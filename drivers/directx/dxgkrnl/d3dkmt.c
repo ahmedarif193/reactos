@@ -3116,8 +3116,11 @@ DxgkpQueryAdapterInfoCaptured(
             RtlZeroMemory(&Caps, sizeof(Caps));
             Caps.IsHybridIntegratedGPU = DriverCaps->HybridIntegrated ? 1 : 0;
             Caps.IsHybridDiscreteGPU = DriverCaps->HybridDiscrete ? 1 : 0;
-            Caps.SupportPowerManagementPStates =
-                DriverCaps->SupportRuntimePowerManagement ? 1 : 0;
+            /* dxgkrnl does not yet register an adapter PoFx component table.
+             * Do not relay the miniport declaration as an OS capability while
+             * the component active/idle and PEP-control callbacks are explicit
+             * unavailable slots. */
+            Caps.SupportPowerManagementPStates = 0;
             /* Kept consistent with KMTQAITYPE_CROSSADAPTERRESOURCE_SUPPORT
              * above, which reports TIER_NONE.  Two queries answering the same
              * question differently is how a caller ends up trusting the wrong

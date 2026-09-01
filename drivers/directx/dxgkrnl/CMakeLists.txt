@@ -21,6 +21,8 @@ list(APPEND SOURCE
     dxgkrnl.c
     dxgmms2_client.c
     adapter.c
+    adapter_map_core.c
+    adapter_start_core.c
     legacy.c
     pnp.c
     vidmm.c
@@ -76,6 +78,6 @@ add_importlibs(dxgkrnl dxgmms2 ntoskrnl hal)
 add_pch(dxgkrnl dxgkrnl_private.h "${SOURCE}")
 add_cd_file(TARGET dxgkrnl DESTINATION reactos/system32/drivers FOR all)
 
-# Preregister the WDDM kernel display stack (dxgmms1/dxgkrnl/softgpu) into the
+# Preregister the WDDM kernel display stack (dxgmms2/dxgkrnl/softgpu) into the
 # livecd SYSTEM hive so it loads at boot and replaces the legacy XPDM path.
 add_registry_inf(wddm_reg.inf)

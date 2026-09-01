@@ -2786,9 +2786,9 @@ VidSchNotifyInterrupt(
 /*
  * VidSchNotifyDpc
  *
- * Called from DISPATCH_LEVEL after the miniport's DPC routine.
- * Signals the adapter-wide SyncEvent and lets per-engine DPCs handle
- * the actual retirement.
+ * Called from DISPATCH_LEVEL after the miniport's DPC routine. Interrupt
+ * publication already queued the relevant per-engine completion DPC, so this
+ * is the explicit protocol boundary and does not duplicate that queueing.
  */
 VOID
 VidSchNotifyDpc(

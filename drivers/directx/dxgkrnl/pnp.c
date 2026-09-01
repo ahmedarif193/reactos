@@ -118,12 +118,16 @@ DxgkpPublishChildConnection(
     _In_ ULONG ChildUid,
     _In_ DXGK_CHILD_DEVICE_HPD_AWARENESS ExpectedHpdAwareness,
     _In_ BOOLEAN ValidateHpdAwareness,
-    _In_ BOOLEAN Connected)
+    _In_ BOOLEAN Connected,
+    _Out_opt_ PBOOLEAN Found)
 {
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
     BOOLEAN Changed = FALSE;
     BOOLEAN NewConnected = Connected ? TRUE : FALSE;
+
+    if (Found != NULL)
+        *Found = FALSE;
 
     KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
     for (Entry = Adapter->ChildListHead.Flink; Entry != &Adapter->ChildListHead; Entry = Entry->Flink)
@@ -132,6 +136,8 @@ DxgkpPublishChildConnection(
 
         if (Child->Descriptor.ChildUid != ChildUid || Child->Descriptor.ChildDeviceType != TypeVideoOutput || (ValidateHpdAwareness && Child->Descriptor.ChildCapabilities.HpdAwareness != ExpectedHpdAwareness))
             continue;
+        if (Found != NULL)
+            *Found = TRUE;
         if (Child->Connected != NewConnected)
         {
             Child->Connected = NewConnected;
@@ -146,15 +152,61 @@ DxgkpPublishChildConnection(
     return Changed;
 }
 
-BOOLEAN
-DxgkPnpPublishChildConnection(
+NTSTATUS
+DxgkPnpIndicateChildConnection(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG ChildUid,
-    _In_ BOOLEAN Connected)
+    _In_ BOOLEAN Connected,
+    _Out_ PBOOLEAN Changed)
 {
-    if (Adapter == NULL)
-        return FALSE;
-    return DxgkpPublishChildConnection(Adapter, ChildUid, HpdAwarenessUninitialized, FALSE, Connected);
+    BOOLEAN Found;
+
+    if (Adapter == NULL || Changed == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *Changed = DxgkpPublishChildConnection(
+                   Adapter,
+                   ChildUid,
+                   HpdAwarenessUninitialized,
+                   FALSE,
+                   Connected,
+                   &Found);
+    return Found ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+}
+
+NTSTATUS
+DxgkPnpResolveChildAcpiUid(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG ChildUid,
+    _Out_ PULONG AcpiUid)
+{
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
+
+    if (Adapter == NULL || AcpiUid == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *AcpiUid = 0;
+    KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
+    for (Entry = Adapter->ChildListHead.Flink;
+         Entry != &Adapter->ChildListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGK_CHILD_PDO_EXTENSION Child =
+            CONTAINING_RECORD(Entry,
+                              DXGK_CHILD_PDO_EXTENSION,
+                              ListEntry);
+
+        if (Child->Present && Child->Descriptor.ChildUid == ChildUid)
+        {
+            *AcpiUid = Child->Descriptor.AcpiUid;
+            Status = STATUS_SUCCESS;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+    return Status;
 }
 
 VOID
@@ -244,7 +296,7 @@ DxgkpPollDisplayChildrenAdapter(
         _SEH2_END;
         if (!NT_SUCCESS(Status))
             break;
-        if (DxgkpPublishChildConnection(Adapter, Children[Index].ChildUid, Children[Index].HpdAwareness, TRUE, ChildStatus.HotPlug.Connected))
+        if (DxgkpPublishChildConnection(Adapter, Children[Index].ChildUid, Children[Index].HpdAwareness, TRUE, ChildStatus.HotPlug.Connected, NULL))
             ConnectionChanged = TRUE;
     }
 

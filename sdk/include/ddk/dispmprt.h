@@ -163,6 +163,16 @@ typedef _In_ CONST PDEVICE_OBJECT      IN_CONST_PDEVICE_OBJECT;
 #error d3dukmdt.h contains an unsupported WDDM interface selector set
 #endif
 
+/* DxgkCbExcludeAdapterAccess Attributes. */
+#define DXGK_EXCLUDE_EVICT_ALL          0x00000001
+#define DXGK_EXCLUDE_CALL_SYNCHRONOUS   0x00000002
+#define DXGK_EXCLUDE_BRIDGE_ACCESS      0x00000004
+#define DXGK_EXCLUDE_EVICT_STANDBY        0x00000008
+#define DXGK_EXCLUDE_EVICT_HIBERNATE      0x00000010
+#define DXGK_EXCLUDE_EVICT_SHUTDOWN       0x00000020
+#define DXGK_EXCLUDE_D3_STATE_TRANSITION  0x00000040
+#define DXGK_EXCLUDE_EVICT_DFX_STANDBY    0x00000080
+
 /* =========================================================================
  * GPU interrupt type constants
  *

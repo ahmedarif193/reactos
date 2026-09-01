@@ -1506,7 +1506,6 @@ DxgkVidPnQueueHotPlugRebuild(
 {
     KIRQL OldIrql;
 
-    PAGED_CODE();
     if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
     if (Adapter->State != DxgkAdapterStateStarted || InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0)

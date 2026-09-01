@@ -337,28 +337,10 @@ typedef struct _VIDSCH_CONTEXT
 /* ========================================================================
  * VIDSCH_INTERFACE — Function pointer table exported to dxgkrnl
  *
- * On Windows 8.1, dxgmms1.sys exports ordinal 2 (VidSchInterface) which
- * fills this table.  In ReactOS, the scheduler is built inline into
- * dxgkrnl.sys.  We define the interface structure to match the Win8.1
- * layout (15 function pointer slots) so that future separation into a
- * standalone module is straightforward.
- *
- * Slot order matches the .text thunk catalog from the cleanroom analysis:
- *   0x1AC30  VidSchInitialize
- *   0x1AC5C  VidSchStartScheduler
- *   0x1ACFC  VidSchSubmitCommand
- *   0x1AD48  VidSchNotifyInterrupt
- *   0x1AD50  VidSchNotifyDpc
- *   0x1ADCC  VidSchPreemptEngine
- *   0x1B748  VidSchSuspendScheduler
- *   0x1B888  VidSchResumeScheduler
- *   0x1B890  VidSchSetEngineState
- *   0x1B9E4  VidSchResetEngine
- *   0x1BC20  VidSchFlipPresent
- *   0x1BC94  VidSchWaitForIdle
- *   0x1BCBC  VidSchQueryEngineStatus
- *   0x1BD88  VidSchSetSchedulerCallback
- *   0x1BD9C  VidSchGetEngineTdrInfo
+ * This is a ReactOS-private, versioned table. It is not a Windows 11 export
+ * contract: the Windows 11 26100 dxgkrnl.sys export directory has no
+ * VidSchInterface symbol. Slot order is defined solely by the declarations
+ * below and its ReactOS callers.
  * ====================================================================== */
 
 /* Function pointer typedefs for the interface table. */
@@ -527,8 +509,8 @@ VidSchNotifyInterrupt(
  * VidSchNotifyDpc
  *
  * Called from DISPATCH_LEVEL after the miniport's DPC routine completes.
- * Processes completed commands, retires packets, and kicks pending
- * submissions.
+ * Per-engine retirement was scheduled when the interrupt data was
+ * published; this callback marks the documented DPC protocol boundary.
  *
  * IRQL: DISPATCH_LEVEL
  */

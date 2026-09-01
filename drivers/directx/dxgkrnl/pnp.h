@@ -109,11 +109,18 @@ NTSTATUS
 DxgkpPollDisplayChildrenRequest(
     _In_ CONST D3DKMT_POLLDISPLAYCHILDREN *PollRequest);
 
-BOOLEAN
-DxgkPnpPublishChildConnection(
+NTSTATUS
+DxgkPnpIndicateChildConnection(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG ChildUid,
-    _In_ BOOLEAN Connected);
+    _In_ BOOLEAN Connected,
+    _Out_ PBOOLEAN Changed);
+
+NTSTATUS
+DxgkPnpResolveChildAcpiUid(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG ChildUid,
+    _Out_ PULONG AcpiUid);
 
 VOID
 DxgkPnpBeginChildEnumerationEpoch(

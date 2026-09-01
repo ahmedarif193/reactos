@@ -59,9 +59,13 @@
 #include "dxgmms2_client.h"
 #include "submit_reservation_core.h"
 #include "hotplug_work_core.h"
+#include "adapter_map_core.h"
+#include "adapter_start_core.h"
 
 #include <ndk/inbvfuncs.h>
 #include <reactos/arc/arc.h>
+#include <reactos/drivers/acpi/acpipci.h>
+#include <reactos/drivers/cmreslist.h>
 /*
  * ntddvdeo.h is already included via dxgkrnl_private.h (before INITGUID),
  * so DEFINE_GUID only produced an extern declaration.  Instantiate here.
@@ -72,6 +76,8 @@ const GUID GUID_DISPLAY_DEVICE_ARRIVAL =
 #define DXGKP_BUGCHECK_VIDEO_DXGKRNL_FATAL_ERROR 0x113
 #define DXGKP_FATAL_SURPRISE_REMOVAL_SUBTYPE 0x19
 #define DXGKP_FATAL_MMS2_LIFECYCLE_SUBTYPE 0x1A
+/* The public DDI mandates a bugcheck but does not publish the native subtype. */
+#define DXGKP_FATAL_PHYSICAL_MEMORY_ADL_LEAK_SUBTYPE 0x524F5301UL
 #define DXGKP_GPUMMU_END_TO_END 1
 #define DXGKP_MMS2_FAILURE_ADD_ROLLBACK 1
 #define DXGKP_MMS2_FAILURE_ATTACH_ROLLBACK 2
@@ -119,11 +125,114 @@ static NTSTATUS
 DxgkpAdapterStopInternal(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ BOOLEAN ReleasePostDisplayOwnership,
-    _In_ DXGMMS2_STOP_REASON StopReason);
+    _In_ DXGMMS2_STOP_REASON StopReason,
+    _Out_opt_ PDXGK_DISPLAY_INFORMATION ReleasedPostDisplayInformation,
+    _Out_opt_ PBOOLEAN ReleasedByDriver);
 
 static NTSTATUS
 DxgkpStopMiniportForTeardown(
     _In_ PDXGKRNL_ADAPTER Adapter);
+
+static NTSTATUS
+DxgkpSetVsyncInterruptState(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_CRTC_VSYNC_STATE VsyncState);
+
+static SIZE_T
+DxgkpResourceListSize(
+    _In_ PCM_RESOURCE_LIST ResourceList)
+{
+    PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
+    SIZE_T TotalSize;
+    ULONG FullIndex;
+
+    TotalSize = FIELD_OFFSET(CM_RESOURCE_LIST, List);
+    FullDescriptor = &ResourceList->List[0];
+    for (FullIndex = 0; FullIndex < ResourceList->Count; ++FullIndex)
+    {
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
+        SIZE_T FullSize;
+        ULONG PartialIndex;
+
+        FullSize = FIELD_OFFSET(CM_FULL_RESOURCE_DESCRIPTOR, PartialResourceList) + FIELD_OFFSET(CM_PARTIAL_RESOURCE_LIST, PartialDescriptors);
+        PartialDescriptor = &FullDescriptor->PartialResourceList.PartialDescriptors[0];
+        for (PartialIndex = 0; PartialIndex < FullDescriptor->PartialResourceList.Count; ++PartialIndex)
+        {
+            SIZE_T DescriptorSize = sizeof(*PartialDescriptor);
+
+            if (PartialDescriptor->Type == CmResourceTypeDeviceSpecific)
+            {
+                if (PartialDescriptor->u.DeviceSpecificData.DataSize > MAXULONG_PTR - DescriptorSize)
+                    return 0;
+                DescriptorSize += PartialDescriptor->u.DeviceSpecificData.DataSize;
+            }
+            if (FullSize > MAXULONG_PTR - DescriptorSize)
+                return 0;
+            FullSize += DescriptorSize;
+            PartialDescriptor = CmiGetNextPartialDescriptor(PartialDescriptor);
+        }
+        if (TotalSize > MAXULONG_PTR - FullSize)
+            return 0;
+        TotalSize += FullSize;
+        FullDescriptor = CmiGetNextResourceDescriptor(FullDescriptor);
+    }
+    return TotalSize;
+}
+
+static PCM_RESOURCE_LIST
+DxgkpCloneResourceList(
+    _In_opt_ PCM_RESOURCE_LIST ResourceList)
+{
+    PCM_RESOURCE_LIST Clone;
+    SIZE_T Size;
+
+    if (ResourceList == NULL)
+        return NULL;
+    Size = DxgkpResourceListSize(ResourceList);
+    if (Size == 0)
+        return NULL;
+    Clone = ExAllocatePoolWithTag(NonPagedPool, Size, TAG_DXGK_RESOURCES);
+    if (Clone != NULL)
+        RtlCopyMemory(Clone, ResourceList, Size);
+    return Clone;
+}
+
+static VOID
+DxgkpReleaseAdapterResources(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter->AllocatedResources != NULL)
+    {
+        ExFreePoolWithTag(Adapter->AllocatedResources, TAG_DXGK_RESOURCES);
+        Adapter->AllocatedResources = NULL;
+    }
+    if (Adapter->TranslatedResources != NULL)
+    {
+        ExFreePoolWithTag(Adapter->TranslatedResources, TAG_DXGK_RESOURCES);
+        Adapter->TranslatedResources = NULL;
+    }
+}
+
+static NTSTATUS
+DxgkpCaptureAdapterResources(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PCM_RESOURCE_LIST AllocatedResources,
+    _In_opt_ PCM_RESOURCE_LIST TranslatedResources)
+{
+    ASSERT(Adapter->AllocatedResources == NULL);
+    ASSERT(Adapter->TranslatedResources == NULL);
+
+    Adapter->AllocatedResources = DxgkpCloneResourceList(AllocatedResources);
+    if (AllocatedResources != NULL && Adapter->AllocatedResources == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Adapter->TranslatedResources = DxgkpCloneResourceList(TranslatedResources);
+    if (TranslatedResources != NULL && Adapter->TranslatedResources == NULL)
+    {
+        DxgkpReleaseAdapterResources(Adapter);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    return STATUS_SUCCESS;
+}
 
 /* The published owner holds one FDO reference. A transient reference returned
  * here keeps both the device extension and Owner valid after dropping the lock. */
@@ -208,12 +317,21 @@ DxgkpClearPostDisplayOwner(
  */
 static NTSTATUS
 DxgkpStopPostDisplayOwner(
-    _In_ PDXGKRNL_ADAPTER Owner)
+    _In_ PDXGKRNL_ADAPTER Owner,
+    _Out_ PDXGK_DISPLAY_INFORMATION ReleasedPostDisplayInformation,
+    _Out_ PBOOLEAN ReleasedByDriver)
 {
     NTSTATUS Status;
 
+    RtlZeroMemory(ReleasedPostDisplayInformation,
+                  sizeof(*ReleasedPostDisplayInformation));
+    *ReleasedByDriver = FALSE;
     DXGKRNL_WARN("DxgkpStopPostDisplayOwner: stopping %s adapter %p — a new miniport is acquiring the boot display\n", (Owner->MiniportContext != NULL && Owner->MiniportContext->IsBasicDisplayFallback) ? "basic-display fallback" : "display", Owner);
-    Status = DxgkpAdapterStopInternal(Owner, TRUE, Dxgmms2StopReasonPnpStop);
+    Status = DxgkpAdapterStopInternal(Owner,
+                                      TRUE,
+                                      Dxgmms2StopReasonPnpStop,
+                                      ReleasedPostDisplayInformation,
+                                      ReleasedByDriver);
     if (NT_SUCCESS(Status))
         DxgkpClearPostDisplayOwner(Owner);
     return Status;
@@ -913,87 +1031,6 @@ DxgkpStopTdrWatchdog(
     DxgkpWaitForFlagClear(&Adapter->TdrWorkQueued);
 }
 
-/*
- * DxgkpEnsurePostDisplayResolution
- *
- * Populate Adapter->PostDisplayWidth/Height from the firmware GOP framebuffer
- * if a minimal miniport never called DxgkCbAcquirePostDisplayOwnership (softgpu
- * does not). This MUST run before DxgkDisplayRegister writes the registry
- * DefaultSettings and before the VidPn is committed: win32k sizes its GDI
- * surface from DefaultSettings while framebuf renders into a shadow FB sized to
- * the committed mode. If they disagree (e.g. DefaultSettings 1024x768 vs a
- * committed/GOP 800x600 FB) framebuf writes past the shadow FB and corrupts
- * adjacent NonPagedPool. Anchoring all three to the real GOP resolution keeps
- * them consistent.
- */
-VOID
-DxgkpEnsurePostDisplayResolution(
-    _Inout_ PDXGKRNL_ADAPTER Adapter)
-{
-    LOADER_PARAMETER_FRAMEBUFFER Fb;
-    ULONG  Pitch;
-    SIZE_T FbSize;
-
-    if (Adapter == NULL)
-        return;
-
-    /* Already set up (geometry known and GOP mapped)? */
-    if (Adapter->PostDisplayVirtualAddress != NULL &&
-        Adapter->PostDisplayWidth != 0 && Adapter->PostDisplayHeight != 0)
-        return;
-
-    /*
-     * A minimal WDDM 1.0 miniport (softgpu) never calls
-     * DxgkCbAcquirePostDisplayOwnership, so PostDisplay* stay zero and the GOP
-     * is never mapped. Query + map the firmware framebuffer directly.
-     *
-     * We deliberately use InbvGetGopFrameBufferInfo (not the
-     * DxgkCbAcquirePostDisplayOwnership path) because InbvHasValidGopFrameBuffer
-     * can report FALSE this late in boot even though the GOP info is still
-     * retrievable — the callback would then take its VBE fallback and leave
-     * PostDisplay zeroed. Anchoring the real GOP geometry here keeps registry
-     * DefaultSettings, the pinned VidPn mode and the shadow FB consistent, and
-     * the kernel mapping lets the present path blit the shadow FB to the screen.
-     */
-    RtlZeroMemory(&Fb, sizeof(Fb));
-    if (!InbvGetGopFrameBufferInfo(&Fb) ||
-        Fb.HorizontalResolution == 0 || Fb.VerticalResolution == 0 ||
-        Fb.FrameBufferBase.QuadPart == 0)
-    {
-        DXGKRNL_WARN("DxgkpEnsurePostDisplayResolution: no usable GOP framebuffer\n");
-        return;
-    }
-
-    Pitch = Fb.PixelsPerScanLine * 4;
-    if (Pitch < Fb.HorizontalResolution * 4)
-        Pitch = Fb.HorizontalResolution * 4;
-
-    Adapter->PostDisplayWidth           = Fb.HorizontalResolution;
-    Adapter->PostDisplayHeight          = Fb.VerticalResolution;
-    Adapter->PostDisplayPitch           = Pitch;
-    Adapter->PostDisplayPhysicalAddress = Fb.FrameBufferBase;
-
-    if (Adapter->PostDisplayVirtualAddress == NULL)
-    {
-        FbSize = (SIZE_T)Pitch * Fb.VerticalResolution;
-        Adapter->PostDisplayVirtualAddress =
-            MmMapIoSpace(Fb.FrameBufferBase, FbSize, MmWriteCombined);
-        if (Adapter->PostDisplayVirtualAddress == NULL)
-            Adapter->PostDisplayVirtualAddress =
-                MmMapIoSpace(Fb.FrameBufferBase, FbSize, MmNonCached);
-        if (Adapter->PostDisplayVirtualAddress != NULL)
-            Adapter->PostDisplayMappingSize = FbSize;
-    }
-
-    DXGKRNL_TRACE("DxgkpEnsurePostDisplayResolution: GOP %lux%lu pitch=%lu "
-                  "PA=0x%I64X VA=%p size=%Iu\n",
-                  Adapter->PostDisplayWidth, Adapter->PostDisplayHeight,
-                  Adapter->PostDisplayPitch,
-                  Adapter->PostDisplayPhysicalAddress.QuadPart,
-                  Adapter->PostDisplayVirtualAddress,
-                  Adapter->PostDisplayMappingSize);
-}
-
 /* ========================================================================
  * Module-local state
  * ====================================================================== */
@@ -1039,7 +1076,8 @@ typedef enum _DXGK_MAPMEM_KIND
 typedef struct _DXGK_MAPMEM_ENTRY
 {
     LIST_ENTRY       ListEntry;
-    HANDLE           DeviceHandle;
+    PDXGKRNL_ADAPTER Adapter;
+    PEPROCESS        Process;
     PVOID            VirtualAddress;
     PVOID            BaseAddress;
     PMDL             Mdl;
@@ -1119,6 +1157,7 @@ typedef struct _DXGKP_PHYSICAL_MAPPING
 {
     LIST_ENTRY ListEntry;
     DXGKP_PHYSICAL_MAPPING_KIND Kind;
+    PEPROCESS Process;
     PVOID BaseAddress;
     SIZE_T Size;
     PMDL MappingMdl;
@@ -3148,7 +3187,7 @@ DxgkpEnsureGlobalInitialization(VOID)
  * Skip the current IRP stack location and forward the IRP to the next
  * lower driver in the stack synchronously.
  *
- * IRQL: <= DISPATCH_LEVEL
+ * IRQL: PASSIVE_LEVEL
  */
 static NTSTATUS
 DxgkpForwardIrp(
@@ -3579,16 +3618,132 @@ NTSTATUS APIENTRY DxgkCbReadDeviceSpace(HANDLE, ULONG, PVOID, ULONG, ULONG, PULO
 NTSTATUS APIENTRY DxgkCbWriteDeviceSpace(HANDLE, ULONG, PVOID, ULONG, ULONG, PULONG);
 
 /* ========================================================================
- * Stub callbacks for DXGK_INTERFACE slots that viogpudo accesses
+ * DXGK_INTERFACE callbacks supplied to WDDM miniports.
  *
- * These return error codes rather than being NULL, which prevents
- * NULL pointer dereference crashes when the miniport calls them.
+ * A callback with an explicit "Unavailable" suffix is a deliberate failure
+ * boundary for a subsystem that ReactOS does not yet provide.  Keep such
+ * callbacks deterministic and never turn them into success placeholders.
  * ====================================================================== */
+
+static const GUID DxgkpPciDevicePresentInterfaceGuid =
+{
+    0xd1b82c26, 0xbf49, 0x45ef,
+    {0xb2, 0x16, 0x71, 0xcb, 0xd7, 0x88, 0x9b, 0x57}
+};
+
+static const GUID DxgkpBusInterfaceStandardGuid =
+{
+    0x496b8280, 0x6f25, 0x11d0,
+    {0xbe, 0xaf, 0x08, 0x00, 0x2b, 0xe2, 0x09, 0x2f}
+};
+
+static NTSTATUS
+DxgkpQueryPdoInterface(
+    _In_ PDEVICE_OBJECT PhysicalDeviceObject,
+    _In_ const GUID *InterfaceType,
+    _In_ USHORT Size,
+    _In_ USHORT Version,
+    _Out_writes_bytes_(Size) PINTERFACE Interface)
+{
+    PIO_STACK_LOCATION Stack;
+    PDEVICE_OBJECT TargetDevice;
+    IO_STATUS_BLOCK IoStatus;
+    KEVENT Event;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (PhysicalDeviceObject == NULL || InterfaceType == NULL || Interface == NULL || Size < sizeof(INTERFACE))
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Interface, Size);
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    TargetDevice = IoGetAttachedDeviceReference(PhysicalDeviceObject);
+    Irp = IoBuildSynchronousFsdRequest(IRP_MJ_PNP, TargetDevice, NULL, 0, NULL, &Event, &IoStatus);
+    if (Irp == NULL)
+    {
+        ObDereferenceObject(TargetDevice);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    Irp->IoStatus.Information = 0;
+    Stack = IoGetNextIrpStackLocation(Irp);
+    Stack->MajorFunction = IRP_MJ_PNP;
+    Stack->MinorFunction = IRP_MN_QUERY_INTERFACE;
+    Stack->Parameters.QueryInterface.InterfaceType = InterfaceType;
+    Stack->Parameters.QueryInterface.Size = Size;
+    Stack->Parameters.QueryInterface.Version = Version;
+    Stack->Parameters.QueryInterface.Interface = Interface;
+    Stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
+
+    Status = IoCallDriver(TargetDevice, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+
+    ObDereferenceObject(TargetDevice);
+    return Status;
+}
+
+static VOID
+DxgkpReleasePciBusInterface(
+    _Inout_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (!Adapter->PciBusInterfaceValid)
+        return;
+
+    Adapter->PciBusInterfaceValid = FALSE;
+    if (Adapter->PciBusInterface.InterfaceDereference != NULL)
+    {
+        Adapter->PciBusInterface.InterfaceDereference(
+            Adapter->PciBusInterface.Context);
+    }
+    RtlZeroMemory(&Adapter->PciBusInterface,
+                  sizeof(Adapter->PciBusInterface));
+}
+
+static NTSTATUS
+DxgkpCapturePciBusInterface(
+    _Inout_ PDXGKRNL_ADAPTER Adapter)
+{
+    BUS_INTERFACE_STANDARD BusInterface;
+    NTSTATUS Status;
+
+    ASSERT(!Adapter->PciBusInterfaceValid);
+    Status = DxgkpQueryPdoInterface(
+                 Adapter->PhysicalDeviceObject,
+                &DxgkpBusInterfaceStandardGuid,
+                 sizeof(BusInterface),
+                 1,
+                (PINTERFACE)&BusInterface);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (BusInterface.Size < sizeof(BusInterface) ||
+        BusInterface.Version < 1 ||
+        BusInterface.Context == NULL ||
+        BusInterface.GetBusData == NULL ||
+        BusInterface.SetBusData == NULL ||
+        BusInterface.InterfaceDereference == NULL)
+    {
+        if (BusInterface.InterfaceDereference != NULL)
+            BusInterface.InterfaceDereference(BusInterface.Context);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Adapter->PciBusInterface = BusInterface;
+    Adapter->PciBusInterfaceValid = TRUE;
+    return STATUS_SUCCESS;
+}
 
 /*
  * DxgkCbIsDevicePresent — offset 0x60
- * Deprecated in WDDM 1.0.  The callback reports presence through its output
- * parameter; the return value reports whether the query itself was accepted.
+ * The callback reports presence through its output parameter; the return
+ * value reports whether the query itself was accepted.
  */
 static NTSTATUS
 APIENTRY
@@ -3598,24 +3753,62 @@ DxgkCbIsDevicePresent(
     _Out_ PBOOLEAN DevicePresent)
 {
     PDXGKRNL_ADAPTER Adapter;
+    PCI_DEVICE_PRESENT_INTERFACE PresentInterface;
+    NTSTATUS Status;
 
-    if (DevicePresenceParameters == NULL || DevicePresent == NULL ||
-        DevicePresenceParameters->Size < sizeof(*DevicePresenceParameters))
+    PAGED_CODE();
+
+    if (DevicePresent == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *DevicePresent = FALSE;
+
+    if (DevicePresenceParameters == NULL ||
+        DevicePresenceParameters->Size != sizeof(*DevicePresenceParameters) ||
+        (DevicePresenceParameters->Flags & ~(PCI_USE_SUBSYSTEM_IDS |
+                                              PCI_USE_REVISION |
+                                              PCI_USE_VENDEV_IDS |
+                                              PCI_USE_CLASS_SUBCLASS |
+                                              PCI_USE_PROGIF |
+                                              PCI_USE_LOCAL_BUS |
+                                              PCI_USE_LOCAL_DEVICE)) != 0)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    *DevicePresent = FALSE;
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
         return STATUS_INVALID_HANDLE;
 
-    *DevicePresent =
-        Adapter->PhysicalDeviceObject != NULL &&
-        Adapter->State != DxgkAdapterStateRemoved &&
-        InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) == 0;
+    if (Adapter->PhysicalDeviceObject == NULL)
+    {
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    Status = DxgkpQueryPdoInterface(Adapter->PhysicalDeviceObject, &DxgkpPciDevicePresentInterfaceGuid, sizeof(PresentInterface), PCI_DEVICE_PRESENT_INTERFACE_VERSION, (PINTERFACE)&PresentInterface);
+    if (!NT_SUCCESS(Status))
+    {
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return Status;
+    }
+
+    if (PresentInterface.Size < sizeof(PresentInterface) ||
+        PresentInterface.Version < PCI_DEVICE_PRESENT_INTERFACE_VERSION ||
+        PresentInterface.IsDevicePresentEx == NULL)
+    {
+        Status = STATUS_NOT_SUPPORTED;
+    }
+    else
+    {
+        *DevicePresent = PresentInterface.IsDevicePresentEx(PresentInterface.Context, DevicePresenceParameters);
+        Status = STATUS_SUCCESS;
+    }
+
+    if (PresentInterface.InterfaceDereference != NULL)
+        PresentInterface.InterfaceDereference(PresentInterface.Context);
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 static PVOID
@@ -3687,23 +3880,24 @@ DxgkCbEnumHandleChildren(
  */
 
 /*
- * DxgkCbGetCaptureAddressStub — offset 0xa0
+ * DxgkCbGetCaptureAddress — offset 0xa0
  */
 static NTSTATUS
 APIENTRY
-DxgkCbGetCaptureAddressStub(
+DxgkCbGetCaptureAddress(
     INOUT_PDXGKARGCB_GETCAPTUREADDRESS GetCaptureAddress)
 {
     return DxgkVidMmGetCaptureAddress(GetCaptureAddress);
 }
 
 /*
- * DxgkCbLogEtwEventStub — offset 0xa8
- * ETW event logging for GPU diagnostics.
+ * ReactOS has no graphics ETW provider yet.  The WDDM callback has no return
+ * value, so retain the ABI slot while deliberately dropping the event.  Do
+ * not advertise this as diagnostic parity.
  */
 static VOID
 APIENTRY
-DxgkCbLogEtwEventStub(
+DxgkCbLogEtwEventDisabled(
     _In_ CONST LPCGUID EventGuid,
     _In_ UCHAR Type,
     _In_ USHORT EventBufferSize,
@@ -3716,87 +3910,150 @@ DxgkCbLogEtwEventStub(
 }
 
 /*
- * DxgkCbExcludeAdapterAccessStub — offset 0xb0
- * Used for VGA arbitration during display mode changes.
+ * Adapter exclusion needs a real scheduler/VidMm access gate and protected
+ * callback transaction.  Returning failure is safer than invoking the
+ * callback while other adapter access remains possible.
  */
 static NTSTATUS
 APIENTRY
-DxgkCbExcludeAdapterAccessStub(
+DxgkCbExcludeAdapterAccessNotSupported(
     _In_ HANDLE DeviceHandle,
     _In_ ULONG  Attributes,
     _In_ DXGKDDI_PROTECTED_CALLBACK DxgkProtectedCallback,
     _In_ PVOID ProtectedCallbackContext)
 {
-    UNREFERENCED_PARAMETER(DeviceHandle);
-    UNREFERENCED_PARAMETER(Attributes);
-    UNREFERENCED_PARAMETER(DxgkProtectedCallback);
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
     UNREFERENCED_PARAMETER(ProtectedCallbackContext);
-    DXGKRNL_TRACE("DxgkCbExcludeAdapterAccess: called (stub returning NOT_SUPPORTED)\n");
+
+    if (DxgkProtectedCallback == NULL ||
+        (Attributes & ~(DXGK_EXCLUDE_EVICT_ALL |
+                        DXGK_EXCLUDE_CALL_SYNCHRONOUS |
+                        DXGK_EXCLUDE_BRIDGE_ACCESS |
+                        DXGK_EXCLUDE_EVICT_STANDBY |
+                        DXGK_EXCLUDE_EVICT_HIBERNATE |
+                        DXGK_EXCLUDE_EVICT_SHUTDOWN |
+                        DXGK_EXCLUDE_D3_STATE_TRANSITION |
+                        DXGK_EXCLUDE_EVICT_DFX_STANDBY)) != 0 ||
+        (Attributes & (DXGK_EXCLUDE_EVICT_ALL |
+                       DXGK_EXCLUDE_CALL_SYNCHRONOUS)) ==
+            (DXGK_EXCLUDE_EVICT_ALL |
+             DXGK_EXCLUDE_CALL_SYNCHRONOUS))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_NOT_SUPPORTED;
 }
 
 /*
- * DxgkCbCreateContextAllocationStub — offset 0xb8 (Win8)
+ * Context allocations require a VidMm resident-allocation implementation.
+ * Leave the output sanitized until that owner-scoped substrate exists.
  */
 static NTSTATUS
 APIENTRY
-DxgkCbCreateContextAllocationStub(
+DxgkCbCreateContextAllocationNotSupported(
     INOUT_PDXGKARGCB_CREATECONTEXTALLOCATION ContextAllocation)
 {
-    UNREFERENCED_PARAMETER(ContextAllocation);
-    DXGKRNL_TRACE("DxgkCbCreateContextAllocation: called (stub returning NOT_SUPPORTED)\n");
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (ContextAllocation == NULL)
+        return STATUS_INVALID_PARAMETER;
+    ContextAllocation->hAllocation = NULL;
+
+    if ((ContextAllocation->ContextAllocationFlags.Value & ~0x3U) != 0 ||
+        ContextAllocation->hDevice == NULL ||
+        ContextAllocation->hDriverAllocation == NULL ||
+        ContextAllocation->Size == 0 ||
+        (ContextAllocation->Alignment != 0 &&
+         (ContextAllocation->Alignment &
+          (ContextAllocation->Alignment - 1)) != 0) ||
+        (ContextAllocation->ContextAllocationFlags.SharedAcrossContexts &&
+         ContextAllocation->hContext != NULL) ||
+        (!ContextAllocation->ContextAllocationFlags.SharedAcrossContexts &&
+         ContextAllocation->hContext == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(ContextAllocation->hAdapter);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_NOT_SUPPORTED;
 }
 
 /*
- * DxgkCbDestroyContextAllocationStub — offset 0xc0 (Win8)
+ * Matching unavailable destroy path for context allocations.
  */
 static NTSTATUS
 APIENTRY
-DxgkCbDestroyContextAllocationStub(
+DxgkCbDestroyContextAllocationNotSupported(
     _In_ HANDLE DeviceHandle,
     _In_ HANDLE ContextAllocationHandle)
 {
-    UNREFERENCED_PARAMETER(DeviceHandle);
-    UNREFERENCED_PARAMETER(ContextAllocationHandle);
-    DXGKRNL_TRACE("DxgkCbDestroyContextAllocation: called (stub returning NOT_SUPPORTED)\n");
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (ContextAllocationHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_NOT_SUPPORTED;
 }
 
 /*
- * DxgkCbSetPowerComponentActiveStub — offset 0xc8 (Win8)
+ * Runtime component power is not advertised until dxgkrnl owns a registered
+ * PoFx device and component table.  These void ABI slots therefore only
+ * validate the adapter lifetime and perform no transition.
  */
 static VOID
 APIENTRY
-DxgkCbSetPowerComponentActiveStub(
+DxgkCbSetPowerComponentActiveSuppressed(
     _In_ HANDLE DeviceHandle,
     _In_ UINT   Component)
 {
-    UNREFERENCED_PARAMETER(DeviceHandle);
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
     UNREFERENCED_PARAMETER(Component);
-    DXGKRNL_TRACE("DxgkCbSetPowerComponentActive: called\n");
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
 }
 
 /*
- * DxgkCbSetPowerComponentIdleStub — offset 0xd0 (Win8)
+ * Matching unavailable runtime-component idle slot.
  */
 static VOID
 APIENTRY
-DxgkCbSetPowerComponentIdleStub(
+DxgkCbSetPowerComponentIdleSuppressed(
     _In_ HANDLE DeviceHandle,
     _In_ UINT   Component)
 {
-    UNREFERENCED_PARAMETER(DeviceHandle);
+    PDXGKRNL_ADAPTER Adapter;
+
     UNREFERENCED_PARAMETER(Component);
-    DXGKRNL_TRACE("DxgkCbSetPowerComponentIdle: called\n");
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
 }
 
 /*
- * DxgkCbPowerRuntimeControlRequestStub — offset 0xe0 (Win8)
+ * Power-control requests require an adapter-owned PoFx/PEP registration.
  */
 static NTSTATUS
 APIENTRY
-DxgkCbPowerRuntimeControlRequestStub(
+DxgkCbPowerRuntimeControlRequestNotSupported(
     _In_ HANDLE DeviceHandle,
     _In_ LPCGUID PowerControlCode,
     _In_opt_ PVOID InBuffer,
@@ -3805,15 +4062,660 @@ DxgkCbPowerRuntimeControlRequestStub(
     _In_ SIZE_T OutBufferSize,
     _Out_opt_ PSIZE_T BytesReturned)
 {
-    UNREFERENCED_PARAMETER(DeviceHandle);
-    UNREFERENCED_PARAMETER(PowerControlCode);
-    UNREFERENCED_PARAMETER(InBuffer);
-    UNREFERENCED_PARAMETER(InBufferSize);
-    UNREFERENCED_PARAMETER(OutBuffer);
-    UNREFERENCED_PARAMETER(OutBufferSize);
-    if (BytesReturned) *BytesReturned = 0;
-    DXGKRNL_TRACE("DxgkCbPowerRuntimeControlRequest: called (stub returning NOT_SUPPORTED)\n");
+    PDXGKRNL_ADAPTER Adapter;
+
+    if (BytesReturned != NULL)
+        *BytesReturned = 0;
+    if (PowerControlCode == NULL ||
+        (InBuffer == NULL && InBufferSize != 0) ||
+        (OutBuffer == NULL && OutBufferSize != 0))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (OutBuffer != NULL && OutBufferSize != 0)
+        RtlZeroMemory(OutBuffer, OutBufferSize);
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_NOT_SUPPORTED;
+}
+
+/*
+ * Runtime-component latency is meaningful only for a registered PoFx
+ * component of type DXGK_POWER_COMPONENT_OTHER.  ReactOS advertises no such
+ * component table, so retain the callable slot without manufacturing state.
+ */
+static VOID
+APIENTRY
+DxgkCbSetPowerComponentLatencySuppressed(
+    _In_ HANDLE DeviceHandle,
+    _In_ UINT ComponentIndex,
+    _In_ ULONGLONG Latency)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    UNREFERENCED_PARAMETER(ComponentIndex);
+    UNREFERENCED_PARAMETER(Latency);
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+}
+
+/* Matching no-component expected-residency slot. */
+static VOID
+APIENTRY
+DxgkCbSetPowerComponentResidencySuppressed(
+    _In_ HANDLE DeviceHandle,
+    _In_ UINT ComponentIndex,
+    _In_ ULONGLONG Residency)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    UNREFERENCED_PARAMETER(ComponentIndex);
+    UNREFERENCED_PARAMETER(Residency);
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+}
+
+/*
+ * No F-state completion can be pending while no component advertises
+ * DriverCompletesFStateTransition.  Keep the void slot inert.
+ */
+static VOID
+APIENTRY
+DxgkCbCompleteFStateTransitionSuppressed(
+    _In_ HANDLE DeviceHandle,
+    _In_ UINT ComponentIndex)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    UNREFERENCED_PARAMETER(ComponentIndex);
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+}
+
+/* Reserved system callback; ReactOS owns no P-state transition transaction. */
+static VOID
+APIENTRY
+DxgkCbCompletePStateTransitionSuppressed(
+    _In_ HANDLE DeviceHandle,
+    _In_ UINT ComponentIndex,
+    _In_ UINT CompletedPState)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    UNREFERENCED_PARAMETER(ComponentIndex);
+    UNREFERENCED_PARAMETER(CompletedPState);
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+}
+
+/*
+ * Context-allocation GPU VA mapping cannot exist while the matching create
+ * callback is unavailable.  The public failure sentinel is address zero.
+ */
+static D3DGPU_VIRTUAL_ADDRESS
+APIENTRY
+DxgkCbMapContextAllocationNotSupported(
+    _In_ HANDLE DeviceHandle,
+    _In_ IN_CONST_PDXGKARGCB_MAPCONTEXTALLOCATION Args)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (Args == NULL || Args->hAllocation == NULL ||
+        Args->SizeInPages == 0 ||
+        Args->OffsetInPages > MAXULONGLONG - Args->SizeInPages)
+    {
+        return 0;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return 0;
+}
+
+/* Context-allocation updates require the same unavailable VidMm owner. */
+static NTSTATUS
+APIENTRY
+DxgkCbUpdateContextAllocationNotSupported(
+    _In_ HANDLE DeviceHandle,
+    _In_ IN_CONST_PDXGKARGCB_UPDATECONTEXTALLOCATION Args)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (Args == NULL || Args->hAllocation == NULL ||
+        (Args->PrivateDriverDataSize != 0 &&
+         Args->pPrivateDriverData == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/*
+ * Driver-owned process-creation reservations need a distinct GPU-VA range
+ * policy that preserves AllowUserModeMapping.  Sanitise the output and fail
+ * until that policy and its teardown are owned end to end.
+ */
+static NTSTATUS
+APIENTRY
+DxgkCbReserveGpuVirtualAddressRangeNotSupported(
+    _In_ HANDLE DeviceHandle,
+    _Inout_ INOUT_PDXGKARGCB_RESERVEGPUVIRTUALADDRESSRANGE Args)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (Args == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Args->StartVirtualAddress = 0;
+
+    if (Args->hDxgkProcess == NULL || Args->SizeInBytes == 0 ||
+        Args->Alignment == 0 ||
+        (Args->Alignment & (Args->Alignment - 1)) != 0 ||
+        (Args->Flags & ~1U) != 0 ||
+        (Args->BaseAddress & (Args->Alignment - 1)) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* Protected-session teardown is inert while protected sessions stay off. */
+static VOID
+APIENTRY
+DxgkCbHardwareContentProtectionTeardownSuppressed(
+    _In_ HANDLE DeviceHandle,
+    _In_ UINT Flags)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    UNREFERENCED_PARAMETER(Flags);
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+}
+
+/* Public MPO support is off, so there is no DWM fallback state to notify. */
+static VOID
+APIENTRY
+DxgkCbMultiPlaneOverlayDisabledSuppressed(
+    _In_ HANDLE DeviceHandle,
+    _In_ UINT VidPnSourceId)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    UNREFERENCED_PARAMETER(VidPnSourceId);
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+}
+
+/* No SR-IOV virtual-function mitigated-range owner is advertised. */
+static VOID
+APIENTRY
+DxgkCbMitigatedRangeUpdateSuppressed(
+    _In_ HANDLE DeviceHandle,
+    _In_ ULONG VirtualFunctionIndex)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(VirtualFunctionIndex);
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+}
+
+/*
+ * Hardware-context invalidation is a scheduler-owned operation.  ReactOS
+ * does not advertise hardware queues or own their invalidation/cleanup
+ * transaction, so validate the public envelope and fail without changing
+ * an ordinary context.
+ */
+static NTSTATUS
+APIENTRY
+DxgkCbInvalidateHwContextNotSupported(
+    IN_CONST_PDXGKARGCB_INVALIDATEHWCONTEXT Args)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (Args == NULL || Args->hAdapter == NULL || Args->hHwContext == NULL ||
+        (Args->Flags.Value & ~1U) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(Args->hAdapter);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/*
+ * The WDDM 2.2 connector callback announces entries in the miniport's
+ * ordered QueryConnectionChange queue.  The legacy QueryChildStatus route
+ * is not equivalent, so do not report that the queue was accepted until a
+ * PASSIVE_LEVEL drain worker and topology transaction exist.
+ */
+static NTSTATUS
+APIENTRY
+DxgkCbIndicateConnectorChangeNotSupported(
+    IN_CONST_HANDLE DeviceHandle)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/*
+ * UEFI framebuffer ranges can be unblocked only by the owner that first
+ * blocked the exact segment ranges.  ReactOS records no such ownership, so
+ * accept no transition and leave the caller's range array untouched.
+ */
+static NTSTATUS
+APIENTRY
+DxgkCbUnblockUEFIFrameBufferRangesNotSupported(
+    IN_CONST_HANDLE DeviceHandle,
+    IN_CONST_PDXGK_SEGMENTMEMORYSTATE SegmentMemoryState)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    if (SegmentMemoryState == NULL ||
+        (SegmentMemoryState->NumUEFIFrameBufferRanges != 0 &&
+         SegmentMemoryState->pMemoryRanges == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* Protected-session objects and their status state machine remain off. */
+static NTSTATUS
+APIENTRY
+DxgkCbSetProtectedSessionStatusNotSupported(
+    IN_CONST_PDXGKARGCB_PROTECTEDSESSIONSTATUS ProtectedSessionStatus)
+{
+    PAGED_CODE();
+    if (ProtectedSessionStatus == NULL ||
+        ProtectedSessionStatus->hProtectedSession == NULL ||
+        ProtectedSessionStatus->Status >
+            DXGK_PROTECTED_SESSION_STATUS_INVALID)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* No framebuffer-save section or commit accounting is advertised. */
+static NTSTATUS
+APIENTRY
+DxgkCbPinFrameBufferForSaveNotSupported(
+    IN_CONST_HANDLE DeviceHandle,
+    INOUT_PDXGKARGCB_PINFRAMEBUFFERFORSAVE PinFrameBufferForSave)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (PinFrameBufferForSave == NULL)
+        return STATUS_INVALID_PARAMETER;
+    PinFrameBufferForSave->pMdl = NULL;
+    if (PinFrameBufferForSave->PhysicalAdapterIndex != 0 ||
+        PinFrameBufferForSave->CommitSize == 0 ||
+        (PinFrameBufferForSave->CommitSize & (PAGE_SIZE - 1)) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* The matching unpin cannot succeed while pin never publishes an MDL. */
+static NTSTATUS
+APIENTRY
+DxgkCbUnpinFrameBufferForSaveNotSupported(
+    IN_CONST_HANDLE DeviceHandle,
+    IN_CONST_PDXGKARGCB_UNPINFRAMEBUFFERFORSAVE UnpinFrameBufferForSave)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (UnpinFrameBufferForSave == NULL ||
+        UnpinFrameBufferForSave->PhysicalAdapterIndex != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* No per-physical-adapter framebuffer section exists to map. */
+static NTSTATUS
+APIENTRY
+DxgkCbMapFrameBufferPointerNotSupported(
+    IN_CONST_HANDLE DeviceHandle,
+    INOUT_PDXGKARGCB_MAPFRAMEBUFFERPOINTER MapFrameBufferPointer)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (MapFrameBufferPointer == NULL)
+        return STATUS_INVALID_PARAMETER;
+    MapFrameBufferPointer->pBaseAddress = NULL;
+    if (MapFrameBufferPointer->PhysicalAdapterIndex != 0 ||
+        MapFrameBufferPointer->Size == 0 ||
+        MapFrameBufferPointer->Offset >
+            MAXULONG_PTR - MapFrameBufferPointer->Size)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* The matching unmap rejects pointers that this port never published. */
+static NTSTATUS
+APIENTRY
+DxgkCbUnmapFrameBufferPointerNotSupported(
+    IN_CONST_HANDLE DeviceHandle,
+    IN_CONST_PDXGKARGCB_UNMAPFRAMEBUFFERPOINTER UnmapFrameBufferPointer)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (UnmapFrameBufferPointer == NULL ||
+        UnmapFrameBufferPointer->PhysicalAdapterIndex != 0 ||
+        UnmapFrameBufferPointer->pBaseAddress == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* Graphics IOMMU domains remain unadvertised; never return an identity map. */
+static NTSTATUS
+APIENTRY
+DxgkCbMapMdlToIoMmuNotSupported(
+    IN_CONST_HANDLE DeviceHandle,
+    INOUT_PDXGKARGCB_MAPMDLTOIOMMU MapMdlToIoMmu)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (MapMdlToIoMmu == NULL)
+        return STATUS_INVALID_PARAMETER;
+    MapMdlToIoMmu->hMemoryHandle = NULL;
+    if (MapMdlToIoMmu->pMdl == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* No valid IOMMU handle can exist while the matching map always fails. */
+static VOID
+APIENTRY
+DxgkCbUnmapMdlFromIoMmuSuppressed(
+    IN_CONST_HANDLE DeviceHandle,
+    IN_CONST_PDXGKARGCB_UNMAPMDLFROMIOMMU UnmapMdlFromIoMmu)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(UnmapMdlFromIoMmu);
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter != NULL)
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+}
+
+/*
+ * ReactOS has no bounded diagnostic ingestion sink.  Validate the public
+ * WDDM envelope at the callback's DISPATCH_LEVEL ceiling, but never claim
+ * that an event was recorded.
+ */
+static NTSTATUS
+APIENTRY
+DxgkCbReportDiagnosticNotSupported(
+    _In_ HANDLE DeviceHandle,
+    IN_PDXGK_DIAGNOSTIC_HEADER Diagnostic)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    ULONG RequiredSize;
+
+    if (Diagnostic == NULL || Diagnostic->Reserved != 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Diagnostic->Size < sizeof(*Diagnostic))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    if (Diagnostic->Category.Value == DXGK_DIAGCAT_NOTIFICATIONS_MASK)
+    {
+        if (Diagnostic->Type.Value != DXGK_DIAG_NOTIFICATIONS_PSR_SW_MASK &&
+            Diagnostic->Type.Value != DXGK_DIAG_NOTIFICATIONS_PSR_HW_MASK)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        RequiredSize = sizeof(DXGK_DIAGNOSTIC_PSR);
+    }
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_5)
+    else if (Diagnostic->Category.Value == DXGK_DIAGCAT_PROGRESSIONS_MASK)
+    {
+        if (Diagnostic->Type.Value !=
+            DXGK_DIAG_PROGRESSIONS_SYNCLOCK_ENABLE_SYNC_MASK)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        RequiredSize = sizeof(DXGK_DIAGNOSTIC_SYNCLOCK_ENABLESYNC);
+    }
+#endif
+    else
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Diagnostic->Size < RequiredSize)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/*
+ * Driver hot update is not an advertised lifecycle.  On failure ownership of
+ * every input buffer and MDL remains with the miniport.
+ */
+static NTSTATUS
+APIENTRY
+DxgkCbSaveMemoryForHotUpdateNotSupported(
+    IN_CONST_HANDLE DeviceHandle,
+    IN_CONST_PDXGKARGCB_SAVEMEMORYFORHOTUPDATE Args)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (Args == NULL ||
+        (Args->NumDataMemoryRanges != 0 &&
+         Args->pDataMemoryRanges == NULL) ||
+        (Args->DataSize != 0 && Args->pData == NULL &&
+         Args->pDataMdl == NULL) ||
+        (Args->MetaDataSize != 0 && Args->pMetaData == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* No cursor capability-change transaction is owned by the present path. */
+static NTSTATUS
+APIENTRY
+DxgkCbNotifyCursorSupportChangeNotSupported(
+    IN_CONST_PDXGKARGCB_NOTIFYCURSORSUPPORTCHANGE Args)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (Args == NULL || Args->DeviceHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Adapter = DxgkpHandleToAdapter(Args->DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    if (Args->VidPnSourceId >= Adapter->NumberOfVideoPresentSources)
+    {
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* No framebuffer-save section exists from which a WDDM 2.9 ADL can be made. */
+static NTSTATUS
+APIENTRY
+DxgkCbPinFrameBufferForSave2NotSupported(
+    IN_CONST_HANDLE DeviceHandle,
+    INOUT_PDXGKARGCB_PINFRAMEBUFFERFORSAVE2 Args)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
+    if (Args == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Args->pAdl = NULL;
+    if (Args->PhysicalAdapterIndex != 0 || Args->CommitSize == 0 ||
+        (Args->CommitSize & (PAGE_SIZE - 1)) != 0 ||
+        (Args->Flags.Value & ~1U) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/*
+ * Doorbells stay outside the clean-room feature gate.  No handles are
+ * published, no mapping is rotated, and no user-visible status is changed.
+ */
+static NTSTATUS
+APIENTRY
+DxgkCbDisconnectDoorbellNotSupported(
+    INOUT_PDXGKARGCB_DISCONNECTDOORBELL Args)
+{
+    PAGED_CODE();
+    if (Args == NULL || Args->hHwQueue == NULL || Args->hDoorbell == NULL ||
+        Args->Flags.Value != 0 ||
+        (Args->DisconnectReason !=
+             D3DDDI_DOORBELLSTATUS_DISCONNECTED_RETRY &&
+         Args->DisconnectReason !=
+             D3DDDI_DOORBELLSTATUS_DISCONNECTED_ABORT))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_NOT_SUPPORTED;
+}
+
+#define DXGKP_MAX_ACPI_METHOD_ARGUMENTS 7
+
+static BOOLEAN
+DxgkpValidateAcpiComplexInput(
+    _In_reads_bytes_(InputSize)
+        PACPI_EVAL_INPUT_BUFFER_COMPLEX InputBuffer,
+    _In_ ULONG InputSize)
+{
+    PACPI_METHOD_ARGUMENT Argument;
+    ULONG ArgumentLength;
+    ULONG ArgumentOffset;
+    ULONG Index;
+
+    if (InputBuffer == NULL ||
+        InputSize < sizeof(*InputBuffer) ||
+        InputBuffer->ArgumentCount > DXGKP_MAX_ACPI_METHOD_ARGUMENTS)
+    {
+        return FALSE;
+    }
+
+    ArgumentOffset = FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument);
+    Argument = InputBuffer->Argument;
+    for (Index = 0; Index < InputBuffer->ArgumentCount; ++Index)
+    {
+        if (ArgumentOffset > InputSize ||
+            sizeof(*Argument) > InputSize - ArgumentOffset)
+        {
+            return FALSE;
+        }
+
+        ArgumentLength = ACPI_METHOD_ARGUMENT_LENGTH(Argument->DataLength);
+        if (ArgumentLength > InputSize - ArgumentOffset)
+            return FALSE;
+
+        ArgumentOffset += ArgumentLength;
+        Argument = (PACPI_METHOD_ARGUMENT)
+            ((PUCHAR)InputBuffer + ArgumentOffset);
+    }
+
+    return TRUE;
 }
 
 /*
@@ -3840,13 +4742,18 @@ DxgkCbEvalAcpiMethod(
     PIRP Irp;
     NTSTATUS Status;
     ULONG Signature;
+    ULONG ChildAcpiUid;
+    ULONG IoControlCode;
+    PVOID IoInputBuffer;
+    ULONG IoInputSize;
+    PACPI_PCI_CHILD_EVAL_INPUT_BUFFER ChildInput;
 
     PAGED_CODE();
-    UNREFERENCED_PARAMETER(DeviceUid);
 
-    if (AcpiInputBuffer == NULL ||
-        AcpiInputSize < FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument) ||
-        (AcpiOutputBuffer == NULL && AcpiOutputSize != 0))
+    if (!DxgkpValidateAcpiComplexInput(AcpiInputBuffer, AcpiInputSize) ||
+        (AcpiOutputBuffer == NULL && AcpiOutputSize != 0) ||
+        (AcpiOutputBuffer != NULL &&
+         AcpiOutputSize < sizeof(ACPI_EVAL_OUTPUT_BUFFER)))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -3858,6 +4765,9 @@ DxgkCbEvalAcpiMethod(
         return STATUS_INVALID_PARAMETER;
     }
 
+    /* The public contract restores the caller's marker before returning. */
+    AcpiInputBuffer->Signature = ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE;
+
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
         return STATUS_INVALID_HANDLE;
@@ -3868,17 +4778,62 @@ DxgkCbEvalAcpiMethod(
         return STATUS_DEVICE_NOT_READY;
     }
 
-    /* Windows restores this signature before returning, including when the
-     * caller opted into passing arguments to ACPI child devices. */
-    AcpiInputBuffer->Signature = ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE;
+    ChildInput = NULL;
+    IoControlCode = IOCTL_ACPI_EVAL_METHOD;
+    IoInputBuffer = AcpiInputBuffer;
+    IoInputSize = AcpiInputSize;
+
+    if (DeviceUid != DISPLAY_ADAPTER_HW_ID)
+    {
+        Status = DxgkPnpResolveChildAcpiUid(Adapter,
+                                            DeviceUid,
+                                           &ChildAcpiUid);
+        if (!NT_SUCCESS(Status))
+        {
+            ExReleaseRundownProtection(
+                &Adapter->ReverseCallbackRundownRef);
+            return Status;
+        }
+        if (AcpiInputSize > MAXULONG - sizeof(*ChildInput))
+        {
+            ExReleaseRundownProtection(
+                &Adapter->ReverseCallbackRundownRef);
+            return STATUS_INTEGER_OVERFLOW;
+        }
+
+        IoInputSize = sizeof(*ChildInput) + AcpiInputSize;
+        ChildInput = ExAllocatePoolWithTag(PagedPool,
+                                           IoInputSize,
+                                           TAG_DXGK_RESOURCES);
+        if (ChildInput == NULL)
+        {
+            ExReleaseRundownProtection(
+                &Adapter->ReverseCallbackRundownRef);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlZeroMemory(ChildInput, sizeof(*ChildInput));
+        ChildInput->Signature =
+            ACPI_PCI_CHILD_EVAL_INPUT_BUFFER_SIGNATURE;
+        ChildInput->ChildAcpiUid = ChildAcpiUid;
+        ChildInput->TotalSize = IoInputSize;
+        ChildInput->InputBufferOffset = sizeof(*ChildInput);
+        ChildInput->InputBufferSize = AcpiInputSize;
+        RtlCopyMemory(
+            ACPI_PCI_CHILD_EVAL_GET_INPUT_BUFFER(ChildInput),
+            AcpiInputBuffer,
+            AcpiInputSize);
+        IoControlCode = IOCTL_ACPI_EVAL_METHOD_FOR_PCI_CHILD;
+        IoInputBuffer = ChildInput;
+    }
 
     RtlZeroMemory(&IoStatus, sizeof(IoStatus));
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
     Irp = IoBuildDeviceIoControlRequest(
-              IOCTL_ACPI_EVAL_METHOD,
+              IoControlCode,
               Adapter->PhysicalDeviceObject,
-              AcpiInputBuffer,
-              AcpiInputSize,
+              IoInputBuffer,
+              IoInputSize,
               AcpiOutputBuffer,
               AcpiOutputSize,
               FALSE,
@@ -3886,6 +4841,8 @@ DxgkCbEvalAcpiMethod(
               &IoStatus);
     if (Irp == NULL)
     {
+        if (ChildInput != NULL)
+            ExFreePoolWithTag(ChildInput, TAG_DXGK_RESOURCES);
         ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -3901,6 +4858,8 @@ DxgkCbEvalAcpiMethod(
         Status = IoStatus.Status;
     }
 
+    if (ChildInput != NULL)
+        ExFreePoolWithTag(ChildInput, TAG_DXGK_RESOURCES);
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return Status;
 }
@@ -3937,6 +4896,7 @@ DxgkCbIsFeatureEnabled(
 {
     PDXGKRNL_ADAPTER Adapter;
 
+    PAGED_CODE();
     if (Args == NULL)
         return STATUS_INVALID_PARAMETER;
     Args->Enabled = FALSE;
@@ -3961,6 +4921,7 @@ DxgkCbQueryFeatureSupport(
 {
     PDXGKRNL_ADAPTER Adapter;
 
+    PAGED_CODE();
     if (Args == NULL ||
         Args->DriverSupportState > DXGK_FEATURE_SUPPORT_ALWAYS_ON)
     {
@@ -3984,11 +4945,10 @@ DxgkCbQueryFeatureSupport(
 #endif
 
 /*
- * Native dxgkrnl does not advertise sizeof(DXGKRNL_INTERFACE) blindly.  Older
- * selectors are normalized to the newest compatible revision and receive the
- * exact prefix ending at that revision's last callback.  Starting with WDDM
- * 2.8, native publishes its whole current callback buffer and leaves callbacks
- * it does not implement NULL.
+ * Native dxgkrnl does not advertise sizeof(DXGKRNL_INTERFACE) blindly.  Each
+ * accepted WDDM 2.x/3.x selector receives the public prefix ending at that
+ * revision's last callback.  Starting with WDDM 2.8, native publishes its
+ * whole current callback buffer and leaves unsupported callbacks NULL.
  *
  * Keep the sizes tied to WDK field ends rather than pointer-size literals.
  * These assertions also prove the x86 sizes independently of the native
@@ -4028,25 +4988,10 @@ DxgkpSelectInterfaceAdvertisement(
     _Out_ PULONG AdvertisedSize,
     _Out_ PULONG AdvertisedVersion)
 {
-    if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WIN7)
+    if (RequestedVersion < DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     {
-        *AdvertisedSize =
-            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbExcludeAdapterAccess);
-        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WIN7;
-    }
-    else if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WIN8)
-    {
-        *AdvertisedSize =
-            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbCompleteFStateTransition);
-        *AdvertisedVersion = DXGKDDI_INTERFACE_VERSION_WIN8;
-    }
-    else if (RequestedVersion <=
-             DXGKDDI_INTERFACE_VERSION_WDDM1_3_PATH_INDEPENDENT_ROTATION)
-    {
-        *AdvertisedSize =
-            DXGKP_FIELD_END(DXGKRNL_INTERFACE, DxgkCbCompletePStateTransition);
-        *AdvertisedVersion =
-            DXGKDDI_INTERFACE_VERSION_WDDM1_3_PATH_INDEPENDENT_ROTATION;
+        *AdvertisedSize = 0;
+        *AdvertisedVersion = 0;
     }
     else if (RequestedVersion <= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     {
@@ -4135,7 +5080,7 @@ DxgkpFillInterface(
                   RequestedVersion,
                   Interface->Version);
 
-    /* WDDM 1.0 (Vista) baseline callbacks — correct WDK field order */
+    /* The WDDM 2.x baseline retains the original callback prefix. */
     Interface->DxgkCbEvalAcpiMethod                = DxgkCbEvalAcpiMethod;     /* 0x10 */
     Interface->DxgkCbGetDeviceInformation          = DxgkCbGetDeviceInformation;  /* 0x18 */
     Interface->DxgkCbIndicateChildStatus           = DxgkCbIndicateChildStatus;   /* 0x20 */
@@ -4154,45 +5099,62 @@ DxgkpFillInterface(
     Interface->DxgkCbNotifyDpc                     = DxgkCbNotifyDpc;             /* 0x88 */
     Interface->DxgkCbQueryVidPnInterface           = DxgkCbQueryVidPnInterface; /* 0x90 */
     Interface->DxgkCbQueryMonitorInterface         = DxgkCbQueryMonitorInterface; /* 0x98 */
-    Interface->DxgkCbGetCaptureAddress             = DxgkCbGetCaptureAddressStub; /* 0xa0 */
+    Interface->DxgkCbGetCaptureAddress             = DxgkCbGetCaptureAddress; /* 0xa0 */
 
-    if (DxgkCapsCoreInterfaceVersionAtLeast(
-            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_1))
-    {
-        Interface->DxgkCbLogEtwEvent          = DxgkCbLogEtwEventStub; /* 0xa8 */
-        Interface->DxgkCbExcludeAdapterAccess = DxgkCbExcludeAdapterAccessStub; /* 0xb0 */
-    }
-
-    if (DxgkCapsCoreInterfaceVersionAtLeast(
-            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_2))
-    {
-        Interface->DxgkCbCreateContextAllocation =
-            DxgkCbCreateContextAllocationStub; /* 0xb8 */
-        Interface->DxgkCbDestroyContextAllocation =
-            DxgkCbDestroyContextAllocationStub; /* 0xc0 */
-        Interface->DxgkCbSetPowerComponentActive =
-            DxgkCbSetPowerComponentActiveStub; /* 0xc8 */
-        Interface->DxgkCbSetPowerComponentIdle =
-            DxgkCbSetPowerComponentIdleStub; /* 0xd0 */
-        Interface->DxgkCbAcquirePostDisplayOwnership =
-            DxgkCbAcquirePostDisplayOwnership; /* 0xd8 */
-        Interface->DxgkCbPowerRuntimeControlRequest =
-            DxgkCbPowerRuntimeControlRequestStub; /* 0xe0 */
-    }
+    Interface->DxgkCbLogEtwEvent = DxgkCbLogEtwEventDisabled; /* 0xa8 */
+    Interface->DxgkCbExcludeAdapterAccess = DxgkCbExcludeAdapterAccessNotSupported; /* 0xb0 */
+    Interface->DxgkCbCreateContextAllocation = DxgkCbCreateContextAllocationNotSupported; /* 0xb8 */
+    Interface->DxgkCbDestroyContextAllocation = DxgkCbDestroyContextAllocationNotSupported; /* 0xc0 */
+    Interface->DxgkCbSetPowerComponentActive = DxgkCbSetPowerComponentActiveSuppressed; /* 0xc8 */
+    Interface->DxgkCbSetPowerComponentIdle = DxgkCbSetPowerComponentIdleSuppressed; /* 0xd0 */
+    Interface->DxgkCbAcquirePostDisplayOwnership = DxgkCbAcquirePostDisplayOwnership; /* 0xd8 */
+    Interface->DxgkCbPowerRuntimeControlRequest = DxgkCbPowerRuntimeControlRequestNotSupported; /* 0xe0 */
+    Interface->DxgkCbSetPowerComponentLatency = DxgkCbSetPowerComponentLatencySuppressed; /* 0xe8 */
+    Interface->DxgkCbSetPowerComponentResidency = DxgkCbSetPowerComponentResidencySuppressed; /* 0xf0 */
+    Interface->DxgkCbCompleteFStateTransition = DxgkCbCompleteFStateTransitionSuppressed; /* 0xf8 */
+    Interface->DxgkCbCompletePStateTransition = DxgkCbCompletePStateTransitionSuppressed; /* 0x100 */
 
     if (DxgkCapsCoreInterfaceVersionAtLeast(
             Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
     {
+        Interface->DxgkCbMapContextAllocation = DxgkCbMapContextAllocationNotSupported; /* 0x108 */
+        Interface->DxgkCbUpdateContextAllocation = DxgkCbUpdateContextAllocationNotSupported; /* 0x110 */
+        Interface->DxgkCbReserveGpuVirtualAddressRange = DxgkCbReserveGpuVirtualAddressRangeNotSupported; /* 0x118 */
         Interface->DxgkCbAcquireHandleData = DxgkCbAcquireHandleData; /* 0x120 */
         Interface->DxgkCbReleaseHandleData = DxgkCbReleaseHandleData; /* 0x128 */
+        Interface->DxgkCbHardwareContentProtectionTeardown = DxgkCbHardwareContentProtectionTeardownSuppressed; /* 0x130 */
     }
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_1))
+    {
+        Interface->DxgkCbMultiPlaneOverlayDisabled = DxgkCbMultiPlaneOverlayDisabledSuppressed; /* 0x138 */
+        Interface->DxgkCbMitigatedRangeUpdate = DxgkCbMitigatedRangeUpdateSuppressed; /* 0x140 */
+    }
+#endif
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
     if (DxgkCapsCoreInterfaceVersionAtLeast(
             Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_2))
     {
+        Interface->DxgkCbInvalidateHwContext =
+            DxgkCbInvalidateHwContextNotSupported; /* 0x148 */
+        Interface->DxgkCbIndicateConnectorChange =
+            DxgkCbIndicateConnectorChangeNotSupported; /* 0x150 */
+        Interface->DxgkCbUnblockUEFIFrameBufferRanges =
+            DxgkCbUnblockUEFIFrameBufferRangesNotSupported; /* 0x158 */
         Interface->DxgkCbAcquirePostDisplayOwnership2 =
             DxgkCbAcquirePostDisplayOwnership2; /* 0x160 */
+    }
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_3))
+    {
+        Interface->DxgkCbSetProtectedSessionStatus =
+            DxgkCbSetProtectedSessionStatusNotSupported; /* 0x168 */
     }
 #endif
 
@@ -4208,13 +5170,20 @@ DxgkpFillInterface(
             DxgkCbAllocatePagesForMdl; /* 0x180 */
         Interface->DxgkCbFreePagesFromMdl =
             DxgkCbFreePagesFromMdl; /* 0x188 */
-
-        /*
-         * Leave the framebuffer-save, MDL-to-IOMMU, and diagnostic callbacks
-         * NULL.  The memory callbacks require per-physical-adapter
-         * section/commit accounting or a graphics IOMMU domain, and diagnostic
-         * reporting requires an ingestion sink.  None exists in this dxgkrnl.
-         */
+        Interface->DxgkCbPinFrameBufferForSave =
+            DxgkCbPinFrameBufferForSaveNotSupported; /* 0x190 */
+        Interface->DxgkCbUnpinFrameBufferForSave =
+            DxgkCbUnpinFrameBufferForSaveNotSupported; /* 0x198 */
+        Interface->DxgkCbMapFrameBufferPointer =
+            DxgkCbMapFrameBufferPointerNotSupported; /* 0x1a0 */
+        Interface->DxgkCbUnmapFrameBufferPointer =
+            DxgkCbUnmapFrameBufferPointerNotSupported; /* 0x1a8 */
+        Interface->DxgkCbMapMdlToIoMmu =
+            DxgkCbMapMdlToIoMmuNotSupported; /* 0x1b0 */
+        Interface->DxgkCbUnmapMdlFromIoMmu =
+            DxgkCbUnmapMdlFromIoMmuSuppressed; /* 0x1b8 */
+        Interface->DxgkCbReportDiagnostic =
+            DxgkCbReportDiagnosticNotSupported; /* 0x1c0 */
     }
 #endif
 
@@ -4233,6 +5202,18 @@ DxgkpFillInterface(
             Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_6))
     {
         Interface->DxgkCbIsFeatureEnabled = DxgkCbIsFeatureEnabled;
+        Interface->DxgkCbSaveMemoryForHotUpdate =
+            DxgkCbSaveMemoryForHotUpdateNotSupported;
+    }
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2800) && \
+    (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_8)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_8))
+    {
+        Interface->DxgkCbNotifyCursorSupportChange =
+            DxgkCbNotifyCursorSupportChangeNotSupported;
     }
 #endif
 
@@ -4254,6 +5235,18 @@ DxgkpFillInterface(
             DxgkCbOpenPhysicalMemoryObject;
         Interface->DxgkCbClosePhysicalMemoryObject =
             DxgkCbClosePhysicalMemoryObject;
+        Interface->DxgkCbPinFrameBufferForSave2 =
+            DxgkCbPinFrameBufferForSave2NotSupported;
+    }
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3100) && \
+    (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+    if (DxgkCapsCoreInterfaceVersionAtLeast(
+            Interface->Version, DXGK_CAPS_CORE_LEVEL_WDDM_3_1))
+    {
+        Interface->DxgkCbDisconnectDoorbell =
+            DxgkCbDisconnectDoorbellNotSupported;
     }
 #endif
 
@@ -4314,8 +5307,9 @@ DxgkpHandleToAdapter(
 /*
  * DxgkCbNotifyInterrupt
  *
- * Called from the miniport's ISR (at DIRQL) to notify dxgkrnl of a GPU
- * interrupt.  Queues a DPC to perform deferred processing.
+ * Called from the miniport's ISR (at DIRQL) to publish interrupt data to
+ * dxgkrnl. The miniport separately calls DxgkCbQueueDpc before leaving its
+ * ISR when deferred processing is required.
  *
  * IRQL: DIRQL (called from ISR context)
  */
@@ -4341,95 +5335,57 @@ DxgkCbNotifyInterrupt(
     if (!DxgkpAcquireVidSchCallback(Adapter))
         return;
 
-    /* Log interrupt type for diagnostics */
-    if (NotifyInterruptData)
-    {
-        static LONG NotifyCount = 0;
-        LONG c = InterlockedIncrement(&NotifyCount);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
-        if (NotifyInterruptData->InterruptType ==
-            DXGK_INTERRUPT_MONITORED_FENCE_SIGNALED)
-        {
-            (VOID)DxgkpQueueMonitoredFenceEvaluation(
-                Adapter,
-                NotifyInterruptData->MonitoredFenceSignaled
-                    .NodeOrdinal,
-                NotifyInterruptData->MonitoredFenceSignaled
-                    .EngineOrdinal);
-        }
+    if (NotifyInterruptData->InterruptType ==
+        DXGK_INTERRUPT_MONITORED_FENCE_SIGNALED)
+    {
+        (VOID)DxgkpQueueMonitoredFenceEvaluation(
+            Adapter,
+            NotifyInterruptData->MonitoredFenceSignaled.NodeOrdinal,
+            NotifyInterruptData->MonitoredFenceSignaled.EngineOrdinal);
+    }
 #endif
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
-        if (NotifyInterruptData->InterruptType ==
-            DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED)
-        {
-            BOOLEAN QueuePeriodicDpc;
-            KIRQL OldIrql;
+    if (NotifyInterruptData->InterruptType ==
+        DXGK_INTERRUPT_PERIODIC_MONITORED_FENCE_SIGNALED)
+    {
+        BOOLEAN QueuePeriodicDpc;
+        KIRQL OldIrql;
 
-            if (DxgkpPeriodicInterruptHandoffSupported(Adapter))
-            {
-                OldIrql =
-                    DxgkpAcquireAdapterInterruptLock(Adapter);
-                (VOID)DxgkPeriodicInterruptCoreEnqueueLocked(
-                    &Adapter->PeriodicInterruptCore,
-                    NotifyInterruptData->PeriodicMonitoredFenceSignaled
-                        .VidPnTargetId,
-                    NotifyInterruptData->PeriodicMonitoredFenceSignaled
-                        .NotificationID,
-                    1,
-                    &QueuePeriodicDpc);
-                DxgkpReleaseAdapterInterruptLock(Adapter, OldIrql);
-            }
+        if (DxgkpPeriodicInterruptHandoffSupported(Adapter))
+        {
+            OldIrql = DxgkpAcquireAdapterInterruptLock(Adapter);
+            (VOID)DxgkPeriodicInterruptCoreEnqueueLocked(&Adapter->PeriodicInterruptCore, NotifyInterruptData->PeriodicMonitoredFenceSignaled.VidPnTargetId, NotifyInterruptData->PeriodicMonitoredFenceSignaled.NotificationID, 1, &QueuePeriodicDpc);
+            DxgkpReleaseAdapterInterruptLock(Adapter, OldIrql);
         }
+    }
 #endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
-        if (NotifyInterruptData->InterruptType ==
-                DXGK_INTERRUPT_NATIVE_FENCE_SIGNALED &&
-            Adapter->MiniportContext != NULL &&
-            DxgkCapsCoreInterfaceVersionAtLeast(
-                Adapter->MiniportContext->InitData.s.Version,
-                DXGK_CAPS_CORE_LEVEL_WDDM_3_2) &&
-            NotifyInterruptData->Flags
-                .EvaluateLegacyMonitoredFences)
-        {
-            (VOID)DxgkpQueueMonitoredFenceEvaluation(
-                Adapter,
-                NotifyInterruptData->NativeFenceSignaled
-                    .NodeOrdinal,
-                NotifyInterruptData->NativeFenceSignaled
-                    .EngineOrdinal);
-        }
-#endif
-        if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_CRTC_VSYNC)
-        {
-            ULONG TargetId = NotifyInterruptData->CrtcVsync.VidPnTargetId;
-
-            if (TargetId < Adapter->PresentQueueCount && TargetId < 32)
-                InterlockedOr(&Adapter->VsyncPending, (LONG)(1UL << TargetId));
-        }
-        if (c <= 10)
-        {
-            /* Can't use DPRINT1 at DIRQL safely — just count */
-        }
-
-        /* Forward DMA completion/preemption to the VidSch engine state machine. */
-        VidSchNotifyInterrupt(Adapter, NotifyInterruptData);
-    }
-    /* Queue the DPC; the DPC routine will call DxgkDdiDpcRoutine. */
+    if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_NATIVE_FENCE_SIGNALED &&
+        Adapter->MiniportContext != NULL &&
+        DxgkCapsCoreInterfaceVersionAtLeast(Adapter->MiniportContext->InitData.s.Version, DXGK_CAPS_CORE_LEVEL_WDDM_3_2) &&
+        NotifyInterruptData->Flags.EvaluateLegacyMonitoredFences)
     {
-        static LONG NotifyCount = 0;
-        InterlockedIncrement(&NotifyCount);
+        (VOID)DxgkpQueueMonitoredFenceEvaluation(Adapter, NotifyInterruptData->NativeFenceSignaled.NodeOrdinal, NotifyInterruptData->NativeFenceSignaled.EngineOrdinal);
     }
-    KeInsertQueueDpc(&Adapter->DpcObject, NULL, NULL);
+#endif
+    if (NotifyInterruptData->InterruptType == DXGK_INTERRUPT_CRTC_VSYNC)
+    {
+        ULONG TargetId = NotifyInterruptData->CrtcVsync.VidPnTargetId;
 
+        if (TargetId < Adapter->PresentQueueCount && TargetId < 32)
+            InterlockedOr(&Adapter->VsyncPending, (LONG)(1UL << TargetId));
+    }
+
+    VidSchNotifyInterrupt(Adapter, NotifyInterruptData);
     DxgkpReleaseVidSchCallback(Adapter);
 }
 
 /*
  * DxgkCbNotifyDpc
  *
- * Called from the miniport's DPC routine to signal dxgkrnl that deferred
- * GPU work is complete.  Sets the synchronisation event used by
- * DxgkCbSynchronizeExecution and vidmm fence waits.
+ * Called from the miniport's DPC routine to signal that its deferred
+ * interrupt processing is complete.
  *
  * IRQL: DISPATCH_LEVEL
  */
@@ -4446,7 +5402,7 @@ DxgkCbNotifyDpc(
     if (!DxgkpAcquireVidSchCallback(Adapter))
         return;
 
-    KeSetEvent(&Adapter->SyncEvent, IO_NO_INCREMENT, FALSE);
+    VidSchNotifyDpc(Adapter);
     DxgkpReleaseVidSchCallback(Adapter);
 }
 
@@ -4586,37 +5542,24 @@ DxgkCbGetDeviceInformation(
     PDXGKRNL_ADAPTER Adapter;
     PPHYSICAL_MEMORY_RANGE MemoryRanges;
     PPHYSICAL_MEMORY_RANGE Range;
-    ULONGLONG        TotalStart100ns;
+    ULONGLONG TotalSystemMemory = 0;
+    ULONGLONG HighestPhysicalAddress = 0;
+    BOOLEAN FoundPhysicalRange = FALSE;
 
     PAGED_CODE();
 
-    TotalStart100ns = DxgkpTraceNow100ns();
-
-    DXGKRNL_TRACE("DxgkCbGetDeviceInformation: handle=%p DeviceInfo=%p\n",
-                  DeviceHandle, DeviceInformation);
-
     if (DeviceInformation == NULL)
         return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(DeviceInformation, sizeof(*DeviceInformation));
 
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
-    {
-        DXGKRNL_ERR("DxgkCbGetDeviceInformation: invalid handle %p\n",
-                    DeviceHandle);
-        return STATUS_INVALID_HANDLE;
-    }
-
-    DXGKRNL_TRACE("DxgkCbGetDeviceInformation: Adapter=%p PDO=%p\n",
-                  Adapter, Adapter->PhysicalDeviceObject);
-
-    RtlZeroMemory(DeviceInformation, sizeof(*DeviceInformation));
+        return STATUS_INVALID_PARAMETER;
 
     DeviceInformation->MiniportDeviceContext = Adapter->MiniportDeviceContext;
     DeviceInformation->PhysicalDeviceObject = Adapter->PhysicalDeviceObject;
     DeviceInformation->DeviceRegistryPath = Adapter->DeviceRegistryPath;
     DeviceInformation->TranslatedResourceList = Adapter->TranslatedResources;
-    DeviceInformation->SystemMemorySize.QuadPart =
-        (LONGLONG)SharedUserData->NumberOfPhysicalPages << PAGE_SHIFT;
     DeviceInformation->DockingState = DockStateUnsupported;
 
     /*
@@ -4628,37 +5571,53 @@ DxgkCbGetDeviceInformation(
     if (MemoryRanges != NULL)
     {
         for (Range = MemoryRanges;
-             Range->NumberOfBytes.QuadPart != 0;
+             Range->BaseAddress.QuadPart != 0 ||
+                 Range->NumberOfBytes.QuadPart != 0;
              ++Range)
         {
+            ULONGLONG BaseAddress;
+            ULONGLONG NumberOfBytes;
             ULONGLONG EndAddress;
 
-            EndAddress = (ULONGLONG)Range->BaseAddress.QuadPart +
-                         (ULONGLONG)Range->NumberOfBytes.QuadPart - 1;
-            if (EndAddress >
-                (ULONGLONG)DeviceInformation->HighestPhysicalAddress.QuadPart)
-            {
-                DeviceInformation->HighestPhysicalAddress.QuadPart =
-                    (LONGLONG)EndAddress;
-            }
+            if (Range->BaseAddress.QuadPart < 0 ||
+                Range->NumberOfBytes.QuadPart <= 0)
+                continue;
+
+            BaseAddress = (ULONGLONG)Range->BaseAddress.QuadPart;
+            NumberOfBytes = (ULONGLONG)Range->NumberOfBytes.QuadPart;
+            TotalSystemMemory =
+                TotalSystemMemory > MAXULONGLONG - NumberOfBytes ?
+                    MAXULONGLONG :
+                    TotalSystemMemory + NumberOfBytes;
+            EndAddress = BaseAddress > MAXULONGLONG - (NumberOfBytes - 1) ?
+                MAXULONGLONG :
+                BaseAddress + NumberOfBytes - 1;
+            if (!FoundPhysicalRange ||
+                EndAddress > HighestPhysicalAddress)
+                HighestPhysicalAddress = EndAddress;
+            FoundPhysicalRange = TRUE;
         }
         ExFreePool(MemoryRanges);
     }
-    else if (DeviceInformation->SystemMemorySize.QuadPart != 0)
+
+    if (!FoundPhysicalRange)
     {
-        DeviceInformation->HighestPhysicalAddress.QuadPart =
-            DeviceInformation->SystemMemorySize.QuadPart - 1;
+        ULONGLONG NumberOfPhysicalPages =
+            SharedUserData->NumberOfPhysicalPages;
+
+        TotalSystemMemory =
+            NumberOfPhysicalPages >
+                ((ULONGLONG)MAXLONGLONG >> PAGE_SHIFT) ?
+                (ULONGLONG)MAXLONGLONG :
+                NumberOfPhysicalPages << PAGE_SHIFT;
+        if (TotalSystemMemory != 0)
+            HighestPhysicalAddress = TotalSystemMemory - 1;
     }
 
-    DXGKRNL_TRACE("DxgkCbGetDeviceInformation: PDO %p SoftwareKey=%wZ "
-                  "SysMem=%I64u HighestPA=0x%I64X TransRes=%p\n",
-                  Adapter->PhysicalDeviceObject,
-                  &DeviceInformation->DeviceRegistryPath,
-                  DeviceInformation->SystemMemorySize.QuadPart,
-                  DeviceInformation->HighestPhysicalAddress.QuadPart,
-                  DeviceInformation->TranslatedResourceList);
-    DXGKRNL_TRACE("DxgkCbGetDeviceInformation: total=%I64u us\n",
-                  DxgkpTraceElapsedUs(TotalStart100ns));
+    DeviceInformation->SystemMemorySize.QuadPart =
+        (LONGLONG)min(TotalSystemMemory, (ULONGLONG)MAXLONGLONG);
+    DeviceInformation->HighestPhysicalAddress.QuadPart =
+        (LONGLONG)min(HighestPhysicalAddress, (ULONGLONG)MAXLONGLONG);
 
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_SUCCESS;
@@ -4726,8 +5685,7 @@ DxgkpBuildMdlForContiguousAllocation(
 
 static VOID
 DxgkpFreeCallbackMemoryEntry(
-    _In_ PDXGKP_CALLBACK_MEMORY_ENTRY Entry,
-    _In_ BOOLEAN ReclaimMdl)
+    _In_ PDXGKP_CALLBACK_MEMORY_ENTRY Entry)
 {
     PMDL Mdl = NULL;
 
@@ -4771,12 +5729,13 @@ DxgkpFreeCallbackMemoryEntry(
     }
 
     /*
-     * DXGKCB_FREEPAGESFROMMDL frees the described pages, just like
-     * MmFreePagesFromMdl; the miniport retains ownership of the MDL storage.
-     * Only reclaim that storage when the adapter is removed with an allocation
-     * still outstanding and the miniport can no longer perform its final free.
+     * The miniport releases this allocation through the opaque Dxgkrnl
+     * tracking handle; it is not the owner of the MDL allocation.  The Mm
+     * allocator requires the caller to release the MDL structure after the
+     * pages, so normal callback teardown and adapter-removal reclamation use
+     * the same complete destruction path.
      */
-    if (ReclaimMdl && Mdl != NULL)
+    if (Mdl != NULL)
         ExFreePool(Mdl);
 
     ExFreePoolWithTag(Entry, TAG_DXGK_RESOURCES);
@@ -4847,8 +5806,7 @@ DxgkpReleaseCallbackMemory(
         DxgkpFreeCallbackMemoryEntry(
             CONTAINING_RECORD(Link,
                               DXGKP_CALLBACK_MEMORY_ENTRY,
-                              ListEntry),
-            TRUE);
+                              ListEntry));
     }
 
     if (LeakCount != 0)
@@ -4876,16 +5834,17 @@ DxgkCbAllocateContiguousMemory(
 
     TotalStart100ns = DxgkpTraceNow100ns();
 
-    if (pAllocateContiguousMemory == NULL ||
-        pAllocateContiguousMemory->NumberOfBytes == 0)
-    {
+    if (pAllocateContiguousMemory == NULL)
         return STATUS_INVALID_PARAMETER;
-    }
 
     pAllocateContiguousMemory->hMemoryHandle = NULL;
     pAllocateContiguousMemory->pMemory = NULL;
 
-    if ((ULONGLONG)
+    if (pAllocateContiguousMemory->NumberOfBytes == 0 ||
+        pAllocateContiguousMemory->LowestAcceptableAddress.QuadPart < 0 ||
+        pAllocateContiguousMemory->HighestAcceptableAddress.QuadPart < 0 ||
+        pAllocateContiguousMemory->BoundaryAddressMultiple.QuadPart < 0 ||
+        (ULONGLONG)
             pAllocateContiguousMemory->LowestAcceptableAddress.QuadPart >
         (ULONGLONG)
             pAllocateContiguousMemory->HighestAcceptableAddress.QuadPart)
@@ -5013,7 +5972,7 @@ DxgkCbFreeContiguousMemory(
     DXGKRNL_TRACE("DxgkCbFreeContiguousMemory: VA=%p\n",
                   Entry->Memory.ContiguousMemory);
 
-    DxgkpFreeCallbackMemoryEntry(Entry, FALSE);
+    DxgkpFreeCallbackMemoryEntry(Entry);
 
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_SUCCESS;
@@ -5024,9 +5983,10 @@ DxgkCbFreeContiguousMemory(
  *
  * Provides the WDDM 2.4 MmAllocatePagesForMdlEx-equivalent allocation
  * service.  ReactOS does not yet expose a graphics IOMMU domain, so the
- * IOMMU map/unmap callbacks remain NULL and adapters continue to report the
- * IOMMU capability as unsupported.  On that truthful identity-domain path,
- * the MDL returned here describes the physical pages allocated by Mm.
+ * IOMMU map/unmap callbacks are explicit unavailable boundaries and adapters
+ * continue to report the IOMMU capability as unsupported.  On that truthful
+ * identity-domain path, the MDL returned here describes the physical pages
+ * allocated by Mm.
  *
  * IRQL: PASSIVE_LEVEL
  */
@@ -5058,7 +6018,9 @@ DxgkCbAllocatePagesForMdl(
     if (pAllocatePagesForMdl->TotalBytes == 0 ||
         pAllocatePagesForMdl->TotalBytes >
             ((SIZE_T)MAXULONG - (PAGE_SIZE - 1)) ||
-        pAllocatePagesForMdl->LowAddress.QuadPart < 0)
+        pAllocatePagesForMdl->LowAddress.QuadPart < 0 ||
+        pAllocatePagesForMdl->HighAddress.QuadPart < 0 ||
+        pAllocatePagesForMdl->SkipBytes.QuadPart < 0)
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -5296,7 +6258,7 @@ DxgkCbFreePagesFromMdl(
         return STATUS_INVALID_HANDLE;
     }
 
-    DxgkpFreeCallbackMemoryEntry(Entry, FALSE);
+    DxgkpFreeCallbackMemoryEntry(Entry);
 
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_SUCCESS;
@@ -5380,13 +6342,79 @@ DxgkpFindAdapterMemoryObjectLocked(
     return NULL;
 }
 
+static BOOLEAN
+DxgkpAdapterMemoryObjectHasAdlLocked(
+    _In_ PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject)
+{
+    PLIST_ENTRY Link;
+
+    for (Link = AdapterObject->PhysicalObject->AdlList.Flink;
+         Link != &AdapterObject->PhysicalObject->AdlList;
+         Link = Link->Flink)
+    {
+        PDXGKP_ADL_ENTRY Entry =
+            CONTAINING_RECORD(Link, DXGKP_ADL_ENTRY, ListEntry);
+
+        if (Entry->AdapterMemoryObject == AdapterObject)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static VOID
+DxgkpDetachAdapterMemoryObjectAdlsLocked(
+    _In_ PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject,
+    _Inout_ PLIST_ENTRY ReclaimList)
+{
+    PLIST_ENTRY Link;
+
+    Link = AdapterObject->PhysicalObject->AdlList.Flink;
+    while (Link != &AdapterObject->PhysicalObject->AdlList)
+    {
+        PLIST_ENTRY Next = Link->Flink;
+        PDXGKP_ADL_ENTRY Entry =
+            CONTAINING_RECORD(Link, DXGKP_ADL_ENTRY, ListEntry);
+
+        if (Entry->AdapterMemoryObject == AdapterObject)
+        {
+            RemoveEntryList(Link);
+            InsertTailList(ReclaimList, Link);
+        }
+        Link = Next;
+    }
+}
+
+static VOID
+DxgkpFreeDetachedAdls(
+    _Inout_ PLIST_ENTRY ReclaimList)
+{
+    while (!IsListEmpty(ReclaimList))
+    {
+        PLIST_ENTRY Link = RemoveHeadList(ReclaimList);
+
+        ExFreePoolWithTag(CONTAINING_RECORD(Link, DXGKP_ADL_ENTRY, ListEntry), TAG_DXGK_RESOURCES);
+    }
+}
+
 static VOID
 DxgkpFreePhysicalMapping(
     _In_ PDXGKP_PHYSICAL_MAPPING Mapping)
 {
     if (Mapping->Kind == DxgkpPhysicalMappingMdl)
     {
+        KAPC_STATE ApcState;
+        BOOLEAN Attached = FALSE;
+
+        if (Mapping->Process != NULL &&
+            Mapping->Process != PsGetCurrentProcess())
+        {
+            KeStackAttachProcess((PKPROCESS)Mapping->Process, &ApcState);
+            Attached = TRUE;
+        }
         MmUnmapLockedPages(Mapping->BaseAddress, Mapping->MappingMdl);
+        if (Attached)
+            KeUnstackDetachProcess(&ApcState);
         IoFreeMdl(Mapping->MappingMdl);
     }
     else if (Mapping->Kind == DxgkpPhysicalMappingIoSpace)
@@ -5394,16 +6422,23 @@ DxgkpFreePhysicalMapping(
         MmUnmapIoSpace(Mapping->BaseAddress, Mapping->Size);
     }
 
+    if (Mapping->Process != NULL)
+        ObDereferenceObject(Mapping->Process);
     ExFreePoolWithTag(Mapping, TAG_DXGK_RESOURCES);
 }
 
 static VOID
-DxgkpDestroyPhysicalMemoryObjectLocked(
+DxgkpDetachPhysicalMemoryObjectLocked(
+    _In_ PDXGKP_PHYSICAL_MEMORY_OBJECT Object)
+{
+    RemoveEntryList(&Object->ListEntry);
+}
+
+static VOID
+DxgkpFreePhysicalMemoryObject(
     _In_ PDXGKP_PHYSICAL_MEMORY_OBJECT Object)
 {
     PLIST_ENTRY Link;
-
-    RemoveEntryList(&Object->ListEntry);
 
     while (!IsListEmpty(&Object->MappingList))
     {
@@ -5452,9 +6487,16 @@ static VOID
 DxgkpReleasePhysicalMemoryObjects(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
+    LIST_ENTRY ObjectReclaimList;
+    LIST_ENTRY AdapterObjectReclaimList;
+    LIST_ENTRY AdlReclaimList;
     PLIST_ENTRY ObjectLink;
-    ULONG Reclaimed = 0;
+    ULONG ReclaimedObjects = 0;
+    ULONG ReclaimedAdapterObjects = 0;
 
+    InitializeListHead(&ObjectReclaimList);
+    InitializeListHead(&AdapterObjectReclaimList);
+    InitializeListHead(&AdlReclaimList);
     ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
     ObjectLink = DxgkpPhysicalMemoryList.Flink;
     while (ObjectLink != &DxgkpPhysicalMemoryList)
@@ -5464,36 +6506,54 @@ DxgkpReleasePhysicalMemoryObjects(
             CONTAINING_RECORD(ObjectLink,
                               DXGKP_PHYSICAL_MEMORY_OBJECT,
                               ListEntry);
-        PLIST_ENTRY AdapterLink;
-        BOOLEAN Owned = (Object->CreatorAdapter == Adapter);
-
-        for (AdapterLink = Object->AdapterMemoryList.Flink;
-             !Owned && AdapterLink != &Object->AdapterMemoryList;
-             AdapterLink = AdapterLink->Flink)
+        if (Object->CreatorAdapter == Adapter)
         {
-            PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject =
-                CONTAINING_RECORD(AdapterLink,
-                                  DXGKP_ADAPTER_MEMORY_OBJECT,
-                                  ListEntry);
-            Owned = (AdapterObject->Adapter == Adapter);
+            DxgkpDetachPhysicalMemoryObjectLocked(Object);
+            InsertTailList(&ObjectReclaimList, &Object->ListEntry);
         }
-
-        if (Owned)
+        else
         {
-            DxgkpDestroyPhysicalMemoryObjectLocked(Object);
-            Reclaimed++;
+            PLIST_ENTRY AdapterLink = Object->AdapterMemoryList.Flink;
+
+            while (AdapterLink != &Object->AdapterMemoryList)
+            {
+                PLIST_ENTRY NextAdapterLink = AdapterLink->Flink;
+                PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject = CONTAINING_RECORD(AdapterLink, DXGKP_ADAPTER_MEMORY_OBJECT, ListEntry);
+
+                if (AdapterObject->Adapter == Adapter)
+                {
+                    DxgkpDetachAdapterMemoryObjectAdlsLocked(AdapterObject, &AdlReclaimList);
+                    RemoveEntryList(AdapterLink);
+                    InsertTailList(&AdapterObjectReclaimList, AdapterLink);
+                }
+                AdapterLink = NextAdapterLink;
+            }
         }
 
         ObjectLink = NextObjectLink;
     }
     ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
 
-    if (Reclaimed != 0)
+    DxgkpFreeDetachedAdls(&AdlReclaimList);
+
+    while (!IsListEmpty(&AdapterObjectReclaimList))
     {
-        DXGKRNL_WARN("DxgkpReleasePhysicalMemoryObjects: reclaimed %lu "
-                     "WDDM physical memory object(s) for adapter %p\n",
-                     Reclaimed,
-                     Adapter);
+        PLIST_ENTRY AdapterLink = RemoveHeadList(&AdapterObjectReclaimList);
+
+        ExFreePoolWithTag(CONTAINING_RECORD(AdapterLink, DXGKP_ADAPTER_MEMORY_OBJECT, ListEntry), TAG_DXGK_RESOURCES);
+        ReclaimedAdapterObjects++;
+    }
+
+    while (!IsListEmpty(&ObjectReclaimList))
+    {
+        ObjectLink = RemoveHeadList(&ObjectReclaimList);
+        DxgkpFreePhysicalMemoryObject(CONTAINING_RECORD(ObjectLink, DXGKP_PHYSICAL_MEMORY_OBJECT, ListEntry));
+        ReclaimedObjects++;
+    }
+
+    if (ReclaimedObjects != 0 || ReclaimedAdapterObjects != 0)
+    {
+        DXGKRNL_WARN("DxgkpReleasePhysicalMemoryObjects: reclaimed %lu creator-owned object(s) and closed %lu adapter view(s) for adapter %p\n", ReclaimedObjects, ReclaimedAdapterObjects, Adapter);
     }
 }
 
@@ -5510,11 +6570,14 @@ DxgkCbCreatePhysicalMemoryObject(
 
     PAGED_CODE();
 
-    if (pArgs == NULL || pArgs->Size == 0 || pArgs->Size > MAXULONG)
+    if (pArgs == NULL)
         return STATUS_INVALID_PARAMETER;
 
     pArgs->hPhysicalMemoryObject = NULL;
     pArgs->hAdapterMemoryObject = NULL;
+
+    if (pArgs->Size == 0 || pArgs->Size > MAXULONG)
+        return STATUS_INVALID_PARAMETER;
 
     Status = DxgkpConvertPhysicalCacheType(pArgs->CacheType, &CacheType);
     if (!NT_SUCCESS(Status))
@@ -5577,6 +6640,8 @@ DxgkCbCreatePhysicalMemoryObject(
                 MM_ALLOCATE_AND_HOT_REMOVE;
 
             if (pArgs->Mdl.LowAddress.QuadPart < 0 ||
+                pArgs->Mdl.HighAddress.QuadPart < 0 ||
+                pArgs->Mdl.SkipBytes.QuadPart < 0 ||
                 (ULONGLONG)pArgs->Mdl.LowAddress.QuadPart >
                     (ULONGLONG)pArgs->Mdl.HighAddress.QuadPart ||
                 (pArgs->Mdl.Flags & ~AllowedFlags) != 0)
@@ -5673,11 +6738,27 @@ DxgkCbCreatePhysicalMemoryObject(
 
         case DXGK_PHYSICAL_MEMORY_TYPE_CONTIGUOUS_MEMORY:
             if (pArgs->ContiguousMemory.LowestAcceptableAddress.QuadPart < 0 ||
+                pArgs->ContiguousMemory.HighestAcceptableAddress.QuadPart < 0 ||
+                pArgs->ContiguousMemory.BoundaryAddressMultiple.QuadPart < 0 ||
                 (ULONGLONG)pArgs->ContiguousMemory.LowestAcceptableAddress.QuadPart >
                     (ULONGLONG)pArgs->ContiguousMemory.HighestAcceptableAddress.QuadPart)
             {
                 Status = STATUS_INVALID_PARAMETER;
                 goto Failure;
+            }
+
+            if (pArgs->ContiguousMemory.BoundaryAddressMultiple.QuadPart != 0)
+            {
+                ULONGLONG Boundary =
+                    (ULONGLONG)pArgs->ContiguousMemory.
+                        BoundaryAddressMultiple.QuadPart;
+
+                if (Boundary < PAGE_SIZE ||
+                    (Boundary & (Boundary - 1)) != 0)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    goto Failure;
+                }
             }
 
             Object->VirtualAddress =
@@ -5704,7 +6785,11 @@ DxgkCbCreatePhysicalMemoryObject(
             break;
 
         case DXGK_PHYSICAL_MEMORY_TYPE_IO_SPACE:
-            if ((pArgs->IOSpace.BaseAddress.QuadPart & (PAGE_SIZE - 1)) != 0)
+            if (pArgs->IOSpace.BaseAddress.QuadPart < 0 ||
+                (pArgs->IOSpace.BaseAddress.QuadPart &
+                    (PAGE_SIZE - 1)) != 0 ||
+                (ULONGLONG)pArgs->IOSpace.BaseAddress.QuadPart >
+                    MAXULONGLONG - ((ULONGLONG)pArgs->Size - 1))
             {
                 Status = STATUS_INVALID_PARAMETER;
                 goto Failure;
@@ -5768,7 +6853,9 @@ APIENTRY
 DxgkCbDestroyPhysicalMemoryObject(
     IN_CONST_PDXGKARGCB_DESTROY_PHYSICAL_MEMORY_OBJECT pArgs)
 {
-    PDXGKP_PHYSICAL_MEMORY_OBJECT Object;
+    PDXGKP_PHYSICAL_MEMORY_OBJECT Object = NULL;
+    BOOLEAN OutstandingAdl = FALSE;
+    BOOLEAN OutstandingAdapterObject = FALSE;
 
     PAGED_CODE();
 
@@ -5794,9 +6881,41 @@ DxgkCbDestroyPhysicalMemoryObject(
             }
         }
 
-        DxgkpDestroyPhysicalMemoryObjectLocked(Object);
+        if (!IsListEmpty(&Object->AdlList))
+        {
+            OutstandingAdl = TRUE;
+            Object = NULL;
+        }
+        else if (pArgs->hAdapterMemoryObject == NULL &&
+                 !IsListEmpty(&Object->AdapterMemoryList))
+        {
+            OutstandingAdapterObject = TRUE;
+            Object = NULL;
+        }
+        else
+        {
+            DxgkpDetachPhysicalMemoryObjectLocked(Object);
+        }
     }
     ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+
+    if (OutstandingAdl)
+    {
+        KeBugCheckEx(
+            DXGKP_BUGCHECK_VIDEO_DXGKRNL_FATAL_ERROR,
+            (ULONG_PTR)DXGKP_FATAL_PHYSICAL_MEMORY_ADL_LEAK_SUBTYPE,
+            (ULONG_PTR)pArgs->hPhysicalMemoryObject,
+            0,
+            0);
+    }
+    if (OutstandingAdapterObject)
+    {
+        DXGKRNL_ERR("DxgkCbDestroyPhysicalMemoryObject: refusing to destroy object %p without closing its adapter view\n", pArgs->hPhysicalMemoryObject);
+        return;
+    }
+
+    if (Object != NULL)
+        DxgkpFreePhysicalMemoryObject(Object);
 }
 
 NTSTATUS
@@ -5807,19 +6926,25 @@ DxgkCbMapPhysicalMemory(
     PDXGKP_PHYSICAL_MEMORY_OBJECT Object;
     PDXGKP_PHYSICAL_MAPPING Mapping;
     MEMORY_CACHING_TYPE CacheType;
-    NTSTATUS Status;
+    SIZE_T RequestedOffset;
+    SIZE_T RequestedSize;
+    SIZE_T ViewOffset;
+    SIZE_T OffsetInView;
+    SIZE_T ViewSpan;
+    SIZE_T ViewSize;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
-    if (pArgs == NULL || pArgs->hPhysicalMemoryObject == NULL ||
-        pArgs->Size == 0)
-    {
+    if (pArgs == NULL)
         return STATUS_INVALID_PARAMETER;
-    }
 
     pArgs->pMappedAddress = NULL;
-    if (pArgs->AccessMode != DXGK_ACCESS_MODE_KERNEL_MODE &&
-        pArgs->AccessMode != DXGK_ACCESS_MODE_USER_MODE)
+    RequestedOffset = pArgs->Offset;
+    RequestedSize = pArgs->Size;
+    if (pArgs->hPhysicalMemoryObject == NULL || RequestedSize == 0 ||
+        (pArgs->AccessMode != DXGK_ACCESS_MODE_KERNEL_MODE &&
+         pArgs->AccessMode != DXGK_ACCESS_MODE_USER_MODE))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -5834,8 +6959,8 @@ DxgkCbMapPhysicalMemory(
     ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
     Object = DxgkpFindPhysicalMemoryObjectLocked(
                  pArgs->hPhysicalMemoryObject);
-    if (Object == NULL || pArgs->Offset > Object->Size ||
-        pArgs->Size > Object->Size - pArgs->Offset ||
+    if (Object == NULL || RequestedOffset > Object->Size ||
+        RequestedSize > Object->Size - RequestedOffset ||
         (Object->Backing == DxgkpPhysicalBackingIoSpace &&
          pArgs->AccessMode != DXGK_ACCESS_MODE_KERNEL_MODE))
     {
@@ -5844,27 +6969,44 @@ DxgkCbMapPhysicalMemory(
         goto Failure;
     }
 
+    ViewOffset = RequestedOffset & ~((SIZE_T)PAGE_SIZE - 1);
+    OffsetInView = RequestedOffset - ViewOffset;
+    if (RequestedSize > (SIZE_T)MAXULONG - OffsetInView)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Failure;
+    }
+
+    ViewSpan = OffsetInView + RequestedSize;
+    if (ViewSpan > (SIZE_T)MAXULONG - (PAGE_SIZE - 1))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Failure;
+    }
+    ViewSize = (ViewSpan + PAGE_SIZE - 1) &
+               ~((SIZE_T)PAGE_SIZE - 1);
+
     Status = DxgkpConvertPhysicalCacheType(Object->CacheType, &CacheType);
     if (!NT_SUCCESS(Status))
         goto Failure;
 
-    Mapping->Size = pArgs->Size;
+    Mapping->Size = ViewSize;
     if ((Object->Backing == DxgkpPhysicalBackingContiguousMdl ||
          Object->Backing == DxgkpPhysicalBackingContiguous) &&
         pArgs->AccessMode == DXGK_ACCESS_MODE_KERNEL_MODE)
     {
         Mapping->Kind = DxgkpPhysicalMappingDirect;
         Mapping->BaseAddress =
-            (PVOID)((PUCHAR)Object->VirtualAddress + pArgs->Offset);
+            (PVOID)((PUCHAR)Object->VirtualAddress + ViewOffset);
     }
     else if (Object->Backing == DxgkpPhysicalBackingIoSpace)
     {
         PHYSICAL_ADDRESS Address = Object->IoBaseAddress;
 
-        Address.QuadPart += pArgs->Offset;
+        Address.QuadPart += ViewOffset;
         Mapping->Kind = DxgkpPhysicalMappingIoSpace;
         Mapping->BaseAddress = MmMapIoSpace(Address,
-                                            pArgs->Size,
+                                            ViewSize,
                                             CacheType);
         if (Mapping->BaseAddress == NULL)
         {
@@ -5876,10 +7018,10 @@ DxgkCbMapPhysicalMemory(
     {
         PVOID SourceAddress =
             (PVOID)((PUCHAR)MmGetMdlVirtualAddress(Object->Mdl) +
-                    pArgs->Offset);
+                    ViewOffset);
 
         Mapping->MappingMdl = IoAllocateMdl(SourceAddress,
-                                            (ULONG)pArgs->Size,
+                                            (ULONG)ViewSize,
                                             FALSE,
                                             FALSE,
                                             NULL);
@@ -5892,27 +7034,57 @@ DxgkCbMapPhysicalMemory(
         IoBuildPartialMdl(Object->Mdl,
                           Mapping->MappingMdl,
                           SourceAddress,
-                          (ULONG)pArgs->Size);
+                          (ULONG)ViewSize);
         Mapping->Kind = DxgkpPhysicalMappingMdl;
-        Mapping->BaseAddress = MmMapLockedPagesSpecifyCache(
-                                   Mapping->MappingMdl,
-                                   pArgs->AccessMode ==
-                                       DXGK_ACCESS_MODE_KERNEL_MODE ?
-                                           KernelMode : UserMode,
-                                   CacheType,
-                                   NULL,
-                                   FALSE,
-                                   NormalPagePriority);
-        if (Mapping->BaseAddress == NULL)
+        if (pArgs->AccessMode == DXGK_ACCESS_MODE_USER_MODE)
         {
+            Mapping->Process = PsGetCurrentProcess();
+            ObReferenceObject(Mapping->Process);
+            _SEH2_TRY
+            {
+                Mapping->BaseAddress = MmMapLockedPagesSpecifyCache(
+                                           Mapping->MappingMdl,
+                                           UserMode,
+                                           CacheType,
+                                           NULL,
+                                           FALSE,
+                                           NormalPagePriority |
+                                               MdlMappingNoExecute);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+        }
+        else
+        {
+            Mapping->BaseAddress = MmMapLockedPagesSpecifyCache(
+                                       Mapping->MappingMdl,
+                                       KernelMode,
+                                       CacheType,
+                                       NULL,
+                                       FALSE,
+                                       NormalPagePriority);
+        }
+        if (!NT_SUCCESS(Status) || Mapping->BaseAddress == NULL)
+        {
+            if (Mapping->Process != NULL)
+            {
+                ObDereferenceObject(Mapping->Process);
+                Mapping->Process = NULL;
+            }
             IoFreeMdl(Mapping->MappingMdl);
             Mapping->MappingMdl = NULL;
-            Status = STATUS_INSUFFICIENT_RESOURCES;
+            if (NT_SUCCESS(Status))
+                Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Failure;
         }
     }
 
     InsertTailList(&Object->MappingList, &Mapping->ListEntry);
+    pArgs->Offset = OffsetInView;
+    pArgs->Size = ViewSize;
     pArgs->pMappedAddress = Mapping->BaseAddress;
     ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
     return STATUS_SUCCESS;
@@ -5955,7 +7127,9 @@ DxgkCbUnmapPhysicalMemory(
                                   ListEntry);
 
             if (Candidate->BaseAddress == pArgs->pBaseAddress &&
-                Candidate->Size == pArgs->Size)
+                Candidate->Size == pArgs->Size &&
+                (Candidate->Process == NULL ||
+                 Candidate->Process == PsGetCurrentProcess()))
             {
                 RemoveEntryList(Link);
                 Mapping = Candidate;
@@ -5964,9 +7138,10 @@ DxgkCbUnmapPhysicalMemory(
         }
     }
 
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+
     if (Mapping != NULL)
         DxgkpFreePhysicalMapping(Mapping);
-    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
 }
 
 NTSTATUS
@@ -5987,7 +7162,11 @@ DxgkCbAllocateAdl(
 
     PAGED_CODE();
 
-    if (pArgs == NULL || pArgs->hAdapterMemoryObject == NULL ||
+    if (pArgs == NULL)
+        return STATUS_INVALID_PARAMETER;
+    pArgs->pAdl = NULL;
+
+    if (pArgs->hAdapterMemoryObject == NULL ||
         pArgs->Size == 0 ||
         (pArgs->Offset & (PAGE_SIZE - 1)) != 0 ||
         (pArgs->Size & (PAGE_SIZE - 1)) != 0 ||
@@ -5995,7 +7174,8 @@ DxgkCbAllocateAdl(
     {
         return STATUS_INVALID_PARAMETER;
     }
-    pArgs->pAdl = NULL;
+    if ((pArgs->Size >> PAGE_SHIFT) > MAXULONG)
+        return STATUS_INTEGER_OVERFLOW;
 
     ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
     AdapterObject = DxgkpFindAdapterMemoryObjectLocked(
@@ -6145,12 +7325,12 @@ DxgkCbOpenPhysicalMemoryObject(
 
     PAGED_CODE();
 
-    if (pArgs == NULL || pArgs->hPhysicalMemoryObject == NULL ||
-        pArgs->hAdapter == NULL)
-    {
+    if (pArgs == NULL)
         return STATUS_INVALID_PARAMETER;
-    }
     pArgs->hAdapterMemoryObject = NULL;
+
+    if (pArgs->hPhysicalMemoryObject == NULL || pArgs->hAdapter == NULL)
+        return STATUS_INVALID_PARAMETER;
 
     Adapter = DxgkpHandleToAdapter(pArgs->hAdapter);
     if (Adapter == NULL)
@@ -6197,7 +7377,8 @@ APIENTRY
 DxgkCbClosePhysicalMemoryObject(
     IN_CONST_PDXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT pArgs)
 {
-    PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject;
+    PDXGKP_ADAPTER_MEMORY_OBJECT AdapterObject = NULL;
+    BOOLEAN OutstandingAdl = FALSE;
 
     PAGED_CODE();
 
@@ -6209,10 +7390,25 @@ DxgkCbClosePhysicalMemoryObject(
                         pArgs->hAdapterMemoryObject);
     if (AdapterObject != NULL)
     {
-        RemoveEntryList(&AdapterObject->ListEntry);
-        ExFreePoolWithTag(AdapterObject, TAG_DXGK_RESOURCES);
+        if (DxgkpAdapterMemoryObjectHasAdlLocked(AdapterObject))
+        {
+            OutstandingAdl = TRUE;
+            AdapterObject = NULL;
+        }
+        else
+        {
+            RemoveEntryList(&AdapterObject->ListEntry);
+        }
     }
     ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+
+    if (OutstandingAdl)
+    {
+        DXGKRNL_ERR("DxgkCbClosePhysicalMemoryObject: refusing to close adapter object %p with live ADLs\n", pArgs->hAdapterMemoryObject);
+        return;
+    }
+    if (AdapterObject != NULL)
+        ExFreePoolWithTag(AdapterObject, TAG_DXGK_RESOURCES);
 }
 #endif
 
@@ -6222,7 +7418,17 @@ DxgkpFreeMapMemoryEntry(
 {
     if (Entry->Kind == DxgkMapMemoryMdl)
     {
+        KAPC_STATE ApcState;
+        BOOLEAN Attached = FALSE;
+
+        if (Entry->Process != NULL && Entry->Process != PsGetCurrentProcess())
+        {
+            KeStackAttachProcess((PKPROCESS)Entry->Process, &ApcState);
+            Attached = TRUE;
+        }
         MmUnmapLockedPages(Entry->BaseAddress, Entry->Mdl);
+        if (Attached)
+            KeUnstackDetachProcess(&ApcState);
         IoFreeMdl(Entry->Mdl);
     }
     else if (Entry->Kind == DxgkMapMemoryIoSpace)
@@ -6230,7 +7436,41 @@ DxgkpFreeMapMemoryEntry(
         MmUnmapIoSpace(Entry->BaseAddress, Entry->Length);
     }
 
+    if (Entry->Process != NULL)
+        ObDereferenceObject(Entry->Process);
     ExFreePoolWithTag(Entry, TAG_DXGK_RESOURCES);
+}
+
+static NTSTATUS
+DxgkpBuildMapMemoryMdl(
+    _In_ PHYSICAL_ADDRESS TranslatedAddress,
+    _In_ ULONG Length,
+    _Out_ PMDL *Mdl)
+{
+    PPFN_NUMBER Pages;
+    PFN_NUMBER FirstPfn;
+    PVOID OffsetAddress;
+    ULONG PageCount;
+    ULONG Index;
+    PMDL NewMdl;
+
+    *Mdl = NULL;
+    OffsetAddress = (PVOID)(ULONG_PTR)BYTE_OFFSET(TranslatedAddress.LowPart);
+    NewMdl = MmCreateMdl(NULL, OffsetAddress, Length);
+    if (NewMdl == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    NewMdl->Process = NULL;
+    NewMdl->MappedSystemVa = NULL;
+    NewMdl->MdlFlags |= MDL_PAGES_LOCKED | MDL_IO_SPACE | MDL_MAPPING_CAN_FAIL;
+    FirstPfn = (PFN_NUMBER)((ULONGLONG)TranslatedAddress.QuadPart >> PAGE_SHIFT);
+    PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(OffsetAddress, Length);
+    Pages = MmGetMdlPfnArray(NewMdl);
+    for (Index = 0; Index < PageCount; ++Index)
+        Pages[Index] = FirstPfn + Index;
+
+    *Mdl = NewMdl;
+    return STATUS_SUCCESS;
 }
 
 static VOID
@@ -6251,7 +7491,7 @@ DxgkpReleaseMapMemory(
         PDXGK_MAPMEM_ENTRY Entry =
             CONTAINING_RECORD(Link, DXGK_MAPMEM_ENTRY, ListEntry);
 
-        if (Entry->DeviceHandle == (HANDLE)Adapter)
+        if (Entry->Adapter == Adapter)
         {
             RemoveEntryList(Link);
             InsertTailList(&ReclaimList, Link);
@@ -6278,19 +7518,106 @@ DxgkpReleaseMapMemory(
 }
 
 /*
+ * Remove process-owned reverse-callback mappings while the process address
+ * space is still current and intact.  Adapter/object teardown remains the
+ * fallback for kernel mappings and for abnormal miniport shutdown.
+ */
+VOID
+DxgkAdapterProcessCleanup(
+    _In_ PEPROCESS Process)
+{
+    LIST_ENTRY MapReclaimList;
+    PLIST_ENTRY Link;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    LIST_ENTRY PhysicalReclaimList;
+    PLIST_ENTRY ObjectLink;
+#endif
+
+    PAGED_CODE();
+
+    if (Process == NULL)
+        return;
+
+    InitializeListHead(&MapReclaimList);
+    ExAcquireFastMutex(&DxgkpMapMemoryMutex);
+    Link = DxgkpMapMemoryList.Flink;
+    while (Link != &DxgkpMapMemoryList)
+    {
+        PLIST_ENTRY NextLink = Link->Flink;
+        PDXGK_MAPMEM_ENTRY Entry =
+            CONTAINING_RECORD(Link, DXGK_MAPMEM_ENTRY, ListEntry);
+
+        if (Entry->Process == Process)
+        {
+            RemoveEntryList(Link);
+            InsertTailList(&MapReclaimList, Link);
+        }
+        Link = NextLink;
+    }
+    ExReleaseFastMutex(&DxgkpMapMemoryMutex);
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    InitializeListHead(&PhysicalReclaimList);
+    ExAcquireFastMutex(&DxgkpPhysicalMemoryMutex);
+    for (ObjectLink = DxgkpPhysicalMemoryList.Flink;
+         ObjectLink != &DxgkpPhysicalMemoryList;
+         ObjectLink = ObjectLink->Flink)
+    {
+        PDXGKP_PHYSICAL_MEMORY_OBJECT Object =
+            CONTAINING_RECORD(ObjectLink,
+                              DXGKP_PHYSICAL_MEMORY_OBJECT,
+                              ListEntry);
+
+        Link = Object->MappingList.Flink;
+        while (Link != &Object->MappingList)
+        {
+            PLIST_ENTRY NextLink = Link->Flink;
+            PDXGKP_PHYSICAL_MAPPING Mapping =
+                CONTAINING_RECORD(Link,
+                                  DXGKP_PHYSICAL_MAPPING,
+                                  ListEntry);
+
+            if (Mapping->Process == Process)
+            {
+                RemoveEntryList(Link);
+                InsertTailList(&PhysicalReclaimList, Link);
+            }
+            Link = NextLink;
+        }
+    }
+    ExReleaseFastMutex(&DxgkpPhysicalMemoryMutex);
+#endif
+
+    while (!IsListEmpty(&MapReclaimList))
+    {
+        Link = RemoveHeadList(&MapReclaimList);
+        DxgkpFreeMapMemoryEntry(
+            CONTAINING_RECORD(Link, DXGK_MAPMEM_ENTRY, ListEntry));
+    }
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    while (!IsListEmpty(&PhysicalReclaimList))
+    {
+        Link = RemoveHeadList(&PhysicalReclaimList);
+        DxgkpFreePhysicalMapping(
+            CONTAINING_RECORD(Link,
+                              DXGKP_PHYSICAL_MAPPING,
+                              ListEntry));
+    }
+#endif
+}
+
+/*
  * DxgkCbMapMemory
  *
- * WDDM 1.0 callback — maps a range of translated physical addresses
- * (BAR regions) into kernel virtual address space or user-mode address
- * space.  This is the primary memory-mapping callback used by WDDM 1.x
- * miniport drivers to access GPU MMIO registers and frame buffers.
+ * Baseline callback retained by the WDDM 2.x/3.x interface — maps a range of
+ * translated physical addresses into kernel virtual address space or the
+ * current user process.
  *
- * Device-memory resources are normally mapped with MmMapIoSpace.  The
- * amd64 viogpudo path below retains an MDL-based compatibility workaround
- * for an existing ReactOS system-PTE collision, but a physical Intel BAR
- * must use the device-memory path.  In particular, manufacturing an MDL
- * from BAR PFNs does not use a separate PTE allocator and omits the cache
- * and TLB synchronization performed by MmMapIoSpace.
+ * Device-memory resources are mapped with MmMapIoSpace. User mappings use an
+ * I/O-space MDL whose PFNs cover only the adapter-assigned translated range.
+ * Every successful mapping is tracked by adapter and, for a user view, by
+ * process so UnmapMemory and teardown cannot release another owner's view.
  *
  * Unlike DxgkCbMapPhysicalMemory (WDDM 2.9), this callback takes
  * individual parameters rather than a structure pointer.
@@ -6308,251 +7635,126 @@ DxgkCbMapMemory(
     _In_  MEMORY_CACHING_TYPE CacheType,
     _Out_ PVOID              *VirtualAddress)
 {
-    PVOID Va;
-    PDXGKRNL_ADAPTER ProbeAdapter;
+    PDXGKRNL_ADAPTER Adapter;
     PDXGK_MAPMEM_ENTRY MapEntry;
+    PVOID Va = NULL;
+    NTSTATUS Status = STATUS_SUCCESS;
     ULONGLONG TotalStart100ns;
     ULONGLONG MapStart100ns;
     ULONGLONG MapUs = 0;
-    PCSTR     MapMethod = "mmmapiospace";
-    BOOLEAN   MappingTracked = FALSE;
-    BOOLEAN   DirectPortSpace = FALSE;
-    BOOLEAN   IntelN100 = FALSE;
+    PCSTR MapMethod = "unmapped";
 
     PAGED_CODE();
-
     TotalStart100ns = DxgkpTraceNow100ns();
 
-    if (VirtualAddress == NULL || Length == 0)
+    if (VirtualAddress == NULL)
         return STATUS_INVALID_PARAMETER;
-
     *VirtualAddress = NULL;
 
-    ProbeAdapter = DxgkpHandleToAdapter(DeviceHandle);
-    if (ProbeAdapter != NULL)
+    if (Length == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+    if (CacheType < MmNonCached || CacheType > MmWriteCombined || !DxgkAdapterMapRangeAssigned(Adapter->TranslatedResources, TranslatedAddress, Length, InIoSpace))
     {
-        PCI_COMMON_CONFIG PciConfig;
-        ULONG BytesRead;
-
-        RtlZeroMemory(&PciConfig, sizeof(PciConfig));
-        BytesRead = HalGetBusDataByOffset(
-            PCIConfiguration,
-            ProbeAdapter->PciBusNumber,
-            ProbeAdapter->PciSlotNumber.u.AsULONG,
-            &PciConfig,
-            0,
-            PCI_COMMON_HDR_LENGTH);
-        IntelN100 =
-            (BytesRead >= sizeof(ULONG) &&
-             PciConfig.VendorID == 0x8086 &&
-             PciConfig.DeviceID == 0x46D1);
-
-        ExReleaseRundownProtection(
-            &ProbeAdapter->ReverseCallbackRundownRef);
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return STATUS_INVALID_PARAMETER;
     }
 
     DXGKRNL_TRACE("DxgkCbMapMemory: enter PA=0x%I64X Len=0x%lX IoSpace=%d UserMode=%d Cache=%d\n",
                   TranslatedAddress.QuadPart, Length, InIoSpace, MapToUserMode, CacheType);
 
+    MapEntry = ExAllocatePoolWithTag(NonPagedPool, sizeof(*MapEntry), TAG_DXGK_RESOURCES);
+    if (MapEntry == NULL)
+    {
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlZeroMemory(MapEntry, sizeof(*MapEntry));
+    MapEntry->Adapter = Adapter;
+    MapEntry->PhysicalAddress = TranslatedAddress;
+    MapEntry->Length = Length;
+
+    MapStart100ns = DxgkpTraceNow100ns();
     if (InIoSpace)
     {
         /*
-         * DXGKCB_MAP_MEMORY requires I/O-space ranges to be returned as a
-         * port address suitable for the READ_PORT and WRITE_PORT families on
-         * x86.  This is observable on the N100's I/O BAR4.  Architectures
-         * whose port accessors dereference memory still need an MMIO mapping.
+         * MapToUserMode is ignored for I/O-space ranges by the public DDI.
+         * x86 port accessors consume the translated port address directly;
+         * architectures with memory-backed port access need an MMIO mapping.
          */
 #if defined(_M_AMD64) || defined(_M_IX86)
         Va = (PVOID)(ULONG_PTR)TranslatedAddress.QuadPart;
         MapMethod = "port-space";
-        DirectPortSpace = TRUE;
+        MapEntry->Kind = DxgkMapMemoryPortSpace;
 #else
-        MapStart100ns = DxgkpTraceNow100ns();
         Va = MmMapIoSpace(TranslatedAddress, Length, MmNonCached);
-        MapUs = DxgkpTraceElapsedUs(MapStart100ns);
         MapMethod = "iospace-port";
+        MapEntry->Kind = DxgkMapMemoryIoSpace;
 #endif
     }
     else if (MapToUserMode)
     {
-        /*
-         * User-mode mapping: not supported in our initial implementation.
-         * Real Windows dxgkrnl would create an MDL, probe-and-lock, then
-         * MmMapLockedPagesSpecifyCache with UserMode.  Return failure for
-         * now; miniports that need user-mode mapping will fail gracefully.
-         */
-        DXGKRNL_ERR("DxgkCbMapMemory: user-mode mapping not supported\n");
-        return STATUS_NOT_SUPPORTED;
+        Status = DxgkpBuildMapMemoryMdl(TranslatedAddress, Length, &MapEntry->Mdl);
+        if (NT_SUCCESS(Status))
+        {
+            _SEH2_TRY
+            {
+                Va = MmMapLockedPagesSpecifyCache(MapEntry->Mdl, UserMode, CacheType, NULL, FALSE, NormalPagePriority | MdlMappingNoExecute);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+        }
+        if (NT_SUCCESS(Status) && Va == NULL)
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        if (NT_SUCCESS(Status))
+        {
+            MapEntry->Process = PsGetCurrentProcess();
+            ObReferenceObject(MapEntry->Process);
+            MapEntry->Kind = DxgkMapMemoryMdl;
+            MapMethod = "user-mdl";
+        }
     }
     else
     {
-#if defined(_M_ARM64)
-        /*
-         * ARM64: a device BAR (MMIO) MUST be mapped as Device memory so the
-         * miniport's register accesses keep strict MMIO ordering and are not
-         * speculated or write-combined.  The MDL + MmMapLockedPagesSpecifyCache
-         * route used on amd64 (below) yields a Normal-NonCacheable mapping,
-         * which breaks virtio register handshakes — the genuine viogpudo
-         * StartDevice negotiates the virtio-gpu over this BAR and times out
-         * (INSUFFICIENT_RESOURCES) when it is not Device memory.  MmMapIoSpace
-         * gives a proper Device mapping here; the amd64 system-PTE collision
-         * the MDL route works around does not apply on ARM64.
-         */
-        MapStart100ns = DxgkpTraceNow100ns();
-        Va = MmMapIoSpace(TranslatedAddress, Length, MmNonCached);
-        MapUs = DxgkpTraceElapsedUs(MapStart100ns);
-        MapMethod = "iospace-device";
-#else
-        /*
-         * Use the native device-memory mapping path for the physical
-         * Alder Lake-N BAR.  DXGKCB_MAP_MEMORY describes this as a translated
-         * memory-space resource, and Windows maps such device-register ranges
-         * with MmMapIoSpace.  Keep the MDL path below only as the existing
-         * viogpudo compatibility workaround.
-         */
-        if (IntelN100)
-        {
-            MapStart100ns = DxgkpTraceNow100ns();
-            Va = MmMapIoSpace(TranslatedAddress, Length, CacheType);
-            MapUs = DxgkpTraceElapsedUs(MapStart100ns);
-            MapMethod = "iospace-intel";
-        }
-        else
-        {
-        /*
-         * On amd64/UEFI, the existing viogpudo workaround constructs an MDL
-         * over the BAR PFNs.  Both this and MmMapIoSpace reserve system PTEs;
-         * this path is retained solely to avoid changing the validated QEMU
-         * adapter while the underlying collision is investigated separately.
-         *
-         * Build an MDL over the device PFNs and map it through
-         * MmMapLockedPagesSpecifyCache.
-         */
-        PMDL                Mdl;
-        PVOID               BaseVa;
-        ULONG               Offset;
-        ULONG               PageCount;
-        PFN_NUMBER          FirstPfn;
-
-        Va = NULL;
-        Offset = BYTE_OFFSET(TranslatedAddress.LowPart);
-        PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(Offset, Length);
-        FirstPfn = (PFN_NUMBER)(TranslatedAddress.QuadPart >> PAGE_SHIFT);
-
-        MapStart100ns = DxgkpTraceNow100ns();
-        Mdl = IoAllocateMdl(NULL,
-                            PageCount << PAGE_SHIFT,
-                            FALSE,
-                            FALSE,
-                            NULL);
-        if (Mdl != NULL)
-        {
-            PPFN_NUMBER Pages;
-            ULONG       i;
-
-            Pages = MmGetMdlPfnArray(Mdl);
-            for (i = 0; i < PageCount; ++i)
-                Pages[i] = FirstPfn + i;
-
-            Mdl->MdlFlags |= MDL_PAGES_LOCKED;
-
-            BaseVa = MmMapLockedPagesSpecifyCache(Mdl,
-                                                  KernelMode,
-                                                  CacheType,
-                                                  NULL,
-                                                  FALSE,
-                                                  NormalPagePriority);
-            if (BaseVa != NULL)
-            {
-                MapEntry = ExAllocatePoolWithTag(NonPagedPool,
-                                                 sizeof(*MapEntry),
-                                                 TAG_DXGK_RESOURCES);
-                if (MapEntry != NULL)
-                {
-                    Va = (PVOID)((ULONG_PTR)BaseVa + Offset);
-                    MapEntry->DeviceHandle = DeviceHandle;
-                    MapEntry->VirtualAddress = Va;
-                    MapEntry->BaseAddress = BaseVa;
-                    MapEntry->Mdl = Mdl;
-                    MapEntry->PhysicalAddress = TranslatedAddress;
-                    MapEntry->Length = Length;
-                    MapEntry->MapMethod = "mdl";
-                    MapEntry->Kind = DxgkMapMemoryMdl;
-                    ExAcquireFastMutex(&DxgkpMapMemoryMutex);
-                    InsertTailList(&DxgkpMapMemoryList,
-                                   &MapEntry->ListEntry);
-                    ExReleaseFastMutex(&DxgkpMapMemoryMutex);
-                    MapMethod = "mdl";
-                    MappingTracked = TRUE;
-                }
-                else
-                {
-                    MmUnmapLockedPages(BaseVa, Mdl);
-                    IoFreeMdl(Mdl);
-                }
-            }
-            else
-            {
-                IoFreeMdl(Mdl);
-            }
-        }
-
-        if (Va == NULL)
-        {
-            Va = MmMapIoSpace(TranslatedAddress, Length, CacheType);
-            MapMethod = "mmmapiospace-fallback";
-        }
-
-        MapUs = DxgkpTraceElapsedUs(MapStart100ns);
-        }
-#endif /* _M_ARM64 */
+        Va = MmMapIoSpace(TranslatedAddress, Length, CacheType);
+        MapMethod = "mmmapiospace";
+        MapEntry->Kind = DxgkMapMemoryIoSpace;
     }
+    MapUs = DxgkpTraceElapsedUs(MapStart100ns);
 
-    if (Va == NULL)
+    if (!NT_SUCCESS(Status) || Va == NULL)
     {
-        DXGKRNL_ERR("DxgkCbMapMemory: MmMapIoSpace failed PA=0x%I64X Len=0x%lX\n",
-                     TranslatedAddress.QuadPart, Length);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        if (MapEntry->Mdl != NULL)
+            IoFreeMdl(MapEntry->Mdl);
+        ExFreePoolWithTag(MapEntry, TAG_DXGK_RESOURCES);
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return NT_SUCCESS(Status) ? STATUS_INSUFFICIENT_RESOURCES : Status;
     }
 
-    if (!MappingTracked)
-    {
-        MapEntry = ExAllocatePoolWithTag(NonPagedPool,
-                                         sizeof(*MapEntry),
-                                         TAG_DXGK_RESOURCES);
-        if (MapEntry == NULL)
-        {
-            if (!DirectPortSpace)
-                MmUnmapIoSpace(Va, Length);
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        MapEntry->DeviceHandle = DeviceHandle;
-        MapEntry->VirtualAddress = Va;
-        MapEntry->BaseAddress = Va;
-        MapEntry->Mdl = NULL;
-        MapEntry->PhysicalAddress = TranslatedAddress;
-        MapEntry->Length = Length;
-        MapEntry->MapMethod = MapMethod;
-        MapEntry->Kind = DirectPortSpace ?
-            DxgkMapMemoryPortSpace : DxgkMapMemoryIoSpace;
-        ExAcquireFastMutex(&DxgkpMapMemoryMutex);
-        InsertTailList(&DxgkpMapMemoryList, &MapEntry->ListEntry);
-        ExReleaseFastMutex(&DxgkpMapMemoryMutex);
-        MappingTracked = TRUE;
-    }
-
+    MapEntry->VirtualAddress = Va;
+    MapEntry->BaseAddress = Va;
+    MapEntry->MapMethod = MapMethod;
+    ExAcquireFastMutex(&DxgkpMapMemoryMutex);
+    InsertTailList(&DxgkpMapMemoryList, &MapEntry->ListEntry);
+    ExReleaseFastMutex(&DxgkpMapMemoryMutex);
     *VirtualAddress = Va;
 
     DXGKRNL_TRACE("DxgkCbMapMemory: PA=0x%I64X -> VA=%p Len=0x%lX IoSpace=%d UserMode=%d Cache=%d via=%s map=%I64u us total=%I64u us\n",
                   TranslatedAddress.QuadPart, Va, Length, InIoSpace, MapToUserMode, CacheType,
                   MapMethod, MapUs, DxgkpTraceElapsedUs(TotalStart100ns));
 
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_SUCCESS;
 }
 
 /*
- * DxgkCbUnmapMemory (WDDM 1.0 version)
+ * DxgkCbUnmapMemory (baseline WDDM callback)
  *
  * Unmaps an address range previously mapped by DxgkCbMapMemory.
  * Takes a HANDLE + PVOID (simpler than the WDDM 2.9 struct-based variant).
@@ -6565,6 +7767,8 @@ DxgkCbUnmapMemory(
     _In_ HANDLE DeviceHandle,
     _In_ PVOID  VirtualAddress)
 {
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGK_MAPMEM_ENTRY MapEntry = NULL;
     PLIST_ENTRY Link;
 
     PAGED_CODE();
@@ -6572,38 +7776,36 @@ DxgkCbUnmapMemory(
     if (VirtualAddress == NULL)
         return STATUS_INVALID_PARAMETER;
 
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+
     ExAcquireFastMutex(&DxgkpMapMemoryMutex);
     for (Link = DxgkpMapMemoryList.Flink;
          Link != &DxgkpMapMemoryList;
          Link = Link->Flink)
     {
-        PDXGK_MAPMEM_ENTRY MapEntry =
+        PDXGK_MAPMEM_ENTRY Candidate =
             CONTAINING_RECORD(Link, DXGK_MAPMEM_ENTRY, ListEntry);
 
-        if (MapEntry->VirtualAddress == VirtualAddress)
+        if (Candidate->VirtualAddress == VirtualAddress && DxgkAdapterMapOwnerMatches(Candidate->Adapter, Candidate->Process, Adapter, PsGetCurrentProcess()))
         {
+            MapEntry = Candidate;
             RemoveEntryList(&MapEntry->ListEntry);
-            ExReleaseFastMutex(&DxgkpMapMemoryMutex);
-
-            if (MapEntry->DeviceHandle != DeviceHandle)
-            {
-                DXGKRNL_WARN("DxgkCbUnmapMemory: mapping owner %p differs "
-                             "from caller %p for VA=%p\n",
-                             MapEntry->DeviceHandle,
-                             DeviceHandle,
-                             VirtualAddress);
-            }
-
-            DxgkpFreeMapMemoryEntry(MapEntry);
-            return STATUS_SUCCESS;
+            break;
         }
     }
     ExReleaseFastMutex(&DxgkpMapMemoryMutex);
 
-    DXGKRNL_WARN("DxgkCbUnmapMemory: unknown mapping VA=%p handle=%p\n",
-                 VirtualAddress,
-                 DeviceHandle);
-    return STATUS_INVALID_PARAMETER;
+    if (MapEntry == NULL)
+    {
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DxgkpFreeMapMemoryEntry(MapEntry);
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -6650,8 +7852,7 @@ DxgkCbQueueDpc(
 /*
  * DxgkCbReadDeviceSpace
  *
- * Reads from the PCI configuration space of the display adapter.
- * Wraps the HalGetBusDataByOffset / IoGetDeviceProperty mechanism.
+ * Reads device space owned by the display adapter.
  *
  * DataType values follow the Windows display-miniport ABI:
  *   DXGK_WHICHSPACE_CONFIG (PCI_WHICHSPACE_CONFIG) — adapter config space
@@ -6661,130 +7862,6 @@ DxgkCbQueueDpc(
  *
  * IRQL: PASSIVE_LEVEL
  */
-static BOOLEAN
-DxgkpCachePciBridgeTarget(
-    _Inout_ PDXGKRNL_ADAPTER Adapter)
-{
-    PCI_COMMON_CONFIG PciConfig;
-    PCI_SLOT_NUMBER Slot;
-    ULONG Bus;
-    ULONG Device;
-    ULONG Function;
-    ULONG BytesRead;
-    UCHAR BestSecondaryBus = 0;
-    BOOLEAN Found = FALSE;
-    BOOLEAN Multifunction;
-
-    if (Adapter->PciBridgeSlotCached)
-        return TRUE;
-    if (!Adapter->PciBusSlotCached)
-        return FALSE;
-
-    RtlZeroMemory(&Slot, sizeof(Slot));
-
-    /* Select the closest type-1 bridge whose secondary/subordinate window
-     * contains the adapter bus.  PCIe root ports use the same class/header
-     * layout, including multifunction root-port devices. */
-    for (Bus = 0; Bus < Adapter->PciBusNumber; ++Bus)
-    {
-        for (Device = 0; Device < PCI_MAX_DEVICES; ++Device)
-        {
-            for (Function = 0; Function < PCI_MAX_FUNCTION; ++Function)
-            {
-                RtlZeroMemory(&PciConfig, sizeof(PciConfig));
-                RtlZeroMemory(&Slot, sizeof(Slot));
-                Slot.u.bits.DeviceNumber = Device;
-                Slot.u.bits.FunctionNumber = Function;
-                BytesRead = HalGetBusDataByOffset(PCIConfiguration,
-                                                   Bus,
-                                                   Slot.u.AsULONG,
-                                                  &PciConfig,
-                                                   0,
-                                                   PCI_COMMON_HDR_LENGTH);
-                if (BytesRead < PCI_COMMON_HDR_LENGTH ||
-                    PciConfig.VendorID == PCI_INVALID_VENDORID ||
-                    PciConfig.VendorID == 0)
-                {
-                    if (Function == 0)
-                        break;
-                    continue;
-                }
-
-                Multifunction = PCI_MULTIFUNCTION_DEVICE(&PciConfig);
-                if (PCI_CONFIGURATION_TYPE(&PciConfig) == PCI_BRIDGE_TYPE &&
-                    PciConfig.BaseClass == PCI_CLASS_BRIDGE_DEV &&
-                    PciConfig.SubClass == PCI_SUBCLASS_BR_PCI_TO_PCI &&
-                    PciConfig.u.type1.SecondaryBus <= Adapter->PciBusNumber &&
-                    PciConfig.u.type1.SubordinateBus >= Adapter->PciBusNumber &&
-                    (!Found || PciConfig.u.type1.SecondaryBus >= BestSecondaryBus))
-                {
-                    Adapter->PciBridgeBusNumber = Bus;
-                    Adapter->PciBridgeSlotNumber = Slot;
-                    BestSecondaryBus = PciConfig.u.type1.SecondaryBus;
-                    Found = TRUE;
-                }
-
-                if (Function == 0 && !Multifunction)
-                    break;
-            }
-        }
-    }
-
-    Adapter->PciBridgeSlotCached = Found;
-    if (Found)
-    {
-        DXGKRNL_TRACE("PCI upstream bridge for %lu:%02lu.%lu is "
-                      "%lu:%02lu.%lu (secondary bus %u)\n",
-                      Adapter->PciBusNumber,
-                      (ULONG)Adapter->PciSlotNumber.u.bits.DeviceNumber,
-                      (ULONG)Adapter->PciSlotNumber.u.bits.FunctionNumber,
-                      Adapter->PciBridgeBusNumber,
-                      (ULONG)Adapter->PciBridgeSlotNumber.u.bits.DeviceNumber,
-                      (ULONG)Adapter->PciBridgeSlotNumber.u.bits.FunctionNumber,
-                      BestSecondaryBus);
-    }
-    return Found;
-}
-
-static BOOLEAN
-DxgkpResolveDeviceSpaceTarget(
-    _Inout_ PDXGKRNL_ADAPTER Adapter,
-    _In_ ULONG DataType,
-    _Out_ PULONG BusNumber,
-    _Out_ PPCI_SLOT_NUMBER SlotNumber)
-{
-    RtlZeroMemory(SlotNumber, sizeof(*SlotNumber));
-
-    switch (DataType)
-    {
-        case DXGK_WHICHSPACE_CONFIG:
-            if (!Adapter->PciBusSlotCached)
-                return FALSE;
-            *BusNumber = Adapter->PciBusNumber;
-            *SlotNumber = Adapter->PciSlotNumber;
-            return TRUE;
-
-        case DXGK_WHICHSPACE_MCH:
-            /*
-             * DXGK_WHICHSPACE_MCH names the memory-controller hub that is a
-             * peer of the adapter's parent bus. On a segment-zero PCI root,
-             * that peer is the host bridge at 00:00.0.
-             */
-            *BusNumber = 0;
-            return TRUE;
-
-        case DXGK_WHICHSPACE_BRIDGE:
-            if (!DxgkpCachePciBridgeTarget(Adapter))
-                return FALSE;
-            *BusNumber = Adapter->PciBridgeBusNumber;
-            *SlotNumber = Adapter->PciBridgeSlotNumber;
-            return TRUE;
-
-        default:
-            return FALSE;
-    }
-}
-
 C_ASSERT(DXGK_WHICHSPACE_CONFIG == PCI_WHICHSPACE_CONFIG);
 C_ASSERT(DXGK_WHICHSPACE_ROM == PCI_WHICHSPACE_ROM);
 C_ASSERT(DXGK_WHICHSPACE_MCH == 0x80000000);
@@ -6802,8 +7879,6 @@ DxgkCbReadDeviceSpace(
 {
     PDXGKRNL_ADAPTER Adapter;
     ULONG            BytesTransferred;
-    ULONG            TargetBusNumber;
-    PCI_SLOT_NUMBER  TargetSlotNumber;
     ULONGLONG        TotalStart100ns;
     ULONGLONG        ElapsedUs;
 
@@ -6811,10 +7886,13 @@ DxgkCbReadDeviceSpace(
 
     TotalStart100ns = DxgkpTraceNow100ns();
 
-    if (Buffer == NULL || BytesRead == NULL || Length == 0)
+    if (BytesRead == NULL)
         return STATUS_INVALID_PARAMETER;
 
     *BytesRead = 0;
+
+    if (Buffer == NULL || Length == 0)
+        return STATUS_INVALID_PARAMETER;
 
     /* Resolve and pin the adapter while it remains on the global list. */
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
@@ -6824,25 +7902,24 @@ DxgkCbReadDeviceSpace(
         return STATUS_INVALID_HANDLE;
     }
 
-    /* Use cached/scanned PCI locations rather than sending PnP IRPs from a
-     * reverse callback.  This also preserves the native distinction between
-     * adapter, MCH, and upstream-bridge configuration spaces. */
-    if (DxgkpResolveDeviceSpaceTarget(Adapter,
-                                      DataType,
-                                     &TargetBusNumber,
-                                     &TargetSlotNumber))
+    if (DataType == DXGK_WHICHSPACE_CONFIG)
     {
-        BytesTransferred = HalGetBusDataByOffset(
-            PCIConfiguration,
-            TargetBusNumber,
-            TargetSlotNumber.u.AsULONG,
+        if (!Adapter->PciBusInterfaceValid ||
+            Adapter->PciBusInterface.GetBusData == NULL)
+        {
+            ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+            return STATUS_UNSUCCESSFUL;
+        }
+
+        BytesTransferred = Adapter->PciBusInterface.GetBusData(
+            Adapter->PciBusInterface.Context,
+            PCI_WHICHSPACE_CONFIG,
             Buffer,
             Offset,
             Length);
 
-        if (BytesTransferred == 0)
+        if (BytesTransferred == 0 || BytesTransferred > Length)
         {
-            DXGKRNL_ERR("DxgkCbReadDeviceSpace: HalGetBusDataByOffset failed\n");
             ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
             return STATUS_UNSUCCESSFUL;
         }
@@ -6858,16 +7935,11 @@ DxgkCbReadDeviceSpace(
         return STATUS_SUCCESS;
     }
 
-    if (DataType == DXGK_WHICHSPACE_ROM)
+    if (DataType == DXGK_WHICHSPACE_ROM ||
+        DataType == DXGK_WHICHSPACE_MCH ||
+        DataType == DXGK_WHICHSPACE_BRIDGE)
     {
-        DXGKRNL_WARN("DxgkCbReadDeviceSpace: ROM space is not implemented\n");
-        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-        return STATUS_UNSUCCESSFUL;
-    }
-    else if (DataType == DXGK_WHICHSPACE_MCH ||
-             DataType == DXGK_WHICHSPACE_BRIDGE)
-    {
-        DXGKRNL_WARN("DxgkCbReadDeviceSpace: no target for DataType 0x%08lX\n",
+        DXGKRNL_WARN("DxgkCbReadDeviceSpace: unavailable DataType 0x%08lX\n",
                      DataType);
         ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
         return STATUS_UNSUCCESSFUL;
@@ -6897,8 +7969,6 @@ DxgkCbWriteDeviceSpace(
 {
     PDXGKRNL_ADAPTER Adapter;
     ULONG            BytesTransferred;
-    ULONG            TargetBusNumber;
-    PCI_SLOT_NUMBER  TargetSlotNumber;
     ULONGLONG        TotalStart100ns;
     ULONGLONG        ElapsedUs;
 
@@ -6906,10 +7976,13 @@ DxgkCbWriteDeviceSpace(
 
     TotalStart100ns = DxgkpTraceNow100ns();
 
-    if (Buffer == NULL || BytesWritten == NULL || Length == 0)
+    if (BytesWritten == NULL)
         return STATUS_INVALID_PARAMETER;
 
     *BytesWritten = 0;
+
+    if (Buffer == NULL || Length == 0)
+        return STATUS_INVALID_PARAMETER;
 
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
@@ -6920,22 +7993,24 @@ DxgkCbWriteDeviceSpace(
 
     /* No per-write trace to avoid stack overflow from serial output. */
 
-    if (DxgkpResolveDeviceSpaceTarget(Adapter,
-                                      DataType,
-                                     &TargetBusNumber,
-                                     &TargetSlotNumber))
+    if (DataType == DXGK_WHICHSPACE_CONFIG)
     {
-        BytesTransferred = HalSetBusDataByOffset(
-            PCIConfiguration,
-            TargetBusNumber,
-            TargetSlotNumber.u.AsULONG,
+        if (!Adapter->PciBusInterfaceValid ||
+            Adapter->PciBusInterface.SetBusData == NULL)
+        {
+            ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+            return STATUS_UNSUCCESSFUL;
+        }
+
+        BytesTransferred = Adapter->PciBusInterface.SetBusData(
+            Adapter->PciBusInterface.Context,
+            PCI_WHICHSPACE_CONFIG,
             Buffer,
             Offset,
             Length);
 
-        if (BytesTransferred == 0)
+        if (BytesTransferred == 0 || BytesTransferred > Length)
         {
-            DXGKRNL_ERR("DxgkCbWriteDeviceSpace: HalSetBusDataByOffset failed\n");
             ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
             return STATUS_UNSUCCESSFUL;
         }
@@ -6951,16 +8026,11 @@ DxgkCbWriteDeviceSpace(
         return STATUS_SUCCESS;
     }
 
-    if (DataType == DXGK_WHICHSPACE_ROM)
+    if (DataType == DXGK_WHICHSPACE_ROM ||
+        DataType == DXGK_WHICHSPACE_MCH ||
+        DataType == DXGK_WHICHSPACE_BRIDGE)
     {
-        DXGKRNL_WARN("DxgkCbWriteDeviceSpace: ROM space is not implemented\n");
-        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-        return STATUS_UNSUCCESSFUL;
-    }
-    else if (DataType == DXGK_WHICHSPACE_MCH ||
-             DataType == DXGK_WHICHSPACE_BRIDGE)
-    {
-        DXGKRNL_WARN("DxgkCbWriteDeviceSpace: no target for DataType 0x%08lX\n",
+        DXGKRNL_WARN("DxgkCbWriteDeviceSpace: unavailable DataType 0x%08lX\n",
                      DataType);
         ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
         return STATUS_UNSUCCESSFUL;
@@ -6972,84 +8042,6 @@ DxgkCbWriteDeviceSpace(
 }
 
 /*
- * DxgkCbMapPhysicalMemoryLegacy
- *
- * Maps a physical address range into kernel virtual address space.
- * Uses MmNonCached because GPU MMIO registers must not be cached.
- * This two-argument helper is not the WDDM 2.9 physical-memory-object
- * callback and is deliberately not published in DXGKRNL_INTERFACE.
- *
- * IRQL: PASSIVE_LEVEL
- */
-NTSTATUS
-APIENTRY
-DxgkCbMapPhysicalMemoryLegacy(
-    _In_    HANDLE  DeviceHandle,
-    _Inout_ PVOID   MapPhysicalMemoryArg)
-{
-    PDXGKARGCB_MAPPHYSICALMEMORY MapPhysicalMemory =
-        (PDXGKARGCB_MAPPHYSICALMEMORY)MapPhysicalMemoryArg;
-    PVOID Va;
-
-    PAGED_CODE();
-
-    UNREFERENCED_PARAMETER(DeviceHandle);
-
-    if (MapPhysicalMemory == NULL || MapPhysicalMemory->NumberOfBytes == 0)
-        return STATUS_INVALID_PARAMETER;
-
-    Va = MmMapIoSpace(MapPhysicalMemory->PhysicalAddress,
-                      MapPhysicalMemory->NumberOfBytes,
-                      MmNonCached);
-    if (Va == NULL)
-    {
-        DXGKRNL_ERR("DxgkCbMapPhysicalMemoryLegacy: MmMapIoSpace failed "
-                    "PA=0x%I64X Len=%Iu\n",
-                    MapPhysicalMemory->PhysicalAddress.QuadPart,
-                    MapPhysicalMemory->NumberOfBytes);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    MapPhysicalMemory->pVirtualAddress = Va;
-
-    return STATUS_SUCCESS;
-}
-
-/*
- * DxgkCbUnmapPhysicalMemoryLegacy
- *
- * Unmaps a range mapped by DxgkCbMapPhysicalMemoryLegacy.
- * This two-argument helper is not the WDDM 2.9 physical-memory-object
- * callback and is deliberately not published in DXGKRNL_INTERFACE.
- *
- * IRQL: PASSIVE_LEVEL
- */
-NTSTATUS
-APIENTRY
-DxgkCbUnmapPhysicalMemoryLegacy(
-    _In_ HANDLE  DeviceHandle,
-    _In_ PVOID   UnmapPhysicalMemoryArg)
-{
-    PDXGKARGCB_UNMAP_PHYSICAL_MEMORY UnmapPhysicalMemory =
-        (PDXGKARGCB_UNMAP_PHYSICAL_MEMORY)UnmapPhysicalMemoryArg;
-
-    PAGED_CODE();
-
-    UNREFERENCED_PARAMETER(DeviceHandle);
-
-    if (UnmapPhysicalMemory == NULL ||
-        UnmapPhysicalMemory->pVirtualAddress == NULL)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    MmUnmapIoSpace(UnmapPhysicalMemory->pVirtualAddress,
-                   UnmapPhysicalMemory->NumberOfBytes);
-
-    return STATUS_SUCCESS;
-}
-
-/*
  * DxgkCbIndicateChildStatus
  *
  * Called by the miniport when a child device's connection status changes
@@ -7057,7 +8049,7 @@ DxgkCbUnmapPhysicalMemoryLegacy(
  * relations for the FDO, causing the PnP manager to re-enumerate children.
  * Also triggers a VidPN rebuild to update the display topology.
  *
- * IRQL: PASSIVE_LEVEL
+ * IRQL: <= DISPATCH_LEVEL
  */
 NTSTATUS
 APIENTRY
@@ -7066,9 +8058,21 @@ DxgkCbIndicateChildStatus(
     _In_ PDXGK_CHILD_STATUS  ChildStatus)
 {
     PDXGKRNL_ADAPTER Adapter;
+    BOOLEAN Changed;
     NTSTATUS Status = STATUS_SUCCESS;
 
-    PAGED_CODE();
+    if (ChildStatus == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (ChildStatus->Type != StatusConnection)
+    {
+        if (ChildStatus->Type == StatusRotation ||
+            ChildStatus->Type == StatusMiracastConnection)
+        {
+            return STATUS_NOT_SUPPORTED;
+        }
+        return STATUS_INVALID_PARAMETER;
+    }
 
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
@@ -7089,13 +8093,17 @@ DxgkCbIndicateChildStatus(
     /* Publish the connector state before any deferred topology snapshot.  The
      * rebuild is never run inside a reverse callback because the miniport may
      * already own the adapter KMD transaction on this thread. */
-    if (ChildStatus != NULL && ChildStatus->Type == StatusConnection)
+    Status = DxgkPnpIndicateChildConnection(
+                 Adapter,
+                 ChildStatus->ChildUid,
+                 ChildStatus->HotPlug.Connected,
+                 &Changed);
+    if (NT_SUCCESS(Status) && Changed)
     {
-        if (DxgkPnpPublishChildConnection(Adapter, ChildStatus->ChildUid, ChildStatus->HotPlug.Connected))
-            Status = DxgkVidPnQueueHotPlugRebuild(Adapter);
+        Status = DxgkVidPnQueueHotPlugRebuild(Adapter);
+        IoInvalidateDeviceRelations(Adapter->PhysicalDeviceObject,
+                                    BusRelations);
     }
-
-    IoInvalidateDeviceRelations(Adapter->PhysicalDeviceObject, BusRelations);
 
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return Status;
@@ -7104,8 +8112,9 @@ DxgkCbIndicateChildStatus(
 /*
  * DxgkCbQueryServices
  *
- * Returns an interface for the requested service type. Used by miniports
- * to obtain DMA adapter, AGP, or debug report interfaces.
+ * Returns only service interfaces backed by an actual dxgkrnl provider.
+ * Debug-report, AGP, and the former ReactOS selector-1 bus extension remain
+ * unavailable rather than publishing callback tables with no consumer.
  */
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
 static VOID
@@ -7174,136 +8183,6 @@ DxgkpFeatureQueryInterface(
 }
 #endif
 
-#define DXGKP_DEBUG_REPORT_SIGNATURE 'RDgD'
-
-typedef struct _DXGKP_DEBUG_REPORT
-{
-    ULONG Signature;
-    ULONG Code;
-    ULONG_PTR Arguments[4];
-    PVOID SecondaryData;
-    ULONG SecondaryDataSize;
-} DXGKP_DEBUG_REPORT, *PDXGKP_DEBUG_REPORT;
-
-static VOID
-NTAPI
-DxgkpDebugReportInterfaceReferenceNop(
-    _In_opt_ PVOID Context)
-{
-    UNREFERENCED_PARAMETER(Context);
-}
-
-static DXGK_DEBUG_REPORT_HANDLE
-DxgkpDebugReportCreate(
-    _In_ HANDLE DeviceHandle,
-    _In_ ULONG Code,
-    _In_ ULONG_PTR Arg1,
-    _In_ ULONG_PTR Arg2,
-    _In_ ULONG_PTR Arg3,
-    _In_ ULONG_PTR Arg4)
-{
-    PDXGKP_DEBUG_REPORT Report;
-
-    PAGED_CODE();
-
-    /* The public contract explicitly permits a NULL device handle. */
-    UNREFERENCED_PARAMETER(DeviceHandle);
-
-    Report = ExAllocatePoolWithTag(NonPagedPool,
-                                   sizeof(*Report),
-                                   TAG_DXGK_DEBUG);
-    if (Report == NULL)
-        return NULL;
-
-    RtlZeroMemory(Report, sizeof(*Report));
-    Report->Signature = DXGKP_DEBUG_REPORT_SIGNATURE;
-    Report->Code = Code;
-    Report->Arguments[0] = Arg1;
-    Report->Arguments[1] = Arg2;
-    Report->Arguments[2] = Arg3;
-    Report->Arguments[3] = Arg4;
-    return (DXGK_DEBUG_REPORT_HANDLE)Report;
-}
-
-static BOOLEAN
-DxgkpDebugReportSecondaryData(
-    _Inout_ DXGK_DEBUG_REPORT_HANDLE ReportHandle,
-    _In_reads_bytes_(DataSize) PVOID Data,
-    _In_ ULONG DataSize)
-{
-    PDXGKP_DEBUG_REPORT Report = (PDXGKP_DEBUG_REPORT)ReportHandle;
-    PVOID CapturedData = NULL;
-    ULONG CapturedDataSize;
-
-    PAGED_CODE();
-
-    if ((Report == NULL) ||
-        (Report->Signature != DXGKP_DEBUG_REPORT_SIGNATURE) ||
-        (Report->SecondaryDataSize > DXGK_DEBUG_REPORT_MAX_SIZE) ||
-        (DataSize > DXGK_DEBUG_REPORT_MAX_SIZE -
-                        Report->SecondaryDataSize) ||
-        ((DataSize != 0) && (Data == NULL)))
-    {
-        return FALSE;
-    }
-
-    if (DataSize != 0)
-    {
-        CapturedDataSize = Report->SecondaryDataSize + DataSize;
-        CapturedData = ExAllocatePoolWithTag(NonPagedPool,
-                                             CapturedDataSize,
-                                             TAG_DXGK_DEBUG);
-        if (CapturedData == NULL)
-            return FALSE;
-        if (Report->SecondaryDataSize != 0)
-        {
-            RtlCopyMemory(CapturedData,
-                          Report->SecondaryData,
-                          Report->SecondaryDataSize);
-        }
-        RtlCopyMemory((PUCHAR)CapturedData + Report->SecondaryDataSize,
-                      Data,
-                      DataSize);
-    }
-    else
-    {
-        return TRUE;
-    }
-
-    if (Report->SecondaryData != NULL)
-    {
-        ExFreePoolWithTag(Report->SecondaryData, TAG_DXGK_DEBUG);
-    }
-    Report->SecondaryData = CapturedData;
-    Report->SecondaryDataSize = CapturedDataSize;
-    return TRUE;
-}
-
-static VOID
-DxgkpDebugReportComplete(
-    _Inout_ DXGK_DEBUG_REPORT_HANDLE ReportHandle)
-{
-    PDXGKP_DEBUG_REPORT Report = (PDXGKP_DEBUG_REPORT)ReportHandle;
-
-    PAGED_CODE();
-
-    if ((Report == NULL) ||
-        (Report->Signature != DXGKP_DEBUG_REPORT_SIGNATURE))
-    {
-        return;
-    }
-
-    DXGKRNL_TRACE("debug report code=0x%08lX data=%lu bytes\n",
-                  Report->Code,
-                  Report->SecondaryDataSize);
-    Report->Signature = 0;
-    if (Report->SecondaryData != NULL)
-    {
-        ExFreePoolWithTag(Report->SecondaryData, TAG_DXGK_DEBUG);
-    }
-    ExFreePoolWithTag(Report, TAG_DXGK_DEBUG);
-}
-
 NTSTATUS
 APIENTRY
 DxgkCbQueryServices(
@@ -7312,6 +8191,8 @@ DxgkCbQueryServices(
     _Inout_ PINTERFACE Interface)
 {
     PDXGKRNL_ADAPTER Adapter;
+
+    PAGED_CODE();
 
     DXGKRNL_TRACE("DxgkCbQueryServices: handle=%p type=%lu iface=%p\n",
                   DeviceHandle, (ULONG)ServicesType, Interface);
@@ -7327,125 +8208,6 @@ DxgkCbQueryServices(
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
         return STATUS_INVALID_HANDLE;
-
-    if (ServicesType == DxgkServicesDebugReport &&
-        Interface->Size != sizeof(BUS_INTERFACE_STANDARD))
-    {
-        PDXGK_DEBUG_REPORT_INTERFACE DebugInterface =
-            (PDXGK_DEBUG_REPORT_INTERFACE)Interface;
-        DXGK_DEBUG_REPORT_INTERFACE ReturnedInterface;
-
-        if (DebugInterface->Size < sizeof(ReturnedInterface))
-        {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-        if (DebugInterface->Version !=
-            DXGK_DEBUG_REPORT_INTERFACE_VERSION_1)
-        {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_NOT_SUPPORTED;
-        }
-
-        RtlZeroMemory(&ReturnedInterface, sizeof(ReturnedInterface));
-        ReturnedInterface.Size = sizeof(ReturnedInterface);
-        ReturnedInterface.Version =
-            DXGK_DEBUG_REPORT_INTERFACE_VERSION_1;
-        ReturnedInterface.Context = Adapter;
-        ReturnedInterface.InterfaceReference =
-            DxgkpDebugReportInterfaceReferenceNop;
-        ReturnedInterface.InterfaceDereference =
-            DxgkpDebugReportInterfaceReferenceNop;
-        ReturnedInterface.DbgReportCreate = DxgkpDebugReportCreate;
-        ReturnedInterface.DbgReportSecondaryData =
-            DxgkpDebugReportSecondaryData;
-        ReturnedInterface.DbgReportComplete = DxgkpDebugReportComplete;
-        *DebugInterface = ReturnedInterface;
-
-        ExReleaseRundownProtection(
-            &Adapter->ReverseCallbackRundownRef);
-        return STATUS_SUCCESS;
-    }
-
-    /*
-     * Preserve the old ReactOS selector-1 bus-interface extension only for
-     * callers presenting its exact structure shape. Selector 1 is publicly
-     * DxgkServicesDebugReport and must never be routed here for a conforming
-     * WDDM caller.
-     */
-    if (ServicesType == DxgkServicesDebugReport &&
-        Interface->Size == sizeof(BUS_INTERFACE_STANDARD) &&
-        Interface->Version == 1)
-    {
-        PBUS_INTERFACE_STANDARD BusInterface =
-            (PBUS_INTERFACE_STANDARD)Interface;
-        static const GUID DxgkpBusInterfaceStandardGuid =
-        {
-            0x496b8280, 0x6f25, 0x11d0,
-            { 0xbe, 0xaf, 0x08, 0x00, 0x2b, 0xe2, 0x09, 0x2f }
-        };
-        KEVENT Event;
-        IO_STATUS_BLOCK IoStatus;
-        PIRP Irp;
-        PIO_STACK_LOCATION Stack;
-        PDEVICE_OBJECT TargetDevice;
-        NTSTATUS Status;
-
-        if (Adapter->PhysicalDeviceObject == NULL)
-        {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_NOT_SUPPORTED;
-        }
-
-        TargetDevice =
-            IoGetAttachedDeviceReference(Adapter->PhysicalDeviceObject);
-        KeInitializeEvent(&Event, NotificationEvent, FALSE);
-        Irp = IoBuildSynchronousFsdRequest(IRP_MJ_PNP,
-                                           TargetDevice,
-                                           NULL,
-                                           0,
-                                           NULL,
-                                           &Event,
-                                           &IoStatus);
-        if (Irp == NULL)
-        {
-            ObDereferenceObject(TargetDevice);
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-        Stack = IoGetNextIrpStackLocation(Irp);
-        Stack->MajorFunction = IRP_MJ_PNP;
-        Stack->MinorFunction = IRP_MN_QUERY_INTERFACE;
-        Stack->Parameters.QueryInterface.InterfaceType =
-            &DxgkpBusInterfaceStandardGuid;
-        Stack->Parameters.QueryInterface.Size =
-            sizeof(BUS_INTERFACE_STANDARD);
-        Stack->Parameters.QueryInterface.Version = 1;
-        Stack->Parameters.QueryInterface.Interface =
-            (PINTERFACE)BusInterface;
-        Stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
-
-        Status = IoCallDriver(TargetDevice, Irp);
-        if (Status == STATUS_PENDING)
-        {
-            KeWaitForSingleObject(&Event,
-                                  Executive,
-                                  KernelMode,
-                                  FALSE,
-                                  NULL);
-            Status = IoStatus.Status;
-        }
-        ObDereferenceObject(TargetDevice);
-        ExReleaseRundownProtection(
-            &Adapter->ReverseCallbackRundownRef);
-        return Status;
-    }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
     if (ServicesType == DxgkServicesFeature)
@@ -7501,11 +8263,7 @@ DxgkCbQueryServices(
  * (i.e. at the interrupt's IRQL with the interrupt spinlock held), then
  * returns the routine's boolean result in *ReturnValue.
  *
- * If the adapter has no interrupt object registered, calls the routine
- * directly at the current IRQL (safe because the miniport must not call
- * us with a non-trivial routine in that case).
- *
- * IRQL: PASSIVE_LEVEL
+ * IRQL: <= DISPATCH_LEVEL
  */
 NTSTATUS
 APIENTRY
@@ -7521,54 +8279,56 @@ DxgkCbSynchronizeExecution(
     ULONGLONG        TotalStart100ns;
     ULONGLONG        ElapsedUs;
 
-    PAGED_CODE();
-
     TotalStart100ns = DxgkpTraceNow100ns();
+
+    if (ReturnValue == NULL || SynchronizeRoutine == NULL)
+    {
+        if (ReturnValue != NULL)
+            *ReturnValue = FALSE;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *ReturnValue = FALSE;
 
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
     {
         DXGKRNL_ERR("DxgkCbSynchronizeExecution: invalid handle %p\n",
                     DeviceHandle);
-        if (ReturnValue) *ReturnValue = FALSE;
         return STATUS_INVALID_HANDLE;
     }
 
-    if (ReturnValue == NULL)
+    if (Adapter->InterruptMessageTable != NULL)
     {
-        DXGKRNL_ERR("DxgkCbSynchronizeExecution: NULL ReturnValue pointer\n");
-        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (SynchronizeRoutine == NULL)
-    {
-        *ReturnValue = TRUE;
-        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-        return STATUS_SUCCESS;
-    }
-
-    if (Adapter->InterruptMessageTable != NULL &&
-        MessageNumber < Adapter->InterruptMessageTable->MessageCount)
-    {
+        if (MessageNumber >= Adapter->InterruptMessageTable->MessageCount)
+        {
+            ExReleaseRundownProtection(
+                &Adapter->ReverseCallbackRundownRef);
+            return STATUS_INVALID_PARAMETER;
+        }
         InterruptObject =
             Adapter->InterruptMessageTable->MessageInfo[MessageNumber].InterruptObject;
     }
-
-    if (InterruptObject == NULL)
-        InterruptObject = Adapter->InterruptObject;
-
-    if (InterruptObject != NULL)
-    {
-        *ReturnValue = KeSynchronizeExecution(InterruptObject,
-                                              SynchronizeRoutine,
-                                              Context);
-    }
     else
     {
-        /* No interrupt; call directly at current IRQL. */
-        *ReturnValue = SynchronizeRoutine(Context);
+        if (MessageNumber != 0)
+        {
+            ExReleaseRundownProtection(
+                &Adapter->ReverseCallbackRundownRef);
+            return STATUS_INVALID_PARAMETER;
+        }
+        InterruptObject = Adapter->InterruptObject;
     }
+
+    if (InterruptObject == NULL)
+    {
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    *ReturnValue = KeSynchronizeExecution(InterruptObject,
+                                          SynchronizeRoutine,
+                                          Context);
 
     ElapsedUs = DxgkpTraceElapsedUs(TotalStart100ns);
     if (ElapsedUs >= DXGK_TRACE_SLOW_SYNC_US)
@@ -7581,155 +8341,71 @@ DxgkCbSynchronizeExecution(
     return STATUS_SUCCESS;
 }
 
+static BOOLEAN
+DxgkpValidatePostDisplayInformation(
+    _In_ const DXGK_DISPLAY_INFORMATION *DisplayInformation)
+{
+    ULONG BytesPerPixel = 4;
+
+    if (DisplayInformation->Width == 0)
+        return TRUE;
+    if (DisplayInformation->Height == 0 ||
+        DisplayInformation->PhysicAddress.QuadPart <= 0 ||
+        (DisplayInformation->ColorFormat != D3DDDIFMT_X8R8G8B8 &&
+         DisplayInformation->ColorFormat != D3DDDIFMT_A8R8G8B8) ||
+        DisplayInformation->Width > MAXULONG / BytesPerPixel ||
+        DisplayInformation->Pitch <
+            DisplayInformation->Width * BytesPerPixel ||
+        DisplayInformation->Height >
+            MAXULONG_PTR / DisplayInformation->Pitch)
+    {
+        return FALSE;
+    }
+    return TRUE;
+}
+
 /*
- * DxgkCbAcquirePostDisplayOwnership
+ * DxgkpAcquirePostDisplayOwnership
  *
- * Called by the miniport during DxgkDdiStartDevice to query the
- * firmware-provided POST framebuffer (EFI GOP) and claim display
- * ownership from the InbV boot-video layer.
+ * Called by the miniport during DxgkDdiStartDevice to obtain POST state from
+ * the previous WDDM owner or firmware and claim display ownership.
  *
- * On return DisplayInformation is filled with the GOP framebuffer
- * geometry.  If no UEFI GOP framebuffer is present, we fall back to
- * detecting a VBE DISPI (bochs-display / QEMU stdvga) device and
- * programming a linear framebuffer mode.  If neither is available
- * all fields are zeroed and STATUS_SUCCESS is still returned (the
- * miniport must then cold-start its display pipeline).
+ * If no representable POST framebuffer is present, all fields are zeroed and
+ * STATUS_SUCCESS is returned so the miniport cold-starts its pipeline.
  *
  * IRQL: PASSIVE_LEVEL
  */
 
-/* ---- VBE DISPI register definitions (bochs-display / QEMU stdvga) ---- */
-#define VBE_DISPI_IOPORT_INDEX  0x01CE
-#define VBE_DISPI_IOPORT_DATA   0x01CF
-
-#define VBE_DISPI_INDEX_ID      0
-#define VBE_DISPI_INDEX_XRES    1
-#define VBE_DISPI_INDEX_YRES    2
-#define VBE_DISPI_INDEX_BPP     3
-#define VBE_DISPI_INDEX_ENABLE  4
-
-#define VBE_DISPI_ENABLED       0x01
-#define VBE_DISPI_LFB_ENABLED   0x40
-
-#define VBE_DISPI_ID_MIN        0xB0C0
-#define VBE_DISPI_ID_MAX        0xB0C5
-
-#define VBE_FALLBACK_WIDTH      1024
-#define VBE_FALLBACK_HEIGHT     768
-#define VBE_FALLBACK_BPP        32
-
-static USHORT
-VbeDispiRead(USHORT Index)
-{
-    WRITE_PORT_USHORT((PUSHORT)(ULONG_PTR)VBE_DISPI_IOPORT_INDEX, Index);
-    return READ_PORT_USHORT((PUSHORT)(ULONG_PTR)VBE_DISPI_IOPORT_DATA);
-}
-
-static VOID
-VbeDispiWrite(USHORT Index, USHORT Value)
-{
-    WRITE_PORT_USHORT((PUSHORT)(ULONG_PTR)VBE_DISPI_IOPORT_INDEX, Index);
-    WRITE_PORT_USHORT((PUSHORT)(ULONG_PTR)VBE_DISPI_IOPORT_DATA, Value);
-}
-
-/**
- * Try to detect and program a VBE DISPI linear framebuffer when booting
- * on BIOS (no UEFI GOP).  Returns TRUE on success.
- */
-static BOOLEAN
-DxgkpAcquireVbeDisplayOwnership(
-    _In_  PDXGKRNL_ADAPTER          Adapter,
-    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation)
-{
-    USHORT DispiId;
-    PCM_FULL_RESOURCE_DESCRIPTOR FullDesc;
-    PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc;
-    PHYSICAL_ADDRESS FbPhysAddr = {{0}};
-    ULONG i;
-
-#if !defined(_M_IX86) && !defined(_M_AMD64)
-    /* Legacy port I/O: on ARM64 WRITE_PORT_USHORT((PUSHORT)0x1CE, ...) is a
-     * raw store to VA 0x1CE — a NULL-page fault, observed as a boot-killing
-     * DABORT when no GOP framebuffer exists. There is no I/O port space to
-     * probe; report no VBE device. */
-    UNREFERENCED_PARAMETER(Adapter);
-    UNREFERENCED_PARAMETER(DisplayInformation);
-    return FALSE;
-#endif
-
-    /* Probe VBE DISPI ID register to detect bochs-display */
-    DispiId = VbeDispiRead(VBE_DISPI_INDEX_ID);
-    if (DispiId < VBE_DISPI_ID_MIN || DispiId > VBE_DISPI_ID_MAX)
-    {
-        DXGKRNL_TRACE("VBE DISPI ID 0x%04X not recognized\n", DispiId);
-        return FALSE;
-    }
-
-    DXGKRNL_TRACE("Detected bochs-display DISPI ID 0x%04X\n", DispiId);
-
-    /* Find framebuffer physical address from PCI BAR (first large memory resource) */
-    if (!Adapter->TranslatedResources || Adapter->TranslatedResources->Count == 0)
-    {
-        DXGKRNL_ERR("VBE fallback: no translated resources\n");
-        return FALSE;
-    }
-
-    FullDesc = &Adapter->TranslatedResources->List[0];
-    for (i = 0; i < FullDesc->PartialResourceList.Count; i++)
-    {
-        Desc = &FullDesc->PartialResourceList.PartialDescriptors[i];
-        if (Desc->Type == CmResourceTypeMemory &&
-            Desc->u.Memory.Length >= (VBE_FALLBACK_WIDTH * VBE_FALLBACK_HEIGHT * (VBE_FALLBACK_BPP / 8)))
-        {
-            FbPhysAddr = Desc->u.Memory.Start;
-            break;
-        }
-    }
-
-    if (FbPhysAddr.QuadPart == 0)
-    {
-        DXGKRNL_ERR("VBE fallback: no suitable memory BAR for framebuffer\n");
-        return FALSE;
-    }
-
-    /* Program VBE linear framebuffer mode */
-    VbeDispiWrite(VBE_DISPI_INDEX_ENABLE, 0);
-    VbeDispiWrite(VBE_DISPI_INDEX_XRES, VBE_FALLBACK_WIDTH);
-    VbeDispiWrite(VBE_DISPI_INDEX_YRES, VBE_FALLBACK_HEIGHT);
-    VbeDispiWrite(VBE_DISPI_INDEX_BPP,  VBE_FALLBACK_BPP);
-    VbeDispiWrite(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED);
-
-    DisplayInformation->Width         = VBE_FALLBACK_WIDTH;
-    DisplayInformation->Height        = VBE_FALLBACK_HEIGHT;
-    DisplayInformation->Pitch         = VBE_FALLBACK_WIDTH * (VBE_FALLBACK_BPP / 8);
-    DisplayInformation->ColorFormat   = D3DDDIFMT_X8R8G8B8;
-    DisplayInformation->PhysicAddress = FbPhysAddr;
-    DisplayInformation->TargetId      = 0;
-    DisplayInformation->AcpiId        = 0;
-
-    DXGKRNL_ERR("VBE fallback: %ux%ux%u LFB at %I64X pitch=%u\n",
-                VBE_FALLBACK_WIDTH, VBE_FALLBACK_HEIGHT, VBE_FALLBACK_BPP,
-                FbPhysAddr.QuadPart, DisplayInformation->Pitch);
-
-    return TRUE;
-}
-
-NTSTATUS
-APIENTRY
-DxgkCbAcquirePostDisplayOwnership(
+static NTSTATUS
+DxgkpAcquirePostDisplayOwnership(
     _In_ HANDLE DeviceHandle,
-    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation)
+    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation,
+    _Out_opt_ PDXGK_DISPLAY_OWNERSHIP_FLAGS Flags)
 {
+    PDXGKRNL_ADAPTER            Claimant;
     LOADER_PARAMETER_FRAMEBUFFER Fb;
+    DXGK_DISPLAY_INFORMATION     ReleasedDisplayInformation;
+    DXGK_FRAMEBUFFER_STATE       FrameBufferState = FrameBufferStateUnknown;
     D3DDDIFORMAT                 ColorFormat;
     ULONG                        BytesPerPixel;
     ULONGLONG                    TotalStart100ns;
     ULONGLONG                    GopQueryUs = 0;
     ULONGLONG                    OwnershipUs = 0;
     ULONGLONG                    StepStart100ns;
+    BOOLEAN                      ReleasedByDriver = FALSE;
+    BOOLEAN                      TransferFromInbv = TRUE;
     NTSTATUS                     Status = STATUS_SUCCESS;
 
     PAGED_CODE();
+
+    if (DisplayInformation == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Flags != NULL)
+        RtlZeroMemory(Flags, sizeof(*Flags));
+
+    Claimant = DxgkpHandleToAdapter(DeviceHandle);
+    if (Claimant == NULL)
+        return STATUS_INVALID_HANDLE;
 
     TotalStart100ns = DxgkpTraceNow100ns();
 
@@ -7737,6 +8413,8 @@ DxgkCbAcquirePostDisplayOwnership(
                   DeviceHandle, DisplayInformation);
 
     RtlZeroMemory(DisplayInformation, sizeof(*DisplayInformation));
+    RtlZeroMemory(&ReleasedDisplayInformation,
+                  sizeof(ReleasedDisplayInformation));
     (VOID)KeWaitForSingleObject(&g_PostDisplayOwnershipMutex, Executive, KernelMode, FALSE, NULL);
 
     /*
@@ -7748,7 +8426,6 @@ DxgkCbAcquirePostDisplayOwnership(
      *     (typically the fallback) before acquiring.
      */
     {
-        PDXGKRNL_ADAPTER Claimant = (PDXGKRNL_ADAPTER)DeviceHandle;
         PDEVICE_OBJECT OwnerDeviceObject;
         PDXGKRNL_ADAPTER Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
         BOOLEAN RetainFallback = FALSE;
@@ -7803,7 +8480,10 @@ DxgkCbAcquirePostDisplayOwnership(
                 }
             }
 
-            Status = DxgkpStopPostDisplayOwner(Owner);
+            Status = DxgkpStopPostDisplayOwner(
+                         Owner,
+                         &ReleasedDisplayInformation,
+                         &ReleasedByDriver);
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: old owner %p could not be stopped 0x%08lX\n", Owner, Status);
@@ -7847,6 +8527,25 @@ DxgkCbAcquirePostDisplayOwnership(
             ObDereferenceObject(OwnerDeviceObject);
     }
 
+    if (ReleasedByDriver)
+    {
+        TransferFromInbv = FALSE;
+        if (!DxgkpValidatePostDisplayInformation(
+                 &ReleasedDisplayInformation))
+        {
+            DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: previous KMD "
+                         "returned invalid POST information\n");
+            RtlZeroMemory(&ReleasedDisplayInformation,
+                          sizeof(ReleasedDisplayInformation));
+        }
+        else if (ReleasedDisplayInformation.Width != 0)
+        {
+            *DisplayInformation = ReleasedDisplayInformation;
+            FrameBufferState = FrameBufferStateInitializedByDriver;
+        }
+        goto StorePostDisplay;
+    }
+
     /*
      * If no valid GOP framebuffer was saved by FreeLOADer / InbV the
      * miniport must initialise its pipeline from scratch.  Return a
@@ -7854,24 +8553,9 @@ DxgkCbAcquirePostDisplayOwnership(
      */
     if (!InbvHasValidGopFrameBuffer())
     {
-        PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)DeviceHandle;
-
         DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: "
-                      "no GOP framebuffer, trying VBE DISPI fallback\n");
-
-        if (DxgkpAcquireVbeDisplayOwnership(Adapter, DisplayInformation))
-        {
-            DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: "
-                          "VBE fallback succeeded total=%I64u us\n",
-                          DxgkpTraceElapsedUs(TotalStart100ns));
-            DxgkpSetPostDisplayOwner(Adapter);
-            goto Complete;
-        }
-
-        /* Expected on headless boots: the miniport cold-starts. */
-        DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: "
-                     "no GOP and no VBE — miniport must cold-start\n");
-        goto Complete;
+                      "no firmware framebuffer; miniport must cold-start\n");
+        goto TransferOwnership;
     }
 
     StepStart100ns = DxgkpTraceNow100ns();
@@ -7879,71 +8563,85 @@ DxgkCbAcquirePostDisplayOwnership(
     {
         DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership: "
                     "InbvGetGopFrameBufferInfo failed\n");
-        goto Complete;
+        goto TransferOwnership;
     }
     GopQueryUs = DxgkpTraceElapsedUs(StepStart100ns);
 
     /*
-     * Translate EFI GOP PixelFormat to a D3DDDIFMT value.
-     *
-     * EFI GOP pixel format constants:
-     *   0 = PixelRedGreenBlueReserved8BitPerColor  (RGBX — stored as XRGB)
-     *   1 = PixelBlueGreenRedReserved8BitPerColor  (BGRX — most common)
-     *   2 = PixelBitMask                           (custom bitmask)
-     *   3 = PixelBltOnly                           (no linear framebuffer)
-     *
-     * WDDM maps both RGBX and BGRX to D3DDDIFMT_X8R8G8B8 (32bpp) for the
-     * POST display because the byte order does not affect the scan-out —
-     * the miniport reads the actual PixelFormat from DXGK_DISPLAY_INFORMATION
-     * or from the GOP protocol directly to determine final byte order.
-     *
-     * For PixelBitMask with R=0xF800, G=0x07E0, B=0x001F we infer 16bpp
-     * R5G6B5.  Otherwise fall back to X8R8G8B8.
+     * DXGKCB_ACQUIRE_POST_DISPLAY_OWNERSHIP permits only the X8/A8 R8G8B8
+     * formats.  Publish only firmware layouts that can be represented exactly
+     * as X8R8G8B8; a zero descriptor tells KMD to cold-start every other mode.
+     * FreeLoader stores bits-per-pixel in PixelFormat, while an EFI loader may
+     * store the GOP enum.  The masks disambiguate the former convention.
      */
     switch (Fb.PixelFormat)
     {
-        case 0: /* RGBX 32bpp */
-        case 1: /* BGRX 32bpp */
+        case 1: /* EFI PixelBlueGreenRedReserved8BitPerColor */
             ColorFormat   = D3DDDIFMT_X8R8G8B8;
             BytesPerPixel = 4;
             break;
 
-        case 2: /* BitMask */
-            if (Fb.RedMask == 0xF800 &&
-                Fb.GreenMask == 0x07E0 &&
-                Fb.BlueMask  == 0x001F)
+        case 2: /* EFI PixelBitMask */
+            if (Fb.RedMask == 0x00FF0000 &&
+                Fb.GreenMask == 0x0000FF00 &&
+                Fb.BlueMask == 0x000000FF)
             {
-                ColorFormat   = D3DDDIFMT_R5G6B5;
-                BytesPerPixel = 2;
+                ColorFormat = D3DDDIFMT_X8R8G8B8;
+                BytesPerPixel = 4;
             }
             else
             {
-                /* Non-standard bitmask: treat as 32bpp X8R8G8B8. */
-                ColorFormat   = D3DDDIFMT_X8R8G8B8;
-                BytesPerPixel = 4;
+                DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: "
+                             "unrepresentable GOP masks R=%08lX G=%08lX "
+                             "B=%08lX\n",
+                             Fb.RedMask,
+                             Fb.GreenMask,
+                             Fb.BlueMask);
+                goto TransferOwnership;
             }
             break;
 
-        /*
-         * The ARM64 loader stores BITS PER PIXEL here rather than the EFI
-         * GOP enum (freeldr GOP detection; the former XPDM consumers
-         * computed BytesPerPixel = (PixelFormat + 7) / 8).  Accept the
-         * two linear formats that convention produces.
-         */
+        /* FreeLoader bits-per-pixel convention. */
         case 32:
-            ColorFormat   = D3DDDIFMT_X8R8G8B8;
+            if (Fb.RedMask != 0x00FF0000 ||
+                Fb.GreenMask != 0x0000FF00 ||
+                Fb.BlueMask != 0x000000FF)
+            {
+                DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: "
+                             "unrepresentable 32-bpp masks R=%08lX G=%08lX "
+                             "B=%08lX\n",
+                             Fb.RedMask,
+                             Fb.GreenMask,
+                             Fb.BlueMask);
+                goto TransferOwnership;
+            }
+            ColorFormat = D3DDDIFMT_X8R8G8B8;
             BytesPerPixel = 4;
             break;
 
-        case 16:
-            ColorFormat   = D3DDDIFMT_R5G6B5;
-            BytesPerPixel = 2;
-            break;
-
-        default: /* BltOnly or unknown — no usable linear framebuffer */
+        default: /* RGBX, 15/16-bpp, BltOnly, or unknown. */
             DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: "
-                         "PixelFormat %lu has no linear FB\n", Fb.PixelFormat);
-            goto Complete;
+                         "PixelFormat %lu is not representable by the public "
+                         "POST format contract\n",
+                         Fb.PixelFormat);
+            goto TransferOwnership;
+    }
+
+    if (Fb.HorizontalResolution == 0 ||
+        Fb.VerticalResolution == 0 ||
+        Fb.FrameBufferBase.QuadPart <= 0 ||
+        Fb.PixelsPerScanLine < Fb.HorizontalResolution ||
+        Fb.PixelsPerScanLine > MAXULONG / BytesPerPixel ||
+        Fb.VerticalResolution >
+            MAXULONG_PTR / (Fb.PixelsPerScanLine * BytesPerPixel))
+    {
+        DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: invalid firmware "
+                     "geometry %lux%lu scan=%lu PA=0x%I64X\n",
+                     Fb.HorizontalResolution,
+                     Fb.VerticalResolution,
+                     Fb.PixelsPerScanLine,
+                     Fb.FrameBufferBase.QuadPart);
+        goto TransferOwnership;
     }
 
     DisplayInformation->Width         = Fb.HorizontalResolution;
@@ -7951,12 +8649,15 @@ DxgkCbAcquirePostDisplayOwnership(
     DisplayInformation->Pitch         = Fb.PixelsPerScanLine * BytesPerPixel;
     DisplayInformation->ColorFormat   = ColorFormat;
     DisplayInformation->PhysicAddress.QuadPart = Fb.FrameBufferBase.QuadPart;
-    DisplayInformation->TargetId      = 0; /* primary output */
+    DisplayInformation->TargetId      = D3DDDI_ID_UNINITIALIZED;
     DisplayInformation->AcpiId        = 0;
+    FrameBufferState = FrameBufferStateInitializedByFirmware;
 
     /* Store POST display info in the adapter for later use. */
+StorePostDisplay:
+    if (DisplayInformation->Width != 0)
     {
-        PDXGKRNL_ADAPTER PostAdapter = (PDXGKRNL_ADAPTER)DeviceHandle;
+        PDXGKRNL_ADAPTER PostAdapter = Claimant;
         if (PostAdapter != NULL)
         {
             SIZE_T FbSize = (SIZE_T)DisplayInformation->Pitch *
@@ -7989,7 +8690,7 @@ DxgkCbAcquirePostDisplayOwnership(
             PostAdapter->PostDisplayPhysicalAddress = DisplayInformation->PhysicAddress;
             PostAdapter->PostDisplayPitch  = DisplayInformation->Pitch;
 
-            /* Map the GOP framebuffer into kernel VA for direct CPU access. */
+            /* Map the transferred POST framebuffer for direct CPU access. */
             if (DisplayInformation->PhysicAddress.QuadPart != 0 &&
                 PostAdapter->PostDisplayVirtualAddress == NULL)
             {
@@ -8014,7 +8715,7 @@ DxgkCbAcquirePostDisplayOwnership(
                 }
 
                 DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: "
-                              "mapped GOP FB PA=0x%I64X -> VA=%p (%Iu bytes)\n",
+                              "mapped POST FB PA=0x%I64X -> VA=%p (%Iu bytes)\n",
                               DisplayInformation->PhysicAddress.QuadPart,
                               PostAdapter->PostDisplayVirtualAddress,
                               FbSize);
@@ -8022,6 +8723,7 @@ DxgkCbAcquirePostDisplayOwnership(
         }
     }
 
+TransferOwnership:
     DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: "
                   "%lux%lu Pitch=%lu Fmt=%d PA=0x%I64X\n",
                   DisplayInformation->Width,
@@ -8035,11 +8737,14 @@ DxgkCbAcquirePostDisplayOwnership(
      * This synchronously stops the boot animation before InbV marks the
      * display lost, so no boot-video thread can write after the handoff.
      */
-    StepStart100ns = DxgkpTraceNow100ns();
-    InbvNotifyDisplayOwnershipLost(NULL);
-    OwnershipUs = DxgkpTraceElapsedUs(StepStart100ns);
+    if (TransferFromInbv)
+    {
+        StepStart100ns = DxgkpTraceNow100ns();
+        InbvNotifyDisplayOwnershipLost(NULL);
+        OwnershipUs = DxgkpTraceElapsedUs(StepStart100ns);
+    }
 
-    DxgkpSetPostDisplayOwner((PDXGKRNL_ADAPTER)DeviceHandle);
+    DxgkpSetPostDisplayOwner(Claimant);
 
     DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: gop=%I64u us ownership=%I64u us total=%I64u us\n",
                   GopQueryUs,
@@ -8047,8 +8752,22 @@ DxgkCbAcquirePostDisplayOwnership(
                   DxgkpTraceElapsedUs(TotalStart100ns));
 
 Complete:
+    if (Flags != NULL && NT_SUCCESS(Status))
+        Flags->FrameBufferState = FrameBufferState;
     KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
+    ExReleaseRundownProtection(&Claimant->ReverseCallbackRundownRef);
     return Status;
+}
+
+NTSTATUS
+APIENTRY
+DxgkCbAcquirePostDisplayOwnership(
+    _In_ HANDLE DeviceHandle,
+    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation)
+{
+    return DxgkpAcquirePostDisplayOwnership(DeviceHandle,
+                                             DisplayInformation,
+                                             NULL);
 }
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
@@ -8059,21 +8778,12 @@ DxgkCbAcquirePostDisplayOwnership2(
     _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation,
     _Out_ PDXGK_DISPLAY_OWNERSHIP_FLAGS Flags)
 {
-    NTSTATUS Status;
-
     if (DisplayInformation == NULL || Flags == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    RtlZeroMemory(Flags, sizeof(*Flags));
-    Status = DxgkCbAcquirePostDisplayOwnership(DeviceHandle,
-                                               DisplayInformation);
-    if (NT_SUCCESS(Status) &&
-        DisplayInformation->PhysicAddress.QuadPart != 0)
-    {
-        Flags->FrameBufferState = FrameBufferStateInitializedByFirmware;
-    }
-
-    return Status;
+    return DxgkpAcquirePostDisplayOwnership(DeviceHandle,
+                                             DisplayInformation,
+                                             Flags);
 }
 #endif
 
@@ -8158,136 +8868,11 @@ DxgkpMessageIsrTrampoline(
     _In_ ULONG       MessageNumber)
 {
     PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)ServiceContext;
-    BOOLEAN Handled = FALSE;
-    ULONG m;
     UNREFERENCED_PARAMETER(Interrupt);
-
-    /*
-     * On ROS ARM64 the interrupt arbiter grants a single GIC vector even for a
-     * multi-message MSI-X device, and pci.sys replicates that vector across the
-     * device's whole MSI-X table (see PciPdoEnableMsix path).  So every queue's
-     * MSI arrives on this one vector with MessageNumber 0.  Poll every message
-     * the device exposes so the miniport checks all of its VirtIO queues and
-     * retires whichever completed — otherwise queue>0 completions are missed and
-     * the command queue stalls.
-     */
-    if (Adapter != NULL && Adapter->InterruptMessageCount > 1)
-    {
-        for (m = 0; m < Adapter->InterruptMessageCount; m++)
-            Handled |= DxgkpInvokeMiniportInterrupt(Adapter, m,
-                                                    "DxgkpMessageIsrTrampoline");
-        return Handled;
-    }
 
     return DxgkpInvokeMiniportInterrupt(Adapter,
                                         MessageNumber,
                                         "DxgkpMessageIsrTrampoline");
-}
-
-/*
- * DxgkpIsMsixEnabled — read the device's live MSI-X Message Control Enable bit.
- *
- * On ROS ARM64 the interrupt resource descriptor handed to the FDO can lack
- * CM_RESOURCE_INTERRUPT_MESSAGE even after pci.sys has allocated + enabled MSI-X
- * on the device (the flag is lost in the PnP resource hand-off).  pci.sys enables
- * MSI-X before the FDO connects its interrupt, so the live Enable bit in config
- * space is the reliable signal for "connect message-based".
- */
-static ULONG
-DxgkpIsMsixEnabled(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    ULONG BusNum = 0, SlotNum = 0, Dummy = 0;
-    PCI_SLOT_NUMBER Slot;
-    UCHAR CapPtr = 0, CapId = 0;
-    USHORT MsgCtrl = 0;
-    ULONG Guard = 0;
-
-    if (Adapter == NULL || Adapter->PhysicalDeviceObject == NULL)
-        return 0;
-
-    IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
-                        DevicePropertyBusNumber, sizeof(BusNum), &BusNum, &Dummy);
-    IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
-                        DevicePropertyAddress, sizeof(SlotNum), &SlotNum, &Dummy);
-
-    Slot.u.AsULONG = 0;
-    Slot.u.bits.DeviceNumber = (SlotNum >> 16) & 0x1F;
-    Slot.u.bits.FunctionNumber = SlotNum & 0x7;
-
-    if (HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                              &CapPtr, 0x34 /* Cap ptr */, 1) == 0)
-        return 0;
-
-    while (CapPtr >= 0x40 && CapPtr != 0xFF && Guard++ < 48)
-    {
-        HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                              &CapId, CapPtr, 1);
-        if (CapId == 0x11) /* PCI_CAPABILITY_ID_MSIX */
-        {
-            HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                                  &MsgCtrl, CapPtr + 2, 2);
-            /* Enable = bit 15; low 11 bits = (table size - 1).  Return the MSI-X
-             * table size when enabled, 0 when MSI-X is not enabled. */
-            return (MsgCtrl & 0x8000) ? (((ULONG)(MsgCtrl & 0x07FF)) + 1) : 0;
-        }
-        HalGetBusDataByOffset(PCIConfiguration, BusNum, Slot.u.AsULONG,
-                              &CapPtr, CapPtr + 1 /* next cap */, 1);
-    }
-    return 0;
-}
-
-/*
- * DxgkpMarkInterruptResourcesMessageBased — set CM_RESOURCE_INTERRUPT_MESSAGE on
- * the interrupt descriptors that really are messages.
- *
- * The FDO's interrupt resource descriptor can arrive line-based on ROS ARM64 even
- * when MSI-X is in use.  The miniport (viogpudo) reads these resources back via
- * DxgkCbGetDeviceInformation and, if it sees a line-based interrupt, programs its
- * VirtIO queues for polling (NO_VECTOR) instead of enabling per-queue MSI-X — so
- * the device never raises a completion MSI.  Once we know we are message-based,
- * mark the resources accordingly so the miniport enables queue MSI-X.
- *
- * But *only* the ones that are messages.  This used to mark every interrupt
- * descriptor it found, which included the INTx GSI still present in the list
- * alongside the MSI-X messages.  A miniport pairing its virtqueues with messages
- * then counts one more than the device's table holds, and the extra one -- the
- * line -- is precisely the interrupt that cannot fire while the device is in
- * MSI-X mode.
- *
- * An MSI is edge-triggered by definition: the message is a posted write, and
- * there is no wire to hold asserted.  A level-sensitive descriptor is therefore
- * never a message, and that is a property of what MSI *is* rather than a guess
- * about how this platform happens to build its resource lists.
- */
-static VOID
-DxgkpMarkInterruptResourcesMessageBased(
-    _In_opt_ PCM_RESOURCE_LIST ResourceList)
-{
-    ULONG li, di;
-
-    if (ResourceList == NULL)
-        return;
-
-    for (li = 0; li < ResourceList->Count; li++)
-    {
-        PCM_PARTIAL_RESOURCE_LIST Partial = &ResourceList->List[li].PartialResourceList;
-        for (di = 0; di < Partial->Count; di++)
-        {
-            PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc = &Partial->PartialDescriptors[di];
-
-            if (Desc->Type != CmResourceTypeInterrupt)
-                continue;
-            if ((Desc->Flags & CM_RESOURCE_INTERRUPT_LATCHED) == 0)
-            {
-                /* Level-sensitive: the INTx line, not a message.  Leave it as
-                 * it is so the miniport does not count it among its MSI-X
-                 * messages. */
-                continue;
-            }
-            Desc->Flags |= CM_RESOURCE_INTERRUPT_MESSAGE;
-        }
-    }
 }
 
 /*
@@ -8730,10 +9315,10 @@ DxgkpMms2StartAdministrativeAdapter(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PBOOLEA
             Status = DxgkpMms2QuerySchedulerInterface(Adapter->Mms2Adapter, &Adapter->Mms2SchedulerInterface);
         if (NT_SUCCESS(Status))
         {
+            /* StartAdapter already started the provider-owned scheduler.
+             * Publishing the queried interface does not start it a second
+             * time. */
             InterlockedExchange(&Adapter->Mms2SchedulerValid, 1);
-            Status = Adapter->Mms2SchedulerInterface.Start(Adapter->Mms2SchedulerInterface.SchedulerHandle, Adapter->NodeCount != 0 ? Adapter->NodeCount : 1);
-            if (Status == STATUS_INVALID_DEVICE_STATE)
-                Status = STATUS_SUCCESS;   /* already started by StartAdapter */
         }
         if (NT_SUCCESS(Status))
             Status = DxgkpMms2QuerySchedulerTimeline(Adapter->Mms2Adapter, &Timeline);
@@ -8823,6 +9408,147 @@ DxgkpCompleteAdapterStart(
     DxgkpCompletePostDisplayHandoff(Adapter, Status, Restartable);
     if (QueueHotPlug)
         (VOID)DxgkVidPnQueueHotPlugRebuild(Adapter);
+}
+
+typedef struct _DXGKP_ADAPTER_START_PROGRESS
+{
+    BOOLEAN MiniportStarted;
+    BOOLEAN VidMmStarted;
+    BOOLEAN Mms2Started;
+    BOOLEAN SchedulerStarted;
+    BOOLEAN VidPnCreated;
+    BOOLEAN PresentStarted;
+    BOOLEAN RundownReinitialized;
+    BOOLEAN TdrStarted;
+    BOOLEAN VsyncEnabled;
+    BOOLEAN InterfaceEnabled;
+    BOOLEAN DisplayRegistered;
+} DXGKP_ADAPTER_START_PROGRESS, *PDXGKP_ADAPTER_START_PROGRESS;
+
+static VOID
+DxgkpDestroyAdapterVidPn(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    D3DKMDT_HVIDPN VidPn;
+
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+    VidPn = (D3DKMDT_HVIDPN)Adapter->VidPn;
+    Adapter->VidPn = NULL;
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    if (VidPn != NULL)
+        DxgkVidPnDestroy(VidPn);
+}
+
+static NTSTATUS
+DxgkpCloseAndRetireReverseCallbacks(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (InterlockedCompareExchange(&Adapter->ReverseCallbackRundownStarted, 1, 0) != 0)
+        return STATUS_DELETE_PENDING;
+    ExWaitForRundownProtectionRelease(&Adapter->ReverseCallbackRundownRef);
+    DxgkpReleaseMapMemory(Adapter);
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+    DxgkpReleaseCallbackMemory(Adapter);
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    DxgkpReleasePhysicalMemoryObjects(Adapter);
+#endif
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpRollbackAdapterStart(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKP_ADAPTER_START_PROGRESS Progress,
+    _In_ NTSTATUS FailureStatus,
+    _Out_ PBOOLEAN Restartable)
+{
+    NTSTATUS BeginStatus = STATUS_SUCCESS;
+    NTSTATUS StopStatus = STATUS_SUCCESS;
+    NTSTATUS CompleteStatus = STATUS_SUCCESS;
+    NTSTATUS InterfaceStatus = STATUS_SUCCESS;
+    NTSTATUS ResourceStatus = STATUS_SUCCESS;
+
+    *Restartable = FALSE;
+    InterlockedExchange(&Adapter->SubmitDmaStopping, 1);
+    DxgkPresentBeginStop(Adapter);
+    InterlockedExchange(&Adapter->VidSchStopping, 1);
+    if (Progress->RundownReinitialized)
+        DxgkBeginAdapterRundown(Adapter);
+    if (Progress->TdrStarted)
+        DxgkpStopTdrWatchdog(Adapter);
+    if (Progress->VsyncEnabled)
+    {
+        NTSTATUS VsyncStatus = DxgkpSetVsyncInterruptState(Adapter, DXGK_VSYNC_DISABLE_NO_PHASE);
+
+        if (!NT_SUCCESS(VsyncStatus) && VsyncStatus != STATUS_NOT_SUPPORTED)
+            DXGKRNL_WARN("DxgkAdapterStart: rollback could not disable vsync 0x%08lX\n", VsyncStatus);
+    }
+    if (Progress->DisplayRegistered)
+        DxgkDisplayUnregister(Adapter);
+    if (Progress->InterfaceEnabled && Adapter->DeviceInterfaceEnabled)
+    {
+        InterfaceStatus = IoSetDeviceInterfaceState(&Adapter->DeviceInterfaceName, FALSE);
+        if (NT_SUCCESS(InterfaceStatus))
+            Adapter->DeviceInterfaceEnabled = FALSE;
+        else
+            DXGKRNL_ERR("DxgkAdapterStart: rollback could not disable the adapter interface 0x%08lX\n", InterfaceStatus);
+    }
+    if (Progress->Mms2Started)
+        BeginStatus = DxgkpMms2BeginStop(Adapter, Dxgmms2StopReasonStartRollback);
+    VidSchPrepareForStop(Adapter);
+    DxgkpDisablePeriodicInterruptHandoff(Adapter);
+    DxgkpDisconnectAdapterInterrupt(Adapter);
+    KeRemoveQueueDpc(&Adapter->DpcObject);
+    KeFlushQueuedDpcs();
+    DxgkpWaitForVidSchCallbacks(Adapter);
+    if (Progress->MiniportStarted)
+        StopStatus = DxgkpStopMiniportForTeardown(Adapter);
+    if (!NT_SUCCESS(StopStatus))
+    {
+        DXGKRNL_ERR("DxgkAdapterStart: rollback could not establish ownership boundary 0x%08lX; retaining state for RemoveDevice\n", StopStatus);
+        return StopStatus;
+    }
+
+    ResourceStatus = DxgkpCloseAndRetireReverseCallbacks(Adapter);
+    if (!NT_SUCCESS(BeginStatus))
+    {
+        DXGKRNL_ERR("DxgkAdapterStart: dxgmms2 rollback could not begin 0x%08lX; retaining state for RemoveDevice\n", BeginStatus);
+        return BeginStatus;
+    }
+    if (Progress->Mms2Started)
+        CompleteStatus = DxgkpMms2CompleteRetiredStop(Adapter);
+    if (!NT_SUCCESS(ResourceStatus) || !NT_SUCCESS(CompleteStatus))
+    {
+        NTSTATUS RollbackStatus = !NT_SUCCESS(ResourceStatus) ? ResourceStatus : CompleteStatus;
+
+        DXGKRNL_ERR("DxgkAdapterStart: rollback retirement incomplete 0x%08lX; retaining state for RemoveDevice\n", RollbackStatus);
+        return RollbackStatus;
+    }
+
+    if (Progress->PresentStarted)
+        DxgkPresentTeardown(Adapter);
+    if (Progress->VidPnCreated)
+        DxgkpDestroyAdapterVidPn(Adapter);
+    if (Progress->SchedulerStarted)
+        VidSchDestroy(Adapter);
+    if (Progress->VidMmStarted)
+    {
+        DxgkVidMmQuiesceAdapter(Adapter);
+        DxgkVidMmTeardownAdapter(Adapter);
+    }
+    DxgkpClearPostDisplayOwner(Adapter);
+    DxgkpReleasePostDisplayMapping(Adapter);
+    DxgkpReleaseAdapterResources(Adapter);
+    Adapter->PresentQueueInitializationStatus = STATUS_DEVICE_NOT_READY;
+    Adapter->InterruptTraceEpoch100ns = 0;
+    Adapter->NodeCount = 0;
+    Adapter->GpuMmuCapsValid = FALSE;
+    Adapter->PageTableLevelsValid = FALSE;
+    if (!NT_SUCCESS(InterfaceStatus))
+        return InterfaceStatus;
+    *Restartable = TRUE;
+    return FailureStatus;
 }
 
 /* Returns with AdapterMutex held after every in-flight start has completed. */
@@ -8992,7 +9718,7 @@ DxgkpSetVsyncInterruptState(
     if (ControlInterrupt3 == NULL &&
         !Adapter->MiniportContext->UseDodLayout &&
         DxgkCapsCoreInterfaceVersionAtLeast(
-            Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_3))
+            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
     {
         ControlInterrupt2 =
             DXGK_CB_FULL(Adapter, DxgkDdiControlInterrupt2);
@@ -9073,9 +9799,13 @@ DxgkAdapterStart(
     ULONGLONG       PresentUs = 0;
     ULONGLONG       DisplayUs = 0;
     ULONG           StartGeneration;
+    DXGK_ADAPTER_START_ROLE Role;
+    DXGKP_ADAPTER_START_PROGRESS Progress;
+    BOOLEAN         Restartable;
 
     PAGED_CODE();
 
+    RtlZeroMemory(&Progress, sizeof(Progress));
     AdapterStart100ns = DxgkpTraceNow100ns();
 
     DxgkRosAssert(Adapter != NULL, DXGKRNL_BUGCHECK_NULL_ADAPTER);
@@ -9090,6 +9820,20 @@ DxgkAdapterStart(
     Status = DxgkpBeginAdapterStart(Adapter, &StartGeneration);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    Status = DxgkpCaptureAdapterResources(Adapter, AllocatedResources, TranslatedResources);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, TRUE);
+        return Status;
+    }
+    if (InterlockedCompareExchange(&Adapter->ReverseCallbackRundownStarted, 0, 0) != 0)
+    {
+        ExReInitializeRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        InterlockedExchange(&Adapter->ReverseCallbackRundownStarted, 0);
+    }
+    AllocatedResources = Adapter->AllocatedResources;
+    TranslatedResources = Adapter->TranslatedResources;
     Adapter->MiniportDeviceStopped = FALSE;
     Adapter->SurpriseRemovalHandled = FALSE;
     InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
@@ -9098,6 +9842,13 @@ DxgkAdapterStart(
     Adapter->QueueDpcCount = 0;
     Adapter->DpcCount = 0;
     Adapter->InterruptTraceEpoch100ns = AdapterStart100ns;
+    Adapter->InterruptMessageBased = FALSE;
+    Adapter->InterruptMessageCount = 0;
+    Adapter->InterruptVector = 0;
+    Adapter->InterruptLevel = PASSIVE_LEVEL;
+    Adapter->InterruptAffinity = 0;
+    Adapter->InterruptShared = FALSE;
+    Adapter->InterruptMode = LevelSensitive;
 
     DXGKRNL_TRACE("DxgkAdapterStart: Adapter %p AllocRes=%p TransRes=%p\n",
                   Adapter, AllocatedResources, TranslatedResources);
@@ -9125,39 +9876,22 @@ DxgkAdapterStart(
                       Adapter->MiniportContext ? Adapter->MiniportContext->IsDisplayOnlyDriver : -1);
     }
 
-    /* Save raw PCI resource lists for DxgkCbGetDeviceInformation. */
-    Adapter->AllocatedResources  = AllocatedResources;
-    Adapter->TranslatedResources = TranslatedResources;
-
     /* Save interrupt resource info for connection immediately before
      * DxgkDdiStartDevice, which may require initialization completions. */
     if (TranslatedResources && TranslatedResources->Count > 0)
     {
         ULONG ri;
         PCM_PARTIAL_RESOURCE_LIST PartialList = &TranslatedResources->List[0].PartialResourceList;
-        PCM_PARTIAL_RESOURCE_LIST RawPartialList =
-            (AllocatedResources && AllocatedResources->Count > 0) ?
-            &AllocatedResources->List[0].PartialResourceList : NULL;
         for (ri = 0; ri < PartialList->Count; ri++)
         {
             PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc = &PartialList->PartialDescriptors[ri];
-            PCM_PARTIAL_RESOURCE_DESCRIPTOR RawDesc =
-                (RawPartialList != NULL && ri < RawPartialList->Count) ?
-                &RawPartialList->PartialDescriptors[ri] : NULL;
             if (Desc->Type == CmResourceTypeInterrupt)
             {
-                /* A message-signalled (MSI/MSI-X) interrupt carries
-                 * CM_RESOURCE_INTERRUPT_MESSAGE.  On ROS ARM64 the TRANSLATED
-                 * descriptor can drop that flag, so also honour it from the RAW
-                 * descriptor; connect message-based (CONNECT_MESSAGE_BASED) if
-                 * either carries it.  (The .Translated vector/level/affinity of a
-                 * message interrupt overlays u.Interrupt, so it stays valid even
-                 * when the translated flag was dropped.) */
+                /* The assigned translated descriptor is authoritative.  Loss
+                 * of the MESSAGE flag is a PCI/PnP translation defect and must
+                 * not be guessed around from live configuration registers. */
                 Adapter->InterruptMessageBased =
-                    ((Desc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) ||
-                     (RawDesc != NULL &&
-                      RawDesc->Type == CmResourceTypeInterrupt &&
-                      (RawDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)))
+                    (Desc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
                     ? TRUE : FALSE;
 
                 if (Adapter->InterruptMessageBased)
@@ -9170,12 +9904,7 @@ DxgkAdapterStart(
                         Desc->u.MessageInterrupt.Translated.Affinity;
                     Adapter->InterruptShared = FALSE;
                     Adapter->InterruptMode = Latched;
-                    Adapter->InterruptMessageCount =
-                        (RawDesc != NULL &&
-                         RawDesc->Type == CmResourceTypeInterrupt &&
-                         (RawDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
-                         RawDesc->u.MessageInterrupt.Raw.MessageCount) ?
-                        RawDesc->u.MessageInterrupt.Raw.MessageCount : 1;
+                    Adapter->InterruptMessageCount = 1;
 
                     DXGKRNL_TRACE("DxgkAdapterStart: saved MSI interrupt — "
                                   "BaseVector=%lu Count=%lu IRQL=%u\n",
@@ -9203,32 +9932,10 @@ DxgkAdapterStart(
         }
     }
 
-    /*
-     * Cache PCI bus number and slot (device/function) from the PDO properties.
-     * This is done once so DxgkCbReadDeviceSpace/DxgkCbWriteDeviceSpace don't
-     * need to call IoGetDeviceProperty on every PCI config access, which sends
-     * PnP IRPs and can cause spinlock re-entrancy issues on ReactOS.
-     */
-    {
-        ULONG BusNum = 0, DevAddr = 0, Dummy = 0;
-        IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
-                            DevicePropertyBusNumber, sizeof(BusNum), &BusNum, &Dummy);
-        IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
-                            DevicePropertyAddress, sizeof(DevAddr), &DevAddr, &Dummy);
-        Adapter->PciBusNumber = BusNum;
-        RtlZeroMemory(&Adapter->PciSlotNumber, sizeof(Adapter->PciSlotNumber));
-        Adapter->PciSlotNumber.u.bits.DeviceNumber = (DevAddr >> 16) & 0x1F;
-        Adapter->PciSlotNumber.u.bits.FunctionNumber = DevAddr & 0x7;
-        Adapter->PciBusSlotCached = TRUE;
-        DXGKRNL_TRACE("DxgkAdapterStart: cached PCI bus=%lu dev=%lu fn=%lu\n",
-                      BusNum,
-                      (ULONG)Adapter->PciSlotNumber.u.bits.DeviceNumber,
-                      (ULONG)Adapter->PciSlotNumber.u.bits.FunctionNumber);
-    }
-
     /* Fill the callback table for the miniport.  DxgkpFillInterface zeros the
-     * full current buffer before publishing the version-specific prefix, so
-     * every unimplemented callback remains NULL. */
+     * full current buffer before publishing the version-specific prefix.
+     * Unsupported published slots are explicit failure/suppression callbacks;
+     * their dependent capabilities remain disabled. */
     DxgkpFillInterface(Adapter, &Interface);
 
     /* Build the start-info block. */
@@ -9265,24 +9972,6 @@ DxgkAdapterStart(
     {
         IO_CONNECT_INTERRUPT_PARAMETERS ConnectParams;
         RtlZeroMemory(&ConnectParams, sizeof(ConnectParams));
-
-        /* If pci.sys enabled MSI-X on the device but the resource descriptor
-         * arrived line-based (the message flag is dropped in the PnP resource
-         * hand-off on ROS ARM64), connect message-based anyway — the device is
-         * in MSI-X mode and will never assert INTx. */
-        {
-            ULONG MsixSize = DxgkpIsMsixEnabled(Adapter);
-            if (!Adapter->InterruptMessageBased && MsixSize > 0)
-            {
-                DXGKRNL_WARN("DxgkAdapterStart: MSI-X enabled in config (table=%lu) but "
-                             "descriptor was line-based — connecting message-based\n", MsixSize);
-                Adapter->InterruptMessageBased = TRUE;
-                /* All MSI-X table entries share the single granted GIC vector, so
-                 * record the table size: the ISR trampoline polls every message
-                 * on this vector so the miniport checks all of its VirtIO queues. */
-                Adapter->InterruptMessageCount = MsixSize;
-            }
-        }
 
         if (Adapter->InterruptMessageBased)
         {
@@ -9331,15 +10020,8 @@ DxgkAdapterStart(
             {
                 Adapter->InterruptObject =
                     Adapter->InterruptMessageTable->MessageInfo[0].InterruptObject;
-            }
-
-            /* Tell the miniport (via DxgkCbGetDeviceInformation) that its
-             * interrupt is message-based so it enables per-queue MSI-X instead
-             * of polling; the FDO's descriptor arrived line-based. */
-            if (Adapter->InterruptMessageBased)
-            {
-                DxgkpMarkInterruptResourcesMessageBased(Adapter->AllocatedResources);
-                DxgkpMarkInterruptResourcesMessageBased(Adapter->TranslatedResources);
+                Adapter->InterruptMessageCount =
+                    Adapter->InterruptMessageTable->MessageCount;
             }
 
             DXGKRNL_TRACE("DxgkAdapterStart: Interrupt connected pre-start — "
@@ -9350,7 +10032,24 @@ DxgkAdapterStart(
                               Adapter->InterruptMessageTable->MessageCount : 1);
         }
         else
-            DXGKRNL_ERR("DxgkAdapterStart: IoConnectInterruptEx failed 0x%08lX\n", Status);
+        {
+            DXGKRNL_ERR("DxgkAdapterStart: mandatory IoConnectInterruptEx failed 0x%08lX\n", Status);
+            InterlockedExchange(&Adapter->VidSchStopping, 1);
+            DxgkpDisconnectAdapterInterrupt(Adapter);
+            KeRemoveQueueDpc(&Adapter->DpcObject);
+            KeFlushQueuedDpcs();
+            DxgkpWaitForVidSchCallbacks(Adapter);
+            DxgkpReleasePostDisplayMapping(Adapter);
+            Restartable = NT_SUCCESS(DxgkpCloseAndRetireReverseCallbacks(Adapter));
+            if (!Restartable)
+                Status = STATUS_DELETE_PENDING;
+            DxgkpReleaseAdapterResources(Adapter);
+            Adapter->InterruptTraceEpoch100ns = 0;
+            DxgkEndKmdExclusive(Adapter, FALSE);
+            DxgkReleaseLevel3Transition(Adapter);
+            DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, Restartable);
+            return Status;
+        }
     }
 
     /* Call miniport start. */
@@ -9390,8 +10089,17 @@ DxgkAdapterStart(
          */
         DxgkpClearPostDisplayOwner(Adapter);
         DxgkpReleasePostDisplayMapping(Adapter);
-        Adapter->AllocatedResources  = NULL;
-        Adapter->TranslatedResources = NULL;
+        if (!NT_SUCCESS(DxgkpCloseAndRetireReverseCallbacks(Adapter)))
+        {
+            Status = STATUS_DELETE_PENDING;
+            DxgkpReleaseAdapterResources(Adapter);
+            Adapter->InterruptTraceEpoch100ns = 0;
+            DxgkEndKmdExclusive(Adapter, FALSE);
+            DxgkReleaseLevel3Transition(Adapter);
+            DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, FALSE);
+            return Status;
+        }
+        DxgkpReleaseAdapterResources(Adapter);
         DXGKRNL_TRACE("DxgkAdapterStart: fail summary connect=%I64u us miniport=%I64u us total=%I64u us irq=%ld queue=%ld dpc=%ld\n",
                       InterruptConnectUs,
                       MiniportStartUs,
@@ -9405,6 +10113,8 @@ DxgkAdapterStart(
         DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, TRUE);
         return Status;
     }
+
+    Progress.MiniportStarted = TRUE;
 
     DxgkpEnablePeriodicInterruptHandoff(Adapter);
     DxgkEndKmdExclusive(Adapter, TRUE);
@@ -9421,50 +10131,28 @@ DxgkAdapterStart(
     VidMmUs = DxgkpTraceElapsedUs(StepStart100ns);
     if (!NT_SUCCESS(Status))
     {
-        NTSTATUS StopStatus;
-
         DXGKRNL_ERR("DxgkAdapterStart: DxgkVidMmInitializeAdapter failed "
                     "0x%08lX\n", Status);
-        InterlockedExchange(&Adapter->VidSchStopping, 1);
-        DxgkpDisconnectAdapterInterrupt(Adapter);
-        KeRemoveQueueDpc(&Adapter->DpcObject);
-        KeFlushQueuedDpcs();
-        DxgkpWaitForVidSchCallbacks(Adapter);
-        StopStatus = DxgkpStopMiniportForTeardown(Adapter);
-        if (NT_SUCCESS(StopStatus))
-        {
-            DxgkpClearPostDisplayOwner(Adapter);
-            DxgkpReleasePostDisplayMapping(Adapter);
-            Adapter->AllocatedResources = NULL;
-            Adapter->TranslatedResources = NULL;
-            DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, TRUE);
-        }
-        else
-        {
-            DXGKRNL_ERR("DxgkAdapterStart: rollback StopDevice failed 0x%08lX; retaining the non-restartable miniport state\n", StopStatus);
-            Status = StopStatus;
-            DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, FALSE);
-        }
-        return Status;
+        goto StartRollback;
     }
+    Progress.VidMmStarted = TRUE;
 
     /* Cache surprise-removal support while hardware is still present.  The
      * topology fields apply only to full WDDM adapters. */
     Adapter->NodeCount = 0;
     Adapter->SupportSurpriseRemoval = FALSE;
+    Role = DxgkAdapterStartClassifyRole(Adapter->MiniportContext->IsDisplayOnlyDriver, Adapter->NumberOfVideoPresentSources);
     {
         PDXGK_DRIVERCAPS Caps;
+        NTSTATUS CapsStatus = STATUS_SUCCESS;
 
-        Caps = ExAllocatePoolWithTag(NonPagedPool,
-                                     DXGKP_DRIVERCAPS_QUERY_SIZE,
-                                     TAG_DXGK_ADAPTER);
+        Caps = ExAllocatePoolWithTag(NonPagedPool, DXGKP_DRIVERCAPS_QUERY_SIZE, TAG_DXGK_ADAPTER);
         if (Caps != NULL)
         {
-            if (NT_SUCCESS(DxgkpQueryDriverCaps(Adapter, Caps)))
+            CapsStatus = DxgkpQueryDriverCaps(Adapter, Caps);
+            if (NT_SUCCESS(CapsStatus))
             {
-                if (DxgkCapsCoreInterfaceVersionAtLeast(
-                        Adapter->MiniportContext->InitData.s.Version,
-                        DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
+                if (DxgkCapsCoreInterfaceVersionAtLeast(Adapter->MiniportContext->InitData.s.Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
                     Adapter->SupportSurpriseRemoval = Caps->SupportSurpriseRemoval;
                 if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
                 {
@@ -9477,6 +10165,22 @@ DxgkAdapterStart(
 
             ExFreePoolWithTag(Caps, TAG_DXGK_ADAPTER);
         }
+        else
+        {
+            CapsStatus = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        if (!Adapter->MiniportContext->IsDisplayOnlyDriver && !NT_SUCCESS(CapsStatus))
+        {
+            Status = CapsStatus;
+            DXGKRNL_ERR("DxgkAdapterStart: mandatory full-adapter capability query failed 0x%08lX\n", Status);
+            goto StartRollback;
+        }
+    }
+    if (!DxgkAdapterStartRoleHasValidCounts(Role, Adapter->NumberOfVideoPresentSources, Adapter->NodeCount, DXGK_MAX_TRACKED_NODES))
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        DXGKRNL_ERR("DxgkAdapterStart: invalid %s topology (sources=%lu nodes=%lu supported-nodes=%lu)\n", Role == DxgkAdapterStartDisplayOnly ? "DOD" : Role == DxgkAdapterStartRenderOnly ? "render-only" : "full-display", Adapter->NumberOfVideoPresentSources, Adapter->NodeCount, (ULONG)DXGK_MAX_TRACKED_NODES);
+        goto StartRollback;
     }
 
     /* Cache the GPU MMU declaration while the miniport is callable. */
@@ -9503,66 +10207,33 @@ DxgkAdapterStart(
 
     {
         BOOLEAN ProviderStarted;
-        NTSTATUS Mms2Status;
 
         ProviderStarted = FALSE;
-        Mms2Status = DxgkpMms2StartAdministrativeAdapter(Adapter, &ProviderStarted);
+        Status = DxgkpMms2StartAdministrativeAdapter(Adapter, &ProviderStarted);
         if (ProviderStarted)
-            DxgkpMms2PublishStarted(Adapter);
-        if (!NT_SUCCESS(Mms2Status))
         {
-            NTSTATUS BeginStatus;
-            NTSTATUS CompleteStatus;
-            NTSTATUS StopStatus;
-
-            DXGKRNL_ERR("DxgkAdapterStart: dxgmms2 start failed 0x%08lX\n", Mms2Status);
-            BeginStatus = ProviderStarted ? DxgkpMms2BeginStop(Adapter, Dxgmms2StopReasonStartRollback) : STATUS_SUCCESS;
-            InterlockedExchange(&Adapter->VidSchStopping, 1);
-            DxgkpDisconnectAdapterInterrupt(Adapter);
-            KeRemoveQueueDpc(&Adapter->DpcObject);
-            KeFlushQueuedDpcs();
-            DxgkpWaitForVidSchCallbacks(Adapter);
-            StopStatus = DxgkpStopMiniportForTeardown(Adapter);
-            if (NT_SUCCESS(StopStatus) && NT_SUCCESS(BeginStatus))
-            {
-                CompleteStatus = ProviderStarted ? DxgkpMms2CompleteRetiredStop(Adapter) : STATUS_SUCCESS;
-                if (NT_SUCCESS(CompleteStatus))
-                {
-                    DxgkVidMmQuiesceAdapter(Adapter);
-                    DxgkVidMmTeardownAdapter(Adapter);
-                    DxgkpClearPostDisplayOwner(Adapter);
-                    DxgkpReleasePostDisplayMapping(Adapter);
-                    Adapter->AllocatedResources = NULL;
-                    Adapter->TranslatedResources = NULL;
-                    DxgkpCompleteAdapterStart(Adapter, StartGeneration, Mms2Status, TRUE);
-                    return Mms2Status;
-                }
-                Mms2Status = CompleteStatus;
-            }
-            else if (!NT_SUCCESS(StopStatus))
-            {
-                Mms2Status = StopStatus;
-            }
-            else
-            {
-                Mms2Status = BeginStatus;
-            }
-            DXGKRNL_ERR("DxgkAdapterStart: dxgmms2 rollback incomplete 0x%08lX; retaining state for RemoveDevice\n", Mms2Status);
-            DxgkpCompleteAdapterStart(Adapter, StartGeneration, Mms2Status, FALSE);
-            return Mms2Status;
+            DxgkpMms2PublishStarted(Adapter);
+            Progress.Mms2Started = TRUE;
+        }
+        if (!NT_SUCCESS(Status) || !ProviderStarted)
+        {
+            if (NT_SUCCESS(Status))
+                Status = STATUS_INVALID_DEVICE_STATE;
+            DXGKRNL_ERR("DxgkAdapterStart: dxgmms2 start failed 0x%08lX\n", Status);
+            goto StartRollback;
         }
     }
 
-    /* Initialise the video scheduler for this adapter (full WDDM only). */
+    /* Full-display and render-only adapters require a live scheduler. */
+    if (DxgkAdapterStartRoleRequiresScheduler(Role))
     {
-        NTSTATUS VidSchStatus = VidSchInitialize(Adapter);
-        if (!NT_SUCCESS(VidSchStatus))
+        Status = VidSchInitialize(Adapter);
+        if (!NT_SUCCESS(Status))
         {
-            DXGKRNL_WARN("DxgkAdapterStart: VidSchInitialize failed "
-                         "0x%08lX — continuing without scheduler\n",
-                         VidSchStatus);
-            /* Non-fatal for display-only adapters, which do not use VidSch. */
+            DXGKRNL_ERR("DxgkAdapterStart: mandatory VidSchInitialize failed 0x%08lX\n", Status);
+            goto StartRollback;
         }
+        Progress.SchedulerStarted = TRUE;
     }
 
     /*
@@ -9570,8 +10241,10 @@ DxgkAdapterStart(
      * The VidPN is needed by the miniport driver for mode enumeration
      * (IsSupportedVidPn, EnumVidPnCofuncModality, CommitVidPn).
      */
+    if (DxgkAdapterStartRoleRequiresDisplayPipeline(Role))
     {
         D3DKMDT_HVIDPN hVidPn = NULL;
+
         StepStart100ns = DxgkpTraceNow100ns();
         Status = DxgkVidPnCreateForAdapter(Adapter, &hVidPn);
         VidPnUs = DxgkpTraceElapsedUs(StepStart100ns);
@@ -9580,16 +10253,13 @@ DxgkAdapterStart(
             (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
             Adapter->VidPn = (PVOID)hVidPn;
             KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+            Progress.VidPnCreated = TRUE;
             DXGKRNL_TRACE("DxgkAdapterStart: VidPN created %p\n", hVidPn);
         }
         else
         {
-            DXGKRNL_ERR("DxgkAdapterStart: DxgkVidPnCreateForAdapter failed "
-                        "0x%08lX — continuing without VidPN\n", Status);
-            /* Non-fatal: adapter can still start; VidPN calls will fail gracefully. */
-            (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
-            Adapter->VidPn = NULL;
-            KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+            DXGKRNL_ERR("DxgkAdapterStart: mandatory DxgkVidPnCreateForAdapter failed 0x%08lX\n", Status);
+            goto StartRollback;
         }
     }
 
@@ -9600,80 +10270,91 @@ DxgkAdapterStart(
      */
     if (Adapter->MiniportContext->IsDisplayOnlyDriver)
     {
-        NTSTATUS InitialModeStatus;
-
-        InitialModeStatus = DxgkDisplayEstablishInitialMode(Adapter);
-        if (!NT_SUCCESS(InitialModeStatus))
+        Status = DxgkDisplayEstablishInitialMode(Adapter);
+        if (!NT_SUCCESS(Status))
         {
-            DXGKRNL_WARN("DxgkAdapterStart: initial DOD mode establishment "
-                         "failed 0x%08lX — continuing with fallback query path\n",
-                         InitialModeStatus);
+            DXGKRNL_ERR("DxgkAdapterStart: mandatory DOD mode establishment failed 0x%08lX\n", Status);
+            goto StartRollback;
         }
     }
 
     /* Initialise the per-VidPnSource present queues. */
+    if (DxgkAdapterStartRoleRequiresDisplayPipeline(Role))
     {
-        NTSTATUS PresentStatus;
-
         StepStart100ns = DxgkpTraceNow100ns();
-        PresentStatus = DxgkPresentInit(Adapter);
-        Adapter->PresentQueueInitializationStatus = PresentStatus;
+        Status = DxgkPresentInit(Adapter);
+        Adapter->PresentQueueInitializationStatus = Status;
         PresentUs = DxgkpTraceElapsedUs(StepStart100ns);
-        if (!NT_SUCCESS(PresentStatus))
+        if (!NT_SUCCESS(Status))
         {
-            DXGKRNL_ERR("DxgkAdapterStart: DxgkPresentInit failed "
-                        "0x%08lX — continuing without present queues\n",
-                        PresentStatus);
-            /* Display-only adapters use DxgkDdiPresentDisplayOnly instead. */
+            DXGKRNL_ERR("DxgkAdapterStart: mandatory DxgkPresentInit failed 0x%08lX\n", Status);
+            goto StartRollback;
         }
+        Progress.PresentStarted = TRUE;
     }
 
     DxgkReinitializeAdapterRundown(Adapter);
-    InterlockedExchange(&Adapter->SubmitDmaStopping, 0);
-    InterlockedExchange(&Adapter->VidSchStopping, 0);
-    DxgkPresentResume(Adapter);
+    Progress.RundownReinitialized = TRUE;
+    if (DxgkAdapterStartRoleRequiresScheduler(Role))
+    {
+        InterlockedExchange(&Adapter->SubmitDmaStopping, 0);
+        InterlockedExchange(&Adapter->VidSchStopping, 0);
+    }
+    if (DxgkAdapterStartRoleRequiresDisplayPipeline(Role))
+        DxgkPresentResume(Adapter);
 
     /* Watch for stuck submissions (documented TDR recovery). */
-    DxgkpStartTdrWatchdog(Adapter);
+    if (DxgkAdapterStartRoleRequiresScheduler(Role))
+    {
+        DxgkpStartTdrWatchdog(Adapter);
+        Progress.TdrStarted = TRUE;
+    }
 
     /*
      * Ask the miniport to deliver vsync notifications. WDDM 2.7 uses the
-     * per-source ControlInterrupt3 contract when supplied; earlier full
-     * miniports use ControlInterrupt2, with the legacy callback retained for
-     * pre-1.3 and DOD tables.
+     * per-source ControlInterrupt3 contract when supplied; WDDM 2.0-2.6 full
+     * miniports use ControlInterrupt2, while DOD can use ControlInterrupt.
      */
+    if (DxgkAdapterStartRoleRequiresDisplayPipeline(Role))
     {
-        NTSTATUS VsyncStatus;
-
-        VsyncStatus =
-            DxgkpSetVsyncInterruptState(Adapter, DXGK_VSYNC_ENABLE);
-        DXGKRNL_TRACE("DxgkAdapterStart: CRTC_VSYNC enable -> 0x%08lX\n",
-                      VsyncStatus);
+        Status = DxgkpSetVsyncInterruptState(Adapter, DXGK_VSYNC_ENABLE);
+        DXGKRNL_TRACE("DxgkAdapterStart: CRTC_VSYNC enable -> 0x%08lX\n", Status);
+        if (NT_SUCCESS(Status))
+            Progress.VsyncEnabled = TRUE;
+        else if (Status != STATUS_NOT_SUPPORTED)
+            goto StartRollback;
     }
 
     /* Enable the GUID_DISPLAY_DEVICE_ARRIVAL device interface.
      * User-mode components (DXGI, OpenGL ICD loader) and kernel PnP
      * notification consumers listen for this interface to discover adapters. */
-    if (Adapter->DeviceInterfaceName.Buffer != NULL)
+    if (Adapter->DeviceInterfaceName.Buffer == NULL)
     {
-        NTSTATUS IfStatus;
-        IfStatus = IoSetDeviceInterfaceState(&Adapter->DeviceInterfaceName, TRUE);
-        if (NT_SUCCESS(IfStatus))
+        Status = STATUS_INVALID_DEVICE_STATE;
+        DXGKRNL_ERR("DxgkAdapterStart: adapter discovery interface was not registered\n");
+        goto StartRollback;
+    }
+    else
+    {
+        Status = IoSetDeviceInterfaceState(&Adapter->DeviceInterfaceName, TRUE);
+        if (NT_SUCCESS(Status))
         {
             Adapter->DeviceInterfaceEnabled = TRUE;
+            Progress.InterfaceEnabled = TRUE;
             DXGKRNL_TRACE("DxgkAdapterStart: enabled device interface %wZ\n",
                           &Adapter->DeviceInterfaceName);
         }
         else
         {
-            DXGKRNL_WARN("DxgkAdapterStart: IoSetDeviceInterfaceState(TRUE) "
-                          "failed 0x%08lX\n", IfStatus);
+            DXGKRNL_ERR("DxgkAdapterStart: mandatory IoSetDeviceInterfaceState(TRUE) failed 0x%08lX\n", Status);
+            goto StartRollback;
         }
     }
 
     /* Create \DosDevices\DISPLAY symlink pointing to \Device\DxgKrnl.
      * This is created once (first adapter to start).  If the symlink
      * already exists we silently ignore the collision. */
+    if (DxgkAdapterStartRoleRequiresDisplayPipeline(Role))
     {
         static LONG DisplaySymlinkCreated = 0;
         if (InterlockedCompareExchange(&DisplaySymlinkCreated, 1, 0) == 0)
@@ -9713,19 +10394,17 @@ DxgkAdapterStart(
      * different mechanism; on ReactOS we emulate the XPDM device discovery
      * path that win32ss expects.
      */
+    if (DxgkAdapterStartRoleRequiresDisplayPipeline(Role))
     {
-        NTSTATUS DisplayStatus;
-
         StepStart100ns = DxgkpTraceNow100ns();
-        DisplayStatus = DxgkDisplayRegister(Adapter);
+        Status = DxgkDisplayRegister(Adapter);
         DisplayUs = DxgkpTraceElapsedUs(StepStart100ns);
-        if (!NT_SUCCESS(DisplayStatus))
+        if (!NT_SUCCESS(Status))
         {
-            DXGKRNL_ERR("DxgkAdapterStart: DxgkDisplayRegister failed "
-                         "0x%08lX — continuing without display\n",
-                         DisplayStatus);
-            /* Non-fatal: adapter is started but display won't work */
+            DXGKRNL_ERR("DxgkAdapterStart: mandatory DxgkDisplayRegister failed 0x%08lX\n", Status);
+            goto StartRollback;
         }
+        Progress.DisplayRegistered = TRUE;
     }
 
     DXGKRNL_TRACE("DxgkAdapterStart: summary connect=%I64u us miniport=%I64u us vidmm=%I64u us vidpn=%I64u us present=%I64u us display=%I64u us total=%I64u us irq=%ld queue=%ld dpc=%ld\n",
@@ -9742,6 +10421,11 @@ DxgkAdapterStart(
 
     Status = STATUS_SUCCESS;
     DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, TRUE);
+    return Status;
+
+StartRollback:
+    Status = DxgkpRollbackAdapterStart(Adapter, &Progress, Status, &Restartable);
+    DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, Restartable);
     return Status;
 }
 
@@ -10037,7 +10721,9 @@ static NTSTATUS
 DxgkpAdapterStopInternal(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ BOOLEAN ReleasePostDisplayOwnership,
-    _In_ DXGMMS2_STOP_REASON StopReason)
+    _In_ DXGMMS2_STOP_REASON StopReason,
+    _Out_opt_ PDXGK_DISPLAY_INFORMATION ReleasedPostDisplayInformation,
+    _Out_opt_ PBOOLEAN ReleasedByDriver)
 {
     NTSTATUS Status;
     NTSTATUS SchedulerIdleStatus;
@@ -10052,6 +10738,13 @@ DxgkpAdapterStopInternal(
     PAGED_CODE();
 
     DxgkRosAssert(Adapter != NULL, DXGKRNL_BUGCHECK_NULL_ADAPTER);
+    if (ReleasedPostDisplayInformation != NULL)
+    {
+        RtlZeroMemory(ReleasedPostDisplayInformation,
+                      sizeof(*ReleasedPostDisplayInformation));
+    }
+    if (ReleasedByDriver != NULL)
+        *ReleasedByDriver = FALSE;
 
     DXGKRNL_TRACE("DxgkAdapterStop: Adapter %p\n", Adapter);
 
@@ -10229,15 +10922,21 @@ DxgkpAdapterStopInternal(
 
         if (PfnRelease != NULL)
         {
-            DXGK_DISPLAY_INFORMATION ReleasedInfo;
+            DXGK_DISPLAY_INFORMATION LocalReleasedInfo;
+            PDXGK_DISPLAY_INFORMATION ReleasedInfo;
 
-            RtlZeroMemory(&ReleasedInfo, sizeof(ReleasedInfo));
+            ReleasedInfo = ReleasedPostDisplayInformation != NULL ?
+                               ReleasedPostDisplayInformation :
+                               &LocalReleasedInfo;
+            RtlZeroMemory(ReleasedInfo, sizeof(*ReleasedInfo));
             DxgkBeginKmdExclusive(Adapter);
             if (DxgkAcquireMiniportCallback(Adapter))
             {
                 _SEH2_TRY
                 {
-                    Status = PfnRelease(Adapter->MiniportDeviceContext, 0, &ReleasedInfo);
+                    Status = PfnRelease(Adapter->MiniportDeviceContext,
+                                        0,
+                                        ReleasedInfo);
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
@@ -10245,9 +10944,16 @@ DxgkpAdapterStopInternal(
                 }
                 _SEH2_END;
                 if (NT_SUCCESS(Status))
+                {
                     Adapter->MiniportDeviceStopped = TRUE;
+                    if (ReleasedByDriver != NULL)
+                        *ReleasedByDriver = TRUE;
+                }
                 else
+                {
+                    RtlZeroMemory(ReleasedInfo, sizeof(*ReleasedInfo));
                     DXGKRNL_WARN("DxgkpStopPostDisplayOwner: StopDeviceAndReleasePostDisplayOwnership failed 0x%08lX\n", Status);
+                }
                 DxgkReleaseMiniportCallback(Adapter);
             }
             DxgkEndKmdExclusive(Adapter, FALSE);
@@ -10258,6 +10964,12 @@ DxgkpAdapterStopInternal(
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_ERR("DxgkAdapterStop: DxgkDdiStopDevice remained failed 0x%08lX; retaining scheduler/VidMm state for RemoveDevice\n", Status);
+        goto CompleteStop;
+    }
+    Status = DxgkpCloseAndRetireReverseCallbacks(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkAdapterStop: reverse-callback retirement failed 0x%08lX; retaining software state for RemoveDevice\n", Status);
         goto CompleteStop;
     }
 
@@ -10278,7 +10990,7 @@ DxgkpAdapterStopInternal(
     VidSchDestroy(Adapter);
 
     /* Unregister the display device from win32ss. */
-    DxgkDisplayUnregister();
+    DxgkDisplayUnregister(Adapter);
 
     /* Tear down the VidPN. */
     {
@@ -10298,8 +11010,7 @@ DxgkpAdapterStopInternal(
 
     DxgkpClearPostDisplayOwner(Adapter);
 
-    Adapter->AllocatedResources  = NULL;
-    Adapter->TranslatedResources = NULL;
+    DxgkpReleaseAdapterResources(Adapter);
     Adapter->InterruptTraceEpoch100ns = 0;
     DxgkpReleasePostDisplayMapping(Adapter);
 
@@ -10327,7 +11038,11 @@ NTSTATUS
 DxgkAdapterStop(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    return DxgkpAdapterStopInternal(Adapter, FALSE, Dxgmms2StopReasonPnpStop);
+    return DxgkpAdapterStopInternal(Adapter,
+                                    FALSE,
+                                    Dxgmms2StopReasonPnpStop,
+                                    NULL,
+                                    NULL);
 }
 
 /*
@@ -10373,7 +11088,11 @@ DxgkAdapterRemove(
     DxgkBeginAdapterRundown(Adapter);
     if (InterlockedCompareExchange(&Adapter->AdapterStopInProgress, 0, 0) != 0 || Adapter->State == DxgkAdapterStateStarting || Adapter->State == DxgkAdapterStateStarted || Adapter->State == DxgkAdapterStateStopping)
     {
-        StopStatus = DxgkpAdapterStopInternal(Adapter, FALSE, Dxgmms2StopReasonRemove);
+        StopStatus = DxgkpAdapterStopInternal(Adapter,
+                                              FALSE,
+                                              Dxgmms2StopReasonRemove,
+                                              NULL,
+                                              NULL);
         MiniportCleanupBeforeRemove = NT_SUCCESS(StopStatus);
     }
     else if (Adapter->State == DxgkAdapterStateStopped)
@@ -10439,7 +11158,7 @@ DxgkAdapterRemove(
     /* Stop display dispatch and its present worker while callbacks remain
      * valid, then prevent bugcheck-time display callbacks from retaining the
      * adapter past the final miniport removal boundary. */
-    DxgkDisplayUnregister();
+    DxgkDisplayUnregister(Adapter);
     DxgkpClearPostDisplayOwner(Adapter);
 
     /* Close the callback gate and detach the opaque context before invoking
@@ -10458,6 +11177,7 @@ DxgkAdapterRemove(
         ExWaitForRundownProtectionRelease(&Adapter->ReverseCallbackRundownRef);
     KeReleaseMutex(&Adapter->MiniportCallbackMutex, FALSE);
     DxgkpReleaseMapMemory(Adapter);
+    DxgkpReleasePciBusInterface(Adapter);
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
     DxgkpReleaseCallbackMemory(Adapter);
 #endif
@@ -10510,8 +11230,7 @@ DxgkAdapterRemove(
     DxgkDestroySharedPrimary(Adapter);
     DxgkVidMmTeardownAdapter(Adapter);
     (VOID)DxgkCleanupAdapterDevices(Adapter);
-    Adapter->AllocatedResources = NULL;
-    Adapter->TranslatedResources = NULL;
+    DxgkpReleaseAdapterResources(Adapter);
     DxgkpReleasePostDisplayMapping(Adapter);
 
     /* Delete all child PDOs. */
@@ -11476,17 +12195,14 @@ DxgkpAddDeviceRegistered(
         return STATUS_NO_SUCH_DEVICE;
     }
 
-    /*
-     * Refuse to add this device if the miniport's DDI version indicates
-     * it is actually an XDDM driver (version < WDDM 1.0 threshold).
-     * The PnP manager will then try the next compatible driver (videoprt).
-     */
+    /* Registration already enforces the Win11 profile.  Keep the same floor
+     * at AddDevice so a corrupted or stale registration cannot reintroduce a
+     * pre-WDDM2 miniport through the PnP path. */
     if (!DxgkCapsCoreInterfaceVersionAtLeast(
             MpCtx->InitData.s.Version,
-            DXGK_CAPS_CORE_LEVEL_WDDM_1_0))
+            DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
     {
-        DXGKRNL_WARN("DxgkpAddDevice: XDDM miniport (version 0x%lX), "
-                     "deferring to videoprt\n", MpCtx->InitData.s.Version);
+        DXGKRNL_WARN("DxgkpAddDevice: pre-WDDM2 miniport version 0x%lX rejected by the Win11 profile\n", MpCtx->InitData.s.Version);
         return STATUS_NOT_SUPPORTED;
     }
 
@@ -11544,7 +12260,6 @@ DxgkpAddDeviceRegistered(
     KeInitializeMutex(&Adapter->PresentLifecycleMutex, 0);
     KeInitializeSpinLock(&Adapter->SubmitDmaLock);
     KeInitializeSpinLock(&Adapter->TdrHistoryLock);
-    KeInitializeEvent(&Adapter->SyncEvent, SynchronizationEvent, FALSE);
     KeInitializeMutex(&Adapter->AdapterMutex, 0);
     KeInitializeMutex(&Adapter->VidPnMutex, 0);
     KeInitializeEvent(&Adapter->AdapterStartCompletedEvent, NotificationEvent, TRUE);
@@ -11642,6 +12357,15 @@ DxgkpAddDeviceRegistered(
     }
     Adapter->Mms2State = DxgkMms2AdapterCreated;
 
+    /* Retain the PDO-owned standard bus interface for CONFIG device-space
+     * callbacks.  A root-enumerated/software adapter legitimately has none. */
+    Status = DxgkpCapturePciBusInterface(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_TRACE("DxgkpAddDevice: no PCI bus interface (0x%08lX)\n",
+                      Status);
+    }
+
     /* Call DxgkDdiAddDevice to obtain the miniport's device context. */
     Status = MpCtx->InitData.s.DxgkDdiAddDevice(PhysicalDeviceObject,
                                                &Adapter->MiniportDeviceContext);
@@ -11656,6 +12380,7 @@ DxgkpAddDeviceRegistered(
         Mms2Status = DxgkpMms2DestroyAdministrativeAdapter(Adapter);
         if (!NT_SUCCESS(Mms2Status))
             DxgkpBugCheckMms2Lifecycle(Adapter, Mms2Status, DXGKP_MMS2_FAILURE_ADD_ROLLBACK);
+        DxgkpReleasePciBusInterface(Adapter);
         DxgkpFreeAdapterRegistryPath(Adapter);
         IoDeleteDevice(Fdo);
         return Status;
@@ -11686,6 +12411,7 @@ DxgkpAddDeviceRegistered(
         Mms2Status = DxgkpMms2DestroyAdministrativeAdapter(Adapter);
         if (!NT_SUCCESS(Mms2Status))
             DxgkpBugCheckMms2Lifecycle(Adapter, Mms2Status, DXGKP_MMS2_FAILURE_ATTACH_ROLLBACK);
+        DxgkpReleasePciBusInterface(Adapter);
         DxgkpFreeAdapterRegistryPath(Adapter);
         IoDeleteDevice(Fdo);
         return STATUS_NO_SUCH_DEVICE;
@@ -11849,8 +12575,8 @@ DxgkUnInitialize(
         ExReInitializeRundownProtection(&MpCtx->RegistrationRundown);
         KeMemoryBarrier();
         InterlockedExchange(&MpCtx->RegistrationState, DxgkMiniportRegistrationRegistered);
-        DXGKRNL_WARN("DxgkUnInitialize: cleanup deferred because the miniport still owns an adapter\n");
-        Status = STATUS_SUCCESS;
+        DXGKRNL_WARN("DxgkUnInitialize: refusing cleanup because the miniport still owns an adapter\n");
+        Status = STATUS_DEVICE_BUSY;
         goto UninitializeUnlock;
     }
     DxgkpClearMiniportRegistrationPayload(MpCtx);
@@ -11903,14 +12629,8 @@ UninitializeUnlock:
 #define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_1
 #elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
 #define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_2_0
-#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
-#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_1_3
-#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
-#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_1_2
-#elif (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN7)
-#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_1_1
 #else
-#define DXGKP_FULL_INIT_DATA_MAX_LEVEL DXGK_CAPS_CORE_LEVEL_WDDM_1_0
+#error dxgkrnl requires WDDM 2.0 or newer public DDI declarations
 #endif
 
 /* Return the append-only prefix that a full-table caller compiled for Version
@@ -11989,29 +12709,17 @@ DxgkpFullInitDataPrefixSize(
     if (DxgkCapsCoreInterfaceVersionAtLeast(
             Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
         return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVideoProtectedRegion);
-    if (DxgkCapsCoreInterfaceVersionAtLeast(
-            Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_3))
-        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiFormatHistoryBuffer);
-    if (DxgkCapsCoreInterfaceVersionAtLeast(
-            Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_2))
-        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiNotifySurpriseRemoval);
-    if (DxgkCapsCoreInterfaceVersionAtLeast(
-            Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_1))
-        return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiQueryVidPnHWCapability);
-    return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetDisplayPrivateDriverFormat);
+    return DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiSetVideoProtectedRegion);
 }
 
-/* KMDDOD has a distinct layout.  Its Win8/WDDM1.3 prefix ends at surprise
- * removal; WDDM2.0 appends one power-runtime callback and later SDKs append no
- * additional public fields through Windows 11 26100. */
+/* KMDDOD has a distinct layout. WDDM 2.0 appends the final public callback;
+ * later SDKs add no fields through Windows 11 26100. */
 static ULONG
 DxgkpDodInitDataPrefixSize(
     _In_ ULONG Version)
 {
-    if (DxgkCapsCoreInterfaceVersionAtLeast(
-            Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
-        return DXGKP_FIELD_END(KMDDOD_INITIALIZATION_DATA, DxgkDdiPowerRuntimeSetDeviceHandle);
-    return DXGKP_FIELD_END(KMDDOD_INITIALIZATION_DATA, DxgkDdiNotifySurpriseRemoval);
+    (VOID)Version;
+    return DXGKP_FIELD_END(KMDDOD_INITIALIZATION_DATA, DxgkDdiPowerRuntimeSetDeviceHandle);
 }
 
 #ifdef _WIN64
@@ -12217,17 +12925,17 @@ DxgkpInitializeMiniport(
     if (!DxgkCapsCoreInterfaceVersionPermitted(
             Version, REACTOS_WDDM_TARGET_LEVEL))
     {
-        DXGKRNL_ERR("DxgkpInitializeMiniport: DDI selector 0x%lX level %lu exceeds configured WDDM ceiling %lu\n",
-                    Version, VersionLevel, (ULONG)REACTOS_WDDM_TARGET_LEVEL);
+        DXGKRNL_ERR("DxgkpInitializeMiniport: DDI selector 0x%lX level %lu is outside the Win11 miniport range %lu..%lu\n",
+                    Version, VersionLevel, (ULONG)DXGK_CAPS_CORE_LEVEL_WDDM_2_0, (ULONG)REACTOS_WDDM_TARGET_LEVEL);
         return STATUS_REVISION_MISMATCH;
     }
 
     if (UseDodLayout)
     {
         if (!DxgkCapsCoreInterfaceVersionAtLeast(
-                Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_2))
+                Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
         {
-            DXGKRNL_ERR("DxgkpInitializeMiniport: unsupported DOD version 0x%lX (minimum 0x%lX)\n", Version, (ULONG)DXGKDDI_INTERFACE_VERSION_WIN8);
+            DXGKRNL_ERR("DxgkpInitializeMiniport: pre-WDDM 2 DOD version 0x%lX is outside the Win11 profile\n", Version);
             return STATUS_INVALID_PARAMETER;
         }
         RequiredPrefixSize = DxgkpDodInitDataPrefixSize(Version);
@@ -12242,9 +12950,9 @@ DxgkpInitializeMiniport(
             return STATUS_REVISION_MISMATCH;
         }
         if (!DxgkCapsCoreInterfaceVersionAtLeast(
-                Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_0))
+                Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
         {
-            DXGKRNL_ERR("DxgkpInitializeMiniport: unsupported full-table version 0x%lX (minimum 0x%lX)\n", Version, (ULONG)DXGKDDI_INTERFACE_VERSION_VISTA);
+            DXGKRNL_ERR("DxgkpInitializeMiniport: pre-WDDM 2 full-table version 0x%lX is outside the Win11 profile\n", Version);
             return STATUS_INVALID_PARAMETER;
         }
         RequiredPrefixSize = DxgkpFullInitDataPrefixSize(Version);
@@ -12430,20 +13138,6 @@ DxgkpInitializeMiniport(
     DriverObject->MajorFunction[IRP_MJ_POWER]          = DxgkpMiniportPowerDispatch;
     DriverObject->DriverUnload                         = DxgkpDriverUnload;
 
-    /*
-     * Auto-detect Display-Only Driver (DOD) from the init data content.
-     * DOD drivers fill the full DRIVER_INITIALIZATION_DATA but leave
-     * DxgkDdiCreateDevice NULL (they don't support device/allocation).
-     * This detection works for both DxgkInitialize (IOCTL path, viogpudo)
-     * and DxgkInitializeDisplayOnlyDriver (direct import, kmdod).
-     */
-    if (!MpCtx->UseDodLayout && MpCtx->InitDataSize >= DXGKP_FIELD_END(DRIVER_INITIALIZATION_DATA, DxgkDdiCreateDevice) &&
-        MpCtx->InitData.s.DxgkDdiCreateDevice == NULL)
-    {
-        MpCtx->IsDisplayOnlyDriver = TRUE;
-        DXGKRNL_TRACE("DxgkInitializeEx: auto-detected DOD (CreateDevice=NULL)\n");
-    }
-
     KeMemoryBarrier();
     InterlockedExchange(&MpCtx->RegistrationState, DxgkMiniportRegistrationRegistered);
     Status = STATUS_SUCCESS;
@@ -12474,8 +13168,8 @@ DxgkInitializeEx(
  * Size-less wrapper around DxgkInitializeEx.  Derives the readable append-only
  * prefix from the caller's declared DDI version instead of using dxgkrnl's
  * compile-time structure size.
- * Exported by dxgkrnl.sys; called from WDDM miniport DriverEntry routines
- * that do not know about DxgkInitializeEx.
+ * Reached through the public displib entry, which resolves this ReactOS-owned
+ * registration target through the dxgkrnl control-device protocol.
  *
  * IRQL: PASSIVE_LEVEL
  */
