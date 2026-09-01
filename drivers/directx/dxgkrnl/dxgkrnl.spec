@@ -15,6 +15,9 @@
 ; --- DxgCoreInterface (static callback table consumed by dxgmms2.sys) ---
 43 extern DxgCoreInterface
 
+; --- Layout-free TDR policy ---
+23 stdcall TdrIsEnabled()
+
 ; --- dxgmms2 build, bugcheck, and timeout state ---
 30 extern g_DxgMmsBugcheckExportIndex
 31 extern g_IsInternalRelease
