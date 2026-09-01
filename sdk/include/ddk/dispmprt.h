@@ -1555,63 +1555,76 @@ typedef struct _DXGK_MONITOR_INTERFACE DXGK_MONITOR_INTERFACE;
  * Function table returned by DXGK_VIDPN_INTERFACE::pfnGetTopology.
  * =========================================================================
  */
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_GETNUMPATHS)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _Out_ SIZE_T *pNumPaths);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_GETNUMPATHSFROMSOURCE)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ SIZE_T *pNumPathsFromSource);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_ENUMPATHTARGETSFROMSOURCE)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ D3DKMDT_VIDPN_PRESENT_PATH_INDEX PathIndex,
+    _Out_ D3DDDI_VIDEO_PRESENT_TARGET_ID *pVidPnTargetId);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_GETPATHSOURCEFROMTARGET)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _Out_ D3DDDI_VIDEO_PRESENT_SOURCE_ID *pVidPnSourceId);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_ACQUIREPATHINFO)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _Out_ CONST D3DKMDT_VIDPN_PRESENT_PATH **ppVidPnPresentPathInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_ACQUIREFIRSTPATHINFO)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _Out_ CONST D3DKMDT_VIDPN_PRESENT_PATH **ppFirstVidPnPresentPathInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_ACQUIRENEXTPATHINFO)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _In_ CONST D3DKMDT_VIDPN_PRESENT_PATH *pVidPnPresentPathInfo,
+    _Out_ CONST D3DKMDT_VIDPN_PRESENT_PATH **ppNextVidPnPresentPathInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_UPDATEPATHSUPPORTINFO)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _In_ CONST D3DKMDT_VIDPN_PRESENT_PATH *pVidPnPresentPathInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_RELEASEPATHINFO)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _In_ CONST D3DKMDT_VIDPN_PRESENT_PATH *pVidPnPresentPathInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_CREATENEWPATHINFO)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _Out_ D3DKMDT_VIDPN_PRESENT_PATH **ppNewVidPnPresentPathInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_ADDPATH)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _In_ D3DKMDT_VIDPN_PRESENT_PATH *pVidPnPresentPath);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTOPOLOGY_REMOVEPATH)(
+    _In_ D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId);
+
 typedef struct _DXGK_VIDPNTOPOLOGY_INTERFACE
 {
-    NTSTATUS (APIENTRY *pfnGetNumPaths)(
-        _In_  D3DKMDT_HVIDPNTOPOLOGY hVidPnTopology,
-        _Out_ SIZE_T*                pNumPaths);
-
-    NTSTATUS (APIENTRY *pfnGetNumPathsFromSource)(
-        _In_  D3DKMDT_HVIDPNTOPOLOGY               hVidPnTopology,
-        _In_  D3DDDI_VIDEO_PRESENT_SOURCE_ID        VidPnSourceId,
-        _Out_ SIZE_T*                               pNumPathsFromSource);
-
-    NTSTATUS (APIENTRY *pfnEnumPathTargetsFromSource)(
-        _In_  D3DKMDT_HVIDPNTOPOLOGY               hVidPnTopology,
-        _In_  D3DDDI_VIDEO_PRESENT_SOURCE_ID        VidPnSourceId,
-        _In_  D3DKMDT_VIDPN_PRESENT_PATH_INDEX      PathIndex,
-        _Out_ D3DDDI_VIDEO_PRESENT_TARGET_ID*       pVidPnTargetId);
-
-    NTSTATUS (APIENTRY *pfnGetPathSourceFromTarget)(
-        _In_  D3DKMDT_HVIDPNTOPOLOGY               hVidPnTopology,
-        _In_  D3DDDI_VIDEO_PRESENT_TARGET_ID        VidPnTargetId,
-        _Out_ D3DDDI_VIDEO_PRESENT_SOURCE_ID*       pVidPnSourceId);
-
-    NTSTATUS (APIENTRY *pfnAcquirePathInfo)(
-        _In_  D3DKMDT_HVIDPNTOPOLOGY               hVidPnTopology,
-        _In_  D3DDDI_VIDEO_PRESENT_SOURCE_ID        VidPnSourceId,
-        _In_  D3DDDI_VIDEO_PRESENT_TARGET_ID        VidPnTargetId,
-        _Out_ CONST D3DKMDT_VIDPN_PRESENT_PATH**   ppVidPnPresentPathInfo);
-
-    NTSTATUS (APIENTRY *pfnAcquireFirstPathInfo)(
-        _In_  D3DKMDT_HVIDPNTOPOLOGY               hVidPnTopology,
-        _Out_ CONST D3DKMDT_VIDPN_PRESENT_PATH**   ppFirstVidPnPresentPathInfo);
-
-    NTSTATUS (APIENTRY *pfnAcquireNextPathInfo)(
-        _In_  D3DKMDT_HVIDPNTOPOLOGY               hVidPnTopology,
-        _In_  CONST D3DKMDT_VIDPN_PRESENT_PATH*    pVidPnPresentPathInfo,
-        _Out_ CONST D3DKMDT_VIDPN_PRESENT_PATH**   ppNextVidPnPresentPathInfo);
-
-    NTSTATUS (APIENTRY *pfnUpdatePathSupportInfo)(
-        _In_ D3DKMDT_HVIDPNTOPOLOGY                hVidPnTopology,
-        _In_ CONST D3DKMDT_VIDPN_PRESENT_PATH*     pVidPnPresentPathInfo);
-
-    NTSTATUS (APIENTRY *pfnReleasePathInfo)(
-        _In_ D3DKMDT_HVIDPNTOPOLOGY                hVidPnTopology,
-        _In_ CONST D3DKMDT_VIDPN_PRESENT_PATH*     pVidPnPresentPathInfo);
-
-    NTSTATUS (APIENTRY *pfnCreateNewPathInfo)(
-        _In_  D3DKMDT_HVIDPNTOPOLOGY               hVidPnTopology,
-        _Out_ D3DKMDT_VIDPN_PRESENT_PATH**         ppNewVidPnPresentPathInfo);
-
-    NTSTATUS (APIENTRY *pfnAddPath)(
-        _In_ D3DKMDT_HVIDPNTOPOLOGY                hVidPnTopology,
-        _In_ D3DKMDT_VIDPN_PRESENT_PATH*           pVidPnPresentPath);
-
-    NTSTATUS (APIENTRY *pfnRemovePath)(
-        _In_ D3DKMDT_HVIDPNTOPOLOGY                hVidPnTopology,
-        _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID         VidPnSourceId,
-        _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID         VidPnTargetId);
+    DXGKDDI_VIDPNTOPOLOGY_GETNUMPATHS pfnGetNumPaths;
+    DXGKDDI_VIDPNTOPOLOGY_GETNUMPATHSFROMSOURCE pfnGetNumPathsFromSource;
+    DXGKDDI_VIDPNTOPOLOGY_ENUMPATHTARGETSFROMSOURCE pfnEnumPathTargetsFromSource;
+    DXGKDDI_VIDPNTOPOLOGY_GETPATHSOURCEFROMTARGET pfnGetPathSourceFromTarget;
+    DXGKDDI_VIDPNTOPOLOGY_ACQUIREPATHINFO pfnAcquirePathInfo;
+    DXGKDDI_VIDPNTOPOLOGY_ACQUIREFIRSTPATHINFO pfnAcquireFirstPathInfo;
+    DXGKDDI_VIDPNTOPOLOGY_ACQUIRENEXTPATHINFO pfnAcquireNextPathInfo;
+    DXGKDDI_VIDPNTOPOLOGY_UPDATEPATHSUPPORTINFO pfnUpdatePathSupportInfo;
+    DXGKDDI_VIDPNTOPOLOGY_RELEASEPATHINFO pfnReleasePathInfo;
+    DXGKDDI_VIDPNTOPOLOGY_CREATENEWPATHINFO pfnCreateNewPathInfo;
+    DXGKDDI_VIDPNTOPOLOGY_ADDPATH pfnAddPath;
+    DXGKDDI_VIDPNTOPOLOGY_REMOVEPATH pfnRemovePath;
 } DXGK_VIDPNTOPOLOGY_INTERFACE;
 
 /* =========================================================================
@@ -1620,40 +1633,49 @@ typedef struct _DXGK_VIDPNTOPOLOGY_INTERFACE
  * Function table for manipulating a VidPN source mode set.
  * =========================================================================
  */
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNSOURCEMODESET_GETNUMMODES)(
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet,
+    _Out_ CONST SIZE_T *pNumModes);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNSOURCEMODESET_ACQUIREFIRSTMODEINFO)(
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet,
+    _Out_ CONST D3DKMDT_VIDPN_SOURCE_MODE **ppFirstVidPnSourceModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNSOURCEMODESET_ACQUIRENEXTMODEINFO)(
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet,
+    _In_ CONST D3DKMDT_VIDPN_SOURCE_MODE *pVidPnSourceModeInfo,
+    _Out_ CONST D3DKMDT_VIDPN_SOURCE_MODE **ppNextVidPnSourceModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNSOURCEMODESET_ACQUIREPINNEDMODEINFO)(
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet,
+    _Out_ CONST D3DKMDT_VIDPN_SOURCE_MODE **ppPinnedVidPnSourceModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNSOURCEMODESET_RELEASEMODEINFO)(
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet,
+    _In_ CONST D3DKMDT_VIDPN_SOURCE_MODE *pVidPnSourceModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNSOURCEMODESET_CREATENEWMODEINFO)(
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet,
+    _Out_ D3DKMDT_VIDPN_SOURCE_MODE **ppNewVidPnSourceModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNSOURCEMODESET_ADDMODE)(
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet,
+    _In_ D3DKMDT_VIDPN_SOURCE_MODE *pVidPnSourceModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNSOURCEMODESET_PINMODE)(
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet,
+    _In_ D3DKMDT_VIDEO_PRESENT_SOURCE_MODE_ID VidPnSourceModeId);
+
 typedef struct _DXGK_VIDPNSOURCEMODESET_INTERFACE
 {
-    NTSTATUS (APIENTRY *pfnGetNumModes)(
-        _In_  D3DKMDT_HVIDPNSOURCEMODESET           hVidPnSourceModeSet,
-        _Out_ CONST SIZE_T*                         pNumModes);
-
-    NTSTATUS (APIENTRY *pfnAcquireFirstModeInfo)(
-        _In_  D3DKMDT_HVIDPNSOURCEMODESET                   hVidPnSourceModeSet,
-        _Out_ CONST D3DKMDT_VIDPN_SOURCE_MODE**             ppFirstVidPnSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnAcquireNextModeInfo)(
-        _In_  D3DKMDT_HVIDPNSOURCEMODESET                   hVidPnSourceModeSet,
-        _In_  CONST D3DKMDT_VIDPN_SOURCE_MODE*              pVidPnSourceModeInfo,
-        _Out_ CONST D3DKMDT_VIDPN_SOURCE_MODE**             ppNextVidPnSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnAcquirePinnedModeInfo)(
-        _In_  D3DKMDT_HVIDPNSOURCEMODESET                   hVidPnSourceModeSet,
-        _Out_ CONST D3DKMDT_VIDPN_SOURCE_MODE**             ppPinnedVidPnSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnReleaseModeInfo)(
-        _In_ D3DKMDT_HVIDPNSOURCEMODESET                    hVidPnSourceModeSet,
-        _In_ CONST D3DKMDT_VIDPN_SOURCE_MODE*               pVidPnSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnCreateNewModeInfo)(
-        _In_  D3DKMDT_HVIDPNSOURCEMODESET                   hVidPnSourceModeSet,
-        _Out_ D3DKMDT_VIDPN_SOURCE_MODE**                   ppNewVidPnSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnAddMode)(
-        _In_ D3DKMDT_HVIDPNSOURCEMODESET                    hVidPnSourceModeSet,
-        _In_ D3DKMDT_VIDPN_SOURCE_MODE*                     pVidPnSourceModeInfo);
-
-    NTSTATUS (APIENTRY *pfnPinMode)(
-        _In_ D3DKMDT_HVIDPNSOURCEMODESET                    hVidPnSourceModeSet,
-        _In_ D3DKMDT_VIDEO_PRESENT_SOURCE_MODE_ID           VidPnSourceModeId);
+    DXGKDDI_VIDPNSOURCEMODESET_GETNUMMODES pfnGetNumModes;
+    DXGKDDI_VIDPNSOURCEMODESET_ACQUIREFIRSTMODEINFO pfnAcquireFirstModeInfo;
+    DXGKDDI_VIDPNSOURCEMODESET_ACQUIRENEXTMODEINFO pfnAcquireNextModeInfo;
+    DXGKDDI_VIDPNSOURCEMODESET_ACQUIREPINNEDMODEINFO pfnAcquirePinnedModeInfo;
+    DXGKDDI_VIDPNSOURCEMODESET_RELEASEMODEINFO pfnReleaseModeInfo;
+    DXGKDDI_VIDPNSOURCEMODESET_CREATENEWMODEINFO pfnCreateNewModeInfo;
+    DXGKDDI_VIDPNSOURCEMODESET_ADDMODE pfnAddMode;
+    DXGKDDI_VIDPNSOURCEMODESET_PINMODE pfnPinMode;
 } DXGK_VIDPNSOURCEMODESET_INTERFACE;
 
 /* =========================================================================
@@ -1662,40 +1684,49 @@ typedef struct _DXGK_VIDPNSOURCEMODESET_INTERFACE
  * Function table for manipulating a VidPN target mode set.
  * =========================================================================
  */
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTARGETMODESET_GETNUMMODES)(
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet,
+    _Out_ CONST SIZE_T *pNumModes);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTARGETMODESET_ACQUIREFIRSTMODEINFO)(
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet,
+    _Out_ CONST D3DKMDT_VIDPN_TARGET_MODE **ppFirstVidPnTargetModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTARGETMODESET_ACQUIRENEXTMODEINFO)(
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet,
+    _In_ CONST D3DKMDT_VIDPN_TARGET_MODE *pVidPnTargetModeInfo,
+    _Out_ CONST D3DKMDT_VIDPN_TARGET_MODE **ppNextVidPnTargetModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTARGETMODESET_ACQUIREPINNEDMODEINFO)(
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet,
+    _Out_ CONST D3DKMDT_VIDPN_TARGET_MODE **ppPinnedVidPnTargetModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTARGETMODESET_RELEASEMODEINFO)(
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet,
+    _In_ CONST D3DKMDT_VIDPN_TARGET_MODE *pVidPnTargetModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTARGETMODESET_CREATENEWMODEINFO)(
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet,
+    _Out_ D3DKMDT_VIDPN_TARGET_MODE **ppNewVidPnTargetModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTARGETMODESET_ADDMODE)(
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet,
+    _In_ D3DKMDT_VIDPN_TARGET_MODE *pVidPnTargetModeInfo);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPNTARGETMODESET_PINMODE)(
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet,
+    _In_ D3DKMDT_VIDEO_PRESENT_TARGET_MODE_ID VidPnTargetModeId);
+
 typedef struct _DXGK_VIDPNTARGETMODESET_INTERFACE
 {
-    NTSTATUS (APIENTRY *pfnGetNumModes)(
-        _In_  D3DKMDT_HVIDPNTARGETMODESET           hVidPnTargetModeSet,
-        _Out_ CONST SIZE_T*                         pNumModes);
-
-    NTSTATUS (APIENTRY *pfnAcquireFirstModeInfo)(
-        _In_  D3DKMDT_HVIDPNTARGETMODESET                   hVidPnTargetModeSet,
-        _Out_ CONST D3DKMDT_VIDPN_TARGET_MODE**             ppFirstVidPnTargetModeInfo);
-
-    NTSTATUS (APIENTRY *pfnAcquireNextModeInfo)(
-        _In_  D3DKMDT_HVIDPNTARGETMODESET                   hVidPnTargetModeSet,
-        _In_  CONST D3DKMDT_VIDPN_TARGET_MODE*              pVidPnTargetModeInfo,
-        _Out_ CONST D3DKMDT_VIDPN_TARGET_MODE**             ppNextVidPnTargetModeInfo);
-
-    NTSTATUS (APIENTRY *pfnAcquirePinnedModeInfo)(
-        _In_  D3DKMDT_HVIDPNTARGETMODESET                   hVidPnTargetModeSet,
-        _Out_ CONST D3DKMDT_VIDPN_TARGET_MODE**             ppPinnedVidPnTargetModeInfo);
-
-    NTSTATUS (APIENTRY *pfnReleaseModeInfo)(
-        _In_ D3DKMDT_HVIDPNTARGETMODESET                    hVidPnTargetModeSet,
-        _In_ CONST D3DKMDT_VIDPN_TARGET_MODE*               pVidPnTargetModeInfo);
-
-    NTSTATUS (APIENTRY *pfnCreateNewModeInfo)(
-        _In_  D3DKMDT_HVIDPNTARGETMODESET                   hVidPnTargetModeSet,
-        _Out_ D3DKMDT_VIDPN_TARGET_MODE**                   ppNewVidPnTargetModeInfo);
-
-    NTSTATUS (APIENTRY *pfnAddMode)(
-        _In_ D3DKMDT_HVIDPNTARGETMODESET                    hVidPnTargetModeSet,
-        _In_ D3DKMDT_VIDPN_TARGET_MODE*                     pVidPnTargetModeInfo);
-
-    NTSTATUS (APIENTRY *pfnPinMode)(
-        _In_ D3DKMDT_HVIDPNTARGETMODESET                    hVidPnTargetModeSet,
-        _In_ D3DKMDT_VIDEO_PRESENT_TARGET_MODE_ID           VidPnTargetModeId);
+    DXGKDDI_VIDPNTARGETMODESET_GETNUMMODES pfnGetNumModes;
+    DXGKDDI_VIDPNTARGETMODESET_ACQUIREFIRSTMODEINFO pfnAcquireFirstModeInfo;
+    DXGKDDI_VIDPNTARGETMODESET_ACQUIRENEXTMODEINFO pfnAcquireNextModeInfo;
+    DXGKDDI_VIDPNTARGETMODESET_ACQUIREPINNEDMODEINFO pfnAcquirePinnedModeInfo;
+    DXGKDDI_VIDPNTARGETMODESET_RELEASEMODEINFO pfnReleaseModeInfo;
+    DXGKDDI_VIDPNTARGETMODESET_CREATENEWMODEINFO pfnCreateNewModeInfo;
+    DXGKDDI_VIDPNTARGETMODESET_ADDMODE pfnAddMode;
+    DXGKDDI_VIDPNTARGETMODESET_PINMODE pfnPinMode;
 } DXGK_VIDPNTARGETMODESET_INTERFACE;
 
 /* Monitor-source-mode-set interface. */
@@ -2037,61 +2068,71 @@ typedef struct _DXGK_MONITOR_INTERFACE_V2
  * Top-level VidPN interface returned by DxgkCbQueryVidPnInterface.
  * =========================================================================
  */
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_GETTOPOLOGY)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _Out_ D3DKMDT_HVIDPNTOPOLOGY *phVidPnTopology,
+    _Out_ CONST DXGK_VIDPNTOPOLOGY_INTERFACE **ppVidPnTopologyInterface);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_ACQUIRESOURCEMODESET)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ D3DKMDT_HVIDPNSOURCEMODESET *phVidPnSourceModeSet,
+    _Out_ CONST DXGK_VIDPNSOURCEMODESET_INTERFACE **ppVidPnSourceModeSetInterface);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_RELEASESOURCEMODESET)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_CREATENEWSOURCEMODESET)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ D3DKMDT_HVIDPNSOURCEMODESET *phVidPnSourceModeSet,
+    _Out_ CONST DXGK_VIDPNSOURCEMODESET_INTERFACE **ppVidPnSourceModeSetInterface);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_ASSIGNSOURCEMODESET)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ D3DKMDT_HVIDPNSOURCEMODESET hVidPnSourceModeSet);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_ASSIGNMULTISAMPLINGMETHODSET)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ CONST D3DDDI_MULTISAMPLINGMETHOD *pMultisamplingMethod);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_ACQUIRETARGETMODESET)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _Out_ D3DKMDT_HVIDPNTARGETMODESET *phVidPnTargetModeSet,
+    _Out_ CONST DXGK_VIDPNTARGETMODESET_INTERFACE **ppVidPnTargetModeSetInterface);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_RELEASETARGETMODESET)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_CREATENEWTARGETMODESET)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _Out_ D3DKMDT_HVIDPNTARGETMODESET *phVidPnTargetModeSet,
+    _Out_ CONST DXGK_VIDPNTARGETMODESET_INTERFACE **ppVidPnTargetModeSetInterface);
+
+typedef NTSTATUS (APIENTRY *DXGKDDI_VIDPN_ASSIGNTARGETMODESET)(
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    _In_ D3DKMDT_HVIDPNTARGETMODESET hVidPnTargetModeSet);
+
 typedef struct _DXGK_VIDPN_INTERFACE
 {
     DXGK_VIDPN_INTERFACE_VERSION Version;
-
-    NTSTATUS (APIENTRY *pfnGetTopology)(
-        _In_  D3DKMDT_HVIDPN                               hVidPn,
-        _Out_ D3DKMDT_HVIDPNTOPOLOGY*                      phVidPnTopology,
-        _Out_ CONST DXGK_VIDPNTOPOLOGY_INTERFACE**         ppVidPnTopologyInterface);
-
-    NTSTATUS (APIENTRY *pfnAcquireSourceModeSet)(
-        _In_  D3DKMDT_HVIDPN                               hVidPn,
-        _In_  D3DDDI_VIDEO_PRESENT_SOURCE_ID                VidPnSourceId,
-        _Out_ D3DKMDT_HVIDPNSOURCEMODESET*                 phVidPnSourceModeSet,
-        _Out_ CONST DXGK_VIDPNSOURCEMODESET_INTERFACE**    ppVidPnSourceModeSetInterface);
-
-    NTSTATUS (APIENTRY *pfnReleaseSourceModeSet)(
-        _In_ D3DKMDT_HVIDPN                                hVidPn,
-        _In_ D3DKMDT_HVIDPNSOURCEMODESET                   hVidPnSourceModeSet);
-
-    NTSTATUS (APIENTRY *pfnCreateNewSourceModeSet)(
-        _In_  D3DKMDT_HVIDPN                               hVidPn,
-        _In_  D3DDDI_VIDEO_PRESENT_SOURCE_ID                VidPnSourceId,
-        _Out_ D3DKMDT_HVIDPNSOURCEMODESET*                 phVidPnSourceModeSet,
-        _Out_ CONST DXGK_VIDPNSOURCEMODESET_INTERFACE**    ppVidPnSourceModeSetInterface);
-
-    NTSTATUS (APIENTRY *pfnAssignSourceModeSet)(
-        _In_ D3DKMDT_HVIDPN                                hVidPn,
-        _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID                 VidPnSourceId,
-        _In_ D3DKMDT_HVIDPNSOURCEMODESET                   hVidPnSourceModeSet);
-
-    NTSTATUS (APIENTRY *pfnAssignMultisamplingMethodSet)(
-        _In_ D3DKMDT_HVIDPN                                hVidPn,
-        _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID                 VidPnSourceId,
-        _In_ CONST D3DDDI_MULTISAMPLINGMETHOD*             pMultisamplingMethod);
-
-    NTSTATUS (APIENTRY *pfnAcquireTargetModeSet)(
-        _In_  D3DKMDT_HVIDPN                               hVidPn,
-        _In_  D3DDDI_VIDEO_PRESENT_TARGET_ID                VidPnTargetId,
-        _Out_ D3DKMDT_HVIDPNTARGETMODESET*                 phVidPnTargetModeSet,
-        _Out_ CONST DXGK_VIDPNTARGETMODESET_INTERFACE**    ppVidPnTargetModeSetInterface);
-
-    NTSTATUS (APIENTRY *pfnReleaseTargetModeSet)(
-        _In_ D3DKMDT_HVIDPN                                hVidPn,
-        _In_ D3DKMDT_HVIDPNTARGETMODESET                   hVidPnTargetModeSet);
-
-    NTSTATUS (APIENTRY *pfnCreateNewTargetModeSet)(
-        _In_  D3DKMDT_HVIDPN                               hVidPn,
-        _In_  D3DDDI_VIDEO_PRESENT_TARGET_ID                VidPnTargetId,
-        _Out_ D3DKMDT_HVIDPNTARGETMODESET*                 phVidPnTargetModeSet,
-        _Out_ CONST DXGK_VIDPNTARGETMODESET_INTERFACE**    ppVidPnTargetModeSetInterface);
-
-    NTSTATUS (APIENTRY *pfnAssignTargetModeSet)(
-        _In_ D3DKMDT_HVIDPN                                hVidPn,
-        _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID                 VidPnTargetId,
-        _In_ D3DKMDT_HVIDPNTARGETMODESET                   hVidPnTargetModeSet);
+    DXGKDDI_VIDPN_GETTOPOLOGY pfnGetTopology;
+    DXGKDDI_VIDPN_ACQUIRESOURCEMODESET pfnAcquireSourceModeSet;
+    DXGKDDI_VIDPN_RELEASESOURCEMODESET pfnReleaseSourceModeSet;
+    DXGKDDI_VIDPN_CREATENEWSOURCEMODESET pfnCreateNewSourceModeSet;
+    DXGKDDI_VIDPN_ASSIGNSOURCEMODESET pfnAssignSourceModeSet;
+    DXGKDDI_VIDPN_ASSIGNMULTISAMPLINGMETHODSET pfnAssignMultisamplingMethodSet;
+    DXGKDDI_VIDPN_ACQUIRETARGETMODESET pfnAcquireTargetModeSet;
+    DXGKDDI_VIDPN_RELEASETARGETMODESET pfnReleaseTargetModeSet;
+    DXGKDDI_VIDPN_CREATENEWTARGETMODESET pfnCreateNewTargetModeSet;
+    DXGKDDI_VIDPN_ASSIGNTARGETMODESET pfnAssignTargetModeSet;
 } DXGK_VIDPN_INTERFACE;
 
 /* =========================================================================
