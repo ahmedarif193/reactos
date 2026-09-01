@@ -3287,6 +3287,39 @@ typedef struct _DXGK_PRESENTFLAGS
 
 C_ASSERT(sizeof(DXGK_PRESENTFLAGS) == 0x4);
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN7)
+typedef struct _DXGK_PRESENTALLOCATIONINFO
+{
+    HANDLE hDeviceSpecificAllocation;
+    D3DGPU_VIRTUAL_ADDRESS AllocationVirtualAddress;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    WORD SegmentId;
+    WORD PhysicalAdapterIndex;
+} DXGK_PRESENTALLOCATIONINFO;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+typedef struct _DXGK_PRESENTMULTIPLANEOVERLAYLIST
+{
+    UINT LayerIndex;
+    BOOL Enabled;
+    HANDLE hDeviceSpecificAllocation;
+    struct
+    {
+        UINT SegmentId : 5;
+        UINT Reserved : 27;
+    };
+    PHYSICAL_ADDRESS PhysicalAddress;
+} DXGK_PRESENTMULTIPLANEOVERLAYLIST;
+
+typedef struct _DXGK_PRESENTMULTIPLANEOVERLAYINFO
+{
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    UINT PlaneListCount;
+    DXGK_PRESENTMULTIPLANEOVERLAYLIST *pPlaneList;
+} DXGK_PRESENTMULTIPLANEOVERLAYINFO;
+#endif
+
 #ifndef DXGK_PRESENT_SOURCE_INDEX
 #define DXGK_PRESENT_SOURCE_INDEX 1
 #endif
@@ -3308,8 +3341,12 @@ typedef struct _DXGKARG_PRESENT
     union
     {
         DXGK_ALLOCATIONLIST        *pAllocationList;
-        PVOID                       pAllocationInfo;
-        PVOID                       pPresentMultiPlaneOverlayInfo;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN7)
+        DXGK_PRESENTALLOCATIONINFO *pAllocationInfo;
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+        DXGK_PRESENTMULTIPLANEOVERLAYINFO *pPresentMultiPlaneOverlayInfo;
+#endif
     };
     D3DDDI_PATCHLOCATIONLIST   *pPatchLocationListOut;
     UINT                        PatchLocationListOutSize;
