@@ -296,104 +296,26 @@ else()
         "'${REACTOS_GRAPHICS_DRIVER_MODEL}'")
 endif()
 
-set(REACTOS_WDDM_LEVEL "2.0" CACHE STRING
-"Maximum WDDM compatibility level selected for a WDDM build.")
-set_property(CACHE REACTOS_WDDM_LEVEL PROPERTY STRINGS
-    "1.0" "1.1" "1.2" "1.3"
-    "2.0" "2.1" "2.2" "2.3" "2.4" "2.5" "2.6" "2.7" "2.8" "2.9"
-    "3.0" "3.1" "3.2")
+set(REACTOS_WDDM_LEVEL "3.2" CACHE STRING
+"Windows 11 24H2 WDDM host contract level. Pre-WDDM 2 miniports are not supported.")
+set_property(CACHE REACTOS_WDDM_LEVEL PROPERTY STRINGS "3.2")
 
-# Keep the selected compatibility ceiling separate from
-# DXGKDDI_INTERFACE_VERSION. The latter controls public structure layouts and
-# WDDM targets intentionally compile against the highest audited header
-# surface; the selected level limits what the resulting OS is allowed to
-# advertise.
-# In XPDM builds the cached level is dormant and must not affect configuration.
+# The active WDDM tree has one ABI target: Windows 11 24H2 / WDDM 3.2.
+# Individual features still advertise only completed behavior. A 3.2 build
+# target must never be interpreted as claiming that every optional feature is
+# present; feature support is negotiated through the 3.2 feature interface.
 if(REACTOS_USE_WDDM)
-    if(REACTOS_WDDM_LEVEL STREQUAL "1.0")
-        set(REACTOS_WDDM_TARGET_LEVEL 1000)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x1052)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x000C)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "1.1")
-        set(REACTOS_WDDM_TARGET_LEVEL 1105)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x2005)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x2003)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "1.2")
-        set(REACTOS_WDDM_TARGET_LEVEL 1200)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x300E)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x3004)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "1.3")
-        set(REACTOS_WDDM_TARGET_LEVEL 1300)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x4002)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x4002)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.0")
-        set(REACTOS_WDDM_TARGET_LEVEL 2000)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x5023)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x5002)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.1")
-        set(REACTOS_WDDM_TARGET_LEVEL 2100)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x6003)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x6003)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.2")
-        set(REACTOS_WDDM_TARGET_LEVEL 2200)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x700A)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x7001)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.3")
-        set(REACTOS_WDDM_TARGET_LEVEL 2300)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x8001)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x8001)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.4")
-        set(REACTOS_WDDM_TARGET_LEVEL 2400)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x9006)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x9001)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.5")
-        set(REACTOS_WDDM_TARGET_LEVEL 2500)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0xA00B)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0xA002)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.6")
-        set(REACTOS_WDDM_TARGET_LEVEL 2600)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0xB004)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0xB003)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.7")
-        set(REACTOS_WDDM_TARGET_LEVEL 2700)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0xC004)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0xC001)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.8")
-        set(REACTOS_WDDM_TARGET_LEVEL 2800)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0xD001)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0xD000)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "2.9")
-        set(REACTOS_WDDM_TARGET_LEVEL 2900)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0xE003)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0xE000)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "3.0")
-        set(REACTOS_WDDM_TARGET_LEVEL 3000)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0xF003)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0xF000)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "3.1")
-        set(REACTOS_WDDM_TARGET_LEVEL 3100)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x10004)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x10000)
-    elseif(REACTOS_WDDM_LEVEL STREQUAL "3.2")
-        set(REACTOS_WDDM_TARGET_LEVEL 3200)
-        set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x11008)
-        set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x11000)
-    else()
+    if(NOT REACTOS_WDDM_LEVEL STREQUAL "3.2")
         message(FATAL_ERROR
-            "Unsupported REACTOS_WDDM_LEVEL '${REACTOS_WDDM_LEVEL}'")
+            "REACTOS_WDDM_LEVEL must be 3.2; pre-WDDM 2 miniport contracts were removed")
     endif()
+    set(REACTOS_WDDM_TARGET_LEVEL 3200)
+    set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x11008)
+    set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x11000)
 
-    # Lower targets need their exact shorter table layouts. The current UMD
-    # and runtime implement the complete WDDM 2.1 callback tail; later targets
-    # retain that honest implementation ceiling.
-    if(REACTOS_WDDM_TARGET_LEVEL LESS 2000)
-        set(REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION
-            ${REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION})
-    elseif(REACTOS_WDDM_TARGET_LEVEL LESS 2100)
-        set(REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION 0x5002)
-    else()
-        set(REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION 0x6003)
-    endif()
+    # Runtime callbacks currently complete the WDDM 2.1 tail. This is an
+    # implementation ceiling, not a second selectable OS contract.
+    set(REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION 0x6003)
 endif()
 
 set(DLL_EXPORT_VERSION "${REACTOS_TARGET_NT}" CACHE INTERNAL
