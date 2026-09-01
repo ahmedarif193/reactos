@@ -360,6 +360,7 @@ SoftGpuDdiSubmitCommandVirtual(
     _In_ CONST DXGKARG_SUBMITCOMMANDVIRTUAL  *pSubmitCommand)
 {
     PSOFTGPU_DEVICE     Device = (PSOFTGPU_DEVICE)hAdapter;
+    PSOFTGPU_ENGINE     Engine;
     PSOFTGPU_CONTEXT    Context;
     PSOFTGPU_KMD_DEVICE KmdDevice;
     PSOFTGPU_PROCESS    Process;
@@ -373,8 +374,12 @@ SoftGpuDdiSubmitCommandVirtual(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (pSubmitCommand->NodeOrdinal != 0 || pSubmitCommand->EngineOrdinal != 0)
+    if (pSubmitCommand->NodeOrdinal >= SOFTGPU_ENGINE_COUNT ||
+        pSubmitCommand->EngineOrdinal != 0)
+    {
         return STATUS_INVALID_PARAMETER;
+    }
+    Engine = &Device->Engines[pSubmitCommand->NodeOrdinal];
 
     DPRINT("SOFTGPU: SubmitCommandVirtual fence=%u node=%u gpuVa=0x%I64x size=%u null=%u\n",
            pSubmitCommand->SubmissionFenceId,
@@ -421,21 +426,21 @@ SoftGpuDdiSubmitCommandVirtual(
     {
         PSOFTGPU_SUBMIT Entry;
 
-        if (Device->SubmitRingTail - Device->SubmitRingHead >=
+        if (Engine->SubmitRingTail - Engine->SubmitRingHead >=
             SOFTGPU_SUBMIT_RING_SIZE)
         {
             KeReleaseSpinLock(&Device->FenceLock, OldIrql);
             return STATUS_DEVICE_BUSY;
         }
-        Entry = &Device->SubmitRing[Device->SubmitRingTail %
+        Entry = &Engine->SubmitRing[Engine->SubmitRingTail %
                                     SOFTGPU_SUBMIT_RING_SIZE];
         RtlZeroMemory(Entry, sizeof(*Entry));
         Entry->Fence = pSubmitCommand->SubmissionFenceId;
         Entry->NullRendering = TRUE;
         Entry->DxgkProcessHandle = DxgkProcessHandle;
-        Device->SubmitRingTail++;
-        Device->CurrentFence = pSubmitCommand->SubmissionFenceId;
-        KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
+        Engine->SubmitRingTail++;
+        Engine->CurrentFence = pSubmitCommand->SubmissionFenceId;
+        KeInsertQueueDpc(&Engine->DpcObject, NULL, NULL);
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return STATUS_SUCCESS;
     }
@@ -456,7 +461,7 @@ SoftGpuDdiSubmitCommandVirtual(
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return STATUS_DELETE_PENDING;
     }
-    if (Device->SubmitRingTail - Device->SubmitRingHead >=
+    if (Engine->SubmitRingTail - Engine->SubmitRingHead >=
         SOFTGPU_SUBMIT_RING_SIZE)
     {
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
@@ -464,7 +469,7 @@ SoftGpuDdiSubmitCommandVirtual(
     }
     {
         PSOFTGPU_SUBMIT Entry =
-            &Device->SubmitRing[Device->SubmitRingTail %
+            &Engine->SubmitRing[Engine->SubmitRingTail %
                                 SOFTGPU_SUBMIT_RING_SIZE];
 
         RtlZeroMemory(Entry, sizeof(*Entry));
@@ -476,10 +481,10 @@ SoftGpuDdiSubmitCommandVirtual(
         Entry->VirtualAddressing = TRUE;
         Entry->DxgkProcessHandle = DxgkProcessHandle;
         SoftGpuGpuVaRootSnapshot(&Root, &Entry->Root);
-        Device->SubmitRingTail++;
+        Engine->SubmitRingTail++;
     }
-    Device->CurrentFence = pSubmitCommand->SubmissionFenceId;
-    KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
+    Engine->CurrentFence = pSubmitCommand->SubmissionFenceId;
+    KeInsertQueueDpc(&Engine->DpcObject, NULL, NULL);
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
     return STATUS_SUCCESS;
 }

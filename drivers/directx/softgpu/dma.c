@@ -943,6 +943,7 @@ SoftGpuDpcRoutine(
     _In_opt_ PVOID   SystemArgument1,
     _In_opt_ PVOID   SystemArgument2)
 {
+    PSOFTGPU_ENGINE              Engine;
     PSOFTGPU_DEVICE              Device;
     KIRQL                        OldIrql;
     ULONG                        CompletedFence = 0;
@@ -965,7 +966,12 @@ SoftGpuDpcRoutine(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    Device = (PSOFTGPU_DEVICE)DeferredContext;
+    /* One DPC per node, so the engine is the context and the adapter comes
+     * from it; a node never drains another node's ring. */
+    Engine = (PSOFTGPU_ENGINE)DeferredContext;
+    if (Engine == NULL)
+        return;
+    Device = Engine->Device;
     if (Device == NULL)
         return;
 
@@ -978,9 +984,9 @@ SoftGpuDpcRoutine(
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return;
     }
-    HaveSubmit = Device->EngineActive == 0;
+    HaveSubmit = Engine->EngineActive == 0;
     if (HaveSubmit)
-        Device->EngineActive = 1;
+        Engine->EngineActive = 1;
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
     if (HaveSubmit)
@@ -988,9 +994,9 @@ SoftGpuDpcRoutine(
         for (;;)
         {
             KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
-            if (Device->Stopped || Device->SubmitRingHead == Device->SubmitRingTail)
+            if (Device->Stopped || Engine->SubmitRingHead == Engine->SubmitRingTail)
             {
-                Device->EngineActive = 0;
+                Engine->EngineActive = 0;
                 KeReleaseSpinLock(&Device->FenceLock, OldIrql);
                 break;
             }
@@ -998,8 +1004,8 @@ SoftGpuDpcRoutine(
              * GPU wait must keep owning its slot, otherwise a producer could
              * refill it while the engine is parked.  Only this drainer moves
              * the head, and the full check keeps producers off it. */
-            HeadIndex = Device->SubmitRingHead;
-            Submit = Device->SubmitRing[HeadIndex % SOFTGPU_SUBMIT_RING_SIZE];
+            HeadIndex = Engine->SubmitRingHead;
+            Submit = Engine->SubmitRing[HeadIndex % SOFTGPU_SUBMIT_RING_SIZE];
             KeReleaseSpinLock(&Device->FenceLock, OldIrql);
             {
                 SOFTGPU_EXECUTION_RESULT ExecuteResult;
@@ -1012,7 +1018,7 @@ SoftGpuDpcRoutine(
                 KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
                 if (Device->Stopped)
                 {
-                    Device->EngineActive = 0;
+                    Engine->EngineActive = 0;
                     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
                     break;
                 }
@@ -1021,9 +1027,9 @@ SoftGpuDpcRoutine(
                     /* Blocked on a GPU wait: record where to resume and stop
                      * draining without completing the fence.  The refresh
                      * timer re-kicks the engine. */
-                    Device->SubmitRing[HeadIndex % SOFTGPU_SUBMIT_RING_SIZE].StartOffset =
+                    Engine->SubmitRing[HeadIndex % SOFTGPU_SUBMIT_RING_SIZE].StartOffset =
                         ExecuteResult.ResumeOffset;
-                    Device->EngineActive = 0;
+                    Engine->EngineActive = 0;
                     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
                     break;
                 }
@@ -1035,13 +1041,13 @@ SoftGpuDpcRoutine(
                         REACTOS_WDDM_TARGET_LEVEL,
                         HeadIndex,
                         Submit.Fence,
-                        Device->CompletedFence,
+                        Engine->CompletedFence,
                         &FaultRetirement);
-                    Device->SubmitRingHead =
+                    Engine->SubmitRingHead =
                         FaultRetirement.NextHead;
-                    Device->CompletedFence =
+                    Engine->CompletedFence =
                         FaultRetirement.CompletedFence;
-                    Device->EngineActive = 0;
+                    Engine->EngineActive = 0;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
                     /*
                      * A fault is terminal for this one packet, not a completed
@@ -1065,9 +1071,9 @@ SoftGpuDpcRoutine(
                     continue;
 #endif
                 }
-                Device->SubmitRingHead = HeadIndex + 1;
-                if ((LONG)(Submit.Fence - Device->CompletedFence) > 0)
-                    Device->CompletedFence = Submit.Fence;
+                Engine->SubmitRingHead = HeadIndex + 1;
+                if ((LONG)(Submit.Fence - Engine->CompletedFence) > 0)
+                    Engine->CompletedFence = Submit.Fence;
                 KeReleaseSpinLock(&Device->FenceLock, OldIrql);
             }
         }
@@ -1079,10 +1085,10 @@ SoftGpuDpcRoutine(
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return;
     }
-    if (Device->CompletedFence != Device->NotifiedFence)
+    if (Engine->CompletedFence != Engine->NotifiedFence)
     {
-        CompletedFence = Device->CompletedFence;
-        Device->NotifiedFence = CompletedFence;
+        CompletedFence = Engine->CompletedFence;
+        Engine->NotifiedFence = CompletedFence;
         HaveCompletion = TRUE;
     }
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
@@ -1106,7 +1112,7 @@ SoftGpuDpcRoutine(
         RtlZeroMemory(&NotifyData, sizeof(NotifyData));
         NotifyData.InterruptType =
             DXGK_INTERRUPT_MONITORED_FENCE_SIGNALED;
-        NotifyData.MonitoredFenceSignaled.NodeOrdinal = 0;
+        NotifyData.MonitoredFenceSignaled.NodeOrdinal = Engine->NodeOrdinal;
         NotifyData.MonitoredFenceSignaled.EngineOrdinal = 0;
         Device->DxgkInterface.DxgkCbNotifyInterrupt(
             Device->DxgkInterface.DeviceHandle,
@@ -1125,7 +1131,7 @@ SoftGpuDpcRoutine(
         NotifyData.InterruptType =
             DXGK_INTERRUPT_TYPE_DMA_COMPLETED;
         NotifyData.DmaCompleted.SubmissionFenceId = CompletedFence;
-        NotifyData.DmaCompleted.NodeOrdinal = 0;
+        NotifyData.DmaCompleted.NodeOrdinal = Engine->NodeOrdinal;
         NotifyData.DmaCompleted.EngineOrdinal = 0;
         Device->DxgkInterface.DxgkCbNotifyInterrupt(
             Device->DxgkInterface.DeviceHandle,
@@ -1150,7 +1156,7 @@ SoftGpuDpcRoutine(
             FaultResult.PageFaultFlags;
         NotifyData.DmaPageFaulted.FaultedVirtualAddress =
             FaultResult.FaultedVirtualAddress;
-        NotifyData.DmaPageFaulted.NodeOrdinal = 0;
+        NotifyData.DmaPageFaulted.NodeOrdinal = Engine->NodeOrdinal;
         NotifyData.DmaPageFaulted.EngineOrdinal = 0;
         NotifyData.DmaPageFaulted.PageTableLevel =
             FaultResult.PageTableLevel;
@@ -1219,10 +1225,15 @@ SoftGpuVsyncDpcRoutine(
     if (!PhaseActive)
         return;
 
-    /* Re-kick the engine: a buffer parked on an unsatisfied GPU wait retries
+    /* Re-kick every node: a buffer parked on an unsatisfied GPU wait retries
      * on this cadence, so a fence signaled by another engine or by the CPU
-     * always unblocks it. */
-    KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
+     * always unblocks it -- and the signaller may be a different node. */
+    {
+        ULONG NodeOrdinal;
+
+        for (NodeOrdinal = 0; NodeOrdinal < SOFTGPU_ENGINE_COUNT; NodeOrdinal++)
+            KeInsertQueueDpc(&Device->Engines[NodeOrdinal].DpcObject, NULL, NULL);
+    }
 
     if (!Deliver)
         return;
@@ -1320,6 +1331,7 @@ SoftGpuDdiSubmitCommand(
     _In_ CONST DXGKARG_SUBMITCOMMAND *SubmitCommand)
 {
     PSOFTGPU_DEVICE     Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+    PSOFTGPU_ENGINE     Engine;
     PSOFTGPU_KMD_DEVICE KmdDevice;
     PSOFTGPU_PROCESS    Process = NULL;
     KIRQL               OldIrql;
@@ -1334,8 +1346,14 @@ SoftGpuDdiSubmitCommand(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (SubmitCommand->NodeOrdinal != 0 || SubmitCommand->EngineOrdinal != 0)
+    /* One engine ordinal per node: this adapter has no second engine behind
+     * any of its nodes. */
+    if (SubmitCommand->NodeOrdinal >= SOFTGPU_ENGINE_COUNT ||
+        SubmitCommand->EngineOrdinal != 0)
+    {
         return STATUS_INVALID_PARAMETER;
+    }
+    Engine = &Device->Engines[SubmitCommand->NodeOrdinal];
 
     Start100ns = SoftGpuTraceNow100ns();
 
@@ -1388,14 +1406,14 @@ SoftGpuDdiSubmitCommand(
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return STATUS_INVALID_PARAMETER;
     }
-    if (Device->SubmitRingTail - Device->SubmitRingHead >= SOFTGPU_SUBMIT_RING_SIZE)
+    if (Engine->SubmitRingTail - Engine->SubmitRingHead >= SOFTGPU_SUBMIT_RING_SIZE)
     {
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         return STATUS_DEVICE_BUSY;
     }
-    Device->CurrentFence = SubmitCommand->SubmissionFenceId;
+    Engine->CurrentFence = SubmitCommand->SubmissionFenceId;
     {
-        PSOFTGPU_SUBMIT Entry = &Device->SubmitRing[Device->SubmitRingTail % SOFTGPU_SUBMIT_RING_SIZE];
+        PSOFTGPU_SUBMIT Entry = &Engine->SubmitRing[Engine->SubmitRingTail % SOFTGPU_SUBMIT_RING_SIZE];
 
         RtlZeroMemory(Entry, sizeof(*Entry));
         Entry->DmaPhys = SubmitCommand->DmaBufferPhysicalAddress;
@@ -1411,9 +1429,9 @@ SoftGpuDdiSubmitCommand(
             &Entry->Root,
             &Entry->DxgkProcessHandle);
 #endif
-        Device->SubmitRingTail++;
+        Engine->SubmitRingTail++;
     }
-    Queued = KeInsertQueueDpc(&Device->DpcObject, NULL, NULL);
+    Queued = KeInsertQueueDpc(&Engine->DpcObject, NULL, NULL);
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
     /*
@@ -1433,7 +1451,7 @@ SoftGpuDdiSubmitCommand(
                SubmitCommand->NodeOrdinal,
                Queued,
                ElapsedUs,
-               Device->CompletedFence);
+               Engine->CompletedFence);
     }
 
     return STATUS_SUCCESS;
@@ -2206,8 +2224,17 @@ SoftGpuDdiQueryCurrentFence(
         return STATUS_INVALID_PARAMETER;
     }
 
+    /* Each node retires its own fence stream, so the answer depends on which
+     * node is being asked about. */
+    if (pCurrentFence->NodeOrdinal >= SOFTGPU_ENGINE_COUNT ||
+        pCurrentFence->EngineOrdinal != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
-    pCurrentFence->CurrentFence = Device->CompletedFence;
+    pCurrentFence->CurrentFence =
+        Device->Engines[pCurrentFence->NodeOrdinal].CompletedFence;
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
     return STATUS_SUCCESS;

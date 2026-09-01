@@ -186,12 +186,37 @@ SoftGpuPlatformUpdatePointer(
 
 VOID
 SoftGpuPlatformFillNodeMetadata(
+    _In_ ULONG NodeOrdinal,
     _Out_ DXGKARG_GETNODEMETADATA *GetNodeMetadata)
 {
-    GetNodeMetadata->EngineType = DXGK_ENGINE_TYPE_3D;
+    /*
+     * Each node's engine type is what tells the OS -- and anything showing
+     * per-engine utilization -- which kind of work that queue carries.  The
+     * names are the ones Windows shows for these types.
+     */
+    static const struct
+    {
+        DXGK_ENGINE_TYPE EngineType;
+        const WCHAR     *FriendlyName;
+    } Nodes[SOFTGPU_ENGINE_COUNT] =
+    {
+        { DXGK_ENGINE_TYPE_3D,           L"3D" },
+        { DXGK_ENGINE_TYPE_COPY,         L"Copy" },
+        { DXGK_ENGINE_TYPE_VIDEO_DECODE, L"Video Decode" },
+        { DXGK_ENGINE_TYPE_VIDEO_ENCODE, L"Video Encode" },
+    };
+    SIZE_T NameBytes;
+
+    if (NodeOrdinal >= SOFTGPU_ENGINE_COUNT)
+        NodeOrdinal = 0;
+
+    GetNodeMetadata->EngineType = Nodes[NodeOrdinal].EngineType;
+    NameBytes = (wcslen(Nodes[NodeOrdinal].FriendlyName) + 1) * sizeof(WCHAR);
+    if (NameBytes > sizeof(GetNodeMetadata->FriendlyName))
+        NameBytes = sizeof(GetNodeMetadata->FriendlyName);
     RtlCopyMemory(GetNodeMetadata->FriendlyName,
-                  L"ReactOS software GPU",
-                  sizeof(L"ReactOS software GPU"));
+                  Nodes[NodeOrdinal].FriendlyName,
+                  NameBytes);
 }
 
 VOID

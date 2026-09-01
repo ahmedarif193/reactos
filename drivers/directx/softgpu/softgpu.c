@@ -285,7 +285,8 @@ SoftGpuAllocateFrameBuffer(
  * All capability fields left at zero except what softgpu actually supports:
  *   - PointerCaps.Color: 64x64 cursor composited directly into scanout
  *   - MaxAllocationListSlotId: 255
- *   - GpuEngineTopology: 1 (one 3D engine node)
+ *   - GpuEngineTopology: SOFTGPU_ENGINE_COUNT nodes (3D, copy, video
+ *     decode, video encode), each an independently scheduled queue
  *   - WDDMVersion: the highest completed tier, matching the registered table
  */
 static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =
@@ -302,7 +303,7 @@ static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =
     .GammaRampCaps.Value        = 0,
     .SchedulingCaps.Value       = 0,
     .MemoryManagementCaps.Value = 0,
-    .GpuEngineTopology.NbAsymetricProcessingNodes = 1,
+    .GpuEngineTopology.NbAsymetricProcessingNodes = SOFTGPU_ENGINE_COUNT,
     .WDDMVersion                = SOFTGPU_DECLARED_WDDM_VERSION,
 };
 
@@ -1148,12 +1149,24 @@ SoftGpuDdiStartDevice(
     *NumberOfChildren            = Device->NumChildren;
 
     /*
-     * Initialise the DPC object used to simulate asynchronous GPU completion.
-     * The DPC is queued from SoftGpuDdiSubmitCommand at DISPATCH_LEVEL and
-     * fires SoftGpuDpcRoutine which notifies dxgkrnl of fence completion.
+     * Bring up one execution queue per GPU node.  Each node owns its own
+     * completion DPC so a submission to one never has to wait behind
+     * another node's drain, which is the whole point of exposing them as
+     * separate engines to the scheduler.
      */
-    KeInitializeDpc(&Device->DpcObject, SoftGpuDpcRoutine, Device);
-    Device->DpcInitialized = TRUE;
+    {
+        ULONG NodeOrdinal;
+
+        for (NodeOrdinal = 0; NodeOrdinal < SOFTGPU_ENGINE_COUNT; NodeOrdinal++)
+        {
+            PSOFTGPU_ENGINE Engine = &Device->Engines[NodeOrdinal];
+
+            Engine->Device = Device;
+            Engine->NodeOrdinal = NodeOrdinal;
+            KeInitializeDpc(&Engine->DpcObject, SoftGpuDpcRoutine, Engine);
+            Engine->DpcInitialized = TRUE;
+        }
+    }
     KeInitializeTimer(&Device->VsyncTimer);
     KeInitializeDpc(&Device->VsyncDpc, SoftGpuVsyncDpcRoutine, Device);
     Device->VsyncTimerInitialized = TRUE;
@@ -1237,12 +1250,25 @@ SoftGpuDdiStopDevice(
         KeCancelTimer(&Device->VsyncTimer);
         Device->VsyncTimerInitialized = FALSE;
     }
-    if (Device->DpcInitialized)
     {
-        KeRemoveQueueDpc(&Device->DpcObject);
-        KeRemoveQueueDpc(&Device->VsyncDpc);
-        KeFlushQueuedDpcs();
-        Device->DpcInitialized = FALSE;
+        ULONG NodeOrdinal;
+        BOOLEAN Removed = FALSE;
+
+        for (NodeOrdinal = 0; NodeOrdinal < SOFTGPU_ENGINE_COUNT; NodeOrdinal++)
+        {
+            PSOFTGPU_ENGINE Engine = &Device->Engines[NodeOrdinal];
+
+            if (!Engine->DpcInitialized)
+                continue;
+            KeRemoveQueueDpc(&Engine->DpcObject);
+            Engine->DpcInitialized = FALSE;
+            Removed = TRUE;
+        }
+        if (Removed)
+        {
+            KeRemoveQueueDpc(&Device->VsyncDpc);
+            KeFlushQueuedDpcs();
+        }
     }
     SoftGpuScanoutStop(Device);
     Status = SoftGpuPlatformStopScanout(Device);
@@ -1323,11 +1349,17 @@ SoftGpuDdiGetNodeMetadata(
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC || GetNodeMetadata == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (NodeOrdinalAndAdapterIndex != 0)
+    /* The high word selects a physical adapter in an LDA chain; this one is
+     * a single adapter, so only index zero exists. */
+    if ((NodeOrdinalAndAdapterIndex >> 16) != 0 ||
+        (NodeOrdinalAndAdapterIndex & 0xFFFF) >= SOFTGPU_ENGINE_COUNT)
+    {
         return STATUS_INVALID_PARAMETER;
+    }
 
     RtlZeroMemory(GetNodeMetadata, sizeof(*GetNodeMetadata));
-    SoftGpuPlatformFillNodeMetadata(GetNodeMetadata);
+    SoftGpuPlatformFillNodeMetadata(NodeOrdinalAndAdapterIndex & 0xFFFF,
+                                    GetNodeMetadata);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     GetNodeMetadata->GpuMmuSupported = SOFTGPU_GPUMMU_END_TO_END;
     GetNodeMetadata->IoMmuSupported = FALSE;
