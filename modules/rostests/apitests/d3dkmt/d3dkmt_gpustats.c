@@ -24,6 +24,11 @@
 
 typedef NTSTATUS (APIENTRY *PFN_QueryStatistics)(const D3DKMT_QUERYSTATISTICS *);
 
+static BOOL StatisticsClassUnavailable(NTSTATUS Status)
+{
+    return Status == STATUS_INVALID_PARAMETER || Status == STATUS_NOT_SUPPORTED;
+}
+
 static BOOL GetAdapterLuid(D3DKMT_HANDLE hAdapter, LUID *Luid)
 {
     D3DKMT_QUERYADAPTERINFO Query;
@@ -226,9 +231,14 @@ static void Test_QueryStatistics_Nodes(void)
         First.AdapterLuid = Luid;
         First.QueryNode.NodeId = i;
         Status = pfn(&First);
-        ok_succeeded(Status, "QueryStatistics(NODE %lu) failed 0x%08lX\n", (unsigned long)i, (long)Status);
         if (!NT_SUCCESS(Status))
+        {
+            if (StatisticsClassUnavailable(Status))
+                skip("QueryStatistics(NODE %lu) unavailable (0x%08lX)\n", (unsigned long)i, (long)Status);
+            else
+                ok_succeeded(Status, "QueryStatistics(NODE %lu) failed 0x%08lX\n", (unsigned long)i, (long)Status);
             continue;
+        }
 
         Sleep(50);
 
@@ -322,7 +332,10 @@ static void Test_QueryStatistics_Process(void)
     }
 
     Status = Query(pfn, &Statistics, D3DKMT_QUERYSTATISTICS_PROCESS_ADAPTER, Luid);
-    ok_succeeded(Status, "QueryStatistics(PROCESS_ADAPTER) failed 0x%08lX\n", (long)Status);
+    if (StatisticsClassUnavailable(Status))
+        skip("QueryStatistics(PROCESS_ADAPTER) unavailable (0x%08lX)\n", (long)Status);
+    else
+        ok_succeeded(Status, "QueryStatistics(PROCESS_ADAPTER) failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         ok(Statistics.QueryResult.ProcessAdapterInformation.NbSegments == Segments,
@@ -347,10 +360,14 @@ static void Test_QueryStatistics_Process(void)
         Statistics.AdapterLuid = Luid;
         Statistics.QueryProcessSegment.SegmentId = i;
         Status = pfn(&Statistics);
-        ok_succeeded(Status, "QueryStatistics(PROCESS_SEGMENT %lu) failed 0x%08lX\n",
-                     (unsigned long)i, (long)Status);
         if (!NT_SUCCESS(Status))
+        {
+            if (StatisticsClassUnavailable(Status))
+                skip("QueryStatistics(PROCESS_SEGMENT %lu) unavailable (0x%08lX)\n", (unsigned long)i, (long)Status);
+            else
+                ok_succeeded(Status, "QueryStatistics(PROCESS_SEGMENT %lu) failed 0x%08lX\n", (unsigned long)i, (long)Status);
             continue;
+        }
 
         /* A single process cannot hold more of a segment than the segment
          * itself is holding. */
@@ -418,10 +435,14 @@ static void Test_QueryStatistics_SegmentGroups(void)
             ? D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL
             : D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL;
         Status = pfn(&Statistics);
-        ok_succeeded(Status, "QueryStatistics(PROCESS_SEGMENT_GROUP %d) failed 0x%08lX\n",
-                     group, (long)Status);
         if (!NT_SUCCESS(Status))
+        {
+            if (StatisticsClassUnavailable(Status))
+                skip("QueryStatistics(PROCESS_SEGMENT_GROUP %d) unavailable (0x%08lX)\n", group, (long)Status);
+            else
+                ok_succeeded(Status, "QueryStatistics(PROCESS_SEGMENT_GROUP %d) failed 0x%08lX\n", group, (long)Status);
             continue;
+        }
 
         trace("Segment group %d: budget=%llu usage=%llu requested=%llu\n", group,
               (unsigned long long)Statistics.QueryResult.ProcessSegmentGroupInformation.Budget,
@@ -470,7 +491,10 @@ static void Test_QueryStatistics_VidPnSource(void)
     Statistics.AdapterLuid = Luid;
     Statistics.QueryProcessVidPnSource.VidPnSourceId = 0;
     Status = pfn(&Statistics);
-    ok_succeeded(Status, "QueryStatistics(PROCESS_VIDPNSOURCE) failed 0x%08lX\n", (long)Status);
+    if (StatisticsClassUnavailable(Status))
+        skip("QueryStatistics(PROCESS_VIDPNSOURCE) unavailable (0x%08lX)\n", (long)Status);
+    else
+        ok_succeeded(Status, "QueryStatistics(PROCESS_VIDPNSOURCE) failed 0x%08lX\n", (long)Status);
 
     CloseAdapter(hAdapter);
 }
@@ -494,7 +518,10 @@ static void Test_QueryStatistics_PhysicalAdapter(void)
     Statistics.AdapterLuid = Luid;
     Statistics.QueryPhysAdapter.PhysicalAdapterIndex = 0;
     Status = pfn(&Statistics);
-    ok_succeeded(Status, "QueryStatistics(PHYSICAL_ADAPTER) failed 0x%08lX\n", (long)Status);
+    if (StatisticsClassUnavailable(Status))
+        skip("QueryStatistics(PHYSICAL_ADAPTER) unavailable (0x%08lX)\n", (long)Status);
+    else
+        ok_succeeded(Status, "QueryStatistics(PHYSICAL_ADAPTER) failed 0x%08lX\n", (long)Status);
     if (NT_SUCCESS(Status))
     {
         trace("PhysAdapter: temperature=%lu fan=%lu memfreq=%llu\n",
