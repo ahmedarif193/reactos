@@ -1454,6 +1454,16 @@ PiInitializeDevNode(
 
     PiSetDevNodeFlag(DeviceNode, DNF_IDS_QUERIED);
 
+    /*
+     * Install a CriticalDeviceDatabase match before asking the bus driver for
+     * resource requirements. The CDDB entry can provision the device's
+     * Driver/Class key, including DDInstall.HW policy such as
+     * MSISupported. Querying first permanently caches requirements generated
+     * without that policy and can strand a message-capable device on legacy
+     * INTx during its first start.
+     */
+    IopInstallCriticalDevice(DeviceNode);
+
     // Set the device's DeviceDesc and LocationInformation fields
     PiSetDevNodeText(DeviceNode, InstanceKey);
 
@@ -1522,10 +1532,8 @@ PiInitializeDevNode(
         PiAssignContainerId(DeviceNode, InstanceKey);
     }
 
-    // Try installing a critical device, so its Service key is populated
-    // then call IopSetServiceEnumData to populate service's Enum key.
-    // That allows us to start devices during an early boot
-    IopInstallCriticalDevice(DeviceNode);
+    // The critical-device service was populated before querying resources;
+    // now publish its device instance in the service's Enum key.
     IopSetServiceEnumData(DeviceNode, InstanceKey);
 
     ZwClose(InstanceKey);
