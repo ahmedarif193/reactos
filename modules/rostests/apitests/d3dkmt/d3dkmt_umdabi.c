@@ -35,11 +35,9 @@ C_ASSERT(FIELD_OFFSET(D3DDDIARG_OPENADAPTER, hAdapter) == 0);
 static void Test_TableSlotCounts(void)
 {
     /*
-     * This ABI-freeze target is deliberately compiled at
-     * D3D_UMD_INTERFACE_VERSION_WDDM2_0, the current in-tree implementation
-     * ceiling.  Lower configured images compile their runtime and UMD at their
-     * exact shorter contract; higher images continue to advertise this 2.0
-     * table until their newer callback tails are implemented.
+     * This ABI-freeze test is compiled at the image's effective UMD version,
+     * exactly like d3dumdrt and the in-tree UMDs.  The WDDM 2.0 table prefix
+     * remains frozen at these counts through the current 0x6003 ceiling.
      */
     ok_eq_ulong((ULONG)UMD_DEVICEFUNC_SLOTS, 140UL);
     ok_eq_ulong((ULONG)UMD_DEVICECALLBACK_SLOTS, 50UL);
@@ -74,11 +72,7 @@ static void Test_EntrySurfaceShape(void)
     Open.DriverVersion = D3D_UMD_INTERFACE_VERSION;
     ok_eq_ulong((ULONG)D3D_UMD_INTERFACE_VERSION_WDDM2_0, 0x5002UL);
 
-    /*
-     * Report the compile-time contract as well as pinning its table shape.
-     * CMake selects 0x5002 specifically for this ABI-freeze test; runtime-load
-     * coverage separately receives the configured image's expected version.
-     */
+    /* Report the same compile-time contract used by the runtime and UMD. */
     trace("effective D3D_UMD_INTERFACE_VERSION = 0x%04X (WDDM2_0 = 0x%04X, WDDM3_2 = 0x%04X)\n",
           (unsigned)D3D_UMD_INTERFACE_VERSION,
           (unsigned)D3D_UMD_INTERFACE_VERSION_WDDM2_0,
