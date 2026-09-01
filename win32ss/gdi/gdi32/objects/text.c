@@ -11,6 +11,22 @@
 #define NDEBUG
 #include <debug.h>
 
+static BOOL
+is_simple_ltr_text(
+    _In_reads_opt_(count) LPCWSTR text,
+    _In_ UINT count)
+{
+    UINT i;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (text[i] > 0x7f)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
 /*
  * @implemented
  */
@@ -296,6 +312,10 @@ GetTextExtentExPointW(
         DPRINT("nMaxExtent is invalid: %d\n", nMaxExtent);
     }
 
+    if (cchString >= 0 && is_simple_ltr_text(lpszString, cchString))
+        return GetTextExtentExPointWPri(hdc, lpszString, cchString, nMaxExtent,
+                                       lpnFit, lpnDx, lpSize);
+
     if (LoadLPK(LPK_GTEP))
         return LpkGetTextExtentExPoint(hdc, lpszString, cchString, nMaxExtent, lpnFit, lpnDx, lpSize, 0, 0);
 
@@ -533,7 +553,15 @@ ExtTextOutW(
 
     if ( GdiConvertAndCheckDC(hdc) == NULL ) return FALSE;
 
-    if (!(fuOptions & (ETO_GLYPH_INDEX | ETO_IGNORELANGUAGE)))
+    /* LPK is needed for bidirectional and complex-script processing. Plain
+       ASCII in a left-to-right DC can go directly through the native GDI
+       batch without changing the rendered glyph sequence. */
+    pdcattr = GdiGetDcAttr(hdc);
+    if (!(fuOptions & (ETO_GLYPH_INDEX | ETO_IGNORELANGUAGE)) &&
+        (!pdcattr ||
+         (pdcattr->dwLayout & LAYOUT_RTL) ||
+         (pdcattr->lTextAlign & TA_RTLREADING) ||
+         !is_simple_ltr_text(lpString, cwc)))
     {
         bBypassETOWMF = TRUE;
 
@@ -546,7 +574,6 @@ ExtTextOutW(
     }
 
     /* Get the DC attribute */
-    pdcattr = GdiGetDcAttr(hdc);
     if ( pdcattr &&
          !(pdcattr->ulDirty_ & DC_DIBSECTION) &&
          !(pdcattr->lTextAlign & TA_UPDATECP))
