@@ -63,7 +63,7 @@ list(APPEND SOURCE
     dwrite_2.idl
     dwrite_3.idl
     dvdif.idl
-    dxgiformat.idl
+#   dxgiformat.idl (dxgiformat.h is a checked-in shared header consumed directly)
 #   dyngraph.idl
     emptyvc.idl
     endpointvolume.idl
@@ -330,7 +330,7 @@ add_idl_headers(d3d_idl_headers
     dxgi1_4.idl
     dxgi1_5.idl
     dxgi1_6.idl
-    dxgicommon.idl
+#   dxgicommon.idl (dxgicommon.h is a checked-in shared header consumed directly)
     dxgidebug.idl
     dxva2api.idl
     dxvahd.idl
