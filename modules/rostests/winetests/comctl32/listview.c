@@ -7360,6 +7360,70 @@ static void test_list_explicit_width(void)
     DestroyWindow(hwnd);
 }
 
+static void test_list_deferred_width(void)
+{
+    enum { item_count = 64 };
+    static char direct_text[] = "direct item with a deliberately wide label";
+    LVITEMA item = {0};
+    HWND hwnd;
+    LRESULT ret;
+    int default_width, width, i;
+
+    hwnd = create_listview_control(LVS_LIST);
+    ok(hwnd != NULL, "failed to create a listview window\n");
+
+    default_width = SendMessageA(hwnd, LVM_GETCOLUMNWIDTH, 0, 0);
+    SendMessageA(hwnd, WM_SETREDRAW, FALSE, 0);
+    item.mask = LVIF_TEXT;
+    item.pszText = LPSTR_TEXTCALLBACKA;
+    g_dispinfo_count = 0;
+    for (i = 0; i < item_count; ++i)
+    {
+        item.iItem = i;
+        ret = SendMessageA(hwnd, LVM_INSERTITEMA, 0, (LPARAM)&item);
+        ok(ret == i, "failed to insert item %d, got %Id\n", i, ret);
+    }
+    ok(!g_dispinfo_count, "insertion requested %u item labels\n",
+       g_dispinfo_count);
+    width = SendMessageA(hwnd, LVM_GETCOLUMNWIDTH, 0, 0);
+    ok(width == default_width, "expected width %d, got %d\n",
+       default_width, width);
+
+    SendMessageA(hwnd, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(hwnd, NULL, TRUE);
+    UpdateWindow(hwnd);
+    ok(g_dispinfo_count >= item_count,
+       "paint requested only %u of %u item labels\n",
+       g_dispinfo_count, item_count);
+
+    DestroyWindow(hwnd);
+
+    hwnd = create_listview_control(LVS_LIST);
+    ok(hwnd != NULL, "failed to create a listview window\n");
+
+    default_width = SendMessageA(hwnd, LVM_GETCOLUMNWIDTH, 0, 0);
+    SendMessageA(hwnd, WM_SETREDRAW, FALSE, 0);
+    item.pszText = direct_text;
+    for (i = 0; i < item_count; ++i)
+    {
+        item.iItem = i;
+        ret = SendMessageA(hwnd, LVM_INSERTITEMA, 0, (LPARAM)&item);
+        ok(ret == i, "failed to insert item %d, got %Id\n", i, ret);
+    }
+    width = SendMessageA(hwnd, LVM_GETCOLUMNWIDTH, 0, 0);
+    ok(width == default_width, "expected width %d, got %d\n",
+       default_width, width);
+
+    SendMessageA(hwnd, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(hwnd, NULL, TRUE);
+    UpdateWindow(hwnd);
+    width = SendMessageA(hwnd, LVM_GETCOLUMNWIDTH, 0, 0);
+    ok(width > default_width, "expected width greater than %d, got %d\n",
+       default_width, width);
+
+    DestroyWindow(hwnd);
+}
+
 static void test_LVN_ENDLABELEDIT(void)
 {
     WCHAR text[] = {'l','a','l','a',0};
@@ -7898,6 +7962,7 @@ START_TEST(listview)
     test_callback_mask();
     test_state_image();
     test_LVSCW_AUTOSIZE();
+    test_list_deferred_width();
     test_list_explicit_width();
     test_LVN_ENDLABELEDIT();
     test_LVM_GETCOUNTPERPAGE();
@@ -7950,6 +8015,7 @@ START_TEST(listview)
     test_oneclickactivate();
     test_state_image();
     test_LVSCW_AUTOSIZE();
+    test_list_deferred_width();
     test_list_explicit_width();
     test_LVN_ENDLABELEDIT();
     test_LVM_GETCOUNTPERPAGE();
