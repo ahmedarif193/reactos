@@ -1504,7 +1504,7 @@
 #@ stdcall SetProcessPreferredUILanguages(long ptr ptr)
 #@ stdcall SetProcessPriorityBoost(long long)
 #@ stdcall SetProcessShutdownParameters(long long)
-# #@ stub SetProcessValidCallTargets
+@ stdcall SetProcessValidCallTargets(long ptr long long ptr) kernel32.SetProcessValidCallTargets
 #@ stdcall SetProcessWorkingSetSizeEx(long long long long)
 # #@ stub SetProtectedPolicy
 # #@ stub SetRoamingLastObservedChangeTime
