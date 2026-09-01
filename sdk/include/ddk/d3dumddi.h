@@ -3063,6 +3063,20 @@ typedef struct _DXVADDI_VIDEODESC
     UINT                   Reserved;
 } DXVADDI_VIDEODESC;
 
+typedef struct _DXVADDI_DECODEINPUT
+{
+    CONST GUID*       pGuid;
+    DXVADDI_VIDEODESC VideoDesc;
+} DXVADDI_DECODEINPUT;
+
+typedef struct _DXVADDI_DECODEBUFFERINFO
+{
+    D3DDDIFORMAT CompressedBufferType;
+    UINT         CreationWidth;
+    UINT         CreationHeight;
+    D3DDDI_POOL  CreationPool;
+} DXVADDI_DECODEBUFFERINFO;
+
 typedef struct _DXVADDI_VIDEOSAMPLE
 {
     REFERENCE_TIME          Start;
