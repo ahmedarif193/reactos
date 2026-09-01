@@ -78,8 +78,8 @@ struct LISTVIEW_SORT_INFO
 // For the context menu of the def view, the id of the items are based on 1 because we need
 // to call TrackPopupMenu and let it use the 0 value as an indication that the menu was canceled
 #define CONTEXT_MENU_BASE_ID 1
-#define DEFVIEW_ENUM_BATCH_ITEMS 16
-#define DEFVIEW_ENUM_BATCH_MS 4
+#define DEFVIEW_ENUM_BATCH_ITEMS 8
+#define DEFVIEW_ENUM_BATCH_MS 2
 
 struct PERSISTCOLUMNS
 {
@@ -1386,6 +1386,7 @@ int CDefView::LV_FindItemByPidl(PCUITEMID_CHILD pidl)
 
 int CDefView::LV_AddItem(PCUITEMID_CHILD pidl)
 {
+    WCHAR text[MAX_PATH];
     LVITEMW lvItem;
 
     TRACE("(%p)(pidl=%p)\n", this, pidl);
@@ -1400,7 +1401,21 @@ int CDefView::LV_AddItem(PCUITEMID_CHILD pidl)
     lvItem.iSubItem = 0;
     lvItem.lParam = reinterpret_cast<LPARAM>(ILClone(pidl)); // set item's data
     lvItem.pszText = LPSTR_TEXTCALLBACKW;                 // get text on a callback basis
-    lvItem.iImage = I_IMAGECALLBACK;                      // get image on a callback basis
+    /* List mode measures every callback label before its first paint. Resolve
+       labels while the enumeration is already split into bounded batches. */
+    if (m_FolderSettings.ViewMode == FVM_LIST)
+    {
+        SHELLDETAILS details;
+
+        if (SUCCEEDED(GetDetailsByListColumn(pidl, 0, details)) &&
+            SUCCEEDED(StrRetToBufW(&details.str, pidl, text, _countof(text))))
+        {
+            lvItem.pszText = text;
+        }
+    }
+    /* Image lookup can enter the shell namespace. Keep that work out of the
+       first visible paint and inside the bounded enumeration batches. */
+    lvItem.iImage = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidl, 0);
     lvItem.stateMask = LVIS_CUT;
     if (m_HasCutItems)
     {
@@ -1624,6 +1639,10 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
     {
         m_ListView.SetRedraw(TRUE);
         m_ListView.InvalidateRect(NULL, FALSE);
+        /* Posted continuation messages run before WM_PAINT. Make the first
+           batch visible instead of leaving an empty view until enumeration. */
+        if ((ULONG)m_ListView.GetItemCount() <= BatchCount)
+            m_ListView.UpdateWindow();
     }
 
     if (Generation != m_FillListGeneration || m_Destroyed || !m_ListView)
