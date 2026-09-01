@@ -176,9 +176,9 @@ static VOID TestInterfaceSelectorNormalization(VOID)
     ok_bool_true(DxgkCapsCoreInterfaceVersionPermitted(
         0x5022, DXGK_CAPS_CORE_LEVEL_WDDM_2_0),
         "historical selector at configured level");
-    ok_bool_true(DxgkCapsCoreInterfaceVersionPermitted(
+    ok_bool_false(DxgkCapsCoreInterfaceVersionPermitted(
         0x4003, DXGK_CAPS_CORE_LEVEL_WDDM_2_0),
-        "known selector below configured level");
+        "pre-WDDM 2 selector is outside the Win11 profile");
     ok_bool_false(DxgkCapsCoreInterfaceVersionPermitted(
         0x6003, DXGK_CAPS_CORE_LEVEL_WDDM_2_0),
         "known selector above configured level");
