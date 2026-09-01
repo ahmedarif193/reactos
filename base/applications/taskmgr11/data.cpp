@@ -176,9 +176,6 @@ struct SensorTelemetryDevice
 static Vec<SensorTelemetryDevice> s_sensorTelemetryDevices;
 
 /* network deltas */
-static DWORD s_netIfIndex = (DWORD)-1;
-static DWORD s_prevNetIn, s_prevNetOut;
-static int   s_netInfoAge = 999;
 static PMIB_IFTABLE s_netTable;
 static ULONG s_netTableSize;
 static BOOL  s_wsaStarted;
@@ -2475,14 +2472,14 @@ static const WCHAR* NetworkTypeName(DWORD type)
     }
 }
 
-static void RefreshNetworkMetadata(const MIB_IFROW* row)
+static void RefreshNetworkMetadata(const MIB_IFROW* row, NetSnapshot* net)
 {
-    StringCchCopyW(g.netType, _countof(g.netType), NetworkTypeName(row->dwType));
-    g.netLinkBps = row->dwSpeed;
-    g.netIpv4[0] = 0;
-    g.netIpv6[0] = 0;
-    g.netDns[0] = 0;
-    g.netName[0] = 0;
+    StringCchCopyW(net->type, _countof(net->type), NetworkTypeName(row->dwType));
+    net->linkBps = row->dwSpeed;
+    net->ipv4[0] = 0;
+    net->ipv6[0] = 0;
+    net->dns[0] = 0;
+    net->name[0] = 0;
 
     ULONG size = 0;
     ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
@@ -2503,15 +2500,15 @@ static void RefreshNetworkMetadata(const MIB_IFROW* row)
                     continue;
 
                 if (adapter->FriendlyName && adapter->FriendlyName[0])
-                    StringCchCopyW(g.netName, _countof(g.netName), adapter->FriendlyName);
+                    StringCchCopyW(net->name, _countof(net->name), adapter->FriendlyName);
                 if (adapter->Description && adapter->Description[0])
-                    StringCchCopyW(g.netAdapter, _countof(g.netAdapter), adapter->Description);
+                    StringCchCopyW(net->adapter, _countof(net->adapter), adapter->Description);
                 if (adapter->DnsSuffix && adapter->DnsSuffix[0])
-                    StringCchCopyW(g.netDns, _countof(g.netDns), adapter->DnsSuffix);
+                    StringCchCopyW(net->dns, _countof(net->dns), adapter->DnsSuffix);
                 if (adapter->Length >= FIELD_OFFSET(IP_ADAPTER_ADDRESSES, ReceiveLinkSpeed) +
                                        sizeof(adapter->ReceiveLinkSpeed))
                 {
-                    g.netLinkBps = adapter->ReceiveLinkSpeed > adapter->TransmitLinkSpeed ?
+                    net->linkBps = adapter->ReceiveLinkSpeed > adapter->TransmitLinkSpeed ?
                                    adapter->ReceiveLinkSpeed : adapter->TransmitLinkSpeed;
                 }
 
@@ -2521,13 +2518,13 @@ static void RefreshNetworkMetadata(const MIB_IFROW* row)
                     SOCKADDR* socketAddress = address->Address.lpSockaddr;
                     if (!socketAddress)
                         continue;
-                    if (socketAddress->sa_family == AF_INET && !g.netIpv4[0])
+                    if (socketAddress->sa_family == AF_INET && !net->ipv4[0])
                     {
                         SOCKADDR_IN* ipv4 = (SOCKADDR_IN*)socketAddress;
                         InetNtopW(AF_INET, &ipv4->sin_addr,
-                                  g.netIpv4, _countof(g.netIpv4));
+                                  net->ipv4, _countof(net->ipv4));
                     }
-                    else if (socketAddress->sa_family == AF_INET6 && !g.netIpv6[0])
+                    else if (socketAddress->sa_family == AF_INET6 && !net->ipv6[0])
                     {
                         SOCKADDR_IN6* ipv6 = (SOCKADDR_IN6*)socketAddress;
                         WCHAR addressText[64];
@@ -2535,11 +2532,11 @@ static void RefreshNetworkMetadata(const MIB_IFROW* row)
                                      addressText, _countof(addressText)))
                         {
                             if (ipv6->sin6_scope_id)
-                                StringCchPrintfW(g.netIpv6, _countof(g.netIpv6),
+                                StringCchPrintfW(net->ipv6, _countof(net->ipv6),
                                                  L"%s%%%lu", addressText,
                                                  ipv6->sin6_scope_id);
                             else
-                                StringCchCopyW(g.netIpv6, _countof(g.netIpv6), addressText);
+                                StringCchCopyW(net->ipv6, _countof(net->ipv6), addressText);
                         }
                     }
                 }
@@ -2550,7 +2547,7 @@ static void RefreshNetworkMetadata(const MIB_IFROW* row)
             HeapFree(GetProcessHeap(), 0, addresses);
     }
 
-    if (!g.netAdapter[0])
+    if (!net->adapter[0])
     {
         int descriptionLength = row->dwDescrLen;
         if (descriptionLength > MAXLEN_IFDESCR)
@@ -2558,18 +2555,18 @@ static void RefreshNetworkMetadata(const MIB_IFROW* row)
         int converted = MultiByteToWideChar(CP_ACP, 0,
                                              (const char*)row->bDescr,
                                              descriptionLength,
-                                             g.netAdapter,
-                                             _countof(g.netAdapter) - 1);
+                                             net->adapter,
+                                             _countof(net->adapter) - 1);
         if (converted > 0)
-            g.netAdapter[converted] = 0;
+            net->adapter[converted] = 0;
     }
-    if (!g.netName[0])
-        StringCchCopyW(g.netName, _countof(g.netName), g.netType);
+    if (!net->name[0])
+        StringCchCopyW(net->name, _countof(net->name), net->type);
 
-    if (!g.netDns[0])
+    if (!net->dns[0])
     {
-        DWORD count = _countof(g.netDns);
-        GetComputerNameExW(ComputerNameDnsFullyQualified, g.netDns, &count);
+        DWORD count = _countof(net->dns);
+        GetComputerNameExW(ComputerNameDnsFullyQualified, net->dns, &count);
     }
 }
 
@@ -2751,6 +2748,7 @@ void Init(void)
     DetectCpuTopology();
     DetectMemoryDevices();
     DetectDisks();
+    GpuInit();
 
     RefreshServices();
     RefreshStartup();
@@ -2760,6 +2758,7 @@ void Init(void)
 
 void Shutdown(void)
 {
+    GpuShutdown();
     SaveAppHistory();
     DestroyAppHistory();
     ShutdownTelemetry();
@@ -3364,79 +3363,95 @@ void Tick(void)
         if (g.disks[i].writeBps < 0) g.disks[i].writeBps = 0;
     }
 
+    /* ---- gpu ---- */
+    GpuTick();
+
     /* ---- network ---- */
     {
-        g.netPresent = FALSE;
-        g.netConnected = FALSE;
-        MIB_IFROW selected;
-        ZeroMemory(&selected, sizeof(selected));
-        MIB_IFROW* best = NULL;
+        /*
+         * Every adapter is listed, connected or not.  Each keeps its slot
+         * across ticks by interface index so its history and its previous
+         * octet counters stay with the adapter they belong to; an adapter
+         * that disappears takes its slot with it rather than shifting the
+         * next one's samples onto itself.
+         */
+        NetSnapshot previous[TM_MAX_NICS];
+        int previousCount = g.netCount;
+        int count = 0;
+        PMIB_IFTABLE table;
 
-        /* Once selected, query only that interface. Re-enumerate when it is
-           unavailable or disconnected so another connected adapter can win. */
-        if (s_netIfIndex != (DWORD)-1)
-        {
-            selected.dwIndex = s_netIfIndex;
-            if (GetIfEntry(&selected) == NO_ERROR &&
-                selected.dwOperStatus >= IF_OPER_STATUS_CONNECTED)
-                best = &selected;
-        }
+        CopyMemory(previous, g.nets, sizeof(previous));
+        ZeroMemory(g.nets, sizeof(g.nets));
+        g.netRecvBps = 0;
+        g.netSendBps = 0;
 
-        if (!best)
+        table = QueryNetworkTable();
+        if (table)
         {
-            PMIB_IFTABLE table = QueryNetworkTable();
-            if (table)
+            for (DWORD i = 0; i < table->dwNumEntries && count < TM_MAX_NICS; i++)
             {
-                for (DWORD i = 0; i < table->dwNumEntries; i++)
+                MIB_IFROW* row = &table->table[i];
+                NetSnapshot* net;
+                int slot = -1;
+
+                /* Loopback and tunnels are not adapters anyone throttles or
+                 * watches; Windows leaves them off this page too. */
+                if (row->dwType == MIB_IF_TYPE_LOOPBACK ||
+                    row->dwType == IF_TYPE_TUNNEL)
+                    continue;
+
+                net = &g.nets[count++];
+                for (int j = 0; j < previousCount; j++)
                 {
-                    MIB_IFROW* row = &table->table[i];
-                    if (row->dwType == MIB_IF_TYPE_LOOPBACK) continue;
-                    BOOL connected = row->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
-                    BOOL bestConnected = best &&
-                        best->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
-                    if (s_netIfIndex == row->dwIndex && connected)
+                    if (previous[j].present && previous[j].ifIndex == row->dwIndex)
                     {
-                        best = row;
+                        slot = j;
                         break;
                     }
-                    if (!best || (connected && !bestConnected) ||
-                        (connected == bestConnected &&
-                         (row->dwInOctets + row->dwOutOctets) >
-                         (best->dwInOctets + best->dwOutOctets)))
-                        best = row;
+                }
+                if (slot >= 0)
+                    *net = previous[slot];
+                else
+                    net->metadataAge = 999;
+
+                net->ifIndex = row->dwIndex;
+                net->present = TRUE;
+                net->connected = row->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
+                if (slot < 0)
+                {
+                    net->prevIn = row->dwInOctets;
+                    net->prevOut = row->dwOutOctets;
+                }
+
+                {
+                    /* Unsigned arithmetic gives the right delta across the
+                     * 32-bit counter wrap these rows still use. */
+                    DWORD deltaIn = row->dwInOctets - net->prevIn;
+                    DWORD deltaOut = row->dwOutOctets - net->prevOut;
+
+                    net->recvBps = deltaIn / dt;
+                    net->sendBps = deltaOut / dt;
+                    net->prevIn = row->dwInOctets;
+                    net->prevOut = row->dwOutOctets;
+                }
+                if (!net->connected)
+                {
+                    net->recvBps = 0;
+                    net->sendBps = 0;
+                }
+                net->hRecv.Push((float)net->recvBps);
+                net->hSend.Push((float)net->sendBps);
+                g.netRecvBps += net->recvBps;
+                g.netSendBps += net->sendBps;
+
+                if (++net->metadataAge > 30)
+                {
+                    net->metadataAge = 0;
+                    RefreshNetworkMetadata(row, net);
                 }
             }
         }
-
-        if (best)
-        {
-            if (s_netIfIndex != best->dwIndex)
-            {
-                s_netIfIndex = best->dwIndex;
-                s_prevNetIn = best->dwInOctets;
-                s_prevNetOut = best->dwOutOctets;
-                s_netInfoAge = 999;
-            }
-            DWORD dIn = best->dwInOctets - s_prevNetIn;    /* wraps ok (unsigned) */
-            DWORD dOut = best->dwOutOctets - s_prevNetOut;
-            g.netRecvBps = dIn / dt;
-            g.netSendBps = dOut / dt;
-            s_prevNetIn = best->dwInOctets;
-            s_prevNetOut = best->dwOutOctets;
-            g.netPresent = TRUE;
-            g.netConnected = best->dwOperStatus >= IF_OPER_STATUS_CONNECTED;
-
-            if (++s_netInfoAge > 30)
-            {
-                s_netInfoAge = 0;
-                RefreshNetworkMetadata(best);
-            }
-        }
-        if (!g.netPresent)
-        {
-            g.netRecvBps = 0;
-            g.netSendBps = 0;
-        }
+        g.netCount = count;
     }
 
     /* ---- window map ---- */
@@ -3698,9 +3713,6 @@ void Tick(void)
         if (disk->perfValid)
             disk->hActive.Push((float)disk->activePct);
     }
-    g.hNetRecv.Push((float)g.netRecvBps);
-    g.hNetSend.Push((float)g.netSendBps);
-
     DWORD tick = GetTickCount();
     if (s_appHistDirty && tick - s_appHistLastSave >= 60000)
     {

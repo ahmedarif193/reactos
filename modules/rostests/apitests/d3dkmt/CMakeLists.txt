@@ -63,6 +63,7 @@ list(APPEND SOURCE
     d3dkmt_cle.c
     d3dkmt_v3dsmoke.c
     d3dkmt_parity.c
+    d3dkmt_gpustats.c
     vidmm_test.c
     present_test.c
     dwm_test.c

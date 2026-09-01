@@ -623,6 +623,31 @@ DxgkVidMmQuerySegmentSizes(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _Inout_ D3DKMT_SEGMENTGROUPSIZEINFO *Info);
 
+/*
+ * D3DKMTQueryStatistics support.  SegmentIndex is the zero-based index the
+ * public query uses, not the one-based WDDM segment id a placement records.
+ *
+ * IRQL: PASSIVE_LEVEL
+ */
+NTSTATUS
+DxgkVidMmQuerySegmentStatistics(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SegmentIndex,
+    _Out_ D3DKMT_QUERYSTATISTICS_SEGMENT_INFORMATION *Information);
+
+NTSTATUS
+DxgkVidMmQueryProcessSegmentStatistics(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _In_ ULONG SegmentIndex,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT_INFORMATION *Information);
+
+NTSTATUS
+DxgkVidMmQueryProcessMemoryStatistics(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _Out_ D3DKMT_QUERYSTATISTICS_SYSTEM_MEMORY *SystemMemory);
+
 NTSTATUS
 DxgkVidMmSubmitAperturePagingPacket(
     _In_ PDXGKRNL_ADAPTER Adapter,

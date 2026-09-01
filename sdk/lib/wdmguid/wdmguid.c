@@ -18,6 +18,17 @@ DEFINE_GUID(GUID_DEVINTERFACE_PARTITION,
   0x53f5630aL, 0xb6bf, 0x11d0, 0x94, 0xf2, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b);
 
 /*
+ * Display device interfaces, declared by <ntddvdeo.h>.  Both are needed to
+ * find a display adapter's devnode from user mode: the arrival interface is
+ * the one a WDDM display port registers, and the adapter interface is the
+ * older name a legacy miniport registers.
+ */
+DEFINE_GUID(GUID_DISPLAY_DEVICE_ARRIVAL,
+  0x1ca05180L, 0xa699, 0x450a, 0x9a, 0x0c, 0xde, 0x4f, 0xbe, 0x3d, 0xdd, 0x89);
+DEFINE_GUID(GUID_DEVINTERFACE_DISPLAY_ADAPTER,
+  0x5b45201dL, 0xf2f2, 0x4f3b, 0x85, 0xbb, 0x30, 0xff, 0x1f, 0x95, 0x35, 0x99);
+
+/*
  * ACPI/PCI device interface. Mirrored from
  * <reactos/drivers/acpi/acpipci.h> here to give every driver that links
  * wdmguid a real definition of GUID_ACPI_PCI_INTERFACE. Without this,

@@ -85,6 +85,7 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkHandleTable.c
     directx/DxgkAdapterCaps.c
     directx/DxgkNodeAffinity.c
+    directx/DxgkNodeStatistics.c
     directx/DxgkTdrPolicy.c
     directx/DxgkKeyedMutex.c
     directx/DxgkFenceConcurrency.c
@@ -249,6 +250,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/adapter_map_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/adapter_start_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/fence_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/node_stats_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/dma_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/residency_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/paging_core.c

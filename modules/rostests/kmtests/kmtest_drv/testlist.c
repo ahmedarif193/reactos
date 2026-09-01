@@ -31,6 +31,7 @@ KMT_TESTFUNC Test_DxgkFlipQueue;
 KMT_TESTFUNC Test_DxgkHandleTable;
 KMT_TESTFUNC Test_DxgkAdapterCaps;
 KMT_TESTFUNC Test_DxgkNodeAffinity;
+KMT_TESTFUNC Test_DxgkNodeStatistics;
 KMT_TESTFUNC Test_DxgkTdrPolicy;
 KMT_TESTFUNC Test_DxgkFenceConcurrency;
 KMT_TESTFUNC Test_DxgkGpuFaultPolicy;
@@ -309,6 +310,7 @@ const KMT_TEST TestList[] =
     { "DxgkHandleTable",                    Test_DxgkHandleTable },
     { "DxgkAdapterCaps",                    Test_DxgkAdapterCaps },
     { "DxgkNodeAffinity",                   Test_DxgkNodeAffinity },
+    { "DxgkNodeStatistics",                 Test_DxgkNodeStatistics },
     { "DxgkTdrPolicy",                      Test_DxgkTdrPolicy },
     { "DxgkFenceConcurrency",               Test_DxgkFenceConcurrency },
     { "DxgkGpuFaultPolicy",                 Test_DxgkGpuFaultPolicy },

@@ -31,6 +31,7 @@ list(APPEND SOURCE
     gpuva.c
     gpuva_core.c
     fence_core.c
+    node_stats_core.c
     dma_core.c
     residency_core.c
     paging_core.c

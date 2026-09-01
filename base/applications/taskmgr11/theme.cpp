@@ -132,6 +132,7 @@ void Theme_Apply(BOOL dark, int dpi)
         g_t.graph[GR_MEM]  = RGB(0x8A, 0x51, 0xBF);
         g_t.graph[GR_DISK] = RGB(0x3E, 0x8E, 0x3E);
         g_t.graph[GR_NET]  = RGB(0xC0, 0x68, 0x21);
+        g_t.graph[GR_GPU]  = RGB(0x74, 0x3F, 0x9E);
     }
     else
     {
@@ -163,6 +164,7 @@ void Theme_Apply(BOOL dark, int dpi)
         g_t.graph[GR_MEM]  = RGB(0xB5, 0x86, 0xF0);
         g_t.graph[GR_DISK] = RGB(0x6C, 0xCB, 0x5F);
         g_t.graph[GR_NET]  = RGB(0xE8, 0x97, 0x5C);
+        g_t.graph[GR_GPU]  = RGB(0xC4, 0x8A, 0xEF);
     }
 
     const WCHAR* face = PickFace();

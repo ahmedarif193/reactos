@@ -2337,6 +2337,10 @@ DxgkpQueryAdapterInfoMinimumLevel(
         case KMTQAITYPE_ADAPTERREGISTRYINFO_RENDER:
         case KMTQAITYPE_WDDM_1_2_CAPS_RENDER:
         case KMTQAITYPE_WDDM_1_3_CAPS_RENDER:
+        case KMTQAITYPE_NODEPERFDATA:
+        case KMTQAITYPE_ADAPTERPERFDATA:
+        case KMTQAITYPE_ADAPTERPERFDATA_CAPS:
+        case KMTQUITYPE_GPUVERSION:
             *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_2_4;
             return TRUE;
 
@@ -2361,6 +2365,75 @@ DxgkpQueryAdapterInfoMinimumLevel(
             *MinimumLevel = 0;
             return FALSE;
     }
+}
+
+/*
+ * Largest performance-data structure passed to DxgkDdiQueryAdapterInfo.
+ * D3DKMT_GPUVERSION is the biggest of them at two 32-character strings.
+ */
+#define DXGKP_PERFDATA_QUERY_MAX_SIZE 256
+
+/* Defined with the rest of the statistics surface below; both the adapter
+ * info classes and D3DKMTQueryStatistics reach the miniport through it. */
+static NTSTATUS
+DxgkpQueryMiniportPerfData(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_QUERYADAPTERINFOTYPE Type,
+    _Inout_updates_bytes_(DataSize) PVOID Data,
+    _In_ ULONG DataSize);
+
+/*
+ * The performance-data classes are a straight pass-through to the miniport:
+ * dxgkrnl knows nothing about a GPU's temperature, fan or clocks, so a
+ * driver that does not answer must be reported as not answering.  Inventing
+ * a zero here would read to a caller as a GPU running at absolute zero with
+ * a stopped fan, which is why the miniport's refusal is propagated intact.
+ */
+static NTSTATUS
+DxgkpQueryAdapterPerfDataClass(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_QUERYADAPTERINFOTYPE MiniportType,
+    _In_ CONST D3DKMT_QUERYADAPTERINFO *pQueryAdapterInfo,
+    _In_ ULONG StructureSize)
+{
+    UCHAR Buffer[DXGKP_PERFDATA_QUERY_MAX_SIZE];
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+        pQueryAdapterInfo->PrivateDriverDataSize < StructureSize)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if (StructureSize > sizeof(Buffer))
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Buffer, sizeof(Buffer));
+    _SEH2_TRY
+    {
+        RtlCopyMemory(Buffer, pQueryAdapterInfo->pPrivateDriverData, StructureSize);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    Status = DxgkpQueryMiniportPerfData(Adapter, MiniportType, Buffer, StructureSize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    _SEH2_TRY
+    {
+        RtlCopyMemory(pQueryAdapterInfo->pPrivateDriverData, Buffer, StructureSize);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS
@@ -2967,6 +3040,54 @@ DxgkpQueryAdapterInfoCaptured(
             _SEH2_END;
             DXGKP_QUERY_RETURN(STATUS_SUCCESS);
         }
+
+        case KMTQAITYPE_NODEPERFDATA:
+        {
+            D3DKMT_NODE_PERFDATA Request;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(Request))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+            _SEH2_TRY
+            {
+                Request = *(D3DKMT_NODE_PERFDATA *)pQueryAdapterInfo->pPrivateDriverData;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                DXGKP_QUERY_RETURN(_SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+            /* Bound the selector here: the miniport is entitled to assume it
+             * names a node the adapter actually reported. */
+            if (Request.NodeOrdinal >= Adapter->NodeCount ||
+                Request.PhysicalAdapterIndex != 0)
+            {
+                DXGKP_QUERY_RETURN(STATUS_INVALID_PARAMETER);
+            }
+            DXGKP_QUERY_RETURN(
+                DxgkpQueryAdapterPerfDataClass(Adapter, DXGKQAITYPE_NODEPERFDATA,
+                                               pQueryAdapterInfo, sizeof(Request)));
+        }
+
+        case KMTQAITYPE_ADAPTERPERFDATA:
+            DXGKP_QUERY_RETURN(
+                DxgkpQueryAdapterPerfDataClass(Adapter, DXGKQAITYPE_ADAPTERPERFDATA,
+                                               pQueryAdapterInfo,
+                                               sizeof(D3DKMT_ADAPTER_PERFDATA)));
+
+        case KMTQAITYPE_ADAPTERPERFDATA_CAPS:
+            DXGKP_QUERY_RETURN(
+                DxgkpQueryAdapterPerfDataClass(Adapter, DXGKQAITYPE_ADAPTERPERFDATA_CAPS,
+                                               pQueryAdapterInfo,
+                                               sizeof(D3DKMT_ADAPTER_PERFDATACAPS)));
+
+        case KMTQUITYPE_GPUVERSION:
+            DXGKP_QUERY_RETURN(
+                DxgkpQueryAdapterPerfDataClass(Adapter, DXGKQAITYPE_GPUVERSION,
+                                               pQueryAdapterInfo,
+                                               sizeof(D3DKMT_GPUVERSION)));
 
         /*
          * Bus location, taken from the PDO rather than invented.  A caller uses
@@ -5045,26 +5166,350 @@ DxgkQueryAllocationResidency(
 /* ========================================================================
  * DxgkQueryStatistics — D3DKMTQueryStatistics
  *
- * Only the VidPn-source frame counters are answered: Frame is every present
- * that reached the scan-out on that source (blt and flip, which is what the
- * Windows documentation says the field counts) and QueuedPresent is the
- * present queue depth. Every other query class stays STATUS_NOT_SUPPORTED
- * rather than reporting zeros that a caller would read as real data.
+ * Every query class answers from the component that owns the number, never
+ * from a copy kept here: segment occupancy comes from the video-memory
+ * owner, node busy time from the scheduler's accounting, per-process memory
+ * from the budget ledger, and the physical-adapter performance data from the
+ * miniport.  A class whose number nothing in this tree produces reports zero
+ * rather than an invented value, and says so where it does.
  *
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
+
+/*
+ * One DxgkDdiQueryAdapterInfo call for the performance-data classes.
+ *
+ * These classes carry their selector — physical adapter index, node ordinal —
+ * inside the very structure the miniport fills in.  A driver written to the
+ * input-buffer convention reads that selector from pInputData and one written
+ * to the in/out convention reads it from pOutputData, so both are presented,
+ * from separate storage: aliasing the two would let a driver that clears its
+ * output first destroy the selector it is about to be asked about.
+ */
+static NTSTATUS
+DxgkpQueryMiniportPerfData(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_QUERYADAPTERINFOTYPE Type,
+    _Inout_updates_bytes_(DataSize) PVOID Data,
+    _In_ ULONG DataSize)
+{
+    PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
+    DXGKARG_QUERYADAPTERINFO QueryArgs;
+    UCHAR Selector[DXGKP_PERFDATA_QUERY_MAX_SIZE];
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Adapter->MiniportContext == NULL ||
+        Data == NULL || DataSize == 0 || DataSize > sizeof(Selector))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    PfnQueryAdapterInfo = DXGK_CB(Adapter, DxgkDdiQueryAdapterInfo);
+    if (PfnQueryAdapterInfo == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    RtlZeroMemory(Selector, sizeof(Selector));
+    RtlCopyMemory(Selector, Data, DataSize);
+
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+
+    RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
+    QueryArgs.Type = Type;
+    QueryArgs.pInputData = Selector;
+    QueryArgs.InputDataSize = DataSize;
+    QueryArgs.pOutputData = Data;
+    QueryArgs.OutputDataSize = DataSize;
+
+    _SEH2_TRY
+    {
+        Status = PfnQueryAdapterInfo(Adapter->MiniportDeviceContext, &QueryArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    DxgkReleaseKmdCall(Adapter);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpQueryStatisticsAdapter(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ D3DKMT_QUERYSTATISTICS_ADAPTER_INFORMATION *Information)
+{
+    PAGED_CODE();
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    Information->NbSegments = Adapter->SegmentCount;
+    Information->NodeCount = Adapter->NodeCount;
+    Information->VidPnSourceCount = Adapter->NumberOfVideoPresentSources;
+    Information->VSyncEnabled =
+        (ULONG)InterlockedCompareExchange(&Adapter->VsyncInterruptEnabled, 0, 0);
+    Information->TdrDetectedCount =
+        (ULONG)InterlockedCompareExchange(&Adapter->TdrDetectedCount, 0, 0);
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+    /*
+     * Two memory groups, local and non-local, which is exactly the split the
+     * budget ledger keeps.  Demotion is a vidmm policy this tree does not
+     * implement, and claiming it would tell a caller its allocations can be
+     * quietly moved to a cheaper segment when they never are.
+     */
+    Information->Flags.NumberOfMemoryGroups = 2;
+    Information->Flags.SupportsDemotion = 0;
+#endif
+
+    /*
+     * The remaining fields — renaming, swizzling ranges, paging-fault and
+     * lock histograms, allocation and termination totals — count events of
+     * mechanisms this video memory manager does not have.  They stay zero
+     * because zero is what actually happened, not because they are unfilled.
+     */
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpQueryStatisticsPhysicalAdapter(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG PhysicalAdapterIndex,
+    _Out_ D3DKMT_QUERYSTATISTICS_PHYSICAL_ADAPTER_INFORMATION *Information)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    /* One physical adapter per DXGKRNL_ADAPTER: any other index names
+     * something that does not exist. */
+    if (PhysicalAdapterIndex != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Information, sizeof(*Information));
+
+    Information->AdapterPerfData.PhysicalAdapterIndex = PhysicalAdapterIndex;
+    Status = DxgkpQueryMiniportPerfData(Adapter, DXGKQAITYPE_ADAPTERPERFDATA, &Information->AdapterPerfData, sizeof(Information->AdapterPerfData));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Information->AdapterPerfDataCaps.PhysicalAdapterIndex = PhysicalAdapterIndex;
+    Status = DxgkpQueryMiniportPerfData(Adapter, DXGKQAITYPE_ADAPTERPERFDATA_CAPS, &Information->AdapterPerfDataCaps, sizeof(Information->AdapterPerfDataCaps));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Information->GpuVersion.PhysicalAdapterIndex = PhysicalAdapterIndex;
+    return DxgkpQueryMiniportPerfData(Adapter, DXGKQAITYPE_GPUVERSION, &Information->GpuVersion, sizeof(Information->GpuVersion));
+}
+
+static NTSTATUS
+DxgkpQueryStatisticsNode(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeId,
+    _Out_ D3DKMT_QUERYSTATISTICS_NODE_INFORMATION *Information)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    Status = VidSchQueryNodeStatistics(Adapter, NULL, NodeId,
+                                       &Information->GlobalInformation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* The system's own share is a subset of the global figure above, not a
+     * second clock: it is the contextless paging work dxgkrnl submits. */
+    (VOID)VidSchQuerySystemNodeStatistics(Adapter, NodeId,
+                                          &Information->SystemInformation);
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+    Information->NodePerfData.NodeOrdinal = NodeId;
+    Information->NodePerfData.PhysicalAdapterIndex = 0;
+    Status = DxgkpQueryMiniportPerfData(Adapter, DXGKQAITYPE_NODEPERFDATA, &Information->NodePerfData, sizeof(Information->NodePerfData));
+    if (!NT_SUCCESS(Status))
+        return Status;
+#endif
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpQueryStatisticsVidPnSource(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ D3DKMT_QUERYSTATISTICS_VIDPNSOURCE_INFORMATION *Information)
+{
+    ULONG Frame = 0;
+    ULONG Queued = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Status = DxgkPresentQueryVidPnSourceStats(Adapter, VidPnSourceId, &Frame, &Queued);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    Information->GlobalInformation.Frame = Frame;
+    Information->GlobalInformation.QueuedPresent = Queued;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+    Information->GlobalInformation.IsVSyncEnabled =
+        (UINT64)InterlockedCompareExchange(&Adapter->VsyncInterruptEnabled, 0, 0);
+#endif
+    /* No separate system-present owner is tracked; do not label all client
+     * presents as system work. */
+    return STATUS_SUCCESS;
+}
+
+/*
+ * A process that never opened this adapter has no record, and that is a
+ * truthful answer of zero rather than an error: the caller asked what that
+ * process is using and it is using nothing.  ProcessRecord comes back NULL
+ * in that case and every per-process class reports zeroes.
+ */
+static NTSTATUS
+DxgkpQueryStatisticsResolveProcess(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ HANDLE ProcessHandle,
+    _Out_ PEPROCESS *OutProcess,
+    _Out_ PDXGKRNL_PROCESS *OutProcessRecord)
+{
+    PEPROCESS Process;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    *OutProcess = NULL;
+    *OutProcessRecord = NULL;
+
+    if (ProcessHandle == NULL)
+    {
+        Process = PsGetCurrentProcess();
+        ObReferenceObject(Process);
+    }
+    else
+    {
+        Status = ObReferenceObjectByHandle(ProcessHandle,
+                                           PROCESS_QUERY_INFORMATION,
+                                           *PsProcessType,
+                                           UserMode,
+                                           (PVOID *)&Process,
+                                           NULL);
+        if (!NT_SUCCESS(Status))
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    *OutProcess = Process;
+    (VOID)DxgkReferenceProcessRecordByAdapter(Adapter, Process, OutProcessRecord);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpQueryStatisticsProcessAdapter(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_PROCESS ProcessRecord,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_ADAPTER_INFORMATION *Information)
+{
+    PAGED_CODE();
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    Information->NbSegments = Adapter->SegmentCount;
+    Information->NodeCount = Adapter->NodeCount;
+    Information->VidPnSourceCount = Adapter->NumberOfVideoPresentSources;
+    if (ProcessRecord != NULL)
+    {
+        ULONGLONG Reserved;
+
+        ExAcquireFastMutex(&ProcessRecord->GpuVaLock);
+        Reserved = ProcessRecord->GpuVaTotalReserved;
+        ExReleaseFastMutex(&ProcessRecord->GpuVaLock);
+        Information->VirtualMemoryUsage =
+            (ULONG)((Reserved > MAXULONG) ? MAXULONG : Reserved);
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpQueryStatisticsProcessVidPnSource(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_PROCESS ProcessRecord,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_VIDPNSOURCE_INFORMATION *Information)
+{
+    PAGED_CODE();
+
+    if (VidPnSourceId >= Adapter->NumberOfVideoPresentSources)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    if (ProcessRecord != NULL &&
+        VidPnSourceId < RTL_NUMBER_OF(ProcessRecord->PresentsRetired))
+    {
+        LONG Submitted =
+            InterlockedCompareExchange(&ProcessRecord->PresentsSubmitted[VidPnSourceId], 0, 0);
+        LONG Retired =
+            InterlockedCompareExchange(&ProcessRecord->PresentsRetired[VidPnSourceId], 0, 0);
+
+        Information->Frame = (ULONG)Retired;
+        Information->QueuedPresent = (ULONG)((Submitted > Retired) ? Submitted - Retired : 0);
+    }
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
+    Information->IsVSyncEnabled =
+        (UINT64)InterlockedCompareExchange(&Adapter->VsyncInterruptEnabled, 0, 0);
+#endif
+    return STATUS_SUCCESS;
+}
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+static NTSTATUS
+DxgkpQueryStatisticsProcessSegmentGroup(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT_GROUP_INFORMATION *Information)
+{
+    UINT64 Budget = 0;
+    UINT64 Usage = 0;
+    UINT64 Reservation = 0;
+    UINT64 AvailableForReservation = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    if (Group != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL &&
+        Group != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = DxgkVidMmQueryProcessBudget(Adapter, Process, Group, &Budget, &Usage,
+                                         &Reservation, &AvailableForReservation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Information->Budget = Budget;
+    Information->Usage = Usage;
+    /* What the process asked to be guaranteed is its reservation; a budget
+     * this tree never lowers means nothing was ever demoted out of it. */
+    Information->Requested = Reservation;
+    return STATUS_SUCCESS;
+}
+#endif
+
 static NTSTATUS
 NTAPI
 DxgkQueryStatistics(
     _Inout_ CONST D3DKMT_QUERYSTATISTICS *pData)
 {
-    D3DKMT_QUERYSTATISTICS_VIDPNSOURCE_INFORMATION Info;
+    D3DKMT_QUERYSTATISTICS Query;
     PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
     PDXGKRNL_ADAPTER Adapter = NULL;
-    D3DKMT_QUERYSTATISTICS_TYPE Type;
-    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
-    LUID Luid;
-    ULONG Count, i, Frame = 0, Queued = 0;
+    PDXGKRNL_PROCESS ProcessRecord = NULL;
+    PEPROCESS Process = NULL;
+    ULONG Count, i;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -5074,9 +5519,7 @@ DxgkQueryStatistics(
 
     _SEH2_TRY
     {
-        Type = pData->Type;
-        Luid = pData->AdapterLuid;
-        VidPnSourceId = pData->QueryVidPnSource.VidPnSourceId;
+        Query = *pData;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -5084,15 +5527,14 @@ DxgkQueryStatistics(
     }
     _SEH2_END;
 
-    if (Type != D3DKMT_QUERYSTATISTICS_VIDPNSOURCE)
-        return STATUS_NOT_SUPPORTED;
+    RtlZeroMemory(&Query.QueryResult, sizeof(Query.QueryResult));
 
     Count = DxgkpSnapshotAdapters(Snapshot);
     for (i = 0; i < Count; ++i)
     {
         if (Snapshot[i]->State == DxgkAdapterStateStarted &&
-            Snapshot[i]->AdapterLuid.LowPart  == Luid.LowPart &&
-            Snapshot[i]->AdapterLuid.HighPart == Luid.HighPart)
+            Snapshot[i]->AdapterLuid.LowPart  == Query.AdapterLuid.LowPart &&
+            Snapshot[i]->AdapterLuid.HighPart == Query.AdapterLuid.HighPart)
         {
             Adapter = Snapshot[i];
             break;
@@ -5105,20 +5547,212 @@ DxgkQueryStatistics(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = DxgkPresentQueryVidPnSourceStats(Adapter, VidPnSourceId, &Frame, &Queued);
+    switch (Query.Type)
+    {
+        case D3DKMT_QUERYSTATISTICS_PROCESS:
+            Status = DxgkpQueryStatisticsResolveProcess(Adapter, Query.hProcess, &Process, &ProcessRecord);
+            if (!NT_SUCCESS(Status))
+            {
+                DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+                return Status;
+            }
+            break;
+
+        case D3DKMT_QUERYSTATISTICS_PROCESS_ADAPTER:
+        case D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT:
+        case D3DKMT_QUERYSTATISTICS_PROCESS_NODE:
+        case D3DKMT_QUERYSTATISTICS_PROCESS_VIDPNSOURCE:
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+        case D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT_GROUP:
+#endif
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+        case D3DKMT_QUERYSTATISTICS_PROCESS_ADAPTER2:
+        case D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT2:
+        case D3DKMT_QUERYSTATISTICS_PROCESS_NODE2:
+        case D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT_GROUP2:
+#endif
+            if (Query.hProcess == NULL)
+            {
+                DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+                return STATUS_INVALID_PARAMETER;
+            }
+            Status = DxgkpQueryStatisticsResolveProcess(Adapter, Query.hProcess,
+                                                        &Process, &ProcessRecord);
+            if (!NT_SUCCESS(Status))
+            {
+                DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+                return Status;
+            }
+            break;
+        default:
+            break;
+    }
+
+    switch (Query.Type)
+    {
+        case D3DKMT_QUERYSTATISTICS_ADAPTER:
+            Status = DxgkpQueryStatisticsAdapter(
+                         Adapter, &Query.QueryResult.AdapterInformation);
+            break;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+        case D3DKMT_QUERYSTATISTICS_PHYSICAL_ADAPTER:
+            Status = DxgkpQueryStatisticsPhysicalAdapter(
+                         Adapter,
+                         Query.QueryPhysAdapter.PhysicalAdapterIndex,
+                         &Query.QueryResult.PhysAdapterInformation);
+            break;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+        case D3DKMT_QUERYSTATISTICS_ADAPTER2:
+            Status = (Query.QueryAdapter2.PhysicalAdapterIndex == 0) ? DxgkpQueryStatisticsAdapter(Adapter, &Query.QueryResult.AdapterInformation) : STATUS_INVALID_PARAMETER;
+            break;
+#endif
+
+        case D3DKMT_QUERYSTATISTICS_SEGMENT:
+            Status = DxgkVidMmQuerySegmentStatistics(
+                         Adapter,
+                         Query.QuerySegment.SegmentId,
+                         &Query.QueryResult.SegmentInformation);
+            break;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+        case D3DKMT_QUERYSTATISTICS_SEGMENT2:
+            Status = (Query.QuerySegment2.PhysicalAdapterIndex == 0) ? DxgkVidMmQuerySegmentStatistics(Adapter, Query.QuerySegment2.SegmentId, &Query.QueryResult.SegmentInformation) : STATUS_INVALID_PARAMETER;
+            break;
+#endif
+
+        case D3DKMT_QUERYSTATISTICS_NODE:
+            Status = DxgkpQueryStatisticsNode(
+                         Adapter,
+                         Query.QueryNode.NodeId,
+                         &Query.QueryResult.NodeInformation);
+            break;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+        case D3DKMT_QUERYSTATISTICS_NODE2:
+            Status = (Query.QueryNode2.PhysicalAdapterIndex == 0) ? DxgkpQueryStatisticsNode(Adapter, Query.QueryNode2.NodeOrdinal, &Query.QueryResult.NodeInformation) : STATUS_INVALID_PARAMETER;
+            break;
+#endif
+
+        case D3DKMT_QUERYSTATISTICS_VIDPNSOURCE:
+            Status = DxgkpQueryStatisticsVidPnSource(
+                         Adapter,
+                         Query.QueryVidPnSource.VidPnSourceId,
+                         &Query.QueryResult.VidPnSourceInformation);
+            break;
+
+        case D3DKMT_QUERYSTATISTICS_PROCESS:
+            Query.QueryResult.ProcessInformation.NodeCount = Adapter->NodeCount;
+            Query.QueryResult.ProcessInformation.VidPnSourceCount =
+                Adapter->NumberOfVideoPresentSources;
+            Status = DxgkVidMmQueryProcessMemoryStatistics(
+                         Adapter, Process,
+                         &Query.QueryResult.ProcessInformation.SystemMemory);
+            break;
+
+        case D3DKMT_QUERYSTATISTICS_PROCESS_ADAPTER:
+            Status = DxgkpQueryStatisticsProcessAdapter(
+                         Adapter, ProcessRecord,
+                         &Query.QueryResult.ProcessAdapterInformation);
+            break;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+        case D3DKMT_QUERYSTATISTICS_PROCESS_ADAPTER2:
+            Status = (Query.QueryProcessAdapter2.PhysicalAdapterIndex == 0) ? DxgkpQueryStatisticsProcessAdapter(Adapter, ProcessRecord, &Query.QueryResult.ProcessAdapterInformation) : STATUS_INVALID_PARAMETER;
+            break;
+#endif
+
+        case D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT:
+            Status = DxgkVidMmQueryProcessSegmentStatistics(
+                         Adapter, Process,
+                         Query.QueryProcessSegment.SegmentId,
+                         &Query.QueryResult.ProcessSegmentInformation);
+            break;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+        case D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT2:
+            Status = (Query.QueryProcessSegment2.PhysicalAdapterIndex == 0) ? DxgkVidMmQueryProcessSegmentStatistics(Adapter, Process, Query.QueryProcessSegment2.SegmentId, &Query.QueryResult.ProcessSegmentInformation) : STATUS_INVALID_PARAMETER;
+            break;
+#endif
+
+        case D3DKMT_QUERYSTATISTICS_PROCESS_NODE:
+            /* Bound the ordinal even when the process has no record, so an
+             * out-of-range node is refused for every caller alike. */
+            if (Query.QueryProcessNode.NodeId >= Adapter->NodeCount)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+            if (ProcessRecord == NULL)
+            {
+                Status = STATUS_SUCCESS;
+                break;
+            }
+            Status = VidSchQueryNodeStatistics(
+                         Adapter, ProcessRecord,
+                         Query.QueryProcessNode.NodeId,
+                         &Query.QueryResult.ProcessNodeInformation);
+            break;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+        case D3DKMT_QUERYSTATISTICS_PROCESS_NODE2:
+            if (Query.QueryProcessNode2.PhysicalAdapterIndex != 0 || Query.QueryProcessNode2.NodeOrdinal >= Adapter->NodeCount)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+            Status = (ProcessRecord != NULL) ? VidSchQueryNodeStatistics(Adapter, ProcessRecord, Query.QueryProcessNode2.NodeOrdinal, &Query.QueryResult.ProcessNodeInformation) : STATUS_SUCCESS;
+            break;
+#endif
+
+        case D3DKMT_QUERYSTATISTICS_PROCESS_VIDPNSOURCE:
+            Status = DxgkpQueryStatisticsProcessVidPnSource(
+                         Adapter, ProcessRecord,
+                         Query.QueryProcessVidPnSource.VidPnSourceId,
+                         &Query.QueryResult.ProcessVidPnSourceInformation);
+            break;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+        case D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT_GROUP:
+            Status = DxgkpQueryStatisticsProcessSegmentGroup(
+                         Adapter, Process,
+                         Query.QueryProcessSegmentGroup,
+                         &Query.QueryResult.ProcessSegmentGroupInformation);
+            break;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+        case D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT_GROUP2:
+            Status = (Query.QueryProcessSegmentGroup2.PhysicalAdapterIndex == 0) ? DxgkpQueryStatisticsProcessSegmentGroup(Adapter, Process, (D3DKMT_MEMORY_SEGMENT_GROUP)Query.QueryProcessSegmentGroup2.SegmentGroup, &Query.QueryResult.ProcessSegmentGroupInformation) : STATUS_INVALID_PARAMETER;
+            break;
+
+        case D3DKMT_QUERYSTATISTICS_SEGMENT_USAGE:
+        case D3DKMT_QUERYSTATISTICS_SEGMENT_GROUP_USAGE:
+            /* These structures divide physical pages by memory-list state.
+             * The current VidMm does not own zero/modified/standby ledgers. */
+            Status = STATUS_NOT_SUPPORTED;
+            break;
+#endif
+
+        default:
+            Status = STATUS_INVALID_PARAMETER;
+            break;
+    }
+
+    DxgkDereferenceProcessRecord(ProcessRecord);
+    if (Process != NULL)
+        ObDereferenceObject(Process);
     DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+
     if (!NT_SUCCESS(Status))
         return Status;
 
-    RtlZeroMemory(&Info, sizeof(Info));
-    Info.GlobalInformation.Frame = Frame;
-    Info.GlobalInformation.QueuedPresent = Queued;
-    Info.SystemInformation = Info.GlobalInformation;
-
     _SEH2_TRY
     {
-        RtlCopyMemory((PVOID)&pData->QueryResult.VidPnSourceInformation,
-                      &Info, sizeof(Info));
+        RtlCopyMemory((PVOID)&pData->QueryResult, &Query.QueryResult,
+                      sizeof(Query.QueryResult));
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -9868,10 +10502,23 @@ DxgkpDispatchBufferedIoctl(
 
         case IOCTL_D3DKMT_QUERYSTATISTICS:
         {
-            if (InputLength < sizeof(D3DKMT_QUERYSTATISTICS) || SystemBuffer == NULL)
+            /*
+             * The whole structure is both the request and the answer, and
+             * METHOD_BUFFERED has already copied it into kernel memory, so
+             * the implementation reads its selector and writes its result
+             * through the same buffer.
+             */
+            if (InputLength < sizeof(D3DKMT_QUERYSTATISTICS) ||
+                OutputLength < sizeof(D3DKMT_QUERYSTATISTICS) ||
+                SystemBuffer == NULL)
+            {
                 return STATUS_BUFFER_TOO_SMALL;
+            }
 
-            return STATUS_NOT_SUPPORTED;
+            Status = DxgkQueryStatistics((CONST D3DKMT_QUERYSTATISTICS *)SystemBuffer);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_QUERYSTATISTICS);
+            return Status;
         }
 
         case IOCTL_D3DKMT_CREATEDCFROMMEMORY:
