@@ -569,7 +569,6 @@ EvalCreateParametersList(
                         IoStack->Parameters.DeviceIoControl.InputBufferLength -
                             Offset)
                 {
-                    DPRINT1("Argument buffer outside of argument bounds\n");
                     ExFreePoolWithTag(ParamList->Pointer, TAG_ACPI_PARAMETERS_LIST);
                     return STATUS_ACPI_INVALID_ARGTYPE;
                 }
@@ -929,11 +928,6 @@ EvalMethodOnHandleInternal(
 
     if (!ACPI_SUCCESS(AcpiStatus))
     {
-        DPRINT("Query method '%.4s' failed on ACPI handle %p with status 0x%04x\n",
-               EvalInputBuffer->MethodName,
-               AcpiHandle,
-               AcpiStatus);
-
         return EvalAcpiStatusToNtStatus(AcpiStatus);
     }
 
