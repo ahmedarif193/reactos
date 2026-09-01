@@ -20,6 +20,7 @@ add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 list(APPEND SOURCE
     dxgkrnl.c
     dxgmms2_client.c
+    iommu.c
     adapter.c
     adapter_map_core.c
     adapter_start_core.c

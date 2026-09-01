@@ -28,6 +28,10 @@ BOOLEAN NTAPI TdrIsEnabled(VOID);
 BOOLEAN NTAPI TdrIsTimeoutForcedFlip(VOID);
 DECLSPEC_IMPORT extern volatile LONG g_TdrForceTimeout;
 BOOLEAN CDECL DxgKrnlTelemetryGlobal_LogTelemetryEvent(VOID);
+NTSTATUS CDECL SysMmMapIommuContiguousRange(_In_opt_ PVOID Adapter, _In_ ULONGLONG DeviceAddress, _In_ LARGE_INTEGER PhysicalAddress, _In_ ULONGLONG NumberOfBytes, _In_ BOOLEAN Writable);
+NTSTATUS CDECL SysMmMapIommuRange(_In_opt_ PVOID Adapter, _In_ ULONGLONG DeviceAddress, _In_opt_ PMDL Mdl, _In_ BOOLEAN Writable);
+VOID CDECL SysMmUnmapIommuContiguousRange(_In_opt_ PVOID Adapter, _In_ ULONGLONG DeviceAddress, _In_ LARGE_INTEGER PhysicalAddress, _In_ ULONGLONG NumberOfBytes, _In_ BOOLEAN Writable);
+VOID CDECL SysMmUnmapIommuRange(_In_opt_ PVOID Adapter, _In_ ULONGLONG DeviceAddress, _In_opt_ PMDL Mdl, _In_ BOOLEAN Writable);
 
 typedef struct _DXGK_TEST_RESOURCE_LIST
 {
@@ -118,6 +122,9 @@ TestAdapterStartRolePolicy(VOID)
 
 START_TEST(DxgkWddmAbi)
 {
+    LARGE_INTEGER PhysicalAddress;
+
+    PhysicalAddress.QuadPart = 0;
     TestMapMemoryContractCore();
     TestAdapterStartRolePolicy();
 
@@ -133,6 +140,10 @@ START_TEST(DxgkWddmAbi)
     ok_bool_true(TdrIsTimeoutForcedFlip(), "forced timeout is consumed");
     ok_bool_false(TdrIsTimeoutForcedFlip(), "forced timeout remains cleared");
     ok_bool_false(DxgKrnlTelemetryGlobal_LogTelemetryEvent(), "telemetry remains disabled");
+    ok_eq_hex(SysMmMapIommuContiguousRange(NULL, 0, PhysicalAddress, PAGE_SIZE, FALSE), STATUS_NOT_SUPPORTED);
+    ok_eq_hex(SysMmMapIommuRange(NULL, 0, NULL, FALSE), STATUS_NOT_SUPPORTED);
+    SysMmUnmapIommuContiguousRange(NULL, 0, PhysicalAddress, PAGE_SIZE, FALSE);
+    SysMmUnmapIommuRange(NULL, 0, NULL, FALSE);
 
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_4, 0x9006);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_5, 0xA00B);
