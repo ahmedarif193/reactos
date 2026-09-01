@@ -7,6 +7,8 @@
 #ifndef _DXGMMS2_PRIVATE_H_
 #define _DXGMMS2_PRIVATE_H_
 
+#include "../wddm_cleanroom_gate.h"
+
 #include <ntifs.h>
 #include <ntddk.h>
 #include <wdm.h>

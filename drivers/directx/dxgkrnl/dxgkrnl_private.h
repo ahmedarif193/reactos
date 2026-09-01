@@ -38,6 +38,8 @@
 #ifndef _DXGKRNL_PRIVATE_H_
 #define _DXGKRNL_PRIVATE_H_
 
+#include "../wddm_cleanroom_gate.h"
+
 /* ---- Minimum OS version for dxgkrnl ------------------------------------ */
 /*
  * dxgkrnl.sys uses the Windows 7 kernel API declaration set.
