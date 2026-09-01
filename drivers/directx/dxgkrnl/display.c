@@ -1067,8 +1067,8 @@ DxgkDisplayEstablishInitialMode(
  *
  * Direct shadow-framebuffer -> firmware-GOP copy used when the miniport does
  * not expose DxgkDdiPresentDisplayOnly (e.g. softgpu, a WDDM 1.0 null/software
- * miniport). dxgkrnl already maps the GOP to kernel VA (PostDisplayVirtualAddress
- * via DxgkpEnsurePostDisplayResolution / DxgkCbAcquirePostDisplayOwnership), so
+ * miniport). dxgkrnl maps the transferred POST framebuffer to kernel VA in
+ * DxgkCbAcquirePostDisplayOwnership, so
  * we blit the dirty region row by row, honouring the (possibly different) shadow
  * and GOP pitches and clamping to both the committed mode and the mapped GOP
  * extent so we never write past the mapping.
@@ -2807,20 +2807,21 @@ DxgkDisplayRegister(
     DXGKRNL_TRACE("DxgkDisplayRegister: Adapter=%p\n", Adapter);
 
     /*
-     * Anchor the POST display resolution to the real firmware GOP before we
-     * write DefaultSettings below. A minimal miniport (softgpu) never calls
-     * DxgkCbAcquirePostDisplayOwnership, leaving PostDisplayWidth/Height 0, so
-     * DefaultSettings would fall back to 1024x768 while the committed VidPn and
-     * the shadow framebuffer use the GOP's 800x600 — framebuf would then render
-     * past the shadow FB and corrupt NonPagedPool. Keep all three consistent.
+     * POST geometry is owned by the public ownership callback. In-tree
+     * display miniports call DxgkCbAcquirePostDisplayOwnership during start;
+     * a miniport that deliberately runs headless leaves these fields zero.
      */
-    DxgkpEnsurePostDisplayResolution(Adapter);
 
     /* Already registered? */
     if (g_DisplayDeviceObject != NULL)
     {
-        DXGKRNL_TRACE("DxgkDisplayRegister: already registered\n");
-        return STATUS_SUCCESS;
+        if (g_DisplayAdapter == Adapter)
+        {
+            DXGKRNL_TRACE("DxgkDisplayRegister: already registered for this adapter\n");
+            return STATUS_SUCCESS;
+        }
+        DXGKRNL_ERR("DxgkDisplayRegister: the ReactOS display bridge already belongs to adapter %p\n", g_DisplayAdapter);
+        return STATUS_NOT_SUPPORTED;
     }
 
     /* ---- Step 1: Find a free \Device\VideoN name ---- */
@@ -3087,14 +3088,15 @@ Cleanup:
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
 VOID
-DxgkDisplayUnregister(VOID)
+DxgkDisplayUnregister(
+    _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    PDXGKRNL_ADAPTER Adapter;
     PVOID OldFb = NULL;
 
     PAGED_CODE();
 
-    Adapter = g_DisplayAdapter;
+    if (Adapter == NULL || g_DisplayAdapter != Adapter)
+        return;
     if (Adapter != NULL)
     {
         DxgkpStopPresentTimer(Adapter);
@@ -3123,8 +3125,7 @@ DxgkDisplayUnregister(VOID)
         g_DisplayAdapter = NULL;
         g_DisplayDeviceNumber = 0;
     }
-    if (Adapter != NULL)
-        Adapter->DisplayDeviceName[0] = L'\0';
+    Adapter->DisplayDeviceName[0] = L'\0';
 }
 
 /* ========================================================================

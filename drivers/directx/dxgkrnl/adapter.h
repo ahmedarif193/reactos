@@ -224,14 +224,6 @@ VOID APIENTRY DxgkCbClosePhysicalMemoryObject(
     IN_CONST_PDXGKARGCB_CLOSE_PHYSICAL_MEMORY_OBJECT pArgs);
 #endif
 
-NTSTATUS APIENTRY DxgkCbMapPhysicalMemoryLegacy(
-    _In_    HANDLE                       DeviceHandle,
-    _Inout_ PDXGKARGCB_MAPPHYSICALMEMORY MapPhysicalMemory);
-
-NTSTATUS APIENTRY DxgkCbUnmapPhysicalMemoryLegacy(
-    _In_ HANDLE                           DeviceHandle,
-    _In_ PDXGKARGCB_UNMAP_PHYSICAL_MEMORY UnmapPhysicalMemory);
-
 NTSTATUS APIENTRY DxgkCbIndicateChildStatus(
     _In_ HANDLE             DeviceHandle,
     _In_ PDXGK_CHILD_STATUS ChildStatus);

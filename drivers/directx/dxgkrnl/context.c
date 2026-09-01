@@ -2254,6 +2254,7 @@ DxgkProcessCleanup(
      * before exit, and MmMapLockedPagesSpecifyCache(UserMode) uses dedicated
      * VADs that ARM3 expects to be gone by this point.
      */
+    DxgkAdapterProcessCleanup(Process);
     DxgkVidMmProcessCleanup(Process);
     DxgkD3dkmtProcessCleanup(Process);
     DxgkKeyedMutexProcessCleanup(Process);

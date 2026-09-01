@@ -192,7 +192,6 @@ typedef struct _DXGKVMM_RESOURCE DXGKVMM_RESOURCE, *PDXGKVMM_RESOURCE;
 #define TAG_DXGK_SUBMITDMA  'QxgD'   /* DXGQ - tracked submit DMA buffers */
 #define TAG_DXGK_HANDLE     'HxgD'   /* DXGH - typed D3DKMT handle entry   */
 #define TAG_DXGK_CAPTURE    'UxgD'   /* DXGU - captured user buffers       */
-#define TAG_DXGK_DEBUG      'BxgD'   /* DXGB - miniport debug reports      */
 #define DXGKP_MAX_USER_PRIVATE_DATA (1024U * 1024U)
 #define DXGKP_MAX_CAPTURE_ALLOCATIONS 4096U
 
@@ -692,8 +691,8 @@ struct _DXGKRNL_ADAPTER
 
     /*
      * GPU engine / node count.
-     * Filled in from DxgkDdiQueryAdapterInfo(DXGKQAITYPE_NUMPOWERCOMPONENTS)
-     * or equivalent; governs scheduling policy.
+     * Filled from DXGKQAITYPE_DRIVERCAPS.GpuEngineTopology; it is unrelated
+     * to runtime-power component enumeration and governs scheduling policy.
      */
     ULONG                       NodeCount;
 
@@ -718,9 +717,10 @@ struct _DXGKRNL_ADAPTER
     BOOLEAN                     SurpriseRemovalHandled;
 
     /*
-     * Interrupt object registered by dxgkrnl on behalf of the miniport
-     * (IoConnectInterrupt / IoConnectInterruptEx).  NULL if the miniport
-     * does not use line-based interrupts.
+     * Interrupt state registered by dxgkrnl on behalf of the miniport.
+     * InterruptMessageTable owns message-based connections; InterruptObject
+     * owns a line-based connection and aliases message zero for synchronized
+     * reverse callbacks.
      */
     PKINTERRUPT                 InterruptObject;
     PIO_INTERRUPT_MESSAGE_INFO  InterruptMessageTable;
@@ -773,7 +773,6 @@ struct _DXGKRNL_ADAPTER
      * Synchronisation event used by DxgkCbSynchronizeExecution to
      * coordinate between PASSIVE_LEVEL callers and the interrupt ISR.
      */
-    KEVENT                      SyncEvent;
 
     /*
      * Mutex serialising all PASSIVE_LEVEL adapter state mutations
@@ -796,25 +795,16 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               SharedSurfaceAvailable;
 
     /*
-     * Translated PCI resource lists captured at IRP_MN_START_DEVICE time.
-     * Both pointers are NULL before Start or after Remove.
+     * Dxgkrnl-owned copies of the PCI resource lists supplied with
+     * IRP_MN_START_DEVICE. Both pointers are NULL before Start and after Stop;
+     * reverse callbacks must never retain pointers into the completed IRP.
      */
     PCM_RESOURCE_LIST           AllocatedResources;     /* raw (bus-relative)  */
     PCM_RESOURCE_LIST           TranslatedResources;    /* translated (system) */
 
-    /*
-     * Cached PCI bus/slot number for this adapter.
-     * Queried once during DxgkAdapterStart from IoGetDeviceProperty and
-     * reused by DxgkCbReadDeviceSpace/DxgkCbWriteDeviceSpace to avoid
-     * sending PnP IRPs (which can cause spinlock re-entrancy) on every
-     * PCI config space access.
-     */
-    ULONG                       PciBusNumber;
-    PCI_SLOT_NUMBER             PciSlotNumber;
-    BOOLEAN                     PciBusSlotCached;
-    ULONG                       PciBridgeBusNumber;
-    PCI_SLOT_NUMBER             PciBridgeSlotNumber;
-    BOOLEAN                     PciBridgeSlotCached;
+    /* Parent-owned interface for this adapter's PCI configuration space. */
+    BUS_INTERFACE_STANDARD      PciBusInterface;
+    BOOLEAN                     PciBusInterfaceValid;
 
     /*
      * Power state tracking.
@@ -1788,18 +1778,6 @@ DxgkCbClosePhysicalMemoryObject(
 
 NTSTATUS
 APIENTRY
-DxgkCbMapPhysicalMemoryLegacy(
-    _In_    HANDLE  DeviceHandle,
-    _Inout_ PVOID   MapPhysicalMemory);
-
-NTSTATUS
-APIENTRY
-DxgkCbUnmapPhysicalMemoryLegacy(
-    _In_ HANDLE  DeviceHandle,
-    _In_ PVOID   UnmapPhysicalMemory);
-
-NTSTATUS
-APIENTRY
 DxgkCbGetDeviceInformation(
     _In_  HANDLE              DeviceHandle,
     _Out_ PDXGK_DEVICE_INFO   DeviceInformation);
@@ -2461,6 +2439,10 @@ DxgkD3dkmtProcessCleanup(
     _In_ PEPROCESS Process);
 
 VOID
+DxgkAdapterProcessCleanup(
+    _In_ PEPROCESS Process);
+
+VOID
 DxgkD3dkmtAdapterCleanup(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
@@ -2848,17 +2830,6 @@ NTSTATUS
 DxgkDisplayRegister(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
-/*
- * DxgkpEnsurePostDisplayResolution
- *
- * Fill Adapter->PostDisplayWidth/Height from the firmware GOP if no miniport
- * acquired POST display ownership. Keeps registry DefaultSettings, the pinned
- * VidPn mode and the shadow framebuffer all anchored to the real GOP size.
- */
-VOID
-DxgkpEnsurePostDisplayResolution(
-    _Inout_ PDXGKRNL_ADAPTER Adapter);
-
 NTSTATUS
 DxgkDisplayEstablishInitialMode(
     _In_ PDXGKRNL_ADAPTER Adapter);
@@ -2870,7 +2841,8 @@ DxgkDisplayEstablishInitialMode(
  * Called from DxgkAdapterStop / DxgkAdapterRemove.
  */
 VOID
-DxgkDisplayUnregister(VOID);
+DxgkDisplayUnregister(
+    _In_ PDXGKRNL_ADAPTER Adapter);
 
 /*
  * Display dispatch helpers — called from dxgkrnl dispatch routines
