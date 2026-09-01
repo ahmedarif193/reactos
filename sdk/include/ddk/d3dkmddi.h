@@ -1250,6 +1250,45 @@ typedef struct _DXGK_QUERYSEGMENTOUT
     UINT                        PagingBufferPrivateDataSize;
 } DXGK_QUERYSEGMENTOUT, *PDXGK_QUERYSEGMENTOUT;
 
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN7)
+#define DXGK_SEGMENT_ID_INVALID 0
+#define DXGK_SEGMENT_ID_SYSTEMMEMORY 31
+#define DXGK_SEGMENT_SET_SYSTEMMEMORY 0x80000000
+
+typedef struct _DXGK_SEGMENTFLAGS2
+{
+    union
+    {
+        struct
+        {
+            UINT Aperture : 1;
+            UINT PopulatedFromSystemMemory : 1;
+            UINT SystemMemoryReservedByBios : 1;
+            UINT CpuVisible : 1;
+            UINT Reserved : 28;
+        };
+        UINT Value;
+    };
+} DXGK_SEGMENTFLAGS2;
+
+typedef struct _DXGK_SEGMENTDESCRIPTOR2
+{
+    DXGK_SEGMENTFLAGS2 Flags;
+    SIZE_T Size;
+    PMDL pMdl;
+    PHYSICAL_ADDRESS BaseAddress;
+    PHYSICAL_ADDRESS CpuTranslatedAddress;
+} DXGK_SEGMENTDESCRIPTOR2;
+
+typedef struct _DXGK_QUERYSEGMENTOUT2
+{
+    UINT SegmentCount;
+    DXGK_SEGMENTDESCRIPTOR2 *pSegmentDescriptor;
+} DXGK_QUERYSEGMENTOUT2;
+
+C_ASSERT(sizeof(DXGK_SEGMENTFLAGS2) == sizeof(UINT));
+#endif
+
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
 typedef struct _DXGK_QUERYSEGMENTOUT3
 {
