@@ -18,6 +18,12 @@
 ; --- DxgCoreInterface (static callback table consumed by dxgmms2.sys) ---
 43 extern DxgCoreInterface
 
+; --- IOMMU feature-disabled boundary ---
+11 cdecl SysMmMapIommuContiguousRange(ptr int64 int64 int64 long)
+12 cdecl SysMmMapIommuRange(ptr int64 ptr long)
+13 cdecl SysMmUnmapIommuContiguousRange(ptr int64 int64 int64 long)
+14 cdecl SysMmUnmapIommuRange(ptr int64 ptr long)
+
 ; --- Layout-free TDR policy ---
 23 stdcall TdrIsEnabled()
 25 stdcall TdrIsTimeoutForcedFlip()
