@@ -262,29 +262,45 @@ EvalConvertEvaluationResults(
  * @brief Returns the number of sub-objects (elements) in a package.
  */
 static
-ULONG
+NTSTATUS
 EvalGetPackageCount(
     _In_ PACPI_METHOD_ARGUMENT Package,
     _In_ PACPI_METHOD_ARGUMENT PackageArgument,
-    _In_ ULONG DataLength)
+    _In_ ULONG DataLength,
+    _Out_ PULONG PackageCount)
 {
     ACPI_METHOD_ARGUMENT* Ptr;
-    ULONG TotalLength = 0, TotalCount = 0;
+    ULONG ArgumentLength;
+    ULONG TotalLength = 0;
+    ULONG TotalCount = 0;
+
+    if (PackageCount == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *PackageCount = 0;
 
     /* Empty package */
     if (DataLength < ACPI_METHOD_ARGUMENT_LENGTH(0) || Package->Argument == 0)
-        return 0;
+        return STATUS_SUCCESS;
 
     Ptr = PackageArgument;
     while (TotalLength < DataLength)
     {
-        TotalLength += ACPI_METHOD_ARGUMENT_LENGTH_FROM_ARGUMENT(Ptr);
-        TotalCount++;
+        if (sizeof(*Ptr) > DataLength - TotalLength)
+            return STATUS_ACPI_INVALID_ARGTYPE;
 
-        Ptr = ACPI_METHOD_NEXT_ARGUMENT(Ptr);
+        ArgumentLength = ACPI_METHOD_ARGUMENT_LENGTH(Ptr->DataLength);
+        if (ArgumentLength > DataLength - TotalLength)
+            return STATUS_ACPI_INVALID_ARGTYPE;
+
+        TotalLength += ArgumentLength;
+        TotalCount++;
+        Ptr = (PACPI_METHOD_ARGUMENT)
+            ((PUCHAR)PackageArgument + TotalLength);
     }
 
-    return TotalCount;
+    *PackageCount = TotalCount;
+    return STATUS_SUCCESS;
 }
 
 /**
@@ -355,15 +371,19 @@ EvalConvertParameterObjects(
 
         case ACPI_METHOD_ARGUMENT_PACKAGE:
         {
-            ULONG i, PackageSize;
+            ULONG i, PackageCount, PackageSize;
             NTSTATUS Status;
             PACPI_METHOD_ARGUMENT PackageArgument;
 
             Arg->Type = ACPI_TYPE_PACKAGE;
 
-            Arg->Package.Count = EvalGetPackageCount(Argument,
-                                                     (PACPI_METHOD_ARGUMENT)Argument->Data,
-                                                     Argument->DataLength);
+            Status = EvalGetPackageCount(Argument,
+                                         (PACPI_METHOD_ARGUMENT)Argument->Data,
+                                         Argument->DataLength,
+                                         &PackageCount);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            Arg->Package.Count = PackageCount;
             /* Empty package, nothing more to convert */
             if (Arg->Package.Count == 0)
             {
@@ -513,6 +533,8 @@ EvalCreateParametersList(
             ComplexBuffer = (PACPI_EVAL_INPUT_BUFFER_COMPLEX)EvalInputBuffer;
 
             ParamList->Count = ComplexBuffer->ArgumentCount;
+            if (ParamList->Count > 7)
+                return STATUS_ACPI_INCORRECT_ARGUMENT_COUNT;
             if (ParamList->Count == 0)
             {
                 /* DxgkCbEvalAcpiMethod always supplies the complex form,
@@ -541,15 +563,28 @@ EvalCreateParametersList(
             for (i = 0; i < ParamList->Count; i++)
             {
                 Offset = Length;
-                Length += ACPI_METHOD_ARGUMENT_LENGTH_FROM_ARGUMENT(Argument);
-
-                if (!AcpiVerifyInBuffer(IoStack, Length))
+                if (Offset >
+                        IoStack->Parameters.DeviceIoControl.InputBufferLength ||
+                    sizeof(*Argument) >
+                        IoStack->Parameters.DeviceIoControl.InputBufferLength -
+                            Offset)
                 {
                     DPRINT1("Argument buffer outside of argument bounds\n");
-
                     ExFreePoolWithTag(ParamList->Pointer, TAG_ACPI_PARAMETERS_LIST);
                     return STATUS_ACPI_INVALID_ARGTYPE;
                 }
+
+                Length = ACPI_METHOD_ARGUMENT_LENGTH(Argument->DataLength);
+                if (Length >
+                        IoStack->Parameters.DeviceIoControl.InputBufferLength -
+                            Offset)
+                {
+                    DPRINT1("Argument buffer outside of argument bounds\n");
+                    ExFreePoolWithTag(ParamList->Pointer,
+                                      TAG_ACPI_PARAMETERS_LIST);
+                    return STATUS_ACPI_INVALID_ARGTYPE;
+                }
+                Length += Offset;
 
                 Status = EvalConvertParameterObjects(Arg, 0, Argument, IoStack, Offset);
                 if (!NT_SUCCESS(Status))
@@ -559,7 +594,8 @@ EvalCreateParametersList(
                 }
 
                 Arg++;
-                Argument = ACPI_METHOD_NEXT_ARGUMENT(Argument);
+                Argument = (PACPI_METHOD_ARGUMENT)
+                    ((PUCHAR)ComplexBuffer + Length);
             }
 
             break;
@@ -868,13 +904,9 @@ Bus_PDO_EvalMethod(
  * @return STATUS_NOT_FOUND if no ACPI device corresponds to this PCI device
  * @return Other NTSTATUS error codes on failure
  */
-static
-NTSTATUS
-EvalMethodForPciDeviceInternal(
-    _In_ ULONG Segment,
-    _In_ ULONG Bus,
-    _In_ ULONG Device,
-    _In_ ULONG Function,
+static NTSTATUS
+EvalMethodOnHandleInternal(
+    _In_ ACPI_HANDLE AcpiHandle,
     _In_ PACPI_EVAL_INPUT_BUFFER EvalInputBuffer,
     _In_ PIO_STACK_LOCATION IoStack,
     _Inout_ PIRP Irp)
@@ -883,15 +915,8 @@ EvalMethodForPciDeviceInternal(
     ACPI_STATUS AcpiStatus;
     NTSTATUS Status;
     ACPI_BUFFER ReturnBuffer = { ACPI_ALLOCATE_BUFFER, NULL };
-    ACPI_HANDLE AcpiHandle = NULL;
-
-    /* Find the ACPI device node for this PCI device */
-    if (!AcpiFindPciDeviceInNamespace(Segment, Bus, Device, Function, &AcpiHandle))
-    {
-        DPRINT("ACPI: No ACPI device for PCI %lu:%lu:%lu:%lu\n",
-               Segment, Bus, Device, Function);
-        return STATUS_NOT_FOUND;
-    }
+    if (AcpiHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
 
     Status = EvalCreateParametersList(IoStack, EvalInputBuffer, &ParamList);
     if (!NT_SUCCESS(Status))
@@ -904,9 +929,8 @@ EvalMethodForPciDeviceInternal(
 
     if (!ACPI_SUCCESS(AcpiStatus))
     {
-        DPRINT("Query method '%.4s' failed on PCI %lu:%lu:%lu:%lu (handle %p) with status 0x%04x\n",
+        DPRINT("Query method '%.4s' failed on ACPI handle %p with status 0x%04x\n",
                EvalInputBuffer->MethodName,
-               Segment, Bus, Device, Function,
                AcpiHandle,
                AcpiStatus);
 
@@ -919,6 +943,53 @@ EvalMethodForPciDeviceInternal(
         AcpiOsFree(ReturnBuffer.Pointer);
 
     return Status;
+}
+
+static NTSTATUS
+EvalFindDisplayChildByAcpiUid(
+    _In_ ACPI_HANDLE AdapterHandle,
+    _In_ ULONG ChildAcpiUid,
+    _Out_ ACPI_HANDLE *ChildHandle)
+{
+    ACPI_HANDLE Current = NULL;
+    ACPI_STATUS AcpiStatus;
+
+    if (AdapterHandle == NULL || ChildHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *ChildHandle = NULL;
+    for (;;)
+    {
+        ACPI_BUFFER AdrBuffer;
+        ACPI_OBJECT AdrObject;
+        ACPI_HANDLE Next;
+
+        AcpiStatus = AcpiGetNextObject(ACPI_TYPE_DEVICE,
+                                       AdapterHandle,
+                                       Current,
+                                       &Next);
+        if (AcpiStatus == AE_NOT_FOUND)
+            return STATUS_NOT_FOUND;
+        if (ACPI_FAILURE(AcpiStatus))
+            return STATUS_ACPI_INVALID_DATA;
+
+        Current = Next;
+        RtlZeroMemory(&AdrObject, sizeof(AdrObject));
+        AdrBuffer.Length = sizeof(AdrObject);
+        AdrBuffer.Pointer = &AdrObject;
+        AcpiStatus = AcpiEvaluateObject(Current,
+                                        "_ADR",
+                                        NULL,
+                                        &AdrBuffer);
+        if (ACPI_SUCCESS(AcpiStatus) &&
+            AdrObject.Type == ACPI_TYPE_INTEGER &&
+            AdrObject.Integer.Value <= MAXULONG &&
+            (ULONG)AdrObject.Integer.Value == ChildAcpiUid)
+        {
+            *ChildHandle = Current;
+            return STATUS_SUCCESS;
+        }
+    }
 }
 
 /**
@@ -949,6 +1020,7 @@ AcpiEvalMethodForPciDeviceIoctl(
     ULONG InputBufferSize;
     NTSTATUS Status;
     IO_STACK_LOCATION SyntheticIoStack;
+    ACPI_HANDLE AcpiHandle;
 
     UNREFERENCED_PARAMETER(FdoData);
 
@@ -981,7 +1053,10 @@ AcpiEvalMethodForPciDeviceIoctl(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (PciInputBuffer->InputBufferOffset + PciInputBuffer->InputBufferSize > InputBufferSize)
+    if (PciInputBuffer->TotalSize != InputBufferSize ||
+        PciInputBuffer->InputBufferOffset > InputBufferSize ||
+        PciInputBuffer->InputBufferSize >
+            InputBufferSize - PciInputBuffer->InputBufferOffset)
     {
         DPRINT1("ACPI: IOCTL_ACPI_EVAL_METHOD_FOR_PCI: embedded buffer overflow (%lu + %lu > %lu)\n",
                 PciInputBuffer->InputBufferOffset,
@@ -1022,16 +1097,81 @@ AcpiEvalMethodForPciDeviceIoctl(
      * Parameter decoding uses EvalInputBuffer explicitly; temporarily pointing
      * SystemBuffer at the embedded input would write overflow metadata into the
      * input envelope and discard it during I/O completion. */
-    Status = EvalMethodForPciDeviceInternal(
-        PciInputBuffer->Segment,
-        PciInputBuffer->Bus,
-        PciInputBuffer->Device,
-        PciInputBuffer->Function,
-        EvalInputBuffer,
-        &SyntheticIoStack,
-        Irp);
+    if (!AcpiFindPciDeviceInNamespace(PciInputBuffer->Segment,
+                                      PciInputBuffer->Bus,
+                                      PciInputBuffer->Device,
+                                      PciInputBuffer->Function,
+                                      &AcpiHandle))
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    Status = EvalMethodOnHandleInternal(AcpiHandle, EvalInputBuffer, &SyntheticIoStack, Irp);
 
     return Status;
+}
+
+NTSTATUS
+NTAPI
+AcpiEvalMethodForPciChildIoctl(
+    _In_ PFDO_DEVICE_DATA FdoData,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PACPI_PCI_CHILD_EVAL_INPUT_BUFFER PciInputBuffer;
+    PACPI_EVAL_INPUT_BUFFER EvalInputBuffer;
+    IO_STACK_LOCATION SyntheticIoStack;
+    ACPI_HANDLE AdapterHandle;
+    ACPI_HANDLE ChildHandle;
+    ULONG InputBufferSize;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(FdoData);
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    InputBufferSize = IoStack->Parameters.DeviceIoControl.InputBufferLength;
+    if (InputBufferSize < ACPI_PCI_CHILD_EVAL_INPUT_BUFFER_MIN_SIZE ||
+        Irp->AssociatedIrp.SystemBuffer == NULL)
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    PciInputBuffer = Irp->AssociatedIrp.SystemBuffer;
+    if (PciInputBuffer->Signature !=
+            ACPI_PCI_CHILD_EVAL_INPUT_BUFFER_SIGNATURE ||
+        PciInputBuffer->TotalSize != InputBufferSize ||
+        PciInputBuffer->InputBufferOffset < sizeof(*PciInputBuffer) ||
+        PciInputBuffer->InputBufferOffset > InputBufferSize ||
+        PciInputBuffer->InputBufferSize >
+            InputBufferSize - PciInputBuffer->InputBufferOffset ||
+        PciInputBuffer->InputBufferSize <
+            sizeof(ACPI_EVAL_INPUT_BUFFER))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!AcpiFindPciDeviceInNamespace(PciInputBuffer->Segment,
+                                      PciInputBuffer->Bus,
+                                      PciInputBuffer->Device,
+                                      PciInputBuffer->Function,
+                                      &AdapterHandle))
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    Status = EvalFindDisplayChildByAcpiUid(AdapterHandle, PciInputBuffer->ChildAcpiUid, &ChildHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    EvalInputBuffer = (PACPI_EVAL_INPUT_BUFFER)
+        ACPI_PCI_CHILD_EVAL_GET_INPUT_BUFFER(PciInputBuffer);
+    RtlZeroMemory(&SyntheticIoStack, sizeof(SyntheticIoStack));
+    SyntheticIoStack.Parameters.DeviceIoControl.InputBufferLength =
+        PciInputBuffer->InputBufferSize;
+    SyntheticIoStack.Parameters.DeviceIoControl.OutputBufferLength =
+        IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    return EvalMethodOnHandleInternal(ChildHandle, EvalInputBuffer, &SyntheticIoStack, Irp);
 }
 
 NTSTATUS

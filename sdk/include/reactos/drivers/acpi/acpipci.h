@@ -44,6 +44,15 @@ DEFINE_GUID(GUID_ACPI_PCI_INTERFACE,
     CTL_CODE(FILE_DEVICE_ACPI, 0x10, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
 
 /*
+ * Evaluate a method on a display child in the namespace of a PCI display
+ * function.  Dxgkrnl sends this request to the PCI PDO with the location
+ * fields zeroed; pci.sys replaces them with the PDO's trusted location before
+ * forwarding the same envelope to acpi.sys.
+ */
+#define IOCTL_ACPI_EVAL_METHOD_FOR_PCI_CHILD \
+    CTL_CODE(FILE_DEVICE_ACPI, 0x11, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+
+/*
  * Ask acpi.sys to transition the ACPI namespace device that corresponds to a
  * PCI function.  This applies both _PRx power resources and _PSx methods;
  * changing PMCSR alone is insufficient when platform power wells are gated.
@@ -100,6 +109,21 @@ typedef struct _ACPI_PCI_EVAL_INPUT_BUFFER {
 
 } ACPI_PCI_EVAL_INPUT_BUFFER, *PACPI_PCI_EVAL_INPUT_BUFFER;
 
+#define ACPI_PCI_CHILD_EVAL_INPUT_BUFFER_SIGNATURE 'DcpA'
+
+typedef struct _ACPI_PCI_CHILD_EVAL_INPUT_BUFFER {
+    ULONG Signature;
+    ULONG Segment;
+    ULONG Bus;
+    ULONG Device;
+    ULONG Function;
+    ULONG ChildAcpiUid;
+    ULONG TotalSize;
+    ULONG InputBufferOffset;
+    ULONG InputBufferSize;
+} ACPI_PCI_CHILD_EVAL_INPUT_BUFFER,
+ *PACPI_PCI_CHILD_EVAL_INPUT_BUFFER;
+
 #define ACPI_PCI_SET_POWER_INPUT_BUFFER_SIGNATURE 'PcpA'
 
 typedef struct _ACPI_PCI_SET_POWER_INPUT_BUFFER {
@@ -117,6 +141,9 @@ typedef struct _ACPI_PCI_SET_POWER_INPUT_BUFFER {
 #define ACPI_PCI_EVAL_INPUT_BUFFER_MIN_SIZE \
     sizeof(ACPI_PCI_EVAL_INPUT_BUFFER)
 
+#define ACPI_PCI_CHILD_EVAL_INPUT_BUFFER_MIN_SIZE \
+    sizeof(ACPI_PCI_CHILD_EVAL_INPUT_BUFFER)
+
 /*
  * Helper macro to calculate the total size of ACPI_PCI_EVAL_INPUT_BUFFER
  * given the size of the embedded ACPI evaluation input buffer.
@@ -128,6 +155,9 @@ typedef struct _ACPI_PCI_SET_POWER_INPUT_BUFFER {
  * Helper macro to get a pointer to the embedded ACPI evaluation input buffer.
  */
 #define ACPI_PCI_EVAL_GET_INPUT_BUFFER(Buffer) \
+    ((PVOID)((PUCHAR)(Buffer) + (Buffer)->InputBufferOffset))
+
+#define ACPI_PCI_CHILD_EVAL_GET_INPUT_BUFFER(Buffer) \
     ((PVOID)((PUCHAR)(Buffer) + (Buffer)->InputBufferOffset))
 
 /* EOF */
