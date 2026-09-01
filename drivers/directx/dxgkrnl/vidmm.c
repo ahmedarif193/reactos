@@ -2481,13 +2481,7 @@ DxgkVidMmReleaseHandleData(
     ExReleaseFastMutex(&DxgkVidMmHandleDataReferenceListLock);
 
     if (Reference == NULL)
-    {
-        DPRINT1("DxgkVidMmReleaseHandleData: invalid or already released handle %p\n", ReleaseHandle);
         return;
-    }
-
-    if (Type != Reference->Type)
-        DPRINT1("DxgkVidMmReleaseHandleData: type %u does not match acquired type %u\n", Type, Reference->Type);
 
     switch (Reference->Type)
     {
