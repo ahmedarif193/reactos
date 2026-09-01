@@ -41,21 +41,19 @@ IopFixupDeviceId(PWCHAR String)
 }
 
 /*
- * A CriticalDeviceDatabase install writes only ClassGUID + Service to the
- * device's Enum instance key.  A full PnP install also creates the driver key
- * Control\Class\{ClassGUID}\NNNN and points the instance's "Driver" value at
- * it.  Without that, IoGetDeviceProperty(DevicePropertyDriverKeyName) and thus
- * IoOpenDeviceRegistryKey(PLUGPLAY_REGKEY_DRIVER) fail with
- * STATUS_OBJECT_NAME_NOT_FOUND for every CDDB-installed device (e.g. the
- * virtio-gpu WDDM display-only driver, whose StartDevice reads/writes its
- * driver key).  Create the driver key on demand and record it, mirroring a
- * normal install.  Idempotent: a device that already has a "Driver" value is
- * left untouched.
+ * A CriticalDeviceDatabase install writes ClassGUID + Service to the device's
+ * Enum instance key. A full PnP install also points the instance's "Driver"
+ * value at Control\Class\{ClassGUID}\NNNN. Honor an explicitly provisioned
+ * CDDB Driver value first so its preinstalled hardware and software policy is
+ * not stranded on a different class instance. Otherwise create the first free
+ * driver key on demand, mirroring a normal install. Idempotent: a device that
+ * already has a "Driver" value is left untouched.
  */
 static
 VOID
 IopEnsureCriticalDeviceDriverKey(
-    _In_ HANDLE InstanceKey)
+    _In_ HANDLE InstanceKey,
+    _In_ HANDLE CriticalDeviceKey)
 {
     UNICODE_STRING DriverU = RTL_CONSTANT_STRING(L"Driver");
     UNICODE_STRING ClassGuidU = RTL_CONSTANT_STRING(L"ClassGUID");
@@ -73,6 +71,52 @@ IopEnsureCriticalDeviceDriverKey(
     Status = ZwQueryValueKey(InstanceKey, &DriverU, KeyValuePartialInformation, NULL, 0, &Length);
     if (Status == STATUS_SUCCESS || Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL)
         return;
+
+    /* Use the class instance selected by a preinstalled CDDB entry. */
+    if (CriticalDeviceKey)
+    {
+        PKEY_VALUE_PARTIAL_INFORMATION DriverInfo;
+
+        Length = 0;
+        Status = ZwQueryValueKey(CriticalDeviceKey,
+                                 &DriverU,
+                                 KeyValuePartialInformation,
+                                 NULL,
+                                 0,
+                                 &Length);
+        if (Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL)
+        {
+            DriverInfo = ExAllocatePool(PagedPool, Length);
+            if (DriverInfo)
+            {
+                Status = ZwQueryValueKey(CriticalDeviceKey,
+                                         &DriverU,
+                                         KeyValuePartialInformation,
+                                         DriverInfo,
+                                         Length,
+                                         &Length);
+                if (NT_SUCCESS(Status) &&
+                    DriverInfo->Type == REG_SZ &&
+                    DriverInfo->DataLength >= 2 * sizeof(WCHAR) &&
+                    ((PWSTR)DriverInfo->Data)[DriverInfo->DataLength / sizeof(WCHAR) - 1] == UNICODE_NULL)
+                {
+                    Status = ZwSetValueKey(InstanceKey,
+                                           &DriverU,
+                                           0,
+                                           REG_SZ,
+                                           DriverInfo->Data,
+                                           DriverInfo->DataLength);
+                    if (NT_SUCCESS(Status))
+                    {
+                        ExFreePool(DriverInfo);
+                        return;
+                    }
+                }
+
+                ExFreePool(DriverInfo);
+            }
+        }
+    }
 
     /* Read the device's ClassGUID */
     Length = 0;
@@ -492,7 +536,7 @@ IopInstallCriticalDevice(PDEVICE_NODE DeviceNode)
                     /* Create the Control\Class driver key + "Driver" value so
                      * IoOpenDeviceRegistryKey(PLUGPLAY_REGKEY_DRIVER) works for
                      * this CDDB-installed device. */
-                    IopEnsureCriticalDeviceDriverKey(InstanceKey);
+                    IopEnsureCriticalDeviceDriverKey(InstanceKey, ChildKeyHandle);
 
                     ExFreePool(OriginalIdBuffer);
                     ExFreePool(PartialInfo);
