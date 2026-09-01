@@ -1562,6 +1562,7 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     HANDLE                      hKmdCpuEvent;
     volatile LONG               KmdCpuEventCreated;
     EX_RUNDOWN_REF              KmdCpuEventRundown;
+    LIST_ENTRY                  KmdCpuEventListEntry;
 #endif
     KEVENT                      CpuEvent;
     LIST_ENTRY                  SyncObjListEntry;

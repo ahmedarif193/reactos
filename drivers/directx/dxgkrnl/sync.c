@@ -67,6 +67,10 @@ static KSPIN_LOCK DxgkSyncMonitoredLock;
 static LIST_ENTRY DxgkSyncMonitoredListHead;
 static volatile LONG DxgkSyncMonitoredInterruptSequence;
 #endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+static KSPIN_LOCK DxgkSyncKmdCpuEventLock;
+static LIST_ENTRY DxgkSyncKmdCpuEventListHead;
+#endif
 static volatile LONG DxgkSyncNextShareHandle = 0;
 static volatile LONG DxgkSyncNextPeriodicNotificationId = 0;
 static CONST ULONG DxgkSyncShareHandleCookie = 0x4E595353; /* "SSYN" */
@@ -85,6 +89,10 @@ DxgkpSyncShareInitialize(VOID)
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
         KeInitializeSpinLock(&DxgkSyncMonitoredLock);
         InitializeListHead(&DxgkSyncMonitoredListHead);
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+        KeInitializeSpinLock(&DxgkSyncKmdCpuEventLock);
+        InitializeListHead(&DxgkSyncKmdCpuEventListHead);
 #endif
         InterlockedExchange(&DxgkSyncShareInitialized, 2);
         return;
@@ -886,6 +894,79 @@ DxgkpReferenceSyncObjectByHandle(
 }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+static VOID
+DxgkpPublishKmdCpuEventCookie(
+    _Inout_ PDXGKRNL_SYNC_OBJECT SyncObj)
+{
+    KIRQL OldIrql;
+
+    DxgkpSyncShareInitialize();
+    KeAcquireSpinLock(&DxgkSyncKmdCpuEventLock, &OldIrql);
+    if (!DxgkpIsListEntryLinked(&SyncObj->KmdCpuEventListEntry))
+    {
+        InsertTailList(&DxgkSyncKmdCpuEventListHead,
+                       &SyncObj->KmdCpuEventListEntry);
+    }
+    KeReleaseSpinLock(&DxgkSyncKmdCpuEventLock, OldIrql);
+}
+
+static VOID
+DxgkpUnpublishKmdCpuEventCookie(
+    _Inout_ PDXGKRNL_SYNC_OBJECT SyncObj)
+{
+    KIRQL OldIrql;
+
+    if (InterlockedCompareExchange(
+            &DxgkSyncShareInitialized, 2, 2) != 2)
+    {
+        return;
+    }
+
+    KeAcquireSpinLock(&DxgkSyncKmdCpuEventLock, &OldIrql);
+    if (DxgkpIsListEntryLinked(&SyncObj->KmdCpuEventListEntry))
+    {
+        RemoveEntryList(&SyncObj->KmdCpuEventListEntry);
+        InitializeListHead(&SyncObj->KmdCpuEventListEntry);
+    }
+    KeReleaseSpinLock(&DxgkSyncKmdCpuEventLock, OldIrql);
+}
+
+static PDXGKRNL_SYNC_OBJECT
+DxgkpReferenceKmdCpuEventByCookie(
+    _In_ HANDLE Cookie)
+{
+    PDXGKRNL_SYNC_OBJECT SyncObj = NULL;
+    PLIST_ENTRY Link;
+    KIRQL OldIrql;
+
+    if (Cookie == NULL ||
+        InterlockedCompareExchange(
+            &DxgkSyncShareInitialized, 2, 2) != 2)
+    {
+        return NULL;
+    }
+
+    KeAcquireSpinLock(&DxgkSyncKmdCpuEventLock, &OldIrql);
+    for (Link = DxgkSyncKmdCpuEventListHead.Flink;
+         Link != &DxgkSyncKmdCpuEventListHead;
+         Link = Link->Flink)
+    {
+        PDXGKRNL_SYNC_OBJECT Candidate =
+            CONTAINING_RECORD(Link,
+                              DXGKRNL_SYNC_OBJECT,
+                              KmdCpuEventListEntry);
+
+        if ((HANDLE)Candidate == Cookie &&
+            ExAcquireRundownProtection(&Candidate->KmdCpuEventRundown))
+        {
+            SyncObj = Candidate;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&DxgkSyncKmdCpuEventLock, OldIrql);
+    return SyncObj;
+}
+
 static NTSTATUS
 DxgkpDestroyKmdCpuEvent(
     _Inout_ PDXGKRNL_SYNC_OBJECT SyncObj)
@@ -895,9 +976,12 @@ DxgkpDestroyKmdCpuEvent(
     HANDLE KmdCpuEvent;
     NTSTATUS Status;
 
-    if (SyncObj == NULL ||
-        InterlockedCompareExchange(&SyncObj->KmdCpuEventCreated, 0, 1) != 1)
+    if (SyncObj == NULL)
+        return STATUS_SUCCESS;
+    if (InterlockedCompareExchange(
+            &SyncObj->KmdCpuEventCreated, 0, 1) != 1)
     {
+        DxgkpUnpublishKmdCpuEventCookie(SyncObj);
         return STATUS_SUCCESS;
     }
 
@@ -906,6 +990,7 @@ DxgkpDestroyKmdCpuEvent(
      * rundown protection.  Drain it before telling KMD that the opaque event
      * is gone; after this point no new signal can pass the state recheck.
      */
+    DxgkpUnpublishKmdCpuEventCookie(SyncObj);
     ExWaitForRundownProtectionRelease(&SyncObj->KmdCpuEventRundown);
     KmdCpuEvent = SyncObj->hKmdCpuEvent;
     SyncObj->hKmdCpuEvent = NULL;
@@ -979,6 +1064,7 @@ DxgkpCreateKmdCpuEvent(
 
     if (!DxgkAcquireKmdCall(Adapter))
         return STATUS_DELETE_PENDING;
+    DxgkpPublishKmdCpuEventCookie(SyncObj);
 
     _SEH2_TRY
     {
@@ -1013,6 +1099,10 @@ DxgkpCreateKmdCpuEvent(
             DXGKRNL_ERR("DxgkDdiDestroyCpuEvent rollback failed 0x%08lX after create status 0x%08lX\n",
                         CleanupStatus, Status);
         }
+    }
+    else if (!NT_SUCCESS(Status))
+    {
+        DxgkpUnpublishKmdCpuEventCookie(SyncObj);
     }
 
     return Status;
@@ -1087,23 +1177,18 @@ DxgkCbSignalEvent(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /*
-     * hEvent is the opaque cookie supplied to DxgkDdiCreateCpuEvent.  Its
-     * lifetime extends through DxgkDdiDestroyCpuEvent; the per-event rundown
-     * below admits callbacks already in flight and rejects new ones once
-     * destruction starts.
-     */
-    SyncObj = (PDXGKRNL_SYNC_OBJECT)Args->hEvent;
-    if (SyncObj->PublicType != D3DDDI_CPU_NOTIFICATION ||
-        !SyncObj->Flags.SignalByKmd ||
-        SyncObj->CpuNotificationEvent == NULL ||
-        !ExAcquireRundownProtection(&SyncObj->KmdCpuEventRundown))
-    {
-        return STATUS_DELETE_PENDING;
-    }
+    /* Resolve the opaque cookie without dereferencing caller-controlled data.
+     * The registry and rundown are DISPATCH-safe because the Windows 11 KMD
+     * CPU-event contract permits this reverse callback through DISPATCH_LEVEL. */
+    SyncObj = DxgkpReferenceKmdCpuEventByCookie(Args->hEvent);
+    if (SyncObj == NULL)
+        return STATUS_INVALID_HANDLE;
 
     if (InterlockedCompareExchange(
-            &SyncObj->KmdCpuEventCreated, 1, 1) != 1)
+            &SyncObj->KmdCpuEventCreated, 1, 1) != 1 ||
+        SyncObj->PublicType != D3DDDI_CPU_NOTIFICATION ||
+        !SyncObj->Flags.SignalByKmd ||
+        SyncObj->CpuNotificationEvent == NULL)
     {
         Status = STATUS_DELETE_PENDING;
     }
@@ -1621,6 +1706,7 @@ DxgkpCreateSynchronizationObjectInternal(
 #endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
     ExInitializeRundownProtection(&SyncObj->KmdCpuEventRundown);
+    InitializeListHead(&SyncObj->KmdCpuEventListEntry);
 #endif
     switch (Info->Type)
     {
@@ -1899,6 +1985,9 @@ DxgkOpenSynchronizationObject(
     InitializeListHead(&Alias->DeviceSyncObjListEntry);
     InitializeListHead(&Alias->GlobalShareListEntry);
     InitializeListHead(&Alias->PeriodicListEntry);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+    InitializeListHead(&Alias->KmdCpuEventListEntry);
+#endif
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
     ExInitializeRundownProtection(
         &Alias->MonitoredInterruptRundown);
