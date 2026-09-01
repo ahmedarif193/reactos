@@ -50,6 +50,7 @@ extern void func_luidident(void);
 extern void func_handletype(void);
 extern void func_stalehandle(void);
 extern void func_modelistsize(void);
+extern void func_gpustats(void);
 extern void func_vidmm(void);
 extern void func_present(void);
 extern void func_dwm(void);
@@ -124,6 +125,7 @@ const struct test winetest_testlist[] =
     { "handletype",    func_handletype },
     { "stalehandle",   func_stalehandle },
     { "modelistsize",  func_modelistsize },
+    { "gpustats",      func_gpustats },
     { "vidmm",         func_vidmm },
     { "present",       func_present },
     { "dwm",           func_dwm },

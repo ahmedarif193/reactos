@@ -12691,6 +12691,222 @@ DxgkVidMmQuerySegmentSizes(
     return STATUS_SUCCESS;
 }
 
+/* ========================================================================
+ * D3DKMTQueryStatistics support
+ *
+ * The commit ledger lives in dxgmms2 and the placement index lives here, so
+ * a segment's occupancy is asked of the owner and its residency is counted
+ * from the allocations dxgkrnl indexed into it.  Neither number is cached:
+ * a second copy of segment occupancy is exactly what the ownership split
+ * exists to prevent.
+ * ====================================================================== */
+
+/*
+ * Resolve a caller-supplied zero-based segment index.  D3DKMTQueryStatistics
+ * numbers segments from zero across NbSegments, while a placement records the
+ * one-based WDDM segment id, so the two never index the same array directly.
+ */
+static PDXGKRNL_SEGMENT
+DxgkpVidMmSegmentFromStatisticsIndex(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SegmentIndex)
+{
+    PDXGKRNL_SEGMENT Segments;
+
+    if (SegmentIndex >= Adapter->SegmentCount)
+        return NULL;
+    Segments = ADAPTER_SEGMENTS(Adapter);
+    if (Segments == NULL)
+        return NULL;
+    return &Segments[SegmentIndex];
+}
+
+/*
+ * Sum what a segment actually holds.  Process may be NULL to count every
+ * owner, or an EPROCESS to count only that one; ResidentBytes counts the
+ * placements the segment carries and ResidentCount how many there are.
+ */
+static VOID
+DxgkpVidMmSumSegmentResidency(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PEPROCESS Process,
+    _In_ ULONG SegmentId,
+    _Out_ PULONGLONG ResidentBytes,
+    _Out_ PULONG ResidentCount)
+{
+    PLIST_ENTRY Entry;
+
+    *ResidentBytes = 0;
+    *ResidentCount = 0;
+
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    for (Entry = DxgkVidMmAllocationListHead.Flink;
+         Entry != &DxgkVidMmAllocationListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_ALLOCATION Allocation =
+            CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
+
+        if (Allocation->Adapter != Adapter)
+            continue;
+        if (Process != NULL &&
+            (Allocation->Device == NULL ||
+             Allocation->Device->ProcessRecord == NULL ||
+             Allocation->Device->ProcessRecord->Process != Process))
+        {
+            continue;
+        }
+        if (!Allocation->Resident || Allocation->SegmentId != SegmentId)
+            continue;
+        DxgkpVidMmSaturatingAdd(ResidentBytes, Allocation->Size);
+        (*ResidentCount)++;
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+}
+
+NTSTATUS
+DxgkVidMmQuerySegmentStatistics(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SegmentIndex,
+    _Out_ D3DKMT_QUERYSTATISTICS_SEGMENT_INFORMATION *Information)
+{
+    PDXGMMS2_VIDMM_INTERFACE_V1 VidMm;
+    DXGMMS2_VIDMM_SEGMENT_STATUS_V1 Status;
+    PDXGKRNL_SEGMENT Segment;
+    DXGK_SEGMENTFLAGS Flags;
+    ULONGLONG ResidentBytes;
+    ULONGLONG PlacementLimit;
+    ULONG SegmentId;
+    ULONG ResidentCount;
+    BOOLEAN Aperture;
+    BOOLEAN SystemMemory;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Information == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Segment = DxgkpVidMmSegmentFromStatisticsIndex(Adapter, SegmentIndex);
+    if (Segment == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    ExAcquireFastMutex(&Segment->Lock);
+    SegmentId = Segment->SegmentId;
+    Flags = Segment->Flags;
+    PlacementLimit = VidMmSegmentPlacementLimit(Segment);
+    Aperture = VidMmSegmentIsAperture(Segment);
+    ExReleaseFastMutex(&Segment->Lock);
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    Information->CommitLimit = PlacementLimit;
+    Information->Aperture = Aperture ? 1 : 0;
+
+    /* Occupancy belongs to the owner of the space, so ask it rather than
+     * counting placements a second time and disagreeing with it. */
+    VidMm = DxgkpVidMmOwner(Adapter);
+    if (VidMm != NULL)
+    {
+        RtlZeroMemory(&Status, sizeof(Status));
+        if (NT_SUCCESS(VidMm->QuerySegmentStatus(VidMm->VidMmHandle, SegmentIndex, &Status)))
+        {
+            Information->BytesCommitted = Status.UsedSize;
+            Information->Memory.AllocsCommitted = Status.PlacementCount;
+        }
+    }
+
+    DxgkpVidMmSumSegmentResidency(Adapter, NULL, SegmentId, &ResidentBytes, &ResidentCount);
+    Information->BytesResident = ResidentBytes;
+    Information->Memory.AllocsResident = ResidentCount;
+
+    /* Eviction fields are cumulative history.  Current non-residency cannot
+     * prove that an allocation ever occupied this segment, so they remain
+     * zero until the eviction path owns an explicit lifetime ledger. */
+
+    SystemMemory = (BOOLEAN)(Aperture || Flags.PopulatedFromSystemMemory);
+    /* Preservation across standby and hibernate is a miniport power-policy
+     * contract, not a property implied by the segment's backing store. */
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+    Information->SegmentProperties.SystemMemory = SystemMemory ? 1 : 0;
+#endif
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkVidMmQueryProcessSegmentStatistics(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _In_ ULONG SegmentIndex,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT_INFORMATION *Information)
+{
+    PDXGKRNL_SEGMENT Segment;
+    ULONGLONG ResidentBytes;
+    ULONG SegmentId;
+    ULONG ResidentCount;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Process == NULL || Information == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Segment = DxgkpVidMmSegmentFromStatisticsIndex(Adapter, SegmentIndex);
+    if (Segment == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    ExAcquireFastMutex(&Segment->Lock);
+    SegmentId = Segment->SegmentId;
+    ExReleaseFastMutex(&Segment->Lock);
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    DxgkpVidMmSumSegmentResidency(Adapter, Process, SegmentId, &ResidentBytes, &ResidentCount);
+
+    /* This VidMm commits segment space only by publishing a live placement;
+     * it has no detached per-process commitment state.  Count those owned
+     * placements directly, while leaving working-set policy fields unset. */
+    Information->BytesCommitted = ResidentBytes;
+    Information->VideoMemory.AllocsCommitted = ResidentCount;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkVidMmQueryProcessMemoryStatistics(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PEPROCESS Process,
+    _Out_ D3DKMT_QUERYSTATISTICS_SYSTEM_MEMORY *SystemMemory)
+{
+    PLIST_ENTRY Entry;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Process == NULL || SystemMemory == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(SystemMemory, sizeof(*SystemMemory));
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    for (Entry = DxgkVidMmAllocationListHead.Flink;
+         Entry != &DxgkVidMmAllocationListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_ALLOCATION Allocation =
+            CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
+
+        if (Allocation->Adapter != Adapter ||
+            Allocation->Device == NULL ||
+            Allocation->Device->ProcessRecord == NULL ||
+            Allocation->Device->ProcessRecord->Process != Process)
+        {
+            continue;
+        }
+        if (Allocation->SystemMemory == NULL)
+            continue;
+
+        /* The allocation owns these backing bytes.  Reservation, block-size,
+         * section, and cache-attribute statistics require metadata this VidMm
+         * does not keep, so do not manufacture a classification for them. */
+        DxgkpVidMmSaturatingAdd(&SystemMemory->BytesAllocated, Allocation->Size);
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    return STATUS_SUCCESS;
+}
+
 /*
  * DxgkVidMmPublishSegments
  *

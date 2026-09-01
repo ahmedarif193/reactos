@@ -76,6 +76,7 @@
 #include "process_device_core.h"
 #include "process_lifetime_core.h"
 #include "caps_core.h"
+#include "node_stats_core.h"
 #include "postdisplay_core.h"
 
 /* ---- WDDM DDI interface version selection ------------------------------ */
@@ -466,6 +467,18 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
  * can complete out of global fence order). */
 #define DXGK_MAX_TRACKED_NODES 8
 
+/*
+ * Per-node execution accounting.  The rules live in node_stats_core.h, which
+ * has no dxgkrnl types so they can be exercised on their own; dxgkrnl adds
+ * only the clock and the arrays.
+ */
+typedef DXGK_NODE_STATS  DXGKRNL_NODE_STATISTICS;
+typedef PDXGK_NODE_STATS PDXGKRNL_NODE_STATISTICS;
+
+/* Per-source present accounting cap.  A source past this is still presented
+ * to; only its per-process present counters stop being kept. */
+#define DXGK_MAX_TRACKED_VIDPN_SOURCES 8
+
 /* Upper bound on miniport-declared GPU page-table levels. */
 #define DXGK_MAX_PAGE_TABLE_LEVELS 6
 #define DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY 8192
@@ -693,6 +706,32 @@ struct _DXGKRNL_ADAPTER
      * to runtime-power component enumeration and governs scheduling policy.
      */
     ULONG                       NodeCount;
+
+    /*
+     * Per-node execution accounting, indexed by node ordinal.  Adapter start
+     * refuses any topology with more nodes than DXGK_MAX_TRACKED_NODES, so
+     * NodeCount never indexes past this array and the accounting path never
+     * has to allocate at DISPATCH_LEVEL.
+     */
+    DXGKRNL_NODE_STATISTICS     NodeStatistics[DXGK_MAX_TRACKED_NODES];
+
+    /*
+     * The share of the above that belongs to dxgkrnl's own work rather than
+     * to any client process: paging and other contextless submissions.  It
+     * is a subset of NodeStatistics, not a separate clock.
+     */
+    DXGKRNL_NODE_STATISTICS     SystemNodeStatistics[DXGK_MAX_TRACKED_NODES];
+
+    /*
+     * Performance-counter frequency captured once at adapter start, so the
+     * DISPATCH_LEVEL accounting path never has to ask for it and every
+     * conversion of RunningTicks uses the same divisor.
+     */
+    LONG64                      PerformanceFrequency;
+
+    /* Adapter-wide counters answered by D3DKMTQueryStatistics(ADAPTER). */
+    volatile LONG               TdrDetectedCount;
+    volatile LONG               VsyncInterruptEnabled;
 
     /* Stable head fields cached from DXGKQAITYPE_DRIVERCAPS. */
     PHYSICAL_ADDRESS            HighestAcceptableAddress;
@@ -1415,6 +1454,23 @@ struct _DXGKRNL_PROCESS
      * this process on this adapter, including detached devices still retained
      * by queued or committed tracker entries. */
     volatile LONG               InFlightSubmissions;
+
+    /*
+     * This process's share of each node's execution clock.  Indexed by node
+     * ordinal, which the adapter has already bounded to the array size, so
+     * the accounting path at DISPATCH_LEVEL needs neither an allocation nor
+     * a lifetime of its own.
+     */
+    DXGKRNL_NODE_STATISTICS     NodeStatistics[DXGK_MAX_TRACKED_NODES];
+
+    /*
+     * This process's presents per VidPN source: what it handed to the
+     * scheduler and what came back.  The difference is what is still queued,
+     * which is the only way to report a queue depth per process without
+     * walking the queue under its lock from a query path.
+     */
+    volatile LONG               PresentsSubmitted[DXGK_MAX_TRACKED_VIDPN_SOURCES];
+    volatile LONG               PresentsRetired[DXGK_MAX_TRACKED_VIDPN_SOURCES];
 
     /*
      * Kernel handle to the owning process, opened with

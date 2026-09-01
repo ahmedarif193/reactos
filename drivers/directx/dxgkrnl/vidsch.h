@@ -136,6 +136,15 @@ typedef struct _VIDSCH_DMA_PACKET
     PVOID                       PatchLocationList;
     ULONG                       PatchLocationListSize;
 
+    /*
+     * Node accounting: the performance counter reading taken when this
+     * packet was handed to the miniport, or zero when no charge is open.
+     * The charge opens exactly once per dispatch and closes exactly once
+     * per retirement, both by interlocked exchange, so a resubmitted or
+     * doubly-reported packet can neither double-charge nor double-credit.
+     */
+    volatile LONG64             ExecutionChargeStart;
+
     /* Back-pointer to the submitting context (for priority). */
     PVOID                       Context;        /* PDXGKRNL_CONTEXT */
     /*
@@ -493,6 +502,37 @@ VidSchWaitForIdle(
  *
  * IRQL: Any (reads volatile fields)
  */
+/*
+ * Node execution accounting.  Dispatch opens a node's busy charge and
+ * retirement closes it; both are safe to call more than once for the same
+ * packet, and both run at DISPATCH_LEVEL on the submission and completion
+ * paths.
+ */
+VOID VidSchAccountNodeDispatch(_Inout_ PVIDSCH_DMA_PACKET Packet);
+VOID VidSchAccountNodeRetire(_Inout_ PVIDSCH_DMA_PACKET Packet);
+
+/*
+ * Snapshot one node's accounting.  ProcessRecord selects whose share is
+ * reported: NULL asks for the node as a whole.  Frequency conversion happens
+ * here so no caller has to know the clock.
+ *
+ * IRQL: <= DISPATCH_LEVEL
+ */
+NTSTATUS
+VidSchQueryNodeStatistics(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_opt_ struct _DXGKRNL_PROCESS *ProcessRecord,
+    _In_ ULONG NodeOrdinal,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_NODE_INFORMATION *Information);
+
+/* The share of the node clock that belongs to dxgkrnl's own contextless
+ * work rather than to any client process. */
+NTSTATUS
+VidSchQuerySystemNodeStatistics(
+    _In_ struct _DXGKRNL_ADAPTER *Adapter,
+    _In_ ULONG NodeOrdinal,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_NODE_INFORMATION *Information);
+
 NTSTATUS
 VidSchQueryEngineStatus(
     _In_  struct _DXGKRNL_ADAPTER *Adapter,

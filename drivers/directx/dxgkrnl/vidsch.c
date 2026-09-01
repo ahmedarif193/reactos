@@ -413,6 +413,10 @@ VidSchpDrainRetirements(_In_ PDXGKRNL_ADAPTER Adapter)
 
             if (Packet == NULL)
                 continue;
+            /* Every record here is a packet the miniport has handed back,
+             * whatever the reason, so this is the one place the node's busy
+             * charge has to close. */
+            VidSchAccountNodeRetire(Packet);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
             Faulted =
                 VidSchpUnpublishTerminalPacket(Packet, &FaultStatus);
@@ -723,8 +727,257 @@ static BOOLEAN VidSchpPacketSubmissionOwned(_In_ PVIDSCH_DMA_PACKET Packet)
     return Packet->Kicked || InterlockedCompareExchange(&Packet->ContextOrderResubmissionPending, 0, 0) != 0;
 }
 
+/* ========================================================================
+ * Node execution accounting
+ *
+ * A GPU node is busy for exactly as long as the miniport holds one of its
+ * packets.  The dispatch that hands a packet over opens the charge and the
+ * retirement that takes it back closes it, so the busy clock never counts
+ * time the hardware was not asked to do anything and never stops while it
+ * still is.
+ *
+ * Both edges are idempotent per packet.  Dispatch stores the start reading
+ * only into a zero slot, and retirement takes the reading away before using
+ * it, so a preemption resubmission cannot open a second charge and a packet
+ * reported through more than one terminal path cannot credit twice.
+ * ====================================================================== */
+
+/*
+ * Which of the four public DMA packet types a packet is.  The paging flag is
+ * what separates paging traffic from a client's own rendering, and a paging
+ * packet with no owning device is the system's own, not a client's.
+ */
+static D3DKMT_QUERYSTATISTICS_DMA_PACKET_TYPE
+VidSchpPacketType(
+    _In_ PVIDSCH_DMA_PACKET Packet)
+{
+    if ((Packet->SubmitFlags & VIDSCH_SUBMITFLAG_PAGING) == 0)
+        return D3DKMT_ClientRenderBuffer;
+    return (Packet->Device != NULL) ? D3DKMT_ClientPagingBuffer
+                                    : D3DKMT_SystemPagingBuffer;
+}
+
+/*
+ * The node ordinal a packet carries has already been bounded by the
+ * submission path, but the accounting arrays are fixed size and this runs on
+ * the completion path, so it is re-checked here rather than trusted.
+ */
+static PDXGKRNL_ADAPTER
+VidSchpAccountingTarget(
+    _In_ PVIDSCH_DMA_PACKET Packet,
+    _Out_ PULONG NodeOrdinal)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    *NodeOrdinal = 0;
+    if (Packet == NULL || Packet->OwnerEngine == NULL)
+        return NULL;
+    Adapter = Packet->OwnerEngine->Adapter;
+    if (Adapter == NULL)
+        return NULL;
+    if (Packet->NodeOrdinal >= RTL_NUMBER_OF(Adapter->NodeStatistics))
+        return NULL;
+    *NodeOrdinal = Packet->NodeOrdinal;
+    return Adapter;
+}
+
+VOID
+VidSchAccountNodeDispatch(
+    _Inout_ PVIDSCH_DMA_PACKET Packet)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_PROCESS ProcessRecord;
+    D3DKMT_QUERYSTATISTICS_DMA_PACKET_TYPE PacketType;
+    LARGE_INTEGER Now;
+    ULONG NodeOrdinal;
+
+    Adapter = VidSchpAccountingTarget(Packet, &NodeOrdinal);
+    if (Adapter == NULL)
+        return;
+
+    Now = KeQueryPerformanceCounter(NULL);
+    if (InterlockedCompareExchange64(&Packet->ExecutionChargeStart,
+                                     Now.QuadPart, 0) != 0)
+    {
+        return;
+    }
+
+    PacketType = VidSchpPacketType(Packet);
+    DxgkNodeStatsCoreOpen(&Adapter->NodeStatistics[NodeOrdinal], PacketType, Now.QuadPart);
+
+    /*
+     * The packet holds a device reference for its whole flight and the device
+     * holds one on its process record, so the record is alive here without
+     * any lock of its own.
+     */
+    ProcessRecord = (Packet->Device != NULL) ? Packet->Device->ProcessRecord : NULL;
+    if (ProcessRecord != NULL)
+    {
+        DxgkNodeStatsCoreOpen(&ProcessRecord->NodeStatistics[NodeOrdinal], PacketType, Now.QuadPart);
+        if (Packet->IsPresent &&
+            Packet->VidPnSourceId < RTL_NUMBER_OF(ProcessRecord->PresentsSubmitted))
+        {
+            InterlockedIncrement(&ProcessRecord->PresentsSubmitted[Packet->VidPnSourceId]);
+        }
+    }
+    else
+    {
+        /* Contextless work belongs to no client, so it is dxgkrnl's own. */
+        DxgkNodeStatsCoreOpen(&Adapter->SystemNodeStatistics[NodeOrdinal], PacketType, Now.QuadPart);
+    }
+}
+
+VOID
+VidSchAccountNodeRetire(
+    _Inout_ PVIDSCH_DMA_PACKET Packet)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_PROCESS ProcessRecord;
+    D3DKMT_QUERYSTATISTICS_DMA_PACKET_TYPE PacketType;
+    LARGE_INTEGER Now;
+    ULONG NodeOrdinal;
+
+    Adapter = VidSchpAccountingTarget(Packet, &NodeOrdinal);
+    if (Adapter == NULL)
+        return;
+    if (InterlockedExchange64(&Packet->ExecutionChargeStart, 0) == 0)
+        return;
+
+    Now = KeQueryPerformanceCounter(NULL);
+    PacketType = VidSchpPacketType(Packet);
+    ProcessRecord = (Packet->Device != NULL) ? Packet->Device->ProcessRecord : NULL;
+    if (ProcessRecord != NULL)
+    {
+        DxgkNodeStatsCoreClose(&ProcessRecord->NodeStatistics[NodeOrdinal], PacketType, Now.QuadPart);
+        /*
+         * A present packet the miniport has handed back is a frame that
+         * reached the source, which is the one moment it can be charged to
+         * the process that asked for it.
+         */
+        if (Packet->IsPresent &&
+            Packet->VidPnSourceId < RTL_NUMBER_OF(ProcessRecord->PresentsRetired))
+        {
+            InterlockedIncrement(&ProcessRecord->PresentsRetired[Packet->VidPnSourceId]);
+        }
+    }
+    else
+    {
+        DxgkNodeStatsCoreClose(&Adapter->SystemNodeStatistics[NodeOrdinal], PacketType, Now.QuadPart);
+    }
+    DxgkNodeStatsCoreClose(&Adapter->NodeStatistics[NodeOrdinal], PacketType, Now.QuadPart);
+}
+
+/*
+ * Convert one accounting record into the public shape.  A node that is busy
+ * right now has an interval that has not been added to RunningTicks yet;
+ * leaving it out would make a saturated engine report a running time that
+ * stalls, so the open interval is included in the snapshot without being
+ * committed to the counter.
+ */
+static VOID
+VidSchpSnapshotNodeStatistics(
+    _In_ PDXGKRNL_NODE_STATISTICS Statistics,
+    _In_ LONG64 Frequency,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_NODE_INFORMATION *Information)
+{
+    LARGE_INTEGER Now;
+    ULONG Index;
+
+    RtlZeroMemory(Information, sizeof(*Information));
+    Now = KeQueryPerformanceCounter(NULL);
+    /*
+     * 100ns units.  The WDK header calls this field micro-seconds, but the
+     * GPU Engine performance counter it feeds -- "Running Time" -- is a
+     * PERF_100NSEC_TIMER and is documented in 100-nanosecond units, and every
+     * consumer divides this by an elapsed 100ns interval to get a
+     * utilization.  Emitting microseconds would make a saturated engine
+     * report ten per cent.
+     */
+    Information->RunningTime.QuadPart =
+        DxgkNodeStatsCoreTicksTo100ns(
+            DxgkNodeStatsCoreRunningTicks(Statistics, Now.QuadPart),
+            Frequency);
+
+    Information->ContextSwitch =
+        (ULONG)InterlockedCompareExchange64(&Statistics->ContextSwitches, 0, 0);
+    for (Index = 0; Index < D3DKMT_QUERYSTATISTICS_DMA_PACKET_TYPE_MAX; ++Index)
+    {
+        Information->PacketStatistics.DmaPacket[Index].PacketSubmited =
+            (ULONG)InterlockedCompareExchange64(&Statistics->PacketsDispatched[Index], 0, 0);
+        Information->PacketStatistics.DmaPacket[Index].PacketCompleted =
+            (ULONG)InterlockedCompareExchange64(&Statistics->PacketsRetired[Index], 0, 0);
+        Information->PacketStatistics.DmaPacket[Index].PacketPreempted =
+            (ULONG)InterlockedCompareExchange64(&Statistics->PacketsPreempted[Index], 0, 0);
+    }
+    Information->PreemptionStatistics.PreemptionCounter[D3DKMT_PreemptionAttempt] =
+        (ULONG)InterlockedCompareExchange64(&Statistics->PreemptionsRequested, 0, 0);
+    Information->PreemptionStatistics.PreemptionCounter[D3DKMT_PreemptionAttemptSuccess] =
+        (ULONG)InterlockedCompareExchange64(&Statistics->PreemptionsCompleted, 0, 0);
+}
+
+static PDXGKRNL_NODE_STATISTICS
+VidSchpPacketOwnerNodeStatistics(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PVIDSCH_DMA_PACKET Packet,
+    _In_ ULONG NodeOrdinal)
+{
+    PDXGKRNL_PROCESS ProcessRecord;
+
+    if (Packet == NULL)
+        return NULL;
+    ProcessRecord = (Packet->Device != NULL) ? Packet->Device->ProcessRecord : NULL;
+    if (ProcessRecord != NULL)
+        return &ProcessRecord->NodeStatistics[NodeOrdinal];
+    return &Adapter->SystemNodeStatistics[NodeOrdinal];
+}
+
+NTSTATUS
+VidSchQueryNodeStatistics(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_PROCESS ProcessRecord,
+    _In_ ULONG NodeOrdinal,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_NODE_INFORMATION *Information)
+{
+    if (Adapter == NULL || Information == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (NodeOrdinal >= Adapter->NodeCount ||
+        NodeOrdinal >= RTL_NUMBER_OF(Adapter->NodeStatistics))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    VidSchpSnapshotNodeStatistics(
+        (ProcessRecord != NULL) ? &ProcessRecord->NodeStatistics[NodeOrdinal]
+                                : &Adapter->NodeStatistics[NodeOrdinal],
+        Adapter->PerformanceFrequency,
+        Information);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+VidSchQuerySystemNodeStatistics(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG NodeOrdinal,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_NODE_INFORMATION *Information)
+{
+    if (Adapter == NULL || Information == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (NodeOrdinal >= Adapter->NodeCount ||
+        NodeOrdinal >= RTL_NUMBER_OF(Adapter->SystemNodeStatistics))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    VidSchpSnapshotNodeStatistics(
+        &Adapter->SystemNodeStatistics[NodeOrdinal],
+        Adapter->PerformanceFrequency,
+        Information);
+    return STATUS_SUCCESS;
+}
+
 static VOID VidSchpFinalizeDequeuedPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS CompletionStatus)
 {
+    VidSchAccountNodeRetire(Packet);
     Packet->SchedulerCookie = 0;
     DxgkDeviceWorkComplete(Packet->DeviceWork);
     if (Packet->ContextOrderOperation != NULL)
@@ -1193,6 +1446,29 @@ VidSchpCompletionDpcRoutine(
         {
             Engine->CompletedPreemptionEngineOrdinal = Engine->PendingPreemptionEngineOrdinal;
             InterlockedExchange(&Engine->CompletedPreemptionFenceId, (LONG)CompletedPreemptionFence);
+            if (Engine->Adapter != NULL &&
+                Engine->SchedulerOrdinal < RTL_NUMBER_OF(Engine->Adapter->NodeStatistics))
+            {
+                PDXGKRNL_NODE_STATISTICS NodeStatistics =
+                    &Engine->Adapter->NodeStatistics[Engine->SchedulerOrdinal];
+                PDXGKRNL_NODE_STATISTICS OwnerStatistics;
+
+                InterlockedIncrement64(&NodeStatistics->PreemptionsCompleted);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+                OwnerStatistics = VidSchpPacketOwnerNodeStatistics(Engine->Adapter, Engine->ActivePacket, Engine->SchedulerOrdinal);
+                if (OwnerStatistics != NULL)
+                    InterlockedIncrement64(&OwnerStatistics->PreemptionsCompleted);
+                if (Engine->ActivePacket != NULL)
+                {
+                    D3DKMT_QUERYSTATISTICS_DMA_PACKET_TYPE PacketType = VidSchpPacketType(Engine->ActivePacket);
+
+                    InterlockedIncrement64(&NodeStatistics->PacketsPreempted[PacketType]);
+                    InterlockedIncrement64(&OwnerStatistics->PacketsPreempted[PacketType]);
+                }
+#else
+                UNREFERENCED_PARAMETER(OwnerStatistics);
+#endif
+            }
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
             Engine->ActivePacket = NULL;
 #endif
@@ -1362,6 +1638,7 @@ VidSchpVirtualSubmitWorker(
             VidSchpPublishActivePacket(Packet);
 #endif
         }
+        VidSchAccountNodeDispatch(Packet);
         DxgkPublishSubmittedFence(Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
         _SEH2_TRY
         {
@@ -1642,6 +1919,7 @@ VidSchpKickEngine(
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
             VidSchpPublishActivePacket(Packet);
 #endif
+            VidSchAccountNodeDispatch(Packet);
             DxgkPublishSubmittedFence(Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
             KeRaiseIrql(DISPATCH_LEVEL, &CallIrql);
             _SEH2_TRY
@@ -3190,7 +3468,26 @@ VidSchPreemptEngine(
     _SEH2_END;
     KeLowerIrql(CallIrql);
     if (NT_SUCCESS(Status))
+    {
         InterlockedCompareExchange(&Engine->PreemptionDdiState, 2, 1);
+        /* An attempt is counted where it was actually made: the miniport
+         * accepted the request and the node now owes a DMA_PREEMPTED. */
+        if (NodeOrdinal < RTL_NUMBER_OF(Adapter->NodeStatistics))
+        {
+            PDXGKRNL_NODE_STATISTICS OwnerStatistics;
+
+            InterlockedIncrement64(&Adapter->NodeStatistics[NodeOrdinal].PreemptionsRequested);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+            KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+            OwnerStatistics = VidSchpPacketOwnerNodeStatistics(Adapter, Engine->ActivePacket, NodeOrdinal);
+            if (OwnerStatistics != NULL)
+                InterlockedIncrement64(&OwnerStatistics->PreemptionsRequested);
+            KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+#else
+            UNREFERENCED_PARAMETER(OwnerStatistics);
+#endif
+        }
+    }
     DxgkReleaseKmdCall(Adapter);
 
     if (!NT_SUCCESS(Status))

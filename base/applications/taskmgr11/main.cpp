@@ -162,6 +162,8 @@ void Settings_Load(void)
         st.navExpanded = RegReadDw(hk, L"NavExpanded", 1);
         st.noEffPrompt = RegReadDw(hk, L"NoEfficiencyPrompt", 0);
         st.fullAcctName = RegReadDw(hk, L"FullAccountName", 0);
+        st.perfResource = RegReadDw(hk, L"PerfResource", 0);
+        st.perfIndex = RegReadDw(hk, L"PerfIndex", 0);
 
         DWORD cb = sizeof(st.wp);
         if (RegQueryValueExW(hk, L"Placement", NULL, NULL, (LPBYTE)&st.wp, &cb)
@@ -192,6 +194,8 @@ void Settings_Save(void)
     WR(L"NavExpanded", st.navExpanded);
     WR(L"NoEfficiencyPrompt", st.noEffPrompt);
     WR(L"FullAccountName", st.fullAcctName);
+    WR(L"PerfResource", st.perfResource);
+    WR(L"PerfIndex", st.perfIndex);
 #undef WR
     if (g_app.hFrame)
     {

@@ -622,6 +622,10 @@ DxgkpRecordTdrRecovery(
     if (Adapter->TdrRecoveryEntryCount < DXGKP_TDR_HISTORY_CAPACITY)
         Adapter->TdrRecoveryEntryCount++;
     KeReleaseSpinLock(&Adapter->TdrHistoryLock, OldIrql);
+    /* The ring above saturates at its capacity because it answers a rate
+     * question.  D3DKMTQueryStatistics(ADAPTER) asks a lifetime one, so the
+     * total is counted separately and never wraps back to the window. */
+    InterlockedIncrement(&Adapter->TdrDetectedCount);
 }
 
 static VOID
@@ -9880,6 +9884,13 @@ DxgkpSetVsyncInterruptState(
     _SEH2_END;
 
     DxgkReleaseMiniportCallback(Adapter);
+    /* This is the only place the vsync interrupt is turned on or off, so it
+     * is the only place that can answer whether it is on. */
+    if (NT_SUCCESS(Status))
+    {
+        InterlockedExchange(&Adapter->VsyncInterruptEnabled,
+                            (VsyncState == DXGK_VSYNC_ENABLE) ? 1 : 0);
+    }
     return Status;
 }
 
@@ -10252,6 +10263,20 @@ DxgkAdapterStart(
      * topology fields apply only to full WDDM adapters. */
     Adapter->NodeCount = 0;
     Adapter->SupportSurpriseRemoval = FALSE;
+
+    /*
+     * Node accounting starts from zero on every start, and the clock it is
+     * measured with is captured here so the DISPATCH_LEVEL charge path never
+     * asks for the frequency and every reader divides by the same number.
+     */
+    RtlZeroMemory(Adapter->NodeStatistics, sizeof(Adapter->NodeStatistics));
+    RtlZeroMemory(Adapter->SystemNodeStatistics, sizeof(Adapter->SystemNodeStatistics));
+    {
+        LARGE_INTEGER PerformanceFrequency;
+
+        (VOID)KeQueryPerformanceCounter(&PerformanceFrequency);
+        Adapter->PerformanceFrequency = PerformanceFrequency.QuadPart;
+    }
     Role = DxgkAdapterStartClassifyRole(Adapter->MiniportContext->IsDisplayOnlyDriver, Adapter->NumberOfVideoPresentSources);
     {
         PDXGK_DRIVERCAPS Caps;

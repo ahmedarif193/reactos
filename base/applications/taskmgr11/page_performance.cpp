@@ -9,9 +9,14 @@
 
 #define PGF_CLASS L"TM11PagePerf"
 
-enum { RES_CPU = 0, RES_MEM, RES_DISK, RES_NET, RES_COUNT };
+enum { RES_CPU = 0, RES_MEM, RES_DISK, RES_NET, RES_GPU, RES_COUNT };
 enum { CPU_GRAPH_OVERALL = 0, CPU_GRAPH_LOGICAL = 1 };
-#define MAX_PERF_TILES (TM_MAX_DISKS + 3)
+
+/* -1 shows every engine at once, which is what Windows opens with; any
+ * other value names the single engine to fill the graph area with. */
+#define GPU_GRAPH_ALL_ENGINES (-1)
+
+#define MAX_PERF_TILES (TM_MAX_DISKS + TM_MAX_NICS + TM_MAX_GPUS + 2)
 
 struct PerformancePage : Page
 {
@@ -19,15 +24,19 @@ struct PerformancePage : Page
     int  hotTile;
     int  railScroll;
     int  cpuGraphMode;
+    int  gpuGraphMode;
     BOOL showKernelTimes;
     BOOL trackingMouse;
+    BOOL selectionRestored;
     RECT tiles[MAX_PERF_TILES];
     RECT railClip;
     RECT rcPane;
 
     PerformancePage() : sel(0), hotTile(-1), railScroll(0),
                         cpuGraphMode(CPU_GRAPH_LOGICAL),
-                        showKernelTimes(FALSE), trackingMouse(FALSE)
+                        gpuGraphMode(GPU_GRAPH_ALL_ENGINES),
+                        showKernelTimes(FALSE), trackingMouse(FALSE),
+                        selectionRestored(FALSE)
     {
         ZeroMemory(tiles, sizeof(tiles));
         SetRectEmpty(&railClip);
@@ -36,9 +45,11 @@ struct PerformancePage : Page
 
     const WCHAR* Title() { return L"Performance"; }
 
+    /* CPU, memory, one per disk, one per network adapter, one per display
+     * adapter -- the same order Windows lists them in. */
     int TileCount(void) const
     {
-        return Data::g.diskCount + 3; /* CPU, memory, disks, network */
+        return Data::g.diskCount + Data::g.netCount + Data::g.gpuCount + 2;
     }
 
     int TileResource(int tile) const
@@ -46,7 +57,8 @@ struct PerformancePage : Page
         if (tile == 0) return RES_CPU;
         if (tile == 1) return RES_MEM;
         if (tile < 2 + Data::g.diskCount) return RES_DISK;
-        return RES_NET;
+        if (tile < 2 + Data::g.diskCount + Data::g.netCount) return RES_NET;
+        return RES_GPU;
     }
 
     DiskSnapshot* TileDisk(int tile)
@@ -57,6 +69,22 @@ struct PerformancePage : Page
         return &Data::g.disks[index];
     }
 
+    NetSnapshot* TileNet(int tile)
+    {
+        int index = tile - (2 + Data::g.diskCount);
+        if (index < 0 || index >= Data::g.netCount)
+            return NULL;
+        return &Data::g.nets[index];
+    }
+
+    GpuSnapshot* TileGpu(int tile)
+    {
+        int index = tile - (2 + Data::g.diskCount + Data::g.netCount);
+        if (index < 0 || index >= Data::g.gpuCount)
+            return NULL;
+        return &Data::g.gpus[index];
+    }
+
     int SelectedResource(void) const
     {
         return TileResource(sel);
@@ -65,6 +93,73 @@ struct PerformancePage : Page
     DiskSnapshot* SelectedDisk(void)
     {
         return TileDisk(sel);
+    }
+
+    NetSnapshot* SelectedNet(void)
+    {
+        return TileNet(sel);
+    }
+
+    GpuSnapshot* SelectedGpu(void)
+    {
+        return TileGpu(sel);
+    }
+
+    /* Which one of its kind a tile is: disk 2, GPU 1, and so on.  CPU,
+     * memory and network have exactly one each, so their index is zero. */
+    int TileIndex(int tile) const
+    {
+        int resource = TileResource(tile);
+
+        if (resource == RES_DISK)
+            return tile - 2;
+        if (resource == RES_NET)
+            return tile - (2 + Data::g.diskCount);
+        if (resource == RES_GPU)
+            return tile - (2 + Data::g.diskCount + Data::g.netCount);
+        return 0;
+    }
+
+    /*
+     * Reopening Task Manager comes back to the resource it was last showing.
+     * The selection is remembered as a kind plus an index rather than a tile
+     * number, because a disk that appeared or a GPU that went away would
+     * otherwise shift the same number onto a different resource.
+     */
+    void RememberSelection(void)
+    {
+        g_app.st.perfResource = (DWORD)SelectedResource();
+        g_app.st.perfIndex = (DWORD)TileIndex(sel);
+    }
+
+    void RestoreSelection(void)
+    {
+        int count = TileCount();
+
+        if (selectionRestored)
+            return;
+        /* Nothing is restorable until the first sample has told us which
+         * disks and adapters exist. */
+        if (count <= 2)
+            return;
+        selectionRestored = TRUE;
+        for (int i = 0; i < count; i++)
+        {
+            if ((DWORD)TileResource(i) == g_app.st.perfResource &&
+                (DWORD)TileIndex(i) == g_app.st.perfIndex)
+            {
+                sel = i;
+                EnsureSelectedVisible();
+                return;
+            }
+        }
+    }
+
+    /* The engines drawn for a GPU, capped at what fits the graph area. */
+    int GpuVisibleEngines(const GpuSnapshot* gpu) const
+    {
+        int count = gpu ? gpu->engineCount : 0;
+        return count > 4 ? 4 : count;
     }
 
     /* ---------- layout ---------- */
@@ -141,9 +236,38 @@ struct PerformancePage : Page
             if (!disk) return NULL;
             return disk->hActive.count ? &disk->hActive : &disk->hTransfer;
         }
-        case RES_NET:  return &Data::g.hNetRecv;
+        case RES_NET:
+        {
+            NetSnapshot* net = TileNet(tile);
+            return net ? &net->hRecv : NULL;
+        }
+        case RES_GPU:
+        {
+            GpuSnapshot* gpu = TileGpu(tile);
+            return gpu ? &gpu->hUtil : NULL;
+        }
         }
         return NULL;
+    }
+
+    /* "1.6/12.0 GB" -- one unit for the pair, which is how Windows shows a
+     * used-of-total figure so the two halves stay comparable at a glance. */
+    static void FmtMemoryPair(ULONGLONG used, ULONGLONG total, WCHAR* buf, int cch)
+    {
+        const double gigabyte = 1024.0 * 1024.0 * 1024.0;
+        const double megabyte = 1024.0 * 1024.0;
+
+        /* One decimal either way, and the same unit the graph beside it is
+         * scaled in, so the pair and the graph's ceiling read as the same
+         * number rather than one rounded copy of the other. */
+        if (total >= (ULONGLONG)gigabyte)
+        {
+            StringCchPrintfW(buf, cch, L"%.1f/%.1f GB",
+                             used / gigabyte, total / gigabyte);
+            return;
+        }
+        StringCchPrintfW(buf, cch, L"%.1f/%.1f MB",
+                         used / megabyte, total / megabyte);
     }
 
     static void FmtBits(double bitsPerSecond, WCHAR* buf, int cch)
@@ -184,8 +308,18 @@ struct PerformancePage : Page
             break;
         }
         case RES_NET:
-            StringCchCopyW(buf, cch, d.netType[0] ? d.netType : L"Network");
+        {
+            NetSnapshot* net = TileNet(tile);
+            StringCchCopyW(buf, cch,
+                           (net && net->type[0]) ? net->type : L"Network");
             break;
+        }
+        case RES_GPU:
+        {
+            GpuSnapshot* gpu = TileGpu(tile);
+            StringCchPrintfW(buf, cch, L"GPU %d", gpu ? gpu->index : 0);
+            break;
+        }
         default:
             buf[0] = 0;
             break;
@@ -219,29 +353,81 @@ struct PerformancePage : Page
             if (!disk || !disk->present)
                 StringCchCopyW(buf, cch, L"Not available");
             else if (disk->perfValid)
-                StringCchPrintfW(buf, cch, L"%s  %.0f%%",
-                                 disk->type, disk->activePct);
+                FmtPct(disk->activePct, buf, cch);
             else
-            {
-                WCHAR rate[32];
-                FmtRate(disk->readBps + disk->writeBps, rate, _countof(rate));
-                StringCchPrintfW(buf, cch, L"%s  %s", disk->type, rate);
-            }
+                FmtRate(disk->readBps + disk->writeBps, buf, cch);
             break;
         }
         case RES_NET:
         {
-            WCHAR s[32], rr[32];
-            if (!d.netPresent || !d.netConnected)
+            NetSnapshot* net = TileNet(tile);
+            WCHAR sent[32], received[32];
+            if (!net || !net->connected)
             {
                 StringCchCopyW(buf, cch, L"Not connected");
                 break;
             }
-            FmtBits(d.netSendBps * 8.0, s, _countof(s));
-            FmtBits(d.netRecvBps * 8.0, rr, _countof(rr));
-            StringCchPrintfW(buf, cch, L"S: %s  R: %s", s, rr);
+            FmtBits(net->sendBps * 8.0, sent, _countof(sent));
+            FmtBits(net->recvBps * 8.0, received, _countof(received));
+            StringCchPrintfW(buf, cch, L"S: %s  R: %s", sent, received);
             break;
         }
+        case RES_GPU:
+        {
+            GpuSnapshot* gpu = TileGpu(tile);
+            if (!gpu)
+            {
+                StringCchCopyW(buf, cch, L"Not available");
+                break;
+            }
+            if (gpu->hasTemperature)
+                StringCchPrintfW(buf, cch, L"%.0f%% (%.0f \u00B0C)",
+                                 gpu->utilPct, gpu->temperatureC);
+            else
+                StringCchPrintfW(buf, cch, L"%.0f%%", gpu->utilPct);
+            break;
+        }
+        }
+    }
+
+    /*
+     * The adapter's own name, shown above its utilization, is what makes two
+     * identically-named GPU tiles tell each other apart.  It is a separate
+     * line rather than part of the value because a long adapter name has to
+     * be truncated with an ellipsis, and a wrapped one would push the
+     * utilization out of the tile.
+     */
+    BOOL TileSubtitle(int tile, WCHAR* buf, int cch)
+    {
+        buf[0] = 0;
+        switch (TileResource(tile))
+        {
+        case RES_GPU:
+        {
+            GpuSnapshot* gpu = TileGpu(tile);
+            if (!gpu)
+                return FALSE;
+            StringCchCopyW(buf, cch, gpu->name);
+            return TRUE;
+        }
+        case RES_DISK:
+        {
+            DiskSnapshot* disk = TileDisk(tile);
+            if (!disk || !disk->present || !disk->type[0])
+                return FALSE;
+            StringCchCopyW(buf, cch, disk->type);
+            return TRUE;
+        }
+        case RES_NET:
+        {
+            NetSnapshot* net = TileNet(tile);
+            if (!net || !net->name[0])
+                return FALSE;
+            StringCchCopyW(buf, cch, net->name);
+            return TRUE;
+        }
+        default:
+            return FALSE;
         }
     }
 
@@ -274,7 +460,9 @@ struct PerformancePage : Page
         ZeroMemory(&gs, sizeof(gs));
         gs.line = g_t.graph[res];
         gs.border = TRUE;
-        gs.yMax = (res == RES_CPU || res == RES_MEM ||
+        /* A percentage series is drawn against a fixed 100% ceiling; a rate
+         * series has no natural ceiling and auto-scales. */
+        gs.yMax = (res == RES_CPU || res == RES_MEM || res == RES_GPU ||
                    (res == RES_DISK && TileDisk(tile) &&
                     TileDisk(tile)->hActive.count)) ? 100.0 : 0.0;
         DrawGraph(dc, gr, Ring(tile), gs);
@@ -286,7 +474,18 @@ struct PerformancePage : Page
         DrawTextClip(dc, name, tr, g_t.fBodySemi, g_t.textMain,
                      DT_LEFT | DT_SINGLELINE);
         WCHAR val[96];
+        WCHAR subtitle[160];
         TileValue(tile, val, _countof(val));
+        if (TileSubtitle(tile, subtitle, _countof(subtitle)))
+        {
+            RECT sr = { tr.left, r.top + S(32), r.right - S(4), r.top + S(48) };
+            RECT vr = { tr.left, r.top + S(48), r.right - S(4), r.bottom - S(8) };
+            DrawTextClip(dc, subtitle, sr, g_t.fSmall, g_t.textSec,
+                         DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+            DrawTextClip(dc, val, vr, g_t.fSmall, g_t.textSec,
+                         DT_LEFT | DT_SINGLELINE);
+            return;
+        }
         RECT vr = { tr.left, r.top + S(34), r.right - S(4), r.bottom - S(8) };
         DrawTextClip(dc, val, vr, g_t.fSmall, g_t.textSec, DT_LEFT | DT_WORDBREAK);
     }
@@ -460,36 +659,83 @@ struct PerformancePage : Page
         }
         case RES_NET:
         {
-            FmtBits(d.netSendBps * 8.0, st[n].value, 64);
+            NetSnapshot* net = SelectedNet();
+            if (!net)
+                break;
+
+            FmtBits(net->sendBps * 8.0, st[n].value, 64);
             st[n++].label = L"Send";
-            FmtBits(d.netRecvBps * 8.0, st[n].value, 64);
+            FmtBits(net->recvBps * 8.0, st[n].value, 64);
             st[n++].label = L"Receive";
 
             StringCchCopyW(rst[rn].value, 64,
-                           d.netAdapter[0] ? d.netAdapter : L"Unavailable");
+                           net->adapter[0] ? net->adapter : L"Unavailable");
             rst[rn++].label = L"Adapter name:";
             StringCchCopyW(rst[rn].value, 64,
-                           d.netDns[0] ? d.netDns : L"Unavailable");
+                           net->dns[0] ? net->dns : L"Unavailable");
             rst[rn++].label = L"DNS name:";
             StringCchCopyW(rst[rn].value, 64,
-                           d.netType[0] ? d.netType : L"Unavailable");
+                           net->type[0] ? net->type : L"Unavailable");
             rst[rn++].label = L"Connection type:";
             StringCchCopyW(rst[rn].value, 64,
-                           d.netIpv4[0] ? d.netIpv4 : L"Unavailable");
+                           net->ipv4[0] ? net->ipv4 : L"Unavailable");
             rst[rn++].label = L"IPv4 address:";
             StringCchCopyW(rst[rn].value, 64,
-                           d.netIpv6[0] ? d.netIpv6 : L"Unavailable");
+                           net->ipv6[0] ? net->ipv6 : L"Unavailable");
             rst[rn++].label = L"IPv6 address:";
-            if (d.netLinkBps)
+            if (net->linkBps)
             {
-                FmtBits((double)d.netLinkBps, rst[rn].value, 64);
+                FmtBits((double)net->linkBps, rst[rn].value, 64);
             }
             else
             {
                 StringCchCopyW(rst[rn].value, 64, L"Unavailable");
             }
             rst[rn++].label = L"Link speed:";
-            StringCchCopyW(rightTitle, cchR, d.netName);
+            StringCchCopyW(rightTitle, cchR, net->name);
+            break;
+        }
+        case RES_GPU:
+        {
+            GpuSnapshot* gpu = SelectedGpu();
+            if (!gpu)
+                break;
+
+            FmtPct(gpu->utilPct, st[n].value, 64);
+            st[n++].label = L"Utilization";
+            FmtMemoryPair(gpu->dedicatedUsed, gpu->dedicatedTotal, st[n].value, 64);
+            st[n++].label = L"Dedicated GPU memory";
+            FmtMemoryPair(gpu->dedicatedUsed + gpu->sharedUsed,
+                          gpu->dedicatedTotal + gpu->sharedTotal, st[n].value, 64);
+            st[n++].label = L"GPU Memory";
+            FmtMemoryPair(gpu->sharedUsed, gpu->sharedTotal, st[n].value, 64);
+            st[n++].label = L"Shared GPU memory";
+            /*
+             * A driver that reports no thermals leaves the row out entirely,
+             * exactly as Windows does; a zero here would read as a real
+             * reading of zero degrees.
+             */
+            if (gpu->hasTemperature)
+            {
+                StringCchPrintfW(st[n].value, 64, L"%.0f \u00B0C", gpu->temperatureC);
+                st[n++].label = L"GPU Temperature";
+            }
+
+            StringCchCopyW(rst[rn].value, 64,
+                           gpu->driverVersion[0] ? gpu->driverVersion : L"Unavailable");
+            rst[rn++].label = L"Driver version:";
+            StringCchCopyW(rst[rn].value, 64,
+                           gpu->driverDate[0] ? gpu->driverDate : L"Unavailable");
+            rst[rn++].label = L"Driver date:";
+            StringCchCopyW(rst[rn].value, 64,
+                           gpu->directX[0] ? gpu->directX : L"Unavailable");
+            rst[rn++].label = L"DirectX version:";
+            StringCchCopyW(rst[rn].value, 64,
+                           gpu->location[0] ? gpu->location : L"Unavailable");
+            rst[rn++].label = L"Physical location:";
+            FmtMemMB(gpu->reserved, rst[rn].value, 64);
+            rst[rn++].label = L"Hardware reserved memory:";
+            StringCchCopyW(rightTitle, cchR, gpu->name);
             break;
         }
         }
@@ -774,6 +1020,110 @@ struct PerformancePage : Page
                       labelWidth, rightStats[i]);
     }
 
+    /*
+     * One graph per engine, laid out the way Windows lays them out: a single
+     * engine fills the row, two share it, and more than two fall into a grid.
+     * Each cell carries its own name and full-scale label, because an engine
+     * graph with no name is unreadable next to three others.
+     */
+    void PaintGpuEngines(HDC dc, const RECT& area, GpuSnapshot* gpu)
+    {
+        int count = GpuVisibleEngines(gpu);
+        int columns, rows;
+        int gap = S(10);
+        int labelHeight = S(16);
+        int cellWidth, cellHeight;
+
+        if (count <= 0)
+        {
+            DrawTextClip(dc, L"No GPU engines reported", area, g_t.fBody,
+                         g_t.textSec, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+            return;
+        }
+
+        columns = (count == 1) ? 1 : 2;
+        rows = (count + columns - 1) / columns;
+        cellWidth = (area.right - area.left - gap * (columns - 1)) / columns;
+        cellHeight = (area.bottom - area.top - gap * (rows - 1)) / rows;
+        if (cellHeight <= labelHeight + S(12))
+            cellHeight = labelHeight + S(12);
+
+        {
+            GraphPaint paint(dc);
+            for (int i = 0; i < count; i++)
+            {
+                int column = i % columns;
+                int row = i / columns;
+                int left = area.left + column * (cellWidth + gap);
+                int top = area.top + row * (cellHeight + gap);
+                RECT cell = { left, top + labelHeight, left + cellWidth, top + cellHeight };
+                GraphStyle style;
+
+                ZeroMemory(&style, sizeof(style));
+                style.line = g_t.graph[GR_GPU];
+                style.grid = TRUE;
+                style.border = TRUE;
+                style.yMax = 100.0;
+                DrawGraph(paint, cell, &gpu->engines[i].history, style);
+            }
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            int column = i % columns;
+            int row = i / columns;
+            int left = area.left + column * (cellWidth + gap);
+            int top = area.top + row * (cellHeight + gap);
+            RECT label = { left, top, left + cellWidth, top + labelHeight };
+            WCHAR percent[16];
+
+            DrawTextClip(dc, gpu->engines[i].name, label, g_t.fSmall, g_t.textSec,
+                         DT_LEFT | DT_SINGLELINE | DT_BOTTOM);
+            StringCchPrintfW(percent, _countof(percent), L"%.0f%%",
+                             gpu->engines[i].utilPct);
+            DrawTextClip(dc, percent, label, g_t.fSmall, g_t.textSec,
+                         DT_RIGHT | DT_SINGLELINE | DT_BOTTOM);
+        }
+    }
+
+    void PaintGpuStats(HDC dc, const RECT& pane, int y)
+    {
+        Stat stats[12], rightStats[12];
+        int packed = GetStats(stats, rightStats);
+        int count = packed & 0xFF;
+        int rightCount = packed >> 8;
+        int width = pane.right - pane.left;
+        int rightX = pane.left + width * 52 / 100;
+        int leftWidth = rightX - pane.left - S(18);
+        /*
+         * The second column carries the long labels -- "Dedicated GPU memory"
+         * and "Shared GPU memory" -- while the first carries short ones, so
+         * the split is uneven on purpose: an even one clips the very labels
+         * that say which memory the number beside them is.
+         */
+        int columnWidth = leftWidth * 42 / 100;
+
+        for (int i = 0; i < count; i++)
+        {
+            int column = i % 2;
+            int row = i / 2;
+            PaintMetric(dc, pane.left + column * columnWidth,
+                        y + row * S(43),
+                        column == 0 ? columnWidth : leftWidth - columnWidth,
+                        stats[i], g_t.fMed);
+        }
+
+        {
+            int rightWidth = pane.right - rightX;
+            /* "Hardware reserved memory:" is the widest label on this pane and
+             * the split is sized so it never has to be clipped. */
+            int labelWidth = rightWidth * 60 / 100;
+            for (int i = 0; i < rightCount; i++)
+                PaintPair(dc, rightX, y + i * S(19), rightWidth,
+                          labelWidth, rightStats[i]);
+        }
+    }
+
     void PaintNetworkStats(HDC dc, const RECT& pane, int y)
     {
         Stat stats[12], rightStats[12];
@@ -822,8 +1172,17 @@ struct PerformancePage : Page
             hardware = disk && disk->present ? disk->model : L"Not available";
             break;
         case RES_NET:
-            hardware = d.netPresent ? d.netAdapter : L"Not available";
+        {
+            NetSnapshot* net = SelectedNet();
+            hardware = net ? net->adapter : L"Not available";
             break;
+        }
+        case RES_GPU:
+        {
+            GpuSnapshot* gpu = SelectedGpu();
+            hardware = gpu ? gpu->name : L"Not available";
+            break;
+        }
         }
         DrawTextClip(dc, hardware, header, g_t.fBody, g_t.textSec,
                      DT_RIGHT | DT_SINGLELINE | DT_BOTTOM);
@@ -886,17 +1245,103 @@ struct PerformancePage : Page
                               maximum, FALSE);
             PaintDiskStats(dc, pane, transferGraph.bottom + S(24));
         }
+        else if (resourceType == RES_GPU)
+        {
+            GpuSnapshot* gpu = SelectedGpu();
+            int statsY = pane.bottom - S(112);
+            int graphLimit = statsY - S(24);
+            int available = graphLimit - graphTop;
+            int gap = S(30);
+            int enginesHeight;
+            int dedicatedHeight;
+            int sharedHeight;
+            WCHAR maximumLabel[64];
+
+            if (!gpu)
+                return;
+            if (available < S(240))
+                available = S(240);
+
+            /*
+             * The engine block takes the top half and the two memory graphs
+             * split the rest, which keeps a four-engine grid readable while
+             * still giving each memory graph a usable height.
+             */
+            enginesHeight = (available - gap * 2) * 50 / 100;
+            /* A display-only adapter reports no engines at all.  Leaving an
+             * empty half-pane where the engine graphs would be says nothing;
+             * the memory graphs take the room instead. */
+            if (gpu->engineCount == 0)
+                enginesHeight = 0;
+            dedicatedHeight = (available - gap * 2 - enginesHeight) / 2;
+            sharedHeight = available - gap * 2 - enginesHeight - dedicatedHeight;
+
+            if (enginesHeight != 0)
+            {
+                RECT engines = { pane.left, graphTop, pane.right,
+                                 graphTop + enginesHeight };
+                if (gpuGraphMode == GPU_GRAPH_ALL_ENGINES ||
+                    gpuGraphMode >= gpu->engineCount)
+                {
+                    PaintGpuEngines(dc, engines, gpu);
+                }
+                else
+                {
+                    /* A single named engine gets the whole block, which is the
+                     * only way to read a spiky engine at this scale. */
+                    WCHAR percent[16];
+                    StringCchPrintfW(percent, _countof(percent), L"100%%");
+                    PaintHistoryGraph(dc, engines,
+                                      gpu->engines[gpuGraphMode].name, percent,
+                                      &gpu->engines[gpuGraphMode].history,
+                                      NULL, 100.0, FALSE);
+                }
+            }
+
+            {
+                int memoryTop = (enginesHeight != 0)
+                                    ? graphTop + enginesHeight + gap
+                                    : graphTop;
+                RECT dedicated = { pane.left, memoryTop, pane.right,
+                                   memoryTop + dedicatedHeight };
+                RECT shared = { pane.left, dedicated.bottom + gap, pane.right,
+                                dedicated.bottom + gap + sharedHeight };
+                double dedicatedMax = gpu->dedicatedTotal ?
+                                      (double)gpu->dedicatedTotal :
+                                      AutoMaximum(&gpu->hDedicated, NULL,
+                                                  64.0 * 1024.0 * 1024.0);
+                double sharedMax = gpu->sharedTotal ?
+                                   (double)gpu->sharedTotal :
+                                   AutoMaximum(&gpu->hShared, NULL,
+                                               64.0 * 1024.0 * 1024.0);
+
+                FmtBytes((ULONGLONG)dedicatedMax, maximumLabel, _countof(maximumLabel));
+                PaintHistoryGraph(dc, dedicated, L"Dedicated GPU memory usage",
+                                  maximumLabel, &gpu->hDedicated, NULL,
+                                  dedicatedMax, FALSE);
+                FmtBytes((ULONGLONG)sharedMax, maximumLabel, _countof(maximumLabel));
+                PaintHistoryGraph(dc, shared, L"Shared GPU memory usage",
+                                  maximumLabel, &gpu->hShared, NULL,
+                                  sharedMax, FALSE);
+                PaintGpuStats(dc, pane, shared.bottom + S(24));
+            }
+        }
         else
         {
+            NetSnapshot* net = SelectedNet();
             int graphBottom = pane.bottom - S(150);
             if (graphBottom < graphTop + S(90))
                 graphBottom = graphTop + S(90);
             RECT graph = { pane.left, graphTop, pane.right, graphBottom };
-            double maximum = AutoMaximum(&d.hNetRecv, &d.hNetSend, 12500.0);
+            double maximum;
             WCHAR maximumLabel[64];
+
+            if (!net)
+                return;
+            maximum = AutoMaximum(&net->hRecv, &net->hSend, 12500.0);
             FmtBits(maximum * 8.0, maximumLabel, _countof(maximumLabel));
             PaintHistoryGraph(dc, graph, L"Throughput", maximumLabel,
-                              &d.hNetRecv, &d.hNetSend, maximum, FALSE);
+                              &net->hRecv, &net->hSend, maximum, FALSE);
             PaintNetworkStats(dc, pane, graph.bottom + S(24));
         }
     }
@@ -921,6 +1366,7 @@ struct PerformancePage : Page
     void Paint(HDC dc, const RECT& rcPaint)
     {
         FillRect32(dc, rcPaint, g_t.listBg);
+        RestoreSelection();
         Layout();
         int saved = SaveDC(dc);
         IntersectClipRect(dc, railClip.left, railClip.top,
@@ -985,6 +1431,66 @@ struct PerformancePage : Page
 
     void ShowContextMenu(POINT screenPoint)
     {
+        if (SelectedResource() == RES_GPU)
+        {
+            GpuSnapshot* gpu = SelectedGpu();
+            MItem graphModes[TM_MAX_GPU_ENGINES + 1];
+            MItem items[3];
+            int modeCount = 0;
+            int engines = gpu ? gpu->engineCount : 0;
+            UINT command;
+
+            graphModes[modeCount].id = 20;
+            graphModes[modeCount].text = L"Multiple engines";
+            graphModes[modeCount].flags =
+                (gpuGraphMode == GPU_GRAPH_ALL_ENGINES) ? MIF_RADIO : 0u;
+            graphModes[modeCount].sub = NULL;
+            graphModes[modeCount].nSub = 0;
+            modeCount++;
+            for (int i = 0; i < engines && modeCount < (int)_countof(graphModes); i++)
+            {
+                graphModes[modeCount].id = 21 + i;
+                graphModes[modeCount].text = gpu->engines[i].name;
+                graphModes[modeCount].flags = (gpuGraphMode == i) ? MIF_RADIO : 0u;
+                graphModes[modeCount].sub = NULL;
+                graphModes[modeCount].nSub = 0;
+                modeCount++;
+            }
+
+            items[0].id = 0;
+            items[0].text = L"Change graph to";
+            items[0].flags = 0;
+            items[0].sub = graphModes;
+            items[0].nSub = modeCount;
+            items[1].id = 0;
+            items[1].text = NULL;
+            items[1].flags = MIF_SEP;
+            items[1].sub = NULL;
+            items[1].nSub = 0;
+            items[2].id = 1;
+            items[2].text = L"Copy";
+            items[2].flags = 0;
+            items[2].sub = NULL;
+            items[2].nSub = 0;
+
+            command = Menu_Show(hwnd, screenPoint, items, _countof(items));
+            if (command == 1)
+            {
+                CopyStats();
+            }
+            else if (command == 20)
+            {
+                gpuGraphMode = GPU_GRAPH_ALL_ENGINES;
+                InvalidateRect(hwnd, &rcPane, FALSE);
+            }
+            else if (command >= 21 && command < 21u + (UINT)engines)
+            {
+                gpuGraphMode = (int)(command - 21);
+                InvalidateRect(hwnd, &rcPane, FALSE);
+            }
+            return;
+        }
+
         if (SelectedResource() != RES_CPU)
         {
             MItem items[] =
@@ -1115,6 +1621,7 @@ static LRESULT CALLBACK PgPerfProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (PtInRect(&pg->tiles[i], pt))
             {
                 pg->sel = i;
+                pg->RememberSelection();
                 pg->EnsureSelectedVisible();
                 InvalidateRect(hwnd, NULL, FALSE);
                 break;
@@ -1157,12 +1664,14 @@ static LRESULT CALLBACK PgPerfProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (wp == VK_UP && pg->sel > 0)
         {
             pg->sel--;
+            pg->RememberSelection();
             pg->EnsureSelectedVisible();
             InvalidateRect(hwnd, NULL, FALSE);
         }
         else if (wp == VK_DOWN && pg->sel < pg->TileCount() - 1)
         {
             pg->sel++;
+            pg->RememberSelection();
             pg->EnsureSelectedVisible();
             InvalidateRect(hwnd, NULL, FALSE);
         }

@@ -164,8 +164,8 @@ struct Theme
     COLORREF closeHover;    /* #C42B1C */
     COLORREF dangerText;
 
-    /* graph line colors: 0=CPU 1=Memory 2=Disk 3=Network */
-    COLORREF graph[4];
+    /* graph line colors: 0=CPU 1=Memory 2=Disk 3=Network 4=GPU */
+    COLORREF graph[5];
 
     HFONT fCaption;   /* 12    titlebar                */
     HFONT fTitle;     /* 20 sb page title              */
@@ -189,6 +189,7 @@ BOOL Theme_SystemPrefersDark(void);
 #define GR_MEM  1
 #define GR_DISK 2
 #define GR_NET  3
+#define GR_GPU  4
 
 /* ------------------------------------------------------------------ */
 /*  App state / settings                                               */
@@ -221,6 +222,11 @@ struct Settings
     BOOL  navExpanded;
     BOOL  noEffPrompt;   /* don't ask again        */
     BOOL  fullAcctName;
+    /* Which resource the Performance page was last showing, so reopening
+     * Task Manager comes back to it: the resource kind plus which one of
+     * that kind, because disk 2 and GPU 1 are both "index 1". */
+    DWORD perfResource;
+    DWORD perfIndex;
     WINDOWPLACEMENT wp;  /* wp.length==0 if unset  */
 };
 
@@ -427,6 +433,78 @@ struct DiskSnapshot
     HistRing  hActive;         /* 0..100 or empty        */
 };
 
+/*
+ * One adapter, and the engines it reports.  An engine is a GPU node, so the
+ * list is whatever the display miniport declared: a driver with one 3D node
+ * shows one graph, and one with a copy and two video nodes shows those.
+ * Nothing here is a fixed set of engine names.
+ */
+#define TM_MAX_GPUS         8
+#define TM_MAX_GPU_ENGINES  8
+
+struct GpuEngineSnapshot
+{
+    WCHAR     name[64];         /* engine name from the node metadata      */
+    ULONG     engineType;       /* DXGK_ENGINE_TYPE the node reported      */
+    ULONGLONG runningTime;      /* cumulative busy time, 100ns             */
+    double    utilPct;          /* 0..100 over the last sample interval    */
+    HistRing  history;
+};
+
+struct GpuSnapshot
+{
+    LUID      luid;
+    WCHAR     name[160];        /* adapter description                     */
+    WCHAR     driverVersion[64];
+    WCHAR     driverDate[32];
+    WCHAR     directX[48];      /* "12 (FL 12.1)"                          */
+    WCHAR     location[96];     /* "PCI bus 11, device 0, function 0"      */
+    int       index;            /* GPU 0, GPU 1, ...                       */
+    int       engineCount;
+    GpuEngineSnapshot engines[TM_MAX_GPU_ENGINES];
+
+    double    utilPct;          /* busiest engine, which is what Windows
+                                 * calls the GPU's utilization             */
+    ULONGLONG dedicatedTotal, dedicatedUsed;
+    ULONGLONG sharedTotal, sharedUsed;
+    ULONGLONG reserved;         /* memory the hardware kept for itself     */
+    double    temperatureC;
+    BOOL      hasTemperature;   /* the driver reports thermals at all      */
+    BOOL      thermalAsked;     /* whether that has been settled yet       */
+    BOOL      present;
+
+    HistRing  hUtil;            /* busiest engine, 0..100                  */
+    HistRing  hDedicated;       /* bytes                                   */
+    HistRing  hShared;          /* bytes                                   */
+};
+
+/*
+ * One network adapter.  The Performance page lists every adapter the system
+ * has, connected or not, the way Windows does: a machine with two Ethernet
+ * ports has two entries, each with its own throughput history, because the
+ * sum of the two answers no question anyone is asking of that page.
+ */
+#define TM_MAX_NICS 8
+
+struct NetSnapshot
+{
+    DWORD     ifIndex;
+    WCHAR     adapter[160];    /* hardware description                     */
+    WCHAR     name[96];        /* connection name ("Ethernet 2")           */
+    WCHAR     type[32];
+    WCHAR     dns[160];
+    WCHAR     ipv4[64];
+    WCHAR     ipv6[96];
+    ULONGLONG linkBps;
+    double    recvBps, sendBps;
+    DWORD     prevIn, prevOut; /* octet counters from the previous sample  */
+    int       metadataAge;     /* ticks since the addresses were re-read   */
+    BOOL      connected;
+    BOOL      present;
+    HistRing  hRecv;
+    HistRing  hSend;
+};
+
 enum TelemetryKind
 {
     TEL_TEMPERATURE = 0,
@@ -621,16 +699,13 @@ struct SysSnapshot
     int       diskCount;
     DiskSnapshot disks[TM_MAX_DISKS];
 
+    int       gpuCount;
+    GpuSnapshot gpus[TM_MAX_GPUS];
+
+    /* System-wide totals used by the Processes page summary. */
     double    netRecvBps, netSendBps;
-    WCHAR     netAdapter[160];
-    WCHAR     netName[96];
-    WCHAR     netType[32];
-    WCHAR     netDns[160];
-    WCHAR     netIpv4[64];
-    WCHAR     netIpv6[96];
-    ULONGLONG netLinkBps;
-    BOOL      netPresent;
-    BOOL      netConnected;
+    int       netCount;
+    NetSnapshot nets[TM_MAX_NICS];
 
     /* history */
     HistRing  hCpu;        /* 0..100          */
@@ -638,8 +713,6 @@ struct SysSnapshot
     HistRing  hCpuLogical[64];
     HistRing  hCpuLogicalKernel[64];
     HistRing  hMem;        /* 0..100 used     */
-    HistRing  hNetRecv;    /* bytes/s         */
-    HistRing  hNetSend;    /* bytes/s         */
 
     Vec<ProcRow> procs;
 };
@@ -651,6 +724,11 @@ namespace Data
     void Init(void);
     void Shutdown(void);
     void Tick(void);                       /* collect a full sample */
+
+    /* GPU sampling (gpu.cpp); driven from the same tick as everything else */
+    void GpuInit(void);
+    void GpuShutdown(void);
+    void GpuTick(void);
 
     const WCHAR* SvchostServices(ULONG pid);   /* comma list or NULL */
     const WCHAR* SvchostGroup(ULONG pid);
