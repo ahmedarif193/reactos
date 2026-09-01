@@ -307,6 +307,10 @@ ACPIDispatchDeviceControl(
                 break;
             }
 
+            case IOCTL_ACPI_EVAL_METHOD_FOR_PCI_CHILD:
+                status = AcpiEvalMethodForPciChildIoctl(fdoData, Irp);
+                break;
+
             case IOCTL_ACPI_SET_POWER_FOR_PCI:
                 status = AcpiSetPowerForPciDeviceIoctl(fdoData, Irp);
                 break;
