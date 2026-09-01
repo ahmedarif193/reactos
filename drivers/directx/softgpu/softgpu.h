@@ -171,6 +171,58 @@ typedef struct _SOFTGPU_SUBMIT
     SOFTGPU_GPUVA_ROOT Root;
 } SOFTGPU_SUBMIT, *PSOFTGPU_SUBMIT;
 
+/*
+ * GPU nodes.
+ *
+ * WDDM calls an independently schedulable execution queue a node, and gives
+ * each one an engine type so the OS can tell rendering from copying from
+ * video work.  This adapter exposes four of them, and each is a real queue:
+ * it has its own fence stream, its own submission ring, and its own
+ * completion DPC, so work submitted to one node runs and retires without
+ * waiting on any other.
+ *
+ * The engines are asymmetric in name only -- one software execution core
+ * serves all four -- which is exactly what an adapter with one execution
+ * unit and several command queues looks like to the scheduler.
+ */
+#define SOFTGPU_NODE_3D             0
+#define SOFTGPU_NODE_COPY           1
+#define SOFTGPU_NODE_VIDEO_DECODE   2
+#define SOFTGPU_NODE_VIDEO_ENCODE   3
+#define SOFTGPU_ENGINE_COUNT        4
+
+typedef struct _SOFTGPU_ENGINE
+{
+    /* Owning adapter and this engine's node ordinal, both fixed at start. */
+    struct _SOFTGPU_DEVICE *Device;
+    ULONG               NodeOrdinal;
+
+    /*
+     * Fence tracking for this node.
+     *
+     * CurrentFence   — fence ID of the last SubmitCommand call on it.
+     * CompletedFence — fence ID of the last DPC completion on it.
+     * NotifiedFence  — last value reported through DxgkCbNotifyInterrupt, so
+     *                  a timer kick cannot replay a stale completion.
+     *
+     * All three are protected by the adapter's FenceLock, which is what also
+     * serializes them against StopDevice.
+     */
+    ULONG               CurrentFence;
+    ULONG               CompletedFence;
+    ULONG               NotifiedFence;
+
+    /* Submission ring and the drain flag that keeps one drainer on it. */
+    SOFTGPU_SUBMIT      SubmitRing[SOFTGPU_SUBMIT_RING_SIZE];
+    ULONG               SubmitRingHead;
+    ULONG               SubmitRingTail;
+    LONG                EngineActive;
+
+    /* Completion DPC, queued by a submission to this node. */
+    KDPC                DpcObject;
+    BOOLEAN             DpcInitialized;
+} SOFTGPU_ENGINE, *PSOFTGPU_ENGINE;
+
 typedef struct _SOFTGPU_DEVICE
 {
     /* Sanity / validation marker */
@@ -262,42 +314,21 @@ typedef struct _SOFTGPU_DEVICE
     D3DDDIFORMAT        Format;
 
     /*
-     * Fence tracking.
-     *
-     * CurrentFence  — fence ID of the last SubmitCommand call.
-     * CompletedFence— fence ID of the last DPC completion.
-     *
-     * Both are protected by FenceLock (KSPIN_LOCK).
-     * The DPC sets CompletedFence = CurrentFence inside the lock,
-     * then calls DxgkCbNotifyInterrupt / DxgkCbNotifyDpc.
+     * One lock for every node's fence state.  A single execution core serves
+     * all four, so per-node locks would buy no parallelism and would leave
+     * StopDevice with four gates to close instead of one.
      */
-    ULONG               CurrentFence;
-    ULONG               CompletedFence;
-    /* Last value reported through DxgkCbNotifyInterrupt.  A completion
-     * interrupt is raised only when the completed fence advances, so the
-     * refresh-timer kick cannot replay a stale completion. */
-    ULONG               NotifiedFence;
     KSPIN_LOCK          FenceLock;
-
-    /*
-     * DPC object queued by SubmitCommand at DISPATCH_LEVEL.
-     * The DPC fires SoftGpuDpcRoutine which notifies dxgkrnl of
-     * fence completion.
-     */
-    KDPC                DpcObject;
     volatile LONG       Stopped;
-    BOOLEAN             DpcInitialized;
+
+    /* The adapter's GPU nodes, indexed by node ordinal. */
+    SOFTGPU_ENGINE      Engines[SOFTGPU_ENGINE_COUNT];
 
     KTIMER              VsyncTimer;
     KDPC                VsyncDpc;
     volatile LONG       VsyncPhaseEnabled;
     volatile LONG       VsyncEnabled;
     BOOLEAN             VsyncTimerInitialized;
-
-    SOFTGPU_SUBMIT      SubmitRing[SOFTGPU_SUBMIT_RING_SIZE];
-    ULONG               SubmitRingHead;
-    ULONG               SubmitRingTail;
-    LONG                EngineActive;
 
     /*
      * dxgkrnl callback vtable.  Copied from the PDXGK_INTERFACE argument
@@ -377,6 +408,7 @@ SoftGpuPlatformUpdatePointer(
 
 VOID
 SoftGpuPlatformFillNodeMetadata(
+    _In_ ULONG NodeOrdinal,
     _Out_ DXGKARG_GETNODEMETADATA *GetNodeMetadata);
 
 VOID

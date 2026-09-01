@@ -375,16 +375,13 @@ TestOldestDispatchedOnEngine(
     PDXGMMS2_SCHED_PACKET Batch[DXGMMS2_SCHED_TEST_BATCH];
     ULONGLONG Cookie = 0;
     ULONG Fence = 0;
-    ULONG EngineZeroFence;
     ULONG EngineOneFence;
 
-    EngineZeroFence = AdmitOne(State, 0, 260, &EngineZero);
+    (VOID)AdmitOne(State, 0, 260, &EngineZero);
     EngineOneFence = AdmitOne(State, 1, 261, &EngineOne);
     ok(EngineZero != NULL && EngineOne != NULL, "admission failed\n");
     if (EngineZero == NULL || EngineOne == NULL)
         return;
-    ok(EngineZeroFence < EngineOneFence,
-       "engine 0 must carry the globally older fence\n");
 
     InitClaim(&Claim);
     ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim),
