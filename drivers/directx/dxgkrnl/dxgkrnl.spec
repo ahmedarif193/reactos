@@ -15,6 +15,12 @@
 ; --- DxgCoreInterface (static callback table consumed by dxgmms2.sys) ---
 @ extern DxgCoreInterface
 
+; --- dxgmms2 build, bugcheck, and timeout state ---
+@ extern g_DxgMmsBugcheckExportIndex
+@ extern g_IsInternalRelease
+@ extern g_IsInternalReleaseOrDbg
+@ extern g_TdrForceTimeout
+
 ; --- ETW tracing stubs ---
 @ stdcall TraceDxgkBlockThread(long)
 @ stdcall TraceDxgkContext(long ptr)
