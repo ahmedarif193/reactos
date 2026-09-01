@@ -16,12 +16,22 @@
 #define DXGMMS2_SCHED_TEST_ENGINES 2
 #define DXGMMS2_SCHED_TEST_BATCH 8
 
+extern DRIVER_UNLOAD DriverUnload;
+
 typedef struct _DXGMMS2_SCHED_TEST_STATE
 {
     DXGMMS2_SCHED_CORE Core;
     DXGMMS2_SCHED_PACKET Packets[DXGMMS2_SCHED_MAX_PACKETS];
     ULONG NextPacket;
 } DXGMMS2_SCHED_TEST_STATE, *PDXGMMS2_SCHED_TEST_STATE;
+
+static VOID
+TestNativeUnloadExportContract(VOID)
+{
+    volatile PDRIVER_UNLOAD UnloadRoutine = DriverUnload;
+
+    ok(UnloadRoutine != NULL, "dxgmms2 DriverUnload import was not resolved\n");
+}
 
 static PDXGMMS2_SCHED_PACKET
 AllocateTestPacket(
@@ -965,6 +975,7 @@ START_TEST(Dxgmms2Scheduler)
 {
     PDXGMMS2_SCHED_TEST_STATE State;
 
+    TestNativeUnloadExportContract();
     State = ExAllocatePoolWithTag(NonPagedPool, sizeof(*State), TAG_DXGMMS2_SCHED_TEST);
     ok(State != NULL, "scheduler test state allocation failed\n");
     if (State == NULL)
