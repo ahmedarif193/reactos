@@ -227,11 +227,26 @@ wglGetAdapterLuid(HDC hdc, LUID *AdapterLuid)
 }
 
 static BOOL APIENTRY
+wglPresentBuffersDirect(HDC hdc,
+                        struct ICD_Data *IcdData,
+                        const WGL_PRESENTBUFFERS_CB *CallbackData)
+{
+    WGL_PRESENTBUFFERS PresentData;
+
+    RtlZeroMemory(&PresentData, sizeof(PresentData));
+    PresentData.AdapterLuid = CallbackData->AdapterLuid;
+    PresentData.PrivateData = CallbackData->PrivateData;
+
+    return IcdData->DrvPresentBuffers(hdc, &PresentData);
+}
+
+static BOOL APIENTRY
 wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
 {
     struct ICD_Data *IcdData;
     PWGL_ASYNC_PRESENT AsyncPresent = NULL;
     WGL_PRESENTBUFFERS PresentData;
+    WGL_PRESENTBUFFERS2 PresentData2;
     HWND Window;
     HANDLE SharedSurface = NULL;
     ULONGLONG UpdateId = 0;
@@ -249,13 +264,20 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     if (Window == NULL)
         return FALSE;
 
+    IcdData = IntGetIcdData(hdc);
+    if (IcdData == NULL || IcdData->DrvPresentBuffers == NULL)
+    {
+        IntReportDwmDxPresentFailure("icd_callback", E_NOINTERFACE);
+        return FALSE;
+    }
+
     (void)InitOnceExecuteOnce(&DwmDxInitOnce, IntLoadDwmDxCallbacks,
                               NULL, NULL);
     if (DwmDxGetWindowSharedSurface == NULL ||
         DwmDxUpdateWindowSharedSurface == NULL)
     {
         IntReportDwmDxPresentFailure("load_callbacks", E_NOINTERFACE);
-        return FALSE;
+        return wglPresentBuffersDirect(hdc, IcdData, CallbackData);
     }
 
     Result = DwmDxGetWindowSharedSurface(Window,
@@ -270,6 +292,11 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     if (FAILED(Result))
     {
         IntReportDwmDxPresentFailure("get_surface", Result);
+        if (Result == HRESULT_FROM_WIN32(ERROR_NOT_READY) ||
+            Result == DWM_E_COMPOSITIONDISABLED)
+        {
+            return wglPresentBuffersDirect(hdc, IcdData, CallbackData);
+        }
         return FALSE;
     }
     if (SharedSurface == NULL || UpdateId == 0)
@@ -278,20 +305,12 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
         return FALSE;
     }
 
-    IcdData = IntGetIcdData(hdc);
-    if (IcdData == NULL || IcdData->DrvPresentBuffers == NULL)
-    {
-        IntReportDwmDxPresentFailure("icd_callback", E_NOINTERFACE);
-        goto Cancel;
-    }
-
     RtlZeroMemory(&PresentData, sizeof(PresentData));
     PresentData.hSurface = SharedSurface;
     PresentData.AdapterLuid = CallbackData->AdapterLuid;
     PresentData.PresentToken = UpdateId;
     PresentData.PrivateData = CallbackData->PrivateData;
-    PresentData.Version = CallbackData->Version;
-    if (CallbackData->Version >= 3)
+    if (CallbackData->Version >= 3 && IcdData->DrvPresentBuffers2 != NULL)
     {
         AsyncPresent = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
                                  sizeof(*AsyncPresent));
@@ -313,9 +332,25 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
         AsyncPresent->UpdateId = UpdateId;
         AsyncPresent->Flags = CallbackData->SyncType;
         AsyncPresent->UpdateRect = CallbackData->UpdateRect;
-        PresentData.CompletionEvent = AsyncPresent->CompletionEvent;
     }
-    if (!IcdData->DrvPresentBuffers(hdc, &PresentData))
+
+    if (AsyncPresent != NULL)
+    {
+        RtlZeroMemory(&PresentData2, sizeof(PresentData2));
+        PresentData2.Size = sizeof(PresentData2);
+        PresentData2.Version = WGL_PRESENTBUFFERS2_VERSION;
+        PresentData2.hSurface = PresentData.hSurface;
+        PresentData2.AdapterLuid = PresentData.AdapterLuid;
+        PresentData2.PresentToken = PresentData.PresentToken;
+        PresentData2.PrivateData = PresentData.PrivateData;
+        PresentData2.CompletionEvent = AsyncPresent->CompletionEvent;
+        Result = IcdData->DrvPresentBuffers2(hdc, &PresentData2) ? S_OK : E_FAIL;
+    }
+    else
+    {
+        Result = IcdData->DrvPresentBuffers(hdc, &PresentData) ? S_OK : E_FAIL;
+    }
+    if (FAILED(Result))
     {
         IntReportDwmDxPresentFailure("icd_present", E_FAIL);
         goto Cancel;
@@ -723,6 +758,8 @@ custom_end:
     DRV_LOAD(DrvSwapLayerBuffers);
     data->DrvPresentBuffers =
         (void *)GetProcAddress(data->hModule, "DrvPresentBuffers");
+    data->DrvPresentBuffers2 =
+        (void *)GetProcAddress(data->hModule, "DrvPresentBuffers2");
 #undef DRV_LOAD
 
     /* Let's see if GDI should handle this instead of the ICD DLL */
