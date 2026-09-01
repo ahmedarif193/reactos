@@ -242,6 +242,8 @@ typedef enum _DXGKRNL_DMA_BACKING_KIND
 
 typedef struct _DXGKRNL_DMA_BUFFER
 {
+    LIST_ENTRY                  CacheListEntry;
+    PDXGKRNL_ADAPTER           OwnerAdapter;
     PVOID                       VirtualAddress;
     ULONG                       Capacity;
     ULONG                       SubmissionStartOffset;
@@ -965,6 +967,10 @@ struct _DXGKRNL_ADAPTER
     KSPIN_LOCK                  SubmitDmaLock;
     LIST_ENTRY                  SubmitDmaListHead;
     LIST_ENTRY                  SubmitDmaRetireListHead;
+    KSPIN_LOCK                  DmaBufferCacheLock;
+    LIST_ENTRY                  DmaBufferCacheListHead;
+    ULONG                       DmaBufferCacheCount;
+    volatile LONG               DmaBufferCacheStopping;
     WORK_QUEUE_ITEM             SubmitDmaRetireWorkItem;
     volatile LONG               SubmitDmaRetireWorkQueued;
     volatile LONG               SubmitDmaRetireActiveWorkers;

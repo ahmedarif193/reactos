@@ -85,6 +85,8 @@ const GUID GUID_DISPLAY_DEVICE_ARRIVAL =
 #define DXGKP_MMS2_FAILURE_FINAL_DESTROY 4
 #define DXGKP_MINIPORT_CONTEXT_SIGNATURE 'MkgD'
 #define DXGKP_DIAGNOSTIC_BUFFER_SIZE 0x80000UL
+#define DXGKP_DMA_BUFFER_CACHE_LIMIT 4
+#define DXGKP_DMA_BUFFER_CACHE_MAX_CAPACITY (4 * 1024 * 1024)
 
 /* ========================================================================
  * InbV forward declarations
@@ -1720,11 +1722,42 @@ DxgkAllocateDmaBuffer(
         return STATUS_INVALID_PARAMETER;
 
     *OutDmaBuffer = NULL;
+    {
+        KIRQL OldIrql;
+        PLIST_ENTRY Link;
+
+        KeAcquireSpinLock(&Adapter->DmaBufferCacheLock, &OldIrql);
+        if (InterlockedCompareExchange(&Adapter->DmaBufferCacheStopping, 0, 0) == 0)
+        {
+            for (Link = Adapter->DmaBufferCacheListHead.Flink;
+                 Link != &Adapter->DmaBufferCacheListHead;
+                 Link = Link->Flink)
+            {
+                DmaBuffer = CONTAINING_RECORD(Link, DXGKRNL_DMA_BUFFER, CacheListEntry);
+                if (DmaBuffer->Capacity != Capacity)
+                    continue;
+
+                RemoveEntryList(&DmaBuffer->CacheListEntry);
+                InitializeListHead(&DmaBuffer->CacheListEntry);
+                ASSERT(Adapter->DmaBufferCacheCount != 0);
+                Adapter->DmaBufferCacheCount--;
+                DmaBuffer->SubmissionStartOffset = 0;
+                DmaBuffer->SubmissionEndOffset = 0;
+                KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
+                *OutDmaBuffer = DmaBuffer;
+                return STATUS_SUCCESS;
+            }
+        }
+        KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
+    }
+
     DmaBuffer = ExAllocatePoolWithTag(NonPagedPool, sizeof(*DmaBuffer), TAG_DXGK_SUBMITDMA);
     if (DmaBuffer == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
     RtlZeroMemory(DmaBuffer, sizeof(*DmaBuffer));
+    InitializeListHead(&DmaBuffer->CacheListEntry);
+    DmaBuffer->OwnerAdapter = Adapter;
     LowestAddress.QuadPart = 0;
     HighestAddress = Adapter->HighestAcceptableAddress;
     if (HighestAddress.QuadPart == 0)
@@ -1747,19 +1780,114 @@ DxgkAllocateDmaBuffer(
     return STATUS_SUCCESS;
 }
 
+static VOID
+DxgkpDestroyDmaBuffer(
+    _In_ PDXGKRNL_DMA_BUFFER DmaBuffer)
+{
+    if (DmaBuffer->VirtualAddress != NULL &&
+        DmaBuffer->BackingKind == DxgkDmaBackingContiguousMemory)
+    {
+        MmFreeContiguousMemory(DmaBuffer->VirtualAddress);
+    }
+    DmaBuffer->OwnerAdapter = NULL;
+    DmaBuffer->VirtualAddress = NULL;
+    DmaBuffer->BackingKind = DxgkDmaBackingInvalid;
+    ExFreePoolWithTag(DmaBuffer, TAG_DXGK_SUBMITDMA);
+}
+
 VOID
 NTAPI
 DxgkFreeDmaBuffer(
     _In_opt_ PDXGKRNL_DMA_BUFFER DmaBuffer)
 {
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_DMA_BUFFER EvictedBuffer = NULL;
+    KIRQL OldIrql;
+
     if (DmaBuffer == NULL)
         return;
 
-    if (DmaBuffer->VirtualAddress != NULL && DmaBuffer->BackingKind == DxgkDmaBackingContiguousMemory)
-        MmFreeContiguousMemory(DmaBuffer->VirtualAddress);
-    DmaBuffer->VirtualAddress = NULL;
-    DmaBuffer->BackingKind = DxgkDmaBackingInvalid;
-    ExFreePoolWithTag(DmaBuffer, TAG_DXGK_SUBMITDMA);
+    Adapter = DmaBuffer->OwnerAdapter;
+    DmaBuffer->SubmissionStartOffset = 0;
+    DmaBuffer->SubmissionEndOffset = 0;
+    if (Adapter != NULL &&
+        DmaBuffer->VirtualAddress != NULL &&
+        DmaBuffer->BackingKind == DxgkDmaBackingContiguousMemory &&
+        DmaBuffer->Capacity <= DXGKP_DMA_BUFFER_CACHE_MAX_CAPACITY)
+    {
+        KeAcquireSpinLock(&Adapter->DmaBufferCacheLock, &OldIrql);
+        if (InterlockedCompareExchange(&Adapter->DmaBufferCacheStopping, 0, 0) == 0)
+        {
+            if (Adapter->DmaBufferCacheCount == DXGKP_DMA_BUFFER_CACHE_LIMIT)
+            {
+                PLIST_ENTRY Link;
+
+                for (Link = Adapter->DmaBufferCacheListHead.Flink;
+                     Link != &Adapter->DmaBufferCacheListHead;
+                     Link = Link->Flink)
+                {
+                    PDXGKRNL_DMA_BUFFER Candidate;
+
+                    Candidate = CONTAINING_RECORD(Link, DXGKRNL_DMA_BUFFER, CacheListEntry);
+                    if (Candidate->Capacity >= DmaBuffer->Capacity ||
+                        (EvictedBuffer != NULL && Candidate->Capacity >= EvictedBuffer->Capacity))
+                    {
+                        continue;
+                    }
+                    EvictedBuffer = Candidate;
+                }
+                if (EvictedBuffer != NULL)
+                {
+                    RemoveEntryList(&EvictedBuffer->CacheListEntry);
+                    InitializeListHead(&EvictedBuffer->CacheListEntry);
+                    Adapter->DmaBufferCacheCount--;
+                }
+            }
+
+            if (Adapter->DmaBufferCacheCount < DXGKP_DMA_BUFFER_CACHE_LIMIT)
+            {
+                InsertTailList(&Adapter->DmaBufferCacheListHead, &DmaBuffer->CacheListEntry);
+                Adapter->DmaBufferCacheCount++;
+                KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
+                if (EvictedBuffer != NULL)
+                    DxgkpDestroyDmaBuffer(EvictedBuffer);
+                return;
+            }
+        }
+        KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
+    }
+
+    DxgkpDestroyDmaBuffer(DmaBuffer);
+}
+
+static VOID
+DxgkpDrainDmaBufferCache(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LIST_ENTRY FreeList;
+    KIRQL OldIrql;
+
+    InitializeListHead(&FreeList);
+    InterlockedExchange(&Adapter->DmaBufferCacheStopping, 1);
+    KeAcquireSpinLock(&Adapter->DmaBufferCacheLock, &OldIrql);
+    while (!IsListEmpty(&Adapter->DmaBufferCacheListHead))
+    {
+        PLIST_ENTRY Link = RemoveHeadList(&Adapter->DmaBufferCacheListHead);
+
+        InsertTailList(&FreeList, Link);
+        ASSERT(Adapter->DmaBufferCacheCount != 0);
+        Adapter->DmaBufferCacheCount--;
+    }
+    KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
+
+    while (!IsListEmpty(&FreeList))
+    {
+        PDXGKRNL_DMA_BUFFER DmaBuffer;
+
+        DmaBuffer = CONTAINING_RECORD(RemoveHeadList(&FreeList), DXGKRNL_DMA_BUFFER, CacheListEntry);
+        InitializeListHead(&DmaBuffer->CacheListEntry);
+        DxgkpDestroyDmaBuffer(DmaBuffer);
+    }
 }
 
 NTSTATUS
@@ -11069,6 +11197,7 @@ DxgkAdapterRemove(
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
     if (InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 1, 0) == 0)
         ExWaitForRundownProtectionRelease(&Adapter->RemoveRundownRef);
+    DxgkpDrainDmaBufferCache(Adapter);
 
     /* Stop the adapter if it is still running. */
     InterlockedExchange(&Adapter->SubmitDmaStopping, 1);
@@ -12248,6 +12377,7 @@ DxgkpAddDeviceRegistered(
     KeInitializeSpinLock(&Adapter->ChildListLock);
     KeInitializeMutex(&Adapter->PresentLifecycleMutex, 0);
     KeInitializeSpinLock(&Adapter->SubmitDmaLock);
+    KeInitializeSpinLock(&Adapter->DmaBufferCacheLock);
     KeInitializeSpinLock(&Adapter->TdrHistoryLock);
     KeInitializeMutex(&Adapter->AdapterMutex, 0);
     KeInitializeMutex(&Adapter->VidPnMutex, 0);
@@ -12298,6 +12428,8 @@ DxgkpAddDeviceRegistered(
     Adapter->SubmitDmaRetireActiveWorkers = 0;
     ExInitializeWorkItem(&Adapter->SubmitDmaRetireWorkItem, DxgkpRetireSubmittedDmaBuffersWorker, Adapter);
     Adapter->SubmitDmaStopping = 1;
+    Adapter->DmaBufferCacheStopping = 0;
+    Adapter->DmaBufferCacheCount = 0;
     Adapter->SubmitDmaActiveReservations = 0;
     Adapter->PresentQueueInitializationStatus = STATUS_DEVICE_NOT_READY;
     Adapter->PresentQueueStopping = 1;
@@ -12325,6 +12457,7 @@ DxgkpAddDeviceRegistered(
     InitializeListHead(&Adapter->ChildListHead);
     InitializeListHead(&Adapter->SubmitDmaListHead);
     InitializeListHead(&Adapter->SubmitDmaRetireListHead);
+    InitializeListHead(&Adapter->DmaBufferCacheListHead);
     InitializeListHead(&Adapter->MiniportAdapterListEntry);
     InitializeListHead(&Adapter->GlobalAdapterListEntry);
 
