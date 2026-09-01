@@ -634,6 +634,497 @@ C_ASSERT(sizeof(DXGK_WAITWAKE_INTERFACE) == 0x18);
 
 #endif /* DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2 */
 
+DEFINE_GUID(GUID_DEVINTERFACE_OPM,
+            0xbf4672de, 0x6b4e, 0x4be4, 0xa3, 0x25, 0x68, 0xa9, 0x1e, 0xa4, 0x9c, 0x09);
+
+#define DXGK_OPM_INTERFACE_VERSION_1 0x01
+
+typedef NTSTATUS (*DXGKDDI_OPM_GET_CERTIFICATE_SIZE)(
+    PVOID MiniportDeviceContext,
+    DXGKMDT_CERTIFICATE_TYPE CertificateType,
+    PULONG CertificateSize);
+
+typedef NTSTATUS (*DXGKDDI_OPM_GET_CERTIFICATE)(
+    PVOID MiniportDeviceContext,
+    DXGKMDT_CERTIFICATE_TYPE CertificateType,
+    ULONG CertificateSize,
+    PVOID CertificateBuffer);
+
+typedef NTSTATUS (*DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT)(
+    PVOID MiniportDeviceContext,
+    D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    DXGKMDT_OPM_VIDEO_OUTPUT_SEMANTICS NewVideoOutputSemantics,
+    PHANDLE NewProtectedOutputHandle);
+
+typedef NTSTATUS (*DXGKDDI_OPM_GET_RANDOM_NUMBER)(
+    PVOID MiniportDeviceContext,
+    HANDLE ProtectedOutputHandle,
+    PDXGKMDT_OPM_RANDOM_NUMBER RandomNumber);
+
+typedef NTSTATUS (*DXGKDDI_OPM_SET_SIGNING_KEY_AND_SEQUENCE_NUMBERS)(
+    PVOID MiniportDeviceContext,
+    HANDLE ProtectedOutputHandle,
+    CONST DXGKMDT_OPM_ENCRYPTED_PARAMETERS *EncryptedParameters);
+
+typedef NTSTATUS (*DXGKDDI_OPM_GET_INFORMATION)(
+    PVOID MiniportDeviceContext,
+    HANDLE ProtectedOutputHandle,
+    CONST DXGKMDT_OPM_GET_INFO_PARAMETERS *Parameters,
+    PDXGKMDT_OPM_REQUESTED_INFORMATION RequestedInformation);
+
+typedef NTSTATUS (*DXGKDDI_OPM_GET_COPP_COMPATIBLE_INFORMATION)(
+    PVOID MiniportDeviceContext,
+    HANDLE ProtectedOutputHandle,
+    CONST DXGKMDT_OPM_COPP_COMPATIBLE_GET_INFO_PARAMETERS *Parameters,
+    PDXGKMDT_OPM_REQUESTED_INFORMATION RequestedInformation);
+
+typedef NTSTATUS (*DXGKDDI_OPM_CONFIGURE_PROTECTED_OUTPUT)(
+    PVOID MiniportDeviceContext,
+    HANDLE ProtectedOutputHandle,
+    CONST DXGKMDT_OPM_CONFIGURE_PARAMETERS *Parameters,
+    ULONG AdditionalParametersSize,
+    CONST VOID *AdditionalParameters);
+
+typedef NTSTATUS (*DXGKDDI_OPM_DESTROY_PROTECTED_OUTPUT)(
+    PVOID MiniportDeviceContext,
+    HANDLE ProtectedOutputHandle);
+
+typedef struct _DXGK_OPM_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKDDI_OPM_GET_CERTIFICATE_SIZE DxgkDdiOPMGetCertificateSize;
+    DXGKDDI_OPM_GET_CERTIFICATE DxgkDdiOPMGetCertificate;
+    DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT DxgkDdiOPMCreateProtectedOutput;
+    DXGKDDI_OPM_GET_RANDOM_NUMBER DxgkDdiOPMGetRandomNumber;
+    DXGKDDI_OPM_SET_SIGNING_KEY_AND_SEQUENCE_NUMBERS DxgkDdiOPMSetSigningKeyAndSequenceNumbers;
+    DXGKDDI_OPM_GET_INFORMATION DxgkDdiOPMGetInformation;
+    DXGKDDI_OPM_GET_COPP_COMPATIBLE_INFORMATION DxgkDdiOPMGetCOPPCompatibleInformation;
+    DXGKDDI_OPM_CONFIGURE_PROTECTED_OUTPUT DxgkDdiOPMConfigureProtectedOutput;
+    DXGKDDI_OPM_DESTROY_PROTECTED_OUTPUT DxgkDdiOPMDestroyProtectedOutput;
+} DXGK_OPM_INTERFACE, *PDXGK_OPM_INTERFACE;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+DEFINE_GUID(GUID_DEVINTERFACE_OPM_2_JTP,
+            0xe929eea4, 0xb9f1, 0x407b, 0xaa, 0xb9, 0xab, 0x08, 0xbb, 0x44, 0xfb, 0xf4);
+DEFINE_GUID(GUID_DEVINTERFACE_OPM_2,
+            0x7f098726, 0x2ebb, 0x4ff3, 0xa2, 0x7f, 0x10, 0x46, 0xb9, 0x5d, 0xc5, 0x17);
+
+#define DXGK_OPM_INTERFACE_VERSION_2_JTP 0x02
+#define DXGK_OPM_INTERFACE_VERSION_2 0x03
+
+typedef NTSTATUS (*DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT_NONLOCAL_DISPLAY_JTP)(
+    PVOID MiniportDeviceContext,
+    DXGKMDT_OPM_VIDEO_OUTPUT_SEMANTICS NewVideoOutputSemantics,
+    ULONG64 OPMEncoderContext,
+    DXGKMDT_OPM_ACTUAL_OUTPUT_FORMAT *pActualOutputFormat,
+    D3DDDI_VIDEO_PRESENT_TARGET_ID NonLocalOutputId,
+    PHANDLE NewProtectedOutputHandle);
+
+typedef NTSTATUS (*DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT_VIRTUAL_MODE_JTP)(
+    PVOID MiniportDeviceContext,
+    D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    DXGKMDT_OPM_VIDEO_OUTPUT_SEMANTICS NewVideoOutputSemantics,
+    DXGKMDT_OPM_ACTUAL_OUTPUT_FORMAT *pActualOutputFormat,
+    PHANDLE NewProtectedOutputHandle);
+
+typedef struct _DXGK_OPM_INTERFACE_2_JTP
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKDDI_OPM_GET_CERTIFICATE_SIZE DxgkDdiOPMGetCertificateSize;
+    DXGKDDI_OPM_GET_CERTIFICATE DxgkDdiOPMGetCertificate;
+    DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT DxgkDdiOPMCreateProtectedOutput;
+    DXGKDDI_OPM_GET_RANDOM_NUMBER DxgkDdiOPMGetRandomNumber;
+    DXGKDDI_OPM_SET_SIGNING_KEY_AND_SEQUENCE_NUMBERS DxgkDdiOPMSetSigningKeyAndSequenceNumbers;
+    DXGKDDI_OPM_GET_INFORMATION DxgkDdiOPMGetInformation;
+    DXGKDDI_OPM_GET_COPP_COMPATIBLE_INFORMATION DxgkDdiOPMGetCOPPCompatibleInformation;
+    DXGKDDI_OPM_CONFIGURE_PROTECTED_OUTPUT DxgkDdiOPMConfigureProtectedOutput;
+    DXGKDDI_OPM_DESTROY_PROTECTED_OUTPUT DxgkDdiOPMDestroyProtectedOutput;
+    DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT_VIRTUAL_MODE_JTP DxgkDdiOPMCreateProtectedOutputVirtualMode;
+    DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT_NONLOCAL_DISPLAY_JTP DxgkDdiOPMCreateProtectedOutputNonLocalDisplay;
+} DXGK_OPM_INTERFACE_2_JTP, *PDXGK_OPM_INTERFACE_2_JTP;
+
+typedef NTSTATUS (*DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT_NONLOCAL_DISPLAY)(
+    PVOID MiniportDeviceContext,
+    DXGKMDT_OPM_VIDEO_OUTPUT_SEMANTICS NewVideoOutputSemantics,
+    UINT64 OPMEncoderContext,
+    DXGKMDT_OPM_ACTUAL_OUTPUT_FORMAT *pActualOutputFormat,
+    UINT64 NonLocalOutputId,
+    DXGKMDT_OPM_CONNECTOR_TYPE NonLocalConnectorType,
+    PHANDLE NewProtectedOutputHandle);
+
+typedef struct _DXGK_OPM_INTERFACE_2
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKDDI_OPM_GET_CERTIFICATE_SIZE DxgkDdiOPMGetCertificateSize;
+    DXGKDDI_OPM_GET_CERTIFICATE DxgkDdiOPMGetCertificate;
+    DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT DxgkDdiOPMCreateProtectedOutput;
+    DXGKDDI_OPM_GET_RANDOM_NUMBER DxgkDdiOPMGetRandomNumber;
+    DXGKDDI_OPM_SET_SIGNING_KEY_AND_SEQUENCE_NUMBERS DxgkDdiOPMSetSigningKeyAndSequenceNumbers;
+    DXGKDDI_OPM_GET_INFORMATION DxgkDdiOPMGetInformation;
+    DXGKDDI_OPM_GET_COPP_COMPATIBLE_INFORMATION DxgkDdiOPMGetCOPPCompatibleInformation;
+    DXGKDDI_OPM_CONFIGURE_PROTECTED_OUTPUT DxgkDdiOPMConfigureProtectedOutput;
+    DXGKDDI_OPM_DESTROY_PROTECTED_OUTPUT DxgkDdiOPMDestroyProtectedOutput;
+    DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT_NONLOCAL_DISPLAY DxgkDdiOPMCreateProtectedOutputNonLocalDisplay;
+} DXGK_OPM_INTERFACE_2, *PDXGK_OPM_INTERFACE_2;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_3)
+DEFINE_GUID(GUID_DEVINTERFACE_OPM_3,
+            0x693a2cb1, 0x8c8d, 0x4ab6, 0x95, 0x55, 0x4b, 0x85, 0xef, 0x2c, 0x7c, 0x6b);
+
+#define DXGK_OPM_INTERFACE_VERSION_3 0x04
+
+typedef NTSTATUS (*DXGKDDI_OPM_SET_SRM_LIST)(
+    PVOID MiniportDeviceContext,
+    ULONG SrmListSize,
+    PVOID SrmListBuffer);
+
+typedef NTSTATUS (*DXGKDDI_OPM_GET_SRM_LIST_VERSION)(
+    PVOID MiniportDeviceContext,
+    PULONG SrmListVersionSize,
+    PVOID SrmListVersionBuffer);
+
+typedef struct _DXGK_OPM_INTERFACE_3
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKDDI_OPM_GET_CERTIFICATE_SIZE DxgkDdiOPMGetCertificateSize;
+    DXGKDDI_OPM_GET_CERTIFICATE DxgkDdiOPMGetCertificate;
+    DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT DxgkDdiOPMCreateProtectedOutput;
+    DXGKDDI_OPM_GET_RANDOM_NUMBER DxgkDdiOPMGetRandomNumber;
+    DXGKDDI_OPM_SET_SIGNING_KEY_AND_SEQUENCE_NUMBERS DxgkDdiOPMSetSigningKeyAndSequenceNumbers;
+    DXGKDDI_OPM_GET_INFORMATION DxgkDdiOPMGetInformation;
+    DXGKDDI_OPM_GET_COPP_COMPATIBLE_INFORMATION DxgkDdiOPMGetCOPPCompatibleInformation;
+    DXGKDDI_OPM_CONFIGURE_PROTECTED_OUTPUT DxgkDdiOPMConfigureProtectedOutput;
+    DXGKDDI_OPM_DESTROY_PROTECTED_OUTPUT DxgkDdiOPMDestroyProtectedOutput;
+    DXGKDDI_OPM_CREATE_PROTECTED_OUTPUT_NONLOCAL_DISPLAY DxgkDdiOPMCreateProtectedOutputNonLocalDisplay;
+    DXGKDDI_OPM_SET_SRM_LIST DxgkDdiOPMSetSrmList;
+    DXGKDDI_OPM_GET_SRM_LIST_VERSION DxgkDdiOPMGetSrmListVersion;
+} DXGK_OPM_INTERFACE_3, *PDXGK_OPM_INTERFACE_3;
+#endif
+
+DEFINE_GUID(GUID_DEVINTERFACE_I2C,
+            0x2564aa4f, 0xdddb, 0x4495, 0xb4, 0x97, 0x6a, 0xd4, 0xa8, 0x41, 0x63, 0xd7);
+
+#define DXGK_I2C_INTERFACE_VERSION_1 0x01
+
+typedef NTSTATUS (*DXGKDDI_I2C_TRANSMIT_DATA_TO_DISPLAY)(
+    PVOID MiniportDeviceContext,
+    D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    ULONG SevenBitI2CAddress,
+    ULONG DataLength,
+    CONST VOID *Data);
+
+typedef NTSTATUS (*DXGKDDI_I2C_RECEIVE_DATA_FROM_DISPLAY)(
+    PVOID MiniportDeviceContext,
+    D3DDDI_VIDEO_PRESENT_TARGET_ID VidPnTargetId,
+    ULONG SevenBitI2CAddress,
+    ULONG Flags,
+    ULONG DataLength,
+    PVOID Data);
+
+typedef struct _DXGK_I2C_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKDDI_I2C_TRANSMIT_DATA_TO_DISPLAY DxgkDdiI2CTransmitDataToDisplay;
+    DXGKDDI_I2C_RECEIVE_DATA_FROM_DISPLAY DxgkDdiI2CReceiveDataFromDisplay;
+} DXGK_I2C_INTERFACE, *PDXGK_I2C_INTERFACE;
+
+#define DXGK_BRIGHTNESS_INTERFACE_VERSION_1 0x01
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_GET_POSSIBLE)(
+    PVOID Context,
+    ULONG BufferSize,
+    PUCHAR LevelCount,
+    PUCHAR BrightnessLevels);
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_SET)(
+    PVOID Context,
+    UCHAR Brightness);
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_GET)(
+    PVOID Context,
+    PUCHAR Brightness);
+
+typedef struct
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGK_BRIGHTNESS_GET_POSSIBLE GetPossibleBrightness;
+    DXGK_BRIGHTNESS_SET SetBrightness;
+    DXGK_BRIGHTNESS_GET GetBrightness;
+} DXGK_BRIGHTNESS_INTERFACE, *PDXGK_BRIGHTNESS_INTERFACE;
+
+#define DXGK_BRIGHTNESS_INTERFACE_VERSION_2 0x02
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_GET_CAPS)(
+    PVOID Context,
+    DXGK_BRIGHTNESS_CAPS *BrightnessCaps);
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_SET_STATE)(
+    PVOID Context,
+    DXGK_BRIGHTNESS_STATE *BrightnessState);
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_SET_BACKLIGHT_OPTIMIZATION)(
+    PVOID Context,
+    DXGK_BACKLIGHT_OPTIMIZATION_LEVEL OptimizationLevel);
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_GET_BACKLIGHT_REDUCTION)(
+    PVOID Context,
+    DXGK_BACKLIGHT_INFO *BacklightInfo);
+
+typedef struct
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGK_BRIGHTNESS_GET_POSSIBLE GetPossibleBrightness;
+    DXGK_BRIGHTNESS_SET SetBrightness;
+    DXGK_BRIGHTNESS_GET GetBrightness;
+    DXGK_BRIGHTNESS_GET_CAPS GetBrightnessCaps;
+    DXGK_BRIGHTNESS_SET_STATE SetBrightnessState;
+    DXGK_BRIGHTNESS_SET_BACKLIGHT_OPTIMIZATION SetBacklightOptimization;
+    DXGK_BRIGHTNESS_GET_BACKLIGHT_REDUCTION GetBacklightReduction;
+} DXGK_BRIGHTNESS_INTERFACE_2, *PDXGK_BRIGHTNESS_INTERFACE_2;
+
+#define DXGK_BRIGHTNESS_INTERFACE_VERSION_3 0x03
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_SET_3)(
+    PVOID Context,
+    ULONG ChildUid,
+    PDXGK_BRIGHTNESS_SET_IN pIn);
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_GET_3)(
+    PVOID Context,
+    ULONG ChildUid,
+    PDXGK_BRIGHTNESS_GET_OUT pOut);
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_GET_CAPS_3)(
+    PVOID Context,
+    ULONG ChildUid,
+    DXGK_BRIGHTNESS_CAPS *pBrightnessCaps);
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_GET_NIT_RANGES)(
+    PVOID Context,
+    ULONG ChildUid,
+    PDXGK_BRIGHTNESS_GET_NIT_RANGES_OUT pOut);
+
+typedef NTSTATUS (*DXGK_BRIGHTNESS_SET_BACKLIGHT_OPTIMIZATION_3)(
+    PVOID Context,
+    ULONG ChildUid,
+    DXGK_BACKLIGHT_OPTIMIZATION_LEVEL OptimizationLevel);
+
+typedef struct
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGK_BRIGHTNESS_SET_3 SetBrightness;
+    DXGK_BRIGHTNESS_GET_3 GetBrightness;
+    DXGK_BRIGHTNESS_GET_CAPS_3 GetBrightnessCaps;
+    DXGK_BRIGHTNESS_GET_NIT_RANGES GetNitRanges;
+    DXGK_BRIGHTNESS_SET_BACKLIGHT_OPTIMIZATION_3 SetBacklightOptimization;
+} DXGK_BRIGHTNESS_INTERFACE_3, *PDXGK_BRIGHTNESS_INTERFACE_3;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
+DEFINE_GUID(GUID_DEVINTERFACE_MIRACAST_DISPLAY,
+            0xaf03f190, 0x22af, 0x48cb, 0x94, 0xbb, 0xb7, 0x8e, 0x76, 0xa2, 0x51, 0x07);
+
+#define DXGK_MIRACAST_DISPLAY_INTERFACE_VERSION_1 0x01
+
+typedef struct _DXGK_MIRACAST_CAPS
+{
+    ULONG MaxChunkPrivateDriverDataSize;
+    union
+    {
+        struct
+        {
+            UINT HdcpSupport : 1;
+            UINT Reserved : 31;
+        };
+        UINT Value;
+    } Flags;
+} DXGK_MIRACAST_CAPS, *PDXGK_MIRACAST_CAPS;
+
+typedef NTSTATUS (*DXGKDDI_MIRACAST_QUERY_CAPS)(
+    PVOID DriverContext,
+    ULONG MiracastCapsSize,
+    DXGK_MIRACAST_CAPS *MiracastCaps);
+
+typedef VOID (*DXGKCB_MIRACAST_SEND_MESSAGE_CALLBACK)(
+    PVOID CallbackContext,
+    PIO_STATUS_BLOCK pIoStatusBlock);
+
+typedef NTSTATUS (*DXGKCB_MIRACAST_SEND_MESSAGE)(
+    HANDLE MiracastHandle,
+    ULONG InputBufferSize,
+    VOID *pInputBuffer,
+    ULONG OutputBufferSize,
+    VOID *pOutputBuffer,
+    DXGKCB_MIRACAST_SEND_MESSAGE_CALLBACK pCallback,
+    PVOID pCallbackContext);
+
+typedef NTSTATUS (*DXGKCB_MIRACAST_REPORT_CHUNK_INFO)(
+    HANDLE MiracastHandle,
+    DXGK_MIRACAST_CHUNK_INFO *pChunkInfo,
+    PVOID pPrivateDriverData,
+    UINT PrivateDataDriverSize);
+
+typedef struct _DXGK_MIRACAST_DISPLAY_CALLBACKS
+{
+    HANDLE MiracastHandle;
+    DXGKCB_MIRACAST_SEND_MESSAGE DxgkCbMiracastSendMessage;
+    DXGKCB_MIRACAST_REPORT_CHUNK_INFO DxgkCbReportChunkInfo;
+} DXGK_MIRACAST_DISPLAY_CALLBACKS, *PDXGK_MIRACAST_DISPLAY_CALLBACKS;
+
+typedef NTSTATUS (*DXGKDDI_MIRACAST_CREATE_CONTEXT)(
+    PVOID DriverContext,
+    DXGK_MIRACAST_DISPLAY_CALLBACKS *MiracastCallbacks,
+    PVOID *MiracastContext,
+    ULONG *TargetId);
+
+typedef VOID (*DXGKDDI_MIRACAST_DESTROY_CONTEXT)(
+    PVOID DriverContext,
+    PVOID MiracastContext);
+
+typedef NTSTATUS (*DXGKDDI_MIRACAST_HANDLE_IO_CONTROL)(
+    PVOID DriverContext,
+    PVOID MiracastContext,
+    ULONG InputBufferSize,
+    VOID *pInputBuffer,
+    ULONG OutputBufferSize,
+    VOID *pOutputBuffer,
+    ULONG *BytesReturned);
+
+typedef struct _DXGK_MIRACAST_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKDDI_MIRACAST_QUERY_CAPS DxgkDdiMiracastQueryCaps;
+    DXGKDDI_MIRACAST_CREATE_CONTEXT DxgkDdiMiracastCreateContext;
+    DXGKDDI_MIRACAST_HANDLE_IO_CONTROL DxgkDdiMiracastIoControl;
+    DXGKDDI_MIRACAST_DESTROY_CONTEXT DxgkDdiMiracastDestroyContext;
+} DXGK_MIRACAST_DISPLAY_INTERFACE, *PDXGK_MIRACAST_DISPLAY_INTERFACE;
+#endif
+
+#define DXGK_AGP_INTERFACE_VERSION_1 0x01
+#define DXGK_AGPCOMMAND_AGP1X 0x00001
+#define DXGK_AGPCOMMAND_AGP2X 0x00002
+#define DXGK_AGPCOMMAND_AGP4X 0x00004
+#define DXGK_AGPCOMMAND_AGP8X 0x00008
+#define DXGK_AGPCOMMAND_DISABLE_SBA 0x10000
+#define DXGK_AGPCOMMAND_DISABLE_FW 0x20000
+
+typedef NTSTATUS (APIENTRY *DXGKCB_AGP_ALLOCATE_POOL)(
+    HANDLE Context,
+    ULONG AllocationSize,
+    MEMORY_CACHING_TYPE CacheType,
+    PPHYSICAL_ADDRESS PhysicalAddress,
+    PVOID *VirtualAddress);
+
+typedef NTSTATUS (APIENTRY *DXGKCB_AGP_FREE_POOL)(
+    HANDLE Context,
+    PVOID VirtualAddress);
+
+typedef NTSTATUS (APIENTRY *DXGKCB_AGP_SET_COMMAND)(
+    HANDLE Context,
+    ULONG Command);
+
+typedef struct _DXGK_AGP_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    DXGKCB_AGP_ALLOCATE_POOL AgpAllocatePool;
+    DXGKCB_AGP_FREE_POOL AgpFreePool;
+    DXGKCB_AGP_SET_COMMAND AgpSetCommand;
+} DXGK_AGP_INTERFACE, *PDXGK_AGP_INTERFACE;
+
+#define DXGK_TIMED_OPERATION_INTERFACE_VERSION_1 0x01
+#define DXGK_TIMED_OPERATION_TIMEOUT_MAX_SECONDS 5
+
+typedef struct _DXGK_TIMED_OPERATION
+{
+    USHORT Size;
+    ULONG_PTR OwnerTag;
+    BOOLEAN OsHandled;
+    BOOLEAN TimeoutTriggered;
+    LARGE_INTEGER Timeout;
+    LARGE_INTEGER StartTick;
+} DXGK_TIMED_OPERATION, *PDXGK_TIMED_OPERATION;
+
+typedef struct _DXGK_TIMED_OPERATION_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    NTSTATUS (*TimedOperationStart)(DXGK_TIMED_OPERATION *Op, const LARGE_INTEGER *Timeout, BOOLEAN OsHandled);
+    NTSTATUS (*TimedOperationDelay)(DXGK_TIMED_OPERATION *Op, KPROCESSOR_MODE WaitMode, BOOLEAN Alertable, const LARGE_INTEGER *Interval);
+    NTSTATUS (*TimedOperationWaitForSingleObject)(DXGK_TIMED_OPERATION *Op, PVOID Object, KWAIT_REASON WaitReason, KPROCESSOR_MODE WaitMode, BOOLEAN Alertable, const LARGE_INTEGER *Timeout);
+} DXGK_TIMED_OPERATION_INTERFACE, *PDXGK_TIMED_OPERATION_INTERFACE;
+
+#define DXGK_SPB_INTERFACE_VERSION_1 0x01
+
+typedef struct _DXGK_SPB_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    NTSTATUS (*OpenSpbResource)(HANDLE DeviceHandle, LARGE_INTEGER SpbResourceId, UNICODE_STRING *SpbResourceSubName, ACCESS_MASK DesiredAccess, ULONG ShareAccess, ULONG OpenOptions, VOID **SpbResource);
+    NTSTATUS (*CloseSpbResource)(HANDLE DeviceHandle, VOID *SpbResource);
+    NTSTATUS (*ReadSpbResource)(HANDLE DeviceHandle, VOID *SpbResource, ULONG Length, VOID *Buffer, LARGE_INTEGER *ByteOffset, HANDLE EventHandle, IO_STATUS_BLOCK *IoStatusBlock);
+    NTSTATUS (*WriteSpbResource)(HANDLE DeviceHandle, VOID *SpbResource, ULONG Length, VOID *Buffer, LARGE_INTEGER *ByteOffset, HANDLE EventHandle, IO_STATUS_BLOCK *IoStatusBlock);
+    NTSTATUS (*SpbResourceIoControl)(HANDLE DeviceHandle, VOID *SpbResource, ULONG IoControlCode, ULONG InBufferSize, VOID *InputBuffer, ULONG OutBufferSize, VOID *OutputBuffer, HANDLE EventHandle, IO_STATUS_BLOCK *IoStatusBlock);
+} DXGK_SPB_INTERFACE, *PDXGK_SPB_INTERFACE;
+
+#define DXGK_FIRMWARE_TABLE_INTERFACE_VERSION_1 0x01
+
+typedef struct _DXGK_FIRMWARE_TABLE_INTERFACE
+{
+    USHORT Size;
+    USHORT Version;
+    PVOID Context;
+    PINTERFACE_REFERENCE InterfaceReference;
+    PINTERFACE_DEREFERENCE InterfaceDereference;
+    NTSTATUS (*EnumSystemFirmwareTables)(VOID *Context, ULONG ProviderSignature, ULONG BufferSize, VOID *Buffer, ULONG *RequiredSize);
+    NTSTATUS (*ReadSystemFirmwareTable)(VOID *Context, ULONG ProviderSignature, ULONG TableId, ULONG BufferSize, VOID *Buffer, ULONG *RequiredSize);
+} DXGK_FIRMWARE_TABLE_INTERFACE, *PDXGK_FIRMWARE_TABLE_INTERFACE;
+
 typedef enum
 {
     DockStateUnsupported = 0,
