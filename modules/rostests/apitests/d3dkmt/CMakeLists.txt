@@ -7,6 +7,9 @@
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
 add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 
+option(REACTOS_D3DKMT_PRIVATE_DWM_TEST
+    "Build ReactOS-private DWM redirection ABI probes" OFF)
+
 # Compile the tests against the same UMD callback layout as the runtime and
 # in-tree UMDs.  A lower private test selector changes D3DDDI_DEVICECALLBACKS
 # itself, so handing that shorter buffer to the current runtime corrupts the
@@ -64,9 +67,12 @@ list(APPEND SOURCE
     vidmm_test.c
     present_test.c
     dwm_test.c
-    dwmdx_test.c
     cursor_test.c
     display_test.c)
+
+if(REACTOS_D3DKMT_PRIVATE_DWM_TEST)
+    list(APPEND SOURCE dwmdx_test.c)
+endif()
 
 if(REACTOS_USE_WDDM AND (REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000))
     list(APPEND SOURCE d3dkmt_vc4kmt_smoke.c)
@@ -81,6 +87,10 @@ add_executable(d3dkmt_apitest
 
 target_compile_definitions(d3dkmt_apitest PRIVATE
     REACTOS_EXPECTED_UMD_INTERFACE_VERSION=${REACTOS_EXPECTED_UMD_INTERFACE_VERSION})
+if(REACTOS_D3DKMT_PRIVATE_DWM_TEST)
+    target_compile_definitions(d3dkmt_apitest PRIVATE
+        REACTOS_D3DKMT_PRIVATE_DWM_TEST)
+endif()
 target_link_libraries(d3dkmt_apitest wine ${PSEH_LIB})
 if(REACTOS_USE_WDDM AND (REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000))
     target_link_libraries(d3dkmt_apitest vc4kmt)
