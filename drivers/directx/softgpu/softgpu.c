@@ -445,8 +445,11 @@ DriverEntry(
     InitData.DxgkDdiSetTimingsFromVidPn =
         SoftGpuDdiSetTimingsFromVidPn;
 #endif
-#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000) || \
+    defined(SOFTGPU_PLATFORM_PRIVATE_ESCAPE)
     InitData.DxgkDdiEscape                         = SoftGpuDdiEscape;
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
     InitData.DxgkDdiCreateCpuEvent                 =
         SoftGpuDdiCreateCpuEvent;
     InitData.DxgkDdiDestroyCpuEvent                =
@@ -949,10 +952,21 @@ SoftGpuDdiStartDevice(
                  &RequiredFrameBufferSize);
     if (!NT_SUCCESS(Status))
         goto CleanupStart;
+    if (PlatformConfig.MinimumAllocationSlabSize >
+            SOFTGPU_MAX_ALLOCATION_SLAB_SIZE)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto CleanupStart;
+    }
+    RequiredFrameBufferSize = max(
+        RequiredFrameBufferSize,
+        PlatformConfig.MinimumAllocationSlabSize);
 
     Device->Width = PlatformConfig.Width;
     Device->Height = PlatformConfig.Height;
     Device->Format = PlatformConfig.Format;
+    Device->HighestDmaAddress =
+        PlatformConfig.HighestFrameBufferAddress;
 
     Status = SoftGpuAllocateFrameBuffer(
                  Device,
@@ -1477,6 +1491,11 @@ SoftGpuDdiQueryAdapterInfo(
         RtlCopyMemory(pQueryAdapterInfo->pOutputData,
                       &SOFTGPU_DRIVER_CAPS,
                       sizeof(DXGK_DRIVERCAPS));
+        if (Device->HighestDmaAddress.QuadPart != 0)
+        {
+            ((PDXGK_DRIVERCAPS)pQueryAdapterInfo->pOutputData)
+                ->HighestAcceptableAddress = Device->HighestDmaAddress;
+        }
         return STATUS_SUCCESS;
 
     case DXGKQAITYPE_QUERYSEGMENT:
@@ -1787,9 +1806,24 @@ SoftGpuDdiEscape(
     if (Device == NULL ||
         Device->Magic != SOFTGPU_DEVICE_MAGIC ||
         Escape == NULL ||
-        Escape->hDevice == NULL ||
-        Escape->hContext != NULL ||
         Escape->pPrivateDriverData == NULL ||
+        Escape->PrivateDriverDataSize == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+#if defined(SOFTGPU_PLATFORM_PRIVATE_ESCAPE)
+    {
+        NTSTATUS PlatformStatus;
+
+        PlatformStatus = SoftGpuPlatformEscape(Device, Escape);
+        if (PlatformStatus != STATUS_NOT_SUPPORTED)
+            return PlatformStatus;
+    }
+#endif
+
+    if (Escape->hDevice == NULL ||
+        Escape->hContext != NULL ||
         Escape->PrivateDriverDataSize !=
             sizeof(D3DDDI_DRIVERESCAPE_CPUEVENTUSAGE) ||
         !Escape->Flags.DriverKnownEscape)
@@ -1835,6 +1869,30 @@ SoftGpuDdiEscape(
     KeReleaseSpinLock(&CpuEvent->UsageLock, OldIrql);
     ExReleaseRundownProtection(&CpuEvent->Rundown);
     return STATUS_SUCCESS;
+}
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL < 3000) && \
+    defined(SOFTGPU_PLATFORM_PRIVATE_ESCAPE)
+NTSTATUS
+APIENTRY
+SoftGpuDdiEscape(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ CONST DXGKARG_ESCAPE *Escape)
+{
+    PSOFTGPU_DEVICE Device =
+        (PSOFTGPU_DEVICE)MiniportDeviceContext;
+
+    if (Device == NULL ||
+        Device->Magic != SOFTGPU_DEVICE_MAGIC ||
+        Escape == NULL ||
+        Escape->pPrivateDriverData == NULL ||
+        Escape->PrivateDriverDataSize == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return SoftGpuPlatformEscape(Device, Escape);
 }
 #endif
 
@@ -2391,6 +2449,7 @@ SoftGpuDdiOpenAllocation(
     {
         DXGK_OPENALLOCATIONINFO *pInfo = &OpenAllocation->pOpenAllocation[i];
         SOFTGPU_ALLOCATION_PRIVATE_DATA PrivateData;
+        UINT LinearSize;
 
         if (pInfo->hAllocation == 0 ||
             (pInfo->PrivateDriverDataSize != 0 &&
@@ -2436,6 +2495,19 @@ SoftGpuDdiOpenAllocation(
                 Open->Pitch = PrivateData.Pitch;
                 Open->Format = PrivateData.Format;
             }
+        }
+        else if (pInfo->PrivateDriverDataSize == sizeof(LinearSize))
+        {
+            RtlCopyMemory(&LinearSize,
+                          pInfo->pPrivateDriverData,
+                          sizeof(LinearSize));
+            if (LinearSize == 0 || LinearSize > Device->FrameBufferSize)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Rollback;
+            }
+
+            Open->Size = LinearSize;
         }
         pInfo->hDeviceSpecificAllocation = (HANDLE)Open;
         Open = NULL;

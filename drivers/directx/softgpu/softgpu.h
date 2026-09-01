@@ -194,6 +194,7 @@ typedef struct _SOFTGPU_DEVICE
     PVOID               FrameBuffer;
     PHYSICAL_ADDRESS    FrameBufferPhys;
     SIZE_T              FrameBufferSize;
+    PHYSICAL_ADDRESS    HighestDmaAddress;
 
     /*
      * Fixed firmware scanout. Allocations live in FrameBuffer above; the
@@ -206,6 +207,7 @@ typedef struct _SOFTGPU_DEVICE
     ULONG               ScanoutPitch;
     KSPIN_LOCK          ScanoutLock;
     KMUTEX              ScanoutMutex;
+    KMUTEX              PointerMutex;
     EX_RUNDOWN_REF      ScanoutRundown;
     WORK_QUEUE_ITEM     ScanoutWorkItem;
     BOOLEAN             ScanoutRundownCompleted;
@@ -232,7 +234,8 @@ typedef struct _SOFTGPU_DEVICE
     BOOLEAN             PlatformHardwarePointer;
 
     /* Software-emulated WDDM color-pointer plane. ScanoutMutex serializes
-     * these fields with every write to the firmware scanout. */
+     * software composition with scanout writes. Hardware cursor platforms
+     * use PointerMutex so position updates do not wait for framebuffer copies. */
     ULONG               PointerPixels[SOFTGPU_POINTER_PIXEL_COUNT];
     ULONG               PointerBacking[SOFTGPU_POINTER_PIXEL_COUNT];
     ULONG               PointerWidth;
@@ -328,6 +331,7 @@ typedef struct _SOFTGPU_PLATFORM_CONFIG
     ULONG               ScanoutPitch;
     ULONGLONG           ScanoutSize;
     PHYSICAL_ADDRESS    HighestFrameBufferAddress;
+    SIZE_T              MinimumAllocationSlabSize;
 } SOFTGPU_PLATFORM_CONFIG, *PSOFTGPU_PLATFORM_CONFIG;
 
 /*
@@ -387,6 +391,29 @@ NTSTATUS
 SoftGpuPlatformQueryScanLine(
     _In_ PSOFTGPU_DEVICE Device,
     _Inout_ PDXGKARG_GETSCANLINE GetScanLine);
+
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+struct _SOFTGPU_KMD_DEVICE;
+
+NTSTATUS
+SoftGpuPlatformRender(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ struct _SOFTGPU_KMD_DEVICE *KmdDevice,
+    _Inout_ PDXGKARG_RENDER Render);
+
+NTSTATUS
+SoftGpuPlatformSubmitCommand(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ const DXGKARG_SUBMITCOMMAND *SubmitCommand);
+
+BOOLEAN
+SoftGpuPlatformInterruptRoutine(
+    _Inout_ PSOFTGPU_DEVICE Device);
+
+VOID
+SoftGpuPlatformDpcRoutine(
+    _Inout_ PSOFTGPU_DEVICE Device);
+#endif
 
 BOOLEAN
 SoftGpuDecodeLoaderGop(
@@ -630,11 +657,21 @@ APIENTRY
 SoftGpuDdiDestroyCpuEvent(
     _In_ HANDLE MiniportDeviceContext,
     _In_ HANDLE KmdCpuEvent);
+#endif
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3000) || \
+    defined(SOFTGPU_PLATFORM_PRIVATE_ESCAPE)
 NTSTATUS
 APIENTRY
 SoftGpuDdiEscape(
     _In_ PVOID MiniportDeviceContext,
+    _In_ CONST DXGKARG_ESCAPE *Escape);
+#endif
+
+#if defined(SOFTGPU_PLATFORM_PRIVATE_ESCAPE)
+NTSTATUS
+SoftGpuPlatformEscape(
+    _Inout_ PSOFTGPU_DEVICE Device,
     _In_ CONST DXGKARG_ESCAPE *Escape);
 #endif
 

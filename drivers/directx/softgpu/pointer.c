@@ -156,6 +156,7 @@ SoftGpuDdiSetPointerPosition(
     _In_ const DXGKARG_SETPOINTERPOSITION *SetPointerPosition)
 {
     PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+    PKMUTEX PointerMutex;
     NTSTATUS Status;
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC ||
@@ -168,7 +169,10 @@ SoftGpuDdiSetPointerPosition(
     if (!ExAcquireRundownProtection(&Device->ScanoutRundown))
         return STATUS_DELETE_PENDING;
 
-    Status = KeWaitForSingleObject(&Device->ScanoutMutex, Executive, KernelMode, FALSE, NULL);
+    PointerMutex = Device->PlatformHardwarePointer
+                       ? &Device->PointerMutex
+                       : &Device->ScanoutMutex;
+    Status = KeWaitForSingleObject(PointerMutex, Executive, KernelMode, FALSE, NULL);
     if (!NT_SUCCESS(Status))
         goto CleanupRundown;
     if (InterlockedCompareExchange(&Device->Stopped, 0, 0) != 0)
@@ -196,7 +200,7 @@ SoftGpuDdiSetPointerPosition(
     Status = STATUS_SUCCESS;
 
 CleanupMutex:
-    KeReleaseMutex(&Device->ScanoutMutex, FALSE);
+    KeReleaseMutex(PointerMutex, FALSE);
 CleanupRundown:
     ExReleaseRundownProtection(&Device->ScanoutRundown);
     return Status;
@@ -209,6 +213,7 @@ SoftGpuDdiSetPointerShape(
     _In_ const DXGKARG_SETPOINTERSHAPE *SetPointerShape)
 {
     PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
+    PKMUTEX PointerMutex;
     const UCHAR *Pixels;
     ULONG Y;
     NTSTATUS Status;
@@ -229,7 +234,10 @@ SoftGpuDdiSetPointerShape(
     if (!ExAcquireRundownProtection(&Device->ScanoutRundown))
         return STATUS_DELETE_PENDING;
 
-    Status = KeWaitForSingleObject(&Device->ScanoutMutex, Executive, KernelMode, FALSE, NULL);
+    PointerMutex = Device->PlatformHardwarePointer
+                       ? &Device->PointerMutex
+                       : &Device->ScanoutMutex;
+    Status = KeWaitForSingleObject(PointerMutex, Executive, KernelMode, FALSE, NULL);
     if (!NT_SUCCESS(Status))
         goto CleanupRundown;
     if (InterlockedCompareExchange(&Device->Stopped, 0, 0) != 0)
@@ -268,7 +276,7 @@ SoftGpuDdiSetPointerShape(
     Status = STATUS_SUCCESS;
 
 CleanupMutex:
-    KeReleaseMutex(&Device->ScanoutMutex, FALSE);
+    KeReleaseMutex(PointerMutex, FALSE);
 CleanupRundown:
     ExReleaseRundownProtection(&Device->ScanoutRundown);
     return Status;
