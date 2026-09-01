@@ -501,10 +501,6 @@ typedef struct _TDR_CONFIG
 
 extern TDR_CONFIG g_TdrConfig;
 
-NTSTATUS NTAPI TdrCreateRecoveryContext(_Out_ PVOID *RecoveryContext, _In_ PVOID AdapterContext);
-NTSTATUS NTAPI TdrCompleteRecoveryContext(_In_opt_ PVOID RecoveryContext);
-NTSTATUS NTAPI TdrResetFromTimeout(_In_ PVOID RecoveryContext);
-
 /* Direct counters include every committed tracked submission.  The public
  * virtgpu escape path also precharges queued PREPARED work against these
  * initial admission limits; other producers are not quota-gated yet. */
@@ -955,7 +951,6 @@ struct _DXGKRNL_ADAPTER
     KTIMER                      TdrDdiTimer;
     KDPC                        TdrDdiDpc;
     volatile LONG               TdrDdiTimerArmed;
-    PVOID                       TdrRecoveryContext;
 
     /*
      * Miniport CRTC_VSYNC notifications are recorded by the ISR and consumed
@@ -1926,9 +1921,6 @@ VOID
 DxgkEndKmdExclusive(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ BOOLEAN ReopenAdmission);
-
-VOID DxgkpArmTdrDdiDeadline(_In_ PDXGKRNL_ADAPTER Adapter);
-VOID DxgkpDisarmTdrDdiDeadline(_In_ PDXGKRNL_ADAPTER Adapter);
 
 BOOLEAN
 DxgkBeginKmdTransaction(

@@ -17,6 +17,7 @@
 #define REACTOS_WDDM_AUTONOMOUS_GPU_CONTEXT_RUNLIST       0
 #define REACTOS_WDDM_MULTI_APP_PRIORITY_TIME_ENTITLEMENT  0
 #define REACTOS_WDDM_USER_MODE_WORK_SUBMISSION            0
+#define REACTOS_WDDM_PRIVATE_TDR_ABI                      0
 
 #if REACTOS_WDDM_AUTONOMOUS_GPU_CONTEXT_RUNLIST != 0
 #error Autonomous GPU context run lists are quarantined pending claim review
@@ -28,6 +29,10 @@
 
 #if REACTOS_WDDM_USER_MODE_WORK_SUBMISSION != 0
 #error WDDM 3.2 user-mode work submission is not enabled in Windows 11 24H2 and is outside the audited contract
+#endif
+
+#if REACTOS_WDDM_PRIVATE_TDR_ABI != 0
+#error Private TDR exports and recovery layouts require independent clean-room ABI clearance
 #endif
 
 #endif /* _REACTOS_WDDM_CLEANROOM_GATE_H_ */

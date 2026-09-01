@@ -1,28 +1,9 @@
 ; dxgkrnl.sys exports
 ;
-; Ordinals 1-26 match the Windows 7 SP1 export table layout.
-; Groups: TDR (12 functions + 4 data), Display Port bridge (4+1 functions),
-;         DxgCoreInterface (1 data), SQM (9 functions), ETW (6 functions + 1 data),
-;         VidMm (1 function), plus the DxgkInitialize family (3 functions).
-
-; --- TDR (Timeout Detection and Recovery) ---
-@ stdcall TdrAllowToDebugEngineTimeout(ptr)
-@ stdcall TdrCollectDbgInfoStage1(ptr)
-@ stdcall TdrCollectDbgInfoStage2(ptr)
-@ stdcall TdrCompleteRecoveryContext(ptr)
-@ stdcall TdrCreateRecoveryContext(ptr ptr)
-@ stdcall TdrHistoryInit(ptr)
-@ stdcall TdrHistoryIsLimitExhausted(ptr ptr long)
-@ stdcall TdrHistoryUpdate(ptr ptr)
-@ stdcall TdrIsEnabled()
-@ stdcall TdrIsRecoveryRequired(ptr)
-@ stdcall TdrIsTimeoutForcedFlip(ptr)
-@ stdcall TdrResetFromTimeout(ptr)
-@ stdcall TdrUpdateDbgReport(ptr long)
-@ extern g_TdrConfig
-@ extern g_TdrForceDodPresentTimeout
-@ extern g_TdrForceDodVSyncTimeout
-@ extern g_TdrForceTimeout
+; The public name set is the clean-room-supported intersection with Windows 11
+; 24H2 build 26100.1742. Ordinals are generated and are not claimed to match
+; the native ARM64 binary. Miniport initialization is resolved through the
+; displib control-device protocol and is intentionally not exported.
 
 ; --- Display Port / Scheduler bridge ---
 @ stdcall DpSynchronizeExecution(ptr ptr ptr long ptr)
