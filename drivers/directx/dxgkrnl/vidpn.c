@@ -1916,28 +1916,10 @@ static NTSTATUS
 DxgkpRecoverFailedHotPlugRollback(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    PVOID RecoveryContext = NULL;
-    NTSTATUS CompleteStatus;
-    NTSTATUS Status;
-
     InterlockedExchange(&Adapter->TdrOwnershipUncertain, 1);
-    Status = TdrCreateRecoveryContext(&RecoveryContext, Adapter);
-    if (NT_SUCCESS(Status))
-    {
-        Status = TdrResetFromTimeout(RecoveryContext);
-        CompleteStatus = TdrCompleteRecoveryContext(RecoveryContext);
-        RecoveryContext = NULL;
-        if (NT_SUCCESS(Status) && !NT_SUCCESS(CompleteStatus))
-            Status = CompleteStatus;
-    }
-    if (NT_SUCCESS(Status))
-    {
-        InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
-        return STATUS_SUCCESS;
-    }
-    DXGKRNL_ERR("DxgkpRecoverFailedHotPlugRollback: reset/restart failed 0x%08lX; failing adapter closed\n", Status);
+    DXGKRNL_ERR("DxgkpRecoverFailedHotPlugRollback: private TDR recovery is quarantined; failing adapter closed\n");
     DxgkBeginAdapterRundown(Adapter);
-    return Status;
+    return STATUS_NOT_SUPPORTED;
 }
 
 static NTSTATUS

@@ -299,39 +299,7 @@ DxgkpInitializeCoreInterface(VOID)
     DxgCoreInterface.Slots[21] = (PVOID)DxgkCoreStubVoid;          /* SetPowerComponentResidency */
 }
 
-/* ========================================================================
- * TDR (Timeout Detection and Recovery) exports
- *
- * These functions are consumed by dxgmms1.sys (GPU scheduler) to
- * coordinate GPU hang detection and recovery.
- *
- * TDR recovery context layout (0xB30 bytes, tag "vTDR"):
- *   +0x00: ULONG  Signature1       — "vTDR" (0x52445476)
- *   +0x04: ULONG  Reserved04
- *   +0x08: PVOID  Reserved08
- *   +0x10: ULONG  RecoveryType
- *   +0x18: ULONGLONG Reserved18     — copied to history slot field 1
- *   +0x20: PVOID  SchedulerContext
- *   +0x28: PVOID  SchedulerPtr
- *   +0x30: ULONGLONG Reserved30     — copied to history slot field 2
- *   +0x38: ULONGLONG Reserved38     — copied to history slot field 3
- *   +0x40: ULONGLONG Reserved40     — copied to history slot field 4
- *   +0x58: ULONG  Signature2       — "vTDR" (0x52445476)
- *   +0x5C: ULONG  Flags
- *   +0x60: ULONGLONG Timestamp      — SharedUserData tick at creation
- *   +0x68: ULONG  TimeoutMultiplier — default 0x10
- *   +0xAC8: ULONG TdrDelay         — copied from g_TdrConfig
- *   +0xACC: ULONG TdrDdiDelay      — copied from g_TdrConfig
- *   +0xAD0: ULONG TdrLevel         — copied from g_TdrConfig
- *   +0xAF0: ULONG Signature3       — "vTDR" (0x52445476)
- *
- * TDR history buffer layout (0xA18 bytes):
- *   +0x00: ULONGLONG Reserved
- *   +0x08: ULONGLONG Reserved
- *   +0x10: ULONG  TimeIncrement    — from KeQueryTimeIncrement
- *   +0x14: LONG   WriteIndex       — atomic circular index (AND 0x3F)
- *   +0x18: TDR_HISTORY_ENTRY[64]   — each entry is 40 bytes (5 QWORDs)
- * ====================================================================== */
+/* TDR registry policy used by the adapter-owned watchdog boundary. */
 
 /*
  * g_TdrConfig — TDR configuration read from registry.
@@ -432,6 +400,13 @@ LONG g_TdrForceDodVSyncTimeout = 0;
  * g_bVSyncEnabledForLogging — VSync logging flag for ETW tracing.
  */
 BOOLEAN g_bVSyncEnabledForLogging = FALSE;
+
+/*
+ * The private TDR export ABI is intentionally excluded. Its public PDB names
+ * do not define recovery-context sizes, field offsets, ownership, or calling
+ * contracts, and no paired black-box contract has cleared those details.
+ */
+#if REACTOS_WDDM_PRIVATE_TDR_ABI
 
 /* Pool tag for TDR recovery context allocations ("vTDR" = 0x52445476) */
 #define TAG_TDR_CONTEXT 0x52445476
@@ -1020,6 +995,8 @@ TdrUpdateDbgReport(
     UNREFERENCED_PARAMETER(RecoveryContext);
     UNREFERENCED_PARAMETER(Stage);
 }
+
+#endif /* REACTOS_WDDM_PRIVATE_TDR_ABI */
 
 /*
  * DxgkVidMmAllowFailOnOfferReclaimErrors

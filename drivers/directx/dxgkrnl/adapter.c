@@ -530,14 +530,12 @@ DxgkpBugCheckTdrFailure(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ NTSTATUS FailureStatus)
 {
-    PVOID RecoveryContext;
     ULONG_PTR OwnerTag = 0;
 
     DXGKRNL_ERR("DxgkpBugCheckTdrFailure: unrecoverable TDR on adapter %p status 0x%08lX\n", Adapter, FailureStatus);
-    RecoveryContext = InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, NULL, NULL);
     if (Adapter->MiniportContext != NULL && DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout) != NULL)
         OwnerTag = (ULONG_PTR)DXGK_CB_FULL(Adapter, DxgkDdiResetFromTimeout);
-    KeBugCheckEx(0x116, (ULONG_PTR)RecoveryContext, OwnerTag, (ULONG_PTR)FailureStatus, 0);
+    KeBugCheckEx(0x116, (ULONG_PTR)Adapter, OwnerTag, (ULONG_PTR)FailureStatus, 0);
 }
 
 static VOID
@@ -640,20 +638,12 @@ DxgkpTdrWorker(
     BOOLEAN DdiDeadlineArmed = FALSE;
     BOOLEAN Level3Transition = FALSE;
     BOOLEAN PresentResetStarted = FALSE;
-    BOOLEAN RecoveryContextPublished = FALSE;
     BOOLEAN SchedulerPrepared = FALSE;
-    PVOID RecoveryContext = NULL;
     NTSTATUS Status;
 
     if (Adapter == NULL)
         return;
 
-    Status = TdrCreateRecoveryContext(&RecoveryContext, Adapter);
-    if (!NT_SUCCESS(Status))
-        DxgkpBugCheckTdrFailure(Adapter, Status);
-    if (InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, RecoveryContext, NULL) != NULL)
-        goto Exit;
-    RecoveryContextPublished = TRUE;
     DxgkpArmTdrDdiDeadline(Adapter);
     DdiDeadlineArmed = TRUE;
     DxgkAcquireLevel3Transition(Adapter);
@@ -852,12 +842,6 @@ Exit:
         DxgkPresentCompleteReset(Adapter);
     if (DdiDeadlineArmed)
         DxgkpDisarmTdrDdiDeadline(Adapter);
-    if (RecoveryContext != NULL)
-    {
-        if (RecoveryContextPublished)
-            InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, NULL, RecoveryContext);
-        (VOID)TdrCompleteRecoveryContext(RecoveryContext);
-    }
     ExReleaseRundownProtection(&Adapter->RundownRef);
     InterlockedExchange(&Adapter->TdrWorkQueued, 0);
     if (Level3Transition)
@@ -889,7 +873,7 @@ DxgkpTdrDpcRoutine(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->TdrTimerActive, 0, 0) == 0 || InterlockedCompareExchangePointer((PVOID volatile *)&Adapter->TdrRecoveryContext, NULL, NULL) != NULL)
+    if (Adapter == NULL || InterlockedCompareExchange(&Adapter->TdrTimerActive, 0, 0) == 0)
         return;
     Now100ns = KeQueryInterruptTime();
 
@@ -1002,7 +986,6 @@ DxgkpStartTdrWatchdog(
     Adapter->TdrStuckTicks = 0;
     Adapter->TdrLastProgressTime100ns = KeQueryInterruptTime();
     Adapter->TdrDdiTimerArmed = 0;
-    Adapter->TdrRecoveryContext = NULL;
     DxgkResetSubmittedFenceIdentities(Adapter);
     InterlockedExchange(&Adapter->TdrCompletionNotificationsEnabled, 1);
     if (Adapter->TdrConfig.TdrLevel == DXGKP_TDR_LEVEL_OFF)
@@ -10553,13 +10536,19 @@ DxgkpResetMiniportForTeardown(
     _SEH2_END;
     DxgkReleaseMiniportCallback(Adapter);
     if (!NT_SUCCESS(Status))
-        DxgkpBugCheckTdrFailure(Adapter, Status);
+        goto ResetFailed;
     Status = DxgkVidMmRecoverFromTimeout(Adapter);
     if (!NT_SUCCESS(Status))
-        DxgkpBugCheckTdrFailure(Adapter, Status);
+        goto ResetFailed;
     InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
     if (SchedulerPrepared)
         VidSchCompleteAdapterReset(Adapter, TRUE);
+    DxgkEndKmdExclusive(Adapter, FALSE);
+    return Status;
+
+ResetFailed:
+    if (SchedulerPrepared)
+        VidSchCompleteAdapterReset(Adapter, FALSE);
     DxgkEndKmdExclusive(Adapter, FALSE);
     return Status;
 }
