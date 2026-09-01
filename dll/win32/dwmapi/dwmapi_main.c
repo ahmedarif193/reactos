@@ -91,9 +91,23 @@ HRESULT WINAPI DwmEnableComposition(UINT uCompositionAction)
  */
 HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND hwnd, const MARGINS* margins)
 {
+#ifdef __REACTOS__
+    TRACE("(%p, %p)\n", hwnd, margins);
+
+    if (!IsWindow(hwnd))
+        return E_HANDLE;
+    if (!margins)
+        return E_INVALIDARG;
+
+    /* The frame margins are compositor metadata. Do not rewrite USER window
+     * styles here: doing so changes Chromium's output-device selection before
+     * DirectComposition has attached its target. */
+    return S_OK;
+#else
     FIXME("(%p, %p) stub\n", hwnd, margins);
 
     return S_OK;
+#endif
 }
 
 /**********************************************************************
@@ -123,11 +137,56 @@ HRESULT WINAPI DwmInvalidateIconicBitmaps(HWND hwnd)
  */
 HRESULT WINAPI DwmSetWindowAttribute(HWND hwnd, DWORD attributenum, LPCVOID attribute, DWORD size)
 {
+#ifdef __REACTOS__
+    TRACE("(%p, %lx, %p, %lx)\n", hwnd, attributenum, attribute, size);
+
+    if (!IsWindow(hwnd))
+        return E_HANDLE;
+    if (!attribute)
+        return E_INVALIDARG;
+
+    switch (attributenum)
+    {
+        case DWMWA_NCRENDERING_POLICY:
+        case DWMWA_TRANSITIONS_FORCEDISABLED:
+        case DWMWA_ALLOW_NCPAINT:
+        case DWMWA_NONCLIENT_RTL_LAYOUT:
+        case DWMWA_FORCE_ICONIC_REPRESENTATION:
+        case DWMWA_FLIP3D_POLICY:
+        case DWMWA_HAS_ICONIC_BITMAP:
+        case DWMWA_DISALLOW_PEEK:
+        case DWMWA_EXCLUDED_FROM_PEEK:
+        case DWMWA_CLOAK:
+        case DWMWA_FREEZE_REPRESENTATION:
+        case DWMWA_PASSIVE_UPDATE_MODE:
+        case DWMWA_USE_HOSTBACKDROPBRUSH:
+        case DWMWA_USE_IMMERSIVE_DARK_MODE:
+        case 26: /* pre-release immersive-dark-mode attribute used by Chromium */
+        case DWMWA_WINDOW_CORNER_PREFERENCE:
+        case DWMWA_BORDER_COLOR:
+        case DWMWA_CAPTION_COLOR:
+        case DWMWA_TEXT_COLOR:
+        case DWMWA_SYSTEMBACKDROP_TYPE:
+            if (size != sizeof(DWORD))
+                return E_INVALIDARG;
+            break;
+
+        default:
+            /* Keep forward compatibility with attributes newer than this
+             * Wine snapshot. Unknown metadata is inert until ReactOS has a
+             * system compositor, but accepting it must not disable the
+             * caller's DirectComposition path. */
+            break;
+    }
+
+    return S_OK;
+#else
     static BOOL once;
 
     if (!once++) FIXME("(%p, %lx, %p, %lx) stub\n", hwnd, attributenum, attribute, size);
 
     return S_OK;
+#endif
 }
 
 /**********************************************************************
