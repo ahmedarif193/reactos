@@ -61,6 +61,23 @@
 #pragma warning(disable:4200) /* zero-sized array     */
 #pragma warning(disable:4214) /* bit-field type other than int */
 
+/* SAL-decorated parameter aliases used by the public DXGK callback typedefs. */
+typedef _In_ BOOLEAN IN_BOOLEAN;
+typedef _In_ UCHAR IN_UCHAR;
+typedef _In_ DEVICE_POWER_STATE IN_DEVICE_POWER_STATE;
+typedef _In_ CONST HANDLE IN_CONST_HANDLE;
+typedef _Inout_ UINT *INOUT_PUINT;
+typedef _Out_ UINT *OUT_PUINT;
+typedef _In_ ULONG IN_ULONG;
+typedef _Out_ PULONG OUT_PULONG;
+typedef _In_ POWER_ACTION IN_POWER_ACTION;
+typedef _In_ PVOID IN_PVOID;
+typedef _In_ CONST PVOID IN_CONST_PVOID;
+typedef _Outptr_ PVOID *OUT_PPVOID;
+typedef _In_ CONST SIZE_T IN_CONST_SIZE_T;
+typedef _Out_ SIZE_T *OUT_PSIZE_T;
+typedef _Out_ SIZE_T *CONST OUT_PSIZE_T_CONST;
+
 typedef struct _DXGK_ALLOCATIONINFOFLAGS_WDDM2_0
 {
     union
@@ -4122,9 +4139,6 @@ typedef struct _DXGK_POWER_P_COMPONENT
  * Layout matches Windows 10 WDK (10.0.16299.0) d3dkmddi.h exactly.
  * =========================================================================
  */
-
-typedef _In_ CONST HANDLE IN_CONST_HANDLE;
-typedef _In_ CONST PVOID IN_CONST_PVOID;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
 
