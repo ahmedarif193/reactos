@@ -349,12 +349,30 @@ static BOOL wined3d_caps_gl_ctx_create(struct wined3d_adapter_gl *adapter_gl, st
         ERR("Failed to find a suitable pixel format.\n");
         goto fail;
     }
-    DescribePixelFormat(ctx->dc, iPixelFormat, sizeof(pfd), &pfd);
-    SetPixelFormat(ctx->dc, iPixelFormat, &pfd);
+    if (!DescribePixelFormat(ctx->dc, iPixelFormat, sizeof(pfd), &pfd))
+    {
+#ifdef __REACTOS__
+        ERR("Failed to describe pixel format %d for window %p, dc %p, last error %#lx.\n",
+                iPixelFormat, ctx->wnd, ctx->dc, GetLastError());
+#endif
+        goto fail;
+    }
+    if (!SetPixelFormat(ctx->dc, iPixelFormat, &pfd))
+    {
+#ifdef __REACTOS__
+        ERR("Failed to set pixel format %d for window %p, dc %p, last error %#lx.\n",
+                iPixelFormat, ctx->wnd, ctx->dc, GetLastError());
+#endif
+        goto fail;
+    }
 
     /* Create a GL context. */
     if (!(ctx->gl_ctx = wglCreateContext(ctx->dc)))
     {
+#ifdef __REACTOS__
+        ERR("Failed to create default context for window %p, dc %p, pixel format %d, last error %#lx.\n",
+                ctx->wnd, ctx->dc, iPixelFormat, GetLastError());
+#endif
         WARN("Failed to create default context for capabilities initialization.\n");
         goto fail;
     }
@@ -4956,6 +4974,12 @@ static void wined3d_adapter_gl_init_d3d_info(struct wined3d_adapter_gl *adapter_
     d3d_info->srgb_write_control = !!gl_info->supported[ARB_FRAMEBUFFER_SRGB];
     d3d_info->clip_control = !!gl_info->supported[ARB_CLIP_CONTROL];
     d3d_info->full_ffp_varyings = !!(shader_caps.wined3d_caps & WINED3D_SHADER_CAP_FULL_FFP_VARYINGS);
+#ifdef __REACTOS__
+    /* The full-varyings path also sources every fixed-function texture
+     * coordinate from a distinct generic vertex attribute. */
+    if (gl_info->limits.vertex_attribs < WINED3D_FFP_ATTRIBS_COUNT)
+        d3d_info->full_ffp_varyings = FALSE;
+#endif
     d3d_info->scaled_resolve = !!gl_info->supported[EXT_FRAMEBUFFER_MULTISAMPLE_BLIT_SCALED];
     d3d_info->pbo = !!gl_info->supported[ARB_PIXEL_BUFFER_OBJECT];
     d3d_info->subpixel_viewport = gl_info->limits.viewport_subpixel_bits >= 8;
