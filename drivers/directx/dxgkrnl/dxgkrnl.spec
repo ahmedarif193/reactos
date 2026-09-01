@@ -38,3 +38,8 @@
 83 stdcall NtDxgkSubmitPresentBltToHwQueue(ptr) DxgkSubmitPresentBltToHwQueue
 134 stdcall NtGdiDdDDICreateHwContext(ptr) DxgkSubmitPresentBltToHwQueue
 149 stdcall NtGdiDdDDIDestroyHwContext(ptr) DxgkSubmitPresentBltToHwQueue
+
+; --- Shared terminal not-supported boundary ---
+236 stdcall NtGdiDdDDIQueryFSEBlock(ptr) DxgkD3dkmtNotSupported
+260 stdcall NtGdiDdDDISetFSEBlock(ptr) DxgkD3dkmtNotSupported
+264 stdcall NtGdiDdDDISetMonitorColorSpaceTransform(ptr) DxgkD3dkmtNotSupported

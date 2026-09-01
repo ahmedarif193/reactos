@@ -402,6 +402,20 @@ LONG g_TdrForceDodVSyncTimeout = 0;
 BOOLEAN g_bVSyncEnabledForLogging = FALSE;
 
 /*
+ * Windows 11 build 26100 maps the two FSE-block system services and monitor
+ * color-space transform service to one terminal entry point. It neither reads
+ * the caller buffer nor changes it before returning STATUS_NOT_SUPPORTED.
+ */
+NTSTATUS
+NTAPI
+DxgkD3dkmtNotSupported(
+    _In_opt_ PVOID Data)
+{
+    UNREFERENCED_PARAMETER(Data);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/*
  * The private TDR export ABI is intentionally excluded. Its public PDB names
  * do not define recovery-context sizes, field offsets, ownership, or calling
  * contracts, and no paired black-box contract has cleared those details.
