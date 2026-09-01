@@ -4511,6 +4511,8 @@ struct _D3DKMT_ACQUIREKEYEDMUTEX;
 struct _D3DKMT_RELEASEKEYEDMUTEX;
 struct _D3DKMT_GETOVERLAYSTATE;
 struct _D3DKMT_CHECKSHAREDRESOURCEACCESS;
+struct _D3DKMT_QUERYFSEBLOCK;
+struct _D3DKMT_SETFSEBLOCK;
 
 __kernel_entry
 W32KAPI
@@ -5082,6 +5084,20 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIIsFeatureEnabled(
     _Inout_ struct _D3DKMT_ISFEATUREENABLED* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetFSEBlock(
+    _In_ const struct _D3DKMT_SETFSEBLOCK* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryFSEBlock(
+    _Inout_ struct _D3DKMT_QUERYFSEBLOCK* unnamedParam1);
 
 /* Multi-argument D3DKMT entry points (non-single-struct signatures). */
 __kernel_entry

@@ -234,6 +234,8 @@ NTSTATUS APIENTRY D3DKMTSubmitPresentToHwQueue(_Inout_ struct _D3DKMT_SUBMITPRES
 NTSTATUS APIENTRY D3DKMTRegisterTrimNotification(_Inout_ struct _D3DKMT_REGISTERTRIMNOTIFICATION *pData);
 NTSTATUS APIENTRY D3DKMTUnregisterTrimNotification(_Inout_ struct _D3DKMT_UNREGISTERTRIMNOTIFICATION *pData);
 NTSTATUS APIENTRY D3DKMTIsFeatureEnabled(_Inout_ struct _D3DKMT_ISFEATUREENABLED *pData);
+NTSTATUS APIENTRY D3DKMTSetFSEBlock(_In_ CONST struct _D3DKMT_SETFSEBLOCK *pData);
+NTSTATUS APIENTRY D3DKMTQueryFSEBlock(_Inout_ struct _D3DKMT_QUERYFSEBLOCK *pData);
 NTSTATUS APIENTRY D3DKMTCreateKeyedMutex2(_Inout_ struct _D3DKMT_CREATEKEYEDMUTEX2 *pData);
 NTSTATUS APIENTRY D3DKMTOpenKeyedMutex(_Inout_ D3DKMT_OPENKEYEDMUTEX *pData);
 NTSTATUS APIENTRY D3DKMTOpenKeyedMutex2(_Inout_ struct _D3DKMT_OPENKEYEDMUTEX2 *pData);
@@ -2185,6 +2187,20 @@ NtGdiDdDDIIsFeatureEnabled(
     if (!NT_SUCCESS(Status))
         return Status;
     return D3DKMTIsFeatureEnabled(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetFSEBlock(_In_ const struct _D3DKMT_SETFSEBLOCK* unnamedParam1)
+{
+    return D3DKMTSetFSEBlock(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryFSEBlock(_Inout_ struct _D3DKMT_QUERYFSEBLOCK* unnamedParam1)
+{
+    return D3DKMTQueryFSEBlock(unnamedParam1);
 }
 
 /*

@@ -30,6 +30,8 @@
 #include <reactos/rddm/rxgkioctl.h>
 
 struct _D3DKMT_ISFEATUREENABLED;
+struct _D3DKMT_QUERYFSEBLOCK;
+struct _D3DKMT_SETFSEBLOCK;
 
 #define NDEBUG
 #include <debug.h>
@@ -5232,6 +5234,32 @@ D3DKMTIsFeatureEnabled(
                    FIELD_OFFSET(D3DKMT_ISFEATUREENABLED, Result),
                &Result,
                sizeof(Result));
+#endif
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTSetFSEBlock(_In_ CONST struct _D3DKMT_SETFSEBLOCK *pData)
+{
+#if (REACTOS_WDDM_TARGET_LEVEL < 2100)
+    UNREFERENCED_PARAMETER(pData);
+    return STATUS_NOT_SUPPORTED;
+#else
+    UNREFERENCED_PARAMETER(pData);
+    return WddmBridgeSendIoctl(IOCTL_D3DKMT_SETFSEBLOCK, NULL, 0, NULL, 0);
+#endif
+}
+
+NTSTATUS
+APIENTRY
+D3DKMTQueryFSEBlock(_Inout_ struct _D3DKMT_QUERYFSEBLOCK *pData)
+{
+#if (REACTOS_WDDM_TARGET_LEVEL < 2100)
+    UNREFERENCED_PARAMETER(pData);
+    return STATUS_NOT_SUPPORTED;
+#else
+    UNREFERENCED_PARAMETER(pData);
+    return WddmBridgeSendIoctl(IOCTL_D3DKMT_QUERYFSEBLOCK, NULL, 0, NULL, 0);
 #endif
 }
 

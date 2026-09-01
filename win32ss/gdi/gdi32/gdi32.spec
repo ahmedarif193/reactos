@@ -689,6 +689,7 @@
 @ stdcall -version=0x600+ D3DKMTPresent(ptr) NtGdiDdDDIPresent
 @ stdcall -version=0x600+ D3DKMTQueryAdapterInfo(ptr) NtGdiDdDDIQueryAdapterInfo
 @ stdcall -version=0x600+ D3DKMTQueryAllocationResidency(ptr) NtGdiDdDDIQueryAllocationResidency
+@ stdcall -version=0xA00+ D3DKMTQueryFSEBlock(ptr) NtGdiDdDDIQueryFSEBlock
 @ stdcall -version=0x600+ D3DKMTQueryResourceInfo(ptr) NtGdiDdDDIQueryResourceInfo
 @ stdcall -version=0x600+ D3DKMTQueryStatistics(ptr) NtGdiDdDDIQueryStatistics
 @ stdcall -version=0x600+ D3DKMTReleaseProcessVidPnSourceOwners(ptr) NtGdiDdDDIReleaseProcessVidPnSourceOwners
@@ -697,6 +698,7 @@
 @ stdcall -version=0x600+ D3DKMTSetContextSchedulingPriority(ptr) NtGdiDdDDISetContextSchedulingPriority
 @ stdcall -version=0x600+ D3DKMTSetDisplayMode(ptr) NtGdiDdDDISetDisplayMode
 @ stdcall -version=0x600+ D3DKMTSetDisplayPrivateDriverFormat(ptr) NtGdiDdDDISetDisplayPrivateDriverFormat
+@ stdcall -version=0xA00+ D3DKMTSetFSEBlock(ptr) NtGdiDdDDISetFSEBlock
 @ stdcall -version=0x600+ D3DKMTSetGammaRamp(ptr) NtGdiDdDDISetGammaRamp
 @ stdcall -version=0x600+ D3DKMTSetProcessSchedulingPriorityClass(ptr ptr) NtGdiDdDDISetProcessSchedulingPriorityClass
 @ stdcall -version=0x600+ D3DKMTSetQueuedLimit(ptr) NtGdiDdDDISetQueuedLimit
