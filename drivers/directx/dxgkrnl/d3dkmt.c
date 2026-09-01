@@ -3386,6 +3386,14 @@ typedef struct _DXGK_VIRTGPU_ESCAPE_PACKET_HEADER
     USHORT PayloadBytes;
 } DXGK_VIRTGPU_ESCAPE_PACKET_HEADER, *PDXGK_VIRTGPU_ESCAPE_PACKET_HEADER;
 
+typedef struct _DXGK_VIRTGPU_ESCAPE_PACKET_HEADER_V2
+{
+    ULONG Magic;
+    UINT PacketType;
+    UINT PayloadBytes;
+} DXGK_VIRTGPU_ESCAPE_PACKET_HEADER_V2,
+ *PDXGK_VIRTGPU_ESCAPE_PACKET_HEADER_V2;
+
 typedef struct _DXGK_VIRTGPU_COMMAND_PACKET_HEADER
 {
     UINT CommandType;
@@ -3397,6 +3405,14 @@ typedef struct _DXGK_VIRTGPU_RESOURCE_LIST_HEADER
     ULONG Magic;
     UINT ResourceCount;
 } DXGK_VIRTGPU_RESOURCE_LIST_HEADER, *PDXGK_VIRTGPU_RESOURCE_LIST_HEADER;
+
+typedef struct _DXGK_VIRTGPU_RESOURCE_LIST_HEADER_V3
+{
+    ULONG Magic;
+    UINT ResourceCount;
+    UINT DmaBufferBytes;
+} DXGK_VIRTGPU_RESOURCE_LIST_HEADER_V3,
+ *PDXGK_VIRTGPU_RESOURCE_LIST_HEADER_V3;
 
 typedef struct _DXGK_VIRTGPU_RESOURCE_ENTRY
 {
@@ -3414,7 +3430,10 @@ typedef struct _DXGK_VIRTGPU_SIGNAL_BLOCK
 
 #define DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V1 0x5652474cUL
 #define DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V2 0x3252474cUL
+#define DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V3 0x3352474cUL
+#define DXGK_VIRTGPU_ESCAPE_PACKET_MAGIC_V2 0x32454756UL
 #define DXGK_VIRTGPU_RESOURCE_CPU_DIRTY     0x00000001UL
+#define DXGK_VIRTGPU_MAX_DMA_BUFFER_BYTES   (32U * 1024U * 1024U)
 
 static BOOLEAN
 DxgkpIsVirtGpuCommandEscape(
@@ -3424,22 +3443,28 @@ DxgkpIsVirtGpuCommandEscape(
     _Outptr_result_maybenull_ CONST VOID **ResourceEntries,
     _Out_ UINT *ResourceHandleCount,
     _Out_ UINT *ResourceEntrySize,
+    _Out_ UINT *DmaBufferBytes,
     _Out_opt_ D3DKMT_HANDLE *SignalSyncObject,
     _Out_opt_ ULONG64 *SignalFenceValue)
 {
     const DXGK_VIRTGPU_ESCAPE_PACKET_HEADER *PacketHeader;
+    const DXGK_VIRTGPU_ESCAPE_PACKET_HEADER_V2 *PacketHeaderV2;
     const DXGK_VIRTGPU_RESOURCE_LIST_HEADER *ResourceHeader;
     const DXGK_VIRTGPU_COMMAND_PACKET_HEADER *CommandHeader;
     const UCHAR *Cursor;
     SIZE_T MetadataBytes;
     SIZE_T HeaderBytes;
+    SIZE_T PacketHeaderBytes;
     SIZE_T TotalBytes;
+    UINT PacketType;
+    UINT PayloadBytes;
 
     if (CommandBuffer == NULL ||
         CommandBytes == NULL ||
         ResourceEntries == NULL ||
         ResourceHandleCount == NULL ||
         ResourceEntrySize == NULL ||
+        DmaBufferBytes == NULL ||
         pEscape == NULL)
     {
         return FALSE;
@@ -3450,6 +3475,7 @@ DxgkpIsVirtGpuCommandEscape(
     *ResourceEntries = NULL;
     *ResourceHandleCount = 0;
     *ResourceEntrySize = 0;
+    *DmaBufferBytes = 0;
     if (SignalSyncObject != NULL)
         *SignalSyncObject = 0;
     if (SignalFenceValue != NULL)
@@ -3462,54 +3488,94 @@ DxgkpIsVirtGpuCommandEscape(
         return FALSE;
     }
 
-    PacketHeader = (const DXGK_VIRTGPU_ESCAPE_PACKET_HEADER *)pEscape->pPrivateDriverData;
-    if (PacketHeader->PacketType < 1 || PacketHeader->PacketType > 3)
+    PacketHeaderV2 =
+        (const DXGK_VIRTGPU_ESCAPE_PACKET_HEADER_V2 *)
+            pEscape->pPrivateDriverData;
+    if (pEscape->PrivateDriverDataSize >=
+            sizeof(*PacketHeaderV2) + sizeof(*CommandHeader) &&
+        PacketHeaderV2->Magic == DXGK_VIRTGPU_ESCAPE_PACKET_MAGIC_V2)
+    {
+        PacketHeaderBytes = sizeof(*PacketHeaderV2);
+        PacketType = PacketHeaderV2->PacketType;
+        PayloadBytes = PacketHeaderV2->PayloadBytes;
+    }
+    else
+    {
+        PacketHeader =
+            (const DXGK_VIRTGPU_ESCAPE_PACKET_HEADER *)
+                pEscape->pPrivateDriverData;
+        PacketHeaderBytes = sizeof(*PacketHeader);
+        PacketType = PacketHeader->PacketType;
+        PayloadBytes = PacketHeader->PayloadBytes;
+    }
+
+    if (PacketType < 1 || PacketType > 3)
         return FALSE;
 
-    if ((SIZE_T)PacketHeader->PayloadBytes + sizeof(*PacketHeader) !=
+    if ((SIZE_T)PayloadBytes + PacketHeaderBytes !=
         pEscape->PrivateDriverDataSize)
     {
         return FALSE;
     }
 
-    Cursor = (const UCHAR *)pEscape->pPrivateDriverData + sizeof(*PacketHeader);
+    Cursor = (const UCHAR *)pEscape->pPrivateDriverData + PacketHeaderBytes;
     MetadataBytes = 0;
 
-    if (PacketHeader->PayloadBytes >= sizeof(*ResourceHeader) + sizeof(*CommandHeader))
+    if (PayloadBytes >= sizeof(*ResourceHeader) + sizeof(*CommandHeader))
     {
         ResourceHeader = (const DXGK_VIRTGPU_RESOURCE_LIST_HEADER *)Cursor;
         if (ResourceHeader->Magic == DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V1 ||
-            ResourceHeader->Magic == DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V2)
+            ResourceHeader->Magic == DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V2 ||
+            ResourceHeader->Magic == DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V3)
         {
+            SIZE_T ResourceHeaderBytes = sizeof(*ResourceHeader);
             SIZE_T EntrySize = ResourceHeader->Magic ==
-                                   DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V2
-                                   ? sizeof(DXGK_VIRTGPU_RESOURCE_ENTRY)
-                                   : sizeof(D3DKMT_HANDLE);
+                                   DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V1
+                                   ? sizeof(D3DKMT_HANDLE)
+                                   : sizeof(DXGK_VIRTGPU_RESOURCE_ENTRY);
             SIZE_T HandleBytes;
+
+            if (ResourceHeader->Magic ==
+                    DXGK_VIRTGPU_RESOURCE_LIST_MAGIC_V3)
+            {
+                const DXGK_VIRTGPU_RESOURCE_LIST_HEADER_V3 *HeaderV3 =
+                    (const DXGK_VIRTGPU_RESOURCE_LIST_HEADER_V3 *)Cursor;
+
+                ResourceHeaderBytes = sizeof(*HeaderV3);
+                if (PayloadBytes < ResourceHeaderBytes +
+                        sizeof(*CommandHeader) ||
+                    HeaderV3->DmaBufferBytes == 0 ||
+                    HeaderV3->DmaBufferBytes >
+                        DXGK_VIRTGPU_MAX_DMA_BUFFER_BYTES)
+                {
+                    return FALSE;
+                }
+                *DmaBufferBytes = HeaderV3->DmaBufferBytes;
+            }
 
             if (ResourceHeader->ResourceCount > MAXULONG_PTR / EntrySize)
                 return FALSE;
             HandleBytes = (SIZE_T)ResourceHeader->ResourceCount * EntrySize;
 
-            if (PacketHeader->PayloadBytes <
-                sizeof(*ResourceHeader) + HandleBytes + sizeof(*CommandHeader))
+            if (PayloadBytes <
+                ResourceHeaderBytes + HandleBytes + sizeof(*CommandHeader))
             {
                 return FALSE;
             }
 
-            *ResourceEntries = Cursor + sizeof(*ResourceHeader);
+            *ResourceEntries = Cursor + ResourceHeaderBytes;
             *ResourceHandleCount = ResourceHeader->ResourceCount;
             *ResourceEntrySize = (UINT)EntrySize;
-            MetadataBytes = sizeof(*ResourceHeader) + HandleBytes;
+            MetadataBytes = ResourceHeaderBytes + HandleBytes;
             Cursor += MetadataBytes;
         }
     }
 
     CommandHeader = (const DXGK_VIRTGPU_COMMAND_PACKET_HEADER *)Cursor;
-    if (CommandHeader->CommandType != PacketHeader->PacketType)
+    if (CommandHeader->CommandType != PacketType)
         return FALSE;
 
-    TotalBytes = sizeof(*PacketHeader) +
+    TotalBytes = PacketHeaderBytes +
                  MetadataBytes +
                  sizeof(*CommandHeader) +
                  (SIZE_T)CommandHeader->PayloadBytes;
@@ -3530,7 +3596,7 @@ DxgkpIsVirtGpuCommandEscape(
     if (CommandHeader->PayloadBytes == 0)
         return FALSE;
 
-    if (PacketHeader->PacketType == 2)
+    if (PacketType == 2)
     {
         const DXGK_VIRTGPU_SIGNAL_BLOCK *Signal;
 
@@ -3603,6 +3669,7 @@ DxgkpSubmitVirtGpuCommandEscape(
     _In_reads_bytes_opt_(ResourceHandleCount * ResourceEntrySize) CONST VOID *ResourceEntries,
     _In_ UINT ResourceHandleCount,
     _In_ UINT ResourceEntrySize,
+    _In_ UINT RequestedDmaBufferBytes,
     _In_ D3DKMT_HANDLE SignalSyncObject,
     _In_ ULONG64 SignalFenceValue)
 {
@@ -3654,7 +3721,13 @@ DxgkpSubmitVirtGpuCommandEscape(
     if (NodeOrdinal >= Adapter->NodeCount)
         return STATUS_INVALID_PARAMETER;
 
-    Status = DxgkAllocateDmaBuffer(Adapter, CommandBytes, &DmaBuffer);
+    if (RequestedDmaBufferBytes < CommandBytes)
+        RequestedDmaBufferBytes = CommandBytes;
+    if (RequestedDmaBufferBytes > DXGK_VIRTGPU_MAX_DMA_BUFFER_BYTES)
+        return STATUS_INVALID_BUFFER_SIZE;
+    Status = DxgkAllocateDmaBuffer(Adapter,
+                                   RequestedDmaBufferBytes,
+                                   &DmaBuffer);
     if (!NT_SUCCESS(Status))
         return Status;
     if (!DxgkBeginKmdTransaction(Adapter))
@@ -3732,7 +3805,7 @@ DxgkpSubmitVirtGpuCommandEscape(
     RenderArgs.pCommand = CommandBuffer;
     RenderArgs.CommandLength = CommandBytes;
     RenderArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
-    RenderArgs.DmaSize = CommandBytes;
+    RenderArgs.DmaSize = RequestedDmaBufferBytes;
     RenderArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
     RenderArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
     RenderArgs.pAllocationList = AllocationList;
@@ -4106,6 +4179,7 @@ DxgkpEscapeCaptured(
     CONST VOID       *ResourceEntries;
     UINT             ResourceHandleCount;
     UINT             ResourceEntrySize;
+    UINT             DmaBufferBytes;
     NTSTATUS         Status;
     BOOLEAN          MiniportCallbackAcquired = FALSE;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
@@ -4224,6 +4298,7 @@ DxgkpEscapeCaptured(
                                         &CommandBytes, &ResourceEntries,
                                         &ResourceHandleCount,
                                         &ResourceEntrySize,
+                                        &DmaBufferBytes,
                                         &SignalSyncObject,
                                         &SignalFenceValue))
         {
@@ -4238,7 +4313,7 @@ DxgkpEscapeCaptured(
             Status = DxgkpSubmitVirtGpuCommandEscape(
                          Adapter, EscDevice, EscContext, CommandBuffer,
                          CommandBytes, ResourceEntries, ResourceHandleCount,
-                         ResourceEntrySize, SignalSyncObject,
+                         ResourceEntrySize, DmaBufferBytes, SignalSyncObject,
                          SignalFenceValue);
             goto Cleanup;
         }
