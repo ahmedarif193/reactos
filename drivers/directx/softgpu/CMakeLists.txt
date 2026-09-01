@@ -5,8 +5,8 @@
 # COPYRIGHT: Copyright 2024 ReactOS WDDM Team
 #
 # Build order in drivers/directx:
-#   1. dxgmms1   — no dxgkrnl dependency
-#   2. dxgkrnl   — imports ntoskrnl/hal; owns the internal resolver device
+#   1. dxgmms2   — owns the Win11 scheduler/VidMm module boundary
+#   2. dxgkrnl   — imports dxgmms2; owns the internal resolver device
 #   3. softgpu   — resolves DxgkInitialize through the static displib wrapper
 
 spec2def(BasicDisplay.sys softgpu.spec ADD_IMPORTLIB)
