@@ -84,7 +84,7 @@ WRITE_REGISTER_ULONG(
 VOID
 NTAPI
 READ_REGISTER_BUFFER_UCHAR(
-    _In_ PUCHAR Register,
+    _In_ volatile UCHAR *Register,
     _Out_writes_(Count) PUCHAR Buffer,
     _In_ ULONG Count)
 {
@@ -97,7 +97,7 @@ READ_REGISTER_BUFFER_UCHAR(
 VOID
 NTAPI
 READ_REGISTER_BUFFER_USHORT(
-    _In_ PUSHORT Register,
+    _In_ volatile USHORT *Register,
     _Out_writes_(Count) PUSHORT Buffer,
     _In_ ULONG Count)
 {
@@ -110,7 +110,7 @@ READ_REGISTER_BUFFER_USHORT(
 VOID
 NTAPI
 READ_REGISTER_BUFFER_ULONG(
-    _In_ PULONG Register,
+    _In_ volatile ULONG *Register,
     _Out_writes_(Count) PULONG Buffer,
     _In_ ULONG Count)
 {
@@ -123,7 +123,7 @@ READ_REGISTER_BUFFER_ULONG(
 VOID
 NTAPI
 WRITE_REGISTER_BUFFER_UCHAR(
-    _In_ PUCHAR Register,
+    _In_ volatile UCHAR *Register,
     _In_reads_(Count) PUCHAR Buffer,
     _In_ ULONG Count)
 {
@@ -136,7 +136,7 @@ WRITE_REGISTER_BUFFER_UCHAR(
 VOID
 NTAPI
 WRITE_REGISTER_BUFFER_USHORT(
-    _In_ PUSHORT Register,
+    _In_ volatile USHORT *Register,
     _In_reads_(Count) PUSHORT Buffer,
     _In_ ULONG Count)
 {
@@ -149,7 +149,7 @@ WRITE_REGISTER_BUFFER_USHORT(
 VOID
 NTAPI
 WRITE_REGISTER_BUFFER_ULONG(
-    _In_ PULONG Register,
+    _In_ volatile ULONG *Register,
     _In_reads_(Count) PULONG Buffer,
     _In_ ULONG Count)
 {
