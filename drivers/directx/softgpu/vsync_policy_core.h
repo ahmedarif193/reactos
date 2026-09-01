@@ -53,4 +53,16 @@ SoftGpuVsyncEvaluatePolicy(
     }
 }
 
+FORCEINLINE
+BOOLEAN
+SoftGpuVsyncCanDeliverNotification(
+    _In_ BOOLEAN PhaseActive,
+    _In_ BOOLEAN NotificationEnabled,
+    _In_ BOOLEAN NotifyInterruptAvailable,
+    _In_ BOOLEAN QueueDpcAvailable)
+{
+    return PhaseActive && NotificationEnabled &&
+           NotifyInterruptAvailable && QueueDpcAvailable;
+}
+
 #endif /* _SOFTGPU_VSYNC_POLICY_CORE_H_ */

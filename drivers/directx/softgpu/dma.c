@@ -33,6 +33,7 @@
 #include "softgpu.h"
 #include "softgpu_2d_core.h"
 #include "fault_policy_core.h"
+#include "vsync_policy_core.h"
 
 #define SOFTGPU_TRACE_LOG_LIMIT  32
 #define SOFTGPU_TRACE_SLOW_US    1000ULL
@@ -1218,9 +1219,7 @@ SoftGpuVsyncDpcRoutine(
     PhaseActive = !Device->Stopped &&
                   InterlockedCompareExchange(
                       &Device->VsyncPhaseEnabled, 0, 0) != 0;
-    Deliver = PhaseActive &&
-              InterlockedCompareExchange(&Device->VsyncEnabled, 0, 0) != 0 &&
-              Device->DxgkInterface.DxgkCbNotifyInterrupt != NULL;
+    Deliver = SoftGpuVsyncCanDeliverNotification(PhaseActive, InterlockedCompareExchange(&Device->VsyncEnabled, 0, 0) != 0, Device->DxgkInterface.DxgkCbNotifyInterrupt != NULL, Device->DxgkInterface.DxgkCbQueueDpc != NULL);
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
     if (!PhaseActive)
         return;
@@ -1246,6 +1245,7 @@ SoftGpuVsyncDpcRoutine(
     Device->DxgkInterface.DxgkCbNotifyInterrupt(
         Device->DxgkInterface.DeviceHandle,
         &NotifyData);
+    Device->DxgkInterface.DxgkCbQueueDpc(Device->DxgkInterface.DeviceHandle);
 }
 
 
