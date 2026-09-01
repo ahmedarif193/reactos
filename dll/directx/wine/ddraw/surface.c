@@ -1622,7 +1622,15 @@ static HRESULT ddraw_surface_blt(struct ddraw_surface *dst_surface, const RECT *
         return E_NOTIMPL;
     }
 
+#ifdef __REACTOS__
+    /* DDBLT_WAIT waits until the blit can be queued, not until the GPU has
+     * completed it. The command stream admission above already provides that
+     * guarantee; draining the entire queue here serializes rendering and
+     * presentation that Windows permits to overlap. */
+    if (!(flags & (DDBLT_ASYNC | DDBLT_WAIT)))
+#else
     if (!(flags & DDBLT_ASYNC))
+#endif
         wined3d_flags |= WINED3D_BLT_SYNCHRONOUS;
 
     return wined3d_device_context_blt(ddraw->immediate_context,
