@@ -451,6 +451,12 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_1;
 #endif
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+        case IOCTL_D3DKMT_CREATEHWCONTEXT:
+        case IOCTL_D3DKMT_DESTROYHWCONTEXT:
+            return DXGK_CAPS_CORE_LEVEL_WDDM_2_2;
+#endif
+
         /* Hardware queues first appeared in WDDM 2.2. */
         case IOCTL_D3DKMT_GETALLOCATIONPRIORITY:
         case IOCTL_D3DKMT_CREATEHWQUEUE:
@@ -460,6 +466,9 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_SUBMITSIGNALSYNCOBJECTSTOHWQUEUE:
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_2;
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2300)
+        case IOCTL_D3DKMT_SETMONITORCOLORSPACETRANSFORM:
+#endif
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER2:
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_3;
 
@@ -8010,6 +8019,21 @@ DxgkpDispatchBufferedIoctl(
         }
 #endif
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+        case IOCTL_D3DKMT_CREATEHWCONTEXT:
+        case IOCTL_D3DKMT_DESTROYHWCONTEXT:
+        {
+            return Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? STATUS_NOT_IMPLEMENTED : STATUS_ACCESS_DENIED;
+        }
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2300)
+        case IOCTL_D3DKMT_SETMONITORCOLORSPACETRANSFORM:
+        {
+            return Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? STATUS_NOT_SUPPORTED : STATUS_ACCESS_DENIED;
+        }
+#endif
+
         case IOCTL_D3DKMT_GETDISPLAYMODELIST:
         {
             if (InputLength < sizeof(D3DKMT_GETDISPLAYMODELIST) || SystemBuffer == NULL)
@@ -10839,6 +10863,13 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_RECLAIMALLOCATIONS3:
         case IOCTL_D3DKMT_SETFSEBLOCK:
         case IOCTL_D3DKMT_QUERYFSEBLOCK:
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+        case IOCTL_D3DKMT_CREATEHWCONTEXT:
+        case IOCTL_D3DKMT_DESTROYHWCONTEXT:
+#endif
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2300)
+        case IOCTL_D3DKMT_SETMONITORCOLORSPACETRANSFORM:
 #endif
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER:
         case IOCTL_D3DKMT_GETDEVICESTATE:

@@ -233,9 +233,15 @@ NTSTATUS APIENTRY D3DKMTSubmitPresentBltToHwQueue(_In_ CONST struct _D3DKMT_SUBM
 NTSTATUS APIENTRY D3DKMTSubmitPresentToHwQueue(_Inout_ struct _D3DKMT_SUBMITPRESENTTOHWQUEUE *pData);
 NTSTATUS APIENTRY D3DKMTRegisterTrimNotification(_Inout_ struct _D3DKMT_REGISTERTRIMNOTIFICATION *pData);
 NTSTATUS APIENTRY D3DKMTUnregisterTrimNotification(_Inout_ struct _D3DKMT_UNREGISTERTRIMNOTIFICATION *pData);
+struct _D3DKMT_CREATEHWCONTEXT;
+struct _D3DKMT_DESTROYHWCONTEXT;
+struct _D3DKMT_SET_COLORSPACE_TRANSFORM;
 NTSTATUS APIENTRY D3DKMTIsFeatureEnabled(_Inout_ struct _D3DKMT_ISFEATUREENABLED *pData);
 NTSTATUS APIENTRY D3DKMTSetFSEBlock(_In_ CONST struct _D3DKMT_SETFSEBLOCK *pData);
 NTSTATUS APIENTRY D3DKMTQueryFSEBlock(_Inout_ struct _D3DKMT_QUERYFSEBLOCK *pData);
+NTSTATUS APIENTRY D3DKMTCreateHwContext(_Inout_ struct _D3DKMT_CREATEHWCONTEXT *pData);
+NTSTATUS APIENTRY D3DKMTDestroyHwContext(_In_ CONST struct _D3DKMT_DESTROYHWCONTEXT *pData);
+NTSTATUS APIENTRY D3DKMTSetMonitorColorSpaceTransform(_In_ struct _D3DKMT_SET_COLORSPACE_TRANSFORM *pData);
 NTSTATUS APIENTRY D3DKMTCreateKeyedMutex2(_Inout_ struct _D3DKMT_CREATEKEYEDMUTEX2 *pData);
 NTSTATUS APIENTRY D3DKMTOpenKeyedMutex(_Inout_ D3DKMT_OPENKEYEDMUTEX *pData);
 NTSTATUS APIENTRY D3DKMTOpenKeyedMutex2(_Inout_ struct _D3DKMT_OPENKEYEDMUTEX2 *pData);
@@ -2201,6 +2207,27 @@ APIENTRY
 NtGdiDdDDIQueryFSEBlock(_Inout_ struct _D3DKMT_QUERYFSEBLOCK* unnamedParam1)
 {
     return D3DKMTQueryFSEBlock(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateHwContext(_Inout_ struct _D3DKMT_CREATEHWCONTEXT* unnamedParam1)
+{
+    return D3DKMTCreateHwContext(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDIDestroyHwContext(_In_ const struct _D3DKMT_DESTROYHWCONTEXT* unnamedParam1)
+{
+    return D3DKMTDestroyHwContext(unnamedParam1);
+}
+
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetMonitorColorSpaceTransform(_In_ struct _D3DKMT_SET_COLORSPACE_TRANSFORM* unnamedParam1)
+{
+    return D3DKMTSetMonitorColorSpaceTransform(unnamedParam1);
 }
 
 /*
