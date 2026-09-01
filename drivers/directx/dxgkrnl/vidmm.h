@@ -37,6 +37,9 @@
  */
 #define TAG_VIDMM_RESOURCE  'RVxD'
 
+/* Opaque AcquireHandleData references returned to a display miniport. */
+#define TAG_VIDMM_HANDLE_REF 'HVxD'
+
 /* =========================================================================
  * DXGKRNL_SEGMENT
  *
@@ -269,6 +272,9 @@ typedef struct _DXGKVMM_ALLOCATION
 
     /* TRUE if the allocation can be mapped into CPU virtual address space. */
     BOOLEAN             CpuVisible;
+
+    /* Miniport-declared capture buffer; required by GetCaptureAddress. */
+    BOOLEAN             Capture;
 
     /* TRUE when the allocation is resident in a GPU segment. */
     BOOLEAN             Resident;

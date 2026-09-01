@@ -184,9 +184,11 @@ static FAST_MUTEX DxgkVidMmAllocationListLock;
 static FAST_MUTEX DxgkVidMmResourceListLock;
 static FAST_MUTEX DxgkVidMmDestroyBatchListLock;
 static FAST_MUTEX DxgkVidMmPolicyLock;
+static FAST_MUTEX DxgkVidMmHandleDataReferenceListLock;
 static LIST_ENTRY DxgkVidMmAllocationListHead;
 static LIST_ENTRY DxgkVidMmResourceListHead;
 static LIST_ENTRY DxgkVidMmDestroyBatchListHead;
+static LIST_ENTRY DxgkVidMmHandleDataReferenceListHead;
 static ULONG      DxgkVidMmAllocationHandleCookie = 0x4D4D414C; /* "LAMM" */
 static ULONG      DxgkVidMmResourceHandleCookie   = 0x4D4D4552; /* "REMM" */
 static ULONG      DxgkVidMmGlobalShareHandleCookie = 0x4D4D4753; /* "SGMM" */
@@ -274,6 +276,17 @@ typedef struct _DXGKVMM_ALLOCATION_SNAPSHOT
     PDXGKVMM_DESTROY_BATCH *Batches;
     SIZE_T BatchCount;
 } DXGKVMM_ALLOCATION_SNAPSHOT, *PDXGKVMM_ALLOCATION_SNAPSHOT;
+
+typedef struct _DXGKVMM_HANDLE_DATA_REFERENCE
+{
+    LIST_ENTRY Link;
+    DXGK_HANDLE_TYPE Type;
+    union
+    {
+        PDXGKVMM_ALLOCATION Allocation;
+        PDXGKVMM_RESOURCE Resource;
+    } Object;
+} DXGKVMM_HANDLE_DATA_REFERENCE, *PDXGKVMM_HANDLE_DATA_REFERENCE;
 
 /* HELPERS ********************************************************************/
 
@@ -432,12 +445,14 @@ DxgkpVidMmEnsureGlobalsInitialized(VOID)
         ExInitializeFastMutex(&DxgkVidMmResourceListLock);
         ExInitializeFastMutex(&DxgkVidMmDestroyBatchListLock);
         ExInitializeFastMutex(&DxgkVidMmPolicyLock);
+        ExInitializeFastMutex(&DxgkVidMmHandleDataReferenceListLock);
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         ExInitializeFastMutex(&DxgkVidMmProcessBudgetLock);
 #endif
         InitializeListHead(&DxgkVidMmAllocationListHead);
         InitializeListHead(&DxgkVidMmResourceListHead);
         InitializeListHead(&DxgkVidMmDestroyBatchListHead);
+        InitializeListHead(&DxgkVidMmHandleDataReferenceListHead);
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         InitializeListHead(&DxgkVidMmProcessBudgetListHead);
         InitializeListHead(&DxgkVidMmProcessBudgetGateListHead);
@@ -986,6 +1001,7 @@ DxgkpVidMmCreateSystemAllocation(
                                 AllocInfo->AllocationPriority :
                                 VIDMM_PRIORITY_NORMAL;
     Alloc->CpuVisible = TRUE;
+    Alloc->Capture = AllocInfo->FlagsWddm2.Capture != 0;
     Alloc->Resident = FALSE;
     Alloc->PhysicalAddress = MmGetPhysicalAddress(Alloc->SystemMemory);
     Alloc->CpuAddress = Alloc->SystemMemory;
@@ -2308,7 +2324,7 @@ DxgkVidMmGetHandleData(
 
             ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
             Allocation = DxgkpVidMmLookupAllocationLocked(Handle);
-            if (Allocation != NULL && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
+            if (Allocation != NULL && !Allocation->Initializing && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
             {
                 if (DeviceSpecific)
                     MiniportHandle = Allocation->OpenBindingHandle;
@@ -2350,12 +2366,20 @@ DxgkVidMmAcquireHandleData(
     _In_ BOOLEAN DeviceSpecific,
     _Out_ PDXGKARG_RELEASE_HANDLE ReleaseHandle)
 {
+    PDXGKVMM_HANDLE_DATA_REFERENCE Reference;
     PVOID MiniportHandle = NULL;
 
     if (ReleaseHandle == NULL)
         return NULL;
     *ReleaseHandle = NULL;
     DxgkpVidMmEnsureGlobalsInitialized();
+    Reference = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Reference), TAG_VIDMM_HANDLE_REF);
+    if (Reference == NULL)
+        return NULL;
+    RtlZeroMemory(Reference, sizeof(*Reference));
+    InitializeListHead(&Reference->Link);
+    Reference->Type = Type;
+
     switch (Type)
     {
         case DXGK_HANDLE_ALLOCATION:
@@ -2365,14 +2389,14 @@ DxgkVidMmAcquireHandleData(
 
             ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
             Allocation = DxgkpVidMmLookupAllocationLocked(Handle);
-            if (Allocation != NULL && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
+            if (Allocation != NULL && !Allocation->Initializing && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
             {
                 BackingAllocation = Allocation->BackingAllocation != NULL ? Allocation->BackingAllocation : Allocation;
                 MiniportHandle = DeviceSpecific ? Allocation->OpenBindingHandle : BackingAllocation->MiniportHandle;
                 if (MiniportHandle != NULL && InterlockedCompareExchange(&Allocation->LogicalReferenceCount, 0, 0) > 0)
                 {
                     InterlockedIncrement(&Allocation->LogicalReferenceCount);
-                    *ReleaseHandle = Allocation;
+                    Reference->Object.Allocation = Allocation;
                 }
                 else
                 {
@@ -2380,7 +2404,7 @@ DxgkVidMmAcquireHandleData(
                 }
             }
             ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
-            return MiniportHandle;
+            break;
         }
 
         case DXGK_HANDLE_RESOURCE:
@@ -2389,17 +2413,17 @@ DxgkVidMmAcquireHandleData(
             PDXGKVMM_RESOURCE ReferencedResource;
 
             if (DeviceSpecific)
-                return NULL;
+                break;
             ExAcquireFastMutex(&DxgkVidMmResourceListLock);
             Resource = DxgkpVidMmLookupResourceLocked(Handle);
-            if (Resource != NULL && InterlockedCompareExchange(&Resource->Destroying, 0, 0) == 0)
+            if (Resource != NULL && InterlockedCompareExchange(&Resource->Destroying, 0, 0) == 0 && InterlockedCompareExchange(&Resource->CloseUncertain, 0, 0) == 0 && InterlockedCompareExchange(&Resource->DestroyFailureUncertain, 0, 0) == 0)
             {
                 ReferencedResource = Resource->BackingResource != NULL ? Resource->BackingResource : Resource;
                 MiniportHandle = ReferencedResource->MiniportHandle;
                 if (MiniportHandle != NULL && InterlockedCompareExchange(&ReferencedResource->ReferenceCount, 0, 0) > 0)
                 {
                     InterlockedIncrement(&ReferencedResource->ReferenceCount);
-                    *ReleaseHandle = ReferencedResource;
+                    Reference->Object.Resource = ReferencedResource;
                 }
                 else
                 {
@@ -2407,13 +2431,25 @@ DxgkVidMmAcquireHandleData(
                 }
             }
             ExReleaseFastMutex(&DxgkVidMmResourceListLock);
-            return MiniportHandle;
+            break;
         }
 
         default:
             DPRINT1("DxgkVidMmAcquireHandleData: unsupported type %u handle 0x%08X\n", Type, Handle);
-            return NULL;
+            break;
     }
+
+    if (MiniportHandle == NULL)
+    {
+        ExFreePoolWithTag(Reference, TAG_VIDMM_HANDLE_REF);
+        return NULL;
+    }
+
+    ExAcquireFastMutex(&DxgkVidMmHandleDataReferenceListLock);
+    InsertTailList(&DxgkVidMmHandleDataReferenceListHead, &Reference->Link);
+    ExReleaseFastMutex(&DxgkVidMmHandleDataReferenceListLock);
+    *ReleaseHandle = Reference;
+    return MiniportHandle;
 }
 
 VOID
@@ -2421,23 +2457,53 @@ DxgkVidMmReleaseHandleData(
     _In_ DXGK_HANDLE_TYPE Type,
     _In_ DXGKARG_RELEASE_HANDLE ReleaseHandle)
 {
+    PDXGKVMM_HANDLE_DATA_REFERENCE Reference = NULL;
+    PLIST_ENTRY Entry;
+
     if (ReleaseHandle == NULL)
         return;
 
-    switch (Type)
+    DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmHandleDataReferenceListLock);
+    for (Entry = DxgkVidMmHandleDataReferenceListHead.Flink; Entry != &DxgkVidMmHandleDataReferenceListHead; Entry = Entry->Flink)
+    {
+        PDXGKVMM_HANDLE_DATA_REFERENCE Candidate;
+
+        Candidate = CONTAINING_RECORD(Entry, DXGKVMM_HANDLE_DATA_REFERENCE, Link);
+        if (Candidate == (PDXGKVMM_HANDLE_DATA_REFERENCE)ReleaseHandle)
+        {
+            Reference = Candidate;
+            RemoveEntryList(&Reference->Link);
+            InitializeListHead(&Reference->Link);
+            break;
+        }
+    }
+    ExReleaseFastMutex(&DxgkVidMmHandleDataReferenceListLock);
+
+    if (Reference == NULL)
+    {
+        DPRINT1("DxgkVidMmReleaseHandleData: invalid or already released handle %p\n", ReleaseHandle);
+        return;
+    }
+
+    if (Type != Reference->Type)
+        DPRINT1("DxgkVidMmReleaseHandleData: type %u does not match acquired type %u\n", Type, Reference->Type);
+
+    switch (Reference->Type)
     {
         case DXGK_HANDLE_ALLOCATION:
-            DxgkVidMmDereferenceLogicalAllocation((PDXGKVMM_ALLOCATION)ReleaseHandle);
+            DxgkVidMmDereferenceLogicalAllocation(Reference->Object.Allocation);
             break;
 
         case DXGK_HANDLE_RESOURCE:
-            DxgkVidMmDereferenceResource((PDXGKVMM_RESOURCE)ReleaseHandle);
+            DxgkVidMmDereferenceResource(Reference->Object.Resource);
             break;
 
         default:
-            DPRINT1("DxgkVidMmReleaseHandleData: unsupported type %u\n", Type);
+            ASSERT(FALSE);
             break;
     }
+    ExFreePoolWithTag(Reference, TAG_VIDMM_HANDLE_REF);
 }
 
 D3DKMT_HANDLE
@@ -2451,9 +2517,12 @@ DxgkVidMmGetHandleParent(
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     Allocation = DxgkpVidMmLookupAllocationLocked(AllocationHandle);
     if (Allocation != NULL &&
+        !Allocation->Initializing &&
         InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0 &&
         Allocation->Resource != NULL &&
-        InterlockedCompareExchange(&Allocation->Resource->Destroying, 0, 0) == 0)
+        InterlockedCompareExchange(&Allocation->Resource->Destroying, 0, 0) == 0 &&
+        InterlockedCompareExchange(&Allocation->Resource->CloseUncertain, 0, 0) == 0 &&
+        InterlockedCompareExchange(&Allocation->Resource->DestroyFailureUncertain, 0, 0) == 0)
     {
         ParentHandle = Allocation->Resource->Handle;
     }
@@ -2468,30 +2537,18 @@ DxgkVidMmEnumHandleChildren(
     _In_ UINT Index)
 {
     PLIST_ENTRY Entry;
-    PDXGKVMM_RESOURCE Resource = NULL;
+    PDXGKVMM_RESOURCE Resource;
     D3DKMT_HANDLE ChildHandle = 0;
     UINT CurrentIndex = 0;
 
     DxgkpVidMmEnsureGlobalsInitialized();
+    ExAcquireFastMutex(&DxgkVidMmResourceListLock);
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
-
-    for (Entry = DxgkVidMmAllocationListHead.Flink;
-         Entry != &DxgkVidMmAllocationListHead;
-         Entry = Entry->Flink)
-    {
-        PDXGKVMM_ALLOCATION Allocation =
-            CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
-
-        if (Allocation->Resource != NULL &&
-            Allocation->Resource->Handle == ResourceHandle &&
-            InterlockedCompareExchange(&Allocation->Resource->Destroying, 0, 0) == 0)
-        {
-            Resource = Allocation->Resource;
-            break;
-        }
-    }
-
-    if (Resource != NULL)
+    Resource = DxgkpVidMmLookupResourceLocked(ResourceHandle);
+    if (Resource != NULL &&
+        InterlockedCompareExchange(&Resource->Destroying, 0, 0) == 0 &&
+        InterlockedCompareExchange(&Resource->CloseUncertain, 0, 0) == 0 &&
+        InterlockedCompareExchange(&Resource->DestroyFailureUncertain, 0, 0) == 0)
     {
         for (Entry = Resource->AllocationList.Flink;
              Entry != &Resource->AllocationList;
@@ -2511,6 +2568,7 @@ DxgkVidMmEnumHandleChildren(
     }
 
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    ExReleaseFastMutex(&DxgkVidMmResourceListLock);
     return ChildHandle;
 }
 
@@ -2534,6 +2592,12 @@ DxgkVidMmGetCaptureAddress(
         &Allocation);
     if (!NT_SUCCESS(Status))
         return STATUS_INVALID_PARAMETER;
+
+    if (!Allocation->Capture)
+    {
+        DxgkVidMmDereferenceAllocation(Allocation);
+        return STATUS_INVALID_PARAMETER;
+    }
 
     (VOID)KeWaitForSingleObject(
         &Allocation->ResidencyLock,
@@ -4067,6 +4131,7 @@ DxgkpVidMmCreateAllocationTracked(
                                 ? AllocInfo->AllocationPriority
                                 : VIDMM_PRIORITY_NORMAL;
     Alloc->CpuVisible         = (AllocInfo->Flags.CpuVisible != 0);
+    Alloc->Capture            = (AllocInfo->FlagsWddm2.Capture != 0);
     Alloc->Resident           = FALSE;
     Alloc->Resource           = NULL;
 
