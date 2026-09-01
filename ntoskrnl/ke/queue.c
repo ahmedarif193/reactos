@@ -487,6 +487,19 @@ KiRemoveQueueExInternal(
                 /* Reset the wait reason */
                 Thread->WaitReason = 0;
 
+                /*
+                 * An untimed queue wait cannot legitimately expire.  A late
+                 * expiration of this thread's reusable timer block can race a
+                 * subsequent untimed wait and leave STATUS_TIMEOUT in the
+                 * thread wait status.  Do not expose that impossible sentinel
+                 * as a queue entry; restore the queue accounting below and
+                 * re-arm the wait just like a kernel APC interruption.
+                 */
+                if ((Timeout == NULL) && (Status == STATUS_TIMEOUT))
+                {
+                    Status = STATUS_KERNEL_APC;
+                }
+
                 /* Check if we were executing an APC */
                 if (Status != STATUS_KERNEL_APC)
                 {
