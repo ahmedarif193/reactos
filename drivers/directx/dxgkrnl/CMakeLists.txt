@@ -51,6 +51,7 @@ list(APPEND SOURCE
     dma.c
     present.c
     redirection.c
+    ntgdi_exports.c
     sync.c
     keyedmutex.c
     trimnotify.c

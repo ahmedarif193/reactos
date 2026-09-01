@@ -95,6 +95,7 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkSyncWait.c
     directx/DxgkTrackedWork.c
     directx/DxgkVidMmWorkerDrain.c
+    directx/DxgkrnlPublicExports.c
     directx/Dxgmms2ContextStream.c
     directx/Dxgmms2Scheduler.c
     directx/Dxgmms2Timeline.c

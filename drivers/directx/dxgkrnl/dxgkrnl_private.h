@@ -2745,6 +2745,15 @@ NTSTATUS
 DxgkRegisterWin32kCddInterface(
     _In_ const DXGKRNL_WIN32K_CDD_INTERFACE *Interface);
 
+ULONG_PTR
+DxgkDispatchWin32kNtGdi(
+    _In_ ULONG NativeOrdinal,
+    _In_ ULONG_PTR Argument0,
+    _In_ ULONG_PTR Argument1,
+    _In_ ULONG_PTR Argument2,
+    _In_ ULONG_PTR Argument3,
+    _In_ ULONG_PTR Argument4);
+
 NTSTATUS
 DxgkAssociateRedirectionSurface(
     _In_ PDXGKRNL_ADAPTER Adapter,

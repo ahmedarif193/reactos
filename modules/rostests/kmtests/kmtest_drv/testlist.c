@@ -41,6 +41,7 @@ KMT_TESTFUNC Test_DxgkPresentQueue;
 KMT_TESTFUNC Test_DxgkSyncWait;
 KMT_TESTFUNC Test_DxgkTrackedWork;
 KMT_TESTFUNC Test_DxgkVidMmWorkerDrain;
+KMT_TESTFUNC Test_DxgkrnlPublicExports;
 KMT_TESTFUNC Test_Dxgmms2ContextStream;
 KMT_TESTFUNC Test_Dxgmms2Scheduler;
 KMT_TESTFUNC Test_Dxgmms2Timeline;
@@ -318,6 +319,7 @@ const KMT_TEST TestList[] =
     { "DxgkSyncWait",                      Test_DxgkSyncWait },
     { "DxgkTrackedWork",                   Test_DxgkTrackedWork },
     { "DxgkVidMmWorkerDrain",              Test_DxgkVidMmWorkerDrain },
+    { "DxgkrnlPublicExports",              Test_DxgkrnlPublicExports },
     { "Dxgmms2ContextStream",              Test_Dxgmms2ContextStream },
     { "Dxgmms2Scheduler",                  Test_Dxgmms2Scheduler },
     { "Dxgmms2Timeline",                   Test_Dxgmms2Timeline },
