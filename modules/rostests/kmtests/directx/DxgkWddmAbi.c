@@ -17,6 +17,11 @@
 #include "adapter_map_core.h"
 #include "adapter_start_core.h"
 
+NTSTATUS NTAPI DxgkSubmitPresentBltToHwQueue(_In_opt_ PVOID Data);
+NTSTATUS NTAPI NtDxgkSubmitPresentBltToHwQueue(_In_opt_ PVOID Data);
+NTSTATUS NTAPI NtGdiDdDDICreateHwContext(_In_opt_ PVOID Data);
+NTSTATUS NTAPI NtGdiDdDDIDestroyHwContext(_In_opt_ PVOID Data);
+
 typedef struct _DXGK_TEST_RESOURCE_LIST
 {
     CM_RESOURCE_LIST Resources;
@@ -108,6 +113,11 @@ START_TEST(DxgkWddmAbi)
 {
     TestMapMemoryContractCore();
     TestAdapterStartRolePolicy();
+
+    ok_eq_hex(DxgkSubmitPresentBltToHwQueue(NULL), STATUS_NOT_IMPLEMENTED);
+    ok_eq_hex(NtDxgkSubmitPresentBltToHwQueue(NULL), STATUS_NOT_IMPLEMENTED);
+    ok_eq_hex(NtGdiDdDDICreateHwContext(NULL), STATUS_NOT_IMPLEMENTED);
+    ok_eq_hex(NtGdiDdDDIDestroyHwContext(NULL), STATUS_NOT_IMPLEMENTED);
 
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_4, 0x9006);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_5, 0xA00B);

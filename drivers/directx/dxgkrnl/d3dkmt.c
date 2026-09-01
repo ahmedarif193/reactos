@@ -7750,18 +7750,19 @@ DxgkSubmitSignalSyncObjectsToHwQueue(
     return STATUS_INVALID_PARAMETER;
 }
 
-static NTSTATUS
+NTSTATUS
 NTAPI
 DxgkSubmitPresentBltToHwQueue(
     _In_ CONST D3DKMT_SUBMITPRESENTBLTTOHWQUEUE *pData)
 {
-    PAGED_CODE();
+    UNREFERENCED_PARAMETER(pData);
 
-    if (pData == NULL || pData->hHwQueue == 0)
-        return STATUS_INVALID_PARAMETER;
-
-    /* No hardware queue can exist while hardware scheduling is disabled. */
-    return STATUS_INVALID_PARAMETER;
+    /*
+     * Windows 11 build 26100 exports this same entry point under four names
+     * and returns STATUS_NOT_IMPLEMENTED without touching the argument.  Keep
+     * that feature-disabled contract until hardware contexts are supported.
+     */
+    return STATUS_NOT_IMPLEMENTED;
 }
 
 static NTSTATUS
