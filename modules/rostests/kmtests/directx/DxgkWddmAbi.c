@@ -14,9 +14,101 @@
 #undef DXGKDDI_INTERFACE_VERSION
 #define DXGKDDI_INTERFACE_VERSION 0x11008
 #include <dispmprt.h>
+#include "adapter_map_core.h"
+#include "adapter_start_core.h"
+
+typedef struct _DXGK_TEST_RESOURCE_LIST
+{
+    CM_RESOURCE_LIST Resources;
+    CM_PARTIAL_RESOURCE_DESCRIPTOR ExtraDescriptors[2];
+} DXGK_TEST_RESOURCE_LIST;
+
+static VOID
+TestMapMemoryContractCore(VOID)
+{
+    DXGK_TEST_RESOURCE_LIST TestList;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptors;
+    PHYSICAL_ADDRESS Address;
+    PVOID AdapterA = (PVOID)(ULONG_PTR)0x1000;
+    PVOID AdapterB = (PVOID)(ULONG_PTR)0x2000;
+    PVOID ProcessA = (PVOID)(ULONG_PTR)0x3000;
+    PVOID ProcessB = (PVOID)(ULONG_PTR)0x4000;
+
+    RtlZeroMemory(&TestList, sizeof(TestList));
+    TestList.Resources.Count = 1;
+    TestList.Resources.List[0].PartialResourceList.Count = 3;
+    Descriptors = &TestList.Resources.List[0].PartialResourceList.PartialDescriptors[0];
+
+    Descriptors[0].Type = CmResourceTypeMemory;
+    Descriptors[0].u.Memory.Start.QuadPart = 0x100000;
+    Descriptors[0].u.Memory.Length = 0x2000;
+
+    Descriptors[1].Type = CmResourceTypePort;
+    Descriptors[1].Flags = CM_RESOURCE_PORT_IO;
+    Descriptors[1].u.Port.Start.QuadPart = 0x3C0;
+    Descriptors[1].u.Port.Length = 0x20;
+
+    Descriptors[2].Type = CmResourceTypeMemoryLarge;
+    Descriptors[2].Flags = CM_RESOURCE_MEMORY_LARGE_40;
+    Descriptors[2].u.Memory40.Start.QuadPart = 0x100000000LL;
+    Descriptors[2].u.Memory40.Length40 = 0x20;
+
+    Address.QuadPart = 0x100000;
+    ok(DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 0x2000, FALSE), "Exact memory resource was rejected\n");
+    Address.QuadPart = 0x100800;
+    ok(DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 0x800, FALSE), "Contained memory range was rejected\n");
+    Address.QuadPart = 0x0FFFFF;
+    ok(!DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 1, FALSE), "Range before resource was accepted\n");
+    Address.QuadPart = 0x101800;
+    ok(!DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 0x1000, FALSE), "Range escaping resource was accepted\n");
+    Address.QuadPart = 0x100000;
+    ok(!DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 0x100, TRUE), "Memory resource was accepted as I/O space\n");
+
+    Address.QuadPart = 0x3C0;
+    ok(DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 0x20, TRUE), "Exact I/O-port resource was rejected\n");
+    ok(!DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 0x21, TRUE), "I/O-port range escape was accepted\n");
+
+    Address.QuadPart = 0x100000000LL;
+    ok(DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 0x2000, FALSE), "Large-memory resource was decoded incorrectly\n");
+    Address.QuadPart = -1;
+    ok(!DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 1, FALSE), "Negative physical address was accepted\n");
+    Address.QuadPart = 0x100000;
+    ok(!DxgkAdapterMapRangeAssigned(NULL, Address, 1, FALSE), "NULL resource list was accepted\n");
+    ok(!DxgkAdapterMapRangeAssigned(&TestList.Resources, Address, 0, FALSE), "Zero-length range was accepted\n");
+
+    ok(DxgkAdapterMapOwnerMatches(AdapterA, NULL, AdapterA, ProcessA), "Kernel mapping rejected its adapter owner\n");
+    ok(!DxgkAdapterMapOwnerMatches(AdapterA, NULL, AdapterB, ProcessA), "Kernel mapping accepted a foreign adapter\n");
+    ok(DxgkAdapterMapOwnerMatches(AdapterA, ProcessA, AdapterA, ProcessA), "User mapping rejected its adapter/process owner\n");
+    ok(!DxgkAdapterMapOwnerMatches(AdapterA, ProcessA, AdapterA, ProcessB), "User mapping accepted a foreign process\n");
+    ok(!DxgkAdapterMapOwnerMatches(AdapterA, ProcessA, AdapterB, ProcessA), "User mapping accepted a foreign adapter\n");
+}
+
+static VOID
+TestAdapterStartRolePolicy(VOID)
+{
+    ok_eq_int(DxgkAdapterStartClassifyRole(TRUE, 1), DxgkAdapterStartDisplayOnly);
+    ok_eq_int(DxgkAdapterStartClassifyRole(FALSE, 1), DxgkAdapterStartFullDisplay);
+    ok_eq_int(DxgkAdapterStartClassifyRole(FALSE, 0), DxgkAdapterStartRenderOnly);
+    ok(!DxgkAdapterStartRoleRequiresScheduler(DxgkAdapterStartDisplayOnly), "DOD unexpectedly requires VidSch\n");
+    ok(DxgkAdapterStartRoleRequiresScheduler(DxgkAdapterStartFullDisplay), "full display adapter does not require VidSch\n");
+    ok(DxgkAdapterStartRoleRequiresScheduler(DxgkAdapterStartRenderOnly), "render-only adapter does not require VidSch\n");
+    ok(DxgkAdapterStartRoleRequiresDisplayPipeline(DxgkAdapterStartDisplayOnly), "DOD lacks a display pipeline\n");
+    ok(DxgkAdapterStartRoleRequiresDisplayPipeline(DxgkAdapterStartFullDisplay), "full display adapter lacks a display pipeline\n");
+    ok(!DxgkAdapterStartRoleRequiresDisplayPipeline(DxgkAdapterStartRenderOnly), "render-only adapter unexpectedly requires a display pipeline\n");
+    ok(DxgkAdapterStartRoleHasValidCounts(DxgkAdapterStartDisplayOnly, 1, 0, 64), "valid DOD counts rejected\n");
+    ok(!DxgkAdapterStartRoleHasValidCounts(DxgkAdapterStartDisplayOnly, 0, 0, 64), "source-less DOD accepted\n");
+    ok(DxgkAdapterStartRoleHasValidCounts(DxgkAdapterStartFullDisplay, 1, 1, 64), "valid full-display counts rejected\n");
+    ok(!DxgkAdapterStartRoleHasValidCounts(DxgkAdapterStartFullDisplay, 1, 0, 64), "scheduler-less full-display adapter accepted\n");
+    ok(DxgkAdapterStartRoleHasValidCounts(DxgkAdapterStartRenderOnly, 0, 1, 64), "valid render-only counts rejected\n");
+    ok(!DxgkAdapterStartRoleHasValidCounts(DxgkAdapterStartRenderOnly, 1, 1, 64), "render-only adapter with a display source accepted\n");
+    ok(!DxgkAdapterStartRoleHasValidCounts(DxgkAdapterStartRenderOnly, 0, 65, 64), "out-of-range GPU node count accepted\n");
+}
 
 START_TEST(DxgkWddmAbi)
 {
+    TestMapMemoryContractCore();
+    TestAdapterStartRolePolicy();
+
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_4, 0x9006);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_5, 0xA00B);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_6, 0xB004);
