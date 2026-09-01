@@ -18,6 +18,7 @@
 #define REACTOS_WDDM_MULTI_APP_PRIORITY_TIME_ENTITLEMENT  0
 #define REACTOS_WDDM_USER_MODE_WORK_SUBMISSION            0
 #define REACTOS_WDDM_PRIVATE_TDR_ABI                      0
+#define REACTOS_WDDM_PRIVATE_DXGMMS2_EXPORT_TABLES        0
 
 #if REACTOS_WDDM_AUTONOMOUS_GPU_CONTEXT_RUNLIST != 0
 #error Autonomous GPU context run lists are quarantined pending claim review
@@ -33,6 +34,10 @@
 
 #if REACTOS_WDDM_PRIVATE_TDR_ABI != 0
 #error Private TDR recovery-context exports and layouts require independent clean-room ABI clearance
+#endif
+
+#if REACTOS_WDDM_PRIVATE_DXGMMS2_EXPORT_TABLES != 0
+#error Native VidMmInterface and VidSchInterface export tables require independent clean-room ABI clearance
 #endif
 
 #endif /* _REACTOS_WDDM_CLEANROOM_GATE_H_ */
