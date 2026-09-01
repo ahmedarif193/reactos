@@ -2157,7 +2157,9 @@ KiArm64HandleSynchronousException(
             Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
             RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
-            ExceptionRecord.ExceptionCode = STATUS_DATATYPE_MISALIGNMENT;
+            ExceptionRecord.ExceptionCode =
+                (EsrClass == 0x22) ? STATUS_INSTRUCTION_MISALIGNMENT
+                                   : STATUS_DATATYPE_MISALIGNMENT;
             ExceptionRecord.ExceptionFlags = 0;
             ExceptionRecord.ExceptionRecord = NULL;
             ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
