@@ -232,6 +232,8 @@ typedef enum _DXGKVGPU_ESCAPE_TYPE
     DXGKVGPU_ESCAPE_TYPE_RELEASE                    = 3,
     DXGKVGPU_ESCAPE_TYPE_GET_VGPU_TYPE              = 4,
     DXGKVGPU_ESCAPE_TYPE_POWERTRANSITIONCOMPLETE    = 5,
+    DXGKVGPU_ESCAPE_TYPE_PAUSE                      = 6,
+    DXGKVGPU_ESCAPE_TYPE_RESUME                     = 7,
 } DXGKVGPU_ESCAPE_TYPE;
 
 typedef struct _DXGKVGPU_ESCAPE_HEAD
@@ -278,6 +280,27 @@ typedef struct _DXGKVGPU_ESCAPE_RELEASE
 {
     DXGKVGPU_ESCAPE_HEAD Header;
 } DXGKVGPU_ESCAPE_RELEASE;
+
+typedef struct _DXGKVGPU_ESCAPE_PAUSE
+{
+    DXGKVGPU_ESCAPE_HEAD Header;
+    LUID DeviceLuid;
+    union
+    {
+        struct
+        {
+            UINT GuestVmRunning : 1;
+        };
+        UINT Flags;
+    };
+} DXGKVGPU_ESCAPE_PAUSE;
+
+typedef struct _DXGKVGPU_ESCAPE_RESUME
+{
+    DXGKVGPU_ESCAPE_HEAD Header;
+    LUID DeviceLuid;
+    UINT Flags;
+} DXGKVGPU_ESCAPE_RESUME;
 
 
 typedef enum _DXGK_PTE_PAGE_SIZE
