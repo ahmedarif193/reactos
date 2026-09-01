@@ -9,10 +9,10 @@
 @ stdcall DpSynchronizeExecution(ptr ptr ptr long ptr)
 @ stdcall DpiGetDriverVersion(ptr)
 @ stdcall DpiGetDxgAdapter(ptr)
-@ stdcall DpiGetSchedulerCallbackState(ptr ptr)
+@ stdcall DpiGetSchedulerCallbackState(ptr)
 @ stdcall DpiSetSchedulerCallbackState(ptr long)
 
-; --- DxgCoreInterface (static callback table for dxgmms1.sys) ---
+; --- DxgCoreInterface (static callback table consumed by dxgmms2.sys) ---
 @ extern DxgCoreInterface
 
 ; --- ETW tracing stubs ---
