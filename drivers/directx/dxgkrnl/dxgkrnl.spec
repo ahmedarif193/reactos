@@ -19,6 +19,8 @@
 30 extern g_DxgMmsBugcheckExportIndex
 31 extern g_IsInternalRelease
 32 extern g_IsInternalReleaseOrDbg
+35 extern ?g_TdrForceDodPresentTimeout@@3JC g_TdrForceDodPresentTimeout
+36 extern ?g_TdrForceDodVSyncTimeout@@3JC g_TdrForceDodVSyncTimeout
 37 extern g_TdrForceTimeout
 
 ; --- ETW tracing stubs ---
