@@ -35,7 +35,7 @@ static VOID DisplibInitializeServiceName(_Out_ PUNICODE_STRING ServiceName)
     RtlInitUnicodeString(ServiceName, L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\DXGKrnl");
 }
 
-static BOOLEAN DisplibIsSupportedDodVersion(_In_ ULONG Version)
+static BOOLEAN DisplibIsSupportedVersion(_In_ ULONG Version)
 {
     switch (Version)
     {
@@ -55,12 +55,6 @@ static BOOLEAN DisplibIsSupportedDodVersion(_In_ ULONG Version)
         case DXGKDDI_INTERFACE_VERSION_WDDM2_1:
         case DXGKDDI_INTERFACE_VERSION_WDDM2_0:
         case 0x5022: /* Windows 10 10240 WDDM 2.0 */
-        case DXGKDDI_INTERFACE_VERSION_WDDM1_3_PATH_INDEPENDENT_ROTATION:
-        case DXGKDDI_INTERFACE_VERSION_WDDM1_3:
-        case DXGKDDI_INTERFACE_VERSION_WIN8:
-        case DXGKDDI_INTERFACE_VERSION_WIN7:
-        case DXGKDDI_INTERFACE_VERSION_VISTA_SP1:
-        case DXGKDDI_INTERFACE_VERSION_VISTA:
             return TRUE;
         default:
             return FALSE;
@@ -158,6 +152,8 @@ NTSTATUS APIENTRY DxgkInitialize(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE
 
     if (DriverObject == NULL || RegistryPath == NULL || DriverInitializationData == NULL)
         return STATUS_INVALID_PARAMETER;
+    if (!DisplibIsSupportedVersion(DriverInitializationData->Version))
+        return STATUS_REVISION_MISMATCH;
     Status = DisplibConnectDxgkrnl(&Connection);
     if (!NT_SUCCESS(Status) && Status != STATUS_IMAGE_ALREADY_LOADED)
         return Status;
@@ -187,7 +183,7 @@ NTSTATUS APIENTRY DxgkInitializeDisplayOnlyDriver(_In_ PDRIVER_OBJECT DriverObje
 
     if (DriverObject == NULL || RegistryPath == NULL || KmDodInitializationData == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (!DisplibIsSupportedDodVersion(KmDodInitializationData->Version))
+    if (!DisplibIsSupportedVersion(KmDodInitializationData->Version))
         return STATUS_REVISION_MISMATCH;
     Status = DisplibConnectDxgkrnl(&Connection);
     if (!NT_SUCCESS(Status) && Status != STATUS_IMAGE_ALREADY_LOADED)
@@ -222,10 +218,10 @@ NTSTATUS APIENTRY DxgkUnInitialize(_In_ PDRIVER_OBJECT DriverObject)
     if (NT_SUCCESS(Status))
     {
         UnInitialize = (PDISPLIB_UNINITIALIZE)EntryPoint;
-        (VOID)UnInitialize(DriverObject);
+        Status = UnInitialize(DriverObject);
     }
     DisplibDisconnectDxgkrnl(&Connection);
-    if (Connection.LoadStatus != STATUS_IMAGE_ALREADY_LOADED)
+    if (NT_SUCCESS(Status) && Connection.LoadStatus != STATUS_IMAGE_ALREADY_LOADED)
         DisplibUnloadDxgkrnl();
     return Status;
 }

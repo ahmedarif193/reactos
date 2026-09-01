@@ -4,14 +4,6 @@
 ; registry INF. This file owns only the common WDDM kernel stack.
 
 [AddReg]
-; --- dxgmms1 (legacy video memory manager) ---
-HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","ErrorControl",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","Group",0x00000000,"Video Init"
-HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","ImagePath",0x00020000,"system32\drivers\dxgmms1.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","Start",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","Type",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","Tag",0x00010001,0x00000001
-
 ; --- dxgkrnl (WDDM port driver / DirectX graphics kernel) ---
 HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","ErrorControl",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Group",0x00000000,"Video Init"
