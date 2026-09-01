@@ -50,9 +50,9 @@ Dxgmms2EnsureInitialized(VOID)
     return State == 2 ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
 }
 
-static VOID
+VOID
 NTAPI
-Dxgmms2DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
+DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
 
@@ -74,6 +74,6 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
     Status = Dxgmms2EnsureInitialized();
     if (!NT_SUCCESS(Status))
         return Status;
-    DriverObject->DriverUnload = Dxgmms2DriverUnload;
+    DriverObject->DriverUnload = DriverUnload;
     return STATUS_SUCCESS;
 }
