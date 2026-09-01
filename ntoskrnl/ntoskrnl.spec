@@ -2187,7 +2187,7 @@
 @ stdcall -arch=arm64 ExFreePool2(ptr long ptr long)
 @ stdcall -arch=i386,x86_64,arm64 ExFreeToLookasideListEx(ptr ptr) ExpFreeToLookasideListExExport
 @ stdcall -arch=i386,x86_64,arm64 ExFreeToNPagedLookasideList(ptr ptr) ExpFreeToNPagedLookasideListExport
-@ stdcall -arch=arm64 ExGetFirmwareEnvironmentVariable(ptr ptr ptr ptr ptr)
+@ stdcall -arch=i386,x86_64,arm64 ExGetFirmwareEnvironmentVariable(ptr ptr ptr ptr ptr)
 @ stdcall -arch=arm64 ExGetFirmwareType()
 @ stub -arch=arm64 ExGetLicenseTamperState
 @ stub -arch=arm64 ExGetPrmInterface
