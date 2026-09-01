@@ -1654,6 +1654,19 @@ DxgkVidMmDereferenceAllocation(
     }
 }
 
+/*
+ * External dxgmms2 lifetime boundary. The caller transfers one live
+ * allocation reference; ReactOS keeps the object layout private and releases
+ * that reference through the same VidMm primitive used by in-module callers.
+ */
+VOID
+NTAPI
+DxgkUnreferenceDxgAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    DxgkVidMmDereferenceAllocation(Allocation);
+}
+
 BOOLEAN
 DxgkVidMmDuplicateAllocationReference(
     _In_ PDXGKVMM_ALLOCATION Allocation)
@@ -1803,6 +1816,19 @@ DxgkVidMmDereferenceResource(
         if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0)
             DxgkpVidMmScheduleResourceFinalizer(Resource);
     }
+}
+
+/*
+ * External dxgmms2 lifetime boundary. The caller transfers one live resource
+ * reference; destruction and rundown remain owned by the ReactOS VidMm
+ * reference model.
+ */
+VOID
+NTAPI
+DxgkUnreferenceDxgResource(
+    _In_ PDXGKVMM_RESOURCE Resource)
+{
+    DxgkVidMmDereferenceResource(Resource);
 }
 
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)

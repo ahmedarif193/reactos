@@ -29,4 +29,6 @@
 325 stdcall TraceDxgkPerformanceWarning(long ptr)
 
 ; --- VidMm ---
+8 stdcall DxgkUnreferenceDxgAllocation(ptr)
+9 stdcall DxgkUnreferenceDxgResource(ptr)
 10 stdcall DxgkVidMmAllowFailOnOfferReclaimErrors()

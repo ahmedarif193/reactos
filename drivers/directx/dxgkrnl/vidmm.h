@@ -679,6 +679,11 @@ VOID
 DxgkVidMmDereferenceAllocation(
     _In_ PDXGKVMM_ALLOCATION Allocation);
 
+VOID
+NTAPI
+DxgkUnreferenceDxgAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation);
+
 /* Duplicate a lifetime reference already owned by the caller.  This remains
  * valid after handle tombstoning, but never resurrects a zero reference. */
 BOOLEAN
@@ -774,6 +779,11 @@ DxgkVidMmAttachAllocationToResource(
 
 VOID
 DxgkVidMmDereferenceResource(
+    _In_ PDXGKVMM_RESOURCE Resource);
+
+VOID
+NTAPI
+DxgkUnreferenceDxgResource(
     _In_ PDXGKVMM_RESOURCE Resource);
 
 NTSTATUS
