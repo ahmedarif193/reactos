@@ -32,3 +32,9 @@
 8 stdcall DxgkUnreferenceDxgAllocation(ptr)
 9 stdcall DxgkUnreferenceDxgResource(ptr)
 10 stdcall DxgkVidMmAllowFailOnOfferReclaimErrors()
+
+; --- Hardware-context feature-disabled boundary ---
+48 stdcall DxgkSubmitPresentBltToHwQueue(ptr)
+83 stdcall NtDxgkSubmitPresentBltToHwQueue(ptr) DxgkSubmitPresentBltToHwQueue
+134 stdcall NtGdiDdDDICreateHwContext(ptr) DxgkSubmitPresentBltToHwQueue
+149 stdcall NtGdiDdDDIDestroyHwContext(ptr) DxgkSubmitPresentBltToHwQueue
