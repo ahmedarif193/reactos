@@ -7,19 +7,16 @@
 remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
 add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
 
-# Keep the ABI-freeze test on the in-tree UMD implementation ceiling while
-# separately telling runtime-load tests which lower version this image must
-# advertise. The KMT surface above remains compiled at the 3.2 header ceiling.
+# Compile the tests against the same UMD callback layout as the runtime and
+# in-tree UMDs.  A lower private test selector changes D3DDDI_DEVICECALLBACKS
+# itself, so handing that shorter buffer to the current runtime corrupts the
+# caller rather than testing an older contract in isolation.
 if(REACTOS_USE_WDDM)
-    remove_definitions(
-        -DD3D_UMD_INTERFACE_VERSION=${REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION})
     set(REACTOS_EXPECTED_UMD_INTERFACE_VERSION
         ${REACTOS_WDDM_EFFECTIVE_UMD_INTERFACE_VERSION})
 else()
-    remove_definitions(-DD3D_UMD_INTERFACE_VERSION=0x000C)
     set(REACTOS_EXPECTED_UMD_INTERFACE_VERSION 0x000C)
 endif()
-add_definitions(-DD3D_UMD_INTERFACE_VERSION=0x5002)
 
 list(APPEND SOURCE
     d3dkmt_adapter.c
