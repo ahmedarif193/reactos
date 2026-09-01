@@ -41,6 +41,7 @@ list(APPEND SOURCE
     ResolveLocaleName.c
     SetDefaultDllDirectories.c
     SetFileInformationByHandle.c
+    SetProcessValidCallTargets.c
     sync.c
     ThreadDescription.c
     ThreadGroupAffinity.c

@@ -40,6 +40,22 @@ typedef struct _K32_PROCESS_MITIGATION_DEP_POLICY
 
 #define K32_MITIGATION_OPTION_DEP_ENABLE 0x1ULL
 
+static BOOL
+K32IsCurrentImageCfgEnabled(VOID)
+{
+    PIMAGE_LOAD_CONFIG_DIRECTORY LoadConfig;
+    PIMAGE_NT_HEADERS NtHeaders;
+    PVOID ImageBase = NtCurrentPeb()->ImageBaseAddress;
+    ULONG Size;
+
+    NtHeaders = RtlImageNtHeader(ImageBase);
+    if (NtHeaders == NULL || !(NtHeaders->OptionalHeader.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_GUARD_CF))
+        return FALSE;
+    LoadConfig = RtlImageDirectoryEntryToData(ImageBase, TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &Size);
+    return LoadConfig != NULL && Size >= RTL_SIZEOF_THROUGH_FIELD(IMAGE_LOAD_CONFIG_DIRECTORY, GuardFlags) &&
+           (LoadConfig->GuardFlags & IMAGE_GUARD_CF_INSTRUMENTED) != 0;
+}
+
 BOOL
 WINAPI
 GetProcessMitigationPolicy(
@@ -77,6 +93,17 @@ GetProcessMitigationPolicy(
 #endif
         RtlZeroMemory(lpBuffer, dwLength);
         RtlCopyMemory(lpBuffer, &OptionsMask, sizeof(OptionsMask));
+        return TRUE;
+    }
+
+    if (MitigationPolicy == ProcessControlFlowGuardPolicy)
+    {
+        if (dwLength != sizeof(DWORD) || hProcess != GetCurrentProcess())
+        {
+            SetLastError(hProcess != GetCurrentProcess() ? ERROR_NOT_SUPPORTED : ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        *(PDWORD)lpBuffer = K32IsCurrentImageCfgEnabled() ? 1 : 0;
         return TRUE;
     }
 

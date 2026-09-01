@@ -13,6 +13,9 @@
 #define NDEBUG
 #include <debug.h>
 
+NTSTATUS NTAPI RtlRegisterCfgTargetRange(PVOID Base, SIZE_T Size);
+VOID NTAPI RtlUnregisterCfgTargetRange(PVOID Base);
+
 /* FUNCTIONS ******************************************************************/
 
 /*
@@ -53,6 +56,18 @@ VirtualAllocEx(IN HANDLE hProcess,
         return NULL;
     }
 
+    if ((flProtect & PAGE_TARGETS_INVALID) && hProcess == GetCurrentProcess())
+    {
+        Status = RtlRegisterCfgTargetRange(lpAddress, dwSize);
+        if (!NT_SUCCESS(Status))
+        {
+            SIZE_T FreeSize = 0;
+            NtFreeVirtualMemory(hProcess, &lpAddress, &FreeSize, MEM_RELEASE);
+            BaseSetLastNTError(Status);
+            return NULL;
+        }
+    }
+
     /* Return the allocated address */
     return lpAddress;
 }
@@ -86,6 +101,7 @@ VirtualFreeEx(IN HANDLE hProcess,
               IN DWORD dwFreeType)
 {
     NTSTATUS Status;
+    PVOID ReleasedAddress = lpAddress;
 
     /* Validate size and flags */
     if (!(dwSize) || !(dwFreeType & MEM_RELEASE))
@@ -101,6 +117,9 @@ VirtualFreeEx(IN HANDLE hProcess,
             BaseSetLastNTError(Status);
             return FALSE;
         }
+
+        if ((dwFreeType & MEM_RELEASE) && hProcess == GetCurrentProcess())
+            RtlUnregisterCfgTargetRange(ReleasedAddress);
 
         /* Return success */
         return TRUE;
