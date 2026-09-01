@@ -93,6 +93,12 @@ RtlFirstEntrySList(
             } Bits;
         } Pointer;
 
+        /* An empty legacy header has no pointer bits to reconstruct. */
+        if (!SListHead->Header8.NextEntry)
+        {
+            return NULL;
+        }
+
 #if defined(_IA64_)
         /* On Itanium we stored the region in the list head */
         Pointer.Region = SListHead->Region;
