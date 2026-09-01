@@ -2206,7 +2206,7 @@ typedef struct _SCATTER_GATHER_ELEMENT {
   ULONG_PTR Reserved;
 } SCATTER_GATHER_ELEMENT, *PSCATTER_GATHER_ELEMENT;
 
-#if defined(_MSC_EXTENSIONS) || defined(__GNUC__)
+#if defined(_MSC_EXTENSIONS) || defined(__GNUC__) || defined(__clang__)
 
 #if defined(_MSC_VER)
 #if _MSC_VER >= 1200
@@ -2229,12 +2229,12 @@ typedef struct _SCATTER_GATHER_LIST {
 #endif
 #endif /* _MSC_VER */
 
-#else /* defined(_MSC_EXTENSIONS) || defined(__GNUC__) */
+#else /* defined(_MSC_EXTENSIONS) || defined(__GNUC__) || defined(__clang__) */
 
 struct _SCATTER_GATHER_LIST;
 typedef struct _SCATTER_GATHER_LIST SCATTER_GATHER_LIST, *PSCATTER_GATHER_LIST;
 
-#endif /* defined(_MSC_EXTENSIONS) || defined(__GNUC__) */
+#endif /* defined(_MSC_EXTENSIONS) || defined(__GNUC__) || defined(__clang__) */
 
 _Function_class_(DRIVER_ADD_DEVICE)
 _IRQL_requires_(PASSIVE_LEVEL)

@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#ifdef __GNUC__
+#if defined(__GNUC__) || defined(__clang__)
 #ifndef __GNUC_VA_LIST
 #define __GNUC_VA_LIST
   typedef __builtin_va_list __gnuc_va_list;
@@ -27,7 +27,7 @@ extern "C" {
 
 #ifndef _VA_LIST_DEFINED
 #define _VA_LIST_DEFINED
-#if defined(__GNUC__)
+#if defined(__GNUC__) || defined(__clang__)
   typedef __gnuc_va_list va_list;
 #elif defined(_MSC_VER)
   typedef _Writable_bytes_(_Inexpressible_("length varies")) char *  va_list;
