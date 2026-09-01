@@ -12,8 +12,6 @@
 
 #include "cdd.h"
 
-#define RCDD_PRESENT_SYNCHRONOUS 0x80000000u
-
 static BOOL
 RcddRectContains(
    const RECTL *prclOuter,
@@ -42,6 +40,12 @@ RcddNotifyDirtyRects(
    ULONG Count,
    ULONG Flags)
 {
+   union
+   {
+      ULONGLONG Alignment;
+      UCHAR Bytes[FIELD_OFFSET(DXGK_PRESENT_DIRTY_RECTS_INPUT, Rects) +
+                  DXGK_PRESENT_DIRTY_MAX_RECTS * sizeof(RECTL)];
+   } Packet;
    PDXGK_PRESENT_DIRTY_RECTS_INPUT Input;
    SIZE_T HeaderSize;
    SIZE_T InputSize;
@@ -49,12 +53,11 @@ RcddNotifyDirtyRects(
    BOOL Result;
 
    HeaderSize = FIELD_OFFSET(DXGK_PRESENT_DIRTY_RECTS_INPUT, Rects);
-   if (Count > (~(ULONG)0 - HeaderSize) / sizeof(Input->Rects[0]))
+   if (Count > DXGK_PRESENT_DIRTY_MAX_RECTS)
       return FALSE;
    InputSize = HeaderSize + Count * sizeof(Input->Rects[0]);
-   Input = EngAllocMem(FL_ZERO_MEMORY, InputSize, ALLOC_TAG);
-   if (Input == NULL)
-      return FALSE;
+   Input = (PDXGK_PRESENT_DIRTY_RECTS_INPUT)Packet.Bytes;
+   RtlZeroMemory(Input, InputSize);
 
    Input->StructSize = (ULONG)InputSize;
    Input->Flags = Flags;
@@ -72,7 +75,6 @@ RcddNotifyDirtyRects(
                                NULL,
                                0,
                                &Ret) == 0;
-   EngFreeMem(Input);
    return Result;
 }
 
@@ -95,236 +97,22 @@ RcddRectUnion(
    prclDest->bottom = max(prclDest->bottom, prclSource->bottom);
 }
 
-static VOID
-NTAPI
-RcddPresentWorkerThread(
-   PVOID Context)
-{
-   PRCDD_PDEV ppdev = Context;
-   PRCDD_PRESENT_SLOT Slot;
-   PRCDD_PRESENT_SLOT Oldest;
-   ULONG Index;
-   BOOL Stop;
-   BOOL Result;
-
-   for (;;)
-   {
-      EngWaitForSingleObject(ppdev->PresentWakeEvent, NULL);
-
-      for (;;)
-      {
-         Slot = NULL;
-         Oldest = NULL;
-         EngAcquireSemaphore(ppdev->PresentLock);
-         for (Index = 0; Index < RCDD_PRESENT_SLOT_COUNT; Index++)
-         {
-            if ((ppdev->PresentSlots[Index].State == RcddPresentSlotCapturing ||
-                 ppdev->PresentSlots[Index].State == RcddPresentSlotQueued) &&
-                (Oldest == NULL ||
-                 ppdev->PresentSlots[Index].Sequence < Oldest->Sequence))
-            {
-               Oldest = &ppdev->PresentSlots[Index];
-            }
-         }
-         if (Oldest != NULL && Oldest->State == RcddPresentSlotQueued)
-         {
-            Slot = Oldest;
-            Slot->State = RcddPresentSlotActive;
-         }
-         Stop = ppdev->PresentWorkerStop;
-         if (Slot == NULL && Stop && ppdev->PresentPendingCount == 0)
-         {
-            EngReleaseSemaphore(ppdev->PresentLock);
-            EngSetEvent(ppdev->PresentExitEvent);
-            PsTerminateSystemThread(STATUS_SUCCESS);
-            return;
-         }
-         EngReleaseSemaphore(ppdev->PresentLock);
-
-         if (Slot == NULL)
-            break;
-
-         Result = RcddNotifyDirtyRects(ppdev,
-                                       Slot->Buffer,
-                                       ppdev->ScreenDelta,
-                                       (ULONG)Slot->BufferSize,
-                                       Slot->Rects,
-                                       Slot->RectCount,
-                                       DXGK_PRESENT_DIRTY_FLUSH);
-
-         EngAcquireSemaphore(ppdev->PresentLock);
-         if (Result)
-            ppdev->PresentCompletedCount++;
-         else
-            ppdev->PresentFailedCount++;
-         ASSERT(Slot->Sequence != 0);
-         ASSERT(Slot->Sequence > ppdev->PresentLastCompletedSequence);
-         ppdev->PresentLastCompletedSequence = Slot->Sequence;
-         Slot->RectCount = 0;
-         Slot->Sequence = 0;
-         Slot->State = RcddPresentSlotFree;
-         ASSERT(ppdev->PresentPendingCount != 0);
-         if (ppdev->PresentPendingCount != 0)
-            ppdev->PresentPendingCount--;
-         if (ppdev->PresentPendingCount == 0)
-            EngSetEvent(ppdev->PresentDrainEvent);
-         EngReleaseSemaphore(ppdev->PresentLock);
-      }
-   }
-}
-
-static VOID
-RcddReleasePresentWorkerResources(
-   PRCDD_PDEV ppdev)
-{
-   ULONG Index;
-
-   for (Index = 0; Index < RCDD_PRESENT_SLOT_COUNT; Index++)
-   {
-      if (ppdev->PresentSlots[Index].Buffer != NULL)
-      {
-         EngFreeMem(ppdev->PresentSlots[Index].Buffer);
-         ppdev->PresentSlots[Index].Buffer = NULL;
-      }
-      ppdev->PresentSlots[Index].BufferSize = 0;
-      ppdev->PresentSlots[Index].RectCount = 0;
-      ppdev->PresentSlots[Index].Sequence = 0;
-      ppdev->PresentSlots[Index].State = RcddPresentSlotFree;
-   }
-
-   if (ppdev->PresentDrainEvent != NULL)
-   {
-      EngDeleteEvent(ppdev->PresentDrainEvent);
-      ppdev->PresentDrainEvent = NULL;
-   }
-   if (ppdev->PresentExitEvent != NULL)
-   {
-      EngDeleteEvent(ppdev->PresentExitEvent);
-      ppdev->PresentExitEvent = NULL;
-   }
-   if (ppdev->PresentWakeEvent != NULL)
-   {
-      EngDeleteEvent(ppdev->PresentWakeEvent);
-      ppdev->PresentWakeEvent = NULL;
-   }
-   if (ppdev->PresentLock != NULL)
-   {
-      EngDeleteSemaphore(ppdev->PresentLock);
-      ppdev->PresentLock = NULL;
-   }
-}
-
-BOOL
-RcddStartPresentWorker(
-   PRCDD_PDEV ppdev)
-{
-   OBJECT_ATTRIBUTES ObjectAttributes;
-   ULONGLONG BufferSize64;
-   ULONG BufferSize;
-   ULONG Index;
-   NTSTATUS Status;
-
-   if (ppdev == NULL || ppdev->ScreenPtr == NULL ||
-       ppdev->ScreenDelta == 0 || ppdev->ScreenHeight == 0 ||
-       ppdev->PresentWorkerActive)
-   {
-      return FALSE;
-   }
-
-   BufferSize64 = (ULONGLONG)ppdev->ScreenDelta * ppdev->ScreenHeight;
-   if (BufferSize64 == 0 || BufferSize64 > MAXULONG)
-      return FALSE;
-   BufferSize = (ULONG)BufferSize64;
-
-   ppdev->PresentLock = EngCreateSemaphore();
-   if (ppdev->PresentLock == NULL ||
-       !EngCreateEvent(&ppdev->PresentWakeEvent) ||
-       !EngCreateEvent(&ppdev->PresentExitEvent) ||
-       !EngCreateEvent(&ppdev->PresentDrainEvent))
-   {
-      RcddReleasePresentWorkerResources(ppdev);
-      return FALSE;
-   }
-
-   for (Index = 0; Index < RCDD_PRESENT_SLOT_COUNT; Index++)
-   {
-      ppdev->PresentSlots[Index].Buffer =
-         EngAllocMem(FL_NONPAGED_MEMORY, BufferSize, ALLOC_TAG);
-      if (ppdev->PresentSlots[Index].Buffer == NULL)
-      {
-         RcddReleasePresentWorkerResources(ppdev);
-         return FALSE;
-      }
-      ppdev->PresentSlots[Index].BufferSize = BufferSize;
-      ppdev->PresentSlots[Index].State = RcddPresentSlotFree;
-   }
-
-   EngSetEvent(ppdev->PresentDrainEvent);
-   ppdev->PresentWorkerStop = FALSE;
-   InitializeObjectAttributes(&ObjectAttributes,
-                              NULL,
-                              OBJ_KERNEL_HANDLE,
-                              NULL,
-                              NULL);
-   Status = PsCreateSystemThread(&ppdev->PresentThread,
-                                 THREAD_ALL_ACCESS,
-                                 &ObjectAttributes,
-                                 NULL,
-                                 NULL,
-                                 RcddPresentWorkerThread,
-                                 ppdev);
-   if (!NT_SUCCESS(Status))
-   {
-      ppdev->PresentThread = NULL;
-      RcddReleasePresentWorkerResources(ppdev);
-      return FALSE;
-   }
-
-   ppdev->PresentWorkerActive = TRUE;
-   return TRUE;
-}
-
 VOID
-RcddStopPresentWorker(
-   PRCDD_PDEV ppdev)
-{
-   if (ppdev == NULL || !ppdev->PresentWorkerActive)
-      return;
-
-   EngAcquireSemaphore(ppdev->PresentLock);
-   ppdev->PresentWorkerActive = FALSE;
-   ppdev->PresentWorkerStop = TRUE;
-   EngReleaseSemaphore(ppdev->PresentLock);
-   EngSetEvent(ppdev->PresentWakeEvent);
-   EngWaitForSingleObject(ppdev->PresentExitEvent, NULL);
-
-   if (ppdev->PresentThread != NULL)
-   {
-      ZwClose(ppdev->PresentThread);
-      ppdev->PresentThread = NULL;
-   }
-   RcddReleasePresentWorkerResources(ppdev);
-}
-
-VOID
-RcddQueryPresentWorkerStats(
+RcddQueryPresentStats(
    PRCDD_PDEV ppdev,
    PDXGK_PRESENT_STATS Stats)
 {
-   if (ppdev == NULL || Stats == NULL || ppdev->PresentLock == NULL)
+   if (ppdev == NULL || Stats == NULL)
       return;
 
-   EngAcquireSemaphore(ppdev->PresentLock);
-   Stats->PresentQueueDepth = ppdev->PresentPendingCount;
-   Stats->PendingDirtyRect =
-      ppdev->PresentPendingCount != 0 || ppdev->PendingRectCount != 0;
-   Stats->PresentQueueHighWatermark = ppdev->PresentQueueHighWatermark;
+   Stats->PresentQueueDepth = 0;
+   Stats->PendingDirtyRect = ppdev->PendingRectCount != 0;
+   Stats->PresentQueueHighWatermark = 0;
    Stats->PresentQueued = ppdev->PresentQueuedCount;
    Stats->PresentCompleted = ppdev->PresentCompletedCount;
    Stats->PresentFailed = ppdev->PresentFailedCount;
    Stats->PresentRejected = ppdev->PresentRejectedCount;
    Stats->PresentSynchronous = ppdev->PresentSynchronousCount;
-   EngReleaseSemaphore(ppdev->PresentLock);
 }
 
 static VOID
@@ -366,120 +154,6 @@ RcddAccumulateRect(
       RcddRectUnion(&Rects[Best], prcl);
 }
 
-static BOOL
-RcddQueuePresent(
-   PRCDD_PDEV ppdev,
-   const RECTL *Rects,
-   ULONG Count)
-{
-   PRCDD_PRESENT_SLOT Slot = NULL;
-   PRCDD_PRESENT_SLOT Newest = NULL;
-   ULONG BytesPerPixel;
-   ULONG BytesPerRow;
-   ULONG Index;
-   LONG Y;
-   BOOL Coalesced = FALSE;
-
-   if (ppdev == NULL || Rects == NULL || Count == 0 ||
-       Count > DXGK_PRESENT_DIRTY_MAX_RECTS ||
-       ppdev->PresentLock == NULL)
-   {
-      return FALSE;
-   }
-
-   EngAcquireSemaphore(ppdev->PresentLock);
-   if (ppdev->PresentWorkerActive && !ppdev->PresentWorkerStop)
-   {
-      for (Index = 0; Index < RCDD_PRESENT_SLOT_COUNT; Index++)
-      {
-         if (ppdev->PresentSlots[Index].State == RcddPresentSlotFree)
-         {
-            Slot = &ppdev->PresentSlots[Index];
-            break;
-         }
-         if (Newest == NULL ||
-             ppdev->PresentSlots[Index].Sequence > Newest->Sequence)
-         {
-            Newest = &ppdev->PresentSlots[Index];
-         }
-      }
-
-      if (Slot != NULL)
-      {
-         Slot->State = RcddPresentSlotCapturing;
-         if (++ppdev->PresentNextSequence == 0)
-            ++ppdev->PresentNextSequence;
-         Slot->Sequence = ppdev->PresentNextSequence;
-         ppdev->PresentPendingCount++;
-         if (ppdev->PresentPendingCount > ppdev->PresentQueueHighWatermark)
-            ppdev->PresentQueueHighWatermark = ppdev->PresentPendingCount;
-         EngClearEvent(ppdev->PresentDrainEvent);
-      }
-      else if (Newest != NULL && Newest->State == RcddPresentSlotQueued)
-      {
-         Slot = Newest;
-         Slot->State = RcddPresentSlotCapturing;
-         Coalesced = TRUE;
-      }
-   }
-   if (Slot == NULL)
-      ppdev->PresentRejectedCount++;
-   EngReleaseSemaphore(ppdev->PresentLock);
-   if (Slot == NULL)
-      return FALSE;
-
-   BytesPerPixel = (ppdev->BitsPerPixel + 7) / 8;
-   if (Coalesced)
-   {
-      for (Index = 0; Index < Count; Index++)
-         RcddAccumulateRect(Slot->Rects, &Slot->RectCount, &Rects[Index]);
-   }
-   else
-   {
-      RtlCopyMemory(Slot->Rects, Rects, Count * sizeof(Rects[0]));
-      Slot->RectCount = Count;
-   }
-   for (Index = 0; Index < Slot->RectCount; Index++)
-   {
-      BytesPerRow =
-         (Slot->Rects[Index].right - Slot->Rects[Index].left) * BytesPerPixel;
-      for (Y = Slot->Rects[Index].top; Y < Slot->Rects[Index].bottom; Y++)
-      {
-         RtlCopyMemory((PUCHAR)Slot->Buffer +
-                          (SIZE_T)Y * ppdev->ScreenDelta +
-                          (SIZE_T)Slot->Rects[Index].left * BytesPerPixel,
-                       (PUCHAR)ppdev->ScreenPtr +
-                          (SIZE_T)Y * ppdev->ScreenDelta +
-                          (SIZE_T)Slot->Rects[Index].left * BytesPerPixel,
-                       BytesPerRow);
-      }
-   }
-
-   EngAcquireSemaphore(ppdev->PresentLock);
-   if (ppdev->PresentWorkerActive && !ppdev->PresentWorkerStop &&
-       Slot->State == RcddPresentSlotCapturing)
-   {
-      Slot->State = RcddPresentSlotQueued;
-      if (!Coalesced)
-         ppdev->PresentQueuedCount++;
-      EngReleaseSemaphore(ppdev->PresentLock);
-      EngSetEvent(ppdev->PresentWakeEvent);
-      return TRUE;
-   }
-
-   Slot->RectCount = 0;
-   Slot->Sequence = 0;
-   Slot->State = RcddPresentSlotFree;
-   ASSERT(ppdev->PresentPendingCount != 0);
-   if (ppdev->PresentPendingCount != 0)
-      ppdev->PresentPendingCount--;
-   if (ppdev->PresentPendingCount == 0)
-      EngSetEvent(ppdev->PresentDrainEvent);
-   EngReleaseSemaphore(ppdev->PresentLock);
-   EngSetEvent(ppdev->PresentWakeEvent);
-   return FALSE;
-}
-
 static VOID
 RcddAccumulateDirtyRect(
    PRCDD_PDEV ppdev,
@@ -497,7 +171,6 @@ RcddPublishPending(
 {
    RECTL SentRect;
    BOOL Notified;
-   BOOL Synchronous;
    ULONG Index;
 
    if (ppdev->ScreenPtr == NULL)
@@ -510,39 +183,32 @@ RcddPublishPending(
    for (Index = 1; Index < ppdev->PendingRectCount; Index++)
       RcddRectUnion(&SentRect, &ppdev->PendingRects[Index]);
 
-   Synchronous = (Flags & RCDD_PRESENT_SYNCHRONOUS) != 0;
-   Flags &= ~RCDD_PRESENT_SYNCHRONOUS;
-   if (Synchronous)
+   InterlockedIncrement((volatile LONG *)&ppdev->PresentQueuedCount);
+   Notified = RcddNotifyDirtyRects(ppdev,
+                                   ppdev->ScreenPtr,
+                                   ppdev->ScreenDelta,
+                                   ppdev->ScreenDelta * ppdev->ScreenHeight,
+                                   ppdev->PendingRects,
+                                   ppdev->PendingRectCount,
+                                   Flags);
+   if (!Notified)
    {
       Notified = RcddNotifyDirtyRects(ppdev,
                                       ppdev->ScreenPtr,
                                       ppdev->ScreenDelta,
                                       ppdev->ScreenDelta * ppdev->ScreenHeight,
-                                      ppdev->PendingRects,
-                                      ppdev->PendingRectCount,
+                                      &SentRect,
+                                      1,
                                       Flags);
-      if (!Notified)
-      {
-         Notified = RcddNotifyDirtyRects(ppdev,
-                                         ppdev->ScreenPtr,
-                                         ppdev->ScreenDelta,
-                                         ppdev->ScreenDelta * ppdev->ScreenHeight,
-                                         &SentRect,
-                                         1,
-                                         Flags);
-      }
-      if (Notified)
-      {
-         EngAcquireSemaphore(ppdev->PresentLock);
-         ppdev->PresentSynchronousCount++;
-         EngReleaseSemaphore(ppdev->PresentLock);
-      }
+   }
+   if (Notified)
+   {
+      InterlockedIncrement((volatile LONG *)&ppdev->PresentCompletedCount);
+      InterlockedIncrement((volatile LONG *)&ppdev->PresentSynchronousCount);
    }
    else
    {
-      Notified = RcddQueuePresent(ppdev,
-                                  ppdev->PendingRects,
-                                  ppdev->PendingRectCount);
+      InterlockedIncrement((volatile LONG *)&ppdev->PresentFailedCount);
    }
    if (!Notified)
       return FALSE;
@@ -748,8 +414,9 @@ RcddCopyBits(
  * RcddSynchronizeSurface
  *
  * Windows uses DSS_TIMER_EVENT and DSS_FLUSH_EVENT as completed-update
- * boundaries. DSS_RESERVED selects the synchronous command form on the native
- * CDD path; it is not a begin/end batching protocol.
+ * boundaries. The current display-only miniports complete PresentDisplayOnly
+ * synchronously, so the mapped primary only has to remain stable for this
+ * callback. DSS_RESERVED is not a begin/end batching protocol.
  */
 VOID APIENTRY
 RcddSynchronizeSurface(
@@ -771,8 +438,7 @@ RcddSynchronizeSurface(
 
    RcddPresentEx(ppdev,
                  prcl,
-                 DXGK_PRESENT_DIRTY_FLUSH |
-                    ((fl & DSS_RESERVED) ? RCDD_PRESENT_SYNCHRONOUS : 0));
+                 DXGK_PRESENT_DIRTY_FLUSH);
 }
 
 typedef struct _RCDD_DISPLAY_TILE_RANGE

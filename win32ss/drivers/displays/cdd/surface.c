@@ -148,9 +148,9 @@ RcddEnableSurface(
     * BitBlt/CopyBits/Synchronize only to learn which rectangles changed and then
     * drive an explicit WDDM dirty-rect present (RcddPresent ->
     * IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT -> the miniport's PresentDisplayOnly).
-    * Each completed frame is captured while the display-area serialization is
-    * still held, then presented asynchronously from that immutable snapshot.
-    * The compositor seam is escape.c.
+    * The completed SynchronizeSurface callback submits the stable primary
+    * directly to the synchronous display-only present DDI. The compositor
+    * seam is escape.c.
     */
    SurfaceBits = ppdev->ScreenPtr;
    flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_SYNCHRONIZE |
@@ -184,17 +184,6 @@ RcddEnableSurface(
 
    ppdev->hSurfEng = hSurface;
 
-   if (!RcddStartPresentWorker(ppdev))
-   {
-      EngDeleteSurface(hSurface);
-      ppdev->hSurfEng = NULL;
-      VideoMemory.RequestedVirtualAddress = ppdev->ScreenPtr;
-      EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_UNMAP_VIDEO_MEMORY,
-                         &VideoMemory, sizeof(VIDEO_MEMORY), NULL, 0, &ulTemp);
-      ppdev->ScreenPtr = NULL;
-      return NULL;
-   }
-
    return hSurface;
 
 CleanupMapping:
@@ -218,8 +207,6 @@ RcddDisableSurface(
    DWORD ulTemp;
    VIDEO_MEMORY VideoMemory;
    PRCDD_PDEV ppdev = (PRCDD_PDEV)dhpdev;
-
-   RcddStopPresentWorker(ppdev);
 
    if (ppdev->hSurfEng != NULL)
    {

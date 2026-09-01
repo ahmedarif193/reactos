@@ -223,8 +223,6 @@ RcddDisablePDEV(
 {
    PRCDD_PDEV ppdev = (PRCDD_PDEV)dhpdev;
 
-   RcddStopPresentWorker(ppdev);
-
    if (ppdev->DefaultPalette)
    {
       EngDeletePalette(ppdev->DefaultPalette);

@@ -33,28 +33,9 @@
  * win32k and dxgkrnl. */
 #include <reactos/dwmframe.h>
 
-#define RCDD_PRESENT_SLOT_COUNT 3
 #define RCDD_DISPLAY_TILE_DIMENSION 9
 #define RCDD_DISPLAY_TILE_COUNT \
    (RCDD_DISPLAY_TILE_DIMENSION * RCDD_DISPLAY_TILE_DIMENSION)
-
-typedef enum _RCDD_PRESENT_SLOT_STATE
-{
-   RcddPresentSlotFree,
-   RcddPresentSlotCapturing,
-   RcddPresentSlotQueued,
-   RcddPresentSlotActive
-} RCDD_PRESENT_SLOT_STATE;
-
-typedef struct _RCDD_PRESENT_SLOT
-{
-   PVOID Buffer;
-   SIZE_T BufferSize;
-   RECTL Rects[DXGK_PRESENT_DIRTY_MAX_RECTS];
-   ULONG RectCount;
-   ULONGLONG Sequence;
-   RCDD_PRESENT_SLOT_STATE State;
-} RCDD_PRESENT_SLOT, *PRCDD_PRESENT_SLOT;
 
 typedef struct _RCDD_PDEV
 {
@@ -112,27 +93,14 @@ typedef struct _RCDD_PDEV
    ULONG SentSeq;              /* DrawSeq of the last notification sent       */
    RECTL SentRect;             /* Rect of the last notification sent          */
 
-   /* Native CDD completes ordinary SynchronizeSurface requests through a
-    * worker. Each queued entry owns an immutable copy of its dirty pixels;
-    * the primary can therefore be painted again while PresentDisplayOnly is
-    * in progress. DSS_RESERVED requests retain the synchronous command path. */
-   HSEMAPHORE PresentLock;
-   PEVENT PresentWakeEvent;
-   PEVENT PresentExitEvent;
-   PEVENT PresentDrainEvent;
-   HANDLE PresentThread;
-   BOOL PresentWorkerActive;
-   BOOL PresentWorkerStop;
-   ULONG PresentPendingCount;
-   ULONG PresentQueueHighWatermark;
+   /* PresentDisplayOnly is synchronous for the current display-only
+    * miniports. GDI keeps the primary valid for the duration of the completed
+    * SynchronizeSurface callback, so CDD does not need a private frame queue. */
    ULONG PresentQueuedCount;
    ULONG PresentCompletedCount;
    ULONG PresentFailedCount;
    ULONG PresentRejectedCount;
    ULONG PresentSynchronousCount;
-   ULONGLONG PresentNextSequence;
-   ULONGLONG PresentLastCompletedSequence;
-   RCDD_PRESENT_SLOT PresentSlots[RCDD_PRESENT_SLOT_COUNT];
 } RCDD_PDEV, *PRCDD_PDEV;
 
 typedef struct _RCDD_BITMAP
@@ -319,16 +287,8 @@ RcddSynchronizeSurface(
    IN RECTL *prcl,
    IN FLONG fl);
 
-BOOL
-RcddStartPresentWorker(
-   IN PRCDD_PDEV ppdev);
-
 VOID
-RcddStopPresentWorker(
-   IN PRCDD_PDEV ppdev);
-
-VOID
-RcddQueryPresentWorkerStats(
+RcddQueryPresentStats(
    IN PRCDD_PDEV ppdev,
    IN OUT PDXGK_PRESENT_STATS Stats);
 

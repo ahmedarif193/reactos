@@ -264,7 +264,7 @@ RcddEscape(
          return 0;
       }
 
-      RcddQueryPresentWorkerStats(ppdev, pvOut);
+      RcddQueryPresentStats(ppdev, pvOut);
 
       return 1;
    }
