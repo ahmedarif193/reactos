@@ -23,6 +23,7 @@ typedef struct _DXGMMS2_SCHED_PACKET
     ULONGLONG  OwnerCookie;
     ULONGLONG  ClaimToken;
     ULONG      SubmissionFenceId;
+    ULONGLONG  DispatchSequence;
     ULONG      Flags;
     LONG       Priority;
     BOOLEAN    Dispatched;      /* handed to the miniport at least once */
@@ -37,6 +38,7 @@ typedef struct _DXGMMS2_SCHED_ENGINE
     ULONG      State;
     ULONG      LastSubmittedFenceId;
     ULONG      LastCompletedFenceId;
+    volatile LONG NextFenceId;
     ULONGLONG  NextClaimToken;
 } DXGMMS2_SCHED_ENGINE, *PDXGMMS2_SCHED_ENGINE;
 
@@ -48,7 +50,7 @@ typedef struct _DXGMMS2_SCHED_CORE
     ULONG      RetirementCount;
     LIST_ENTRY FreeList;
     ULONG      TotalPackets;
-    volatile LONG NextFenceId;
+    ULONGLONG  NextDispatchSequence;
     BOOLEAN    AdmissionOpen;
     BOOLEAN    Started;
 } DXGMMS2_SCHED_CORE, *PDXGMMS2_SCHED_CORE;

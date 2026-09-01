@@ -418,6 +418,75 @@ TestOldestDispatchedOnEngine(
         RTL_NUMBER_OF(Batch));
 }
 
+/*
+ * Submission fences are per-engine identities.  They cannot be compared
+ * across engines to decide which packet was dispatched first; watchdog
+ * attribution instead follows the provider's independent dispatch order.
+ */
+static VOID
+TestPerEngineFenceDomainsAndDispatchAge(
+    _Inout_ PDXGMMS2_SCHED_TEST_STATE State)
+{
+    DXGMMS2_SCHEDULER_ADMIT_INFO_V1 Info;
+    DXGMMS2_SCHEDULER_CLAIM_V1 Claim;
+    PDXGMMS2_SCHED_PACKET EngineZeroFirst;
+    PDXGMMS2_SCHED_PACKET EngineZeroSecond;
+    PDXGMMS2_SCHED_PACKET EngineOne;
+    PDXGMMS2_SCHED_PACKET Failed = NULL;
+    PDXGMMS2_SCHED_PACKET Batch[DXGMMS2_SCHED_TEST_BATCH];
+    ULONGLONG Cookie = 0;
+    ULONG Engine = MAXULONG;
+    ULONG Fence = 0;
+    ULONG EngineZeroSecondFence = 0;
+    ULONG EngineOneFence;
+    NTSTATUS Status;
+
+    Status = Dxgmms2SchedCoreStop(&State->Core);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreStart(&State->Core, DXGMMS2_SCHED_TEST_ENGINES);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    EngineZeroFirst = AllocateTestPacket(State);
+    EngineZeroSecond = AllocateTestPacket(State);
+    ok(EngineZeroFirst != NULL && EngineZeroSecond != NULL, "packet pool exhausted\n");
+    if (EngineZeroFirst == NULL || EngineZeroSecond == NULL)
+        return;
+    InitAdmitInfo(&Info, 0, (ULONGLONG)(ULONG_PTR)EngineZeroFirst, 270);
+    Info.Flags = DXGMMS2_SCHEDULER_ADMIT_PREFENCED;
+    Info.SubmissionFenceId = 100;
+    Status = Dxgmms2SchedCoreAdmit(&State->Core, &Info, EngineZeroFirst, &Fence);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Fence, 100UL);
+
+    InitAdmitInfo(&Info, 0, (ULONGLONG)(ULONG_PTR)EngineZeroSecond, 271);
+    Status = Dxgmms2SchedCoreAdmit(&State->Core, &Info, EngineZeroSecond, &EngineZeroSecondFence);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(EngineZeroSecondFence, 101UL);
+
+    EngineOneFence = AdmitOne(State, 1, 272, &EngineOne);
+    ok(EngineOne != NULL, "engine 1 admission failed\n");
+    ok_eq_ulong(EngineOneFence, 1UL);
+    if (EngineOne == NULL)
+        return;
+
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "claim engine 0 oldest packet");
+    (VOID)Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+    (VOID)Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 1, &Claim), "claim engine 1 packet");
+    (VOID)Dxgmms2SchedCorePublishDispatch(&State->Core, 1, Claim.ClaimToken);
+    (VOID)Dxgmms2SchedCoreCompleteDispatch(&State->Core, 1, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+
+    ok_bool_true(Dxgmms2SchedCoreGetOldestDispatched(&State->Core, &Engine, &Fence, &Cookie), "oldest dispatched packet is visible");
+    ok_eq_ulong(Engine, 0UL);
+    ok_eq_ulong(Fence, 100UL);
+    ok_eq_pointer((PVOID)(ULONG_PTR)Cookie, EngineZeroFirst);
+
+    (VOID)Dxgmms2SchedCoreAbortAll(&State->Core, TRUE, Batch, RTL_NUMBER_OF(Batch));
+}
+
 static VOID
 TestFailedDispatchAndCancellation(
     _Inout_ PDXGMMS2_SCHED_TEST_STATE State)
@@ -907,6 +976,7 @@ START_TEST(Dxgmms2Scheduler)
     TestCompletionDuringOutstandingClaim(State);
     TestOldestDispatchedOpaqueCookie(State);
     TestOldestDispatchedOnEngine(State);
+    TestPerEngineFenceDomainsAndDispatchAge(State);
     TestFailedDispatchAndCancellation(State);
     TestAbortRespectsDispatchOwnership(State);
     TestPreemptionResetsDispatchOnly(State);
