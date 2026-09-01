@@ -1460,12 +1460,7 @@ void __PREfastPagedCodeLocked(void);
 #define PAGED_ASSERT( exp ) ASSERT( exp )
 #endif
 
-#define PAGED_CODE() { \
-  if (KeGetCurrentIrql() > APC_LEVEL) { \
-    KdPrint( ("NTDDK: Pageable code called at IRQL > APC_LEVEL (%d)\n", KeGetCurrentIrql() )); \
-    PAGED_ASSERT(FALSE); \
-  } \
-}
+#define PAGED_CODE() PAGED_ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
 
 #define PAGED_CODE_LOCKED() NOP_FUNCTION;
 
