@@ -57,6 +57,38 @@
 #include <d3dkmddi.h>
 #include <acpiioct.h>
 
+/* Legacy video-port declarations retained by the WDK for compatibility. */
+#ifndef _NTOSP_
+#define _NTOSP_
+typedef enum _EMULATOR_PORT_ACCESS_TYPE
+{
+    Uchar,
+    Ushort,
+    Ulong
+} EMULATOR_PORT_ACCESS_TYPE, *PEMULATOR_PORT_ACCESS_TYPE;
+
+typedef struct _EMULATOR_ACCESS_ENTRY
+{
+    ULONG BasePort;
+    ULONG NumConsecutivePorts;
+    EMULATOR_PORT_ACCESS_TYPE AccessType;
+    UCHAR AccessMode;
+    UCHAR StringSupport;
+    PVOID Routine;
+} EMULATOR_ACCESS_ENTRY, *PEMULATOR_ACCESS_ENTRY;
+#endif
+
+typedef VOID (*PBANKED_SECTION_ROUTINE)(
+    _In_ ULONG ReadBank,
+    _In_ ULONG WriteBank,
+    _In_ PVOID Context);
+
+/* dispmprt.h exposes the complete video request packet, as does the WDK. */
+#ifndef _NTOSDEF_
+#define _NTOSDEF_
+#endif
+#include <video.h>
+
 #ifndef _IRQL_requires_DXGK_
 #define _IRQL_requires_DXGK_(level) _IRQL_requires_(level)
 #endif
@@ -81,23 +113,6 @@ DEFINE_GUID(GUID_WDDM_INTERFACE_WAITWAKE,
  * if the miniport implements the corresponding callbacks.
  * =========================================================================
  */
-
-/* video.h: VRP passed to DxgkDdiDispatchIoRequest */
-typedef struct _VIDEO_REQUEST_PACKET   VIDEO_REQUEST_PACKET;
-typedef struct _VIDEO_REQUEST_PACKET  *PVIDEO_REQUEST_PACKET;
-
-/* video.h: passed to DxgkDdiQueryInterface */
-typedef struct _QUERY_INTERFACE
-{
-    CONST GUID *InterfaceType;
-    USHORT      Size;
-    USHORT      Version;
-    PINTERFACE  Interface;
-    PVOID       InterfaceSpecificData;
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
-    ULONG       DeviceUid;
-#endif
-} QUERY_INTERFACE, *PQUERY_INTERFACE;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3)
 #ifdef _WIN64
