@@ -24,6 +24,7 @@ NTSTATUS NTAPI NtGdiDdDDIDestroyHwContext(_In_opt_ PVOID Data);
 NTSTATUS NTAPI NtGdiDdDDIQueryFSEBlock(_In_opt_ PVOID Data);
 NTSTATUS NTAPI NtGdiDdDDISetFSEBlock(_In_opt_ PVOID Data);
 NTSTATUS NTAPI NtGdiDdDDISetMonitorColorSpaceTransform(_In_opt_ PVOID Data);
+BOOLEAN NTAPI TdrIsEnabled(VOID);
 
 typedef struct _DXGK_TEST_RESOURCE_LIST
 {
@@ -124,6 +125,7 @@ START_TEST(DxgkWddmAbi)
     ok_eq_hex(NtGdiDdDDIQueryFSEBlock(NULL), STATUS_NOT_SUPPORTED);
     ok_eq_hex(NtGdiDdDDISetFSEBlock(NULL), STATUS_NOT_SUPPORTED);
     ok_eq_hex(NtGdiDdDDISetMonitorColorSpaceTransform(NULL), STATUS_NOT_SUPPORTED);
+    ok_bool_true(TdrIsEnabled(), "default TDR policy is enabled");
 
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_4, 0x9006);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_5, 0xA00B);

@@ -32,7 +32,7 @@
 #endif
 
 #if REACTOS_WDDM_PRIVATE_TDR_ABI != 0
-#error Private TDR exports and recovery layouts require independent clean-room ABI clearance
+#error Private TDR recovery-context exports and layouts require independent clean-room ABI clearance
 #endif
 
 #endif /* _REACTOS_WDDM_CLEANROOM_GATE_H_ */

@@ -416,6 +416,18 @@ DxgkD3dkmtNotSupported(
 }
 
 /*
+ * Layout-free TDR policy query consumed by dxgmms2. The public symbol fixes a
+ * no-argument BOOLEAN contract, and the native entry reads only the enabled
+ * policy state. ReactOS derives that state from its documented TdrLevel value.
+ */
+BOOLEAN
+NTAPI
+TdrIsEnabled(VOID)
+{
+    return g_TdrConfig.TdrLevel != DXGKP_TDR_LEVEL_OFF;
+}
+
+/*
  * The private TDR export ABI is intentionally excluded. Its public PDB names
  * do not define recovery-context sizes, field offsets, ownership, or calling
  * contracts, and no paired black-box contract has cleared those details.
@@ -461,19 +473,6 @@ DxgkD3dkmtNotSupported(
 
 /* Atomic pointer for single active recovery context */
 static PVOID g_TdrActiveRecoveryContext = NULL;
-
-/*
- * TdrIsEnabled
- *
- * Returns TRUE if TDR is enabled (TdrLevel != 0).
- * Consumed by dxgmms1.sys to decide whether timeout detection is active.
- */
-BOOLEAN
-NTAPI
-TdrIsEnabled(VOID)
-{
-    return (g_TdrConfig.TdrLevel != 0) ? TRUE : FALSE;
-}
 
 /*
  * TdrHistoryInit
