@@ -40,6 +40,14 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dwmapi);
 
+#ifdef __REACTOS__
+/* Chromium intentionally discovers DirectComposition with GetModuleHandleW()
+ * after loading the desktop composition stack. Keep dcomp.dll resident as a
+ * real dwmapi dependency, matching that system-level availability contract. */
+extern HRESULT WINAPI DCompositionCreateDevice3(IUnknown *, REFIID, void **);
+static HRESULT (WINAPI * volatile dcomp_create_device3_import)(IUnknown *, REFIID, void **)
+        = DCompositionCreateDevice3;
+#endif
 
 /**********************************************************************
  *           DwmIsCompositionEnabled         (DWMAPI.@)
@@ -57,6 +65,9 @@ HRESULT WINAPI DwmIsCompositionEnabled(BOOL *enabled)
     if (!enabled)
         return E_INVALIDARG;
 
+#ifdef __REACTOS__
+    (void)dcomp_create_device3_import;
+#endif
     *enabled = FALSE;
     version.dwOSVersionInfoSize = sizeof(version);
     if (!RtlGetVersion(&version))
