@@ -50,6 +50,12 @@ START_TEST(SoftGpuVsyncPolicy)
         FALSE,
         FALSE,
         FALSE);
+
+    ok_eq_bool(SoftGpuVsyncCanDeliverNotification(TRUE, TRUE, TRUE, TRUE), TRUE);
+    ok_eq_bool(SoftGpuVsyncCanDeliverNotification(FALSE, TRUE, TRUE, TRUE), FALSE);
+    ok_eq_bool(SoftGpuVsyncCanDeliverNotification(TRUE, FALSE, TRUE, TRUE), FALSE);
+    ok_eq_bool(SoftGpuVsyncCanDeliverNotification(TRUE, TRUE, FALSE, TRUE), FALSE);
+    ok_eq_bool(SoftGpuVsyncCanDeliverNotification(TRUE, TRUE, TRUE, FALSE), FALSE);
 }
 
 /* EOF */
