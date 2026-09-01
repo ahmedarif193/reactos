@@ -54,12 +54,14 @@ extern void func_gpustats(void);
 extern void func_vidmm(void);
 extern void func_present(void);
 extern void func_dwm(void);
+#ifdef REACTOS_D3DKMT_PRIVATE_DWM_TEST
 extern void func_dwmdxexport(void);
 extern void func_dwmdxabi(void);
 extern void func_dwmdxarg(void);
 extern void func_dwmdxsurface(void);
 extern void func_dwmdxluid(void);
 extern void func_dwmdxntuser(void);
+#endif
 extern void func_cursor(void);
 extern void func_display(void);
 extern void func_pipeline(void);
@@ -129,12 +131,14 @@ const struct test winetest_testlist[] =
     { "vidmm",         func_vidmm },
     { "present",       func_present },
     { "dwm",           func_dwm },
+#ifdef REACTOS_D3DKMT_PRIVATE_DWM_TEST
     { "dwmdxexport",   func_dwmdxexport },
     { "dwmdxabi",      func_dwmdxabi },
     { "dwmdxarg",      func_dwmdxarg },
     { "dwmdxsurface",  func_dwmdxsurface },
     { "dwmdxluid",     func_dwmdxluid },
     { "dwmdxntuser",   func_dwmdxntuser },
+#endif
     { "cursor",        func_cursor },
     { "display",       func_display },
     { "pipeline",      func_pipeline },
