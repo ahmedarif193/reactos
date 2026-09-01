@@ -21,6 +21,9 @@ NTSTATUS NTAPI DxgkSubmitPresentBltToHwQueue(_In_opt_ PVOID Data);
 NTSTATUS NTAPI NtDxgkSubmitPresentBltToHwQueue(_In_opt_ PVOID Data);
 NTSTATUS NTAPI NtGdiDdDDICreateHwContext(_In_opt_ PVOID Data);
 NTSTATUS NTAPI NtGdiDdDDIDestroyHwContext(_In_opt_ PVOID Data);
+NTSTATUS NTAPI NtGdiDdDDIQueryFSEBlock(_In_opt_ PVOID Data);
+NTSTATUS NTAPI NtGdiDdDDISetFSEBlock(_In_opt_ PVOID Data);
+NTSTATUS NTAPI NtGdiDdDDISetMonitorColorSpaceTransform(_In_opt_ PVOID Data);
 
 typedef struct _DXGK_TEST_RESOURCE_LIST
 {
@@ -118,6 +121,9 @@ START_TEST(DxgkWddmAbi)
     ok_eq_hex(NtDxgkSubmitPresentBltToHwQueue(NULL), STATUS_NOT_IMPLEMENTED);
     ok_eq_hex(NtGdiDdDDICreateHwContext(NULL), STATUS_NOT_IMPLEMENTED);
     ok_eq_hex(NtGdiDdDDIDestroyHwContext(NULL), STATUS_NOT_IMPLEMENTED);
+    ok_eq_hex(NtGdiDdDDIQueryFSEBlock(NULL), STATUS_NOT_SUPPORTED);
+    ok_eq_hex(NtGdiDdDDISetFSEBlock(NULL), STATUS_NOT_SUPPORTED);
+    ok_eq_hex(NtGdiDdDDISetMonitorColorSpaceTransform(NULL), STATUS_NOT_SUPPORTED);
 
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_4, 0x9006);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_5, 0xA00B);
