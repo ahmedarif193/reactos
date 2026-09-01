@@ -2837,6 +2837,7 @@ typedef enum _D3DKMT_VAD_ESCAPE_COMMAND
     D3DKMT_VAD_ESCAPE_GET_PTE,
     D3DKMT_VAD_ESCAPE_GET_GPUMMU_CAPS,
     D3DKMT_VAD_ESCAPE_GET_SEGMENT_CAPS,
+    D3DKMT_VAD_ESCAPE_GET_PTE_DATA,
 } D3DKMT_VAD_ESCAPE_COMMAND;
 
 typedef struct _D3DKMT_VAD_DESC
@@ -2908,6 +2909,8 @@ typedef struct _DXGK_ESCAPE_GPUMMUCAPS
     BOOLEAN LargePageSupported;
     BOOLEAN DualPteSupported;
     BOOLEAN AllowNonAlignedLargePageAddress;
+    BOOLEAN PageTable64KSupported : 1;
+    BOOLEAN Reserved : 7;
     UINT    VirtualAddressBitCount;
     UINT    PageTableLevelCount;
     D3DKMT_PAGE_TABLE_LEVEL_DESC PageTableLevelDesk[DXGK_MAX_PAGE_TABLE_LEVEL_COUNT];
@@ -2931,6 +2934,12 @@ typedef struct _D3DKMT_GET_PTE
     DXGK_PTE    Pte[D3DKMT_GET_PTE_MAX];                            // Out
     UINT        NumValidEntries;                                    // Out
 } D3DKMT_GET_PTE;
+
+typedef struct _D3DKMT_GET_PTE_EXT
+{
+    UINT64 DriverProtection[D3DKMT_GET_PTE_MAX];
+    UINT64 AllocationData[D3DKMT_GET_PTE_MAX];
+} D3DKMT_GET_PTE_EXT;
 
 #define D3DKMT_MAX_SEGMENT_COUNT 32
 
@@ -3043,6 +3052,10 @@ typedef struct _D3DKMT_VIDMM_ESCAPE
             };
             D3DKMT_VAD_ESCAPE_COMMAND Command;      // in
             NTSTATUS    Status;                     // out
+            union
+            {
+                D3DKMT_GET_PTE_EXT GetPteExt;
+            };
         } GetVads;
         struct
         {
