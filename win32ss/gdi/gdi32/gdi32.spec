@@ -700,7 +700,7 @@
 @ stdcall -version=0x600+ D3DKMTSetDisplayPrivateDriverFormat(ptr) NtGdiDdDDISetDisplayPrivateDriverFormat
 @ stdcall -version=0xA00+ D3DKMTSetFSEBlock(ptr) NtGdiDdDDISetFSEBlock
 @ stdcall -version=0x600+ D3DKMTSetGammaRamp(ptr) NtGdiDdDDISetGammaRamp
-@ stdcall -version=0x600+ D3DKMTSetProcessSchedulingPriorityClass(ptr ptr) NtGdiDdDDISetProcessSchedulingPriorityClass
+@ stdcall -version=0x600+ D3DKMTSetProcessSchedulingPriorityClass(ptr long) NtGdiDdDDISetProcessSchedulingPriorityClass
 @ stdcall -version=0x600+ D3DKMTSetQueuedLimit(ptr) NtGdiDdDDISetQueuedLimit
 @ stdcall -version=0x600+ D3DKMTSetVidPnSourceOwner(ptr) NtGdiDdDDISetVidPnSourceOwner
 @ stdcall -version=0x600+ D3DKMTSharedPrimaryLockNotification(ptr) NtGdiDdDDISharedPrimaryLockNotification
