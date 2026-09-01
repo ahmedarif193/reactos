@@ -853,5 +853,7 @@
     SVC_(GdiDdDDISubmitSignalSyncObjectsToHwQueue, 1)
     SVC_(GdiDdDDISubmitPresentBltToHwQueue, 1)
     SVC_(GdiDdDDISubmitPresentToHwQueue, 1)
+    SVC_(GdiDdDDISetFSEBlock, 1)
+    SVC_(GdiDdDDIQueryFSEBlock, 1)
     SVC_(UserAddClipboardFormatListener, 1)
     SVC_(UserRemoveClipboardFormatListener, 1)

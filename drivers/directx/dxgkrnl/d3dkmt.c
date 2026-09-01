@@ -446,6 +446,8 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         /* Mandatory WDDM 2.1 allocation-property and reclaim contracts. */
         case IOCTL_D3DKMT_UPDATEALLOCATIONPROPERTY:
         case IOCTL_D3DKMT_RECLAIMALLOCATIONS3:
+        case IOCTL_D3DKMT_SETFSEBLOCK:
+        case IOCTL_D3DKMT_QUERYFSEBLOCK:
             return DXGK_CAPS_CORE_LEVEL_WDDM_2_1;
 #endif
 
@@ -7999,6 +8001,14 @@ DxgkpDispatchBufferedIoctl(
         }
 #endif
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
+        case IOCTL_D3DKMT_SETFSEBLOCK:
+        case IOCTL_D3DKMT_QUERYFSEBLOCK:
+        {
+            return Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? STATUS_NOT_SUPPORTED : STATUS_ACCESS_DENIED;
+        }
+#endif
+
         case IOCTL_D3DKMT_GETDISPLAYMODELIST:
         {
             if (InputLength < sizeof(D3DKMT_GETDISPLAYMODELIST) || SystemBuffer == NULL)
@@ -10826,6 +10836,8 @@ DxgkDispatchDeviceControl(
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
         case IOCTL_D3DKMT_UPDATEALLOCATIONPROPERTY:
         case IOCTL_D3DKMT_RECLAIMALLOCATIONS3:
+        case IOCTL_D3DKMT_SETFSEBLOCK:
+        case IOCTL_D3DKMT_QUERYFSEBLOCK:
 #endif
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER:
         case IOCTL_D3DKMT_GETDEVICESTATE:

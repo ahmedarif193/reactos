@@ -64,6 +64,7 @@ extern void func_display(void);
 extern void func_pipeline(void);
 extern void func_capture(void);
 extern void func_privateioctl(void);
+extern void func_fseblock(void);
 extern void func_cle(void);
 extern void func_v3dsmoke(void);
 #ifdef REACTOS_D3DKMT_VC4KMT_TEST
@@ -135,6 +136,7 @@ const struct test winetest_testlist[] =
     { "pipeline",      func_pipeline },
     { "capture",       func_capture },
     { "privateioctl",  func_privateioctl },
+    { "fseblock",      func_fseblock },
     { "cle",           func_cle },
     { "v3dsmoke",      func_v3dsmoke },
 #ifdef REACTOS_D3DKMT_VC4KMT_TEST

@@ -721,12 +721,10 @@ WddmBridgeSendIoctlToDevice(
     if (Information != NULL)
         *Information = IoStatus.Information;
 
-    /* STATUS_DEVICE_BUSY is the escape-busy/retry backpressure the UMD
-     * deliberately spins on when the GPU queue is full — expected flow
-     * control, not an error.  Printing it floods serial at 100Hz during a
-     * busy/TDR window and buries the real faults; stay silent for it,
-     * report everything else. */
-    if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_BUSY)
+    /* STATUS_DEVICE_BUSY is queue backpressure and STATUS_NOT_SUPPORTED is
+     * the documented result for unavailable public D3DKMT contracts.  Both
+     * are expected control flow; keep diagnostics for other failures. */
+    if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_BUSY && Status != STATUS_NOT_SUPPORTED)
     {
         DPRINT1("WddmBridgeSendIoctl: IOCTL 0x%08lX failed with 0x%08lX\n",
                 IoControlCode, Status);
