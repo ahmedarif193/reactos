@@ -4114,11 +4114,6 @@ typedef struct _DXGKARG_FLIPOVERLAY
     UINT             PrivateDriverDataSize;
 } DXGKARG_FLIPOVERLAY, *PDXGKARG_FLIPOVERLAY;
 
-typedef struct _DXGKARG_DESTROYOVERLAY
-{
-    HANDLE  hOverlay;
-} DXGKARG_DESTROYOVERLAY, *PDXGKARG_DESTROYOVERLAY;
-
 
 /* =========================================================================
  * DXGK_DISPLAY_DRIVERCAPS_EXTENSION
