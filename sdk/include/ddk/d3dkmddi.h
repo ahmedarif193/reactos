@@ -1529,6 +1529,21 @@ typedef struct _DXGKARG_DESTROYALLOCATION
  * DXGKARG_DESCRIBEALLOCATION
  * =========================================================================
  */
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+typedef struct _DXGK_DESCRIBEALLOCATIONFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT CheckDisplayMode : 1;
+            UINT Reserved : 31;
+        };
+        UINT Value;
+    };
+} DXGK_DESCRIBEALLOCATIONFLAGS;
+#endif
+
 typedef struct _DXGKARG_DESCRIBEALLOCATION
 {
     HANDLE                      hAllocation;
@@ -1542,6 +1557,10 @@ typedef struct _DXGKARG_DESCRIBEALLOCATION
         UINT                    PrivateFormatAttribute;
         UINT                    PrivateDriverFormatAttribute;
     };
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+    DXGK_DESCRIBEALLOCATIONFLAGS Flags;
+    D3DDDI_ROTATION Rotation;
+#endif
 } DXGKARG_DESCRIBEALLOCATION, *PDXGKARG_DESCRIBEALLOCATION;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
@@ -1928,12 +1947,24 @@ typedef struct _DXGKARG_SUBMITCOMMAND
  * DXGKARG_PREEMPTCOMMAND
  * =========================================================================
  */
+typedef struct _DXGK_PREEMPTCOMMANDFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Reserved : 32;
+        };
+        UINT Value;
+    };
+} DXGK_PREEMPTCOMMANDFLAGS;
+
 typedef struct _DXGKARG_PREEMPTCOMMAND
 {
     UINT    PreemptionFenceId;
     UINT    NodeOrdinal;
     UINT    EngineOrdinal;
-    UINT    Flags;
+    DXGK_PREEMPTCOMMANDFLAGS Flags;
 } DXGKARG_PREEMPTCOMMAND, *PDXGKARG_PREEMPTCOMMAND;
 
 typedef struct _DXGKARG_CANCELCOMMAND
@@ -2724,16 +2755,26 @@ typedef DXGKARG_SETPALETTE *PDXGKARG_SETPALETTE;
  * DXGKARG_SETPOINTERPOSITION / DXGKARG_SETPOINTERSHAPE
  * =========================================================================
  */
+typedef struct _DXGK_SETPOINTERPOSITIONFLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Visible : 1;
+            UINT Procedural : 1;
+            UINT Reserved : 30;
+        };
+        UINT Value;
+    };
+} DXGK_SETPOINTERPOSITIONFLAGS;
+
 typedef struct _DXGKARG_SETPOINTERPOSITION
 {
     D3DDDI_VIDEO_PRESENT_SOURCE_ID  VidPnSourceId;
     INT     X;
     INT     Y;
-    struct {
-        UINT    Visible  : 1;
-        UINT    Procedural : 1;
-        UINT    Reserved : 30;
-    } Flags;
+    DXGK_SETPOINTERPOSITIONFLAGS Flags;
 } DXGKARG_SETPOINTERPOSITION, *PDXGKARG_SETPOINTERPOSITION;
 
 typedef struct _DXGK_POINTERINFO
@@ -2838,6 +2879,13 @@ typedef enum _DXGK_RECOMMENDFUNCTIONALVIDPN_REASON
     DXGK_RFVR_USERMODE = 2,
     DXGK_RFVR_FIRMWARE = 3,
 } DXGK_RECOMMENDFUNCTIONALVIDPN_REASON;
+
+typedef enum _DXGK_ACTIVE_VIDPN_INVALIDATION_REASON
+{
+    DXGK_AVIR_UNINITIALIZED = DXGK_RFVR_UNINITIALIZED,
+    DXGK_AVIR_HOTKEY = DXGK_RFVR_HOTKEY,
+    DXGK_AVIR_USERMODE = DXGK_RFVR_USERMODE,
+} DXGK_ACTIVE_VIDPN_INVALIDATION_REASON;
 
 typedef struct _DXGKARG_RECOMMENDFUNCTIONALVIDPN
 {
@@ -3025,7 +3073,7 @@ typedef struct _DXGKARG_RECOMMENDVIDPNTOPOLOGY
  */
 typedef struct _DXGKARG_GETSCANLINE
 {
-    D3DDDI_VIDEO_PRESENT_SOURCE_ID  VidPnSourceId;
+    D3DDDI_VIDEO_PRESENT_TARGET_ID  VidPnTargetId;
     BOOLEAN                         InVerticalBlank;    /* out */
     UINT                            ScanLine;           /* out */
 } DXGKARG_GETSCANLINE, *PDXGKARG_GETSCANLINE;
@@ -3315,11 +3363,12 @@ typedef struct _DXGKARG_RENDER
  */
 typedef struct _DXGKARG_ACQUIRESWIZZLINGRANGE
 {
-    HANDLE  hAllocation;
-    UINT    PrivateDriverData;
-    UINT    RangeId;        /* out */
-    UINT    SegmentId;
-    UINT    RangeAddress;   /* out: CPU virtual address */
+    HANDLE              hAllocation;
+    UINT                PrivateDriverData;
+    UINT                RangeId;
+    UINT                SegmentId;
+    SIZE_T              RangeSize;
+    PHYSICAL_ADDRESS    CPUTranslatedAddress;
 } DXGKARG_ACQUIRESWIZZLINGRANGE, *PDXGKARG_ACQUIRESWIZZLINGRANGE;
 
 typedef struct _DXGKARG_RELEASESWIZZLINGRANGE
@@ -3337,6 +3386,7 @@ typedef struct _DXGKARG_RELEASESWIZZLINGRANGE
 typedef struct _DXGKARG_SETDISPLAYPRIVATEDRIVERFORMAT
 {
     D3DDDI_VIDEO_PRESENT_SOURCE_ID  VidPnSourceId;
+    HANDLE                          PrimaryAllocation;
     UINT                            PrivateDriverFormatAttribute;
 } DXGKARG_SETDISPLAYPRIVATEDRIVERFORMAT, *PDXGKARG_SETDISPLAYPRIVATEDRIVERFORMAT;
 
@@ -3389,12 +3439,28 @@ typedef struct _DXGKARG_GETMULTISAMPLEANALYSISMASK
  * DXGKARG_QUERYENGINESTATUS / DXGKARG_RESETENGINE  (WDDM 1.1 / Win7 TDR)
  * =========================================================================
  */
+typedef struct _DXGK_ENGINESTATUS
+{
+    union
+    {
+        struct
+        {
+            UINT Responsive : 1;
+            UINT Reserved : 31;
+        };
+        UINT Value;
+    };
+} DXGK_ENGINESTATUS;
+
 typedef struct _DXGKARG_QUERYENGINESTATUS
 {
-    UINT        NodeOrdinal;
-    UINT        EngineOrdinal;
-    BOOLEAN     Responsive;     /* out */
+    UINT NodeOrdinal;
+    UINT EngineOrdinal;
+    DXGK_ENGINESTATUS EngineStatus;
 } DXGKARG_QUERYENGINESTATUS, *PDXGKARG_QUERYENGINESTATUS;
+
+C_ASSERT(sizeof(DXGK_ENGINESTATUS) == 0x4);
+C_ASSERT(sizeof(DXGKARG_QUERYENGINESTATUS) == 0xC);
 
 typedef struct _DXGKARG_RESETENGINE
 {
@@ -3775,8 +3841,8 @@ typedef struct _DXGKARG_UPDATEOVERLAY
 typedef struct _DXGKARG_FLIPOVERLAY
 {
     HANDLE           hSource;
-    PHYSICAL_ADDRESS PhysicalAddress;
-    UINT             SegmentId;
+    PHYSICAL_ADDRESS SrcPhysicalAddress;
+    UINT             SrcSegmentId;
     PVOID            pPrivateDriverData;
     UINT             PrivateDriverDataSize;
 } DXGKARG_FLIPOVERLAY, *PDXGKARG_FLIPOVERLAY;
