@@ -370,8 +370,6 @@ C_ASSERT(sizeof(DwmApiFormerStubOrdinals) /
          sizeof(DwmApiFormerStubOrdinals[0]) == 61);
 
 static BOOL DwmApiFormerStubCovered[61];
-static const void *SharedCfgCheckFunction;
-static const void *SharedCfgDispatchFunction;
 
 typedef struct _DWM_PRIVATE_EXPECTATION
 {
@@ -530,28 +528,11 @@ VerifyDwmApiFormerStubCoverage(void)
     }
 }
 
-#ifdef _WIN64
-C_ASSERT(sizeof(IMAGE_LOAD_CONFIG_DIRECTORY64) == 0x140);
-#endif
-
-static BOOL
-AddressIsInImage(const void *Address, const void *ImageBase, SIZE_T ImageSize)
-{
-    ULONG_PTR Value = (ULONG_PTR)Address;
-    ULONG_PTR Base = (ULONG_PTR)ImageBase;
-
-    return Value >= Base && Value - Base < ImageSize;
-}
-
 static void
-TestImageContract(HMODULE Module, const char *ModuleName, BOOL LoaderResolved)
+TestImageVersionContract(HMODULE Module, const char *ModuleName)
 {
-    const IMAGE_LOAD_CONFIG_DIRECTORY *LoadConfig;
-    const IMAGE_DATA_DIRECTORY *Directory;
     const IMAGE_DOS_HEADER *DosHeader;
     const IMAGE_NT_HEADERS *NtHeaders;
-    const void *CheckFunction;
-    const void *DispatchFunction;
 
     ok(Module != NULL, "%s module is NULL\n", ModuleName);
     if (Module == NULL)
@@ -580,65 +561,6 @@ TestImageContract(HMODULE Module, const char *ModuleName, BOOL LoaderResolved)
     ok_eq_int(NtHeaders->OptionalHeader.MinorSubsystemVersion, 0);
     ok(NtHeaders->OptionalHeader.AddressOfEntryPoint != 0,
        "%s has no entry point\n", ModuleName);
-    ok((NtHeaders->OptionalHeader.DllCharacteristics &
-        IMAGE_DLLCHARACTERISTICS_GUARD_CF) != 0,
-       "%s lacks IMAGE_DLLCHARACTERISTICS_GUARD_CF\n", ModuleName);
-
-    Directory = &NtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG];
-    ok_eq_ulong(Directory->Size, sizeof(*LoadConfig));
-    ok(Directory->VirtualAddress != 0,
-       "%s has no load-config directory\n", ModuleName);
-    if (Directory->VirtualAddress == 0 ||
-        Directory->Size < sizeof(*LoadConfig))
-        return;
-
-    LoadConfig = (const IMAGE_LOAD_CONFIG_DIRECTORY *)((const BYTE *)Module +
-                                                        Directory->VirtualAddress);
-    ok_eq_ulong(LoadConfig->Size, sizeof(*LoadConfig));
-    ok((LoadConfig->GuardFlags & IMAGE_GUARD_CF_INSTRUMENTED) != 0,
-       "%s load config is not CFG-instrumented\n", ModuleName);
-    ok((LoadConfig->GuardFlags & IMAGE_GUARD_CF_FUNCTION_TABLE_PRESENT) != 0,
-       "%s has no CFG function table flag\n", ModuleName);
-    ok(LoadConfig->GuardCFFunctionTable != 0,
-       "%s has no CFG function table\n", ModuleName);
-    ok(LoadConfig->GuardCFFunctionCount != 0,
-       "%s has an empty CFG function table\n", ModuleName);
-    ok(AddressIsInImage((const void *)(ULONG_PTR)LoadConfig->GuardCFCheckFunctionPointer,
-                        Module, NtHeaders->OptionalHeader.SizeOfImage),
-       "%s CFG check slot is outside the image\n", ModuleName);
-    ok(AddressIsInImage((const void *)(ULONG_PTR)LoadConfig->GuardCFDispatchFunctionPointer,
-                        Module, NtHeaders->OptionalHeader.SizeOfImage),
-       "%s CFG dispatch slot is outside the image\n", ModuleName);
-
-    CheckFunction = *(const void * const *)(ULONG_PTR)LoadConfig->GuardCFCheckFunctionPointer;
-    DispatchFunction = *(const void * const *)(ULONG_PTR)LoadConfig->GuardCFDispatchFunctionPointer;
-    ok(CheckFunction != NULL, "%s CFG check function is NULL\n", ModuleName);
-    ok(DispatchFunction != NULL, "%s CFG dispatch function is NULL\n", ModuleName);
-    if (LoaderResolved)
-    {
-        ok(!AddressIsInImage(CheckFunction, Module,
-                            NtHeaders->OptionalHeader.SizeOfImage),
-           "%s CFG check function was not loader-resolved at %p\n",
-           ModuleName, CheckFunction);
-        ok(!AddressIsInImage(DispatchFunction, Module,
-                            NtHeaders->OptionalHeader.SizeOfImage),
-           "%s CFG dispatch function was not loader-resolved at %p\n",
-           ModuleName, DispatchFunction);
-
-        if (SharedCfgCheckFunction == NULL)
-            SharedCfgCheckFunction = CheckFunction;
-        else
-            ok(CheckFunction == SharedCfgCheckFunction,
-               "%s CFG check function %p differs from shared target %p\n",
-               ModuleName, CheckFunction, SharedCfgCheckFunction);
-
-        if (SharedCfgDispatchFunction == NULL)
-            SharedCfgDispatchFunction = DispatchFunction;
-        else
-            ok(DispatchFunction == SharedCfgDispatchFunction,
-               "%s CFG dispatch function %p differs from shared target %p\n",
-               ModuleName, DispatchFunction, SharedCfgDispatchFunction);
-    }
 }
 
 static HMODULE
@@ -2280,12 +2202,12 @@ START_TEST(dwmstack)
     ok(Core != NULL, "LoadLibrary(dwmcore.dll) failed: %lu\n", GetLastError());
     if (Core == NULL)
         return;
-    TestImageContract(Core, "dwmcore", TRUE);
+    TestImageVersionContract(Core, "dwmcore");
 
     UserDwm = LoadLibraryW(L"uDWM.dll");
     ok(UserDwm != NULL, "LoadLibrary(uDWM.dll) failed: %lu\n", GetLastError());
     if (UserDwm != NULL)
-        TestImageContract(UserDwm, "uDWM", TRUE);
+        TestImageVersionContract(UserDwm, "uDWM");
 
     ApiSet = LoadLibraryW(L"api-ms-win-composition-windowmanager-l1-1-0.dll");
     ok(ApiSet != NULL, "Window Manager API set failed: %lu\n", GetLastError());
@@ -2294,7 +2216,7 @@ START_TEST(dwmstack)
     ok(DwmApi != NULL, "LoadLibrary(dwmapi.dll) failed: %lu\n", GetLastError());
     if (DwmApi != NULL)
     {
-        TestImageContract(DwmApi, "dwmapi", TRUE);
+        TestImageVersionContract(DwmApi, "dwmapi");
         TestDwmApiExports(DwmApi);
         TestDwmApiPrivateBehaviorSessions(DwmApi);
     }
@@ -2302,7 +2224,7 @@ START_TEST(dwmstack)
     DwmExe = LoadSystemImageWithoutImports(L"dwm.exe");
     ok(DwmExe != NULL, "mapping dwm.exe failed: %lu\n", GetLastError());
     if (DwmExe != NULL)
-        TestImageContract(DwmExe, "dwm.exe", FALSE);
+        TestImageVersionContract(DwmExe, "dwm.exe");
 
     TestOrdinalInventory(Core, "dwmcore", 1000, 7, 5);
     if (UserDwm != NULL)

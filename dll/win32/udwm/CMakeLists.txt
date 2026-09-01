@@ -10,9 +10,7 @@ add_library(udwm MODULE
 set_target_properties(udwm PROPERTIES OUTPUT_NAME "uDWM")
 set_module_type(udwm win32dll UNICODE)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
-    target_compile_options(udwm PRIVATE -mguard=cf)
     target_link_options(udwm PRIVATE
-        -Wl,--guard-cf
         -Wl,-Xlink=/version:10.0
         -Wl,--major-subsystem-version,10
         -Wl,--minor-subsystem-version,0)

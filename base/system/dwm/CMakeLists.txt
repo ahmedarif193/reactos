@@ -11,9 +11,7 @@ endif()
 add_executable(dwm main.c)
 set_module_type(dwm win32gui UNICODE)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
-    target_compile_options(dwm PRIVATE -mguard=cf)
     target_link_options(dwm PRIVATE
-        -Wl,--guard-cf
         -Wl,-Xlink=/version:10.0
         -Wl,--major-subsystem-version,10
         -Wl,--minor-subsystem-version,0)

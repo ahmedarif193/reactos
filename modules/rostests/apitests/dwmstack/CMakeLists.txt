@@ -4,9 +4,7 @@
 add_executable(dwmstack_apitest dwmstack.c testlist.c)
 set_module_type(dwmstack_apitest win32cui)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
-    target_compile_options(dwmstack_apitest PRIVATE -mguard=cf)
     target_link_options(dwmstack_apitest PRIVATE
-        -Wl,--guard-cf
         -Wl,-Xlink=/version:10.0
         -Wl,--major-subsystem-version,10
         -Wl,--minor-subsystem-version,0)
