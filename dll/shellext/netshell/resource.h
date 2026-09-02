@@ -13,6 +13,13 @@
 #define IDI_NET_TRANS            108
 #define IDI_NET_TRANSREC         109
 #define IDI_NET_SETUP            110
+#define IDI_NET_TRAY_WIRED       120
+#define IDI_NET_TRAY_OFF         121
+#define IDI_NET_TRAY_WIFI1       122
+#define IDI_NET_TRAY_WIFI2       123
+#define IDI_NET_TRAY_WIFI3       124
+#define IDI_NET_TRAY_WIFI4       125
+#define IDI_NET_TRAY_WIFIOFF     126
 
 #define IDC_STATIC -1
 

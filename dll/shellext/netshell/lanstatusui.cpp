@@ -7,14 +7,143 @@
 
 #include "precomp.h"
 
-#include <winsock.h>
+
+#include <wlanapi.h>
+
+typedef DWORD (WINAPI *PFN_NS_WLANOPENHANDLE)(DWORD, PVOID, PDWORD, PHANDLE);
+typedef DWORD (WINAPI *PFN_NS_WLANCLOSEHANDLE)(HANDLE, PVOID);
+typedef DWORD (WINAPI *PFN_NS_WLANENUMINTERFACES)(HANDLE, PVOID, PWLAN_INTERFACE_INFO_LIST *);
+typedef DWORD (WINAPI *PFN_NS_WLANQUERYINTERFACE)(HANDLE, const GUID *, WLAN_INTF_OPCODE, PVOID, PDWORD, PVOID *, WLAN_OPCODE_VALUE_TYPE *);
+typedef VOID (WINAPI *PFN_NS_WLANFREEMEMORY)(PVOID);
+
+static HMODULE g_hWlanApi = NULL;
+static PFN_NS_WLANOPENHANDLE g_pfnWlanOpen;
+static PFN_NS_WLANCLOSEHANDLE g_pfnWlanClose;
+static PFN_NS_WLANENUMINTERFACES g_pfnWlanEnum;
+static PFN_NS_WLANQUERYINTERFACE g_pfnWlanQuery;
+static PFN_NS_WLANFREEMEMORY g_pfnWlanFree;
+
+static int
+NetShellWifiQuality(const GUID *pConnGuid)
+{
+    HANDLE hWlan = NULL;
+    DWORD dwVersion = 0;
+    PWLAN_INTERFACE_INFO_LIST pList = NULL;
+    int nQuality = -1;
+
+    if (!g_hWlanApi)
+    {
+        g_hWlanApi = LoadLibraryW(L"wlanapi.dll");
+        if (!g_hWlanApi)
+            return -1;
+        g_pfnWlanOpen = (PFN_NS_WLANOPENHANDLE)GetProcAddress(g_hWlanApi, "WlanOpenHandle");
+        g_pfnWlanClose = (PFN_NS_WLANCLOSEHANDLE)GetProcAddress(g_hWlanApi, "WlanCloseHandle");
+        g_pfnWlanEnum = (PFN_NS_WLANENUMINTERFACES)GetProcAddress(g_hWlanApi, "WlanEnumInterfaces");
+        g_pfnWlanQuery = (PFN_NS_WLANQUERYINTERFACE)GetProcAddress(g_hWlanApi, "WlanQueryInterface");
+        g_pfnWlanFree = (PFN_NS_WLANFREEMEMORY)GetProcAddress(g_hWlanApi, "WlanFreeMemory");
+    }
+    if (!g_pfnWlanOpen || !g_pfnWlanClose || !g_pfnWlanEnum || !g_pfnWlanQuery || !g_pfnWlanFree)
+        return -1;
+    if (g_pfnWlanOpen(2, NULL, &dwVersion, &hWlan) != ERROR_SUCCESS || !hWlan)
+        return -1;
+    if (g_pfnWlanEnum(hWlan, NULL, &pList) == ERROR_SUCCESS && pList)
+    {
+        for (DWORD i = 0; i < pList->dwNumberOfItems; i++)
+        {
+            WLAN_INTERFACE_INFO *pInfo = &pList->InterfaceInfo[i];
+            DWORD cb = 0;
+            PVOID pData = NULL;
+            WLAN_OPCODE_VALUE_TYPE vt;
+            if (pConnGuid && !IsEqualGUID(pInfo->InterfaceGuid, *pConnGuid) && pList->dwNumberOfItems > 1)
+                continue;
+            if (pInfo->isState != wlan_interface_state_connected)
+                continue;
+            if (g_pfnWlanQuery(hWlan, &pInfo->InterfaceGuid, wlan_intf_opcode_current_connection,
+                               NULL, &cb, &pData, &vt) == ERROR_SUCCESS && pData)
+            {
+                WLAN_CONNECTION_ATTRIBUTES *pAttr = (WLAN_CONNECTION_ATTRIBUTES *)pData;
+                nQuality = (int)pAttr->wlanAssociationAttributes.wlanSignalQuality;
+                g_pfnWlanFree(pData);
+                break;
+            }
+        }
+        g_pfnWlanFree(pList);
+    }
+    g_pfnWlanClose(hWlan, NULL);
+    return nQuality;
+}
 
 #define NETTIMERID 0xFABC
 
 CLanStatus::CLanStatus() :
     m_lpNetMan(NULL),
-    m_pHead(NULL)
+    m_pHead(NULL),
+    m_hwndRetry(NULL)
 {
+}
+
+LRESULT CALLBACK
+CLanStatus::RetryWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    CLanStatus *pThis;
+
+    if (uMsg == WM_NCCREATE)
+    {
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)((CREATESTRUCTW *)lParam)->lpCreateParams);
+        return TRUE;
+    }
+    pThis = (CLanStatus *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (pThis && (uMsg == WM_TIMER || (uMsg == WM_DEVICECHANGE && wParam == 0x0007)))
+    {
+        pThis->InitializeNetTaskbarNotifications();
+        return 0;
+    }
+    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+}
+
+VOID
+CLanStatus::StartRetry()
+{
+    WNDCLASSW wc;
+
+    if (m_hwndRetry)
+        return;
+    ZeroMemory(&wc, sizeof(wc));
+    wc.lpfnWndProc = RetryWndProc;
+    wc.hInstance = netshell_hInstance;
+    wc.lpszClassName = L"NetshellLanStatusRetry";
+    RegisterClassW(&wc);
+    m_hwndRetry = CreateWindowExW(0, wc.lpszClassName, NULL, WS_OVERLAPPED, 0, 0, 0, 0,
+                                  NULL, NULL, netshell_hInstance, this);
+    if (m_hwndRetry)
+        SetTimer(m_hwndRetry, 1, 5000, NULL);
+}
+
+VOID
+CLanStatus::StopRetry()
+{
+    if (!m_hwndRetry)
+        return;
+    KillTimer(m_hwndRetry, 1);
+    DestroyWindow(m_hwndRetry);
+    m_hwndRetry = NULL;
+}
+
+HRESULT
+CLanStatus::InitializeNetTaskbarNotifications()
+{
+    HRESULT hr = S_OK;
+
+    if (!m_pHead)
+        hr = EnumerateTrayConnections();
+    if (!m_pHead)
+    {
+        TRACE("LanStatus: no network connections enumerated (hr %08x), retrying later\n", hr);
+        StartRetry();
+        return S_OK;
+    }
+    StopRetry();
+    return S_OK;
 }
 
 VOID
@@ -144,26 +273,72 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
     }
 
     hIcon = NULL;
-    if (IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_CONNECTED || IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_OPERATIONAL)
+    if (IfEntry.dwType == IF_TYPE_IEEE80211)
+    {
+        BOOL bUp = (IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_CONNECTED ||
+                    IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_OPERATIONAL);
+        UINT nWanted = 10;
+        UINT nIcon = IDI_NET_TRAY_WIFIOFF;
+        if (bUp)
+        {
+            NETCON_PROPERTIES *pProps = NULL;
+            GUID guid;
+            const GUID *pGuid = NULL;
+            int nQuality;
+            if (pContext->pNet->GetProperties(&pProps) == S_OK && pProps)
+            {
+                guid = pProps->guidId;
+                pGuid = &guid;
+                NcFreeNetconProperties(pProps);
+            }
+            nQuality = NetShellWifiQuality(pGuid);
+            if (nQuality < 0 || nQuality >= 75)
+            {
+                nWanted = 6;
+                nIcon = IDI_NET_TRAY_WIFI1;
+            }
+            else if (nQuality >= 50)
+            {
+                nWanted = 7;
+                nIcon = IDI_NET_TRAY_WIFI2;
+            }
+            else if (nQuality >= 25)
+            {
+                nWanted = 8;
+                nIcon = IDI_NET_TRAY_WIFI3;
+            }
+            else
+            {
+                nWanted = 9;
+                nIcon = IDI_NET_TRAY_WIFI4;
+            }
+        }
+        if (pContext->Status != nWanted)
+        {
+            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(nIcon), IMAGE_ICON, 32, 32, LR_SHARED);
+            pContext->Status = nWanted;
+        }
+    }
+    else if (IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_CONNECTED || IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_OPERATIONAL)
     {
         if (pContext->dwInOctets == IfEntry.dwInOctets && pContext->dwOutOctets == IfEntry.dwOutOctets && pContext->Status  != 0)
         {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_IDLE), IMAGE_ICON, 32, 32, LR_SHARED);
+            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED), IMAGE_ICON, 32, 32, LR_SHARED);
             pContext->Status = 0;
         }
         else if (pContext->dwInOctets != IfEntry.dwInOctets && pContext->dwOutOctets != IfEntry.dwOutOctets && pContext->Status  != 1)
         {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRANSREC), IMAGE_ICON, 32, 32, LR_SHARED);
+            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED), IMAGE_ICON, 32, 32, LR_SHARED);
             pContext->Status = 1;
         }
         else if (pContext->dwInOctets != IfEntry.dwInOctets && pContext->Status  != 2)
         {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_REC), IMAGE_ICON, 32, 32, LR_SHARED);
+            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED), IMAGE_ICON, 32, 32, LR_SHARED);
             pContext->Status = 2;
         }
         else if (pContext->dwOutOctets != IfEntry.dwOutOctets && pContext->Status  != 3)
         {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRANS), IMAGE_ICON, 32, 32, LR_SHARED);
+            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED), IMAGE_ICON, 32, 32, LR_SHARED);
             pContext->Status = 3;
         }
     }
@@ -171,7 +346,7 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
     {
         if (pContext->Status != 4)
         {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_OFF), IMAGE_ICON, 32, 32, LR_SHARED);
+            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_OFF), IMAGE_ICON, 32, 32, LR_SHARED);
             pContext->Status = 4;
         }
     }
@@ -179,7 +354,7 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
     {
         if (pContext->Status != 5)
         {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_OFF), IMAGE_ICON, 32, 32, LR_SHARED);
+            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_OFF), IMAGE_ICON, 32, 32, LR_SHARED);
             pContext->Status = 5;
         }
     }
@@ -736,15 +911,17 @@ InitializePropertyDialog(
     }
 
     if (!GetAdapterIndexFromNetCfgInstanceId(pAdapterInfo, pStr, &dwAdapterIndex))
+        dwAdapterIndex = pContext->dwAdapterIndex;
+
+    pCurAdapter = pAdapterInfo;
+    while (pCurAdapter && pCurAdapter->Index != dwAdapterIndex)
+        pCurAdapter = pCurAdapter->Next;
+    if (!pCurAdapter)
     {
         CoTaskMemFree(pAdapterInfo);
         CoTaskMemFree(pStr);
         return;
     }
-
-    pCurAdapter = pAdapterInfo;
-    while (pCurAdapter->Index != dwAdapterIndex)
-        pCurAdapter = pCurAdapter->Next;
 
 
     pContext->IpAddress = inet_addr(pCurAdapter->IpAddressList.IpAddress.String);
@@ -990,7 +1167,8 @@ LANStatusDlg(
                     {
                         break;
                     }
-
+                }
+                case WM_LBUTTONDBLCLK:
                     if (pContext->hwndDlg)
                     {
                         HWND hwndSheet = GetParent(pContext->hwndDlg);
@@ -1006,18 +1184,6 @@ LANStatusDlg(
                         ShowStatusPropertyDialog(pContext, hwndDlg);
                     }
                     break;
-                }
-
-                if (pContext->hwndDlg)
-                {
-                    ShowWindow(GetParent(pContext->hwndDlg), SW_SHOW);
-                    BringWindowToTop(GetParent(pContext->hwndDlg));
-                }
-                else
-                {
-                    ShowStatusPropertyDialog(pContext, hwndDlg);
-                }
-                break;
 
                 case WM_RBUTTONUP:
                 case WM_CONTEXTMENU:
@@ -1080,7 +1246,7 @@ LANStatusDlg(
 }
 
 HRESULT
-CLanStatus::InitializeNetTaskbarNotifications()
+CLanStatus::EnumerateTrayConnections()
 {
     NOTIFYICONDATAW nid;
     HWND hwndDlg;
@@ -1186,9 +1352,9 @@ CLanStatus::InitializeNetTaskbarNotifications()
                 nid.uFlags |= NIF_STATE;
             }
             if (pProps->Status == NCS_MEDIA_DISCONNECTED || pProps->Status == NCS_DISCONNECTED || pProps->Status == NCS_HARDWARE_DISABLED)
-                nid.hIcon = LoadIcon(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_OFF));
+                nid.hIcon = LoadIcon(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_OFF));
             else if (pProps->Status == NCS_CONNECTED)
-                nid.hIcon = LoadIcon(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_IDLE));
+                nid.hIcon = LoadIcon(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED));
 
             if (nid.hIcon)
                 nid.uFlags |= NIF_ICON;
@@ -1199,6 +1365,7 @@ CLanStatus::InitializeNetTaskbarNotifications()
         pContext->hwndStatusDlg = hwndDlg;
         pItem->hwndDlg = hwndDlg;
 
+        TRACE("LanStatus tray icon %u state %lu flags %lx icon %p\n", nid.uID, nid.dwState, nid.uFlags, nid.hIcon);
         if (Shell_NotifyIconW(NIM_ADD, &nid))
         {
             if (pLast)
@@ -1233,7 +1400,7 @@ CLanStatus::ShowStatusDialogByCLSID(const GUID *pguidCmdGroup)
     {
         if (IsEqualGUID(pItem->guidItem, *pguidCmdGroup))
         {
-            SendMessageW(pItem->hwndDlg, WM_SHOWSTATUSDLG, 0, WM_LBUTTONUP);
+            SendMessageW(pItem->hwndDlg, WM_SHOWSTATUSDLG, 0, WM_LBUTTONDBLCLK);
             return S_OK;
         }
         pItem = pItem->pNext;
