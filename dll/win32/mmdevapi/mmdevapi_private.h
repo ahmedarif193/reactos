@@ -196,6 +196,9 @@ extern HRESULT reactos_audio_session_enumerate(IMMDevice *device,
 extern HRESULT reactos_audio_session_read(const struct reactos_audio_session_id *id,
                                           LONG known_generation,
                                           struct reactos_audio_session_snapshot *snapshot);
+extern HRESULT reactos_audio_session_set_strings(const struct reactos_audio_session_id *id,
+                                                 const WCHAR *display_name,
+                                                 const WCHAR *icon_path);
 extern HRESULT reactos_audio_session_set_master(const struct reactos_audio_session_id *id,
                                                 float level);
 extern HRESULT reactos_audio_session_set_mute(const struct reactos_audio_session_id *id,
