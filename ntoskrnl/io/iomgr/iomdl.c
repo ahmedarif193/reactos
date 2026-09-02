@@ -27,22 +27,21 @@ IoAllocateMdl(IN PVOID VirtualAddress,
 {
     PMDL Mdl = NULL, p;
     ULONG Flags = 0;
-    ULONG Size;
+    ULONG PageCount;
+    SIZE_T Size;
 
     /* Make sure we got a valid length */
     ASSERT(Length != 0);
 
-    /* Fail if allocation is over 2GB */
-    if (Length & 0x80000000) return NULL;
+    /* Windows 7 and later support MDLs up to 4 GB minus one page. */
+    if (Length > MAXULONG - PAGE_SIZE + 1) return NULL;
 
     /* Calculate the number of pages for the allocation */
-    Size = ADDRESS_AND_SIZE_TO_SPAN_PAGES(VirtualAddress, Length);
-    if (Size > 23)
+    PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(VirtualAddress, Length);
+    if (PageCount > 23)
     {
         /* This is bigger then our fixed-size MDLs. Calculate real size */
-        Size *= sizeof(PFN_NUMBER);
-        Size += sizeof(MDL);
-        if (Size > MAXUSHORT) return NULL;
+        Size = sizeof(MDL) + (SIZE_T)PageCount * sizeof(PFN_NUMBER);
     }
     else
     {
