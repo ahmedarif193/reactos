@@ -187,22 +187,11 @@ Status WriteTemporaryBytes(std::wstring_view destination, const std::vector<std:
     return Status::Ok();
 }
 
-Status FinalizeTemporaryFile(std::wstring_view temporary, std::wstring_view destination)
-{
-    if (!MoveFileExW(std::wstring(temporary).c_str(), std::wstring(destination).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-    {
-        const DWORD error = GetLastError();
-        DeleteFileW(std::wstring(temporary).c_str());
-        return Status::Fail(error, "cannot finalize source cache file: " + WindowsErrorMessage(error));
-    }
-    return Status::Ok();
-}
-
 Status AtomicWriteBytes(std::wstring_view destination, const std::vector<std::uint8_t> &bytes)
 {
     std::wstring temporary;
     Status status = WriteTemporaryBytes(destination, bytes, temporary);
-    return status ? FinalizeTemporaryFile(temporary, destination) : status;
+    return status ? AtomicReplaceFile(temporary, destination, "source cache file") : status;
 }
 
 std::uint32_t ReadLe32(const std::uint8_t *value)
@@ -383,7 +372,7 @@ Status SourceManager::ActivateSource(std::wstring_view sourcePackage, bool copyP
             return status;
         }
     }
-    status = FinalizeTemporaryFile(indexTemporary, indexPath_);
+    status = AtomicReplaceFile(indexTemporary, indexPath_, "source index");
     if (!status) return status;
     index_ = std::move(validatedIndex);
     ready_ = true;

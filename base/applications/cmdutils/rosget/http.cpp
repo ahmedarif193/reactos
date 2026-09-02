@@ -26,6 +26,33 @@ namespace
 constexpr unsigned MaximumAttempts = 4;
 constexpr std::size_t MaximumMemoryResponse = 4 * 1024 * 1024;
 
+void TraceHttp(const std::string &message)
+{
+    const std::string line = "[ROSGET:HTTP] " + message + "\n";
+    OutputDebugStringA(line.c_str());
+}
+
+void TraceInternetFailure(std::string_view stage, DWORD error)
+{
+    DWORD responseError = 0;
+    DWORD size = 0;
+    std::string message(stage);
+    message += " failed error=" + std::to_string(error) + " (0x";
+    char errorHex[9]{};
+    std::snprintf(errorHex, sizeof(errorHex), "%08lx", error);
+    message += errorHex;
+    message += ") " + WindowsErrorMessage(error);
+
+    InternetGetLastResponseInfoW(&responseError, nullptr, &size);
+    if (size)
+    {
+        std::vector<wchar_t> text(size + 1);
+        if (InternetGetLastResponseInfoW(&responseError, text.data(), &size))
+            message += " extended=" + std::to_string(responseError) + " " + Utf8FromWide(text.data());
+    }
+    TraceHttp(message);
+}
+
 class InternetRequest
 {
 public:
@@ -50,6 +77,7 @@ Status OpenRequest(HINTERNET session, std::wstring_view url, std::wstring_view h
 {
     Status status = ValidateHttpsUrl(url);
     if (!status) return status;
+    TraceHttp("opening " + Utf8FromWide(url));
     const DWORD flags = INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_COOKIES |
                         INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_UI;
     HINTERNET handle = InternetOpenUrlW(session, std::wstring(url).c_str(), headers.empty() ? nullptr : std::wstring(headers).c_str(),
@@ -57,8 +85,10 @@ Status OpenRequest(HINTERNET session, std::wstring_view url, std::wstring_view h
     if (!handle)
     {
         const DWORD error = GetLastError();
+        TraceInternetFailure("InternetOpenUrlW", error);
         return Status::Fail(error, "HTTPS request failed: " + WindowsErrorMessage(error));
     }
+    TraceHttp("request handle opened");
     request = std::make_unique<InternetRequest>(handle);
     return Status::Ok();
 }
@@ -126,21 +156,11 @@ std::wstring UniquePartialPath(std::wstring_view destination)
     return path;
 }
 
-Status AtomicReplace(std::wstring_view source, std::wstring_view destination, std::string_view description)
-{
-    if (!MoveFileExW(std::wstring(source).c_str(), std::wstring(destination).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-    {
-        const DWORD error = GetLastError();
-        DeleteFileW(std::wstring(source).c_str());
-        return Status::Fail(error, "cannot finalize " + std::string(description) + ": " + WindowsErrorMessage(error));
-    }
-    return Status::Ok();
-}
-
 } // namespace
 
 HttpClient::HttpClient()
 {
+    TraceHttp("initializing WinINet session");
     session_ = InternetOpenW(L"rosget/0.1", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
     if (session_)
     {
@@ -148,12 +168,46 @@ HttpClient::HttpClient()
         InternetSetOptionW(static_cast<HINTERNET>(session_), INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
         InternetSetOptionW(static_cast<HINTERNET>(session_), INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
         InternetSetOptionW(static_cast<HINTERNET>(session_), INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
+        TraceHttp("WinINet session ready with 30000 ms timeouts");
     }
+    else
+        TraceInternetFailure("InternetOpenW", GetLastError());
 }
 
 HttpClient::~HttpClient()
 {
     if (session_) InternetCloseHandle(static_cast<HINTERNET>(session_));
+}
+
+Status HttpClient::ProbeContentLength(std::wstring_view url, unsigned long long &length,
+                                      std::wstring_view headers) const
+{
+    length = 0;
+    if (!session_)
+    {
+        const DWORD error = GetLastError();
+        return Status::Fail(error, "cannot initialize WinINet: " + WindowsErrorMessage(error));
+    }
+
+    std::unique_ptr<InternetRequest> request;
+    Status status = OpenRequest(static_cast<HINTERNET>(session_), url, headers, request);
+    if (!status)
+        return status;
+
+    DWORD statusCode = 0;
+    status = QueryStatusCode(request->Get(), statusCode);
+    if (!status)
+        return status;
+    TraceHttp("size probe HTTP status=" + std::to_string(statusCode));
+    if (statusCode < 200 || statusCode >= 300)
+        return Status::Fail(ERROR_HTTP_INVALID_SERVER_RESPONSE,
+                            "installer size request returned HTTP " + std::to_string(statusCode));
+
+    length = QueryContentLength(request->Get());
+    if (!length)
+        return Status::Fail(ERROR_NOT_FOUND, "installer response has no content length");
+    TraceHttp("size probe content-length=" + std::to_string(length));
+    return Status::Ok();
 }
 
 Status HttpClient::Get(std::wstring_view url, std::wstring_view headers, HttpResponse &response) const
@@ -168,6 +222,7 @@ Status HttpClient::Get(std::wstring_view url, std::wstring_view headers, HttpRes
     Status last = Status::Fail(ERROR_RETRY, "HTTPS request retries exhausted");
     for (unsigned attempt = 0; attempt < MaximumAttempts; ++attempt)
     {
+        TraceHttp("GET attempt " + std::to_string(attempt + 1) + "/" + std::to_string(MaximumAttempts));
         response = {};
         std::unique_ptr<InternetRequest> request;
         last = OpenRequest(static_cast<HINTERNET>(session_), url, headers, request);
@@ -182,6 +237,7 @@ Status HttpClient::Get(std::wstring_view url, std::wstring_view headers, HttpRes
         }
         last = QueryStatusCode(request->Get(), response.statusCode);
         if (!last) return last;
+        TraceHttp("GET HTTP status=" + std::to_string(response.statusCode));
         if (IsTransientHttpStatus(response.statusCode) && attempt + 1 < MaximumAttempts)
         {
             WaitBeforeRetry(attempt, request->Get());
@@ -195,10 +251,16 @@ Status HttpClient::Get(std::wstring_view url, std::wstring_view headers, HttpRes
             if (!InternetReadFile(request->Get(), buffer.data(), static_cast<DWORD>(buffer.size()), &read))
             {
                 const DWORD error = GetLastError();
+                TraceInternetFailure("InternetReadFile(GET)", error);
                 last = Status::Fail(error, "HTTPS response read failed: " + WindowsErrorMessage(error));
                 break;
             }
-            if (!read) return Status::Ok();
+            if (!read)
+            {
+                TraceHttp("GET complete bytes=" + std::to_string(response.body.size()));
+                return Status::Ok();
+            }
+            TraceHttp("GET read bytes=" + std::to_string(read));
             if (response.body.size() > MaximumMemoryResponse - std::min<std::size_t>(read, MaximumMemoryResponse))
                 return Status::Fail(ERROR_INSUFFICIENT_BUFFER, "HTTPS response exceeds the 4 MiB manifest limit");
             response.body.insert(response.body.end(), buffer.begin(), buffer.begin() + read);
@@ -227,6 +289,7 @@ Status HttpClient::Download(std::wstring_view url, std::wstring_view destination
     Status last = Status::Fail(ERROR_RETRY, "download retries exhausted");
     for (unsigned attempt = 0; attempt < MaximumAttempts; ++attempt)
     {
+        TraceHttp("download attempt " + std::to_string(attempt + 1) + "/" + std::to_string(MaximumAttempts) + " destination=" + Utf8FromWide(destination));
         std::unique_ptr<InternetRequest> request;
         last = OpenRequest(static_cast<HINTERNET>(session_), url, headers, request);
         if (!last)
@@ -241,6 +304,7 @@ Status HttpClient::Download(std::wstring_view url, std::wstring_view destination
         DWORD statusCode = 0;
         last = QueryStatusCode(request->Get(), statusCode);
         if (!last) return last;
+        TraceHttp("download HTTP status=" + std::to_string(statusCode));
         if (IsTransientHttpStatus(statusCode) && attempt + 1 < MaximumAttempts)
         {
             WaitBeforeRetry(attempt, request->Get());
@@ -250,6 +314,7 @@ Status HttpClient::Download(std::wstring_view url, std::wstring_view destination
             return Status::Fail(ERROR_INVALID_DATA, "HTTP server returned status " + std::to_string(statusCode));
 
         const unsigned long long expected = QueryContentLength(request->Get());
+        TraceHttp("download content-length=" + std::to_string(expected));
         if (expected && expected > maximumBytes)
             return Status::Fail(ERROR_FILE_TOO_LARGE, "download exceeds its permitted size");
         if (progress) progress(0, expected);
@@ -271,6 +336,7 @@ Status HttpClient::Download(std::wstring_view url, std::wstring_view destination
             if (!InternetReadFile(request->Get(), buffer.data(), static_cast<DWORD>(buffer.size()), &read))
             {
                 const DWORD error = GetLastError();
+                TraceInternetFailure("InternetReadFile(download)", error);
                 last = Status::Fail(error, "download read failed: " + WindowsErrorMessage(error));
                 break;
             }
@@ -292,6 +358,7 @@ Status HttpClient::Download(std::wstring_view url, std::wstring_view destination
                 break;
             }
             total += read;
+            TraceHttp("download received=" + std::to_string(total) + " chunk=" + std::to_string(read));
             if (progress) progress(total, expected);
         }
         if (complete && !FlushFileBuffers(file))
@@ -311,10 +378,11 @@ Status HttpClient::Download(std::wstring_view url, std::wstring_view destination
             }
             return last;
         }
-        status = AtomicReplace(partial, destination, "download");
+        status = AtomicReplaceFile(partial, destination, "download");
         if (!status) return status;
         if (progress) progress(total, expected ? expected : total);
         std::printf("Downloaded %llu bytes.\n", total);
+        TraceHttp("download complete bytes=" + std::to_string(total));
         return Status::Ok();
     }
     return last;
