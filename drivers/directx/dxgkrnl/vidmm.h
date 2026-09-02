@@ -186,6 +186,19 @@ typedef struct _DXGKVMM_USER_MAPPING
     PMDL                Mdl;
     PEPROCESS           Process;
     ULONG               LockCount;
+
+    /*
+     * Placement identity captured when MapBase was established.  A balanced
+     * D3DKMTUnlock releases the residency pin and makes Address unusable by
+     * the caller, but VidMm may retain the process mapping for a later lock.
+     * A changed identity makes that dormant mapping stale and forces a
+     * rebuild before it is returned again.
+     */
+    BOOLEAN             Resident;
+    ULONG               SegmentId;
+    ULONGLONG           SegmentOffset;
+    PHYSICAL_ADDRESS    PhysicalAddress;
+    PVOID               SystemMemory;
 } DXGKVMM_USER_MAPPING, *PDXGKVMM_USER_MAPPING;
 
 typedef struct _DXGKVMM_ALLOCATION
@@ -364,7 +377,7 @@ typedef struct _DXGKVMM_ALLOCATION
      */
     PVOID               CpuAddress;
 
-    /* One D3DKMTLock mapping per process, shared by nested locks there. */
+    /* One cached D3DKMTLock mapping per process, shared by nested locks. */
     LIST_ENTRY          UserModeMappingList;
     volatile LONG       UserModeMappingCount;
     KMUTEX              UserModeLock;

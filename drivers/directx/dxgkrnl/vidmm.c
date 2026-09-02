@@ -75,8 +75,10 @@
 static NTSTATUS DxgkpVidMmReleaseApertureMapping(_In_ PDXGKVMM_ALLOCATION Allocation, _In_ BOOLEAN ForceInvalidate);
 static NTSTATUS DxgkpVidMmPrepareAllocationApertureMappingOwned(_In_ PDXGKVMM_ALLOCATION Allocation);
 static NTSTATUS DxgkpVidMmFillAperturePagingOperation(_In_ PDXGKVMM_ALLOCATION Allocation, _In_ BOOLEAN Map, _Out_ PDXGKRNL_PAGING_OP Op);
-static NTSTATUS DxgkpVidMmForceUnmapUserMapping(_In_ PDXGKVMM_ALLOCATION Allocation);
-static NTSTATUS DxgkpVidMmUnmapAllocationUserProcess(_In_ PDXGKVMM_ALLOCATION Allocation, _In_ PEPROCESS Process, _In_ BOOLEAN Force);
+static NTSTATUS DxgkpVidMmUnmapUserMappings(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN IncludeActive);
+static NTSTATUS DxgkpVidMmUnmapAllocationUserProcess(_In_ PDXGKVMM_ALLOCATION Allocation, _In_ PEPROCESS Process, _In_ BOOLEAN Force, _In_ BOOLEAN IncludeActive);
 static NTSTATUS DxgkpVidMmLockResidencyForExternalOperation(_In_ PDXGKVMM_ALLOCATION Allocation);
 static VOID DxgkpVidMmReleaseSegmentPlacement(_In_ PDXGKVMM_ALLOCATION Allocation);
 static VOID DxgkpVidMmFinalizeAllocation(_In_ PDXGKVMM_ALLOCATION Allocation);
@@ -2787,6 +2789,9 @@ static VOID
 DxgkpVidMmReleaseSystemBacking(
     _In_ PDXGKVMM_ALLOCATION Allocation)
 {
+    /* A dormant D3DKMTLock mapping must not outlive its backing pages. */
+    (VOID)DxgkpVidMmUnmapUserMappings(Allocation, TRUE);
+
     if (Allocation->SysMemMdl != NULL)
     {
         MmUnlockPages(Allocation->SysMemMdl);
@@ -2873,7 +2878,7 @@ DxgkpVidMmFinalizeAllocation(
             Allocation->ApertureMdl = NULL;
         }
         Allocation->ApertureMapped = FALSE;
-        (VOID)DxgkpVidMmForceUnmapUserMapping(Allocation);
+        (VOID)DxgkpVidMmUnmapUserMappings(Allocation, TRUE);
         if (Allocation->CpuAddress != NULL)
             DxgkVidMmUnmapAllocationCpu(Allocation);
         if (Allocation->Resident)
@@ -7090,6 +7095,12 @@ DxgkpVidMmReleaseSegmentPlacement(
     if (Allocation == NULL || !Allocation->Resident)
         return;
 
+    /*
+     * Cached, unlocked process mappings do not pin a placement.  Remove them
+     * before dxgmms2 makes the range available to another allocation.
+     */
+    (VOID)DxgkpVidMmUnmapUserMappings(Allocation, FALSE);
+
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     DxgkpVidMmReleaseAllAllocationBudgetCharges(Allocation);
 #endif
@@ -10428,11 +10439,13 @@ DxgkpVidMmNotifyLostMemoryPlacement(
 }
 
 static NTSTATUS
-DxgkpVidMmForceUnmapUserMapping(
-    _In_ PDXGKVMM_ALLOCATION Allocation)
+DxgkpVidMmUnmapUserMappings(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN IncludeActive)
 {
     for (;;)
     {
+        PLIST_ENTRY Entry;
         PDXGKVMM_USER_MAPPING Mapping;
         PEPROCESS Process;
         NTSTATUS Status;
@@ -10442,18 +10455,30 @@ DxgkpVidMmForceUnmapUserMapping(
                                     KernelMode,
                                     FALSE,
                                     NULL);
-        if (IsListEmpty(&Allocation->UserModeMappingList))
+        Mapping = NULL;
+        for (Entry = Allocation->UserModeMappingList.Flink;
+             Entry != &Allocation->UserModeMappingList;
+             Entry = Entry->Flink)
+        {
+            PDXGKVMM_USER_MAPPING Candidate;
+
+            Candidate = CONTAINING_RECORD(Entry,
+                                          DXGKVMM_USER_MAPPING,
+                                          Entry);
+            if (IncludeActive || Candidate->LockCount == 0)
+            {
+                Mapping = Candidate;
+                break;
+            }
+        }
+        if (Mapping == NULL)
         {
             KeReleaseMutex(&Allocation->UserModeLock, FALSE);
             return STATUS_SUCCESS;
         }
 
-        Mapping = CONTAINING_RECORD(Allocation->UserModeMappingList.Flink,
-                                    DXGKVMM_USER_MAPPING,
-                                    Entry);
         if (Mapping->MapBase == NULL || Mapping->Address == NULL ||
-            Mapping->Mdl == NULL || Mapping->Process == NULL ||
-            Mapping->LockCount == 0)
+            Mapping->Mdl == NULL || Mapping->Process == NULL)
         {
             KeReleaseMutex(&Allocation->UserModeLock, FALSE);
             return STATUS_INVALID_DEVICE_STATE;
@@ -10464,9 +10489,11 @@ DxgkpVidMmForceUnmapUserMapping(
 
         Status = DxgkpVidMmUnmapAllocationUserProcess(Allocation,
                                                        Process,
-                                                       TRUE);
+                                                       TRUE,
+                                                       IncludeActive);
         ObDereferenceObject(Process);
-        if (!NT_SUCCESS(Status) && Status != STATUS_NOT_FOUND)
+        if (!NT_SUCCESS(Status) && Status != STATUS_NOT_FOUND &&
+            Status != STATUS_DEVICE_BUSY)
             return Status;
     }
 }
@@ -10510,7 +10537,7 @@ DxgkpVidMmRecoverAllocationOwned(
     CleanupStatus = DxgkpVidMmNotifyLostMemoryPlacement(Allocation);
     if (NT_SUCCESS(Status) && !NT_SUCCESS(CleanupStatus))
         Status = CleanupStatus;
-    CleanupStatus = DxgkpVidMmForceUnmapUserMapping(Allocation);
+    CleanupStatus = DxgkpVidMmUnmapUserMappings(Allocation, TRUE);
     if (NT_SUCCESS(Status) && !NT_SUCCESS(CleanupStatus))
         Status = CleanupStatus;
     if (Allocation->CpuAddress != NULL && Allocation->CpuAddress != Allocation->SystemMemory)
@@ -10969,12 +10996,55 @@ DxgkpVidMmFindUserMappingLocked(
     return NULL;
 }
 
+static BOOLEAN
+DxgkpVidMmUserMappingMatchesPlacement(
+    _In_ CONST DXGKVMM_USER_MAPPING *Mapping,
+    _In_ CONST DXGKVMM_ALLOCATION *Allocation)
+{
+    return !Allocation->ContentLost &&
+           Mapping->Resident == Allocation->Resident &&
+           Mapping->SegmentId == Allocation->SegmentId &&
+           Mapping->SegmentOffset == Allocation->SegmentOffset &&
+           Mapping->PhysicalAddress.QuadPart ==
+               Allocation->PhysicalAddress.QuadPart &&
+           Mapping->SystemMemory == Allocation->SystemMemory;
+}
+
+static VOID
+DxgkpVidMmDestroyUserMappingStorage(
+    _In_ PDXGKVMM_USER_MAPPING Mapping)
+{
+    KAPC_STATE ApcState;
+    BOOLEAN Attached = FALSE;
+
+    ASSERT(Mapping != NULL);
+    ASSERT(Mapping->MapBase != NULL);
+    ASSERT(Mapping->Mdl != NULL);
+    ASSERT(Mapping->Process != NULL);
+
+    if (Mapping->Process != PsGetCurrentProcess())
+    {
+        KeStackAttachProcess((PKPROCESS)Mapping->Process, &ApcState);
+        Attached = TRUE;
+    }
+
+    MmUnmapLockedPages(Mapping->MapBase, Mapping->Mdl);
+
+    if (Attached)
+        KeUnstackDetachProcess(&ApcState);
+
+    IoFreeMdl(Mapping->Mdl);
+    ObDereferenceObject(Mapping->Process);
+    ExFreePoolWithTag(Mapping, TAG_VIDMM_ALLOC);
+}
+
 NTSTATUS
 DxgkVidMmMapAllocationUser(
     _In_  PDXGKVMM_ALLOCATION   Allocation,
     _Out_ PVOID                *OutVa)
 {
     PDXGKVMM_USER_MAPPING Mapping;
+    PDXGKVMM_USER_MAPPING StaleMapping = NULL;
     PMDL Mdl = NULL;
     MEMORY_CACHING_TYPE CacheType;
     ULONG_PTR UserOffset;
@@ -10993,31 +11063,48 @@ DxgkVidMmMapAllocationUser(
     (VOID)KeWaitForSingleObject(&Allocation->UserModeLock, Executive, KernelMode, FALSE, NULL);
 
     Mapping = DxgkpVidMmFindUserMappingLocked(Allocation, Process);
-    if (Mapping != NULL)
+    if (Mapping != NULL && Mapping->LockCount != 0)
     {
+        if (Mapping->LockCount == MAXULONG)
+        {
+            KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+            return STATUS_INTEGER_OVERFLOW;
+        }
         Mapping->LockCount++;
         *OutVa = Mapping->Address;
         KeReleaseMutex(&Allocation->UserModeLock, FALSE);
         return STATUS_SUCCESS;
     }
 
-    Mapping = ExAllocatePoolWithTag(NonPagedPool,
-                                    sizeof(*Mapping),
-                                    TAG_VIDMM_ALLOC);
-    if (Mapping == NULL)
-    {
-        KeReleaseMutex(&Allocation->UserModeLock, FALSE);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    RtlZeroMemory(Mapping, sizeof(*Mapping));
+    KeReleaseMutex(&Allocation->UserModeLock, FALSE);
 
     Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
     if (!NT_SUCCESS(Status))
+        return Status;
+
+    (VOID)KeWaitForSingleObject(&Allocation->UserModeLock,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+    Mapping = DxgkpVidMmFindUserMappingLocked(Allocation, Process);
+    if (Mapping != NULL && Mapping->LockCount != 0)
     {
-        ExFreePoolWithTag(Mapping, TAG_VIDMM_ALLOC);
+        if (Mapping->LockCount == MAXULONG)
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+        }
+        else
+        {
+            Mapping->LockCount++;
+            *OutVa = Mapping->Address;
+            Status = STATUS_SUCCESS;
+        }
         KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+        KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
         return Status;
     }
+
     if (InterlockedCompareExchange(&Allocation->UserModeMappingCount, 0, 0) == MAXLONG)
     {
         Status = STATUS_INTEGER_OVERFLOW;
@@ -11031,10 +11118,41 @@ DxgkVidMmMapAllocationUser(
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
     if (!NT_SUCCESS(Status))
     {
-        ExFreePoolWithTag(Mapping, TAG_VIDMM_ALLOC);
         KeReleaseMutex(&Allocation->UserModeLock, FALSE);
         return Status;
     }
+
+    if (Mapping != NULL &&
+        DxgkpVidMmUserMappingMatchesPlacement(Mapping, Allocation))
+    {
+        Mapping->LockCount = 1;
+        *OutVa = Mapping->Address;
+        KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+        return STATUS_SUCCESS;
+    }
+
+    if (Mapping != NULL)
+    {
+        ASSERT(Mapping->LockCount == 0);
+        RemoveEntryList(&Mapping->Entry);
+        StaleMapping = Mapping;
+        Mapping = NULL;
+    }
+
+    if (StaleMapping != NULL)
+        DxgkpVidMmDestroyUserMappingStorage(StaleMapping);
+
+    Mapping = ExAllocatePoolWithTag(NonPagedPool,
+                                    sizeof(*Mapping),
+                                    TAG_VIDMM_ALLOC);
+    if (Mapping == NULL)
+    {
+        ASSERT(MappingPinHeld);
+        InterlockedDecrement(&Allocation->UserModeMappingCount);
+        KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlZeroMemory(Mapping, sizeof(*Mapping));
 
     Status = DxgkpVidMmBuildAllocationUserMdl(Allocation,
                                               &Mdl,
@@ -11087,6 +11205,11 @@ DxgkVidMmMapAllocationUser(
     Mapping->Mdl = Mdl;
     Mapping->Process = Process;
     Mapping->LockCount = 1;
+    Mapping->Resident = Allocation->Resident;
+    Mapping->SegmentId = Allocation->SegmentId;
+    Mapping->SegmentOffset = Allocation->SegmentOffset;
+    Mapping->PhysicalAddress = Allocation->PhysicalAddress;
+    Mapping->SystemMemory = Allocation->SystemMemory;
     InsertTailList(&Allocation->UserModeMappingList, &Mapping->Entry);
     ASSERT(MappingPinHeld);
 
@@ -11276,7 +11399,8 @@ static NTSTATUS
 DxgkpVidMmUnmapAllocationUserProcess(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ PEPROCESS Process,
-    _In_ BOOLEAN Force)
+    _In_ BOOLEAN Force,
+    _In_ BOOLEAN IncludeActive)
 {
     PDXGKVMM_USER_MAPPING Mapping = NULL;
     PMDL Mdl;
@@ -11284,6 +11408,7 @@ DxgkpVidMmUnmapAllocationUserProcess(
     PVOID UserVa;
     KAPC_STATE ApcState;
     BOOLEAN Attached = FALSE;
+    BOOLEAN MappingPinHeld;
     LONG MappingCount;
 
     ASSERT(Allocation != NULL);
@@ -11296,13 +11421,31 @@ DxgkpVidMmUnmapAllocationUserProcess(
         KeReleaseMutex(&Allocation->UserModeLock, FALSE);
         return STATUS_NOT_FOUND;
     }
-    if (!Force && Mapping->LockCount > 1)
+    if (!Force)
     {
+        if (Mapping->LockCount == 0)
+        {
+            KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+            return STATUS_NOT_FOUND;
+        }
+
         Mapping->LockCount--;
+        if (Mapping->LockCount == 0)
+        {
+            MappingCount = InterlockedDecrement(
+                               &Allocation->UserModeMappingCount);
+            ASSERT(MappingCount >= 0);
+        }
         KeReleaseMutex(&Allocation->UserModeLock, FALSE);
         return STATUS_SUCCESS;
     }
+    if (!IncludeActive && Mapping->LockCount != 0)
+    {
+        KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+        return STATUS_DEVICE_BUSY;
+    }
 
+    MappingPinHeld = Mapping->LockCount != 0;
     RemoveEntryList(&Mapping->Entry);
     UserMapBase = Mapping->MapBase;
     UserVa = Mapping->Address;
@@ -11318,8 +11461,12 @@ DxgkpVidMmUnmapAllocationUserProcess(
 
     MmUnmapLockedPages(UserMapBase, Mdl);
 
-    MappingCount = InterlockedDecrement(&Allocation->UserModeMappingCount);
-    ASSERT(MappingCount >= 0);
+    if (MappingPinHeld)
+    {
+        MappingCount = InterlockedDecrement(
+                           &Allocation->UserModeMappingCount);
+        ASSERT(MappingCount >= 0);
+    }
 
     if (Attached)
         KeUnstackDetachProcess(&ApcState);
@@ -11349,6 +11496,7 @@ DxgkVidMmUnmapAllocationUser(
     return NT_SUCCESS(DxgkpVidMmUnmapAllocationUserProcess(
                           Allocation,
                           PsGetCurrentProcess(),
+                          FALSE,
                           FALSE));
 }
 
@@ -11422,7 +11570,10 @@ DxgkVidMmProcessCleanup(
     {
         PDXGKVMM_ALLOCATION Alloc = Allocations[--Index];
 
-        (VOID)DxgkpVidMmUnmapAllocationUserProcess(Alloc, Process, TRUE);
+        (VOID)DxgkpVidMmUnmapAllocationUserProcess(Alloc,
+                                                    Process,
+                                                    TRUE,
+                                                    TRUE);
         DxgkVidMmDereferenceAllocation(Alloc);
     }
 
