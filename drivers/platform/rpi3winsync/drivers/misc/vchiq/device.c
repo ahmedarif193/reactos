@@ -121,6 +121,10 @@ NTSTATUS VchiqCreateDevice (
         deviceContextPtr->Device = device;
         deviceContextPtr->VersionMajor = VCHIQ_VERSION_MAJOR;
         deviceContextPtr->VersionMinor = VCHIQ_VERSION_MINOR;
+        KeInitializeEvent(
+            &deviceContextPtr->VchiqThreadEventStop,
+            NotificationEvent,
+            FALSE);
 
         deviceContextPtr->PhyDeviceObjectPtr =
             WdfDeviceWdmGetPhysicalDevice(device);
@@ -325,17 +329,6 @@ NTSTATUS VchiqReleaseHardware (
     deviceContextPtr = VchiqGetDeviceContext(Device);
 
 
-    if (deviceContextPtr->VchiqRegisterPtr != NULL) {
-        MmUnmapIoSpace(deviceContextPtr->VchiqRegisterPtr,
-            deviceContextPtr->VchiqRegisterLength);
-        deviceContextPtr->VchiqRegisterPtr = NULL;
-    }
-
-    status = VchiqRelease(deviceContextPtr);
-    if (!NT_SUCCESS(status)) {
-        VCHIQ_LOG_ERROR("Fail to release VCHIQ resource %!STATUS!", status);
-    }
-
     if (deviceContextPtr->RpiqNotificationHandle != NULL) {
 
         status = IoUnregisterPlugPlayNotification(
@@ -347,6 +340,17 @@ NTSTATUS VchiqReleaseHardware (
         }
 
         deviceContextPtr->RpiqNotificationHandle = NULL;
+    }
+
+    status = VchiqRelease(deviceContextPtr);
+    if (!NT_SUCCESS(status)) {
+        VCHIQ_LOG_ERROR("Fail to release VCHIQ resource %!STATUS!", status);
+    }
+
+    if (deviceContextPtr->VchiqRegisterPtr != NULL) {
+        MmUnmapIoSpace(deviceContextPtr->VchiqRegisterPtr,
+            deviceContextPtr->VchiqRegisterLength);
+        deviceContextPtr->VchiqRegisterPtr = NULL;
     }
 
     NT_ASSERT(deviceContextPtr->AllocPhyMemCount == 0);
@@ -401,6 +405,4 @@ VOID VchiqIoStop (
 }
 
 VCHIQ_NONPAGED_SEGMENT_END
-
-
 

@@ -35,9 +35,11 @@ typedef enum _MSG_BULK_TYPE {
 typedef enum _SERVICE_STATE {
     // Service State
     SERVICE_STATE_MIN = 0,
-    SERVICE_STATE_OPEN = 1,
-    SERVICE_STATE_CLOSE = 2,
-}_ERVICE_STATE;
+    SERVICE_STATE_OPENING,
+    SERVICE_STATE_OPEN,
+    SERVICE_STATE_CLOSING,
+    SERVICE_STATE_CLOSE,
+} SERVICE_STATE;
 
 typedef struct _VCHIQ_FILE_CONTEXT {
     ULONG    ArmPortNumber;
@@ -57,6 +59,8 @@ typedef struct _VCHIQ_FILE_CONTEXT {
     WDFQUEUE FileQueue[FILE_QUEUE_MAX];
 
     KEVENT FileEventStop;
+    KEVENT ServiceStateEvent;
+    KEVENT ServiceClosedEvent;
     
     // Pointer to service data in user space. Userland expects the driver 
     // returns this back when completing a transaction
@@ -69,6 +73,8 @@ typedef struct _VCHIQ_FILE_CONTEXT {
     // Minimal state management for now. Consider to expand more service
     // state tracking i current implementation is insufficient.
     volatile LONG State;
+    FAST_MUTEX ServiceMutex;
+    volatile LONG BulksAborted;
 
     // DMA
     DMA_ADAPTER* DmaAdapterPtr;
@@ -85,5 +91,10 @@ NTSTATUS VchiqAllocateFileObjContext (
     );
 
 EVT_WDF_FILE_CLOSE VchiqFileClose;
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID VchiqAbortServiceBulks (
+    _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr
+    );
 
 EXTERN_C_END

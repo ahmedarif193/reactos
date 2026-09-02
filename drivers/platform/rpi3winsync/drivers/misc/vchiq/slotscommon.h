@@ -23,12 +23,16 @@ typedef struct _SLOT_INFO {
 typedef struct _VCHIQ_PENDING_MSG {
     VCHIQ_HEADER* Msg;
     ULONG SlotNumber;
+    VOID* BulkUserData;
+    VCHIQ_BULK_MODE_T BulkMode;
+    BOOLEAN IsBulkCompletion;
     WDFMEMORY WdfMemory;
     LIST_ENTRY ListEntry;
 }VCHIQ_PENDING_MSG, *PVCHIQ_PENDING_MSG;
 
 typedef struct _VCHIQ_PENDING_BULK_MSG {
     VOID* BulkUserData;
+    WDFREQUEST Request;
     WDFMEMORY WdfMemory;
     LIST_ENTRY ListEntry;
     VCHIQ_BULK_MODE_T Mode;

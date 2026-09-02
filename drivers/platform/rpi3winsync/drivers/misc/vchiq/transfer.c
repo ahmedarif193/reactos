@@ -67,10 +67,12 @@ NTSTATUS VchiqAllocateTransferRequestObjContext (
     ULONG PageListSize,
     PHYSICAL_ADDRESS PageListPhyAddr,
     SCATTER_GATHER_LIST* ScatterGatherListPtr,
+    BOOLEAN WriteToDevice,
     VCHIQ_TX_REQUEST_CONTEXT** VchiqTxRequestContextPPtr
     )
 {
     WDF_OBJECT_ATTRIBUTES wdfObjectAttributes;
+    PVOID context;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(
         &wdfObjectAttributes,
         VCHIQ_TX_REQUEST_CONTEXT);
@@ -82,13 +84,15 @@ NTSTATUS VchiqAllocateTransferRequestObjContext (
     NTSTATUS status = WdfObjectAllocateContext(
         WdfRequest,
         &wdfObjectAttributes,
-        VchiqTxRequestContextPPtr);
+        &context);
     if (!NT_SUCCESS(status)) {
         VCHIQ_LOG_WARNING(
             "WdfObjectAllocateContext() failed %!STATUS!)",
             status);
         goto End;
     }
+
+    *VchiqTxRequestContextPPtr = context;
 
     (*VchiqTxRequestContextPPtr)->BufferMdlPtr = BufferMdlPtr;
     (*VchiqTxRequestContextPPtr)->PageListPtr = PageListPtr;
@@ -97,6 +101,11 @@ NTSTATUS VchiqAllocateTransferRequestObjContext (
     (*VchiqTxRequestContextPPtr)->ScatterGatherListPtr = ScatterGatherListPtr;
     (*VchiqTxRequestContextPPtr)->DeviceContextPtr = DeviceContextPtr;
     (*VchiqTxRequestContextPPtr)->VchiqFileContextPtr = VchiqFileContextPtr;
+    (*VchiqTxRequestContextPPtr)->FragmentPtr = NULL;
+    (*VchiqTxRequestContextPPtr)->WriteToDevice = WriteToDevice;
+    (*VchiqTxRequestContextPPtr)->FirmwareStatus = STATUS_PENDING;
+    (*VchiqTxRequestContextPPtr)->ActualLength = 0;
+    (*VchiqTxRequestContextPPtr)->CompletionState = 0;
 
 End:
     return status;
@@ -105,6 +114,193 @@ End:
 VCHIQ_PAGED_SEGMENT_END
 
 VCHIQ_NONPAGED_SEGMENT_BEGIN
+
+static
+VOID
+VchiqReleaseTransferFragment(
+    _In_ VCHIQ_TX_REQUEST_CONTEXT* RequestContext)
+{
+    DEVICE_CONTEXT* deviceContext;
+    KIRQL oldIrql;
+
+    if (RequestContext->FragmentPtr == NULL)
+        return;
+
+    deviceContext = RequestContext->DeviceContextPtr;
+    KeAcquireSpinLock(&deviceContext->FragmentLock, &oldIrql);
+    *(UCHAR**)RequestContext->FragmentPtr = deviceContext->FreeFragmentPtr;
+    deviceContext->FreeFragmentPtr = RequestContext->FragmentPtr;
+    RequestContext->FragmentPtr = NULL;
+    KeReleaseSpinLock(&deviceContext->FragmentLock, oldIrql);
+    KeReleaseSemaphore(
+        &deviceContext->AvailableFragments,
+        IO_NO_INCREMENT,
+        1,
+        FALSE);
+}
+
+static
+VOID
+VchiqFinalizeTransferRequest(
+    _In_ WDFREQUEST Request,
+    _In_ BOOLEAN RequestOwned)
+{
+    VCHIQ_TX_REQUEST_CONTEXT* requestContext =
+        VchiqGetTxRequestContext(Request);
+    LONG state;
+    NTSTATUS status;
+    ULONG_PTR information;
+
+    if (requestContext == NULL)
+        return;
+
+    for (;;)
+    {
+        state = InterlockedCompareExchange(
+            &requestContext->CompletionState,
+            0,
+            0);
+        if (!(state & VCHIQ_TRANSFER_STATE_FIRMWARE_DONE) ||
+            (!RequestOwned && !(state & VCHIQ_TRANSFER_STATE_CANCELED)))
+        {
+            return;
+        }
+
+        if (state & VCHIQ_TRANSFER_STATE_FINALIZED)
+            return;
+
+        if (InterlockedCompareExchange(
+                &requestContext->CompletionState,
+                state | VCHIQ_TRANSFER_STATE_FINALIZED,
+                state) == state)
+        {
+            break;
+        }
+    }
+
+    status = (state & VCHIQ_TRANSFER_STATE_CANCELED) ?
+        STATUS_CANCELLED : requestContext->FirmwareStatus;
+    information = NT_SUCCESS(status) ? requestContext->ActualLength : 0;
+
+    if (requestContext->ScatterGatherListPtr)
+    {
+        requestContext->VchiqFileContextPtr->DmaAdapterPtr->DmaOperations->
+            FreeAdapterObject(
+                requestContext->VchiqFileContextPtr->DmaAdapterPtr,
+                DeallocateObjectKeepRegisters);
+        requestContext->VchiqFileContextPtr->DmaAdapterPtr->DmaOperations->
+            PutScatterGatherList(
+                requestContext->VchiqFileContextPtr->DmaAdapterPtr,
+                requestContext->ScatterGatherListPtr,
+                requestContext->WriteToDevice);
+        requestContext->ScatterGatherListPtr = NULL;
+    }
+
+    if (requestContext->FragmentPtr != NULL)
+    {
+        if (NT_SUCCESS(status) && !requestContext->WriteToDevice)
+        {
+            VCHIQ_PAGELIST* pageList = requestContext->PageListPtr;
+            UCHAR* buffer = MmGetSystemAddressForMdlSafe(
+                requestContext->BufferMdlPtr,
+                NormalPagePriority);
+            ULONG actual = requestContext->ActualLength;
+            ULONG headBytes;
+            ULONG tailBytes;
+
+            if (buffer == NULL || pageList == NULL)
+            {
+                status = STATUS_INSUFFICIENT_RESOURCES;
+                information = 0;
+            }
+            else
+            {
+                headBytes = (CACHE_LINE_SIZE - pageList->Offset) &
+                    (CACHE_LINE_SIZE - 1);
+                tailBytes = (pageList->Offset + actual) &
+                    (CACHE_LINE_SIZE - 1);
+                if (headBytes > actual)
+                    headBytes = actual;
+
+                if (headBytes != 0)
+                {
+                    RtlCopyMemory(
+                        buffer,
+                        requestContext->FragmentPtr,
+                        headBytes);
+                }
+                if (headBytes < actual && tailBytes != 0)
+                {
+                    RtlCopyMemory(
+                        buffer + actual - tailBytes,
+                        requestContext->FragmentPtr + CACHE_LINE_SIZE,
+                        tailBytes);
+                }
+            }
+        }
+
+        VchiqReleaseTransferFragment(requestContext);
+    }
+
+    WdfRequestCompleteWithInformation(Request, status, information);
+}
+
+_Use_decl_annotations_
+VOID
+VchiqTransferFirmwareComplete(
+    WDFREQUEST Request,
+    NTSTATUS Status,
+    ULONG ActualLength,
+    BOOLEAN RequestOwned)
+{
+    VCHIQ_TX_REQUEST_CONTEXT* requestContext =
+        VchiqGetTxRequestContext(Request);
+
+    if (requestContext == NULL)
+    {
+        if (RequestOwned)
+            WdfRequestComplete(Request, STATUS_INVALID_DEVICE_STATE);
+        return;
+    }
+
+    if (RequestOwned && WdfRequestIsCanceled(Request))
+    {
+        InterlockedOr(
+            &requestContext->CompletionState,
+            VCHIQ_TRANSFER_STATE_CANCELED);
+    }
+
+    requestContext->FirmwareStatus = Status;
+    requestContext->ActualLength = ActualLength;
+    MemoryBarrier();
+    InterlockedOr(
+        &requestContext->CompletionState,
+        VCHIQ_TRANSFER_STATE_FIRMWARE_DONE);
+    VchiqFinalizeTransferRequest(Request, RequestOwned);
+}
+
+_Use_decl_annotations_
+VOID
+VchiqBulkRequestCanceled(
+    WDFQUEUE Queue,
+    WDFREQUEST Request)
+{
+    VCHIQ_TX_REQUEST_CONTEXT* requestContext =
+        VchiqGetTxRequestContext(Request);
+
+    UNREFERENCED_PARAMETER(Queue);
+
+    if (requestContext == NULL)
+    {
+        WdfRequestComplete(Request, STATUS_CANCELLED);
+        return;
+    }
+
+    InterlockedOr(
+        &requestContext->CompletionState,
+        VCHIQ_TRANSFER_STATE_CANCELED);
+    VchiqFinalizeTransferRequest(Request, FALSE);
+}
 
 /*++
 
@@ -146,16 +342,16 @@ VOID VchiqTransferRequestContextCleanup (
         vchiqTxRequestContextPtr->PageListPtr = NULL;
     }
 
-    if (vchiqTxRequestContextPtr->ScatterGatherListPtr) {
+    VchiqReleaseTransferFragment(vchiqTxRequestContextPtr);
 
+    if (vchiqTxRequestContextPtr->ScatterGatherListPtr) {
         vchiqFileContextPtr->DmaAdapterPtr->DmaOperations->FreeAdapterObject(
             vchiqFileContextPtr->DmaAdapterPtr,
             DeallocateObjectKeepRegisters);
-
         vchiqFileContextPtr->DmaAdapterPtr->DmaOperations->PutScatterGatherList(
             vchiqFileContextPtr->DmaAdapterPtr,
             vchiqTxRequestContextPtr->ScatterGatherListPtr,
-            FALSE);
+            vchiqTxRequestContextPtr->WriteToDevice);
 
         vchiqTxRequestContextPtr->ScatterGatherListPtr = NULL;
     }

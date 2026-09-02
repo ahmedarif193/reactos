@@ -69,16 +69,21 @@ __inline VOID VCHIQ_ENABLE_EVENT_INTERRUPT (
     )
 {
     EventPtr->Armed = 1;
+    KeMemoryBarrier();
 }
 
 __inline VOID VCHIQ_RESET_EVENT_SIGNAL (
     _In_ VCHIQ_REMOTE_EVENT* EventPtr
     )
 {
+    EventPtr->Armed = 0;
+    KeMemoryBarrier();
+
     // Reset the 'Fired' state so we can check this value to detect 
     // any notification that the firmware may have fired before we have a 
     // chance to armed the interrupt for the firmware.
     EventPtr->Fired = 0;
+    KeMemoryBarrier();
 }
 
 __inline BOOLEAN VCHIQ_IS_EVENT_SIGNAL (
@@ -88,6 +93,7 @@ __inline BOOLEAN VCHIQ_IS_EVENT_SIGNAL (
     // Check if if the firmware has attempted to notify of a new message
     // before we enabled interrupt. Resetting the 'Fired' state before
     // enabling the interrupt is the only way to stay in sync with firmware
+    KeMemoryBarrier();
     return (EventPtr->Fired == 1);
 }
 
@@ -178,6 +184,22 @@ NTSTATUS VchiqQueueMessageAsync (
     );
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS VchiqQueueMessageSync (
+    _In_ DEVICE_CONTEXT* DeviceContextPtr,
+    _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    _In_ ULONG MessageId,
+    _In_reads_bytes_(BufferSize) VOID* BufferPtr,
+    _In_ ULONG BufferSize
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS VchiqRetrieveQueuedRequest (
+    _In_ WDFQUEUE Queue,
+    _In_ WDFREQUEST TargetRequest,
+    _Out_ WDFREQUEST* Request
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS VchiqQueueMultiElementAsync (
     _In_ DEVICE_CONTEXT* DeviceContextPtr,
     _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
@@ -239,7 +261,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS VchiqProcessNewRxMsg (
     _In_ DEVICE_CONTEXT* DeviceContextPtr,
     _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
-    _In_ VCHIQ_HEADER* RxMsg
+    _In_ VCHIQ_HEADER* RxMsg,
+    _In_opt_ VOID* BulkUserData,
+    _In_ VCHIQ_BULK_MODE_T BulkMode,
+    _In_ BOOLEAN IsBulkCompletion
     );
 
 _Requires_lock_held_(&VchiqFileContextPtr->PendingDataMsgMutex)
@@ -248,7 +273,10 @@ NTSTATUS VchiqAddPendingMsg (
     _In_ DEVICE_CONTEXT* DeviceContextPtr,
     _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
     _In_ VCHIQ_HEADER* Msg,
-    _In_ ULONG SlotNumber
+    _In_ ULONG SlotNumber,
+    _In_opt_ VOID* BulkUserData,
+    _In_ VCHIQ_BULK_MODE_T BulkMode,
+    _In_ BOOLEAN IsBulkCompletion
     );
 
 _Requires_lock_held_(&VchiqFileContextPtr->PendingDataMsgMutex)
@@ -263,6 +291,7 @@ _Requires_lock_held_(&VchiqFileContextPtr->PendingBulkMsgMutex[BulkType])
 _IRQL_requires_max_(APC_LEVEL)
 NTSTATUS VchiqAddPendingBulkMsg (
     _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    _In_ WDFREQUEST Request,
     _In_ VCHIQ_QUEUE_BULK_TRANSFER* BulkTransferPtr,
     _In_ MSG_BULK_TYPE BulkType
     );
@@ -274,7 +303,8 @@ NTSTATUS VchiqRemovePendingBulkMsg (
     _Inout_opt_ VCHIQ_COMPLETION_DATA* CompletionDataPtr,
     _In_ MSG_BULK_TYPE BulkType,
     _In_ ULONG RemoveAll,
-    _Out_opt_ VCHIQ_BULK_MODE_T* BulkMode
+    _Out_opt_ VCHIQ_BULK_MODE_T* BulkMode,
+    _Out_opt_ WDFREQUEST* Request
     );
 
 _Requires_lock_held_(&VchiqFileContextPtr->PendingVchiMsgMutex)

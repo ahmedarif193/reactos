@@ -87,8 +87,13 @@ typedef struct _DEVICE_CONTEXT {
     WDFINTERRUPT VchiqIntObj;
 
     // VCHIQ Slot
+    VOID* SlotMemoryBasePtr;
     VCHIQ_SLOT_ZERO* SlotZeroPtr;
     PHYSICAL_ADDRESS SlotMemoryPhy;
+    UCHAR* FragmentBasePtr;
+    UCHAR* FreeFragmentPtr;
+    KSPIN_LOCK FragmentLock;
+    KSEMAPHORE AvailableFragments;
     FAST_MUTEX TxSlotMutex;
     FAST_MUTEX RecycleSlotMutex;
 

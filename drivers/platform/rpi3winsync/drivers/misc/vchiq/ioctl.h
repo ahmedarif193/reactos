@@ -24,7 +24,8 @@ NTSTATUS VchiqUpdateQueueDispatchMessage (
     _In_opt_ WDFQUEUE MsgQueue,
     _In_ ULONG MessageId,
     _In_reads_bytes_(BufferSize) VOID* BufferPtr,
-    _In_ ULONG BufferSize
+    _In_ ULONG BufferSize,
+    _Out_ BOOLEAN* RequestOwned
     );
 
 EVT_WDF_IO_IN_CALLER_CONTEXT VchiqInCallerContext;
