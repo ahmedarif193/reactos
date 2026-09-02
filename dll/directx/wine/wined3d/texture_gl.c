@@ -1599,12 +1599,6 @@ static void wined3d_texture_gl_upload_data(struct wined3d_context *context,
         dst_texture->resource.pin_sysmem = 1;
     }
 
-    if (src_format->attrs & WINED3D_FORMAT_ATTR_HEIGHT_SCALE)
-    {
-        update_h *= src_format->height_scale.numerator;
-        update_h /= src_format->height_scale.denominator;
-    }
-
     target = wined3d_texture_gl_get_sub_resource_target(wined3d_texture_gl(dst_texture), dst_sub_resource_idx);
     level = dst_sub_resource_idx % dst_texture->level_count;
 
@@ -1622,6 +1616,49 @@ static void wined3d_texture_gl_upload_data(struct wined3d_context *context,
         case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
             FIXME("Not supported for multisample textures.\n");
             return;
+    }
+
+#ifdef __REACTOS__
+    /* A decoder may align the luma allocation height independently of the
+     * visible image. Upload each plane into WineD3D's packed NV12 texture so
+     * the existing shader coordinates never expose that storage padding. */
+    if (src_format->id == WINED3DFMT_NV12 &&
+            dst_texture->sub_resources[dst_sub_resource_idx].planar_memory.data &&
+            !src_bo_addr->buffer_object &&
+            src_bo_addr->addr ==
+            dst_texture->sub_resources[dst_sub_resource_idx].planar_memory.data &&
+            src_box->left == 0 && src_box->top == 0 && src_box->front == 0 &&
+            update_w == dst_texture->resource.width &&
+            update_h == dst_texture->resource.height && update_d == 1 &&
+            !dst_x && !dst_y && !dst_z)
+    {
+        const struct wined3d_planar_memory_desc *planar_memory =
+                &dst_texture->sub_resources[dst_sub_resource_idx].planar_memory;
+        const BYTE *data = planar_memory->data;
+        unsigned int chroma_height = update_h / 2;
+
+        GL_EXTCALL(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
+        checkGLcall("glBindBuffer");
+        wined3d_texture_gl_upload_bo(src_format, target, level,
+                planar_memory->plane_pitches[0],
+                planar_memory->plane_pitches[0] * update_h,
+                0, 0, 0, update_w, update_h, 1,
+                data + planar_memory->plane_offsets[0], srgb,
+                dst_texture, gl_info);
+        wined3d_texture_gl_upload_bo(src_format, target, level,
+                planar_memory->plane_pitches[1],
+                planar_memory->plane_pitches[1] * chroma_height,
+                0, update_h, 0, update_w, chroma_height, 1,
+                data + planar_memory->plane_offsets[1], srgb,
+                dst_texture, gl_info);
+        goto upload_complete;
+    }
+#endif
+
+    if (src_format->attrs & WINED3D_FORMAT_ATTR_HEIGHT_SCALE)
+    {
+        update_h *= src_format->height_scale.numerator;
+        update_h /= src_format->height_scale.denominator;
     }
 
     bo.buffer_object = src_bo_addr->buffer_object;
@@ -1728,6 +1765,7 @@ static void wined3d_texture_gl_upload_data(struct wined3d_context *context,
         }
     }
 
+upload_complete:
     if (gl_info->quirks & WINED3D_QUIRK_FBO_TEX_UPDATE)
     {
         struct wined3d_device *device = dst_texture->resource.device;

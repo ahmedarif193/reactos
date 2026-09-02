@@ -982,6 +982,84 @@ HRESULT CDECL wined3d_texture_update_desc(struct wined3d_texture *texture,
     return WINED3D_OK;
 }
 
+#ifdef __REACTOS__
+HRESULT CDECL wined3d_texture_set_planar_memory(struct wined3d_texture *texture,
+        unsigned int sub_resource_idx, const struct wined3d_planar_memory_desc *desc)
+{
+    struct wined3d_texture_sub_resource *sub_resource;
+    unsigned int width, height, i;
+    ULONGLONG end;
+    HRESULT hr;
+
+    if (!desc)
+    {
+        if (!wined3d_texture_validate_sub_resource_idx(texture, sub_resource_idx))
+            return WINED3DERR_INVALIDCALL;
+        memset(&texture->sub_resources[sub_resource_idx].planar_memory, 0,
+                sizeof(texture->sub_resources[sub_resource_idx].planar_memory));
+        return wined3d_texture_update_desc(texture, sub_resource_idx, NULL, 0);
+    }
+    if (!wined3d_texture_validate_sub_resource_idx(texture, sub_resource_idx) ||
+            texture->resource.format->id != WINED3DFMT_NV12 ||
+            texture->resource.type != WINED3D_RTYPE_TEXTURE_2D ||
+            texture->level_count * texture->layer_count != 1 ||
+            !desc->data || !desc->size || desc->size > UINT_MAX ||
+            desc->plane_count != 2 || desc->plane_offsets[0] ||
+            !desc->row_pitch)
+        return WINED3DERR_INVALIDCALL;
+
+    width = wined3d_texture_get_level_width(texture, 0);
+    height = wined3d_texture_get_level_height(texture, 0);
+    if (desc->width != width || desc->height != height ||
+            (width & 1) || (height & 1) || desc->storage_height < height ||
+            desc->row_pitch < width ||
+            desc->plane_pitches[0] != desc->row_pitch)
+        return WINED3DERR_INVALIDCALL;
+
+    for (i = 0; i < desc->plane_count; ++i)
+    {
+        unsigned int plane_height = i ? height / 2 : height;
+
+        if (desc->plane_pitches[i] < width ||
+                desc->plane_offsets[i] >= desc->size)
+            return WINED3DERR_INVALIDCALL;
+        end = (ULONGLONG)desc->plane_offsets[i] +
+                (ULONGLONG)(plane_height - 1) * desc->plane_pitches[i] + width;
+        if (end > desc->size)
+            return WINED3DERR_INVALIDCALL;
+    }
+
+    sub_resource = &texture->sub_resources[sub_resource_idx];
+    if (sub_resource->user_memory == desc->data &&
+            !memcmp(&sub_resource->planar_memory, desc, sizeof(*desc)))
+    {
+        wined3d_texture_validate_location(texture, sub_resource_idx,
+                WINED3D_LOCATION_SYSMEM);
+        wined3d_texture_invalidate_location(texture, sub_resource_idx,
+                ~WINED3D_LOCATION_SYSMEM);
+        return WINED3D_OK;
+    }
+
+    if (FAILED(hr = wined3d_texture_update_desc(texture, sub_resource_idx,
+            desc->data, desc->row_pitch)))
+        return hr;
+
+    sub_resource = &texture->sub_resources[sub_resource_idx];
+    if (texture->resource.size != desc->size)
+    {
+        if (!(texture->resource.access & WINED3D_RESOURCE_ACCESS_CPU) &&
+                texture->resource.usage & WINED3DUSAGE_VIDMEM_ACCOUNTING)
+            adapter_adjust_memory(texture->resource.device->adapter,
+                    (INT64)desc->size - texture->resource.size);
+        texture->slice_pitch = (unsigned int)desc->size;
+        texture->resource.size = (unsigned int)desc->size;
+        sub_resource->size = (unsigned int)desc->size;
+    }
+    sub_resource->planar_memory = *desc;
+    return WINED3D_OK;
+}
+#endif
+
 static void wined3d_texture_force_reload(struct wined3d_texture *texture)
 {
     unsigned int sub_count = texture->level_count * texture->layer_count;

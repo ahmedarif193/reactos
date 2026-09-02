@@ -346,6 +346,7 @@
 @ cdecl wined3d_texture_set_color_key(ptr long ptr)
 @ cdecl wined3d_texture_set_lod(ptr long)
 #ifdef __REACTOS__
+@ cdecl wined3d_texture_set_planar_memory(ptr long ptr)
 @ cdecl wined3d_texture_set_yuv_color_space(ptr long)
 #endif
 @ cdecl wined3d_texture_set_overlay_position(ptr long long long)
