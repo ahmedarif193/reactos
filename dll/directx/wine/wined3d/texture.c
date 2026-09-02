@@ -1037,6 +1037,9 @@ HRESULT CDECL wined3d_texture_set_planar_memory(struct wined3d_texture *texture,
                 WINED3D_LOCATION_SYSMEM);
         wined3d_texture_invalidate_location(texture, sub_resource_idx,
                 ~WINED3D_LOCATION_SYSMEM);
+        wined3d_resource_preload(&texture->resource);
+        wined3d_cs_finish(texture->resource.device->cs,
+                WINED3D_CS_QUEUE_DEFAULT);
         return WINED3D_OK;
     }
 
@@ -1056,6 +1059,9 @@ HRESULT CDECL wined3d_texture_set_planar_memory(struct wined3d_texture *texture,
         sub_resource->size = (unsigned int)desc->size;
     }
     sub_resource->planar_memory = *desc;
+    wined3d_resource_preload(&texture->resource);
+    wined3d_cs_finish(texture->resource.device->cs,
+            WINED3D_CS_QUEUE_DEFAULT);
     return WINED3D_OK;
 }
 #endif
