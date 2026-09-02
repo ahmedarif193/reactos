@@ -736,7 +736,6 @@ NtGdiGetBoundsRect(
 
        if (RECTL_bIsEmptyRect(&rc))
        {
-          rc.left = rc.top = rc.right = rc.bottom = 0;
           ret = DCB_RESET;
        }
        else
@@ -752,7 +751,10 @@ NtGdiGetBoundsRect(
           rc.bottom = min( rc.bottom, rcRgn.bottom - rcRgn.top );
           ret = DCB_SET;
        }
-       IntDPtoLP(pdc, (PPOINTL)&rc, 2);
+       if (ret == DCB_RESET)
+          rc.left = rc.top = rc.right = rc.bottom = 0;
+       else
+          IntDPtoLP(pdc, (PPOINTL)&rc, 2);
        DPRINT("rc1 l %d t %d\n",rc.left,rc.top);
        DPRINT("    r %d b %d\n",rc.right,rc.bottom);
     }
@@ -849,6 +851,7 @@ NtGdiSetBoundsRect(
         if (!(flags & DCB_WINDOWMGR))
         {
            IntLPtoDP( pdc, (POINT *)&rcl, 2 );
+           RECTL_vMakeWellOrdered(&rcl);
            RECTL_bUnionRect(&pdc->erclBoundsApp, &pdc->erclBoundsApp, &rcl);
         }
         else
