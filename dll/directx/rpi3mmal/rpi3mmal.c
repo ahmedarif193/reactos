@@ -129,6 +129,19 @@ typedef struct _VCHIQ_AWAIT_COMPLETION_T
 
 #include <poppack.h>
 
+/* These are the native ARM64 ioctl layouts in vchiq_ioctl.h. Unlike the MMAL
+ * wire protocol below, their pointers are user virtual addresses and remain
+ * pointer-sized across the user/kernel boundary. */
+C_ASSERT(sizeof(void *) == 8);
+C_ASSERT(sizeof(VCHIQ_HEADER_T) == 8);
+C_ASSERT(sizeof(VCHIQ_ELEMENT_T) == 20);
+C_ASSERT(sizeof(VCHIQ_SERVICE_PARAMS_T) == 24);
+C_ASSERT(sizeof(VCHIQ_CREATE_SERVICE_T) == 36);
+C_ASSERT(sizeof(VCHIQ_QUEUE_MESSAGE_T) == 24);
+C_ASSERT(sizeof(VCHIQ_QUEUE_BULK_TRANSFER_T) == 36);
+C_ASSERT(sizeof(VCHIQ_COMPLETION_DATA_T) == 36);
+C_ASSERT(sizeof(VCHIQ_AWAIT_COMPLETION_T) == 36);
+
 #define MMAL_FOURCC(a, b, c, d) \
     ((UINT32)(a) | ((UINT32)(b) << 8) | ((UINT32)(c) << 16) | ((UINT32)(d) << 24))
 
