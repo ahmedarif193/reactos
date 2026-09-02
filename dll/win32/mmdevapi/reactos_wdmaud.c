@@ -25,6 +25,7 @@
 #include "mmsystem.h"
 #include "mmreg.h"
 #include "audiopolicy.h"
+#include "cfgmgr32.h"
 #include "setupapi.h"
 #include "ks.h"
 #include "ksmedia.h"
@@ -152,6 +153,7 @@ static BOOL open_wdmaud(void)
 {
     HDEVINFO devinfo;
     SP_DEVICE_INTERFACE_DATA iface;
+    SP_DEVINFO_DATA device;
     SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail;
     WCHAR *path;
     DWORD detail_size;
@@ -169,6 +171,7 @@ static BOOL open_wdmaud(void)
     }
 
     iface.cbSize = sizeof(iface);
+    device.cbSize = sizeof(device);
     if (!SetupDiEnumDeviceInterfaces(devinfo, NULL, &wdmaud_category, 0, &iface))
     {
         WARN("SetupDiEnumDeviceInterfaces(KSCATEGORY_WDMAUD) failed, error %lu.\n", GetLastError());
@@ -181,11 +184,24 @@ static BOOL open_wdmaud(void)
         goto done;
 
     detail->cbSize = sizeof(*detail);
-    if (!SetupDiGetDeviceInterfaceDetailW(devinfo, &iface, detail, detail_size, NULL, NULL))
+    if (!SetupDiGetDeviceInterfaceDetailW(devinfo, &iface, detail, detail_size,
+                                          NULL, &device))
     {
         WARN("SetupDiGetDeviceInterfaceDetailW(KSCATEGORY_WDMAUD) failed, error %lu.\n", GetLastError());
         free(detail);
         goto done;
+    }
+
+    {
+        ULONG status, problem;
+
+        if (CM_Get_DevNode_Status(&status, &problem, device.DevInst, 0) != CR_SUCCESS ||
+            !(status & DN_STARTED))
+        {
+            TRACE("WDMAUD interface is present but its device is not started.\n");
+            free(detail);
+            goto done;
+        }
     }
 
     path = detail->DevicePath;
