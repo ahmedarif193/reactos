@@ -86,6 +86,9 @@ if(WOW64_I386_RUNTIME AND ARCH STREQUAL "i386")
 endif()
 
 set_module_type(user32 win32dll UNICODE ENTRYPOINT DllMain 12)
+if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
+    target_compile_options(user32 PRIVATE -Xclang -fasync-exceptions)
+endif()
 target_link_libraries(user32 user32_vista_static user32_optional_vista user32_wsprintf wine win32ksys ${PSEH_LIB})
 add_dependencies(user32 asm)
 
