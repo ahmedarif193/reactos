@@ -821,14 +821,16 @@ Rpi3Vc4NotifyRetirement(
     _In_ NTSTATUS CompletionStatus)
 {
     DXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyData;
+    PSOFTGPU_ENGINE Engine;
     KIRQL OldIrql;
 
+    Engine = &Device->Engines[SOFTGPU_NODE_3D];
     KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
     if (NT_SUCCESS(CompletionStatus) &&
-        (LONG)(Fence - Device->CompletedFence) > 0)
+        (LONG)(Fence - Engine->CompletedFence) > 0)
     {
-        Device->CompletedFence = Fence;
-        Device->NotifiedFence = Fence;
+        Engine->CompletedFence = Fence;
+        Engine->NotifiedFence = Fence;
     }
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
@@ -951,7 +953,8 @@ Rpi3Vc4SubmitCommand(
         Context->V3dSubmitTail % RPI3VC4_V3D_SUBMIT_RING_SIZE].Fence =
             SubmitCommand->SubmissionFenceId;
     Context->V3dSubmitTail++;
-    Device->CurrentFence = SubmitCommand->SubmissionFenceId;
+    Device->Engines[SOFTGPU_NODE_3D].CurrentFence =
+        SubmitCommand->SubmissionFenceId;
     Rpi3Vc4StartNextLocked(Context);
     KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
     return STATUS_SUCCESS;
