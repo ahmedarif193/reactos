@@ -162,6 +162,8 @@ C_ASSERT(sizeof(VCHIQ_AWAIT_COMPLETION_T) == 36);
 #define MMAL_COMPLETION_COUNT              8
 #define MMAL_OUTPUT_BUFFER_COUNT           6
 #define MMAL_CONTROL_TIMEOUT_MS            10000
+#define MMAL_DECODER_INPUT_SIZE_720P       (512u << 10)
+#define MMAL_DECODER_INPUT_SIZE_HIGH       (768u << 10)
 
 #define MMAL_BUFFER_HEADER_FLAG_EOS                 (1u << 0)
 #define MMAL_BUFFER_HEADER_FLAG_FRAME_START         (1u << 1)
@@ -169,6 +171,7 @@ C_ASSERT(sizeof(VCHIQ_AWAIT_COMPLETION_T) == 36);
 #define MMAL_BUFFER_HEADER_FLAG_KEYFRAME            (1u << 3)
 #define MMAL_BUFFER_HEADER_FLAG_DISCONTINUITY       (1u << 4)
 #define MMAL_BUFFER_HEADER_FLAG_CONFIG              (1u << 5)
+#define MMAL_BUFFER_HEADER_FLAG_CODECSIDEINFO       (1u << 7)
 #define MMAL_BUFFER_HEADER_FLAG_CORRUPTED           (1u << 9)
 #define MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED (1u << 10)
 
@@ -192,6 +195,11 @@ C_ASSERT(sizeof(VCHIQ_AWAIT_COMPLETION_T) == 36);
     (MMAL_PARAMETER_GROUP_VIDEO + 42u)
 #define MMAL_PARAMETER_VIDEO_VALIDATE_TIMESTAMPS      \
     (MMAL_PARAMETER_GROUP_VIDEO + 55u)
+#define MMAL_PARAMETER_VIDEO_DECODE_CONFIG_VD3        \
+    (MMAL_PARAMETER_GROUP_VIDEO + 39u)
+
+#define VD3_COMPONENT_H264_DPB                        5u
+#define VD3_CONFIGURE_DPB_NUM_REORDER_FRAMES          0x00000002u
 
 #define MMAL_VIDEO_PROFILE_H264_BASELINE              25u
 #define MMAL_VIDEO_PROFILE_H264_MAIN                  26u
@@ -256,6 +264,22 @@ typedef enum _MMAL_PORT_ACTION
     MmalPortActionDisconnect,
     MmalPortActionSetRequirements
 } MMAL_PORT_ACTION;
+
+typedef struct _VD3_CONFIGURE
+{
+    UINT32 Component;
+    UINT32 ConfigSize;
+    UINT32 ConfigRequests;
+    UINT32 ConfigOverride;
+} VD3_CONFIGURE;
+
+typedef struct _VD3_CONFIGURE_DPB
+{
+    VD3_CONFIGURE Common;
+    UINT32 MultiviewEnable;
+    UINT32 NumReorderFrames;
+    UINT32 MaxDpbFrames;
+} VD3_CONFIGURE_DPB;
 
 /*
  * The VideoCore MMAL worker is a 32-bit endpoint. Pointer-looking members in
@@ -587,6 +611,7 @@ struct RPI3_MMAL_DECODER
     CRITICAL_SECTION OutputBulkLock;
     CRITICAL_SECTION StateLock;
     volatile LONG StopRequested;
+    volatile LONG StopAfterControlReply;
     volatile LONG FormatChanged;
     volatile LONG Reconfiguring;
     volatile LONG AsyncResult;
@@ -597,6 +622,7 @@ struct RPI3_MMAL_DECODER
     BYTE ControlReply[MMAL_MESSAGE_SIZE];
     UINT ControlReplySize;
     UINT32 ComponentHandle;
+    RPI3_MMAL_PORT Control;
     RPI3_MMAL_PORT Input;
     RPI3_MMAL_PORT Output;
     UINT Width;
@@ -613,6 +639,8 @@ struct RPI3_MMAL_DECODER
     UINT IntraPeriod;
     UINT Profile;
     UINT Level;
+    UINT DecoderFlags;
+    UINT CodecExtraDataSize;
     UINT FormatGeneration;
     UINT AppliedFormatGeneration;
     ULONGLONG NextOutputSequence;
@@ -622,8 +650,10 @@ struct RPI3_MMAL_DECODER
     BOOL InputEnabled;
     BOOL OutputEnabled;
     BOOL InputBulkSent;
+    BOOL InputEosSubmitted;
     BOOL Encoder;
     BOOL InlineHeaders;
+    BYTE CodecExtraData[MMAL_FORMAT_EXTRADATA_MAX_SIZE];
     RPI3_MMAL_PENDING_FORMAT PendingFormat;
     RPI3_MMAL_OUTPUT_SLOT OutputSlots[MMAL_OUTPUT_BUFFER_COUNT];
 };
@@ -1315,7 +1345,6 @@ Rpi3MmalUpdateOutputGeometry(RPI3_MMAL_DECODER *Decoder)
     VisibleHeight = Decoder->Output.Es.Video.Crop.Height > 0 ?
                     Decoder->Output.Es.Video.Crop.Height : Decoder->Height;
     if (!VisibleWidth || !VisibleHeight ||
-        VisibleWidth > Decoder->Width || VisibleHeight > Decoder->Height ||
         VisibleWidth > 1920 || VisibleHeight > 1088 ||
         Width < VisibleWidth || Height < VisibleHeight || Width > 1920 || Height > 1088)
     {
@@ -1328,6 +1357,8 @@ Rpi3MmalUpdateOutputGeometry(RPI3_MMAL_DECODER *Decoder)
     if (OutputSize > MAXUINT)
         return E_OUTOFMEMORY;
 
+    Decoder->Width = VisibleWidth;
+    Decoder->Height = VisibleHeight;
     Decoder->Pitch = Width;
     Decoder->StorageHeight = Height;
     Decoder->VisibleWidth = VisibleWidth;
@@ -1782,11 +1813,22 @@ Rpi3MmalCompletionThread(VOID *Context)
                 Rpi3MmalHandleBuffer(Decoder, (MMAL_BUFFER_MESSAGE *)Header);
             }
             else if (Header->MessageId == MmalWorkerEventToHost &&
-                     VchiqHeader->size >= sizeof(MMAL_EVENT_MESSAGE))
+                     VchiqHeader->size >=
+                         FIELD_OFFSET(MMAL_EVENT_MESSAGE, Data))
             {
                 MMAL_EVENT_MESSAGE *Event = (MMAL_EVENT_MESSAGE *)Header;
-                if (Event->Command == MMAL_EVENT_FORMAT_CHANGED)
+                UINT EventSpace = VchiqHeader->size -
+                                  FIELD_OFFSET(MMAL_EVENT_MESSAGE, Data);
+
+                if (Event->Length > MMAL_WORKER_EVENT_SPACE ||
+                    Event->Length > EventSpace)
+                {
+                    Rpi3MmalSetAsyncResult(Decoder, E_FAIL);
+                }
+                else if (Event->Command == MMAL_EVENT_FORMAT_CHANGED)
+                {
                     Rpi3MmalHandleFormatChanged(Decoder, Event);
+                }
                 else if (Event->Command == MMAL_EVENT_ERROR)
                 {
                     HRESULT Result = E_FAIL;
@@ -1810,6 +1852,11 @@ Rpi3MmalCompletionThread(VOID *Context)
                 CopyMemory(Decoder->ControlReply, Header, CopySize);
                 Decoder->ControlReplySize = CopySize;
                 MemoryBarrier();
+                if (InterlockedCompareExchange(
+                        &Decoder->StopAfterControlReply, 0, 0))
+                {
+                    InterlockedExchange(&Decoder->StopRequested, 1);
+                }
                 SetEvent(Decoder->ControlEvent);
             }
         }
@@ -1859,16 +1906,42 @@ Rpi3MmalConfigureDecoderPorts(RPI3_MMAL_DECODER *Decoder,
                               const BYTE *ExtraData,
                               UINT ExtraDataSize)
 {
+    VD3_CONFIGURE_DPB DpbConfiguration;
     UINT AlignedWidth = ALIGN_UP(Decoder->Width, 32);
     UINT AlignedHeight = ALIGN_UP(Decoder->Height, 16);
     HRESULT Result;
 
+    Result = Rpi3MmalPortInfoGet(Decoder,
+                                 MmalPortTypeControl,
+                                 0,
+                                 &Decoder->Control);
+    if (FAILED(Result))
+        return Result;
     Result = Rpi3MmalPortInfoGet(Decoder, MmalPortTypeInput, 0, &Decoder->Input);
     if (FAILED(Result))
         return Result;
     Result = Rpi3MmalPortInfoGet(Decoder, MmalPortTypeOutput, 0, &Decoder->Output);
     if (FAILED(Result))
         return Result;
+
+    if (Decoder->DecoderFlags & RPI3_MMAL_DECODER_OUTPUT_DECODE_ORDER)
+    {
+        ZeroMemory(&DpbConfiguration, sizeof(DpbConfiguration));
+        DpbConfiguration.Common.Component = VD3_COMPONENT_H264_DPB;
+        DpbConfiguration.Common.ConfigSize = sizeof(DpbConfiguration);
+        DpbConfiguration.Common.ConfigRequests =
+            VD3_CONFIGURE_DPB_NUM_REORDER_FRAMES;
+        DpbConfiguration.Common.ConfigOverride =
+            VD3_CONFIGURE_DPB_NUM_REORDER_FRAMES;
+        Result = Rpi3MmalPortParameterSet(
+                     Decoder,
+                     &Decoder->Control,
+                     MMAL_PARAMETER_VIDEO_DECODE_CONFIG_VD3,
+                     &DpbConfiguration,
+                     sizeof(DpbConfiguration));
+        if (FAILED(Result))
+            return Result;
+    }
 
     /* Keep input timestamps attached to reordered decoded pictures. */
     Result = Rpi3MmalPortParameterSetBoolean(
@@ -1905,6 +1978,15 @@ Rpi3MmalConfigureDecoderPorts(RPI3_MMAL_DECODER *Decoder,
         Decoder->Input.Port.BufferSize = Decoder->Input.Port.BufferSizeRecommended;
     if (Decoder->Input.Port.BufferSize < Decoder->Input.Port.BufferSizeMin)
         Decoder->Input.Port.BufferSize = Decoder->Input.Port.BufferSizeMin;
+    if ((ULONGLONG)Decoder->Width * Decoder->Height > 1280u * 720u)
+    {
+        if (Decoder->Input.Port.BufferSize < MMAL_DECODER_INPUT_SIZE_HIGH)
+            Decoder->Input.Port.BufferSize = MMAL_DECODER_INPUT_SIZE_HIGH;
+    }
+    else if (Decoder->Input.Port.BufferSize < MMAL_DECODER_INPUT_SIZE_720P)
+    {
+        Decoder->Input.Port.BufferSize = MMAL_DECODER_INPUT_SIZE_720P;
+    }
 
     Result = Rpi3MmalPortInfoSet(Decoder, MmalPortTypeInput, 0, &Decoder->Input);
     if (FAILED(Result))
@@ -2007,8 +2089,14 @@ Rpi3MmalConfigureEncoderPorts(RPI3_MMAL_ENCODER *Encoder)
     if (Encoder->Input.Port.BufferNum < Encoder->Input.Port.BufferNumMin)
         Encoder->Input.Port.BufferNum = Encoder->Input.Port.BufferNumMin;
     Encoder->Input.Port.BufferSize = (UINT)InputSize;
+    if (Encoder->Input.Port.BufferSize <
+        Encoder->Input.Port.BufferSizeRecommended)
+    {
+        Encoder->Input.Port.BufferSize =
+            Encoder->Input.Port.BufferSizeRecommended;
+    }
     if (Encoder->Input.Port.BufferSize < Encoder->Input.Port.BufferSizeMin)
-        return E_NOTIMPL;
+        Encoder->Input.Port.BufferSize = Encoder->Input.Port.BufferSizeMin;
 
     Result = Rpi3MmalPortInfoSet(Encoder,
                                  MmalPortTypeInput,
@@ -2318,9 +2406,10 @@ static HRESULT
 Rpi3MmalReconfigureEncoderOutput(RPI3_MMAL_ENCODER *Encoder)
 {
     RPI3_MMAL_PENDING_FORMAT Pending;
+    RPI3_MMAL_PORT Output;
+    UINT ActiveBufferCount;
+    UINT ActiveBufferSize;
     UINT Generation;
-    UINT Index;
-    HRESULT Result;
 
     EnterCriticalSection(&Encoder->StateLock);
     Generation = Encoder->FormatGeneration;
@@ -2331,128 +2420,56 @@ Rpi3MmalReconfigureEncoderOutput(RPI3_MMAL_ENCODER *Encoder)
         return S_FALSE;
     }
     Pending = Encoder->PendingFormat;
-    InterlockedExchange(&Encoder->Reconfiguring, 1);
-    Rpi3MmalUpdateOutputEventsLocked(Encoder);
+    Output = Encoder->Output;
+    ActiveBufferCount = Encoder->OutputCount;
+    ActiveBufferSize = Encoder->OutputSize;
     LeaveCriticalSection(&Encoder->StateLock);
-
     if (Pending.Format.Type != 3 ||
         Pending.Format.Encoding != MMAL_ENCODING_H264 ||
-        Pending.BufferNumMin > MMAL_OUTPUT_BUFFER_COUNT)
+        Pending.BufferNumMin > ActiveBufferCount ||
+        Pending.BufferSizeMin > ActiveBufferSize)
     {
-        Result = E_NOTIMPL;
-        goto Failure;
+        Rpi3MmalSetAsyncResult(Encoder, E_NOTIMPL);
+        return E_NOTIMPL;
     }
 
-    Result = Rpi3MmalDrainReturnedOutputs(Encoder);
-    if (FAILED(Result))
-        goto Failure;
-    if (Encoder->OutputEnabled)
-    {
-        Result = Rpi3MmalPortAction(Encoder,
-                                    &Encoder->Output,
-                                    MmalPortActionDisable);
-        if (FAILED(Result))
-            goto Failure;
-        Encoder->OutputEnabled = FALSE;
-    }
-    Result = Rpi3MmalWaitForOutputDrain(Encoder);
-    if (FAILED(Result))
-        goto Failure;
-    Result = Rpi3MmalDrainReturnedOutputs(Encoder);
-    if (FAILED(Result))
-        goto Failure;
-
-    Rpi3MmalFreeOutputBuffers(Encoder);
-    Encoder->Output.Format = Pending.Format;
-    Encoder->Output.Format.Type = 3;
-    Encoder->Output.Format.Encoding = MMAL_ENCODING_H264;
-    Encoder->Output.Format.EncodingVariant = 0;
-    Encoder->Output.Format.Es = 0;
-    Encoder->Output.Format.ExtraData = 0;
-    Encoder->Output.Format.ExtraDataSize = Pending.ExtraDataSize;
-    Encoder->Output.Es = Pending.Es;
-    ZeroMemory(Encoder->Output.ExtraData,
-               sizeof(Encoder->Output.ExtraData));
+    /* The encoder reports its initial H.264 format after output buffers may
+     * already contain codec configuration or picture data.  The fixed-format
+     * contract does not require a new pool when the announced minima fit the
+     * active one.  Observe the notification in place so those returned
+     * buffers remain available to the caller.  Port-info-set is not an event
+     * acknowledgement and cannot reconfigure an enabled output port. */
+    Output.Format = Pending.Format;
+    Output.Format.Type = 3;
+    Output.Format.Encoding = MMAL_ENCODING_H264;
+    Output.Format.EncodingVariant = 0;
+    Output.Format.Es = 0;
+    Output.Format.ExtraData = 0;
+    Output.Format.ExtraDataSize = Pending.ExtraDataSize;
+    Output.Es = Pending.Es;
+    ZeroMemory(Output.ExtraData, sizeof(Output.ExtraData));
     if (Pending.ExtraDataSize)
     {
-        CopyMemory(Encoder->Output.ExtraData,
+        CopyMemory(Output.ExtraData,
                    Pending.ExtraData,
                    Pending.ExtraDataSize);
     }
-    Encoder->Output.Port.BufferNumMin = Pending.BufferNumMin;
-    Encoder->Output.Port.BufferNumRecommended = Pending.BufferNumRecommended;
-    Encoder->Output.Port.BufferSizeMin = Pending.BufferSizeMin;
-    Encoder->Output.Port.BufferSizeRecommended = Pending.BufferSizeRecommended;
-    Encoder->Output.Port.BufferNum = Pending.BufferNumRecommended;
-    if (Encoder->Output.Port.BufferNum < Pending.BufferNumMin)
-        Encoder->Output.Port.BufferNum = Pending.BufferNumMin;
-    if (!Encoder->Output.Port.BufferNum)
-        Encoder->Output.Port.BufferNum = MMAL_OUTPUT_BUFFER_COUNT;
-    Encoder->Output.Port.BufferSize = Pending.BufferSizeRecommended;
-    if (Encoder->Output.Port.BufferSize < Pending.BufferSizeMin)
-        Encoder->Output.Port.BufferSize = Pending.BufferSizeMin;
-    if (!Encoder->Output.Port.BufferSize)
-        Encoder->Output.Port.BufferSize = 256 * 1024;
-
-    Result = Rpi3MmalPortInfoSet(Encoder,
-                                 MmalPortTypeOutput,
-                                 0,
-                                 &Encoder->Output);
-    if (FAILED(Result))
-        goto Failure;
-    Result = Rpi3MmalPortInfoGet(Encoder,
-                                 MmalPortTypeOutput,
-                                 0,
-                                 &Encoder->Output);
-    if (FAILED(Result))
-        goto Failure;
-    if (Encoder->Output.Port.BufferNumMin > MMAL_OUTPUT_BUFFER_COUNT)
-    {
-        Result = E_NOTIMPL;
-        goto Failure;
-    }
-    Encoder->OutputSize = Encoder->Output.Port.BufferSize;
-    Encoder->OutputCount = Encoder->Output.Port.BufferNum;
-    if (!Encoder->OutputCount)
-        Encoder->OutputCount = MMAL_OUTPUT_BUFFER_COUNT;
-    if (Encoder->OutputCount > MMAL_OUTPUT_BUFFER_COUNT)
-        Encoder->OutputCount = MMAL_OUTPUT_BUFFER_COUNT;
-
-    Result = Rpi3MmalAllocateOutputBuffers(Encoder);
-    if (FAILED(Result))
-        goto Failure;
-    Result = Rpi3MmalPortAction(Encoder,
-                                &Encoder->Output,
-                                MmalPortActionEnable);
-    if (FAILED(Result))
-        goto Failure;
-    Encoder->OutputEnabled = TRUE;
-    InterlockedExchange(&Encoder->Reconfiguring, 0);
-
-    for (Index = 0; Index < Encoder->OutputCount; ++Index)
-    {
-        if (!Rpi3MmalQueueOutputSlot(Encoder,
-                                     Index,
-                                     Rpi3MmalSlotFree,
-                                     FALSE))
-        {
-            Result = Rpi3MmalErrorFromLastError();
-            goto Failure;
-        }
-    }
+    Output.Port.BufferNumMin = Pending.BufferNumMin;
+    Output.Port.BufferNumRecommended = Pending.BufferNumRecommended;
+    Output.Port.BufferSizeMin = Pending.BufferSizeMin;
+    Output.Port.BufferSizeRecommended = Pending.BufferSizeRecommended;
+    Output.Port.BufferNum = ActiveBufferCount;
+    Output.Port.BufferSize = ActiveBufferSize;
 
     EnterCriticalSection(&Encoder->StateLock);
+    Encoder->Output = Output;
     Encoder->AppliedFormatGeneration = Generation;
     if (Encoder->FormatGeneration == Generation)
         ResetEvent(Encoder->FormatEvent);
+    Rpi3MmalUpdateOutputEventsLocked(Encoder);
     LeaveCriticalSection(&Encoder->StateLock);
     InterlockedExchange(&Encoder->FormatChanged, 1);
     return S_OK;
-
-Failure:
-    InterlockedExchange(&Encoder->Reconfiguring, 0);
-    Rpi3MmalSetAsyncResult(Encoder, Result);
-    return Result;
 }
 
 static HRESULT
@@ -2610,6 +2627,56 @@ Rpi3MmalQueryCaps(RPI3_MMAL_CAPS *Caps)
     return TRUE;
 }
 
+static BOOL
+Rpi3MmalValidateH264AccessUnit(const BYTE *Data, UINT DataSize)
+{
+    UINT Index;
+    BOOL AnnexB = FALSE;
+
+    for (Index = 0; Index + 2 < DataSize; ++Index)
+    {
+        UINT StartCodeSize = 0;
+        UINT HeaderOffset;
+        BYTE NalHeader;
+
+        if (Data[Index] || Data[Index + 1])
+            continue;
+        if (Data[Index + 2] == 1)
+            StartCodeSize = 3;
+        else if (Index + 3 < DataSize &&
+                 !Data[Index + 2] && Data[Index + 3] == 1)
+            StartCodeSize = 4;
+        if (!StartCodeSize)
+            continue;
+
+        AnnexB = TRUE;
+        HeaderOffset = Index + StartCodeSize;
+        if (HeaderOffset >= DataSize)
+            return FALSE;
+        NalHeader = Data[HeaderOffset];
+        if ((NalHeader & 0x80) || !(NalHeader & 0x1f) ||
+            (NalHeader & 0x1f) > 23)
+        {
+            return FALSE;
+        }
+        Index = HeaderOffset;
+    }
+
+    if (!AnnexB)
+        return TRUE;
+
+    for (Index = 0; Index + 2 < DataSize; ++Index)
+    {
+        if (!Data[Index] && !Data[Index + 1] && Data[Index + 2] == 3 &&
+            (Index + 3 >= DataSize || Data[Index + 3] > 3))
+        {
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
 HRESULT WINAPI
 Rpi3MmalCreateH264Decoder(UINT Width,
                          UINT Height,
@@ -2617,12 +2684,29 @@ Rpi3MmalCreateH264Decoder(UINT Width,
                          UINT ExtraDataSize,
                          RPI3_MMAL_DECODER **DecoderOut)
 {
+    return Rpi3MmalCreateH264DecoderEx(Width,
+                                       Height,
+                                       ExtraData,
+                                       ExtraDataSize,
+                                       0,
+                                       DecoderOut);
+}
+
+HRESULT WINAPI
+Rpi3MmalCreateH264DecoderEx(UINT Width,
+                           UINT Height,
+                           const BYTE *ExtraData,
+                           UINT ExtraDataSize,
+                           UINT Flags,
+                           RPI3_MMAL_DECODER **DecoderOut)
+{
     RPI3_MMAL_DECODER *Decoder;
     HRESULT Result;
 
     if (!DecoderOut || !Width || !Height || Width > 1920 || Height > 1088 ||
         ExtraDataSize > MMAL_FORMAT_EXTRADATA_MAX_SIZE ||
-        (ExtraDataSize && !ExtraData))
+        (ExtraDataSize && !ExtraData) ||
+        (Flags & ~RPI3_MMAL_DECODER_OUTPUT_DECODE_ORDER))
     {
         return E_INVALIDARG;
     }
@@ -2636,6 +2720,10 @@ Rpi3MmalCreateH264Decoder(UINT Width,
     Decoder->Height = Height;
     Decoder->VisibleWidth = Width;
     Decoder->VisibleHeight = Height;
+    Decoder->DecoderFlags = Flags;
+    Decoder->CodecExtraDataSize = ExtraDataSize;
+    if (ExtraDataSize)
+        CopyMemory(Decoder->CodecExtraData, ExtraData, ExtraDataSize);
     Result = Rpi3MmalOpenSession(Decoder);
     if (FAILED(Result))
         goto Failure;
@@ -2685,6 +2773,14 @@ Rpi3MmalSubmit(RPI3_MMAL_DECODER *Decoder,
     Result = (HRESULT)InterlockedCompareExchange(&Decoder->AsyncResult, S_OK, S_OK);
     if (FAILED(Result))
         return Result;
+    if (!Decoder->Encoder && DataSize &&
+        (Flags & (RPI3_MMAL_SUBMIT_FRAME_START |
+                  RPI3_MMAL_SUBMIT_FRAME_END)) ==
+            (RPI3_MMAL_SUBMIT_FRAME_START | RPI3_MMAL_SUBMIT_FRAME_END) &&
+        !Rpi3MmalValidateH264AccessUnit(Data, DataSize))
+    {
+        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+    }
 
     if (Flags & RPI3_MMAL_SUBMIT_FRAME_START)
         MmalFlags |= MMAL_BUFFER_HEADER_FLAG_FRAME_START;
@@ -2737,7 +2833,7 @@ Rpi3MmalSubmit(RPI3_MMAL_DECODER *Decoder,
         Token = 1;
     Message.DriverBuffer.ClientContext = Token;
     Message.BufferHeader.Data = Token;
-    Message.BufferHeader.AllocationSize = DataSize;
+    Message.BufferHeader.AllocationSize = Decoder->Input.Port.BufferSize;
     Message.BufferHeader.Length = DataSize;
     Message.BufferHeader.Flags = MmalFlags;
     Message.BufferHeader.Pts = Pts;
@@ -2798,6 +2894,8 @@ Rpi3MmalSubmit(RPI3_MMAL_DECODER *Decoder,
 
 InputComplete:
     InterlockedCompareExchange(&Decoder->PendingInputToken, 0, (LONG)Token);
+    if (SUCCEEDED(Result) && (Flags & RPI3_MMAL_SUBMIT_EOS))
+        Decoder->InputEosSubmitted = TRUE;
     LeaveCriticalSection(&Decoder->InputLock);
 
     if (AllocatedTransfer)
@@ -2892,8 +2990,8 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
     if (!Decoder || Decoder->Encoder || !SelectOutput || !Frame)
         return E_INVALIDARG;
 
-    WaitHandles[0] = Decoder->FormatEvent;
-    WaitHandles[1] = Decoder->FrameEvent;
+    WaitHandles[0] = Decoder->FrameEvent;
+    WaitHandles[1] = Decoder->FormatEvent;
     WaitHandles[2] = Decoder->ReceiveStopEvent;
     WaitHandles[3] = Decoder->StopEvent;
 
@@ -2905,7 +3003,7 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
 
         WaitStatus = WaitForMultipleObjects(ARRAYSIZE(WaitHandles), WaitHandles, FALSE,
                                             TimeoutMilliseconds);
-        if (WaitStatus == WAIT_OBJECT_0)
+        if (WaitStatus == WAIT_OBJECT_0 + 1)
         {
             Result = Rpi3MmalReconfigureOutput(Decoder);
             if (FAILED(Result))
@@ -2915,19 +3013,11 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
         if (WaitStatus == WAIT_OBJECT_0 + 2 ||
             WaitStatus == WAIT_OBJECT_0 + 3)
             return HRESULT_FROM_WIN32(ERROR_OPERATION_ABORTED);
-        if (WaitStatus != WAIT_OBJECT_0 + 1)
+        if (WaitStatus != WAIT_OBJECT_0)
         {
             return WaitStatus == WAIT_TIMEOUT ? HRESULT_FROM_WIN32(ERROR_TIMEOUT) :
                                                 Rpi3MmalErrorFromLastError();
         }
-
-        EnterCriticalSection(&Decoder->StateLock);
-        if (Decoder->FormatGeneration != Decoder->AppliedFormatGeneration)
-        {
-            LeaveCriticalSection(&Decoder->StateLock);
-            continue;
-        }
-        LeaveCriticalSection(&Decoder->StateLock);
 
         ZeroMemory(&Output, sizeof(Output));
         if (!Rpi3MmalSnapshotOldestReadyOutput(Decoder, &Output))
@@ -3376,6 +3466,8 @@ Rpi3MmalReceiveH264(RPI3_MMAL_ENCODER *Encoder,
             Packet->Flags |= RPI3_MMAL_PACKET_CONFIG;
         if (Output.Flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END)
             Packet->Flags |= RPI3_MMAL_PACKET_FRAME_END;
+        if (Output.Flags & MMAL_BUFFER_HEADER_FLAG_CODECSIDEINFO)
+            Packet->Flags |= RPI3_MMAL_PACKET_CODECSIDEINFO;
 
         if (Output.Flags & MMAL_BUFFER_HEADER_FLAG_EOS)
         {
@@ -3454,6 +3546,78 @@ Rpi3MmalSetIntraPeriod(RPI3_MMAL_ENCODER *Encoder, UINT IntraPeriod)
 }
 
 static HRESULT
+Rpi3MmalResetDecoderComponent(RPI3_MMAL_DECODER *Decoder)
+{
+    HRESULT Result;
+
+    if (Decoder->InputEnabled)
+    {
+        Result = Rpi3MmalPortAction(Decoder,
+                                    &Decoder->Input,
+                                    MmalPortActionDisable);
+        if (FAILED(Result))
+            return Result;
+        Decoder->InputEnabled = FALSE;
+    }
+    if (Decoder->OutputEnabled)
+    {
+        Result = Rpi3MmalPortAction(Decoder,
+                                    &Decoder->Output,
+                                    MmalPortActionDisable);
+        if (FAILED(Result))
+            return Result;
+        Decoder->OutputEnabled = FALSE;
+        Result = Rpi3MmalWaitForOutputDrain(Decoder);
+        if (FAILED(Result))
+            return Result;
+        Result = Rpi3MmalDrainReturnedOutputs(Decoder);
+        if (FAILED(Result))
+            return Result;
+    }
+    if (Decoder->ComponentEnabled)
+    {
+        Result = Rpi3MmalComponentCommand(Decoder,
+                                          MmalWorkerComponentDisable);
+        if (FAILED(Result))
+            return Result;
+        Decoder->ComponentEnabled = FALSE;
+    }
+
+    Result = Rpi3MmalComponentCommand(Decoder, MmalWorkerComponentDestroy);
+    if (FAILED(Result))
+        return Result;
+    Decoder->ComponentHandle = 0;
+
+    Rpi3MmalFreeOutputBuffers(Decoder);
+    ZeroMemory(&Decoder->Input, sizeof(Decoder->Input));
+    ZeroMemory(&Decoder->Output, sizeof(Decoder->Output));
+    EnterCriticalSection(&Decoder->StateLock);
+    Decoder->FormatGeneration = 0;
+    Decoder->AppliedFormatGeneration = 0;
+    Decoder->NextOutputSequence = 0;
+    ZeroMemory(&Decoder->PendingFormat, sizeof(Decoder->PendingFormat));
+    InterlockedExchange(&Decoder->FormatChanged, 0);
+    ResetEvent(Decoder->FrameEvent);
+    ResetEvent(Decoder->FormatEvent);
+    SetEvent(Decoder->OutputDrainedEvent);
+    LeaveCriticalSection(&Decoder->StateLock);
+
+    Result = Rpi3MmalCreateComponent(Decoder);
+    if (FAILED(Result))
+        return Result;
+    Result = Rpi3MmalConfigureDecoderPorts(Decoder,
+                                           Decoder->CodecExtraData,
+                                           Decoder->CodecExtraDataSize);
+    if (FAILED(Result))
+        return Result;
+    Result = Rpi3MmalAllocateOutputBuffers(Decoder);
+    if (FAILED(Result))
+        return Result;
+    InterlockedExchange(&Decoder->Reconfiguring, 0);
+    return Rpi3MmalStart(Decoder);
+}
+
+static HRESULT
 Rpi3MmalFlushInternal(RPI3_MMAL_DECODER *Decoder)
 {
     BOOL FormatPending;
@@ -3462,14 +3626,16 @@ Rpi3MmalFlushInternal(RPI3_MMAL_DECODER *Decoder)
 
     if (!Decoder)
         return E_INVALIDARG;
+    EnterCriticalSection(&Decoder->InputLock);
     Result = (HRESULT)InterlockedCompareExchange(&Decoder->AsyncResult, S_OK, S_OK);
     if (FAILED(Result))
-        return Result;
+        goto Exit;
 
     InterlockedExchange(&Decoder->Reconfiguring, 1);
     Result = Rpi3MmalDrainReturnedOutputs(Decoder);
     if (FAILED(Result))
         goto Failure;
+
     Result = Rpi3MmalPortFlush(Decoder, &Decoder->Input, Decoder->InputBulkSent);
     if (FAILED(Result))
         goto Failure;
@@ -3483,6 +3649,16 @@ Rpi3MmalFlushInternal(RPI3_MMAL_DECODER *Decoder)
     Result = Rpi3MmalDrainReturnedOutputs(Decoder);
     if (FAILED(Result))
         goto Failure;
+
+    if (!Decoder->Encoder && Decoder->InputEosSubmitted)
+    {
+        Result = Rpi3MmalResetDecoderComponent(Decoder);
+        if (FAILED(Result))
+            goto Failure;
+        Decoder->InputBulkSent = FALSE;
+        Decoder->InputEosSubmitted = FALSE;
+        goto Exit;
+    }
 
     EnterCriticalSection(&Decoder->StateLock);
     for (Index = 0; Index < Decoder->OutputCount; ++Index)
@@ -3506,13 +3682,19 @@ Rpi3MmalFlushInternal(RPI3_MMAL_DECODER *Decoder)
                                      Index,
                                      Rpi3MmalSlotFree,
                                      FALSE))
-            return Rpi3MmalErrorFromLastError();
+        {
+            Result = Rpi3MmalErrorFromLastError();
+            goto Failure;
+        }
     }
-    return S_OK;
+    Result = S_OK;
+    goto Exit;
 
 Failure:
     InterlockedExchange(&Decoder->Reconfiguring, 0);
     Rpi3MmalSetAsyncResult(Decoder, Result);
+Exit:
+    LeaveCriticalSection(&Decoder->InputLock);
     return Result;
 }
 
@@ -3591,8 +3773,12 @@ Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
             Decoder->ComponentEnabled = FALSE;
         }
         if (SUCCEEDED(Result))
-            (VOID)Rpi3MmalComponentCommand(Decoder,
-                                            MmalWorkerComponentDestroy);
+        {
+            InterlockedExchange(&Decoder->StopAfterControlReply, 1);
+            Result = Rpi3MmalComponentCommand(
+                         Decoder,
+                         MmalWorkerComponentDestroy);
+        }
         Decoder->ComponentHandle = 0;
         LeaveCriticalSection(&Decoder->OutputLock);
     }
@@ -3610,18 +3796,6 @@ Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
         SetEvent(Decoder->FormatEvent);
     if (Decoder->OutputDrainedEvent)
         SetEvent(Decoder->OutputDrainedEvent);
-    if (Decoder->Device != INVALID_HANDLE_VALUE)
-    {
-        (VOID)Rpi3MmalDeviceIoControl(Decoder,
-                                      VCHIQ_IOC_SHUTDOWN,
-                                      NULL,
-                                      0,
-                                      NULL,
-                                      0,
-                                      NULL);
-        if (Decoder->Device != INVALID_HANDLE_VALUE)
-            CancelIoEx(Decoder->Device, NULL);
-    }
     if (Decoder->CompletionThread)
     {
         WaitStatus = WaitForSingleObject(Decoder->CompletionThread,
@@ -3635,6 +3809,17 @@ Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
             WaitForSingleObject(Decoder->CompletionThread, INFINITE);
         }
         CloseHandle(Decoder->CompletionThread);
+        Decoder->CompletionThread = NULL;
+    }
+    if (Decoder->Device != INVALID_HANDLE_VALUE)
+    {
+        (VOID)Rpi3MmalDeviceIoControl(Decoder,
+                                      VCHIQ_IOC_SHUTDOWN,
+                                      NULL,
+                                      0,
+                                      NULL,
+                                      0,
+                                      NULL);
     }
     if (Decoder->Device != INVALID_HANDLE_VALUE)
     {
