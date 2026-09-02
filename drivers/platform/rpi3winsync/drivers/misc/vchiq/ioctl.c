@@ -259,6 +259,8 @@ VOID VchiqIoDeviceControl (
     case IOCTL_VCHIQ_CREATE_SERVICE:
         {
             VCHIQ_CREATE_SERVICE* createServicePtr;
+            LONG serviceState;
+            BOOLEAN requestOwned;
             status = WdfRequestRetrieveInputBuffer(
                 WdfRequest,
                 sizeof(*createServicePtr),
@@ -288,6 +290,28 @@ VOID VchiqIoDeviceControl (
             vchiqFileContextPtr->ServiceUserData =
                 createServicePtr->Params.UserData;
 
+            ExAcquireFastMutex(&vchiqFileContextPtr->ServiceMutex);
+            serviceState = InterlockedCompareExchange(
+                &vchiqFileContextPtr->State,
+                SERVICE_STATE_MIN,
+                SERVICE_STATE_MIN);
+            if (serviceState != SERVICE_STATE_MIN &&
+                serviceState != SERVICE_STATE_CLOSE)
+            {
+                ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
+                status = STATUS_DEVICE_BUSY;
+                goto CompleteRequest;
+            }
+
+            InterlockedExchange(
+                &vchiqFileContextPtr->BulksAborted,
+                0);
+            KeClearEvent(&vchiqFileContextPtr->ServiceStateEvent);
+            KeClearEvent(&vchiqFileContextPtr->ServiceClosedEvent);
+            InterlockedExchange(
+                &vchiqFileContextPtr->State,
+                SERVICE_STATE_OPENING);
+
             status = VchiqUpdateQueueDispatchMessage(
                 deviceContextPtr,
                 vchiqFileContextPtr,
@@ -298,13 +322,25 @@ VOID VchiqIoDeviceControl (
                     vchiqFileContextPtr->ArmPortNumber,
                     0),
                 &createServicePayload,
-                sizeof(createServicePayload));
+                sizeof(createServicePayload),
+                &requestOwned);
             if (!NT_SUCCESS(status)) {
+                InterlockedExchange(
+                    &vchiqFileContextPtr->State,
+                    serviceState);
+                KeSetEvent(
+                    &vchiqFileContextPtr->ServiceStateEvent,
+                    IO_NO_INCREMENT,
+                    FALSE);
                 VCHIQ_LOG_ERROR(
                     "VchiqUpdateQueueDispatchMessage failed ( %!STATUS!)",
                     status);
-                goto CompleteRequest;
+                ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
+                if (requestOwned)
+                    goto CompleteRequest;
+                goto End;
             }
+            ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
         }
         goto End;
     case IOCTL_VCHIQ_SHUTDOWN:
@@ -321,10 +357,24 @@ VOID VchiqIoDeviceControl (
     case IOCTL_VCHIQ_REMOVE_SERVICE:
     case IOCTL_VCHIQ_CLOSE_SERVICE:
         {
-            // The current VCHIQ driver doesn't manage any service state. This 
-            // would be an ideal time to clean up service and close pending
-            // request. Although when a file handle is close all queues are 
-            // purged at that point.
+            BOOLEAN requestOwned;
+
+            ExAcquireFastMutex(&vchiqFileContextPtr->ServiceMutex);
+            if (InterlockedCompareExchange(
+                    &vchiqFileContextPtr->State,
+                    SERVICE_STATE_OPEN,
+                    SERVICE_STATE_OPEN) != SERVICE_STATE_OPEN)
+            {
+                ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
+                status = STATUS_INVALID_DEVICE_STATE;
+                goto CompleteRequest;
+            }
+
+            KeClearEvent(&vchiqFileContextPtr->ServiceStateEvent);
+            KeClearEvent(&vchiqFileContextPtr->ServiceClosedEvent);
+            InterlockedExchange(
+                &vchiqFileContextPtr->State,
+                SERVICE_STATE_CLOSING);
             status = VchiqUpdateQueueDispatchMessage(
                 deviceContextPtr,
                 vchiqFileContextPtr,
@@ -335,13 +385,25 @@ VOID VchiqIoDeviceControl (
                     vchiqFileContextPtr->ArmPortNumber,
                     vchiqFileContextPtr->VCHIQPortNumber),
                 NULL,
-                0);
+                0,
+                &requestOwned);
             if (!NT_SUCCESS(status)) {
+                InterlockedExchange(
+                    &vchiqFileContextPtr->State,
+                    SERVICE_STATE_OPEN);
+                KeSetEvent(
+                    &vchiqFileContextPtr->ServiceStateEvent,
+                    IO_NO_INCREMENT,
+                    FALSE);
                 VCHIQ_LOG_ERROR(
                     "VchiqUpdateQueueDispatchMessage failed ( %!STATUS!)",
                     status);
-                goto CompleteRequest;
+                ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
+                if (requestOwned)
+                    goto CompleteRequest;
+                goto End;
             }
+            ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
         }
         goto End;
     case IOCTL_VCHIQ_QUEUE_MSG:
@@ -363,6 +425,17 @@ VOID VchiqIoDeviceControl (
             VCHIQ_ELEMENT* elementsPtr = WdfMemoryGetBuffer(
                 messageBufferPtr->WdfMemoryElementBuffer,
                 NULL);
+            ExAcquireFastMutex(&vchiqFileContextPtr->ServiceMutex);
+            if (InterlockedCompareExchange(
+                    &vchiqFileContextPtr->State,
+                    SERVICE_STATE_OPEN,
+                    SERVICE_STATE_OPEN) != SERVICE_STATE_OPEN)
+            {
+                ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
+                status = STATUS_INVALID_DEVICE_STATE;
+                goto CompleteRequest;
+            }
+
             if (messageBufferPtr->Count == 1) {
                 VOID* elementDataPtr = WdfMemoryGetBuffer(
                     elementsPtr->WdfMemoryData,
@@ -398,6 +471,7 @@ VOID VchiqIoDeviceControl (
                         status);
                 }
             }
+            ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
 
             goto CompleteRequest;
         }
@@ -440,6 +514,13 @@ VOID VchiqIoDeviceControl (
                 VCHIQ_LOG_ERROR(
                     "WdfRequestRetrieveOutputBuffer failed %!STATUS!",
                     status);
+                goto CompleteRequest;
+            }
+
+            if (bulkTransferPtr->Size == 0 ||
+                bulkTransferPtr->Size != MmGetMdlByteCount(bufferMdl) ||
+                bulkTransferPtr->Mode > VCHIQ_BULK_MODE_NOCALLBACK) {
+                status = STATUS_INVALID_PARAMETER;
                 goto CompleteRequest;
             }
 
@@ -496,6 +577,13 @@ VOID VchiqIoDeviceControl (
                 VCHIQ_LOG_ERROR(
                     "WdfRequestRetrieveInputBuffer failed %!STATUS!",
                     status);
+                goto CompleteRequest;
+            }
+
+            if (bulkTransferPtr->Size == 0 ||
+                bulkTransferPtr->Size != MmGetMdlByteCount(bufferMdl) ||
+                bulkTransferPtr->Mode > VCHIQ_BULK_MODE_NOCALLBACK) {
+                status = STATUS_INVALID_PARAMETER;
                 goto CompleteRequest;
             }
 
@@ -695,12 +783,15 @@ NTSTATUS VchiqUpdateQueueDispatchMessage (
     WDFQUEUE MsgQueue,
     ULONG MessageId,
     VOID* BufferPtr,
-    ULONG BufferSize
+    ULONG BufferSize,
+    BOOLEAN* RequestOwned
     )
 {
     NTSTATUS status;
 
     PAGED_CODE();
+
+    *RequestOwned = TRUE;
 
     if (WdfRequest && MsgQueue) {
         status = WdfRequestForwardToIoQueue(
@@ -712,6 +803,7 @@ NTSTATUS VchiqUpdateQueueDispatchMessage (
                 status);
             goto End;
         }
+        *RequestOwned = FALSE;
     }
 
     status = VchiqQueueMessageAsync(
@@ -729,19 +821,22 @@ NTSTATUS VchiqUpdateQueueDispatchMessage (
             status);
 
         if (WdfRequest && MsgQueue) {
-            tempStatus = WdfIoQueueRetrieveFoundRequest(
+            tempStatus = VchiqRetrieveQueuedRequest(
                 MsgQueue,
                 WdfRequest,
                 &removeRequest);
-            if (tempStatus == STATUS_NOT_FOUND) {
-                // Request not found, framework has has cancel the request just
-                // return success and request would not be completed
-                status = STATUS_SUCCESS;
+            if (tempStatus == STATUS_NOT_FOUND ||
+                tempStatus == STATUS_NO_MORE_ENTRIES)
+            {
+                /* The framework owns and will complete the canceled request. */
             } else if (!NT_SUCCESS(tempStatus)) {
                 VCHIQ_LOG_ERROR(
                     "WdfIoQueueRetrieveFoundRequest failed (%!STATUS!)",
                     tempStatus);
                 NT_ASSERT(NT_SUCCESS(tempStatus));
+            } else {
+                NT_ASSERT(removeRequest == WdfRequest);
+                *RequestOwned = TRUE;
             }
         }
 
@@ -874,6 +969,14 @@ VOID VchiqInCallerContext (
             // First lock the element list
             WDFMEMORY wdfMemoryBufferLock;
             VCHIQ_ELEMENT* elementsPtr = messageBufferPtr->Elements;
+            ULONG totalSize = 0;
+
+            if (messageBufferPtr->Count == 0 || elementsPtr == NULL ||
+                messageBufferPtr->Count >
+                    VCHIQ_MAX_MSG_SIZE / sizeof(*elementsPtr)) {
+                status = STATUS_INVALID_PARAMETER;
+                goto CompleteRequest;
+            }
 
             if (isUserMode) {
                 status = WdfRequestProbeAndLockUserBufferForRead(
@@ -883,7 +986,7 @@ VOID VchiqInCallerContext (
                     &wdfMemoryBufferLock);
                 if (!NT_SUCCESS(status)) {
                     VCHIQ_LOG_ERROR(
-                        "WdfRequestProbeAndLockUserBufferForWrite \
+                        "WdfRequestProbeAndLockUserBufferForRead \
                         failed %!STATUS!",
                         status);
                     goto CompleteRequest;
@@ -892,12 +995,6 @@ VOID VchiqInCallerContext (
                 WDF_OBJECT_ATTRIBUTES attributes;
                 WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
                 attributes.ParentObject = WdfRequest;
-
-                if (messageBufferPtr->Count == 0) {
-                    status = STATUS_INVALID_PARAMETER;
-                    VCHIQ_LOG_WARNING("Incoming buffer count is zero");
-                    goto CompleteRequest;
-                }
 
                 status = WdfMemoryCreatePreallocated(
                     &attributes,
@@ -913,21 +1010,32 @@ VOID VchiqInCallerContext (
             }
 
             messageBufferPtr->WdfMemoryElementBuffer = wdfMemoryBufferLock;
+            elementsPtr = WdfMemoryGetBuffer(wdfMemoryBufferLock, NULL);
+            messageBufferPtr->Elements = elementsPtr;
 
             // Next lock all the element of the user mode data
             for (ULONG elementsCount = 0;
                 elementsCount < messageBufferPtr->Count;
                 ++elementsCount) {
 
+                if (elementsPtr[elementsCount].Data == NULL ||
+                    elementsPtr[elementsCount].Size <= 0 ||
+                    (ULONG)elementsPtr[elementsCount].Size >
+                        VCHIQ_MAX_MSG_SIZE - totalSize) {
+                    status = STATUS_INVALID_PARAMETER;
+                    goto CompleteRequest;
+                }
+                totalSize += elementsPtr[elementsCount].Size;
+
                 if (isUserMode) {
-                    status = WdfRequestProbeAndLockUserBufferForWrite(
+                    status = WdfRequestProbeAndLockUserBufferForRead(
                         WdfRequest,
                         elementsPtr[elementsCount].Data,
                         elementsPtr[elementsCount].Size,
                         &wdfMemoryBufferLock);
                     if (!NT_SUCCESS(status)) {
                         VCHIQ_LOG_ERROR(
-                            "WdfRequestProbeAndLockUserBufferForWrite \
+                            "WdfRequestProbeAndLockUserBufferForRead \
                         failed %!STATUS!. count %d",
                             status,
                             elementsCount);
@@ -937,12 +1045,6 @@ VOID VchiqInCallerContext (
                     WDF_OBJECT_ATTRIBUTES attributes;
                     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
                     attributes.ParentObject = WdfRequest;
-
-                    if (elementsPtr[elementsCount].Size == 0) {
-                        status = STATUS_INVALID_PARAMETER;
-                        VCHIQ_LOG_WARNING("Incoming buffer size is zero");
-                        goto CompleteRequest;
-                    }
 
                     status = WdfMemoryCreatePreallocated(
                         &attributes,
@@ -976,6 +1078,19 @@ VOID VchiqInCallerContext (
                 goto CompleteRequest;
             }
 
+            if (awaitCompletionPtr->Count == 0 ||
+                awaitCompletionPtr->MsgBufCount == 0 ||
+                awaitCompletionPtr->MsgBufCount > awaitCompletionPtr->Count ||
+                awaitCompletionPtr->Count > 64 ||
+                awaitCompletionPtr->Buf == NULL ||
+                awaitCompletionPtr->MsgBufs == NULL ||
+                awaitCompletionPtr->MsgBufSize < sizeof(VCHIQ_HEADER) ||
+                awaitCompletionPtr->MsgBufSize >
+                    VCHIQ_MAX_MSG_SIZE + sizeof(VCHIQ_HEADER)) {
+                status = STATUS_INVALID_PARAMETER;
+                goto CompleteRequest;
+            }
+
             BOOLEAN isUserMode =
                 (WdfRequestGetRequestorMode(WdfRequest) == UserMode);
 
@@ -1001,12 +1116,6 @@ VOID VchiqInCallerContext (
                 WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
                 attributes.ParentObject = WdfRequest;
 
-                if (awaitCompletionPtr->Count == 0) {
-                    status = STATUS_INVALID_PARAMETER;
-                    VCHIQ_LOG_WARNING("Incoming buffer count is zero");
-                    goto CompleteRequest;
-                }
-
                 status = WdfMemoryCreatePreallocated(
                     &attributes,
                     awaitCompletionPtr->Buf,
@@ -1023,10 +1132,32 @@ VOID VchiqInCallerContext (
 
             awaitCompletionPtr->WdfMemoryCompletion = wdfMemoryBufferLock;
 
+            if (isUserMode) {
+                status = WdfRequestProbeAndLockUserBufferForRead(
+                    WdfRequest,
+                    awaitCompletionPtr->MsgBufs,
+                    sizeof(*awaitCompletionPtr->MsgBufs) *
+                        awaitCompletionPtr->MsgBufCount,
+                    &wdfMemoryBufferLock);
+                if (!NT_SUCCESS(status)) {
+                    VCHIQ_LOG_ERROR(
+                        "WdfRequestProbeAndLockUserBufferForRead failed %!STATUS!",
+                        status);
+                    goto CompleteRequest;
+                }
+                awaitCompletionPtr->MsgBufs =
+                    WdfMemoryGetBuffer(wdfMemoryBufferLock, NULL);
+            }
+
             // Now lock all the buffer pointers
             for (ULONG completionCount = 0; 
-                 completionCount < awaitCompletionPtr->Count;
+                 completionCount < awaitCompletionPtr->MsgBufCount;
                  ++completionCount) { 
+
+                if (awaitCompletionPtr->MsgBufs[completionCount] == NULL) {
+                    status = STATUS_INVALID_PARAMETER;
+                    goto CompleteRequest;
+                }
 
                 if (isUserMode) {
                     status = WdfRequestProbeAndLockUserBufferForWrite(
@@ -1046,12 +1177,6 @@ VOID VchiqInCallerContext (
                     WDF_OBJECT_ATTRIBUTES attributes;
                     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
                     attributes.ParentObject = WdfRequest;
-
-                    if (awaitCompletionPtr->MsgBufSize == 0) {
-                        status = STATUS_INVALID_PARAMETER;
-                        VCHIQ_LOG_WARNING("Incoming buffer size is zero");
-                        goto CompleteRequest;
-                    }
 
                     status = WdfMemoryCreatePreallocated(
                         &attributes,
