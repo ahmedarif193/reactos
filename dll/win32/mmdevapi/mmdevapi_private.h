@@ -61,6 +61,8 @@ struct reactos_audio_session_snapshot
     WCHAR process_path[MAX_PATH];
     WCHAR display_name[128];
     WCHAR icon_path[MAX_PATH];
+    float peak;
+    DWORD peak_tick;
 };
 #endif
 
@@ -97,6 +99,7 @@ typedef struct audio_session_wrapper {
     IAudioSessionControl2 IAudioSessionControl2_iface;
     IChannelAudioVolume IChannelAudioVolume_iface;
     ISimpleAudioVolume ISimpleAudioVolume_iface;
+    IAudioMeterInformation IAudioMeterInformation_iface;
 
     LONG ref;
 
@@ -209,6 +212,12 @@ extern HRESULT reactos_audio_session_set_channel(const struct reactos_audio_sess
                                                  UINT32 channel, float level);
 extern HRESULT reactos_audio_session_set_channels(const struct reactos_audio_session_id *id,
                                                   UINT32 count, const float *levels);
+extern HRESULT reactos_audio_session_set_peak(const struct reactos_audio_session_id *id,
+                                              float peak);
+extern HRESULT reactos_audio_session_read_peak(const struct reactos_audio_session_id *id,
+                                               float *peak, DWORD *tick);
+extern HRESULT reactos_audio_session_max_peak(IMMDevice *device, float *peak);
+extern HRESULT AudioEndpointMeter_Create(IMMDevice *parent, void **ppv);
 extern HRESULT reactos_audio_session_set_state(const struct reactos_audio_session_id *id,
                                                AudioSessionState state);
 extern void reactos_audio_sessions_shutdown(void);

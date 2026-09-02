@@ -2678,10 +2678,84 @@ static NTSTATUS reactos_get_render_buffer(struct get_render_buffer_params *param
     return STATUS_SUCCESS;
 }
 
+static float reactos_render_peak(const struct reactos_stream *stream, UINT32 frames)
+{
+    const WAVEFORMATEX *fmt = &stream->format.Format;
+    UINT32 channels = fmt->nChannels ? fmt->nChannels : 1;
+    UINT32 samples = frames * channels;
+    UINT32 i;
+    float peak = 0.0f;
+
+    if (!frames || !stream->buffer)
+        return 0.0f;
+    if (samples > 8192)
+        samples = 8192;
+    if (is_float_format(fmt) && fmt->wBitsPerSample == 32)
+    {
+        const float *p = (const float *)stream->buffer;
+        for (i = 0; i < samples; i++)
+        {
+            float v = p[i] < 0.0f ? -p[i] : p[i];
+            if (v > peak) peak = v;
+        }
+    }
+    else if (fmt->wBitsPerSample == 16)
+    {
+        const SHORT *p = (const SHORT *)stream->buffer;
+        LONG best = 0;
+        for (i = 0; i < samples; i++)
+        {
+            LONG v = p[i] < 0 ? -(LONG)p[i] : p[i];
+            if (v > best) best = v;
+        }
+        peak = (float)best / 32768.0f;
+    }
+    else if (fmt->wBitsPerSample == 32)
+    {
+        const LONG *p = (const LONG *)stream->buffer;
+        ULONG best = 0;
+        for (i = 0; i < samples; i++)
+        {
+            ULONG v = p[i] < 0 ? (ULONG)(-(LONGLONG)p[i]) : (ULONG)p[i];
+            if (v > best) best = v;
+        }
+        peak = (float)((double)best / 2147483648.0);
+    }
+    else if (fmt->wBitsPerSample == 24)
+    {
+        const BYTE *p = stream->buffer;
+        LONG best = 0;
+        for (i = 0; i < samples; i++)
+        {
+            LONG v = (LONG)((p[i * 3 + 2] << 24) | (p[i * 3 + 1] << 16) | (p[i * 3] << 8)) >> 8;
+            if (v < 0) v = -v;
+            if (v > best) best = v;
+        }
+        peak = (float)best / 8388608.0f;
+    }
+    else if (fmt->wBitsPerSample == 8)
+    {
+        const BYTE *p = stream->buffer;
+        LONG best = 0;
+        for (i = 0; i < samples; i++)
+        {
+            LONG v = (LONG)p[i] - 128;
+            if (v < 0) v = -v;
+            if (v > best) best = v;
+        }
+        peak = (float)best / 128.0f;
+    }
+    if (peak > 1.0f)
+        peak = 1.0f;
+    return peak;
+}
+
 static NTSTATUS reactos_release_render_buffer(struct release_render_buffer_params *params)
 {
     struct reactos_stream *stream = stream_from_handle(params->stream);
     HRESULT hr;
+
+    params->peak = 0.0f;
 
     if (!stream || stream->flow != eRender)
     {
@@ -2725,6 +2799,8 @@ static NTSTATUS reactos_release_render_buffer(struct release_render_buffer_param
         params->result = AUDCLNT_E_DEVICE_INVALIDATED;
         return STATUS_SUCCESS;
     }
+    if (!(params->flags & AUDCLNT_BUFFERFLAGS_SILENT))
+        params->peak = reactos_render_peak(stream, params->written_frames);
     if (stream->shared_render)
     {
         const BYTE *render_data = stream->buffer;

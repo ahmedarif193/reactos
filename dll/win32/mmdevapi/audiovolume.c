@@ -760,3 +760,111 @@ HRESULT AudioEndpointVolume_Create(MMDevice *parent, IAudioEndpointVolumeEx **pp
     *ppv = &This->IAudioEndpointVolumeEx_iface;
     return S_OK;
 }
+
+struct endpoint_meter
+{
+    IAudioMeterInformation IAudioMeterInformation_iface;
+    LONG ref;
+    IMMDevice *device;
+};
+
+static inline struct endpoint_meter *impl_from_meter(IAudioMeterInformation *iface)
+{
+    return CONTAINING_RECORD(iface, struct endpoint_meter, IAudioMeterInformation_iface);
+}
+
+static HRESULT WINAPI endpointmeter_QueryInterface(IAudioMeterInformation *iface, REFIID riid, void **ppv)
+{
+    if (!ppv)
+        return E_POINTER;
+    *ppv = NULL;
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IAudioMeterInformation))
+        *ppv = iface;
+    else
+        return E_NOINTERFACE;
+    IUnknown_AddRef((IUnknown *)*ppv);
+    return S_OK;
+}
+
+static ULONG WINAPI endpointmeter_AddRef(IAudioMeterInformation *iface)
+{
+    struct endpoint_meter *This = impl_from_meter(iface);
+    return InterlockedIncrement(&This->ref);
+}
+
+static ULONG WINAPI endpointmeter_Release(IAudioMeterInformation *iface)
+{
+    struct endpoint_meter *This = impl_from_meter(iface);
+    ULONG ref = InterlockedDecrement(&This->ref);
+    if (!ref)
+    {
+        IMMDevice_Release(This->device);
+        free(This);
+    }
+    return ref;
+}
+
+static HRESULT WINAPI endpointmeter_GetPeakValue(IAudioMeterInformation *iface, float *peak)
+{
+    struct endpoint_meter *This = impl_from_meter(iface);
+    if (!peak)
+        return E_POINTER;
+    return reactos_audio_session_max_peak(This->device, peak);
+}
+
+static HRESULT WINAPI endpointmeter_GetMeteringChannelCount(IAudioMeterInformation *iface, UINT *count)
+{
+    if (!count)
+        return E_POINTER;
+    *count = 1;
+    return S_OK;
+}
+
+static HRESULT WINAPI endpointmeter_GetChannelsPeakValues(IAudioMeterInformation *iface, UINT32 count, float *peaks)
+{
+    struct endpoint_meter *This = impl_from_meter(iface);
+    float peak = 0.0f;
+    UINT32 i;
+    if (!peaks)
+        return E_POINTER;
+    reactos_audio_session_max_peak(This->device, &peak);
+    for (i = 0; i < count; i++)
+        peaks[i] = peak;
+    return S_OK;
+}
+
+static HRESULT WINAPI endpointmeter_QueryHardwareSupport(IAudioMeterInformation *iface, DWORD *mask)
+{
+    if (!mask)
+        return E_POINTER;
+    *mask = 0;
+    return S_OK;
+}
+
+static const IAudioMeterInformationVtbl EndpointMeterInformation_Vtbl =
+{
+    endpointmeter_QueryInterface,
+    endpointmeter_AddRef,
+    endpointmeter_Release,
+    endpointmeter_GetPeakValue,
+    endpointmeter_GetMeteringChannelCount,
+    endpointmeter_GetChannelsPeakValues,
+    endpointmeter_QueryHardwareSupport
+};
+
+HRESULT AudioEndpointMeter_Create(IMMDevice *parent, void **ppv)
+{
+    struct endpoint_meter *This;
+    if (!ppv)
+        return E_POINTER;
+    *ppv = NULL;
+    This = calloc(1, sizeof(*This));
+    if (!This)
+        return E_OUTOFMEMORY;
+    This->IAudioMeterInformation_iface.lpVtbl = &EndpointMeterInformation_Vtbl;
+    This->ref = 1;
+    This->device = parent;
+    IMMDevice_AddRef(parent);
+    *ppv = &This->IAudioMeterInformation_iface;
+    return S_OK;
+}
