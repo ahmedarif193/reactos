@@ -742,6 +742,48 @@ IntCompositionOnWindowDestroy(_In_ PWND Wnd)
  * moves/Z-order changes reach the screen without waiting for a paint.
  */
 VOID
+IntCompositionOnDisplayChangeBegin(VOID)
+{
+    ULONG i;
+
+    if (!gbCompositionEnabled)
+        return;
+
+    for (i = 0; i < g_RedirectHighWater; i++)
+    {
+        REDIRECT_ENTRY *e = &g_Redirects[i];
+
+        if (e->Wnd == NULL)
+            continue;
+        IntCompositionFreeSurface(&e->Redirect);
+        InterlockedExchange(&e->BackComplete, FALSE);
+        e->Damaged = TRUE;
+        DceResetActiveDCEs(e->Wnd);
+    }
+    IntCompositionMarkDamage(TRUE);
+}
+
+VOID
+IntCompositionOnDisplayChangeEnd(VOID)
+{
+    ULONG i;
+
+    if (!gbCompositionEnabled)
+        return;
+
+    for (i = 0; i < g_RedirectHighWater; i++)
+    {
+        REDIRECT_ENTRY *e = &g_Redirects[i];
+
+        if (e->Wnd == NULL || !IntCompositionIsCompositable(e->Wnd))
+            continue;
+        IntCompositionEnsureSurface(e->Wnd, &e->Redirect);
+        DceResetActiveDCEs(e->Wnd);
+    }
+    IntCompositionMarkDamage(TRUE);
+}
+
+VOID
 IntCompositionOnWindowResize(_In_ PWND Wnd)
 {
     REDIRECT_ENTRY *e;
