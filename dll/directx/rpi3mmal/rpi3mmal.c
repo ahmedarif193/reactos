@@ -2936,7 +2936,9 @@ Rpi3MmalSubmit(RPI3_MMAL_DECODER *Decoder,
         Token = 1;
     Message.DriverBuffer.ClientContext = Token;
     Message.BufferHeader.Data = Token;
-    Message.BufferHeader.AllocationSize = Decoder->Input.Port.BufferSize;
+    Message.BufferHeader.AllocationSize =
+        TransferSize > Decoder->Input.Port.BufferSize ?
+            TransferSize : Decoder->Input.Port.BufferSize;
     Message.BufferHeader.Length = DataSize;
     Message.BufferHeader.Flags = MmalFlags;
     Message.BufferHeader.Pts = Pts;
