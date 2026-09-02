@@ -21,6 +21,7 @@ InitializeRows(
 START_TEST(SoftGpu2DPolicy)
 {
     SOFTGPU_ALLOCATION_PRIVATE_DATA PrivateData;
+    SOFTGPU_ALLOCATION_PRIVATE_DATA NormalizedPrivateData;
     ULONG Source[4 * 6];
     ULONG Destination[4 * 8];
     ULONG Overlap[4 * 4];
@@ -28,6 +29,7 @@ START_TEST(SoftGpu2DPolicy)
     RECT DestinationRect;
     NTSTATUS Status;
     SIZE_T SlabSize;
+    ULONGLONG RequiredSize;
     ULONG Index;
 
     Status = SoftGpu2dComputeAllocationSlabSize(
@@ -79,7 +81,9 @@ START_TEST(SoftGpu2DPolicy)
     ok_eq_hex(Status, STATUS_INVALID_ADDRESS);
 
     RtlZeroMemory(&PrivateData, sizeof(PrivateData));
-    ok_eq_ulong(sizeof(PrivateData), 7 * sizeof(ULONG));
+    ok_eq_ulong(sizeof(PrivateData), 15 * sizeof(ULONG));
+    ok_eq_ulong(SOFTGPU_ALLOCATION_PRIVATE_VERSION_2_SIZE,
+                8 * sizeof(ULONG));
     ok_eq_ulong(FIELD_OFFSET(SOFTGPU_ALLOCATION_PRIVATE_DATA, Width), 0);
     ok_eq_ulong(FIELD_OFFSET(SOFTGPU_ALLOCATION_PRIVATE_DATA, Height),
                 sizeof(ULONG));
@@ -94,6 +98,9 @@ START_TEST(SoftGpu2DPolicy)
     PrivateData.Version = SOFTGPU_ALLOCATION_PRIVATE_VERSION;
     PrivateData.Pitch = 6 * sizeof(ULONG);
     PrivateData.Format = D3DDDIFMT_X8R8G8B8;
+    PrivateData.StorageHeight = PrivateData.Height;
+    PrivateData.PlaneCount = 1;
+    PrivateData.PlanePitches[0] = PrivateData.Pitch;
     ok_bool_true(
         SoftGpuAllocationPrivateDataValid(&PrivateData),
         "valid padded linear surface");
@@ -116,6 +123,70 @@ START_TEST(SoftGpu2DPolicy)
     ok_bool_false(
         SoftGpuAllocationPrivateDataValid(&PrivateData),
         "unknown private-data version");
+
+    RtlZeroMemory(&PrivateData, sizeof(PrivateData));
+    PrivateData.Width = 1920;
+    PrivateData.Height = 1080;
+    PrivateData.BitsPerPixel = 12;
+    PrivateData.Magic = SOFTGPU_ALLOCATION_PRIVATE_MAGIC;
+    PrivateData.Version = SOFTGPU_ALLOCATION_PRIVATE_VERSION;
+    PrivateData.Pitch = 1920;
+    PrivateData.Format = SOFTGPU_D3DDDIFMT_NV12;
+    PrivateData.StorageHeight = 1088;
+    PrivateData.PlaneCount = 2;
+    PrivateData.PlaneOffsets[1] = 1920 * 1088;
+    PrivateData.PlanePitches[0] = 1920;
+    PrivateData.PlanePitches[1] = 1920;
+    ok_bool_true(
+        SoftGpuAllocationPrivateDataSize(&PrivateData, &RequiredSize),
+        "valid NV12 storage height");
+    ok_eq_ulonglong(RequiredSize, 3133440ULL);
+    PrivateData.StorageHeight = 1072;
+    ok_bool_false(
+        SoftGpuAllocationPrivateDataSize(&PrivateData, &RequiredSize),
+        "storage height shorter than visible height");
+    PrivateData.StorageHeight = 1089;
+    ok_bool_false(
+        SoftGpuAllocationPrivateDataSize(&PrivateData, &RequiredSize),
+        "odd NV12 storage height");
+    PrivateData.StorageHeight = 1088;
+    PrivateData.PlaneOffsets[1]++;
+    ok_bool_false(
+        SoftGpuAllocationPrivateDataSize(&PrivateData, &RequiredSize),
+        "NV12 chroma offset does not follow padded luma");
+    PrivateData.PlaneOffsets[1]--;
+    PrivateData.PlanePitches[1] = 2048;
+    ok_bool_false(
+        SoftGpuAllocationPrivateDataSize(&PrivateData, &RequiredSize),
+        "NV12 chroma pitch differs from the allocation layout");
+
+    PrivateData.PlanePitches[1] = PrivateData.Pitch;
+    PrivateData.Version = SOFTGPU_ALLOCATION_PRIVATE_VERSION_2;
+    PrivateData.PlaneCount = 0;
+    PrivateData.PlaneOffsets[1] = 0;
+    PrivateData.PlanePitches[0] = 0;
+    PrivateData.PlanePitches[1] = 0;
+    ok_bool_true(
+        SoftGpuReadAllocationPrivateData(
+            &PrivateData,
+            SOFTGPU_ALLOCATION_PRIVATE_VERSION_2_SIZE,
+            &NormalizedPrivateData,
+            &RequiredSize),
+        "version 2 NV12 metadata is normalized");
+    ok_eq_ulong(NormalizedPrivateData.Version,
+                SOFTGPU_ALLOCATION_PRIVATE_VERSION);
+    ok_eq_ulong(NormalizedPrivateData.PlaneCount, 2);
+    ok_eq_ulong(NormalizedPrivateData.PlaneOffsets[1], 1920 * 1088);
+    ok_eq_ulong(NormalizedPrivateData.PlanePitches[0], 1920);
+    ok_eq_ulong(NormalizedPrivateData.PlanePitches[1], 1920);
+    ok_eq_ulonglong(RequiredSize, 3133440ULL);
+    ok_bool_false(
+        SoftGpuReadAllocationPrivateData(
+            &PrivateData,
+            SOFTGPU_ALLOCATION_PRIVATE_VERSION_2_SIZE - 1,
+            &NormalizedPrivateData,
+            &RequiredSize),
+        "truncated version 2 metadata");
 
     ok_eq_ulong(
         SoftGpu2dPresentEvaluate(TRUE, FALSE, FALSE, 1, 0),
