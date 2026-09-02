@@ -226,6 +226,12 @@ EnumDisplaySettingsExA(
         /* Store old structure size */
         WORD OldSize = lpDevMode->dmSize;
 
+        if (OldSize < FIELD_OFFSET(DEVMODEA, dmICMMethod) || OldSize > sizeof(DEVMODEA))
+        {
+            OldSize = sizeof(DEVMODEA);
+            lpDevMode->dmDriverExtra = 0;
+        }
+
 #define COPYS(f,len) WideCharToMultiByte(CP_THREAD_ACP, 0, lpExtendedDevMode->f, len, (LPSTR)lpDevMode->f, len, NULL, NULL)
 #define COPYN(f) lpDevMode->f = lpExtendedDevMode->f
 
@@ -361,6 +367,12 @@ EnumDisplaySettingsExW(
         /* Store old structure sizes */
         WORD OldSize = lpDevMode->dmSize;
         WORD OldDriverExtra = lpDevMode->dmDriverExtra;
+
+        if (OldSize < FIELD_OFFSET(DEVMODEW, dmICMMethod) || OldSize > sizeof(DEVMODEW))
+        {
+            OldSize = sizeof(DEVMODEW);
+            OldDriverExtra = 0;
+        }
 
         /* Copy general data */
         RtlCopyMemory(lpDevMode, lpExtendedDevMode, OldSize);
