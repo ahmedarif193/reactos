@@ -1176,8 +1176,16 @@ static HRESULT
 rpi3_append_packet(struct rpi3_encoder *Encoder,
                    const RPI3_MMAL_PACKET *Packet)
 {
+    UINT PacketFlags = Packet->Flags;
     HRESULT Result;
 
+    if (PacketFlags & RPI3_MMAL_PACKET_CODECSIDEINFO)
+    {
+        Encoder->PendingOutputFlags |=
+                PacketFlags & (RPI3_MMAL_PACKET_EOS |
+                               RPI3_MMAL_PACKET_CORRUPT);
+        return S_OK;
+    }
     if (Packet->Size > Encoder->OutputInfo.cbSize - Encoder->PendingOutputSize)
         return MF_E_BUFFERTOOSMALL;
     if (Packet->Size)
@@ -1187,6 +1195,8 @@ rpi3_append_packet(struct rpi3_encoder *Encoder,
                    Packet->Size);
         if (Packet->Flags & RPI3_MMAL_PACKET_CONFIG)
         {
+            PacketFlags &= ~(RPI3_MMAL_PACKET_FRAME_END |
+                             RPI3_MMAL_PACKET_KEYFRAME);
             if (!Encoder->SequenceHeaderOpen)
             {
                 Encoder->SequenceHeaderSize = 0;
@@ -1220,7 +1230,7 @@ rpi3_append_packet(struct rpi3_encoder *Encoder,
         }
         Encoder->PendingOutputSize += Packet->Size;
     }
-    Encoder->PendingOutputFlags |= Packet->Flags;
+    Encoder->PendingOutputFlags |= PacketFlags;
     return S_OK;
 }
 
@@ -1362,7 +1372,6 @@ transform_ProcessOutput(IMFTransform *Interface,
                 Result = MF_E_TRANSFORM_NEED_MORE_INPUT;
                 goto Done;
             }
-            Encoder->PendingOutputFlags |= RPI3_MMAL_PACKET_FRAME_END;
         }
     }
 
