@@ -21,3 +21,11 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4\Device0","DefaultSettings.XResol
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4\Device0","DefaultSettings.YResolution",0x00010001,0x00000300
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4\Device0","Device Description",0x00000000,"Raspberry Pi 3 VC4 Display (WDDM)"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4\Device0","VgaCompatible",0x00010001,0x00000000
+HKCR,"CLSID\{7fdf3f31-28d2-4c58-8a0c-47722d6f3a13}","",0x00000000,"Raspberry Pi 3 VideoCore H.264 Encoder"
+HKCR,"CLSID\{7fdf3f31-28d2-4c58-8a0c-47722d6f3a13}\InprocServer32","",0x00020000,"%SystemRoot%\System32\rpi3h264enc.dll"
+HKCR,"CLSID\{7fdf3f31-28d2-4c58-8a0c-47722d6f3a13}\InprocServer32","ThreadingModel",0x00000000,"Both"
+HKCR,"MediaFoundation\Transforms\7fdf3f31-28d2-4c58-8a0c-47722d6f3a13","",0x00000000,"Raspberry Pi 3 VideoCore H.264 Encoder"
+HKCR,"MediaFoundation\Transforms\7fdf3f31-28d2-4c58-8a0c-47722d6f3a13","InputTypes",0x00000001,0x76,0x69,0x64,0x73,0x00,0x00,0x10,0x00,0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71,0x4e,0x56,0x31,0x32,0x00,0x00,0x10,0x00,0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71
+HKCR,"MediaFoundation\Transforms\7fdf3f31-28d2-4c58-8a0c-47722d6f3a13","OutputTypes",0x00000001,0x76,0x69,0x64,0x73,0x00,0x00,0x10,0x00,0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71,0x48,0x32,0x36,0x34,0x00,0x00,0x10,0x00,0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71
+HKCR,"MediaFoundation\Transforms\7fdf3f31-28d2-4c58-8a0c-47722d6f3a13","MFTFlags",0x00010001,0x00000001
+HKCR,"MediaFoundation\Transforms\Categories\f79eac7d-e545-4387-bdee-d647d7bde42a\7fdf3f31-28d2-4c58-8a0c-47722d6f3a13","",0x00000010

@@ -1,0 +1,14 @@
+/*
+ * PROJECT:     ReactOS Raspberry Pi 3 video support
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     VideoCore H.264 Media Foundation encoder registration
+ * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
+ */
+
+#pragma makedep register
+
+[
+    threading(both),
+    uuid(7fdf3f31-28d2-4c58-8a0c-47722d6f3a13)
+]
+coclass Rpi3H264EncoderMFT {}
