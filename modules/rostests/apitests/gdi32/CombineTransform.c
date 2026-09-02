@@ -13,13 +13,19 @@ typedef union
     long l;
 } FLT_LONG;
 
+#ifdef _M_ARM64
+#define IS_ARCH_NAN(x) _isnan(x)
+#else
+#define IS_ARCH_NAN(x) FALSE
+#endif
+
 #define ok_flt(x, y) \
 { \
     FLT_LONG __x, __y; \
     __x.e = (x); \
     __y.e = (y); \
     if (_isnan(y)) {\
-      ok((__x.l == __y.l) || (__x.l == 0), "Wrong value for " #x ", expected " #y " (%f), got %f\n", (double)(y), (double)(x)); \
+      ok((__x.l == __y.l) || (__x.l == 0) || IS_ARCH_NAN(__x.e), "Wrong value for " #x ", expected " #y " (%f), got %f\n", (double)(y), (double)(x)); \
     } else {\
       ok(__x.l == __y.l, "Wrong value for " #x ", expected " #y " (%f), got %f\n", (double)(y), (double)(x)); \
     } \

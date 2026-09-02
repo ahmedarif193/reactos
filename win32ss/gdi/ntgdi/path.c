@@ -351,6 +351,24 @@ PATH_ReserveEntries(
     return TRUE;
 }
 
+static BOOL
+PATH_bRoundToLong(FLOATOBJ *pf, PLONG pl)
+{
+    FLOATOBJ tmp, back;
+    LONG l;
+
+    tmp = *pf;
+    FLOATOBJ_SetFloat(&back, 0.5f);
+    FLOATOBJ_Add(&tmp, &back);
+    if (!FLOATOBJ_bConvertToLong(&tmp, &l))
+        return FALSE;
+    FLOATOBJ_SetLong(&back, l);
+    if (FLOATOBJ_GreaterThan(&back, &tmp))
+        l--;
+    *pl = l;
+    return TRUE;
+}
+
 /* PATH_ScaleNormalizedPoint
  *
  * Scales a normalized point (x, y) with respect to the box whose corners are
@@ -377,7 +395,7 @@ PATH_ScaleNormalizedPoint(
     FLOATOBJ_Div(&tmp, (FLOATOBJ*)&gef2);
     FLOATOBJ_MulLong(&tmp, corners[1].x - corners[0].x);
     FLOATOBJ_AddLong(&tmp, corners[0].x);
-    if (!FLOATOBJ_bConvertToLong(&tmp, &pPoint->x))
+    if (!PATH_bRoundToLong(&tmp, &pPoint->x))
         return FALSE;
 
     /* pPoint->y = (double)corners[0].y + (double)(corners[1].y - corners[0].y) * 0.5 * (y + 1.0); */
@@ -386,7 +404,7 @@ PATH_ScaleNormalizedPoint(
     FLOATOBJ_Div(&tmp, (FLOATOBJ*)&gef2);
     FLOATOBJ_MulLong(&tmp, corners[1].y - corners[0].y);
     FLOATOBJ_AddLong(&tmp, corners[0].y);
-    if (!FLOATOBJ_bConvertToLong(&tmp, &pPoint->y))
+    if (!PATH_bRoundToLong(&tmp, &pPoint->y))
         return FALSE;
     return TRUE;
 }
