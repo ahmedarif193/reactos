@@ -92,6 +92,11 @@ static char *schan_get_buffer(struct schan_buffers *buffers, SIZE_T *count)
         if (available)
             break;
 
+        /* Preserve the consumed offset when the final buffer is exhausted.
+         * The caller uses it to report unconsumed SECBUFFER_EXTRA bytes. */
+        if ((ULONG)(buffers->current_buffer_idx + 1) >= buffers->desc->cBuffers)
+            return NULL;
+
         buffers->current_buffer_idx++;
         buffers->offset = 0;
     }
