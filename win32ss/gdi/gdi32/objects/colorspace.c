@@ -3,37 +3,64 @@
 #define NDEBUG
 #include <debug.h>
 
-/*
- * @unimplemented
- */
+BOOL
+FASTCALL
+IntGetLogColorSpaceW(HCOLORSPACE hCS, LPLOGCOLORSPACEW lplcpw);
+
 BOOL
 WINAPI
 GetLogColorSpaceA(
-    HCOLORSPACE		a0,
-    LPLOGCOLORSPACEA	a1,
-    DWORD			a2
-)
+    HCOLORSPACE hColorSpace,
+    LPLOGCOLORSPACEA lpBuffer,
+    DWORD nSize)
 {
-    UNIMPLEMENTED;
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    LOGCOLORSPACEW lcsw;
+
+    if (!lpBuffer || nSize < sizeof(LOGCOLORSPACEA))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!IntGetLogColorSpaceW(hColorSpace, &lcsw))
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    lpBuffer->lcsSignature = lcsw.lcsSignature;
+    lpBuffer->lcsVersion = lcsw.lcsVersion;
+    lpBuffer->lcsSize = sizeof(LOGCOLORSPACEA);
+    lpBuffer->lcsCSType = lcsw.lcsCSType;
+    lpBuffer->lcsIntent = lcsw.lcsIntent;
+    lpBuffer->lcsEndpoints = lcsw.lcsEndpoints;
+    lpBuffer->lcsGammaRed = lcsw.lcsGammaRed;
+    lpBuffer->lcsGammaGreen = lcsw.lcsGammaGreen;
+    lpBuffer->lcsGammaBlue = lcsw.lcsGammaBlue;
+    WideCharToMultiByte(CP_ACP, 0, lcsw.lcsFilename, -1, lpBuffer->lcsFilename, MAX_PATH, NULL, NULL);
+    lpBuffer->lcsFilename[MAX_PATH - 1] = 0;
+    return TRUE;
 }
 
-
-/*
- * @unimplemented
- */
 BOOL
 WINAPI
 GetLogColorSpaceW(
-    HCOLORSPACE		a0,
-    LPLOGCOLORSPACEW	a1,
-    DWORD			a2
-)
+    HCOLORSPACE hColorSpace,
+    LPLOGCOLORSPACEW lpBuffer,
+    DWORD nSize)
 {
-    UNIMPLEMENTED;
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    LOGCOLORSPACEW lcsw;
+
+    if (!lpBuffer || nSize < sizeof(LOGCOLORSPACEW))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!IntGetLogColorSpaceW(hColorSpace, &lcsw))
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    *lpBuffer = lcsw;
+    return TRUE;
 }
 
 /*

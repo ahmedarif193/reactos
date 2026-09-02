@@ -137,7 +137,7 @@
 137 stdcall DdEntry7(ptr ptr ptr) NtGdiDdAddAttachedSurface
 138 stdcall DdEntry8(ptr ptr ptr) NtGdiDdAlphaBlt
 139 stdcall DdEntry9(ptr ptr) NtGdiDdAttachSurface
-140 stdcall DeleteColorSpace(long) NtGdiDeleteColorSpace
+140 stdcall DeleteColorSpace(long)
 141 stdcall DeleteDC(long)
 142 stdcall DeleteEnhMetaFile(long)
 143 stdcall DeleteMetaFile(long)
