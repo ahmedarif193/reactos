@@ -397,7 +397,7 @@ WlanSvcDoScan(PWLANSVC_INTERFACE Iface, PDOT11_SSID pSsid)
 }
 
 /* Find a stored profile targeting this BSS's SSID. */
-static PWLANSVC_PROFILE
+PWLANSVC_PROFILE
 WlanSvcMatchProfileForBss(PWLANSVC_INTERFACE Iface, PWLANSVC_BSS_ENTRY bss)
 {
     PLIST_ENTRY entry;
@@ -617,4 +617,47 @@ WlanSvcBuildBssList(PWLANSVC_INTERFACE Iface,
     *ppList = list;
     *pdwSize = (DWORD)size;
     return ERROR_SUCCESS;
+}
+
+DWORD
+WlanSvcTryAutoConnect(PWLANSVC_INTERFACE Iface)
+{
+    PLIST_ENTRY entry;
+    PWLANSVC_BSS_ENTRY best = NULL;
+    PWLANSVC_PROFILE bestProf = NULL;
+    WLAN_CONNECTION_PARAMETERS params;
+
+    if (Iface->Connected || !Iface->RadioOn || !Iface->AutoConfigEnabled)
+        return ERROR_INVALID_STATE;
+    if (Iface->State == wlan_interface_state_associating ||
+        Iface->State == wlan_interface_state_authenticating ||
+        Iface->State == wlan_interface_state_discovering)
+        return ERROR_INVALID_STATE;
+
+    for (entry = Iface->BssListHead.Flink;
+         entry != &Iface->BssListHead;
+         entry = entry->Flink)
+    {
+        PWLANSVC_BSS_ENTRY bss =
+            CONTAINING_RECORD(entry, WLANSVC_BSS_ENTRY, ListEntry);
+        PWLANSVC_PROFILE prof = WlanSvcMatchProfileForBss(Iface, bss);
+
+        if (prof == NULL || !prof->AutoConnect)
+            continue;
+        if (best == NULL || bss->Rssi > best->Rssi)
+        {
+            best = bss;
+            bestProf = prof;
+        }
+    }
+
+    if (best == NULL)
+        return ERROR_NOT_FOUND;
+
+    ZeroMemory(&params, sizeof(params));
+    params.wlanConnectionMode = wlan_connection_mode_profile;
+    params.strProfile = bestProf->Name;
+    params.dot11BssType = best->BssType;
+    Iface->LastAutoConnectTick = GetTickCount64();
+    return WlanSvcConnect(Iface, &params);
 }

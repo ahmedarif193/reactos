@@ -260,6 +260,7 @@ typedef struct _WLANSVC_INTERFACE
     DOT11_PHY_TYPE        PhyType;
     BOOL                  RadioOn;
     BOOL                  AutoConfigEnabled;
+    ULONGLONG             LastAutoConnectTick;
 
     /* Scan/BSS cache. */
     LIST_ENTRY            BssListHead;
@@ -358,6 +359,12 @@ VOID  WlanSvcFreeProfile(PWLANSVC_PROFILE Profile);
 
 /* notify.c */
 VOID WlanSvcIndicateAcm(PWLANSVC_INTERFACE Iface, DWORD NotificationCode);
+VOID WlanSvcIndicateRadioState(PWLANSVC_INTERFACE Iface);
+PWLANSVC_PROFILE WlanSvcMatchProfileForBss(PWLANSVC_INTERFACE Iface, PWLANSVC_BSS_ENTRY bss);
+DWORD WlanSvcTryAutoConnect(PWLANSVC_INTERFACE Iface);
+DWORD WlanSvcScanInterface(const GUID *pInterfaceGuid, PDOT11_SSID pDot11Ssid);
+VOID WlanSvcStartAutoConfig(VOID);
+VOID WlanSvcStopAutoConfig(VOID);
 VOID WlanSvcIndicateConnection(PWLANSVC_INTERFACE Iface, DWORD NotificationCode,
                                WLAN_CONNECTION_MODE Mode, LPCWSTR ProfileName,
                                WLAN_REASON_CODE Reason);

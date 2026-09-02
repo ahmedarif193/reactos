@@ -81,6 +81,21 @@ WlanSvcIndicateAcm(PWLANSVC_INTERFACE Iface, DWORD NotificationCode)
 }
 
 VOID
+WlanSvcIndicateRadioState(PWLANSVC_INTERFACE Iface)
+{
+    WLAN_PHY_RADIO_STATE rs;
+
+    ZeroMemory(&rs, sizeof(rs));
+    rs.dwPhyIndex = 0;
+    rs.dot11SoftwareRadioState = Iface->RadioOn ? dot11_radio_state_on : dot11_radio_state_off;
+    rs.dot11HardwareRadioState = dot11_radio_state_on;
+    WlanSvcBroadcast(WLAN_NOTIFICATION_SOURCE_MSM,
+                     wlan_notification_msm_radio_state_change,
+                     &Iface->InterfaceGuid,
+                     &rs, sizeof(rs));
+}
+
+VOID
 WlanSvcIndicateConnection(PWLANSVC_INTERFACE Iface,
                           DWORD NotificationCode,
                           WLAN_CONNECTION_MODE Mode,
