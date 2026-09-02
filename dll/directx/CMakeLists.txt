@@ -20,6 +20,7 @@ endif()
 add_subdirectory(ksuser)
 if((ARCH STREQUAL "arm64") AND RPI3_SUPPORT)
     add_subdirectory(rpi3mmal)
+    add_subdirectory(rpi3h264enc)
 endif()
 #add_subdirectory(msdvbnp) #disabled in trunk
 #add_subdirectory(msvidctl) #disabled in trunk
