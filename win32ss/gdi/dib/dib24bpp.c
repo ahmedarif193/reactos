@@ -505,8 +505,7 @@ DIB_24BPP_BitBlt(PBLTINFO BltInfo)
    {
       if (BltInfo->PatternSurface)
       {
-         PatternY = (BltInfo->DestRect.top - BltInfo->BrushOrigin.y) %
-                    BltInfo->PatternSurface->sizlBitmap.cy;
+         PatternY = DIB_PatternIndex(BltInfo->DestRect.top - BltInfo->BrushOrigin.y, BltInfo->PatternSurface->sizlBitmap.cy);
       }
       else
       {
@@ -532,7 +531,7 @@ DIB_24BPP_BitBlt(PBLTINFO BltInfo)
 
          if (BltInfo->PatternSurface)
          {
-            Pattern = DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX - BltInfo->BrushOrigin.x) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY);
+            Pattern = DIB_GetSourceIndex(BltInfo->PatternSurface, DIB_PatternIndex(DestX - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY);
          }
 
          Dest = DIB_DoRop(BltInfo->Rop4, Dest, Source, Pattern) & 0xFFFFFF;
