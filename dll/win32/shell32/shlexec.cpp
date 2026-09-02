@@ -1994,15 +1994,37 @@ static BOOL SHELL_translate_idlist(LPSHELLEXECUTEINFOW sei, LPWSTR wszParameters
     /* last chance to translate IDList: now also allow CLSID paths */
     if (SUCCEEDED(SHELL_GetPathFromIDListForExecuteW((LPCITEMIDLIST)sei->lpIDList, buffer, ARRAY_SIZE(buffer)))) {
         if (buffer[0] == ':' && buffer[1] == ':') {
+            WCHAR wszFolderCmd[1024];
+            DWORD resultLen;
+
             /* open shell folder for the specified class GUID */
             if (strlenW(buffer) + 1 > parametersLen)
                 ERR("parameters len exceeds buffer size (%i > %i), truncating\n",
                     lstrlenW(buffer) + 1, parametersLen);
             lstrcpynW(wszParameters, buffer, parametersLen);
-            if (strlenW(L"explorer.exe") > dwApplicationNameLen)
-                ERR("application len exceeds buffer size (%i), truncating\n",
-                    dwApplicationNameLen);
-            lstrcpynW(wszApplicationName, L"explorer.exe", dwApplicationNameLen);
+
+            if (HCR_GetExecuteCommandW(0, L"Folder", sei->lpVerb,
+                                       wszFolderCmd, sizeof(wszFolderCmd)))
+            {
+                SHELL_ArgifyW(wszApplicationName, dwApplicationNameLen,
+                              wszFolderCmd, buffer, (LPITEMIDLIST)sei->lpIDList,
+                              sei->lpParameters, &resultLen,
+                              !StrIsNullOrEmpty(sei->lpDirectory) ? sei->lpDirectory : NULL);
+                if (resultLen > dwApplicationNameLen)
+                    ERR("Argify buffer not large enough... truncating\n");
+
+                LPCWSTR params = PathGetArgsW(wszApplicationName);
+                lstrcpynW(wszParameters, params, parametersLen);
+                PathRemoveArgsW(wszApplicationName);
+                PathUnquoteSpacesW(wszApplicationName);
+            }
+            else
+            {
+                if (strlenW(L"explorer.exe") > dwApplicationNameLen)
+                    ERR("application len exceeds buffer size (%i), truncating\n",
+                        dwApplicationNameLen);
+                lstrcpynW(wszApplicationName, L"explorer.exe", dwApplicationNameLen);
+            }
             appKnownSingular = TRUE;
 
             sei->fMask &= ~SEE_MASK_INVOKEIDLIST;
