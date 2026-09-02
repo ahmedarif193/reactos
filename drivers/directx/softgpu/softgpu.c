@@ -299,7 +299,7 @@ static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =
     .MaxAllocationListSlotId    = 255,
     .ApertureSegmentCommitLimit = 0,
     /* PresentationCaps.Value = 0 */
-    .MaxOverlays                = 0,
+    .MaxOverlays                = SOFTGPU_MAX_OVERLAYS,
     .GammaRampCaps.Value        = 0,
     .SchedulingCaps.Value       = 0,
     .MemoryManagementCaps.Value = 0,
@@ -395,6 +395,16 @@ DriverEntry(
     InitData.DxgkDdiSetPointerShape                 = SoftGpuDdiSetPointerShape;
     InitData.DxgkDdiSetPalette                      = SoftGpuDdiSetPalette;
     InitData.DxgkDdiGetScanLine                     = SoftGpuDdiGetScanLine;
+#if defined(SOFTGPU_PLATFORM_HARDWARE_OVERLAY)
+    InitData.DxgkDdiCreateOverlay                   =
+        SoftGpuPlatformCreateOverlay;
+    InitData.DxgkDdiUpdateOverlay                   =
+        SoftGpuPlatformUpdateOverlay;
+    InitData.DxgkDdiFlipOverlay                     =
+        SoftGpuPlatformFlipOverlay;
+    InitData.DxgkDdiDestroyOverlay                  =
+        SoftGpuPlatformDestroyOverlay;
+#endif
 
     /* --- Per-device / context -------------------------------------------- */
     InitData.DxgkDdiCreateDevice                    = SoftGpuDdiCreateDevice;
@@ -2068,6 +2078,10 @@ SoftGpuDdiGetStandardAllocationDriverData(
     PrivateData.Version = SOFTGPU_ALLOCATION_PRIVATE_VERSION;
     PrivateData.Pitch = Pitch;
     PrivateData.Format = Format;
+    PrivateData.StorageHeight = Height;
+    PrivateData.PlaneCount = 1;
+    PrivateData.PlaneOffsets[0] = 0;
+    PrivateData.PlanePitches[0] = Pitch;
     if (!SoftGpuAllocationPrivateDataValid(&PrivateData) ||
         (ULONGLONG)Pitch * Height > Device->FrameBufferSize)
     {
@@ -2155,8 +2169,17 @@ SoftGpuDdiCreateAllocation(
 
     for (i = 0; i < CreateAllocation->NumAllocations; i++)
     {
+        ULONGLONG RequiredSize = 0;
+        SIZE_T RequestedSize;
+
         pInfo = &CreateAllocation->pAllocationInfo[i];
 
+        if (pInfo->PrivateDriverDataSize != 0 &&
+            pInfo->pPrivateDriverData == NULL)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Rollback;
+        }
         if (pInfo->Size > Device->FrameBufferSize)
         {
             Status = STATUS_GRAPHICS_NO_VIDEO_MEMORY;
@@ -2177,58 +2200,68 @@ SoftGpuDdiCreateAllocation(
         RtlZeroMemory(Alloc, sizeof(SOFTGPU_ALLOC));
         Alloc->Magic = SOFTGPU_ALLOC_MAGIC;
 
+        Alloc->Format = D3DDDIFMT_A8R8G8B8;    /* default */
+
+        if (pInfo->pPrivateDriverData != NULL &&
+            pInfo->PrivateDriverDataSize >=
+                SOFTGPU_ALLOCATION_PRIVATE_VERSION_1_SIZE)
+        {
+            SOFTGPU_ALLOCATION_PRIVATE_DATA PrivateData;
+
+            if (((const SOFTGPU_ALLOCATION_PRIVATE_DATA *)
+                    pInfo->pPrivateDriverData)->Magic ==
+                    SOFTGPU_ALLOCATION_PRIVATE_MAGIC)
+            {
+                if (!SoftGpuReadAllocationPrivateData(
+                         pInfo->pPrivateDriverData,
+                         pInfo->PrivateDriverDataSize,
+                         &PrivateData,
+                         &RequiredSize))
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    goto Rollback;
+                }
+                Alloc->Width = PrivateData.Width;
+                Alloc->Height = PrivateData.Height;
+                Alloc->Pitch = PrivateData.Pitch;
+                Alloc->StorageHeight = PrivateData.StorageHeight;
+                Alloc->Format = PrivateData.Format;
+                Alloc->PlaneCount = PrivateData.PlaneCount;
+                RtlCopyMemory(Alloc->PlaneOffsets,
+                              PrivateData.PlaneOffsets,
+                              sizeof(Alloc->PlaneOffsets));
+                RtlCopyMemory(Alloc->PlanePitches,
+                              PrivateData.PlanePitches,
+                              sizeof(Alloc->PlanePitches));
+            }
+        }
+
         /*
-         * Standard allocations and softgpu UMD resources carry the same exact
-         * linear geometry record. Other private records remain opaque and can
-         * never enter the validated 2D render path.
+         * The compact dxgkrnl size heuristic is only an initial estimate. Use
+         * the miniport's validated pitch-aware size for every private linear
+         * allocation, including planar video and DXVA compressed buffers.
          */
-        Alloc->Size   = (pInfo->Size != 0) ? pInfo->Size : PAGE_SIZE;
-        if (Alloc->Size > MAXULONG_PTR - (PAGE_SIZE - 1))
+        RequestedSize = pInfo->Size != 0 ? pInfo->Size : PAGE_SIZE;
+        if (RequiredSize > RequestedSize)
+        {
+            if (RequiredSize > MAXULONG_PTR)
+            {
+                Status = STATUS_INTEGER_OVERFLOW;
+                goto Rollback;
+            }
+            RequestedSize = (SIZE_T)RequiredSize;
+        }
+        if (RequestedSize > MAXULONG_PTR - (PAGE_SIZE - 1))
         {
             Status = STATUS_INTEGER_OVERFLOW;
             goto Rollback;
         }
 
-        Alloc->Size   = (Alloc->Size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        Alloc->Size = (RequestedSize + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
         if (Alloc->Size > Device->FrameBufferSize)
         {
             Status = STATUS_GRAPHICS_NO_VIDEO_MEMORY;
             goto Rollback;
-        }
-        Alloc->Format = D3DDDIFMT_A8R8G8B8;    /* default */
-
-        if (pInfo->pPrivateDriverData != NULL &&
-            pInfo->PrivateDriverDataSize >=
-                sizeof(SOFTGPU_ALLOCATION_PRIVATE_DATA))
-        {
-            const SOFTGPU_ALLOCATION_PRIVATE_DATA *PrivateData =
-                (const SOFTGPU_ALLOCATION_PRIVATE_DATA *)
-                    pInfo->pPrivateDriverData;
-
-            if (PrivateData->Magic ==
-                    SOFTGPU_ALLOCATION_PRIVATE_MAGIC)
-            {
-                ULONGLONG RequiredSize;
-
-                if (!SoftGpuAllocationPrivateDataValid(PrivateData))
-                {
-                    Status = STATUS_INVALID_PARAMETER;
-                    goto Rollback;
-                }
-                RequiredSize =
-                    (ULONGLONG)PrivateData->Pitch *
-                    PrivateData->Height;
-                if (RequiredSize > Alloc->Size)
-                {
-                    Status = STATUS_INVALID_BUFFER_SIZE;
-                    goto Rollback;
-                }
-
-                Alloc->Width = PrivateData->Width;
-                Alloc->Height = PrivateData->Height;
-                Alloc->Pitch = PrivateData->Pitch;
-                Alloc->Format = PrivateData->Format;
-            }
         }
 
         /* Fill in DXGK_ALLOCATIONINFO fields for dxgkrnl placement. */
@@ -2504,14 +2537,21 @@ SoftGpuDdiOpenAllocation(
         Open->Device = KmdDevice;
         Open->hAllocation = pInfo->hAllocation;
 
-        if (pInfo->PrivateDriverDataSize >= sizeof(PrivateData))
+        if (pInfo->PrivateDriverDataSize >=
+                SOFTGPU_ALLOCATION_PRIVATE_VERSION_1_SIZE)
         {
-            RtlCopyMemory(&PrivateData,
-                          pInfo->pPrivateDriverData,
-                          sizeof(PrivateData));
-            if (PrivateData.Magic ==
+            ULONGLONG RequiredSize;
+
+            RtlZeroMemory(&PrivateData, sizeof(PrivateData));
+            RequiredSize = 0;
+            if (((const SOFTGPU_ALLOCATION_PRIVATE_DATA *)
+                    pInfo->pPrivateDriverData)->Magic ==
                     SOFTGPU_ALLOCATION_PRIVATE_MAGIC &&
-                !SoftGpuAllocationPrivateDataValid(&PrivateData))
+                !SoftGpuReadAllocationPrivateData(
+                     pInfo->pPrivateDriverData,
+                     pInfo->PrivateDriverDataSize,
+                     &PrivateData,
+                     &RequiredSize))
             {
                 Status = STATUS_INVALID_PARAMETER;
                 goto Rollback;
@@ -2520,12 +2560,19 @@ SoftGpuDdiOpenAllocation(
             if (PrivateData.Magic ==
                     SOFTGPU_ALLOCATION_PRIVATE_MAGIC)
             {
-                Open->Size =
-                    (SIZE_T)PrivateData.Pitch * PrivateData.Height;
+                Open->Size = (SIZE_T)RequiredSize;
                 Open->Width = PrivateData.Width;
                 Open->Height = PrivateData.Height;
                 Open->Pitch = PrivateData.Pitch;
+                Open->StorageHeight = PrivateData.StorageHeight;
                 Open->Format = PrivateData.Format;
+                Open->PlaneCount = PrivateData.PlaneCount;
+                RtlCopyMemory(Open->PlaneOffsets,
+                              PrivateData.PlaneOffsets,
+                              sizeof(Open->PlaneOffsets));
+                RtlCopyMemory(Open->PlanePitches,
+                              PrivateData.PlanePitches,
+                              sizeof(Open->PlanePitches));
             }
         }
         else if (pInfo->PrivateDriverDataSize == sizeof(LinearSize))
