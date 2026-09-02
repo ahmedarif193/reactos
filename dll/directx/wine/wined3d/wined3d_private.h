@@ -3401,6 +3401,9 @@ struct wined3d_texture
     unsigned int lod;
     uint32_t flags;
     DWORD update_map_binding;
+#ifdef __REACTOS__
+    enum wined3d_yuv_color_space yuv_color_space;
+#endif
 
     unsigned int row_pitch;
     unsigned int slice_pitch;

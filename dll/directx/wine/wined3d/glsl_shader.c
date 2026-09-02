@@ -12231,6 +12231,9 @@ struct glsl_blitter_args
     GLenum texture_type;
     struct color_fixup_desc fixup;
     unsigned short use_colour_key;
+#ifdef __REACTOS__
+    unsigned short yuv_color_space;
+#endif
 };
 
 struct glsl_blitter_program
@@ -12573,7 +12576,33 @@ static void glsl_blitter_generate_yuv_shader(struct wined3d_string_buffer *buffe
      * of which only matches the frame if the reduced range is used, so we side
      * with the reduced range here. */
 
+#ifdef __REACTOS__
+    switch (args->yuv_color_space)
+    {
+        case WINED3D_YUV_BT709_LIMITED:
+            shader_addline(buffer, "const vec4 yuv_coef = vec4(1.793, -0.213, -0.533, 2.112);\n");
+            shader_addline(buffer, "const vec2 yuv_luma = vec2(0.0627451, 1.164384);\n");
+            break;
+
+        case WINED3D_YUV_BT601_FULL:
+            shader_addline(buffer, "const vec4 yuv_coef = vec4(1.402, -0.344136, -0.714136, 1.772);\n");
+            shader_addline(buffer, "const vec2 yuv_luma = vec2(0.0, 1.0);\n");
+            break;
+
+        case WINED3D_YUV_BT709_FULL:
+            shader_addline(buffer, "const vec4 yuv_coef = vec4(1.5748, -0.187324, -0.468124, 1.8556);\n");
+            shader_addline(buffer, "const vec2 yuv_luma = vec2(0.0, 1.0);\n");
+            break;
+
+        case WINED3D_YUV_BT601_LIMITED:
+        default:
+            shader_addline(buffer, "const vec4 yuv_coef = vec4(1.596, -0.392, -0.813, 2.017);\n");
+            shader_addline(buffer, "const vec2 yuv_luma = vec2(0.0627451, 1.164384);\n");
+            break;
+    }
+#else
     shader_addline(buffer, "const vec4 yuv_coef = vec4(1.596, -0.392, -0.813, 2.017);\n");
+#endif
     shader_addline(buffer, "float luminance;\n");
     shader_addline(buffer, "vec2 texcoord;\n");
     shader_addline(buffer, "vec2 chroma;\n");
@@ -12615,7 +12644,11 @@ static void glsl_blitter_generate_yuv_shader(struct wined3d_string_buffer *buffe
      * http://www.fourcc.org/fccyvrgb.php. Note that the chroma
      * ranges from -0.5 to 0.5. */
     shader_addline(buffer, "\n    chroma.xy -= 0.5;\n");
+#ifdef __REACTOS__
+    shader_addline(buffer, "    luminance = (luminance - yuv_luma.x) * yuv_luma.y;\n");
+#else
     shader_addline(buffer, "    luminance = (luminance - 0.063) * 1.164;\n");
+#endif
 
     shader_addline(buffer, "    %s.x = luminance + chroma.x * yuv_coef.x;\n", output);
     shader_addline(buffer, "    %s.y = luminance + chroma.y * yuv_coef.y + chroma.x * yuv_coef.z;\n", output);
@@ -12819,6 +12852,9 @@ static struct glsl_blitter_program *glsl_blitter_get_program(struct wined3d_glsl
     args.texture_type = texture_gl->target;
     args.fixup = texture_gl->t.resource.format->color_fixup;
     args.use_colour_key = use_colour_key;
+#ifdef __REACTOS__
+    args.yuv_color_space = texture_gl->t.yuv_color_space;
+#endif
 
     if ((entry = wine_rb_get(&blitter->programs, &args)))
         return WINE_RB_ENTRY_VALUE(entry, struct glsl_blitter_program, entry);
@@ -13001,6 +13037,9 @@ static DWORD glsl_blitter_blit(struct wined3d_blitter *blitter, enum wined3d_bli
         wined3d_texture_upload_from_texture(staging_texture, 0, 0, 0, 0,
                 src_texture, src_sub_resource_idx, &upload_box);
 
+#ifdef __REACTOS__
+        staging_texture->yuv_color_space = src_texture->yuv_color_space;
+#endif
         src_texture = staging_texture;
         src_texture_gl = wined3d_texture_gl(src_texture);
         src_sub_resource_idx = 0;

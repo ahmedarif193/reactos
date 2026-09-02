@@ -1630,6 +1630,18 @@ HRESULT CDECL wined3d_device_context_blt(struct wined3d_device_context *context,
     return WINED3D_OK;
 }
 
+#ifdef __REACTOS__
+HRESULT CDECL wined3d_texture_set_yuv_color_space(struct wined3d_texture *texture,
+        enum wined3d_yuv_color_space color_space)
+{
+    if (color_space > WINED3D_YUV_BT709_FULL)
+        return WINED3DERR_INVALIDCALL;
+
+    texture->yuv_color_space = color_space;
+    return WINED3D_OK;
+}
+#endif
+
 HRESULT CDECL wined3d_texture_get_overlay_position(const struct wined3d_texture *texture,
         unsigned int sub_resource_idx, LONG *x, LONG *y)
 {
