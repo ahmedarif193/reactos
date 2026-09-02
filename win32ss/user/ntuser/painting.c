@@ -283,11 +283,18 @@ IntGetNCUpdateRgn(PWND Window, BOOL Validate)
       else if (RgnType == NULLREGION)
       {
          GreDeleteObject(hRgnWindow);
-         GreDeleteObject(hRgnNonClient);
          if (FullWindowUpdate)
+         {
+            GreDeleteObject(hRgnNonClient);
             return HRGN_WINDOW;
+         }
          Window->state &= ~WNDS_UPDATEDIRTY;
-         return NULL;
+         if (NtGdiCombineRgn(hRgnNonClient, Window->hrgnUpdate, NULL, RGN_COPY) == ERROR)
+         {
+            GreDeleteObject(hRgnNonClient);
+            return HRGN_WINDOW;
+         }
+         return hRgnNonClient;
       }
 
       /*
@@ -437,7 +444,7 @@ co_IntPaintWindows(PWND Wnd, ULONG Flags, BOOL Recurse)
                   // Kill the loop, so Clear before we send.
                   if (!co_IntSendMessage(hWnd, WM_ERASEBKGND, (WPARAM)hDC, 0))
                   {
-                     Wnd->state |= (WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
+                     Wnd->state |= WNDS_ERASEBACKGROUND;
                   }
                   UserReleaseDC(Wnd, hDC, FALSE);
                }
@@ -1484,7 +1491,7 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
    // If set, always clear flags out due to the conditions later on for sending the message.
    if (Window->state & WNDS_SENDERASEBACKGROUND)
    {
-      Window->state &= ~(WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
+      Window->state &= ~WNDS_SENDERASEBACKGROUND;
       Erase = TRUE;
    }
 
@@ -1512,16 +1519,14 @@ IntBeginPaint(PWND Window, PPAINTSTRUCT Ps)
         (!(Window->pcls->style & CS_PARENTDC) || // not parent dc or
          RECTL_bIntersectRect( &Rect, &Rect, &Ps->rcPaint) ) ) // intersecting.
    {
-      Ps->fErase = !co_IntSendMessage(UserHMGetHandle(Window), WM_ERASEBKGND, (WPARAM)Ps->hdc, 0);
-      if ( Ps->fErase )
-      {
-         Window->state |= (WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
-      }
+      if (co_IntSendMessage(UserHMGetHandle(Window), WM_ERASEBKGND, (WPARAM)Ps->hdc, 0))
+         Window->state &= ~WNDS_ERASEBACKGROUND;
+      else
+         Window->state |= WNDS_ERASEBACKGROUND;
    }
-   else
-   {
-      Ps->fErase = FALSE;
-   }
+
+   Ps->fErase = !!(Window->state & WNDS_ERASEBACKGROUND);
+   Window->state &= ~WNDS_ERASEBACKGROUND;
 
    IntSendChildNCPaint(Window);
 

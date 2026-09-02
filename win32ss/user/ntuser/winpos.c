@@ -1737,7 +1737,7 @@ ForceNCPaintErase(PWND Wnd, HRGN hRgn, PREGION pRgn)
       // Kill the loop, so Clear before we send.
       if (!co_IntSendMessage(UserHMGetHandle(Wnd), WM_ERASEBKGND, (WPARAM)hDC, 0))
       {
-          Wnd->state |= (WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
+          Wnd->state |= WNDS_ERASEBACKGROUND;
       }
       UserReleaseDC(Wnd, hDC, FALSE);
    }
