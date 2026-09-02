@@ -3474,6 +3474,9 @@ struct wined3d_texture
         } clear_value;
 
         void *user_memory;
+#ifdef __REACTOS__
+        struct wined3d_planar_memory_desc planar_memory;
+#endif
     } *sub_resources;
 };
 
