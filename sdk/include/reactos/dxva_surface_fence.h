@@ -23,6 +23,8 @@
 
 #define REACTOS_DXVA_SURFACE_MAX_PLANES 3u
 
+#define REACTOS_DXVA_SURFACE_MEMORY_DEFERRED_UPLOAD 0x00000001u
+
 typedef struct REACTOS_DXVA_SURFACE_MEMORY
 {
     void *Data;
@@ -35,6 +37,7 @@ typedef struct REACTOS_DXVA_SURFACE_MEMORY
     UINT PlaneOffsets[REACTOS_DXVA_SURFACE_MAX_PLANES];
     UINT PlanePitches[REACTOS_DXVA_SURFACE_MAX_PLANES];
     ULONG Generation;
+    DWORD Flags;
 } REACTOS_DXVA_SURFACE_MEMORY;
 
 typedef struct IReactOSDxvaSurfaceFence IReactOSDxvaSurfaceFence;
@@ -54,6 +57,8 @@ typedef struct IReactOSDxvaSurfaceFenceVtbl
                                      REACTOS_DXVA_SURFACE_MEMORY *memory);
     HRESULT (WINAPI *PrepareFallback)(IReactOSDxvaSurfaceFence *iface,
                                       DWORD flags);
+    HRESULT (WINAPI *MarkConsumed)(IReactOSDxvaSurfaceFence *iface,
+                                   DWORD flags);
     HRESULT (WINAPI *Present)(IReactOSDxvaSurfaceFence *iface,
                               const RECT *source,
                               const RECT *destination,
@@ -78,6 +83,8 @@ struct IReactOSDxvaSurfaceFence
     ((iface)->lpVtbl->GetSharedMemory((iface), (flags), (memory)))
 #define IReactOSDxvaSurfaceFence_PrepareFallback(iface, flags) \
     ((iface)->lpVtbl->PrepareFallback((iface), (flags)))
+#define IReactOSDxvaSurfaceFence_MarkConsumed(iface, flags) \
+    ((iface)->lpVtbl->MarkConsumed((iface), (flags)))
 #define IReactOSDxvaSurfaceFence_Present(iface, source, destination, flags) \
     ((iface)->lpVtbl->Present((iface), (source), (destination), (flags)))
 #define IReactOSDxvaSurfaceFence_Hide(iface) \

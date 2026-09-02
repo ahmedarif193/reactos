@@ -2176,6 +2176,10 @@ static HRESULT WINAPI d3d9_device_StretchRect(IDirect3DDevice9Ex *iface, IDirect
     struct d3d9_surface *src = unsafe_impl_from_IDirect3DSurface9(src_surface);
     struct d3d9_surface *dst = unsafe_impl_from_IDirect3DSurface9(dst_surface);
     struct wined3d_sub_resource_desc src_desc, dst_desc;
+#ifdef __REACTOS__
+    BOOL dxva_composition = FALSE;
+    BOOL dxva_consumed = FALSE;
+#endif
     HRESULT hr = D3DERR_INVALIDCALL;
     RECT d, s;
 
@@ -2255,6 +2259,7 @@ static HRESULT WINAPI d3d9_device_StretchRect(IDirect3DDevice9Ex *iface, IDirect
     hr = d3d9_device_present_dxva_overlay(device, src, dst, src_rect, dst_rect);
     if (SUCCEEDED(hr))
         return hr;
+    dxva_composition = hr != D3DERR_NOTFOUND;
     if (FAILED(hr = d3d9_surface_prepare_dxva_composition(src, 0)))
         return hr;
     wined3d_mutex_lock();
@@ -2267,9 +2272,16 @@ static HRESULT WINAPI d3d9_device_StretchRect(IDirect3DDevice9Ex *iface, IDirect
         hr = D3DERR_INVALIDCALL;
     if (SUCCEEDED(hr) && dst->texture)
         d3d9_texture_flag_auto_gen_mipmap(dst->texture);
+#ifdef __REACTOS__
+    dxva_consumed = dxva_composition && SUCCEEDED(hr);
+#endif
 
 done:
     wined3d_mutex_unlock();
+#ifdef __REACTOS__
+    if (dxva_consumed && FAILED(hr = d3d9_surface_mark_dxva_consumed(src, 0)))
+        return hr;
+#endif
     return hr;
 }
 
