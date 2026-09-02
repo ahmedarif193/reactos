@@ -575,6 +575,7 @@ struct RPI3_MMAL_DECODER
     HANDLE Device;
     HANDLE CompletionThread;
     HANDLE StopEvent;
+    HANDLE ReceiveStopEvent;
     HANDLE ControlEvent;
     HANDLE InputReturnedEvent;
     HANDLE FrameEvent;
@@ -2511,12 +2512,14 @@ Rpi3MmalOpenSession(RPI3_MMAL_DECODER *Session)
     InitializeCriticalSection(&Session->StateLock);
 
     Session->StopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    Session->ReceiveStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     Session->ControlEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
     Session->InputReturnedEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     Session->FrameEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     Session->FormatEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     Session->OutputDrainedEvent = CreateEventW(NULL, TRUE, TRUE, NULL);
-    if (!Session->StopEvent || !Session->ControlEvent ||
+    if (!Session->StopEvent || !Session->ReceiveStopEvent ||
+        !Session->ControlEvent ||
         !Session->InputReturnedEvent || !Session->FrameEvent ||
         !Session->FormatEvent || !Session->OutputDrainedEvent)
     {
@@ -2868,7 +2871,7 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
                             void *Context,
                             RPI3_MMAL_FRAME *Frame)
 {
-    HANDLE WaitHandles[3];
+    HANDLE WaitHandles[4];
     RPI3_MMAL_READY_OUTPUT Output;
     BYTE *Buffer;
     BYTE *ReceiveBuffer;
@@ -2891,7 +2894,8 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
 
     WaitHandles[0] = Decoder->FormatEvent;
     WaitHandles[1] = Decoder->FrameEvent;
-    WaitHandles[2] = Decoder->StopEvent;
+    WaitHandles[2] = Decoder->ReceiveStopEvent;
+    WaitHandles[3] = Decoder->StopEvent;
 
     for (;;)
     {
@@ -2908,7 +2912,8 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
                 return Result;
             continue;
         }
-        if (WaitStatus == WAIT_OBJECT_0 + 2)
+        if (WaitStatus == WAIT_OBJECT_0 + 2 ||
+            WaitStatus == WAIT_OBJECT_0 + 3)
             return HRESULT_FROM_WIN32(ERROR_OPERATION_ABORTED);
         if (WaitStatus != WAIT_OBJECT_0 + 1)
         {
@@ -3279,7 +3284,7 @@ Rpi3MmalReceiveH264(RPI3_MMAL_ENCODER *Encoder,
                     DWORD TimeoutMilliseconds,
                     RPI3_MMAL_PACKET *Packet)
 {
-    HANDLE WaitHandles[3];
+    HANDLE WaitHandles[4];
     RPI3_MMAL_READY_OUTPUT Output;
     UINT Index;
     DWORD WaitStatus;
@@ -3290,7 +3295,8 @@ Rpi3MmalReceiveH264(RPI3_MMAL_ENCODER *Encoder,
 
     WaitHandles[0] = Encoder->FormatEvent;
     WaitHandles[1] = Encoder->FrameEvent;
-    WaitHandles[2] = Encoder->StopEvent;
+    WaitHandles[2] = Encoder->ReceiveStopEvent;
+    WaitHandles[3] = Encoder->StopEvent;
     EnterCriticalSection(&Encoder->OutputLock);
     for (;;)
     {
@@ -3312,7 +3318,8 @@ Rpi3MmalReceiveH264(RPI3_MMAL_ENCODER *Encoder,
                 break;
             continue;
         }
-        if (WaitStatus == WAIT_OBJECT_0 + 2)
+        if (WaitStatus == WAIT_OBJECT_0 + 2 ||
+            WaitStatus == WAIT_OBJECT_0 + 3)
         {
             Result = HRESULT_FROM_WIN32(ERROR_OPERATION_ABORTED);
             break;
@@ -3550,6 +3557,9 @@ Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
     if (!Decoder)
         return;
 
+    if (Decoder->ReceiveStopEvent)
+        SetEvent(Decoder->ReceiveStopEvent);
+
     if (Decoder->ComponentHandle && Decoder->CompletionThread)
     {
         EnterCriticalSection(&Decoder->OutputLock);
@@ -3642,6 +3652,8 @@ Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
         CloseHandle(Decoder->ControlEvent);
     if (Decoder->InputReturnedEvent)
         CloseHandle(Decoder->InputReturnedEvent);
+    if (Decoder->ReceiveStopEvent)
+        CloseHandle(Decoder->ReceiveStopEvent);
     if (Decoder->StopEvent)
         CloseHandle(Decoder->StopEvent);
     DeleteCriticalSection(&Decoder->StateLock);
