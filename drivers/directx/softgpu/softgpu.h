@@ -142,6 +142,10 @@ InbvGetGopFrameBufferInfo(
 #define SOFTGPU_POINTER_MAX_HEIGHT      64UL
 #define SOFTGPU_POINTER_PIXEL_COUNT     (SOFTGPU_POINTER_MAX_WIDTH * SOFTGPU_POINTER_MAX_HEIGHT)
 
+#ifndef SOFTGPU_MAX_OVERLAYS
+#define SOFTGPU_MAX_OVERLAYS            0UL
+#endif
+
 /* GPU virtual-memory geometry this device declares: a 4-level radix of 9
  * index bits per level over 4 KB pages, i.e. a 48-bit address space. */
 #define SOFTGPU_GPUVA_INDEX_BITS 9
@@ -424,6 +428,31 @@ SoftGpuPlatformQueryScanLine(
     _In_ PSOFTGPU_DEVICE Device,
     _Inout_ PDXGKARG_GETSCANLINE GetScanLine);
 
+#if defined(SOFTGPU_PLATFORM_HARDWARE_OVERLAY)
+NTSTATUS
+APIENTRY
+SoftGpuPlatformCreateOverlay(
+    _In_ HANDLE AdapterContext,
+    _Inout_ PDXGKARG_CREATEOVERLAY CreateOverlay);
+
+NTSTATUS
+APIENTRY
+SoftGpuPlatformUpdateOverlay(
+    _In_ HANDLE OverlayContext,
+    _In_ const DXGKARG_UPDATEOVERLAY *UpdateOverlay);
+
+NTSTATUS
+APIENTRY
+SoftGpuPlatformFlipOverlay(
+    _In_ HANDLE OverlayContext,
+    _In_ const DXGKARG_FLIPOVERLAY *FlipOverlay);
+
+NTSTATUS
+APIENTRY
+SoftGpuPlatformDestroyOverlay(
+    _In_ HANDLE OverlayContext);
+#endif
+
 #if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
 struct _SOFTGPU_KMD_DEVICE;
 
@@ -508,7 +537,11 @@ typedef struct _SOFTGPU_ALLOC
     ULONG           Width;          /* surface width in pixels (if 2D)      */
     ULONG           Height;         /* surface height in pixels (if 2D)     */
     ULONG           Pitch;          /* stride in bytes                      */
+    ULONG           StorageHeight;  /* padded luma or packed surface rows   */
     D3DDDIFORMAT    Format;         /* surface pixel format                 */
+    ULONG           PlaneCount;
+    ULONG           PlaneOffsets[SOFTGPU_ALLOCATION_MAX_PLANES];
+    ULONG           PlanePitches[SOFTGPU_ALLOCATION_MAX_PLANES];
 } SOFTGPU_ALLOC, *PSOFTGPU_ALLOC;
 
 
@@ -530,7 +563,11 @@ typedef struct _SOFTGPU_OPENALLOC
     ULONG           Width;
     ULONG           Height;
     ULONG           Pitch;
+    ULONG           StorageHeight;
     D3DDDIFORMAT    Format;
+    ULONG           PlaneCount;
+    ULONG           PlaneOffsets[SOFTGPU_ALLOCATION_MAX_PLANES];
+    ULONG           PlanePitches[SOFTGPU_ALLOCATION_MAX_PLANES];
 } SOFTGPU_OPENALLOC, *PSOFTGPU_OPENALLOC;
 
 

@@ -148,39 +148,202 @@ SoftGpu2dPresentEvaluate(
 }
 
 FORCEINLINE BOOLEAN
+SoftGpuAllocationPrivateDataSize(
+    _In_ const SOFTGPU_ALLOCATION_PRIVATE_DATA *PrivateData,
+    _Out_ PULONGLONG RequiredSize)
+{
+    ULONGLONG Size;
+    ULONG Plane;
+
+    if (PrivateData == NULL || RequiredSize == NULL ||
+        PrivateData->Magic != SOFTGPU_ALLOCATION_PRIVATE_MAGIC ||
+        PrivateData->Version != SOFTGPU_ALLOCATION_PRIVATE_VERSION ||
+        PrivateData->Width == 0 ||
+        PrivateData->Height == 0 || PrivateData->Pitch == 0 ||
+        PrivateData->PlaneCount == 0 ||
+        PrivateData->PlaneCount > SOFTGPU_ALLOCATION_MAX_PLANES)
+    {
+        return FALSE;
+    }
+
+    for (Plane = PrivateData->PlaneCount;
+         Plane < SOFTGPU_ALLOCATION_MAX_PLANES;
+         ++Plane)
+    {
+        if (PrivateData->PlaneOffsets[Plane] != 0 ||
+            PrivateData->PlanePitches[Plane] != 0)
+        {
+            return FALSE;
+        }
+    }
+
+    if (PrivateData->Format == D3DDDIFMT_X8R8G8B8 ||
+        PrivateData->Format == D3DDDIFMT_A8R8G8B8)
+    {
+        if (PrivateData->BitsPerPixel != SOFTGPU_DISPLAY_BITS_PER_PIXEL ||
+            PrivateData->Width > SOFTGPU_MAX_DISPLAY_WIDTH ||
+            PrivateData->Height > SOFTGPU_MAX_DISPLAY_HEIGHT ||
+            PrivateData->Width >
+                MAXULONG / SOFTGPU_DISPLAY_BYTES_PER_PIXEL ||
+            PrivateData->Pitch <
+                PrivateData->Width * SOFTGPU_DISPLAY_BYTES_PER_PIXEL ||
+            PrivateData->Pitch > SOFTGPU_MAX_DISPLAY_PITCH ||
+            (PrivateData->Pitch % SOFTGPU_DISPLAY_BYTES_PER_PIXEL) != 0 ||
+            PrivateData->PlaneCount != 1 ||
+            PrivateData->PlaneOffsets[0] != 0 ||
+            PrivateData->PlanePitches[0] != PrivateData->Pitch)
+        {
+            return FALSE;
+        }
+        if (PrivateData->StorageHeight != PrivateData->Height)
+            return FALSE;
+        Size = (ULONGLONG)PrivateData->Pitch * PrivateData->Height;
+        if (Size == 0 ||
+            Size > (ULONGLONG)SOFTGPU_MAX_SURFACE_SIZE)
+        {
+            return FALSE;
+        }
+    }
+    else if (PrivateData->Format == SOFTGPU_D3DDDIFMT_NV12)
+    {
+        if (PrivateData->BitsPerPixel != 12 ||
+            (PrivateData->Width & 1) != 0 ||
+            (PrivateData->Height & 1) != 0 ||
+            PrivateData->Width > SOFTGPU_MAX_DISPLAY_WIDTH ||
+            PrivateData->Height > SOFTGPU_MAX_DISPLAY_HEIGHT ||
+            PrivateData->StorageHeight < PrivateData->Height ||
+            PrivateData->StorageHeight > SOFTGPU_MAX_DISPLAY_HEIGHT ||
+            (PrivateData->StorageHeight & 1) != 0 ||
+            PrivateData->Pitch < PrivateData->Width ||
+            (PrivateData->Pitch & 1) != 0 ||
+            PrivateData->PlaneCount != 2 ||
+            PrivateData->PlaneOffsets[0] != 0 ||
+            PrivateData->PlanePitches[0] != PrivateData->Pitch ||
+            PrivateData->PlanePitches[1] != PrivateData->Pitch)
+        {
+            return FALSE;
+        }
+        Size = (ULONGLONG)PrivateData->Pitch *
+               PrivateData->StorageHeight;
+        if (Size > MAXULONG ||
+            PrivateData->PlaneOffsets[1] != (ULONG)Size)
+        {
+            return FALSE;
+        }
+        Size += (ULONGLONG)PrivateData->Pitch *
+                (PrivateData->StorageHeight / 2);
+        if (Size == 0 ||
+            Size > (ULONGLONG)SOFTGPU_MAX_ALLOCATION_SLAB_SIZE)
+        {
+            return FALSE;
+        }
+    }
+    else if (PrivateData->Format >= D3DDDIFMT_DXVACOMPBUFFER_BASE &&
+             PrivateData->Format <= D3DDDIFMT_DXVA_RESERVED31)
+    {
+        if (PrivateData->BitsPerPixel != 8 ||
+            PrivateData->Pitch < PrivateData->Width ||
+            PrivateData->StorageHeight != PrivateData->Height ||
+            PrivateData->PlaneCount != 1 ||
+            PrivateData->PlaneOffsets[0] != 0 ||
+            PrivateData->PlanePitches[0] != PrivateData->Pitch)
+        {
+            return FALSE;
+        }
+        Size = (ULONGLONG)PrivateData->Pitch * PrivateData->Height;
+        if (Size == 0 ||
+            Size > (ULONGLONG)SOFTGPU_MAX_ALLOCATION_SLAB_SIZE)
+        {
+            return FALSE;
+        }
+    }
+    else
+    {
+        return FALSE;
+    }
+
+    *RequiredSize = Size;
+    return TRUE;
+}
+
+FORCEINLINE BOOLEAN
+SoftGpuReadAllocationPrivateData(
+    _In_reads_bytes_(PrivateDataSize) const VOID *PrivateDataBuffer,
+    _In_ SIZE_T PrivateDataSize,
+    _Out_ SOFTGPU_ALLOCATION_PRIVATE_DATA *PrivateData,
+    _Out_ PULONGLONG RequiredSize)
+{
+    const SOFTGPU_ALLOCATION_PRIVATE_DATA *Source;
+    ULONGLONG ChromaOffset;
+
+    if (PrivateDataBuffer == NULL || PrivateData == NULL ||
+        RequiredSize == NULL ||
+        PrivateDataSize < SOFTGPU_ALLOCATION_PRIVATE_VERSION_1_SIZE)
+    {
+        return FALSE;
+    }
+
+    Source = (const SOFTGPU_ALLOCATION_PRIVATE_DATA *)PrivateDataBuffer;
+    RtlZeroMemory(PrivateData, sizeof(*PrivateData));
+    if (Source->Magic != SOFTGPU_ALLOCATION_PRIVATE_MAGIC)
+        return FALSE;
+
+    if (Source->Version == SOFTGPU_ALLOCATION_PRIVATE_VERSION_1)
+    {
+        RtlCopyMemory(PrivateData,
+                      Source,
+                      SOFTGPU_ALLOCATION_PRIVATE_VERSION_1_SIZE);
+        PrivateData->Version = SOFTGPU_ALLOCATION_PRIVATE_VERSION;
+        PrivateData->StorageHeight = PrivateData->Height;
+    }
+    else if (Source->Version == SOFTGPU_ALLOCATION_PRIVATE_VERSION_2)
+    {
+        if (PrivateDataSize < SOFTGPU_ALLOCATION_PRIVATE_VERSION_2_SIZE)
+            return FALSE;
+        RtlCopyMemory(PrivateData,
+                      Source,
+                      SOFTGPU_ALLOCATION_PRIVATE_VERSION_2_SIZE);
+        PrivateData->Version = SOFTGPU_ALLOCATION_PRIVATE_VERSION;
+    }
+    else if (Source->Version == SOFTGPU_ALLOCATION_PRIVATE_VERSION)
+    {
+        if (PrivateDataSize < sizeof(*PrivateData))
+            return FALSE;
+        RtlCopyMemory(PrivateData, Source, sizeof(*PrivateData));
+        return SoftGpuAllocationPrivateDataSize(PrivateData, RequiredSize);
+    }
+    else
+    {
+        return FALSE;
+    }
+
+    PrivateData->PlaneCount =
+        PrivateData->Format == SOFTGPU_D3DDDIFMT_NV12 ? 2 : 1;
+    PrivateData->PlaneOffsets[0] = 0;
+    PrivateData->PlanePitches[0] = PrivateData->Pitch;
+    if (PrivateData->PlaneCount == 2)
+    {
+        ChromaOffset = (ULONGLONG)PrivateData->Pitch *
+                       PrivateData->StorageHeight;
+        if (ChromaOffset > MAXULONG)
+            return FALSE;
+        PrivateData->PlaneOffsets[1] = (ULONG)ChromaOffset;
+        PrivateData->PlanePitches[1] = PrivateData->Pitch;
+    }
+
+    return SoftGpuAllocationPrivateDataSize(PrivateData, RequiredSize);
+}
+
+FORCEINLINE BOOLEAN
 SoftGpuAllocationPrivateDataValid(
     _In_ const SOFTGPU_ALLOCATION_PRIVATE_DATA *PrivateData)
 {
     ULONGLONG RequiredSize;
 
-    if (PrivateData == NULL ||
-        PrivateData->Magic != SOFTGPU_ALLOCATION_PRIVATE_MAGIC ||
-        PrivateData->Version != SOFTGPU_ALLOCATION_PRIVATE_VERSION ||
-        PrivateData->BitsPerPixel != SOFTGPU_DISPLAY_BITS_PER_PIXEL ||
-        PrivateData->Width == 0 ||
-        PrivateData->Height == 0 ||
-        PrivateData->Width > SOFTGPU_MAX_DISPLAY_WIDTH ||
-        PrivateData->Height > SOFTGPU_MAX_DISPLAY_HEIGHT ||
-        PrivateData->Width >
-            MAXULONG / SOFTGPU_DISPLAY_BYTES_PER_PIXEL ||
-        (PrivateData->Format != D3DDDIFMT_X8R8G8B8 &&
-         PrivateData->Format != D3DDDIFMT_A8R8G8B8))
-    {
-        return FALSE;
-    }
-
-    if (PrivateData->Pitch <
-            PrivateData->Width * SOFTGPU_DISPLAY_BYTES_PER_PIXEL ||
-        PrivateData->Pitch > SOFTGPU_MAX_DISPLAY_PITCH ||
-        (PrivateData->Pitch % SOFTGPU_DISPLAY_BYTES_PER_PIXEL) != 0)
-    {
-        return FALSE;
-    }
-
-    RequiredSize =
-        (ULONGLONG)PrivateData->Pitch * PrivateData->Height;
-    return RequiredSize != 0 &&
-           RequiredSize <= (ULONGLONG)SOFTGPU_MAX_SURFACE_SIZE;
+    return PrivateData != NULL &&
+           (PrivateData->Format == D3DDDIFMT_X8R8G8B8 ||
+            PrivateData->Format == D3DDDIFMT_A8R8G8B8) &&
+           SoftGpuAllocationPrivateDataSize(PrivateData, &RequiredSize);
 }
 
 FORCEINLINE NTSTATUS

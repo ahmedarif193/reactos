@@ -16,9 +16,12 @@
 #include <d3dumddi.h>
 #include <reactos/drivers/directx/softgpu_2d_shared.h>
 
+#include "softgpuum_backend.h"
+
 #define SOFTGPUUM_ADAPTER_MAGIC  0x53475541u /* 'SGUA' */
 #define SOFTGPUUM_DEVICE_MAGIC   0x53475544u /* 'SGUD' */
 #define SOFTGPUUM_RESOURCE_MAGIC 0x53475552u /* 'SGUR' */
+#define SOFTGPUUM_OVERLAY_MAGIC  0x5347554fu /* 'SGUO' */
 
 #define SOFTGPUUM_MAX_SUBRESOURCES 32u
 
@@ -29,8 +32,11 @@
      0x00000004u | /* Dynamic */ \
      0x00000040u | /* WriteOnly */ \
      0x00000080u | /* NotLockable */ \
+     0x00002000u | /* Video */ \
      0x00008000u | /* Primary */ \
      0x00010000u | /* Texture */ \
+     0x00200000u | /* DecodeRenderTarget */ \
+     0x00400000u | /* DecodeCompressedBuffer */ \
      0x01000000u)  /* CpuOptimized */
 
 #define SOFTGPUUM_BLT_FLAGS_ALLOWED       0x00000700u
@@ -39,10 +45,12 @@
 typedef struct _SOFTGPUUM_ADAPTER SOFTGPUUM_ADAPTER;
 typedef struct _SOFTGPUUM_DEVICE SOFTGPUUM_DEVICE;
 typedef struct _SOFTGPUUM_RESOURCE SOFTGPUUM_RESOURCE;
+typedef struct _SOFTGPUUM_OVERLAY SOFTGPUUM_OVERLAY;
 
 typedef SOFTGPUUM_ADAPTER *PSOFTGPUUM_ADAPTER;
 typedef SOFTGPUUM_DEVICE *PSOFTGPUUM_DEVICE;
 typedef SOFTGPUUM_RESOURCE *PSOFTGPUUM_RESOURCE;
+typedef SOFTGPUUM_OVERLAY *PSOFTGPUUM_OVERLAY;
 
 typedef struct _SOFTGPUUM_SUBRESOURCE
 {
@@ -50,6 +58,10 @@ typedef struct _SOFTGPUUM_SUBRESOURCE
     UINT Width;
     UINT Height;
     UINT Pitch;
+    UINT StorageHeight;
+    UINT PlaneCount;
+    UINT PlaneOffsets[SOFTGPU_ALLOCATION_MAX_PLANES];
+    UINT PlanePitches[SOFTGPU_ALLOCATION_MAX_PLANES];
     SIZE_T Size;
     BOOL Locked;
     VOID *LockBase;
@@ -62,6 +74,7 @@ struct _SOFTGPUUM_ADAPTER
     UINT Interface;
     UINT Version;
     D3DDDI_ADAPTERCALLBACKS Callbacks;
+    CONST SOFTGPUUM_BACKEND *Backend;
     volatile LONG DeviceCount;
     PSOFTGPUUM_ADAPTER Next;
 };
@@ -72,6 +85,8 @@ struct _SOFTGPUUM_DEVICE
     PSOFTGPUUM_ADAPTER Adapter;
     HANDLE hRuntimeDevice;
     D3DDDI_DEVICECALLBACKS Callbacks;
+    CONST SOFTGPUUM_BACKEND *Backend;
+    VOID *BackendContext;
 
     HANDLE hContext;
     VOID *pCommandBuffer;
@@ -83,6 +98,7 @@ struct _SOFTGPUUM_DEVICE
 
     CRITICAL_SECTION Lock;
     PSOFTGPUUM_RESOURCE Resources;
+    PSOFTGPUUM_OVERLAY Overlays;
     PSOFTGPUUM_DEVICE Next;
 };
 
@@ -95,11 +111,28 @@ struct _SOFTGPUUM_RESOURCE
     D3DDDIFORMAT Format;
     D3DDDI_RESOURCEFLAGS Flags;
     UINT SubresourceCount;
+    UINT OverlayReferenceCount;
+    UINT OperationReferenceCount;
 #if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_1_2)
     HANDLE hSyncToken;
 #endif
     PSOFTGPUUM_RESOURCE Next;
     SOFTGPUUM_SUBRESOURCE Subresources[1];
+};
+
+struct _SOFTGPUUM_OVERLAY
+{
+    ULONG Magic;
+    PSOFTGPUUM_DEVICE Device;
+    D3DKMT_HANDLE hKernelOverlay;
+    PSOFTGPUUM_RESOURCE Resource;
+    UINT SubresourceIndex;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    RECT SrcRect;
+    RECT DstRect;
+    UINT InfoFlags;
+    UINT OperationReferenceCount;
+    PSOFTGPUUM_OVERLAY Next;
 };
 
 static CRITICAL_SECTION SoftGpuUmObjectLock;
@@ -183,6 +216,81 @@ SoftGpuUmResourceLocked(
                : NULL;
 }
 
+/* Device->Lock must be held. */
+static PSOFTGPUUM_OVERLAY
+SoftGpuUmOverlayLocked(
+    PSOFTGPUUM_DEVICE Device,
+    HANDLE hOverlay)
+{
+    PSOFTGPUUM_OVERLAY Overlay;
+
+    if (Device == NULL || hOverlay == NULL)
+        return NULL;
+
+    for (Overlay = Device->Overlays;
+         Overlay != NULL;
+         Overlay = Overlay->Next)
+    {
+        if ((HANDLE)Overlay == hOverlay)
+            break;
+    }
+    return Overlay != NULL &&
+           Overlay->Magic == SOFTGPUUM_OVERLAY_MAGIC &&
+           Overlay->Device == Device
+               ? Overlay
+               : NULL;
+}
+
+static BOOL
+SoftGpuUmOverlayRectValid(
+    CONST RECT *Rect)
+{
+    return Rect != NULL && Rect->left >= 0 && Rect->top >= 0 &&
+           Rect->right > Rect->left && Rect->bottom > Rect->top;
+}
+
+static BOOL
+SoftGpuUmOverlaySourceValid(
+    CONST RECT *Rect,
+    CONST SOFTGPUUM_SUBRESOURCE *Surface)
+{
+    return SoftGpuUmOverlayRectValid(Rect) && Surface != NULL &&
+           (UINT)Rect->right <= Surface->Width &&
+           (UINT)Rect->bottom <= Surface->Height;
+}
+
+static VOID
+SoftGpuUmOverlayKernelInfo(
+    D3DDDI_KERNELOVERLAYINFO *KernelInfo,
+    CONST SOFTGPUUM_RESOURCE *Resource,
+    UINT SubresourceIndex,
+    CONST RECT *SrcRect,
+    CONST RECT *DstRect,
+    SOFTGPU_OVERLAY_PRIVATE_DATA *PrivateData,
+    UINT InfoFlags,
+    UINT FlipFlags)
+{
+    ZeroMemory(KernelInfo, sizeof(*KernelInfo));
+    KernelInfo->hAllocation =
+        Resource->Subresources[SubresourceIndex].hAllocation;
+    KernelInfo->SrcRect.left = SrcRect->left;
+    KernelInfo->SrcRect.top = SrcRect->top;
+    KernelInfo->SrcRect.right = SrcRect->right;
+    KernelInfo->SrcRect.bottom = SrcRect->bottom;
+    KernelInfo->DstRect.left = DstRect->left;
+    KernelInfo->DstRect.top = DstRect->top;
+    KernelInfo->DstRect.right = DstRect->right;
+    KernelInfo->DstRect.bottom = DstRect->bottom;
+
+    ZeroMemory(PrivateData, sizeof(*PrivateData));
+    PrivateData->Magic = SOFTGPU_OVERLAY_PRIVATE_MAGIC;
+    PrivateData->Version = SOFTGPU_OVERLAY_PRIVATE_VERSION;
+    PrivateData->InfoFlags = InfoFlags;
+    PrivateData->FlipFlags = FlipFlags;
+    KernelInfo->pPrivateDriverData = PrivateData;
+    KernelInfo->PrivateDriverDataSize = sizeof(*PrivateData);
+}
+
 static BOOL
 SoftGpuUmSurfaceGeometry(
     CONST D3DDDI_SURFACEINFO *Surface,
@@ -216,6 +324,41 @@ SoftGpuUmSurfaceGeometry(
 
     *Size = (SIZE_T)SurfaceSize;
     return TRUE;
+}
+
+static HRESULT
+SoftGpuUmGetSurfaceLayout(
+    PSOFTGPUUM_DEVICE Device,
+    CONST D3DDDIARG_CREATERESOURCE *Resource,
+    CONST D3DDDI_SURFACEINFO *Surface,
+    SOFTGPUUM_SURFACE_LAYOUT *Layout)
+{
+    if (Device == NULL || Resource == NULL || Surface == NULL ||
+        Layout == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    ZeroMemory(Layout, sizeof(*Layout));
+    if ((Resource->Format == D3DDDIFMT_X8R8G8B8 ||
+         Resource->Format == D3DDDIFMT_A8R8G8B8) &&
+        SoftGpuUmSurfaceGeometry(Surface, &Layout->Pitch, &Layout->Size))
+    {
+        Layout->StorageHeight = Surface->Height;
+        Layout->BitsPerPixel = SOFTGPU_DISPLAY_BITS_PER_PIXEL;
+        Layout->PlaneCount = 1;
+        Layout->PlaneOffsets[0] = 0;
+        Layout->PlanePitches[0] = Layout->Pitch;
+        return S_OK;
+    }
+
+    if (Device->Backend == NULL ||
+        Device->Backend->GetSurfaceLayout == NULL)
+    {
+        return E_NOTIMPL;
+    }
+
+    return Device->Backend->GetSurfaceLayout(Resource, Surface, Layout);
 }
 
 static BOOL
@@ -330,6 +473,7 @@ SoftGpuUmCreateResource(
     D3DDDICB_DEALLOCATE Deallocate;
     SIZE_T ResourceBytes;
     UINT Index;
+    UINT Plane;
     HRESULT Result = E_INVALIDARG;
 
     if (Device == NULL || pData == NULL ||
@@ -340,9 +484,7 @@ SoftGpuUmCreateResource(
     {
         return E_INVALIDARG;
     }
-    if ((pData->Format != D3DDDIFMT_X8R8G8B8 &&
-         pData->Format != D3DDDIFMT_A8R8G8B8) ||
-        (pData->Pool != D3DDDIPOOL_VIDEOMEMORY &&
+    if ((pData->Pool != D3DDDIPOOL_VIDEOMEMORY &&
          pData->Pool != D3DDDIPOOL_LOCALVIDMEM) ||
         pData->MultisampleType != D3DDDIMULTISAMPLE_NONE ||
         pData->MultisampleQuality != 0 ||
@@ -397,37 +539,82 @@ SoftGpuUmCreateResource(
 
     for (Index = 0; Index < pData->SurfCount; ++Index)
     {
-        UINT Pitch;
-        SIZE_T Size;
+        SOFTGPUUM_SURFACE_LAYOUT Layout;
 
-        if (!SoftGpuUmSurfaceGeometry(
-                 &pData->pSurfList[Index],
-                 &Pitch,
-                 &Size))
+        Result = SoftGpuUmGetSurfaceLayout(
+                     Device,
+                     pData,
+                     &pData->pSurfList[Index],
+                     &Layout);
+        if (FAILED(Result))
         {
-            Result = E_NOTIMPL;
             goto Cleanup;
+        }
+        if (Layout.Pitch == 0 || Layout.Size == 0 ||
+            Layout.StorageHeight < pData->pSurfList[Index].Height ||
+            Layout.BitsPerPixel == 0 ||
+            Layout.PlaneCount == 0 ||
+            Layout.PlaneCount > SOFTGPU_ALLOCATION_MAX_PLANES ||
+            Layout.Size > SOFTGPU_MAX_ALLOCATION_SLAB_SIZE)
+        {
+            Result = E_INVALIDARG;
+            goto Cleanup;
+        }
+        for (Plane = 0; Plane < SOFTGPU_ALLOCATION_MAX_PLANES; ++Plane)
+        {
+            if (Plane < Layout.PlaneCount)
+            {
+                if (Layout.PlaneOffsets[Plane] >= Layout.Size ||
+                    Layout.PlanePitches[Plane] == 0)
+                {
+                    Result = E_INVALIDARG;
+                    goto Cleanup;
+                }
+            }
+            else if (Layout.PlaneOffsets[Plane] != 0 ||
+                     Layout.PlanePitches[Plane] != 0)
+            {
+                Result = E_INVALIDARG;
+                goto Cleanup;
+            }
         }
 
         Resource->Subresources[Index].Width =
             pData->pSurfList[Index].Width;
         Resource->Subresources[Index].Height =
             pData->pSurfList[Index].Height;
-        Resource->Subresources[Index].Pitch = Pitch;
-        Resource->Subresources[Index].Size = Size;
+        Resource->Subresources[Index].Pitch = Layout.Pitch;
+        Resource->Subresources[Index].StorageHeight =
+            Layout.StorageHeight;
+        Resource->Subresources[Index].PlaneCount = Layout.PlaneCount;
+        CopyMemory(Resource->Subresources[Index].PlaneOffsets,
+                   Layout.PlaneOffsets,
+                   sizeof(Layout.PlaneOffsets));
+        CopyMemory(Resource->Subresources[Index].PlanePitches,
+                   Layout.PlanePitches,
+                   sizeof(Layout.PlanePitches));
+        Resource->Subresources[Index].Size = Layout.Size;
 
         PrivateData[Index].Width =
             Resource->Subresources[Index].Width;
         PrivateData[Index].Height =
             Resource->Subresources[Index].Height;
         PrivateData[Index].BitsPerPixel =
-            SOFTGPU_DISPLAY_BITS_PER_PIXEL;
+            Layout.BitsPerPixel;
         PrivateData[Index].Magic =
             SOFTGPU_ALLOCATION_PRIVATE_MAGIC;
         PrivateData[Index].Version =
             SOFTGPU_ALLOCATION_PRIVATE_VERSION;
-        PrivateData[Index].Pitch = Pitch;
+        PrivateData[Index].Pitch = Layout.Pitch;
         PrivateData[Index].Format = pData->Format;
+        PrivateData[Index].StorageHeight = Layout.StorageHeight;
+        PrivateData[Index].PlaneCount = Layout.PlaneCount;
+        CopyMemory(PrivateData[Index].PlaneOffsets,
+                   Layout.PlaneOffsets,
+                   sizeof(Layout.PlaneOffsets));
+        CopyMemory(PrivateData[Index].PlanePitches,
+                   Layout.PlanePitches,
+                   sizeof(Layout.PlanePitches));
 
         AllocationInfo[Index].pPrivateDriverData =
             &PrivateData[Index];
@@ -529,6 +716,56 @@ SoftGpuUmDestroyResource(
         LeaveCriticalSection(&Device->Lock);
         return E_INVALIDARG;
     }
+    if (Resource->OverlayReferenceCount != 0 ||
+        Resource->OperationReferenceCount != 0)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_PENDING;
+    }
+    for (Index = 0; Index < Resource->SubresourceCount; ++Index)
+    {
+        if (Resource->Subresources[Index].Locked)
+        {
+            LeaveCriticalSection(&Device->Lock);
+            return E_FAIL;
+        }
+    }
+#if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_1_2)
+    if (Resource->hSyncToken != NULL)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_FAIL;
+    }
+#endif
+    if (Device->Callbacks.pfnDeallocateCb == NULL)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_NOTIMPL;
+    }
+
+    if (Device->Backend != NULL && Device->Backend->ReleaseResource != NULL)
+    {
+        ++Resource->OperationReferenceCount;
+        LeaveCriticalSection(&Device->Lock);
+        Result = Device->Backend->ReleaseResource(
+                     hDevice,
+                     Device->BackendContext,
+                     hResource);
+        EnterCriticalSection(&Device->Lock);
+        --Resource->OperationReferenceCount;
+        if (FAILED(Result))
+        {
+            LeaveCriticalSection(&Device->Lock);
+            return Result;
+        }
+        if (Resource->OverlayReferenceCount != 0 ||
+            Resource->OperationReferenceCount != 0)
+        {
+            LeaveCriticalSection(&Device->Lock);
+            return E_PENDING;
+        }
+    }
+
     for (Index = 0; Index < Resource->SubresourceCount; ++Index)
     {
         if (Resource->Subresources[Index].Locked)
@@ -578,6 +815,364 @@ SoftGpuUmDestroyResource(
     return S_OK;
 }
 
+/* ------------------------------------------------------------------------ *
+ * Hardware-overlay entries
+ * ------------------------------------------------------------------------ */
+
+static HRESULT
+SoftGpuUmWaitResourceLocked(
+    PSOFTGPUUM_DEVICE Device,
+    PSOFTGPUUM_RESOURCE Resource,
+    UINT SubresourceIndex,
+    PSOFTGPUUM_OVERLAY Overlay,
+    BOOL WriteAccess,
+    BOOL DoNotWait)
+{
+    HRESULT Result;
+
+    /* Do not hold the core object lock while the producer completes.  The
+     * decoder output thread maps this same resource through the core. */
+    ++Resource->OperationReferenceCount;
+    if (Overlay != NULL)
+        ++Overlay->OperationReferenceCount;
+    LeaveCriticalSection(&Device->Lock);
+
+    Result = Device->Backend == NULL ||
+             Device->Backend->WaitResource == NULL
+                 ? S_OK
+                 : Device->Backend->WaitResource((HANDLE)Device,
+                                                  Device->BackendContext,
+                                                  (HANDLE)Resource,
+                                                  SubresourceIndex,
+                                                  WriteAccess,
+                                                  DoNotWait);
+
+    EnterCriticalSection(&Device->Lock);
+    if (Overlay != NULL && Overlay->OperationReferenceCount != 0)
+        --Overlay->OperationReferenceCount;
+    if (Resource->OperationReferenceCount != 0)
+        --Resource->OperationReferenceCount;
+    return Result;
+}
+
+static HRESULT APIENTRY
+SoftGpuUmCreateOverlay(
+    HANDLE hDevice,
+    D3DDDIARG_CREATEOVERLAY *pData)
+{
+    PSOFTGPUUM_DEVICE Device = SoftGpuUmDevice(hDevice);
+    PSOFTGPUUM_RESOURCE Resource;
+    PSOFTGPUUM_OVERLAY Overlay;
+    D3DDDICB_CREATEOVERLAY Create;
+    SOFTGPU_OVERLAY_PRIVATE_DATA PrivateData;
+    HRESULT Result;
+
+    if (Device == NULL || pData == NULL)
+        return E_INVALIDARG;
+    pData->hOverlay = NULL;
+    if (pData->VidPnSourceId != 0 ||
+        pData->OverlayInfo.hResource == NULL ||
+        (pData->OverlayInfo.Flags.Value &
+         ~SOFTGPU_OVERLAY_INFO_ALLOWED) != 0 ||
+        !SoftGpuUmOverlayRectValid(&pData->OverlayInfo.DstRect) ||
+        Device->Callbacks.pfnCreateOverlayCb == NULL ||
+        Device->Callbacks.pfnDestroyOverlayCb == NULL)
+    {
+        return E_NOTIMPL;
+    }
+
+    Overlay = (PSOFTGPUUM_OVERLAY)HeapAlloc(GetProcessHeap(),
+                                             HEAP_ZERO_MEMORY,
+                                             sizeof(*Overlay));
+    if (Overlay == NULL)
+        return E_OUTOFMEMORY;
+
+    EnterCriticalSection(&Device->Lock);
+    Resource = SoftGpuUmResourceLocked(Device,
+                                        pData->OverlayInfo.hResource);
+    if (Resource == NULL ||
+        pData->OverlayInfo.SubResourceIndex >= Resource->SubresourceCount ||
+        Resource->Format != SOFTGPU_D3DDDIFMT_NV12 ||
+        !Resource->Flags.DecodeRenderTarget ||
+        Resource->Subresources[pData->OverlayInfo.SubResourceIndex].PlaneCount != 2 ||
+        !SoftGpuUmOverlaySourceValid(
+             &pData->OverlayInfo.SrcRect,
+             &Resource->Subresources[pData->OverlayInfo.SubResourceIndex]))
+    {
+        Result = E_INVALIDARG;
+        goto Failure;
+    }
+
+    Result = SoftGpuUmWaitResourceLocked(
+                 Device,
+                 Resource,
+                 pData->OverlayInfo.SubResourceIndex,
+                 NULL,
+                 FALSE,
+                 FALSE);
+    if (FAILED(Result))
+        goto Failure;
+
+    ZeroMemory(&Create, sizeof(Create));
+    Create.VidPnSourceId = pData->VidPnSourceId;
+    SoftGpuUmOverlayKernelInfo(
+        &Create.OverlayInfo,
+        Resource,
+        pData->OverlayInfo.SubResourceIndex,
+        &pData->OverlayInfo.SrcRect,
+        &pData->OverlayInfo.DstRect,
+        &PrivateData,
+        pData->OverlayInfo.Flags.Value,
+        0);
+    Result = Device->Callbacks.pfnCreateOverlayCb(
+                 Device->hRuntimeDevice,
+                 &Create);
+    if (FAILED(Result) || Create.hKernelOverlay == 0)
+    {
+        if (SUCCEEDED(Result))
+            Result = E_FAIL;
+        goto Failure;
+    }
+
+    Overlay->Magic = SOFTGPUUM_OVERLAY_MAGIC;
+    Overlay->Device = Device;
+    Overlay->hKernelOverlay = Create.hKernelOverlay;
+    Overlay->Resource = Resource;
+    Overlay->SubresourceIndex =
+        pData->OverlayInfo.SubResourceIndex;
+    Overlay->VidPnSourceId = pData->VidPnSourceId;
+    Overlay->SrcRect = pData->OverlayInfo.SrcRect;
+    Overlay->DstRect = pData->OverlayInfo.DstRect;
+    Overlay->InfoFlags = pData->OverlayInfo.Flags.Value;
+    Overlay->Next = Device->Overlays;
+    Device->Overlays = Overlay;
+    ++Resource->OverlayReferenceCount;
+    pData->hOverlay = (HANDLE)Overlay;
+    LeaveCriticalSection(&Device->Lock);
+    return S_OK;
+
+Failure:
+    LeaveCriticalSection(&Device->Lock);
+    HeapFree(GetProcessHeap(), 0, Overlay);
+    return Result;
+}
+
+static HRESULT APIENTRY
+SoftGpuUmUpdateOverlay(
+    HANDLE hDevice,
+    CONST D3DDDIARG_UPDATEOVERLAY *pData)
+{
+    PSOFTGPUUM_DEVICE Device = SoftGpuUmDevice(hDevice);
+    PSOFTGPUUM_OVERLAY Overlay;
+    PSOFTGPUUM_RESOURCE Resource;
+    PSOFTGPUUM_RESOURCE OldResource;
+    D3DDDICB_UPDATEOVERLAY Update;
+    SOFTGPU_OVERLAY_PRIVATE_DATA PrivateData;
+    HRESULT Result;
+
+    if (Device == NULL || pData == NULL ||
+        pData->hOverlay == NULL ||
+        pData->OverlayInfo.hResource == NULL ||
+        (pData->OverlayInfo.Flags.Value &
+         ~SOFTGPU_OVERLAY_INFO_ALLOWED) != 0 ||
+        !SoftGpuUmOverlayRectValid(&pData->OverlayInfo.DstRect) ||
+        Device->Callbacks.pfnUpdateOverlayCb == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    EnterCriticalSection(&Device->Lock);
+    Overlay = SoftGpuUmOverlayLocked(Device, pData->hOverlay);
+    Resource = SoftGpuUmResourceLocked(Device,
+                                        pData->OverlayInfo.hResource);
+    if (Overlay == NULL || Resource == NULL ||
+        pData->OverlayInfo.SubResourceIndex >= Resource->SubresourceCount ||
+        Resource->Format != SOFTGPU_D3DDDIFMT_NV12 ||
+        !Resource->Flags.DecodeRenderTarget ||
+        Resource->Subresources[pData->OverlayInfo.SubResourceIndex].PlaneCount != 2 ||
+        !SoftGpuUmOverlaySourceValid(
+             &pData->OverlayInfo.SrcRect,
+             &Resource->Subresources[pData->OverlayInfo.SubResourceIndex]))
+    {
+        Result = E_INVALIDARG;
+        goto Exit;
+    }
+
+    Result = SoftGpuUmWaitResourceLocked(
+                 Device,
+                 Resource,
+                 pData->OverlayInfo.SubResourceIndex,
+                 Overlay,
+                 FALSE,
+                 FALSE);
+    if (FAILED(Result))
+        goto Exit;
+
+    ZeroMemory(&Update, sizeof(Update));
+    Update.hKernelOverlay = Overlay->hKernelOverlay;
+    SoftGpuUmOverlayKernelInfo(
+        &Update.OverlayInfo,
+        Resource,
+        pData->OverlayInfo.SubResourceIndex,
+        &pData->OverlayInfo.SrcRect,
+        &pData->OverlayInfo.DstRect,
+        &PrivateData,
+        pData->OverlayInfo.Flags.Value,
+        0);
+    Result = Device->Callbacks.pfnUpdateOverlayCb(
+                 Device->hRuntimeDevice,
+                 &Update);
+    if (FAILED(Result))
+        goto Exit;
+
+    OldResource = Overlay->Resource;
+    if (OldResource != Resource)
+    {
+        ++Resource->OverlayReferenceCount;
+        if (OldResource->OverlayReferenceCount != 0)
+            --OldResource->OverlayReferenceCount;
+        Overlay->Resource = Resource;
+    }
+    Overlay->SubresourceIndex =
+        pData->OverlayInfo.SubResourceIndex;
+    Overlay->SrcRect = pData->OverlayInfo.SrcRect;
+    Overlay->DstRect = pData->OverlayInfo.DstRect;
+    Overlay->InfoFlags = pData->OverlayInfo.Flags.Value;
+
+Exit:
+    LeaveCriticalSection(&Device->Lock);
+    return Result;
+}
+
+static HRESULT APIENTRY
+SoftGpuUmFlipOverlay(
+    HANDLE hDevice,
+    CONST D3DDDIARG_FLIPOVERLAY *pData)
+{
+    PSOFTGPUUM_DEVICE Device = SoftGpuUmDevice(hDevice);
+    PSOFTGPUUM_OVERLAY Overlay;
+    PSOFTGPUUM_RESOURCE Resource;
+    PSOFTGPUUM_RESOURCE OldResource;
+    D3DDDICB_FLIPOVERLAY Flip;
+    SOFTGPU_OVERLAY_PRIVATE_DATA PrivateData;
+    HRESULT Result;
+
+    if (Device == NULL || pData == NULL || pData->hOverlay == NULL ||
+        pData->hSource == NULL || (pData->Flags.Value & ~0x3u) != 0 ||
+        (pData->Flags.Even && pData->Flags.Odd) ||
+        Device->Callbacks.pfnFlipOverlayCb == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    EnterCriticalSection(&Device->Lock);
+    Overlay = SoftGpuUmOverlayLocked(Device, pData->hOverlay);
+    Resource = SoftGpuUmResourceLocked(Device, pData->hSource);
+    if (Overlay == NULL || Resource == NULL ||
+        pData->SourceIndex >= Resource->SubresourceCount ||
+        Resource->Format != SOFTGPU_D3DDDIFMT_NV12 ||
+        !Resource->Flags.DecodeRenderTarget ||
+        Resource->Subresources[pData->SourceIndex].PlaneCount != 2 ||
+        !SoftGpuUmOverlaySourceValid(
+             &Overlay->SrcRect,
+             &Resource->Subresources[pData->SourceIndex]))
+    {
+        Result = E_INVALIDARG;
+        goto Exit;
+    }
+
+    Result = SoftGpuUmWaitResourceLocked(Device,
+                                         Resource,
+                                         pData->SourceIndex,
+                                         Overlay,
+                                         FALSE,
+                                         FALSE);
+    if (FAILED(Result))
+        goto Exit;
+
+    ZeroMemory(&Flip, sizeof(Flip));
+    Flip.hKernelOverlay = Overlay->hKernelOverlay;
+    Flip.hSource = Resource->Subresources[pData->SourceIndex].hAllocation;
+    ZeroMemory(&PrivateData, sizeof(PrivateData));
+    PrivateData.Magic = SOFTGPU_OVERLAY_PRIVATE_MAGIC;
+    PrivateData.Version = SOFTGPU_OVERLAY_PRIVATE_VERSION;
+    PrivateData.InfoFlags = Overlay->InfoFlags;
+    PrivateData.FlipFlags = pData->Flags.Value;
+    Flip.pPrivateDriverData = &PrivateData;
+    Flip.PrivateDriverDataSize = sizeof(PrivateData);
+    Result = Device->Callbacks.pfnFlipOverlayCb(Device->hRuntimeDevice,
+                                                &Flip);
+    if (FAILED(Result))
+        goto Exit;
+
+    OldResource = Overlay->Resource;
+    if (OldResource != Resource)
+    {
+        ++Resource->OverlayReferenceCount;
+        if (OldResource->OverlayReferenceCount != 0)
+            --OldResource->OverlayReferenceCount;
+        Overlay->Resource = Resource;
+    }
+    Overlay->SubresourceIndex = pData->SourceIndex;
+
+Exit:
+    LeaveCriticalSection(&Device->Lock);
+    return Result;
+}
+
+static HRESULT APIENTRY
+SoftGpuUmDestroyOverlay(
+    HANDLE hDevice,
+    CONST D3DDDIARG_DESTROYOVERLAY *pData)
+{
+    PSOFTGPUUM_DEVICE Device = SoftGpuUmDevice(hDevice);
+    PSOFTGPUUM_OVERLAY Overlay;
+    PSOFTGPUUM_OVERLAY *Link;
+    D3DDDICB_DESTROYOVERLAY Destroy;
+    HRESULT Result;
+
+    if (Device == NULL || pData == NULL || pData->hOverlay == NULL ||
+        Device->Callbacks.pfnDestroyOverlayCb == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    EnterCriticalSection(&Device->Lock);
+    Overlay = SoftGpuUmOverlayLocked(Device, pData->hOverlay);
+    if (Overlay == NULL || Overlay->OperationReferenceCount != 0)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_INVALIDARG;
+    }
+
+    ZeroMemory(&Destroy, sizeof(Destroy));
+    Destroy.hKernelOverlay = Overlay->hKernelOverlay;
+    Result = Device->Callbacks.pfnDestroyOverlayCb(Device->hRuntimeDevice,
+                                                   &Destroy);
+    if (FAILED(Result))
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return Result;
+    }
+
+    for (Link = &Device->Overlays; *Link != NULL; Link = &(*Link)->Next)
+    {
+        if (*Link == Overlay)
+        {
+            *Link = Overlay->Next;
+            break;
+        }
+    }
+    if (Overlay->Resource->OverlayReferenceCount != 0)
+        --Overlay->Resource->OverlayReferenceCount;
+    Overlay->Magic = 0;
+    Overlay->Device = NULL;
+    Overlay->Resource = NULL;
+    LeaveCriticalSection(&Device->Lock);
+    HeapFree(GetProcessHeap(), 0, Overlay);
+    return S_OK;
+}
+
 static HRESULT APIENTRY
 SoftGpuUmLock(
     HANDLE hDevice,
@@ -624,6 +1219,31 @@ SoftGpuUmLock(
         LeaveCriticalSection(&Device->Lock);
         return E_INVALIDARG;
     }
+    Surface = &Resource->Subresources[pData->SubResourceIndex];
+    if (Resource->Flags.NotLockable || Surface->Locked)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_FAIL;
+    }
+    if (Resource->Flags.WriteOnly && pData->Flags.ReadOnly)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_INVALIDARG;
+    }
+
+    Result = SoftGpuUmWaitResourceLocked(
+                 Device,
+                 Resource,
+                 pData->SubResourceIndex,
+                 NULL,
+                 !pData->Flags.ReadOnly,
+                 pData->Flags.DoNotWait);
+    if (FAILED(Result))
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return Result;
+    }
+
     Surface = &Resource->Subresources[pData->SubResourceIndex];
     if (Resource->Flags.NotLockable || Surface->Locked)
     {
@@ -755,6 +1375,145 @@ SoftGpuUmUnlock(
     {
         Surface->Locked = FALSE;
         Surface->LockBase = NULL;
+    }
+    LeaveCriticalSection(&Device->Lock);
+    return Result;
+}
+
+VOID *APIENTRY
+SoftGpuUmGetBackendContext(
+    HANDLE hDevice)
+{
+    PSOFTGPUUM_DEVICE Device = SoftGpuUmDevice(hDevice);
+
+    return Device != NULL ? Device->BackendContext : NULL;
+}
+
+HRESULT APIENTRY
+SoftGpuUmMapResource(
+    HANDLE hDevice,
+    HANDLE hResource,
+    UINT SubResourceIndex,
+    BOOL WriteOnly,
+    SOFTGPUUM_RESOURCE_MAPPING *Mapping)
+{
+    PSOFTGPUUM_DEVICE Device = SoftGpuUmDevice(hDevice);
+    PSOFTGPUUM_RESOURCE Resource;
+    PSOFTGPUUM_SUBRESOURCE Surface;
+    D3DDDICB_LOCK Lock;
+    HRESULT Result;
+
+    if (Device == NULL || hResource == NULL || Mapping == NULL)
+        return E_INVALIDARG;
+
+    ZeroMemory(Mapping, sizeof(*Mapping));
+    EnterCriticalSection(&Device->Lock);
+    Resource = SoftGpuUmResourceLocked(Device, hResource);
+    if (Resource == NULL || SubResourceIndex >= Resource->SubresourceCount)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_INVALIDARG;
+    }
+
+    Surface = &Resource->Subresources[SubResourceIndex];
+    if (Surface->Locked || Device->Callbacks.pfnLockCb == NULL)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_FAIL;
+    }
+
+    ZeroMemory(&Lock, sizeof(Lock));
+    Lock.hAllocation = Surface->hAllocation;
+    Lock.Flags.ReadOnly = WriteOnly ? 0 : 1;
+    Lock.Flags.WriteOnly = WriteOnly ? 1 : 0;
+    Lock.Flags.LockEntire = 1;
+    Result = Device->Callbacks.pfnLockCb(Device->hRuntimeDevice, &Lock);
+    if (FAILED(Result))
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return Result;
+    }
+    if (Lock.pData == NULL)
+    {
+        D3DDDICB_UNLOCK Unlock;
+        D3DKMT_HANDLE Allocation = Surface->hAllocation;
+
+        ZeroMemory(&Unlock, sizeof(Unlock));
+        Unlock.NumAllocations = 1;
+        Unlock.phAllocations = &Allocation;
+        if (Device->Callbacks.pfnUnlockCb != NULL)
+            (VOID)Device->Callbacks.pfnUnlockCb(Device->hRuntimeDevice, &Unlock);
+        LeaveCriticalSection(&Device->Lock);
+        return E_FAIL;
+    }
+
+    Surface->Locked = TRUE;
+    Surface->LockBase = Lock.pData;
+    Mapping->Data = Lock.pData;
+    Mapping->Size = Surface->Size;
+    Mapping->Pitch = Surface->Pitch;
+    Mapping->Width = Surface->Width;
+    Mapping->Height = Surface->Height;
+    Mapping->StorageHeight = Surface->StorageHeight;
+    Mapping->PlaneCount = Surface->PlaneCount;
+    CopyMemory(Mapping->PlaneOffsets,
+               Surface->PlaneOffsets,
+               sizeof(Mapping->PlaneOffsets));
+    CopyMemory(Mapping->PlanePitches,
+               Surface->PlanePitches,
+               sizeof(Mapping->PlanePitches));
+    Mapping->Format = Resource->Format;
+    Mapping->Resource = hResource;
+    Mapping->SubResourceIndex = SubResourceIndex;
+    LeaveCriticalSection(&Device->Lock);
+    return S_OK;
+}
+
+HRESULT APIENTRY
+SoftGpuUmUnmapResource(
+    HANDLE hDevice,
+    SOFTGPUUM_RESOURCE_MAPPING *Mapping)
+{
+    PSOFTGPUUM_DEVICE Device = SoftGpuUmDevice(hDevice);
+    PSOFTGPUUM_RESOURCE Resource;
+    PSOFTGPUUM_SUBRESOURCE Surface;
+    D3DDDICB_UNLOCK Unlock;
+    D3DKMT_HANDLE Allocation;
+    HRESULT Result;
+
+    if (Device == NULL || Mapping == NULL || Mapping->Resource == NULL ||
+        Mapping->Data == NULL)
+    {
+        return E_INVALIDARG;
+    }
+
+    EnterCriticalSection(&Device->Lock);
+    Resource = SoftGpuUmResourceLocked(Device, Mapping->Resource);
+    if (Resource == NULL ||
+        Mapping->SubResourceIndex >= Resource->SubresourceCount)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_INVALIDARG;
+    }
+
+    Surface = &Resource->Subresources[Mapping->SubResourceIndex];
+    if (!Surface->Locked || Surface->LockBase != Mapping->Data ||
+        Device->Callbacks.pfnUnlockCb == NULL)
+    {
+        LeaveCriticalSection(&Device->Lock);
+        return E_INVALIDARG;
+    }
+
+    Allocation = Surface->hAllocation;
+    ZeroMemory(&Unlock, sizeof(Unlock));
+    Unlock.NumAllocations = 1;
+    Unlock.phAllocations = &Allocation;
+    Result = Device->Callbacks.pfnUnlockCb(Device->hRuntimeDevice, &Unlock);
+    if (SUCCEEDED(Result))
+    {
+        Surface->Locked = FALSE;
+        Surface->LockBase = NULL;
+        ZeroMemory(Mapping, sizeof(*Mapping));
     }
     LeaveCriticalSection(&Device->Lock);
     return Result;
@@ -1156,8 +1915,18 @@ SoftGpuUmDestroyDevice(
     if (Device == NULL)
         return E_INVALIDARG;
 
+    if (Device->Backend != NULL &&
+        Device->Backend->CanDestroyDevice != NULL)
+    {
+        Result = Device->Backend->CanDestroyDevice(
+                     hDevice,
+                     Device->BackendContext);
+        if (FAILED(Result))
+            return Result;
+    }
+
     EnterCriticalSection(&Device->Lock);
-    if (Device->Resources != NULL)
+    if (Device->Resources != NULL || Device->Overlays != NULL)
     {
         LeaveCriticalSection(&Device->Lock);
         return E_FAIL;
@@ -1195,6 +1964,15 @@ SoftGpuUmDestroyDevice(
         }
     }
     LeaveCriticalSection(&SoftGpuUmObjectLock);
+
+    if (Device->Backend != NULL &&
+        Device->Backend->DestroyDevice != NULL)
+    {
+        Device->Backend->DestroyDevice(
+            hDevice,
+            Device->BackendContext);
+        Device->BackendContext = NULL;
+    }
 
     InterlockedDecrement(&Device->Adapter->DeviceCount);
     Device->Magic = 0;
@@ -1235,10 +2013,18 @@ SoftGpuUmGetCaps(
     CONST D3DDDIARG_GETCAPS *pData)
 {
     PSOFTGPUUM_ADAPTER Adapter = SoftGpuUmAdapter(hAdapter);
+    HRESULT Result;
 
     if (Adapter == NULL || pData == NULL || pData->pData == NULL)
     {
         return E_INVALIDARG;
+    }
+
+    if (Adapter->Backend != NULL && Adapter->Backend->GetCaps != NULL)
+    {
+        Result = Adapter->Backend->GetCaps(pData);
+        if (Result != E_NOTIMPL)
+            return Result;
     }
 
     switch (pData->Type)
@@ -1348,6 +2134,7 @@ SoftGpuUmCreateDevice(
     Device->Adapter = Adapter;
     Device->hRuntimeDevice = pData->hDevice;
     Device->Callbacks = *pData->pCallbacks;
+    Device->Backend = Adapter->Backend;
     InitializeCriticalSection(&Device->Lock);
 
     /*
@@ -1424,6 +2211,10 @@ SoftGpuUmCreateDevice(
     Funcs->pfnFlush = SoftGpuUmFlush;
     Funcs->pfnBlt = SoftGpuUmBlt;
     Funcs->pfnColorFill = SoftGpuUmColorFill;
+    Funcs->pfnCreateOverlay = SoftGpuUmCreateOverlay;
+    Funcs->pfnUpdateOverlay = SoftGpuUmUpdateOverlay;
+    Funcs->pfnFlipOverlay = SoftGpuUmFlipOverlay;
+    Funcs->pfnDestroyOverlay = SoftGpuUmDestroyOverlay;
     Funcs->pfnDestroyDevice = SoftGpuUmDestroyDevice;
 #if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_1_2)
     Funcs->pfnAcquireResource = SoftGpuUmAcquireResource;
@@ -1431,6 +2222,30 @@ SoftGpuUmCreateDevice(
 #if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_1_3)
     Funcs->pfnReleaseResource = SoftGpuUmReleaseResource;
 #endif
+
+    if (Device->Backend != NULL &&
+        Device->Backend->CreateDevice != NULL)
+    {
+        Result = Device->Backend->CreateDevice(
+                     (HANDLE)Device,
+                     Funcs,
+                     &Device->BackendContext);
+        if (FAILED(Result))
+        {
+            if (Device->hContext != NULL)
+            {
+                ZeroMemory(&DestroyContext, sizeof(DestroyContext));
+                DestroyContext.hContext = Device->hContext;
+                (VOID)Device->Callbacks.pfnDestroyContextCb(
+                          Device->hRuntimeDevice,
+                          &DestroyContext);
+            }
+            DeleteCriticalSection(&Device->Lock);
+            Device->Magic = 0;
+            HeapFree(GetProcessHeap(), 0, Device);
+            return Result;
+        }
+    }
 
     EnterCriticalSection(&SoftGpuUmObjectLock);
     Device->Next = SoftGpuUmDevices;
@@ -1503,6 +2318,7 @@ OpenAdapter10_2(
     Adapter->hRuntimeAdapter = pOpenData->hAdapter;
     Adapter->Interface = pOpenData->Interface;
     Adapter->Version = pOpenData->Version;
+    Adapter->Backend = SoftGpuUmGetBackend();
     if (pOpenData->pAdapterCallbacks != NULL)
         Adapter->Callbacks = *pOpenData->pAdapterCallbacks;
 
