@@ -391,6 +391,27 @@ typedef enum _WLAN_NOTIFICATION_ACM {
 } WLAN_NOTIFICATION_ACM;
 typedef WLAN_NOTIFICATION_ACM *PWLAN_NOTIFICATION_ACM;
 
+typedef enum _WLAN_NOTIFICATION_MSM {
+    wlan_notification_msm_start = 0,
+    wlan_notification_msm_associating,
+    wlan_notification_msm_associated,
+    wlan_notification_msm_authenticating,
+    wlan_notification_msm_connected,
+    wlan_notification_msm_roaming_start,
+    wlan_notification_msm_roaming_end,
+    wlan_notification_msm_radio_state_change,
+    wlan_notification_msm_signal_quality_change,
+    wlan_notification_msm_disassociating,
+    wlan_notification_msm_disconnected,
+    wlan_notification_msm_peer_join,
+    wlan_notification_msm_peer_leave,
+    wlan_notification_msm_adapter_removal,
+    wlan_notification_msm_adapter_operation_mode_change,
+    wlan_notification_msm_link_degraded,
+    wlan_notification_msm_link_improved,
+    wlan_notification_msm_end
+} WLAN_NOTIFICATION_MSM, *PWLAN_NOTIFICATION_MSM;
+
 /* Functions */
 #if !defined(__midl) && !defined(__WIDL__)
 PVOID WINAPI WlanAllocateMemory(DWORD dwSize);
@@ -408,6 +429,7 @@ DWORD WINAPI WlanGetProfileCustomUserData(IN HANDLE hClientHandle, IN const GUID
 DWORD WINAPI WlanGetProfileList(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, PVOID pReserved, OUT PWLAN_PROFILE_INFO_LIST *ppProfileList);
 DWORD WINAPI WlanIhvControl(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN WLAN_IHV_CONTROL_TYPE Type, IN DWORD dwInBufferSize, IN PVOID pInBuffer, IN DWORD dwOutBufferSize, PVOID pOutBuffer, OUT PDWORD pdwBytesReturned);
 DWORD WINAPI WlanQueryInterface(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN WLAN_INTF_OPCODE OpCode, PVOID pReserved, OUT PDWORD pdwDataSize, OUT PVOID *ppData, WLAN_OPCODE_VALUE_TYPE *pWlanOpcodeValueType);
+DWORD WINAPI WlanSetInterface(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN WLAN_INTF_OPCODE OpCode, IN DWORD dwDataSize, IN const VOID *pData, PVOID pReserved);
 DWORD WINAPI WlanReasonCodeToString(IN DWORD dwReasonCode, IN DWORD dwBufferSize, IN PWCHAR pStringBuffer, PVOID pReserved);
 DWORD WINAPI WlanRegisterNotification(IN HANDLE hClientHandle,IN DWORD dwNotifSource, IN BOOL bIgnoreDuplicate, WLAN_NOTIFICATION_CALLBACK funcCallback, PVOID pCallbackContext, PVOID pReserved, PDWORD pdwPrevNotifSource);
 DWORD WINAPI WlanRenameProfile(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN LPCWSTR strOldProfileName, IN LPCWSTR strNewProfileName, PVOID pReserved);
