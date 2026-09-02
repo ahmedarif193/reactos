@@ -116,8 +116,8 @@ Rpi3Vc4GpuAddress(
            ((ULONG)PhysicalAddress.QuadPart & RPI3VC4_GPU_ADDRESS_MASK);
 }
 
-static NTSTATUS
-Rpi3Vc4AllocateBinnerOverflow(
+NTSTATUS
+Rpi3Vc4ReserveV3dMemory(
     _Inout_ PRPI3VC4_CONTEXT Context)
 {
     PHYSICAL_ADDRESS LowAddress;
@@ -527,7 +527,7 @@ Rpi3Vc4InitializeV3d(
         return STATUS_DEVICE_HARDWARE_ERROR;
     }
 
-    Status = Rpi3Vc4AllocateBinnerOverflow(Context);
+    Status = Rpi3Vc4ReserveV3dMemory(Context);
     if (!NT_SUCCESS(Status))
     {
         Context->V3dStatus = Status;
