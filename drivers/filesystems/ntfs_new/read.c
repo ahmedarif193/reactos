@@ -445,20 +445,31 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                             ReadOffset.QuadPart);
                 OriginalLength = RequestedLength;
             }
-            if (!CcCopyRead(FileObject, &ReadOffset, RequestedLength,
-                            TRUE, Buffer, &Irp->IoStatus))
+            _SEH2_TRY
             {
-                Status = STATUS_CANT_WAIT;
-            }
-            else
-            {
-                Status = Irp->IoStatus.Status;
-                if (NT_SUCCESS(Status))
+                if (!CcCopyRead(FileObject, &ReadOffset, RequestedLength,
+                                TRUE, Buffer, &Irp->IoStatus))
                 {
-                    RequestedLength = OriginalLength -
-                                      (ULONG)Irp->IoStatus.Information;
+                    Status = STATUS_CANT_WAIT;
+                }
+                else
+                {
+                    Status = Irp->IoStatus.Status;
+                    if (NT_SUCCESS(Status))
+                    {
+                        RequestedLength = OriginalLength -
+                                          (ULONG)Irp->IoStatus.Information;
+                    }
                 }
             }
+            _SEH2_EXCEPT(FsRtlIsNtstatusExpected(_SEH2_GetExceptionCode()) ?
+                         EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+            {
+                Status = _SEH2_GetExceptionCode();
+                Irp->IoStatus.Information = 0;
+                RequestedLength = 0;
+            }
+            _SEH2_END;
         }
     }
     else if (RequestedLength)
