@@ -234,7 +234,6 @@ elseif(ARCH STREQUAL "arm64")
         math/libm_sse2/_handle_error.c
         math/libm_sse2/atan2.c
         math/arm64/ceil.c
-        math/cos.c
         math/arm64/exp.c
         math/fabs.c
         math/arm64/floor.c
@@ -243,9 +242,9 @@ elseif(ARCH STREQUAL "arm64")
         math/arm64/log.c
         math/arm64/log10.c
         math/arm64/pow.c
-        math/sin.c
+        math/libm_sse2/remainder_piby2.c
         math/sqrt.c
-        math/arm64/tan.c
+        math/arm64/trig.c
     )
     list(APPEND CRT_MATH_SOURCE
         math/_hypotf.c
