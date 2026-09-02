@@ -41,6 +41,14 @@ typedef enum _SERVICE_STATE {
     SERVICE_STATE_CLOSE,
 } SERVICE_STATE;
 
+#define VCHIQ_PAGE_LIST_CACHE_DEPTH 8
+
+typedef struct _VCHIQ_PAGE_LIST_CACHE_ENTRY {
+    VOID* BufferPtr;
+    ULONG BufferSize;
+    PHYSICAL_ADDRESS PhysicalAddress;
+} VCHIQ_PAGE_LIST_CACHE_ENTRY, *PVCHIQ_PAGE_LIST_CACHE_ENTRY;
+
 typedef struct _VCHIQ_FILE_CONTEXT {
     ULONG    ArmPortNumber;
     ULONG    VCHIQPortNumber;
@@ -78,6 +86,8 @@ typedef struct _VCHIQ_FILE_CONTEXT {
 
     // DMA
     DMA_ADAPTER* DmaAdapterPtr;
+    KSPIN_LOCK PageListCacheLock;
+    VCHIQ_PAGE_LIST_CACHE_ENTRY PageListCache[VCHIQ_PAGE_LIST_CACHE_DEPTH];
 
 } VCHIQ_FILE_CONTEXT, *PVCHIQ_FILE_CONTEXT;
 

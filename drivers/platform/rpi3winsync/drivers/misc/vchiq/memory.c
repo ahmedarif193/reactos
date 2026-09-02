@@ -136,6 +136,65 @@ End:
     return status;
 }
 
+_Use_decl_annotations_
+NTSTATUS VchiqAcquirePageListBuffer (
+    VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    ULONG BufferSize,
+    VOID** BufferPPtr,
+    ULONG* AllocatedSizePtr,
+    PHYSICAL_ADDRESS* PhyAddressPtr
+    )
+{
+    KIRQL oldIrql;
+    ULONG bestIndex = VCHIQ_PAGE_LIST_CACHE_DEPTH;
+    ULONG bestSize = MAXULONG;
+
+    PAGED_CODE();
+
+    if (BufferPPtr == NULL || AllocatedSizePtr == NULL ||
+        PhyAddressPtr == NULL || BufferSize == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeAcquireSpinLock(&VchiqFileContextPtr->PageListCacheLock, &oldIrql);
+    for (ULONG i = 0; i < VCHIQ_PAGE_LIST_CACHE_DEPTH; ++i)
+    {
+        VCHIQ_PAGE_LIST_CACHE_ENTRY* entry =
+            &VchiqFileContextPtr->PageListCache[i];
+
+        if (entry->BufferPtr != NULL && entry->BufferSize >= BufferSize &&
+            entry->BufferSize < bestSize)
+        {
+            bestIndex = i;
+            bestSize = entry->BufferSize;
+        }
+    }
+
+    if (bestIndex != VCHIQ_PAGE_LIST_CACHE_DEPTH)
+    {
+        VCHIQ_PAGE_LIST_CACHE_ENTRY* entry =
+            &VchiqFileContextPtr->PageListCache[bestIndex];
+
+        *BufferPPtr = entry->BufferPtr;
+        *AllocatedSizePtr = entry->BufferSize;
+        *PhyAddressPtr = entry->PhysicalAddress;
+        entry->BufferPtr = NULL;
+        entry->BufferSize = 0;
+        entry->PhysicalAddress.QuadPart = 0;
+        KeReleaseSpinLock(&VchiqFileContextPtr->PageListCacheLock, oldIrql);
+        return STATUS_SUCCESS;
+    }
+    KeReleaseSpinLock(&VchiqFileContextPtr->PageListCacheLock, oldIrql);
+
+    *AllocatedSizePtr = BufferSize;
+    return VchiqAllocateCommonBuffer(
+        VchiqFileContextPtr,
+        BufferSize,
+        BufferPPtr,
+        PhyAddressPtr);
+}
+
 VCHIQ_PAGED_SEGMENT_END
 
 VCHIQ_NONPAGED_SEGMENT_BEGIN
@@ -185,6 +244,79 @@ NTSTATUS VchiqFreeCommonBuffer (
 End:
     return status;
 }
+
+_Use_decl_annotations_
+VOID VchiqReleasePageListBuffer (
+    VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    ULONG BufferSize,
+    PHYSICAL_ADDRESS PhyAddress,
+    VOID* BufferPtr
+    )
+{
+    KIRQL oldIrql;
+
+    if (BufferPtr == NULL || BufferSize == 0)
+        return;
+
+    KeAcquireSpinLock(&VchiqFileContextPtr->PageListCacheLock, &oldIrql);
+    for (ULONG i = 0; i < VCHIQ_PAGE_LIST_CACHE_DEPTH; ++i)
+    {
+        VCHIQ_PAGE_LIST_CACHE_ENTRY* entry =
+            &VchiqFileContextPtr->PageListCache[i];
+
+        if (entry->BufferPtr == NULL)
+        {
+            entry->BufferPtr = BufferPtr;
+            entry->BufferSize = BufferSize;
+            entry->PhysicalAddress = PhyAddress;
+            KeReleaseSpinLock(
+                &VchiqFileContextPtr->PageListCacheLock,
+                oldIrql);
+            return;
+        }
+    }
+    KeReleaseSpinLock(&VchiqFileContextPtr->PageListCacheLock, oldIrql);
+
+    VchiqFreeCommonBuffer(
+        VchiqFileContextPtr,
+        BufferSize,
+        PhyAddress,
+        BufferPtr);
+}
+
+VCHIQ_NONPAGED_SEGMENT_END
+
+VCHIQ_PAGED_SEGMENT_BEGIN
+
+_Use_decl_annotations_
+VOID VchiqDrainPageListCache (
+    VCHIQ_FILE_CONTEXT* VchiqFileContextPtr
+    )
+{
+    PAGED_CODE();
+
+    for (ULONG i = 0; i < VCHIQ_PAGE_LIST_CACHE_DEPTH; ++i)
+    {
+        VCHIQ_PAGE_LIST_CACHE_ENTRY* entry =
+            &VchiqFileContextPtr->PageListCache[i];
+
+        if (entry->BufferPtr != NULL)
+        {
+            VchiqFreeCommonBuffer(
+                VchiqFileContextPtr,
+                entry->BufferSize,
+                entry->PhysicalAddress,
+                entry->BufferPtr);
+            entry->BufferPtr = NULL;
+            entry->BufferSize = 0;
+            entry->PhysicalAddress.QuadPart = 0;
+        }
+    }
+}
+
+VCHIQ_PAGED_SEGMENT_END
+
+VCHIQ_NONPAGED_SEGMENT_BEGIN
 
 /*++
 
