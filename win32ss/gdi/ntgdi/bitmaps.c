@@ -849,11 +849,18 @@ BITMAP_GetObject(SURFACE *psurf, INT Count, LPVOID buffer)
             pds->dsBmih.biSizeImage = psurf->SurfObj.cjBits;
             pds->dsBmih.biXPelsPerMeter = 0;
             pds->dsBmih.biYPelsPerMeter = 0;
-            pds->dsBmih.biClrUsed = psurf->ppal->NumColors;
+            pds->dsBmih.biClrUsed = (pds->dsBmih.biBitCount <= 8) ? psurf->ppal->NumColors : 0;
             pds->dsBmih.biClrImportant = psurf->biClrImportant;
-            pds->dsBitfields[0] = psurf->ppal->RedMask;
-            pds->dsBitfields[1] = psurf->ppal->GreenMask;
-            pds->dsBitfields[2] = psurf->ppal->BlueMask;
+            if (pds->dsBmih.biCompression == BI_BITFIELDS)
+            {
+                pds->dsBitfields[0] = psurf->ppal->RedMask;
+                pds->dsBitfields[1] = psurf->ppal->GreenMask;
+                pds->dsBitfields[2] = psurf->ppal->BlueMask;
+            }
+            else
+            {
+                pds->dsBitfields[0] = pds->dsBitfields[1] = pds->dsBitfields[2] = 0;
+            }
             pds->dshSection = psurf->hDIBSection;
             pds->dsOffset = psurf->dwOffset;
 
