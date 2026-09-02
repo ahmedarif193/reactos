@@ -21,6 +21,14 @@ namespace rosget
 namespace
 {
 
+constexpr unsigned VerifiedDownloadAttempts = 2;
+
+void TraceInstaller(const std::string &message)
+{
+    const std::string line = "[ROSGET:INSTALLER] " + message + "\n";
+    OutputDebugStringA(line.c_str());
+}
+
 std::wstring SafePathComponent(std::string_view value)
 {
     std::wstring result = WideFromUtf8(value);
@@ -70,18 +78,23 @@ Status InstallerService::Download(const PackageRecord &package, const InstallerE
     if (!status)
         return status;
     path = JoinPath(targetDirectory, FileNameFromUrl(installer.url));
-    std::printf("Downloading %s %s [%s]\n", package.name.c_str(), package.version.c_str(), installer.architecture.c_str());
-    if (stage) stage(InstallerDownloadStage::Downloading);
-    status = http_.Download(WideFromUtf8(installer.url), path, {}, ~0ull, std::move(progress));
-    if (!status)
-        return status;
-    std::printf("Verifying installer SHA-256...\n");
-    if (stage) stage(InstallerDownloadStage::Verifying);
-    status = VerifyFileSha256(path, installer.sha256);
-    if (!status)
+    for (unsigned attempt = 0; attempt < VerifiedDownloadAttempts; ++attempt)
     {
+        std::printf("Downloading %s %s [%s]\n", package.name.c_str(), package.version.c_str(), installer.architecture.c_str());
+        if (stage) stage(InstallerDownloadStage::Downloading);
+        status = http_.Download(WideFromUtf8(installer.url), path, {}, ~0ull, progress);
+        if (!status)
+            return status;
+        std::printf("Verifying installer SHA-256...\n");
+        if (stage) stage(InstallerDownloadStage::Verifying);
+        status = VerifyFileSha256(path, installer.sha256);
+        if (status)
+            break;
         DeleteFileW(path.c_str());
-        return status;
+        TraceInstaller("verification attempt " + std::to_string(attempt + 1) + "/" + std::to_string(VerifiedDownloadAttempts) + " failed: " + status.message);
+        if (status.code != ERROR_CRC || attempt + 1 == VerifiedDownloadAttempts)
+            return status;
+        TraceInstaller("discarded untrusted download and retrying from the vendor URL");
     }
     std::printf("Installer hash verified.\n");
     if (stage) stage(InstallerDownloadStage::Verified);

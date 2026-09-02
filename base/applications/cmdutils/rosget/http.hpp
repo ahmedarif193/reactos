@@ -31,6 +31,8 @@ public:
     HttpClient &operator=(const HttpClient &) = delete;
 
     Status Get(std::wstring_view url, std::wstring_view headers, HttpResponse &response) const;
+    Status ProbeContentLength(std::wstring_view url, unsigned long long &length,
+                              std::wstring_view headers = {}) const;
     Status Download(std::wstring_view url, std::wstring_view destination, std::wstring_view headers = {},
                     unsigned long long maximumBytes = ~0ull, DownloadProgressCallback progress = {}) const;
 

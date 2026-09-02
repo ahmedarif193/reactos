@@ -245,6 +245,82 @@ Status EnsureDirectory(std::wstring_view path)
     return Status::Fail(error, "cannot create directory: " + WindowsErrorMessage(error));
 }
 
+namespace
+{
+
+void TraceFileOperation(const std::string &message)
+{
+    const std::string line = "[ROSGET:FILE] " + message + "\n";
+    OutputDebugStringA(line.c_str());
+}
+
+bool IsMoveCompatibilityError(DWORD error)
+{
+    return error == ERROR_INVALID_FUNCTION || error == ERROR_INVALID_PARAMETER || error == ERROR_INVALID_NAME ||
+           error == ERROR_NOT_SUPPORTED || error == ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+} // namespace
+
+Status AtomicReplaceFile(std::wstring_view source, std::wstring_view destination, std::string_view description)
+{
+    const std::wstring sourcePath(source);
+    const std::wstring destinationPath(destination);
+    const DWORD sourceAttributes = GetFileAttributesW(sourcePath.c_str());
+    const DWORD destinationAttributes = GetFileAttributesW(destinationPath.c_str());
+    const DWORD durableFlags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+    TraceFileOperation("finalize " + std::string(description) + " source=\"" + Utf8FromWide(sourcePath) + "\" source-length=" + std::to_string(sourcePath.size()) + " source-attributes=" + std::to_string(sourceAttributes) + " destination=\"" + Utf8FromWide(destinationPath) + "\" destination-length=" + std::to_string(destinationPath.size()) + " destination-attributes=" + std::to_string(destinationAttributes) + " flags=" + std::to_string(durableFlags));
+
+    if (MoveFileExW(sourcePath.c_str(), destinationPath.c_str(), durableFlags))
+    {
+        TraceFileOperation("MoveFileExW durable rename succeeded");
+        return Status::Ok();
+    }
+
+    DWORD error = GetLastError();
+    TraceFileOperation("MoveFileExW durable rename failed error=" + std::to_string(error) + " " + WindowsErrorMessage(error));
+    if (IsMoveCompatibilityError(error))
+    {
+        if (MoveFileExW(sourcePath.c_str(), destinationPath.c_str(), MOVEFILE_REPLACE_EXISTING))
+        {
+            TraceFileOperation("MoveFileExW compatibility rename succeeded without WRITE_THROUGH");
+            return Status::Ok();
+        }
+
+        error = GetLastError();
+        TraceFileOperation("MoveFileExW compatibility rename failed error=" + std::to_string(error) + " " + WindowsErrorMessage(error));
+        if (IsMoveCompatibilityError(error))
+        {
+            if (CopyFileW(sourcePath.c_str(), destinationPath.c_str(), FALSE))
+            {
+                HANDLE destinationFile = CreateFileW(destinationPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (destinationFile != INVALID_HANDLE_VALUE)
+                {
+                    if (!FlushFileBuffers(destinationFile))
+                        TraceFileOperation("FlushFileBuffers after compatibility copy failed error=" + std::to_string(GetLastError()));
+                    CloseHandle(destinationFile);
+                }
+                else
+                {
+                    TraceFileOperation("opening compatibility copy for flush failed error=" + std::to_string(GetLastError()));
+                }
+                if (!DeleteFileW(sourcePath.c_str()))
+                    TraceFileOperation("compatibility copy succeeded but temporary cleanup failed error=" + std::to_string(GetLastError()));
+                else
+                    TraceFileOperation("compatibility copy and temporary cleanup succeeded");
+                return Status::Ok();
+            }
+
+            error = GetLastError();
+            TraceFileOperation("CopyFileW compatibility fallback failed error=" + std::to_string(error) + " " + WindowsErrorMessage(error));
+        }
+    }
+
+    if (!DeleteFileW(sourcePath.c_str()))
+        TraceFileOperation("failed-finalize temporary cleanup failed error=" + std::to_string(GetLastError()));
+    return Status::Fail(error, "cannot finalize " + std::string(description) + ": " + WindowsErrorMessage(error));
+}
+
 Status ReadFileBytes(std::wstring_view path, std::vector<std::uint8_t> &bytes, std::size_t maximumSize)
 {
     bytes.clear();
