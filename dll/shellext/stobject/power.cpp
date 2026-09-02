@@ -146,26 +146,59 @@ static HICON DynamicLoadIcon(HINSTANCE hinst)
     return hBatIcon;
 }
 
+static BOOL g_bPowerIconShown = FALSE;
+
+static BOOL Power_HasBattery(void)
+{
+    SYSTEM_POWER_STATUS PowerStatus;
+
+    if (!GetSystemPowerStatus(&PowerStatus))
+        return TRUE;
+    if (PowerStatus.BatteryFlag == BATTERY_FLAG_UNKNOWN)
+        return TRUE;
+    return (PowerStatus.BatteryFlag & BATTERY_FLAG_NO_BATTERY) == 0;
+}
+
+static HRESULT Power_SyncIcon(_In_ CSysTray * pSysTray)
+{
+    BOOL bShow = Power_HasBattery();
+
+    if (!bShow)
+    {
+        if (!g_bPowerIconShown)
+            return S_OK;
+        g_bPowerIconShown = FALSE;
+        return pSysTray->NotifyIcon(NIM_DELETE, ID_ICON_POWER, NULL, NULL);
+    }
+
+    g_hIconBattery = DynamicLoadIcon(g_hInstance);
+    if (!g_bPowerIconShown)
+    {
+        g_bPowerIconShown = TRUE;
+        return pSysTray->NotifyIcon(NIM_ADD, ID_ICON_POWER, g_hIconBattery, g_strTooltip);
+    }
+    return pSysTray->NotifyIcon(NIM_MODIFY, ID_ICON_POWER, g_hIconBattery, g_strTooltip);
+}
+
 HRESULT STDMETHODCALLTYPE Power_Init(_In_ CSysTray * pSysTray)
 {
     TRACE("Power_Init\n");
-    g_hIconBattery = DynamicLoadIcon(g_hInstance);
-
-    return pSysTray->NotifyIcon(NIM_ADD, ID_ICON_POWER, g_hIconBattery, g_strTooltip);
+    g_bPowerIconShown = FALSE;
+    return Power_SyncIcon(pSysTray);
 }
 
 HRESULT STDMETHODCALLTYPE Power_Update(_In_ CSysTray * pSysTray)
 {
     TRACE("Power_Update\n");
-    g_hIconBattery = DynamicLoadIcon(g_hInstance);
-
-    return pSysTray->NotifyIcon(NIM_MODIFY, ID_ICON_POWER, g_hIconBattery, g_strTooltip);
+    return Power_SyncIcon(pSysTray);
 }
 
 HRESULT STDMETHODCALLTYPE Power_Shutdown(_In_ CSysTray * pSysTray)
 {
     TRACE("Power_Shutdown\n");
-
+    if (!g_bPowerIconShown)
+        return S_OK;
+    g_bPowerIconShown = FALSE;
     return pSysTray->NotifyIcon(NIM_DELETE, ID_ICON_POWER, NULL, NULL);
 }
 
@@ -296,8 +329,14 @@ HRESULT STDMETHODCALLTYPE Power_Message(_In_ CSysTray * pSysTray, UINT uMsg, WPA
         case WM_TIMER:
             if (wParam == POWER_TIMER_ID)
             {
+                HWND hwndTaskbar;
                 KillTimer(pSysTray->GetHWnd(), POWER_TIMER_ID);
-                ShowPowerSchemesPopupMenu(pSysTray);
+                hwndTaskbar = FindWindowW(L"Shell_TrayWnd", NULL);
+                if (!hwndTaskbar ||
+                    !SendMessageW(hwndTaskbar, WM_USER + 273, 0, 0))
+                {
+                    ShowPowerSchemesPopupMenu(pSysTray);
+                }
             }
             break;
 

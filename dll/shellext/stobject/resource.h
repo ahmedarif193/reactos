@@ -29,6 +29,8 @@
 
 #define IDI_VOLUME                230
 #define IDI_VOLMUTE               231
+#define IDI_VOLUME0               232
+#define IDI_VOLUME1               233
 
 #define IDS_VOL_VOLUME            252
 #define IDS_VOL_ADJUST            255
