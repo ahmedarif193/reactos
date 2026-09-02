@@ -85,6 +85,7 @@ typedef struct GDI_LOAD_FONT
 {
     PUNICODE_STRING     pFileName;
     PSHARED_MEM         Memory;
+    PSHARED_MEM         MetricsMemory;
     DWORD               Characteristics;
     UNICODE_STRING      RegValueName;
     BOOL                IsTrueType;

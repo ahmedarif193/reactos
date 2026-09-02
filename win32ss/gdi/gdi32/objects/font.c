@@ -218,9 +218,13 @@ IntFontFamilyCompareEx(const FONTFAMILYINFO *ffi1,
     const LOGFONTW *plf1 = &ffi1->EnumLogFontEx.elfLogFont;
     const LOGFONTW *plf2 = &ffi2->EnumLogFontEx.elfLogFont;
     ULONG WeightDiff1, WeightDiff2;
-    int cmp = _wcsicmp(plf1->lfFaceName, plf2->lfFaceName);
+    BOOL bVert1 = (plf1->lfFaceName[0] == L'@');
+    BOOL bVert2 = (plf2->lfFaceName[0] == L'@');
+    int cmp = _wcsicmp(plf1->lfFaceName + bVert1, plf2->lfFaceName + bVert2);
     if (cmp)
         return cmp;
+    if (bVert1 != bVert2)
+        return bVert1 ? 1 : -1;
     if (dwCompareFlags & IFFCX_CHARSET)
     {
         if (plf1->lfCharSet < plf2->lfCharSet)
