@@ -56,7 +56,10 @@ enum ULONG {
     VCHIQ_ALLOC_TAG_GLOBAL_OBJ = '3QHV',
 
     // Generic allocations WDF makes on our behalf
-    VCHIQ_ALLOC_TAG_WDF = '@QHV'
+    VCHIQ_ALLOC_TAG_WDF = '@QHV',
+
+    // Scatter/gather storage owned by a bulk-transfer request
+    VCHIQ_ALLOC_TAG_SGL = '4QHV'
 };
 
 enum {

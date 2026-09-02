@@ -18,6 +18,7 @@
 #include "slotscommon.h"
 #include "device.h"
 #include "file.h"
+#include "memory.h"
 #include "slots.h"
 #include "transfer.h"
 
@@ -164,6 +165,7 @@ NTSTATUS VchiqAllocateFileObjContext (
     }
 
     ExInitializeFastMutex(&(*VchiqFileContextPPtr)->ServiceMutex);
+    KeInitializeSpinLock(&(*VchiqFileContextPPtr)->PageListCacheLock);
 
     KeInitializeEvent(
         &(*VchiqFileContextPPtr)->FileEventStop,
@@ -493,6 +495,7 @@ VOID VchiqFileClose (
     ExReleaseFastMutex(&vchiqFileContextPtr->PendingVchiMsgMutex);
 
     if (vchiqFileContextPtr->DmaAdapterPtr) {
+        VchiqDrainPageListCache(vchiqFileContextPtr);
         vchiqFileContextPtr->DmaAdapterPtr->DmaOperations->PutDmaAdapter(
             vchiqFileContextPtr->DmaAdapterPtr);
         vchiqFileContextPtr->DmaAdapterPtr = NULL;
