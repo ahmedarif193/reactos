@@ -55,6 +55,9 @@ if(WOW64_I386_RUNTIME AND ARCH STREQUAL "i386")
 endif()
 
 set_module_type(gdi32 win32dll UNICODE ENTRYPOINT DllMain 12)
+if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
+    target_compile_options(gdi32 PRIVATE -Xclang -fasync-exceptions)
+endif()
 
 target_link_libraries(gdi32
     gdi32_vista_static
