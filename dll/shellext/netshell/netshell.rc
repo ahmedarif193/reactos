@@ -22,6 +22,13 @@ IDI_NET_REC ICON "res/netrec.ico"
 IDI_NET_TRANS ICON "res/nettrans.ico"
 IDI_NET_TRANSREC ICON "res/nettrrec.ico"
 IDI_NET_SETUP ICON "res/netsetup.ico"
+IDI_NET_TRAY_WIRED ICON "res/fluent/tray_wired.ico"
+IDI_NET_TRAY_OFF ICON "res/fluent/tray_offline.ico"
+IDI_NET_TRAY_WIFI1 ICON "res/fluent/wifi_1.ico"
+IDI_NET_TRAY_WIFI2 ICON "res/fluent/wifi_2.ico"
+IDI_NET_TRAY_WIFI3 ICON "res/fluent/wifi_3.ico"
+IDI_NET_TRAY_WIFI4 ICON "res/fluent/wifi_4.ico"
+IDI_NET_TRAY_WIFIOFF ICON "res/fluent/tray_wifi_x.ico"
 
 IDR_NETSHELL REGISTRY "res/netshell.rgs"
 

@@ -514,115 +514,99 @@ NormalizeOperStatus(
     }
 }
 
+static BOOL
+GuidFromAdapterName(LPCSTR pszName, GUID *pGuid)
+{
+    WCHAR szWide[64];
+    ULONG h1 = 2166136261u, h2 = 0x9747b28cu;
+    const char *p;
+
+    ZeroMemory(pGuid, sizeof(*pGuid));
+    if (!pszName || !pszName[0])
+        return FALSE;
+    if (MultiByteToWideChar(CP_ACP, 0, pszName, -1, szWide, _countof(szWide)) &&
+        szWide[0] == L'{' && SUCCEEDED(CLSIDFromString(szWide, pGuid)))
+        return TRUE;
+    for (p = pszName; *p; p++)
+    {
+        h1 = (h1 ^ (UCHAR)*p) * 16777619u;
+        h2 = (h2 ^ (UCHAR)*p) * 0x01000193u;
+    }
+    pGuid->Data1 = h1;
+    pGuid->Data2 = (USHORT)(h2 >> 16);
+    pGuid->Data3 = (USHORT)(h2 & 0xFFFF);
+    pGuid->Data4[0] = (UCHAR)(h1 >> 24); pGuid->Data4[1] = (UCHAR)(h1 >> 16);
+    pGuid->Data4[2] = (UCHAR)(h1 >> 8);  pGuid->Data4[3] = (UCHAR)h1;
+    pGuid->Data4[4] = (UCHAR)(h2 >> 24); pGuid->Data4[5] = (UCHAR)(h2 >> 16);
+    pGuid->Data4[6] = (UCHAR)(h2 >> 8);  pGuid->Data4[7] = (UCHAR)h2;
+    return TRUE;
+}
+
+static PWSTR
+DupConnectionString(LPCWSTR pszText)
+{
+    PWSTR pszCopy;
+    if (!pszText)
+        return NULL;
+    pszCopy = static_cast<PWSTR>(CoTaskMemAlloc((wcslen(pszText) + 1) * sizeof(WCHAR)));
+    if (pszCopy)
+        wcscpy(pszCopy, pszText);
+    return pszCopy;
+}
+
 HRESULT
 CNetConnectionManager::EnumerateINetConnections()
 {
-    DWORD dwSize, dwResult, dwIndex, dwAdapterIndex, dwShowIcon, dwNotifyDisconnect;
-    MIB_IFTABLE *pIfTable;
-    MIB_IFROW IfEntry;
-    IP_ADAPTER_INFO * pAdapterInfo;
-    HDEVINFO hInfo;
-    SP_DEVINFO_DATA DevInfo;
-    HKEY hSubKey;
-    WCHAR szNetCfg[50];
-    WCHAR szAdapterNetCfg[50];
-    WCHAR szDetail[200] = L"SYSTEM\\CurrentControlSet\\Control\\Class\\";
-    WCHAR szName[130] = L"SYSTEM\\CurrentControlSet\\Control\\Network\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\";
+    ULONG cbBuffer = 16 * 1024;
+    ULONG ret = ERROR_BUFFER_OVERFLOW;
+    PIP_ADAPTER_ADDRESSES pAddresses = NULL;
+    PIP_ADAPTER_ADDRESSES pAdapter;
     PINetConnectionItem pCurrent = NULL;
+    int attempt;
 
-    /* get the IfTable */
-    dwSize = 0;
-    if (GetIfTable(NULL, &dwSize, TRUE) != ERROR_INSUFFICIENT_BUFFER)
-        return E_FAIL;
-
-    pIfTable = static_cast<PMIB_IFTABLE>(CoTaskMemAlloc(dwSize));
-    if (!pIfTable)
-        return E_OUTOFMEMORY;
-
-    dwResult = GetIfTable(pIfTable, &dwSize, TRUE);
-    if (dwResult != NO_ERROR)
+    for (attempt = 0; attempt < 3 && ret == ERROR_BUFFER_OVERFLOW; attempt++)
     {
-        CoTaskMemFree(pIfTable);
-        return HRESULT_FROM_WIN32(dwResult);
-    }
-
-    dwSize = 0;
-    dwResult = GetAdaptersInfo(NULL, &dwSize);
-    if (dwResult!= ERROR_BUFFER_OVERFLOW)
-    {
-        CoTaskMemFree(pIfTable);
-        return HRESULT_FROM_WIN32(dwResult);
-    }
-
-    pAdapterInfo = static_cast<PIP_ADAPTER_INFO>(CoTaskMemAlloc(dwSize));
-    if (!pAdapterInfo)
-    {
-        CoTaskMemFree(pIfTable);
-        return E_OUTOFMEMORY;
-    }
-
-    dwResult = GetAdaptersInfo(pAdapterInfo, &dwSize);
-    if (dwResult != NO_ERROR)
-    {
-        CoTaskMemFree(pIfTable);
-        CoTaskMemFree(pAdapterInfo);
-        return HRESULT_FROM_WIN32(dwResult);
-    }
-
-    hInfo = SetupDiGetClassDevs(&GUID_DEVCLASS_NET, NULL, NULL, DIGCF_PRESENT );
-    if (!hInfo)
-    {
-        CoTaskMemFree(pIfTable);
-        CoTaskMemFree(pAdapterInfo);
-        return E_FAIL;
-    }
-
-    dwIndex = 0;
-    do
-    {
-        ZeroMemory(&DevInfo, sizeof(SP_DEVINFO_DATA));
-        DevInfo.cbSize = sizeof(DevInfo);
-
-        /* get device info */
-        if (!SetupDiEnumDeviceInfo(hInfo, dwIndex++, &DevInfo))
-            break;
-
-        /* get device software registry path */
-        if (!SetupDiGetDeviceRegistryPropertyW(hInfo, &DevInfo, SPDRP_DRIVER, NULL, (LPBYTE)&szDetail[39], sizeof(szDetail)/sizeof(WCHAR) - 40, &dwSize))
-            break;
-
-        /* open device registry key */
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, szDetail, 0, KEY_READ, &hSubKey) != ERROR_SUCCESS)
-            break;
-
-        /* query NetCfgInstanceId for current device */
-        dwSize = sizeof(szNetCfg);
-        if (RegQueryValueExW(hSubKey, L"NetCfgInstanceId", NULL, NULL, (LPBYTE)szNetCfg, &dwSize) != ERROR_SUCCESS)
+        pAddresses = static_cast<PIP_ADAPTER_ADDRESSES>(CoTaskMemAlloc(cbBuffer));
+        if (!pAddresses)
+            return E_OUTOFMEMORY;
+        ret = GetAdaptersAddresses(AF_UNSPEC,
+                                   GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                                   NULL, pAddresses, &cbBuffer);
+        if (ret != NO_ERROR)
         {
-            RegCloseKey(hSubKey);
-            break;
+            CoTaskMemFree(pAddresses);
+            pAddresses = NULL;
         }
-        RegCloseKey(hSubKey);
+    }
+    if (ret != NO_ERROR)
+        return HRESULT_FROM_WIN32(ret);
 
-        /* get the current adapter index from NetCfgInstanceId */
-        if (!GetAdapterIndexFromNetCfgInstanceId(pAdapterInfo, szNetCfg, &dwAdapterIndex))
+    for (pAdapter = pAddresses; pAdapter != NULL; pAdapter = pAdapter->Next)
+    {
+        MIB_IFROW IfEntry;
+        HKEY hSubKey;
+        LPOLESTR pStr = NULL;
+        WCHAR szName[200];
+        WCHAR szValue[128];
+        DWORD dwSize, dwShowIcon, dwNotifyDisconnect;
+        PINetConnectionItem pNew;
+
+        if (pAdapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
+            pAdapter->IfType == IF_TYPE_TUNNEL)
             continue;
 
-        /* get detailed adapter info */
         ZeroMemory(&IfEntry, sizeof(IfEntry));
-        IfEntry.dwIndex = dwAdapterIndex;
+        IfEntry.dwIndex = pAdapter->IfIndex;
         if (GetIfEntry(&IfEntry) != NO_ERROR)
-            break;
+            continue;
 
-        /* allocate new INetConnectionItem */
-        PINetConnectionItem pNew = static_cast<PINetConnectionItem>(CoTaskMemAlloc(sizeof(INetConnectionItem)));
+        pNew = static_cast<PINetConnectionItem>(CoTaskMemAlloc(sizeof(INetConnectionItem)));
         if (!pNew)
             break;
 
         ZeroMemory(pNew, sizeof(INetConnectionItem));
-        pNew->dwAdapterIndex = dwAdapterIndex;
-        /* store NetCfgInstanceId */
-        CLSIDFromString(szNetCfg, &pNew->Props.guidId);
+        pNew->dwAdapterIndex = pAdapter->IfIndex;
+        GuidFromAdapterName(pAdapter->AdapterName, &pNew->Props.guidId);
         NormalizeOperStatus(&IfEntry, &pNew->Props);
 
         switch (IfEntry.dwType)
@@ -634,58 +618,66 @@ CNetConnectionManager::EnumerateINetConnections()
                 pNew->Props.MediaType = NCM_SHAREDACCESSHOST_RAS;
                 break;
             default:
+                pNew->Props.MediaType = NCM_LAN;
                 break;
         }
-        /*  open network connections details */
-        wcscpy(&szName[80], szNetCfg);
-        wcscpy(&szName[118], L"\\Connection");
+        pNew->Props.dwCharacter |= NCCF_SHOW_ICON;
 
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, szName, 0, KEY_READ, &hSubKey) == ERROR_SUCCESS)
+        if (SUCCEEDED(StringFromCLSID(pNew->Props.guidId, &pStr)))
         {
-            /* retrieve name of connection */
-            dwSize = sizeof(szAdapterNetCfg);
-            if (RegQueryValueExW(hSubKey, L"Name", NULL, NULL, (LPBYTE)szAdapterNetCfg, &dwSize) == ERROR_SUCCESS)
+            wcscpy(szName, L"SYSTEM\\CurrentControlSet\\Control\\Network\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\");
+            wcscat(szName, pStr);
+            wcscat(szName, L"\\Connection");
+            CoTaskMemFree(pStr);
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, szName, 0, KEY_READ, &hSubKey) == ERROR_SUCCESS)
             {
-                pNew->Props.pszwName = static_cast<PWSTR>(CoTaskMemAlloc((wcslen(szAdapterNetCfg)+1) * sizeof(WCHAR)));
-                if (pNew->Props.pszwName)
-                    wcscpy(pNew->Props.pszwName, szAdapterNetCfg);
+                dwSize = sizeof(szValue);
+                if (RegQueryValueExW(hSubKey, L"Name", NULL, NULL, (LPBYTE)szValue, &dwSize) == ERROR_SUCCESS && szValue[0])
+                    pNew->Props.pszwName = DupConnectionString(szValue);
+                dwSize = sizeof(dwShowIcon);
+                dwShowIcon = 1;
+                RegQueryValueExW(hSubKey, L"ShowIcon", NULL, NULL, (LPBYTE)&dwShowIcon, &dwSize);
+                if (!dwShowIcon)
+                    pNew->Props.dwCharacter &= ~NCCF_SHOW_ICON;
+                dwSize = sizeof(dwNotifyDisconnect);
+                if (RegQueryValueExW(hSubKey, L"IpCheckingEnabled", NULL, NULL, (LPBYTE)&dwNotifyDisconnect, &dwSize) == ERROR_SUCCESS)
+                {
+                    if (dwNotifyDisconnect)
+                        pNew->Props.dwCharacter |= NCCF_NOTIFY_DISCONNECTED;
+                }
+                RegCloseKey(hSubKey);
             }
-            dwSize = sizeof(dwShowIcon);
-            if (RegQueryValueExW(hSubKey, L"ShowIcon", NULL, NULL, (LPBYTE)&dwShowIcon, &dwSize) == ERROR_SUCCESS)
-            {
-                if (dwShowIcon)
-                    pNew->Props.dwCharacter |= NCCF_SHOW_ICON;
-            }
-            dwSize = sizeof(dwNotifyDisconnect);
-            if (RegQueryValueExW(hSubKey, L"IpCheckingEnabled", NULL, NULL, (LPBYTE)&dwNotifyDisconnect, &dwSize) == ERROR_SUCCESS)
-            {
-                if (dwNotifyDisconnect)
-                    pNew->Props.dwCharacter |= NCCF_NOTIFY_DISCONNECTED;
-            }
-            RegCloseKey(hSubKey);
         }
 
-        /* Get the adapter device description */
-        dwSize = 0;
-        SetupDiGetDeviceRegistryPropertyW(hInfo, &DevInfo, SPDRP_DEVICEDESC, NULL, NULL, 0, &dwSize);
-        if (dwSize != 0)
+        if (!pNew->Props.pszwName)
         {
-            pNew->Props.pszwDeviceName = static_cast<PWSTR>(CoTaskMemAlloc(dwSize));
-            if (pNew->Props.pszwDeviceName)
-                SetupDiGetDeviceRegistryPropertyW(hInfo, &DevInfo, SPDRP_DEVICEDESC, NULL, (PBYTE)pNew->Props.pszwDeviceName, dwSize, &dwSize);
+            if (pAdapter->FriendlyName && pAdapter->FriendlyName[0])
+                pNew->Props.pszwName = DupConnectionString(pAdapter->FriendlyName);
+            else if (IfEntry.dwType == IF_TYPE_IEEE80211)
+                pNew->Props.pszwName = DupConnectionString(L"Wireless Network Connection");
+            else
+                pNew->Props.pszwName = DupConnectionString(L"Local Area Connection");
         }
+
+        if (pAdapter->Description && pAdapter->Description[0])
+            pNew->Props.pszwDeviceName = DupConnectionString(pAdapter->Description);
+        else if (IfEntry.bDescr[0])
+        {
+            MultiByteToWideChar(CP_ACP, 0, (LPCSTR)IfEntry.bDescr, -1, szValue, _countof(szValue));
+            szValue[_countof(szValue) - 1] = 0;
+            pNew->Props.pszwDeviceName = DupConnectionString(szValue);
+        }
+        else
+            pNew->Props.pszwDeviceName = DupConnectionString(L"Network adapter");
 
         if (pCurrent)
             pCurrent->Next = pNew;
         else
             m_pHead = pNew;
-
         pCurrent = pNew;
-    } while (TRUE);
+    }
 
-    CoTaskMemFree(pIfTable);
-    CoTaskMemFree(pAdapterInfo);
-    SetupDiDestroyDeviceInfoList(hInfo);
+    CoTaskMemFree(pAddresses);
 
     m_pCurrent = m_pHead;
     return (m_pHead != NULL ? S_OK : S_FALSE);

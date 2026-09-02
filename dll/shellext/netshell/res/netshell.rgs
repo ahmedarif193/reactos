@@ -129,3 +129,22 @@ HKLM
     }
   }
 }
+HKLM
+{
+    NoRemove Software
+    {
+        NoRemove Microsoft
+        {
+            NoRemove Windows
+            {
+                NoRemove CurrentVersion
+                {
+                    NoRemove ShellServiceObjectDelayLoad
+                    {
+                        val 'Network.ConnectionTray' = s '{7007ACCF-3202-11D1-AAD2-00805FC1270E}'
+                    }
+                }
+            }
+        }
+    }
+}

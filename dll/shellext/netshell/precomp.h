@@ -20,6 +20,8 @@
 #include <atlcom.h>
 #include <atlcoll.h>
 #include <atlstr.h>
+#include <winsock2.h>
+#include <ws2ipdef.h>
 #include <iphlpapi.h>
 #include <setupapi.h>
 #include <devguid.h>
