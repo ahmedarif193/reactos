@@ -104,11 +104,23 @@ HRESULT WINAPI DrawThemeParentBackground(HWND hwnd, HDC hdc, RECT *prc)
     HWND hParent;
     HRGN clip = NULL;
     int hasClip = -1;
+    HRESULT hr = S_OK;
 
     TRACE("(%p,%p,%p)\n", hwnd, hdc, prc);
+
+    if (!IsWindow(hwnd) || !hdc)
+        return E_HANDLE;
+
+    if (prc && IsBadReadPtr(prc, sizeof(RECT)))
+        return E_POINTER;
+
     hParent = GetParent(hwnd);
     if(!hParent)
         return S_OK;
+
+    if (HandleToUlong(GetPropW(hParent, UXTHEME_PARENTBKGND_PROP)) & UXTHEME_PARENTBKGND_DRAWING)
+        return S_FALSE;
+
     if(prc) {
         rt = *prc;
         MapWindowPoints(hwnd, hParent, (LPPOINT)&rt, 2);
@@ -127,8 +139,12 @@ HRESULT WINAPI DrawThemeParentBackground(HWND hwnd, HDC hdc, RECT *prc)
 
     OffsetViewportOrgEx(hdc, -rt.left, -rt.top, &org);
 
+    SetPropW(hParent, UXTHEME_PARENTBKGND_PROP, UlongToHandle(UXTHEME_PARENTBKGND_DRAWING));
     SendMessageW(hParent, WM_ERASEBKGND, (WPARAM)hdc, 0);
     SendMessageW(hParent, WM_PRINTCLIENT, (WPARAM)hdc, PRF_CLIENT);
+    if (HandleToUlong(GetPropW(hParent, UXTHEME_PARENTBKGND_PROP)) & UXTHEME_PARENTBKGND_UNHANDLED)
+        hr = S_FALSE;
+    RemovePropW(hParent, UXTHEME_PARENTBKGND_PROP);
 
     SetViewportOrgEx(hdc, org.x, org.y, NULL);
     if(prc) {
@@ -138,7 +154,7 @@ HRESULT WINAPI DrawThemeParentBackground(HWND hwnd, HDC hdc, RECT *prc)
             SelectClipRgn(hdc, clip);
         DeleteObject(clip);
     }
-    return S_OK;
+    return hr;
 }
 
 
@@ -1098,7 +1114,7 @@ HRESULT WINAPI DrawThemeBackgroundEx(HTHEME hTheme, HDC hdc, int iPartId,
     RECT rt;
 
     TRACE("(%p,%p,%d,%d,%ld,%ld)\n", hTheme, hdc, iPartId, iStateId,pRect->left,pRect->top);
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
 
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_BGTYPE, &bgtype);
@@ -1680,7 +1696,7 @@ HRESULT WINAPI DrawThemeEdge(HTHEME hTheme, HDC hdc, int iPartId,
     TRACE("%p %p %d %d %s 0x%08x 0x%08x %s\n", hTheme, hdc, iPartId, iStateId,
           wine_dbgstr_rect(pDestRect), uEdge, uFlags, wine_dbgstr_rect(pContentRect));
 
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
      
     if(uFlags & BF_DIAGONAL)
@@ -1791,7 +1807,7 @@ HRESULT WINAPI DrawThemeTextEx(HTHEME hTheme, HDC hdc, int iPartId, int iStateId
     TRACE("%p %p %d %d %s:%d 0x%08lx %p %p\n", hTheme, hdc, iPartId, iStateId,
         debugstr_wn(pszText, iCharCount), iCharCount, flags, rect, options);
 
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
 
     if(options) {
@@ -1843,7 +1859,7 @@ HRESULT WINAPI GetThemeBackgroundContentRect(HTHEME hTheme, HDC hdc, int iPartId
     HRESULT hr;
 
     TRACE("(%d,%d)\n", iPartId, iStateId);
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
 
     /* try content margins property... */
@@ -1891,7 +1907,7 @@ HRESULT WINAPI GetThemeBackgroundExtent(HTHEME hTheme, HDC hdc, int iPartId,
     HRESULT hr;
 
     TRACE("(%d,%d)\n", iPartId, iStateId);
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
 
     /* try content margins property... */
@@ -2056,7 +2072,7 @@ HRESULT WINAPI GetThemeBackgroundRegion(HTHEME hTheme, HDC hdc, int iPartId,
     int bgtype = BT_BORDERFILL;
 
     TRACE("(%p,%p,%d,%d)\n", hTheme, hdc, iPartId, iStateId);
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
     if(!pRect || !pRegion)
         return E_POINTER;
@@ -2135,7 +2151,7 @@ HRESULT WINAPI GetThemePartSize(HTHEME hTheme, HDC hdc, int iPartId,
     HRESULT hr = S_OK;
     POINT size = {1, 1};
 
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
 
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_BGTYPE, &bgtype);
@@ -2171,7 +2187,7 @@ HRESULT WINAPI GetThemeTextExtent(HTHEME hTheme, HDC hdc, int iPartId,
     RECT rt = {0,0,0xFFFF,0xFFFF};
     
     TRACE("%d %d\n", iPartId, iStateId);
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
 
     if(pBoundingRect)
@@ -2208,7 +2224,7 @@ HRESULT WINAPI GetThemeTextMetrics(HTHEME hTheme, HDC hdc, int iPartId,
     LOGFONTW logfont;
 
     TRACE("(%p, %p, %d, %d)\n", hTheme, hdc, iPartId, iStateId);
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
 
     hr = GetThemeFont(hTheme, hdc, iPartId, iStateId, TMT_FONT, &logfont);
@@ -2246,7 +2262,7 @@ BOOL WINAPI IsThemeBackgroundPartiallyTransparent(HTHEME hTheme, int iPartId,
 
     TRACE("(%d,%d)\n", iPartId, iStateId);
 
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return FALSE;
 
     GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_BGTYPE, &bgtype);

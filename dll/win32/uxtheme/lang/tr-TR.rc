@@ -16,4 +16,5 @@ BEGIN
     IDS_INACTIVEWIN "Pasif Pencere"
     IDS_OK "Tamam"
     IDS_WINTEXT "Pencere Metni"
+    IDS_ERR_UNKNOWN_PROPERTY "Must be Primitive, enum, or type: %1"
 END

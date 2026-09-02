@@ -339,12 +339,44 @@ ThemeFillSolidRect(HDC hDC, const RECT *rect, COLORREF color)
     }
 }
 
+static BOOL
+ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade)
+{
+    static const INT frames[] = { 10, 12, 14, 16, 20, 24, 32 };
+    INT height = rect->bottom - rect->top;
+    INT size = MulDiv(height, 10, 22);
+    INT i;
+    HICON icon;
+
+    for (i = 0; i < ARRAYSIZE(frames); i++)
+    {
+        if (frames[i] >= size)
+        {
+            size = frames[i];
+            break;
+        }
+    }
+    if (size > 32)
+        size = 32;
+    if (size < 10)
+        size = 10;
+
+    icon = LoadImageW(hDllInst, MAKEINTRESOURCEW(baseId + shade), IMAGE_ICON, size, size, LR_SHARED);
+    if (!icon)
+        return FALSE;
+
+    return DrawIconEx(hDC, (rect->left + rect->right - size) / 2, (rect->top + rect->bottom - size) / 2,
+                      icon, size, size, 0, NULL, DI_NORMAL);
+}
+
 static void
 ThemeDrawDarkCaptionButton(PDRAW_CONTEXT pcontext,
                            CAPTIONBUTTON buttonId,
                            INT iStateId,
                            const RECT *rect)
 {
+    UINT glyphId = 0;
+    INT shade = 0;
     COLORREF background = ThemeDarkCaptionColor(pcontext);
     COLORREF foreground;
     HPEN pen, oldPen;
@@ -365,6 +397,31 @@ ThemeDrawDarkCaptionButton(PDRAW_CONTEXT pcontext,
         foreground = RGB(160, 160, 160);
     else
         foreground = RGB(255, 255, 255);
+
+    if (iStateId == BUTTON_DISABLED || iStateId == BUTTON_INACTIVE_DISABLED)
+        shade = 2;
+    else if (foreground != RGB(255, 255, 255))
+        shade = 1;
+
+    switch (buttonId)
+    {
+    case CLOSEBUTTON:
+        glyphId = IDI_CAPTION_CLOSE;
+        break;
+    case MAXBUTTON:
+        glyphId = (pcontext->wi.dwStyle & WS_MAXIMIZE) ? IDI_CAPTION_RESTORE : IDI_CAPTION_MAX;
+        break;
+    case MINBUTTON:
+        glyphId = (pcontext->wi.dwStyle & WS_MINIMIZE) ? IDI_CAPTION_RESTORE : IDI_CAPTION_MIN;
+        break;
+    case HELPBUTTON:
+        glyphId = IDI_CAPTION_HELP;
+        break;
+    default:
+        break;
+    }
+    if (glyphId && ThemeDrawCaptionGlyph(pcontext->hDC, rect, glyphId, shade))
+        return;
 
     centerX = (rect->left + rect->right) / 2;
     centerY = (rect->top + rect->bottom) / 2;
@@ -512,7 +569,7 @@ ThemeDrawCaptionButtons(PDRAW_CONTEXT pcontext, DWORD htHot, DWORD htDown)
 static void
 ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
 {
-    RECT rcPart;
+    RECT rcPart, rcContent;
     int iPart, iState, iButtonState;
     HICON hIcon;
 
@@ -544,6 +601,9 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
     else
         DrawThemeBackground(pcontext->theme, pcontext->hDC, iPart, iState, &rcPart, NULL);
 
+    rcContent = rcPart;
+    rcContent.top += pcontext->wi.cyWindowBorders;
+
     /* Add a padding around the objects of the caption */
     InflateRect(&rcPart, -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE,
                          -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE);
@@ -559,21 +619,23 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
         ThemeDrawCaptionButton(pcontext, &rcPart, HELPBUTTON, iButtonState);
     }
 
-    rcPart.top += 3 ;
+    rcContent.left = rcPart.left;
+    rcContent.right = rcPart.right;
 
     /* Draw the icon */
     if (hIcon)
     {
         int IconHeight = GetSystemMetrics(SM_CYSMICON);
         int IconWidth = GetSystemMetrics(SM_CXSMICON);
-        DrawIconEx(pcontext->hDC, rcPart.left, rcPart.top , hIcon, IconWidth, IconHeight, 0, NULL, DI_NORMAL);
-        rcPart.left += IconWidth + 4;
+        int IconTop = rcContent.top + (rcContent.bottom - rcContent.top - IconHeight) / 2;
+        DrawIconEx(pcontext->hDC, rcContent.left, IconTop, hIcon, IconWidth, IconHeight, 0, NULL, DI_NORMAL);
+        rcContent.left += IconWidth + 4;
     }
 
-    rcPart.right -= 4;
+    rcContent.right -= 4;
 
     /* Draw the caption */
-    ThemeDrawCaptionText(pcontext, &rcPart, iPart, iState);
+    ThemeDrawCaptionText(pcontext, &rcContent, iPart, iState);
 }
 
 static void

@@ -16,4 +16,5 @@ BEGIN
     IDS_INACTIVEWIN "Неактивное окно"
     IDS_OK "ОК"
     IDS_WINTEXT "Текст в окне"
+    IDS_ERR_UNKNOWN_PROPERTY "Must be Primitive, enum, or type: %1"
 END
