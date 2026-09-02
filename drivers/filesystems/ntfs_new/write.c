@@ -40,6 +40,8 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     BOOLEAN ResourceAcquired = FALSE;
     BOOLEAN PagingIo = FALSE;
     PVOID BounceBuffer = NULL;
+    PMDL LockMdl = NULL;
+    BOOLEAN LockFailed = FALSE;
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
 
@@ -139,13 +141,66 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
     }
 
-    Status = NtfsFileRecordWriteFileData(FileRec,
-                                         RequestedType,
-                                         RequestedStream,
-                                         Buffer,
-                                         &Length,
-                                         &ByteOffset);
+    if (!PagingIo && Length != 0 && Buffer != NULL &&
+        Irp->RequestorMode == UserMode &&
+        !Irp->MdlAddress && !Irp->AssociatedIrp.SystemBuffer)
+    {
+        LockMdl = IoAllocateMdl(Buffer, Length, FALSE, FALSE, NULL);
+        if (LockMdl)
+        {
+            _SEH2_TRY
+            {
+                MmProbeAndLockPages(LockMdl, UserMode, IoReadAccess);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                IoFreeMdl(LockMdl);
+                LockMdl = NULL;
+                LockFailed = TRUE;
+            }
+            _SEH2_END;
+            if (LockMdl)
+            {
+                PVOID SystemBuffer = MmGetSystemAddressForMdlSafe(LockMdl, NormalPagePriority);
+                if (SystemBuffer)
+                {
+                    Buffer = SystemBuffer;
+                }
+                else
+                {
+                    MmUnlockPages(LockMdl);
+                    IoFreeMdl(LockMdl);
+                    LockMdl = NULL;
+                    LockFailed = TRUE;
+                }
+            }
+        }
+        else
+        {
+            LockFailed = TRUE;
+        }
+    }
 
+    if (LockFailed)
+    {
+        Status = STATUS_INVALID_USER_BUFFER;
+    }
+    else
+    {
+        Status = NtfsFileRecordWriteFileData(FileRec,
+                                             RequestedType,
+                                             RequestedStream,
+                                             Buffer,
+                                             &Length,
+                                             &ByteOffset);
+    }
+
+    if (LockMdl)
+    {
+        MmUnlockPages(LockMdl);
+        IoFreeMdl(LockMdl);
+        LockMdl = NULL;
+    }
     if (BounceBuffer)
     {
         ExFreePoolWithTag(BounceBuffer, TAG_NTFS);
