@@ -41,7 +41,8 @@ static WCHAR *duplicate_wstr(const WCHAR *str)
     const WCHAR *source = str ? str : L"";
     int len = (wcslen(source) + 1) * sizeof(WCHAR);
     WCHAR *ret = CoTaskMemAlloc(len);
-    memcpy(ret, source, len);
+    if (ret)
+        memcpy(ret, source, len);
     return ret;
 }
 
@@ -85,6 +86,30 @@ static void apply_shared_snapshot(
         {
             free(session->process_path);
             session->process_path = process_path;
+        }
+    }
+
+    if (!session->display_name ||
+        lstrcmpW(session->display_name, snapshot->display_name))
+    {
+        WCHAR *display_name = wcsdup(snapshot->display_name);
+
+        if (display_name)
+        {
+            free(session->display_name);
+            session->display_name = display_name;
+        }
+    }
+
+    if (!session->icon_path ||
+        lstrcmpW(session->icon_path, snapshot->icon_path))
+    {
+        WCHAR *icon_path = wcsdup(snapshot->icon_path);
+
+        if (icon_path)
+        {
+            free(session->icon_path);
+            session->icon_path = icon_path;
         }
     }
     session->shared_generation = snapshot->generation;
@@ -295,9 +320,13 @@ static HRESULT WINAPI control_GetDisplayName(IAudioSessionControl2 *iface, WCHAR
     if (!name)
         return E_POINTER;
 
+    sessions_lock();
+    if (session->shared_proxy)
+        sync_audio_session(session);
     *name = duplicate_wstr(session->display_name);
+    sessions_unlock();
 
-    return S_OK;
+    return *name ? S_OK : E_OUTOFMEMORY;
 }
 
 static HRESULT WINAPI control_SetDisplayName(IAudioSessionControl2 *iface, const WCHAR *name,
@@ -305,17 +334,30 @@ static HRESULT WINAPI control_SetDisplayName(IAudioSessionControl2 *iface, const
 {
     struct audio_session_wrapper *This = impl_from_IAudioSessionControl2(iface);
     struct audio_session *session = This->session;
+    WCHAR *copy;
+    HRESULT hr = S_OK;
 
     TRACE("(%p)->(%p, %s) - stub\n", This, name, debugstr_guid(event_context));
     FIXME("Ignoring event_context\n");
 
     if (!name)
         return HRESULT_FROM_WIN32(RPC_X_NULL_REF_POINTER);
+    if (!(copy = wcsdup(name)))
+        return E_OUTOFMEMORY;
 
-    free(session->display_name);
-    session->display_name = wcsdup(name);
+    sessions_lock();
+    if (session->shared_valid)
+        hr = reactos_audio_session_set_strings(&session->shared_id, name, NULL);
+    if (SUCCEEDED(hr))
+    {
+        free(session->display_name);
+        session->display_name = copy;
+        copy = NULL;
+    }
+    sessions_unlock();
+    free(copy);
 
-    return S_OK;
+    return hr;
 }
 
 static HRESULT WINAPI control_GetIconPath(IAudioSessionControl2 *iface, WCHAR **path)
@@ -328,9 +370,13 @@ static HRESULT WINAPI control_GetIconPath(IAudioSessionControl2 *iface, WCHAR **
     if (!path)
         return E_POINTER;
 
+    sessions_lock();
+    if (session->shared_proxy)
+        sync_audio_session(session);
     *path = duplicate_wstr(session->icon_path);
+    sessions_unlock();
 
-    return S_OK;
+    return *path ? S_OK : E_OUTOFMEMORY;
 }
 
 static HRESULT WINAPI control_SetIconPath(IAudioSessionControl2 *iface, const WCHAR *path,
@@ -338,17 +384,30 @@ static HRESULT WINAPI control_SetIconPath(IAudioSessionControl2 *iface, const WC
 {
     struct audio_session_wrapper *This = impl_from_IAudioSessionControl2(iface);
     struct audio_session *session = This->session;
+    WCHAR *copy;
+    HRESULT hr = S_OK;
 
     TRACE("(%p)->(%s, %s) - stub\n", This, debugstr_w(path), debugstr_guid(event_context));
     FIXME("Ignoring event_context\n");
 
     if (!path)
         return HRESULT_FROM_WIN32(RPC_X_NULL_REF_POINTER);
+    if (!(copy = wcsdup(path)))
+        return E_OUTOFMEMORY;
 
-    free(session->icon_path);
-    session->icon_path = wcsdup(path);
+    sessions_lock();
+    if (session->shared_valid)
+        hr = reactos_audio_session_set_strings(&session->shared_id, NULL, path);
+    if (SUCCEEDED(hr))
+    {
+        free(session->icon_path);
+        session->icon_path = copy;
+        copy = NULL;
+    }
+    sessions_unlock();
+    free(copy);
 
-    return S_OK;
+    return hr;
 }
 
 static HRESULT WINAPI control_GetGroupingParam(IAudioSessionControl2 *iface, GUID *group)
