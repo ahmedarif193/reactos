@@ -2027,6 +2027,37 @@ static void d3d9_device_hide_dxva_overlay(struct d3d9_device *device)
         IReactOSDxvaSurfaceFence_Release(binding);
 }
 
+static BOOL d3d9_device_windowed_overlay_is_fullscreen(HWND window,
+        const RECT *client_rect, const POINT *client_origin)
+{
+    MONITORINFO monitor_info;
+    RECT screen_client;
+    HMONITOR monitor;
+    HWND foreground;
+    HWND root;
+
+    root = GetAncestor(window, GA_ROOT);
+    foreground = GetForegroundWindow();
+    if (!root || !foreground || GetAncestor(foreground, GA_ROOT) != root ||
+            !IsWindowVisible(root) || IsIconic(root))
+        return FALSE;
+
+    monitor = MonitorFromWindow(root, MONITOR_DEFAULTTONULL);
+    if (!monitor)
+        return FALSE;
+
+    memset(&monitor_info, 0, sizeof(monitor_info));
+    monitor_info.cbSize = sizeof(monitor_info);
+    if (!GetMonitorInfoW(monitor, &monitor_info))
+        return FALSE;
+
+    screen_client.left = client_origin->x + client_rect->left;
+    screen_client.top = client_origin->y + client_rect->top;
+    screen_client.right = client_origin->x + client_rect->right;
+    screen_client.bottom = client_origin->y + client_rect->bottom;
+    return EqualRect(&screen_client, &monitor_info.rcMonitor);
+}
+
 static HRESULT d3d9_device_present_dxva_overlay(struct d3d9_device *device,
         struct d3d9_surface *src, struct d3d9_surface *dst,
         const RECT *source, const RECT *destination)
@@ -2058,10 +2089,7 @@ static HRESULT d3d9_device_present_dxva_overlay(struct d3d9_device *device,
     wined3d_mutex_lock();
     wined3d_swapchain_get_desc(dst->swapchain, &swapchain_desc);
     wined3d_mutex_unlock();
-    /* Legacy overlays are not composed by the DWM. Keep arbitrary windowed
-     * and occluded presentation on WineD3D's shader path; otherwise a paused
-     * overlay can remain above a window that later covers it. */
-    if (swapchain_desc.windowed || !swapchain_desc.device_window ||
+    if (!swapchain_desc.device_window ||
             !swapchain_desc.backbuffer_width ||
             !swapchain_desc.backbuffer_height ||
             destination->left < 0 || destination->top < 0 ||
@@ -2079,6 +2107,20 @@ static HRESULT d3d9_device_present_dxva_overlay(struct d3d9_device *device,
     client_width = client_rect.right - client_rect.left;
     client_height = client_rect.bottom - client_rect.top;
     if (client_width <= 0 || client_height <= 0)
+    {
+        d3d9_device_hide_dxva_overlay(device);
+        IReactOSDxvaSurfaceFence_Hide(binding);
+        IReactOSDxvaSurfaceFence_Release(binding);
+        return D3DERR_NOTAVAILABLE;
+    }
+
+    /* A legacy overlay is not composed by the DWM. It is nevertheless safe
+     * for a windowed swap chain which is serving as the active fullscreen
+     * surface: deactivation hides the overlay, while arbitrary windowed and
+     * occluded presentation remains on WineD3D's composition path. */
+    if (swapchain_desc.windowed &&
+            !d3d9_device_windowed_overlay_is_fullscreen(
+                    swapchain_desc.device_window, &client_rect, &client_origin))
     {
         d3d9_device_hide_dxva_overlay(device);
         IReactOSDxvaSurfaceFence_Hide(binding);
