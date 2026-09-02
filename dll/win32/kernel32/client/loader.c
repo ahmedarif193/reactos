@@ -313,6 +313,12 @@ LoadLibraryExW(LPCWSTR lpLibFileName,
     }
 
     /* Build up a unicode dll name from null-terminated string */
+    if (!lpLibFileName || !*lpLibFileName)
+    {
+        SetLastError(lpLibFileName ? ERROR_MOD_NOT_FOUND : ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+
     RtlInitUnicodeString(&DllName, (LPWSTR)lpLibFileName);
 
     /* Lazy-initialize BasepExeLdrEntry */
