@@ -1220,7 +1220,9 @@ SoftGpuUmLock(
         return E_INVALIDARG;
     }
     Surface = &Resource->Subresources[pData->SubResourceIndex];
-    if (Resource->Flags.NotLockable || Surface->Locked)
+    /* A backend producer may hold the allocation lock until WaitResource()
+     * completes. Recheck the lock after waiting to reject unrelated locks. */
+    if (Resource->Flags.NotLockable)
     {
         LeaveCriticalSection(&Device->Lock);
         return E_FAIL;
