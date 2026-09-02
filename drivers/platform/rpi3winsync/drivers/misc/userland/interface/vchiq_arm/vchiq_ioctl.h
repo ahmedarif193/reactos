@@ -24,16 +24,16 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-Copyright © 2015 Microsoft Corporation
+Copyright (c) 2015 Microsoft Corporation
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the “Software”), to deal in
+this software and associated documentation files (the "Software"), to deal in
 the Software without restriction, including without limitation the rights to
 use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
 of the Software, and to permit persons to whom the Software is furnished to do
 so, subject to the following conditions:
 
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
@@ -57,7 +57,11 @@ SOFTWARE.
 #include <Ntstrsafe.h>
 #endif
 #else
+#ifdef __REACTOS__
+#include <windows.h>
+#else
 #include <Windows.h>
+#endif
 #endif
 
 #define FILE_DEVICE_VCHIQ          2835
@@ -90,6 +94,10 @@ SOFTWARE.
 #include <linux/ioctl.h>
 #endif
 #include "vchiq_if.h"
+
+#if defined(__REACTOS__) && defined(WIN32)
+#include <pshpack1.h>
+#endif
 
 #define VCHIQ_IOC_MAGIC 0xc4
 #define VCHIQ_INVALID_HANDLE (~0)
@@ -186,8 +194,12 @@ typedef struct {
 #define VCHIQ_IOC_QUEUE_MESSAGE        _IOW(VCHIQ_IOC_MAGIC,  4, VCHIQ_QUEUE_MESSAGE_T)
 #define VCHIQ_IOC_QUEUE_BULK_TRANSMIT  _IOWR(VCHIQ_IOC_MAGIC, 5, VCHIQ_QUEUE_BULK_TRANSFER_T)
 #ifdef WIN32
-// Used buffer memory for Windows for better memory alignment
+#ifdef __REACTOS__
+/* The ReactOS driver retrieves an output MDL for the receive payload. */
+#define VCHIQ_IOC_QUEUE_BULK_RECEIVE   _IOW(VCHIQ_IOC_MAGIC, 6, VCHIQ_QUEUE_BULK_TRANSFER_T)
+#else
 #define VCHIQ_IOC_QUEUE_BULK_RECEIVE   _IO(VCHIQ_IOC_MAGIC, 6)
+#endif
 #else
 #define VCHIQ_IOC_QUEUE_BULK_RECEIVE   _IOWR(VCHIQ_IOC_MAGIC, 6, VCHIQ_QUEUE_BULK_TRANSFER_T)
 #endif
@@ -203,5 +215,9 @@ typedef struct {
 #define VCHIQ_IOC_LIB_VERSION          _IO(VCHIQ_IOC_MAGIC,   16)
 #define VCHIQ_IOC_CLOSE_DELIVERED      _IO(VCHIQ_IOC_MAGIC,   17)
 #define VCHIQ_IOC_MAX                  17
+
+#if defined(__REACTOS__) && defined(WIN32)
+#include <poppack.h>
+#endif
 
 #endif

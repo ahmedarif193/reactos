@@ -170,6 +170,7 @@ VOID VchiqDpc (
         slotZeroPtr->Slave.Trigger.Fired) {
 
         slotZeroPtr->Slave.Trigger.Armed = 0;
+        KeMemoryBarrier();
         KeSetEvent(
             &deviceContextPtr->VchiqThreadEvent[THREAD_TRIGGER], 
             0, 
@@ -180,6 +181,7 @@ VOID VchiqDpc (
         slotZeroPtr->Slave.Recycle.Fired) {
 
         slotZeroPtr->Slave.Recycle.Armed = 0;
+        KeMemoryBarrier();
         KeSetEvent(
             &deviceContextPtr->VchiqThreadEvent[THREAD_RECYCLE],
             0,
@@ -190,6 +192,7 @@ VOID VchiqDpc (
         slotZeroPtr->Slave.SyncTrigger.Fired) {
 
         slotZeroPtr->Slave.SyncTrigger.Armed = 0;
+        KeMemoryBarrier();
         KeSetEvent(
             &deviceContextPtr->VchiqThreadEvent[THREAD_SYNC],
             0,
@@ -200,6 +203,7 @@ VOID VchiqDpc (
         slotZeroPtr->Slave.SyncRelease.Fired) {
 
         slotZeroPtr->Slave.SyncRelease.Armed = 0;
+        KeMemoryBarrier();
         KeSetEvent(
             &deviceContextPtr->VchiqThreadEvent[THREAD_SYNC_RELEASE],
             0,

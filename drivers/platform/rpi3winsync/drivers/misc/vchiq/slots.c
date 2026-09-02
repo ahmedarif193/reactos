@@ -24,6 +24,150 @@
 
 VCHIQ_PAGED_SEGMENT_BEGIN
 
+NTSTATUS
+VchiqRetrieveQueuedRequest(
+    _In_ WDFQUEUE Queue,
+    _In_ WDFREQUEST TargetRequest,
+    _Out_ WDFREQUEST* Request)
+{
+    WDFREQUEST tagRequest = NULL;
+    WDFREQUEST foundRequest;
+    NTSTATUS status;
+
+    PAGED_CODE();
+
+    *Request = NULL;
+
+    for (;;)
+    {
+        status = WdfIoQueueFindRequest(
+            Queue,
+            tagRequest,
+            NULL,
+            NULL,
+            &foundRequest);
+        if (tagRequest != NULL)
+        {
+            WdfObjectDereference(tagRequest);
+            tagRequest = NULL;
+        }
+
+        if (!NT_SUCCESS(status))
+            return status;
+
+        if (foundRequest == TargetRequest)
+        {
+            status = WdfIoQueueRetrieveFoundRequest(
+                Queue,
+                foundRequest,
+                Request);
+            if (!NT_SUCCESS(status))
+                WdfObjectDereference(foundRequest);
+            return status;
+        }
+
+        tagRequest = foundRequest;
+    }
+}
+
+static
+NTSTATUS
+VchiqCompleteBulkRequest(
+    _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    _In_ VCHIQ_HEADER* Header,
+    _In_ MSG_BULK_TYPE BulkType,
+    _In_ ULONG QueueIndex,
+    _Out_ VOID** BulkUserData,
+    _Out_ VCHIQ_BULK_MODE_T* BulkMode)
+{
+    VCHIQ_COMPLETION_DATA completion = {0};
+    VCHIQ_TX_REQUEST_CONTEXT* requestContext;
+    WDFREQUEST pendingRequest = NULL;
+    WDFREQUEST request = NULL;
+    ULONG actual;
+    ULONG bufferSize;
+    NTSTATUS completionStatus = STATUS_SUCCESS;
+    NTSTATUS status;
+
+    PAGED_CODE();
+
+    *BulkUserData = NULL;
+    *BulkMode = VCHIQ_BULK_MODE_WAITING;
+
+    ExAcquireFastMutex(&VchiqFileContextPtr->PendingBulkMsgMutex[BulkType]);
+    status = VchiqRemovePendingBulkMsg(
+        VchiqFileContextPtr,
+        &completion,
+        BulkType,
+        FALSE,
+        BulkMode,
+        &pendingRequest);
+    ExReleaseFastMutex(&VchiqFileContextPtr->PendingBulkMsgMutex[BulkType]);
+    if (!NT_SUCCESS(status))
+        return status;
+
+    *BulkUserData = completion.BulkUserData;
+
+    if (Header->Size < sizeof(actual))
+    {
+        completionStatus = STATUS_DEVICE_PROTOCOL_ERROR;
+        actual = 0;
+    }
+    else
+    {
+        actual = *(ULONG *)(Header + 1);
+        if (actual == MAXULONG)
+            completionStatus = STATUS_UNSUCCESSFUL;
+    }
+
+    requestContext = VchiqGetTxRequestContext(pendingRequest);
+    if (requestContext == NULL || requestContext->BufferMdlPtr == NULL)
+    {
+        completionStatus = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        bufferSize = MmGetMdlByteCount(requestContext->BufferMdlPtr);
+        if (actual > bufferSize)
+            completionStatus = STATUS_DEVICE_PROTOCOL_ERROR;
+    }
+
+    status = VchiqRetrieveQueuedRequest(
+        VchiqFileContextPtr->FileQueue[QueueIndex],
+        pendingRequest,
+        &request);
+    if (NT_SUCCESS(status))
+    {
+        VchiqTransferFirmwareComplete(
+            request,
+            completionStatus,
+            actual,
+            TRUE);
+    }
+    else if (status == STATUS_NOT_FOUND || status == STATUS_NO_MORE_ENTRIES)
+    {
+        VchiqTransferFirmwareComplete(
+            pendingRequest,
+            completionStatus,
+            actual,
+            FALSE);
+    }
+    else
+    {
+        VchiqTransferFirmwareComplete(
+            pendingRequest,
+            completionStatus,
+            actual,
+            FALSE);
+        completionStatus = status;
+    }
+
+    status = completionStatus;
+
+    WdfObjectDereference(pendingRequest);
+    return status;
+}
+
 /*++
 
 Routine Description:
@@ -47,39 +191,41 @@ NTSTATUS VchiqInit (
     NTSTATUS status;
     OBJECT_ATTRIBUTES objectAttributes;
     ULONG slotMemorySize = (VCHIQ_DEFAULT_TOTAL_SLOTS * VCHIQ_SLOT_SIZE);
-    // 2 * (cache line size) * (max fragments)
-    // cache line is based on cache-line-size = <32> at bcm2835-rpi.dtsi
-    ULONG fragMemorySize = 2 * 32 * VCHIQ_MAX_FRAGMENTS;
+    ULONG fragMemorySize = sizeof(FRAGMENTS) * VCHIQ_MAX_FRAGMENTS;
     ULONG totalMemorySize = slotMemorySize + fragMemorySize;
+    UCHAR* slotMemoryBasePtr;
 
     PAGED_CODE();
+
+    KeClearEvent(&DeviceContextPtr->VchiqThreadEventStop);
 
     // Allocated slot memory
     status = VchiqAllocPhyContiguous(
         DeviceContextPtr,
         totalMemorySize,
-        &DeviceContextPtr->SlotZeroPtr);
+        &DeviceContextPtr->SlotMemoryBasePtr);
     if (!NT_SUCCESS(status)) {
         VCHIQ_LOG_ERROR("Fail to allocate slot memory");
         status = STATUS_INSUFFICIENT_RESOURCES;
         goto End;
     }
 
-    RtlZeroMemory(DeviceContextPtr->SlotZeroPtr, totalMemorySize);
+    RtlZeroMemory(DeviceContextPtr->SlotMemoryBasePtr, totalMemorySize);
+    slotMemoryBasePtr = DeviceContextPtr->SlotMemoryBasePtr;
 
     // Get the slot physical memory
     DeviceContextPtr->SlotMemoryPhy =
-        MmGetPhysicalAddress(DeviceContextPtr->SlotZeroPtr);
+        MmGetPhysicalAddress(DeviceContextPtr->SlotMemoryBasePtr);
     ULONG slotMemoryPhy = DeviceContextPtr->SlotMemoryPhy.LowPart
         + OFFSET_DIRECT_SDRAM;
 
     // Initialize slot
     ULONG memAlign =
-        (VCHIQ_SLOT_SIZE - (UINT_PTR)DeviceContextPtr->SlotZeroPtr)
+        (VCHIQ_SLOT_SIZE - (UINT_PTR)DeviceContextPtr->SlotMemoryBasePtr)
         & VCHIQ_SLOT_MASK;
     VCHIQ_SLOT_ZERO* slotZeroPtr = (VCHIQ_SLOT_ZERO*)
-        ((UCHAR*)DeviceContextPtr->SlotZeroPtr + memAlign);
-    ULONG numSlots = (totalMemorySize - memAlign) / VCHIQ_SLOT_SIZE;
+        ((UCHAR*)DeviceContextPtr->SlotMemoryBasePtr + memAlign);
+    ULONG numSlots = (slotMemorySize - memAlign) / VCHIQ_SLOT_SIZE;
     ULONG firstDataSlot = VCHIQ_SLOT_ZERO_SLOTS;
 
     numSlots -= firstDataSlot;
@@ -141,26 +287,26 @@ NTSTATUS VchiqInit (
     slotZeroPtr->PlatformData[VCHIQ_PLATFORM_FRAGMENTS_COUNT_IDX] =
         VCHIQ_MAX_FRAGMENTS;
     {
-        UCHAR* fragmentBasePtr =
-            ((UCHAR*)DeviceContextPtr->SlotZeroPtr + slotMemorySize);
+        UCHAR* fragmentBasePtr = slotMemoryBasePtr + slotMemorySize;
 
         ULONG i;
+        DeviceContextPtr->FragmentBasePtr = fragmentBasePtr;
+        DeviceContextPtr->FreeFragmentPtr = fragmentBasePtr;
         for (i = 0; i < (VCHIQ_MAX_FRAGMENTS - 1); ++i) {
-            *(UCHAR **)&fragmentBasePtr[i * 2 * 32] =
-                &fragmentBasePtr[(i + 1) * (2 * 32)];
+            *(UCHAR **)&fragmentBasePtr[i * sizeof(FRAGMENTS)] =
+                &fragmentBasePtr[(i + 1) * sizeof(FRAGMENTS)];
         }
-        *(char **)&fragmentBasePtr[i * (2 * 32)] = NULL;
+        *(UCHAR **)&fragmentBasePtr[i * sizeof(FRAGMENTS)] = NULL;
+        KeInitializeSpinLock(&DeviceContextPtr->FragmentLock);
+        KeInitializeSemaphore(
+            &DeviceContextPtr->AvailableFragments,
+            VCHIQ_MAX_FRAGMENTS,
+            VCHIQ_MAX_FRAGMENTS);
     }
 
     // Initialize all the slot processing threads and locks
     ExInitializeFastMutex(&DeviceContextPtr->TxSlotMutex);
     ExInitializeFastMutex(&DeviceContextPtr->RecycleSlotMutex);
-
-    // Initialize event and thread objects
-    KeInitializeEvent(
-        &DeviceContextPtr->VchiqThreadEventStop,
-        NotificationEvent,
-        FALSE);
 
     InitializeObjectAttributes(
         &objectAttributes,
@@ -223,6 +369,8 @@ NTSTATUS VchiqInit (
     }
 
 End:
+    if (!NT_SUCCESS(status))
+        VchiqRelease(DeviceContextPtr);
     return status;
 }
 
@@ -246,30 +394,27 @@ NTSTATUS VchiqRelease (
     DEVICE_CONTEXT* DeviceContextPtr
     )
 {
+    NTSTATUS status = STATUS_SUCCESS;
+
     PAGED_CODE();
 
-    VchiqFreePhyContiguous(
-        DeviceContextPtr,
-        &DeviceContextPtr->SlotZeroPtr);
+    DeviceContextPtr->VCConnected = FALSE;
+    (void)KeSetEvent(
+        &DeviceContextPtr->VchiqThreadEventStop,
+        IO_NO_INCREMENT,
+        FALSE);
 
     for (ULONG threadCount = 0;
          threadCount < THREAD_MAX_SUPPORTED;
          ++threadCount) {
 
         if (DeviceContextPtr->VchiqThreadObj[threadCount]) {
-            NTSTATUS status;
-            LARGE_INTEGER timeout;
-
-            (void)KeSetEvent(&DeviceContextPtr->VchiqThreadEventStop, 0, FALSE);
-
-            timeout.QuadPart = WDF_REL_TIMEOUT_IN_MS(1000);
-
             status = KeWaitForSingleObject(
                 DeviceContextPtr->VchiqThreadObj[threadCount],
                 Executive,
                 KernelMode,
-                FALSE, 
-                &timeout);
+                FALSE,
+                NULL);
             if (!NT_SUCCESS(status)) {
                 VCHIQ_LOG_ERROR(
                     "KeWaitForSingleObject for thread (%d) failed %!STATUS!",
@@ -287,7 +432,17 @@ NTSTATUS VchiqRelease (
         }
     }
 
-    return STATUS_SUCCESS;
+    if (DeviceContextPtr->SlotMemoryBasePtr != NULL)
+    {
+        status = VchiqFreePhyContiguous(
+            DeviceContextPtr,
+            &DeviceContextPtr->SlotMemoryBasePtr);
+        DeviceContextPtr->SlotZeroPtr = NULL;
+        DeviceContextPtr->FragmentBasePtr = NULL;
+        DeviceContextPtr->FreeFragmentPtr = NULL;
+    }
+
+    return status;
 }
 
 /*++
@@ -317,6 +472,7 @@ NTSTATUS VchiqSignalVC (
 
     // Indicate that we to VC side that the event has been triggered
     EventPtr->Fired = 1;
+    KeMemoryBarrier();
 
     if (EventPtr->Armed) {
         WRITE_REGISTER_NOFENCE_ULONG(
@@ -458,6 +614,10 @@ NTSTATUS VchiqProcessRxSlot (
     DEVICE_CONTEXT* DeviceContextPtr
     )
 {
+    ULONG alignedMessageSize;
+    ULONG publishedTxPos;
+    ULONG slotOffset;
+    ULONG slotRemaining;
     NTSTATUS status;
     VCHIQ_SLOT_ZERO* slotZeroPtr;
     VCHIQ_FILE_CONTEXT* vchiqFileContextPtr;
@@ -468,6 +628,10 @@ NTSTATUS VchiqProcessRxSlot (
 
     // Attempt to parse updated received messages
     while (DeviceContextPtr->CurrentRxPos < slotZeroPtr->Master.TxPos) {
+        if (KeReadStateEvent(&DeviceContextPtr->VchiqThreadEventStop))
+            return STATUS_CANCELLED;
+
+        publishedTxPos = slotZeroPtr->Master.TxPos;
         if (DeviceContextPtr->MasterCurrentSlot == NULL) {
             DeviceContextPtr->MasterCurrentSlotIndex =
                 VCHIQ_GET_NEXT_RX_SLOT_INDEX(
@@ -482,8 +646,42 @@ NTSTATUS VchiqProcessRxSlot (
         }
         VCHIQ_HEADER* rxHeader =
             VCHIQ_GET_CURRENT_RX_HEADER(DeviceContextPtr);
+        slotOffset = DeviceContextPtr->CurrentRxPos & VCHIQ_SLOT_MASK;
+        slotRemaining = VCHIQ_SLOT_SIZE - slotOffset;
+        if (slotRemaining < sizeof(*rxHeader) ||
+            rxHeader->Size > VCHIQ_MAX_MSG_SIZE)
+        {
+            VCHIQ_LOG_ERROR(
+                "Invalid RX header at position 0x%08x size 0x%08x",
+                DeviceContextPtr->CurrentRxPos,
+                rxHeader->Size);
+            KeSetEvent(
+                &DeviceContextPtr->VchiqThreadEventStop,
+                IO_NO_INCREMENT,
+                FALSE);
+            return STATUS_DATA_ERROR;
+        }
+
+        alignedMessageSize = VCHIQ_GET_SLOT_ALIGN_SIZE(
+            rxHeader->Size + sizeof(*rxHeader));
+        if (alignedMessageSize > slotRemaining ||
+            alignedMessageSize > publishedTxPos - DeviceContextPtr->CurrentRxPos)
+        {
+            VCHIQ_LOG_ERROR(
+                "Truncated RX message at position 0x%08x size 0x%08x published 0x%08x",
+                DeviceContextPtr->CurrentRxPos,
+                rxHeader->Size,
+                publishedTxPos);
+            KeSetEvent(
+                &DeviceContextPtr->VchiqThreadEventStop,
+                IO_NO_INCREMENT,
+                FALSE);
+            return STATUS_DATA_ERROR;
+        }
+
         ULONG armPortNum = VCHIQ_MSG_DSTPORT(rxHeader->MsgId);
-        vchiqFileContextPtr = DeviceContextPtr->ArmPortHandles[armPortNum];
+        vchiqFileContextPtr = armPortNum < MAX_ARM_PORTS ?
+            DeviceContextPtr->ArmPortHandles[armPortNum] : NULL;
 
         switch (VCHIQ_MSG_TYPE(rxHeader->MsgId))
         {
@@ -498,6 +696,8 @@ NTSTATUS VchiqProcessRxSlot (
             break;
         case VCHIQ_MSG_OPENACK:
             {
+                LONG serviceState;
+
                 if (vchiqFileContextPtr == NULL) {
                     VCHIQ_LOG_ERROR(
                         "Unknown VCHIQ_MSG_OPENACK 0x%08x (%S) size 0x%08x",
@@ -506,8 +706,32 @@ NTSTATUS VchiqProcessRxSlot (
                         rxHeader->Size);
                     break;
                 }
+
+                ExAcquireFastMutex(&vchiqFileContextPtr->ServiceMutex);
+                serviceState = InterlockedCompareExchange(
+                    &vchiqFileContextPtr->State,
+                    SERVICE_STATE_OPENING,
+                    SERVICE_STATE_OPENING);
+                if (serviceState != SERVICE_STATE_OPENING)
+                {
+                    ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
+                    VCHIQ_LOG_ERROR(
+                        "OPENACK received in service state %ld",
+                        serviceState);
+                    break;
+                }
+
                 vchiqFileContextPtr->VCHIQPortNumber =
                     VCHIQ_MSG_SRCPORT(rxHeader->MsgId);
+
+                InterlockedExchange(
+                    &vchiqFileContextPtr->State,
+                    SERVICE_STATE_OPEN);
+                KeSetEvent(
+                    &vchiqFileContextPtr->ServiceStateEvent,
+                    IO_NO_INCREMENT,
+                    FALSE);
+                ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
 
                 {
                     WDFREQUEST nextRequest;
@@ -521,16 +745,14 @@ NTSTATUS VchiqProcessRxSlot (
                         break;
                     }
                     
-                    InterlockedExchange(
-                        &vchiqFileContextPtr->State,
-                        SERVICE_STATE_OPEN);
-
                     WdfRequestComplete(nextRequest, STATUS_SUCCESS);
                 }
             }
             break;
         case VCHIQ_MSG_CLOSE:
             {
+                LONG serviceState;
+
                 if (vchiqFileContextPtr == NULL) {
                     VCHIQ_LOG_WARNING(
                         "Unknown VCHIQ_MSG_CLOSE 0x%08x (%S) size 0x%08x",
@@ -541,21 +763,44 @@ NTSTATUS VchiqProcessRxSlot (
                 }
 
                 WDFREQUEST nextRequest;
+                ExAcquireFastMutex(&vchiqFileContextPtr->ServiceMutex);
+                serviceState = InterlockedCompareExchange(
+                    &vchiqFileContextPtr->State,
+                    SERVICE_STATE_MIN,
+                    SERVICE_STATE_MIN);
+                if (serviceState != SERVICE_STATE_CLOSING &&
+                    serviceState != SERVICE_STATE_OPEN)
+                {
+                    VCHIQ_LOG_WARNING(
+                        "CLOSE received in service state %ld",
+                        serviceState);
+                }
+                InterlockedExchange(
+                    &vchiqFileContextPtr->State,
+                    SERVICE_STATE_CLOSE);
+                ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
+
+                VchiqAbortServiceBulks(vchiqFileContextPtr);
+
                 status = WdfIoQueueRetrieveNextRequest(
                     vchiqFileContextPtr->FileQueue[FILE_QUEUE_CLOSE_SERVICE],
                     &nextRequest);
-                if (!NT_SUCCESS(status)) {
+                if (!NT_SUCCESS(status) && status != STATUS_NO_MORE_ENTRIES) {
                     VCHIQ_LOG_WARNING(
                         "WdfIoQueueRetrieveNextRequest failed  %!STATUS!",
                         status);
-                } else {
-
-                    InterlockedExchange(
-                        &vchiqFileContextPtr->State,
-                        SERVICE_STATE_CLOSE);
-
+                } else if (NT_SUCCESS(status)) {
                     WdfRequestComplete(nextRequest, STATUS_SUCCESS);
                 }
+
+                KeSetEvent(
+                    &vchiqFileContextPtr->ServiceStateEvent,
+                    IO_NO_INCREMENT,
+                    FALSE);
+                KeSetEvent(
+                    &vchiqFileContextPtr->ServiceClosedEvent,
+                    IO_NO_INCREMENT,
+                    FALSE);
 
             }
             break;
@@ -578,7 +823,10 @@ NTSTATUS VchiqProcessRxSlot (
                 status = VchiqProcessNewRxMsg(
                     DeviceContextPtr,
                     vchiqFileContextPtr,
-                    rxHeader);
+                    rxHeader,
+                    NULL,
+                    VCHIQ_BULK_MODE_WAITING,
+                    FALSE);
                 if (!NT_SUCCESS(status)) {
                     VCHIQ_LOG_ERROR(
                         "VchiqProcessNewRxMsg failed  %!STATUS!",
@@ -636,6 +884,9 @@ NTSTATUS VchiqProcessRxSlot (
             break;
         case VCHIQ_MSG_BULK_RX_DONE:
             {
+                VOID* bulkUserData;
+                VCHIQ_BULK_MODE_T bulkMode;
+
                 if (vchiqFileContextPtr == NULL) {
                     VCHIQ_LOG_ERROR(
                         "Unknown VCHIQ_MSG_BULK_RX_DONE 0x%08x (%S) size 0x%08x",
@@ -645,55 +896,25 @@ NTSTATUS VchiqProcessRxSlot (
                     break;
                 }
 
-                {
-                    WDFREQUEST nextRequest;
-                    status = WdfIoQueueRetrieveNextRequest(
-                        vchiqFileContextPtr->FileQueue[FILE_QUEUE_RX_DATA],
-                        &nextRequest);
-                    if (!NT_SUCCESS(status)) {
-                        VCHIQ_LOG_WARNING(
-                            "WdfIoQueueRetrieveNextRequest failed  %!STATUS!",
-                            status);
-                        break;
-                    }
-
-                    ULONG* respondMsg = (ULONG*)(rxHeader + 1);
-                    if (*respondMsg == 0xFFFFFFFF) {
-                        WdfRequestComplete(nextRequest, STATUS_UNSUCCESSFUL);
-                    } else {
-
-                        VCHIQ_TX_REQUEST_CONTEXT* vchiqTxRequestContextPtr =
-                            VchiqGetTxRequestContext(nextRequest);
-                        if (vchiqTxRequestContextPtr != NULL) {
-
-                            DMA_ADAPTER* dmaAdapterPtr =
-                                vchiqFileContextPtr->DmaAdapterPtr;
-
-                            dmaAdapterPtr->DmaOperations->FreeAdapterObject(
-                                vchiqFileContextPtr->DmaAdapterPtr,
-                                DeallocateObjectKeepRegisters);
-
-                            dmaAdapterPtr->DmaOperations->PutScatterGatherList(
-                                vchiqFileContextPtr->DmaAdapterPtr,
-                                vchiqTxRequestContextPtr->ScatterGatherListPtr,
-                                FALSE);
-
-                            vchiqTxRequestContextPtr->ScatterGatherListPtr = NULL;
-
-                            WdfRequestCompleteWithInformation(
-                                nextRequest,
-                                STATUS_SUCCESS,
-                                MmGetMdlByteCount(vchiqTxRequestContextPtr->BufferMdlPtr));
-                        } else {
-                            WdfRequestComplete(nextRequest, STATUS_UNSUCCESSFUL);
-                        }
-                    }
-                }
+                status = VchiqCompleteBulkRequest(
+                    vchiqFileContextPtr,
+                    rxHeader,
+                    MSG_BULK_RX,
+                    FILE_QUEUE_RX_DATA,
+                    &bulkUserData,
+                    &bulkMode);
+                if (status == STATUS_NOT_FOUND)
+                    break;
+                if (!NT_SUCCESS(status))
+                    VCHIQ_LOG_WARNING("Bulk receive completion failed %!STATUS!", status);
 
                 status = VchiqProcessNewRxMsg(
                     DeviceContextPtr,
                     vchiqFileContextPtr,
-                    rxHeader);
+                    rxHeader,
+                    bulkUserData,
+                    bulkMode,
+                    TRUE);
                 if (!NT_SUCCESS(status)) {
                     VCHIQ_LOG_ERROR(
                         "VchiqProcessNewRxMsg failed  %!STATUS!",
@@ -704,6 +925,9 @@ NTSTATUS VchiqProcessRxSlot (
             break;
         case VCHIQ_MSG_BULK_TX_DONE:
             {
+                VOID* bulkUserData;
+                VCHIQ_BULK_MODE_T bulkMode;
+
                 if (vchiqFileContextPtr == NULL) {
                     VCHIQ_LOG_ERROR(
                         "Unknown VCHIQ_MSG_BULK_TX_DONE 0x%08x (%S) size 0x%08x",
@@ -713,55 +937,25 @@ NTSTATUS VchiqProcessRxSlot (
                     break;
                 }
 
-                {
-                    WDFREQUEST nextRequest;
-                    status = WdfIoQueueRetrieveNextRequest(
-                        vchiqFileContextPtr->FileQueue[FILE_QUEUE_TX_DATA],
-                        &nextRequest);
-                    if (!NT_SUCCESS(status)) {
-                        VCHIQ_LOG_WARNING(
-                            "WdfIoQueueRetrieveNextRequest failed  %!STATUS!",
-                            status);
-                        break;
-                    }
-
-                    ULONG* respondMsg = (ULONG*)(rxHeader + 1);
-                    if (*respondMsg == 0xFFFFFFFF) {
-                        WdfRequestComplete(nextRequest, STATUS_UNSUCCESSFUL);
-                    } else {
-
-                        VCHIQ_TX_REQUEST_CONTEXT* vchiqTxRequestContextPtr =
-                            VchiqGetTxRequestContext(nextRequest);
-                        if (vchiqTxRequestContextPtr != NULL) {
-
-                            DMA_ADAPTER* dmaAdapterPtr =
-                                vchiqFileContextPtr->DmaAdapterPtr;
-
-                            dmaAdapterPtr->DmaOperations->FreeAdapterObject(
-                                vchiqFileContextPtr->DmaAdapterPtr,
-                                DeallocateObjectKeepRegisters);
-
-                            dmaAdapterPtr->DmaOperations->PutScatterGatherList(
-                                vchiqFileContextPtr->DmaAdapterPtr,
-                                vchiqTxRequestContextPtr->ScatterGatherListPtr,
-                                TRUE);
-
-                            vchiqTxRequestContextPtr->ScatterGatherListPtr = NULL;
-
-                            WdfRequestCompleteWithInformation(
-                                nextRequest,
-                                STATUS_SUCCESS,
-                                MmGetMdlByteCount(vchiqTxRequestContextPtr->BufferMdlPtr));
-                        } else {
-                            WdfRequestComplete(nextRequest, STATUS_UNSUCCESSFUL);
-                        }
-                    }
-                }
+                status = VchiqCompleteBulkRequest(
+                    vchiqFileContextPtr,
+                    rxHeader,
+                    MSG_BULK_TX,
+                    FILE_QUEUE_TX_DATA,
+                    &bulkUserData,
+                    &bulkMode);
+                if (status == STATUS_NOT_FOUND)
+                    break;
+                if (!NT_SUCCESS(status))
+                    VCHIQ_LOG_WARNING("Bulk transmit completion failed %!STATUS!", status);
 
                 status = VchiqProcessNewRxMsg(
                     DeviceContextPtr,
                     vchiqFileContextPtr,
-                    rxHeader);
+                    rxHeader,
+                    bulkUserData,
+                    bulkMode,
+                    TRUE);
                 if (!NT_SUCCESS(status)) {
                     VCHIQ_LOG_ERROR(
                         "VchiqProcessNewRxMsg failed  %!STATUS!",
@@ -796,8 +990,7 @@ NTSTATUS VchiqProcessRxSlot (
             VCHIQ_MESSAGE_NAME(rxHeader->MsgId),
             rxHeader->Size);
 
-        DeviceContextPtr->CurrentRxPos +=
-            VCHIQ_GET_SLOT_ALIGN_SIZE(rxHeader->Size + sizeof(VCHIQ_HEADER));
+        DeviceContextPtr->CurrentRxPos += alignedMessageSize;
 
         // Attempt to release the slot once we process the last message
         if ((DeviceContextPtr->CurrentRxPos & VCHIQ_SLOT_MASK) == 0) {
@@ -897,12 +1090,14 @@ Return Value:
 
 --*/
 _Use_decl_annotations_
-NTSTATUS VchiqQueueMessageAsync (
+static
+NTSTATUS VchiqQueueMessageInternal (
     DEVICE_CONTEXT* DeviceContextPtr,
     VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
     ULONG MessageId,
     VOID* BufferPtr,
-    ULONG BufferSize
+    ULONG BufferSize,
+    BOOLEAN SyncAcquire
     )
 {
     NTSTATUS status;
@@ -916,7 +1111,7 @@ NTSTATUS VchiqQueueMessageAsync (
         DeviceContextPtr,
         VchiqFileContextPtr,
         sizeof(*msgHeaderPtr) + BufferSize,
-        FALSE,
+        SyncAcquire,
         &msgHeaderPtr);
     if (!NT_SUCCESS(status)) {
         VCHIQ_LOG_ERROR(
@@ -963,6 +1158,42 @@ End:
     ExReleaseFastMutex(&DeviceContextPtr->TxSlotMutex);
 
     return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS VchiqQueueMessageAsync (
+    DEVICE_CONTEXT* DeviceContextPtr,
+    VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    ULONG MessageId,
+    VOID* BufferPtr,
+    ULONG BufferSize
+    )
+{
+    return VchiqQueueMessageInternal(
+        DeviceContextPtr,
+        VchiqFileContextPtr,
+        MessageId,
+        BufferPtr,
+        BufferSize,
+        FALSE);
+}
+
+_Use_decl_annotations_
+NTSTATUS VchiqQueueMessageSync (
+    DEVICE_CONTEXT* DeviceContextPtr,
+    VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    ULONG MessageId,
+    VOID* BufferPtr,
+    ULONG BufferSize
+    )
+{
+    return VchiqQueueMessageInternal(
+        DeviceContextPtr,
+        VchiqFileContextPtr,
+        MessageId,
+        BufferPtr,
+        BufferSize,
+        TRUE);
 }
 
 /*++
@@ -1121,6 +1352,9 @@ NTSTATUS VchiqProcessBulkTransfer (
     )
 {
     NTSTATUS status;
+    VCHIQ_TX_REQUEST_CONTEXT* requestContext;
+    BOOLEAN bulkMutexHeld = FALSE;
+    PHYSICAL_ADDRESS nullPhysicalAddress = {0};
     MSG_BULK_TYPE bulkType =
         (MsgDirection == VCHIQ_MSG_BULK_TX) ?
         MSG_BULK_TX : MSG_BULK_RX;
@@ -1130,14 +1364,40 @@ NTSTATUS VchiqProcessBulkTransfer (
 
     PAGED_CODE();
 
+    ExAcquireFastMutex(&VchiqFileContextPtr->ServiceMutex);
+    if (InterlockedCompareExchange(
+            &VchiqFileContextPtr->State,
+            SERVICE_STATE_OPEN,
+            SERVICE_STATE_OPEN) != SERVICE_STATE_OPEN)
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+        goto End;
+    }
+
+    status = VchiqAllocateTransferRequestObjContext(
+        DeviceContextPtr,
+        VchiqFileContextPtr,
+        WdfRequest,
+        BufferMdl,
+        NULL,
+        0,
+        nullPhysicalAddress,
+        NULL,
+        (MsgDirection == VCHIQ_MSG_BULK_TX) ? TRUE : FALSE,
+        &requestContext);
+    if (!NT_SUCCESS(status))
+        goto End;
+
     // Acquire a mutex here so we can serialize tracking of bulk transfer.
     // On the firmware side it is gurantee to process all bulk in a serialize
     // FIFO fashion. As long as we track the order correctly here we would not
     // be out of sync.
     ExAcquireFastMutex(&VchiqFileContextPtr->PendingBulkMsgMutex[bulkType]);
+    bulkMutexHeld = TRUE;
 
     status = VchiqAddPendingBulkMsg(
         VchiqFileContextPtr,
+        WdfRequest,
         BulkTransferPtr,
         (MsgDirection == VCHIQ_MSG_BULK_TX) ?
             MSG_BULK_TX : MSG_BULK_RX);
@@ -1165,6 +1425,7 @@ NTSTATUS VchiqProcessBulkTransfer (
             NULL,
             bulkType,
             FALSE,
+            NULL,
             NULL);
         if (!NT_SUCCESS(tempStatus)) {
             VCHIQ_LOG_ERROR(
@@ -1186,7 +1447,9 @@ NTSTATUS VchiqProcessBulkTransfer (
         VchiqFileContextPtr->VCHIQPortNumber);
     if (!NT_SUCCESS(status)) {
         NTSTATUS tempStatus;
-        WDFREQUEST removeRequest;
+        NTSTATUS transferStatus = status;
+        WDFREQUEST removeRequest = NULL;
+        WDFREQUEST trackedRequest = NULL;
 
         VCHIQ_LOG_ERROR(
             "VchiqBulkTransfer failed (%!STATUS!)",
@@ -1197,33 +1460,61 @@ NTSTATUS VchiqProcessBulkTransfer (
             NULL,
             bulkType,
             FALSE,
-            NULL);
+            NULL,
+            &trackedRequest);
         if (!NT_SUCCESS(tempStatus)) {
             VCHIQ_LOG_ERROR(
                 "VchiqRemovePendingBulkMsg failed (%!STATUS!)",
                 tempStatus);
             NT_ASSERT(NT_SUCCESS(tempStatus));
+            status = tempStatus;
+            goto End;
         }
 
-        // Remove the request that was just inserted
-        tempStatus = WdfIoQueueRetrieveFoundRequest(
+        if (trackedRequest == NULL)
+        {
+            VCHIQ_LOG_ERROR("Failed bulk transfer has no tracked request");
+            status = STATUS_INTERNAL_ERROR;
+            goto End;
+        }
+
+        tempStatus = VchiqRetrieveQueuedRequest(
             VchiqFileContextPtr->FileQueue[transactionType],
-            WdfRequest,
+            trackedRequest,
             &removeRequest);
-        if (tempStatus == STATUS_NOT_FOUND) {
-            // Request not found, framework has has cancel the request just
-            // return success and request would not be completed
-            status = STATUS_SUCCESS;
-        } else if (!NT_SUCCESS(tempStatus)) {
+        if (NT_SUCCESS(tempStatus))
+        {
+            VchiqTransferFirmwareComplete(
+                removeRequest,
+                transferStatus,
+                0,
+                TRUE);
+        }
+        else if (tempStatus == STATUS_NOT_FOUND ||
+                 tempStatus == STATUS_NO_MORE_ENTRIES)
+        {
+            VchiqTransferFirmwareComplete(
+                trackedRequest,
+                transferStatus,
+                0,
+                FALSE);
+        }
+        else
+        {
             VCHIQ_LOG_ERROR(
-                "WdfIoQueueRetrieveFoundRequest failed (%!STATUS!)",
+                "Unable to reclaim failed bulk request (%!STATUS!)",
                 tempStatus);
             NT_ASSERT(NT_SUCCESS(tempStatus));
         }
+
+        WdfObjectDereference(trackedRequest);
+        status = STATUS_SUCCESS;
     }
 
 End:
-    ExReleaseFastMutex(&VchiqFileContextPtr->PendingBulkMsgMutex[bulkType]);
+    if (bulkMutexHeld)
+        ExReleaseFastMutex(&VchiqFileContextPtr->PendingBulkMsgMutex[bulkType]);
+    ExReleaseFastMutex(&VchiqFileContextPtr->ServiceMutex);
 
     return status;
 }
@@ -1280,28 +1571,42 @@ NTSTATUS VchiqBulkTransfer (
     VOID* dmaTransferContextBufferPtr;
     ULONG pageListSize = 0;
     PHYSICAL_ADDRESS pageListPhyAddress = { 0 };
+    SCATTER_GATHER_LIST* scatterGatherListOutPtr;
 
     PAGED_CODE();
 
-    // Use the DMA api to get the right buffer list for DMA transfer as the
-    // recommended approach. 
-    status = dmaAdapterPtr->DmaOperations->CalculateScatterGatherList(
-        dmaAdapterPtr,
-        BufferMdl,
-        MmGetMdlVirtualAddress(BufferMdl),
-        BufferSize,
-        &scatterGatherListSize,
-        &numberOfMapRegisters);
-    if (!NT_SUCCESS(status)) {
-        VCHIQ_LOG_ERROR(
-            "CalculateScatterGatherList failed (%!STATUS!)",
-            status);
-        goto End;
+    vchiqTxRequestContextPtr = VchiqGetTxRequestContext(WdfRequest);
+    if (vchiqTxRequestContextPtr == NULL ||
+        vchiqTxRequestContextPtr->BufferMdlPtr != BufferMdl)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
     }
 
-    // Allocate memory to hold the scatter gather list and transfer context
+    if (InterlockedCompareExchange(
+            &vchiqTxRequestContextPtr->CompletionState,
+            0,
+            0) & VCHIQ_TRANSFER_STATE_CANCELED)
+    {
+        return STATUS_CANCELLED;
+    }
+
     {
         WDF_OBJECT_ATTRIBUTES attributes;
+
+        status = dmaAdapterPtr->DmaOperations->CalculateScatterGatherList(
+            dmaAdapterPtr,
+            BufferMdl,
+            MmGetMdlVirtualAddress(BufferMdl),
+            BufferSize,
+            &scatterGatherListSize,
+            &numberOfMapRegisters);
+        if (!NT_SUCCESS(status)) {
+            VCHIQ_LOG_ERROR(
+                "CalculateScatterGatherList failed (%!STATUS!)",
+                status);
+            goto End;
+        }
+
         WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
 
         // Let the framework release the memory when request is completed
@@ -1320,7 +1625,6 @@ NTSTATUS VchiqBulkTransfer (
                 status);
             goto End;
         }
-
         status = WdfMemoryCreate(
             &attributes,
             PagedPool,
@@ -1346,8 +1650,6 @@ NTSTATUS VchiqBulkTransfer (
         }
     }
 
-    SCATTER_GATHER_LIST* scatterGatherListOutPtr;
-
     status = dmaAdapterPtr->DmaOperations->BuildScatterGatherListEx(
         dmaAdapterPtr,
         DeviceContextPtr->PhyDeviceObjectPtr,
@@ -1370,25 +1672,34 @@ NTSTATUS VchiqBulkTransfer (
             status);
         goto End;
     }
+    vchiqTxRequestContextPtr->ScatterGatherListPtr =
+        scatterGatherListOutPtr;
 
     // Now allocate and setup a page list for buffer transmission
     {
-        SCATTER_GATHER_LIST* scatterGatherListPtr = scatterGatherBufferPtr;
+        SCATTER_GATHER_LIST* scatterGatherListPtr = scatterGatherListOutPtr;
 
-        ULONG numPages = scatterGatherListPtr->NumberOfElements;
-        pageListSize = (numPages * sizeof(ULONG)) + sizeof(VCHIQ_PAGELIST);
+        ULONG numElements = scatterGatherListPtr->NumberOfElements;
+        if (numElements == 0 ||
+            numElements >
+                (MAXULONG - FIELD_OFFSET(VCHIQ_PAGELIST, Addrs)) /
+                    sizeof(ULONG)) {
+            status = STATUS_INVALID_BUFFER_SIZE;
+            goto End;
+        }
+        pageListSize = FIELD_OFFSET(VCHIQ_PAGELIST, Addrs) +
+            numElements * sizeof(ULONG);
 
         status = VchiqAllocateCommonBuffer(
             VchiqFileContextPtr,
             pageListSize,
-            &pageListPtr,
+            (VOID**)&pageListPtr,
             &pageListPhyAddress);
         if (!NT_SUCCESS(status)) {
             VCHIQ_LOG_ERROR("Fail to alloc page list memory");
             status = STATUS_INSUFFICIENT_RESOURCES;
             goto End;
         }
-
         pageListPtr->Length = BufferSize;
         pageListPtr->Type =
             (MsgDirection == VCHIQ_MSG_BULK_TX) ?
@@ -1396,6 +1707,64 @@ NTSTATUS VchiqBulkTransfer (
         pageListPtr->Offset =
             (USHORT)(scatterGatherListPtr->Elements[0].Address.LowPart
                 & (PAGE_SIZE - 1));
+
+        if (MsgDirection == VCHIQ_MSG_BULK_RX &&
+            ((pageListPtr->Offset & (CACHE_LINE_SIZE - 1)) != 0 ||
+             ((pageListPtr->Offset + BufferSize) &
+                (CACHE_LINE_SIZE - 1)) != 0))
+        {
+            UCHAR* fragmentPtr;
+            ULONG fragmentIndex;
+            KIRQL oldIrql;
+
+            status = KeWaitForSingleObject(
+                &DeviceContextPtr->AvailableFragments,
+                Executive,
+                KernelMode,
+                FALSE,
+                NULL);
+            if (!NT_SUCCESS(status))
+                goto End;
+
+            KeAcquireSpinLock(&DeviceContextPtr->FragmentLock, &oldIrql);
+            fragmentPtr = DeviceContextPtr->FreeFragmentPtr;
+            if (fragmentPtr != NULL)
+                DeviceContextPtr->FreeFragmentPtr = *(UCHAR**)fragmentPtr;
+            KeReleaseSpinLock(&DeviceContextPtr->FragmentLock, oldIrql);
+
+            if (fragmentPtr == NULL)
+            {
+                KeReleaseSemaphore(
+                    &DeviceContextPtr->AvailableFragments,
+                    IO_NO_INCREMENT,
+                    1,
+                    FALSE);
+                status = STATUS_INTERNAL_ERROR;
+                goto End;
+            }
+
+            fragmentIndex = (ULONG)(
+                (fragmentPtr - DeviceContextPtr->FragmentBasePtr) /
+                sizeof(FRAGMENTS));
+            if (fragmentIndex >= VCHIQ_MAX_FRAGMENTS)
+            {
+                KeAcquireSpinLock(&DeviceContextPtr->FragmentLock, &oldIrql);
+                *(UCHAR**)fragmentPtr = DeviceContextPtr->FreeFragmentPtr;
+                DeviceContextPtr->FreeFragmentPtr = fragmentPtr;
+                KeReleaseSpinLock(&DeviceContextPtr->FragmentLock, oldIrql);
+                KeReleaseSemaphore(
+                    &DeviceContextPtr->AvailableFragments,
+                    IO_NO_INCREMENT,
+                    1,
+                    FALSE);
+                status = STATUS_INTERNAL_ERROR;
+                goto End;
+            }
+
+            vchiqTxRequestContextPtr->FragmentPtr = fragmentPtr;
+            pageListPtr->Type = (USHORT)(
+                PAGELIST_READ_WITH_FRAGMENTS + fragmentIndex);
+        }
 
         // Fill up page information for transfer with page address as required
         // by the firmware. Firmware does not expect actual physical address.
@@ -1405,39 +1774,44 @@ NTSTATUS VchiqBulkTransfer (
         ULONG i;
 
         for ( i = 0; i < scatterGatherListPtr->NumberOfElements; ++i) {
+            SCATTER_GATHER_ELEMENT* element =
+                &scatterGatherListPtr->Elements[i];
+            ULONG pageCount;
 
-            // Firmware does not support DMA transaction more than 16MB in 
-            // running pages. This is an unlikely path so adding an assert
-            // to catch this
-            ASSERT(scatterGatherListPtr->Elements[i].Length <= 0x1000000);
+            if (element->Address.HighPart != 0 || element->Length == 0) {
+                status = STATUS_INVALID_ADDRESS;
+                goto End;
+            }
+
+            pageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(
+                (PVOID)(ULONG_PTR)element->Address.LowPart,
+                element->Length);
+            if (pageCount == 0 || pageCount > 0x1000) {
+                status = STATUS_INVALID_BUFFER_SIZE;
+                goto End;
+            }
 
             *pageListAddrPtr =
-                (scatterGatherListPtr->Elements[i].Address.LowPart &
-                    ~(PAGE_SIZE - 1)) |
+                (element->Address.LowPart & ~(PAGE_SIZE - 1)) |
                 OFFSET_DIRECT_SDRAM |
-                BYTES_TO_PAGES(scatterGatherListPtr->Elements[i].Length) - 1;
+                (pageCount - 1);
             ++pageListAddrPtr;
         }
     }
 
-    status = VchiqAllocateTransferRequestObjContext(
-        DeviceContextPtr,
-        VchiqFileContextPtr,
-        WdfRequest,
-        BufferMdl,
-        pageListPtr,
-        pageListSize,
-        pageListPhyAddress,
-        (SCATTER_GATHER_LIST* )scatterGatherBufferPtr,
-        &vchiqTxRequestContextPtr);
-    if (!NT_SUCCESS(status)) {
-        VCHIQ_LOG_ERROR(
-            "VchiqAllocateTransferRequestObjContext failed (%!STATUS!)",
-            status);
+    if (InterlockedCompareExchange(
+            &vchiqTxRequestContextPtr->CompletionState,
+            0,
+            0) & VCHIQ_TRANSFER_STATE_CANCELED)
+    {
+        status = STATUS_CANCELLED;
         goto End;
     }
 
     // Buffer will be free when request object is released
+    vchiqTxRequestContextPtr->PageListPtr = pageListPtr;
+    vchiqTxRequestContextPtr->PageListSize = pageListSize;
+    vchiqTxRequestContextPtr->PageListPhyAddr = pageListPhyAddress;
     pageListPtr = NULL;
 
     // Dispatch message
@@ -1708,7 +2082,10 @@ _Use_decl_annotations_
 NTSTATUS VchiqProcessNewRxMsg (
     DEVICE_CONTEXT* DeviceContextPtr,
     VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
-    VCHIQ_HEADER* RxMsg
+    VCHIQ_HEADER* RxMsg,
+    VOID* BulkUserData,
+    VCHIQ_BULK_MODE_T BulkMode,
+    BOOLEAN IsBulkCompletion
     )
 {
     NTSTATUS status;
@@ -1721,7 +2098,10 @@ NTSTATUS VchiqProcessNewRxMsg (
         DeviceContextPtr,
         VchiqFileContextPtr,
         RxMsg,
-        DeviceContextPtr->MasterCurrentSlotIndex);
+        DeviceContextPtr->MasterCurrentSlotIndex,
+        BulkUserData,
+        BulkMode,
+        IsBulkCompletion);
     if (!NT_SUCCESS(status)) {
         VCHIQ_LOG_ERROR(
             "VchiqAddPendingMsg failed  %!STATUS!",
@@ -1772,7 +2152,10 @@ NTSTATUS VchiqAddPendingMsg (
     DEVICE_CONTEXT* DeviceContextPtr,
     VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
     VCHIQ_HEADER* Msg,
-    ULONG SlotNumber
+    ULONG SlotNumber,
+    VOID* BulkUserData,
+    VCHIQ_BULK_MODE_T BulkMode,
+    BOOLEAN IsBulkCompletion
     )
 {
     NTSTATUS status;
@@ -1805,6 +2188,9 @@ NTSTATUS VchiqAddPendingMsg (
 
     newPendingMsgPtr->Msg = Msg;
     newPendingMsgPtr->SlotNumber = SlotNumber;
+    newPendingMsgPtr->BulkUserData = BulkUserData;
+    newPendingMsgPtr->BulkMode = BulkMode;
+    newPendingMsgPtr->IsBulkCompletion = IsBulkCompletion;
     newPendingMsgPtr->WdfMemory = wdfMemoryNewPendingMsg;
 
     InsertTailList(
@@ -1858,20 +2244,16 @@ NTSTATUS VchiqRemovePendingMsg (
 
     // Remove all pending message if a request object is not provided
     if (WdfRequest == NULL) {
-        do {
+        while (!IsListEmpty(&VchiqFileContextPtr->PendingDataMsgList)) {
             nextListEntryPtr = RemoveTailList(
                 &VchiqFileContextPtr->PendingDataMsgList);
-            if (nextListEntryPtr ==
-                &VchiqFileContextPtr->PendingDataMsgList) {
-                break;
-            }
             ULONG nextMsgSlotNumber =
                 CONTAINING_RECORD(
                     nextListEntryPtr, VCHIQ_PENDING_MSG, ListEntry)->SlotNumber;
             VchiqReleaseMsg(DeviceContextPtr, nextMsgSlotNumber);
             WdfObjectDelete(CONTAINING_RECORD(
                 nextListEntryPtr, VCHIQ_PENDING_MSG, ListEntry)->WdfMemory);
-        } while (nextListEntryPtr != NULL);
+        }
         status = STATUS_SUCCESS;
         goto End;
     }
@@ -1914,19 +2296,15 @@ NTSTATUS VchiqRemovePendingMsg (
             awaitCompletionPtr->WdfMemoryCompletion,
             NULL);
 
-    do {
+    while (!IsListEmpty(&VchiqFileContextPtr->PendingDataMsgList) &&
+           *totalMsgPtr < awaitCompletionPtr->MsgBufCount) {
         nextListEntryPtr = RemoveHeadList(
             &VchiqFileContextPtr->PendingDataMsgList);
-        if (nextListEntryPtr ==
-            &VchiqFileContextPtr->PendingDataMsgList) {
-
-            break;
-        }
 
         // Only copy over the message header is we have sufficient output buffer
-        VCHIQ_HEADER* nextMsgHeaderPtr =
-            CONTAINING_RECORD(
-                nextListEntryPtr, VCHIQ_PENDING_MSG, ListEntry)->Msg;
+        VCHIQ_PENDING_MSG* pendingMsg = CONTAINING_RECORD(
+            nextListEntryPtr, VCHIQ_PENDING_MSG, ListEntry);
+        VCHIQ_HEADER* nextMsgHeaderPtr = pendingMsg->Msg;
         ULONG pendingMsgSize = nextMsgHeaderPtr->Size + sizeof(*nextMsgHeaderPtr);
         if (pendingMsgSize > awaitCompletionPtr->MsgBufSize) {
             InsertHeadList(
@@ -1935,16 +2313,12 @@ NTSTATUS VchiqRemovePendingMsg (
             break;
         }
 
-        ULONG nextMsgSlotNumber =
-            CONTAINING_RECORD(
-                nextListEntryPtr, VCHIQ_PENDING_MSG, ListEntry)->SlotNumber;
+        ULONG nextMsgSlotNumber = pendingMsg->SlotNumber;
 
         // Return the reason we receive the message. This is redundant but 
         // userland expects this information. We return VCHIQ defined reason
         // even for vchi service as userland would be responsible to translate
         // it to equivalent vchi defined reason.
-        NTSTATUS tempStatus;
-        VCHIQ_BULK_MODE_T bulkMode;
         BOOLEAN trackMsgForVchiService = FALSE;
         BOOLEAN returnMsgToVchiService = TRUE;
         switch (VCHIQ_MSG_TYPE(nextMsgHeaderPtr->MsgId))
@@ -1958,40 +2332,24 @@ NTSTATUS VchiqRemovePendingMsg (
             break;
         case VCHIQ_MSG_BULK_TX_DONE:
             {
-                completionDataPtr[*totalMsgPtr].Reason = 
+                ULONG actual = nextMsgHeaderPtr->Size >= sizeof(ULONG) ?
+                    *(ULONG *)(nextMsgHeaderPtr + 1) : MAXULONG;
+
+                completionDataPtr[*totalMsgPtr].Reason =
+                    actual == MAXULONG ?
+                    VCHIQ_BULK_TRANSMIT_ABORTED :
                     VCHIQ_BULK_TRANSMIT_DONE;
-
-                ExAcquireFastMutex(
-                    &VchiqFileContextPtr->PendingBulkMsgMutex[MSG_BULK_TX]);
-
-                // Suppress warning as OACR seem confused. Lock is acquired
-                // above but OACR still flags a warning. Warning does not occur
-                // in a Visual Studio build.
-                #pragma warning(suppress: 26110)
-                tempStatus = VchiqRemovePendingBulkMsg(
-                    VchiqFileContextPtr,
-                    &completionDataPtr[*totalMsgPtr],
-                    MSG_BULK_TX,
-                    FALSE,
-                    &bulkMode);
-
-                ExReleaseFastMutex(
-                    &VchiqFileContextPtr->PendingBulkMsgMutex[MSG_BULK_TX]);
-
-                if (!NT_SUCCESS(tempStatus)) {
-                    VCHIQ_LOG_ERROR(
-                        "VchiqRemovePendingBulkMsg failed %!STATUS!",
-                        tempStatus);
+                if (!pendingMsg->IsBulkCompletion) {
                     returnMsgToVchiService = FALSE;
                     break;
                 }
-
-               
+                completionDataPtr[*totalMsgPtr].BulkUserData =
+                    pendingMsg->BulkUserData;
 
                 // Do not return message if bulk transfer mode is blocking
                 // or no callback
-                if ((bulkMode == VCHIQ_BULK_MODE_BLOCKING) ||
-                    (bulkMode == VCHIQ_BULK_MODE_NOCALLBACK)) {
+                if ((pendingMsg->BulkMode == VCHIQ_BULK_MODE_BLOCKING) ||
+                    (pendingMsg->BulkMode == VCHIQ_BULK_MODE_NOCALLBACK)) {
 
                     returnMsgToVchiService = FALSE;
                 }
@@ -1999,34 +2357,24 @@ NTSTATUS VchiqRemovePendingMsg (
             break;
         case VCHIQ_MSG_BULK_RX_DONE:
             {
-                completionDataPtr[*totalMsgPtr].Reason = 
+                ULONG actual = nextMsgHeaderPtr->Size >= sizeof(ULONG) ?
+                    *(ULONG *)(nextMsgHeaderPtr + 1) : MAXULONG;
+
+                completionDataPtr[*totalMsgPtr].Reason =
+                    actual == MAXULONG ?
+                    VCHIQ_BULK_RECEIVE_ABORTED :
                     VCHIQ_BULK_RECEIVE_DONE;
-
-                ExAcquireFastMutex(
-                    &VchiqFileContextPtr->PendingBulkMsgMutex[MSG_BULK_RX]);
-
-                tempStatus = VchiqRemovePendingBulkMsg(
-                    VchiqFileContextPtr,
-                    &completionDataPtr[*totalMsgPtr],
-                    MSG_BULK_RX,
-                    FALSE,
-                    &bulkMode);
-
-                ExReleaseFastMutex(
-                    &VchiqFileContextPtr->PendingBulkMsgMutex[MSG_BULK_RX]);
-
-                if (!NT_SUCCESS(tempStatus)) {
-                    VCHIQ_LOG_ERROR(
-                        "VchiqRemovePendingBulkMsg failed %!STATUS!",
-                        tempStatus);
+                if (!pendingMsg->IsBulkCompletion) {
                     returnMsgToVchiService = FALSE;
                     break;
                 }
+                completionDataPtr[*totalMsgPtr].BulkUserData =
+                    pendingMsg->BulkUserData;
 
                 // Do not return message if bulk transfer mode is blocking
                 // or no callback
-                if ((bulkMode == VCHIQ_BULK_MODE_BLOCKING) ||
-                    (bulkMode == VCHIQ_BULK_MODE_NOCALLBACK)) {
+                if ((pendingMsg->BulkMode == VCHIQ_BULK_MODE_BLOCKING) ||
+                    (pendingMsg->BulkMode == VCHIQ_BULK_MODE_NOCALLBACK)) {
 
                     returnMsgToVchiService = FALSE;
                 }
@@ -2080,7 +2428,7 @@ NTSTATUS VchiqRemovePendingMsg (
 
         VchiqReleaseMsg(DeviceContextPtr, nextMsgSlotNumber);
 
-    } while (*totalMsgPtr < awaitCompletionPtr->MsgBufCount);
+    }
 
     if (*totalMsgPtr == 0) {
 
@@ -2149,6 +2497,7 @@ Return Value:
 _Use_decl_annotations_
 NTSTATUS VchiqAddPendingBulkMsg (
     VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    WDFREQUEST Request,
     VCHIQ_QUEUE_BULK_TRANSFER* BulkTransferPtr,
     MSG_BULK_TYPE BulkType
     )
@@ -2183,10 +2532,12 @@ NTSTATUS VchiqAddPendingBulkMsg (
     }
 
     newPendingBulkTransferPtr->WdfMemory = wdfMemoryNewPendingMsg;
+    newPendingBulkTransferPtr->Request = Request;
     newPendingBulkTransferPtr->Mode = BulkTransferPtr->Mode;
     newPendingBulkTransferPtr->BulkUserData =
         BulkTransferPtr->UserData;
 
+    WdfObjectReference(Request);
     InsertTailList(
         &VchiqFileContextPtr->PendingBulkMsgList[BulkType],
         &newPendingBulkTransferPtr->ListEntry);
@@ -2235,7 +2586,8 @@ NTSTATUS VchiqRemovePendingBulkMsg (
     VCHIQ_COMPLETION_DATA* CompletionDataPtr,
     MSG_BULK_TYPE BulkType,
     ULONG RemoveAll,
-    VCHIQ_BULK_MODE_T* BulkMode
+    VCHIQ_BULK_MODE_T* BulkMode,
+    WDFREQUEST* Request
     )
 {
     NTSTATUS status = STATUS_SUCCESS;
@@ -2246,43 +2598,57 @@ NTSTATUS VchiqRemovePendingBulkMsg (
     if (BulkMode) {
         *BulkMode = VCHIQ_BULK_MODE_WAITING;
     }
+    if (Request) {
+        *Request = NULL;
+    }
 
     // Remove the last inserted bulk list
     if (CompletionDataPtr == NULL) {
-        do {
+        while (!IsListEmpty(
+                   &VchiqFileContextPtr->PendingBulkMsgList[BulkType])) {
             nextListEntryPtr = RemoveTailList(
                 &VchiqFileContextPtr->PendingBulkMsgList[BulkType]);
-            if (nextListEntryPtr ==
-                &VchiqFileContextPtr->PendingBulkMsgList[BulkType]) {
-                break;
-            }
 
-            WdfObjectDelete(CONTAINING_RECORD(
-                nextListEntryPtr, VCHIQ_PENDING_BULK_MSG, ListEntry)->WdfMemory);
-        } while (nextListEntryPtr != NULL && RemoveAll);
+            VCHIQ_PENDING_BULK_MSG* pendingBulk = CONTAINING_RECORD(
+                nextListEntryPtr, VCHIQ_PENDING_BULK_MSG, ListEntry);
+            if (Request != NULL && !RemoveAll)
+                *Request = pendingBulk->Request;
+            else
+                WdfObjectDereference(pendingBulk->Request);
+            WdfObjectDelete(pendingBulk->WdfMemory);
+            if (!RemoveAll)
+                break;
+        }
 
         status = STATUS_SUCCESS;
         goto End;
     }
 
-    nextListEntryPtr = RemoveHeadList(
-        &VchiqFileContextPtr->PendingBulkMsgList[BulkType]);
-    if (nextListEntryPtr ==
-        &VchiqFileContextPtr->PendingBulkMsgList[BulkType]) {
-
+    if (IsListEmpty(
+            &VchiqFileContextPtr->PendingBulkMsgList[BulkType])) {
         status = STATUS_NOT_FOUND;
         VCHIQ_LOG_WARNING("No pending bulk transfer available");
         goto End;
     }
 
+    nextListEntryPtr = RemoveHeadList(
+        &VchiqFileContextPtr->PendingBulkMsgList[BulkType]);
+
     // Userland expects the bulk user data pointer to be returned. I
-    CompletionDataPtr->BulkUserData = CONTAINING_RECORD(
-        nextListEntryPtr, VCHIQ_PENDING_BULK_MSG, ListEntry)->BulkUserData;
+    VCHIQ_PENDING_BULK_MSG* pendingBulk = CONTAINING_RECORD(
+        nextListEntryPtr, VCHIQ_PENDING_BULK_MSG, ListEntry);
+
+    CompletionDataPtr->BulkUserData = pendingBulk->BulkUserData;
 
     if (BulkMode) {
-        *BulkMode = CONTAINING_RECORD(
-            nextListEntryPtr, VCHIQ_PENDING_BULK_MSG, ListEntry)->Mode;
+        *BulkMode = pendingBulk->Mode;
     }
+    if (Request) {
+        *Request = pendingBulk->Request;
+    } else {
+        WdfObjectDereference(pendingBulk->Request);
+    }
+    WdfObjectDelete(pendingBulk->WdfMemory);
 
 End:
 
@@ -2400,20 +2766,16 @@ NTSTATUS VchiqRemovePendingVchiMsg (
     // Just like pending data message remove all pending vchi message if a 
     // request WDF object is not provided
     if (WdfRequest == NULL) {
-        do {
+        while (!IsListEmpty(&VchiqFileContextPtr->PendingVchiMsgList)) {
             nextListEntryPtr = RemoveTailList(
                 &VchiqFileContextPtr->PendingVchiMsgList);
-            if (nextListEntryPtr ==
-                &VchiqFileContextPtr->PendingVchiMsgList) {
-                break;
-            }
             ULONG nextMsgSlotNumber =
                 CONTAINING_RECORD(
                     nextListEntryPtr, VCHIQ_PENDING_MSG, ListEntry)->SlotNumber;
             VchiqReleaseMsg(DeviceContextPtr, nextMsgSlotNumber);
             WdfObjectDelete(CONTAINING_RECORD(
                 nextListEntryPtr, VCHIQ_PENDING_MSG, ListEntry)->WdfMemory);
-        } while (nextListEntryPtr != NULL);
+        }
         status = STATUS_SUCCESS;
         goto End;
     }
@@ -2449,16 +2811,15 @@ NTSTATUS VchiqRemovePendingVchiMsg (
         goto CompleteRequest;
     }
     
-    nextListEntryPtr = RemoveHeadList(
-        &VchiqFileContextPtr->PendingVchiMsgList);
-    if (nextListEntryPtr ==
-        &VchiqFileContextPtr->PendingVchiMsgList) {
-
+    if (IsListEmpty(&VchiqFileContextPtr->PendingVchiMsgList)) {
         VCHIQ_LOG_ERROR(
             "No more vchi message available!");
         status = STATUS_UNSUCCESSFUL;
         goto CompleteRequest;
     }
+
+    nextListEntryPtr = RemoveHeadList(
+        &VchiqFileContextPtr->PendingVchiMsgList);
 
     // Only copy over the message header is we have sufficient output buffer
     VCHIQ_HEADER* nextMsgHeaderPtr =
@@ -2609,6 +2970,9 @@ VOID VchiqTriggerThreadRoutine (
 
     while (threadActive) {
 
+        if (KeReadStateEvent(&deviceContextPtr->VchiqThreadEventStop))
+            break;
+
         if (VCHIQ_IS_EVENT_SIGNAL(
                 &deviceContextPtr->SlotZeroPtr->Slave.Trigger)) {
             status = STATUS_WAIT_0;
@@ -2675,6 +3039,9 @@ VOID VchiqRecycleThreadRoutine (
 
     while (threadActive) {
 
+        if (KeReadStateEvent(&deviceContextPtr->VchiqThreadEventStop))
+            break;
+
         if (VCHIQ_IS_EVENT_SIGNAL(
                 &deviceContextPtr->SlotZeroPtr->Slave.Recycle)) {
             status = STATUS_WAIT_0;
@@ -2740,6 +3107,9 @@ VOID VchiqSyncThreadRoutine (
     PAGED_CODE();
 
     while (threadActive) {
+        if (KeReadStateEvent(&deviceContextPtr->VchiqThreadEventStop))
+            break;
+
         if (VCHIQ_IS_EVENT_SIGNAL(
                 &deviceContextPtr->SlotZeroPtr->Slave.SyncTrigger)) {
             status = STATUS_WAIT_0;
@@ -2805,6 +3175,9 @@ VOID VchiqSyncReleaseThreadRoutine (
     PAGED_CODE();
 
     while (threadActive) {
+        if (KeReadStateEvent(&deviceContextPtr->VchiqThreadEventStop))
+            break;
+
         if (VCHIQ_IS_EVENT_SIGNAL(
                 &deviceContextPtr->SlotZeroPtr->Slave.SyncRelease)) {
             status = STATUS_WAIT_0;
