@@ -851,6 +851,7 @@ LDEVOBJ_bProbeAndCaptureDevmode(
     }
 
     /* Now, search the exact mode to return to caller */
+    pdmSelected = NULL;
     for (i = 0; i < pGraphicsDevice->cDevModes; i++)
     {
         pdmCurrent = pGraphicsDevice->pDevModeList[i].pdm;
