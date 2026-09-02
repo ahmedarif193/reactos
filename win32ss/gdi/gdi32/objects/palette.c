@@ -143,6 +143,16 @@ RealizePalette(
        return METADC_RealizePalette(hdc);
     }
 
+    if (GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_ALTDC_TYPE)
+    {
+        PLDC pLDC = GdiGetLDC(hdc);
+        if (pLDC && pLDC->iType == LDC_EMFLDC)
+        {
+            EMFDC_RealizePalette(pLDC);
+            return 0;
+        }
+    }
+
     if (GDI_HANDLE_GET_TYPE(hdc) != GDILoObjType_LO_DC_TYPE)
     {
         return GDI_ERROR;
