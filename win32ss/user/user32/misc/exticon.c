@@ -301,6 +301,7 @@ static UINT ICO_ExtractIconExW(
 {
 	UINT		ret = 0;
 	UINT		cx1, cx2, cy1, cy2;
+	UINT		*pIconIdAlloc = NULL;
 	LPBYTE		pData;
 	DWORD		sig;
 	HANDLE		hFile;
@@ -424,8 +425,13 @@ static UINT ICO_ExtractIconExW(
 	if (pIconId) /* Invalidate first icon identifier */
 		*pIconId = 0xFFFFFFFF;
 
-	if (!pIconId) /* if no icon identifier array present use the icon handle array as intermediate storage */
-	  pIconId = (UINT*)RetPtr;
+	if (!pIconId && RetPtr)
+	{
+	  pIconIdAlloc = HeapAlloc(GetProcessHeap(), 0, (nIcons + 2) * sizeof(UINT));
+	  if (!pIconIdAlloc)
+	    goto end;
+	  pIconId = pIconIdAlloc;
+	}
 
 	sig = USER32_GetResourceTable(peimage, fsizel, &pData);
 
@@ -627,7 +633,6 @@ static UINT ICO_ExtractIconExW(
                             DestroyIcon(icon);
 
                         iconCount = 1;
-                        break;
                     }
                 }
             }
@@ -711,6 +716,9 @@ static UINT ICO_ExtractIconExW(
 	  }
 
 	  /* assure we don't get too much */
+	  if (cx2 && cy2 && (nIcons & 1))
+	    goto end;
+
 	  if( nIcons > iconDirCount - nIconIndex )
 	    nIcons = iconDirCount - nIconIndex;
 
@@ -843,6 +851,8 @@ static UINT ICO_ExtractIconExW(
 
 end:
 	UnmapViewOfFile(peimage);	/* success */
+	if (pIconIdAlloc)
+	  HeapFree(GetProcessHeap(), 0, pIconIdAlloc);
 	return ret;
 }
 
