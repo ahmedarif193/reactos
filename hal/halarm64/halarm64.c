@@ -335,9 +335,6 @@ static ULONG HalpArm64PciRootBridgeCount = 0;
 
 #define HAL_ARM64_DMA_ADAPTER_SIGNATURE 'ADMA'
 
-/* Maximum map registers per adapter */
-#define HAL_ARM64_MAX_MAP_REGISTERS 256
-
 #define HAL_ARM64_DMA_DEFAULT_ALIGNMENT 64
 
 #ifndef TAG_HAL
@@ -3415,11 +3412,14 @@ HalpArm64AllocateMapRegisterBase(
     PHAL_ARM64_MAP_REGISTER_BASE MapRegisterBase;
     SIZE_T AllocationSize;
 
-    if (!AdapterObject || NumberOfMapRegisters > HAL_ARM64_MAX_MAP_REGISTERS)
+    if (!AdapterObject)
         return NULL;
 
     if (NumberOfMapRegisters == 0)
         NumberOfMapRegisters = 1;
+
+    if (NumberOfMapRegisters > AdapterObject->MapRegistersPerChannel)
+        return NULL;
 
     AllocationSize = FIELD_OFFSET(HAL_ARM64_MAP_REGISTER_BASE, Registers) +
                      (NumberOfMapRegisters * sizeof(HAL_ARM64_MAP_REGISTER_ENTRY));
@@ -3447,12 +3447,14 @@ HalAllocateAdapterChannel(
     IO_ALLOCATION_ACTION Action;
     KIRQL OldIrql;
 
-    if (!AdapterObject || !Wcb || !ExecutionRoutine ||
-        NumberOfMapRegisters > HAL_ARM64_MAX_MAP_REGISTERS)
+    if (!AdapterObject || !Wcb || !ExecutionRoutine)
     {
         DPRINT1("[arm64][DMA] HalAllocateAdapterChannel: Invalid parameters\n");
         return STATUS_INVALID_PARAMETER;
     }
+
+    if (NumberOfMapRegisters > AdapterObject->MapRegistersPerChannel)
+        return STATUS_INSUFFICIENT_RESOURCES;
 
     MapRegisterBase = HalpArm64AllocateMapRegisterBase(AdapterObject,
                                                         NumberOfMapRegisters);
@@ -4731,8 +4733,8 @@ HalpArm64GetScatterGatherRequirements(
         PVOID CurrentVa = (PUCHAR)MmGetMdlVirtualAddress(Mdl) + CurrentOffset;
         ULONG Pages = (ULONG)ADDRESS_AND_SIZE_TO_SPAN_PAGES(CurrentVa, Chunk);
 
-        if (Pages > HAL_ARM64_MAX_MAP_REGISTERS - MapRegisters)
-            return STATUS_INSUFFICIENT_RESOURCES;
+        if (Pages > MAXULONG - MapRegisters)
+            return STATUS_INTEGER_OVERFLOW;
 
         MapRegisters += Pages;
         Remaining -= Chunk;
@@ -4773,12 +4775,13 @@ HalpArm64CalculateScatterGatherListSize(
     _Out_ PULONG ScatterGatherListSize,
     _Out_opt_ PULONG NumberOfMapRegisters)
 {
+    PADAPTER_OBJECT AdapterObject = (PADAPTER_OBJECT)DmaAdapter;
     NTSTATUS Status;
     ULONGLONG Offset;
 
-    UNREFERENCED_PARAMETER(DmaAdapter);
-
-    if (!ScatterGatherListSize || !Mdl || Length == 0)
+    if (!AdapterObject ||
+        AdapterObject->Signature != HAL_ARM64_DMA_ADAPTER_SIGNATURE ||
+        !ScatterGatherListSize || !Mdl || Length == 0)
     {
         if (NumberOfMapRegisters) *NumberOfMapRegisters = 0;
         return STATUS_INVALID_PARAMETER;
@@ -4797,6 +4800,11 @@ HalpArm64CalculateScatterGatherListSize(
                                                         &MapRegisters,
                                                         ScatterGatherListSize,
                                                         NULL);
+        if (NT_SUCCESS(Status) &&
+            MapRegisters > AdapterObject->MapRegistersPerChannel)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
         if (NumberOfMapRegisters)
             *NumberOfMapRegisters = NT_SUCCESS(Status) ? MapRegisters : 0;
     }
@@ -4845,6 +4853,9 @@ HalpArm64BuildScatterGatherListInternal(
                                                     &ContextOffset);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    if (MapRegisterCount > AdapterObject->MapRegistersPerChannel)
+        return STATUS_INSUFFICIENT_RESOURCES;
 
     if (UsingUserBuffer)
     {
@@ -5084,7 +5095,7 @@ HalpArm64GetDmaAdapterInfo(
     }
 
     AdapterInfo->V1.ReadDmaCounterAvailable = FALSE;
-    AdapterInfo->V1.ScatterGatherLimit = HAL_ARM64_MAX_MAP_REGISTERS;
+    AdapterInfo->V1.ScatterGatherLimit = AdapterObject->MapRegistersPerChannel;
     AdapterInfo->V1.DmaAddressWidth = AdapterObject->DmaAddressWidth;
     AdapterInfo->V1.Flags = 0;
     AdapterInfo->V1.MinimumTransferUnit = 1;
@@ -5100,14 +5111,16 @@ HalpArm64GetDmaTransferInfo(
     _In_ BOOLEAN WriteOnly,
     _Inout_ PDMA_TRANSFER_INFO TransferInfo)
 {
+    PADAPTER_OBJECT AdapterObject = (PADAPTER_OBJECT)DmaAdapter;
     NTSTATUS Status;
     ULONG MapRegisterCount;
     ULONG ScatterGatherListSize;
 
-    UNREFERENCED_PARAMETER(DmaAdapter);
     UNREFERENCED_PARAMETER(WriteOnly);
 
-    if (!TransferInfo)
+    if (!AdapterObject ||
+        AdapterObject->Signature != HAL_ARM64_DMA_ADAPTER_SIGNATURE ||
+        !TransferInfo)
         return STATUS_INVALID_PARAMETER;
 
     Status = HalpArm64GetScatterGatherRequirements(Mdl,
@@ -5118,6 +5131,9 @@ HalpArm64GetDmaTransferInfo(
                                                     NULL);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    if (MapRegisterCount > AdapterObject->MapRegistersPerChannel)
+        return STATUS_INSUFFICIENT_RESOURCES;
 
     switch (TransferInfo->Version)
     {
@@ -5422,14 +5438,10 @@ HalGetAdapter(
      * Calculate the number of map registers needed.
      * This determines how many pages can be transferred at once.
      */
-    MaximumLength = DeviceDescription->MaximumLength & MAXLONG;
+    MaximumLength = DeviceDescription->MaximumLength;
 
-    /* The extra register covers a transfer that begins on a partial page. */
-    MapRegisterCount = ((MaximumLength + PAGE_SIZE - 1) >> PAGE_SHIFT) + 1;
-
-    /* Limit to a reasonable maximum */
-    if (MapRegisterCount > HAL_ARM64_MAX_MAP_REGISTERS)
-        MapRegisterCount = HAL_ARM64_MAX_MAP_REGISTERS;
+    /* Account for the worst-case starting offset within the first page. */
+    MapRegisterCount = (MaximumLength + (2 * PAGE_SIZE - 2)) >> PAGE_SHIFT;
     if (!MapRegisterCount)
         MapRegisterCount = 1;
     MapRegisters = (ULONG)MapRegisterCount;
