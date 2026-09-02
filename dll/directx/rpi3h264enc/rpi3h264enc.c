@@ -1264,12 +1264,10 @@ rpi3_write_output_sample(struct rpi3_encoder *Encoder, IMFSample *Sample)
     Result = IMFSample_SetSampleDuration(Sample, Duration);
     if (FAILED(Result))
         goto Unlock;
-    if (Encoder->PendingOutputFlags & RPI3_MMAL_PACKET_KEYFRAME)
-    {
-        Result = IMFSample_SetUINT32(Sample,
-                                     &MFSampleExtension_CleanPoint,
-                                     TRUE);
-    }
+    Result = IMFSample_SetUINT32(
+                 Sample,
+                 &MFSampleExtension_CleanPoint,
+                 !!(Encoder->PendingOutputFlags & RPI3_MMAL_PACKET_KEYFRAME));
 Unlock:
     IMFMediaBuffer_Unlock(MediaBuffer);
 Done:
