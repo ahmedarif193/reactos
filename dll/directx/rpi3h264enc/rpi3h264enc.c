@@ -1002,7 +1002,14 @@ transform_ProcessMessage(IMFTransform *Interface,
             break;
         case MFT_MESSAGE_COMMAND_FLUSH:
             if (Encoder->Session)
+            {
                 Result = Rpi3MmalFlushEncoder(Encoder->Session);
+                if (FAILED(Result))
+                {
+                    rpi3_destroy_session(Encoder);
+                    break;
+                }
+            }
             Encoder->QueuedInputs = 0;
             Encoder->Draining = FALSE;
             Encoder->EosSent = FALSE;
