@@ -1523,11 +1523,12 @@ Rpi3Vc4UmDecodeEndFrame(
 
     if (Decoder->MmalDecoder == NULL)
     {
-        Result = Rpi3MmalCreateH264Decoder(
+        Result = Rpi3MmalCreateH264DecoderEx(
                      Decoder->VideoDesc.SampleWidth,
                      Decoder->VideoDesc.SampleHeight,
                      NULL,
                      0,
+                     RPI3_MMAL_DECODER_OUTPUT_DECODE_ORDER,
                      &Decoder->MmalDecoder);
         if (FAILED(Result))
             goto Exit;

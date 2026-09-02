@@ -5,6 +5,7 @@
 
 @ stdcall Rpi3MmalQueryCaps(ptr)
 @ stdcall Rpi3MmalCreateH264Decoder(long long ptr long ptr)
+@ stdcall Rpi3MmalCreateH264DecoderEx(long long ptr long long ptr)
 @ stdcall Rpi3MmalSubmit(ptr ptr long long int64 int64)
 @ stdcall Rpi3MmalReceiveNV12(ptr ptr long long long ptr)
 @ stdcall Rpi3MmalReceiveNV12Selected(ptr long ptr ptr ptr)

@@ -13,7 +13,9 @@
 extern "C" {
 #endif
 
-#define RPI3_MMAL_ABI_VERSION 3
+#define RPI3_MMAL_ABI_VERSION 4
+
+#define RPI3_MMAL_DECODER_OUTPUT_DECODE_ORDER 0x00000001u
 
 #define RPI3_MMAL_SUBMIT_FRAME_START    0x00000001u
 #define RPI3_MMAL_SUBMIT_FRAME_END      0x00000002u
@@ -31,6 +33,7 @@ extern "C" {
 #define RPI3_MMAL_PACKET_KEYFRAME       0x00000004u
 #define RPI3_MMAL_PACKET_CONFIG         0x00000008u
 #define RPI3_MMAL_PACKET_FRAME_END      0x00000010u
+#define RPI3_MMAL_PACKET_CODECSIDEINFO  0x00000020u
 
 typedef struct RPI3_MMAL_DECODER RPI3_MMAL_DECODER;
 typedef struct RPI3_MMAL_DECODER RPI3_MMAL_ENCODER;
@@ -111,6 +114,10 @@ BOOL WINAPI Rpi3MmalQueryCaps(RPI3_MMAL_CAPS *Caps);
 HRESULT WINAPI Rpi3MmalCreateH264Decoder(UINT Width, UINT Height,
                                          const BYTE *ExtraData, UINT ExtraDataSize,
                                          RPI3_MMAL_DECODER **Decoder);
+HRESULT WINAPI Rpi3MmalCreateH264DecoderEx(UINT Width, UINT Height,
+                                           const BYTE *ExtraData, UINT ExtraDataSize,
+                                           UINT Flags,
+                                           RPI3_MMAL_DECODER **Decoder);
 HRESULT WINAPI Rpi3MmalSubmit(RPI3_MMAL_DECODER *Decoder,
                               const BYTE *Data, UINT DataSize, UINT Flags,
                               LONGLONG Pts, LONGLONG Dts);
