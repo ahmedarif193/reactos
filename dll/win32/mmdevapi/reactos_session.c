@@ -24,13 +24,13 @@
 WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
 
 #define SESSION_REGISTRY_MAGIC 0x53534152 /* RASS */
-#define SESSION_REGISTRY_VERSION 1
+#define SESSION_REGISTRY_VERSION 2
 #define SESSION_REGISTRY_CAPACITY 128
 
 static const WCHAR session_registry_name[] =
-    L"Local\\ReactOS.CoreAudio.SessionRegistry.v1";
+    L"Local\\ReactOS.CoreAudio.SessionRegistry.v2";
 static const WCHAR session_registry_mutex_name[] =
-    L"Local\\ReactOS.CoreAudio.SessionRegistry.v1.Lock";
+    L"Local\\ReactOS.CoreAudio.SessionRegistry.v2.Lock";
 
 struct shared_audio_session
 {
@@ -50,6 +50,8 @@ struct shared_audio_session
     WCHAR process_path[MAX_PATH];
     WCHAR display_name[128];
     WCHAR icon_path[MAX_PATH];
+    volatile LONG peak_bits;
+    volatile LONG peak_tick;
 };
 
 struct shared_audio_session_registry
@@ -335,6 +337,98 @@ static void copy_record_snapshot(const struct shared_audio_session *session,
              ARRAY_SIZE(snapshot->display_name));
     lstrcpynW(snapshot->icon_path, session->icon_path,
              ARRAY_SIZE(snapshot->icon_path));
+    snapshot->peak_tick = (DWORD)InterlockedCompareExchange((volatile LONG *)&session->peak_tick, 0, 0);
+    {
+        LONG bits = InterlockedCompareExchange((volatile LONG *)&session->peak_bits, 0, 0);
+        memcpy(&snapshot->peak, &bits, sizeof(float));
+    }
+}
+
+HRESULT reactos_audio_session_set_peak(
+    const struct reactos_audio_session_id *id, float peak)
+{
+    struct shared_audio_session *session;
+    LONG bits;
+    HRESULT hr;
+
+    if (!id || id->slot >= SESSION_REGISTRY_CAPACITY)
+        return E_INVALIDARG;
+    if (FAILED(hr = ensure_registry()))
+        return hr;
+    session = &registry->sessions[id->slot];
+    if (!InterlockedCompareExchange(&session->occupied, TRUE, TRUE) ||
+        !IsEqualGUID(&session->instance_guid, &id->instance_guid))
+        return AUDCLNT_E_DEVICE_INVALIDATED;
+    if (peak < 0.0f) peak = 0.0f;
+    if (peak > 1.0f) peak = 1.0f;
+    memcpy(&bits, &peak, sizeof(LONG));
+    InterlockedExchange((volatile LONG *)&session->peak_bits, bits);
+    InterlockedExchange((volatile LONG *)&session->peak_tick, (LONG)GetTickCount());
+    return S_OK;
+}
+
+HRESULT reactos_audio_session_read_peak(
+    const struct reactos_audio_session_id *id, float *peak, DWORD *tick)
+{
+    struct shared_audio_session *session;
+    LONG bits;
+    HRESULT hr;
+
+    if (!id || !peak)
+        return E_POINTER;
+    *peak = 0.0f;
+    if (tick)
+        *tick = 0;
+    if (id->slot >= SESSION_REGISTRY_CAPACITY)
+        return E_INVALIDARG;
+    if (FAILED(hr = ensure_registry()))
+        return hr;
+    session = &registry->sessions[id->slot];
+    if (!InterlockedCompareExchange(&session->occupied, TRUE, TRUE) ||
+        !IsEqualGUID(&session->instance_guid, &id->instance_guid))
+        return AUDCLNT_E_DEVICE_INVALIDATED;
+    bits = InterlockedCompareExchange((volatile LONG *)&session->peak_bits, 0, 0);
+    memcpy(peak, &bits, sizeof(float));
+    if (tick)
+        *tick = (DWORD)InterlockedCompareExchange((volatile LONG *)&session->peak_tick, 0, 0);
+    return S_OK;
+}
+
+HRESULT reactos_audio_session_max_peak(IMMDevice *device, float *peak)
+{
+    WCHAR endpoint_id[MAX_PATH];
+    DWORD now = GetTickCount();
+    float best = 0.0f;
+    UINT32 i;
+    HRESULT hr;
+
+    if (!device || !peak)
+        return E_POINTER;
+    *peak = 0.0f;
+    if (FAILED(hr = get_endpoint_id(device, endpoint_id)))
+        return hr;
+    if (FAILED(hr = ensure_registry()))
+        return hr;
+    for (i = 0; i < SESSION_REGISTRY_CAPACITY; ++i)
+    {
+        struct shared_audio_session *session = &registry->sessions[i];
+        LONG bits;
+        DWORD tick;
+        float value;
+        if (!InterlockedCompareExchange(&session->occupied, TRUE, TRUE))
+            continue;
+        if (lstrcmpW(session->endpoint_id, endpoint_id))
+            continue;
+        tick = (DWORD)InterlockedCompareExchange((volatile LONG *)&session->peak_tick, 0, 0);
+        if (now - tick > 400)
+            continue;
+        bits = InterlockedCompareExchange((volatile LONG *)&session->peak_bits, 0, 0);
+        memcpy(&value, &bits, sizeof(float));
+        if (value > best)
+            best = value;
+    }
+    *peak = best;
+    return S_OK;
 }
 
 HRESULT reactos_audio_session_register(

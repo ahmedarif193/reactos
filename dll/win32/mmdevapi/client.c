@@ -1494,7 +1494,7 @@ static HRESULT WINAPI render_ReleaseBuffer(IAudioRenderClient *iface, UINT32 wri
     params.stream         = This->stream;
     params.written_frames = written_frames;
     params.flags          = flags;
-
+    params.peak           = 0.0f;
 #ifdef __REACTOS__
     sessions_lock();
     if (This->session && sync_audio_session(This->session))
@@ -1502,7 +1502,10 @@ static HRESULT WINAPI render_ReleaseBuffer(IAudioRenderClient *iface, UINT32 wri
     sessions_unlock();
 #endif
     wine_unix_call(release_render_buffer, &params);
-
+#ifdef __REACTOS__
+    if (SUCCEEDED(params.result) && This->session && This->session->shared_valid)
+        reactos_audio_session_set_peak(&This->session->shared_id, params.peak);
+#endif
     return params.result;
 }
 
