@@ -76,8 +76,7 @@
 #define SDHC_CRITICAL_ASSERT(_Expression) NT_ASSERT(_Expression)
 #define SDHC_ASSERT(_Expression) NT_ASSERT(_Expression)
 
-#define VCHIQ_LOG_INFORMATION(_Format, ...) \
-    DbgPrint("VCHIQ: INFO %s:%d: %s\n", __FILE__, __LINE__, (_Format))
+#define VCHIQ_LOG_INFORMATION(_Format, ...) do { } while (0)
 #define VCHIQ_LOG_WARNING(_Format, ...) \
     DbgPrint("VCHIQ: WARNING %s:%d: %s\n", __FILE__, __LINE__, (_Format))
 #define VCHIQ_LOG_ERROR(_Format, ...) \
