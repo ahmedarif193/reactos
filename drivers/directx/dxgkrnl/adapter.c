@@ -12406,6 +12406,7 @@ DxgkpAddDeviceRegistered(
     KeInitializeSpinLock(&Adapter->TdrHistoryLock);
     KeInitializeMutex(&Adapter->AdapterMutex, 0);
     KeInitializeMutex(&Adapter->VidPnMutex, 0);
+    KeInitializeMutex(&Adapter->OverlayMutex, 0);
     KeInitializeEvent(&Adapter->AdapterStartCompletedEvent, NotificationEvent, TRUE);
     Adapter->AdapterStartGeneration = 0;
     Adapter->AdapterStartCompletedGeneration = 0;

@@ -1318,6 +1318,7 @@ DxgkCreateDevice(
 
     InitializeListHead(&Device->ContextListHead);
     InitializeListHead(&Device->SyncObjListHead);
+    InitializeListHead(&Device->OverlayListHead);
     InitializeListHead(&Device->DeviceListEntry);
     DxgkProcessDeviceLinkInitialize(&Device->ProcessDeviceLink, Device);
     RtlZeroMemory(&WorkTerminal, sizeof(WorkTerminal));
@@ -1600,13 +1601,11 @@ DxgkpDestroyDetachedDevice(
         }
     }
 
-    if (!DxgkpWaitForDeviceReferences(Device))
-    {
-        InterlockedExchange(&Device->MiniportDestroyPending, 1);
-        DxgkpRetainDetachedDevice(Device);
-        return STATUS_DEVICE_BUSY;
-    }
-    Status = DxgkVidMmCleanupDeviceAllocations(Device);
+    Status = DxgkOverlayCleanupDevice(Device);
+    if (NT_SUCCESS(Status) && !DxgkpWaitForDeviceReferences(Device))
+        Status = STATUS_DEVICE_BUSY;
+    if (NT_SUCCESS(Status))
+        Status = DxgkVidMmCleanupDeviceAllocations(Device);
     if (NT_SUCCESS(Status))
         Status = DxgkpDestroyMiniportDevice(Adapter, Device->hMiniportDevice);
     if (!NT_SUCCESS(Status))
@@ -1624,6 +1623,7 @@ DxgkpDestroyDetachedDevice(
 
     ASSERT(DxgkDeviceWorkCoreIsEmpty(&Device->WorkLedger));
     ASSERT(DxgkSyncWaitCoreIsEmpty(&Device->SyncWaitRegistry));
+    ASSERT(IsListEmpty(&Device->OverlayListHead));
     ASSERT(InterlockedCompareExchange(&Device->InFlightSubmissions, 0, 0) == 0);
     ASSERT(IsListEmpty(&Device->ProcessDeviceLink.Entry));
     DxgkDereferenceProcessRecord(Device->ProcessRecord);
