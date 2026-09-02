@@ -13,6 +13,8 @@
 #include "category.hpp"
 #include "details.hpp"
 #include "gui.hpp"
+#include "http.hpp"
+#include "installed.hpp"
 #include "installer.hpp"
 #include "manifest.hpp"
 #include "resource.h"
@@ -50,6 +52,7 @@ enum : int
     IdOperationDetail = 1012,
     IdOperationProgress = 1013,
     IdOperationPercent = 1014,
+    IdInstalled = 1015,
 };
 
 enum : UINT_PTR
@@ -57,6 +60,7 @@ enum : UINT_PTR
     TimerSearch = 1,
     TimerSelect = 2,
     TimerSpinner = 3,
+    TimerSize = 4,
 };
 
 enum class BlockKind
@@ -121,9 +125,14 @@ struct DetailResult
     std::vector<PackageAgreement> agreements;
     std::vector<std::string> installers;
     std::string selected;
+    std::string selectedArchitecture;
     std::string selectedError;
     std::string installerUrl;
     std::string installerHash;
+    bool sizePending = false;
+    bool sizeKnown = false;
+    unsigned long long installerSize = 0;
+    std::string sizeError;
 };
 
 enum class OperationStage
@@ -157,7 +166,7 @@ COLORREF Blend(COLORREF front, COLORREF back, int weight)
     return RGB(red, green, blue);
 }
 
-std::wstring FormatCount(std::size_t value)
+std::wstring FormatCount(unsigned long long value)
 {
     std::wstring digits = std::to_wstring(value);
     std::wstring grouped;
@@ -292,10 +301,29 @@ public:
         source_ = source;
         InitializeCriticalSection(&lock_);
         signal_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!signal_)
+        probeStop_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!signal_ || !probeStop_)
+        {
+            if (signal_)
+                CloseHandle(signal_);
+            if (probeStop_)
+                CloseHandle(probeStop_);
+            signal_ = nullptr;
+            probeStop_ = nullptr;
+            DeleteCriticalSection(&lock_);
             return false;
+        }
         thread_ = CreateThread(nullptr, 0, ThreadMain, this, 0, nullptr);
-        return thread_ != nullptr;
+        if (!thread_)
+        {
+            CloseHandle(signal_);
+            CloseHandle(probeStop_);
+            signal_ = nullptr;
+            probeStop_ = nullptr;
+            DeleteCriticalSection(&lock_);
+            return false;
+        }
+        return true;
     }
 
     void Stop()
@@ -305,6 +333,7 @@ public:
         EnterCriticalSection(&lock_);
         quit_ = true;
         LeaveCriticalSection(&lock_);
+        SetEvent(probeStop_);
         SetEvent(signal_);
         if (thread_)
         {
@@ -314,6 +343,8 @@ public:
         }
         CloseHandle(signal_);
         signal_ = nullptr;
+        CloseHandle(probeStop_);
+        probeStop_ = nullptr;
         DeleteCriticalSection(&lock_);
     }
 
@@ -354,10 +385,76 @@ public:
     }
 
 private:
+    struct SizeProbeContext
+    {
+        HWND window = nullptr;
+        HANDLE stop = nullptr;
+        std::unique_ptr<DetailResult> result;
+    };
+
     static DWORD WINAPI ThreadMain(LPVOID parameter)
     {
         static_cast<Worker *>(parameter)->Run();
         return 0;
+    }
+
+    static DWORD WINAPI SizeProbeMain(LPVOID parameter)
+    {
+        std::unique_ptr<SizeProbeContext> context(static_cast<SizeProbeContext *>(parameter));
+        unsigned long long installerSize = 0;
+        HttpClient http;
+        const Status status = http.ProbeContentLength(WideFromUtf8(context->result->installerUrl), installerSize);
+        context->result->stage = 3;
+        context->result->sizePending = false;
+        if (status)
+        {
+            context->result->sizeKnown = true;
+            context->result->installerSize = installerSize;
+        }
+        else
+        {
+            context->result->sizeError = status.message;
+        }
+
+        if (WaitForSingleObject(context->stop, 0) != WAIT_OBJECT_0 &&
+            PostMessageW(context->window, MessageDetailsReady, context->result->generation,
+                         reinterpret_cast<LPARAM>(context->result.get())))
+        {
+            context->result.release();
+        }
+        CloseHandle(context->stop);
+        return 0;
+    }
+
+    void StartSizeProbe(std::unique_ptr<DetailResult> result)
+    {
+        HANDLE stop = nullptr;
+        if (!DuplicateHandle(GetCurrentProcess(), probeStop_, GetCurrentProcess(), &stop, 0, FALSE,
+                             DUPLICATE_SAME_ACCESS))
+        {
+            result->stage = 3;
+            result->sizePending = false;
+            result->sizeError = "cannot start installer size query";
+            PostDetails(result);
+            return;
+        }
+
+        std::unique_ptr<SizeProbeContext> context(new SizeProbeContext());
+        context->window = window_;
+        context->stop = stop;
+        context->result = std::move(result);
+        HANDLE thread = CreateThread(nullptr, 0, SizeProbeMain, context.get(), 0, nullptr);
+        if (!thread)
+        {
+            CloseHandle(stop);
+            context->result->stage = 3;
+            context->result->sizePending = false;
+            context->result->sizeError = "cannot start installer size query";
+            PostDetails(context->result);
+            return;
+        }
+        context.release();
+        CloseHandle(thread);
     }
 
     std::uint32_t Generation() { return static_cast<std::uint32_t>(InterlockedCompareExchange(&generation_, 0, 0)); }
@@ -555,7 +652,7 @@ private:
         if (!status)
         {
             result->error = status.message;
-            result->stage = 2;
+            result->stage = 3;
             PostDetails(result);
             return;
         }
@@ -568,9 +665,9 @@ private:
         Manifest manifest;
         if (status)
             status = ParseInstallerManifest(yaml, manifest);
-        result->stage = 2;
         if (!status)
         {
+            result->stage = 3;
             result->selectedError = status.message;
             PostDetails(result);
             return;
@@ -588,12 +685,21 @@ private:
         const Status selection = SelectInstaller(manifest, SelectionOptions(), selected);
         if (selection)
         {
+            result->selectedArchitecture = selected.architecture.empty() ? "unknown" : selected.architecture;
             result->selected = selected.architecture + " \xc2\xb7 " + selected.type;
             result->installerUrl = selected.url;
             result->installerHash = selected.sha256;
+            result->stage = 2;
+            result->sizePending = true;
+            PostDetails(result);
+            if (result->generation != Generation())
+                return;
+            StartSizeProbe(std::move(result));
+            return;
         }
         else
         {
+            result->stage = 3;
             result->selectedError = selection.message;
         }
         PostDetails(result);
@@ -603,6 +709,7 @@ private:
     SourceManager *source_ = nullptr;
     HANDLE thread_ = nullptr;
     HANDLE signal_ = nullptr;
+    HANDLE probeStop_ = nullptr;
     CRITICAL_SECTION lock_{};
     PackageRecord pending_;
     PackageRecord operationPackage_;
@@ -629,6 +736,7 @@ struct Theme
     HBRUSH operationBrush = nullptr;
     HBRUSH lineBrush = nullptr;
     HBRUSH accentBrush = nullptr;
+    HICON mark = nullptr;
     int uiHeight = 16;
     int titleHeight = 22;
     int miniHeight = 14;
@@ -650,6 +758,7 @@ struct Theme
     {
         HDC screen = GetDC(nullptr);
         scale = MulDiv(GetDeviceCaps(screen, LOGPIXELSY), 100, 96);
+        LoadIconWithScaleDown(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_ROSGET), Px(36), Px(36), &mark);
 
         LOGFONTW base{};
         NONCLIENTMETRICSW metrics{};
@@ -717,6 +826,9 @@ struct Theme
                 DeleteObject(*brush);
             *brush = nullptr;
         }
+        if (mark)
+            DestroyIcon(mark);
+        mark = nullptr;
     }
 };
 
@@ -1085,6 +1197,7 @@ struct CatalogWindow
     HWND install = nullptr;
     HWND download = nullptr;
     HWND refresh = nullptr;
+    HWND installed = nullptr;
     HWND appTitle = nullptr;
     HWND appSubtitle = nullptr;
     HWND operationTitle = nullptr;
@@ -1111,7 +1224,10 @@ struct CatalogWindow
     bool loading = true;
     bool operationVisible = false;
     bool operationBusy = false;
+    bool backgroundProgress = false;
     bool spinning = false;
+    bool sizeAnimating = false;
+    unsigned sizeDotPhase = 1;
     bool selectFirst = false;
     bool buildingTree = false;
     int treeWidth = 0;
@@ -1122,6 +1238,11 @@ struct CatalogWindow
 WNDPROC OriginalSearchProc = nullptr;
 
 void UpdateActionButtons(CatalogWindow &state);
+void SetOperationMarquee(CatalogWindow &state, bool marquee);
+void ShowBackgroundProgress(CatalogWindow &state, const wchar_t *title, const wchar_t *detail);
+void HideBackgroundProgress(CatalogWindow &state);
+void StopSpinner(CatalogWindow &state);
+void StopSizeAnimation(CatalogWindow &state);
 
 int CompareAscii(const std::string &left, const std::string &right)
 {
@@ -1214,21 +1335,23 @@ void LayoutWindow(CatalogWindow &state)
     const int header = state.theme.Px(96);
     const int splitter = state.theme.Px(6);
     const int margin = state.theme.Px(12);
-    const int actionWidth = state.theme.Px(100);
-    const int refreshWidth = state.theme.Px(88);
+    const int actionWidth = state.theme.Px(82);
+    const int installedWidth = state.theme.Px(112);
     const int buttonHeight = state.theme.Px(30);
     const int gap = state.theme.Px(8);
 
     MoveWindow(state.appTitle, margin + state.theme.Px(46), state.theme.Px(9),
-               std::max(state.theme.Px(120), width - refreshWidth - margin * 3 - state.theme.Px(44)), state.theme.Px(26), TRUE);
+               std::max(state.theme.Px(120), width - installedWidth - margin * 3 - state.theme.Px(46)), state.theme.Px(26), TRUE);
     MoveWindow(state.appSubtitle, margin + state.theme.Px(46), state.theme.Px(34),
-               std::max(state.theme.Px(120), width - refreshWidth - margin * 3 - state.theme.Px(44)), state.theme.Px(18), TRUE);
-    MoveWindow(state.refresh, width - margin - refreshWidth, state.theme.Px(15), refreshWidth, buttonHeight, TRUE);
+               std::max(state.theme.Px(120), width - installedWidth - margin * 3 - state.theme.Px(46)), state.theme.Px(18), TRUE);
+    MoveWindow(state.installed, width - margin - installedWidth, state.theme.Px(15), installedWidth, buttonHeight, TRUE);
 
     int right = width - margin;
     MoveWindow(state.install, right - actionWidth, state.theme.Px(57), actionWidth, buttonHeight, TRUE);
     right -= actionWidth + gap;
     MoveWindow(state.download, right - actionWidth, state.theme.Px(57), actionWidth, buttonHeight, TRUE);
+    right -= actionWidth + gap;
+    MoveWindow(state.refresh, right - actionWidth, state.theme.Px(57), actionWidth, buttonHeight, TRUE);
     right -= actionWidth + state.theme.Px(14);
     const int searchWidth = std::max(state.theme.Px(160), right - margin);
     MoveWindow(state.search, margin, state.theme.Px(57), searchWidth, buttonHeight, TRUE);
@@ -1356,6 +1479,11 @@ void ApplyFilter(CatalogWindow &state)
         state.filtered.push_back(entry.second);
 
     state.selected = -1;
+    state.worker.CancelDetails();
+    state.generation = 0;
+    StopSpinner(state);
+    StopSizeAnimation(state);
+    HideBackgroundProgress(state);
     UpdateActionButtons(state);
     SendMessageW(state.list, LVM_SETITEMCOUNT, static_cast<WPARAM>(state.filtered.size()), LVSICF_NOSCROLL | LVSICF_NOINVALIDATEALL);
     InvalidateRect(state.list, nullptr, FALSE);
@@ -1407,6 +1535,39 @@ void StartSpinner(CatalogWindow &state)
         return;
     SetTimer(state.window, TimerSpinner, 90, nullptr);
     state.spinning = true;
+}
+
+void StopSizeAnimation(CatalogWindow &state)
+{
+    if (!state.sizeAnimating)
+        return;
+    KillTimer(state.window, TimerSize);
+    state.sizeAnimating = false;
+    state.sizeDotPhase = 1;
+}
+
+void StartSizeAnimation(CatalogWindow &state)
+{
+    StopSizeAnimation(state);
+    state.sizeAnimating = true;
+    state.sizeDotPhase = 1;
+    SetTimer(state.window, TimerSize, 350, nullptr);
+}
+
+void AdvanceSizeAnimation(CatalogWindow &state)
+{
+    if (!state.sizeAnimating)
+        return;
+    state.sizeDotPhase = state.sizeDotPhase == 3 ? 1 : state.sizeDotPhase + 1;
+    for (InfoBlock &block : state.info.blocks)
+    {
+        if (block.kind == BlockKind::Field && block.label == L"Size")
+        {
+            block.text.assign(state.sizeDotPhase, L'.');
+            InvalidateRect(state.info.window, nullptr, FALSE);
+            break;
+        }
+    }
 }
 
 void SetInfoBlocks(CatalogWindow &state, const GuiPackage &package, const DetailResult *result)
@@ -1608,6 +1769,32 @@ void SetInfoBlocks(CatalogWindow &state, const GuiPackage &package, const Detail
                 selected.accent = state.theme.dim;
             }
             blocks.push_back(std::move(selected));
+            if (!result->selectedArchitecture.empty())
+            {
+                InfoBlock architecture;
+                architecture.kind = BlockKind::Field;
+                architecture.label = L"Architecture";
+                architecture.text = WideFromUtf8(result->selectedArchitecture);
+                blocks.push_back(std::move(architecture));
+            }
+            if (!result->installerUrl.empty())
+            {
+                InfoBlock size;
+                size.kind = BlockKind::Field;
+                size.label = L"Size";
+                if (result->sizePending)
+                    size.text = L".";
+                else if (result->sizeKnown)
+                    size.text = FormatByteCount(result->installerSize) + L" (" +
+                                FormatCount(result->installerSize) + L" bytes)";
+                else
+                {
+                    size.text = result->sizeError.empty() ? L"not reported" : L"not reported by server";
+                    size.useAccent = true;
+                    size.accent = state.theme.dim;
+                }
+                blocks.push_back(std::move(size));
+            }
             if (!result->installerUrl.empty())
             {
                 InfoBlock url;
@@ -1634,10 +1821,12 @@ void SetInfoBlocks(CatalogWindow &state, const GuiPackage &package, const Detail
 
 void ShowDetails(CatalogWindow &state)
 {
+    StopSizeAnimation(state);
     if (state.selected < 0 || static_cast<std::size_t>(state.selected) >= state.filtered.size())
     {
         state.worker.CancelDetails();
         StopSpinner(state);
+        HideBackgroundProgress(state);
         state.info.blocks.clear();
         RelayoutInfo(state.info);
         return;
@@ -1651,6 +1840,7 @@ void ShowDetails(CatalogWindow &state)
         state.worker.CancelDetails();
         state.generation = 0;
         StopSpinner(state);
+        HideBackgroundProgress(state);
         SetInfoBlocks(state, package, &cached->second);
         return;
     }
@@ -1663,6 +1853,7 @@ void ShowDetails(CatalogWindow &state)
     state.generation = state.worker.RequestDetails(record);
     SetInfoBlocks(state, package, nullptr);
     StartSpinner(state);
+    ShowBackgroundProgress(state, L"Loading package details", L"Fetching the signed installer manifest…");
 }
 
 void UpdateActionButtons(CatalogWindow &state)
@@ -1671,6 +1862,7 @@ void UpdateActionButtons(CatalogWindow &state)
     EnableWindow(state.install, selected && !state.loading && !state.operationBusy);
     EnableWindow(state.download, selected && !state.loading && !state.operationBusy);
     EnableWindow(state.refresh, !state.loading && !state.operationBusy);
+    EnableWindow(state.installed, !state.operationBusy);
 }
 
 void SetOperationMarquee(CatalogWindow &state, bool marquee)
@@ -1699,6 +1891,32 @@ void SetOperationMarquee(CatalogWindow &state, bool marquee)
     }
 }
 
+void ShowBackgroundProgress(CatalogWindow &state, const wchar_t *title, const wchar_t *detail)
+{
+    if (state.operationBusy)
+        return;
+    state.backgroundProgress = true;
+    state.operationVisible = true;
+    SetWindowTextW(state.operationTitle, title);
+    SetWindowTextW(state.operationDetail, detail);
+    SetWindowTextW(state.operationPercent, L"");
+    SendMessageW(state.operationProgress, PBM_SETBARCOLOR, 0, state.theme.accent);
+    SetOperationMarquee(state, true);
+    LayoutWindow(state);
+    InvalidateRect(state.window, nullptr, TRUE);
+}
+
+void HideBackgroundProgress(CatalogWindow &state)
+{
+    if (!state.backgroundProgress || state.operationBusy)
+        return;
+    state.backgroundProgress = false;
+    state.operationVisible = false;
+    SetOperationMarquee(state, false);
+    LayoutWindow(state);
+    InvalidateRect(state.window, nullptr, TRUE);
+}
+
 void BeginOperation(CatalogWindow &state, bool install)
 {
     if (state.operationBusy || state.selected < 0 || static_cast<std::size_t>(state.selected) >= state.filtered.size())
@@ -1710,6 +1928,7 @@ void BeginOperation(CatalogWindow &state, bool install)
     record.version = package.utf8Version;
     record.manifestHash = package.manifestHash;
 
+    state.backgroundProgress = false;
     state.operationVisible = true;
     state.operationBusy = true;
     SetWindowTextW(state.operationTitle, (std::wstring(L"Preparing ") + package.name).c_str());
@@ -1844,6 +2063,8 @@ void CreateChildren(CatalogWindow &state)
                                      0, 0, 10, 10, state.window, reinterpret_cast<HMENU>(IdDownload), instance, nullptr);
     state.refresh = CreateWindowExW(0, L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                     0, 0, 10, 10, state.window, reinterpret_cast<HMENU>(IdRefresh), instance, nullptr);
+    state.installed = CreateWindowExW(0, L"BUTTON", L"Installed apps", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                      0, 0, 10, 10, state.window, reinterpret_cast<HMENU>(IdInstalled), instance, nullptr);
 
     state.tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_FULLROWSELECT | TVS_SHOWSELALWAYS | TVS_TRACKSELECT | TVS_NOHSCROLL,
@@ -1894,7 +2115,7 @@ void CreateChildren(CatalogWindow &state)
     SendMessageW(state.operationProgress, PBM_SETBARCOLOR, 0, state.theme.accent);
     SendMessageW(state.operationProgress, PBM_SETBKCOLOR, 0, state.theme.window);
 
-    for (HWND child : {state.search, state.install, state.download, state.refresh, state.tree, state.list, state.status,
+    for (HWND child : {state.search, state.install, state.download, state.refresh, state.installed, state.tree, state.list, state.status,
                        state.operationDetail})
         SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(state.theme.ui), TRUE);
     SendMessageW(state.appTitle, WM_SETFONT, reinterpret_cast<WPARAM>(state.theme.title), TRUE);
@@ -1943,6 +2164,10 @@ LRESULT HandleNotify(CatalogWindow &state, LPARAM lParam)
             const NMLISTVIEW *view = reinterpret_cast<const NMLISTVIEW *>(lParam);
             if ((view->uChanged & LVIF_STATE) && (view->uNewState & LVIS_SELECTED))
             {
+                state.worker.CancelDetails();
+                state.generation = 0;
+                StopSpinner(state);
+                StopSizeAnimation(state);
                 state.selected = view->iItem;
                 UpdateActionButtons(state);
                 SetTimer(state.window, TimerSelect, 160, nullptr);
@@ -2015,9 +2240,8 @@ LRESULT CALLBACK CatalogProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             RECT headerLine{0, header.bottom - 1, client.right, header.bottom};
             FillRect(dc, &headerLine, state->theme.lineBrush);
             const int markSize = state->theme.Px(36);
-            HICON appIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_ROSGET));
-            if (appIcon)
-                DrawIconEx(dc, state->theme.Px(11), state->theme.Px(9), appIcon, markSize, markSize, 0, nullptr, DI_NORMAL);
+            if (state->theme.mark)
+                DrawIconEx(dc, state->theme.Px(11), state->theme.Px(9), state->theme.mark, markSize, markSize, 0, nullptr, DI_NORMAL);
             if (state->operationVisible)
             {
                 RECT statusRect{};
@@ -2080,6 +2304,11 @@ LRESULT CALLBACK CatalogProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                 InvalidateRect(state->info.window, nullptr, FALSE);
                 return 0;
             }
+            if (wParam == TimerSize)
+            {
+                AdvanceSizeAnimation(*state);
+                return 0;
+            }
             return 0;
         case WM_COMMAND:
             switch (LOWORD(wParam))
@@ -2099,11 +2328,26 @@ LRESULT CALLBACK CatalogProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                     {
                         state->loading = true;
                         state->cache.clear();
+                        state->worker.CancelDetails();
+                        state->generation = 0;
+                        StopSpinner(*state);
+                        StopSizeAnimation(*state);
                         UpdateStatusBar(*state);
                         UpdateActionButtons(*state);
+                        ShowBackgroundProgress(*state, L"Loading winget catalog", L"Refreshing the signed package index…");
                         state->worker.RequestCatalog(true);
                     }
                     return 0;
+                case IdInstalled:
+                {
+                    const Status status = ShowInstalledAppsManager(window);
+                    if (!status)
+                    {
+                        const std::wstring message = WideFromUtf8(status.message);
+                        MessageBoxW(window, message.c_str(), L"Installed apps", MB_OK | MB_ICONERROR);
+                    }
+                    return 0;
+                }
                 case IDOK:
                     if (GetFocus() == state->search)
                         SetFocus(state->list);
@@ -2203,6 +2447,7 @@ LRESULT CALLBACK CatalogProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         {
             std::unique_ptr<CatalogResult> result(reinterpret_cast<CatalogResult *>(lParam));
             state->loading = false;
+            HideBackgroundProgress(*state);
             UpdateActionButtons(*state);
             if (!result->ok)
             {
@@ -2252,9 +2497,17 @@ LRESULT CALLBACK CatalogProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             if (result->stage >= 2)
             {
                 StopSpinner(*state);
+                HideBackgroundProgress(*state);
+            }
+            if (result->stage >= 3)
+            {
                 state->cache[package.utf8Id + "/" + package.utf8Version] = *result;
             }
             SetInfoBlocks(*state, package, result.get());
+            if (result->sizePending)
+                StartSizeAnimation(*state);
+            else
+                StopSizeAnimation(*state);
             return 0;
         }
         case MessageOperationUpdate:
@@ -2268,6 +2521,7 @@ LRESULT CALLBACK CatalogProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         }
         case WM_DESTROY:
             StopSpinner(*state);
+            StopSizeAnimation(*state);
             state->worker.Stop();
             if (state->treeImages)
                 ImageList_Destroy(state->treeImages);
@@ -2344,11 +2598,16 @@ Status RunCatalogGui(SourceManager &source, const std::string &initialQuery)
     UpdateWindow(window);
     UpdateStatusBar(state);
 
+    MessageBoxW(window,
+                L"The winget catalog contains applications published for Windows. Some packages may not install or run correctly on ReactOS yet.",
+                L"rosget compatibility notice", MB_OK | MB_ICONWARNING);
+
     if (!state.worker.Start(window, &source))
     {
         DestroyWindow(window);
         return Status::Fail(ERROR_NOT_ENOUGH_MEMORY, "cannot start the catalog worker thread");
     }
+    ShowBackgroundProgress(state, L"Loading winget catalog", L"Opening the signed package index…");
     state.worker.RequestCatalog(false);
     UpdateActionButtons(state);
 

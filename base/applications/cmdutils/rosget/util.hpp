@@ -28,6 +28,7 @@ std::wstring FileNameFromUrl(std::string_view url);
 std::wstring LocalCacheDirectory();
 std::wstring TemporaryDirectory();
 Status EnsureDirectory(std::wstring_view path);
+Status AtomicReplaceFile(std::wstring_view source, std::wstring_view destination, std::string_view description);
 Status ReadFileBytes(std::wstring_view path, std::vector<std::uint8_t> &bytes,
                      std::size_t maximumSize = static_cast<std::size_t>(-1));
 Status WriteFileBytes(std::wstring_view path, const std::vector<std::uint8_t> &bytes);
