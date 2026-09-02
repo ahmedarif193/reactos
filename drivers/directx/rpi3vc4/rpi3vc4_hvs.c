@@ -8,6 +8,33 @@
 #include "rpi3vc4.h"
 #include "softgpu_2d_core.h"
 
+typedef enum _RPI3VC4_HVS_SCALING
+{
+    Rpi3Vc4HvsScalingNone,
+    Rpi3Vc4HvsScalingPpf,
+    Rpi3Vc4HvsScalingTpz
+} RPI3VC4_HVS_SCALING;
+
+typedef struct _RPI3VC4_HVS_OVERLAY_PLANE
+{
+    PHYSICAL_ADDRESS LumaPhysical;
+    PHYSICAL_ADDRESS ChromaPhysical;
+    ULONG LumaPitch;
+    ULONG ChromaPitch;
+    ULONG SourceWidth;
+    ULONG SourceHeight;
+    ULONG DestinationX;
+    ULONG DestinationY;
+    ULONG DestinationWidth;
+    ULONG DestinationHeight;
+    ULONG InfoFlags;
+} RPI3VC4_HVS_OVERLAY_PLANE, *PRPI3VC4_HVS_OVERLAY_PLANE;
+
+static BOOLEAN
+Rpi3Vc4WaitForDisplayList(
+    _In_ PRPI3VC4_CONTEXT Context,
+    _In_ ULONG Head);
+
 static PULONG
 Rpi3Vc4Register(
     _In_ PVOID Base,
@@ -454,6 +481,722 @@ Rpi3Vc4EmitPlane(
     return RPI3VC4_HVS_PLANE_DWORDS;
 }
 
+static RPI3VC4_HVS_SCALING
+Rpi3Vc4GetScalingMode(
+    _In_ ULONG Source,
+    _In_ ULONG Destination)
+{
+    if (Destination == Source)
+        return Rpi3Vc4HvsScalingNone;
+    if ((ULONGLONG)3 * Destination >= (ULONGLONG)2 * Source)
+        return Rpi3Vc4HvsScalingPpf;
+    return Rpi3Vc4HvsScalingTpz;
+}
+
+static ULONG
+Rpi3Vc4GetScalerField(
+    _In_ RPI3VC4_HVS_SCALING Horizontal,
+    _In_ RPI3VC4_HVS_SCALING Vertical)
+{
+    if (Horizontal == Rpi3Vc4HvsScalingPpf &&
+        Vertical == Rpi3Vc4HvsScalingPpf)
+    {
+        return RPI3VC4_HVS_SCL_H_PPF_V_PPF;
+    }
+    if (Horizontal == Rpi3Vc4HvsScalingTpz &&
+        Vertical == Rpi3Vc4HvsScalingPpf)
+    {
+        return RPI3VC4_HVS_SCL_H_TPZ_V_PPF;
+    }
+    if (Horizontal == Rpi3Vc4HvsScalingPpf &&
+        Vertical == Rpi3Vc4HvsScalingTpz)
+    {
+        return RPI3VC4_HVS_SCL_H_PPF_V_TPZ;
+    }
+    if (Horizontal == Rpi3Vc4HvsScalingTpz &&
+        Vertical == Rpi3Vc4HvsScalingTpz)
+    {
+        return RPI3VC4_HVS_SCL_H_TPZ_V_TPZ;
+    }
+    if (Horizontal == Rpi3Vc4HvsScalingPpf &&
+        Vertical == Rpi3Vc4HvsScalingNone)
+    {
+        return RPI3VC4_HVS_SCL_H_PPF_V_NONE;
+    }
+    if (Horizontal == Rpi3Vc4HvsScalingNone &&
+        Vertical == Rpi3Vc4HvsScalingPpf)
+    {
+        return RPI3VC4_HVS_SCL_H_NONE_V_PPF;
+    }
+    if (Horizontal == Rpi3Vc4HvsScalingNone &&
+        Vertical == Rpi3Vc4HvsScalingTpz)
+    {
+        return RPI3VC4_HVS_SCL_H_NONE_V_TPZ;
+    }
+    if (Horizontal == Rpi3Vc4HvsScalingTpz &&
+        Vertical == Rpi3Vc4HvsScalingNone)
+    {
+        return RPI3VC4_HVS_SCL_H_TPZ_V_NONE;
+    }
+    return 0;
+}
+
+static BOOLEAN
+Rpi3Vc4AppendDisplayWord(
+    _Out_writes_(Capacity) PULONG List,
+    _In_ ULONG Capacity,
+    _Inout_ PULONG Count,
+    _In_ ULONG Value)
+{
+    if (*Count >= Capacity)
+        return FALSE;
+    List[(*Count)++] = Value;
+    return TRUE;
+}
+
+static BOOLEAN
+Rpi3Vc4WriteTpz(
+    _Out_writes_(Capacity) PULONG List,
+    _In_ ULONG Capacity,
+    _Inout_ PULONG Count,
+    _In_ ULONG Source,
+    _In_ ULONG Destination)
+{
+    ULONGLONG Scale64;
+    ULONG Scale;
+    ULONG Reciprocal;
+
+    if (Source == 0 || Destination == 0)
+        return FALSE;
+    Scale64 = ((ULONGLONG)Source << 16) / Destination;
+    if (Scale64 == 0 || Scale64 > RPI3VC4_HVS_TPZ_SCALE_MASK)
+        return FALSE;
+    Scale = (ULONG)Scale64;
+    Reciprocal = MAXULONG / Scale;
+    if (Reciprocal > RPI3VC4_HVS_TPZ_RECIP_MASK)
+        Reciprocal = RPI3VC4_HVS_TPZ_RECIP_MASK;
+    return Rpi3Vc4AppendDisplayWord(
+               List,
+               Capacity,
+               Count,
+               Scale << RPI3VC4_HVS_TPZ_SCALE_SHIFT) &&
+           Rpi3Vc4AppendDisplayWord(List,
+                                    Capacity,
+                                    Count,
+                                    Reciprocal);
+}
+
+static BOOLEAN
+Rpi3Vc4WritePpf(
+    _Out_writes_(Capacity) PULONG List,
+    _In_ ULONG Capacity,
+    _Inout_ PULONG Count,
+    _In_ ULONG Source,
+    _In_ ULONG Destination,
+    _In_ BOOLEAN Chroma)
+{
+    ULONGLONG Scale64;
+    ULONGLONG Remainder;
+    LONG Phase;
+
+    if (Source == 0 || Destination == 0)
+        return FALSE;
+    Scale64 = ((ULONGLONG)Source << 16) / Destination;
+    if (Scale64 == 0 || Scale64 > RPI3VC4_HVS_PPF_SCALE_MASK)
+        return FALSE;
+    if (!Chroma)
+        Scale64 &= ~1ULL;
+    Remainder = ((ULONGLONG)Source << 16) -
+                (ULONGLONG)Destination * Scale64;
+    Phase = Chroma ? -16 : -32;
+    Phase += (LONG)(Remainder >> 11);
+    if (Phase >= 64)
+        Phase = 63;
+    return Rpi3Vc4AppendDisplayWord(
+               List,
+               Capacity,
+               Count,
+               RPI3VC4_HVS_PPF_AGC |
+                   ((ULONG)Scale64 <<
+                    RPI3VC4_HVS_PPF_SCALE_SHIFT) |
+                   ((ULONG)Phase & RPI3VC4_HVS_PPF_PHASE_MASK));
+}
+
+static BOOLEAN
+Rpi3Vc4WriteScalingParameters(
+    _Out_writes_(Capacity) PULONG List,
+    _In_ ULONG Capacity,
+    _Inout_ PULONG Count,
+    _In_ ULONG SourceWidth,
+    _In_ ULONG SourceHeight,
+    _In_ ULONG DestinationWidth,
+    _In_ ULONG DestinationHeight,
+    _In_ RPI3VC4_HVS_SCALING Horizontal,
+    _In_ RPI3VC4_HVS_SCALING Vertical,
+    _In_ BOOLEAN Chroma)
+{
+    if (Horizontal == Rpi3Vc4HvsScalingPpf &&
+        !Rpi3Vc4WritePpf(List,
+                          Capacity,
+                          Count,
+                          SourceWidth,
+                          DestinationWidth,
+                          Chroma))
+    {
+        return FALSE;
+    }
+    if (Vertical == Rpi3Vc4HvsScalingPpf &&
+        (!Rpi3Vc4WritePpf(List,
+                           Capacity,
+                           Count,
+                           SourceHeight,
+                           DestinationHeight,
+                           Chroma) ||
+         !Rpi3Vc4AppendDisplayWord(List,
+                                   Capacity,
+                                   Count,
+                                   RPI3VC4_HVS_CONTEXT_INIT)))
+    {
+        return FALSE;
+    }
+    if (Horizontal == Rpi3Vc4HvsScalingTpz &&
+        !Rpi3Vc4WriteTpz(List,
+                          Capacity,
+                          Count,
+                          SourceWidth,
+                          DestinationWidth))
+    {
+        return FALSE;
+    }
+    if (Vertical == Rpi3Vc4HvsScalingTpz &&
+        (!Rpi3Vc4WriteTpz(List,
+                           Capacity,
+                           Count,
+                           SourceHeight,
+                           DestinationHeight) ||
+         !Rpi3Vc4AppendDisplayWord(List,
+                                   Capacity,
+                                   Count,
+                                   RPI3VC4_HVS_CONTEXT_INIT)))
+    {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static ULONG
+Rpi3Vc4PackFilterWord(
+    _In_ LONG Coefficient0,
+    _In_ LONG Coefficient1,
+    _In_ LONG Coefficient2)
+{
+    return ((ULONG)Coefficient0 & 0x1ffUL) |
+           (((ULONG)Coefficient1 & 0x1ffUL) << 9) |
+           (((ULONG)Coefficient2 & 0x1ffUL) << 18);
+}
+
+static VOID
+Rpi3Vc4UploadScalingFilter(
+    _Inout_ PRPI3VC4_CONTEXT Context)
+{
+    static const LONG Coefficients[16] =
+    {
+        0, -2, -6, -8, -10, -8, -3, 2,
+        18, 50, 82, 119, 155, 187, 213, 227
+    };
+    PULONG DisplayList;
+    ULONG Kernel[6];
+    ULONG Index;
+
+    Kernel[0] = Rpi3Vc4PackFilterWord(Coefficients[0],
+                                      Coefficients[1],
+                                      Coefficients[2]);
+    Kernel[1] = Rpi3Vc4PackFilterWord(Coefficients[3],
+                                      Coefficients[4],
+                                      Coefficients[5]);
+    Kernel[2] = Rpi3Vc4PackFilterWord(Coefficients[6],
+                                      Coefficients[7],
+                                      Coefficients[8]);
+    Kernel[3] = Rpi3Vc4PackFilterWord(Coefficients[9],
+                                      Coefficients[10],
+                                      Coefficients[11]);
+    Kernel[4] = Rpi3Vc4PackFilterWord(Coefficients[12],
+                                      Coefficients[13],
+                                      Coefficients[14]);
+    Kernel[5] = Rpi3Vc4PackFilterWord(Coefficients[15],
+                                      Coefficients[15],
+                                      0);
+
+    DisplayList = Rpi3Vc4Register(Context->HvsBase,
+                                  RPI3VC4_HVS_DLIST_OFFSET);
+    for (Index = 0; Index < RPI3VC4_HVS_FILTER_DWORDS; ++Index)
+    {
+        ULONG SourceIndex;
+
+        SourceIndex = Index < RTL_NUMBER_OF(Kernel) ?
+                          Index :
+                          RPI3VC4_HVS_FILTER_DWORDS - Index - 1;
+        WRITE_REGISTER_ULONG(
+            &DisplayList[RPI3VC4_HVS_FILTER_OFFSET + Index],
+            Kernel[SourceIndex]);
+    }
+}
+
+static BOOLEAN
+Rpi3Vc4SurfacePlaneFits(
+    _In_ SIZE_T AllocationSize,
+    _In_ ULONG Offset,
+    _In_ ULONG Pitch,
+    _In_ ULONG Rows,
+    _In_ ULONG RowBytes)
+{
+    ULONGLONG End;
+
+    if (Pitch == 0 || Rows == 0 || RowBytes == 0 || RowBytes > Pitch)
+        return FALSE;
+    End = (ULONGLONG)Offset +
+          (ULONGLONG)(Rows - 1) * Pitch + RowBytes;
+    return End <= AllocationSize;
+}
+
+static NTSTATUS
+Rpi3Vc4ReadOverlayPrivateData(
+    _In_reads_bytes_(PrivateDataSize) const VOID *PrivateData,
+    _In_ ULONG PrivateDataSize,
+    _Out_ PULONG InfoFlags)
+{
+    const SOFTGPU_OVERLAY_PRIVATE_DATA *Data;
+
+    if (PrivateData == NULL ||
+        PrivateDataSize != sizeof(SOFTGPU_OVERLAY_PRIVATE_DATA))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Data = PrivateData;
+    if (Data->Magic != SOFTGPU_OVERLAY_PRIVATE_MAGIC ||
+        Data->Version != SOFTGPU_OVERLAY_PRIVATE_VERSION ||
+        (Data->InfoFlags & ~SOFTGPU_OVERLAY_INFO_ALLOWED) != 0 ||
+        Data->FlipFlags != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *InfoFlags = Data->InfoFlags;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+Rpi3Vc4ReadOverlayInfo(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ const DXGK_OVERLAYINFO *Info,
+    _Out_ PRPI3VC4_OVERLAY State)
+{
+    PSOFTGPU_ALLOC Allocation;
+    ULONGLONG AllocationEnd;
+    ULONGLONG LumaStorageEnd;
+    NTSTATUS Status;
+
+    if (Device == NULL || Info == NULL || State == NULL ||
+        Info->hAllocation == NULL ||
+        Info->SegmentId != SOFTGPU_SEGMENT_ID ||
+        Info->PhysicalAddress.QuadPart < 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Allocation = (PSOFTGPU_ALLOC)Info->hAllocation;
+    if (Allocation->Magic != SOFTGPU_ALLOC_MAGIC ||
+        Allocation->Format != SOFTGPU_D3DDDIFMT_NV12 ||
+        Allocation->PlaneCount != 2 ||
+        Allocation->Width == 0 || Allocation->Height == 0 ||
+        Allocation->Width > 0xfffUL ||
+        Allocation->Height > 0xfffUL ||
+        (Allocation->Width & 1) != 0 ||
+        (Allocation->Height & 1) != 0 ||
+        Allocation->StorageHeight < Allocation->Height ||
+        Allocation->Pitch != Allocation->PlanePitches[0] ||
+        Allocation->PlanePitches[0] > 0xffffUL ||
+        Allocation->PlanePitches[1] > 0xffffUL ||
+        !Rpi3Vc4SurfacePlaneFits(Allocation->Size,
+                                 Allocation->PlaneOffsets[0],
+                                 Allocation->PlanePitches[0],
+                                 Allocation->Height,
+                                 Allocation->Width) ||
+        !Rpi3Vc4SurfacePlaneFits(Allocation->Size,
+                                 Allocation->PlaneOffsets[1],
+                                 Allocation->PlanePitches[1],
+                                 Allocation->Height / 2,
+                                 Allocation->Width))
+    {
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+    LumaStorageEnd =
+        (ULONGLONG)Allocation->PlaneOffsets[0] +
+        (ULONGLONG)Allocation->PlanePitches[0] *
+            Allocation->StorageHeight;
+    if (LumaStorageEnd > Allocation->Size ||
+        Allocation->PlaneOffsets[1] < LumaStorageEnd)
+    {
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+    if (Info->SrcRect.left < 0 || Info->SrcRect.top < 0 ||
+        Info->SrcRect.right <= Info->SrcRect.left ||
+        Info->SrcRect.bottom <= Info->SrcRect.top ||
+        Info->SrcRect.right > (LONG)Allocation->Width ||
+        Info->SrcRect.bottom > (LONG)Allocation->Height ||
+        ((Info->SrcRect.left | Info->SrcRect.top |
+          Info->SrcRect.right | Info->SrcRect.bottom) & 1) != 0 ||
+        Info->DstRect.right <= Info->DstRect.left ||
+        Info->DstRect.bottom <= Info->DstRect.top)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (Allocation->Size == 0 ||
+        (ULONGLONG)Info->PhysicalAddress.QuadPart >
+            RPI3VC4_HIGHEST_SCANOUT_ADDRESS)
+    {
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+    AllocationEnd = (ULONGLONG)Info->PhysicalAddress.QuadPart +
+                    Allocation->Size - 1;
+    if (AllocationEnd < (ULONGLONG)Info->PhysicalAddress.QuadPart ||
+        AllocationEnd > RPI3VC4_HIGHEST_SCANOUT_ADDRESS)
+    {
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+
+    RtlZeroMemory(State, sizeof(*State));
+    Status = Rpi3Vc4ReadOverlayPrivateData(
+                 Info->pPrivateDriverData,
+                 Info->PrivateDriverDataSize,
+                 &State->InfoFlags);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    State->Allocation = Allocation;
+    State->PhysicalAddress = Info->PhysicalAddress;
+    State->SegmentId = Info->SegmentId;
+    State->SourceRect = Info->SrcRect;
+    State->DestinationRect = Info->DstRect;
+    State->Enabled = TRUE;
+    return STATUS_SUCCESS;
+}
+
+static BOOLEAN
+Rpi3Vc4BuildOverlayPlane(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ const RPI3VC4_OVERLAY *Overlay,
+    _Out_ PRPI3VC4_HVS_OVERLAY_PLANE Plane)
+{
+    const RECT *Source;
+    const RECT *Destination;
+    RECT Clipped;
+    ULONGLONG SourceWidth;
+    ULONGLONG SourceHeight;
+    ULONGLONG DestinationWidth;
+    ULONGLONG DestinationHeight;
+    ULONGLONG MappedLeft;
+    ULONGLONG MappedTop;
+    ULONGLONG MappedRight;
+    ULONGLONG MappedBottom;
+    ULONGLONG LumaOffset;
+    ULONGLONG ChromaOffset;
+
+    if (!Overlay->Enabled)
+        return FALSE;
+    Source = &Overlay->SourceRect;
+    Destination = &Overlay->DestinationRect;
+    Clipped.left = max(Destination->left, 0);
+    Clipped.top = max(Destination->top, 0);
+    Clipped.right = min(Destination->right, (LONG)Device->Width);
+    Clipped.bottom = min(Destination->bottom, (LONG)Device->Height);
+    if (Clipped.right <= Clipped.left || Clipped.bottom <= Clipped.top)
+        return FALSE;
+
+    SourceWidth = Source->right - Source->left;
+    SourceHeight = Source->bottom - Source->top;
+    DestinationWidth = (ULONGLONG)
+        ((LONGLONG)Destination->right - Destination->left);
+    DestinationHeight = (ULONGLONG)
+        ((LONGLONG)Destination->bottom - Destination->top);
+    MappedLeft = Source->left +
+                 ((ULONGLONG)((LONGLONG)Clipped.left -
+                              Destination->left) *
+                  SourceWidth) / DestinationWidth;
+    MappedTop = Source->top +
+                ((ULONGLONG)((LONGLONG)Clipped.top -
+                             Destination->top) *
+                 SourceHeight) / DestinationHeight;
+    MappedRight = Source->left +
+                  (((ULONGLONG)((LONGLONG)Clipped.right -
+                                Destination->left) *
+                    SourceWidth) + DestinationWidth - 1) /
+                  DestinationWidth;
+    MappedBottom = Source->top +
+                   (((ULONGLONG)((LONGLONG)Clipped.bottom -
+                                 Destination->top) *
+                     SourceHeight) + DestinationHeight - 1) /
+                   DestinationHeight;
+
+    MappedLeft &= ~1ULL;
+    MappedTop &= ~1ULL;
+    MappedRight = (MappedRight + 1) & ~1ULL;
+    MappedBottom = (MappedBottom + 1) & ~1ULL;
+    MappedLeft = max(MappedLeft, (ULONGLONG)Source->left);
+    MappedTop = max(MappedTop, (ULONGLONG)Source->top);
+    MappedRight = min(MappedRight, (ULONGLONG)Source->right);
+    MappedBottom = min(MappedBottom, (ULONGLONG)Source->bottom);
+    if (MappedRight <= MappedLeft || MappedBottom <= MappedTop)
+        return FALSE;
+
+    LumaOffset = Overlay->Allocation->PlaneOffsets[0] +
+                 MappedTop * Overlay->Allocation->PlanePitches[0] +
+                 MappedLeft;
+    ChromaOffset = Overlay->Allocation->PlaneOffsets[1] +
+                   (MappedTop / 2) *
+                       Overlay->Allocation->PlanePitches[1] +
+                   MappedLeft;
+    Plane->LumaPhysical.QuadPart =
+        Overlay->PhysicalAddress.QuadPart + LumaOffset;
+    Plane->ChromaPhysical.QuadPart =
+        Overlay->PhysicalAddress.QuadPart + ChromaOffset;
+    Plane->LumaPitch = Overlay->Allocation->PlanePitches[0];
+    Plane->ChromaPitch = Overlay->Allocation->PlanePitches[1];
+    Plane->SourceWidth = (ULONG)(MappedRight - MappedLeft);
+    Plane->SourceHeight = (ULONG)(MappedBottom - MappedTop);
+    Plane->DestinationX = Clipped.left;
+    Plane->DestinationY = Clipped.top;
+    Plane->DestinationWidth = Clipped.right - Clipped.left;
+    Plane->DestinationHeight = Clipped.bottom - Clipped.top;
+    Plane->InfoFlags = Overlay->InfoFlags;
+    return TRUE;
+}
+
+static NTSTATUS
+Rpi3Vc4EmitNv12Overlay(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_ PRPI3VC4_CONTEXT Context,
+    _In_ const RPI3VC4_OVERLAY *Overlay,
+    _Out_writes_(Capacity) PULONG List,
+    _In_ ULONG Capacity,
+    _Inout_ PULONG Count)
+{
+    RPI3VC4_HVS_OVERLAY_PLANE Plane;
+    RPI3VC4_HVS_SCALING ChromaHorizontal;
+    RPI3VC4_HVS_SCALING ChromaVertical;
+    RPI3VC4_HVS_SCALING LumaHorizontal;
+    RPI3VC4_HVS_SCALING LumaVertical;
+    ULONG ControlIndex;
+    ULONG PlaneStart;
+    ULONG PlaneDwords;
+    ULONG LbmSize;
+    ULONG Kernel;
+    BOOLEAN UsesPpf;
+
+    if (!Rpi3Vc4BuildOverlayPlane(Device, Overlay, &Plane))
+        return STATUS_SUCCESS;
+
+    ChromaHorizontal = Rpi3Vc4GetScalingMode(
+                           Plane.SourceWidth / 2,
+                           Plane.DestinationWidth);
+    ChromaVertical = Rpi3Vc4GetScalingMode(
+                         Plane.SourceHeight / 2,
+                         Plane.DestinationHeight);
+    LumaHorizontal = Rpi3Vc4GetScalingMode(
+                         Plane.SourceWidth,
+                         Plane.DestinationWidth);
+    LumaVertical = Rpi3Vc4GetScalingMode(
+                       Plane.SourceHeight,
+                       Plane.DestinationHeight);
+
+    /* VC4 performs YUV-to-RGB conversion in the scaler. The chroma channel
+     * must remain enabled when its subsampled dimensions otherwise happen
+     * to match the destination. */
+    if (ChromaHorizontal == Rpi3Vc4HvsScalingNone)
+        ChromaHorizontal = Rpi3Vc4HvsScalingPpf;
+    if (ChromaVertical == Rpi3Vc4HvsScalingNone)
+        ChromaVertical = Rpi3Vc4HvsScalingPpf;
+
+    LbmSize = max(Plane.SourceWidth, Plane.DestinationWidth) * 16UL;
+    LbmSize = (LbmSize + RPI3VC4_HVS_LBM_ALIGNMENT - 1) &
+              ~(RPI3VC4_HVS_LBM_ALIGNMENT - 1);
+    if (LbmSize == 0 || LbmSize > RPI3VC4_HVS_LBM_BYTES)
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+
+    PlaneStart = *Count;
+    ControlIndex = *Count;
+    if (!Rpi3Vc4AppendDisplayWord(List, Capacity, Count, 0) ||
+        !Rpi3Vc4AppendDisplayWord(
+             List,
+             Capacity,
+             Count,
+             (0xffUL << RPI3VC4_HVS_POS0_ALPHA_SHIFT) |
+                 ((Plane.DestinationY & 0xfffUL) <<
+                  RPI3VC4_HVS_POS0_Y_SHIFT) |
+                 (Plane.DestinationX & 0xfffUL)) ||
+        !Rpi3Vc4AppendDisplayWord(
+             List,
+             Capacity,
+             Count,
+             ((Plane.DestinationHeight & 0xfffUL) <<
+              RPI3VC4_HVS_POS1_HEIGHT_SHIFT) |
+                 (Plane.DestinationWidth & 0xfffUL)) ||
+        !Rpi3Vc4AppendDisplayWord(
+             List,
+             Capacity,
+             Count,
+             (RPI3VC4_HVS_POS2_ALPHA_FIXED <<
+              RPI3VC4_HVS_POS2_ALPHA_SHIFT) |
+                 ((Plane.SourceHeight & 0xfffUL) <<
+                  RPI3VC4_HVS_POS2_HEIGHT_SHIFT) |
+                 (Plane.SourceWidth & 0xfffUL)) ||
+        !Rpi3Vc4AppendDisplayWord(List,
+                                  Capacity,
+                                  Count,
+                                  RPI3VC4_HVS_CONTEXT_INIT) ||
+        !Rpi3Vc4AppendDisplayWord(
+             List,
+             Capacity,
+             Count,
+             Rpi3Vc4GpuAddress(Context, Plane.LumaPhysical)) ||
+        !Rpi3Vc4AppendDisplayWord(
+             List,
+             Capacity,
+             Count,
+             Rpi3Vc4GpuAddress(Context, Plane.ChromaPhysical)) ||
+        !Rpi3Vc4AppendDisplayWord(List,
+                                  Capacity,
+                                  Count,
+                                  RPI3VC4_HVS_CONTEXT_INIT) ||
+        !Rpi3Vc4AppendDisplayWord(List,
+                                  Capacity,
+                                  Count,
+                                  RPI3VC4_HVS_CONTEXT_INIT) ||
+        !Rpi3Vc4AppendDisplayWord(List,
+                                  Capacity,
+                                  Count,
+                                  Plane.LumaPitch) ||
+        !Rpi3Vc4AppendDisplayWord(List,
+                                  Capacity,
+                                  Count,
+                                  Plane.ChromaPitch))
+    {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    if ((Plane.InfoFlags & SOFTGPU_OVERLAY_INFO_LIMITED_RGB) == 0)
+    {
+        if (!Rpi3Vc4AppendDisplayWord(List,
+                                      Capacity,
+                                      Count,
+                                      RPI3VC4_HVS_CSC0_FULL) ||
+            !Rpi3Vc4AppendDisplayWord(List,
+                                      Capacity,
+                                      Count,
+                                      (Plane.InfoFlags & SOFTGPU_OVERLAY_INFO_BT709)
+                                          ? RPI3VC4_HVS_CSC1_709_FULL
+                                          : RPI3VC4_HVS_CSC1_601_FULL) ||
+            !Rpi3Vc4AppendDisplayWord(List,
+                                      Capacity,
+                                      Count,
+                                      (Plane.InfoFlags & SOFTGPU_OVERLAY_INFO_BT709)
+                                          ? RPI3VC4_HVS_CSC2_709_FULL
+                                          : RPI3VC4_HVS_CSC2_601_FULL))
+        {
+            return STATUS_BUFFER_OVERFLOW;
+        }
+    }
+    else if ((Plane.InfoFlags & SOFTGPU_OVERLAY_INFO_BT709) != 0)
+    {
+        if (!Rpi3Vc4AppendDisplayWord(List,
+                                      Capacity,
+                                      Count,
+                                      RPI3VC4_HVS_CSC0_LIMITED) ||
+            !Rpi3Vc4AppendDisplayWord(List,
+                                      Capacity,
+                                      Count,
+                                      RPI3VC4_HVS_CSC1_709_LIMITED) ||
+            !Rpi3Vc4AppendDisplayWord(List,
+                                      Capacity,
+                                      Count,
+                                      RPI3VC4_HVS_CSC2_709_LIMITED))
+        {
+            return STATUS_BUFFER_OVERFLOW;
+        }
+    }
+    else if (!Rpi3Vc4AppendDisplayWord(List,
+                                       Capacity,
+                                       Count,
+                                       RPI3VC4_HVS_CSC0_LIMITED) ||
+             !Rpi3Vc4AppendDisplayWord(List,
+                                       Capacity,
+                                       Count,
+                                       RPI3VC4_HVS_CSC1_601_LIMITED) ||
+             !Rpi3Vc4AppendDisplayWord(List,
+                                       Capacity,
+                                       Count,
+                                       RPI3VC4_HVS_CSC2_601_LIMITED))
+    {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    if (!Rpi3Vc4AppendDisplayWord(List, Capacity, Count, 0) ||
+        !Rpi3Vc4WriteScalingParameters(
+             List,
+             Capacity,
+             Count,
+             Plane.SourceWidth / 2,
+             Plane.SourceHeight / 2,
+             Plane.DestinationWidth,
+             Plane.DestinationHeight,
+             ChromaHorizontal,
+             ChromaVertical,
+             TRUE) ||
+        !Rpi3Vc4WriteScalingParameters(
+             List,
+             Capacity,
+             Count,
+             Plane.SourceWidth,
+             Plane.SourceHeight,
+             Plane.DestinationWidth,
+             Plane.DestinationHeight,
+             LumaHorizontal,
+             LumaVertical,
+             FALSE))
+    {
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+
+    UsesPpf = ChromaHorizontal == Rpi3Vc4HvsScalingPpf ||
+              ChromaVertical == Rpi3Vc4HvsScalingPpf ||
+              LumaHorizontal == Rpi3Vc4HvsScalingPpf ||
+              LumaVertical == Rpi3Vc4HvsScalingPpf;
+    if (UsesPpf)
+    {
+        Kernel = RPI3VC4_HVS_FILTER_OFFSET &
+                 RPI3VC4_HVS_PPF_KERNEL_MASK;
+        if (!Rpi3Vc4AppendDisplayWord(List, Capacity, Count, Kernel) ||
+            !Rpi3Vc4AppendDisplayWord(List, Capacity, Count, Kernel) ||
+            !Rpi3Vc4AppendDisplayWord(List, Capacity, Count, Kernel) ||
+            !Rpi3Vc4AppendDisplayWord(List, Capacity, Count, Kernel))
+        {
+            return STATUS_BUFFER_OVERFLOW;
+        }
+    }
+
+    PlaneDwords = *Count - PlaneStart;
+    if (PlaneDwords > RPI3VC4_HVS_CTL0_SIZE_MASK)
+        return STATUS_BUFFER_OVERFLOW;
+    List[ControlIndex] =
+        RPI3VC4_HVS_CTL0_VALID |
+        (PlaneDwords << RPI3VC4_HVS_CTL0_SIZE_SHIFT) |
+        (Rpi3Vc4GetScalerField(ChromaHorizontal,
+                               ChromaVertical) <<
+         RPI3VC4_HVS_CTL0_SCL0_SHIFT) |
+        (Rpi3Vc4GetScalerField(LumaHorizontal,
+                               LumaVertical) <<
+         RPI3VC4_HVS_CTL0_SCL1_SHIFT) |
+        RPI3VC4_HVS_FORMAT_NV12;
+    return STATUS_SUCCESS;
+}
+
 static BOOLEAN
 Rpi3Vc4ClipPointer(
     _In_ PSOFTGPU_DEVICE Device,
@@ -669,6 +1412,7 @@ Rpi3Vc4CommitDisplayList(
     ULONG Count;
     ULONG Slot;
     BOOLEAN CursorIncluded;
+    NTSTATUS Status;
 
     Context = (PRPI3VC4_CONTEXT)Device->PlatformContext;
     if (Context == NULL || !Context->DirectScanoutReady)
@@ -689,6 +1433,19 @@ Rpi3Vc4CommitDisplayList(
                      Context->PrimaryWidth,
                      Context->PrimaryHeight,
                      FALSE);
+
+        if (Context->Overlay != NULL)
+        {
+            Status = Rpi3Vc4EmitNv12Overlay(
+                         Device,
+                         Context,
+                         Context->Overlay,
+                         List,
+                         RTL_NUMBER_OF(List),
+                         &Count);
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
 
         {
             ULONG CursorX;
@@ -760,20 +1517,39 @@ Rpi3Vc4UpdateCursorInDisplayList(
     PULONG DisplayList;
     PULONG Cursor;
     ULONG Control;
+    ULONG Offset;
 
     if (!Rpi3Vc4IsPrivateDisplayList(Head))
         return FALSE;
     DisplayList = Rpi3Vc4Register(Context->HvsBase,
                                   RPI3VC4_HVS_DLIST_OFFSET);
-    Cursor = &DisplayList[Head + RPI3VC4_HVS_CURSOR_PLANE_OFFSET];
-    Control = READ_REGISTER_ULONG(&Cursor[0]);
-    if ((Control & RPI3VC4_HVS_CTL0_VALID) == 0 ||
-        ((Control >> RPI3VC4_HVS_CTL0_SIZE_SHIFT) &
-         RPI3VC4_HVS_CTL0_SIZE_MASK) !=
-            RPI3VC4_HVS_PLANE_DWORDS)
+    Cursor = NULL;
+    Offset = 0;
+    while (Offset < RPI3VC4_HVS_DLIST_SLOT_DWORDS)
     {
-        return FALSE;
+        ULONG Size;
+
+        Control = READ_REGISTER_ULONG(&DisplayList[Head + Offset]);
+        if ((Control & RPI3VC4_HVS_CTL0_END) != 0)
+            break;
+        Size = (Control >> RPI3VC4_HVS_CTL0_SIZE_SHIFT) &
+               RPI3VC4_HVS_CTL0_SIZE_MASK;
+        if ((Control & RPI3VC4_HVS_CTL0_VALID) == 0 ||
+            Size == 0 ||
+            Offset > RPI3VC4_HVS_DLIST_SLOT_DWORDS - Size)
+        {
+            return FALSE;
+        }
+        if (Offset != 0 &&
+            Size == RPI3VC4_HVS_PLANE_DWORDS &&
+            (Control & 0xfUL) == RPI3VC4_HVS_FORMAT_RGBA8888)
+        {
+            Cursor = &DisplayList[Head + Offset];
+        }
+        Offset += Size;
     }
+    if (Cursor == NULL)
+        return FALSE;
 
     WRITE_REGISTER_ULONG(
         &Cursor[1],
@@ -873,6 +1649,16 @@ Rpi3Vc4StartScanout(
         Context->OriginalDisplayList & RPI3VC4_HVS_LIST_HEAD_MASK;
     if (!Rpi3Vc4DeriveBusAlias(Context, Device->ScanoutPhys))
         return STATUS_NOT_SUPPORTED;
+    if (RPI3VC4_HVS_FILTER_OFFSET + RPI3VC4_HVS_FILTER_DWORDS >
+            RPI3VC4_HVS_DLIST_DWORDS)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+    Rpi3Vc4UploadScalingFilter(Context);
+#if defined(_M_ARM64)
+    __dsb(_ARM64_BARRIER_SY);
+#endif
+    KeMemoryBarrier();
 
     Status = Rpi3Vc4AllocateScanoutBuffers(Device, Context);
     if (!NT_SUCCESS(Status))
@@ -1008,6 +1794,15 @@ Rpi3Vc4StopScanout(
             if (!Rpi3Vc4QuiesceChannel(Context))
                 return STATUS_DEVICE_BUSY;
         }
+    }
+
+    Context->DirectScanoutReady = FALSE;
+    if (Context->Overlay != NULL)
+    {
+        Context->Overlay->Magic = 0;
+        ExFreePoolWithTag(Context->Overlay,
+                          RPI3VC4_OVERLAY_POOL_TAG);
+        Context->Overlay = NULL;
     }
 
     if (Context->CursorBuffer != NULL)
@@ -1292,6 +2087,245 @@ Rpi3Vc4PresentDisplayOnly(
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS
+Rpi3Vc4CommitOverlayLocked(
+    _Inout_ PSOFTGPU_DEVICE Device)
+{
+    PRPI3VC4_CONTEXT Context;
+    NTSTATUS Status;
+
+    Context = (PRPI3VC4_CONTEXT)Device->PlatformContext;
+    Status = Rpi3Vc4CommitDisplayList(Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!Rpi3Vc4WaitForDisplayList(Context,
+                                   Context->LastSubmittedDisplayList))
+    {
+        return STATUS_DEVICE_BUSY;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+APIENTRY
+SoftGpuPlatformCreateOverlay(
+    _In_ HANDLE AdapterContext,
+    _Inout_ PDXGKARG_CREATEOVERLAY CreateOverlay)
+{
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)AdapterContext;
+    PRPI3VC4_CONTEXT Context;
+    PRPI3VC4_OVERLAY Overlay;
+    RPI3VC4_OVERLAY State;
+    NTSTATUS RollbackStatus;
+    NTSTATUS Status;
+
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC ||
+        CreateOverlay == NULL || CreateOverlay->VidPnSourceId != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    CreateOverlay->hOverlay = NULL;
+    Context = (PRPI3VC4_CONTEXT)Device->PlatformContext;
+    if (Context == NULL || !Context->DirectScanoutReady)
+        return STATUS_DEVICE_NOT_READY;
+
+    Status = Rpi3Vc4ReadOverlayInfo(Device,
+                                    &CreateOverlay->OverlayInfo,
+                                    &State);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Overlay = ExAllocatePoolWithTag(NonPagedPool,
+                                    sizeof(*Overlay),
+                                    RPI3VC4_OVERLAY_POOL_TAG);
+    if (Overlay == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    *Overlay = State;
+    Overlay->Magic = RPI3VC4_OVERLAY_MAGIC;
+    Overlay->Context = Context;
+
+    Status = KeWaitForSingleObject(&Device->PointerMutex,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+    if (Context->Overlay != NULL)
+    {
+        Status = STATUS_GRAPHICS_TOO_MANY_REFERENCES;
+        goto Unlock;
+    }
+    Context->Overlay = Overlay;
+    Status = Rpi3Vc4CommitOverlayLocked(Device);
+    if (!NT_SUCCESS(Status))
+    {
+        Context->Overlay = NULL;
+        RollbackStatus = Rpi3Vc4CommitOverlayLocked(Device);
+        if (!NT_SUCCESS(RollbackStatus))
+            Status = RollbackStatus;
+        goto Unlock;
+    }
+    CreateOverlay->hOverlay = (HANDLE)Overlay;
+
+Unlock:
+    KeReleaseMutex(&Device->PointerMutex, FALSE);
+Failure:
+    if (!NT_SUCCESS(Status))
+    {
+        Overlay->Magic = 0;
+        ExFreePoolWithTag(Overlay, RPI3VC4_OVERLAY_POOL_TAG);
+    }
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+SoftGpuPlatformUpdateOverlay(
+    _In_ HANDLE OverlayContext,
+    _In_ const DXGKARG_UPDATEOVERLAY *UpdateOverlay)
+{
+    PRPI3VC4_OVERLAY Overlay = (PRPI3VC4_OVERLAY)OverlayContext;
+    PRPI3VC4_CONTEXT Context;
+    PSOFTGPU_DEVICE Device;
+    RPI3VC4_OVERLAY Candidate;
+    RPI3VC4_OVERLAY Previous;
+    NTSTATUS RollbackStatus;
+    NTSTATUS Status;
+
+    if (Overlay == NULL ||
+        Overlay->Magic != RPI3VC4_OVERLAY_MAGIC ||
+        Overlay->Context == NULL || UpdateOverlay == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Context = Overlay->Context;
+    Device = Context->Device;
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC ||
+        !Context->DirectScanoutReady)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
+    Status = Rpi3Vc4ReadOverlayInfo(Device,
+                                    &UpdateOverlay->OverlayInfo,
+                                    &Candidate);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Candidate.Magic = RPI3VC4_OVERLAY_MAGIC;
+    Candidate.Context = Context;
+
+    Status = KeWaitForSingleObject(&Device->PointerMutex,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Context->Overlay != Overlay)
+    {
+        Status = STATUS_INVALID_HANDLE;
+        goto Unlock;
+    }
+    Previous = *Overlay;
+    *Overlay = Candidate;
+    Status = Rpi3Vc4CommitOverlayLocked(Device);
+    if (!NT_SUCCESS(Status))
+    {
+        *Overlay = Previous;
+        RollbackStatus = Rpi3Vc4CommitOverlayLocked(Device);
+        if (!NT_SUCCESS(RollbackStatus))
+            Status = RollbackStatus;
+    }
+
+Unlock:
+    KeReleaseMutex(&Device->PointerMutex, FALSE);
+    return Status;
+}
+
+NTSTATUS
+APIENTRY
+SoftGpuPlatformFlipOverlay(
+    _In_ HANDLE OverlayContext,
+    _In_ const DXGKARG_FLIPOVERLAY *FlipOverlay)
+{
+    PRPI3VC4_OVERLAY Overlay = (PRPI3VC4_OVERLAY)OverlayContext;
+    DXGK_OVERLAYINFO Info;
+
+    if (Overlay == NULL ||
+        Overlay->Magic != RPI3VC4_OVERLAY_MAGIC ||
+        FlipOverlay == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.hAllocation = FlipOverlay->hSource;
+    Info.PhysicalAddress = FlipOverlay->SrcPhysicalAddress;
+    Info.SegmentId = FlipOverlay->SrcSegmentId;
+    Info.SrcRect = Overlay->SourceRect;
+    Info.DstRect = Overlay->DestinationRect;
+    Info.pPrivateDriverData = FlipOverlay->pPrivateDriverData;
+    Info.PrivateDriverDataSize = FlipOverlay->PrivateDriverDataSize;
+    {
+        DXGKARG_UPDATEOVERLAY Update;
+
+        RtlZeroMemory(&Update, sizeof(Update));
+        Update.OverlayInfo = Info;
+        return SoftGpuPlatformUpdateOverlay(OverlayContext, &Update);
+    }
+}
+
+NTSTATUS
+APIENTRY
+SoftGpuPlatformDestroyOverlay(
+    _In_ HANDLE OverlayContext)
+{
+    PRPI3VC4_OVERLAY Overlay = (PRPI3VC4_OVERLAY)OverlayContext;
+    PRPI3VC4_CONTEXT Context;
+    PSOFTGPU_DEVICE Device;
+    NTSTATUS RollbackStatus;
+    NTSTATUS Status;
+
+    if (Overlay == NULL ||
+        Overlay->Magic != RPI3VC4_OVERLAY_MAGIC ||
+        Overlay->Context == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Context = Overlay->Context;
+    Device = Context->Device;
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
+        return STATUS_DEVICE_NOT_READY;
+
+    Status = KeWaitForSingleObject(&Device->PointerMutex,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Context->Overlay != Overlay)
+    {
+        Status = STATUS_INVALID_HANDLE;
+        goto Unlock;
+    }
+    Context->Overlay = NULL;
+    Status = Rpi3Vc4CommitOverlayLocked(Device);
+    if (!NT_SUCCESS(Status))
+    {
+        Context->Overlay = Overlay;
+        RollbackStatus = Rpi3Vc4CommitOverlayLocked(Device);
+        if (!NT_SUCCESS(RollbackStatus))
+            Status = RollbackStatus;
+        goto Unlock;
+    }
+    Overlay->Magic = 0;
+
+Unlock:
+    KeReleaseMutex(&Device->PointerMutex, FALSE);
+    if (NT_SUCCESS(Status))
+        ExFreePoolWithTag(Overlay, RPI3VC4_OVERLAY_POOL_TAG);
+    return Status;
+}
+
 NTSTATUS
 Rpi3Vc4UpdatePointer(
     _Inout_ PSOFTGPU_DEVICE Device)
@@ -1381,7 +2415,7 @@ Rpi3Vc4QueryScanLine(
     ULONG Line;
 
     if (Device == NULL || GetScanLine == NULL ||
-        GetScanLine->VidPnSourceId != 0)
+        GetScanLine->VidPnTargetId != 0)
     {
         return STATUS_INVALID_PARAMETER;
     }
