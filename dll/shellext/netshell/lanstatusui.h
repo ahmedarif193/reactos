@@ -45,10 +45,15 @@ class CLanStatus:
 
     private:
         HRESULT InitializeNetTaskbarNotifications();
+        HRESULT EnumerateTrayConnections();
         HRESULT ShowStatusDialogByCLSID(const GUID *pguidCmdGroup);
+        VOID StartRetry();
+        VOID StopRetry();
+        static LRESULT CALLBACK RetryWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
         CComPtr<INetConnectionManager> m_lpNetMan;
         NOTIFICATION_ITEM *m_pHead;
+        HWND m_hwndRetry;
 
     public:
         DECLARE_NO_REGISTRY()
