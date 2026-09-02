@@ -475,7 +475,11 @@ NtGdiDdDDIOpenAdapterFromGdiDisplayName(_Inout_ D3DKMT_OPENADAPTERFROMGDIDISPLAY
     UNICODE_STRING DisplayName;
     PPDEVOBJ Pdev;
     ULONG Index;
-    NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    NTSTATUS Status;
+
+    if (unnamedParam1 == NULL)
+        return STATUS_UNSUCCESSFUL;
+    Status = D3dkmtValidateWddmThunk(unnamedParam1);
 
     if (!NT_SUCCESS(Status))
         return Status;
@@ -492,7 +496,9 @@ NtGdiDdDDIOpenAdapterFromGdiDisplayName(_Inout_ D3DKMT_OPENADAPTERFROMGDIDISPLAY
     _SEH2_END;
     for (Index = 0; Index < RTL_NUMBER_OF(Captured.DeviceName) && Captured.DeviceName[Index] != L'\0'; ++Index)
         NOTHING;
-    if (Index == 0 || Index == RTL_NUMBER_OF(Captured.DeviceName))
+    if (Index == 0)
+        return STATUS_UNSUCCESSFUL;
+    if (Index == RTL_NUMBER_OF(Captured.DeviceName))
         return STATUS_INVALID_PARAMETER;
     RtlInitUnicodeString(&DisplayName, Captured.DeviceName);
     Pdev = EngpGetPDEV(&DisplayName);
@@ -651,7 +657,7 @@ NtGdiDdDDICheckOcclusion(_In_ const D3DKMT_CHECKOCCLUSION* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
     if (Captured.hWindow == NULL)
-        return STATUS_INVALID_HANDLE;
+        return STATUS_INVALID_PARAMETER;
 
     /*
      * Validate the window handle before forwarding: a bogus HWND must be
