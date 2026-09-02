@@ -103,7 +103,7 @@ CalculateColorTableSize(
                 *ColorSpec = DIB_RGB_COLORS;
             if (BitCount != 16 && BitCount != 24 && BitCount != 32)
                 return FALSE;
-            *ColorTableSize = ClrUsed;
+            *ColorTableSize = min(ClrUsed, 256);
             return TRUE;
         }
 
@@ -391,7 +391,6 @@ LogFontW2A(LPLOGFONTA pA, CONST LOGFONTW *pW)
     COPYN(lfQuality);
     COPYN(lfPitchAndFamily);
     COPYS(lfFaceName,LF_FACESIZE);
-    pA->lfFaceName[LF_FACESIZE - 1] = '\0';
 
 #undef COPYN
 #undef COPYS

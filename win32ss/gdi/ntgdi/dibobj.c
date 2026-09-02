@@ -465,6 +465,7 @@ IntGdiCreateMaskFromRLE(
         return NULL;
     }
     ASSERT(SurfObj->pvBits != NULL);
+    RtlZeroMemory(SurfObj->pvBits, SurfObj->cjBits);
 
     x = y = 0;
 
@@ -1819,8 +1820,7 @@ NtGdiStretchDIBitsInternal(
      * and it fixes over 100 gdi32:dib regression tests. */
     if (dwRop == SRCCOPY)
     {
-        LinesCopied = min(max(abs(cySrc), abs(cyDst)),
-                          abs(pbmiSafe->bmiHeader.biHeight));
+        LinesCopied = abs(pbmiSafe->bmiHeader.biHeight);
     }
     else
     {
@@ -2172,7 +2172,7 @@ NtGdiCreateDIBSection(
     HBITMAP hbitmap = 0;
     DC *dc;
     BOOL bTemporaryDC = FALSE;
-    UINT cjExpected;
+    UINT cjExpected, cjMax = 0;
     ULONG ulError = EngGetLastError();
 
     if (!bmi) return hbitmap; // Make sure.
@@ -2207,13 +2207,21 @@ NtGdiCreateDIBSection(
         cjExpected += min(cColors, 256U) *
                       ((Usage == DIB_PAL_COLORS) ? sizeof(WORD) : sizeof(RGBQUAD));
     }
-    else if ((bmi->bmiHeader.biCompression == BI_BITFIELDS) &&
-             (bmi->bmiHeader.biSize < sizeof(BITMAPV4HEADER)))
+    else
     {
-        cjExpected += 3 * sizeof(DWORD);
+        if ((bmi->bmiHeader.biCompression == BI_BITFIELDS) &&
+            (bmi->bmiHeader.biSize < sizeof(BITMAPV4HEADER)))
+        {
+            cjExpected += 3 * sizeof(DWORD);
+        }
+        cjMax = cjExpected + min(bmi->bmiHeader.biClrUsed, 256U) * sizeof(RGBQUAD);
     }
-    if ((cjHeader != cjExpected) ||
-        !MmIsAddressValid((PBYTE)bmi + cjExpected - 1))
+
+    if (cjMax < cjExpected)
+        cjMax = cjExpected;
+
+    if ((cjHeader < cjExpected) || (cjHeader > cjMax) ||
+        !MmIsAddressValid((PBYTE)bmi + cjHeader - 1))
     {
         return NULL;
     }
