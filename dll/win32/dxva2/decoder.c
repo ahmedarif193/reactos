@@ -85,6 +85,8 @@ struct dxva2_decoder_surface
     HANDLE resource;
     struct dxva2_surface_fence *fence;
     BOOL fence_attached;
+    BOOL shared_locked;
+    D3DDDIARG_LOCK shared_lock;
     ULONG generation;
     ULONG fallback_generation;
 };
@@ -121,6 +123,15 @@ static HRESULT dxva2_decoder_copy_output(struct dxva2_decoder *decoder,
         UINT surface_index);
 
 static HRESULT dxva2_decoder_hide_overlay(struct dxva2_decoder *decoder);
+
+static HRESULT dxva2_umd_lock_resource(struct dxva2_umd_runtime *runtime,
+        HANDLE resource, BOOL read_only, D3DDDIARG_LOCK *lock);
+
+static HRESULT dxva2_umd_unlock_resource(struct dxva2_umd_runtime *runtime,
+        HANDLE resource);
+
+static HRESULT dxva2_decoder_unlock_shared_surface(
+        struct dxva2_decoder *decoder, UINT surface_index);
 
 static HRESULT dxva2_surface_fence_begin_call(
         struct dxva2_surface_fence *fence,
@@ -300,6 +311,95 @@ static HRESULT WINAPI dxva2_surface_fence_Wait(
     return hr;
 }
 
+static HRESULT WINAPI dxva2_surface_fence_GetSharedMemory(
+        IReactOSDxvaSurfaceFence *iface, DWORD flags,
+        REACTOS_DXVA_SURFACE_MEMORY *memory)
+{
+    struct dxva2_surface_fence *fence = impl_from_IReactOSDxvaSurfaceFence(iface);
+    struct dxva2_decoder_surface *surface;
+    struct dxva2_decoder *decoder;
+    ULONGLONG chroma_offset;
+    UINT surface_index;
+    UINT storage_height;
+    UINT row_count;
+    HRESULT hr;
+
+    if (!memory)
+        return E_POINTER;
+    memset(memory, 0, sizeof(*memory));
+    if (flags & ~REACTOS_DXVA_SURFACE_FENCE_DONOTWAIT)
+        return E_INVALIDARG;
+    if (FAILED(hr = dxva2_surface_fence_begin_call(fence, &decoder, &surface_index)))
+        return hr;
+    if (FAILED(hr = dxva2_surface_fence_wait_internal(fence, flags)))
+        goto done;
+
+    /* Keep the completed allocation mapped only until the application reuses
+     * this render target in BeginFrame. This gives D3D9 a stable source for a
+     * synchronous texture upload without overlapping the next decode. */
+    EnterCriticalSection(&decoder->copy_lock);
+    surface = &decoder->surfaces[surface_index];
+    if (!surface->shared_locked)
+    {
+        if (FAILED(hr = dxva2_decoder_hide_overlay(decoder)))
+            goto unlock;
+        if (FAILED(hr = dxva2_umd_lock_resource(&decoder->runtime,
+                surface->resource, TRUE, &surface->shared_lock)))
+            goto unlock;
+        surface->shared_locked = TRUE;
+    }
+
+    if (!surface->shared_lock.pSurfData ||
+            (decoder->video_desc.SampleHeight & 1) ||
+            surface->shared_lock.Pitch < decoder->video_desc.SampleWidth ||
+            !surface->shared_lock.SlicePitch ||
+            surface->shared_lock.SlicePitch % surface->shared_lock.Pitch)
+    {
+        hr = E_FAIL;
+        (void)dxva2_decoder_unlock_shared_surface(decoder, surface_index);
+        goto unlock;
+    }
+    row_count = surface->shared_lock.SlicePitch / surface->shared_lock.Pitch;
+    if ((ULONGLONG)row_count * 2 % 3)
+    {
+        hr = E_FAIL;
+        (void)dxva2_decoder_unlock_shared_surface(decoder, surface_index);
+        goto unlock;
+    }
+    storage_height = row_count * 2 / 3;
+    chroma_offset = (ULONGLONG)surface->shared_lock.Pitch * storage_height;
+    if (storage_height < decoder->video_desc.SampleHeight ||
+            chroma_offset > surface->shared_lock.SlicePitch ||
+            decoder->video_desc.SampleHeight / 2 >
+            (surface->shared_lock.SlicePitch - chroma_offset) /
+            surface->shared_lock.Pitch)
+    {
+        hr = E_FAIL;
+        (void)dxva2_decoder_unlock_shared_surface(decoder, surface_index);
+        goto unlock;
+    }
+
+    memory->Data = surface->shared_lock.pSurfData;
+    memory->Size = surface->shared_lock.SlicePitch;
+    memory->Width = decoder->video_desc.SampleWidth;
+    memory->Height = decoder->video_desc.SampleHeight;
+    memory->Pitch = surface->shared_lock.Pitch;
+    memory->StorageHeight = storage_height;
+    memory->PlaneCount = 2;
+    memory->PlaneOffsets[0] = 0;
+    memory->PlaneOffsets[1] = (UINT)chroma_offset;
+    memory->PlanePitches[0] = surface->shared_lock.Pitch;
+    memory->PlanePitches[1] = surface->shared_lock.Pitch;
+    memory->Generation = surface->generation;
+    hr = S_OK;
+
+unlock:
+    LeaveCriticalSection(&decoder->copy_lock);
+done:
+    dxva2_surface_fence_end_call(fence);
+    return hr;
+}
+
 static HRESULT WINAPI dxva2_surface_fence_PrepareFallback(
         IReactOSDxvaSurfaceFence *iface, DWORD flags)
 {
@@ -469,6 +569,7 @@ static const IReactOSDxvaSurfaceFenceVtbl dxva2_surface_fence_vtbl =
     dxva2_surface_fence_Release,
     dxva2_surface_fence_GetPresentationFlags,
     dxva2_surface_fence_Wait,
+    dxva2_surface_fence_GetSharedMemory,
     dxva2_surface_fence_PrepareFallback,
     dxva2_surface_fence_Present,
     dxva2_surface_fence_Hide,
@@ -847,6 +948,28 @@ static HRESULT dxva2_umd_unlock_resource(struct dxva2_umd_runtime *runtime, HAND
     return runtime->device_funcs.pfnUnlock(runtime->umd_device, &unlock);
 }
 
+/* decoder->copy_lock must be held. */
+static HRESULT dxva2_decoder_unlock_shared_surface(
+        struct dxva2_decoder *decoder, UINT surface_index)
+{
+    struct dxva2_decoder_surface *surface;
+    HRESULT hr;
+
+    if (surface_index >= decoder->surface_count)
+        return E_INVALIDARG;
+    surface = &decoder->surfaces[surface_index];
+    if (!surface->shared_locked)
+        return S_OK;
+
+    hr = dxva2_umd_unlock_resource(&decoder->runtime, surface->resource);
+    if (SUCCEEDED(hr))
+    {
+        memset(&surface->shared_lock, 0, sizeof(surface->shared_lock));
+        surface->shared_locked = FALSE;
+    }
+    return hr;
+}
+
 static HRESULT dxva2_query_count(struct dxva2_umd_runtime *runtime, D3DDDICAPS_TYPE type,
         const void *info, UINT *count)
 {
@@ -1082,6 +1205,13 @@ static void dxva2_decoder_destroy(struct dxva2_decoder *decoder)
 
     EnterCriticalSection(&decoder->copy_lock);
     (void)dxva2_decoder_hide_overlay(decoder);
+    for (i = 0; decoder->surfaces && i < decoder->surface_count; ++i)
+    {
+        HRESULT hr = dxva2_decoder_unlock_shared_surface(decoder, i);
+
+        if (FAILED(hr))
+            WARN("Failed to release shared decoded surface %u, hr %#lx.\n", i, hr);
+    }
     LeaveCriticalSection(&decoder->copy_lock);
 
     for (i = 0; decoder->buffers && i < decoder->buffer_count; ++i)
@@ -1245,6 +1375,17 @@ static HRESULT WINAPI dxva2_decoder_BeginFrame(IDirectXVideoDecoder *iface,
     if (InterlockedCompareExchange(&decoder->surfaces[i].fence->pending, 0, 0))
         return E_PENDING;
 
+    EnterCriticalSection(&decoder->copy_lock);
+    if (decoder->overlay && decoder->overlay_surface == i)
+        hr = dxva2_decoder_hide_overlay(decoder);
+    else
+        hr = S_OK;
+    if (SUCCEEDED(hr))
+        hr = dxva2_decoder_unlock_shared_surface(decoder, i);
+    LeaveCriticalSection(&decoder->copy_lock);
+    if (FAILED(hr))
+        return hr;
+
     memset(&set_target, 0, sizeof(set_target));
     set_target.hDecode = decoder->decode;
     set_target.hRenderTarget = decoder->surfaces[i].resource;
@@ -1296,19 +1437,29 @@ static HRESULT dxva2_copy_nv12_rows(void *destination, UINT destination_pitch,
 
 static HRESULT dxva2_decoder_copy_output(struct dxva2_decoder *decoder, UINT surface_index)
 {
+    struct dxva2_decoder_surface *surface = &decoder->surfaces[surface_index];
     IDirect3DSurface9 *target = decoder->surfaces[surface_index].surface;
     IDirect3DSurface9 *staging = NULL;
     D3DDDIARG_LOCK source_lock;
     D3DLOCKED_RECT target_lock;
     POINT point = {0, 0};
+    BOOL unlock_source = FALSE;
     UINT source_storage_height;
     UINT source_rows;
     HRESULT unlock_hr;
     HRESULT hr;
 
-    if (FAILED(hr = dxva2_umd_lock_resource(&decoder->runtime,
-            decoder->surfaces[surface_index].resource, TRUE, &source_lock)))
-        return hr;
+    if (surface->shared_locked)
+    {
+        source_lock = surface->shared_lock;
+    }
+    else
+    {
+        if (FAILED(hr = dxva2_umd_lock_resource(&decoder->runtime,
+                surface->resource, TRUE, &source_lock)))
+            return hr;
+        unlock_source = TRUE;
+    }
     if (!source_lock.pSurfData || source_lock.Pitch < decoder->video_desc.SampleWidth ||
             !source_lock.SlicePitch || source_lock.SlicePitch % source_lock.Pitch)
     {
@@ -1362,8 +1513,9 @@ static HRESULT dxva2_decoder_copy_output(struct dxva2_decoder *decoder, UINT sur
 done:
     if (staging)
         IDirect3DSurface9_Release(staging);
-    unlock_hr = dxva2_umd_unlock_resource(&decoder->runtime,
-            decoder->surfaces[surface_index].resource);
+    unlock_hr = unlock_source
+            ? dxva2_umd_unlock_resource(&decoder->runtime, surface->resource)
+            : S_OK;
     return FAILED(hr) ? hr : unlock_hr;
 }
 
@@ -1638,12 +1790,6 @@ HRESULT dxva2_decoder_create(IDirectXVideoDecoderService *service, IDirect3DDevi
             hr = E_OUTOFMEMORY;
             goto failed;
         }
-        if (FAILED(hr = IDirect3DSurface9_SetPrivateData(render_targets[i],
-                &reactos_dxva_surface_fence_guid,
-                &decoder->surfaces[i].fence->IReactOSDxvaSurfaceFence_iface,
-                sizeof(IUnknown *), D3DSPD_IUNKNOWN)))
-            goto failed;
-        decoder->surfaces[i].fence_attached = TRUE;
     }
 
     decoder->service = service;
@@ -1748,6 +1894,16 @@ HRESULT dxva2_decoder_create(IDirectXVideoDecoderService *service, IDirect3DDevi
     {
         hr = HRESULT_FROM_WIN32(GetLastError());
         goto failed;
+    }
+
+    for (i = 0; i < surface_count; ++i)
+    {
+        if (FAILED(hr = IDirect3DSurface9_SetPrivateData(render_targets[i],
+                &reactos_dxva_surface_fence_guid,
+                &decoder->surfaces[i].fence->IReactOSDxvaSurfaceFence_iface,
+                sizeof(IUnknown *), D3DSPD_IUNKNOWN)))
+            goto failed;
+        decoder->surfaces[i].fence_attached = TRUE;
     }
 
     free(buffer_info);

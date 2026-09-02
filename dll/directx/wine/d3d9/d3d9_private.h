@@ -185,6 +185,10 @@ struct d3d9_surface
     IUnknown *container;
     struct d3d9_texture *texture;
     struct wined3d_swapchain *swapchain;
+#ifdef __REACTOS__
+    ULONG dxva_shared_generation;
+    BOOL dxva_shared_memory_bound;
+#endif
 };
 
 struct wined3d_rendertarget_view *d3d9_surface_acquire_rendertarget_view(struct d3d9_surface *surface);
@@ -194,6 +198,8 @@ struct d3d9_device *d3d9_surface_get_device(const struct d3d9_surface *surface);
 #ifdef __REACTOS__
 HRESULT d3d9_surface_get_dxva_binding(struct d3d9_surface *surface,
         IReactOSDxvaSurfaceFence **binding);
+HRESULT d3d9_surface_prepare_dxva_composition(struct d3d9_surface *surface,
+        DWORD flags);
 HRESULT d3d9_surface_prepare_dxva_fallback(struct d3d9_surface *surface,
         DWORD flags);
 #endif

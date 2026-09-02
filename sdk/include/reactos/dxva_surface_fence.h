@@ -21,6 +21,22 @@
     (REACTOS_DXVA_SURFACE_PRESENT_LIMITED_RGB | \
      REACTOS_DXVA_SURFACE_PRESENT_BT709)
 
+#define REACTOS_DXVA_SURFACE_MAX_PLANES 3u
+
+typedef struct REACTOS_DXVA_SURFACE_MEMORY
+{
+    void *Data;
+    SIZE_T Size;
+    UINT Width;
+    UINT Height;
+    UINT Pitch;
+    UINT StorageHeight;
+    UINT PlaneCount;
+    UINT PlaneOffsets[REACTOS_DXVA_SURFACE_MAX_PLANES];
+    UINT PlanePitches[REACTOS_DXVA_SURFACE_MAX_PLANES];
+    ULONG Generation;
+} REACTOS_DXVA_SURFACE_MEMORY;
+
 typedef struct IReactOSDxvaSurfaceFence IReactOSDxvaSurfaceFence;
 
 typedef struct IReactOSDxvaSurfaceFenceVtbl
@@ -33,6 +49,9 @@ typedef struct IReactOSDxvaSurfaceFenceVtbl
     HRESULT (WINAPI *GetPresentationFlags)(IReactOSDxvaSurfaceFence *iface,
                                            DWORD *flags);
     HRESULT (WINAPI *Wait)(IReactOSDxvaSurfaceFence *iface, DWORD flags);
+    HRESULT (WINAPI *GetSharedMemory)(IReactOSDxvaSurfaceFence *iface,
+                                     DWORD flags,
+                                     REACTOS_DXVA_SURFACE_MEMORY *memory);
     HRESULT (WINAPI *PrepareFallback)(IReactOSDxvaSurfaceFence *iface,
                                       DWORD flags);
     HRESULT (WINAPI *Present)(IReactOSDxvaSurfaceFence *iface,
@@ -55,6 +74,8 @@ struct IReactOSDxvaSurfaceFence
     ((iface)->lpVtbl->GetPresentationFlags((iface), (flags)))
 #define IReactOSDxvaSurfaceFence_Wait(iface, flags) \
     ((iface)->lpVtbl->Wait((iface), (flags)))
+#define IReactOSDxvaSurfaceFence_GetSharedMemory(iface, flags, memory) \
+    ((iface)->lpVtbl->GetSharedMemory((iface), (flags), (memory)))
 #define IReactOSDxvaSurfaceFence_PrepareFallback(iface, flags) \
     ((iface)->lpVtbl->PrepareFallback((iface), (flags)))
 #define IReactOSDxvaSurfaceFence_Present(iface, source, destination, flags) \
