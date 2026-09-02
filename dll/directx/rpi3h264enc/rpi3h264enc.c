@@ -1030,10 +1030,19 @@ transform_ProcessInput(IMFTransform *Interface,
 {
     struct rpi3_encoder *Encoder = impl_from_IMFTransform(Interface);
     IMFMediaBuffer *MediaBuffer = NULL;
+    IMF2DBuffer2 *Buffer2D = NULL;
     BYTE *Source = NULL;
+    BYTE *BufferStart = NULL;
     DWORD MaximumLength = 0;
     DWORD CurrentLength = 0;
+    DWORD BufferCount;
+    DWORD BufferLength = 0;
+    ULONG_PTR SourceOffset;
+    ULONGLONG RequiredSize;
     LONGLONG SampleTime;
+    LONG SourcePitch;
+    BOOL Buffer2DLocked = FALSE;
+    BOOL MediaBufferLocked = FALSE;
     UINT Row;
     HRESULT Result;
 
@@ -1052,26 +1061,72 @@ transform_ProcessInput(IMFTransform *Interface,
         Result = MF_E_NOTACCEPTING;
         goto Done;
     }
-    if (FAILED(Result = IMFSample_ConvertToContiguousBuffer(Sample,
-                                                            &MediaBuffer)) ||
-        FAILED(Result = IMFMediaBuffer_Lock(MediaBuffer,
-                                            &Source,
-                                            &MaximumLength,
-                                            &CurrentLength)))
+    if (FAILED(Result = IMFSample_GetBufferCount(Sample, &BufferCount)))
+        goto Done;
+    if (BufferCount == 1)
+        Result = IMFSample_GetBufferByIndex(Sample, 0, &MediaBuffer);
+    else
+        Result = IMFSample_ConvertToContiguousBuffer(Sample, &MediaBuffer);
+    if (FAILED(Result))
+        goto Done;
+
+    Result = IMFMediaBuffer_QueryInterface(MediaBuffer,
+                                            &IID_IMF2DBuffer2,
+                                            (void **)&Buffer2D);
+    if (SUCCEEDED(Result))
+    {
+        Result = IMF2DBuffer2_Lock2DSize(Buffer2D,
+                                         MF2DBuffer_LockFlags_Read,
+                                         &Source,
+                                         &SourcePitch,
+                                         &BufferStart,
+                                         &BufferLength);
+        if (FAILED(Result))
+            goto Done;
+        Buffer2DLocked = TRUE;
+        if (SourcePitch <= 0 || (UINT)SourcePitch < Encoder->Width ||
+            (ULONG_PTR)Source < (ULONG_PTR)BufferStart)
+        {
+            Result = MF_E_INVALIDMEDIATYPE;
+            goto Unlock;
+        }
+        SourceOffset = (ULONG_PTR)Source - (ULONG_PTR)BufferStart;
+        RequiredSize = (ULONGLONG)(UINT)SourcePitch * Encoder->Height +
+                       (ULONGLONG)(UINT)SourcePitch *
+                           ((Encoder->Height + 1) / 2);
+        if (SourceOffset > BufferLength ||
+            RequiredSize > BufferLength - SourceOffset)
+        {
+            Result = MF_E_BUFFERTOOSMALL;
+            goto Unlock;
+        }
+    }
+    else if (FAILED(Result = IMFMediaBuffer_Lock(MediaBuffer,
+                                                 &Source,
+                                                 &MaximumLength,
+                                                 &CurrentLength)))
     {
         goto Done;
     }
-    if (CurrentLength < Encoder->InputInfo.cbSize)
+    else
     {
-        Result = MF_E_BUFFERTOOSMALL;
-        goto Unlock;
+        MediaBufferLocked = TRUE;
+        SourcePitch = Encoder->InputStride;
+        RequiredSize = (ULONGLONG)(UINT)SourcePitch * Encoder->Height +
+                       (ULONGLONG)(UINT)SourcePitch *
+                           ((Encoder->Height + 1) / 2);
+        if (CurrentLength < RequiredSize || MaximumLength < RequiredSize)
+        {
+            Result = MF_E_BUFFERTOOSMALL;
+            goto Unlock;
+        }
     }
 
     ZeroMemory(Encoder->InputBuffer, Encoder->InputBufferSize);
     for (Row = 0; Row < Encoder->Height; ++Row)
     {
         CopyMemory(Encoder->InputBuffer + Row * Encoder->HardwarePitch,
-                   Source + Row * Encoder->InputStride,
+                   Source + Row * SourcePitch,
                    Encoder->Width);
     }
     for (Row = 0; Row < (Encoder->Height + 1) / 2; ++Row)
@@ -1079,8 +1134,8 @@ transform_ProcessInput(IMFTransform *Interface,
         CopyMemory(Encoder->InputBuffer +
                        Encoder->HardwarePitch * Encoder->HardwareHeight +
                        Row * Encoder->HardwarePitch,
-                   Source + Encoder->InputStride * Encoder->Height +
-                       Row * Encoder->InputStride,
+                   Source + SourcePitch * Encoder->Height +
+                       Row * SourcePitch,
                    Encoder->Width);
     }
     if (FAILED(IMFSample_GetSampleTime(Sample, &SampleTime)))
@@ -1096,8 +1151,13 @@ transform_ProcessInput(IMFTransform *Interface,
         ++Encoder->QueuedInputs;
 
 Unlock:
-    IMFMediaBuffer_Unlock(MediaBuffer);
+    if (Buffer2DLocked)
+        IMF2DBuffer2_Unlock2D(Buffer2D);
+    if (MediaBufferLocked)
+        IMFMediaBuffer_Unlock(MediaBuffer);
 Done:
+    if (Buffer2D)
+        IMF2DBuffer2_Release(Buffer2D);
     if (MediaBuffer)
         IMFMediaBuffer_Release(MediaBuffer);
     LeaveCriticalSection(&Encoder->Lock);
