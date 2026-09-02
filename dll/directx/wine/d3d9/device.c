@@ -24,6 +24,10 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d9);
 
+#ifdef __REACTOS__
+static void d3d9_device_hide_dxva_overlay(struct d3d9_device *device);
+#endif
+
 static void STDMETHODCALLTYPE d3d9_null_wined3d_object_destroyed(void *parent) {}
 
 const struct wined3d_parent_ops d3d9_null_wined3d_parent_ops =
@@ -730,6 +734,10 @@ static ULONG WINAPI DECLSPEC_HOTPATCH d3d9_device_Release(IDirect3DDevice9Ex *if
         unsigned i;
         device->in_destruction = TRUE;
 
+#ifdef __REACTOS__
+        d3d9_device_hide_dxva_overlay(device);
+#endif
+
         wined3d_mutex_lock();
         for (i = 0; i < device->fvf_decl_count; ++i)
         {
@@ -1134,6 +1142,10 @@ static HRESULT d3d9_device_reset(struct d3d9_device *device,
         WARN("App not active, returning D3DERR_DEVICELOST.\n");
         return D3DERR_DEVICELOST;
     }
+
+#ifdef __REACTOS__
+    d3d9_device_hide_dxva_overlay(device);
+#endif
 
     if (mode)
     {
@@ -1862,6 +1874,12 @@ static HRESULT WINAPI d3d9_device_UpdateSurface(IDirect3DDevice9Ex *iface,
     TRACE("iface %p, src_surface %p, src_rect %s, dst_surface %p, dst_point %p.\n",
             iface, src_surface, wine_dbgstr_rect(src_rect), dst_surface, dst_point);
 
+#ifdef __REACTOS__
+    if (FAILED(hr = d3d9_surface_prepare_dxva_fallback(src, 0)) ||
+            FAILED(hr = d3d9_surface_prepare_dxva_fallback(dst, 0)))
+        return hr;
+#endif
+
     wined3d_mutex_lock();
 
     wined3d_texture_get_sub_resource_desc(src->wined3d_texture, src->sub_resource_idx, &src_desc);
@@ -1945,6 +1963,12 @@ static HRESULT WINAPI d3d9_device_GetRenderTargetData(IDirect3DDevice9Ex *iface,
     if (!render_target || !dst_surface)
         return D3DERR_INVALIDCALL;
 
+#ifdef __REACTOS__
+    if (FAILED(hr = d3d9_surface_prepare_dxva_fallback(rt_impl, 0)) ||
+            FAILED(hr = d3d9_surface_prepare_dxva_fallback(dst_impl, 0)))
+        return hr;
+#endif
+
     wined3d_mutex_lock();
     wined3d_texture_get_sub_resource_desc(dst_impl->wined3d_texture, dst_impl->sub_resource_idx, &wined3d_desc);
     SetRect(&dst_rect, 0, 0, wined3d_desc.width, wined3d_desc.height);
@@ -1973,6 +1997,11 @@ static HRESULT WINAPI d3d9_device_GetFrontBufferData(IDirect3DDevice9Ex *iface,
 
     TRACE("iface %p, swapchain %u, dst_surface %p.\n", iface, swapchain, dst_surface);
 
+#ifdef __REACTOS__
+    if (FAILED(hr = d3d9_surface_prepare_dxva_fallback(dst_impl, 0)))
+        return hr;
+#endif
+
     wined3d_mutex_lock();
     if (swapchain < device->implicit_swapchain_count)
         hr = wined3d_swapchain_get_front_buffer_data(device->implicit_swapchains[swapchain],
@@ -1981,6 +2010,122 @@ static HRESULT WINAPI d3d9_device_GetFrontBufferData(IDirect3DDevice9Ex *iface,
 
     return hr;
 }
+
+#ifdef __REACTOS__
+static void d3d9_device_hide_dxva_overlay(struct d3d9_device *device)
+{
+    IReactOSDxvaSurfaceFence *binding;
+
+    AcquireSRWLockExclusive(&device->dxva_overlay_lock);
+    binding = device->dxva_overlay_binding;
+    device->dxva_overlay_binding = NULL;
+    if (binding)
+        IReactOSDxvaSurfaceFence_Hide(binding);
+    ReleaseSRWLockExclusive(&device->dxva_overlay_lock);
+
+    if (binding)
+        IReactOSDxvaSurfaceFence_Release(binding);
+}
+
+static HRESULT d3d9_device_present_dxva_overlay(struct d3d9_device *device,
+        struct d3d9_surface *src, struct d3d9_surface *dst,
+        const RECT *source, const RECT *destination)
+{
+    IReactOSDxvaSurfaceFence *binding;
+    IReactOSDxvaSurfaceFence *old_binding;
+    struct wined3d_swapchain_desc swapchain_desc;
+    RECT client_rect;
+    RECT screen_destination;
+    POINT client_origin = {0, 0};
+    LONG client_width;
+    LONG client_height;
+    HRESULT hr;
+
+    hr = d3d9_surface_get_dxva_binding(src, &binding);
+    if (FAILED(hr))
+    {
+        if (hr == D3DERR_NOTFOUND && dst->swapchain)
+            d3d9_device_hide_dxva_overlay(device);
+        return hr;
+    }
+    if (!dst->swapchain)
+    {
+        IReactOSDxvaSurfaceFence_Hide(binding);
+        IReactOSDxvaSurfaceFence_Release(binding);
+        return D3DERR_NOTAVAILABLE;
+    }
+
+    wined3d_mutex_lock();
+    wined3d_swapchain_get_desc(dst->swapchain, &swapchain_desc);
+    wined3d_mutex_unlock();
+    /* Legacy overlays are not composed by the DWM. Keep arbitrary windowed
+     * and occluded presentation on WineD3D's shader path; otherwise a paused
+     * overlay can remain above a window that later covers it. */
+    if (swapchain_desc.windowed || !swapchain_desc.device_window ||
+            !swapchain_desc.backbuffer_width ||
+            !swapchain_desc.backbuffer_height ||
+            destination->left < 0 || destination->top < 0 ||
+            destination->right > (LONG)swapchain_desc.backbuffer_width ||
+            destination->bottom > (LONG)swapchain_desc.backbuffer_height ||
+            !GetClientRect(swapchain_desc.device_window, &client_rect) ||
+            !ClientToScreen(swapchain_desc.device_window, &client_origin))
+    {
+        d3d9_device_hide_dxva_overlay(device);
+        IReactOSDxvaSurfaceFence_Hide(binding);
+        IReactOSDxvaSurfaceFence_Release(binding);
+        return D3DERR_NOTAVAILABLE;
+    }
+
+    client_width = client_rect.right - client_rect.left;
+    client_height = client_rect.bottom - client_rect.top;
+    if (client_width <= 0 || client_height <= 0)
+    {
+        d3d9_device_hide_dxva_overlay(device);
+        IReactOSDxvaSurfaceFence_Hide(binding);
+        IReactOSDxvaSurfaceFence_Release(binding);
+        return D3DERR_NOTAVAILABLE;
+    }
+
+    screen_destination.left = client_origin.x + MulDiv(destination->left,
+            client_width, swapchain_desc.backbuffer_width);
+    screen_destination.top = client_origin.y + MulDiv(destination->top,
+            client_height, swapchain_desc.backbuffer_height);
+    screen_destination.right = client_origin.x + MulDiv(destination->right,
+            client_width, swapchain_desc.backbuffer_width);
+    screen_destination.bottom = client_origin.y + MulDiv(destination->bottom,
+            client_height, swapchain_desc.backbuffer_height);
+    AcquireSRWLockExclusive(&device->dxva_overlay_lock);
+    old_binding = device->dxva_overlay_binding;
+    if (old_binding != binding)
+    {
+        device->dxva_overlay_binding = NULL;
+        if (old_binding)
+        {
+            IReactOSDxvaSurfaceFence_Hide(old_binding);
+            IReactOSDxvaSurfaceFence_Release(old_binding);
+        }
+    }
+
+    hr = IReactOSDxvaSurfaceFence_Present(binding, source, &screen_destination, 0);
+    if (SUCCEEDED(hr) && device->dxva_overlay_binding != binding)
+    {
+        IReactOSDxvaSurfaceFence_AddRef(binding);
+        device->dxva_overlay_binding = binding;
+    }
+    if (FAILED(hr))
+    {
+        IReactOSDxvaSurfaceFence_Hide(binding);
+        if (device->dxva_overlay_binding == binding)
+        {
+            device->dxva_overlay_binding = NULL;
+            IReactOSDxvaSurfaceFence_Release(binding);
+        }
+    }
+    ReleaseSRWLockExclusive(&device->dxva_overlay_lock);
+    IReactOSDxvaSurfaceFence_Release(binding);
+    return hr;
+}
+#endif
 
 static HRESULT WINAPI d3d9_device_StretchRect(IDirect3DDevice9Ex *iface, IDirect3DSurface9 *src_surface,
         const RECT *src_rect, IDirect3DSurface9 *dst_surface, const RECT *dst_rect, D3DTEXTUREFILTERTYPE filter)
@@ -1994,6 +2139,11 @@ static HRESULT WINAPI d3d9_device_StretchRect(IDirect3DDevice9Ex *iface, IDirect
 
     TRACE("iface %p, src_surface %p, src_rect %s, dst_surface %p, dst_rect %s, filter %#x.\n",
             iface, src_surface, wine_dbgstr_rect(src_rect), dst_surface, wine_dbgstr_rect(dst_rect), filter);
+
+#ifdef __REACTOS__
+    if (FAILED(hr = d3d9_surface_prepare_dxva_fallback(dst, 0)))
+        return hr;
+#endif
 
     wined3d_mutex_lock();
     wined3d_texture_get_sub_resource_desc(dst->wined3d_texture, dst->sub_resource_idx, &dst_desc);
@@ -2058,6 +2208,17 @@ static HRESULT WINAPI d3d9_device_StretchRect(IDirect3DDevice9Ex *iface, IDirect
         }
     }
 
+#ifdef __REACTOS__
+    wined3d_mutex_unlock();
+    hr = d3d9_device_present_dxva_overlay(device, src, dst, src_rect, dst_rect);
+    if (SUCCEEDED(hr))
+        return hr;
+    if (hr != D3DERR_NOTFOUND &&
+            FAILED(hr = d3d9_surface_prepare_dxva_fallback(src, 0)))
+        return hr;
+    wined3d_mutex_lock();
+#endif
+
     hr = wined3d_device_context_blt(device->immediate_context, dst->wined3d_texture,
             dst->sub_resource_idx, dst_rect, src->wined3d_texture, src->sub_resource_idx,
             src_rect, 0, NULL, wined3d_texture_filter_type_from_d3d(filter));
@@ -2091,6 +2252,11 @@ static HRESULT WINAPI d3d9_device_ColorFill(IDirect3DDevice9Ex *iface,
 
     if (!surface)
         return D3DERR_INVALIDCALL;
+
+#ifdef __REACTOS__
+    if (FAILED(hr = d3d9_surface_prepare_dxva_fallback(surface_impl, 0)))
+        return hr;
+#endif
 
     wined3d_mutex_lock();
 
@@ -2210,6 +2376,11 @@ static HRESULT WINAPI d3d9_device_SetRenderTarget(IDirect3DDevice9Ex *iface, DWO
         return D3DERR_INVALIDCALL;
     }
 
+#ifdef __REACTOS__
+    if (surface_impl && FAILED(hr = d3d9_surface_prepare_dxva_fallback(surface_impl, 0)))
+        return hr;
+#endif
+
     wined3d_mutex_lock();
     rtv = surface_impl ? d3d9_surface_acquire_rendertarget_view(surface_impl) : NULL;
     hr = wined3d_device_context_set_rendertarget_views(device->immediate_context, idx, 1, &rtv, TRUE);
@@ -2270,6 +2441,11 @@ static HRESULT WINAPI d3d9_device_SetDepthStencilSurface(IDirect3DDevice9Ex *ifa
     HRESULT hr;
 
     TRACE("iface %p, depth_stencil %p.\n", iface, depth_stencil);
+
+#ifdef __REACTOS__
+    if (ds_impl && FAILED(hr = d3d9_surface_prepare_dxva_fallback(ds_impl, 0)))
+        return hr;
+#endif
 
     wined3d_mutex_lock();
     rtv = ds_impl ? d3d9_surface_acquire_rendertarget_view(ds_impl) : NULL;
@@ -4683,6 +4859,11 @@ static void CDECL device_parent_activate(struct wined3d_device_parent *device_pa
     if (!device->d3d_parent)
         return;
 
+#ifdef __REACTOS__
+    if (!activate)
+        d3d9_device_hide_dxva_overlay(device);
+#endif
+
     if (!activate)
         InterlockedCompareExchange(&device->device_state, D3D9_DEVICE_STATE_LOST, D3D9_DEVICE_STATE_OK);
     else if (device->d3d_parent->extended)
@@ -4779,6 +4960,9 @@ HRESULT device_init(struct d3d9_device *device, struct d3d9 *parent, struct wine
     device->device_parent.ops = &d3d9_wined3d_device_parent_ops;
     device->adapter_ordinal = adapter;
     device->refcount = 1;
+#ifdef __REACTOS__
+    InitializeSRWLock(&device->dxva_overlay_lock);
+#endif
 
     if (!(flags & D3DCREATE_FPU_PRESERVE)) setup_fpu();
 
