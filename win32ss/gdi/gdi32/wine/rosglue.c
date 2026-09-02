@@ -183,11 +183,8 @@ GDI_hdc_not_using_object(
     HGDIOBJ hobj,
     HDC hdc)
 {
-    HDC hdcLink;
-
-    /* Remove the HDC link for the object */
-    hdcLink = GdiRemoveClientObjLink(hobj);
-    ASSERT(hdcLink == NULL || hdcLink == hdc);
+    if (!GdiRemoveClientObjLinkFor(hobj, hdc))
+        GdiRemoveClientObjLink(hobj);
 }
 
 /***********************************************************************
@@ -289,13 +286,6 @@ SetVirtualResolution(
                                      cyVirtualDeviceMm);
 }
 
-BOOL
-WINAPI
-DeleteColorSpace(
-    HCOLORSPACE hcs)
-{
-    return NtGdiDeleteColorSpace(hcs);
-}
 void
 __cdecl
 _assert (
@@ -367,13 +357,8 @@ METADC_RosGlueDeleteObject(HGDIOBJ hobj)
 
     /* Check if we have a client object link and remove it if it was found.
        The link is the HDC that the object was selected into. */
-    hdc = GdiRemoveClientObjLink(hobj);
-    if (hdc == NULL)
+    while ((hdc = GdiRemoveClientObjLink(hobj)) != NULL)
     {
-        DPRINT1("the link was not found\n");
-        /* The link was not found, so we are not handling this object here */
-        return;
-    }
 
     if ( GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_METADC16_TYPE ) METADC_DeleteObject( hdc, hobj );
 
@@ -384,6 +369,7 @@ METADC_RosGlueDeleteObject(HGDIOBJ hobj)
         {
             emfdc_delete_object( hdc, hobj );
         }
+    }
     }
 }
 

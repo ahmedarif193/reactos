@@ -4,6 +4,121 @@
 #include <debug.h>
 
 
+typedef struct _GDI_COLORSPACE_RECORD
+{
+    LIST_ENTRY Entry;
+    HCOLORSPACE hCS;
+    LOGCOLORSPACEW lcs;
+} GDI_COLORSPACE_RECORD, *PGDI_COLORSPACE_RECORD;
+
+static LIST_ENTRY g_ColorSpaceList = { &g_ColorSpaceList, &g_ColorSpaceList };
+static RTL_CRITICAL_SECTION g_ColorSpaceLock;
+static BOOL g_ColorSpaceLockInit;
+
+static VOID
+IntColorSpaceLock(VOID)
+{
+    if (!g_ColorSpaceLockInit)
+    {
+        RtlEnterCriticalSection(&semLocal);
+        if (!g_ColorSpaceLockInit)
+        {
+            RtlInitializeCriticalSection(&g_ColorSpaceLock);
+            g_ColorSpaceLockInit = TRUE;
+        }
+        RtlLeaveCriticalSection(&semLocal);
+    }
+    RtlEnterCriticalSection(&g_ColorSpaceLock);
+}
+
+static VOID
+IntColorSpaceUnlock(VOID)
+{
+    RtlLeaveCriticalSection(&g_ColorSpaceLock);
+}
+
+static VOID
+IntColorSpaceRemember(HCOLORSPACE hCS, LPLOGCOLORSPACEW lplcpw)
+{
+    PGDI_COLORSPACE_RECORD pRec;
+
+    pRec = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(*pRec));
+    if (!pRec)
+        return;
+    pRec->hCS = hCS;
+    pRec->lcs = *lplcpw;
+    IntColorSpaceLock();
+    InsertHeadList(&g_ColorSpaceList, &pRec->Entry);
+    IntColorSpaceUnlock();
+}
+
+static VOID
+IntColorSpaceForget(HCOLORSPACE hCS)
+{
+    PLIST_ENTRY pEntry;
+    PGDI_COLORSPACE_RECORD pRec;
+
+    IntColorSpaceLock();
+    for (pEntry = g_ColorSpaceList.Flink; pEntry != &g_ColorSpaceList; pEntry = pEntry->Flink)
+    {
+        pRec = CONTAINING_RECORD(pEntry, GDI_COLORSPACE_RECORD, Entry);
+        if (pRec->hCS == hCS)
+        {
+            RemoveEntryList(&pRec->Entry);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, pRec);
+            break;
+        }
+    }
+    IntColorSpaceUnlock();
+}
+
+BOOL
+FASTCALL
+IntGetLogColorSpaceW(HCOLORSPACE hCS, LPLOGCOLORSPACEW lplcpw)
+{
+    PLIST_ENTRY pEntry;
+    PGDI_COLORSPACE_RECORD pRec;
+    BOOL bFound = FALSE;
+
+    if (GDI_HANDLE_GET_TYPE(hCS) != GDILoObjType_LO_ICMLCS_TYPE || !GdiValidateHandle(hCS))
+        return FALSE;
+
+    IntColorSpaceLock();
+    for (pEntry = g_ColorSpaceList.Flink; pEntry != &g_ColorSpaceList; pEntry = pEntry->Flink)
+    {
+        pRec = CONTAINING_RECORD(pEntry, GDI_COLORSPACE_RECORD, Entry);
+        if (pRec->hCS == hCS)
+        {
+            *lplcpw = pRec->lcs;
+            bFound = TRUE;
+            break;
+        }
+    }
+    IntColorSpaceUnlock();
+
+    if (!bFound)
+    {
+        RtlZeroMemory(lplcpw, sizeof(*lplcpw));
+        lplcpw->lcsSignature = LCS_SIGNATURE;
+        lplcpw->lcsVersion = 0x400;
+        lplcpw->lcsSize = sizeof(LOGCOLORSPACEW);
+        lplcpw->lcsCSType = LCS_sRGB;
+        lplcpw->lcsIntent = LCS_GM_IMAGES;
+        wcscpy(lplcpw->lcsFilename, L"sRGB Color Space Profile.icm");
+    }
+    return TRUE;
+}
+
+BOOL
+WINAPI
+DeleteColorSpace(HCOLORSPACE hCS)
+{
+    BOOL bRet = NtGdiDeleteColorSpace(hCS);
+    if (bRet)
+        IntColorSpaceForget(hCS);
+    return bRet;
+}
+
 HCOLORSPACE
 FASTCALL
 IntCreateColorSpaceW(
@@ -12,6 +127,7 @@ IntCreateColorSpaceW(
 )
 {
     LOGCOLORSPACEEXW lcpeexw;
+    HCOLORSPACE hCS;
 
     if ((lplcpw->lcsSignature != LCS_SIGNATURE) ||
             (lplcpw->lcsVersion != 0x400) ||
@@ -21,8 +137,11 @@ IntCreateColorSpaceW(
         return NULL;
     }
     RtlCopyMemory(&lcpeexw.lcsColorSpace, lplcpw, sizeof(LOGCOLORSPACEW));
-
-    return NtGdiCreateColorSpace(&lcpeexw);
+    lcpeexw.dwFlags = 0;
+    hCS = NtGdiCreateColorSpace(&lcpeexw);
+    if (hCS)
+        IntColorSpaceRemember(hCS, lplcpw);
+    return hCS;
 }
 
 /*

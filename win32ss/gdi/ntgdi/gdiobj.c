@@ -112,6 +112,7 @@ ASSERT_LOCK_ORDER(
            (objt) == GDIObjType_PAL_TYPE || \
            (objt) == GDIObjType_LFONT_TYPE || \
            (objt) == GDIObjType_PATH_TYPE || \
+           (objt) == GDIObjType_ICMLCS_TYPE || \
            (objt) == GDIObjType_BRUSH_TYPE)
 #define ASSERT_EXCLUSIVE_OBJECT_TYPE(objt) \
     ASSERT((objt) == GDIObjType_DC_TYPE || \

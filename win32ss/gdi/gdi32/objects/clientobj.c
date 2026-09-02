@@ -125,7 +125,7 @@ GdiRemoveClientObjLink(
             /* Get the object pointer */
             pvObject = pcol->pvObj;
 
-            /* Free the link structure */
+            *ppcol = pcol->pcolNext;
             HeapFree(GetProcessHeap(), 0, pcol);
 
             /* We're done */
@@ -141,6 +141,42 @@ GdiRemoveClientObjLink(
 
     /* Return the object pointer, or NULL if we did not find it */
     return pvObject;
+}
+
+BOOL
+WINAPI
+GdiRemoveClientObjLinkFor(
+    _In_ HGDIOBJ hobj,
+    _In_ PVOID pvObject)
+{
+    PCLIENTOBJLINK pcol, *ppcol;
+    ULONG iHashIndex;
+    BOOL bFound = FALSE;
+
+    iHashIndex = (ULONG_PTR)hobj % _countof(gapcolHashTable);
+
+    EnterCriticalSection(&gcsClientObjLinks);
+
+    ppcol = &gapcolHashTable[iHashIndex];
+    while (*ppcol != NULL)
+    {
+        pcol = *ppcol;
+
+        if (pcol->hobj == hobj && pcol->pvObj == pvObject)
+        {
+            gcClientObj--;
+            *ppcol = pcol->pcolNext;
+            HeapFree(GetProcessHeap(), 0, pcol);
+            bFound = TRUE;
+            break;
+        }
+
+        ppcol = &(pcol->pcolNext);
+    }
+
+    LeaveCriticalSection(&gcsClientObjLinks);
+
+    return bFound;
 }
 
 HGDIOBJ

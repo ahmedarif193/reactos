@@ -591,6 +591,12 @@ WINAPI
 GdiRemoveClientObjLink(
     _In_ HGDIOBJ hobj);
 
+BOOL
+WINAPI
+GdiRemoveClientObjLinkFor(
+    _In_ HGDIOBJ hobj,
+    _In_ PVOID pvObject);
+
 extern ULONG gcClientObj;
 
 VOID
@@ -869,6 +875,7 @@ extern BOOL EMFDC_ScaleWindowExtEx( LDC *dc_attr, INT x_num, INT x_denom, INT y_
 extern BOOL EMFDC_SelectClipPath( LDC *dc_attr, INT mode ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SelectObject( LDC *dc_attr, HGDIOBJ obj ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SelectPalette( LDC *dc_attr, HPALETTE palette ) DECLSPEC_HIDDEN;
+extern BOOL EMFDC_RealizePalette( LDC *dc_attr ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetArcDirection( LDC *dc_attr, INT dir ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetBkColor( LDC *dc_attr, COLORREF color ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_SetBkMode( LDC *dc_attr, INT mode ) DECLSPEC_HIDDEN;

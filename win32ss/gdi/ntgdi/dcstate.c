@@ -27,7 +27,14 @@ DC_vCopyState(PDC pdcSrc, PDC pdcDst, BOOL To)
     pdcDst->pdcattr->ulDirty_ |= (DIRTY_FILL|DIRTY_LINE|DIRTY_TEXT|DIRTY_BACKGROUND|DIRTY_CHARSET|DC_ICM_NOT_CALIBRATED|DC_ICM_NOT_SET); // Note: Use if, To is FALSE....
 
     /* Copy DC level */
-    pdcDst->dclevel.pColorSpace     = pdcSrc->dclevel.pColorSpace;
+    if (pdcDst->dclevel.pColorSpace != pdcSrc->dclevel.pColorSpace)
+    {
+        if (pdcDst->dclevel.pColorSpace)
+            GDIOBJ_vDereferenceObject((POBJ)pdcDst->dclevel.pColorSpace);
+        if (pdcSrc->dclevel.pColorSpace)
+            GDIOBJ_vReferenceObjectByPointer((POBJ)pdcSrc->dclevel.pColorSpace);
+        pdcDst->dclevel.pColorSpace = pdcSrc->dclevel.pColorSpace;
+    }
     pdcDst->dclevel.laPath          = pdcSrc->dclevel.laPath;
     pdcDst->dclevel.ca              = pdcSrc->dclevel.ca;
     pdcDst->dclevel.mxWorldToDevice = pdcSrc->dclevel.mxWorldToDevice;
