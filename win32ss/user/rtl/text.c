@@ -1204,9 +1204,9 @@ INT WINAPI DrawTextExWorker( HDC hdc,
     {
 	len = sizeof(line)/sizeof(line[0]);
 	if (invert_y)
-            last_line = !(flags & DT_NOCLIP) && y - ((flags & DT_EDITCONTROL) ? 2*lh-1 : lh) < rect->bottom;
+            last_line = !(flags & DT_NOCLIP) && y - ((flags & DT_EDITCONTROL) ? 2*lh : lh) < rect->bottom;
 	else
-            last_line = !(flags & DT_NOCLIP) && y + ((flags & DT_EDITCONTROL) ? 2*lh-1 : lh) > rect->bottom;
+            last_line = !(flags & DT_NOCLIP) && y + ((flags & DT_EDITCONTROL) ? 2*lh : lh) > rect->bottom;
 	strPtr = TEXT_NextLineW(hdc, strPtr, &count, line, &len, width, flags, &size, last_line, &p_retstr, tabwidth, &prefix_offset, &ellip);
 
 #ifdef __REACTOS__
