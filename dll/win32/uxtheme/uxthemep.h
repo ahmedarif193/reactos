@@ -170,6 +170,8 @@ VOID NC_TrackScrollBar(HWND Wnd, WPARAM wParam, POINT Pt);
 void ThemeInitDrawContext(PDRAW_CONTEXT pcontext, HWND hWnd, HRGN hRgn);
 void ThemeCleanupDrawContext(PDRAW_CONTEXT pcontext);
 PWND_DATA ThemeGetWndData(HWND hWnd);
+HBRUSH UXTHEME_GetDialogBackgroundBrush(HWND hwnd, BOOL create);
+void UXTHEME_DestroyDialogBrush(HWND hwnd);
 HTHEME GetNCCaptionTheme(HWND hWnd, DWORD style);
 HTHEME GetNCScrollbarTheme(HWND hWnd, DWORD style);
 

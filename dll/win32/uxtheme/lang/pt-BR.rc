@@ -16,4 +16,5 @@ BEGIN
     IDS_INACTIVEWIN "Janela inativa"
     IDS_OK "OK"
     IDS_WINTEXT "Texto da janela"
+    IDS_ERR_UNKNOWN_PROPERTY "Must be Primitive, enum, or type: %1"
 END

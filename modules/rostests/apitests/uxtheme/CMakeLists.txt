@@ -3,6 +3,7 @@ list(APPEND SOURCE
     CloseThemeData.c
     DrawThemeParentBackground.c
     GetThemeParseErrorInfo.c
+    NonClientCaption.c
     SetWindowTheme.c
     SetThemeAppProperties.c
     ThemeRendering.c

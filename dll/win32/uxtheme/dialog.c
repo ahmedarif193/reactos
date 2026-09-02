@@ -104,6 +104,16 @@ static void destroy_dialog_brush(HWND hwnd)
     }
 }
 
+HBRUSH UXTHEME_GetDialogBackgroundBrush(HWND hwnd, BOOL create)
+{
+    return get_dialog_background_brush(hwnd, create);
+}
+
+void UXTHEME_DestroyDialogBrush(HWND hwnd)
+{
+    destroy_dialog_brush(hwnd);
+}
+
 LRESULT WINAPI UXTHEME_DefDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, BOOL unicode)
 {
     POINT org, old_org;

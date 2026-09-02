@@ -31,6 +31,7 @@
 #include "vssym32.h"
 #ifdef __REACTOS__
 #include "winnls.h"
+#include "resource.h"
 #endif
 
 #include "uxthemedll.h"
@@ -641,7 +642,10 @@ static HRESULT UXTHEME_SetWindowProperty(HWND hwnd, ATOM aProp, LPCWSTR pszValue
     if(oldValue)
         DeleteAtom(oldValue);
     if(pszValue) {
-        ATOM atValue = AddAtomW(pszValue);
+        ATOM atValue;
+        if (!*pszValue)
+            pszValue = L"$";
+        atValue = AddAtomW(pszValue);
         if(!atValue
            || !SetPropW(hwnd, (LPCWSTR)MAKEINTATOM(aProp), (LPWSTR)MAKEINTATOM(atValue))) {
             HRESULT hr = HRESULT_FROM_WIN32(GetLastError());
@@ -789,7 +793,7 @@ HRESULT WINAPI SetWindowTheme(HWND hwnd, LPCWSTR pszSubAppName,
     TRACE("(%p,%s,%s)\n", hwnd, debugstr_w(pszSubAppName),
           debugstr_w(pszSubIdList));
 
-    if (!hwnd)
+    if (!IsWindow(hwnd))
         return E_HANDLE;
 
     hr = UXTHEME_SetWindowProperty(hwnd, atSubAppName, pszSubAppName);
@@ -865,7 +869,7 @@ HRESULT WINAPI HitTestThemeBackground(HTHEME hTheme, HDC hdc, int iPartId,
                                      POINT ptTest, WORD *pwHitTestCode)
 {
     FIXME("%d %d 0x%08lx: stub\n", iPartId, iStateId, dwOptions);
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
     return E_NOTIMPL;
 }
@@ -876,7 +880,7 @@ HRESULT WINAPI HitTestThemeBackground(HTHEME hTheme, HDC hdc, int iPartId,
 BOOL WINAPI IsThemePartDefined(HTHEME hTheme, int iPartId, int iStateId)
 {
     TRACE("(%p,%d,%d)\n", hTheme, iPartId, iStateId);
-    if(!hTheme) {
+    if(!MSSTYLES_ValidateHandle(hTheme)) {
         SetLastError(E_HANDLE);
         return FALSE;
     }
@@ -1333,8 +1337,38 @@ HRESULT WINAPI EnumThemeSizes(LPWSTR pszThemeFileName, LPWSTR pszColorName,
 HRESULT WINAPI ParseThemeIniFile(LPCWSTR pszIniFileName, LPWSTR pszUnknown,
                                  ParseThemeIniFileProc callback, LPVOID lpData)
 {
-    FIXME("%s %s: stub\n", debugstr_w(pszIniFileName), debugstr_w(pszUnknown));
-    return E_NOTIMPL;
+    PUXINI_FILE ini;
+    LPCWSTR lpName, lpValue;
+    DWORD dwLen, dwValueLen;
+    WCHAR szPropertyName[MAX_THEME_VALUE_NAME];
+    WCHAR szLine[MAX_PATH];
+    int iPrimitive, iId, nLineNo;
+    HRESULT hr = S_OK;
+
+    FIXME("%s %p %p %p: entries are not enumerated\n", debugstr_w(pszIniFileName), pszUnknown, callback, lpData);
+
+    if (!pszIniFileName)
+        return E_POINTER;
+
+    ini = UXINI_LoadINIFile(pszIniFileName);
+    if (!ini)
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    while (SUCCEEDED(hr) && (lpName = UXINI_GetNextSection(ini, &dwLen)))
+    {
+        while ((lpName = UXINI_GetNextValue(ini, &dwLen, &lpValue, &dwValueLen)))
+        {
+            lstrcpynW(szPropertyName, lpName, min(dwLen + 1, ARRAY_SIZE(szPropertyName)));
+            if (MSSTYLES_LookupProperty(szPropertyName, &iPrimitive, &iId))
+                continue;
+            nLineNo = UXINI_GetLine(ini, lpName, szLine, ARRAY_SIZE(szLine));
+            hr = UXTHEME_MakeParseError(IDS_ERR_UNKNOWN_PROPERTY, szPropertyName, L"",
+                                        pszIniFileName, szLine, nLineNo);
+            break;
+        }
+    }
+    UXINI_CloseINI(ini);
+    return hr;
 }
 
 /**********************************************************************

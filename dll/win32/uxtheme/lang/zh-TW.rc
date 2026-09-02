@@ -16,4 +16,5 @@ BEGIN
     IDS_INACTIVEWIN "非使用中視窗"
     IDS_OK "確定"
     IDS_WINTEXT "視窗內的文字"
+    IDS_ERR_UNKNOWN_PROPERTY "Must be Primitive, enum, or type: %1"
 END

@@ -16,4 +16,5 @@ BEGIN
     IDS_INACTIVEWIN "Neaktívne okno"
     IDS_OK "OK"
     IDS_WINTEXT "Text okna"
+    IDS_ERR_UNKNOWN_PROPERTY "Must be Primitive, enum, or type: %1"
 END
