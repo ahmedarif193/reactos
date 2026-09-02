@@ -30,11 +30,105 @@
 #include "dxva2api.h"
 #include "dxvahd.h"
 
+#include "decoder.h"
+
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(dxva2);
 
 #define D3DFMT_NV12 MAKEFOURCC('N','V','1','2')
+
+static const GUID dxva2_surface_group_guid =
+    {0x2a539302, 0xdb1a, 0x43e1, {0x8e, 0xa9, 0x58, 0x0f, 0x88, 0x84, 0xe9, 0x49}};
+
+struct dxva2_surface_group
+{
+    IUnknown IUnknown_iface;
+    LONG refcount;
+    UINT count;
+    IDirect3DSurface9 *surfaces[1];
+};
+
+static struct dxva2_surface_group *impl_from_surface_group_IUnknown(IUnknown *iface)
+{
+    return CONTAINING_RECORD(iface, struct dxva2_surface_group, IUnknown_iface);
+}
+
+static HRESULT WINAPI dxva2_surface_group_QueryInterface(IUnknown *iface,
+        REFIID iid, void **object)
+{
+    if (!object)
+        return E_POINTER;
+    if (!IsEqualIID(iid, &IID_IUnknown))
+    {
+        *object = NULL;
+        return E_NOINTERFACE;
+    }
+
+    *object = iface;
+    IUnknown_AddRef(iface);
+    return S_OK;
+}
+
+static ULONG WINAPI dxva2_surface_group_AddRef(IUnknown *iface)
+{
+    struct dxva2_surface_group *group = impl_from_surface_group_IUnknown(iface);
+
+    return InterlockedIncrement(&group->refcount);
+}
+
+static ULONG WINAPI dxva2_surface_group_Release(IUnknown *iface)
+{
+    struct dxva2_surface_group *group = impl_from_surface_group_IUnknown(iface);
+    ULONG refcount = InterlockedDecrement(&group->refcount);
+    UINT i;
+
+    if (!refcount)
+    {
+        for (i = 0; i < group->count; ++i)
+            IDirect3DSurface9_Release(group->surfaces[i]);
+        free(group);
+    }
+    return refcount;
+}
+
+static const IUnknownVtbl dxva2_surface_group_vtbl =
+{
+    dxva2_surface_group_QueryInterface,
+    dxva2_surface_group_AddRef,
+    dxva2_surface_group_Release,
+};
+
+static HRESULT dxva2_surface_group_attach(IDirect3DSurface9 **surfaces,
+        UINT surface_count)
+{
+    struct dxva2_surface_group *group;
+    SIZE_T size;
+    UINT i;
+    HRESULT hr;
+
+    if (surface_count <= 1)
+        return S_OK;
+    size = FIELD_OFFSET(struct dxva2_surface_group,
+            surfaces[surface_count - 1]);
+    if (!(group = calloc(1, size)))
+        return E_OUTOFMEMORY;
+
+    group->IUnknown_iface.lpVtbl = &dxva2_surface_group_vtbl;
+    group->refcount = 1;
+    group->count = surface_count - 1;
+    for (i = 0; i < group->count; ++i)
+    {
+        group->surfaces[i] = surfaces[i + 1];
+        IDirect3DSurface9_AddRef(group->surfaces[i]);
+    }
+
+    hr = IDirect3DSurface9_SetPrivateData(surfaces[0],
+            &dxva2_surface_group_guid, &group->IUnknown_iface,
+            sizeof(IUnknown *), D3DSPD_IUNKNOWN);
+    IUnknown_Release(&group->IUnknown_iface);
+    return hr;
+}
 
 enum device_handle_flags
 {
@@ -679,44 +773,86 @@ static HRESULT WINAPI device_manager_decoder_service_CreateSurface(IDirectXVideo
         UINT width, UINT height, UINT backbuffers, D3DFORMAT format, D3DPOOL pool, DWORD usage, DWORD dxvaType,
         IDirect3DSurface9 **surfaces, HANDLE *shared_handle)
 {
-    FIXME("%p, %u, %u, %u, %#x, %d, %ld, %ld, %p, %p.\n", iface, width, height, backbuffers, format, pool, usage,
+    struct device_manager *manager = impl_from_IDirectXVideoDecoderService(iface);
+    unsigned int i, j;
+    HRESULT hr = S_OK;
+
+    TRACE("%p, %u, %u, %u, %#x, %d, %ld, %ld, %p, %p.\n", iface, width, height, backbuffers, format, pool, usage,
             dxvaType, surfaces, shared_handle);
 
-    return E_NOTIMPL;
+    if (!surfaces)
+        return E_POINTER;
+    if (!width || !height || backbuffers == UINT_MAX || usage ||
+            dxvaType != DXVA2_VideoDecoderRenderTarget || shared_handle ||
+            (SIZE_T)backbuffers + 1 > MAXULONG_PTR / sizeof(*surfaces))
+        return D3DERR_INVALIDCALL;
+
+    memset(surfaces, 0, (backbuffers + 1) * sizeof(*surfaces));
+    for (i = 0; i <= backbuffers; ++i)
+    {
+        if (FAILED(hr = IDirect3DDevice9_CreateOffscreenPlainSurface(manager->device, width, height,
+                format, pool, &surfaces[i], NULL)))
+            break;
+    }
+
+    if (SUCCEEDED(hr))
+        hr = dxva2_surface_group_attach(surfaces, backbuffers + 1);
+
+    if (FAILED(hr))
+    {
+        for (j = 0; j < i; ++j)
+        {
+            IDirect3DSurface9_Release(surfaces[j]);
+            surfaces[j] = NULL;
+        }
+    }
+
+    return hr;
 }
 
 static HRESULT WINAPI device_manager_decoder_service_GetDecoderDeviceGuids(IDirectXVideoDecoderService *iface,
         UINT *count, GUID **guids)
 {
-    FIXME("%p, %p, %p.\n", iface, count, guids);
+    struct device_manager *manager = impl_from_IDirectXVideoDecoderService(iface);
 
-    return E_NOTIMPL;
+    TRACE("%p, %p, %p.\n", iface, count, guids);
+
+    return dxva2_decoder_get_device_guids(manager->device, count, guids);
 }
 
 static HRESULT WINAPI device_manager_decoder_service_GetDecoderRenderTargets(IDirectXVideoDecoderService *iface,
         REFGUID guid, UINT *count, D3DFORMAT **formats)
 {
-    FIXME("%p, %s, %p, %p.\n", iface, debugstr_guid(guid), count, formats);
+    struct device_manager *manager = impl_from_IDirectXVideoDecoderService(iface);
 
-    return E_NOTIMPL;
+    TRACE("%p, %s, %p, %p.\n", iface, debugstr_guid(guid), count, formats);
+
+    return dxva2_decoder_get_render_targets(manager->device, guid, count, formats);
 }
 
 static HRESULT WINAPI device_manager_decoder_service_GetDecoderConfigurations(IDirectXVideoDecoderService *iface,
         REFGUID guid, const DXVA2_VideoDesc *video_desc, void *reserved, UINT *count, DXVA2_ConfigPictureDecode **configs)
 {
-    FIXME("%p, %s, %p, %p, %p, %p.\n", iface, debugstr_guid(guid), video_desc, reserved, count, configs);
+    struct device_manager *manager = impl_from_IDirectXVideoDecoderService(iface);
 
-    return E_NOTIMPL;
+    TRACE("%p, %s, %p, %p, %p, %p.\n", iface, debugstr_guid(guid), video_desc, reserved, count, configs);
+
+    if (reserved)
+        return E_INVALIDARG;
+
+    return dxva2_decoder_get_configurations(manager->device, guid, video_desc, count, configs);
 }
 
 static HRESULT WINAPI device_manager_decoder_service_CreateVideoDecoder(IDirectXVideoDecoderService *iface,
         REFGUID guid, const DXVA2_VideoDesc *video_desc, const DXVA2_ConfigPictureDecode *config, IDirect3DSurface9 **rts,
         UINT num_surfaces, IDirectXVideoDecoder **decoder)
 {
-    FIXME("%p, %s, %p, %p, %p, %u, %p.\n", iface, debugstr_guid(guid), video_desc, config, rts, num_surfaces,
+    struct device_manager *manager = impl_from_IDirectXVideoDecoderService(iface);
+
+    TRACE("%p, %s, %p, %p, %p, %u, %p.\n", iface, debugstr_guid(guid), video_desc, config, rts, num_surfaces,
             decoder);
 
-    return E_NOTIMPL;
+    return dxva2_decoder_create(iface, manager->device, guid, video_desc, config, rts, num_surfaces, decoder);
 }
 
 static const IDirectXVideoDecoderServiceVtbl device_manager_decoder_service_vtbl =
