@@ -5418,6 +5418,9 @@ enum _LI_METRIC
    LIM_SMALL,
    LIM_LARGE,
 };
+
+HRESULT WINAPI LoadIconMetric(_In_opt_ HINSTANCE, _In_ PCWSTR, _In_ int, _Out_ HICON *);
+HRESULT WINAPI LoadIconWithScaleDown(_In_opt_ HINSTANCE, _In_ PCWSTR, _In_ int, _In_ int, _Out_ HICON *);
 #endif
 
 #ifdef __cplusplus

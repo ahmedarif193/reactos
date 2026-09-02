@@ -3,6 +3,7 @@ list(APPEND SOURCE
     ../include/msgtrace.c
     button.c
     imagelist.c
+    LoadIconWithScaleDown.c
     propsheet.c
     testlist.c
     themestate.c
