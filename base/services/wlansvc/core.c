@@ -222,6 +222,7 @@ WlanSvcInitialize(VOID)
 VOID
 WlanSvcCleanup(VOID)
 {
+    WlanSvcStopAutoConfig();
     PLIST_ENTRY entry;
 
     if (!WlanSvcInitialized)

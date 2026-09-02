@@ -18,6 +18,7 @@ DWORD WINAPI RpcThreadRoutine(LPVOID lpParameter)
     RPC_STATUS Status;
 
     WlanSvcInitialize();
+    WlanSvcStartAutoConfig();
 
     Status = RpcServerUseProtseqEpW(L"ncalrpc", 20, L"wlansvc", NULL);
     if (Status != RPC_S_OK)
@@ -271,8 +272,76 @@ DWORD _RpcSetInterface(
     DWORD dwDataSize,
     LPBYTE pData)
 {
-    UNIMPLEMENTED;
-    return ERROR_CALL_NOT_IMPLEMENTED;
+    PWLANSVC_INTERFACE iface;
+    DWORD dwResult = ERROR_SUCCESS;
+
+    if (pData == NULL || dwDataSize == 0)
+        return ERROR_INVALID_PARAMETER;
+
+    if (!WlanSvcValidateHandle(hClientHandle))
+        return ERROR_INVALID_HANDLE;
+
+    EnterCriticalSection(&WlanSvcLock);
+    iface = WlanSvcFindInterface(pInterfaceGuid);
+    if (iface == NULL)
+    {
+        LeaveCriticalSection(&WlanSvcLock);
+        return ERROR_NOT_FOUND;
+    }
+
+    switch (OpCode)
+    {
+        case wlan_intf_opcode_radio_state:
+        {
+            const WLAN_PHY_RADIO_STATE *prs = (const WLAN_PHY_RADIO_STATE *)pData;
+            BOOL on;
+
+            if (dwDataSize < sizeof(WLAN_PHY_RADIO_STATE))
+            {
+                dwResult = ERROR_INVALID_PARAMETER;
+                break;
+            }
+            on = (prs->dot11SoftwareRadioState != dot11_radio_state_off);
+            if (on != iface->RadioOn)
+            {
+                iface->RadioOn = on;
+                if (!on)
+                {
+                    if (iface->Connected)
+                        WlanSvcDisconnect(iface);
+                    WlanSvcFlushBssList(iface);
+                    iface->State = wlan_interface_state_disconnected;
+                }
+                else
+                {
+                    iface->LastAutoConnectTick = 0;
+                }
+                WlanSvcIndicateRadioState(iface);
+            }
+            break;
+        }
+
+        case wlan_intf_opcode_autoconf_enabled:
+        {
+            if (dwDataSize < sizeof(BOOL))
+            {
+                dwResult = ERROR_INVALID_PARAMETER;
+                break;
+            }
+            iface->AutoConfigEnabled = (*(const BOOL *)pData != FALSE);
+            WlanSvcIndicateAcm(iface, iface->AutoConfigEnabled ?
+                               wlan_notification_acm_autoconf_enabled :
+                               wlan_notification_acm_autoconf_disabled);
+            break;
+        }
+
+        default:
+            dwResult = ERROR_NOT_SUPPORTED;
+            break;
+    }
+
+    LeaveCriticalSection(&WlanSvcLock);
+    return dwResult;
 }
 
 DWORD _RpcQueryInterface(
@@ -320,11 +389,8 @@ DWORD _RpcIhvControl(
     return ERROR_CALL_NOT_IMPLEMENTED;
 }
 
-DWORD _RpcScan(
-    WLANSVC_RPC_HANDLE hClientHandle,
-    const GUID *pInterfaceGuid,
-    PDOT11_SSID pDot11Ssid,
-    PWLAN_RAW_DATA pIeData)
+DWORD
+WlanSvcScanInterface(const GUID *pInterfaceGuid, PDOT11_SSID pDot11Ssid)
 {
     PWLANSVC_INTERFACE iface;
     PNWIFI_BSS_LIST bssList = NULL;
@@ -334,17 +400,17 @@ DWORD _RpcScan(
     ULONG64 upperLuid;
     DWORD dwResult;
 
-    UNREFERENCED_PARAMETER(pIeData);
-
-    if (!WlanSvcValidateHandle(hClientHandle))
-        return ERROR_INVALID_HANDLE;
-
     EnterCriticalSection(&WlanSvcLock);
     iface = WlanSvcFindInterface(pInterfaceGuid);
     if (iface == NULL)
     {
         LeaveCriticalSection(&WlanSvcLock);
         return ERROR_NOT_FOUND;
+    }
+    if (!iface->RadioOn)
+    {
+        LeaveCriticalSection(&WlanSvcLock);
+        return ERROR_INVALID_STATE;
     }
 
     interfaceGuid = iface->InterfaceGuid;
@@ -373,12 +439,98 @@ DWORD _RpcScan(
     }
     if (iface != NULL && dwResult == ERROR_SUCCESS)
         WlanSvcIndicateAcm(iface, wlan_notification_acm_scan_complete);
+    if (iface != NULL && dwResult == ERROR_SUCCESS && !iface->Connected)
+        WlanSvcTryAutoConnect(iface);
     LeaveCriticalSection(&WlanSvcLock);
 
     if (bssList != NULL)
         HeapFree(GetProcessHeap(), 0, bssList);
 
     return dwResult;
+}
+
+static HANDLE WlanSvcAutoStopEvent = NULL;
+static HANDLE WlanSvcAutoThread = NULL;
+
+static DWORD WINAPI
+WlanSvcAutoConfigThread(PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+
+    while (WaitForSingleObject(WlanSvcAutoStopEvent, 15000) == WAIT_TIMEOUT)
+    {
+        GUID guids[8];
+        DWORD count = 0, i;
+        ULONGLONG now = GetTickCount64();
+        PLIST_ENTRY entry;
+
+        EnterCriticalSection(&WlanSvcLock);
+        for (entry = WlanSvcInterfaceListHead.Flink;
+             entry != &WlanSvcInterfaceListHead && count < 8;
+             entry = entry->Flink)
+        {
+            PWLANSVC_INTERFACE iface =
+                CONTAINING_RECORD(entry, WLANSVC_INTERFACE, ListEntry);
+
+            if (iface->Connected || !iface->RadioOn || !iface->AutoConfigEnabled ||
+                iface->ProfileCount == 0 ||
+                iface->State == wlan_interface_state_associating ||
+                iface->State == wlan_interface_state_authenticating)
+                continue;
+            if (now - iface->LastAutoConnectTick < 30000)
+                continue;
+            iface->LastAutoConnectTick = now;
+            guids[count++] = iface->InterfaceGuid;
+        }
+        LeaveCriticalSection(&WlanSvcLock);
+
+        for (i = 0; i < count; i++)
+            WlanSvcScanInterface(&guids[i], NULL);
+    }
+    return 0;
+}
+
+VOID
+WlanSvcStartAutoConfig(VOID)
+{
+    if (WlanSvcAutoThread != NULL)
+        return;
+    WlanSvcAutoStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (WlanSvcAutoStopEvent == NULL)
+        return;
+    WlanSvcAutoThread = CreateThread(NULL, 0, WlanSvcAutoConfigThread, NULL, 0, NULL);
+    if (WlanSvcAutoThread == NULL)
+    {
+        CloseHandle(WlanSvcAutoStopEvent);
+        WlanSvcAutoStopEvent = NULL;
+    }
+}
+
+VOID
+WlanSvcStopAutoConfig(VOID)
+{
+    if (WlanSvcAutoThread == NULL)
+        return;
+    SetEvent(WlanSvcAutoStopEvent);
+    WaitForSingleObject(WlanSvcAutoThread, 5000);
+    CloseHandle(WlanSvcAutoThread);
+    CloseHandle(WlanSvcAutoStopEvent);
+    WlanSvcAutoThread = NULL;
+    WlanSvcAutoStopEvent = NULL;
+}
+
+DWORD _RpcScan(
+    WLANSVC_RPC_HANDLE hClientHandle,
+    const GUID *pInterfaceGuid,
+    PDOT11_SSID pDot11Ssid,
+    PWLAN_RAW_DATA pIeData)
+{
+    UNREFERENCED_PARAMETER(pIeData);
+
+    if (!WlanSvcValidateHandle(hClientHandle))
+        return ERROR_INVALID_HANDLE;
+
+    return WlanSvcScanInterface(pInterfaceGuid, pDot11Ssid);
 }
 
 DWORD _RpcGetAvailableNetworkList(
@@ -482,6 +634,12 @@ DWORD _RpcConnect(
     {
         LeaveCriticalSection(&WlanSvcLock);
         return ERROR_NOT_FOUND;
+    }
+
+    if (!iface->RadioOn)
+    {
+        LeaveCriticalSection(&WlanSvcLock);
+        return ERROR_INVALID_STATE;
     }
 
     dwResult = WlanSvcConnect(iface, *pConnectionParameters);
