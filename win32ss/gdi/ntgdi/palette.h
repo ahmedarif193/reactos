@@ -84,12 +84,6 @@ PALETTE_AllocPalWithHandle(
     _In_ FLONG flGreen,
     _In_ FLONG flBlue);
 
-VOID
-FASTCALL
-PALETTE_ValidateFlags(
-    PALETTEENTRY* lpPalE,
-    INT size);
-
 INT
 FASTCALL
 PALETTE_GetObject(

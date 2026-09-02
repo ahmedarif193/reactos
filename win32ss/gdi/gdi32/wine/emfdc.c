@@ -529,6 +529,20 @@ static DWORD emfdc_create_palette( struct emf *emf, HPALETTE hPal )
     return pal.hdr.ihPal;
 }
 
+BOOL EMFDC_RealizePalette( WINEDC *dc_attr )
+{
+    HPALETTE palette = GetCurrentObject( dc_attr->hdc, OBJ_PAL );
+    struct emf *emf = dc_attr->emf;
+    EMRREALIZEPALETTE emr;
+
+    if (palette == GetStockObject( DEFAULT_PALETTE ))
+        return TRUE;
+
+    emr.emr.iType = EMR_REALIZEPALETTE;
+    emr.emr.nSize = sizeof(emr);
+    return emfdc_record( emf, &emr.emr );
+}
+
 BOOL EMFDC_SelectPalette( WINEDC *dc_attr, HPALETTE palette )
 {
     struct emf *emf = dc_attr->emf;
@@ -1116,12 +1130,14 @@ BOOL EMFDC_ExtTextOut( WINEDC *dc_attr, INT x, INT y, UINT flags, const RECT *re
     int text_height = 0;
     int text_width = 0;
     TEXTMETRICW tm;
-    DWORD size;
+    DWORD size, dx_len;
     BOOL ret;
 
     if (count > INT_MAX) return FALSE;
 
-    size = sizeof(*emr) + ((count+1) & ~1) * sizeof(WCHAR) + count * sizeof(INT);
+    if (!dx && (flags & ETO_PDY)) return FALSE;
+    dx_len = (flags & ETO_PDY) ? count * 2 : count;
+    size = sizeof(*emr) + ((count+1) & ~1) * sizeof(WCHAR) + dx_len * sizeof(INT);
 
     TRACE( "%s %s count %d size = %d\n", debugstr_wn(str, count),
            wine_dbgstr_rect(rect), count, size );
@@ -1177,8 +1193,11 @@ BOOL EMFDC_ExtTextOut( WINEDC *dc_attr, INT x, INT y, UINT flags, const RECT *re
     {
         UINT i;
         SIZE str_size;
-        memcpy( (char*)emr + emr->emrtext.offDx, dx, count * sizeof(INT) );
-        for (i = 0; i < count; i++) text_width += dx[i];
+        memcpy( (char*)emr + emr->emrtext.offDx, dx, dx_len * sizeof(INT) );
+        if (flags & ETO_PDY)
+            for (i = 0; i < count; i++) text_width += dx[2 * i];
+        else
+            for (i = 0; i < count; i++) text_width += dx[i];
         if (GetTextExtentPoint32W( dc_attr->hdc, str, count, &str_size ))
             text_height = str_size.cy;
     }
