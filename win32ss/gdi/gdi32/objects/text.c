@@ -225,6 +225,10 @@ GetTextMetricsA(
     }
 
     FONT_TextMetricWToA(&tmwi.TextMetric, lptm);
+    lptm->tmFirstChar = (BYTE)tmwi.Diff.chFirst;
+    lptm->tmLastChar = (BYTE)tmwi.Diff.chLast;
+    lptm->tmDefaultChar = (BYTE)tmwi.Diff.ChDefault;
+    lptm->tmBreakChar = (BYTE)tmwi.Diff.ChBreak;
     return TRUE;
 }
 
@@ -480,23 +484,62 @@ ExtTextOutA(
     _In_ UINT cch,
     _In_reads_opt_(cch) const INT *lpDx)
 {
-    ANSI_STRING StringA;
-    UNICODE_STRING StringU;
+    LPWSTR pwsz = NULL;
+    INT *lpDxW = NULL;
+    INT cchW = 0;
+    UINT cp;
     BOOL ret;
 
-    if (fuOptions & ETO_GLYPH_INDEX)
+    if ((fuOptions & ETO_GLYPH_INDEX) || cch > 8192)
         return ExtTextOutW(hdc, x, y, fuOptions, lprc, (LPCWSTR)lpString, cch, lpDx);
 
-    StringA.Buffer = (PCHAR)lpString;
-    StringA.Length = StringA.MaximumLength = cch;
-    RtlAnsiStringToUnicodeString(&StringU, &StringA, TRUE);
+    cp = GdiGetCodePage(hdc);
+    if (lpString && cch)
+    {
+        cchW = MultiByteToWideChar(cp, 0, lpString, cch, NULL, 0);
+        pwsz = HeapAlloc(GetProcessHeap(), 0, (cchW ? cchW : 1) * sizeof(WCHAR));
+        if (!pwsz)
+            return FALSE;
+        cchW = MultiByteToWideChar(cp, 0, lpString, cch, pwsz, cchW);
+    }
 
-    if (StringU.Length != StringA.Length * sizeof(WCHAR))
-        DPRINT1("ERROR: Should convert lpDx properly!\n");
+    if (lpDx && cchW)
+    {
+        UINT i = 0, j = 0;
+        UINT stride = (fuOptions & ETO_PDY) ? 2 : 1;
 
-    ret = ExtTextOutW(hdc, x, y, fuOptions, lprc, StringU.Buffer, cch, lpDx);
+        lpDxW = HeapAlloc(GetProcessHeap(), 0, cchW * stride * sizeof(INT));
+        if (!lpDxW)
+        {
+            HeapFree(GetProcessHeap(), 0, pwsz);
+            return FALSE;
+        }
+        while (i < cch && j < (UINT)cchW * stride)
+        {
+            if (IsDBCSLeadByteEx(cp, lpString[i]) && i + 1 < cch)
+            {
+                lpDxW[j] = lpDx[i * stride] + lpDx[(i + 1) * stride];
+                if (stride == 2)
+                    lpDxW[j + 1] = lpDx[i * stride + 1] + lpDx[(i + 1) * stride + 1];
+                i += 2;
+            }
+            else
+            {
+                lpDxW[j] = lpDx[i * stride];
+                if (stride == 2)
+                    lpDxW[j + 1] = lpDx[i * stride + 1];
+                i++;
+            }
+            j += stride;
+        }
+    }
 
-    RtlFreeUnicodeString(&StringU);
+    ret = ExtTextOutW(hdc, x, y, fuOptions, lprc, pwsz, cchW, lpDxW ? lpDxW : (cchW == (INT)cch ? lpDx : NULL));
+
+    if (lpDxW)
+        HeapFree(GetProcessHeap(), 0, lpDxW);
+    if (pwsz)
+        HeapFree(GetProcessHeap(), 0, pwsz);
 
     return ret;
 }
