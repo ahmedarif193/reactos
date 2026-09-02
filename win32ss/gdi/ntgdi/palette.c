@@ -122,13 +122,6 @@ InitPaletteImpl(VOID)
     return STATUS_SUCCESS;
 }
 
-VOID FASTCALL PALETTE_ValidateFlags(PALETTEENTRY* lpPalE, INT size)
-{
-    int i = 0;
-    for (; i<size ; i++)
-        lpPalE[i].peFlags = PC_SYS_USED | (lpPalE[i].peFlags & 0x07);
-}
-
 
 PPALETTE
 NTAPI
@@ -474,8 +467,6 @@ GreCreatePaletteInternal(
 
     if (ppal != NULL)
     {
-        PALETTE_ValidateFlags(ppal->IndexedColors, ppal->NumColors);
-
         hpal = ppal->BaseObject.hHmgr;
         PALETTE_UnlockPalette(ppal);
     }
@@ -519,8 +510,6 @@ NtGdiCreatePaletteInternal(
         _SEH2_YIELD(return NULL);
     }
     _SEH2_END;
-
-    PALETTE_ValidateFlags(ppal->IndexedColors, cEntries);
     hpal = ppal->BaseObject.hHmgr;
     PALETTE_UnlockPalette(ppal);
 
@@ -616,7 +605,6 @@ NtGdiResizePalette(
   {
     if(XlateObj) memset(palPtr->logicalToSystem + cPrevEnt, 0, (cEntries - cPrevEnt)*sizeof(int));
     memset( (BYTE*)palPtr + prevsize, 0, size - prevsize );
-    PALETTE_ValidateFlags((PALETTEENTRY*)((BYTE*)palPtr + prevsize), cEntries - cPrevEnt );
   }
   palPtr->logpalette->palNumEntries = cEntries;
   palPtr->logpalette->palVersion = prevVer;
@@ -800,7 +788,6 @@ IntAnimatePalette(HPALETTE hPal,
                 memcpy( &palPtr->IndexedColors[StartIndex], pptr,
                         sizeof(PALETTEENTRY) );
                 ret++;
-                PALETTE_ValidateFlags(&palPtr->IndexedColors[StartIndex], 1);
             }
         }
 
@@ -865,8 +852,11 @@ IntGetPaletteEntries(
             return 0;
         }
         memcpy(pe, palGDI->IndexedColors + StartIndex, Entries * sizeof(PALETTEENTRY));
-        for (UINT i = 0; i < Entries; i++)
-            pe[i].peFlags &= ~PC_SYS_USED;
+        if (palGDI == gppalDefault)
+        {
+            for (UINT i = 0; i < Entries; i++)
+                pe[i].peFlags &= ~PC_SYS_USED;
+        }
     }
     else
     {

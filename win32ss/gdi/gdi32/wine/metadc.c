@@ -1376,8 +1376,6 @@ HDC WINAPI CreateMetaFileW( const WCHAR *filename )
     metadc->brush = GetStockObject( WHITE_BRUSH );
     metadc->font  = GetStockObject( DEVICE_DEFAULT_FONT );
 
-    SetVirtualResolution( hdc, 0, 0, 0, 0);
-
     if (filename)  /* disk based metafile */
     {
         HANDLE file = CreateFileW( filename, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, 0 );
