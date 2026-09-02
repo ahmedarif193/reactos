@@ -19,15 +19,6 @@ IntCreateDICW(
 
     HANDLE hspool = NULL;
 
-    if ( !ghSpooler && !LoadTheSpoolerDrv())
-    {
-        DPRINT1("WinSpooler.Drv Did not load!\n");
-    }
-    else
-    {
-        DPRINT("WinSpooler.Drv Loaded! hMod -> 0x%p\n", ghSpooler);
-    }
-
     if ((!lpwszDevice) && (!lpwszDriver))
     {
         /* CreateDC(NULL, NULL, ...) fails on Windows, but an information
@@ -64,6 +55,10 @@ IntCreateDICW(
     // Handle Print device or something else.
     if (!Display)
     {
+        if ( !ghSpooler && !LoadTheSpoolerDrv())
+        {
+            DPRINT1("WinSpooler.Drv Did not load!\n");
+        }
         // WIP - GDI Print Commit coming in soon.
         DPRINT1("Not a DISPLAY device! %wZ\n", &Device);
         return NULL; // Return NULL until then.....
@@ -595,11 +590,13 @@ GetDeviceCaps(
         pdcattr = GdiGetDcAttr(hdc);
         if ( pdcattr == NULL )
         {
-            SetLastError(ERROR_INVALID_PARAMETER);
-            return 0;
+            if (!GdiValidateHandle(hdc))
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return 0;
+            }
         }
-
-        if (!(pdcattr->ulDirty_ & DC_PRIMARY_DISPLAY))
+        else if (!(pdcattr->ulDirty_ & DC_PRIMARY_DISPLAY))
             return NtGdiGetDeviceCaps(hdc, nIndex);
     }
 
@@ -1448,6 +1445,11 @@ GdiSelectBitmap(
     _In_ HDC hdc,
     _In_ HBITMAP hbmp)
 {
+    if (!GdiValidateHandle(hdc))
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return NULL;
+    }
     return NtGdiSelectBitmap(hdc, hbmp);
 }
 
