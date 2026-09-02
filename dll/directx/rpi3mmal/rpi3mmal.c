@@ -2586,7 +2586,8 @@ Rpi3MmalSubmit(RPI3_MMAL_DECODER *Decoder,
     static const BYTE EmptyBulk[8];
     HANDLE WaitHandles[2];
     MMAL_BUFFER_MESSAGE Message;
-    BYTE *Transfer = NULL;
+    const BYTE *Transfer = NULL;
+    BYTE *AllocatedTransfer = NULL;
     UINT TransferSize = 0;
     UINT32 MmalFlags = 0;
     UINT32 Token;
@@ -2619,10 +2620,20 @@ Rpi3MmalSubmit(RPI3_MMAL_DECODER *Decoder,
         if (DataSize > MAXUINT - 3)
             return E_INVALIDARG;
         TransferSize = ALIGN_UP(DataSize, 4);
-        Transfer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, TransferSize);
-        if (!Transfer)
-            return E_OUTOFMEMORY;
-        CopyMemory(Transfer, Data, DataSize);
+        if (TransferSize == DataSize)
+        {
+            Transfer = Data;
+        }
+        else
+        {
+            AllocatedTransfer = HeapAlloc(GetProcessHeap(),
+                                          HEAP_ZERO_MEMORY,
+                                          TransferSize);
+            if (!AllocatedTransfer)
+                return E_OUTOFMEMORY;
+            CopyMemory(AllocatedTransfer, Data, DataSize);
+            Transfer = AllocatedTransfer;
+        }
     }
     else if (Flags & RPI3_MMAL_SUBMIT_EOS)
     {
@@ -2705,8 +2716,8 @@ InputComplete:
     InterlockedCompareExchange(&Decoder->PendingInputToken, 0, (LONG)Token);
     LeaveCriticalSection(&Decoder->InputLock);
 
-    if (DataSize && Transfer)
-        HeapFree(GetProcessHeap(), 0, Transfer);
+    if (AllocatedTransfer)
+        HeapFree(GetProcessHeap(), 0, AllocatedTransfer);
     if (FAILED(Result))
     {
         Rpi3MmalSetAsyncResult(Decoder, Result);
