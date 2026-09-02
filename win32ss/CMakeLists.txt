@@ -257,6 +257,14 @@ add_library(win32k MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/win32k.def)
 
 set_module_type(win32k kernelmodedriver)
+if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
+    foreach(_win32k_src ${SOURCE} gdi/ntgdi/brush.cpp)
+        if(NOT _win32k_src MATCHES "user/ntuser/hook\\.c$")
+            set_property(SOURCE ${_win32k_src} PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+            set_property(SOURCE ${_win32k_src} APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
+        endif()
+    endforeach()
+endif()
 target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr wddm_bridge)
 
 if(REACTOS_USE_WDDM)
