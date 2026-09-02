@@ -357,6 +357,7 @@ EngBitBlt(
     POINTL             AdjustedBrushOrigin;
     LONG               lTmp;
     BOOLEAN            bTopToBottom, bLeftToRight;
+    POINTL             MaskPoint, MaskPt;
 
     UsesSource = ROP4_USES_SOURCE(rop4);
     UsesMask = ROP4_USES_MASK(rop4);
@@ -390,6 +391,11 @@ EngBitBlt(
     OutputRect = *prclTrg;
     RECTL_vMakeWellOrdered(&OutputRect);
 
+    if (pptlMask)
+        MaskPoint = *pptlMask;
+    else
+        MaskPoint.x = MaskPoint.y = 0;
+
     DPRINT("EngBitBlt: prclTrg: (%d,%d)-(%d,%d)\n",
            prclTrg->left, prclTrg->top, prclTrg->right, prclTrg->bottom);
 
@@ -409,11 +415,13 @@ EngBitBlt(
         if (InputPoint.x < 0)
         {
             OutputRect.left -= InputPoint.x;
+            MaskPoint.x -= InputPoint.x;
             InputPoint.x = 0;
         }
         if (InputPoint.y < 0)
         {
             OutputRect.top -= InputPoint.y;
+            MaskPoint.y -= InputPoint.y;
             InputPoint.y = 0;
         }
         if (psoSrc->sizlBitmap.cx < InputPoint.x +
@@ -451,6 +459,7 @@ EngBitBlt(
         {
             InputRect.left += pco->rclBounds.left - OutputRect.left;
             InputPoint.x += pco->rclBounds.left - OutputRect.left;
+            MaskPoint.x += pco->rclBounds.left - OutputRect.left;
             OutputRect.left = pco->rclBounds.left;
         }
         if (pco->rclBounds.right < OutputRect.right)
@@ -462,6 +471,7 @@ EngBitBlt(
         {
             InputRect.top += pco->rclBounds.top - OutputRect.top;
             InputPoint.y += pco->rclBounds.top - OutputRect.top;
+            MaskPoint.y += pco->rclBounds.top - OutputRect.top;
             OutputRect.top = pco->rclBounds.top;
         }
         if (pco->rclBounds.bottom < OutputRect.bottom)
@@ -556,7 +566,7 @@ EngBitBlt(
                                  pxlo,
                                  &OutputRect,
                                  &InputPoint,
-                                 pptlMask,
+                                 pptlMask ? &MaskPoint : NULL,
                                  pbo,
                                  &AdjustedBrushOrigin,
                                  rop4);
@@ -578,13 +588,15 @@ EngBitBlt(
 #endif
                 Pt.x = InputPoint.x + CombinedRect.left - OutputRect.left;
                 Pt.y = InputPoint.y + CombinedRect.top - OutputRect.top;
+                MaskPt.x = MaskPoint.x + CombinedRect.left - OutputRect.left;
+                MaskPt.y = MaskPoint.y + CombinedRect.top - OutputRect.top;
                 Ret = (*BltRectFunc)(OutputObj,
                                      InputObj,
                                      psoMask,
                                      pxlo,
                                      &CombinedRect,
                                      &Pt,
-                                     pptlMask,
+                                     pptlMask ? &MaskPt : NULL,
                                      pbo,
                                      &AdjustedBrushOrigin,
                                      rop4);
@@ -632,13 +644,15 @@ EngBitBlt(
 #endif
                         Pt.x = InputPoint.x + CombinedRect.left - OutputRect.left;
                         Pt.y = InputPoint.y + CombinedRect.top - OutputRect.top;
+                        MaskPt.x = MaskPoint.x + CombinedRect.left - OutputRect.left;
+                        MaskPt.y = MaskPoint.y + CombinedRect.top - OutputRect.top;
                         Ret = (*BltRectFunc)(OutputObj,
                                              InputObj,
                                              psoMask,
                                              pxlo,
                                              &CombinedRect,
                                              &Pt,
-                                             pptlMask,
+                                             pptlMask ? &MaskPt : NULL,
                                              pbo,
                                              &AdjustedBrushOrigin,
                                              rop4) && Ret;
