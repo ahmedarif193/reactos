@@ -297,7 +297,7 @@ else()
 endif()
 
 set(REACTOS_WDDM_LEVEL "3.2" CACHE STRING
-"Windows 11 24H2 WDDM host contract level. Pre-WDDM 2 miniports are not supported.")
+"Windows 11 24H2 WDDM host contract level. Pre-WDDM 2 miniports are not supported." FORCE)
 set_property(CACHE REACTOS_WDDM_LEVEL PROPERTY STRINGS "3.2")
 
 # The active WDDM tree has one ABI target: Windows 11 24H2 / WDDM 3.2.
@@ -305,10 +305,6 @@ set_property(CACHE REACTOS_WDDM_LEVEL PROPERTY STRINGS "3.2")
 # target must never be interpreted as claiming that every optional feature is
 # present; feature support is negotiated through the 3.2 feature interface.
 if(REACTOS_USE_WDDM)
-    if(NOT REACTOS_WDDM_LEVEL STREQUAL "3.2")
-        message(FATAL_ERROR
-            "REACTOS_WDDM_LEVEL must be 3.2; pre-WDDM 2 miniport contracts were removed")
-    endif()
     set(REACTOS_WDDM_TARGET_LEVEL 3200)
     set(REACTOS_WDDM_TARGET_INTERFACE_VERSION 0x11007)
     set(REACTOS_WDDM_TARGET_UMD_INTERFACE_VERSION 0x11000)

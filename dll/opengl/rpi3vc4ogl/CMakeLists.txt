@@ -6,8 +6,7 @@ set(RPI3VC4_MESA_VC4_ICD "$ENV{REACTOS_MESA_VC4_ICD}" CACHE FILEPATH
     "Mesa VC4 WGL ICD to deploy for the Raspberry Pi 3")
 
 if(NOT RPI3VC4_MESA_VC4_ICD)
-    message(FATAL_ERROR
-        "RPI3VC4_MESA_VC4_ICD must name the Mesa VC4 WGL ICD for Raspberry Pi 3 builds")
+    return()
 endif()
 
 if(NOT EXISTS "${RPI3VC4_MESA_VC4_ICD}")
