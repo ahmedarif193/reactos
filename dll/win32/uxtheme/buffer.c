@@ -173,8 +173,19 @@ HRESULT WINAPI EndBufferedPaint(HPAINTBUFFER bufferhandle, BOOL update)
  */
 HRESULT WINAPI BufferedPaintClear(HPAINTBUFFER hBufferedPaint, const RECT *prc)
 {
-    FIXME("Stub (%p %p)\n", hBufferedPaint, prc);
-    return E_NOTIMPL;
+    struct paintbuffer *buffer = get_buffer_obj(hBufferedPaint);
+    RECT rc;
+
+    TRACE("(%p %s)\n", hBufferedPaint, wine_dbgstr_rect(prc));
+
+    if (!buffer)
+        return E_FAIL;
+
+    if (!prc || !IntersectRect(&rc, prc, &buffer->rect))
+        rc = buffer->rect;
+
+    PatBlt(buffer->memorydc, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, BLACKNESS);
+    return S_OK;
 }
 
 /***********************************************************************
@@ -182,8 +193,32 @@ HRESULT WINAPI BufferedPaintClear(HPAINTBUFFER hBufferedPaint, const RECT *prc)
  */
 HRESULT WINAPI BufferedPaintSetAlpha(HPAINTBUFFER hBufferedPaint, const RECT *prc, BYTE alpha)
 {
-    FIXME("Stub (%p %p %u)\n", hBufferedPaint, prc, alpha);
-    return E_NOTIMPL;
+    struct paintbuffer *buffer = get_buffer_obj(hBufferedPaint);
+    DIBSECTION ds;
+    RECT rc;
+    LONG y, x, row;
+    BYTE *line;
+
+    TRACE("(%p %s %u)\n", hBufferedPaint, wine_dbgstr_rect(prc), alpha);
+
+    if (!buffer)
+        return E_FAIL;
+
+    if (!buffer->bits || GetObjectW(buffer->bitmap, sizeof(ds), &ds) != sizeof(ds) || ds.dsBm.bmBitsPixel != 32)
+        return E_FAIL;
+
+    if (!prc || !IntersectRect(&rc, prc, &buffer->rect))
+        rc = buffer->rect;
+
+    OffsetRect(&rc, -buffer->rect.left, -buffer->rect.top);
+    for (y = rc.top; y < rc.bottom; y++)
+    {
+        row = ds.dsBmih.biHeight < 0 ? y : ds.dsBm.bmHeight - 1 - y;
+        line = (BYTE *)buffer->bits + row * ds.dsBm.bmWidthBytes;
+        for (x = rc.left; x < rc.right; x++)
+            line[x * 4 + 3] = alpha;
+    }
+    return S_OK;
 }
 
 /***********************************************************************
