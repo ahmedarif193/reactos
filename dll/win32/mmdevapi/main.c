@@ -142,6 +142,27 @@ static BOOL WINAPI init_driver(INIT_ONCE *once, void *param, void **context)
 
     WARN("No ReactOS WDMAUD audio backend could be initialized.\n");
     return TRUE;
+}
+
+BOOL reactos_ensure_driver(void)
+{
+    static SRWLOCK retry_lock = SRWLOCK_INIT;
+    BOOL loaded;
+
+    if (drvs.module)
+        return TRUE;
+
+    AcquireSRWLockExclusive(&retry_lock);
+
+    if (!drvs.module && reactos_audio_driver_init(&drvs))
+    {
+        midi_driver = drvs;
+        load_devices_from_reg();
+    }
+
+    loaded = drvs.module != NULL;
+    ReleaseSRWLockExclusive(&retry_lock);
+    return loaded;
 #else
     static WCHAR default_list[] = L"pulse,alsa,oss,coreaudio";
     DriverFuncs driver;

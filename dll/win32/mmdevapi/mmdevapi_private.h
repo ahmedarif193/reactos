@@ -147,6 +147,8 @@ typedef struct _DriverFuncs {
 
 extern DriverFuncs drvs;
 
+extern BOOL reactos_ensure_driver(void);
+
 typedef struct MMDevice {
     IMMDevice IMMDevice_iface;
     IMMEndpoint IMMEndpoint_iface;
