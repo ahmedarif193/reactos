@@ -2115,7 +2115,7 @@ REGION_bXformRgn(
             }
 
             /* Reset bounds */
-            RECTL_vSetEmptyRect(&prgn->rdh.rcBound);
+            RECTL_vSetEmptyRect(&rect);
 
             /* Loop all rects in the region */
             for (i = 0; i < prgn->rdh.nCount; i++)
@@ -2124,14 +2124,10 @@ REGION_bXformRgn(
                 RECTL_vMakeWellOrdered(&prgn->Buffer[i]);
 
                 /* Update bounds */
-                if (!RECTL_bUnionRect(&prgn->rdh.rcBound,
-                                 &prgn->rdh.rcBound,
-                                 &prgn->Buffer[i]))
-                {
-                    DPRINT1("NULL Set in Union Rects\n");
-                    return FALSE;
-                }
+                RECTL_bUnionRect(&rect, &rect, &prgn->Buffer[i]);
             }
+
+            prgn->rdh.rcBound = rect;
 
             /* Loop all rects in the region */
             for (i = 0; i < prgn->rdh.nCount - 1; i++)
@@ -2175,7 +2171,7 @@ REGION_bXformRgn(
         /* Apply the xform to the rects in the buffer */
         if (!XFORMOBJ_bApplyXform(&xo,
                                   XF_LTOL,
-                                  prgn->rdh.nCount * 2,
+                                  prgn->rdh.nCount * 4,
                                   ppt,
                                   ppt))
         {
@@ -3313,6 +3309,16 @@ REGION_SetPolyPolygonRgn(
     for (poly = total = 0; poly < cPolygons; poly++)
         total += pcPoints[poly];
 
+    for (poly = 0; poly < total; poly++)
+    {
+        if ((ppt[poly].x < MIN_COORD) || (ppt[poly].x > MAX_COORD) ||
+            (ppt[poly].y < MIN_COORD) || (ppt[poly].y > MAX_COORD))
+        {
+            REGION_SetRectRgn(prgn, 0, 0, 0, 0);
+            return TRUE;
+        }
+    }
+
     pETEs = ExAllocatePoolWithTag(PagedPool,
                                   sizeof(EDGE_TABLE_ENTRY) * total,
                                   TAG_REGION);
@@ -3892,11 +3898,7 @@ NtGdiExtCreateRegion(
             if (ret != DDI_ERROR)
             {
                 /* Apply the coordinate transformation on the rects */
-                if (XFORMOBJ_bApplyXform(&xo,
-                                         XF_LTOL,
-                                         Region->rdh.nCount * 2,
-                                         Region->Buffer,
-                                         Region->Buffer))
+                if (REGION_bXformRgn(Region, &matrix))
                 {
                     Status = STATUS_SUCCESS;
                 }
