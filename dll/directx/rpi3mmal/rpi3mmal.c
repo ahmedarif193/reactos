@@ -2905,7 +2905,8 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
             return Result;
         }
 
-        DirectOutput = Pitch == SourcePitch &&
+        DirectOutput = Output.Offset == 0 &&
+                       Pitch == SourcePitch &&
                        BufferSize >= Decoder->OutputSize;
         ReceiveBuffer = DirectOutput ? Buffer : Decoder->DiscardData;
         ReceiveBufferSize = DirectOutput ? BufferSize : Decoder->DiscardSize;
