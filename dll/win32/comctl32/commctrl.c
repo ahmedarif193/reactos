@@ -1673,12 +1673,351 @@ int WINAPI DrawShadowText(HDC hdc, LPCWSTR text, UINT length, RECT *rect, DWORD 
 #endif
 }
 
+#ifdef __REACTOS__
+#include <pshpack2.h>
+typedef struct
+{
+    BYTE bWidth;
+    BYTE bHeight;
+    BYTE bColorCount;
+    BYTE bReserved;
+    WORD wPlanes;
+    WORD wBitCount;
+    DWORD dwBytesInRes;
+    WORD nID;
+} SCALEDOWN_GRPICONDIRENTRY;
+
+typedef struct
+{
+    WORD idReserved;
+    WORD idType;
+    WORD idCount;
+    SCALEDOWN_GRPICONDIRENTRY idEntries[1];
+} SCALEDOWN_GRPICONDIR;
+
+typedef struct
+{
+    BYTE bWidth;
+    BYTE bHeight;
+    BYTE bColorCount;
+    BYTE bReserved;
+    WORD wPlanes;
+    WORD wBitCount;
+    DWORD dwBytesInRes;
+    DWORD dwImageOffset;
+} SCALEDOWN_ICONFILEDIRENTRY;
+
+typedef struct
+{
+    WORD idReserved;
+    WORD idType;
+    WORD idCount;
+    SCALEDOWN_ICONFILEDIRENTRY idEntries[1];
+} SCALEDOWN_ICONFILEDIR;
+#include <poppack.h>
+
+#define SCALEDOWN_MAX_FRAMES 64
+
+typedef struct
+{
+    int cx;
+    int cy;
+    int bpp;
+} SCALEDOWN_FRAME;
+
+static HINSTANCE scaledown_oem_module(const WCHAR **name)
+{
+    SIZE_T id = (SIZE_T)*name;
+
+    if (id < (SIZE_T)IDI_APPLICATION || id > (SIZE_T)IDI_APPLICATION + 6)
+        return NULL;
+
+    id = 100 + id - (SIZE_T)IDI_APPLICATION;
+    if ((id | 2) == 103)
+        id ^= 2;
+    *name = MAKEINTRESOURCEW(id);
+    return GetModuleHandleW(L"user32.dll");
+}
+
+static int scaledown_resource_frames(HINSTANCE hinst, const WCHAR *name, SCALEDOWN_FRAME *frames)
+{
+    const SCALEDOWN_GRPICONDIR *dir;
+    HRSRC hrsrc;
+    HGLOBAL handle;
+    DWORD size;
+    int i, count = 0;
+
+    if (!hinst)
+    {
+        if (!IS_INTRESOURCE(name))
+            return 0;
+        hinst = scaledown_oem_module(&name);
+        if (!hinst)
+            return 0;
+    }
+
+    hrsrc = FindResourceW(hinst, name, (LPCWSTR)RT_GROUP_ICON);
+    if (!hrsrc)
+        return 0;
+    size = SizeofResource(hinst, hrsrc);
+    handle = LoadResource(hinst, hrsrc);
+    if (!handle)
+        return 0;
+    dir = LockResource(handle);
+    if (!dir || size < 3 * sizeof(WORD) || dir->idType != 1)
+        return 0;
+
+    for (i = 0; i < dir->idCount && count < SCALEDOWN_MAX_FRAMES; i++)
+    {
+        if (size < FIELD_OFFSET(SCALEDOWN_GRPICONDIR, idEntries[i + 1]))
+            break;
+        frames[count].cx = dir->idEntries[i].bWidth ? dir->idEntries[i].bWidth : 256;
+        frames[count].cy = dir->idEntries[i].bHeight ? dir->idEntries[i].bHeight : 256;
+        frames[count].bpp = dir->idEntries[i].wBitCount;
+        count++;
+    }
+    return count;
+}
+
+static int scaledown_file_frames(const WCHAR *path, SCALEDOWN_FRAME *frames)
+{
+    BYTE buffer[FIELD_OFFSET(SCALEDOWN_ICONFILEDIR, idEntries[SCALEDOWN_MAX_FRAMES])];
+    const SCALEDOWN_ICONFILEDIR *dir = (const SCALEDOWN_ICONFILEDIR *)buffer;
+    HANDLE file;
+    DWORD read = 0;
+    int i, count = 0;
+
+    file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+        return 0;
+    if (!ReadFile(file, buffer, sizeof(buffer), &read, NULL))
+        read = 0;
+    CloseHandle(file);
+
+    if (read < 3 * sizeof(WORD) || dir->idReserved != 0 || dir->idType != 1)
+        return 0;
+
+    for (i = 0; i < dir->idCount && count < SCALEDOWN_MAX_FRAMES; i++)
+    {
+        if (read < FIELD_OFFSET(SCALEDOWN_ICONFILEDIR, idEntries[i + 1]))
+            break;
+        frames[count].cx = dir->idEntries[i].bWidth ? dir->idEntries[i].bWidth : 256;
+        frames[count].cy = dir->idEntries[i].bHeight ? dir->idEntries[i].bHeight : 256;
+        frames[count].bpp = dir->idEntries[i].wBitCount;
+        count++;
+    }
+    return count;
+}
+
+static int scaledown_pick_frame(const SCALEDOWN_FRAME *frames, int count, int cx, int cy)
+{
+    int best = -1, i;
+
+    for (i = 0; i < count; i++)
+    {
+        if (frames[i].cx == cx && frames[i].cy == cy)
+            return -1;
+        if (frames[i].cx < cx || frames[i].cy < cy)
+            continue;
+        if (best < 0 ||
+            frames[i].cx * frames[i].cy < frames[best].cx * frames[best].cy ||
+            (frames[i].cx * frames[i].cy == frames[best].cx * frames[best].cy &&
+             frames[i].bpp > frames[best].bpp))
+            best = i;
+    }
+    return best;
+}
+
+static void scaledown_resample(const DWORD *src, int srcW, int srcH, DWORD *dst, int cx, int cy)
+{
+    int dx, dy, sx, sy;
+
+    for (dy = 0; dy < cy; dy++)
+    {
+        int y0 = dy * srcH, y1 = (dy + 1) * srcH;
+        int syStart = y0 / cy, syEnd = (y1 + cy - 1) / cy;
+
+        for (dx = 0; dx < cx; dx++)
+        {
+            int x0 = dx * srcW, x1 = (dx + 1) * srcW;
+            int sxStart = x0 / cx, sxEnd = (x1 + cx - 1) / cx;
+            ULONGLONG a = 0, r = 0, g = 0, b = 0, total = 0;
+
+            for (sy = syStart; sy < syEnd; sy++)
+            {
+                int wy = min(y1, (sy + 1) * cy) - max(y0, sy * cy);
+
+                for (sx = sxStart; sx < sxEnd; sx++)
+                {
+                    int wx = min(x1, (sx + 1) * cx) - max(x0, sx * cx);
+                    ULONGLONG w = (ULONGLONG)wx * wy;
+                    DWORD p = src[sy * srcW + sx];
+                    ULONGLONG pa = (p >> 24) * w;
+
+                    a += pa;
+                    r += ((p >> 16) & 0xff) * pa;
+                    g += ((p >> 8) & 0xff) * pa;
+                    b += (p & 0xff) * pa;
+                    total += w;
+                }
+            }
+
+            if (a)
+            {
+                DWORD alpha = (DWORD)((a + total / 2) / total);
+                DWORD red = (DWORD)((r + a / 2) / a);
+                DWORD green = (DWORD)((g + a / 2) / a);
+                DWORD blue = (DWORD)((b + a / 2) / a);
+                dst[dy * cx + dx] = (alpha << 24) | (red << 16) | (green << 8) | blue;
+            }
+            else
+                dst[dy * cx + dx] = 0;
+        }
+    }
+}
+
+static HICON scaledown_create_icon(HICON source, int srcW, int srcH, int cx, int cy)
+{
+    BITMAPINFO info;
+    ICONINFO ii, scaled;
+    HDC hdc = NULL;
+    DWORD *src = NULL, *dst = NULL, *bits = NULL;
+    BYTE *maskBits = NULL;
+    HICON result = NULL;
+    LONG srcMaskStride = ((srcW + 31) / 32) * 4;
+    LONG dstMaskStride = ((cx + 15) / 16) * 2;
+    BOOL hasAlpha = FALSE;
+    int x, y;
+
+    ZeroMemory(&ii, sizeof(ii));
+    ZeroMemory(&scaled, sizeof(scaled));
+    if (!GetIconInfo(source, &ii))
+        return NULL;
+    if (!ii.hbmColor || !ii.hbmMask)
+        goto done;
+
+    hdc = CreateCompatibleDC(NULL);
+    src = HeapAlloc(GetProcessHeap(), 0, srcW * srcH * sizeof(DWORD));
+    dst = HeapAlloc(GetProcessHeap(), 0, cx * cy * sizeof(DWORD));
+    maskBits = HeapAlloc(GetProcessHeap(), 0, max(srcMaskStride * srcH, dstMaskStride * cy));
+    if (!hdc || !src || !dst || !maskBits)
+        goto done;
+
+    ZeroMemory(&info, sizeof(info));
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = srcW;
+    info.bmiHeader.biHeight = -srcH;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    if (GetDIBits(hdc, ii.hbmColor, 0, srcH, src, &info, DIB_RGB_COLORS) != srcH)
+        goto done;
+
+    for (y = 0; y < srcW * srcH && !hasAlpha; y++)
+        hasAlpha = (src[y] & 0xff000000) != 0;
+
+    if (!hasAlpha)
+    {
+        BYTE maskInfo[sizeof(BITMAPINFOHEADER) + 2 * sizeof(RGBQUAD)];
+        BITMAPINFO *mi = (BITMAPINFO *)maskInfo;
+
+        ZeroMemory(maskInfo, sizeof(maskInfo));
+        mi->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        mi->bmiHeader.biWidth = srcW;
+        mi->bmiHeader.biHeight = -srcH;
+        mi->bmiHeader.biPlanes = 1;
+        mi->bmiHeader.biBitCount = 1;
+        mi->bmiHeader.biCompression = BI_RGB;
+        if (GetDIBits(hdc, ii.hbmMask, 0, srcH, maskBits, mi, DIB_RGB_COLORS) != srcH)
+            goto done;
+
+        for (y = 0; y < srcH; y++)
+        {
+            const BYTE *row = maskBits + y * srcMaskStride;
+            for (x = 0; x < srcW; x++)
+            {
+                BOOL transparent = (row[x / 8] >> (7 - (x % 8))) & 1;
+                src[y * srcW + x] = (src[y * srcW + x] & 0x00ffffff) | (transparent ? 0 : 0xff000000);
+            }
+        }
+    }
+
+    scaledown_resample(src, srcW, srcH, dst, cx, cy);
+
+    info.bmiHeader.biWidth = cx;
+    info.bmiHeader.biHeight = -cy;
+    scaled.hbmColor = CreateDIBSection(hdc, &info, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+    if (!scaled.hbmColor)
+        goto done;
+    CopyMemory(bits, dst, cx * cy * sizeof(DWORD));
+
+    ZeroMemory(maskBits, dstMaskStride * cy);
+    for (y = 0; y < cy; y++)
+    {
+        BYTE *row = maskBits + y * dstMaskStride;
+        for (x = 0; x < cx; x++)
+        {
+            if (!(dst[y * cx + x] & 0xff000000))
+                row[x / 8] |= 0x80 >> (x % 8);
+        }
+    }
+    scaled.hbmMask = CreateBitmap(cx, cy, 1, 1, maskBits);
+    if (!scaled.hbmMask)
+        goto done;
+
+    scaled.fIcon = TRUE;
+    result = CreateIconIndirect(&scaled);
+
+done:
+    if (scaled.hbmColor) DeleteObject(scaled.hbmColor);
+    if (scaled.hbmMask) DeleteObject(scaled.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    if (hdc) DeleteDC(hdc);
+    if (src) HeapFree(GetProcessHeap(), 0, src);
+    if (dst) HeapFree(GetProcessHeap(), 0, dst);
+    if (maskBits) HeapFree(GetProcessHeap(), 0, maskBits);
+    return result;
+}
+
+static HICON scaledown_load(HINSTANCE hinst, const WCHAR *name, int cx, int cy, UINT flags)
+{
+    SCALEDOWN_FRAME frames[SCALEDOWN_MAX_FRAMES];
+    HICON source, result;
+    int count, best;
+
+    if (cx <= 0 || cy <= 0)
+        return NULL;
+
+    if (flags & LR_LOADFROMFILE)
+        count = scaledown_file_frames(name, frames);
+    else
+        count = scaledown_resource_frames(hinst, name, frames);
+
+    best = scaledown_pick_frame(frames, count, cx, cy);
+    if (best < 0)
+        return NULL;
+
+    source = LoadImageW(hinst, name, IMAGE_ICON, frames[best].cx, frames[best].cy, flags);
+    if (!source)
+        return NULL;
+
+    result = scaledown_create_icon(source, frames[best].cx, frames[best].cy, cx, cy);
+    DestroyIcon(source);
+    return result;
+}
+#endif
+
 /***********************************************************************
  * LoadIconWithScaleDown [COMCTL32.@]
  */
 HRESULT WINAPI LoadIconWithScaleDown(HINSTANCE hinst, const WCHAR *name, int cx, int cy, HICON *icon)
 {
     DWORD error;
+#ifdef __REACTOS__
+    UINT flags;
+#endif
 
     TRACE("(%p, %s, %d, %d, %p)\n", hinst, debugstr_w(name), cx, cy, icon);
 
@@ -1687,8 +2026,17 @@ HRESULT WINAPI LoadIconWithScaleDown(HINSTANCE hinst, const WCHAR *name, int cx,
     if (!name)
         return E_INVALIDARG;
 
+#ifdef __REACTOS__
+    flags = (hinst || IS_INTRESOURCE(name)) ? 0 : LR_LOADFROMFILE;
+    *icon = scaledown_load(hinst, name, cx, cy, flags);
+    if (*icon)
+        return S_OK;
+
+    *icon = LoadImageW(hinst, name, IMAGE_ICON, cx, cy, flags);
+#else
     *icon = LoadImageW(hinst, name, IMAGE_ICON, cx, cy,
                        (hinst || IS_INTRESOURCE(name)) ? 0 : LR_LOADFROMFILE);
+#endif
     if (!*icon)
     {
         error = GetLastError();
