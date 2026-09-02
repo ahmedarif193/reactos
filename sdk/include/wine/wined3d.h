@@ -2046,6 +2046,21 @@ enum wined3d_yuv_color_space
     WINED3D_YUV_BT601_FULL,
     WINED3D_YUV_BT709_FULL,
 };
+
+#define WINED3D_PLANAR_MEMORY_MAX_PLANES 3u
+
+struct wined3d_planar_memory_desc
+{
+    void *data;
+    SIZE_T size;
+    unsigned int width;
+    unsigned int height;
+    unsigned int row_pitch;
+    unsigned int storage_height;
+    unsigned int plane_count;
+    unsigned int plane_offsets[WINED3D_PLANAR_MEMORY_MAX_PLANES];
+    unsigned int plane_pitches[WINED3D_PLANAR_MEMORY_MAX_PLANES];
+};
 #endif
 
 struct wined3d_blt_fx
@@ -2986,6 +3001,8 @@ HRESULT __cdecl wined3d_texture_release_dc(struct wined3d_texture *texture, unsi
 HRESULT __cdecl wined3d_texture_set_color_key(struct wined3d_texture *texture,
         uint32_t flags, const struct wined3d_color_key *color_key);
 #ifdef __REACTOS__
+HRESULT __cdecl wined3d_texture_set_planar_memory(struct wined3d_texture *texture,
+        unsigned int sub_resource_idx, const struct wined3d_planar_memory_desc *desc);
 HRESULT __cdecl wined3d_texture_set_yuv_color_space(struct wined3d_texture *texture,
         enum wined3d_yuv_color_space color_space);
 #endif
