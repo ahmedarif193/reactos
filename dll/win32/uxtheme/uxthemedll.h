@@ -122,6 +122,12 @@ extern DWORD gdwErrorInfoTlsIndex;
 extern BOOL g_bThemeHooksActive;
 BOOL CALLBACK UXTHEME_broadcast_theme_changed(HWND hwnd, LPARAM enable);
 void UXTHEME_DeleteParseErrorInfo(void);
+HRESULT UXTHEME_MakeParseError(UINT nID, LPCWSTR pszParam1, LPCWSTR pszParam2,
+                               LPCWSTR pszFile, LPCWSTR pszLine, INT nLineNo);
+
+#define UXTHEME_PARENTBKGND_PROP        ((LPCWSTR)MAKEINTATOM(0xA915))
+#define UXTHEME_PARENTBKGND_DRAWING     0x1
+#define UXTHEME_PARENTBKGND_UNHANDLED   0x2
 #endif
 
 extern struct user_api_hook user_api;

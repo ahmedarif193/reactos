@@ -39,6 +39,7 @@ typedef struct _UXINI_FILE {
     LPCWSTR lpIni;
     LPCWSTR lpCurLoc;
     LPCWSTR lpEnd;
+    LPWSTR lpBuffer;
 } UXINI_FILE, *PUXINI_FILE;
 
 /***********************************************************************/
@@ -76,8 +77,93 @@ PUXINI_FILE UXINI_LoadINI(HMODULE hTheme, LPCWSTR lpName) {
     uf->lpIni = lpThemesIni;
     uf->lpCurLoc = lpThemesIni;
     uf->lpEnd = lpThemesIni + dwIniSize;
+    uf->lpBuffer = NULL;
     return uf;
 }
+
+#ifdef __REACTOS__
+PUXINI_FILE UXINI_LoadINIFile(LPCWSTR lpFileName)
+{
+    HANDLE hFile;
+    LPBYTE lpData, lpStart;
+    LPWSTR lpText;
+    DWORD dwSize, dwRead, dwLen;
+    UINT uCodePage = CP_ACP;
+    PUXINI_FILE uf;
+
+    TRACE("Loading INI file %s\n", debugstr_w(lpFileName));
+
+    hFile = CreateFileW(lpFileName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return NULL;
+
+    dwSize = GetFileSize(hFile, NULL);
+    lpData = (dwSize != INVALID_FILE_SIZE) ? malloc(dwSize + sizeof(WCHAR)) : NULL;
+    if (!lpData || !ReadFile(hFile, lpData, dwSize, &dwRead, NULL))
+    {
+        free(lpData);
+        CloseHandle(hFile);
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return NULL;
+    }
+    CloseHandle(hFile);
+
+    if (dwRead >= 2 && lpData[0] == 0xFF && lpData[1] == 0xFE)
+    {
+        dwLen = (dwRead - 2) / sizeof(WCHAR);
+        lpText = malloc((dwLen + 1) * sizeof(WCHAR));
+        if (lpText)
+            memcpy(lpText, lpData + 2, dwLen * sizeof(WCHAR));
+    }
+    else
+    {
+        lpStart = lpData;
+        if (dwRead >= 3 && lpData[0] == 0xEF && lpData[1] == 0xBB && lpData[2] == 0xBF)
+        {
+            uCodePage = CP_UTF8;
+            lpStart += 3;
+            dwRead -= 3;
+        }
+        dwLen = MultiByteToWideChar(uCodePage, 0, (LPCSTR)lpStart, dwRead, NULL, 0);
+        lpText = malloc((dwLen + 1) * sizeof(WCHAR));
+        if (lpText)
+            MultiByteToWideChar(uCodePage, 0, (LPCSTR)lpStart, dwRead, lpText, dwLen);
+    }
+    free(lpData);
+
+    uf = lpText ? malloc(sizeof(*uf)) : NULL;
+    if (!uf)
+    {
+        free(lpText);
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return NULL;
+    }
+    lpText[dwLen] = 0;
+    uf->lpIni = lpText;
+    uf->lpCurLoc = lpText;
+    uf->lpEnd = lpText + dwLen;
+    uf->lpBuffer = lpText;
+    return uf;
+}
+
+INT UXINI_GetLine(PUXINI_FILE uf, LPCWSTR lpPos, LPWSTR lpLine, DWORD cchLine)
+{
+    LPCWSTR lpStart = lpPos, lpEnd = lpPos, p;
+    INT nLineNo = 1;
+
+    for (p = uf->lpIni; p < lpPos; p++)
+    {
+        if (*p == '\n')
+            nLineNo++;
+    }
+    while (lpStart > uf->lpIni && lpStart[-1] != '\n')
+        lpStart--;
+    while (lpEnd < uf->lpEnd && *lpEnd != '\n' && *lpEnd != '\r')
+        lpEnd++;
+    lstrcpynW(lpLine, lpStart, min((DWORD)(lpEnd - lpStart) + 1, cchLine));
+    return nLineNo;
+}
+#endif
 
 /**********************************************************************
  *      UXINI_CloseINI
@@ -89,6 +175,9 @@ PUXINI_FILE UXINI_LoadINI(HMODULE hTheme, LPCWSTR lpName) {
  */
 void UXINI_CloseINI(PUXINI_FILE uf)
 {
+    if (!uf)
+        return;
+    free(uf->lpBuffer);
     free(uf);
 }
 

@@ -16,6 +16,22 @@
 #define REACTOS_STR_ORIGINAL_FILENAME "uxtheme.dll"
 #include <reactos/version.rc>
 
+IDI_CAPTION_CLOSE ICON "res/fluent/cap_close_w.ico"
+IDI_CAPTION_CLOSE_INACTIVE ICON "res/fluent/cap_close_i.ico"
+IDI_CAPTION_CLOSE_DISABLED ICON "res/fluent/cap_close_d.ico"
+IDI_CAPTION_MAX ICON "res/fluent/cap_max_w.ico"
+IDI_CAPTION_MAX_INACTIVE ICON "res/fluent/cap_max_i.ico"
+IDI_CAPTION_MAX_DISABLED ICON "res/fluent/cap_max_d.ico"
+IDI_CAPTION_RESTORE ICON "res/fluent/cap_restore_w.ico"
+IDI_CAPTION_RESTORE_INACTIVE ICON "res/fluent/cap_restore_i.ico"
+IDI_CAPTION_RESTORE_DISABLED ICON "res/fluent/cap_restore_d.ico"
+IDI_CAPTION_MIN ICON "res/fluent/cap_min_w.ico"
+IDI_CAPTION_MIN_INACTIVE ICON "res/fluent/cap_min_i.ico"
+IDI_CAPTION_MIN_DISABLED ICON "res/fluent/cap_min_d.ico"
+IDI_CAPTION_HELP ICON "res/fluent/cap_help_w.ico"
+IDI_CAPTION_HELP_INACTIVE ICON "res/fluent/cap_help_i.ico"
+IDI_CAPTION_HELP_DISABLED ICON "res/fluent/cap_help_d.ico"
+
 /* UTF-8 */
 #pragma code_page(65001)
 

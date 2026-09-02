@@ -147,7 +147,7 @@ HRESULT WINAPI GetThemeSysInt(HTHEME hTheme, int iIntID, int *piValue)
     PTHEME_PROPERTY tp;
 
     TRACE("(%p, %d)\n", hTheme, iIntID);
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
     if(iIntID < TMT_FIRSTINT || iIntID > TMT_LASTINT) {
         WARN("Unknown IntID: %d\n", iIntID);
@@ -211,7 +211,7 @@ HRESULT WINAPI GetThemeSysString(HTHEME hTheme, int iStringID,
     PTHEME_PROPERTY tp;
 
     TRACE("(%p, %d)\n", hTheme, iStringID);
-    if(!hTheme)
+    if(!MSSTYLES_ValidateHandle(hTheme))
         return E_HANDLE;
     if(iStringID < TMT_FIRSTSTRING || iStringID > TMT_LASTSTRING) {
         WARN("Unknown StringID: %d\n", iStringID);

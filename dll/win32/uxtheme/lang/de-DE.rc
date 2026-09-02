@@ -16,4 +16,5 @@ BEGIN
     IDS_INACTIVEWIN "Inaktives Fenster"
     IDS_OK "OK"
     IDS_WINTEXT "Fenstertext"
+    IDS_ERR_UNKNOWN_PROPERTY "Must be Primitive, enum, or type: %1"
 END

@@ -106,6 +106,7 @@ BOOL MSSTYLES_LookupPartState(LPCWSTR pszClass, LPCWSTR pszPart, LPCWSTR pszStat
 PUXINI_FILE MSSTYLES_GetThemeIni(PTHEME_FILE tf);
 UINT MSSTYLES_GetThemeDPI(PTHEME_CLASS tc);
 PTHEME_PARTSTATE MSSTYLES_FindPart(PTHEME_CLASS tc, int iPartId);
+BOOL MSSTYLES_ValidateHandle(HTHEME hTheme);
 PTHEME_PARTSTATE MSSTYLES_FindPartState(PTHEME_CLASS tc, int iPartId, int iStateId, PTHEME_CLASS *tcNext);
 PTHEME_PROPERTY MSSTYLES_FindProperty(PTHEME_CLASS tc, int iPartId, int iStateId, int iPropertyPrimitive, int iPropertyId);
 PTHEME_PROPERTY MSSTYLES_FindMetric(PTHEME_CLASS tc, int iPropertyPrimitive, int iPropertyId);
@@ -129,6 +130,10 @@ HRESULT MSSTYLES_GetPropertyMargins(PTHEME_PROPERTY tp, RECT *prc, MARGINS *pMar
 
 void UXINI_CloseINI(PUXINI_FILE uf);
 PUXINI_FILE UXINI_LoadINI(HMODULE hTheme, const WCHAR *name) __WINE_DEALLOC(UXINI_CloseINI);
+#ifdef __REACTOS__
+PUXINI_FILE UXINI_LoadINIFile(LPCWSTR lpFileName) __WINE_DEALLOC(UXINI_CloseINI);
+INT UXINI_GetLine(PUXINI_FILE uf, LPCWSTR lpPos, LPWSTR lpLine, DWORD cchLine);
+#endif
 LPCWSTR UXINI_GetNextSection(PUXINI_FILE uf, DWORD *dwLen);
 BOOL UXINI_FindSection(PUXINI_FILE uf, LPCWSTR lpName);
 LPCWSTR UXINI_GetNextValue(PUXINI_FILE uf, DWORD *dwNameLen, LPCWSTR *lpValue, DWORD *dwValueLen);

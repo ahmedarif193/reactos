@@ -268,11 +268,25 @@ int OnPostWinPosChanged(HWND hWnd, WINDOWPOS* pWinPos)
  *      Hook Functions
  */
 
+static void
+ThemeMarkPrintClient(HWND hWnd, UINT Msg)
+{
+    ULONG flags;
+
+    if (Msg != WM_PRINTCLIENT)
+        return;
+
+    flags = HandleToUlong(GetPropW(hWnd, UXTHEME_PARENTBKGND_PROP));
+    if (flags & UXTHEME_PARENTBKGND_DRAWING)
+        SetPropW(hWnd, UXTHEME_PARENTBKGND_PROP, UlongToHandle(flags | UXTHEME_PARENTBKGND_UNHANDLED));
+}
+
 static LRESULT CALLBACK
 ThemeDefWindowProcW(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 {
     PWND_DATA pwndData;
 
+    ThemeMarkPrintClient(hWnd, Msg);
     pwndData = (PWND_DATA)GetPropW(hWnd, (LPCWSTR)MAKEINTATOM(atWndContext));
 
     if(!IsAppThemed() ||
@@ -297,6 +311,7 @@ ThemeDefWindowProcA(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 {
     PWND_DATA pwndData;
 
+    ThemeMarkPrintClient(hWnd, Msg);
     pwndData = (PWND_DATA)GetPropW(hWnd, (LPCWSTR)MAKEINTATOM(atWndContext));
 
     if(!IsAppThemed() ||
@@ -391,6 +406,7 @@ ThemePostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR
         case WM_THEMECHANGED:
         {
             DWORD style = GetWindowLongW(hWnd, GWL_STYLE);
+            UXTHEME_DestroyDialogBrush(hWnd);
 
             if ((style & WS_CAPTION) == WS_CAPTION)
             {
@@ -405,6 +421,7 @@ ThemePostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR
         }
         case WM_NCDESTROY:
         {
+            UXTHEME_DestroyDialogBrush(hWnd);
             ThemeDestroyWndData(hWnd);
             return 0;
         }
@@ -489,61 +506,114 @@ void HackFillStaticBg(HWND hwnd, HDC hdc, HBRUSH* result)
     *result = GetStockObject (NULL_BRUSH);
 }
 
+static const WCHAR uxtheme_dlg_hook_prop[] = L"uxtheme_dlg_hook";
+
 static LRESULT CALLBACK
 ThemeDlgPreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR ret,PDWORD unknown)
 {
+    LRESULT *pResult = (LRESULT *)ret;
+    WNDPROC dlgproc;
+    HBRUSH brush;
+    LRESULT lr;
+    POINT org, old_org;
+    RECT rect;
+    HDC hdc;
+
+    switch (Msg)
+    {
+        case WM_ERASEBKGND:
+        {
+            if (!IsThemeDialogTextureEnabled(hWnd))
+                return 0;
+            if (GetPropW(hWnd, uxtheme_dlg_hook_prop))
+                return 0;
+            dlgproc = (WNDPROC)GetWindowLongPtrW(hWnd, DWLP_DLGPROC);
+            if (!dlgproc)
+                return 0;
+            SetPropW(hWnd, uxtheme_dlg_hook_prop, (HANDLE)1);
+            SetWindowLongPtrW(hWnd, DWLP_MSGRESULT, 0);
+            lr = LOWORD(CallWindowProcW(dlgproc, hWnd, Msg, wParam, lParam));
+            if (lr || !IsWindow(hWnd))
+            {
+                if (IsWindow(hWnd))
+                {
+                    *pResult = GetWindowLongPtrW(hWnd, DWLP_MSGRESULT);
+                    RemovePropW(hWnd, uxtheme_dlg_hook_prop);
+                }
+                else
+                    *pResult = lr;
+                return TRUE;
+            }
+            brush = UXTHEME_GetDialogBackgroundBrush(hWnd, TRUE);
+            hdc = (HDC)wParam;
+            if (!brush)
+            {
+                brush = (HBRUSH)SendMessageW(hWnd, WM_CTLCOLORDLG, wParam, (LPARAM)hWnd);
+                if (!brush)
+                    brush = (HBRUSH)DefWindowProcW(hWnd, WM_CTLCOLORDLG, wParam, (LPARAM)hWnd);
+                if (brush)
+                {
+                    GetClientRect(hWnd, &rect);
+                    DPtoLP(hdc, (LPPOINT)&rect, 2);
+                    FillRect(hdc, &rect, brush);
+                }
+                RemovePropW(hWnd, uxtheme_dlg_hook_prop);
+                *pResult = TRUE;
+                return TRUE;
+            }
+            GetViewportOrgEx(hdc, &org);
+            SetBrushOrgEx(hdc, org.x, org.y, &old_org);
+            GetClientRect(hWnd, &rect);
+            FillRect(hdc, &rect, brush);
+            SetBrushOrgEx(hdc, old_org.x, old_org.y, NULL);
+            RemovePropW(hWnd, uxtheme_dlg_hook_prop);
+            *pResult = TRUE;
+            return TRUE;
+        }
+        case WM_CTLCOLORMSGBOX:
+        case WM_CTLCOLORBTN:
+        case WM_CTLCOLORDLG:
+        case WM_CTLCOLORSTATIC:
+        {
+            if (!IsThemeDialogTextureEnabled(hWnd))
+                return 0;
+            if (GetPropW(hWnd, uxtheme_dlg_hook_prop))
+                return 0;
+            dlgproc = (WNDPROC)GetWindowLongPtrW(hWnd, DWLP_DLGPROC);
+            if (!dlgproc)
+                return 0;
+            SetPropW(hWnd, uxtheme_dlg_hook_prop, (HANDLE)1);
+            lr = CallWindowProcW(dlgproc, hWnd, Msg, wParam, lParam);
+            if (IsWindow(hWnd))
+                RemovePropW(hWnd, uxtheme_dlg_hook_prop);
+            if (lr || !IsWindow(hWnd))
+            {
+                *pResult = lr;
+                return TRUE;
+            }
+            brush = UXTHEME_GetDialogBackgroundBrush(hWnd, FALSE);
+            if (!brush)
+            {
+                *pResult = DefWindowProcW(hWnd, Msg, wParam, lParam);
+                return TRUE;
+            }
+            hdc = (HDC)wParam;
+            SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
+            SetBkMode(hdc, TRANSPARENT);
+            org.x = 0;
+            org.y = 0;
+            MapWindowPoints((HWND)lParam, hWnd, &org, 1);
+            SetBrushOrgEx(hdc, -org.x, -org.y, NULL);
+            *pResult = (LRESULT)brush;
+            return TRUE;
+        }
+    }
     return 0;
 }
 
 static LRESULT CALLBACK
 ThemeDlgPostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR ret,PDWORD unknown)
 {
-    switch(Msg)
-    {
-        case WM_CTLCOLORDLG:
-        case WM_CTLCOLORBTN:
-        case WM_CTLCOLORSTATIC:
-        {
-            HWND hwndTarget = (HWND)lParam;
-            HDC hdc = (HDC)wParam;
-            HBRUSH* phbrush = (HBRUSH*)ret;
-            PWND_DATA pwndData;
-            HTHEME hTheme;
-
-            if(!IsAppThemed() || !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
-                break;
-
-            if (!IsThemeDialogTextureEnabled (hWnd))
-                break;
-
-            pwndData = ThemeGetWndData(hWnd);
-            if (pwndData == NULL)
-                break;
-
-            if (!pwndData->hthemeTab)
-                pwndData->hthemeTab = OpenThemeData(NULL, L"TAB");
-
-            hTheme = pwndData->hthemeTab;
-            if (!hTheme)
-                break;
-
-            GetDiaogTextureBrush(hTheme, hwndTarget, hdc, phbrush, Msg != WM_CTLCOLORDLG);
-
-#if 1
-            {
-                WCHAR controlClass[32];
-                GetClassNameW (hwndTarget, controlClass, sizeof(controlClass) / sizeof(controlClass[0]));
-
-                /* This is a hack for the static class. Windows have a v6 static class just for this. */
-                if (lstrcmpiW (controlClass, WC_STATICW) == 0)
-                    HackFillStaticBg(hwndTarget, hdc, phbrush);
-            }
-#endif
-            SetBkMode( hdc, TRANSPARENT );
-            break;
-        }
-    }
-
     return 0;
 }
 
@@ -675,6 +745,7 @@ ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
     UAH_HOOK_MESSAGE(puah->DefWndProcArray, WM_CTLCOLORMSGBOX);
     UAH_HOOK_MESSAGE(puah->DefWndProcArray, WM_CTLCOLORBTN);
     UAH_HOOK_MESSAGE(puah->DefWndProcArray, WM_CTLCOLORSTATIC);
+    UAH_HOOK_MESSAGE(puah->DefWndProcArray, WM_PRINTCLIENT);
 
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_CREATE);
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_SETTINGCHANGE);
@@ -700,6 +771,7 @@ ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
     UAH_HOOK_MESSAGE(puah->DlgProcArray, WM_CTLCOLORBTN);
     UAH_HOOK_MESSAGE(puah->DlgProcArray, WM_CTLCOLORDLG);
     UAH_HOOK_MESSAGE(puah->DlgProcArray, WM_CTLCOLORSTATIC);
+    UAH_HOOK_MESSAGE(puah->DlgProcArray, WM_ERASEBKGND);
     UAH_HOOK_MESSAGE(puah->DlgProcArray, WM_PRINTCLIENT);
 
     UXTHEME_ReloadTheme(TRUE);

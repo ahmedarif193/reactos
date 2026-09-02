@@ -35,7 +35,6 @@
 
 #include "msstyles.h"
 
-#include "wine/exception.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
@@ -55,6 +54,16 @@ static HRESULT MSSTYLES_GetFont (LPCWSTR lpStringStart, LPCWSTR lpStringEnd, LPC
 #define THEME_CLASS_SIGNATURE 0x12bc6d83
 
 static PTHEME_FILE tfActiveTheme;
+
+static CRITICAL_SECTION handles_cs;
+static CRITICAL_SECTION_DEBUG handles_cs_debug =
+{
+    0, 0, &handles_cs,
+    { &handles_cs_debug.ProcessLocksList, &handles_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": handles_cs") }
+};
+static CRITICAL_SECTION handles_cs = { &handles_cs_debug, -1, 0, 0, 0, 0 };
+static PTHEME_CLASS open_handles;
 
 /***********************************************************************/
 
@@ -1159,11 +1168,37 @@ static PTHEME_CLASS open_theme_class(PTHEME_FILE theme, LPCWSTR pszAppName,
         if (!cls) cls = MSSTYLES_FindClass(theme, NULL, szClassName);
     }
     if(cls) {
+        PTHEME_CLASS handle;
         TRACE("Opened app %s, class %s from list %s\n", debugstr_w(cls->szAppName), debugstr_w(cls->szClassName), debugstr_w(pszClassList));
-	cls->tf = theme;
-        InterlockedIncrement(&cls->tf->refcount);
-        InterlockedIncrement(&cls->refcount);
-        cls->dpi = dpi;
+        EnterCriticalSection(&handles_cs);
+        for (handle = open_handles; handle; handle = handle->next)
+        {
+            if (handle->tf == theme && handle->dpi == dpi && handle->partstate == cls->partstate &&
+                !wcscmp(handle->szAppName, cls->szAppName) && !wcscmp(handle->szClassName, cls->szClassName))
+                break;
+        }
+        if (handle)
+        {
+            if (handle->refcount++ == 0)
+                InterlockedIncrement(&theme->refcount);
+            LeaveCriticalSection(&handles_cs);
+            return handle;
+        }
+        handle = malloc(sizeof(*handle));
+        if (!handle)
+        {
+            LeaveCriticalSection(&handles_cs);
+            return NULL;
+        }
+        *handle = *cls;
+        handle->refcount = 1;
+        handle->tf = theme;
+        handle->dpi = dpi;
+        InterlockedIncrement(&theme->refcount);
+        handle->next = open_handles;
+        open_handles = handle;
+        LeaveCriticalSection(&handles_cs);
+        cls = handle;
     }
     return cls;
 }
@@ -1183,6 +1218,26 @@ PTHEME_CLASS MSSTYLES_OpenThemeClassFromFile(PTHEME_FILE tf, LPCWSTR pszAppName,
 }
 #endif
 
+BOOL MSSTYLES_ValidateHandle(HTHEME hTheme)
+{
+    PTHEME_CLASS handle;
+    BOOL found = FALSE;
+
+    if (!hTheme)
+        return FALSE;
+    EnterCriticalSection(&handles_cs);
+    for (handle = open_handles; handle; handle = handle->next)
+    {
+        if (handle == (PTHEME_CLASS)hTheme)
+        {
+            found = TRUE;
+            break;
+        }
+    }
+    LeaveCriticalSection(&handles_cs);
+    return found;
+}
+
 /***********************************************************************
  *      MSSTYLES_CloseThemeClass
  *
@@ -1197,29 +1252,31 @@ PTHEME_CLASS MSSTYLES_OpenThemeClassFromFile(PTHEME_FILE tf, LPCWSTR pszAppName,
  */
 HRESULT MSSTYLES_CloseThemeClass(PTHEME_CLASS tc)
 {
-    LONG refcount;
+    PTHEME_CLASS *link;
+    BOOL found = FALSE;
+    struct _THEME_FILE *tf = NULL;
 
-    __TRY
+    EnterCriticalSection(&handles_cs);
+    for (link = &open_handles; *link; link = &(*link)->next)
     {
-        if (tc->signature != THEME_CLASS_SIGNATURE)
-            tc = NULL;
+        if (*link == tc)
+        {
+            found = TRUE;
+            if (tc->refcount > 0 && --tc->refcount == 0)
+                tf = tc->tf;
+            break;
+        }
     }
-    __EXCEPT_PAGE_FAULT
-    {
-        tc = NULL;
-    }
-    __ENDTRY
+    LeaveCriticalSection(&handles_cs);
 
-    if (!tc)
+    if (!found)
     {
-        WARN("Invalid theme class handle\n");
+        WARN("Invalid theme class handle %p\n", tc);
         return E_HANDLE;
     }
 
-    refcount = InterlockedDecrement(&tc->refcount);
-    /* Some buggy apps may double free HTHEME handles */
-    if (refcount >= 0)
-        MSSTYLES_CloseThemeFile(tc->tf);
+    if (tf)
+        MSSTYLES_CloseThemeFile(tf);
     return S_OK;
 }
 
