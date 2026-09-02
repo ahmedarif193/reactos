@@ -855,7 +855,14 @@ UserChangeDisplaySettings(
     }
 
     /* Shall we apply the settings? */
-    if (!(flags & CDS_NORESET))
+    if (!(flags & CDS_NORESET) &&
+        (newDevMode->dmPelsWidth != ppdev->pdmwDev->dmPelsWidth ||
+         newDevMode->dmPelsHeight != ppdev->pdmwDev->dmPelsHeight ||
+         newDevMode->dmBitsPerPel != ppdev->pdmwDev->dmBitsPerPel ||
+         newDevMode->dmDisplayFrequency != ppdev->pdmwDev->dmDisplayFrequency ||
+         newDevMode->dmDisplayFlags != ppdev->pdmwDev->dmDisplayFlags ||
+         newDevMode->dmPanningWidth != ppdev->pdmwDev->dmPanningWidth ||
+         newDevMode->dmPanningHeight != ppdev->pdmwDev->dmPanningHeight))
     {
         ULONG_PTR ulResult;
         PVOID pvOldCursor;
@@ -864,8 +871,12 @@ UserChangeDisplaySettings(
         /* Remove mouse pointer */
         pvOldCursor = UserSetCursor(NULL, TRUE);
 
+        IntCompositionOnDisplayChangeBegin();
+
         /* Do the mode switch */
         ulResult = PDEVOBJ_bSwitchMode(ppdev, newDevMode);
+
+        IntCompositionOnDisplayChangeEnd();
 
         /* Restore mouse pointer, no hooks called */
         pvOldCursor = UserSetCursor(pvOldCursor, TRUE);

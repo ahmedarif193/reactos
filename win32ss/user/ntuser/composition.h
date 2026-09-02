@@ -130,6 +130,8 @@ BOOL IntCompositionIsGLWindow(_In_opt_ PWND Wnd);
 VOID IntCompositionOnWindowCreate(_In_ PWND Wnd);
 VOID IntCompositionOnWindowDestroy(_In_ PWND Wnd);
 VOID IntCompositionOnWindowResize(_In_ PWND Wnd);
+VOID IntCompositionOnDisplayChangeBegin(VOID);
+VOID IntCompositionOnDisplayChangeEnd(VOID);
 
 /* Damage: a window (NULL = the whole frame) changed — schedule a recompose. */
 VOID IntCompositionDamageWindow(_In_opt_ PWND Wnd);
