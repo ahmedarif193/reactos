@@ -374,6 +374,7 @@ VOID VchiqFileClose (
             ExReleaseFastMutex(&vchiqFileContextPtr->ServiceMutex);
             if (!NT_SUCCESS(closeStatus))
                 break;
+            serviceState = SERVICE_STATE_CLOSING;
         }
         else
         {
@@ -410,7 +411,9 @@ VOID VchiqFileClose (
         }
 
         closeStatus = KeWaitForSingleObject(
-            &vchiqFileContextPtr->ServiceStateEvent,
+            serviceState == SERVICE_STATE_CLOSING ?
+                &vchiqFileContextPtr->ServiceClosedEvent :
+                &vchiqFileContextPtr->ServiceStateEvent,
             Executive,
             KernelMode,
             FALSE,
