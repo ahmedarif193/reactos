@@ -715,7 +715,7 @@ end:
 #ifdef __REACTOS__
 static void reactos_refresh_devices(EDataFlow flow)
 {
-    if (!drvs.module)
+    if (!drvs.module && !reactos_ensure_driver())
         return;
 
     if (flow == eRender || flow == eCapture)
