@@ -27,6 +27,7 @@ static const CLSID CLSID_Rpi3H264EncoderMFT =
 #define RPI3_ENCODER_MAX_QUEUED_INPUTS 4
 #define RPI3_ENCODER_BITSTREAM_MARGIN (64 * 1024)
 #define RPI3_ENCODER_MAX_BITRATE 25000000u
+#define RPI3_ENCODER_OUTPUT_TIMEOUT_MS 10000u
 
 struct rpi3_encoder
 {
@@ -1286,6 +1287,7 @@ transform_ProcessOutput(IMFTransform *Interface,
 {
     struct rpi3_encoder *Encoder = impl_from_IMFTransform(Interface);
     RPI3_MMAL_PACKET Packet;
+    DWORD TimeoutMilliseconds;
     HRESULT Result;
 
     if (Flags || OutputCount != 1 || !Outputs || !Status || !Outputs[0].pSample)
@@ -1327,14 +1329,17 @@ transform_ProcessOutput(IMFTransform *Interface,
         }
 
         ZeroMemory(&Packet, sizeof(Packet));
+        TimeoutMilliseconds = Encoder->QueuedInputs || Encoder->Draining ?
+                              RPI3_ENCODER_OUTPUT_TIMEOUT_MS : 0;
         Result = Rpi3MmalReceiveH264(Encoder->Session,
                                      Encoder->PacketBuffer,
                                      Encoder->PacketBufferSize,
-                                     0,
+                                     TimeoutMilliseconds,
                                      &Packet);
         if (Result == HRESULT_FROM_WIN32(ERROR_TIMEOUT))
         {
-            Result = MF_E_TRANSFORM_NEED_MORE_INPUT;
+            if (!TimeoutMilliseconds)
+                Result = MF_E_TRANSFORM_NEED_MORE_INPUT;
             goto Done;
         }
         if (FAILED(Result))
