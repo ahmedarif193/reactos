@@ -591,6 +591,34 @@ HRESULT reactos_audio_session_set_mute(
     return S_OK;
 }
 
+HRESULT reactos_audio_session_set_strings(
+    const struct reactos_audio_session_id *id,
+    const WCHAR *display_name, const WCHAR *icon_path)
+{
+    struct shared_audio_session *session;
+    HRESULT hr;
+
+    if (FAILED(hr = ensure_registry()))
+        return hr;
+    if (!lock_registry())
+        return HRESULT_FROM_WIN32(GetLastError());
+    if (!(session = find_record_locked(id)))
+    {
+        unlock_registry();
+        return AUDCLNT_E_DEVICE_INVALIDATED;
+    }
+    begin_record_update(session);
+    if (display_name)
+        lstrcpynW(session->display_name, display_name,
+                  ARRAY_SIZE(session->display_name));
+    if (icon_path)
+        lstrcpynW(session->icon_path, icon_path,
+                  ARRAY_SIZE(session->icon_path));
+    finish_record_update(session);
+    unlock_registry();
+    return S_OK;
+}
+
 HRESULT reactos_audio_session_set_channel(
     const struct reactos_audio_session_id *id, UINT32 channel, float level)
 {
