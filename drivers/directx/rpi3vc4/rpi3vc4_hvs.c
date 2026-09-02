@@ -988,6 +988,7 @@ Rpi3Vc4EmitNv12Overlay(
     ULONG PlaneDwords;
     ULONG LbmSize;
     ULONG Kernel;
+    BOOLEAN LumaUnity;
     BOOLEAN UsesPpf;
 
     if (!Rpi3Vc4BuildOverlayPlane(Device, Overlay, &Plane))
@@ -1005,6 +1006,8 @@ Rpi3Vc4EmitNv12Overlay(
     LumaVertical = Rpi3Vc4GetScalingMode(
                        Plane.SourceHeight,
                        Plane.DestinationHeight);
+    LumaUnity = LumaHorizontal == Rpi3Vc4HvsScalingNone &&
+                LumaVertical == Rpi3Vc4HvsScalingNone;
 
     /* VC4 performs YUV-to-RGB conversion in the scaler. The chroma channel
      * must remain enabled when its subsampled dimensions otherwise happen
@@ -1030,15 +1033,24 @@ Rpi3Vc4EmitNv12Overlay(
              (0xffUL << RPI3VC4_HVS_POS0_ALPHA_SHIFT) |
                  ((Plane.DestinationY & 0xfffUL) <<
                   RPI3VC4_HVS_POS0_Y_SHIFT) |
-                 (Plane.DestinationX & 0xfffUL)) ||
+                 (Plane.DestinationX & 0xfffUL)))
+    {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    if (!LumaUnity &&
         !Rpi3Vc4AppendDisplayWord(
              List,
              Capacity,
              Count,
              ((Plane.DestinationHeight & 0xfffUL) <<
               RPI3VC4_HVS_POS1_HEIGHT_SHIFT) |
-                 (Plane.DestinationWidth & 0xfffUL)) ||
-        !Rpi3Vc4AppendDisplayWord(
+                 (Plane.DestinationWidth & 0xfffUL)))
+    {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    if (!Rpi3Vc4AppendDisplayWord(
              List,
              Capacity,
              Count,
@@ -1193,6 +1205,7 @@ Rpi3Vc4EmitNv12Overlay(
         (Rpi3Vc4GetScalerField(LumaHorizontal,
                                LumaVertical) <<
          RPI3VC4_HVS_CTL0_SCL1_SHIFT) |
+        (LumaUnity ? RPI3VC4_HVS_CTL0_UNITY : 0) |
         RPI3VC4_HVS_FORMAT_NV12;
     return STATUS_SUCCESS;
 }
