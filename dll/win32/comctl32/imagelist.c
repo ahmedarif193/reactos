@@ -42,6 +42,7 @@
 #include "winuser.h"
 #include "commctrl.h"
 #include "comctl32.h"
+#include "comctl32_undoc.h"
 #include "commoncontrols.h"
 #include "wine/debug.h"
 #include "wine/exception.h"
@@ -799,6 +800,9 @@ ImageList_Destroy (HIMAGELIST himl)
 {
     if (!is_valid(himl))
 	return FALSE;
+
+    if (himl->flags & ILC_SYSTEM)
+        return FALSE;
 
     IImageList_Release((IImageList *) himl);
     return TRUE;
@@ -2729,11 +2733,41 @@ ImageList_SetFilter (HIMAGELIST himl, INT i, DWORD dwFilter)
  *    Stub.
  */
 
-DWORD WINAPI
+static void imagelist_free_resources(HIMAGELIST himl)
+{
+    if (himl->hbmImage) DeleteObject (himl->hbmImage);
+    if (himl->hbmMask)  DeleteObject (himl->hbmMask);
+    if (himl->hdcImage) DeleteDC (himl->hdcImage);
+    if (himl->hdcMask)  DeleteDC (himl->hdcMask);
+    if (himl->hbrBlend25) DeleteObject (himl->hbrBlend25);
+    if (himl->hbrBlend50) DeleteObject (himl->hbrBlend50);
+    Free(himl->item_flags);
+    himl->hbmImage = NULL;
+    himl->hbmMask = NULL;
+    himl->hdcImage = NULL;
+    himl->hdcMask = NULL;
+    himl->hbrBlend25 = NULL;
+    himl->hbrBlend50 = NULL;
+    himl->item_flags = NULL;
+    himl->cCurImage = 0;
+    himl->cMaxImage = 0;
+}
+
+BOOL WINAPI
 ImageList_SetFlags(HIMAGELIST himl, DWORD flags)
 {
-    FIXME("(%p %#lx):empty stub\n", himl, flags);
-    return 0;
+    TRACE("(%p %#lx)\n", himl, flags);
+
+    if (!is_valid(himl))
+        return FALSE;
+
+    if (himl->flags == flags)
+        return TRUE;
+
+    imagelist_free_resources(himl);
+
+    return IImageList2_Initialize(&himl->IImageList2_iface, himl->cx, himl->cy,
+                                  flags, himl->cInitial, himl->cGrow) == S_OK;
 }
 
 
@@ -3203,21 +3237,9 @@ static ULONG WINAPI ImageListImpl_Release(IImageList2 *iface)
 
     if (ref == 0)
     {
-        /* delete image bitmaps */
-        if (This->hbmImage) DeleteObject (This->hbmImage);
-        if (This->hbmMask)  DeleteObject (This->hbmMask);
-
-        /* delete image & mask DCs */
-        if (This->hdcImage) DeleteDC (This->hdcImage);
-        if (This->hdcMask)  DeleteDC (This->hdcMask);
-
-        /* delete blending brushes */
-        if (This->hbrBlend25) DeleteObject (This->hbrBlend25);
-        if (This->hbrBlend50) DeleteObject (This->hbrBlend50);
-
+        imagelist_free_resources(This);
         This->IImageList2_iface.lpVtbl = NULL;
         This->magic = 0;
-        Free(This->item_flags);
         Free(This);
     }
 
