@@ -322,6 +322,14 @@ HRESULT STDMETHODCALLTYPE CDesktopBrowser::BrowseObject(LPCITEMIDLIST pidl, UINT
      * find an open shell window that shows the requested pidl and activate it
      */
 
+    SHELLEXECUTEINFOW info = { sizeof(info) };
+    info.fMask = SEE_MASK_IDLIST | SEE_MASK_FLAG_NO_UI;
+    info.lpVerb = L"open";
+    info.lpIDList = const_cast<LPITEMIDLIST>(pidl);
+    info.nShow = SW_SHOWNORMAL;
+    if (ShellExecuteExW(&info))
+        return S_OK;
+
     DWORD dwFlags = ((wFlags & SBSP_EXPLOREMODE) != 0) ? SH_EXPLORER_CMDLINE_FLAG_E : 0;
     return SHOpenNewFrame(ILClone(pidl), NULL, 0, dwFlags);
 }
