@@ -82,6 +82,8 @@ struct dxva2_surface_fence
 struct dxva2_decoder_surface
 {
     IDirect3DSurface9 *surface;
+    IDirect3DQuery9 *reuse_query;
+    BOOL reuse_query_pending;
     HANDLE resource;
     struct dxva2_surface_fence *fence;
     BOOL fence_attached;
@@ -391,6 +393,8 @@ static HRESULT WINAPI dxva2_surface_fence_GetSharedMemory(
     memory->PlanePitches[0] = surface->shared_lock.Pitch;
     memory->PlanePitches[1] = surface->shared_lock.Pitch;
     memory->Generation = surface->generation;
+    if (surface->reuse_query)
+        memory->Flags |= REACTOS_DXVA_SURFACE_MEMORY_DEFERRED_UPLOAD;
     hr = S_OK;
 
 unlock:
@@ -441,6 +445,37 @@ static HRESULT WINAPI dxva2_surface_fence_PrepareFallback(
     LeaveCriticalSection(&decoder->copy_lock);
 
 done:
+    dxva2_surface_fence_end_call(fence);
+    return hr;
+}
+
+static HRESULT WINAPI dxva2_surface_fence_MarkConsumed(
+        IReactOSDxvaSurfaceFence *iface, DWORD flags)
+{
+    struct dxva2_surface_fence *fence = impl_from_IReactOSDxvaSurfaceFence(iface);
+    struct dxva2_decoder_surface *surface;
+    struct dxva2_decoder *decoder;
+    UINT surface_index;
+    HRESULT hr;
+
+    if (flags)
+        return E_INVALIDARG;
+    if (FAILED(hr = dxva2_surface_fence_begin_call(fence, &decoder, &surface_index)))
+        return hr;
+
+    EnterCriticalSection(&decoder->copy_lock);
+    surface = &decoder->surfaces[surface_index];
+    if (!surface->shared_locked || !surface->reuse_query)
+    {
+        hr = S_OK;
+    }
+    else if (SUCCEEDED(hr = IDirect3DQuery9_Issue(surface->reuse_query,
+            D3DISSUE_END)))
+    {
+        surface->reuse_query_pending = TRUE;
+    }
+    LeaveCriticalSection(&decoder->copy_lock);
+
     dxva2_surface_fence_end_call(fence);
     return hr;
 }
@@ -571,6 +606,7 @@ static const IReactOSDxvaSurfaceFenceVtbl dxva2_surface_fence_vtbl =
     dxva2_surface_fence_Wait,
     dxva2_surface_fence_GetSharedMemory,
     dxva2_surface_fence_PrepareFallback,
+    dxva2_surface_fence_MarkConsumed,
     dxva2_surface_fence_Present,
     dxva2_surface_fence_Hide,
 };
@@ -966,7 +1002,30 @@ static HRESULT dxva2_decoder_unlock_shared_surface(
     {
         memset(&surface->shared_lock, 0, sizeof(surface->shared_lock));
         surface->shared_locked = FALSE;
+        surface->reuse_query_pending = FALSE;
     }
+    return hr;
+}
+
+static HRESULT dxva2_decoder_wait_surface_reuse(
+        struct dxva2_decoder_surface *surface)
+{
+    HRESULT hr;
+
+    if (!surface->shared_locked || !surface->reuse_query)
+        return S_OK;
+    if (!surface->reuse_query_pending)
+    {
+        if (FAILED(hr = IDirect3DQuery9_Issue(surface->reuse_query,
+                D3DISSUE_END)))
+            return hr;
+        surface->reuse_query_pending = TRUE;
+    }
+    while ((hr = IDirect3DQuery9_GetData(surface->reuse_query, NULL, 0,
+            D3DGETDATA_FLUSH)) == S_FALSE)
+        SwitchToThread();
+    if (SUCCEEDED(hr))
+        surface->reuse_query_pending = FALSE;
     return hr;
 }
 
@@ -1244,6 +1303,8 @@ static void dxva2_decoder_destroy(struct dxva2_decoder *decoder)
             IReactOSDxvaSurfaceFence_Release(
                     &decoder->surfaces[i].fence->IReactOSDxvaSurfaceFence_iface);
         }
+        if (decoder->surfaces[i].reuse_query)
+            IDirect3DQuery9_Release(decoder->surfaces[i].reuse_query);
         if (decoder->surfaces[i].surface)
             IDirect3DSurface9_Release(decoder->surfaces[i].surface);
     }
@@ -1380,6 +1441,8 @@ static HRESULT WINAPI dxva2_decoder_BeginFrame(IDirectXVideoDecoder *iface,
         hr = dxva2_decoder_hide_overlay(decoder);
     else
         hr = S_OK;
+    if (SUCCEEDED(hr))
+        hr = dxva2_decoder_wait_surface_reuse(&decoder->surfaces[i]);
     if (SUCCEEDED(hr))
         hr = dxva2_decoder_unlock_shared_surface(decoder, i);
     LeaveCriticalSection(&decoder->copy_lock);
@@ -1784,6 +1847,9 @@ HRESULT dxva2_decoder_create(IDirectXVideoDecoderService *service, IDirect3DDevi
         }
         decoder->surfaces[i].surface = render_targets[i];
         IDirect3DSurface9_AddRef(render_targets[i]);
+        if (FAILED(IDirect3DDevice9_CreateQuery(device, D3DQUERYTYPE_EVENT,
+                &decoder->surfaces[i].reuse_query)))
+            decoder->surfaces[i].reuse_query = NULL;
         if (!(decoder->surfaces[i].fence =
                 dxva2_surface_fence_create(decoder, i)))
         {

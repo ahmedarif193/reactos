@@ -202,6 +202,8 @@ HRESULT d3d9_surface_prepare_dxva_composition(struct d3d9_surface *surface,
         DWORD flags);
 HRESULT d3d9_surface_prepare_dxva_fallback(struct d3d9_surface *surface,
         DWORD flags);
+HRESULT d3d9_surface_mark_dxva_consumed(struct d3d9_surface *surface,
+        DWORD flags);
 #endif
 void d3d9_surface_release_rendertarget_view(struct d3d9_surface *surface,
         struct wined3d_rendertarget_view *rtv);

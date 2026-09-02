@@ -58,7 +58,7 @@ static HRESULT d3d9_surface_detach_dxva_memory(struct d3d9_surface *surface)
 
     wined3d_mutex_lock();
     hr = wined3d_texture_set_planar_memory(surface->wined3d_texture,
-            surface->sub_resource_idx, NULL);
+            surface->sub_resource_idx, NULL, TRUE);
     wined3d_mutex_unlock();
     if (SUCCEEDED(hr))
     {
@@ -426,7 +426,8 @@ HRESULT d3d9_surface_prepare_dxva_composition(struct d3d9_surface *surface,
 
         wined3d_mutex_lock();
         hr = wined3d_texture_set_planar_memory(surface->wined3d_texture,
-                surface->sub_resource_idx, &desc);
+                surface->sub_resource_idx, &desc,
+                !(memory.Flags & REACTOS_DXVA_SURFACE_MEMORY_DEFERRED_UPLOAD));
         wined3d_mutex_unlock();
         if (SUCCEEDED(hr))
         {
@@ -434,6 +435,23 @@ HRESULT d3d9_surface_prepare_dxva_composition(struct d3d9_surface *surface,
             surface->dxva_shared_generation = memory.Generation;
         }
     }
+    IReactOSDxvaSurfaceFence_Release(binding);
+    return hr;
+}
+
+HRESULT d3d9_surface_mark_dxva_consumed(struct d3d9_surface *surface,
+        DWORD flags)
+{
+    IReactOSDxvaSurfaceFence *binding;
+    HRESULT hr;
+
+    hr = d3d9_surface_get_dxva_binding(surface, &binding);
+    if (hr == D3DERR_NOTFOUND)
+        return D3D_OK;
+    if (FAILED(hr))
+        return hr;
+
+    hr = IReactOSDxvaSurfaceFence_MarkConsumed(binding, flags);
     IReactOSDxvaSurfaceFence_Release(binding);
     return hr;
 }

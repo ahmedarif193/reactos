@@ -3002,7 +3002,8 @@ HRESULT __cdecl wined3d_texture_set_color_key(struct wined3d_texture *texture,
         uint32_t flags, const struct wined3d_color_key *color_key);
 #ifdef __REACTOS__
 HRESULT __cdecl wined3d_texture_set_planar_memory(struct wined3d_texture *texture,
-        unsigned int sub_resource_idx, const struct wined3d_planar_memory_desc *desc);
+        unsigned int sub_resource_idx, const struct wined3d_planar_memory_desc *desc,
+        BOOL synchronize);
 HRESULT __cdecl wined3d_texture_set_yuv_color_space(struct wined3d_texture *texture,
         enum wined3d_yuv_color_space color_space);
 #endif

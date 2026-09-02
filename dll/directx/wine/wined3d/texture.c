@@ -984,7 +984,8 @@ HRESULT CDECL wined3d_texture_update_desc(struct wined3d_texture *texture,
 
 #ifdef __REACTOS__
 HRESULT CDECL wined3d_texture_set_planar_memory(struct wined3d_texture *texture,
-        unsigned int sub_resource_idx, const struct wined3d_planar_memory_desc *desc)
+        unsigned int sub_resource_idx, const struct wined3d_planar_memory_desc *desc,
+        BOOL synchronize)
 {
     struct wined3d_texture_sub_resource *sub_resource;
     unsigned int width, height, i;
@@ -1038,8 +1039,9 @@ HRESULT CDECL wined3d_texture_set_planar_memory(struct wined3d_texture *texture,
         wined3d_texture_invalidate_location(texture, sub_resource_idx,
                 ~WINED3D_LOCATION_SYSMEM);
         wined3d_resource_preload(&texture->resource);
-        wined3d_cs_finish(texture->resource.device->cs,
-                WINED3D_CS_QUEUE_DEFAULT);
+        if (synchronize)
+            wined3d_cs_finish(texture->resource.device->cs,
+                    WINED3D_CS_QUEUE_DEFAULT);
         return WINED3D_OK;
     }
 
@@ -1060,8 +1062,9 @@ HRESULT CDECL wined3d_texture_set_planar_memory(struct wined3d_texture *texture,
     }
     sub_resource->planar_memory = *desc;
     wined3d_resource_preload(&texture->resource);
-    wined3d_cs_finish(texture->resource.device->cs,
-            WINED3D_CS_QUEUE_DEFAULT);
+    if (synchronize)
+        wined3d_cs_finish(texture->resource.device->cs,
+                WINED3D_CS_QUEUE_DEFAULT);
     return WINED3D_OK;
 }
 #endif
