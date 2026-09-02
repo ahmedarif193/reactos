@@ -15,6 +15,9 @@ endif()
 #add_subdirectory(dsound_new) #disabled in trunk
 #add_subdirectory(ksproxy) Not needed at the moment
 add_subdirectory(ksuser)
+if((ARCH STREQUAL "arm64") AND RPI3_SUPPORT)
+    add_subdirectory(rpi3mmal)
+endif()
 #add_subdirectory(msdvbnp) #disabled in trunk
 #add_subdirectory(msvidctl) #disabled in trunk
 add_subdirectory(wine)
