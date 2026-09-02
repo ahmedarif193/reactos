@@ -697,21 +697,50 @@ Rpi3MmalUpdateOutputEventsLocked(RPI3_MMAL_DECODER *Decoder)
 }
 
 static BOOL
-Rpi3MmalDeviceIoControl(HANDLE Device,
-                        DWORD IoControlCode,
-                        VOID *InputBuffer,
-                        DWORD InputSize,
-                        VOID *OutputBuffer,
-                        DWORD OutputSize,
-                        DWORD *BytesReturned)
+Rpi3MmalCloseDevice(RPI3_MMAL_DECODER *Decoder, HANDLE Device)
+{
+    if (Device == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    if (InterlockedCompareExchangePointer(
+            (PVOID volatile *)&Decoder->Device,
+            INVALID_HANDLE_VALUE,
+            Device) != Device)
+    {
+        return FALSE;
+    }
+
+    (VOID)CancelIoEx(Device, NULL);
+    CloseHandle(Device);
+    return TRUE;
+}
+
+static BOOL
+Rpi3MmalDeviceIoControlTimeout(RPI3_MMAL_DECODER *Decoder,
+                               DWORD IoControlCode,
+                               VOID *InputBuffer,
+                               DWORD InputSize,
+                               VOID *OutputBuffer,
+                               DWORD OutputSize,
+                               DWORD *BytesReturned,
+                               DWORD TimeoutMilliseconds)
 {
     OVERLAPPED Overlapped;
+    HANDLE Device;
     DWORD LocalBytes;
     DWORD Error;
+    DWORD WaitStatus;
     BOOL Result;
 
     if (!BytesReturned)
         BytesReturned = &LocalBytes;
+
+    Device = Decoder->Device;
+    if (Device == INVALID_HANDLE_VALUE)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
 
     ZeroMemory(&Overlapped, sizeof(Overlapped));
     Overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -730,14 +759,52 @@ Rpi3MmalDeviceIoControl(HANDLE Device,
     {
         Error = GetLastError();
         if (Error == ERROR_IO_PENDING)
-            Result = GetOverlappedResult(Device, &Overlapped,
-                                         BytesReturned, TRUE);
+        {
+            WaitStatus = WaitForSingleObject(Overlapped.hEvent,
+                                             TimeoutMilliseconds);
+            if (WaitStatus == WAIT_OBJECT_0)
+            {
+                Result = GetOverlappedResult(Device, &Overlapped,
+                                             BytesReturned, FALSE);
+            }
+            else
+            {
+                Error = WaitStatus == WAIT_TIMEOUT ?
+                        ERROR_TIMEOUT : ERROR_GEN_FAILURE;
+                (VOID)CancelIoEx(Device, &Overlapped);
+                (VOID)Rpi3MmalCloseDevice(Decoder, Device);
+                (VOID)WaitForSingleObject(Overlapped.hEvent, INFINITE);
+                (VOID)GetOverlappedResult(Device, &Overlapped,
+                                          BytesReturned, FALSE);
+                Result = FALSE;
+                SetLastError(Error);
+            }
+        }
     }
 
     Error = Result ? ERROR_SUCCESS : GetLastError();
     CloseHandle(Overlapped.hEvent);
     SetLastError(Error);
     return Result;
+}
+
+static BOOL
+Rpi3MmalDeviceIoControl(RPI3_MMAL_DECODER *Decoder,
+                        DWORD IoControlCode,
+                        VOID *InputBuffer,
+                        DWORD InputSize,
+                        VOID *OutputBuffer,
+                        DWORD OutputSize,
+                        DWORD *BytesReturned)
+{
+    return Rpi3MmalDeviceIoControlTimeout(Decoder,
+                                          IoControlCode,
+                                          InputBuffer,
+                                          InputSize,
+                                          OutputBuffer,
+                                          OutputSize,
+                                          BytesReturned,
+                                          MMAL_CONTROL_TIMEOUT_MS);
 }
 
 static BOOL
@@ -757,7 +824,7 @@ Rpi3MmalQueueMessage(RPI3_MMAL_DECODER *Decoder,
     Arguments.count = 1;
     Arguments.elements = &Element;
 
-    return Rpi3MmalDeviceIoControl(Decoder->Device,
+    return Rpi3MmalDeviceIoControl(Decoder,
                                    VCHIQ_IOC_QUEUE_MESSAGE,
                                    &Arguments,
                                    sizeof(Arguments),
@@ -782,7 +849,7 @@ Rpi3MmalBulkTransmit(RPI3_MMAL_DECODER *Decoder,
     Arguments.mode = VCHIQ_BULK_MODE_BLOCKING;
 
     /* METHOD_IN_DIRECT: payload is input, transfer descriptor is output. */
-    return Rpi3MmalDeviceIoControl(Decoder->Device,
+    return Rpi3MmalDeviceIoControl(Decoder,
                                    VCHIQ_IOC_QUEUE_BULK_TRANSMIT,
                                    (VOID *)Data,
                                    Size,
@@ -807,7 +874,7 @@ Rpi3MmalBulkReceive(RPI3_MMAL_DECODER *Decoder,
     Arguments.mode = VCHIQ_BULK_MODE_BLOCKING;
 
     /* METHOD_OUT_DIRECT: transfer descriptor is input, payload is output. */
-    return Rpi3MmalDeviceIoControl(Decoder->Device,
+    return Rpi3MmalDeviceIoControl(Decoder,
                                    VCHIQ_IOC_QUEUE_BULK_RECEIVE,
                                    &Arguments,
                                    sizeof(Arguments),
@@ -1643,13 +1710,14 @@ Rpi3MmalCompletionThread(VOID *Context)
         Arguments.msgbufs = MessagePointers;
         TotalMessages = 0;
 
-        if (!Rpi3MmalDeviceIoControl(Decoder->Device,
-                                     VCHIQ_IOC_AWAIT_COMPLETION,
-                                     &Arguments,
-                                     sizeof(Arguments),
-                                     &TotalMessages,
-                                     sizeof(TotalMessages),
-                                     &BytesReturned))
+        if (!Rpi3MmalDeviceIoControlTimeout(Decoder,
+                                            VCHIQ_IOC_AWAIT_COMPLETION,
+                                            &Arguments,
+                                            sizeof(Arguments),
+                                            &TotalMessages,
+                                            sizeof(TotalMessages),
+                                            &BytesReturned,
+                                            INFINITE))
         {
             if (!InterlockedCompareExchange(&Decoder->StopRequested, 0, 0))
             {
@@ -2452,14 +2520,14 @@ Rpi3MmalOpenSession(RPI3_MMAL_DECODER *Session)
     if (Session->Device == INVALID_HANDLE_VALUE)
         return Rpi3MmalErrorFromLastError();
 
-    if (!Rpi3MmalDeviceIoControl(Session->Device,
+    if (!Rpi3MmalDeviceIoControl(Session,
                                  VCHIQ_IOC_LIB_VERSION,
                                  &Version,
                                  sizeof(Version),
                                  NULL,
                                  0,
                                  NULL) ||
-        !Rpi3MmalDeviceIoControl(Session->Device,
+        !Rpi3MmalDeviceIoControl(Session,
                                  VCHIQ_IOC_CONNECT,
                                  NULL,
                                  0,
@@ -2477,7 +2545,7 @@ Rpi3MmalOpenSession(RPI3_MMAL_DECODER *Session)
     CreateService.params.version_min = MMAL_WORKER_VERSION_MINIMUM;
     CreateService.is_open = TRUE;
     CreateService.handle = VCHIQ_SERVICE_HANDLE_INVALID;
-    if (!Rpi3MmalDeviceIoControl(Session->Device,
+    if (!Rpi3MmalDeviceIoControl(Session,
                                  VCHIQ_IOC_CREATE_SERVICE,
                                  &CreateService,
                                  sizeof(CreateService),
@@ -3464,6 +3532,7 @@ void WINAPI
 Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
 {
     DWORD WaitStatus;
+    HRESULT Result = S_OK;
 
     if (!Decoder)
         return;
@@ -3472,25 +3541,35 @@ Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
     {
         EnterCriticalSection(&Decoder->OutputLock);
         InterlockedExchange(&Decoder->Reconfiguring, 1);
-        (VOID)Rpi3MmalDrainReturnedOutputs(Decoder);
-        if (Decoder->InputEnabled)
+        Result = Rpi3MmalDrainReturnedOutputs(Decoder);
+        if (Decoder->InputEnabled && SUCCEEDED(Result))
         {
-            Rpi3MmalPortAction(Decoder, &Decoder->Input, MmalPortActionDisable);
+            Result = Rpi3MmalPortAction(Decoder,
+                                        &Decoder->Input,
+                                        MmalPortActionDisable);
             Decoder->InputEnabled = FALSE;
         }
-        if (Decoder->OutputEnabled)
+        if (Decoder->OutputEnabled && SUCCEEDED(Result))
         {
-            Rpi3MmalPortAction(Decoder, &Decoder->Output, MmalPortActionDisable);
+            Result = Rpi3MmalPortAction(Decoder,
+                                        &Decoder->Output,
+                                        MmalPortActionDisable);
             Decoder->OutputEnabled = FALSE;
-            (VOID)Rpi3MmalWaitForOutputDrain(Decoder);
-            (VOID)Rpi3MmalDrainReturnedOutputs(Decoder);
+            if (SUCCEEDED(Result))
+                Result = Rpi3MmalWaitForOutputDrain(Decoder);
+            if (SUCCEEDED(Result))
+                Result = Rpi3MmalDrainReturnedOutputs(Decoder);
         }
-        if (Decoder->ComponentEnabled)
+        if (Decoder->ComponentEnabled && SUCCEEDED(Result))
         {
-            Rpi3MmalComponentCommand(Decoder, MmalWorkerComponentDisable);
+            Result = Rpi3MmalComponentCommand(
+                         Decoder,
+                         MmalWorkerComponentDisable);
             Decoder->ComponentEnabled = FALSE;
         }
-        Rpi3MmalComponentCommand(Decoder, MmalWorkerComponentDestroy);
+        if (SUCCEEDED(Result))
+            (VOID)Rpi3MmalComponentCommand(Decoder,
+                                            MmalWorkerComponentDestroy);
         Decoder->ComponentHandle = 0;
         LeaveCriticalSection(&Decoder->OutputLock);
     }
@@ -3510,14 +3589,15 @@ Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
         SetEvent(Decoder->OutputDrainedEvent);
     if (Decoder->Device != INVALID_HANDLE_VALUE)
     {
-        (VOID)Rpi3MmalDeviceIoControl(Decoder->Device,
+        (VOID)Rpi3MmalDeviceIoControl(Decoder,
                                       VCHIQ_IOC_SHUTDOWN,
                                       NULL,
                                       0,
                                       NULL,
                                       0,
                                       NULL);
-        CancelIoEx(Decoder->Device, NULL);
+        if (Decoder->Device != INVALID_HANDLE_VALUE)
+            CancelIoEx(Decoder->Device, NULL);
     }
     if (Decoder->CompletionThread)
     {
@@ -3527,8 +3607,7 @@ Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
         {
             if (Decoder->Device != INVALID_HANDLE_VALUE)
             {
-                CloseHandle(Decoder->Device);
-                Decoder->Device = INVALID_HANDLE_VALUE;
+                (VOID)Rpi3MmalCloseDevice(Decoder, Decoder->Device);
             }
             WaitForSingleObject(Decoder->CompletionThread, INFINITE);
         }
@@ -3536,8 +3615,7 @@ Rpi3MmalDestroyDecoder(RPI3_MMAL_DECODER *Decoder)
     }
     if (Decoder->Device != INVALID_HANDLE_VALUE)
     {
-        CloseHandle(Decoder->Device);
-        Decoder->Device = INVALID_HANDLE_VALUE;
+        (VOID)Rpi3MmalCloseDevice(Decoder, Decoder->Device);
     }
 
     Rpi3MmalFreeOutputBuffers(Decoder);
