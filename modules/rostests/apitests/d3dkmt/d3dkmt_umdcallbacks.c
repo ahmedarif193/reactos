@@ -74,14 +74,20 @@ static void Test_TableIsPopulated(D3DKMT_HANDLE hAdapter, D3DKMT_HANDLE hDevice)
     ok(Callbacks.pfnSetDisplayModeCb != NULL,
        "no pfnSetDisplayModeCb -- a primary cannot become scanout\n");
     ok(Callbacks.pfnPresentCb != NULL, "no pfnPresentCb -- a driver cannot show anything\n");
+    ok(Callbacks.pfnCreateOverlayCb != NULL,
+       "no pfnCreateOverlayCb -- a video driver cannot create an overlay\n");
+    ok(Callbacks.pfnUpdateOverlayCb != NULL,
+       "no pfnUpdateOverlayCb -- a video driver cannot move an overlay\n");
+    ok(Callbacks.pfnFlipOverlayCb != NULL,
+       "no pfnFlipOverlayCb -- a video driver cannot queue another surface\n");
+    ok(Callbacks.pfnDestroyOverlayCb != NULL,
+       "no pfnDestroyOverlayCb -- a video driver cannot release an overlay\n");
 
     /*
-     * Unimplemented entries stay NULL.  A driver tests for NULL before calling,
-     * so a stub returning S_OK without doing the work is a lie the driver
-     * cannot detect until its results are wrong -- this pins that choice.
+     * A driver tests for NULL before calling optional callbacks.  Every entry
+     * asserted above therefore has a real runtime path rather than a success
+     * stub that leaves the requested operation undone.
      */
-    ok(Callbacks.pfnCreateOverlayCb == NULL,
-       "an unimplemented entry is filled in; a driver will call it and believe it worked\n");
 
 #if (REACTOS_EXPECTED_UMD_INTERFACE_VERSION >= \
      D3D_UMD_INTERFACE_VERSION_WIN8)
@@ -254,6 +260,51 @@ static void Test_ContextLifetimeThroughCallbacks(D3DKMT_HANDLE hAdapter, D3DKMT_
     ok(SUCCEEDED(hr), "destroying the context through the callback failed 0x%08lX\n", (long)hr);
 
     pfnDestroyCallbacks(hRuntimeDevice);
+}
+
+static void
+Test_OverlayCallbacksRejectMalformedRequests(
+    D3DKMT_HANDLE hAdapter,
+    D3DKMT_HANDLE hDevice)
+{
+    D3DDDI_DEVICECALLBACKS Callbacks;
+    D3DDDICB_CREATEOVERLAY Create;
+    D3DDDICB_UPDATEOVERLAY Update;
+    D3DDDICB_FLIPOVERLAY Flip;
+    D3DDDICB_DESTROYOVERLAY Destroy;
+    HANDLE hRuntimeDevice = NULL;
+
+    if (pfnCreateCallbacks(hAdapter,
+                           hDevice,
+                           &Callbacks,
+                           &hRuntimeDevice) != S_OK)
+    {
+        skip("no callback table\n");
+        return;
+    }
+
+    memset(&Create, 0, sizeof(Create));
+    ok(FAILED(Callbacks.pfnCreateOverlayCb(hRuntimeDevice, &Create)),
+       "overlay creation without an allocation was accepted\n");
+    ok(FAILED(Callbacks.pfnCreateOverlayCb(
+                  (HANDLE)(ULONG_PTR)0xBAD0CAFE,
+                  &Create)),
+       "overlay creation accepted an unknown runtime device\n");
+
+    memset(&Update, 0, sizeof(Update));
+    ok(FAILED(Callbacks.pfnUpdateOverlayCb(hRuntimeDevice, &Update)),
+       "overlay update without handles was accepted\n");
+
+    memset(&Flip, 0, sizeof(Flip));
+    ok(FAILED(Callbacks.pfnFlipOverlayCb(hRuntimeDevice, &Flip)),
+       "overlay flip without handles was accepted\n");
+
+    memset(&Destroy, 0, sizeof(Destroy));
+    ok(FAILED(Callbacks.pfnDestroyOverlayCb(hRuntimeDevice, &Destroy)),
+       "overlay destroy without a handle was accepted\n");
+
+    ok(SUCCEEDED(pfnDestroyCallbacks(hRuntimeDevice)),
+       "malformed overlay calls left live runtime state\n");
 }
 
 static void
@@ -2036,6 +2087,7 @@ START_TEST(umdcallbacks)
     Test_RefusesMalformedConstruction(hAdapter, hDevice);
     Test_AllocateLockUnlockDeallocate(hAdapter, hDevice);
     Test_ContextLifetimeThroughCallbacks(hAdapter, hDevice);
+    Test_OverlayCallbacksRejectMalformedRequests(hAdapter, hDevice);
     Test_SynchronizationObjectThroughCallbacks(hAdapter, hDevice);
 #if (REACTOS_EXPECTED_UMD_INTERFACE_VERSION >= \
      D3D_UMD_INTERFACE_VERSION_WIN8)
