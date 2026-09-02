@@ -21,6 +21,10 @@ DWORD  g_muteControlID;
 UINT g_mmDeviceChange;
 
 static BOOL g_IsMute = FALSE;
+static DWORD g_volControlID = (DWORD)-1;
+static int g_VolLevel = 2;
+static HICON g_hIconVolume0 = NULL;
+static HICON g_hIconVolume1 = NULL;
 
 static HRESULT __stdcall Volume_FindMixerControl(CSysTray * pSysTray)
 {
@@ -106,7 +110,45 @@ static HRESULT __stdcall Volume_FindMixerControl(CSysTray * pSysTray)
 
     g_muteControlID = mixerControl.dwControlID;
 
+    g_volControlID = (DWORD)-1;
+    mixerLineControls.dwControlType = MIXERCONTROL_CONTROLTYPE_VOLUME;
+    if (!mixerGetLineControlsW((HMIXEROBJ)UlongToHandle(g_mixerId), &mixerLineControls, MIXER_GETLINECONTROLSF_ONEBYTYPE))
+        g_volControlID = mixerControl.dwControlID;
+
     return S_OK;
+}
+
+static int Volume_Level()
+{
+    MIXERCONTROLDETAILS details;
+    MIXERCONTROLDETAILS_UNSIGNED value = { 0 };
+
+    if (g_mixerId == (UINT)-1 || g_volControlID == (DWORD)-1)
+        return 2;
+    details.cbStruct = sizeof(details);
+    details.hwndOwner = 0;
+    details.dwControlID = g_volControlID;
+    details.cChannels = 1;
+    details.paDetails = &value;
+    details.cbDetails = sizeof(value);
+    if (mixerGetControlDetailsW((HMIXEROBJ)UlongToHandle(g_mixerId), &details, 0))
+        return 2;
+    if (value.dwValue == 0)
+        return 0;
+    if (value.dwValue < 0xFFFF / 3)
+        return 1;
+    return 2;
+}
+
+static HICON Volume_PickIcon()
+{
+    if (g_IsMute)
+        return g_hIconMute;
+    if (g_VolLevel == 0 && g_hIconVolume0)
+        return g_hIconVolume0;
+    if (g_VolLevel == 1 && g_hIconVolume1)
+        return g_hIconVolume1;
+    return g_hIconVolume;
 }
 
 HRESULT Volume_IsMute()
@@ -151,14 +193,13 @@ HRESULT STDMETHODCALLTYPE Volume_Init(_In_ CSysTray * pSysTray)
 
     g_hIconVolume = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_VOLUME));
     g_hIconMute = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_VOLMUTE));
+    g_hIconVolume0 = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_VOLUME0));
+    g_hIconVolume1 = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_VOLUME1));
 
     Volume_IsMute();
+    g_VolLevel = Volume_Level();
 
-    HICON icon;
-    if (g_IsMute)
-        icon = g_hIconMute;
-    else
-        icon = g_hIconVolume;
+    HICON icon = Volume_PickIcon();
 
     LoadStringW(g_hInstance, IDS_VOL_VOLUME, strTooltip, _countof(strTooltip));
     return pSysTray->NotifyIcon(NIM_ADD, ID_ICON_VOLUME, icon, strTooltip);
@@ -170,23 +211,16 @@ HRESULT STDMETHODCALLTYPE Volume_Update(_In_ CSysTray * pSysTray)
 
     TRACE("Volume_Update\n");
 
+    int PrevLevel = g_VolLevel;
     PrevState = g_IsMute;
     Volume_IsMute();
+    g_VolLevel = Volume_Level();
 
-    if (PrevState != g_IsMute)
+    if (PrevState != g_IsMute || PrevLevel != g_VolLevel)
     {
         WCHAR strTooltip[128];
-        HICON icon;
-        if (g_IsMute)
-        {
-            icon = g_hIconMute;
-            LoadStringW(g_hInstance, IDS_VOL_MUTED, strTooltip, _countof(strTooltip));
-        }
-        else
-        {
-            icon = g_hIconVolume;
-            LoadStringW(g_hInstance, IDS_VOL_VOLUME, strTooltip, _countof(strTooltip));
-        }
+        HICON icon = Volume_PickIcon();
+        LoadStringW(g_hInstance, g_IsMute ? IDS_VOL_MUTED : IDS_VOL_VOLUME, strTooltip, _countof(strTooltip));
 
         return pSysTray->NotifyIcon(NIM_MODIFY, ID_ICON_VOLUME, icon, strTooltip);
     }
