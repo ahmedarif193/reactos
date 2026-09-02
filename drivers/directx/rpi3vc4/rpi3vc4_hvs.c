@@ -219,6 +219,16 @@ Rpi3Vc4QueryPlatform(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    /*
+     * VC4 addresses tile state, tile allocation, and binner overflow memory
+     * through one 16 MiB DMA span whose top address nibble must be constant.
+     * Reserve that span while StartDevice still owns an unfragmented physical
+     * memory view. V3D power-up and command execution remain demand-driven.
+     */
+    Status = Rpi3Vc4ReserveV3dMemory(Context);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     RtlZeroMemory(Config, sizeof(*Config));
     Status = SoftGpuAcquirePostDisplay(DxgkInterface,
                                        &PostDisplayInfo,

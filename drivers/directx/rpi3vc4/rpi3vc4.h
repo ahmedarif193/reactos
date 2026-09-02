@@ -257,6 +257,10 @@ Rpi3Vc4InitializeV3d(
     _Inout_ PRPI3VC4_CONTEXT Context);
 
 NTSTATUS
+Rpi3Vc4ReserveV3dMemory(
+    _Inout_ PRPI3VC4_CONTEXT Context);
+
+NTSTATUS
 Rpi3Vc4EnsureV3dReady(
     _Inout_ PRPI3VC4_CONTEXT Context);
 
