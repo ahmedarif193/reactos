@@ -99,6 +99,7 @@ NTSTATUS VchiqAllocateTransferRequestObjContext (
     (*VchiqTxRequestContextPPtr)->PageListSize = PageListSize;
     (*VchiqTxRequestContextPPtr)->PageListPhyAddr = PageListPhyAddr;
     (*VchiqTxRequestContextPPtr)->ScatterGatherListPtr = ScatterGatherListPtr;
+    (*VchiqTxRequestContextPPtr)->ScatterGatherBufferPtr = NULL;
     (*VchiqTxRequestContextPPtr)->DeviceContextPtr = DeviceContextPtr;
     (*VchiqTxRequestContextPPtr)->VchiqFileContextPtr = VchiqFileContextPtr;
     (*VchiqTxRequestContextPPtr)->FragmentPtr = NULL;
@@ -137,6 +138,34 @@ VchiqReleaseTransferFragment(
         IO_NO_INCREMENT,
         1,
         FALSE);
+}
+
+static
+VOID
+VchiqReleaseScatterGather(
+    _Inout_ VCHIQ_TX_REQUEST_CONTEXT* RequestContext)
+{
+    if (RequestContext->ScatterGatherListPtr != NULL)
+    {
+        RequestContext->VchiqFileContextPtr->DmaAdapterPtr->DmaOperations->
+            FreeAdapterObject(
+                RequestContext->VchiqFileContextPtr->DmaAdapterPtr,
+                DeallocateObjectKeepRegisters);
+        RequestContext->VchiqFileContextPtr->DmaAdapterPtr->DmaOperations->
+            PutScatterGatherList(
+                RequestContext->VchiqFileContextPtr->DmaAdapterPtr,
+                RequestContext->ScatterGatherListPtr,
+                RequestContext->WriteToDevice);
+        RequestContext->ScatterGatherListPtr = NULL;
+    }
+
+    if (RequestContext->ScatterGatherBufferPtr != NULL)
+    {
+        ExFreePoolWithTag(
+            RequestContext->ScatterGatherBufferPtr,
+            VCHIQ_ALLOC_TAG_SGL);
+        RequestContext->ScatterGatherBufferPtr = NULL;
+    }
 }
 
 static
@@ -184,16 +213,7 @@ VchiqFinalizeTransferRequest(
 
     if (requestContext->ScatterGatherListPtr)
     {
-        requestContext->VchiqFileContextPtr->DmaAdapterPtr->DmaOperations->
-            FreeAdapterObject(
-                requestContext->VchiqFileContextPtr->DmaAdapterPtr,
-                DeallocateObjectKeepRegisters);
-        requestContext->VchiqFileContextPtr->DmaAdapterPtr->DmaOperations->
-            PutScatterGatherList(
-                requestContext->VchiqFileContextPtr->DmaAdapterPtr,
-                requestContext->ScatterGatherListPtr,
-                requestContext->WriteToDevice);
-        requestContext->ScatterGatherListPtr = NULL;
+        VchiqReleaseScatterGather(requestContext);
     }
 
     if (requestContext->FragmentPtr != NULL)
@@ -334,7 +354,7 @@ VOID VchiqTransferRequestContextCleanup (
     }
 
     if (vchiqTxRequestContextPtr->PageListPtr) {
-        VchiqFreeCommonBuffer(
+        VchiqReleasePageListBuffer(
             vchiqFileContextPtr,
             vchiqTxRequestContextPtr->PageListSize,
             vchiqTxRequestContextPtr->PageListPhyAddr,
@@ -344,17 +364,7 @@ VOID VchiqTransferRequestContextCleanup (
 
     VchiqReleaseTransferFragment(vchiqTxRequestContextPtr);
 
-    if (vchiqTxRequestContextPtr->ScatterGatherListPtr) {
-        vchiqFileContextPtr->DmaAdapterPtr->DmaOperations->FreeAdapterObject(
-            vchiqFileContextPtr->DmaAdapterPtr,
-            DeallocateObjectKeepRegisters);
-        vchiqFileContextPtr->DmaAdapterPtr->DmaOperations->PutScatterGatherList(
-            vchiqFileContextPtr->DmaAdapterPtr,
-            vchiqTxRequestContextPtr->ScatterGatherListPtr,
-            vchiqTxRequestContextPtr->WriteToDevice);
-
-        vchiqTxRequestContextPtr->ScatterGatherListPtr = NULL;
-    }
+    VchiqReleaseScatterGather(vchiqTxRequestContextPtr);
 
     return;
 }

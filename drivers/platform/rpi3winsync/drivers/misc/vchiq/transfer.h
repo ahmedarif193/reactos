@@ -20,6 +20,7 @@ typedef struct _VCHIQ_TX_REQUEST_CONTEXT {
      ULONG PageListSize;
      PHYSICAL_ADDRESS PageListPhyAddr;
      SCATTER_GATHER_LIST* ScatterGatherListPtr;
+     VOID* ScatterGatherBufferPtr;
      DEVICE_CONTEXT* DeviceContextPtr;
      VCHIQ_FILE_CONTEXT* VchiqFileContextPtr;
      UCHAR* FragmentPtr;
@@ -27,6 +28,8 @@ typedef struct _VCHIQ_TX_REQUEST_CONTEXT {
      volatile LONG CompletionState;
      NTSTATUS FirmwareStatus;
      ULONG ActualLength;
+     DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT)
+     UCHAR DmaTransferContext[DMA_TRANSFER_CONTEXT_SIZE_V1];
 } VCHIQ_TX_REQUEST_CONTEXT, *PVCHIQ_TX_REQUEST_CONTEXT;
 
 #define VCHIQ_TRANSFER_STATE_CANCELED      0x00000001L

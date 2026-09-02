@@ -31,6 +31,28 @@ NTSTATUS VchiqAllocateCommonBuffer (
     _Out_ PHYSICAL_ADDRESS* PhyAddressPtr
     );
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS VchiqAcquirePageListBuffer (
+    _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    _In_ ULONG BufferSize,
+    _Outptr_ VOID** BufferPPtr,
+    _Out_ ULONG* AllocatedSizePtr,
+    _Out_ PHYSICAL_ADDRESS* PhyAddressPtr
+    );
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID VchiqReleasePageListBuffer (
+    _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,
+    _In_ ULONG BufferSize,
+    _In_ PHYSICAL_ADDRESS PhyAddress,
+    _In_ VOID* BufferPtr
+    );
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+VOID VchiqDrainPageListCache (
+    _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr
+    );
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS VchiqFreeCommonBuffer (
     _In_ VCHIQ_FILE_CONTEXT* VchiqFileContextPtr,

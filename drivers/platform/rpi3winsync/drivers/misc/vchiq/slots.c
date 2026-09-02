@@ -1565,14 +1565,10 @@ NTSTATUS VchiqBulkTransfer (
     VCHIQ_TX_REQUEST_CONTEXT* vchiqTxRequestContextPtr;
     DMA_ADAPTER* dmaAdapterPtr = VchiqFileContextPtr->DmaAdapterPtr;
     ULONG scatterGatherListSize, numberOfMapRegisters;
-    WDFMEMORY scatterGatherWdfMemory = NULL;
-    WDFMEMORY dmaTransferContextPtr = NULL;
     VOID* scatterGatherBufferPtr = NULL;
-    VOID* dmaTransferContextBufferPtr;
     ULONG pageListSize = 0;
     PHYSICAL_ADDRESS pageListPhyAddress = { 0 };
     SCATTER_GATHER_LIST* scatterGatherListOutPtr;
-
     PAGED_CODE();
 
     vchiqTxRequestContextPtr = VchiqGetTxRequestContext(WdfRequest);
@@ -1590,70 +1586,43 @@ NTSTATUS VchiqBulkTransfer (
         return STATUS_CANCELLED;
     }
 
-    {
-        WDF_OBJECT_ATTRIBUTES attributes;
-
-        status = dmaAdapterPtr->DmaOperations->CalculateScatterGatherList(
-            dmaAdapterPtr,
-            BufferMdl,
-            MmGetMdlVirtualAddress(BufferMdl),
-            BufferSize,
-            &scatterGatherListSize,
-            &numberOfMapRegisters);
-        if (!NT_SUCCESS(status)) {
-            VCHIQ_LOG_ERROR(
-                "CalculateScatterGatherList failed (%!STATUS!)",
-                status);
-            goto End;
-        }
-
-        WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-
-        // Let the framework release the memory when request is completed
-        attributes.ParentObject = WdfRequest;
-
-        status = WdfMemoryCreate(
-            &attributes,
-            PagedPool,
-            VCHIQ_ALLOC_TAG_WDF,
-            scatterGatherListSize,
-            &scatterGatherWdfMemory,
-            &scatterGatherBufferPtr);
-        if (!NT_SUCCESS(status)) {
-            VCHIQ_LOG_ERROR(
-                "WdfMemoryCreate (scatter gather list) failed (%!STATUS!)",
-                status);
-            goto End;
-        }
-        status = WdfMemoryCreate(
-            &attributes,
-            PagedPool,
-            VCHIQ_ALLOC_TAG_WDF,
-            DMA_TRANSFER_CONTEXT_SIZE_V1,
-            &dmaTransferContextPtr,
-            &dmaTransferContextBufferPtr);
-        if (!NT_SUCCESS(status)) {
-            VCHIQ_LOG_ERROR(
-                "WdfMemoryCreate for transfer context failed (%!STATUS!)",
-                status);
-            goto End;
-        }
-
-        status = dmaAdapterPtr->DmaOperations->InitializeDmaTransferContext(
-            dmaAdapterPtr,
-            dmaTransferContextBufferPtr);
-        if (!NT_SUCCESS(status)) {
-            VCHIQ_LOG_ERROR(
-                "InitializeDmaTransferContext failed (%!STATUS!)",
-                status);
-            goto End;
-        }
+    status = dmaAdapterPtr->DmaOperations->CalculateScatterGatherList(
+        dmaAdapterPtr,
+        BufferMdl,
+        MmGetMdlVirtualAddress(BufferMdl),
+        BufferSize,
+        &scatterGatherListSize,
+        &numberOfMapRegisters);
+    if (!NT_SUCCESS(status)) {
+        VCHIQ_LOG_ERROR(
+            "CalculateScatterGatherList failed (%!STATUS!)",
+            status);
+        goto End;
     }
+    scatterGatherBufferPtr = ExAllocatePoolWithTag(
+        NonPagedPool,
+        scatterGatherListSize,
+        VCHIQ_ALLOC_TAG_SGL);
+    if (scatterGatherBufferPtr == NULL) {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto End;
+    }
+    vchiqTxRequestContextPtr->ScatterGatherBufferPtr =
+        scatterGatherBufferPtr;
 
+    status = dmaAdapterPtr->DmaOperations->InitializeDmaTransferContext(
+        dmaAdapterPtr,
+        vchiqTxRequestContextPtr->DmaTransferContext);
+    if (!NT_SUCCESS(status)) {
+        VCHIQ_LOG_ERROR(
+            "InitializeDmaTransferContext failed (%!STATUS!)",
+            status);
+        goto End;
+    }
     status = dmaAdapterPtr->DmaOperations->BuildScatterGatherListEx(
         dmaAdapterPtr,
         DeviceContextPtr->PhyDeviceObjectPtr,
-        dmaTransferContextBufferPtr,
+        vchiqTxRequestContextPtr->DmaTransferContext,
         BufferMdl,
         0,
         BufferSize,
@@ -1690,10 +1659,11 @@ NTSTATUS VchiqBulkTransfer (
         pageListSize = FIELD_OFFSET(VCHIQ_PAGELIST, Addrs) +
             numElements * sizeof(ULONG);
 
-        status = VchiqAllocateCommonBuffer(
+        status = VchiqAcquirePageListBuffer(
             VchiqFileContextPtr,
             pageListSize,
             (VOID**)&pageListPtr,
+            &pageListSize,
             &pageListPhyAddress);
         if (!NT_SUCCESS(status)) {
             VCHIQ_LOG_ERROR("Fail to alloc page list memory");
@@ -1838,7 +1808,7 @@ NTSTATUS VchiqBulkTransfer (
 End:
     if (!NT_SUCCESS(status)) {
         if (pageListPtr) {
-            VchiqFreeCommonBuffer(
+            VchiqReleasePageListBuffer(
                 VchiqFileContextPtr,
                 pageListSize,
                 pageListPhyAddress,
