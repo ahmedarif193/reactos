@@ -48,6 +48,25 @@ static HRESULT d3d9_surface_get_dxva_color_space(
                 ? WINED3D_YUV_BT601_LIMITED : WINED3D_YUV_BT601_FULL;
     return D3D_OK;
 }
+
+static HRESULT d3d9_surface_detach_dxva_memory(struct d3d9_surface *surface)
+{
+    HRESULT hr;
+
+    if (!surface->dxva_shared_memory_bound)
+        return D3D_OK;
+
+    wined3d_mutex_lock();
+    hr = wined3d_texture_set_planar_memory(surface->wined3d_texture,
+            surface->sub_resource_idx, NULL);
+    wined3d_mutex_unlock();
+    if (SUCCEEDED(hr))
+    {
+        surface->dxva_shared_memory_bound = FALSE;
+        surface->dxva_shared_generation = 0;
+    }
+    return hr;
+}
 #endif
 
 static inline struct d3d9_surface *impl_from_IDirect3DSurface9(IDirect3DSurface9 *iface)
@@ -230,8 +249,16 @@ static HRESULT WINAPI d3d9_surface_GetPrivateData(IDirect3DSurface9 *iface, REFG
 static HRESULT WINAPI d3d9_surface_FreePrivateData(IDirect3DSurface9 *iface, REFGUID guid)
 {
     struct d3d9_surface *surface = impl_from_IDirect3DSurface9(iface);
+#ifdef __REACTOS__
+    HRESULT hr;
+#endif
     TRACE("iface %p, guid %s.\n", iface, debugstr_guid(guid));
 
+#ifdef __REACTOS__
+    if (IsEqualGUID(guid, &reactos_dxva_surface_fence_guid) &&
+            FAILED(hr = d3d9_surface_detach_dxva_memory(surface)))
+        return hr;
+#endif
     return d3d9_resource_free_private_data(&surface->resource, guid);
 }
 
@@ -253,6 +280,10 @@ static void WINAPI d3d9_surface_PreLoad(IDirect3DSurface9 *iface)
 
     TRACE("iface %p.\n", iface);
 
+#ifdef __REACTOS__
+    if (FAILED(d3d9_surface_prepare_dxva_composition(surface, 0)))
+        return;
+#endif
     wined3d_mutex_lock();
     wined3d_resource_preload(wined3d_texture_get_resource(surface->wined3d_texture));
     wined3d_mutex_unlock();
@@ -338,7 +369,71 @@ HRESULT d3d9_surface_prepare_dxva_fallback(struct d3d9_surface *surface,
     if (FAILED(hr))
         return hr;
 
+    if (FAILED(hr = d3d9_surface_detach_dxva_memory(surface)))
+    {
+        IReactOSDxvaSurfaceFence_Release(binding);
+        return hr;
+    }
+
     hr = IReactOSDxvaSurfaceFence_PrepareFallback(binding, flags);
+    IReactOSDxvaSurfaceFence_Release(binding);
+    return hr;
+}
+
+HRESULT d3d9_surface_prepare_dxva_composition(struct d3d9_surface *surface,
+        DWORD flags)
+{
+    IReactOSDxvaSurfaceFence *binding;
+    REACTOS_DXVA_SURFACE_MEMORY memory;
+    struct wined3d_planar_memory_desc desc;
+    HRESULT hr;
+
+    hr = d3d9_surface_get_dxva_binding(surface, &binding);
+    if (hr == D3DERR_NOTFOUND)
+        return D3D_OK;
+    if (FAILED(hr))
+        return hr;
+
+    memset(&memory, 0, sizeof(memory));
+    hr = IReactOSDxvaSurfaceFence_GetSharedMemory(binding, flags, &memory);
+    if (hr == E_NOTIMPL)
+    {
+        hr = IReactOSDxvaSurfaceFence_PrepareFallback(binding, flags);
+        IReactOSDxvaSurfaceFence_Release(binding);
+        return hr;
+    }
+    if (FAILED(hr))
+    {
+        IReactOSDxvaSurfaceFence_Release(binding);
+        return hr;
+    }
+
+    if (!surface->dxva_shared_memory_bound ||
+            surface->dxva_shared_generation != memory.Generation)
+    {
+        memset(&desc, 0, sizeof(desc));
+        desc.data = memory.Data;
+        desc.size = memory.Size;
+        desc.width = memory.Width;
+        desc.height = memory.Height;
+        desc.row_pitch = memory.Pitch;
+        desc.storage_height = memory.StorageHeight;
+        desc.plane_count = memory.PlaneCount;
+        memcpy(desc.plane_offsets, memory.PlaneOffsets,
+                sizeof(desc.plane_offsets));
+        memcpy(desc.plane_pitches, memory.PlanePitches,
+                sizeof(desc.plane_pitches));
+
+        wined3d_mutex_lock();
+        hr = wined3d_texture_set_planar_memory(surface->wined3d_texture,
+                surface->sub_resource_idx, &desc);
+        wined3d_mutex_unlock();
+        if (SUCCEEDED(hr))
+        {
+            surface->dxva_shared_memory_bound = TRUE;
+            surface->dxva_shared_generation = memory.Generation;
+        }
+    }
     IReactOSDxvaSurfaceFence_Release(binding);
     return hr;
 }

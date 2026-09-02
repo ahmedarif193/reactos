@@ -1875,7 +1875,7 @@ static HRESULT WINAPI d3d9_device_UpdateSurface(IDirect3DDevice9Ex *iface,
             iface, src_surface, wine_dbgstr_rect(src_rect), dst_surface, dst_point);
 
 #ifdef __REACTOS__
-    if (FAILED(hr = d3d9_surface_prepare_dxva_fallback(src, 0)) ||
+    if (FAILED(hr = d3d9_surface_prepare_dxva_composition(src, 0)) ||
             FAILED(hr = d3d9_surface_prepare_dxva_fallback(dst, 0)))
         return hr;
 #endif
@@ -1964,7 +1964,7 @@ static HRESULT WINAPI d3d9_device_GetRenderTargetData(IDirect3DDevice9Ex *iface,
         return D3DERR_INVALIDCALL;
 
 #ifdef __REACTOS__
-    if (FAILED(hr = d3d9_surface_prepare_dxva_fallback(rt_impl, 0)) ||
+    if (FAILED(hr = d3d9_surface_prepare_dxva_composition(rt_impl, 0)) ||
             FAILED(hr = d3d9_surface_prepare_dxva_fallback(dst_impl, 0)))
         return hr;
 #endif
@@ -2213,8 +2213,7 @@ static HRESULT WINAPI d3d9_device_StretchRect(IDirect3DDevice9Ex *iface, IDirect
     hr = d3d9_device_present_dxva_overlay(device, src, dst, src_rect, dst_rect);
     if (SUCCEEDED(hr))
         return hr;
-    if (hr != D3DERR_NOTFOUND &&
-            FAILED(hr = d3d9_surface_prepare_dxva_fallback(src, 0)))
+    if (FAILED(hr = d3d9_surface_prepare_dxva_composition(src, 0)))
         return hr;
     wined3d_mutex_lock();
 #endif
