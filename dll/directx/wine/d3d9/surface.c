@@ -23,6 +23,33 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d9);
 
+#ifdef __REACTOS__
+static const GUID reactos_dxva_surface_fence_guid = REACTOS_DXVA_SURFACE_FENCE_GUID_INIT;
+
+static HRESULT d3d9_surface_get_dxva_color_space(
+        IReactOSDxvaSurfaceFence *binding,
+        enum wined3d_yuv_color_space *color_space)
+{
+    DWORD flags;
+    HRESULT hr;
+
+    if (!color_space)
+        return D3DERR_INVALIDCALL;
+    if (FAILED(hr = IReactOSDxvaSurfaceFence_GetPresentationFlags(binding, &flags)))
+        return hr;
+    if (flags & ~REACTOS_DXVA_SURFACE_PRESENT_ALLOWED)
+        return D3DERR_INVALIDCALL;
+
+    if (flags & REACTOS_DXVA_SURFACE_PRESENT_BT709)
+        *color_space = flags & REACTOS_DXVA_SURFACE_PRESENT_LIMITED_RGB
+                ? WINED3D_YUV_BT709_LIMITED : WINED3D_YUV_BT709_FULL;
+    else
+        *color_space = flags & REACTOS_DXVA_SURFACE_PRESENT_LIMITED_RGB
+                ? WINED3D_YUV_BT601_LIMITED : WINED3D_YUV_BT601_FULL;
+    return D3D_OK;
+}
+#endif
+
 static inline struct d3d9_surface *impl_from_IDirect3DSurface9(IDirect3DSurface9 *iface)
 {
     return CONTAINING_RECORD(iface, struct d3d9_surface, IDirect3DSurface9_iface);
@@ -140,8 +167,52 @@ static HRESULT WINAPI d3d9_surface_SetPrivateData(IDirect3DSurface9 *iface, REFG
         const void *data, DWORD data_size, DWORD flags)
 {
     struct d3d9_surface *surface = impl_from_IDirect3DSurface9(iface);
+#ifdef __REACTOS__
+    IReactOSDxvaSurfaceFence *binding;
+    enum wined3d_yuv_color_space color_space;
+    HRESULT hr;
+#endif
     TRACE("iface %p, guid %s, data %p, data_size %lu, flags %#lx.\n",
             iface, debugstr_guid(guid), data, data_size, flags);
+
+#ifdef __REACTOS__
+    if (IsEqualGUID(guid, &reactos_dxva_surface_fence_guid))
+    {
+        if (!(flags & D3DSPD_IUNKNOWN) || data_size != sizeof(binding) ||
+                !(binding = (IReactOSDxvaSurfaceFence *)data))
+            return D3DERR_INVALIDCALL;
+        if (FAILED(hr = d3d9_surface_get_dxva_color_space(binding, &color_space)))
+            return hr;
+
+        wined3d_mutex_lock();
+        if (wined3d_private_store_get_private_data(
+                &surface->resource.private_store,
+                &reactos_dxva_surface_fence_guid))
+        {
+            hr = D3DERR_INVALIDCALL;
+        }
+        else if (SUCCEEDED(hr = wined3d_private_store_set_private_data(
+                &surface->resource.private_store, guid, data, data_size, flags)))
+        {
+            hr = wined3d_texture_set_yuv_color_space(
+                    surface->wined3d_texture, color_space);
+            if (FAILED(hr))
+            {
+                struct wined3d_private_data *entry;
+
+                entry = wined3d_private_store_get_private_data(
+                        &surface->resource.private_store, guid);
+                if (entry)
+                {
+                    wined3d_private_store_free_private_data(
+                            &surface->resource.private_store, entry);
+                }
+            }
+        }
+        wined3d_mutex_unlock();
+        return hr;
+    }
+#endif
 
     return d3d9_resource_set_private_data(&surface->resource, guid, data, data_size, flags);
 }
@@ -234,6 +305,45 @@ static HRESULT WINAPI d3d9_surface_GetDesc(IDirect3DSurface9 *iface, D3DSURFACE_
     return D3D_OK;
 }
 
+#ifdef __REACTOS__
+HRESULT d3d9_surface_get_dxva_binding(struct d3d9_surface *surface,
+        IReactOSDxvaSurfaceFence **binding)
+{
+    DWORD size = sizeof(*binding);
+    HRESULT hr;
+
+    if (!surface || !binding)
+        return D3DERR_INVALIDCALL;
+    *binding = NULL;
+
+    hr = d3d9_resource_get_private_data(
+             &surface->resource,
+             &reactos_dxva_surface_fence_guid,
+             binding,
+             &size);
+    if (FAILED(hr) || size != sizeof(*binding) || !*binding)
+        return FAILED(hr) ? hr : D3DERR_INVALIDCALL;
+    return D3D_OK;
+}
+
+HRESULT d3d9_surface_prepare_dxva_fallback(struct d3d9_surface *surface,
+        DWORD flags)
+{
+    IReactOSDxvaSurfaceFence *binding;
+    HRESULT hr;
+
+    hr = d3d9_surface_get_dxva_binding(surface, &binding);
+    if (hr == D3DERR_NOTFOUND)
+        return D3D_OK;
+    if (FAILED(hr))
+        return hr;
+
+    hr = IReactOSDxvaSurfaceFence_PrepareFallback(binding, flags);
+    IReactOSDxvaSurfaceFence_Release(binding);
+    return hr;
+}
+#endif
+
 static HRESULT WINAPI d3d9_surface_LockRect(IDirect3DSurface9 *iface,
         D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags)
 {
@@ -244,6 +354,16 @@ static HRESULT WINAPI d3d9_surface_LockRect(IDirect3DSurface9 *iface,
 
     TRACE("iface %p, locked_rect %p, rect %s, flags %#lx.\n",
             iface, locked_rect, wine_dbgstr_rect(rect), flags);
+
+#ifdef __REACTOS__
+    hr = d3d9_surface_prepare_dxva_fallback(
+             surface,
+             flags & D3DLOCK_DONOTWAIT
+                 ? REACTOS_DXVA_SURFACE_FENCE_DONOTWAIT
+                 : 0);
+    if (FAILED(hr))
+        return hr;
+#endif
 
     if (rect)
         wined3d_box_set(&box, rect->left, rect->top, rect->right, rect->bottom, 0, 1);
@@ -293,6 +413,11 @@ static HRESULT WINAPI d3d9_surface_GetDC(IDirect3DSurface9 *iface, HDC *dc)
     HRESULT hr;
 
     TRACE("iface %p, dc %p.\n", iface, dc);
+
+#ifdef __REACTOS__
+    if (FAILED(hr = d3d9_surface_prepare_dxva_fallback(surface, 0)))
+        return hr;
+#endif
 
     wined3d_mutex_lock();
     hr = wined3d_texture_get_dc(surface->wined3d_texture, surface->sub_resource_idx, dc);
