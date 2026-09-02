@@ -189,6 +189,7 @@ LRESULT WINAPI UXTHEME_DefDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, BOO
 
         hdc = (HDC)wp;
         SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
+        SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
         SetBkMode(hdc, TRANSPARENT);
 
         org.x = 0;
