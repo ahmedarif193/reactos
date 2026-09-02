@@ -16,6 +16,7 @@ START_TEST(IoMdl)
     PIRP Irp;
     PVOID VirtualAddress;
     ULONG MdlSize = 2*4096+184; // 2 pages and some random value
+    ULONG LargeMdlSize = 64 * 1024 * 1024;
     ULONG TooLargeMdlSize = (0x10000 - sizeof(MDL)) / sizeof(ULONG_PTR) * PAGE_SIZE;
 
     // Try to alloc 2Gb MDL
@@ -66,6 +67,19 @@ START_TEST(IoMdl)
 
     Mdl = IoAllocateMdl(NULL, TooLargeMdlSize - PAGE_SIZE, FALSE, FALSE, NULL);
     ok(Mdl != NULL, "Mdl allocation for %lu bytes failed\n", TooLargeMdlSize - PAGE_SIZE);
+    if (Mdl) IoFreeMdl(Mdl);
+
+    /* Windows 7 and later support MDLs larger than the 16-bit Size field. */
+    Mdl = IoAllocateMdl(NULL, LargeMdlSize, FALSE, FALSE, NULL);
+    if (GetNTVersion() >= _WIN32_WINNT_WIN7)
+    {
+        ok(Mdl != NULL, "Mdl allocation for %lu bytes failed\n", LargeMdlSize);
+        if (Mdl != NULL)
+            ok(Mdl->ByteCount == LargeMdlSize,
+               "Mdl->ByteCount is %lu, expected %lu\n",
+               Mdl->ByteCount,
+               LargeMdlSize);
+    }
     if (Mdl) IoFreeMdl(Mdl);
 
     Mdl = IoAllocateMdl(NULL, TooLargeMdlSize / 2, FALSE, FALSE, NULL);
