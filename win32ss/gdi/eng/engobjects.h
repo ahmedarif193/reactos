@@ -160,6 +160,7 @@ typedef struct _FONTGDI {
   BYTE          OriginalItalic;
   LONG          OriginalWeight;
   BYTE          CharSet;
+  BYTE          IsVertical;
 
   /* Precomputed font metrics (supplements FreeType metrics) */
   LONG          tmHeight;
