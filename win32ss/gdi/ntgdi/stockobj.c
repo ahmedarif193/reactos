@@ -284,6 +284,7 @@ CreateStockObjects(void)
             GDIOBJ_ConvertToStockObj(&StockObjects[Object]);
         }
     }
+    hStockColorSpace = StockObjects[20];
 
     DPRINT("Completed creation of stock objects\n");
 }

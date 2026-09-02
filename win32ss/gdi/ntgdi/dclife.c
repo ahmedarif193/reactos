@@ -317,7 +317,7 @@ DC_vInitDc(
 	pdc->dcattr.IcmBrushColor = CLR_INVALID;
 	pdc->dcattr.IcmPenColor = CLR_INVALID;
 	pdc->dcattr.pvLIcm = NULL;
-    pdc->dcattr.hColorSpace = NULL; // FIXME: 0189001f
+    pdc->dcattr.hColorSpace = hStockColorSpace;
 	pdc->dclevel.pColorSpace = NULL; // FIXME
     pdc->pClrxFormLnk = NULL;
 //	pdc->dclevel.ca =
@@ -403,6 +403,12 @@ DC_vCleanup(PVOID ObjectBody)
        pdc->dclevel.hPath = 0;
        pdc->dclevel.flPath = 0;
     }
+    if (pdc->dclevel.pColorSpace)
+    {
+        GDIOBJ_vDereferenceObject((POBJ)pdc->dclevel.pColorSpace);
+        pdc->dclevel.pColorSpace = NULL;
+    }
+
     if (pdc->dclevel.pSurface)
         SURFACE_ShareUnlockSurface(pdc->dclevel.pSurface);
 
@@ -994,7 +1000,8 @@ NtGdiDeleteObjectApp(HANDLE hobj)
         bResult = IntGdiDeleteDC(hobj, FALSE);
 
 Exit:
-    EngSetLastError(bResult ? ERROR_SUCCESS : ulError);
+    if (!bResult)
+        EngSetLastError(ulError);
     return bResult;
 }
 

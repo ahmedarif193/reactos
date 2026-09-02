@@ -202,9 +202,10 @@ NtGdiSetColorSpace(IN HDC hdc,
         return TRUE;
     }
 
-    pCS = COLORSPACEOBJ_LockCS(hColorSpace);
+    pCS = (PCOLORSPACE)GDIOBJ_ReferenceObjectByHandle(hColorSpace, GDIObjType_ICMLCS_TYPE);
     if (!pCS)
     {
+        DC_UnlockDc(pDC);
         EngSetLastError(ERROR_INVALID_HANDLE);
         return FALSE;
     }
@@ -217,7 +218,6 @@ NtGdiSetColorSpace(IN HDC hdc,
     pDC->dclevel.pColorSpace = pCS;
     pdcattr->hColorSpace = hColorSpace;
 
-    COLORSPACEOBJ_UnlockCS(pCS);
     DC_UnlockDc(pDC);
     return TRUE;
 }
