@@ -97,14 +97,16 @@ CURSORICON_ConvertPngToBmpIcon(
 {
     TRACE("pngBits %p fileSize %d\n", pngBits, fileSize);
 
+    static const BYTE png_signature[PNG_CHECK_SIG_SIZE] = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+
+    if (!pngBits || fileSize < PNG_CHECK_SIG_SIZE || memcmp(pngBits, png_signature, PNG_CHECK_SIG_SIZE) != 0)
+        return NULL;
+
     if (!LibPngExists())
     {
         ERR("No libpng.dll\n");
         return NULL;
     }
-
-    if (!pngBits || fileSize < PNG_CHECK_SIG_SIZE || !png_check_sig(pngBits, PNG_CHECK_SIG_SIZE))
-        return NULL;
 
     png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
     if (!png_ptr)
@@ -2760,15 +2762,7 @@ int WINAPI LookupIconIdFromDirectoryEx(
     if(Flags & LR_MONOCHROME)
         bppDesired = 1;
     else
-    {
-        HDC icScreen;
-        icScreen = CreateICW(DISPLAYW, NULL, NULL, NULL);
-        if(!icScreen)
-            return FALSE;
-
-        bppDesired = GetDeviceCaps(icScreen, BITSPIXEL);
-        DeleteDC(icScreen);
-    }
+        bppDesired = gpsi->BitCount;
 
     if(!cxDesired)
         cxDesired = Flags & LR_DEFAULTSIZE ? GetSystemMetrics(fIcon ? SM_CXICON : SM_CXCURSOR) : 256;
