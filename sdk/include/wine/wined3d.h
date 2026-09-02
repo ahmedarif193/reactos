@@ -2038,6 +2038,16 @@ struct wined3d_color_key
                                             * to be treated as Color Key, inclusive */
 };
 
+#ifdef __REACTOS__
+enum wined3d_yuv_color_space
+{
+    WINED3D_YUV_BT601_LIMITED,
+    WINED3D_YUV_BT709_LIMITED,
+    WINED3D_YUV_BT601_FULL,
+    WINED3D_YUV_BT709_FULL,
+};
+#endif
+
 struct wined3d_blt_fx
 {
     uint32_t fx;
@@ -2975,6 +2985,10 @@ ULONG __cdecl wined3d_texture_incref(struct wined3d_texture *texture);
 HRESULT __cdecl wined3d_texture_release_dc(struct wined3d_texture *texture, unsigned int sub_resource_idx, HDC dc);
 HRESULT __cdecl wined3d_texture_set_color_key(struct wined3d_texture *texture,
         uint32_t flags, const struct wined3d_color_key *color_key);
+#ifdef __REACTOS__
+HRESULT __cdecl wined3d_texture_set_yuv_color_space(struct wined3d_texture *texture,
+        enum wined3d_yuv_color_space color_space);
+#endif
 HRESULT __cdecl wined3d_texture_set_overlay_position(struct wined3d_texture *texture,
         unsigned int sub_resource_idx, LONG x, LONG y);
 void __cdecl wined3d_texture_set_sub_resource_parent(struct wined3d_texture *texture,

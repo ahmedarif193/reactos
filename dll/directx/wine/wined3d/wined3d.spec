@@ -345,6 +345,9 @@
 @ cdecl wined3d_texture_release_dc(ptr long ptr)
 @ cdecl wined3d_texture_set_color_key(ptr long ptr)
 @ cdecl wined3d_texture_set_lod(ptr long)
+#ifdef __REACTOS__
+@ cdecl wined3d_texture_set_yuv_color_space(ptr long)
+#endif
 @ cdecl wined3d_texture_set_overlay_position(ptr long long long)
 @ cdecl wined3d_texture_set_sub_resource_parent(ptr long ptr ptr)
 @ cdecl wined3d_texture_update_desc(ptr long ptr long)
