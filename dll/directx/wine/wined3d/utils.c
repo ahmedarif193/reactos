@@ -3490,19 +3490,23 @@ static void apply_format_fixups(struct wined3d_adapter *adapter, struct wined3d_
         format->internal = 0;
     }
 
+    format = get_format_gl_internal(adapter, WINED3DFMT_YV12);
+    format->f.attrs |= WINED3D_FORMAT_ATTR_HEIGHT_SCALE;
+    format->f.height_scale.numerator = 3;
+    format->f.height_scale.denominator = 2;
+
+    format = get_format_gl_internal(adapter, WINED3DFMT_NV12);
+    format->f.attrs |= WINED3D_FORMAT_ATTR_HEIGHT_SCALE;
+    format->f.height_scale.numerator = 3;
+    format->f.height_scale.denominator = 2;
+
     if (gl_info->supported[ARB_FRAGMENT_PROGRAM]
             || (gl_info->supported[ARB_FRAGMENT_SHADER] && gl_info->supported[ARB_VERTEX_SHADER]))
     {
         format = get_format_gl_internal(adapter, WINED3DFMT_YV12);
-        format->f.attrs |= WINED3D_FORMAT_ATTR_HEIGHT_SCALE;
-        format->f.height_scale.numerator = 3;
-        format->f.height_scale.denominator = 2;
         format->f.color_fixup = create_complex_fixup_desc(COMPLEX_FIXUP_YV12);
 
         format = get_format_gl_internal(adapter, WINED3DFMT_NV12);
-        format->f.attrs |= WINED3D_FORMAT_ATTR_HEIGHT_SCALE;
-        format->f.height_scale.numerator = 3;
-        format->f.height_scale.denominator = 2;
         format->f.color_fixup = create_complex_fixup_desc(COMPLEX_FIXUP_NV12);
     }
     else
