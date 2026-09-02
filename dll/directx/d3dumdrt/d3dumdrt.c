@@ -60,6 +60,15 @@ typedef struct _D3DUMDRT_CONTEXT
     struct _D3DUMDRT_CONTEXT *Next;
 } D3DUMDRT_CONTEXT, *PD3DUMDRT_CONTEXT;
 
+typedef struct _D3DUMDRT_OVERLAY
+{
+    D3DKMT_HANDLE hKernelOverlay;
+    BOOL Destroying;
+    LONG ActiveCalls;
+    HANDLE CallsDrainedEvent;
+    struct _D3DUMDRT_OVERLAY *Next;
+} D3DUMDRT_OVERLAY, *PD3DUMDRT_OVERLAY;
+
 #if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_1_2)
 typedef struct _D3DUMDRT_SYNC_TOKEN
 {
@@ -85,6 +94,7 @@ typedef struct _D3DUMDRT_DEVICE
     PD3DUMDRT_RESOURCE       Resources;
     PD3DUMDRT_SYNC_OBJECT    SyncObjects;
     PD3DUMDRT_CONTEXT        Contexts;
+    PD3DUMDRT_OVERLAY        Overlays;
 #if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_1_2)
     PD3DUMDRT_SYNC_TOKEN     SyncTokens;
 #endif
@@ -115,6 +125,10 @@ static PFND3DKMT_CREATECONTEXT     pfnCreateContext;
 static PFND3DKMT_DESTROYCONTEXT    pfnDestroyContext;
 static PFND3DKMT_ESCAPE            pfnEscape;
 static PFND3DKMT_SETDISPLAYMODE    pfnSetDisplayMode;
+static PFND3DKMT_CREATEOVERLAY     pfnCreateOverlay;
+static PFND3DKMT_UPDATEOVERLAY     pfnUpdateOverlay;
+static PFND3DKMT_FLIPOVERLAY       pfnFlipOverlay;
+static PFND3DKMT_DESTROYOVERLAY    pfnDestroyOverlay;
 static PFND3DKMT_CREATESYNCHRONIZATIONOBJECT  pfnCreateSynchronizationObject;
 static PFND3DKMT_DESTROYSYNCHRONIZATIONOBJECT pfnDestroySynchronizationObject;
 static PFND3DKMT_WAITFORSYNCHRONIZATIONOBJECT pfnWaitForSynchronizationObject;
@@ -179,6 +193,10 @@ static BOOL D3DUmdRtResolveProcs(VOID)
     RESOLVE(DestroyContext, DESTROYCONTEXT);
     RESOLVE(Escape, ESCAPE);
     RESOLVE(SetDisplayMode, SETDISPLAYMODE);
+    RESOLVE(CreateOverlay, CREATEOVERLAY);
+    RESOLVE(UpdateOverlay, UPDATEOVERLAY);
+    RESOLVE(FlipOverlay, FLIPOVERLAY);
+    RESOLVE(DestroyOverlay, DESTROYOVERLAY);
     RESOLVE(CreateSynchronizationObject, CREATESYNCHRONIZATIONOBJECT);
     RESOLVE(DestroySynchronizationObject, DESTROYSYNCHRONIZATIONOBJECT);
     RESOLVE(WaitForSynchronizationObject, WAITFORSYNCHRONIZATIONOBJECT);
@@ -261,6 +279,50 @@ D3DUmdRtContextLocked(
             return Context;
     }
     return NULL;
+}
+
+/* D3DUmdRtDeviceLock must be held. */
+static PD3DUMDRT_OVERLAY
+D3DUmdRtOverlayLocked(
+    PD3DUMDRT_DEVICE Device,
+    D3DKMT_HANDLE hKernelOverlay)
+{
+    PD3DUMDRT_OVERLAY Overlay;
+
+    for (Overlay = Device->Overlays;
+         Overlay != NULL;
+         Overlay = Overlay->Next)
+    {
+        if (Overlay->hKernelOverlay == hKernelOverlay)
+            return Overlay;
+    }
+    return NULL;
+}
+
+/* D3DUmdRtDeviceLock must be held. */
+static PD3DUMDRT_OVERLAY
+D3DUmdRtBeginOverlayCallLocked(
+    PD3DUMDRT_DEVICE Device,
+    D3DKMT_HANDLE hKernelOverlay)
+{
+    PD3DUMDRT_OVERLAY Overlay;
+
+    Overlay = D3DUmdRtOverlayLocked(Device, hKernelOverlay);
+    if (Overlay == NULL || Overlay->Destroying)
+        return NULL;
+    if (Overlay->ActiveCalls++ == 0)
+        ResetEvent(Overlay->CallsDrainedEvent);
+    return Overlay;
+}
+
+static VOID
+D3DUmdRtEndOverlayCall(
+    PD3DUMDRT_OVERLAY Overlay)
+{
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    if (Overlay->ActiveCalls != 0 && --Overlay->ActiveCalls == 0)
+        SetEvent(Overlay->CallsDrainedEvent);
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
 }
 
 static VOID
@@ -901,6 +963,213 @@ static HRESULT APIENTRY D3DUmdRtPresentCb(HANDLE hDevice, D3DDDICB_PRESENT *pDat
         Present.bOptimizeForComposition;
 #endif
     return S_OK;
+}
+
+/* ------------------------------------------------------------------------ *
+ * Hardware overlays
+ * ------------------------------------------------------------------------ */
+
+static HRESULT APIENTRY
+D3DUmdRtCreateOverlayCb(
+    HANDLE hDevice,
+    D3DDDICB_CREATEOVERLAY *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    PD3DUMDRT_OVERLAY Overlay;
+    D3DKMT_CREATEOVERLAY Create;
+    NTSTATUS Status;
+
+    if (Device == NULL || pData == NULL || pfnCreateOverlay == NULL ||
+        pfnDestroyOverlay == NULL ||
+        pData->OverlayInfo.hAllocation == 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    Overlay = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Overlay));
+    if (Overlay == NULL)
+        return E_OUTOFMEMORY;
+    Overlay->CallsDrainedEvent = CreateEventW(NULL, TRUE, TRUE, NULL);
+    if (Overlay->CallsDrainedEvent == NULL)
+    {
+        HeapFree(GetProcessHeap(), 0, Overlay);
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    ZeroMemory(&Create, sizeof(Create));
+    Create.hDevice = Device->hDevice;
+    Create.VidPnSourceId = pData->VidPnSourceId;
+    Create.OverlayInfo = pData->OverlayInfo;
+    Status = pfnCreateOverlay(&Create);
+    if (Status < 0 || Create.hOverlay == 0)
+    {
+        CloseHandle(Overlay->CallsDrainedEvent);
+        HeapFree(GetProcessHeap(), 0, Overlay);
+        return Status < 0 ? D3DUmdRtStatusToHresult(Status) : E_FAIL;
+    }
+
+    Overlay->hKernelOverlay = Create.hOverlay;
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    if (D3DUmdRtOverlayLocked(Device, Create.hOverlay) != NULL)
+    {
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        {
+            D3DKMT_DESTROYOVERLAY Destroy;
+
+            ZeroMemory(&Destroy, sizeof(Destroy));
+            Destroy.hDevice = Device->hDevice;
+            Destroy.hOverlay = Create.hOverlay;
+            (VOID)pfnDestroyOverlay(&Destroy);
+        }
+        CloseHandle(Overlay->CallsDrainedEvent);
+        HeapFree(GetProcessHeap(), 0, Overlay);
+        return E_FAIL;
+    }
+    Overlay->Next = Device->Overlays;
+    Device->Overlays = Overlay;
+    InterlockedIncrement(&Device->LiveObjectCount);
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+
+    pData->hKernelOverlay = Create.hOverlay;
+    return S_OK;
+}
+
+static HRESULT APIENTRY
+D3DUmdRtUpdateOverlayCb(
+    HANDLE hDevice,
+    CONST D3DDDICB_UPDATEOVERLAY *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    PD3DUMDRT_OVERLAY Overlay;
+    D3DKMT_UPDATEOVERLAY Update;
+    HRESULT Result;
+
+    if (Device == NULL || pData == NULL || pfnUpdateOverlay == NULL ||
+        pData->hKernelOverlay == 0 ||
+        pData->OverlayInfo.hAllocation == 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    Overlay = D3DUmdRtBeginOverlayCallLocked(Device,
+                                             pData->hKernelOverlay);
+    if (Overlay == NULL)
+    {
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        return E_INVALIDARG;
+    }
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+
+    ZeroMemory(&Update, sizeof(Update));
+    Update.hDevice = Device->hDevice;
+    Update.hOverlay = pData->hKernelOverlay;
+    Update.OverlayInfo = pData->OverlayInfo;
+    Result = D3DUmdRtStatusToHresult(pfnUpdateOverlay(&Update));
+    D3DUmdRtEndOverlayCall(Overlay);
+    return Result;
+}
+
+static HRESULT APIENTRY
+D3DUmdRtFlipOverlayCb(
+    HANDLE hDevice,
+    CONST D3DDDICB_FLIPOVERLAY *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    PD3DUMDRT_OVERLAY Overlay;
+    D3DKMT_FLIPOVERLAY Flip;
+    HRESULT Result;
+
+    if (Device == NULL || pData == NULL || pfnFlipOverlay == NULL ||
+        pData->hKernelOverlay == 0 || pData->hSource == 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    Overlay = D3DUmdRtBeginOverlayCallLocked(Device,
+                                             pData->hKernelOverlay);
+    if (Overlay == NULL)
+    {
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        return E_INVALIDARG;
+    }
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+
+    ZeroMemory(&Flip, sizeof(Flip));
+    Flip.hDevice = Device->hDevice;
+    Flip.hOverlay = pData->hKernelOverlay;
+    Flip.hSource = pData->hSource;
+    Flip.pPrivateDriverData = pData->pPrivateDriverData;
+    Flip.PrivateDriverDataSize = pData->PrivateDriverDataSize;
+    Result = D3DUmdRtStatusToHresult(pfnFlipOverlay(&Flip));
+    D3DUmdRtEndOverlayCall(Overlay);
+    return Result;
+}
+
+static HRESULT APIENTRY
+D3DUmdRtDestroyOverlayCb(
+    HANDLE hDevice,
+    CONST D3DDDICB_DESTROYOVERLAY *pData)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    PD3DUMDRT_OVERLAY Overlay;
+    PD3DUMDRT_OVERLAY *Link;
+    D3DKMT_DESTROYOVERLAY Destroy;
+    NTSTATUS Status;
+
+    if (Device == NULL || pData == NULL || pfnDestroyOverlay == NULL ||
+        pData->hKernelOverlay == 0)
+    {
+        return E_INVALIDARG;
+    }
+
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    for (Link = &Device->Overlays; *Link != NULL; Link = &(*Link)->Next)
+    {
+        if ((*Link)->hKernelOverlay == pData->hKernelOverlay)
+            break;
+    }
+    Overlay = *Link;
+    if (Overlay == NULL || Overlay->Destroying)
+    {
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        return E_INVALIDARG;
+    }
+    Overlay->Destroying = TRUE;
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+
+    WaitForSingleObject(Overlay->CallsDrainedEvent, INFINITE);
+
+    ZeroMemory(&Destroy, sizeof(Destroy));
+    Destroy.hDevice = Device->hDevice;
+    Destroy.hOverlay = pData->hKernelOverlay;
+    Status = pfnDestroyOverlay(&Destroy);
+
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    if (Status >= 0)
+    {
+        for (Link = &Device->Overlays; *Link != NULL; Link = &(*Link)->Next)
+        {
+            if (*Link == Overlay)
+                break;
+        }
+        if (*Link == Overlay)
+            *Link = Overlay->Next;
+        InterlockedDecrement(&Device->LiveObjectCount);
+    }
+    else
+    {
+        Overlay->Destroying = FALSE;
+    }
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+
+    if (Status >= 0)
+    {
+        CloseHandle(Overlay->CallsDrainedEvent);
+        HeapFree(GetProcessHeap(), 0, Overlay);
+    }
+    return D3DUmdRtStatusToHresult(Status);
 }
 
 /* ------------------------------------------------------------------------ *
@@ -2426,6 +2695,10 @@ D3DUmdRtCreateDeviceCallbacks(
         D3DUmdRtSignalSynchronizationObjectCb;
     pCallbacks->pfnEscapeCb = D3DUmdRtEscapeCb;
     pCallbacks->pfnPresentCb = D3DUmdRtPresentCb;
+    pCallbacks->pfnCreateOverlayCb = D3DUmdRtCreateOverlayCb;
+    pCallbacks->pfnUpdateOverlayCb = D3DUmdRtUpdateOverlayCb;
+    pCallbacks->pfnFlipOverlayCb = D3DUmdRtFlipOverlayCb;
+    pCallbacks->pfnDestroyOverlayCb = D3DUmdRtDestroyOverlayCb;
 #if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WIN8)
     pCallbacks->pfnOfferAllocationsCb = D3DUmdRtOfferAllocationsCb;
     pCallbacks->pfnReclaimAllocationsCb = D3DUmdRtReclaimAllocationsCb;
