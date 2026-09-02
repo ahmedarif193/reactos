@@ -118,6 +118,7 @@ struct release_render_buffer_params
     UINT32 written_frames;
     UINT flags;
     HRESULT result;
+    float peak;
 };
 
 struct get_capture_buffer_params

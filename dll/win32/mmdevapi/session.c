@@ -185,6 +185,92 @@ static inline struct audio_session_wrapper *impl_from_ISimpleAudioVolume(ISimple
     return CONTAINING_RECORD(iface, struct audio_session_wrapper, ISimpleAudioVolume_iface);
 }
 
+static inline struct audio_session_wrapper *impl_from_IAudioMeterInformation(IAudioMeterInformation *iface)
+{
+    return CONTAINING_RECORD(iface, struct audio_session_wrapper, IAudioMeterInformation_iface);
+}
+
+static HRESULT WINAPI sessionmeter_QueryInterface(IAudioMeterInformation *iface, REFIID riid, void **ppv)
+{
+    struct audio_session_wrapper *This = impl_from_IAudioMeterInformation(iface);
+    return IAudioSessionControl2_QueryInterface(&This->IAudioSessionControl2_iface, riid, ppv);
+}
+
+static ULONG WINAPI sessionmeter_AddRef(IAudioMeterInformation *iface)
+{
+    struct audio_session_wrapper *This = impl_from_IAudioMeterInformation(iface);
+    return IAudioSessionControl2_AddRef(&This->IAudioSessionControl2_iface);
+}
+
+static ULONG WINAPI sessionmeter_Release(IAudioMeterInformation *iface)
+{
+    struct audio_session_wrapper *This = impl_from_IAudioMeterInformation(iface);
+    return IAudioSessionControl2_Release(&This->IAudioSessionControl2_iface);
+}
+
+static float session_current_peak(struct audio_session *session)
+{
+    float peak = 0.0f;
+    DWORD tick = 0;
+    if (!session || !session->shared_valid)
+        return 0.0f;
+    if (FAILED(reactos_audio_session_read_peak(&session->shared_id, &peak, &tick)))
+        return 0.0f;
+    if (GetTickCount() - tick > 400)
+        return 0.0f;
+    return peak;
+}
+
+static HRESULT WINAPI sessionmeter_GetPeakValue(IAudioMeterInformation *iface, float *peak)
+{
+    struct audio_session_wrapper *This = impl_from_IAudioMeterInformation(iface);
+    if (!peak)
+        return E_POINTER;
+    *peak = session_current_peak(This->session);
+    return S_OK;
+}
+
+static HRESULT WINAPI sessionmeter_GetMeteringChannelCount(IAudioMeterInformation *iface, UINT *count)
+{
+    struct audio_session_wrapper *This = impl_from_IAudioMeterInformation(iface);
+    if (!count)
+        return E_POINTER;
+    *count = (This->session && This->session->channel_count) ? This->session->channel_count : 1;
+    return S_OK;
+}
+
+static HRESULT WINAPI sessionmeter_GetChannelsPeakValues(IAudioMeterInformation *iface, UINT32 count, float *peaks)
+{
+    struct audio_session_wrapper *This = impl_from_IAudioMeterInformation(iface);
+    UINT32 i;
+    float peak;
+    if (!peaks)
+        return E_POINTER;
+    peak = session_current_peak(This->session);
+    for (i = 0; i < count; i++)
+        peaks[i] = peak;
+    return S_OK;
+}
+
+static HRESULT WINAPI sessionmeter_QueryHardwareSupport(IAudioMeterInformation *iface, DWORD *mask)
+{
+    if (!mask)
+        return E_POINTER;
+    *mask = 0;
+    return S_OK;
+}
+
+static const IAudioMeterInformationVtbl SessionMeterInformation_Vtbl =
+{
+    sessionmeter_QueryInterface,
+    sessionmeter_AddRef,
+    sessionmeter_Release,
+    sessionmeter_GetPeakValue,
+    sessionmeter_GetMeteringChannelCount,
+    sessionmeter_GetChannelsPeakValues,
+    sessionmeter_QueryHardwareSupport
+};
+
 #ifdef __REACTOS__
 static void release_proxy_session(struct audio_session *session)
 {
@@ -218,6 +304,8 @@ static HRESULT WINAPI control_QueryInterface(IAudioSessionControl2 *iface, REFII
         *ppv = &session->ISimpleAudioVolume_iface;
     else if (IsEqualIID(riid, &IID_IChannelAudioVolume))
         *ppv = &session->IChannelAudioVolume_iface;
+    else if (IsEqualIID(riid, &IID_IAudioMeterInformation))
+        *ppv = &session->IAudioMeterInformation_iface;
     else {
         *ppv = NULL;
         return E_NOINTERFACE;
@@ -1103,6 +1191,7 @@ struct audio_session_wrapper *session_wrapper_create(struct audio_client *client
     ret->IAudioSessionControl2_iface.lpVtbl = &AudioSessionControl2_Vtbl;
     ret->IChannelAudioVolume_iface.lpVtbl   = &ChannelAudioVolume_Vtbl;
     ret->ISimpleAudioVolume_iface.lpVtbl    = &SimpleAudioVolume_Vtbl;
+    ret->IAudioMeterInformation_iface.lpVtbl = &SessionMeterInformation_Vtbl;
 
     ret->ref    = 1;
     ret->client = client;

@@ -532,12 +532,27 @@ static MMDevice *MMDevice_Create(const WCHAR *name, GUID *id, EDataFlow flow, DW
             pv.pwszVal = type = (WCHAR *)(flow == eCapture ? L"Microphone" : L"Speakers");
             MMDevice_SetPropValue(id, flow, (const PROPERTYKEY*)&DEVPKEY_Device_DeviceDesc, &pv);
 
-            len = (wcslen(type) + wcslen(cur->drv_id) + wcslen(L" ()") + 1);
-            pv.vt = VT_LPWSTR;
-            pv.pwszVal = CoTaskMemAlloc(len * sizeof(WCHAR));
-            swprintf(pv.pwszVal, len, L"%ls (%ls)", type, cur->drv_id);
-            MMDevice_SetPropValue(id, flow, (const PROPERTYKEY*)&DEVPKEY_Device_FriendlyName, &pv);
-            CoTaskMemFree(pv.pwszVal);
+            {
+                MMDevice *other;
+                unsigned int dup = 0;
+                LIST_FOR_EACH_ENTRY(other, &device_list, MMDevice, entry)
+                {
+                    if (other == cur)
+                        break;
+                    if (other->flow == flow && other->drv_id && !wcscmp(other->drv_id, cur->drv_id) &&
+                        other->state != DEVICE_STATE_NOTPRESENT)
+                        dup++;
+                }
+                len = (wcslen(type) + wcslen(cur->drv_id) + wcslen(L" (99- )") + 1);
+                pv.vt = VT_LPWSTR;
+                pv.pwszVal = CoTaskMemAlloc(len * sizeof(WCHAR));
+                if (dup)
+                    swprintf(pv.pwszVal, len, L"%ls (%u- %ls)", type, dup + 1, cur->drv_id);
+                else
+                    swprintf(pv.pwszVal, len, L"%ls (%ls)", type, cur->drv_id);
+                MMDevice_SetPropValue(id, flow, (const PROPERTYKEY*)&DEVPKEY_Device_FriendlyName, &pv);
+                CoTaskMemFree(pv.pwszVal);
+            }
 
             pv.pwszVal = guidstr;
             MMDevice_SetPropValue(id, flow, &deviceinterface_key, &pv);
@@ -801,6 +816,8 @@ static HRESULT WINAPI MMDevice_Activate(IMMDevice *iface, REFIID riid, DWORD cls
     }else if (IsEqualIID(riid, &IID_IAudioEndpointVolume) ||
             IsEqualIID(riid, &IID_IAudioEndpointVolumeEx))
         hr = AudioEndpointVolume_Create(This, (IAudioEndpointVolumeEx**)ppv);
+    else if (IsEqualIID(riid, &IID_IAudioMeterInformation))
+        hr = AudioEndpointMeter_Create(iface, ppv);
     else if (IsEqualIID(riid, &IID_IAudioSessionManager)
              || IsEqualIID(riid, &IID_IAudioSessionManager2))
     {
