@@ -193,6 +193,7 @@ typedef struct _DXGKVMM_RESOURCE DXGKVMM_RESOURCE, *PDXGKVMM_RESOURCE;
 #define TAG_DXGK_SUBMITDMA  'QxgD'   /* DXGQ - tracked submit DMA buffers */
 #define TAG_DXGK_HANDLE     'HxgD'   /* DXGH - typed D3DKMT handle entry   */
 #define TAG_DXGK_CAPTURE    'UxgD'   /* DXGU - captured user buffers       */
+#define TAG_DXGK_OVERLAY    'OxgD'   /* DXGO - hardware overlays           */
 #define DXGKP_MAX_USER_PRIVATE_DATA (1024U * 1024U)
 #define DXGKP_MAX_CAPTURE_ALLOCATIONS 4096U
 
@@ -219,6 +220,9 @@ typedef struct _DXGKRNL_DEVICE           *PDXGKRNL_DEVICE;
 
 typedef struct _DXGKRNL_CONTEXT           DXGKRNL_CONTEXT;
 typedef struct _DXGKRNL_CONTEXT          *PDXGKRNL_CONTEXT;
+
+typedef struct _DXGKRNL_OVERLAY           DXGKRNL_OVERLAY;
+typedef struct _DXGKRNL_OVERLAY          *PDXGKRNL_OVERLAY;
 
 typedef struct _DXGKRNL_ALLOCATION        DXGKRNL_ALLOCATION;
 typedef struct _DXGKRNL_ALLOCATION       *PDXGKRNL_ALLOCATION;
@@ -822,6 +826,9 @@ struct _DXGKRNL_ADAPTER
      * shared-primary mutex is always acquired before this mutex. */
     KMUTEX                     VidPnMutex;
 
+    /* Vista overlay DDIs form one non-reentrant callback class. */
+    KMUTEX                     OverlayMutex;
+
     /* Serializes PASSIVE-level shared-primary/shadow lazy lifecycle. Readers
      * retain one coherent generation through SharedSurfaceRundown; writers
      * drain it before replacing handles, geometry, or ShadowFb backing. */
@@ -1179,7 +1186,27 @@ struct _DXGKRNL_DEVICE
      */
     LIST_ENTRY                  SyncObjListHead;
 
+    /* Live hardware overlays. Protected by DeviceMutex. */
+    LIST_ENTRY                  OverlayListHead;
+
     FAST_MUTEX                  DeviceMutex;
+};
+
+/* A published overlay owns its device and displayed-allocation references. */
+struct _DXGKRNL_OVERLAY
+{
+    PDXGKRNL_DEVICE             Device;
+    PEPROCESS                   OwnerProcess;
+    D3DKMT_HANDLE               Handle;
+    HANDLE                      hMiniportOverlay;
+    PDXGKVMM_ALLOCATION         Allocation;
+    KMUTEX                      OperationMutex;
+    volatile LONG               ReferenceCount;
+    volatile LONG               Destroying;
+    volatile LONG               TeardownClaimed;
+    volatile LONG               MiniportDestroyPending;
+    KEVENT                      ReferencesDrainedEvent;
+    LIST_ENTRY                  DeviceOverlayListEntry;
 };
 
 /* ========================================================================
@@ -2539,6 +2566,45 @@ NTSTATUS
 NTAPI
 DxgkEscape(
     _In_ CONST D3DKMT_ESCAPE *pEscape);
+
+NTSTATUS
+NTAPI
+DxgkCreateOverlay(
+    _Inout_ D3DKMT_CREATEOVERLAY *Data);
+
+NTSTATUS
+DxgkCreateOverlayWithAccessMode(
+    _Inout_ D3DKMT_CREATEOVERLAY *Data,
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode);
+
+NTSTATUS
+NTAPI
+DxgkUpdateOverlay(
+    _In_ CONST D3DKMT_UPDATEOVERLAY *Data);
+
+NTSTATUS
+DxgkUpdateOverlayWithAccessMode(
+    _In_ CONST D3DKMT_UPDATEOVERLAY *Data,
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode);
+
+NTSTATUS
+NTAPI
+DxgkFlipOverlay(
+    _In_ CONST D3DKMT_FLIPOVERLAY *Data);
+
+NTSTATUS
+DxgkFlipOverlayWithAccessMode(
+    _In_ CONST D3DKMT_FLIPOVERLAY *Data,
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode);
+
+NTSTATUS
+NTAPI
+DxgkDestroyOverlay(
+    _In_ CONST D3DKMT_DESTROYOVERLAY *Data);
+
+NTSTATUS
+DxgkOverlayCleanupDevice(
+    _In_ PDXGKRNL_DEVICE Device);
 
 /* ========================================================================
  * Function prototypes — sync.c  (GPU synchronisation objects)

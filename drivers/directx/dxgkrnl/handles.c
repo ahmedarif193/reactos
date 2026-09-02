@@ -9,9 +9,9 @@
 #include "handles.h"
 #include <ndk/psfuncs.h>
 
-#define DXGKP_HANDLE_TYPE_SHIFT 29
-#define DXGKP_HANDLE_TYPE_MASK 0xE0000000UL
-#define DXGKP_HANDLE_GENERATION_MASK 0x1FFFFFFFUL
+#define DXGKP_HANDLE_TYPE_SHIFT 28
+#define DXGKP_HANDLE_TYPE_MASK 0xF0000000UL
+#define DXGKP_HANDLE_GENERATION_MASK 0x0FFFFFFFUL
 #define DXGKP_HANDLE_COOKIE 0x19B753A1UL
 
 typedef struct _DXGKRNL_HANDLE_ENTRY
@@ -617,7 +617,7 @@ DxgkCreateOwnedHandle(
     _Inout_ volatile LONG *TeardownClaimed,
     _Out_ D3DKMT_HANDLE *OutHandle)
 {
-    if (Type < DxgkHandleTypeSynchronizationObject || Type > DxgkHandleTypeKeyedMutex)
+    if (Type < DxgkHandleTypeSynchronizationObject || Type > DxgkHandleTypeOverlay)
         return STATUS_INVALID_PARAMETER;
     if (TeardownClaimed == NULL)
         return STATUS_INVALID_PARAMETER;

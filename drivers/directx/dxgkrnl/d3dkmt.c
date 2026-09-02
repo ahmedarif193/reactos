@@ -4677,60 +4677,6 @@ DxgkUnsupportedDeviceCall(
 
 static NTSTATUS
 NTAPI
-DxgkCreateOverlay(
-    _Inout_ D3DKMT_CREATEOVERLAY *pData)
-{
-    NTSTATUS Status;
-
-    if (pData == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    Status = DxgkpValidateDeviceHandleForIoctl(
-                 pData->hDevice,
-                 NULL,
-                 NULL);
-    return DxgkPresentCoreCompleteUnsupportedOverlayCreate(
-               Status,
-               &pData->hOverlay);
-}
-
-static NTSTATUS
-NTAPI
-DxgkDestroyOverlay(
-    _In_ CONST D3DKMT_DESTROYOVERLAY *pData)
-{
-    if (pData == NULL || pData->hOverlay == 0)
-        return STATUS_INVALID_PARAMETER;
-
-    return DxgkUnsupportedDeviceCall(pData->hDevice);
-}
-
-static NTSTATUS
-NTAPI
-DxgkFlipOverlay(
-    _In_ CONST D3DKMT_FLIPOVERLAY *pData)
-{
-    if (pData == NULL || pData->hOverlay == 0 || pData->hSource == 0)
-        return STATUS_INVALID_PARAMETER;
-    if (pData->PrivateDriverDataSize != 0 && pData->pPrivateDriverData == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    return DxgkUnsupportedDeviceCall(pData->hDevice);
-}
-
-static NTSTATUS
-NTAPI
-DxgkUpdateOverlay(
-    _In_ CONST D3DKMT_UPDATEOVERLAY *pData)
-{
-    if (pData == NULL || pData->hOverlay == 0)
-        return STATUS_INVALID_PARAMETER;
-
-    return DxgkUnsupportedDeviceCall(pData->hDevice);
-}
-
-static NTSTATUS
-NTAPI
 DxgkGetContextSchedulingPriority(
     _Inout_ D3DKMT_GETCONTEXTSCHEDULINGPRIORITY *pData)
 {
@@ -10754,12 +10700,46 @@ DxgkpDispatchBufferedIoctl(
         }
 
         case IOCTL_D3DKMT_CREATEOVERLAY:
+        {
+            if (InputLength < sizeof(D3DKMT_CREATEOVERLAY) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            Status = DxgkCreateOverlayWithAccessMode(
+                         (D3DKMT_CREATEOVERLAY *)SystemBuffer,
+                         EmbeddedBufferMode);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(D3DKMT_CREATEOVERLAY);
+            return Status;
+        }
+
         case IOCTL_D3DKMT_DESTROYOVERLAY:
+        {
+            if (InputLength < sizeof(D3DKMT_DESTROYOVERLAY) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkDestroyOverlay(
+                       (CONST D3DKMT_DESTROYOVERLAY *)SystemBuffer);
+        }
+
         case IOCTL_D3DKMT_FLIPOVERLAY:
+        {
+            if (InputLength < sizeof(D3DKMT_FLIPOVERLAY) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkFlipOverlayWithAccessMode(
+                       (CONST D3DKMT_FLIPOVERLAY *)SystemBuffer,
+                       EmbeddedBufferMode);
+        }
+
         case IOCTL_D3DKMT_UPDATEOVERLAY:
+        {
+            if (InputLength < sizeof(D3DKMT_UPDATEOVERLAY) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkUpdateOverlayWithAccessMode(
+                       (CONST D3DKMT_UPDATEOVERLAY *)SystemBuffer,
+                       EmbeddedBufferMode);
+        }
+
         case IOCTL_D3DKMT_GETOVERLAYSTATE:
         {
-            /* Overlay: not yet implemented */
+            /* Overlay state query was added after the Vista overlay DDIs. */
             return STATUS_NOT_SUPPORTED;
         }
 

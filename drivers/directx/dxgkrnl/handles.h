@@ -15,7 +15,8 @@ typedef enum _DXGKRNL_HANDLE_TYPE
     DxgkHandleTypeSynchronizationObject = 4,
     DxgkHandleTypePagingQueue = 5,
     DxgkHandleTypeAllocation = 6,
-    DxgkHandleTypeKeyedMutex = 7
+    DxgkHandleTypeKeyedMutex = 7,
+    DxgkHandleTypeOverlay = 8
 } DXGKRNL_HANDLE_TYPE;
 
 typedef BOOLEAN (*PDXGKRNL_HANDLE_REFERENCE_ROUTINE)(_In_ PVOID Object);
