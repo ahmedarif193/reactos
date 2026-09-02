@@ -713,6 +713,10 @@ static const IMF2DBuffer2Vtbl memory_2d_buffer_vtbl =
 static HRESULT d3d9_surface_buffer_lock(struct buffer *buffer, MF2DBuffer_LockFlags flags, BYTE **scanline0,
         LONG *pitch, BYTE **buffer_start, DWORD *buffer_length)
 {
+#ifdef __REACTOS__
+    ULONGLONG length = 0;
+    ULONGLONG surface_pitch;
+#endif
     HRESULT hr = S_OK;
 
     if (buffer->_2d.linear_buffer)
@@ -724,6 +728,24 @@ static HRESULT d3d9_surface_buffer_lock(struct buffer *buffer, MF2DBuffer_LockFl
 
     if (SUCCEEDED(hr))
     {
+#ifdef __REACTOS__
+        if (buffer_length)
+        {
+            surface_pitch = buffer->d3d9_surface.rect.Pitch < 0
+                    ? -(LONGLONG)buffer->d3d9_surface.rect.Pitch
+                    : buffer->d3d9_surface.rect.Pitch;
+            if (!buffer->_2d.width ||
+                    surface_pitch * buffer->_2d.plane_size /
+                    buffer->_2d.width > MAXDWORD)
+            {
+                if (!buffer->_2d.locks)
+                    IDirect3DSurface9_UnlockRect(buffer->d3d9_surface.surface);
+                return MF_E_INVALIDMEDIATYPE;
+            }
+            length = surface_pitch * buffer->_2d.plane_size /
+                    buffer->_2d.width;
+        }
+#endif
         if (!buffer->_2d.locks)
             buffer->_2d.lock_flags = flags;
         buffer->_2d.locks++;
@@ -732,7 +754,11 @@ static HRESULT d3d9_surface_buffer_lock(struct buffer *buffer, MF2DBuffer_LockFl
         if (buffer_start)
             *buffer_start = *scanline0;
         if (buffer_length)
+#ifdef __REACTOS__
+            *buffer_length = (DWORD)length;
+#else
             *buffer_length = buffer->d3d9_surface.rect.Pitch * buffer->_2d.height;
+#endif
     }
 
     return hr;
