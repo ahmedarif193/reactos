@@ -162,6 +162,7 @@ C_ASSERT(sizeof(VCHIQ_AWAIT_COMPLETION_T) == 36);
 #define MMAL_COMPLETION_COUNT              8
 #define MMAL_OUTPUT_BUFFER_COUNT           6
 #define MMAL_CONTROL_TIMEOUT_MS            10000
+#define RPI3_MMAL_RECONFIGURE_REQUIRED     HRESULT_FROM_WIN32(ERROR_RETRY)
 #define MMAL_DECODER_INPUT_SIZE_720P       (512u << 10)
 #define MMAL_DECODER_INPUT_SIZE_HIGH       (768u << 10)
 
@@ -906,9 +907,37 @@ static BOOL
 Rpi3MmalBulkReceive(RPI3_MMAL_DECODER *Decoder,
                     VOID *Data,
                     UINT Size,
-                    UINT32 Token)
+                    UINT32 Token);
+
+typedef struct _RPI3_MMAL_BULK_RECEIVE
+{
+    OVERLAPPED Overlapped;
+    HANDLE Device;
+    DWORD BytesReturned;
+    BOOL Pending;
+} RPI3_MMAL_BULK_RECEIVE;
+
+static BOOL
+Rpi3MmalBeginBulkReceive(RPI3_MMAL_DECODER *Decoder,
+                         VOID *Data,
+                         UINT Size,
+                         UINT32 Token,
+                         RPI3_MMAL_BULK_RECEIVE *Receive)
 {
     VCHIQ_QUEUE_BULK_TRANSFER_T Arguments;
+    DWORD Error;
+    BOOL Result;
+
+    ZeroMemory(Receive, sizeof(*Receive));
+    Receive->Device = Decoder->Device;
+    if (Receive->Device == INVALID_HANDLE_VALUE)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    Receive->Overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!Receive->Overlapped.hEvent)
+        return FALSE;
 
     ZeroMemory(&Arguments, sizeof(Arguments));
     Arguments.handle = 0;
@@ -918,13 +947,87 @@ Rpi3MmalBulkReceive(RPI3_MMAL_DECODER *Decoder,
     Arguments.mode = VCHIQ_BULK_MODE_BLOCKING;
 
     /* METHOD_OUT_DIRECT: transfer descriptor is input, payload is output. */
-    return Rpi3MmalDeviceIoControl(Decoder,
-                                   VCHIQ_IOC_QUEUE_BULK_RECEIVE,
-                                   &Arguments,
-                                   sizeof(Arguments),
-                                   Data,
-                                   Size,
-                                   NULL);
+    Result = DeviceIoControl(Receive->Device,
+                             VCHIQ_IOC_QUEUE_BULK_RECEIVE,
+                             &Arguments,
+                             sizeof(Arguments),
+                             Data,
+                             Size,
+                             &Receive->BytesReturned,
+                             &Receive->Overlapped);
+    if (Result)
+        return TRUE;
+
+    Error = GetLastError();
+    if (Error == ERROR_IO_PENDING)
+    {
+        Receive->Pending = TRUE;
+        return TRUE;
+    }
+
+    CloseHandle(Receive->Overlapped.hEvent);
+    Receive->Overlapped.hEvent = NULL;
+    SetLastError(Error);
+    return FALSE;
+}
+
+static BOOL
+Rpi3MmalFinishBulkReceive(RPI3_MMAL_DECODER *Decoder,
+                          RPI3_MMAL_BULK_RECEIVE *Receive,
+                          DWORD TimeoutMilliseconds)
+{
+    DWORD Error = ERROR_SUCCESS;
+    DWORD WaitStatus;
+    BOOL Result = TRUE;
+
+    if (Receive->Pending)
+    {
+        WaitStatus = WaitForSingleObject(Receive->Overlapped.hEvent,
+                                         TimeoutMilliseconds);
+        if (WaitStatus == WAIT_OBJECT_0)
+        {
+            Result = GetOverlappedResult(Receive->Device,
+                                         &Receive->Overlapped,
+                                         &Receive->BytesReturned,
+                                         FALSE);
+            if (!Result)
+                Error = GetLastError();
+        }
+        else
+        {
+            Error = WaitStatus == WAIT_TIMEOUT ?
+                    ERROR_TIMEOUT : ERROR_GEN_FAILURE;
+            (VOID)CancelIoEx(Receive->Device, &Receive->Overlapped);
+            (VOID)Rpi3MmalCloseDevice(Decoder, Receive->Device);
+            (VOID)WaitForSingleObject(Receive->Overlapped.hEvent, INFINITE);
+            (VOID)GetOverlappedResult(Receive->Device,
+                                      &Receive->Overlapped,
+                                      &Receive->BytesReturned,
+                                      FALSE);
+            Result = FALSE;
+        }
+    }
+
+    CloseHandle(Receive->Overlapped.hEvent);
+    Receive->Overlapped.hEvent = NULL;
+    SetLastError(Result ? ERROR_SUCCESS : Error);
+    return Result;
+}
+
+static BOOL
+Rpi3MmalBulkReceive(RPI3_MMAL_DECODER *Decoder,
+                    VOID *Data,
+                    UINT Size,
+                    UINT32 Token)
+{
+    RPI3_MMAL_BULK_RECEIVE Receive;
+
+    if (!Rpi3MmalBeginBulkReceive(Decoder, Data, Size, Token, &Receive))
+        return FALSE;
+
+    return Rpi3MmalFinishBulkReceive(Decoder,
+                                     &Receive,
+                                     MMAL_CONTROL_TIMEOUT_MS);
 }
 
 static HRESULT
@@ -2969,21 +3072,28 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
                             void *Context,
                             RPI3_MMAL_FRAME *Frame)
 {
+    BYTE EmptyBulk[8];
     HANDLE WaitHandles[4];
+    RPI3_MMAL_BULK_RECEIVE BulkReceive;
     RPI3_MMAL_READY_OUTPUT Output;
+    RPI3_MMAL_OUTPUT_SLOT *Slot;
     BYTE *Buffer;
     BYTE *ReceiveBuffer;
     UINT BufferSize;
     UINT Pitch;
     UINT ReceiveBufferSize;
+    UINT ReceiveOffset;
     DWORD WaitStatus;
     UINT Index;
     UINT Row;
     UINT RequiredSize;
     UINT SourcePitch;
     UINT SourceHeight;
+    UINT TransferSize;
     ULONGLONG Size;
     UINT FrameFlags = 0;
+    BOOL BulkStarted;
+    BOOL Discard;
     BOOL DirectOutput;
     HRESULT Result = S_OK;
 
@@ -3004,12 +3114,7 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
         WaitStatus = WaitForMultipleObjects(ARRAYSIZE(WaitHandles), WaitHandles, FALSE,
                                             TimeoutMilliseconds);
         if (WaitStatus == WAIT_OBJECT_0 + 1)
-        {
-            Result = Rpi3MmalReconfigureOutput(Decoder);
-            if (FAILED(Result))
-                return Result;
-            continue;
-        }
+            return RPI3_MMAL_RECONFIGURE_REQUIRED;
         if (WaitStatus == WAIT_OBJECT_0 + 2 ||
             WaitStatus == WAIT_OBJECT_0 + 3)
             return HRESULT_FROM_WIN32(ERROR_OPERATION_ABORTED);
@@ -3019,9 +3124,27 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
                                                 Rpi3MmalErrorFromLastError();
         }
 
-        ZeroMemory(&Output, sizeof(Output));
-        if (!Rpi3MmalSnapshotOldestReadyOutput(Decoder, &Output))
+        EnterCriticalSection(&Decoder->OutputBulkLock);
+        EnterCriticalSection(&Decoder->StateLock);
+        if (!Rpi3MmalFindOldestReadyOutputLocked(Decoder, &Index))
+        {
+            LeaveCriticalSection(&Decoder->StateLock);
+            LeaveCriticalSection(&Decoder->OutputBulkLock);
             continue;
+        }
+
+        Slot = &Decoder->OutputSlots[Index];
+        Output.Index = Index;
+        Output.Offset = Slot->Offset;
+        Output.Length = Slot->Length;
+        Output.Flags = Slot->Flags;
+        Output.PayloadInMessage = Slot->PayloadInMessage;
+        Output.Pts = Slot->Pts;
+        Output.Dts = Slot->Dts;
+        Output.Sequence = Slot->Sequence;
+        Slot->State = Rpi3MmalSlotConsuming;
+        Rpi3MmalUpdateOutputEventsLocked(Decoder);
+        LeaveCriticalSection(&Decoder->StateLock);
 
         ZeroMemory(Frame, sizeof(*Frame));
         Frame->Width = Decoder->Width;
@@ -3037,27 +3160,22 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
         Buffer = NULL;
         BufferSize = 0;
         Pitch = 0;
+        Discard = FALSE;
+        BulkStarted = FALSE;
+        ZeroMemory(&BulkReceive, sizeof(BulkReceive));
         Result = SelectOutput(Context, Frame, &Buffer, &BufferSize, &Pitch);
         if (FAILED(Result) || !Buffer)
         {
-            HRESULT DiscardResult = Rpi3MmalConsumeReadyOutput(
-                                        Decoder,
-                                        Decoder->DiscardData,
-                                        Decoder->DiscardSize,
-                                        TRUE,
-                                        &Output,
-                                        NULL);
-            if (FAILED(DiscardResult))
-                Result = DiscardResult;
-            Rpi3MmalSetAsyncResult(Decoder, Result);
-            return Result;
+            if (SUCCEEDED(Result))
+                Result = E_INVALIDARG;
+            Discard = TRUE;
         }
 
         SourcePitch = Decoder->Pitch;
         SourceHeight = Decoder->StorageHeight;
-        if (Pitch < Decoder->VisibleWidth)
+        if (!Discard && Pitch < Decoder->VisibleWidth)
             Result = E_INVALIDARG;
-        else
+        else if (!Discard)
         {
             Size = (ULONGLONG)Pitch * Decoder->VisibleHeight +
                    (ULONGLONG)Pitch * ((Decoder->VisibleHeight + 1) / 2);
@@ -3067,21 +3185,9 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
                 RequiredSize = (UINT)Size;
         }
         if (FAILED(Result))
-        {
-            HRESULT DiscardResult = Rpi3MmalConsumeReadyOutput(
-                                        Decoder,
-                                        Decoder->DiscardData,
-                                        Decoder->DiscardSize,
-                                        TRUE,
-                                        &Output,
-                                        NULL);
-            if (FAILED(DiscardResult))
-                Result = DiscardResult;
-            Rpi3MmalSetAsyncResult(Decoder, Result);
-            return Result;
-        }
+            Discard = TRUE;
 
-        DirectOutput = Output.Offset == 0 &&
+        DirectOutput = !Discard && Output.Offset == 0 &&
                        Pitch == SourcePitch &&
                        BufferSize >= Decoder->OutputSize;
         ReceiveBuffer = DirectOutput ? Buffer : Decoder->DiscardData;
@@ -3089,25 +3195,96 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
         if (!ReceiveBuffer || !ReceiveBufferSize)
         {
             Result = E_OUTOFMEMORY;
-            Rpi3MmalSetAsyncResult(Decoder, Result);
-            return Result;
+            Discard = TRUE;
         }
 
-        Result = Rpi3MmalConsumeReadyOutput(
-                     Decoder,
-                     ReceiveBuffer,
-                     ReceiveBufferSize,
-                     FALSE,
-                     &Output,
-                     &Output);
-        if (Result == S_FALSE)
-            continue;
-        if (FAILED(Result))
+        if (Output.PayloadInMessage)
         {
+            if (!Discard)
+            {
+                if (Output.PayloadInMessage > ReceiveBufferSize)
+                {
+                    Result = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+                    Discard = TRUE;
+                }
+                else
+                {
+                    CopyMemory(ReceiveBuffer,
+                               Slot->ShortData,
+                               Output.PayloadInMessage);
+                }
+            }
+        }
+        else if (Output.Length ||
+                 (Output.Flags & MMAL_BUFFER_HEADER_FLAG_EOS))
+        {
+            TransferSize = Output.Length ? ALIGN_UP(Output.Length, 4) : 8;
+            ReceiveOffset = Output.Length ? Output.Offset : 0;
+            if (!Discard &&
+                (ReceiveOffset > ReceiveBufferSize ||
+                 TransferSize > ReceiveBufferSize - ReceiveOffset))
+            {
+                Result = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+                Discard = TRUE;
+            }
+            if (Discard)
+            {
+                if (TransferSize > Decoder->DiscardSize)
+                {
+                    Result = E_FAIL;
+                }
+                else
+                {
+                    ReceiveBuffer = Output.Length ?
+                                    Decoder->DiscardData : EmptyBulk;
+                    ReceiveBufferSize = Decoder->DiscardSize;
+                    ReceiveOffset = 0;
+                }
+            }
+            else if (!Output.Length)
+            {
+                ReceiveBuffer = EmptyBulk;
+                ReceiveOffset = 0;
+            }
+
+            if (ReceiveBuffer &&
+                ReceiveOffset <= ReceiveBufferSize &&
+                TransferSize <= ReceiveBufferSize - ReceiveOffset &&
+                Rpi3MmalBeginBulkReceive(
+                    Decoder,
+                    ReceiveBuffer + ReceiveOffset,
+                    TransferSize,
+                    MMAL_TOKEN_OUTPUT | Index,
+                    &BulkReceive))
+            {
+                BulkStarted = TRUE;
+            }
+            else if (SUCCEEDED(Result))
+            {
+                Result = Rpi3MmalErrorFromLastError();
+            }
+        }
+
+        LeaveCriticalSection(&Decoder->OutputBulkLock);
+
+        if (BulkStarted &&
+            !Rpi3MmalFinishBulkReceive(Decoder,
+                                       &BulkReceive,
+                                       MMAL_CONTROL_TIMEOUT_MS))
+        {
+            Result = Rpi3MmalErrorFromLastError();
+        }
+
+        if (FAILED(Result) || Discard)
+        {
+            EnterCriticalSection(&Decoder->StateLock);
+            if (Slot->State == Rpi3MmalSlotConsuming)
+                Slot->State = Rpi3MmalSlotFree;
+            Rpi3MmalUpdateOutputEventsLocked(Decoder);
+            LeaveCriticalSection(&Decoder->StateLock);
             Rpi3MmalSetAsyncResult(Decoder, Result);
             return Result;
         }
-        Index = Output.Index;
         break;
     }
 
@@ -3158,17 +3335,53 @@ Rpi3MmalReceiveNV12Internal(RPI3_MMAL_DECODER *Decoder,
         Rpi3MmalUpdateOutputEventsLocked(Decoder);
         LeaveCriticalSection(&Decoder->StateLock);
     }
-    else if (!Rpi3MmalQueueOutputSlot(Decoder,
-                                      Index,
-                                      Rpi3MmalSlotConsuming,
-                                      TRUE))
+    else
     {
-        HRESULT QueueResult = Rpi3MmalErrorFromLastError();
-        Rpi3MmalSetAsyncResult(Decoder, QueueResult);
-        return QueueResult;
+        if (!Rpi3MmalQueueOutputSlot(Decoder,
+                                     Index,
+                                     Rpi3MmalSlotConsuming,
+                                     TRUE))
+        {
+            HRESULT QueueResult = Rpi3MmalErrorFromLastError();
+            Rpi3MmalSetAsyncResult(Decoder, QueueResult);
+            return QueueResult;
+        }
     }
 
     return Result;
+}
+
+static HRESULT
+Rpi3MmalReceiveNV12Locked(
+    RPI3_MMAL_DECODER *Decoder,
+    DWORD TimeoutMilliseconds,
+    RPI3_MMAL_SELECT_NV12_OUTPUT SelectOutput,
+    void *Context,
+    RPI3_MMAL_FRAME *Frame)
+{
+    BOOL Reconfigure;
+    HRESULT Result;
+
+    for (;;)
+    {
+        EnterCriticalSection(&Decoder->OutputLock);
+        Result = Rpi3MmalReceiveNV12Internal(Decoder,
+                                             TimeoutMilliseconds,
+                                             SelectOutput,
+                                             Context,
+                                             Frame);
+        Reconfigure = Result == RPI3_MMAL_RECONFIGURE_REQUIRED;
+        if (Reconfigure)
+        {
+            if (WaitForSingleObject(Decoder->FormatEvent, 0) == WAIT_OBJECT_0)
+                Result = Rpi3MmalReconfigureOutput(Decoder);
+            else
+                Result = S_OK;
+        }
+        LeaveCriticalSection(&Decoder->OutputLock);
+        if (FAILED(Result) || !Reconfigure)
+            return Result;
+    }
 }
 
 HRESULT WINAPI
@@ -3180,7 +3393,6 @@ Rpi3MmalReceiveNV12(RPI3_MMAL_DECODER *Decoder,
                     RPI3_MMAL_FRAME *Frame)
 {
     RPI3_MMAL_FIXED_OUTPUT Output;
-    HRESULT Result;
 
     if (!Decoder || !Buffer || !Frame)
         return E_INVALIDARG;
@@ -3188,14 +3400,11 @@ Rpi3MmalReceiveNV12(RPI3_MMAL_DECODER *Decoder,
     Output.Buffer = Buffer;
     Output.BufferSize = BufferSize;
     Output.Pitch = Pitch;
-    EnterCriticalSection(&Decoder->OutputLock);
-    Result = Rpi3MmalReceiveNV12Internal(Decoder,
-                                         TimeoutMilliseconds,
-                                         Rpi3MmalSelectFixedOutput,
-                                         &Output,
-                                         Frame);
-    LeaveCriticalSection(&Decoder->OutputLock);
-    return Result;
+    return Rpi3MmalReceiveNV12Locked(Decoder,
+                                    TimeoutMilliseconds,
+                                    Rpi3MmalSelectFixedOutput,
+                                    &Output,
+                                    Frame);
 }
 
 HRESULT WINAPI
@@ -3205,19 +3414,14 @@ Rpi3MmalReceiveNV12Selected(RPI3_MMAL_DECODER *Decoder,
                             void *Context,
                             RPI3_MMAL_FRAME *Frame)
 {
-    HRESULT Result;
-
     if (!Decoder || !SelectOutput || !Frame)
         return E_INVALIDARG;
 
-    EnterCriticalSection(&Decoder->OutputLock);
-    Result = Rpi3MmalReceiveNV12Internal(Decoder,
-                                         TimeoutMilliseconds,
-                                         SelectOutput,
-                                         Context,
-                                         Frame);
-    LeaveCriticalSection(&Decoder->OutputLock);
-    return Result;
+    return Rpi3MmalReceiveNV12Locked(Decoder,
+                                    TimeoutMilliseconds,
+                                    SelectOutput,
+                                    Context,
+                                    Frame);
 }
 
 static BOOL
