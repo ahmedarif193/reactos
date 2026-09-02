@@ -124,6 +124,8 @@ IntGdiExtCreatePen(
     }
     else
     {
+        dwWidth = abs((INT)dwWidth);
+
         switch (dwPenStyle & PS_ENDCAP_MASK)
         {
             case PS_ENDCAP_ROUND:
