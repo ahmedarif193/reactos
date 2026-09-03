@@ -126,6 +126,7 @@ extern void func_RtlQueryEnvironmentVariable(void);
 extern void func_RtlQueryEnvironmentVariable_U(void);
 extern void func_RtlQueryTimeZoneInformation(void);
 extern void func_RtlReAllocateHeap(void);
+extern void func_RtlSRWLock(void);
 extern void func_RtlRemovePrivileges(void);
 extern void func_RtlUnhandledExceptionFilter(void);
 extern void func_RtlUnicodeStringToAnsiString(void);
@@ -270,6 +271,7 @@ const struct test winetest_testlist[] =
     { "RtlQueryEnvironmentVariable_U",  func_RtlQueryEnvironmentVariable_U },
     { "RtlQueryTimeZoneInformation",    func_RtlQueryTimeZoneInformation },
     { "RtlReAllocateHeap",              func_RtlReAllocateHeap },
+    { "RtlSRWLock",                     func_RtlSRWLock },
     { "RtlRemovePrivileges",            func_RtlRemovePrivileges },
     { "RtlUnhandledExceptionFilter",    func_RtlUnhandledExceptionFilter },
     { "RtlUnicodeStringToAnsiSize",     func_RtlxUnicodeStringToAnsiSize }, /* For some reason, starting test name with Rtlx hides it */
