@@ -2496,6 +2496,7 @@ DxgkpQueryAdapterInfoMinimumLevel(
         case KMTQAITYPE_GETSEGMENTSIZE:
         case KMTQAITYPE_ADAPTERADDRESS:
         case KMTQAITYPE_ADAPTERREGISTRYINFO:
+        case KMTQAITYPE_CURRENTDISPLAYMODE:
             *MinimumLevel = DXGK_CAPS_CORE_LEVEL_WDDM_1_0;
             return TRUE;
 
@@ -2559,6 +2560,73 @@ DxgkpQueryAdapterInfoMinimumLevel(
             *MinimumLevel = 0;
             return FALSE;
     }
+}
+
+static NTSTATUS
+DxgkpQueryCurrentDisplayModeForAdapter(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ D3DKMT_CURRENTDISPLAYMODE *CurrentMode)
+{
+    PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
+    PDXGKRNL_ADAPTER DisplayPair = NULL;
+    PDXGKRNL_ADAPTER RenderPair = NULL;
+    ULONG DisplayPairCount = 0;
+    ULONG RenderPairCount = 0;
+    ULONG Count;
+    ULONG Index;
+    NTSTATUS Status;
+
+    Status = DxgkVidPnQueryCurrentDisplayMode(Adapter, CurrentMode);
+    if (NT_SUCCESS(Status) ||
+        Adapter->MiniportContext == NULL ||
+        Adapter->MiniportContext->IsBasicDisplayFallback)
+    {
+        return Status;
+    }
+
+    /*
+     * The private HDC/GDI-name open path pairs a BasicDisplay-owned desktop
+     * with a unique render adapter. Preserve that same pair for display-mode
+     * queries: the D3DKMT handle names the renderer, while the committed VidPn
+     * remains owned by BasicDisplay until the vendor KMD takes over scanout.
+     * Requiring both sides to be unique avoids inventing a pair on multi-GPU
+     * systems.
+     */
+    Count = DxgkpSnapshotAdapters(Snapshot);
+    for (Index = 0; Index < Count; ++Index)
+    {
+        PDXGKRNL_ADAPTER Candidate = Snapshot[Index];
+
+        if (Candidate->State != DxgkAdapterStateStarted ||
+            Candidate->MiniportContext == NULL)
+        {
+            continue;
+        }
+        if (Candidate->MiniportContext->IsBasicDisplayFallback)
+        {
+            if (CurrentMode->VidPnSourceId <
+                Candidate->NumberOfVideoPresentSources)
+            {
+                DisplayPair = Candidate;
+                ++DisplayPairCount;
+            }
+            continue;
+        }
+        if (DxgkpAdapterSupportsRender(Candidate))
+        {
+            RenderPair = Candidate;
+            ++RenderPairCount;
+        }
+    }
+
+    if (DisplayPairCount == 1 &&
+        RenderPairCount == 1 &&
+        RenderPair == Adapter)
+    {
+        Status = DxgkVidPnQueryCurrentDisplayMode(DisplayPair, CurrentMode);
+    }
+    DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+    return Status;
 }
 
 /*
@@ -2846,6 +2914,24 @@ DxgkpQueryAdapterInfoCaptured(
                           OpenGlInfo.Version,
                           OpenGlInfo.Flags);
             DXGKP_QUERY_RETURN(STATUS_SUCCESS);
+        }
+
+        case KMTQAITYPE_CURRENTDISPLAYMODE:
+        {
+            D3DKMT_CURRENTDISPLAYMODE *CurrentMode;
+            NTSTATUS Status;
+
+            if (pQueryAdapterInfo->pPrivateDriverData == NULL ||
+                pQueryAdapterInfo->PrivateDriverDataSize < sizeof(*CurrentMode))
+            {
+                DXGKP_QUERY_RETURN(STATUS_BUFFER_TOO_SMALL);
+            }
+
+            CurrentMode = (D3DKMT_CURRENTDISPLAYMODE *)
+                pQueryAdapterInfo->pPrivateDriverData;
+            Status = DxgkpQueryCurrentDisplayModeForAdapter(Adapter,
+                                                            CurrentMode);
+            DXGKP_QUERY_RETURN(Status);
         }
 
         case 15: /* KMTQAITYPE_ADAPTERTYPE (Win8+, not in Vista-level enum) */

@@ -352,6 +352,8 @@ static void Test_CurrentDisplayMode(PFND3DKMT_QUERYADAPTERINFO pfn, D3DKMT_HANDL
     memset(&mode, 0, sizeof(mode));
     mode.VidPnSourceId = 0; /* primary source */
     st = QueryAI(pfn, h, KMTQAITYPE_CURRENTDISPLAYMODE, &mode, sizeof(mode));
+    ok(NT_SUCCESS(st), "CURRENTDISPLAYMODE failed for the active primary source: 0x%08lX\n",
+       (long)st);
     if (NT_SUCCESS(st))
     {
         trace("CURRENTDISPLAYMODE: %ux%u Format=%d\n",
@@ -367,6 +369,10 @@ static void Test_CurrentDisplayMode(PFND3DKMT_QUERYADAPTERINFO pfn, D3DKMT_HANDL
     {
         trace("CURRENTDISPLAYMODE not available (0x%08lX)\n", (long)st);
     }
+    memset(&mode, 0, sizeof(mode));
+    mode.VidPnSourceId = (D3DDDI_VIDEO_PRESENT_SOURCE_ID)-1;
+    st = QueryAI(pfn, h, KMTQAITYPE_CURRENTDISPLAYMODE, &mode, sizeof(mode));
+    ok(!NT_SUCCESS(st), "CURRENTDISPLAYMODE accepted an invalid source id\n");
     ExpectRefuseBadBuffers(pfn, h, KMTQAITYPE_CURRENTDISPLAYMODE,
                            "CURRENTDISPLAYMODE", sizeof(mode));
 }
