@@ -8,7 +8,8 @@
 #define _DXGMMS2_TIMELINE_CORE_H_
 
 #define DXGMMS2_TIMELINE_SIGNATURE                    'T2MG'
-#define DXGMMS2_TIMELINE_MAX_NODES                    8
+/* Match every node representable by dxgkrnl's ULONG node masks. */
+#define DXGMMS2_TIMELINE_MAX_NODES                    32
 #define DXGMMS2_TIMELINE_IDENTITY_CAPACITY             8192
 #define DXGMMS2_TIMELINE_PUBLISHED_BIT                 0x8000000000000000ULL
 #define DXGMMS2_TIMELINE_TOMBSTONE                     ((LONG64)-1)

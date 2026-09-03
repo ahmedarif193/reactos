@@ -16,6 +16,8 @@ static VOID TestValidation(VOID)
     { NTSTATUS Observed = DxgkNodeCoreValidateAffinity(0x1, 4); ok_eq_hex(Observed, STATUS_SUCCESS); }
     { NTSTATUS Observed = DxgkNodeCoreValidateAffinity(0xF, 4); ok_eq_hex(Observed, STATUS_SUCCESS); }
     { NTSTATUS Observed = DxgkNodeCoreValidateAffinity(0x8, 4); ok_eq_hex(Observed, STATUS_SUCCESS); }
+    { NTSTATUS Observed = DxgkNodeCoreValidateAffinity(0x1000, 13); ok_eq_hex(Observed, STATUS_SUCCESS); }
+    { NTSTATUS Observed = DxgkNodeCoreValidateAffinity(0x80000000UL, 32); ok_eq_hex(Observed, STATUS_SUCCESS); }
 
     /* An empty affinity steers the submission nowhere at all. */
     { NTSTATUS Observed = DxgkNodeCoreValidateAffinity(0, 4); ok_eq_hex(Observed, STATUS_INVALID_PARAMETER); }
@@ -43,6 +45,10 @@ static VOID TestSelection(VOID)
     ok_eq_ulong(Node, 3UL);
     ok_bool_true(DxgkNodeCoreFirstNode(0xC, 4, &Node), "lowest of several");
     ok_eq_ulong(Node, 2UL);
+    ok_bool_true(DxgkNodeCoreFirstNode(0x1000, 13, &Node), "node 12");
+    ok_eq_ulong(Node, 12UL);
+    ok_bool_true(DxgkNodeCoreFirstNode(0x80000000UL, 32, &Node), "node 31");
+    ok_eq_ulong(Node, 31UL);
 
     Node = 0xFFFFFFFF;
     ok_bool_false(DxgkNodeCoreFirstNode(0, 4, &Node), "empty mask selects nothing");
@@ -56,6 +62,8 @@ static VOID TestCounting(VOID)
     { ULONG Observed = DxgkNodeCoreCountNodes(0x5, 4); ok_eq_ulong(Observed, 2UL); }
     { ULONG Observed = DxgkNodeCoreCountNodes(0xF, 4); ok_eq_ulong(Observed, 4UL); }
     { ULONG Observed = DxgkNodeCoreCountNodes(0xFF, 8); ok_eq_ulong(Observed, 8UL); }
+    { ULONG Observed = DxgkNodeCoreCountNodes(0x1FFF, 13); ok_eq_ulong(Observed, 13UL); }
+    { ULONG Observed = DxgkNodeCoreCountNodes(0xFFFFFFFFUL, 32); ok_eq_ulong(Observed, 32UL); }
     /* An invalid mask counts as nothing rather than reporting a bogus total. */
     { ULONG Observed = DxgkNodeCoreCountNodes(0, 4); ok_eq_ulong(Observed, 0UL); }
     { ULONG Observed = DxgkNodeCoreCountNodes(0x10, 4); ok_eq_ulong(Observed, 0UL); }
