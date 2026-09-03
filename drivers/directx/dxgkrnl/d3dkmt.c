@@ -2645,6 +2645,89 @@ DxgkpQueryMiniportPerfData(
     _In_ ULONG DataSize);
 
 /*
+ * Forward the opaque adapter-identification exchange initiated by a UMD.
+ * D3DKMT exposes one in/out buffer, while the KMD DDI deliberately exposes
+ * distinct input and output buffers.  Preserve the input in separate storage
+ * so a miniport cannot destroy a selector while producing its answer.
+ */
+static NTSTATUS
+DxgkpQueryMiniportUmdPrivate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_updates_bytes_(DataSize) PVOID Data,
+    _In_ ULONG DataSize)
+{
+    PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
+    PDXGKRNL_PROCESS ProcessRecord = NULL;
+    DXGKARG_QUERYADAPTERINFO QueryArgs;
+    PVOID InputData;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Adapter->MiniportContext == NULL ||
+        Data == NULL || DataSize == 0 || DataSize > DXGKP_MAX_USER_PRIVATE_DATA)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    PfnQueryAdapterInfo = DXGK_CB(Adapter, DxgkDdiQueryAdapterInfo);
+    if (PfnQueryAdapterInfo == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    InputData = ExAllocatePoolWithTag(NonPagedPool,
+                                      DataSize,
+                                      TAG_DXGK_CAPTURE);
+    if (InputData == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(InputData, Data, DataSize);
+
+    /*
+     * An adapter handle owns a ready process record.  Pin it across the KMD
+     * call so hKmdProcessHandle cannot be destroyed underneath the query.
+     */
+    Status = DxgkReferenceProcessRecordByAdapter(Adapter,
+                                                  PsGetCurrentProcess(),
+                                                 &ProcessRecord);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
+    QueryArgs.Type = DXGKQAITYPE_UMDRIVERPRIVATE;
+    QueryArgs.pInputData = InputData;
+    QueryArgs.InputDataSize = DataSize;
+    QueryArgs.pOutputData = Data;
+    QueryArgs.OutputDataSize = DataSize;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
+    QueryArgs.hKmdProcessHandle = ProcessRecord->hMiniportProcess;
+#endif
+
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+
+    _SEH2_TRY
+    {
+        Status = PfnQueryAdapterInfo(Adapter->MiniportDeviceContext,
+                                     &QueryArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    DxgkReleaseKmdCall(Adapter);
+
+Cleanup:
+    if (ProcessRecord != NULL)
+        DxgkDereferenceProcessRecord(ProcessRecord);
+    ExFreePoolWithTag(InputData, TAG_DXGK_CAPTURE);
+    return Status;
+}
+
+/*
  * The performance-data classes are a straight pass-through to the miniport:
  * dxgkrnl knows nothing about a GPU's temperature, fan or clocks, so a
  * driver that does not answer must be reported as not answering.  Inventing
@@ -2972,7 +3055,11 @@ DxgkpQueryAdapterInfoCaptured(
 
         case KMTQAITYPE_UMDRIVERPRIVATE:
         {
-            DXGKP_QUERY_RETURN(STATUS_NOT_SUPPORTED);
+            DXGKP_QUERY_RETURN(
+                DxgkpQueryMiniportUmdPrivate(
+                    Adapter,
+                    pQueryAdapterInfo->pPrivateDriverData,
+                    pQueryAdapterInfo->PrivateDriverDataSize));
         }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
