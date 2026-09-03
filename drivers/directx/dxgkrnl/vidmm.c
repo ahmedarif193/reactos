@@ -6919,6 +6919,30 @@ DxgkCreateAllocation2(
     return DxgkpCreateAllocation2WithAccessMode(CreateAllocation, KernelMode);
 }
 
+#define DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS 5000
+
+static NTSTATUS
+DxgkpVidMmWaitForQueuedWorkBeforeDestroy(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ PCSTR Operation)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    Status = DxgkDeviceWorkWaitForQueued(Device, DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS);
+    if (Status == STATUS_TIMEOUT)
+    {
+        DPRINT1("%s: queued work on device %p did not finish within %u ms\n",
+                Operation, Device, DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS);
+    }
+    else if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_REMOVED)
+    {
+        DPRINT1("%s: queued-work wait on device %p failed 0x%08lx\n",
+                Operation, Device, Status);
+    }
+    return Status;
+}
+
 NTSTATUS
 DxgkDestroyAllocation(
     _In_ CONST D3DKMT_DESTROYALLOCATION *pDestroyAllocation)
@@ -6965,6 +6989,21 @@ DxgkDestroyAllocation(
         Status = STATUS_INVALID_PARAMETER;
         goto Cleanup;
     }
+
+    /*
+     * D3DKMTDestroyAllocation is the AssumeNotInUse == FALSE form of the
+     * D3DDDICB_DESTROYALLOCATION2FLAGS contract: the video memory manager
+     * must assume that commands queued before this request may still access
+     * the allocations and defer the destruction until that work finishes.
+     * The GPU page-table entries and the backing are released synchronously
+     * below, so the deferral is a wait here.  Only work already accepted on
+     * the owning device counts; a device whose work never completes is torn
+     * down by TDR, which terminates its ledger and ends the wait.
+     */
+    Status = DxgkpVidMmWaitForQueuedWorkBeforeDestroy(Device, "DxgkDestroyAllocation");
+    if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_REMOVED)
+        goto Cleanup;
+
     if (!DxgkBeginKmdTransaction(Adapter))
     {
         Status = STATUS_DEVICE_NOT_READY;
