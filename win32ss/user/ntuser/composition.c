@@ -2225,13 +2225,16 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                                FALSE);
                 break;
             }
+            /* Native opengl32 forwards the ICD callback rectangle unchanged.
+             * It is relative to the top-level window, while the shared GPU
+             * allocation contains only the client pixels. */
             if ((Request.Flags & ~1u) != 0 ||
-                Request.UpdateRect.left < 0 ||
-                Request.UpdateRect.top < 0 ||
+                Request.UpdateRect.left < Entry->Redirect.rcClient.left ||
+                Request.UpdateRect.top < Entry->Redirect.rcClient.top ||
                 Request.UpdateRect.right <= Request.UpdateRect.left ||
                 Request.UpdateRect.bottom <= Request.UpdateRect.top ||
-                (ULONG)Request.UpdateRect.right > Entry->Redirect.DxInfo.Width ||
-                (ULONG)Request.UpdateRect.bottom > Entry->Redirect.DxInfo.Height)
+                Request.UpdateRect.right > Entry->Redirect.rcClient.right ||
+                Request.UpdateRect.bottom > Entry->Redirect.rcClient.bottom)
             {
                 return STATUS_INVALID_PARAMETER;
             }

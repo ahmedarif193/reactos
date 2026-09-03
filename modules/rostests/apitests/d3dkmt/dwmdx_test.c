@@ -664,7 +664,8 @@ START_TEST(dwmdxsurface)
     HANDLE Surface = NULL, Surface2 = NULL;
     ULONGLONG FirstId = 0, SecondId = 0;
     UINT Format = 0;
-    RECT Client, Rect;
+    RECT Client, ClientInWindow, Rect, WindowRect;
+    POINT ClientOrigin;
     ULONG Width, Height;
     HRESULT hr;
 
@@ -679,7 +680,7 @@ START_TEST(dwmdxsurface)
         return;
     }
 
-    Window = CreateParityWindow(320, 240);
+    Window = CreateParityWindowEx(WS_OVERLAPPEDWINDOW | WS_VISIBLE, 320, 240);
     if (Window == NULL)
     {
         skip("could not create the parity test window\n");
@@ -688,6 +689,17 @@ START_TEST(dwmdxsurface)
     GetClientRect(Window, &Client);
     Width = (ULONG)(Client.right - Client.left);
     Height = (ULONG)(Client.bottom - Client.top);
+    ClientOrigin.x = 0;
+    ClientOrigin.y = 0;
+    ClientToScreen(Window, &ClientOrigin);
+    GetWindowRect(Window, &WindowRect);
+    ClientInWindow = Client;
+    OffsetRect(&ClientInWindow,
+               ClientOrigin.x - WindowRect.left,
+               ClientOrigin.y - WindowRect.top);
+    ok(ClientInWindow.left > 0 && ClientInWindow.top > 0,
+       "the regression window must have a non-client offset, got (%ld,%ld)\n",
+       ClientInWindow.left, ClientInWindow.top);
 
     hr = pDwmpDxGetWindowSharedSurface(Window, Luid, NULL, 0,
                                        &Format, &Surface, &FirstId);
@@ -740,20 +752,23 @@ START_TEST(dwmdxsurface)
        "update ids must increase monotonically, got %I64u after %I64u\n",
        SecondId, FirstId);
 
-    hr = pDwmpDxUpdateWindowSharedSurface(Window, FirstId, 0, NULL, &Client);
+    hr = pDwmpDxUpdateWindowSharedSurface(Window, FirstId, 0, NULL,
+                                          &ClientInWindow);
     ok(FAILED(hr), "publishing a stale update id must fail, got 0x%08lX\n",
        (unsigned long)hr);
 
-    SetRect(&Rect, 0, 0, (int)Width + 1, (int)Height);
+    Rect = ClientInWindow;
+    ++Rect.right;
     hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 0, NULL, &Rect);
     ok(FAILED(hr),
-       "an update rect wider than the surface must be refused, got 0x%08lX\n",
+       "an update rect wider than the client bounds must be refused, got 0x%08lX\n",
        (unsigned long)hr);
 
-    SetRect(&Rect, -1, 0, (int)Width, (int)Height);
+    Rect = ClientInWindow;
+    --Rect.left;
     hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 0, NULL, &Rect);
     ok(FAILED(hr),
-       "a negative update-rect origin must be refused, got 0x%08lX\n",
+       "an update rect outside the client origin must be refused, got 0x%08lX\n",
        (unsigned long)hr);
 
     SetRectEmpty(&Rect);
@@ -761,11 +776,18 @@ START_TEST(dwmdxsurface)
     ok(FAILED(hr), "an empty update rect must be refused, got 0x%08lX\n",
        (unsigned long)hr);
 
-    hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 4, NULL, &Client);
+    hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 4, NULL,
+                                          &ClientInWindow);
     ok(FAILED(hr), "a reserved update flag bit must be refused, got 0x%08lX\n",
        (unsigned long)hr);
 
     hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 0, NULL, &Client);
+    ok(FAILED(hr),
+       "a surface-local rect must not ignore the window's client offset, "
+       "got 0x%08lX\n", (unsigned long)hr);
+
+    hr = pDwmpDxUpdateWindowSharedSurface(Window, SecondId, 0, NULL,
+                                          &ClientInWindow);
     ok(hr == S_OK, "publishing the issued update must succeed, got 0x%08lX\n",
        (unsigned long)hr);
 
