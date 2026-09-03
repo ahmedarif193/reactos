@@ -327,8 +327,16 @@ ServiceDispatch:
         }
     }
 
-    /* Ensure IRQs are enabled while we execute the service */
-    KeRestoreInterrupts(TRUE);
+    /*
+     * The EL0 SVC vector already restores the caller's IRQ state before
+     * entering the dispatcher. Kernel-mode SVC entries keep IRQs masked in
+     * the vector and rely on the dispatcher to enable them before invoking
+     * the service.
+     */
+    if (TrapFrame->PreviousMode == KernelMode)
+    {
+        KeRestoreInterrupts(TRUE);
+    }
 
     TrapFrame->X0 = KiArm64InvokeSystemCall(
         SystemCall,
