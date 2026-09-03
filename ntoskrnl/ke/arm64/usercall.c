@@ -27,67 +27,16 @@ KiTrapReturn(
  * it's normally called only from architecture-specific assembly (x86-64) */
 NTSTATUS NTAPI PsConvertToGuiThread(VOID);
 
-/*
- * Return type is ULONG_PTR (not NTSTATUS) to preserve all 64 bits of the
- * return value.  Many Nt* syscalls return handles (pointer-sized values).
- * If the dispatch layer truncates through NTSTATUS (LONG, 32-bit signed),
- * handles with bit 31 set get sign-extended to 0xFFFFFFFF_xxxxxxxx when
- * stored back into TrapFrame->X0 (64-bit), producing corrupt handles
- * that fail GDI/USER validation.
- */
-typedef ULONG_PTR (*PKI_SYSCALL_PARAM_HANDLER)(PVOID, PVOID *);
+#define KI_ARM64_MAX_SYSCALL_ARGUMENTS 17
+#define KI_ARM64_REGISTER_ARGUMENTS     8
 
-#define BUILD_SYSCALLS                                                        \
-SYSCALL(00, ())                                                               \
-SYSCALL(01, (_1))                                                             \
-SYSCALL(02, (_1, _2))                                                         \
-SYSCALL(03, (_1, _2, _3))                                                     \
-SYSCALL(04, (_1, _2, _3, _4))                                                 \
-SYSCALL(05, (_1, _2, _3, _4, _5))                                             \
-SYSCALL(06, (_1, _2, _3, _4, _5, _6))                                         \
-SYSCALL(07, (_1, _2, _3, _4, _5, _6, _7))                                     \
-SYSCALL(08, (_1, _2, _3, _4, _5, _6, _7, _8))                                 \
-SYSCALL(09, (_1, _2, _3, _4, _5, _6, _7, _8, _9))                             \
-SYSCALL(0A, (_1, _2, _3, _4, _5, _6, _7, _8, _9, a))                          \
-SYSCALL(0B, (_1, _2, _3, _4, _5, _6, _7, _8, _9, a, b))                       \
-SYSCALL(0C, (_1, _2, _3, _4, _5, _6, _7, _8, _9, a, b, c))                    \
-SYSCALL(0D, (_1, _2, _3, _4, _5, _6, _7, _8, _9, a, b, c, d))                 \
-SYSCALL(0E, (_1, _2, _3, _4, _5, _6, _7, _8, _9, a, b, c, d, e))              \
-SYSCALL(0F, (_1, _2, _3, _4, _5, _6, _7, _8, _9, a, b, c, d, e, f))           \
-SYSCALL(10, (_1, _2, _3, _4, _5, _6, _7, _8, _9, a, b, c, d, e, f, _10))      \
-SYSCALL(11, (_1, _2, _3, _4, _5, _6, _7, _8, _9, a, b, c, d, e, f, _10, _11))
-
-#define PROTO
-#include "ke_i.h"
-BUILD_SYSCALLS
-
-#define FUNC
-#include "ke_i.h"
-BUILD_SYSCALLS
-
-static const PKI_SYSCALL_PARAM_HANDLER KiSyscallHandlers[] =
-{
-    KiSyscall00Param,
-    KiSyscall01Param,
-    KiSyscall02Param,
-    KiSyscall03Param,
-    KiSyscall04Param,
-    KiSyscall05Param,
-    KiSyscall06Param,
-    KiSyscall07Param,
-    KiSyscall08Param,
-    KiSyscall09Param,
-    KiSyscall0AParam,
-    KiSyscall0BParam,
-    KiSyscall0CParam,
-    KiSyscall0DParam,
-    KiSyscall0EParam,
-    KiSyscall0FParam,
-    KiSyscall10Param,
-    KiSyscall11Param,
-};
-
-C_ASSERT(RTL_NUMBER_OF(KiSyscallHandlers) == 0x12);
+ULONG_PTR
+KiArm64InvokeSystemCall(
+    _In_ PVOID SystemCall,
+    _In_reads_(KI_ARM64_REGISTER_ARGUMENTS) CONST ULONG64 *RegisterArguments,
+    _In_reads_(StackArgumentCount) PVOID *StackArguments,
+    _In_range_(0, KI_ARM64_MAX_SYSCALL_ARGUMENTS - KI_ARM64_REGISTER_ARGUMENTS)
+        ULONG StackArgumentCount);
 
 static
 NTSTATUS
@@ -210,7 +159,8 @@ KiSystemService(
     ULONG ServiceNumber;
     ULONG ArgumentCount;
     ULONG Index;
-    PVOID KernelArguments[RTL_NUMBER_OF(KiSyscallHandlers)];
+    PVOID StackArguments[KI_ARM64_MAX_SYSCALL_ARGUMENTS -
+                         KI_ARM64_REGISTER_ARGUMENTS];
     ULONG_PTR RegisterArguments[8];
     PVOID *UserArguments = NULL;
     PVOID SystemCall;
@@ -349,23 +299,18 @@ ServiceDispatch:
 
     SystemCall = (PVOID)DescriptorTable->Base[ServiceNumber];
     ArgumentCount = DescriptorTable->Number[ServiceNumber] / sizeof(ULONG_PTR);
-    if (ArgumentCount >= RTL_NUMBER_OF(KiSyscallHandlers))
+    if (ArgumentCount > KI_ARM64_MAX_SYSCALL_ARGUMENTS)
     {
-        ArgumentCount = RTL_NUMBER_OF(KiSyscallHandlers) - 1;
+        ArgumentCount = KI_ARM64_MAX_SYSCALL_ARGUMENTS;
     }
 
-    for (Index = 0; (Index < ArgumentCount) && (Index < 8); Index++)
-    {
-        KernelArguments[Index] = (PVOID)TrapFrame->X[Index];
-    }
-
-    if (ArgumentCount > 8)
+    if (ArgumentCount > KI_ARM64_REGISTER_ARGUMENTS)
     {
         if (KiGetPreviousMode(TrapFrame) == UserMode)
         {
             UserArguments = (PVOID*)TrapFrame->Sp;
             ProbeForRead(UserArguments,
-                         (ArgumentCount - 8) * sizeof(PVOID),
+                         (ArgumentCount - KI_ARM64_REGISTER_ARGUMENTS) * sizeof(PVOID),
                          sizeof(PVOID));
         }
         else
@@ -373,16 +318,24 @@ ServiceDispatch:
             UserArguments = (PVOID*)(TrapFrame + 1);
         }
 
-        for (Index = 8; Index < ArgumentCount; Index++)
+        for (Index = KI_ARM64_REGISTER_ARGUMENTS;
+             Index < ArgumentCount;
+             Index++)
         {
-            KernelArguments[Index] = UserArguments[Index - 8];
+            StackArguments[Index - KI_ARM64_REGISTER_ARGUMENTS] =
+                UserArguments[Index - KI_ARM64_REGISTER_ARGUMENTS];
         }
     }
 
     /* Ensure IRQs are enabled while we execute the service */
     KeRestoreInterrupts(TRUE);
 
-    TrapFrame->X0 = KiSyscallHandlers[ArgumentCount](SystemCall, KernelArguments);
+    TrapFrame->X0 = KiArm64InvokeSystemCall(
+        SystemCall,
+        TrapFrame->X,
+        StackArguments,
+        ArgumentCount > KI_ARM64_REGISTER_ARGUMENTS ?
+            ArgumentCount - KI_ARM64_REGISTER_ARGUMENTS : 0);
 
     if (KiGetPreviousMode(TrapFrame) == UserMode)
     {
