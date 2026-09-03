@@ -193,6 +193,7 @@ DwmDxRegisterSurface(HWND Window,
     DWM_DX_SURFACE_EXCHANGE Exchange;
     D3DKMT_CREATEALLOCATION Create;
     D3DDDI_ALLOCATIONINFO Allocation;
+    D3DKMT_QUERYRESOURCEINFO Query;
     UINT Dimensions[3];
     ULONG DeviceIndex;
     HANDLE ReadyEvent;
@@ -245,6 +246,37 @@ DwmDxRegisterSurface(HWND Window,
         DwmDxReportFailure("create_allocation_contract",
                            STATUS_INVALID_DEVICE_STATE);
         return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    /* The standard-allocation DDI is allowed to choose its CPU-visible pitch.
+     * Query the resource metadata produced by dxgkrnl instead of retaining the
+     * tightly packed request as if it were an adapter result. */
+    RtlZeroMemory(&RuntimeInfo, sizeof(RuntimeInfo));
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.hDevice = g_DxDevices[DeviceIndex].hDevice;
+    Query.hGlobalShare = Create.hGlobalShare;
+    Query.pPrivateRuntimeData = &RuntimeInfo;
+    Query.PrivateRuntimeDataSize = sizeof(RuntimeInfo);
+    Status = D3DKMTQueryResourceInfo(&Query);
+    if (!NT_SUCCESS(Status) ||
+        Query.NumAllocations != 1 ||
+        Query.PrivateRuntimeDataSize != sizeof(RuntimeInfo) ||
+        RuntimeInfo.Magic != DWM_DX_SURFACE_INFO_MAGIC ||
+        RuntimeInfo.Version != DWM_DX_SURFACE_INFO_VERSION ||
+        RuntimeInfo.Width != Width || RuntimeInfo.Height != Height ||
+        RuntimeInfo.Pitch < Width * sizeof(ULONG) ||
+        RuntimeInfo.Format != DWM_DX_FORMAT_B8G8R8A8_UNORM)
+    {
+        D3DKMT_DESTROYALLOCATION Destroy;
+
+        RtlZeroMemory(&Destroy, sizeof(Destroy));
+        Destroy.hDevice = g_DxDevices[DeviceIndex].hDevice;
+        Destroy.hResource = Create.hResource;
+        (void)D3DKMTDestroyAllocation(&Destroy);
+        if (NT_SUCCESS(Status))
+            Status = STATUS_INVALID_DEVICE_STATE;
+        DwmDxReportFailure("query_allocation", Status);
+        return Status;
     }
 
     ReadyEvent = CreateEventW(NULL, TRUE, TRUE, NULL);
