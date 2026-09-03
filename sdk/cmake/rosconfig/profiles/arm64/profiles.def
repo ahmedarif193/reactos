@@ -16,4 +16,5 @@ config PROFILE_ARM64
 
       Raspberry Pi 5 adds the Pi boot firmware and device trees together
       with the RP1 Ethernet, CYW43455 Wi-Fi, and VC4 display drivers.
-      Optional modules are selected independently in the Modules submenu.
+      Optional image contents are selected independently in the Image contents
+      and tests submenu.

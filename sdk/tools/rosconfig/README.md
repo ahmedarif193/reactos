@@ -13,8 +13,8 @@ menuconfig.cmd               # Windows: prepare output-MinGW-amd64-debug
 ./menuconfig.sh --build-dir output-Clang-arm64-debug
 menuconfig.cmd --build-dir output-Clang-arm64-debug
                               # open one output tree's configuration UI
-./configure.sh menuconfig    # open the UI, then configure with the result
-configure.cmd menuconfig     # Windows: same
+./configure.sh menuconfig    # choose the target, then configure its output tree
+configure.cmd menuconfig     # Windows: configure the selected output tree
 ./menuconfig.sh --self-test  # build the tool and run its non-interactive tests
 menuconfig.cmd --self-test   # same test on Windows
 ```
@@ -89,13 +89,15 @@ source root. Persistent selections live below the output tree they configure:
   3. the menuconfig cache;
   4. built-in defaults.
 - The target selections `ARCH`, `TOOLCHAIN` and `BUILD_TYPE` are "meta"
-  options. They record the identity encoded by the selected output directory,
-  are refreshed by the configure scripts, and are never passed to CMake
-  directly. To select another target, pass the corresponding configure flag
-  and use its output directory instead of repurposing an existing tree.
+  options. They are never emitted to CMake directly. In the integrated
+  `configure.sh menuconfig` workflow they select the matching output directory;
+  the completed menu is copied there before CMake starts. Explicit configure
+  flags still win. The standalone `menuconfig.sh` workflow instead keeps the
+  identity encoded by its selected output directory, so use `--build-dir` to
+  choose another standalone target tree.
 - Bool options can hold the value `auto`, which means "do not emit to
   CMake" — the conditional defaults in `sdk/cmake/config.cmake` (e.g.
-  `DBG` following the build type) stay in charge.
+  `WITH_DEBUG_SYMBOLS`) stay in charge.
 - From the source directory, the no-argument wrappers prepare their platform's
   default output tree. From another output directory they use that tree; an
   explicit `--build-dir <output-directory>` selects any conventionally named
@@ -103,11 +105,20 @@ source root. Persistent selections live below the output tree they configure:
 - Changed selections take effect the next time that tree is configured
   (`configure.sh` always starts from a fresh CMake cache).
 
-## Target profiles and modules
+## Target profiles and image contents
 
-The `Target platform` submenu shows the profile selector for the selected
-architecture. Profile definitions and their CMake manifests are kept below
-`sdk/cmake/rosconfig/profiles/`:
+The main menu is intentionally limited to four stable areas:
+
+| Main area | Contents |
+| --- | --- |
+| Platform, image, and boot | Target identity and profile, boot behavior, optional image contents, and boot-test payloads. |
+| Compiler and code generation | CPU instruction selection, release optimization, toolchain support, and ccache. |
+| Debugging and analysis | Debug information, kernel-debugger policy and watchdog, runtime checks, and MSVC analysis. |
+| System components and compatibility | ALPC, graphics model, target NT level, ISA PnP, FEX, and WoW64. |
+
+The `Platform, image, and boot -> Target platform` submenu shows the profile
+selector for the selected architecture. Profile definitions and their CMake
+manifests are kept below `sdk/cmake/rosconfig/profiles/`:
 
 ```
 profiles/
@@ -139,13 +150,14 @@ targets.
 Profile-owned config values are enforced when the profile is applied, so an
 existing tree can switch profiles without retaining stale values from the old
 profile. Explicit `-D` precedence remains unchanged for ordinary menu and
-module options. If `ROSCONFIG_PROFILE` is not provided, CMake uses the
+image-content options. If `ROSCONFIG_PROFILE` is not provided, CMake uses the
 architecture's `generic` profile.
 
-Modules are independent switches, not profiles. The `Modules` submenu exposes
-the existing RosApps, RosTests, and wallpapers build options. Enabling
-`ENABLE_ROSTESTS` builds and packages the test suite and `rosautotest` runner,
-and can be combined with any target profile.
+Optional image contents are independent switches, not profiles. The
+`Platform, image, and boot -> Image contents and tests` submenu exposes
+RosApps, RosTests, diagnostic payloads, boot-test automation, and wallpapers.
+Enabling `ENABLE_ROSTESTS` builds and packages the test suite and
+`rosautotest` runner, and can be combined with any target profile.
 
 ## Option definitions
 
@@ -193,7 +205,6 @@ Visibility follows the build path that actually consumes each setting:
 | Setting group | Visible when |
 | --- | --- |
 | Target CPU generation | GCC or Clang; MSVC does not consume `OARCH`/`TUNE`. |
-| Debug compiler level | Debug builds, with separate GCC/Clang and MSVC value lists. Release flags are fixed by the toolchain files. |
 | Release optimizations | Release with GCC or Clang; currently exposes LTCG. |
 | Dummy PSEH | GCC or Clang; MSVC always uses native SEH. |
 | Debug-symbol controls | GCC or Clang; the MSVC path manages PDB output itself. |
@@ -206,11 +217,11 @@ Visibility follows the build path that actually consumes each setting:
 
 ## Graphics driver model
 
-The `Components and features -> Graphics stack` menu selects either the legacy
-XPDM/VideoPort path or the experimental WDDM/dxgkrnl path. XPDM restores the
-UEFI framebuffer registration and, for the Raspberry Pi 5 profile, builds the
-preserved VC4 XPDM miniport. WDDM builds the DirectX graphics kernel stack and
-selects the WDDM VC4 miniport instead.
+The `System components and compatibility -> Graphics stack` menu selects
+either the legacy XPDM/VideoPort path or the experimental WDDM/dxgkrnl path.
+XPDM restores the UEFI framebuffer registration and, for the Raspberry Pi 5
+profile, builds the preserved VC4 XPDM miniport. WDDM builds the DirectX
+graphics kernel stack and selects the WDDM VC4 miniport instead.
 
 The WDDM level is a compatibility ceiling, not a capability assertion.
 WDDM targets compile against the highest audited shared header layout, while

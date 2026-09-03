@@ -23,7 +23,10 @@
 #
 # Bool options defaulting to "auto" are tri-state: "auto" means "do not
 # emit to CMake", which keeps the conditional default logic from
-# sdk/cmake/config.cmake (e.g. DBG following CMAKE_BUILD_TYPE) intact.
+# sdk/cmake/config.cmake (e.g. WITH_DEBUG_SYMBOLS following its conditional
+# default) intact.
+
+menu "Platform, image, and boot"
 
 menu "Target platform"
 
@@ -78,8 +81,8 @@ config BUILD_TYPE
     default Debug
     meta
     help
-      CMAKE_BUILD_TYPE for the configured tree. Also the default
-      feed for DBG/WITH_DEBUG_SYMBOLS when those are set to "auto".
+      CMAKE_BUILD_TYPE for the configured tree. It controls the default
+      DBG value and feeds the WITH_DEBUG_SYMBOLS automatic default.
       A -r/--release (or /r) argument or an explicit
       -DCMAKE_BUILD_TYPE overrides this selection for that run.
 
@@ -99,40 +102,20 @@ config FREELDR_HTTP_BOOT
       live image over HTTP and boots it as a ramdisk. Packages the
       board's UEFI network drivers onto the boot media.
 
-config ENABLE_KD_WATCHDOG
-    prompt "Enable KD log-stall watchdog"
-    type bool
-    default n
-    depends BUILD_TYPE=Debug
-    help
-      Enable the internal-debugger log-stall watchdog by default. It remains
-      disabled unless selected here or enabled for an individual boot with
-      /KDWATCHDOG=<seconds>. Only /DEBUG boots can arm it.
-
-config KD_WATCHDOG_TIMEOUT
-    prompt "Default KD watchdog timeout (seconds)"
-    type string
-    default 6
-    depends BUILD_TYPE=Debug
-    depends ENABLE_KD_WATCHDOG=y
-    help
-      Default timeout for the internal-debugger log-stall watchdog when
-      the boot options do not contain /KDWATCHDOG. A boot entry can still
-      override it with /KDWATCHDOG=<seconds>; zero disables it. Valid values
-      for the enabled default range from 5 to 3600 seconds.
-
-endmenu
-
-menu "Modules"
-
-config ENABLE_ALPC
-    prompt "Advanced Local Procedure Call (ALPC)"
+config ENABLE_EXPERIMENTAL_EARLY_SPLASH
+    prompt "Early Winlogon PNG background"
     type bool
     default y
     help
-      Whether to build the experimental ALPC port implementation in place of
-      the classic LPC implementation. Disable this option to retain the
-      established LPC kernel path while ALPC is under development.
+      Display the shipped BlueHorizon PNG as soon as Winlogon creates the
+      interactive desktop. Keep it stretched across the full virtual screen
+      until Userinit has prepared the normal user background and launched the
+      shell. Disable this option to retain the classic solid-color startup
+      background and omit the PNG decoder path from Winlogon.
+
+endmenu
+
+menu "Image contents and tests"
 
 config ENABLE_ROSAPPS
     prompt "ReactOS extra applications"
@@ -149,6 +132,17 @@ config ENABLE_ROSTESTS
     help
       Build and package the ReactOS test suite, including the
       rosautotest runner. Tests are available only in Debug builds.
+
+config ENABLE_FEX_ARM64EC_TEST_PAYLOADS
+    prompt "Include local AMD64 FEX diagnostic payloads"
+    type bool
+    default n
+    depends ARCH=arm64
+    depends ENABLE_FEX_ARM64EC=y
+    help
+      Whether to import optional AMD64 diagnostic executables from a
+      neighboring AMD64 build into ReactOS images. Keep this disabled for
+      deterministic release and normal development images.
 
 menu "Boot test automation"
     depends BUILD_TYPE=Debug
@@ -209,7 +203,9 @@ config ENABLE_WALLPAPERS
 
 endmenu
 
-menu "Code generation"
+endmenu
+
+menu "Compiler and code generation"
 
 menu "Target CPU code generation"
 
@@ -268,59 +264,6 @@ config TUNE
 
 endmenu
 
-config ROSSYM_COMPRESSION
-    prompt "Compress the embedded .rossym symbol section"
-    type bool
-    default n
-    depends TOOLCHAIN!=msvc && NO_ROSSYM=n
-    help
-      Store the embedded symbol section compressed with LZNT1 and expand it
-      when a module is loaded. The section is roughly a third of its former
-      size, which is worth about 59 MB across a full image, at the cost of
-      one decompression per module at load time. Symbol lookup itself is
-      unaffected because the expanded copy is what gets searched.
-
-menu "Debug compiler level"
-
-    depends BUILD_TYPE=Debug
-
-config OPTIMIZE
-    prompt "GCC/Clang compiler level"
-    type choice
-    value 0 "Off"
-    value 1 "Optimize for size (-Os) plus extras"
-    value 2 "Optimize for size (-Os)"
-    value 3 "Optimize the debugging experience (-Og)"
-    value 4 "Optimize (-O1)"
-    value 5 "Optimize more (-O2)"
-    value 6 "Optimize yet more (-O3)"
-    value 7 "Disregard strict standards compliance (-Ofast)"
-    default 4
-    depends TOOLCHAIN!=msvc
-    help
-      Custom compiler level used by GCC and Clang for non-Release builds.
-      ReactOS fixes Release builds at -O2, so this selector is deliberately
-      hidden in Release mode.
-
-config OPTIMIZE_MSVC
-    prompt "MSVC compiler level"
-    type choice
-    var OPTIMIZE
-    value 0 "No explicit optimization option"
-    value 1 "Minimize size (/O1)"
-    value 2 "Maximize speed (/O2)"
-    value 3 "Favor fast code (/Ot /Ox, no /GS)"
-    value 4 "Disable optimization (/Od /Ob0)"
-    value 5 "Favor small code (/Os /Ox, no /GS)"
-    default 4
-    depends TOOLCHAIN=msvc
-    help
-      Custom compiler level used by MSVC for non-Release builds. ReactOS
-      fixes Release builds at /Ox /Ob2 /Ot /Oy, so this selector is
-      deliberately hidden in Release mode.
-
-endmenu
-
 menu "Release optimizations"
 
     depends BUILD_TYPE=Release
@@ -361,18 +304,20 @@ config USE_DUMMY_PSEH
 
 endmenu
 
+config ENABLE_CCACHE
+    prompt "Use ccache"
+    type bool
+    default n
+    depends TOOLCHAIN!=msvc
+    help
+      Whether to wrap the compiler with ccache. Requires ccache to
+      be installed on the host.
+
 endmenu
 
-menu "Debugging"
+menu "Debugging and analysis"
 
-config DBG
-    prompt "Compile for debugging"
-    type bool
-    default auto
-    help
-      Whether to compile for debugging (the DBG variable).
-      "auto" follows the build type: enabled for Debug, disabled
-      for Release, exactly like sdk/cmake/config.cmake.
+menu "Debug information"
 
 config WITH_DEBUG_SYMBOLS
     prompt "Compile debug information"
@@ -391,6 +336,22 @@ config SEPARATE_DBG
     help
       Whether to generate separate debug symbol files (instead of
       keeping symbols inside the binaries).
+
+config ROSSYM_COMPRESSION
+    prompt "Compress the embedded .rossym symbol section"
+    type bool
+    default n
+    depends TOOLCHAIN!=msvc && NO_ROSSYM=n
+    help
+      Store the embedded symbol section compressed with LZNT1 and expand it
+      when a module is loaded. The section is roughly a third of its former
+      size, which is worth about 59 MB across a full image, at the cost of
+      one decompression per module at load time. Symbol lookup itself is
+      unaffected because the expanded copy is what gets searched.
+
+endmenu
+
+menu "Kernel debugger"
 
 config KD_DEBUGGER
     prompt "Kernel debugger mode"
@@ -419,6 +380,32 @@ config KD_DEFAULT_TRANSPORT
       modules; they remain available for selection through the boot
       DEBUGPORT option.
 
+config ENABLE_KD_WATCHDOG
+    prompt "Enable KD log-stall watchdog"
+    type bool
+    default n
+    depends BUILD_TYPE=Debug
+    help
+      Enable the internal-debugger log-stall watchdog by default. It remains
+      disabled unless selected here or enabled for an individual boot with
+      /KDWATCHDOG=<seconds>. Only /DEBUG boots can arm it.
+
+config KD_WATCHDOG_TIMEOUT
+    prompt "Default KD watchdog timeout (seconds)"
+    type string
+    default 6
+    depends BUILD_TYPE=Debug
+    depends ENABLE_KD_WATCHDOG=y
+    help
+      Default timeout for the internal-debugger log-stall watchdog when
+      the boot options do not contain /KDWATCHDOG. A boot entry can still
+      override it with /KDWATCHDOG=<seconds>; zero disables it. Valid values
+      for the enabled default range from 5 to 3600 seconds.
+
+endmenu
+
+menu "Compiler diagnostics"
+
 config RUNTIME_CHECKS
     prompt "MSVC runtime checks"
     type bool
@@ -430,16 +417,11 @@ config RUNTIME_CHECKS
       enables them for Debug builds; they are incompatible with
       compiler optimizations.
 
-endmenu
-
-menu "Static analysis (MSVC)"
-
-    depends TOOLCHAIN=msvc
-
 config _PREFAST_
     prompt "PREFAST analysis"
     type bool
     default n
+    depends TOOLCHAIN=msvc
     help
       Whether to enable PREFAST while compiling (MSVC only).
 
@@ -447,12 +429,24 @@ config _VS_ANALYZE_
     prompt "Visual Studio static analysis"
     type bool
     default n
+    depends TOOLCHAIN=msvc
     help
       Whether to enable static analysis while compiling (MSVC only).
 
 endmenu
 
-menu "Components and features"
+endmenu
+
+menu "System components and compatibility"
+
+config ENABLE_ALPC
+    prompt "Advanced Local Procedure Call (ALPC)"
+    type bool
+    default y
+    help
+      Whether to build the experimental ALPC port implementation in place of
+      the classic LPC implementation. Disable this option to retain the
+      established LPC kernel path while ALPC is under development.
 
 menu "Graphics stack"
 
@@ -533,21 +527,6 @@ config ISAPNP_ENABLE
       except for the Xbox platform variant, like
       sdk/cmake/config.cmake.
 
-menu "Experimental"
-
-config ENABLE_EXPERIMENTAL_EARLY_SPLASH
-    prompt "Early Winlogon PNG background"
-    type bool
-    default y
-    help
-      Display the shipped BlueHorizon PNG as soon as Winlogon creates the
-      interactive desktop. Keep it stretched across the full virtual screen
-      until Userinit has prepared the normal user background and launched the
-      shell. Disable this option to retain the classic solid-color startup
-      background and omit the PNG decoder path from Winlogon.
-
-endmenu
-
 config ENABLE_FEX_ARM64EC
     prompt "FEX ARM64EC emulator (run AMD64 binaries)"
     type bool
@@ -559,17 +538,6 @@ config ENABLE_FEX_ARM64EC
       configure.sh syncs and prepares the (large) FEX submodule.
       Missing FEX prerequisites do not block the main ARM64 build.
 
-config ENABLE_FEX_ARM64EC_TEST_PAYLOADS
-    prompt "Include local AMD64 FEX diagnostic payloads"
-    type bool
-    default n
-    depends ARCH=arm64
-    depends ENABLE_FEX_ARM64EC=y
-    help
-      Whether to import optional AMD64 diagnostic executables from a
-      neighboring AMD64 build into ReactOS images. Keep this disabled for
-      deterministic release and normal development images.
-
 config ENABLE_WOW64
     prompt "WoW64 subsystem (run IA-32 binaries)"
     type bool
@@ -578,20 +546,5 @@ config ENABLE_WOW64
     help
       Whether to build the native WoW64 support DLLs and the supporting
       ntdll and kernel paths needed to run 32-bit applications on amd64.
-
-config GENERATE_DEPENDENCY_GRAPH
-    prompt "GraphML DLL dependency graph"
-    type bool
-    default n
-    help
-      Whether to create a GraphML dependency graph of the DLLs.
-
-config ENABLE_CCACHE
-    prompt "Use ccache"
-    type bool
-    default n
-    help
-      Whether to wrap the compiler with ccache. Requires ccache to
-      be installed on the host.
 
 endmenu
