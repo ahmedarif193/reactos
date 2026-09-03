@@ -150,6 +150,7 @@ list(APPEND SOURCE
     RtlQueryEnvironmentVariable_U.c
     RtlQueryTimeZoneInfo.c
     RtlReAllocateHeap.c
+    RtlSRWLock.c
     RtlRemovePrivileges.c
     RtlUnhandledExceptionFilter.c
     RtlUnicodeStringToAnsiString.c
