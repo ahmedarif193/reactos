@@ -763,18 +763,30 @@ MiArm64CleanPteRangeToPoC(
     __asm__ __volatile__("dsb ish" ::: "memory");
 }
 
-/* Single owner of the per-VA user TLB invalidate sequence (all-ASID, all-level, broadcast). */
+/* Invalidate a leaf in the address space currently installed on this CPU. */
 FORCEINLINE
 VOID
 MiArm64InvalidateUserAddress(
     _In_ PVOID Address)
 {
-    ULONG_PTR Va = ((ULONG_PTR)Address >> PAGE_SHIFT) & KI_ARM64_TLBI_VA_MASK;
+    KiArm64InvalidateUserTlbEntry(Address);
+}
 
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
+/* A foreign process may not own the ASID currently installed in TTBR1. */
+FORCEINLINE
+VOID
+MiArm64InvalidateUserAddressForProcess(
+    _In_ PKPROCESS Process,
+    _In_ PVOID Address)
+{
+    if (Process == KeGetCurrentThread()->ApcState.Process)
+    {
+        KiArm64InvalidateUserTlbEntry(Address);
+    }
+    else
+    {
+        KeInvalidateTlbEntry(Address);
+    }
 }
 
 FORCEINLINE

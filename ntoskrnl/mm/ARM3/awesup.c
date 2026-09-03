@@ -438,7 +438,7 @@ MiAweMapVa(
         ASSERT(OldPfn->PteAddress == MiAddressToPte(Va));
         OldPfn->PteAddress = MI_AWE_UNMAPPED_PTE;
         MI_ERASE_PTE(PointerPte);
-        MiArm64InvalidateUserAddress((PVOID)Va);
+        MiArm64InvalidateUserAddressForProcess(&Process->Pcb, (PVOID)Va);
     }
     else
     {
@@ -454,7 +454,7 @@ MiAweMapVa(
        as the mapping identity so MiPteToAddress() recovers the VA */
     PointerPte->u.Long = TempPte.u.Long;
     MiArm64CleanEntryToPoC(PointerPte);
-    MiArm64InvalidateUserAddress((PVOID)Va);
+    MiArm64InvalidateUserAddressForProcess(&Process->Pcb, (PVOID)Va);
     Pfn1->PteAddress = MiAddressToPte(Va);
 
     MiReleasePfnLock(OldIrql);
@@ -499,7 +499,7 @@ MiAweUnmapVa(
     }
     ASSERT(Pfn1->PteAddress == MiAddressToPte(Va));
     MI_ERASE_PTE(PointerPte);
-    MiArm64InvalidateUserAddress((PVOID)Va);
+    MiArm64InvalidateUserAddressForProcess(&Process->Pcb, (PVOID)Va);
     Pfn1->PteAddress = MI_AWE_UNMAPPED_PTE;
     MiReleasePfnLock(OldIrql);
 
