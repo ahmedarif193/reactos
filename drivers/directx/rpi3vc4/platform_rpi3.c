@@ -97,6 +97,26 @@ SoftGpuPlatformQueryStart(
     return Rpi3Vc4QueryPlatform(Device, DxgkInterface, Config);
 }
 
+ULONG
+SoftGpuPlatformDmaBufferPrivateDataSize(VOID)
+{
+    return sizeof(RPI3VC4_DMA_PACKET);
+}
+
+NTSTATUS
+SoftGpuPlatformOpenAllocation(
+    _Inout_ PSOFTGPU_OPENALLOC OpenAllocation)
+{
+    return Rpi3Vc4OpenAllocation(OpenAllocation);
+}
+
+VOID
+SoftGpuPlatformCloseAllocation(
+    _Inout_ PSOFTGPU_OPENALLOC OpenAllocation)
+{
+    Rpi3Vc4CloseAllocation(OpenAllocation);
+}
+
 NTSTATUS
 SoftGpuPlatformRender(
     _Inout_ PSOFTGPU_DEVICE Device,

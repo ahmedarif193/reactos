@@ -415,6 +415,9 @@ SoftGpuPlatformFillNodeMetadata(
     _In_ ULONG NodeOrdinal,
     _Out_ DXGKARG_GETNODEMETADATA *GetNodeMetadata);
 
+ULONG
+SoftGpuPlatformDmaBufferPrivateDataSize(VOID);
+
 VOID
 SoftGpuPlatformInitializeTiming(
     _Inout_ PSOFTGPU_DEVICE Device);
@@ -455,6 +458,15 @@ SoftGpuPlatformDestroyOverlay(
 
 #if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
 struct _SOFTGPU_KMD_DEVICE;
+struct _SOFTGPU_OPENALLOC;
+
+NTSTATUS
+SoftGpuPlatformOpenAllocation(
+    _Inout_ struct _SOFTGPU_OPENALLOC *OpenAllocation);
+
+VOID
+SoftGpuPlatformCloseAllocation(
+    _Inout_ struct _SOFTGPU_OPENALLOC *OpenAllocation);
 
 NTSTATUS
 SoftGpuPlatformRender(
@@ -568,6 +580,9 @@ typedef struct _SOFTGPU_OPENALLOC
     ULONG           PlaneCount;
     ULONG           PlaneOffsets[SOFTGPU_ALLOCATION_MAX_PLANES];
     ULONG           PlanePitches[SOFTGPU_ALLOCATION_MAX_PLANES];
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+    PVOID           PlatformAllocation;
+#endif
 } SOFTGPU_OPENALLOC, *PSOFTGPU_OPENALLOC;
 
 

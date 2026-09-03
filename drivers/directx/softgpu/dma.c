@@ -2755,11 +2755,12 @@ SoftGpuDdiCreateContext(
      * AllocationListSize:       256 entries.
      * PatchLocationListSize:    256 entries.
      * DmaBufferSegmentSet:      0 requests physically contiguous system memory.
-     * DmaBufferPrivateDataSize: 0 (softgpu has no per-DMA private state).
+     * DmaBufferPrivateDataSize: selected by the linked platform provider.
      */
     CreateContext->ContextInfo.DmaBufferSize            = 64 * 1024;
     CreateContext->ContextInfo.DmaBufferSegmentSet      = 0;
-    CreateContext->ContextInfo.DmaBufferPrivateDataSize = 0;
+    CreateContext->ContextInfo.DmaBufferPrivateDataSize =
+        SoftGpuPlatformDmaBufferPrivateDataSize();
     CreateContext->ContextInfo.AllocationListSize       = 256;
     CreateContext->ContextInfo.PatchLocationListSize    = 256;
     CreateContext->ContextInfo.Caps.Value               = 0;

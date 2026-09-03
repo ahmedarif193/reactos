@@ -281,6 +281,14 @@ Rpi3Vc4EnsureV3dReady(
     _Inout_ PRPI3VC4_CONTEXT Context);
 
 NTSTATUS
+Rpi3Vc4OpenAllocation(
+    _Inout_ PSOFTGPU_OPENALLOC OpenAllocation);
+
+VOID
+Rpi3Vc4CloseAllocation(
+    _Inout_ PSOFTGPU_OPENALLOC OpenAllocation);
+
+NTSTATUS
 Rpi3Vc4ValidateRender(
     _Inout_ PSOFTGPU_DEVICE Device,
     _In_ PSOFTGPU_KMD_DEVICE KmdDevice,

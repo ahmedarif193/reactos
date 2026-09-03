@@ -258,6 +258,11 @@ struct drm_gem_cma_object *
 drm_gem_cma_create_uninitialized(
     _In_ struct drm_device *Device,
     _In_ size_t Size);
+
+bool
+drm_gem_cma_clear_for_device(
+    _Inout_ struct drm_gem_cma_object *Object,
+    _In_ size_t Size);
 #endif
 
 int

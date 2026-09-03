@@ -2460,6 +2460,9 @@ SoftGpuRollbackOpenedAllocations(
         if (Open != NULL)
         {
             ASSERT(Open->Magic == SOFTGPU_OPENALLOC_MAGIC);
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+            SoftGpuPlatformCloseAllocation(Open);
+#endif
             Open->Magic = 0xDEAD0A11UL;
             Open->Device = NULL;
             ExFreePoolWithTag(Open, SOFTGPU_POOL_TAG);
@@ -2595,6 +2598,11 @@ SoftGpuDdiOpenAllocation(
              * for BLT/FILL until a surface geometry record is supplied. */
             Open->Size = PAGE_SIZE;
         }
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+        Status = SoftGpuPlatformOpenAllocation(Open);
+        if (!NT_SUCCESS(Status))
+            goto Rollback;
+#endif
         pInfo->hDeviceSpecificAllocation = (HANDLE)Open;
         Open = NULL;
     }
@@ -2604,6 +2612,9 @@ SoftGpuDdiOpenAllocation(
 Rollback:
     if (Open != NULL)
     {
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+        SoftGpuPlatformCloseAllocation(Open);
+#endif
         Open->Magic = 0xDEAD0A11UL;
         Open->Device = NULL;
         ExFreePoolWithTag(Open, SOFTGPU_POOL_TAG);
@@ -2671,6 +2682,9 @@ SoftGpuDdiCloseAllocation(
     for (i = 0; i < CloseAllocation->NumAllocations; i++)
     {
         Open = (PSOFTGPU_OPENALLOC)CloseAllocation->pOpenHandleList[i];
+#if defined(SOFTGPU_PLATFORM_HARDWARE_3D)
+        SoftGpuPlatformCloseAllocation(Open);
+#endif
         Open->Magic = 0xDEAD0A11UL;    /* poison */
         Open->Device = NULL;
         ExFreePoolWithTag(Open, SOFTGPU_POOL_TAG);

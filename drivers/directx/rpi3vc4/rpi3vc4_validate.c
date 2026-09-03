@@ -9,12 +9,22 @@
 
 #define RPI3VC4_VALIDATOR_TAG 'v3VR'
 #define RPI3VC4_VALIDATOR_HEADER_MAGIC 0x56414c33UL
+#define RPI3VC4_SHADER_CACHE_TAG 's3VR'
 
 typedef struct _RPI3VC4_VALIDATOR_ALLOCATION
 {
     ULONG Magic;
     SIZE_T Size;
 } RPI3VC4_VALIDATOR_ALLOCATION, *PRPI3VC4_VALIDATOR_ALLOCATION;
+
+typedef struct _RPI3VC4_SHADER_CACHE
+{
+    KMUTEX Mutex;
+    PVOID Buffer;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    SIZE_T Size;
+    struct vc4_validated_shader_info *ValidatedShader;
+} RPI3VC4_SHADER_CACHE, *PRPI3VC4_SHADER_CACHE;
 
 typedef struct vc4_validation_context
 {
@@ -23,6 +33,7 @@ typedef struct vc4_validation_context
     PHYSICAL_ADDRESS ArenaPhysical;
     SIZE_T ArenaSize;
     SIZE_T ArenaCursor;
+    SIZE_T ArenaLimit;
     struct drm_vc4_bo *Wrappers;
     ULONG WrapperCapacity;
     ULONG WrapperCount;
@@ -127,6 +138,7 @@ Rpi3Vc4CreateCmaObject(
     PRPI3VC4_VALIDATION_CONTEXT Validation;
     struct drm_vc4_bo *Wrapper;
     SIZE_T AlignmentBias;
+    SIZE_T Aligned;
     SIZE_T Start;
     PHYSICAL_ADDRESS Physical;
 
@@ -141,14 +153,44 @@ Rpi3Vc4CreateCmaObject(
      */
     AlignmentBias = (SIZE_T)(Validation->ArenaPhysical.QuadPart &
                              (PAGE_SIZE - 1));
-    if (Validation->ArenaCursor > MAXULONG_PTR - AlignmentBias)
-        return NULL;
-    Start = ALIGN_UP_BY(Validation->ArenaCursor + AlignmentBias, PAGE_SIZE) -
-            AlignmentBias;
-    if (Start > Validation->ArenaSize || Size > Validation->ArenaSize - Start ||
-        Validation->WrapperCount >= Validation->WrapperCapacity)
+    if (Validation->WrapperCount >= Validation->WrapperCapacity)
     {
         return NULL;
+    }
+
+    if (Zero)
+    {
+        if (Validation->ArenaCursor > MAXULONG_PTR - AlignmentBias)
+            return NULL;
+        Start = ALIGN_UP_BY(Validation->ArenaCursor + AlignmentBias,
+                            PAGE_SIZE) - AlignmentBias;
+        if (Start > Validation->ArenaLimit ||
+            Size > Validation->ArenaLimit - Start)
+        {
+            return NULL;
+        }
+        Validation->ArenaCursor = Start + Size;
+    }
+    else
+    {
+        /* Keep GPU-written scratch above all CPU-written command data.  The
+         * generic DMA flush can then clean the command prefix without walking
+         * the large tile-allocation pool on every submission. */
+        if (Size > Validation->ArenaLimit ||
+            Validation->ArenaLimit - Size >
+                MAXULONG_PTR - AlignmentBias)
+        {
+            return NULL;
+        }
+        Aligned = ALIGN_DOWN_BY(Validation->ArenaLimit - Size +
+                                    AlignmentBias,
+                                PAGE_SIZE);
+        if (Aligned < AlignmentBias)
+            return NULL;
+        Start = Aligned - AlignmentBias;
+        if (Start < Validation->ArenaCursor)
+            return NULL;
+        Validation->ArenaLimit = Start;
     }
 
     Wrapper = &Validation->Wrappers[Validation->WrapperCount++];
@@ -161,7 +203,6 @@ Rpi3Vc4CreateCmaObject(
     Wrapper->base.paddr = Rpi3Vc4BusAddress(Validation->Platform, Physical);
     if (Zero)
         RtlZeroMemory(Wrapper->base.vaddr, Size);
-    Validation->ArenaCursor = Start + Size;
     return &Wrapper->base;
 }
 
@@ -181,18 +222,183 @@ drm_gem_cma_create_uninitialized(
     return Rpi3Vc4CreateCmaObject(Device, Size, FALSE);
 }
 
+bool
+drm_gem_cma_clear_for_device(
+    _Inout_ struct drm_gem_cma_object *Object,
+    _In_ size_t Size)
+{
+    PMDL Mdl;
+
+    if (Object == NULL || Object->vaddr == NULL ||
+        Size == 0 || Size > Object->base.size || Size > MAXULONG)
+    {
+        return false;
+    }
+
+    RtlZeroMemory(Object->vaddr, Size);
+    Mdl = IoAllocateMdl(Object->vaddr, (ULONG)Size, FALSE, FALSE, NULL);
+    if (Mdl == NULL)
+        return false;
+
+    MmBuildMdlForNonPagedPool(Mdl);
+    KeFlushIoBuffers(Mdl, FALSE, TRUE);
+    IoFreeMdl(Mdl);
+    return true;
+}
+
 static VOID
 Rpi3Vc4FreeValidatedShader(
-    _Inout_ struct drm_vc4_bo *Wrapper)
+    _In_opt_ struct vc4_validated_shader_info *Shader)
 {
-    struct vc4_validated_shader_info *Shader = Wrapper->validated_shader;
-
     if (Shader == NULL)
         return;
     kfree(Shader->texture_samples);
     kfree(Shader->uniform_addr_offsets);
     kfree(Shader);
-    Wrapper->validated_shader = NULL;
+}
+
+NTSTATUS
+Rpi3Vc4OpenAllocation(
+    _Inout_ PSOFTGPU_OPENALLOC OpenAllocation)
+{
+    PRPI3VC4_SHADER_CACHE Cache;
+
+    if (OpenAllocation == NULL ||
+        OpenAllocation->Magic != SOFTGPU_OPENALLOC_MAGIC ||
+        OpenAllocation->PlatformAllocation != NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Cache = ExAllocatePoolWithTag(NonPagedPool,
+                                  sizeof(*Cache),
+                                  RPI3VC4_SHADER_CACHE_TAG);
+    if (Cache == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Cache, sizeof(*Cache));
+    KeInitializeMutex(&Cache->Mutex, 0);
+    OpenAllocation->PlatformAllocation = Cache;
+    return STATUS_SUCCESS;
+}
+
+VOID
+Rpi3Vc4CloseAllocation(
+    _Inout_ PSOFTGPU_OPENALLOC OpenAllocation)
+{
+    PRPI3VC4_SHADER_CACHE Cache;
+    PVOID Buffer;
+    SIZE_T Size;
+    struct vc4_validated_shader_info *ValidatedShader;
+
+    if (OpenAllocation == NULL)
+        return;
+
+    Cache = OpenAllocation->PlatformAllocation;
+    if (Cache == NULL)
+        return;
+
+    KeWaitForSingleObject(&Cache->Mutex,
+                          Executive,
+                          KernelMode,
+                          FALSE,
+                          NULL);
+    OpenAllocation->PlatformAllocation = NULL;
+    Buffer = Cache->Buffer;
+    Size = Cache->Size;
+    ValidatedShader = Cache->ValidatedShader;
+    Cache->Buffer = NULL;
+    Cache->Size = 0;
+    Cache->ValidatedShader = NULL;
+    KeReleaseMutex(&Cache->Mutex, FALSE);
+
+    Rpi3Vc4FreeValidatedShader(ValidatedShader);
+    if (Buffer != NULL)
+    {
+        MmFreeContiguousMemorySpecifyCache(Buffer, Size, MmNonCached);
+    }
+    ExFreePoolWithTag(Cache, RPI3VC4_SHADER_CACHE_TAG);
+}
+
+static NTSTATUS
+Rpi3Vc4PrepareShader(
+    _In_ PRPI3VC4_CONTEXT Platform,
+    _In_ PSOFTGPU_OPENALLOC OpenAllocation,
+    _Inout_ struct drm_vc4_bo *Wrapper)
+{
+    PRPI3VC4_SHADER_CACHE Cache = OpenAllocation->PlatformAllocation;
+    PHYSICAL_ADDRESS LowestAddress;
+    PHYSICAL_ADDRESS HighestAddress;
+    PHYSICAL_ADDRESS BoundaryAddress;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    PVOID Buffer = NULL;
+    struct vc4_validated_shader_info *ValidatedShader = NULL;
+    NTSTATUS Status;
+
+    if (Cache == NULL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Status = KeWaitForSingleObject(&Cache->Mutex,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Cache->ValidatedShader == NULL)
+    {
+        LowestAddress.QuadPart = 0;
+        HighestAddress.QuadPart = RPI3VC4_HIGHEST_SCANOUT_ADDRESS;
+        BoundaryAddress.QuadPart = 0;
+        Buffer = MmAllocateContiguousMemorySpecifyCache(
+                     OpenAllocation->Size,
+                     LowestAddress,
+                     HighestAddress,
+                     BoundaryAddress,
+                     MmNonCached);
+        if (Buffer == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Unlock;
+        }
+
+        RtlCopyMemory(Buffer, Wrapper->base.vaddr, OpenAllocation->Size);
+        PhysicalAddress = MmGetPhysicalAddress(Buffer);
+        Wrapper->base.vaddr = Buffer;
+        Wrapper->base.paddr = Rpi3Vc4BusAddress(Platform, PhysicalAddress);
+        ValidatedShader = vc4_validate_shader(&Wrapper->base);
+        if (ValidatedShader == NULL)
+        {
+            Status = STATUS_INVALID_IMAGE_FORMAT;
+            goto Unlock;
+        }
+
+        Cache->Buffer = Buffer;
+        Cache->PhysicalAddress = PhysicalAddress;
+        Cache->Size = OpenAllocation->Size;
+        Cache->ValidatedShader = ValidatedShader;
+        Buffer = NULL;
+        ValidatedShader = NULL;
+    }
+
+    Wrapper->base.base.size = Cache->Size;
+    Wrapper->base.vaddr = Cache->Buffer;
+    Wrapper->base.paddr = Rpi3Vc4BusAddress(Platform,
+                                            Cache->PhysicalAddress);
+    Wrapper->validated_shader = Cache->ValidatedShader;
+    Status = STATUS_SUCCESS;
+
+Unlock:
+    KeReleaseMutex(&Cache->Mutex, FALSE);
+    Rpi3Vc4FreeValidatedShader(ValidatedShader);
+    if (Buffer != NULL)
+    {
+        MmFreeContiguousMemorySpecifyCache(Buffer,
+                                            OpenAllocation->Size,
+                                            MmNonCached);
+    }
+    return Status;
 }
 
 static VOID
@@ -361,9 +567,19 @@ Rpi3Vc4PrepareResourceWrappers(
 
         if ((ResourceFlags[Index] & RPI3VC4_RESOURCE_SHADER) != 0)
         {
-            Wrapper->validated_shader = vc4_validate_shader(&Wrapper->base);
-            if (Wrapper->validated_shader == NULL)
-                return STATUS_INVALID_IMAGE_FORMAT;
+            NTSTATUS Status = Rpi3Vc4PrepareShader(Validation->Platform,
+                                                   Open,
+                                                   Wrapper);
+
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+        else
+        {
+            PRPI3VC4_SHADER_CACHE Cache = Open->PlatformAllocation;
+
+            if (Cache != NULL && Cache->ValidatedShader != NULL)
+                Wrapper->validated_shader = Cache->ValidatedShader;
         }
     }
     return STATUS_SUCCESS;
@@ -392,7 +608,6 @@ Rpi3Vc4ValidateRender(
     ULONG UniformOffset;
     ULONG ExecSize;
     ULONG TemporarySize;
-    ULONG Index;
     ULONG FailureStage = 0;
     int ValidatorStatus = 0;
     NTSTATUS Status;
@@ -456,6 +671,7 @@ Rpi3Vc4ValidateRender(
     Validation->ArenaPhysical.QuadPart +=
         ALIGN_UP_BY(sizeof(*Packet), 16);
     Validation->ArenaSize = Submit->ScratchBytes;
+    Validation->ArenaLimit = Validation->ArenaSize;
     RtlZeroMemory(&DrmDevice, sizeof(DrmDevice));
     DrmDevice.Validation = Validation;
 
@@ -627,6 +843,13 @@ Rpi3Vc4ValidateRender(
         Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
         goto Cleanup;
     }
+    if (Render->pDmaBufferPrivateData != NULL &&
+        Render->DmaBufferPrivateDataSize >= sizeof(*Packet))
+    {
+        RtlCopyMemory(Render->pDmaBufferPrivateData,
+                      Packet,
+                      sizeof(*Packet));
+    }
     Render->pDmaBuffer = Validation->Arena + Validation->ArenaCursor;
     Render->MultipassOffset = 0;
     Status = STATUS_SUCCESS;
@@ -659,8 +882,6 @@ Cleanup:
     }
     if (Validation != NULL && Validation->Wrappers != NULL)
     {
-        for (Index = 0; Index < Validation->WrapperCount; Index++)
-            Rpi3Vc4FreeValidatedShader(&Validation->Wrappers[Index]);
         Rpi3Vc4ValidatorFree(Validation->Wrappers);
     }
     Rpi3Vc4ValidatorFree(Temporary);
