@@ -35,10 +35,19 @@ typedef enum
 
 static CRITICAL_SECTION icdload_cs = {NULL, -1, 0, 0, 0, 0};
 static struct ICD_Data* ICD_Data_List = NULL;
+static DWORD IcdLoadingThreadId;
 static const WCHAR OpenGLDrivers_Key[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\OpenGLDrivers";
 static const WCHAR CustomDrivers_Key[] = L"SOFTWARE\\ReactOS\\OpenGL";
 static Drv_Opengl_Info CustomDrvInfo;
 static CUSTOM_DRIVER_STATE CustomDriverState = OGL_CD_NOT_QUERIED;
+
+static BOOL
+IntGetWddmIcdInfo(
+    HDC hdc,
+    Drv_Opengl_Info *DrvInfo,
+    WCHAR DllName[MAX_PATH],
+    DWORD *Flags,
+    LUID *AdapterLuid);
 
 static void APIENTRY wglSetCurrentValue(PVOID value)
 {
@@ -199,6 +208,9 @@ wglGetAdapterLuid(HDC hdc, LUID *AdapterLuid)
 {
     D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME OpenDisplayAdapter;
     D3DKMT_OPENADAPTERFROMHDC OpenAdapter;
+    Drv_Opengl_Info DrvInfo;
+    WCHAR DllName[MAX_PATH];
+    DWORD Flags;
     NTSTATUS Status;
 
     if (AdapterLuid == NULL)
@@ -206,6 +218,24 @@ wglGetAdapterLuid(HDC hdc, LUID *AdapterLuid)
     AdapterLuid->LowPart = 0;
     AdapterLuid->HighPart = 0;
     if (hdc == NULL)
+        return;
+
+    /* The ICD calls this on every present; answer from the identity captured
+     * when the ICD was bound to this DC instead of re-opening the adapter. */
+    {
+        struct wgl_dc_data *DcData = IntGetDcData(hdc);
+
+        if (DcData != NULL && DcData->icd_data != NULL &&
+            DcData->AdapterLuidValid)
+        {
+            *AdapterLuid = DcData->AdapterLuid;
+            return;
+        }
+    }
+
+    RtlZeroMemory(&DrvInfo, sizeof(DrvInfo));
+    RtlZeroMemory(DllName, sizeof(DllName));
+    if (IntGetWddmIcdInfo(hdc, &DrvInfo, DllName, &Flags, AdapterLuid))
         return;
 
     Status = IntOpenAdapterFromWindowMonitor(hdc, &OpenDisplayAdapter);
@@ -223,7 +253,109 @@ wglGetAdapterLuid(HDC hdc, LUID *AdapterLuid)
     {
         *AdapterLuid = OpenAdapter.AdapterLuid;
         IntCloseAdapter(OpenAdapter.hAdapter);
+        return;
     }
+
+}
+
+static BOOL
+IntQueryWddmOpenGlInfo(
+    D3DKMT_HANDLE Adapter,
+    D3DKMT_OPENGLINFO *OpenGlInfo)
+{
+    D3DKMT_QUERYADAPTERINFO QueryInfo;
+    NTSTATUS Status;
+
+    if (Adapter == 0 || OpenGlInfo == NULL)
+        return FALSE;
+
+    RtlZeroMemory(OpenGlInfo, sizeof(*OpenGlInfo));
+    RtlZeroMemory(&QueryInfo, sizeof(QueryInfo));
+    QueryInfo.hAdapter = Adapter;
+    QueryInfo.Type = KMTQAITYPE_UMOPENGLINFO;
+    QueryInfo.pPrivateDriverData = OpenGlInfo;
+    QueryInfo.PrivateDriverDataSize = sizeof(*OpenGlInfo);
+    Status = D3DKMTQueryAdapterInfo(&QueryInfo);
+    OpenGlInfo->UmdOpenGlIcdFileName[
+        ARRAYSIZE(OpenGlInfo->UmdOpenGlIcdFileName) - 1] = UNICODE_NULL;
+    return NT_SUCCESS(Status) && OpenGlInfo->UmdOpenGlIcdFileName[0] != UNICODE_NULL;
+}
+
+static BOOL
+IntFindWddmRenderIcd(
+    D3DKMT_OPENGLINFO *OpenGlInfo,
+    LUID *AdapterLuid)
+{
+    D3DKMT_ENUMADAPTERS2 Enumeration;
+    D3DKMT_ADAPTERINFO *Adapters = NULL;
+    D3DKMT_QUERYADAPTERINFO QueryInfo;
+    D3DKMT_ADAPTERTYPE AdapterType;
+    D3DKMT_OPENGLINFO CandidateInfo;
+    ULONG AdapterCount;
+    ULONG FoundCount = 0;
+    ULONG Index;
+    BOOL Found = FALSE;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Enumeration, sizeof(Enumeration));
+    Status = D3DKMTEnumAdapters2(&Enumeration);
+    if (!NT_SUCCESS(Status) || Enumeration.NumAdapters == 0)
+        return FALSE;
+
+    AdapterCount = Enumeration.NumAdapters;
+    if ((SIZE_T)AdapterCount > ~(SIZE_T)0 / sizeof(*Adapters))
+        return FALSE;
+
+    Adapters = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                         (SIZE_T)AdapterCount * sizeof(*Adapters));
+    if (Adapters == NULL)
+        return FALSE;
+
+    Enumeration.NumAdapters = AdapterCount;
+    Enumeration.pAdapters = Adapters;
+    Status = D3DKMTEnumAdapters2(&Enumeration);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (Enumeration.NumAdapters < AdapterCount)
+        AdapterCount = Enumeration.NumAdapters;
+
+    for (Index = 0; Index < AdapterCount; ++Index)
+    {
+        BOOL TypeKnown;
+
+        RtlZeroMemory(&AdapterType, sizeof(AdapterType));
+        RtlZeroMemory(&QueryInfo, sizeof(QueryInfo));
+        QueryInfo.hAdapter = Adapters[Index].hAdapter;
+        QueryInfo.Type = KMTQAITYPE_ADAPTERTYPE;
+        QueryInfo.pPrivateDriverData = &AdapterType;
+        QueryInfo.PrivateDriverDataSize = sizeof(AdapterType);
+        TypeKnown = NT_SUCCESS(D3DKMTQueryAdapterInfo(&QueryInfo));
+        if (TypeKnown &&
+            (!AdapterType.RenderSupported || AdapterType.SoftwareDevice))
+        {
+            continue;
+        }
+
+        if (!IntQueryWddmOpenGlInfo(Adapters[Index].hAdapter, &CandidateInfo))
+            continue;
+
+        ++FoundCount;
+        if (FoundCount == 1)
+        {
+            *OpenGlInfo = CandidateInfo;
+            if (AdapterLuid != NULL)
+                *AdapterLuid = Adapters[Index].AdapterLuid;
+        }
+    }
+
+    Found = FoundCount == 1;
+
+Cleanup:
+    for (Index = 0; Index < AdapterCount; ++Index)
+        IntCloseAdapter(Adapters[Index].hAdapter);
+    HeapFree(GetProcessHeap(), 0, Adapters);
+    return Found;
 }
 
 static BOOL APIENTRY
@@ -264,7 +396,14 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     if (Window == NULL)
         return FALSE;
 
-    IcdData = IntGetIcdData(hdc);
+    /* The ICD presents on every frame; use the ICD already bound to this DC
+     * instead of re-running ICD discovery (adapter open/query/close). */
+    {
+        struct wgl_dc_data *DcData = IntGetDcData(hdc);
+
+        IcdData = (DcData != NULL && DcData->icd_data != NULL) ?
+            DcData->icd_data : IntGetIcdData(hdc, NULL, NULL);
+    }
     if (IcdData == NULL || IcdData->DrvPresentBuffers == NULL)
     {
         IntReportDwmDxPresentFailure("icd_callback", E_NOINTERFACE);
@@ -355,7 +494,6 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
         IntReportDwmDxPresentFailure("icd_present", E_FAIL);
         goto Cancel;
     }
-
     if (AsyncPresent != NULL)
     {
         if (!QueueUserWorkItem(IntPublishDwmDxPresentWorker, AsyncPresent,
@@ -402,52 +540,57 @@ IntGetWddmIcdInfo(
     HDC hdc,
     Drv_Opengl_Info *DrvInfo,
     WCHAR DllName[MAX_PATH],
-    DWORD *Flags)
+    DWORD *Flags,
+    LUID *AdapterLuid)
 {
     D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME OpenDisplayAdapter;
     D3DKMT_OPENADAPTERFROMHDC OpenAdapter;
-    D3DKMT_QUERYADAPTERINFO QueryInfo;
     D3DKMT_OPENGLINFO OpenGlInfo;
     D3DKMT_HANDLE Adapter = 0;
-    NTSTATUS Status;
+    LUID SelectedLuid;
+    BOOL Found = FALSE;
+    NTSTATUS Status = STATUS_NOT_FOUND;
 
     if (!hdc || !DrvInfo || !DllName || !Flags)
         return FALSE;
+
+    SelectedLuid.LowPart = 0;
+    SelectedLuid.HighPart = 0;
 
     memset(&OpenAdapter, 0, sizeof(OpenAdapter));
     OpenAdapter.hDc = hdc;
     Status = D3DKMTOpenAdapterFromHdc(&OpenAdapter);
     if (NT_SUCCESS(Status) && OpenAdapter.hAdapter != 0)
+    {
         Adapter = OpenAdapter.hAdapter;
+        SelectedLuid = OpenAdapter.AdapterLuid;
+    }
 
-    memset(&OpenGlInfo, 0, sizeof(OpenGlInfo));
-    memset(&QueryInfo, 0, sizeof(QueryInfo));
-    QueryInfo.hAdapter = Adapter;
-    QueryInfo.Type = KMTQAITYPE_UMOPENGLINFO;
-    QueryInfo.pPrivateDriverData = &OpenGlInfo;
-    QueryInfo.PrivateDriverDataSize = sizeof(OpenGlInfo);
-    Status = Adapter != 0 ?
-        D3DKMTQueryAdapterInfo(&QueryInfo) : STATUS_INVALID_HANDLE;
-
+    Found = IntQueryWddmOpenGlInfo(Adapter, &OpenGlInfo);
     IntCloseAdapter(Adapter);
 
     /* A redirected window DC is backed by a DIB, not by the scan-out PDEV.
      * Resolve that window's monitor when the HDC-selected adapter does not
      * publish an ICD, preserving the normal HDC path for direct display DCs. */
-    if (!NT_SUCCESS(Status) || !OpenGlInfo.UmdOpenGlIcdFileName[0])
+    if (!Found)
     {
         Status = IntOpenAdapterFromWindowMonitor(hdc, &OpenDisplayAdapter);
-        if (!NT_SUCCESS(Status) || OpenDisplayAdapter.hAdapter == 0)
-            return FALSE;
-
-        memset(&OpenGlInfo, 0, sizeof(OpenGlInfo));
-        QueryInfo.hAdapter = OpenDisplayAdapter.hAdapter;
-        Status = D3DKMTQueryAdapterInfo(&QueryInfo);
-        IntCloseAdapter(OpenDisplayAdapter.hAdapter);
+        if (NT_SUCCESS(Status) && OpenDisplayAdapter.hAdapter != 0)
+        {
+            SelectedLuid = OpenDisplayAdapter.AdapterLuid;
+            Found = IntQueryWddmOpenGlInfo(OpenDisplayAdapter.hAdapter,
+                                           &OpenGlInfo);
+            IntCloseAdapter(OpenDisplayAdapter.hAdapter);
+        }
     }
 
-    OpenGlInfo.UmdOpenGlIcdFileName[ARRAYSIZE(OpenGlInfo.UmdOpenGlIcdFileName) - 1] = UNICODE_NULL;
-    if (!NT_SUCCESS(Status) || !OpenGlInfo.UmdOpenGlIcdFileName[0])
+    /* If BasicDisplay owns the scan-out PDEV, the HDC and monitor both resolve
+     * to that software adapter.  A separately started hardware render adapter
+     * can still publish the ICD that should service windowed OpenGL. */
+    if (!Found)
+        Found = IntFindWddmRenderIcd(&OpenGlInfo, &SelectedLuid);
+
+    if (!Found)
         return FALSE;
 
     lstrcpynW(DllName, OpenGlInfo.UmdOpenGlIcdFileName, MAX_PATH);
@@ -458,6 +601,8 @@ IntGetWddmIcdInfo(
     lstrcpynW(DrvInfo->DriverName, OpenGlInfo.UmdOpenGlIcdFileName,
               ARRAYSIZE(DrvInfo->DriverName));
     *Flags = OpenGlInfo.Flags;
+    if (AdapterLuid != NULL)
+        *AdapterLuid = SelectedLuid;
     return TRUE;
 }
 
@@ -467,21 +612,31 @@ extern BOOL APIENTRY GdiSetPixelFormat(HDC hdc, INT ipfd);
 extern BOOL APIENTRY GdiSwapBuffers(HDC hdc);
 
 /* Retrieves the ICD data (driver version + relevant DLL entry points) for a device context */
-struct ICD_Data* IntGetIcdData(HDC hdc)
+struct ICD_Data* IntGetIcdData(
+    HDC hdc,
+    LUID *AdapterLuid,
+    BOOL *AdapterLuidValid)
 {
     int ret;
     DWORD dwInput, dwValueType, Version, DriverVersion, Flags;
     Drv_Opengl_Info DrvInfo;
     pDrv_Opengl_Info pDrvInfo;
     struct ICD_Data* data;
+    DWORD CurrentThreadId;
     HKEY OglKey = NULL;
     HKEY DrvKey = NULL, CustomKey = NULL;
     WCHAR DllName[MAX_PATH];
     WCHAR WddmDllName[MAX_PATH];
     DWORD WddmFlags = 0;
     BOOL WddmIcd = FALSE;
+    LUID WddmLuid = {0, 0};
     BOOL (WINAPI *DrvValidateVersion)(DWORD);
     void (WINAPI *DrvSetCallbackProcs)(int nProcs, PROC* pProcs);
+
+    if (AdapterLuid != NULL)
+        memset(AdapterLuid, 0, sizeof(*AdapterLuid));
+    if (AdapterLuidValid != NULL)
+        *AdapterLuidValid = FALSE;
 
     /* The following code is ReactOS specific and allows us to easily load an arbitrary ICD:
      * It checks HKCU\Software\ReactOS\OpenGL for a custom ICD and will always load it
@@ -552,7 +707,15 @@ custom_end:
     {
         memset(&DrvInfo, 0, sizeof(DrvInfo));
         memset(WddmDllName, 0, sizeof(WddmDllName));
-        WddmIcd = IntGetWddmIcdInfo(hdc, &DrvInfo, WddmDllName, &WddmFlags);
+        WddmIcd = IntGetWddmIcdInfo(hdc, &DrvInfo, WddmDllName, &WddmFlags,
+                                    &WddmLuid);
+        if (WddmIcd)
+        {
+            if (AdapterLuid != NULL)
+                *AdapterLuid = WddmLuid;
+            if (AdapterLuidValid != NULL)
+                *AdapterLuidValid = TRUE;
+        }
         if (!WddmIcd)
         {
             /* XPDM ICD discovery through the display driver's escape. */
@@ -579,6 +742,17 @@ custom_end:
 
     /* Protect the list while we are loading*/
     EnterCriticalSection(&icdload_cs);
+
+    CurrentThreadId = GetCurrentThreadId();
+    if (IcdLoadingThreadId == CurrentThreadId)
+    {
+        /* A vendor ICD may initialize DXGI from DrvValidateVersion.  ReactOS's
+         * DXGI backend probes WGL, which must use its software bootstrap path
+         * until the outer ICD has finished publishing a complete dispatch
+         * table. */
+        LeaveCriticalSection(&icdload_cs);
+        return NULL;
+    }
 
     /* Search for it in the list of already loaded modules */
     data = ICD_Data_List;
@@ -685,6 +859,8 @@ custom_end:
         RegCloseKey(OglKey);
     }
 
+    IcdLoadingThreadId = CurrentThreadId;
+
     /* So far so good, allocate data */
     data = HeapAlloc(GetProcessHeap(), 0, sizeof(*data));
     if(!data)
@@ -785,10 +961,12 @@ custom_end:
 
 end:
     /* Unlock and return */
+    IcdLoadingThreadId = 0;
     LeaveCriticalSection(&icdload_cs);
     return data;
 
 fail:
+    IcdLoadingThreadId = 0;
     LeaveCriticalSection(&icdload_cs);
     FreeLibrary(data->hModule);
     HeapFree(GetProcessHeap(), 0, data);

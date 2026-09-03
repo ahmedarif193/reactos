@@ -61,6 +61,8 @@ struct wgl_dc_data
     /* ICD */
     struct ICD_Data* icd_data;
     INT nb_icd_formats;
+    LUID AdapterLuid;
+    BOOL AdapterLuidValid;
 
     /* Software implementation */
     INT nb_sw_formats;
@@ -69,6 +71,9 @@ struct wgl_dc_data
     /* Linked list */
     struct wgl_dc_data* next;
 };
+
+/* Existing DC data lookup for the ICD callback path. */
+struct wgl_dc_data* IntGetDcData(HDC hdc);
 
 /* Clean up functions */
 void IntDeleteAllContexts(void);
