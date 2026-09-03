@@ -55,6 +55,18 @@ typedef struct _DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID
 typedef NTSTATUS (APIENTRY *PFN_DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID)(
     DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID *Query);
 
+/* OpenAdapterFromLuid is a public Win8 D3DKMT thunk.  Keep this Win10/11 DWM
+ * consumer buildable at the Intel KMD's older DXGKDDI header level by using
+ * the fixed public thunk layout instead of raising the miniport ABI view. */
+typedef struct _DWM_D3DKMT_OPENADAPTERFROMLUID
+{
+    LUID AdapterLuid;
+    D3DKMT_HANDLE hAdapter;
+} DWM_D3DKMT_OPENADAPTERFROMLUID;
+
+typedef NTSTATUS (APIENTRY *PFN_DWM_D3DKMT_OPENADAPTERFROMLUID)(
+    DWM_D3DKMT_OPENADAPTERFROMLUID *OpenAdapter);
+
 typedef struct _DWM_DX_VIEW
 {
     ULONG GlobalShare;
@@ -92,6 +104,8 @@ static PFN_DWM_D3DKMT_INVALIDATECACHE g_InvalidateCache;
 static BOOL g_InvalidateCacheResolved;
 static PFN_DWM_D3DKMT_GETSHAREDRESOURCEADAPTERLUID g_GetSharedResourceAdapterLuid;
 static BOOL g_GetSharedResourceAdapterLuidResolved;
+static PFN_DWM_D3DKMT_OPENADAPTERFROMLUID g_OpenAdapterFromLuid;
+static BOOL g_OpenAdapterFromLuidResolved;
 
 static BOOL
 DwmDxLuidEqual(const LUID *Left, const LUID *Right)
@@ -103,7 +117,7 @@ DwmDxLuidEqual(const LUID *Left, const LUID *Right)
 static NTSTATUS
 DwmDxGetDevice(const LUID *Luid, ULONG *DeviceIndex)
 {
-    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME OpenAdapter;
+    DWM_D3DKMT_OPENADAPTERFROMLUID OpenAdapter;
     D3DKMT_CREATEDEVICE CreateDevice;
     ULONG Index, FreeIndex = DWM_DX_MAX_DEVICES;
     NTSTATUS Status;
@@ -122,21 +136,26 @@ DwmDxGetDevice(const LUID *Luid, ULONG *DeviceIndex)
     if (FreeIndex == DWM_DX_MAX_DEVICES)
         return STATUS_INSUFFICIENT_RESOURCES;
 
+    if (!g_OpenAdapterFromLuidResolved)
+    {
+        HMODULE Gdi32 = GetModuleHandleW(L"gdi32.dll");
+
+        if (Gdi32 != NULL)
+        {
+            g_OpenAdapterFromLuid =
+                (PFN_DWM_D3DKMT_OPENADAPTERFROMLUID)
+                    GetProcAddress(Gdi32, "D3DKMTOpenAdapterFromLuid");
+        }
+        g_OpenAdapterFromLuidResolved = TRUE;
+    }
+    if (g_OpenAdapterFromLuid == NULL)
+        return STATUS_NOT_SUPPORTED;
+
     RtlZeroMemory(&OpenAdapter, sizeof(OpenAdapter));
-    lstrcpynW(OpenAdapter.DeviceName, L"\\\\.\\DISPLAY1",
-              ARRAYSIZE(OpenAdapter.DeviceName));
-    Status = D3DKMTOpenAdapterFromGdiDisplayName(&OpenAdapter);
+    OpenAdapter.AdapterLuid = *Luid;
+    Status = g_OpenAdapterFromLuid(&OpenAdapter);
     if (!NT_SUCCESS(Status) || OpenAdapter.hAdapter == 0)
         return NT_SUCCESS(Status) ? STATUS_NOT_FOUND : Status;
-    if (!DwmDxLuidEqual(&OpenAdapter.AdapterLuid, Luid))
-    {
-        D3DKMT_CLOSEADAPTER CloseAdapter;
-
-        RtlZeroMemory(&CloseAdapter, sizeof(CloseAdapter));
-        CloseAdapter.hAdapter = OpenAdapter.hAdapter;
-        (void)D3DKMTCloseAdapter(&CloseAdapter);
-        return STATUS_NOT_FOUND;
-    }
 
     RtlZeroMemory(&CreateDevice, sizeof(CreateDevice));
     CreateDevice.hAdapter = OpenAdapter.hAdapter;
