@@ -356,7 +356,10 @@ ULONGLONG
 VidMmSegmentPlacementLimit(
     _In_ CONST PDXGKRNL_SEGMENT Segment)
 {
-    if (VidMmSegmentIsAperture(Segment))
+    /* A zero aperture CommitLimit means that no smaller limit was supplied;
+     * use the segment size.  The dxgmms2 placement owner follows the same
+     * rule, so budgeting and actual placement must agree. */
+    if (VidMmSegmentIsAperture(Segment) && Segment->CommitLimit != 0)
         return min(Segment->CommitLimit, Segment->Size);
     return Segment->Size;
 }
