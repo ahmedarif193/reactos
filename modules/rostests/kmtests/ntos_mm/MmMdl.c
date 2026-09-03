@@ -250,6 +250,125 @@ TestMmBuildMdlForNonPagedPool(VOID)
     ExFreePoolWithTag(Page, 'Test');
 }
 
+/*
+ * MmAllocatePagesForMdlEx records the requested caching type on the pages,
+ * and a user-mode mapping of those pages takes the page's attribute over the
+ * request.  The only view of that from an API test is behaviour: an
+ * uncacheable (write-combined) mapping reads far slower than a cached one on
+ * real hardware.  Under an emulator both views are ordinary memory, so the
+ * timing is reported and only the mapping contract itself is asserted.
+ */
+static
+VOID
+TestMmAllocatePagesForMdlCacheAttribute(VOID)
+{
+    PHYSICAL_ADDRESS LowAddress;
+    PHYSICAL_ADDRESS HighAddress;
+    PHYSICAL_ADDRESS SkipBytes;
+    PMDL WcMdl = NULL;
+    PMDL CachedMdl = NULL;
+    volatile ULONG *WcUser = NULL;
+    volatile ULONG *CachedUser = NULL;
+    ULONG Index;
+    ULONG Pass;
+    ULONG Sum;
+    LARGE_INTEGER Start, WcTicks, CachedTicks;
+    const ULONG Size = 64 * 1024;
+    const ULONG Count = Size / sizeof(ULONG);
+    const ULONG Passes = 16;
+
+    LowAddress.QuadPart = 0;
+    HighAddress.QuadPart = -1;
+    SkipBytes.QuadPart = 0;
+    WcMdl = MmAllocatePagesForMdlEx(LowAddress, HighAddress, SkipBytes, Size, MmWriteCombined, 0);
+    CachedMdl = MmAllocatePagesForMdlEx(LowAddress, HighAddress, SkipBytes, Size, MmCached, 0);
+    ok(WcMdl != NULL, "MmAllocatePagesForMdlEx(MmWriteCombined) failed\n");
+    ok(CachedMdl != NULL, "MmAllocatePagesForMdlEx(MmCached) failed\n");
+    if (skip(WcMdl != NULL && CachedMdl != NULL &&
+             MmGetMdlByteCount(WcMdl) == Size && MmGetMdlByteCount(CachedMdl) == Size,
+             "No pages\n"))
+        goto Cleanup;
+
+    /* Ask for a cached view of the write-combined pages: the page attribute
+     * recorded at allocation must win over the mapping request. */
+    _SEH2_TRY
+    {
+        WcUser = MmMapLockedPagesSpecifyCache(WcMdl, UserMode, MmCached, NULL, FALSE, NormalPagePriority);
+        CachedUser = MmMapLockedPagesSpecifyCache(CachedMdl, UserMode, MmCached, NULL, FALSE, NormalPagePriority);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok(0, "User mapping raised 0x%lx\n", _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+    ok(WcUser != NULL, "User mapping of write-combined pages failed\n");
+    ok(CachedUser != NULL, "User mapping of cached pages failed\n");
+    if (skip(WcUser != NULL && CachedUser != NULL, "No user mappings\n"))
+        goto Cleanup;
+
+    _SEH2_TRY
+    {
+        for (Index = 0; Index < Count; Index++)
+        {
+            WcUser[Index] = Index * 2654435761UL;
+            CachedUser[Index] = Index * 2654435761UL;
+        }
+        for (Index = 0; Index < Count; Index++)
+        {
+            if (WcUser[Index] != Index * 2654435761UL || CachedUser[Index] != Index * 2654435761UL)
+                break;
+        }
+        ok(Index == Count, "Pattern mismatch at %lu\n", Index);
+
+        Sum = 0;
+        Start = KeQueryPerformanceCounter(NULL);
+        for (Pass = 0; Pass < Passes; Pass++)
+            for (Index = 0; Index < Count; Index++)
+                Sum += CachedUser[Index];
+        CachedTicks.QuadPart = KeQueryPerformanceCounter(NULL).QuadPart - Start.QuadPart;
+        Start = KeQueryPerformanceCounter(NULL);
+        for (Pass = 0; Pass < Passes; Pass++)
+            for (Index = 0; Index < Count; Index++)
+                Sum += WcUser[Index];
+        WcTicks.QuadPart = KeQueryPerformanceCounter(NULL).QuadPart - Start.QuadPart;
+        trace("Reads: cached %I64d ticks, write-combined %I64d ticks (sum 0x%lx)\n",
+              CachedTicks.QuadPart, WcTicks.QuadPart, Sum);
+        if (CachedTicks.QuadPart > 0 && WcTicks.QuadPart >= 2 * CachedTicks.QuadPart)
+            ok(TRUE, "Write-combined pages read uncached through a cached mapping request\n");
+        else
+            skip(FALSE, "Cache attribute timing inconclusive (emulated or no PAT)\n");
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok(0, "Access through user mapping raised 0x%lx\n", _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+Cleanup:
+    _SEH2_TRY
+    {
+        if (WcUser != NULL)
+            MmUnmapLockedPages((PVOID)WcUser, WcMdl);
+        if (CachedUser != NULL)
+            MmUnmapLockedPages((PVOID)CachedUser, CachedMdl);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ok(0, "Unmap raised 0x%lx\n", _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+    if (WcMdl != NULL)
+    {
+        MmFreePagesFromMdl(WcMdl);
+        ExFreePoolWithTag(WcMdl, 0);
+    }
+    if (CachedMdl != NULL)
+    {
+        MmFreePagesFromMdl(CachedMdl);
+        ExFreePoolWithTag(CachedMdl, 0);
+    }
+}
+
 START_TEST(MmMdl)
 {
     if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
@@ -257,5 +376,6 @@ START_TEST(MmMdl)
         return;
 
     TestMmAllocatePagesForMdl();
+    TestMmAllocatePagesForMdlCacheAttribute();
     TestMmBuildMdlForNonPagedPool();
 }

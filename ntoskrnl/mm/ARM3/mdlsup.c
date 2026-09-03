@@ -784,6 +784,12 @@ MmFreePagesFromMdl(IN PMDL Mdl)
         Pfn1->u2.ShareCount = 0;
 
         //
+        // The caching attribute recorded at allocation time belongs to this
+        // use of the page; the next owner maps it as ordinary cached memory.
+        //
+        Pfn1->u3.e1.CacheAttribute = MiCached;
+
+        //
         // Dereference it
         //
         ASSERT(Pfn1->u3.e2.ReferenceCount != 0);
