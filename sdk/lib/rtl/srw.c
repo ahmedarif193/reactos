@@ -250,32 +250,19 @@ NTAPI
 RtlpAcquireSRWLockExclusiveWait(IN OUT PRTL_SRWLOCK SRWLock,
                                 IN PRTLP_SRWLOCK_WAITBLOCK WaitBlock)
 {
-    LONG_PTR CurrentValue;
     ULONG SpinCount = 0;
 
-    while (1)
-    {
-        CurrentValue = *(volatile LONG_PTR *)&SRWLock->Ptr;
-        if (!(CurrentValue & RTL_SRWLOCK_SHARED))
-        {
-            if (CurrentValue & RTL_SRWLOCK_CONTENDED)
-            {
-                if (WaitBlock->Wake != 0)
-                {
-                    /* Our wait block became the first one
-                       in the chain, we own the lock now! */
-                    break;
-                }
-            }
-            else
-            {
-                /* The last wait block was removed and/or we're
-                   finally a simple exclusive lock. This means we
-                   don't need to wait anymore, we acquired the lock! */
-                break;
-            }
-        }
+    UNREFERENCED_PARAMETER(SRWLock);
 
+    /*
+     * Wait for the releaser to hand the lock over through our wait block.
+     * The wait block lives on this thread's stack, and the releaser writes
+     * Wake as its very last access to the block after it has already
+     * published the new lock word.  Leaving early because the lock word
+     * looks uncontended would let the releaser write into a dead frame.
+     */
+    while (WaitBlock->Wake == 0)
+    {
         RtlpSrwSpin(&SpinCount);
     }
 }
@@ -288,46 +275,21 @@ RtlpAcquireSRWLockSharedWait(IN OUT PRTL_SRWLOCK SRWLock,
                              IN OUT PRTLP_SRWLOCK_SHARED_WAKE WakeChain)
 {
     ULONG SpinCount = 0;
-    if (FirstWait != NULL)
+
+    UNREFERENCED_PARAMETER(SRWLock);
+    UNREFERENCED_PARAMETER(FirstWait);
+
+    /*
+     * Every shared waiter, whether it owns the wait block or merely joined
+     * its wake chain, must wait for its own wake entry.  The releaser walks
+     * the chain after publishing the new lock word, reading each entry's
+     * Next pointer before setting Wake.  A waiter that left as soon as the
+     * lock word became uncontended would leave a dead stack entry in the
+     * chain for the releaser to read.
+     */
+    while (WakeChain->Wake == 0)
     {
-        while (WakeChain->Wake == 0)
-        {
-            RtlpSrwSpin(&SpinCount);
-        }
-    }
-    else
-    {
-        LONG_PTR CurrentValue;
-
-        while (1)
-        {
-            CurrentValue = *(volatile LONG_PTR *)&SRWLock->Ptr;
-            if (CurrentValue & RTL_SRWLOCK_SHARED)
-            {
-                /* The RTL_SRWLOCK_OWNED bit always needs to be set when
-                   RTL_SRWLOCK_SHARED is set! */
-                ASSERT(CurrentValue & RTL_SRWLOCK_OWNED);
-
-                if (CurrentValue & RTL_SRWLOCK_CONTENDED)
-                {
-                    if (WakeChain->Wake != 0)
-                    {
-                        /* Our wait block became the first one
-                           in the chain, we own the lock now! */
-                        break;
-                    }
-                }
-                else
-                {
-                    /* The last wait block was removed and/or we're
-                       finally a simple shared lock. This means we
-                       don't need to wait anymore, we acquired the lock! */
-                    break;
-                }
-            }
-
-            RtlpSrwSpin(&SpinCount);
-        }
+        RtlpSrwSpin(&SpinCount);
     }
 }
 
@@ -353,6 +315,17 @@ RtlAcquireSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
     while (1)
     {
         CurrentValue = *(volatile LONG_PTR *)&SRWLock->Ptr;
+
+        if (CurrentValue & RTL_SRWLOCK_CONTENTION_LOCK)
+        {
+            /* Another thread holds the wait block lock, possibly only to
+           probe a contended state that has since gone away.  It
+           releases the bit by clearing it, so no fast path may
+           overwrite the word while the bit is set: a later holder
+           would otherwise lose the lock to that clear. */
+            RtlpSrwSpin(&SpinCount);
+            continue;
+        }
 
         if (CurrentValue & RTL_SRWLOCK_SHARED)
         {
@@ -555,6 +528,14 @@ RtlReleaseSRWLockShared(IN OUT PRTL_SRWLOCK SRWLock)
     {
         CurrentValue = *(volatile LONG_PTR *)&SRWLock->Ptr;
 
+        if (CurrentValue & RTL_SRWLOCK_CONTENTION_LOCK)
+        {
+            /* See RtlAcquireSRWLockShared: never overwrite a word whose
+           wait block lock bit is held by another thread. */
+            RtlpSrwSpin(&SpinCount);
+            continue;
+        }
+
         if (CurrentValue & RTL_SRWLOCK_SHARED)
         {
             if (CurrentValue & RTL_SRWLOCK_CONTENDED)
@@ -624,6 +605,14 @@ RtlAcquireSRWLockExclusive(IN OUT PRTL_SRWLOCK SRWLock)
         while (1)
         {
             CurrentValue = *(volatile LONG_PTR *)&SRWLock->Ptr;
+
+            if (CurrentValue & RTL_SRWLOCK_CONTENTION_LOCK)
+            {
+                /* See RtlAcquireSRWLockShared: never overwrite a word whose
+               wait block lock bit is held by another thread. */
+                RtlpSrwSpin(&SpinCount);
+                continue;
+            }
 
             if (CurrentValue & RTL_SRWLOCK_SHARED)
             {
@@ -740,6 +729,14 @@ RtlReleaseSRWLockExclusive(IN OUT PRTL_SRWLOCK SRWLock)
     {
         CurrentValue = *(volatile LONG_PTR *)&SRWLock->Ptr;
 
+        if (CurrentValue & RTL_SRWLOCK_CONTENTION_LOCK)
+        {
+            /* See RtlAcquireSRWLockShared: never overwrite a word whose
+           wait block lock bit is held by another thread. */
+            RtlpSrwSpin(&SpinCount);
+            continue;
+        }
+
         if (!(CurrentValue & RTL_SRWLOCK_OWNED))
         {
             RtlRaiseStatus(STATUS_RESOURCE_NOT_OWNED);
@@ -794,26 +791,77 @@ BOOLEAN
 NTAPI
 RtlTryAcquireSRWLockShared(PRTL_SRWLOCK SRWLock)
 {
+    LONG_PTR CurrentValue, NewValue;
 
-    LONG_PTR CompareValue, NewValue, GotValue;
-
-    do
+    while (1)
     {
-        CompareValue = *(volatile LONG_PTR *)&SRWLock->Ptr;
-        NewValue = ((CompareValue >> RTL_SRWLOCK_BITS) + 1) | RTL_SRWLOCK_SHARED | RTL_SRWLOCK_OWNED;
+        CurrentValue = *(volatile LONG_PTR *)&SRWLock->Ptr;
 
-        /* Only increment shared count if there is no waiter */
-        CompareValue &= ~RTL_SRWLOCK_MASK | RTL_SRWLOCK_SHARED | RTL_SRWLOCK_OWNED;
-    } while (
-        ((GotValue = (LONG_PTR)InterlockedCompareExchangePointer(&SRWLock->Ptr, (LONG_PTR*)NewValue, (LONG_PTR*)CompareValue)) != CompareValue)
-        && (((GotValue & RTL_SRWLOCK_MASK) == (RTL_SRWLOCK_SHARED | RTL_SRWLOCK_OWNED)) || (GotValue == 0)));
+        if (CurrentValue & RTL_SRWLOCK_CONTENTION_LOCK)
+        {
+            /* A short-lived probe of the wait block lock; do not fail the
+               caller for it and do not overwrite the bit. */
+            YieldProcessor();
+            continue;
+        }
 
-    return ((GotValue & RTL_SRWLOCK_MASK) == (RTL_SRWLOCK_SHARED | RTL_SRWLOCK_OWNED)) || (GotValue == 0);
+        if (CurrentValue & RTL_SRWLOCK_CONTENDED)
+        {
+            /* Waiters are queued; joining them would block. */
+            return FALSE;
+        }
+
+        if (CurrentValue & RTL_SRWLOCK_SHARED)
+        {
+            ASSERT(CurrentValue & RTL_SRWLOCK_OWNED);
+            NewValue = (((CurrentValue >> RTL_SRWLOCK_BITS) + 1) << RTL_SRWLOCK_BITS) |
+                       RTL_SRWLOCK_SHARED | RTL_SRWLOCK_OWNED;
+        }
+        else if (CurrentValue & RTL_SRWLOCK_OWNED)
+        {
+            /* Held exclusively. */
+            return FALSE;
+        }
+        else
+        {
+            NewValue = (_ONE << RTL_SRWLOCK_BITS) | RTL_SRWLOCK_SHARED | RTL_SRWLOCK_OWNED;
+        }
+
+        if ((LONG_PTR)InterlockedCompareExchangePointer(&SRWLock->Ptr,
+                                                        (PVOID)NewValue,
+                                                        (PVOID)CurrentValue) == CurrentValue)
+        {
+            return TRUE;
+        }
+    }
 }
 
 BOOLEAN
 NTAPI
 RtlTryAcquireSRWLockExclusive(PRTL_SRWLOCK SRWLock)
 {
-    return InterlockedCompareExchangePointer(&SRWLock->Ptr, (ULONG_PTR*)RTL_SRWLOCK_OWNED, 0) == 0;
+    LONG_PTR CurrentValue;
+
+    while (1)
+    {
+        CurrentValue = *(volatile LONG_PTR *)&SRWLock->Ptr;
+
+        if (CurrentValue & RTL_SRWLOCK_CONTENTION_LOCK)
+        {
+            /* A short-lived probe of the wait block lock; do not fail the
+               caller for it and do not overwrite the bit. */
+            YieldProcessor();
+            continue;
+        }
+
+        if (CurrentValue != 0)
+            return FALSE;
+
+        if (InterlockedCompareExchangePointer(&SRWLock->Ptr,
+                                              (PVOID)RTL_SRWLOCK_OWNED,
+                                              NULL) == NULL)
+        {
+            return TRUE;
+        }
+    }
 }
