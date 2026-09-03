@@ -227,13 +227,104 @@ ThemeEndBufferedPaint(PDRAW_CONTEXT pcontext, int x, int y, int cx, int cy)
     pcontext->hDC = pcontext->hDCScreen;
 }
 
+static BOOL
+ThemeGetCaptionButtonPlacement(HTHEME hTheme, INT iPartId, POINT *Offset, INT *OffsetType)
+{
+    return SUCCEEDED(GetThemePosition(hTheme, iPartId, 0, TMT_OFFSET, Offset)) &&
+           SUCCEEDED(GetThemeEnumValue(hTheme, iPartId, 0, TMT_OFFSETTYPE, OffsetType));
+}
+
+static BOOL
+ThemePlaceCaptionButton(RECT *ButtonRect, const RECT *WindowRect, const RECT *CaptionRect,
+                        const RECT *LastButtonRect, BOOL HasLastButton,
+                        INT Width, INT Height, const POINT *Offset, INT OffsetType)
+{
+    INT x, y;
+
+    switch (OffsetType)
+    {
+        case OT_TOPLEFT:
+            x = WindowRect->left + Offset->x;
+            y = WindowRect->top + Offset->y;
+            break;
+        case OT_TOPRIGHT:
+            x = WindowRect->right - Offset->x;
+            y = WindowRect->top + Offset->y;
+            break;
+        case OT_TOPMIDDLE:
+            x = (WindowRect->left + WindowRect->right) / 2 + Offset->x;
+            y = WindowRect->top + Offset->y;
+            break;
+        case OT_BOTTOMLEFT:
+            x = WindowRect->left + Offset->x;
+            y = WindowRect->bottom - Offset->y;
+            break;
+        case OT_BOTTOMRIGHT:
+            x = WindowRect->right - Offset->x;
+            y = WindowRect->bottom - Offset->y;
+            break;
+        case OT_BOTTOMMIDDLE:
+            x = (WindowRect->left + WindowRect->right) / 2 + Offset->x;
+            y = WindowRect->bottom - Offset->y;
+            break;
+        case OT_MIDDLELEFT:
+            x = WindowRect->left + Offset->x;
+            y = (WindowRect->top + WindowRect->bottom) / 2 + Offset->y;
+            break;
+        case OT_MIDDLERIGHT:
+            x = WindowRect->right - Offset->x;
+            y = (WindowRect->top + WindowRect->bottom) / 2 + Offset->y;
+            break;
+        case OT_LEFTOFCAPTION:
+            x = CaptionRect->left - Offset->x - Width;
+            y = CaptionRect->top + Offset->y;
+            break;
+        case OT_RIGHTOFCAPTION:
+            x = CaptionRect->right + Offset->x;
+            y = CaptionRect->top + Offset->y;
+            break;
+        case OT_LEFTOFLASTBUTTON:
+            if (!HasLastButton)
+                return FALSE;
+            x = LastButtonRect->left - Offset->x - Width;
+            y = LastButtonRect->top + Offset->y;
+            break;
+        case OT_RIGHTOFLASTBUTTON:
+            if (!HasLastButton)
+                return FALSE;
+            x = LastButtonRect->right + Offset->x;
+            y = LastButtonRect->top + Offset->y;
+            break;
+        case OT_ABOVELASTBUTTON:
+            if (!HasLastButton)
+                return FALSE;
+            x = LastButtonRect->left + Offset->x;
+            y = LastButtonRect->top - Offset->y - Height;
+            break;
+        case OT_BELOWLASTBUTTON:
+            if (!HasLastButton)
+                return FALSE;
+            x = LastButtonRect->left + Offset->x;
+            y = LastButtonRect->bottom + Offset->y;
+            break;
+        default:
+            return FALSE;
+    }
+
+    SetRect(ButtonRect, x, y, x + Width, y + Height);
+    return ButtonRect->left >= WindowRect->left && ButtonRect->top >= WindowRect->top &&
+           ButtonRect->right <= WindowRect->right && ButtonRect->bottom <= WindowRect->bottom;
+}
+
 static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME htheme, INT buttonHeight)
 {
     PWND_DATA pwndData;
     DWORD style;
-    INT captionBtnWidth, captionBtnHeight, iPartId, i, edgeRight;
-    RECT rcCurrent;
+    INT captionBtnWidth, captionBtnHeight, iPartId, i;
+    RECT rcCurrent, rcWindow, rcLastButton;
     SIZE ButtonSize;
+    BOOL hasLastButton = FALSE;
+    UINT dpi;
 
     /* First of all check if we have something to do here */
     style = GetWindowLongW(hWnd, GWL_STYLE);
@@ -257,55 +348,61 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
     rcCurrent.right = wi->rcWindow.right - wi->rcWindow.left - wi->cxWindowBorders - 1;
     rcCurrent.bottom = wi->rcWindow.bottom - wi->rcWindow.top;
     rcCurrent.left = wi->cxWindowBorders;
-    edgeRight = wi->rcWindow.right - wi->rcWindow.left;
+    SetRect(&rcWindow, 0, 0,
+            wi->rcWindow.right - wi->rcWindow.left,
+            wi->rcWindow.bottom - wi->rcWindow.top);
 
     captionBtnHeight = buttonHeight - 4;
+    dpi = MSSTYLES_GetThemeDPI((PTHEME_CLASS)htheme);
+    if (!dpi)
+        dpi = 96;
 
     for (i = CLOSEBUTTON; i <= HELPBUTTON; i++)
     {
         static const int rgPart[] = { WP_CLOSEBUTTON, WP_MAXBUTTON, WP_MINBUTTON, WP_HELPBUTTON };
-        INT btnTop, btnHeight2, btnScaleHeight, btnRight;
-        BOOL edgeAligned;
-        int valign;
+        POINT offset;
+        INT offsetType;
+        BOOL hasPlacement;
 
         iPartId = rgPart[i - CLOSEBUTTON];
         if (i == CLOSEBUTTON && (wi->dwExStyle & WS_EX_TOOLWINDOW))
             iPartId = WP_SMALLCLOSEBUTTON;
-
-        /* A theme authoring VAlign = Top anchors its buttons to the frame edge */
-        edgeAligned = SUCCEEDED(GetThemeEnumValue(htheme, iPartId, 0, TMT_VALIGN, &valign)) &&
-                      valign == VA_TOP;
-        if (edgeAligned)
-        {
-            btnTop = 0;
-            btnHeight2 = buttonHeight + wi->cyWindowBorders;
-            btnScaleHeight = buttonHeight - 2;
-            btnRight = edgeRight;
-        }
-        else
-        {
-            btnTop = rcCurrent.top;
-            btnHeight2 = captionBtnHeight;
-            btnScaleHeight = btnHeight2;
-            btnRight = rcCurrent.right;
-        }
+        else if (i == MAXBUTTON && (style & WS_MAXIMIZE))
+            iPartId = WP_RESTOREBUTTON;
+        else if (i == MINBUTTON && (style & WS_MINIMIZE))
+            iPartId = WP_RESTOREBUTTON;
 
         if (FAILED(GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_MIN, &ButtonSize)) ||
             ButtonSize.cy <= 0)
-            ButtonSize.cx = ButtonSize.cy = btnScaleHeight;
+            ButtonSize.cx = ButtonSize.cy = captionBtnHeight;
 
-        captionBtnWidth = MulDiv(ButtonSize.cx, btnScaleHeight, ButtonSize.cy);
+        captionBtnWidth = MulDiv(ButtonSize.cx, captionBtnHeight, ButtonSize.cy);
 
-        SetRect(&pwndData->rcCaptionButtons[i],
-                btnRight - captionBtnWidth,
-                btnTop,
-                btnRight,
-                btnTop + btnHeight2);
+        hasPlacement = ThemeGetCaptionButtonPlacement(htheme, iPartId, &offset, &offsetType);
+        if (hasPlacement)
+        {
+            offset.x = MulDiv(offset.x, dpi, 96);
+            offset.y = MulDiv(offset.y, dpi, 96);
+        }
 
-        if (edgeAligned)
-            edgeRight -= captionBtnWidth;
+        if (!hasPlacement ||
+            !ThemePlaceCaptionButton(&pwndData->rcCaptionButtons[i], &rcWindow, &rcCurrent,
+                                     &rcLastButton, hasLastButton, captionBtnWidth,
+                                     captionBtnHeight, &offset, offsetType))
+        {
+            SetRect(&pwndData->rcCaptionButtons[i],
+                    rcCurrent.right - captionBtnWidth,
+                    rcCurrent.top,
+                    rcCurrent.right,
+                    rcCurrent.top + captionBtnHeight);
+        }
+
+        rcLastButton = pwndData->rcCaptionButtons[i];
+        hasLastButton = TRUE;
+        if ((rcLastButton.left + rcLastButton.right) / 2 < rcWindow.right / 2)
+            rcCurrent.left = max(rcCurrent.left, rcLastButton.right);
         else
-            rcCurrent.right -= captionBtnWidth;
+            rcCurrent.right = min(rcCurrent.right, rcLastButton.left);
     }
 }
 
@@ -529,7 +626,15 @@ ThemeDrawCaptionButton(PDRAW_CONTEXT pcontext,
     }
 
     if (prcCurrent)
-        prcCurrent->right = pwndData->rcCaptionButtons[buttonId].left;
+    {
+        const RECT *ButtonRect = &pwndData->rcCaptionButtons[buttonId];
+        INT WindowMiddle = (pcontext->wi.rcWindow.right - pcontext->wi.rcWindow.left) / 2;
+
+        if ((ButtonRect->left + ButtonRect->right) / 2 < WindowMiddle)
+            prcCurrent->left = max(prcCurrent->left, ButtonRect->right);
+        else
+            prcCurrent->right = min(prcCurrent->right, ButtonRect->left);
+    }
 
     if (pcontext->DarkMode)
         ThemeDrawDarkCaptionButton(pcontext, buttonId, iStateId,
