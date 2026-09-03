@@ -975,6 +975,41 @@ MiArm64UserPteKseg0(_In_ PVOID Address)
 }
 
 /*
+ * Typed probes normally cover one small object. Touch each covered page and
+ * let the caller's native SEH scope handle an access violation. The ARM64
+ * exception path resolves writable, clean, and copy-on-write pages before
+ * retrying the faulting store.
+ */
+FORCEINLINE
+VOID
+MiArm64ProbeForWriteSmall(
+    _In_ PVOID Address,
+    _In_ SIZE_T Length)
+{
+    ULONG_PTR Current = (ULONG_PTR)Address;
+    ULONG_PTR Last;
+    UCHAR Value;
+
+    if (Length == 0)
+        return;
+
+    Last = Current + Length - 1;
+    if ((Last < Current) || (Last >= (ULONG_PTR)MmUserProbeAddress))
+    {
+        ExRaiseAccessViolation();
+    }
+
+    Value = *(volatile UCHAR *)Current;
+    *(volatile UCHAR *)Current = Value;
+
+    if (PAGE_ROUND_DOWN(Current) != PAGE_ROUND_DOWN(Last))
+    {
+        Value = *(volatile UCHAR *)Last;
+        *(volatile UCHAR *)Last = Value;
+    }
+}
+
+/*
  * MiArm64KernelPteKseg0 - Get the real TTBR1 L3 PTE entry via KSEG0.
  *
  * Kernel mappings are translated through TTBR1. The recursive self-map can

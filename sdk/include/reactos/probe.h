@@ -27,7 +27,9 @@ static const LARGE_STRING __emptyLargeString = {0, 0, 0, NULL};
 /*
  * NOTE: Alignment of the pointers is not verified!
  */
-#ifdef _M_ARM64
+#if defined(_M_ARM64) && defined(_NTOSKRNL_)
+#define ProbeForWriteGenericType(Ptr, Type) MiArm64ProbeForWriteSmall((PVOID)(Ptr), sizeof(Type))
+#elif defined(_M_ARM64)
 #define ProbeForWriteGenericType(Ptr, Type) ProbeForWrite((PVOID)(Ptr), sizeof(Type), 1)
 #else
 #define ProbeForWriteGenericType(Ptr, Type)                                    \
