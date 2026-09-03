@@ -17,7 +17,7 @@
 
 C_ASSERT(REACTOS_AUDIO_SESSION_MAX_CHANNELS == 32);
 C_ASSERT(sizeof(struct reactos_audio_session_id) == 20);
-C_ASSERT(sizeof(struct reactos_audio_session_snapshot) == 1480);
+C_ASSERT(sizeof(struct reactos_audio_session_snapshot) == 1488);
 C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_id, instance_guid) == 4);
 C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, process_id) == 32);
 C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, generation) == 44);
@@ -27,3 +27,5 @@ C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, channel_volumes) ==
 C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, process_path) == 184);
 C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, display_name) == 704);
 C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, icon_path) == 960);
+C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, peak) == 1480);
+C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, peak_tick) == 1484);
