@@ -1017,13 +1017,15 @@ MMRESULT WINAPI timeGetDevCaps(TIMECAPS *caps, UINT size)
  */
 MMRESULT WINAPI timeBeginPeriod(UINT period)
 {
+    ULONG CurrentResolution;
+
     if (period < MMSYSTIME_MININTERVAL || period > MMSYSTIME_MAXINTERVAL)
         return TIMERR_NOCANDO;
 
-    if (period > MMSYSTIME_MININTERVAL)
-        WARN("Stub; we set our timer resolution at minimum\n");
-
-    return 0;
+    return NT_SUCCESS(NtSetTimerResolution(period * 10000,
+                                           TRUE,
+                                           &CurrentResolution)) ?
+           TIMERR_NOERROR : TIMERR_NOCANDO;
 }
 
 /******************************************************************************
@@ -1031,13 +1033,15 @@ MMRESULT WINAPI timeBeginPeriod(UINT period)
  */
 MMRESULT WINAPI timeEndPeriod(UINT period)
 {
+    ULONG CurrentResolution;
+
     if (period < MMSYSTIME_MININTERVAL || period > MMSYSTIME_MAXINTERVAL)
         return TIMERR_NOCANDO;
 
-    if (period > MMSYSTIME_MININTERVAL)
-        WARN("Stub; we set our timer resolution at minimum\n");
-
-    return 0;
+    return NT_SUCCESS(NtSetTimerResolution(period * 10000,
+                                           FALSE,
+                                           &CurrentResolution)) ?
+           TIMERR_NOERROR : TIMERR_NOCANDO;
 }
 
 /* EOF */
