@@ -411,6 +411,16 @@ MiAllocatePagesForMdl(IN PHYSICAL_ADDRESS LowAddress,
         ASSERT(Pfn1);
         if (Pfn1->u3.e1.PageLocation != ZeroedPageList) MiZeroPhysicalPage(Page);
         Pfn1->u3.e1.PageLocation = ActiveAndValid;
+
+        //
+        // Record the caching type the caller asked for (MmAllocatePagesForMdlEx).
+        // A later user-mode mapping of the page takes the page's attribute over
+        // the mapping request, so pages meant to be write-combined or
+        // non-cached must carry that attribute, or the mapping ends up cached.
+        // MiNotMapped (MmAllocatePagesForMdl) leaves the page as it is.
+        //
+        if (CacheAttribute != MiNotMapped)
+            Pfn1->u3.e1.CacheAttribute = CacheAttribute;
     }
 
     //
