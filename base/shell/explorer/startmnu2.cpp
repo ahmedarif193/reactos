@@ -2084,13 +2084,15 @@ public:
         }
         else if (m_AnimPhase == SM2A_CLOSE)
         {
-            double t = (double)(now - m_AnimT0) / 130.0;
+            double t = (double)(now - m_AnimT0) / 170.0;
             if (t > 1.0) t = 1.0;
-            double e = SM2Ease(t);
-            BYTE alpha = (BYTE)(255.0 * (1.0 - e));
+            double e = SM2Ease(1.0 - t);
+            BYTE alpha = (BYTE)(255.0 * e);
+            int x = m_ptFinal.x + (int)(m_dxSlide * (1.0 - e));
+            int y = m_ptFinal.y + (int)(m_dySlide * (1.0 - e));
             SetLayeredWindowAttributes(m_hWnd, 0, alpha, LWA_ALPHA);
-            if (m_UserPic.IsWindow())
-                SetLayeredWindowAttributes(m_UserPic.m_hWnd, 0, alpha, LWA_ALPHA);
+            SetWindowPos(NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            PositionUserPic(x, y, alpha);
             if (t >= 1.0)
                 FinishHide();
             else
