@@ -3453,6 +3453,14 @@ VOID
 DxgkDeviceWorkNotifyStateChange(
     _In_ PDXGKRNL_DEVICE Device);
 
+/* Waits until every submission the device had accepted at the time of the
+ * call has completed or the device reached a terminal state.  Later
+ * submissions do not extend the wait. */
+NTSTATUS
+DxgkDeviceWorkWaitForQueued(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG TimeoutMs);
+
 VOID
 DxgkDeviceBeginDestroy(
     _In_ PDXGKRNL_DEVICE Device);

@@ -141,6 +141,28 @@ DxgkDeviceWorkNotifyStateChange(
     DxgkDeviceWorkCoreNotifyStateChange(&Device->WorkLedger);
 }
 
+NTSTATUS
+DxgkDeviceWorkWaitForQueued(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG TimeoutMs)
+{
+    DXGK_DEVICE_WORK_SNAPSHOT Snapshot;
+    LARGE_INTEGER Deadline;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Device == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (DxgkDeviceWorkCoreIsEmpty(&Device->WorkLedger))
+        return STATUS_SUCCESS;
+    Status = DxgkDeviceWorkCoreCaptureSnapshot(&Device->WorkLedger, &Snapshot);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    KeQuerySystemTime(&Deadline);
+    Deadline.QuadPart += (LONGLONG)TimeoutMs * 10000LL;
+    return DxgkDeviceWorkCoreWaitForSnapshotUntil(&Device->WorkLedger, &Snapshot, &Deadline);
+}
+
 VOID
 DxgkDeviceBeginDestroy(
     _In_ PDXGKRNL_DEVICE Device)
