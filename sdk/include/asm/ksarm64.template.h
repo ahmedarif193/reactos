@@ -166,6 +166,7 @@ SIZE(KTRAP_FRAME_LENGTH, KTRAP_FRAME),
 
 HEADER("KPCR offsets"),
 OFFSET(PcCurrentPrcb, KIPCR, CurrentPrcb),
+OFFSET(PcCurrentIrql, KIPCR, CurrentIrql),
 OFFSET(PcCurrentThread, KIPCR, Prcb.CurrentThread),
 
 HEADER("KPRCB offsets"),

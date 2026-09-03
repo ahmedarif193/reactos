@@ -33,7 +33,11 @@ KiTrapReturn:
     isb                                  /* Ensure mask takes effect NOW */
 
     ldrb    w0, [x20, #TfSavedIrql]
+    ldrb    w1, [x18, #PcCurrentIrql]
+    cmp     w0, w1
+    b.eq    .Lirql_restored
     bl      KiRestoreTrapFrameIrql
+.Lirql_restored:
 
     /* Preserve fallback frame pointer/link register */
     ldr     x24, [x20, #TfFp]
@@ -45,8 +49,6 @@ KiTrapReturn:
     ldr     x26, [x20, #TfSp]
 
     /* Restore volatile registers from the trap frame */
-    ldr     x18, [x20, #TfX18]
-    ldp     x16, x17, [x20, #TfX16]
     ldp     x14, x15, [x20, #TfX14]
     ldp     x12, x13, [x20, #TfX12]
     ldp     x10, x11, [x20, #TfX10]
