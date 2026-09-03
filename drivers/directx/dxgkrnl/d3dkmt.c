@@ -2123,15 +2123,16 @@ DxgkpOpenFirstStartedAdapter(
 /*
  * DxgkpOpenAdapterByDisplayOrdinal
  *
- * Exact GDI display selection: \\.\DISPLAYn maps to the n-th started
- * display-capable adapter (each adapter exposes one source, so display
- * ordinal == adapter ordinal among display adapters).
+ * Exact GDI display selection: \\.\DISPLAYn maps across the video-present
+ * sources of the started display-capable adapters.  A full WDDM adapter may
+ * expose several sources even when none is attached to the desktop yet.
  */
 static NTSTATUS
 DxgkpOpenAdapterByDisplayOrdinal(
     _In_ ULONG DisplayOrdinal,
     _Out_ D3DKMT_HANDLE *OutHandle,
-    _Out_ LUID *OutLuid)
+    _Out_ LUID *OutLuid,
+    _Out_ D3DDDI_VIDEO_PRESENT_SOURCE_ID *OutSourceId)
 {
     PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
     ULONG Count;
@@ -2141,17 +2142,24 @@ DxgkpOpenAdapterByDisplayOrdinal(
 
     *OutHandle = 0;
     RtlZeroMemory(OutLuid, sizeof(*OutLuid));
+    *OutSourceId = D3DDDI_ID_UNINITIALIZED;
     if (DisplayOrdinal == 0)
         return STATUS_INVALID_PARAMETER;
     Count = DxgkpSnapshotAdapters(Snapshot);
     for (i = 0; i < Count; ++i)
     {
-        if (Snapshot[i]->NumberOfVideoPresentSources == 0)
+        ULONG SourceCount = Snapshot[i]->NumberOfVideoPresentSources;
+
+        if (SourceCount == 0)
             continue;
-        if (++Seen != DisplayOrdinal)
+        if (DisplayOrdinal - Seen > SourceCount)
+        {
+            Seen += SourceCount;
             continue;
+        }
         *OutHandle = DxgkpCreateAdapterHandle(Snapshot[i]);
         *OutLuid = Snapshot[i]->AdapterLuid;
+        *OutSourceId = DisplayOrdinal - Seen - 1;
         Status = *OutHandle != 0 ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
         break;
     }
@@ -8992,16 +9000,51 @@ DxgkpDispatchBufferedIoctl(
          */
         case IOCTL_D3DKMT_OPENADAPTERFROMHDC:
         {
+            D3DKMT_OPENADAPTERFROMHDC *pData;
+
             if (InputLength < sizeof(D3DKMT_OPENADAPTERFROMHDC) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
-            return Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? STATUS_NOT_SUPPORTED : STATUS_ACCESS_DENIED;
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
+                return STATUS_ACCESS_DENIED;
+
+            /* win32k owns HDCs and forwards only desktop DCs through this
+             * bridge.  DISPLAY1 is therefore the bridge's primary source. */
+            pData = (D3DKMT_OPENADAPTERFROMHDC *)SystemBuffer;
+            Status = DxgkpOpenAdapterByDisplayOrdinal(
+                         1,
+                         &pData->hAdapter,
+                         &pData->AdapterLuid,
+                         &pData->VidPnSourceId);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(*pData);
+            return Status;
         }
 
         case IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME:
         {
+            D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME *pData;
+            ULONG DisplayOrdinal;
+
             if (InputLength < sizeof(D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
-            return Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL ? STATUS_NOT_SUPPORTED : STATUS_ACCESS_DENIED;
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
+                return STATUS_ACCESS_DENIED;
+
+            pData = (D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME *)SystemBuffer;
+            DisplayOrdinal = DxgkpParseGdiDisplayName(
+                                 pData->DeviceName,
+                                 RTL_NUMBER_OF(pData->DeviceName));
+            if (DisplayOrdinal == 0)
+                return STATUS_INVALID_PARAMETER;
+
+            Status = DxgkpOpenAdapterByDisplayOrdinal(
+                         DisplayOrdinal,
+                         &pData->hAdapter,
+                         &pData->AdapterLuid,
+                         &pData->VidPnSourceId);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = sizeof(*pData);
+            return Status;
         }
 
         case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
