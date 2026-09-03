@@ -2525,6 +2525,9 @@ DxgkD3dkmtDeviceCleanup(
     _In_ PDXGKRNL_DEVICE Device);
 
 NTSTATUS
+DxgkSharedObjectsInitialize(VOID);
+
+NTSTATUS
 DxgkCleanupAdapterDevices(
     _In_ PDXGKRNL_ADAPTER Adapter);
 

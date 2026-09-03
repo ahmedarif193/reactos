@@ -22,6 +22,8 @@
  */
 
 #include "dxgkrnl_private.h"
+#include <ndk/obfuncs.h>
+#include <ndk/psfuncs.h>
 #include "vidmm.h"
 #include "vidsch.h"
 #include "d3dkmt.h"
@@ -44,6 +46,18 @@ C_ASSERT(sizeof(RXGK_ISFEATUREENABLED_PACKET) == RXGK_ISFEATUREENABLED_PACKET_SI
 #endif
 C_ASSERT(sizeof(RXGK_GETRESOURCEPRESENTPRIVATE_PACKET) == RXGK_GETRESOURCEPRESENTPRIVATE_PACKET_V1_SIZE);
 C_ASSERT(sizeof(RXGK_INVALIDATECACHE_PACKET) == RXGK_INVALIDATECACHE_PACKET_V1_SIZE);
+C_ASSERT(sizeof(RXGK_SHAREOBJECTS_PACKET) == RXGK_SHAREOBJECTS_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, Size) == 0);
+C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, Version) == 4);
+C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, ObjectCount) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, DesiredAccess) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, ObjectHandles) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, ObjectAttributesPresent) == 28);
+C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, SharedNtHandle) == 32);
+C_ASSERT(sizeof(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET) ==
+         RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, NtHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, GlobalShareHandle) == 16);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
 C_ASSERT(sizeof(RXGK_GETDWMVERTICALBLANKEVENT_PACKET) ==
          RXGK_GETDWMVERTICALBLANKEVENT_PACKET_V1_SIZE);
@@ -271,6 +285,184 @@ typedef struct _DXGKRNL_FILE_CONTEXT
     ULONG Magic;
 } DXGKRNL_FILE_CONTEXT, *PDXGKRNL_FILE_CONTEXT;
 
+typedef struct _DXGKRNL_SHARED_RESOURCE_OBJECT
+{
+    PDXGKVMM_RESOURCE Resource;
+} DXGKRNL_SHARED_RESOURCE_OBJECT, *PDXGKRNL_SHARED_RESOURCE_OBJECT;
+
+static POBJECT_TYPE DxgkSharedResourceObjectType;
+
+static VOID
+NTAPI
+DxgkpDeleteSharedResourceObject(
+    _In_ PVOID Object)
+{
+    PDXGKRNL_SHARED_RESOURCE_OBJECT SharedObject = Object;
+
+    if (SharedObject->Resource != NULL)
+    {
+        DxgkVidMmDereferenceResource(SharedObject->Resource);
+        SharedObject->Resource = NULL;
+    }
+}
+
+NTSTATUS
+DxgkSharedObjectsInitialize(VOID)
+{
+    OBJECT_TYPE_INITIALIZER TypeInitializer;
+    GENERIC_MAPPING GenericMapping;
+    UNICODE_STRING TypeName;
+
+    if (DxgkSharedResourceObjectType != NULL)
+        return STATUS_SUCCESS;
+
+    GenericMapping.GenericRead = STANDARD_RIGHTS_READ;
+    GenericMapping.GenericWrite = STANDARD_RIGHTS_WRITE |
+                                  SHARED_ALLOCATION_WRITE;
+    GenericMapping.GenericExecute = STANDARD_RIGHTS_EXECUTE;
+    GenericMapping.GenericAll = STANDARD_RIGHTS_ALL |
+                                SHARED_ALLOCATION_WRITE;
+
+    RtlZeroMemory(&TypeInitializer, sizeof(TypeInitializer));
+    RtlInitUnicodeString(&TypeName, L"DxgkSharedResource");
+    TypeInitializer.Length = sizeof(TypeInitializer);
+    TypeInitializer.InvalidAttributes = OBJ_OPENLINK;
+    TypeInitializer.GenericMapping = GenericMapping;
+    TypeInitializer.ValidAccessMask = STANDARD_RIGHTS_ALL |
+                                      SHARED_ALLOCATION_WRITE;
+    TypeInitializer.PoolType = NonPagedPool;
+    TypeInitializer.DefaultNonPagedPoolCharge =
+        sizeof(DXGKRNL_SHARED_RESOURCE_OBJECT);
+    TypeInitializer.UseDefaultObject = TRUE;
+    TypeInitializer.SecurityRequired = TRUE;
+    TypeInitializer.DeleteProcedure =
+        DxgkpDeleteSharedResourceObject;
+
+    return ObCreateObjectType(&TypeName,
+                              &TypeInitializer,
+                              NULL,
+                              &DxgkSharedResourceObjectType);
+}
+
+static NTSTATUS
+DxgkpShareObjects(
+    _Inout_ PRXGK_SHAREOBJECTS_PACKET Packet)
+{
+    PDXGKRNL_SHARED_RESOURCE_OBJECT SharedObject;
+    PDXGKVMM_RESOURCE Resource;
+    HANDLE SharedNtHandle;
+    NTSTATUS Status;
+
+    if (Packet == NULL ||
+        Packet->Size != RXGK_SHAREOBJECTS_PACKET_V1_SIZE ||
+        Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+        Packet->ObjectCount != 1 ||
+        Packet->ObjectHandles[0] == 0 ||
+        Packet->ObjectHandles[1] != 0 ||
+        Packet->ObjectHandles[2] != 0 ||
+        Packet->ObjectAttributesPresent != 1 ||
+        Packet->SharedNtHandle != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (DxgkSharedResourceObjectType == NULL)
+        return STATUS_DEVICE_NOT_READY;
+
+    Status = DxgkVidMmReferenceResource(Packet->ObjectHandles[0],
+                                        FALSE,
+                                        NULL,
+                                        &Resource);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_PARAMETER;
+    if (Resource->Device == NULL ||
+        Resource->Device->OwnerProcess != PsGetCurrentProcess() ||
+        !Resource->Shareable ||
+        !Resource->NtSecuritySharing ||
+        Resource->BackingResource != NULL)
+    {
+        DxgkVidMmDereferenceResource(Resource);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = ObCreateObject(KernelMode,
+                            DxgkSharedResourceObjectType,
+                            NULL,
+                            KernelMode,
+                            NULL,
+                            sizeof(*SharedObject),
+                            0,
+                            0,
+                            (PVOID *)&SharedObject);
+    if (!NT_SUCCESS(Status))
+    {
+        DxgkVidMmDereferenceResource(Resource);
+        return Status;
+    }
+    RtlZeroMemory(SharedObject, sizeof(*SharedObject));
+    SharedObject->Resource = Resource;
+
+    Status = ObInsertObject(SharedObject,
+                            NULL,
+                            Packet->DesiredAccess,
+                            0,
+                            NULL,
+                            &SharedNtHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Packet->SharedNtHandle = (ULONGLONG)(ULONG_PTR)SharedNtHandle;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpResolveSharedResourceNtHandle(
+    _Inout_ PRXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET Packet)
+{
+    PDXGKRNL_SHARED_RESOURCE_OBJECT SharedObject = NULL;
+    PDXGKVMM_RESOURCE Resource;
+    NTSTATUS Status;
+
+    if (Packet == NULL ||
+        Packet->Size != RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE ||
+        Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+        Packet->NtHandle == 0 ||
+        Packet->NtHandle > (ULONGLONG)(ULONG_PTR)-1 ||
+        Packet->GlobalShareHandle != 0 ||
+        Packet->Reserved != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (DxgkSharedResourceObjectType == NULL)
+        return STATUS_DEVICE_NOT_READY;
+
+    Status = ObReferenceObjectByHandle(
+                 (HANDLE)(ULONG_PTR)Packet->NtHandle,
+                 0,
+                 DxgkSharedResourceObjectType,
+                 UserMode,
+                 (PVOID *)&SharedObject,
+                 NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Resource = SharedObject->Resource;
+    if (Resource == NULL ||
+        !Resource->Shareable ||
+        !Resource->NtSecuritySharing ||
+        Resource->GlobalShareHandle == 0)
+    {
+        Status = STATUS_INVALID_HANDLE;
+    }
+    else
+    {
+        Packet->GlobalShareHandle = Resource->GlobalShareHandle;
+        Status = STATUS_SUCCESS;
+    }
+
+    ObDereferenceObject(SharedObject);
+    return Status;
+}
+
 /*
  * WDDM 2.x/3.x code in this tree remains experimental.  Public version
  * reporting stays at the last ABI- and behavior-complete level until the full
@@ -404,6 +596,8 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET:
 #endif
         case IOCTL_D3DKMT_GETSHAREDRESOURCEADAPTERLUID:
+        case IOCTL_D3DKMT_SHAREOBJECTS:
+        case IOCTL_RXGK_RESOLVESHAREDRESOURCENTHANDLE:
         case IOCTL_DXGKRNL_GET_DOD_INIT_ENTRY:
             return DXGK_CAPS_CORE_LEVEL_WDDM_1_2;
 
@@ -10256,6 +10450,55 @@ DxgkpDispatchBufferedIoctl(
         }
 #endif
 
+        case IOCTL_D3DKMT_SHAREOBJECTS:
+        {
+            PRXGK_SHAREOBJECTS_PACKET Packet;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+            {
+                return STATUS_ACCESS_DENIED;
+            }
+            if (InputLength < RXGK_SHAREOBJECTS_PACKET_V1_SIZE ||
+                OutputLength < RXGK_SHAREOBJECTS_PACKET_V1_SIZE ||
+                SystemBuffer == NULL)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet = (PRXGK_SHAREOBJECTS_PACKET)SystemBuffer;
+            Status = DxgkpShareObjects(Packet);
+            if (NT_SUCCESS(Status))
+                Irp->IoStatus.Information = RXGK_SHAREOBJECTS_PACKET_V1_SIZE;
+            return Status;
+        }
+
+        case IOCTL_RXGK_RESOLVESHAREDRESOURCENTHANDLE:
+        {
+            PRXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET Packet;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+            {
+                return STATUS_ACCESS_DENIED;
+            }
+            if (InputLength < RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE ||
+                OutputLength < RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE ||
+                SystemBuffer == NULL)
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+
+            Packet = (PRXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET)SystemBuffer;
+            Status = DxgkpResolveSharedResourceNtHandle(Packet);
+            if (NT_SUCCESS(Status))
+            {
+                Irp->IoStatus.Information =
+                    RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE;
+            }
+            return Status;
+        }
+
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         case IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP:
         {
@@ -11642,6 +11885,8 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_SETMONITORCOLORSPACETRANSFORM:
 #endif
         case IOCTL_D3DKMT_PUBLIC_OPERATION:
+        case IOCTL_D3DKMT_SHAREOBJECTS:
+        case IOCTL_RXGK_RESOLVESHAREDRESOURCENTHANDLE:
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER:
         case IOCTL_D3DKMT_GETDEVICESTATE:
         case IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS:

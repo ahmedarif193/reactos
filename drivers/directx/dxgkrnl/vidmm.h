@@ -143,6 +143,9 @@ typedef struct _DXGKVMM_RESOURCE
     /* TRUE only when the creator explicitly exported this resource. */
     BOOLEAN            Shareable;
 
+    /* TRUE when sharing uses a secured NT object instead of hGlobalShare. */
+    BOOLEAN            NtSecuritySharing;
+
     /* Runtime-private data copied from D3DKMT_CREATEALLOCATION. */
     PVOID              PrivateRuntimeData;
     UINT               PrivateRuntimeDataSize;

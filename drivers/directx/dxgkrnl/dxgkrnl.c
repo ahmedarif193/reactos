@@ -1401,6 +1401,17 @@ DriverEntry(
         return Status;
     }
 
+    Status = DxgkSharedObjectsInitialize();
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DriverEntry: shared-object initialization failed 0x%08lX\n",
+                    Status);
+        IoDeleteDevice(ControlDeviceObject);
+        GDxgControlDeviceStatus = Status;
+        InterlockedExchange(&GDxgControlDeviceState, 3);
+        return Status;
+    }
+
     /* Install every dispatch target before publishing or opening admission. */
     DriverObject->MajorFunction[IRP_MJ_CREATE] = DxgkDispatchCreate;
     DriverObject->MajorFunction[IRP_MJ_CLOSE] = DxgkDispatchClose;
