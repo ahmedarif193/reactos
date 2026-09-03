@@ -8538,13 +8538,26 @@ DxgkSubmitCommand(
 
     RtlCopyMemory(&FlagsValue, &SubmitCommand->Flags, sizeof(FlagsValue));
     if (SubmitCommand->BroadcastContextCount != 1 || SubmitCommand->BroadcastContext[0] == 0 || SubmitCommand->Commands == 0 || SubmitCommand->CommandLength == 0 || SubmitCommand->PrivateDriverDataSize > RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA || (SubmitCommand->PrivateDriverDataSize != 0 && SubmitCommand->pPrivateDriverData == NULL))
+    {
+        DXGKRNL_ERR("DxgkSubmitCommand: malformed request contexts=%lu context=0x%08x commands=0x%I64x length=%lu private=%lu data=%p\n",
+                    SubmitCommand->BroadcastContextCount,
+                    SubmitCommand->BroadcastContext[0],
+                    SubmitCommand->Commands,
+                    SubmitCommand->CommandLength,
+                    SubmitCommand->PrivateDriverDataSize,
+                    SubmitCommand->pPrivateDriverData);
         return STATUS_INVALID_PARAMETER;
+    }
     if (SubmitCommand->NumPrimaries != 0 || SubmitCommand->NumHistoryBuffers != 0 || SubmitCommand->PresentHistoryToken != 0 || (FlagsValue & ~RXGK_SUBMITCOMMAND_SUPPORTED_FLAGS) != 0)
         return STATUS_NOT_SUPPORTED;
 
     Status = DxgkReferenceVirtualContextByHandle(SubmitCommand->BroadcastContext[0], PsGetCurrentProcess(), &Adapter, &Device, &Context);
     if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkSubmitCommand: context 0x%08x lookup failed 0x%08lX\n",
+                    SubmitCommand->BroadcastContext[0], Status);
         return Status;
+    }
     if (!DxgkpDeviceExecutionActive(Device))
     {
         DxgkDereferenceContext(Context);
@@ -8573,8 +8586,22 @@ DxgkSubmitCommand(
             return STATUS_NOT_SUPPORTED;
         }
     }
-    else if (!SubmitCommand->Flags.NullRendering && !DxgkGpuVaValidateRange(Adapter, Device->ProcessRecord, SubmitCommand->Commands, SubmitCommand->CommandLength))
+    /*
+     * Commands is the GPU-VA anchor passed to DxgkDdiSubmitCommandVirtual;
+     * CommandLength is KMD-owned DMA-buffer geometry.  It need not describe
+     * one contiguous dxgkrnl allocation mapping. Native dxgkrnl likewise does
+     * not validate Commands + CommandLength as a GPU-VA span. Require only
+     * that the command start is mapped; vidsch pins
+     * the containing mapping atomically before queueing the packet.
+     */
+    else if (!SubmitCommand->Flags.NullRendering &&
+             !DxgkGpuVaValidateRange(Adapter,
+                                     Device->ProcessRecord,
+                                     SubmitCommand->Commands,
+                                     1))
     {
+        DXGKRNL_ERR("DxgkSubmitCommand: command start GPU VA 0x%I64x is not mapped\n",
+                    SubmitCommand->Commands);
         DxgkDereferenceContext(Context);
         return STATUS_INVALID_PARAMETER;
     }
