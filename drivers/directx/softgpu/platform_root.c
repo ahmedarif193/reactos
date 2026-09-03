@@ -132,6 +132,12 @@ SoftGpuPlatformQueryStart(
     return STATUS_SUCCESS;
 }
 
+ULONG
+SoftGpuPlatformDmaBufferPrivateDataSize(VOID)
+{
+    return 0;
+}
+
 NTSTATUS
 SoftGpuPlatformStartScanout(
     _Inout_ PSOFTGPU_DEVICE Device)

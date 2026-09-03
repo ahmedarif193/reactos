@@ -397,13 +397,11 @@ validate_tile_binning_config(VALIDATE_ARGS)
 	tile_alloc_size += 1024 * 1024;
 
 #ifdef __REACTOS__
-	/* AUTO_INIT_TSDA initializes the tile-state array, and the binner writes
-	 * the tile-allocation pool before the render thread follows its lists.
-	 * This internal object is not exposed through the untrusted BO table, so
-	 * avoid clearing the 1 MiB allocation pool on every submission.
-	 */
-	exec->tile_bo = drm_gem_cma_create_uninitialized(
-		dev, exec->tile_alloc_offset + tile_alloc_size);
+	/* The tile allocation is GPU output, so keep it outside the command
+	 * buffer's CPU-written prefix. */
+	exec->tile_bo = drm_gem_cma_create_uninitialized(dev,
+							 exec->tile_alloc_offset +
+							 tile_alloc_size);
 #else
 	exec->tile_bo = drm_gem_cma_create(dev, exec->tile_alloc_offset +
 					   tile_alloc_size);
@@ -412,6 +410,15 @@ validate_tile_binning_config(VALIDATE_ARGS)
 		return -ENOMEM;
 	list_addtail(&to_vc4_bo(&exec->tile_bo->base)->unref_head,
 		     &exec->unref_list);
+
+#ifdef __REACTOS__
+	/* The TSDA must be zero and visible to V3D before submission.  It lives
+	 * outside the generic command-prefix cache clean, so clean this small
+	 * range explicitly without touching the GPU-written allocation pool. */
+	if (!drm_gem_cma_clear_for_device(exec->tile_bo,
+						  exec->tile_alloc_offset))
+		return -ENOMEM;
+#endif
 
 	/* tile alloc address. */
 	*(uint32_t *)(validated + 0) = (exec->tile_bo->paddr +
