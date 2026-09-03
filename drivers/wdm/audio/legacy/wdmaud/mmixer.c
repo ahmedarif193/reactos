@@ -250,7 +250,7 @@ Enum(
 
     /* get device count */
     DeviceCount = GetSysAudioDeviceCount(DeviceObject);
-    DPRINT1("WDMAUD: Enum index %lu sysaudio count %lu\n",
+    DPRINT("WDMAUD: Enum index %lu sysaudio count %lu\n",
             DeviceIndex,
             DeviceCount);
 
@@ -272,7 +272,7 @@ Enum(
         return MM_STATUS_UNSUCCESSFUL;
     }
 
-    DPRINT1("WDMAUD: Enum device %lu name %S\n", DeviceIndex, *DeviceName);
+    DPRINT("WDMAUD: Enum device %lu name %S\n", DeviceIndex, *DeviceName);
 
     /* initialize key name */
     RtlInitUnicodeString(&KeyName, *DeviceName);

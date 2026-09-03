@@ -82,16 +82,12 @@ WdmAudInitWorkerRoutine(
     /* get device count */
     DeviceCount = GetSysAudioDeviceCount(DeviceObject);
 
-    DPRINT1("WDMAUD: SysAudioDeviceCount %lu previous %lu\n",
-            DeviceCount,
-            DeviceExtension->SysAudioDeviceCount);
-
     /* was a device added / removed */
     if (DeviceCount != DeviceExtension->SysAudioDeviceCount)
     {
         /* init mmixer library */
         Status = WdmAudMixerInitialize(DeviceObject);
-        DPRINT1("WDMAUD: MMixerInitialize Status %x WaveIn %lu WaveOut %lu Mixer %lu\n",
+        DPRINT("WDMAUD: MMixerInitialize Status %x WaveIn %lu WaveOut %lu Mixer %lu\n",
                 Status,
                 WdmAudGetWaveInDeviceCount(),
                 WdmAudGetWaveOutDeviceCount(),
