@@ -160,7 +160,8 @@ Rpi3Vc4ReserveV3dMemory(
     RtlZeroMemory(Context->V3dBinOverflow,
                   RPI3VC4_V3D_BIN_OVERFLOW_SIZE);
     Context->V3dBinOverflowPhysical = PhysicalAddress;
-    Context->V3dBinOverflowCursor = 0;
+    Context->V3dBinOverflowUsed = 0;
+    Context->V3dBinOverflowCurrent = 0;
     return STATUS_SUCCESS;
 }
 
@@ -499,8 +500,15 @@ Rpi3Vc4InitializeV3d(
     KeAcquireSpinLock(&Context->V3dQueueLock, &OldIrql);
     Context->V3dSubmitHead = 0;
     Context->V3dSubmitTail = 0;
+    Context->V3dBinNext = 0;
+    Context->V3dBinActiveIndex = 0;
+    Context->V3dRenderActiveIndex = 0;
     Context->V3dInterruptPending = 0;
-    Context->V3dEngineActive = FALSE;
+    Context->V3dBinOverflowUsed = 0;
+    Context->V3dBinOverflowCurrent = 0;
+    Context->V3dBinActive = FALSE;
+    Context->V3dRenderActive = FALSE;
+    Context->V3dRecovering = FALSE;
     KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
 
     if (!Context->V3dPollInitialized)
@@ -644,8 +652,13 @@ Rpi3Vc4StopV3d(
     KeAcquireSpinLock(&Context->V3dQueueLock, &OldIrql);
     Context->V3dReady = FALSE;
     Context->V3dSubmitHead = Context->V3dSubmitTail;
+    Context->V3dBinNext = Context->V3dSubmitTail;
     Context->V3dInterruptPending = 0;
-    Context->V3dEngineActive = FALSE;
+    Context->V3dBinOverflowUsed = 0;
+    Context->V3dBinOverflowCurrent = 0;
+    Context->V3dBinActive = FALSE;
+    Context->V3dRenderActive = FALSE;
+    Context->V3dRecovering = FALSE;
     KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
 
     Status = KeWaitForSingleObject(&Context->V3dPowerMutex,
@@ -692,7 +705,8 @@ Rpi3Vc4StopV3d(
             MmNonCached);
         Context->V3dBinOverflow = NULL;
         Context->V3dBinOverflowPhysical.QuadPart = 0;
-        Context->V3dBinOverflowCursor = 0;
+        Context->V3dBinOverflowUsed = 0;
+        Context->V3dBinOverflowCurrent = 0;
     }
     KeReleaseMutex(&Context->V3dPowerMutex, FALSE);
 }
@@ -743,11 +757,65 @@ Rpi3Vc4ResetCommandThreads(
 }
 
 /* V3D queue lock held. */
+static BOOLEAN
+Rpi3Vc4ReserveOverflowSlotLocked(
+    _Inout_ PRPI3VC4_CONTEXT Context,
+    _Out_ PULONG SlotMask,
+    _Out_ PULONG Address)
+{
+    ULONG Slot;
+    ULONG Mask;
+
+    for (Slot = 0;
+         Slot < RPI3VC4_V3D_BIN_OVERFLOW_SIZE /
+                    RPI3VC4_V3D_BIN_OVERFLOW_SLOT_SIZE;
+         ++Slot)
+    {
+        Mask = 1UL << Slot;
+        if ((Context->V3dBinOverflowUsed & Mask) != 0)
+            continue;
+
+        Context->V3dBinOverflowUsed |= Mask;
+        *SlotMask = Mask;
+        *Address = Rpi3Vc4GpuAddress(
+                       Context, Context->V3dBinOverflowPhysical) +
+                   Slot * RPI3VC4_V3D_BIN_OVERFLOW_SLOT_SIZE;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+/* V3D queue lock held. */
 static VOID
 Rpi3Vc4StartRenderLocked(
     _Inout_ PRPI3VC4_CONTEXT Context,
-    _Inout_ PRPI3VC4_V3D_SUBMIT Submit)
+    _In_ ULONG SubmitIndex)
 {
+    PRPI3VC4_V3D_SUBMIT Submit;
+
+    if (Context->V3dRecovering || Context->V3dRenderActive ||
+        SubmitIndex != Context->V3dSubmitHead ||
+        SubmitIndex == Context->V3dSubmitTail)
+    {
+        return;
+    }
+
+    Submit = &Context->V3dSubmitRing[
+        SubmitIndex % RPI3VC4_V3D_SUBMIT_RING_SIZE];
+    if (!Submit->BinComplete || Submit->RenderStarted)
+        return;
+
+    Submit->RenderStarted = TRUE;
+    Submit->RenderStartTime100ns = KeQueryInterruptTime();
+    Submit->RenderLastProgressTime100ns = Submit->RenderStartTime100ns;
+    Submit->RenderLastAddress = Submit->Packet.Ct1Start;
+    if (Submit->Packet.Ct1Start == 0)
+    {
+        Submit->RenderComplete = TRUE;
+        return;
+    }
+
     WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context,
                                              RPI3VC4_V3D_L2CACTL),
                          RPI3VC4_V3D_L2CCLR);
@@ -755,63 +823,82 @@ Rpi3Vc4StartRenderLocked(
                                              RPI3VC4_V3D_SLCACTL),
                          RPI3VC4_V3D_SLCACTL_TEXTURE);
     KeMemoryBarrier();
+    WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_INTENA),
+                         RPI3VC4_V3D_INTERRUPT_MASK);
     WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_CT1CA),
                          Submit->Packet.Ct1Start);
     WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_CT1EA),
                          Submit->Packet.Ct1End);
-    Submit->RenderStarted = TRUE;
-    Submit->StartTime100ns = KeQueryInterruptTime();
+    Context->V3dRenderActive = TRUE;
+    Context->V3dRenderActiveIndex = SubmitIndex;
 }
 
 /* V3D queue lock held. */
 static VOID
-Rpi3Vc4StartNextLocked(
+Rpi3Vc4StartBinLocked(
     _Inout_ PRPI3VC4_CONTEXT Context)
 {
     PRPI3VC4_V3D_SUBMIT Submit;
+    ULONG SubmitIndex;
 
-    if (Context->V3dEngineActive ||
-        Context->V3dSubmitHead == Context->V3dSubmitTail)
-    {
+    if (Context->V3dRecovering || Context->V3dBinActive)
         return;
-    }
-    Submit = &Context->V3dSubmitRing[
-        Context->V3dSubmitHead % RPI3VC4_V3D_SUBMIT_RING_SIZE];
-    Context->V3dEngineActive = TRUE;
-    Submit->RenderStarted = FALSE;
-    Submit->SnapshotLogged = FALSE;
-    Submit->StartTime100ns = KeQueryInterruptTime();
 
-    if (Submit->Packet.Ct1Start == 0)
+    while (Context->V3dBinNext != Context->V3dSubmitTail)
     {
-        InterlockedOr((volatile LONG *)&Context->V3dInterruptPending,
-                      RPI3VC4_V3D_INT_FRDONE);
-        KeInsertQueueDpc(&Context->V3dPollDpc, NULL, NULL);
-        return;
-    }
+        SubmitIndex = Context->V3dBinNext;
+        Submit = &Context->V3dSubmitRing[
+            SubmitIndex % RPI3VC4_V3D_SUBMIT_RING_SIZE];
+        if (Submit->Packet.Ct1Start == 0 ||
+            Submit->Packet.Ct0Start == 0)
+        {
+            Submit->BinComplete = TRUE;
+            ++Context->V3dBinNext;
+            continue;
+        }
 
-    Rpi3Vc4ResetCommandThreads(Context);
-    Context->V3dBinOverflowCursor = 0;
+        WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context,
+                                                 RPI3VC4_V3D_L2CACTL),
+                             RPI3VC4_V3D_L2CCLR);
+        WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context,
+                                                 RPI3VC4_V3D_SLCACTL),
+                             RPI3VC4_V3D_SLCACTL_ALL);
 #if defined(_M_ARM64)
-    __dsb(_ARM64_BARRIER_SY);
+        __dsb(_ARM64_BARRIER_SY);
 #endif
-    KeMemoryBarrier();
-    WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_INTENA),
-                         RPI3VC4_V3D_INTERRUPT_MASK);
-    if (Submit->Packet.Ct0Start != 0)
-    {
+        KeMemoryBarrier();
+        WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context,
+                                                 RPI3VC4_V3D_INTENA),
+                             RPI3VC4_V3D_INTERRUPT_MASK);
         WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context,
                                                  RPI3VC4_V3D_CT0CA),
                              Submit->Packet.Ct0Start);
         WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context,
                                                  RPI3VC4_V3D_CT0EA),
                              Submit->Packet.Ct0End);
+        Submit->BinStartTime100ns = KeQueryInterruptTime();
+        Submit->BinLastProgressTime100ns = Submit->BinStartTime100ns;
+        Submit->BinLastAddress = Submit->Packet.Ct0Start;
+        Context->V3dBinActive = TRUE;
+        Context->V3dBinActiveIndex = SubmitIndex;
+        ++Context->V3dBinNext;
+        return;
     }
-    else
-    {
-        Rpi3Vc4StartRenderLocked(Context, Submit);
-    }
-    Rpi3Vc4ArmPollTimer(Context);
+}
+
+/* V3D queue lock held. */
+static VOID
+Rpi3Vc4StartPipelinesLocked(
+    _Inout_ PRPI3VC4_CONTEXT Context)
+{
+    if (Context->V3dRecovering)
+        return;
+
+    Rpi3Vc4StartRenderLocked(Context, Context->V3dSubmitHead);
+    Rpi3Vc4StartBinLocked(Context);
+    Rpi3Vc4StartRenderLocked(Context, Context->V3dSubmitHead);
+    if (Context->V3dBinActive || Context->V3dRenderActive)
+        Rpi3Vc4ArmPollTimer(Context);
 }
 
 static VOID
@@ -871,7 +958,9 @@ Rpi3Vc4SubmitCommand(
     PRPI3VC4_CONTEXT Context;
     RPI3VC4_DMA_PACKET Packet;
     PHYSICAL_ADDRESS DmaPhysical;
-    PUCHAR Mapping;
+    PUCHAR Mapping = NULL;
+    BOOLEAN PhysicalMapping = FALSE;
+    BOOLEAN PrivatePacket = FALSE;
     ULONG BinnerOverflowEnd;
     KIRQL OldIrql;
 
@@ -896,18 +985,45 @@ Rpi3Vc4SubmitCommand(
         {
             return STATUS_INVALID_PARAMETER;
         }
-        DmaPhysical = SubmitCommand->DmaBufferPhysicalAddress;
-        Mapping = MmMapIoSpace(DmaPhysical,
-                               SubmitCommand->DmaBufferSubmissionEndOffset,
-                               MmCached);
-        if (Mapping == NULL)
-            return STATUS_INSUFFICIENT_RESOURCES;
-        RtlCopyMemory(&Packet,
-                      Mapping +
-                          SubmitCommand->DmaBufferSubmissionStartOffset,
-                      sizeof(Packet));
-        MmUnmapIoSpace(Mapping,
-                       SubmitCommand->DmaBufferSubmissionEndOffset);
+        if (SubmitCommand->pDmaBufferPrivateData != NULL &&
+            SubmitCommand->DmaBufferPrivateDataSubmissionStartOffset <=
+                SubmitCommand->DmaBufferPrivateDataSubmissionEndOffset &&
+            SubmitCommand->DmaBufferPrivateDataSubmissionEndOffset <=
+                SubmitCommand->DmaBufferPrivateDataSize &&
+            sizeof(Packet) <=
+                SubmitCommand->DmaBufferPrivateDataSubmissionEndOffset -
+                    SubmitCommand->DmaBufferPrivateDataSubmissionStartOffset)
+        {
+            RtlCopyMemory(
+                &Packet,
+                (const UCHAR *)SubmitCommand->pDmaBufferPrivateData +
+                    SubmitCommand->DmaBufferPrivateDataSubmissionStartOffset,
+                sizeof(Packet));
+            PrivatePacket = TRUE;
+        }
+        if (!PrivatePacket)
+        {
+            DmaPhysical = SubmitCommand->DmaBufferPhysicalAddress;
+            Mapping = MmMapIoSpace(
+                          DmaPhysical,
+                          SubmitCommand->DmaBufferSubmissionEndOffset,
+                          MmCached);
+            if (Mapping == NULL)
+                return STATUS_INSUFFICIENT_RESOURCES;
+            PhysicalMapping = TRUE;
+        }
+        if (!PrivatePacket)
+        {
+            RtlCopyMemory(&Packet,
+                          Mapping +
+                              SubmitCommand->DmaBufferSubmissionStartOffset,
+                          sizeof(Packet));
+        }
+        if (PhysicalMapping)
+        {
+            MmUnmapIoSpace(Mapping,
+                           SubmitCommand->DmaBufferSubmissionEndOffset);
+        }
         if (Packet.Magic != RPI3VC4_DMA_PACKET_MAGIC)
             return STATUS_NOT_SUPPORTED;
         if (Packet.Op != RPI3VC4_DMA_OP_VALIDATED_CL ||
@@ -920,7 +1036,9 @@ Rpi3Vc4SubmitCommand(
                                        Packet.Ct1End) ||
             Packet.Ct1Start == 0 ||
             (Packet.Ct0Start != 0 &&
-             (Packet.BinnerOverflowSize == 0 ||
+             (Packet.BinnerOverflowAddress != Rpi3Vc4GpuAddress(
+                  Context, Context->V3dBinOverflowPhysical) ||
+              Packet.BinnerOverflowSize != RPI3VC4_V3D_BIN_OVERFLOW_SIZE ||
               Packet.BinnerOverflowAddress >
                   MAXULONG - Packet.BinnerOverflowSize)))
         {
@@ -946,16 +1064,21 @@ Rpi3Vc4SubmitCommand(
         return Context->V3dReady ? STATUS_DEVICE_BUSY :
                                    STATUS_DEVICE_NOT_READY;
     }
+    RtlZeroMemory(
+        &Context->V3dSubmitRing[
+            Context->V3dSubmitTail % RPI3VC4_V3D_SUBMIT_RING_SIZE],
+        sizeof(Context->V3dSubmitRing[0]));
     Context->V3dSubmitRing[
-        Context->V3dSubmitTail % RPI3VC4_V3D_SUBMIT_RING_SIZE].Packet =
-            Packet;
+        Context->V3dSubmitTail % RPI3VC4_V3D_SUBMIT_RING_SIZE].Packet = Packet;
     Context->V3dSubmitRing[
         Context->V3dSubmitTail % RPI3VC4_V3D_SUBMIT_RING_SIZE].Fence =
-            SubmitCommand->SubmissionFenceId;
+        SubmitCommand->SubmissionFenceId;
     Context->V3dSubmitTail++;
     Device->Engines[SOFTGPU_NODE_3D].CurrentFence =
         SubmitCommand->SubmissionFenceId;
-    Rpi3Vc4StartNextLocked(Context);
+    Rpi3Vc4StartPipelinesLocked(Context);
+    if (Packet.Ct1Start == 0)
+        KeInsertQueueDpc(&Context->V3dPollDpc, NULL, NULL);
     KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
     return STATUS_SUCCESS;
 }
@@ -1011,18 +1134,37 @@ Rpi3Vc4Dpc(
     ULONG InterruptStatus;
     ULONG Ct0Status;
     ULONG Ct1Status;
-    ULONG Fence;
+    ULONG Ct0Address;
+    ULONG Ct1Address;
     ULONG OverflowAddress;
-    ULONGLONG StartTime;
+    ULONG OverflowSlot;
+    ULONG CompletedFences[RPI3VC4_V3D_SUBMIT_RING_SIZE];
+    ULONG CompletedCount = 0;
+    ULONG Index;
+    ULONGLONG Now;
     BOOLEAN Faulted;
     KIRQL OldIrql;
     PRPI3VC4_V3D_SUBMIT Submit;
+    PRPI3VC4_V3D_SUBMIT OverflowOwner;
 
     if (Device == NULL)
         return;
     Context = (PRPI3VC4_CONTEXT)Device->PlatformContext;
     if (Context == NULL || !Context->V3dReady || Context->V3dBase == NULL)
         return;
+    KeAcquireSpinLock(&Context->V3dQueueLock, &OldIrql);
+    if (!Context->V3dReady || Context->V3dBase == NULL)
+    {
+        KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
+        return;
+    }
+
+    /*
+     * The interrupt and polling DPCs may execute concurrently on different
+     * processors.  Capture and acknowledge status while holding the queue
+     * lock so that a completion observed by both callers cannot be applied to
+     * two successive hardware jobs.
+     */
     InterruptStatus = (ULONG)InterlockedExchange(
         (volatile LONG *)&Context->V3dInterruptPending, 0);
     InterruptStatus |= READ_REGISTER_ULONG(
@@ -1044,39 +1186,81 @@ Rpi3Vc4Dpc(
         Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_CT0CS));
     Ct1Status = READ_REGISTER_ULONG(
         Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_CT1CS));
+    Ct0Address = READ_REGISTER_ULONG(
+        Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_CT0CA));
+    Ct1Address = READ_REGISTER_ULONG(
+        Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_CT1CA));
 
-    KeAcquireSpinLock(&Context->V3dQueueLock, &OldIrql);
-    if (!Context->V3dEngineActive ||
+    if (Context->V3dRecovering ||
         Context->V3dSubmitHead == Context->V3dSubmitTail)
     {
         KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
         return;
     }
-    Submit = &Context->V3dSubmitRing[
-        Context->V3dSubmitHead % RPI3VC4_V3D_SUBMIT_RING_SIZE];
-    StartTime = Submit->StartTime100ns;
-    Faulted = (Ct0Status & RPI3VC4_V3D_CTERR) != 0 ||
-              (Ct1Status & RPI3VC4_V3D_CTERR) != 0;
+
+    Faulted = (Context->V3dBinActive &&
+               (Ct0Status & RPI3VC4_V3D_CTERR) != 0) ||
+              (Context->V3dRenderActive &&
+               (Ct1Status & RPI3VC4_V3D_CTERR) != 0);
+    if (!Faulted && Context->V3dBinActive &&
+        (InterruptStatus & RPI3VC4_V3D_INT_FLDONE) != 0)
+    {
+        Submit = &Context->V3dSubmitRing[
+            Context->V3dBinActiveIndex % RPI3VC4_V3D_SUBMIT_RING_SIZE];
+        Submit->BinComplete = TRUE;
+        Context->V3dBinActive = FALSE;
+    }
+    if (!Faulted && Context->V3dRenderActive &&
+        (InterruptStatus & RPI3VC4_V3D_INT_FRDONE) != 0)
+    {
+        Submit = &Context->V3dSubmitRing[
+            Context->V3dRenderActiveIndex % RPI3VC4_V3D_SUBMIT_RING_SIZE];
+        Submit->RenderComplete = TRUE;
+        Context->V3dRenderActive = FALSE;
+    }
     if (!Faulted &&
         (InterruptStatus & RPI3VC4_V3D_INT_OUTOMEM) != 0)
     {
-        if (Submit->Packet.Ct0Start == 0 ||
-            Submit->Packet.BinnerOverflowSize <
-                RPI3VC4_V3D_BIN_OVERFLOW_SLOT_SIZE ||
-            Context->V3dBinOverflowCursor >
-                Submit->Packet.BinnerOverflowSize -
-                    RPI3VC4_V3D_BIN_OVERFLOW_SLOT_SIZE ||
-            Submit->Packet.BinnerOverflowAddress >
-                MAXULONG - Context->V3dBinOverflowCursor)
+        OverflowOwner = NULL;
+        if (Context->V3dBinOverflowCurrent != 0)
+        {
+            if (Context->V3dBinActive)
+            {
+                OverflowOwner = &Context->V3dSubmitRing[
+                    Context->V3dBinActiveIndex %
+                        RPI3VC4_V3D_SUBMIT_RING_SIZE];
+            }
+            else if (Context->V3dBinNext != Context->V3dSubmitTail)
+            {
+                OverflowOwner = &Context->V3dSubmitRing[
+                    Context->V3dBinNext %
+                        RPI3VC4_V3D_SUBMIT_RING_SIZE];
+            }
+            else if (Context->V3dBinNext != Context->V3dSubmitHead)
+            {
+                OverflowOwner = &Context->V3dSubmitRing[
+                    (Context->V3dBinNext - 1) %
+                        RPI3VC4_V3D_SUBMIT_RING_SIZE];
+            }
+
+            if (OverflowOwner != NULL)
+                OverflowOwner->BinnerOverflowSlots |=
+                    Context->V3dBinOverflowCurrent;
+            else
+                Context->V3dBinOverflowUsed &=
+                    ~Context->V3dBinOverflowCurrent;
+            Context->V3dBinOverflowCurrent = 0;
+        }
+
+        if (!Rpi3Vc4ReserveOverflowSlotLocked(Context,
+                                              &OverflowSlot,
+                                              &OverflowAddress))
         {
             Faulted = TRUE;
         }
         else
         {
-            OverflowAddress = Submit->Packet.BinnerOverflowAddress +
-                              Context->V3dBinOverflowCursor;
-            Context->V3dBinOverflowCursor +=
-                RPI3VC4_V3D_BIN_OVERFLOW_SLOT_SIZE;
+            Context->V3dBinOverflowCurrent = OverflowSlot;
             WRITE_REGISTER_ULONG(
                 Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_BPOA),
                 OverflowAddress);
@@ -1090,78 +1274,101 @@ Rpi3Vc4Dpc(
             WRITE_REGISTER_ULONG(
                 Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_INTENA),
                 RPI3VC4_V3D_INT_OUTOMEM);
-            InterruptStatus &= ~RPI3VC4_V3D_INT_OUTOMEM;
         }
-    }
-    if (!Faulted &&
-        !Submit->RenderStarted &&
-        (InterruptStatus & RPI3VC4_V3D_INT_FLDONE) != 0)
-    {
-        Rpi3Vc4StartRenderLocked(Context, Submit);
-        StartTime = Submit->StartTime100ns;
-        InterruptStatus &= ~(RPI3VC4_V3D_INT_FLDONE |
-                             RPI3VC4_V3D_INT_FRDONE);
-    }
-    if (!Faulted &&
-        (!Submit->RenderStarted ||
-         (InterruptStatus & RPI3VC4_V3D_INT_FRDONE) == 0))
-    {
-        if (!Submit->SnapshotLogged &&
-            KeQueryInterruptTime() - StartTime >= 1000ULL * 1000 * 10)
-        {
-            Submit->SnapshotLogged = TRUE;
-            DPRINT1("RPI3VC4_JOB_STALL fence=%lu phase=%s int=%08lx ct0cs=%08lx ct0ca=%08lx ct0ea=%08lx ct1cs=%08lx ct1ca=%08lx ct1ea=%08lx pcs=%08lx bfc=%08lx rfc=%08lx err=%08lx\n",
-                    Submit->Fence,
-                    Submit->RenderStarted ? "render" : "bin",
-                    InterruptStatus,
-                    Ct0Status,
-                    READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
-                        Context, RPI3VC4_V3D_CT0CA)),
-                    READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
-                        Context, RPI3VC4_V3D_CT0EA)),
-                    Ct1Status,
-                    READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
-                        Context, RPI3VC4_V3D_CT1CA)),
-                    READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
-                        Context, RPI3VC4_V3D_CT1EA)),
-                    READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
-                        Context, RPI3VC4_V3D_PCS)),
-                    READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
-                        Context, RPI3VC4_V3D_BFC)),
-                    READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
-                        Context, RPI3VC4_V3D_RFC)),
-                    READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
-                        Context, RPI3VC4_V3D_ERRSTAT)));
-        }
-        if (KeQueryInterruptTime() - StartTime < 2ULL * 1000 * 1000 * 10)
-        {
-            Rpi3Vc4ArmPollTimer(Context);
-            KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
-            return;
-        }
-        Faulted = TRUE;
     }
 
-    Fence = Context->V3dSubmitRing[
-        Context->V3dSubmitHead % RPI3VC4_V3D_SUBMIT_RING_SIZE].Fence;
-    Context->V3dSubmitHead++;
-    Context->V3dEngineActive = FALSE;
-    if (Faulted)
-        Rpi3Vc4ResetCommandThreads(Context);
-    else
+    Now = KeQueryInterruptTime();
+    if (!Faulted && Context->V3dBinActive)
     {
-        WRITE_REGISTER_ULONG(
-            Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_L2CACTL),
-            RPI3VC4_V3D_L2CCLR);
-        KeMemoryBarrier();
+        Submit = &Context->V3dSubmitRing[
+            Context->V3dBinActiveIndex % RPI3VC4_V3D_SUBMIT_RING_SIZE];
+        if (Ct0Address != Submit->BinLastAddress)
+        {
+            Submit->BinLastAddress = Ct0Address;
+            Submit->BinLastProgressTime100ns = Now;
+        }
+        if (Now - Submit->BinLastProgressTime100ns >=
+            2ULL * 1000 * 1000 * 10)
+        {
+            Faulted = TRUE;
+        }
     }
-    Rpi3Vc4StartNextLocked(Context);
+    if (!Faulted && Context->V3dRenderActive)
+    {
+        Submit = &Context->V3dSubmitRing[
+            Context->V3dRenderActiveIndex % RPI3VC4_V3D_SUBMIT_RING_SIZE];
+        if (Ct1Address != Submit->RenderLastAddress)
+        {
+            Submit->RenderLastAddress = Ct1Address;
+            Submit->RenderLastProgressTime100ns = Now;
+        }
+        if (Now - Submit->RenderLastProgressTime100ns >=
+            2ULL * 1000 * 1000 * 10)
+        {
+            Faulted = TRUE;
+        }
+    }
+
+    if (Faulted)
+    {
+        Context->V3dRecovering = TRUE;
+        for (Index = Context->V3dSubmitHead;
+             Index != Context->V3dSubmitTail;
+             ++Index)
+        {
+            CompletedFences[CompletedCount++] =
+                Context->V3dSubmitRing[
+                    Index % RPI3VC4_V3D_SUBMIT_RING_SIZE].Fence;
+        }
+        Context->V3dSubmitHead = Context->V3dSubmitTail;
+        Context->V3dBinNext = Context->V3dSubmitTail;
+        Context->V3dBinOverflowUsed = 0;
+        Context->V3dBinOverflowCurrent = 0;
+        Context->V3dBinActive = FALSE;
+        Context->V3dRenderActive = FALSE;
+        Rpi3Vc4ResetCommandThreads(Context);
+        KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
+
+        for (Index = 0; Index < CompletedCount; ++Index)
+        {
+            Rpi3Vc4NotifyRetirement(Device, CompletedFences[Index],
+                                    STATUS_DEVICE_HARDWARE_ERROR);
+        }
+
+        KeAcquireSpinLock(&Context->V3dQueueLock, &OldIrql);
+        Context->V3dRecovering = FALSE;
+        Rpi3Vc4StartPipelinesLocked(Context);
+        KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
+        return;
+    }
+
+    for (;;)
+    {
+        while (Context->V3dSubmitHead != Context->V3dSubmitTail)
+        {
+            Submit = &Context->V3dSubmitRing[
+                Context->V3dSubmitHead % RPI3VC4_V3D_SUBMIT_RING_SIZE];
+            if (!Submit->RenderComplete)
+                break;
+
+            CompletedFences[CompletedCount++] = Submit->Fence;
+            Context->V3dBinOverflowUsed &= ~Submit->BinnerOverflowSlots;
+            ++Context->V3dSubmitHead;
+        }
+
+        Rpi3Vc4StartPipelinesLocked(Context);
+        if (Context->V3dSubmitHead == Context->V3dSubmitTail ||
+            !Context->V3dSubmitRing[
+                Context->V3dSubmitHead %
+                    RPI3VC4_V3D_SUBMIT_RING_SIZE].RenderComplete)
+        {
+            break;
+        }
+    }
     KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
 
-    Rpi3Vc4NotifyRetirement(Device,
-                            Fence,
-                            Faulted ? STATUS_DEVICE_HARDWARE_ERROR :
-                                      STATUS_SUCCESS);
+    for (Index = 0; Index < CompletedCount; ++Index)
+        Rpi3Vc4NotifyRetirement(Device, CompletedFences[Index], STATUS_SUCCESS);
 }
 
 static VOID
