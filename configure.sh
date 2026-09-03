@@ -475,12 +475,133 @@ if [ "$REACTOS_START_DIR" != "$REACTOS_SOURCE_DIR" ]; then
 	fi
 fi
 
+if [ "$USE_CLANG" -eq 1 ]; then
+	BUILD_ENVIRONMENT=Clang
+else
+	BUILD_ENVIRONMENT=GCC
+fi
+
+REACTOS_OUTPUT_PATH=output-$BUILD_ENVIRONMENT-$ARCH-$BUILD_TYPE_SUFFIX$ROSBE_OUTPUT_SUFFIX
+EXPECTED_BUILD_DIR="$REACTOS_SOURCE_DIR/$REACTOS_OUTPUT_PATH"
+
+# Never reconfigure one target's output directory as another target. This check
+# runs before any CMake cache or generated build state is removed.
+if [ "$REACTOS_START_DIR" = "$REACTOS_SOURCE_DIR" ]; then
+	BUILD_DIR="$EXPECTED_BUILD_DIR"
+	BUILD_HINT_PATH="./$REACTOS_OUTPUT_PATH"
+	if [ "$RUN_MENUCONFIG" = "0" ]; then
+		echo "Creating directories in $REACTOS_OUTPUT_PATH"
+		mkdir -p "$BUILD_DIR"
+	fi
+elif [ "$REACTOS_START_DIR" = "$EXPECTED_BUILD_DIR" ]; then
+	BUILD_DIR="$REACTOS_START_DIR"
+	BUILD_HINT_PATH="$BUILD_DIR"
+else
+	fail "refusing to configure '$REACTOS_START_DIR' as $BUILD_ENVIRONMENT/$ARCH/$BUILD_TYPE; expected output directory '$EXPECTED_BUILD_DIR'"
+fi
+
+ROSCONFIG_STATE_DIR="$BUILD_DIR/.rosconfig"
+ROSCONFIG_CACHE="$ROSCONFIG_STATE_DIR/config.cache"
+ROSCONFIG_OVERRIDES="$ROSCONFIG_STATE_DIR/overrides.cmake"
+if [ "$RUN_MENUCONFIG" = "0" ]; then
+	mkdir -p "$ROSCONFIG_STATE_DIR"
+fi
+
+if [ "$USE_CLANG" -eq 1 ]; then
+	ROSCONFIG_TOOLCHAIN=clang
+else
+	ROSCONFIG_TOOLCHAIN=gcc
+fi
+
+# Build the host configurator and seed this output tree's cache. The target
+# identity is persisted rather than existing only as a transient override.
+if rosconfig_build; then
+	ROSCONFIG_OK=1
+	if [ "$RUN_MENUCONFIG" = "0" ]; then
+		if ! "$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --defaults --set "ARCH=$ARCH" --set "TOOLCHAIN=$ROSCONFIG_TOOLCHAIN" --set "BUILD_TYPE=$BUILD_TYPE"; then
+			ROSCONFIG_OK=0
+		fi
+	fi
+fi
+
+if [ "$RUN_MENUCONFIG" = "1" ]; then
+	[ "$ROSCONFIG_OK" = "1" ] || fail "menuconfig requested but the rosconfig tool could not be built"
+	ROSCONFIG_MENU_DIR=$(mktemp -d "${TMPDIR:-/tmp}/reactos-menuconfig.XXXXXX") || fail "could not create a temporary menuconfig directory"
+	ROSCONFIG_MENU_CACHE="$ROSCONFIG_MENU_DIR/config.cache"
+	trap 'rm -rf "$ROSCONFIG_MENU_DIR"' 0 1 2 3 15
+	if [ -f "$ROSCONFIG_CACHE" ]; then
+		cp "$ROSCONFIG_CACHE" "$ROSCONFIG_MENU_CACHE" || fail "could not prepare the menuconfig cache"
+	fi
+	"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_MENU_CACHE" --defaults --set "ARCH=$ARCH" --set "TOOLCHAIN=$ROSCONFIG_TOOLCHAIN" --set "BUILD_TYPE=$BUILD_TYPE" || fail "could not initialize the menuconfig cache"
+	"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_MENU_CACHE" --menu --ask-configure
+	menu_status=$?
+	if [ "$menu_status" -ne 0 ] && [ "$menu_status" -ne "$ROSCONFIG_EXIT_SKIP_CONFIGURE" ]; then
+		[ "$menu_status" -eq 130 ] && echo "configure.sh: menuconfig cancelled; build configuration was not started." >&2
+		exit "$menu_status"
+	fi
+
+	# Unlike standalone menuconfig, the integrated workflow may select another
+	# target. Command-line target options still take precedence over the menu.
+	if [ "$USER_ARCH" = "0" ]; then
+		ARCH=$(rosconfig_file_get "$ROSCONFIG_MENU_CACHE" ARCH)
+	fi
+	case "$ARCH" in
+		amd64|i386|arm64|arm) ;;
+		*) fail "menuconfig selected an unsupported architecture: $ARCH" ;;
+	esac
+
+	if [ "$USER_TOOLCHAIN" = "0" ]; then
+		case "$(rosconfig_file_get "$ROSCONFIG_MENU_CACHE" TOOLCHAIN)" in
+			clang) USE_CLANG=1 ;;
+			gcc) USE_CLANG=0 ;;
+			msvc) fail "the MSVC toolchain selected by menuconfig is only supported by configure.cmd" ;;
+			*) fail "menuconfig selected an unsupported toolchain" ;;
+		esac
+	fi
+
+	if [ "$USER_BUILD_TYPE_FLAG" = "0" ] && [ "$USER_BUILD_TYPE" = "0" ]; then
+		BUILD_TYPE=$(rosconfig_file_get "$ROSCONFIG_MENU_CACHE" BUILD_TYPE)
+		case "$BUILD_TYPE" in
+			Debug|Release) ;;
+			*) fail "menuconfig selected an unsupported build type: $BUILD_TYPE" ;;
+		esac
+		BUILD_TYPE_SUFFIX=$(lower_build_type "$BUILD_TYPE")
+	fi
+
+	if [ "$USE_CLANG" -eq 1 ]; then
+		BUILD_ENVIRONMENT=Clang
+		ROSCONFIG_TOOLCHAIN=clang
+	else
+		BUILD_ENVIRONMENT=GCC
+		ROSCONFIG_TOOLCHAIN=gcc
+	fi
+	REACTOS_OUTPUT_PATH=output-$BUILD_ENVIRONMENT-$ARCH-$BUILD_TYPE_SUFFIX$ROSBE_OUTPUT_SUFFIX
+	BUILD_DIR="$REACTOS_SOURCE_DIR/$REACTOS_OUTPUT_PATH"
+	BUILD_HINT_PATH="$BUILD_DIR"
+	ROSCONFIG_STATE_DIR="$BUILD_DIR/.rosconfig"
+	ROSCONFIG_CACHE="$ROSCONFIG_STATE_DIR/config.cache"
+	ROSCONFIG_OVERRIDES="$ROSCONFIG_STATE_DIR/overrides.cmake"
+	mkdir -p "$ROSCONFIG_STATE_DIR" || fail "could not create $ROSCONFIG_STATE_DIR"
+	cp "$ROSCONFIG_MENU_CACHE" "$ROSCONFIG_CACHE" || fail "could not store the menuconfig selections in $ROSCONFIG_CACHE"
+	"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --defaults --set "ARCH=$ARCH" --set "TOOLCHAIN=$ROSCONFIG_TOOLCHAIN" --set "BUILD_TYPE=$BUILD_TYPE" || fail "could not preserve the output tree identity in $ROSCONFIG_CACHE"
+	rm -rf "$ROSCONFIG_MENU_DIR"
+	trap - 0 1 2 3 15
+
+	if [ "$menu_status" -eq "$ROSCONFIG_EXIT_SKIP_CONFIGURE" ]; then
+		echo "configure.sh: configuration stored in $ROSCONFIG_CACHE; CMake was not started."
+		exit 0
+	fi
+fi
+
+# Add the implicit build type only after menuconfig has had a chance to change
+# it. An explicit -DCMAKE_BUILD_TYPE argument was already retained above.
 if [ "$USER_BUILD_TYPE" -eq 0 ]; then
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DCMAKE_BUILD_TYPE:STRING=$BUILD_TYPE"
 fi
 
+# Resolve and validate the toolchain only after menuconfig has made its final
+# target selection.
 if [ "$USE_CLANG" -eq 1 ]; then
-	BUILD_ENVIRONMENT=Clang
 	TOOLCHAIN_FILE=toolchain-clang.cmake
 
 	if [ "$ROSBE_SKIP_HOST_CHECK" != "1" ]; then
@@ -494,7 +615,6 @@ if [ "$USE_CLANG" -eq 1 ]; then
 
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DREACTOS_CLANG_LLVM_MINGW_ROOT:PATH=$ROSBE_LLVM_ROOT"
 else
-	BUILD_ENVIRONMENT=GCC
 	TOOLCHAIN_FILE=toolchain-gcc.cmake
 	ROSBE_GCC_ROOT="$ROSBE_ROOT/mingw-gcc"
 	GCC_TRIPLET=$(gcc_triplet_for_arch "$ARCH")
@@ -506,58 +626,6 @@ else
 	fi
 
 	export PATH="$GCC_TOOLCHAIN_ROOT/bin:$PATH"
-fi
-
-REACTOS_OUTPUT_PATH=output-$BUILD_ENVIRONMENT-$ARCH-$BUILD_TYPE_SUFFIX$ROSBE_OUTPUT_SUFFIX
-EXPECTED_BUILD_DIR="$REACTOS_SOURCE_DIR/$REACTOS_OUTPUT_PATH"
-
-# Never reconfigure one target's output directory as another target. This check
-# runs before any CMake cache or generated build state is removed.
-if [ "$REACTOS_START_DIR" = "$REACTOS_SOURCE_DIR" ]; then
-	BUILD_DIR="$EXPECTED_BUILD_DIR"
-	BUILD_HINT_PATH="./$REACTOS_OUTPUT_PATH"
-	echo "Creating directories in $REACTOS_OUTPUT_PATH"
-	mkdir -p "$BUILD_DIR"
-elif [ "$REACTOS_START_DIR" = "$EXPECTED_BUILD_DIR" ]; then
-	BUILD_DIR="$REACTOS_START_DIR"
-	BUILD_HINT_PATH="$BUILD_DIR"
-else
-	fail "refusing to configure '$REACTOS_START_DIR' as $BUILD_ENVIRONMENT/$ARCH/$BUILD_TYPE; expected output directory '$EXPECTED_BUILD_DIR'"
-fi
-
-ROSCONFIG_STATE_DIR="$BUILD_DIR/.rosconfig"
-ROSCONFIG_CACHE="$ROSCONFIG_STATE_DIR/config.cache"
-ROSCONFIG_OVERRIDES="$ROSCONFIG_STATE_DIR/overrides.cmake"
-mkdir -p "$ROSCONFIG_STATE_DIR"
-
-if [ "$USE_CLANG" -eq 1 ]; then
-	ROSCONFIG_TOOLCHAIN=clang
-else
-	ROSCONFIG_TOOLCHAIN=gcc
-fi
-
-# Build the host configurator and seed this output tree's cache. The target
-# identity is persisted rather than existing only as a transient override.
-if rosconfig_build; then
-	ROSCONFIG_OK=1
-	if ! "$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --defaults --set "ARCH=$ARCH" --set "TOOLCHAIN=$ROSCONFIG_TOOLCHAIN" --set "BUILD_TYPE=$BUILD_TYPE"; then
-		ROSCONFIG_OK=0
-	fi
-fi
-
-if [ "$RUN_MENUCONFIG" = "1" ]; then
-	[ "$ROSCONFIG_OK" = "1" ] || fail "menuconfig requested but the rosconfig tool could not be built"
-	"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --menu --ask-configure
-	menu_status=$?
-	if [ "$menu_status" -ne 0 ]; then
-		if [ "$menu_status" -eq "$ROSCONFIG_EXIT_SKIP_CONFIGURE" ]; then
-			echo "configure.sh: configuration was not started."
-			exit 0
-		fi
-		[ "$menu_status" -eq 130 ] && echo "configure.sh: menuconfig cancelled; build configuration was not started." >&2
-		exit "$menu_status"
-	fi
-	"$ROSCONFIG_BIN" --def "$ROSCONFIG_DEF" --cache "$ROSCONFIG_CACHE" --defaults --set "ARCH=$ARCH" --set "TOOLCHAIN=$ROSCONFIG_TOOLCHAIN" --set "BUILD_TYPE=$BUILD_TYPE" || fail "could not preserve the output tree identity in $ROSCONFIG_CACHE"
 fi
 
 # Turn this output tree's selections into the CMake pre-load fragment consumed
