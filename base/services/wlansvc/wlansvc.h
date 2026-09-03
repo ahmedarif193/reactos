@@ -82,6 +82,9 @@
 #define WLAN_NOTIFICATION_SOURCE_IHV          0x00000040
 #endif
 
+/* wlan_notification_msm_radio_state_change from WLAN_NOTIFICATION_MSM. */
+#define WLANSVC_NOTIFICATION_MSM_RADIO_STATE_CHANGE 7U
+
 /*
  * WIDL emits only the wlanapi.h types reachable from the RPC interface; the
  * ones below are used service-locally (built into opaque LPBYTE blobs by the
