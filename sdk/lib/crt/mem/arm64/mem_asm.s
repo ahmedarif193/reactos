@@ -198,6 +198,39 @@ memset:
     orr     x1, x1, x1, lsl #32
     mov     x3, x1
 
+    // Large zero fills use the architected cache-block zero operation when
+    // the processor permits it.  The block size is reported by DCZID_EL0, so
+    // this remains correct across ARM64 implementations instead of assuming
+    // the 64-byte block used by Cortex-A53.
+    cbnz    x1, .Lset_head
+    cmp     x2, #256
+    b.lo    .Lset_head
+    mrs     x4, dczid_el0
+    tbnz    x4, #4, .Lset_head       // DZP: DC ZVA is prohibited
+    and     x4, x4, #0xf
+    mov     x5, #4
+    lsl     x5, x5, x4               // bytes = 4 << BS
+    sub     x6, x5, #1
+    neg     x7, x0
+    and     x7, x7, x6               // bytes to the next ZVA boundary
+    cbz     x7, .Lset_zva_blocks
+    cmp     x2, x7
+    b.lo    .Lset_head
+
+.Lset_zva_head:
+    strb    wzr, [x0], #1
+    sub     x2, x2, #1
+    subs    x7, x7, #1
+    b.ne    .Lset_zva_head
+
+.Lset_zva_blocks:
+    cmp     x2, x5
+    b.lo    .Lset_words
+    dc      zva, x0
+    add     x0, x0, x5
+    sub     x2, x2, x5
+    b       .Lset_zva_blocks
+
 .Lset_head:
     tst     x0, #7
     b.eq    .Lset_blocks
