@@ -939,11 +939,40 @@ static BOOL running_under_wine(void)
 }
 
 /* main function */
+#ifdef __REACTOS__
+static LONG WINAPI winetest_trace_exception( EXCEPTION_POINTERS *info )
+{
+    EXCEPTION_RECORD *record = info->ExceptionRecord;
+    HMODULE module = NULL;
+    char name[MAX_PATH];
+    void *addr = record->ExceptionAddress;
+    DWORD length;
+
+    printf( "winetest: exception %08lx at %p", record->ExceptionCode, addr );
+    if (GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (const char *)addr, &module ))
+    {
+        length = GetModuleFileNameA( module, name, sizeof(name) );
+        if (length && length < sizeof(name))
+            printf( " (%s+0x%Ix)", name, (ULONG_PTR)addr - (ULONG_PTR)module );
+    }
+    if (record->NumberParameters >= 2)
+        printf( " info %p", (void *)record->ExceptionInformation[1] );
+    printf( "\n" );
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 int main( int argc, char **argv )
 {
     char p[128];
 
     setvbuf (stdout, NULL, _IONBF, 0);
+#ifdef __REACTOS__
+    if (GetEnvironmentVariableA( "WINETEST_TRACE_EXCEPTIONS", p, sizeof(p) ))
+        AddVectoredExceptionHandler( 1, winetest_trace_exception );
+#endif
     winetest_mutex = CreateMutexA(NULL, FALSE, "winetest_print_mutex");
 
     winetest_argc = argc;
