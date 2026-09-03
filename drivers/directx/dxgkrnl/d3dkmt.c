@@ -1851,53 +1851,6 @@ DxgkpCapturePrioritiesForIoctl(
     return STATUS_SUCCESS;
 }
 
-/*
- * DxgkpApplyMakeResidentPriorities
- *
- * Applies a MakeResident request's per-allocation priorities.  The whole list
- * is referenced first so an invalid handle fails before any priority changes,
- * then the request-wide setter publishes every value atomically.
- */
-static NTSTATUS
-DxgkpApplyMakeResidentPriorities(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_DEVICE Device,
-    _In_reads_(Count) CONST D3DKMT_HANDLE *AllocationList,
-    _In_reads_(Count) CONST UINT *Priorities,
-    _In_ UINT Count)
-{
-    PDXGKVMM_ALLOCATION *Allocations;
-    UINT Referenced = 0;
-    UINT Index;
-    NTSTATUS Status = STATUS_SUCCESS;
-
-    if (Count == 0)
-        return STATUS_SUCCESS;
-    Allocations = ExAllocatePoolWithTag(PagedPool, (SIZE_T)Count * sizeof(*Allocations), TAG_DXGK_GPUVA);
-    if (Allocations == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-    RtlZeroMemory(Allocations, (SIZE_T)Count * sizeof(*Allocations));
-
-    for (Index = 0; Index < Count; ++Index)
-    {
-        Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)AllocationList[Index], Adapter, Device, &Allocations[Index]);
-        if (!NT_SUCCESS(Status))
-        {
-            Status = STATUS_INVALID_PARAMETER;
-            break;
-        }
-        Referenced++;
-    }
-
-    if (NT_SUCCESS(Status))
-        Status = DxgkVidMmSetAllocationPriorities(Allocations, Priorities, Count);
-
-    for (Index = 0; Index < Referenced; ++Index)
-        DxgkVidMmDereferenceAllocation(Allocations[Index]);
-    ExFreePoolWithTag(Allocations, TAG_DXGK_GPUVA);
-    return Status;
-}
-
 /* ========================================================================
  * DxgkEnumAdapters — D3DKMTEnumAdapters
  *
@@ -10020,9 +9973,9 @@ DxgkpDispatchBufferedIoctl(
         }
 
         case IOCTL_D3DKMT_MAKERESIDENT:
-        {   /* Priorities are applied request-wide before any residency
-             * transition, so a rejected priority cannot leave a partially
-             * repriorized list behind. */
+        {   /* PriorityList is currently informational for MakeResident.
+             * Capture it safely, but SetAllocationPriority remains the only
+             * operation that mutates allocation priority. */
             D3DDDI_MAKERESIDENT_LOCAL *pMakeResident;
             PDXGKRNL_ADAPTER Adapter;
             PDXGKRNL_DEVICE Device;
@@ -10086,8 +10039,6 @@ DxgkpDispatchBufferedIoctl(
                             Status = STATUS_INVALID_PARAMETER;
                             break;
                         }
-                        if (PriorityList[i] < D3DDDI_ALLOCATIONPRIORITY_MINIMUM || PriorityList[i] > D3DDDI_ALLOCATIONPRIORITY_MAXIMUM)
-                            Status = STATUS_INVALID_PARAMETER;
                         DxgkVidMmDereferenceAllocation(Allocation);
                         if (!NT_SUCCESS(Status))
                             break;
@@ -10101,8 +10052,6 @@ DxgkpDispatchBufferedIoctl(
                                  &FenceTransaction);
                     FenceTransactionActive = NT_SUCCESS(Status);
                 }
-                if (NT_SUCCESS(Status) && PriorityList != NULL)
-                    Status = DxgkpApplyMakeResidentPriorities(Adapter, Device, AllocationList, PriorityList, pMakeResident->NumAllocations);
                 if (NT_SUCCESS(Status))
                 {
                     Status = DxgkGpuVaMakeResident(
