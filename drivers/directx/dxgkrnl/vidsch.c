@@ -257,6 +257,18 @@ VidSchpPacketFromCookie(_In_ ULONGLONG Cookie)
 }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+static PVIDSCH_DMA_PACKET
+VidSchpFirstActivePacketLocked(
+    _In_ PVIDSCH_ENGINE Engine)
+{
+    if (IsListEmpty(&Engine->ActivePacketList))
+        return NULL;
+
+    return CONTAINING_RECORD(Engine->ActivePacketList.Flink,
+                             VIDSCH_DMA_PACKET,
+                             ActiveEngineEntry);
+}
+
 static VOID
 VidSchpPublishActivePacket(
     _Inout_ PVIDSCH_DMA_PACKET Packet)
@@ -269,13 +281,10 @@ VidSchpPublishActivePacket(
 
     Engine = Packet->OwnerEngine;
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-    ASSERT(Engine->ActivePacket == NULL ||
-           Engine->ActivePacket == Packet);
-    if (Engine->ActivePacket == NULL ||
-        Engine->ActivePacket == Packet)
-    {
-        Engine->ActivePacket = Packet;
-    }
+    ASSERT(IsListEmpty(&Packet->ActiveEngineEntry));
+    if (IsListEmpty(&Packet->ActiveEngineEntry))
+        InsertTailList(&Engine->ActivePacketList,
+                       &Packet->ActiveEngineEntry);
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
 }
 
@@ -299,8 +308,11 @@ VidSchpUnpublishTerminalPacket(
         return FALSE;
 
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-    if (Engine->ActivePacket == Packet)
-        Engine->ActivePacket = NULL;
+    if (!IsListEmpty(&Packet->ActiveEngineEntry))
+    {
+        RemoveEntryList(&Packet->ActiveEngineEntry);
+        InitializeListHead(&Packet->ActiveEngineEntry);
+    }
     Faulted =
         InterlockedCompareExchange(&Packet->Faulted, 0, 0) != 0;
     if (Faulted)
@@ -665,14 +677,7 @@ VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
     VidSchpReleaseCall(Engine->Adapter);
 }
 
-typedef struct _VIDSCH_VIRTUAL_SUBMIT_WORK
-{
-    WORK_QUEUE_ITEM WorkItem;
-    PVIDSCH_ENGINE Engine;
-    PVIDSCH_DMA_PACKET Packet;
-} VIDSCH_VIRTUAL_SUBMIT_WORK, *PVIDSCH_VIRTUAL_SUBMIT_WORK;
-
-static VOID NTAPI VidSchpVirtualSubmitWorker(_In_ PVOID Parameter);
+static VOID VidSchpSubmitVirtualPacket(_In_ PVIDSCH_ENGINE Engine, _Inout_ PVIDSCH_DMA_PACKET Packet);
 static VOID NTAPI VidSchpDestroyPacketWorker(_In_ PVOID Parameter);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 static VOID NTAPI VidSchpFaultCleanupWorker(_In_ PVOID Parameter);
@@ -704,8 +709,6 @@ VidSchpDestroyPacket(
     }
     if (Packet->OwnedDriverPrivateData != NULL)
         ExFreePoolWithTag(Packet->OwnedDriverPrivateData, TAG_VIDSCH);
-    if (Packet->VirtualSubmitWorkItem != NULL)
-        ExFreePoolWithTag(Packet->VirtualSubmitWorkItem, TAG_VIDSCH);
     DxgkDeviceWorkDestroy(Packet->DeviceWork);
     Packet->DeviceWork = NULL;
     if (Packet->HoldsContextReference)
@@ -1283,9 +1286,23 @@ VidSchpMarkActivePacketFaulted(
         NotifyData->DmaPageFaulted.FaultedProcessHandle;
 
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-    Packet = Engine->ActivePacket;
+    Packet = NULL;
+    for (PLIST_ENTRY Entry = Engine->ActivePacketList.Flink;
+         Entry != &Engine->ActivePacketList;
+         Entry = Entry->Flink)
+    {
+        PVIDSCH_DMA_PACKET Candidate;
+
+        Candidate = CONTAINING_RECORD(Entry,
+                                      VIDSCH_DMA_PACKET,
+                                      ActiveEngineEntry);
+        if ((ULONGLONG)(ULONG_PTR)Candidate == ExpectedCookie)
+        {
+            Packet = Candidate;
+            break;
+        }
+    }
     if (Packet == NULL ||
-        (ULONGLONG)(ULONG_PTR)Packet != ExpectedCookie ||
         Packet->OwnerEngine != Engine ||
         Packet->SubmissionFenceId !=
             NotifyData->DmaPageFaulted.FaultedFenceId ||
@@ -1396,7 +1413,7 @@ VidSchpConsumePageFaultInterrupt(
     /*
      * GetOldestDispatchedOnEngine's cookie is only a scalar cross-check: the
      * provider drops its lock before returning, so never dereference it.
-     * ActivePacket is the lifetime-safe local publication protected by
+     * ActivePacketList is the lifetime-safe local publication protected by
      * QueueLock.
      */
     Packet = VidSchpMarkActivePacketFaulted(
@@ -1505,22 +1522,32 @@ VidSchpCompletionDpcRoutine(
 
                 InterlockedIncrement64(&NodeStatistics->PreemptionsCompleted);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
-                OwnerStatistics = VidSchpPacketOwnerNodeStatistics(Engine->Adapter, Engine->ActivePacket, Engine->SchedulerOrdinal);
+                PVIDSCH_DMA_PACKET ActivePacket =
+                    VidSchpFirstActivePacketLocked(Engine);
+
+                OwnerStatistics = VidSchpPacketOwnerNodeStatistics(Engine->Adapter, ActivePacket, Engine->SchedulerOrdinal);
                 if (OwnerStatistics != NULL)
                     InterlockedIncrement64(&OwnerStatistics->PreemptionsCompleted);
-                if (Engine->ActivePacket != NULL)
+                if (ActivePacket != NULL)
                 {
-                    D3DKMT_QUERYSTATISTICS_DMA_PACKET_TYPE PacketType = VidSchpPacketType(Engine->ActivePacket);
+                    D3DKMT_QUERYSTATISTICS_DMA_PACKET_TYPE PacketType = VidSchpPacketType(ActivePacket);
 
                     InterlockedIncrement64(&NodeStatistics->PacketsPreempted[PacketType]);
-                    InterlockedIncrement64(&OwnerStatistics->PacketsPreempted[PacketType]);
+                    if (OwnerStatistics != NULL)
+                        InterlockedIncrement64(&OwnerStatistics->PacketsPreempted[PacketType]);
                 }
 #else
                 UNREFERENCED_PARAMETER(OwnerStatistics);
 #endif
             }
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
-            Engine->ActivePacket = NULL;
+            while (!IsListEmpty(&Engine->ActivePacketList))
+            {
+                PLIST_ENTRY Entry =
+                    RemoveHeadList(&Engine->ActivePacketList);
+
+                InitializeListHead(Entry);
+            }
 #endif
             VidSchpTryTransitionEngine(Engine, VidSchEnginePreempting, VidSchEnginePreempted);
             PreemptionCompleted = TRUE;
@@ -1623,14 +1650,11 @@ VidSchpTdrDpcRoutine(
 }
 
 static VOID
-NTAPI
-VidSchpVirtualSubmitWorker(
-    _In_ PVOID Parameter)
+VidSchpSubmitVirtualPacket(
+    _In_ PVIDSCH_ENGINE Engine,
+    _Inout_ PVIDSCH_DMA_PACKET Packet)
 {
-    PVIDSCH_VIRTUAL_SUBMIT_WORK Work = (PVIDSCH_VIRTUAL_SUBMIT_WORK)Parameter;
-    PVIDSCH_ENGINE Engine = Work->Engine;
     PDXGKRNL_ADAPTER Adapter = Engine->Adapter;
-    PVIDSCH_DMA_PACKET Packet = Work->Packet;
     DXGKARG_SUBMITCOMMANDVIRTUAL SubmitArgs;
     KIRQL OldIrql;
     NTSTATUS AbortStatus;
@@ -1749,9 +1773,6 @@ VidSchpVirtualSubmitWorker(
 
     if (Packet != NULL)
         VidSchpDereferencePacket(Packet);
-    ExFreePoolWithTag(Work, TAG_VIDSCH);
-    VidSchpReleaseOutstandingWorker(Engine);
-    VidSchpReleaseCall(Adapter);
 }
 
 /* ========================================================================
@@ -1888,41 +1909,14 @@ VidSchpKickEngine(
 #endif
         if (Packet->VirtualAddressing)
         {
-            PVIDSCH_VIRTUAL_SUBMIT_WORK Work = (PVIDSCH_VIRTUAL_SUBMIT_WORK)Packet->VirtualSubmitWorkItem;
-
-            /* Resubmission after preemption: the original work item was
-             * consumed by the first kick — mint a fresh one. */
-            if (Work == NULL)
-            {
-                Work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Work), TAG_VIDSCH);
-                if (Work != NULL)
-                {
-                    RtlZeroMemory(Work, sizeof(*Work));
-                    Work->Engine = Engine;
-                    Work->Packet = Packet;
-                    ExInitializeWorkItem(&Work->WorkItem, VidSchpVirtualSubmitWorker, Work);
-                }
-            }
-            if (Work == NULL)
-            {
-                /* The claim is committed as a failure, so dxgmms2 retires the
-                 * packet and dxgkrnl finalizes it from the retirement record. */
-                Packet->SchedulerClaimToken = 0;
-                (VOID)Sched->CompleteDispatch(Sched->SchedulerHandle, Engine->SchedulerOrdinal, ClaimToken, STATUS_INSUFFICIENT_RESOURCES);
-                VidSchpDrainRetirements(Adapter);
-                KeSetEvent(&Engine->CompletionEvent, IO_NO_INCREMENT, FALSE);
-                if (AuthorizedPacket != NULL)
-                    return TRUE;
-                continue;
-            }
-            Work->Packet = Packet;
-            Packet->VirtualSubmitWorkItem = NULL;
+            /* Native dxgmms2 submits from its persistent scheduler worker.
+             * Context-ordered virtual packets arrive here at PASSIVE_LEVEL
+             * with an authorized claim, so retain the packet across the
+             * callback and execute it on that same worker. */
+            ASSERT(AuthorizedPacket == Packet);
+            ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
             InterlockedIncrement(&Packet->ReferenceCount);
-            VidSchpReferenceActiveCall(Adapter);
-            KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-            VidSchpReferenceOutstandingWorkerLocked(Engine);
-            KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
-            ExQueueWorkItem(&Work->WorkItem, DelayedWorkQueue);
+            VidSchpSubmitVirtualPacket(Engine, Packet);
             return TRUE;
         }
 
@@ -2060,6 +2054,7 @@ VidSchInitialize(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     PVIDSCH_CONTEXT Ctx;
+    NTSTATUS Status;
     ULONG i;
 
     PAGED_CODE();
@@ -2122,6 +2117,9 @@ VidSchInitialize(
         Engine->NextFenceId = 1;
 
         KeInitializeSpinLock(&Engine->QueueLock);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+        InitializeListHead(&Engine->ActivePacketList);
+#endif
         KeInitializeEvent(&Engine->CompletionEvent, SynchronizationEvent, FALSE);
         KeInitializeEvent(&Engine->PreemptionCompletedEvent, NotificationEvent, FALSE);
         KeInitializeEvent(&Engine->WorkersDrainedEvent, NotificationEvent, TRUE);
@@ -2130,6 +2128,14 @@ VidSchInitialize(
 
         KeInitializeTimer(&Engine->TdrTimer);
         KeInitializeDpc(&Engine->TdrDpc, VidSchpTdrDpcRoutine, Engine);
+    }
+
+    Status = DxgkContextOrderStartSchedulerWorker(Ctx);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Ctx->Engines, TAG_VIDSCH);
+        ExFreePoolWithTag(Ctx, TAG_VIDSCH);
+        return Status;
     }
 
     Ctx->Initialized = TRUE;
@@ -2277,6 +2283,7 @@ VidSchDestroy(
 
     VidSchPrepareForStop(Adapter);
     VidSchAbortAllPackets(Adapter, STATUS_DEVICE_REMOVED);
+    DxgkContextOrderStopSchedulerWorker(Ctx);
 
     Adapter->VidSchContext = NULL;
     if (Ctx->Engines != NULL)
@@ -2360,6 +2367,7 @@ VidSchpPrepareSubmit(
     Packet->EngineOrdinal = EngineOrdinal;
     Packet->NodeOrdinal = NodeOrdinal;
     Packet->OwnerEngine = Engine;
+    InitializeListHead(&Packet->ActiveEngineEntry);
     Packet->ReferenceCount = 1;
     ExInitializeWorkItem(
         &Packet->DestroyWorkItem,
@@ -2485,8 +2493,6 @@ VidSchSubmitCommandVirtual(
     PVIDSCH_CONTEXT Ctx;
     PVIDSCH_ENGINE Engine;
     PVIDSCH_DMA_PACKET Packet;
-    PVIDSCH_VIRTUAL_SUBMIT_WORK Work;
-    KIRQL OldIrql;
     ULONG EngineOrdinal;
     ULONG FenceId;
     ULONG AdmittedFenceId;
@@ -2542,19 +2548,6 @@ VidSchSubmitCommandVirtual(
         Packet->DriverPrivateDataSize = DriverPrivateDataSize;
     }
 
-    Work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Work), TAG_VIDSCH);
-    if (Work == NULL)
-    {
-        VidSchpDereferencePacket(Packet);
-        VidSchpReleaseCall(Adapter);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    RtlZeroMemory(Work, sizeof(*Work));
-    Work->Engine = Engine;
-    Work->Packet = Packet;
-    ExInitializeWorkItem(&Work->WorkItem, VidSchpVirtualSubmitWorker, Work);
-    Packet->VirtualSubmitWorkItem = Work;
     Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
     if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, Context->NodeOrdinal, Packet->SubmissionFenceId, &Packet->FenceIdentityEpoch))
     {
@@ -3537,7 +3530,10 @@ VidSchPreemptEngine(
             InterlockedIncrement64(&Adapter->NodeStatistics[NodeOrdinal].PreemptionsRequested);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
             KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-            OwnerStatistics = VidSchpPacketOwnerNodeStatistics(Adapter, Engine->ActivePacket, NodeOrdinal);
+            OwnerStatistics = VidSchpPacketOwnerNodeStatistics(
+                                  Adapter,
+                                  VidSchpFirstActivePacketLocked(Engine),
+                                  NodeOrdinal);
             if (OwnerStatistics != NULL)
                 InterlockedIncrement64(&OwnerStatistics->PreemptionsRequested);
             KeReleaseSpinLock(&Engine->QueueLock, OldIrql);

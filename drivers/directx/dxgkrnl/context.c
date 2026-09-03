@@ -792,11 +792,11 @@ DxgkpInitializeContextStreamState(_Inout_ PDXGKRNL_CONTEXT Context)
     KeInitializeMutex(&Context->StreamAdmissionMutex, 0);
     KeInitializeSpinLock(&Context->StreamLock);
     InitializeListHead(&Context->StreamOperationList);
+    InitializeListHead(&Context->StreamReadyEntry);
     Context->StreamWorkerQueued = 0;
     Context->StreamWaitOperationCount = 0;
     Context->StreamStopping = 0;
     KeInitializeEvent(&Context->StreamDrainedEvent, NotificationEvent, TRUE);
-    /* StreamWorkItem remains zeroed until the ordered-operation worker is installed. */
 }
 
 static NTSTATUS

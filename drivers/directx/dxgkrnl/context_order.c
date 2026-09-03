@@ -426,6 +426,146 @@ ReleaseWorker:
     DxgkDereferenceContext(Context);
 }
 
+static BOOLEAN
+DxgkpContextOrderQueueContext(
+    _Inout_ PDXGKRNL_CONTEXT Context)
+{
+    PVIDSCH_CONTEXT Scheduler;
+    KIRQL OldIrql;
+    BOOLEAN Queued = FALSE;
+
+    if (Context->Device == NULL || Context->Device->Adapter == NULL)
+        return FALSE;
+    Scheduler = (PVIDSCH_CONTEXT)Context->Device->Adapter->VidSchContext;
+    if (Scheduler == NULL)
+        return FALSE;
+
+    KeAcquireSpinLock(&Scheduler->ContextOrderReadyLock, &OldIrql);
+    if (InterlockedCompareExchange(&Scheduler->ContextOrderThreadStopping, 0, 0) == 0)
+    {
+        ASSERT(IsListEmpty(&Context->StreamReadyEntry));
+        InsertTailList(&Scheduler->ContextOrderReadyList, &Context->StreamReadyEntry);
+        Queued = TRUE;
+    }
+    KeReleaseSpinLock(&Scheduler->ContextOrderReadyLock, OldIrql);
+
+    if (Queued)
+        KeSetEvent(&Scheduler->ContextOrderReadyEvent, IO_NO_INCREMENT, FALSE);
+    return Queued;
+}
+
+static VOID NTAPI
+DxgkpContextOrderSchedulerThread(
+    _In_ PVOID Parameter)
+{
+    PVIDSCH_CONTEXT Scheduler = Parameter;
+
+    KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
+    for (;;)
+    {
+        BOOLEAN Stop;
+
+        (VOID)KeWaitForSingleObject(&Scheduler->ContextOrderReadyEvent,
+                                    Executive,
+                                    KernelMode,
+                                    FALSE,
+                                    NULL);
+        for (;;)
+        {
+            PDXGKRNL_CONTEXT Context = NULL;
+            PLIST_ENTRY Entry;
+            KIRQL OldIrql;
+
+            KeAcquireSpinLock(&Scheduler->ContextOrderReadyLock, &OldIrql);
+            if (!IsListEmpty(&Scheduler->ContextOrderReadyList))
+            {
+                Entry = RemoveHeadList(&Scheduler->ContextOrderReadyList);
+                InitializeListHead(Entry);
+                Context = CONTAINING_RECORD(Entry, DXGKRNL_CONTEXT, StreamReadyEntry);
+            }
+            Stop = Context == NULL &&
+                   InterlockedCompareExchange(&Scheduler->ContextOrderThreadStopping, 0, 0) != 0;
+            KeReleaseSpinLock(&Scheduler->ContextOrderReadyLock, OldIrql);
+
+            if (Context == NULL)
+                break;
+            DxgkpContextOrderWorker(Context);
+        }
+        if (Stop)
+            break;
+    }
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+NTSTATUS
+DxgkContextOrderStartSchedulerWorker(
+    _Inout_ PVIDSCH_CONTEXT Scheduler)
+{
+    HANDLE ThreadHandle;
+    PETHREAD Thread;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Scheduler == NULL || Scheduler->ContextOrderThread != NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    KeInitializeSpinLock(&Scheduler->ContextOrderReadyLock);
+    InitializeListHead(&Scheduler->ContextOrderReadyList);
+    KeInitializeEvent(&Scheduler->ContextOrderReadyEvent, SynchronizationEvent, FALSE);
+    Scheduler->ContextOrderThreadStopping = 0;
+
+    Status = PsCreateSystemThread(&ThreadHandle,
+                                  THREAD_ALL_ACCESS,
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  DxgkpContextOrderSchedulerThread,
+                                  Scheduler);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ObReferenceObjectByHandle(ThreadHandle,
+                                       THREAD_ALL_ACCESS,
+                                       *PsThreadType,
+                                       KernelMode,
+                                       (PVOID *)&Thread,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        InterlockedExchange(&Scheduler->ContextOrderThreadStopping, 1);
+        KeSetEvent(&Scheduler->ContextOrderReadyEvent, IO_NO_INCREMENT, FALSE);
+        (VOID)ZwWaitForSingleObject(ThreadHandle, FALSE, NULL);
+        ZwClose(ThreadHandle);
+        return Status;
+    }
+    ZwClose(ThreadHandle);
+    Scheduler->ContextOrderThread = Thread;
+    return STATUS_SUCCESS;
+}
+
+VOID
+DxgkContextOrderStopSchedulerWorker(
+    _Inout_ PVIDSCH_CONTEXT Scheduler)
+{
+    PETHREAD Thread;
+    KIRQL OldIrql;
+
+    PAGED_CODE();
+    if (Scheduler == NULL || Scheduler->ContextOrderThread == NULL)
+        return;
+
+    KeAcquireSpinLock(&Scheduler->ContextOrderReadyLock, &OldIrql);
+    InterlockedExchange(&Scheduler->ContextOrderThreadStopping, 1);
+    Thread = Scheduler->ContextOrderThread;
+    KeReleaseSpinLock(&Scheduler->ContextOrderReadyLock, OldIrql);
+    KeSetEvent(&Scheduler->ContextOrderReadyEvent, IO_NO_INCREMENT, FALSE);
+
+    (VOID)KeWaitForSingleObject(Thread, Executive, KernelMode, FALSE, NULL);
+    ObDereferenceObject(Thread);
+    Scheduler->ContextOrderThread = NULL;
+    ASSERT(IsListEmpty(&Scheduler->ContextOrderReadyList));
+}
+
 static VOID DxgkpContextOrderSortContexts(_Out_writes_(ContextCount) PDXGKRNL_CONTEXT *SortedContexts, _In_reads_(ContextCount) PDXGKRNL_CONTEXT const *Contexts, _In_ ULONG ContextCount)
 {
     ULONG ContextIndex;
@@ -621,8 +761,12 @@ VOID DxgkContextOrderScheduleReferenced(_Inout_ PDXGKRNL_CONTEXT Context)
             if (InterlockedCompareExchange(&Context->StreamWorkerQueued, 1, 0) != 0)
                 continue;
             KeClearEvent(&Context->StreamDrainedEvent);
-            ExInitializeWorkItem(&Context->StreamWorkItem, DxgkpContextOrderWorker, Context);
-            ExQueueWorkItem(&Context->StreamWorkItem, DelayedWorkQueue);
+            if (!DxgkpContextOrderQueueContext(Context))
+            {
+                InterlockedExchange(&Context->StreamWorkerQueued, 0);
+                KeSetEvent(&Context->StreamDrainedEvent, IO_NO_INCREMENT, FALSE);
+                DxgkDereferenceContext(Context);
+            }
             return;
         }
         if (State == 1)

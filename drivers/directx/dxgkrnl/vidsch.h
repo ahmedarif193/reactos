@@ -174,8 +174,8 @@ typedef struct _VIDSCH_DMA_PACKET
     BOOLEAN                     VirtualAddressing;
     BOOLEAN                     HoldsContextReference;
     PVOID                       OwnedDriverPrivateData;
-    PVOID                       VirtualSubmitWorkItem;
     struct _VIDSCH_ENGINE      *OwnerEngine;
+    LIST_ENTRY                  ActiveEngineEntry;
     volatile LONG               ReferenceCount;
 
     /*
@@ -254,11 +254,12 @@ typedef struct _VIDSCH_ENGINE
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     /*
-     * QueueLock protects ActivePacket.  The provider owns the packet reference
-     * while this raw pointer is published; retirement clears it before
-     * releasing that reference.
+     * QueueLock protects ActivePacketList. The provider owns every packet
+     * reference while its entry is published; retirement removes the entry
+     * before releasing that reference. Dispatched packets form a FIFO prefix,
+     * so more than one packet may legitimately be owned by the engine.
      */
-    struct _VIDSCH_DMA_PACKET  *ActivePacket;
+    LIST_ENTRY                  ActivePacketList;
 
     /*
      * Lock-free interrupt-to-DPC handoff:
@@ -339,10 +340,29 @@ typedef struct _VIDSCH_CONTEXT
     /* Typed DpiGet/SetSchedulerCallbackState bit-mask contract. */
     volatile LONG               CallbackState;
 
+    /*
+     * Ordered context streams are dispatched by one scheduler-owned thread.
+     * This mirrors the persistent worker/event model used by dxgmms2 instead
+     * of borrowing a general executive work-queue thread for every wakeup.
+     */
+    KSPIN_LOCK                  ContextOrderReadyLock;
+    LIST_ENTRY                  ContextOrderReadyList;
+    KEVENT                      ContextOrderReadyEvent;
+    PETHREAD                    ContextOrderThread;
+    volatile LONG               ContextOrderThreadStopping;
+
     /* TRUE once VidSchInitialize has completed successfully. */
     BOOLEAN                     Initialized;
 
 } VIDSCH_CONTEXT, *PVIDSCH_CONTEXT;
+
+NTSTATUS
+DxgkContextOrderStartSchedulerWorker(
+    _Inout_ PVIDSCH_CONTEXT Scheduler);
+
+VOID
+DxgkContextOrderStopSchedulerWorker(
+    _Inout_ PVIDSCH_CONTEXT Scheduler);
 
 /* ========================================================================
  * VidSch public interface — called by adapter.c, dma.c, present.c
