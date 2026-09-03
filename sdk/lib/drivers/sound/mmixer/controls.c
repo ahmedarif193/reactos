@@ -1412,7 +1412,7 @@ MMixerHandleTopologyFilter(
     PULONG Pins;
     PTOPOLOGY Topology;
 
-    DPRINT1("MMIXER: handle local topology input=%lu pin=%lu\n", bInput, Pin);
+    DPRINT("MMIXER: handle local topology input=%lu pin=%lu\n", bInput, Pin);
 
     /* re-use existing topology */
     Topology = MixerData->Topology;
@@ -1432,7 +1432,7 @@ MMixerHandleTopologyFilter(
         */
         PinsCount = 0;
         Status = MMixerGetAllUpOrDownstreamPinsFromPinIndex(MixerContext, Topology, Pin, FALSE, &PinsCount, Pins);
-        DPRINT1("MMIXER: local topology pin=%lu downstream status=%x count=%lu first=%lu\n",
+        DPRINT("MMIXER: local topology pin=%lu downstream status=%x count=%lu first=%lu\n",
                 Pin,
                 Status,
                 PinsCount,
@@ -1454,7 +1454,7 @@ MMixerHandleTopologyFilter(
         * because bridge pins may belong to different render paths
         */
         MMixerApplyOutputFilterHack(MixerContext, MixerData, MixerData->hDevice, &PinsCount, Pins);
-        DPRINT1("MMIXER: local topology pin=%lu after output filter count=%lu first=%lu\n",
+        DPRINT("MMIXER: local topology pin=%lu after output filter count=%lu first=%lu\n",
                 Pin,
                 PinsCount,
                 PinsCount ? Pins[0] : MAXULONG);
@@ -1472,11 +1472,11 @@ MMixerHandleTopologyFilter(
         }
 
         /* create destination line */
-        DPRINT1("MMIXER: local topology build destination pin=%lu input=%lu begin\n",
+        DPRINT("MMIXER: local topology build destination pin=%lu input=%lu begin\n",
                 Pins[0],
                 bInput);
         Status = MMixerBuildMixerDestinationLine(MixerContext, MixerInfo, MixerData->hDevice, Pins[0], bInput);
-        DPRINT1("MMIXER: local topology build destination pin=%lu input=%lu status=%x\n",
+        DPRINT("MMIXER: local topology build destination pin=%lu input=%lu status=%x\n",
                 Pins[0],
                 bInput,
                 Status);
@@ -1494,11 +1494,11 @@ MMixerHandleTopologyFilter(
         }
 
         /* add mixer controls to destination line */
-        DPRINT1("MMIXER: local topology add controls pin=%lu dest=%lu begin\n",
+        DPRINT("MMIXER: local topology add controls pin=%lu dest=%lu begin\n",
                 Pins[0],
                 DestinationLineID);
         Status = MMixerAddMixerControlsToDestinationLine(MixerContext, MixerInfo, MixerData->hDevice, Topology, Pins[0], bInput, DestinationLineID, &LineTerminator);
-        DPRINT1("MMIXER: local topology add controls pin=%lu dest=%lu status=%x term=%lu\n",
+        DPRINT("MMIXER: local topology add controls pin=%lu dest=%lu status=%x term=%lu\n",
                 Pins[0],
                 DestinationLineID,
                 Status,
@@ -1507,11 +1507,11 @@ MMixerHandleTopologyFilter(
         if (Status == MM_STATUS_SUCCESS)
         {
             /* now add the rest of the source lines */
-            DPRINT1("MMIXER: local topology add source lines dest=%lu term=%lu begin\n",
+            DPRINT("MMIXER: local topology add source lines dest=%lu term=%lu begin\n",
                     DestinationLineID,
                     LineTerminator);
             Status = MMixerAddMixerSourceLines(MixerContext, MixerInfo, MixerData->hDevice, Topology, DestinationLineID, LineTerminator);
-            DPRINT1("MMIXER: local topology add source lines dest=%lu status=%x\n",
+            DPRINT("MMIXER: local topology add source lines dest=%lu status=%x\n",
                     DestinationLineID,
                     Status);
         }
@@ -1528,11 +1528,11 @@ MMixerHandleTopologyFilter(
         DestinationLineID = (DESTINATION_LINE + MixerInfo->MixCaps.cDestinations - 1);
 
         /* add mixer controls */
-        DPRINT1("MMIXER: local input add controls pin=%lu dest=%lu begin\n",
+        DPRINT("MMIXER: local input add controls pin=%lu dest=%lu begin\n",
                 Pin,
                 DestinationLineID);
         Status = MMixerAddMixerControlsToDestinationLine(MixerContext, MixerInfo, MixerData->hDevice, Topology, Pin, bInput, DestinationLineID, &LineTerminator);
-        DPRINT1("MMIXER: local input add controls pin=%lu dest=%lu status=%x term=%lu\n",
+        DPRINT("MMIXER: local input add controls pin=%lu dest=%lu status=%x term=%lu\n",
                 Pin,
                 DestinationLineID,
                 Status,
@@ -1541,11 +1541,11 @@ MMixerHandleTopologyFilter(
         if (Status == MM_STATUS_SUCCESS)
         {
             /* now add the rest of the source lines */
-            DPRINT1("MMIXER: local input add source lines dest=%lu term=%lu begin\n",
+            DPRINT("MMIXER: local input add source lines dest=%lu term=%lu begin\n",
                     DestinationLineID,
                     LineTerminator);
             Status = MMixerAddMixerSourceLines(MixerContext, MixerInfo, MixerData->hDevice, Topology, DestinationLineID, LineTerminator);
-            DPRINT1("MMIXER: local input add source lines dest=%lu status=%x\n",
+            DPRINT("MMIXER: local input add source lines dest=%lu status=%x\n",
                     DestinationLineID,
                     Status);
         }
@@ -1729,7 +1729,7 @@ MMixerInitializeFilter(
     ULONG PinsFound;
     ULONG NewMixerInfo = FALSE;
 
-    DPRINT1("MMIXER: initialize filter node=%lu input=%lu mixerInfo=%p\n",
+    DPRINT("MMIXER: initialize filter node=%lu input=%lu mixerInfo=%p\n",
             NodeIndex,
             bInputMixer,
             MixerInfo);
@@ -1790,7 +1790,7 @@ MMixerInitializeFilter(
      */
     PinsFound = 0;
     MMixerGetAllUpOrDownstreamPinsFromNodeIndex(MixerContext, Topology, NodeIndex, !bInputMixer, &PinsFound, Pins);
-    DPRINT1("MMIXER: node=%lu input=%lu wave pins found=%lu first=%lu\n",
+    DPRINT("MMIXER: node=%lu input=%lu wave pins found=%lu first=%lu\n",
             NodeIndex,
             bInputMixer,
             PinsFound,
@@ -1800,11 +1800,11 @@ MMixerInitializeFilter(
     ASSERT(PinsFound != 0);
 
     /* now create a wave info struct */
-    DPRINT1("MMIXER: node=%lu input=%lu initialize wave info begin\n",
+    DPRINT("MMIXER: node=%lu input=%lu initialize wave info begin\n",
             NodeIndex,
             bInputMixer);
     Status = MMixerInitializeWaveInfo(MixerContext, MixerList, MixerData, MixerInfo->MixCaps.szPname, bInputMixer, PinsFound, Pins);
-    DPRINT1("MMIXER: node=%lu input=%lu initialize wave info status=%x WaveIn=%lu WaveOut=%lu\n",
+    DPRINT("MMIXER: node=%lu input=%lu initialize wave info status=%x WaveIn=%lu WaveOut=%lu\n",
             NodeIndex,
             bInputMixer,
             Status,
@@ -1851,7 +1851,7 @@ MMixerInitializeFilter(
 
     PinsFound = 0;
     MMixerGetAllUpOrDownstreamPinsFromNodeIndex(MixerContext, Topology, NodeIndex, bInputMixer, &PinsFound, Pins);
-    DPRINT1("MMIXER: node=%lu input=%lu bridge pins found=%lu first=%lu\n",
+    DPRINT("MMIXER: node=%lu input=%lu bridge pins found=%lu first=%lu\n",
             NodeIndex,
             bInputMixer,
             PinsFound,
@@ -1879,7 +1879,7 @@ MMixerInitializeFilter(
 
     /* does the pin have a physical connection */
     Status = MMixerGetPhysicalConnection(MixerContext, MixerData->hDevice, Pins[0], &OutConnection);
-    DPRINT1("MMIXER: node=%lu input=%lu bridge pin=%lu physical status=%x\n",
+    DPRINT("MMIXER: node=%lu input=%lu bridge pin=%lu physical status=%x\n",
             NodeIndex,
             bInputMixer,
             Pins[0],
@@ -1892,7 +1892,7 @@ MMixerInitializeFilter(
 
         /* topology on the topoloy filter */
         Status = MMixerHandlePhysicalConnection(MixerContext, MixerList, MixerData, MixerInfo, bInputMixer, OutConnection);
-        DPRINT1("MMIXER: node=%lu input=%lu physical topology status=%x\n",
+        DPRINT("MMIXER: node=%lu input=%lu physical topology status=%x\n",
                 NodeIndex,
                 bInputMixer,
                 Status);
@@ -1904,7 +1904,7 @@ MMixerInitializeFilter(
     {
         /* topology is on the same filter */
         Status = MMixerHandleTopologyFilter(MixerContext, MixerList, MixerData, MixerInfo, bInputMixer, Pins[0]);
-        DPRINT1("MMIXER: node=%lu input=%lu local topology status=%x\n",
+        DPRINT("MMIXER: node=%lu input=%lu local topology status=%x\n",
                 NodeIndex,
                 bInputMixer,
                 Status);
@@ -1923,7 +1923,7 @@ Complete:
     }
 
     /* done */
-    DPRINT1("MMIXER: initialize filter done node=%lu input=%lu status=%x Mixer=%lu WaveIn=%lu WaveOut=%lu\n",
+    DPRINT("MMIXER: initialize filter done node=%lu input=%lu status=%x Mixer=%lu WaveIn=%lu WaveOut=%lu\n",
             NodeIndex,
             bInputMixer,
             Status,
@@ -2052,7 +2052,7 @@ MMixerSetupFilter(
          * direction for the purposes of endpoint enumeration. */
         NodeIndex = MMixerGetNodeIndexFromGuid(Topology, &KSNODETYPE_AUDIO_ENGINE);
     }
-    DPRINT1("MMIXER: DAC node index %lu\n", NodeIndex);
+    DPRINT("MMIXER: DAC node index %lu\n", NodeIndex);
     if (NodeIndex != MAXULONG)
     {
         /* it has */
@@ -2074,7 +2074,7 @@ MMixerSetupFilter(
 
     /* check if the filter has an wave in node */
     NodeIndex = MMixerGetNodeIndexFromGuid(Topology, &KSNODETYPE_ADC);
-    DPRINT1("MMIXER: ADC node index %lu\n", NodeIndex);
+    DPRINT("MMIXER: ADC node index %lu\n", NodeIndex);
     if (NodeIndex != MAXULONG)
     {
         /* it has */
