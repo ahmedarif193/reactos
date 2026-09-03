@@ -18,3 +18,17 @@ typedef struct _ACPI_GET_SYSTEM_TABLE_INPUT
     CHAR Signature[4];
     ULONG Instance;
 } ACPI_GET_SYSTEM_TABLE_INPUT, *PACPI_GET_SYSTEM_TABLE_INPUT;
+
+/*
+ * Lists the signature of every description table the firmware published, in
+ * load order, as an array of four-character signatures.  A caller that has to
+ * discover which tables exist, rather than ask for one it already knows about,
+ * needs this because a signature can appear more than once.
+ */
+#define IOCTL_ACPI_ENUM_SYSTEM_TABLES CTL_CODE(FILE_DEVICE_ACPI, 0x12, METHOD_BUFFERED, FILE_READ_ACCESS)
+
+typedef struct _ACPI_ENUM_SYSTEM_TABLES_ENTRY
+{
+    CHAR Signature[4];
+    ULONG Instance;
+} ACPI_ENUM_SYSTEM_TABLES_ENTRY, *PACPI_ENUM_SYSTEM_TABLES_ENTRY;
