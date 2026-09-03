@@ -233,6 +233,31 @@ StartProcess(
 }
 
 static BOOL
+StartDesktopCompositor(
+    _In_opt_ PVOID pEnvironment)
+{
+    WCHAR DwmPath[MAX_PATH];
+    UINT Length;
+
+    Length = GetSystemDirectoryW(DwmPath, ARRAYSIZE(DwmPath));
+    if (Length == 0 || Length >= ARRAYSIZE(DwmPath) ||
+        FAILED(StringCchCatW(DwmPath, ARRAYSIZE(DwmPath), L"\\dwm.exe")))
+    {
+        WARN("Failed to build the desktop compositor path\n");
+        return FALSE;
+    }
+
+    if (!StartProcess(DwmPath, pEnvironment))
+    {
+        WARN("Failed to start desktop compositor '%s'\n", debugstr_w(DwmPath));
+        return FALSE;
+    }
+
+    TRACE("Started desktop compositor '%s'\n", debugstr_w(DwmPath));
+    return TRUE;
+}
+
+static BOOL
 StartShell(
     _In_opt_ PVOID pEnvironment)
 {
@@ -821,6 +846,8 @@ Restart:
                 WARN("CreateEnvironmentBlock() failed, fall back to default (error %lu)\n",
                      GetLastError());
             }
+            if (!IsConsoleShell())
+                StartDesktopCompositor(pEnvironment);
             Success = StartShell(pEnvironment);
             if (pEnvironment)
                 DestroyEnvironmentBlock(pEnvironment);
