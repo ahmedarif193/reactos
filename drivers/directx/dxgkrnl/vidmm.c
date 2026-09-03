@@ -2361,8 +2361,13 @@ DxgkVidMmGetHandleData(
 
             ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
             Allocation = DxgkpVidMmLookupAllocationLocked(Handle);
-            if (Allocation != NULL && !Allocation->Initializing && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
+            if (Allocation != NULL &&
+                (!Allocation->Initializing || !DeviceSpecific) &&
+                InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
             {
+                /* DxgkDdiOpenAllocation may query the adapter allocation
+                 * handle before the creator transaction publishes its
+                 * device-specific binding. */
                 if (DeviceSpecific)
                     MiniportHandle = Allocation->OpenBindingHandle;
                 else if (Allocation->BackingAllocation != NULL)
@@ -2426,7 +2431,9 @@ DxgkVidMmAcquireHandleData(
 
             ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
             Allocation = DxgkpVidMmLookupAllocationLocked(Handle);
-            if (Allocation != NULL && !Allocation->Initializing && InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
+            if (Allocation != NULL &&
+                (!Allocation->Initializing || !DeviceSpecific) &&
+                InterlockedCompareExchange(&Allocation->Destroying, 0, 0) == 0)
             {
                 BackingAllocation = Allocation->BackingAllocation != NULL ? Allocation->BackingAllocation : Allocation;
                 MiniportHandle = DeviceSpecific ? Allocation->OpenBindingHandle : BackingAllocation->MiniportHandle;
