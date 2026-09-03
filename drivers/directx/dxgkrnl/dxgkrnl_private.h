@@ -1248,13 +1248,13 @@ struct _DXGKRNL_CONTEXT
     D3DDDI_CREATECONTEXTFLAGS   UserModeCreateFlags;
 
     /* One dxgmms2 ordered stream exists for every public context. The lock,
-     * operation list, worker item, and drain state form the nonpaged client
-     * serialization boundary used by the next ordering-integration phase. */
+     * operation list, scheduler-ready entry, and drain state form the
+     * nonpaged client serialization boundary. */
     DXGMMS2_CONTEXT_STREAM_HANDLE Mms2ContextStream;
     KMUTEX                      StreamAdmissionMutex;
     KSPIN_LOCK                  StreamLock;
     LIST_ENTRY                  StreamOperationList;
-    WORK_QUEUE_ITEM             StreamWorkItem;
+    LIST_ENTRY                  StreamReadyEntry;
     volatile LONG               StreamWorkerQueued;
     volatile LONG               StreamWaitOperationCount;
     volatile LONG               StreamStopping;
