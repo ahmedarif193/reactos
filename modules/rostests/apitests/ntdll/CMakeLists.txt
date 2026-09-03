@@ -57,6 +57,7 @@ list(APPEND SOURCE
     LdrLoadDll.c
     load_notifications.c
     locale.c
+    memmove.c
     NtAcceptConnectPort.c
     NtAccessCheck.c
     NtAccessCheckByType.c
