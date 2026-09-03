@@ -516,6 +516,15 @@ DwmApplyBlur(ULONG *Composition, LONG Width, LONG Height,
     }
 }
 
+static BOOL
+DwmWindowBlursBackdrop(const DWM_WIN *Window)
+{
+    if (Window->BlurFlags & DWM_BLUR_ENABLE)
+        return TRUE;
+    return Window->BackdropType == DWM_BACKDROP_TRANSIENT &&
+           Window->BackdropRegion != 0;
+}
+
 static void
 DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
                      LONG ClipLeft, LONG ClipTop, LONG ClipRight,
@@ -1126,6 +1135,38 @@ DwmComposeLoop(HANDLE hStopEvent)
             if (pt < 0) pt = 0;
             if (pr > g_W) pr = g_W;
             if (pb > g_H) pb = g_H;
+            wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
+
+            for (;;)
+            {
+                BOOL grown = FALSE;
+
+                for (i = 0; i < hdr->Count; i++)
+                {
+                    LONGLONG wl, wt, wr, wb;
+
+                    if (!DwmWindowBlursBackdrop(&wins[i]))
+                        continue;
+                    wl = (LONGLONG)wins[i].x - g_originX;
+                    wt = (LONGLONG)wins[i].y - g_originY;
+                    wr = wl + wins[i].cx;
+                    wb = wt + wins[i].cy;
+                    if (wl < 0) wl = 0;
+                    if (wt < 0) wt = 0;
+                    if (wr > g_W) wr = g_W;
+                    if (wb > g_H) wb = g_H;
+                    if (wr <= wl || wb <= wt ||
+                        wr <= pl || wl >= pr || wb <= pt || wt >= pb)
+                        continue;
+                    if (wl < pl) { pl = (LONG)wl; grown = TRUE; }
+                    if (wt < pt) { pt = (LONG)wt; grown = TRUE; }
+                    if (wr > pr) { pr = (LONG)wr; grown = TRUE; }
+                    if (wb > pb) { pb = (LONG)wb; grown = TRUE; }
+                }
+                if (!grown)
+                    break;
+            }
+
             if (pl == 0 && pt == 0 && pr == g_W && pb == g_H)
                 refreshBackdrop = TRUE;
             forceFull = FALSE;
@@ -1152,7 +1193,6 @@ DwmComposeLoop(HANDLE hStopEvent)
                     continue;
                 }
 
-                wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
                 blurRects = (PRECTL)(g_buf + hdr->BlurRectArrayBase);
                 for (i = 0; i < hdr->Count; i++)
                 {
