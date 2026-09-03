@@ -3199,7 +3199,10 @@ HandleTrayContextMenu:
         if (!IsThemeActive() || !m_TrayNotify)
             return FALSE;
         ::GetWindowRect(m_TrayNotify, &rcAnchor);
-        TrayVolume_Toggle(m_hWnd, &rcAnchor);
+        if (wParam == 1)
+            TrayMixer_Open(&rcAnchor);
+        else
+            TrayVolume_Toggle(m_hWnd, &rcAnchor);
         return TRUE;
     }
 
@@ -3210,6 +3213,30 @@ HandleTrayContextMenu:
             return FALSE;
         ::GetWindowRect(m_TrayNotify, &rcAnchor);
         TrayNetwork_Toggle(m_hWnd, &rcAnchor);
+        return TRUE;
+    }
+
+    LRESULT OnShowPowerFlyout(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        RECT rcAnchor;
+        if (!IsThemeActive() || !m_TrayNotify)
+            return FALSE;
+        ::GetWindowRect(m_TrayNotify, &rcAnchor);
+        TrayPower_Toggle(m_hWnd, &rcAnchor);
+        return TRUE;
+    }
+
+    LRESULT OnShowCalendarFlyout(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        RECT rcAnchor;
+        HWND hwndClock;
+        if (!IsThemeActive() || !m_TrayNotify)
+            return FALSE;
+        hwndClock = FindWindowExW(m_TrayNotify, NULL, L"TrayClockWClass", NULL);
+        if (!hwndClock)
+            return FALSE;
+        ::GetWindowRect(hwndClock, &rcAnchor);
+        TrayCalendar_Toggle(hwndClock, &rcAnchor);
         return TRUE;
     }
 
@@ -3622,6 +3649,8 @@ HandleTrayContextMenu:
         MESSAGE_HANDLER(TWM_OPENSTARTMENU, OnOpenStartMenu)
         MESSAGE_HANDLER(TWM_SHOWVOLUMEFLYOUT, OnShowVolumeFlyout)
         MESSAGE_HANDLER(TWM_SHOWNETWORKFLYOUT, OnShowNetworkFlyout)
+        MESSAGE_HANDLER(TWM_SHOWCALENDARFLYOUT, OnShowCalendarFlyout)
+        MESSAGE_HANDLER(TWM_SHOWPOWERFLYOUT, OnShowPowerFlyout)
         MESSAGE_HANDLER(TWM_DOEXITWINDOWS, OnDoExitWindows)
         MESSAGE_HANDLER(TWM_GETTASKSWITCH, OnGetTaskSwitch)
         MESSAGE_HANDLER(TWM_SETZORDER, OnSetZOrder)
