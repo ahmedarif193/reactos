@@ -24,6 +24,11 @@ extern ATOM AtomDDETrack;
 extern ATOM AtomQOS;
 extern ATOM AtomImeLevel;
 extern ATOM AtomDwmDarkMode;
+extern ATOM AtomDwmSystemBackdropType;
+extern ATOM AtomDwmBackdropOpacity;
+extern ATOM AtomDwmBackdropColor;
+extern ATOM AtomDwmBackdropColorization;
+extern ATOM AtomDwmBackdropRegion;
 extern ERESOURCE UserLock;
 
 CODE_SEG("INIT") NTSTATUS NTAPI InitUserImpl(VOID);

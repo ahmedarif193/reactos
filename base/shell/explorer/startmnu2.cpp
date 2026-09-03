@@ -827,6 +827,7 @@ public:
     HFONT m_hFont;
     HFONT m_hFontCue;
     HFONT m_hFontUser;
+    HTHEME m_hLiquidTheme;
     int m_iDpi;
 
     SM2ITEM m_Root;
@@ -875,7 +876,8 @@ public:
 
     CStartMenu2Wnd() :
         m_Tray(NULL), m_hwndTray(NULL), m_hwndEdit(NULL),
-        m_hFont(NULL), m_hFontCue(NULL), m_hFontUser(NULL), m_iDpi(96),
+        m_hFont(NULL), m_hFontCue(NULL), m_hFontUser(NULL),
+        m_hLiquidTheme(NULL), m_iDpi(96),
         m_nView(SM2V_MAIN), m_nScroll(0), m_nContentH(0),
         m_bScrollVis(FALSE), m_bDragScroll(FALSE), m_nDragOff(0),
         m_iHot(-1), m_iSel(-1), m_iPressed(-1),
@@ -892,6 +894,13 @@ public:
     }
 
     int Sc(int v) const { return MulDiv(v, m_iDpi, 96); }
+
+    VOID RefreshLiquidMaterial()
+    {
+        if (m_hLiquidTheme)
+            CloseThemeData(m_hLiquidTheme);
+        m_hLiquidTheme = OpenThemeData(m_hWnd, L"StartMenu");
+    }
     int MenuW() const { return Sc(430); }
     int MenuH() const { return Sc(488); }
     int LeftW() const { return Sc(250); }
@@ -1997,6 +2006,7 @@ public:
 
     LRESULT OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
+        RefreshLiquidMaterial();
         NONCLIENTMETRICSW ncm;
         ncm.cbSize = sizeof(ncm);
         LOGFONTW lf;
@@ -2055,7 +2065,19 @@ public:
         if (m_hFont) { DeleteObject(m_hFont); m_hFont = NULL; }
         if (m_hFontCue) { DeleteObject(m_hFontCue); m_hFontCue = NULL; }
         if (m_hFontUser) { DeleteObject(m_hFontUser); m_hFontUser = NULL; }
+        if (m_hLiquidTheme)
+        {
+            CloseThemeData(m_hLiquidTheme);
+            m_hLiquidTheme = NULL;
+        }
         m_Root.Clear();
+        return 0;
+    }
+
+    LRESULT OnThemeChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        RefreshLiquidMaterial();
+        InvalidateRect(NULL, TRUE);
         return 0;
     }
 
@@ -2301,6 +2323,7 @@ public:
     BEGIN_MSG_MAP(CStartMenu2Wnd)
         MESSAGE_HANDLER(WM_CREATE, OnCreate)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
+        MESSAGE_HANDLER(WM_THEMECHANGED, OnThemeChanged)
         MESSAGE_HANDLER(WM_PAINT, OnPaint)
         MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBkgnd)
         MESSAGE_HANDLER(WM_TIMER, OnTimer)

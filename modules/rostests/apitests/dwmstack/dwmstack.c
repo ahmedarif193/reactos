@@ -1022,6 +1022,53 @@ TestDwmApiExports(HMODULE DwmApi)
             ok_hex(Result, E_INVALIDARG);
             Result = GetWindowAttribute(Window, 0, &Value, sizeof(Value));
             ok_hex(Result, E_INVALIDARG);
+
+            {
+                static const DWORD BackdropTypes[] =
+                {
+                    DWMSBT_AUTO,
+                    DWMSBT_NONE,
+                    DWMSBT_MAINWINDOW,
+                    DWMSBT_TRANSIENTWINDOW,
+                    DWMSBT_TABBEDWINDOW
+                };
+                ULONG BackdropIndex;
+
+                for (BackdropIndex = 0;
+                     BackdropIndex < ARRAYSIZE(BackdropTypes);
+                     ++BackdropIndex)
+                {
+                    DWORD ReadBack = 0xdeadbeef;
+
+                    Value = BackdropTypes[BackdropIndex];
+                    Result = SetWindowAttribute(
+                        Window, DWMWA_SYSTEMBACKDROP_TYPE,
+                        &Value, sizeof(Value));
+                    ok_hex(Result, S_OK);
+                    Result = GetWindowAttribute(
+                        Window, DWMWA_SYSTEMBACKDROP_TYPE,
+                        &ReadBack, sizeof(ReadBack));
+                    ok_hex(Result, S_OK);
+                    ok_eq_ulong(ReadBack, Value);
+                }
+
+                Result = SetWindowAttribute(
+                    Window, DWMWA_SYSTEMBACKDROP_TYPE,
+                    NULL, sizeof(Value));
+                ok_hex(Result, E_INVALIDARG);
+                Result = SetWindowAttribute(
+                    Window, DWMWA_SYSTEMBACKDROP_TYPE,
+                    &Value, sizeof(Value) - 1);
+                ok_hex(Result, E_INVALIDARG);
+                Result = GetWindowAttribute(
+                    Window, DWMWA_SYSTEMBACKDROP_TYPE,
+                    NULL, sizeof(Value));
+                ok_hex(Result, E_INVALIDARG);
+                Result = GetWindowAttribute(
+                    Window, DWMWA_SYSTEMBACKDROP_TYPE,
+                    &Value, sizeof(Value) - 1);
+                ok_hex(Result, E_INVALIDARG);
+            }
             DestroyWindow(Window);
         }
     }

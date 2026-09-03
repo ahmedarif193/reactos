@@ -2300,13 +2300,14 @@ ChangePos:
             return S_OK;
         }
 
-        DWORD dwExStyle = WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE;
+        DWORD dwExStyle = WS_EX_TOOLWINDOW;
         if (g_TaskbarSettings.sr.AlwaysOnTop)
             dwExStyle |= WS_EX_TOPMOST;
 
         DWORD dwStyle = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
-        if(!m_Theme)
+        if (!IsThemeActive())
         {
+            dwExStyle |= WS_EX_WINDOWEDGE;
             dwStyle |= WS_THICKFRAME | WS_BORDER;
         }
 
@@ -2587,10 +2588,12 @@ ChangePos:
 
         if (m_Theme)
         {
+            SetWindowExStyle(m_hWnd, WS_EX_WINDOWEDGE, 0);
             SetWindowStyle(m_hWnd, WS_THICKFRAME | WS_BORDER, 0);
         }
         else
         {
+            SetWindowExStyle(m_hWnd, WS_EX_WINDOWEDGE, WS_EX_WINDOWEDGE);
             SetWindowStyle(m_hWnd, WS_THICKFRAME | WS_BORDER, WS_THICKFRAME | WS_BORDER);
         }
         SetWindowPos(NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);

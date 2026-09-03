@@ -1587,6 +1587,17 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         g_DwmFrameWindows[count].BlurFlags = e->BlurFlags;
         g_DwmFrameWindows[count].BlurRectBase = blurRectCount;
         g_DwmFrameWindows[count].BlurRectCount = 0;
+        g_DwmFrameWindows[count].BackdropType = 0;
+        g_DwmFrameWindows[count].BackdropOpacity = 255;
+        g_DwmFrameWindows[count].BackdropColor = 0;
+        g_DwmFrameWindows[count].BackdropColorization = 0;
+        g_DwmFrameWindows[count].BackdropRegion = 0;
+        g_DwmFrameWindows[count].ClientX = e->Redirect.rcClient.left;
+        g_DwmFrameWindows[count].ClientY = e->Redirect.rcClient.top;
+        g_DwmFrameWindows[count].ClientWidth =
+            e->Redirect.rcClient.right - e->Redirect.rcClient.left;
+        g_DwmFrameWindows[count].ClientHeight =
+            e->Redirect.rcClient.bottom - e->Redirect.rcClient.top;
         if ((e->BlurFlags & DWM_BLUR_ENABLE) &&
             !(e->BlurFlags & DWM_BLUR_REGION_ENTIRE_WINDOW) &&
             e->BlurRectCount != 0 && e->BlurRects != NULL)
@@ -1627,6 +1638,45 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             g_DwmFrameWindows[count].Alpha = alpha;
             g_DwmFrameWindows[count].ColorKey = (ULONG)key;
             g_DwmFrameWindows[count].LayerFlags = lf;
+        }
+        if (AtomDwmSystemBackdropType != 0)
+        {
+            ULONG_PTR Value = (ULONG_PTR)UserGetProp(
+                w, AtomDwmSystemBackdropType, FALSE);
+
+            if (Value >= DWM_BACKDROP_MAIN && Value <= DWM_BACKDROP_TABBED)
+            {
+                ULONG_PTR Encoded;
+
+                g_DwmFrameWindows[count].BackdropType = (ULONG)Value;
+                Encoded = (ULONG_PTR)UserGetProp(
+                    w, AtomDwmBackdropOpacity, FALSE);
+                if (Encoded != 0 && Encoded <= 256)
+                    g_DwmFrameWindows[count].BackdropOpacity = (ULONG)(Encoded - 1);
+                Encoded = (ULONG_PTR)UserGetProp(
+                    w, AtomDwmBackdropColor, FALSE);
+                if (Encoded != 0 && Encoded <= 0x01000000)
+                    g_DwmFrameWindows[count].BackdropColor = (ULONG)(Encoded - 1);
+                Encoded = (ULONG_PTR)UserGetProp(
+                    w, AtomDwmBackdropColorization, FALSE);
+                if (Encoded != 0 && Encoded <= 0x01000000)
+                {
+                    g_DwmFrameWindows[count].BackdropColorization =
+                        (ULONG)(Encoded - 1);
+                }
+                else
+                {
+                    g_DwmFrameWindows[count].BackdropColorization =
+                        g_DwmFrameWindows[count].BackdropColor;
+                }
+                Value = (ULONG_PTR)UserGetProp(
+                    w, AtomDwmBackdropRegion, FALSE);
+                if (Value == DWM_BACKDROP_REGION_NONCLIENT ||
+                    Value == DWM_BACKDROP_REGION_WINDOW)
+                {
+                    g_DwmFrameWindows[count].BackdropRegion = (ULONG)Value;
+                }
+            }
         }
         count++;
 

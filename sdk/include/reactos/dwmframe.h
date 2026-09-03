@@ -191,6 +191,22 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_WINDOW_ACTIVE    0x40000000u
 #define DWM_WINDOW_NC_SHADOW 0x80000000u
 
+/* Private window properties shared by UXTheme, win32k and the compositor. */
+#define DWM_PROP_SYSTEM_BACKDROP_TYPE L"ReactOS.Dwm.SystemBackdropType"
+#define DWM_PROP_BACKDROP_OPACITY     L"ReactOS.Dwm.BackdropOpacity"
+#define DWM_PROP_BACKDROP_COLOR       L"ReactOS.Dwm.BackdropColor"
+#define DWM_PROP_BACKDROP_COLORIZATION L"ReactOS.Dwm.BackdropColorization"
+#define DWM_PROP_BACKDROP_REGION      L"ReactOS.Dwm.BackdropRegion"
+
+/* Values intentionally match DWM_SYSTEMBACKDROP_TYPE in dwmapi.h. */
+#define DWM_BACKDROP_NONE       1u
+#define DWM_BACKDROP_MAIN       2u
+#define DWM_BACKDROP_TRANSIENT  3u
+#define DWM_BACKDROP_TABBED     4u
+
+#define DWM_BACKDROP_REGION_NONCLIENT 1u
+#define DWM_BACKDROP_REGION_WINDOW    2u
+
 /* DwmEnableBlurBehindWindow state carried to the user-mode compositor. */
 #define DWM_BLUR_ENABLE                  0x00000001u
 #define DWM_BLUR_REGION_ENTIRE_WINDOW    0x00000002u
@@ -232,6 +248,15 @@ typedef struct _DWM_WIN
     ULONG BlurFlags;
     ULONG BlurRectBase;  /* index in the frame's RECTL blur array */
     ULONG BlurRectCount;
+    ULONG BackdropType;  /* DWM_BACKDROP_* material                    */
+    ULONG BackdropOpacity; /* themed background opacity, 0..255       */
+    ULONG BackdropColor; /* COLORREF identifying the background brush */
+    ULONG BackdropColorization; /* optional second background brush   */
+    ULONG BackdropRegion;/* DWM_BACKDROP_REGION_*                     */
+    LONG  ClientX;
+    LONG  ClientY;
+    LONG  ClientWidth;
+    LONG  ClientHeight;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER
