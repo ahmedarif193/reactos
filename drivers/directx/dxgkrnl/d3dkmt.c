@@ -3937,6 +3937,7 @@ typedef struct _DXGK_VIRTGPU_SIGNAL_BLOCK
 #define DXGK_VIRTGPU_ESCAPE_PACKET_MAGIC_V2 0x32454756UL
 #define DXGK_VIRTGPU_RESOURCE_CPU_DIRTY     0x00000001UL
 #define DXGK_VIRTGPU_MAX_DMA_BUFFER_BYTES   (32U * 1024U * 1024U)
+#define DXGK_VIRTGPU_MAX_PRIVATE_DATA_BYTES (64U * 1024U)
 
 static BOOLEAN
 DxgkpIsVirtGpuCommandEscape(
@@ -4178,6 +4179,10 @@ DxgkpSubmitVirtGpuCommandEscape(
 {
     DXGKARG_RENDER RenderArgs;
     DXGKARG_SUBMITCOMMAND SubmitArgs;
+    DXGK_ALLOCATIONLIST InlineAllocationList[VIDSCH_INLINE_ALLOCATIONS];
+    PDXGKVMM_ALLOCATION InlineOpenBindingReferenceList[VIDSCH_INLINE_ALLOCATIONS];
+    PDXGKVMM_ALLOCATION InlineAllocationReferenceList[VIDSCH_INLINE_ALLOCATIONS];
+    BOOLEAN InlineAllocationCpuDirtyList[VIDSCH_INLINE_ALLOCATIONS];
     DXGK_ALLOCATIONLIST *AllocationList = NULL;
     PDXGKVMM_ALLOCATION *OpenBindingReferenceList = NULL;
     PDXGKVMM_ALLOCATION *AllocationReferenceList = NULL;
@@ -4186,6 +4191,7 @@ DxgkpSubmitVirtGpuCommandEscape(
     PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = NULL;
     DXGKRNL_TRACK_DMA_ARGS TrackArgs;
     PVOID DmaBufferPrivateData = NULL;
+    ULONG DmaBufferPrivateDataSize = 0;
     ULONG SubmissionFenceId;
     ULONG VidSchFence = 0;
     UINT DmaBytesUsed = 0;
@@ -4224,6 +4230,15 @@ DxgkpSubmitVirtGpuCommandEscape(
     if (NodeOrdinal >= Adapter->NodeCount)
         return STATUS_INVALID_PARAMETER;
 
+    if (Context != NULL)
+        DmaBufferPrivateDataSize =
+            Context->ContextInfo.DmaBufferPrivateDataSize;
+    else if (Device->LegacyDeviceInfoValid)
+        DmaBufferPrivateDataSize =
+            Device->LegacyDeviceInfo.DmaBufferPrivateDataSize;
+    if (DmaBufferPrivateDataSize > DXGK_VIRTGPU_MAX_PRIVATE_DATA_BYTES)
+        return STATUS_INVALID_PARAMETER;
+
     if (RequestedDmaBufferBytes < CommandBytes)
         RequestedDmaBufferBytes = CommandBytes;
     if (RequestedDmaBufferBytes > DXGK_VIRTGPU_MAX_DMA_BUFFER_BYTES)
@@ -4233,6 +4248,20 @@ DxgkpSubmitVirtGpuCommandEscape(
                                    &DmaBuffer);
     if (!NT_SUCCESS(Status))
         return Status;
+    if (DmaBufferPrivateDataSize != 0)
+    {
+        DmaBufferPrivateData = ExAllocatePoolWithTag(
+                                   NonPagedPool,
+                                   DmaBufferPrivateDataSize,
+                                   TAG_DXGK_SUBMITDMA);
+        if (DmaBufferPrivateData == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        RtlZeroMemory(DmaBufferPrivateData, DmaBufferPrivateDataSize);
+    }
+
     if (!DxgkBeginKmdTransaction(Adapter))
     {
         Status = STATUS_DELETE_PENDING;
@@ -4247,11 +4276,24 @@ DxgkpSubmitVirtGpuCommandEscape(
 
     if (ResourceHandleCount != 0)
     {
-        AllocationList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationList), TAG_DXGK_SUBMITDMA);
-        OpenBindingReferenceList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*OpenBindingReferenceList), TAG_DXGK_SUBMITDMA);
-        AllocationReferenceList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationReferenceList), TAG_DXGK_SUBMITDMA);
-        AllocationCpuDirtyList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationCpuDirtyList), TAG_DXGK_SUBMITDMA);
-        if (AllocationList == NULL || OpenBindingReferenceList == NULL || AllocationReferenceList == NULL || AllocationCpuDirtyList == NULL)
+        if (ResourceHandleCount <= VIDSCH_INLINE_ALLOCATIONS)
+        {
+            AllocationList = InlineAllocationList;
+            OpenBindingReferenceList = InlineOpenBindingReferenceList;
+            AllocationReferenceList = InlineAllocationReferenceList;
+            AllocationCpuDirtyList = InlineAllocationCpuDirtyList;
+        }
+        else
+        {
+            AllocationList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationList), TAG_DXGK_SUBMITDMA);
+            OpenBindingReferenceList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*OpenBindingReferenceList), TAG_DXGK_SUBMITDMA);
+            AllocationReferenceList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationReferenceList), TAG_DXGK_SUBMITDMA);
+            AllocationCpuDirtyList = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)ResourceHandleCount * sizeof(*AllocationCpuDirtyList), TAG_DXGK_SUBMITDMA);
+        }
+        if (AllocationList == NULL ||
+            OpenBindingReferenceList == NULL ||
+            AllocationReferenceList == NULL ||
+            AllocationCpuDirtyList == NULL)
         {
             Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Cleanup;
@@ -4309,8 +4351,8 @@ DxgkpSubmitVirtGpuCommandEscape(
     RenderArgs.CommandLength = CommandBytes;
     RenderArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
     RenderArgs.DmaSize = RequestedDmaBufferBytes;
-    RenderArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
-    RenderArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+    RenderArgs.pDmaBufferPrivateData = DmaBufferPrivateData;
+    RenderArgs.DmaBufferPrivateDataSize = DmaBufferPrivateDataSize;
     RenderArgs.pAllocationList = AllocationList;
     RenderArgs.AllocationListSize = ResourceHandleCount;
     RenderArgs.pPatchLocationListOut = EscapePatchList;
@@ -4366,8 +4408,7 @@ DxgkpSubmitVirtGpuCommandEscape(
     TrackArgs.AllocationReferences = AllocationReferenceList;
     TrackArgs.AllocationReferenceCount = AllocationReferenceCount;
     TrackArgs.AllocationCpuDirty = AllocationCpuDirtyList;
-
-    Status = VidSchSubmitCommandTracked(Adapter, NodeOrdinal, 0, DmaBuffer, &DmaBufferPrivateData, sizeof(DmaBufferPrivateData), AllocationList, ResourceHandleCount, EscapePatchList, EscapePatchCount, Adapter->SchedulingCaps.MultiEngineAware ? NULL : Device->hMiniportDevice, Adapter->SchedulingCaps.MultiEngineAware ? Context->hMiniportContext : NULL, 0, &TrackArgs, 0, 0, &VidSchFence);
+    Status = VidSchSubmitCommandTracked(Adapter, NodeOrdinal, 0, DmaBuffer, DmaBufferPrivateData, DmaBufferPrivateDataSize, AllocationList, ResourceHandleCount, EscapePatchList, EscapePatchCount, Adapter->SchedulingCaps.MultiEngineAware ? NULL : Device->hMiniportDevice, Adapter->SchedulingCaps.MultiEngineAware ? Context->hMiniportContext : NULL, 0, &TrackArgs, 0, 0, &VidSchFence);
     if (NT_SUCCESS(Status))
     {
         DmaBuffer = NULL;
@@ -4407,10 +4448,10 @@ DxgkpSubmitVirtGpuCommandEscape(
         PatchArgs.DmaBufferSize = DmaBuffer->Capacity;
         PatchArgs.DmaBufferSubmissionStartOffset = DmaBuffer->SubmissionStartOffset;
         PatchArgs.DmaBufferSubmissionEndOffset = DmaBuffer->SubmissionEndOffset;
-        PatchArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
-        PatchArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+        PatchArgs.pDmaBufferPrivateData = DmaBufferPrivateData;
+        PatchArgs.DmaBufferPrivateDataSize = DmaBufferPrivateDataSize;
         PatchArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-        PatchArgs.DmaBufferPrivateDataSubmissionEndOffset = sizeof(DmaBufferPrivateData);
+        PatchArgs.DmaBufferPrivateDataSubmissionEndOffset = DmaBufferPrivateDataSize;
         PatchArgs.pAllocationList = AllocationList;
         PatchArgs.AllocationListSize = ResourceHandleCount;
         PatchArgs.pPatchLocationList = EscapePatchList;
@@ -4456,10 +4497,10 @@ DxgkpSubmitVirtGpuCommandEscape(
     SubmitArgs.DmaBufferSegmentId = DmaBuffer->SegmentId;
     SubmitArgs.DmaBufferPhysicalAddress = DmaBuffer->SegmentAddress;
     SubmitArgs.DmaBufferSize = DmaBuffer->Capacity;
-    SubmitArgs.pDmaBufferPrivateData = &DmaBufferPrivateData;
-    SubmitArgs.DmaBufferPrivateDataSize = sizeof(DmaBufferPrivateData);
+    SubmitArgs.pDmaBufferPrivateData = DmaBufferPrivateData;
+    SubmitArgs.DmaBufferPrivateDataSize = DmaBufferPrivateDataSize;
     SubmitArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-    SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = sizeof(DmaBufferPrivateData);
+    SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = DmaBufferPrivateDataSize;
     SubmitArgs.DmaBufferSubmissionStartOffset = DmaBuffer->SubmissionStartOffset;
     SubmitArgs.DmaBufferSubmissionEndOffset = DmaBuffer->SubmissionEndOffset;
     SubmitArgs.SubmissionFenceId = SubmissionFenceId;
@@ -4508,13 +4549,14 @@ Cleanup:
         DxgkCancelTrackedDmaBuffer(Reservation);
     if (KmdTransaction)
         DxgkEndKmdTransaction(Adapter);
-    if (AllocationList != NULL)
+    if (AllocationList != NULL && AllocationList != InlineAllocationList)
         ExFreePoolWithTag(AllocationList, TAG_DXGK_SUBMITDMA);
     if (OpenBindingReferenceList != NULL)
     {
         for (i = 0; i < OpenBindingReferenceCount; ++i)
             DxgkVidMmDereferenceLogicalAllocation(OpenBindingReferenceList[i]);
-        ExFreePoolWithTag(OpenBindingReferenceList, TAG_DXGK_SUBMITDMA);
+        if (OpenBindingReferenceList != InlineOpenBindingReferenceList)
+            ExFreePoolWithTag(OpenBindingReferenceList, TAG_DXGK_SUBMITDMA);
     }
     if (AllocationReferenceList != NULL)
     {
@@ -4523,10 +4565,14 @@ Cleanup:
             DxgkVidMmReleaseSubmissionResidencyPin(AllocationReferenceList[i]);
             DxgkVidMmDereferenceAllocation(AllocationReferenceList[i]);
         }
-        ExFreePoolWithTag(AllocationReferenceList, TAG_DXGK_SUBMITDMA);
+        if (AllocationReferenceList != InlineAllocationReferenceList)
+            ExFreePoolWithTag(AllocationReferenceList, TAG_DXGK_SUBMITDMA);
     }
-    if (AllocationCpuDirtyList != NULL)
+    if (AllocationCpuDirtyList != NULL &&
+        AllocationCpuDirtyList != InlineAllocationCpuDirtyList)
         ExFreePoolWithTag(AllocationCpuDirtyList, TAG_DXGK_SUBMITDMA);
+    if (DmaBufferPrivateData != NULL)
+        ExFreePoolWithTag(DmaBufferPrivateData, TAG_DXGK_SUBMITDMA);
     if (DmaBuffer != NULL)
         DxgkFreeDmaBuffer(DmaBuffer);
 
