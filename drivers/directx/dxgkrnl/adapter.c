@@ -63,6 +63,7 @@
 #include "adapter_start_core.h"
 
 #include <ndk/inbvfuncs.h>
+#include <drivers/acpi/acpisystem.h>
 #include <reactos/arc/arc.h>
 #include <reactos/drivers/acpi/acpipci.h>
 #include <reactos/drivers/cmreslist.h>
@@ -8245,6 +8246,264 @@ DxgkCbIndicateChildStatus(
  * unavailable rather than publishing callback tables with no consumer.
  */
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+/*
+ * System Firmware Table interface (DxgkServicesFirmwareTable)
+ *
+ * A display miniport reads firmware description tables to find data the
+ * firmware left for it: the AMD miniport, for one, reads the ACPI VFCT table
+ * to recover the adapter's video BIOS image.  The tables live in the ACPI
+ * driver, which publishes them on GUID_ACPI_SYSTEM_INTERFACE, so both entry
+ * points below are thin forwarders to that device.
+ *
+ * A miniport that asks for this interface and gets a failure may still call
+ * through the structure it passed in, so every published entry has to be a
+ * real routine; leaving one null turns an unsupported provider into a jump to
+ * address zero.
+ */
+
+/* 'ACPI', as the provider signature is spelled on the wire */
+#define DXGKP_FIRMWARE_PROVIDER_ACPI 0x41435049
+
+#define DXGKP_FIRMWARE_TABLE_LIMIT (16 * 1024 * 1024)
+
+static VOID
+NTAPI
+DxgkpFirmwareTableInterfaceReferenceNop(
+    _In_opt_ PVOID Context)
+{
+    /* Same-stack interface: dxgkrnl outlives the miniport that holds it. */
+    UNREFERENCED_PARAMETER(Context);
+}
+
+static NTSTATUS
+DxgkpFirmwareTableSendIoctl(
+    _In_ ULONG IoControlCode,
+    _In_reads_bytes_opt_(InputSize) PVOID InputBuffer,
+    _In_ ULONG InputSize,
+    _Out_writes_bytes_opt_(OutputSize) PVOID OutputBuffer,
+    _In_ ULONG OutputSize,
+    _Out_ PULONG_PTR Information)
+{
+    PWSTR InterfaceList = NULL;
+    PFILE_OBJECT FileObject = NULL;
+    PDEVICE_OBJECT DeviceObject = NULL;
+    UNICODE_STRING InterfaceName;
+    IO_STATUS_BLOCK IoStatus;
+    KEVENT Event;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    *Information = 0;
+
+    /*
+     * Opening the ACPI device interface takes the passive level.  A miniport
+     * that asks for a firmware table from a raised IRQL gets a clean refusal
+     * rather than an assertion, because the table contents never change and
+     * the caller can read them during start-up instead.
+     */
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    Status = IoGetDeviceInterfaces(&GUID_ACPI_SYSTEM_INTERFACE,
+                                   NULL,
+                                   0,
+                                   &InterfaceList);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (InterfaceList == NULL || InterfaceList[0] == UNICODE_NULL)
+    {
+        if (InterfaceList != NULL)
+            ExFreePool(InterfaceList);
+        return STATUS_NOT_FOUND;
+    }
+
+    RtlInitUnicodeString(&InterfaceName, InterfaceList);
+    Status = IoGetDeviceObjectPointer(&InterfaceName,
+                                      FILE_READ_DATA | SYNCHRONIZE,
+                                      &FileObject,
+                                      &DeviceObject);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePool(InterfaceList);
+        return Status;
+    }
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    RtlZeroMemory(&IoStatus, sizeof(IoStatus));
+
+    Irp = IoBuildDeviceIoControlRequest(IoControlCode,
+                                        DeviceObject,
+                                        InputBuffer,
+                                        InputSize,
+                                        OutputBuffer,
+                                        OutputSize,
+                                        FALSE,
+                                        &Event,
+                                        &IoStatus);
+    if (Irp == NULL)
+    {
+        ObDereferenceObject(FileObject);
+        ExFreePool(InterfaceList);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+
+    *Information = IoStatus.Information;
+
+    ObDereferenceObject(FileObject);
+    ExFreePool(InterfaceList);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpFirmwareTableEnumTables(
+    _In_ PVOID Context,
+    _In_ ULONG ProviderSignature,
+    _In_ ULONG BufferSize,
+    _Out_writes_bytes_opt_(BufferSize) PVOID Buffer,
+    _Out_ PULONG RequiredSize)
+{
+    PACPI_ENUM_SYSTEM_TABLES_ENTRY Entries = NULL;
+    ULONG_PTR Information = 0;
+    ULONG EntrySize = sizeof(*Entries);
+    ULONG Capacity = 64;
+    ULONG Count;
+    ULONG Index;
+    NTSTATUS Status;
+
+
+    UNREFERENCED_PARAMETER(Context);
+
+    if (RequiredSize == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *RequiredSize = 0;
+
+    if (Buffer == NULL && BufferSize != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Only the ACPI provider is described by the ACPI driver. */
+    if (ProviderSignature != DXGKP_FIRMWARE_PROVIDER_ACPI)
+        return STATUS_NOT_SUPPORTED;
+
+    for (;;)
+    {
+        Entries = ExAllocatePoolWithTag(PagedPool,
+                                        Capacity * EntrySize,
+                                        TAG_DXGK_RESOURCES);
+        if (Entries == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        Status = DxgkpFirmwareTableSendIoctl(IOCTL_ACPI_ENUM_SYSTEM_TABLES,
+                                             NULL,
+                                             0,
+                                             Entries,
+                                             Capacity * EntrySize,
+                                             &Information);
+        if (Status != STATUS_BUFFER_TOO_SMALL)
+            break;
+
+        ExFreePoolWithTag(Entries, TAG_DXGK_RESOURCES);
+        Entries = NULL;
+
+        if (Information <= (ULONG_PTR)(Capacity * EntrySize) ||
+            Information > DXGKP_FIRMWARE_TABLE_LIMIT)
+        {
+            return STATUS_ACPI_INVALID_DATA;
+        }
+        Capacity = (ULONG)(Information / EntrySize);
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        if (Entries != NULL)
+            ExFreePoolWithTag(Entries, TAG_DXGK_RESOURCES);
+        return Status;
+    }
+
+    Count = (ULONG)(Information / EntrySize);
+
+    /* The caller wants the table identifiers, which for ACPI are signatures. */
+    *RequiredSize = Count * sizeof(ULONG);
+    if (BufferSize < *RequiredSize)
+    {
+        ExFreePoolWithTag(Entries, TAG_DXGK_RESOURCES);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        ULONG TableId;
+
+        RtlCopyMemory(&TableId, Entries[Index].Signature, sizeof(TableId));
+        ((PULONG)Buffer)[Index] = TableId;
+    }
+
+    ExFreePoolWithTag(Entries, TAG_DXGK_RESOURCES);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpFirmwareTableReadTable(
+    _In_ PVOID Context,
+    _In_ ULONG ProviderSignature,
+    _In_ ULONG TableId,
+    _In_ ULONG BufferSize,
+    _Out_writes_bytes_opt_(BufferSize) PVOID Buffer,
+    _Out_ PULONG RequiredSize)
+{
+    ACPI_GET_SYSTEM_TABLE_INPUT Input;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+
+    UNREFERENCED_PARAMETER(Context);
+
+    if (RequiredSize == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *RequiredSize = 0;
+
+    if (Buffer == NULL && BufferSize != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    if (ProviderSignature != DXGKP_FIRMWARE_PROVIDER_ACPI)
+        return STATUS_NOT_SUPPORTED;
+
+    RtlZeroMemory(&Input, sizeof(Input));
+    RtlCopyMemory(Input.Signature, &TableId, sizeof(Input.Signature));
+    Input.Instance = 1;
+
+    Status = DxgkpFirmwareTableSendIoctl(IOCTL_ACPI_GET_SYSTEM_TABLE,
+                                         &Input,
+                                         sizeof(Input),
+                                         Buffer,
+                                         BufferSize,
+                                         &Information);
+
+    /*
+     * The size query is the ordinary first call: the caller passes no buffer
+     * and reads the length out of RequiredSize, so the length has to survive
+     * the buffer-too-small answer.
+     */
+    if (Information > DXGKP_FIRMWARE_TABLE_LIMIT)
+        return STATUS_ACPI_INVALID_DATA;
+
+    if (Status == STATUS_BUFFER_TOO_SMALL || NT_SUCCESS(Status))
+        *RequiredSize = (ULONG)Information;
+
+    return Status;
+}
+#endif /* REACTOS_WDDM_TARGET_LEVEL >= 3200 */
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
 static VOID
 NTAPI
 DxgkpFeatureInterfaceReferenceNop(
@@ -8372,6 +8631,48 @@ DxgkCbQueryServices(
         ReturnedInterface.QueryFeatureInterface =
             DxgkpFeatureQueryInterface;
         *FeatureInterface = ReturnedInterface;
+
+        ExReleaseRundownProtection(
+            &Adapter->ReverseCallbackRundownRef);
+        return STATUS_SUCCESS;
+    }
+#endif
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
+    if (ServicesType == DxgkServicesFirmwareTable)
+    {
+        PDXGK_FIRMWARE_TABLE_INTERFACE FirmwareInterface =
+            (PDXGK_FIRMWARE_TABLE_INTERFACE)Interface;
+        DXGK_FIRMWARE_TABLE_INTERFACE ReturnedInterface;
+
+        if (FirmwareInterface->Size < sizeof(ReturnedInterface))
+        {
+            ExReleaseRundownProtection(
+                &Adapter->ReverseCallbackRundownRef);
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        if (FirmwareInterface->Version !=
+            DXGK_FIRMWARE_TABLE_INTERFACE_VERSION_1)
+        {
+            ExReleaseRundownProtection(
+                &Adapter->ReverseCallbackRundownRef);
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        RtlZeroMemory(&ReturnedInterface, sizeof(ReturnedInterface));
+        ReturnedInterface.Size = sizeof(ReturnedInterface);
+        ReturnedInterface.Version =
+            DXGK_FIRMWARE_TABLE_INTERFACE_VERSION_1;
+        ReturnedInterface.Context = Adapter;
+        ReturnedInterface.InterfaceReference =
+            DxgkpFirmwareTableInterfaceReferenceNop;
+        ReturnedInterface.InterfaceDereference =
+            DxgkpFirmwareTableInterfaceReferenceNop;
+        ReturnedInterface.EnumSystemFirmwareTables =
+            DxgkpFirmwareTableEnumTables;
+        ReturnedInterface.ReadSystemFirmwareTable =
+            DxgkpFirmwareTableReadTable;
+        *FirmwareInterface = ReturnedInterface;
 
         ExReleaseRundownProtection(
             &Adapter->ReverseCallbackRundownRef);

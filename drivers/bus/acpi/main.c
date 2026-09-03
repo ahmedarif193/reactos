@@ -59,6 +59,70 @@ AcpiGetSystemTableIoctl(
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+AcpiEnumSystemTablesIoctl(
+    _Inout_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION IrpStack)
+{
+    PACPI_ENUM_SYSTEM_TABLES_ENTRY Entries;
+    ACPI_TABLE_HEADER *Table;
+    ACPI_STATUS AcpiStatus;
+    ULONG OutputLength;
+    ULONG Count = 0;
+    ULONG Index;
+    ULONG Capacity;
+
+    OutputLength = IrpStack->Parameters.DeviceIoControl.OutputBufferLength;
+    Entries = Irp->AssociatedIrp.SystemBuffer;
+    Capacity = OutputLength / sizeof(*Entries);
+
+    /*
+     * Walk the loaded table list by index.  A signature is not unique, so the
+     * instance number of each repeat is reported alongside it; that pair is
+     * what IOCTL_ACPI_GET_SYSTEM_TABLE takes back.
+     */
+    for (Index = 0; ; Index++)
+    {
+        ULONG Instance = 1;
+        ULONG Earlier;
+
+        AcpiStatus = AcpiGetTableByIndex(Index, &Table);
+        if (AcpiStatus == AE_BAD_PARAMETER || AcpiStatus == AE_NOT_FOUND)
+            break;
+        if (ACPI_FAILURE(AcpiStatus) || !Table)
+            break;
+
+        if (Count < Capacity)
+        {
+            for (Earlier = 0; Earlier < Count; Earlier++)
+            {
+                if (RtlCompareMemory(Entries[Earlier].Signature,
+                                     Table->Signature,
+                                     sizeof(Entries[Earlier].Signature)) ==
+                    sizeof(Entries[Earlier].Signature))
+                {
+                    Instance++;
+                }
+            }
+
+            RtlCopyMemory(Entries[Count].Signature,
+                          Table->Signature,
+                          sizeof(Entries[Count].Signature));
+            Entries[Count].Instance = Instance;
+        }
+
+        AcpiPutTable(Table);
+        Count++;
+    }
+
+    Irp->IoStatus.Information = Count * sizeof(*Entries);
+    if (Count > Capacity)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    return STATUS_SUCCESS;
+}
+
 UNICODE_STRING ProcessorHardwareIds = {0, 0, NULL};
 LPWSTR ProcessorIdString = NULL;
 LPWSTR ProcessorNameString = NULL;
@@ -294,6 +358,10 @@ ACPIDispatchDeviceControl(
         {
             case IOCTL_ACPI_GET_SYSTEM_TABLE:
                 status = AcpiGetSystemTableIoctl(Irp, irpStack);
+                break;
+
+            case IOCTL_ACPI_ENUM_SYSTEM_TABLES:
+                status = AcpiEnumSystemTablesIoctl(Irp, irpStack);
                 break;
 
             case IOCTL_ACPI_EVAL_METHOD_FOR_PCI:
