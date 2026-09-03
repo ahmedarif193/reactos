@@ -329,6 +329,20 @@ AcpiGetName (
 }
 
 ACPI_STATUS
+AcpiGetNextObject(
+    ACPI_OBJECT_TYPE Type,
+    ACPI_HANDLE Parent,
+    ACPI_HANDLE Child,
+    ACPI_HANDLE *OutHandle)
+{
+    UNREFERENCED_PARAMETER(Type);
+    UNREFERENCED_PARAMETER(Parent);
+    UNREFERENCED_PARAMETER(Child);
+    UNREFERENCED_PARAMETER(OutHandle);
+    return AE_NOT_FOUND;
+}
+
+ACPI_STATUS
 AcpiEvaluateObject (
     ACPI_HANDLE             Object,
     ACPI_STRING             Pathname,
