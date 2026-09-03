@@ -357,7 +357,8 @@ DwmSubtractPixel(ULONGLONG *Red, ULONGLONG *Green, ULONGLONG *Blue,
 
 static void
 DwmBlurRectangle(ULONG *Composition, LONG Width, LONG Height,
-                 LONG Left, LONG Top, LONG Right, LONG Bottom, LONG Radius)
+                 LONG Left, LONG Top, LONG Right, LONG Bottom, LONG Radius,
+                 ULONG Alpha)
 {
     const ULONG Divisor = (ULONG)Radius * 2u + 1u;
     LONG SampleTop, SampleBottom, x, y, Offset;
@@ -413,11 +414,27 @@ DwmBlurRectangle(ULONG *Composition, LONG Width, LONG Height,
         }
         for (y = Top; y < Bottom; ++y)
         {
-            Composition[(SIZE_T)y * Width + x] =
+            ULONG Blurred =
                 0xff000000u |
                 ((ULONG)(Red / Divisor) << 16) |
                 ((ULONG)(Green / Divisor) << 8) |
                 (ULONG)(Blue / Divisor);
+
+            if (Alpha < 255)
+            {
+                ULONG Base = g_blurSource[(SIZE_T)y * Width + x];
+                ULONG Inverse = 255u - Alpha;
+
+                Blurred =
+                    0xff000000u |
+                    ((((Blurred >> 16) & 0xffu) * Alpha +
+                      ((Base >> 16) & 0xffu) * Inverse) / 255u << 16) |
+                    ((((Blurred >> 8) & 0xffu) * Alpha +
+                      ((Base >> 8) & 0xffu) * Inverse) / 255u << 8) |
+                    (((Blurred & 0xffu) * Alpha +
+                      (Base & 0xffu) * Inverse) / 255u);
+            }
+            Composition[(SIZE_T)y * Width + x] = Blurred;
             DwmSubtractPixel(
                 &Red, &Green, &Blue,
                 g_blurTemp[(SIZE_T)DwmClampCoordinate(y - Radius, Height) *
@@ -437,12 +454,16 @@ DwmApplyBlur(ULONG *Composition, LONG Width, LONG Height,
 {
     RECTL Entire = {0, 0, Window->cx, Window->cy};
     const RECTL *Rectangle;
-    ULONG Index, Count;
+    ULONG Index, Count, Alpha = 255;
     LONG Radius, WindowX, WindowY;
     SIZE_T Bytes;
 
     if (!(Window->BlurFlags & DWM_BLUR_ENABLE) ||
         Window->cx <= 0 || Window->cy <= 0)
+        return;
+    if (Window->LayerFlags & DWM_LWA_ALPHA)
+        Alpha = Window->Alpha;
+    if (Alpha == 0)
         return;
     if (Window->BlurFlags & DWM_BLUR_REGION_ENTIRE_WINDOW)
     {
@@ -491,7 +512,7 @@ DwmApplyBlur(ULONG *Composition, LONG Width, LONG Height,
         if (Right > Width) Right = Width;
         if (Bottom > Height) Bottom = Height;
         DwmBlurRectangle(Composition, Width, Height,
-                         Left, Top, Right, Bottom, Radius);
+                         Left, Top, Right, Bottom, Radius, Alpha);
     }
 }
 
