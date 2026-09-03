@@ -54,7 +54,8 @@ ULONG DxgkHandleCoreLiveCount(_In_ const DXGK_HANDLE_TABLE *Table);
 
 /* --- node / engine affinity ------------------------------------------- */
 
-#define DXGK_NODE_CORE_MAX_NODES  8
+/* AffinityMask is an ULONG; accept every node it can represent. */
+#define DXGK_NODE_CORE_MAX_NODES  32
 
 NTSTATUS DxgkNodeCoreValidateAffinity(_In_ ULONG AffinityMask, _In_ ULONG NodeCount);
 /* Lowest set node in the mask; the ordinal a submission is steered to. */

@@ -467,9 +467,15 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
 #endif
 } DXGKRNL_SUBMIT_DMA_BUFFER, *PDXGKRNL_SUBMIT_DMA_BUFFER;
 
-/* Per-node completed-fence tracking cap (independent GPU engine queues
- * can complete out of global fence order). */
-#define DXGK_MAX_TRACKED_NODES 8
+/*
+ * Per-node completed-fence tracking cap (independent GPU engine queues can
+ * complete out of global fence order).  WDDM exposes node-affinity and
+ * pending-node sets as ULONG masks, so every node representable by those
+ * contracts must have backing scheduler/accounting state.  The public DDI
+ * topology can describe more nodes, but the mask-based paths cap a physical
+ * adapter at 32.
+ */
+#define DXGK_MAX_TRACKED_NODES 32
 
 /*
  * Per-node execution accounting.  The rules live in node_stats_core.h, which

@@ -390,7 +390,8 @@ typedef struct _DXGMMS2_PROVIDER_INTERFACE_V3
 
 typedef PVOID DXGMMS2_SCHEDULER_HANDLE;
 
-#define DXGMMS2_SCHEDULER_MAX_ENGINES                 8UL
+/* Engine ordinals are carried in ULONG masks by the dxgkrnl contract. */
+#define DXGMMS2_SCHEDULER_MAX_ENGINES                 32UL
 #define DXGMMS2_SCHEDULER_MAX_RETIREMENTS             64UL
 
 /* Admission flags mirror the submission kinds the queue must order. */
