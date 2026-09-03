@@ -441,7 +441,7 @@ ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade)
 {
     static const INT frames[] = { 10, 12, 14, 16, 20, 24, 32 };
     INT height = rect->bottom - rect->top;
-    INT size = MulDiv(height, 10, 22);
+    INT size = MulDiv(height, 12, 22);
     INT i;
     HICON icon;
 
@@ -455,8 +455,8 @@ ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade)
     }
     if (size > 32)
         size = 32;
-    if (size < 10)
-        size = 10;
+    if (size < 12)
+        size = 12;
 
     icon = LoadImageW(hDllInst, MAKEINTRESOURCEW(baseId + shade), IMAGE_ICON, size, size, LR_SHARED);
     if (!icon)
