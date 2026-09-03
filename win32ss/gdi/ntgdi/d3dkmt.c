@@ -97,6 +97,11 @@ C_ASSERT(FIELD_OFFSET(D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP, OwnerType) == 20);
 #endif
 #endif
 
+C_ASSERT(sizeof(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET) ==
+         RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, NtHandle) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, GlobalShareHandle) == 16);
+
 #define RETURN_STATUS_IF_NULL(Argument)            \
     do                                             \
     {                                              \
@@ -297,6 +302,16 @@ D3DKMTDestroyAllocation2(
 
 NTSTATUS
 APIENTRY
+D3DKMTQueryResourceInfo(
+    _Inout_ D3DKMT_QUERYRESOURCEINFO *pData);
+
+NTSTATUS
+APIENTRY
+D3DKMTOpenResource(
+    _Inout_ D3DKMT_OPENRESOURCE *pData);
+
+NTSTATUS
+APIENTRY
 D3DKMTLock2(
     _Inout_ struct _D3DKMT_LOCK2 *pData);
 
@@ -394,6 +409,39 @@ D3dkmtValidateHandle(
     _In_ D3DKMT_HANDLE Handle)
 {
     return (Handle != 0) ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
+}
+
+static NTSTATUS
+D3dkmtResolveSharedResourceNtHandle(
+    _In_ HANDLE NtHandle,
+    _Out_ D3DKMT_HANDLE *GlobalShareHandle)
+{
+    RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET Packet;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (NtHandle == NULL || GlobalShareHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE;
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.NtHandle = (ULONGLONG)(ULONG_PTR)NtHandle;
+
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_RXGK_RESOLVESHAREDRESOURCENTHANDLE,
+                 &Packet,
+                 sizeof(Packet),
+                 &Packet,
+                 sizeof(Packet),
+                 &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(Packet) || Packet.GlobalShareHandle == 0)
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    *GlobalShareHandle = Packet.GlobalShareHandle;
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -1757,16 +1805,142 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenResourceFromNtHandle(_Inout_ struct _D3DKMT_OPENRESOURCEFROMNTHANDLE* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    D3DKMT_OPENRESOURCEFROMNTHANDLE Captured;
+    D3DKMT_OPENRESOURCE OpenResource;
+    D3DKMT_HANDLE GlobalShareHandle;
+    NTSTATUS Status;
+
+    Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = D3dkmtCaptureUserStructure(
+                 unnamedParam1, sizeof(Captured), &Captured);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.hDevice == 0 || Captured.hNtHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Captured.pKeyedMutexPrivateRuntimeData != NULL ||
+        Captured.KeyedMutexPrivateRuntimeDataSize != 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    /* Probe every scalar output before creating per-device open handles. */
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+            ProbeForWrite(unnamedParam1, sizeof(Captured), 1);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    Status = D3dkmtResolveSharedResourceNtHandle(
+                 Captured.hNtHandle, &GlobalShareHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&OpenResource, sizeof(OpenResource));
+    OpenResource.hDevice = Captured.hDevice;
+    OpenResource.hGlobalShare = GlobalShareHandle;
+    OpenResource.NumAllocations = Captured.NumAllocations;
+    OpenResource.pOpenAllocationInfo2 = Captured.pOpenAllocationInfo2;
+    OpenResource.pPrivateRuntimeData = Captured.pPrivateRuntimeData;
+    OpenResource.PrivateRuntimeDataSize = Captured.PrivateRuntimeDataSize;
+    OpenResource.pResourcePrivateDriverData =
+        Captured.pResourcePrivateDriverData;
+    OpenResource.ResourcePrivateDriverDataSize =
+        Captured.ResourcePrivateDriverDataSize;
+    OpenResource.pTotalPrivateDriverDataBuffer =
+        Captured.pTotalPrivateDriverDataBuffer;
+    OpenResource.TotalPrivateDriverDataBufferSize =
+        Captured.TotalPrivateDriverDataBufferSize;
+
+    Status = D3DKMTOpenResource(&OpenResource);
+    if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_TOO_SMALL)
+        return Status;
+
+    Captured.NumAllocations = OpenResource.NumAllocations;
+    Captured.PrivateRuntimeDataSize = OpenResource.PrivateRuntimeDataSize;
+    Captured.ResourcePrivateDriverDataSize =
+        OpenResource.ResourcePrivateDriverDataSize;
+    Captured.TotalPrivateDriverDataBufferSize =
+        OpenResource.TotalPrivateDriverDataBufferSize;
+    Captured.hResource = OpenResource.hResource;
+    Captured.hKeyedMutex = 0;
+    Captured.hSyncObject = 0;
+
+    _SEH2_TRY
+    {
+        *unnamedParam1 = Captured;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryResourceInfoFromNtHandle(_Inout_ struct _D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE* unnamedParam1)
 {
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    return STATUS_NOT_IMPLEMENTED;
+    D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE Captured;
+    D3DKMT_QUERYRESOURCEINFO QueryResourceInfo;
+    D3DKMT_HANDLE GlobalShareHandle;
+    NTSTATUS Status;
+
+    Status = D3dkmtValidateWddmThunk(unnamedParam1);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = D3dkmtCaptureUserStructure(
+                 unnamedParam1, sizeof(Captured), &Captured);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Captured.hDevice == 0 || Captured.hNtHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = D3dkmtResolveSharedResourceNtHandle(
+                 Captured.hNtHandle, &GlobalShareHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&QueryResourceInfo, sizeof(QueryResourceInfo));
+    QueryResourceInfo.hDevice = Captured.hDevice;
+    QueryResourceInfo.hGlobalShare = GlobalShareHandle;
+    QueryResourceInfo.pPrivateRuntimeData = Captured.pPrivateRuntimeData;
+    QueryResourceInfo.PrivateRuntimeDataSize =
+        Captured.PrivateRuntimeDataSize;
+
+    Status = D3DKMTQueryResourceInfo(&QueryResourceInfo);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Captured.PrivateRuntimeDataSize =
+        QueryResourceInfo.PrivateRuntimeDataSize;
+    Captured.TotalPrivateDriverDataSize =
+        QueryResourceInfo.TotalPrivateDriverDataSize;
+    Captured.ResourcePrivateDriverDataSize =
+        QueryResourceInfo.ResourcePrivateDriverDataSize;
+    Captured.NumAllocations = QueryResourceInfo.NumAllocations;
+
+    _SEH2_TRY
+    {
+        if (ExGetPreviousMode() != KernelMode)
+            ProbeForWrite(unnamedParam1, sizeof(Captured), 1);
+        *unnamedParam1 = Captured;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
 }
 
 NTSTATUS
@@ -2447,8 +2621,10 @@ NtGdiDdDDIRegisterVailProcess(_In_ GUID *unnamedParam1)
 
 /*
  * D3DKMTShareObjects — multi-argument NT-handle sharing entry point.
- * Validate the documented argument contract (cObjects in [1,N], non-NULL
- * object list and output handle), then report the operation as unimplemented.
+ *
+ * The private bridge v1 contract carries the render-UMD case: one unnamed
+ * NtSecuritySharing resource.  Capture every user pointer here before the
+ * kernel-to-kernel IOCTL; dxgkrnl never dereferences the original buffers.
  */
 NTSTATUS
 APIENTRY
@@ -2458,13 +2634,91 @@ NtGdiDdDDIShareObjects(_In_ UINT cObjects,
                        _In_ DWORD dwDesiredAccess,
                        _Out_ HANDLE* phSharedNtHandle)
 {
-    UNREFERENCED_PARAMETER(pObjectAttributes);
-    UNREFERENCED_PARAMETER(dwDesiredAccess);
+    RXGK_SHAREOBJECTS_PACKET Packet;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+    UINT Index;
 
-    if (cObjects == 0 || hObjects == NULL || phSharedNtHandle == NULL)
+    if (cObjects == 0 ||
+        cObjects > D3DKMT_MAX_OBJECTS_PER_HANDLE ||
+        hObjects == NULL ||
+        pObjectAttributes == NULL ||
+        phSharedNtHandle == NULL)
+    {
         return STATUS_INVALID_PARAMETER;
+    }
 
-    return STATUS_NOT_IMPLEMENTED;
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    RtlZeroMemory(&ObjectAttributes, sizeof(ObjectAttributes));
+    _SEH2_TRY
+    {
+        for (Index = 0; Index < cObjects; ++Index)
+            Packet.ObjectHandles[Index] = hObjects[Index];
+        ObjectAttributes = *(POBJECT_ATTRIBUTES)pObjectAttributes;
+        *phSharedNtHandle = NULL;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (ObjectAttributes.Length != sizeof(ObjectAttributes))
+        return STATUS_INVALID_PARAMETER;
+    if (ObjectAttributes.RootDirectory != NULL ||
+        ObjectAttributes.ObjectName != NULL ||
+        ObjectAttributes.Attributes != 0 ||
+        ObjectAttributes.SecurityDescriptor != NULL ||
+        ObjectAttributes.SecurityQualityOfService != NULL)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Packet.Size = RXGK_SHAREOBJECTS_PACKET_V1_SIZE;
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.ObjectCount = cObjects;
+    Packet.DesiredAccess = dwDesiredAccess;
+    Packet.ObjectAttributesPresent = 1;
+
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_SHAREOBJECTS,
+                 &Packet,
+                 sizeof(Packet),
+                 &Packet,
+                 sizeof(Packet),
+                 &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != RXGK_SHAREOBJECTS_PACKET_V1_SIZE ||
+        Packet.SharedNtHandle == 0 ||
+        Packet.SharedNtHandle > (ULONGLONG)(ULONG_PTR)-1)
+    {
+        if (Packet.SharedNtHandle != 0 &&
+            Packet.SharedNtHandle <= (ULONGLONG)(ULONG_PTR)-1)
+        {
+            ZwClose((HANDLE)(ULONG_PTR)Packet.SharedNtHandle);
+        }
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    _SEH2_TRY
+    {
+        *phSharedNtHandle =
+            (HANDLE)(ULONG_PTR)Packet.SharedNtHandle;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+    {
+        ZwClose((HANDLE)(ULONG_PTR)Packet.SharedNtHandle);
+        return Status;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 ULONG_PTR

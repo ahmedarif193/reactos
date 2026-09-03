@@ -6386,6 +6386,8 @@ DxgkpCreateAllocationCaptured(
                 Status = STATUS_INSUFFICIENT_RESOURCES;
                 break;
             }
+            Resource->NtSecuritySharing =
+                pCreateAllocation->Flags.NtSecuritySharing != 0;
             TrackedAlloc->DestroyMiniportResource = FALSE;
 
             CreatedResource = TRUE;
@@ -6393,7 +6395,8 @@ DxgkpCreateAllocationCaptured(
             ResourceLockHeld = TRUE;
 
             pCreateAllocation->hResource = Resource->Handle;
-            if (pCreateAllocation->Flags.CreateShared)
+            if (pCreateAllocation->Flags.CreateShared &&
+                !pCreateAllocation->Flags.NtSecuritySharing)
             {
                 pCreateAllocation->hGlobalShare = Resource->GlobalShareHandle;
                 ASSERT(pCreateAllocation->hGlobalShare != 0);

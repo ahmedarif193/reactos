@@ -65,6 +65,7 @@ C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress) == 24);
 #define CAF_CREATESHARED            0x00000002u
 #define CAF_CREATEPROTECTED         0x00000008u  /* forbidden from user mode */
 #define CAF_EXISTINGSYSMEM          0x00000020u  /* user mode: EXISTINGHEAP only */
+#define CAF_NTSECURITYSHARING       0x00000040u
 #define CAF_CREATEWRITECOMBINED     0x00000100u  /* forbidden from user mode */
 #define CAF_CREATECACHED            0x00000200u  /* forbidden from user mode */
 #define CAF_CROSSADAPTER            0x00000800u
@@ -592,6 +593,8 @@ START_TEST(allocflags)
     Flags_ValidCombo(CAF_CREATERESOURCE | CAF_CREATESHARED, 2,
                      "CreateResource|CreateShared");
     Flags_Forbidden(CAF_CREATESHARED, "CreateShared without CreateResource");
+    Flags_Forbidden(CAF_NTSECURITYSHARING,
+                    "NtSecuritySharing without CreateShared");
 
     /* User-mode-forbidden flags (assert refusal). */
     Flags_Forbidden(CAF_CREATEPROTECTED,

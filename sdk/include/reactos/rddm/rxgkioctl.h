@@ -53,6 +53,10 @@
 #define IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1C7, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #endif
+#define IOCTL_D3DKMT_SHAREOBJECTS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1D2, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_RXGK_RESOLVESHAREDRESOURCENTHANDLE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1D3, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
 #define IOCTL_D3DKMT_SETFSEBLOCK \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1CC, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -91,6 +95,8 @@
 #endif
 #define RXGK_CONTEXTINPROCESSPRIORITY_PACKET_V1_SIZE 16U
 #define RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET_V1_SIZE 32U
+#define RXGK_SHAREOBJECTS_PACKET_V1_SIZE       40U
+#define RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE 24U
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 #define RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE 48U
 #endif
@@ -386,6 +392,39 @@ typedef struct _RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET
     LONG AdapterLuidHighPart;
 } RXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET,
  *PRXGK_GETSHAREDRESOURCEADAPTERLUID_PACKET;
+
+/*
+ * Pointer-free Windows 8 NT-security sharing request.  The v1 bridge admits
+ * one unnamed resource object, which is the contract used by render UMDs for
+ * private resource sharing.  Named objects and multi-object resource bundles
+ * need an extended packet carrying a captured name and the other object
+ * classes; they are rejected rather than silently losing security metadata.
+ */
+typedef struct _RXGK_SHAREOBJECTS_PACKET
+{
+    ULONG       Size;
+    ULONG       Version;
+    ULONG       ObjectCount;
+    ULONG       DesiredAccess;
+    ULONG       ObjectHandles[D3DKMT_MAX_OBJECTS_PER_HANDLE];
+    ULONG       ObjectAttributesPresent;
+    ULONGLONG   SharedNtHandle;
+} RXGK_SHAREOBJECTS_PACKET, *PRXGK_SHAREOBJECTS_PACKET;
+
+/*
+ * Resolves a secured shared-resource NT handle inside dxgkrnl.  The returned
+ * legacy share handle never crosses back to user mode; win32k uses it only to
+ * reuse the pointer-safe QueryResourceInfo/OpenResource bridge.
+ */
+typedef struct _RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET
+{
+    ULONG       Size;
+    ULONG       Version;
+    ULONGLONG   NtHandle;
+    ULONG       GlobalShareHandle;
+    ULONG       Reserved;
+} RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET,
+ *PRXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET;
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 /*
