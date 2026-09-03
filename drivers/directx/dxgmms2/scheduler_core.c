@@ -177,9 +177,11 @@ Dxgmms2SchedCoreAdmit(
 /*
  * Dxgmms2SchedCoreClaim
  *
- * Hands the head packet to one dispatcher.  Only the head may be claimed, and
- * only while no other claim is outstanding on that engine, so dispatch order
- * cannot diverge from queue order.
+ * Hands the first undispatched packet to one dispatcher.  Dispatched packets
+ * form a prefix of the FIFO and remain queued until their fences retire; the
+ * next packet after that prefix may be claimed while the GPU owns the prefix.
+ * Only one dispatch claim may be outstanding on an engine, so miniport submit
+ * order cannot diverge from queue order.
  */
 BOOLEAN
 Dxgmms2SchedCoreClaim(
@@ -189,14 +191,22 @@ Dxgmms2SchedCoreClaim(
 {
     PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine(Core, EngineOrdinal);
     PDXGMMS2_SCHED_PACKET Packet;
+    PLIST_ENTRY Entry;
 
     if (Engine == NULL || IsListEmpty(&Engine->RunQueue))
         return FALSE;
     if (Engine->State != Dxgmms2EngineIdle && Engine->State != Dxgmms2EngineRunning)
         return FALSE;
 
-    Packet = CONTAINING_RECORD(Engine->RunQueue.Flink, DXGMMS2_SCHED_PACKET, Entry);
-    if (Packet->Claimed || Packet->Dispatched)
+    for (Entry = Engine->RunQueue.Flink;
+         Entry != &Engine->RunQueue;
+         Entry = Entry->Flink)
+    {
+        Packet = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
+        if (!Packet->Dispatched)
+            break;
+    }
+    if (Entry == &Engine->RunQueue || Packet->Claimed)
         return FALSE;
 
     Packet->Claimed = TRUE;
@@ -543,14 +553,22 @@ Dxgmms2SchedCorePeekNext(
 {
     PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine((PDXGMMS2_SCHED_CORE)Core, EngineOrdinal);
     PDXGMMS2_SCHED_PACKET Packet;
+    PLIST_ENTRY Entry;
 
     *OutPacketCookie = 0;
     if (Engine == NULL || IsListEmpty(&Engine->RunQueue))
         return FALSE;
     if (Engine->State != Dxgmms2EngineIdle && Engine->State != Dxgmms2EngineRunning)
         return FALSE;
-    Packet = CONTAINING_RECORD(Engine->RunQueue.Flink, DXGMMS2_SCHED_PACKET, Entry);
-    if (Packet->Claimed || Packet->Dispatched)
+    for (Entry = Engine->RunQueue.Flink;
+         Entry != &Engine->RunQueue;
+         Entry = Entry->Flink)
+    {
+        Packet = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
+        if (!Packet->Dispatched)
+            break;
+    }
+    if (Entry == &Engine->RunQueue || Packet->Claimed)
         return FALSE;
     *OutPacketCookie = Packet->PacketCookie;
     return TRUE;

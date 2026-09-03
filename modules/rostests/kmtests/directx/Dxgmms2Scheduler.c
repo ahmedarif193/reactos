@@ -298,6 +298,109 @@ TestCompletionDuringOutstandingClaim(
 }
 
 /*
+ * Successfully submitted packets remain at the head until their fences
+ * retire.  They must not prevent the scheduler from feeding later FIFO work
+ * to the miniport; otherwise every command buffer creates a GPU pipeline
+ * bubble and a CPU-side submit eventually waits for that retirement.
+ */
+static VOID
+TestPipelinedDispatch(
+    _Inout_ PDXGMMS2_SCHED_TEST_STATE State)
+{
+    DXGMMS2_SCHEDULER_CLAIM_V1 Claim;
+    DXGMMS2_SCHEDULER_CLAIM_V1 ConcurrentClaim;
+    DXGMMS2_SCHEDULER_ENGINE_STATUS_V1 EngineStatus;
+    PDXGMMS2_SCHED_PACKET First;
+    PDXGMMS2_SCHED_PACKET Second;
+    PDXGMMS2_SCHED_PACKET Third;
+    PDXGMMS2_SCHED_PACKET Failed = NULL;
+    PDXGMMS2_SCHED_PACKET Retired[DXGMMS2_SCHED_TEST_BATCH];
+    ULONGLONG NextCookie = 0;
+    ULONG FirstFence;
+    ULONG SecondFence;
+    ULONG ThirdFence;
+    ULONG Count;
+    NTSTATUS Status;
+
+    FirstFence = AdmitOne(State, 0, 150, &First);
+    SecondFence = AdmitOne(State, 0, 150, &Second);
+    ThirdFence = AdmitOne(State, 0, 150, &Third);
+    ok(First != NULL && Second != NULL && Third != NULL,
+       "pipeline admission failed\n");
+    if (First == NULL || Second == NULL || Third == NULL)
+        return;
+
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim),
+                 "claim first pipeline packet");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, First);
+    Status = Dxgmms2SchedCorePublishDispatch(
+                 &State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(
+                 &State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_pointer(Failed, NULL);
+
+    ok_bool_true(Dxgmms2SchedCorePeekNext(
+                     &State->Core, 0, &NextCookie),
+                 "peek behind dispatched FIFO prefix");
+    ok_eq_pointer((PVOID)(ULONG_PTR)NextCookie, Second);
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim),
+                 "claim second while first is in flight");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, Second);
+    InitClaim(&ConcurrentClaim);
+    ok_bool_false(Dxgmms2SchedCoreClaim(
+                      &State->Core, 0, &ConcurrentClaim),
+                  "one outstanding submit claim per engine");
+    Status = Dxgmms2SchedCorePublishDispatch(
+                 &State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(
+                 &State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim),
+                 "claim third behind two in-flight packets");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, Third);
+    Status = Dxgmms2SchedCorePublishDispatch(
+                 &State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(
+                 &State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    InitEngineStatus(&EngineStatus);
+    Status = Dxgmms2SchedCoreQueryEngine(
+                 &State->Core, 0, &EngineStatus);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(EngineStatus.PendingPacketCount, 3UL);
+    ok_eq_ulong(EngineStatus.OldestKickedFenceId, FirstFence);
+
+    Count = Dxgmms2SchedCoreNotifyCompletion(
+                &State->Core, 0, SecondFence,
+                Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 2UL);
+    ok_eq_pointer(Retired[0], First);
+    ok_eq_pointer(Retired[1], Second);
+    InitEngineStatus(&EngineStatus);
+    (VOID)Dxgmms2SchedCoreQueryEngine(
+        &State->Core, 0, &EngineStatus);
+    ok_eq_ulong(EngineStatus.PendingPacketCount, 1UL);
+    ok_eq_ulong(EngineStatus.OldestKickedFenceId, ThirdFence);
+
+    Count = Dxgmms2SchedCoreNotifyCompletion(
+                &State->Core, 0, ThirdFence,
+                Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 1UL);
+    ok_eq_pointer(Retired[0], Third);
+    ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core),
+                 "pipeline retires in FIFO order");
+}
+
+/*
  * The scheduler packet cookie is opaque caller state.  Watchdog users may
  * consume the engine/fence snapshot after the provider lock is released, but
  * must not infer that the returned cookie still names live storage.
@@ -981,6 +1084,7 @@ START_TEST(Dxgmms2Scheduler)
 
     TestStartAndAdmissionGate(State);
     TestFifoOrderAndClaimProtocol(State);
+    TestPipelinedDispatch(State);
     TestCompletionDuringOutstandingClaim(State);
     TestOldestDispatchedOpaqueCookie(State);
     TestOldestDispatchedOnEngine(State);
