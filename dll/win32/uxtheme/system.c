@@ -32,6 +32,7 @@
 #ifdef __REACTOS__
 #include "winnls.h"
 #include "resource.h"
+#include <reactos/dwmframe.h>
 #endif
 
 #include "uxthemedll.h"
@@ -667,6 +668,108 @@ static LPWSTR UXTHEME_GetWindowProperty(HWND hwnd, ATOM aProp, LPWSTR pszBuffer,
     return NULL;
 }
 
+#ifdef __REACTOS__
+static BOOL UXTHEME_ClassListContains(LPCWSTR classList, LPCWSTR wanted)
+{
+    SIZE_T wantedLength = lstrlenW(wanted);
+
+    while (classList && *classList)
+    {
+        LPCWSTR end = wcschr(classList, ';');
+        SIZE_T length = end ? (SIZE_T)(end - classList) : lstrlenW(classList);
+
+        if (length == wantedLength &&
+            CompareStringOrdinal(classList, (INT)length,
+                                 wanted, (INT)wantedLength, TRUE) == CSTR_EQUAL)
+            return TRUE;
+        if (!end)
+            break;
+        classList = end + 1;
+    }
+    return FALSE;
+}
+
+static void UXTHEME_ClearLiquidProperties(HWND hwnd, ULONG region)
+{
+    ULONG_PTR currentRegion = (ULONG_PTR)GetPropW(hwnd, DWM_PROP_BACKDROP_REGION);
+
+    /* A whole-window shell material takes precedence over its non-client. */
+    if (region == DWM_BACKDROP_REGION_NONCLIENT &&
+        currentRegion == DWM_BACKDROP_REGION_WINDOW)
+        return;
+    RemovePropW(hwnd, DWM_PROP_SYSTEM_BACKDROP_TYPE);
+    RemovePropW(hwnd, DWM_PROP_BACKDROP_OPACITY);
+    RemovePropW(hwnd, DWM_PROP_BACKDROP_COLOR);
+    RemovePropW(hwnd, DWM_PROP_BACKDROP_COLORIZATION);
+    RemovePropW(hwnd, DWM_PROP_BACKDROP_REGION);
+}
+
+static void UXTHEME_ApplyLiquidProperties(HWND hwnd, LPCWSTR classList,
+                                          DWORD flags, UINT dpi)
+{
+    LPCWSTR role = NULL;
+    ULONG backdropType = 0, region = 0;
+    PTHEME_CLASS liquid;
+    BOOL composited = FALSE;
+    INT opacity = 255;
+    COLORREF color = 0;
+    COLORREF colorization;
+
+    if (!IsWindow(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd)
+        return;
+    if (flags & OTD_NONCLIENT)
+    {
+        role = L"NonClient";
+        backdropType = DWM_BACKDROP_TRANSIENT;
+        region = DWM_BACKDROP_REGION_NONCLIENT;
+    }
+    else if (UXTHEME_ClassListContains(classList, L"TaskBar"))
+    {
+        role = L"Taskbar";
+        backdropType = DWM_BACKDROP_TRANSIENT;
+        region = DWM_BACKDROP_REGION_WINDOW;
+    }
+    else if (UXTHEME_ClassListContains(classList, L"StartMenu"))
+    {
+        role = L"StartMenu";
+        backdropType = DWM_BACKDROP_TRANSIENT;
+        region = DWM_BACKDROP_REGION_WINDOW;
+    }
+    if (!role)
+        return;
+
+    liquid = bThemeActive ? MSSTYLES_OpenThemeClass(role, L"Liquid", dpi) : NULL;
+    if (!liquid || FAILED(GetThemeBool(liquid, 0, 0, TMT_COMPOSITED,
+                                       &composited)) || !composited ||
+        FAILED(GetThemeInt(liquid, 0, 0, TMT_OPACITY, &opacity)) ||
+        opacity < 0 || opacity > 255 ||
+        FAILED(GetThemeColor(liquid, 0, 0, TMT_FILLCOLOR, &color)))
+    {
+        if (liquid)
+            MSSTYLES_CloseThemeClass(liquid);
+        UXTHEME_ClearLiquidProperties(hwnd, region);
+        return;
+    }
+
+    colorization = color;
+    GetThemeColor(liquid, 0, 0, TMT_COLORIZATIONCOLOR, &colorization);
+    MSSTYLES_CloseThemeClass(liquid);
+    if (!SetPropW(hwnd, DWM_PROP_SYSTEM_BACKDROP_TYPE,
+                  (HANDLE)(ULONG_PTR)backdropType) ||
+        !SetPropW(hwnd, DWM_PROP_BACKDROP_OPACITY,
+                  (HANDLE)(ULONG_PTR)(opacity + 1)) ||
+        !SetPropW(hwnd, DWM_PROP_BACKDROP_COLOR,
+                  (HANDLE)(ULONG_PTR)((ULONG)color + 1)) ||
+        !SetPropW(hwnd, DWM_PROP_BACKDROP_COLORIZATION,
+                  (HANDLE)(ULONG_PTR)((ULONG)colorization + 1)) ||
+        !SetPropW(hwnd, DWM_PROP_BACKDROP_REGION,
+                  (HANDLE)(ULONG_PTR)region))
+    {
+        UXTHEME_ClearLiquidProperties(hwnd, region);
+    }
+}
+#endif
+
 static HTHEME open_theme_data(HWND hwnd, LPCWSTR pszClassList, DWORD flags, UINT dpi)
 {
     WCHAR szAppBuff[256];
@@ -718,7 +821,14 @@ static HTHEME open_theme_data(HWND hwnd, LPCWSTR pszClassList, DWORD flags, UINT
 
         if (pszUseClassList)
             hTheme = MSSTYLES_OpenThemeClass(pszAppName, pszUseClassList, dpi);
+#ifdef __REACTOS__
+        UXTHEME_ApplyLiquidProperties(hwnd, pszUseClassList, flags, dpi);
+#endif
     }
+#ifdef __REACTOS__
+    else
+        UXTHEME_ApplyLiquidProperties(hwnd, pszClassList, flags, dpi);
+#endif
     if(IsWindow(hwnd))
         SetPropW(hwnd, (LPCWSTR)MAKEINTATOM(atWindowTheme), hTheme);
     TRACE(" = %p\n", hTheme);

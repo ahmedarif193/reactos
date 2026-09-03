@@ -111,11 +111,11 @@ DwmSweepViews(void)
     }
 }
 
-#define DWM_SHADOW_WIDE_EXTENT_96       64
-#define DWM_SHADOW_TOP_MARGIN_96        32
-#define DWM_SHADOW_BOTTOM_MARGIN_96     96
-#define DWM_SHADOW_ACTIVE_OFFSET_NUMERATOR_96   128
-#define DWM_SHADOW_INACTIVE_OFFSET_NUMERATOR_96 64
+#define DWM_SHADOW_WIDE_EXTENT_96       24
+#define DWM_SHADOW_TOP_MARGIN_96        12
+#define DWM_SHADOW_BOTTOM_MARGIN_96     32
+#define DWM_SHADOW_ACTIVE_OFFSET_NUMERATOR_96   32
+#define DWM_SHADOW_INACTIVE_OFFSET_NUMERATOR_96 18
 #define DWM_SHADOW_OFFSET_DENOMINATOR_96        3
 #define DWM_SHADOW_ACTIVE_WIDE_OPACITY  280
 #define DWM_SHADOW_ACTIVE_TIGHT_OPACITY 220
@@ -496,6 +496,45 @@ DwmApplyBlur(ULONG *Composition, LONG Width, LONG Height,
 }
 
 static void
+DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
+                     LONG ClipLeft, LONG ClipTop, LONG ClipRight,
+                     LONG ClipBottom, const DWM_WIN *Window)
+{
+    DWM_WIN BlurWindow;
+    RECTL Rectangles[4];
+
+    if (Window->BackdropType != DWM_BACKDROP_TRANSIENT)
+        return;
+
+    BlurWindow = *Window;
+    BlurWindow.BlurFlags = DWM_BLUR_ENABLE;
+    if (Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW)
+    {
+        BlurWindow.BlurFlags |= DWM_BLUR_REGION_ENTIRE_WINDOW;
+        BlurWindow.BlurRectCount = 0;
+        DwmApplyBlur(Composition, Width, Height,
+                     ClipLeft, ClipTop, ClipRight, ClipBottom,
+                     &BlurWindow, NULL);
+        return;
+    }
+    if (Window->BackdropRegion != DWM_BACKDROP_REGION_NONCLIENT)
+        return;
+
+    Rectangles[0] = (RECTL){0, 0, Window->cx, Window->ClientY};
+    Rectangles[1] = (RECTL){0, Window->ClientY + Window->ClientHeight,
+                            Window->cx, Window->cy};
+    Rectangles[2] = (RECTL){0, Window->ClientY, Window->ClientX,
+                            Window->ClientY + Window->ClientHeight};
+    Rectangles[3] = (RECTL){Window->ClientX + Window->ClientWidth,
+                            Window->ClientY, Window->cx,
+                            Window->ClientY + Window->ClientHeight};
+    BlurWindow.BlurRectCount = ARRAYSIZE(Rectangles);
+    DwmApplyBlur(Composition, Width, Height,
+                 ClipLeft, ClipTop, ClipRight, ClipBottom,
+                 &BlurWindow, Rectangles);
+}
+
+static void
 DwmBlendShadowSpan(ULONG *Row, LONG X0, LONG X1, LONGLONG OwnerX,
                    LONG Width, const DWM_SHADOW_KERNEL *TightKernel,
                    ULONG WideY, ULONG TightY,
@@ -531,6 +570,9 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
                LONG clipL, LONG clipT, LONG clipR, LONG clipB,
                const DWM_WIN *w)
 {
+    MONITORINFO monitorInfo;
+    HMONITOR monitor;
+    RECT ownerRect;
     LONGLONG ownerX = (LONGLONG)w->x - g_originX;
     LONGLONG ownerY = (LONGLONG)w->y - g_originY;
     LONGLONG ownerRight = ownerX + w->cx;
@@ -551,6 +593,48 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
         w->cx <= 0 || w->cy <= 0 ||
         !(w->LayerFlags & DWM_WINDOW_NC_SHADOW))
         return;
+
+    ownerRect.left = w->x;
+    ownerRect.top = w->y;
+    ownerRect.right = w->x + w->cx;
+    ownerRect.bottom = w->y + w->cy;
+    monitor = MonitorFromRect(&ownerRect, MONITOR_DEFAULTTONEAREST);
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    if (monitor != NULL && GetMonitorInfoW(monitor, &monitorInfo))
+    {
+        LONGLONG workLeft = (LONGLONG)monitorInfo.rcWork.left - g_originX;
+        LONGLONG workTop = (LONGLONG)monitorInfo.rcWork.top - g_originY;
+        LONGLONG workRight = (LONGLONG)monitorInfo.rcWork.right - g_originX;
+        LONGLONG workBottom = (LONGLONG)monitorInfo.rcWork.bottom - g_originY;
+
+        /* Appbars occupy the monitor area excluded from rcWork. They are
+         * shell layers, not ordinary framed windows, and must not acquire an
+         * active/inactive non-client shadow when their focus state changes. */
+        if ((monitorInfo.rcWork.left > monitorInfo.rcMonitor.left &&
+             ownerRect.right <= monitorInfo.rcWork.left) ||
+            (monitorInfo.rcWork.top > monitorInfo.rcMonitor.top &&
+             ownerRect.bottom <= monitorInfo.rcWork.top) ||
+            (monitorInfo.rcWork.right < monitorInfo.rcMonitor.right &&
+             ownerRect.left >= monitorInfo.rcWork.right) ||
+            (monitorInfo.rcWork.bottom < monitorInfo.rcMonitor.bottom &&
+             ownerRect.top >= monitorInfo.rcWork.bottom))
+        {
+            return;
+        }
+
+        if (monitorInfo.rcWork.left > monitorInfo.rcMonitor.left &&
+            shadowLeft < workLeft)
+            shadowLeft = workLeft;
+        if (monitorInfo.rcWork.top > monitorInfo.rcMonitor.top &&
+            shadowTop < workTop)
+            shadowTop = workTop;
+        if (monitorInfo.rcWork.right < monitorInfo.rcMonitor.right &&
+            shadowRight > workRight)
+            shadowRight = workRight;
+        if (monitorInfo.rcWork.bottom < monitorInfo.rcMonitor.bottom &&
+            shadowBottom > workBottom)
+            shadowBottom = workBottom;
+    }
 
     if (shadowRight <= clipL || shadowLeft >= clipR ||
         shadowBottom <= clipT || shadowTop >= clipB)
@@ -630,7 +714,7 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
 static void
 DwmBlitWindow(ULONG *comp, LONG scrW,
               LONG clipL, LONG clipT, LONG clipR, LONG clipB,
-              const BYTE *pix, const DWM_WIN *w)
+              const BYTE *pix, const ULONG *wallpaper, const DWM_WIN *w)
 {
     LONG r, r0, r1, x0, x1, srcx0, dy, x, width;
     LONGLONG wx = (LONGLONG)w->x - g_originX;
@@ -639,7 +723,10 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
     BOOL useKey = (w->LayerFlags & DWM_LWA_COLORKEY) != 0;
     BOOL useAlpha = (w->LayerFlags & DWM_LWA_ALPHA) != 0 && w->Alpha < 255;
     BOOL usePixelAlpha = (w->BlurFlags & DWM_BLUR_ENABLE) != 0;
-    ULONG a = w->Alpha, ia = 255 - w->Alpha, key = 0;
+    BOOL useBackdrop = w->BackdropType >= DWM_BACKDROP_MAIN &&
+                       w->BackdropType <= DWM_BACKDROP_TABBED &&
+                       w->BackdropRegion != 0;
+    ULONG a = w->Alpha, key = 0, backdropKey = 0, colorizationKey = 0;
 
     if (w->cx <= 0 || w->cy <= 0 ||
         (ULONG)w->cx > ((ULONG)-1) / sizeof(ULONG) ||
@@ -665,17 +752,29 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
         ULONG c = w->ColorKey;
         key = ((c & 0xFFu) << 16) | (c & 0xFF00u) | ((c >> 16) & 0xFFu);
     }
+    if (useBackdrop)
+    {
+        ULONG c = w->BackdropColor;
+        backdropKey = ((c & 0xFFu) << 16) |
+                      (c & 0xFF00u) | ((c >> 16) & 0xFFu);
+        c = w->BackdropColorization;
+        colorizationKey = ((c & 0xFFu) << 16) |
+                          (c & 0xFF00u) | ((c >> 16) & 0xFFu);
+    }
 
     for (r = r0; r < r1; r++)
     {
         const ULONG *srcrow;
+        const ULONG *wallpaperrow = NULL;
         ULONG *dstrow;
 
         dy = (LONG)(wy + r);
         srcrow = (const ULONG *)(pix + (SIZE_T)r * w->Stride) + srcx0;
         dstrow = comp + (SIZE_T)dy * scrW + x0;
+        if (wallpaper != NULL)
+            wallpaperrow = wallpaper + (SIZE_T)dy * scrW + x0;
 
-        if (!useKey && !useAlpha && !usePixelAlpha)
+        if (!useKey && !useAlpha && !usePixelAlpha && !useBackdrop)
         {
             RtlCopyMemory(dstrow, srcrow, (SIZE_T)width * 4);
             continue;
@@ -683,44 +782,67 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
 
         for (x = 0; x < width; x++)
         {
-            ULONG s = srcrow[x], d;
+            ULONG s = srcrow[x], d, pixelAlpha = 255;
+            LONG sourceX = srcx0 + x;
+            BOOL materialPixel = FALSE;
+
             if (useKey && (s & 0x00FFFFFFu) == key)
                 continue;
-            if (usePixelAlpha)
+            if (useBackdrop &&
+                ((s & 0x00FFFFFFu) == backdropKey ||
+                 (s & 0x00FFFFFFu) == colorizationKey))
             {
-                ULONG PixelAlpha = (s >> 24) & 0xffu;
-                ULONG Inverse;
-
-                if (useAlpha)
-                    PixelAlpha = PixelAlpha * a / 255u;
-                if (PixelAlpha == 0)
-                    continue;
-                if (PixelAlpha == 255)
+                if (w->BackdropRegion == DWM_BACKDROP_REGION_WINDOW ||
+                    sourceX < w->ClientX ||
+                    sourceX >= w->ClientX + w->ClientWidth ||
+                    r < w->ClientY ||
+                    r >= w->ClientY + w->ClientHeight)
                 {
-                    dstrow[x] = s & 0x00ffffffu;
-                    continue;
+                    materialPixel = TRUE;
                 }
-                Inverse = 255u - PixelAlpha;
-                d = dstrow[x];
-                dstrow[x] =
-                    ((((s >> 16) & 0xFFu) * PixelAlpha +
-                      ((d >> 16) & 0xFFu) * Inverse) / 255u << 16) |
-                    ((((s >> 8) & 0xFFu) * PixelAlpha +
-                      ((d >> 8) & 0xFFu) * Inverse) / 255u << 8) |
-                    (((s & 0xFFu) * PixelAlpha +
-                      (d & 0xFFu) * Inverse) / 255u);
             }
-            else if (useAlpha)
+            if (usePixelAlpha)
+                pixelAlpha = (s >> 24) & 0xffu;
+
+            d = dstrow[x];
+            if (materialPixel &&
+                (w->BackdropType == DWM_BACKDROP_MAIN ||
+                 w->BackdropType == DWM_BACKDROP_TABBED) &&
+                wallpaperrow != NULL)
             {
-                d = dstrow[x];
-                dstrow[x] =
-                    ((((s >> 16) & 0xFFu) * a + ((d >> 16) & 0xFFu) * ia) / 255u << 16) |
-                    ((((s >> 8)  & 0xFFu) * a + ((d >> 8)  & 0xFFu) * ia) / 255u << 8)  |
-                    (((s & 0xFFu) * a + (d & 0xFFu) * ia) / 255u);
+                ULONG base = wallpaperrow[x];
+                ULONG opacity = w->BackdropOpacity;
+                ULONG inverse = 255u - opacity;
+
+                s = ((((s >> 16) & 0xFFu) * opacity +
+                      ((base >> 16) & 0xFFu) * inverse) / 255u << 16) |
+                    ((((s >> 8) & 0xFFu) * opacity +
+                      ((base >> 8) & 0xFFu) * inverse) / 255u << 8) |
+                    (((s & 0xFFu) * opacity +
+                      (base & 0xFFu) * inverse) / 255u);
             }
-            else
+            else if (materialPixel)
             {
-                dstrow[x] = s;
+                pixelAlpha = pixelAlpha * w->BackdropOpacity / 255u;
+            }
+            if (useAlpha)
+                pixelAlpha = pixelAlpha * a / 255u;
+            if (pixelAlpha == 0)
+                continue;
+            if (pixelAlpha == 255)
+            {
+                dstrow[x] = s & 0x00ffffffu;
+                continue;
+            }
+            {
+                ULONG inverse = 255u - pixelAlpha;
+                dstrow[x] =
+                    ((((s >> 16) & 0xFFu) * pixelAlpha +
+                      ((d >> 16) & 0xFFu) * inverse) / 255u << 16) |
+                    ((((s >> 8) & 0xFFu) * pixelAlpha +
+                      ((d >> 8) & 0xFFu) * inverse) / 255u << 8) |
+                    (((s & 0xFFu) * pixelAlpha +
+                      (d & 0xFFu) * inverse) / 255u);
             }
         }
     }
@@ -731,6 +853,7 @@ static HBITMAP g_hbmComp;
 static void   *g_compBits;
 static HDC     g_hdcBackdrop;
 static HBITMAP g_hbmBackdrop;
+static void   *g_backdropBits;
 static BYTE   *g_buf;
 static ULONG   g_bufSize;
 static LONG    g_W, g_H;
@@ -832,6 +955,7 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
     g_compBits = bitsNew;
     g_hdcBackdrop = hdcBackdropNew;
     g_hbmBackdrop = hbmBackdropNew;
+    g_backdropBits = backdropBitsNew;
 
     g_W = W;
     g_H = H;
@@ -1031,12 +1155,16 @@ DwmComposeLoop(HANDLE hStopEvent)
                     DwmApplyBlur((ULONG *)g_compBits, g_W, g_H,
                                  pl, pt, pr, pb, &wins[i],
                                  windowBlurRects);
+                    DwmApplyBackdropBlur((ULONG *)g_compBits, g_W, g_H,
+                                         pl, pt, pr, pb, &wins[i]);
                     /* A non-client shadow is a compositor layer immediately
                      * below its owner. Since wins[] is bottom-to-top, higher
                      * windows and their shadows naturally occlude lower ones. */
                     DwmBlendShadow((ULONG *)g_compBits, g_W, g_H,
                                    pl, pt, pr, pb, &wins[i]);
-                    DwmBlitWindow((ULONG *)g_compBits, g_W, pl, pt, pr, pb, pix, &wins[i]);
+                    DwmBlitWindow((ULONG *)g_compBits, g_W, pl, pt, pr, pb,
+                                  pix, (const ULONG *)g_backdropBits,
+                                  &wins[i]);
 
                     dxpix = DwmDxGetSurfaceSnapshot(&wins[i]);
                     if (dxpix != NULL)
@@ -1048,8 +1176,11 @@ DwmComposeLoop(HANDLE hStopEvent)
                         client.cx = (LONG)wins[i].DxWidth;
                         client.cy = (LONG)wins[i].DxHeight;
                         client.Stride = wins[i].DxPitch;
+                        if (client.BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT)
+                            client.BackdropType = 0;
                         DwmBlitWindow((ULONG *)g_compBits, g_W,
-                                      pl, pt, pr, pb, dxpix, &client);
+                                      pl, pt, pr, pb, dxpix,
+                                      (const ULONG *)g_backdropBits, &client);
                     }
                 }
 

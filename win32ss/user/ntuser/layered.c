@@ -67,6 +67,9 @@ IntSetLayeredWindowAttributes(PWND pWnd,
 {
    PLRD_PROP pLrdProp;
    INT was_Layered;
+   COLORREF oldKey;
+   BYTE oldAlpha;
+   DWORD oldFlags;
 
    if (!(pWnd->ExStyle & WS_EX_LAYERED) )
    {
@@ -91,6 +94,9 @@ IntSetLayeredWindowAttributes(PWND pWnd,
    if (pLrdProp)
    {
       was_Layered = pLrdProp->is_Layered;
+      oldKey = pLrdProp->Key;
+      oldAlpha = pLrdProp->Alpha;
+      oldFlags = pLrdProp->Flags;
 
       pLrdProp->Key = crKey;
 
@@ -109,6 +115,12 @@ IntSetLayeredWindowAttributes(PWND pWnd,
   
       if (!was_Layered)
          co_UserRedrawWindow(pWnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME );
+
+      if (!was_Layered || oldKey != pLrdProp->Key ||
+          oldAlpha != pLrdProp->Alpha || oldFlags != pLrdProp->Flags)
+      {
+         IntCompositionDamageWindow(pWnd);
+      }
    }
    // FIXME: Now set some bits to the Window DC!!!!
    return TRUE;

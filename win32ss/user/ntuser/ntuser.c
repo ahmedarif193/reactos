@@ -27,6 +27,11 @@ BOOL ClientPfnInit = FALSE;
 ATOM gaGuiConsoleWndClass;
 ATOM AtomImeLevel;
 ATOM AtomDwmDarkMode;
+ATOM AtomDwmSystemBackdropType;
+ATOM AtomDwmBackdropOpacity;
+ATOM AtomDwmBackdropColor;
+ATOM AtomDwmBackdropColorization;
+ATOM AtomDwmBackdropRegion;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -139,6 +144,12 @@ InitUserAtoms(VOID)
     AtomQOS      = IntAddGlobalAtom(L"SysQOS", TRUE);
     AtomImeLevel = IntAddGlobalAtom(L"SysIMEL", TRUE);
     AtomDwmDarkMode = IntAddUserPropertyAtom(L"ReactOS.Dwm.ImmersiveDarkMode");
+    AtomDwmSystemBackdropType = IntAddUserPropertyAtom(DWM_PROP_SYSTEM_BACKDROP_TYPE);
+    AtomDwmBackdropOpacity = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_OPACITY);
+    AtomDwmBackdropColor = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_COLOR);
+    AtomDwmBackdropColorization = IntAddUserPropertyAtom(
+        DWM_PROP_BACKDROP_COLORIZATION);
+    AtomDwmBackdropRegion = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_REGION);
 
     /*
      * FIXME: AddPropW uses the global kernel atom table, thus leading to conflicts if we use
