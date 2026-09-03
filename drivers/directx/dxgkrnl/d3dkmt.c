@@ -503,6 +503,7 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_OPENADAPTERFROMHDC:
         case IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME:
         case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
+        case IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME:
         case IOCTL_D3DKMT_PUBLIC_OPERATION:
         case IOCTL_D3DKMT_CREATEDEVICE:
         case IOCTL_D3DKMT_DESTROYDEVICE:
@@ -2236,12 +2237,16 @@ static NTSTATUS DxgkpCaptureDeviceName(_In_ PCWSTR Source, _In_ KPROCESSOR_MODE 
 static NTSTATUS
 DxgkpOpenAdapterByDeviceObjectName(
     _In_ PCWSTR DeviceName,
+    _In_ BOOLEAN PreferRenderPair,
     _Out_ D3DKMT_HANDLE *OutHandle,
     _Out_ LUID *OutLuid)
 {
     PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
+    PDXGKRNL_ADAPTER Selected = NULL;
+    PDXGKRNL_ADAPTER RenderPair = NULL;
     UNICODE_STRING Name;
     ULONG Count;
+    ULONG RenderPairCount = 0;
     ULONG i;
     NTSTATUS Status = STATUS_NO_SUCH_DEVICE;
 
@@ -2267,10 +2272,44 @@ DxgkpOpenAdapterByDeviceObjectName(
         }
         if (!Match)
             continue;
-        *OutHandle = DxgkpCreateAdapterHandle(Snapshot[i]);
-        *OutLuid = Snapshot[i]->AdapterLuid;
-        Status = *OutHandle != 0 ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
+        Selected = Snapshot[i];
         break;
+    }
+
+    /* A display-only fallback may own the desktop HDC while a unique vendor
+     * adapter supplies rendering.  Pair only this private win32k path; public
+     * device-name opens and VidPn ownership queries retain exact identity. */
+    if (PreferRenderPair &&
+        Selected != NULL &&
+        Selected->MiniportContext != NULL &&
+        Selected->MiniportContext->IsBasicDisplayFallback)
+    {
+        for (i = 0; i < Count; ++i)
+        {
+            if (Snapshot[i] == Selected ||
+                Snapshot[i]->State != DxgkAdapterStateStarted ||
+                Snapshot[i]->MiniportContext == NULL ||
+                Snapshot[i]->MiniportContext->IsBasicDisplayFallback ||
+                !DxgkpAdapterSupportsRender(Snapshot[i]))
+            {
+                continue;
+            }
+
+            RenderPair = Snapshot[i];
+            ++RenderPairCount;
+        }
+
+        if (RenderPairCount == 1)
+        {
+            Selected = RenderPair;
+        }
+    }
+
+    if (Selected != NULL)
+    {
+        *OutHandle = DxgkpCreateAdapterHandle(Selected);
+        *OutLuid = Selected->AdapterLuid;
+        Status = *OutHandle != 0 ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
     }
     DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
     return Status;
@@ -8966,6 +9005,7 @@ DxgkpDispatchBufferedIoctl(
         }
 
         case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
+        case IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME:
         {
             D3DKMT_OPENADAPTERFROMDEVICENAME *pData;
             WCHAR NameBuffer[260];
@@ -8980,7 +9020,11 @@ DxgkpDispatchBufferedIoctl(
             if (!NT_SUCCESS(Status))
                 return Status;
 
-            Status = DxgkpOpenAdapterByDeviceObjectName(NameBuffer, &pData->hAdapter, &pData->AdapterLuid);
+            Status = DxgkpOpenAdapterByDeviceObjectName(
+                         NameBuffer,
+                         IoControlCode == IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME,
+                         &pData->hAdapter,
+                         &pData->AdapterLuid);
             if (!NT_SUCCESS(Status))
                 return Status;
             Irp->IoStatus.Information = sizeof(D3DKMT_OPENADAPTERFROMDEVICENAME);
@@ -11809,6 +11853,7 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_OPENADAPTERFROMHDC:
         case IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME:
         case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
+        case IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME:
         case IOCTL_D3DKMT_CREATEDEVICE:
         case IOCTL_D3DKMT_DESTROYDEVICE:
         case IOCTL_D3DKMT_CREATEALLOCATION:
