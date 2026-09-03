@@ -125,21 +125,7 @@ KiArm64SavePreviousModeForTrap(
     _Inout_ PKTRAP_FRAME TrapFrame)
 {
     TrapFrame->Reserved = (TrapFrame->Reserved & 0xFFUL) | ARM64_PREVIOUS_MODE_COOKIE | (((ULONG)Thread->PreviousMode << ARM64_PREVIOUS_MODE_SHIFT) & ARM64_PREVIOUS_MODE_VALUE);
-    Thread->PreviousMode = KiGetPreviousMode(TrapFrame);
-}
-
-static
-VOID
-KiArm64RestorePreviousModeFromTrap(
-    _Inout_ PKTHREAD Thread,
-    _In_ PKTRAP_FRAME TrapFrame)
-{
-    ULONG PreviousMode = TrapFrame->Reserved;
-
-    if ((PreviousMode & ARM64_PREVIOUS_MODE_MASK) == ARM64_PREVIOUS_MODE_COOKIE)
-    {
-        Thread->PreviousMode = (CHAR)((PreviousMode & ARM64_PREVIOUS_MODE_VALUE) >> ARM64_PREVIOUS_MODE_SHIFT);
-    }
+    Thread->PreviousMode = TrapFrame->PreviousMode;
 }
 
 static
@@ -1022,7 +1008,7 @@ KiArm64DeliverUserApcOnExceptionExit(
 static __inline VOID
 KiArm64ClearTrapActive(VOID)
 {
-    ULONG ProcessorIndex = KeGetCurrentProcessorNumber();
+    ULONG ProcessorIndex = KeGetCurrentPrcb()->Number;
 
     if (ProcessorIndex < MAXIMUM_PROCESSORS)
     {
@@ -1042,9 +1028,6 @@ KiArm64HandleSystemService(
     /* The fast vector path already populated architectural state directly. */
     TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromVector(Context->State.VectorId);
     TrapFrame->SavedIrql = (UCHAR)KeGetCurrentIrql();
-    ExceptionFrame->TrapFrame = (ULONG64)(ULONG_PTR)TrapFrame;
-    Context->TrapFramePointer = TrapFrame;
-    Context->ExceptionFramePointer = ExceptionFrame;
 
     Thread = KeGetCurrentThread();
     KiArm64SavePreviousModeForTrap(Thread, TrapFrame);
@@ -1053,8 +1036,11 @@ KiArm64HandleSystemService(
 
     Instruction = (ULONG)(TrapFrame->X[8] & 0x1FFF);
 
-    /* Zw entries may nest through SVC while the service dispatcher is active. */
-    KiArm64ClearTrapActive();
+    /* Only a nested kernel SVC can inherit the synchronous-exception guard. */
+    if (TrapFrame->PreviousMode == KernelMode)
+    {
+        KiArm64ClearTrapActive();
+    }
     KiSystemService(Thread, TrapFrame, Instruction);
 
     /* A first win32k call can relocate the entire kernel stack. */
@@ -1064,13 +1050,19 @@ KiArm64HandleSystemService(
                                 TrapFrame);
     ExceptionFrame = &Context->ExceptionFrame;
 
-    KiArm64DeliverPendingUserApc(ExceptionFrame, TrapFrame, TRUE);
-    KiArm64RestorePreviousModeFromTrap(Thread, TrapFrame);
+    if ((TrapFrame->PreviousMode == UserMode) &&
+        Thread->ApcState.UserApcPending)
+    {
+        KiArm64DeliverPendingUserApc(ExceptionFrame, TrapFrame, TRUE);
+    }
     Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
 
     Context->TrapFramePointer = TrapFrame;
     Context->ExceptionFramePointer = ExceptionFrame;
-    KiArm64ClearTrapActive();
+    if (TrapFrame->PreviousMode == KernelMode)
+    {
+        KiArm64ClearTrapActive();
+    }
     return TRUE;
 }
 
