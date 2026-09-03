@@ -63,6 +63,9 @@ typedef struct _WND_REDIRECT
     ULONG     DxGlobalShare;
     ULONG     DxGeneration;
     LUID      DxAdapterLuid;
+    ULONGLONG DxWindow;      /* HWND whose client owns the shared allocation */
+    LONG      DxClientX;     /* source client origin in top-level backing    */
+    LONG      DxClientY;
     ULONGLONG DxIssuedUpdateId;
     ULONGLONG DxPublishedUpdateId;
     ULONGLONG DxConsumedUpdateId;
