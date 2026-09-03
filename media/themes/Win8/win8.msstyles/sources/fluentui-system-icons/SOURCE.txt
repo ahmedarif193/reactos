@@ -1,0 +1,15 @@
+Source: Microsoft Fluent UI System Icons
+Repository: https://github.com/microsoft/fluentui-system-icons
+Revision: 4d685f77b2cb8f3f412a74ec8d920c8c91149528
+License: MIT (see LICENSE)
+
+Files used:
+- assets/Dismiss/SVG/ic_fluent_dismiss_12_regular.svg
+- assets/Dismiss/SVG/ic_fluent_dismiss_16_regular.svg
+- assets/Subtract/SVG/ic_fluent_subtract_16_filled.svg
+- assets/Square/SVG/ic_fluent_square_16_regular.svg
+- assets/Square Multiple/SVG/ic_fluent_square_multiple_16_regular.svg
+
+The Win8 theme bitmap strips preserve these paths and apply only the theme's
+per-state colors. The minimize path is translated three pixels downward inside
+its 16-pixel caption glyph cell to match caption-button baseline placement.
