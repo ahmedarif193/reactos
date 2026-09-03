@@ -143,6 +143,9 @@ AcpiGetPossibleResources (
     return AE_OK;
 }
 
+#define BuspGpioInterruptCount(DeviceData, Resource) 0
+#define BuspGpioInterruptVector(DeviceData, Resource, ResourceIndex, PinIndex, Gsiv) FALSE
+
 #undef stat
 #include "../../../../drivers/bus/acpi/buspdo.c"
 
