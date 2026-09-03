@@ -673,16 +673,18 @@ typedef struct _VIDSCH_VIRTUAL_SUBMIT_WORK
 } VIDSCH_VIRTUAL_SUBMIT_WORK, *PVIDSCH_VIRTUAL_SUBMIT_WORK;
 
 static VOID NTAPI VidSchpVirtualSubmitWorker(_In_ PVOID Parameter);
+static VOID NTAPI VidSchpDestroyPacketWorker(_In_ PVOID Parameter);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 static VOID NTAPI VidSchpFaultCleanupWorker(_In_ PVOID Parameter);
 #endif
 
 static VOID
-VidSchpDereferencePacket(
+VidSchpDestroyPacket(
     _In_ PVIDSCH_DMA_PACKET Packet)
 {
-    if (InterlockedDecrement(&Packet->ReferenceCount) != 0)
-        return;
+    ASSERT(Packet != NULL);
+    ASSERT(InterlockedCompareExchange(&Packet->ReferenceCount, 0, 0) == 0);
+    ASSERT(!VidSchPolicyPacketCleanupMustDefer(KeGetCurrentIrql()));
 
     if (Packet->FenceIdentityReserved && Packet->OwnerEngine != NULL)
         DxgkReleaseSubmittedFenceIdentity(Packet->OwnerEngine->Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId, Packet->FenceIdentityEpoch);
@@ -708,6 +710,51 @@ VidSchpDereferencePacket(
     if (Packet->Device != NULL)
         DxgkDereferenceDevice(Packet->Device);
     ExFreePoolWithTag(Packet, TAG_VIDSCH);
+}
+
+static VOID
+NTAPI
+VidSchpDestroyPacketWorker(
+    _In_ PVOID Parameter)
+{
+    PVIDSCH_DMA_PACKET Packet = Parameter;
+    PVIDSCH_ENGINE Engine = Packet->OwnerEngine;
+    PDXGKRNL_ADAPTER Adapter = Engine->Adapter;
+
+    PAGED_CODE();
+
+    VidSchpDestroyPacket(Packet);
+    VidSchpReleaseOutstandingWorker(Engine);
+    VidSchpReleaseCall(Adapter);
+}
+
+static VOID
+VidSchpDereferencePacket(
+    _In_ PVIDSCH_DMA_PACKET Packet)
+{
+    PVIDSCH_ENGINE Engine;
+    KIRQL OldIrql;
+
+    if (InterlockedDecrement(&Packet->ReferenceCount) != 0)
+        return;
+
+    if (!VidSchPolicyPacketCleanupMustDefer(KeGetCurrentIrql()))
+    {
+        VidSchpDestroyPacket(Packet);
+        return;
+    }
+
+    /* Completion retirement runs at DISPATCH_LEVEL, while final teardown can
+     * take the GPU-VA FAST_MUTEX and other PASSIVE/APC-level locks.  Transfer
+     * the zero-reference packet to a system worker and keep its engine and
+     * adapter scheduler storage alive until that worker is finished. */
+    Engine = Packet->OwnerEngine;
+    ASSERT(Engine != NULL);
+    VidSchpReferenceActiveCall(Engine->Adapter);
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    VidSchpReferenceOutstandingWorkerLocked(Engine);
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    ExQueueWorkItem(&Packet->DestroyWorkItem, DelayedWorkQueue);
 }
 
 VOID VidSchReferenceContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
@@ -2311,6 +2358,10 @@ VidSchpPrepareSubmit(
     Packet->NodeOrdinal = NodeOrdinal;
     Packet->OwnerEngine = Engine;
     Packet->ReferenceCount = 1;
+    ExInitializeWorkItem(
+        &Packet->DestroyWorkItem,
+        VidSchpDestroyPacketWorker,
+        Packet);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     ExInitializeWorkItem(
         &Packet->CleanupWorkItem,

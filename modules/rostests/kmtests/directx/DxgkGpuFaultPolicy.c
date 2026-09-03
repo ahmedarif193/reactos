@@ -45,6 +45,16 @@ START_TEST(DxgkGpuFaultPolicy)
         VidSchPolicyCompletionMustFail(0, 4),
         "active device accepts completion");
 
+    ok_bool_false(
+        VidSchPolicyPacketCleanupMustDefer(PASSIVE_LEVEL),
+        "PASSIVE_LEVEL packet cleanup can run inline");
+    ok_bool_false(
+        VidSchPolicyPacketCleanupMustDefer(APC_LEVEL),
+        "APC_LEVEL is the FAST_MUTEX ceiling");
+    ok_bool_true(
+        VidSchPolicyPacketCleanupMustDefer(DISPATCH_LEVEL),
+        "completion-DPC packet cleanup must be deferred");
+
     ok_bool_true(
         SoftGpuDmaCommandAddressClassAllowed(
             FALSE,
