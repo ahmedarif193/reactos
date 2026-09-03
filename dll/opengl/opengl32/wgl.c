@@ -74,8 +74,10 @@ get_dc_data_ex(HDC hdc, INT format, UINT size, PIXELFORMATDESCRIPTOR *descr)
     data->flags = flags;
     data->pixelformat = 0;
     data->sw_data = NULL;
+    data->AdapterLuidValid = FALSE;
     /* Load the driver */
-    data->icd_data = IntGetIcdData(hdc);
+    data->icd_data = IntGetIcdData(hdc, &data->AdapterLuid,
+                                   &data->AdapterLuidValid);
     /* Get the number of available formats for this DC once and for all */
     if(data->icd_data)
         data->nb_icd_formats = data->icd_data->DrvDescribePixelFormat(hdc, format, size, descr);
@@ -94,6 +96,43 @@ struct wgl_dc_data*
 get_dc_data(HDC hdc)
 {
     return get_dc_data_ex(hdc, 0, 0, NULL);
+}
+
+struct wgl_dc_data* IntGetDcData(HDC hdc)
+{
+    HWND hwnd;
+    struct wgl_dc_data *data;
+    union
+    {
+        HWND hwnd;
+        HDC hdc;
+        HANDLE u;
+    } id;
+
+    if (GetObjectType(hdc) == OBJ_DC)
+    {
+        hwnd = WindowFromDC(hdc);
+        if (hwnd == NULL)
+            return NULL;
+        id.hwnd = hwnd;
+    }
+    else if (GetObjectType(hdc) == OBJ_MEMDC)
+    {
+        id.hdc = hdc;
+    }
+    else
+    {
+        return NULL;
+    }
+
+    EnterCriticalSection(&dc_data_cs);
+    for (data = dc_data_list; data != NULL; data = data->next)
+    {
+        if (data->owner.u == id.u)
+            break;
+    }
+    LeaveCriticalSection(&dc_data_cs);
+    return data;
 }
 
 void release_dc_data(struct wgl_dc_data* dc_data)
@@ -153,7 +192,7 @@ INT WINAPI wglDescribePixelFormat(HDC hdc, INT format, UINT size, PIXELFORMATDES
         struct ICD_Data* icd_data = dc_data->icd_data;
         /* SetPixelFormat may have NULLified this */
         if (!icd_data)
-            icd_data = IntGetIcdData(hdc);
+            icd_data = IntGetIcdData(hdc, NULL, NULL);
         if(!icd_data->DrvDescribePixelFormat(hdc, format, size, descr))
         {
             ret = 0;

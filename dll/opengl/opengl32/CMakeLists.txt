@@ -1,4 +1,9 @@
 
+if(REACTOS_USE_WDDM)
+    remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
+    add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+endif()
+
 spec2def(opengl32.dll opengl32.spec ADD_IMPORTLIB)
 
 include_directories(../mesa)

@@ -423,4 +423,4 @@ struct ICD_Data
     struct ICD_Data* next;
 };
 
-struct ICD_Data* IntGetIcdData(HDC hdc);
+struct ICD_Data* IntGetIcdData(HDC hdc, LUID *AdapterLuid, BOOL *AdapterLuidValid);
