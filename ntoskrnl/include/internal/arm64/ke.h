@@ -826,6 +826,13 @@ KiSaveVfpState(_Out_ PKARM64_VFP_STATE State);
 VOID
 KiRestoreVfpState(_In_ PKARM64_VFP_STATE State);
 
+/*
+ * A system-service frame initially contains only the nonvolatile vector bank
+ * and floating-point control state. KeContextToTrapFrame promotes it to a
+ * complete snapshot before requesting a full vector restore.
+ */
+#define KI_ARM64_PARTIAL_VFP_LINK ((PKARM64_VFP_STATE)(ULONG_PTR)1)
+
 /* Debug CPU features banner */
 #if DBG
 VOID KiReportCpuFeatures(IN PKPRCB Prcb);

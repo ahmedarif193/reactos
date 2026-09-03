@@ -35,6 +35,8 @@
 .equ ARM64_IRQ_FPSR,                  0x2E8
 .equ ARM64_IRQ_FRAME_SIZE,            0x340
 
+.equ ARM64_PARTIAL_VFP_LINK,          1
+
 /*
  * Dispatch hardware interrupts on the per-processor ISR stack.
  * The vector has already captured the interrupted state in IrqFrame, so x9-x11
@@ -178,6 +180,20 @@ KiArm64InterruptDispatchOnIsrStack:
     ldp q26, q27, [x9, #0x1A0]
     ldp q28, q29, [x9, #0x1C0]
     ldp q30, q31, [x9, #0x1E0]
+.endm
+
+/*
+ * A normal system call follows the Windows ARM64 service-frame convention:
+ * vector registers volatile across a call are not spilled on entry. Keep the
+ * complete nonvolatile Q8-Q15 bank in the trap-owned buffer so the context
+ * helpers can still materialize a complete CONTEXT when requested.
+ */
+.macro ARM64_SAVE_SERVICE_NEON Base, Offset
+    add x9, \Base, #\Offset
+    stp q8,  q9,  [x9, #0x080]
+    stp q10, q11, [x9, #0x0A0]
+    stp q12, q13, [x9, #0x0C0]
+    stp q14, q15, [x9, #0x0E0]
 .endm
 
 .macro ARM64_SAVE_FP_CONTROL FpcrOffset, FpsrOffset
@@ -474,37 +490,27 @@ KiArm64SvcVectorCommon:
     .seh_stackalloc ARM64_EARLY_STATE_SIZE
     .seh_endprologue
     str x1, [sp, #ARM64_EARLY_STATE_VECTORID]
-    str xzr, [sp, #ARM64_EARLY_STATE_VFP] /* KARM64_VFP_STATE.Link */
-    ARM64_SAVE_NEON sp, ARM64_EARLY_STATE_NEON
-    ARM64_SAVE_FP_CONTROL ARM64_EARLY_STATE_FPCR, ARM64_EARLY_STATE_FPSR
+    mov x9, #ARM64_PARTIAL_VFP_LINK
+    str x9, [sp, #ARM64_EARLY_STATE_VFP] /* KARM64_VFP_STATE.Link */
+    ARM64_SAVE_SERVICE_NEON sp, ARM64_EARLY_STATE_NEON
+    /* Windows' service frame preserves FPCR, while FPSR is call-clobbered. */
+    mrs x9, fpcr
+    str w9, [sp, #ARM64_EARLY_STATE_FPCR]
+    str wzr, [sp, #ARM64_EARLY_STATE_FPSR]
+    msr fpcr, xzr
 
     /* Keep frame bases in scratch registers; x28 points at the caller save. */
     add x28, sp, #ARM64_SYNC_CALLER_OFFSET
     add x9, sp, #ARM64_EARLY_STATE_TRAP_FRAME
     add x10, sp, #ARM64_EARLY_STATE_EXC_FRAME
 
-    /* Clear fields that are not populated by an SVC entry. */
-    stp xzr, xzr, [x9, #0x00]
-    stp xzr, xzr, [x9, #0x10]
-    stp xzr, xzr, [x9, #0x20]
-    stp xzr, xzr, [x9, #0x30]
-    stp xzr, xzr, [x9, #0x40]
-    stp xzr, xzr, [x9, #0x50]
-    stp xzr, xzr, [x9, #0x60]
-    stp xzr, xzr, [x9, #0x70]
-    stp xzr, xzr, [x9, #0x80]
-    stp xzr, xzr, [x9, #0x90]
+    /* Debug state is absent unless a context operation explicitly supplies it. */
+    str xzr, [x9]
+    mov w11, #KEXCEPTION_ACTIVE_SERVICE_FRAME
+    strb w11, [x9, #TfExceptionActive]
 
     add x11, sp, #ARM64_EARLY_STATE_VFP
     str x11, [x9, #TfVfpState]
-
-    stp xzr, xzr, [x10, #0x00]
-    stp xzr, xzr, [x10, #0x10]
-    stp xzr, xzr, [x10, #0x20]
-    stp xzr, xzr, [x10, #0x30]
-    stp xzr, xzr, [x10, #0x40]
-    stp xzr, xzr, [x10, #0x50]
-    str xzr, [x10, #ExReturn]
 
     /* Volatile state used by the system-service dispatcher. */
     str x0, [x9, #TfX0]
