@@ -296,6 +296,7 @@ static DWORD create_netconn_socket(server_t *server, object_header_t *hdr, DWORD
     assert(server->addr);
     if ((netconn->socket = create_connect_socket(server->addr, AF_UNSPEC, timeout, hdr, callback_context)) == -1)
         return ERROR_INTERNET_CANNOT_CONNECT;
+    netconn->is_blocking = FALSE;
 
     flag = 1;
     if(setsockopt(netconn->socket, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(flag)) < 0)
