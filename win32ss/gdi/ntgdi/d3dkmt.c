@@ -13,6 +13,7 @@
 #include <debug.h>
 
 #define IOCTL_RXGK_OPENADAPTERFROMDEVICENAME CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x112, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x113, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_RXGK_CLOSEADAPTER CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x103, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_D3DKMT_CHECKOCCLUSION CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x169, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
@@ -162,6 +163,7 @@ D3dkmtCloseCapturedAdapter(
 static NTSTATUS
 D3dkmtOpenAdapterByCapturedNtDeviceName(
     _In_ PCWSTR DeviceName,
+    _In_ BOOLEAN PreferRenderPair,
     _Out_ D3DKMT_HANDLE *AdapterHandle,
     _Out_ LUID *AdapterLuid)
 {
@@ -175,7 +177,14 @@ D3dkmtOpenAdapterByCapturedNtDeviceName(
     RtlZeroMemory(AdapterLuid, sizeof(*AdapterLuid));
     RtlZeroMemory(&OpenByName, sizeof(OpenByName));
     OpenByName.pDeviceName = DeviceName;
-    Status = WddmBridgeSendIoctlWithInformation(IOCTL_RXGK_OPENADAPTERFROMDEVICENAME, &OpenByName, sizeof(OpenByName), &OpenByName, sizeof(OpenByName), &Information);
+    Status = WddmBridgeSendIoctlWithInformation(
+                 PreferRenderPair ? IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME
+                                  : IOCTL_RXGK_OPENADAPTERFROMDEVICENAME,
+                 &OpenByName,
+                 sizeof(OpenByName),
+                 &OpenByName,
+                 sizeof(OpenByName),
+                 &Information);
     if (!NT_SUCCESS(Status))
         return Status;
     if (Information != sizeof(OpenByName) || OpenByName.hAdapter == 0)
@@ -572,7 +581,11 @@ NtGdiDdDDIOpenAdapterFromGdiDisplayName(_Inout_ D3DKMT_OPENADAPTERFROMGDIDISPLAY
     PDEVOBJ_vRelease(Pdev);
     if (!NT_SUCCESS(Status))
         return Status;
-    Status = D3dkmtOpenAdapterByCapturedNtDeviceName(NtDeviceName, &Captured.hAdapter, &Captured.AdapterLuid);
+    Status = D3dkmtOpenAdapterByCapturedNtDeviceName(
+                 NtDeviceName,
+                 TRUE,
+                 &Captured.hAdapter,
+                 &Captured.AdapterLuid);
     if (!NT_SUCCESS(Status))
         return Status;
     Captured.VidPnSourceId = 0;
@@ -632,7 +645,11 @@ NtGdiDdDDIOpenAdapterFromHdc(_Inout_ D3DKMT_OPENADAPTERFROMHDC* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = D3dkmtOpenAdapterByCapturedNtDeviceName(DeviceName, &Captured.hAdapter, &Captured.AdapterLuid);
+    Status = D3dkmtOpenAdapterByCapturedNtDeviceName(
+                 DeviceName,
+                 TRUE,
+                 &Captured.hAdapter,
+                 &Captured.AdapterLuid);
     if (!NT_SUCCESS(Status))
         return Status;
     Captured.VidPnSourceId = 0;
@@ -2233,6 +2250,7 @@ NtGdiDdDDIQueryVidPnExclusiveOwnership(_Inout_ struct _D3DKMT_QUERYVIDPNEXCLUSIV
     {
         Status = D3dkmtOpenAdapterByCapturedNtDeviceName(
                      NtDeviceName,
+                     FALSE,
                      &AdapterHandle,
                      &QueryAdapterLuid);
         if (!NT_SUCCESS(Status))
