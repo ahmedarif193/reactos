@@ -148,6 +148,7 @@ static void Test_ResidencyCycle_EvictMakeResidentWait(void)
     D3DDDI_MAKERESIDENT mr;
     D3DKMT_EVICT ev;
     D3DKMT_HANDLE hAlloc;
+    UINT Priority = 0;
     UINT Pass;
     NTSTATUS Status;
 
@@ -195,6 +196,7 @@ static void Test_ResidencyCycle_EvictMakeResidentWait(void)
         mr.hPagingQueue = cpq.hPagingQueue;
         mr.NumAllocations = 1;
         mr.AllocationList = &hAlloc;
+        mr.PriorityList = &Priority;
         Status = pMakeResident(&mr);
         if (Status == STATUS_NOT_SUPPORTED) { skip("MakeResident is safely gated until residency accounting is implemented\n"); break; }
         ok_succeeded(Status, "MakeResident pass %u failed 0x%08lX\n", Pass, (long)Status);
