@@ -120,6 +120,12 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
             RtlCopyMemory(VfpState->V, Context->V, sizeof(Context->V));
             VfpState->Fpcr = Context->Fpcr;
             VfpState->Fpsr = Context->Fpsr;
+
+            /* Publish the complete snapshot only after all state is valid. */
+            if (VfpState->Link == KI_ARM64_PARTIAL_VFP_LINK)
+            {
+                VfpState->Link = NULL;
+            }
         }
 
         if (ExceptionFrame != NULL)
@@ -212,7 +218,18 @@ KeTrapFrameToContext(_In_ PKTRAP_FRAME TrapFrame,
 
         if (VfpState != NULL)
         {
-            RtlCopyMemory(Context->V, VfpState->V, sizeof(Context->V));
+            if (VfpState->Link == KI_ARM64_PARTIAL_VFP_LINK)
+            {
+                RtlZeroMemory(Context->V, sizeof(Context->V));
+                RtlCopyMemory(&Context->V[8],
+                              &VfpState->V[8],
+                              sizeof(VfpState->V[0]) * 8);
+            }
+            else
+            {
+                RtlCopyMemory(Context->V, VfpState->V, sizeof(Context->V));
+            }
+
             Context->Fpcr = VfpState->Fpcr;
             Context->Fpsr = VfpState->Fpsr;
         }

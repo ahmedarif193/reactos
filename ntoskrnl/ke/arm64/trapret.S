@@ -179,6 +179,9 @@ KiTrapReturn:
     cbz     x16, .Lvfp_restored
     ldr     w17, [x16, #0x08]
     msr     fpcr, x17
+    ldr     x17, [x16]
+    cmp     x17, #1
+    b.eq    .Lrestore_service_vfp
     ldr     w17, [x16, #0x0C]
     msr     fpsr, x17
     add     x16, x16, #0x10
@@ -198,6 +201,38 @@ KiTrapReturn:
     ldp     q26, q27, [x16, #0x1A0]
     ldp     q28, q29, [x16, #0x1C0]
     ldp     q30, q31, [x16, #0x1E0]
+    b       .Lvfp_restored
+.Lrestore_service_vfp:
+    /*
+     * The service call chain preserves D8-D15 under the ARM64 procedure-call
+     * standard, so the unchanged syscall-return path can leave them live.
+     * If a context operation replaces floating-point state it clears the
+     * partial marker above and takes the complete restore path instead.
+     */
+    movi    v0.16b, #0
+    movi    v1.16b, #0
+    movi    v2.16b, #0
+    movi    v3.16b, #0
+    movi    v4.16b, #0
+    movi    v5.16b, #0
+    movi    v6.16b, #0
+    movi    v7.16b, #0
+    movi    v16.16b, #0
+    movi    v17.16b, #0
+    movi    v18.16b, #0
+    movi    v19.16b, #0
+    movi    v20.16b, #0
+    movi    v21.16b, #0
+    movi    v22.16b, #0
+    movi    v23.16b, #0
+    movi    v24.16b, #0
+    movi    v25.16b, #0
+    movi    v26.16b, #0
+    movi    v27.16b, #0
+    movi    v28.16b, #0
+    movi    v29.16b, #0
+    movi    v30.16b, #0
+    movi    v31.16b, #0
 .Lvfp_restored:
     /* Reload volatile scratch and the ABI-defined x18 platform value last. */
     ldr     w16, [x18, #TfSpsr]
