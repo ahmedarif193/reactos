@@ -159,6 +159,7 @@ typedef enum _CM_SHARE_DISPOSITION
 #define CM_RESOURCE_DMA_TYPE_A            0x0010
 #define CM_RESOURCE_DMA_TYPE_B            0x0020
 #define CM_RESOURCE_DMA_TYPE_F            0x0040
+#define CM_RESOURCE_DMA_V3                0x0080
 
 //
 // Interrupt Resource Descriptor Flags
@@ -680,6 +681,15 @@ typedef struct _CM_PARTIAL_RESOURCE_DESCRIPTOR
         } Dma;
         struct
         {
+            ULONG Channel;
+            ULONG RequestLine;
+            UCHAR TransferWidth;
+            UCHAR Reserved1;
+            UCHAR Reserved2;
+            UCHAR Reserved3;
+        } DmaV3;
+        struct
+        {
             ULONG Data[3];
         } DevicePrivate;
         struct
@@ -781,5 +791,4 @@ typedef struct _CM_DISK_GEOMETRY_DEVICE_DATA
 #endif // _!NTOS_MODE_USER
 
 #endif // _CMTYPES_H
-
 
