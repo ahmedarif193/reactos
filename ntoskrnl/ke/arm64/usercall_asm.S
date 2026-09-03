@@ -6,6 +6,47 @@
 
     .extern KiUserModeCallout
 
+    .global KiArm64InvokeSystemCall
+    .seh_proc KiArm64InvokeSystemCall
+KiArm64InvokeSystemCall:
+    /*
+     * x0: system-service address
+     * x1: saved x0-x7 array
+     * x2: copied stack-argument array
+     * w3: number of stack arguments (0 through 9)
+     *
+     * Keep the first eight arguments in registers, as on Windows ARM64, and
+     * copy only arguments nine through seventeen to the outgoing stack area.
+     */
+    stp     x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    mov     x29, sp
+    .seh_set_fp
+    sub     sp, sp, #80
+    .seh_stackalloc 80
+    .seh_endprologue
+
+    mov     x16, x0
+    mov     x17, x1
+    cbz     w3, 2f
+    mov     x9, sp
+1:
+    ldr     x10, [x2], #8
+    str     x10, [x9], #8
+    subs    w3, w3, #1
+    b.ne    1b
+2:
+    ldp     x0, x1, [x17, #0]
+    ldp     x2, x3, [x17, #16]
+    ldp     x4, x5, [x17, #32]
+    ldp     x6, x7, [x17, #48]
+    blr     x16
+
+    add     sp, sp, #80
+    ldp     x29, x30, [sp], #16
+    ret
+    .seh_endproc
+
     .global KiCallUserMode
     .seh_proc KiCallUserMode
 KiCallUserMode:
