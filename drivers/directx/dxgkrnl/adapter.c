@@ -1721,6 +1721,7 @@ DxgkAllocateDmaBuffer(
     PHYSICAL_ADDRESS LowestAddress;
     PHYSICAL_ADDRESS HighestAddress;
     PHYSICAL_ADDRESS BoundaryAddress;
+    NTSTATUS Status;
 
     if (Adapter == NULL || Capacity == 0 || OutDmaBuffer == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -1776,10 +1777,22 @@ DxgkAllocateDmaBuffer(
 
     DmaBuffer->Capacity = Capacity;
     DmaBuffer->SubmissionStartOffset = 0;
-    DmaBuffer->SubmissionEndOffset = 0;
+    DmaBuffer->SubmissionEndOffset = Capacity;
     DmaBuffer->SegmentId = 0;
     DmaBuffer->SegmentAddress = MmGetPhysicalAddress(DmaBuffer->VirtualAddress);
     DmaBuffer->BackingKind = DxgkDmaBackingContiguousMemory;
+
+    /* Establish a clean baseline before a cached DMA buffer can contain
+     * device-written regions that the CPU deliberately never touches.  Later
+     * submissions only need to clean their declared CPU-written prefix. */
+    Status = DxgkFlushDmaBufferForSubmission(DmaBuffer);
+    if (!NT_SUCCESS(Status))
+    {
+        MmFreeContiguousMemory(DmaBuffer->VirtualAddress);
+        ExFreePoolWithTag(DmaBuffer, TAG_DXGK_SUBMITDMA);
+        return Status;
+    }
+    DmaBuffer->SubmissionEndOffset = 0;
     *OutDmaBuffer = DmaBuffer;
     return STATUS_SUCCESS;
 }
