@@ -598,6 +598,7 @@ ThemeDlgPreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_P
                 return TRUE;
             }
             hdc = (HDC)wParam;
+            SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
             SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
             SetBkMode(hdc, TRANSPARENT);
             org.x = 0;
