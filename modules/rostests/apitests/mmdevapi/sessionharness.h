@@ -38,13 +38,17 @@ struct reactos_audio_session_snapshot
     WCHAR process_path[MAX_PATH];
     WCHAR display_name[128];
     WCHAR icon_path[MAX_PATH];
+    float peak;
+    DWORD peak_tick;
 };
 
 C_ASSERT(sizeof(struct reactos_audio_session_id) == 20);
-C_ASSERT(sizeof(struct reactos_audio_session_snapshot) == 1480);
+C_ASSERT(sizeof(struct reactos_audio_session_snapshot) == 1488);
 C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, master_volume) == 48);
 C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, channel_volumes) == 56);
 C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, display_name) == 704);
+C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, peak) == 1480);
+C_ASSERT(FIELD_OFFSET(struct reactos_audio_session_snapshot, peak_tick) == 1484);
 
 extern HRESULT reactos_audio_session_register(IMMDevice *device, const GUID *session_guid,
                                               UINT32 channels,
