@@ -421,12 +421,14 @@ PciPdoShouldUseDefaultMessageInterrupts(
      * CriticalDeviceDatabase, whose INF [DDInstall.HW] MSISupported policy
      * therefore never runs) are message-signalled devices: their miniports
      * service VirtIO/GPU command-queue completions from an MSI/MSI-X ISR.
-     * Default them to message interrupts when the controller exposes MSI-X,
+     * Default them to message interrupts when the controller exposes MSI-X or
+     * MSI,
      * otherwise the PDO hands out a line-based (INTx) interrupt that is never
      * delivered here and the GPU command queue stalls.
      */
     if (PciConfig->BaseClass == PCI_CLASS_DISPLAY_CTLR &&
-        DeviceExtension->PciDevice->MsixCapability != 0)
+        (DeviceExtension->PciDevice->MsixCapability != 0 ||
+         DeviceExtension->PciDevice->MsiCapability != 0))
     {
         return TRUE;
     }
