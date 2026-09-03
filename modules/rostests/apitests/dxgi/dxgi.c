@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS API Tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     DXGI/D3D11 temporary surface stub contract tests.
+ * PURPOSE:     DXGI factory, D3D11 device, and software render probe tests.
  */
 
 #include <apitest.h>
@@ -18,6 +18,9 @@
 #define D3D_FEATURE_LEVEL_11_0 0x0000b000
 #define D3D_FEATURE_LEVEL_10_1 0x0000a100
 #define D3D_FEATURE_LEVEL_10_0 0x0000a000
+#define D3D_FEATURE_LEVEL_9_3 0x00009300
+#define D3D_FEATURE_LEVEL_9_2 0x00009200
+#define D3D_FEATURE_LEVEL_9_1 0x00009100
 #define DXGI_FORMAT_R8G8B8A8_UNORM 28
 #define DXGI_USAGE_RENDER_TARGET_OUTPUT 0x20
 #define DXGI_SWAP_EFFECT_DISCARD 0
@@ -82,6 +85,9 @@ typedef HRESULT (WINAPI *PFN_D3D11CreateDeviceAndSwapChain)(
                                                 UINT *obtained_feature_level,
                                                 void **immediate_context);
 typedef ULONG (WINAPI *PFN_ComRelease)(void *self);
+typedef HRESULT (WINAPI *PFN_IDXGIFactory_EnumAdapters)(void *self,
+                                                        UINT adapter,
+                                                        void **adapter_out);
 typedef HRESULT (WINAPI *PFN_IDXGISwapChain_Present)(void *self,
                                                      UINT sync_interval,
                                                      UINT flags);
@@ -150,13 +156,51 @@ create_probe_window(void)
                            Instance, NULL);
 }
 
-static void
-expect_factory_unsupported(const char *Name, HRESULT hr, void *Factory)
+static BOOL
+check_factory(const char *Name, HRESULT hr, void *Factory)
 {
-    ok(hr == DXGI_ERROR_UNSUPPORTED,
-       "%s returned 0x%08lx, expected DXGI_ERROR_UNSUPPORTED\n",
-       Name, hr);
-    ok(Factory == NULL, "%s left factory output %p\n", Name, Factory);
+    void **Vtbl;
+    void *Adapter;
+
+    if (hr == DXGI_ERROR_UNSUPPORTED)
+    {
+        ok(Factory == NULL, "%s left factory output %p\n", Name, Factory);
+        skip("%s: no DXGI backend available\n", Name);
+        return FALSE;
+    }
+
+    ok(hr == S_OK, "%s returned 0x%08lx\n", Name, hr);
+    ok(Factory != NULL, "%s returned NULL factory\n", Name);
+    if (hr != S_OK || Factory == NULL)
+        return FALSE;
+
+    Vtbl = com_vtbl(Factory);
+    ok(Vtbl != NULL && Vtbl[7] != NULL, "%s factory vtable is incomplete\n",
+       Name);
+    if (Vtbl == NULL || Vtbl[7] == NULL)
+    {
+        release_object(Factory);
+        return FALSE;
+    }
+
+    Adapter = NULL;
+    hr = ((PFN_IDXGIFactory_EnumAdapters)Vtbl[7])(Factory, 0, &Adapter);
+    ok(hr == S_OK || hr == DXGI_ERROR_NOT_FOUND,
+       "%s EnumAdapters(0) returned 0x%08lx\n", Name, hr);
+    if (hr == S_OK)
+    {
+        ok(Adapter != NULL, "%s EnumAdapters(0) returned NULL adapter\n",
+           Name);
+        release_object(Adapter);
+    }
+    else
+    {
+        ok(Adapter == NULL, "%s EnumAdapters(0) left adapter output %p\n",
+           Name, Adapter);
+    }
+    release_object(Factory);
+
+    return hr == S_OK;
 }
 
 START_TEST(stub_surface)
@@ -171,6 +215,7 @@ START_TEST(stub_surface)
     void *Device;
     void *Context;
     UINT FeatureLevel;
+    BOOL HaveAdapter;
 
     Dxgi = LoadLibraryW(L"dxgi.dll");
     ok(Dxgi != NULL, "LoadLibraryW(dxgi.dll) failed, error %lu\n",
@@ -210,28 +255,48 @@ START_TEST(stub_surface)
 
     Object = (void *)(ULONG_PTR)0xdeadbeef;
     hr = pCreateDXGIFactory(&test_iid_factory, &Object);
-    expect_factory_unsupported("CreateDXGIFactory", hr, Object);
+    HaveAdapter = check_factory("CreateDXGIFactory", hr, Object);
 
     Object = (void *)(ULONG_PTR)0xdeadbeef;
     hr = pCreateDXGIFactory1(&test_iid_factory, &Object);
-    expect_factory_unsupported("CreateDXGIFactory1", hr, Object);
+    HaveAdapter |= check_factory("CreateDXGIFactory1", hr, Object);
 
     Object = (void *)(ULONG_PTR)0xdeadbeef;
     hr = pCreateDXGIFactory2(0, &test_iid_factory, &Object);
-    expect_factory_unsupported("CreateDXGIFactory2", hr, Object);
+    HaveAdapter |= check_factory("CreateDXGIFactory2", hr, Object);
 
     Device = (void *)(ULONG_PTR)0xdeadbeef;
     Context = (void *)(ULONG_PTR)0xfeedface;
     FeatureLevel = 0x11111111;
-    hr = pD3D11CreateDevice(NULL, 1, NULL, 0, NULL, 0, 7,
-                            &Device, &FeatureLevel, &Context);
-    ok(hr == DXGI_ERROR_UNSUPPORTED,
-       "D3D11CreateDevice returned 0x%08lx, expected DXGI_ERROR_UNSUPPORTED\n",
-       hr);
-    ok(Device == NULL, "D3D11CreateDevice left device output %p\n", Device);
-    ok(Context == NULL, "D3D11CreateDevice left context output %p\n", Context);
-    ok(FeatureLevel == 0, "D3D11CreateDevice left feature level %#x\n",
-       FeatureLevel);
+    hr = pD3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0,
+                            D3D11_SDK_VERSION, &Device, &FeatureLevel,
+                            &Context);
+    if (hr == DXGI_ERROR_UNSUPPORTED || hr == DXGI_ERROR_NOT_FOUND)
+    {
+        ok(!HaveAdapter,
+           "D3D11CreateDevice returned 0x%08lx with an adapter present\n", hr);
+        ok(Device == NULL, "D3D11CreateDevice left device output %p\n",
+           Device);
+        ok(Context == NULL, "D3D11CreateDevice left context output %p\n",
+           Context);
+        ok(FeatureLevel == 0, "D3D11CreateDevice left feature level %#x\n",
+           FeatureLevel);
+        skip("D3D11CreateDevice: no usable adapter (0x%08lx)\n", hr);
+    }
+    else
+    {
+        ok(hr == S_OK, "D3D11CreateDevice returned 0x%08lx\n", hr);
+        ok(Device != NULL, "D3D11CreateDevice returned NULL device\n");
+        ok(Context != NULL, "D3D11CreateDevice returned NULL context\n");
+        ok(FeatureLevel >= D3D_FEATURE_LEVEL_9_1,
+           "D3D11CreateDevice returned feature level %#x\n", FeatureLevel);
+        trace("D3D11: device created feature_level=0x%08x\n", FeatureLevel);
+        if (hr == S_OK)
+        {
+            release_object(Context);
+            release_object(Device);
+        }
+    }
 
     FreeLibrary(D3d11);
     FreeLibrary(Dxgi);
@@ -243,7 +308,10 @@ START_TEST(d3d11_render_probe)
     {
         D3D_FEATURE_LEVEL_11_0,
         D3D_FEATURE_LEVEL_10_1,
-        D3D_FEATURE_LEVEL_10_0
+        D3D_FEATURE_LEVEL_10_0,
+        D3D_FEATURE_LEVEL_9_3,
+        D3D_FEATURE_LEVEL_9_2,
+        D3D_FEATURE_LEVEL_9_1
     };
     const float ClearColor[4] = { 0.10f, 0.20f, 0.40f, 1.00f };
     HMODULE D3d11;
@@ -296,17 +364,16 @@ START_TEST(d3d11_render_probe)
                                         sizeof(FeatureLevels) / sizeof(FeatureLevels[0]),
                                         D3D11_SDK_VERSION, &Desc, &SwapChain,
                                         &Device, &FeatureLevel, &Context);
-    if (hr == DXGI_ERROR_UNSUPPORTED)
+    if (hr == DXGI_ERROR_UNSUPPORTED || hr == DXGI_ERROR_NOT_FOUND)
     {
-        trace("D3D11: backend unavailable hr=0x%08lx (stub path)\n",
-              (ULONG)hr);
+        trace("D3D11: no usable adapter hr=0x%08lx\n", (ULONG)hr);
         ok(SwapChain == NULL, "unsupported create left swapchain %p\n",
            SwapChain);
         ok(Device == NULL, "unsupported create left device %p\n", Device);
         ok(Context == NULL, "unsupported create left context %p\n", Context);
         ok(FeatureLevel == 0, "unsupported create left feature level %#x\n",
            FeatureLevel);
-        skip("D3D11 render probe needs a real d3d11/dxgi backend\n");
+        skip("D3D11 render probe needs a DXGI adapter\n");
         goto done;
     }
 
