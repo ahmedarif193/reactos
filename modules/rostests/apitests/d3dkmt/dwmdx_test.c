@@ -417,6 +417,54 @@ START_TEST(dwmdxarg)
 /* ------------------------------------------------------------------ */
 /* End-to-end: issue / publish / cancel and the shared-handle contract  */
 /* ------------------------------------------------------------------ */
+static BOOL
+OpenSharedSurfaceAdapter(HANDLE SharedSurface,
+                         D3DKMT_HANDLE *Adapter,
+                         LUID *AdapterLuid)
+{
+    PFND3DKMT_GETSHAREDRESOURCEADAPTERLUID pfnGetLuid;
+    PFN_D3DKMTOpenAdapterFromLuid pfnOpen;
+    D3DKMT_GETSHAREDRESOURCEADAPTERLUID GetLuid;
+    D3DKMT_OPENADAPTERFROMLUID Open;
+    NTSTATUS Status;
+
+    pfnGetLuid = (PFND3DKMT_GETSHAREDRESOURCEADAPTERLUID)
+        LoadD3DKMTProc("D3DKMTGetSharedResourceAdapterLuid");
+    pfnOpen = (PFN_D3DKMTOpenAdapterFromLuid)
+        LoadD3DKMTProc("D3DKMTOpenAdapterFromLuid");
+    if (pfnGetLuid == NULL || pfnOpen == NULL)
+    {
+        skip("the shared-resource LUID adapter entry points are not exported\n");
+        return FALSE;
+    }
+
+    memset(&GetLuid, 0, sizeof(GetLuid));
+    GetLuid.hGlobalShare = (D3DKMT_HANDLE)(ULONG_PTR)SharedSurface;
+    Status = pfnGetLuid(&GetLuid);
+    ok(NT_SUCCESS(Status),
+       "GetSharedResourceAdapterLuid on the redirection surface returned "
+       "0x%08lX\n", (unsigned long)Status);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    memset(&Open, 0, sizeof(Open));
+    Open.AdapterLuid = GetLuid.AdapterLuid;
+    Status = pfnOpen(&Open);
+    ok(NT_SUCCESS(Status) && Open.hAdapter != 0,
+       "the redirection surface owner LUID %08lX:%08lX must reopen its exact "
+       "adapter, got 0x%08lX handle=%#lx\n",
+       (unsigned long)GetLuid.AdapterLuid.HighPart,
+       (unsigned long)GetLuid.AdapterLuid.LowPart,
+       (unsigned long)Status, (unsigned long)Open.hAdapter);
+    if (!NT_SUCCESS(Status) || Open.hAdapter == 0)
+        return FALSE;
+
+    *Adapter = Open.hAdapter;
+    if (AdapterLuid != NULL)
+        *AdapterLuid = GetLuid.AdapterLuid;
+    return TRUE;
+}
+
 static void
 CheckSharedSurfaceRuntimeData(HANDLE SharedSurface, ULONG Width, ULONG Height)
 {
@@ -434,17 +482,14 @@ CheckSharedSurfaceRuntimeData(HANDLE SharedSurface, ULONG Width, ULONG Height)
         return;
     }
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (hAdapter == 0)
-    {
-        skip("could not open the DISPLAY1 adapter\n");
+    if (!OpenSharedSurfaceAdapter(SharedSurface, &hAdapter, NULL))
         return;
-    }
 
     hDevice = CreateTestDevice(hAdapter);
     if (hDevice == 0)
     {
-        skip("could not create a D3DKMT device on the display adapter\n");
+        ok(0, "could not create a D3DKMT device on the redirection surface "
+              "owner\n");
         CloseAdapter(hAdapter);
         return;
     }
@@ -523,16 +568,13 @@ CheckSharedSurfaceClientOpen(HANDLE SharedSurface, ULONG Width, ULONG Height)
         return;
     }
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (hAdapter == 0)
-    {
-        skip("could not open the DISPLAY1 adapter\n");
+    if (!OpenSharedSurfaceAdapter(SharedSurface, &hAdapter, NULL))
         return;
-    }
     hDevice = CreateTestDevice(hAdapter);
     if (hDevice == 0)
     {
-        skip("could not create a D3DKMT device on the display adapter\n");
+        ok(0, "could not create a D3DKMT device on the redirection surface "
+              "owner\n");
         CloseAdapter(hAdapter);
         return;
     }
