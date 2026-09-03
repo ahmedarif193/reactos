@@ -338,6 +338,9 @@ IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r)
     r->DxGlobalShare = 0;
     r->DxGeneration = 0;
     RtlZeroMemory(&r->DxAdapterLuid, sizeof(r->DxAdapterLuid));
+    r->DxWindow = 0;
+    r->DxClientX = 0;
+    r->DxClientY = 0;
     r->DxIssuedUpdateId = 0;
     r->DxPublishedUpdateId = 0;
     r->DxConsumedUpdateId = 0;
@@ -1566,8 +1569,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         g_DwmFrameWindows[count].DxGeneration = e->Redirect.DxGeneration;
         g_DwmFrameWindows[count].DxAdapterLuid = e->Redirect.DxAdapterLuid;
         g_DwmFrameWindows[count].DxUpdateId = e->Redirect.DxPublishedUpdateId;
-        g_DwmFrameWindows[count].DxClientX = e->Redirect.rcClient.left;
-        g_DwmFrameWindows[count].DxClientY = e->Redirect.rcClient.top;
+        g_DwmFrameWindows[count].DxClientX = e->Redirect.DxClientX;
+        g_DwmFrameWindows[count].DxClientY = e->Redirect.DxClientY;
         g_DwmFrameWindows[count].DxWidth = e->Redirect.DxInfo.Width;
         g_DwmFrameWindows[count].DxHeight = e->Redirect.DxInfo.Height;
         g_DwmFrameWindows[count].DxPitch = e->Redirect.DxInfo.Pitch;
@@ -2007,12 +2010,36 @@ IntCompositionDwmOpenSurface(_In_ PVOID pUser)
     return Status;
 }
 
+static BOOLEAN
+IntCompositionUpdateDxPlacement(
+    _In_ PWND SourceWnd,
+    _In_ PWND TopWnd,
+    _Inout_ PWND_REDIRECT Redirect)
+{
+    LONG Width = SourceWnd->rcClient.right - SourceWnd->rcClient.left;
+    LONG Height = SourceWnd->rcClient.bottom - SourceWnd->rcClient.top;
+
+    if (Width <= 0 || Height <= 0 ||
+        (ULONG)Width != Redirect->DxInfo.Width ||
+        (ULONG)Height != Redirect->DxInfo.Height)
+    {
+        return FALSE;
+    }
+
+    Redirect->DxClientX =
+        SourceWnd->rcClient.left - TopWnd->rcWindow.left;
+    Redirect->DxClientY =
+        SourceWnd->rcClient.top - TopWnd->rcWindow.top;
+    return TRUE;
+}
+
 NTSTATUS
 IntCompositionDwmDxSurface(_In_ PVOID pUser)
 {
     DWM_DX_SURFACE_EXCHANGE Request;
     REDIRECT_ENTRY *Entry = NULL;
-    PWND Wnd = NULL;
+    PWND SourceWnd = NULL;
+    PWND TopWnd = NULL;
     PPROCESSINFO ProcessInfo;
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -2062,21 +2089,21 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
         return STATUS_INVALID_HANDLE;
     }
 
-    Wnd = UserGetWindowObject((HWND)(ULONG_PTR)Request.Window);
-    Wnd = IntCompositionTopLevel(Wnd);
+    SourceWnd = UserGetWindowObject((HWND)(ULONG_PTR)Request.Window);
+    TopWnd = IntCompositionTopLevel(SourceWnd);
     ProcessInfo = PsGetCurrentProcessWin32Process();
-    if (Wnd == NULL || Wnd->head.pti == NULL || ProcessInfo == NULL ||
-        Wnd->head.pti->ppi != ProcessInfo)
+    if (SourceWnd == NULL || TopWnd == NULL || SourceWnd->head.pti == NULL ||
+        ProcessInfo == NULL || SourceWnd->head.pti->ppi != ProcessInfo)
     {
         return STATUS_ACCESS_DENIED;
     }
 
-    Entry = IntCompositionFind(Wnd);
+    Entry = IntCompositionFind(TopWnd);
     if (Entry == NULL && Request.Action == DWM_DX_SURFACE_REGISTER &&
-        IntCompositionIsCompositable(Wnd))
+        IntCompositionIsCompositable(TopWnd))
     {
-        IntCompositionOnWindowCreate(Wnd);
-        Entry = IntCompositionFind(Wnd);
+        IntCompositionOnWindowCreate(TopWnd);
+        Entry = IntCompositionFind(TopWnd);
     }
     if (Entry == NULL)
         return STATUS_NOT_FOUND;
@@ -2085,8 +2112,8 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
     {
         case DWM_DX_SURFACE_REGISTER:
         {
-            ULONG ClientWidth = Wnd->rcClient.right - Wnd->rcClient.left;
-            ULONG ClientHeight = Wnd->rcClient.bottom - Wnd->rcClient.top;
+            ULONG ClientWidth = SourceWnd->rcClient.right - SourceWnd->rcClient.left;
+            ULONG ClientHeight = SourceWnd->rcClient.bottom - SourceWnd->rcClient.top;
             PKEVENT ReadyEvent;
 
             if (Request.GlobalShare == 0 || Request.ReadyEvent == 0 ||
@@ -2097,7 +2124,7 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 Request.Info.Width != ClientWidth ||
                 Request.Info.Height != ClientHeight ||
                 Request.Info.Width > MAXULONG / sizeof(ULONG) ||
-                Request.Info.Pitch != Request.Info.Width * sizeof(ULONG) ||
+                Request.Info.Pitch < Request.Info.Width * sizeof(ULONG) ||
                 Request.Info.Height > MAXULONG / Request.Info.Pitch ||
                 Request.Info.Format != DWM_DX_FORMAT_B8G8R8A8_UNORM)
             {
@@ -2125,6 +2152,11 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             Entry->Redirect.DxGlobalShare = Request.GlobalShare;
             Entry->Redirect.DxAdapterLuid = Request.AdapterLuid;
             Entry->Redirect.DxInfo = Request.Info;
+            Entry->Redirect.DxWindow = Request.Window;
+            Entry->Redirect.DxClientX =
+                SourceWnd->rcClient.left - TopWnd->rcWindow.left;
+            Entry->Redirect.DxClientY =
+                SourceWnd->rcClient.top - TopWnd->rcWindow.top;
             Entry->Redirect.DxIssuedUpdateId = 0;
             Entry->Redirect.DxPublishedUpdateId = 0;
             Entry->Redirect.DxConsumedUpdateId = 0;
@@ -2139,7 +2171,10 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
         }
 
         case DWM_DX_SURFACE_ISSUE:
-            if (Request.GlobalShare != Entry->Redirect.DxGlobalShare ||
+            if (Request.Window != Entry->Redirect.DxWindow ||
+                !IntCompositionUpdateDxPlacement(SourceWnd, TopWnd,
+                                                 &Entry->Redirect) ||
+                Request.GlobalShare != Entry->Redirect.DxGlobalShare ||
                 !RtlEqualMemory(&Request.AdapterLuid,
                                 &Entry->Redirect.DxAdapterLuid,
                                 sizeof(Request.AdapterLuid)))
@@ -2164,7 +2199,7 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             break;
 
         case DWM_DX_SURFACE_ISSUE_GDI:
-            if (IntCompositionEnsureSurface(Wnd, &Entry->Redirect) == NULL ||
+            if (IntCompositionEnsureSurface(TopWnd, &Entry->Redirect) == NULL ||
                 Entry->Redirect.BackGlobalShare == 0)
             {
                 return STATUS_NOT_SUPPORTED;
@@ -2210,7 +2245,10 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             break;
 
         case DWM_DX_SURFACE_UPDATE:
-            if (Request.UpdateId == 0 ||
+            if (Request.Window != Entry->Redirect.DxWindow ||
+                !IntCompositionUpdateDxPlacement(SourceWnd, TopWnd,
+                                                 &Entry->Redirect) ||
+                Request.UpdateId == 0 ||
                 Request.UpdateId != Entry->Redirect.DxIssuedUpdateId)
             {
                 return STATUS_INVALID_PARAMETER;
@@ -2225,16 +2263,16 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                                FALSE);
                 break;
             }
-            /* Native opengl32 forwards the ICD callback rectangle unchanged.
-             * It is relative to the top-level window, while the shared GPU
-             * allocation contains only the client pixels. */
+            /* The ICD update rectangle addresses the client-sized shared
+             * allocation. The compositor applies rcClient when placing that
+             * allocation in the top-level window backing store. */
             if ((Request.Flags & ~1u) != 0 ||
-                Request.UpdateRect.left < Entry->Redirect.rcClient.left ||
-                Request.UpdateRect.top < Entry->Redirect.rcClient.top ||
+                Request.UpdateRect.left < 0 ||
+                Request.UpdateRect.top < 0 ||
                 Request.UpdateRect.right <= Request.UpdateRect.left ||
                 Request.UpdateRect.bottom <= Request.UpdateRect.top ||
-                Request.UpdateRect.right > Entry->Redirect.rcClient.right ||
-                Request.UpdateRect.bottom > Entry->Redirect.rcClient.bottom)
+                (ULONG)Request.UpdateRect.right > Entry->Redirect.DxInfo.Width ||
+                (ULONG)Request.UpdateRect.bottom > Entry->Redirect.DxInfo.Height)
             {
                 return STATUS_INVALID_PARAMETER;
             }
