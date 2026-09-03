@@ -257,11 +257,9 @@ StartWithDesktop(IN HINSTANCE hInstance)
     return 0;
 }
 
-INT WINAPI
-_tWinMain(IN HINSTANCE hInstance,
-          IN HINSTANCE hPrevInstance,
-          IN LPTSTR lpCmdLine,
-          IN INT nCmdShow)
+EXTERN_C INT WINAPI
+Explorer_Main(IN HINSTANCE hInstance,
+              IN LPTSTR lpCmdLine)
 {
     /*
      * The shell consumes physical system metrics and must opt out of
@@ -293,3 +291,16 @@ _tWinMain(IN HINSTANCE hInstance,
 
     return StartWithDesktop(hInstance);
 }
+
+#ifndef EXPLORER11_BUILD
+INT WINAPI
+_tWinMain(IN HINSTANCE hInstance,
+          IN HINSTANCE hPrevInstance,
+          IN LPTSTR lpCmdLine,
+          IN INT nCmdShow)
+{
+    UNREFERENCED_PARAMETER(hPrevInstance);
+    UNREFERENCED_PARAMETER(nCmdShow);
+    return Explorer_Main(hInstance, lpCmdLine);
+}
+#endif
