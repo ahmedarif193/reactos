@@ -20,7 +20,7 @@ static NTSTATUS DxgkpDeviceWorkQueryTerminalLocked(_In_ PDXGK_DEVICE_WORK_LEDGER
     return NT_SUCCESS(Status) ? STATUS_SUCCESS : Status;
 }
 
-static NTSTATUS DxgkpDeviceWorkWait(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _In_ ULONGLONG TargetSequence, _Inout_opt_ PKEVENT ArmedEvent)
+static NTSTATUS DxgkpDeviceWorkWaitUntil(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _In_ ULONGLONG TargetSequence, _Inout_opt_ PKEVENT ArmedEvent, _In_opt_ PLARGE_INTEGER Deadline)
 {
     KIRQL OldIrql;
     NTSTATUS Status;
@@ -53,11 +53,18 @@ static NTSTATUS DxgkpDeviceWorkWait(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _In
         if (ArmedEvent != NULL)
             KeSetEvent(ArmedEvent, IO_NO_INCREMENT, FALSE);
         KeReleaseSpinLock(&Ledger->Lock, OldIrql);
-        Status = KeWaitForSingleObject(&Ledger->ProgressEvent, Executive, KernelMode, FALSE, NULL);
+        Status = KeWaitForSingleObject(&Ledger->ProgressEvent, Executive, KernelMode, FALSE, Deadline);
+        if (Status == STATUS_TIMEOUT)
+            return STATUS_TIMEOUT;
         if (!NT_SUCCESS(Status))
             return Status;
         KeAcquireSpinLock(&Ledger->Lock, &OldIrql);
     }
+}
+
+static NTSTATUS DxgkpDeviceWorkWait(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _In_ ULONGLONG TargetSequence, _Inout_opt_ PKEVENT ArmedEvent)
+{
+    return DxgkpDeviceWorkWaitUntil(Ledger, TargetSequence, ArmedEvent, NULL);
 }
 
 VOID DxgkDeviceWorkCoreInitializeLedger(_Out_ PDXGK_DEVICE_WORK_LEDGER Ledger, _In_opt_ const DXGK_DEVICE_WORK_TERMINAL_STATE *Terminal)
@@ -203,6 +210,13 @@ NTSTATUS DxgkDeviceWorkCoreWaitForSnapshot(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledg
     if (Ledger == NULL || Snapshot == NULL || Snapshot->Ledger != Ledger)
         return STATUS_INVALID_PARAMETER;
     return DxgkpDeviceWorkWait(Ledger, Snapshot->TargetSequence, ArmedEvent);
+}
+
+NTSTATUS DxgkDeviceWorkCoreWaitForSnapshotUntil(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _In_ const DXGK_DEVICE_WORK_SNAPSHOT *Snapshot, _In_opt_ PLARGE_INTEGER Deadline)
+{
+    if (Ledger == NULL || Snapshot == NULL || Snapshot->Ledger != Ledger)
+        return STATUS_INVALID_PARAMETER;
+    return DxgkpDeviceWorkWaitUntil(Ledger, Snapshot->TargetSequence, NULL, Deadline);
 }
 
 NTSTATUS DxgkDeviceWorkCoreWaitForIdle(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _Inout_opt_ PKEVENT ArmedEvent)
