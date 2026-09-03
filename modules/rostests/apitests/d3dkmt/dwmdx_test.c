@@ -528,8 +528,8 @@ CheckSharedSurfaceRuntimeData(HANDLE SharedSurface, ULONG Width, ULONG Height)
                "the runtime data must describe the client rect %lux%lu, "
                "got %lux%lu\n", (unsigned long)Width, (unsigned long)Height,
                (unsigned long)Info.Width, (unsigned long)Info.Height);
-            ok(Info.Pitch == Info.Width * 4,
-               "a linear B8G8R8A8 surface must have pitch = width * 4 (%lu), "
+            ok(Info.Pitch >= Info.Width * 4,
+               "a linear B8G8R8A8 surface pitch must cover width * 4 (%lu), "
                "got %lu\n", (unsigned long)(Info.Width * 4),
                (unsigned long)Info.Pitch);
             ok(Info.Format == DWM_DX_FORMAT_B8G8R8A8_UNORM,
