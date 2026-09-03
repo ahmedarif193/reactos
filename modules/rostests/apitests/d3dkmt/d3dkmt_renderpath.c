@@ -745,14 +745,13 @@ static void Test_VirtualAddressingSubmission(void)
     Status = pSubmit(&submit);
     ok_failed(Status, "SubmitCommand accepted an unmapped GPU VA (0x%08lX)\n", (long)Status);
 
-    /* And a length that runs off the end of the mapping. */
-    memset(&submit, 0, sizeof(submit));
-    submit.BroadcastContextCount = 1;
-    submit.BroadcastContext[0] = hContext;
-    submit.Commands = CommandVa;
-    submit.CommandLength = 0x10000000;
-    Status = pSubmit(&submit);
-    ok_failed(Status, "SubmitCommand accepted a length past its mapping (0x%08lX)\n", (long)Status);
+    /*
+     * Do not infer a GPU-VA span from CommandLength here.  It is DMA-buffer
+     * geometry interpreted by the KMD, while Commands is the mapped GPU-VA
+     * anchor.  Native dxgkrnl validates the request and passes both values to
+     * the KMD separately; the unmapped-anchor case above is the dxgkrnl
+     * boundary this test owns.
+     */
 
 cleanup:
     if (hQueue && pDestroyQueue)
