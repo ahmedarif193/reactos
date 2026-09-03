@@ -22,6 +22,8 @@
 
 /* TLBI VA operands carry VA[55:12] in bits [43:0]. */
 #define KI_ARM64_TLBI_VA_MASK 0x00000FFFFFFFFFFFULL
+/* TCR_EL1.AS is clear, so the implemented process tag is TTBR1[55:48]. */
+#define KI_ARM64_TLBI_ASID_MASK 0x00FF000000000000ULL
 
 #define ARM64_SYNC_BARRIER() do { __dmb(_ARM64_BARRIER_SY); __isb(_ARM64_BARRIER_SY); } while (0)
 
@@ -139,6 +141,38 @@ KeInvalidateTlbEntry(
     __asm__ __volatile__("isb" ::: "memory");
 }
 
+FORCEINLINE
+ULONG64
+KiArm64CurrentTlbAsid(VOID)
+{
+    ULONG64 Ttbr1;
+
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+    return Ttbr1 & KI_ARM64_TLBI_ASID_MASK;
+}
+
+FORCEINLINE
+VOID
+KiArm64InvalidateUserTlbEntry(
+    _In_ PVOID Address)
+{
+    ULONG64 Asid = KiArm64CurrentTlbAsid();
+    ULONG64 Operand = Asid |
+        (((ULONG_PTR)Address >> PAGE_SHIFT) & KI_ARM64_TLBI_VA_MASK);
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    if (Asid != 0)
+    {
+        __asm__ __volatile__("tlbi vae1is, %0" :: "r"(Operand) : "memory");
+    }
+    else
+    {
+        __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Operand) : "memory");
+    }
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
 /*
  * Keep short mapping ranges targeted. The cutoff is deliberately conservative:
  * one global invalidation is preferable once issuing a long run of VA operands
@@ -183,10 +217,60 @@ KeInvalidateTlbRange(
 
 FORCEINLINE
 VOID
+KiArm64InvalidateUserTlbRange(
+    _In_ PVOID BaseAddress,
+    _In_ ULONG PageCount)
+{
+    ULONG64 Asid;
+    ULONG64 Operand;
+    ULONG Index;
+
+    if (PageCount == 0)
+    {
+        return;
+    }
+
+    Asid = KiArm64CurrentTlbAsid();
+    if (Asid == 0)
+    {
+        KeInvalidateTlbRange(BaseAddress, PageCount);
+        return;
+    }
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    if (PageCount >= KI_ARM64_TLBI_RANGE_FULL_THRESHOLD)
+    {
+        __asm__ __volatile__("tlbi aside1is, %0" :: "r"(Asid) : "memory");
+    }
+    else
+    {
+        Operand = Asid |
+            (((ULONG_PTR)BaseAddress >> PAGE_SHIFT) & KI_ARM64_TLBI_VA_MASK);
+        for (Index = 0; Index < PageCount; Index++, Operand++)
+        {
+            __asm__ __volatile__("tlbi vae1is, %0" :: "r"(Operand) : "memory");
+        }
+    }
+
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
+FORCEINLINE
+VOID
 KeFlushProcessTb(VOID)
 {
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("tlbi vmalle1is");
+    ULONG64 Asid = KiArm64CurrentTlbAsid();
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    if (Asid != 0)
+    {
+        __asm__ __volatile__("tlbi aside1is, %0" :: "r"(Asid) : "memory");
+    }
+    else
+    {
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+    }
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 }

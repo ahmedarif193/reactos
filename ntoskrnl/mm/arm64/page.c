@@ -1102,7 +1102,7 @@ MiArm64ReleaseUserPageTableReferenceLockedInternal(
         ASSERT(TablePfn->u2.ShareCount == 1);
 
         MiArm64WritePteEntry(&Walk->LevelTable[Level - 1][Index[Level - 1]], 0);
-        MiArm64InvalidateUserAddress(Address);
+        MiArm64InvalidateUserAddressForProcess(&Process->Pcb, Address);
         MiDecrementShareCount(ParentPfn, Walk->LevelPfn[Level - 1]);
         MI_SET_PFN_DELETED(TablePfn);
         MiDecrementShareCount(TablePfn, Walk->LevelPfn[Level]);

@@ -2825,7 +2825,14 @@ MiFlushProcessTbRange(
         KiIpiSendTbFlush(TargetSet, BaseAddress, FlushPageCount);
     }
 #elif defined(_M_ARM64)
-    KeInvalidateTlbRange(BaseAddress, FlushPageCount);
+    if (BaseAddress <= MmHighestUserAddress)
+    {
+        KiArm64InvalidateUserTlbRange(BaseAddress, FlushPageCount);
+    }
+    else
+    {
+        KeInvalidateTlbRange(BaseAddress, FlushPageCount);
+    }
 #else
     UNREFERENCED_PARAMETER(BaseAddress);
     KeFlushProcessTb();
@@ -2852,7 +2859,14 @@ MiFlushTbForAddress(
 
     KiIpiSendTbFlush(TargetSet, VirtualAddress, 1);
 #elif defined(_M_ARM64)
-    KeInvalidateTlbEntry(VirtualAddress);
+    if (VirtualAddress <= MmHighestUserAddress)
+    {
+        KiArm64InvalidateUserTlbEntry(VirtualAddress);
+    }
+    else
+    {
+        KeInvalidateTlbEntry(VirtualAddress);
+    }
 #else
     KeFlushEntireTb(TRUE, TRUE);
 #endif
