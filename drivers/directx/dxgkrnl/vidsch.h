@@ -206,6 +206,7 @@ typedef struct _VIDSCH_DMA_PACKET
     D3DDDI_PATCHLOCATIONLIST    InlinePatchList[VIDSCH_INLINE_PATCHES];
     ULONG                       InlinePatchCount;
     WORK_QUEUE_ITEM             CleanupWorkItem;
+    WORK_QUEUE_ITEM             DestroyWorkItem;
 
     /* dxgmms2 context-stream ownership. The operation retains one packet
      * reference from successful admission through its retirement record. */

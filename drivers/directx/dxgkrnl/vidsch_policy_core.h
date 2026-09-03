@@ -50,4 +50,15 @@ VidSchPolicyCompletionMustFail(
     return CurrentExecutionState == PageFaultExecutionState;
 }
 
+/* Packet teardown may unpin GPU virtual addresses and take FAST_MUTEXes.
+ * ExAcquireFastMutex is valid through APC_LEVEL, but never at the
+ * DISPATCH_LEVEL used by the completion DPC. */
+FORCEINLINE
+BOOLEAN
+VidSchPolicyPacketCleanupMustDefer(
+    _In_ KIRQL CurrentIrql)
+{
+    return CurrentIrql > APC_LEVEL;
+}
+
 #endif /* _VIDSCH_POLICY_CORE_H_ */
