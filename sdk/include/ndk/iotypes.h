@@ -367,6 +367,12 @@ typedef struct _IO_RESOURCE_DESCRIPTOR {
       ULONG MaximumChannel;
     } Dma;
     struct {
+      ULONG RequestLine;
+      ULONG Reserved;
+      ULONG Channel;
+      ULONG TransferWidth;
+    } DmaV3;
+    struct {
       ULONG Length;
       ULONG Alignment;
       PHYSICAL_ADDRESS MinimumAddress;
