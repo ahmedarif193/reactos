@@ -26,10 +26,13 @@
 #define RPI3VC4_V3D_INTCTL                0x0030UL
 #define RPI3VC4_V3D_INTENA                0x0034UL
 #define RPI3VC4_V3D_INTDIS                0x0038UL
-#define RPI3VC4_V3D_INTERRUPT_MASK        0x0000000fUL
 #define RPI3VC4_V3D_INT_FRDONE            (1UL << 0)
 #define RPI3VC4_V3D_INT_FLDONE            (1UL << 1)
 #define RPI3VC4_V3D_INT_OUTOMEM           (1UL << 2)
+#define RPI3VC4_V3D_INTERRUPT_MASK        \
+    (RPI3VC4_V3D_INT_FRDONE |             \
+     RPI3VC4_V3D_INT_FLDONE |             \
+     RPI3VC4_V3D_INT_OUTOMEM)
 #define RPI3VC4_V3D_L2CACTL               0x0020UL
 #define RPI3VC4_V3D_SLCACTL               0x0024UL
 #define RPI3VC4_V3D_L2CCLR                (1UL << 2)
@@ -164,9 +167,16 @@ typedef struct _RPI3VC4_V3D_SUBMIT
 {
     RPI3VC4_DMA_PACKET Packet;
     ULONG Fence;
-    ULONGLONG StartTime100ns;
+    ULONG BinnerOverflowSlots;
+    ULONG BinLastAddress;
+    ULONG RenderLastAddress;
+    ULONGLONG BinStartTime100ns;
+    ULONGLONG RenderStartTime100ns;
+    ULONGLONG BinLastProgressTime100ns;
+    ULONGLONG RenderLastProgressTime100ns;
+    BOOLEAN BinComplete;
     BOOLEAN RenderStarted;
-    BOOLEAN SnapshotLogged;
+    BOOLEAN RenderComplete;
 } RPI3VC4_V3D_SUBMIT, *PRPI3VC4_V3D_SUBMIT;
 
 typedef struct _RPI3VC4_CONTEXT
@@ -193,11 +203,17 @@ typedef struct _RPI3VC4_CONTEXT
     RPI3VC4_V3D_SUBMIT V3dSubmitRing[RPI3VC4_V3D_SUBMIT_RING_SIZE];
     ULONG V3dSubmitHead;
     ULONG V3dSubmitTail;
+    ULONG V3dBinNext;
+    ULONG V3dBinActiveIndex;
+    ULONG V3dRenderActiveIndex;
     ULONG V3dInterruptPending;
-    BOOLEAN V3dEngineActive;
+    ULONG V3dBinOverflowUsed;
+    ULONG V3dBinOverflowCurrent;
+    BOOLEAN V3dBinActive;
+    BOOLEAN V3dRenderActive;
+    BOOLEAN V3dRecovering;
     PVOID V3dBinOverflow;
     PHYSICAL_ADDRESS V3dBinOverflowPhysical;
-    ULONG V3dBinOverflowCursor;
     KTIMER V3dPollTimer;
     KDPC V3dPollDpc;
     BOOLEAN V3dPollInitialized;
