@@ -5012,6 +5012,131 @@ DxgkpInitializeDisplayMode(
     Mode->DisplayFixedOutput = 0;
 }
 
+NTSTATUS
+DxgkVidPnQueryCurrentDisplayMode(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ D3DKMT_CURRENTDISPLAYMODE *CurrentMode)
+{
+    D3DKMT_DISPLAYMODE Mode;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId;
+    PDXGKP_VIDPN VidPn;
+    PDXGKP_VIDPN_SOURCE_MODESET SourceSet;
+    PDXGKP_VIDPN_TARGET_MODESET TargetSet = NULL;
+    CONST D3DKMDT_VIDPN_SOURCE_MODE *SourceMode = NULL;
+    CONST D3DKMDT_VIDPN_TARGET_MODE *TargetMode = NULL;
+    CONST D3DKMDT_VIDPN_PRESENT_PATH *Path = NULL;
+    SIZE_T Index;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || CurrentMode == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    SourceId = CurrentMode->VidPnSourceId;
+    if (SourceId >= Adapter->NumberOfVideoPresentSources)
+        return STATUS_INVALID_PARAMETER;
+
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+    VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
+    if (!Adapter->VidPnCommitted ||
+        Adapter->CommittedWidth == 0 ||
+        Adapter->CommittedHeight == 0 ||
+        VidPn == NULL ||
+        VidPn->Signature != DXGKP_VIDPN_SIGNATURE ||
+        SourceId >= VidPn->NumSources)
+    {
+        goto Cleanup;
+    }
+
+    for (Index = 0; Index < VidPn->NumPaths; ++Index)
+    {
+        if (VidPn->Paths[Index].VidPnSourceId == SourceId)
+        {
+            Path = &VidPn->Paths[Index];
+            break;
+        }
+    }
+    if (Path == NULL)
+        goto Cleanup;
+
+    SourceSet = VidPn->SourceModeSets[SourceId];
+    if (SourceSet == NULL || SourceSet->PinnedModeId == (UINT)-1)
+        goto Cleanup;
+    for (Index = 0; Index < SourceSet->NumModes; ++Index)
+    {
+        if (SourceSet->Modes[Index].Id == SourceSet->PinnedModeId)
+        {
+            SourceMode = &SourceSet->Modes[Index];
+            break;
+        }
+    }
+    if (SourceMode == NULL || SourceMode->Type != D3DKMDT_RMT_GRAPHICS)
+        goto Cleanup;
+
+    DxgkpInitializeDisplayMode(&Mode,
+                               SourceMode->Format.Graphics.PrimSurfSize.cx,
+                               SourceMode->Format.Graphics.PrimSurfSize.cy);
+    if (Mode.Width == 0 || Mode.Height == 0)
+    {
+        Mode.Width = Adapter->CommittedWidth;
+        Mode.Height = Adapter->CommittedHeight;
+    }
+    if (SourceMode->Format.Graphics.PixelFormat != D3DDDIFMT_UNKNOWN)
+        Mode.Format = SourceMode->Format.Graphics.PixelFormat;
+
+    if (Path->VidPnTargetId < VidPn->NumTargets)
+        TargetSet = VidPn->TargetModeSets[Path->VidPnTargetId];
+    if (TargetSet != NULL && TargetSet->PinnedModeId != (UINT)-1)
+    {
+        for (Index = 0; Index < TargetSet->NumModes; ++Index)
+        {
+            if (TargetSet->Modes[Index].Id == TargetSet->PinnedModeId)
+            {
+                TargetMode = &TargetSet->Modes[Index];
+                break;
+            }
+        }
+    }
+    if (TargetMode != NULL &&
+        TargetMode->VideoSignalInfo.VSyncFreq.Numerator != 0 &&
+        TargetMode->VideoSignalInfo.VSyncFreq.Denominator != 0)
+    {
+        Mode.RefreshRate = TargetMode->VideoSignalInfo.VSyncFreq;
+        Mode.IntegerRefreshRate = (UINT)(((ULONGLONG)Mode.RefreshRate.Numerator +
+                                          (Mode.RefreshRate.Denominator / 2)) /
+                                         Mode.RefreshRate.Denominator);
+        Mode.ScanLineOrdering = TargetMode->VideoSignalInfo.ScanLineOrdering;
+    }
+
+    switch (Path->ContentTransformation.Rotation)
+    {
+        case D3DKMDT_VPPR_ROTATE90:
+            Mode.DisplayOrientation = D3DDDI_ROTATION_90;
+            break;
+        case D3DKMDT_VPPR_ROTATE180:
+            Mode.DisplayOrientation = D3DDDI_ROTATION_180;
+            break;
+        case D3DKMDT_VPPR_ROTATE270:
+            Mode.DisplayOrientation = D3DDDI_ROTATION_270;
+            break;
+        default:
+            Mode.DisplayOrientation = D3DDDI_ROTATION_IDENTITY;
+            break;
+    }
+
+    CurrentMode->DisplayMode = Mode;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    return Status;
+}
+
 static NTSTATUS
 DxgkpReturnDefaultDisplayModeList(
     _Inout_ D3DKMT_GETDISPLAYMODELIST *pGetDisplayModeList)

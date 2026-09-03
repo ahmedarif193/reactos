@@ -2931,6 +2931,11 @@ DxgkGetDisplayModeList(
     _Inout_ D3DKMT_GETDISPLAYMODELIST *pGetDisplayModeList);
 
 NTSTATUS
+DxgkVidPnQueryCurrentDisplayMode(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ D3DKMT_CURRENTDISPLAYMODE *CurrentMode);
+
+NTSTATUS
 NTAPI
 DxgkSetVidPnSourceOwner(
     _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner);
