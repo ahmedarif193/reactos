@@ -3107,7 +3107,8 @@ typedef struct _D3DKMT_VIDMM_ESCAPE
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_7)
         struct
         {
-            UINT SegmentId;
+            UINT16 PhysicalAdapterIndex;
+            UINT16 SegmentId;
         } VerifyIntegrity;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
         struct
