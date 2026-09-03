@@ -6,5 +6,5 @@ config PROFILE_I386
     default generic
     depends ARCH=i386
     help
-      Select the generic i386 target profile. Optional modules are selected
-      independently in the Modules submenu.
+      Select the generic i386 target profile. Optional image contents are
+      selected independently in the Image contents and tests submenu.
