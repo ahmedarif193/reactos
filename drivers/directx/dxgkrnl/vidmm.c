@@ -423,7 +423,13 @@ static BOOLEAN DxgkpVidMmValidateAllocationSegmentSets(_In_ PDXGKRNL_ADAPTER Ada
         if ((AllocInfo->SupportedWriteSegmentSet & (1UL << Index)) != 0 && Segment->Flags.PitchAlignment)
             SupportsPitchAlignedSegment = TRUE;
     }
-    if (SupportsPitchAlignedSegment != (AllocInfo->PitchAlignedSize != 0) || (AllocInfo->PitchAlignedSize != 0 && AllocInfo->PitchAlignedSize < AllocInfo->Size))
+    /* A miniport may return a nonzero PitchAlignedSize even when none of the
+     * supported segments uses pitch alignment.  In that case VidMm ignores
+     * it.  It becomes required and size-validated only when such a segment
+     * can actually be selected. */
+    if (SupportsPitchAlignedSegment &&
+        (AllocInfo->PitchAlignedSize == 0 ||
+         AllocInfo->PitchAlignedSize < AllocInfo->Size))
         return FALSE;
     PreferredIds[0] = AllocInfo->PreferredSegment.SegmentId0;
     PreferredIds[1] = AllocInfo->PreferredSegment.SegmentId1;
