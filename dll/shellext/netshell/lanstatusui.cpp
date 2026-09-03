@@ -376,10 +376,10 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
     {
         if (pProperties->dwCharacter & NCCF_SHOW_ICON)
         {
-            if (hwndDlg)
-                nid.hIcon = (HICON)CopyImage(hIcon, IMAGE_ICON, 16, 16, LR_COPYFROMRESOURCE);
-            else
-                nid.hIcon = hIcon;
+            nid.hIcon = (HICON)CopyImage(hIcon, IMAGE_ICON,
+                                         GetSystemMetrics(SM_CXSMICON),
+                                         GetSystemMetrics(SM_CYSMICON),
+                                         LR_COPYFROMRESOURCE);
 
             if (nid.hIcon)
                 nid.uFlags |= NIF_ICON;
@@ -1351,10 +1351,12 @@ CLanStatus::EnumerateTrayConnections()
                 nid.dwStateMask = NIS_HIDDEN;
                 nid.uFlags |= NIF_STATE;
             }
-            if (pProps->Status == NCS_MEDIA_DISCONNECTED || pProps->Status == NCS_DISCONNECTED || pProps->Status == NCS_HARDWARE_DISABLED)
-                nid.hIcon = LoadIcon(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_OFF));
-            else if (pProps->Status == NCS_CONNECTED)
-                nid.hIcon = LoadIcon(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED));
+            nid.hIcon = (HICON)LoadImage(netshell_hInstance,
+                                         MAKEINTRESOURCE(pProps->Status == NCS_CONNECTED ?
+                                                         IDI_NET_TRAY_WIRED : IDI_NET_TRAY_OFF),
+                                         IMAGE_ICON,
+                                         GetSystemMetrics(SM_CXSMICON),
+                                         GetSystemMetrics(SM_CYSMICON), 0);
 
             if (nid.hIcon)
                 nid.uFlags |= NIF_ICON;
