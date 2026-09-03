@@ -62,6 +62,9 @@ VOID DxgkDeviceWorkCoreTransitionTerminal(_Inout_opt_ PDXGK_DEVICE_WORK_LEDGER L
 BOOLEAN DxgkDeviceWorkCoreTryTransitionTerminal(_Inout_opt_ PDXGK_DEVICE_WORK_LEDGER Ledger, _Inout_opt_ volatile LONG *State, _In_ LONG ExpectedValue, _In_ LONG NewValue);
 NTSTATUS DxgkDeviceWorkCoreCaptureSnapshot(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _Out_ PDXGK_DEVICE_WORK_SNAPSHOT Snapshot);
 NTSTATUS DxgkDeviceWorkCoreWaitForSnapshot(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _In_ const DXGK_DEVICE_WORK_SNAPSHOT *Snapshot, _Inout_opt_ PKEVENT ArmedEvent);
+/* Deadline is an absolute system time (KeQuerySystemTime units); NULL waits
+ * without limit.  STATUS_TIMEOUT means the snapshot had not drained. */
+NTSTATUS DxgkDeviceWorkCoreWaitForSnapshotUntil(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _In_ const DXGK_DEVICE_WORK_SNAPSHOT *Snapshot, _In_opt_ PLARGE_INTEGER Deadline);
 NTSTATUS DxgkDeviceWorkCoreWaitForIdle(_Inout_ PDXGK_DEVICE_WORK_LEDGER Ledger, _Inout_opt_ PKEVENT ArmedEvent);
 BOOLEAN DxgkDeviceWorkCoreIsEmpty(_Inout_opt_ PDXGK_DEVICE_WORK_LEDGER Ledger);
 

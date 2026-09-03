@@ -469,6 +469,73 @@ DxgkDeviceWorkTestConditionalTerminalTransition(VOID)
         DxgkDeviceWorkItemDormant);
 }
 
+/*
+ * A bounded snapshot wait must report STATUS_TIMEOUT while work accepted
+ * before the snapshot is still outstanding, must not be extended by work
+ * accepted after the snapshot, and must succeed once the earlier work
+ * completes.  This is the contract DestroyAllocation relies on to defer
+ * destruction until commands queued before the request have finished.
+ */
+static VOID DxgkDeviceWorkTestBoundedSnapshotWait(VOID)
+{
+    DXGK_DEVICE_WORK_TEST_OWNER Owner;
+    DXGK_DEVICE_WORK_ITEM Earlier;
+    DXGK_DEVICE_WORK_ITEM Later;
+    DXGK_DEVICE_WORK_SNAPSHOT Snapshot;
+    LARGE_INTEGER Deadline;
+    NTSTATUS Status;
+
+    DxgkDeviceWorkTestInitializeOwner(&Owner);
+    DxgkDeviceWorkCoreInitializeItem(&Earlier, &Owner.Ledger);
+    DxgkDeviceWorkCoreInitializeItem(&Later, &Owner.Ledger);
+
+    /* Nothing outstanding: a bounded wait returns at once. */
+    Status = DxgkDeviceWorkCoreCaptureSnapshot(&Owner.Ledger, &Snapshot);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    KeQuerySystemTime(&Deadline);
+    Deadline.QuadPart += 10LL * 1000LL * 10LL; /* 10 ms */
+    Status = DxgkDeviceWorkCoreWaitForSnapshotUntil(&Owner.Ledger, &Snapshot, &Deadline);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    /* Earlier work is outstanding at the snapshot: the bounded wait times out. */
+    Status = DxgkDeviceWorkCoreActivate(&Earlier);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = DxgkDeviceWorkCoreCaptureSnapshot(&Owner.Ledger, &Snapshot);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    KeQuerySystemTime(&Deadline);
+    Deadline.QuadPart += 50LL * 1000LL * 10LL; /* 50 ms */
+    Status = DxgkDeviceWorkCoreWaitForSnapshotUntil(&Owner.Ledger, &Snapshot, &Deadline);
+    ok_eq_hex(Status, STATUS_TIMEOUT);
+    ok_eq_long(InterlockedCompareExchange(&Earlier.State, 0, 0), DxgkDeviceWorkItemActive);
+
+    /* Work accepted after the snapshot does not extend the wait. */
+    Status = DxgkDeviceWorkCoreActivate(&Later);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    DxgkDeviceWorkCoreComplete(&Earlier);
+    KeQuerySystemTime(&Deadline);
+    Deadline.QuadPart += 50LL * 1000LL * 10LL;
+    Status = DxgkDeviceWorkCoreWaitForSnapshotUntil(&Owner.Ledger, &Snapshot, &Deadline);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_long(InterlockedCompareExchange(&Later.State, 0, 0), DxgkDeviceWorkItemActive);
+    ok_bool_false(DxgkDeviceWorkCoreIsEmpty(&Owner.Ledger), "later work still outstanding");
+
+    /* A terminal owner ends a bounded wait with the terminal status. */
+    Status = DxgkDeviceWorkCoreCaptureSnapshot(&Owner.Ledger, &Snapshot);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    DxgkDeviceWorkCoreTransitionTerminal(&Owner.Ledger, &Owner.ExecutionState, DxgkDeviceWorkTestReset);
+    KeQuerySystemTime(&Deadline);
+    Deadline.QuadPart += 50LL * 1000LL * 10LL;
+    Status = DxgkDeviceWorkCoreWaitForSnapshotUntil(&Owner.Ledger, &Snapshot, &Deadline);
+    ok_eq_hex(Status, STATUS_DEVICE_REMOVED);
+    DxgkDeviceWorkCoreComplete(&Later);
+    ok_bool_true(DxgkDeviceWorkCoreIsEmpty(&Owner.Ledger), "ledger drained after completion");
+
+    /* A foreign snapshot is rejected. */
+    Snapshot.Ledger = NULL;
+    Status = DxgkDeviceWorkCoreWaitForSnapshotUntil(&Owner.Ledger, &Snapshot, NULL);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+}
+
 START_TEST(DxgkDeviceWork)
 {
     DxgkDeviceWorkTestDormantIdempotentOverflow();
@@ -481,4 +548,5 @@ START_TEST(DxgkDeviceWork)
     DxgkDeviceWorkTestTerminalWake(DxgkDeviceWorkTerminalCallback);
     DxgkDeviceWorkTestSnapshotAndIsolation();
     DxgkDeviceWorkTestConditionalTerminalTransition();
+    DxgkDeviceWorkTestBoundedSnapshotWait();
 }
