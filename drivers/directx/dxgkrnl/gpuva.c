@@ -5039,33 +5039,61 @@ DxgkGpuVaReserveDriverRange(
 
     PAGED_CODE();
 
-    if (Process == NULL || Process->Adapter != Adapter || OutAddress == NULL ||
-        SizeInBytes == 0 || Alignment == 0 ||
-        (Alignment & (Alignment - 1)) != 0 ||
-        !GpuVaGetDriverReservationGeometry(Adapter,
-                                            &LeafEntryCoverage,
-                                            &FirstDriverAddress,
-                                            &AddressSpaceEnd))
+    /*
+     * DXGKARGCB_RESERVEGPUVIRTUALADDRESSRANGE.Alignment carries no documented
+     * lower bound: zero means the miniport has no alignment requirement beyond
+     * the one the page tables already impose.  Rejecting it made every such
+     * request fail STATUS_INVALID_PARAMETER, which took DxgkDdiCreateProcess
+     * down with it.  Treat zero as "leaf granularity" and note that computing
+     * (Alignment - 1) on zero would underflow the mask below.
+     */
+    if (Process == NULL || OutAddress == NULL || SizeInBytes == 0 ||
+        (Alignment != 0 && (Alignment & (Alignment - 1)) != 0))
     {
+        DPRINT1("DxgkGpuVaReserveDriverRange: bad arguments process=%p out=%p "
+                "base=0x%I64x size=0x%I64x align=0x%lx\n",
+                Process, OutAddress, BaseAddress, SizeInBytes, Alignment);
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (Process->Adapter != Adapter)
+    {
+        DPRINT1("DxgkGpuVaReserveDriverRange: process %p belongs to adapter %p, "
+                "reservation is for adapter %p\n",
+                Process, Process->Adapter, Adapter);
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!GpuVaGetDriverReservationGeometry(Adapter,
+                                           &LeafEntryCoverage,
+                                           &FirstDriverAddress,
+                                           &AddressSpaceEnd))
+    {
+        DPRINT1("DxgkGpuVaReserveDriverRange: no reservation geometry for adapter %p "
+                "(mmucaps=%u pagetablelevels=%u levels=%lu vabits=%u)\n",
+                Adapter,
+                Adapter != NULL ? Adapter->GpuMmuCapsValid : 0,
+                Adapter != NULL ? Adapter->PageTableLevelsValid : 0,
+                Adapter != NULL ? GpuVaLevelCount(Adapter) : 0,
+                Adapter != NULL ? Adapter->GpuMmuCaps.VirtualAddressBitCount : 0);
         return STATUS_INVALID_PARAMETER;
     }
 
     *OutAddress = 0;
-    if ((SizeInBytes & (LeafEntryCoverage - 1)) != 0)
-        return STATUS_INVALID_PARAMETER;
-
     EffectiveAlignment = max((ULONGLONG)Alignment, LeafEntryCoverage);
-    if (BaseAddress != 0 &&
-        ((BaseAddress & (LeafEntryCoverage - 1)) != 0 ||
-         (BaseAddress & (Alignment - 1)) != 0 ||
-         BaseAddress < FirstDriverAddress ||
-         BaseAddress >= AddressSpaceEnd ||
-         SizeInBytes > AddressSpaceEnd - BaseAddress))
+
+    if ((SizeInBytes & (LeafEntryCoverage - 1)) != 0 ||
+        (BaseAddress != 0 &&
+         ((BaseAddress & (EffectiveAlignment - 1)) != 0 ||
+          BaseAddress < FirstDriverAddress ||
+          BaseAddress >= AddressSpaceEnd ||
+          SizeInBytes > AddressSpaceEnd - BaseAddress)) ||
+        (BaseAddress == 0 && SizeInBytes > AddressSpaceEnd - FirstDriverAddress))
     {
+        DPRINT1("DxgkGpuVaReserveDriverRange: rejected base=0x%I64x size=0x%I64x "
+                "align=0x%lx effalign=0x%I64x leaf=0x%I64x first=0x%I64x end=0x%I64x\n",
+                BaseAddress, SizeInBytes, Alignment, EffectiveAlignment,
+                LeafEntryCoverage, FirstDriverAddress, AddressSpaceEnd);
         return STATUS_INVALID_PARAMETER;
     }
-    if (BaseAddress == 0 && SizeInBytes > AddressSpaceEnd - FirstDriverAddress)
-        return STATUS_INVALID_PARAMETER;
 
     Range = GpuVaAllocRange();
     if (Range == NULL)
