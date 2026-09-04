@@ -113,7 +113,7 @@ HTHEME GetNCCaptionTheme(HWND hWnd, DWORD style)
 
     /* If the theme data was not cached, open it now */
     if (!pwndData->hthemeWindow)
-        pwndData->hthemeWindow = OpenThemeDataEx(hWnd, L"WINDOW", OTD_NONCLIENT);
+        pwndData->hthemeWindow = UXTHEME_OpenNcThemeData(hWnd, L"WINDOW", OTD_NONCLIENT);
 
     return pwndData->hthemeWindow;
 }
@@ -143,7 +143,7 @@ HTHEME GetNCScrollbarTheme(HWND hWnd, DWORD style)
 
     /* If the theme data was not cached, open it now */
     if (!pwndData->hthemeScrollbar)
-        pwndData->hthemeScrollbar = OpenThemeDataEx(hWnd, L"SCROLLBAR", OTD_NONCLIENT);
+        pwndData->hthemeScrollbar = UXTHEME_OpenNcThemeData(hWnd, L"SCROLLBAR", OTD_NONCLIENT);
 
     return pwndData->hthemeScrollbar;
 }
