@@ -22,7 +22,7 @@
 #endif
 
 #if !defined(WINBASEAPI)
-#if !defined(_KERNEL32_)
+#if !defined(_KERNEL32_) && !defined(_KERNELBASE_)
 #define WINBASEAPI DECLSPEC_IMPORT
 #else
 #define WINBASEAPI

@@ -100,7 +100,6 @@ VidSchpBugCheckInvalidFence(
  * dxgkrnl asks for a move and is told whether the engine took it.
  */
 static BOOLEAN VidSchpTryTransitionEngine(_In_ PVIDSCH_ENGINE Engine, _In_ VIDSCH_ENGINE_STATE Expected, _In_ VIDSCH_ENGINE_STATE New);
-static BOOLEAN VidSchpForceEngineState(_In_ PVIDSCH_ENGINE Engine, _In_ VIDSCH_ENGINE_STATE New);
 static NTSTATUS VidSchpTransitionEngineEx(_In_ PVIDSCH_ENGINE Engine, _In_ VIDSCH_ENGINE_STATE Expected, _In_ VIDSCH_ENGINE_STATE New, _Out_ VIDSCH_ENGINE_STATE *OutPrevious);
 
 /*
@@ -710,18 +709,6 @@ VidSchpTransitionEngineEx(
     return Status;
 }
 
-static BOOLEAN
-VidSchpForceEngineState(
-    _In_ PVIDSCH_ENGINE Engine,
-    _In_ VIDSCH_ENGINE_STATE New)
-{
-    PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched = VidSchpScheduler(Engine->Adapter);
-
-    if (Sched == NULL)
-        return FALSE;
-    return NT_SUCCESS(Sched->SetEngineState(Sched->SchedulerHandle, Engine->SchedulerOrdinal, DXGMMS2_ENGINE_STATE_ANY, (ULONG)New, NULL));
-}
-
 static ULONG
 VidSchpEnginePendingCount(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG EngineOrdinal)
 {
@@ -938,11 +925,6 @@ VOID VidSchDereferenceContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
 {
     if (Packet != NULL)
         VidSchpDereferencePacket(Packet);
-}
-
-static BOOLEAN VidSchpPacketSubmissionOwned(_In_ PVIDSCH_DMA_PACKET Packet)
-{
-    return Packet->Kicked || InterlockedCompareExchange(&Packet->ContextOrderResubmissionPending, 0, 0) != 0;
 }
 
 /* ========================================================================
@@ -2551,7 +2533,6 @@ VidSchDestroy(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     PVIDSCH_CONTEXT Ctx;
-    ULONG i;
 
     PAGED_CODE();
 
@@ -2685,10 +2666,8 @@ VidSchSubmitCommand(
     PVIDSCH_CONTEXT Ctx;
     PVIDSCH_ENGINE Engine;
     PVIDSCH_DMA_PACKET Packet;
-    KIRQL OldIrql;
     ULONG FenceId;
     ULONG AdmittedFenceId;
-    PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -4411,8 +4390,6 @@ VidSchCompleteAdapterReset(
     _In_ BOOLEAN ResetSucceeded)
 {
     PVIDSCH_CONTEXT Ctx;
-    LIST_ENTRY RetireList;
-    PLIST_ENTRY Link;
     BOOLEAN LifecycleRecovered = ResetSucceeded;
     ULONG i;
 

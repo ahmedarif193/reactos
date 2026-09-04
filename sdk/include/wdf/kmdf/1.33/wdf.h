@@ -68,6 +68,11 @@ extern WDFFUNC WdfDriverMiniportUnloadOverride;
 
 _Analysis_mode_(KMDF_INCLUDED)
 
+#if defined(__GNUC__) && !defined(__clang__) && !defined(__cplusplus)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wold-style-declaration"
+#endif
+
 // Basic definitions
 #include "wdftypes.h"
 #include "wdfglobals.h"
@@ -128,6 +133,10 @@ _Analysis_mode_(KMDF_INCLUDED)
 
 
 #include "wdfcompaniontarget.h"
+
+#if defined(__GNUC__) && !defined(__clang__) && !defined(__cplusplus)
+#pragma GCC diagnostic pop
+#endif
 
 
 

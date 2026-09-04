@@ -30,3 +30,12 @@ typedef struct
 #define __MINGW_NOTHROW
 #include <float.h>
 #endif
+
+#if defined(__GNUC__) && !defined(__clang__) && defined(__cplusplus)
+#ifndef __CRT__NO_INLINE
+#define __CRT__NO_INLINE 1
+#endif
+#include <cstddef>
+#include <math.h>
+#undef __valid
+#endif

@@ -2465,7 +2465,6 @@ DxgkProcessCleanup(
 {
     PDXGKRNL_ADAPTER Snapshot[DXGK_MAX_ADAPTERS];
     ULONG            Count, i;
-    PLIST_ENTRY      DevEntry;
 
     UNREFERENCED_PARAMETER(ProcessId);
 

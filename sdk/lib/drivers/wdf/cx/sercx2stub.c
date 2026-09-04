@@ -15,7 +15,7 @@
 PVOID SercxDriverGlobals;
 PVOID SercxFunctions[35];
 
-__declspec(allocate(".kmdfclassbind$b"))
+DATA_SEG(".kmdfclassbind$b")
 WDF_CLASS_BIND_INFO _SerCx_BIND_INFO =
 {
     sizeof(WDF_CLASS_BIND_INFO),

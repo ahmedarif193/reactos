@@ -250,7 +250,7 @@ Status SQLiteIndex::ScanTablePage(std::uint32_t pageNumber, const RowCallback &c
             return Status::Fail(ERROR_BAD_FORMAT, "WinGet index B-tree cell points outside its page");
         if (interior)
         {
-            if (cellOffset + 4 > pageSize_)
+            if (static_cast<std::uint32_t>(cellOffset) + 4 > pageSize_)
                 return Status::Fail(ERROR_BAD_FORMAT, "WinGet index interior cell is truncated");
             Status status = ScanTablePage(ReadBe32(page + cellOffset), callback, visited);
             if (!status)
@@ -323,7 +323,7 @@ Status SQLiteIndex::ScanIndexPage(std::uint32_t pageNumber, const RowCallback &c
         std::size_t cursor = cellOffset;
         if (interior)
         {
-            if (cellOffset + 4 > pageSize_)
+            if (static_cast<std::uint32_t>(cellOffset) + 4 > pageSize_)
                 return Status::Fail(ERROR_BAD_FORMAT, "WinGet index interior cell is truncated");
             Status status = ScanIndexPage(ReadBe32(page + cursor), callback, visited);
             if (!status)

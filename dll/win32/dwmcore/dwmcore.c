@@ -253,15 +253,6 @@ DwmListRemoveHead(PLIST_ENTRY Head)
     return Entry;
 }
 
-static void
-DwmListInsertTail(PLIST_ENTRY Head, PLIST_ENTRY Entry)
-{
-    Entry->Blink = Head->Blink;
-    Entry->Flink = Head;
-    Head->Blink->Flink = Entry;
-    Head->Blink = Entry;
-}
-
 C_ASSERT(sizeof(IDwmChannelPrivateVtbl) == 103 * sizeof(PVOID));
 C_ASSERT(FIELD_OFFSET(IDwmChannelPrivateVtbl, WaitForNextMessage) ==
          7 * sizeof(PVOID));
