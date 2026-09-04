@@ -3944,10 +3944,16 @@ Cleanup:
         DxgkVidMmDereferenceAllocation(Allocation);
     if (!NT_SUCCESS(Status))
     {
-        if (AllocationHandle != NULL)
-            (VOID)DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
         if (Resource != NULL)
+        {
             (VOID)DxgkpVidMmDestroyResourceWrapper(Adapter, Resource);
+            Resource = NULL;
+            AllocationHandle = NULL;
+        }
+        else if (AllocationHandle != NULL)
+        {
+            (VOID)DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
+        }
     }
     if (AllocationPrivateData != NULL)
         ExFreePoolWithTag(AllocationPrivateData, TAG_DXGK_DISPLAY);
