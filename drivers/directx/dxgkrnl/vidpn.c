@@ -1400,10 +1400,14 @@ DxgkpSnapshotHotPlugMonitor(
         return STATUS_RETRY;
     }
     KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
-    if (ConnectedCount > 1 || VidPn->NumSources != 1)
+    if (ConnectedCount > 1)
         return STATUS_NOT_SUPPORTED;
+    /* Nothing connected is a complete answer for any adapter; the single
+     * source this implementation drives only matters once a path exists. */
     if (!Snapshot->Connected)
         return STATUS_SUCCESS;
+    if (VidPn->NumSources != 1)
+        return STATUS_NOT_SUPPORTED;
     if (VidPn->NumTargets == 1)
         Snapshot->TargetId = 0;
     else if (Snapshot->ChildUid < VidPn->NumTargets)
@@ -1882,8 +1886,12 @@ DxgkpRecommendTopologyFallback(
     /* The driver wrote into our VidPn.  Whatever it built has to still be a
      * VidPn this adapter can drive, or the negotiation continues on something
      * malformed and fails much later with a less useful status. */
-    if (VidPn->Signature != DXGKP_VIDPN_SIGNATURE || VidPn->NumSources != 1 || VidPn->NumPaths > 1)
+    /* An empty topology needs no source; a path still drives source 0 only. */
+    if (VidPn->Signature != DXGKP_VIDPN_SIGNATURE || VidPn->NumPaths > 1 ||
+        (VidPn->NumPaths != 0 && VidPn->NumSources != 1))
+    {
         return STATUS_GRAPHICS_INVALID_VIDPN;
+    }
     return STATUS_SUCCESS;
 }
 
@@ -1968,8 +1976,12 @@ DxgkpRecommendHotPlugCandidate(
     }
     if (!NT_SUCCESS(Status))
         return Status;
-    if (VidPn->Signature != DXGKP_VIDPN_SIGNATURE || VidPn->NumSources != 1 || VidPn->NumPaths > 1)
+    /* An empty topology needs no source; a path still drives source 0 only. */
+    if (VidPn->Signature != DXGKP_VIDPN_SIGNATURE || VidPn->NumPaths > 1 ||
+        (VidPn->NumPaths != 0 && VidPn->NumSources != 1))
+    {
         return STATUS_GRAPHICS_INVALID_VIDPN;
+    }
     return STATUS_SUCCESS;
 }
 
