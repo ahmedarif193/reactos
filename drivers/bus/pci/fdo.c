@@ -556,13 +556,14 @@ FdoStartDevice(
                 }
                 break;
 
+            case CmResourceTypeMemoryLarge:
             case CmResourceTypeMemory:
                 if ((ResourceDescriptor->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE) &&
-                    ResourceDescriptor->u.Memory.Length != 0 &&
+                    PciMemoryDescriptorLength(ResourceDescriptor) != 0 &&
                     DeviceExtension->MemoryWindowCount < PCI_MAX_ADDRESS_WINDOWS)
                 {
                     PPCI_ADDRESS_WINDOW Window = &DeviceExtension->MemoryWindows[DeviceExtension->MemoryWindowCount];
-                    ULONGLONG Length = ResourceDescriptor->u.Memory.Length;
+                    ULONGLONG Length = PciMemoryDescriptorLength(ResourceDescriptor);
 
                     Window->Start = ResourceDescriptor->u.Memory.Start.QuadPart;
                     if (Window->Start > MAXULONGLONG - (Length - 1))

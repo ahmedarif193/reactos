@@ -546,3 +546,57 @@ DriverEntry(
     IN PUNICODE_STRING RegistryPath);
 
 #endif /* _PCI_PCH_ */
+
+FORCEINLINE
+ULONGLONG
+PciMemoryDescriptorLength(
+    _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor)
+{
+    USHORT LargeType;
+
+    if (Descriptor->Type != CmResourceTypeMemoryLarge)
+        return Descriptor->u.Memory.Length;
+
+    LargeType = Descriptor->Flags & CM_RESOURCE_MEMORY_LARGE;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_40)
+        return (ULONGLONG)Descriptor->u.Memory40.Length40 << 8;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_48)
+        return (ULONGLONG)Descriptor->u.Memory48.Length48 << 16;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_64)
+        return (ULONGLONG)Descriptor->u.Memory64.Length64 << 32;
+
+    return 0;
+}
+
+FORCEINLINE
+VOID
+PciSetMemoryDescriptor(
+    _Inout_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor,
+    _In_ ULONGLONG Start,
+    _In_ ULONGLONG Length)
+{
+    Descriptor->u.Memory.Start.QuadPart = (LONGLONG)Start;
+    if (Length <= MAXULONG)
+    {
+        Descriptor->Type = CmResourceTypeMemory;
+        Descriptor->u.Memory.Length = (ULONG)Length;
+        return;
+    }
+
+    Descriptor->Type = CmResourceTypeMemoryLarge;
+    if ((Length & 0xFF) == 0 && (Length >> 8) <= MAXULONG)
+    {
+        Descriptor->Flags |= CM_RESOURCE_MEMORY_LARGE_40;
+        Descriptor->u.Memory40.Length40 = (ULONG)(Length >> 8);
+    }
+    else if ((Length & 0xFFFF) == 0 && (Length >> 16) <= MAXULONG)
+    {
+        Descriptor->Flags |= CM_RESOURCE_MEMORY_LARGE_48;
+        Descriptor->u.Memory48.Length48 = (ULONG)(Length >> 16);
+    }
+    else
+    {
+        Descriptor->Flags |= CM_RESOURCE_MEMORY_LARGE_64;
+        Descriptor->u.Memory64.Length64 = (ULONG)(Length >> 32);
+    }
+}

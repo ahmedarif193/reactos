@@ -2188,6 +2188,60 @@ PciPdoRoutedInterruptLine(
 
 #define PCI_MAX_BASE_RESOURCE_DESCRIPTORS 64
 
+/*
+ * Fills the length, alignment and address range of a memory requirement,
+ * choosing the ordinary or the large-memory descriptor as the length needs.
+ * The caller has already set the flags that describe the window itself; only
+ * the size-class bits are added here.
+ */
+static
+VOID
+PciPdoSetMemoryRequirement(
+    _Inout_ PIO_RESOURCE_DESCRIPTOR Descriptor,
+    _In_ ULONGLONG Length,
+    _In_ ULONGLONG Alignment,
+    _In_ ULONGLONG Minimum,
+    _In_ ULONGLONG Maximum)
+{
+    if (Length <= MAXULONG)
+    {
+        Descriptor->Type = CmResourceTypeMemory;
+        Descriptor->u.Memory.Length = (ULONG)Length;
+        Descriptor->u.Memory.Alignment = (ULONG)Alignment;
+        Descriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
+        Descriptor->u.Memory.MaximumAddress.QuadPart = Maximum;
+        return;
+    }
+
+    Descriptor->Type = CmResourceTypeMemoryLarge;
+    if (Length <= CM_RESOURCE_MEMORY_LARGE_40_MAXLEN &&
+        (Length & 0xFF) == 0 && (Alignment & 0xFF) == 0)
+    {
+        Descriptor->Flags |= CM_RESOURCE_MEMORY_LARGE_40;
+        Descriptor->u.Memory40.Length40 = (ULONG)(Length >> 8);
+        Descriptor->u.Memory40.Alignment40 = (ULONG)(Alignment >> 8);
+        Descriptor->u.Memory40.MinimumAddress.QuadPart = Minimum;
+        Descriptor->u.Memory40.MaximumAddress.QuadPart = Maximum;
+    }
+    else if (Length <= CM_RESOURCE_MEMORY_LARGE_48_MAXLEN &&
+             (Length & 0xFFFF) == 0 && (Alignment & 0xFFFF) == 0)
+    {
+        Descriptor->Flags |= CM_RESOURCE_MEMORY_LARGE_48;
+        Descriptor->u.Memory48.Length48 = (ULONG)(Length >> 16);
+        Descriptor->u.Memory48.Alignment48 = (ULONG)(Alignment >> 16);
+        Descriptor->u.Memory48.MinimumAddress.QuadPart = Minimum;
+        Descriptor->u.Memory48.MaximumAddress.QuadPart = Maximum;
+    }
+    else
+    {
+        Descriptor->Flags |= CM_RESOURCE_MEMORY_LARGE_64;
+        Descriptor->u.Memory64.Length64 = (ULONG)(Length >> 32);
+        Descriptor->u.Memory64.Alignment64 = (ULONG)(Alignment >> 32);
+        Descriptor->u.Memory64.MinimumAddress.QuadPart = Minimum;
+        Descriptor->u.Memory64.MaximumAddress.QuadPart = Maximum;
+    }
+}
+
 static
 VOID
 PciPdoInitializeBarRequirement(
@@ -2195,9 +2249,11 @@ PciPdoInitializeBarRequirement(
     _In_ UCHAR Option,
     _In_ ULONGLONG Minimum,
     _In_ ULONGLONG Maximum,
-    _In_ ULONG Length,
+    _In_ ULONGLONG Length,
     _In_ ULONG Flags)
 {
+    ULONGLONG Alignment = (Option == IO_RESOURCE_PREFERRED) ? 1 : Length;
+
     RtlZeroMemory(Descriptor, sizeof(*Descriptor));
     Descriptor->Option = Option;
     Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
@@ -2209,22 +2265,23 @@ PciPdoInitializeBarRequirement(
                             CM_RESOURCE_PORT_16_BIT_DECODE |
                             CM_RESOURCE_PORT_POSITIVE_DECODE |
                             CM_RESOURCE_PORT_BAR;
-        Descriptor->u.Port.Length = Length;
-        Descriptor->u.Port.Alignment = (Option == IO_RESOURCE_PREFERRED) ? 1 : Length;
+        Descriptor->u.Port.Length = (ULONG)Length;
+        Descriptor->u.Port.Alignment = (ULONG)Alignment;
         Descriptor->u.Port.MinimumAddress.QuadPart = Minimum;
         Descriptor->u.Port.MaximumAddress.QuadPart = Maximum;
+        return;
     }
-    else
-    {
-        Descriptor->Type = CmResourceTypeMemory;
-        Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
-                            CM_RESOURCE_MEMORY_BAR |
-            ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
-        Descriptor->u.Memory.Length = Length;
-        Descriptor->u.Memory.Alignment = (Option == IO_RESOURCE_PREFERRED) ? 1 : Length;
-        Descriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
-        Descriptor->u.Memory.MaximumAddress.QuadPart = Maximum;
-    }
+
+    /*
+     * A length of 4 GB or more does not fit the ordinary descriptor, so it is
+     * published as a large-memory requirement instead.  A discrete graphics
+     * adapter that exposes its whole video memory through one aperture needs
+     * this: dropping the requirement starts the device with no frame buffer.
+     */
+    Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
+                        CM_RESOURCE_MEMORY_BAR |
+        ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
+    PciPdoSetMemoryRequirement(Descriptor, Length, Alignment, Minimum, Maximum);
 }
 
 static
@@ -2245,12 +2302,12 @@ PciPdoAppendBarRequirements(
     BOOLEAN HasPreferred = (Base != 0);
     BOOLEAN IsLegacyMemoryBar = !(Flags & PCI_ADDRESS_IO_SPACE) && ((Flags & PCI_ADDRESS_MEMORY_TYPE_MASK) == PCI_TYPE_20BIT);
 
-    if (Length == 0 || Length > MAXULONG)
+    if (Length == 0)
         return Descriptor;
 
     if (HasPreferred && Descriptor < DescriptorEnd)
     {
-        PciPdoInitializeBarRequirement(Descriptor++, IO_RESOURCE_PREFERRED, Base, Base + Length - 1, (ULONG)Length, Flags);
+        PciPdoInitializeBarRequirement(Descriptor++, IO_RESOURCE_PREFERRED, Base, Base + Length - 1, Length, Flags);
     }
 
     if (FdoExtension)
@@ -2300,7 +2357,7 @@ PciPdoAppendBarRequirements(
         if (Minimum > Maximum || AlignmentMask > Maximum - Minimum)
             continue;
 
-        PciPdoInitializeBarRequirement(Descriptor++, (!HasPreferred && !AddedAlternative) ? 0 : IO_RESOURCE_ALTERNATIVE, Minimum, Maximum, (ULONG)Length, Flags);
+        PciPdoInitializeBarRequirement(Descriptor++, (!HasPreferred && !AddedAlternative) ? 0 : IO_RESOURCE_ALTERNATIVE, Minimum, Maximum, Length, Flags);
         AddedAlternative = TRUE;
     }
 
@@ -2311,7 +2368,7 @@ PciPdoAppendBarRequirements(
 
         if (!(Flags & PCI_ADDRESS_IO_SPACE) && !IsLegacyMemoryBar && Minimum < 0x100000)
             Minimum = 0x100000;
-        PciPdoInitializeBarRequirement(Descriptor++, HasPreferred ? IO_RESOURCE_ALTERNATIVE : 0, Minimum, MaximumAddress, (ULONG)Length, Flags);
+        PciPdoInitializeBarRequirement(Descriptor++, HasPreferred ? IO_RESOURCE_ALTERNATIVE : 0, Minimum, MaximumAddress, Length, Flags);
     }
 
     return Descriptor;
@@ -2598,30 +2655,34 @@ PdoQueryResourceRequirements(
             {
                 ULONGLONG PrefLength = PrefLimitFull - PrefBaseFull + 1;
 
+                /* A 64-bit prefetchable window carries the whole video
+                 * memory of a discrete adapter, so it routinely exceeds 4 GB
+                 * and has to keep its full length. */
+
                 /* Preferred: current assignment */
                 Descriptor->Option = IO_RESOURCE_PREFERRED;
-                Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
                 Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
                                     CM_RESOURCE_MEMORY_PREFETCHABLE |
                                     CM_RESOURCE_MEMORY_WINDOW_DECODE;
-                Descriptor->u.Memory.Length = (ULONG)PrefLength;
-                Descriptor->u.Memory.Alignment = 1;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = PrefBaseFull;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = PrefBaseFull + PrefLength - 1;
+                PciPdoSetMemoryRequirement(Descriptor,
+                                           PrefLength,
+                                           1,
+                                           PrefBaseFull,
+                                           PrefBaseFull + PrefLength - 1);
                 Descriptor++;
 
                 /* Alternative: any valid range */
                 Descriptor->Option = IO_RESOURCE_ALTERNATIVE;
-                Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
                 Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
                                     CM_RESOURCE_MEMORY_PREFETCHABLE |
                                     CM_RESOURCE_MEMORY_WINDOW_DECODE;
-                Descriptor->u.Memory.Length = (ULONG)PrefLength;
-                Descriptor->u.Memory.Alignment = 0x100000;
-                Descriptor->u.Memory.MinimumAddress.QuadPart = 0x100000;
-                Descriptor->u.Memory.MaximumAddress.QuadPart = PrefMax;
+                PciPdoSetMemoryRequirement(Descriptor,
+                                           PrefLength,
+                                           0x100000,
+                                           0x100000,
+                                           PrefMax);
                 Descriptor++;
             }
         }
@@ -2967,12 +3028,10 @@ PdoQueryResources(
             }
             else
             {
-                Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
                 Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
                     ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
-                Descriptor->u.Memory.Start.QuadPart = (ULONGLONG)Base;
-                Descriptor->u.Memory.Length = Length;
+                PciSetMemoryDescriptor(Descriptor, (ULONGLONG)Base, Length);
 
                 /* Enable memory space access */
                 DeviceExtension->PciDevice->EnableMemorySpace = TRUE;
@@ -3029,12 +3088,10 @@ PdoQueryResources(
             }
             else
             {
-                Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
                 Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
                     ((Flags & PCI_ADDRESS_MEMORY_PREFETCHABLE) ? CM_RESOURCE_MEMORY_PREFETCHABLE : 0);
-                Descriptor->u.Memory.Start.QuadPart = (ULONGLONG)Base;
-                Descriptor->u.Memory.Length = Length;
+                PciSetMemoryDescriptor(Descriptor, (ULONGLONG)Base, Length);
 
                 /* Enable memory space access */
                 DeviceExtension->PciDevice->EnableMemorySpace = TRUE;
@@ -3116,13 +3173,11 @@ PdoQueryResources(
             }
             if (PrefBaseFull <= PrefLimitFull)
             {
-                Descriptor->Type = CmResourceTypeMemory;
                 Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
                 Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE |
                                     CM_RESOURCE_MEMORY_PREFETCHABLE |
                                     CM_RESOURCE_MEMORY_WINDOW_DECODE;
-                Descriptor->u.Memory.Start.QuadPart = PrefBaseFull;
-                Descriptor->u.Memory.Length = (ULONG)(PrefLimitFull - PrefBaseFull + 1);
+                PciSetMemoryDescriptor(Descriptor, PrefBaseFull, PrefLimitFull - PrefBaseFull + 1);
                 Descriptor++;
             }
         }
@@ -3564,9 +3619,12 @@ PciPdoProgramType0Bars(
 
             if (AssignedCount >= RTL_NUMBER_OF(Assigned))
                 break;
-            if (PartialDescriptor->Type == CmResourceTypeMemory &&
+            if ((PartialDescriptor->Type == CmResourceTypeMemory ||
+                 PartialDescriptor->Type == CmResourceTypeMemoryLarge) &&
                 !(PartialDescriptor->Flags & CM_RESOURCE_MEMORY_WINDOW_DECODE))
             {
+                /* An aperture of 4 GB or more arrives as the large form; it
+                 * still describes one base address register. */
                 Assigned[AssignedCount++] = PartialDescriptor;
             }
             else if (PartialDescriptor->Type == CmResourceTypePort &&
@@ -3622,13 +3680,25 @@ PciPdoProgramType0Bars(
 
             if (Used[ResourceIndex])
                 continue;
-            if ((IsIo && Resource->Type != CmResourceTypePort) ||
-                (!IsIo && Resource->Type != CmResourceTypeMemory))
+            if (IsIo)
             {
-                continue;
+                if (Resource->Type != CmResourceTypePort)
+                    continue;
+                if (Resource->u.Port.Length != Length)
+                    continue;
             }
-            if (Resource->u.Memory.Length != Length)
-                continue;
+            else
+            {
+                /* An aperture of 4 GB or more comes back as the large-memory
+                 * type, whose length is scaled; match on the decoded value. */
+                if (Resource->Type != CmResourceTypeMemory &&
+                    Resource->Type != CmResourceTypeMemoryLarge)
+                {
+                    continue;
+                }
+                if (PciMemoryDescriptorLength(Resource) != Length)
+                    continue;
+            }
 
             AssignedBase = Resource->u.Memory.Start.QuadPart;
             Used[ResourceIndex] = TRUE;
@@ -3951,8 +4021,11 @@ PdoStartDevice(
                                           0x3c /* PCI_INTERRUPT_LINE */,
                                           sizeof(UCHAR));
             }
-            else if (RawPartialDesc->Type == CmResourceTypeMemory)
+            else if (RawPartialDesc->Type == CmResourceTypeMemory ||
+                     RawPartialDesc->Type == CmResourceTypeMemoryLarge)
             {
+                /* A device whose only aperture is 4 GB or more reports it in
+                 * the large form; it still needs memory decode enabled. */
                 HasMemResource = TRUE;
             }
             else if (RawPartialDesc->Type == CmResourceTypePort)
