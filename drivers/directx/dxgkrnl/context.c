@@ -2051,12 +2051,6 @@ DxgkCreateContextVirtual(
         DxgkpDereferenceDevice(Device);
         return STATUS_NOT_SUPPORTED;
     }
-    if (!pCreateContext->Flags.NullRendering && !DxgkGpuVaPageTableReady(Adapter, Device->ProcessRecord))
-    {
-        DxgkpDereferenceDevice(Device);
-        return STATUS_NOT_SUPPORTED;
-    }
-
     Context = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Context), TAG_DXGK_CONTEXT);
     if (Context == NULL)
     {
