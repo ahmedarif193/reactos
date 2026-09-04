@@ -770,7 +770,13 @@ static void UXTHEME_ApplyLiquidProperties(HWND hwnd, LPCWSTR classList,
 }
 #endif
 
+#ifdef __REACTOS__
+static HTHEME
+open_theme_data_prop(HWND hwnd, LPCWSTR pszClassList, DWORD flags, UINT dpi,
+                     BOOL bSetWindowProp)
+#else
 static HTHEME open_theme_data(HWND hwnd, LPCWSTR pszClassList, DWORD flags, UINT dpi)
+#endif
 {
     WCHAR szAppBuff[256];
     WCHAR szClassBuff[256];
@@ -829,13 +835,36 @@ static HTHEME open_theme_data(HWND hwnd, LPCWSTR pszClassList, DWORD flags, UINT
     else
         UXTHEME_ApplyLiquidProperties(hwnd, pszClassList, flags, dpi);
 #endif
+#ifdef __REACTOS__
+    if (bSetWindowProp && IsWindow(hwnd))
+#else
     if(IsWindow(hwnd))
+#endif
         SetPropW(hwnd, (LPCWSTR)MAKEINTATOM(atWindowTheme), hTheme);
     TRACE(" = %p\n", hTheme);
 
     SetLastError(hTheme ? ERROR_SUCCESS : E_PROP_ID_UNSUPPORTED);
     return hTheme;
 }
+
+#ifdef __REACTOS__
+static HTHEME
+open_theme_data(HWND hwnd, LPCWSTR pszClassList, DWORD flags, UINT dpi)
+{
+    return open_theme_data_prop(hwnd, pszClassList, flags, dpi, TRUE);
+}
+
+HTHEME
+UXTHEME_OpenNcThemeData(HWND hwnd, LPCWSTR pszClassList, DWORD flags)
+{
+    UINT dpi = GetDpiForWindow(hwnd);
+
+    if (!dpi)
+        dpi = GetDpiForSystem();
+
+    return open_theme_data_prop(hwnd, pszClassList, flags, dpi, FALSE);
+}
+#endif
 
 /***********************************************************************
  *      OpenThemeDataEx                                     (UXTHEME.61)

@@ -172,6 +172,7 @@ void ThemeCleanupDrawContext(PDRAW_CONTEXT pcontext);
 PWND_DATA ThemeGetWndData(HWND hWnd);
 HBRUSH UXTHEME_GetDialogBackgroundBrush(HWND hwnd, BOOL create);
 void UXTHEME_DestroyDialogBrush(HWND hwnd);
+HTHEME UXTHEME_OpenNcThemeData(HWND hWnd, LPCWSTR pszClassList, DWORD flags);
 HTHEME GetNCCaptionTheme(HWND hWnd, DWORD style);
 HTHEME GetNCScrollbarTheme(HWND hWnd, DWORD style);
 
