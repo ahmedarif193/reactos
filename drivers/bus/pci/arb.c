@@ -426,7 +426,8 @@ PciArbiterInitializeFromBootConfig(
         /* Skip descriptors that don't match our resource type.
          * Type 7 (CmResourceTypeMemoryLarge) aliases to Memory. */
         if (Desc->Type != Arbiter->ResourceType &&
-            !(Desc->Type == 7 && Arbiter->ResourceType == CmResourceTypeMemory))
+            !(Desc->Type == CmResourceTypeMemoryLarge &&
+              Arbiter->ResourceType == CmResourceTypeMemory))
         {
             continue;
         }
@@ -437,10 +438,11 @@ PciArbiterInitializeFromBootConfig(
             Start = Desc->u.Port.Start.QuadPart;
             Length = (ULONGLONG)Desc->u.Port.Length;
         }
-        else if (Desc->Type == CmResourceTypeMemory || Desc->Type == 7)
+        else if (Desc->Type == CmResourceTypeMemory ||
+                 Desc->Type == CmResourceTypeMemoryLarge)
         {
             Start = Desc->u.Memory.Start.QuadPart;
-            Length = (ULONGLONG)Desc->u.Memory.Length;
+            Length = PciMemoryDescriptorLength(Desc);
         }
         else if (Desc->Type == CmResourceTypeBusNumber)
         {
