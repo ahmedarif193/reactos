@@ -1533,6 +1533,12 @@ DxgkpHotPlugRebuildWorker(
             KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
             continue;
         }
+        /* The adapter is started and not running down (checked above), so a
+         * refused miniport call means another thread still holds the KMD
+         * exclusively -- the tail of the start that queued this rebuild --
+         * which is a wait, not a removal. */
+        if (Status == STATUS_DELETE_PENDING)
+            Status = STATUS_DEVICE_BUSY;
         if (DxgkHotPlugWorkCoreShouldRetry(Status, RetryCount))
         {
             LARGE_INTEGER Delay;
