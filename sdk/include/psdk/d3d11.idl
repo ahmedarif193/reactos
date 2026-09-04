@@ -290,6 +290,20 @@ cpp_quote("#define _D3D11_2_CONSTANTS")
 const UINT D3D11_2_TILED_RESOURCE_TILE_SIZE_IN_BYTES = 0x10000;
 cpp_quote("#endif")
 
+cpp_quote("/* The CD3D11_ helpers below are reproduced from the Microsoft SDK unchanged.")
+cpp_quote(" * CD3D11_DEFAULT is an empty struct sitting inside the extern-C block, and each")
+cpp_quote(" * helper carries a conversion operator to its own base that derived-to-base")
+cpp_quote(" * conversion always wins over; both are diagnosed, and neither can be dropped")
+cpp_quote(" * without breaking source compatibility with code written against the SDK. */")
+cpp_quote("#if defined(__clang__)")
+cpp_quote("#pragma clang diagnostic push")
+cpp_quote("#pragma clang diagnostic ignored \"-Wextern-c-compat\"")
+cpp_quote("#pragma clang diagnostic ignored \"-Wclass-conversion\"")
+cpp_quote("#elif defined(__GNUC__) && __GNUC__ >= 10")
+cpp_quote("#pragma GCC diagnostic push")
+cpp_quote("#pragma GCC diagnostic ignored \"-Wclass-conversion\"")
+cpp_quote("#endif")
+
 cpp_quote("#if !defined(D3D11_NO_HELPERS) && defined(__cplusplus)")
 cpp_quote("struct CD3D11_DEFAULT {};")
 cpp_quote("extern const DECLSPEC_SELECTANY CD3D11_DEFAULT D3D11_DEFAULT;")
@@ -1952,6 +1966,12 @@ cpp_quote("    }" )
 cpp_quote("    ~CD3D11_TEXTURE2D_DESC() {}")
 cpp_quote("    operator const D3D11_TEXTURE2D_DESC&() const { return *this; }")
 cpp_quote("};")
+cpp_quote("#endif")
+
+cpp_quote("#if defined(__clang__)")
+cpp_quote("#pragma clang diagnostic pop")
+cpp_quote("#elif defined(__GNUC__) && __GNUC__ >= 10")
+cpp_quote("#pragma GCC diagnostic pop")
 cpp_quote("#endif")
 
 typedef struct D3D11_TEXTURE3D_DESC

@@ -482,6 +482,18 @@ typedef struct D3D10_BUFFER_DESC {
     UINT MiscFlags;
 } D3D10_BUFFER_DESC;
 
+cpp_quote("/* The CD3D10_ helpers below are reproduced from the Microsoft SDK unchanged: each")
+cpp_quote(" * carries a conversion operator to its own base that derived-to-base conversion")
+cpp_quote(" * always wins over, and dropping it would break source compatibility with code")
+cpp_quote(" * written against the SDK. */")
+cpp_quote("#if defined(__clang__)")
+cpp_quote("#pragma clang diagnostic push")
+cpp_quote("#pragma clang diagnostic ignored \"-Wclass-conversion\"")
+cpp_quote("#elif defined(__GNUC__) && __GNUC__ >= 10")
+cpp_quote("#pragma GCC diagnostic push")
+cpp_quote("#pragma GCC diagnostic ignored \"-Wclass-conversion\"")
+cpp_quote("#endif")
+
 cpp_quote("#if !defined(D3D10_NO_HELPERS) && defined(__cplusplus)")
 cpp_quote("struct CD3D10_BUFFER_DESC : public D3D10_BUFFER_DESC {")
 cpp_quote("    CD3D10_BUFFER_DESC() {}" )
@@ -585,6 +597,12 @@ cpp_quote("    operator const D3D10_TEXTURE2D_DESC&() const {")
 cpp_quote("        return *this;")
 cpp_quote("    }")
 cpp_quote("};")
+cpp_quote("#endif")
+
+cpp_quote("#if defined(__clang__)")
+cpp_quote("#pragma clang diagnostic pop")
+cpp_quote("#elif defined(__GNUC__) && __GNUC__ >= 10")
+cpp_quote("#pragma GCC diagnostic pop")
 cpp_quote("#endif")
 
 typedef struct D3D10_TEXTURE3D_DESC {
