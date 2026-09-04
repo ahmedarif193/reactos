@@ -1559,6 +1559,12 @@ DxgkpGpuVaFlushPageTableUpdates(
     Op.RootPageTableAddress = Process->RootPageTableAddress;
     Op.StartVirtualAddress = Start;
     Op.EndVirtualAddress = End;
+    if (!Adapter->GpuMmuCaps.InvalidTlbEntriesNotCached)
+    {
+        /* A zero range asks the miniport to invalidate the entire address space. */
+        Op.StartVirtualAddress = 0;
+        Op.EndVirtualAddress = 0;
+    }
     /*
      * Passing PagingDevice makes every queued paging packet take its own device
      * reference.  The explicit reference acquired above covers the build and
