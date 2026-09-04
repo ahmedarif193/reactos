@@ -725,6 +725,12 @@ AddTrayIcon(HWND hwnd)
     tnid.hIcon = CreateTrayIcon(szKLID, szImeFile);
     StringCchCopy(tnid.szTip, _countof(tnid.szTip), szName);
 
+    if (g_cKLs <= 1)
+    {
+        DestroyIcon(tnid.hIcon);
+        return;
+    }
+
     if (!Shell_NotifyIcon(NIM_ADD, &tnid))
         ERR("Shell_NotifyIcon(NIM_ADD) failed\n");
 
@@ -762,7 +768,18 @@ UpdateTrayIcon(HWND hwnd, LPTSTR szKLID, LPTSTR szName)
     tnid.hIcon = CreateTrayIcon(szKLID, szImeFile);
     StringCchCopy(tnid.szTip, _countof(tnid.szTip), szName);
 
-    Shell_NotifyIcon(NIM_MODIFY, &tnid);
+    if (g_cKLs <= 1)
+    {
+        DestroyIcon(tnid.hIcon);
+        DeleteTrayIcon(hwnd);
+        return;
+    }
+
+    if (!Shell_NotifyIcon(NIM_MODIFY, &tnid) &&
+        !Shell_NotifyIcon(NIM_ADD, &tnid))
+    {
+        ERR("Shell_NotifyIcon failed\n");
+    }
 
     if (g_hTrayIcon)
         DestroyIcon(g_hTrayIcon);
