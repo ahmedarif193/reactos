@@ -85,6 +85,34 @@ get_dc_data_ex(HDC hdc, INT format, UINT size, PIXELFORMATDESCRIPTOR *descr)
         data->nb_icd_formats = 0;
     TRACE("ICD %S has %u formats for HDC %x.\n", data->icd_data ? data->icd_data->DriverName : NULL, data->nb_icd_formats, hdc);
     data->nb_sw_formats = sw_DescribePixelFormat(hdc, 0, 0, NULL);
+    /* The ICD/software split is decided here once per DC; a loaded ICD
+     * that offers no format is a hardware path silently lost. */
+    if (data->icd_data == NULL || data->nb_icd_formats == 0)
+    {
+        D3DKMT_OPENADAPTERFROMHDC DcAdapter;
+        LUID DcLuid = {0, 0};
+
+        RtlZeroMemory(&DcAdapter, sizeof(DcAdapter));
+        DcAdapter.hDc = hdc;
+        if (NT_SUCCESS(D3DKMTOpenAdapterFromHdc(&DcAdapter)) && DcAdapter.hAdapter != 0)
+        {
+            D3DKMT_CLOSEADAPTER Close = { DcAdapter.hAdapter };
+
+            DcLuid = DcAdapter.AdapterLuid;
+            D3DKMTCloseAdapter(&Close);
+        }
+        ERR("HDC %p: ICD %S offers %u format(s), software offers %u; ICD adapter LUID %08lx-%08lx (%s), DC adapter LUID %08lx-%08lx source %u\n",
+            hdc,
+            data->icd_data ? data->icd_data->DriverName : L"(none)",
+            data->nb_icd_formats,
+            data->nb_sw_formats,
+            data->AdapterLuid.HighPart,
+            data->AdapterLuid.LowPart,
+            data->AdapterLuidValid ? "valid" : "unknown",
+            DcLuid.HighPart,
+            DcLuid.LowPart,
+            DcAdapter.VidPnSourceId);
+    }
     data->next = dc_data_list;
     dc_data_list = data;
     LeaveCriticalSection(&dc_data_cs);
@@ -898,6 +926,11 @@ BOOL WINAPI wglSetPixelFormat(HDC hdc, INT format, const PIXELFORMATDESCRIPTOR *
     if(sw_format <= dc_data->nb_sw_formats)
     {
         TRACE("Calling SW implementation.\n");
+        if (dc_data->icd_data != NULL)
+        {
+            ERR("HDC %p: software format %i chosen although ICD %S offers %u format(s)\n",
+                hdc, sw_format, dc_data->icd_data->DriverName, dc_data->nb_icd_formats);
+        }
         ret = sw_SetPixelFormat(hdc, dc_data, sw_format);
         if(ret)
         {
