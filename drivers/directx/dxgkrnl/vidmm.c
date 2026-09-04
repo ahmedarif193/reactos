@@ -57,6 +57,7 @@
 #include "vidsch.h"
 #include "debug.h"
 #include <ndk/psfuncs.h>
+#include <reactos/dwmframe.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -6066,6 +6067,97 @@ DxgkpVidMmCommitInitializingAllocations(
     return Status;
 }
 
+/*
+ * The DWM thunk has no adapter-specific UMD with which to manufacture the
+ * private data for a redirection surface.  Its small dimension descriptor is
+ * an OS request, not KMD input.  Convert that request into the standard GDI
+ * surface sequence: ask the KMD for its private data, then create the resource
+ * with that data.  Passing the dimension descriptor directly to a production
+ * KMD is invalid and Intel correctly rejects it.
+ */
+static BOOLEAN
+DxgkpCreateDwmRedirectionAllocation(
+    _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation,
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion,
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _Out_ PNTSTATUS CreateStatus)
+{
+    CONST DWM_DX_SHARED_SURFACE_INFO *RuntimeInfo;
+    D3DDDI_ALLOCATIONINFO *AllocationInfo;
+    DXGK_REDIRECTION_SURFACE_CREATE CreateSurface;
+    UINT Dimensions[3];
+    UINT RawFlags;
+
+    *CreateStatus = STATUS_SUCCESS;
+    if (InfoVersion != DxgkpAllocationInfoVersion1 ||
+        CreateAllocation->PrivateRuntimeDataSize != sizeof(*RuntimeInfo) ||
+        CreateAllocation->pPrivateRuntimeData == NULL)
+    {
+        return FALSE;
+    }
+
+    RuntimeInfo = CreateAllocation->pPrivateRuntimeData;
+    if (RuntimeInfo->Magic != DWM_DX_SURFACE_INFO_MAGIC)
+        return FALSE;
+
+    RtlCopyMemory(&RawFlags, &CreateAllocation->Flags, sizeof(RawFlags));
+    AllocationInfo = CreateAllocation->pAllocationInfo;
+    if (RuntimeInfo->Version != DWM_DX_SURFACE_INFO_VERSION ||
+        RuntimeInfo->Width == 0 || RuntimeInfo->Height == 0 ||
+        RuntimeInfo->Format != DWM_DX_FORMAT_B8G8R8A8_UNORM ||
+        RuntimeInfo->Width > MAXULONG / sizeof(ULONG) ||
+        RuntimeInfo->Pitch != RuntimeInfo->Width * sizeof(ULONG) ||
+        RuntimeInfo->Height > MAXULONG / RuntimeInfo->Pitch ||
+        RawFlags != (DXGKP_CA_FLAG_CREATE_RESOURCE |
+                     DXGKP_CA_FLAG_CREATE_SHARED) ||
+        CreateAllocation->hResource != 0 ||
+        CreateAllocation->NumAllocations != 1 ||
+        CreateAllocation->PrivateDriverDataSize != 0 ||
+        AllocationInfo == NULL || AllocationInfo->pSystemMem != NULL ||
+        AllocationInfo->Flags.Value != 0 ||
+        AllocationInfo->pPrivateDriverData == NULL ||
+        AllocationInfo->PrivateDriverDataSize != sizeof(Dimensions))
+    {
+        *CreateStatus = STATUS_INVALID_PARAMETER;
+        return TRUE;
+    }
+
+    RtlCopyMemory(Dimensions,
+                  AllocationInfo->pPrivateDriverData,
+                  sizeof(Dimensions));
+    if (Dimensions[0] != RuntimeInfo->Width ||
+        Dimensions[1] != RuntimeInfo->Height ||
+        Dimensions[2] != 32)
+    {
+        *CreateStatus = STATUS_INVALID_PARAMETER;
+        return TRUE;
+    }
+    if (InterlockedCompareExchange(&Device->ExecutionState, 0, 0) !=
+        D3DKMT_DEVICEEXECUTION_ACTIVE)
+    {
+        *CreateStatus = STATUS_DEVICE_REMOVED;
+        return TRUE;
+    }
+
+    RtlZeroMemory(&CreateSurface, sizeof(CreateSurface));
+    CreateSurface.StructSize = sizeof(CreateSurface);
+    CreateSurface.Width = RuntimeInfo->Width;
+    CreateSurface.Height = RuntimeInfo->Height;
+    CreateSurface.Format = RuntimeInfo->Format;
+    *CreateStatus = DxgkCreateRedirectionSurface(Adapter,
+                                                  Device,
+                                                  &CreateSurface);
+    if (NT_SUCCESS(*CreateStatus))
+    {
+        AllocationInfo->hAllocation =
+            (D3DKMT_HANDLE)(ULONG_PTR)CreateSurface.AllocationHandle;
+        CreateAllocation->hResource = CreateSurface.ResourceHandle;
+        CreateAllocation->hGlobalShare = CreateSurface.GlobalShare;
+    }
+    return TRUE;
+}
+
 static NTSTATUS
 DxgkpCreateAllocationCaptured(
     _Inout_ D3DKMT_CREATEALLOCATION *pCreateAllocation,
@@ -6187,6 +6279,16 @@ DxgkpCreateAllocationCaptured(
         if (!NT_SUCCESS(Status))
             goto Cleanup;
     }
+
+    if (DxgkpCreateDwmRedirectionAllocation(pCreateAllocation,
+                                             InfoVersion,
+                                             Adapter,
+                                             Device,
+                                             &Status))
+    {
+        goto Cleanup;
+    }
+
     CreateRollbackAllocations = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)pCreateAllocation->NumAllocations * sizeof(*CreateRollbackAllocations), TAG_VIDMM_ALLOC);
     CreateRollbackBatch = DxgkpVidMmAllocateDestroyBatch(Adapter, pCreateAllocation->NumAllocations);
     if (CreateRollbackAllocations == NULL || CreateRollbackBatch == NULL)

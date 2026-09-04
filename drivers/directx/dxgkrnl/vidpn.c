@@ -3750,6 +3750,7 @@ DxgkpDestroySharedPrimaryLocked(
 NTSTATUS
 DxgkCreateRedirectionSurface(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
     _Inout_ PDXGK_REDIRECTION_SURFACE_CREATE Create)
 {
     DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA QueryArgs;
@@ -3769,7 +3770,8 @@ DxgkCreateRedirectionSurface(
     ULONGLONG RequiredBytes;
     NTSTATUS Status;
 
-    if (Adapter == NULL || Create == NULL ||
+    if (Adapter == NULL || (Device != NULL && Device->Adapter != Adapter) ||
+        Create == NULL ||
         Create->StructSize != sizeof(*Create) || Create->Flags != 0 ||
         Create->Width == 0 || Create->Height == 0 ||
         Create->Format != DWM_DX_FORMAT_B8G8R8A8_UNORM ||
@@ -3875,7 +3877,7 @@ DxgkCreateRedirectionSurface(
     RtlZeroMemory(&CreateFlags, sizeof(CreateFlags));
     CreateFlags.Resource = 1;
     Status = DxgkVidMmCreateAllocation(
-        Adapter, NULL, &AllocInfo, ResourcePrivateData,
+        Adapter, Device, &AllocInfo, ResourcePrivateData,
         ResourcePrivateDataSize, NULL, CreateFlags,
         &AllocationHandle, &MiniportResourceHandle);
     if (!NT_SUCCESS(Status))
@@ -3908,7 +3910,7 @@ DxgkCreateRedirectionSurface(
     RuntimeInfo.Pitch = SurfaceData.Pitch;
     RuntimeInfo.Format = Create->Format;
     Resource = DxgkVidMmCreateResourceWrapper(
-        Adapter, NULL, MiniportResourceHandle, 0, TRUE,
+        Adapter, Device, MiniportResourceHandle, 0, TRUE,
         &RuntimeInfo, sizeof(RuntimeInfo),
         ResourcePrivateData, ResourcePrivateDataSize);
     if (Resource == NULL)
@@ -3923,12 +3925,18 @@ DxgkCreateRedirectionSurface(
     Allocation->MiniportResourceHandle = NULL;
     Allocation->DestroyMiniportResource = FALSE;
 
-    Status = DxgkVidMmMapAllocationCpu(Allocation, &CpuAddress);
-    if (!NT_SUCCESS(Status) || CpuAddress == NULL)
+    /* CDD paints its kernel-owned redirection bitmap through CpuAddress.  A
+     * user DWM/ICD resource is instead a GPU texture opened by global share;
+     * production KMDs legitimately describe that texture as non-CPU-visible. */
+    if (Device == NULL)
     {
-        if (NT_SUCCESS(Status))
-            Status = STATUS_UNSUCCESSFUL;
-        goto Cleanup;
+        Status = DxgkVidMmMapAllocationCpu(Allocation, &CpuAddress);
+        if (!NT_SUCCESS(Status) || CpuAddress == NULL)
+        {
+            if (NT_SUCCESS(Status))
+                Status = STATUS_UNSUCCESSFUL;
+            goto Cleanup;
+        }
     }
 
     Create->Pitch = SurfaceData.Pitch;
