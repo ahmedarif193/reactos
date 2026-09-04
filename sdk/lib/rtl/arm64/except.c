@@ -171,6 +171,28 @@ RtlpArm64GetExceptionHandler(
     return TRUE;
 }
 
+/*
+ * Advances a captured CONTEXT one frame up so it describes the caller of the
+ * routine that captured it.
+ */
+VOID
+NTAPI
+RtlpArm64StepContextToCaller(_Inout_ PCONTEXT Context)
+{
+    PRUNTIME_FUNCTION FunctionEntry;
+    ULONG_PTR ImageBase;
+    ULONG64 EstablisherFrame;
+    PVOID HandlerData;
+
+    FunctionEntry = RtlLookupFunctionEntry(Context->Pc, &ImageBase, NULL);
+    if (FunctionEntry == NULL)
+    {
+        return;
+    }
+
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, Context->Pc, FunctionEntry, Context, &HandlerData, &EstablisherFrame, NULL);
+}
+
 VOID
 NTAPI
 RtlGetCallersAddress(
