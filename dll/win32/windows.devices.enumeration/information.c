@@ -90,7 +90,7 @@ static HRESULT WINAPI device_information_GetIids( IDeviceInformation *iface, ULO
 
 static HRESULT WINAPI device_information_GetRuntimeClassName( IDeviceInformation *iface, HSTRING *class_name )
 {
-    const static WCHAR *name = RuntimeClass_Windows_Devices_Enumeration_DeviceInformation;
+    static const WCHAR *name = RuntimeClass_Windows_Devices_Enumeration_DeviceInformation;
     TRACE( "iface %p, class_name %p\n", iface, class_name );
     return WindowsCreateString( name, wcslen( name ), class_name );
 }

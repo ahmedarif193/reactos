@@ -111,6 +111,8 @@ DeviceEventWorker(
             HeapFree(GetProcessHeap(), 0, Context);
         }
     }
+
+    return ERROR_SUCCESS;
 }
 
 

@@ -982,6 +982,8 @@ SoftGpuDdiStartDevice(
     {
         BOOLEAN FeatureStateResolved = FALSE;
 
+        (VOID)FeatureStateResolved;
+
         Device->KmdSignalCpuEventEnabled = FALSE;
         if (DxgkInterface->Size >=
                 FIELD_OFFSET(DXGK_INTERFACE, DxgkCbSignalEvent) +

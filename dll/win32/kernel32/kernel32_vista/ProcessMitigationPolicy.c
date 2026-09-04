@@ -50,8 +50,10 @@ GetProcessMitigationPolicy(
 {
     PK32_PROCESS_MITIGATION_DEP_POLICY DepPolicy;
     ULONGLONG OptionsMask = 0;
+#ifndef _WIN64
     DWORD Flags;
     BOOL Permanent;
+#endif
 
     if ((ULONG)MitigationPolicy >= MaxProcessMitigationPolicy || !lpBuffer)
     {

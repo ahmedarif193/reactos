@@ -313,12 +313,18 @@ typedef struct _WDF_OBJECT_CONTEXT_TYPE_INFO {
 #pragma section(WDF_TYPE_INIT_SECTION_NAME, read, write)
 #pragma section(WDF_TYPE_DEFAULT_SECTION_NAME)
 
+#if defined(__GNUC__) || defined(__clang__)
+#define WDF_TYPE_INFO_SECTION(_section)
+#else
+#define WDF_TYPE_INFO_SECTION(_section) __declspec(allocate(_section))
+#endif
+
 #define WDF_DECLARE_TYPE_AND_GLOBALS(_contexttype, _UniqueType, _GetUniqueType, _section)\
                                                                         \
 typedef _contexttype* WDF_TYPE_NAME_POINTER_TYPE(_contexttype);         \
                                                                         \
 WDF_EXTERN_C                                                            \
-__declspec(allocate( _section ))                                        \
+WDF_TYPE_INFO_SECTION( _section )                                       \
 __declspec(selectany)                                                   \
 const WDF_OBJECT_CONTEXT_TYPE_INFO                                      \
 WDF_TYPE_NAME_TO_TYPE_INFO(_contexttype) =                              \
@@ -334,8 +340,8 @@ WDF_TYPE_NAME_TO_TYPE_INFO(_contexttype) =                              \
                                                                         \
 WDF_EXTERN_C                                                            \
 __drv_aliasesMem                                                        \
-WDF_TYPE_NAME_POINTER_TYPE(_contexttype)                                \
 FORCEINLINE                                                             \
+WDF_TYPE_NAME_POINTER_TYPE(_contexttype)                                \
 _castingfunction(                                                       \
    _In_ WDFOBJECT Handle                                                \
    )                                                                    \

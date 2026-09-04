@@ -1413,7 +1413,6 @@ NtUserSetProcessDpiAwarenessContext(
 {
     PPROCESSINFO ppi;
     ULONG SystemDpi;
-    ULONG BaseContext;
     ULONG Ret = 0;
 
     UNREFERENCED_PARAMETER(Flags);

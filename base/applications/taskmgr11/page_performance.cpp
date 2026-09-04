@@ -158,7 +158,6 @@ struct PerformancePage : Page
 
     void ResourceName(int tile, WCHAR* buf, int cch)
     {
-        SysSnapshot& d = Data::g;
         int res = TileResource(tile);
         switch (res)
         {

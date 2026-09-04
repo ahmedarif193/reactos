@@ -16,10 +16,10 @@
 #pragma section(WDF_TYPE_INIT_END_SECTION_NAME, read, write)
 #pragma comment(linker, "/merge:.kmdftypeinit=.data")
 
-__declspec(allocate(WDF_TYPE_INIT_START_SECTION_NAME))
+DATA_SEG(WDF_TYPE_INIT_START_SECTION_NAME)
 MARKER_TYPE __KMDF_TYPE_INIT_START;
 
-__declspec(allocate(WDF_TYPE_INIT_END_SECTION_NAME))
+DATA_SEG(WDF_TYPE_INIT_END_SECTION_NAME)
 PVOID __KMDF_TYPE_INIT_END;
 
 static

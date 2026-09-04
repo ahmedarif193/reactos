@@ -15,7 +15,7 @@
 PVOID SpbDriverGlobals;
 PVOID SpbFunctions[13];
 
-__declspec(allocate(".kmdfclassbind$b"))
+DATA_SEG(".kmdfclassbind$b")
 WDF_CLASS_BIND_INFO _SPBCx_BIND_INFO =
 {
     sizeof(WDF_CLASS_BIND_INFO),
