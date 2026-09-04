@@ -163,7 +163,7 @@ static CONST DXGK_MONITORSOURCEMODESET_INTERFACE g_MonitorSourceModeSetInterface
     MonitorSourceModeSet_ReleaseModeInfo,
 };
 
-static CONST DXGK_VIDPN_INTERFACE g_VidPnInterface =
+static CONST DXGK_VIDPN_INTERFACE g_VidPnInterfaceV1 =
 {
     DXGK_VIDPN_INTERFACE_VERSION_V1,
     VidPn_GetTopology,
@@ -177,6 +177,29 @@ static CONST DXGK_VIDPN_INTERFACE g_VidPnInterface =
     VidPn_CreateNewTargetModeSet,
     VidPn_AssignTargetModeSet,
 };
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+/*
+ * WDDM 2.9 added interface version V2 without changing the
+ * DXGK_VIDPN_INTERFACE layout or its callback signatures.  Keep a distinct
+ * table because a miniport is allowed to validate that Version matches the
+ * version it requested.
+ */
+static CONST DXGK_VIDPN_INTERFACE g_VidPnInterfaceV2 =
+{
+    DXGK_VIDPN_INTERFACE_VERSION_V2,
+    VidPn_GetTopology,
+    VidPn_AcquireSourceModeSet,
+    VidPn_ReleaseSourceModeSet,
+    VidPn_CreateNewSourceModeSet,
+    VidPn_AssignSourceModeSet,
+    VidPn_AssignMultisamplingMethodSet,
+    VidPn_AcquireTargetModeSet,
+    VidPn_ReleaseTargetModeSet,
+    VidPn_CreateNewTargetModeSet,
+    VidPn_AssignTargetModeSet,
+};
+#endif
 
 NTSTATUS
 DxgkVidPnResolveTargetForSource(
@@ -2146,15 +2169,23 @@ DxgkCbQueryVidPnInterface(
         return STATUS_GRAPHICS_INVALID_VIDPN;
     }
 
-    if (VidPnInterfaceVersion != DXGK_VIDPN_INTERFACE_VERSION_V1)
+    switch (VidPnInterfaceVersion)
     {
-        DXGKRNL_WARN("DxgkCbQueryVidPnInterface: unsupported version %d\n",
-                     VidPnInterfaceVersion);
-        return STATUS_NOT_SUPPORTED;
-    }
+        case DXGK_VIDPN_INTERFACE_VERSION_V1:
+            *ppVidPnInterface = &g_VidPnInterfaceV1;
+            return STATUS_SUCCESS;
 
-    *ppVidPnInterface = &g_VidPnInterface;
-    return STATUS_SUCCESS;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_9)
+        case DXGK_VIDPN_INTERFACE_VERSION_V2:
+            *ppVidPnInterface = &g_VidPnInterfaceV2;
+            return STATUS_SUCCESS;
+#endif
+
+        default:
+            DXGKRNL_WARN("DxgkCbQueryVidPnInterface: unsupported version %d\n",
+                         VidPnInterfaceVersion);
+            return STATUS_NOT_SUPPORTED;
+    }
 }
 
 NTSTATUS
