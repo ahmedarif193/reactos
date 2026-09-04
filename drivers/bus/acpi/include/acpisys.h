@@ -155,6 +155,18 @@ Bus_PDO_EvalMethod(
 
 NTSTATUS
 NTAPI
+Bus_PDO_EvalMethodEx(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _Inout_ PIRP Irp);
+
+NTSTATUS
+NTAPI
+Bus_PDO_EnumChildren(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _Inout_ PIRP Irp);
+
+NTSTATUS
+NTAPI
 AcpiEvalMethodForPciDeviceIoctl(
     _In_ PFDO_DEVICE_DATA FdoData,
     _Inout_ PIRP Irp);
