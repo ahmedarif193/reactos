@@ -10,20 +10,31 @@
 
 #include <wlanapi.h>
 #include <netlistmgr.h>
+extern "C"
+{
+#include <netioapi.h>
+}
 
 #define NETSHELL_MAX_TRAY 32
 
-static DWORD g_TrayRank[NETSHELL_MAX_TRAY];
+static struct
+{
+    HWND hwnd;
+    DWORD Rank;
+    BOOL Shown;
+} g_Tray[NETSHELL_MAX_TRAY];
+
 
 static NLM_CONNECTIVITY
 NetShellGetConnectivity(const GUID *pAdapterId)
 {
-    CComPtr<INetworkListManager> pMgr;
     CComPtr<IEnumNetworkConnections> pEnum;
     NLM_CONNECTIVITY Result = NLM_CONNECTIVITY_DISCONNECTED;
 
     if (pAdapterId == NULL)
         return Result;
+    CComPtr<INetworkListManager> pMgr;
+
     if (FAILED(CoCreateInstance(CLSID_NetworkListManager, NULL, CLSCTX_ALL,
                                 IID_PPV_ARG(INetworkListManager, &pMgr))))
         return Result;
@@ -75,20 +86,56 @@ NetShellRankConnection(NLM_CONNECTIVITY Conn, DWORD dwType, int nQuality)
     return Scope * 100000 + Iface * 1000 + Signal;
 }
 
-static BOOL
-NetShellIsPrimaryTray(UINT uID, DWORD Rank)
+static VOID
+NetShellUpdateTrayVisibility(VOID)
 {
     UINT i, Best = 0;
 
-    if (uID >= NETSHELL_MAX_TRAY)
-        return TRUE;
-    g_TrayRank[uID] = Rank + 1;
     for (i = 0; i < NETSHELL_MAX_TRAY; i++)
     {
-        if (g_TrayRank[i] > g_TrayRank[Best])
+        if (g_Tray[i].Rank > g_Tray[Best].Rank)
             Best = i;
     }
-    return Best == uID;
+
+    for (i = 0; i < NETSHELL_MAX_TRAY; i++)
+    {
+        NOTIFYICONDATAW nid;
+        BOOL bShow = (i == Best && g_Tray[i].Rank != 0);
+
+        if (g_Tray[i].hwnd == NULL || g_Tray[i].Shown == bShow)
+            continue;
+
+        ZeroMemory(&nid, sizeof(nid));
+        nid.cbSize = sizeof(nid);
+        nid.hWnd = g_Tray[i].hwnd;
+        nid.uID = i;
+        nid.uFlags = NIF_STATE;
+        nid.dwStateMask = NIS_HIDDEN;
+        nid.dwState = bShow ? 0 : NIS_HIDDEN;
+        Shell_NotifyIconW(NIM_MODIFY, &nid);
+        g_Tray[i].Shown = bShow;
+    }
+}
+
+static VOID
+NetShellSetTrayRank(UINT uID, HWND hwnd, DWORD Rank)
+{
+    if (uID >= NETSHELL_MAX_TRAY)
+        return;
+
+    g_Tray[uID].hwnd = hwnd;
+    g_Tray[uID].Rank = Rank + 1;
+    NetShellUpdateTrayVisibility();
+}
+
+static VOID
+NetShellClearTrayRank(UINT uID, HWND hwnd)
+{
+    if (uID >= NETSHELL_MAX_TRAY || g_Tray[uID].hwnd != hwnd)
+        return;
+
+    ZeroMemory(&g_Tray[uID], sizeof(g_Tray[uID]));
+    NetShellUpdateTrayVisibility();
 }
 
 typedef DWORD (WINAPI *PFN_NS_WLANOPENHANDLE)(DWORD, PVOID, PDWORD, PHANDLE);
@@ -378,6 +425,7 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
     IfEntry.dwIndex = pContext->dwAdapterIndex;
     if (GetIfEntry(&IfEntry) != NO_ERROR)
     {
+        NetShellClearTrayRank(pContext->uID, pContext->hwndStatusDlg);
         return;
     }
 
@@ -444,13 +492,8 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
             if (nid.hIcon)
                 nid.uFlags |= NIF_ICON;
 
-            nid.uFlags |= NIF_STATE;
-            nid.dwState =
-                NetShellIsPrimaryTray(pContext->uID,
-                                      NetShellRankConnection(Conn, IfEntry.dwType,
-                                                             nQuality))
-                    ? 0 : NIS_HIDDEN;
-            nid.dwStateMask = NIS_HIDDEN;
+            NetShellSetTrayRank(pContext->uID, nid.hWnd,
+                                NetShellRankConnection(Conn, IfEntry.dwType, nQuality));
 
             if (pProperties->pszwName)
             {
@@ -469,12 +512,17 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
         }
         else
         {
+            NetShellClearTrayRank(pContext->uID, nid.hWnd);
             nid.uFlags |= NIF_STATE;
             nid.dwState = NIS_HIDDEN;
             nid.dwStateMask = NIS_HIDDEN;
 
         }
         NcFreeNetconProperties(pProperties);
+    }
+    else
+    {
+        NetShellClearTrayRank(pContext->uID, nid.hWnd);
     }
 
     Shell_NotifyIconW(NIM_MODIFY, &nid);
@@ -1200,6 +1248,8 @@ LANStatusDlg(
 
         case WM_DESTROY:
             pContext = (LANSTATUSUI_CONTEXT*)GetWindowLongPtr(hwndDlg, DWLP_USER);
+            if (pContext)
+                NetShellClearTrayRank(pContext->uID, hwndDlg);
             if (pContext && pContext->nIDEvent)
             {
                 KillTimer(hwndDlg, pContext->nIDEvent);
@@ -1331,23 +1381,10 @@ CLanStatus::EnumerateTrayConnections()
        pItem = m_pHead;
        while (pItem)
        {
-           hr = pItem->pNet->GetProperties(&pProps);
-           if (SUCCEEDED(hr))
-           {
-                ZeroMemory(&nid, sizeof(nid));
-                nid.cbSize = sizeof(nid);
-                nid.uID = pItem->uID;
-                nid.hWnd = pItem->hwndDlg;
-                nid.uFlags = NIF_STATE;
-                if (pProps->dwCharacter & NCCF_SHOW_ICON)
-                    nid.dwState = 0;
-                else
-                    nid.dwState = NIS_HIDDEN;
-
-                nid.dwStateMask = NIS_HIDDEN;
-                Shell_NotifyIconW(NIM_MODIFY, &nid);
-                NcFreeNetconProperties(pProps);
-           }
+           pContext = reinterpret_cast<LANSTATUSUI_CONTEXT *>(
+               GetWindowLongPtrW(pItem->hwndDlg, DWLP_USER));
+           if (pContext)
+               UpdateLanStatus(NULL, pContext);
            pItem = pItem->pNext;
        }
        return S_OK;
@@ -1408,13 +1445,18 @@ CLanStatus::EnumerateTrayConnections()
         hr = pNetCon->GetProperties(&pProps);
         if (SUCCEEDED(hr))
         {
+            NET_LUID Luid;
+            NET_IFINDEX IfIndex;
+
             CopyMemory(&pItem->guidItem, &pProps->guidId, sizeof(GUID));
-            if (!(pProps->dwCharacter & NCCF_SHOW_ICON))
+            if (!ConvertInterfaceGuidToLuid(&pProps->guidId, &Luid) &&
+                !ConvertInterfaceLuidToIndex(&Luid, &IfIndex))
             {
-                nid.dwState = NIS_HIDDEN;
-                nid.dwStateMask = NIS_HIDDEN;
-                nid.uFlags |= NIF_STATE;
+                pContext->dwAdapterIndex = IfIndex;
             }
+            nid.dwState = NIS_HIDDEN;
+            nid.dwStateMask = NIS_HIDDEN;
+            nid.uFlags |= NIF_STATE;
             nid.hIcon = (HICON)LoadImage(netshell_hInstance,
                                          MAKEINTRESOURCE(NetShellTrayIcon(
                                              IF_TYPE_ETHERNET_CSMACD,
@@ -1457,7 +1499,7 @@ CLanStatus::EnumerateTrayConnections()
                 m_pHead = pItem;
 
             pLast = pItem;
-            Index++;
+            UpdateLanStatus(NULL, pContext);
         }
         else
         {
