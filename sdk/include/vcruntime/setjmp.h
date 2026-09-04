@@ -214,6 +214,18 @@ typedef struct __JUMP_BUFFER {
 #define setjmpex(BUF) _setjmpex((BUF),mingw_getsp())
   int __MINGW_NOTHROW __cdecl _setjmpex(jmp_buf _Buf,void *_Ctx);
 #endif /* _INC_SETJMPEX */
+#elif _VCRT_ARM64_CODEGEN
+/* longjmp unwinds to the frame recorded here, so it must be the stack pointer
+ * on entry to the caller - the establisher frame the unwinder reports. */
+#ifndef _INC_SETJMPEX
+#define setjmp(BUF) _setjmp((BUF),__builtin_sponentry())
+  int __MINGW_NOTHROW __cdecl _setjmp(jmp_buf _Buf,void *_Frame);
+#else /* _INC_SETJMPEX */
+#undef setjmp
+#define setjmp(BUF) _setjmpex((BUF),__builtin_sponentry())
+#define setjmpex(BUF) _setjmpex((BUF),__builtin_sponentry())
+  int __MINGW_NOTHROW __cdecl _setjmpex(jmp_buf _Buf,void *_Frame);
+#endif /* _INC_SETJMPEX */
 #else /* !USE_MINGW_SETJMP_TWO_ARGS || !x86 */
 #ifndef _INC_SETJMPEX
 #define setjmp _setjmp
