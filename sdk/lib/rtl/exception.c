@@ -61,6 +61,9 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
     CONTEXT Context;
     NTSTATUS Status;
 
+    /* The record describes a raise, not a processor trap */
+    ExceptionRecord->ExceptionFlags |= EXCEPTION_SOFTWARE_ORIGINATE;
+
     /* Capture the context */
     RtlCaptureContext(&Context);
 
@@ -139,7 +142,7 @@ RtlRaiseStatus(IN NTSTATUS Status)
     ExceptionRecord.ExceptionCode  = Status;
     ExceptionRecord.ExceptionRecord = NULL;
     ExceptionRecord.NumberParameters = 0;
-    ExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+    ExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE | EXCEPTION_SOFTWARE_ORIGINATE;
 
     /* Write the context flag */
     Context.ContextFlags = CONTEXT_FULL;
