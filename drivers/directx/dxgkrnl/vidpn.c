@@ -1087,7 +1087,8 @@ DxgkVidPnCreateForAdapter(
 {
     PDXGKP_VIDPN VidPn = NULL;
     ULONG NumSources, NumTargets;
-    ULONG i, PathCount;
+    ULONG i, ModePairCount, PathCount;
+    BOOLEAN SeedDefaultTopology;
 
     PAGED_CODE();
 
@@ -1142,13 +1143,27 @@ DxgkVidPnCreateForAdapter(
             goto Fail;
     }
 
-    /* Populate default modes for each source/target pair. */
-    PathCount = (NumSources < NumTargets) ? NumSources : NumTargets;
-    if (PathCount > DXGKP_MAX_PATHS) PathCount = DXGKP_MAX_PATHS;
+    /*
+     * A full WDDM miniport's source and child counts describe capacities, not
+     * source-to-target wiring.  Start it with the contractually valid empty
+     * topology; child-status/hot-plug discovery will add only paths that are
+     * actually connected.  Display-only and BasicDisplay adapters need their
+     * pre-seeded path during early boot because they provide the desktop
+     * framebuffer before child discovery runs.
+     */
+    SeedDefaultTopology =
+        Adapter->MiniportContext != NULL &&
+        (Adapter->MiniportContext->IsDisplayOnlyDriver ||
+         Adapter->MiniportContext->IsBasicDisplayFallback);
+    ModePairCount = (NumSources < NumTargets) ? NumSources : NumTargets;
+    if (ModePairCount > DXGKP_MAX_PATHS)
+        ModePairCount = DXGKP_MAX_PATHS;
+    PathCount = SeedDefaultTopology ? ModePairCount : 0;
 
-    for (i = 0; i < PathCount; i++)
+    for (i = 0; i < ModePairCount; i++)
     {
-        DxgkpPopulateDefaultPath(&VidPn->Paths[i], i, i);
+        if (SeedDefaultTopology)
+            DxgkpPopulateDefaultPath(&VidPn->Paths[i], i, i);
         DxgkpPopulateDefaultModes(
             VidPn->SourceModeSets[i],
             VidPn->TargetModeSets[i],
