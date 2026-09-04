@@ -2114,6 +2114,13 @@ DxgkPrepareTrackedDmaBuffer(
     *OutEntry = NULL;
     if (Adapter == NULL || Args == NULL || Args->DmaBuffer == NULL || Args->SubmissionFenceId == 0 || Args->NodeOrdinal >= Adapter->NodeCount || Args->NodeOrdinal >= DXGK_MAX_TRACKED_NODES || Args->DmaBuffer->VirtualAddress == NULL || Args->DmaBuffer->SubmissionStartOffset > Args->DmaBuffer->SubmissionEndOffset || Args->DmaBuffer->SubmissionEndOffset > Args->DmaBuffer->Capacity || (Args->PresentBindingReferenceCount != 0 && (Args->PresentBindingReferences == NULL || Args->Device == NULL)) || (Args->OpenBindingReferenceCount != 0 && Args->OpenBindingReferences == NULL) || (Args->AllocationReferenceCount != 0 && Args->AllocationReferences == NULL) || (Args->LifetimeAllocationReferenceCount != 0 && Args->LifetimeAllocationReferences == NULL) || (SIZE_T)Args->PresentBindingReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION) || (SIZE_T)Args->OpenBindingReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION) || (SIZE_T)Args->AllocationReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION) || (SIZE_T)Args->LifetimeAllocationReferenceCount > MAXULONG_PTR / sizeof(PDXGKVMM_ALLOCATION))
         return STATUS_INVALID_PARAMETER;
+    /* D3DKMTLock takes the same transaction before its final idle recheck.
+     * Keep allocation-bearing admission inside that serialization boundary. */
+    if (Args->AllocationReferenceCount != 0 &&
+        Adapter->KmdTransactionOwnerThread != PsGetCurrentThread())
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
     if (!DxgkpAcquireSubmitDmaReservation(Adapter))
         return STATUS_DELETE_PENDING;
 
@@ -2379,10 +2386,9 @@ DxgkPrepareTrackedDmaBuffer(
              * after Render and immediately before the tracker owns the final
              * residency pin.  A supplied dirty vector lets V2 escapes avoid
              * walking read-only resources. */
-            Status = DxgkVidMmAcquireSubmissionResidencyPinEx(
+            Status = DxgkVidMmAcquireTrackedSubmissionResidencyPin(
                          Entry->AllocationReferenceList[Index],
                          Adapter,
-                         NULL,
                          Args->AllocationCpuDirty == NULL ||
                              Args->AllocationCpuDirty[Index]);
             if (!NT_SUCCESS(Status))
@@ -2961,7 +2967,8 @@ DxgkpFreeTrackedDmaBufferEntry(
 
         for (Index = 0; Index < Entry->AllocationReferenceCount; ++Index)
         {
-            DxgkVidMmReleaseSubmissionResidencyPin(Entry->AllocationReferenceList[Index]);
+            DxgkVidMmReleaseTrackedSubmissionResidencyPin(
+                Entry->AllocationReferenceList[Index]);
             DxgkVidMmDereferenceAllocation(Entry->AllocationReferenceList[Index]);
         }
         ExFreePoolWithTag(Entry->AllocationReferenceList, TAG_DXGK_SUBMITDMA);

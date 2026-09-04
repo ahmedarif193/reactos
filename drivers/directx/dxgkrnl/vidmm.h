@@ -326,9 +326,14 @@ typedef struct _DXGKVMM_ALLOCATION
     LIST_ENTRY          ResidencyBudgetChargeList;
 #endif
 
-    /* Separate from user MakeResident/Evict references: each admitted GPU
-     * submission pins this exact placement until tracked terminal cleanup. */
+    /* Separate from user MakeResident/Evict references: GPU and overlay work
+     * pins this exact placement until its terminal cleanup.  The tracked
+     * subset lets D3DKMTLock wait only for submitted GPU work, not a
+     * long-lived overlay placement pin. */
+    KSPIN_LOCK          TrackedSubmissionLock;
     volatile LONG       SubmissionResidencyPinCount;
+    volatile LONG       TrackedSubmissionPinCount;
+    KEVENT              TrackedSubmissionsDrainedEvent;
 
     /*
      * Physical base address of the allocation.
@@ -776,9 +781,24 @@ DxgkVidMmAcquireSubmissionResidencyPinEx(
     _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry,
     _In_ BOOLEAN CpuDirty);
 
+NTSTATUS
+DxgkVidMmAcquireTrackedSubmissionResidencyPin(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_ BOOLEAN CpuDirty);
+
 VOID
 DxgkVidMmReleaseSubmissionResidencyPin(
     _In_ PDXGKVMM_ALLOCATION Allocation);
+
+VOID
+DxgkVidMmReleaseTrackedSubmissionResidencyPin(
+    _In_ PDXGKVMM_ALLOCATION Allocation);
+
+NTSTATUS
+DxgkVidMmWaitForTrackedSubmissions(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN DoNotWait);
 
 NTSTATUS
 DxgkVidMmReferenceResource(

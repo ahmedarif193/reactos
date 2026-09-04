@@ -1929,7 +1929,10 @@ DxgkpExecuteFullPresent(
     HANDLE SourceDeviceSpecificHandle = NULL;
     HANDLE DestinationDeviceSpecificHandle = NULL;
     PDXGKVMM_ALLOCATION PresentBindingReferences[2];
+    PDXGKVMM_ALLOCATION SubmissionAllocations[2];
+    BOOLEAN SubmissionAllocationCpuDirty[2];
     UINT PresentBindingReferenceCount = 0;
+    UINT SubmissionAllocationCount = 0;
     PDXGKRNL_DEVICE Device = NULL;
     PDXGKRNL_CONTEXT Context;
     HANDLE MiniportDeviceHandle;
@@ -1985,6 +1988,9 @@ DxgkpExecuteFullPresent(
 
     RtlZeroMemory(&PresentArgs, sizeof(PresentArgs));
     RtlZeroMemory(PresentBindingReferences, sizeof(PresentBindingReferences));
+    RtlZeroMemory(SubmissionAllocations, sizeof(SubmissionAllocations));
+    RtlZeroMemory(SubmissionAllocationCpuDirty,
+                  sizeof(SubmissionAllocationCpuDirty));
 
     MiniportDeviceHandle = Device->hMiniportDevice;
     if (MiniportDeviceHandle == NULL)
@@ -2128,8 +2134,18 @@ DxgkpExecuteFullPresent(
             PresentBindingReferenceCount++;
         }
 
+        Status = DxgkVidMmAcquireSubmissionResidencyPinEx(
+                     Entry->SourceAllocation,
+                     Adapter,
+                     &PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX],
+                     TRUE);
+        if (!NT_SUCCESS(Status))
+            goto PresentCleanup;
         PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = SourceDeviceSpecificHandle;
-        DxgkpFillPresentAllocationListEntry(Entry->SourceAllocation, &PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX]);
+        SubmissionAllocations[SubmissionAllocationCount] =
+            Entry->SourceAllocation;
+        SubmissionAllocationCpuDirty[SubmissionAllocationCount] = TRUE;
+        SubmissionAllocationCount++;
     }
 
     if (Entry->hDestination != 0)
@@ -2155,9 +2171,28 @@ DxgkpExecuteFullPresent(
             PresentBindingReferenceCount++;
         }
 
+        if (Entry->DestinationAllocation != Entry->SourceAllocation)
+        {
+            Status = DxgkVidMmAcquireSubmissionResidencyPinEx(
+                         Entry->DestinationAllocation,
+                         Adapter,
+                         &PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX],
+                         FALSE);
+            if (!NT_SUCCESS(Status))
+                goto PresentCleanup;
+            SubmissionAllocations[SubmissionAllocationCount] =
+                Entry->DestinationAllocation;
+            SubmissionAllocationCpuDirty[SubmissionAllocationCount] = FALSE;
+            SubmissionAllocationCount++;
+        }
+        else
+        {
+            DxgkpFillPresentAllocationListEntry(
+                Entry->DestinationAllocation,
+                &PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX]);
+        }
         PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation = DestinationDeviceSpecificHandle;
         PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX].WriteOperation = 1;
-        DxgkpFillPresentAllocationListEntry(Entry->DestinationAllocation, &PresentAllocationList[DXGK_PRESENT_DESTINATION_INDEX]);
 
     }
 
@@ -2402,6 +2437,9 @@ DxgkpExecuteFullPresent(
         TrackArgs.RefreshHeight = Entry->SharedSurface.PrimaryHeight;
         TrackArgs.PresentBindingReferences = PresentBindingReferences;
         TrackArgs.PresentBindingReferenceCount = PresentBindingReferenceCount;
+        TrackArgs.AllocationReferences = SubmissionAllocations;
+        TrackArgs.AllocationReferenceCount = SubmissionAllocationCount;
+        TrackArgs.AllocationCpuDirty = SubmissionAllocationCpuDirty;
 
         Status = VidSchSubmitCommandTracked(Adapter, PresentNode, PresentEngine, DmaBuffer, DmaBufferPrivateData, DmaBufferPrivateDataSize, PresentAllocationList, DXGK_PRESENT_MAX_INDEX + 1, PatchLocationList, PatchEntries, Adapter->SchedulingCaps.MultiEngineAware ? NULL : MiniportDeviceHandle, Adapter->SchedulingCaps.MultiEngineAware ? MiniportContextHandle : NULL, PresentPriority, &TrackArgs, SubmitFlags.Value, Entry->VidPnSourceId, &VidSchFence);
         if (NT_SUCCESS(Status))
@@ -2613,6 +2651,13 @@ PresentCleanup:
         ExFreePoolWithTag(DmaBufferPrivateData, TAG_DXGK_SUBMITDMA);
     if (PresentAllocationList != NULL)
         ExFreePoolWithTag(PresentAllocationList, TAG_DXGK_PRESENT);
+
+    while (SubmissionAllocationCount != 0)
+    {
+        SubmissionAllocationCount--;
+        DxgkVidMmReleaseSubmissionResidencyPin(
+            SubmissionAllocations[SubmissionAllocationCount]);
+    }
 
     while (PresentBindingReferenceCount != 0)
     {
