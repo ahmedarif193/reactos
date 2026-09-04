@@ -912,7 +912,6 @@ RtlUnwindEx(
                 ContextRecord->Pc = (ULONG64)(ULONG_PTR)TargetIp;
             }
             else if ((ExceptionRecord->ExceptionCode == STATUS_UNWIND_CONSOLIDATE) &&
-                     (ExceptionRecord->NumberParameters > 10) &&
                      (ExceptionRecord->ExceptionInformation[10] == (ULONG_PTR)-1))
             {
                 ExceptionRecord->ExceptionInformation[10] = (ULONG_PTR)&NonVolatileRegisters;
