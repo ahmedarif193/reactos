@@ -3791,13 +3791,16 @@ MmPageEntireDriver(IN PVOID AddressWithinSection)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 VOID
 NTAPI
 MmResetDriverPaging(IN PVOID AddressWithinSection)
 {
-    UNIMPLEMENTED;
+    /* MmPageEntireDriver never makes a driver pageable while the paging
+     * executive is disabled, so there is no paging state to reset. */
+    UNREFERENCED_PARAMETER(AddressWithinSection);
+    ASSERT(MmDisablePagingExecutive);
 }
 
 /*
