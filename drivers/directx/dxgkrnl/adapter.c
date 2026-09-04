@@ -10142,6 +10142,27 @@ DxgkpAcquirePostDisplayOwnership(
                 !Claimant->MiniportContext->IsBasicDisplayFallback &&
                 Owner->MiniportContext != NULL &&
                 Owner->MiniportContext->IsBasicDisplayFallback;
+            /*
+             * Nothing to hand over: firmware left no framebuffer, so the
+             * fallback drives a headless desktop.  A miniport that took that
+             * desktop would own a session with no mode to show it in --
+             * win32k could not build its primary surface and would bugcheck
+             * VIDEO_DRIVER_INIT_FAILURE.  Answer the claimant with the empty
+             * descriptor every non-POST adapter gets and let the fallback
+             * keep the desktop bridge.
+             */
+            if (RetainFallback &&
+                Owner->PostDisplayWidth == 0 &&
+                !InbvHasValidGopFrameBuffer())
+            {
+                DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: no firmware "
+                             "framebuffer to hand over; fallback %p keeps the "
+                             "desktop, claimant %p starts without it\n",
+                             Owner, Claimant);
+                if (OwnerDeviceObject != NULL)
+                    ObDereferenceObject(OwnerDeviceObject);
+                goto Complete;
+            }
             if (RetainFallback)
             {
                 Status = DxgkpRetainAndStopBasicDisplayFallback(
