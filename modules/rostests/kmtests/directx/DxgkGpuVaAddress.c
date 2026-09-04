@@ -114,12 +114,54 @@ static VOID TestPageMath(VOID)
     ok_bool_false(DxgkGpuVaCorePageCount(0x1000, 0, &Pages), "zero size");
 }
 
+typedef struct _TEST_SPAN
+{
+    DXGK_GPUVA_CORE_SPAN Core;
+    ULONGLONG Payload;
+} TEST_SPAN;
+
+static VOID TestMapPieces(VOID)
+{
+    TEST_SPAN Spans[2] = { { { 0x20000, 0x40000 }, 1 },
+                           { { 0x60000, 0x70000 }, 2 } };
+    ULONG Index = 0;
+    ULONGLONG End = 0;
+    ULONG Cover = 0;
+
+    ok_bool_true(DxgkGpuVaCoreNextMapPiece(Spans, 2, sizeof(TEST_SPAN), 0x10000, 0x80000, &Index, &End, &Cover), "leading gap");
+    ok_eq_ulonglong(End, 0x20000ULL);
+    ok_eq_ulong(Cover, MAXULONG);
+    ok_bool_true(DxgkGpuVaCoreNextMapPiece(Spans, 2, sizeof(TEST_SPAN), End, 0x80000, &Index, &End, &Cover), "first range");
+    ok_eq_ulonglong(End, 0x40000ULL);
+    ok_eq_ulong(Cover, 0UL);
+    ok_bool_true(DxgkGpuVaCoreNextMapPiece(Spans, 2, sizeof(TEST_SPAN), End, 0x80000, &Index, &End, &Cover), "middle gap");
+    ok_eq_ulonglong(End, 0x60000ULL);
+    ok_eq_ulong(Cover, MAXULONG);
+    ok_bool_true(DxgkGpuVaCoreNextMapPiece(Spans, 2, sizeof(TEST_SPAN), End, 0x68000, &Index, &End, &Cover), "limit inside range");
+    ok_eq_ulonglong(End, 0x68000ULL);
+    ok_eq_ulong(Cover, 1UL);
+    ok_bool_true(DxgkGpuVaCoreNextMapPiece(Spans, 2, sizeof(TEST_SPAN), 0x68000, 0x80000, &Index, &End, &Cover), "resume inside range");
+    ok_eq_ulonglong(End, 0x70000ULL);
+    ok_eq_ulong(Cover, 1UL);
+    ok_bool_true(DxgkGpuVaCoreNextMapPiece(Spans, 2, sizeof(TEST_SPAN), End, 0x80000, &Index, &End, &Cover), "trailing gap");
+    ok_eq_ulonglong(End, 0x80000ULL);
+    ok_eq_ulong(Cover, MAXULONG);
+    ok_bool_false(DxgkGpuVaCoreNextMapPiece(Spans, 2, sizeof(TEST_SPAN), 0x80000, 0x80000, &Index, &End, &Cover), "empty window");
+    ok_bool_false(DxgkGpuVaCoreNextMapPiece(NULL, 2, sizeof(TEST_SPAN), 0, 0x1000, &Index, &End, &Cover), "null spans");
+    ok_bool_false(DxgkGpuVaCoreNextMapPiece(Spans, 2, sizeof(ULONG), 0, 0x1000, &Index, &End, &Cover), "short stride");
+    Index = 0;
+    ok_bool_true(DxgkGpuVaCoreNextMapPiece(NULL, 0, sizeof(TEST_SPAN), 0x1000, 0x9000, &Index, &End, &Cover), "no spans");
+    ok_eq_ulonglong(End, 0x9000ULL);
+    ok_eq_ulong(Cover, MAXULONG);
+}
+
 START_TEST(DxgkGpuVaAddress)
 {
     TestAlignUp();
     TestRangeEnd();
     TestOverlapAndContainment();
     TestPageMath();
+    TestMapPieces();
 }
 
 /* EOF */

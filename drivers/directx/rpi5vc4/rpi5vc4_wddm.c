@@ -2671,7 +2671,7 @@ Rpi5Vc4UpdateNativePageTable(
         Update->StartIndex >= (1u << RPI5VC4_GPUVA_INDEX_BITS) ||
         Update->NumPageTableEntries >
             (1u << RPI5VC4_GPUVA_INDEX_BITS) - Update->StartIndex ||
-        Update->Flags.Repeat || Update->Flags.Use64KBPages ||
+        Update->Flags.Use64KBPages ||
         (Update->FirstPteVirtualAddress & (PAGE_SIZE - 1)) != 0)
     {
         return STATUS_INVALID_PARAMETER;
@@ -2697,7 +2697,7 @@ Rpi5Vc4UpdateNativePageTable(
 
         Status = Rpi5Vc4EncodeNativePte(
             DeviceExtension,
-            &Update->pPageTableEntries[Index],
+            &Update->pPageTableEntries[Update->Flags.Repeat ? 0 : Index],
             &NativePte);
         if (!NT_SUCCESS(Status))
             return Status;
@@ -2722,7 +2722,7 @@ Rpi5Vc4UpdateNativePageTable(
 
         Status = Rpi5Vc4EncodeNativePte(
             DeviceExtension,
-            &Update->pPageTableEntries[Index],
+            &Update->pPageTableEntries[Update->Flags.Repeat ? 0 : Index],
             &NativePte);
         ASSERT(NT_SUCCESS(Status));
         Process->V3dPageTable[FirstPage + Index] = NativePte;

@@ -9475,7 +9475,8 @@ DxgkpCacheGpuMmuGeometry(
     ULONG Level;
 
     if (Adapter->GpuMmuCaps.PageTableLevelCount == 0 ||
-        Adapter->GpuMmuCaps.PageTableLevelCount > DXGK_MAX_PAGE_TABLE_LEVELS)
+        Adapter->GpuMmuCaps.PageTableLevelCount > DXGK_MAX_PAGE_TABLE_LEVELS ||
+        Adapter->GpuMmuCaps.VirtualAddressBitCount >= 64)
     {
         return FALSE;
     }
