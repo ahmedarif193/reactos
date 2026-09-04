@@ -2012,8 +2012,13 @@ DxgkpVidPnRebuildForHotPlugGeneration(
         return STATUS_INVALID_PARAMETER;
     if (KeGetCurrentIrql() != PASSIVE_LEVEL)
         return STATUS_INVALID_DEVICE_STATE;
-    if (DXGK_CB(Adapter, DxgkDdiCommitVidPn) == NULL)
+    /* WDDM 2.3 replaced DxgkDdiCommitVidPn with DxgkDdiSetTimingsFromVidPn;
+     * a miniport that implements either can take the rebuilt topology. */
+    if (DXGK_CB(Adapter, DxgkDdiCommitVidPn) == NULL &&
+        DXGK_CB_FULL(Adapter, DxgkDdiSetTimingsFromVidPn) == NULL)
+    {
         return STATUS_NOT_SUPPORTED;
+    }
     (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
     DxgkpBeginSharedSurfaceMutationLocked(Adapter);
     if (!DxgkBeginKmdTransaction(Adapter))
