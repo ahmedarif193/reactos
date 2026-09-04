@@ -2,6 +2,7 @@
 #include <math.h>
 #include <commctrl.h>
 #include <windowsx.h>
+#include <reactos/dwmframe.h>
 
 enum
 {
@@ -192,12 +193,26 @@ TfyFluentIcon(UINT nId, int cx)
     return hIcon;
 }
 
+static int
+TfyFluentNativeSize(int n)
+{
+    static const int s_Sizes[] = { 16, 20, 24, 28, 32, 40, 48, 64, 96, 128, 256 };
+    int best = s_Sizes[0];
+
+    for (UINT i = 0; i < _countof(s_Sizes); i++)
+    {
+        if (s_Sizes[i] <= n)
+            best = s_Sizes[i];
+    }
+    return best;
+}
+
 static VOID
 TfyDrawFluent(HDC hdc, const RECT *prc, UINT nId)
 {
     int cx = prc->right - prc->left;
     int cy = prc->bottom - prc->top;
-    int n = min(cx, cy);
+    int n = TfyFluentNativeSize(min(cx, cy));
     HICON hIcon = TfyFluentIcon(nId, n);
 
     if (hIcon)
@@ -3672,6 +3687,7 @@ typedef VOID (WINAPI *PFN_WLANFREEMEMORY)(PVOID);
 #define TFY_TIMER_POLL 10
 #define TFY_TIMER_RESCAN 12
 #define TFY_NET_VISROWS 3
+#define TFY_NET_RADIUS 8
 #define TFY_TIMER_SPIN 13
 #define TFY_NET_EDIT_ID 101
 
@@ -4506,6 +4522,8 @@ public:
         else
             SetWindowPos(NULL, 0, 0, m_size.cx, m_size.cy,
                          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        SetPropW(m_hWnd, DWM_PROP_CORNER_RADIUS,
+                 (HANDLE)(ULONG_PTR)Sc(TFY_NET_RADIUS));
         InvalidateRect(NULL, FALSE);
     }
 
@@ -4944,9 +4962,6 @@ public:
         HBRUSH hbr = CreateSolidBrush(m_Pal.PanelBg);
         FillRect(hdcMem, &rc, hbr);
         DeleteObject(hbr);
-        HBRUSH hbrEdge = CreateSolidBrush(m_Pal.Border);
-        FrameRect(hdcMem, &rc, hbrEdge);
-        DeleteObject(hbrEdge);
         SetBkMode(hdcMem, TRANSPARENT);
         HGDIOBJ hFontOld = SelectObject(hdcMem, m_hFontHeader);
         RECT rcTitle = { Sc(12), Sc(8), m_rcRefresh.left - Sc(6), Sc(8) + Sc(26) };
@@ -5019,13 +5034,8 @@ public:
                 TfyDrawFluent(hdcMem, &rcNetIcon, nWifi);
                 if (row.bSecure)
                 {
-                    RECT rcLock = { rcNetIcon.right - Sc(9), rcNetIcon.bottom - Sc(9),
-                                    rcNetIcon.right + Sc(3), rcNetIcon.bottom + Sc(3) };
-                    RECT rcLockBg = rcLock;
-                    InflateRect(&rcLockBg, -Sc(1), -Sc(1));
-                    HBRUSH hbrLockBg = CreateSolidBrush(m_Pal.PanelBg);
-                    FillRect(hdcMem, &rcLockBg, hbrLockBg);
-                    DeleteObject(hbrLockBg);
+                    RECT rcLock = { rcRow.right - Sc(26), cyMid - Sc(7),
+                                    rcRow.right - Sc(12), cyMid + Sc(7) };
                     TfyDrawFluent(hdcMem, &rcLock, IDI_FLU_LOCK);
                 }
             }
