@@ -64,10 +64,8 @@ RtlVirtualUnwind(
     return NULL;
 }
 
-void
-__chkstk(void)
-{
-    /* Stack probing is unnecessary in the loader; the stack is pre-reserved. */
-}
+/* __chkstk is not stubbed here: the compiler runtime already provides the
+ * AArch64 implementation the compiler actually calls (size in x15, clobbering
+ * only x16/x17), and a second definition merely shadowed it. */
 
 #endif /* ARM64 */
