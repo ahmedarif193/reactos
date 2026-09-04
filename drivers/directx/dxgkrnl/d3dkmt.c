@@ -10178,7 +10178,13 @@ DxgkpDispatchBufferedIoctl(
                 NTSTATUS FlushStatus;
 
                 Protection.Value = pMap->Protection.Value;
-                Status = PrepareOnly ? DxgkGpuVaPlanMap(Adapter, Device->ProcessRecord, Allocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, &pMap->VirtualAddress) : DxgkGpuVaMap(Adapter, Device->ProcessRecord, Allocation, pMap->hAllocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, pMap->DriverProtection, &pMap->VirtualAddress);
+                if (!PrepareOnly && Allocation != NULL &&
+                    Allocation->AccessedPhysically)
+                    Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
+                else
+                    Status = STATUS_SUCCESS;
+                if (NT_SUCCESS(Status))
+                    Status = PrepareOnly ? DxgkGpuVaPlanMap(Adapter, Device->ProcessRecord, Allocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, &pMap->VirtualAddress) : DxgkGpuVaMap(Adapter, Device->ProcessRecord, Allocation, pMap->hAllocation, MapOffset, pMap->BaseAddress, pMap->MinimumAddress, pMap->MaximumAddress, MapSize, Protection, pMap->DriverProtection, &pMap->VirtualAddress);
                 if (!PrepareOnly)
                 {
                     FlushStatus = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
