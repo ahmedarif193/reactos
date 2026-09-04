@@ -3202,7 +3202,12 @@ HandleTrayContextMenu:
         if (wParam == 1)
             TrayMixer_Open(&rcAnchor);
         else
+        {
+            WORD state = HIWORD(lParam);
+            if (state & 0x8000)
+                TrayVolume_SetCachedState((int)LOWORD(lParam), (state & 1) != 0);
             TrayVolume_Toggle(m_hWnd, &rcAnchor);
+        }
         return TRUE;
     }
 

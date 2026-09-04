@@ -1,4 +1,5 @@
 #include "precomp.h"
+#include <math.h>
 #include <commctrl.h>
 #include <windowsx.h>
 
@@ -11,6 +12,16 @@ enum
 
 enum TFYANIM { TFY_NONE, TFY_OPEN, TFY_CLOSE };
 
+enum
+{
+    TFY_ANIM_INTERVAL = 15,
+    TFY_ANIM_OPEN_MS = 120,
+    TFY_ANIM_CLOSE_MS = 90,
+    TFY_ANIM_INITIAL_ALPHA = 48,
+    TFY_ANIM_OFFSET = 8,
+    TFY_REOPEN_GUARD_MS = TFY_ANIM_CLOSE_MS + 20
+};
+
 static double
 TfyEase(double t)
 {
@@ -20,6 +31,122 @@ TfyEase(double t)
     u = 1.0 - t;
     return 1.0 - u * u * u;
 }
+
+class CTrayFlyoutAnimation
+{
+public:
+    int m_AnimPhase;
+    ULONGLONG m_AnimT0;
+    POINT m_ptFinal;
+    BYTE m_AnimAlpha;
+    BYTE m_AnimStartAlpha;
+    HTHEME m_hFlyoutTheme;
+
+    CTrayFlyoutAnimation() : m_AnimPhase(TFY_NONE), m_AnimT0(0),
+                             m_AnimAlpha(255), m_AnimStartAlpha(255),
+                             m_hFlyoutTheme(NULL)
+    {
+        ZeroMemory(&m_ptFinal, sizeof(m_ptFinal));
+    }
+
+    ~CTrayFlyoutAnimation()
+    {
+        if (m_hFlyoutTheme)
+            CloseThemeData(m_hFlyoutTheme);
+    }
+
+    VOID RefreshFlyoutMaterial(HWND hWnd, COLORREF crBackground)
+    {
+        LPCWSTR pszClass = ((GetRValue(crBackground) * 299 +
+                             GetGValue(crBackground) * 587 +
+                             GetBValue(crBackground) * 114) / 1000 < 128)
+                                ? L"FlyoutDark" : L"FlyoutLight";
+
+        if (m_hFlyoutTheme)
+        {
+            CloseThemeData(m_hFlyoutTheme);
+            m_hFlyoutTheme = NULL;
+        }
+        SetWindowTheme(hWnd, pszClass, NULL);
+        m_hFlyoutTheme = OpenThemeData(hWnd, pszClass);
+    }
+
+    VOID BeginFlyoutOpen(HWND hWnd, int x, int y, int cx, int cy,
+                         COLORREF crBackground)
+    {
+        int nOffset = ShellScaleForDpi(TFY_ANIM_OFFSET);
+
+        RefreshFlyoutMaterial(hWnd, crBackground);
+        m_ptFinal.x = x;
+        m_ptFinal.y = y;
+        m_AnimPhase = TFY_OPEN;
+        m_AnimT0 = GetTickCount64();
+        m_AnimAlpha = TFY_ANIM_INITIAL_ALPHA;
+        m_AnimStartAlpha = TFY_ANIM_INITIAL_ALPHA;
+        SetLayeredWindowAttributes(hWnd, 0, m_AnimAlpha, LWA_ALPHA);
+        SetWindowPos(hWnd, HWND_TOPMOST, x, y + nOffset, cx, cy,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        SetForegroundWindow(hWnd);
+        InvalidateRect(hWnd, NULL, FALSE);
+        UpdateWindow(hWnd);
+        SetTimer(hWnd, TFY_TIMER_ANIM, TFY_ANIM_INTERVAL, NULL);
+    }
+
+    BOOL HandleFlyoutAnimation(HWND hWnd, WPARAM wParam)
+    {
+        if (wParam != TFY_TIMER_ANIM)
+            return FALSE;
+
+        ULONGLONG now = GetTickCount64();
+        if (m_AnimPhase == TFY_OPEN)
+        {
+            double t = (double)(now - m_AnimT0) / TFY_ANIM_OPEN_MS;
+            double e = TfyEase(t);
+            int nOffset = ShellScaleForDpi(TFY_ANIM_OFFSET);
+            m_AnimAlpha = (BYTE)(TFY_ANIM_INITIAL_ALPHA +
+                                 (255 - TFY_ANIM_INITIAL_ALPHA) * e);
+            SetLayeredWindowAttributes(hWnd, 0, m_AnimAlpha, LWA_ALPHA);
+            SetWindowPos(hWnd, NULL, m_ptFinal.x,
+                         m_ptFinal.y + (int)(nOffset * (1.0 - e)), 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            if (t >= 1.0)
+            {
+                m_AnimPhase = TFY_NONE;
+                m_AnimAlpha = 255;
+                SetLayeredWindowAttributes(hWnd, 0, 255, LWA_ALPHA);
+                KillTimer(hWnd, TFY_TIMER_ANIM);
+            }
+        }
+        else if (m_AnimPhase == TFY_CLOSE)
+        {
+            double t = (double)(now - m_AnimT0) / TFY_ANIM_CLOSE_MS;
+            if (t >= 1.0)
+            {
+                KillTimer(hWnd, TFY_TIMER_ANIM);
+                DestroyWindow(hWnd);
+                return TRUE;
+            }
+            m_AnimAlpha = (BYTE)(m_AnimStartAlpha * (1.0 - TfyEase(t)));
+            SetLayeredWindowAttributes(hWnd, 0, m_AnimAlpha, LWA_ALPHA);
+        }
+        else
+        {
+            KillTimer(hWnd, TFY_TIMER_ANIM);
+        }
+        return TRUE;
+    }
+
+    BOOL BeginFlyoutClose(HWND hWnd)
+    {
+        if (m_AnimPhase == TFY_CLOSE)
+            return FALSE;
+        m_AnimPhase = TFY_CLOSE;
+        m_AnimT0 = GetTickCount64();
+        m_AnimStartAlpha = m_AnimAlpha;
+        SetTimer(hWnd, TFY_TIMER_ANIM, TFY_ANIM_INTERVAL, NULL);
+        return TRUE;
+    }
+};
 
 static COLORREF
 TfyMix(COLORREF a, COLORREF b, int t)
@@ -36,7 +163,7 @@ TfyCreateFont(int nHeight, int nWeight)
 {
     return CreateFontW(-ShellScaleForDpi(nHeight), 0, 0, 0, nWeight, FALSE, FALSE, FALSE,
                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                       CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+                       ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
 }
 
 static HICON
@@ -338,7 +465,8 @@ struct TFYCARD
 };
 
 class CTaskPreviewWnd :
-    public CWindowImpl<CTaskPreviewWnd, CWindow, CTrayFlyoutTraits>
+    public CWindowImpl<CTaskPreviewWnd, CWindow, CTrayFlyoutTraits>,
+    public CTrayFlyoutAnimation
 {
 public:
     DECLARE_WND_CLASS_EX(L"TrayTaskPreview", CS_DROPSHADOW, COLOR_WINDOW)
@@ -350,17 +478,12 @@ public:
     int m_iHot;
     BOOL m_bCloseHot;
     BOOL m_bTracking;
-    int m_AnimPhase;
-    ULONGLONG m_AnimT0;
-    POINT m_ptFinal;
     SIZE m_size;
 
     CTaskPreviewWnd() : m_hFont(NULL), m_nGroupId(0), m_iHot(-1),
-                        m_bCloseHot(FALSE), m_bTracking(FALSE),
-                        m_AnimPhase(TFY_NONE), m_AnimT0(0)
+                        m_bCloseHot(FALSE), m_bTracking(FALSE)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
-        ZeroMemory(&m_ptFinal, sizeof(m_ptFinal));
         ZeroMemory(&m_size, sizeof(m_size));
     }
 
@@ -440,19 +563,8 @@ public:
         yPos = prcAnchor->top - m_size.cy - Sc(6);
         if (yPos < mi.rcMonitor.top) yPos = prcAnchor->bottom + Sc(6);
 
-        m_ptFinal.x = xPos;
-        m_ptFinal.y = yPos;
-
-        m_AnimPhase = TFY_OPEN;
-        m_AnimT0 = GetTickCount64();
-
-        SetLayeredWindowAttributes(m_hWnd, 0, 0, LWA_ALPHA);
-        SetWindowPos(HWND_TOPMOST, xPos, yPos + Sc(10), m_size.cx, m_size.cy,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        ::SetForegroundWindow(m_hWnd);
-        SetTimer(TFY_TIMER_ANIM, 16, NULL);
+        BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg);
         SetTimer(TFY_TIMER_ALIVE, 500, NULL);
-        InvalidateRect(NULL, FALSE);
     }
 
     VOID FadeOut();
@@ -584,38 +696,8 @@ public:
 
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
-        if (wParam == TFY_TIMER_ANIM)
-        {
-            ULONGLONG now = GetTickCount64();
-            if (m_AnimPhase == TFY_OPEN)
-            {
-                double t = (double)(now - m_AnimT0) / 160.0;
-                double e = TfyEase(t);
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * e), LWA_ALPHA);
-                SetWindowPos(NULL, m_ptFinal.x, m_ptFinal.y + (int)(Sc(10) * (1.0 - e)), 0, 0,
-                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                if (t >= 1.0)
-                {
-                    m_AnimPhase = TFY_NONE;
-                    KillTimer(TFY_TIMER_ANIM);
-                }
-            }
-            else if (m_AnimPhase == TFY_CLOSE)
-            {
-                double t = (double)(now - m_AnimT0) / 120.0;
-                if (t >= 1.0)
-                {
-                    KillTimer(TFY_TIMER_ANIM);
-                    DestroyWindow();
-                    return 0;
-                }
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * (1.0 - TfyEase(t))), LWA_ALPHA);
-            }
-            else
-            {
-                KillTimer(TFY_TIMER_ANIM);
-            }
-        }
+        if (HandleFlyoutAnimation(m_hWnd, wParam))
+            return 0;
         else if (wParam == TFY_TIMER_ALIVE)
         {
             BOOL bChanged = FALSE;
@@ -761,20 +843,17 @@ void CTaskPreviewWnd::OnFinalMessage(HWND hWnd)
 
 VOID CTaskPreviewWnd::FadeOut()
 {
-    if (m_AnimPhase == TFY_CLOSE)
+    if (!BeginFlyoutClose(m_hWnd))
         return;
-    g_TpDismissTick = GetTickCount64();
+    g_TpDismissTick = m_AnimT0;
     g_TpDismissGroup = m_nGroupId;
-    m_AnimPhase = TFY_CLOSE;
-    m_AnimT0 = g_TpDismissTick;
-    SetTimer(TFY_TIMER_ANIM, 16, NULL);
 }
 
 VOID TaskPreview_Show(IN HWND hwndOwner, IN const RECT *prcAnchor,
                       IN const HWND *pahWnd, IN UINT cWindows, IN INT_PTR nGroupId)
 {
     if (nGroupId == g_TpDismissGroup &&
-        GetTickCount64() - g_TpDismissTick < 350)
+        GetTickCount64() - g_TpDismissTick < TFY_REOPEN_GUARD_MS)
         return;
 
     TaskPreview_Hide();
@@ -813,7 +892,8 @@ BOOL TaskPreview_IsVisibleFor(IN INT_PTR nGroupId)
 }
 
 class CTrayCalendarWnd :
-    public CWindowImpl<CTrayCalendarWnd, CWindow, CTrayFlyoutTraits>
+    public CWindowImpl<CTrayCalendarWnd, CWindow, CTrayFlyoutTraits>,
+    public CTrayFlyoutAnimation
 {
 public:
     DECLARE_WND_CLASS_EX(L"TrayCalendar", CS_DROPSHADOW, COLOR_WINDOW)
@@ -832,9 +912,6 @@ public:
     int m_iHotCell;
     int m_iHotNav;
     BOOL m_bTracking;
-    int m_AnimPhase;
-    ULONGLONG m_AnimT0;
-    POINT m_ptFinal;
     SIZE m_size;
     RECT m_rcTime, m_rcDate, m_rcPrev, m_rcNext, m_rcHeader, m_rcGrid, m_rcLink;
     int m_FirstDayOfWeek;
@@ -845,11 +922,9 @@ public:
                          m_ViewYear(0), m_ViewMonth(0), m_Level(0),
                          m_SelYear(0), m_SelMonth(0), m_SelDay(0),
                          m_iHotCell(-1), m_iHotNav(NAV_NONE),
-                         m_bTracking(FALSE), m_AnimPhase(TFY_NONE), m_AnimT0(0),
-                         m_FirstDayOfWeek(0)
+                         m_bTracking(FALSE), m_FirstDayOfWeek(0)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
-        ZeroMemory(&m_ptFinal, sizeof(m_ptFinal));
         ZeroMemory(&m_size, sizeof(m_size));
     }
 
@@ -971,19 +1046,8 @@ public:
         yPos = prcAnchor->top - m_size.cy - Sc(6);
         if (yPos < mi.rcMonitor.top) yPos = prcAnchor->bottom + Sc(6);
 
-        m_ptFinal.x = xPos;
-        m_ptFinal.y = yPos;
-
-        m_AnimPhase = TFY_OPEN;
-        m_AnimT0 = GetTickCount64();
-
-        SetLayeredWindowAttributes(m_hWnd, 0, 0, LWA_ALPHA);
-        SetWindowPos(HWND_TOPMOST, xPos, yPos + Sc(10), m_size.cx, m_size.cy,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        ::SetForegroundWindow(m_hWnd);
-        SetTimer(TFY_TIMER_ANIM, 16, NULL);
+        BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg);
         SetTimer(TFY_TIMER_TICK, 1000, NULL);
-        InvalidateRect(NULL, FALSE);
     }
 
     VOID FadeOut();
@@ -1247,38 +1311,8 @@ public:
 
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
-        if (wParam == TFY_TIMER_ANIM)
-        {
-            ULONGLONG now = GetTickCount64();
-            if (m_AnimPhase == TFY_OPEN)
-            {
-                double t = (double)(now - m_AnimT0) / 160.0;
-                double e = TfyEase(t);
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * e), LWA_ALPHA);
-                SetWindowPos(NULL, m_ptFinal.x, m_ptFinal.y + (int)(Sc(10) * (1.0 - e)), 0, 0,
-                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                if (t >= 1.0)
-                {
-                    m_AnimPhase = TFY_NONE;
-                    KillTimer(TFY_TIMER_ANIM);
-                }
-            }
-            else if (m_AnimPhase == TFY_CLOSE)
-            {
-                double t = (double)(now - m_AnimT0) / 120.0;
-                if (t >= 1.0)
-                {
-                    KillTimer(TFY_TIMER_ANIM);
-                    DestroyWindow();
-                    return 0;
-                }
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * (1.0 - TfyEase(t))), LWA_ALPHA);
-            }
-            else
-            {
-                KillTimer(TFY_TIMER_ANIM);
-            }
-        }
+        if (HandleFlyoutAnimation(m_hWnd, wParam))
+            return 0;
         else if (wParam == TFY_TIMER_TICK)
         {
             InvalidateRect(&m_rcTime, FALSE);
@@ -1535,17 +1569,14 @@ void CTrayCalendarWnd::OnFinalMessage(HWND hWnd)
 
 VOID CTrayCalendarWnd::FadeOut()
 {
-    if (m_AnimPhase == TFY_CLOSE)
+    if (!BeginFlyoutClose(m_hWnd))
         return;
-    g_CalDismissTick = GetTickCount64();
-    m_AnimPhase = TFY_CLOSE;
-    m_AnimT0 = g_CalDismissTick;
-    SetTimer(TFY_TIMER_ANIM, 16, NULL);
+    g_CalDismissTick = m_AnimT0;
 }
 
 VOID TrayCalendar_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor)
 {
-    if (GetTickCount64() - g_CalDismissTick < 350)
+    if (GetTickCount64() - g_CalDismissTick < TFY_REOPEN_GUARD_MS)
         return;
 
     if (g_pTrayCalendar && g_pTrayCalendar->IsWindow())
@@ -1783,6 +1814,19 @@ struct TFYMIXROW
 static const PROPERTYKEY TFY_PKEY_Device_FriendlyName =
     { { 0xa45c254e, 0xdf1c, 0x4efd, { 0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0 } }, 14 };
 
+#define TFY_TIMER_AUDIOLOAD 6
+
+static volatile LONG g_TfyAudioPercent = 50;
+static volatile LONG g_TfyAudioMute = FALSE;
+
+VOID TrayVolume_SetCachedState(int nPercent, BOOL bMute)
+{
+    if (nPercent < 0) nPercent = 0;
+    if (nPercent > 100) nPercent = 100;
+    InterlockedExchange(&g_TfyAudioPercent, nPercent);
+    InterlockedExchange(&g_TfyAudioMute, bMute);
+}
+
 struct TFYAUDIODEV
 {
     WCHAR szId[256];
@@ -1859,7 +1903,8 @@ TfySetDefaultRenderDevice(LPCWSTR pszId)
 VOID TrayMixer_Open(const RECT *prcAnchor);
 
 class CTrayVolumeWnd :
-    public CWindowImpl<CTrayVolumeWnd, CWindow, CTrayFlyoutTraits>
+    public CWindowImpl<CTrayVolumeWnd, CWindow, CTrayFlyoutTraits>,
+    public CTrayFlyoutAnimation
 {
 public:
     DECLARE_WND_CLASS_EX(L"TrayVolumeFlyout", CS_DROPSHADOW, COLOR_WINDOW)
@@ -1872,6 +1917,8 @@ public:
     CComPtr<IAudioSessionManager2> m_pSessionMgr;
     CAtlArray<TFYMIXROW> m_Rows;
     BOOL m_bComVolume;
+    BOOL m_bAudioLoaded;
+    BOOL m_bOpenBelow;
     HFONT m_hFont;
     HFONT m_hFontSmall;
     WCHAR m_szDevice[96];
@@ -1882,21 +1929,20 @@ public:
     BOOL m_bHotMute;
     BOOL m_bHotMixer;
     BOOL m_bTracking;
-    int m_AnimPhase;
-    ULONGLONG m_AnimT0;
-    POINT m_ptFinal;
     SIZE m_size;
     RECT m_rcMasterRow, m_rcMasterSlider, m_rcMasterMute, m_rcMixerLink;
 
-    CTrayVolumeWnd() : m_bComVolume(FALSE), m_hFont(NULL), m_hFontSmall(NULL),
+    CTrayVolumeWnd() : m_bComVolume(FALSE), m_bAudioLoaded(FALSE), m_bOpenBelow(FALSE),
+                       m_hFont(NULL), m_hFontSmall(NULL),
                        m_nMaster(0), m_bMasterMute(FALSE),
                        m_iDragRow(-2), m_iHotRow(-2), m_bHotMute(FALSE), m_bHotMixer(FALSE),
-                       m_bTracking(FALSE), m_AnimPhase(TFY_NONE), m_AnimT0(0)
+                       m_bTracking(FALSE)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
-        ZeroMemory(&m_ptFinal, sizeof(m_ptFinal));
         ZeroMemory(&m_size, sizeof(m_size));
-        m_szDevice[0] = 0;
+        m_nMaster = (int)InterlockedCompareExchange(&g_TfyAudioPercent, 0, 0);
+        m_bMasterMute = InterlockedCompareExchange(&g_TfyAudioMute, 0, 0) != 0;
+        StringCchCopyW(m_szDevice, _countof(m_szDevice), L"Speakers");
     }
 
     int Sc(int v) const { return ShellScaleForDpi(v); }
@@ -2028,6 +2074,9 @@ public:
             m_nMaster = m_Fallback.GetVolume();
             m_bMasterMute = m_Fallback.GetMute();
         }
+        m_bAudioLoaded = TRUE;
+        InterlockedExchange(&g_TfyAudioPercent, m_nMaster);
+        InterlockedExchange(&g_TfyAudioMute, m_bMasterMute);
     }
 
     VOID LayoutSliderRow(const RECT *prcRow, RECT *prcMute, RECT *prcSlider)
@@ -2067,6 +2116,27 @@ public:
         m_size.cy = y;
     }
 
+    VOID Reposition()
+    {
+        RECT rcWin;
+        GetWindowRect(&rcWin);
+        m_ptFinal.x = rcWin.right - m_size.cx;
+        m_ptFinal.y = m_bOpenBelow ? rcWin.top : rcWin.bottom - m_size.cy;
+        SetWindowPos(NULL, m_ptFinal.x, m_ptFinal.y, m_size.cx, m_size.cy,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    VOID EnsureAudioLoaded()
+    {
+        if (m_bAudioLoaded)
+            return;
+        KillTimer(TFY_TIMER_AUDIOLOAD);
+        BuildAudio();
+        Layout();
+        Reposition();
+        InvalidateRect(NULL, FALSE);
+    }
+
     VOID Toggle(HWND hwndOwner, const RECT *prcAnchor)
     {
         MONITORINFO mi;
@@ -2078,7 +2148,6 @@ public:
         if (!m_hFont) m_hFont = TfyCreateFont(12, FW_NORMAL);
         if (!m_hFontSmall) m_hFontSmall = TfyCreateFont(11, FW_NORMAL);
 
-        BuildAudio();
         Layout();
 
         ptRef.x = prcAnchor->right;
@@ -2090,20 +2159,15 @@ public:
         if (xPos + m_size.cx > mi.rcMonitor.right) xPos = mi.rcMonitor.right - m_size.cx;
         if (xPos < mi.rcMonitor.left) xPos = mi.rcMonitor.left;
         yPos = prcAnchor->top - m_size.cy - Sc(6);
-        if (yPos < mi.rcMonitor.top) yPos = prcAnchor->bottom + Sc(6);
+        m_bOpenBelow = FALSE;
+        if (yPos < mi.rcMonitor.top)
+        {
+            yPos = prcAnchor->bottom + Sc(6);
+            m_bOpenBelow = TRUE;
+        }
 
-        m_ptFinal.x = xPos;
-        m_ptFinal.y = yPos;
-
-        m_AnimPhase = TFY_OPEN;
-        m_AnimT0 = GetTickCount64();
-
-        SetLayeredWindowAttributes(m_hWnd, 0, 0, LWA_ALPHA);
-        SetWindowPos(HWND_TOPMOST, xPos, yPos + Sc(10), m_size.cx, m_size.cy,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        ::SetForegroundWindow(m_hWnd);
-        SetTimer(TFY_TIMER_ANIM, 16, NULL);
-        InvalidateRect(NULL, FALSE);
+        BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg);
+        SetTimer(TFY_TIMER_AUDIOLOAD, TFY_ANIM_OPEN_MS + TFY_ANIM_INTERVAL, NULL);
     }
 
     VOID FadeOut();
@@ -2121,6 +2185,7 @@ public:
 
     VOID ApplyMaster(int nPercent)
     {
+        EnsureAudioLoaded();
         m_nMaster = nPercent;
         if (m_bComVolume && m_pEndpointVolume)
         {
@@ -2140,6 +2205,8 @@ public:
                 m_Fallback.SetMute(FALSE);
             }
         }
+        InterlockedExchange(&g_TfyAudioPercent, m_nMaster);
+        InterlockedExchange(&g_TfyAudioMute, m_bMasterMute);
         InvalidateRect(NULL, FALSE);
     }
 
@@ -2289,37 +2356,18 @@ public:
 
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
-        if (wParam == TFY_TIMER_ANIM)
+        if (HandleFlyoutAnimation(m_hWnd, wParam))
+            return 0;
+        if (wParam == TFY_TIMER_AUDIOLOAD)
         {
-            ULONGLONG now = GetTickCount64();
             if (m_AnimPhase == TFY_OPEN)
             {
-                double t = (double)(now - m_AnimT0) / 160.0;
-                double e = TfyEase(t);
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * e), LWA_ALPHA);
-                SetWindowPos(NULL, m_ptFinal.x, m_ptFinal.y + (int)(Sc(10) * (1.0 - e)), 0, 0,
-                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                if (t >= 1.0)
-                {
-                    m_AnimPhase = TFY_NONE;
-                    KillTimer(TFY_TIMER_ANIM);
-                }
+                SetTimer(TFY_TIMER_AUDIOLOAD, TFY_ANIM_INTERVAL, NULL);
+                return 0;
             }
-            else if (m_AnimPhase == TFY_CLOSE)
-            {
-                double t = (double)(now - m_AnimT0) / 120.0;
-                if (t >= 1.0)
-                {
-                    KillTimer(TFY_TIMER_ANIM);
-                    DestroyWindow();
-                    return 0;
-                }
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * (1.0 - TfyEase(t))), LWA_ALPHA);
-            }
-            else
-            {
-                KillTimer(TFY_TIMER_ANIM);
-            }
+            KillTimer(TFY_TIMER_AUDIOLOAD);
+            if (m_AnimPhase != TFY_CLOSE)
+                EnsureAudioLoaded();
         }
         return 0;
     }
@@ -2450,11 +2498,13 @@ public:
         {
             if (iRow == -1)
             {
+                EnsureAudioLoaded();
                 m_bMasterMute = !m_bMasterMute;
                 if (m_bComVolume && m_pEndpointVolume)
                     m_pEndpointVolume->SetMute(m_bMasterMute, NULL);
                 else
                     m_Fallback.SetMute(m_bMasterMute);
+                InterlockedExchange(&g_TfyAudioMute, m_bMasterMute);
             }
             else if (iRow >= 0 && iRow < (int)m_Rows.GetCount())
             {
@@ -2506,6 +2556,7 @@ public:
     LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
         KillTimer(TFY_TIMER_ANIM);
+        KillTimer(TFY_TIMER_AUDIOLOAD);
         FreeRows();
         m_pSessionMgr.Release();
         m_pEndpointVolume.Release();
@@ -2546,17 +2597,14 @@ void CTrayVolumeWnd::OnFinalMessage(HWND hWnd)
 
 VOID CTrayVolumeWnd::FadeOut()
 {
-    if (m_AnimPhase == TFY_CLOSE)
+    if (!BeginFlyoutClose(m_hWnd))
         return;
-    g_VolDismissTick = GetTickCount64();
-    m_AnimPhase = TFY_CLOSE;
-    m_AnimT0 = g_VolDismissTick;
-    SetTimer(TFY_TIMER_ANIM, 16, NULL);
+    g_VolDismissTick = m_AnimT0;
 }
 
 VOID TrayVolume_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor)
 {
-    if (GetTickCount64() - g_VolDismissTick < 350)
+    if (GetTickCount64() - g_VolDismissTick < TFY_REOPEN_GUARD_MS)
         return;
 
     if (g_pTrayVolume && g_pTrayVolume->IsWindow())
@@ -2622,7 +2670,8 @@ TfyExtractAppIcon(LPCWSTR pszPath)
 #define TFY_TIMER_MIXMETER 8
 
 class CVolumeMixerWnd :
-    public CWindowImpl<CVolumeMixerWnd, CWindow, CTrayFlyoutTraits>
+    public CWindowImpl<CVolumeMixerWnd, CWindow, CTrayFlyoutTraits>,
+    public CTrayFlyoutAnimation
 {
 public:
     DECLARE_WND_CLASS_EX(L"ROSVolumeMixer", CS_DROPSHADOW, COLOR_WINDOW)
@@ -2635,6 +2684,7 @@ public:
     CComPtr<IAudioSessionManager2> m_pSessionMgr;
     CAtlArray<TFYMIXCOL> m_Cols;
     CAtlArray<TFYAUDIODEV> m_Devices;
+    BOOL m_bAudioLoaded;
     HFONT m_hFont;
     HFONT m_hFontSmall;
     WCHAR m_szDevice[128];
@@ -2646,25 +2696,23 @@ public:
     BOOL m_bMenu;
     BOOL m_bTracking;
     int m_iDragCol;
-    int m_AnimPhase;
-    ULONGLONG m_AnimT0;
-    POINT m_ptFinal;
     RECT m_rcMasterCol, m_rcMasterSlider, m_rcMasterMeter, m_rcMasterMute;
     RECT m_rcDeviceGroup, m_rcAppsGroup, m_rcDevLabel;
     SIZE m_size;
     int m_nTick;
 
-    CVolumeMixerWnd() : m_hFont(NULL), m_hFontSmall(NULL),
+    CVolumeMixerWnd() : m_bAudioLoaded(FALSE), m_hFont(NULL), m_hFontSmall(NULL),
                         m_nMaster(0), m_bMasterMute(FALSE), m_bMasterActive(TRUE),
                         m_fMasterPeak(0.0f), m_bDevHot(FALSE), m_bMenu(FALSE), m_bTracking(FALSE),
-                        m_iDragCol(-2), m_AnimPhase(TFY_NONE), m_AnimT0(0), m_nTick(0)
+                        m_iDragCol(-2), m_nTick(0)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
-        ZeroMemory(&m_ptFinal, sizeof(m_ptFinal));
         ZeroMemory(&m_size, sizeof(m_size));
         ZeroMemory(&m_rcDevLabel, sizeof(m_rcDevLabel));
         ZeroMemory(&m_rcMasterMeter, sizeof(m_rcMasterMeter));
-        m_szDevice[0] = 0;
+        m_nMaster = (int)InterlockedCompareExchange(&g_TfyAudioPercent, 0, 0);
+        m_bMasterMute = InterlockedCompareExchange(&g_TfyAudioMute, 0, 0) != 0;
+        StringCchCopyW(m_szDevice, _countof(m_szDevice), L"Speakers");
     }
 
     int Sc(int v) const { return ShellScaleForDpi(v); }
@@ -2840,6 +2888,9 @@ public:
         m_Cols.Add(sysCol);
         for (SIZE_T i = 0; i < apps.GetCount(); i++)
             m_Cols.Add(apps[i]);
+        m_bAudioLoaded = TRUE;
+        InterlockedExchange(&g_TfyAudioPercent, m_nMaster);
+        InterlockedExchange(&g_TfyAudioMute, m_bMasterMute);
     }
 
     VOID LayoutColumn(RECT *prcCol, RECT *prcSlider, RECT *prcMeter, RECT *prcMute, int x, int cx)
@@ -2855,7 +2906,8 @@ public:
     {
         int devW = Sc(118);
         int colW = Sc(100);
-        int nApps = (int)m_Cols.GetCount();
+        int nCols = (int)m_Cols.GetCount();
+        int nApps = max(nCols, 1);
 
         m_size.cy = Sc(400);
         m_size.cx = Sc(14) + devW + Sc(14) + nApps * colW + Sc(14);
@@ -2866,7 +2918,7 @@ public:
 
         x += devW + Sc(14);
         SetRect(&m_rcAppsGroup, x, Sc(44), x + nApps * colW, m_size.cy - Sc(12));
-        for (int i = 0; i < nApps; i++)
+        for (int i = 0; i < nCols; i++)
         {
             TFYMIXCOL &col = m_Cols[i];
             LayoutColumn(&col.rcCol, &col.rcSlider, &col.rcMeter, &col.rcMute, x + i * colW, colW);
@@ -3138,6 +3190,7 @@ public:
 
     VOID ApplyColPercent(int iCol, int nPercent)
     {
+        EnsureAudioLoaded();
         if (nPercent < 0) nPercent = 0;
         if (nPercent > 100) nPercent = 100;
 
@@ -3154,6 +3207,8 @@ public:
             if (col.pVolume)
                 col.pVolume->SetMasterVolume(nPercent / 100.0f, NULL);
         }
+        if (iCol == -1)
+            InterlockedExchange(&g_TfyAudioPercent, m_nMaster);
         InvalidateRect(NULL, FALSE);
     }
 
@@ -3168,6 +3223,7 @@ public:
 
     VOID ShowDeviceMenu()
     {
+        EnsureAudioLoaded();
         if (m_Devices.GetCount() == 0 || m_bMenu)
             return;
         HMENU hMenu = CreatePopupMenu();
@@ -3212,9 +3268,11 @@ public:
         }
         if (PtInRect(&m_rcMasterMute, pt))
         {
+            EnsureAudioLoaded();
             m_bMasterMute = !m_bMasterMute;
             if (m_pEndpointVolume)
                 m_pEndpointVolume->SetMute(m_bMasterMute, NULL);
+            InterlockedExchange(&g_TfyAudioMute, m_bMasterMute);
             InvalidateRect(NULL, FALSE);
             return 0;
         }
@@ -3350,37 +3408,19 @@ public:
 
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
-        if (wParam == TFY_TIMER_ANIM)
+        if (HandleFlyoutAnimation(m_hWnd, wParam))
+            return 0;
+
+        if (wParam == TFY_TIMER_AUDIOLOAD)
         {
-            ULONGLONG now = GetTickCount64();
             if (m_AnimPhase == TFY_OPEN)
             {
-                double t = (double)(now - m_AnimT0) / 160.0;
-                double e = TfyEase(t);
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * e), LWA_ALPHA);
-                SetWindowPos(NULL, m_ptFinal.x, m_ptFinal.y + (int)(Sc(10) * (1.0 - e)), 0, 0,
-                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                if (t >= 1.0)
-                {
-                    m_AnimPhase = TFY_NONE;
-                    KillTimer(TFY_TIMER_ANIM);
-                }
+                SetTimer(TFY_TIMER_AUDIOLOAD, TFY_ANIM_INTERVAL, NULL);
+                return 0;
             }
-            else if (m_AnimPhase == TFY_CLOSE)
-            {
-                double t = (double)(now - m_AnimT0) / 120.0;
-                if (t >= 1.0)
-                {
-                    KillTimer(TFY_TIMER_ANIM);
-                    DestroyWindow();
-                    return 0;
-                }
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * (1.0 - TfyEase(t))), LWA_ALPHA);
-            }
-            else
-            {
-                KillTimer(TFY_TIMER_ANIM);
-            }
+            KillTimer(TFY_TIMER_AUDIOLOAD);
+            if (m_AnimPhase != TFY_CLOSE)
+                EnsureAudioLoaded();
             return 0;
         }
 
@@ -3476,6 +3516,19 @@ public:
                      SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
+    VOID EnsureAudioLoaded()
+    {
+        if (m_bAudioLoaded)
+            return;
+        KillTimer(TFY_TIMER_AUDIOLOAD);
+        BuildAudio();
+        Layout();
+        Reposition();
+        InvalidateRect(NULL, FALSE);
+        SetTimer(TFY_TIMER_MIXSTATE, 500, NULL);
+        SetTimer(TFY_TIMER_MIXMETER, 50, NULL);
+    }
+
     LRESULT OnKeyDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
         if (wParam == VK_ESCAPE)
@@ -3493,6 +3546,7 @@ public:
     LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
         KillTimer(TFY_TIMER_ANIM);
+        KillTimer(TFY_TIMER_AUDIOLOAD);
         KillTimer(TFY_TIMER_MIXSTATE);
         KillTimer(TFY_TIMER_MIXMETER);
         FreeCols();
@@ -3518,7 +3572,6 @@ public:
         if (!m_hFont) m_hFont = TfyCreateFont(12, FW_SEMIBOLD);
         if (!m_hFontSmall) m_hFontSmall = TfyCreateFont(11, FW_NORMAL);
 
-        BuildAudio();
         Layout();
         ptRef.x = prcAnchor->right;
         ptRef.y = prcAnchor->bottom;
@@ -3531,20 +3584,8 @@ public:
         yPos = prcAnchor->bottom - m_size.cy;
         if (yPos < mi.rcMonitor.top) yPos = mi.rcMonitor.top;
 
-        m_ptFinal.x = xPos;
-        m_ptFinal.y = yPos;
-
-        m_AnimPhase = TFY_OPEN;
-        m_AnimT0 = GetTickCount64();
-
-        SetLayeredWindowAttributes(m_hWnd, 0, 0, LWA_ALPHA);
-        SetWindowPos(HWND_TOPMOST, xPos, yPos + Sc(10), m_size.cx, m_size.cy,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        ::SetForegroundWindow(m_hWnd);
-        SetTimer(TFY_TIMER_ANIM, 16, NULL);
-        SetTimer(TFY_TIMER_MIXSTATE, 500, NULL);
-        SetTimer(TFY_TIMER_MIXMETER, 50, NULL);
-        InvalidateRect(NULL, FALSE);
+        BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg);
+        SetTimer(TFY_TIMER_AUDIOLOAD, TFY_ANIM_OPEN_MS + TFY_ANIM_INTERVAL, NULL);
     }
 
     virtual void OnFinalMessage(HWND hWnd) override;
@@ -3576,17 +3617,14 @@ void CVolumeMixerWnd::OnFinalMessage(HWND hWnd)
 
 VOID CVolumeMixerWnd::FadeOut()
 {
-    if (m_AnimPhase == TFY_CLOSE)
+    if (!BeginFlyoutClose(m_hWnd))
         return;
-    g_MixerDismissTick = GetTickCount64();
-    m_AnimPhase = TFY_CLOSE;
-    m_AnimT0 = g_MixerDismissTick;
-    SetTimer(TFY_TIMER_ANIM, 16, NULL);
+    g_MixerDismissTick = m_AnimT0;
 }
 
 VOID TrayMixer_Open(const RECT *prcAnchor)
 {
-    if (GetTickCount64() - g_MixerDismissTick < 350)
+    if (GetTickCount64() - g_MixerDismissTick < TFY_REOPEN_GUARD_MS)
         return;
 
     if (g_pVolumeMixer && g_pVolumeMixer->IsWindow())
@@ -3629,8 +3667,12 @@ typedef DWORD (WINAPI *PFN_WLANSETINTERFACE)(HANDLE, const GUID *, WLAN_INTF_OPC
 typedef VOID (WINAPI *PFN_WLANFREEMEMORY)(PVOID);
 
 #define TFY_WM_WLANNOTIFY (WM_APP + 41)
+#define TFY_WM_NETREFRESH (WM_APP + 42)
 #define TFY_TIMER_SCAN 9
 #define TFY_TIMER_POLL 10
+#define TFY_TIMER_RESCAN 12
+#define TFY_NET_VISROWS 3
+#define TFY_TIMER_SPIN 13
 #define TFY_NET_EDIT_ID 101
 
 #define TFY_NETHIT_NONE     -1
@@ -3662,6 +3704,313 @@ struct TFYNETROW
     RECT rcCheck;
     RECT rcEdit;
 };
+
+struct TFYNETCACHE
+{
+    TFYNETROW Adapters[20];
+    TFYNETROW Wlan[24];
+    DWORD nAdapters;
+    DWORD nWlan;
+    int nWlanIfaces;
+    BOOL bWifiOn;
+    BOOL bValid;
+};
+
+struct TFYNETREFRESH
+{
+    BOOL bScan;
+};
+
+static TFYNETCACHE g_NetCache;
+static SRWLOCK g_NetCacheLock = SRWLOCK_INIT;
+static volatile LONG g_NetRefreshActive = 0;
+static volatile LONG g_NetRadioState = TRUE;
+static PVOID volatile g_NetRefreshWindow = NULL;
+
+static VOID
+TfyCollectAdapterRows(TFYNETCACHE *pCache)
+{
+    ULONG cbBuffer = 16 * 1024;
+    PIP_ADAPTER_ADDRESSES pAddresses = NULL;
+    ULONG ret;
+
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+        pAddresses = (PIP_ADAPTER_ADDRESSES)HeapAlloc(hProcessHeap, 0, cbBuffer);
+        if (!pAddresses)
+            return;
+        ret = GetAdaptersAddresses(AF_INET,
+                                   GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                                   GAA_FLAG_SKIP_DNS_SERVER,
+                                   NULL, pAddresses, &cbBuffer);
+        if (ret == ERROR_BUFFER_OVERFLOW)
+        {
+            HeapFree(hProcessHeap, 0, pAddresses);
+            pAddresses = NULL;
+            continue;
+        }
+        if (ret != NO_ERROR)
+        {
+            HeapFree(hProcessHeap, 0, pAddresses);
+            return;
+        }
+        break;
+    }
+    if (!pAddresses)
+        return;
+
+    for (PIP_ADAPTER_ADDRESSES pCurrent = pAddresses;
+         pCurrent != NULL && pCache->nAdapters < _countof(pCache->Adapters);
+         pCurrent = pCurrent->Next)
+    {
+        if (pCurrent->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
+            pCurrent->IfType == IF_TYPE_TUNNEL ||
+            pCurrent->IfType == IF_TYPE_IEEE80211)
+        {
+            continue;
+        }
+
+        TFYNETROW *pRow = &pCache->Adapters[pCache->nAdapters++];
+        ZeroMemory(pRow, sizeof(*pRow));
+        pRow->nType = 0;
+        if (pCurrent->AdapterName)
+        {
+            WCHAR szGuid[64];
+            if (MultiByteToWideChar(CP_ACP, 0, pCurrent->AdapterName, -1,
+                                    szGuid, _countof(szGuid)) > 0)
+            {
+                CLSIDFromString(szGuid, &pRow->ifGuid);
+            }
+        }
+        StringCchCopyW(pRow->szName, _countof(pRow->szName),
+                       pCurrent->FriendlyName ? pCurrent->FriendlyName : L"Network adapter");
+        if (pCurrent->OperStatus == IfOperStatusUp)
+        {
+            pRow->bConnected = TRUE;
+            StringCchCopyW(pRow->szStatus, _countof(pRow->szStatus), L"Connected");
+            for (PIP_ADAPTER_UNICAST_ADDRESS pAddr = pCurrent->FirstUnicastAddress;
+                 pAddr != NULL; pAddr = pAddr->Next)
+            {
+                if (pAddr->Address.lpSockaddr &&
+                    pAddr->Address.lpSockaddr->sa_family == AF_INET)
+                {
+                    BYTE *ip = (BYTE *)&((struct sockaddr_in *)pAddr->Address.lpSockaddr)->sin_addr;
+                    StringCchPrintfW(pRow->szStatus, _countof(pRow->szStatus),
+                                     L"Connected \x2014 %u.%u.%u.%u",
+                                     ip[0], ip[1], ip[2], ip[3]);
+                    break;
+                }
+            }
+        }
+        else
+        {
+            StringCchCopyW(pRow->szStatus, _countof(pRow->szStatus), L"Not connected");
+        }
+    }
+    HeapFree(hProcessHeap, 0, pAddresses);
+}
+
+static VOID
+TfyCollectWlanRows(TFYNETCACHE *pCache, BOOL bScan)
+{
+    HMODULE hWlanApi = LoadLibraryW(L"wlanapi.dll");
+    HANDLE hWlan = NULL;
+    PWLAN_INTERFACE_INFO_LIST pInterfaces = NULL;
+    PFN_WLANOPENHANDLE pfnOpen;
+    PFN_WLANCLOSEHANDLE pfnClose;
+    PFN_WLANENUMINTERFACES pfnEnum;
+    PFN_WLANGETNETWORKLIST pfnList;
+    PFN_WLANSCAN pfnScan;
+    PFN_WLANQUERYINTERFACE pfnQuery;
+    PFN_WLANFREEMEMORY pfnFree;
+    DWORD dwVersion = 0;
+    BOOL bAnyRadio = FALSE, bRadioOn = FALSE;
+
+    pCache->bWifiOn = TRUE;
+    if (!hWlanApi)
+        return;
+
+    pfnOpen = (PFN_WLANOPENHANDLE)GetProcAddress(hWlanApi, "WlanOpenHandle");
+    pfnClose = (PFN_WLANCLOSEHANDLE)GetProcAddress(hWlanApi, "WlanCloseHandle");
+    pfnEnum = (PFN_WLANENUMINTERFACES)GetProcAddress(hWlanApi, "WlanEnumInterfaces");
+    pfnList = (PFN_WLANGETNETWORKLIST)GetProcAddress(hWlanApi, "WlanGetAvailableNetworkList");
+    pfnScan = (PFN_WLANSCAN)GetProcAddress(hWlanApi, "WlanScan");
+    pfnQuery = (PFN_WLANQUERYINTERFACE)GetProcAddress(hWlanApi, "WlanQueryInterface");
+    pfnFree = (PFN_WLANFREEMEMORY)GetProcAddress(hWlanApi, "WlanFreeMemory");
+    if (!pfnOpen || !pfnClose || !pfnEnum || !pfnList || !pfnFree ||
+        pfnOpen(2, NULL, &dwVersion, &hWlan) != ERROR_SUCCESS)
+    {
+        FreeLibrary(hWlanApi);
+        return;
+    }
+    if (pfnEnum(hWlan, NULL, &pInterfaces) != ERROR_SUCCESS || !pInterfaces)
+        goto cleanup;
+
+    pCache->nWlanIfaces = (int)pInterfaces->dwNumberOfItems;
+    for (DWORD i = 0; i < pInterfaces->dwNumberOfItems; i++)
+    {
+        const GUID *pGuid = &pInterfaces->InterfaceInfo[i].InterfaceGuid;
+        PWLAN_AVAILABLE_NETWORK_LIST pNetworks = NULL;
+
+        if (pfnQuery)
+        {
+            DWORD cb = 0;
+            PVOID pData = NULL;
+            WLAN_OPCODE_VALUE_TYPE vt;
+            if (pfnQuery(hWlan, pGuid, wlan_intf_opcode_radio_state, NULL,
+                         &cb, &pData, &vt) == ERROR_SUCCESS && pData)
+            {
+                WLAN_RADIO_STATE *pState = (WLAN_RADIO_STATE *)pData;
+                bAnyRadio = TRUE;
+                for (DWORD k = 0; k < pState->dwNumberOfPhys && k < 64; k++)
+                {
+                    if (pState->PhyRadioState[k].dot11SoftwareRadioState == dot11_radio_state_on)
+                        bRadioOn = TRUE;
+                }
+                pfnFree(pData);
+            }
+        }
+        if (bScan && pfnScan)
+            pfnScan(hWlan, pGuid, NULL, NULL, NULL);
+        if (pfnList(hWlan, pGuid, 0, NULL, &pNetworks) != ERROR_SUCCESS || !pNetworks)
+            continue;
+
+        for (DWORD n = 0;
+             n < pNetworks->dwNumberOfItems && pCache->nWlan < _countof(pCache->Wlan);
+             n++)
+        {
+            WLAN_AVAILABLE_NETWORK *pNet = &pNetworks->Network[n];
+            WCHAR szSsid[DOT11_SSID_MAX_LENGTH + 1];
+            UINT cch;
+            BOOL bDuplicate = FALSE;
+
+            if (pNet->dot11Ssid.uSSIDLength == 0)
+                continue;
+            cch = MultiByteToWideChar(CP_UTF8, 0, (LPCSTR)pNet->dot11Ssid.ucSSID,
+                                      pNet->dot11Ssid.uSSIDLength,
+                                      szSsid, _countof(szSsid) - 1);
+            if (!cch)
+                continue;
+            szSsid[cch] = 0;
+            for (DWORD r = 0; r < pCache->nWlan; r++)
+            {
+                TFYNETROW *pExisting = &pCache->Wlan[r];
+                if (!IsEqualGUID(pExisting->ifGuid, *pGuid) ||
+                    wcscmp(pExisting->szName, szSsid))
+                    continue;
+                bDuplicate = TRUE;
+                if ((int)pNet->wlanSignalQuality > pExisting->nSignal)
+                    pExisting->nSignal = pNet->wlanSignalQuality;
+                if (pNet->dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED)
+                    pExisting->bConnected = TRUE;
+                if ((pNet->dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE) &&
+                    !pExisting->bHasProfile)
+                {
+                    pExisting->bHasProfile = TRUE;
+                    StringCchCopyW(pExisting->szProfile, _countof(pExisting->szProfile),
+                                   pNet->strProfileName);
+                }
+                break;
+            }
+            if (bDuplicate)
+                continue;
+
+            TFYNETROW *pRow = &pCache->Wlan[pCache->nWlan++];
+            ZeroMemory(pRow, sizeof(*pRow));
+            pRow->nType = 2;
+            pRow->ifGuid = *pGuid;
+            pRow->nSignal = pNet->wlanSignalQuality;
+            pRow->bConnected = !!(pNet->dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED);
+            pRow->bHasProfile = !!(pNet->dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE);
+            pRow->bSecure = pNet->bSecurityEnabled;
+            pRow->bConnectable = pNet->bNetworkConnectable;
+            pRow->auth = pNet->dot11DefaultAuthAlgorithm;
+            pRow->cipher = pNet->dot11DefaultCipherAlgorithm;
+            StringCchCopyW(pRow->szName, _countof(pRow->szName), szSsid);
+            if (pRow->bHasProfile)
+                StringCchCopyW(pRow->szProfile, _countof(pRow->szProfile), pNet->strProfileName);
+            if (pRow->bConnected)
+                StringCchCopyW(pRow->szStatus, _countof(pRow->szStatus), L"Connected");
+        }
+        pfnFree(pNetworks);
+    }
+
+    for (DWORD a = 0; a < pCache->nWlan; a++)
+    {
+        for (DWORD b = a + 1; b < pCache->nWlan; b++)
+        {
+            TFYNETROW *pLeft = &pCache->Wlan[a];
+            TFYNETROW *pRight = &pCache->Wlan[b];
+            if ((pRight->bConnected && !pLeft->bConnected) ||
+                (pRight->bConnected == pLeft->bConnected &&
+                 pRight->nSignal > pLeft->nSignal))
+            {
+                TFYNETROW tmp = *pLeft;
+                *pLeft = *pRight;
+                *pRight = tmp;
+            }
+        }
+    }
+    pCache->bWifiOn = bAnyRadio ? bRadioOn : TRUE;
+
+cleanup:
+    if (pInterfaces)
+        pfnFree(pInterfaces);
+    pfnClose(hWlan, NULL);
+    FreeLibrary(hWlanApi);
+}
+
+static DWORD WINAPI
+TfyNetworkRefreshThread(LPVOID lpParameter)
+{
+    TFYNETREFRESH *pRefresh = (TFYNETREFRESH *)lpParameter;
+    TFYNETCACHE Cache;
+    HWND hWnd;
+
+    ZeroMemory(&Cache, sizeof(Cache));
+    TfyCollectAdapterRows(&Cache);
+    TfyCollectWlanRows(&Cache, pRefresh->bScan);
+    Cache.bValid = TRUE;
+
+    AcquireSRWLockExclusive(&g_NetCacheLock);
+    g_NetCache = Cache;
+    ReleaseSRWLockExclusive(&g_NetCacheLock);
+    InterlockedExchange(&g_NetRadioState, Cache.bWifiOn);
+
+    hWnd = (HWND)InterlockedCompareExchangePointer(&g_NetRefreshWindow, NULL, NULL);
+    InterlockedExchange(&g_NetRefreshActive, 0);
+    if (hWnd)
+        PostMessageW(hWnd, TFY_WM_NETREFRESH, pRefresh->bScan, 0);
+    HeapFree(hProcessHeap, 0, pRefresh);
+    return 0;
+}
+
+static BOOL
+TfyQueueNetworkRefresh(HWND hWnd, BOOL bScan)
+{
+    TFYNETREFRESH *pRefresh;
+    HANDLE hThread;
+
+    InterlockedExchangePointer(&g_NetRefreshWindow, hWnd);
+    if (InterlockedCompareExchange(&g_NetRefreshActive, 1, 0) != 0)
+        return FALSE;
+    pRefresh = (TFYNETREFRESH *)HeapAlloc(hProcessHeap, 0, sizeof(*pRefresh));
+    if (!pRefresh)
+    {
+        InterlockedExchange(&g_NetRefreshActive, 0);
+        return FALSE;
+    }
+    pRefresh->bScan = bScan;
+    hThread = CreateThread(NULL, 0, TfyNetworkRefreshThread, pRefresh, 0, NULL);
+    if (!hThread)
+    {
+        HeapFree(hProcessHeap, 0, pRefresh);
+        InterlockedExchange(&g_NetRefreshActive, 0);
+        return FALSE;
+    }
+    CloseHandle(hThread);
+    return TRUE;
+}
 
 static VOID
 TfyXmlEscape(LPCWSTR pszIn, LPWSTR pszOut, SIZE_T cchOut)
@@ -3708,7 +4057,8 @@ TfyNetEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
 }
 
 class CTrayNetworkWnd :
-    public CWindowImpl<CTrayNetworkWnd, CWindow, CTrayFlyoutTraits>
+    public CWindowImpl<CTrayNetworkWnd, CWindow, CTrayFlyoutTraits>,
+    public CTrayFlyoutAnimation
 {
 public:
     DECLARE_WND_CLASS_EX(L"TrayNetworkFlyout", CS_DROPSHADOW, COLOR_WINDOW)
@@ -3740,14 +4090,17 @@ public:
     BOOL m_bAutoConnect;
     BOOL m_bPassMode;
     BOOL m_bScanning;
+    BOOL m_bScanPending;
+    BOOL m_bLaunching;
+    int m_nWlanScroll;
+    BOOL m_bWlanLoading;
+    ULONGLONG m_SpinT0;
+    RECT m_rcWlanArea;
     BOOL m_bConnecting;
     BOOL m_bTracking;
     int m_nIfaces;
     WCHAR m_szSelName[128];
     WCHAR m_szBanner[128];
-    int m_AnimPhase;
-    ULONGLONG m_AnimT0;
-    POINT m_ptFinal;
     RECT m_rcAnchor;
     SIZE m_size;
     RECT m_rcLink;
@@ -3766,11 +4119,12 @@ public:
                         m_hwndEdit(NULL), m_hbrEdit(NULL),
                         m_iHot(TFY_NETHIT_NONE), m_iSel(-1), m_iHotBtn(0),
                         m_bAutoConnect(TRUE), m_bPassMode(FALSE), m_bScanning(FALSE),
+                        m_bScanPending(FALSE), m_bLaunching(FALSE), m_nWlanScroll(0),
+                        m_bWlanLoading(FALSE), m_SpinT0(0),
                         m_bConnecting(FALSE), m_bTracking(FALSE), m_nIfaces(0),
-                        m_AnimPhase(TFY_NONE), m_AnimT0(0), m_bWifiOn(TRUE), m_bAirplane(FALSE)
+                        m_bWifiOn(TRUE), m_bAirplane(FALSE)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
-        ZeroMemory(&m_ptFinal, sizeof(m_ptFinal));
         ZeroMemory(&m_rcAnchor, sizeof(m_rcAnchor));
         ZeroMemory(&m_size, sizeof(m_size));
         ZeroMemory(&m_rcLink, sizeof(m_rcLink));
@@ -3862,32 +4216,7 @@ public:
 
     BOOL QueryRadio()
     {
-        PWLAN_INTERFACE_INFO_LIST pInterfaces = NULL;
-        BOOL bAny = FALSE, bOn = FALSE;
-        if (!LoadWlan() || !m_pfnQuery)
-            return TRUE;
-        if (m_pfnEnum(m_hWlan, NULL, &pInterfaces) != ERROR_SUCCESS || !pInterfaces)
-            return TRUE;
-        for (DWORD i = 0; i < pInterfaces->dwNumberOfItems; i++)
-        {
-            DWORD cb = 0;
-            PVOID pData = NULL;
-            WLAN_OPCODE_VALUE_TYPE vt;
-            if (m_pfnQuery(m_hWlan, &pInterfaces->InterfaceInfo[i].InterfaceGuid,
-                           wlan_intf_opcode_radio_state, NULL, &cb, &pData, &vt) == ERROR_SUCCESS && pData)
-            {
-                WLAN_RADIO_STATE *prs = (WLAN_RADIO_STATE *)pData;
-                bAny = TRUE;
-                for (DWORD k = 0; k < prs->dwNumberOfPhys && k < 64; k++)
-                {
-                    if (prs->PhyRadioState[k].dot11SoftwareRadioState == dot11_radio_state_on)
-                        bOn = TRUE;
-                }
-                m_pfnFree(pData);
-            }
-        }
-        m_pfnFree(pInterfaces);
-        return bAny ? bOn : TRUE;
+        return InterlockedCompareExchange(&g_NetRadioState, 0, 0) != 0;
     }
 
     VOID SetRadio(BOOL bOn)
@@ -3908,6 +4237,7 @@ public:
                      wlan_intf_opcode_radio_state, sizeof(rs), &rs, NULL);
         }
         m_pfnFree(pInterfaces);
+        InterlockedExchange(&g_NetRadioState, bOn);
     }
 
     VOID ToggleAirplane()
@@ -3956,162 +4286,13 @@ public:
         m_hWlan = NULL;
     }
 
-    VOID AddAdapters()
+    VOID AddSection(LPCWSTR pszText)
     {
-        ULONG cbBuffer = 16 * 1024;
-        PIP_ADAPTER_ADDRESSES pAddresses = NULL;
-        ULONG ret;
-        for (int attempt = 0; attempt < 3; attempt++)
-        {
-            pAddresses = (PIP_ADAPTER_ADDRESSES)HeapAlloc(hProcessHeap, 0, cbBuffer);
-            if (!pAddresses)
-                return;
-            ret = GetAdaptersAddresses(AF_INET,
-                                       GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
-                                       NULL, pAddresses, &cbBuffer);
-            if (ret == ERROR_BUFFER_OVERFLOW)
-            {
-                HeapFree(hProcessHeap, 0, pAddresses);
-                pAddresses = NULL;
-                continue;
-            }
-            if (ret != NO_ERROR)
-            {
-                HeapFree(hProcessHeap, 0, pAddresses);
-                return;
-            }
-            break;
-        }
-        if (!pAddresses)
-            return;
-        for (PIP_ADAPTER_ADDRESSES pCurrent = pAddresses;
-             pCurrent != NULL && m_Rows.GetCount() < 20;
-             pCurrent = pCurrent->Next)
-        {
-            if (pCurrent->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
-                pCurrent->IfType == IF_TYPE_TUNNEL ||
-                pCurrent->IfType == IF_TYPE_IEEE80211)
-                continue;
-            TFYNETROW row;
-            ZeroMemory(&row, sizeof(row));
-            row.nType = 0;
-            StringCchCopyW(row.szName, _countof(row.szName),
-                           pCurrent->FriendlyName ? pCurrent->FriendlyName : L"Network adapter");
-            if (pCurrent->OperStatus == IfOperStatusUp)
-            {
-                row.bConnected = TRUE;
-                StringCchCopyW(row.szStatus, _countof(row.szStatus), L"Connected");
-                for (PIP_ADAPTER_UNICAST_ADDRESS pAddr = pCurrent->FirstUnicastAddress;
-                     pAddr != NULL; pAddr = pAddr->Next)
-                {
-                    if (pAddr->Address.lpSockaddr &&
-                        pAddr->Address.lpSockaddr->sa_family == AF_INET)
-                    {
-                        BYTE *ip = (BYTE *)&((struct sockaddr_in *)pAddr->Address.lpSockaddr)->sin_addr;
-                        StringCchPrintfW(row.szStatus, _countof(row.szStatus),
-                                         L"Connected \x2014 %u.%u.%u.%u",
-                                         ip[0], ip[1], ip[2], ip[3]);
-                        break;
-                    }
-                }
-            }
-            else
-            {
-                StringCchCopyW(row.szStatus, _countof(row.szStatus), L"Not connected");
-            }
-            m_Rows.Add(row);
-        }
-        HeapFree(hProcessHeap, 0, pAddresses);
-    }
-
-    VOID AddWlanNetworks()
-    {
-        PWLAN_INTERFACE_INFO_LIST pInterfaces = NULL;
-        m_nIfaces = 0;
-        if (!LoadWlan())
-            return;
-        if (m_pfnEnum(m_hWlan, NULL, &pInterfaces) != ERROR_SUCCESS || !pInterfaces)
-            return;
-        m_nIfaces = (int)pInterfaces->dwNumberOfItems;
-        for (DWORD i = 0; i < pInterfaces->dwNumberOfItems; i++)
-        {
-            PWLAN_AVAILABLE_NETWORK_LIST pNetworks = NULL;
-            const GUID *pGuid = &pInterfaces->InterfaceInfo[i].InterfaceGuid;
-            if (m_pfnList(m_hWlan, pGuid, 0, NULL, &pNetworks) != ERROR_SUCCESS || !pNetworks)
-                continue;
-            for (DWORD n = 0; n < pNetworks->dwNumberOfItems && m_Rows.GetCount() < 24; n++)
-            {
-                WLAN_AVAILABLE_NETWORK *pNet = &pNetworks->Network[n];
-                WCHAR szSsid[DOT11_SSID_MAX_LENGTH + 1];
-                UINT cch;
-                if (pNet->dot11Ssid.uSSIDLength == 0)
-                    continue;
-                cch = MultiByteToWideChar(CP_UTF8, 0,
-                                          (LPCSTR)pNet->dot11Ssid.ucSSID,
-                                          pNet->dot11Ssid.uSSIDLength,
-                                          szSsid, _countof(szSsid) - 1);
-                szSsid[cch] = 0;
-                BOOL bDuplicate = FALSE;
-                for (SIZE_T r = 0; r < m_Rows.GetCount(); r++)
-                {
-                    TFYNETROW &ex = m_Rows[r];
-                    if (ex.nType == 2 && !wcscmp(ex.szName, szSsid))
-                    {
-                        bDuplicate = TRUE;
-                        if ((int)pNet->wlanSignalQuality > ex.nSignal)
-                            ex.nSignal = pNet->wlanSignalQuality;
-                        if (pNet->dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED)
-                            ex.bConnected = TRUE;
-                        if ((pNet->dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE) && !ex.bHasProfile)
-                        {
-                            ex.bHasProfile = TRUE;
-                            StringCchCopyW(ex.szProfile, _countof(ex.szProfile), pNet->strProfileName);
-                        }
-                        break;
-                    }
-                }
-                if (bDuplicate)
-                    continue;
-                TFYNETROW row;
-                ZeroMemory(&row, sizeof(row));
-                row.nType = 2;
-                row.ifGuid = *pGuid;
-                row.nSignal = pNet->wlanSignalQuality;
-                row.bConnected = (pNet->dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED) != 0;
-                row.bHasProfile = (pNet->dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE) != 0;
-                row.bSecure = pNet->bSecurityEnabled;
-                row.bConnectable = pNet->bNetworkConnectable;
-                row.auth = pNet->dot11DefaultAuthAlgorithm;
-                row.cipher = pNet->dot11DefaultCipherAlgorithm;
-                StringCchCopyW(row.szName, _countof(row.szName), szSsid);
-                if (row.bHasProfile)
-                    StringCchCopyW(row.szProfile, _countof(row.szProfile), pNet->strProfileName);
-                if (row.bConnected)
-                    StringCchCopyW(row.szStatus, _countof(row.szStatus), L"Connected");
-                m_Rows.Add(row);
-            }
-            m_pfnFree(pNetworks);
-        }
-        m_pfnFree(pInterfaces);
-        for (SIZE_T a = 0; a < m_Rows.GetCount(); a++)
-        {
-            for (SIZE_T b = a + 1; b < m_Rows.GetCount(); b++)
-            {
-                TFYNETROW &ra = m_Rows[a];
-                TFYNETROW &rb = m_Rows[b];
-                BOOL bSwap = FALSE;
-                if (rb.bConnected && !ra.bConnected)
-                    bSwap = TRUE;
-                else if (rb.bConnected == ra.bConnected && rb.nSignal > ra.nSignal)
-                    bSwap = TRUE;
-                if (bSwap)
-                {
-                    TFYNETROW t = ra;
-                    ra = rb;
-                    rb = t;
-                }
-            }
-        }
+        TFYNETROW row;
+        ZeroMemory(&row, sizeof(row));
+        row.nType = 3;
+        StringCchCopyW(row.szName, _countof(row.szName), pszText);
+        m_Rows.Add(row);
     }
 
     VOID Rebuild()
@@ -4120,8 +4301,18 @@ public:
         StringCchCopyW(szKeep, _countof(szKeep), m_szSelName);
         BOOL bRestore = TRUE;
         m_Rows.SetCount(0);
-        AddWlanNetworks();
-        AddAdapters();
+        AcquireSRWLockShared(&g_NetCacheLock);
+        if (g_NetCache.nAdapters)
+        {
+            AddSection(L"Currently connected to:");
+            for (DWORD k = 0; k < g_NetCache.nAdapters; k++)
+                m_Rows.Add(g_NetCache.Adapters[k]);
+        }
+        AddSection(L"Wireless Network Connection");
+        m_nIfaces = g_NetCache.nWlanIfaces;
+        for (DWORD k = 0; k < g_NetCache.nWlan; k++)
+            m_Rows.Add(g_NetCache.Wlan[k]);
+        ReleaseSRWLockShared(&g_NetCacheLock);
         m_bAirplane = LoadAirplane(&bRestore);
         m_bWifiOn = QueryRadio();
         if (m_nIfaces > 0 && !m_bScanning)
@@ -4161,23 +4352,22 @@ public:
         }
     }
 
-    VOID StartScan()
+    VOID StartScan(BOOL bQuiet = FALSE)
     {
-        PWLAN_INTERFACE_INFO_LIST pInterfaces = NULL;
-        if (!LoadWlan() || !m_pfnScan || !m_bWifiOn || m_bAirplane)
+        if (!m_bWifiOn || m_bAirplane)
             return;
-        if (m_pfnEnum(m_hWlan, NULL, &pInterfaces) != ERROR_SUCCESS || !pInterfaces)
-            return;
-        for (DWORD i = 0; i < pInterfaces->dwNumberOfItems; i++)
-        {
-            if (m_pfnScan(m_hWlan, &pInterfaces->InterfaceInfo[i].InterfaceGuid, NULL, NULL, NULL) == ERROR_SUCCESS)
-                m_bScanning = TRUE;
-        }
-        m_pfnFree(pInterfaces);
-        if (m_bScanning)
-        {
+        m_bScanning = TRUE;
+        if (!bQuiet)
             StringCchCopyW(m_szBanner, _countof(m_szBanner), L"Searching for networks...");
+        if (TfyQueueNetworkRefresh(m_hWnd, TRUE))
+        {
+            m_bScanPending = FALSE;
             SetTimer(TFY_TIMER_SCAN, 8000, NULL);
+        }
+        else
+        {
+            m_bScanPending = TRUE;
+            SetTimer(TFY_TIMER_RESCAN, 100, NULL);
         }
     }
 
@@ -4186,7 +4376,9 @@ public:
         if (!m_bScanning)
             return;
         m_bScanning = FALSE;
+        m_bScanPending = FALSE;
         KillTimer(TFY_TIMER_SCAN);
+        KillTimer(TFY_TIMER_RESCAN);
         if (!wcscmp(m_szBanner, L"Searching for networks..."))
             m_szBanner[0] = 0;
     }
@@ -4194,27 +4386,53 @@ public:
     VOID Layout()
     {
         int y = Sc(10) + Sc(28);
-        m_size.cx = Sc(320);
+        m_size.cx = Sc(256);
         SetRect(&m_rcRefresh, m_size.cx - Sc(12) - Sc(22), Sc(10), m_size.cx - Sc(12), Sc(10) + Sc(22));
         if (m_szBanner[0] || (m_nIfaces == 0 && !m_Rows.GetCount()))
             y += Sc(20);
         if (m_nIfaces > 0)
         {
-            SetRect(&m_rcAirplane, Sc(8), y, m_size.cx - Sc(8), y + Sc(36));
-            y += Sc(36);
-            SetRect(&m_rcWifi, Sc(8), y, m_size.cx - Sc(8), y + Sc(36));
-            y += Sc(36) + Sc(6);
+            int nHalf = (m_size.cx - Sc(16)) / 2;
+            SetRect(&m_rcAirplane, Sc(8), y, Sc(8) + nHalf, y + Sc(32));
+            SetRect(&m_rcWifi, Sc(8) + nHalf, y, Sc(8) + nHalf * 2, y + Sc(32));
+            y += Sc(32) + Sc(6);
         }
         else
         {
             SetRectEmpty(&m_rcAirplane);
             SetRectEmpty(&m_rcWifi);
         }
+        int nWlanTotal = 0;
+        for (SIZE_T k = 0; k < m_Rows.GetCount(); k++)
+        {
+            if (m_Rows[k].nType == 2)
+                nWlanTotal++;
+        }
+        if (m_nWlanScroll > nWlanTotal - TFY_NET_VISROWS)
+            m_nWlanScroll = nWlanTotal - TFY_NET_VISROWS;
+        if (m_nWlanScroll < 0)
+            m_nWlanScroll = 0;
+
+        int nWlanIdx = 0;
+        int nWlanStart = -1;
         for (SIZE_T i = 0; i < m_Rows.GetCount(); i++)
         {
             TFYNETROW &row = m_Rows[i];
-            int nRowH = (row.nType == 2) ? Sc(40) : Sc(46);
+            int nRowH = (row.nType == 3) ? Sc(28) : (row.nType == 2) ? Sc(40) : Sc(46);
             BOOL bExpanded = (row.nType == 2 && (int)i == m_iSel);
+            if (row.nType == 2)
+            {
+                int nThis = nWlanIdx++;
+                if (nThis < m_nWlanScroll || nThis >= m_nWlanScroll + TFY_NET_VISROWS)
+                {
+                    SetRectEmpty(&row.rc);
+                    SetRect(&row.rcButton, 0, 0, 0, 0);
+                    SetRect(&row.rcButton2, 0, 0, 0, 0);
+                    SetRect(&row.rcCheck, 0, 0, 0, 0);
+                    SetRect(&row.rcEdit, 0, 0, 0, 0);
+                    continue;
+                }
+            }
             SetRect(&row.rcButton, 0, 0, 0, 0);
             SetRect(&row.rcButton2, 0, 0, 0, 0);
             SetRect(&row.rcCheck, 0, 0, 0, 0);
@@ -4244,8 +4462,15 @@ public:
                 nRowH = yb - y;
             }
             SetRect(&row.rc, Sc(8), y, m_size.cx - Sc(8), y + nRowH);
+            if (row.nType == 2 && nWlanStart < 0)
+                nWlanStart = y;
             y += nRowH;
         }
+        if (nWlanStart < 0)
+            nWlanStart = y;
+        if (nWlanTotal < TFY_NET_VISROWS)
+            y += (TFY_NET_VISROWS - nWlanTotal) * Sc(40);
+        SetRect(&m_rcWlanArea, Sc(8), nWlanStart, m_size.cx - Sc(8), y);
         y += Sc(8);
         SetRect(&m_rcLink, Sc(8), y, m_size.cx - Sc(8), y + Sc(26));
         y += Sc(26) + Sc(10);
@@ -4269,14 +4494,19 @@ public:
         mi.cbSize = sizeof(mi);
         GetMonitorInfoW(MonitorFromPoint(ptRef, MONITOR_DEFAULTTONEAREST), &mi);
         xPos = m_rcAnchor.right - m_size.cx - Sc(8);
-        if (xPos + m_size.cx > mi.rcMonitor.right) xPos = mi.rcMonitor.right - m_size.cx;
-        if (xPos < mi.rcMonitor.left) xPos = mi.rcMonitor.left;
+        if (xPos + m_size.cx > mi.rcWork.right) xPos = mi.rcWork.right - m_size.cx;
+        if (xPos < mi.rcWork.left) xPos = mi.rcWork.left;
         yPos = m_rcAnchor.top - m_size.cy - Sc(6);
-        if (yPos < mi.rcMonitor.top) yPos = mi.rcMonitor.top;
+        if (yPos + m_size.cy > mi.rcWork.bottom) yPos = mi.rcWork.bottom - m_size.cy;
+        if (yPos < mi.rcWork.top) yPos = mi.rcWork.top;
         m_ptFinal.x = xPos;
         m_ptFinal.y = yPos;
         if (m_AnimPhase == TFY_NONE)
             SetWindowPos(NULL, xPos, yPos, m_size.cx, m_size.cy, SWP_NOZORDER | SWP_NOACTIVATE);
+        else
+            SetWindowPos(NULL, 0, 0, m_size.cx, m_size.cy,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        InvalidateRect(NULL, FALSE);
     }
 
     VOID Relayout()
@@ -4288,26 +4518,33 @@ public:
 
     VOID Toggle(HWND hwndOwner, const RECT *prcAnchor)
     {
+        BOOL bCacheValid;
+
         StartMenu2_GetFlyoutPalette(&m_Pal);
         if (!m_hFont) m_hFont = TfyCreateFont(12, FW_SEMIBOLD);
         if (!m_hFontSmall) m_hFontSmall = TfyCreateFont(11, FW_NORMAL);
         if (!m_hFontHeader) m_hFontHeader = TfyCreateFont(14, FW_SEMIBOLD);
         m_rcAnchor = *prcAnchor;
         Rebuild();
-        if (m_nIfaces == 0)
+        AcquireSRWLockShared(&g_NetCacheLock);
+        bCacheValid = g_NetCache.bValid;
+        ReleaseSRWLockShared(&g_NetCacheLock);
+        if (!bCacheValid)
+        {
+            m_bWlanLoading = TRUE;
+            m_SpinT0 = GetTickCount64();
+            SetTimer(TFY_TIMER_SPIN, 33, NULL);
+        }
+        else if (m_nIfaces == 0)
             StringCchCopyW(m_szBanner, _countof(m_szBanner), L"No wireless adapter");
-        else
-            StartScan();
         Layout();
         Reposition();
-        m_AnimPhase = TFY_OPEN;
-        m_AnimT0 = GetTickCount64();
-        SetLayeredWindowAttributes(m_hWnd, 0, 0, LWA_ALPHA);
-        SetWindowPos(HWND_TOPMOST, m_ptFinal.x, m_ptFinal.y + Sc(10), m_size.cx, m_size.cy,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        ::SetForegroundWindow(m_hWnd);
-        SetTimer(TFY_TIMER_ANIM, 16, NULL);
-        InvalidateRect(NULL, FALSE);
+        BeginFlyoutOpen(m_hWnd, m_ptFinal.x, m_ptFinal.y,
+                        m_size.cx, m_size.cy, m_Pal.PanelBg);
+        if (m_bWifiOn && !m_bAirplane)
+            StartScan(TRUE);
+        else
+            TfyQueueNetworkRefresh(m_hWnd, FALSE);
     }
 
     VOID FadeOut();
@@ -4432,7 +4669,7 @@ public:
         if (i < 0 || i >= (int)m_Rows.GetCount())
             return;
         TFYNETROW &row = m_Rows[i];
-        if (row.nType != 2 || !m_hWlan || !m_pfnConnect)
+        if (row.nType != 2 || !LoadWlan() || !m_pfnConnect)
             return;
         if (IsEnterprise(row) && !row.bHasProfile)
         {
@@ -4498,7 +4735,7 @@ public:
         if (i < 0 || i >= (int)m_Rows.GetCount())
             return;
         TFYNETROW &row = m_Rows[i];
-        if (row.nType != 2 || !m_hWlan || !m_pfnDisconnect)
+        if (row.nType != 2 || !LoadWlan() || !m_pfnDisconnect)
             return;
         m_pfnDisconnect(m_hWlan, &row.ifGuid, NULL);
         row.bConnected = FALSE;
@@ -4549,14 +4786,26 @@ public:
         {
             m_iSel = i;
             if (i >= 0 && m_Rows[i].nType == 2)
+            {
+                int nWlanIndex = 0;
+                for (int k = 0; k < i; k++)
+                {
+                    if (m_Rows[k].nType == 2)
+                        nWlanIndex++;
+                }
+                if (nWlanIndex < m_nWlanScroll)
+                    m_nWlanScroll = nWlanIndex;
+                else if (nWlanIndex >= m_nWlanScroll + TFY_NET_VISROWS)
+                    m_nWlanScroll = nWlanIndex - TFY_NET_VISROWS + 1;
                 StringCchCopyW(m_szSelName, _countof(m_szSelName), m_Rows[i].szName);
+            }
             else
                 m_szSelName[0] = 0;
         }
         Relayout();
     }
 
-    VOID DrawToggle(HDC hdc, const RECT *prc, LPCWSTR pszLabel, BOOL bOn, BOOL bHot, BOOL bEnabled, UINT nIcon)
+    VOID DrawToggle(HDC hdc, const RECT *prc, LPCWSTR pszLabel, BOOL bOn, BOOL bHot, BOOL bEnabled, UINT nIcon, BOOL bCompact = FALSE)
     {
         if (bHot && bEnabled)
         {
@@ -4566,17 +4815,27 @@ public:
         }
         int cyMid = (prc->top + prc->bottom) / 2;
         COLORREF crText = bEnabled ? m_Pal.PanelText : m_Pal.DimText;
-        RECT rcIcon = { prc->left + Sc(8), cyMid - Sc(11), prc->left + Sc(30), cyMid + Sc(11) };
+        int nPad = bCompact ? Sc(12) : Sc(8);
+        RECT rcIcon = { prc->left + nPad, cyMid - Sc(11), prc->left + nPad + Sc(22), cyMid + Sc(11) };
         TfyDrawFluent(hdc, &rcIcon, nIcon);
-        RECT rcSw = { prc->right - Sc(8) - Sc(44), cyMid - Sc(10), prc->right - Sc(8), cyMid + Sc(10) };
-        RECT rcLabel = { prc->left + Sc(38), prc->top, rcSw.left - Sc(40), prc->bottom };
-        SelectObject(hdc, m_hFont);
-        SetTextColor(hdc, crText);
-        DrawTextW(hdc, pszLabel, -1, &rcLabel, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-        RECT rcState = { rcSw.left - Sc(36), prc->top, rcSw.left - Sc(6), prc->bottom };
-        SelectObject(hdc, m_hFontSmall);
-        SetTextColor(hdc, bEnabled ? m_Pal.DimText : TfyMix(m_Pal.PanelBg, m_Pal.DimText, 150));
-        DrawTextW(hdc, bOn ? L"On" : L"Off", -1, &rcState, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
+        RECT rcSw;
+        if (bCompact)
+            SetRect(&rcSw, rcIcon.right + Sc(8), cyMid - Sc(10),
+                    rcIcon.right + Sc(8) + Sc(44), cyMid + Sc(10));
+        else
+            SetRect(&rcSw, prc->right - nPad - Sc(44), cyMid - Sc(10),
+                    prc->right - nPad, cyMid + Sc(10));
+        if (!bCompact)
+        {
+            RECT rcLabel = { prc->left + Sc(38), prc->top, rcSw.left - Sc(40), prc->bottom };
+            SelectObject(hdc, m_hFont);
+            SetTextColor(hdc, crText);
+            DrawTextW(hdc, pszLabel, -1, &rcLabel, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+            RECT rcState = { rcSw.left - Sc(36), prc->top, rcSw.left - Sc(6), prc->bottom };
+            SelectObject(hdc, m_hFontSmall);
+            SetTextColor(hdc, bEnabled ? m_Pal.DimText : TfyMix(m_Pal.PanelBg, m_Pal.DimText, 150));
+            DrawTextW(hdc, bOn ? L"On" : L"Off", -1, &rcState, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
+        }
 
         TFYAA aa;
         int ss = 3;
@@ -4717,14 +4976,30 @@ public:
         if (m_nIfaces > 0)
         {
             DrawToggle(hdcMem, &m_rcAirplane, L"Airplane mode", m_bAirplane,
-                       m_iHot == TFY_NETHIT_AIRPLANE, TRUE, IDI_FLU_AIRPLANE);
+                       m_iHot == TFY_NETHIT_AIRPLANE, TRUE, IDI_FLU_AIRPLANE, TRUE);
             DrawToggle(hdcMem, &m_rcWifi, L"Wi-Fi", m_bWifiOn && !m_bAirplane,
-                       m_iHot == TFY_NETHIT_WIFI, !m_bAirplane, IDI_FLU_WIFI1);
+                       m_iHot == TFY_NETHIT_WIFI, !m_bAirplane, IDI_FLU_WIFI1, TRUE);
         }
         for (SIZE_T i = 0; i < m_Rows.GetCount(); i++)
         {
             TFYNETROW &row = m_Rows[i];
             RECT rcRow = row.rc;
+            if (IsRectEmpty(&rcRow))
+                continue;
+            if (row.nType == 3)
+            {
+                RECT rcSep = { rcRow.left + Sc(8), rcRow.top, rcRow.right - Sc(8), rcRow.top + 1 };
+                HBRUSH hbrSep = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.Border, 140));
+                FillRect(hdcMem, &rcSep, hbrSep);
+                DeleteObject(hbrSep);
+                RECT rcSec = { rcRow.left + Sc(10), rcRow.top + Sc(6),
+                               rcRow.right - Sc(8), rcRow.bottom };
+                SelectObject(hdcMem, m_hFontSmall);
+                SetTextColor(hdcMem, m_Pal.DimText);
+                DrawTextW(hdcMem, row.szName, -1, &rcSec,
+                          DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+                continue;
+            }
             BOOL bExpanded = (row.nType == 2 && (int)i == m_iSel);
             if ((int)i == m_iHot || bExpanded)
             {
@@ -4826,7 +5101,28 @@ public:
                           DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
             }
         }
-        if (m_Rows.GetCount() == 0 && !m_szBanner[0])
+        if (m_bWlanLoading)
+        {
+            const double kPi = 3.14159265358979;
+            double t = (double)(GetTickCount64() - m_SpinT0) / 1000.0;
+            double a = (t * kPi * 0.5) + sin(t * kPi) * 0.5;
+            int cxMid = (m_rcWlanArea.left + m_rcWlanArea.right) / 2;
+            int cyMid2 = (m_rcWlanArea.top + m_rcWlanArea.bottom) / 2;
+            int r = Sc(12);
+            HPEN hPen = CreatePen(PS_SOLID, Sc(2), TfyMix(m_Pal.PanelBg, m_Pal.AccentBg, 220));
+            HGDIOBJ hPenOld = SelectObject(hdcMem, hPen);
+            HGDIOBJ hBrOld = SelectObject(hdcMem, GetStockObject(NULL_BRUSH));
+
+            Arc(hdcMem, cxMid - r, cyMid2 - r, cxMid + r, cyMid2 + r,
+                cxMid + (int)(r * cos(a)), cyMid2 + (int)(r * sin(a)),
+                cxMid + (int)(r * cos(a + kPi * 1.35)),
+                cyMid2 + (int)(r * sin(a + kPi * 1.35)));
+
+            SelectObject(hdcMem, hBrOld);
+            SelectObject(hdcMem, hPenOld);
+            DeleteObject(hPen);
+        }
+        else if (m_Rows.GetCount() == 0 && !m_szBanner[0])
         {
             RECT rcNone = { Sc(12), Sc(40), rc.right - Sc(12), Sc(70) };
             SelectObject(hdcMem, m_hFontSmall);
@@ -4879,8 +5175,7 @@ public:
             if ((int)wParam == wlan_notification_msm_radio_state_change)
             {
                 EndScan();
-                Rebuild();
-                Relayout();
+                TfyQueueNetworkRefresh(m_hWnd, FALSE);
             }
             return 0;
         }
@@ -4889,8 +5184,7 @@ public:
             case wlan_notification_acm_scan_complete:
             case wlan_notification_acm_scan_fail:
                 EndScan();
-                Rebuild();
-                Relayout();
+                TfyQueueNetworkRefresh(m_hWnd, FALSE);
                 break;
             case wlan_notification_acm_connection_start:
                 m_bConnecting = TRUE;
@@ -4899,13 +5193,11 @@ public:
                 m_bConnecting = FALSE;
                 KillTimer(TFY_TIMER_POLL);
                 m_szBanner[0] = 0;
-                Rebuild();
-                Relayout();
+                TfyQueueNetworkRefresh(m_hWnd, FALSE);
                 break;
             case wlan_notification_acm_connection_attempt_fail:
                 m_bConnecting = FALSE;
                 KillTimer(TFY_TIMER_POLL);
-                Rebuild();
                 for (SIZE_T i = 0; i < m_Rows.GetCount(); i++)
                 {
                     if (m_Rows[i].nType == 2 && m_szSelName[0] && !wcscmp(m_Rows[i].szName, m_szSelName) &&
@@ -4918,70 +5210,80 @@ public:
             case wlan_notification_acm_interface_arrival:
             case wlan_notification_acm_interface_removal:
             case wlan_notification_acm_profile_change:
-                Rebuild();
-                Relayout();
+                TfyQueueNetworkRefresh(m_hWnd, FALSE);
                 break;
         }
         return 0;
     }
 
+    LRESULT OnNetRefresh(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        KillTimer(TFY_TIMER_SPIN);
+        m_bWlanLoading = FALSE;
+        if (!wcscmp(m_szBanner, L"No wireless adapter"))
+            m_szBanner[0] = 0;
+        if (!wParam && !m_bScanPending)
+            EndScan();
+        if (wParam)
+            m_bScanPending = FALSE;
+        Rebuild();
+        if (m_nIfaces == 0)
+            StringCchCopyW(m_szBanner, _countof(m_szBanner), L"No wireless adapter");
+        if (m_bConnecting)
+        {
+            for (SIZE_T i = 0; i < m_Rows.GetCount(); i++)
+            {
+                if (m_Rows[i].nType == 2 && m_Rows[i].bConnected)
+                {
+                    m_bConnecting = FALSE;
+                    KillTimer(TFY_TIMER_POLL);
+                    break;
+                }
+            }
+        }
+        Relayout();
+        if (wParam)
+            SetTimer(TFY_TIMER_RESCAN, 1500, NULL);
+        return 0;
+    }
+
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
+        if (wParam == TFY_TIMER_SPIN)
+        {
+            InvalidateRect(&m_rcWlanArea, FALSE);
+            return 0;
+        }
+        if (wParam == TFY_TIMER_RESCAN)
+        {
+            KillTimer(TFY_TIMER_RESCAN);
+            if (m_bScanPending)
+            {
+                if (TfyQueueNetworkRefresh(m_hWnd, TRUE))
+                {
+                    m_bScanPending = FALSE;
+                    SetTimer(TFY_TIMER_SCAN, 8000, NULL);
+                }
+                else
+                    SetTimer(TFY_TIMER_RESCAN, 100, NULL);
+            }
+            else if (m_bScanning && !TfyQueueNetworkRefresh(m_hWnd, FALSE))
+                SetTimer(TFY_TIMER_RESCAN, 100, NULL);
+            return 0;
+        }
         if (wParam == TFY_TIMER_SCAN)
         {
             EndScan();
-            Rebuild();
-            Relayout();
+            TfyQueueNetworkRefresh(m_hWnd, FALSE);
             return 0;
         }
         if (wParam == TFY_TIMER_POLL)
         {
-            Rebuild();
-            for (SIZE_T i = 0; i < m_Rows.GetCount(); i++)
-            {
-                if (m_Rows[i].nType == 2 && m_Rows[i].bConnected && m_bConnecting)
-                {
-                    m_bConnecting = FALSE;
-                    KillTimer(TFY_TIMER_POLL);
-                }
-            }
-            if (!m_bConnecting)
-                KillTimer(TFY_TIMER_POLL);
-            Relayout();
+            TfyQueueNetworkRefresh(m_hWnd, FALSE);
             return 0;
         }
-        if (wParam == TFY_TIMER_ANIM)
-        {
-            ULONGLONG now = GetTickCount64();
-            if (m_AnimPhase == TFY_OPEN)
-            {
-                double t = (double)(now - m_AnimT0) / 160.0;
-                double e = TfyEase(t);
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * e), LWA_ALPHA);
-                SetWindowPos(NULL, m_ptFinal.x, m_ptFinal.y + (int)(Sc(10) * (1.0 - e)), 0, 0,
-                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                if (t >= 1.0)
-                {
-                    m_AnimPhase = TFY_NONE;
-                    KillTimer(TFY_TIMER_ANIM);
-                }
-            }
-            else if (m_AnimPhase == TFY_CLOSE)
-            {
-                double t = (double)(now - m_AnimT0) / 120.0;
-                if (t >= 1.0)
-                {
-                    KillTimer(TFY_TIMER_ANIM);
-                    DestroyWindow();
-                    return 0;
-                }
-                SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * (1.0 - TfyEase(t))), LWA_ALPHA);
-            }
-            else
-            {
-                KillTimer(TFY_TIMER_ANIM);
-            }
-        }
+        if (HandleFlyoutAnimation(m_hWnd, wParam))
+            return 0;
         return 0;
     }
 
@@ -5001,6 +5303,8 @@ public:
             TFYNETROW &row = m_Rows[i];
             if (!PtInRect(&row.rc, pt))
                 continue;
+            if (row.nType == 3)
+                return TFY_NETHIT_NONE;
             if ((int)i == m_iSel && row.nType == 2)
             {
                 if (PtInRect(&row.rcButton, pt)) *pnBtn = 1;
@@ -5033,6 +5337,19 @@ public:
         return 0;
     }
 
+    LRESULT OnMouseWheel(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        int nOld = m_nWlanScroll;
+
+        m_nWlanScroll -= GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA;
+        if (m_nWlanScroll < 0)
+            m_nWlanScroll = 0;
+        Relayout();
+        if (m_nWlanScroll != nOld)
+            InvalidateRect(NULL, FALSE);
+        return 0;
+    }
+
     LRESULT OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
         m_bTracking = FALSE;
@@ -5052,7 +5369,9 @@ public:
         int i = HitTest(pt, &nBtn);
         if (i == TFY_NETHIT_LINK)
         {
+            m_bLaunching = TRUE;
             ShellExecuteW(NULL, NULL, L"ncpa.cpl", NULL, NULL, SW_SHOWNORMAL);
+            m_bLaunching = FALSE;
             FadeOut();
             return 0;
         }
@@ -5081,7 +5400,21 @@ public:
         TFYNETROW &row = m_Rows[i];
         if (row.nType != 2)
         {
-            ShellExecuteW(NULL, NULL, L"ncpa.cpl", NULL, NULL, SW_SHOWNORMAL);
+            static const GUID guidNull = { 0 };
+            HRESULT hr = E_FAIL;
+
+            m_bLaunching = TRUE;
+            if (!IsEqualGUID(row.ifGuid, guidNull))
+            {
+                CComPtr<IOleCommandTarget> pCmd;
+
+                if (SUCCEEDED(CoCreateInstance(CLSID_ConnectionTray, NULL, CLSCTX_INPROC_SERVER,
+                                               IID_PPV_ARG(IOleCommandTarget, &pCmd))))
+                    hr = pCmd->Exec(&row.ifGuid, OLECMDID_NEW, OLECMDEXECOPT_DODEFAULT, NULL, NULL);
+            }
+            if (FAILED(hr))
+                ShellExecuteW(NULL, NULL, L"ncpa.cpl", NULL, NULL, SW_SHOWNORMAL);
+            m_bLaunching = FALSE;
             FadeOut();
             return 0;
         }
@@ -5121,7 +5454,7 @@ public:
 
     LRESULT OnActivate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
-        if (LOWORD(wParam) == WA_INACTIVE)
+        if (LOWORD(wParam) == WA_INACTIVE && !m_bLaunching)
             FadeOut();
         return 0;
     }
@@ -5155,14 +5488,18 @@ public:
             if (n == 0)
                 return 0;
             int i = m_iSel;
-            do
+            for (int k = 0; k < n; k++)
             {
                 i = (wParam == VK_DOWN) ? i + 1 : i - 1;
                 if (i < 0) i = n - 1;
                 if (i >= n) i = 0;
-            } while (m_Rows[i].nType != 2 && i != m_iSel && m_iSel >= 0);
-            if (m_Rows[i].nType == 2 && i != m_iSel)
-                SelectRow(i);
+                if (m_Rows[i].nType == 2)
+                {
+                    if (i != m_iSel)
+                        SelectRow(i);
+                    break;
+                }
+            }
             return 0;
         }
         if (wParam == VK_F5 && !m_bScanning)
@@ -5175,9 +5512,12 @@ public:
 
     LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
+        InterlockedCompareExchangePointer(&g_NetRefreshWindow, NULL, (PVOID)m_hWnd);
         KillTimer(TFY_TIMER_ANIM);
         KillTimer(TFY_TIMER_SCAN);
         KillTimer(TFY_TIMER_POLL);
+        KillTimer(TFY_TIMER_RESCAN);
+        KillTimer(TFY_TIMER_SPIN);
         UnloadWlan();
         if (m_hwndEdit)
         {
@@ -5198,12 +5538,14 @@ public:
         MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBkgnd)
         MESSAGE_HANDLER(WM_TIMER, OnTimer)
         MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
+        MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
         MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
         MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
         MESSAGE_HANDLER(WM_ACTIVATE, OnActivate)
         MESSAGE_HANDLER(WM_KEYDOWN, OnKeyDown)
         MESSAGE_HANDLER(WM_CTLCOLOREDIT, OnCtlColorEdit)
         MESSAGE_HANDLER(TFY_WM_WLANNOTIFY, OnWlanNotify)
+        MESSAGE_HANDLER(TFY_WM_NETREFRESH, OnNetRefresh)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
     END_MSG_MAP()
 };
@@ -5220,18 +5562,17 @@ void CTrayNetworkWnd::OnFinalMessage(HWND hWnd)
 
 VOID CTrayNetworkWnd::FadeOut()
 {
-    if (m_AnimPhase == TFY_CLOSE)
+    if (!BeginFlyoutClose(m_hWnd))
         return;
-    g_NetDismissTick = GetTickCount64();
-    m_AnimPhase = TFY_CLOSE;
-    m_AnimT0 = g_NetDismissTick;
+    g_NetDismissTick = m_AnimT0;
+    KillTimer(TFY_TIMER_RESCAN);
+    KillTimer(TFY_TIMER_SPIN);
     HideEdit();
-    SetTimer(TFY_TIMER_ANIM, 16, NULL);
 }
 
 VOID TrayNetwork_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor)
 {
-    if (GetTickCount64() - g_NetDismissTick < 350)
+    if (GetTickCount64() - g_NetDismissTick < TFY_REOPEN_GUARD_MS)
         return;
     if (g_pTrayNetwork && g_pTrayNetwork->IsWindow())
     {
@@ -5291,7 +5632,8 @@ struct TFYPWRSCHEME
 #define TFY_PWRHIT_LINK  -2
 
 class CTrayPowerWnd :
-    public CWindowImpl<CTrayPowerWnd, CWindow, CTrayFlyoutTraits>
+    public CWindowImpl<CTrayPowerWnd, CWindow, CTrayFlyoutTraits>,
+    public CTrayFlyoutAnimation
 {
 public:
     DECLARE_WND_CLASS_EX(L"TrayPowerFlyout", CS_DROPSHADOW, COLOR_WINDOW)
@@ -5306,19 +5648,15 @@ public:
     SYSTEM_POWER_STATUS m_sps;
     int m_iHot;
     BOOL m_bTracking;
-    int m_AnimPhase;
-    ULONGLONG m_AnimT0;
-    POINT m_ptFinal;
     SIZE m_size;
     RECT m_rcIcon, m_rcHeader, m_rcSub, m_rcPlanLabel, m_rcLink;
 
     CTrayPowerWnd() : m_hFontHeader(NULL), m_hFont(NULL), m_hFontSmall(NULL),
                       m_uiActive(0), m_bHaveActive(FALSE), m_iHot(TFY_PWRHIT_NONE),
-                      m_bTracking(FALSE), m_AnimPhase(TFY_NONE), m_AnimT0(0)
+                      m_bTracking(FALSE)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
         ZeroMemory(&m_sps, sizeof(m_sps));
-        ZeroMemory(&m_ptFinal, sizeof(m_ptFinal));
         ZeroMemory(&m_size, sizeof(m_size));
     }
 
@@ -5467,17 +5805,8 @@ public:
         yPos = prcAnchor->top - m_size.cy - Sc(6);
         if (yPos < mi.rcMonitor.top) yPos = prcAnchor->bottom + Sc(6);
 
-        m_ptFinal.x = xPos;
-        m_ptFinal.y = yPos;
-        m_AnimPhase = TFY_OPEN;
-        m_AnimT0 = GetTickCount64();
-        SetLayeredWindowAttributes(m_hWnd, 0, 0, LWA_ALPHA);
-        SetWindowPos(HWND_TOPMOST, xPos, yPos + Sc(10), m_size.cx, m_size.cy,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        ::SetForegroundWindow(m_hWnd);
-        SetTimer(TFY_TIMER_ANIM, 16, NULL);
+        BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg);
         SetTimer(TFY_TIMER_TICK, 2000, NULL);
-        InvalidateRect(NULL, FALSE);
     }
 
     VOID FadeOut();
@@ -5667,37 +5996,7 @@ public:
             }
             return 0;
         }
-        if (wParam != TFY_TIMER_ANIM)
-            return 0;
-        ULONGLONG now = GetTickCount64();
-        if (m_AnimPhase == TFY_OPEN)
-        {
-            double t = (double)(now - m_AnimT0) / 160.0;
-            double e = TfyEase(t);
-            SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * e), LWA_ALPHA);
-            SetWindowPos(NULL, m_ptFinal.x, m_ptFinal.y + (int)(Sc(10) * (1.0 - e)), 0, 0,
-                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-            if (t >= 1.0)
-            {
-                m_AnimPhase = TFY_NONE;
-                KillTimer(TFY_TIMER_ANIM);
-            }
-        }
-        else if (m_AnimPhase == TFY_CLOSE)
-        {
-            double t = (double)(now - m_AnimT0) / 120.0;
-            if (t >= 1.0)
-            {
-                KillTimer(TFY_TIMER_ANIM);
-                DestroyWindow();
-                return 0;
-            }
-            SetLayeredWindowAttributes(m_hWnd, 0, (BYTE)(255.0 * (1.0 - TfyEase(t))), LWA_ALPHA);
-        }
-        else
-        {
-            KillTimer(TFY_TIMER_ANIM);
-        }
+        HandleFlyoutAnimation(m_hWnd, wParam);
         return 0;
     }
 
@@ -5752,17 +6051,14 @@ void CTrayPowerWnd::OnFinalMessage(HWND hWnd)
 
 VOID CTrayPowerWnd::FadeOut()
 {
-    if (m_AnimPhase == TFY_CLOSE)
+    if (!BeginFlyoutClose(m_hWnd))
         return;
-    g_PowerDismissTick = GetTickCount64();
-    m_AnimPhase = TFY_CLOSE;
-    m_AnimT0 = g_PowerDismissTick;
-    SetTimer(TFY_TIMER_ANIM, 16, NULL);
+    g_PowerDismissTick = m_AnimT0;
 }
 
 VOID TrayPower_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor)
 {
-    if (GetTickCount64() - g_PowerDismissTick < 350)
+    if (GetTickCount64() - g_PowerDismissTick < TFY_REOPEN_GUARD_MS)
         return;
 
     if (g_pTrayPower && g_pTrayPower->IsWindow())
