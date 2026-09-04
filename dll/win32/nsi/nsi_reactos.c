@@ -70,13 +70,27 @@ static NET_LUID interface_luid(UINT index)
     return make_luid(index, interface_type(index));
 }
 
-static GUID interface_guid(UINT index)
+static GUID interface_guid(UINT index, const char *name)
 {
+    unsigned int data1, data2, data3, data4[8];
+    const char *start;
     GUID guid;
+    UINT i;
 
     memset(&guid, 0, sizeof(guid));
     guid.Data1 = index;
     memcpy(guid.Data4 + 2, "NetDev", 6);
+
+    if (!name || !(start = strchr(name, '{'))) return guid;
+    if (sscanf(start, "{%8x-%4x-%4x-%2x%2x-%2x%2x%2x%2x%2x%2x}", &data1, &data2, &data3,
+               &data4[0], &data4[1], &data4[2], &data4[3], &data4[4], &data4[5], &data4[6],
+               &data4[7]) != 11)
+        return guid;
+
+    guid.Data1 = data1;
+    guid.Data2 = (USHORT)data2;
+    guid.Data3 = (USHORT)data3;
+    for (i = 0; i < 8; i++) guid.Data4[i] = (BYTE)data4[i];
     return guid;
 }
 
@@ -139,7 +153,7 @@ static void fill_ndis_entry(UINT index, NET_LUID *key, struct nsi_ndis_ifinfo_rw
     if (rw)
     {
         memset(rw, 0, sizeof(*rw));
-        rw->network_guid = interface_guid(index);
+        rw->network_guid = interface_guid(index, name);
         rw->admin_status = row.dwAdminStatus == 2 ? NET_IF_ADMIN_STATUS_DOWN : NET_IF_ADMIN_STATUS_UP;
         init_counted_string(&rw->alias, name);
         rw->phys_addr.Length = physical_length;
@@ -181,7 +195,7 @@ static void fill_ndis_entry(UINT index, NET_LUID *key, struct nsi_ndis_ifinfo_rw
         stat->type = type;
         stat->access_type = type == MIB_IF_TYPE_LOOPBACK ? NET_IF_ACCESS_LOOPBACK : NET_IF_ACCESS_BROADCAST;
         stat->conn_type = NET_IF_CONNECTION_DEDICATED;
-        stat->if_guid = interface_guid(index);
+        stat->if_guid = interface_guid(index, name);
         stat->conn_present = type != MIB_IF_TYPE_LOOPBACK;
         stat->perm_phys_addr.Length = physical_length;
         memcpy(stat->perm_phys_addr.Address, physical, stat->perm_phys_addr.Length);
