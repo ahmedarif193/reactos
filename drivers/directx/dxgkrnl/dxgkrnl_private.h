@@ -1426,9 +1426,9 @@ typedef struct _DXGKRNL_GPUVA_RANGE
 
 /*
  * Software GPU page table (GpuMmu, DXGK_PAGETABLEUPDATE_CPU_VIRTUAL mode).
- * One 8KB block of 512 16-byte DXGK_PTE entries per table; four radix levels
- * cover a 48-bit GPU VA space.  Non-leaf tables keep a kernel-side child pointer
- * array so the CPU walk never reverse-maps physical addresses.
+ * KernelVa is the native page-table allocation. Entries is the portable
+ * DXGK_PTE descriptor array passed to DxgkDdiBuildPagingBuffer. Non-leaf
+ * tables keep child pointers so the CPU walk does not reverse-map addresses.
  * All tables of a process live on DXGKRNL_PROCESS->GpuVaPageTableList,
  * protected by GpuVaLock.
  */
@@ -1442,13 +1442,19 @@ typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
     /* First GPU VA covered by this table. */
     ULONGLONG                   CoverageBase;
 
-    /* One table of DXGK_PTE update descriptors and its first physical
-     * address.  Bytes is the miniport-declared size for this level. */
+    /* Native page-table storage and its first physical address. Bytes is the
+     * miniport-declared allocation size for this level. */
     PVOID                       KernelVa;
     ULONG                       Bytes;
     ULONG                       EntryCount;
     MEMORY_CACHING_TYPE         CacheType;
     PHYSICAL_ADDRESS            Physical;
+
+    /* Portable update descriptors; not overlaid on native table storage. */
+    DXGK_PTE                    *Entries;
+
+    /* The first KMD update must initialize the complete implicit table. */
+    BOOLEAN                     InitialUpdatePending;
 
     /* Child table pointers (non-leaf only, EntryCount entries), else NULL. */
     struct _DXGKRNL_GPUVA_PAGE_TABLE **Children;
@@ -3314,7 +3320,9 @@ typedef struct _DXGKRNL_PAGING_OP
     ULONG                       StartIndex;
     ULONG                       NumPageTableEntries;
     ULONG64                     AllocationOffsetInBytes;
+    UINT64                      DriverProtection;
     DXGK_PAGETABLEUPDATEMODE    UpdateMode;
+    BOOLEAN                     Repeat;
     BOOLEAN                     InitialUpdate;
     D3DGPU_PHYSICAL_ADDRESS     RootPageTableAddress;
     D3DGPU_VIRTUAL_ADDRESS      StartVirtualAddress;

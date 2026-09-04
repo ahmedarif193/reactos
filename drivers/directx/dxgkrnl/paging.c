@@ -140,11 +140,13 @@ DxgkpPagingFillBuildArgs(
             BuildArgs->UpdatePageTable.pPageTableEntries = Op->PageTableEntries;
             BuildArgs->UpdatePageTable.StartIndex = Op->StartIndex;
             BuildArgs->UpdatePageTable.NumPageTableEntries = Op->NumPageTableEntries;
+            BuildArgs->UpdatePageTable.Flags.Repeat = Op->Repeat ? 1 : 0;
             BuildArgs->UpdatePageTable.Flags.InitialUpdate = Op->InitialUpdate ? 1 : 0;
             BuildArgs->UpdatePageTable.AllocationOffsetInBytes = Op->AllocationOffsetInBytes;
             BuildArgs->UpdatePageTable.hProcess = Op->hMiniportProcess;
             BuildArgs->UpdatePageTable.UpdateMode = Op->UpdateMode;
             BuildArgs->UpdatePageTable.FirstPteVirtualAddress = Op->StartVirtualAddress;
+            BuildArgs->UpdatePageTable.DriverProtection = Op->DriverProtection;
             break;
 
         case DxgkPagingOpFlushTlb:

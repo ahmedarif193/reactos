@@ -57,6 +57,14 @@
 #define GPUVA_RESERVATION_ALIGNMENT (64ULL * 1024ULL)
 #define GPUVA_RESERVATION_MASK      (GPUVA_RESERVATION_ALIGNMENT - 1ULL)
 
+/* DXGK_PTE addresses are page-aligned byte addresses, not page numbers. */
+static __inline ULONGLONG
+GpuVaPteAddress(
+    _In_ ULONGLONG Address)
+{
+    return Address & ~GPUVA_PAGE_MASK;
+}
+
 /* A fixed per-process node cap bounds user-controlled NonPagedPool growth.
  * Validation is serialized by GpuVaLock; clone/replacement amplification is
  * separately bounded to at most three capped lists plus two split nodes. */
@@ -72,6 +80,30 @@
  * to catch NULL pointer dereferences on the GPU).
  */
 #define GPUVA_START_ADDRESS         (64ULL * 1024ULL)
+
+/* Snapshot of a mapped range taken under GpuVaLock for leaf page-table
+ * updates that must name their allocation to the miniport. */
+typedef struct _DXGKP_GPUVA_MAP_SPAN
+{
+    D3DGPU_VIRTUAL_ADDRESS      Start;
+    D3DGPU_VIRTUAL_ADDRESS      End;
+    HANDLE                      MiniportHandle;
+    ULONGLONG                   AllocationOffset;
+    UINT64                      DriverProtection;
+    PDXGKRNL_GPUVA_BINDING      Binding;
+} DXGKP_GPUVA_MAP_SPAN, *PDXGKP_GPUVA_MAP_SPAN;
+C_ASSERT(FIELD_OFFSET(DXGKP_GPUVA_MAP_SPAN, Start) == FIELD_OFFSET(DXGK_GPUVA_CORE_SPAN, Start));
+C_ASSERT(FIELD_OFFSET(DXGKP_GPUVA_MAP_SPAN, End) == FIELD_OFFSET(DXGK_GPUVA_CORE_SPAN, End));
+
+/* Portable descriptors copied with the dirty range under GpuVaLock. */
+typedef struct _DXGKP_GPUVA_TABLE_SNAPSHOT
+{
+    PDXGKRNL_GPUVA_PAGE_TABLE Table;
+    DXGK_PTE                  *Entries;
+    ULONG                     StartIndex;
+    ULONG                     EndIndex;
+    BOOLEAN                   InitialUpdatePending;
+} DXGKP_GPUVA_TABLE_SNAPSHOT, *PDXGKP_GPUVA_TABLE_SNAPSHOT;
 
 /* HELPERS ********************************************************************/
 
@@ -170,7 +202,7 @@ GpuVaReferenceBinding(
     do
     {
         References = InterlockedCompareExchange(&Binding->ReferenceCount, 0, 0);
-        if (References <= 0)
+        if (References <= 0 || References == MAXLONG)
             return FALSE;
     } while (InterlockedCompareExchange(&Binding->ReferenceCount, References + 1, References) != References);
     return TRUE;
@@ -1112,6 +1144,8 @@ GpuVaAllocPageTable(
 
     TableBytes = GpuVaTableBytes(Adapter, Level);
     EntryCount = (ULONG)GpuVaEntriesPerTable(Adapter, Level);
+    if ((SIZE_T)EntryCount > MAXULONG_PTR / sizeof(*Table->Entries))
+        return NULL;
 
     Table = (PDXGKRNL_GPUVA_PAGE_TABLE)ExAllocatePoolWithTag(
                 NonPagedPool, sizeof(*Table), TAG_DXGK_GPUVA_PT);
@@ -1126,7 +1160,10 @@ GpuVaAllocPageTable(
     BoundaryAddress.QuadPart = GpuVaLevelDesc(Adapter, Level)->PageTableAlignmentInBytes > TableBytes
                                    ? (LONGLONG)GpuVaLevelDesc(Adapter, Level)->PageTableAlignmentInBytes
                                    : 0;
-    CacheType = Adapter->GpuMmuCaps.CacheCoherentMemorySupported ? MmCached : MmNonCached;
+    /* Page-table cacheability is independent of ordinary allocation cache
+     * coherency.  CachedPageTables is the KMD's explicit promise that its
+     * walker observes cached CPU_VIRTUAL updates. */
+    CacheType = Adapter->GpuMmuCaps.CachedPageTables ? MmCached : MmNonCached;
     Table->KernelVa = MmAllocateContiguousMemorySpecifyCache(TableBytes, LowestAddress, HighestAddress, BoundaryAddress, CacheType);
     if (Table->KernelVa == NULL)
     {
@@ -1134,6 +1171,21 @@ GpuVaAllocPageTable(
         return NULL;
     }
     RtlZeroMemory(Table->KernelVa, TableBytes);
+
+    Table->Entries = (DXGK_PTE *)ExAllocatePoolWithTag(
+                         NonPagedPool,
+                         (SIZE_T)EntryCount * sizeof(*Table->Entries),
+                         TAG_DXGK_GPUVA_PT);
+    if (Table->Entries == NULL)
+    {
+        MmFreeContiguousMemorySpecifyCache(Table->KernelVa,
+                                            TableBytes,
+                                            CacheType);
+        ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
+        return NULL;
+    }
+    RtlZeroMemory(Table->Entries,
+                  (SIZE_T)EntryCount * sizeof(*Table->Entries));
 
     if (Level > 0)
     {
@@ -1143,6 +1195,7 @@ GpuVaAllocPageTable(
                     TAG_DXGK_GPUVA_PT);
         if (Table->Children == NULL)
         {
+            ExFreePoolWithTag(Table->Entries, TAG_DXGK_GPUVA_PT);
             MmFreeContiguousMemorySpecifyCache(Table->KernelVa, TableBytes, CacheType);
             ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
             return NULL;
@@ -1157,6 +1210,7 @@ GpuVaAllocPageTable(
     Table->CoverageBase = CoverageBase;
     Table->CacheType = CacheType;
     Table->Physical = MmGetPhysicalAddress(Table->KernelVa);
+    Table->InitialUpdatePending = TRUE;
 
     InsertTailList(&Process->GpuVaPageTableList, &Table->PageTableListEntry);
     Process->GpuVaPageTableCount++;
@@ -1180,6 +1234,7 @@ GpuVaFreePageTables(
 
         if (Table->Children != NULL)
             ExFreePoolWithTag(Table->Children, TAG_DXGK_GPUVA_PT);
+        ExFreePoolWithTag(Table->Entries, TAG_DXGK_GPUVA_PT);
         MmFreeContiguousMemorySpecifyCache(Table->KernelVa, Table->Bytes, Table->CacheType);
         ExFreePoolWithTag(Table, TAG_DXGK_GPUVA_PT);
     }
@@ -1218,7 +1273,10 @@ GpuVaEnsureRootPageTable(
 
     RootLevel = GpuVaLevelCount(Adapter) - 1;
     RootEntries = (ULONG)GpuVaEntriesPerTable(Adapter, RootLevel);
-    ReportedSize = DxgkGpuVaGetRootPageTableSize(Adapter, RootEntries, 0);
+    ReportedSize = GpuVaTableBytes(Adapter, RootLevel);
+    /* Only a two-level translation scheme has a resizable root. */
+    if (GpuVaLevelCount(Adapter) == 2)
+        ReportedSize = DxgkGpuVaGetRootPageTableSize(Adapter, RootEntries, 0);
     if (ReportedSize != GpuVaTableBytes(Adapter, RootLevel))
     {
         DPRINT1("DxgkGpuVa: root table size %Iu disagrees with level descriptor %u\n", ReportedSize, GpuVaTableBytes(Adapter, RootLevel));
@@ -1367,7 +1425,9 @@ DxgkpGpuVaFlushPageTableUpdates(
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE PagingDevice = NULL;
     PDXGKRNL_DEVICE SubmissionDevice = NULL;
-    PDXGKRNL_GPUVA_PAGE_TABLE *Tables = NULL;
+    PDXGKP_GPUVA_TABLE_SNAPSHOT Tables = NULL;
+    PDXGKP_GPUVA_MAP_SPAN Spans = NULL;
+    ULONG SpanCount = 0;
     DXGKRNL_PAGING_OP Op;
     HANDLE PagingMiniportDevice = NULL;
     D3DGPU_VIRTUAL_ADDRESS Start = 0;
@@ -1375,6 +1435,7 @@ DxgkpGpuVaFlushPageTableUpdates(
     ULONG TableCapacity;
     ULONG TableCount = 0;
     ULONG TableIndex;
+    ULONG ReleaseIndex;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -1388,6 +1449,20 @@ DxgkpGpuVaFlushPageTableUpdates(
                                    NULL);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    Adapter = Process->Adapter;
+    if (Adapter == NULL)
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Complete;
+    }
+    if (!DxgkPagingOperationSupported(Adapter,
+                                      DxgkPagingOpUpdatePageTable) ||
+        !DxgkPagingOperationSupported(Adapter, DxgkPagingOpFlushTlb))
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Complete;
+    }
 
     for (;;)
     {
@@ -1418,6 +1493,7 @@ DxgkpGpuVaFlushPageTableUpdates(
             Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Complete;
         }
+        RtlZeroMemory(Tables, (SIZE_T)TableCapacity * sizeof(*Tables));
 
         ExAcquireFastMutex(&Process->GpuVaLock);
         if (Process->GpuVaPageTableCount > TableCapacity)
@@ -1430,17 +1506,145 @@ DxgkpGpuVaFlushPageTableUpdates(
 
         Start = Process->PageTableUpdateStart;
         End = Process->PageTableUpdateEnd;
+        if (End <= Start)
+        {
+            Process->PageTableUpdatePending = FALSE;
+            Process->PageTableUpdateStart = 0;
+            Process->PageTableUpdateEnd = 0;
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            Status = STATUS_DATA_ERROR;
+            goto Complete;
+        }
         TableCount = 0;
         for (Entry = Process->GpuVaPageTableList.Flink;
              Entry != &Process->GpuVaPageTableList;
              Entry = Entry->Flink)
         {
+            PDXGKRNL_GPUVA_PAGE_TABLE Table;
+            ULONGLONG EntryCoverage;
+            ULONGLONG TableCoverage;
+            ULONGLONG TableEnd;
+            ULONGLONG OverlapStart;
+            ULONGLONG OverlapEnd;
+            ULONG StartIndex;
+            ULONG EndIndex;
+            ULONG EntryCount;
+
             if (TableCount >= TableCapacity)
                 break;
-            Tables[TableCount++] = CONTAINING_RECORD(
+            Table = CONTAINING_RECORD(
                 Entry,
                 DXGKRNL_GPUVA_PAGE_TABLE,
                 PageTableListEntry);
+            EntryCoverage = 1ULL << GpuVaLevelShift(Adapter, Table->Level);
+            if (Table->EntryCount > MAXULONGLONG / EntryCoverage ||
+                Table->CoverageBase > MAXULONGLONG -
+                                      Table->EntryCount * EntryCoverage)
+            {
+                ExReleaseFastMutex(&Process->GpuVaLock);
+                Status = STATUS_INTEGER_OVERFLOW;
+                goto Requeue;
+            }
+            TableCoverage = Table->EntryCount * EntryCoverage;
+            TableEnd = Table->CoverageBase + TableCoverage;
+            if (Table->InitialUpdatePending)
+            {
+                OverlapStart = Table->CoverageBase;
+                OverlapEnd = TableEnd;
+            }
+            else
+            {
+                OverlapStart = max(Start, Table->CoverageBase);
+                OverlapEnd = min(End, TableEnd);
+            }
+            if (OverlapStart >= OverlapEnd)
+                continue;
+
+            StartIndex = (ULONG)((OverlapStart - Table->CoverageBase) /
+                                 EntryCoverage);
+            EndIndex = (ULONG)(((OverlapEnd - Table->CoverageBase) +
+                                EntryCoverage - 1) / EntryCoverage);
+            if (EndIndex > Table->EntryCount)
+                EndIndex = Table->EntryCount;
+            if (StartIndex >= EndIndex)
+                continue;
+
+            EntryCount = EndIndex - StartIndex;
+            if ((SIZE_T)EntryCount > MAXULONG_PTR / sizeof(DXGK_PTE))
+            {
+                ExReleaseFastMutex(&Process->GpuVaLock);
+                Status = STATUS_INTEGER_OVERFLOW;
+                goto Requeue;
+            }
+            Tables[TableCount].Entries = ExAllocatePoolWithTag(
+                NonPagedPool,
+                (SIZE_T)EntryCount * sizeof(DXGK_PTE),
+                TAG_DXGK_GPUVA_PT);
+            if (Tables[TableCount].Entries == NULL)
+            {
+                ExReleaseFastMutex(&Process->GpuVaLock);
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                goto Requeue;
+            }
+            RtlCopyMemory(Tables[TableCount].Entries,
+                          Table->Entries + StartIndex,
+                          (SIZE_T)EntryCount * sizeof(DXGK_PTE));
+            Tables[TableCount].Table = Table;
+            Tables[TableCount].StartIndex = StartIndex;
+            Tables[TableCount].EndIndex = EndIndex;
+            Tables[TableCount].InitialUpdatePending = Table->InitialUpdatePending;
+            TableCount++;
+        }
+        /* Leaf updates must identify the allocation covering each PTE span. */
+        SpanCount = 0;
+        {
+            ULONG MappedCount = 0;
+
+            for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList; Entry = Entry->Flink)
+            {
+                PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
+
+                if (Range->State == GpuVaStateMapped && Range->Binding != NULL)
+                    MappedCount++;
+            }
+            if (MappedCount != 0)
+            {
+                if ((SIZE_T)MappedCount > MAXULONG_PTR / sizeof(*Spans))
+                {
+                    ExReleaseFastMutex(&Process->GpuVaLock);
+                    Status = STATUS_INTEGER_OVERFLOW;
+                    goto Requeue;
+                }
+                Spans = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)MappedCount * sizeof(*Spans), TAG_DXGK_GPUVA_PT);
+                if (Spans == NULL)
+                {
+                    ExReleaseFastMutex(&Process->GpuVaLock);
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    goto Requeue;
+                }
+                for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList && SpanCount < MappedCount; Entry = Entry->Flink)
+                {
+                    PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
+                    PDXGKVMM_ALLOCATION MapAllocation;
+
+                    if (Range->State != GpuVaStateMapped || Range->Binding == NULL)
+                        continue;
+                    if (!GpuVaReferenceBinding(Range->Binding))
+                    {
+                        ExReleaseFastMutex(&Process->GpuVaLock);
+                        Status = STATUS_DELETE_PENDING;
+                        goto Requeue;
+                    }
+                    Spans[SpanCount].Binding = Range->Binding;
+                    MapAllocation = Range->Binding->BackingAllocation != NULL ? Range->Binding->BackingAllocation : Range->Binding->LogicalAllocation;
+                    Spans[SpanCount].Start = Range->GpuVirtualAddress;
+                    Spans[SpanCount].End = Range->GpuVirtualAddress + Range->SizeInBytes;
+                    Spans[SpanCount].MiniportHandle = MapAllocation != NULL ? MapAllocation->MiniportHandle : NULL;
+                    Spans[SpanCount].AllocationOffset = Range->AllocationOffset;
+                    Spans[SpanCount].DriverProtection = Range->DriverProtection;
+                    SpanCount++;
+                }
+            }
         }
         Process->PageTableUpdatePending = FALSE;
         Process->PageTableUpdateStart = 0;
@@ -1449,24 +1653,6 @@ DxgkpGpuVaFlushPageTableUpdates(
         break;
     }
 
-    Adapter = Process->Adapter;
-    if (End <= Start)
-    {
-        Status = STATUS_DATA_ERROR;
-        goto Complete;
-    }
-    if (Adapter == NULL)
-    {
-        Status = STATUS_DEVICE_NOT_READY;
-        goto Requeue;
-    }
-    if (!DxgkPagingOperationSupported(Adapter,
-                                      DxgkPagingOpUpdatePageTable) ||
-        !DxgkPagingOperationSupported(Adapter, DxgkPagingOpFlushTlb))
-    {
-        Status = STATUS_NOT_SUPPORTED;
-        goto Requeue;
-    }
     if (OwnedDevice != NULL)
     {
         /* Device destruction has already closed admission and unlinked this
@@ -1498,38 +1684,12 @@ DxgkpGpuVaFlushPageTableUpdates(
      * and the caller holds the process throughout this transaction. */
     for (TableIndex = 0; TableIndex < TableCount; ++TableIndex)
     {
-        PDXGKRNL_GPUVA_PAGE_TABLE Table = Tables[TableIndex];
+        PDXGKP_GPUVA_TABLE_SNAPSHOT Snapshot = &Tables[TableIndex];
+        PDXGKRNL_GPUVA_PAGE_TABLE Table = Snapshot->Table;
+        DXGK_PTE ZeroPte;
         ULONGLONG EntryCoverage;
-        ULONGLONG TableCoverage;
-        ULONGLONG TableEnd;
-        ULONGLONG OverlapStart;
-        ULONGLONG OverlapEnd;
-        ULONG StartIndex;
-        ULONG EndIndex;
 
         EntryCoverage = 1ULL << GpuVaLevelShift(Adapter, Table->Level);
-        if (Table->EntryCount > MAXULONGLONG / EntryCoverage ||
-            Table->CoverageBase > MAXULONGLONG -
-                                  Table->EntryCount * EntryCoverage)
-        {
-            Status = STATUS_INTEGER_OVERFLOW;
-            goto Requeue;
-        }
-        TableCoverage = Table->EntryCount * EntryCoverage;
-        TableEnd = Table->CoverageBase + TableCoverage;
-        OverlapStart = max(Start, Table->CoverageBase);
-        OverlapEnd = min(End, TableEnd);
-        if (OverlapStart >= OverlapEnd)
-            continue;
-
-        StartIndex = (ULONG)((OverlapStart - Table->CoverageBase) /
-                             EntryCoverage);
-        EndIndex = (ULONG)(((OverlapEnd - Table->CoverageBase) +
-                            EntryCoverage - 1) / EntryCoverage);
-        if (EndIndex > Table->EntryCount)
-            EndIndex = Table->EntryCount;
-        if (StartIndex >= EndIndex)
-            continue;
 
         RtlZeroMemory(&Op, sizeof(Op));
         Op.Type = DxgkPagingOpUpdatePageTable;
@@ -1537,19 +1697,91 @@ DxgkpGpuVaFlushPageTableUpdates(
         Op.hMiniportProcess = Process->hMiniportProcess;
         Op.PageTableLevel = Table->Level;
         Op.PageTableAddress.CpuVirtual = Table->KernelVa;
-        Op.PageTableEntries =
-            (DXGK_PTE *)Table->KernelVa + StartIndex;
-        Op.StartIndex = StartIndex;
-        Op.NumPageTableEntries = EndIndex - StartIndex;
         Op.UpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
-        Op.StartVirtualAddress = Table->CoverageBase +
-                                 (ULONGLONG)StartIndex * EntryCoverage;
-        Status = GpuVaExecutePagingOperationWithBusyRetry(
-                     Adapter,
-                     SubmissionDevice,
-                     &Op);
-        if (!NT_SUCCESS(Status))
-            goto Requeue;
+        if (Snapshot->InitialUpdatePending)
+        {
+            /* InitialUpdate describes the whole implicit table and cannot
+             * attribute valid entries from several allocations at once. */
+            RtlZeroMemory(&ZeroPte, sizeof(ZeroPte));
+            Op.PageTableEntries = &ZeroPte;
+            Op.StartIndex = 0;
+            Op.NumPageTableEntries = Table->EntryCount;
+            Op.Repeat = TRUE;
+            Op.InitialUpdate = TRUE;
+            Op.StartVirtualAddress = Table->CoverageBase;
+            Status = GpuVaExecutePagingOperationWithBusyRetry(
+                         Adapter,
+                         SubmissionDevice,
+                         &Op);
+            if (!NT_SUCCESS(Status))
+                goto Requeue;
+            Table->InitialUpdatePending = FALSE;
+        }
+
+        Op.Repeat = FALSE;
+        Op.InitialUpdate = FALSE;
+        if (Table->Level != 0 || SpanCount == 0)
+        {
+            /* Directory entries and unowned leaf entries do not name an
+             * allocation, but still come from the coherent snapshot. */
+            Op.PageTableEntries = Snapshot->Entries;
+            Op.StartIndex = Snapshot->StartIndex;
+            Op.NumPageTableEntries = Snapshot->EndIndex - Snapshot->StartIndex;
+            Op.StartVirtualAddress = Table->CoverageBase +
+                                     (ULONGLONG)Snapshot->StartIndex * EntryCoverage;
+            Status = GpuVaExecutePagingOperationWithBusyRetry(
+                         Adapter,
+                         SubmissionDevice,
+                         &Op);
+            if (!NT_SUCCESS(Status))
+                goto Requeue;
+        }
+        if (Table->Level == 0 && SpanCount != 0)
+        {
+            /* Split leaf updates at allocation boundaries. */
+            ULONGLONG Cursor = Table->CoverageBase + (ULONGLONG)Snapshot->StartIndex * EntryCoverage;
+            ULONGLONG SpanLimit = Table->CoverageBase + (ULONGLONG)Snapshot->EndIndex * EntryCoverage;
+            ULONG SpanIndex = 0;
+
+            while (Cursor < SpanLimit)
+            {
+                ULONGLONG PieceEnd;
+                PDXGKP_GPUVA_MAP_SPAN Span = NULL;
+                ULONG Covering;
+                ULONG PieceStartIndex;
+                ULONG PieceEndIndex;
+
+                if (!DxgkGpuVaCoreNextMapPiece(Spans, SpanCount, sizeof(*Spans), Cursor, SpanLimit, &SpanIndex, &PieceEnd, &Covering))
+                {
+                    Status = STATUS_DATA_ERROR;
+                    goto Requeue;
+                }
+                if (Covering != MAXULONG)
+                    Span = &Spans[Covering];
+                PieceStartIndex = (ULONG)((Cursor - Table->CoverageBase) / EntryCoverage);
+                PieceEndIndex = (ULONG)(((PieceEnd - Table->CoverageBase) + EntryCoverage - 1) / EntryCoverage);
+                if (PieceEndIndex > Table->EntryCount)
+                    PieceEndIndex = Table->EntryCount;
+                if (PieceStartIndex < PieceEndIndex)
+                {
+                    Op.PageTableEntries = Snapshot->Entries +
+                                          (PieceStartIndex - Snapshot->StartIndex);
+                    Op.StartIndex = PieceStartIndex;
+                    Op.NumPageTableEntries = PieceEndIndex - PieceStartIndex;
+                    Op.StartVirtualAddress = Cursor;
+                    Op.hMiniportAllocation = Span != NULL ? Span->MiniportHandle : NULL;
+                    Op.AllocationOffsetInBytes = Span != NULL ? Span->AllocationOffset + (Cursor - Span->Start) : 0;
+                    Op.DriverProtection = Span != NULL ? Span->DriverProtection : 0;
+                    Status = GpuVaExecutePagingOperationWithBusyRetry(
+                                 Adapter,
+                                 SubmissionDevice,
+                                 &Op);
+                    if (!NT_SUCCESS(Status))
+                        goto Requeue;
+                }
+                Cursor = PieceEnd;
+            }
+        }
     }
 
     RtlZeroMemory(&Op, sizeof(Op));
@@ -1586,7 +1818,17 @@ Requeue:
 
 Complete:
     if (Tables != NULL)
+    {
+        for (ReleaseIndex = 0; ReleaseIndex < TableCount; ++ReleaseIndex)
+            ExFreePoolWithTag(Tables[ReleaseIndex].Entries, TAG_DXGK_GPUVA_PT);
         ExFreePoolWithTag(Tables, TAG_DXGK_GPUVA_PT);
+    }
+    if (Spans != NULL)
+    {
+        for (ReleaseIndex = 0; ReleaseIndex < SpanCount; ++ReleaseIndex)
+            GpuVaDereferenceBinding(Spans[ReleaseIndex].Binding);
+        ExFreePoolWithTag(Spans, TAG_DXGK_GPUVA_PT);
+    }
     if (PagingDevice != NULL)
         DxgkDereferenceDevice(PagingDevice);
     KeReleaseMutex(&Process->PageTableFlushMutex, FALSE);
@@ -1640,7 +1882,6 @@ GpuVaGetLeafTable(
         Child = Table->Children[Index];
         if (Child == NULL)
         {
-            DXGK_PTE *Entries;
             ULONGLONG CoverageBase;
 
             if (!Allocate)
@@ -1650,15 +1891,15 @@ GpuVaGetLeafTable(
             if (Child == NULL)
                 return NULL;
             Table->Children[Index] = Child;
-            Entries = (DXGK_PTE *)Table->KernelVa;
-            Entries[Index].Flags = 0;
-            Entries[Index].Valid = 1;
-            Entries[Index].PageTableAddress =
-                (ULONGLONG)Child->Physical.QuadPart & ~GPUVA_PAGE_MASK;
+            Table->Entries[Index].Flags = 0;
+            Table->Entries[Index].Valid = 1;
+            Table->Entries[Index].Segment = 0;
+            Table->Entries[Index].PageTableAddress =
+                GpuVaPteAddress((ULONGLONG)Child->Physical.QuadPart);
             if (!NT_SUCCESS(GpuVaNotifyPageTableUpdate(Process, Table, Index, 1, CoverageBase, TRUE)))
             {
-                Entries[Index].Flags = 0;
-                Entries[Index].PageTableAddress = 0;
+                Table->Entries[Index].Flags = 0;
+                Table->Entries[Index].PageTableAddress = 0;
                 Table->Children[Index] = NULL;
                 return NULL;
             }
@@ -1672,25 +1913,78 @@ GpuVaGetLeafTable(
  * GpuVaAllocationPageAddress
  *
  * Physical address of the page at Offset in an allocation's current
- * placement.  A segment placement is physically contiguous from
- * PhysicalAddress; a system-memory backing is walked page by page.  Returns
- * zero when the allocation has no usable placement.
+ * placement.  For a nonzero segment DXGK_PTE carries an offset from the start
+ * of that segment; segment zero carries a system-memory physical address.
+ * Returns FALSE when the allocation has no usable placement.
  */
-static PHYSICAL_ADDRESS
+static BOOLEAN
 GpuVaAllocationPageAddress(
     _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ ULONGLONG Offset)
+    _In_ ULONGLONG Offset,
+    _Out_ PULONG SegmentId,
+    _Out_ PULONGLONG PageAddress)
 {
     PHYSICAL_ADDRESS Physical;
 
-    Physical.QuadPart = 0;
-    if (Offset >= Allocation->Size)
-        return Physical;
+    if (Allocation == NULL || SegmentId == NULL || PageAddress == NULL ||
+        Offset >= Allocation->Size)
+    {
+        return FALSE;
+    }
+
+    *SegmentId = 0;
+    *PageAddress = 0;
+    if (Allocation->Resident && Allocation->SegmentId != 0)
+    {
+        PDXGKRNL_ADAPTER Adapter = Allocation->Adapter;
+        PDXGKRNL_SEGMENT Segment;
+
+        if (Allocation->SegmentId > 31 || Adapter == NULL ||
+            Adapter->Segments == NULL ||
+            Allocation->SegmentId > Adapter->SegmentCount ||
+            Allocation->SegmentOffset > MAXULONGLONG - Offset)
+        {
+            return FALSE;
+        }
+        Segment = &((PDXGKRNL_SEGMENT)Adapter->Segments)
+                       [Allocation->SegmentId - 1];
+        /* Ordinary aperture allocations use their backing system pages. */
+        if ((Segment->Flags.Aperture || Segment->Flags.Agp) &&
+            !Allocation->AccessedPhysically)
+        {
+            if (Allocation->SystemMemory == NULL)
+                return FALSE;
+            Physical = MmGetPhysicalAddress(
+                           (PUCHAR)Allocation->SystemMemory + Offset);
+            if (Physical.QuadPart == 0)
+                return FALSE;
+            *PageAddress = GpuVaPteAddress(
+                               (ULONGLONG)Physical.QuadPart);
+            return TRUE;
+        }
+        if ((Segment->Flags.Aperture || Segment->Flags.Agp) &&
+            !Allocation->ApertureMapped)
+        {
+            return FALSE;
+        }
+        *SegmentId = Allocation->SegmentId;
+        *PageAddress = GpuVaPteAddress(
+                           Allocation->SegmentOffset + Offset);
+        return TRUE;
+    }
+
     if (Allocation->SystemMemory != NULL)
-        return MmGetPhysicalAddress((PUCHAR)Allocation->SystemMemory + Offset);
-    if (Allocation->Resident && Allocation->PhysicalAddress.QuadPart != 0)
+        Physical = MmGetPhysicalAddress((PUCHAR)Allocation->SystemMemory + Offset);
+    else if (Allocation->Resident &&
+             Allocation->PhysicalAddress.QuadPart != 0)
         Physical.QuadPart = Allocation->PhysicalAddress.QuadPart + (LONGLONG)Offset;
-    return Physical;
+    else
+        Physical.QuadPart = 0;
+
+    if (Physical.QuadPart == 0)
+        return FALSE;
+    *PageAddress = GpuVaPteAddress((ULONGLONG)Physical.QuadPart);
+    return TRUE;
 }
 
 /*
@@ -1711,15 +2005,13 @@ GpuVaClearPteSpan(
     {
         PDXGKRNL_GPUVA_PAGE_TABLE Leaf =
             GpuVaGetLeafTable(Process, Address + Offset, FALSE);
-        DXGK_PTE *Entries;
         ULONG Index;
 
         if (Leaf == NULL)
             continue;
         Index = GpuVaPteIndexFor(Process->Adapter, Address + Offset, 0);
-        Entries = (DXGK_PTE *)Leaf->KernelVa;
-        Entries[Index].Flags = 0;
-        Entries[Index].PageAddress = 0;
+        Leaf->Entries[Index].Flags = 0;
+        Leaf->Entries[Index].PageAddress = 0;
         (VOID)GpuVaNotifyPageTableUpdate(Process, Leaf, Index, 1, Address + Offset, FALSE);
     }
 }
@@ -1753,7 +2045,6 @@ GpuVaWritePteSpan(
     {
         PDXGKRNL_GPUVA_PAGE_TABLE Leaf =
             GpuVaGetLeafTable(Process, Address + Offset, TRUE);
-        DXGK_PTE *Entries;
         DXGK_PTE Pte;
 
         if (Leaf == NULL)
@@ -1765,9 +2056,13 @@ GpuVaWritePteSpan(
         RtlZeroMemory(&Pte, sizeof(Pte));
         if (Allocation != NULL)
         {
-            PHYSICAL_ADDRESS Physical = GpuVaAllocationPageAddress(Allocation, AllocationOffset + Offset);
+            ULONG SegmentId;
+            ULONGLONG PageAddress;
 
-            if (Physical.QuadPart == 0)
+            if (!GpuVaAllocationPageAddress(Allocation,
+                                            AllocationOffset + Offset,
+                                            &SegmentId,
+                                            &PageAddress))
             {
                 GpuVaClearPteSpan(Process, Address, Offset);
                 return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
@@ -1778,7 +2073,8 @@ GpuVaWritePteSpan(
                     1 : 0;
             Pte.ReadOnly = Protection.Write ? 0 : 1;
             Pte.NoExecute = Protection.Execute ? 0 : 1;
-            Pte.PageAddress = (ULONGLONG)Physical.QuadPart & ~GPUVA_PAGE_MASK;
+            Pte.Segment = SegmentId;
+            Pte.PageAddress = PageAddress;
         }
         else
         {
@@ -1788,12 +2084,11 @@ GpuVaWritePteSpan(
         {
             ULONG Index = GpuVaPteIndexFor(Process->Adapter, Address + Offset, 0);
 
-            Entries = (DXGK_PTE *)Leaf->KernelVa;
-            Entries[Index] = Pte;
+            Leaf->Entries[Index] = Pte;
             if (!NT_SUCCESS(GpuVaNotifyPageTableUpdate(Process, Leaf, Index, 1, Address + Offset, FALSE)))
             {
-                Entries[Index].Flags = 0;
-                Entries[Index].PageAddress = 0;
+                Leaf->Entries[Index].Flags = 0;
+                Leaf->Entries[Index].PageAddress = 0;
                 GpuVaClearPteSpan(Process, Address, Offset);
                 return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
             }
@@ -2857,7 +3152,6 @@ DxgkGpuVaMapFencePage(
     PDXGKRNL_GPUVA_PAGE_TABLE Leaf;
     D3DGPU_VIRTUAL_ADDRESS ActualAddress;
     PHYSICAL_ADDRESS Physical;
-    DXGK_PTE *Entries;
     DXGK_PTE Pte;
     NTSTATUS Status;
 
@@ -2911,16 +3205,15 @@ DxgkGpuVaMapFencePage(
     Pte.CacheCoherent =
         Adapter->GpuMmuCaps.CacheCoherentMemorySupported ? 1 : 0;
     Pte.NoExecute = 1;
-    Pte.PageAddress = (ULONGLONG)Physical.QuadPart & ~GPUVA_PAGE_MASK;
-    Entries = (DXGK_PTE *)Leaf->KernelVa;
+    Pte.PageAddress = GpuVaPteAddress((ULONGLONG)Physical.QuadPart);
     {
         ULONG Index = GpuVaPteIndexFor(Process->Adapter, ActualAddress, 0);
 
-        Entries[Index] = Pte;
+        Leaf->Entries[Index] = Pte;
         if (!NT_SUCCESS(GpuVaNotifyPageTableUpdate(Process, Leaf, Index, 1, ActualAddress, FALSE)))
         {
-            Entries[Index].Flags = 0;
-            Entries[Index].PageAddress = 0;
+            Leaf->Entries[Index].Flags = 0;
+            Leaf->Entries[Index].PageAddress = 0;
             ExReleaseFastMutex(&Process->GpuVaLock);
             GpuVaFreeRange(Range);
             return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;

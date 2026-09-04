@@ -102,6 +102,55 @@ DxgkGpuVaCorePageCount(
     return TRUE;
 }
 
+BOOLEAN
+DxgkGpuVaCoreNextMapPiece(
+    _In_reads_bytes_(SpanCount * SpanStride) const VOID *Spans,
+    _In_ ULONG SpanCount,
+    _In_ ULONG SpanStride,
+    _In_ ULONGLONG Cursor,
+    _In_ ULONGLONG Limit,
+    _Inout_ PULONG SpanIndex,
+    _Out_ PULONGLONG PieceEnd,
+    _Out_ PULONG CoveringSpan)
+{
+    const DXGK_GPUVA_CORE_SPAN *Span;
+
+    *PieceEnd = Cursor;
+    *CoveringSpan = MAXULONG;
+    if (Cursor >= Limit || (SpanCount != 0 && Spans == NULL) ||
+        SpanStride < sizeof(*Span) || *SpanIndex > SpanCount)
+    {
+        return FALSE;
+    }
+
+    while (*SpanIndex < SpanCount)
+    {
+        Span = (const DXGK_GPUVA_CORE_SPAN *)
+                   ((const UCHAR *)Spans + (SIZE_T)*SpanIndex * SpanStride);
+        if (Span->End > Cursor)
+            break;
+        (*SpanIndex)++;
+    }
+
+    if (*SpanIndex >= SpanCount)
+    {
+        *PieceEnd = Limit;
+        return TRUE;
+    }
+
+    if (Span->Start <= Cursor)
+    {
+        *CoveringSpan = *SpanIndex;
+        *PieceEnd = min(Span->End, Limit);
+    }
+    else
+    {
+        *PieceEnd = min(Span->Start, Limit);
+    }
+
+    return *PieceEnd > Cursor;
+}
+
 /* --- page-table geometry --------------------------------------------- */
 
 NTSTATUS

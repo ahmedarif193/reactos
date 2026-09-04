@@ -59,6 +59,23 @@ BOOLEAN DxgkGpuVaCoreRangeContains(_In_ ULONGLONG OuterStart, _In_ ULONGLONG Out
 BOOLEAN DxgkGpuVaCoreIsPageAligned(_In_ ULONGLONG Value);
 BOOLEAN DxgkGpuVaCorePageCount(_In_ ULONGLONG Address, _In_ ULONGLONG Size, _Out_ PULONGLONG PageCount);
 
+typedef struct _DXGK_GPUVA_CORE_SPAN
+{
+    ULONGLONG Start;
+    ULONGLONG End;
+} DXGK_GPUVA_CORE_SPAN;
+
+BOOLEAN
+DxgkGpuVaCoreNextMapPiece(
+    _In_reads_bytes_(SpanCount * SpanStride) const VOID *Spans,
+    _In_ ULONG SpanCount,
+    _In_ ULONG SpanStride,
+    _In_ ULONGLONG Cursor,
+    _In_ ULONGLONG Limit,
+    _Inout_ PULONG SpanIndex,
+    _Out_ PULONGLONG PieceEnd,
+    _Out_ PULONG CoveringSpan);
+
 /* --- page-table geometry --------------------------------------------- */
 
 NTSTATUS DxgkGpuVaCoreValidateGeometry(_In_ const DXGK_GPUVA_GEOMETRY *Geometry);
