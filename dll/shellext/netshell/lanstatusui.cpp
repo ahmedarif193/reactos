@@ -9,6 +9,87 @@
 
 
 #include <wlanapi.h>
+#include <netlistmgr.h>
+
+#define NETSHELL_MAX_TRAY 32
+
+static DWORD g_TrayRank[NETSHELL_MAX_TRAY];
+
+static NLM_CONNECTIVITY
+NetShellGetConnectivity(const GUID *pAdapterId)
+{
+    CComPtr<INetworkListManager> pMgr;
+    CComPtr<IEnumNetworkConnections> pEnum;
+    NLM_CONNECTIVITY Result = NLM_CONNECTIVITY_DISCONNECTED;
+
+    if (pAdapterId == NULL)
+        return Result;
+    if (FAILED(CoCreateInstance(CLSID_NetworkListManager, NULL, CLSCTX_ALL,
+                                IID_PPV_ARG(INetworkListManager, &pMgr))))
+        return Result;
+    if (FAILED(pMgr->GetNetworkConnections(&pEnum)))
+        return Result;
+
+    for (;;)
+    {
+        CComPtr<INetworkConnection> pConn;
+        ULONG Fetched = 0;
+        GUID Adapter;
+
+        if (pEnum->Next(1, &pConn, &Fetched) != S_OK || Fetched == 0)
+            break;
+        if (SUCCEEDED(pConn->GetAdapterId(&Adapter)) &&
+            IsEqualGUID(Adapter, *pAdapterId))
+        {
+            NLM_CONNECTIVITY Conn;
+
+            if (SUCCEEDED(pConn->GetConnectivity(&Conn)))
+                Result = Conn;
+            break;
+        }
+    }
+    return Result;
+}
+
+static DWORD
+NetShellRankConnection(NLM_CONNECTIVITY Conn, DWORD dwType, int nQuality)
+{
+    DWORD Scope, Iface, Signal;
+
+    if (Conn & (NLM_CONNECTIVITY_IPV4_INTERNET | NLM_CONNECTIVITY_IPV6_INTERNET))
+        Scope = 3;
+    else if (Conn & (NLM_CONNECTIVITY_IPV4_LOCALNETWORK |
+                     NLM_CONNECTIVITY_IPV6_LOCALNETWORK))
+        Scope = 2;
+    else if (Conn & (NLM_CONNECTIVITY_IPV4_SUBNET | NLM_CONNECTIVITY_IPV6_SUBNET))
+        Scope = 1;
+    else
+        Scope = 0;
+
+    Iface = (dwType == IF_TYPE_PPP || dwType == IF_TYPE_SLIP) ? 0 : 1;
+    if (dwType == IF_TYPE_IEEE80211)
+        Signal = (nQuality < 0) ? 0 : (DWORD)nQuality;
+    else
+        Signal = 101;
+
+    return Scope * 100000 + Iface * 1000 + Signal;
+}
+
+static BOOL
+NetShellIsPrimaryTray(UINT uID, DWORD Rank)
+{
+    UINT i, Best = 0;
+
+    if (uID >= NETSHELL_MAX_TRAY)
+        return TRUE;
+    g_TrayRank[uID] = Rank + 1;
+    for (i = 0; i < NETSHELL_MAX_TRAY; i++)
+    {
+        if (g_TrayRank[i] > g_TrayRank[Best])
+            Best = i;
+    }
+    return Best == uID;
+}
 
 typedef DWORD (WINAPI *PFN_NS_WLANOPENHANDLE)(DWORD, PVOID, PDWORD, PHANDLE);
 typedef DWORD (WINAPI *PFN_NS_WLANCLOSEHANDLE)(HANDLE, PVOID);
@@ -23,19 +104,22 @@ static PFN_NS_WLANENUMINTERFACES g_pfnWlanEnum;
 static PFN_NS_WLANQUERYINTERFACE g_pfnWlanQuery;
 static PFN_NS_WLANFREEMEMORY g_pfnWlanFree;
 
+#define NS_WIFI_NOINFO  (-2)
+#define NS_WIFI_NOASSOC (-1)
+
 static int
 NetShellWifiQuality(const GUID *pConnGuid)
 {
     HANDLE hWlan = NULL;
     DWORD dwVersion = 0;
     PWLAN_INTERFACE_INFO_LIST pList = NULL;
-    int nQuality = -1;
+    int nQuality = NS_WIFI_NOINFO;
 
     if (!g_hWlanApi)
     {
         g_hWlanApi = LoadLibraryW(L"wlanapi.dll");
         if (!g_hWlanApi)
-            return -1;
+            return NS_WIFI_NOINFO;
         g_pfnWlanOpen = (PFN_NS_WLANOPENHANDLE)GetProcAddress(g_hWlanApi, "WlanOpenHandle");
         g_pfnWlanClose = (PFN_NS_WLANCLOSEHANDLE)GetProcAddress(g_hWlanApi, "WlanCloseHandle");
         g_pfnWlanEnum = (PFN_NS_WLANENUMINTERFACES)GetProcAddress(g_hWlanApi, "WlanEnumInterfaces");
@@ -43,11 +127,12 @@ NetShellWifiQuality(const GUID *pConnGuid)
         g_pfnWlanFree = (PFN_NS_WLANFREEMEMORY)GetProcAddress(g_hWlanApi, "WlanFreeMemory");
     }
     if (!g_pfnWlanOpen || !g_pfnWlanClose || !g_pfnWlanEnum || !g_pfnWlanQuery || !g_pfnWlanFree)
-        return -1;
+        return NS_WIFI_NOINFO;
     if (g_pfnWlanOpen(2, NULL, &dwVersion, &hWlan) != ERROR_SUCCESS || !hWlan)
-        return -1;
+        return NS_WIFI_NOINFO;
     if (g_pfnWlanEnum(hWlan, NULL, &pList) == ERROR_SUCCESS && pList)
     {
+        nQuality = NS_WIFI_NOASSOC;
         for (DWORD i = 0; i < pList->dwNumberOfItems; i++)
         {
             WLAN_INTERFACE_INFO *pInfo = &pList->InterfaceInfo[i];
@@ -71,6 +156,39 @@ NetShellWifiQuality(const GUID *pConnGuid)
     }
     g_pfnWlanClose(hWlan, NULL);
     return nQuality;
+}
+
+static UINT
+NetShellTrayIcon(DWORD dwType, DWORD dwOperStatus, NLM_CONNECTIVITY Conn, int nQuality)
+{
+    BOOL bWifi = (dwType == IF_TYPE_IEEE80211);
+    BOOL bInternet;
+
+    if (dwOperStatus != MIB_IF_OPER_STATUS_CONNECTED &&
+        dwOperStatus != MIB_IF_OPER_STATUS_OPERATIONAL)
+    {
+        return bWifi ? IDI_NET_TRAY_WIFIOFF : IDI_NET_TRAY_WIRED_X;
+    }
+
+    if (bWifi && nQuality == NS_WIFI_NOASSOC)
+        return IDI_NET_TRAY_WIFIOFF;
+
+    bInternet = (Conn & (NLM_CONNECTIVITY_IPV4_INTERNET |
+                         NLM_CONNECTIVITY_IPV6_INTERNET)) != 0;
+
+    if (!bWifi)
+        return bInternet ? IDI_NET_TRAY_WIRED : IDI_NET_TRAY_WIRED_WARN;
+
+    if (!bInternet)
+        return IDI_NET_TRAY_WIFI_WARN;
+
+    if (nQuality >= 75 || nQuality == NS_WIFI_NOINFO)
+        return IDI_NET_TRAY_WIFI1;
+    if (nQuality >= 50)
+        return IDI_NET_TRAY_WIFI2;
+    if (nQuality >= 25)
+        return IDI_NET_TRAY_WIFI3;
+    return IDI_NET_TRAY_WIFI4;
 }
 
 #define NETTIMERID 0xFABC
@@ -253,6 +371,8 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
     HICON hIcon, hOldIcon = NULL;
     NOTIFYICONDATAW nid;
     NETCON_PROPERTIES * pProperties = NULL;
+    NLM_CONNECTIVITY Conn;
+    int nQuality;
 
     ZeroMemory(&IfEntry, sizeof(IfEntry));
     IfEntry.dwIndex = pContext->dwAdapterIndex;
@@ -273,89 +393,29 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
     }
 
     hIcon = NULL;
-    if (IfEntry.dwType == IF_TYPE_IEEE80211)
     {
-        BOOL bUp = (IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_CONNECTED ||
-                    IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_OPERATIONAL);
-        UINT nWanted = 10;
-        UINT nIcon = IDI_NET_TRAY_WIFIOFF;
-        if (bUp)
+        NETCON_PROPERTIES *pProps = NULL;
+        GUID guid;
+        const GUID *pGuid = NULL;
+        UINT nIcon;
+
+        if (pContext->pNet->GetProperties(&pProps) == S_OK && pProps)
         {
-            NETCON_PROPERTIES *pProps = NULL;
-            GUID guid;
-            const GUID *pGuid = NULL;
-            int nQuality;
-            if (pContext->pNet->GetProperties(&pProps) == S_OK && pProps)
-            {
-                guid = pProps->guidId;
-                pGuid = &guid;
-                NcFreeNetconProperties(pProps);
-            }
-            nQuality = NetShellWifiQuality(pGuid);
-            if (nQuality < 0 || nQuality >= 75)
-            {
-                nWanted = 6;
-                nIcon = IDI_NET_TRAY_WIFI1;
-            }
-            else if (nQuality >= 50)
-            {
-                nWanted = 7;
-                nIcon = IDI_NET_TRAY_WIFI2;
-            }
-            else if (nQuality >= 25)
-            {
-                nWanted = 8;
-                nIcon = IDI_NET_TRAY_WIFI3;
-            }
-            else
-            {
-                nWanted = 9;
-                nIcon = IDI_NET_TRAY_WIFI4;
-            }
+            guid = pProps->guidId;
+            pGuid = &guid;
+            NcFreeNetconProperties(pProps);
         }
-        if (pContext->Status != nWanted)
+
+        nQuality = (IfEntry.dwType == IF_TYPE_IEEE80211) ? NetShellWifiQuality(pGuid)
+                                                         : NS_WIFI_NOINFO;
+        Conn = NetShellGetConnectivity(pGuid);
+        nIcon = NetShellTrayIcon(IfEntry.dwType, IfEntry.dwOperStatus, Conn, nQuality);
+
+        if (pContext->Status != nIcon)
         {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(nIcon), IMAGE_ICON, 32, 32, LR_SHARED);
-            pContext->Status = nWanted;
-        }
-    }
-    else if (IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_CONNECTED || IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_OPERATIONAL)
-    {
-        if (pContext->dwInOctets == IfEntry.dwInOctets && pContext->dwOutOctets == IfEntry.dwOutOctets && pContext->Status  != 0)
-        {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED), IMAGE_ICON, 32, 32, LR_SHARED);
-            pContext->Status = 0;
-        }
-        else if (pContext->dwInOctets != IfEntry.dwInOctets && pContext->dwOutOctets != IfEntry.dwOutOctets && pContext->Status  != 1)
-        {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED), IMAGE_ICON, 32, 32, LR_SHARED);
-            pContext->Status = 1;
-        }
-        else if (pContext->dwInOctets != IfEntry.dwInOctets && pContext->Status  != 2)
-        {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED), IMAGE_ICON, 32, 32, LR_SHARED);
-            pContext->Status = 2;
-        }
-        else if (pContext->dwOutOctets != IfEntry.dwOutOctets && pContext->Status  != 3)
-        {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_WIRED), IMAGE_ICON, 32, 32, LR_SHARED);
-            pContext->Status = 3;
-        }
-    }
-    else if (IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_UNREACHABLE || IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_DISCONNECTED)
-    {
-        if (pContext->Status != 4)
-        {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_OFF), IMAGE_ICON, 32, 32, LR_SHARED);
-            pContext->Status = 4;
-        }
-    }
-    else if (IfEntry.dwOperStatus == MIB_IF_OPER_STATUS_NON_OPERATIONAL)
-    {
-        if (pContext->Status != 5)
-        {
-            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(IDI_NET_TRAY_OFF), IMAGE_ICON, 32, 32, LR_SHARED);
-            pContext->Status = 5;
+            hIcon = (HICON)LoadImage(netshell_hInstance, MAKEINTRESOURCE(nIcon),
+                                     IMAGE_ICON, 32, 32, LR_SHARED);
+            pContext->Status = nIcon;
         }
     }
 
@@ -385,7 +445,11 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
                 nid.uFlags |= NIF_ICON;
 
             nid.uFlags |= NIF_STATE;
-            nid.dwState = 0;
+            nid.dwState =
+                NetShellIsPrimaryTray(pContext->uID,
+                                      NetShellRankConnection(Conn, IfEntry.dwType,
+                                                             nQuality))
+                    ? 0 : NIS_HIDDEN;
             nid.dwStateMask = NIS_HIDDEN;
 
             if (pProperties->pszwName)
@@ -1352,8 +1416,13 @@ CLanStatus::EnumerateTrayConnections()
                 nid.uFlags |= NIF_STATE;
             }
             nid.hIcon = (HICON)LoadImage(netshell_hInstance,
-                                         MAKEINTRESOURCE(pProps->Status == NCS_CONNECTED ?
-                                                         IDI_NET_TRAY_WIRED : IDI_NET_TRAY_OFF),
+                                         MAKEINTRESOURCE(NetShellTrayIcon(
+                                             IF_TYPE_ETHERNET_CSMACD,
+                                             pProps->Status == NCS_CONNECTED ?
+                                                 MIB_IF_OPER_STATUS_CONNECTED :
+                                                 MIB_IF_OPER_STATUS_DISCONNECTED,
+                                             NetShellGetConnectivity(&pProps->guidId),
+                                             NS_WIFI_NOINFO)),
                                          IMAGE_ICON,
                                          GetSystemMetrics(SM_CXSMICON),
                                          GetSystemMetrics(SM_CYSMICON), 0);

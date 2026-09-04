@@ -20,6 +20,9 @@
 #define IDI_NET_TRAY_WIFI3       124
 #define IDI_NET_TRAY_WIFI4       125
 #define IDI_NET_TRAY_WIFIOFF     126
+#define IDI_NET_TRAY_WIFI_WARN   127
+#define IDI_NET_TRAY_WIRED_WARN  128
+#define IDI_NET_TRAY_WIRED_X     129
 
 #define IDC_STATIC -1
 
