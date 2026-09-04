@@ -334,18 +334,6 @@ DxgkpApplySourceOwnerOperation(
 
     if (RequestedType == D3DKMT_VIDPNSOURCEOWNER_SHARED)
     {
-        if (Current->OwnerDevice == NULL)
-        {
-            Current->OwnerDevice = OwnerDevice;
-            Current->OwnerType = RequestedType;
-            Current->OwnerFlags = OwnerFlags;
-            return STATUS_SUCCESS;
-        }
-        if (Current->OwnerDevice == OwnerDevice && Current->OwnerType == RequestedType)
-        {
-            Current->OwnerFlags = OwnerFlags;
-            return STATUS_SUCCESS;
-        }
         if (Current->OwnerDevice == OwnerDevice && (Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE || Current->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI))
             return STATUS_INVALID_PARAMETER;
         return STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
@@ -5483,6 +5471,37 @@ DxgkSetVidPnSourceOwner(
     _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner)
 {
     return DxgkpSetVidPnSourceOwnerWithAccessMode(pSetVidPnSourceOwner, KernelMode);
+}
+
+BOOLEAN
+NTAPI
+DxgkpIsAnyVidPnSourceExclusivelyOwned(VOID)
+{
+    PLIST_ENTRY Entry;
+    PDXGKP_SOURCE_OWNER_ADAPTER_STATE State;
+    BOOLEAN Owned = FALSE;
+    ULONG i;
+
+    PAGED_CODE();
+
+    DxgkpEnsureSourceOwnerMutex();
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    for (Entry = g_SourceOwnerAdapterList.Flink; Entry != &g_SourceOwnerAdapterList && !Owned; Entry = Entry->Flink)
+    {
+        State = CONTAINING_RECORD(Entry, DXGKP_SOURCE_OWNER_ADAPTER_STATE, Entry);
+        for (i = 0; i < DXGKP_MAX_SOURCES; ++i)
+        {
+            if (State->Owners[i].OwnerDevice != NULL &&
+                (State->Owners[i].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE ||
+                 State->Owners[i].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI))
+            {
+                Owned = TRUE;
+                break;
+            }
+        }
+    }
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
+    return Owned;
 }
 
 NTSTATUS
