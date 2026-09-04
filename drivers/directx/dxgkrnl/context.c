@@ -163,6 +163,86 @@ DxgkDeviceWorkWaitForQueued(
     return DxgkDeviceWorkCoreWaitForSnapshotUntil(&Device->WorkLedger, &Snapshot, &Deadline);
 }
 
+/*
+ * Wait for the DMA work already queued on every device of a process.
+ *
+ * Used before a process-wide mapping is torn down (D3DKMTFreeGpuVirtualAddress
+ * clears page-table entries with the CPU).  The video memory manager's
+ * destruction rule (D3DDDICB_DESTROYALLOCATION2FLAGS.AssumeNotInUse == FALSE)
+ * assumes that commands queued before the request may still access what is
+ * being taken away; the same holds for a GPU virtual address range, and on
+ * GpuMmu hardware a translation miss halts the engine rather than returning
+ * zeros.  Only work accepted before the call counts: the ledgers are
+ * snapshotted, and a device whose work never completes is torn down by TDR,
+ * which makes its ledger terminal and ends the wait.  Devices are referenced
+ * under ProcessMutex and waited on with the mutex released.
+ */
+#define DXGK_PROCESS_WAIT_STACK_DEVICES 16
+
+NTSTATUS
+DxgkProcessWaitForQueuedWork(
+    _In_ PDXGKRNL_PROCESS ProcessRecord,
+    _In_ ULONG TimeoutMs)
+{
+    PDXGKRNL_DEVICE StackDevices[DXGK_PROCESS_WAIT_STACK_DEVICES];
+    PDXGKRNL_DEVICE *Devices = StackDevices;
+    ULONG Capacity = DXGK_PROCESS_WAIT_STACK_DEVICES;
+    ULONG Count = 0;
+    ULONG Index;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+    if (ProcessRecord == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    ExAcquireFastMutex(&ProcessRecord->ProcessMutex);
+    for (Entry = ProcessRecord->DeviceListHead.Flink;
+         Entry != &ProcessRecord->DeviceListHead;
+         Entry = Entry->Flink)
+    {
+        Count++;
+    }
+    if (Count > Capacity)
+    {
+        /* NonPagedPool: the fast mutex holds us at APC_LEVEL. */
+        Devices = ExAllocatePoolWithTag(NonPagedPool, Count * sizeof(*Devices), TAG_DXGK_DEVICE);
+        if (Devices == NULL)
+        {
+            ExReleaseFastMutex(&ProcessRecord->ProcessMutex);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        Capacity = Count;
+    }
+    Count = 0;
+    for (Entry = ProcessRecord->DeviceListHead.Flink;
+         Entry != &ProcessRecord->DeviceListHead && Count < Capacity;
+         Entry = Entry->Flink)
+    {
+        PDXGK_PROCESS_DEVICE_LINK Link = CONTAINING_RECORD(Entry, DXGK_PROCESS_DEVICE_LINK, Entry);
+        PDXGKRNL_DEVICE Device = (PDXGKRNL_DEVICE)Link->Device;
+
+        /* A device that refuses the reference is being destroyed: its ledger
+         * is terminal and nothing queued on it can still run. */
+        if (Device == NULL || !DxgkReferenceDevice(Device))
+            continue;
+        Devices[Count++] = Device;
+    }
+    ExReleaseFastMutex(&ProcessRecord->ProcessMutex);
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        NTSTATUS WaitStatus = DxgkDeviceWorkWaitForQueued(Devices[Index], TimeoutMs);
+
+        if (WaitStatus == STATUS_TIMEOUT || (!NT_SUCCESS(WaitStatus) && NT_SUCCESS(Status)))
+            Status = WaitStatus;
+        DxgkDereferenceDevice(Devices[Index]);
+    }
+    if (Devices != StackDevices)
+        ExFreePoolWithTag(Devices, TAG_DXGK_DEVICE);
+    return Status;
+}
+
 VOID
 DxgkDeviceBeginDestroy(
     _In_ PDXGKRNL_DEVICE Device)
@@ -180,6 +260,13 @@ DxgkDeviceSetExecutionState(
 {
     if (Device == NULL)
         return;
+    if (ExecutionState != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    {
+        DPRINT1("DxgkDeviceSetExecutionState: device %p handle 0x%X state %d -> %d (caller %p)\n",
+                Device, Device->Handle,
+                InterlockedCompareExchange(&Device->ExecutionState, 0, 0),
+                ExecutionState, _ReturnAddress());
+    }
     DxgkDeviceWorkCoreTransitionTerminal(&Device->WorkLedger, &Device->ExecutionState, ExecutionState);
     if (ExecutionState == D3DKMT_DEVICEEXECUTION_STOPPED)
         DxgkSyncObjectCancelDeviceWaits(Device, STATUS_DEVICE_REMOVED, TRUE);
@@ -201,6 +288,8 @@ DxgkDeviceSetPageFaultExecutionState(
                        D3DKMT_DEVICEEXECUTION_ERROR_DMAPAGEFAULT);
     if (Transitioned)
     {
+        DPRINT1("DxgkDeviceSetPageFaultExecutionState: device %p handle 0x%X -> ERROR_DMAPAGEFAULT (caller %p)\n",
+                Device, Device->Handle, _ReturnAddress());
         DxgkSyncObjectCancelDeviceWaits(
             Device,
             STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE,
@@ -498,6 +587,61 @@ DxgkpFindProcessRecordLocked(
     return NULL;
 }
 
+/*
+ * Validate the opaque hDxgkProcess token passed to the miniport without ever
+ * dereferencing an untrusted pointer.  The CreateProcess owner retains the
+ * record's original lifetime reference for the whole synchronous callback,
+ * so a matching Creating record cannot disappear after the list lock drops.
+ */
+NTSTATUS
+DxgkValidateCreatingProcessHandle(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE ProcessHandle,
+    _Out_ PDXGKRNL_PROCESS *OutProcessRecord)
+{
+    PDXGKRNL_PROCESS Requested;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status = STATUS_INVALID_HANDLE;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || ProcessHandle == NULL || OutProcessRecord == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *OutProcessRecord = NULL;
+    Requested = (PDXGKRNL_PROCESS)ProcessHandle;
+
+    ExAcquireFastMutex(&DxgkProcessListLock);
+    for (Entry = DxgkProcessListHead.Flink;
+         Entry != &DxgkProcessListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKRNL_PROCESS ProcessRecord =
+            CONTAINING_RECORD(Entry,
+                              DXGKRNL_PROCESS,
+                              GlobalProcessListEntry);
+
+        if (ProcessRecord != Requested)
+            continue;
+
+        if (ProcessRecord->Adapter == Adapter &&
+            ProcessRecord->Lifetime.State == DxgkProcessLifetimeCreating &&
+            ProcessRecord->Lifetime.CallbackOwner == PsGetCurrentThread())
+        {
+            *OutProcessRecord = ProcessRecord;
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            Status = STATUS_DEVICE_NOT_READY;
+        }
+        break;
+    }
+    ExReleaseFastMutex(&DxgkProcessListLock);
+
+    return Status;
+}
+
 static VOID
 DxgkpFreeProcessRecordStorage(
     _In_ PDXGKRNL_PROCESS ProcessRecord)
@@ -790,6 +934,7 @@ DxgkpInitializeContextStreamState(_Inout_ PDXGKRNL_CONTEXT Context)
 {
     KeInitializeMutex(&Context->RenderLock, 0);
     KeInitializeMutex(&Context->StreamAdmissionMutex, 0);
+    ExInitializeRundownProtection(&Context->StreamAdmissionRundown);
     KeInitializeSpinLock(&Context->StreamLock);
     InitializeListHead(&Context->StreamOperationList);
     InitializeListHead(&Context->StreamReadyEntry);
@@ -876,6 +1021,9 @@ DxgkpDrainContextStreamRetirements(_In_ PDXGKRNL_CONTEXT Context, _In_ const DXG
     return STATUS_SUCCESS;
 }
 
+/* Upper bound on the engine drain taken while a context is torn down. */
+#define DXGKP_CONTEXT_TEARDOWN_DRAIN_MS 1000
+
 static NTSTATUS
 DxgkpBeginContextStreamTeardown(_Inout_ PDXGKRNL_CONTEXT Context)
 {
@@ -886,6 +1034,13 @@ DxgkpBeginContextStreamTeardown(_Inout_ PDXGKRNL_CONTEXT Context)
 
     PAGED_CODE();
     InterlockedExchange(&Context->StreamStopping, 1);
+    /*
+     * StreamStopping alone does not close the admission window: a submission
+     * that already passed the check is still building its operation.  Wait for
+     * those to drain before cancelling, so no packet is admitted into a stream
+     * that is being torn down.
+     */
+    ExWaitForRundownProtectionRelease(&Context->StreamAdmissionRundown);
     (VOID)KeWaitForSingleObject(&Context->StreamAdmissionMutex, Executive, KernelMode, FALSE, NULL);
     CancelStatus = InterlockedCompareExchange(&Context->Device->ExecutionState, 0, 0) == D3DKMT_DEVICEEXECUTION_ACTIVE ? STATUS_CANCELLED : STATUS_DEVICE_REMOVED;
     VidSchCancelContextPackets(Context->Device->Adapter, Context, CancelStatus);
@@ -909,6 +1064,18 @@ DxgkpBeginContextStreamTeardown(_Inout_ PDXGKRNL_CONTEXT Context)
 
 Exit:
     KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
+    /*
+     * NOTE: cancellation only withdraws packets the provider never dispatched.
+     * Work already handed to the engine keeps running out of this context's
+     * page tables, and other contexts may still hold references to resources
+     * torn down here -- that is the residual GPU page fault.  Draining this
+     * context's own operations here does not close it (measured: the fault
+     * returns), and idling every engine does (measured: no faults) but blocks
+     * the destroying thread long enough to deadlock against work that needs it
+     * to proceed, which TDRs.  The real fix is a per-allocation reference
+     * fence so only the work that actually touches these resources is awaited.
+     * TODO: implement that tracking; neither coarse drain belongs here.
+     */
     return Status;
 }
 
@@ -1100,6 +1267,15 @@ DxgkpDestroyContextNoLock(
     if (InterlockedCompareExchange(&Context->StreamWorkerQueued, 0, 0) != 0)
         (VOID)KeWaitForSingleObject(&Context->StreamDrainedEvent, Executive, KernelMode, FALSE, NULL);
 
+    /*
+     * NOTE: an idle worker does not prove the GPU is finished -- operations
+     * leave StreamOperationList only when the engine retires them, and the
+     * emptiness check lives in DxgkpFinishContextStreamTeardown, which runs
+     * after the miniport context is destroyed.  Draining here instead was
+     * measured to hang the engine into an unrecoverable TDR, so the ordering
+     * is left as-is until per-allocation reference fences make a precise wait
+     * possible.  TODO: fix the ordering together with that tracking.
+     */
     DXGKRNL_TRACE("DxgkpDestroyContextNoLock: Context %p hMiniport %p\n", Context, Context->hMiniportContext);
 
     Status = DxgkpDestroyMiniportContext(Adapter, Context->hMiniportContext);
@@ -2048,9 +2224,31 @@ DxgkCreateContextVirtual(
         DXGK_CB_FULL(Adapter, DxgkDdiDestroyContext) == NULL ||
         DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL)
     {
+        DXGKRNL_ERR("DxgkCreateContextVirtual: capability gate node=%lu nodes=%lu version=0x%lX create=%p destroy=%p submit-virtual=%p\n",
+                    pCreateContext->NodeOrdinal,
+                    Adapter->NodeCount,
+                    Adapter->MiniportContext->InitData.s.Version,
+                    DXGK_CB_FULL(Adapter, DxgkDdiCreateContext),
+                    DXGK_CB_FULL(Adapter, DxgkDdiDestroyContext),
+                    DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual));
         DxgkpDereferenceDevice(Device);
         return STATUS_NOT_SUPPORTED;
     }
+    if (!pCreateContext->Flags.NullRendering)
+    {
+        Status = DxgkGpuVaPreparePageTable(Adapter, Device->ProcessRecord);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkCreateContextVirtual: GPUVA preparation failed 0x%08lX mode=%u mmu=%u levels=%u\n",
+                        Status,
+                        Adapter->GpuMmuCaps.PageTableUpdateMode,
+                        Adapter->GpuMmuCapsValid,
+                        Adapter->PageTableLevelsValid);
+            DxgkpDereferenceDevice(Device);
+            return Status;
+        }
+    }
+
     Context = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Context), TAG_DXGK_CONTEXT);
     if (Context == NULL)
     {
@@ -2107,6 +2305,17 @@ DxgkCreateContextVirtual(
     Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateContext)(Device->hMiniportDevice, &CreateContextArg);
     if (!NT_SUCCESS(Status))
     {
+        DXGKRNL_ERR("DxgkCreateContextVirtual: DxgkDdiCreateContext=%p failed 0x%08lX device=%p context=%p node=%lu engine=0x%X flags=0x%X private=%p bytes=%u arg-size=%Iu\n",
+                    DXGK_CB_FULL(Adapter, DxgkDdiCreateContext),
+                    Status,
+                    Device->hMiniportDevice,
+                    CreateContextArg.hContext,
+                    CreateContextArg.NodeOrdinal,
+                    CreateContextArg.EngineAffinity,
+                    CreateContextArg.Flags.Value,
+                    CreateContextArg.pPrivateDriverData,
+                    CreateContextArg.PrivateDriverDataSize,
+                    sizeof(CreateContextArg));
         if (CreateContextArg.hContext != NULL && CreateContextArg.hContext != (HANDLE)Context)
         {
             Context->hMiniportContext = CreateContextArg.hContext;

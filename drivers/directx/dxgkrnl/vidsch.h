@@ -128,6 +128,7 @@ typedef struct _VIDSCH_DMA_PACKET
     /* Private driver data passed through to DxgkDdiSubmitCommand. */
     PVOID                       DriverPrivateData;
     ULONG                       DriverPrivateDataSize;
+    ULONG                       UmdPrivateDataSize;
     ULONG                       DriverPrivateDataSubmissionEndOffset;
 
     /* Allocation list and patch location list pointers. */
@@ -217,6 +218,9 @@ typedef struct _VIDSCH_DMA_PACKET
     volatile LONG               ContextOrderState;
     volatile LONG               ContextOrderCompletionPending;
     volatile LONG               ContextOrderResubmissionPending;
+    ULONGLONG                   AdmitTime100ns;
+    ULONGLONG                   DispatchTime100ns;
+    LONG64                      AdmitSequence;
     NTSTATUS                    ContextOrderCompletionStatus;
     NTSTATUS                    ContextOrderAbortStatus;
 
@@ -228,6 +232,29 @@ typedef struct _VIDSCH_DMA_PACKET
  * The current scheduler supports exactly one WDDM engine (ordinal zero) per
  * node.  One instance therefore represents one node's sole engine.
  * ====================================================================== */
+#define VIDSCH_DISPATCH_RING_SIZE 8
+
+typedef struct _VIDSCH_DISPATCH_RECORD
+{
+    ULONG                       Fence;
+    ULONG                       NodeOrdinal;
+    PVOID                       Context;
+    HANDLE                      MiniportContext;
+    ULONGLONG                   GpuVa;
+    ULONG                       Size;
+    ULONG                       SubmitFlags;
+    ULONG                       PrivateDataSize;
+    ULONG                       UmdPrivateDataSize;
+    ULONGLONG                   AdmitTime100ns;
+    ULONGLONG                   DispatchTime100ns;
+    ULONGLONG                   CompleteTime100ns;
+    LONG64                      AdmitSequence;
+    LONG64                      DispatchSequence;
+    LONG64                      CompleteSequence;
+    BOOLEAN                     Virtual;
+    BOOLEAN                     Ordered;
+} VIDSCH_DISPATCH_RECORD, *PVIDSCH_DISPATCH_RECORD;
+
 typedef struct _VIDSCH_ENGINE
 {
     /* Back-pointer to owning adapter. */
@@ -313,6 +340,19 @@ typedef struct _VIDSCH_ENGINE
 
     volatile LONG               OutstandingWorkers;
     KEVENT                      WorkersDrainedEvent;
+
+    VIDSCH_DISPATCH_RECORD      DispatchRing[VIDSCH_DISPATCH_RING_SIZE];
+    ULONG                       DispatchRingNext;
+    D3DGPU_VIRTUAL_ADDRESS      LastFaultDmaGpuVa;
+    ULONG                       LastFaultDmaSize;
+    ULONG                       LastFaultFence;
+    struct _DXGKRNL_PROCESS    *LastFaultProcess;
+    D3DGPU_VIRTUAL_ADDRESS      LastDispatchDmaGpuVa;
+    ULONG                       LastDispatchDmaSize;
+    ULONG                       LastDispatchFence;
+    struct _DXGKRNL_PROCESS    *LastDispatchProcess;
+    WORK_QUEUE_ITEM             FaultDumpWorkItem;
+    volatile LONG               FaultDumpQueued;
 
 } VIDSCH_ENGINE, *PVIDSCH_ENGINE;
 
@@ -660,6 +700,7 @@ VidSchGetEngineTdrInfo(
     _In_  ULONG                    EngineOrdinal,
     _Out_ PVOID                    TdrInfo);
 
+VOID VidSchDumpEngineDiagnostics(_In_ struct _DXGKRNL_ADAPTER *Adapter);
 BOOLEAN VidSchGetOldestKickedPacket(_In_ struct _DXGKRNL_ADAPTER *Adapter, _Out_ PULONG FenceId, _Out_ PULONG NodeOrdinal, _Out_ PULONG EngineOrdinal);
 
 VOID VidSchReferenceContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet);
@@ -669,6 +710,7 @@ VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet);
 BOOLEAN VidSchIsContextOrderPacketResubmittable(_In_ PVIDSCH_DMA_PACKET Packet);
 BOOLEAN VidSchDispatchContextOrderPacketResubmission(_Inout_ PVIDSCH_DMA_PACKET Packet);
 NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ PVIDSCH_DMA_PACKET Packet);
+VOID DxgkContextOrderKickContext(_Inout_ PDXGKRNL_CONTEXT Context);
 VOID DxgkContextOrderPublishAdmittedPacket(_Inout_ PDXGKRNL_CONTEXT Context);
 VOID DxgkContextOrderScheduleReferenced(_Inout_ PDXGKRNL_CONTEXT Context);
 VOID DxgkContextOrderCommitPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS SubmissionStatus);
