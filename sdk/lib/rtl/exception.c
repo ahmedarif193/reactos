@@ -32,6 +32,12 @@ RtlpAmd64StepContextToCaller(
 #endif
 
 #if defined(_M_ARM64)
+/* Defined in rtl/arm64/except.c - advances a captured CONTEXT one frame up so
+ * it describes the caller of the routine that captured it. */
+VOID
+NTAPI
+RtlpArm64StepContextToCaller(_Inout_ PCONTEXT Context);
+
 /* Defined in rtl/arm64/context_asm.S - loads the register file from Context and
  * branches to Context->Pc (does not return). Used to resume at a handler-patched
  * context; ZwContinue cannot resume a kernel-mode context from a non-trap call
@@ -57,6 +63,15 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
 
     /* Capture the context */
     RtlCaptureContext(&Context);
+
+#if defined(_M_ARM64)
+    /*
+     * RtlCaptureContext records this helper's own frame. Step the context up
+     * one frame so dispatch starts in the caller's SEH scope and a handler that
+     * continues execution resumes after the raise instead of re-entering here.
+     */
+    RtlpArm64StepContextToCaller(&Context);
+#endif
 
     /* Save the exception address */
     ExceptionRecord->ExceptionAddress = _ReturnAddress();
