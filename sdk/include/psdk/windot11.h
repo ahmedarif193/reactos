@@ -74,8 +74,14 @@ typedef DOT11_MAC_ADDRESS* PDOT11_MAC_ADDRESS;
 #endif
 
 #define DOT11_HESSID_LENGTH   6
+#if defined(__midl) || defined(__WIDL__)
+typedef struct _DOT11_HESSID {
+    UCHAR ucDot11Hessid[DOT11_HESSID_LENGTH];
+} DOT11_HESSID, *PDOT11_HESSID;
+#else
 typedef UCHAR DOT11_HESSID[DOT11_HESSID_LENGTH];
 typedef DOT11_HESSID* PDOT11_HESSID;
+#endif
 
 typedef struct _DOT11_SSID {
     ULONG uSSIDLength;
