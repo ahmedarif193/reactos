@@ -287,18 +287,6 @@ TF_CreateDisplayAttributeMgr(_Out_ ITfDisplayAttributeMgr **ppdam)
 }
 
 /***********************************************************************
- *      TF_DllDetachInOther (MSCTF.@)
- *
- * @unimplemented
- */
-EXTERN_C BOOL WINAPI
-TF_DllDetachInOther(VOID)
-{
-    FIXME("()\n");
-    return TRUE;
-}
-
-/***********************************************************************
  *      TF_GetGlobalCompartment (MSCTF.@)
  *
  * @unimplemented
