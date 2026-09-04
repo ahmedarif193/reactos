@@ -3340,14 +3340,20 @@ DxgkGpuVaPageTableReady(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_PROCESS Process)
 {
-    if (Adapter == NULL || Process == NULL || Process->Adapter != Adapter || Process->hMiniportProcess == NULL || Process->hRootPageTable == NULL || Process->RootPageTableEntries == 0 || !Process->RootPageTableProgrammed)
+    if (Adapter == NULL || Process == NULL || Process->Adapter != Adapter ||
+        !Adapter->GpuMmuCapsValid || !Adapter->PageTableLevelsValid ||
+        Process->hMiniportProcess == NULL || Process->hRootPageTable == NULL ||
+        Process->RootPageTableEntries == 0 || !Process->RootPageTableProgrammed)
         return FALSE;
     if (Adapter->MiniportContext == NULL ||
         !DxgkCapsCoreInterfaceVersionAtLeast(
             Adapter->MiniportContext->InitData.s.Version,
             DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
         return FALSE;
-    if (DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiGetRootPageTableSize) == NULL || DXGK_CB_FULL(Adapter, DxgkDdiSetRootPageTable) == NULL)
+    if (DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer) == NULL ||
+        DXGK_CB_FULL(Adapter, DxgkDdiSetRootPageTable) == NULL ||
+        (GpuVaLevelCount(Adapter) == 2 &&
+         DXGK_CB_FULL(Adapter, DxgkDdiGetRootPageTableSize) == NULL))
         return FALSE;
     return TRUE;
 }
