@@ -757,6 +757,20 @@ D3DKMTQueryAdapterInfo(
     if (NT_SUCCESS(Status) && PrivateDriverData != NULL)
         Status = WddmBridgeSafeCopyTo(UserPrivateDriverData, PrivateDriverData, PrivateDriverDataSize);
 
+    /* An adapter without an ICD answers KMTQAITYPE_UMOPENGLINFO with
+     * STATUS_OBJECT_NAME_NOT_FOUND by contract; every OpenGL client asks
+     * every adapter, so that answer is not worth a line. */
+    if (!NT_SUCCESS(Status) &&
+        !(Captured.Type == KMTQAITYPE_UMOPENGLINFO &&
+          Status == STATUS_OBJECT_NAME_NOT_FOUND))
+    {
+        DPRINT1("D3DKMTQueryAdapterInfo failed: handle=0x%X type=%u size=%u status=0x%08lX\n",
+                Captured.hAdapter,
+                (UINT)Captured.Type,
+                Captured.PrivateDriverDataSize,
+                Status);
+    }
+
     if (PrivateDriverData != NULL)
         ExFreePoolWithTag(PrivateDriverData, TAG_WDDM_BRIDGE);
     return Status;
