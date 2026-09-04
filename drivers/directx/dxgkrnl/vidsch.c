@@ -1540,6 +1540,49 @@ VidSchpFaultDumpWorker(
         DxgkGpuVaDumpTranslation(Engine->Adapter, Engine->LastFaultProcess, 0x4000);
         Engine->LastFaultDmaGpuVa = 0;
     }
+    /*
+     * DXGK_PAGE_FAULT_ENGINE_RESET_REQUIRED / _ADAPTER_RESET_REQUIRED are the
+     * miniport telling us the fault left the engine in a state that cannot run
+     * further work until it is reset.  Recording the fault and marking the
+     * device lost is not enough: without the reset the engine never retires
+     * another packet, so every later submission waits forever and the GPU goes
+     * silent rather than reporting an error.  The reset DDI is PASSIVE_LEVEL
+     * only, which is why it happens here and not in the fault consumer.
+     */
+    if ((Engine->LastFaultFlags &
+             (DXGK_PAGE_FAULT_ENGINE_RESET_REQUIRED |
+              DXGK_PAGE_FAULT_ADAPTER_RESET_REQUIRED |
+              DXGK_PAGE_FAULT_FATAL_HARDWARE_ERROR)) != 0)
+    {
+        ULONG FaultFlags = Engine->LastFaultFlags;
+
+        Engine->LastFaultFlags = 0;
+
+        /*
+         * Only the engine case is remedied here.  ADAPTER_RESET_REQUIRED asks
+         * for a full adapter reset and FATAL_HARDWARE_ERROR asks the OS to
+         * bugcheck; an engine reset is not a substitute for either, so they are
+         * reported rather than silently under-handled.
+         * TODO: drive DxgkDdiResetFromTimeout/DxgkDdiRestartFromTimeout (see
+         * TdrResetFromTimeout in dxgkrnl.c) for the adapter case.
+         */
+        if ((FaultFlags & DXGK_PAGE_FAULT_ENGINE_RESET_REQUIRED) != 0)
+        {
+            NTSTATUS ResetStatus =
+                VidSchResetEngine(Engine->Adapter, Engine->SchedulerOrdinal);
+
+            DXGKRNL_ERR("VidSch: engine %lu reset after page fault -> 0x%08lX\n",
+                        Engine->SchedulerOrdinal, ResetStatus);
+        }
+        if ((FaultFlags & (DXGK_PAGE_FAULT_ADAPTER_RESET_REQUIRED |
+                           DXGK_PAGE_FAULT_FATAL_HARDWARE_ERROR)) != 0)
+        {
+            DXGKRNL_ERR("VidSch: page fault flags 0x%lx demand an adapter reset "
+                        "or bugcheck, which is not implemented; the GPU will not "
+                        "recover on its own\n",
+                        FaultFlags);
+        }
+    }
     InterlockedExchange(&Engine->FaultDumpQueued, 0);
 }
 
@@ -1650,6 +1693,7 @@ VidSchpConsumePageFaultInterrupt(
         Engine->LastFaultDmaGpuVa = Packet->DmaBufferGpuVa;
         Engine->LastFaultDmaSize = Packet->VirtualDmaBufferSize;
         Engine->LastFaultFence = NotifyData.DmaPageFaulted.FaultedFenceId;
+        Engine->LastFaultFlags = (ULONG)NotifyData.DmaPageFaulted.PageFaultFlags;
         Engine->LastFaultProcess = Packet->GpuVaPinProcess;
         /* A submission that pinned no range still belongs to a process: the
          * batch, translation and table dumps need it. */
