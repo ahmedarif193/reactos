@@ -1942,7 +1942,7 @@ DxgkpEnumAdapters2(
     PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
     D3DKMT_ADAPTERINFO Adapters[DXGKP_MAX_ADAPTERS];
     D3DKMT_ADAPTERINFO *UserAdapters;
-    ULONG            Capacity, Count, i, Started;
+    ULONG            Capacity, Count, i, Started, Skipped;
     NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
@@ -1992,9 +1992,21 @@ DxgkpEnumAdapters2(
         return Status;
     }
 
-    /* Build the complete result in kernel memory before publishing handles. */
+    /*
+     * Build the complete result in kernel memory before publishing handles.
+     *
+     * Opening one adapter can fail on its own -- DxgkpCreateAdapterHandle takes
+     * a per-process record, which runs the miniport's DxgkDdiCreateProcess, and
+     * a miniport that is still being brought up can fail or fault there.  That
+     * is not a reason to deny the caller the adapters that did open: failing
+     * the whole enumeration meant one sick adapter took every healthy one down
+     * with it, so a working adapter lost its OpenGL the moment a second one
+     * appeared.  Windows returns the adapters it could open, so skip the one
+     * that failed and keep going.
+     */
     RtlZeroMemory(Adapters, sizeof(Adapters));
     Started = 0;
+    Skipped = 0;
     for (i = 0; i < Count; ++i)
     {
         PDXGKRNL_ADAPTER Adapter = Snapshot[i];
@@ -2004,8 +2016,13 @@ DxgkpEnumAdapters2(
         Adapters[Started].hAdapter = DxgkpCreateAdapterHandle(Adapter);
         if (Adapters[Started].hAdapter == 0)
         {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            break;
+            DXGKRNL_WARN("DxgkEnumAdapters2: skipping adapter %p (LUID={%ld,%lu}): "
+                         "no process handle\n",
+                         Adapter,
+                         Adapter->AdapterLuid.HighPart,
+                         Adapter->AdapterLuid.LowPart);
+            Skipped++;
+            continue;
         }
 
         Adapters[Started].AdapterLuid = Adapter->AdapterLuid;
@@ -2014,6 +2031,10 @@ DxgkpEnumAdapters2(
         Started++;
     }
     DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
+
+    /* Only a total failure is the caller's problem. */
+    if (Started == 0 && Skipped != 0)
+        Status = STATUS_INSUFFICIENT_RESOURCES;
 
     if (NT_SUCCESS(Status))
         Status = DxgkpCopyToUserBuffer(UserAdapters, Adapters, (SIZE_T)Started * sizeof(*Adapters), EmbeddedBufferMode);
