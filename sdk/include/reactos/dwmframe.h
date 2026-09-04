@@ -197,6 +197,7 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_PROP_BACKDROP_COLOR       L"ReactOS.Dwm.BackdropColor"
 #define DWM_PROP_BACKDROP_COLORIZATION L"ReactOS.Dwm.BackdropColorization"
 #define DWM_PROP_BACKDROP_REGION      L"ReactOS.Dwm.BackdropRegion"
+#define DWM_PROP_BACKDROP_NC_EXTEND   L"ReactOS.Dwm.BackdropNcExtend"
 #define DWM_PROP_CORNER_RADIUS        L"ReactOS.Dwm.CornerRadius"
 
 /* Values intentionally match DWM_SYSTEMBACKDROP_TYPE in dwmapi.h. */
@@ -221,6 +222,7 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_BLUR_REQUEST_TRANSITION      0x00000004u
 #define DWM_BLUR_REQUEST_VALID_FLAGS     0x00000007u
 #define DWM_MAX_BLUR_RECTS               4096u
+#define DWM_MAX_NC_EXTEND                4096u
 
 typedef struct _DWM_WIN
 {
@@ -258,6 +260,7 @@ typedef struct _DWM_WIN
     ULONG BackdropColor; /* COLORREF identifying the background brush */
     ULONG BackdropColorization; /* optional second background brush   */
     ULONG BackdropRegion;/* DWM_BACKDROP_REGION_*                     */
+    ULONG BackdropNcExtend;
     LONG  ClientX;
     LONG  ClientY;
     LONG  ClientWidth;

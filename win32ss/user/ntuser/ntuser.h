@@ -29,6 +29,7 @@ extern ATOM AtomDwmBackdropOpacity;
 extern ATOM AtomDwmBackdropColor;
 extern ATOM AtomDwmBackdropColorization;
 extern ATOM AtomDwmBackdropRegion;
+extern ATOM AtomDwmBackdropNcExtend;
 extern ATOM AtomDwmCornerRadius;
 extern ERESOURCE UserLock;
 

@@ -1882,6 +1882,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         g_DwmFrameWindows[count].BackdropColor = 0;
         g_DwmFrameWindows[count].BackdropColorization = 0;
         g_DwmFrameWindows[count].BackdropRegion = 0;
+        g_DwmFrameWindows[count].BackdropNcExtend = 0;
         g_DwmFrameWindows[count].CornerRadius = 0;
         {
             ULONG_PTR Radius = (ULONG_PTR)UserGetProp(w, AtomDwmCornerRadius,
@@ -1993,6 +1994,16 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                     Value == DWM_BACKDROP_REGION_WINDOW)
                 {
                     g_DwmFrameWindows[count].BackdropRegion = (ULONG)Value;
+                }
+                if (AtomDwmBackdropNcExtend != 0)
+                {
+                    Encoded = (ULONG_PTR)UserGetProp(
+                        w, AtomDwmBackdropNcExtend, FALSE);
+                    if (Encoded != 0 && Encoded <= DWM_MAX_NC_EXTEND + 1)
+                    {
+                        g_DwmFrameWindows[count].BackdropNcExtend =
+                            (ULONG)(Encoded - 1);
+                    }
                 }
             }
         }
