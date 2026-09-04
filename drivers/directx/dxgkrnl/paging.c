@@ -224,6 +224,31 @@ DxgkpPagingFillBuildArgs(
             BuildArgs->NotifyResidency.PhysicalAddress = Op->NotifyPhysicalAddress;
             BuildArgs->NotifyResidency.Resident = Op->NotifyResident ? 1 : 0;
             break;
+
+        case DxgkPagingOpUpdateContextAllocation:
+            BuildArgs->Operation = DXGK_OPERATION_UPDATE_CONTEXT_ALLOCATION;
+            BuildArgs->UpdateContextAllocation.ContextAllocation = Op->ContextGpuVirtualAddress;
+            BuildArgs->UpdateContextAllocation.ContextAllocationSize = Op->ContextAllocationSize;
+            BuildArgs->UpdateContextAllocation.pDriverPrivateData = Op->PrivateDriverData;
+            BuildArgs->UpdateContextAllocation.DriverPrivateDataSize = Op->PrivateDriverDataSize;
+            break;
+#endif
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+        case DxgkPagingOpInitContextResource:
+            BuildArgs->Operation = DXGK_OPERATION_INIT_CONTEXT_RESOURCE;
+            BuildArgs->InitContextResource.hAllocation = Op->hContextAllocation;
+            BuildArgs->InitContextResource.Destination.SegmentId = Op->DestinationSegmentId;
+            if (Op->DestinationSegmentId == 0)
+                BuildArgs->InitContextResource.Destination.pMdl = Op->DestinationMdl;
+            else
+                BuildArgs->InitContextResource.Destination.SegmentAddress = Op->DestinationSegmentAddress;
+            BuildArgs->InitContextResource.Destination.VirtualAddress = Op->DestinationVirtualAddress;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+            BuildArgs->InitContextResource.Destination.GpuVirtualAddress =
+                Op->DestinationGpuVirtualAddress;
+#endif
+            break;
 #endif
 
         default:
@@ -246,9 +271,25 @@ DxgkPagingOperationSupported(
         case DxgkPagingOpMapAperture:
         case DxgkPagingOpUnmapAperture:
             return TRUE;
+        case DxgkPagingOpInitContextResource:
+            /*
+             * DXGK_OPERATION_INIT_CONTEXT_RESOURCE is a Windows 8 (WDDM 1.2)
+             * operation, not a WDDM 2 one: it is how every context allocation
+             * the miniport creates through DxgkCbCreateContextAllocation gets
+             * initialized.  Leaving it out of this gate made
+             * DxgkPagingExecute refuse the operation, so
+             * DxgkCbCreateContextAllocation returned STATUS_NOT_SUPPORTED,
+             * DxgkDdiCreateContext failed, and no GPU context -- and so no
+             * OpenGL context -- could ever be created.
+             */
+            return Adapter->MiniportContext != NULL &&
+                   DxgkCapsCoreInterfaceVersionAtLeast(
+                       Adapter->MiniportContext->InitData.s.Version,
+                       DXGK_CAPS_CORE_LEVEL_WDDM_1_2);
         case DxgkPagingOpUpdatePageTable:
         case DxgkPagingOpFlushTlb:
         case DxgkPagingOpNotifyResidency:
+        case DxgkPagingOpUpdateContextAllocation:
             return Adapter->MiniportContext != NULL &&
                    DxgkCapsCoreInterfaceVersionAtLeast(
                        Adapter->MiniportContext->InitData.s.Version,
