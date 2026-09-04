@@ -15,60 +15,54 @@
 RtlCaptureContext:
     .seh_endprologue
 
-    /*
-     * Capture the caller-visible register state without calling back into C.
-     * x0 is both the incoming argument and the value that belongs in Context.X0.
-     * Save x9-x11 before using them as scratch so the context keeps the true
-     * volatile register values seen by this routine's caller.
-     */
-    str     x9,  [x0, #CxX9]
-    str     x10, [x0, #CxX10]
-    str     x11, [x0, #CxX11]
+    stp     xzr, x1,  [x0, #CxX0]
+    stp     x2,  x3,  [x0, #CxX2]
+    stp     x4,  x5,  [x0, #CxX4]
+    stp     x6,  x7,  [x0, #CxX6]
+    stp     x8,  x9,  [x0, #CxX8]
+    stp     x10, x11, [x0, #CxX10]
+    stp     x12, x13, [x0, #CxX12]
+    stp     x14, x15, [x0, #CxX14]
+    stp     x16, x17, [x0, #CxX16]
+    stp     x18, x19, [x0, #CxX18]
+    stp     x20, x21, [x0, #CxX20]
+    stp     x22, x23, [x0, #CxX22]
+    stp     x24, x25, [x0, #CxX24]
+    stp     x26, x27, [x0, #CxX26]
+    str     x28,       [x0, #CxX28]
+    stp     x29, xzr, [x0, #CxFp]
 
-    mov     x9, x0
+    mov     x8, sp
+    stp     x8, x30, [x0, #CxSp]
 
-    stp     x0,  x1,  [x9, #CxX0]
-    stp     x2,  x3,  [x9, #CxX2]
-    stp     x4,  x5,  [x9, #CxX4]
-    stp     x6,  x7,  [x9, #CxX6]
-    str     x8,        [x9, #CxX8]
-    stp     x12, x13, [x9, #CxX12]
-    stp     x14, x15, [x9, #CxX14]
-    stp     x16, x17, [x9, #CxX16]
-    stp     x18, x19, [x9, #CxX18]
-    stp     x20, x21, [x9, #CxX20]
-    stp     x22, x23, [x9, #CxX22]
-    stp     x24, x25, [x9, #CxX24]
-    stp     x26, x27, [x9, #CxX26]
-    stp     x28, x29, [x9, #CxX28]
-    str     x30,       [x9, #CxLr]
+    mrs     x8, nzcv
+    str     w8, [x0, #CxCpsr]
 
-    mov     x10, sp
-    str     x10, [x9, #CxSp]
-    str     x30, [x9, #CxPc]
+    mov     w17, #0x7
+    movk    w17, #0x40, lsl #16
+    str     w17, [x0, #CxContextFlags]
 
-    mov     w10, #0x7
-    movk    w10, #0x40, lsl #16
-    str     w10, [x9, #CxContextFlags]
-
-    mrs     x10, nzcv
-    str     w10, [x9, #CxCpsr]
-
-    /*
-     * Clear FP/vector and debug state so callers do not see stale stack data
-     * in portions of CONTEXT that are not captured here.
-     */
-    add     x10, x9, #CxV
-    mov     x11, #(CONTEXT_FRAME_LENGTH - CxV)
-1:
-    stp     xzr, xzr, [x10], #16
-    subs    x11, x11, #16
-    b.ne    1b
-
-    mrs     x10, fpcr
-    str     w10, [x9, #CxFpcr]
+    mrs     x9, fpcr
     mrs     x10, fpsr
-    str     w10, [x9, #CxFpsr]
+    str     w9, [x0, #CxFpcr]
+    str     w10, [x0, #CxFpsr]
+
+    stp     q0,  q1,  [x0, #(CxV + 16 * 0)]
+    stp     q2,  q3,  [x0, #(CxV + 16 * 2)]
+    stp     q4,  q5,  [x0, #(CxV + 16 * 4)]
+    stp     q6,  q7,  [x0, #(CxV + 16 * 6)]
+    stp     q8,  q9,  [x0, #(CxV + 16 * 8)]
+    stp     q10, q11, [x0, #(CxV + 16 * 10)]
+    stp     q12, q13, [x0, #(CxV + 16 * 12)]
+    stp     q14, q15, [x0, #(CxV + 16 * 14)]
+    stp     q16, q17, [x0, #(CxV + 16 * 16)]
+    stp     q18, q19, [x0, #(CxV + 16 * 18)]
+    stp     q20, q21, [x0, #(CxV + 16 * 20)]
+    stp     q22, q23, [x0, #(CxV + 16 * 22)]
+    stp     q24, q25, [x0, #(CxV + 16 * 24)]
+    stp     q26, q27, [x0, #(CxV + 16 * 26)]
+    stp     q28, q29, [x0, #(CxV + 16 * 28)]
+    stp     q30, q31, [x0, #(CxV + 16 * 30)]
 
     ret
     .seh_endproc
