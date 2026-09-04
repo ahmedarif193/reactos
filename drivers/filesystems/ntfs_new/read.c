@@ -397,13 +397,16 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         goto Complete;
     }
 
-    /* The first ordinary read establishes the stream's shared cache map. */
+    /* The first ordinary read establishes the stream's shared cache map. Cc
+     * keeps that map in the stream's section object pointers, so a stream the
+     * create path left without one is read uncached. */
     if (NtfsCachedReadsEnabled &&
         RequestedLength &&
         !PagingIo &&
         !BooleanFlagOn(Irp->Flags, IRP_NOCACHE) &&
         !BooleanFlagOn(FileObject->Flags, FO_NO_INTERMEDIATE_BUFFERING) &&
         FileCB->RequestedType == TypeData &&
+        FileObject->SectionObjectPointer != NULL &&
         FileObject->PrivateCacheMap == NULL)
     {
         PCC_FILE_SIZES FileSizes = (PCC_FILE_SIZES)&NtfsGetCommonFcbHeader(FileCB)->AllocationSize;
