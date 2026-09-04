@@ -64,6 +64,17 @@
     DPRINT1("DXGKRNL: WARNING: " fmt, ##__VA_ARGS__)
 
 /*
+ * DXGKRNL_INFO(fmt, ...)
+ *
+ * Always-on report of a normal event worth keeping in a boot log: the
+ * resources, capabilities, mappings and firmware answers an adapter start
+ * is built from.  Printed at the same level as an error so a failed start
+ * still says what preceded it, but not labelled as one.
+ */
+#define DXGKRNL_INFO(fmt, ...) \
+    DPRINT1("DXGKRNL: " fmt, ##__VA_ARGS__)
+
+/*
  * DXGKRNL_ERR(fmt, ...)
  *
  * Error-level print — always active (uses DPRINT1 which maps to DbgPrint

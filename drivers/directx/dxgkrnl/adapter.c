@@ -797,7 +797,7 @@ DxgkpDiagMapMmio(
             Adapter->DiagMmioPhysical = D->u.Memory.Start;
             Adapter->DiagMmioSize = 0x1000000;
             Adapter->DiagMmio = MmMapIoSpace(Adapter->DiagMmioPhysical, Adapter->DiagMmioSize, MmNonCached);
-            DXGKRNL_ERR("DxgkDiag: GT MMIO at 0x%I64x mapped %p\n", (ULONGLONG)Adapter->DiagMmioPhysical.QuadPart, Adapter->DiagMmio);
+            DXGKRNL_INFO("DxgkDiag: GT MMIO at 0x%I64x mapped %p\n", (ULONGLONG)Adapter->DiagMmioPhysical.QuadPart, Adapter->DiagMmio);
             return Adapter->DiagMmio != NULL;
         }
     }
@@ -929,7 +929,7 @@ DxgkDiagStartFaultPoll(
     InterlockedExchange(&Adapter->DiagFaultTimerActive, 1);
     Due.QuadPart = -10000000LL;
     KeSetTimer(&Adapter->DiagFaultTimer, Due, &Adapter->DiagFaultDpc);
-    DXGKRNL_ERR("DxgkDiag: fault poll started\n");
+    DXGKRNL_INFO("DxgkDiag: fault poll started\n");
 }
 
 VOID
@@ -4694,7 +4694,7 @@ DxgkCbCreateContextAllocation(
 
         if (Count <= 24 || !NT_SUCCESS(Status))
         {
-            DXGKRNL_ERR("DxgkCbCreateContextAllocation #%ld: size=%Iu flags=0x%x (shared=%u mapva=%u) allocflags=0x%08x (cpuvisible=%u protected=%u cached=%u) segset=0x%x evict=0x%x pref=0x%x align=%u ctx=%p dev=%p -> status=0x%08lx handle=%p va=0x%I64x\n",
+            DXGKRNL_INFO("DxgkCbCreateContextAllocation #%ld: size=%Iu flags=0x%x (shared=%u mapva=%u) allocflags=0x%08x (cpuvisible=%u protected=%u cached=%u) segset=0x%x evict=0x%x pref=0x%x align=%u ctx=%p dev=%p -> status=0x%08lx handle=%p va=0x%I64x\n",
                         Count, ContextAllocation->Size, ContextAllocation->ContextAllocationFlags.Value,
                         ContextAllocation->ContextAllocationFlags.SharedAcrossContexts,
                         ContextAllocation->ContextAllocationFlags.MapGpuVirtualAddress,
@@ -4959,7 +4959,7 @@ DxgkCbMapContextAllocation(
     Count = InterlockedIncrement(&Adapter->ContextAllocationMapCount);
     if (Count <= 24 || !NT_SUCCESS(Status))
     {
-        DXGKRNL_ERR("DxgkCbMapContextAllocation #%ld: alloc=%p base=0x%I64x min=0x%I64x max=0x%I64x offset=%I64u pages=%I64u prot=0x%I64x -> status=0x%08lx va=0x%I64x\n",
+        DXGKRNL_INFO("DxgkCbMapContextAllocation #%ld: alloc=%p base=0x%I64x min=0x%I64x max=0x%I64x offset=%I64u pages=%I64u prot=0x%I64x -> status=0x%08lx va=0x%I64x\n",
                     Count, Args->hAllocation, Args->BaseAddress, Args->MinimumAddress, Args->MaximumAddress,
                     (ULONGLONG)Args->OffsetInPages, (ULONGLONG)Args->SizeInPages, Args->Protection.Value, Status, Address);
     }
@@ -4993,7 +4993,7 @@ DxgkCbUpdateContextAllocation(
     Status = DxgkVidMmUpdateContextAllocation(Adapter, Args->hAllocation, Args->pPrivateDriverData, Args->PrivateDriverDataSize);
     Count = InterlockedIncrement(&Adapter->ContextAllocationUpdateCount);
     if (Count <= 8 || !NT_SUCCESS(Status))
-        DXGKRNL_ERR("DxgkCbUpdateContextAllocation #%ld: alloc=%p private=%u bytes -> 0x%08lx\n", Count, Args->hAllocation, Args->PrivateDriverDataSize, Status);
+        DXGKRNL_INFO("DxgkCbUpdateContextAllocation #%ld: alloc=%p private=%u bytes -> 0x%08lx\n", Count, Args->hAllocation, Args->PrivateDriverDataSize, Status);
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return Status;
 }
@@ -5583,7 +5583,7 @@ DxgkpReportAcpiEval(
         OutputLength = OutputBuffer->Length;
     }
 
-    DXGKRNL_ERR("DxgkCbEvalAcpiMethod #%ld: adapter=%p uid=0x%lx sig=%.4s "
+    DXGKRNL_INFO("DxgkCbEvalAcpiMethod #%ld: adapter=%p uid=0x%lx sig=%.4s "
                 "method=%s args=%lu in=%lu out=%lu -> status=0x%08lx "
                 "info=%Iu count=%lu length=%lu\n",
                 Count, Adapter, DeviceUid, (PCSTR)&Signature, MethodName,
@@ -5952,7 +5952,7 @@ DxgkpFillInterface(
         &Interface->Version);
     Interface->DeviceHandle = (HANDLE)Adapter;
 
-    DXGKRNL_ERR("DxgkpFillInterface: DeviceHandle=%p Size=%u "
+    DXGKRNL_INFO("DxgkpFillInterface: DeviceHandle=%p Size=%u "
                 "RequestedVersion=0x%lX AdvertisedVersion=0x%lX\n",
                   Interface->DeviceHandle,
                   Interface->Size,
@@ -6560,7 +6560,7 @@ DxgkCbGetDeviceInformation(
                         else if (Desc->Flags & CM_RESOURCE_MEMORY_LARGE_64)
                             Decoded = (ULONGLONG)Desc->u.Memory64.Length64 << 32;
                     }
-                    DXGKRNL_ERR("adapter %p resource[%lu.%lu] type=%u flags=0x%04x "
+                    DXGKRNL_INFO("adapter %p resource[%lu.%lu] type=%u flags=0x%04x "
                                 "start=0x%I64x rawlen=0x%08lx len=0x%I64x\n",
                                 Adapter, ListIndex, Index, Desc->Type, Desc->Flags,
                                 Desc->u.Memory.Start.QuadPart,
@@ -8826,7 +8826,7 @@ DxgkCbMapMemory(
 
         if (MapCount <= 8)
         {
-            DXGKRNL_ERR("DxgkCbMapMemory #%ld: adapter %p PA=0x%I64X len=0x%lX "
+            DXGKRNL_INFO("DxgkCbMapMemory #%ld: adapter %p PA=0x%I64X len=0x%lX "
                         "io=%d user=%d cache=%d -> %p (%s)\n",
                         MapCount, Adapter, TranslatedAddress.QuadPart, Length,
                         InIoSpace, MapToUserMode, CacheType, Va, MapMethod);
@@ -9443,7 +9443,7 @@ DxgkpFirmwareTableReadTable(
                                          BufferSize,
                                          &Information);
 
-    DXGKRNL_ERR("firmware table '%.4s' provider '%.4s' -> 0x%08lx, %lu byte(s)\n",
+    DXGKRNL_INFO("firmware table '%.4s' provider '%.4s' -> 0x%08lx, %lu byte(s)\n",
                 (PCHAR)&TableId, (PCHAR)&ProviderSignature,
                 Status, (ULONG)Information);
 
@@ -9937,7 +9937,7 @@ Done:
     Count = InterlockedIncrement(&Adapter->QueryServicesCount);
     if (Count <= 16 || !NT_SUCCESS(Status))
     {
-        DXGKRNL_ERR("DxgkCbQueryServices #%ld: adapter=%p type=%lu size=%u "
+        DXGKRNL_INFO("DxgkCbQueryServices #%ld: adapter=%p type=%lu size=%u "
                     "version=%u -> status=0x%08lx\n",
                     Count, Adapter, (ULONG)ServicesType,
                     Interface->Size, Interface->Version, Status);
@@ -10422,7 +10422,7 @@ Complete:
     AcquireCount = InterlockedIncrement(&Claimant->PostDisplayAcquireCount);
     if (AcquireCount <= 8 || !NT_SUCCESS(Status))
     {
-        DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership #%ld: claimant=%p "
+        DXGKRNL_INFO("DxgkCbAcquirePostDisplayOwnership #%ld: claimant=%p "
                     "owner=%p -> status=0x%08lx %lux%lu pitch=%lu fmt=%d "
                     "pa=0x%I64x fbstate=%d\n",
                     AcquireCount, Claimant, PreviousOwner, Status,
@@ -11914,7 +11914,7 @@ DxgkAdapterStart(
                 {
                     Adapter->NodeCount = Caps->GpuEngineTopology.NbAsymetricProcessingNodes;
                     Adapter->HighestAcceptableAddress = Caps->HighestAcceptableAddress;
-                    DXGKRNL_ERR("DxgkAdapterStart: driver caps: HighestAcceptableAddress=0x%I64x nodes=%lu scheduling=0x%08x\n",
+                    DXGKRNL_INFO("DxgkAdapterStart: driver caps: HighestAcceptableAddress=0x%I64x nodes=%lu scheduling=0x%08x\n",
                                 (ULONGLONG)Caps->HighestAcceptableAddress.QuadPart, Caps->GpuEngineTopology.NbAsymetricProcessingNodes, Caps->SchedulingCaps.Value);
                     Adapter->SchedulingCaps.Value = Caps->SchedulingCaps.Value;
                     DXGKRNL_TRACE("DxgkAdapterStart: %lu GPU node(s) reported\n", Adapter->NodeCount);
@@ -11980,7 +11980,7 @@ DxgkAdapterStart(
     if (Adapter->PageTableLevelsValid)
     {
         Adapter->GpuMmuCapsValid = TRUE;
-        DXGKRNL_ERR("DxgkAdapterStart: GpuMmu caps: va-bits=%u levels=%u update-mode=%u flags=0x%08x "
+        DXGKRNL_INFO("DxgkAdapterStart: GpuMmu caps: va-bits=%u levels=%u update-mode=%u flags=0x%08x "
                     "(ReadOnly=%u NoExecute=%u ZeroInPte=%u ExplicitPTInvalidation=%u CacheCoherent=%u "
                     "RequireAddressSpaceIdle=%u LargePage=%u DualPte=%u InvalidTlbNotCached=%u CachedPageTables=%u) "
                     "MultiEngineAware=%u nodes=%lu\n",
@@ -12035,7 +12035,7 @@ DxgkAdapterStart(
         _SEH2_END;
         DxgkReleaseKmdCall(Adapter);
         Adapter->PhysicalAdapterCapsValid = NT_SUCCESS(CapsStatus);
-        DXGKRNL_ERR("DxgkAdapterStart: physical adapter caps status=0x%08lx nodes=%u paging-node=%u handle=%p flags=0x%08x\n",
+        DXGKRNL_INFO("DxgkAdapterStart: physical adapter caps status=0x%08lx nodes=%u paging-node=%u handle=%p flags=0x%08x\n",
                     CapsStatus, Adapter->PhysicalAdapterCaps.NumExecutionNodes, Adapter->PhysicalAdapterCaps.PagingNodeIndex,
                     Adapter->PhysicalAdapterCaps.DxgkPhysicalAdapterHandle, Adapter->PhysicalAdapterCaps.Flags.Value);
     }
