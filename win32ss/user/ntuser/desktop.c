@@ -1695,6 +1695,40 @@ UserBuildShellHookHwndList(PDESKTOP Desktop)
     return list;
 }
 
+BOOL co_IntGetShellMinRect(HWND hWnd, RECTL *prc)
+{
+    PDESKTOP Desktop = IntGetActiveDesktop();
+    HWND *HwndList, *cursor;
+    BOOL Found = FALSE;
+
+    if (Desktop == NULL)
+        return FALSE;
+
+    HwndList = UserBuildShellHookHwndList(Desktop);
+    if (HwndList == NULL)
+        return FALSE;
+
+    for (cursor = HwndList; *cursor != NULL && !Found; cursor++)
+    {
+        ULONG_PTR Result = 0;
+        RECTL rc = {0, 0, 0, 0};
+
+        if (!co_IntSendMessageTimeout(*cursor, WM_KLUDGEMINRECT,
+                                      (WPARAM)hWnd, (LPARAM)&rc,
+                                      SMTO_ABORTIFHUNG, 200, &Result))
+            continue;
+        if (Result == 0 || rc.right <= rc.left || rc.bottom <= rc.top ||
+            rc.right - rc.left > 4096 || rc.bottom - rc.top > 4096 ||
+            rc.left < -32000 || rc.top < -32000)
+            continue;
+        *prc = rc;
+        Found = TRUE;
+    }
+
+    ExFreePoolWithTag(HwndList, USERTAG_WINDOWLIST);
+    return Found;
+}
+
 /*
  * Send the Message to the windows registered for ShellHook
  * notifications. The lParam contents depend on the Message. See

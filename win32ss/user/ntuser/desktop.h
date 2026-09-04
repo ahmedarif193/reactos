@@ -175,6 +175,7 @@ VOID APIENTRY UserRedrawDesktop(VOID);
 BOOL IntRegisterShellHookWindow(HWND hWnd);
 BOOL IntDeRegisterShellHookWindow(HWND hWnd);
 VOID co_IntShellHookNotify(WPARAM Message, WPARAM wParam, LPARAM lParam);
+BOOL co_IntGetShellMinRect(HWND hWnd, RECTL *prc);
 HDC FASTCALL UserGetDesktopDC(ULONG,BOOL,BOOL);
 
 #define IntIsActiveDesktop(Desktop) \

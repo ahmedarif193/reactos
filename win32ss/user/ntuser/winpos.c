@@ -2568,6 +2568,7 @@ co_WinPosMinMaximize(PWND Wnd, UINT ShowFlag, RECT* NewPos)
          case SW_FORCEMINIMIZE:
             {
                //ERR("MinMaximize Minimize\n");
+               IntCompositionQueryMinimizeRect(Wnd);
                if (Wnd->style & WS_MAXIMIZE)
                {
                   Wnd->InternalPos.flags |= WPF_RESTORETOMAXIMIZED;
@@ -2634,6 +2635,8 @@ co_WinPosMinMaximize(PWND Wnd, UINT ShowFlag, RECT* NewPos)
          case SW_SHOWDEFAULT: /* FIXME: should have its own handler */
             {
                //ERR("MinMaximize Restore\n");
+               if (Wnd->style & WS_MINIMIZE)
+                  IntCompositionQueryMinimizeRect(Wnd);
                old_style = IntSetStyle( Wnd, 0, WS_MINIMIZE | WS_MAXIMIZE );
                if (old_style & WS_MINIMIZE)
                {

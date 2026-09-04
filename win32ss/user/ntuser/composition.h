@@ -133,11 +133,15 @@ BOOL IntCompositionIsGLWindow(_In_opt_ PWND Wnd);
 VOID IntCompositionOnWindowCreate(_In_ PWND Wnd);
 VOID IntCompositionOnWindowDestroy(_In_ PWND Wnd);
 VOID IntCompositionOnWindowResize(_In_ PWND Wnd);
+
+VOID IntCompositionQueryMinimizeRect(_In_ PWND Wnd);
 VOID IntCompositionOnDisplayChangeBegin(VOID);
 VOID IntCompositionOnDisplayChangeEnd(VOID);
 
 /* Damage: a window (NULL = the whole frame) changed — schedule a recompose. */
 VOID IntCompositionDamageWindow(_In_opt_ PWND Wnd);
+VOID IntCompositionAnimateMove(_In_opt_ PWND Wnd, _In_opt_ const RECTL *From);
+VOID IntCompositionDamageWindowMetadata(_In_opt_ PWND Wnd);
 
 /* Damage from the GDI blit path (DC_vFinishBlit): a backing surface was drawn
  * into outside a paint cycle (e.g. an OpenGL present) — psurf resolves to its

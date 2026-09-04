@@ -2649,8 +2649,14 @@ public:
         if (TaskItem)
         {
             RECT* prcMinRect = (RECT*) lParam;
-            RECT rcItem, rcToolbar;
-            m_TaskBar.GetItemRect(TaskItem->Index, &rcItem);
+            RECT rcItem = { 0 }, rcToolbar;
+            INT iIndex = TaskItem->Index;
+
+            if (iIndex < 0 && TaskItem->Group != NULL)
+                iIndex = TaskItem->Group->Index;
+            if (iIndex < 0 || !m_TaskBar.GetItemRect(iIndex, &rcItem))
+                return FALSE;
+
             m_TaskBar.GetWindowRect(&rcToolbar);
 
             OffsetRect(&rcItem, rcToolbar.left, rcToolbar.top);

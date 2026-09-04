@@ -458,6 +458,7 @@ VOID FASTCALL
 co_IntSnapWindow(PWND Wnd, UINT Edge)
 {
     RECT newPos;
+    RECT oldPos = Wnd->rcWindow;
     BOOLEAN wasSnapped = IntIsWindowSnapped(Wnd);
     UINT normal = !(Wnd->style & (WS_MAXIMIZE | WS_MINIMIZE));
     USER_REFERENCE_ENTRY ref;
@@ -497,6 +498,7 @@ co_IntSnapWindow(PWND Wnd, UINT Edge)
                           newPos.right - newPos.left,
                           newPos.bottom - newPos.top,
                           0);
+    IntCompositionAnimateMove(Wnd, (const RECTL *)&oldPos);
     if (hasRef)
         UserDerefObjectCo(Wnd);
 }

@@ -68,7 +68,22 @@ typedef struct _REDIRECT_ENTRY
     PRECTL       BlurRects;     /* window-relative DwmEnableBlur region         */
     ULONG        BlurRectCount;
     ULONG        BlurFlags;     /* DWM_BLUR_*                                    */
+    BOOL         Minimized;
+    BOOL         Maximized;
+    BOOL         MinRectValid;
+    RECTL        MinRect;
+    ULONG        AnimFlags;
+    LONGLONG     AnimStart;
+    LONGLONG     AnimDuration;
+    RECTL        AnimRect;
+    RECTL        AnimTarget;
+    POINTL       AnimAnchor;
+    RECTL        AnimDamage;
 } REDIRECT_ENTRY;
+
+#define COMPOSITION_ANIM_SCALE          65536
+#define COMPOSITION_ANIM_MINIMIZE_100NS (200LL * 10000LL)
+#define COMPOSITION_ANIM_RESTORE_100NS  (250LL * 10000LL)
 
 static REDIRECT_ENTRY  g_Redirects[COMPOSITION_MAX_WINDOWS];
 static ULONG           g_RedirectHighWater = 0;
@@ -508,6 +523,9 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
     PPDEVOBJ ppdev = NULL;
     ULONG Stride, Bytes;
 
+    if ((Wnd->style & WS_MINIMIZE) && r->psurf != NULL)
+        return r->psurf;
+
     r->rcClient.left = max(Wnd->rcClient.left - Wnd->rcWindow.left, 0);
     r->rcClient.top = max(Wnd->rcClient.top - Wnd->rcWindow.top, 0);
     r->rcClient.right = min(Wnd->rcClient.right - Wnd->rcWindow.left, cx);
@@ -709,6 +727,7 @@ IntCompositionOnWindowCreate(_In_ PWND Wnd)
     IntCompositionEnsureSurface(Wnd, &e->Redirect);
     e->WindowRect = Wnd->rcWindow;
     e->WindowRectValid = TRUE;
+    e->Minimized = (Wnd->style & WS_MINIMIZE) != 0;
     IntCompositionDamageWindow(Wnd);
 }
 
@@ -736,6 +755,213 @@ IntCompositionOnWindowDestroy(_In_ PWND Wnd)
     IntCompositionFreeBlur(e);
     e->Wnd = NULL;
     e->WindowRectValid = FALSE;
+}
+
+static VOID
+IntCompositionDefaultMinimizeRect(_In_ PWND Wnd, _Out_ PRECTL prc)
+{
+    PMONITOR pMonitor = UserMonitorFromRect((PRECTL)&Wnd->rcWindow,
+                                            MONITOR_DEFAULTTONEAREST);
+    RECTL rcMonitor, rcWork;
+    LONG cx, cy;
+
+    if (pMonitor == NULL)
+    {
+        rcMonitor.left = 0;
+        rcMonitor.top = 0;
+        rcMonitor.right = UserGetSystemMetrics(SM_CXSCREEN);
+        rcMonitor.bottom = UserGetSystemMetrics(SM_CYSCREEN);
+        rcWork = rcMonitor;
+    }
+    else
+    {
+        rcMonitor = *(PRECTL)&pMonitor->rcMonitor;
+        rcWork = *(PRECTL)&pMonitor->rcWork;
+    }
+
+    cx = UserGetSystemMetrics(SM_CXMINIMIZED);
+    cy = UserGetSystemMetrics(SM_CYSIZE) + 2 * UserGetSystemMetrics(SM_CYSIZEFRAME);
+    if (cx <= 0) cx = 160;
+    if (cy <= 0) cy = 32;
+
+    if (rcWork.bottom < rcMonitor.bottom)
+    {
+        prc->top = rcWork.bottom;
+        prc->bottom = rcMonitor.bottom;
+    }
+    else if (rcWork.top > rcMonitor.top)
+    {
+        prc->top = rcMonitor.top;
+        prc->bottom = rcWork.top;
+    }
+    else
+    {
+        prc->top = rcMonitor.bottom - cy;
+        prc->bottom = rcMonitor.bottom;
+    }
+
+    if (rcWork.right < rcMonitor.right)
+    {
+        prc->left = rcWork.right;
+        prc->right = rcMonitor.right;
+        prc->top = (Wnd->rcWindow.top + Wnd->rcWindow.bottom) / 2 - cy / 2;
+        prc->bottom = prc->top + cy;
+    }
+    else if (rcWork.left > rcMonitor.left)
+    {
+        prc->left = rcMonitor.left;
+        prc->right = rcWork.left;
+        prc->top = (Wnd->rcWindow.top + Wnd->rcWindow.bottom) / 2 - cy / 2;
+        prc->bottom = prc->top + cy;
+    }
+    else
+    {
+        prc->left = (Wnd->rcWindow.left + Wnd->rcWindow.right) / 2 - cx / 2;
+        prc->right = prc->left + cx;
+    }
+}
+
+VOID
+IntCompositionQueryMinimizeRect(_In_ PWND Wnd)
+{
+    REDIRECT_ENTRY *e;
+    RECTL rc;
+    BOOL FromShell;
+
+    if (!gbCompositionEnabled || !g_DwmAttached)
+        return;
+    if (IntCompositionFind(Wnd) == NULL)
+        return;
+
+    FromShell = co_IntGetShellMinRect(UserHMGetHandle(Wnd), &rc);
+
+    e = IntCompositionFind(Wnd);
+    if (e == NULL)
+        return;
+    if (!FromShell)
+        IntCompositionDefaultMinimizeRect(Wnd, &rc);
+    e->MinRect = rc;
+    e->MinRectValid = (rc.right > rc.left && rc.bottom > rc.top);
+}
+
+static VOID
+IntCompositionStartAnimation(_Inout_ REDIRECT_ENTRY *Entry,
+                             _In_ const RECTL *Window, _In_ const RECTL *Target,
+                             _In_ ULONG Flags)
+{
+    if (Window->right <= Window->left || Window->bottom <= Window->top ||
+        Target->right <= Target->left || Target->bottom <= Target->top)
+    {
+        Entry->AnimFlags = 0;
+        return;
+    }
+
+    Entry->AnimRect = *Window;
+    Entry->AnimTarget = *Target;
+    Entry->AnimAnchor.x = (Target->left + Target->right) / 2;
+    Entry->AnimAnchor.y = Target->top;
+    Entry->AnimFlags = Flags;
+    Entry->AnimStart = (LONGLONG)KeQueryInterruptTime();
+    Entry->AnimDuration = (Flags == DWM_ANIM_MINIMIZE)
+                              ? COMPOSITION_ANIM_MINIMIZE_100NS
+                              : COMPOSITION_ANIM_RESTORE_100NS;
+    Entry->AnimDamage = (Flags == DWM_ANIM_MINIMIZE) ? *Window : *Target;
+    if (Flags == DWM_ANIM_MOVE)
+        RECTL_bUnionRect(&Entry->AnimDamage, (PRECTL)Window, (PRECTL)Target);
+    IntCompositionMarkDamage(FALSE);
+}
+
+static ULONG
+IntCompositionCubeRoot(_In_ ULONGLONG Value)
+{
+    ULONG Low = 0, High = COMPOSITION_ANIM_SCALE;
+
+    while (Low < High)
+    {
+        ULONG Mid = (Low + High + 1) >> 1;
+
+        if ((ULONGLONG)Mid * Mid * Mid <= Value)
+            Low = Mid;
+        else
+            High = Mid - 1;
+    }
+    return Low;
+}
+
+static ULONG
+IntCompositionEase(_In_ ULONG Progress, _In_ BOOL Accelerate)
+{
+    ULONGLONG t, p;
+
+    if (Accelerate)
+        Progress = COMPOSITION_ANIM_SCALE - Progress;
+    t = IntCompositionCubeRoot((ULONGLONG)Progress << 32);
+    p = ((3 * t * t) >> 16) - ((2 * t * t * t) >> 32);
+    if (p > COMPOSITION_ANIM_SCALE)
+        p = COMPOSITION_ANIM_SCALE;
+    if (Accelerate)
+        return COMPOSITION_ANIM_SCALE - (ULONG)p;
+    return (ULONG)p;
+}
+
+static LONG
+IntCompositionAnimEdge(_In_ LONG Edge, _In_ LONG Anchor, _In_ ULONG Scale)
+{
+    return Anchor + (LONG)(((LONGLONG)(Edge - Anchor) * Scale) /
+                           COMPOSITION_ANIM_SCALE);
+}
+
+static BOOL
+IntCompositionEvaluateAnimation(_Inout_ REDIRECT_ENTRY *Entry,
+                                _In_ LONGLONG Now, _Out_ PRECTL prc,
+                                _Out_ PRECTL prcDamage)
+{
+    LONGLONG Elapsed = Now - Entry->AnimStart;
+    ULONG u, s;
+    RECTL rc;
+
+    if (Entry->AnimDuration <= 0 || Elapsed >= Entry->AnimDuration)
+    {
+        RECTL_bUnionRect(prcDamage, &Entry->AnimDamage, &Entry->AnimRect);
+        Entry->AnimFlags = 0;
+        return FALSE;
+    }
+    if (Elapsed < 0)
+        Elapsed = 0;
+
+    u = (ULONG)((Elapsed * COMPOSITION_ANIM_SCALE) / Entry->AnimDuration);
+    if (Entry->AnimFlags == DWM_ANIM_MINIMIZE)
+        s = COMPOSITION_ANIM_SCALE - IntCompositionEase(u, TRUE);
+    else
+        s = IntCompositionEase(u, FALSE);
+
+    if (Entry->AnimFlags == DWM_ANIM_MOVE)
+    {
+        rc.left = IntCompositionAnimEdge(Entry->AnimTarget.left,
+                                         Entry->AnimRect.left, s);
+        rc.top = IntCompositionAnimEdge(Entry->AnimTarget.top,
+                                        Entry->AnimRect.top, s);
+        rc.right = IntCompositionAnimEdge(Entry->AnimTarget.right,
+                                          Entry->AnimRect.right, s);
+        rc.bottom = IntCompositionAnimEdge(Entry->AnimTarget.bottom,
+                                           Entry->AnimRect.bottom, s);
+    }
+    else
+    {
+        rc.left = IntCompositionAnimEdge(Entry->AnimRect.left, Entry->AnimAnchor.x, s);
+        rc.top = IntCompositionAnimEdge(Entry->AnimRect.top, Entry->AnimAnchor.y, s);
+        rc.right = IntCompositionAnimEdge(Entry->AnimRect.right, Entry->AnimAnchor.x, s);
+        rc.bottom = IntCompositionAnimEdge(Entry->AnimRect.bottom, Entry->AnimAnchor.y, s);
+    }
+    if (rc.right <= rc.left)
+        rc.right = rc.left + 1;
+    if (rc.bottom <= rc.top)
+        rc.bottom = rc.top + 1;
+
+    RECTL_bUnionRect(prcDamage, &Entry->AnimDamage, &rc);
+    Entry->AnimDamage = rc;
+    *prc = rc;
+    return TRUE;
 }
 
 /*
@@ -791,6 +1017,10 @@ IntCompositionOnWindowResize(_In_ PWND Wnd)
 {
     REDIRECT_ENTRY *e;
     BOOL PositionDamaged = FALSE;
+    BOOL Maximized;
+    RECTL OldWindowRect;
+    BOOL OldWindowRectValid;
+    BOOL Minimized;
 
     if (!gbCompositionEnabled)
         return;
@@ -801,6 +1031,45 @@ IntCompositionOnWindowResize(_In_ PWND Wnd)
         IntCompositionOnWindowCreate(Wnd);
         return;
     }
+
+    OldWindowRect = e->WindowRect;
+    OldWindowRectValid = e->WindowRectValid;
+    Minimized = (Wnd->style & WS_MINIMIZE) != 0;
+    Maximized = (Wnd->style & WS_MAXIMIZE) != 0;
+
+    if (!IntCompositionIsCompositable(Wnd))
+    {
+        e->AnimFlags = 0;
+    }
+    else if (Minimized && !e->Minimized)
+    {
+        if (g_DwmAttached && OldWindowRectValid && e->MinRectValid)
+            IntCompositionStartAnimation(e, &OldWindowRect, &e->MinRect,
+                                         DWM_ANIM_MINIMIZE);
+    }
+    else if (!Minimized && e->Minimized)
+    {
+        if (g_DwmAttached && e->MinRectValid)
+            IntCompositionStartAnimation(e, (PRECTL)&Wnd->rcWindow,
+                                         &e->MinRect,
+                                         DWM_ANIM_RESTORE);
+    }
+    else if (g_DwmAttached && OldWindowRectValid &&
+             Maximized != e->Maximized)
+    {
+        IntCompositionStartAnimation(e, &OldWindowRect,
+                                     (PRECTL)&Wnd->rcWindow, DWM_ANIM_MOVE);
+    }
+    else if (e->AnimFlags != 0 && OldWindowRectValid &&
+             (OldWindowRect.left != Wnd->rcWindow.left ||
+              OldWindowRect.top != Wnd->rcWindow.top ||
+              OldWindowRect.right != Wnd->rcWindow.right ||
+              OldWindowRect.bottom != Wnd->rcWindow.bottom))
+    {
+        e->AnimFlags = 0;
+    }
+    e->Minimized = Minimized;
+    e->Maximized = Maximized;
 
     /* Recompose every layer intersecting both the vacated and destination
      * bounds. This preserves strict Z order without turning a small move into
@@ -836,6 +1105,26 @@ IntCompositionOnWindowResize(_In_ PWND Wnd)
 }
 
 VOID
+IntCompositionAnimateMove(_In_opt_ PWND Wnd, _In_opt_ const RECTL *From)
+{
+    REDIRECT_ENTRY *e;
+
+    if (!gbCompositionEnabled || !g_DwmAttached || Wnd == NULL || From == NULL)
+        return;
+    if (!IntCompositionIsCompositable(Wnd))
+        return;
+    e = IntCompositionFind(Wnd);
+    if (e == NULL)
+        return;
+    if (From->left == Wnd->rcWindow.left && From->top == Wnd->rcWindow.top &&
+        From->right == Wnd->rcWindow.right &&
+        From->bottom == Wnd->rcWindow.bottom)
+        return;
+    IntCompositionStartAnimation(e, From, (PRECTL)&Wnd->rcWindow,
+                                 DWM_ANIM_MOVE);
+}
+
+VOID
 IntCompositionDamageWindow(_In_opt_ PWND Wnd)
 {
     REDIRECT_ENTRY *e;
@@ -852,6 +1141,27 @@ IntCompositionDamageWindow(_In_opt_ PWND Wnd)
     else
     {
         IntCompositionMarkDamage(TRUE);
+    }
+}
+
+VOID
+IntCompositionDamageWindowMetadata(_In_opt_ PWND Wnd)
+{
+    REDIRECT_ENTRY *e;
+
+    if (!gbCompositionEnabled)
+        return;
+
+    if (Wnd != NULL &&
+        (e = IntCompositionFind(IntCompositionTopLevel(Wnd))) != NULL &&
+        e->WindowRectValid &&
+        IntCompositionAccumulatePositionDamage(&e->WindowRect))
+    {
+        IntCompositionMarkDamage(FALSE);
+    }
+    else
+    {
+        IntCompositionDamageWindow(Wnd);
     }
 }
 
@@ -1352,6 +1662,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     BOOL DeferredDamage = FALSE;
     BOOL PaintDamageDeferred = FALSE;
     BOOL ReadyDamage = FALSE;
+    BOOL AnimRunning = FALSE;
     BOOL PositionDamageValid;
     RECTL PositionDamage;
     RECTL rcDmg = {0, 0, 0, 0};
@@ -1601,6 +1912,27 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             e->Redirect.rcClient.right - e->Redirect.rcClient.left;
         g_DwmFrameWindows[count].ClientHeight =
             e->Redirect.rcClient.bottom - e->Redirect.rcClient.top;
+        g_DwmFrameWindows[count].AnimFlags = 0;
+        g_DwmFrameWindows[count].AnimX = 0;
+        g_DwmFrameWindows[count].AnimY = 0;
+        g_DwmFrameWindows[count].AnimCx = 0;
+        g_DwmFrameWindows[count].AnimCy = 0;
+        if (e->AnimFlags != 0)
+        {
+            RECTL rcAnim, rcAnimDamage;
+            ULONG AnimFlags = e->AnimFlags;
+
+            AnimRunning = TRUE;
+            if (IntCompositionEvaluateAnimation(e, now, &rcAnim, &rcAnimDamage))
+            {
+                g_DwmFrameWindows[count].AnimFlags = AnimFlags;
+                g_DwmFrameWindows[count].AnimX = rcAnim.left;
+                g_DwmFrameWindows[count].AnimY = rcAnim.top;
+                g_DwmFrameWindows[count].AnimCx = rcAnim.right - rcAnim.left;
+                g_DwmFrameWindows[count].AnimCy = rcAnim.bottom - rcAnim.top;
+            }
+            RECTL_bUnionRect(&rcDmg, &rcDmg, &rcAnimDamage);
+        }
         if ((e->BlurFlags & DWM_BLUR_ENABLE) &&
             !(e->BlurFlags & DWM_BLUR_REGION_ENTIRE_WINDOW) &&
             e->BlurRectCount != 0 && e->BlurRects != NULL)
@@ -1693,14 +2025,15 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
      * wakes DWM immediately. An incomplete paint tree only retains the dirty
      * bit: its final EndPaint normally wakes DWM, while the idle poll remains
      * a bounded fallback without spinning on a long-running paint. */
-    if (DeferredDamage)
+    if (DeferredDamage || AnimRunning)
         IntCompositionMarkDamage(FALSE);
     else if (PaintDamageDeferred)
         InterlockedExchange(&g_CompositionDamaged, TRUE);
 
     Frame.Count = count;
     Frame.FullDamage = fullDamage ? 1 : 0;
-    Frame.Dirty = (fullDamage || PositionDamageValid || ReadyDamage) ? 1 : 0;
+    Frame.Dirty = (fullDamage || PositionDamageValid || ReadyDamage ||
+                   AnimRunning) ? 1 : 0;
     Frame.DmgL = rcDmg.left;
     Frame.DmgT = rcDmg.top;
     Frame.DmgR = rcDmg.right;
