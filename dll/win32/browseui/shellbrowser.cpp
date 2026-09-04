@@ -24,6 +24,7 @@
 #include <htiframe.h>
 #include <strsafe.h>
 #include <shdocvw_undoc.h>
+#include <reactos/dwmframe.h>
 
 extern HRESULT IUnknown_ShowDW(IUnknown * punk, BOOL fShow);
 
@@ -1622,6 +1623,16 @@ void CShellBrowser::RepositionBars()
                 clientRect.right = toolbarRect.left;
             }
         }
+    }
+
+    if (clientRect.top > 0 && clientRect.top <= (LONG)DWM_MAX_NC_EXTEND)
+    {
+        ::SetPropW(m_hWnd, DWM_PROP_BACKDROP_NC_EXTEND,
+                   (HANDLE)(ULONG_PTR)(clientRect.top + 1));
+    }
+    else
+    {
+        ::RemovePropW(m_hWnd, DWM_PROP_BACKDROP_NC_EXTEND);
     }
 
     if (!fCurrentShellViewWindow)

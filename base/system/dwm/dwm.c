@@ -776,6 +776,17 @@ DwmBuildRoundedRects(RECTL *Rects, ULONG Max, LONG cx, LONG cy, ULONG Radius)
     return Count;
 }
 
+static LONG
+DwmBackdropNcBottom(const DWM_WIN *Window)
+{
+    LONG Bottom = Window->ClientY + (LONG)Window->BackdropNcExtend;
+    LONG Limit = Window->ClientY + Window->ClientHeight;
+
+    if (Bottom > Limit)
+        Bottom = Limit;
+    return Bottom;
+}
+
 static void
 DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
                      LONG ClipLeft, LONG ClipTop, LONG ClipRight,
@@ -783,6 +794,7 @@ DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
 {
     DWM_WIN BlurWindow;
     RECTL Rectangles[4];
+    LONG NcBottom;
 
     if (Window->BackdropType != DWM_BACKDROP_TRANSIENT)
         return;
@@ -816,13 +828,14 @@ DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
     if (Window->BackdropRegion != DWM_BACKDROP_REGION_NONCLIENT)
         return;
 
-    Rectangles[0] = (RECTL){0, 0, Window->cx, Window->ClientY};
+    NcBottom = DwmBackdropNcBottom(Window);
+    Rectangles[0] = (RECTL){0, 0, Window->cx, NcBottom};
     Rectangles[1] = (RECTL){0, Window->ClientY + Window->ClientHeight,
                             Window->cx, Window->cy};
-    Rectangles[2] = (RECTL){0, Window->ClientY, Window->ClientX,
+    Rectangles[2] = (RECTL){0, NcBottom, Window->ClientX,
                             Window->ClientY + Window->ClientHeight};
     Rectangles[3] = (RECTL){Window->ClientX + Window->ClientWidth,
-                            Window->ClientY, Window->cx,
+                            NcBottom, Window->cx,
                             Window->ClientY + Window->ClientHeight};
     BlurWindow.BlurRectCount = ARRAYSIZE(Rectangles);
     DwmApplyBlur(Composition, Width, Height,
@@ -1033,6 +1046,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
     BOOL useBackdrop = w->BackdropType >= DWM_BACKDROP_MAIN &&
                        w->BackdropType <= DWM_BACKDROP_TABBED &&
                        w->BackdropRegion != 0;
+    LONG ncBottom = DwmBackdropNcBottom(w);
     ULONG a = w->Alpha, key = 0, backdropKey = 0, colorizationKey = 0;
 
     if (w->cx <= 0 || w->cy <= 0 ||
@@ -1102,7 +1116,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                 if (w->BackdropRegion == DWM_BACKDROP_REGION_WINDOW ||
                     sourceX < w->ClientX ||
                     sourceX >= w->ClientX + w->ClientWidth ||
-                    r < w->ClientY ||
+                    r < ncBottom ||
                     r >= w->ClientY + w->ClientHeight)
                 {
                     ULONG Near = DwmChannelDistance(s, backdropKey);
