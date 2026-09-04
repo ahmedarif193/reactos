@@ -19,6 +19,15 @@
  */
 #define UEFI_NETWORK_MAX_ATTEMPTS 30
 
+/*
+ * Layers the transfer needs only in some configurations, kept out of both the
+ * load pass and the readiness gate otherwise. Only DNS is ever requested
+ * today: the loader runs no DHCP client, so UEFI_NET_FEATURE_DHCP exists for
+ * the commented-out path in UefiHttpBootDownload() to switch back on.
+ */
+#define UEFI_NET_FEATURE_DHCP   0x0001
+#define UEFI_NET_FEATURE_DNS    0x0002
+
 typedef struct _UEFI_NET_CONTEXT
 {
     EFI_HANDLE ControllerHandle;
@@ -41,6 +50,7 @@ UefiNetGetProtocol(
 BOOLEAN
 UefiNetPrepare(
     _Out_ PUEFI_NET_CONTEXT Context,
+    _In_ UINT32 Features,
     _Out_opt_ PBOOLEAN Cancelled);
 
 BOOLEAN
@@ -63,6 +73,10 @@ UefiLattePandaFixMac(
 
 BOOLEAN
 UefiDhcpAcquire(
+    _Inout_ PUEFI_NET_CONTEXT Context);
+
+BOOLEAN
+UefiInheritIpConfigure(
     _Inout_ PUEFI_NET_CONTEXT Context);
 
 BOOLEAN

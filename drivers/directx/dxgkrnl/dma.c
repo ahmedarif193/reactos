@@ -386,7 +386,7 @@ DxgkRender(
         ReferencedCount++;
     }
 
-    Status = DxgkAllocateDmaBuffer(Adapter, max(Context->ContextInfo.DmaBufferSize, pRender->CommandLength), &DmaBuffer);
+    Status = DxgkAllocateDmaBufferInSegmentSet(Adapter, max(Context->ContextInfo.DmaBufferSize, pRender->CommandLength), Context->ContextInfo.DmaBufferSegmentSet, &DmaBuffer);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 

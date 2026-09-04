@@ -254,6 +254,24 @@ DxgkVidPnCreateForAdapter(
     _Out_ D3DKMDT_HVIDPN          *phVidPn);
 
 /*
+ * DxgkVidPnTargetIndexFromId
+ *
+ * Maps a VidPN target id to the slot that holds its mode sets.
+ *
+ * A target id is the miniport's child uid, which the driver picks freely --
+ * this Intel part numbers its connected output 49 while declaring ten
+ * children, and even BasicDisplay numbers its single output 1.  The
+ * TargetModeSets/MonitorModeSets arrays are positional, so an id is not an
+ * index and every array access must go through this lookup.
+ *
+ * Returns MAXULONG when no slot carries that id.
+ */
+ULONG
+DxgkVidPnTargetIndexFromId(
+    _In_ PDXGKP_VIDPN VidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId);
+
+/*
  * DxgkVidPnClone
  *
  * Creates a deep copy of an existing VidPN.  The clone is independent

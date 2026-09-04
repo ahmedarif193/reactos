@@ -253,7 +253,7 @@ SoftGpuWalkGpuVaPage(
                 return FALSE;
             }
             TablePhysical =
-                Entry.PageTableAddress & ~(ULONGLONG)(PAGE_SIZE - 1);
+                Entry.PageTableAddress << PAGE_SHIFT;
             continue;
         }
 
@@ -277,7 +277,7 @@ SoftGpuWalkGpuVaPage(
             return FALSE;
         }
         *PhysicalAddress =
-            (Entry.PageAddress & ~(ULONGLONG)(PAGE_SIZE - 1)) +
+            (Entry.PageAddress << PAGE_SHIFT) +
             (Va & (PAGE_SIZE - 1));
         return TRUE;
     }

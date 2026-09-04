@@ -9099,8 +9099,6 @@ DxgkSubmitCommand(
                                      SubmitCommand->Commands,
                                      1))
     {
-        DXGKRNL_ERR("DxgkSubmitCommand: command start GPU VA 0x%I64x is not mapped\n",
-                    SubmitCommand->Commands);
         DxgkDereferenceContext(Context);
         return STATUS_INVALID_PARAMETER;
     }
@@ -10647,6 +10645,16 @@ DxgkpDispatchBufferedIoctlWorker(
                 Status = STATUS_INVALID_PARAMETER;
             else
                 Status = PrepareOnly ? DxgkGpuVaPlanReserve(ProcessRecord, pReserve->BaseAddress, pReserve->MinimumAddress, pReserve->MaximumAddress, pReserve->Size, (D3DDDIGPUVIRTUALADDRESS_RESERVATION_TYPE)pReserve->ReservationType, &pReserve->VirtualAddress) : DxgkGpuVaReserve(ProcessRecord, pReserve->BaseAddress, pReserve->MinimumAddress, pReserve->MaximumAddress, pReserve->Size, (D3DDDIGPUVIRTUALADDRESS_RESERVATION_TYPE)pReserve->ReservationType, pReserve->DriverProtection, &pReserve->VirtualAddress);
+
+            if (!PrepareOnly &&
+                ProcessRecord != NULL &&
+                pReserve->ReservationType == D3DDDIGPUVIRTUALADDRESS_RESERVE_ZERO)
+            {
+                NTSTATUS FlushStatus = DxgkGpuVaFlushPageTableUpdates(ProcessRecord);
+
+                if (NT_SUCCESS(Status) && !NT_SUCCESS(FlushStatus))
+                    Status = FlushStatus;
+            }
 
             if (Device != NULL)
                 DxgkDereferenceDevice(Device);

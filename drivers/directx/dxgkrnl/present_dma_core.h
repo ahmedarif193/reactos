@@ -65,14 +65,6 @@ DxgkPresentDmaCoreSelectGeometry(
     {
         return STATUS_INVALID_PARAMETER;
     }
-    /*
-     * DxgkAllocateDmaBuffer currently creates contiguous system-memory DMA
-     * buffers (SegmentId 0).  It cannot honestly satisfy a miniport request
-     * for one of the aperture segments in this mask.
-     */
-    if (DmaBufferSegmentSet != 0)
-        return STATUS_NOT_SUPPORTED;
-
     if (AllocationListSize < DXGK_PRESENT_DMA_MIN_ALLOCATIONS ||
         AllocationListSize > DXGK_PRESENT_DMA_MAX_ALLOCATIONS)
     {

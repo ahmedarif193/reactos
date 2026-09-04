@@ -300,6 +300,34 @@ DxgkPagingOperationSupported(
 }
 
 /*
+ * DxgkpPagingNode
+ *
+ * The execution node a paging packet belongs on.
+ *
+ * DXGK_PHYSICALADAPTERCAPS.PagingNodeIndex names the node the miniport builds
+ * paging buffers for.  Every packet submitted from here carries
+ * VIDSCH_SUBMITFLAG_PAGING, so it belongs on that node.  The operations are
+ * zero-initialised by their builders and nothing ever assigns NodeOrdinal, so
+ * without this they all ran on node 0 -- a different engine from the one the
+ * miniport prepared them for whenever the adapter declares a non-zero paging
+ * node.  An operation that names a node explicitly keeps it.
+ */
+static ULONG
+DxgkpPagingNode(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG RequestedNode)
+{
+    if (RequestedNode != 0 ||
+        Adapter == NULL ||
+        !Adapter->PhysicalAdapterCapsValid ||
+        Adapter->PhysicalAdapterCaps.PagingNodeIndex >= Adapter->NodeCount)
+    {
+        return RequestedNode;
+    }
+    return Adapter->PhysicalAdapterCaps.PagingNodeIndex;
+}
+
+/*
  * DxgkPagingExecuteBatch
  *
  * Build an entire set of paging operations before admitting any packet to
@@ -695,7 +723,7 @@ DxgkPagingExecuteBatch(
     TrackArgs.LifetimeAllocationReferenceCount =
         LifetimeAllocationReferenceCount;
     Status = VidSchSubmitCommandTracked(Adapter,
-                                        Operations[0].NodeOrdinal,
+                                        DxgkpPagingNode(Adapter, Operations[0].NodeOrdinal),
                                         Operations[0].EngineOrdinal,
                                         DmaBuffer,
                                         DmaBuffer->PrivateData,
@@ -899,7 +927,7 @@ DxgkPagingExecute(
         {
             RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
             TrackArgs.Device = Device;
-            Status = VidSchSubmitCommandTracked(Adapter, Op->NodeOrdinal, Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
+            Status = VidSchSubmitCommandTracked(Adapter, DxgkpPagingNode(Adapter, Op->NodeOrdinal), Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
             if (!NT_SUCCESS(Status))
                 goto Cleanup;
             PendingBuffer = NULL;
@@ -930,7 +958,7 @@ DxgkPagingExecute(
     TrackArgs.Device = Device;
     TrackArgs.hSignalSyncObject = hSignalSyncObject;
     TrackArgs.SignalFenceValue = SignalFenceValue;
-    Status = VidSchSubmitCommandTracked(Adapter, Op->NodeOrdinal, Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
+    Status = VidSchSubmitCommandTracked(Adapter, DxgkpPagingNode(Adapter, Op->NodeOrdinal), Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     PendingBuffer = NULL;

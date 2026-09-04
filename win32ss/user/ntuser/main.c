@@ -65,12 +65,17 @@ AllocW32Process(IN  PEPROCESS Process,
                 OUT PPROCESSINFO* W32Process)
 {
     PPROCESSINFO ppiCurrent;
+    NTSTATUS Status;
 
     TRACE_CH(UserProcess, "In AllocW32Process(0x%p)\n", Process);
 
     /* Check that we were not called with an already existing Win32 process info */
     ppiCurrent = PsGetProcessWin32Process(Process);
-    if (ppiCurrent) return STATUS_SUCCESS;
+    if (ppiCurrent)
+    {
+        *W32Process = ppiCurrent;
+        return STATUS_SUCCESS;
+    }
 
     /* Allocate a new Win32 process info */
     ppiCurrent = ExAllocatePoolWithTag(NonPagedPool,
@@ -88,7 +93,13 @@ AllocW32Process(IN  PEPROCESS Process,
 
     RtlZeroMemory(ppiCurrent, sizeof(*ppiCurrent));
 
-    PsSetProcessWin32Process(Process, ppiCurrent, NULL);
+    Status = PsSetProcessWin32Process(Process, ppiCurrent, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(ppiCurrent, USERTAG_PROCESSINFO);
+        return Status;
+    }
+
     IntReferenceProcessInfo(ppiCurrent);
 
     *W32Process = ppiCurrent;

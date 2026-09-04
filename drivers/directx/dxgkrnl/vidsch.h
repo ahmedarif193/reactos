@@ -344,6 +344,8 @@ typedef struct _VIDSCH_ENGINE
     VIDSCH_DISPATCH_RECORD      DispatchRing[VIDSCH_DISPATCH_RING_SIZE];
     ULONG                       DispatchRingNext;
     D3DGPU_VIRTUAL_ADDRESS      LastFaultDmaGpuVa;
+    /* Diagnostics: the address the GPU actually failed to translate. */
+    D3DGPU_VIRTUAL_ADDRESS      LastFaultVa;
     ULONG                       LastFaultDmaSize;
     ULONG                       LastFaultFence;
     /* DXGK_PAGE_FAULT_FLAGS as reported by the miniport.  The reset-required

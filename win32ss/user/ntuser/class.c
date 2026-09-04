@@ -34,6 +34,17 @@ static PWSTR ControlsList[] =
 
 static NTSTATUS IntDeregisterClassAtom(IN RTL_ATOM Atom);
 
+/*
+ * The default server classes are registered before user32 has loaded the
+ * system cursors, so the arrow they ask for does not exist yet and every one
+ * of them ended up with a NULL class cursor for the life of the session --
+ * DefWndHandleSetCursor(HTCLIENT) then set no cursor at all and the pointer
+ * was never drawn.  Remember the classes whose cursor could not be resolved
+ * and finish them once the arrow is actually registered.
+ */
+static PCLS gapclsPendingArrow[8];
+static ULONG gnclsPendingArrow;
+
 REGISTER_SYSCLASS DefaultServerClasses[] =
 {
   { ((PWSTR)WC_DESKTOP),
@@ -2354,6 +2365,8 @@ UserRegisterSystemClasses(VOID)
     RtlZeroMemory(&ClassName, sizeof(ClassName));
     RtlZeroMemory(&MenuName, sizeof(MenuName));
 
+    BOOL bWantsArrowCursor;
+
     for (i = 0; i != ARRAYSIZE(DefaultServerClasses); i++)
     {
         if (!IS_ATOM(DefaultServerClasses[i].ClassName))
@@ -2386,6 +2399,7 @@ UserRegisterSystemClasses(VOID)
         wc.cbClsExtra = 0;
         wc.cbWndExtra = DefaultServerClasses[i].ExtraBytes;
         wc.hIcon = NULL;
+        bWantsArrowCursor = FALSE;
 
         //// System Cursors should be initilized!!!
         wc.hCursor = NULL;
@@ -2393,7 +2407,9 @@ UserRegisterSystemClasses(VOID)
         {
             if (SYSTEMCUR(ARROW) == NULL)
             {
-                ERR("SYSTEMCUR(ARROW) == NULL, should not happen!!\n");
+                /* Not an error: the system cursors load after this runs.
+                 * Resolve it when NtUserSetSystemCursor supplies the arrow. */
+                bWantsArrowCursor = TRUE;
             }
             else
             {
@@ -2426,6 +2442,12 @@ UserRegisterSystemClasses(VOID)
                                              Class);
 
             ppi->dwRegisteredClasses |= ICLASS_TO_MASK(DefaultServerClasses[i].iCls);
+
+            if (bWantsArrowCursor &&
+                gnclsPendingArrow < ARRAYSIZE(gapclsPendingArrow))
+            {
+                gapclsPendingArrow[gnclsPendingArrow++] = Class;
+            }
         }
         else
         {
@@ -2435,6 +2457,36 @@ UserRegisterSystemClasses(VOID)
     }
     if (Ret) ppi->W32PF_flags |= W32PF_CLASSESREGISTERED;
     return Ret;
+}
+
+/*
+ * IntApplySystemArrowToPendingClasses
+ *
+ * Completes the default server classes that asked for OCR_NORMAL before the
+ * system cursors existed.  Called once the arrow is registered.
+ */
+VOID
+FASTCALL
+IntApplySystemArrowToPendingClasses(
+    PCURICON_OBJECT pcur)
+{
+    ULONG i;
+
+    if (pcur == NULL)
+        return;
+
+    for (i = 0; i < gnclsPendingArrow; i++)
+    {
+        PCLS Class = gapclsPendingArrow[i];
+
+        gapclsPendingArrow[i] = NULL;
+        if (Class == NULL || Class->spcur != NULL)
+            continue;
+
+        UserReferenceObject(pcur);
+        Class->spcur = pcur;
+    }
+    gnclsPendingArrow = 0;
 }
 
 /* SYSCALLS *****************************************************************/

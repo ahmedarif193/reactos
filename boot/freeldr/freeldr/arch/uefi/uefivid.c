@@ -933,8 +933,16 @@ UefiInitializeGop(VOID)
     Status = GlobalSystemTable->BootServices->LocateProtocol(&EfiGraphicsOutputProtocol, 0, (void**)&gop);
     if (Status != EFI_SUCCESS)
     {
-        TRACE("Failed to find GOP with status %d\n", Status);
+        /* Without a framebuffer the kernel starts headless, every display
+         * adapter is refused POST ownership and the desktop stays on the
+         * basic-display fallback, so say why rather than tracing it. */
+        ERR("Failed to find GOP with status %llx\n", (ULONGLONG)Status);
         return Status;
+    }
+    if (gop->Mode == NULL || gop->Mode->Info == NULL)
+    {
+        ERR("GOP located but has no mode information (Mode=%p)\n", gop->Mode);
+        return EFI_UNSUPPORTED;
     }
 
     if (UefiGetEdidPreferredResolution(&PreferredWidth, &PreferredHeight))

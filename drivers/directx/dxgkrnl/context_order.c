@@ -113,46 +113,12 @@ static VOID DxgkpContextOrderFreeUnpublishedOperation(_Inout_ PDXGK_CONTEXT_ORDE
 
 static VOID NTAPI DxgkpContextOrderWorker(_In_ PVOID Parameter);
 
-/* Drive the ordered stream on the submitting thread instead of waking the
- * scheduler thread.  Handing the first pass off costs a context switch on
- * every submission while the submitting thread has nothing else to do, and
- * the next submission then blocks on the admission mutex behind that wakeup.
- * The caller must have dropped its own locks: this runs the full worker pass,
- * including the miniport dispatch.  Contexts woken by a signal keep using the
- * queued path so a dispatch can never recurse into another one. */
+/* Miniport submission and its interrupt handlers need the scheduler thread's
+ * stack. A GDI caller can already be deep in a software drawing operation. */
 VOID DxgkContextOrderKickContext(_Inout_ PDXGKRNL_CONTEXT Context)
 {
-    LONG State;
-
     PAGED_CODE();
-    if (Context == NULL || Context->Mms2ContextStream == NULL)
-        return;
-    InterlockedIncrement(&Context->ReferenceCount);
-    for (;;)
-    {
-        State = InterlockedCompareExchange(&Context->StreamWorkerQueued, 0, 0);
-        if (State == 0)
-        {
-            if (InterlockedCompareExchange(&Context->StreamWorkerQueued, 1, 0) != 0)
-                continue;
-            KeClearEvent(&Context->StreamDrainedEvent);
-            /* The worker consumes the reference taken above, exactly as it
-             * does when the scheduler thread picks the context up. */
-            DxgkpContextOrderWorker(Context);
-            return;
-        }
-        if (State == 1)
-        {
-            if (InterlockedCompareExchange(&Context->StreamWorkerQueued, 2, 1) != 1)
-                continue;
-            break;
-        }
-        if (State == 2)
-            break;
-        ASSERT(FALSE);
-        break;
-    }
-    DxgkDereferenceContext(Context);
+    DxgkContextOrderScheduleReferenced(Context);
 }
 
 
@@ -369,7 +335,8 @@ ContinueWorker:
         Action.Size = DXGMMS2_CONTEXT_ACTION_V1_SIZE;
         Action.Version = DXGMMS2_CONTEXT_STREAM_VERSION_1;
         Status = Interface.ClaimNextAction(Interface.AdapterHandle, Context->Mms2ContextStream, &Action);
-        if (!NT_SUCCESS(Status))
+        /* A pending signal has no claim until its preceding work completes. */
+        if (Status != STATUS_SUCCESS)
             break;
         if (Action.ClientTag != (ULONGLONG)(ULONG_PTR)Operation || Action.ObjectId != (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WORK ? 0 : (ULONGLONG)(ULONG_PTR)Operation) || Action.Sequence != Marker->Sequence)
         {

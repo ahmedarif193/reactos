@@ -379,6 +379,14 @@ DxgkpReleaseSharedSurfaceSnapshot(
     _Inout_ PDXGKRNL_SHARED_SURFACE_SNAPSHOT Snapshot);
 
 NTSTATUS
+DxgkpProgramSharedPrimaryScanout(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
+    _In_ D3DKMT_HANDLE AllocationHandle,
+    _In_ ULONG64 PresentId);
+
+NTSTATUS
 DxgkpPresentDisplayOnlyToSharedPrimary(
     _In_ struct _DXGKRNL_ADAPTER *Adapter,
     _In_ const DXGKRNL_SHARED_SURFACE_SNAPSHOT *SharedSurface,

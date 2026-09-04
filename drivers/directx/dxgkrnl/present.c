@@ -74,6 +74,9 @@ typedef struct _DXGKRNL_VBLANK_WAITER
 } DXGKRNL_VBLANK_WAITER, *PDXGKRNL_VBLANK_WAITER;
 
 static VOID NTAPI DxgkpVSyncWorker(_In_ PVOID Context);
+static NTSTATUS DxgkpExecuteFullPresent(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PDXGKRNL_PRESENT_ENTRY Entry);
+static NTSTATUS DxgkpSelectPresentNode(_In_ PDXGKRNL_ADAPTER Adapter, _In_ DXGKRNL_PRESENT_TYPE PresentType, _Out_ PULONG OutNode);
+static NTSTATUS DxgkpSelectCddPresentEngine(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PULONG OutNode, _Out_ PUINT OutEngineAffinity);
 
 static BOOLEAN
 DxgkpAcquirePresentQueues(
@@ -949,17 +952,81 @@ DxgkpCopyShadowToSharedPrimary(
  * receive flips as one-plane MPO configurations).  Returns STATUS_NOT_-
  * SUPPORTED to let the caller fall back to the legacy SetVidPnSourceAddress.
  */
+static BOOLEAN
+DxgkpHasPrimaryScanout(_In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter->MiniportContext == NULL || Adapter->MiniportContext->IsDisplayOnlyDriver)
+        return FALSE;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+    if (DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3) != NULL)
+        return TRUE;
+#endif
+    return DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay) != NULL ||
+           DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) != NULL;
+}
+
 static NTSTATUS
 DxgkpProgramScanoutViaMpo(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
-    _In_ LARGE_INTEGER PrimaryAddress)
+    _In_ LARGE_INTEGER PrimaryAddress,
+    _In_ ULONG64 PresentId)
 {
     DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY MpoArgs;
     DXGK_MULTIPLANE_OVERLAY_PLANE Plane;
     PDXGKDDI_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY PfnSetMpo;
     NTSTATUS Status;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
+    if (DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3) != NULL)
+    {
+        DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY3 Args3;
+        DXGK_MULTIPLANE_OVERLAY_PLANE3 Plane3, *PlanePointer = &Plane3;
+        DXGK_PRIMARYCONTEXTDATA Primary, *PrimaryPointer = &Primary;
+
+        RtlZeroMemory(&Primary, sizeof(Primary));
+        Primary.hAllocation = Allocation->MiniportHandle;
+        Primary.SegmentId = (WORD)Allocation->SegmentId;
+        Primary.SegmentAddress = PrimaryAddress;
+        RtlZeroMemory(&Plane3, sizeof(Plane3));
+        Plane3.PresentId = PresentId;
+        Plane3.InputFlags.Enabled = 1;
+        Plane3.InputFlags.FlipImmediate = 1;
+        Plane3.ContextCount = 1;
+        Plane3.ppContextData = &PrimaryPointer;
+        Plane3.PlaneAttributes.SrcRect.right = (LONG)Adapter->CommittedWidth;
+        Plane3.PlaneAttributes.SrcRect.bottom = (LONG)Adapter->CommittedHeight;
+        Plane3.PlaneAttributes.DstRect = Plane3.PlaneAttributes.SrcRect;
+        Plane3.PlaneAttributes.ClipRect = Plane3.PlaneAttributes.SrcRect;
+        Plane3.PlaneAttributes.Rotation = D3DDDI_ROTATION_IDENTITY;
+        Plane3.PlaneAttributes.StretchQuality = DXGK_MULTIPLANE_OVERLAY_STRETCH_QUALITY_BILINEAR;
+        RtlZeroMemory(&Args3, sizeof(Args3));
+        Args3.VidPnSourceId = VidPnSourceId;
+        Args3.PlaneCount = 1;
+        Args3.ppPlanes = &PlanePointer;
+
+        if (!DxgkAcquireKmdCall(Adapter))
+            return STATUS_DELETE_PENDING;
+        _SEH2_TRY
+        {
+            Status = DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3)(Adapter->MiniportDeviceContext, &Args3);
+            if (Status == STATUS_RETRY && Args3.OutputFlags.PrePresentNeeded && KeGetCurrentIrql() == PASSIVE_LEVEL)
+            {
+                Args3.InputFlags.RetryAtLowerIrql = 1;
+                Args3.OutputFlags.Value = 0;
+                Status = DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3)(Adapter->MiniportDeviceContext, &Args3);
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        DxgkReleaseKmdCall(Adapter);
+        return Status;
+    }
+#endif
 
     PfnSetMpo = DXGK_CB_FULL(Adapter,
                              DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay);
@@ -980,6 +1047,7 @@ DxgkpProgramScanoutViaMpo(
     Plane.PlaneAttributes.SrcRect.bottom = (LONG)Adapter->CommittedHeight;
     Plane.PlaneAttributes.DstRect = Plane.PlaneAttributes.SrcRect;
     Plane.PlaneAttributes.ClipRect = Plane.PlaneAttributes.SrcRect;
+    Plane.PlaneAttributes.Rotation = D3DDDI_ROTATION_IDENTITY;
 
     RtlZeroMemory(&MpoArgs, sizeof(MpoArgs));
     MpoArgs.VidPnSourceId = VidPnSourceId;
@@ -1003,7 +1071,7 @@ DxgkpProgramScanoutViaMpo(
     return Status;
 }
 
-static NTSTATUS
+NTSTATUS
 DxgkpProgramSharedPrimaryScanout(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKVMM_ALLOCATION Allocation,
@@ -1021,7 +1089,7 @@ DxgkpProgramSharedPrimaryScanout(
         Allocation == NULL ||
         Adapter->MiniportContext == NULL ||
         Adapter->MiniportContext->IsDisplayOnlyDriver ||
-        DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL)
+        !DxgkpHasPrimaryScanout(Adapter))
     {
         return STATUS_NOT_SUPPORTED;
     }
@@ -1043,9 +1111,8 @@ DxgkpProgramSharedPrimaryScanout(
     PrimaryAddress = DxgkVidMmGetAllocationPrimaryAddress(Allocation);
 
     /* MPO-capable miniports get the flip as a one-plane configuration. */
-    Status = DxgkpProgramScanoutViaMpo(Adapter, Allocation, VidPnSourceId, PrimaryAddress);
-    if (Status == STATUS_DELETE_PENDING)
-        goto Cleanup;
+    Status = DxgkpProgramScanoutViaMpo(Adapter, Allocation, VidPnSourceId, PrimaryAddress, PresentId);
+
     if (NT_SUCCESS(Status))
     {
         if (DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL)
@@ -1066,6 +1133,9 @@ DxgkpProgramSharedPrimaryScanout(
         }
         goto Cleanup;
     }
+
+    if (Status != STATUS_NOT_SUPPORTED || DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL)
+        goto Cleanup;
 
     SetSourceAddress = ExAllocatePoolWithTag(NonPagedPool, sizeof(*SetSourceAddress), TAG_DXGK_PRESENT);
     if (SetSourceAddress == NULL)
@@ -1127,7 +1197,7 @@ DxgkpProgramSharedPrimaryScanout(
             Status = STATUS_DELETE_PENDING;
         else
         {
-            DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(Adapter->MiniportDeviceContext, &Visibility);
+            Status = DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(Adapter->MiniportDeviceContext, &Visibility);
             DxgkReleaseKmdCall(Adapter);
         }
     }
@@ -1147,6 +1217,15 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
     _In_ const DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly)
 {
     PDXGKVMM_ALLOCATION Allocation;
+    DXGKRNL_PRESENT_ENTRY Entry;
+    PDXGKRNL_DEVICE_WORK PresentWork = NULL;
+    D3DKMT_CREATEDEVICE CreateDevice;
+    D3DKMT_CREATECONTEXT CreateContext;
+    D3DKMT_DESTROYDEVICE DestroyDevice;
+    KAPC_STATE ApcState;
+    BOOLEAN Attached;
+    PDXGKRNL_ADAPTER ContextAdapter;
+    ULONG Node;
     PBYTE DestinationVa;
     PBYTE SourceVa;
     ULONG Width;
@@ -1165,9 +1244,11 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
 
     if (Adapter->MiniportContext == NULL ||
         Adapter->MiniportContext->IsDisplayOnlyDriver ||
-        DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL ||
+        !DxgkpHasPrimaryScanout(Adapter) ||
         SharedSurface->PrimaryAllocation == NULL ||
-        SharedSurface->PrimaryHandle == NULL)
+        SharedSurface->PrimaryHandle == NULL ||
+        SharedSurface->ShadowAllocation == NULL ||
+        DXGK_CB_FULL(Adapter, DxgkDdiPresent) == NULL)
     {
         return STATUS_NOT_SUPPORTED;
     }
@@ -1185,11 +1266,13 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
 
     Width = SharedSurface->CommittedWidth;
     Height = SharedSurface->CommittedHeight;
-    Allocation = SharedSurface->PrimaryAllocation;
+    Allocation = SharedSurface->ShadowAllocation;
     SourcePitch = (ULONG)PresentDisplayOnly->Pitch;
     if (Width == 0 || Height == 0 ||
         SharedSurface->PrimaryWidth < Width ||
         SharedSurface->PrimaryHeight < Height ||
+        SharedSurface->ShadowWidth < Width ||
+        SharedSurface->ShadowHeight < Height ||
         Width > MAXULONG / sizeof(ULONG) ||
         SourcePitch < Width * sizeof(ULONG) ||
         SharedSurface->ShadowFbSize <
@@ -1199,22 +1282,64 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
         return STATUS_INVALID_BUFFER_SIZE;
     }
 
-    Status = DxgkVidMmMapAllocationCpu(Allocation,
-                                       (PVOID *)&DestinationVa);
+    if (!DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DELETE_PENDING;
+    KeWaitForSingleObject(&Adapter->CddPresentMutex, Executive, KernelMode, FALSE, NULL);
+    Attached = PsGetCurrentProcess() != PsInitialSystemProcess;
+    if (Attached)
+        KeStackAttachProcess((PKPROCESS)PsInitialSystemProcess, &ApcState);
+    RtlZeroMemory(&Entry, sizeof(Entry));
+
+    if (Adapter->CddContextHandle == 0)
+    {
+        RtlZeroMemory(&CreateDevice, sizeof(CreateDevice));
+        CreateDevice.pAdapter = Adapter;
+        Status = DxgkCreateCddDevice(&CreateDevice);
+        if (!NT_SUCCESS(Status))
+            goto CleanupCdd;
+        Adapter->CddDeviceHandle = CreateDevice.hDevice;
+
+        RtlZeroMemory(&CreateContext, sizeof(CreateContext));
+        CreateContext.hDevice = CreateDevice.hDevice;
+        Status = DxgkpSelectCddPresentEngine(Adapter, &Node, &CreateContext.EngineAffinity);
+        CreateContext.NodeOrdinal = Node;
+        if (NT_SUCCESS(Status))
+            Status = DxgkCreateCddContext(Adapter, &CreateContext);
+        if (!NT_SUCCESS(Status))
+        {
+            DestroyDevice.hDevice = Adapter->CddDeviceHandle;
+            DxgkDestroyDevice(&DestroyDevice);
+            Adapter->CddDeviceHandle = 0;
+            goto CleanupCdd;
+        }
+        Adapter->CddContextHandle = CreateContext.hContext;
+    }
+
+    Status = DxgkReferenceContextByHandle(Adapter->CddContextHandle, PsInitialSystemProcess, &ContextAdapter, &Entry.Device, &Entry.Context);
     if (!NT_SUCCESS(Status))
-        return Status;
+        goto CleanupCdd;
+    ASSERT(ContextAdapter == Adapter);
+    Status = DxgkDeviceWaitForIdle(Entry.Device);
+    if (!NT_SUCCESS(Status))
+        goto CleanupCdd;
+
+    /* CPU writes belong in the linear shadow, never the swizzled primary. */
+    Status = DxgkVidMmMapAllocationCpu(Allocation, (PVOID *)&DestinationVa);
+    if (!NT_SUCCESS(Status))
+        goto CleanupCdd;
 
     DestinationPitch = DxgkpSurfaceCopyPitch(
                            Allocation,
-                           SharedSurface->PrimaryWidth,
-                           SharedSurface->PrimaryHeight,
-                           0);
+                           SharedSurface->ShadowWidth,
+                           SharedSurface->ShadowHeight,
+                           SharedSurface->ShadowPitch);
     if (DestinationPitch < Width * sizeof(ULONG) ||
         Allocation->Size <
             ((SIZE_T)(Height - 1) * DestinationPitch) +
             ((SIZE_T)Width * sizeof(ULONG)))
     {
-        return STATUS_INVALID_BUFFER_SIZE;
+        Status = STATUS_INVALID_BUFFER_SIZE;
+        goto CleanupCdd;
     }
 
     SourceVa = (PBYTE)PresentDisplayOnly->pSource;
@@ -1254,12 +1379,64 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
     }
 
     KeMemoryBarrier();
-    return DxgkpProgramSharedPrimaryScanout(
-               Adapter,
-               Allocation,
-               SharedSurface->VidPnSourceId,
-               (D3DKMT_HANDLE)(ULONG_PTR)SharedSurface->PrimaryHandle,
-               0);
+    Entry.Type = DxgkPresentTypeBlt;
+    Entry.hSource = (D3DKMT_HANDLE)(ULONG_PTR)SharedSurface->ShadowHandle;
+    Entry.hDestination = (D3DKMT_HANDLE)(ULONG_PTR)SharedSurface->PrimaryHandle;
+    Entry.SourceAllocation = SharedSurface->ShadowAllocation;
+    Entry.DestinationAllocation = SharedSurface->PrimaryAllocation;
+    Entry.SourceIsSharedShadow = TRUE;
+    Entry.DestinationIsSharedPrimary = TRUE;
+    Entry.SharedSurface = *SharedSurface;
+    Entry.VidPnSourceId = SharedSurface->VidPnSourceId;
+    Entry.SrcRect.right = Width;
+    Entry.SrcRect.bottom = Height;
+    Entry.DstRect = Entry.SrcRect;
+    Entry.DstSubRects = (RECT *)PresentDisplayOnly->pDirtyRect;
+    Entry.DstSubRectCount = PresentDisplayOnly->NumDirtyRects;
+    Status = DxgkDeviceWorkCreate(Entry.Device, &Entry.DeviceWork);
+    if (NT_SUCCESS(Status))
+        Status = DxgkDeviceWorkActivate(Entry.DeviceWork);
+    if (NT_SUCCESS(Status))
+    {
+        PresentWork = Entry.DeviceWork;
+        DxgkDeviceWorkReference(PresentWork);
+        Status = DxgkpExecuteFullPresent(Adapter, &Entry);
+        /* A synchronous present retains ownership in Entry. An asynchronous
+         * present transfers it to the scheduler and publishes its result
+         * after scanout, while this observer keeps the result alive. */
+        if (NT_SUCCESS(Status) && Entry.DeviceWork != NULL)
+            DxgkDeviceWorkCompleteWithStatus(Entry.DeviceWork, Status);
+    }
+    if (NT_SUCCESS(Status))
+        Status = DxgkDeviceWaitForIdle(Entry.Device);
+    if (NT_SUCCESS(Status))
+    {
+        Status = DxgkDeviceWorkGetStatus(PresentWork);
+        if (Status == STATUS_PENDING)
+            Status = STATUS_DEVICE_NOT_READY;
+    }
+
+
+CleanupCdd:
+    DxgkDeviceWorkDestroy(Entry.DeviceWork);
+    DxgkDeviceWorkDereference(PresentWork);
+    if (Entry.Context != NULL)
+        DxgkDereferenceContext(Entry.Context);
+    /* Reset terminalizes client devices. Recreate CDD on the next update,
+     * but do not enter device teardown while the reset is still active. */
+    if (Status == STATUS_DEVICE_REMOVED &&
+        InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) == 0)
+    {
+        DestroyDevice.hDevice = Adapter->CddDeviceHandle;
+        Adapter->CddContextHandle = 0;
+        Adapter->CddDeviceHandle = 0;
+        DxgkDestroyDevice(&DestroyDevice);
+    }
+    if (Attached)
+        KeUnstackDetachProcess(&ApcState);
+    KeReleaseMutex(&Adapter->CddPresentMutex, FALSE);
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
 }
 
 static NTSTATUS
@@ -1280,7 +1457,7 @@ DxgkpRefreshSharedPrimaryScanout(
         Entry == NULL ||
         Adapter->MiniportContext == NULL ||
         Adapter->MiniportContext->IsDisplayOnlyDriver ||
-        DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL ||
+        !DxgkpHasPrimaryScanout(Adapter) ||
         Entry->Type != DxgkPresentTypeBlt ||
         Entry->hSource == 0 ||
         Entry->SourceAllocation != Entry->DestinationAllocation ||
@@ -1800,6 +1977,31 @@ DxgkpSelectPresentNode(
     return STATUS_NOT_SUPPORTED;
 }
 
+static NTSTATUS
+DxgkpSelectCddPresentEngine(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ PULONG OutNode,
+    _Out_ PUINT OutEngineAffinity)
+{
+    NTSTATUS Status;
+
+    /* CDD Presents can use rendering commands even for an unscaled copy, so
+     * start on a render node.
+     *
+     * Native CreateCddDevice queries PREFERREDGPUNODE only for its WARP
+     * adapter (Win11 ARM64 RVA 0x1a5274 tests DXGADAPTER+0x1bc bit 4;
+     * the same bit gates SetWarpAdapter at RVA 0xe9c44). Its payload is a
+     * 12-byte output buffer: zero, node ordinal, engine affinity. Querying
+     * every MultiEngineAware hardware adapter was incorrect and this Intel
+     * miniport rejected it. Keep the hardware path on its render node.
+     */
+    Status = DxgkpSelectPresentNode(Adapter, DxgkPresentTypeFlip, OutNode);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    *OutEngineAffinity = 1;
+    return STATUS_SUCCESS;
+}
+
 static ULONG
 DxgkpFirstEngineOrdinal(
     _In_ UINT EngineAffinity)
@@ -1923,6 +2125,10 @@ DxgkpExecuteFullPresent(
 {
     DXGKARG_PRESENT PresentArgs;
     PDXGK_ALLOCATIONLIST PresentAllocationList = NULL;
+    DXGK_PRESENTALLOCATIONINFO PresentAllocationInfo[DXGK_PRESENT_MAX_INDEX + 1];
+    PDXGKVMM_ALLOCATION SourcePresentBinding = NULL;
+    PDXGKVMM_ALLOCATION DestinationPresentBinding = NULL;
+    BOOLEAN VirtualPresent;
     D3DDDI_PATCHLOCATIONLIST PatchLocationList[VIDSCH_INLINE_PATCHES];
     DXGK_PRESENT_DMA_GEOMETRY DmaGeometry;
     RECT DstSubRect;
@@ -1943,6 +2149,7 @@ DxgkpExecuteFullPresent(
     DXGKRNL_TRACK_DMA_ARGS TrackArgs;
     PVOID DmaBufferPrivateData = NULL;
     ULONG DmaBufferPrivateDataSize = 0;
+    BOOLEAN DmaBufferOwnsPrivateData = FALSE;
     SIZE_T PresentAllocationListBytes = 0;
     ULONG SubmissionFenceId = 0;
     UINT DmaBytesUsed = 0;
@@ -2007,6 +2214,7 @@ DxgkpExecuteFullPresent(
     }
     MiniportContextHandle = NULL;
     Context = Entry->Context;
+    VirtualPresent = Context != NULL && Context->VirtualAddressing;
     PresentEngine = 0;
     PresentPriority = 0;
     if (Context != NULL)
@@ -2085,6 +2293,7 @@ DxgkpExecuteFullPresent(
         goto PresentCleanup;
     }
 
+
     Status = DxgkpRefreshSharedPrimaryScanout(Adapter, Entry, &Handled);
     if (Handled)
     {
@@ -2125,7 +2334,7 @@ DxgkpExecuteFullPresent(
      */
     if (Entry->hSource != 0)
     {
-        if (Entry->SourceOpenBindingReference != NULL)
+        if (!VirtualPresent && Entry->SourceOpenBindingReference != NULL)
             SourceDeviceSpecificHandle = Entry->SourceOpenBindingHandle;
         else
         {
@@ -2138,7 +2347,7 @@ DxgkpExecuteFullPresent(
                              Entry->hSource);
                 goto PresentCleanup;
             }
-            PresentBindingReferenceCount++;
+            SourcePresentBinding = PresentBindingReferences[PresentBindingReferenceCount++];
         }
 
         Status = DxgkVidMmAcquireSubmissionResidencyPinEx(
@@ -2161,8 +2370,9 @@ DxgkpExecuteFullPresent(
             SourceDeviceSpecificHandle != NULL)
         {
             DestinationDeviceSpecificHandle = SourceDeviceSpecificHandle;
+            DestinationPresentBinding = SourcePresentBinding;
         }
-        else if (Entry->DestinationOpenBindingReference != NULL)
+        else if (!VirtualPresent && Entry->DestinationOpenBindingReference != NULL)
         {
             DestinationDeviceSpecificHandle = Entry->DestinationOpenBindingHandle;
         }
@@ -2175,7 +2385,7 @@ DxgkpExecuteFullPresent(
                              Entry->hDestination);
                 goto PresentCleanup;
             }
-            PresentBindingReferenceCount++;
+            DestinationPresentBinding = PresentBindingReferences[PresentBindingReferenceCount++];
         }
 
         if (Entry->DestinationAllocation != Entry->SourceAllocation)
@@ -2221,15 +2431,32 @@ DxgkpExecuteFullPresent(
                       Entry->DstRect.bottom);
     }
 
-    Status = DxgkAllocateDmaBuffer(Adapter, DmaGeometry.DmaBufferSize, &DmaBuffer);
+    DmaBufferPrivateDataSize = DmaGeometry.DmaBufferPrivateDataSize;
+    if (VirtualPresent)
+    {
+        Status = DxgkAllocateVirtualDmaBuffer(Device, DmaGeometry.DmaBufferSize, DmaGeometry.DmaBufferSegmentSet, &DmaBuffer);
+    }
+    else
+    {
+        Status = DxgkAllocateDmaBufferInSegmentSetWithPrivateData(
+                     Adapter,
+                     DmaGeometry.DmaBufferSize,
+                     DmaGeometry.DmaBufferSegmentSet,
+                     DmaBufferPrivateDataSize,
+                     &DmaBuffer);
+    }
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkpExecuteFullPresent: DMA buffer alloc failed\n");
         goto PresentCleanup;
     }
 
-    DmaBufferPrivateDataSize = DmaGeometry.DmaBufferPrivateDataSize;
-    if (DmaBufferPrivateDataSize != 0)
+    if (!VirtualPresent)
+    {
+        DmaBufferPrivateData = DmaBuffer->PrivateData;
+        DmaBufferOwnsPrivateData = DmaBufferPrivateData != NULL;
+    }
+    else if (DmaBufferPrivateDataSize != 0)
     {
         DmaBufferPrivateData = ExAllocatePoolWithTag(
                                    NonPagedPool,
@@ -2266,6 +2493,40 @@ DxgkpExecuteFullPresent(
     PresentArgs.NumDstAllocations     = (DestinationDeviceSpecificHandle != NULL) ? 1 : 0;
     PresentArgs.PrivateDriverDataSize = 0;
     PresentArgs.pPrivateDriverData    = NULL;
+
+    if (VirtualPresent)
+    {
+        /* GPUVA Present uses a different union member and entry stride from
+         * the legacy patch allocation list retained by the scheduler. */
+        RtlZeroMemory(PresentAllocationInfo, sizeof(PresentAllocationInfo));
+        PresentAllocationInfo[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = SourceDeviceSpecificHandle;
+        PresentAllocationInfo[DXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation = DestinationDeviceSpecificHandle;
+        if (SourcePresentBinding != NULL)
+        {
+            Status = DxgkVidMmMapVirtualPresentAllocation(DmaBuffer->VirtualBacking, SourcePresentBinding, Entry->SourceAllocation, Entry->hSource == Entry->hDestination, &PresentAllocationInfo[DXGK_PRESENT_SOURCE_INDEX].AllocationVirtualAddress);
+            if (!NT_SUCCESS(Status))
+                goto PresentCleanup;
+        }
+        if (DestinationPresentBinding == SourcePresentBinding)
+        {
+            PresentAllocationInfo[DXGK_PRESENT_DESTINATION_INDEX].AllocationVirtualAddress = PresentAllocationInfo[DXGK_PRESENT_SOURCE_INDEX].AllocationVirtualAddress;
+        }
+        else if (DestinationPresentBinding != NULL)
+        {
+            Status = DxgkVidMmMapVirtualPresentAllocation(DmaBuffer->VirtualBacking, DestinationPresentBinding, Entry->DestinationAllocation, TRUE, &PresentAllocationInfo[DXGK_PRESENT_DESTINATION_INDEX].AllocationVirtualAddress);
+            if (!NT_SUCCESS(Status))
+                goto PresentCleanup;
+        }
+        if (Entry->Type == DxgkPresentTypeFlip)
+        {
+            PresentAllocationInfo[DXGK_PRESENT_SOURCE_INDEX].PhysicalAddress = PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX].PhysicalAddress;
+            PresentAllocationInfo[DXGK_PRESENT_SOURCE_INDEX].SegmentId = PresentAllocationList[DXGK_PRESENT_SOURCE_INDEX].SegmentId;
+        }
+        PresentArgs.pAllocationInfo = PresentAllocationInfo;
+        PresentArgs.pPatchLocationListOut = NULL;
+        PresentArgs.PatchLocationListOutSize = 0;
+        PresentArgs.DmaBufferGpuVirtualAddress = DmaBuffer->GpuVirtualAddress;
+    }
 
     /* Source and destination rectangles. */
     PresentArgs.SrcRect      = Entry->SrcRect;
@@ -2335,14 +2596,25 @@ DxgkpExecuteFullPresent(
             DmaBytesUsed = (UINT)(DmaBufferNext - DmaBufferStart);
         }
     }
+    if (NT_SUCCESS(Status) && DmaBytesUsed != 0)
+    {
+    }
     if (NT_SUCCESS(Status) && DmaBytesUsed == 0)
         Status = STATUS_NOT_SUPPORTED;
-    if (NT_SUCCESS(Status) && DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand) == NULL)
+    if (NT_SUCCESS(Status) &&
+        (VirtualPresent ? DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL :
+                          DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand) == NULL))
         Status = STATUS_NOT_SUPPORTED;
     if (NT_SUCCESS(Status) && DmaBytesUsed != 0)
     {
         DmaBuffer->SubmissionStartOffset = 0;
         DmaBuffer->SubmissionEndOffset = DmaBytesUsed;
+        if (Entry->SourceIsSharedShadow)
+        {
+            static LONG VisibilityDmaCount;
+            if (InterlockedIncrement(&VisibilityDmaCount) <= 3)
+                DxgkpVidMmFlushCpuCache(DmaBuffer->VirtualAddress, DmaBytesUsed);
+        }
     }
 
     if (NT_SUCCESS(Status) && DmaBytesUsed > 0)
@@ -2459,7 +2731,7 @@ DxgkpExecuteFullPresent(
             goto PresentSubmissionDone;
         }
 
-        if (!(Status == STATUS_DEVICE_NOT_READY && Adapter->VidSchContext == NULL))
+        if (VirtualPresent || !(Status == STATUS_DEVICE_NOT_READY && Adapter->VidSchContext == NULL))
             goto PresentSubmissionDone;
 
         SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
@@ -2648,13 +2920,13 @@ PresentSubmissionDone:
 PresentCleanup:
     if (!NT_SUCCESS(Status))
     {
-        DXGKRNL_WARN("DxgkpExecuteFullPresent: DxgkDdiPresent returned "
+        DXGKRNL_WARN("DxgkpExecuteFullPresent: present failed "
                      "0x%08lX\n", Status);
     }
 
     if (DmaBuffer != NULL)
         DxgkFreeDmaBuffer(DmaBuffer);
-    if (DmaBufferPrivateData != NULL)
+    if (DmaBufferPrivateData != NULL && !DmaBufferOwnsPrivateData)
         ExFreePoolWithTag(DmaBufferPrivateData, TAG_DXGK_SUBMITDMA);
     if (PresentAllocationList != NULL)
         ExFreePoolWithTag(PresentAllocationList, TAG_DXGK_PRESENT);

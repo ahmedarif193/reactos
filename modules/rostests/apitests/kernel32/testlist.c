@@ -3,6 +3,7 @@
 #include <apitest.h>
 
 extern void func_ActCtxWithXmlNamespaces(void);
+extern void func_ApiSetCoreSynch(void);
 extern void func_Arm64ThreadContext(void);
 extern void func_ConsoleCP(void);
 extern void func_ConsoleProcessInheritance(void);
@@ -69,6 +70,7 @@ extern void func_WideCharToMultiByte(void);
 const struct test winetest_testlist[] =
 {
     { "ActCtxWithXmlNamespaces",     func_ActCtxWithXmlNamespaces },
+    { "ApiSetCoreSynch",             func_ApiSetCoreSynch },
     { "Arm64ThreadContext",          func_Arm64ThreadContext },
     { "ConsoleCP",                   func_ConsoleCP },
     { "ConsoleProcessInheritance",   func_ConsoleProcessInheritance },

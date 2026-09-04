@@ -17,8 +17,10 @@
  *   - DxgkDdiCreateProcess is called once per process when it first
  *     uses the GPU.  The miniport creates per-process GPU state.
  *
- *   - DxgkDdiSetRootPageTable is called only after RootPageTableProgrammed
- *     proves that a real page-table build/submit path completed.
+ *   - DxgkDdiSetRootPageTable is called only for a context whose node reports
+ *     DXGK_NODEMETADATA.GpuMmuSupported — the OS owns the page tables only
+ *     there — and only after RootPageTableProgrammed proves that a real
+ *     page-table build/submit path completed and the root owns a placement.
  *
  *   - GPU VA UPDATE operations are applied only to a temporary cloned list
  *     for validation.  The authoritative list is unchanged while hardware
@@ -57,12 +59,12 @@
 #define GPUVA_RESERVATION_ALIGNMENT (64ULL * 1024ULL)
 #define GPUVA_RESERVATION_MASK      (GPUVA_RESERVATION_ALIGNMENT - 1ULL)
 
-/* DXGK_PTE addresses are page-aligned byte addresses, not page numbers. */
+/* DXGK_PTE stores address bits 63:12; root SegmentOffset remains in bytes. */
 static __inline ULONGLONG
 GpuVaPteAddress(
     _In_ ULONGLONG Address)
 {
-    return Address & ~GPUVA_PAGE_MASK;
+    return Address >> PAGE_SHIFT;
 }
 
 /* A fixed per-process node cap bounds user-controlled NonPagedPool growth.
@@ -569,54 +571,109 @@ GpuVaListAllowsExecute(
 }
 
 /*
- * GpuVaListAdjustPin — add Delta to SubmissionPinCount on every range that
- * covers [Address, Address+Size).  Caller holds GpuVaLock and has already
- * verified coverage, so every step of the walk must land on a covering range.
+ * GPU VA SUBMISSION PINS *****************************************************
+ *
+ * A pin records that a submitted, unretired DMA packet executes out of a GPU
+ * virtual span.  It is kept off DXGKRNL_GPUVA_RANGE on purpose: every mapping
+ * transaction replaces the whole range list with clones, so a count stored on
+ * a range object is reset by the next unrelated map -- which both drops the
+ * protection and makes the matching unpin underflow.
+ *
+ * All three helpers require GpuVaLock.
  */
-static VOID
-GpuVaListAdjustPin(
-    _In_ PLIST_ENTRY ListHead,
+
+/* Add one reference to the pin on [Address, Address+Size). */
+static BOOLEAN
+GpuVaPinAcquire(
+    _In_ PDXGKRNL_PROCESS Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS Address,
-    _In_ ULONGLONG Size,
-    _In_ LONG Delta)
+    _In_ ULONGLONG Size)
 {
-    D3DGPU_VIRTUAL_ADDRESS EndAddress;
-    D3DGPU_VIRTUAL_ADDRESS Cursor;
+    PLIST_ENTRY Entry;
+    PDXGKRNL_GPUVA_PIN Pin;
+
+    for (Entry = Process->GpuVaPinList.Flink;
+         Entry != &Process->GpuVaPinList;
+         Entry = Entry->Flink)
+    {
+        Pin = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_PIN, PinListEntry);
+
+        if (Pin->GpuVirtualAddress == Address && Pin->SizeInBytes == Size)
+        {
+            if (Pin->Count == MAXULONG)
+                return FALSE;
+            Pin->Count++;
+            return TRUE;
+        }
+    }
+
+    Pin = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Pin), TAG_DXGK_GPUVA_PIN);
+    if (Pin == NULL)
+        return FALSE;
+    RtlZeroMemory(Pin, sizeof(*Pin));
+    Pin->GpuVirtualAddress = Address;
+    Pin->SizeInBytes = Size;
+    Pin->Count = 1;
+    InsertTailList(&Process->GpuVaPinList, &Pin->PinListEntry);
+    return TRUE;
+}
+
+/* Drop one reference from the pin on [Address, Address+Size). */
+static VOID
+GpuVaPinRelease(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size)
+{
     PLIST_ENTRY Entry;
 
-    if (!GpuVaGetRangeEnd(Address, Size, &EndAddress))
-        return;
-
-    Cursor = Address;
-    for (Entry = ListHead->Flink; Entry != ListHead && Cursor < EndAddress; Entry = Entry->Flink)
+    for (Entry = Process->GpuVaPinList.Flink;
+         Entry != &Process->GpuVaPinList;
+         Entry = Entry->Flink)
     {
-        PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
-        D3DGPU_VIRTUAL_ADDRESS RangeEnd;
+        PDXGKRNL_GPUVA_PIN Pin =
+            CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_PIN, PinListEntry);
 
-        if (!GpuVaGetRangeEnd(Range->GpuVirtualAddress, Range->SizeInBytes, &RangeEnd))
-            return;
-        if (RangeEnd <= Cursor)
+        if (Pin->GpuVirtualAddress != Address || Pin->SizeInBytes != Size)
             continue;
-        if (Range->GpuVirtualAddress > Cursor)
-            return;
-        if (Delta > 0)
+
+        ASSERT(Pin->Count != 0);
+        Pin->Count--;
+        if (Pin->Count == 0)
         {
-            Range->SubmissionPinCount += (ULONG)Delta;
+            RemoveEntryList(&Pin->PinListEntry);
+            ExFreePoolWithTag(Pin, TAG_DXGK_GPUVA_PIN);
         }
-        else
-        {
-            ASSERT(Range->SubmissionPinCount >= (ULONG)(-Delta));
-            if (Range->SubmissionPinCount >= (ULONG)(-Delta))
-                Range->SubmissionPinCount -= (ULONG)(-Delta);
-        }
-        Cursor = min(RangeEnd, EndAddress);
+        return;
+    }
+
+    /* Every unpin is issued by the packet that took the pin, so the entry is
+     * normally still here.  Process teardown frees the pin list while the
+     * scheduler may still be retiring that process's packets, so report the
+     * miss instead of asserting the machine into the debugger. */
+    DPRINT1("DxgkGpuVaUnpinRange: no pin for [0x%I64x+0x%I64x) on process %p\n",
+            Address, Size, Process);
+}
+
+/* Free every pin of the process.  Teardown only. */
+static VOID
+GpuVaPinFreeAll(
+    _In_ PDXGKRNL_PROCESS Process)
+{
+    while (!IsListEmpty(&Process->GpuVaPinList))
+    {
+        PDXGKRNL_GPUVA_PIN Pin =
+            CONTAINING_RECORD(RemoveHeadList(&Process->GpuVaPinList),
+                              DXGKRNL_GPUVA_PIN, PinListEntry);
+
+        ExFreePoolWithTag(Pin, TAG_DXGK_GPUVA_PIN);
     }
 }
 
-/* TRUE if any range covering [Address, Address+Size) has live submissions. */
+/* TRUE if any live submission overlaps [Address, Address+Size). */
 static BOOLEAN
-GpuVaListRangeIsPinned(
-    _In_ PLIST_ENTRY ListHead,
+GpuVaRangeIsPinned(
+    _In_ PDXGKRNL_PROCESS Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS Address,
     _In_ ULONGLONG Size)
 {
@@ -625,16 +682,19 @@ GpuVaListRangeIsPinned(
 
     if (!GpuVaGetRangeEnd(Address, Size, &EndAddress))
         return FALSE;
-    for (Entry = ListHead->Flink; Entry != ListHead; Entry = Entry->Flink)
+    for (Entry = Process->GpuVaPinList.Flink;
+         Entry != &Process->GpuVaPinList;
+         Entry = Entry->Flink)
     {
-        PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
-        D3DGPU_VIRTUAL_ADDRESS RangeEnd;
+        PDXGKRNL_GPUVA_PIN Pin =
+            CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_PIN, PinListEntry);
+        D3DGPU_VIRTUAL_ADDRESS PinEnd;
 
-        if (Range->SubmissionPinCount == 0)
+        if (Pin->Count == 0)
             continue;
-        if (!GpuVaGetRangeEnd(Range->GpuVirtualAddress, Range->SizeInBytes, &RangeEnd))
+        if (!GpuVaGetRangeEnd(Pin->GpuVirtualAddress, Pin->SizeInBytes, &PinEnd))
             continue;
-        if (Range->GpuVirtualAddress < EndAddress && Address < RangeEnd)
+        if (Pin->GpuVirtualAddress < EndAddress && Address < PinEnd)
             return TRUE;
     }
     return FALSE;
@@ -1127,7 +1187,9 @@ static PDXGKRNL_GPUVA_PAGE_TABLE
 GpuVaAllocPageTable(
     _In_ PDXGKRNL_PROCESS Process,
     _In_ ULONG Level,
-    _In_ ULONGLONG CoverageBase)
+    _In_ ULONGLONG CoverageBase,
+    _In_opt_ PDXGKRNL_GPUVA_PAGE_TABLE Parent,
+    _In_ ULONG ParentIndex)
 {
     PDXGKRNL_GPUVA_PAGE_TABLE Table;
     PHYSICAL_ADDRESS LowestAddress;
@@ -1137,11 +1199,27 @@ GpuVaAllocPageTable(
     PDXGKRNL_ADAPTER Adapter = Process->Adapter;
     ULONG TableBytes;
     ULONG EntryCount;
+    ULONG SegmentId;
 
     if (Process->GpuVaPageTableCount >= GPUVA_MAX_PROCESS_PAGE_TABLES)
         return NULL;
     if (Adapter == NULL || !Adapter->PageTableLevelsValid || Level >= GpuVaLevelCount(Adapter))
         return NULL;
+
+    SegmentId = GpuVaLevelDesc(Adapter, Level)->PageTableSegmentId;
+    if (SegmentId != 0)
+    {
+        PDXGKRNL_SEGMENT Segment;
+
+        if (Adapter->Segments == NULL || SegmentId > Adapter->SegmentCount)
+            return NULL;
+        Segment = &((PDXGKRNL_SEGMENT)Adapter->Segments)[SegmentId - 1];
+        /* The KMD requests system backing by naming an aperture segment.
+         * Physical references to those pages use the implicit segment zero;
+         * a GPU page walker does not translate an aperture offset. */
+        if (Segment->Flags.Aperture || Segment->Flags.Agp)
+            SegmentId = 0;
+    }
 
     TableBytes = GpuVaTableBytes(Adapter, Level);
     EntryCount = (ULONG)GpuVaEntriesPerTable(Adapter, Level);
@@ -1212,10 +1290,87 @@ GpuVaAllocPageTable(
     Table->CacheType = CacheType;
     Table->Physical = MmGetPhysicalAddress(Table->KernelVa);
     Table->InitialUpdatePending = TRUE;
+    Table->Parent = Parent;
+    Table->ParentIndex = ParentIndex;
+    /* Place the implicit allocation in the miniport's declared segment once
+     * GpuVaLock is released. The root DDI needs that physical placement. */
+    Table->SegmentId = SegmentId;
+    Table->SegmentOffset = 0;
+    Table->SegmentMdl = NULL;
+    Table->PlacementPending = Table->SegmentId != 0;
 
     InsertTailList(&Process->GpuVaPageTableList, &Table->PageTableListEntry);
     Process->GpuVaPageTableCount++;
     return Table;
+}
+
+/*
+ * GpuVaTableSegmentOffset
+ * Where the table sits *inside the segment it was placed in*.
+ *
+ * D3DGPU_PHYSICAL_ADDRESS.SegmentOffset is a byte offset in the segment.
+ * Segment zero uses a system physical address. Aperture-backed child PTEs
+ * instead reference the backing system pages directly.
+ */
+static ULONGLONG
+GpuVaTableSegmentOffset(
+    _In_ PDXGKRNL_GPUVA_PAGE_TABLE Table)
+{
+    if (Table->SegmentId == 0)
+        return (ULONGLONG)Table->Physical.QuadPart;
+    return Table->PlacementPending ? 0ULL : Table->SegmentOffset;
+}
+
+/*
+ * GpuVaLinkChildEntry
+ * Write the parent entry that points at Child.  Caller MUST hold GpuVaLock.
+ */
+static VOID
+GpuVaLinkChildEntry(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_GPUVA_PAGE_TABLE Parent,
+    _In_ ULONG Index,
+    _In_ PDXGKRNL_GPUVA_PAGE_TABLE Child)
+{
+    ULONG SegmentId = Child->SegmentId;
+    ULONGLONG Address = GpuVaTableSegmentOffset(Child);
+
+    /* An aperture maps system memory; its offsets are not physical RAM
+     * addresses. The GPU page walker must follow the backing pages. */
+    if (SegmentId != 0)
+    {
+        PDXGKRNL_SEGMENT Segment = &((PDXGKRNL_SEGMENT)Adapter->Segments)[SegmentId - 1];
+
+        if (Segment->Flags.Aperture || Segment->Flags.Agp)
+        {
+            SegmentId = 0;
+            Address = (ULONGLONG)Child->Physical.QuadPart;
+        }
+    }
+    Parent->Entries[Index].Flags = 0;
+    Parent->Entries[Index].Valid =
+        (Child->SegmentId != 0 && Child->PlacementPending) ? 0 : 1;
+    Parent->Entries[Index].Segment = SegmentId;
+    Parent->Entries[Index].PageTableAddress =
+        GpuVaPteAddress(Address);
+}
+
+/*
+ * GpuVaPublishRootAddress
+ * Republish the root address handed to DxgkDdiSetRootPageTable.
+ * Caller MUST hold GpuVaLock.
+ */
+static VOID
+GpuVaPublishRootAddress(
+    _In_ PDXGKRNL_PROCESS Process)
+{
+    PDXGKRNL_GPUVA_PAGE_TABLE Root =
+        (PDXGKRNL_GPUVA_PAGE_TABLE)Process->hRootPageTable;
+
+    if (Root == NULL)
+        return;
+    Process->RootPageTableAddress.SegmentId = Root->SegmentId;
+    Process->RootPageTableAddress.SegmentOffset = GpuVaTableSegmentOffset(Root);
 }
 
 /*
@@ -1233,6 +1388,15 @@ GpuVaFreePageTables(
             CONTAINING_RECORD(RemoveHeadList(&Process->GpuVaPageTableList),
                               DXGKRNL_GPUVA_PAGE_TABLE, PageTableListEntry);
 
+        if (Table->SegmentId != 0 && !Table->PlacementPending)
+        {
+            DxgkVidMmUnmapPageTableSegment(Process->Adapter,
+                                           Table->SegmentId,
+                                           Table->SegmentOffset,
+                                           Table->Bytes,
+                                           (ULONGLONG)(ULONG_PTR)Table,
+                                           Table->SegmentMdl);
+        }
         if (Table->Children != NULL)
             ExFreePoolWithTag(Table->Children, TAG_DXGK_GPUVA_PT);
         ExFreePoolWithTag(Table->Entries, TAG_DXGK_GPUVA_PT);
@@ -1284,13 +1448,12 @@ GpuVaEnsureRootPageTable(
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
-    Root = GpuVaAllocPageTable(Process, RootLevel, 0);
+    Root = GpuVaAllocPageTable(Process, RootLevel, 0, NULL, 0);
     if (Root == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
     Process->hRootPageTable = (HANDLE)Root;
-    Process->RootPageTableAddress.SegmentId = 0;
-    Process->RootPageTableAddress.SegmentOffset = (UINT64)Root->Physical.QuadPart;
+    GpuVaPublishRootAddress(Process);
     Process->RootPageTableEntries = RootEntries;
     Process->RootPageTableProgrammed = TRUE;
     return STATUS_SUCCESS;
@@ -1405,6 +1568,112 @@ GpuVaExecutePagingOperationWithBusyRetry(
 }
 
 /*
+ * DxgkGpuVaPlacePendingPageTables
+ *
+ * Give every page table allocated since the last call its placement in the
+ * segment the miniport declared for that level.  A page table is an implicit
+ * VidMm allocation: the GPU walker reaches it through the declared segment,
+ * so until the placement exists the parent entry has no address to point at
+ * and the root has none to publish.
+ *
+ * Placing a table is a paging submission, so it cannot happen where tables
+ * are allocated (under GpuVaLock, at APC_LEVEL).  Page tables are only
+ * destroyed at process teardown and the caller owns the process, so dropping
+ * the lock around each placement cannot free the table underneath it.
+ *
+ * IRQL: PASSIVE_LEVEL, GpuVaLock NOT held.
+ */
+NTSTATUS
+DxgkGpuVaPlacePendingPageTables(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Process == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    for (;;)
+    {
+        PDXGKRNL_GPUVA_PAGE_TABLE Table = NULL;
+        PLIST_ENTRY Entry;
+        ULONG SegmentId;
+        ULONG Bytes;
+        ULONG Alignment;
+        PVOID KernelVa;
+        ULONGLONG SegmentOffset = 0;
+        PMDL Mdl = NULL;
+
+        ExAcquireFastMutex(&Process->GpuVaLock);
+        for (Entry = Process->GpuVaPageTableList.Flink;
+             Entry != &Process->GpuVaPageTableList;
+             Entry = Entry->Flink)
+        {
+            PDXGKRNL_GPUVA_PAGE_TABLE Candidate =
+                CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_PAGE_TABLE, PageTableListEntry);
+
+            if (Candidate->PlacementPending)
+            {
+                Table = Candidate;
+                break;
+            }
+        }
+        if (Table == NULL)
+        {
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            break;
+        }
+        SegmentId = Table->SegmentId;
+        Bytes = Table->Bytes;
+        KernelVa = Table->KernelVa;
+        Alignment = GpuVaLevelDesc(Adapter, Table->Level)->PageTableAlignmentInBytes;
+        ExReleaseFastMutex(&Process->GpuVaLock);
+
+        Status = DxgkVidMmMapPageTableSegment(Adapter,
+                                              SegmentId,
+                                              KernelVa,
+                                              Bytes,
+                                              Alignment,
+                                              (ULONGLONG)(ULONG_PTR)Table,
+                                              &SegmentOffset,
+                                              &Mdl);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkGpuVa: page table level %lu placement in segment %lu failed 0x%08lX\n",
+                        Table->Level, SegmentId, Status);
+            return Status;
+        }
+
+        ExAcquireFastMutex(&Process->GpuVaLock);
+        Table->SegmentOffset = SegmentOffset;
+        Table->SegmentMdl = Mdl;
+        /* An object placed in a segment is addressed by the segment's GPU
+         * logical base plus its offset, the same way vidmm.c forms an
+         * allocation's address from its placement. */
+        Table->PlacementPending = FALSE;
+        if (Table->Parent != NULL)
+        {
+            GpuVaLinkChildEntry(Adapter, Table->Parent, Table->ParentIndex, Table);
+            (VOID)GpuVaNotifyPageTableUpdate(Process,
+                                             Table->Parent,
+                                             Table->ParentIndex,
+                                             1,
+                                             Table->CoverageBase,
+                                             FALSE);
+        }
+        else if ((HANDLE)Table == Process->hRootPageTable)
+        {
+            GpuVaPublishRootAddress(Process);
+        }
+        ExReleaseFastMutex(&Process->GpuVaLock);
+    }
+
+    return Status;
+}
+
+/*
  * DxgkGpuVaFlushPageTableUpdates
  *
  * Describes the page-table span accumulated under GpuVaLock to the miniport
@@ -1464,6 +1733,13 @@ DxgkpGpuVaFlushPageTableUpdates(
         Status = STATUS_NOT_SUPPORTED;
         goto Complete;
     }
+
+    /* Anything allocated since the last flush is still unreachable by the GPU
+     * until it has a placement in the miniport's page-table segment, and its
+     * parent entry stays invalid until then, so place before publishing. */
+    Status = DxgkGpuVaPlacePendingPageTables(Adapter, Process);
+    if (!NT_SUCCESS(Status))
+        goto Complete;
 
     for (;;)
     {
@@ -1809,7 +2085,11 @@ DxgkpGpuVaFlushPageTableUpdates(
                                                        &Op);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("DxgkGpuVa: TLB invalidation rejected 0x%08lX over [0x%I64x,0x%I64x)\n", Status, Start, End);
+        /* Page-table edits that are never invalidated leave the walker on stale
+         * translations, so the next access reads whatever the old entry
+         * pointed at rather than faulting.  Stop here: the corruption that
+         * follows has no signature of its own. */
+        DXGKRNL_ERR("DxgkGpuVa: TLB invalidation rejected 0x%08lX over [0x%I64x,0x%I64x)\n", Status, Start, End);
         goto Requeue;
     }
     goto Complete;
@@ -1888,15 +2168,11 @@ GpuVaGetLeafTable(
             if (!Allocate)
                 return NULL;
             CoverageBase = Va & ~((1ULL << GpuVaLevelShift(Adapter, Level)) - 1ULL);
-            Child = GpuVaAllocPageTable(Process, Level - 1, CoverageBase);
+            Child = GpuVaAllocPageTable(Process, Level - 1, CoverageBase, Table, Index);
             if (Child == NULL)
                 return NULL;
             Table->Children[Index] = Child;
-            Table->Entries[Index].Flags = 0;
-            Table->Entries[Index].Valid = 1;
-            Table->Entries[Index].Segment = 0;
-            Table->Entries[Index].PageTableAddress =
-                GpuVaPteAddress((ULONGLONG)Child->Physical.QuadPart);
+            GpuVaLinkChildEntry(Adapter, Table, Index, Child);
             if (!NT_SUCCESS(GpuVaNotifyPageTableUpdate(Process, Table, Index, 1, CoverageBase, TRUE)))
             {
                 Table->Entries[Index].Flags = 0;
@@ -1949,9 +2225,9 @@ GpuVaAllocationPageAddress(
         }
         Segment = &((PDXGKRNL_SEGMENT)Adapter->Segments)
                        [Allocation->SegmentId - 1];
-        /* Ordinary aperture allocations use their backing system pages. */
-        if ((Segment->Flags.Aperture || Segment->Flags.Agp) &&
-            !Allocation->AccessedPhysically)
+        /* GPU virtual mappings of aperture allocations name system pages,
+         * including allocations also mapped for physical engine access. */
+        if (Segment->Flags.Aperture || Segment->Flags.Agp)
         {
             if (Allocation->SystemMemory == NULL)
                 return FALSE;
@@ -1962,11 +2238,6 @@ GpuVaAllocationPageAddress(
             *PageAddress = GpuVaPteAddress(
                                (ULONGLONG)Physical.QuadPart);
             return TRUE;
-        }
-        if ((Segment->Flags.Aperture || Segment->Flags.Agp) &&
-            !Allocation->ApertureMapped)
-        {
-            return FALSE;
         }
         *SegmentId = Allocation->SegmentId;
         *PageAddress = GpuVaPteAddress(
@@ -2072,13 +2343,22 @@ GpuVaWritePteSpan(
             Pte.CacheCoherent =
                 Process->Adapter->GpuMmuCaps.CacheCoherentMemorySupported ?
                     1 : 0;
-            Pte.ReadOnly = Protection.Write ? 0 : 1;
-            Pte.NoExecute = Protection.Execute ? 0 : 1;
+            /* Protection bits are only valid when the miniport advertised
+             * support for them in DXGK_GPUMMUCAPS.  Intel's N100 node reports
+             * neither capability; emitting ReadOnly/NoExecute there creates
+             * PTE encodings the hardware contract does not define. */
+            Pte.ReadOnly =
+                Process->Adapter->GpuMmuCaps.ReadOnlyMemorySupported &&
+                !Protection.Write;
+            Pte.NoExecute =
+                Process->Adapter->GpuMmuCaps.NoExecuteMemorySupported &&
+                !Protection.Execute;
             Pte.Segment = SegmentId;
             Pte.PageAddress = PageAddress;
         }
         else
         {
+            Pte.Valid = 1;
             Pte.Zero = 1;
         }
 
@@ -2259,6 +2539,7 @@ DxgkGpuVaCreateProcess(
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     /* Initialize the WDDM 2.0 GPU VA space. */
     InitializeListHead(&Process->GpuVaRangeList);
+    InitializeListHead(&Process->GpuVaPinList);
     ExInitializeFastMutex(&Process->GpuVaLock);
     KeInitializeMutex(&Process->PageTableFlushMutex, 0);
     Process->PageTableUpdatePending = FALSE;
@@ -2373,10 +2654,14 @@ DxgkGpuVaDestroyProcess(
     }
     ExReleaseFastMutex(&Process->GpuVaLock);
 
-    /* Free the software page tables (root included). */
     ExAcquireFastMutex(&Process->GpuVaLock);
-    GpuVaFreePageTables(Process);
+    GpuVaPinFreeAll(Process);
     ExReleaseFastMutex(&Process->GpuVaLock);
+
+    /* Free the software page tables (root included).  Releasing a table's
+     * placement is a paging submission, so this runs outside GpuVaLock;
+     * teardown owns the process exclusively at this point. */
+    GpuVaFreePageTables(Process);
 
     /*
      * A successful CreateProcess owns one DestroyProcess callback even when
@@ -2437,7 +2722,7 @@ DxgkGpuVaPlanReserve(_In_ PDXGKRNL_PROCESS Process, _In_ D3DGPU_VIRTUAL_ADDRESS 
 
     PAGED_CODE();
 
-    if (Process == NULL || OutAddress == NULL || SizeInBytes == 0 || (SizeInBytes & GPUVA_RESERVATION_MASK) != 0 || ReservationType > D3DDDIGPUVIRTUALADDRESS_RESERVE_ZERO)
+    if (Process == NULL || OutAddress == NULL || SizeInBytes == 0 || (SizeInBytes & GPUVA_RESERVATION_MASK) != 0 || ReservationType > D3DDDIGPUVIRTUALADDRESS_RESERVE_NO_COMMIT)
         return STATUS_INVALID_PARAMETER;
 
     *OutAddress = 0;
@@ -2626,16 +2911,21 @@ DxgkGpuVaReserve(
 {
     PDXGKRNL_GPUVA_RANGE Range;
     D3DGPU_VIRTUAL_ADDRESS ActualAddress;
+    D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection;
+    NTSTATUS Status;
 
     PAGED_CODE();
 
     DPRINT("DxgkGpuVaReserve: Process=%p Base=0x%I64x Size=0x%I64x\n",
            Process, BaseAddress, SizeInBytes);
 
-    if (Process == NULL || OutAddress == NULL || SizeInBytes == 0 || (SizeInBytes & GPUVA_RESERVATION_MASK) != 0 || ReservationType > D3DDDIGPUVIRTUALADDRESS_RESERVE_ZERO)
+    if (Process == NULL || OutAddress == NULL || SizeInBytes == 0 || (SizeInBytes & GPUVA_RESERVATION_MASK) != 0 || ReservationType > D3DDDIGPUVIRTUALADDRESS_RESERVE_NO_COMMIT)
         return STATUS_INVALID_PARAMETER;
 
     *OutAddress = 0;
+    Protection.Value = 0;
+    Protection.NoAccess = ReservationType == D3DDDIGPUVIRTUALADDRESS_RESERVE_NO_ACCESS;
+    Protection.Zero = ReservationType == D3DDDIGPUVIRTUALADDRESS_RESERVE_ZERO;
     if (BaseAddress != 0)
     {
         if ((BaseAddress & GPUVA_RESERVATION_MASK) != 0 || BaseAddress < GPUVA_START_ADDRESS || BaseAddress >= GPUVA_DEFAULT_SPACE_SIZE || SizeInBytes > GPUVA_DEFAULT_SPACE_SIZE - BaseAddress)
@@ -2706,14 +2996,27 @@ DxgkGpuVaReserve(
         }
     }
 
+    if (Protection.Zero)
+    {
+        Status = GpuVaEnsureRootPageTable(Process);
+        if (NT_SUCCESS(Status))
+            Status = GpuVaWritePteSpan(Process, ActualAddress, SizeInBytes, NULL, 0, Protection);
+        if (!NT_SUCCESS(Status))
+        {
+            GpuVaClearPteSpan(Process, ActualAddress, SizeInBytes);
+            ExReleaseFastMutex(&Process->GpuVaLock);
+            GpuVaFreeRange(Range);
+            return Status;
+        }
+    }
+
     /* Populate the range. */
     Range->GpuVirtualAddress = ActualAddress;
     Range->SizeInBytes       = SizeInBytes;
     Range->State             = GpuVaStateReserved;
     Range->hAllocation       = NULL;
     Range->AllocationOffset  = 0;
-    Range->Protection.NoAccess = ReservationType == D3DDDIGPUVIRTUALADDRESS_RESERVE_NO_ACCESS;
-    Range->Protection.Zero = ReservationType == D3DDDIGPUVIRTUALADDRESS_RESERVE_ZERO;
+    Range->Protection        = Protection;
     Range->DriverProtection = DriverProtection;
     Range->ReservationBase   = ActualAddress;
     Range->ReservationSize   = SizeInBytes;
@@ -2726,6 +3029,7 @@ DxgkGpuVaReserve(
 
     *OutAddress = ActualAddress;
 
+    DxgkGpuVaRecordEvent('R', ActualAddress, SizeInBytes, 0);
     DPRINT("DxgkGpuVaReserve: reserved at 0x%I64x size=0x%I64x\n",
            ActualAddress, SizeInBytes);
 
@@ -2777,6 +3081,13 @@ DxgkGpuVaFree(
         ExReleaseFastMutex(&Process->GpuVaLock);
         return STATUS_INVALID_PARAMETER;
     }
+    /* A submitted command buffer executes out of this address; the miniport
+     * still holds it, so it cannot be taken away yet. */
+    if (GpuVaRangeIsPinned(Process, BaseAddress, SizeInBytes))
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        return STATUS_DEVICE_BUSY;
+    }
     for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList; Entry = Entry->Flink)
     {
         PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
@@ -2799,13 +3110,6 @@ DxgkGpuVaFree(
         {
             ExReleaseFastMutex(&Process->GpuVaLock);
             return STATUS_INVALID_PARAMETER;
-        }
-        /* A submitted command buffer executes out of this address; the
-         * miniport still holds it, so it cannot be taken away yet. */
-        if (Range->SubmissionPinCount != 0)
-        {
-            ExReleaseFastMutex(&Process->GpuVaLock);
-            return STATUS_DEVICE_BUSY;
         }
         if (Range->State == GpuVaStateMapped)
         {
@@ -2855,6 +3159,7 @@ DxgkGpuVaFree(
         Process->GpuVaTotalMapped -= min(MappedBytes, Process->GpuVaTotalMapped);
 
     ExReleaseFastMutex(&Process->GpuVaLock);
+    DxgkGpuVaRecordEvent('F', BaseAddress, SizeInBytes, 0);
     DPRINT("DxgkGpuVaFree: freed at 0x%I64x\n", BaseAddress);
     return STATUS_SUCCESS;
 }
@@ -3009,7 +3314,7 @@ DxgkGpuVaMap(
         }
         /* Remapping over a range a submitted buffer executes from would
          * retarget the address the miniport is already running. */
-        if (GpuVaListRangeIsPinned(&Process->GpuVaRangeList, ActualAddress, SizeInBytes))
+        if (GpuVaRangeIsPinned(Process, ActualAddress, SizeInBytes))
         {
             ExReleaseFastMutex(&Process->GpuVaLock);
             if (Binding != NULL)
@@ -3178,6 +3483,7 @@ DxgkGpuVaMap(
     ExReleaseFastMutex(&Process->GpuVaLock);
 
     *OutAddress = ActualAddress;
+    DxgkGpuVaRecordEvent('M', ActualAddress, SizeInBytes, (ULONG)hAllocation);
     DPRINT("DxgkGpuVaMap: mapped at 0x%I64x size=0x%I64x\n", ActualAddress, SizeInBytes);
     return STATUS_SUCCESS;
 }
@@ -3254,7 +3560,8 @@ DxgkGpuVaMapFencePage(
     Pte.Valid = 1;
     Pte.CacheCoherent =
         Adapter->GpuMmuCaps.CacheCoherentMemorySupported ? 1 : 0;
-    Pte.NoExecute = 1;
+    Pte.NoExecute =
+        Adapter->GpuMmuCaps.NoExecuteMemorySupported ? 1 : 0;
     Pte.PageAddress = GpuVaPteAddress((ULONGLONG)Physical.QuadPart);
     {
         ULONG Index = GpuVaPteIndexFor(Process->Adapter, ActualAddress, 0);
@@ -3435,12 +3742,13 @@ DxgkGpuVaValidateRange(
  * submitting without a pin is a time-of-check/time-of-use hole: the range
  * could be unmapped or remapped before the miniport reads the address.
  */
-BOOLEAN
-DxgkGpuVaPinRange(
+static BOOLEAN
+DxgkpGpuVaPinRange(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_PROCESS Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS Address,
-    _In_ ULONGLONG Size)
+    _In_ ULONGLONG Size,
+    _In_ BOOLEAN RequireExecute)
 {
     BOOLEAN Valid;
 
@@ -3453,7 +3761,7 @@ DxgkGpuVaPinRange(
 
     ExAcquireFastMutex(&Process->GpuVaLock);
     Valid = GpuVaListCoversRange(&Process->GpuVaRangeList, Address, Size, GpuVaStateMapped);
-    if (Valid &&
+    if (Valid && RequireExecute &&
         Adapter->GpuMmuCaps.NoExecuteMemorySupported &&
         !GpuVaListAllowsExecute(&Process->GpuVaRangeList,
                                 Address,
@@ -3462,9 +3770,29 @@ DxgkGpuVaPinRange(
         Valid = FALSE;
     }
     if (Valid)
-        GpuVaListAdjustPin(&Process->GpuVaRangeList, Address, Size, 1);
+        Valid = GpuVaPinAcquire(Process, Address, Size);
     ExReleaseFastMutex(&Process->GpuVaLock);
     return Valid;
+}
+
+BOOLEAN
+DxgkGpuVaPinRange(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size)
+{
+    return DxgkpGpuVaPinRange(Adapter, Process, Address, Size, TRUE);
+}
+
+BOOLEAN
+DxgkGpuVaPinAllocationRange(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size)
+{
+    return DxgkpGpuVaPinRange(Adapter, Process, Address, Size, FALSE);
 }
 
 VOID
@@ -3476,7 +3804,7 @@ DxgkGpuVaUnpinRange(
     if (Process == NULL || Address == 0 || Size == 0)
         return;
     ExAcquireFastMutex(&Process->GpuVaLock);
-    GpuVaListAdjustPin(&Process->GpuVaRangeList, Address, Size, -1);
+    GpuVaPinRelease(Process, Address, Size);
     ExReleaseFastMutex(&Process->GpuVaLock);
 }
 
@@ -3616,15 +3944,19 @@ DxgkpGpuVaUpdateWorker(
         {
             case D3DDDI_UPDATEGPUVIRTUALADDRESS_MAP:
                 Status = GpuVaApplyMapOperation(&WorkingHead, Adapter, Process, &Operations[Index], FALSE);
+                DxgkGpuVaRecordEvent('m', Operations[Index].Map.BaseAddress, Operations[Index].Map.SizeInBytes, (ULONG)Operations[Index].Map.hAllocation);
                 break;
             case D3DDDI_UPDATEGPUVIRTUALADDRESS_UNMAP:
                 Status = GpuVaApplyUnmapOperation(&WorkingHead, &Operations[Index]);
+                DxgkGpuVaRecordEvent('u', Operations[Index].Unmap.BaseAddress, Operations[Index].Unmap.SizeInBytes, 0);
                 break;
             case D3DDDI_UPDATEGPUVIRTUALADDRESS_COPY:
                 Status = GpuVaApplyCopyOperation(&WorkingHead, &Operations[Index]);
+                DxgkGpuVaRecordEvent('c', Operations[Index].Copy.DestAddress, Operations[Index].Copy.SizeInBytes, 0);
                 break;
             case D3DDDI_UPDATEGPUVIRTUALADDRESS_MAP_PROTECT:
                 Status = GpuVaApplyMapOperation(&WorkingHead, Adapter, Process, &Operations[Index], TRUE);
+                DxgkGpuVaRecordEvent('p', Operations[Index].MapProtect.BaseAddress, Operations[Index].MapProtect.SizeInBytes, (ULONG)Operations[Index].MapProtect.hAllocation);
                 break;
             default:
                 Status = STATUS_INVALID_PARAMETER;
@@ -3632,7 +3964,14 @@ DxgkpGpuVaUpdateWorker(
         }
 
         if (!NT_SUCCESS(Status))
+        {
+            /* A refused update leaves the UMD believing it owns an address the
+             * GPU cannot reach, which surfaces much later as an execution
+             * fault or a hang, so name the operation that was refused. */
+            DXGKRNL_ERR("DxgkGpuVaApplyUpdate: operation %lu of %lu type=%u refused 0x%08lX\n",
+                               Index, NumOperations, (UINT)Operations[Index].OperationType, Status);
             break;
+        }
         if (!GpuVaCountList(&WorkingHead, GPUVA_MAX_PROCESS_RANGES, &WorkingCount))
         {
             Status = STATUS_QUOTA_EXCEEDED;
@@ -3741,6 +4080,91 @@ DxgkGpuVaApplyUpdate(
 
 /* ROOT PAGE TABLE ************************************************************/
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+/*
+ * GpuVaNodeOwnsGpuMmuPageTables
+ *
+ * WDDM 2.0 makes the addressing contract a property of the node, not of the
+ * adapter: DXGK_NODEMETADATA reports GpuMmuSupported and IoMmuSupported per
+ * node ordinal, and DXGKQAITYPE_GPUMMUCAPS only describes what GpuMmu would
+ * look like on an adapter that has such a node at all.
+ *
+ * Only a GpuMmu node executes against a page-table hierarchy that the OS
+ * builds and owns, so only a GpuMmu node has a root for dxgkrnl to publish.
+ * An IoMmu node translates through the owning process's CPU page tables and a
+ * node that reports neither addresses memory physically; on either one the
+ * page-table tree the GPU walks belongs to the miniport, and handing it a root
+ * of ours replaces an address space we do not own with one that describes only
+ * the mappings we happen to know about.  A miniport without
+ * DxgkDdiGetNodeMetadata has declared no GpuMmu node at all.
+ *
+ * IRQL: PASSIVE_LEVEL.
+ */
+static NTSTATUS
+GpuVaQueryNodeGpuMmuSupport(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ UINT NodeOrdinal,
+    _Out_ PBOOLEAN Supported)
+{
+    DXGKARG_GETNODEMETADATA Metadata;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    *Supported = FALSE;
+
+    if (DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata) == NULL)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    RtlZeroMemory(&Metadata, sizeof(Metadata));
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata)(
+                 Adapter->MiniportDeviceContext, NodeOrdinal, &Metadata);
+    DxgkReleaseKmdCall(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+
+    *Supported = Metadata.GpuMmuSupported ? TRUE : FALSE;
+    return STATUS_SUCCESS;
+}
+#endif /* REACTOS_WDDM_TARGET_LEVEL >= 2000 */
+
+/* The caller owns the context stream. Process root placement is read under
+ * GpuVaLock; roots live until process teardown. */
+BOOLEAN
+DxgkGpuVaRootPageTableNeedsUpdate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ PDXGKRNL_CONTEXT Context)
+{
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    BOOLEAN Changed;
+
+    PAGED_CODE();
+    if (Context->GpuMmuNodeKnown && !Context->GpuMmuNode)
+        return FALSE;
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    Changed = !Context->RootPageTablePublished ||
+        Context->PublishedRootPageTableEpoch !=
+            (ULONG)InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0) ||
+        Context->PublishedRootPageTableAddress.SegmentId != Process->RootPageTableAddress.SegmentId ||
+        Context->PublishedRootPageTableAddress.SegmentOffset != Process->RootPageTableAddress.SegmentOffset ||
+        Context->PublishedRootPageTableEntries != Process->RootPageTableEntries;
+    ExReleaseFastMutex(&Process->GpuVaLock);
+    return Changed;
+#else
+    UNREFERENCED_PARAMETER(Adapter);
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(Context);
+    return FALSE;
+#endif
+}
+
 /*
  * DxgkGpuVaSetRootPageTable
  *
@@ -3766,27 +4190,62 @@ DxgkGpuVaSetRootPageTable(
         return STATUS_DEVICE_REMOVED;
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
-    if (Adapter->GpuMmuCapsValid &&
-        Adapter->GpuMmuCaps.PageTableUpdateMode == DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
-    {
-        NTSTATUS Status;
+    if (!DxgkGpuVaRootPageTableNeedsUpdate(Adapter, Process, Context))
+        return STATUS_SUCCESS;
 
-        ExAcquireFastMutex(&Process->GpuVaLock);
-        Status = GpuVaEnsureRootPageTable(Process);
-        ExReleaseFastMutex(&Process->GpuVaLock);
+    /* The node the context runs on decides who owns its page tables.  Building
+     * and publishing a root for a node that is not a GpuMmu node would hand the
+     * walker an address space dxgkrnl does not own. */
+    if (!Context->GpuMmuNodeKnown)
+    {
+        NTSTATUS Status = GpuVaQueryNodeGpuMmuSupport(Adapter,
+                                                     Context->NodeOrdinal,
+                                                     &Context->GpuMmuNode);
         if (!NT_SUCCESS(Status))
             return Status;
+        Context->GpuMmuNodeKnown = TRUE;
     }
+    if (!Context->GpuMmuNode)
+    {
+        DPRINT("DxgkGpuVaSetRootPageTable: node %u is not a GpuMmu node; no root page table to publish\n",
+               Context->NodeOrdinal);
+        return STATUS_SUCCESS;
+    }
+
+    /* Page-table allocation, placement and updates precede packet admission.
+     * Never queue paging work recursively from the scheduler's dispatch. */
     if (!DxgkGpuVaPageTableReady(Adapter, Process))
         return STATUS_NOT_SUPPORTED;
+
+    {
+        PDXGKRNL_GPUVA_PAGE_TABLE Root;
+        BOOLEAN Placed;
+
+        /* The published address is where the walker starts, so the root has to
+         * own its placement before it is named.  A root still waiting for one
+         * has no address at all, and offset zero of a segment is a legal
+         * address the miniport cannot tell apart from an unplaced root. */
+        ExAcquireFastMutex(&Process->GpuVaLock);
+        Root = (PDXGKRNL_GPUVA_PAGE_TABLE)Process->hRootPageTable;
+        Placed = (BOOLEAN)(Root != NULL && !Root->PlacementPending);
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        if (!Placed)
+        {
+            DXGKRNL_ERR("DxgkGpuVa: root page table has no placement; not publishing a root for context %p\n",
+                        Context);
+            return STATUS_DEVICE_NOT_READY;
+        }
+    }
 
     {
         DXGKARG_SETROOTPAGETABLE SetArgs;
 
         RtlZeroMemory(&SetArgs, sizeof(SetArgs));
         SetArgs.hContext = Context->hMiniportContext;
+        ExAcquireFastMutex(&Process->GpuVaLock);
         SetArgs.Address = Process->RootPageTableAddress;
         SetArgs.NumEntries = Process->RootPageTableEntries;
+        ExReleaseFastMutex(&Process->GpuVaLock);
         if (!DxgkAcquireKmdCall(Adapter))
             return STATUS_DELETE_PENDING;
         if (InterlockedCompareExchange(&Context->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
@@ -3795,8 +4254,12 @@ DxgkGpuVaSetRootPageTable(
             return STATUS_DEVICE_REMOVED;
         }
         DXGK_CB_FULL(Adapter, DxgkDdiSetRootPageTable)(Adapter->MiniportDeviceContext, &SetArgs);
+        Context->PublishedRootPageTableAddress = SetArgs.Address;
+        Context->PublishedRootPageTableEntries = SetArgs.NumEntries;
+        Context->PublishedRootPageTableEpoch =
+            (ULONG)InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0);
+        Context->RootPageTablePublished = TRUE;
         DxgkReleaseKmdCall(Adapter);
-        DPRINT("DxgkGpuVaSetRootPageTable: set for context %p addr=0x%I64x entries=%u\n", Context, SetArgs.Address.SegmentOffset, SetArgs.NumEntries);
     }
 #else
     UNREFERENCED_PARAMETER(Context);
@@ -4125,7 +4588,7 @@ DxgkGpuVaUnmapCpuHostAperture(
 }
 
 /* TDR diagnostics: recent GPU virtual address operations, in order. */
-#define DXGKP_GPUVA_EVENT_RING_SIZE 32
+#define DXGKP_GPUVA_EVENT_RING_SIZE 512
 
 /*
  * TDR diagnostics: hex-dump a GPU-visible buffer through the owning process's
@@ -4228,484 +4691,6 @@ DxgkpGpuVaReadProcessMemory(
  */
 static ULONGLONG GpuVaRawEntry( _In_ PDXGKRNL_GPUVA_PAGE_TABLE Table, _In_ ULONG Index);
 
-VOID
-DxgkGpuVaDumpBatchSurfaces(
-    _In_opt_ PDXGKRNL_PROCESS Process,
-    _In_ D3DGPU_VIRTUAL_ADDRESS BatchVa,
-    _In_ ULONG BatchSize)
-{
-    ULONG Words[512];
-    ULONG Count, i;
-    ULONGLONG SurfaceBase = 0;
-    ULONG BindingTable = 0xFFFFFFFF;
-    ULONG SamplerTable = 0xFFFFFFFF;
-    ULONG BindingTables[8];
-    ULONG BindingTableCount = 0;
-    BOOLEAN SurfaceBaseModified = FALSE;
-
-    if (Process == NULL || BatchVa == 0 || BatchSize == 0 || KeGetCurrentIrql() > APC_LEVEL)
-        return;
-    if (BatchSize > sizeof(Words))
-        BatchSize = sizeof(Words);
-    ExAcquireFastMutex(&Process->GpuVaLock);
-    if (!DxgkpGpuVaReadProcessMemory(Process, BatchVa, Words, BatchSize))
-    {
-        ExReleaseFastMutex(&Process->GpuVaLock);
-        DXGKRNL_ERR("BATCH: cannot read batch at 0x%I64x\n", BatchVa);
-        return;
-    }
-    Count = BatchSize / sizeof(ULONG);
-    for (i = 0; i < Count;)
-    {
-        ULONG W = Words[i];
-        ULONG Len = 1;
-
-        if ((W >> 29) == 3)
-        {
-            ULONG Sub = (W >> 27) & 3, Op = (W >> 24) & 7, SubOp = (W >> 16) & 0xFF;
-
-            Len = (W & 0xFF) + 2;
-            if (Sub == 1 && Op == 0 && (SubOp == 0x0B || SubOp == 0x04))
-                Len = 1;
-            if (W == 0x61010014 && i + 5 < Count)
-            {
-                SurfaceBaseModified = (Words[i + 4] & 1) != 0;
-                SurfaceBase = ((ULONGLONG)Words[i + 5] << 32) | (Words[i + 4] & ~0xFFFULL);
-            }
-            else if ((W & 0xFFFF0000) == 0x782A0000 && i + 1 < Count)
-            {
-                BindingTable = Words[i + 1];
-                if (BindingTableCount < RTL_NUMBER_OF(BindingTables))
-                    BindingTables[BindingTableCount++] = BindingTable;
-            }
-            else if ((W & 0xFFFF0000) == 0x782F0000 && i + 1 < Count)
-                SamplerTable = Words[i + 1];
-        }
-        else if ((W >> 29) == 0)
-        {
-            ULONG MiOp = (W >> 23) & 0x3F;
-
-            if (MiOp == 0x0A)
-                break;
-            Len = (MiOp == 0 || MiOp == 0x02 || MiOp == 0x03 || MiOp == 0x04 || MiOp == 0x05 || MiOp == 0x08 || MiOp == 0x0B || MiOp == 0x0C || MiOp == 0x0D) ? 1 :
-                  (MiOp == 0x31 ? 3 : (W & 0xFF) + 2);
-        }
-        else
-            Len = (W & 0xFF) + 2;
-        i += Len != 0 ? Len : 1;
-    }
-    SurfaceBase &= 0x0000FFFFFFFFFFFFULL;
-    DXGKRNL_ERR("BATCH: surface-base=0x%I64x (modified=%d) binding-table=0x%lx sampler-table=0x%lx (dynamic base not in batch)\n",
-                SurfaceBase, (int)SurfaceBaseModified, BindingTable, SamplerTable);
-    if (SurfaceBase != 0)
-    {
-        ULONG t;
-
-        for (t = 0; t < BindingTableCount; t++)
-        {
-            ULONG Entries[8];
-
-            if (!DxgkpGpuVaReadProcessMemory(Process, SurfaceBase + BindingTables[t], Entries, sizeof(Entries)))
-            {
-                DXGKRNL_ERR("BATCH: bt#%lu at +0x%lx unreadable\n", t, BindingTables[t]);
-                continue;
-            }
-            for (i = 0; i < RTL_NUMBER_OF(Entries); i++)
-            {
-                ULONG State[16];
-                ULONGLONG Base;
-                ULONG Type;
-
-                if (Entries[i] == 0 && i != 0)
-                    continue;
-                if (!DxgkpGpuVaReadProcessMemory(Process, SurfaceBase + (Entries[i] & ~0x3FUL), State, sizeof(State)))
-                {
-                    DXGKRNL_ERR("BATCH: bt#%lu[%lu]=0x%08lx surface state unreadable\n", t, i, Entries[i]);
-                    continue;
-                }
-                Base = (((ULONGLONG)State[9] << 32) | State[8]) & 0x0000FFFFFFFFFFFFULL;
-                Type = (State[0] >> 29) & 7;
-                DXGKRNL_ERR("BATCH: bt#%lu[%lu]=0x%08lx SURFACE type=%lu format=0x%lx dw0=0x%08lx dw1=0x%08lx dw2=0x%08lx dw3=0x%08lx dw4=0x%08lx dw5=0x%08lx dw6=0x%08lx dw7=0x%08lx base=0x%I64x aux=0x%08lx%08lx\n",
-                            t, i, Entries[i], Type, (State[0] >> 18) & 0x1FF, State[0], State[1], State[2], State[3], State[4], State[5], State[6], State[7],
-                            Base, State[11], State[10]);
-                if (Type != 7 && Base != 0)
-                {
-                    PDXGKRNL_GPUVA_RANGE R = GpuVaFindOverlapping(Process, Base, 1);
-
-                    DXGKRNL_ERR("BATCH:   base 0x%I64x -> %s\n", Base,
-                                R == NULL ? "NOT MAPPED" : (R->State == GpuVaStateMapped ? "mapped" : "reserved only"));
-                }
-            }
-        }
-    }
-    /* History: scan the whole command-buffer range holding this batch for
-     * depth / HiZ / stencil buffer commands and print their addresses. */
-    {
-        PDXGKRNL_GPUVA_RANGE Range = GpuVaFindOverlapping(Process, BatchVa, 1);
-
-        if (Range != NULL && Range->State == GpuVaStateMapped && Range->Binding != NULL && Range->SizeInBytes <= 0x40000)
-        {
-            ULONGLONG RangeVa = Range->GpuVirtualAddress;
-            ULONG RangeSize = (ULONG)Range->SizeInBytes;
-            ULONG Chunk;
-            ULONG Printed = 0;
-            ULONGLONG LastDepth = ~0ULL, LastHiz = ~0ULL, LastStencil = ~0ULL;
-            ULONG LastStencilDw1 = 0;
-
-            DXGKRNL_ERR("BATCH: scanning command range 0x%I64x+0x%lx (batch at +0x%I64x)\n", RangeVa, RangeSize, BatchVa - RangeVa);
-            for (Chunk = 0; Chunk < RangeSize; Chunk += sizeof(Words))
-            {
-                ULONG ChunkSize = min((ULONG)sizeof(Words), RangeSize - Chunk);
-                ULONG n = ChunkSize / sizeof(ULONG);
-
-                if (!DxgkpGpuVaReadProcessMemory(Process, RangeVa + Chunk, Words, ChunkSize))
-                    break;
-                for (i = 0; i + 3 < n; i++)
-                {
-                    ULONGLONG Addr = (((ULONGLONG)Words[i + 3] << 32) | Words[i + 2]) & 0x0000FFFFFFFFFFFFULL;
-
-                    if (Words[i] == 0x78050006 && Addr != LastDepth)
-                    {
-                        LastDepth = Addr;
-                        if (Printed++ < 40)
-                            DXGKRNL_ERR("BATCH: +0x%06lx DEPTH   dw1=0x%08lx base=0x%I64x\n", Chunk + i * 4, Words[i + 1], Addr);
-                    }
-                    else if (Words[i] == 0x78070003 && Addr != LastHiz)
-                    {
-                        LastHiz = Addr;
-                        if (Printed++ < 40)
-                            DXGKRNL_ERR("BATCH: +0x%06lx HIZ     dw1=0x%08lx base=0x%I64x\n", Chunk + i * 4, Words[i + 1], Addr);
-                    }
-                    else if (Words[i] == 0x78060006 && (Addr != LastStencil || Words[i + 1] != LastStencilDw1))
-                    {
-                        LastStencil = Addr;
-                        LastStencilDw1 = Words[i + 1];
-                        if (Printed++ < 40)
-                            DXGKRNL_ERR("BATCH: +0x%06lx STENCIL dw1=0x%08lx base=0x%I64x\n", Chunk + i * 4, Words[i + 1], Addr);
-                    }
-                }
-            }
-        }
-    }
-    /* Recover the base addresses the UMD programmed: scan every readable
-     * mapped range for STATE_BASE_ADDRESS commands whose modify bits are set. */
-    {
-        PLIST_ENTRY Entry;
-        ULONG Hits = 0;
-        ULONG RangesScanned = 0;
-
-        for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList && Hits < 16; Entry = Entry->Flink)
-        {
-            PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
-            PDXGKVMM_ALLOCATION Allocation;
-            const ULONG *Mem;
-            ULONGLONG Bytes, Off;
-
-            if (Range->State != GpuVaStateMapped || Range->Binding == NULL)
-                continue;
-            Allocation = Range->Binding->BackingAllocation != NULL ? Range->Binding->BackingAllocation : Range->Binding->LogicalAllocation;
-            if (Allocation == NULL || Allocation->SystemMemory == NULL || Range->AllocationOffset + Range->SizeInBytes > Allocation->Size)
-                continue;
-            RangesScanned++;
-            Mem = (const ULONG *)((PUCHAR)Allocation->SystemMemory + Range->AllocationOffset);
-            Bytes = Range->SizeInBytes;
-            for (Off = 0; Off + 22 * 4 <= Bytes && Hits < 16; Off += 4)
-            {
-                const ULONG *W = &Mem[Off / 4];
-                ULONG Mask;
-
-                if (W[0] != 0x61010014)
-                    continue;
-                Mask = (W[1] & 1) | ((W[4] & 1) << 1) | ((W[6] & 1) << 2) | ((W[8] & 1) << 3) | ((W[10] & 1) << 4) | ((W[16] & 1) << 5) | ((W[19] & 1) << 6);
-                if ((Mask & ~2UL) == 0)
-                    continue;
-                Hits++;
-                DXGKRNL_ERR("SBA @0x%I64x modify=0x%02lx general=0x%I64x surf=0x%I64x dyn=0x%I64x ind=0x%I64x instr=0x%I64x bindless-surf=0x%I64x bindless-samp=0x%I64x sizes gen=0x%lx dyn=0x%lx ind=0x%lx instr=0x%lx bsurf=0x%lx\n",
-                            Range->GpuVirtualAddress + Off, Mask,
-                            ((((ULONGLONG)W[2] << 32) | (W[1] & ~0xFFFULL)) & 0x0000FFFFFFFFFFFFULL),
-                            ((((ULONGLONG)W[5] << 32) | (W[4] & ~0xFFFULL)) & 0x0000FFFFFFFFFFFFULL),
-                            ((((ULONGLONG)W[7] << 32) | (W[6] & ~0xFFFULL)) & 0x0000FFFFFFFFFFFFULL),
-                            ((((ULONGLONG)W[9] << 32) | (W[8] & ~0xFFFULL)) & 0x0000FFFFFFFFFFFFULL),
-                            ((((ULONGLONG)W[11] << 32) | (W[10] & ~0xFFFULL)) & 0x0000FFFFFFFFFFFFULL),
-                            ((((ULONGLONG)W[17] << 32) | (W[16] & ~0xFFFULL)) & 0x0000FFFFFFFFFFFFULL),
-                            ((((ULONGLONG)W[20] << 32) | (W[19] & ~0xFFFULL)) & 0x0000FFFFFFFFFFFFULL),
-                            W[12], W[13], W[14], W[15], W[18]);
-            }
-        }
-        DXGKRNL_ERR("SBA scan: %lu ranges scanned, %lu commands with non-surface modify bits\n", RangesScanned, Hits);
-    }
-    /* Heuristic scan for RENDER_SURFACE_STATE blocks describing 2D textures:
-     * 64-byte aligned, type 1 (2D), plausible format, base inside a mapped
-     * range.  Report their auxiliary (compression) mode and aux base. */
-    {
-        PLIST_ENTRY Entry;
-        ULONG Hits = 0;
-        ULONGLONG CompressedBases[6];
-        ULONGLONG CompressedSizes[6];
-        ULONG CompressedCount = 0;
-        ULONG Pass;
-
-        /* Pass 0 only collects the compressed surfaces; the AUX-TT walk for
-         * them is printed before the (long) surface list so it survives a
-         * dump cut short by the TDR recovery. */
-        for (Pass = 0; Pass < 2; Pass++)
-        {
-        if (Pass == 1)
-        {
-        /* Walk the UMD's Gen12 AUX-TT (64 KB format) for each compressed
-         * surface: L3[47:36] -> L2[35:24] -> L1[23:16], valid bit 0. */
-        if (CompressedCount != 0 && Process->Adapter != NULL)
-        {
-            ULONGLONG AuxBase = ((ULONGLONG)DxgkDiagReadRegister(Process->Adapter, 0x4204) << 32) | DxgkDiagReadRegister(Process->Adapter, 0x4200);
-            ULONG k;
-
-            AuxBase &= 0x0000FFFFFFFFF000ULL;
-            DXGKRNL_ERR("AUXTT: base=0x%I64x (%s)\n", AuxBase, GpuVaFindOverlapping(Process, AuxBase, 1) != NULL ? "mapped" : "NOT MAPPED");
-            for (k = 0; k < CompressedCount && AuxBase != 0; k++)
-            {
-                ULONGLONG Va = CompressedBases[k];
-                ULONGLONG L3Entry = 0, L2Entry = 0, L1Entry = 0, L2Addr, L1Addr, AuxAddr;
-                BOOLEAN L3Ok, L2Ok = FALSE, L1Ok = FALSE;
-
-                L3Ok = DxgkpGpuVaReadProcessMemory(Process, AuxBase + ((Va >> 36) & 0xFFF) * 8, &L3Entry, sizeof(L3Entry));
-                L2Addr = L3Entry & 0xFFFFFFFF8000ULL;
-                if (L3Ok && (L3Entry & 1) && L2Addr != 0)
-                    L2Ok = DxgkpGpuVaReadProcessMemory(Process, L2Addr + ((Va >> 24) & 0xFFF) * 8, &L2Entry, sizeof(L2Entry));
-                L1Addr = L2Entry & 0x0000FFFFFFFFE000ULL;
-                if (L2Ok && (L2Entry & 1) && L1Addr != 0)
-                    L1Ok = DxgkpGpuVaReadProcessMemory(Process, L1Addr + ((Va >> 16) & 0xFF) * 8, &L1Entry, sizeof(L1Entry));
-                AuxAddr = L1Entry & 0x0000FFFFFFFFFF00ULL;
-                DXGKRNL_ERR("AUXTT: main=0x%I64x L3[%lu]=0x%I64x(%s) L2@0x%I64x[%lu]=0x%I64x(%s) L1@0x%I64x[%lu]=0x%I64x(%s) ccs=0x%I64x(%s) fmt=0x%lx\n",
-                            Va, (ULONG)((Va >> 36) & 0xFFF), L3Entry, L3Ok ? ((L3Entry & 1) ? "valid" : "INVALID") : "unreadable",
-                            L2Addr, (ULONG)((Va >> 24) & 0xFFF), L2Entry, L2Ok ? ((L2Entry & 1) ? "valid" : "INVALID") : (L2Addr != 0 ? (GpuVaFindOverlapping(Process, L2Addr, 1) ? "unreadable-mapped" : "UNMAPPED") : "n/a"),
-                            L1Addr, (ULONG)((Va >> 16) & 0xFF), L1Entry, L1Ok ? ((L1Entry & 1) ? "valid" : "INVALID") : (L1Addr != 0 ? (GpuVaFindOverlapping(Process, L1Addr, 1) ? "unreadable-mapped" : "UNMAPPED") : "n/a"),
-                            AuxAddr, AuxAddr != 0 ? (GpuVaFindOverlapping(Process, AuxAddr, 1) ? "mapped" : "UNMAPPED") : "n/a",
-                            (ULONG)(L1Entry >> 52));
-                /* Every 64 KB block of the main surface must have a valid L1
-                 * entry whose CCS page is mapped; report the first that does not. */
-                {
-                    ULONGLONG Blocks = (CompressedSizes[k] + 0xFFFF) >> 16;
-                    ULONGLONG b;
-                    ULONG ValidBlocks = 0;
-
-                    for (b = 0; b < Blocks && b < 512; b++)
-                    {
-                        ULONGLONG BlockVa = Va + (b << 16);
-                        ULONGLONG E3 = 0, E2 = 0, E1 = 0;
-                        BOOLEAN Good = FALSE;
-
-                        if (DxgkpGpuVaReadProcessMemory(Process, AuxBase + ((BlockVa >> 36) & 0xFFF) * 8, &E3, sizeof(E3)) && (E3 & 1) &&
-                            DxgkpGpuVaReadProcessMemory(Process, (E3 & 0xFFFFFFFF8000ULL) + ((BlockVa >> 24) & 0xFFF) * 8, &E2, sizeof(E2)) && (E2 & 1) &&
-                            DxgkpGpuVaReadProcessMemory(Process, (E2 & 0x0000FFFFFFFFE000ULL) + ((BlockVa >> 16) & 0xFF) * 8, &E1, sizeof(E1)) && (E1 & 1) &&
-                            GpuVaFindOverlapping(Process, E1 & 0x0000FFFFFFFFFF00ULL, 1) != NULL &&
-                            GpuVaFindOverlapping(Process, BlockVa, 1) != NULL)
-                        {
-                            Good = TRUE;
-                        }
-                        if (Good)
-                            ValidBlocks++;
-                        else
-                        {
-                            DXGKRNL_ERR("AUXTT:   block %I64u/%I64u at 0x%I64x: L3=0x%I64x L2=0x%I64x L1=0x%I64x main-%s\n", b, Blocks, BlockVa, E3, E2, E1,
-                                        GpuVaFindOverlapping(Process, BlockVa, 1) ? "mapped" : "UNMAPPED");
-                            break;
-                        }
-                    }
-                    DXGKRNL_ERR("AUXTT:   %lu/%I64u blocks valid for main=0x%I64x (%I64u bytes)\n", ValidBlocks, Blocks, Va, CompressedSizes[k]);
-                }
-            }
-        }
-        }
-        Hits = 0;
-        for (Entry = Process->GpuVaRangeList.Flink; Entry != &Process->GpuVaRangeList && Hits < 24; Entry = Entry->Flink)
-        {
-            PDXGKRNL_GPUVA_RANGE Range = CONTAINING_RECORD(Entry, DXGKRNL_GPUVA_RANGE, RangeListEntry);
-            PDXGKVMM_ALLOCATION Allocation;
-            const ULONG *Mem;
-            ULONGLONG Bytes, Off;
-
-            if (Range->State != GpuVaStateMapped || Range->Binding == NULL)
-                continue;
-            Allocation = Range->Binding->BackingAllocation != NULL ? Range->Binding->BackingAllocation : Range->Binding->LogicalAllocation;
-            if (Allocation == NULL || Allocation->SystemMemory == NULL || Range->AllocationOffset + Range->SizeInBytes > Allocation->Size)
-                continue;
-            Mem = (const ULONG *)((PUCHAR)Allocation->SystemMemory + Range->AllocationOffset);
-            Bytes = Range->SizeInBytes;
-            for (Off = 0; Off + 64 <= Bytes && Hits < 24; Off += 64)
-            {
-                const ULONG *W = &Mem[Off / 4];
-                ULONG Type = (W[0] >> 29) & 7;
-                ULONG Format = (W[0] >> 18) & 0x1FF;
-                ULONGLONG Base = (((ULONGLONG)W[9] << 32) | W[8]) & 0x0000FFFFFFFFFFFFULL;
-                ULONG Width = (W[2] & 0x3FFF) + 1, Height = ((W[2] >> 16) & 0x3FFF) + 1;
-                ULONG AuxMode = W[6] & 7;
-
-                if (Type != 1 || Format == 0 || Format > 0x1F0 || Base == 0 || (Base & 0xFFF) != 0 || Width < 4 || Height < 4 || Width > 16384 || Height > 16384)
-                    continue;
-                if (GpuVaFindOverlapping(Process, Base, 1) == NULL)
-                    continue;
-                if ((W[8] & 0xFFF) != 0 || W[3] == 0)
-                    continue;
-                Hits++;
-                if (Pass == 0 && AuxMode != 0 && CompressedCount < RTL_NUMBER_OF(CompressedBases))
-                {
-                    ULONG k;
-                    BOOLEAN Dup = FALSE;
-
-                    for (k = 0; k < CompressedCount; k++)
-                        if (CompressedBases[k] == Base)
-                            Dup = TRUE;
-                    if (!Dup)
-                    {
-                        CompressedSizes[CompressedCount] = (ULONGLONG)((W[3] & 0x3FFFF) + 1) * Height;
-                        CompressedBases[CompressedCount++] = Base;
-                    }
-                }
-                if (Pass == 1)
-                {
-                    ULONGLONG ClearAddr = (((ULONGLONG)(W[13] & 0xFFFF)) << 32) | (W[12] & ~0x3FUL);
-                    ULONGLONG AuxAddr = ((((ULONGLONG)W[11]) << 32) | (W[10] & ~0xFFFUL)) & 0x0000FFFFFFFFFFFFULL;
-
-                    DXGKRNL_ERR("SURF @0x%I64x type=%lu fmt=0x%lx %lux%lu pitch=%lu dw0=0x%08lx dw1=0x%08lx dw4=0x%08lx dw5=0x%08lx dw6=0x%08lx dw7=0x%08lx base=0x%I64x aux-mode=%lu aux=0x%I64x(%s) dw10=0x%08lx dw12=0x%08lx dw13=0x%08lx dw14=0x%08lx dw15=0x%08lx clear=0x%I64x(%s)\n",
-                                Range->GpuVirtualAddress + Off, Type, Format, Width, Height, (W[3] & 0x3FFFF) + 1, W[0], W[1], W[4], W[5], W[6], W[7], Base, AuxMode,
-                                AuxAddr, AuxMode != 0 ? (GpuVaFindOverlapping(Process, AuxAddr, 1) ? "mapped" : "UNMAPPED") : "-",
-                                W[10], W[12], W[13], W[14], W[15],
-                                ClearAddr, (AuxMode != 0 && ClearAddr != 0) ? (GpuVaFindOverlapping(Process, ClearAddr, 1) ? "mapped" : "UNMAPPED") : "-");
-                }
-            }
-        }
-        }
-        DXGKRNL_ERR("SURF scan: %lu candidate 2D surface states\n", Hits);
-
-    }
-    ExReleaseFastMutex(&Process->GpuVaLock);
-    /*
-     * Gen12 binding tables live in the binding table pool, whose base is
-     * context state (3DSTATE_BINDING_TABLE_POOL_ALLOC), so the tables named
-     * by 3DSTATE_BINDING_TABLE_POINTERS_* are pool base + offset; their
-     * entries are surface-state offsets from the surface state base.
-     */
-    if (Process->LastBindingTablePoolBase != 0 && SurfaceBase != 0)
-    {
-        ULONGLONG Pool = Process->LastBindingTablePoolBase;
-        ULONG t;
-
-        DXGKRNL_ERR("BATCH: binding table pool base 0x%I64x (last seen at submit)\n", Pool);
-        for (t = 0; t < BindingTableCount; t++)
-        {
-            ULONG Entries[8];
-            ULONG e;
-
-            if (!DxgkpGpuVaReadProcessMemory(Process, Pool + BindingTables[t], Entries, sizeof(Entries)))
-            {
-                DXGKRNL_ERR("BATCH: pool bt#%lu at +0x%lx unreadable\n", t, BindingTables[t]);
-                continue;
-            }
-            DXGKRNL_ERR("BATCH: pool bt#%lu at +0x%lx entries=%08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", t, BindingTables[t],
-                        Entries[0], Entries[1], Entries[2], Entries[3], Entries[4], Entries[5], Entries[6], Entries[7]);
-            for (e = 0; e < 4; e++)
-            {
-                ULONG St[16];
-                ULONGLONG Base, Aux;
-
-                if (Entries[e] == 0 && e != 0)
-                    continue;
-                if (!DxgkpGpuVaReadProcessMemory(Process, SurfaceBase + (Entries[e] & ~0x3FUL), St, sizeof(St)))
-                    continue;
-                Base = (((ULONGLONG)St[9] << 32) | St[8]) & 0x0000FFFFFFFFFFFFULL;
-                Aux = (((ULONGLONG)St[11] << 32) | (St[10] & ~0xFFFULL)) & 0x0000FFFFFFFFFFFFULL;
-                DXGKRNL_ERR("BATCH:   bt#%lu[%lu] -> state +0x%lx type=%lu fmt=0x%lx %lux%lu base=0x%I64x(%s) aux-mode=%lu aux=0x%I64x dw0=%08lx dw1=%08lx dw6=%08lx dw7=%08lx\n",
-                            t, e, Entries[e], St[0] >> 29, (St[0] >> 18) & 0x1FF, (St[2] & 0x3FFF) + 1, ((St[2] >> 16) & 0x3FFF) + 1,
-                            Base, Base != 0 && GpuVaFindOverlapping(Process, Base, 1) != NULL ? "mapped" : (Base == 0 ? "null" : "UNMAPPED"),
-                            St[6] & 7, Aux, St[0], St[1], St[6], St[7]);
-            }
-        }
-    }
-    /*
-     * Gen12 user-mode drivers sample through bindless surface states: the
-     * binding table above holds a NULL entry and the real surfaces live in
-     * the heap named by STATE_BASE_ADDRESS's bindless base, which is context
-     * state and rarely inside the batch at hand.  Walk that heap as last seen
-     * at submit and translate each surface base through the page tables.
-     */
-    if (Process->LastBindlessSurfaceBase != 0)
-    {
-        ULONGLONG Bindless = Process->LastBindlessSurfaceBase;
-        ULONG Shown = 0, k;
-
-        DXGKRNL_ERR("BATCH: bindless surface base 0x%I64x (last seen at submit); scanning states\n", Bindless);
-        /* GPU view (page the PTE names) versus binding view (the allocation's
-         * pages) versus the user-mode view (the pages the driver writes). */
-        {
-            PDXGKRNL_GPUVA_PAGE_TABLE Leaf;
-            PDXGKRNL_GPUVA_RANGE Range;
-            ULONG Idx, GpuView[16], BindView[16];
-            BOOLEAN BindOk;
-
-            RtlZeroMemory(GpuView, sizeof(GpuView));
-            ExAcquireFastMutex(&Process->GpuVaLock);
-            Leaf = GpuVaGetLeafTable(Process, Bindless, FALSE);
-            Idx = GpuVaPteIndexFor(Process->Adapter, Bindless, 0);
-            if (Leaf != NULL && Idx < Leaf->EntryCount && Leaf->Entries[Idx].Valid)
-            {
-                PHYSICAL_ADDRESS Phys;
-                PVOID Map;
-
-                Phys.QuadPart = (LONGLONG)Leaf->Entries[Idx].PageAddress << PAGE_SHIFT;
-                Map = MmMapIoSpace(Phys, PAGE_SIZE, MmNonCached);
-                if (Map != NULL)
-                {
-                    RtlCopyMemory(GpuView, Map, sizeof(GpuView));
-                    MmUnmapIoSpace(Map, PAGE_SIZE);
-                }
-                DXGKRNL_ERR("BATCH: bindless base pte pfn=0x%I64x raw=0x%I64x gpu-view=%08lx %08lx %08lx %08lx / %08lx %08lx %08lx %08lx\n",
-                            (ULONGLONG)Leaf->Entries[Idx].PageAddress, GpuVaRawEntry(Leaf, Idx),
-                            GpuView[0], GpuView[1], GpuView[2], GpuView[3], GpuView[8], GpuView[9], GpuView[10], GpuView[11]);
-            }
-            else
-            {
-                DXGKRNL_ERR("BATCH: bindless base 0x%I64x has no valid leaf PTE (leaf=%p)\n", Bindless, Leaf);
-            }
-            Range = GpuVaFindOverlapping(Process, Bindless, 1);
-            ExReleaseFastMutex(&Process->GpuVaLock);
-            BindOk = DxgkpGpuVaReadProcessMemory(Process, Bindless, BindView, sizeof(BindView));
-            DXGKRNL_ERR("BATCH: bindless base binding-view(%s)=%08lx %08lx %08lx %08lx / %08lx %08lx %08lx %08lx\n",
-                        BindOk ? "ok" : "unreadable", BindView[0], BindView[1], BindView[2], BindView[3], BindView[8], BindView[9], BindView[10], BindView[11]);
-            if (Range != NULL && Range->Binding != NULL)
-            {
-                PDXGKVMM_ALLOCATION A = Range->Binding->BackingAllocation != NULL ? Range->Binding->BackingAllocation : Range->Binding->LogicalAllocation;
-
-                DXGKRNL_ERR("BATCH: bindless base range=[0x%I64x+0x%I64x] state=%u alloc-offset=0x%I64x alloc=%p\n",
-                            Range->GpuVirtualAddress, Range->SizeInBytes, (UINT)Range->State, Range->AllocationOffset, A);
-                if (A != NULL)
-                    DxgkVidMmDumpUserMappings(A);
-            }
-        }
-        for (k = 0; k < 1024 && Shown < 12; k++)
-        {
-            ULONG State[16];
-            ULONG Type;
-            ULONGLONG Base, AuxBase;
-
-            if (!DxgkpGpuVaReadProcessMemory(Process, Bindless + (ULONGLONG)k * 64, State, sizeof(State)))
-            {
-                DXGKRNL_ERR("BATCH: bindless[%lu] unreadable\n", k);
-                break;
-            }
-            Type = State[0] >> 29;
-            Base = (((ULONGLONG)State[9] << 32) | State[8]) & 0x0000FFFFFFFFFFFFULL;
-            if (Type > 5 || Base == 0)
-                continue;
-            AuxBase = (((ULONGLONG)State[11] << 32) | (State[10] & ~0xFFFULL)) & 0x0000FFFFFFFFFFFFULL;
-            DXGKRNL_ERR("BATCH: bindless[%lu] type=%lu format=0x%lx base=0x%I64x aux-mode=%lu aux=0x%I64x w=%lu h=%lu dw0=%08lx dw6=%08lx dw7=%08lx\n",
-                        k, Type, (State[0] >> 18) & 0x1FF, Base, State[6] & 7, AuxBase,
-                        (State[2] & 0x3FFF) + 1, ((State[2] >> 16) & 0x3FFF) + 1, State[0], State[6], State[7]);
-            DxgkGpuVaDumpTranslation(Process->Adapter, Process, Base);
-            Shown++;
-        }
-    }
-
-}
 
 VOID
 DxgkGpuVaDumpProcessRanges(
@@ -4735,6 +4720,7 @@ DxgkGpuVaDumpProcessRanges(
     ExReleaseFastMutex(&Process->GpuVaLock);
 }
 
+
 static ULONGLONG
 GpuVaRawEntry(
     _In_ PDXGKRNL_GPUVA_PAGE_TABLE Table,
@@ -4759,7 +4745,7 @@ GpuVaVerifyTable(
     _Inout_ PULONG Tables,
     _Inout_ PULONG Valid,
     _Inout_ PULONG Missing,
-    _Inout_ PULONG Stale,
+    _Inout_ PULONG InvalidNonzero,
     _Inout_ PULONG Printed)
 {
     ULONG i;
@@ -4780,7 +4766,12 @@ GpuVaVerifyTable(
         if (Ours && Raw == 0)
             (*Missing)++;
         else if (!Ours && Raw != 0)
-            (*Stale)++;
+        {
+            /* Invalid hardware entries can carry a scratch-page address.
+             * Their encoding belongs to the miniport, not DXGK_PTE. */
+            (*InvalidNonzero)++;
+            continue;
+        }
         else
             continue;
         if ((*Printed)++ < 10)
@@ -4796,7 +4787,7 @@ GpuVaVerifyTable(
         for (i = 0; i < Table->EntryCount; i++)
         {
             if (Table->Children[i] != NULL)
-                GpuVaVerifyTable(Adapter, Table->Children[i], Tables, Valid, Missing, Stale, Printed);
+                GpuVaVerifyTable(Adapter, Table->Children[i], Tables, Valid, Missing, InvalidNonzero, Printed);
         }
     }
 }
@@ -4804,15 +4795,15 @@ GpuVaVerifyTable(
 /*
  * TDR diagnostics: compare the page-table entries this driver asked the
  * miniport to write (Table->Entries) with what the miniport actually wrote
- * into the GPU-visible tables (Table->KernelVa).  Invalid entries are zero
- * (ZeroInPteSupported); a valid one is never all-zero.
+ * into the GPU-visible tables (Table->KernelVa). Count nonzero invalid
+ * encodings separately; ZeroInPteSupported does not specify their format.
  */
 VOID
 DxgkGpuVaVerifyProcessTables(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_opt_ PDXGKRNL_PROCESS Process)
 {
-    ULONG Tables = 0, Valid = 0, Missing = 0, Stale = 0, Printed = 0;
+    ULONG Tables = 0, Valid = 0, Missing = 0, InvalidNonzero = 0, Printed = 0;
     ULONG Above4G = 0;
     PDXGKRNL_GPUVA_PAGE_TABLE Root;
 
@@ -4822,11 +4813,11 @@ DxgkGpuVaVerifyProcessTables(
     GpuVaVerifyAbove4G = 0;
     Root = (PDXGKRNL_GPUVA_PAGE_TABLE)Process->hRootPageTable;
     if (Root != NULL)
-        GpuVaVerifyTable(Adapter, Root, &Tables, &Valid, &Missing, &Stale, &Printed);
+        GpuVaVerifyTable(Adapter, Root, &Tables, &Valid, &Missing, &InvalidNonzero, &Printed);
     Above4G = GpuVaVerifyAbove4G;
     ExReleaseFastMutex(&Process->GpuVaLock);
-    DXGKRNL_ERR("PT VERIFY process=%p root=%p tables=%lu valid-entries=%lu missing-in-hw=%lu stale-in-hw=%lu leaf-pages-above-4G=%lu (highest-acceptable=0x%I64x)\n",
-                Process, Root, Tables, Valid, Missing, Stale, Above4G, (ULONGLONG)Adapter->HighestAcceptableAddress.QuadPart);
+    DXGKRNL_ERR("PT VERIFY process=%p root=%p tables=%lu valid-entries=%lu missing-in-hw=%lu invalid-nonzero=%lu leaf-pages-above-4G=%lu (highest-acceptable=0x%I64x)\n",
+                Process, Root, Tables, Valid, Missing, InvalidNonzero, Above4G, (ULONGLONG)Adapter->HighestAcceptableAddress.QuadPart);
 }
 
 /*
@@ -5145,6 +5136,7 @@ DxgkGpuVaReserveDriverRange(
     Process->GpuVaTotalReserved += SizeInBytes;
     ExReleaseFastMutex(&Process->GpuVaLock);
 
+    DxgkGpuVaRecordEvent('r', ActualAddress, SizeInBytes, 0);
     *OutAddress = ActualAddress;
     return STATUS_SUCCESS;
 }
@@ -5181,6 +5173,8 @@ DxgkGpuVaPreparePageTable(
     ExAcquireFastMutex(&Process->GpuVaLock);
     Status = GpuVaEnsureRootPageTable(Process);
     ExReleaseFastMutex(&Process->GpuVaLock);
+    if (NT_SUCCESS(Status))
+        Status = DxgkGpuVaPlacePendingPageTables(Adapter, Process);
     if (NT_SUCCESS(Status) && !DxgkGpuVaPageTableReady(Adapter, Process))
         Status = STATUS_INTERNAL_ERROR;
     return Status;

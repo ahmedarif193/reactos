@@ -240,12 +240,15 @@ typedef struct _DXGKRNL_DEVICE_WORK
 {
     DXGK_DEVICE_WORK_ITEM       CoreItem;
     PDXGKRNL_DEVICE             Device;
+    volatile LONG              ReferenceCount;
+    volatile LONG              CompletionStatus;
 } DXGKRNL_DEVICE_WORK, *PDXGKRNL_DEVICE_WORK;
 
 typedef enum _DXGKRNL_DMA_BACKING_KIND
 {
     DxgkDmaBackingInvalid = 0,
-    DxgkDmaBackingContiguousMemory
+    DxgkDmaBackingContiguousMemory,
+    DxgkDmaBackingVidMm
 } DXGKRNL_DMA_BACKING_KIND;
 
 typedef struct _DXGKRNL_DMA_BUFFER
@@ -256,9 +259,15 @@ typedef struct _DXGKRNL_DMA_BUFFER
     ULONG                       Capacity;
     ULONG                       SubmissionStartOffset;
     ULONG                       SubmissionEndOffset;
+    /* Original allocation constraint. Segment-backed DMA buffers are pooled
+     * only with requests carrying the same segment set. */
+    ULONG                       SegmentSet;
     UINT                        SegmentId;
     PHYSICAL_ADDRESS            SegmentAddress;
     DXGKRNL_DMA_BACKING_KIND    BackingKind;
+    struct _DXGKVMM_ALLOCATION *BackingAllocation;
+    struct _DXGKVMM_VIRTUAL_DMA_BACKING *VirtualBacking;
+    D3DGPU_VIRTUAL_ADDRESS      GpuVirtualAddress;
     /* Driver-resident paging-buffer private data (zeroed per use); the
      * miniport advances through it in BuildPagingBuffer. */
     PVOID                       PrivateData;
@@ -753,6 +762,7 @@ struct _DXGKRNL_ADAPTER
 
     /* Stable head fields cached from DXGKQAITYPE_DRIVERCAPS. */
     PHYSICAL_ADDRESS            HighestAcceptableAddress;
+    ULONGLONG                   ApertureSegmentCommitLimit;
     DXGK_SCHEDULINGCAPS         SchedulingCaps;
 
     /* GPU MMU declaration cached from DXGKQAITYPE_GPUMMUCAPS at start.
@@ -843,16 +853,6 @@ struct _DXGKRNL_ADAPTER
     /* Reverse-callback mappings taken, so a failed start says how far it got. */
     volatile LONG               MapMemoryCallCount;
     volatile LONG               PowerFStateCompleteCalls;
-    /* Temporary hang diagnostics: Intel GT register window (BAR0). */
-    PVOID                       DiagMmio;
-    ULONG                       DiagMmioSize;
-    PHYSICAL_ADDRESS            DiagMmioPhysical;
-    KTIMER                      DiagFaultTimer;
-    KDPC                        DiagFaultDpc;
-    WORK_QUEUE_ITEM             DiagFaultWorkItem;
-    volatile LONG               DiagFaultWorkQueued;
-    volatile LONG               DiagFaultTimerActive;
-    ULONG                       DiagFaultCount;
     DXGK_PHYSICALADAPTERCAPS    PhysicalAdapterCaps;
     BOOLEAN                     PhysicalAdapterCapsValid;
     volatile LONG               ContextAllocationCreateCount;
@@ -1126,6 +1126,9 @@ struct _DXGKRNL_ADAPTER
      */
     PVOID                       PresentQueues;      /* PDXGKRNL_PRESENT_QUEUE */
     ULONG                       PresentQueueCount;
+    KMUTEX                      CddPresentMutex;
+    D3DKMT_HANDLE               CddDeviceHandle;
+    D3DKMT_HANDLE               CddContextHandle;
     NTSTATUS                    PresentQueueInitializationStatus;
     volatile LONG               PresentQueueStopping;
     volatile LONG               VBlankResetActive;
@@ -1237,6 +1240,7 @@ struct _DXGKRNL_DEVICE
      */
     DXGK_DEVICEINFO              LegacyDeviceInfo;
     BOOLEAN                      LegacyDeviceInfoValid;
+    BOOLEAN                      GdiDevice;
 
     /*
      * Miniport-side device handle returned from DxgkDdiCreateDevice.
@@ -1321,6 +1325,18 @@ struct _DXGKRNL_CONTEXT
 
     /* TRUE when created through D3DKMTCreateContextVirtual. */
     BOOLEAN                     VirtualAddressing;
+
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    /* Serialized by the context stream worker. A reset invalidates the
+     * miniport association even when VidMm retains the same root address. */
+    BOOLEAN                     RootPageTablePublished;
+    BOOLEAN                     GpuMmuNodeKnown;
+    BOOLEAN                     GpuMmuNode;
+    D3DGPU_PHYSICAL_ADDRESS      PublishedRootPageTableAddress;
+    UINT                        PublishedRootPageTableEntries;
+    ULONG                       PublishedRootPageTableEpoch;
+#endif
+
 
     /* Original UMD flags; these are not bit-compatible with KMD context flags. */
     D3DDDI_CREATECONTEXTFLAGS   UserModeCreateFlags;
@@ -1495,13 +1511,6 @@ typedef struct _DXGKRNL_GPUVA_RANGE
     BOOLEAN                     AllowUserModeMapping;
 
     /*
-     * Number of submitted-but-unretired command starts anchored in this
-     * range.  A pinned range cannot be unmapped or freed: the miniport is
-     * holding its GPU virtual address.  Protected by GpuVaLock.
-     */
-    ULONG                       SubmissionPinCount;
-
-    /*
      * Linkage in DXGKRNL_PROCESS->GpuVaRangeList (ascending VA order).
      * Protected by DXGKRNL_PROCESS->GpuVaLock.
      */
@@ -1511,6 +1520,31 @@ typedef struct _DXGKRNL_GPUVA_RANGE
 
 /* Pool tag for GPU VA range objects. */
 #define TAG_DXGK_GPUVA     'GVxD'   /* DXVG - GPU VA range */
+
+/*
+ * One submitted-but-unretired command start anchored at a GPU virtual
+ * address.  A pinned span cannot be unmapped or freed: the miniport is
+ * still executing out of it.
+ *
+ * The pin deliberately does NOT live on DXGKRNL_GPUVA_RANGE.  Every mapping
+ * transaction rebuilds the range list from clones (GpuVaCloneList /
+ * GpuVaReplaceSpan), so a count stored on a range object is silently reset
+ * by the next unrelated map, which both loses the protection and makes the
+ * matching unpin underflow.  Pins are a property of the submission, so they
+ * are tracked separately and survive any reshaping of the range list.
+ *
+ * Linked on DXGKRNL_PROCESS->GpuVaPinList, protected by GpuVaLock.
+ */
+typedef struct _DXGKRNL_GPUVA_PIN
+{
+    LIST_ENTRY                  PinListEntry;
+    D3DGPU_VIRTUAL_ADDRESS      GpuVirtualAddress;
+    ULONGLONG                   SizeInBytes;
+    ULONG                       Count;
+} DXGKRNL_GPUVA_PIN, *PDXGKRNL_GPUVA_PIN;
+
+/* Pool tag for GPU VA submission pins. */
+#define TAG_DXGK_GPUVA_PIN 'NVxD'   /* DXVN - GPU VA submission pin */
 
 /*
  * Software GPU page table (GpuMmu, DXGK_PAGETABLEUPDATE_CPU_VIRTUAL mode).
@@ -1540,14 +1574,27 @@ typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
     MEMORY_CACHING_TYPE         CacheType;
     PHYSICAL_ADDRESS            Physical;
 
-    /* GPU-visible placement. Segment zero uses Physical; nonzero segments
-     * use SegmentOffset and retain the aperture MDL until teardown. */
+    /* GPU-visible placement. Aperture-backed tables use physical system
+     * pages in segment zero; local-memory tables use SegmentOffset. */
     ULONG                       SegmentId;
     ULONGLONG                   SegmentOffset;
     PMDL                        SegmentMdl;
 
     /* Portable update descriptors; not overlaid on native table storage. */
     DXGK_PTE                    *Entries;
+
+    /*
+     * Placing the table is a paging submission and therefore PASSIVE_LEVEL
+     * work, while tables are allocated under GpuVaLock; PlacementPending
+     * carries a table from allocation to the next flush, which places it
+     * before anything is published to the miniport.
+     */
+    BOOLEAN                     PlacementPending;
+
+    /* Parent table entry that points at this one, so a placement completed
+     * after the link was made can correct the address. */
+    struct _DXGKRNL_GPUVA_PAGE_TABLE *Parent;
+    ULONG                       ParentIndex;
 
     /* The first KMD update must initialize the complete implicit table. */
     BOOLEAN                     InitialUpdatePending;
@@ -1689,6 +1736,11 @@ struct _DXGKRNL_PROCESS
      * Protected by GpuVaLock.
      */
     LIST_ENTRY                  GpuVaRangeList;
+    /*
+     * Live submission pins (DXGKRNL_GPUVA_PIN), unordered.
+     * Protected by GpuVaLock.
+     */
+    LIST_ENTRY                  GpuVaPinList;
     /* High-water mark for new GPU VA assignments: freed ranges are not
      * reused while untouched space remains, so a stale translation of a
      * freed range can never alias a live mapping. */
@@ -2431,6 +2483,13 @@ DxgkGpuVaUnpinRange(
     _In_ D3DGPU_VIRTUAL_ADDRESS Address,
     _In_ ULONGLONG Size);
 
+BOOLEAN
+DxgkGpuVaPinAllocationRange(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _In_ ULONGLONG Size);
+
 NTSTATUS
 DxgkGpuVaValidateUpdate(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -2494,6 +2553,12 @@ DxgkGpuVaEvict(
 /*
  * Root page table management.
  */
+BOOLEAN
+DxgkGpuVaRootPageTableNeedsUpdate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ PDXGKRNL_CONTEXT Context);
+
 NTSTATUS
 DxgkGpuVaSetRootPageTable(
     _In_ PDXGKRNL_ADAPTER  Adapter,
@@ -2553,6 +2618,11 @@ DxgkCreateContextVirtual(
     _Inout_ D3DKMT_CREATECONTEXTVIRTUAL *pCreateContext);
 
 NTSTATUS
+DxgkCreateCddContext(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ D3DKMT_CREATECONTEXT *CreateContext);
+
+NTSTATUS
 DxgkReferenceVirtualContextByHandle(
     _In_ D3DKMT_HANDLE Handle,
     _In_ PEPROCESS OwnerProcess,
@@ -2603,6 +2673,10 @@ DxgkAcquireProcessRecord(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PEPROCESS Process,
     _Out_ PDXGKRNL_PROCESS *OutProcessRecord);
+
+NTSTATUS
+DxgkCreateCddDevice(
+    _Inout_ D3DKMT_CREATEDEVICE *CreateDevice);
 
 NTSTATUS
 DxgkValidateCreatingProcessHandle(
@@ -3595,6 +3669,13 @@ VOID
 DxgkDeviceWorkComplete(
     _Inout_opt_ PDXGKRNL_DEVICE_WORK Work);
 
+/* An observer must also retain the owning device until it releases Work. */
+VOID DxgkDeviceWorkReference(_Inout_ PDXGKRNL_DEVICE_WORK Work);
+VOID DxgkDeviceWorkDereference(_Inout_opt_ PDXGKRNL_DEVICE_WORK Work);
+VOID DxgkDeviceWorkCompleteWithStatus(_Inout_opt_ PDXGKRNL_DEVICE_WORK Work,
+                                    _In_ NTSTATUS Status);
+NTSTATUS DxgkDeviceWorkGetStatus(_In_ PDXGKRNL_DEVICE_WORK Work);
+
 VOID
 DxgkDeviceWorkDestroy(
     _Inout_opt_ PDXGKRNL_DEVICE_WORK Work);
@@ -3657,6 +3738,30 @@ NTAPI
 DxgkAllocateDmaBuffer(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG Capacity,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer);
+
+NTSTATUS
+NTAPI
+DxgkAllocateDmaBufferInSegmentSet(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Capacity,
+    _In_ ULONG SegmentSet,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer);
+
+NTSTATUS
+NTAPI
+DxgkAllocateDmaBufferInSegmentSetWithPrivateData(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Capacity,
+    _In_ ULONG SegmentSet,
+    _In_ ULONG PrivateDataSize,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer);
+
+NTSTATUS
+DxgkAllocateVirtualDmaBuffer(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG Capacity,
+    _In_ ULONG SegmentSet,
     _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer);
 
 NTSTATUS
@@ -3798,14 +3903,9 @@ VOID DxgkGpuVaDumpBuffer(_In_opt_ struct _DXGKRNL_PROCESS *Process, _In_ D3DGPU_
 VOID DxgkGpuVaDumpProcessRanges(_In_opt_ struct _DXGKRNL_PROCESS *Process);
 VOID DxgkVidMmDumpContextAllocations(_In_ PDXGKRNL_ADAPTER Adapter);
 BOOLEAN DxgkVidMmApertureWindow(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PHYSICAL_ADDRESS *CpuBaseForGttZero, _Out_ ULONGLONG *GttBase, _Out_ ULONGLONG *GttSize);
-VOID DxgkGpuVaDumpBatchSurfaces(_In_opt_ struct _DXGKRNL_PROCESS *Process, _In_ D3DGPU_VIRTUAL_ADDRESS BatchVa, _In_ ULONG BatchSize);
 ULONG DxgkVidMmPagingBufferPrivateDataSize(_In_ PDXGKRNL_ADAPTER Adapter);
-VOID DxgkDiagDumpGpuRegisters(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PCSTR Reason);
-VOID DxgkDiagStartFaultPoll(_In_ PDXGKRNL_ADAPTER Adapter);
-ULONG DxgkDiagReadRegister(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG Offset);
-VOID DxgkDiagInvalidateRenderTlb(_In_ PDXGKRNL_ADAPTER Adapter);
-VOID DxgkDiagStopFaultPoll(_In_ PDXGKRNL_ADAPTER Adapter);
 VOID DxgkGpuVaVerifyProcessTables(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ struct _DXGKRNL_PROCESS *Process);
+NTSTATUS DxgkGpuVaPlacePendingPageTables(_In_ PDXGKRNL_ADAPTER Adapter, _In_ struct _DXGKRNL_PROCESS *Process);
 VOID DxgkGpuVaDumpTranslation(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ struct _DXGKRNL_PROCESS *Process, _In_ D3DGPU_VIRTUAL_ADDRESS Va);
 VOID DxgkGpuVaAuditMappings(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ struct _DXGKRNL_PROCESS *Process);
 

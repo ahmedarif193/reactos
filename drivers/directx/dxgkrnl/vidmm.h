@@ -228,6 +228,23 @@ typedef struct _DXGKVMM_ALLOCATION
     PVOID volatile      ResidencyTransactionOwner;
     KEVENT              ResidencyTransactionEvent;
 
+    /*
+     * Highest submission fence, per node, of any command that referenced this
+     * allocation.  Destroy must wait for these to retire.  Waiting only on the
+     * destroying device's own queued work is not enough: an allocation shared
+     * with another device is referenced by that device's submissions too, and
+     * clearing its PTEs while such a command is still in flight makes the GPU
+     * read an unmapped page.
+     */
+    volatile ULONG      LastRefFenceId[DXGK_MAX_TRACKED_NODES];
+
+    /* Fence identities are reset as a unit and the adapter bumps
+     * SubmittedFenceIdentityEpoch when that happens.  References stamped in an
+     * older epoch name fence ids that no longer exist, so they must be treated
+     * as retired rather than waited on - otherwise every destroy after a reset
+     * would block for the whole timeout. */
+    volatile LONG       LastRefEpoch;
+
     /* Back-pointer to the owning adapter. */
     PDXGKRNL_ADAPTER    Adapter;
 
@@ -990,6 +1007,34 @@ DxgkpVidMmDestroyResourceWrapper(
 NTSTATUS
 DxgkVidMmEnsureAllocationApertureMapped(
     _In_ PDXGKVMM_ALLOCATION Allocation);
+
+NTSTATUS
+DxgkVidMmCreateVirtualDmaBufferBacking(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG Size,
+    _In_ ULONG SegmentSet,
+    _Out_ PDXGKVMM_ALLOCATION *OutAllocation,
+    _Out_ struct _DXGKVMM_VIRTUAL_DMA_BACKING **OutBacking,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
+
+VOID
+DxgkVidMmFreeVirtualDmaBufferBacking(
+    _In_ struct _DXGKVMM_VIRTUAL_DMA_BACKING *Backing);
+
+NTSTATUS
+DxgkVidMmMapVirtualPresentAllocation(
+    _In_ struct _DXGKVMM_VIRTUAL_DMA_BACKING *Backing,
+    _In_ PDXGKVMM_ALLOCATION Binding,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN Write,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
+
+NTSTATUS
+DxgkVidMmCreateDmaBufferBacking(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Size,
+    _In_ ULONG SegmentSet,
+    _Out_ PDXGKVMM_ALLOCATION *OutAllocation);
 
 NTSTATUS
 DxgkVidMmMapPageTableSegment(

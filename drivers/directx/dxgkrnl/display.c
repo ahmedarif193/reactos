@@ -273,6 +273,55 @@ DxgkpSnapshotCommittedDisplayState(
  *
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
+/*
+ * Ask the miniport whether it can realize this VidPN as it stands.
+ *
+ * Split out because the question is worth asking twice: once on the VidPN
+ * dxgkrnl built, and again once the driver has made it cofunctional and the
+ * modes are pinned from the driver's own sets.  A "no" is not a failure
+ * status -- it is an answer -- so it is returned separately from Status.
+ */
+static NTSTATUS
+DxgkpAskMiniportIsVidPnSupported(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKP_VIDPN VidPn,
+    _Out_ PBOOLEAN Supported)
+{
+    DXGKARG_ISSUPPORTEDVIDPN IsSupportedArgs;
+    NTSTATUS Status;
+
+    *Supported = FALSE;
+    RtlZeroMemory(&IsSupportedArgs, sizeof(IsSupportedArgs));
+    IsSupportedArgs.hDesiredVidPn = (D3DKMDT_HVIDPN)VidPn;
+    IsSupportedArgs.IsVidPnSupported = FALSE;
+
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling DxgkDdiIsSupportedVidPn\n");
+    _SEH2_TRY
+    {
+        Status = DXGK_CB(Adapter, DxgkDdiIsSupportedVidPn)(Adapter->MiniportDeviceContext, &IsSupportedArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+        DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: IsSupportedVidPn FAULTED 0x%08lX\n",
+                    Status);
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: IsSupportedVidPn returned 0x%08lX, "
+                  "supported=%d\n", Status, IsSupportedArgs.IsVidPnSupported);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: IsSupportedVidPn failed 0x%08lX\n", Status);
+        return Status;
+    }
+    *Supported = IsSupportedArgs.IsVidPnSupported != 0;
+    return STATUS_SUCCESS;
+}
+
+
 NTSTATUS
 DxgkpDisplayCommitVidPnCandidate(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -293,6 +342,9 @@ DxgkpDisplayCommitVidPnCandidate(
     PDXGKDDI_SETTIMINGSFROMVIDPN SetTimingsCallback;
     D3DDDI_VIDEO_PRESENT_SOURCE_ID ActiveSourceId = 0;
     D3DDDI_VIDEO_PRESENT_TARGET_ID ActiveTargetId = 0;
+    ULONG ActiveTargetIndex = 0;
+    BOOLEAN VidPnAccepted = TRUE;
+    BOOLEAN FullMiniportNegotiatesModes;
 
     PAGED_CODE();
 
@@ -317,6 +369,11 @@ DxgkpDisplayCommitVidPnCandidate(
         !UseSetTimings &&
         DXGK_CB(Adapter, DxgkDdiCommitVidPn) == NULL;
     TopologyEmpty = VidPn->NumPaths == 0;
+    FullMiniportNegotiatesModes =
+        Adapter->MiniportContext != NULL &&
+        !Adapter->MiniportContext->IsDisplayOnlyDriver &&
+        !Adapter->MiniportContext->IsBasicDisplayFallback &&
+        DXGK_CB(Adapter, DxgkDdiEnumVidPnCofuncModality) != NULL;
     NewCommittedWidth = Adapter->CommittedWidth;
     NewCommittedHeight = Adapter->CommittedHeight;
 
@@ -329,8 +386,26 @@ DxgkpDisplayCommitVidPnCandidate(
     {
         ActiveSourceId = VidPn->Paths[0].VidPnSourceId;
         ActiveTargetId = VidPn->Paths[0].VidPnTargetId;
-        if (ActiveSourceId >= VidPn->NumSources || ActiveSourceId >= DXGKP_MAX_SOURCES || ActiveTargetId >= VidPn->NumTargets || ActiveTargetId >= DXGKP_MAX_TARGETS)
+        if (ActiveSourceId >= VidPn->NumSources || ActiveSourceId >= DXGKP_MAX_SOURCES)
             return STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+        /*
+         * A target id is the miniport's child uid, not a slot number: this
+         * Intel part numbers its connected output 49 while declaring ten
+         * children, and BasicDisplay numbers its single output 1.  Comparing
+         * the id against NumTargets and then indexing the positional mode-set
+         * arrays with it refused every such adapter here, so no VidPn was ever
+         * committed, CommittedWidth stayed zero, the shared primary could not
+         * be created and win32k bugchecked with VIDEO_DRIVER_INIT_FAILURE.
+         * Look the id up; the miniport still receives the id, not the index.
+         */
+        ActiveTargetIndex = DxgkVidPnTargetIndexFromId(VidPn, ActiveTargetId);
+        if (ActiveTargetIndex == MAXULONG)
+        {
+            DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: path target id %lu names no "
+                        "target among the %lu this VidPN describes\n",
+                        ActiveTargetId, VidPn->NumTargets);
+            return STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+        }
     }
 
     /*
@@ -376,47 +451,13 @@ DxgkpDisplayCommitVidPnCandidate(
      */
     if (!ForceDodPresentOnlyPath &&
         !SkipDodVidPnNegotiation &&
+        !FullMiniportNegotiatesModes &&
         DXGK_CB(Adapter, DxgkDdiIsSupportedVidPn) != NULL)
     {
-        DXGKARG_ISSUPPORTEDVIDPN IsSupportedArgs;
-        RtlZeroMemory(&IsSupportedArgs, sizeof(IsSupportedArgs));
-        IsSupportedArgs.hDesiredVidPn = (D3DKMDT_HVIDPN)VidPn;
-        IsSupportedArgs.IsVidPnSupported = FALSE;
-
-        if (!DxgkAcquireKmdCall(Adapter))
-        {
-            Status = STATUS_DELETE_PENDING;
+        Status = DxgkpAskMiniportIsVidPnSupported(Adapter, VidPn, &VidPnAccepted);
+        if (!NT_SUCCESS(Status))
             goto Cleanup;
-        }
-        else
-        {
-            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: calling DxgkDdiIsSupportedVidPn\n");
-            _SEH2_TRY
-            {
-                Status = DXGK_CB(Adapter, DxgkDdiIsSupportedVidPn)(Adapter->MiniportDeviceContext, &IsSupportedArgs);
-            }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-            {
-                Status = _SEH2_GetExceptionCode();
-                DXGKRNL_ERR("DxgkpCommitVidPnToMiniport: IsSupportedVidPn FAULTED 0x%08lX\n",
-                            Status);
-            }
-            _SEH2_END;
-            DxgkReleaseKmdCall(Adapter);
-            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: IsSupportedVidPn returned 0x%08lX, "
-                          "supported=%d\n", Status, IsSupportedArgs.IsVidPnSupported);
-
-            if (!NT_SUCCESS(Status))
-            {
-                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: IsSupportedVidPn failed 0x%08lX\n", Status);
-                goto Cleanup;
-            }
-            if (!IsSupportedArgs.IsVidPnSupported)
-            {
-                Status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
-                goto Cleanup;
-            }
-        }
+        /* Recheck support after cofunctional modality has updated the modes. */
     }
 
     /*
@@ -432,6 +473,38 @@ DxgkpDisplayCommitVidPnCandidate(
         RtlZeroMemory(&EnumArgs, sizeof(EnumArgs));
         EnumArgs.hConstrainingVidPn = (D3DKMDT_HVIDPN)VidPn;
         EnumArgs.EnumPivotType = D3DKMDT_EPT_NOPIVOT;
+
+        /*
+         * A full miniport owns its display timings; dxgkrnl does not.
+         *
+         * Handing one a VidPN whose target mode set dxgkrnl invented, with a
+         * mode already pinned in it, leaves cofunctional modality nothing to
+         * enumerate -- this Intel part reads the topology, the path and both
+         * pinned modes, creates and assigns and pins nothing, and then refuses
+         * the VidPN, because the timing it is being asked to accept is not one
+         * it ever advertised.  Clear the target mode set and name the source as
+         * the pivot instead: the source mode is pinned (that is the desktop
+         * resolution, which is the OS's decision), and the driver is asked to
+         * enumerate the target timings that can drive it.  The target mode is
+         * then pinned below from the driver's own list.
+         *
+         * Display-only and basic-display adapters keep the pre-seeded modes:
+         * they have no timing tables of their own to enumerate from.
+         */
+        if (!TopologyEmpty && FullMiniportNegotiatesModes &&
+            VidPn->TargetModeSets[ActiveTargetIndex] != NULL)
+        {
+            PDXGKP_VIDPN_TARGET_MODESET TgtSet = VidPn->TargetModeSets[ActiveTargetIndex];
+
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: clearing %Iu synthetic target "
+                          "modes so the miniport enumerates its own\n", TgtSet->NumModes);
+            TgtSet->NumModes = 0;
+            TgtSet->PinnedModeId = (UINT)-1;
+            TgtSet->NextModeId = 0;
+            EnumArgs.EnumPivotType = D3DKMDT_EPT_VIDPNSOURCE;
+            EnumArgs.EnumPivot.VidPnSourceId = ActiveSourceId;
+            EnumArgs.EnumPivot.VidPnTargetId = ActiveTargetId;
+        }
 
         if (!DxgkAcquireKmdCall(Adapter))
         {
@@ -486,9 +559,9 @@ DxgkpDisplayCommitVidPnCandidate(
          * sync with the miniport's boot framebuffer when cofunc negotiation
          * is skipped.
          */
-        if (VidPn->TargetModeSets[ActiveTargetId] != NULL && VidPn->TargetModeSets[ActiveTargetId]->NumModes > 0)
+        if (VidPn->TargetModeSets[ActiveTargetIndex] != NULL && VidPn->TargetModeSets[ActiveTargetIndex]->NumModes > 0)
         {
-            PDXGKP_VIDPN_TARGET_MODESET TgtSet = VidPn->TargetModeSets[ActiveTargetId];
+            PDXGKP_VIDPN_TARGET_MODESET TgtSet = VidPn->TargetModeSets[ActiveTargetIndex];
             SIZE_T TargetIndex = 0;
 
             DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: %u target modes, "
@@ -504,9 +577,29 @@ DxgkpDisplayCommitVidPnCandidate(
                               i, TgtSet->Modes[i].Id, w, h);
             }
 
-            if (Adapter->PostDisplayWidth > 0 && Adapter->PostDisplayHeight > 0)
+            /*
+             * A PREFERRED target mode wins, because that is the monitor's own
+             * detailed timing as parsed from its EDID -- a real raster the
+             * display is known to accept.  Matching the POST size first
+             * instead picked whichever synthetic default happened to carry
+             * the same width and height, which is a mode dxgkrnl made up.
+             */
+            BOOLEAN FoundPreferredTarget = FALSE;
+
+            for (i = 0; i < TgtSet->NumModes; i++)
             {
-                /* Search for the POST/GOP resolution. */
+                if (TgtSet->Modes[i].Preference == D3DKMDT_MP_PREFERRED)
+                {
+                    TargetIndex = i;
+                    FoundPreferredTarget = TRUE;
+                    break;
+                }
+            }
+
+            if (!FoundPreferredTarget &&
+                Adapter->PostDisplayWidth > 0 && Adapter->PostDisplayHeight > 0)
+            {
+                /* No monitor timing to go on; fall back to the POST/GOP size. */
                 for (i = 0; i < TgtSet->NumModes; i++)
                 {
                     UINT CandidateWidth;
@@ -518,19 +611,6 @@ DxgkpDisplayCommitVidPnCandidate(
 
                     if (CandidateWidth == Adapter->PostDisplayWidth &&
                         CandidateHeight == Adapter->PostDisplayHeight)
-                    {
-                        TargetIndex = i;
-                        break;
-                    }
-                }
-            }
-
-            /* If GOP resolution wasn't found, look for a PREFERRED mode. */
-            if (TargetIndex == 0 && TgtSet->NumModes > 1)
-            {
-                for (i = 0; i < TgtSet->NumModes; i++)
-                {
-                    if (TgtSet->Modes[i].Preference == D3DKMDT_MP_PREFERRED)
                     {
                         TargetIndex = i;
                         break;
@@ -592,9 +672,9 @@ DxgkpDisplayCommitVidPnCandidate(
             DesiredHeight = DodDesktopH;
 
             /* Re-pin the target to the desktop mode if the set advertises it. */
-            if (VidPn->TargetModeSets[ActiveTargetId] != NULL)
+            if (VidPn->TargetModeSets[ActiveTargetIndex] != NULL)
             {
-                PDXGKP_VIDPN_TARGET_MODESET DodTgt = VidPn->TargetModeSets[ActiveTargetId];
+                PDXGKP_VIDPN_TARGET_MODESET DodTgt = VidPn->TargetModeSets[ActiveTargetIndex];
                 BOOLEAN FoundDodTgt = FALSE;
                 SIZE_T PinIdx = 0;
 
@@ -794,6 +874,29 @@ DxgkpDisplayCommitVidPnCandidate(
     {
         NewCommittedWidth = 0;
         NewCommittedHeight = 0;
+    }
+
+    /*
+     * Step 3b: ask again, now that the driver has made the VidPN cofunctional
+     * and the pinned modes come from the sets the driver itself left behind.
+     * This is the answer that decides the mode set; a driver that still says
+     * no cannot be handed timings.
+     */
+    if ((!VidPnAccepted || FullMiniportNegotiatesModes) &&
+        !ForceDodPresentOnlyPath &&
+        !SkipDodVidPnNegotiation &&
+        DXGK_CB(Adapter, DxgkDdiIsSupportedVidPn) != NULL)
+    {
+        Status = DxgkpAskMiniportIsVidPnSupported(Adapter, VidPn, &VidPnAccepted);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        if (!VidPnAccepted)
+        {
+            Status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+            goto Cleanup;
+        }
+        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: miniport accepted the VidPN after "
+                      "cofunctional modality\n");
     }
 
     /*
@@ -1718,6 +1821,7 @@ DxgkpPointerBridgeSetPosition(
     _SEH2_END;
     DxgkReleaseKmdCall(Adapter);
 
+
     if (!NT_SUCCESS(Status))
         InterlockedIncrement(&g_PointerFailureCount);
 
@@ -1786,6 +1890,7 @@ DxgkpPointerBridgeSetShape(
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
+
     DxgkReleaseMiniportCallback(Adapter);
 
     if (!NT_SUCCESS(Status))

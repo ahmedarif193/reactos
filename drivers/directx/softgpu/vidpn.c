@@ -156,7 +156,7 @@ SoftGpuCheckPinnedTargetMode(
 
     *Supported = FALSE;
     Status = VidPnInterface->pfnAcquireTargetModeSet(hVidPn,
-                                                     0,
+                                                     SOFTGPU_CHILD_UID,
                                                      &hModeSet,
                                                      &ModeSetInterface);
     if (!NT_SUCCESS(Status))
@@ -255,7 +255,7 @@ SoftGpuValidateCommittedTargetMode(
     NTSTATUS ReleaseStatus;
 
     Status = VidPnInterface->pfnAcquireTargetModeSet(hVidPn,
-                                                     0,
+                                                     SOFTGPU_CHILD_UID,
                                                      &hModeSet,
                                                      &ModeSetInterface);
     if (!NT_SUCCESS(Status))
@@ -375,7 +375,7 @@ SoftGpuDdiIsSupportedVidPn(
 
     PathSupported =
         Path->VidPnSourceId == 0 &&
-        Path->VidPnTargetId == 0 &&
+        Path->VidPnTargetId == SOFTGPU_CHILD_UID &&
         (Path->ContentTransformation.Scaling == D3DKMDT_VPPS_IDENTITY ||
          Path->ContentTransformation.Scaling == D3DKMDT_VPPS_UNPINNED ||
          Path->ContentTransformation.Scaling == D3DKMDT_VPPS_NOTSPECIFIED) &&
@@ -847,7 +847,7 @@ SoftGpuValidateFunctionalVidPn(
 
     if (Path->VidPnSourceId != 0)
         Status = STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
-    else if (Path->VidPnTargetId != 0)
+    else if (Path->VidPnTargetId != SOFTGPU_CHILD_UID)
         Status = STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
     else if (!SoftGpuVidPnActiveTransformSupported(
                  Path->ContentTransformation.Scaling,
@@ -982,7 +982,7 @@ SoftGpuDdiSetTimingsFromVidPn(
     if (SetTimings->PathCount != 0)
     {
         PathInfo = &SetTimings->pSetTimingPathInfo[0];
-        if (PathInfo->VidPnTargetId != 0 ||
+        if (PathInfo->VidPnTargetId != SOFTGPU_CHILD_UID ||
             (PathInfo->InputFlags & ~0x1FUL) != 0)
         {
             return STATUS_INVALID_PARAMETER;
@@ -1031,7 +1031,7 @@ SoftGpuDdiSetTimingsFromVidPn(
         RtlZeroMemory(&PathInfo->TargetState,
                       sizeof(PathInfo->TargetState));
         PathInfo->TargetState.ConnectionChangeId = 1;
-        PathInfo->TargetState.TargetId = 0;
+        PathInfo->TargetState.TargetId = SOFTGPU_CHILD_UID;
         PathInfo->TargetState.ConnectionStatus =
             MonitorStatusConnected;
         PathInfo->TargetState.MonitorConnect.LinkTargetType =
@@ -1926,7 +1926,7 @@ SoftGpuDdiUpdateActiveVidPnPresentPath(
     if (UpdateActiveVidPnPresentPath->VidPnPresentPathInfo.VidPnSourceId != 0)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
 
-    if (UpdateActiveVidPnPresentPath->VidPnPresentPathInfo.VidPnTargetId != 0)
+    if (UpdateActiveVidPnPresentPath->VidPnPresentPathInfo.VidPnTargetId != SOFTGPU_CHILD_UID)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
 
     if (!SoftGpuVidPnActiveTransformSupported(
@@ -1964,7 +1964,7 @@ SoftGpuDdiRecommendMonitorModes(
     DPRINT("SOFTGPU: RecommendMonitorModes TargetId=%u\n",
            RecommendMonitorModes->VideoPresentTargetId);
 
-    if (RecommendMonitorModes->VideoPresentTargetId != 0)
+    if (RecommendMonitorModes->VideoPresentTargetId != SOFTGPU_CHILD_UID)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
 
     return STATUS_GRAPHICS_NO_PREFERRED_MODE;
@@ -2029,7 +2029,7 @@ SoftGpuDdiQueryDeviceDescriptor(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (ChildUid != 1)
+    if (ChildUid != SOFTGPU_CHILD_UID)
         return STATUS_INVALID_PARAMETER;
 
     DPRINT("SOFTGPU: QueryDeviceDescriptor ChildUid=%lu\n", ChildUid);

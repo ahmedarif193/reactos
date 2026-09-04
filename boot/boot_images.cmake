@@ -377,6 +377,60 @@ add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Profiles" "D
 # Mini setup runs the shell as LocalSystem, whose profile is resolved by token.
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "reactos/system32/config" "systemprofile")
 
+# Optional build-local payload for LiveCD images. Each non-comment line uses
+# the same "image/path=host/path" format as livecd.cmake.lst. This keeps
+# externally supplied diagnostic and hardware payloads outside the source tree
+# while making their contents part of the generated image build graph.
+set(LIVECD_EXTRA_FILE_LIST "" CACHE FILEPATH "Additional file manifest(s) for ReactOS LiveCD images (semicolon separated)")
+set(LIVECD_EXTRA_REGISTRY_INF "" CACHE FILEPATH "Additional registry INF(s) for ReactOS LiveCD hives (semicolon separated)")
+set(_livecd_overlay_deps)
+foreach(_livecd_extra_file_list IN LISTS LIVECD_EXTRA_FILE_LIST)
+    if(_livecd_extra_file_list STREQUAL "")
+        continue()
+    endif()
+    get_filename_component(_livecd_extra_file_list "${_livecd_extra_file_list}" ABSOLUTE BASE_DIR "${REACTOS_BINARY_DIR}")
+    if(NOT EXISTS "${_livecd_extra_file_list}")
+        message(FATAL_ERROR "LIVECD_EXTRA_FILE_LIST does not exist: ${_livecd_extra_file_list}")
+    endif()
+
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_livecd_extra_file_list}")
+    file(STRINGS "${_livecd_extra_file_list}" _livecd_extra_entries)
+    get_filename_component(_livecd_extra_base "${_livecd_extra_file_list}" DIRECTORY)
+    foreach(_livecd_extra_entry IN LISTS _livecd_extra_entries)
+        if(_livecd_extra_entry STREQUAL "" OR _livecd_extra_entry MATCHES "^[ \t]*#")
+            continue()
+        endif()
+
+        string(FIND "${_livecd_extra_entry}" "=" _livecd_extra_separator)
+        if(_livecd_extra_separator LESS 1)
+            message(FATAL_ERROR "Invalid LiveCD overlay entry: ${_livecd_extra_entry}")
+        endif()
+
+        string(SUBSTRING "${_livecd_extra_entry}" 0 ${_livecd_extra_separator} _livecd_extra_destination)
+        math(EXPR _livecd_extra_source_offset "${_livecd_extra_separator} + 1")
+        string(SUBSTRING "${_livecd_extra_entry}" ${_livecd_extra_source_offset} -1 _livecd_extra_source)
+        get_filename_component(_livecd_extra_source "${_livecd_extra_source}" ABSOLUTE BASE_DIR "${_livecd_extra_base}")
+        if(NOT EXISTS "${_livecd_extra_source}")
+            message(FATAL_ERROR "LiveCD overlay source does not exist: ${_livecd_extra_source}")
+        endif()
+
+        set_property(GLOBAL APPEND PROPERTY LIVECD_OVERLAY_FILE_LIST "${_livecd_extra_destination}=${_livecd_extra_source}")
+        list(APPEND _livecd_overlay_deps "${_livecd_extra_source}")
+    endforeach()
+    list(APPEND _livecd_overlay_deps "${_livecd_extra_file_list}")
+endforeach()
+
+foreach(_livecd_extra_registry_inf IN LISTS LIVECD_EXTRA_REGISTRY_INF)
+    if(_livecd_extra_registry_inf STREQUAL "")
+        continue()
+    endif()
+    get_filename_component(_livecd_extra_registry_inf "${_livecd_extra_registry_inf}" ABSOLUTE BASE_DIR "${REACTOS_BINARY_DIR}")
+    if(NOT EXISTS "${_livecd_extra_registry_inf}")
+        message(FATAL_ERROR "LIVECD_EXTRA_REGISTRY_INF does not exist: ${_livecd_extra_registry_inf}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_livecd_extra_registry_inf}")
+endforeach()
+
 if(FREELDR_WIM_RAMDISK)
     set(_livecd_stage_dir  ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim_stage)
     set(_livecd_boot_wim   ${CMAKE_CURRENT_BINARY_DIR}/boot.wim)
@@ -399,7 +453,7 @@ if(FREELDR_WIM_RAMDISK)
             ${ISO_COMMON_OPTIONS} ${ISO_BOOT_OPTIONS} ${ISO_BOOT_FILES_OPTIONS} ${ISO_LAYOUT_OPTIONS}
             -path-list ${_livecd_wim_lst}
         ${ISOHYBRID_LIVECD_COMMAND}
-        DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs native-wimage ${_livecd_ini_src} ${_livecd_wim_script}
+        DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs native-wimage ${_livecd_ini_src} ${_livecd_wim_script} ${_livecd_overlay_deps}
         VERBATIM)
 else()
     add_custom_target(livecd
@@ -407,7 +461,7 @@ else()
             ${ISO_COMMON_OPTIONS} ${ISO_BOOT_OPTIONS} ${ISO_BOOT_FILES_OPTIONS} ${ISO_LAYOUT_OPTIONS}
             -path-list ${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
         ${ISOHYBRID_LIVECD_COMMAND}
-        DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs
+        DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs ${_livecd_overlay_deps}
         VERBATIM)
 endif()
 
