@@ -172,6 +172,55 @@ RtlpArm64GetExceptionHandler(
 }
 
 /*
+ * The dispatcher-context pointer that RtlpExecuteHandlerForException stashes
+ * below its own establisher frame, so that RtlpExceptionHandler can report the
+ * frame whose handler is running back to the nested dispatch.
+ */
+#define ARM64_HANDLER_FRAME_DISPATCHER_OFFSET 0x10
+
+EXCEPTION_DISPOSITION
+NTAPI
+RtlpExceptionHandler(_In_ PEXCEPTION_RECORD ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ PCONTEXT ContextRecord, _Inout_ PVOID DispatcherContext)
+{
+    PDISPATCHER_CONTEXT NestedDispatcherContext = (PDISPATCHER_CONTEXT)DispatcherContext;
+    PDISPATCHER_CONTEXT ActiveDispatcherContext;
+
+    UNREFERENCED_PARAMETER(ContextRecord);
+
+    /* Unwinding through a handler frame is not a nested exception */
+    if (ExceptionRecord->ExceptionFlags & EXCEPTION_UNWIND)
+    {
+        return ExceptionContinueSearch;
+    }
+
+    ActiveDispatcherContext = *(PDISPATCHER_CONTEXT *)((PUCHAR)EstablisherFrame - ARM64_HANDLER_FRAME_DISPATCHER_OFFSET);
+    NestedDispatcherContext->EstablisherFrame = ActiveDispatcherContext->EstablisherFrame;
+    return ExceptionNestedException;
+}
+
+EXCEPTION_DISPOSITION
+NTAPI
+RtlpUnwindHandler(_In_ PEXCEPTION_RECORD ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ PCONTEXT ContextRecord, _Inout_ PVOID DispatcherContext)
+{
+    PDISPATCHER_CONTEXT CollidedDispatcherContext = (PDISPATCHER_CONTEXT)DispatcherContext;
+    PDISPATCHER_CONTEXT ActiveDispatcherContext;
+    ULONG64 TargetPc;
+
+    UNREFERENCED_PARAMETER(ExceptionRecord);
+    UNREFERENCED_PARAMETER(ContextRecord);
+
+    /*
+     * An unwind is already running in this frame. Hand its state to the new
+     * walk so that it resumes there instead of running the handler again.
+     */
+    ActiveDispatcherContext = *(PDISPATCHER_CONTEXT *)((PUCHAR)EstablisherFrame - ARM64_HANDLER_FRAME_DISPATCHER_OFFSET);
+    TargetPc = CollidedDispatcherContext->TargetPc;
+    *CollidedDispatcherContext = *ActiveDispatcherContext;
+    CollidedDispatcherContext->TargetPc = TargetPc;
+    return ExceptionCollidedUnwind;
+}
+
+/*
  * Advances a captured CONTEXT one frame up so it describes the caller of the
  * routine that captured it.
  */
@@ -191,6 +240,34 @@ RtlpArm64StepContextToCaller(_Inout_ PCONTEXT Context)
     }
 
     RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, Context->Pc, FunctionEntry, Context, &HandlerData, &EstablisherFrame, NULL);
+}
+
+/*
+ * Rewinds a frame walk into the frame that RtlpUnwindHandler reported as
+ * already unwinding, and steps past it, so its handler runs once and the walk
+ * resumes in its caller.
+ */
+VOID
+NTAPI
+RtlpArm64RestoreCollidedFrame(_Inout_ PDISPATCHER_CONTEXT DispatcherContext, _Out_ PCONTEXT UnwindContext, _Out_writes_bytes_(NonVolatileRegistersLength) PVOID NonVolatileRegisters, _In_ ULONG NonVolatileRegistersLength, _Out_ PULONG64 EstablisherFrame)
+{
+    ULONG_PTR LookupPc;
+    ULONG64 UnwoundFrame;
+    PVOID HandlerData;
+
+    *UnwindContext = *DispatcherContext->ContextRecord;
+    RtlCopyMemory(NonVolatileRegisters, DispatcherContext->NonVolatileRegisters, NonVolatileRegistersLength);
+
+    LookupPc = (ULONG_PTR)DispatcherContext->ControlPc;
+    if (DispatcherContext->ControlPcIsUnwound)
+    {
+        LookupPc -= 4;
+    }
+
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER, DispatcherContext->ImageBase, LookupPc, DispatcherContext->FunctionEntry, UnwindContext, &HandlerData, &UnwoundFrame, NULL);
+
+    DispatcherContext->NonVolatileRegisters = (PBYTE)NonVolatileRegisters;
+    *EstablisherFrame = DispatcherContext->EstablisherFrame;
 }
 
 VOID
@@ -219,6 +296,7 @@ RtlDispatchException(
     EXCEPTION_DISPOSITION Disposition;
     ULONG Frames;
     ULONG64 EstablisherFrame;
+    ULONG64 NestedFrame;
     ULONG_PTR StackLow;
     ULONG_PTR StackHigh;
     ULONG_PTR LookupPc;
@@ -232,6 +310,7 @@ RtlDispatchException(
     }
 
     UnwindContext = *ContextRecord;
+    NestedFrame = 0;
     RtlpGetStackLimits(&StackLow, &StackHigh);
 
     for (Frames = 0; Frames < 128; Frames++)
@@ -289,21 +368,44 @@ RtlDispatchException(
             DispatcherContext.ControlPcIsUnwound = ControlPcIsUnwound;
             DispatcherContext.NonVolatileRegisters = NonVolatileRegisters.Buffer;
 
-            Disposition = ExceptionRoutine(ExceptionRecord,
-                                           (PVOID)(ULONG_PTR)EstablisherFrame,
-                                           ContextRecord,
-                                           &DispatcherContext);
-
-            if (Disposition == ExceptionContinueExecution)
+            do
             {
-                if (ExceptionRecord->ExceptionFlags & EXCEPTION_NONCONTINUABLE)
+                Disposition = RtlpExecuteHandlerForException(ExceptionRecord, (PVOID)(ULONG_PTR)EstablisherFrame, ContextRecord, &DispatcherContext, DispatcherContext.LanguageHandler);
+
+                /* Reaching the frame whose handler raised the nesting ends it */
+                if (EstablisherFrame == NestedFrame)
                 {
-                    RtlRaiseStatus(STATUS_NONCONTINUABLE_EXCEPTION);
+                    ExceptionRecord->ExceptionFlags &= ~EXCEPTION_NESTED_CALL;
+                    NestedFrame = 0;
                 }
 
-                RtlCallVectoredContinueHandlers(ExceptionRecord, ContextRecord);
-                return TRUE;
+                if (Disposition == ExceptionContinueExecution)
+                {
+                    if (ExceptionRecord->ExceptionFlags & EXCEPTION_NONCONTINUABLE)
+                    {
+                        RtlRaiseStatus(STATUS_NONCONTINUABLE_EXCEPTION);
+                    }
+
+                    RtlCallVectoredContinueHandlers(ExceptionRecord, ContextRecord);
+                    return TRUE;
+                }
+
+                if (Disposition == ExceptionNestedException)
+                {
+                    /* This dispatch runs inside a handler: tell the frames above it */
+                    ExceptionRecord->ExceptionFlags |= EXCEPTION_NESTED_CALL;
+                    if (DispatcherContext.EstablisherFrame > NestedFrame)
+                    {
+                        NestedFrame = DispatcherContext.EstablisherFrame;
+                    }
+                }
+                else if (Disposition == ExceptionCollidedUnwind)
+                {
+                    RtlpArm64RestoreCollidedFrame(&DispatcherContext, &UnwindContext, NonVolatileRegisters.Buffer, sizeof(NonVolatileRegisters.Buffer), &EstablisherFrame);
+                    DispatcherContext.ContextRecord = &UnwindContext;
+                }
             }
+            while (Disposition == ExceptionCollidedUnwind);
 
             if ((Disposition != ExceptionContinueSearch) &&
                 (Disposition != ExceptionNestedException))
