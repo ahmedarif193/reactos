@@ -1213,15 +1213,6 @@ WddmBridgeCreateAllocation(
         WddmBridgeReadAllocationInfo(AllocationInfo, UseAllocationInfo2, i, &View);
         AllocationPrivateCapture[i].UserBuffer = View.pPrivateDriverData;
         AllocationPrivateCapture[i].Size = View.PrivateDriverDataSize;
-        /* User pSystemMem is only legal as EXISTINGHEAP backing; dxgkrnl
-         * probes and locks the pages in-context. */
-        if (ExGetPreviousMode() != KernelMode && View.pSystemMem != NULL &&
-            !(StandardAllocation &&
-              ((CONST D3DKMT_CREATESTANDARDALLOCATION *)Captured.pStandardAllocation)->Type == D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP))
-        {
-            Status = STATUS_INVALID_PARAMETER;
-            goto Cleanup;
-        }
 
         if (View.PrivateDriverDataSize == 0)
         {
