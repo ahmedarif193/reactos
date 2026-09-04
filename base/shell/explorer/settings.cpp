@@ -60,7 +60,7 @@ BOOL TaskbarSettings::Load()
     bHideInactiveIcons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : FALSE;
 
     dwRet = SHGetValueW(hkExplorer, L"Advanced", L"TaskbarSmallIcons", NULL, &dwValue, &cbSize);
-    bSmallIcons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : TRUE;
+    bSmallIcons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : FALSE;
 
     dwRet = SHGetValueW(hkExplorer, L"Advanced", L"CompactTrayIcons", NULL, &dwValue, &cbSize);
     if (dwRet == ERROR_SUCCESS && dwValue <= TIM_Max)
