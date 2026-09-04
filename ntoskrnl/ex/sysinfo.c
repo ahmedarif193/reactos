@@ -13,6 +13,7 @@
 #include <ntoskrnl.h>
 #include <wmidata.h>
 #include <wmistr.h>
+#include <drivers/acpi/acpisystem.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -373,6 +374,89 @@ ExLockUserBuffer(
     /* Return the MDL */
     *OutMdl = Mdl;
     return STATUS_SUCCESS;
+}
+
+#define EXP_ACPI_TABLE_LIMIT (16 * 1024 * 1024)
+
+static
+NTSTATUS
+ExpSendAcpiTableIoctl(
+    _In_ ULONG IoControlCode,
+    _In_reads_bytes_opt_(InputSize) PVOID InputBuffer,
+    _In_ ULONG InputSize,
+    _Out_writes_bytes_opt_(OutputSize) PVOID OutputBuffer,
+    _In_ ULONG OutputSize,
+    _Out_ PULONG_PTR Information)
+{
+    PWSTR InterfaceList = NULL;
+    PFILE_OBJECT FileObject = NULL;
+    PDEVICE_OBJECT DeviceObject = NULL;
+    UNICODE_STRING InterfaceName;
+    IO_STATUS_BLOCK IoStatus;
+    KEVENT Event;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    *Information = 0;
+
+    Status = IoGetDeviceInterfaces(&GUID_ACPI_SYSTEM_INTERFACE,
+                                   NULL,
+                                   0,
+                                   &InterfaceList);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (InterfaceList == NULL || InterfaceList[0] == UNICODE_NULL)
+    {
+        if (InterfaceList != NULL)
+            ExFreePool(InterfaceList);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    RtlInitUnicodeString(&InterfaceName, InterfaceList);
+    Status = IoGetDeviceObjectPointer(&InterfaceName,
+                                      FILE_READ_DATA | SYNCHRONIZE,
+                                      &FileObject,
+                                      &DeviceObject);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePool(InterfaceList);
+        return Status;
+    }
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    RtlZeroMemory(&IoStatus, sizeof(IoStatus));
+
+    Irp = IoBuildDeviceIoControlRequest(IoControlCode,
+                                        DeviceObject,
+                                        InputBuffer,
+                                        InputSize,
+                                        OutputBuffer,
+                                        OutputSize,
+                                        FALSE,
+                                        &Event,
+                                        &IoStatus);
+    if (Irp == NULL)
+    {
+        ObDereferenceObject(FileObject);
+        ExFreePool(InterfaceList);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+
+    *Information = IoStatus.Information;
+
+    ObDereferenceObject(FileObject);
+    ExFreePool(InterfaceList);
+    return Status;
 }
 
 NTSTATUS
@@ -3075,9 +3159,112 @@ QSI_DEF(SystemFirmwareTableInformation)
          */
         case SIG_ACPI:
         {
-            /* FIXME: Not implemented yet */
-            DPRINT1("ACPI provider not implemented\n");
-            Status = STATUS_NOT_IMPLEMENTED;
+            if (SysFirmwareInfo->Action == SystemFirmwareTable_Enumerate)
+            {
+                PACPI_ENUM_SYSTEM_TABLES_ENTRY Entries;
+                ULONG_PTR Information = 0;
+                ULONG Capacity = 64;
+                ULONG Index;
+
+                for (;;)
+                {
+                    Entries = ExAllocatePoolWithTag(PagedPool,
+                                                    Capacity * sizeof(*Entries),
+                                                    'tfwA');
+                    if (Entries == NULL)
+                    {
+                        Status = STATUS_INSUFFICIENT_RESOURCES;
+                        break;
+                    }
+
+                    Status = ExpSendAcpiTableIoctl(IOCTL_ACPI_ENUM_SYSTEM_TABLES,
+                                                   NULL,
+                                                   0,
+                                                   Entries,
+                                                   Capacity * sizeof(*Entries),
+                                                   &Information);
+                    if (Status != STATUS_BUFFER_TOO_SMALL)
+                        break;
+
+                    ExFreePoolWithTag(Entries, 'tfwA');
+                    Entries = NULL;
+
+                    if (Information <= (ULONG_PTR)(Capacity * sizeof(*Entries)) ||
+                        Information > EXP_ACPI_TABLE_LIMIT ||
+                        Information % sizeof(*Entries) != 0)
+                    {
+                        Status = STATUS_ACPI_INVALID_DATA;
+                        break;
+                    }
+                    Capacity = (ULONG)(Information / sizeof(*Entries));
+                }
+
+                if (!NT_SUCCESS(Status))
+                {
+                    if (Entries != NULL)
+                        ExFreePoolWithTag(Entries, 'tfwA');
+                    break;
+                }
+
+                if (Information > (ULONG_PTR)(Capacity * sizeof(*Entries)) ||
+                    Information % sizeof(*Entries) != 0)
+                {
+                    ExFreePoolWithTag(Entries, 'tfwA');
+                    Status = STATUS_ACPI_INVALID_DATA;
+                    break;
+                }
+
+                TableCount = (ULONG)(Information / sizeof(*Entries));
+                DataSize = TableCount * sizeof(ULONG);
+                if (DataSize <= DataBufSize)
+                {
+                    /* A table is identified by its signature, as a ULONG */
+                    for (Index = 0; Index < TableCount; Index++)
+                    {
+                        RtlCopyMemory(&((PULONG)SysFirmwareInfo->TableBuffer)[Index],
+                                      Entries[Index].Signature,
+                                      sizeof(ULONG));
+                    }
+                }
+
+                ExFreePoolWithTag(Entries, 'tfwA');
+                SysFirmwareInfo->TableBufferLength = DataSize;
+                *ReqSize += DataSize;
+            }
+            else if (SysFirmwareInfo->Action == SystemFirmwareTable_Get)
+            {
+                ACPI_GET_SYSTEM_TABLE_INPUT Input;
+                ULONG_PTR Information = 0;
+
+                RtlZeroMemory(&Input, sizeof(Input));
+                RtlCopyMemory(Input.Signature,
+                              &SysFirmwareInfo->TableID,
+                              sizeof(Input.Signature));
+                Input.Instance = 1;
+
+                Status = ExpSendAcpiTableIoctl(IOCTL_ACPI_GET_SYSTEM_TABLE,
+                                               &Input,
+                                               sizeof(Input),
+                                               SysFirmwareInfo->TableBuffer,
+                                               DataBufSize,
+                                               &Information);
+                if (Information > EXP_ACPI_TABLE_LIMIT)
+                {
+                    Status = STATUS_ACPI_INVALID_DATA;
+                    break;
+                }
+
+                if (Status == STATUS_BUFFER_TOO_SMALL)
+                    Status = STATUS_SUCCESS;
+
+                DataSize = (ULONG)Information;
+                SysFirmwareInfo->TableBufferLength = DataSize;
+                *ReqSize += DataSize;
+            }
+            else
+            {
+                Status = STATUS_ILLEGAL_FUNCTION;
+            }
             break;
         }
         case SIG_FIRM:
