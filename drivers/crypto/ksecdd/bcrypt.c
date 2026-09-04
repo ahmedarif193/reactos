@@ -821,6 +821,22 @@ BCryptHashData(
     if (InputSize != 0 && Input == NULL)
         return STATUS_INVALID_PARAMETER;
 
+    /*
+     * A kernel caller can hand over a range that is no longer mapped: the
+     * Intel display miniport hashes its own image sections after DriverEntry,
+     * including the INIT section the loader has already discarded.  SymCrypt
+     * reads the whole buffer in one pass, so the fault would land inside the
+     * copy with the caller's identity lost.  MmIsAddressValid tests residency,
+     * not ownership, so this only refuses a range with nothing behind it.
+     */
+    if (InputSize != 0 &&
+        (!MmIsAddressValid(Input) || !MmIsAddressValid(Input + InputSize - 1)))
+    {
+        DPRINT1("BCryptHashData: input %p+0x%lx is not mapped, refusing\n",
+                Input, InputSize);
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (Hash->Id == KsecAlgAesCmac)
         SymCryptAesCmacAppend(&Hash->State.Cmac.State, Input, InputSize);
     else if (Hash->Header.Flags & KSEC_HASH_HMAC)
