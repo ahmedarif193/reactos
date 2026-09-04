@@ -4434,16 +4434,33 @@ DxgkVidMmCreateAllocation(
     _Out_     PHANDLE                  OutHandle,
     _Out_opt_ PHANDLE                  OutResourceHandle)
 {
-    return DxgkpVidMmCreateAllocationTracked(Adapter,
-                                             Device,
-                                             AllocInfo,
-                                             CreatePrivateDriverData,
-                                             CreatePrivateDriverDataSize,
-                                             ResourceHandle,
-                                             CreateFlags,
-                                             OutHandle,
-                                             OutResourceHandle,
-                                             NULL);
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    NTSTATUS Status;
+    Status = DxgkpVidMmCreateAllocationTracked(Adapter,
+                                                Device,
+                                                AllocInfo,
+                                                CreatePrivateDriverData,
+                                                CreatePrivateDriverDataSize,
+                                                ResourceHandle,
+                                                CreateFlags,
+                                                OutHandle,
+                                                OutResourceHandle,
+                                                &Allocation);
+    if (NT_SUCCESS(Status))
+    {
+        /* This wrapper is used by completed kernel-owned standard-allocation
+         * operations, not by the multi-allocation user transaction below.
+         * Publish a device-scoped allocation before its resource wrapper is
+         * exposed to Query/OpenResource. */
+        ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+        ASSERT(Allocation != NULL && Allocation->Initializing == (Device != NULL));
+        if (Allocation != NULL)
+            Allocation->Initializing = FALSE;
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    }
+    if (Allocation != NULL)
+        DxgkVidMmDereferenceAllocation(Allocation);
+    return Status;
 }
 
 
