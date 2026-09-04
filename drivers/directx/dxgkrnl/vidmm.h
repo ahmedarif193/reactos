@@ -102,6 +102,7 @@ typedef struct _DXGKRNL_SEGMENT
      */
     ULONG               PagingBufferSegmentId;
     ULONG               PagingBufferSize;
+    ULONG               PagingBufferPrivateDataSize;
 
     /* Page to which UNMAP_APERTURE_SEGMENT redirects a retired aperture. */
     PVOID               DummyPageVa;
@@ -288,6 +289,8 @@ typedef struct _DXGKVMM_ALLOCATION
 
     /* TRUE if the allocation can be mapped into CPU virtual address space. */
     BOOLEAN             CpuVisible;
+    BOOLEAN             Cached;
+    BOOLEAN             ExplicitResidencyNotification;
 
     /* Miniport-declared capture buffer; required by GetCaptureAddress. */
     BOOLEAN             Capture;
@@ -392,6 +395,10 @@ typedef struct _DXGKVMM_ALLOCATION
 
     /* Miniport-side allocation handle (from DxgkDdiCreateAllocation). */
     HANDLE              MiniportHandle;
+    BOOLEAN             ContextAllocation;
+    PVOID               ContextAllocationHandle;
+    BOOLEAN             SysMemContiguousWc;
+    PMDL                SysMemPagesMdl;
 
     /* Allocation-private driver data used by QueryResourceInfo/OpenResource. */
     PVOID               PrivateDriverData;
@@ -507,6 +514,56 @@ NTSTATUS
 DxgkVidMmMakeResident(
     _In_ PDXGKVMM_ALLOCATION    Allocation,
     _In_ PDXGKRNL_ADAPTER       Adapter);
+
+VOID
+DxgkpVidMmFlushCpuCache(
+    _In_reads_bytes_(Size) PVOID Address,
+    _In_ SIZE_T Size);
+
+VOID DxgkVidMmDumpUserMappings(_In_ PDXGKVMM_ALLOCATION Allocation);
+
+NTSTATUS
+DxgkVidMmCreateContextAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ HANDLE DriverAllocation,
+    _In_ SIZE_T Size,
+    _In_ UINT Alignment,
+    _In_ UINT SupportedSegmentSet,
+    _In_ UINT EvictionSegmentSet,
+    _In_ DXGK_SEGMENTPREFERENCE PreferredSegment,
+    _In_ DXGK_SEGMENTBANKPREFERENCE HintedBank,
+    _In_ DXGK_ALLOCATIONINFOFLAGS Flags,
+    _In_ BOOLEAN MapGpuVirtualAddress,
+    _Out_ PHANDLE OutAllocation);
+
+NTSTATUS
+DxgkVidMmUpdateContextAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE ContextAllocationHandle,
+    _In_reads_bytes_opt_(PrivateDriverDataSize) PVOID PrivateDriverData,
+    _In_ ULONG PrivateDriverDataSize);
+
+VOID DxgkVidMmDumpSegments(_In_ PDXGKRNL_ADAPTER Adapter);
+VOID DxgkVidMmDumpContextAllocations(_In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
+DxgkVidMmMapContextAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE ContextAllocationHandle,
+    _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress,
+    _In_ D3DGPU_VIRTUAL_ADDRESS MinimumAddress,
+    _In_ D3DGPU_VIRTUAL_ADDRESS MaximumAddress,
+    _In_ ULONGLONG OffsetInPages,
+    _In_ ULONGLONG SizeInPages,
+    _In_ D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection,
+    _In_ UINT64 DriverProtection,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
+
+NTSTATUS
+DxgkVidMmDestroyContextAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE AllocationHandle);
 
 NTSTATUS
 DxgkVidMmMakeResidentBatch(
@@ -921,6 +978,26 @@ DxgkpVidMmDestroyResourceWrapper(
 NTSTATUS
 DxgkVidMmEnsureAllocationApertureMapped(
     _In_ PDXGKVMM_ALLOCATION Allocation);
+
+NTSTATUS
+DxgkVidMmMapPageTableSegment(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SegmentId,
+    _In_ PVOID KernelVa,
+    _In_ ULONG Size,
+    _In_ ULONG Alignment,
+    _In_ ULONGLONG OwnerCookie,
+    _Out_ PULONGLONG OutSegmentOffset,
+    _Out_ PMDL *OutMdl);
+
+VOID
+DxgkVidMmUnmapPageTableSegment(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SegmentId,
+    _In_ ULONGLONG SegmentOffset,
+    _In_ ULONG Size,
+    _In_ ULONGLONG OwnerCookie,
+    _In_opt_ PMDL Mdl);
 
 /*
  * DxgkVidMmCreatePreMappedAllocation

@@ -397,7 +397,7 @@ DxgkPagingExecuteBatch(
         Status = DxgkAllocateDmaBufferWithPrivateData(
                      Adapter,
                      BufferBytes,
-                     Adapter->PagingBufferPrivateDataSize,
+                     DxgkVidMmPagingBufferPrivateDataSize(Adapter),
                      &DmaBuffer);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
@@ -775,7 +775,7 @@ DxgkPagingExecute(
         Status = DxgkAllocateDmaBufferWithPrivateData(
                      Adapter,
                      BufferBytes,
-                     Adapter->PagingBufferPrivateDataSize,
+                     DxgkVidMmPagingBufferPrivateDataSize(Adapter),
                      &DmaBuffer);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
@@ -1048,5 +1048,24 @@ DxgkPagingAllocationReadyForSubmission(
         return TRUE;
     return DxgkPagingFenceCompleted(Allocation->Adapter, Allocation->PagingFenceId);
 }
+
+VOID
+DxgkPagingDumpStats(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG Type;
+
+    if (Adapter == NULL)
+        return;
+    for (Type = 0; Type < RTL_NUMBER_OF(Adapter->PagingBuildCount); Type++)
+    {
+        if (Adapter->PagingBuildCount[Type] == 0)
+            continue;
+        DXGKRNL_ERR("TDR paging type=%lu builds=%ld zero-byte=%ld bytes=%I64d packets=%ld\n",
+                    Type, Adapter->PagingBuildCount[Type], Adapter->PagingZeroByteBuildCount[Type],
+                    Adapter->PagingBuildBytes[Type], Adapter->PagingPacketCount[Type]);
+    }
+}
+
 
 /* EOF */

@@ -251,14 +251,16 @@ typedef struct _DXGKRNL_DMA_BUFFER
     PDXGKRNL_ADAPTER           OwnerAdapter;
     PVOID                       VirtualAddress;
     ULONG                       Capacity;
-    PVOID                       PrivateData;
-    ULONG                       PrivateDataSize;
-    ULONG                       PrivateDataUsed;
     ULONG                       SubmissionStartOffset;
     ULONG                       SubmissionEndOffset;
     UINT                        SegmentId;
     PHYSICAL_ADDRESS            SegmentAddress;
     DXGKRNL_DMA_BACKING_KIND    BackingKind;
+    /* Driver-resident paging-buffer private data (zeroed per use); the
+     * miniport advances through it in BuildPagingBuffer. */
+    PVOID                       PrivateData;
+    ULONG                       PrivateDataSize;
+    ULONG                       PrivateDataUsed;
 } DXGKRNL_DMA_BUFFER, *PDXGKRNL_DMA_BUFFER;
 
 /*
@@ -712,7 +714,6 @@ struct _DXGKRNL_ADAPTER
      */
     PVOID                       Segments;           /* PDXGKRNL_SEGMENT */
     ULONG                       SegmentCount;
-    ULONG                       PagingBufferPrivateDataSize;
 
     /*
      * GPU engine / node count.
@@ -818,6 +819,69 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               InterruptCount;
     volatile LONG               QueueDpcCount;
     volatile LONG               DpcCount;
+    volatile LONG               NotifyInterruptTypeCount[32];
+    volatile LONG               LastDmaCompletedFence;
+    volatile LONG64             LastDmaCompletedCounter;
+    /* TDR diagnostics: interrupt-time stamps and interrupts that produced
+     * no scheduler notification (miniport-internal or unclaimed). */
+    volatile LONG               NotifyTotalCount;
+    volatile LONG64             LastIsrTime100ns;
+    volatile LONG64             LastDmaNotifyTime100ns;
+    volatile LONG               OtherIsrCount;
+    volatile LONG64             LastOtherIsrTime100ns;
+    volatile LONG               LastOtherIsrMessage;
+    volatile LONG               UnhandledIsrCount;
+    /* TDR diagnostics: runtime power component callback activity. */
+    volatile LONG               PowerActiveCalls;
+    volatile LONG               PowerIdleCalls;
+    volatile LONG               PowerLatencyCalls;
+    volatile LONG               PowerResidencyCalls;
+    volatile LONG               PowerControlRequestCalls;
+    /* Reverse-callback mappings taken, so a failed start says how far it got. */
+    volatile LONG               MapMemoryCallCount;
+    volatile LONG               PowerFStateCompleteCalls;
+    /* Temporary hang diagnostics: Intel GT register window (BAR0). */
+    PVOID                       DiagMmio;
+    ULONG                       DiagMmioSize;
+    PHYSICAL_ADDRESS            DiagMmioPhysical;
+    KTIMER                      DiagFaultTimer;
+    KDPC                        DiagFaultDpc;
+    WORK_QUEUE_ITEM             DiagFaultWorkItem;
+    volatile LONG               DiagFaultWorkQueued;
+    volatile LONG               DiagFaultTimerActive;
+    ULONG                       DiagFaultCount;
+    DXGK_PHYSICALADAPTERCAPS    PhysicalAdapterCaps;
+    BOOLEAN                     PhysicalAdapterCapsValid;
+    volatile LONG               ContextAllocationCreateCount;
+    volatile LONG               ContextAllocationMapCount;
+    volatile LONG               ContextAllocationUpdateCount;
+    /* KMTQAITYPE_UMOPENGLINFO answer cached after the first successful
+     * registry query; the adapter's ICD registration does not change while
+     * it is started and the query is on the ICD's per-present path. */
+    D3DKMT_OPENGLINFO           CachedOpenGlInfo;
+    volatile LONG               OpenGlInfoCached;
+    /* TDR diagnostics: paging-buffer build accounting per operation type. */
+    volatile LONG               PagingBuildCount[16];
+    volatile LONG               PagingZeroByteBuildCount[16];
+    volatile LONG64             PagingBuildBytes[16];
+    volatile LONG               PagingPacketCount[16];
+
+    volatile LONG               PowerLastActiveComponent;
+    volatile LONG               PowerLastIdleComponent;
+    volatile LONG64             PowerLastActiveTime100ns;
+    volatile LONG64             PowerLastIdleTime100ns;
+    volatile LONG64             LastMiniportDpcCompletedCounter;
+    volatile LONG               LastPageFaultFence;
+    volatile LONGLONG           LastPageFaultPrimitiveSequence;
+    volatile LONG               LastPageFaultPipelineStage;
+    volatile LONG               LastPageFaultBindTableEntry;
+    volatile LONG               LastPageFaultFlags;
+    volatile LONGLONG           LastPageFaultVirtualAddress;
+    volatile LONG               LastPageFaultNode;
+    volatile LONG               LastPageFaultEngine;
+    volatile LONG               LastPageFaultLevel;
+    volatile LONG               LastPageFaultErrorCode;
+    volatile LONG64             LastPageFaultProcessHandle;
     ULONGLONG                   InterruptTraceEpoch100ns;
 
     /*
@@ -927,7 +991,7 @@ struct _DXGKRNL_ADAPTER
     ULONG                       ShadowFbPitch;
     ULONG                       ShadowFbSize;
     BOOLEAN                     ShadowFbPoolOwned;
-    LONG                        ShadowFbMapCount;
+    volatile LONG               ShadowFbMapCount;
     PVOID                       RetiredShadowFb;
 
     /*
@@ -1258,6 +1322,9 @@ struct _DXGKRNL_CONTEXT
      * nonpaged client serialization boundary. */
     DXGMMS2_CONTEXT_STREAM_HANDLE Mms2ContextStream;
     KMUTEX                      StreamAdmissionMutex;
+    /* Admission runs without the mutex above; teardown uses this to observe
+     * that no admission is still in flight before it cancels the stream. */
+    EX_RUNDOWN_REF              StreamAdmissionRundown;
     KSPIN_LOCK                  StreamLock;
     LIST_ENTRY                  StreamOperationList;
     LIST_ENTRY                  StreamReadyEntry;
@@ -1411,7 +1478,16 @@ typedef struct _DXGKRNL_GPUVA_RANGE
     ULONGLONG                   ReservationSize;
 
     /*
-     * Number of submitted-but-unretired command buffers executing out of this
+     * DxgkCbReserveGpuVirtualAddressRange creates process-lifetime ranges
+     * owned by the miniport.  User-mode may map within such a reservation
+     * only when the miniport explicitly opted in during CreateProcess, and
+     * may never free the reservation itself.
+     */
+    BOOLEAN                     DriverReserved;
+    BOOLEAN                     AllowUserModeMapping;
+
+    /*
+     * Number of submitted-but-unretired command starts anchored in this
      * range.  A pinned range cannot be unmapped or freed: the miniport is
      * holding its GPU virtual address.  Protected by GpuVaLock.
      */
@@ -1430,9 +1506,11 @@ typedef struct _DXGKRNL_GPUVA_RANGE
 
 /*
  * Software GPU page table (GpuMmu, DXGK_PAGETABLEUPDATE_CPU_VIRTUAL mode).
- * KernelVa is the native page-table allocation. Entries is the portable
- * DXGK_PTE descriptor array passed to DxgkDdiBuildPagingBuffer. Non-leaf
- * tables keep child pointers so the CPU walk does not reverse-map addresses.
+ * KernelVa is the miniport-declared native page-table allocation. Entries is
+ * the separate portable DXGK_PTE descriptor array passed to
+ * DxgkDdiBuildPagingBuffer; the miniport translates those descriptors into its
+ * native entries. Non-leaf tables also keep kernel-side child pointers so the
+ * CPU walk never reverse-maps physical addresses.
  * All tables of a process live on DXGKRNL_PROCESS->GpuVaPageTableList,
  * protected by GpuVaLock.
  */
@@ -1453,6 +1531,12 @@ typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
     ULONG                       EntryCount;
     MEMORY_CACHING_TYPE         CacheType;
     PHYSICAL_ADDRESS            Physical;
+
+    /* GPU-visible placement. Segment zero uses Physical; nonzero segments
+     * use SegmentOffset and retain the aperture MDL until teardown. */
+    ULONG                       SegmentId;
+    ULONGLONG                   SegmentOffset;
+    PMDL                        SegmentMdl;
 
     /* Portable update descriptors; not overlaid on native table storage. */
     DXGK_PTE                    *Entries;
@@ -1597,6 +1681,14 @@ struct _DXGKRNL_PROCESS
      * Protected by GpuVaLock.
      */
     LIST_ENTRY                  GpuVaRangeList;
+    /* High-water mark for new GPU VA assignments: freed ranges are not
+     * reused while untouched space remains, so a stale translation of a
+     * freed range can never alias a live mapping. */
+    D3DGPU_VIRTUAL_ADDRESS      GpuVaBumpHint;
+    /* Diagnostics: bindless surface-state base from the last STATE_BASE_ADDRESS seen at submit. */
+    D3DGPU_VIRTUAL_ADDRESS      LastBindlessSurfaceBase;
+    /* Diagnostics: binding table pool base from the last 3DSTATE_BINDING_TABLE_POOL_ALLOC seen at submit. */
+    D3DGPU_VIRTUAL_ADDRESS      LastBindingTablePoolBase;
     FAST_MUTEX                  GpuVaLock;
     ULONG                       GpuVaRangeCount;
 
@@ -2268,6 +2360,16 @@ DxgkGpuVaReserve(
     _Out_ D3DGPU_VIRTUAL_ADDRESS  *OutAddress);
 
 NTSTATUS
+DxgkGpuVaReserveDriverRange(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress,
+    _In_ ULONGLONG SizeInBytes,
+    _In_ ULONG Alignment,
+    _In_ BOOLEAN AllowUserModeMapping,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress);
+
+NTSTATUS
 DxgkGpuVaFree(
     _In_ PDXGKRNL_PROCESS       Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress,
@@ -2293,6 +2395,11 @@ DxgkGpuVaMap(
 
 BOOLEAN
 DxgkGpuVaPageTableReady(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process);
+
+NTSTATUS
+DxgkGpuVaPreparePageTable(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_PROCESS Process);
 
@@ -2487,6 +2594,12 @@ NTSTATUS
 DxgkAcquireProcessRecord(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PEPROCESS Process,
+    _Out_ PDXGKRNL_PROCESS *OutProcessRecord);
+
+NTSTATUS
+DxgkValidateCreatingProcessHandle(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE ProcessHandle,
     _Out_ PDXGKRNL_PROCESS *OutProcessRecord);
 
 NTSTATUS
@@ -2959,10 +3072,6 @@ NTAPI
 DxgkSetVidPnSourceOwner(
     _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner);
 
-BOOLEAN
-NTAPI
-DxgkpIsAnyVidPnSourceExclusivelyOwned(VOID);
-
 NTSTATUS
 NTAPI
 DxgkCheckVidPnExclusiveOwnership(
@@ -3285,9 +3394,11 @@ typedef enum _DXGKRNL_PAGING_OP_TYPE
     DxgkPagingOpDiscardContent,
     DxgkPagingOpMapAperture,
     DxgkPagingOpUnmapAperture,
+    DxgkPagingOpInitContextResource,
     DxgkPagingOpUpdatePageTable,
     DxgkPagingOpFlushTlb,
-    DxgkPagingOpNotifyResidency
+    DxgkPagingOpNotifyResidency,
+    DxgkPagingOpUpdateContextAllocation
 } DXGKRNL_PAGING_OP_TYPE;
 
 typedef struct _DXGKRNL_PAGING_OP
@@ -3297,6 +3408,7 @@ typedef struct _DXGKRNL_PAGING_OP
     ULONG                       EngineOrdinal;
     HANDLE                      hMiniportDevice;
     HANDLE                      hMiniportAllocation;
+    HANDLE                      hContextAllocation;
     HANDLE                      hMiniportProcess;
 
     /* Transfer / fill / discard placement. A zero SegmentId names the MDL. */
@@ -3318,6 +3430,10 @@ typedef struct _DXGKRNL_PAGING_OP
     SIZE_T                      NumberOfPages;
     PHYSICAL_ADDRESS            DummyPage;
 
+    /* Context-allocation initialization. */
+    PVOID                       DestinationVirtualAddress;
+    D3DGPU_VIRTUAL_ADDRESS      DestinationGpuVirtualAddress;
+
     /* Page-table update and TLB maintenance. */
     ULONG                       PageTableLevel;
     DXGK_PAGETABLEUPDATEADDRESS PageTableAddress;
@@ -3325,7 +3441,6 @@ typedef struct _DXGKRNL_PAGING_OP
     ULONG                       StartIndex;
     ULONG                       NumPageTableEntries;
     ULONG64                     AllocationOffsetInBytes;
-    UINT64                      DriverProtection;
     DXGK_PAGETABLEUPDATEMODE    UpdateMode;
     BOOLEAN                     Repeat;
     BOOLEAN                     InitialUpdate;
@@ -3336,6 +3451,14 @@ typedef struct _DXGKRNL_PAGING_OP
     /* Residency notification. */
     D3DGPU_PHYSICAL_ADDRESS     NotifyPhysicalAddress;
     BOOLEAN                     NotifyResident;
+    /* UpdateContextAllocation: the context allocation's GPU VA + size and
+     * the miniport's private update data. */
+    D3DGPU_VIRTUAL_ADDRESS      ContextGpuVirtualAddress;
+    ULONGLONG                   ContextAllocationSize;
+    PVOID                       PrivateDriverData;
+    ULONG                       PrivateDriverDataSize;
+    /* UpdatePageTable: the UMD's driver-specific protection for the span. */
+    UINT64                      DriverProtection;
 } DXGKRNL_PAGING_OP, *PDXGKRNL_PAGING_OP;
 
 BOOLEAN
@@ -3478,6 +3601,10 @@ DxgkDeviceWorkNotifyStateChange(
 NTSTATUS
 DxgkDeviceWorkWaitForQueued(
     _In_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG TimeoutMs);
+NTSTATUS
+DxgkProcessWaitForQueuedWork(
+    _In_ PDXGKRNL_PROCESS ProcessRecord,
     _In_ ULONG TimeoutMs);
 
 VOID
@@ -3634,6 +3761,55 @@ DxgkLegacyDetach(
 VOID
 NTAPI
 DxgkDebugInit(VOID);
+
+VOID DxgkDumpRecentKmtIoctls(VOID);
+VOID DxgkAccountKmtIoctl(_In_ ULONG IoControlCode, _In_ ULONGLONG Elapsed100ns);
+VOID DxgkRecordKmtIoctl(_In_ ULONG IoControlCode, _In_ ULONG Operation, _In_ NTSTATUS Status);
+
+/* Diagnostics clock: performance counter expressed in 100 ns units so it can
+ * be compared with KeQueryInterruptTime-style values but with sub-microsecond
+ * resolution.  Callable at any IRQL. */
+FORCEINLINE
+ULONGLONG
+DxgkDiagNow100ns(VOID)
+{
+    LARGE_INTEGER Frequency;
+    LARGE_INTEGER Counter = KeQueryPerformanceCounter(&Frequency);
+
+    if (Frequency.QuadPart <= 0)
+        return KeQueryInterruptTime();
+    return (ULONGLONG)((Counter.QuadPart * 10000000LL) / Frequency.QuadPart);
+}
+
+VOID DxgkPagingAccountBuild(_In_ struct _DXGKRNL_ADAPTER *Adapter, _In_ const DXGKRNL_PAGING_OP *Op, _In_ ULONG Bytes, _In_ NTSTATUS BuildStatus);
+VOID DxgkPagingAccountPacket(_In_ struct _DXGKRNL_ADAPTER *Adapter, _In_ ULONG Type);
+VOID DxgkPagingDumpStats(_In_ struct _DXGKRNL_ADAPTER *Adapter);
+VOID DxgkGpuVaRecordEvent(_In_ CHAR Op, _In_ ULONGLONG Address, _In_ ULONGLONG Size, _In_ ULONG Handle);
+VOID DxgkGpuVaDumpRecentEvents(VOID);
+VOID DxgkGpuVaDumpBuffer(_In_opt_ struct _DXGKRNL_PROCESS *Process, _In_ D3DGPU_VIRTUAL_ADDRESS GpuVa, _In_ ULONG Size);
+VOID DxgkGpuVaDumpProcessRanges(_In_opt_ struct _DXGKRNL_PROCESS *Process);
+VOID DxgkVidMmDumpContextAllocations(_In_ PDXGKRNL_ADAPTER Adapter);
+BOOLEAN DxgkVidMmApertureWindow(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PHYSICAL_ADDRESS *CpuBaseForGttZero, _Out_ ULONGLONG *GttBase, _Out_ ULONGLONG *GttSize);
+VOID DxgkGpuVaDumpBatchSurfaces(_In_opt_ struct _DXGKRNL_PROCESS *Process, _In_ D3DGPU_VIRTUAL_ADDRESS BatchVa, _In_ ULONG BatchSize);
+ULONG DxgkVidMmPagingBufferPrivateDataSize(_In_ PDXGKRNL_ADAPTER Adapter);
+VOID DxgkDiagDumpGpuRegisters(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PCSTR Reason);
+VOID DxgkDiagStartFaultPoll(_In_ PDXGKRNL_ADAPTER Adapter);
+ULONG DxgkDiagReadRegister(_In_ PDXGKRNL_ADAPTER Adapter, _In_ ULONG Offset);
+VOID DxgkDiagInvalidateRenderTlb(_In_ PDXGKRNL_ADAPTER Adapter);
+VOID DxgkDiagStopFaultPoll(_In_ PDXGKRNL_ADAPTER Adapter);
+VOID DxgkGpuVaVerifyProcessTables(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ struct _DXGKRNL_PROCESS *Process);
+VOID DxgkGpuVaDumpTranslation(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ struct _DXGKRNL_PROCESS *Process, _In_ D3DGPU_VIRTUAL_ADDRESS Va);
+VOID DxgkGpuVaAuditMappings(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ struct _DXGKRNL_PROCESS *Process);
+
+/* Diagnostics: one global event sequence so rings written by different
+ * threads and CPUs can be ordered without a shared clock. */
+extern volatile LONG64 DxgkDiagGlobalSequence;
+FORCEINLINE
+LONG64
+DxgkDiagSequence(VOID)
+{
+    return InterlockedIncrement64(&DxgkDiagGlobalSequence);
+}
 
 #endif /* _DXGKRNL_PRIVATE_H_ */
 #include "keyedmutex.h"

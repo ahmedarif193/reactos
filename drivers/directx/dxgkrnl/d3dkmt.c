@@ -1284,6 +1284,9 @@ DxgkpInvokeInterfaceDereference(
     return Status;
 }
 
+/* How long a submission absorbs a full context stream before giving up. */
+#define DXGKP_SUBMIT_BACKPRESSURE_MS 100
+
 static NTSTATUS
 DxgkpQueryKmdFeatureSupport(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -2957,31 +2960,43 @@ DxgkpQueryAdapterInfoCaptured(
 
             pOpenGlInfo = (D3DKMT_OPENGLINFO *)pQueryAdapterInfo->pPrivateDriverData;
             RtlZeroMemory(&OpenGlInfo, sizeof(OpenGlInfo));
-
-            Status = DxgkpQueryDriverStringValue(Adapter,
-                                                 L"OpenGLDriverName",
-                                                 0,
-                                                OpenGlInfo.UmdOpenGlIcdFileName,
-                                                ARRAYSIZE(OpenGlInfo.UmdOpenGlIcdFileName));
-            if (!NT_SUCCESS(Status))
+            if (InterlockedCompareExchange(&Adapter->OpenGlInfoCached, 0, 0) != 0)
             {
-                DXGKRNL_WARN("DxgkQueryAdapterInfo: UMOPENGLINFO driver query failed 0x%08lx\n",
-                             Status);
-                DXGKP_QUERY_RETURN(Status);
+                /* The registry answer is stable for a started adapter; the
+                 * ICD asks on every present, so serve it from the cache. */
+                OpenGlInfo = Adapter->CachedOpenGlInfo;
             }
+            else
+            {
 
-            Status = DxgkpQueryDriverDwordValue(Adapter,
-                                                L"OpenGLVersion",
-                                               &OpenGlInfo.Version);
-            if (!NT_SUCCESS(Status))
-                OpenGlInfo.Version = 0;
+                Status = DxgkpQueryDriverStringValue(Adapter,
+                                                     L"OpenGLDriverName",
+                                                     0,
+                                                    OpenGlInfo.UmdOpenGlIcdFileName,
+                                                    ARRAYSIZE(OpenGlInfo.UmdOpenGlIcdFileName));
+                if (!NT_SUCCESS(Status))
+                {
+                    DXGKRNL_WARN("DxgkQueryAdapterInfo: UMOPENGLINFO driver query failed 0x%08lx\n",
+                                 Status);
+                    DXGKP_QUERY_RETURN(Status);
+                }
 
-            Status = DxgkpQueryDriverDwordValue(Adapter,
-                                                L"OpenGLFlags",
-                                               &OpenGlInfo.Flags);
-            if (!NT_SUCCESS(Status))
-                OpenGlInfo.Flags = 0;
+                Status = DxgkpQueryDriverDwordValue(Adapter,
+                                                    L"OpenGLVersion",
+                                                   &OpenGlInfo.Version);
+                if (!NT_SUCCESS(Status))
+                    OpenGlInfo.Version = 0;
 
+                Status = DxgkpQueryDriverDwordValue(Adapter,
+                                                    L"OpenGLFlags",
+                                                   &OpenGlInfo.Flags);
+                if (!NT_SUCCESS(Status))
+                    OpenGlInfo.Flags = 0;
+
+                Adapter->CachedOpenGlInfo = OpenGlInfo;
+                KeMemoryBarrier();
+                InterlockedExchange(&Adapter->OpenGlInfoCached, 1);
+            }
             _SEH2_TRY
             {
                 *pOpenGlInfo = OpenGlInfo;
@@ -4587,67 +4602,123 @@ Cleanup:
  * REACTOS_WIN32K_DXGKRNL_INTERFACE exchange (without IRP context).
  * ====================================================================== */
 
-static NTSTATUS
-DxgkpBeginSynchronizedLock(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_DEVICE Device,
-    _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ D3DDDICB_LOCKFLAGS Flags)
-{
-    BOOLEAN DoNotWait;
-    BOOLEAN SkipSynchronization;
-    NTSTATUS Status;
-
-    /* Discard requires a renamed backing store.  Until VidMm can provide
-     * one, retain synchronization; DonotWait and IgnoreSync have no effect
-     * on a discard lock. */
-    DoNotWait = (BOOLEAN)(Flags.DonotWait && !Flags.Discard);
-    SkipSynchronization =
-        (BOOLEAN)(!Flags.Discard &&
-                  (Flags.IgnoreSync ||
-                   (Flags.ReadOnly && Flags.IgnoreReadSync)));
-
-    for (;;)
-    {
-        if (!SkipSynchronization)
-        {
-            Status = DxgkVidMmWaitForTrackedSubmissions(Allocation,
-                                                        DoNotWait);
-            if (!NT_SUCCESS(Status))
-                return Status;
-        }
-
-        if (!DxgkBeginKmdTransaction(Adapter))
-            return STATUS_DELETE_PENDING;
-        if (!DxgkpDeviceExecutionActive(Device))
-        {
-            DxgkEndKmdTransaction(Adapter);
-            return STATUS_DEVICE_REMOVED;
-        }
-
-        if (SkipSynchronization)
-            return STATUS_SUCCESS;
-
-        /* Submission admission uses this same adapter transaction.  Recheck
-         * after acquiring it to close the wait-to-map race, but never wait
-         * while holding it: reset and cancellation must remain able to drain
-         * tracked work. */
-        Status = DxgkVidMmWaitForTrackedSubmissions(Allocation, TRUE);
-        if (NT_SUCCESS(Status))
-            return STATUS_SUCCESS;
-
-        DxgkEndKmdTransaction(Adapter);
-        if (DoNotWait || Status != STATUS_GRAPHICS_ALLOCATION_BUSY)
-            return Status;
-    }
-}
-
 /*
  * DxgkLock -- D3DKMTLock handler.
  *
  * When called through the interface (no IRP), we assume kernel caller
  * and always use the kernel (system VA) mapping path.
  */
+/* How long D3DKMTLock waits for the GPU to release an allocation. */
+#define DXGKP_LOCK_SYNC_TIMEOUT_MS 1000
+#define DXGKP_LOCK_SYNC_MAX_CONTEXTS 16
+
+/*
+ * D3DKMTLock must not hand a CPU mapping to the client while the GPU may still
+ * be reading or writing the allocation: the client rewrites the buffer in
+ * place, and a batch consuming it mid-flight then reads whatever was half
+ * written -- including pointer fields, which is why this surfaces as a GPU
+ * dereference of address 0.  Callers that know no conflict exists say so
+ * through Flags (IgnoreSync, Discard); callers that cannot block say so with
+ * DonotWait and get STATUS_GRAPHICS_ALLOCATION_BUSY instead.
+ *
+ * Nothing tracks which submitted work touches which allocation, so this waits
+ * at device granularity -- every context the locking device owns.  That is
+ * conservative but sound, and far narrower than idling the adapter.
+ * TODO: per-allocation reference fences would let this wait only on the work
+ * that actually references the allocation being locked.
+ */
+static NTSTATUS
+DxgkpDeviceWaitForGpuRelease(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ BOOLEAN DoNotWait)
+{
+    PDXGKRNL_CONTEXT Contexts[DXGKP_LOCK_SYNC_MAX_CONTEXTS];
+    ULONG ContextCount = 0;
+    ULONG Index;
+    ULONGLONG Deadline;
+    NTSTATUS Status = STATUS_SUCCESS;
+    PLIST_ENTRY Entry;
+
+    if (Device == NULL)
+        return STATUS_SUCCESS;
+
+    /* Snapshot the context list: waiting under DeviceMutex would block the
+     * very paths that retire the work being waited for. */
+    ExAcquireFastMutex(&Device->DeviceMutex);
+    for (Entry = Device->ContextListHead.Flink;
+         Entry != &Device->ContextListHead && ContextCount < DXGKP_LOCK_SYNC_MAX_CONTEXTS;
+         Entry = Entry->Flink)
+    {
+        PDXGKRNL_CONTEXT Candidate = CONTAINING_RECORD(Entry, DXGKRNL_CONTEXT, ContextListEntry);
+
+        if (DxgkReferenceContext(Candidate))
+            Contexts[ContextCount++] = Candidate;
+    }
+    ExReleaseFastMutex(&Device->DeviceMutex);
+
+    Deadline = KeQueryInterruptTime() + (ULONGLONG)DXGKP_LOCK_SYNC_TIMEOUT_MS * 10000ULL;
+    for (Index = 0; Index < ContextCount; ++Index)
+    {
+        PDXGKRNL_CONTEXT Context = Contexts[Index];
+
+        for (;;)
+        {
+            LARGE_INTEGER Timeout;
+            ULONGLONG Now;
+            BOOLEAN Outstanding;
+            KIRQL OldIrql;
+
+            /* Wait on every outstanding operation, not just dispatched work:
+             * restricting this to WORK was measured to reintroduce the crash. */
+            KeAcquireSpinLock(&Context->StreamLock, &OldIrql);
+            Outstanding = !IsListEmpty(&Context->StreamOperationList);
+            KeReleaseSpinLock(&Context->StreamLock, OldIrql);
+            if (!Outstanding)
+                break;
+            if (DoNotWait)
+            {
+                Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+                break;
+            }
+            /*
+             * Bail out if the device is already lost -- there is nothing left
+             * to wait for.
+             */
+            if (!DxgkpDeviceExecutionActive(Device))
+            {
+                Status = STATUS_DEVICE_REMOVED;
+                break;
+            }
+            Now = KeQueryInterruptTime();
+            if (Now >= Deadline)
+            {
+                /*
+                 * Report the allocation as busy rather than waiting forever.
+                 * Blocking indefinitely here is closer to the documented
+                 * contract, but it was measured to cut glmark2 from 30-31
+                 * scenes to 22: the client recovers from a busy allocation,
+                 * whereas an unbounded wait pins the rendering thread behind
+                 * an engine that is not going to drain.
+                 */
+                Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
+                break;
+            }
+            Timeout.QuadPart = -(LONGLONG)(Deadline - Now);
+            (VOID)KeWaitForSingleObject(&Context->StreamDrainedEvent,
+                                        Executive,
+                                        KernelMode,
+                                        FALSE,
+                                        &Timeout);
+        }
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+
+    for (Index = 0; Index < ContextCount; ++Index)
+        DxgkDereferenceContext(Contexts[Index]);
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 DxgkLock(
@@ -4682,18 +4753,34 @@ DxgkLock(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = DxgkpBeginSynchronizedLock(LockAdapter,
-                                        LockDevice,
-                                        LockAlloc,
-                                        pLock->Flags);
-    if (!NT_SUCCESS(Status))
+    if (!DxgkBeginKmdTransaction(LockAdapter))
     {
         DxgkVidMmDereferenceAllocation(LockAlloc);
         DxgkDereferenceDevice(LockDevice);
-        return Status;
+        return STATUS_DELETE_PENDING;
     }
-    /* Interface callers are always kernel -- use system VA mapping. */
-    Status = DxgkVidMmMapAllocationCpu(LockAlloc, &LockVa);
+    /* Interface callers are always kernel -- use system VA mapping.  Keep
+     * reset recovery outside the active-check-to-map interval. */
+    if (!DxgkpDeviceExecutionActive(LockDevice))
+    {
+        Status = STATUS_DEVICE_REMOVED;
+    }
+    else
+    {
+        /* Synchronize before exposing the mapping unless the caller opted out. */
+        if (pLock->Flags.IgnoreSync || pLock->Flags.Discard ||
+            (pLock->Flags.ReadOnly && pLock->Flags.IgnoreReadSync))
+        {
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            Status = DxgkpDeviceWaitForGpuRelease(LockDevice,
+                                                  (BOOLEAN)(pLock->Flags.DonotWait != 0));
+        }
+        if (NT_SUCCESS(Status))
+            Status = DxgkVidMmMapAllocationCpu(LockAlloc, &LockVa);
+    }
     DxgkEndKmdTransaction(LockAdapter);
     DxgkVidMmDereferenceAllocation(LockAlloc);
     DxgkDereferenceDevice(LockDevice);
@@ -5126,8 +5213,6 @@ DxgkCheckOcclusion(
      * matching Win11 for a shown top-level window. (Was STATUS_NOT_SUPPORTED,
      * which failed the displayext occlusion parity test.)
      */
-    if (DxgkpIsAnyVidPnSourceExclusivelyOwned())
-        return STATUS_GRAPHICS_PRESENT_OCCLUDED;
     return STATUS_SUCCESS;
 }
 
@@ -8940,7 +9025,40 @@ DxgkSubmitCommand(
         DxgkDereferenceContext(Context);
         return STATUS_DEVICE_REMOVED;
     }
-    Status = VidSchSubmitCommandVirtual(Adapter, Context, SubmitCommand->Commands, SubmitCommand->CommandLength, SubmitCommand->pPrivateDriverData, SubmitCommand->PrivateDriverDataSize, SubmitCommand->Flags.NullRendering != 0, &FenceId);
+    {
+        /*
+         * A momentarily full context stream is back-pressure, not a failure:
+         * it is mostly entries the GPU has already retired that nobody has
+         * reaped yet.  D3DKMTSubmitCommand has no "try again" contract, so
+         * returning STATUS_DEVICE_BUSY leaves the client to invent one and
+         * resubmit from a state the kernel never agreed to.  Absorb it here --
+         * reap the stream and submit again.  The failed attempt released its
+         * scheduler slot and packet, so each pass starts clean.
+         */
+        ULONGLONG Deadline = KeQueryInterruptTime() +
+                             (ULONGLONG)DXGKP_SUBMIT_BACKPRESSURE_MS * 10000ULL;
+
+        for (;;)
+        {
+            Status = VidSchSubmitCommandVirtual(Adapter, Context, SubmitCommand->Commands, SubmitCommand->CommandLength, SubmitCommand->pPrivateDriverData, SubmitCommand->PrivateDriverDataSize, SubmitCommand->Flags.NullRendering != 0, &FenceId);
+            if (Status != STATUS_DEVICE_BUSY || KeQueryInterruptTime() >= Deadline)
+                break;
+            /*
+             * Back-pressure only makes sense while the device can still drain.
+             * Once it has been lost the queue will never empty, and spending
+             * the full budget on every submission turns a dead device into a
+             * very slow one instead of a failed one -- measured at ~100 ms per
+             * submit, which is what dragged the post-failure scenes down to
+             * 5 FPS.  Report the loss immediately instead.
+             */
+            if (!DxgkpDeviceExecutionActive(Device))
+            {
+                Status = STATUS_DEVICE_REMOVED;
+                break;
+            }
+            DxgkContextOrderKickContext(Context);
+        }
+    }
     DxgkEndKmdTransaction(Adapter);
     if (!NT_SUCCESS(Status))
         DxgkDereferenceContext(Context);
@@ -9109,6 +9227,150 @@ DxgkpDispatchPublicOperation(_Inout_ PRXGK_PUBLIC_OPERATION_PACKET Packet)
 }
 
 /* ========================================================================
+ * TDR diagnostics: ring of the most recent user-mode KMT IOCTLs.  Written on
+ * every completion (a few interlocked stores), printed only by the TDR path.
+ * ====================================================================== */
+#define DXGKP_KMT_IOCTL_RING_SIZE 48
+
+typedef struct _DXGKP_KMT_IOCTL_RECORD
+{
+    ULONG       IoControlCode;
+    ULONG       Operation;
+    NTSTATUS    Status;
+    ULONGLONG   Time100ns;
+    LONG64      Sequence;
+    HANDLE      ProcessId;
+    HANDLE      ThreadId;
+} DXGKP_KMT_IOCTL_RECORD;
+
+static DXGKP_KMT_IOCTL_RECORD DxgkpKmtIoctlRing[DXGKP_KMT_IOCTL_RING_SIZE];
+static volatile LONG DxgkpKmtIoctlRingNext;
+
+VOID
+DxgkRecordKmtIoctl(
+    _In_ ULONG IoControlCode,
+    _In_ ULONG Operation,
+    _In_ NTSTATUS Status)
+{
+    ULONG Slot = (ULONG)(InterlockedIncrement(&DxgkpKmtIoctlRingNext) - 1) % DXGKP_KMT_IOCTL_RING_SIZE;
+    DXGKP_KMT_IOCTL_RECORD *Record = &DxgkpKmtIoctlRing[Slot];
+    static LONG FailPrintCount = 0;
+
+    /* Every refused user-mode request is a potential contract gap; the ring
+     * only keeps the last few dozen calls, so print the first failures. */
+    if (!NT_SUCCESS(Status) && Status != STATUS_TIMEOUT && Status != STATUS_PENDING &&
+        InterlockedIncrement(&FailPrintCount) <= 48)
+    {
+        DPRINT1("KMT_IOCTL_FAIL code=0x%08lx op=%lu status=0x%08lx pid=%p tid=%p\n",
+                IoControlCode, Operation, Status, PsGetCurrentProcessId(), PsGetCurrentThreadId());
+    }
+
+    Record->Time100ns = 0;
+    KeMemoryBarrier();
+    Record->IoControlCode = IoControlCode;
+    Record->Operation = Operation;
+    Record->Status = Status;
+    Record->ProcessId = PsGetCurrentProcessId();
+    Record->ThreadId = PsGetCurrentThreadId();
+    Record->Sequence = DxgkDiagSequence();
+    KeMemoryBarrier();
+    Record->Time100ns = DxgkDiagNow100ns();
+}
+
+/*
+ * Bring-up profiling: per-IOCTL call counts and cumulative dispatch time,
+ * summarised every DXGKP_KMT_IOCTL_REPORT_INTERVAL calls.  Costs two
+ * interlocked adds per call; remove once the submit path is tuned.
+ */
+int __cdecl _snprintf(char *Buffer, size_t Count, const char *Format, ...);
+
+#define DXGKP_KMT_IOCTL_STAT_SLOTS 40
+#define DXGKP_KMT_IOCTL_REPORT_INTERVAL 32768
+
+typedef struct _DXGKP_KMT_IOCTL_STAT
+{
+    volatile LONG   IoControlCode;
+    volatile LONG64 Count;
+    volatile LONG64 Time100ns;
+    volatile LONG64 MaxTime100ns;
+} DXGKP_KMT_IOCTL_STAT;
+
+static DXGKP_KMT_IOCTL_STAT DxgkpKmtIoctlStats[DXGKP_KMT_IOCTL_STAT_SLOTS];
+static volatile LONG64 DxgkpKmtIoctlStatTotal;
+
+VOID
+DxgkAccountKmtIoctl(
+    _In_ ULONG IoControlCode,
+    _In_ ULONGLONG Elapsed100ns)
+{
+    ULONG Index;
+    LONG64 Total;
+
+    for (Index = 0; Index < DXGKP_KMT_IOCTL_STAT_SLOTS; Index++)
+    {
+        DXGKP_KMT_IOCTL_STAT *Stat = &DxgkpKmtIoctlStats[Index];
+        LONG Existing = InterlockedCompareExchange(&Stat->IoControlCode, (LONG)IoControlCode, 0);
+
+        if (Existing != 0 && Existing != (LONG)IoControlCode)
+            continue;
+        InterlockedIncrement64(&Stat->Count);
+        InterlockedAdd64(&Stat->Time100ns, (LONG64)Elapsed100ns);
+        if ((LONG64)Elapsed100ns > Stat->MaxTime100ns)
+            InterlockedExchange64(&Stat->MaxTime100ns, (LONG64)Elapsed100ns);
+        break;
+    }
+
+    Total = InterlockedIncrement64(&DxgkpKmtIoctlStatTotal);
+    if (Total % DXGKP_KMT_IOCTL_REPORT_INTERVAL == 0)
+    {
+        CHAR Line[400];
+        ULONG Used = 0;
+        ULONG Printed = 0;
+
+        Used = (ULONG)_snprintf(Line, sizeof(Line) - 1, "KMT_IOCTL_STATS total=%I64d", Total);
+        for (Index = 0; Index < DXGKP_KMT_IOCTL_STAT_SLOTS && Printed < 12; Index++)
+        {
+            DXGKP_KMT_IOCTL_STAT *Stat = &DxgkpKmtIoctlStats[Index];
+            LONG64 Count = Stat->Count;
+            int Written;
+
+            if (Stat->IoControlCode == 0 || Count < Total / 64)
+                continue;
+            Written = _snprintf(Line + Used, sizeof(Line) - 1 - Used, " %lx:n=%I64d,avg=%I64dus,max=%I64dus",
+                                (ULONG)Stat->IoControlCode & 0xFFFF, Count,
+                                Stat->Time100ns / (Count * 10), Stat->MaxTime100ns / 10);
+            if (Written <= 0)
+                break;
+            Used += (ULONG)Written;
+            Printed++;
+        }
+        Line[sizeof(Line) - 1] = '\0';
+        DXGKRNL_ERR("%s\n", Line);
+    }
+}
+
+VOID
+DxgkDumpRecentKmtIoctls(VOID)
+{
+    ULONGLONG Now100ns = DxgkDiagNow100ns();
+    ULONG Next = (ULONG)DxgkpKmtIoctlRingNext;
+    ULONG Index;
+
+    DXGKRNL_ERR("TDR recent KMT IOCTLs (oldest first, age in us):\n");
+    for (Index = 0; Index < DXGKP_KMT_IOCTL_RING_SIZE; Index++)
+    {
+        DXGKP_KMT_IOCTL_RECORD Record = DxgkpKmtIoctlRing[(Next + Index) % DXGKP_KMT_IOCTL_RING_SIZE];
+
+        if (Record.Time100ns == 0)
+            continue;
+        DXGKRNL_ERR("TDR   #%I64d code=0x%08lx op=%lu status=0x%08lx pid=%p tid=%p\n",
+                    Record.Sequence,
+                    Record.IoControlCode, Record.Operation, Record.Status,
+                    Record.ProcessId, Record.ThreadId);
+    }
+}
+
+/* ========================================================================
  * DxgkpDispatchBufferedIoctl
  *
  * Helper to handle a METHOD_BUFFERED D3DKMT IOCTL.  The I/O manager has
@@ -9118,8 +9380,35 @@ DxgkpDispatchPublicOperation(_Inout_ PRXGK_PUBLIC_OPERATION_PACKET Packet)
  *
  * Returns the NTSTATUS that should be placed in IoStatus.
  * ====================================================================== */
+static NTSTATUS
+DxgkpDispatchBufferedIoctlWorker(
+    _In_ PIRP              Irp,
+    _In_ PIO_STACK_LOCATION Stack);
+
 NTSTATUS
 DxgkpDispatchBufferedIoctl(
+    _In_ PIRP              Irp,
+    _In_ PIO_STACK_LOCATION Stack)
+{
+    ULONG IoControlCode = Stack->Parameters.DeviceIoControl.IoControlCode;
+    ULONGLONG Start100ns = DxgkDiagNow100ns();
+    ULONG Operation = 0;
+    NTSTATUS Status;
+
+    Status = DxgkpDispatchBufferedIoctlWorker(Irp, Stack);
+    DxgkAccountKmtIoctl(IoControlCode, DxgkDiagNow100ns() - Start100ns);
+    if (IoControlCode == IOCTL_D3DKMT_PUBLIC_OPERATION &&
+        Stack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(RXGK_PUBLIC_OPERATION_PACKET) &&
+        Irp->AssociatedIrp.SystemBuffer != NULL)
+    {
+        Operation = ((PRXGK_PUBLIC_OPERATION_PACKET)Irp->AssociatedIrp.SystemBuffer)->Operation;
+    }
+    DxgkRecordKmtIoctl(IoControlCode, Operation, Status);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpDispatchBufferedIoctlWorker(
     _In_ PIRP              Irp,
     _In_ PIO_STACK_LOCATION Stack)
 {
@@ -9476,21 +9765,20 @@ DxgkpDispatchBufferedIoctl(
              * kernel and needs a system VA for the shadow surface.
              */
             UserMappingCaller = (Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL) || (Irp->RequestorMode == UserMode);
-            Status = DxgkpBeginSynchronizedLock(LockAdapter,
-                                                LockDevice,
-                                                LockAlloc,
-                                                pLock->Flags);
-            if (!NT_SUCCESS(Status))
+            if (!DxgkBeginKmdTransaction(LockAdapter))
             {
                 DxgkVidMmDereferenceAllocation(LockAlloc);
                 DxgkDereferenceDevice(LockDevice);
-                return Status;
+                return STATUS_DELETE_PENDING;
             }
-            if (UserMappingCaller)
+            if (!DxgkpDeviceExecutionActive(LockDevice))
+                Status = STATUS_DEVICE_REMOVED;
+            else if (UserMappingCaller)
                 Status = DxgkVidMmMapAllocationUser(LockAlloc, &LockVa);
             else
                 Status = DxgkVidMmMapAllocationCpu(LockAlloc, &LockVa);
             DxgkEndKmdTransaction(LockAdapter);
+
             DxgkVidMmDereferenceAllocation(LockAlloc);
             DxgkDereferenceDevice(LockDevice);
 
@@ -9948,10 +10236,19 @@ DxgkpDispatchBufferedIoctl(
             Packet = (PRXGK_SUBMITCOMMAND_PACKET)SystemBuffer;
             Status = DxgkpValidateWddmPrivatePacket(InputLength, Packet->Size, Packet->Version, sizeof(*Packet), Packet->PrivateDriverDataSize, Packet->PrivateDriverDataOffset);
             if (!NT_SUCCESS(Status))
+            {
+                DXGKRNL_ERR("D3DKMTSubmitCommand: packet validation failed 0x%08lX input=%lu size=%lu version=%lu private=%lu offset=%lu\n",
+                            Status, InputLength, Packet->Size, Packet->Version,
+                            Packet->PrivateDriverDataSize,
+                            Packet->PrivateDriverDataOffset);
                 return Status;
+            }
 
             if (Packet->Reserved != 0 || Packet->ContextHandle == 0 || Packet->Commands == 0 || Packet->CommandLength == 0)
             {
+                DXGKRNL_ERR("D3DKMTSubmitCommand: invalid packet context=0x%08lx commands=0x%I64x length=%lu reserved=0x%08lx\n",
+                            Packet->ContextHandle, Packet->Commands,
+                            Packet->CommandLength, Packet->Reserved);
                 return STATUS_INVALID_PARAMETER;
             }
 
@@ -10137,6 +10434,13 @@ DxgkpDispatchBufferedIoctl(
                 return STATUS_ACCESS_DENIED;
 
             pMap = (D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL *)SystemBuffer;
+            /* D3DDDI_MAPGPUVIRTUALADDRESS documents these bounds as page
+             * aligned; canonicalize before validating so a caller that passes
+             * the last byte of the window is read as the page at or below
+             * it rather than rejected. */
+            pMap->BaseAddress &= ~(DXGKP_GPUVA_PAGE_SIZE - 1);
+            pMap->MinimumAddress &= ~(DXGKP_GPUVA_PAGE_SIZE - 1);
+            pMap->MaximumAddress &= ~(DXGKP_GPUVA_PAGE_SIZE - 1);
             StateProtection = pMap->Protection.Zero || pMap->Protection.NoAccess;
             if (pMap->hPagingQueue == 0 || pMap->SizeInPages == 0 || pMap->SizeInPages > MAXULONGLONG / DXGKP_GPUVA_PAGE_SIZE || pMap->OffsetInPages > MAXULONGLONG / DXGKP_GPUVA_PAGE_SIZE || pMap->Reserved0 != 0 || pMap->Reserved1 != 0 || pMap->Protection.SystemUseOnly || pMap->Protection.Reserved != 0 || (pMap->Protection.Zero && pMap->Protection.NoAccess) || (StateProtection && (pMap->Protection.Write || pMap->Protection.Execute || pMap->hAllocation != 0)) || (!StateProtection && pMap->hAllocation == 0) || (pMap->BaseAddress & (DXGKP_GPUVA_PAGE_SIZE - 1)) != 0 || (pMap->BaseAddress == 0 && ((pMap->MinimumAddress & (DXGKP_GPUVA_PAGE_SIZE - 1)) != 0 || (pMap->MaximumAddress & (DXGKP_GPUVA_PAGE_SIZE - 1)) != 0 || (pMap->MaximumAddress != 0 && pMap->MinimumAddress >= pMap->MaximumAddress))))
                 return STATUS_INVALID_PARAMETER;
@@ -10249,7 +10553,7 @@ DxgkpDispatchBufferedIoctl(
                 Status = STATUS_NOT_SUPPORTED;
             else if (ProcessRecord == NULL)
                 Status = STATUS_NOT_SUPPORTED;
-            else if ((Device != NULL && pReserve->ReservationType > D3DDDIGPUVIRTUALADDRESS_RESERVE_ZERO) || (Device == NULL && (pReserve->ReservationType != 0 || pReserve->DriverProtection != 0 || pReserve->PagingFenceValue != 0)))
+            else if (Device == NULL && (pReserve->ReservationType != 0 || pReserve->DriverProtection != 0 || pReserve->PagingFenceValue != 0))
                 Status = STATUS_INVALID_PARAMETER;
             else
                 Status = PrepareOnly ? DxgkGpuVaPlanReserve(ProcessRecord, pReserve->BaseAddress, pReserve->MinimumAddress, pReserve->MaximumAddress, pReserve->Size, (D3DDDIGPUVIRTUALADDRESS_RESERVATION_TYPE)pReserve->ReservationType, &pReserve->VirtualAddress) : DxgkGpuVaReserve(ProcessRecord, pReserve->BaseAddress, pReserve->MinimumAddress, pReserve->MaximumAddress, pReserve->Size, (D3DDDIGPUVIRTUALADDRESS_RESERVATION_TYPE)pReserve->ReservationType, pReserve->DriverProtection, &pReserve->VirtualAddress);
@@ -10402,7 +10706,13 @@ DxgkpDispatchBufferedIoctl(
              * driver has already queued against it.
              */
             if (pMakeResident->Flags.MustSucceed && !pMakeResident->Flags.CantTrimFurther)
+            {
+                static LONG NormalizedPrinted = 0;
+
+                if (InterlockedCompareExchange(&NormalizedPrinted, 1, 0) == 0)
+                    DPRINT1("D3DKMTMakeResident: normalizing MustSucceed-only request for %u allocation(s)\n", pMakeResident->NumAllocations);
                 pMakeResident->Flags.CantTrimFurther = 1;
+            }
             pMakeResident->NumBytesToTrim = 0;
             pMakeResident->PagingFenceValue = 0;
             Status = DxgkpReferencePagingQueueForPaging(pMakeResident->hPagingQueue, PsGetCurrentProcess(), &Adapter, &Device, &PagingQueue);

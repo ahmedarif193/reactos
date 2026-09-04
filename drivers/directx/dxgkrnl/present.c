@@ -1971,16 +1971,23 @@ DxgkpExecuteFullPresent(
         Status = STATUS_DEVICE_REMOVED;
         goto PresentCleanup;
     }
-    Status = DxgkpExecuteCpuPresent(Adapter, Entry, &Handled);
-    if (Handled)
-        goto PresentCleanup;
-
     /*
-     * Check that the miniport provides DxgkDdiPresent.
-     * DOD drivers do not have this callback.
+     * A miniport that implements DxgkDdiPresent copies on the GPU; only a
+     * display-only miniport, which has no present DDI at all, needs the port
+     * driver to do it.
+     *
+     * DxgkpExecuteCpuPresent claims any full-region blit whose source can be
+     * mapped -- and it maps the source itself when there is no mapping yet --
+     * which is every windowed present.  Running it before the DDI check put a
+     * whole-surface RtlCopyMemory on the per-frame path of adapters that can
+     * blit on the GPU, and that copy, not the GPU, set the frame rate.
      */
     if (DXGK_CB_FULL(Adapter, DxgkDdiPresent) == NULL)
     {
+        Status = DxgkpExecuteCpuPresent(Adapter, Entry, &Handled);
+        if (Handled)
+            goto PresentCleanup;
+
         DXGKRNL_TRACE("DxgkpExecuteFullPresent: no DxgkDdiPresent DDI\n");
         Status = STATUS_NOT_SUPPORTED;
         goto PresentCleanup;

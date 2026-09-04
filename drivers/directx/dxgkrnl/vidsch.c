@@ -39,6 +39,8 @@
 
 #include "dxgkrnl_private.h"
 #include "vidsch.h"
+
+/* Temporary diagnostic: TRUE drains every submission (see VidSchSubmitCommandVirtual). */
 #include "vidsch_policy_core.h"
 #include "present.h"
 #include "debug.h"
@@ -396,6 +398,168 @@ VidSchpAdmitPacket(
     return Sched->AdmitPacket(Sched->SchedulerHandle, &Info, OutFenceId);
 }
 
+/* TDR diagnostics: remember what was handed to the miniport.  Called right
+ * before the submit DDI with QueueLock available (any IRQL <= DISPATCH). */
+static VOID
+VidSchpRecordDispatch(
+    _In_ PVIDSCH_ENGINE Engine,
+    _In_ PVIDSCH_DMA_PACKET Packet)
+{
+    PVIDSCH_DISPATCH_RECORD Record;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    Record = &Engine->DispatchRing[Engine->DispatchRingNext % VIDSCH_DISPATCH_RING_SIZE];
+    Engine->DispatchRingNext++;
+    RtlZeroMemory(Record, sizeof(*Record));
+    Record->Fence = Packet->SubmissionFenceId;
+    Record->NodeOrdinal = Packet->NodeOrdinal;
+    Engine->LastDispatchDmaGpuVa = Packet->DmaBufferGpuVa;
+    Engine->LastDispatchDmaSize = Packet->VirtualDmaBufferSize;
+    Engine->LastDispatchFence = Packet->SubmissionFenceId;
+    Engine->LastDispatchProcess = Packet->GpuVaPinProcess;
+    Record->Context = Packet->Context;
+    Record->MiniportContext = Packet->MiniportContextHandle;
+    Record->GpuVa = Packet->DmaBufferGpuVa;
+    Record->Size = Packet->VirtualAddressing ? Packet->VirtualDmaBufferSize :
+                   (Packet->DmaBuffer != NULL ? Packet->DmaBuffer->Capacity : 0);
+    Record->SubmitFlags = Packet->SubmitFlags;
+    Record->PrivateDataSize = Packet->DriverPrivateDataSize;
+    Record->UmdPrivateDataSize = Packet->UmdPrivateDataSize;
+    Record->AdmitTime100ns = Packet->AdmitTime100ns;
+    Record->DispatchTime100ns = DxgkDiagNow100ns();
+    Record->AdmitSequence = Packet->AdmitSequence;
+    Record->DispatchSequence = DxgkDiagSequence();
+    Record->Virtual = Packet->VirtualAddressing;
+    Record->Ordered = Packet->ContextOrderOperation != NULL;
+    Packet->DispatchTime100ns = Record->DispatchTime100ns;
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+}
+
+static VOID
+VidSchpRecordCompletion(
+    _In_ PVIDSCH_DMA_PACKET Packet)
+{
+    PVIDSCH_ENGINE Engine = Packet->OwnerEngine;
+    KIRQL OldIrql;
+    ULONG Index;
+
+    if (Engine == NULL)
+        return;
+    KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    for (Index = 0; Index < VIDSCH_DISPATCH_RING_SIZE; Index++)
+    {
+        PVIDSCH_DISPATCH_RECORD Record = &Engine->DispatchRing[Index];
+
+        if (Record->DispatchTime100ns != 0 &&
+            Record->Fence == Packet->SubmissionFenceId &&
+            Record->CompleteTime100ns == 0)
+        {
+            Record->CompleteTime100ns = DxgkDiagNow100ns();
+            Record->CompleteSequence = DxgkDiagSequence();
+            break;
+        }
+    }
+    KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+}
+
+static LONGLONG
+VidSchpAgeUs(
+    _In_ ULONGLONG Now100ns,
+    _In_ ULONGLONG Then100ns)
+{
+    if (Then100ns == 0)
+        return -1;
+    return (LONGLONG)(Now100ns - Then100ns) / 10;
+}
+
+VOID
+VidSchDumpEngineDiagnostics(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PVIDSCH_CONTEXT Ctx;
+    ULONGLONG Now = DxgkDiagNow100ns();
+    ULONG EngineIndex;
+
+    if (Adapter == NULL)
+        return;
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx == NULL || !Ctx->Initialized || Ctx->Engines == NULL)
+        return;
+
+    for (EngineIndex = 0; EngineIndex < Ctx->EngineCount; EngineIndex++)
+    {
+        PVIDSCH_ENGINE Engine = &Ctx->Engines[EngineIndex];
+        VIDSCH_DISPATCH_RECORD Ring[VIDSCH_DISPATCH_RING_SIZE];
+        VIDSCH_ENGINE_STATE State = VidSchEngineError;
+        ULONG Pending = 0, LastSubmitted = 0, LastCompleted = 0;
+        ULONG Next;
+        ULONG Index;
+        KIRQL OldIrql;
+
+        (VOID)VidSchQueryEngineStatus(Adapter, EngineIndex, &State, &Pending, &LastSubmitted, &LastCompleted);
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        RtlCopyMemory(Ring, Engine->DispatchRing, sizeof(Ring));
+        Next = Engine->DispatchRingNext;
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+
+        DXGKRNL_ERR("TDR engine %lu: state=%d pending=%lu last-submitted=%lu last-completed=%lu isr-fence=%ld workers=%ld\n",
+                    EngineIndex, State, Pending, LastSubmitted, LastCompleted,
+                    Engine->LastCompletedFence, Engine->OutstandingWorkers);
+        for (Index = 0; Index < VIDSCH_DISPATCH_RING_SIZE; Index++)
+        {
+            PVIDSCH_DISPATCH_RECORD Record = &Ring[(Next + Index) % VIDSCH_DISPATCH_RING_SIZE];
+
+            if (Record->DispatchTime100ns == 0)
+                continue;
+            DXGKRNL_ERR("TDR   fence=%lu seq(admit/dispatch/complete)=#%I64d/#%I64d/#%I64d node=%lu ctx=%p hctx=%p va=0x%I64x size=%lu flags=0x%lx priv=%lu/%lu virt=%d ordered=%d admit=-%I64dus dispatch=-%I64dus complete=%s%I64dus queue-lat=%I64dus\n",
+                        Record->Fence, Record->AdmitSequence, Record->DispatchSequence, Record->CompleteSequence,
+                        Record->NodeOrdinal, Record->Context, Record->MiniportContext,
+                        Record->GpuVa, Record->Size, Record->SubmitFlags,
+                        Record->PrivateDataSize, Record->UmdPrivateDataSize,
+                        Record->Virtual, Record->Ordered,
+                        VidSchpAgeUs(Now, Record->AdmitTime100ns),
+                        VidSchpAgeUs(Now, Record->DispatchTime100ns),
+                        Record->CompleteTime100ns != 0 ? "-" : "never ",
+                        Record->CompleteTime100ns != 0 ? VidSchpAgeUs(Now, Record->CompleteTime100ns) : 0,
+                        (LONGLONG)(Record->DispatchTime100ns - Record->AdmitTime100ns) / 10);
+        }
+    }
+    if (KeGetCurrentIrql() <= APC_LEVEL)
+    {
+        for (EngineIndex = 0; EngineIndex < Ctx->EngineCount; EngineIndex++)
+        {
+            PVIDSCH_ENGINE Engine = &Ctx->Engines[EngineIndex];
+
+            if (Engine->LastFaultDmaGpuVa == 0)
+            {
+                /* Silent hang: the engine still holds the last dispatched packet. */
+                if (Engine->LastDispatchDmaGpuVa == 0 || Engine->LastCompletedFence == Engine->LastDispatchFence)
+                    continue;
+                DXGKRNL_ERR("VidSch: engine %lu stuck packet fence=%lu dma va=0x%I64x size=%lu process=%p (last completed %lu)\n",
+                            EngineIndex, Engine->LastDispatchFence, Engine->LastDispatchDmaGpuVa, Engine->LastDispatchDmaSize,
+                            Engine->LastDispatchProcess, Engine->LastCompletedFence);
+                /* Analysis first: the serial dump races the reset deadline. */
+                DxgkGpuVaDumpBatchSurfaces(Engine->LastDispatchProcess, Engine->LastDispatchDmaGpuVa, Engine->LastDispatchDmaSize);
+                DxgkGpuVaDumpTranslation(Adapter, Engine->LastDispatchProcess, Engine->LastDispatchDmaGpuVa);
+                DxgkGpuVaDumpBuffer(Engine->LastDispatchProcess, Engine->LastDispatchDmaGpuVa, Engine->LastDispatchDmaSize);
+                DxgkGpuVaVerifyProcessTables(Adapter, Engine->LastDispatchProcess);
+                DxgkGpuVaDumpProcessRanges(Engine->LastDispatchProcess);
+                Engine->LastDispatchDmaGpuVa = 0;
+                continue;
+            }
+            DXGKRNL_ERR("VidSch: engine %lu last fault fence=%lu dma va=0x%I64x size=%lu process=%p\n",
+                        EngineIndex, Engine->LastFaultFence, Engine->LastFaultDmaGpuVa, Engine->LastFaultDmaSize, Engine->LastFaultProcess);
+            DxgkGpuVaDumpBuffer(Engine->LastFaultProcess, Engine->LastFaultDmaGpuVa, Engine->LastFaultDmaSize);
+            DxgkGpuVaDumpTranslation(Adapter, Engine->LastFaultProcess, Engine->LastFaultDmaGpuVa);
+            DxgkGpuVaAuditMappings(Adapter, Engine->LastFaultProcess);
+            DxgkGpuVaVerifyProcessTables(Adapter, Engine->LastFaultProcess);
+            DxgkGpuVaDumpProcessRanges(Engine->LastFaultProcess);
+            Engine->LastFaultDmaGpuVa = 0;
+        }
+    }
+}
+
 /* Drains retirement records and finalizes each packet exactly once.  Returns
  * how many packets reached a terminal state. */
 static ULONG
@@ -453,6 +617,7 @@ VidSchpDrainRetirements(_In_ PDXGKRNL_ADAPTER Adapter)
 #endif
             if (Records[Index].Reason == Dxgmms2RetireCompleted)
             {
+                VidSchpRecordCompletion(Packet);
                 DxgkDeviceWorkComplete(Packet->DeviceWork);
                 DxgkContextOrderCompletePacket(Packet, STATUS_SUCCESS);
                 VidSchpDereferencePacket(Packet);
@@ -1354,6 +1519,31 @@ Exit:
 }
 
 static VOID
+NTAPI
+VidSchpFaultDumpWorker(
+    _In_ PVOID Parameter)
+{
+    PVIDSCH_ENGINE Engine = (PVIDSCH_ENGINE)Parameter;
+
+    PAGED_CODE();
+    if (Engine->LastFaultDmaGpuVa != 0)
+    {
+        DxgkDiagDumpGpuRegisters(Engine->Adapter, "fault");
+        DXGKRNL_ERR("VidSch: engine fault dump fence=%lu dma va=0x%I64x size=%lu process=%p\n",
+                    Engine->LastFaultFence, Engine->LastFaultDmaGpuVa, Engine->LastFaultDmaSize, Engine->LastFaultProcess);
+        DxgkGpuVaAuditMappings(Engine->Adapter, Engine->LastFaultProcess);
+        DxgkGpuVaDumpBatchSurfaces(Engine->LastFaultProcess, Engine->LastFaultDmaGpuVa, Engine->LastFaultDmaSize);
+        DxgkGpuVaDumpTranslation(Engine->Adapter, Engine->LastFaultProcess, Engine->LastFaultDmaGpuVa);
+        DxgkGpuVaDumpBuffer(Engine->LastFaultProcess, Engine->LastFaultDmaGpuVa, Engine->LastFaultDmaSize);
+        DxgkGpuVaVerifyProcessTables(Engine->Adapter, Engine->LastFaultProcess);
+        DxgkGpuVaDumpTranslation(Engine->Adapter, Engine->LastFaultProcess, 0);
+        DxgkGpuVaDumpTranslation(Engine->Adapter, Engine->LastFaultProcess, 0x4000);
+        Engine->LastFaultDmaGpuVa = 0;
+    }
+    InterlockedExchange(&Engine->FaultDumpQueued, 0);
+}
+
+static VOID
 VidSchpConsumePageFaultInterrupt(
     _Inout_ PVIDSCH_ENGINE Engine)
 {
@@ -1438,6 +1628,39 @@ VidSchpConsumePageFaultInterrupt(
         NotifyData.DmaPageFaulted.FaultErrorCode;
     PageFaultState.FaultedVirtualAddress =
         NotifyData.DmaPageFaulted.FaultedVirtualAddress;
+    DXGKRNL_ERR("VidSch: GPU page fault: seq=#%I64d fence=%u va=0x%I64x flags=0x%x error=0x%x level=%u node=%u engine=%u stage=%d bind=%u seq=0x%I64x process=%p packet=%p device=%p\n",
+                DxgkDiagSequence(),
+                NotifyData.DmaPageFaulted.FaultedFenceId,
+                NotifyData.DmaPageFaulted.FaultedVirtualAddress,
+                (UINT)NotifyData.DmaPageFaulted.PageFaultFlags,
+                *(const UINT *)&NotifyData.DmaPageFaulted.FaultErrorCode,
+                NotifyData.DmaPageFaulted.PageTableLevel,
+                NotifyData.DmaPageFaulted.NodeOrdinal,
+                NotifyData.DmaPageFaulted.EngineOrdinal,
+                (int)NotifyData.DmaPageFaulted.FaultedPipelineStage,
+                NotifyData.DmaPageFaulted.FaultedBindTableEntry,
+                NotifyData.DmaPageFaulted.FaultedPrimitiveAPISequenceNumber,
+                NotifyData.DmaPageFaulted.FaultedProcessHandle,
+                Packet, Device);
+    VidSchDumpEngineDiagnostics(Engine->Adapter);
+    DxgkGpuVaDumpRecentEvents();
+    DxgkDumpRecentKmtIoctls();
+    if (Packet != NULL)
+    {
+        Engine->LastFaultDmaGpuVa = Packet->DmaBufferGpuVa;
+        Engine->LastFaultDmaSize = Packet->VirtualDmaBufferSize;
+        Engine->LastFaultFence = NotifyData.DmaPageFaulted.FaultedFenceId;
+        Engine->LastFaultProcess = Packet->GpuVaPinProcess;
+        /* A submission that pinned no range still belongs to a process: the
+         * batch, translation and table dumps need it. */
+        if (Engine->LastFaultProcess == NULL && Packet->Device != NULL)
+            Engine->LastFaultProcess = Packet->Device->ProcessRecord;
+        if (InterlockedCompareExchange(&Engine->FaultDumpQueued, 1, 0) == 0)
+        {
+            ExInitializeWorkItem(&Engine->FaultDumpWorkItem, VidSchpFaultDumpWorker, Engine);
+            ExQueueWorkItem(&Engine->FaultDumpWorkItem, DelayedWorkQueue);
+        }
+    }
     DxgkDeviceSetPageFaultState(Device, &PageFaultState);
     if (DxgkDeviceSetPageFaultExecutionState(Device))
     {
@@ -1688,7 +1911,7 @@ VidSchpSubmitVirtualPacket(
             SubmitArgs.DmaBufferSize = Packet->VirtualDmaBufferSize;
             SubmitArgs.pDmaBufferPrivateData = Packet->DriverPrivateData;
             SubmitArgs.DmaBufferPrivateDataSize = Packet->DriverPrivateDataSize;
-            SubmitArgs.DmaBufferUmdPrivateDataSize = Packet->DriverPrivateDataSize;
+            SubmitArgs.DmaBufferUmdPrivateDataSize = Packet->UmdPrivateDataSize;
             SubmitArgs.SubmissionFenceId = Packet->SubmissionFenceId;
             SubmitArgs.VidPnSourceId = 0;
             SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
@@ -1714,6 +1937,15 @@ VidSchpSubmitVirtualPacket(
         }
         VidSchAccountNodeDispatch(Packet);
         DxgkPublishSubmittedFence(Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
+        VidSchpRecordDispatch(Engine, Packet);
+        /* Publication point.  Everything this submission depends on -- the
+         * DMA buffer the client filled in, the page-table updates covering
+         * it, and the fence values published just above -- must be globally
+         * visible before the engine is told to execute it.  Client mappings
+         * are write-combined, and WC stores retire out of order without an
+         * explicit fence, so without this the engine can fetch a partially
+         * written batch and dereference a not-yet-written pointer. */
+        KeMemoryBarrier();
         _SEH2_TRY
         {
             Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual)(Adapter->MiniportDeviceContext, &SubmitArgs);
@@ -1767,8 +1999,10 @@ VidSchpSubmitVirtualPacket(
                 KeSetEvent(&Engine->CompletionEvent, IO_NO_INCREMENT, FALSE);
             }
         }
-        if (!NT_SUCCESS(Status) || Removed)
-            (VOID)VidSchpKickEngine(Engine, NULL);
+        /* A successful dispatch leaves the FIFO head in flight. Wake the
+         * context owning the next undispatched packet so the engine can keep
+         * a hardware queue instead of waiting for the head to retire. */
+        (VOID)VidSchpKickEngine(Engine, NULL);
     }
 
     if (Packet != NULL)
@@ -1812,52 +2046,6 @@ VidSchpKickEngine(
             (VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerRunning &&
              VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerSuspending))
             return FALSE;
-
-        /*
-         * Ordered context work may only be dispatched by its own stream
-         * worker.  Taking the engine's dispatch claim here just to hand it
-         * straight back is not harmless: the authorised claim that races it
-         * fails, and a claimed work action cannot be handed back -- dxgmms2
-         * marks it submitted on any CommitAction -- so the stream has no
-         * choice but to cancel work the application was already told had been
-         * submitted, stranding every waiter on its monitored fence.  Peek
-         * instead and let the owning stream run.
-         */
-        if (AuthorizedPacket == NULL)
-        {
-            PDXGKRNL_CONTEXT HeadContext = NULL;
-            PVIDSCH_DMA_PACKET HeadPacket = NULL;
-            ULONGLONG HeadCookie = 0;
-            KIRQL PeekIrql;
-
-            /*
-             * Peek and take the reference under the engine queue lock, the
-             * same lock VidSchIsContextOrderPacketDispatchable peeks under, so
-             * the head cannot change ownership between the two.
-             */
-            KeAcquireSpinLock(&Engine->QueueLock, &PeekIrql);
-            if (Sched->PeekNextPacket(Sched->SchedulerHandle, Engine->SchedulerOrdinal, &HeadCookie))
-            {
-                HeadPacket = VidSchpPacketFromCookie(HeadCookie);
-                if (HeadPacket != NULL && HeadPacket->ContextOrderOperation != NULL && HeadPacket->Context != NULL)
-                {
-                    HeadContext = (PDXGKRNL_CONTEXT)HeadPacket->Context;
-                    VidSchReferenceContextOrderPacket(HeadPacket);
-                }
-                else
-                {
-                    HeadPacket = NULL;
-                }
-            }
-            KeReleaseSpinLock(&Engine->QueueLock, PeekIrql);
-
-            if (HeadPacket != NULL)
-            {
-                DxgkContextOrderScheduleReferenced(HeadContext);
-                VidSchDereferenceContextOrderPacket(HeadPacket);
-                return FALSE;
-            }
-        }
 
         RtlZeroMemory(&Claim, sizeof(Claim));
         Claim.Size = DXGMMS2_SCHEDULER_CLAIM_V1_SIZE;
@@ -1990,8 +2178,7 @@ VidSchpKickEngine(
         SubmitArgs.pDmaBufferPrivateData = Packet->DriverPrivateData;
         SubmitArgs.DmaBufferPrivateDataSize = Packet->DriverPrivateDataSize;
         SubmitArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-        SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset =
-            Packet->DriverPrivateDataSubmissionEndOffset;
+        SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = Packet->DriverPrivateDataSize;
         SubmitArgs.SubmissionFenceId = Packet->SubmissionFenceId;
         SubmitArgs.VidPnSourceId = Packet->VidPnSourceId;
         SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
@@ -2012,6 +2199,9 @@ VidSchpKickEngine(
 #endif
             VidSchAccountNodeDispatch(Packet);
             DxgkPublishSubmittedFence(Adapter, Packet->NodeOrdinal, Packet->SubmissionFenceId);
+            VidSchpRecordDispatch(Engine, Packet);
+            /* Same publication requirement as the virtual submission path. */
+            KeMemoryBarrier();
             KeRaiseIrql(DISPATCH_LEVEL, &CallIrql);
             _SEH2_TRY
             {
@@ -2540,15 +2730,20 @@ VidSchSubmitCommandVirtual(
     PVIDSCH_CONTEXT Ctx;
     PVIDSCH_ENGINE Engine;
     PVIDSCH_DMA_PACKET Packet;
+    PDXGKRNL_CONTEXT KickContext;
     ULONG EngineOrdinal;
     ULONG FenceId;
     ULONG AdmittedFenceId;
+    ULONG KmdPrivateDataSize;
     PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched;
     NTSTATUS Status;
 
     PAGED_CODE();
 
     if (Adapter == NULL || Context == NULL || DmaBufferGpuVa == 0 || DmaBufferSize == 0 || OutFenceId == NULL || (DriverPrivateDataSize != 0 && DriverPrivateData == NULL))
+        return STATUS_INVALID_PARAMETER;
+    KmdPrivateDataSize = Context->ContextInfo.DmaBufferPrivateDataSize;
+    if (DriverPrivateDataSize > KmdPrivateDataSize)
         return STATUS_INVALID_PARAMETER;
     /* A non-null virtual submission needs a miniport that executes GPU
      * virtual addresses; the caller has already validated the buffer range
@@ -2581,19 +2776,22 @@ VidSchSubmitCommandVirtual(
     }
     Packet->Device = Context->Device;
 
-    if (DriverPrivateDataSize != 0)
+    if (KmdPrivateDataSize != 0)
     {
-        Packet->OwnedDriverPrivateData = ExAllocatePoolWithTag(NonPagedPool, DriverPrivateDataSize, TAG_VIDSCH);
+        Packet->OwnedDriverPrivateData = ExAllocatePoolWithTag(NonPagedPool, KmdPrivateDataSize, TAG_VIDSCH);
         if (Packet->OwnedDriverPrivateData == NULL)
         {
             VidSchpDereferencePacket(Packet);
             VidSchpReleaseCall(Adapter);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        RtlCopyMemory(Packet->OwnedDriverPrivateData, DriverPrivateData, DriverPrivateDataSize);
+        RtlZeroMemory(Packet->OwnedDriverPrivateData, KmdPrivateDataSize);
+        if (DriverPrivateDataSize != 0)
+            RtlCopyMemory(Packet->OwnedDriverPrivateData, DriverPrivateData, DriverPrivateDataSize);
         Packet->DriverPrivateData = Packet->OwnedDriverPrivateData;
-        Packet->DriverPrivateDataSize = DriverPrivateDataSize;
+        Packet->DriverPrivateDataSize = KmdPrivateDataSize;
     }
+    Packet->UmdPrivateDataSize = DriverPrivateDataSize;
 
     Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
     if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, Context->NodeOrdinal, Packet->SubmissionFenceId, &Packet->FenceIdentityEpoch))
@@ -2696,8 +2894,15 @@ VidSchSubmitCommandVirtual(
         VidSchpReleaseCall(Adapter);
         return Status;
     }
-    DxgkContextOrderPublishAdmittedPacket(Context);
+    /* Keep the context alive across the kick: once the packet is published it
+     * can complete and drop its context reference at any moment. */
+    KickContext = DxgkReferenceContext(Context) ? Context : NULL;
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
+    if (KickContext != NULL)
+    {
+        DxgkContextOrderKickContext(KickContext);
+        DxgkDereferenceContext(KickContext);
+    }
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
@@ -2726,6 +2931,7 @@ VidSchSubmitCommandTracked(
     PVIDSCH_CONTEXT Ctx;
     PVIDSCH_ENGINE Engine;
     PVIDSCH_DMA_PACKET Packet;
+    PDXGKRNL_CONTEXT KickContext;
     PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = NULL;
     PDXGKRNL_DEVICE PacketDevice;
     DXGKRNL_TRACK_DMA_ARGS LocalTrackArgs;
@@ -2734,7 +2940,6 @@ VidSchSubmitCommandTracked(
     ULONG FenceId;
     ULONG AdmittedFenceId;
     PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched;
-    BOOLEAN PagingPrivateData;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -2746,14 +2951,6 @@ VidSchSubmitCommandTracked(
     *OutFenceId = 0;
     if (Adapter == NULL || DmaBuffer == NULL || DmaBuffer->VirtualAddress == NULL || DmaBuffer->Capacity == 0 || DmaBuffer->SubmissionStartOffset >= DmaBuffer->SubmissionEndOffset || DmaBuffer->SubmissionEndOffset > DmaBuffer->Capacity || TrackArgs == NULL || (SubmitFlags & ~0xffu) != 0 || (DriverPrivateDataSize != 0 && DriverPrivateData == NULL) || (AllocationListCount != 0 && AllocationList == NULL) || (PatchLocationListCount != 0 && PatchLocationList == NULL) || (Adapter->SchedulingCaps.MultiEngineAware && MiniportContextHandle == NULL) || (!Adapter->SchedulingCaps.MultiEngineAware && MiniportDeviceHandle == NULL))
         return STATUS_INVALID_PARAMETER;
-    PagingPrivateData = (SubmitFlags & VIDSCH_SUBMITFLAG_PAGING) != 0;
-    if (PagingPrivateData &&
-        (DriverPrivateData != DmaBuffer->PrivateData ||
-         DriverPrivateDataSize != DmaBuffer->PrivateDataSize ||
-         DmaBuffer->PrivateDataUsed > DmaBuffer->PrivateDataSize))
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
     if (!VidSchpAcquireCall(Adapter))
         return STATUS_DELETE_PENDING;
 
@@ -2788,28 +2985,16 @@ VidSchSubmitCommandTracked(
 
     if (DriverPrivateDataSize != 0)
     {
-        if (PagingPrivateData)
+        Packet->OwnedDriverPrivateData = ExAllocatePoolWithTag(NonPagedPool, DriverPrivateDataSize, TAG_VIDSCH);
+        if (Packet->OwnedDriverPrivateData == NULL)
         {
-            Packet->DriverPrivateData = (PVOID)DriverPrivateData;
-            Packet->DriverPrivateDataSize = DriverPrivateDataSize;
-            Packet->DriverPrivateDataSubmissionEndOffset =
-                DmaBuffer->PrivateDataUsed;
+            VidSchpDereferencePacket(Packet);
+            VidSchpReleaseCall(Adapter);
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
-        else
-        {
-            Packet->OwnedDriverPrivateData = ExAllocatePoolWithTag(NonPagedPool, DriverPrivateDataSize, TAG_VIDSCH);
-            if (Packet->OwnedDriverPrivateData == NULL)
-            {
-                VidSchpDereferencePacket(Packet);
-                VidSchpReleaseCall(Adapter);
-                return STATUS_INSUFFICIENT_RESOURCES;
-            }
-            RtlCopyMemory(Packet->OwnedDriverPrivateData, DriverPrivateData, DriverPrivateDataSize);
-            Packet->DriverPrivateData = Packet->OwnedDriverPrivateData;
-            Packet->DriverPrivateDataSize = DriverPrivateDataSize;
-            Packet->DriverPrivateDataSubmissionEndOffset =
-                DriverPrivateDataSize;
-        }
+        RtlCopyMemory(Packet->OwnedDriverPrivateData, DriverPrivateData, DriverPrivateDataSize);
+        Packet->DriverPrivateData = Packet->OwnedDriverPrivateData;
+        Packet->DriverPrivateDataSize = DriverPrivateDataSize;
     }
 
     if (AllocationList != NULL && AllocationListCount != 0)
@@ -2898,8 +3083,7 @@ VidSchSubmitCommandTracked(
         PatchArgs.pDmaBufferPrivateData = Packet->DriverPrivateData;
         PatchArgs.DmaBufferPrivateDataSize = Packet->DriverPrivateDataSize;
         PatchArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-        PatchArgs.DmaBufferPrivateDataSubmissionEndOffset =
-            Packet->DriverPrivateDataSubmissionEndOffset;
+        PatchArgs.DmaBufferPrivateDataSubmissionEndOffset = Packet->DriverPrivateDataSize;
         PatchArgs.pAllocationList = Packet->InlineAllocationList;
         PatchArgs.AllocationListSize = Packet->InlineAllocationCount;
         PatchArgs.pPatchLocationList = Packet->InlinePatchList;
@@ -3019,11 +3203,20 @@ VidSchSubmitCommandTracked(
         VidSchpReleaseCall(Adapter);
         return Status;
     }
+    KickContext = NULL;
     if (Packet->ContextOrderOperation != NULL)
-        DxgkContextOrderPublishAdmittedPacket((PDXGKRNL_CONTEXT)Packet->Context);
+    {
+        if (DxgkReferenceContext((PDXGKRNL_CONTEXT)Packet->Context))
+            KickContext = (PDXGKRNL_CONTEXT)Packet->Context;
+    }
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
 
-    if (Packet->ContextOrderOperation == NULL)
+    if (KickContext != NULL)
+    {
+        DxgkContextOrderKickContext(KickContext);
+        DxgkDereferenceContext(KickContext);
+    }
+    else if (Packet->ContextOrderOperation == NULL)
         (VOID)VidSchpKickEngine(Engine, NULL);
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);

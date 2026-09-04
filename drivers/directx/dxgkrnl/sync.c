@@ -10,6 +10,7 @@
  */
 
 #include "dxgkrnl_private.h"
+#include <ndk/psfuncs.h>
 
 #define DXGK_CPU_SIGNAL_ALLOW_FENCE_REWIND 0x00000004UL
 
@@ -1537,6 +1538,12 @@ DxgkSyncObjectAttachMonitoredPage(
          * either proves the translation gone or quarantines the backing.
          */
         SyncObj->MonitoredValueGpuVa = FenceGpuVa;
+        {
+            static LONG FencePrintCount = 0;
+
+            if (InterlockedIncrement(&FencePrintCount) <= 8)
+                DPRINT1("monitored fence %p: value page kva=%p gpuva=0x%I64x\n", SyncObj, SyncObj->MonitoredValueKernelVa, FenceGpuVa);
+        }
         Status = DxgkGpuVaFlushPageTableUpdates(SyncObj->Device->ProcessRecord);
         if (!NT_SUCCESS(Status))
             goto Fail;

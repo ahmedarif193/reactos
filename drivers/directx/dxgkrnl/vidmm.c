@@ -82,7 +82,50 @@ static NTSTATUS DxgkpVidMmUnmapUserMappings(
 static NTSTATUS DxgkpVidMmUnmapAllocationUserProcess(_In_ PDXGKVMM_ALLOCATION Allocation, _In_ PEPROCESS Process, _In_ BOOLEAN Force, _In_ BOOLEAN IncludeActive);
 static NTSTATUS DxgkpVidMmLockResidencyForExternalOperation(_In_ PDXGKVMM_ALLOCATION Allocation);
 static VOID DxgkpVidMmReleaseSegmentPlacement(_In_ PDXGKVMM_ALLOCATION Allocation);
+static VOID DxgkpVidMmReleaseSystemBacking(_In_ PDXGKVMM_ALLOCATION Allocation);
 static VOID DxgkpVidMmFinalizeAllocation(_In_ PDXGKVMM_ALLOCATION Allocation);
+
+/*
+ * Private WDDM allocation-handle view consumed by Win11 display miniports.
+ * The Intel 32.0.101.7088 OS-abstraction methods used by
+ * INIT_CONTEXT_RESOURCE read hDriverAllocation at 0 and the allocation class
+ * at 0x10, store the CPU virtual address at 0x530, recover the context-resource
+ * object at 0x758, and may store the GPU virtual address at 0x8b0.  The address
+ * translation helper also reads the committed segment address at 0x518 while
+ * initializing the context resource.  Preserve the class and resource
+ * association that the miniport placed in its driver allocation; do not
+ * manufacture an allocation class here.
+ */
+typedef struct _DXGKP_CONTEXT_ALLOCATION_HANDLE
+{
+    HANDLE hDriverAllocation;
+    UCHAR Reserved0[0x10 - sizeof(HANDLE)];
+    ULONG AllocationClass;
+    UCHAR Reserved1[0x518 - 0x14];
+    ULONGLONG SegmentAddress;
+    UCHAR Reserved2[0x530 - 0x520];
+    PVOID CpuVirtualAddress;
+    UCHAR Reserved3[0x758 - 0x538];
+    PVOID ContextResource;
+    UCHAR Reserved4[0x8B0 - 0x760];
+    D3DGPU_VIRTUAL_ADDRESS GpuVirtualAddress;
+    UCHAR Reserved5[0x920 - 0x8B8];
+} DXGKP_CONTEXT_ALLOCATION_HANDLE, *PDXGKP_CONTEXT_ALLOCATION_HANDLE;
+
+C_ASSERT(FIELD_OFFSET(DXGKP_CONTEXT_ALLOCATION_HANDLE,
+                      hDriverAllocation) == 0);
+C_ASSERT(FIELD_OFFSET(DXGKP_CONTEXT_ALLOCATION_HANDLE,
+                      AllocationClass) == 0x10);
+C_ASSERT(FIELD_OFFSET(DXGKP_CONTEXT_ALLOCATION_HANDLE,
+                      SegmentAddress) == 0x518);
+C_ASSERT(FIELD_OFFSET(DXGKP_CONTEXT_ALLOCATION_HANDLE,
+                      CpuVirtualAddress) == 0x530);
+C_ASSERT(FIELD_OFFSET(DXGKP_CONTEXT_ALLOCATION_HANDLE,
+                      ContextResource) == 0x758);
+C_ASSERT(FIELD_OFFSET(DXGKP_CONTEXT_ALLOCATION_HANDLE,
+                      GpuVirtualAddress) == 0x8B0);
+C_ASSERT(sizeof(DXGKP_CONTEXT_ALLOCATION_HANDLE) == 0x920);
+
 static VOID DxgkpVidMmFinalizeResource(_In_ PDXGKVMM_RESOURCE Resource);
 static NTSTATUS DxgkpVidMmReferenceInitializingAllocation(_In_ HANDLE Handle, _In_ PDXGKRNL_ADAPTER Adapter, _In_ PDXGKRNL_DEVICE Device, _Out_ PDXGKVMM_ALLOCATION *OutAllocation);
 static VOID DxgkpVidMmDropAllocationHandleReference(_In_ PDXGKVMM_ALLOCATION Allocation);
@@ -310,6 +353,154 @@ VidMmSegmentIsAperture(
     _In_ CONST PDXGKRNL_SEGMENT Segment)
 {
     return (BOOLEAN)(Segment->Flags.Aperture || Segment->Flags.Agp);
+}
+
+/*
+ * DxgkpVidMmFlushCpuCache
+ *
+ * Kernel writes to allocation backing go through a cached (WB) mapping while
+ * the GPU reads the memory directly and user mode writes through a
+ * write-combined mapping.  Push the written lines out so no dirty cache line
+ * is later written back over GPU- or WC-written data.
+ */
+static VOID DxgkpVidMmNotifyResidency(_In_ PDXGKVMM_ALLOCATION Allocation, _In_ BOOLEAN Resident);
+
+/*
+ * GPU-accessible system backing.
+ *
+ * The pages carry the caching type user mode will map them with.  The memory
+ * manager applies a page's recorded attribute to every later user-mode
+ * mapping of it, so pages taken without one (they stay cached) would turn a
+ * write-combined D3DKMTLock view into a cached one: user-mode writes would
+ * sit in the CPU cache while the GPU, whose page-table entries for a
+ * non-cached allocation do not snoop, reads the memory directly.  Cached
+ * allocations (snooped by the GPU) keep cached pages.  Pages are taken below
+ * 4 GB physical when possible; the fallback for a write-combined allocation
+ * is contiguous write-combined memory, and nonpaged pool (cached) is the
+ * last resort.  The caller zeroes the memory.
+ */
+static PVOID
+DxgkpVidMmAllocateBacking(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ SIZE_T Bytes)
+{
+    PHYSICAL_ADDRESS Low, High, Skip;
+    MEMORY_CACHING_TYPE CacheType;
+    PMDL Mdl;
+    PVOID Va;
+    static LONG LowCount = 0, HighCount = 0, PoolCount = 0, WcContiguousCount = 0;
+    ULONG Pass;
+
+    CacheType = Allocation->Cached ? MmCached : MmWriteCombined;
+    Low.QuadPart = 0;
+    Skip.QuadPart = 0;
+    /*
+     * Prefer pages below 4 GB, but do not require them.  Memory under 4 GB is
+     * a small pool shared with every other driver that needs it, and a client
+     * that keeps creating render targets exhausts it: the allocation then
+     * falls through to contiguous write-combined memory and finally nonpaged
+     * pool, both far scarcer, and the client sees an out-of-memory failure
+     * while plenty of memory remains.  Nothing here needs a 32-bit physical
+     * address -- the GPU addresses this memory through its own page tables --
+     * so retry unconstrained before resorting to the scarcer allocators.
+     */
+    for (Pass = 0; Pass < 2; ++Pass)
+    {
+        High.QuadPart = (Pass == 0) ? 0xFFFFFFFFLL : MAXLONGLONG;
+        Mdl = MmAllocatePagesForMdlEx(Low, High, Skip, Bytes, CacheType, 0);
+        if (Mdl == NULL)
+            continue;
+        if (MmGetMdlByteCount(Mdl) >= Bytes)
+        {
+            Va = MmMapLockedPagesSpecifyCache(Mdl, KernelMode, CacheType, NULL, FALSE, NormalPagePriority);
+            if (Va != NULL)
+            {
+                Allocation->SysMemPagesMdl = Mdl;
+                /* The memory manager zero-filled the pages through a cached
+                 * mapping.  Push those lines out now so they cannot be written
+                 * back later over what user mode or the GPU has written. */
+                if (CacheType != MmCached)
+                    DxgkpVidMmFlushCpuCache(Va, Bytes);
+                if (Pass == 0)
+                {
+                    if ((InterlockedIncrement(&LowCount) % 256) == 1)
+                        DPRINT1("VidMm backing: %ld low (<4G) MDL allocations, %ld high, %ld contiguous WC, %ld pool fallbacks\n", LowCount, HighCount, WcContiguousCount, PoolCount);
+                }
+                else if ((InterlockedIncrement(&HighCount) % 256) == 1)
+                {
+                    DPRINT1("VidMm backing: low memory exhausted, %ld allocations placed above 4 GB (low=%ld)\n", HighCount, LowCount);
+                }
+                return Va;
+            }
+        }
+        MmFreePagesFromMdl(Mdl);
+        ExFreePool(Mdl);
+    }
+    if (CacheType != MmCached)
+    {
+        PHYSICAL_ADDRESS Boundary;
+
+        Boundary.QuadPart = 0;
+        Va = MmAllocateContiguousMemorySpecifyCache(Bytes, Low, High, Boundary, MmWriteCombined);
+        if (Va != NULL)
+        {
+            Allocation->SysMemContiguousWc = TRUE;
+            InterlockedIncrement(&WcContiguousCount);
+            return Va;
+        }
+        DPRINT1("VidMm backing: no write-combined memory for %Iu bytes; using cached pool\n", Bytes);
+    }
+    InterlockedIncrement(&PoolCount);
+    return ExAllocatePoolWithTag(NonPagedPool, Bytes, TAG_VIDMM_ALLOC);
+}
+
+/*
+ * Diagnostic: every user-mode view of an allocation, with the first page it
+ * actually maps, so it can be compared with the page the GPU translates to.
+ */
+VOID
+DxgkVidMmDumpUserMappings(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    PLIST_ENTRY Entry;
+    ULONG Count = 0;
+
+    if (Allocation == NULL || KeGetCurrentIrql() > APC_LEVEL)
+        return;
+    (VOID)KeWaitForSingleObject(&Allocation->UserModeLock, Executive, KernelMode, FALSE, NULL);
+    for (Entry = Allocation->UserModeMappingList.Flink;
+         Entry != &Allocation->UserModeMappingList;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_USER_MAPPING Mapping = CONTAINING_RECORD(Entry, DXGKVMM_USER_MAPPING, Entry);
+        ULONGLONG FirstPfn = 0;
+
+        if (Mapping->Mdl != NULL && MmGetMdlByteCount(Mapping->Mdl) != 0)
+            FirstPfn = (ULONGLONG)MmGetMdlPfnArray(Mapping->Mdl)[0];
+        DXGKRNL_ERR("UMAP alloc=%p handle=%p #%lu process=%p base=%p address=%p locks=%lu resident=%u mdl-pfn0=0x%I64x sysmem-pfn0=0x%I64x\n",
+                    Allocation, Allocation->Handle, Count++, Mapping->Process, Mapping->MapBase, Mapping->Address,
+                    Mapping->LockCount, (UINT)Mapping->Resident, FirstPfn,
+                    Allocation->SystemMemory != NULL ? (ULONGLONG)(MmGetPhysicalAddress(Allocation->SystemMemory).QuadPart >> PAGE_SHIFT) : 0ULL);
+    }
+    KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+    if (Count == 0)
+        DXGKRNL_ERR("UMAP alloc=%p handle=%p: no user mappings (sysmem=%p)\n", Allocation, Allocation->Handle, Allocation->SystemMemory);
+}
+
+VOID
+DxgkpVidMmFlushCpuCache(
+    _In_reads_bytes_(Size) PVOID Address,
+    _In_ SIZE_T Size)
+{
+    PUCHAR Line = (PUCHAR)((ULONG_PTR)Address & ~(ULONG_PTR)63);
+    PUCHAR End = (PUCHAR)Address + Size;
+
+    if (Address == NULL || Size == 0)
+        return;
+    _mm_mfence();
+    for (; Line < End; Line += 64)
+        _mm_clflush(Line);
+    _mm_mfence();
 }
 
 /*
@@ -667,12 +858,7 @@ DxgkpVidMmInitializeAllocationLifetime(
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     InitializeListHead(&Allocation->ResidencyBudgetChargeList);
 #endif
-    KeInitializeSpinLock(&Allocation->TrackedSubmissionLock);
     Allocation->SubmissionResidencyPinCount = 0;
-    Allocation->TrackedSubmissionPinCount = 0;
-    KeInitializeEvent(&Allocation->TrackedSubmissionsDrainedEvent,
-                      NotificationEvent,
-                      TRUE);
     Allocation->ResidencyTransactionOwner = NULL;
     KeInitializeEvent(&Allocation->ReferencesDrainedEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Allocation->LogicalReferencesDrainedEvent, NotificationEvent, FALSE);
@@ -988,9 +1174,9 @@ DxgkpVidMmCreateSystemAllocation(
     DxgkpVidMmInitializeAllocationLifetime(Alloc);
     KeInitializeMutex(&Alloc->ResidencyLock, 0);
 
-    Alloc->SystemMemory = ExAllocatePoolWithTag(NonPagedPool,
-                                                AllocSize,
-                                                TAG_VIDMM_ALLOC);
+    /* The backing's caching type follows the allocation's Cached flag. */
+    Alloc->Cached = AllocInfo->Flags.Cached != 0;
+    Alloc->SystemMemory = DxgkpVidMmAllocateBacking(Alloc, AllocSize);
     if (Alloc->SystemMemory == NULL)
     {
         ExFreePoolWithTag(Alloc, TAG_VIDMM_ALLOC);
@@ -998,6 +1184,7 @@ DxgkpVidMmCreateSystemAllocation(
     }
 
     RtlZeroMemory(Alloc->SystemMemory, AllocSize);
+    DxgkpVidMmFlushCpuCache(Alloc->SystemMemory, AllocSize);
 
     Alloc->Handle = DxgkpVidMmAllocateHandle(&DxgkVidMmNextAllocationHandle,
                                              DxgkVidMmAllocationHandleCookie);
@@ -1018,6 +1205,8 @@ DxgkpVidMmCreateSystemAllocation(
                                 AllocInfo->AllocationPriority :
                                 VIDMM_PRIORITY_NORMAL;
     Alloc->CpuVisible = TRUE;
+    Alloc->Cached = AllocInfo->Flags.Cached != 0;
+    Alloc->ExplicitResidencyNotification = AllocInfo->Flags.ExplicitResidencyNotification != 0;
     Alloc->Capture = AllocInfo->FlagsWddm2.Capture != 0;
     Alloc->Resident = FALSE;
     Alloc->PhysicalAddress = MmGetPhysicalAddress(Alloc->SystemMemory);
@@ -1064,6 +1253,244 @@ DxgkpVidMmCreateSystemAllocation(
     AllocInfo->hAllocation = NULL;
     *OutHandle = (HANDLE)(ULONG_PTR)Alloc->Handle;
     return STATUS_SUCCESS;
+}
+
+/*
+ * Create the resident allocation requested by DxgkCbCreateContextAllocation.
+ * The miniport created hDriverAllocation itself; VidMm owns only the backing,
+ * placement, and OS allocation handle.  Keeping the driver handle in
+ * MiniportHandle supplies ordinary paging operations without treating it as a
+ * DxgkDdiCreateAllocation result at destruction.  INIT_CONTEXT_RESOURCE is
+ * different: its hAllocation is the OS handle returned by the callback.
+ */
+NTSTATUS
+DxgkVidMmCreateContextAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ HANDLE DriverAllocation,
+    _In_ SIZE_T Size,
+    _In_ UINT Alignment,
+    _In_ UINT SupportedSegmentSet,
+    _In_ UINT EvictionSegmentSet,
+    _In_ DXGK_SEGMENTPREFERENCE PreferredSegment,
+    _In_ DXGK_SEGMENTBANKPREFERENCE HintedBank,
+    _In_ DXGK_ALLOCATIONINFOFLAGS Flags,
+    _In_ BOOLEAN MapGpuVirtualAddress,
+    _Out_ PHANDLE OutAllocation)
+{
+    DXGK_ALLOCATIONINFO AllocInfo;
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKRNL_SEGMENT Segment;
+    DXGKRNL_PAGING_OP InitOp;
+    HANDLE AllocationHandle = NULL;
+    HANDLE ContextAllocationHandle;
+    PDXGKP_CONTEXT_ALLOCATION_HANDLE ContextHandle;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Device == NULL || Device->Adapter != Adapter ||
+        DriverAllocation == NULL || Size == 0 || OutAllocation == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *OutAllocation = NULL;
+
+    RtlZeroMemory(&AllocInfo, sizeof(AllocInfo));
+    AllocInfo.Size = Size;
+    AllocInfo.Alignment = Alignment;
+    AllocInfo.HintedBank = HintedBank;
+    AllocInfo.PreferredSegment = PreferredSegment;
+    AllocInfo.SupportedReadSegmentSet = SupportedSegmentSet;
+    AllocInfo.SupportedWriteSegmentSet = SupportedSegmentSet;
+    AllocInfo.EvictionSegmentSet = EvictionSegmentSet;
+    AllocInfo.Flags.Value = Flags.Value;
+
+    Status = DxgkpVidMmCreateSystemAllocation(Adapter,
+                                              Device,
+                                              &AllocInfo,
+                                              &AllocationHandle,
+                                              &Allocation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Allocation->MiniportHandle = DriverAllocation;
+    Allocation->ContextAllocation = TRUE;
+    ContextHandle = ExAllocatePoolWithTag(NonPagedPool,
+                                          sizeof(*ContextHandle),
+                                          TAG_VIDMM_ALLOC);
+    if (ContextHandle == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Failure;
+    }
+    RtlZeroMemory(ContextHandle, sizeof(*ContextHandle));
+    Allocation->ContextAllocationHandle = ContextHandle;
+    ContextHandle->hDriverAllocation = DriverAllocation;
+    _SEH2_TRY
+    {
+        ContextHandle->AllocationClass =
+            *(ULONG *)((PUCHAR)DriverAllocation + 0x10);
+        ContextHandle->ContextResource =
+            *(PVOID *)((PUCHAR)DriverAllocation + 0x758);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+    ContextAllocationHandle = ContextHandle;
+    /*
+     * The miniport keeps the CPU address of a CpuVisible context allocation
+     * for its lifetime and writes the context image, ring and status page
+     * through it while the GPU reads them through the GTT.  Windows hands
+     * out the write-combined aperture window; give it write-combined memory
+     * so nothing it writes can linger in the CPU cache.
+     */
+    if (Flags.CpuVisible && !Flags.Cached && Allocation->SystemMemory != NULL &&
+        Allocation->SysMemMdl == NULL && !Allocation->SysMemContiguousWc &&
+        !Allocation->Resident)
+    {
+        PHYSICAL_ADDRESS Low, High, Boundary;
+        PVOID Wc;
+
+        Low.QuadPart = 0;
+        High.QuadPart = 0xFFFFFFFFLL;
+        Boundary.QuadPart = 0;
+        Wc = MmAllocateContiguousMemorySpecifyCache(Allocation->Size, Low, High, Boundary, MmWriteCombined);
+        if (Wc != NULL)
+        {
+            RtlZeroMemory(Wc, Allocation->Size);
+            if (Allocation->SysMemPagesMdl != NULL)
+            {
+                MmUnmapLockedPages(Allocation->SystemMemory, Allocation->SysMemPagesMdl);
+                MmFreePagesFromMdl(Allocation->SysMemPagesMdl);
+                ExFreePool(Allocation->SysMemPagesMdl);
+                Allocation->SysMemPagesMdl = NULL;
+            }
+            else
+            {
+                ExFreePoolWithTag(Allocation->SystemMemory, TAG_VIDMM_ALLOC);
+            }
+            Allocation->SystemMemory = Wc;
+            Allocation->CpuAddress = Wc;
+            Allocation->PhysicalAddress = MmGetPhysicalAddress(Wc);
+            Allocation->SysMemContiguousWc = TRUE;
+        }
+        else
+        {
+            DPRINT1("DxgkVidMmCreateContextAllocation: no contiguous WC memory for %Iu bytes, keeping cached backing\n", Allocation->Size);
+        }
+    }
+    Status = DxgkVidMmMakeResident(Allocation, Adapter);
+    if (NT_SUCCESS(Status))
+    {
+        if (!Allocation->Resident ||
+            Allocation->SegmentId < 1 ||
+            Allocation->SegmentId > Adapter->SegmentCount)
+        {
+            Status = STATUS_INVALID_DEVICE_STATE;
+        }
+        else
+        {
+            Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
+            RtlZeroMemory(&InitOp, sizeof(InitOp));
+            InitOp.Type = DxgkPagingOpInitContextResource;
+            InitOp.hMiniportDevice = Allocation->MiniportDeviceHandle;
+            InitOp.hContextAllocation = DriverAllocation;
+            InitOp.DestinationSegmentId = Allocation->SegmentId;
+            InitOp.DestinationSegmentAddress = Allocation->PhysicalAddress;
+            ContextHandle->SegmentAddress =
+                (ULONGLONG)Allocation->PhysicalAddress.QuadPart;
+            /*
+             * DXGK_CREATECONTEXTALLOCATIONFLAGS.MapGpuVirtualAddress: dxgkrnl
+             * maps the allocation to a GpuMmu virtual address of the owning
+             * process and passes it in InitContextResource.  The binding
+             * lookup refuses initializing allocations; only the miniport
+             * knows this handle, so publishing it before the mapping is safe.
+             */
+            if (MapGpuVirtualAddress &&
+                Device->ProcessRecord != NULL &&
+                Adapter->GpuMmuCapsValid)
+            {
+                D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection;
+                D3DGPU_VIRTUAL_ADDRESS GpuVa = 0;
+                NTSTATUS MapStatus;
+
+                ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+                Allocation->Initializing = FALSE;
+                ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+                Protection.Value = 0;
+                Protection.Write = 1;
+                Protection.Execute = 1;
+                MapStatus = DxgkGpuVaMap(Adapter,
+                                         Device->ProcessRecord,
+                                         Allocation,
+                                         Allocation->Handle,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         ((ULONGLONG)Size + PAGE_SIZE - 1) & ~(ULONGLONG)(PAGE_SIZE - 1),
+                                         Protection,
+                                         0,
+                                         &GpuVa);
+                if (NT_SUCCESS(MapStatus))
+                    MapStatus = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
+                if (!NT_SUCCESS(MapStatus))
+                {
+                    DPRINT1("DxgkVidMmCreateContextAllocation: GPU VA mapping of %Iu bytes failed 0x%08lx\n",
+                            Size, MapStatus);
+                    Status = MapStatus;
+                }
+                else
+                {
+                    ContextHandle->GpuVirtualAddress = GpuVa;
+                }
+            }
+            if (Flags.CpuVisible && Flags.Protected &&
+                VidMmSegmentIsAperture(Segment))
+            {
+                InitOp.DestinationVirtualAddress = Allocation->CpuAddress;
+            }
+            InitOp.DestinationGpuVirtualAddress = ContextHandle->GpuVirtualAddress;
+            DPRINT1("context allocation init: alloc=%p segment=%lu offset=0x%I64x cpuva=%p (cpuvisible=%u protected=%u aperture=%d cpuaddr=%p sysmem=%p) gpuva=0x%I64x\n",
+                    Allocation, Allocation->SegmentId, (ULONGLONG)Allocation->PhysicalAddress.QuadPart, InitOp.DestinationVirtualAddress,
+                    Flags.CpuVisible, Flags.Protected, (int)VidMmSegmentIsAperture(Segment), Allocation->CpuAddress, Allocation->SystemMemory,
+                    InitOp.DestinationGpuVirtualAddress);
+
+            if (NT_SUCCESS(Status))
+            {
+                Status = DxgkPagingExecuteSynchronous(Adapter,
+                                                      Device,
+                                                      &InitOp);
+            }
+            if (Allocation->SystemMemory != NULL)
+                DxgkpVidMmFlushCpuCache(Allocation->SystemMemory, Allocation->Size);
+        }
+    }
+    if (NT_SUCCESS(Status))
+    {
+        ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+        Allocation->Initializing = FALSE;
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+        *OutAllocation = ContextAllocationHandle;
+        DxgkVidMmDereferenceAllocation(Allocation);
+        return STATUS_SUCCESS;
+    }
+
+Failure:
+    /* Make the unpublished object destroyable; its driver handle was never
+     * created by DxgkDdiCreateAllocation and must not enter that DDI. */
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    Allocation->MiniportHandle = NULL;
+    Allocation->ContextAllocation = FALSE;
+    Allocation->Initializing = FALSE;
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    DxgkVidMmDereferenceAllocation(Allocation);
+    (VOID)DxgkVidMmDestroyAllocation(Adapter, AllocationHandle);
+    return Status;
 }
 
 /*
@@ -1146,6 +1573,7 @@ DxgkpVidMmCreateExistingHeapAllocation(
     Alloc->Alignment = PAGE_SIZE;
     Alloc->AllocationPriority = VIDMM_PRIORITY_NORMAL;
     Alloc->CpuVisible = TRUE;
+    Alloc->Cached = TRUE;
     Alloc->Resident = FALSE;
     Alloc->SystemMemory = SystemVa;
     Alloc->SysMemMdl = Mdl;
@@ -1165,6 +1593,71 @@ DxgkpVidMmCreateExistingHeapAllocation(
     *OutHandle = (HANDLE)(ULONG_PTR)Alloc->Handle;
     DPRINT("DxgkpVidMmCreateExistingHeapAllocation: handle=%p user=%p size=%Iu\n",
            *OutHandle, UserSystemMem, Size);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Replace the provisional pool backing created after DxgkDdiCreateAllocation
+ * with the UMD's pSystemMem pages.  D3DDDI_ALLOCATIONINFO[2].pSystemMem is a
+ * normal system-memory allocation input; it is not restricted to the separate
+ * StandardAllocation/ExistingSysMem flag contract.  The miniport determines
+ * the authoritative allocation size first, then VidMm pins exactly that range.
+ */
+static NTSTATUS
+DxgkpVidMmAttachUserSystemBacking(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PVOID UserSystemMem,
+    _In_ KPROCESSOR_MODE AccessMode)
+{
+    PMDL Mdl;
+    PVOID SystemVa;
+
+    PAGED_CODE();
+
+    if (Allocation == NULL || UserSystemMem == NULL ||
+        Allocation->Size == 0 || Allocation->Size > MAXULONG ||
+        Allocation->SysMemMdl != NULL || Allocation->ApertureMdl != NULL ||
+        !Allocation->Initializing)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Mdl = IoAllocateMdl(UserSystemMem,
+                        (ULONG)Allocation->Size,
+                        FALSE,
+                        FALSE,
+                        NULL);
+    if (Mdl == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    _SEH2_TRY
+    {
+        MmProbeAndLockPages(Mdl, AccessMode, IoWriteAccess);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        IoFreeMdl(Mdl);
+        _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+    }
+    _SEH2_END;
+
+    SystemVa = MmGetSystemAddressForMdlSafe(Mdl,
+                                            NormalPagePriority |
+                                            MdlMappingNoExecute);
+    if (SystemVa == NULL)
+    {
+        MmUnlockPages(Mdl);
+        IoFreeMdl(Mdl);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    DxgkpVidMmReleaseSystemBacking(Allocation);
+    Allocation->SystemMemory = SystemVa;
+    Allocation->SysMemMdl = Mdl;
+    Allocation->CpuAddress = SystemVa;
+    if (!Allocation->Resident)
+        Allocation->PhysicalAddress = MmGetPhysicalAddress(SystemVa);
+
     return STATUS_SUCCESS;
 }
 
@@ -2813,6 +3306,14 @@ DxgkpVidMmReleaseSystemBacking(
 {
     /* A dormant D3DKMTLock mapping must not outlive its backing pages. */
     (VOID)DxgkpVidMmUnmapUserMappings(Allocation, TRUE);
+    if (Allocation->SysMemContiguousWc && Allocation->SystemMemory != NULL)
+    {
+        MmFreeContiguousMemorySpecifyCache(Allocation->SystemMemory, Allocation->Size, MmWriteCombined);
+        Allocation->SystemMemory = NULL;
+        Allocation->CpuAddress = NULL;
+        Allocation->SysMemContiguousWc = FALSE;
+        return;
+    }
 
     if (Allocation->SysMemMdl != NULL)
     {
@@ -2820,6 +3321,17 @@ DxgkpVidMmReleaseSystemBacking(
         IoFreeMdl(Allocation->SysMemMdl);
         Allocation->SysMemMdl = NULL;
         Allocation->SystemMemory = NULL;
+        return;
+    }
+    if (Allocation->SysMemPagesMdl != NULL)
+    {
+        if (Allocation->SystemMemory != NULL)
+            MmUnmapLockedPages(Allocation->SystemMemory, Allocation->SysMemPagesMdl);
+        MmFreePagesFromMdl(Allocation->SysMemPagesMdl);
+        ExFreePool(Allocation->SysMemPagesMdl);
+        Allocation->SysMemPagesMdl = NULL;
+        Allocation->SystemMemory = NULL;
+        Allocation->CpuAddress = NULL;
         return;
     }
     if (Allocation->SystemMemory != NULL)
@@ -2874,7 +3386,6 @@ DxgkpVidMmFinalizeAllocation(
     ASSERT(InterlockedCompareExchange(&Allocation->ReferenceCount, 0, 0) == 0);
     ASSERT(InterlockedCompareExchange(&Allocation->LogicalReferenceCount, 0, 0) == 0);
     ASSERT(!DxgkSubmissionResidencyPinIsHeld(&Allocation->SubmissionResidencyPinCount));
-    ASSERT(!DxgkSubmissionResidencyPinIsHeld(&Allocation->TrackedSubmissionPinCount));
     ASSERT(InterlockedCompareExchangePointer(
                &Allocation->ResidencyTransactionOwner,
                NULL,
@@ -2911,6 +3422,10 @@ DxgkpVidMmFinalizeAllocation(
             ExFreePoolWithTag(Allocation->PrivateDriverData, TAG_VIDMM_ALLOC);
         Allocation->PrivateDriverData = NULL;
         Allocation->PrivateDriverDataSize = 0;
+        if (Allocation->ContextAllocationHandle != NULL)
+            ExFreePoolWithTag(Allocation->ContextAllocationHandle,
+                              TAG_VIDMM_ALLOC);
+        Allocation->ContextAllocationHandle = NULL;
         ASSERT(Allocation->MiniportHandle == NULL || Adapter == NULL || InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked, 0, 0) != 0);
     }
 
@@ -3222,7 +3737,7 @@ DxgkVidMmInitializeAdapter(
     BOOLEAN                         UsingSeg4;
     ULONG                           PagingBufferSegmentId;
     ULONG                           PagingBufferSize;
-    ULONG                           PagingBufferPrivateDataSize;
+    ULONG                           PagingBufferPrivateDataSize = 0;
     PDXGKRNL_SEGMENT                Segments;
     PHYSICAL_ADDRESS                LowestAddress;
     PHYSICAL_ADDRESS                HighestAddress;
@@ -3235,7 +3750,6 @@ DxgkVidMmInitializeAdapter(
     ASSERT(Adapter != NULL);
     ASSERT(Adapter->MiniportDeviceContext != NULL);
     ASSERT(Adapter->MiniportContext != NULL);
-    Adapter->PagingBufferPrivateDataSize = 0;
     InterlockedExchange(&Adapter->VidMmBackingCount, 0);
     KeInitializeEvent(&Adapter->VidMmBackingsDrainedEvent, NotificationEvent, TRUE);
     InterlockedExchange(&Adapter->VidMmDestroyWorkerCount, 0);
@@ -3554,6 +4068,9 @@ DxgkVidMmInitializeAdapter(
             Seg->PagingBufferSize      = (PagingBufferSize != 0)
                                          ? PagingBufferSize
                                          : VIDMM_PAGING_BUFFER_SIZE_DEFAULT;
+            Seg->PagingBufferPrivateDataSize = PagingBufferPrivateDataSize;
+            DPRINT1("VidMm: paging buffer segment=%lu size=0x%lx private-data=%lu bytes\n",
+                    PagingBufferSegmentId, Seg->PagingBufferSize, PagingBufferPrivateDataSize);
         }
 
     }
@@ -3569,7 +4086,6 @@ DxgkVidMmInitializeAdapter(
      * ----------------------------------------------------------------------- */
     Adapter->Segments      = (PVOID)Segments;
     Adapter->SegmentCount  = SegmentCount;
-    Adapter->PagingBufferPrivateDataSize = PagingBufferPrivateDataSize;
     KeMemoryBarrier();
 
     ExFreePoolWithTag(DescBuffer, TAG_VIDMM_SEGMENT);
@@ -3946,7 +4462,6 @@ DxgkVidMmTeardownAdapter(
     ExFreePoolWithTag(Adapter->Segments, TAG_VIDMM_SEGMENT);
     Adapter->Segments     = NULL;
     Adapter->SegmentCount = 0;
-    Adapter->PagingBufferPrivateDataSize = 0;
 
     DPRINT("DxgkVidMmTeardownAdapter: done\n");
 }
@@ -4115,6 +4630,7 @@ DxgkpVidMmCreateAllocationTracked(
         if (OutResourceHandle != NULL)
             *OutResourceHandle = CreateArgs.hResource;
         MiniportAllocationCreated = TRUE;
+
     }
     Alloc->MiniportHandle = AllocInfo->hAllocation;
     if (MiniportAllocationCreated && CreateFlags.Resource)
@@ -4170,6 +4686,37 @@ DxgkpVidMmCreateAllocationTracked(
     }
     if (Adapter->Segments != NULL && !DxgkpVidMmValidateAllocationSegmentSets(Adapter, AllocInfo))
     {
+        DXGKRNL_ERR("DxgkVidMmCreateAllocation: miniport returned invalid placement "
+                    "size=0x%Ix pitch=0x%Ix align=0x%x read=0x%x write=0x%x "
+                    "evict=0x%x preferred=0x%x hinted=0x%x flags=0x%x phys=%u "
+                    "allocation=%p segments=%lu\n",
+                    AllocInfo->Size,
+                    AllocInfo->PitchAlignedSize,
+                    AllocInfo->Alignment,
+                    AllocInfo->SupportedReadSegmentSet,
+                    AllocInfo->SupportedWriteSegmentSet,
+                    AllocInfo->EvictionSegmentSet,
+                    AllocInfo->PreferredSegment.Value,
+                    AllocInfo->HintedBank.Value,
+                    AllocInfo->Flags.Value,
+                    AllocInfo->PhysicalAdapterIndex,
+                    AllocInfo->hAllocation,
+                    Adapter->SegmentCount);
+        for (i = 0; i < Adapter->SegmentCount; ++i)
+        {
+            PDXGKRNL_SEGMENT Segment = &ADAPTER_SEGMENTS(Adapter)[i];
+
+            DXGKRNL_ERR("DxgkVidMmCreateAllocation: segment[%lu] id=%lu "
+                        "size=0x%I64x commit=0x%I64x flags=0x%x "
+                        "aperture=%u pitch=%u\n",
+                        i,
+                        Segment->SegmentId,
+                        Segment->Size,
+                        Segment->CommitLimit,
+                        Segment->Flags.Value,
+                        VidMmSegmentIsAperture(Segment),
+                        Segment->Flags.PitchAlignment);
+        }
         Status = STATUS_DEVICE_CONFIGURATION_ERROR;
         goto FailMiniportAllocation;
     }
@@ -4192,6 +4739,21 @@ DxgkpVidMmCreateAllocationTracked(
                                 ? AllocInfo->AllocationPriority
                                 : VIDMM_PRIORITY_NORMAL;
     Alloc->CpuVisible         = (AllocInfo->Flags.CpuVisible != 0);
+    Alloc->Cached             = (AllocInfo->Flags.Cached != 0);
+    Alloc->ExplicitResidencyNotification = (AllocInfo->Flags.ExplicitResidencyNotification != 0);
+    {
+        static LONG AllocLogCount = 0;
+        LONG LogIndex = InterlockedIncrement(&AllocLogCount);
+
+        if (LogIndex <= 16 || (LogIndex % 2048) == 0)
+        {
+            DPRINT1("VidMm alloc #%ld: size=%I64u flags=0x%08x (cpuvisible=%u cached=%u permanentsysmem=%u existingsysmem=%u) flags2=0x%08x supported=0x%x evict=0x%x pref=0x%x align=%u\n",
+                    LogIndex, (ULONGLONG)AllocInfo->Size, AllocInfo->Flags.Value,
+                    AllocInfo->Flags.CpuVisible, AllocInfo->Flags.Cached, AllocInfo->Flags.PermanentSysMem, AllocInfo->Flags.ExistingSysMem,
+                    AllocInfo->FlagsWddm2.Value, AllocInfo->SupportedReadSegmentSet, AllocInfo->EvictionSegmentSet,
+                    AllocInfo->PreferredSegment.Value, AllocInfo->Alignment);
+        }
+    }
     Alloc->Capture            = (AllocInfo->FlagsWddm2.Capture != 0);
     Alloc->Resident           = FALSE;
     Alloc->Resource           = NULL;
@@ -4320,10 +4882,7 @@ DxgkpVidMmCreateAllocationTracked(
                "(placed=%d size=%Iu bytes seg=%lu)\n",
                Placed, AllocSize, Alloc->SegmentId);
 
-        Alloc->SystemMemory = ExAllocatePoolWithTag(
-                                  NonPagedPool,
-                                  AllocSize,
-                                  TAG_VIDMM_ALLOC);
+        Alloc->SystemMemory = DxgkpVidMmAllocateBacking(Alloc, AllocSize);
 
         if (Alloc->SystemMemory == NULL)
         {
@@ -4336,6 +4895,8 @@ DxgkpVidMmCreateAllocationTracked(
 
         /* Zero the backing memory so GPU sees a clean allocation. */
         RtlZeroMemory(Alloc->SystemMemory, AllocSize);
+        DxgkpVidMmFlushCpuCache(Alloc->SystemMemory, AllocSize);
+    DxgkpVidMmFlushCpuCache(Alloc->SystemMemory, AllocSize);
 
         if (!Placed)
         {
@@ -4443,6 +5004,7 @@ DxgkVidMmCreateAllocation(
 {
     PDXGKVMM_ALLOCATION Allocation = NULL;
     NTSTATUS Status;
+
     Status = DxgkpVidMmCreateAllocationTracked(Adapter,
                                                 Device,
                                                 AllocInfo,
@@ -4784,7 +5346,20 @@ DxgkpVidMmTryCommitDestroyBatch(
                 Resource->AllocationCount--;
             }
             if (Allocation->BackingAllocation == NULL && Allocation->MiniportHandle != NULL)
-                Batch->MiniportHandles[Batch->MiniportHandleCount++] = Allocation->MiniportHandle;
+            {
+                if (Allocation->ContextAllocation)
+                {
+                    /* hDriverAllocation belongs to the miniport.  It was
+                     * consumed by paging and is not a CreateAllocation DDI
+                     * handle for the port driver to destroy. */
+                    Allocation->MiniportHandle = NULL;
+                }
+                else
+                {
+                    Batch->MiniportHandles[Batch->MiniportHandleCount++] =
+                        Allocation->MiniportHandle;
+                }
+            }
             if (Resource == NULL && Allocation->MiniportResourceHandle != NULL)
             {
                 ASSERT(Batch->MiniportResourceHandle == NULL || Batch->MiniportResourceHandle == Allocation->MiniportResourceHandle);
@@ -5346,6 +5921,30 @@ DxgkpVidMmDestroyAllocationList(
      * logical handle references intact.  Only the adapter-stop force path may
      * release those references, after hardware access has ceased.
      */
+    /*
+     * Nothing tracks which submitted work still reads these allocations: there
+     * is no per-allocation reference fence, so tearing their translations down
+     * here can clear page-table entries an in-flight batch is still walking.
+     * That is the residual GPU page fault -- a previously valid address
+     * faulting at level 0 with the allocation already gone.
+     *
+     * Waiting for every engine to go idle here does close that window, but it
+     * deadlocks: the wait only ends once the pending packet count reaches
+     * zero, and an ordered stream is dispatched on the submitting thread, so
+     * the packets that have to retire are queued behind the very thread this
+     * wait blocks.  A run measured engine 0 stuck at 32 pending packets with
+     * no worker running, the completed fence frozen, and a queued DPC that
+     * never ran -- ending in an unrecoverable TDR rather than a page fault.
+     *
+     * The wait the destruction contract actually asks for is per device, and
+     * DxgkDestroyAllocation has already performed it through
+     * DxgkpVidMmWaitForQueuedWorkBeforeDestroy before reaching this point.
+     *
+     * TODO: track a last-referencing fence per allocation and wait on that.
+     * That is the only wait that covers a second device still reading a
+     * shared allocation, which is what the device-level wait cannot see.
+     */
+
     for (Index = 0; Index < AllocationCount; ++Index)
     {
         PDXGKRNL_PROCESS Process = Batch->Allocations[Index]->Device != NULL ? Batch->Allocations[Index]->Device->ProcessRecord : NULL;
@@ -5555,6 +6154,299 @@ DxgkVidMmDestroyAllocation(
     Status = DxgkpVidMmDestroyAllocation(Adapter, NULL, NULL, AllocationHandle);
     DxgkEndKmdTransaction(Adapter);
     return Status;
+}
+
+NTSTATUS
+DxgkVidMmDestroyContextAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE AllocationHandle)
+{
+    PDXGKVMM_ALLOCATION Allocation;
+    HANDLE InternalAllocationHandle = NULL;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || AllocationHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (!DxgkBeginKmdTransaction(Adapter))
+        return STATUS_DEVICE_NOT_READY;
+
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    Allocation = NULL;
+    for (Entry = DxgkVidMmAllocationListHead.Flink;
+         Entry != &DxgkVidMmAllocationListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_ALLOCATION Candidate =
+            CONTAINING_RECORD(Entry,
+                              DXGKVMM_ALLOCATION,
+                              GlobalAllocationEntry);
+
+        if ((HANDLE)Candidate->ContextAllocationHandle == AllocationHandle &&
+            Candidate->Adapter == Adapter &&
+            Candidate->ContextAllocation &&
+            !Candidate->Initializing &&
+            InterlockedCompareExchange(&Candidate->Destroying, 0, 0) == 0)
+        {
+            Allocation = Candidate;
+            InternalAllocationHandle =
+                (HANDLE)(ULONG_PTR)Candidate->Handle;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+
+    Status = Allocation != NULL ?
+             DxgkpVidMmDestroyAllocation(Adapter, NULL, NULL,
+                                         InternalAllocationHandle) :
+             STATUS_INVALID_HANDLE;
+    DxgkEndKmdTransaction(Adapter);
+    return Status;
+}
+
+NTSTATUS
+DxgkVidMmMapContextAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE ContextAllocationHandle,
+    _In_ D3DGPU_VIRTUAL_ADDRESS BaseAddress,
+    _In_ D3DGPU_VIRTUAL_ADDRESS MinimumAddress,
+    _In_ D3DGPU_VIRTUAL_ADDRESS MaximumAddress,
+    _In_ ULONGLONG OffsetInPages,
+    _In_ ULONGLONG SizeInPages,
+    _In_ D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection,
+    _In_ UINT64 DriverProtection,
+    _Out_ D3DGPU_VIRTUAL_ADDRESS *OutAddress)
+{
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKRNL_PROCESS Process;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (OutAddress == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutAddress = 0;
+    if (Adapter == NULL || ContextAllocationHandle == NULL || SizeInPages == 0 ||
+        OffsetInPages > MAXULONGLONG / PAGE_SIZE || SizeInPages > MAXULONGLONG / PAGE_SIZE ||
+        !Adapter->GpuMmuCapsValid)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    for (Entry = DxgkVidMmAllocationListHead.Flink;
+         Entry != &DxgkVidMmAllocationListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_ALLOCATION Candidate =
+            CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
+
+        if ((HANDLE)Candidate->ContextAllocationHandle == ContextAllocationHandle &&
+            Candidate->Adapter == Adapter &&
+            Candidate->ContextAllocation &&
+            InterlockedCompareExchange(&Candidate->Destroying, 0, 0) == 0)
+        {
+            Allocation = Candidate;
+            InterlockedIncrement(&Allocation->ReferenceCount);
+            /* Only the miniport owns this handle; a mapping request proves
+             * creation finished on its side. */
+            Allocation->Initializing = FALSE;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    if (Allocation == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    Process = Allocation->Device != NULL ? Allocation->Device->ProcessRecord : NULL;
+    if (Process == NULL)
+    {
+        DxgkVidMmDereferenceAllocation(Allocation);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    Status = DxgkGpuVaMap(Adapter,
+                          Process,
+                          Allocation,
+                          Allocation->Handle,
+                          OffsetInPages * PAGE_SIZE,
+                          BaseAddress,
+                          MinimumAddress,
+                          MaximumAddress,
+                          SizeInPages * PAGE_SIZE,
+                          Protection,
+                          DriverProtection,
+                          OutAddress);
+    if (NT_SUCCESS(Status))
+    {
+        NTSTATUS FlushStatus = DxgkGpuVaFlushPageTableUpdates(Process);
+
+        if (!NT_SUCCESS(FlushStatus))
+            Status = FlushStatus;
+    }
+    if (NT_SUCCESS(Status) && Allocation->ContextAllocationHandle != NULL &&
+        ((PDXGKP_CONTEXT_ALLOCATION_HANDLE)Allocation->ContextAllocationHandle)->GpuVirtualAddress == 0)
+    {
+        ((PDXGKP_CONTEXT_ALLOCATION_HANDLE)Allocation->ContextAllocationHandle)->GpuVirtualAddress = *OutAddress;
+    }
+    DxgkVidMmDereferenceAllocation(Allocation);
+    return Status;
+}
+
+NTSTATUS
+DxgkVidMmUpdateContextAllocation(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE ContextAllocationHandle,
+    _In_reads_bytes_opt_(PrivateDriverDataSize) PVOID PrivateDriverData,
+    _In_ ULONG PrivateDriverDataSize)
+{
+    PDXGKVMM_ALLOCATION Allocation = NULL;
+    PDXGKP_CONTEXT_ALLOCATION_HANDLE ContextHandle;
+    DXGKRNL_PAGING_OP Op;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || ContextAllocationHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (!DxgkPagingOperationSupported(Adapter, DxgkPagingOpUpdateContextAllocation))
+        return STATUS_NOT_SUPPORTED;
+
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    for (Entry = DxgkVidMmAllocationListHead.Flink;
+         Entry != &DxgkVidMmAllocationListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_ALLOCATION Candidate =
+            CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
+
+        if ((HANDLE)Candidate->ContextAllocationHandle == ContextAllocationHandle &&
+            Candidate->Adapter == Adapter &&
+            Candidate->ContextAllocation &&
+            InterlockedCompareExchange(&Candidate->Destroying, 0, 0) == 0)
+        {
+            Allocation = Candidate;
+            InterlockedIncrement(&Allocation->ReferenceCount);
+            break;
+        }
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    if (Allocation == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    ContextHandle = (PDXGKP_CONTEXT_ALLOCATION_HANDLE)Allocation->ContextAllocationHandle;
+    RtlZeroMemory(&Op, sizeof(Op));
+    Op.Type = DxgkPagingOpUpdateContextAllocation;
+    Op.hMiniportDevice = Allocation->MiniportDeviceHandle;
+    Op.hContextAllocation = ContextAllocationHandle;
+    Op.ContextGpuVirtualAddress = ContextHandle != NULL ? ContextHandle->GpuVirtualAddress : 0;
+    Op.ContextAllocationSize = Allocation->Size;
+    Op.PrivateDriverData = PrivateDriverData;
+    Op.PrivateDriverDataSize = PrivateDriverDataSize;
+    Status = DxgkPagingExecuteSynchronous(Adapter, Allocation->Device, &Op);
+    DxgkVidMmDereferenceAllocation(Allocation);
+    return Status;
+}
+
+ULONG
+DxgkVidMmPagingBufferPrivateDataSize(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL || Adapter->Segments == NULL || Adapter->SegmentCount == 0)
+        return 0;
+    return ADAPTER_SEGMENTS(Adapter)[0].PagingBufferPrivateDataSize;
+}
+
+VOID
+DxgkVidMmDumpContextAllocations(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PLIST_ENTRY Entry;
+    ULONG Index = 0;
+
+    if (Adapter == NULL || KeGetCurrentIrql() > APC_LEVEL)
+        return;
+    ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+    for (Entry = DxgkVidMmAllocationListHead.Flink;
+         Entry != &DxgkVidMmAllocationListHead && Index < 16;
+         Entry = Entry->Flink)
+    {
+        PDXGKVMM_ALLOCATION A = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
+        PDXGKP_CONTEXT_ALLOCATION_HANDLE H;
+        const ULONG *W;
+        ULONG NonZero = 0, i, Words;
+
+        if (A->Adapter != Adapter || !A->ContextAllocation)
+            continue;
+        H = (PDXGKP_CONTEXT_ALLOCATION_HANDLE)A->ContextAllocationHandle;
+        W = (const ULONG *)A->SystemMemory;
+        Words = (ULONG)min(A->Size, (SIZE_T)0x20000) / sizeof(ULONG);
+        if (W != NULL)
+        {
+            for (i = 0; i < Words; i++)
+                if (W[i] != 0)
+                    NonZero++;
+        }
+        DPRINT1("CTXALLOC %lu: alloc=%p handle=%p size=0x%I64x segment=%lu resident=%d sysmem=%p cpu=%p gpuva=0x%I64x nonzero-dwords=%lu/%lu\n",
+                Index, A, H, (ULONGLONG)A->Size, A->SegmentId, (int)A->Resident, A->SystemMemory, A->CpuAddress,
+                H != NULL ? H->GpuVirtualAddress : 0ULL, NonZero, Words);
+        if (W != NULL && Words >= 32)
+        {
+            DPRINT1("CTXALLOC %lu: [0000] %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", Index, W[0], W[1], W[2], W[3], W[4], W[5], W[6], W[7]);
+            DPRINT1("CTXALLOC %lu: [0020] %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", Index, W[8], W[9], W[10], W[11], W[12], W[13], W[14], W[15]);
+            DPRINT1("CTXALLOC %lu: [1000] %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", Index,
+                    Words > 0x400 + 8 ? W[0x400] : 0, Words > 0x401 ? W[0x401] : 0, Words > 0x402 ? W[0x402] : 0, Words > 0x403 ? W[0x403] : 0,
+                    Words > 0x404 ? W[0x404] : 0, Words > 0x405 ? W[0x405] : 0, Words > 0x406 ? W[0x406] : 0, Words > 0x407 ? W[0x407] : 0);
+        }
+        Index++;
+    }
+    ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+}
+
+BOOLEAN
+DxgkVidMmApertureWindow(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ PHYSICAL_ADDRESS *CpuBaseForGttZero,
+    _Out_ ULONGLONG *GttBase,
+    _Out_ ULONGLONG *GttSize)
+{
+    ULONG i;
+
+    if (Adapter == NULL || Adapter->Segments == NULL)
+        return FALSE;
+    for (i = 0; i < Adapter->SegmentCount; i++)
+    {
+        PDXGKRNL_SEGMENT Segment = &ADAPTER_SEGMENTS(Adapter)[i];
+
+        if (Segment->Flags.Aperture && Segment->Flags.CpuVisible && Segment->CpuTranslatedAddress.QuadPart != 0)
+        {
+            CpuBaseForGttZero->QuadPart = Segment->CpuTranslatedAddress.QuadPart - Segment->BaseAddress.QuadPart;
+            *GttBase = (ULONGLONG)Segment->BaseAddress.QuadPart;
+            *GttSize = Segment->Size;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+VOID
+DxgkVidMmDumpSegments(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG i;
+
+    if (Adapter == NULL || Adapter->Segments == NULL)
+        return;
+    for (i = 0; i < Adapter->SegmentCount; i++)
+    {
+        PDXGKRNL_SEGMENT Segment = &ADAPTER_SEGMENTS(Adapter)[i];
+
+        DPRINT1("VidMm segment %lu: size=0x%I64x commit=0x%I64x base=0x%I64x cpu=0x%I64x flags=0x%08x (aperture=%u cpuvisible=%u cachecoherent=%u usebanking=%u agp=%u)\n",
+                Segment->SegmentId, Segment->Size, Segment->CommitLimit,
+                (ULONGLONG)Segment->BaseAddress.QuadPart, (ULONGLONG)Segment->CpuTranslatedAddress.QuadPart,
+                Segment->Flags.Value, Segment->Flags.Aperture, Segment->Flags.CpuVisible,
+                Segment->Flags.CacheCoherent, Segment->Flags.UseBanking, Segment->Flags.Agp);
+    }
 }
 
 typedef enum _DXGKP_ALLOCATION_INFO_VERSION
@@ -6200,7 +7092,8 @@ DxgkpCreateDwmRedirectionAllocation(
 static NTSTATUS
 DxgkpCreateAllocationCaptured(
     _Inout_ D3DKMT_CREATEALLOCATION *pCreateAllocation,
-    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion)
+    _In_ DXGKP_ALLOCATION_INFO_VERSION InfoVersion,
+    _In_ KPROCESSOR_MODE EmbeddedBufferMode)
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE Device;
@@ -6219,6 +7112,7 @@ DxgkpCreateAllocationCaptured(
     ULONG EffectiveWddmLevel;
     NTSTATUS Status = STATUS_SUCCESS;
     UINT i;
+    UINT MapIndex;
 
     PAGED_CODE();
 
@@ -6540,6 +7434,18 @@ DxgkpCreateAllocationCaptured(
         }
         CreateRollbackAllocations[CreatedAllocationCount++] = TrackedAlloc;
 
+        if (AllocationInfo.pSystemMem != NULL)
+        {
+            Status = DxgkpVidMmAttachUserSystemBacking(TrackedAlloc,
+                                                       AllocationInfo.pSystemMem,
+                                                       EmbeddedBufferMode);
+            if (!NT_SUCCESS(Status))
+            {
+                DxgkVidMmDereferenceAllocation(TrackedAlloc);
+                break;
+            }
+        }
+
         if (CreateFlags.Resource && Resource == NULL)
         {
             Resource = DxgkVidMmCreateResourceWrapper(Adapter, Device, MiniportResourceHandle, 0, pCreateAllocation->Flags.CreateShared != 0, pCreateAllocation->pPrivateRuntimeData, pCreateAllocation->PrivateRuntimeDataSize, pCreateAllocation->pPrivateDriverData, pCreateAllocation->PrivateDriverDataSize);
@@ -6597,6 +7503,52 @@ DxgkpCreateAllocationCaptured(
         Status = DxgkpVidMmOpenCreatorAllocations(Adapter, Device, pCreateAllocation, InfoVersion, &OpenRollbackOwned);
     if (NT_SUCCESS(Status) && i == pCreateAllocation->NumAllocations)
         Status = DxgkpVidMmCommitInitializingAllocations(Adapter, Device, pCreateAllocation, InfoVersion);
+    if (NT_SUCCESS(Status) &&
+        InfoVersion == DxgkpAllocationInfoVersion2 &&
+        Device->ProcessRecord != NULL &&
+        Adapter->GpuMmuCapsValid &&
+        Adapter->GpuMmuCaps.PageTableUpdateMode == DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+    {
+        D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE Protection;
+
+        Protection.Value = 0;
+        Protection.Write = 1;
+        Protection.Execute = 1;
+        for (MapIndex = 0;
+             MapIndex < pCreateAllocation->NumAllocations;
+             ++MapIndex)
+        {
+            PDXGKVMM_ALLOCATION Allocation =
+                CreateRollbackAllocations[MapIndex];
+            D3DGPU_VIRTUAL_ADDRESS GpuVirtualAddress = 0;
+            D3DKMT_HANDLE AllocationHandle =
+                pCreateAllocation->pAllocationInfo2[MapIndex].hAllocation;
+
+            if (Allocation->AccessedPhysically)
+                Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
+            if (NT_SUCCESS(Status))
+            {
+                Status = DxgkGpuVaMap(Adapter,
+                                      Device->ProcessRecord,
+                                      Allocation,
+                                      AllocationHandle,
+                                      0,
+                                      0,
+                                      0,
+                                      0,
+                                      Allocation->Size,
+                                      Protection,
+                                      0,
+                                      &GpuVirtualAddress);
+            }
+            if (!NT_SUCCESS(Status))
+                break;
+            pCreateAllocation->pAllocationInfo2[MapIndex].GpuVirtualAddress =
+                GpuVirtualAddress;
+        }
+        if (NT_SUCCESS(Status))
+            Status = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
+    }
 
     if (!NT_SUCCESS(Status))
     {
@@ -6878,11 +7830,6 @@ DxgkpCreateAllocationWithAccessModeVariant(
         PrivateCaptures[i].UserBuffer = AllocationInfo.pPrivateDriverData;
         PrivateCaptures[i].Size = AllocationInfo.PrivateDriverDataSize;
         DxgkpSetAllocationHandle(&Captured, InfoVersion, i, 0);
-        if (EmbeddedBufferMode != KernelMode && AllocationInfo.pSystemMem != NULL)
-        {
-            Status = STATUS_INVALID_PARAMETER;
-            goto Cleanup;
-        }
         if (PrivateCaptures[i].Size == 0)
         {
             DxgkpSetAllocationPrivateData(&Captured, InfoVersion, i, NULL);
@@ -6910,7 +7857,9 @@ DxgkpCreateAllocationWithAccessModeVariant(
         TotalPrivateSize += PrivateCaptures[i].Size;
     }
 
-    Status = DxgkpCreateAllocationCaptured(&Captured, InfoVersion);
+    Status = DxgkpCreateAllocationCaptured(&Captured,
+                                            InfoVersion,
+                                            EmbeddedBufferMode);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     CoreSucceeded = TRUE;
@@ -7076,7 +8025,9 @@ DxgkpVidMmWaitForQueuedWorkBeforeDestroy(
     NTSTATUS Status;
 
     PAGED_CODE();
+    DxgkGpuVaRecordEvent('W', (ULONGLONG)(ULONG_PTR)Device, 0, 0);
     Status = DxgkDeviceWorkWaitForQueued(Device, DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS);
+    DxgkGpuVaRecordEvent('w', (ULONGLONG)(ULONG_PTR)Device, (ULONGLONG)(ULONG)Status, 0);
     if (Status == STATUS_TIMEOUT)
     {
         DPRINT1("%s: queued work on device %p did not finish within %u ms\n",
@@ -7150,6 +8101,17 @@ DxgkDestroyAllocation(
     Status = DxgkpVidMmWaitForQueuedWorkBeforeDestroy(Device, "DxgkDestroyAllocation");
     if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_REMOVED)
         goto Cleanup;
+    if (AllocationHandles != NULL)
+    {
+        UINT Index;
+
+        for (Index = 0; Index < pDestroyAllocation->AllocationCount && Index < 8; Index++)
+            DxgkGpuVaRecordEvent('D', 0, 0, AllocationHandles[Index]);
+    }
+    else
+    {
+        DxgkGpuVaRecordEvent('D', 0, 0, pDestroyAllocation->hResource);
+    }
 
     if (!DxgkBeginKmdTransaction(Adapter))
     {
@@ -7282,12 +8244,53 @@ DxgkVidMmTryPlaceInSegment(
         InsertTailList(InsertBefore, &Allocation->SegmentEntry);
     }
     ExReleaseFastMutex(&Segment->Lock);
+    DxgkpVidMmNotifyResidency(Allocation, TRUE);
 
     DPRINT("DxgkVidMmTryPlaceInSegment: alloc %p placed in seg %lu offset=0x%I64x\n",
            Allocation, Segment->SegmentId, Offset);
     return STATUS_SUCCESS;
 }
 
+
+/*
+ * DXGK_OPERATION_NOTIFY_RESIDENCY for allocations that asked for it: the
+ * miniport learns the segment address when the allocation is placed and
+ * (0, 0) when it is released.
+ */
+static VOID
+DxgkpVidMmNotifyResidency(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN Resident)
+{
+    DXGKRNL_PAGING_OP Op;
+    NTSTATUS Status;
+    static LONG NotifyCount = 0;
+
+    if (Allocation == NULL || !Allocation->ExplicitResidencyNotification ||
+        Allocation->Adapter == NULL || Allocation->MiniportHandle == NULL ||
+        KeGetCurrentIrql() > APC_LEVEL ||
+        !DxgkPagingOperationSupported(Allocation->Adapter, DxgkPagingOpNotifyResidency))
+    {
+        return;
+    }
+    RtlZeroMemory(&Op, sizeof(Op));
+    Op.Type = DxgkPagingOpNotifyResidency;
+    Op.hMiniportDevice = Allocation->MiniportDeviceHandle;
+    Op.hMiniportAllocation = Allocation->MiniportHandle;
+    if (Resident)
+    {
+        Op.NotifyPhysicalAddress.SegmentId = Allocation->SegmentId;
+        Op.NotifyPhysicalAddress.SegmentOffset = Allocation->SegmentOffset;
+    }
+    Op.NotifyResident = Resident;
+    Status = DxgkPagingExecuteSynchronous(Allocation->Adapter, Allocation->Device, &Op);
+    if (InterlockedIncrement(&NotifyCount) <= 12 || !NT_SUCCESS(Status))
+    {
+        DPRINT1("NotifyResidency #%ld: alloc=%p hAlloc=%p resident=%d segment=%lu offset=0x%I64x -> 0x%08lx\n",
+                NotifyCount, Allocation, Allocation->MiniportHandle, (int)Resident,
+                Op.NotifyPhysicalAddress.SegmentId, (ULONGLONG)Op.NotifyPhysicalAddress.SegmentOffset, Status);
+    }
+}
 
 static VOID
 DxgkpVidMmReleaseSegmentPlacement(
@@ -7304,6 +8307,7 @@ DxgkpVidMmReleaseSegmentPlacement(
      * Cached, unlocked process mappings do not pin a placement.  Remove them
      * before dxgmms2 makes the range available to another allocation.
      */
+    DxgkpVidMmNotifyResidency(Allocation, FALSE);
     (VOID)DxgkpVidMmUnmapUserMappings(Allocation, FALSE);
 
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
@@ -7412,13 +8416,14 @@ DxgkpVidMmPrepareEvictionOwned(
     {
         if (!DxgkpVidMmRoundUpPageSize(Allocation->Size, &BackingSize))
             return STATUS_INTEGER_OVERFLOW;
-        Allocation->SystemMemory = ExAllocatePoolWithTag(NonPagedPool, BackingSize, TAG_VIDMM_ALLOC);
+        Allocation->SystemMemory = DxgkpVidMmAllocateBacking(Allocation, BackingSize);
         if (Allocation->SystemMemory == NULL)
         {
             DPRINT1("DxgkVidMmEvict: cannot allocate backing store for allocation %p (%Iu bytes)\n", Allocation, BackingSize);
             return STATUS_NO_MEMORY;
         }
         RtlZeroMemory(Allocation->SystemMemory, BackingSize);
+        DxgkpVidMmFlushCpuCache(Allocation->SystemMemory, BackingSize);
     }
 
     Status = DxgkpVidMmTransferAllocationContent(Adapter, Allocation, FALSE);
@@ -7456,6 +8461,23 @@ DxgkpVidMmEvictOwned(
     BOOLEAN ApertureUnmapRequired;
     BOOLEAN Queued = FALSE;
     NTSTATUS Status;
+
+    /*
+     * Eviction releases the allocation's placement (and its aperture mapping)
+     * while the GPU virtual address stays mapped from the client's point of
+     * view.  Commands queued on the owning device before the eviction was
+     * requested may still touch the allocation: D3DKMTEvict only forbids new
+     * accesses, and a make-room victim was never told at all.  Same rule as
+     * destruction (AssumeNotInUse == FALSE): let the work already accepted
+     * on the owner finish first.
+    */
+    if (Allocation->Device != NULL)
+    {
+        Status = DxgkpVidMmWaitForQueuedWorkBeforeDestroy(Allocation->Device,
+                                                          "DxgkVidMmEvict");
+        if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_REMOVED)
+            return Status;
+    }
 
     Status = DxgkpVidMmPrepareEvictionOwned(
                  Allocation,
@@ -8446,13 +9468,14 @@ DxgkVidMmReclaimReferencedAllocation3(
             return STATUS_INTEGER_OVERFLOW;
         }
 
-        Allocation->SystemMemory = ExAllocatePoolWithTag(NonPagedPool, AllocSize, TAG_VIDMM_ALLOC);
+        Allocation->SystemMemory = DxgkpVidMmAllocateBacking(Allocation, AllocSize);
         if (Allocation->SystemMemory == NULL)
         {
             KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         RtlZeroMemory(Allocation->SystemMemory, AllocSize);
+        DxgkpVidMmFlushCpuCache(Allocation->SystemMemory, AllocSize);
         if (!Allocation->Resident)
             Allocation->PhysicalAddress = MmGetPhysicalAddress(Allocation->SystemMemory);
         if (Allocation->CpuVisible && Allocation->CpuAddress == NULL)
@@ -8520,16 +9543,14 @@ DxgkVidMmReclaimReferencedAllocation(
             return STATUS_INTEGER_OVERFLOW;
         }
 
-        Allocation->SystemMemory = ExAllocatePoolWithTag(
-                                       NonPagedPool,
-                                       AllocSize,
-                                       TAG_VIDMM_ALLOC);
+        Allocation->SystemMemory = DxgkpVidMmAllocateBacking(Allocation, AllocSize);
         if (Allocation->SystemMemory == NULL)
         {
             KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         RtlZeroMemory(Allocation->SystemMemory, AllocSize);
+        DxgkpVidMmFlushCpuCache(Allocation->SystemMemory, AllocSize);
         if (!Allocation->Resident)
             Allocation->PhysicalAddress =
                 MmGetPhysicalAddress(Allocation->SystemMemory);
@@ -9106,7 +10127,7 @@ DxgkpVidMmMakeResidentOwned(
             DxgkVidMmDereferenceAllocation(Victim);
             continue;
         }
-        DPRINT("DxgkVidMmMakeResident: evicting victim %p (priority %lu) from seg %lu to make room\n", Victim, VictimPriority, Seg->SegmentId);
+        DPRINT1("DxgkVidMmMakeResident: evicting victim %p (priority %lu) from seg %lu to make room for %p\n", Victim, VictimPriority, Seg->SegmentId, Allocation);
         Status = DxgkpVidMmTryBeginResidencyTransaction(
                      Victim,
                      &VictimOwnerToken);
@@ -9795,6 +10816,12 @@ DxgkVidMmMakeResidentBatch(
                      &Entries[EntryIndex].AperturePagingRequired);
         if (!NT_SUCCESS(Status))
         {
+            DPRINT1("DxgkVidMm: placement of allocation %p (handle 0x%X, size %I64u, segment %lu) failed 0x%08lx\n",
+                    Entries[EntryIndex].Allocation,
+                    Entries[EntryIndex].Allocation->Handle,
+                    (ULONGLONG)Entries[EntryIndex].Allocation->Size,
+                    Entries[EntryIndex].Allocation->SegmentId,
+                    Status);
             if (Status == STATUS_NO_MEMORY ||
                 Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY)
             {
@@ -9957,6 +10984,8 @@ Cleanup:
         (Status == STATUS_GRAPHICS_NO_VIDEO_MEMORY ||
          Status == STATUS_NO_MEMORY))
     {
+        DPRINT1("DxgkVidMm: must-succeed residency of %lu allocation(s) failed 0x%08lx, bytes-to-trim=%I64u; device %p enters ERROR_OUTOFMEMORY\n",
+                AllocationCount, Status, *OutNumBytesToTrim, Device);
         DxgkDeviceSetExecutionState(
             Device,
             D3DKMT_DEVICEEXECUTION_ERROR_OUTOFMEMORY);
@@ -10379,14 +11408,42 @@ DxgkpVidMmPrepareAllocationApertureMappingOwned(
     if (Allocation->Size > MAXULONG)
         return STATUS_INVALID_BUFFER_SIZE;
 
-    Mdl = IoAllocateMdl(Allocation->SystemMemory,
-                        (ULONG)Allocation->Size,
-                        FALSE,
-                        FALSE,
-                        NULL);
+    if (Allocation->SysMemMdl != NULL)
+    {
+        PVOID SourceAddress =
+            MmGetMdlVirtualAddress(Allocation->SysMemMdl);
+
+        if (SourceAddress == NULL ||
+            Allocation->Size > MmGetMdlByteCount(Allocation->SysMemMdl))
+        {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+
+        Mdl = IoAllocateMdl(SourceAddress,
+                            (ULONG)Allocation->Size,
+                            FALSE,
+                            FALSE,
+                            NULL);
+        if (Mdl != NULL)
+        {
+            IoBuildPartialMdl(Allocation->SysMemMdl,
+                              Mdl,
+                              SourceAddress,
+                              (ULONG)Allocation->Size);
+        }
+    }
+    else
+    {
+        Mdl = IoAllocateMdl(Allocation->SystemMemory,
+                            (ULONG)Allocation->Size,
+                            FALSE,
+                            FALSE,
+                            NULL);
+        if (Mdl != NULL)
+            MmBuildMdlForNonPagedPool(Mdl);
+    }
     if (Mdl == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
-    MmBuildMdlForNonPagedPool(Mdl);
     Allocation->ApertureMdl = Mdl;
     return STATUS_SUCCESS;
 }
@@ -10465,6 +11522,153 @@ DxgkVidMmEnsureAllocationApertureMapped(
     }
     DxgkpVidMmEndResidencyTransaction(Allocation, &OwnerToken);
     return Status;
+}
+
+/*
+ * Page tables are implicit VidMm allocations.  A nonzero
+ * DXGK_PAGE_TABLE_LEVEL_DESC.PageTableSegmentId therefore needs placement in
+ * the declared segment even though it has no UMD or KMD allocation handle.
+ * CPU_VIRTUAL page tables can only use a CPU-backed aperture here: reserve an
+ * aperture offset and map the table's system pages into it for the lifetime
+ * of the page-table object.
+ */
+NTSTATUS
+DxgkVidMmMapPageTableSegment(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SegmentId,
+    _In_ PVOID KernelVa,
+    _In_ ULONG Size,
+    _In_ ULONG Alignment,
+    _In_ ULONGLONG OwnerCookie,
+    _Out_ PULONGLONG OutSegmentOffset,
+    _Out_ PMDL *OutMdl)
+{
+    PDXGMMS2_VIDMM_INTERFACE_V1 VidMm;
+    PDXGKRNL_SEGMENT Segment;
+    DXGMMS2_VIDMM_RESERVE_INFO_V1 Info;
+    DXGKRNL_PAGING_OP Op;
+    PMDL Mdl = NULL;
+    ULONGLONG Offset = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (OutSegmentOffset == NULL || OutMdl == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutSegmentOffset = 0;
+    *OutMdl = NULL;
+    if (Adapter == NULL || KernelVa == NULL || Size == 0 ||
+        (Size & (PAGE_SIZE - 1)) != 0 ||
+        ((ULONG_PTR)KernelVa & (PAGE_SIZE - 1)) != 0 ||
+        SegmentId == 0 || SegmentId > Adapter->SegmentCount ||
+        Adapter->Segments == NULL || OwnerCookie == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Segment = &ADAPTER_SEGMENTS(Adapter)[SegmentId - 1];
+    if (!VidMmSegmentIsAperture(Segment) || Segment->Flags.PitchAlignment)
+        return STATUS_NOT_SUPPORTED;
+    VidMm = DxgkpVidMmOwner(Adapter);
+    if (VidMm == NULL)
+        return STATUS_DEVICE_NOT_READY;
+
+    Alignment = max(Alignment, (ULONG)PAGE_SIZE);
+    if ((Alignment & (Alignment - 1)) != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.Size = Size;
+    Info.Alignment = Alignment;
+    Info.OwnerCookie = OwnerCookie;
+    Status = VidMm->ReservePlacement(VidMm->VidMmHandle,
+                                     SegmentId - 1,
+                                     &Info,
+                                     &Offset);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if ((Offset & (PAGE_SIZE - 1)) != 0 ||
+        Offset > Segment->Size || Size > Segment->Size - Offset)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        goto ReleasePlacement;
+    }
+
+    Mdl = IoAllocateMdl(KernelVa, Size, FALSE, FALSE, NULL);
+    if (Mdl == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto ReleasePlacement;
+    }
+    MmBuildMdlForNonPagedPool(Mdl);
+
+    RtlZeroMemory(&Op, sizeof(Op));
+    Op.Type = DxgkPagingOpMapAperture;
+    Op.DestinationSegmentId = SegmentId;
+    Op.OffsetInPages = (SIZE_T)(Offset / PAGE_SIZE);
+    Op.NumberOfPages = Size / PAGE_SIZE;
+    Op.SourceMdl = Mdl;
+    Status = DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
+    if (!NT_SUCCESS(Status))
+        goto FreeMdl;
+
+    *OutSegmentOffset = Offset;
+    *OutMdl = Mdl;
+    return STATUS_SUCCESS;
+
+FreeMdl:
+    IoFreeMdl(Mdl);
+ReleasePlacement:
+    (VOID)VidMm->ReleasePlacement(VidMm->VidMmHandle,
+                                  SegmentId - 1,
+                                  OwnerCookie);
+    return Status;
+}
+
+VOID
+DxgkVidMmUnmapPageTableSegment(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SegmentId,
+    _In_ ULONGLONG SegmentOffset,
+    _In_ ULONG Size,
+    _In_ ULONGLONG OwnerCookie,
+    _In_opt_ PMDL Mdl)
+{
+    PDXGMMS2_VIDMM_INTERFACE_V1 VidMm;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || SegmentId == 0 ||
+        SegmentId > Adapter->SegmentCount || Adapter->Segments == NULL)
+    {
+        if (Mdl != NULL)
+            IoFreeMdl(Mdl);
+        return;
+    }
+
+    if (Mdl != NULL)
+    {
+        PDXGKRNL_SEGMENT Segment =
+            &ADAPTER_SEGMENTS(Adapter)[SegmentId - 1];
+        DXGKRNL_PAGING_OP Op;
+
+        RtlZeroMemory(&Op, sizeof(Op));
+        Op.Type = DxgkPagingOpUnmapAperture;
+        Op.DestinationSegmentId = SegmentId;
+        Op.OffsetInPages = (SIZE_T)(SegmentOffset / PAGE_SIZE);
+        Op.NumberOfPages = Size / PAGE_SIZE;
+        Op.DummyPage = Segment->DummyPage;
+        (VOID)DxgkPagingExecuteSynchronous(Adapter, NULL, &Op);
+        IoFreeMdl(Mdl);
+    }
+
+    VidMm = DxgkpVidMmOwner(Adapter);
+    if (VidMm != NULL)
+    {
+        (VOID)VidMm->ReleasePlacement(VidMm->VidMmHandle,
+                                      SegmentId - 1,
+                                      OwnerCookie);
+    }
 }
 
 LARGE_INTEGER
@@ -10601,6 +11805,7 @@ DxgkpVidMmTransferAllocationContent(
             else
             {
                 RtlCopyMemory(Allocation->SystemMemory, SegmentVa, Allocation->Size);
+                DxgkpVidMmFlushCpuCache(Allocation->SystemMemory, Allocation->Size);
             }
             Status = STATUS_SUCCESS;
         }
@@ -10982,16 +12187,14 @@ DxgkpVidMmCleanAllocationForSubmissionLocked(
 }
 #endif
 
-static NTSTATUS
-DxgkpVidMmAcquireSubmissionResidencyPinEx(
+NTSTATUS
+DxgkVidMmAcquireSubmissionResidencyPinEx(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
     _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry,
-    _In_ BOOLEAN CpuDirty,
-    _In_ BOOLEAN TrackedSubmission)
+    _In_ BOOLEAN CpuDirty)
 {
     NTSTATUS Status = STATUS_SUCCESS;
-    KIRQL OldIrql;
 
     if (Allocation == NULL || ExpectedAdapter == NULL || Allocation->Adapter != ExpectedAdapter)
         return STATUS_INVALID_PARAMETER;
@@ -11022,42 +12225,13 @@ DxgkpVidMmAcquireSubmissionResidencyPinEx(
                          ExpectedAdapter);
         }
 #endif
-        if (NT_SUCCESS(Status))
+        if (NT_SUCCESS(Status) &&
+            !DxgkSubmissionResidencyPinTryAcquire(
+                &Allocation->SubmissionResidencyPinCount))
         {
-            if (!TrackedSubmission)
-            {
-                if (!DxgkSubmissionResidencyPinTryAcquire(
-                        &Allocation->SubmissionResidencyPinCount))
-                {
-                    Status = STATUS_INTEGER_OVERFLOW;
-                }
-            }
-            else
-            {
-                KeAcquireSpinLock(&Allocation->TrackedSubmissionLock,
-                                  &OldIrql);
-                if (!DxgkSubmissionResidencyPinTryAcquire(
-                        &Allocation->SubmissionResidencyPinCount))
-                {
-                    Status = STATUS_INTEGER_OVERFLOW;
-                }
-                else if (!DxgkSubmissionResidencyPinTryAcquire(
-                             &Allocation->TrackedSubmissionPinCount))
-                {
-                    (VOID)DxgkSubmissionResidencyPinRelease(
-                              &Allocation->SubmissionResidencyPinCount);
-                    Status = STATUS_INTEGER_OVERFLOW;
-                }
-                else
-                {
-                    KeClearEvent(
-                        &Allocation->TrackedSubmissionsDrainedEvent);
-                }
-                KeReleaseSpinLock(&Allocation->TrackedSubmissionLock,
-                                  OldIrql);
-            }
+            Status = STATUS_INTEGER_OVERFLOW;
         }
-        if (NT_SUCCESS(Status) && ListEntry != NULL)
+        else if (NT_SUCCESS(Status) && ListEntry != NULL)
         {
             ListEntry->Value = 0;
             ListEntry->SegmentId = Allocation->SegmentId;
@@ -11066,20 +12240,6 @@ DxgkpVidMmAcquireSubmissionResidencyPinEx(
     }
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
     return Status;
-}
-
-NTSTATUS
-DxgkVidMmAcquireSubmissionResidencyPinEx(
-    _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
-    _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry,
-    _In_ BOOLEAN CpuDirty)
-{
-    return DxgkpVidMmAcquireSubmissionResidencyPinEx(Allocation,
-                                                      ExpectedAdapter,
-                                                      ListEntry,
-                                                      CpuDirty,
-                                                      FALSE);
 }
 
 NTSTATUS
@@ -11094,19 +12254,6 @@ DxgkVidMmAcquireSubmissionResidencyPin(
                                                      TRUE);
 }
 
-NTSTATUS
-DxgkVidMmAcquireTrackedSubmissionResidencyPin(
-    _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
-    _In_ BOOLEAN CpuDirty)
-{
-    return DxgkpVidMmAcquireSubmissionResidencyPinEx(Allocation,
-                                                      ExpectedAdapter,
-                                                      NULL,
-                                                      CpuDirty,
-                                                      TRUE);
-}
-
 VOID
 DxgkVidMmReleaseSubmissionResidencyPin(
     _In_ PDXGKVMM_ALLOCATION Allocation)
@@ -11116,74 +12263,6 @@ DxgkVidMmReleaseSubmissionResidencyPin(
     ASSERT(Allocation != NULL);
     Released = DxgkSubmissionResidencyPinRelease(&Allocation->SubmissionResidencyPinCount);
     ASSERT(Released);
-}
-
-VOID
-DxgkVidMmReleaseTrackedSubmissionResidencyPin(
-    _In_ PDXGKVMM_ALLOCATION Allocation)
-{
-    BOOLEAN ResidencyReleased;
-    BOOLEAN TrackedReleased;
-    KIRQL OldIrql;
-
-    ASSERT(Allocation != NULL);
-    KeAcquireSpinLock(&Allocation->TrackedSubmissionLock, &OldIrql);
-    TrackedReleased = DxgkSubmissionResidencyPinRelease(
-                          &Allocation->TrackedSubmissionPinCount);
-    ResidencyReleased = DxgkSubmissionResidencyPinRelease(
-                            &Allocation->SubmissionResidencyPinCount);
-    if (TrackedReleased &&
-        !DxgkSubmissionResidencyPinIsHeld(
-            &Allocation->TrackedSubmissionPinCount))
-    {
-        KeSetEvent(&Allocation->TrackedSubmissionsDrainedEvent,
-                   IO_NO_INCREMENT,
-                   FALSE);
-    }
-    KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
-    ASSERT(TrackedReleased);
-    ASSERT(ResidencyReleased);
-}
-
-NTSTATUS
-DxgkVidMmWaitForTrackedSubmissions(
-    _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ BOOLEAN DoNotWait)
-{
-    KIRQL OldIrql;
-    LONG PinCount;
-    NTSTATUS Status;
-
-    PAGED_CODE();
-    if (Allocation == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    for (;;)
-    {
-        KeAcquireSpinLock(&Allocation->TrackedSubmissionLock, &OldIrql);
-        PinCount = InterlockedCompareExchange(
-                       &Allocation->TrackedSubmissionPinCount,
-                       0,
-                       0);
-        if (PinCount <= 0 || DoNotWait)
-        {
-            KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
-            if (PinCount < 0)
-                return STATUS_INVALID_DEVICE_STATE;
-            return PinCount == 0 ? STATUS_SUCCESS :
-                                   STATUS_GRAPHICS_ALLOCATION_BUSY;
-        }
-        KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
-
-        Status = KeWaitForSingleObject(
-                     &Allocation->TrackedSubmissionsDrainedEvent,
-                     Executive,
-                     KernelMode,
-                     FALSE,
-                     NULL);
-        if (!NT_SUCCESS(Status))
-            return Status;
-    }
 }
 
 static NTSTATUS
@@ -11211,7 +12290,7 @@ DxgkpVidMmBuildAllocationUserMdl(
 
     *OutMdl = NULL;
     *OutUserOffset = 0;
-    *OutCacheType = MmCached;
+    *OutCacheType = (Allocation->Cached || Allocation->SysMemMdl != NULL) ? MmCached : MmWriteCombined;
 
     if (Allocation->ContentLost)
         return STATUS_GRAPHICS_ALLOCATION_CONTENT_LOST;
@@ -11236,7 +12315,7 @@ DxgkpVidMmBuildAllocationUserMdl(
 
             MmBuildMdlForNonPagedPool(Mdl);
             *OutMdl = Mdl;
-            *OutCacheType = MmCached;
+            *OutCacheType = (Allocation->Cached || Allocation->SysMemMdl != NULL) ? MmCached : MmWriteCombined;
             return STATUS_SUCCESS;
         }
 
@@ -11273,7 +12352,7 @@ DxgkpVidMmBuildAllocationUserMdl(
 
             MmBuildMdlForNonPagedPool(Mdl);
             *OutMdl = Mdl;
-            *OutCacheType = MmCached;
+            *OutCacheType = (Allocation->Cached || Allocation->SysMemMdl != NULL) ? MmCached : MmWriteCombined;
             return STATUS_SUCCESS;
         }
 
@@ -12141,8 +13220,40 @@ DxgkVidMmCleanupDeviceAllocations(
     for (Entry = DxgkVidMmDestroyBatchListHead.Flink; Entry != &DxgkVidMmDestroyBatchListHead; Entry = Entry->Flink)
     {
         PDXGKVMM_DESTROY_BATCH Batch = CONTAINING_RECORD(Entry, DXGKVMM_DESTROY_BATCH, QuarantineEntry);
+        UINT Index;
+
         if (Batch->Adapter != Adapter || Batch->MiniportDeviceHandle != MiniportDeviceHandle)
             continue;
+
+        /*
+         * DestroyAllocation removes the device-local allocation immediately,
+         * but an opened shared resource may keep the adapter-global backing
+         * alive.  Once the destroy batch is committed, all logical references
+         * and device-specific open bindings are gone; its eventual
+         * DxgkDdiDestroyAllocation call uses the adapter context, not hDevice.
+         * Detach that deferred physical lifetime before destroying the device.
+         */
+        if (InterlockedCompareExchange(&Batch->DestroyCommitted, 0, 0) != 0)
+        {
+            Batch->MiniportDeviceHandle = NULL;
+            if (Batch->Resource != NULL && Batch->Resource->Device == Device)
+                Batch->Resource->Device = NULL;
+            for (Index = 0; Index < Batch->AllocationCount; ++Index)
+            {
+                PDXGKVMM_ALLOCATION Allocation = Batch->Allocations[Index];
+
+                if (Allocation != NULL && Allocation->Device == Device)
+                {
+                    Allocation->Device = NULL;
+                    Allocation->MiniportDeviceHandle = NULL;
+                }
+            }
+            continue;
+        }
+        DPRINT1("DxgkVidMmCleanupDeviceAllocations: uncommitted destroy batch=%p status=0x%08lX allocations=%u\n",
+                Batch,
+                Batch->CompletionStatus,
+                Batch->AllocationCount);
         RetainedObjects = TRUE;
     }
     ExReleaseFastMutex(&DxgkVidMmDestroyBatchListLock);
@@ -12153,7 +13264,12 @@ DxgkVidMmCleanupDeviceAllocations(
         PDXGKVMM_ALLOCATION Allocation = CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, GlobalAllocationEntry);
 
         if (Allocation->Device == Device)
+        {
+            DPRINT1("DxgkVidMmCleanupDeviceAllocations: device allocation still live handle=0x%08X refs=%ld\n",
+                    Allocation->Handle,
+                    InterlockedCompareExchange(&Allocation->ReferenceCount, 0, 0));
             RetainedObjects = TRUE;
+        }
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
 
@@ -12163,7 +13279,13 @@ DxgkVidMmCleanupDeviceAllocations(
         PDXGKVMM_RESOURCE Resource = CONTAINING_RECORD(Entry, DXGKVMM_RESOURCE, GlobalResourceEntry);
 
         if (Resource->Device == Device)
+        {
+            DPRINT1("DxgkVidMmCleanupDeviceAllocations: device resource still live handle=0x%08X refs=%ld allocations=%lu\n",
+                    Resource->Handle,
+                    InterlockedCompareExchange(&Resource->ReferenceCount, 0, 0),
+                    Resource->AllocationCount);
             RetainedObjects = TRUE;
+        }
     }
     ExReleaseFastMutex(&DxgkVidMmResourceListLock);
     return RetainedObjects ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;

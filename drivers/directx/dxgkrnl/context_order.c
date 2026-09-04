@@ -111,6 +111,51 @@ static VOID DxgkpContextOrderFreeUnpublishedOperation(_Inout_ PDXGK_CONTEXT_ORDE
     ExFreePoolWithTag(Operation, DXGK_CONTEXT_ORDER_OPERATION_TAG);
 }
 
+static VOID NTAPI DxgkpContextOrderWorker(_In_ PVOID Parameter);
+
+/* Drive the ordered stream on the submitting thread instead of waking the
+ * scheduler thread.  Handing the first pass off costs a context switch on
+ * every submission while the submitting thread has nothing else to do, and
+ * the next submission then blocks on the admission mutex behind that wakeup.
+ * The caller must have dropped its own locks: this runs the full worker pass,
+ * including the miniport dispatch.  Contexts woken by a signal keep using the
+ * queued path so a dispatch can never recurse into another one. */
+VOID DxgkContextOrderKickContext(_Inout_ PDXGKRNL_CONTEXT Context)
+{
+    LONG State;
+
+    PAGED_CODE();
+    if (Context == NULL || Context->Mms2ContextStream == NULL)
+        return;
+    InterlockedIncrement(&Context->ReferenceCount);
+    for (;;)
+    {
+        State = InterlockedCompareExchange(&Context->StreamWorkerQueued, 0, 0);
+        if (State == 0)
+        {
+            if (InterlockedCompareExchange(&Context->StreamWorkerQueued, 1, 0) != 0)
+                continue;
+            KeClearEvent(&Context->StreamDrainedEvent);
+            /* The worker consumes the reference taken above, exactly as it
+             * does when the scheduler thread picks the context up. */
+            DxgkpContextOrderWorker(Context);
+            return;
+        }
+        if (State == 1)
+        {
+            if (InterlockedCompareExchange(&Context->StreamWorkerQueued, 2, 1) != 1)
+                continue;
+            break;
+        }
+        if (State == 2)
+            break;
+        ASSERT(FALSE);
+        break;
+    }
+    DxgkDereferenceContext(Context);
+}
+
+
 static VOID DxgkpContextOrderPublishMarker(_Inout_ PDXGK_CONTEXT_ORDER_OPERATION Operation, _In_ ULONG MarkerIndex, _Inout_ PDXGKRNL_CONTEXT Context, _In_ ULONGLONG Sequence)
 {
     PDXGK_CONTEXT_ORDER_MARKER Marker = &Operation->Markers[MarkerIndex];
