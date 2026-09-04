@@ -68,7 +68,7 @@ static BOOLEAN IsoSearchDirectoryBufferForFile(PVOID DirectoryBuffer, ULONG Dire
     PDIR_RECORD    Record;
     ULONG        Offset;
     ULONG i;
-    CHAR Name[32];
+    CHAR Name[256];
 
     Offset = 0;
     Record = (PDIR_RECORD)DirectoryBuffer;
