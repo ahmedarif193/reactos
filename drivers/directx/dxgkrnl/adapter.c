@@ -67,13 +67,6 @@
 #include <reactos/arc/arc.h>
 #include <reactos/drivers/acpi/acpipci.h>
 #include <reactos/drivers/cmreslist.h>
-/*
- * ntddvdeo.h is already included via dxgkrnl_private.h (before INITGUID),
- * so DEFINE_GUID only produced an extern declaration.  Instantiate here.
- */
-const GUID GUID_DISPLAY_DEVICE_ARRIVAL =
-    {0x1ca05180, 0xa699, 0x450a, {0x9a, 0x0c, 0xde, 0x4f, 0xbe, 0x3d, 0xdd, 0x89}};
-
 #define DXGKP_BUGCHECK_VIDEO_DXGKRNL_FATAL_ERROR 0x113
 #define DXGKP_FATAL_SURPRISE_REMOVAL_SUBTYPE 0x19
 #define DXGKP_FATAL_MMS2_LIFECYCLE_SUBTYPE 0x1A
