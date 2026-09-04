@@ -2245,6 +2245,55 @@ static NTSTATUS DxgkpCaptureDeviceName(_In_ PCWSTR Source, _In_ KPROCESSOR_MODE 
  * originate in user mode even though win32k transports it through an internal
  * IOCTL.
  */
+/*
+ * DxgkpFirstRenderPair
+ *
+ * The first started, non-fallback, render-capable adapter in snapshot order,
+ * with the number that were eligible.
+ *
+ * The desktop can be owned by the basic-display fallback while rendering comes
+ * from a real adapter, so a DC on the fallback has to be paired with one.  That
+ * pairing used to be taken only when exactly one candidate existed, which meant
+ * a second GPU turned the answer into "no pair at all": the DC stayed on the
+ * fallback, a hardware ICD asked about an adapter that is not its own reported
+ * no pixel formats, and OpenGL silently dropped to the software rasteriser.
+ * Choosing the first candidate instead matches how opengl32 picks an ICD when
+ * several adapters publish one, so both layers name the same adapter.
+ *
+ * Caller MUST hold a snapshot reference on every entry.
+ */
+static PDXGKRNL_ADAPTER
+DxgkpFirstRenderPair(
+    _In_reads_(Count) PDXGKRNL_ADAPTER *Snapshot,
+    _In_ ULONG Count,
+    _In_opt_ PDXGKRNL_ADAPTER Exclude,
+    _Out_opt_ PULONG EligibleCount)
+{
+    PDXGKRNL_ADAPTER First = NULL;
+    ULONG Eligible = 0;
+    ULONG i;
+
+    for (i = 0; i < Count; ++i)
+    {
+        if (Snapshot[i] == Exclude ||
+            Snapshot[i]->State != DxgkAdapterStateStarted ||
+            Snapshot[i]->MiniportContext == NULL ||
+            Snapshot[i]->MiniportContext->IsBasicDisplayFallback ||
+            !DxgkpAdapterSupportsRender(Snapshot[i]))
+        {
+            continue;
+        }
+
+        ++Eligible;
+        if (First == NULL)
+            First = Snapshot[i];
+    }
+
+    if (EligibleCount != NULL)
+        *EligibleCount = Eligible;
+    return First;
+}
+
 static NTSTATUS
 DxgkpOpenAdapterByDeviceObjectName(
     _In_ PCWSTR DeviceName,
@@ -2295,23 +2344,15 @@ DxgkpOpenAdapterByDeviceObjectName(
         Selected->MiniportContext != NULL &&
         Selected->MiniportContext->IsBasicDisplayFallback)
     {
-        for (i = 0; i < Count; ++i)
+        RenderPair = DxgkpFirstRenderPair(Snapshot, Count, Selected, &RenderPairCount);
+        if (RenderPair != NULL)
         {
-            if (Snapshot[i] == Selected ||
-                Snapshot[i]->State != DxgkAdapterStateStarted ||
-                Snapshot[i]->MiniportContext == NULL ||
-                Snapshot[i]->MiniportContext->IsBasicDisplayFallback ||
-                !DxgkpAdapterSupportsRender(Snapshot[i]))
+            if (RenderPairCount > 1)
             {
-                continue;
+                DXGKRNL_TRACE("DxgkpOpenAdapterByDeviceObjectName: %lu render adapters "
+                              "eligible for the basic-display DC, pairing with the first\n",
+                              RenderPairCount);
             }
-
-            RenderPair = Snapshot[i];
-            ++RenderPairCount;
-        }
-
-        if (RenderPairCount == 1)
-        {
             Selected = RenderPair;
         }
     }
@@ -2615,15 +2656,13 @@ DxgkpQueryCurrentDisplayModeForAdapter(
             }
             continue;
         }
-        if (DxgkpAdapterSupportsRender(Candidate))
-        {
-            RenderPair = Candidate;
-            ++RenderPairCount;
-        }
     }
 
+    /* Same first-render-adapter rule as the device-name path above, so the two
+     * cannot disagree about which adapter answers for the fallback's display. */
+    RenderPair = DxgkpFirstRenderPair(Snapshot, Count, NULL, &RenderPairCount);
+
     if (DisplayPairCount == 1 &&
-        RenderPairCount == 1 &&
         RenderPair == Adapter)
     {
         Status = DxgkVidPnQueryCurrentDisplayMode(DisplayPair, CurrentMode);
