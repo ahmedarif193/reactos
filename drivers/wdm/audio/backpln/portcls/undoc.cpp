@@ -8,7 +8,7 @@
 
 #include "private.hpp"
 
-#define YDEBUG
+#define NDEBUG
 #include <debug.h>
 
 NTSTATUS
