@@ -124,7 +124,20 @@ BOOLEAN DxgkTrackedWorkCoreCancel(_Inout_ PDXGK_TRACKED_WORK_CORE Core)
 
         Core->State = DxgkTrackedWorkCancelled;
         if (PreviousState == DxgkTrackedWorkCommitted)
+        {
             DxgkpTrackedWorkAdjustInFlightLocked(Core, -1);
+            /*
+             * A committed submission already told user mode its monitored
+             * fence would reach the submitted value.  Publish it even though
+             * the work never executed: the submission is terminal either way,
+             * and withholding the value strands every
+             * WaitForSynchronizationObjectFromCpu on it forever.  A submission
+             * cancelled while still Prepared was never acknowledged, so its
+             * value must not be published.
+             */
+            if (Core->Callbacks.PublishSignal != NULL)
+                Core->Callbacks.PublishSignal(Core->CallbackContext);
+        }
         DxgkpTrackedWorkCompleteLocked(Core);
         Cancelled = TRUE;
     }

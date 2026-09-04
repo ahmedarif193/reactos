@@ -2895,17 +2895,19 @@ DxgkpFreeTrackedDmaBufferEntry(
     BOOLEAN ExternalCleanupOwned;
     BOOLEAN WakeOrderedWaits;
 
-    WakeOrderedWaits = Completed && Entry->SignalSyncObjectReference != NULL;
+    /* Both retirement and terminal cancellation publish the monitored fence
+     * now, so ordered waits must be re-driven after either. */
+    WakeOrderedWaits = Entry->SignalSyncObjectReference != NULL;
     if (Completed)
         DxgkTrackedWorkCoreRetire(&Entry->TrackedWork);
     else
         DxgkTrackedWorkCoreCancel(&Entry->TrackedWork);
 
     /*
-     * Retirement publishes CPU-backed monitored fences.  Wake ordered waits
-     * only after that publication, while this entry still owns its device
-     * reference, so a retried wait cannot observe the old fence value and
-     * park without another wakeup.
+     * Retirement and cancellation both publish CPU-backed monitored fences.
+     * Wake ordered waits only after that publication, while this entry still
+     * owns its device reference, so a retried wait cannot observe the old
+     * fence value and park without another wakeup.
      */
     if (WakeOrderedWaits)
         DxgkContextOrderWakeDevice(Entry->Device);
