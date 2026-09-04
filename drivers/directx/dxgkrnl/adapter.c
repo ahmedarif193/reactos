@@ -340,6 +340,36 @@ DxgkpStopPostDisplayOwner(
     return Status;
 }
 
+/* The desktop bridge belongs to the adapter that owns the boot display. */
+static BOOLEAN
+DxgkpShouldRegisterDisplayBridge(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDEVICE_OBJECT OwnerDeviceObject;
+    PDXGKRNL_ADAPTER Owner;
+    BOOLEAN Register;
+
+    PAGED_CODE();
+
+    if (Adapter->MiniportContext == NULL ||
+        Adapter->MiniportContext->IsBasicDisplayFallback)
+    {
+        return TRUE;
+    }
+
+    (VOID)KeWaitForSingleObject(&g_PostDisplayOwnershipMutex,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+    Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
+    Register = (Owner == NULL || Owner == Adapter);
+    if (OwnerDeviceObject != NULL)
+        ObDereferenceObject(OwnerDeviceObject);
+    KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
+    return Register;
+}
+
 /* Complete the claimant-bound handoff after the complete start state has been
  * published. A successful or non-restartable claimant commits the handoff.
  * A restartable failure starts the retained BasicDisplay FDO again while the
@@ -10864,15 +10894,19 @@ DxgkAdapterStart(
      */
     if (DxgkAdapterStartRoleRequiresDisplayPipeline(Role))
     {
+        BOOLEAN RegisterDisplayBridge;
+
         StepStart100ns = DxgkpTraceNow100ns();
-        Status = DxgkDisplayRegister(Adapter);
+        RegisterDisplayBridge = DxgkpShouldRegisterDisplayBridge(Adapter);
+        Status = RegisterDisplayBridge ? DxgkDisplayRegister(Adapter)
+                                       : STATUS_SUCCESS;
         DisplayUs = DxgkpTraceElapsedUs(StepStart100ns);
         if (!NT_SUCCESS(Status))
         {
             DXGKRNL_ERR("DxgkAdapterStart: mandatory DxgkDisplayRegister failed 0x%08lX\n", Status);
             goto StartRollback;
         }
-        Progress.DisplayRegistered = TRUE;
+        Progress.DisplayRegistered = RegisterDisplayBridge;
     }
 
     DXGKRNL_TRACE("DxgkAdapterStart: summary connect=%I64u us miniport=%I64u us vidmm=%I64u us vidpn=%I64u us present=%I64u us display=%I64u us total=%I64u us irq=%ld queue=%ld dpc=%ld\n",
