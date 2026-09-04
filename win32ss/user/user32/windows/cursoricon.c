@@ -324,7 +324,9 @@ User32SetupDefaultCursors(PVOID Arguments,
 
 BOOL get_icon_size(HICON hIcon, SIZE *size)
 {
-    return NtUserGetIconSize(hIcon, 0, &size->cx, &size->cy);
+    BOOL ret = NtUserGetIconSize(hIcon, 0, &size->cx, &size->cy);
+    if (ret) size->cy /= 2;
+    return ret;
 }
 
 HCURSOR CursorIconToCursor(HICON hIcon, BOOL SemiTransparent)
