@@ -3222,6 +3222,7 @@ DxgkVidMmInitializeAdapter(
     BOOLEAN                         UsingSeg4;
     ULONG                           PagingBufferSegmentId;
     ULONG                           PagingBufferSize;
+    ULONG                           PagingBufferPrivateDataSize;
     PDXGKRNL_SEGMENT                Segments;
     PHYSICAL_ADDRESS                LowestAddress;
     PHYSICAL_ADDRESS                HighestAddress;
@@ -3234,6 +3235,7 @@ DxgkVidMmInitializeAdapter(
     ASSERT(Adapter != NULL);
     ASSERT(Adapter->MiniportDeviceContext != NULL);
     ASSERT(Adapter->MiniportContext != NULL);
+    Adapter->PagingBufferPrivateDataSize = 0;
     InterlockedExchange(&Adapter->VidMmBackingCount, 0);
     KeInitializeEvent(&Adapter->VidMmBackingsDrainedEvent, NotificationEvent, TRUE);
     InterlockedExchange(&Adapter->VidMmDestroyWorkerCount, 0);
@@ -3426,16 +3428,19 @@ DxgkVidMmInitializeAdapter(
     {
         PagingBufferSegmentId = SegOut4.PagingBufferSegmentId;
         PagingBufferSize      = SegOut4.PagingBufferSize;
+        PagingBufferPrivateDataSize = SegOut4.PagingBufferPrivateDataSize;
     }
     else if (UsingSeg3)
     {
         PagingBufferSegmentId = SegOut3.PagingBufferSegmentId;
         PagingBufferSize      = SegOut3.PagingBufferSize;
+        PagingBufferPrivateDataSize = SegOut3.PagingBufferPrivateDataSize;
     }
     else
     {
         PagingBufferSegmentId = SegOut.PagingBufferSegmentId;
         PagingBufferSize      = SegOut.PagingBufferSize;
+        PagingBufferPrivateDataSize = SegOut.PagingBufferPrivateDataSize;
     }
 
     /* -----------------------------------------------------------------------
@@ -3564,6 +3569,7 @@ DxgkVidMmInitializeAdapter(
      * ----------------------------------------------------------------------- */
     Adapter->Segments      = (PVOID)Segments;
     Adapter->SegmentCount  = SegmentCount;
+    Adapter->PagingBufferPrivateDataSize = PagingBufferPrivateDataSize;
     KeMemoryBarrier();
 
     ExFreePoolWithTag(DescBuffer, TAG_VIDMM_SEGMENT);
@@ -3940,6 +3946,7 @@ DxgkVidMmTeardownAdapter(
     ExFreePoolWithTag(Adapter->Segments, TAG_VIDMM_SEGMENT);
     Adapter->Segments     = NULL;
     Adapter->SegmentCount = 0;
+    Adapter->PagingBufferPrivateDataSize = 0;
 
     DPRINT("DxgkVidMmTeardownAdapter: done\n");
 }

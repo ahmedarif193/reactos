@@ -1990,7 +1990,8 @@ VidSchpKickEngine(
         SubmitArgs.pDmaBufferPrivateData = Packet->DriverPrivateData;
         SubmitArgs.DmaBufferPrivateDataSize = Packet->DriverPrivateDataSize;
         SubmitArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-        SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = Packet->DriverPrivateDataSize;
+        SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset =
+            Packet->DriverPrivateDataSubmissionEndOffset;
         SubmitArgs.SubmissionFenceId = Packet->SubmissionFenceId;
         SubmitArgs.VidPnSourceId = Packet->VidPnSourceId;
         SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
@@ -2733,6 +2734,7 @@ VidSchSubmitCommandTracked(
     ULONG FenceId;
     ULONG AdmittedFenceId;
     PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched;
+    BOOLEAN PagingPrivateData;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -2744,6 +2746,14 @@ VidSchSubmitCommandTracked(
     *OutFenceId = 0;
     if (Adapter == NULL || DmaBuffer == NULL || DmaBuffer->VirtualAddress == NULL || DmaBuffer->Capacity == 0 || DmaBuffer->SubmissionStartOffset >= DmaBuffer->SubmissionEndOffset || DmaBuffer->SubmissionEndOffset > DmaBuffer->Capacity || TrackArgs == NULL || (SubmitFlags & ~0xffu) != 0 || (DriverPrivateDataSize != 0 && DriverPrivateData == NULL) || (AllocationListCount != 0 && AllocationList == NULL) || (PatchLocationListCount != 0 && PatchLocationList == NULL) || (Adapter->SchedulingCaps.MultiEngineAware && MiniportContextHandle == NULL) || (!Adapter->SchedulingCaps.MultiEngineAware && MiniportDeviceHandle == NULL))
         return STATUS_INVALID_PARAMETER;
+    PagingPrivateData = (SubmitFlags & VIDSCH_SUBMITFLAG_PAGING) != 0;
+    if (PagingPrivateData &&
+        (DriverPrivateData != DmaBuffer->PrivateData ||
+         DriverPrivateDataSize != DmaBuffer->PrivateDataSize ||
+         DmaBuffer->PrivateDataUsed > DmaBuffer->PrivateDataSize))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     if (!VidSchpAcquireCall(Adapter))
         return STATUS_DELETE_PENDING;
 
@@ -2778,16 +2788,28 @@ VidSchSubmitCommandTracked(
 
     if (DriverPrivateDataSize != 0)
     {
-        Packet->OwnedDriverPrivateData = ExAllocatePoolWithTag(NonPagedPool, DriverPrivateDataSize, TAG_VIDSCH);
-        if (Packet->OwnedDriverPrivateData == NULL)
+        if (PagingPrivateData)
         {
-            VidSchpDereferencePacket(Packet);
-            VidSchpReleaseCall(Adapter);
-            return STATUS_INSUFFICIENT_RESOURCES;
+            Packet->DriverPrivateData = (PVOID)DriverPrivateData;
+            Packet->DriverPrivateDataSize = DriverPrivateDataSize;
+            Packet->DriverPrivateDataSubmissionEndOffset =
+                DmaBuffer->PrivateDataUsed;
         }
-        RtlCopyMemory(Packet->OwnedDriverPrivateData, DriverPrivateData, DriverPrivateDataSize);
-        Packet->DriverPrivateData = Packet->OwnedDriverPrivateData;
-        Packet->DriverPrivateDataSize = DriverPrivateDataSize;
+        else
+        {
+            Packet->OwnedDriverPrivateData = ExAllocatePoolWithTag(NonPagedPool, DriverPrivateDataSize, TAG_VIDSCH);
+            if (Packet->OwnedDriverPrivateData == NULL)
+            {
+                VidSchpDereferencePacket(Packet);
+                VidSchpReleaseCall(Adapter);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            RtlCopyMemory(Packet->OwnedDriverPrivateData, DriverPrivateData, DriverPrivateDataSize);
+            Packet->DriverPrivateData = Packet->OwnedDriverPrivateData;
+            Packet->DriverPrivateDataSize = DriverPrivateDataSize;
+            Packet->DriverPrivateDataSubmissionEndOffset =
+                DriverPrivateDataSize;
+        }
     }
 
     if (AllocationList != NULL && AllocationListCount != 0)
@@ -2876,7 +2898,8 @@ VidSchSubmitCommandTracked(
         PatchArgs.pDmaBufferPrivateData = Packet->DriverPrivateData;
         PatchArgs.DmaBufferPrivateDataSize = Packet->DriverPrivateDataSize;
         PatchArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-        PatchArgs.DmaBufferPrivateDataSubmissionEndOffset = Packet->DriverPrivateDataSize;
+        PatchArgs.DmaBufferPrivateDataSubmissionEndOffset =
+            Packet->DriverPrivateDataSubmissionEndOffset;
         PatchArgs.pAllocationList = Packet->InlineAllocationList;
         PatchArgs.AllocationListSize = Packet->InlineAllocationCount;
         PatchArgs.pPatchLocationList = Packet->InlinePatchList;

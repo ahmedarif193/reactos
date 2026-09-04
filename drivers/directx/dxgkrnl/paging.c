@@ -46,6 +46,67 @@ DxgkpPagingBufferBytes(
     return Bytes;
 }
 
+static VOID
+DxgkpPagingPreparePrivateData(
+    _In_ PDXGKRNL_DMA_BUFFER DmaBuffer,
+    _Inout_ DXGKARG_BUILDPAGINGBUFFER *BuildArgs)
+{
+    ASSERT(DmaBuffer->PrivateDataUsed <= DmaBuffer->PrivateDataSize);
+
+    if (DmaBuffer->PrivateDataSize == 0)
+    {
+        BuildArgs->pDmaBufferPrivateData = NULL;
+        BuildArgs->DmaBufferPrivateDataSize = 0;
+        return;
+    }
+
+    BuildArgs->pDmaBufferPrivateData =
+        (PUCHAR)DmaBuffer->PrivateData + DmaBuffer->PrivateDataUsed;
+    BuildArgs->DmaBufferPrivateDataSize =
+        DmaBuffer->PrivateDataSize - DmaBuffer->PrivateDataUsed;
+}
+
+static NTSTATUS
+DxgkpPagingFinishPrivateData(
+    _Inout_ PDXGKRNL_DMA_BUFFER DmaBuffer,
+    _In_ const DXGKARG_BUILDPAGINGBUFFER *BuildArgs)
+{
+    PUCHAR Base;
+    PUCHAR Cursor;
+    ULONG UsedByPointer;
+    ULONG UsedBySize;
+    ULONG Remaining;
+
+    if (DmaBuffer->PrivateDataSize == 0)
+    {
+        return (BuildArgs->pDmaBufferPrivateData == NULL &&
+                BuildArgs->DmaBufferPrivateDataSize == 0)
+                   ? STATUS_SUCCESS
+                   : STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    }
+    if (DmaBuffer->PrivateData == NULL ||
+        DmaBuffer->PrivateDataUsed > DmaBuffer->PrivateDataSize)
+    {
+        return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    }
+
+    Base = DmaBuffer->PrivateData;
+    Cursor = BuildArgs->pDmaBufferPrivateData;
+    Remaining = DmaBuffer->PrivateDataSize - DmaBuffer->PrivateDataUsed;
+    if (Cursor < Base + DmaBuffer->PrivateDataUsed ||
+        Cursor > Base + DmaBuffer->PrivateDataSize ||
+        BuildArgs->DmaBufferPrivateDataSize > Remaining)
+    {
+        return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    }
+
+    UsedByPointer = (ULONG)(Cursor - Base);
+    UsedBySize = DmaBuffer->PrivateDataSize -
+                 BuildArgs->DmaBufferPrivateDataSize;
+    DmaBuffer->PrivateDataUsed = max(UsedByPointer, UsedBySize);
+    return STATUS_SUCCESS;
+}
+
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
 static BOOLEAN
 DxgkpPagingMonitoredFenceSignalSupported(
@@ -333,7 +394,11 @@ DxgkPagingExecuteBatch(
         PUCHAR End;
         BOOLEAN RetryLarger = FALSE;
 
-        Status = DxgkAllocateDmaBuffer(Adapter, BufferBytes, &DmaBuffer);
+        Status = DxgkAllocateDmaBufferWithPrivateData(
+                     Adapter,
+                     BufferBytes,
+                     Adapter->PagingBufferPrivateDataSize,
+                     &DmaBuffer);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
         Cursor = (PUCHAR)DmaBuffer->VirtualAddress;
@@ -357,6 +422,7 @@ DxgkPagingExecuteBatch(
                 RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
                 BuildArgs.pDmaBuffer = Cursor;
                 BuildArgs.DmaSize = (UINT)(End - Cursor);
+                DxgkpPagingPreparePrivateData(DmaBuffer, &BuildArgs);
                 BuildArgs.MultipassOffset = MultipassOffset;
                 DxgkpPagingFillBuildArgs(&Operations[OperationIndex],
                                          Pass == 0,
@@ -380,6 +446,9 @@ DxgkPagingExecuteBatch(
                 }
                 _SEH2_END;
                 DxgkReleaseKmdCall(Adapter);
+                Status = DxgkpPagingFinishPrivateData(DmaBuffer, &BuildArgs);
+                if (!NT_SUCCESS(Status))
+                    goto Cleanup;
 
                 if (!NT_SUCCESS(BuildStatus) &&
                     BuildStatus != STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER)
@@ -440,6 +509,7 @@ DxgkPagingExecuteBatch(
                 RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
                 BuildArgs.pDmaBuffer = Cursor;
                 BuildArgs.DmaSize = (UINT)(End - Cursor);
+                DxgkpPagingPreparePrivateData(DmaBuffer, &BuildArgs);
                 BuildArgs.MultipassOffset = MultipassOffset;
                 BuildArgs.Operation =
                     DXGK_OPERATION_SIGNAL_MONITORED_FENCE;
@@ -466,6 +536,9 @@ DxgkPagingExecuteBatch(
                 }
                 _SEH2_END;
                 DxgkReleaseKmdCall(Adapter);
+                Status = DxgkpPagingFinishPrivateData(DmaBuffer, &BuildArgs);
+                if (!NT_SUCCESS(Status))
+                    goto Cleanup;
 
                 if (!NT_SUCCESS(BuildStatus) &&
                     BuildStatus !=
@@ -584,8 +657,8 @@ DxgkPagingExecuteBatch(
                                         Operations[0].NodeOrdinal,
                                         Operations[0].EngineOrdinal,
                                         DmaBuffer,
-                                        NULL,
-                                        0,
+                                        DmaBuffer->PrivateData,
+                                        DmaBuffer->PrivateDataSize,
                                         NULL,
                                         0,
                                         NULL,
@@ -699,13 +772,18 @@ DxgkPagingExecute(
         ULONG PreviousMultipassOffset = MultipassOffset;
         ULONG BytesUsed;
 
-        Status = DxgkAllocateDmaBuffer(Adapter, BufferBytes, &DmaBuffer);
+        Status = DxgkAllocateDmaBufferWithPrivateData(
+                     Adapter,
+                     BufferBytes,
+                     Adapter->PagingBufferPrivateDataSize,
+                     &DmaBuffer);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
 
         RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
         BuildArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
         BuildArgs.DmaSize = DmaBuffer->Capacity;
+        DxgkpPagingPreparePrivateData(DmaBuffer, &BuildArgs);
         BuildArgs.MultipassOffset = MultipassOffset;
         DxgkpPagingFillBuildArgs(Op, Pass == 0, &BuildArgs);
 
@@ -724,6 +802,9 @@ DxgkPagingExecute(
         }
         _SEH2_END;
         DxgkReleaseKmdCall(Adapter);
+        Status = DxgkpPagingFinishPrivateData(DmaBuffer, &BuildArgs);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
 
         if (!NT_SUCCESS(BuildStatus) && BuildStatus != STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER)
         {
@@ -777,7 +858,7 @@ DxgkPagingExecute(
         {
             RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
             TrackArgs.Device = Device;
-            Status = VidSchSubmitCommandTracked(Adapter, Op->NodeOrdinal, Op->EngineOrdinal, PendingBuffer, NULL, 0, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
+            Status = VidSchSubmitCommandTracked(Adapter, Op->NodeOrdinal, Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
             if (!NT_SUCCESS(Status))
                 goto Cleanup;
             PendingBuffer = NULL;
@@ -808,7 +889,7 @@ DxgkPagingExecute(
     TrackArgs.Device = Device;
     TrackArgs.hSignalSyncObject = hSignalSyncObject;
     TrackArgs.SignalFenceValue = SignalFenceValue;
-    Status = VidSchSubmitCommandTracked(Adapter, Op->NodeOrdinal, Op->EngineOrdinal, PendingBuffer, NULL, 0, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
+    Status = VidSchSubmitCommandTracked(Adapter, Op->NodeOrdinal, Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     PendingBuffer = NULL;

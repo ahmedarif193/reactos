@@ -1743,9 +1743,10 @@ NTSTATUS NTAPI DxgkNotifySubmissionFenceCompletion(_In_ PDXGKRNL_ADAPTER Adapter
 
 NTSTATUS
 NTAPI
-DxgkAllocateDmaBuffer(
+DxgkAllocateDmaBufferWithPrivateData(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG Capacity,
+    _In_ ULONG PrivateDataSize,
     _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer)
 {
     PDXGKRNL_DMA_BUFFER DmaBuffer;
@@ -1770,7 +1771,8 @@ DxgkAllocateDmaBuffer(
                  Link = Link->Flink)
             {
                 DmaBuffer = CONTAINING_RECORD(Link, DXGKRNL_DMA_BUFFER, CacheListEntry);
-                if (DmaBuffer->Capacity != Capacity)
+                if (DmaBuffer->Capacity != Capacity ||
+                    DmaBuffer->PrivateDataSize != PrivateDataSize)
                     continue;
 
                 RemoveEntryList(&DmaBuffer->CacheListEntry);
@@ -1779,6 +1781,7 @@ DxgkAllocateDmaBuffer(
                 Adapter->DmaBufferCacheCount--;
                 DmaBuffer->SubmissionStartOffset = 0;
                 DmaBuffer->SubmissionEndOffset = 0;
+                DmaBuffer->PrivateDataUsed = 0;
                 KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
                 *OutDmaBuffer = DmaBuffer;
                 return STATUS_SUCCESS;
@@ -1807,6 +1810,21 @@ DxgkAllocateDmaBuffer(
     }
 
     DmaBuffer->Capacity = Capacity;
+    DmaBuffer->PrivateDataSize = PrivateDataSize;
+    if (PrivateDataSize != 0)
+    {
+        DmaBuffer->PrivateData = ExAllocatePoolWithTag(
+                                     NonPagedPool,
+                                     PrivateDataSize,
+                                     TAG_DXGK_SUBMITDMA);
+        if (DmaBuffer->PrivateData == NULL)
+        {
+            MmFreeContiguousMemory(DmaBuffer->VirtualAddress);
+            ExFreePoolWithTag(DmaBuffer, TAG_DXGK_SUBMITDMA);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(DmaBuffer->PrivateData, PrivateDataSize);
+    }
     DmaBuffer->SubmissionStartOffset = 0;
     DmaBuffer->SubmissionEndOffset = Capacity;
     DmaBuffer->SegmentId = 0;
@@ -1819,6 +1837,8 @@ DxgkAllocateDmaBuffer(
     Status = DxgkFlushDmaBufferForSubmission(DmaBuffer);
     if (!NT_SUCCESS(Status))
     {
+        if (DmaBuffer->PrivateData != NULL)
+            ExFreePoolWithTag(DmaBuffer->PrivateData, TAG_DXGK_SUBMITDMA);
         MmFreeContiguousMemory(DmaBuffer->VirtualAddress);
         ExFreePoolWithTag(DmaBuffer, TAG_DXGK_SUBMITDMA);
         return Status;
@@ -1826,6 +1846,19 @@ DxgkAllocateDmaBuffer(
     DmaBuffer->SubmissionEndOffset = 0;
     *OutDmaBuffer = DmaBuffer;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+DxgkAllocateDmaBuffer(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Capacity,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer)
+{
+    return DxgkAllocateDmaBufferWithPrivateData(Adapter,
+                                                 Capacity,
+                                                 0,
+                                                 OutDmaBuffer);
 }
 
 static VOID
@@ -1836,6 +1869,11 @@ DxgkpDestroyDmaBuffer(
         DmaBuffer->BackingKind == DxgkDmaBackingContiguousMemory)
     {
         MmFreeContiguousMemory(DmaBuffer->VirtualAddress);
+    }
+    if (DmaBuffer->PrivateData != NULL)
+    {
+        ExFreePoolWithTag(DmaBuffer->PrivateData, TAG_DXGK_SUBMITDMA);
+        DmaBuffer->PrivateData = NULL;
     }
     DmaBuffer->OwnerAdapter = NULL;
     DmaBuffer->VirtualAddress = NULL;

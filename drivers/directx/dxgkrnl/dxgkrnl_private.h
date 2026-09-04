@@ -251,6 +251,9 @@ typedef struct _DXGKRNL_DMA_BUFFER
     PDXGKRNL_ADAPTER           OwnerAdapter;
     PVOID                       VirtualAddress;
     ULONG                       Capacity;
+    PVOID                       PrivateData;
+    ULONG                       PrivateDataSize;
+    ULONG                       PrivateDataUsed;
     ULONG                       SubmissionStartOffset;
     ULONG                       SubmissionEndOffset;
     UINT                        SegmentId;
@@ -709,6 +712,7 @@ struct _DXGKRNL_ADAPTER
      */
     PVOID                       Segments;           /* PDXGKRNL_SEGMENT */
     ULONG                       SegmentCount;
+    ULONG                       PagingBufferPrivateDataSize;
 
     /*
      * GPU engine / node count.
@@ -3518,6 +3522,14 @@ NTAPI
 DxgkAllocateDmaBuffer(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG Capacity,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer);
+
+NTSTATUS
+NTAPI
+DxgkAllocateDmaBufferWithPrivateData(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Capacity,
+    _In_ ULONG PrivateDataSize,
     _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer);
 
 VOID
