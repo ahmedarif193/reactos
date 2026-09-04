@@ -10391,8 +10391,18 @@ DxgkpDispatchBufferedIoctl(
                 return STATUS_BUFFER_TOO_SMALL;
 
             pMakeResident = (D3DDDI_MAKERESIDENT_LOCAL *)SystemBuffer;
-            if (pMakeResident->hPagingQueue == 0 || pMakeResident->NumAllocations > DXGKP_MAX_D3DKMT_LIST_COUNT || (pMakeResident->NumAllocations != 0 && pMakeResident->AllocationList == NULL) || pMakeResident->Flags.Reserved != 0 || (pMakeResident->Flags.MustSucceed && !pMakeResident->Flags.CantTrimFurther))
+            if (pMakeResident->hPagingQueue == 0 || pMakeResident->NumAllocations > DXGKP_MAX_D3DKMT_LIST_COUNT || (pMakeResident->NumAllocations != 0 && pMakeResident->AllocationList == NULL) || pMakeResident->Flags.Reserved != 0)
                 return STATUS_INVALID_PARAMETER;
+            /*
+             * D3DDDI_MAKERESIDENT_FLAGS documents MustSucceed as valid only
+             * together with CantTrimFurther, but shipping user-mode drivers
+             * (Intel) send MustSucceed alone and Windows honours it.  Take it
+             * as the stronger of the two rather than failing the request,
+             * which would leave the mapping invalid under a submission the
+             * driver has already queued against it.
+             */
+            if (pMakeResident->Flags.MustSucceed && !pMakeResident->Flags.CantTrimFurther)
+                pMakeResident->Flags.CantTrimFurther = 1;
             pMakeResident->NumBytesToTrim = 0;
             pMakeResident->PagingFenceValue = 0;
             Status = DxgkpReferencePagingQueueForPaging(pMakeResident->hPagingQueue, PsGetCurrentProcess(), &Adapter, &Device, &PagingQueue);
