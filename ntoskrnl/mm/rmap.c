@@ -14,6 +14,8 @@
 #define NDEBUG
 #include <debug.h>
 
+extern KEVENT MmWaitPageEvent;
+
 /* TYPES ********************************************************************/
 
 /* GLOBALS ******************************************************************/
@@ -221,6 +223,7 @@ GetEntry:
                 MmLockAddressSpace(AddressSpace);
                 MmDeletePageFileMapping(Process, Address, &Dummy);
                 ASSERT(Dummy == MM_WAIT_ENTRY);
+                KeSetEvent(&MmWaitPageEvent, IO_NO_INCREMENT, FALSE);
 
                 if (!NT_SUCCESS(Status))
                 {

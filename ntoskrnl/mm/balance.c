@@ -324,7 +324,8 @@ MmRequestPageMemoryConsumer(ULONG Consumer, BOOLEAN CanWait,
     static LARGE_INTEGER TinyTime = {{-1L, -1L}};
     if (i++ >= 100)
     {
-        KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
+        if (MmAvailablePages < MiMinimumAvailablePages)
+            KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
         i = 0;
     }
 
