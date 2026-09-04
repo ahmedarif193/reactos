@@ -60,6 +60,17 @@ IoInitializeWorkItem(
  */
 VOID
 NTAPI
+IoUninitializeWorkItem(
+    _Inout_ PIO_WORKITEM IoWorkItem)
+{
+    RtlZeroMemory(IoWorkItem, sizeof(IO_WORKITEM));
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
 IoQueueWorkItem(IN PIO_WORKITEM IoWorkItem,
                 IN PIO_WORKITEM_ROUTINE WorkerRoutine,
                 IN WORK_QUEUE_TYPE QueueType,

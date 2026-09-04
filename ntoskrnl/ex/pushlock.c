@@ -1455,3 +1455,15 @@ ExReleasePushLockSharedEx(
     ExpValidatePushLockFlags(PushLock, Flags);
     ExReleasePushLockShared(PushLock);
 }
+
+/*
+ * @implemented
+ */
+#undef ExInitializePushLock
+VOID
+NTAPI
+ExInitializePushLock(
+    _Out_ PULONG_PTR PushLock)
+{
+    *PushLock = 0;
+}

@@ -216,6 +216,15 @@ MmAllocateContiguousMemorySpecifyCache(
   _In_opt_ PHYSICAL_ADDRESS BoundaryAddressMultiple,
   _In_ MEMORY_CACHING_TYPE CacheType);
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+MmAllocateMdlForIoSpace(
+  _In_reads_(NumberOfEntries) PMM_PHYSICAL_ADDRESS_LIST PhysicalAddressList,
+  _In_ SIZE_T NumberOfEntries,
+  _Out_ PMDL *NewMdl);
+
 _Must_inspect_result_
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTKERNELAPI

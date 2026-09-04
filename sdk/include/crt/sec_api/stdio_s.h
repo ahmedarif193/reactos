@@ -141,6 +141,15 @@ extern "C" {
   _CRTIMP
   int
   __cdecl
+  sscanf_s(
+    _In_z_ const char *_Src,
+    _In_z_ _Scanf_s_format_string_ const char *_Format,
+    ...);
+
+  _Check_return_opt_
+  _CRTIMP
+  int
+  __cdecl
   _sscanf_s_l(
     _In_z_ const char *_Src,
     _In_z_ _Scanf_s_format_string_ const char *_Format,
@@ -762,6 +771,15 @@ extern "C" {
     _Inout_ FILE *_File,
     _In_z_ _Scanf_s_format_string_ const wchar_t *_Format,
     _In_opt_ _locale_t _Locale,
+    ...);
+
+  _Check_return_opt_
+  _CRTIMP
+  int
+  __cdecl
+  swscanf_s(
+    _In_z_ const wchar_t *_Src,
+    _In_z_ _Scanf_s_format_string_ const wchar_t *_Format,
     ...);
 
   _Check_return_opt_

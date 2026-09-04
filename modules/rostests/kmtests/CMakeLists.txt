@@ -164,6 +164,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoVolume.c
     ntos_kd/KdSystemDebugControl.c
     ksecdd/KsecBcrypt.c
+    ntos_ke/KeWddmExports.c
     ntos_ke/KeAffinityKM.c
     ntos_ke/KeApc.c
     ntos_ke/KeApcInject.c
