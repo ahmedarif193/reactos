@@ -128,6 +128,7 @@ typedef struct _VIDSCH_DMA_PACKET
     /* Private driver data passed through to DxgkDdiSubmitCommand. */
     PVOID                       DriverPrivateData;
     ULONG                       DriverPrivateDataSize;
+    ULONG                       DriverPrivateDataSubmissionEndOffset;
 
     /* Allocation list and patch location list pointers. */
     PVOID                       AllocationList;
