@@ -667,6 +667,115 @@ DwmWindowBlursBackdrop(const DWM_WIN *Window)
            Window->BackdropRegion != 0;
 }
 
+#define DWM_CORNER_MAX_RECTS 129
+#define DWM_MATERIAL_FRINGE 96u
+
+static ULONG
+DwmChannelDistance(ULONG a, ULONG b)
+{
+    LONG dr = (LONG)((a >> 16) & 0xFFu) - (LONG)((b >> 16) & 0xFFu);
+    LONG dg = (LONG)((a >> 8) & 0xFFu) - (LONG)((b >> 8) & 0xFFu);
+    LONG db = (LONG)(a & 0xFFu) - (LONG)(b & 0xFFu);
+
+    if (dr < 0) dr = -dr;
+    if (dg < 0) dg = -dg;
+    if (db < 0) db = -db;
+    if (dg > dr) dr = dg;
+    if (db > dr) dr = db;
+    return (ULONG)dr;
+}
+
+static ULONG
+DwmCornerAlpha(LONG x, LONG y, LONG cx, LONG cy, ULONG Radius)
+{
+    LONG r = (LONG)Radius;
+    double dx, dy, Distance, Cover;
+
+    if (r <= 0)
+        return 255;
+    if (r * 2 > cx)
+        r = cx / 2;
+    if (r * 2 > cy)
+        r = cy / 2;
+    if (r <= 0)
+        return 255;
+    if (x >= r && x < cx - r)
+        return 255;
+    if (y >= r && y < cy - r)
+        return 255;
+
+    dx = (x < r) ? (double)r - ((double)x + 0.5)
+                 : ((double)x + 0.5) - (double)(cx - r);
+    dy = (y < r) ? (double)r - ((double)y + 0.5)
+                 : ((double)y + 0.5) - (double)(cy - r);
+    if (dx < 0.0)
+        dx = 0.0;
+    if (dy < 0.0)
+        dy = 0.0;
+
+    Distance = sqrt(dx * dx + dy * dy);
+    Cover = (double)r - Distance + 0.5;
+    if (Cover <= 0.0)
+        return 0;
+    if (Cover >= 1.0)
+        return 255;
+    return (ULONG)(Cover * 255.0);
+}
+
+static ULONG
+DwmBuildRoundedRects(RECTL *Rects, ULONG Max, LONG cx, LONG cy, ULONG Radius)
+{
+    LONG r = (LONG)Radius, y;
+    ULONG Count = 0;
+
+    if (r <= 0 || cx <= 0 || cy <= 0)
+        return 0;
+    if (r * 2 > cx)
+        r = cx / 2;
+    if (r * 2 > cy)
+        r = cy / 2;
+    if (r <= 0 || (ULONG)(r * 2 + 1) > Max)
+        return 0;
+
+    for (y = 0; y < r; ++y)
+    {
+        double dy = (double)r - ((double)y + 0.5);
+        double dx = sqrt((double)r * (double)r - dy * dy);
+        LONG Inset = r - (LONG)(dx + 0.5);
+
+        if (Inset < 0)
+            Inset = 0;
+        Rects[Count].left = Inset;
+        Rects[Count].top = y;
+        Rects[Count].right = cx - Inset;
+        Rects[Count].bottom = y + 1;
+        Count++;
+    }
+
+    Rects[Count].left = 0;
+    Rects[Count].top = r;
+    Rects[Count].right = cx;
+    Rects[Count].bottom = cy - r;
+    Count++;
+
+    for (y = cy - r; y < cy; ++y)
+    {
+        double dy = ((double)y + 0.5) - (double)(cy - r);
+        double dx = sqrt((double)r * (double)r - dy * dy);
+        LONG Inset = r - (LONG)(dx + 0.5);
+
+        if (Inset < 0)
+            Inset = 0;
+        Rects[Count].left = Inset;
+        Rects[Count].top = y;
+        Rects[Count].right = cx - Inset;
+        Rects[Count].bottom = y + 1;
+        Count++;
+    }
+
+    return Count;
+}
+
 static void
 DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
                      LONG ClipLeft, LONG ClipTop, LONG ClipRight,
@@ -682,6 +791,21 @@ DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
     BlurWindow.BlurFlags = DWM_BLUR_ENABLE;
     if (Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW)
     {
+        if (Window->CornerRadius != 0)
+        {
+            RECTL Rounded[DWM_CORNER_MAX_RECTS];
+            ULONG Count = DwmBuildRoundedRects(Rounded, ARRAYSIZE(Rounded),
+                                               Window->cx, Window->cy,
+                                               Window->CornerRadius);
+            if (Count != 0)
+            {
+                BlurWindow.BlurRectCount = Count;
+                DwmApplyBlur(Composition, Width, Height,
+                             ClipLeft, ClipTop, ClipRight, ClipBottom,
+                             &BlurWindow, Rounded);
+                return;
+            }
+        }
         BlurWindow.BlurFlags |= DWM_BLUR_REGION_ENTIRE_WINDOW;
         BlurWindow.BlurRectCount = 0;
         DwmApplyBlur(Composition, Width, Height,
@@ -903,6 +1027,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
     LONGLONG wy = (LONGLONG)w->y - g_originY;
     LONGLONG right, bottom;
     BOOL useKey = (w->LayerFlags & DWM_LWA_COLORKEY) != 0;
+    BOOL useCorner = w->CornerRadius != 0;
     BOOL useAlpha = (w->LayerFlags & DWM_LWA_ALPHA) != 0 && w->Alpha < 255;
     BOOL usePixelAlpha = (w->BlurFlags & DWM_BLUR_ENABLE) != 0;
     BOOL useBackdrop = w->BackdropType >= DWM_BACKDROP_MAIN &&
@@ -956,7 +1081,8 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
         if (wallpaper != NULL)
             wallpaperrow = wallpaper + (SIZE_T)dy * scrW + x0;
 
-        if (!useKey && !useAlpha && !usePixelAlpha && !useBackdrop)
+        if (!useKey && !useAlpha && !usePixelAlpha && !useBackdrop &&
+            !useCorner)
         {
             RtlCopyMemory(dstrow, srcrow, (SIZE_T)width * 4);
             continue;
@@ -967,12 +1093,11 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
             ULONG s = srcrow[x], d, pixelAlpha = 255;
             LONG sourceX = srcx0 + x;
             BOOL materialPixel = FALSE;
+            ULONG materialWeight = 0, materialKey = 0;
 
             if (useKey && (s & 0x00FFFFFFu) == key)
                 continue;
-            if (useBackdrop &&
-                ((s & 0x00FFFFFFu) == backdropKey ||
-                 (s & 0x00FFFFFFu) == colorizationKey))
+            if (useBackdrop)
             {
                 if (w->BackdropRegion == DWM_BACKDROP_REGION_WINDOW ||
                     sourceX < w->ClientX ||
@@ -980,7 +1105,25 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                     r < w->ClientY ||
                     r >= w->ClientY + w->ClientHeight)
                 {
-                    materialPixel = TRUE;
+                    ULONG Near = DwmChannelDistance(s, backdropKey);
+                    ULONG Other = DwmChannelDistance(s, colorizationKey);
+
+                    materialKey = backdropKey;
+                    if (Other < Near)
+                    {
+                        Near = Other;
+                        materialKey = colorizationKey;
+                    }
+                    if (Near == 0)
+                    {
+                        materialPixel = TRUE;
+                        materialWeight = 255;
+                    }
+                    else if (Near < DWM_MATERIAL_FRINGE)
+                    {
+                        materialWeight = (DWM_MATERIAL_FRINGE - Near) * 255u /
+                                         DWM_MATERIAL_FRINGE;
+                    }
                 }
             }
             if (usePixelAlpha)
@@ -1003,12 +1146,32 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                     (((s & 0xFFu) * opacity +
                       (base & 0xFFu) * inverse) / 255u);
             }
-            else if (materialPixel)
+            else if (materialWeight != 0)
             {
-                pixelAlpha = pixelAlpha * w->BackdropOpacity / 255u;
+                ULONG Shift = (255u - w->BackdropOpacity) * materialWeight / 255u;
+                LONG sr = (LONG)((s >> 16) & 0xFFu);
+                LONG sg = (LONG)((s >> 8) & 0xFFu);
+                LONG sb = (LONG)(s & 0xFFu);
+
+                sr += ((LONG)((d >> 16) & 0xFFu) -
+                       (LONG)((materialKey >> 16) & 0xFFu)) * (LONG)Shift / 255;
+                sg += ((LONG)((d >> 8) & 0xFFu) -
+                       (LONG)((materialKey >> 8) & 0xFFu)) * (LONG)Shift / 255;
+                sb += ((LONG)(d & 0xFFu) -
+                       (LONG)(materialKey & 0xFFu)) * (LONG)Shift / 255;
+                if (sr < 0) sr = 0; else if (sr > 255) sr = 255;
+                if (sg < 0) sg = 0; else if (sg > 255) sg = 255;
+                if (sb < 0) sb = 0; else if (sb > 255) sb = 255;
+                s = ((ULONG)sr << 16) | ((ULONG)sg << 8) | (ULONG)sb;
             }
             if (useAlpha)
                 pixelAlpha = pixelAlpha * a / 255u;
+            if (useCorner)
+            {
+                pixelAlpha = pixelAlpha *
+                             DwmCornerAlpha(sourceX, r, w->cx, w->cy,
+                                            w->CornerRadius) / 255u;
+            }
             if (pixelAlpha == 0)
                 continue;
             if (pixelAlpha == 255)

@@ -197,6 +197,7 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_PROP_BACKDROP_COLOR       L"ReactOS.Dwm.BackdropColor"
 #define DWM_PROP_BACKDROP_COLORIZATION L"ReactOS.Dwm.BackdropColorization"
 #define DWM_PROP_BACKDROP_REGION      L"ReactOS.Dwm.BackdropRegion"
+#define DWM_PROP_CORNER_RADIUS        L"ReactOS.Dwm.CornerRadius"
 
 /* Values intentionally match DWM_SYSTEMBACKDROP_TYPE in dwmapi.h. */
 #define DWM_BACKDROP_NONE       1u
@@ -264,6 +265,7 @@ typedef struct _DWM_WIN
     ULONG AnimFlags;
     LONG  AnimX, AnimY;
     LONG  AnimCx, AnimCy;
+    ULONG CornerRadius;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER

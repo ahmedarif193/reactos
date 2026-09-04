@@ -32,6 +32,7 @@ ATOM AtomDwmBackdropOpacity;
 ATOM AtomDwmBackdropColor;
 ATOM AtomDwmBackdropColorization;
 ATOM AtomDwmBackdropRegion;
+ATOM AtomDwmCornerRadius;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -150,6 +151,7 @@ InitUserAtoms(VOID)
     AtomDwmBackdropColorization = IntAddUserPropertyAtom(
         DWM_PROP_BACKDROP_COLORIZATION);
     AtomDwmBackdropRegion = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_REGION);
+    AtomDwmCornerRadius = IntAddUserPropertyAtom(DWM_PROP_CORNER_RADIUS);
 
     /*
      * FIXME: AddPropW uses the global kernel atom table, thus leading to conflicts if we use
