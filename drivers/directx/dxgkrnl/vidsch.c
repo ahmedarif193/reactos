@@ -1813,6 +1813,52 @@ VidSchpKickEngine(
              VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerSuspending))
             return FALSE;
 
+        /*
+         * Ordered context work may only be dispatched by its own stream
+         * worker.  Taking the engine's dispatch claim here just to hand it
+         * straight back is not harmless: the authorised claim that races it
+         * fails, and a claimed work action cannot be handed back -- dxgmms2
+         * marks it submitted on any CommitAction -- so the stream has no
+         * choice but to cancel work the application was already told had been
+         * submitted, stranding every waiter on its monitored fence.  Peek
+         * instead and let the owning stream run.
+         */
+        if (AuthorizedPacket == NULL)
+        {
+            PDXGKRNL_CONTEXT HeadContext = NULL;
+            PVIDSCH_DMA_PACKET HeadPacket = NULL;
+            ULONGLONG HeadCookie = 0;
+            KIRQL PeekIrql;
+
+            /*
+             * Peek and take the reference under the engine queue lock, the
+             * same lock VidSchIsContextOrderPacketDispatchable peeks under, so
+             * the head cannot change ownership between the two.
+             */
+            KeAcquireSpinLock(&Engine->QueueLock, &PeekIrql);
+            if (Sched->PeekNextPacket(Sched->SchedulerHandle, Engine->SchedulerOrdinal, &HeadCookie))
+            {
+                HeadPacket = VidSchpPacketFromCookie(HeadCookie);
+                if (HeadPacket != NULL && HeadPacket->ContextOrderOperation != NULL && HeadPacket->Context != NULL)
+                {
+                    HeadContext = (PDXGKRNL_CONTEXT)HeadPacket->Context;
+                    VidSchReferenceContextOrderPacket(HeadPacket);
+                }
+                else
+                {
+                    HeadPacket = NULL;
+                }
+            }
+            KeReleaseSpinLock(&Engine->QueueLock, PeekIrql);
+
+            if (HeadPacket != NULL)
+            {
+                DxgkContextOrderScheduleReferenced(HeadContext);
+                VidSchDereferenceContextOrderPacket(HeadPacket);
+                return FALSE;
+            }
+        }
+
         RtlZeroMemory(&Claim, sizeof(Claim));
         Claim.Size = DXGMMS2_SCHEDULER_CLAIM_V1_SIZE;
         Claim.Version = DXGMMS2_SCHEDULER_VERSION_1;
