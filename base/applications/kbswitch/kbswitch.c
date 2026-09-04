@@ -771,7 +771,8 @@ UpdateTrayIcon(HWND hwnd, LPTSTR szKLID, LPTSTR szName)
     if (g_cKLs <= 1)
     {
         DestroyIcon(tnid.hIcon);
-        DeleteTrayIcon(hwnd);
+        if (g_hTrayIcon)
+            DeleteTrayIcon(hwnd);
         return;
     }
 
