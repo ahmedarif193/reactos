@@ -29,6 +29,7 @@ extern ATOM AtomDwmBackdropOpacity;
 extern ATOM AtomDwmBackdropColor;
 extern ATOM AtomDwmBackdropColorization;
 extern ATOM AtomDwmBackdropRegion;
+extern ATOM AtomDwmCornerRadius;
 extern ERESOURCE UserLock;
 
 CODE_SEG("INIT") NTSTATUS NTAPI InitUserImpl(VOID);

@@ -1906,6 +1906,13 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         g_DwmFrameWindows[count].BackdropColor = 0;
         g_DwmFrameWindows[count].BackdropColorization = 0;
         g_DwmFrameWindows[count].BackdropRegion = 0;
+        g_DwmFrameWindows[count].CornerRadius = 0;
+        {
+            ULONG_PTR Radius = (ULONG_PTR)UserGetProp(w, AtomDwmCornerRadius,
+                                                      FALSE);
+            if (Radius != 0 && Radius <= 64)
+                g_DwmFrameWindows[count].CornerRadius = (ULONG)Radius;
+        }
         g_DwmFrameWindows[count].ClientX = e->Redirect.rcClient.left;
         g_DwmFrameWindows[count].ClientY = e->Redirect.rcClient.top;
         g_DwmFrameWindows[count].ClientWidth =
