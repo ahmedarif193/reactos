@@ -257,20 +257,23 @@ DefaultQueryInfoBufferCheck(
             {
                 _SEH2_TRY
                 {
-                    if (Buffer != NULL)
+                    /*
+                     * Probe unconditionally.  A zero length probes nothing, so
+                     * a class with an optional buffer still succeeds, while a
+                     * NULL buffer paired with a real length is rejected here
+                     * instead of faulting later inside the class handler.
+                     */
+                    if (Flags & ICIF_PROBE_READ)
                     {
-                        if (Flags & ICIF_PROBE_READ)
-                        {
-                            ProbeForRead(Buffer,
-                                         BufferLength,
-                                         ClassList[Class].AlignmentQUERY);
-                        }
-                        else
-                        {
-                            ProbeForWrite(Buffer,
-                                          BufferLength,
-                                          ClassList[Class].AlignmentQUERY);
-                        }
+                        ProbeForRead(Buffer,
+                                     BufferLength,
+                                     ClassList[Class].AlignmentQUERY);
+                    }
+                    else
+                    {
+                        ProbeForWrite(Buffer,
+                                      BufferLength,
+                                      ClassList[Class].AlignmentQUERY);
                     }
 
                     if ((Flags & ICIF_FORCE_RETURN_LENGTH_PROBE) || (ReturnLength != NULL))
