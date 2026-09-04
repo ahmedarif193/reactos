@@ -2372,7 +2372,7 @@ DxgkpDisplayDispatch(
                 break;
             }
 
-            Status = DxgkCreateRedirectionSurface(g_DisplayAdapter, Create);
+            Status = DxgkCreateRedirectionSurface(g_DisplayAdapter, NULL, Create);
             if (NT_SUCCESS(Status))
                 BytesReturned = sizeof(*Create);
             break;

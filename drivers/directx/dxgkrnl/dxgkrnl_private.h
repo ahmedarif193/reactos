@@ -2870,6 +2870,7 @@ DxgkGetShadowSurface(
 NTSTATUS
 DxgkCreateRedirectionSurface(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
     _Inout_ struct _DXGK_REDIRECTION_SURFACE_CREATE *Create);
 
 NTSTATUS
