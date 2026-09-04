@@ -5539,7 +5539,58 @@ DxgkpValidateAcpiComplexInput(
  *
  * Evaluate a method in the display adapter's ACPI namespace.  The PCI PDO
  * forwards IOCTL_ACPI_EVAL_METHOD to the matching ACPI namespace device.
+ * DXGK_ACPI_USE_ACPI_UID names a child by its ACPI _ADR directly instead of
+ * by the ChildUid the miniport enumerated.
  */
+static VOID
+DxgkpReportAcpiEval(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG DeviceUid,
+    _In_ ULONG Signature,
+    _In_reads_bytes_opt_(InputSize)
+        PACPI_EVAL_INPUT_BUFFER_COMPLEX InputBuffer,
+    _In_ ULONG InputSize,
+    _In_reads_bytes_opt_(OutputSize)
+        PACPI_EVAL_OUTPUT_BUFFER OutputBuffer,
+    _In_ ULONG OutputSize,
+    _In_ NTSTATUS Status,
+    _In_ ULONG_PTR Information)
+{
+    CHAR MethodName[5] = "????";
+    ULONG ArgumentCount = 0;
+    ULONG OutputCount = 0;
+    ULONG OutputLength = 0;
+    LONG Count;
+
+    /* A miniport that rejects start rarely says which firmware answer it
+     * disliked, so the first evaluations of every adapter stay visible. */
+    Count = InterlockedIncrement(&Adapter->AcpiEvalCount);
+    if (Count > 32 && NT_SUCCESS(Status))
+        return;
+
+    if (InputBuffer != NULL &&
+        InputSize >= FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument))
+    {
+        RtlCopyMemory(MethodName,
+                      InputBuffer->MethodName,
+                      sizeof(InputBuffer->MethodName));
+        ArgumentCount = InputBuffer->ArgumentCount;
+    }
+    if (OutputBuffer != NULL &&
+        Information >= FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument))
+    {
+        OutputCount = OutputBuffer->Count;
+        OutputLength = OutputBuffer->Length;
+    }
+
+    DXGKRNL_ERR("DxgkCbEvalAcpiMethod #%ld: adapter=%p uid=0x%lx sig=%.4s "
+                "method=%s args=%lu in=%lu out=%lu -> status=0x%08lx "
+                "info=%Iu count=%lu length=%lu\n",
+                Count, Adapter, DeviceUid, (PCSTR)&Signature, MethodName,
+                ArgumentCount, InputSize, OutputSize, Status, Information,
+                OutputCount, OutputLength);
+}
+
 static NTSTATUS
 APIENTRY
 DxgkCbEvalAcpiMethod(
@@ -5557,64 +5608,70 @@ DxgkCbEvalAcpiMethod(
     KEVENT Event;
     PIRP Irp;
     NTSTATUS Status;
-    ULONG Signature;
+    ULONG Signature = 0;
     ULONG ChildAcpiUid;
     ULONG IoControlCode;
     PVOID IoInputBuffer;
     ULONG IoInputSize;
-    PACPI_PCI_CHILD_EVAL_INPUT_BUFFER ChildInput;
+    PACPI_PCI_CHILD_EVAL_INPUT_BUFFER ChildInput = NULL;
 
     PAGED_CODE();
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    RtlZeroMemory(&IoStatus, sizeof(IoStatus));
+    Status = STATUS_INVALID_PARAMETER;
+    if (AcpiInputBuffer != NULL && AcpiInputSize >= sizeof(Signature))
+        Signature = AcpiInputBuffer->Signature;
 
     if (!DxgkpValidateAcpiComplexInput(AcpiInputBuffer, AcpiInputSize) ||
         (AcpiOutputBuffer == NULL && AcpiOutputSize != 0) ||
         (AcpiOutputBuffer != NULL &&
          AcpiOutputSize < sizeof(ACPI_EVAL_OUTPUT_BUFFER)))
     {
-        return STATUS_INVALID_PARAMETER;
+        goto Done;
     }
 
-    Signature = AcpiInputBuffer->Signature;
     if (Signature != ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE &&
-        Signature != DXGK_ACPI_PASS_ARGS_TO_CHILDREN)
+        Signature != DXGK_ACPI_PASS_ARGS_TO_CHILDREN &&
+        Signature != DXGK_ACPI_USE_ACPI_UID)
     {
-        return STATUS_INVALID_PARAMETER;
+        goto Done;
     }
 
     /* The public contract restores the caller's marker before returning. */
     AcpiInputBuffer->Signature = ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE;
 
-    Adapter = DxgkpHandleToAdapter(DeviceHandle);
-    if (Adapter == NULL)
-        return STATUS_INVALID_HANDLE;
-
     if (Adapter->PhysicalDeviceObject == NULL)
     {
-        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-        return STATUS_DEVICE_NOT_READY;
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Done;
     }
 
-    ChildInput = NULL;
     IoControlCode = IOCTL_ACPI_EVAL_METHOD;
     IoInputBuffer = AcpiInputBuffer;
     IoInputSize = AcpiInputSize;
 
     if (DeviceUid != DISPLAY_ADAPTER_HW_ID)
     {
-        Status = DxgkPnpResolveChildAcpiUid(Adapter,
-                                            DeviceUid,
-                                           &ChildAcpiUid);
-        if (!NT_SUCCESS(Status))
+        if (Signature == DXGK_ACPI_USE_ACPI_UID)
         {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return Status;
+            ChildAcpiUid = DeviceUid;
+        }
+        else
+        {
+            Status = DxgkPnpResolveChildAcpiUid(Adapter,
+                                                DeviceUid,
+                                               &ChildAcpiUid);
+            if (!NT_SUCCESS(Status))
+                goto Done;
         }
         if (AcpiInputSize > MAXULONG - sizeof(*ChildInput))
         {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_INTEGER_OVERFLOW;
+            Status = STATUS_INTEGER_OVERFLOW;
+            goto Done;
         }
 
         IoInputSize = sizeof(*ChildInput) + AcpiInputSize;
@@ -5623,9 +5680,8 @@ DxgkCbEvalAcpiMethod(
                                            TAG_DXGK_RESOURCES);
         if (ChildInput == NULL)
         {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_INSUFFICIENT_RESOURCES;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Done;
         }
 
         RtlZeroMemory(ChildInput, sizeof(*ChildInput));
@@ -5643,7 +5699,6 @@ DxgkCbEvalAcpiMethod(
         IoInputBuffer = ChildInput;
     }
 
-    RtlZeroMemory(&IoStatus, sizeof(IoStatus));
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
     Irp = IoBuildDeviceIoControlRequest(
               IoControlCode,
@@ -5657,10 +5712,8 @@ DxgkCbEvalAcpiMethod(
               &IoStatus);
     if (Irp == NULL)
     {
-        if (ChildInput != NULL)
-            ExFreePoolWithTag(ChildInput, TAG_DXGK_RESOURCES);
-        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Done;
     }
 
     Status = IoCallDriver(Adapter->PhysicalDeviceObject, Irp);
@@ -5674,6 +5727,16 @@ DxgkCbEvalAcpiMethod(
         Status = IoStatus.Status;
     }
 
+Done:
+    DxgkpReportAcpiEval(Adapter,
+                        DeviceUid,
+                        Signature,
+                        AcpiInputBuffer,
+                        AcpiInputSize,
+                        AcpiOutputBuffer,
+                        AcpiOutputSize,
+                        Status,
+                        IoStatus.Information);
     if (ChildInput != NULL)
         ExFreePoolWithTag(ChildInput, TAG_DXGK_RESOURCES);
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
@@ -9466,6 +9529,243 @@ DxgkpFeatureQueryInterface(
 }
 #endif
 
+/*
+ * DxgkServicesTimedOperation
+ *
+ * A miniport wraps its hardware polls during start, reset and power
+ * transitions in a timed operation so the OS can bound them.  The deadline
+ * runs from TimedOperationStart on the interrupt-time clock and is capped at
+ * DXGK_TIMED_OPERATION_TIMEOUT_MAX_SECONDS.  Windows escalates an OsHandled
+ * expiry into a TDR; ReactOS reports it once, marks the operation and
+ * returns STATUS_TIMEOUT so the miniport's own fallback runs.
+ */
+static VOID
+NTAPI
+DxgkpServicesInterfaceReferenceNop(
+    _In_opt_ PVOID Context)
+{
+    /* Same-stack interface: dxgkrnl outlives the miniport that holds it. */
+    UNREFERENCED_PARAMETER(Context);
+}
+
+static NTSTATUS
+DxgkpTimedOperationStart(
+    _Inout_ DXGK_TIMED_OPERATION *Op,
+    _In_ const LARGE_INTEGER *Timeout,
+    _In_ BOOLEAN OsHandled)
+{
+    LONGLONG Limit;
+
+    if (Op == NULL || Timeout == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Relative NT intervals are negative; a positive value is taken as the
+     * same magnitude rather than as an absolute time. */
+    Limit = Timeout->QuadPart < 0 ? -Timeout->QuadPart : Timeout->QuadPart;
+    if (Limit > DXGK_TIMED_OPERATION_TIMEOUT_MAX_SECONDS * 10000000LL)
+        Limit = DXGK_TIMED_OPERATION_TIMEOUT_MAX_SECONDS * 10000000LL;
+
+    RtlZeroMemory(Op, sizeof(*Op));
+    Op->Size = sizeof(*Op);
+    Op->OwnerTag = (ULONG_PTR)PsGetCurrentThread();
+    Op->OsHandled = OsHandled;
+    Op->Timeout.QuadPart = Limit;
+    Op->StartTick.QuadPart = (LONGLONG)KeQueryInterruptTime();
+    return STATUS_SUCCESS;
+}
+
+/* Time left before the deadline, in 100 ns units; zero once it has passed. */
+static LONGLONG
+DxgkpTimedOperationRemaining(
+    _In_ const DXGK_TIMED_OPERATION *Op)
+{
+    LONGLONG Elapsed;
+
+    Elapsed = (LONGLONG)KeQueryInterruptTime() - Op->StartTick.QuadPart;
+    if (Elapsed < 0)
+        Elapsed = 0;
+    return Elapsed < Op->Timeout.QuadPart ? Op->Timeout.QuadPart - Elapsed : 0;
+}
+
+static NTSTATUS
+DxgkpTimedOperationExpire(
+    _Inout_ DXGK_TIMED_OPERATION *Op)
+{
+    if (!Op->TimeoutTriggered)
+    {
+        Op->TimeoutTriggered = TRUE;
+        DXGKRNL_ERR("DxgkServicesTimedOperation: thread %p exceeded its "
+                    "%I64u ms deadline (OsHandled=%u)\n",
+                    (PVOID)Op->OwnerTag,
+                    Op->Timeout.QuadPart / 10000,
+                    Op->OsHandled);
+    }
+    return STATUS_TIMEOUT;
+}
+
+static NTSTATUS
+DxgkpTimedOperationDelay(
+    _Inout_ DXGK_TIMED_OPERATION *Op,
+    _In_ KPROCESSOR_MODE WaitMode,
+    _In_ BOOLEAN Alertable,
+    _In_ const LARGE_INTEGER *Interval)
+{
+    LARGE_INTEGER Bounded;
+    LONGLONG Remaining;
+    NTSTATUS Status;
+
+    if (Op == NULL || Interval == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Remaining = DxgkpTimedOperationRemaining(Op);
+    if (Remaining == 0)
+        return DxgkpTimedOperationExpire(Op);
+
+    /* Never sleep past the deadline, whatever interval the caller picked. */
+    Bounded = *Interval;
+    if (Bounded.QuadPart < 0 && -Bounded.QuadPart > Remaining)
+        Bounded.QuadPart = -Remaining;
+    Status = KeDelayExecutionThread(WaitMode, Alertable, &Bounded);
+    if (NT_SUCCESS(Status) && DxgkpTimedOperationRemaining(Op) == 0)
+        return DxgkpTimedOperationExpire(Op);
+    return Status;
+}
+
+static NTSTATUS
+DxgkpTimedOperationWaitForSingleObject(
+    _Inout_ DXGK_TIMED_OPERATION *Op,
+    _In_ PVOID Object,
+    _In_ KWAIT_REASON WaitReason,
+    _In_ KPROCESSOR_MODE WaitMode,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ const LARGE_INTEGER *Timeout)
+{
+    LARGE_INTEGER Bounded;
+    LARGE_INTEGER Now;
+    LONGLONG Requested;
+    LONGLONG Remaining;
+    NTSTATUS Status;
+
+    if (Op == NULL || Object == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Remaining = DxgkpTimedOperationRemaining(Op);
+    if (Remaining == 0)
+        return DxgkpTimedOperationExpire(Op);
+
+    /* The caller's own timeout still applies when it is the shorter one; an
+     * absolute time is measured against the system clock first. */
+    Requested = Remaining;
+    if (Timeout != NULL)
+    {
+        if (Timeout->QuadPart <= 0)
+        {
+            Requested = -Timeout->QuadPart;
+        }
+        else
+        {
+            KeQuerySystemTime(&Now);
+            Requested = Timeout->QuadPart > Now.QuadPart ?
+                        Timeout->QuadPart - Now.QuadPart : 0;
+        }
+    }
+    Bounded.QuadPart = -min(Requested, Remaining);
+    Status = KeWaitForSingleObject(Object,
+                                   WaitReason,
+                                   WaitMode,
+                                   Alertable,
+                                   &Bounded);
+    if (Status == STATUS_TIMEOUT && DxgkpTimedOperationRemaining(Op) == 0)
+        return DxgkpTimedOperationExpire(Op);
+    return Status;
+}
+
+/*
+ * DxgkServicesDebugReport
+ *
+ * A miniport files a report when it decides hardware or firmware misbehaved.
+ * Windows spools it for Online Crash Analysis; ReactOS has no consumer, so
+ * the code and arguments go to the debug log -- where a failed start is
+ * diagnosed anyway -- and the secondary data is only counted.
+ */
+typedef struct _DXGKP_DEBUG_REPORT
+{
+    PDXGKRNL_ADAPTER Adapter;
+    ULONG Code;
+    ULONG_PTR Arguments[4];
+    ULONG SecondaryDataBytes;
+} DXGKP_DEBUG_REPORT, *PDXGKP_DEBUG_REPORT;
+
+static DXGK_DEBUG_REPORT_HANDLE
+DxgkpDbgReportCreate(
+    _In_ HANDLE DeviceHandle,
+    _In_ ULONG Code,
+    _In_ ULONG_PTR Arg1,
+    _In_ ULONG_PTR Arg2,
+    _In_ ULONG_PTR Arg3,
+    _In_ ULONG_PTR Arg4)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKP_DEBUG_REPORT Report;
+
+    PAGED_CODE();
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return NULL;
+
+    DXGKRNL_ERR("DbgReport: adapter %p code=0x%08lx args=0x%Ix 0x%Ix 0x%Ix 0x%Ix\n",
+                Adapter, Code, Arg1, Arg2, Arg3, Arg4);
+
+    Report = ExAllocatePoolWithTag(PagedPool, sizeof(*Report), TAG_DXGK_ADAPTER);
+    if (Report != NULL)
+    {
+        Report->Adapter = Adapter;
+        Report->Code = Code;
+        Report->Arguments[0] = Arg1;
+        Report->Arguments[1] = Arg2;
+        Report->Arguments[2] = Arg3;
+        Report->Arguments[3] = Arg4;
+        Report->SecondaryDataBytes = 0;
+    }
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    return (DXGK_DEBUG_REPORT_HANDLE)Report;
+}
+
+static BOOLEAN
+DxgkpDbgReportSecondaryData(
+    _Inout_ DXGK_DEBUG_REPORT_HANDLE Handle,
+    _In_reads_bytes_(DataSize) PVOID Data,
+    _In_ ULONG DataSize)
+{
+    PDXGKP_DEBUG_REPORT Report = (PDXGKP_DEBUG_REPORT)Handle;
+
+    PAGED_CODE();
+
+    if (Report == NULL || Data == NULL || DataSize == 0 ||
+        DataSize > DXGK_DEBUG_REPORT_MAX_SIZE - Report->SecondaryDataBytes)
+    {
+        return FALSE;
+    }
+    Report->SecondaryDataBytes += DataSize;
+    return TRUE;
+}
+
+static VOID
+DxgkpDbgReportComplete(
+    _Inout_ DXGK_DEBUG_REPORT_HANDLE Handle)
+{
+    PDXGKP_DEBUG_REPORT Report = (PDXGKP_DEBUG_REPORT)Handle;
+
+    PAGED_CODE();
+
+    if (Report == NULL)
+        return;
+    DXGKRNL_ERR("DbgReport: adapter %p code=0x%08lx completed with %lu secondary byte(s)\n",
+                Report->Adapter, Report->Code, Report->SecondaryDataBytes);
+    ExFreePoolWithTag(Report, TAG_DXGK_ADAPTER);
+}
+
 NTSTATUS
 APIENTRY
 DxgkCbQueryServices(
@@ -9474,6 +9774,8 @@ DxgkCbQueryServices(
     _Inout_ PINTERFACE Interface)
 {
     PDXGKRNL_ADAPTER Adapter;
+    NTSTATUS Status;
+    LONG Count;
 
     PAGED_CODE();
 
@@ -9492,6 +9794,69 @@ DxgkCbQueryServices(
     if (Adapter == NULL)
         return STATUS_INVALID_HANDLE;
 
+    Status = STATUS_NOT_SUPPORTED;
+
+    if (ServicesType == DxgkServicesTimedOperation)
+    {
+        PDXGK_TIMED_OPERATION_INTERFACE TimedInterface =
+            (PDXGK_TIMED_OPERATION_INTERFACE)Interface;
+        DXGK_TIMED_OPERATION_INTERFACE ReturnedInterface;
+
+        if (TimedInterface->Size < sizeof(ReturnedInterface))
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+            goto Done;
+        }
+        if (TimedInterface->Version != DXGK_TIMED_OPERATION_INTERFACE_VERSION_1)
+            goto Done;
+
+        RtlZeroMemory(&ReturnedInterface, sizeof(ReturnedInterface));
+        ReturnedInterface.Size = sizeof(ReturnedInterface);
+        ReturnedInterface.Version = DXGK_TIMED_OPERATION_INTERFACE_VERSION_1;
+        ReturnedInterface.Context = Adapter;
+        ReturnedInterface.InterfaceReference =
+            DxgkpServicesInterfaceReferenceNop;
+        ReturnedInterface.InterfaceDereference =
+            DxgkpServicesInterfaceReferenceNop;
+        ReturnedInterface.TimedOperationStart = DxgkpTimedOperationStart;
+        ReturnedInterface.TimedOperationDelay = DxgkpTimedOperationDelay;
+        ReturnedInterface.TimedOperationWaitForSingleObject =
+            DxgkpTimedOperationWaitForSingleObject;
+        *TimedInterface = ReturnedInterface;
+        Status = STATUS_SUCCESS;
+        goto Done;
+    }
+
+    if (ServicesType == DxgkServicesDebugReport)
+    {
+        PDXGK_DEBUG_REPORT_INTERFACE ReportInterface =
+            (PDXGK_DEBUG_REPORT_INTERFACE)Interface;
+        DXGK_DEBUG_REPORT_INTERFACE ReturnedInterface;
+
+        if (ReportInterface->Size < sizeof(ReturnedInterface))
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+            goto Done;
+        }
+        if (ReportInterface->Version != DXGK_DEBUG_REPORT_INTERFACE_VERSION_1)
+            goto Done;
+
+        RtlZeroMemory(&ReturnedInterface, sizeof(ReturnedInterface));
+        ReturnedInterface.Size = sizeof(ReturnedInterface);
+        ReturnedInterface.Version = DXGK_DEBUG_REPORT_INTERFACE_VERSION_1;
+        ReturnedInterface.Context = Adapter;
+        ReturnedInterface.InterfaceReference =
+            DxgkpServicesInterfaceReferenceNop;
+        ReturnedInterface.InterfaceDereference =
+            DxgkpServicesInterfaceReferenceNop;
+        ReturnedInterface.DbgReportCreate = DxgkpDbgReportCreate;
+        ReturnedInterface.DbgReportSecondaryData = DxgkpDbgReportSecondaryData;
+        ReturnedInterface.DbgReportComplete = DxgkpDbgReportComplete;
+        *ReportInterface = ReturnedInterface;
+        Status = STATUS_SUCCESS;
+        goto Done;
+    }
+
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
     if (ServicesType == DxgkServicesFeature)
     {
@@ -9501,16 +9866,13 @@ DxgkCbQueryServices(
 
         if (FeatureInterface->Size < sizeof(ReturnedInterface))
         {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_BUFFER_TOO_SMALL;
+            Status = STATUS_BUFFER_TOO_SMALL;
+            goto Done;
         }
         if (FeatureInterface->Version !=
             DXGK_FEATURE_INTERFACE_VERSION_1)
         {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_NOT_SUPPORTED;
+            goto Done;
         }
 
         RtlZeroMemory(&ReturnedInterface, sizeof(ReturnedInterface));
@@ -9527,10 +9889,8 @@ DxgkCbQueryServices(
         ReturnedInterface.QueryFeatureInterface =
             DxgkpFeatureQueryInterface;
         *FeatureInterface = ReturnedInterface;
-
-        ExReleaseRundownProtection(
-            &Adapter->ReverseCallbackRundownRef);
-        return STATUS_SUCCESS;
+        Status = STATUS_SUCCESS;
+        goto Done;
     }
 #endif
 
@@ -9543,16 +9903,13 @@ DxgkCbQueryServices(
 
         if (FirmwareInterface->Size < sizeof(ReturnedInterface))
         {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_BUFFER_TOO_SMALL;
+            Status = STATUS_BUFFER_TOO_SMALL;
+            goto Done;
         }
         if (FirmwareInterface->Version !=
             DXGK_FIRMWARE_TABLE_INTERFACE_VERSION_1)
         {
-            ExReleaseRundownProtection(
-                &Adapter->ReverseCallbackRundownRef);
-            return STATUS_NOT_SUPPORTED;
+            goto Done;
         }
 
         RtlZeroMemory(&ReturnedInterface, sizeof(ReturnedInterface));
@@ -9569,16 +9926,24 @@ DxgkCbQueryServices(
         ReturnedInterface.ReadSystemFirmwareTable =
             DxgkpFirmwareTableReadTable;
         *FirmwareInterface = ReturnedInterface;
-
-        ExReleaseRundownProtection(
-            &Adapter->ReverseCallbackRundownRef);
-        return STATUS_SUCCESS;
+        Status = STATUS_SUCCESS;
+        goto Done;
     }
 #endif
 
+Done:
+    /* Every service a miniport asks for during start is worth knowing about
+     * when the start fails without explaining itself. */
+    Count = InterlockedIncrement(&Adapter->QueryServicesCount);
+    if (Count <= 16 || !NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkCbQueryServices #%ld: adapter=%p type=%lu size=%u "
+                    "version=%u -> status=0x%08lx\n",
+                    Count, Adapter, (ULONG)ServicesType,
+                    Interface->Size, Interface->Version, Status);
+    }
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-
-    return STATUS_NOT_SUPPORTED;
+    return Status;
 }
 
 /*
@@ -9708,6 +10073,8 @@ DxgkpAcquirePostDisplayOwnership(
     _Out_opt_ PDXGK_DISPLAY_OWNERSHIP_FLAGS Flags)
 {
     PDXGKRNL_ADAPTER            Claimant;
+    PDXGKRNL_ADAPTER            PreviousOwner = NULL;
+    LONG                        AcquireCount;
     LOADER_PARAMETER_FRAMEBUFFER Fb;
     DXGK_DISPLAY_INFORMATION     ReleasedDisplayInformation;
     DXGK_FRAMEBUFFER_STATE       FrameBufferState = FrameBufferStateUnknown;
@@ -9755,6 +10122,7 @@ DxgkpAcquirePostDisplayOwnership(
         PDXGKRNL_ADAPTER Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
         BOOLEAN RetainFallback = FALSE;
 
+        PreviousOwner = Owner;
         if (Claimant != NULL && Owner != NULL && Owner != Claimant)
         {
             if (Claimant->MiniportContext != NULL &&
@@ -10028,6 +10396,21 @@ TransferOwnership:
 Complete:
     if (Flags != NULL && NT_SUCCESS(Status))
         Flags->FrameBufferState = FrameBufferState;
+    /* Whether a miniport claimed the boot display, and what it was
+     * handed, decides which adapter drives the desktop bridge. */
+    AcquireCount = InterlockedIncrement(&Claimant->PostDisplayAcquireCount);
+    if (AcquireCount <= 8 || !NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkCbAcquirePostDisplayOwnership #%ld: claimant=%p "
+                    "owner=%p -> status=0x%08lx %lux%lu pitch=%lu fmt=%d "
+                    "pa=0x%I64x fbstate=%d\n",
+                    AcquireCount, Claimant, PreviousOwner, Status,
+                    DisplayInformation->Width, DisplayInformation->Height,
+                    DisplayInformation->Pitch,
+                    (int)DisplayInformation->ColorFormat,
+                    DisplayInformation->PhysicAddress.QuadPart,
+                    (int)FrameBufferState);
+    }
     KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
     ExReleaseRundownProtection(&Claimant->ReverseCallbackRundownRef);
     return Status;
