@@ -34,3 +34,5 @@
 @ stub WlanSetProfilePosition
 @ stub WlanSetPsdIEDataList
 @ stdcall WlanSetSecuritySettings (ptr long ptr)
+@ stdcall WlanConnect2(ptr ptr ptr ptr)
+@ stdcall WlanGetAvailableNetworkList2(ptr ptr long ptr ptr)
