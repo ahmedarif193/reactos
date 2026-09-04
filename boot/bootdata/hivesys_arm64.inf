@@ -39,8 +39,15 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#PNP0D10","Cla
 ; so that netcfgx creates NetCfgInstanceId, Linkage, the Connection object
 ; and the Tcpip interface parameters.
 
-; vwifi virtual miniport removed: the real CYW43455 SDIO miniport is now the
-; Native 802.11 adapter (cyw43455 service + CDDB seeded below).
+; vwifi virtual miniport: root-enumerated devnode only. No service key and no
+; CriticalDeviceDatabase entry, so umpnpmgr matches ROOT\VWIFI against
+; netvwifi.inf and runs the Net class installer, which creates
+; NetCfgInstanceId, Linkage, the Connection object Network Connections
+; enumerates, and the Tcpip interface parameters. On the RPi5 this coexists
+; with the real CYW43455 SDIO Native 802.11 adapter (seeded below).
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\VWIFI\0000","DeviceDesc",0x00000000,"ReactOS Virtual Native 802.11 Adapter"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\VWIFI\0000","HardwareID",0x00010000,"ROOT\VWIFI"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\VWIFI\0000","ConfigFlags",0x00010001,0x00000000
 
 HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","Start",0x00010001,0x00000001
