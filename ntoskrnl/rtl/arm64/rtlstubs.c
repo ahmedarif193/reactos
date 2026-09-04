@@ -819,9 +819,17 @@ RtlUnwindEx(
 
         if (HaveTarget && EstablisherFrame == (ULONG64)(ULONG_PTR)TargetFrame)
         {
-            if (TargetIp != NULL)
+            if ((TargetIp != NULL) &&
+                (ExceptionRecord->ExceptionCode != STATUS_UNWIND_CONSOLIDATE))
             {
                 FrameContext.Pc = (ULONG64)(ULONG_PTR)TargetIp;
+            }
+            else if ((ExceptionRecord->ExceptionCode == STATUS_UNWIND_CONSOLIDATE) &&
+                     (ExceptionRecord->ExceptionInformation[10] == (ULONG_PTR)-1))
+            {
+                /* A consolidate callback resumes at its own return value, and
+                 * reads the unwound register state from here. */
+                ExceptionRecord->ExceptionInformation[10] = (ULONG_PTR)&NonVolatileRegisters;
             }
 
             FrameContext.X[0] = (ULONG64)(ULONG_PTR)ReturnValue;
