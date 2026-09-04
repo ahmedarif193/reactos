@@ -5071,6 +5071,8 @@ DxgkCheckOcclusion(
      * matching Win11 for a shown top-level window. (Was STATUS_NOT_SUPPORTED,
      * which failed the displayext occlusion parity test.)
      */
+    if (DxgkpIsAnyVidPnSourceExclusivelyOwned())
+        return STATUS_GRAPHICS_PRESENT_OCCLUDED;
     return STATUS_SUCCESS;
 }
 

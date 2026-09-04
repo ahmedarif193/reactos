@@ -2946,6 +2946,10 @@ NTAPI
 DxgkSetVidPnSourceOwner(
     _In_ D3DKMT_SETVIDPNSOURCEOWNER *pSetVidPnSourceOwner);
 
+BOOLEAN
+NTAPI
+DxgkpIsAnyVidPnSourceExclusivelyOwned(VOID);
+
 NTSTATUS
 NTAPI
 DxgkCheckVidPnExclusiveOwnership(
