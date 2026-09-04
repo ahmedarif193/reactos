@@ -1404,6 +1404,9 @@ MiCopyFromUserPage(PFN_NUMBER DestPage, const VOID *SrcAddress)
     return STATUS_SUCCESS;
 }
 
+#define MM_PAGEIN_CLUSTER (256 * _1KB)
+#define MM_PAGEIN_CLUSTER_PAGES (MM_PAGEIN_CLUSTER / PAGE_SIZE)
+
 static
 NTSTATUS
 NTAPI
@@ -1434,9 +1437,9 @@ MmMakeSegmentResident(
         ((ULONG_PTR)IoGetTopLevelIrp() != FSRTL_MOD_WRITE_TOP_LEVEL_IRP) &&
         !FlagOn(FileObject->Flags, FO_RANDOM_ACCESS))
     {
-        RangeStart = Offset - (Offset % _64K);
-        if (RangeEnd % _64K)
-            RangeEnd += _64K - (RangeEnd % _64K);
+        RangeStart = Offset - (Offset % MM_PAGEIN_CLUSTER);
+        if (RangeEnd % MM_PAGEIN_CLUSTER)
+            RangeEnd += MM_PAGEIN_CLUSTER - (RangeEnd % MM_PAGEIN_CLUSTER);
     }
     else
     {
@@ -1460,11 +1463,11 @@ MmMakeSegmentResident(
     }
 
     /* Let's gooooooooo */
-    for ( ; RangeStart < RangeEnd; RangeStart += _64K)
+    for ( ; RangeStart < RangeEnd; RangeStart += MM_PAGEIN_CLUSTER)
     {
         /* First take a look at where we miss pages */
-        ULONG ToReadPageBits = 0;
-        LONGLONG ChunkEnd = RangeStart + _64K;
+        ULONG64 ToReadPageBits = 0;
+        LONGLONG ChunkEnd = RangeStart + MM_PAGEIN_CLUSTER;
 
         if (ChunkEnd > RangeEnd)
             ChunkEnd = RangeEnd;
@@ -1482,7 +1485,7 @@ MmMakeSegmentResident(
             {
                 MmUnlockSectionSegment(Segment);
 
-                KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
+                KeWaitForSingleObject(&MmWaitPageEvent, WrPageIn, KernelMode, FALSE, &TinyTime);
 
                 MmLockSectionSegment(Segment);
                 Entry = MmGetPageEntrySectionSegment(Segment, &CurrentOffset);
@@ -1498,7 +1501,7 @@ MmMakeSegmentResident(
                 continue;
             }
 
-            ToReadPageBits |= 1UL << ((ChunkOffset - RangeStart) >> PAGE_SHIFT);
+            ToReadPageBits |= 1ULL << ((ChunkOffset - RangeStart) >> PAGE_SHIFT);
 
             /* Put a wait entry here */
             Status = MmSetPageEntrySectionSegment(Segment, &CurrentOffset, MAKE_SWAP_SSE(MM_WAIT_ENTRY));
@@ -1518,6 +1521,7 @@ MmMakeSegmentResident(
                 }
 
                 MmUnlockSectionSegment(Segment);
+                KeSetEvent(&MmWaitPageEvent, IO_NO_INCREMENT, FALSE);
                 return Status;
             }
             ASSERT(MM_IS_WAIT_PTE(MmGetPageEntrySectionSegment(Segment, &CurrentOffset)));
@@ -1536,7 +1540,7 @@ MmMakeSegmentResident(
         {
             /* Move forward if there is a hole */
             ULONG BitSet;
-            if (!_BitScanForward(&BitSet, ToReadPageBits))
+            if (!_BitScanForward64(&BitSet, ToReadPageBits))
             {
                 /* Nothing more to read */
                 break;
@@ -1546,10 +1550,11 @@ MmMakeSegmentResident(
             ASSERT(ChunkOffset < ChunkEnd);
 
             /* Get the range we have to read */
-            _BitScanForward(&BitSet, ~ToReadPageBits);
+            if (!_BitScanForward64(&BitSet, ~ToReadPageBits))
+                BitSet = MM_PAGEIN_CLUSTER_PAGES;
             ULONG ReadLength = BitSet * PAGE_SIZE;
 
-            ASSERT(ReadLength <= _64K);
+            ASSERT(ReadLength <= MM_PAGEIN_CLUSTER);
 
             /* Clamp (This is for image mappings */
             if ((ChunkOffset + ReadLength) > ChunkEnd)
@@ -1592,8 +1597,6 @@ MmMakeSegmentResident(
                         MmReleasePageMemoryConsumer(MC_USER, Pages[j]);
                     goto Failed;
                 }
-
-                MiZeroPhysicalPage(Pages[i]);
             }
 
             Mdl->MdlFlags |= MDL_PAGES_LOCKED | MDL_IO_PAGE_READ;
@@ -1659,7 +1662,8 @@ Failed:
                     ChunkOffset += PAGE_SIZE;
                 }
                 MmUnlockSectionSegment(Segment);
-                IoFreeMdl(Mdl);;
+                KeSetEvent(&MmWaitPageEvent, IO_NO_INCREMENT, FALSE);
+                IoFreeMdl(Mdl);
                 return Status;
             }
 
@@ -1681,9 +1685,10 @@ AssignPagesToSegment:
             }
 
             MmUnlockSectionSegment(Segment);
+            KeSetEvent(&MmWaitPageEvent, IO_NO_INCREMENT, FALSE);
 
             IoFreeMdl(Mdl);
-            ToReadPageBits >>= BitSet;
+            ToReadPageBits = (BitSet < MM_PAGEIN_CLUSTER_PAGES) ? (ToReadPageBits >> BitSet) : 0;
             ChunkOffset += BitSet * PAGE_SIZE;
         }
     }
@@ -1733,7 +1738,7 @@ MmAlterViewAttributes(PMMSUPPORT AddressSpace,
                     break;
                 MmUnlockSectionSegment(Segment);
                 MmUnlockAddressSpace(AddressSpace);
-                KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
+                KeWaitForSingleObject(&MmWaitPageEvent, WrPageIn, KernelMode, FALSE, &TinyTime);
                 MmLockAddressSpace(AddressSpace);
                 /* View may have been torn down while unlocked; re-locate instead of using the freed cache. */
                 MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, Address);
@@ -1805,6 +1810,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
     PMM_REGION Region;
     BOOLEAN HasSwapEntry;
     PVOID PAddress;
+    PVOID RegionBase = NULL;
     PEPROCESS Process = MmGetAddressSpaceOwner(AddressSpace);
     SWAPENTRY SwapEntry;
 
@@ -1841,7 +1847,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
     Segment = MemoryArea->SectionData.Segment;
     Region = MmFindRegion((PVOID)MA_GetStartingAddress(MemoryArea),
                           &MemoryArea->SectionData.RegionListHead,
-                          Address, NULL);
+                          Address, &RegionBase);
     ASSERT(Region != NULL);
 
     /* Check for a NOACCESS mapping */
@@ -1877,7 +1883,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         if (SwapEntry == MM_WAIT_ENTRY)
         {
             MmUnlockAddressSpace(AddressSpace);
-            KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
+            KeWaitForSingleObject(&MmWaitPageEvent, WrPageIn, KernelMode, FALSE, &TinyTime);
             MmLockAddressSpace(AddressSpace);
             return STATUS_MM_RESTART_OPERATION;
         }
@@ -1916,6 +1922,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         MmLockAddressSpace(AddressSpace);
         MmDeletePageFileMapping(Process, PAddress, &DummyEntry);
         ASSERT(DummyEntry == MM_WAIT_ENTRY);
+        KeSetEvent(&MmWaitPageEvent, IO_NO_INCREMENT, FALSE);
 
         Status = MmCreateVirtualMapping(Process,
                                         PAddress,
@@ -2033,9 +2040,18 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         MmUnlockAddressSpace(AddressSpace);
 
         /* The data must be paged in. Lock the file, so that the VDL doesn't get updated behind us. */
-        FsRtlAcquireFileExclusive(Segment->FileObject);
-
         PFSRTL_COMMON_FCB_HEADER FcbHeader = Segment->FileObject->FsContext;
+        PERESOURCE PagingIoResource = FcbHeader->PagingIoResource;
+
+        if (PagingIoResource)
+        {
+            FsRtlEnterFileSystem();
+            ExAcquireResourceSharedLite(PagingIoResource, TRUE);
+        }
+        else
+        {
+            FsRtlAcquireFileExclusive(Segment->FileObject);
+        }
 
         Status = MmMakeSegmentResident(Segment,
                                        Offset.QuadPart,
@@ -2043,7 +2059,15 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
                                        &FcbHeader->ValidDataLength,
                                        FALSE);
 
-        FsRtlReleaseFile(Segment->FileObject);
+        if (PagingIoResource)
+        {
+            ExReleaseResourceLite(PagingIoResource);
+            FsRtlExitFileSystem();
+        }
+        else
+        {
+            FsRtlReleaseFile(Segment->FileObject);
+        }
 
         /* Lock address space again */
         MmLockAddressSpace(AddressSpace);
@@ -2072,7 +2096,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         {
             MmUnlockSectionSegment(Segment);
             MmUnlockAddressSpace(AddressSpace);
-            KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
+            KeWaitForSingleObject(&MmWaitPageEvent, WrPageIn, KernelMode, FALSE, &TinyTime);
             MmLockAddressSpace(AddressSpace);
             return STATUS_MM_RESTART_OPERATION;
         }
@@ -2140,6 +2164,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         Entry = MAKE_SSE(Page << PAGE_SHIFT, 1);
         MmSetPageEntrySectionSegment(Segment, &Offset, Entry);
         MmUnlockSectionSegment(Segment);
+        KeSetEvent(&MmWaitPageEvent, IO_NO_INCREMENT, FALSE);
 
         DPRINT("Address 0x%p\n", Address);
         return STATUS_SUCCESS;
@@ -2164,6 +2189,46 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
 
         /* Take a reference on it */
         MmSharePageEntrySectionSegment(Segment, &Offset);
+
+        if (RegionBase != NULL)
+        {
+            ULONG_PTR MapAheadEnd = ((ULONG_PTR)PAddress & ~((ULONG_PTR)MM_PAGEIN_CLUSTER - 1)) + MM_PAGEIN_CLUSTER;
+            ULONG_PTR RegionEnd = (ULONG_PTR)RegionBase + Region->Length;
+            ULONG_PTR AreaEnd = (ULONG_PTR)MA_GetEndingAddress(MemoryArea);
+            ULONG_PTR NextAddress;
+
+            if (MapAheadEnd > RegionEnd)
+                MapAheadEnd = RegionEnd;
+            if (MapAheadEnd > AreaEnd)
+                MapAheadEnd = AreaEnd;
+
+            for (NextAddress = (ULONG_PTR)PAddress + PAGE_SIZE;
+                 NextAddress < MapAheadEnd;
+                 NextAddress += PAGE_SIZE)
+            {
+                LARGE_INTEGER NextOffset;
+                ULONG_PTR NextEntry;
+                PFN_NUMBER NextPage;
+
+                if (MmIsPagePresent(Process, (PVOID)NextAddress))
+                    continue;
+
+                NextOffset.QuadPart = Offset.QuadPart + (NextAddress - (ULONG_PTR)PAddress);
+                NextEntry = MmGetPageEntrySectionSegment(Segment, &NextOffset);
+                if ((NextEntry == 0) || IS_SWAP_FROM_SSE(NextEntry))
+                    break;
+
+                NextPage = PFN_FROM_SSE(NextEntry);
+                if (!NT_SUCCESS(MmCreateVirtualMapping(Process, (PVOID)NextAddress, Attributes, NextPage)))
+                    break;
+
+                if (Process)
+                    MmInsertRmap(NextPage, Process, (PVOID)NextAddress);
+
+                MmSharePageEntrySectionSegment(Segment, &NextOffset);
+            }
+        }
+
         MmUnlockSectionSegment(Segment);
 
         DPRINT("Address 0x%p\n", Address);
@@ -3851,7 +3916,7 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
         MmUnlockSectionSegment(Segment);
         MmUnlockAddressSpace(AddressSpace);
 
-        KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
+        KeWaitForSingleObject(&MmWaitPageEvent, WrPageIn, KernelMode, FALSE, &TinyTime);
 
         MmLockAddressSpace(AddressSpace);
         MmLockSectionSegment(Segment);
@@ -5510,7 +5575,7 @@ MmMakeSegmentDirty(
         while (MM_IS_WAIT_PTE(Entry))
         {
             MmUnlockSectionSegment(Segment);
-            KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
+            KeWaitForSingleObject(&MmWaitPageEvent, WrPageIn, KernelMode, FALSE, &TinyTime);
             MmLockSectionSegment(Segment);
             Entry = MmGetPageEntrySectionSegment(Segment, &RangeStart);
         }
@@ -5888,7 +5953,7 @@ MmMakePagesDirty(
         {
             MmUnlockSectionSegment(Segment);
             MmUnlockAddressSpace(AddressSpace);
-            KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
+            KeWaitForSingleObject(&MmWaitPageEvent, WrPageIn, KernelMode, FALSE, &TinyTime);
             MmLockAddressSpace(AddressSpace);
             MmLockSectionSegment(Segment);
             Entry = MmGetPageEntrySectionSegment(Segment, &SegmentOffset);
