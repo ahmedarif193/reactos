@@ -20,6 +20,8 @@
 SERVICE_STATUS_HANDLE ServiceStatusHandle;
 SERVICE_STATUS SvcStatus;
 static WCHAR ServiceName[] = L"WlanSvc";
+static HANDLE ScanStopEvent;
+static HANDLE ScanThread;
 
 DWORD WINAPI RpcThreadRoutine(LPVOID lpParameter);
 
@@ -47,6 +49,19 @@ ServiceControlHandler(DWORD dwControl,
         case SERVICE_CONTROL_SHUTDOWN:
         case SERVICE_CONTROL_STOP:
             UpdateServiceStatus(ServiceStatusHandle, SERVICE_STOP_PENDING, 1);
+            if (ScanStopEvent)
+                SetEvent(ScanStopEvent);
+            if (ScanThread)
+            {
+                WaitForSingleObject(ScanThread, INFINITE);
+                CloseHandle(ScanThread);
+                ScanThread = NULL;
+            }
+            if (ScanStopEvent)
+            {
+                CloseHandle(ScanStopEvent);
+                ScanStopEvent = NULL;
+            }
             RpcMgmtStopServerListening(NULL);
             WlanSvcCleanup();
             UpdateServiceStatus(ServiceStatusHandle, SERVICE_STOPPED, 0);
@@ -57,6 +72,35 @@ ServiceControlHandler(DWORD dwControl,
             return ERROR_CALL_NOT_IMPLEMENTED;
     }
     return NO_ERROR;
+}
+
+static DWORD WINAPI
+ScanThreadRoutine(LPVOID lpParameter)
+{
+    PLIST_ENTRY entry;
+    PWLANSVC_INTERFACE iface;
+
+    UNREFERENCED_PARAMETER(lpParameter);
+
+    if (WaitForSingleObject(ScanStopEvent, 5000) != WAIT_TIMEOUT)
+        return 0;
+
+    do
+    {
+        EnterCriticalSection(&WlanSvcLock);
+        WlanSvcRefreshInterfaces();
+        for (entry = WlanSvcInterfaceListHead.Flink;
+             entry != &WlanSvcInterfaceListHead;
+             entry = entry->Flink)
+        {
+            iface = CONTAINING_RECORD(entry, WLANSVC_INTERFACE, ListEntry);
+            if (!iface->Connected)
+                WlanSvcDoScan(iface, NULL);
+        }
+        LeaveCriticalSection(&WlanSvcLock);
+    } while (WaitForSingleObject(ScanStopEvent, 60000) == WAIT_TIMEOUT);
+
+    return 0;
 }
 
 static VOID CALLBACK
@@ -95,10 +139,22 @@ ServiceMain(DWORD argc, LPWSTR *argv)
     {
         DPRINT("Can't create RpcThread\n");
         UpdateServiceStatus(ServiceStatusHandle, SERVICE_STOPPED, 0);
+        return;
     }
     else
     {
         CloseHandle(hThread);
+    }
+
+    ScanStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (ScanStopEvent)
+    {
+        ScanThread = CreateThread(NULL, 0, ScanThreadRoutine, NULL, 0, NULL);
+        if (!ScanThread)
+        {
+            CloseHandle(ScanStopEvent);
+            ScanStopEvent = NULL;
+        }
     }
 
     DPRINT("ServiceMain() done\n");
