@@ -144,7 +144,7 @@ NtCreateEvent(OUT PHANDLE EventHandle,
                             (PVOID*)&Event);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ObCreateObject failed: 0x%X\n", Status);
+        DPRINT("ObCreateObject failed: 0x%X\n", Status);
         return Status;
     }
 
@@ -160,7 +160,19 @@ NtCreateEvent(OUT PHANDLE EventHandle,
                             &hEvent);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ObInsertObject failed: 0x%X\n", Status);
+        /* A kernel caller's name is safe to read and says which directory
+         * it expected; a user buffer would have to be probed again. */
+        if (PreviousMode == KernelMode &&
+            ObjectAttributes != NULL &&
+            ObjectAttributes->ObjectName != NULL)
+        {
+            DPRINT("ObInsertObject failed: 0x%X for '%wZ'\n",
+                   Status, ObjectAttributes->ObjectName);
+        }
+        else
+        {
+            DPRINT("ObInsertObject failed: 0x%X\n", Status);
+        }
         /* Note: ObInsertObject dereferences Event on failure */
         return Status;
     }
