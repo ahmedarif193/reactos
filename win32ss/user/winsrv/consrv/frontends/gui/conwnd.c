@@ -426,17 +426,12 @@ GuiGetGuiData(HWND hWnd)
 }
 
 static VOID
-ResizeConWnd(PGUI_CONSOLE_DATA GuiData, DWORD WidthUnit, DWORD HeightUnit)
+UpdateConsoleScrollBars(PGUI_CONSOLE_DATA GuiData,
+                        PDWORD Width,
+                        PDWORD Height)
 {
     PCONSOLE_SCREEN_BUFFER Buff = GuiData->ActiveBuffer;
     SCROLLINFO sInfo;
-
-    DWORD Width, Height;
-
-    Width  = Buff->ViewSize.X * WidthUnit  +
-             2 * (GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXEDGE));
-    Height = Buff->ViewSize.Y * HeightUnit +
-             2 * (GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CYEDGE)) + GetSystemMetrics(SM_CYCAPTION);
 
     /* Set scrollbar sizes */
     sInfo.cbSize = sizeof(sInfo);
@@ -448,7 +443,7 @@ ResizeConWnd(PGUI_CONSOLE_DATA GuiData, DWORD WidthUnit, DWORD HeightUnit)
         sInfo.nPage = Buff->ViewSize.Y;
         sInfo.nPos  = Buff->ViewOrigin.Y;
         SetScrollInfo(GuiData->hWindow, SB_VERT, &sInfo, TRUE);
-        Width += GetSystemMetrics(SM_CXVSCROLL);
+        if (Width) *Width += GetSystemMetrics(SM_CXVSCROLL);
         ShowScrollBar(GuiData->hWindow, SB_VERT, TRUE);
     }
     else
@@ -462,13 +457,27 @@ ResizeConWnd(PGUI_CONSOLE_DATA GuiData, DWORD WidthUnit, DWORD HeightUnit)
         sInfo.nPage = Buff->ViewSize.X;
         sInfo.nPos  = Buff->ViewOrigin.X;
         SetScrollInfo(GuiData->hWindow, SB_HORZ, &sInfo, TRUE);
-        Height += GetSystemMetrics(SM_CYHSCROLL);
+        if (Height) *Height += GetSystemMetrics(SM_CYHSCROLL);
         ShowScrollBar(GuiData->hWindow, SB_HORZ, TRUE);
     }
     else
     {
         ShowScrollBar(GuiData->hWindow, SB_HORZ, FALSE);
     }
+}
+
+static VOID
+ResizeConWnd(PGUI_CONSOLE_DATA GuiData, DWORD WidthUnit, DWORD HeightUnit)
+{
+    PCONSOLE_SCREEN_BUFFER Buff = GuiData->ActiveBuffer;
+    DWORD Width, Height;
+
+    Width  = Buff->ViewSize.X * WidthUnit  +
+             2 * (GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXEDGE));
+    Height = Buff->ViewSize.Y * HeightUnit +
+             2 * (GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CYEDGE)) + GetSystemMetrics(SM_CYCAPTION);
+
+    UpdateConsoleScrollBars(GuiData, &Width, &Height);
 
     /* Resize the window */
     SetWindowPos(GuiData->hWindow, NULL, 0, 0, Width, Height,
@@ -2114,6 +2123,10 @@ OnGetMinMaxInfo(PGUI_CONSOLE_DATA GuiData, PMINMAXINFO minMaxInfo)
     if (ActiveBuffer->ViewSize.X < ActiveBuffer->ScreenBufferSize.X) windy += GetSystemMetrics(SM_CYHSCROLL); // Window currently has a horizontal scrollbar
     if (ActiveBuffer->ViewSize.Y < ActiveBuffer->ScreenBufferSize.Y) windx += GetSystemMetrics(SM_CXVSCROLL); // Window currently has a vertical scrollbar
 
+    /* The backing buffer must not prevent the window from maximizing. */
+    windx = max(windx, (DWORD)minMaxInfo->ptMaxSize.x);
+    windy = max(windy, (DWORD)minMaxInfo->ptMaxSize.y);
+
     minMaxInfo->ptMaxTrackSize.x = windx;
     minMaxInfo->ptMaxTrackSize.y = windy;
 
@@ -2136,6 +2149,7 @@ OnSize(PGUI_CONSOLE_DATA GuiData, WPARAM wParam, LPARAM lParam)
         PCONSOLE_SCREEN_BUFFER Buff = GuiData->ActiveBuffer;
         DWORD windx, windy, charx, chary;
         UINT  WidthUnit, HeightUnit;
+        BOOL BufferResized = FALSE;
 
         GetScreenBufferSizeUnits(Buff, GuiData, &WidthUnit, &HeightUnit);
 
@@ -2166,6 +2180,33 @@ OnSize(PGUI_CONSOLE_DATA GuiData, WPARAM wParam, LPARAM lParam)
         if ((windx % WidthUnit ) >= (WidthUnit  / 2)) ++charx;
         if ((windy % HeightUnit) >= (HeightUnit / 2)) ++chary;
 
+        charx = min(charx, MAXSHORT);
+        chary = min(chary, MAXSHORT);
+
+        /*
+         * A maximized Windows console grows a too-small backing buffer to
+         * accommodate the enlarged viewport, then restores the old buffer
+         * size together with the window. Without this, ResizeConWnd() clamps
+         * the viewport and immediately shrinks a maximized window back down.
+         */
+        if (wParam == SIZE_MAXIMIZED && !GuiData->GuiInfo.FullScreen &&
+            GetType(Buff) == TEXTMODE_BUFFER &&
+            (charx > (DWORD)Buff->ScreenBufferSize.X ||
+             chary > (DWORD)Buff->ScreenBufferSize.Y))
+        {
+            COORD OldSize = Buff->ScreenBufferSize;
+            COORD NewSize = OldSize;
+
+            NewSize.X = max(NewSize.X, (SHORT)charx);
+            NewSize.Y = max(NewSize.Y, (SHORT)chary);
+            if (NT_SUCCESS(ConioResizeBuffer((PCONSOLE)Console, (PTEXTMODE_SCREEN_BUFFER)Buff, NewSize)))
+            {
+                /* Keep the pre-maximize size for the restore transition. */
+                Buff->OldScreenBufferSize = OldSize;
+                BufferResized = TRUE;
+            }
+        }
+
         /* Resize window */
         if ((charx != Buff->ViewSize.X) || (chary != Buff->ViewSize.Y))
         {
@@ -2173,7 +2214,26 @@ OnSize(PGUI_CONSOLE_DATA GuiData, WPARAM wParam, LPARAM lParam)
             Buff->ViewSize.Y = (chary <= (DWORD)Buff->ScreenBufferSize.Y) ? chary : Buff->ScreenBufferSize.Y;
         }
 
-        ResizeConWnd(GuiData, WidthUnit, HeightUnit);
+        if (wParam == SIZE_RESTORED && !GuiData->GuiInfo.FullScreen &&
+            GetType(Buff) == TEXTMODE_BUFFER &&
+            (Buff->OldScreenBufferSize.X < Buff->ScreenBufferSize.X ||
+             Buff->OldScreenBufferSize.Y < Buff->ScreenBufferSize.Y) &&
+            Buff->OldScreenBufferSize.X >= Buff->ViewSize.X &&
+            Buff->OldScreenBufferSize.Y >= Buff->ViewSize.Y)
+        {
+            if (NT_SUCCESS(ConioResizeBuffer((PCONSOLE)Console, (PTEXTMODE_SCREEN_BUFFER)Buff, Buff->OldScreenBufferSize)))
+            {
+                BufferResized = TRUE;
+            }
+        }
+
+        if (wParam == SIZE_MAXIMIZED)
+            UpdateConsoleScrollBars(GuiData, NULL, NULL);
+        else
+            ResizeConWnd(GuiData, WidthUnit, HeightUnit);
+
+        if (BufferResized)
+            PostMessageW(GuiData->hWindow, PM_RESIZE_TERMINAL, 0, 0);
 
         /* Adjust the start of the visible area if we are attempting to show nonexistent areas */
         if ((Buff->ScreenBufferSize.X - Buff->ViewOrigin.X) < Buff->ViewSize.X) Buff->ViewOrigin.X = Buff->ScreenBufferSize.X - Buff->ViewSize.X;
@@ -2629,9 +2689,16 @@ ConWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             GuiData->hBitmap = hnew;
 
-            /* Resize the window to the user's values */
             GuiData->WindowSizeLock = TRUE;
-            ResizeConWnd(GuiData, WidthUnit, HeightUnit);
+            if (IsZoomed(GuiData->hWindow))
+            {
+                /* Keep the outer window at the monitor work area. */
+                UpdateConsoleScrollBars(GuiData, NULL, NULL);
+            }
+            else
+            {
+                ResizeConWnd(GuiData, WidthUnit, HeightUnit);
+            }
             GuiData->WindowSizeLock = FALSE;
             break;
         }
