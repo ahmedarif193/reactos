@@ -39,6 +39,48 @@
  */
 typedef struct _WLAN_BSS_LIST WLAN_BSS_LIST, *PWLAN_BSS_LIST;
 
+#ifndef WLAN_MAX_NAME_LENGTH
+#define WLAN_MAX_NAME_LENGTH 256
+#endif
+
+typedef struct _WLAN_AVAILABLE_NETWORK_V2 {
+    WCHAR strProfileName[WLAN_MAX_NAME_LENGTH];
+    DOT11_SSID dot11Ssid;
+    DOT11_BSS_TYPE dot11BssType;
+    ULONG uNumberOfBssids;
+    BOOL bNetworkConnectable;
+    WLAN_REASON_CODE wlanNotConnectableReason;
+    ULONG uNumberOfPhyTypes;
+    DOT11_PHY_TYPE dot11PhyTypes[8];
+    BOOL bMorePhyTypes;
+    WLAN_SIGNAL_QUALITY wlanSignalQuality;
+    BOOL bSecurityEnabled;
+    DOT11_AUTH_ALGORITHM dot11DefaultAuthAlgorithm;
+    DOT11_CIPHER_ALGORITHM dot11DefaultCipherAlgorithm;
+    DWORD dwFlags;
+    DOT11_ACCESSNETWORKOPTIONS AccessNetworkOptions;
+    DOT11_HESSID dot11HESSID;
+    DOT11_VENUEINFO VenueInfo;
+    DWORD dwReserved;
+} WLAN_AVAILABLE_NETWORK_V2, *PWLAN_AVAILABLE_NETWORK_V2;
+
+typedef struct _WLAN_AVAILABLE_NETWORK_LIST_V2 {
+    DWORD dwNumberOfItems;
+    DWORD dwIndex;
+    WLAN_AVAILABLE_NETWORK_V2 Network[1];
+} WLAN_AVAILABLE_NETWORK_LIST_V2, *PWLAN_AVAILABLE_NETWORK_LIST_V2;
+
+typedef struct _WLAN_CONNECTION_PARAMETERS_V2 {
+    WLAN_CONNECTION_MODE wlanConnectionMode;
+    LPCWSTR strProfile;
+    PDOT11_SSID pDot11Ssid;
+    PDOT11_HESSID pDot11Hessid;
+    PDOT11_BSSID_LIST pDesiredBssidList;
+    DOT11_BSS_TYPE dot11BssType;
+    DWORD dwFlags;
+    PDOT11_ACCESSNETWORKOPTIONS pDot11AccessNetworkOptions;
+} WLAN_CONNECTION_PARAMETERS_V2, *PWLAN_CONNECTION_PARAMETERS_V2;
+
 DWORD WINAPI
 WlanGetNetworkBssList(IN HANDLE hClientHandle,
                       IN const GUID *pInterfaceGuid,

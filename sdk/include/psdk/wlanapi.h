@@ -14,6 +14,7 @@ extern "C" {
 #define WLAN_API_VERSION_2_0 0x00000002
 
 #define WLAN_MAX_PHY_INDEX 64
+#define WLAN_MAX_PHY_TYPE_NUMBER              8
 #define WLAN_MAX_NAME_LENGTH 256
 
 #define WLAN_AVAILABLE_NETWORK_INCLUDE_ALL_ADHOC_PROFILES         0x00000001
@@ -70,6 +71,10 @@ typedef enum _WLAN_SECURABLE_OBJECT {
     wlan_secure_add_new_per_user_profiles,
     wlan_secure_media_streaming_mode_enabled,
     wlan_secure_current_operation_mode,
+    wlan_secure_get_plaintext_key,
+    wlan_secure_hosted_network_elevated_access,
+    wlan_secure_virtual_station_extensibility,
+    wlan_secure_wfd_elevated_access,
     WLAN_SECURABLE_OBJECT_COUNT
 } WLAN_SECURABLE_OBJECT, *PWLAN_SECURABLE_OBJECT;
 
@@ -186,7 +191,7 @@ typedef struct _WLAN_INTERFACE_CAPABILITY {
     DWORD dwMaxDesiredSsidListSize;
     DWORD dwMaxDesiredBssidListSize;
     DWORD dwNumberOfSupportedPhys;
-    /* enum32 */ long dot11PhyTypes[WLAN_MAX_PHY_INDEX];
+    DOT11_PHY_TYPE dot11PhyTypes[WLAN_MAX_PHY_INDEX];
 } WLAN_INTERFACE_CAPABILITY, *PWLAN_INTERFACE_CAPABILITY;
 
 typedef struct _WLAN_PHY_RADIO_STATE {
@@ -431,6 +436,47 @@ DWORD WINAPI WlanIhvControl(IN HANDLE hClientHandle, IN const GUID *pInterfaceGu
 DWORD WINAPI WlanQueryInterface(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN WLAN_INTF_OPCODE OpCode, PVOID pReserved, OUT PDWORD pdwDataSize, OUT PVOID *ppData, WLAN_OPCODE_VALUE_TYPE *pWlanOpcodeValueType);
 DWORD WINAPI WlanSetInterface(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN WLAN_INTF_OPCODE OpCode, IN DWORD dwDataSize, IN const VOID *pData, PVOID pReserved);
 DWORD WINAPI WlanReasonCodeToString(IN DWORD dwReasonCode, IN DWORD dwBufferSize, IN PWCHAR pStringBuffer, PVOID pReserved);
+typedef struct _WLAN_AVAILABLE_NETWORK_V2 {
+    WCHAR strProfileName[WLAN_MAX_NAME_LENGTH];
+    DOT11_SSID dot11Ssid;
+    DOT11_BSS_TYPE dot11BssType;
+    ULONG uNumberOfBssids;
+    BOOL bNetworkConnectable;
+    WLAN_REASON_CODE wlanNotConnectableReason;
+    ULONG uNumberOfPhyTypes;
+    DOT11_PHY_TYPE dot11PhyTypes[WLAN_MAX_PHY_TYPE_NUMBER];
+    BOOL bMorePhyTypes;
+    WLAN_SIGNAL_QUALITY wlanSignalQuality;
+    BOOL bSecurityEnabled;
+    DOT11_AUTH_ALGORITHM dot11DefaultAuthAlgorithm;
+    DOT11_CIPHER_ALGORITHM dot11DefaultCipherAlgorithm;
+    DWORD dwFlags;
+    DOT11_ACCESSNETWORKOPTIONS AccessNetworkOptions;
+    DOT11_HESSID dot11HESSID;
+    DOT11_VENUEINFO VenueInfo;
+    DWORD dwReserved;
+} WLAN_AVAILABLE_NETWORK_V2, *PWLAN_AVAILABLE_NETWORK_V2;
+
+typedef struct _WLAN_AVAILABLE_NETWORK_LIST_V2 {
+    DWORD dwNumberOfItems;
+    DWORD dwIndex;
+    WLAN_AVAILABLE_NETWORK_V2 Network[1];
+} WLAN_AVAILABLE_NETWORK_LIST_V2, *PWLAN_AVAILABLE_NETWORK_LIST_V2;
+
+typedef struct _WLAN_CONNECTION_PARAMETERS_V2 {
+    WLAN_CONNECTION_MODE wlanConnectionMode;
+    LPCWSTR strProfile;
+    PDOT11_SSID pDot11Ssid;
+    PDOT11_HESSID pDot11Hessid;
+    PDOT11_BSSID_LIST pDesiredBssidList;
+    DOT11_BSS_TYPE dot11BssType;
+    DWORD dwFlags;
+    PDOT11_ACCESSNETWORKOPTIONS pDot11AccessNetworkOptions;
+} WLAN_CONNECTION_PARAMETERS_V2, *PWLAN_CONNECTION_PARAMETERS_V2;
+
+DWORD WINAPI WlanConnect2(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN const PWLAN_CONNECTION_PARAMETERS_V2 pConnectionParameters, PVOID pReserved);
+DWORD WINAPI WlanGetAvailableNetworkList2(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN DWORD dwFlags, PVOID pReserved, OUT PWLAN_AVAILABLE_NETWORK_LIST_V2 *ppAvailableNetworkList);
+
 DWORD WINAPI WlanRegisterNotification(IN HANDLE hClientHandle,IN DWORD dwNotifSource, IN BOOL bIgnoreDuplicate, WLAN_NOTIFICATION_CALLBACK funcCallback, PVOID pCallbackContext, PVOID pReserved, PDWORD pdwPrevNotifSource);
 DWORD WINAPI WlanRenameProfile(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN LPCWSTR strOldProfileName, IN LPCWSTR strNewProfileName, PVOID pReserved);
 DWORD WINAPI WlanSetProfile(IN HANDLE hClientHandle, IN const GUID *pInterfaceGuid, IN DWORD dwFlags, IN LPCWSTR strProfileXml, LPCWSTR strAllUserProfileSecurity, IN BOOL bOverwrite, PVOID pReserved, OUT DWORD *pdwReasonCode);

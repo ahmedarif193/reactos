@@ -527,9 +527,91 @@ midl_user_allocate(SIZE_T len)
     return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, len);
 }
 
+DWORD
+WINAPI
+WlanConnect2(IN HANDLE hClientHandle,
+             IN const GUID *pInterfaceGuid,
+             IN const PWLAN_CONNECTION_PARAMETERS_V2 pConnectionParameters,
+             PVOID pReserved)
+{
+    WLAN_CONNECTION_PARAMETERS Params;
+
+    if ((pReserved != NULL) || (hClientHandle == NULL) ||
+        (pInterfaceGuid == NULL) || (pConnectionParameters == NULL))
+        return ERROR_INVALID_PARAMETER;
+    if (pConnectionParameters->pDot11Hessid != NULL ||
+        pConnectionParameters->pDot11AccessNetworkOptions != NULL)
+        return ERROR_NOT_SUPPORTED;
+
+    ZeroMemory(&Params, sizeof(Params));
+    Params.wlanConnectionMode = pConnectionParameters->wlanConnectionMode;
+    Params.strProfile = pConnectionParameters->strProfile;
+    Params.pDot11Ssid = pConnectionParameters->pDot11Ssid;
+    Params.pDesiredBssidList = pConnectionParameters->pDesiredBssidList;
+    Params.dot11BssType = pConnectionParameters->dot11BssType;
+    Params.dwFlags = pConnectionParameters->dwFlags;
+
+    return WlanConnect(hClientHandle, pInterfaceGuid, &Params, NULL);
+}
+
+DWORD
+WINAPI
+WlanGetAvailableNetworkList2(IN HANDLE hClientHandle,
+                             IN const GUID *pInterfaceGuid,
+                             IN DWORD dwFlags,
+                             PVOID pReserved,
+                             OUT PWLAN_AVAILABLE_NETWORK_LIST_V2 *ppAvailableNetworkList)
+{
+    PWLAN_AVAILABLE_NETWORK_LIST pList = NULL;
+    PWLAN_AVAILABLE_NETWORK_LIST_V2 pList2;
+    DWORD dwResult, dwSize, dwItems, i;
+
+    if ((pReserved != NULL) || (hClientHandle == NULL) ||
+        (pInterfaceGuid == NULL) || (ppAvailableNetworkList == NULL))
+        return ERROR_INVALID_PARAMETER;
+
+    *ppAvailableNetworkList = NULL;
+
+    dwResult = WlanGetAvailableNetworkList(hClientHandle, pInterfaceGuid,
+                                           dwFlags, NULL, &pList);
+    if (dwResult != ERROR_SUCCESS)
+        return dwResult;
+
+    dwItems = max(pList->dwNumberOfItems, 1);
+    if (dwItems > (MAXDWORD - FIELD_OFFSET(WLAN_AVAILABLE_NETWORK_LIST_V2, Network)) /
+                  sizeof(WLAN_AVAILABLE_NETWORK_V2))
+    {
+        WlanFreeMemory(pList);
+        return ERROR_ARITHMETIC_OVERFLOW;
+    }
+    dwSize = FIELD_OFFSET(WLAN_AVAILABLE_NETWORK_LIST_V2, Network) +
+             dwItems * sizeof(WLAN_AVAILABLE_NETWORK_V2);
+
+    pList2 = (PWLAN_AVAILABLE_NETWORK_LIST_V2)WlanAllocateMemory(dwSize);
+    if (pList2 == NULL)
+    {
+        WlanFreeMemory(pList);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+
+    ZeroMemory(pList2, dwSize);
+    pList2->dwNumberOfItems = pList->dwNumberOfItems;
+    pList2->dwIndex = pList->dwIndex;
+
+    for (i = 0; i < pList->dwNumberOfItems; i++)
+    {
+        CopyMemory(&pList2->Network[i], &pList->Network[i],
+                   FIELD_OFFSET(WLAN_AVAILABLE_NETWORK, dwReserved));
+    }
+
+    WlanFreeMemory(pList);
+
+    *ppAvailableNetworkList = pList2;
+    return ERROR_SUCCESS;
+}
+
 void __RPC_USER
 midl_user_free(void __RPC_FAR * ptr)
 {
     HeapFree(GetProcessHeap(), 0, ptr);
 }
-
