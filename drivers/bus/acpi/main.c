@@ -354,6 +354,23 @@ ACPIDispatchDeviceControl(
             break;
         }
 
+        case IOCTL_ACPI_ASYNC_EVAL_METHOD_EX:
+        case IOCTL_ACPI_EVAL_METHOD_EX:
+        {
+            ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+
+            status = Bus_PDO_EvalMethodEx((PPDO_DEVICE_DATA)commonData, Irp);
+            break;
+        }
+
+        case IOCTL_ACPI_ENUM_CHILDREN:
+        {
+            ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
+
+            status = Bus_PDO_EnumChildren((PPDO_DEVICE_DATA)commonData, Irp);
+            break;
+        }
+
         case IOCTL_GET_SYS_BUTTON_CAPS:
             if (irpStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(ULONG))
             {

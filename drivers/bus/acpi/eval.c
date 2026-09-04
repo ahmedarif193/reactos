@@ -865,6 +865,318 @@ Bus_PDO_EvalMethod(
     return Status;
 }
 
+
+/**
+ * @brief Builds the parameter list of an ACPI_EVAL_INPUT_BUFFER_COMPLEX_EX.
+ *
+ * The extended form names the method by path and carries the same
+ * ACPI_METHOD_ARGUMENT array as the complex form, at a different offset.
+ */
+static
+NTSTATUS
+EvalCreateParametersListEx(
+    _In_ PIO_STACK_LOCATION IoStack,
+    _In_ PACPI_EVAL_INPUT_BUFFER_COMPLEX_EX ExBuffer,
+    _Out_ ACPI_OBJECT_LIST* ParamList)
+{
+    PACPI_METHOD_ARGUMENT Argument;
+    ACPI_OBJECT* Arg;
+    ULONG InputLength;
+    ULONG i, Length, Offset, ArgumentsSize;
+    NTSTATUS Status;
+
+    ParamList->Count = 0;
+    ParamList->Pointer = NULL;
+    InputLength = IoStack->Parameters.DeviceIoControl.InputBufferLength;
+
+    if (ExBuffer->ArgumentCount > 7)
+        return STATUS_ACPI_INCORRECT_ARGUMENT_COUNT;
+    if (ExBuffer->ArgumentCount == 0)
+        return STATUS_SUCCESS;
+
+    Status = RtlULongMult(ExBuffer->ArgumentCount, sizeof(*Arg), &ArgumentsSize);
+    if (!NT_SUCCESS(Status))
+        return STATUS_ACPI_INCORRECT_ARGUMENT_COUNT;
+
+    Arg = ExAllocatePoolUninitialized(NonPagedPool, ArgumentsSize, TAG_ACPI_PARAMETERS_LIST);
+    if (!Arg)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    ParamList->Count = ExBuffer->ArgumentCount;
+    ParamList->Pointer = Arg;
+
+    Argument = ExBuffer->Argument;
+    Length = FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX_EX, Argument);
+    for (i = 0; i < ParamList->Count; i++)
+    {
+        Offset = Length;
+        if (Offset > InputLength || sizeof(*Argument) > InputLength - Offset)
+        {
+            ExFreePoolWithTag(ParamList->Pointer, TAG_ACPI_PARAMETERS_LIST);
+            ParamList->Count = 0;
+            ParamList->Pointer = NULL;
+            return STATUS_ACPI_INVALID_ARGTYPE;
+        }
+
+        Length = ACPI_METHOD_ARGUMENT_LENGTH(Argument->DataLength);
+        if (Length > InputLength - Offset)
+        {
+            DPRINT1("Argument buffer outside of argument bounds\n");
+            ExFreePoolWithTag(ParamList->Pointer, TAG_ACPI_PARAMETERS_LIST);
+            ParamList->Count = 0;
+            ParamList->Pointer = NULL;
+            return STATUS_ACPI_INVALID_ARGTYPE;
+        }
+        Length += Offset;
+
+        Status = EvalConvertParameterObjects(Arg, 0, Argument, IoStack, Offset);
+        if (!NT_SUCCESS(Status))
+        {
+            /* Only the arguments converted so far own sub-objects. */
+            ParamList->Count = i;
+            if (i != 0)
+                EvalFreeParametersList(ParamList);
+            else
+                ExFreePoolWithTag(ParamList->Pointer, TAG_ACPI_PARAMETERS_LIST);
+            ParamList->Count = 0;
+            ParamList->Pointer = NULL;
+            return Status;
+        }
+
+        Arg++;
+        Argument = (PACPI_METHOD_ARGUMENT)((PUCHAR)ExBuffer + Length);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/**
+ * @brief Resolves a method or device path relative to a namespace node.
+ *
+ * An absolute path ("\_SB.PCI0.GFX0") is looked up from the root; anything
+ * else is relative to the device the request was sent to.
+ */
+static
+NTSTATUS
+EvalResolvePath(
+    _In_ ACPI_HANDLE DeviceHandle,
+    _In_ PCSTR Path,
+    _Out_ ACPI_HANDLE *Handle)
+{
+    ACPI_STATUS AcpiStatus;
+
+    *Handle = NULL;
+    if (Path[0] == '\\')
+        AcpiStatus = AcpiGetHandle(NULL, (ACPI_STRING)Path, Handle);
+    else if (Path[0] == ANSI_NULL)
+        AcpiStatus = DeviceHandle != NULL ? AE_OK : AE_NOT_FOUND, *Handle = DeviceHandle;
+    else
+        AcpiStatus = AcpiGetHandle(DeviceHandle, (ACPI_STRING)Path, Handle);
+
+    if (ACPI_FAILURE(AcpiStatus))
+        return EvalAcpiStatusToNtStatus(AcpiStatus);
+    return STATUS_SUCCESS;
+}
+
+/**
+ * @brief Handles IOCTL_ACPI_EVAL_METHOD_EX and IOCTL_ACPI_ASYNC_EVAL_METHOD_EX.
+ *
+ * The extended request names the method by a NUL-terminated path, absolute
+ * or relative to the device, instead of a four-character name.
+ */
+NTSTATUS
+NTAPI
+Bus_PDO_EvalMethodEx(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PACPI_EVAL_INPUT_BUFFER_COMPLEX_EX ExBuffer;
+    ACPI_OBJECT_LIST ParamList;
+    ACPI_HANDLE Handle;
+    ACPI_STATUS AcpiStatus;
+    NTSTATUS Status;
+    ACPI_BUFFER ReturnBuffer = { ACPI_ALLOCATE_BUFFER, NULL };
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    ExBuffer = Irp->AssociatedIrp.SystemBuffer;
+
+    if (!AcpiVerifyInBuffer(IoStack, FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX_EX, Argument)))
+    {
+        DPRINT1("Buffer too small\n");
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    if (ExBuffer->Signature != ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE_EX)
+    {
+        DPRINT1("Unsupported input buffer signature: 0x%lx\n", ExBuffer->Signature);
+        return STATUS_INVALID_PARAMETER_1;
+    }
+    if (memchr(ExBuffer->MethodName, ANSI_NULL, sizeof(ExBuffer->MethodName)) == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = EvalResolvePath(DeviceData->AcpiHandle, ExBuffer->MethodName, &Handle);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT("Method '%s' not found under %p (0x%08lx)\n",
+               ExBuffer->MethodName, DeviceData->AcpiHandle, Status);
+        return Status;
+    }
+
+    Status = EvalCreateParametersListEx(IoStack, ExBuffer, &ParamList);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    AcpiStatus = AcpiEvaluateObject(Handle, NULL, &ParamList, &ReturnBuffer);
+
+    if (ParamList.Count != 0)
+        EvalFreeParametersList(&ParamList);
+
+    if (!ACPI_SUCCESS(AcpiStatus))
+    {
+        DPRINT("Query method '%s' failed on %p with status 0x%04x\n",
+               ExBuffer->MethodName, DeviceData->AcpiHandle, AcpiStatus);
+        return EvalAcpiStatusToNtStatus(AcpiStatus);
+    }
+
+    Status = EvalCreateOutputArguments(Irp, IoStack, &ReturnBuffer);
+
+    if (ReturnBuffer.Pointer)
+        AcpiOsFree(ReturnBuffer.Pointer);
+
+    return Status;
+}
+
+typedef struct _ACPI_ENUM_CHILDREN_CONTEXT
+{
+    PACPI_ENUM_CHILDREN_OUTPUT_BUFFER Output;
+    ULONG OutputLength;
+    ULONG RequiredLength;
+    ULONG Count;
+    BOOLEAN Overflow;
+} ACPI_ENUM_CHILDREN_CONTEXT, *PACPI_ENUM_CHILDREN_CONTEXT;
+
+static
+ACPI_STATUS
+EvalEnumChildrenCallback(
+    _In_ ACPI_HANDLE Object,
+    _In_ UINT32 NestingLevel,
+    _In_ void *Context,
+    _Out_ void **ReturnValue)
+{
+    PACPI_ENUM_CHILDREN_CONTEXT EnumContext = Context;
+    ACPI_BUFFER NameBuffer;
+    PACPI_ENUM_CHILD Child;
+    ULONG NameLength;
+    ULONG EntryLength;
+
+    UNREFERENCED_PARAMETER(NestingLevel);
+    UNREFERENCED_PARAMETER(ReturnValue);
+
+    NameBuffer.Length = ACPI_ALLOCATE_BUFFER;
+    NameBuffer.Pointer = NULL;
+    if (ACPI_FAILURE(AcpiGetName(Object, ACPI_FULL_PATHNAME, &NameBuffer)))
+        return AE_OK;
+
+    /* Each entry carries its NUL-terminated full path and is packed: a
+     * caller walks the list with ACPI_ENUM_CHILD_NEXT, which advances by
+     * exactly the two header ULONGs plus NameLength, with no padding. */
+    NameLength = (ULONG)strlen(NameBuffer.Pointer) + 1;
+    EntryLength = FIELD_OFFSET(ACPI_ENUM_CHILD, Name) + NameLength;
+    EnumContext->Count++;
+
+    if (!EnumContext->Overflow &&
+        EntryLength <= EnumContext->OutputLength - EnumContext->RequiredLength)
+    {
+        Child = (PACPI_ENUM_CHILD)((PUCHAR)EnumContext->Output + EnumContext->RequiredLength);
+        Child->Flags = 0;
+        Child->NameLength = NameLength;
+        RtlCopyMemory(Child->Name, NameBuffer.Pointer, NameLength);
+    }
+    else
+    {
+        EnumContext->Overflow = TRUE;
+    }
+    EnumContext->RequiredLength += EntryLength;
+
+    AcpiOsFree(NameBuffer.Pointer);
+    return AE_OK;
+}
+
+/**
+ * @brief Handles IOCTL_ACPI_ENUM_CHILDREN.
+ *
+ * Lists the namespace objects below the device (or below the named
+ * descendant), one full path per entry.  When the output buffer is too
+ * small the fixed header reports the required size in NumberOfChildren and
+ * the request completes with STATUS_BUFFER_OVERFLOW, as the ACPI IOCTL
+ * contract requires.
+ */
+NTSTATUS
+NTAPI
+Bus_PDO_EnumChildren(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PACPI_ENUM_CHILDREN_INPUT_BUFFER Input;
+    ACPI_ENUM_CHILDREN_CONTEXT Context;
+    ACPI_HANDLE Root;
+    ACPI_STATUS AcpiStatus;
+    NTSTATUS Status;
+    ULONG InputLength;
+    ULONG MaxDepth;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    Input = Irp->AssociatedIrp.SystemBuffer;
+    InputLength = IoStack->Parameters.DeviceIoControl.InputBufferLength;
+
+    if (!AcpiVerifyInBuffer(IoStack, FIELD_OFFSET(ACPI_ENUM_CHILDREN_INPUT_BUFFER, Name)))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    if (Input->Signature != ACPI_ENUM_CHILDREN_INPUT_BUFFER_SIGNATURE)
+        return STATUS_INVALID_PARAMETER_1;
+    if (Input->NameLength > InputLength - FIELD_OFFSET(ACPI_ENUM_CHILDREN_INPUT_BUFFER, Name) ||
+        (Input->NameLength != 0 && Input->Name[Input->NameLength - 1] != ANSI_NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!AcpiVerifyOutBuffer(IoStack, FIELD_OFFSET(ACPI_ENUM_CHILDREN_OUTPUT_BUFFER, Children)))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    Status = EvalResolvePath(DeviceData->AcpiHandle,
+                             Input->NameLength != 0 ? Input->Name : "",
+                             &Root);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    Context.Output = Irp->AssociatedIrp.SystemBuffer;
+    Context.OutputLength = IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+    Context.RequiredLength = FIELD_OFFSET(ACPI_ENUM_CHILDREN_OUTPUT_BUFFER, Children);
+    MaxDepth = (Input->Flags & ENUM_CHILDREN_MULTILEVEL) ? ACPI_UINT32_MAX : 1;
+
+    AcpiStatus = AcpiWalkNamespace(ACPI_TYPE_ANY,
+                                   Root,
+                                   MaxDepth,
+                                   EvalEnumChildrenCallback,
+                                   NULL,
+                                   &Context,
+                                   NULL);
+    if (ACPI_FAILURE(AcpiStatus))
+        return EvalAcpiStatusToNtStatus(AcpiStatus);
+
+    Context.Output->Signature = ACPI_ENUM_CHILDREN_OUTPUT_BUFFER_SIGNATURE;
+    if (Context.Overflow)
+    {
+        Context.Output->NumberOfChildren = Context.RequiredLength;
+        Irp->IoStatus.Information = FIELD_OFFSET(ACPI_ENUM_CHILDREN_OUTPUT_BUFFER, Children);
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    Context.Output->NumberOfChildren = Context.Count;
+    Irp->IoStatus.Information = Context.RequiredLength;
+    return STATUS_SUCCESS;
+}
+
 /**
  * @brief Evaluates an ACPI method for a PCI device given its location.
  *
