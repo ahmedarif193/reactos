@@ -855,6 +855,11 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               ContextAllocationCreateCount;
     volatile LONG               ContextAllocationMapCount;
     volatile LONG               ContextAllocationUpdateCount;
+    /* Reverse-callback requests a failed start would otherwise leave
+     * unexplained: ACPI evaluations, service queries, POST ownership. */
+    volatile LONG               AcpiEvalCount;
+    volatile LONG               QueryServicesCount;
+    volatile LONG               PostDisplayAcquireCount;
     /* KMTQAITYPE_UMOPENGLINFO answer cached after the first successful
      * registry query; the adapter's ICD registration does not change while
      * it is started and the query is on the ICD's per-present path. */
