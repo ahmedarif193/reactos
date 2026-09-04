@@ -847,11 +847,17 @@ C_ASSERT(sizeof(D3DKMT_CREATEALLOCATIONFLAGS) == sizeof(UINT));
 #define WDDM_CA_FLAG_CROSS_ADAPTER         0x00000800U
 #define WDDM_CA_FLAG_STANDARD_ALLOCATION   0x00010000U
 #define WDDM_CA_FLAG_EXISTING_SECTION      0x00020000U
+/* AllowNotZeroed is an OS memory-policy hint (the caller tolerates unzeroed
+ * backing), not a capability: dxgkrnl accepts it at every WDDM level and may
+ * still zero.  Newer user-mode drivers set it on ordinary and on NT-shared
+ * allocations alike; refusing it here stops every such allocation. */
+#define WDDM_CA_FLAG_ALLOW_NOT_ZEROED      0x00040000U
 #define WDDM_CA_KNOWN_FLAGS_MASK           0x003FFFFFU
 /* Keep documented-but-unimplemented inputs out of this mask so they reach the
  * STATUS_NOT_SUPPORTED gate instead of being misclassified as malformed. */
 #define WDDM_CA_INVALID_INPUT_FLAGS_MASK   0x00001308U
-#define WDDM_CA_SUPPORTED_BASE_FLAGS_MASK  (WDDM_CA_FLAG_CREATE_RESOURCE | WDDM_CA_FLAG_CREATE_SHARED | WDDM_CA_FLAG_NT_SECURITY_SHARING)
+#define WDDM_CA_SUPPORTED_BASE_FLAGS_MASK  (WDDM_CA_FLAG_CREATE_RESOURCE | WDDM_CA_FLAG_CREATE_SHARED | WDDM_CA_FLAG_NT_SECURITY_SHARING | \
+                                            WDDM_CA_FLAG_ALLOW_NOT_ZEROED)
 #define WDDM_CA_STANDARD_REQUIRED_MASK     (WDDM_CA_FLAG_CREATE_SHARED | WDDM_CA_FLAG_CROSS_ADAPTER | WDDM_CA_FLAG_STANDARD_ALLOCATION)
 #define WDDM_CA_STANDARD_SOURCE_MASK       (WDDM_CA_FLAG_EXISTING_SYSMEM | WDDM_CA_FLAG_EXISTING_SECTION)
 

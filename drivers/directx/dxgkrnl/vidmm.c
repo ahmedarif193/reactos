@@ -5572,10 +5572,12 @@ typedef struct _DXGKP_ALLOCATION_INFO_VIEW
 C_ASSERT(sizeof(D3DKMT_CREATEALLOCATIONFLAGS) == sizeof(UINT));
 #define DXGKP_CA_FLAG_CREATE_RESOURCE       0x00000001U
 #define DXGKP_CA_FLAG_CREATE_SHARED         0x00000002U
+#define DXGKP_CA_FLAG_NT_SECURITY_SHARING   0x00000040U
 #define DXGKP_CA_FLAG_EXISTING_SYSMEM       0x00000020U
 #define DXGKP_CA_FLAG_CROSS_ADAPTER         0x00000800U
 #define DXGKP_CA_FLAG_STANDARD_ALLOCATION   0x00010000U
 #define DXGKP_CA_FLAG_EXISTING_SECTION      0x00020000U
+#define DXGKP_CA_FLAG_ALLOW_NOT_ZEROED       0x00040000U
 #define DXGKP_CA_KNOWN_FLAGS_WDDM_1_0       0x0000003FU
 #define DXGKP_CA_KNOWN_FLAGS_WDDM_1_2       0x000007FFU
 #define DXGKP_CA_KNOWN_FLAGS_WDDM_1_3       0x0000FFFFU
@@ -5587,7 +5589,7 @@ C_ASSERT(sizeof(D3DKMT_CREATEALLOCATIONFLAGS) == sizeof(UINT));
 /* Keep documented-but-unimplemented inputs out of this mask so they reach the
  * STATUS_NOT_SUPPORTED gate instead of being misclassified as malformed. */
 #define DXGKP_CA_INVALID_INPUT_FLAGS_MASK   0x00001308U
-#define DXGKP_CA_SUPPORTED_BASE_FLAGS_MASK  (DXGKP_CA_FLAG_CREATE_RESOURCE | DXGKP_CA_FLAG_CREATE_SHARED)
+#define DXGKP_CA_SUPPORTED_BASE_FLAGS_MASK  (DXGKP_CA_FLAG_CREATE_RESOURCE | DXGKP_CA_FLAG_CREATE_SHARED | DXGKP_CA_FLAG_NT_SECURITY_SHARING | DXGKP_CA_FLAG_ALLOW_NOT_ZEROED)
 #define DXGKP_CA_STANDARD_REQUIRED_MASK     (DXGKP_CA_FLAG_CREATE_SHARED | DXGKP_CA_FLAG_CROSS_ADAPTER | DXGKP_CA_FLAG_STANDARD_ALLOCATION)
 #define DXGKP_CA_STANDARD_SOURCE_MASK       (DXGKP_CA_FLAG_EXISTING_SYSMEM | DXGKP_CA_FLAG_EXISTING_SECTION)
 
@@ -5643,7 +5645,14 @@ DxgkpValidateCreateAllocationFlags(
     UINT StandardSources;
 
     RtlCopyMemory(&RawFlags, Flags, sizeof(RawFlags));
-    KnownFlags = DxgkpCreateAllocationKnownFlagsMask(WddmLevel);
+    /*
+     * AllowNotZeroed is an OS-memory policy hint, not a miniport ABI bit.
+     * Newer UMDs use it even when paired with a KMD whose public contract is
+     * capped below WDDM 2.6.  VidMm may still return zeroed backing; accepting
+     * the hint only permits it not to zero pages and is safe at every level.
+     */
+    KnownFlags = DxgkpCreateAllocationKnownFlagsMask(WddmLevel) |
+                 DXGKP_CA_FLAG_ALLOW_NOT_ZEROED;
     *StandardAllocation = (RawFlags & DXGKP_CA_FLAG_STANDARD_ALLOCATION) != 0;
     if ((RawFlags & ~KnownFlags) != 0 || (RawFlags & DXGKP_CA_INVALID_INPUT_FLAGS_MASK) != 0)
         return STATUS_INVALID_PARAMETER;
