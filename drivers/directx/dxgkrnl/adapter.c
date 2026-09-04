@@ -10635,6 +10635,7 @@ DxgkpQueryGpuMmuCaps(
 {
     PDXGKDDI_QUERY_ADAPTER_INFO PfnQueryAdapterInfo;
     DXGKARG_QUERYADAPTERINFO QueryArgs;
+    DXGK_QUERYGPUMMUCAPSIN CapsIn;
     NTSTATUS Status;
 
     if (Caps == NULL)
@@ -10649,8 +10650,14 @@ DxgkpQueryGpuMmuCaps(
     if (!DxgkAcquireKmdCall(Adapter))
         return STATUS_DELETE_PENDING;
 
+    /* The query names the physical adapter it is about; a miniport that
+     * supports linked adapters rejects the request without it. */
+    RtlZeroMemory(&CapsIn, sizeof(CapsIn));
+    CapsIn.PhysicalAdapterIndex = 0;
     RtlZeroMemory(&QueryArgs, sizeof(QueryArgs));
     QueryArgs.Type = DXGKQAITYPE_GPUMMUCAPS;
+    QueryArgs.pInputData = &CapsIn;
+    QueryArgs.InputDataSize = sizeof(CapsIn);
     QueryArgs.pOutputData = Caps;
     QueryArgs.OutputDataSize = sizeof(*Caps);
 
@@ -11943,11 +11950,34 @@ DxgkAdapterStart(
         !Adapter->MiniportContext->IsDisplayOnlyDriver &&
         DxgkCapsCoreInterfaceVersionAtLeast(
             Adapter->MiniportContext->InitData.s.Version,
-            DXGK_CAPS_CORE_LEVEL_WDDM_2_0) &&
-        NT_SUCCESS(DxgkpQueryGpuMmuCaps(Adapter, &Adapter->GpuMmuCaps)) &&
-        Adapter->GpuMmuCaps.VirtualAddressBitCount != 0 &&
-        Adapter->GpuMmuCaps.PageTableLevelCount != 0 &&
-        DxgkpCacheGpuMmuGeometry(Adapter))
+            DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
+    {
+        NTSTATUS MmuStatus;
+        BOOLEAN GeometryCached = FALSE;
+
+        MmuStatus = DxgkpQueryGpuMmuCaps(Adapter, &Adapter->GpuMmuCaps);
+        if (NT_SUCCESS(MmuStatus) &&
+            Adapter->GpuMmuCaps.VirtualAddressBitCount != 0 &&
+            Adapter->GpuMmuCaps.PageTableLevelCount != 0)
+        {
+            GeometryCached = DxgkpCacheGpuMmuGeometry(Adapter);
+        }
+        if (!GeometryCached)
+        {
+            /* Without the geometry no GPU virtual address space exists for
+             * this adapter, so every reservation its miniport later asks
+             * for is refused; say so here rather than at that point. */
+            DXGKRNL_WARN("DxgkAdapterStart: GpuMmu caps unavailable for adapter %p: "
+                         "status=0x%08lx va-bits=%u levels=%u update-mode=%u geometry=%u\n",
+                         Adapter,
+                         MmuStatus,
+                         Adapter->GpuMmuCaps.VirtualAddressBitCount,
+                         Adapter->GpuMmuCaps.PageTableLevelCount,
+                         (UINT)Adapter->GpuMmuCaps.PageTableUpdateMode,
+                         GeometryCached);
+        }
+    }
+    if (Adapter->PageTableLevelsValid)
     {
         Adapter->GpuMmuCapsValid = TRUE;
         DXGKRNL_ERR("DxgkAdapterStart: GpuMmu caps: va-bits=%u levels=%u update-mode=%u flags=0x%08x "
