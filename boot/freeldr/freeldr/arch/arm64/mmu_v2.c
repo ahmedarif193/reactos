@@ -438,6 +438,21 @@ Arm64LookupTableCoversPageTableAllocation(EFI_PHYSICAL_ADDRESS Base, UINTN Pages
 }
 
 static VOID
+zero_pt_pages(VOID *ptr, SIZE_T bytes)
+{
+    volatile UINT64 *q = (volatile UINT64 *)ptr;
+    volatile UINT8 *b;
+    SIZE_T n = bytes / sizeof(UINT64);
+    SIZE_T i;
+
+    for (i = 0; i < n; ++i)
+        q[i] = 0;
+
+    b = (volatile UINT8 *)ptr + n * sizeof(UINT64);
+    for (i = n * sizeof(UINT64); i < bytes; ++i)
+        *b++ = 0;
+}
+static VOID
 Arm64RecordPageTableAllocation(EFI_PHYSICAL_ADDRESS Base, UINTN Pages)
 {
     if (Pages == 0)
@@ -692,7 +707,7 @@ allocate_static_pt_pages(UINTN pages, const char *label)
 
     ptr = (VOID *)(uintptr_t)aligned_abs;
     arm64_static_extra_pt_offset = required;
-    RtlZeroMemory(ptr, bytes);
+    zero_pt_pages(ptr, bytes);
     Arm64RecordPageTableAllocation((EFI_PHYSICAL_ADDRESS)(UINT64)(uintptr_t)ptr, pages);
 
     /* Verify alignment before returning */
@@ -789,7 +804,7 @@ allocate_pt_pages(UINTN pages, const char *label)
     }
 
     ptr = (VOID *)(uintptr_t)addr;
-    RtlZeroMemory(ptr, pages * PAGE_SIZE);
+    zero_pt_pages(ptr, pages * PAGE_SIZE);
     Arm64RecordPageTableAllocation(addr, pages);
     return ptr;
 }
@@ -1270,7 +1285,7 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                 }
             }
 
-            RtlZeroMemory(split_table, PAGE_SIZE);
+            zero_pt_pages(split_table, PAGE_SIZE);
             for (ULONG i = 0; i < 512; ++i)
             {
                 UINT64 pa = block_base + ((UINT64)i << 21);
@@ -1308,7 +1323,7 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                     return NULL;
             }
 
-            RtlZeroMemory(new_table, PAGE_SIZE);
+            zero_pt_pages(new_table, PAGE_SIZE);
             pte_write(&l1_table[l1_index],
                       (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
             return new_table;
@@ -1333,7 +1348,7 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                         return NULL;
                 }
 
-                RtlZeroMemory(new_table, PAGE_SIZE);
+                zero_pt_pages(new_table, PAGE_SIZE);
                 pte_write(&l1_table[l1_index],
                           (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
                 return new_table;
@@ -1344,7 +1359,7 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                 UINT64 *new_table = allocate_pt_pages(1, "TTBR1 L2 (extra)");
                 if (!new_table)
                     return NULL;
-                RtlZeroMemory(new_table, PAGE_SIZE);
+                zero_pt_pages(new_table, PAGE_SIZE);
                 pte_write(&l1_table[l1_index],
                           (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
                 return new_table;
@@ -1367,7 +1382,7 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
             return NULL;
     }
 
-    RtlZeroMemory(new_table, PAGE_SIZE);
+    zero_pt_pages(new_table, PAGE_SIZE);
     pte_write(&l1_table[l1_index],
               (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
     return new_table;
@@ -1512,7 +1527,7 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
                     return NULL;
             }
 
-            RtlZeroMemory(split_table, PAGE_SIZE);
+            zero_pt_pages(split_table, PAGE_SIZE);
             for (ULONG i = 0; i < 512; ++i)
             {
                 UINT64 pa = block_base + ((UINT64)i << 12);
@@ -1541,7 +1556,7 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
             UINT64 *new_table = alloc_kernel_l3_from_flat_pool(l0_slot);
             if (!new_table)
                 return NULL;
-            RtlZeroMemory(new_table, PAGE_SIZE);
+            zero_pt_pages(new_table, PAGE_SIZE);
             pte_write(&l2_table[l2_index],
                       (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
             return new_table;
@@ -1552,7 +1567,7 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
             UINT64 *new_table = alloc_extra_l3_from_flat_pool(extra_slot);
             if (!new_table)
                 return NULL;
-            RtlZeroMemory(new_table, PAGE_SIZE);
+            zero_pt_pages(new_table, PAGE_SIZE);
             pte_write(&l2_table[l2_index],
                       (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
             return new_table;
@@ -1563,7 +1578,7 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
             UINT64 *new_table = allocate_pt_pages(1, "TTBR1 L3 (extra)");
             if (!new_table)
                 return NULL;
-            RtlZeroMemory(new_table, PAGE_SIZE);
+            zero_pt_pages(new_table, PAGE_SIZE);
             pte_write(&l2_table[l2_index],
                       (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
             return new_table;
@@ -1579,7 +1594,7 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
     UINT64 *new_table = alloc_user_l3_from_flat_pool(l0_slot);
     if (!new_table)
         return NULL;
-    RtlZeroMemory(new_table, PAGE_SIZE);
+    zero_pt_pages(new_table, PAGE_SIZE);
     pte_write(&l2_table[l2_index],
               (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
     return new_table;
@@ -1691,7 +1706,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
                         UartPuts("[MAP] allocate_pt_pages failed for extra L1\n");
                         return FALSE;
                     }
-                    RtlZeroMemory(new_l1, PAGE_SIZE);
+                    zero_pt_pages(new_l1, PAGE_SIZE);
                     pte_write(&l0_table[l0_idx],
                               (phys_from_ptr(new_l1) | PTE_TABLE_ATTRS));
                     /* Use the pointer we just allocated */
@@ -2134,7 +2149,7 @@ Arm64EnsureRangeTables(
                     UINT64 *new_l1 = allocate_pt_pages(1, "TTBR1 L1 (extra)");
                     if (!new_l1)
                         return FALSE;
-                    RtlZeroMemory(new_l1, PAGE_SIZE);
+                    zero_pt_pages(new_l1, PAGE_SIZE);
                     pte_write(&l0_table[l0_idx],
                               phys_from_ptr(new_l1) | PTE_TABLE_ATTRS);
                     l1_table = new_l1;
@@ -2575,7 +2590,7 @@ static VOID setup_pgtables(VOID)
                 UINT64 *l1_table = arm64_extra_l1_tables[i];
                 if (l1_table)
                 {
-                    RtlZeroMemory(l1_table, PAGE_SIZE);
+                    zero_pt_pages(l1_table, PAGE_SIZE);
                     UINT64 desc = phys_from_ptr(l1_table) | PTE_TABLE_ATTRS;
                     pte_write(&arm64_kernel_l0_table[idx], desc);
                 }
@@ -2585,7 +2600,7 @@ static VOID setup_pgtables(VOID)
                     UINT64 *new_l1 = allocate_pt_pages(1, "TTBR1 L1 (extra seed)");
                     if (new_l1)
                     {
-                        RtlZeroMemory(new_l1, PAGE_SIZE);
+                        zero_pt_pages(new_l1, PAGE_SIZE);
                         UINT64 desc = phys_from_ptr(new_l1) | PTE_TABLE_ATTRS;
                         pte_write(&arm64_kernel_l0_table[idx], desc);
                         arm64_extra_l1_tables[i] = new_l1;
