@@ -711,7 +711,6 @@ BOOLEAN VidSchIsContextOrderPacketResubmittable(_In_ PVIDSCH_DMA_PACKET Packet);
 BOOLEAN VidSchDispatchContextOrderPacketResubmission(_Inout_ PVIDSCH_DMA_PACKET Packet);
 NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ PVIDSCH_DMA_PACKET Packet);
 VOID DxgkContextOrderKickContext(_Inout_ PDXGKRNL_CONTEXT Context);
-VOID DxgkContextOrderPublishAdmittedPacket(_Inout_ PDXGKRNL_CONTEXT Context);
 VOID DxgkContextOrderScheduleReferenced(_Inout_ PDXGKRNL_CONTEXT Context);
 VOID DxgkContextOrderCommitPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS SubmissionStatus);
 VOID DxgkContextOrderCompletePacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS CompletionStatus);
