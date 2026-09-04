@@ -1,6 +1,17 @@
 
 PROJECT(NTOS)
 
+# Native __try only guards calls unless asynchronous exception handling is on.
+# Clang marks plain loads and stores nounwind, keeps them outside the EH scope,
+# and from -O1 deletes an __except whose try body contains no call, so every
+# _SEH2_TRY guarding a bare user-pointer access silently stops catching the
+# page fault it exists to catch.  The mingw driver discards -fasync-exceptions
+# ("argument unused"), so hand it to cc1.  C only: Clang 23 crashes on some C++
+# translation units with asynchronous EH, and the capture code here is C.
+if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND NOT USE_DUMMY_PSEH)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:SHELL:-Xclang -fasync-exceptions>")
+endif()
+
 if(KDBG AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64") AND NOT TARGET kdb_zydis)
     # KDB must decode the instruction set emitted by current compilers. Build
     # the pinned Zydis copy already carried by the ARM64EC submodule in its
