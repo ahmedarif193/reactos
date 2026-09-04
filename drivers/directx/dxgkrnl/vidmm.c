@@ -8909,7 +8909,8 @@ DxgkpVidMmCompleteResidencyOwned(
     if (!Allocation->Resident || Allocation->SegmentId < 1 || Allocation->SegmentId > Adapter->SegmentCount)
         return STATUS_INVALID_DEVICE_STATE;
     Segment = &ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1];
-    if (VidMmSegmentIsAperture(Segment))
+    if (VidMmSegmentIsAperture(Segment) &&
+        Allocation->AccessedPhysically)
     {
         Status = DxgkpVidMmPrepareAllocationApertureMappingOwned(Allocation);
         if (NT_SUCCESS(Status) && DeferAperturePaging)
