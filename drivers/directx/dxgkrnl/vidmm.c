@@ -3491,7 +3491,20 @@ DxgkVidMmInitializeAdapter(
         else
             VIDMM_READ_SEGMENT_DESC(DXGK_SEGMENTDESCRIPTOR);
 
-        if (Seg->Size == 0 || (VidMmSegmentIsAperture(Seg) ? (Seg->CommitLimit > Seg->Size || Seg->Flags.PopulatedFromSystemMemory) : Seg->CommitLimit != Seg->Size) || (Seg->Flags.LocalBudgetGroup && Seg->Flags.NonLocalBudgetGroup) || (Seg->Flags.Agp && Seg->Flags.Value != (1UL << 1)) || (DxgkCapsCoreInterfaceVersionInRange(Adapter->MiniportContext->InitData.s.Version, DXGK_CAPS_CORE_LEVEL_WDDM_1_0, DXGK_CAPS_CORE_LEVEL_WDDM_2_0) && Seg->Flags.Reserved != 0))
+        /*
+         * CommitLimit is defined only for aperture segments.  Native
+         * miniports commonly leave it zero for local-memory segments; use
+         * Size as their placement limit instead of rejecting the descriptor.
+         */
+        if (Seg->Size == 0 ||
+            (VidMmSegmentIsAperture(Seg) &&
+             (Seg->CommitLimit > Seg->Size || Seg->Flags.PopulatedFromSystemMemory)) ||
+            (Seg->Flags.LocalBudgetGroup && Seg->Flags.NonLocalBudgetGroup) ||
+            (Seg->Flags.Agp && Seg->Flags.Value != (1UL << 1)) ||
+            (DxgkCapsCoreInterfaceVersionInRange(Adapter->MiniportContext->InitData.s.Version,
+                                                  DXGK_CAPS_CORE_LEVEL_WDDM_1_0,
+                                                  DXGK_CAPS_CORE_LEVEL_WDDM_2_0) &&
+             Seg->Flags.Reserved != 0))
         {
             DPRINT1("DxgkVidMmInitializeAdapter: invalid segment %lu size=0x%I64x commit=0x%I64x flags=0x%lx\n", i, Seg->Size, Seg->CommitLimit, Seg->Flags.Value);
             Status = STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -3538,13 +3551,6 @@ DxgkVidMmInitializeAdapter(
                                          : VIDMM_PAGING_BUFFER_SIZE_DEFAULT;
         }
 
-        DPRINT("DxgkVidMmInitializeAdapter: seg[%lu] id=%lu "
-               "size=0x%I64x base=0x%I64x flags=0x%lx %s\n",
-               i, Seg->SegmentId,
-               Seg->Size,
-               Seg->BaseAddress.QuadPart,
-               Seg->Flags,
-               VidMmSegmentIsAperture(Seg) ? "APERTURE" : "VRAM");
     }
 #undef VIDMM_READ_SEGMENT_DESC
 
