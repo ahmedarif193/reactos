@@ -340,6 +340,14 @@ IntFindWddmRenderIcd(
         if (!IntQueryWddmOpenGlInfo(Adapters[Index].hAdapter, &CandidateInfo))
             continue;
 
+        /*
+         * More than one render adapter can publish an ICD once every GPU in
+         * the machine starts.  None of them owns the display (this search
+         * only runs when the display adapter has no ICD), so there is no
+         * better tie-break than enumeration order, which follows adapter
+         * start order; refusing to pick would turn every multi-GPU machine
+         * into a software renderer.
+         */
         ++FoundCount;
         if (FoundCount == 1)
         {
@@ -349,7 +357,7 @@ IntFindWddmRenderIcd(
         }
     }
 
-    Found = FoundCount == 1;
+    Found = FoundCount != 0;
 
 Cleanup:
     for (Index = 0; Index < AdapterCount; ++Index)
