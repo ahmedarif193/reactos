@@ -77,13 +77,19 @@ NetShellRankConnection(NLM_CONNECTIVITY Conn, DWORD dwType, int nQuality)
     else
         Scope = 0;
 
-    Iface = (dwType == IF_TYPE_PPP || dwType == IF_TYPE_SLIP) ? 0 : 1;
+    if (dwType == IF_TYPE_PPP || dwType == IF_TYPE_SLIP)
+        Iface = 0;
+    else if (dwType == IF_TYPE_IEEE80211)
+        Iface = 2;
+    else
+        Iface = 1;
+
     if (dwType == IF_TYPE_IEEE80211)
         Signal = (nQuality < 0) ? 0 : (DWORD)nQuality;
     else
-        Signal = 101;
+        Signal = 0;
 
-    return Scope * 100000 + Iface * 1000 + Signal;
+    return Iface * 1000000 + Scope * 1000 + Signal;
 }
 
 static VOID
@@ -209,25 +215,18 @@ static UINT
 NetShellTrayIcon(DWORD dwType, DWORD dwOperStatus, NLM_CONNECTIVITY Conn, int nQuality)
 {
     BOOL bWifi = (dwType == IF_TYPE_IEEE80211);
-    BOOL bInternet;
 
     if (dwOperStatus != MIB_IF_OPER_STATUS_CONNECTED &&
         dwOperStatus != MIB_IF_OPER_STATUS_OPERATIONAL)
     {
-        return bWifi ? IDI_NET_TRAY_WIFIOFF : IDI_NET_TRAY_WIRED_X;
+        return bWifi ? IDI_NET_TRAY_WIFI4 : IDI_NET_TRAY_WIRED_X;
     }
 
     if (bWifi && nQuality == NS_WIFI_NOASSOC)
-        return IDI_NET_TRAY_WIFIOFF;
-
-    bInternet = (Conn & (NLM_CONNECTIVITY_IPV4_INTERNET |
-                         NLM_CONNECTIVITY_IPV6_INTERNET)) != 0;
+        return IDI_NET_TRAY_WIFI4;
 
     if (!bWifi)
-        return bInternet ? IDI_NET_TRAY_WIRED : IDI_NET_TRAY_WIRED_WARN;
-
-    if (!bInternet)
-        return IDI_NET_TRAY_WIFI_WARN;
+        return IDI_NET_TRAY_WIRED;
 
     if (nQuality >= 75 || nQuality == NS_WIFI_NOINFO)
         return IDI_NET_TRAY_WIFI1;
