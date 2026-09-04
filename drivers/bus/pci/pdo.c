@@ -1351,6 +1351,10 @@ PciPdoEnableMsi(
     ULONG MessageAddressHigh;
     USHORT MessageData;
     USHORT Control;
+    USHORT ReadControl = 0;
+    ULONG ReadAddressLow = 0;
+    USHORT ReadData = 0;
+    ULONG DataOffset;
     BOOLEAN Is64Bit;
     ULONG MessageCount;
     KAFFINITY Affinity;
@@ -1463,34 +1467,68 @@ PciPdoEnableMsi(
 
     Is64Bit = (Device->MsiControl & PCI_MSI_FLAGS_64BIT) != 0;
 
-    PciPdoSetBusDataByOffset(DeviceExtension,
-                             &MessageAddressLow,
-                             Device->MsiCapability + PCI_MSI_ADDRESS_LO,
-                             sizeof(MessageAddressLow));
-    if (Is64Bit)
+    DataOffset = Is64Bit ? PCI_MSI_DATA_64 : PCI_MSI_DATA_32;
+
+    if (PciPdoSetBusDataByOffset(DeviceExtension,
+                                 &MessageAddressLow,
+                                 Device->MsiCapability + PCI_MSI_ADDRESS_LO,
+                                 sizeof(MessageAddressLow)) != sizeof(MessageAddressLow))
     {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+    if (Is64Bit &&
         PciPdoSetBusDataByOffset(DeviceExtension,
                                  &MessageAddressHigh,
                                  Device->MsiCapability + PCI_MSI_ADDRESS_HI,
-                                 sizeof(MessageAddressHigh));
-        PciPdoSetBusDataByOffset(DeviceExtension,
-                                 &MessageData,
-                                 Device->MsiCapability + PCI_MSI_DATA_64,
-                                 sizeof(MessageData));
-    }
-    else
+                                 sizeof(MessageAddressHigh)) != sizeof(MessageAddressHigh))
     {
-        PciPdoSetBusDataByOffset(DeviceExtension,
-                                 &MessageData,
-                                 Device->MsiCapability + PCI_MSI_DATA_32,
-                                 sizeof(MessageData));
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
-    PciPdoSetBusDataByOffset(DeviceExtension,
-                             &Control,
-                             Device->MsiCapability + PCI_MSI_FLAGS,
-                             sizeof(Control));
+    if (PciPdoSetBusDataByOffset(DeviceExtension,
+                                 &MessageData,
+                                 Device->MsiCapability + DataOffset,
+                                 sizeof(MessageData)) != sizeof(MessageData))
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+    if (PciPdoSetBusDataByOffset(DeviceExtension,
+                                 &Control,
+                                 Device->MsiCapability + PCI_MSI_FLAGS,
+                                 sizeof(Control)) != sizeof(Control))
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
 
-    Device->MsiControl = Control;
+    /*
+     * Read the capability back before reporting success.  The caller disables
+     * the legacy interrupt line once this returns, so a device that silently
+     * dropped the programming would be left with no way to signal at all.
+     */
+    if (PciPdoGetBusDataByOffset(DeviceExtension,
+                                 &ReadControl,
+                                 Device->MsiCapability + PCI_MSI_FLAGS,
+                                 sizeof(ReadControl)) != sizeof(ReadControl) ||
+        PciPdoGetBusDataByOffset(DeviceExtension,
+                                 &ReadAddressLow,
+                                 Device->MsiCapability + PCI_MSI_ADDRESS_LO,
+                                 sizeof(ReadAddressLow)) != sizeof(ReadAddressLow) ||
+        PciPdoGetBusDataByOffset(DeviceExtension,
+                                 &ReadData,
+                                 Device->MsiCapability + DataOffset,
+                                 sizeof(ReadData)) != sizeof(ReadData) ||
+        !(ReadControl & PCI_MSI_FLAGS_ENABLE) ||
+        ReadAddressLow != MessageAddressLow ||
+        ReadData != MessageData)
+    {
+        DPRINT1("PCI PDO: MSI programming did not stick for %04X:%04X "
+                "(control=0x%04X addr-lo=0x%08lX/0x%08lX data=0x%04X/0x%04X)\n",
+                Device->PciConfig.VendorID, Device->PciConfig.DeviceID,
+                ReadControl, ReadAddressLow, MessageAddressLow,
+                ReadData, MessageData);
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    Device->MsiControl = ReadControl;
     return STATUS_SUCCESS;
 }
 
@@ -4100,8 +4138,19 @@ PdoStartDevice(
     DBGPRINT("pci!PdoStartDevice: Enabling command flags for PCI device 0x%x on bus 0x%x: ",
             DeviceExtension->PciDevice->SlotNumber.u.AsULONG,
             DeviceExtension->PciDevice->BusNumber);
+    /*
+     * A message-signalled interrupt is a memory write issued by the function
+     * itself, so a device routed to MSI or MSI-X cannot signal at all unless
+     * it is a bus master.  EnableBusMaster is only set while answering
+     * IRP_MN_QUERY_RESOURCES, which the PnP manager need not send, and the
+     * cached command register only carries the bit when firmware happened to
+     * leave the device enabled -- neither is true of a discrete adapter the
+     * firmware did not boot from.  Starting such a device with the legacy
+     * line already disconnected leaves it with no interrupt at all.
+     */
     if (DeviceExtension->PciDevice->EnableBusMaster ||
-        (DeviceExtension->PciDevice->PciConfig.Command & PCI_ENABLE_BUS_MASTER))
+        (DeviceExtension->PciDevice->PciConfig.Command & PCI_ENABLE_BUS_MASTER) ||
+        UsingMsi || UsingMsix)
     {
         Command |= PCI_ENABLE_BUS_MASTER;
         DBGPRINT("[Bus master] ");
