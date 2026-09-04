@@ -986,6 +986,63 @@ GetAdaptersAddresses(
         }
     }
 
+    if (Flags & GAA_FLAG_INCLUDE_GATEWAYS)
+    {
+        RouteTable* Routes = getRouteTable();
+
+        if (Routes)
+        {
+            for (i = 0; i < Routes->numRoutes; i++)
+            {
+                PIP_ADAPTER_ADDRESSES CurrentAA = NULL;
+                ULONG Size = sizeof(IP_ADAPTER_GATEWAY_ADDRESS) + sizeof(SOCKADDR);
+
+                if ((Routes->routes[i].dest != 0) || (Routes->routes[i].mask != 0) ||
+                    (Routes->routes[i].gateway == 0))
+                {
+                    continue;
+                }
+
+                if (pAdapterAddresses)
+                {
+                    CurrentAA = pAdapterAddresses;
+                    while (CurrentAA)
+                    {
+                        if (CurrentAA->IfIndex == Routes->routes[i].ifIndex)
+                            break;
+
+                        CurrentAA = CurrentAA->Next;
+                    }
+
+                    if (!CurrentAA)
+                        continue;
+                }
+
+                if (Ptr && (RemainingSize >= Size))
+                {
+                    PIP_ADAPTER_GATEWAY_ADDRESS Gateway = (PIP_ADAPTER_GATEWAY_ADDRESS)Ptr;
+
+                    ZeroMemory(Gateway, Size);
+                    Gateway->Length = sizeof(IP_ADAPTER_GATEWAY_ADDRESS);
+                    Gateway->Next = CurrentAA->FirstGatewayAddress;
+                    Gateway->Address.lpSockaddr = (LPSOCKADDR)(Gateway + 1);
+                    Gateway->Address.iSockaddrLength = sizeof(SOCKADDR);
+                    Gateway->Address.lpSockaddr->sa_family = AF_INET;
+                    ((LPSOCKADDR_IN)Gateway->Address.lpSockaddr)->sin_port = 0;
+                    ((LPSOCKADDR_IN)Gateway->Address.lpSockaddr)->sin_addr.S_un.S_addr = Routes->routes[i].gateway;
+
+                    CurrentAA->FirstGatewayAddress = Gateway;
+                    Ptr += Size;
+                    RemainingSize -= Size;
+                }
+
+                TotalSize += Size;
+            }
+
+            HeapFree(GetProcessHeap(), 0, Routes);
+        }
+    }
+
 Success:
     /* We're done */
     HeapFree(GetProcessHeap(), 0, InterfacesList);
