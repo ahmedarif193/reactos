@@ -72,6 +72,7 @@ C_ASSERT(FIELD_OFFSET(D3DDDI_ALLOCATIONINFO2, GpuVirtualAddress) == 24);
 #define CAF_OPENCROSSADAPTER        0x00001000u  /* forbidden from user mode */
 #define CAF_STANDARDALLOCATION      0x00010000u
 #define CAF_EXISTINGSECTION         0x00020000u
+#define CAF_ALLOWNOTZEROED          0x00040000u  /* memory-policy hint, accepted everywhere */
 #define CAF_RESERVED_HIGH           0x80000000u
 
 /* A pointer-taking NTSTATUS thunk -- the shared shape of every D3DKMT entry
@@ -592,6 +593,14 @@ START_TEST(allocflags)
     Flags_ValidCombo(CAF_CREATERESOURCE, 2, "CreateResource");
     Flags_ValidCombo(CAF_CREATERESOURCE | CAF_CREATESHARED, 2,
                      "CreateResource|CreateShared");
+    /* AllowNotZeroed only tells the memory manager it may skip zeroing; it is
+     * a hint newer user-mode drivers attach to ordinary and to NT-shared
+     * allocations alike, so the bridge must pass it through. */
+    Flags_ValidCombo(CAF_CREATERESOURCE | CAF_ALLOWNOTZEROED, 2,
+                     "CreateResource|AllowNotZeroed");
+    Flags_ValidCombo(CAF_CREATERESOURCE | CAF_CREATESHARED |
+                     CAF_NTSECURITYSHARING | CAF_ALLOWNOTZEROED, 2,
+                     "CreateResource|CreateShared|NtSecuritySharing|AllowNotZeroed");
     Flags_Forbidden(CAF_CREATESHARED, "CreateShared without CreateResource");
     Flags_Forbidden(CAF_NTSECURITYSHARING,
                     "NtSecuritySharing without CreateShared");
