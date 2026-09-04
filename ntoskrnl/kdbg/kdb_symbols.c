@@ -863,7 +863,7 @@ LoadSymbolsRoutine(
             OBJECT_ATTRIBUTES Attrib;
             IO_STATUS_BLOCK Iosb;
             InitializeObjectAttributes(&Attrib, &LdrEntry->FullDllName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-            DPRINT1("Trying %wZ\n", &LdrEntry->FullDllName);
+            DPRINT("Trying %wZ\n", &LdrEntry->FullDllName);
             Status = ZwOpenFile(&FileHandle,
                                 FILE_READ_ACCESS | SYNCHRONIZE,
                                 &Attrib,
@@ -880,7 +880,7 @@ LoadSymbolsRoutine(
                 RtlCopyUnicodeString(&ImagePath, &System32Dir);
                 RtlAppendUnicodeStringToString(&ImagePath, &LdrEntry->BaseDllName);
                 InitializeObjectAttributes(&Attrib, &ImagePath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-                DPRINT1("Trying %wZ\n", &ImagePath);
+                DPRINT("Trying %wZ\n", &ImagePath);
                 Status = ZwOpenFile(&FileHandle,
                                     FILE_READ_ACCESS | SYNCHRONIZE,
                                     &Attrib,
@@ -895,7 +895,7 @@ LoadSymbolsRoutine(
                     RtlCopyUnicodeString(&ImagePath, &DriversDir);
                     RtlAppendUnicodeStringToString(&ImagePath, &LdrEntry->BaseDllName);
                     InitializeObjectAttributes(&Attrib, &ImagePath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-                    DPRINT1("Trying %wZ\n", &ImagePath);
+                    DPRINT("Trying %wZ\n", &ImagePath);
                     Status = ZwOpenFile(&FileHandle,
                                         FILE_READ_ACCESS | SYNCHRONIZE,
                                         &Attrib,
@@ -907,7 +907,7 @@ LoadSymbolsRoutine(
 
             if (!NT_SUCCESS(Status))
             {
-                DPRINT1("Failed opening file %wZ (%wZ) for reading symbols (0x%08x)\n", &LdrEntry->FullDllName, &LdrEntry->BaseDllName, Status);
+                DPRINT("Failed opening file %wZ (%wZ) for reading symbols (0x%08x)\n", &LdrEntry->FullDllName, &LdrEntry->BaseDllName, Status);
                 /* We took a ref previously */
                 MmUnloadSystemImage(LdrEntry);
                 continue;
