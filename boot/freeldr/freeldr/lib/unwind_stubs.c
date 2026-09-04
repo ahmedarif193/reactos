@@ -41,6 +41,20 @@ RtlUnwindEx(
     }
 }
 
+VOID
+NTAPI
+RtlUnwind(_In_opt_ PVOID TargetFrame, _In_opt_ PVOID TargetIp, _In_opt_ PEXCEPTION_RECORD ExceptionRecord, _In_ PVOID ReturnValue)
+{
+    UNREFERENCED_PARAMETER(TargetFrame);
+    UNREFERENCED_PARAMETER(TargetIp);
+    UNREFERENCED_PARAMETER(ExceptionRecord);
+    UNREFERENCED_PARAMETER(ReturnValue);
+
+    /* The loader carries no unwind data and registers no termination handlers,
+     * so there is nothing to unwind; longjmp completes through its register
+     * restore instead. */
+}
+
 PEXCEPTION_ROUTINE
 NTAPI
 RtlVirtualUnwind(
