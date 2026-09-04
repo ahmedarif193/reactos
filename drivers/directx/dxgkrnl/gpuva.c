@@ -2448,10 +2448,22 @@ DxgkGpuVaPlanReserve(_In_ PDXGKRNL_PROCESS Process, _In_ D3DGPU_VIRTUAL_ADDRESS 
     }
     else
     {
-        if ((MinAddress != 0 && (MinAddress & GPUVA_RESERVATION_MASK) != 0) || (MaxAddress != 0 && (MaxAddress & GPUVA_RESERVATION_MASK) != 0))
+        /*
+         * MaximumAddress is an *inclusive* upper bound -- the highest usable
+         * byte -- so its low bits are all ones by construction (Intel's ICD
+         * passes 0xb801ffffffff).  Requiring it to be allocation-aligned
+         * therefore rejected every such request with STATUS_INVALID_PARAMETER,
+         * which is what made DxgkCbMapContextAllocation and the GPU VA
+         * reservations fail.  Only MinimumAddress names a placement candidate
+         * and has to be aligned; convert the inclusive bound to the exclusive
+         * limit the search below already assumes.
+         */
+        if (MinAddress != 0 && (MinAddress & GPUVA_RESERVATION_MASK) != 0)
             return STATUS_INVALID_PARAMETER;
         if (MinAddress == 0)
             MinAddress = GPUVA_START_ADDRESS;
+        if (MaxAddress != 0 && MaxAddress != MAXULONGLONG)
+            MaxAddress += 1;
         if (MaxAddress == 0 || MaxAddress > GPUVA_DEFAULT_SPACE_SIZE)
             MaxAddress = GPUVA_DEFAULT_SPACE_SIZE;
         MinAddress = max(MinAddress, GPUVA_START_ADDRESS);
@@ -2524,10 +2536,22 @@ DxgkGpuVaPlanMap(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PDXGKRNL_PROCESS Process, _
     }
     else
     {
-        if ((MinAddress & GPUVA_PAGE_MASK) != 0 || (MaxAddress & GPUVA_PAGE_MASK) != 0)
+        /*
+         * MaximumAddress is an *inclusive* upper bound -- the highest usable
+         * byte -- so its low bits are all ones by construction (Intel's ICD
+         * passes 0xb801ffffffff).  Requiring it to be allocation-aligned
+         * therefore rejected every such request with STATUS_INVALID_PARAMETER,
+         * which is what made DxgkCbMapContextAllocation and the GPU VA
+         * reservations fail.  Only MinimumAddress names a placement candidate
+         * and has to be aligned; convert the inclusive bound to the exclusive
+         * limit the search below already assumes.
+         */
+        if ((MinAddress & GPUVA_PAGE_MASK) != 0)
             return STATUS_INVALID_PARAMETER;
         if (MinAddress == 0)
             MinAddress = GPUVA_START_ADDRESS;
+        if (MaxAddress != 0 && MaxAddress != MAXULONGLONG)
+            MaxAddress += 1;
         if (MaxAddress == 0 || MaxAddress > GPUVA_DEFAULT_SPACE_SIZE)
             MaxAddress = GPUVA_DEFAULT_SPACE_SIZE;
         MinAddress = max(MinAddress, GPUVA_START_ADDRESS);
@@ -2619,10 +2643,22 @@ DxgkGpuVaReserve(
     }
     else
     {
-        if ((MinAddress != 0 && (MinAddress & GPUVA_RESERVATION_MASK) != 0) || (MaxAddress != 0 && (MaxAddress & GPUVA_RESERVATION_MASK) != 0))
+        /*
+         * MaximumAddress is an *inclusive* upper bound -- the highest usable
+         * byte -- so its low bits are all ones by construction (Intel's ICD
+         * passes 0xb801ffffffff).  Requiring it to be allocation-aligned
+         * therefore rejected every such request with STATUS_INVALID_PARAMETER,
+         * which is what made DxgkCbMapContextAllocation and the GPU VA
+         * reservations fail.  Only MinimumAddress names a placement candidate
+         * and has to be aligned; convert the inclusive bound to the exclusive
+         * limit the search below already assumes.
+         */
+        if (MinAddress != 0 && (MinAddress & GPUVA_RESERVATION_MASK) != 0)
             return STATUS_INVALID_PARAMETER;
         if (MinAddress == 0)
             MinAddress = GPUVA_START_ADDRESS;
+        if (MaxAddress != 0 && MaxAddress != MAXULONGLONG)
+            MaxAddress += 1;
         if (MaxAddress == 0 || MaxAddress > GPUVA_DEFAULT_SPACE_SIZE)
             MaxAddress = GPUVA_DEFAULT_SPACE_SIZE;
         MinAddress = max(MinAddress, GPUVA_START_ADDRESS);
@@ -2887,10 +2923,22 @@ DxgkGpuVaMap(
     }
     else
     {
-        if ((MinAddress & GPUVA_PAGE_MASK) != 0 || (MaxAddress & GPUVA_PAGE_MASK) != 0)
+        /*
+         * MaximumAddress is an *inclusive* upper bound -- the highest usable
+         * byte -- so its low bits are all ones by construction (Intel's ICD
+         * passes 0xb801ffffffff).  Requiring it to be allocation-aligned
+         * therefore rejected every such request with STATUS_INVALID_PARAMETER,
+         * which is what made DxgkCbMapContextAllocation and the GPU VA
+         * reservations fail.  Only MinimumAddress names a placement candidate
+         * and has to be aligned; convert the inclusive bound to the exclusive
+         * limit the search below already assumes.
+         */
+        if ((MinAddress & GPUVA_PAGE_MASK) != 0)
             return STATUS_INVALID_PARAMETER;
         if (MinAddress == 0)
             MinAddress = GPUVA_START_ADDRESS;
+        if (MaxAddress != 0 && MaxAddress != MAXULONGLONG)
+            MaxAddress += 1;
         if (MaxAddress == 0 || MaxAddress > GPUVA_DEFAULT_SPACE_SIZE)
             MaxAddress = GPUVA_DEFAULT_SPACE_SIZE;
         MinAddress = max(MinAddress, GPUVA_START_ADDRESS);
