@@ -735,6 +735,18 @@ static void UXTHEME_ApplyLiquidProperties(HWND hwnd, LPCWSTR classList,
         backdropType = DWM_BACKDROP_TRANSIENT;
         region = DWM_BACKDROP_REGION_WINDOW;
     }
+    else if (UXTHEME_ClassListContains(classList, L"FlyoutLight"))
+    {
+        role = L"FlyoutLight";
+        backdropType = DWM_BACKDROP_TRANSIENT;
+        region = DWM_BACKDROP_REGION_WINDOW;
+    }
+    else if (UXTHEME_ClassListContains(classList, L"FlyoutDark"))
+    {
+        role = L"FlyoutDark";
+        backdropType = DWM_BACKDROP_TRANSIENT;
+        region = DWM_BACKDROP_REGION_WINDOW;
+    }
     if (!role)
         return;
 
