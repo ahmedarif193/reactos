@@ -619,7 +619,7 @@ MMixerCountMixerControls(
 
         if (NodesCount != 1)
         {
-            DPRINT1("PinId %lu bInputMixer %lu bUpStream %lu NodeIndex %lu next node count %lu\n",
+            DPRINT("PinId %lu bInputMixer %lu bUpStream %lu NodeIndex %lu next node count %lu\n",
                     PinId,
                     bInputMixer,
                     bUpStream,
@@ -786,7 +786,7 @@ MMixerAddMixerControlsToMixerLineByNodeIndexArray(
     /* initialize control count */
     Count = 0;
 
-    DPRINT1("MMixerAddMixerControlsToMixerLine node count=%lu\n", NodesCount);
+    DPRINT("MMixerAddMixerControlsToMixerLine node count=%lu\n", NodesCount);
 
     for(Index = 0; Index < NodesCount; Index++)
     {
@@ -855,7 +855,7 @@ MMixerAddMixerControlsToMixerLineByNodeIndexArray(
     /* store control count */
     DstLine->Line.cControls = Count;
 
-    DPRINT1("MMixerAddMixerControlsToMixerLine done controls=%lu\n", Count);
+    DPRINT("MMixerAddMixerControlsToMixerLine done controls=%lu\n", Count);
 
     /* done */
     return MM_STATUS_SUCCESS;
@@ -1313,7 +1313,7 @@ MMixerAddMixerControlsToDestinationLine(
 
     /* get all destination line controls */
     Status = MMixerCountMixerControls(MixerContext, Topology, PinId, bInput, TRUE, &NodesCount, Nodes, &LineTerminator);
-    DPRINT1("MMixerAddMixerControlsToDestinationLine pin=%lu status=%x nodes=%lu first=%lu term=%lu\n",
+    DPRINT("MMixerAddMixerControlsToDestinationLine pin=%lu status=%x nodes=%lu first=%lu term=%lu\n",
             PinId,
             Status,
             NodesCount,
