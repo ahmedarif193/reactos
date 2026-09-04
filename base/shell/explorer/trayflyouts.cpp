@@ -4823,6 +4823,24 @@ public:
         Relayout();
     }
 
+    UINT WifiToggleIcon()
+    {
+        if (m_bAirplane || !m_bWifiOn)
+            return IDI_FLU_WIFIOFF;
+
+        for (size_t i = 0; i < m_Rows.GetCount(); i++)
+        {
+            const TFYNETROW &row = m_Rows[i];
+
+            if (row.nType != 2 || !row.bConnected)
+                continue;
+            return row.nSignal >= 75 ? IDI_FLU_WIFI1 :
+                   row.nSignal >= 50 ? IDI_FLU_WIFI2 :
+                   row.nSignal >= 25 ? IDI_FLU_WIFI3 : IDI_FLU_WIFI4;
+        }
+        return IDI_FLU_WIFI4;
+    }
+
     VOID DrawToggle(HDC hdc, const RECT *prc, LPCWSTR pszLabel, BOOL bOn, BOOL bHot, BOOL bEnabled, UINT nIcon, BOOL bCompact = FALSE)
     {
         if (bHot && bEnabled)
@@ -4993,7 +5011,7 @@ public:
             DrawToggle(hdcMem, &m_rcAirplane, L"Airplane mode", m_bAirplane,
                        m_iHot == TFY_NETHIT_AIRPLANE, TRUE, IDI_FLU_AIRPLANE, TRUE);
             DrawToggle(hdcMem, &m_rcWifi, L"Wi-Fi", m_bWifiOn && !m_bAirplane,
-                       m_iHot == TFY_NETHIT_WIFI, !m_bAirplane, IDI_FLU_WIFI1, TRUE);
+                       m_iHot == TFY_NETHIT_WIFI, !m_bAirplane, WifiToggleIcon(), TRUE);
         }
         for (SIZE_T i = 0; i < m_Rows.GetCount(); i++)
         {
