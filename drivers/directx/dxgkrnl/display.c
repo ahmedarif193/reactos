@@ -2085,7 +2085,9 @@ DxgkpDisplayDispatch(
                 DXGKRNL_TRACE("DxgkpDisplayDispatch: shadow FB at VA=%p size=0x%lX\n",
                               FbVa, FbSize);
 
-                ReuseExisting = SharedSurface.ShadowFb != NULL && !SharedSurface.ShadowFbPoolOwned;
+                ReuseExisting = SharedSurface.ShadowFb != NULL &&
+                                (!SharedSurface.ShadowFbPoolOwned ||
+                                 SharedSurface.ShadowFbSize == FbSize);
                 StartTimer = SharedSurface.VidPnCommitted;
                 if (ReuseExisting)
                 {
@@ -2098,6 +2100,8 @@ DxgkpDisplayDispatch(
                         Status = STATUS_INVALID_BUFFER_SIZE;
                         break;
                     }
+                    if (SharedSurface.ShadowFbPoolOwned)
+                        InterlockedIncrement(&g_DisplayAdapter->ShadowFbMapCount);
                 }
                 else
                 {
@@ -2107,11 +2111,22 @@ DxgkpDisplayDispatch(
                     (VOID)KeWaitForSingleObject(&g_DisplayAdapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
                     DxgkpBeginSharedSurfaceMutationLocked(g_DisplayAdapter);
                     if (g_DisplayAdapter->ShadowFbPoolOwned)
-                        OldFb = g_DisplayAdapter->ShadowFb;
+                    {
+                        if (g_DisplayAdapter->ShadowFbMapCount > 0)
+                        {
+                            OldFb = g_DisplayAdapter->RetiredShadowFb;
+                            g_DisplayAdapter->RetiredShadowFb = g_DisplayAdapter->ShadowFb;
+                        }
+                        else
+                        {
+                            OldFb = g_DisplayAdapter->ShadowFb;
+                        }
+                    }
                     g_DisplayAdapter->ShadowFb = FbVa;
                     g_DisplayAdapter->ShadowFbPitch = Width * 4;
                     g_DisplayAdapter->ShadowFbSize = FbSize;
                     g_DisplayAdapter->ShadowFbPoolOwned = TRUE;
+                    g_DisplayAdapter->ShadowFbMapCount = 1;
                     DxgkpEndSharedSurfaceMutationLocked(g_DisplayAdapter);
                     KeReleaseMutex(&g_DisplayAdapter->SharedPrimaryMutex, FALSE);
                     if (OldFb != NULL)
@@ -2140,28 +2155,53 @@ DxgkpDisplayDispatch(
 
         case IOCTL_VIDEO_UNMAP_VIDEO_MEMORY:
         {
-            /*
-             * Unmap request.  Stop the present timer and free the shadow buffer.
-             */
-            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_UNMAP_VIDEO_MEMORY\n");
+            PVIDEO_MEMORY VideoMemory = (PVIDEO_MEMORY)Irp->AssociatedIrp.SystemBuffer;
+            PVOID RequestedVa = NULL;
 
+            DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_UNMAP_VIDEO_MEMORY\n");
+            if (VideoMemory != NULL &&
+                Stack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(VIDEO_MEMORY))
+            {
+                RequestedVa = VideoMemory->RequestedVirtualAddress;
+            }
             if (g_DisplayAdapter != NULL)
             {
                 PVOID OldFb = NULL;
+                BOOLEAN LastMapping = FALSE;
 
-                DxgkpStopPresentTimer(g_DisplayAdapter);
                 (VOID)KeWaitForSingleObject(&g_DisplayAdapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
-                DxgkpBeginSharedSurfaceMutationLocked(g_DisplayAdapter);
-                if (g_DisplayAdapter->ShadowFbPoolOwned)
+                if (RequestedVa != NULL && RequestedVa == g_DisplayAdapter->RetiredShadowFb)
                 {
-                    OldFb = g_DisplayAdapter->ShadowFb;
-                    g_DisplayAdapter->ShadowFb = NULL;
-                    g_DisplayAdapter->ShadowFbPitch = 0;
-                    g_DisplayAdapter->ShadowFbSize = 0;
-                    g_DisplayAdapter->ShadowFbPoolOwned = FALSE;
+                    OldFb = g_DisplayAdapter->RetiredShadowFb;
+                    g_DisplayAdapter->RetiredShadowFb = NULL;
                 }
-                DxgkpEndSharedSurfaceMutationLocked(g_DisplayAdapter);
+                else if (g_DisplayAdapter->ShadowFbPoolOwned &&
+                         (RequestedVa == NULL || RequestedVa == g_DisplayAdapter->ShadowFb))
+                {
+                    if (g_DisplayAdapter->ShadowFbMapCount > 1)
+                        g_DisplayAdapter->ShadowFbMapCount--;
+                    else
+                        LastMapping = TRUE;
+                }
                 KeReleaseMutex(&g_DisplayAdapter->SharedPrimaryMutex, FALSE);
+
+                if (LastMapping)
+                {
+                    DxgkpStopPresentTimer(g_DisplayAdapter);
+                    (VOID)KeWaitForSingleObject(&g_DisplayAdapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
+                    DxgkpBeginSharedSurfaceMutationLocked(g_DisplayAdapter);
+                    if (g_DisplayAdapter->ShadowFbPoolOwned)
+                    {
+                        OldFb = g_DisplayAdapter->ShadowFb;
+                        g_DisplayAdapter->ShadowFb = NULL;
+                        g_DisplayAdapter->ShadowFbPitch = 0;
+                        g_DisplayAdapter->ShadowFbSize = 0;
+                        g_DisplayAdapter->ShadowFbPoolOwned = FALSE;
+                        g_DisplayAdapter->ShadowFbMapCount = 0;
+                    }
+                    DxgkpEndSharedSurfaceMutationLocked(g_DisplayAdapter);
+                    KeReleaseMutex(&g_DisplayAdapter->SharedPrimaryMutex, FALSE);
+                }
                 if (OldFb != NULL)
                     ExFreePoolWithTag(OldFb, TAG_DXGK_DISPLAY);
             }
@@ -3141,6 +3181,12 @@ DxgkDisplayUnregister(
             Adapter->ShadowFbPitch = 0;
             Adapter->ShadowFbSize = 0;
             Adapter->ShadowFbPoolOwned = FALSE;
+            Adapter->ShadowFbMapCount = 0;
+        }
+        if (Adapter->RetiredShadowFb != NULL)
+        {
+            ExFreePoolWithTag(Adapter->RetiredShadowFb, TAG_DXGK_DISPLAY);
+            Adapter->RetiredShadowFb = NULL;
         }
         DxgkpEndSharedSurfaceMutationLocked(Adapter);
         KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);

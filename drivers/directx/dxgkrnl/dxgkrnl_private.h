@@ -923,6 +923,8 @@ struct _DXGKRNL_ADAPTER
     ULONG                       ShadowFbPitch;
     ULONG                       ShadowFbSize;
     BOOLEAN                     ShadowFbPoolOwned;
+    LONG                        ShadowFbMapCount;
+    PVOID                       RetiredShadowFb;
 
     /*
      * Display mode committed through CommitVidPn.  Set when the mode is
