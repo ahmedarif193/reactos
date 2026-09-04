@@ -1098,8 +1098,6 @@ BOOL ProcessAttach(HINSTANCE hinstDLL)
 /// @implemented
 VOID ProcessDetach(HINSTANCE hinstDLL)
 {
-    TF_DllDetachInOther();
-
     if (gfTFInitLib)
     {
         DetachIME();
@@ -1138,7 +1136,6 @@ DllMain(
         }
         case DLL_THREAD_DETACH:
         {
-            TF_DllDetachInOther();
             CtfImeThreadDetach();
             TLS::InternalDestroyTLS();
             break;

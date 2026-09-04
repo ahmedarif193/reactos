@@ -24,7 +24,6 @@
 @ stdcall TF_CreateLangBarItemMgr(ptr)
 @ stdcall TF_CreateLangBarMgr(ptr)
 @ stdcall TF_CreateThreadMgr(ptr)
-@ stdcall TF_DllDetachInOther()
 @ stdcall TF_GetGlobalCompartment(ptr)
 @ stdcall TF_GetInputScope(ptr ptr)
 @ stdcall TF_GetThreadMgr(ptr)

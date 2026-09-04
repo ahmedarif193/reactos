@@ -51,7 +51,6 @@ cpp_quote("BOOL WINAPI TF_IsFullScreenWindowAcitvated(VOID);")
 cpp_quote("HRESULT WINAPI TF_CUASAppFix(_In_ LPCSTR pszName);")
 cpp_quote("HRESULT WINAPI TF_ClearLangBarAddIns(_In_ REFGUID rguid);")
 cpp_quote("HRESULT WINAPI TF_GetInputScope(_In_opt_ HWND hWnd, _Out_ ITfInputScope **ppInputScope);")
-cpp_quote("BOOL WINAPI TF_DllDetachInOther(VOID);")
 
 cpp_quote("BOOL WINAPI")
 cpp_quote("TF_GetMlngHKL(")
