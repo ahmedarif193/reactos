@@ -10406,8 +10406,9 @@ DxgkAdapterStart(
                   StartInfo.AdapterLuid.HighPart,
                   StartInfo.AdapterLuid.LowPart);
 
-    /* Connect the interrupt before StartDevice, but hold ISR/DPC admission
-     * closed until the Level-3 StartDevice callback has returned. */
+    /* Connect the interrupt before StartDevice.  The miniport is required to
+     * enable its hardware interrupts from StartDevice and can wait for an
+     * interrupt-driven initialization completion before returning. */
     DxgkAcquireLevel3Transition(Adapter);
     DxgkBeginKmdExclusive(Adapter);
     InterlockedExchange(&Adapter->VidSchStopping, 1);
@@ -10476,6 +10477,12 @@ DxgkAdapterStart(
                           Adapter->InterruptMessageBased,
                           Adapter->InterruptMessageTable ?
                               Adapter->InterruptMessageTable->MessageCount : 1);
+
+            /* The connection is now a valid synchronization boundary.  Open
+             * ISR/DPC admission before calling StartDevice so a miniport can
+             * complete initialization work through its interrupt routine.
+             * Failure teardown closes and drains this gate before disconnect. */
+            DxgkUnblockInterruptCallbacks(Adapter);
         }
         else
         {
@@ -10518,10 +10525,12 @@ DxgkAdapterStart(
         DXGKRNL_ERR("DxgkAdapterStart: DxgkDdiStartDevice failed 0x%08lX (IRQs fired during start=%ld, vec=%lu msgbased=%d)\n",
                     Status, Adapter->InterruptCount,
                     Adapter->InterruptVector, Adapter->InterruptMessageBased);
-        /* StartDevice did not establish a callable miniport.  In particular,
-         * CollectDbgInfo can queue vendor work against half-built state and
-         * race the fallback restart.  Preserve the original start status and
-         * roll back display ownership without re-entering the failed KMD. */
+        /* Do not call another miniport DDI from this failure path.  StartDevice
+         * can nevertheless leave MiniportDeviceContext-owned objects alive
+         * for DxgkDdiRemoveDevice, and those objects may still own allocations
+         * obtained through the reverse callbacks.  Disconnect OS producers
+         * and roll back display ownership here, but keep the reverse-callback
+         * rundown and its tracked allocations alive through RemoveDevice. */
         InterlockedExchange(&Adapter->VidSchStopping, 1);
         DxgkpDisconnectAdapterInterrupt(Adapter);
         KeRemoveQueueDpc(&Adapter->DpcObject);
@@ -10564,7 +10573,6 @@ DxgkAdapterStart(
 
     DxgkpEnablePeriodicInterruptHandoff(Adapter);
     DxgkEndKmdExclusive(Adapter, TRUE);
-    DxgkUnblockInterruptCallbacks(Adapter);
     DxgkReleaseLevel3Transition(Adapter);
 
     DXGKRNL_TRACE("DxgkAdapterStart: started — Sources=%lu Children=%lu\n",
