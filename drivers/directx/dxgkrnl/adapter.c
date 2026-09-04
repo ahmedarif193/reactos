@@ -11977,6 +11977,14 @@ DxgkAdapterStart(
                          GeometryCached);
         }
     }
+    DXGKRNL_INFO("DxgkAdapterStart: adapter %p LUID=%08lx-%08lx service=%wZ sources=%lu %s\n",
+                 Adapter,
+                 Adapter->AdapterLuid.HighPart,
+                 Adapter->AdapterLuid.LowPart,
+                 &Adapter->MiniportContext->RegistryPath,
+                 Adapter->NumberOfVideoPresentSources,
+                 Adapter->MiniportContext->IsBasicDisplayFallback ? "(basic display fallback)" :
+                 Adapter->MiniportContext->IsDisplayOnlyDriver ? "(display only)" : "(full)");
     if (Adapter->PageTableLevelsValid)
     {
         Adapter->GpuMmuCapsValid = TRUE;
