@@ -3063,8 +3063,29 @@ DxgkpQueryAdapterInfoCaptured(
                                                     ARRAYSIZE(OpenGlInfo.UmdOpenGlIcdFileName));
                 if (!NT_SUCCESS(Status))
                 {
-                    DXGKRNL_WARN("DxgkQueryAdapterInfo: UMOPENGLINFO driver query failed 0x%08lx\n",
-                                 Status);
+                    /*
+                     * STATUS_OBJECT_NAME_NOT_FOUND is the documented answer for
+                     * an adapter that publishes no OpenGL ICD -- a display-only
+                     * adapter such as BasicDisplay -- not a failure.  Every
+                     * process that enumerates adapters asks once per adapter, so
+                     * say it a bounded number of times and keep the louder
+                     * warning for statuses that really are unexpected.
+                     */
+                    if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+                    {
+                        static LONG NoIcdReports = 0;
+
+                        if (InterlockedIncrement(&NoIcdReports) <= 4)
+                        {
+                            DXGKRNL_TRACE("DxgkQueryAdapterInfo: adapter %p publishes no "
+                                          "OpenGL ICD\n", Adapter);
+                        }
+                    }
+                    else
+                    {
+                        DXGKRNL_WARN("DxgkQueryAdapterInfo: UMOPENGLINFO driver query failed 0x%08lx\n",
+                                     Status);
+                    }
                     DXGKP_QUERY_RETURN(Status);
                 }
 
