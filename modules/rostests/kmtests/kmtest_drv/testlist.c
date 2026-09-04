@@ -78,6 +78,7 @@ KMT_TESTFUNC Test_ExResourceExtra;
 KMT_TESTFUNC Test_ExTimerExtra;
 KMT_TESTFUNC Test_ExTimeZone;
 KMT_TESTFUNC Test_ExLicenseDif;
+KMT_TESTFUNC Test_IoLargeMemoryResource;
 KMT_TESTFUNC Test_IoCancelKM;
 KMT_TESTFUNC Test_PsProcessInfo;
 KMT_TESTFUNC Test_PsEnergy;
@@ -402,6 +403,7 @@ const KMT_TEST TestList[] =
     { "ExWddmRtl",                         Test_ExWddmRtl },
     { "ExWddmTls",                         Test_ExWddmTls },
     { "ExWddmWindow",                      Test_ExWddmWindow },
+    { "IoLargeMemoryResource",              Test_IoLargeMemoryResource },
     { "IoCancelKM",                         Test_IoCancelKM },
     { "CmKeyKM",                            Test_CmKeyKM },
     { "EtwRegisterKM",                      Test_EtwRegisterKM },

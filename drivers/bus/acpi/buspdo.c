@@ -317,6 +317,41 @@ BuspRecordPciRootBusRange(
 }
 
 static
+USHORT
+BuspLargeMemoryType(
+    _In_ ULONGLONG Length,
+    _In_ ULONGLONG Alignment)
+{
+    /* A byte alignment is represented by zero in the scaled field. */
+    if (Length <= CM_RESOURCE_MEMORY_LARGE_40_MAXLEN &&
+        (Length & 0xFF) == 0 &&
+        (Alignment == 1 ||
+         (Alignment <= CM_RESOURCE_MEMORY_LARGE_40_MAXLEN &&
+          (Alignment & 0xFF) == 0)))
+    {
+        return CM_RESOURCE_MEMORY_LARGE_40;
+    }
+    if (Length <= CM_RESOURCE_MEMORY_LARGE_48_MAXLEN &&
+        (Length & 0xFFFF) == 0 &&
+        (Alignment == 1 ||
+         (Alignment <= CM_RESOURCE_MEMORY_LARGE_48_MAXLEN &&
+          (Alignment & 0xFFFF) == 0)))
+    {
+        return CM_RESOURCE_MEMORY_LARGE_48;
+    }
+    if (Length <= CM_RESOURCE_MEMORY_LARGE_64_MAXLEN &&
+        (Length & MAXULONG) == 0 &&
+        (Alignment == 1 ||
+         (Alignment <= CM_RESOURCE_MEMORY_LARGE_64_MAXLEN &&
+          (Alignment & MAXULONG) == 0)))
+    {
+        return CM_RESOURCE_MEMORY_LARGE_64;
+    }
+
+    return 0;
+}
+
+static
 BOOLEAN
 BuspUseAddressResource(
     _In_ BOOLEAN IsPciRoot,
@@ -331,20 +366,125 @@ BuspUseAddressResource(
     if (AddressLength == 0)
         return FALSE;
 
-    /* A PCI root may publish an address window larger than the 32-bit Length
-     * field used by ordinary resource descriptors.  Publish a representable
-     * prefix for its children; non-root consumers must remain exact. */
-    if (AddressLength > MAXULONG && !IsPciRoot)
+    return TRUE;
+}
+
+static
+BOOLEAN
+BuspUseAddress64Resource(
+    _In_ BOOLEAN IsPciRoot,
+    _In_ UCHAR ProducerConsumer,
+    _In_ UCHAR ResourceType,
+    _In_ ULONGLONG AddressLength,
+    _In_ ULONGLONG Granularity)
+{
+    ULONGLONG Alignment;
+
+    if (!BuspUseAddressResource(IsPciRoot, ProducerConsumer, AddressLength))
         return FALSE;
+    if (ResourceType > ACPI_BUS_NUMBER_RANGE)
+        return FALSE;
+    if (ResourceType == ACPI_MEMORY_RANGE)
+    {
+        Alignment = Granularity + 1;
+        if (Alignment == 0)
+            Alignment = 1;
+        if ((AddressLength > MAXULONG || Alignment > MAXULONG) &&
+            BuspLargeMemoryType(AddressLength, Alignment) == 0)
+        {
+            return FALSE;
+        }
+    }
+    else if (AddressLength > MAXULONG)
+    {
+        return FALSE;
+    }
 
     return TRUE;
+}
+
+/*
+ * Stores a memory length in a resource descriptor, switching to the
+ * large-memory form when it does not fit the 32-bit field.  A PCI root
+ * routinely produces a window of 4 GB or more for a discrete graphics
+ * adapter, and clamping it left the window a byte short of the aperture the
+ * firmware actually decodes, so nothing that size could ever be placed in it.
+ */
+static
+VOID
+BuspSetMemoryDescriptorLength(
+    _Inout_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor,
+    _In_ ULONGLONG AddressLength)
+{
+    USHORT LargeType;
+
+    if (AddressLength <= MAXULONG)
+    {
+        Descriptor->u.Memory.Length = (ULONG)AddressLength;
+        return;
+    }
+
+    Descriptor->Type = CmResourceTypeMemoryLarge;
+    LargeType = BuspLargeMemoryType(AddressLength, 1);
+    ASSERT(LargeType != 0);
+    Descriptor->Flags |= LargeType;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_40)
+    {
+        Descriptor->u.Memory40.Length40 = (ULONG)(AddressLength >> 8);
+    }
+    else if (LargeType == CM_RESOURCE_MEMORY_LARGE_48)
+    {
+        Descriptor->u.Memory48.Length48 = (ULONG)(AddressLength >> 16);
+    }
+    else
+    {
+        Descriptor->u.Memory64.Length64 = (ULONG)(AddressLength >> 32);
+    }
+}
+
+static
+VOID
+BuspSetMemoryRequirementLength(
+    _Inout_ PIO_RESOURCE_DESCRIPTOR Descriptor,
+    _In_ ULONGLONG AddressLength,
+    _In_ ULONGLONG Alignment)
+{
+    USHORT LargeType;
+
+    if (AddressLength <= MAXULONG && Alignment <= MAXULONG)
+    {
+        Descriptor->u.Memory.Length = (ULONG)AddressLength;
+        Descriptor->u.Memory.Alignment = (ULONG)Alignment;
+        return;
+    }
+
+    Descriptor->Type = CmResourceTypeMemoryLarge;
+    LargeType = BuspLargeMemoryType(AddressLength, Alignment);
+    ASSERT(LargeType != 0);
+    Descriptor->Flags |= LargeType;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_40)
+    {
+        Descriptor->u.Memory40.Length40 = (ULONG)(AddressLength >> 8);
+        Descriptor->u.Memory40.Alignment40 = Alignment == 1 ? 0 : (ULONG)(Alignment >> 8);
+    }
+    else if (LargeType == CM_RESOURCE_MEMORY_LARGE_48)
+    {
+        Descriptor->u.Memory48.Length48 = (ULONG)(AddressLength >> 16);
+        Descriptor->u.Memory48.Alignment48 = Alignment == 1 ? 0 : (ULONG)(Alignment >> 16);
+    }
+    else
+    {
+        Descriptor->u.Memory64.Length64 = (ULONG)(AddressLength >> 32);
+        Descriptor->u.Memory64.Alignment64 = Alignment == 1 ? 0 : (ULONG)(Alignment >> 32);
+    }
 }
 
 static
 ULONG
 BuspGetAddressResourceLength(_In_ ULONGLONG AddressLength)
 {
-    return (AddressLength > MAXULONG) ? MAXULONG : (ULONG)AddressLength;
+    ASSERT(AddressLength <= MAXULONG);
+    return (ULONG)AddressLength;
 }
 
 static
@@ -751,7 +891,11 @@ BuspCountRequirementsFromAcpiResources(
             case ACPI_RESOURCE_TYPE_ADDRESS64:
             {
                 ACPI_RESOURCE_ADDRESS64 *addr64 = &resource->Data.Address64;
-                if (BuspUseAddressResource(IsPciRoot, addr64->ProducerConsumer, addr64->Address.AddressLength))
+                if (BuspUseAddress64Resource(IsPciRoot,
+                                             addr64->ProducerConsumer,
+                                             addr64->ResourceType,
+                                             addr64->Address.AddressLength,
+                                             addr64->Address.Granularity))
                 {
                     NumberOfResources++;
                     if (addr64->ResourceType == ACPI_BUS_NUMBER_RANGE)
@@ -768,7 +912,11 @@ BuspCountRequirementsFromAcpiResources(
             case ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64:
             {
                 ACPI_RESOURCE_EXTENDED_ADDRESS64 *addrx = &resource->Data.ExtAddress64;
-                if (BuspUseAddressResource(IsPciRoot, addrx->ProducerConsumer, addrx->Address.AddressLength))
+                if (BuspUseAddress64Resource(IsPciRoot,
+                                             addrx->ProducerConsumer,
+                                             addrx->ResourceType,
+                                             addrx->Address.AddressLength,
+                                             addrx->Address.Granularity))
                 {
                     NumberOfResources++;
                     if (addrx->ResourceType == ACPI_BUS_NUMBER_RANGE)
@@ -1205,7 +1353,11 @@ BuspCreateRequirementsListFromAcpiResources(
             {
                 ACPI_RESOURCE_ADDRESS64 *addr64 = &resource->Data.Address64;
 
-                if (!BuspUseAddressResource(IsPciRoot, addr64->ProducerConsumer, addr64->Address.AddressLength))
+                if (!BuspUseAddress64Resource(IsPciRoot,
+                                              addr64->ProducerConsumer,
+                                              addr64->ResourceType,
+                                              addr64->Address.AddressLength,
+                                              addr64->Address.Granularity))
                     break;
 
                 RequirementDescriptor->Option = CurrentRes ? 0 : IO_RESOURCE_PREFERRED;
@@ -1244,7 +1396,7 @@ BuspCreateRequirementsListFromAcpiResources(
                 {
                     ULONGLONG Minimum = addr64->Address.Minimum + addr64->Address.TranslationOffset;
                     ULONGLONG Maximum = addr64->Address.Maximum + addr64->Address.TranslationOffset;
-                    ULONG Alignment = (ULONG)addr64->Address.Granularity + 1;
+                    ULONGLONG Alignment = addr64->Address.Granularity + 1;
 
                     if (Alignment == 0)
                         Alignment = 1;
@@ -1265,8 +1417,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     if (IsPciRoot)
                         RequirementDescriptor->Flags |= CM_RESOURCE_MEMORY_WINDOW_DECODE;
 
-                    RequirementDescriptor->u.Memory.Alignment = Alignment;
-                    RequirementDescriptor->u.Memory.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
+                    BuspSetMemoryRequirementLength(RequirementDescriptor, addr64->Address.AddressLength, Alignment);
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addr64->Address.AddressLength - 1;
                 }
@@ -1279,7 +1430,11 @@ BuspCreateRequirementsListFromAcpiResources(
             {
                 ACPI_RESOURCE_EXTENDED_ADDRESS64 *addrx = &resource->Data.ExtAddress64;
 
-                if (!BuspUseAddressResource(IsPciRoot, addrx->ProducerConsumer, addrx->Address.AddressLength))
+                if (!BuspUseAddress64Resource(IsPciRoot,
+                                              addrx->ProducerConsumer,
+                                              addrx->ResourceType,
+                                              addrx->Address.AddressLength,
+                                              addrx->Address.Granularity))
                     break;
 
                 RequirementDescriptor->Option = CurrentRes ? 0 : IO_RESOURCE_PREFERRED;
@@ -1318,7 +1473,7 @@ BuspCreateRequirementsListFromAcpiResources(
                 {
                     ULONGLONG Minimum = addrx->Address.Minimum + addrx->Address.TranslationOffset;
                     ULONGLONG Maximum = addrx->Address.Maximum + addrx->Address.TranslationOffset;
-                    ULONG Alignment = (ULONG)addrx->Address.Granularity + 1;
+                    ULONGLONG Alignment = addrx->Address.Granularity + 1;
 
                     if (Alignment == 0)
                         Alignment = 1;
@@ -1339,8 +1494,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     if (IsPciRoot)
                         RequirementDescriptor->Flags |= CM_RESOURCE_MEMORY_WINDOW_DECODE;
 
-                    RequirementDescriptor->u.Memory.Alignment = Alignment;
-                    RequirementDescriptor->u.Memory.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
+                    BuspSetMemoryRequirementLength(RequirementDescriptor, addrx->Address.AddressLength, Alignment);
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
                     RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addrx->Address.AddressLength - 1;
                 }
@@ -1885,7 +2039,11 @@ BuspCreateResourceListFromAcpiResources(
             case ACPI_RESOURCE_TYPE_ADDRESS64:
             {
                 ACPI_RESOURCE_ADDRESS64 *addr64 = &resource->Data.Address64;
-                if (!BuspUseAddressResource(IsPciRoot, addr64->ProducerConsumer, addr64->Address.AddressLength))
+                if (!BuspUseAddress64Resource(IsPciRoot,
+                                              addr64->ProducerConsumer,
+                                              addr64->ResourceType,
+                                              addr64->Address.AddressLength,
+                                              addr64->Address.Granularity))
                     break;
 
                 if (addr64->ResourceType == ACPI_BUS_NUMBER_RANGE)
@@ -1929,7 +2087,7 @@ BuspCreateResourceListFromAcpiResources(
                     }
                     ResourceDescriptor->u.Memory.Start.QuadPart =
                         addr64->Address.Minimum + addr64->Address.TranslationOffset;
-                    ResourceDescriptor->u.Memory.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
+                    BuspSetMemoryDescriptorLength(ResourceDescriptor, addr64->Address.AddressLength);
                     if (IsPciRoot)
                     {
                         ResourceDescriptor->Flags |= CM_RESOURCE_MEMORY_WINDOW_DECODE;
@@ -1946,7 +2104,11 @@ BuspCreateResourceListFromAcpiResources(
             case ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64:
             {
                 ACPI_RESOURCE_EXTENDED_ADDRESS64 *addrx = &resource->Data.ExtAddress64;
-                if (!BuspUseAddressResource(IsPciRoot, addrx->ProducerConsumer, addrx->Address.AddressLength))
+                if (!BuspUseAddress64Resource(IsPciRoot,
+                                              addrx->ProducerConsumer,
+                                              addrx->ResourceType,
+                                              addrx->Address.AddressLength,
+                                              addrx->Address.Granularity))
                     break;
 
                 if (addrx->ResourceType == ACPI_BUS_NUMBER_RANGE)
@@ -1990,7 +2152,7 @@ BuspCreateResourceListFromAcpiResources(
                     }
                     ResourceDescriptor->u.Memory.Start.QuadPart =
                         addrx->Address.Minimum + addrx->Address.TranslationOffset;
-                    ResourceDescriptor->u.Memory.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
+                    BuspSetMemoryDescriptorLength(ResourceDescriptor, addrx->Address.AddressLength);
                     if (IsPciRoot)
                     {
                         ResourceDescriptor->Flags |= CM_RESOURCE_MEMORY_WINDOW_DECODE;

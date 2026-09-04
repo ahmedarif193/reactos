@@ -234,42 +234,141 @@ IopFindBusNumberResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESO
 }
 
 static
+ULONGLONG
+IopMemoryRequirementLength(
+    _In_ PIO_RESOURCE_DESCRIPTOR IoDesc)
+{
+    USHORT LargeType;
+
+    if (IoDesc->Type != CmResourceTypeMemoryLarge)
+        return IoDesc->u.Memory.Length;
+
+    LargeType = IoDesc->Flags & CM_RESOURCE_MEMORY_LARGE;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_40)
+        return (ULONGLONG)IoDesc->u.Memory40.Length40 << 8;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_48)
+        return (ULONGLONG)IoDesc->u.Memory48.Length48 << 16;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_64)
+        return (ULONGLONG)IoDesc->u.Memory64.Length64 << 32;
+
+    return 0;
+}
+
+static
+ULONGLONG
+IopMemoryRequirementAlignment(
+    _In_ PIO_RESOURCE_DESCRIPTOR IoDesc)
+{
+    ULONGLONG Alignment;
+    USHORT LargeType;
+
+    if (IoDesc->Type != CmResourceTypeMemoryLarge)
+        Alignment = IoDesc->u.Memory.Alignment;
+    else if ((LargeType = IoDesc->Flags & CM_RESOURCE_MEMORY_LARGE) == CM_RESOURCE_MEMORY_LARGE_40)
+        Alignment = (ULONGLONG)IoDesc->u.Memory40.Alignment40 << 8;
+    else if (LargeType == CM_RESOURCE_MEMORY_LARGE_48)
+        Alignment = (ULONGLONG)IoDesc->u.Memory48.Alignment48 << 16;
+    else if (LargeType == CM_RESOURCE_MEMORY_LARGE_64)
+        Alignment = (ULONGLONG)IoDesc->u.Memory64.Alignment64 << 32;
+    else
+        return 0;
+
+    return Alignment != 0 ? Alignment : 1;
+}
+
+static
+ULONGLONG
+IopMemoryDescriptorLength(
+    _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
+{
+    USHORT LargeType;
+
+    if (CmDesc->Type != CmResourceTypeMemoryLarge)
+        return CmDesc->u.Memory.Length;
+
+    LargeType = CmDesc->Flags & CM_RESOURCE_MEMORY_LARGE;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_40)
+        return (ULONGLONG)CmDesc->u.Memory40.Length40 << 8;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_48)
+        return (ULONGLONG)CmDesc->u.Memory48.Length48 << 16;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_64)
+        return (ULONGLONG)CmDesc->u.Memory64.Length64 << 32;
+
+    return 0;
+}
+
+static
+VOID
+IopSetMemoryDescriptor(
+    _Inout_ PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc,
+    _In_ ULONGLONG Start,
+    _In_ ULONGLONG Length)
+{
+    USHORT LargeType;
+
+    if (CmDesc->Type != CmResourceTypeMemoryLarge)
+    {
+        CmDesc->u.Memory.Start.QuadPart = (LONGLONG)Start;
+        CmDesc->u.Memory.Length = (ULONG)Length;
+        return;
+    }
+
+    LargeType = CmDesc->Flags & CM_RESOURCE_MEMORY_LARGE;
+    if (LargeType == CM_RESOURCE_MEMORY_LARGE_40)
+    {
+        CmDesc->u.Memory40.Start.QuadPart = (LONGLONG)Start;
+        CmDesc->u.Memory40.Length40 = (ULONG)(Length >> 8);
+    }
+    else if (LargeType == CM_RESOURCE_MEMORY_LARGE_48)
+    {
+        CmDesc->u.Memory48.Start.QuadPart = (LONGLONG)Start;
+        CmDesc->u.Memory48.Length48 = (ULONG)(Length >> 16);
+    }
+    else if (LargeType == CM_RESOURCE_MEMORY_LARGE_64)
+    {
+        CmDesc->u.Memory64.Start.QuadPart = (LONGLONG)Start;
+        CmDesc->u.Memory64.Length64 = (ULONG)(Length >> 32);
+    }
+}
+
+static
 BOOLEAN
 IopFindMemoryResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_LIST PendingList, OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc, _In_opt_ PDEVICE_NODE DeviceNode)
 {
     ULONGLONG Start;
+    ULONGLONG Length;
+    ULONGLONG Alignment;
+    ULONGLONG Minimum;
+    ULONGLONG Maximum;
     CM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDesc;
 
     ASSERT(IoDesc->Type == CmDesc->Type);
-    ASSERT(IoDesc->Type == CmResourceTypeMemory);
+    ASSERT(IoDesc->Type == CmResourceTypeMemory ||
+           IoDesc->Type == CmResourceTypeMemoryLarge);
 
-    /* HACK */
-    if (IoDesc->u.Memory.Alignment == 0)
-        IoDesc->u.Memory.Alignment = 1;
+    Length = IopMemoryRequirementLength(IoDesc);
+    Alignment = IopMemoryRequirementAlignment(IoDesc);
+    Minimum = (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart;
+    Maximum = (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart;
 
-    if (IoDesc->u.Memory.Length == 0 ||
-        (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart >
-            (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart ||
-        IoDesc->u.Memory.Length - 1 >
-            (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart -
-            (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart)
+    if (Length == 0 ||
+        Minimum > Maximum ||
+        Length - 1 > Maximum - Minimum)
     {
         return FALSE;
     }
 
-    for (Start = (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart;
-         Start <= (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart - IoDesc->u.Memory.Length + 1;
-         Start += IoDesc->u.Memory.Alignment)
+    for (Start = Minimum;
+         Start <= Maximum - Length + 1;
+         Start += Alignment)
     {
-        CmDesc->u.Memory.Length = IoDesc->u.Memory.Length;
-        CmDesc->u.Memory.Start.QuadPart = (LONGLONG)Start;
+        IopSetMemoryDescriptor(CmDesc, Start, Length);
 
         if (IopCheckDescriptorForConflict(CmDesc, PendingList, &ConflictingDesc, DeviceNode))
         {
-            ULONGLONG Alignment = IoDesc->u.Memory.Alignment;
             ULONGLONG ConflictEnd =
                 (ULONGLONG)ConflictingDesc.u.Memory.Start.QuadPart +
-                ConflictingDesc.u.Memory.Length;
+                IopMemoryDescriptorLength(&ConflictingDesc);
             ULONGLONG NextStart;
 
             if (ConflictEnd > MAXULONGLONG - (Alignment - 1))
@@ -284,7 +383,7 @@ IopFindMemoryResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURC
         }
         else
         {
-            DPRINT1("Satisfying memory requirement with 0x%I64x (length: 0x%x)\n", Start, CmDesc->u.Memory.Length);
+            DPRINT1("Satisfying memory requirement with 0x%I64x (length: 0x%I64x)\n", Start, Length);
             return TRUE;
         }
     }
@@ -676,9 +775,15 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                    but only one is allowed and it must be the last one in the list! */
                 PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc = &PartialList->PartialDescriptors[iii];
 
-                /* First check types */
-                if (IoDesc->Type != CmDesc->Type)
+                /* The ordinary and large forms describe the same resource. */
+                if (IoDesc->Type != CmDesc->Type &&
+                    !((IoDesc->Type == CmResourceTypeMemory ||
+                       IoDesc->Type == CmResourceTypeMemoryLarge) &&
+                      (CmDesc->Type == CmResourceTypeMemory ||
+                       CmDesc->Type == CmResourceTypeMemoryLarge)))
+                {
                     continue;
+                }
 
                 switch (IoDesc->Type)
                 {
@@ -713,24 +818,29 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                         }
                         break;
 
+                    case CmResourceTypeMemoryLarge:
                     case CmResourceTypeMemory:
                     case CmResourceTypePort:
                         /* Make sure the length matches and it satisfies our address range */
-                        if (CmDesc->u.Memory.Length == IoDesc->u.Memory.Length &&
+                        if (IopMemoryDescriptorLength(CmDesc) == IopMemoryRequirementLength(IoDesc) &&
                             (ULONGLONG)CmDesc->u.Memory.Start.QuadPart >= (ULONGLONG)IoDesc->u.Memory.MinimumAddress.QuadPart &&
-                            (ULONGLONG)CmDesc->u.Memory.Start.QuadPart + CmDesc->u.Memory.Length - 1 <= (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart)
+                            (ULONGLONG)CmDesc->u.Memory.Start.QuadPart <= (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart &&
+                            IopMemoryDescriptorLength(CmDesc) != 0 &&
+                            IopMemoryDescriptorLength(CmDesc) - 1 <=
+                                (ULONGLONG)IoDesc->u.Memory.MaximumAddress.QuadPart -
+                                (ULONGLONG)CmDesc->u.Memory.Start.QuadPart)
                         {
                             /* Found it */
                             Matched = TRUE;
                         }
                         else
                         {
-                            DPRINT("Memory/Port - Not a match! 0x%I64x with length 0x%x not inside 0x%I64x to 0x%I64x with length 0x%x\n",
+                            DPRINT("Memory/Port - Not a match! 0x%I64x with length 0x%I64x not inside 0x%I64x to 0x%I64x with length 0x%I64x\n",
                                    CmDesc->u.Memory.Start.QuadPart,
-                                   CmDesc->u.Memory.Length,
+                                   IopMemoryDescriptorLength(CmDesc),
                                    IoDesc->u.Memory.MinimumAddress.QuadPart,
                                    IoDesc->u.Memory.MaximumAddress.QuadPart,
-                                   IoDesc->u.Memory.Length);
+                                   IopMemoryRequirementLength(IoDesc));
                         }
                         break;
 
@@ -842,13 +952,14 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                         }
                         break;
 
+                    case CmResourceTypeMemoryLarge:
                     case CmResourceTypeMemory:
                         /* Find an available memory range */
                         if (!IopFindMemoryResource(IoDesc, *ResourceList, &NewDesc, DeviceNode))
                         {
-                            DPRINT1("Failed to find an available memory resource (0x%I64x to 0x%I64x length: 0x%x)\n",
+                            DPRINT1("Failed to find an available memory resource (0x%I64x to 0x%I64x length: 0x%I64x)\n",
                                     IoDesc->u.Memory.MinimumAddress.QuadPart, IoDesc->u.Memory.MaximumAddress.QuadPart,
-                                    IoDesc->u.Memory.Length);
+                                    IopMemoryRequirementLength(IoDesc));
 
                             FoundResource = FALSE;
                         }
@@ -1025,21 +1136,28 @@ IopCheckResourceDescriptor(IN PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc, IN PCM_RE
                 ResDesc2->ShareDisposition == CmResourceShareShared)
                 continue;
 
-            /* Make sure we're comparing the same types */
-            if (ResDesc->Type != ResDesc2->Type)
+            /* Both memory descriptor forms occupy the same address space. */
+            if (ResDesc->Type != ResDesc2->Type &&
+                !((ResDesc->Type == CmResourceTypeMemory ||
+                   ResDesc->Type == CmResourceTypeMemoryLarge) &&
+                  (ResDesc2->Type == CmResourceTypeMemory ||
+                   ResDesc2->Type == CmResourceTypeMemoryLarge)))
+            {
                 continue;
+            }
 
             switch (ResDesc->Type)
             {
+                case CmResourceTypeMemoryLarge:
                 case CmResourceTypeMemory:
                 {
                     /* NOTE: ranges are in a form [x1;x2) */
                     UINT64 rStart = (UINT64)ResDesc->u.Memory.Start.QuadPart;
                     UINT64 rEnd = (UINT64)ResDesc->u.Memory.Start.QuadPart
-                                  + ResDesc->u.Memory.Length;
+                                  + IopMemoryDescriptorLength(ResDesc);
                     UINT64 r2Start = (UINT64)ResDesc2->u.Memory.Start.QuadPart;
                     UINT64 r2End = (UINT64)ResDesc2->u.Memory.Start.QuadPart
-                                   + ResDesc2->u.Memory.Length;
+                                   + IopMemoryDescriptorLength(ResDesc2);
 
                     if (rStart < r2End && r2Start < rEnd)
                     {
@@ -1555,6 +1673,10 @@ IopTranslateDeviceResources(
                }
                break;
             }
+            /* The start address occupies the same place in every memory
+             * form, so a large window translates exactly like an ordinary
+             * one; only the length is stored differently. */
+            case CmResourceTypeMemoryLarge:
             case CmResourceTypeMemory:
             {
                ULONG AddressSpace = 0; /* Memory space */

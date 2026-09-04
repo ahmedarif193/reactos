@@ -3361,6 +3361,29 @@ typedef struct _IO_RESOURCE_DESCRIPTOR {
       ULONG Reserved1;
       ULONG Reserved2;
     } ConfigData;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* Describes a memory requirement larger than MAXULONG.  The length and
+     * alignment are scaled down by 8, 16 or 32 bits, selected by the
+     * CM_RESOURCE_MEMORY_LARGE_40/48/64 flag on the descriptor. */
+    struct {
+      ULONG Length40;
+      ULONG Alignment40;
+      PHYSICAL_ADDRESS MinimumAddress;
+      PHYSICAL_ADDRESS MaximumAddress;
+    } Memory40;
+    struct {
+      ULONG Length48;
+      ULONG Alignment48;
+      PHYSICAL_ADDRESS MinimumAddress;
+      PHYSICAL_ADDRESS MaximumAddress;
+    } Memory48;
+    struct {
+      ULONG Length64;
+      ULONG Alignment64;
+      PHYSICAL_ADDRESS MinimumAddress;
+      PHYSICAL_ADDRESS MaximumAddress;
+    } Memory64;
+#endif
     struct {
       UCHAR Class;
       UCHAR Type;
