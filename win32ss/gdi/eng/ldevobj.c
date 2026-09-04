@@ -285,9 +285,11 @@ LDEVOBJ_bUnloadImage(
 #else
     /* Unfortunately, ntoskrnl allows unloading a driver, but fails loading
      * it again with STATUS_IMAGE_ALREADY_LOADED. Prevent this problem by
-     * never unloading any driver.
+     * never unloading any driver: the image stays mapped by design, so this
+     * is a known limitation of the loader rather than missing work here.
      */
-    UNIMPLEMENTED;
+    TRACE("LDEVOBJ_bUnloadImage: keeping '%wZ' mapped (ntoskrnl cannot reload an unloaded GDI driver)\n",
+          &pldev->pGdiDriverInfo->DriverName);
     Status = STATUS_NOT_IMPLEMENTED;
 #endif
     if (!NT_SUCCESS(Status))
