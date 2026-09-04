@@ -41,14 +41,18 @@ PITEMID_CHILD ILCreateNetConnectItem(INetConnection * pItem)
     NETCON_PROPERTIES * pProperties;
     PNETCONIDSTRUCT pnetid;
     PWCHAR pwchName;
+    PCWSTR pszName, pszDeviceName;
 
     if (pItem->GetProperties(&pProperties) != S_OK)
         return NULL;
 
+    pszName = pProperties->pszwName ? pProperties->pszwName : L"";
+    pszDeviceName = pProperties->pszwDeviceName ? pProperties->pszwDeviceName : L"";
+
     size = sizeof(WORD); /* nr of bytes in this item */
     size += sizeof(NETCONIDSTRUCT);
-    size += (wcslen(pProperties->pszwName) + 1) * sizeof(WCHAR);
-    size += (wcslen(pProperties->pszwDeviceName) + 1) * sizeof(WCHAR);
+    size += (wcslen(pszName) + 1) * sizeof(WCHAR);
+    size += (wcslen(pszDeviceName) + 1) * sizeof(WCHAR);
 
     /* Allocate enough memory for the trailing id which will indicate that this is a simple id */
     pidl = static_cast<LPITEMIDLIST>(SHAlloc(size + sizeof(SHITEMID)));
@@ -66,13 +70,13 @@ PITEMID_CHILD ILCreateNetConnectItem(INetConnection * pItem)
     pnetid->MediaType = pProperties->MediaType;
     pnetid->dwCharacter = pProperties->dwCharacter;
     pnetid->uNameOffset = sizeof(NETCONIDSTRUCT);
-    pnetid->uDeviceNameOffset = ULONG(pnetid->uNameOffset + (wcslen(pProperties->pszwName) + 1) * sizeof(WCHAR));
+    pnetid->uDeviceNameOffset = ULONG(pnetid->uNameOffset + (wcslen(pszName) + 1) * sizeof(WCHAR));
 
     pwchName = ILGetConnName(pidl);
-    wcscpy(pwchName, pProperties->pszwName);
+    wcscpy(pwchName, pszName);
 
     pwchName = ILGetDeviceName(pidl);
-    wcscpy(pwchName, pProperties->pszwDeviceName);
+    wcscpy(pwchName, pszDeviceName);
 
     /* Set the trailing id to null */
     memset((void*)((ULONG_PTR)pidl + size), 0, sizeof(SHITEMID));
