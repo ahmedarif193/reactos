@@ -30,36 +30,43 @@ PVOID KernelVerifier;
 /* PUBLIC FUNCTIONS ***********************************************************/
 
 /*
- * @unimplemented
+ * Pageable driver sections are always resident here: the paging executive
+ * is disabled (MmDisablePagingExecutive) and MiSetPagingOfDriver never
+ * makes an image PTE pageable, so a lock has nothing to bring in and an
+ * unlock nothing to release.  The section handle is the address the caller
+ * passed, which is all MmLockPageableSectionByHandle needs to find it.
+ */
+
+/*
+ * @implemented
  */
 VOID
 NTAPI
 MmUnlockPageableImageSection(IN PVOID ImageSectionHandle)
 {
-    static ULONG Warn; if (!Warn++) UNIMPLEMENTED;
+    UNREFERENCED_PARAMETER(ImageSectionHandle);
+    ASSERT(MmDisablePagingExecutive);
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 VOID
 NTAPI
 MmLockPageableSectionByHandle(IN PVOID ImageSectionHandle)
 {
-    UNIMPLEMENTED;
+    UNREFERENCED_PARAMETER(ImageSectionHandle);
+    ASSERT(MmDisablePagingExecutive);
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 PVOID
 NTAPI
 MmLockPageableDataSection(IN PVOID AddressWithinSection)
 {
-    //
-    // We should just find the section and call MmLockPageableSectionByHandle
-    //
-    static ULONG Warn; if (!Warn++) UNIMPLEMENTED;
+    ASSERT(MmDisablePagingExecutive);
     return AddressWithinSection;
 }
 
