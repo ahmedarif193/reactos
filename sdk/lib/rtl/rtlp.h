@@ -199,15 +199,37 @@ RtlpExecuteHandlerForUnwind(PEXCEPTION_RECORD ExceptionRecord,
                             PCONTEXT Context,
                             PVOID DispatcherContext,
                             PEXCEPTION_ROUTINE ExceptionHandler);
-#else
+#elif !defined(_M_ARM64)
 EXCEPTION_DISPOSITION
 NTAPI
-RtlpExecuteHandlerForUnwind(
-    _Inout_ struct _EXCEPTION_RECORD *ExceptionRecord,
-    _In_ PVOID EstablisherFrame,
-    _Inout_ struct _CONTEXT *ContextRecord,
-    _In_ PVOID DispatcherContext);
+RtlpExecuteHandlerForUnwind(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _In_ PVOID DispatcherContext);
 
+#endif
+
+/* arm64/except_asm.S */
+
+#ifdef _M_ARM64
+EXCEPTION_DISPOSITION
+NTAPI
+RtlpExecuteHandlerForException(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _Inout_ PDISPATCHER_CONTEXT DispatcherContext, _In_ PEXCEPTION_ROUTINE ExceptionRoutine);
+
+EXCEPTION_DISPOSITION
+NTAPI
+RtlpExecuteHandlerForUnwind(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _Inout_ PDISPATCHER_CONTEXT DispatcherContext, _In_ PEXCEPTION_ROUTINE ExceptionRoutine);
+
+/* arm64/except.c */
+
+EXCEPTION_DISPOSITION
+NTAPI
+RtlpExceptionHandler(_In_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _Inout_ PVOID DispatcherContext);
+
+EXCEPTION_DISPOSITION
+NTAPI
+RtlpUnwindHandler(_In_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _Inout_ PVOID DispatcherContext);
+
+VOID
+NTAPI
+RtlpArm64RestoreCollidedFrame(_Inout_ PDISPATCHER_CONTEXT DispatcherContext, _Out_ struct _CONTEXT *UnwindContext, _Out_writes_bytes_(NonVolatileRegistersLength) PVOID NonVolatileRegisters, _In_ ULONG NonVolatileRegistersLength, _Out_ PULONG64 EstablisherFrame);
 #endif
 
 VOID

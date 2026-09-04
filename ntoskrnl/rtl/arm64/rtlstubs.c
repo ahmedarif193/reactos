@@ -46,6 +46,14 @@ typedef union _RTL_ARM64_NONVOLATILE_REGISTERS
     };
 } RTL_ARM64_NONVOLATILE_REGISTERS;
 
+/* sdk/lib/rtl/arm64/except_asm.S - runs a termination handler inside a frame
+ * guarded by RtlpUnwindHandler, so a second unwind through it is reported as a
+ * collided unwind instead of running the handler twice. */
+EXCEPTION_DISPOSITION NTAPI RtlpExecuteHandlerForUnwind(_Inout_ PEXCEPTION_RECORD ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ PCONTEXT ContextRecord, _Inout_ PDISPATCHER_CONTEXT DispatcherContext, _In_ PEXCEPTION_ROUTINE ExceptionRoutine);
+
+/* sdk/lib/rtl/arm64/except.c */
+VOID NTAPI RtlpArm64RestoreCollidedFrame(_Inout_ PDISPATCHER_CONTEXT DispatcherContext, _Out_ PCONTEXT UnwindContext, _Out_writes_bytes_(NonVolatileRegistersLength) PVOID NonVolatileRegisters, _In_ ULONG NonVolatileRegistersLength, _Out_ PULONG64 EstablisherFrame);
+
 VOID NTAPI RtlRestoreContext(_In_ PCONTEXT ContextRecord, _In_opt_ PEXCEPTION_RECORD ExceptionRecord);
 
 PVOID
@@ -703,7 +711,7 @@ RtlUnwindEx(
     UnwindContext = *ContextRecord;
 
     RtlZeroMemory(&DispatcherContext, sizeof(DispatcherContext));
-    DispatcherContext.ContextRecord = &UnwindContext;
+    DispatcherContext.ContextRecord = ContextRecord;
     DispatcherContext.HistoryTable = HistoryTable;
     DispatcherContext.TargetPc = (ULONG64)(ULONG_PTR)TargetIp;
     DispatcherContext.NonVolatileRegisters = NonVolatileRegisters.Buffer;
@@ -769,11 +777,6 @@ RtlUnwindEx(
 
         if (ExceptionRoutine != NULL)
         {
-            if (HaveTarget && EstablisherFrame == (ULONG64)(ULONG_PTR)TargetFrame)
-            {
-                ExceptionRecord->ExceptionFlags |= EXCEPTION_TARGET_UNWIND;
-            }
-
             DispatcherContext.ImageBase = ImageBase;
             DispatcherContext.FunctionEntry = FunctionEntry;
             DispatcherContext.LanguageHandler = ExceptionRoutine;
@@ -782,10 +785,12 @@ RtlUnwindEx(
 
             do
             {
-                Disposition = ExceptionRoutine(ExceptionRecord,
-                                               (PVOID)EstablisherFrame,
-                                               ContextRecord,
-                                               &DispatcherContext);
+                if (HaveTarget && EstablisherFrame == (ULONG64)(ULONG_PTR)TargetFrame)
+                {
+                    ExceptionRecord->ExceptionFlags |= EXCEPTION_TARGET_UNWIND;
+                }
+
+                Disposition = RtlpExecuteHandlerForUnwind(ExceptionRecord, (PVOID)EstablisherFrame, ContextRecord, &DispatcherContext, DispatcherContext.LanguageHandler);
 
                 ExceptionRecord->ExceptionFlags &= ~(EXCEPTION_TARGET_UNWIND |
                                                      EXCEPTION_COLLIDED_UNWIND);
@@ -800,9 +805,8 @@ RtlUnwindEx(
                 }
                 else if (Disposition == ExceptionCollidedUnwind)
                 {
-                    UnwindContext = *ContextRecord;
-                    DispatcherContext.ContextRecord = &UnwindContext;
-                    EstablisherFrame = DispatcherContext.EstablisherFrame;
+                    RtlpArm64RestoreCollidedFrame(&DispatcherContext, &UnwindContext, NonVolatileRegisters.Buffer, sizeof(NonVolatileRegisters.Buffer), &EstablisherFrame);
+                    DispatcherContext.ContextRecord = ContextRecord;
                     ExceptionRecord->ExceptionFlags |= EXCEPTION_COLLIDED_UNWIND;
                 }
                 else if (Disposition != ExceptionContinueSearch)
