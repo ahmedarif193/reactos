@@ -18,10 +18,10 @@ if(ARCH STREQUAL "i386")
 elseif(ARCH STREQUAL "amd64")
     list(APPEND LIBCNTPR_MEM_SOURCE
         mem/memchr.c
-        mem/memset.c
     )
     list(APPEND LIBCNTPR_MEM_ASM_SOURCE
         mem/amd64/memmove_asm.s
+        mem/amd64/memset_asm.s
     )
 elseif(ARCH STREQUAL "arm64")
     list(APPEND LIBCNTPR_MEM_SOURCE
