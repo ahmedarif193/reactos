@@ -92,12 +92,11 @@ EDK2 DXE Drivers
     DpcDxe.efi              Deferred Procedure Call (dependency of MnpDxe)
     RngDxe.efi              Random Number Generator (RDRAND)
     Hash2DxeCrypto.efi      Hash2 service binding (required by TcpDxe)
+    SnpDxe.efi              Simple Network Protocol over the UNDI driver
     MnpDxe.efi              Managed Network Protocol
     ArpDxe.efi              Address Resolution Protocol
     Ip4Dxe.efi              IPv4 network layer
-    Udp4Dxe.efi             UDP over IPv4
-    Dhcp4Dxe.efi            DHCPv4 client
-    Mtftp4Dxe.efi           TFTP over IPv4 (for PXE/TFTP boot)
+    Udp4Dxe.efi             UDP over IPv4 (carries DnsDxe)
     TcpDxe.efi              TCP (dual-stack, replaces deprecated Tcp4Dxe)
     DnsDxe.efi              DNS resolver
     HttpDxe.efi             HTTP protocol
@@ -106,6 +105,29 @@ EDK2 DXE Drivers
   Note: HttpBootDxe.efi (the UEFI firmware HTTP Boot orchestrator) is
   intentionally NOT included.  FreeLDR implements its own boot logic
   using EFI_HTTP_PROTOCOL directly.
+
+  Mtftp4Dxe.efi is likewise NOT included: FreeLDR implements no TFTP or
+  PXE boot path, so nothing would ever load it.
+
+  Dhcp4Dxe.efi is no longer included either. FreeLDR leases no address of
+  its own: a boot entry either names one with HttpBootIp= or inherits the
+  IPv4 configuration the firmware already holds on the interface. The
+  client code is commented out rather than deleted (see
+  UefiHttpBootDownload() in boot/freeldr/freeldr/arch/uefi/uefihttp.c),
+  so restoring the driver here is enough to bring the path back.
+
+  Not all are required for every boot entry. FreeLDR loads the core set
+  unconditionally and the rest only when the entry asks for them:
+    - Always:     DpcDxe + RngDxe + Hash2DxeCrypto + RtkUndiDxe + SnpDxe
+                  + MnpDxe + ArpDxe + Ip4Dxe + TcpDxe + HttpUtilitiesDxe
+                  + HttpDxe
+    - HttpBootUrl= names a host:      Udp4Dxe + DnsDxe
+
+  Without HttpBootIp=, no extra driver is loaded at all: the address is
+  read back from whatever the firmware already configured.
+
+  Mtftp4Dxe.efi is not shipped: FreeLDR implements no TFTP or PXE boot
+  path, so nothing ever loads it.
 
 Raspberry Pi 5 (arm64/)
 -----------------------
@@ -121,9 +143,3 @@ Raspberry Pi 5 (arm64/)
 
   The Pi 5 firmware already provides Mnp/Arp/Ip4/Udp4/Dhcp4/Tcp/Dns and the
   HTTP utilities, so only the two drivers above are shipped for it.
-
-  Not all are required for every boot mode:
-    - TFTP boot:  DpcDxe + MnpDxe + ArpDxe + Ip4Dxe + Udp4Dxe + Dhcp4Dxe
-                  + Mtftp4Dxe
-    - HTTP boot:  All of the above plus Hash2DxeCrypto + TcpDxe + DnsDxe
-                  + Http*.efi

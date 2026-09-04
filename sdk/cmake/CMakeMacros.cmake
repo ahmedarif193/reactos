@@ -484,6 +484,15 @@ endif()
         file(APPEND ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst "${_filelist}\n")
     endif()
     unset(_filelist)
+
+    # Build-local LiveCD overlays are written after the regular image entries
+    # so that a matching destination replaces the default file.
+    get_property(_filelist GLOBAL PROPERTY LIVECD_OVERLAY_FILE_LIST)
+    if(_filelist)
+        string(REPLACE ";" "\n" _filelist "${_filelist}")
+        file(APPEND ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst "${_filelist}\n")
+    endif()
+    unset(_filelist)
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/livecd.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst)
@@ -1059,6 +1068,13 @@ function(create_registry_hives)
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst.inf)
     endif()
+    foreach(_livecd_extra_registry_inf IN LISTS LIVECD_EXTRA_REGISTRY_INF)
+        if(_livecd_extra_registry_inf STREQUAL "")
+            continue()
+        endif()
+        get_filename_component(_livecd_extra_registry_inf "${_livecd_extra_registry_inf}" ABSOLUTE BASE_DIR "${REACTOS_BINARY_DIR}")
+        list(APPEND _livecd_inf_files ${_livecd_extra_registry_inf})
+    endforeach()
 
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/boot/bootdata/system

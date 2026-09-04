@@ -463,6 +463,116 @@ Cleanup:
     return Success;
 }
 
+/*
+ * Adopt the IPv4 configuration the firmware already holds on the interface.
+ * This is what a boot entry without HttpBootIp= gets now that the loader runs
+ * no DHCP client of its own: a board whose firmware brings up a network stack
+ * (and has already leased an address) is usable as-is, and one that does not
+ * (the LattePanda Mu publishes no stack at all) has to name an address.
+ *
+ * Deliberately no SetData() call: changing the policy or the manual address
+ * makes EDK2 tear the current configuration down, which would discard the
+ * very lease this is here to reuse.
+ */
+BOOLEAN
+UefiInheritIpConfigure(
+    _Inout_ PUEFI_NET_CONTEXT Context)
+{
+    EFI_STATUS Status;
+    EFI_IP4_CONFIG2_PROTOCOL *Ip4Config = NULL;
+    EFI_IP4_CONFIG2_INTERFACE_INFO *Info = NULL;
+    EFI_IP4_ROUTE_TABLE *Routes;
+    UINTN DataSize = 0;
+    UINT32 Index;
+    BOOLEAN Success = FALSE;
+
+    Status = UefiNetGetProtocol(
+        Context->ControllerHandle,
+        &EfiIp4Config2Guid,
+        (VOID **)&Ip4Config,
+        NULL);
+    if (EFI_ERROR(Status) || !Ip4Config)
+        return FALSE;
+
+    Status = Ip4Config->GetData(
+        Ip4Config, Ip4Config2DataTypeInterfaceInfo, &DataSize, NULL);
+    if (Status != EFI_BUFFER_TOO_SMALL || DataSize < sizeof(*Info))
+        return FALSE;
+
+    Status = GlobalSystemTable->BootServices->AllocatePool(
+        EfiLoaderData, DataSize, (VOID **)&Info);
+    if (EFI_ERROR(Status) || !Info)
+        return FALSE;
+
+    Status = Ip4Config->GetData(
+        Ip4Config, Ip4Config2DataTypeInterfaceInfo, &DataSize, Info);
+    if (EFI_ERROR(Status))
+        goto Cleanup;
+
+    if (UefiIpv4IsZero(&Info->StationAddress))
+    {
+        TRACE("UEFI HttpBoot: interface carries no IPv4 address to inherit\n");
+        goto Cleanup;
+    }
+
+    RtlCopyMemory(
+        &Context->LocalAddress,
+        &Info->StationAddress,
+        sizeof(Context->LocalAddress));
+    RtlCopyMemory(
+        &Context->SubnetMask,
+        &Info->SubnetMask,
+        sizeof(Context->SubnetMask));
+    RtlZeroMemory(&Context->Gateway, sizeof(Context->Gateway));
+
+    /*
+     * The route table trails the info in the same allocation. Take the
+     * default route as the gateway, and only after the firmware's pointer
+     * proves to lie inside the buffer it just handed us.
+     */
+    Routes = Info->RouteTable;
+    if (Routes &&
+        (UINT8 *)Routes >= (UINT8 *)Info &&
+        (UINT8 *)Routes + (UINTN)Info->RouteTableSize * sizeof(*Routes) <=
+            (UINT8 *)Info + DataSize)
+    {
+        for (Index = 0; Index < Info->RouteTableSize; Index++)
+        {
+            if (!UefiIpv4IsZero(&Routes[Index].SubnetAddress) ||
+                !UefiIpv4IsZero(&Routes[Index].SubnetMask) ||
+                UefiIpv4IsZero(&Routes[Index].GatewayAddress))
+            {
+                continue;
+            }
+
+            RtlCopyMemory(
+                &Context->Gateway,
+                &Routes[Index].GatewayAddress,
+                sizeof(Context->Gateway));
+            break;
+        }
+    }
+
+    TRACE("UEFI HttpBoot: inherited IP=%u.%u.%u.%u mask=%u.%u.%u.%u gateway=%u.%u.%u.%u\n",
+          Context->LocalAddress.Addr[0],
+          Context->LocalAddress.Addr[1],
+          Context->LocalAddress.Addr[2],
+          Context->LocalAddress.Addr[3],
+          Context->SubnetMask.Addr[0],
+          Context->SubnetMask.Addr[1],
+          Context->SubnetMask.Addr[2],
+          Context->SubnetMask.Addr[3],
+          Context->Gateway.Addr[0],
+          Context->Gateway.Addr[1],
+          Context->Gateway.Addr[2],
+          Context->Gateway.Addr[3]);
+    Success = TRUE;
+
+Cleanup:
+    GlobalSystemTable->BootServices->FreePool(Info);
+    return Success;
+}
+
 BOOLEAN
 UefiStaticIpConfigure(
     _Inout_ PUEFI_NET_CONTEXT Context,

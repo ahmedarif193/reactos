@@ -422,6 +422,13 @@ DxgkpRetainAndStopBasicDisplayFallback(
  * POST remains available through its adapter interface, while BasicDisplay (or
  * another real owner) keeps the desktop bridge.
  */
+/* Defined below; the fallback handover is driven from adapter start. */
+static NTSTATUS
+DxgkpAcquirePostDisplayOwnership(
+    _In_ HANDLE DeviceHandle,
+    _Out_ PDXGK_DISPLAY_INFORMATION DisplayInformation,
+    _Out_opt_ PDXGK_DISPLAY_OWNERSHIP_FLAGS Flags);
+
 static BOOLEAN
 DxgkpShouldRegisterDisplayBridge(
     _In_ PDXGKRNL_ADAPTER Claimant)
@@ -429,6 +436,7 @@ DxgkpShouldRegisterDisplayBridge(
     PDEVICE_OBJECT OwnerDeviceObject;
     PDXGKRNL_ADAPTER Owner;
     BOOLEAN RegisterDisplayBridge;
+    BOOLEAN TakeOverFromFallback;
 
     PAGED_CODE();
 
@@ -446,6 +454,55 @@ DxgkpShouldRegisterDisplayBridge(
 
     Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
     RegisterDisplayBridge = (Owner == NULL || Owner == Claimant);
+    /*
+     * The basic-display fallback is root-enumerated and starts before any PCI
+     * display adapter, so it claims the POST framebuffer first every time.  It
+     * is meant to hold the desktop only until the real driver for the display
+     * arrives, exactly as Windows' basic display driver yields.  dxgkrnl has
+     * the whole handover transaction already, but it hangs off
+     * DxgkCbAcquirePostDisplayOwnership, and a miniport is not obliged to call
+     * that -- igdkmd never does.  Nothing then drives the yield, so the real
+     * GPU stays permanently headless behind the fallback.  Claim on its
+     * behalf.
+     */
+    TakeOverFromFallback = !RegisterDisplayBridge &&
+                           Owner != NULL &&
+                           Owner->MiniportContext != NULL &&
+                           Owner->MiniportContext->IsBasicDisplayFallback;
+
+    if (OwnerDeviceObject != NULL)
+        ObDereferenceObject(OwnerDeviceObject);
+    KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
+
+    if (TakeOverFromFallback)
+    {
+        DXGK_DISPLAY_INFORMATION DisplayInformation;
+        NTSTATUS OwnershipStatus;
+
+        RtlZeroMemory(&DisplayInformation, sizeof(DisplayInformation));
+        OwnershipStatus = DxgkpAcquirePostDisplayOwnership((HANDLE)Claimant,
+                                                           &DisplayInformation,
+                                                           NULL);
+        DXGKRNL_ERR("DISPLAY_BRIDGE: adapter %p claiming POST ownership from the "
+                    "basic-display fallback -> 0x%08lX (%ux%u)\n",
+                    Claimant,
+                    OwnershipStatus,
+                    DisplayInformation.Width,
+                    DisplayInformation.Height);
+
+        (VOID)KeWaitForSingleObject(&g_PostDisplayOwnershipMutex,
+                                    Executive,
+                                    KernelMode,
+                                    FALSE,
+                                    NULL);
+        OwnerDeviceObject = NULL;
+        Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
+        RegisterDisplayBridge = (Owner == NULL || Owner == Claimant);
+        if (OwnerDeviceObject != NULL)
+            ObDereferenceObject(OwnerDeviceObject);
+        KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
+    }
+
     if (!RegisterDisplayBridge)
     {
         DXGKRNL_WARN("DISPLAY_BRIDGE: adapter %p did not claim POST ownership; "
@@ -453,10 +510,6 @@ DxgkpShouldRegisterDisplayBridge(
                      Claimant,
                      Owner);
     }
-
-    if (OwnerDeviceObject != NULL)
-        ObDereferenceObject(OwnerDeviceObject);
-    KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
     return RegisterDisplayBridge;
 }
 
@@ -749,311 +802,6 @@ DxgkpRecordTdrRecovery(
     InterlockedIncrement(&Adapter->TdrDetectedCount);
 }
 
-/*
- * Temporary hang diagnostics for the Intel Gen12 render command streamer:
- * locate BAR0 (the 16 MB GTTMMADR window) in the translated resources, map
- * the register half once, and print ring, execlist, error and fault state.
- * Reads only; a forcewake request is issued around the reads so render-domain
- * registers return live values.
- */
-static BOOLEAN
-DxgkpDiagMapMmio(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    PCM_RESOURCE_LIST List;
-    ULONG ListIndex;
-
-    if (Adapter->DiagMmio != NULL)
-        return TRUE;
-    List = Adapter->TranslatedResources;
-    if (List == NULL)
-        return FALSE;
-    for (ListIndex = 0; ListIndex < List->Count; ListIndex++)
-    {
-        PCM_PARTIAL_RESOURCE_LIST Partial = &List->List[ListIndex].PartialResourceList;
-        ULONG i;
-
-        for (i = 0; i < Partial->Count; i++)
-        {
-            PCM_PARTIAL_RESOURCE_DESCRIPTOR D = &Partial->PartialDescriptors[i];
-            ULONGLONG Length = 0;
-
-            if (D->Type == CmResourceTypeMemory)
-                Length = D->u.Memory.Length;
-            else if (D->Type == CmResourceTypeMemoryLarge)
-            {
-                if ((D->Flags & CM_RESOURCE_MEMORY_LARGE) == CM_RESOURCE_MEMORY_LARGE_40)
-                    Length = (ULONGLONG)D->u.Memory40.Length40 << 8;
-                else if ((D->Flags & CM_RESOURCE_MEMORY_LARGE) == CM_RESOURCE_MEMORY_LARGE_48)
-                    Length = (ULONGLONG)D->u.Memory48.Length48 << 16;
-                else if ((D->Flags & CM_RESOURCE_MEMORY_LARGE) == CM_RESOURCE_MEMORY_LARGE_64)
-                    Length = (ULONGLONG)D->u.Memory64.Length64 << 32;
-            }
-            else
-                continue;
-            /* GTTMMADR is 16 MB; the aperture BAR is far larger. */
-            if (Length != 0x1000000ULL)
-                continue;
-            Adapter->DiagMmioPhysical = D->u.Memory.Start;
-            Adapter->DiagMmioSize = 0x1000000;
-            Adapter->DiagMmio = MmMapIoSpace(Adapter->DiagMmioPhysical, Adapter->DiagMmioSize, MmNonCached);
-            DXGKRNL_INFO("DxgkDiag: GT MMIO at 0x%I64x mapped %p\n", (ULONGLONG)Adapter->DiagMmioPhysical.QuadPart, Adapter->DiagMmio);
-            return Adapter->DiagMmio != NULL;
-        }
-    }
-    return FALSE;
-}
-
-static ULONG
-DxgkpDiagRead(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ ULONG Offset)
-{
-    if (Offset + 4 > Adapter->DiagMmioSize)
-        return 0xDEADBEEF;
-    return READ_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->DiagMmio + Offset));
-}
-
-/* Periodic poll: report and clear latched GAM faults so each new fault is
- * seen with its own address and time, independent of the TDR path. */
-static VOID
-NTAPI
-DxgkpDiagFaultWorker(
-    _In_ PVOID Parameter)
-{
-    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Parameter;
-    ULONG Fault;
-
-    PAGED_CODE();
-    if (Adapter->DiagMmio != NULL || DxgkpDiagMapMmio(Adapter))
-    {
-        Fault = DxgkpDiagRead(Adapter, 0xcec4);
-        if (Fault & 1)
-        {
-            ULONG Data0 = DxgkpDiagRead(Adapter, 0xceb8);
-            ULONG Data1 = DxgkpDiagRead(Adapter, 0xcebc);
-
-            Adapter->DiagFaultCount++;
-            DXGKRNL_ERR("GAM POLL #%lu: fault=0x%08lx type=%lu srcid=%lu engine=%lu %s va=0x%I64x acthd=0x%08lx%08lx bbaddr=0x%08lx%08lx ipehr=0x%08lx head=0x%08lx tail=0x%08lx\n",
-                        Adapter->DiagFaultCount, Fault, (Fault >> 1) & 3, (Fault >> 3) & 0xFF, (Fault >> 12) & 7,
-                        (Data1 & 0x10) ? "GGTT" : "PPGTT",
-                        (((ULONGLONG)(Data1 & 0xF)) << 44) | ((ULONGLONG)Data0 << 12),
-                        DxgkpDiagRead(Adapter, 0x205c), DxgkpDiagRead(Adapter, 0x2074),
-                        DxgkpDiagRead(Adapter, 0x2168), DxgkpDiagRead(Adapter, 0x2140),
-                        DxgkpDiagRead(Adapter, 0x2068), DxgkpDiagRead(Adapter, 0x2034), DxgkpDiagRead(Adapter, 0x2030));
-            /* Clear the latch the way i915 does so the next fault is captured. */
-            WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->DiagMmio + 0xcec4), Fault & ~1UL);
-        }
-    }
-    InterlockedExchange(&Adapter->DiagFaultWorkQueued, 0);
-    if (InterlockedCompareExchange(&Adapter->DiagFaultTimerActive, 1, 1) == 1)
-    {
-        LARGE_INTEGER Due;
-
-        Due.QuadPart = -10000000LL; /* 1 s */
-        KeSetTimer(&Adapter->DiagFaultTimer, Due, &Adapter->DiagFaultDpc);
-    }
-}
-
-static VOID
-NTAPI
-DxgkpDiagFaultDpc(
-    _In_ PKDPC Dpc,
-    _In_opt_ PVOID Context,
-    _In_opt_ PVOID Arg1,
-    _In_opt_ PVOID Arg2)
-{
-    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
-
-    UNREFERENCED_PARAMETER(Dpc);
-    UNREFERENCED_PARAMETER(Arg1);
-    UNREFERENCED_PARAMETER(Arg2);
-    if (Adapter == NULL)
-        return;
-    if (InterlockedCompareExchange(&Adapter->DiagFaultWorkQueued, 1, 0) == 0)
-    {
-        ExInitializeWorkItem(&Adapter->DiagFaultWorkItem, DxgkpDiagFaultWorker, Adapter);
-        ExQueueWorkItem(&Adapter->DiagFaultWorkItem, DelayedWorkQueue);
-    }
-}
-
-/*
- * Experiment: invalidate the render TLB directly after page-table updates.
- * Gen12: GFX_TLB_INV_CR (0xced8) bit 0 requests the invalidation and clears
- * when done.  Requires the render forcewake.
- */
-static volatile LONG DxgkDiagTlbInvCount = 0;
-static volatile LONG DxgkDiagTlbInvTimeouts = 0;
-
-VOID
-DxgkDiagInvalidateRenderTlb(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    ULONG Spins;
-
-    if (Adapter == NULL || KeGetCurrentIrql() > DISPATCH_LEVEL || !Adapter->PhysicalAdapterCapsValid)
-        return;
-    if (Adapter->DiagMmio == NULL && !DxgkpDiagMapMmio(Adapter))
-        return;
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->DiagMmio + 0xa278), 0x00010001);
-    for (Spins = 0; Spins < 5000; Spins++)
-    {
-        if (DxgkpDiagRead(Adapter, 0x0d84) & 1)
-            break;
-        KeStallExecutionProcessor(2);
-    }
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->DiagMmio + 0xced8), 1);
-    for (Spins = 0; Spins < 5000; Spins++)
-    {
-        if ((DxgkpDiagRead(Adapter, 0xced8) & 1) == 0)
-            break;
-        KeStallExecutionProcessor(2);
-    }
-    if (Spins >= 5000)
-        InterlockedIncrement(&DxgkDiagTlbInvTimeouts);
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->DiagMmio + 0xa278), 0x00010000);
-    if ((InterlockedIncrement(&DxgkDiagTlbInvCount) % 500) == 1)
-        DXGKRNL_ERR("DxgkDiag: render TLB invalidations=%ld timeouts=%ld\n", DxgkDiagTlbInvCount, DxgkDiagTlbInvTimeouts);
-}
-
-VOID
-DxgkDiagStartFaultPoll(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    LARGE_INTEGER Due;
-
-    if (Adapter == NULL || !DxgkpDiagMapMmio(Adapter))
-        return;
-    KeInitializeTimer(&Adapter->DiagFaultTimer);
-    KeInitializeDpc(&Adapter->DiagFaultDpc, DxgkpDiagFaultDpc, Adapter);
-    InterlockedExchange(&Adapter->DiagFaultTimerActive, 1);
-    Due.QuadPart = -10000000LL;
-    KeSetTimer(&Adapter->DiagFaultTimer, Due, &Adapter->DiagFaultDpc);
-    DXGKRNL_INFO("DxgkDiag: fault poll started\n");
-}
-
-VOID
-DxgkDiagStopFaultPoll(
-    _In_ PDXGKRNL_ADAPTER Adapter)
-{
-    if (Adapter == NULL || InterlockedExchange(&Adapter->DiagFaultTimerActive, 0) == 0)
-        return;
-    KeCancelTimer(&Adapter->DiagFaultTimer);
-    KeFlushQueuedDpcs();
-}
-
-ULONG
-DxgkDiagReadRegister(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ ULONG Offset)
-{
-    if (Adapter == NULL || (Adapter->DiagMmio == NULL && !DxgkpDiagMapMmio(Adapter)))
-        return 0xDEADBEEF;
-    return DxgkpDiagRead(Adapter, Offset);
-}
-
-VOID
-DxgkDiagDumpGpuRegisters(
-    _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PCSTR Reason)
-{
-    ULONG Spins;
-    ULONG Ack;
-
-    if (Adapter == NULL || KeGetCurrentIrql() > DISPATCH_LEVEL)
-        return;
-    if (!DxgkpDiagMapMmio(Adapter))
-    {
-        DXGKRNL_ERR("DxgkDiag(%s): no 16 MB register BAR found\n", Reason);
-        return;
-    }
-    /* Forcewake render + GT so the ring registers are readable. */
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->DiagMmio + 0xa278), 0x00010001);
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->DiagMmio + 0xa188), 0x00010001);
-    for (Spins = 0; Spins < 2000; Spins++)
-    {
-        Ack = DxgkpDiagRead(Adapter, 0x0d84);
-        if (Ack & 1)
-            break;
-        KeStallExecutionProcessor(10);
-    }
-    DXGKRNL_ERR("GT(%s): fw-ack-render=0x%08lx fw-ack-gt=0x%08lx core-status=0x%08lx guc-status=0x%08lx rc-state=0x%08lx\n",
-                Reason, DxgkpDiagRead(Adapter, 0x0d84), DxgkpDiagRead(Adapter, 0x130044),
-                DxgkpDiagRead(Adapter, 0x138060), DxgkpDiagRead(Adapter, 0xc000), DxgkpDiagRead(Adapter, 0xa094));
-    DXGKRNL_ERR("RCS: head=0x%08lx tail=0x%08lx start=0x%08lx ctl=0x%08lx acthd=0x%08lx%08lx bbaddr=0x%08lx%08lx bbstate=0x%08lx\n",
-                DxgkpDiagRead(Adapter, 0x2034), DxgkpDiagRead(Adapter, 0x2030), DxgkpDiagRead(Adapter, 0x2038), DxgkpDiagRead(Adapter, 0x203c),
-                DxgkpDiagRead(Adapter, 0x205c), DxgkpDiagRead(Adapter, 0x2074),
-                DxgkpDiagRead(Adapter, 0x2168), DxgkpDiagRead(Adapter, 0x2140), DxgkpDiagRead(Adapter, 0x2110));
-    DXGKRNL_ERR("RCS: ipeir=0x%08lx ipehr=0x%08lx instdone=0x%08lx instps=0x%08lx eir=0x%08lx emr=0x%08lx esr=0x%08lx mi-mode=0x%08lx gfx-mode=0x%08lx\n",
-                DxgkpDiagRead(Adapter, 0x2064), DxgkpDiagRead(Adapter, 0x2068), DxgkpDiagRead(Adapter, 0x206c), DxgkpDiagRead(Adapter, 0x2070),
-                DxgkpDiagRead(Adapter, 0x20b0), DxgkpDiagRead(Adapter, 0x20b4), DxgkpDiagRead(Adapter, 0x20b8),
-                DxgkpDiagRead(Adapter, 0x209c), DxgkpDiagRead(Adapter, 0x229c));
-    DXGKRNL_ERR("RCS: execlist-status=0x%08lx%08lx ctx-timestamp=0x%08lx timestamp=0x%08lx hwsp=0x%08lx sema-wait? psmi=0x%08lx\n",
-                DxgkpDiagRead(Adapter, 0x2238), DxgkpDiagRead(Adapter, 0x2234),
-                DxgkpDiagRead(Adapter, 0x23a8), DxgkpDiagRead(Adapter, 0x2358), DxgkpDiagRead(Adapter, 0x2080), DxgkpDiagRead(Adapter, 0x2050));
-    DXGKRNL_ERR("GAM: ring-fault=0x%08lx tlb-data0=0x%08lx tlb-data1=0x%08lx aux-err=0x%08lx tlb-inv-cr=0x%08lx err-int=0x%08lx gt-intr-dw0=0x%08lx rcs-intr-mask=0x%08lx\n",
-                DxgkpDiagRead(Adapter, 0xcec4), DxgkpDiagRead(Adapter, 0xceb8), DxgkpDiagRead(Adapter, 0xcebc),
-                DxgkpDiagRead(Adapter, 0x43f4), DxgkpDiagRead(Adapter, 0xced8), DxgkpDiagRead(Adapter, 0x44040),
-                DxgkpDiagRead(Adapter, 0x190018), DxgkpDiagRead(Adapter, 0x190090));
-    /* Per-unit done bits: a 0 bit is a unit still busy. */
-    DXGKRNL_ERR("INSTDONE: cs=0x%08lx sc=0x%08lx sc-extra=0x%08lx sc-extra2=0x%08lx sampler=0x%08lx row=0x%08lx mcr=0x%08lx geom-svg=0x%08lx tdl? =0x%08lx\n",
-                DxgkpDiagRead(Adapter, 0x206c), DxgkpDiagRead(Adapter, 0x7100), DxgkpDiagRead(Adapter, 0x7104), DxgkpDiagRead(Adapter, 0x7108),
-                DxgkpDiagRead(Adapter, 0xe160), DxgkpDiagRead(Adapter, 0xe164), DxgkpDiagRead(Adapter, 0xfdc), DxgkpDiagRead(Adapter, 0x666c), DxgkpDiagRead(Adapter, 0xe168));
-    DXGKRNL_ERR("GUC: status=0x%08lx ct-status=0x%08lx send-intr=0x%08lx wq-tail? =0x%08lx errcode=0x%08lx gtt-fault=0x%08lx\n",
-                DxgkpDiagRead(Adapter, 0xc000), DxgkpDiagRead(Adapter, 0xc3f4), DxgkpDiagRead(Adapter, 0xc4c8), DxgkpDiagRead(Adapter, 0xc4b8), DxgkpDiagRead(Adapter, 0xc148), DxgkpDiagRead(Adapter, 0x4b00));
-    DXGKRNL_ERR("AUX: rcs-aux-table-base=0x%08lx%08lx vd0=0x%08lx%08lx ve0=0x%08lx%08lx blt=0x%08lx%08lx inv=0x%08lx\n",
-                DxgkpDiagRead(Adapter, 0x4204), DxgkpDiagRead(Adapter, 0x4200), DxgkpDiagRead(Adapter, 0x4214), DxgkpDiagRead(Adapter, 0x4210),
-                DxgkpDiagRead(Adapter, 0x4234), DxgkpDiagRead(Adapter, 0x4230), DxgkpDiagRead(Adapter, 0x4244), DxgkpDiagRead(Adapter, 0x4240),
-                DxgkpDiagRead(Adapter, 0x4208));
-    /* The miniport's ring around its head: resolve the ring's GTT pages
-     * through the global GTT (BAR0 + 8 MB, 8 bytes per 4 KB page) and map
-     * the physical pages directly. */
-    {
-        ULONG RingStart = DxgkpDiagRead(Adapter, 0x2038) & ~0xFFFUL;
-        ULONG Head = DxgkpDiagRead(Adapter, 0x2034) & 0x1FFFFC;
-        ULONG Tail = DxgkpDiagRead(Adapter, 0x2030) & 0x1FFFFC;
-        ULONG RingSize = ((DxgkpDiagRead(Adapter, 0x203c) >> 12) + 1) << 12;
-        ULONG From = (Head >= 0x180 ? Head - 0x180 : 0) & ~0x1FUL;
-        ULONG To = min(RingSize, Head + 0x80);
-        ULONG Page;
-
-        DXGKRNL_ERR("RING: start=0x%08lx size=0x%lx head=0x%lx tail=0x%lx (window 0x%lx..0x%lx)\n", RingStart, RingSize, Head, Tail, From, To);
-        if (RingStart != 0 && RingSize <= 0x40000 && Adapter->DiagMmioSize >= 0x1000000)
-        {
-            for (Page = From & ~0xFFFUL; Page < To; Page += 0x1000)
-            {
-                ULONGLONG GttIndex = (ULONGLONG)(RingStart + Page) >> 12;
-                ULONGLONG Pte = *(volatile ULONGLONG *)((PUCHAR)Adapter->DiagMmio + 0x800000 + GttIndex * 8);
-                PHYSICAL_ADDRESS Phys;
-                PULONG Ring;
-                ULONG Off;
-
-                Phys.QuadPart = (LONGLONG)(Pte & 0x0000FFFFFFFFF000ULL);
-                if ((Pte & 1) == 0 || Phys.QuadPart == 0)
-                {
-                    DXGKRNL_ERR("RING: gtt entry for 0x%08lx = 0x%I64x (not present)\n", RingStart + Page, Pte);
-                    continue;
-                }
-                Ring = MmMapIoSpace(Phys, 0x1000, MmNonCached);
-                if (Ring == NULL)
-                    continue;
-                for (Off = max(Page, From); Off < min(Page + 0x1000, To); Off += 32)
-                {
-                    ULONG i = (Off - Page) / 4;
-
-                    DXGKRNL_ERR("RING[%05lx] %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx%s\n", Off,
-                                Ring[i], Ring[i + 1], Ring[i + 2], Ring[i + 3], Ring[i + 4], Ring[i + 5], Ring[i + 6], Ring[i + 7],
-                                (Head >= Off && Head < Off + 32) ? "  <-- head" : "");
-                }
-                MmUnmapIoSpace(Ring, 0x1000);
-            }
-        }
-    }
-    /* Release the forcewake bits we set. */
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->DiagMmio + 0xa278), 0x00010000);
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->DiagMmio + 0xa188), 0x00010000);
-}
-
 static VOID
 NTAPI
 DxgkpTdrWorker(
@@ -1159,12 +907,6 @@ DxgkpTdrWorker(
                     Adapter->PowerLastIdleComponent,
                     Adapter->PowerLastIdleTime100ns != 0 ? (LONGLONG)(Now100ns - (ULONGLONG)Adapter->PowerLastIdleTime100ns) / 10 : -1);
     }
-    DxgkDiagDumpGpuRegisters(Adapter, "tdr");
-    VidSchDumpEngineDiagnostics(Adapter);
-    DxgkDumpRecentKmtIoctls();
-    DxgkPagingDumpStats(Adapter);
-    DxgkGpuVaDumpRecentEvents();
-
     /* Attempt engine preemption first and give the miniport a short window to
      * report DMA_PREEMPTED progress. A preempted but incomplete packet is not
      * completion: until resubmission exists, it must continue into TDR reset. */
@@ -2202,6 +1944,88 @@ NTSTATUS NTAPI DxgkNotifySubmissionFenceCompletion(_In_ PDXGKRNL_ADAPTER Adapter
     return STATUS_SUCCESS;
 }
 
+static VOID
+DxgkpDestroyDmaBuffer(
+    _In_ PDXGKRNL_DMA_BUFFER DmaBuffer);
+
+/* Windows PresentFromCdd obtains a retired buffer from VidMm's DMA pool. Keep
+ * the same ownership shape here for both physically contiguous and VidMm
+ * segment-backed buffers. The exact segment set is part of the pool key: a
+ * buffer placed for one context contract must not satisfy a different one. */
+static PDXGKRNL_DMA_BUFFER
+DxgkpTakeCachedDmaBuffer(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Capacity,
+    _In_ ULONG PrivateDataSize,
+    _In_ DXGKRNL_DMA_BACKING_KIND BackingKind,
+    _In_ ULONG SegmentSet)
+{
+    PDXGKRNL_DMA_BUFFER DmaBuffer = NULL;
+    KIRQL OldIrql;
+    PLIST_ENTRY Link;
+
+    KeAcquireSpinLock(&Adapter->DmaBufferCacheLock, &OldIrql);
+    if (InterlockedCompareExchange(&Adapter->DmaBufferCacheStopping, 0, 0) == 0)
+    {
+        for (Link = Adapter->DmaBufferCacheListHead.Flink;
+             Link != &Adapter->DmaBufferCacheListHead;
+             Link = Link->Flink)
+        {
+            PDXGKRNL_DMA_BUFFER Candidate;
+
+            Candidate = CONTAINING_RECORD(Link,
+                                          DXGKRNL_DMA_BUFFER,
+                                          CacheListEntry);
+            if (Candidate->Capacity != Capacity ||
+                Candidate->PrivateDataSize != PrivateDataSize ||
+                Candidate->BackingKind != BackingKind ||
+                Candidate->SegmentSet != SegmentSet ||
+                Candidate->VirtualBacking != NULL)
+            {
+                continue;
+            }
+
+            RemoveEntryList(&Candidate->CacheListEntry);
+            InitializeListHead(&Candidate->CacheListEntry);
+            ASSERT(Adapter->DmaBufferCacheCount != 0);
+            Adapter->DmaBufferCacheCount--;
+            DmaBuffer = Candidate;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
+
+    if (DmaBuffer == NULL)
+        return NULL;
+
+    DmaBuffer->SubmissionStartOffset = 0;
+    DmaBuffer->SubmissionEndOffset = 0;
+    DmaBuffer->PrivateDataUsed = 0;
+    if (DmaBuffer->PrivateData != NULL)
+        RtlZeroMemory(DmaBuffer->PrivateData, DmaBuffer->PrivateDataSize);
+    if (DmaBuffer->BackingKind == DxgkDmaBackingVidMm)
+    {
+        /* TDR recovery tears down aperture placement for every resident
+         * allocation. A buffer retired into the pool just before or during
+         * recovery can therefore outlive its old SegmentId/address. Drop it
+         * and let the caller acquire a newly placed VidMm backing. */
+        if (DmaBuffer->BackingAllocation == NULL ||
+            !DmaBuffer->BackingAllocation->Resident ||
+            DmaBuffer->BackingAllocation->SegmentId == 0 ||
+            DmaBuffer->BackingAllocation->SystemMemory == NULL)
+        {
+            DxgkpDestroyDmaBuffer(DmaBuffer);
+            return NULL;
+        }
+        DmaBuffer->VirtualAddress = DmaBuffer->BackingAllocation->SystemMemory;
+        DmaBuffer->SegmentId = DmaBuffer->BackingAllocation->SegmentId;
+        DmaBuffer->SegmentAddress =
+            DmaBuffer->BackingAllocation->PhysicalAddress;
+    }
+
+    return DmaBuffer;
+}
+
 NTSTATUS
 NTAPI
 DxgkAllocateDmaBufferWithPrivateData(
@@ -2220,39 +2044,16 @@ DxgkAllocateDmaBufferWithPrivateData(
         return STATUS_INVALID_PARAMETER;
 
     *OutDmaBuffer = NULL;
+    DmaBuffer = DxgkpTakeCachedDmaBuffer(
+                    Adapter,
+                    Capacity,
+                    PrivateDataSize,
+                    DxgkDmaBackingContiguousMemory,
+                    0);
+    if (DmaBuffer != NULL)
     {
-        KIRQL OldIrql;
-        PLIST_ENTRY Link;
-
-        KeAcquireSpinLock(&Adapter->DmaBufferCacheLock, &OldIrql);
-        if (InterlockedCompareExchange(&Adapter->DmaBufferCacheStopping, 0, 0) == 0)
-        {
-            for (Link = Adapter->DmaBufferCacheListHead.Flink;
-                 Link != &Adapter->DmaBufferCacheListHead;
-                 Link = Link->Flink)
-            {
-                DmaBuffer = CONTAINING_RECORD(Link, DXGKRNL_DMA_BUFFER, CacheListEntry);
-                if (DmaBuffer->Capacity != Capacity ||
-                    DmaBuffer->PrivateDataSize != PrivateDataSize)
-                    continue;
-
-                RemoveEntryList(&DmaBuffer->CacheListEntry);
-                InitializeListHead(&DmaBuffer->CacheListEntry);
-                ASSERT(Adapter->DmaBufferCacheCount != 0);
-                Adapter->DmaBufferCacheCount--;
-                DmaBuffer->SubmissionStartOffset = 0;
-                DmaBuffer->SubmissionEndOffset = 0;
-                KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
-                *OutDmaBuffer = DmaBuffer;
-                if (DmaBuffer->PrivateData != NULL)
-                {
-                    RtlZeroMemory(DmaBuffer->PrivateData, DmaBuffer->PrivateDataSize);
-                    DmaBuffer->PrivateDataUsed = 0;
-                }
-                return STATUS_SUCCESS;
-            }
-        }
-        KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
+        *OutDmaBuffer = DmaBuffer;
+        return STATUS_SUCCESS;
     }
 
     DmaBuffer = ExAllocatePoolWithTag(NonPagedPool, sizeof(*DmaBuffer), TAG_DXGK_SUBMITDMA);
@@ -2291,6 +2092,7 @@ DxgkAllocateDmaBufferWithPrivateData(
     }
     DmaBuffer->SubmissionStartOffset = 0;
     DmaBuffer->SubmissionEndOffset = Capacity;
+    DmaBuffer->SegmentSet = 0;
     DmaBuffer->SegmentId = 0;
     DmaBuffer->SegmentAddress = MmGetPhysicalAddress(DmaBuffer->VirtualAddress);
     DmaBuffer->BackingKind = DxgkDmaBackingContiguousMemory;
@@ -2322,6 +2124,126 @@ DxgkAllocateDmaBuffer(
     return DxgkAllocateDmaBufferWithPrivateData(Adapter, Capacity, 0, OutDmaBuffer);
 }
 
+NTSTATUS
+NTAPI
+DxgkAllocateDmaBufferInSegmentSetWithPrivateData(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Capacity,
+    _In_ ULONG SegmentSet,
+    _In_ ULONG PrivateDataSize,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer)
+{
+    PDXGKRNL_DMA_BUFFER Buffer;
+    PDXGKVMM_ALLOCATION Allocation;
+    NTSTATUS Status;
+
+    if (SegmentSet == 0)
+    {
+        return DxgkAllocateDmaBufferWithPrivateData(Adapter,
+                                                    Capacity,
+                                                    PrivateDataSize,
+                                                    OutDmaBuffer);
+    }
+    if (Adapter == NULL || Capacity == 0 || OutDmaBuffer == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutDmaBuffer = NULL;
+    Buffer = DxgkpTakeCachedDmaBuffer(Adapter,
+                                      Capacity,
+                                      PrivateDataSize,
+                                      DxgkDmaBackingVidMm,
+                                      SegmentSet);
+    if (Buffer != NULL)
+    {
+        *OutDmaBuffer = Buffer;
+        return STATUS_SUCCESS;
+    }
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Buffer), TAG_DXGK_SUBMITDMA);
+    if (Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Buffer, sizeof(*Buffer));
+    InitializeListHead(&Buffer->CacheListEntry);
+    if (PrivateDataSize != 0)
+    {
+        Buffer->PrivateData = ExAllocatePoolWithTag(NonPagedPool,
+                                                    PrivateDataSize,
+                                                    TAG_DXGK_SUBMITDMA);
+        if (Buffer->PrivateData == NULL)
+        {
+            ExFreePoolWithTag(Buffer, TAG_DXGK_SUBMITDMA);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(Buffer->PrivateData, PrivateDataSize);
+        Buffer->PrivateDataSize = PrivateDataSize;
+    }
+    Status = DxgkVidMmCreateDmaBufferBacking(Adapter, Capacity, SegmentSet, &Allocation);
+    if (!NT_SUCCESS(Status))
+    {
+        if (Buffer->PrivateData != NULL)
+            ExFreePoolWithTag(Buffer->PrivateData, TAG_DXGK_SUBMITDMA);
+        ExFreePoolWithTag(Buffer, TAG_DXGK_SUBMITDMA);
+        return Status;
+    }
+    Buffer->OwnerAdapter = Adapter;
+    Buffer->VirtualAddress = Allocation->SystemMemory;
+    Buffer->Capacity = Capacity;
+    Buffer->SegmentSet = SegmentSet;
+    Buffer->SegmentId = Allocation->SegmentId;
+    Buffer->SegmentAddress = Allocation->PhysicalAddress;
+    Buffer->BackingKind = DxgkDmaBackingVidMm;
+    Buffer->BackingAllocation = Allocation;
+    *OutDmaBuffer = Buffer;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+DxgkAllocateDmaBufferInSegmentSet(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Capacity,
+    _In_ ULONG SegmentSet,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer)
+{
+    return DxgkAllocateDmaBufferInSegmentSetWithPrivateData(Adapter,
+                                                            Capacity,
+                                                            SegmentSet,
+                                                            0,
+                                                            OutDmaBuffer);
+}
+
+NTSTATUS
+DxgkAllocateVirtualDmaBuffer(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG Capacity,
+    _In_ ULONG SegmentSet,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer)
+{
+    PDXGKRNL_DMA_BUFFER Buffer;
+    NTSTATUS Status;
+
+    if (Device == NULL || OutDmaBuffer == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutDmaBuffer = NULL;
+    Buffer = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Buffer), TAG_DXGK_SUBMITDMA);
+    if (Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Buffer, sizeof(*Buffer));
+    Status = DxgkVidMmCreateVirtualDmaBufferBacking(Device, Capacity, SegmentSet, &Buffer->BackingAllocation, &Buffer->VirtualBacking, &Buffer->GpuVirtualAddress);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Buffer, TAG_DXGK_SUBMITDMA);
+        return Status;
+    }
+    InitializeListHead(&Buffer->CacheListEntry);
+    Buffer->OwnerAdapter = Device->Adapter;
+    Buffer->VirtualAddress = Buffer->BackingAllocation->SystemMemory;
+    Buffer->Capacity = Capacity;
+    Buffer->SegmentSet = SegmentSet;
+    Buffer->BackingKind = DxgkDmaBackingVidMm;
+    *OutDmaBuffer = Buffer;
+    return STATUS_SUCCESS;
+}
+
 static VOID
 DxgkpDestroyDmaBuffer(
     _In_ PDXGKRNL_DMA_BUFFER DmaBuffer)
@@ -2330,6 +2252,18 @@ DxgkpDestroyDmaBuffer(
         DmaBuffer->BackingKind == DxgkDmaBackingContiguousMemory)
     {
         MmFreeContiguousMemory(DmaBuffer->VirtualAddress);
+    }
+    if (DmaBuffer->VirtualBacking != NULL)
+    {
+        DxgkVidMmFreeVirtualDmaBufferBacking(DmaBuffer->VirtualBacking);
+        DmaBuffer->VirtualBacking = NULL;
+        DmaBuffer->BackingAllocation = NULL;
+    }
+    else if (DmaBuffer->BackingKind == DxgkDmaBackingVidMm)
+    {
+        DxgkVidMmReleaseSubmissionResidencyPin(DmaBuffer->BackingAllocation);
+        DxgkVidMmDereferenceAllocation(DmaBuffer->BackingAllocation);
+        DmaBuffer->BackingAllocation = NULL;
     }
     DmaBuffer->OwnerAdapter = NULL;
     DmaBuffer->VirtualAddress = NULL;
@@ -2359,7 +2293,10 @@ DxgkFreeDmaBuffer(
     DmaBuffer->SubmissionEndOffset = 0;
     if (Adapter != NULL &&
         DmaBuffer->VirtualAddress != NULL &&
-        DmaBuffer->BackingKind == DxgkDmaBackingContiguousMemory &&
+        DmaBuffer->VirtualBacking == NULL &&
+        (DmaBuffer->BackingKind == DxgkDmaBackingContiguousMemory ||
+         (DmaBuffer->BackingKind == DxgkDmaBackingVidMm &&
+          DmaBuffer->BackingAllocation != NULL)) &&
         DmaBuffer->Capacity <= DXGKP_DMA_BUFFER_CACHE_MAX_CAPACITY)
     {
         KeAcquireSpinLock(&Adapter->DmaBufferCacheLock, &OldIrql);
@@ -2447,7 +2384,8 @@ DxgkFlushDmaBufferForSubmission(
     PMDL Mdl;
 
     if (DmaBuffer == NULL || DmaBuffer->VirtualAddress == NULL ||
-        DmaBuffer->BackingKind != DxgkDmaBackingContiguousMemory ||
+        (DmaBuffer->BackingKind != DxgkDmaBackingContiguousMemory &&
+         DmaBuffer->BackingKind != DxgkDmaBackingVidMm) ||
         DmaBuffer->SubmissionStartOffset > DmaBuffer->SubmissionEndOffset ||
         DmaBuffer->SubmissionEndOffset > DmaBuffer->Capacity)
     {
@@ -2588,7 +2526,11 @@ static VOID NTAPI DxgkpTrackedWorkCompleteDeviceWork(_In_opt_ PVOID Context)
 {
     PDXGKRNL_SUBMIT_DMA_BUFFER Entry = Context;
 
-    if (Entry != NULL)
+    /* A present is not complete until its passive scanout step has run.
+     * GPU fences still retire here; only the device-work acknowledgement is
+     * deferred to DxgkpFreeTrackedDmaBufferEntry. */
+    if (Entry != NULL && !Entry->RefreshSharedPrimaryOnRetire &&
+        !Entry->ProgramSourceScanoutOnRetire)
         DxgkDeviceWorkComplete(Entry->DeviceWork);
 }
 
@@ -2977,6 +2919,42 @@ DxgkCommitTrackedDmaBuffer(
     if (Adapter == NULL || Entry == NULL || Entry->Adapter != Adapter)
         return;
     KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
+    /*
+     * Stamp every allocation this command references with the submission
+     * fence, so destruction can wait for the work that actually touches the
+     * allocation rather than for the destroying device's queue alone.
+     */
+    if (Entry->NodeOrdinal < DXGK_MAX_TRACKED_NODES &&
+        Entry->AllocationReferenceList != NULL)
+    {
+        UINT RefIndex;
+
+        for (RefIndex = 0; RefIndex < Entry->AllocationReferenceCount; ++RefIndex)
+        {
+            PDXGKVMM_ALLOCATION Referenced =
+                Entry->AllocationReferenceList[RefIndex];
+
+            if (Referenced == NULL)
+                continue;
+            LONG Epoch =
+                InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0);
+
+            if (Referenced->LastRefEpoch != Epoch)
+            {
+                /* Older stamps name fence ids from a reset timeline. */
+                RtlZeroMemory((PVOID)Referenced->LastRefFenceId,
+                              sizeof(Referenced->LastRefFenceId));
+                Referenced->LastRefEpoch = Epoch;
+            }
+            if (Referenced->LastRefFenceId[Entry->NodeOrdinal] == 0 ||
+                !DxgkpFenceIdReached(Referenced->LastRefFenceId[Entry->NodeOrdinal],
+                                     Entry->SubmissionFenceId))
+            {
+                Referenced->LastRefFenceId[Entry->NodeOrdinal] =
+                    Entry->SubmissionFenceId;
+            }
+        }
+    }
     NodeFence = Adapter->NodeLastCompletedFenceId[Entry->NodeOrdinal];
     CompletionAlreadyReached = NodeFence != 0 && DxgkpFenceIdReached(NodeFence, Entry->SubmissionFenceId);
     if (!DxgkTrackedWorkCoreCommit(&Entry->TrackedWork, CompletionAlreadyReached, &RetiredNow))
@@ -3297,14 +3275,12 @@ DxgkpTraceTrackedRefreshSamples(
     }
 }
 
-static VOID
+static NTSTATUS
 DxgkpProgramTrackedScanout(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_SUBMIT_DMA_BUFFER Entry)
 {
     PDXGKVMM_ALLOCATION Allocation;
-    PDXGKARG_SETVIDPNSOURCEADDRESS SetSourceAddress;
-    DXGKARG_SETVIDPNSOURCEVISIBILITY Visibility;
     LARGE_INTEGER PrimaryAddress;
     HANDLE AllocationHandle;
     BOOLEAN SharedPrimaryRefresh;
@@ -3318,10 +3294,9 @@ DxgkpProgramTrackedScanout(
          Entry->ProgramSourceScanoutOnRetire) ||
         !Entry->SharedSurfaceRundownHeld ||
         Adapter->MiniportContext == NULL ||
-        Adapter->MiniportContext->IsDisplayOnlyDriver ||
-        DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL)
+        Adapter->MiniportContext->IsDisplayOnlyDriver)
     {
-        return;
+        return STATUS_INVALID_PARAMETER;
     }
 
     SharedPrimaryRefresh =
@@ -3338,57 +3313,21 @@ DxgkpProgramTrackedScanout(
     }
 
     if (AllocationHandle == NULL)
-        return;
+        return STATUS_INVALID_PARAMETER;
     if (Allocation == NULL || Allocation->Adapter != Adapter)
     {
         DXGKRNL_WARN("DxgkpProgramTrackedScanout: invalid allocation %p\n",
                      AllocationHandle);
-        return;
+        return STATUS_INVALID_PARAMETER;
     }
 
     ASSERT(Adapter->SharedSurfaceGeneration == Entry->SharedSurfaceGeneration);
-
-    Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
-    if (!NT_SUCCESS(Status))
-    {
-        DXGKRNL_WARN("DxgkpProgramTrackedScanout: aperture map failed "
-                     "0x%08lX for %p\n",
-                     Status,
-                     AllocationHandle);
-        goto Cleanup;
-    }
 
     if (SharedPrimaryRefresh)
         DxgkpTraceTrackedRefreshSamples(Adapter, Entry, Allocation);
 
     PrimaryAddress = DxgkVidMmGetAllocationPrimaryAddress(Allocation);
-
-    SetSourceAddress = ExAllocatePoolWithTag(NonPagedPool, sizeof(*SetSourceAddress), TAG_DXGK_ADAPTER);
-    if (SetSourceAddress == NULL)
-        goto Cleanup;
-
-    RtlZeroMemory(SetSourceAddress, sizeof(*SetSourceAddress));
-    SetSourceAddress->VidPnSourceId = Entry->RefreshVidPnSourceId;
-    SetSourceAddress->hAllocation = Allocation->MiniportHandle;
-    SetSourceAddress->PrimaryAddress = PrimaryAddress;
-    SetSourceAddress->PrimarySegment = Allocation->SegmentId;
-    SetSourceAddress->Flags.FlipImmediate = 1;
-
-    if (!DxgkAcquireMiniportCallback(Adapter))
-    {
-        ExFreePoolWithTag(SetSourceAddress, TAG_DXGK_ADAPTER);
-        goto Cleanup;
-    }
-    Status = DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress)(Adapter->MiniportDeviceContext, SetSourceAddress);
-    if (NT_SUCCESS(Status) && DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL)
-    {
-        RtlZeroMemory(&Visibility, sizeof(Visibility));
-        Visibility.VidPnSourceId = Entry->RefreshVidPnSourceId;
-        Visibility.Visible = TRUE;
-        DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(Adapter->MiniportDeviceContext, &Visibility);
-    }
-    DxgkReleaseMiniportCallback(Adapter);
-    ExFreePoolWithTag(SetSourceAddress, TAG_DXGK_ADAPTER);
+    Status = DxgkpProgramSharedPrimaryScanout(Adapter, Allocation, Entry->RefreshVidPnSourceId, (D3DKMT_HANDLE)(ULONG_PTR)AllocationHandle, Entry->RefreshPresentId);
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkpProgramTrackedScanout: SetVidPnSourceAddress failed 0x%08lX fence=%u alloc=%p seg=%u addr=0x%I64x\n", Status, Entry->SubmissionFenceId, AllocationHandle, Allocation->SegmentId, PrimaryAddress.QuadPart);
@@ -3409,7 +3348,7 @@ DxgkpProgramTrackedScanout(
     }
 
 Cleanup:
-    return;
+    return Status;
 }
 
 static VOID
@@ -3423,6 +3362,7 @@ DxgkpFreeTrackedDmaBufferEntry(
     BOOLEAN DeviceWorkOwned;
     BOOLEAN ExternalCleanupOwned;
     BOOLEAN WakeOrderedWaits;
+    NTSTATUS PresentStatus = STATUS_DEVICE_REMOVED;
 
     WakeOrderedWaits = Completed && Entry->SignalSyncObjectReference != NULL;
     if (Completed)
@@ -3448,7 +3388,14 @@ DxgkpFreeTrackedDmaBufferEntry(
         (Entry->RefreshSharedPrimaryOnRetire ||
          Entry->ProgramSourceScanoutOnRetire))
     {
-        DxgkpProgramTrackedScanout(Adapter, Entry);
+        PresentStatus = DxgkpProgramTrackedScanout(Adapter, Entry);
+    }
+
+    if (DeviceWorkOwned &&
+        (Entry->RefreshSharedPrimaryOnRetire ||
+         Entry->ProgramSourceScanoutOnRetire))
+    {
+        DxgkDeviceWorkCompleteWithStatus(Entry->DeviceWork, PresentStatus);
     }
 
     /* GPU completion drives the retained monitored fence even when user mode
@@ -10144,14 +10091,22 @@ DxgkpAcquirePostDisplayOwnership(
                 Owner->MiniportContext->IsBasicDisplayFallback;
             /*
              * Nothing to hand over: firmware left no framebuffer, so the
-             * fallback drives a headless desktop.  A miniport that took that
-             * desktop would own a session with no mode to show it in --
-             * win32k could not build its primary surface and would bugcheck
-             * VIDEO_DRIVER_INIT_FAILURE.  Answer the claimant with the empty
-             * descriptor every non-POST adapter gets and let the fallback
-             * keep the desktop bridge.
+             * fallback drives a headless desktop.  A display-only miniport
+             * that took that desktop would own a session with no mode to show
+             * it in -- it cannot program a mode itself, so win32k could not
+             * build its primary surface and would bugcheck
+             * VIDEO_DRIVER_INIT_FAILURE.
+             *
+             * A full WDDM miniport is not in that position: it enumerates its
+             * own video present sources and targets and commits its own mode
+             * through the VidPn, so it never needed the firmware framebuffer.
+             * Refusing it the desktop leaves the real GPU permanently headless
+             * behind the fallback, which is how a machine whose firmware
+             * hands over no GOP ends up rendering on nothing.  Keep the
+             * fallback only for a claimant that genuinely cannot set a mode.
              */
             if (RetainFallback &&
+                Claimant->MiniportContext->IsDisplayOnlyDriver &&
                 Owner->PostDisplayWidth == 0 &&
                 !InbvHasValidGopFrameBuffer())
             {
@@ -10781,7 +10736,23 @@ DxgkpCacheGpuMmuGeometry(
             return FALSE;
         }
         Entries = 1ULL << Desc->PageTableIndexBitCount;
-        UNREFERENCED_PARAMETER(Entries);
+        /*
+         * PageTableSegmentId decides where a page table has to live: zero
+         * means system memory addressed physically, nonzero names the segment
+         * the table must be placed in, which changes both the root address
+         * published through DxgkDdiSetRootPageTable and how a parent entry
+         * has to describe its child.  Report the geometry the miniport asked
+         * for so the two cannot be guessed at separately.
+         */
+        DXGKRNL_INFO("DxgkAdapterStart: page-table level %lu: %I64u entries x %u bytes "
+                     "(index-bits=%u align=%u) segment=%u paging-process-segment=%u\n",
+                     Level,
+                     Entries,
+                     Desc->PageTableSizeInBytes,
+                     Desc->PageTableIndexBitCount,
+                     Desc->PageTableAlignmentInBytes,
+                     Desc->PageTableSegmentId,
+                     Desc->PagingProcessPageTableSegmentId);
         TotalIndexBits += Desc->PageTableIndexBitCount;
     }
 
@@ -11253,6 +11224,7 @@ DxgkpRollbackAdapterStart(
         VidSchDestroy(Adapter);
     if (Progress->VidMmStarted)
     {
+        DxgkpDrainDmaBufferCache(Adapter);
         DxgkVidMmQuiesceAdapter(Adapter);
         DxgkVidMmTeardownAdapter(Adapter);
     }
@@ -11495,6 +11467,78 @@ DxgkpSetVsyncInterruptState(
         InterlockedExchange(&Adapter->VsyncInterruptEnabled,
                             (VsyncState == DXGK_VSYNC_ENABLE) ? 1 : 0);
     }
+    return Status;
+}
+
+/*
+ * DxgkpEnableEngineInterrupt
+ *
+ * Turns on a non-vsync interrupt source.  dxgkrnl only ever enabled
+ * DXGK_INTERRUPT_CRTC_VSYNC, so the engine's DMA-completion interrupt was
+ * left off and the miniport reported completions from its own periodic check
+ * instead -- measured at a fixed ~480 ms per submission, which throttles every
+ * present to ~2 Hz and makes windows look hung.
+ */
+static NTSTATUS
+DxgkpEnableEngineInterrupt(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ DXGK_INTERRUPT_TYPE InterruptType)
+{
+    PDXGKDDI_CONTROLINTERRUPT3 ControlInterrupt3 = NULL;
+    PDXGKDDI_CONTROLINTERRUPT2 ControlInterrupt2 = NULL;
+    PDXGKDDI_CONTROL_INTERRUPT ControlInterrupt;
+    DXGKARG_CONTROLINTERRUPT3 Args3;
+    DXGKARG_CONTROLINTERRUPT2 Args2;
+    ULONG Version;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Adapter->MiniportContext == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Version = Adapter->MiniportContext->InitData.s.Version;
+    ControlInterrupt = DXGK_CB(Adapter, DxgkDdiControlInterrupt);
+    if (!Adapter->MiniportContext->UseDodLayout &&
+        DxgkCapsCoreInterfaceVersionAtLeast(Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_7))
+    {
+        ControlInterrupt3 = DXGK_CB_FULL(Adapter, DxgkDdiControlInterrupt3);
+    }
+    if (ControlInterrupt3 == NULL && !Adapter->MiniportContext->UseDodLayout &&
+        DxgkCapsCoreInterfaceVersionAtLeast(Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
+    {
+        ControlInterrupt2 = DXGK_CB_FULL(Adapter, DxgkDdiControlInterrupt2);
+    }
+    if (ControlInterrupt3 == NULL && ControlInterrupt2 == NULL && ControlInterrupt == NULL)
+        return STATUS_NOT_SUPPORTED;
+    if (!DxgkAcquireMiniportCallback(Adapter))
+        return STATUS_DELETE_PENDING;
+
+    _SEH2_TRY
+    {
+        if (ControlInterrupt3 != NULL)
+        {
+            RtlZeroMemory(&Args3, sizeof(Args3));
+            Args3.InterruptType = InterruptType;
+            Status = ControlInterrupt3(Adapter->MiniportDeviceContext, &Args3);
+        }
+        else if (ControlInterrupt2 != NULL)
+        {
+            RtlZeroMemory(&Args2, sizeof(Args2));
+            Args2.InterruptType = InterruptType;
+            Status = ControlInterrupt2(Adapter->MiniportDeviceContext, Args2);
+        }
+        else
+        {
+            Status = ControlInterrupt(Adapter->MiniportDeviceContext,
+                                      InterruptType, TRUE);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseMiniportCallback(Adapter);
     return Status;
 }
 
@@ -11878,11 +11922,16 @@ DxgkAdapterStart(
         goto StartRollback;
     }
     Progress.VidMmStarted = TRUE;
+    /* A previous stop drained every segment-backed DMA buffer before tearing
+     * VidMm down. Reopen the pool only after the new VidMm lifetime begins. */
+    ASSERT(Adapter->DmaBufferCacheCount == 0);
+    InterlockedExchange(&Adapter->DmaBufferCacheStopping, 0);
 
     /* Cache surprise-removal support while hardware is still present.  The
      * topology fields apply only to full WDDM adapters. */
     Adapter->NodeCount = 0;
     Adapter->SupportSurpriseRemoval = FALSE;
+    Adapter->ApertureSegmentCommitLimit = 0;
 
     /*
      * Node accounting starts from zero on every start, and the clock it is
@@ -11908,6 +11957,7 @@ DxgkAdapterStart(
             CapsStatus = DxgkpQueryDriverCaps(Adapter, Caps);
             if (NT_SUCCESS(CapsStatus))
             {
+                Adapter->ApertureSegmentCommitLimit = Caps->ApertureSegmentCommitLimit;
                 if (DxgkCapsCoreInterfaceVersionAtLeast(Adapter->MiniportContext->InitData.s.Version, DXGK_CAPS_CORE_LEVEL_WDDM_2_0))
                     Adapter->SupportSurpriseRemoval = Caps->SupportSurpriseRemoval;
                 if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
@@ -11985,6 +12035,115 @@ DxgkAdapterStart(
                  Adapter->NumberOfVideoPresentSources,
                  Adapter->MiniportContext->IsBasicDisplayFallback ? "(basic display fallback)" :
                  Adapter->MiniportContext->IsDisplayOnlyDriver ? "(display only)" : "(full)");
+    if (!Adapter->MiniportContext->IsDisplayOnlyDriver &&
+        DXGK_CB_FULL(Adapter, DxgkDdiQueryAdapterInfo) != NULL)
+    {
+        /* Windows queries the miniport's runtime power components here
+         * (DXGKQAITYPE_NUMPOWERCOMPONENTS / _POWERCOMPONENTINFO), registers
+         * them with PoFx, and drives DxgkDdiSetPowerComponentFState from the
+         * PoFx idle-state callback.  ReactOS issues neither query, so no
+         * component is ever brought to F0.  Measure what this part declares
+         * before building any of that. */
+        DXGKARG_QUERYADAPTERINFO PowerQuery;
+        UINT ComponentCount = 0;
+        NTSTATUS PowerStatus;
+
+        RtlZeroMemory(&PowerQuery, sizeof(PowerQuery));
+        PowerQuery.Type = DXGKQAITYPE_NUMPOWERCOMPONENTS;
+        PowerQuery.pOutputData = &ComponentCount;
+        PowerQuery.OutputDataSize = sizeof(ComponentCount);
+        if (DxgkAcquireKmdCall(Adapter))
+        {
+            _SEH2_TRY
+            {
+                PowerStatus = DXGK_CB_FULL(Adapter, DxgkDdiQueryAdapterInfo)(
+                                  Adapter->MiniportDeviceContext, &PowerQuery);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                PowerStatus = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            DxgkReleaseKmdCall(Adapter);
+            DXGKRNL_INFO("Runtime power components: query 0x%08lX count=%u\n",
+                         PowerStatus, ComponentCount);
+
+            /*
+             * Bring every declared component to F0 (active).
+             *
+             * Windows does this through PoFx: the miniport calls
+             * DxgkCbSetPowerComponentActive, dxgkrnl calls
+             * PoFxActivateComponent, and PoFx calls back into
+             * DxgkDdiSetPowerComponentFState with the new F-state (0 = F0).
+             * ReactOS registers no PoFx device, so that loop never runs and
+             * every component stays in its initial low-power F-state.
+             *
+             * This is the FIRST STAGE only: it pins the components active
+             * rather than following activity. It is a reduced implementation,
+             * not the contract - TODO: register a PO_FX_DEVICE
+             * (PoFxRegisterDevice exists in sdk/lib/drivers/ntoskrnl_vista/
+             * pofx.c) and drive F-states from the idle-state callback, which
+             * also restores runtime power saving.
+             */
+            if (NT_SUCCESS(PowerStatus) && ComponentCount != 0 &&
+                DXGK_CB_FULL(Adapter, DxgkDdiSetPowerComponentFState) != NULL &&
+                DxgkAcquireKmdCall(Adapter))
+            {
+                UINT Component;
+                UINT Activated = 0;
+                NTSTATUS FirstFailure = STATUS_SUCCESS;
+
+                for (Component = 0; Component < ComponentCount; ++Component)
+                {
+                    NTSTATUS FStateStatus;
+
+                    _SEH2_TRY
+                    {
+                        FStateStatus =
+                            DXGK_CB_FULL(Adapter, DxgkDdiSetPowerComponentFState)(
+                                Adapter->MiniportDeviceContext, Component, 0);
+                    }
+                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                    {
+                        FStateStatus = _SEH2_GetExceptionCode();
+                    }
+                    _SEH2_END;
+                    if (NT_SUCCESS(FStateStatus))
+                        Activated++;
+                    else if (NT_SUCCESS(FirstFailure))
+                        FirstFailure = FStateStatus;
+                }
+                DxgkReleaseKmdCall(Adapter);
+                if (Activated != ComponentCount)
+                {
+                    DXGKRNL_WARN("Runtime power components: only %u/%u reached F0, "
+                                 "first failure 0x%08lX\n",
+                                 Activated, ComponentCount, FirstFailure);
+                }
+                else
+                {
+                    DXGKRNL_INFO("Runtime power components: %u activated (F0)\n",
+                                 Activated);
+                }
+            }
+        }
+    }
+    if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
+    {
+        /* Enable every non-vsync source the miniport will accept.  dxgkrnl
+         * historically enabled only DXGK_INTERRUPT_CRTC_VSYNC, so any engine
+         * source the driver needs was left masked.  Unsupported types answer
+         * STATUS_NOT_SUPPORTED, which is not an error.  Vsync is owned by
+         * DxgkpSetVsyncInterruptState and is deliberately not touched here. */
+        ULONG InterruptType;
+
+        for (InterruptType = 1; InterruptType <= 20; ++InterruptType)
+        {
+            if (InterruptType == (ULONG)DXGK_INTERRUPT_CRTC_VSYNC)
+                continue;
+            (VOID)DxgkpEnableEngineInterrupt(Adapter, (DXGK_INTERRUPT_TYPE)InterruptType);
+        }
+    }
     if (Adapter->PageTableLevelsValid)
     {
         Adapter->GpuMmuCapsValid = TRUE;
@@ -12048,8 +12207,6 @@ DxgkAdapterStart(
                     Adapter->PhysicalAdapterCaps.DxgkPhysicalAdapterHandle, Adapter->PhysicalAdapterCaps.Flags.Value);
     }
     DxgkVidMmDumpSegments(Adapter);
-    if (Adapter->PhysicalAdapterCapsValid)
-        DxgkDiagStartFaultPoll(Adapter);
     {
         BOOLEAN ProviderStarted;
 
@@ -12595,7 +12752,6 @@ DxgkpAdapterStopInternal(
     ULONG StopGeneration = 0;
 
     PAGED_CODE();
-    DxgkDiagStopFaultPoll(Adapter);
 
     DxgkRosAssert(Adapter != NULL, DXGKRNL_BUGCHECK_NULL_ADAPTER);
     if (ReleasedPostDisplayInformation != NULL)
@@ -12866,6 +13022,8 @@ DxgkpAdapterStopInternal(
 
     /* Tracker retirement can reference both objects, so destroy them last. */
     DxgkDestroySharedPrimary(Adapter);
+    /* Pooled segment-backed DMA buffers retain VidMm allocations and pins. */
+    DxgkpDrainDmaBufferCache(Adapter);
     DxgkVidMmTeardownAdapter(Adapter);
 
     DxgkpClearPostDisplayOwner(Adapter);
@@ -13089,6 +13247,7 @@ DxgkAdapterRemove(
             DxgkVidPnDestroy(hVidPn);
     }
     DxgkDestroySharedPrimary(Adapter);
+    DxgkpDrainDmaBufferCache(Adapter);
     DxgkVidMmTeardownAdapter(Adapter);
     (VOID)DxgkCleanupAdapterDevices(Adapter);
     DxgkpReleaseAdapterResources(Adapter);
@@ -14119,6 +14278,7 @@ DxgkpAddDeviceRegistered(
         &Adapter->PeriodicInterruptCore);
     KeInitializeSpinLock(&Adapter->ChildListLock);
     KeInitializeMutex(&Adapter->PresentLifecycleMutex, 0);
+    KeInitializeMutex(&Adapter->CddPresentMutex, 0);
     KeInitializeSpinLock(&Adapter->SubmitDmaLock);
     KeInitializeSpinLock(&Adapter->DmaBufferCacheLock);
     KeInitializeSpinLock(&Adapter->TdrHistoryLock);

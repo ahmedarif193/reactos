@@ -584,6 +584,44 @@ UefiConvertUrl(
 }
 
 static BOOLEAN
+UefiHttpHostIsIpv4Literal(
+    _In_ const CHAR8 *Host)
+{
+    UINTN Octets = 0;
+    UINTN Digits = 0;
+    UINTN Value = 0;
+
+    for (;;)
+    {
+        CHAR8 Character = *Host++;
+
+        if (Character >= '0' && Character <= '9')
+        {
+            if (++Digits > 3)
+                return FALSE;
+            Value = Value * 10 + (UINTN)(Character - '0');
+            if (Value > 255)
+                return FALSE;
+            continue;
+        }
+
+        if (Digits == 0)
+            return FALSE;
+        if (++Octets > 4)
+            return FALSE;
+
+        /* The authority may carry a port, which ends the host part. */
+        if (Character == ANSI_NULL || Character == ':')
+            return Octets == 4;
+        if (Character != '.')
+            return FALSE;
+
+        Digits = 0;
+        Value = 0;
+    }
+}
+
+static BOOLEAN
 UefiHttpReadBody(
     _Inout_ UEFI_HTTP_SESSION *Session,
     _Out_writes_bytes_(ContentLength) VOID *Buffer,
@@ -773,6 +811,7 @@ UefiHttpBootDownload(
     UINTN ContentLength;
     UINTN FailedAttempts = 0;
     PVOID RamDisk;
+    UINT32 Features = 0;
     BOOLEAN AddressConfigured = FALSE;
     BOOLEAN ForcedRebind = FALSE;
 
@@ -787,9 +826,18 @@ UefiHttpBootDownload(
         return FALSE;
     }
 
+    /*
+     * The loader runs no DHCP client, so only a URL that names a host still
+     * pulls a layer in beyond the core set. Restoring the DHCP path means
+     * setting UEFI_NET_FEATURE_DHCP here as well; see the address
+     * configuration below.
+     */
+    if (!UefiHttpHostIsIpv4Literal(Host))
+        Features |= UEFI_NET_FEATURE_DNS;
+
     TRACE("UEFI HttpBoot: starting download from %s\n", Url);
     UiDrawStatusText("Waiting for network... Press ESC to return to the boot menu.");
-    if (!UefiNetPrepare(&Context, Cancelled))
+    if (!UefiNetPrepare(&Context, Features, Cancelled))
     {
         return FALSE;
     }
@@ -815,11 +863,34 @@ UefiHttpBootDownload(
                     return FALSE;
                 }
             }
-            else if (!UefiDhcpAcquire(&Context))
+            /*
+             * Without HttpBootIp= the loader inherits whatever address the
+             * firmware already put on the interface rather than leasing one
+             * itself. Dropping the DHCP client also drops Dhcp4Dxe.efi (and,
+             * for an IPv4-literal URL, Udp4Dxe.efi) from every boot.
+             *
+             * To lease an address again: uncomment the branch below, ask for
+             * UEFI_NET_FEATURE_DHCP above, uncomment the Dhcp4Dxe entry in
+             * NetworkDrivers[], and restore Dhcp4Dxe.efi to
+             * media/boot/uefi_drivers/<arch>/.
+             *
+             * else if (!UefiDhcpAcquire(&Context))
+             * {
+             *     if (++FailedAttempts >= HTTP_BOOT_MAX_FAILURES)
+             *     {
+             *         TRACE("UEFI HttpBoot: no DHCP lease after %lu attempts, giving up\n", (unsigned long)FailedAttempts);
+             *         return FALSE;
+             *     }
+             *     GlobalSystemTable->BootServices->Stall(
+             *         UEFI_NETWORK_RETRY_DELAY_US);
+             *     continue;
+             * }
+             */
+            else if (!UefiInheritIpConfigure(&Context))
             {
                 if (++FailedAttempts >= HTTP_BOOT_MAX_FAILURES)
                 {
-                    TRACE("UEFI HttpBoot: no DHCP lease after %lu attempts, giving up\n", (unsigned long)FailedAttempts);
+                    TRACE("UEFI HttpBoot: no address to inherit after %lu attempts, giving up\n", (unsigned long)FailedAttempts);
                     return FALSE;
                 }
                 GlobalSystemTable->BootServices->Stall(

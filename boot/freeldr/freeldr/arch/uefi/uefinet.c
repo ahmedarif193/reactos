@@ -35,10 +35,13 @@ DBG_DEFAULT_CHANNEL(WARNING);
 #define NET_STAGE_HASH2 0x0400
 #define NET_STAGE_HASH2_SERVICE_BINDING 0x0800
 
-#define NET_REQUIRED_STAGES \
+/*
+ * The layers every download needs. DHCP4 and UDP4 join them only for the
+ * configurations that use them; see UefiNetRequiredStages().
+ */
+#define NET_BASE_REQUIRED_STAGES \
     (NET_STAGE_SNP | NET_STAGE_MNP | NET_STAGE_ARP | NET_STAGE_IP4 | \
-     NET_STAGE_IP4_CONFIG2 | NET_STAGE_DHCP | NET_STAGE_UDP4 | \
-     NET_STAGE_TCP4 | NET_STAGE_HTTP)
+     NET_STAGE_IP4_CONFIG2 | NET_STAGE_TCP4 | NET_STAGE_HTTP)
 
 typedef enum _UEFI_NETWORK_DRIVER_PHASE
 {
@@ -54,6 +57,8 @@ typedef struct _UEFI_NETWORK_DRIVER
     BOOLEAN NicDriver;
     BOOLEAN HttpDriver;
     UEFI_NETWORK_DRIVER_PHASE Phase;
+    /* UEFI_NET_FEATURE_* this driver serves, or zero when always needed. */
+    UINT32 Features;
 } UEFI_NETWORK_DRIVER;
 
 static EFI_GUID EfiDhcp4ServiceBindingGuid = EFI_DHCP4_SERVICE_BINDING_PROTOCOL_GUID;
@@ -127,30 +132,41 @@ static EFI_GUID EfiTcp4ServiceBindingGuid =
  * firmware has no network stack at all, while the Raspberry Pi 5 firmware
  * carries everything except a driver for its own NIC (and an HTTP driver
  * that allows plain http:// URLs).
+ *
+ * A driver tagged with a feature is loaded only when the boot entry asks for
+ * it. The loader leases no address of its own, so only a URL naming a host
+ * still pulls in the resolver and the UDP4 layer under it; the DHCP client
+ * is commented out alongside the branch that used to call it (see
+ * UefiHttpBootDownload()).
  */
 static const UEFI_NETWORK_DRIVER NetworkDrivers[] =
 {
 #if defined(_M_ARM64)
-    {L"\\EFI\\BOOT\\drivers\\Rp1GemDxe.efi", TRUE, FALSE, UefiNetworkDriverBase},
-    {L"\\EFI\\BOOT\\drivers\\HttpDxe.efi", FALSE, TRUE, UefiNetworkDriverUpper},
+    {L"\\EFI\\BOOT\\drivers\\Rp1GemDxe.efi", TRUE, FALSE, UefiNetworkDriverBase, 0},
+    {L"\\EFI\\BOOT\\drivers\\HttpDxe.efi", FALSE, TRUE, UefiNetworkDriverUpper, 0},
 #else
-    {L"\\EFI\\BOOT\\drivers\\DpcDxe.efi", FALSE, FALSE, UefiNetworkDriverBase},
-    {L"\\EFI\\BOOT\\drivers\\RngDxe.efi", FALSE, FALSE, UefiNetworkDriverBase},
-    {L"\\EFI\\BOOT\\drivers\\Hash2DxeCrypto.efi", FALSE, FALSE, UefiNetworkDriverBase},
-    {L"\\EFI\\BOOT\\drivers\\RtkUndiDxe.efi", TRUE, FALSE, UefiNetworkDriverBase},
-    {L"\\EFI\\BOOT\\drivers\\SnpDxe.efi", TRUE, FALSE, UefiNetworkDriverBase},
-    {L"\\EFI\\BOOT\\drivers\\MnpDxe.efi", FALSE, FALSE, UefiNetworkDriverMnp},
-    {L"\\EFI\\BOOT\\drivers\\ArpDxe.efi", FALSE, FALSE, UefiNetworkDriverArp},
-    {L"\\EFI\\BOOT\\drivers\\Ip4Dxe.efi", FALSE, FALSE, UefiNetworkDriverUpper},
-    {L"\\EFI\\BOOT\\drivers\\Udp4Dxe.efi", FALSE, FALSE, UefiNetworkDriverUpper},
-    {L"\\EFI\\BOOT\\drivers\\Dhcp4Dxe.efi", FALSE, FALSE, UefiNetworkDriverUpper},
-    {L"\\EFI\\BOOT\\drivers\\TcpDxe.efi", FALSE, FALSE, UefiNetworkDriverUpper},
-    {L"\\EFI\\BOOT\\drivers\\DnsDxe.efi", FALSE, FALSE, UefiNetworkDriverUpper},
-    {L"\\EFI\\BOOT\\drivers\\HttpUtilitiesDxe.efi", FALSE, FALSE, UefiNetworkDriverUpper},
-    {L"\\EFI\\BOOT\\drivers\\HttpDxe.efi", FALSE, TRUE, UefiNetworkDriverUpper},
+    {L"\\EFI\\BOOT\\drivers\\DpcDxe.efi", FALSE, FALSE, UefiNetworkDriverBase, 0},
+    {L"\\EFI\\BOOT\\drivers\\RngDxe.efi", FALSE, FALSE, UefiNetworkDriverBase, 0},
+    {L"\\EFI\\BOOT\\drivers\\Hash2DxeCrypto.efi", FALSE, FALSE, UefiNetworkDriverBase, 0},
+    {L"\\EFI\\BOOT\\drivers\\RtkUndiDxe.efi", TRUE, FALSE, UefiNetworkDriverBase, 0},
+    {L"\\EFI\\BOOT\\drivers\\SnpDxe.efi", TRUE, FALSE, UefiNetworkDriverBase, 0},
+    {L"\\EFI\\BOOT\\drivers\\MnpDxe.efi", FALSE, FALSE, UefiNetworkDriverMnp, 0},
+    {L"\\EFI\\BOOT\\drivers\\ArpDxe.efi", FALSE, FALSE, UefiNetworkDriverArp, 0},
+    {L"\\EFI\\BOOT\\drivers\\Ip4Dxe.efi", FALSE, FALSE, UefiNetworkDriverUpper, 0},
+    {L"\\EFI\\BOOT\\drivers\\Udp4Dxe.efi", FALSE, FALSE, UefiNetworkDriverUpper,
+     UEFI_NET_FEATURE_DHCP | UEFI_NET_FEATURE_DNS},
+/*  {L"\\EFI\\BOOT\\drivers\\Dhcp4Dxe.efi", FALSE, FALSE, UefiNetworkDriverUpper,
+     UEFI_NET_FEATURE_DHCP}, */
+    {L"\\EFI\\BOOT\\drivers\\TcpDxe.efi", FALSE, FALSE, UefiNetworkDriverUpper, 0},
+    {L"\\EFI\\BOOT\\drivers\\DnsDxe.efi", FALSE, FALSE, UefiNetworkDriverUpper,
+     UEFI_NET_FEATURE_DNS},
+    {L"\\EFI\\BOOT\\drivers\\HttpUtilitiesDxe.efi", FALSE, FALSE, UefiNetworkDriverUpper, 0},
+    {L"\\EFI\\BOOT\\drivers\\HttpDxe.efi", FALSE, TRUE, UefiNetworkDriverUpper, 0},
 #endif
 };
 
+static UINT32 NetworkFeatures;
+static UINT32 NetworkDriversLoadedFeatures;
 static BOOLEAN NetworkDriversAttempted;
 static BOOLEAN UpperNetworkDriversReleased;
 static EFI_HANDLE NetworkDriverImages[RTL_NUMBER_OF(NetworkDrivers)];
@@ -246,6 +262,21 @@ UefiNetGetProtocol(
 
     GlobalSystemTable->BootServices->FreePool(Handles);
     return Status;
+}
+
+static UINT32
+UefiNetRequiredStages(
+    _In_ UINT32 Features)
+{
+    UINT32 Stages = NET_BASE_REQUIRED_STAGES;
+
+    /* EDK2 layers both the DHCP client and the resolver on UDP4. */
+    if (Features & (UEFI_NET_FEATURE_DHCP | UEFI_NET_FEATURE_DNS))
+        Stages |= NET_STAGE_UDP4;
+    if (Features & UEFI_NET_FEATURE_DHCP)
+        Stages |= NET_STAGE_DHCP;
+
+    return Stages;
 }
 
 static UINT32
@@ -439,11 +470,17 @@ UefiLoadNetworkDrivers(
     EFI_FILE_PROTOCOL *Root = NULL;
     UINTN Index;
 
-    if (NetworkDriversAttempted)
+    if (NetworkDriversAttempted &&
+        (NetworkFeatures & ~NetworkDriversLoadedFeatures) == 0)
     {
         return;
     }
+
+    /* A second pass adds drivers a previous boot entry did not ask for. */
+    if (NetworkDriversAttempted)
+        UpperNetworkDriversReleased = FALSE;
     NetworkDriversAttempted = TRUE;
+    NetworkDriversLoadedFeatures |= NetworkFeatures;
 
 
     Status = GlobalSystemTable->BootServices->HandleProtocol(
@@ -466,6 +503,15 @@ UefiLoadNetworkDrivers(
     {
         if (!IncludeNicDrivers && NetworkDrivers[Index].NicDriver)
             continue;
+
+        if (NetworkDriverImages[Index])
+            continue;
+
+        if (NetworkDrivers[Index].Features != 0 &&
+            (NetworkDrivers[Index].Features & NetworkFeatures) == 0)
+        {
+            continue;
+        }
 
         UefiLoadDxeImage(
             Root,
@@ -803,10 +849,12 @@ UefiNetForceRebindHttp(
 BOOLEAN
 UefiNetPrepare(
     _Out_ PUEFI_NET_CONTEXT Context,
+    _In_ UINT32 Features,
     _Out_opt_ PBOOLEAN Cancelled)
 {
     EFI_HANDLE HttpController = NULL;
     EFI_SIMPLE_NETWORK_PROTOCOL *Snp = NULL;
+    UINT32 RequiredStages = UefiNetRequiredStages(Features);
     UINT32 Mask;
     UINT32 PreviousMask = (UINT32)-1;
     UINTN Attempts = 0;
@@ -822,6 +870,7 @@ UefiNetPrepare(
     }
 
     RtlZeroMemory(Context, sizeof(*Context));
+    NetworkFeatures = Features;
 
     /*
      * Expose PCI I/O handles, apply the board's RTL8168 preparation before
@@ -832,10 +881,11 @@ UefiNetPrepare(
     UefiLattePandaPrepareNic();
 
     Mask = UefiGetNetworkStageMask(NULL);
-    TRACE("UEFI Network: firmware provides mask %08lx, need %08lx\n",
+    TRACE("UEFI Network: firmware provides mask %08lx, need %08lx (features %08lx)\n",
           (unsigned long)Mask,
-          (unsigned long)NET_REQUIRED_STAGES);
-    if ((Mask & NET_REQUIRED_STAGES) != NET_REQUIRED_STAGES)
+          (unsigned long)RequiredStages,
+          (unsigned long)Features);
+    if ((Mask & RequiredStages) != RequiredStages)
     {
         UefiLoadNetworkDrivers((Mask & NET_STAGE_SNP) == 0);
         if (!UefiNetAnyDriverLoaded())
@@ -861,7 +911,7 @@ UefiNetPrepare(
                 TRACE("UEFI Network: SNP initialization failed\n");
         }
 
-        if (Snp && (Mask & NET_REQUIRED_STAGES) == NET_REQUIRED_STAGES)
+        if (Snp && (Mask & RequiredStages) == RequiredStages)
         {
             /*
              * Keep the address repaired after the remaining drivers bind.

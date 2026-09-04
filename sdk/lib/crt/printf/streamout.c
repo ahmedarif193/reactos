@@ -327,7 +327,7 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
 {
     static const _TCHAR digits_l[] = _T("0123456789abcdef0x");
     static const _TCHAR digits_u[] = _T("0123456789ABCDEF0X");
-    static const char *_nullstring = "(null)";
+    static const _TCHAR _nullstring[] = _T("(null)");
     _TCHAR buffer[BUFFER_SIZE + 1];
     _TCHAR chr, *string;
     STRING *nt_string;
@@ -534,8 +534,14 @@ streamout(FILE *stream, const _TCHAR *format, va_list argptr)
             case_string:
                 if (!string)
                 {
+                    /* Keep the placeholder in the output encoding so wide
+                     * formatting does not require an ANSI code-page lookup. */
                     string = (_TCHAR*)_nullstring;
+#ifdef _UNICODE
+                    flags |= FLAG_WIDECHAR;
+#else
                     flags &= ~FLAG_WIDECHAR;
+#endif
                 }
 
                 if (flags & FLAG_WIDECHAR)

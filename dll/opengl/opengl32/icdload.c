@@ -388,6 +388,9 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     WGL_PRESENTBUFFERS PresentData;
     WGL_PRESENTBUFFERS2 PresentData2;
     HWND Window;
+    POINT ClientOrigin = {0, 0};
+    RECT WindowRect;
+    RECT UpdateRect;
     HANDLE SharedSurface = NULL;
     ULONGLONG UpdateId = 0;
     UINT Format = 0;
@@ -403,6 +406,13 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     Window = WindowFromDC(hdc);
     if (Window == NULL)
         return FALSE;
+
+    /* The ICD update is relative to the window surface, including its
+     * non-client area. The shared surface contains only client pixels. */
+    if (!ClientToScreen(Window, &ClientOrigin) || !GetWindowRect(Window, &WindowRect))
+        return FALSE;
+    UpdateRect = CallbackData->UpdateRect;
+    OffsetRect(&UpdateRect, WindowRect.left - ClientOrigin.x, WindowRect.top - ClientOrigin.y);
 
     /* The ICD presents on every frame; use the ICD already bound to this DC
      * instead of re-running ICD discovery (adapter open/query/close). */
@@ -478,7 +488,7 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
         AsyncPresent->Window = Window;
         AsyncPresent->UpdateId = UpdateId;
         AsyncPresent->Flags = CallbackData->SyncType;
-        AsyncPresent->UpdateRect = CallbackData->UpdateRect;
+        AsyncPresent->UpdateRect = UpdateRect;
     }
 
     if (AsyncPresent != NULL)
@@ -516,7 +526,7 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
                                              UpdateId,
                                              CallbackData->SyncType,
                                              NULL,
-                                             &CallbackData->UpdateRect);
+                                             &UpdateRect);
     if (SUCCEEDED(Result))
         return TRUE;
 

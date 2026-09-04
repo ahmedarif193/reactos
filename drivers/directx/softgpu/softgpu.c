@@ -2720,7 +2720,7 @@ SoftGpuDdiQueryChildRelations(
 
     /*
      * Report one child device: a video output (monitor connector).
-     * ChildUid = 1 is an arbitrary stable identifier.
+     * The child uid is SOFTGPU_CHILD_UID; it is also the VidPN target id.
      * HpdAwareness = HpdAwarenessAlwaysConnected: the virtual monitor is
      * permanently attached and never raises hot-plug interrupts.  In the WDDM2
      * dispmprt.h layout HpdAwareness is a top-level DXGK_CHILD_CAPABILITIES
@@ -2729,7 +2729,7 @@ SoftGpuDdiQueryChildRelations(
     RtlZeroMemory(ChildRelations, sizeof(DXGK_CHILD_DESCRIPTOR));
     ChildRelations[0].ChildDeviceType                = TypeVideoOutput;
     ChildRelations[0].ChildCapabilities.HpdAwareness = HpdAwarenessAlwaysConnected;
-    ChildRelations[0].ChildUid                       = 1;
+    ChildRelations[0].ChildUid                       = SOFTGPU_CHILD_UID;
 
     return STATUS_SUCCESS;
 }
@@ -2747,7 +2747,7 @@ SoftGpuDdiQueryChildStatus(
     DPRINT("SOFTGPU: QueryChildStatus ChildUid=%lu Type=%d\n",
            ChildStatus->ChildUid, (int)ChildStatus->Type);
 
-    if (ChildStatus->ChildUid != 1)
+    if (ChildStatus->ChildUid != SOFTGPU_CHILD_UID)
         return STATUS_INVALID_PARAMETER;
 
     if (ChildStatus->Type == StatusConnection)

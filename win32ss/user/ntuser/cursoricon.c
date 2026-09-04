@@ -2527,6 +2527,10 @@ NtUserSetSystemCursor(
                  pcur->CURSORF_flags |= CURSORF_GLOBAL;
                  pcur->head.ppi = NULL;
                  IntInsertCursorIntoList(pcur);
+                 /* The default server classes were registered before this
+                  * cursor existed and could not resolve OCR_NORMAL then. */
+                 if (i == ROCR_ARROW)
+                     IntApplySystemArrowToPendingClasses(pcur);
                  Ret = TRUE;
               }
               break;

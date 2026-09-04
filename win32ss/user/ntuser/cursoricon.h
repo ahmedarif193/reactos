@@ -132,6 +132,7 @@ extern SYSTEMCURICO gasyscur[];
 #define SYSTEMICO(func) (gasysico[ROIC_ ## func].handle)
 
 VOID IntLoadSystenIcons(HICON,DWORD);
+VOID FASTCALL IntApplySystemArrowToPendingClasses(PCURICON_OBJECT);
 
 BOOL InitCursorImpl(VOID);
 HANDLE IntCreateCurIconHandle(BOOLEAN Anim);

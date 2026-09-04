@@ -49,6 +49,15 @@ static void Test__sntprintf(void)
 #endif
 
     StartSeh()
+        Result = _sntprintf(Buffer, BufferSize, _T("%s|%S|%hs|%ls"), NULL, NULL, NULL, NULL);
+        ok_int(Result, 27);
+        ok(_tcscmp(Buffer, _T("(null)|(null)|(null)|(null)")) == 0, "Unexpected NULL string formatting\n");
+        Result = _sntprintf(Buffer, BufferSize, _T("%8.3s"), NULL);
+        ok_int(Result, 8);
+        ok(_tcscmp(Buffer, _T("     (nu")) == 0, "Unexpected NULL string width or precision\n");
+    EndSeh(STATUS_SUCCESS);
+
+    StartSeh()
         Result = _sntprintf(NULL, 0, _T("Hello"));
 #ifdef TEST_CRTDLL
         ok_int(Result, -1);

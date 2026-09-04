@@ -98,6 +98,8 @@ DxgkDeviceWorkCreate(
     RtlZeroMemory(Work, sizeof(*Work));
     DxgkDeviceWorkCoreInitializeItem(&Work->CoreItem, &Device->WorkLedger);
     Work->Device = Device;
+    Work->ReferenceCount = 1;
+    Work->CompletionStatus = STATUS_PENDING;
     *OutWork = Work;
     return STATUS_SUCCESS;
 }
@@ -112,12 +114,44 @@ DxgkDeviceWorkActivate(
 }
 
 VOID
-DxgkDeviceWorkComplete(
-    _Inout_opt_ PDXGKRNL_DEVICE_WORK Work)
+DxgkDeviceWorkCompleteWithStatus(
+    _Inout_opt_ PDXGKRNL_DEVICE_WORK Work,
+    _In_ NTSTATUS Status)
 {
     if (Work == NULL || Work->Device == NULL)
         return;
-    DxgkDeviceWorkCoreComplete(&Work->CoreItem);
+    ASSERT(Status != STATUS_PENDING);
+    /* Publish the result before waking ledger waiters. Keep the first result
+     * when the ownership cleanup subsequently completes this item again. */
+    if (InterlockedCompareExchange(&Work->CompletionStatus, Status,
+                                   STATUS_PENDING) == STATUS_PENDING)
+        DxgkDeviceWorkCoreComplete(&Work->CoreItem);
+}
+
+VOID
+DxgkDeviceWorkComplete(
+    _Inout_opt_ PDXGKRNL_DEVICE_WORK Work)
+{
+    DxgkDeviceWorkCompleteWithStatus(Work, STATUS_SUCCESS);
+}
+
+VOID
+DxgkDeviceWorkReference(_Inout_ PDXGKRNL_DEVICE_WORK Work)
+{
+    InterlockedIncrement(&Work->ReferenceCount);
+}
+
+VOID
+DxgkDeviceWorkDereference(_Inout_opt_ PDXGKRNL_DEVICE_WORK Work)
+{
+    if (Work != NULL && InterlockedDecrement(&Work->ReferenceCount) == 0)
+        ExFreePoolWithTag(Work, TAG_DXGK_DEVICE);
+}
+
+NTSTATUS
+DxgkDeviceWorkGetStatus(_In_ PDXGKRNL_DEVICE_WORK Work)
+{
+    return InterlockedCompareExchange(&Work->CompletionStatus, 0, 0);
 }
 
 VOID
@@ -126,10 +160,8 @@ DxgkDeviceWorkDestroy(
 {
     if (Work == NULL)
         return;
-    DxgkDeviceWorkCoreComplete(&Work->CoreItem);
-    Work->CoreItem.Ledger = NULL;
-    Work->Device = NULL;
-    ExFreePoolWithTag(Work, TAG_DXGK_DEVICE);
+    DxgkDeviceWorkComplete(Work);
+    DxgkDeviceWorkDereference(Work);
 }
 
 VOID
@@ -1453,10 +1485,10 @@ DxgkContextUninit(VOID)
  *
  * On success pCreateDevice->hDevice receives the new device handle.
  */
-NTSTATUS
-NTAPI
-DxgkCreateDevice(
-    _Inout_ D3DKMT_CREATEDEVICE *pCreateDevice)
+static NTSTATUS
+DxgkpCreateDevice(
+    _Inout_ D3DKMT_CREATEDEVICE *pCreateDevice,
+    _In_ BOOLEAN GdiDevice)
 {
     PDXGKRNL_ADAPTER     Adapter;
     PDXGKRNL_DEVICE      Device;
@@ -1511,6 +1543,7 @@ DxgkCreateDevice(
     Device->Adapter = Adapter;
     Device->OwnerProcess = PsGetCurrentProcess();
     Device->Flags   = pCreateDevice->Flags;
+    Device->GdiDevice = GdiDevice;
     Device->ReferenceCount = 1;
     Device->ExecutionState = D3DKMT_DEVICEEXECUTION_ACTIVE;
 
@@ -1556,6 +1589,7 @@ DxgkCreateDevice(
     CreateDeviceArg.hDevice             = (HANDLE)Device; /* raw pointer as token */
     /* UMD D3DKMT flags are not bit-compatible with the KMD device flags. */
     CreateDeviceArg.Flags.Value         = 0;
+    CreateDeviceArg.Flags.GdiDevice     = GdiDevice;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     CreateDeviceArg.hKmdProcess         = Device->ProcessRecord->hMiniportProcess;
 #endif
@@ -1581,12 +1615,14 @@ DxgkCreateDevice(
         }
         KmdTransactionStarted = TRUE;
         Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateDevice)(Adapter->MiniportDeviceContext, &CreateDeviceArg);
-        if (NT_SUCCESS(Status) && CreateDeviceArg.pInfo != NULL)
+        if (NT_SUCCESS(Status) && !Adapter->SchedulingCaps.MultiEngineAware && CreateDeviceArg.pInfo != NULL)
         {
             /*
              * pInfo belongs to the miniport and is only an output pointer for
              * backward-compatible contextless DMA geometry.  Snapshot it
              * before any other callback can invalidate driver-owned storage.
+             * Multi-engine miniports use ContextInfo instead and may leave
+             * this union holding the input Flags rather than a pointer.
              */
             _SEH2_TRY
             {
@@ -1712,6 +1748,31 @@ DxgkCreateDevice(
         DxgkDereferenceAdapter(Adapter);
     }
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+DxgkCreateDevice(
+    _Inout_ D3DKMT_CREATEDEVICE *pCreateDevice)
+{
+    return DxgkpCreateDevice(pCreateDevice, FALSE);
+}
+
+NTSTATUS
+DxgkCreateCddDevice(
+    _Inout_ D3DKMT_CREATEDEVICE *CreateDevice)
+{
+    PDXGKRNL_PROCESS Process;
+    NTSTATUS Status;
+
+    /* CDD is owned by the system, not by whichever application dirtied GDI. */
+    ASSERT(PsGetCurrentProcess() == PsInitialSystemProcess);
+    Status = DxgkAcquireProcessRecord(CreateDevice->pAdapter, PsInitialSystemProcess, &Process);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = DxgkpCreateDevice(CreateDevice, TRUE);
+    DxgkDereferenceProcessRecord(Process);
+    return Status;
 }
 
 static NTSTATUS
@@ -1841,6 +1902,8 @@ DxgkCleanupAdapterDevices(
         return STATUS_INVALID_PARAMETER;
     DxgkD3dkmtAdapterCleanup(Adapter);
     DxgkPurgeAdapterHandles(Adapter);
+    Adapter->CddDeviceHandle = 0;
+    Adapter->CddContextHandle = 0;
     (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
     while (!IsListEmpty(&Adapter->DeviceListHead))
     {
@@ -1995,6 +2058,7 @@ DxgkpCreateContextCaptured(
      * level of the stack for WDDM 1.0.
      */
     CreateContextArg.Flags.Value           = 0;
+    CreateContextArg.Flags.GdiContext      = Device->GdiDevice;
     CreateContextArg.pPrivateDriverData    = pCreateContext->pPrivateDriverData;
     CreateContextArg.PrivateDriverDataSize = pCreateContext->PrivateDriverDataSize;
 
@@ -2052,7 +2116,7 @@ DxgkpCreateContextCaptured(
          * allocation entries, and patch locations straight into the memory
          * D3DKMTRender will translate.
          */
-        Status = DxgkContextRenderInitialize(Context);
+        Status = Device->GdiDevice ? STATUS_SUCCESS : DxgkContextRenderInitialize(Context);
         if (!NT_SUCCESS(Status))
         {
             DXGKRNL_ERR("DxgkCreateContext: render ring setup failed 0x%08lX\n", Status);
@@ -2189,6 +2253,49 @@ DxgkCreateContext(
     return DxgkpCreateContextWithAccessMode(pCreateContext, KernelMode);
 }
 
+NTSTATUS
+DxgkCreateCddContext(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ D3DKMT_CREATECONTEXT *CreateContext)
+{
+    DXGKARG_GETNODEMETADATA Metadata;
+    D3DKMT_CREATECONTEXTVIRTUAL VirtualContext;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || CreateContext == NULL || PsGetCurrentProcess() != PsInitialSystemProcess)
+        return STATUS_INVALID_PARAMETER;
+    if (DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata) == NULL)
+        return DxgkCreateContext(CreateContext);
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
+    RtlZeroMemory(&Metadata, sizeof(Metadata));
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata)(Adapter->MiniportDeviceContext, CreateContext->NodeOrdinal, &Metadata);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!Metadata.GpuMmuSupported && !Metadata.IoMmuSupported)
+        return DxgkCreateContext(CreateContext);
+    /* GDI must use the node's addressing contract, just like user contexts.
+     * The GPUVA context creator installs the process root page table. */
+    RtlZeroMemory(&VirtualContext, sizeof(VirtualContext));
+    VirtualContext.hDevice = CreateContext->hDevice;
+    VirtualContext.NodeOrdinal = CreateContext->NodeOrdinal;
+    VirtualContext.EngineAffinity = CreateContext->EngineAffinity;
+    Status = DxgkCreateContextVirtual(&VirtualContext);
+    if (NT_SUCCESS(Status))
+        CreateContext->hContext = VirtualContext.hContext;
+    return Status;
+}
+
 /*
  * D3DKMTCreateContextVirtual is a thunk-layer entry point, not a distinct
  * miniport DDI. The WDDM 2.0 contract uses DxgkDdiCreateContext with the
@@ -2277,6 +2384,7 @@ DxgkCreateContextVirtual(
     CreateContextArg.EngineAffinity = pCreateContext->EngineAffinity;
     CreateContextArg.Flags.Value = 0;
     CreateContextArg.Flags.VirtualAddressing = 1;
+    CreateContextArg.Flags.GdiContext = Device->GdiDevice;
     CreateContextArg.pPrivateDriverData = pCreateContext->pPrivateDriverData;
     CreateContextArg.PrivateDriverDataSize = pCreateContext->PrivateDriverDataSize;
 
@@ -2333,21 +2441,8 @@ DxgkCreateContextVirtual(
 
     Context->hMiniportContext = CreateContextArg.hContext;
     Context->ContextInfo = CreateContextArg.ContextInfo;
-    if (pCreateContext->Flags.NullRendering)
-        Status = STATUS_SUCCESS;
-    else
-        Status = DxgkGpuVaSetRootPageTable(Adapter, Device->ProcessRecord, Context);
-
-    if (!NT_SUCCESS(Status))
-    {
-        DxgkpRollbackCreatedContext(Context);
-        if (KmdTransactionStarted)
-        {
-            DxgkEndKmdTransaction(Adapter);
-            DxgkDereferenceAdapter(Adapter);
-        }
-        return Status;
-    }
+    /* Associate the root with the miniport context only when the scheduler
+     * dispatches its first non-null virtual packet. */
 
     Status = DxgkpCreateContextStream(Context);
     if (!NT_SUCCESS(Status))

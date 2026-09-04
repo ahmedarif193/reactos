@@ -14,6 +14,17 @@ set /a TRIES=0
 
 if exist "%BOOTTEST%" call "%BOOTTEST%"
 
+if exist "%S%\glmark2_runner.exe" (
+    if exist "%S%\wglgears_runner.exe" (
+        call :say APPLAUNCH_WGLGEARS_BEGIN
+        "%S%\wglgears_runner.exe"
+        call :say APPLAUNCH_WGLGEARS_EXIT !ERRORLEVEL!
+    )
+    call :say APPLAUNCH_GLMARK2_BEGIN
+    "%S%\glmark2_runner.exe"
+    call :say APPLAUNCH_GLMARK2_EXIT !ERRORLEVEL!
+)
+
 :scan
 for %%D in (D E F G H I J K L M N O P Q R S T U V W X Y Z C) do (
     if /i not "%%D:" == "%SystemDrive%" (

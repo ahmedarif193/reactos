@@ -1026,11 +1026,13 @@ RtlUnwind(
                 NULL);
 }
 
+static
+DECLSPEC_NOINLINE
 ULONG
 NTAPI
-RtlWalkFrameChain(OUT PVOID *Callers,
-                  IN ULONG Count,
-                  IN ULONG Flags)
+RtlpWalkFrameChain(OUT PVOID *Callers,
+                   IN ULONG Count,
+                   IN ULONG Flags)
 {
     CONTEXT Context;
     ULONG64 ControlPc, ImageBase, EstablisherFrame;
@@ -1047,8 +1049,8 @@ RtlWalkFrameChain(OUT PVOID *Callers,
         return 0;
     }
 
-    /* The upper bits in Flags define how many frames to skip */
-    FramesToSkip = Flags >> 8;
+    /* Skip the public wrapper in addition to the caller-requested frames. */
+    FramesToSkip = (Flags >> 8) + 1;
 
     /* Capture the current Context */
     RtlCaptureContext(&Context);
@@ -1140,6 +1142,41 @@ RtlWalkFrameChain(OUT PVOID *Callers,
 
     DPRINT("RtlWalkFrameChain returns %ld\n", i);
     return i;
+}
+
+DECLSPEC_NOINLINE
+ULONG
+NTAPI
+RtlWalkFrameChain(OUT PVOID *Callers,
+                  IN ULONG Count,
+                  IN ULONG Flags)
+{
+    ULONG_PTR StackLow, StackHigh, StackPointer;
+    ULONG Frames;
+
+    if (Callers == NULL || Count == 0)
+        return 0;
+
+    if (RtlpGetMode() == KernelMode)
+    {
+        RtlpGetStackLimits(&StackLow, &StackHigh);
+        StackPointer = (ULONG_PTR)&StackLow;
+
+        /*
+         * Check in a small frame, before allocating the walker's CONTEXT.
+         * Virtual unwinding needs another CONTEXT plus space for lookup and
+         * exception handling. A diagnostic stack walk must not exhaust the
+         * committed kernel stack while trying to capture its caller.
+         */
+        if (StackPointer < StackLow || StackPointer >= StackHigh ||
+            StackPointer - StackLow < 2 * PAGE_SIZE)
+        {
+            return 0;
+        }
+    }
+
+    Frames = RtlpWalkFrameChain(Callers, Count, Flags);
+    return Frames != 0 ? Frames - 1 : 0;
 }
 
 /*! RtlGetCallersAddress

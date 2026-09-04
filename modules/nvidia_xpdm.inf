@@ -1,0 +1,34 @@
+[Version]
+Signature = "$Windows NT$"
+
+[AddReg]
+
+; Optional AMD64 LiveCD NVIDIA XPDM payload
+HKLM,"SYSTEM\CurrentControlSet\Services\nv","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\nv","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\nv","ImagePath",0x00020000,"system32\drivers\nv4_mini.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\nv","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\nv","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\nv","Tag",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Video","Service",0x00000000,"nv"
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Device0","InstalledDisplayDrivers",0x00010000,"nv4_disp"
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Device0","DefaultSettings.BitsPerPel",0x00010001,32
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Device0","DefaultSettings.XResolution",0x00010001,800
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Device0","DefaultSettings.YResolution",0x00010001,600
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Device0","DefaultSettings.VgaCompatible",0x00010001,0
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Device0","Acceleration.Level",0x00010001,0
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Device0","Attach.PrimaryDevice",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Device0","Attach.ToDesktop",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\nv\Device0","Device Description",0x00000000,"NVIDIA GeForce 750ti"
+
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_10DE&DEV_139D","Service",0x00000000,"nv"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_10DE&DEV_139D","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_10DE&DEV_1380","Service",0x00000000,"nv"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_10DE&DEV_1380","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_10DE&DEV_0DF8","Service",0x00000000,"nv"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_10DE&DEV_0DF8","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\RIVATNT","DriverVersion",0x00010001,0x00010000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\RIVATNT","Version",0x00010001,0x00000002
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\RIVATNT","Flags",0x00010001,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\RIVATNT","Dll",,"nvoglnt"

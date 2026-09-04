@@ -135,6 +135,26 @@ InbvGetGopFrameBufferInfo(
 /* Segment 1 is the only segment softgpu exposes (segment IDs are 1-based). */
 #define SOFTGPU_SEGMENT_ID      1
 
+/*
+ * The uid of the single video output softgpu reports from
+ * DxgkDdiQueryChildRelations.  A VidPN target id *is* the child uid, so this
+ * is also the only target id the miniport will ever be handed, and both sides
+ * must be written in terms of this one constant.  They used to disagree --
+ * the child was reported as uid 1 while every VidPN check demanded target id
+ * 0 -- so DxgkDdiIsSupportedVidPn refused the only topology dxgkrnl can build
+ * and the boot ended in VIDEO_DRIVER_INIT_FAILURE.
+ *
+ * It must stay 0 for a miniport that takes dxgkrnl's seeded topology (this
+ * one, and display-only drivers).  DxgkVidPnCreateForAdapter runs inside
+ * DxgkAdapterStart, before PnP has asked for child relations, so it can only
+ * seed a path with the positional target id -- it does not yet know the uids.
+ * A seeded adapter whose uid is not its slot index is therefore handed a
+ * target it does not own.  Full miniports such as the Intel one are unaffected
+ * because they get the empty topology and their real uid arrives with the
+ * hot-plug rebuild.
+ */
+#define SOFTGPU_CHILD_UID       0
+
 #define SOFTGPU_DEFAULT_WIDTH           1024UL
 #define SOFTGPU_DEFAULT_HEIGHT          768UL
 #define SOFTGPU_DEFAULT_FORMAT          D3DDDIFMT_A8R8G8B8
