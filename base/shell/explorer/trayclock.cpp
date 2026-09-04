@@ -192,6 +192,7 @@ LRESULT CTrayClockWnd::OnThemeChanged()
     {
         GetThemeFont(clockTheme, NULL, CLP_TIME, 0, TMT_FONT, &clockFont);
 
+        clockFont.lfQuality = ANTIALIASED_QUALITY;
         hFont = CreateFontIndirectW(&clockFont);
 
         GetThemeColor(clockTheme, CLP_TIME, 0, TMT_TEXTCOLOR, &textColor);
@@ -622,7 +623,7 @@ HFONT CTrayClockWnd::GetClockFont()
             hThemedFont = CreateFontW(-ShellScaleForDpi(12), 0, 0, 0, FW_NORMAL,
                                       FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                      CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+                                      ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
         }
         if (hThemedFont)
             return hThemedFont;

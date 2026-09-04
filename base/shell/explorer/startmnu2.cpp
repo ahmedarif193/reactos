@@ -130,12 +130,14 @@ SM2SelectPalette(VOID)
     g_SM2EditBrush = CreateSolidBrush(g_SM2Pal.SearchBg);
 }
 
+static COLORREF SM2Mix(COLORREF a, COLORREF b, int t);
+
 VOID StartMenu2_GetFlyoutPalette(OUT SM2_FLYOUT_PALETTE *pPal)
 {
     SM2SelectPalette();
     pPal->PanelBg = g_SM2Pal.LeftBg;
     pPal->PanelText = g_SM2Pal.LeftText;
-    pPal->DimText = g_SM2Pal.Cue;
+    pPal->DimText = SM2Mix(g_SM2Pal.LeftText, g_SM2Pal.LeftBg, 54);
     pPal->HotFill = g_SM2Pal.HotFill;
     pPal->HotBorder = g_SM2Pal.HotBorder;
     pPal->Border = g_SM2Pal.Border;
@@ -2008,7 +2010,7 @@ public:
         lf.lfHeight = -Sc(12);
         lf.lfWeight = FW_NORMAL;
         lf.lfItalic = FALSE;
-        lf.lfQuality = CLEARTYPE_QUALITY;
+        lf.lfQuality = ANTIALIASED_QUALITY;
         m_hFont = CreateFontIndirectW(&lf);
 
         lf.lfItalic = TRUE;
