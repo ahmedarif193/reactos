@@ -2053,17 +2053,6 @@ SerCx2DdiPioTransmitPurgeFifoComplete(
 }
 
 static
-NTSTATUS
-NTAPI
-SerCx2DdiNotSupported(
-    _In_ PSERCX_DRIVER_GLOBALS ClientGlobals,
-    ...)
-{
-    UNREFERENCED_PARAMETER(ClientGlobals);
-    return STATUS_NOT_SUPPORTED;
-}
-
-static
 VOID
 NTAPI
 SerCx2DdiNoOperation(

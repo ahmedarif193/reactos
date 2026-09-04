@@ -545,8 +545,6 @@ DriverEntry(
     IN PDRIVER_OBJECT DriverObject,
     IN PUNICODE_STRING RegistryPath);
 
-#endif /* _PCI_PCH_ */
-
 FORCEINLINE
 ULONGLONG
 PciMemoryDescriptorLength(
@@ -600,3 +598,5 @@ PciSetMemoryDescriptor(
         Descriptor->u.Memory64.Length64 = (ULONG)(Length >> 32);
     }
 }
+
+#endif /* _PCI_PCH_ */

@@ -64,6 +64,7 @@ struct user_api_hook user_api = {0};
 
 /***********************************************************************/
 
+#ifndef __REACTOS__
 static BOOL CALLBACK UXTHEME_broadcast_msg_enumchild (HWND hWnd, LPARAM msg)
 {
     PostMessageW(hWnd, msg, 0, 0);
@@ -84,6 +85,7 @@ static BOOL CALLBACK UXTHEME_broadcast_msg (HWND hWnd, LPARAM msg)
     }
     return TRUE;
 }
+#endif
 
 /* At the end of the day this is a subset of what SHRegGetPath() does - copied
  * here to avoid linking against shlwapi. */

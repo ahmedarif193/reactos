@@ -39,11 +39,6 @@ DxDdStartupDxGraphics(  ULONG ulc1,
                         PULONG DirectDrawContext,
                         PEPROCESS Proc)
 {
-    DRVENABLEDATA DxEngDrv;
-    DRVENABLEDATA DxgDrv;
-
-    NTSTATUS Status = STATUS_PROCEDURE_NOT_FOUND;
-
 #if defined(REACTOS_GRAPHICS_DRIVER_MODEL_WDDM)
     /* The XDDM DirectX kernel (dxg.sys) was removed in Windows 8; a WDDM
      * build keeps gpDxFuncs empty so every legacy Dd DDI reports
@@ -57,6 +52,10 @@ DxDdStartupDxGraphics(  ULONG ulc1,
     DPRINT("DxDdStartupDxGraphics: WDDM build, legacy dxg.sys path disabled\n");
     return STATUS_SUCCESS;
 #else
+    DRVENABLEDATA DxEngDrv;
+    DRVENABLEDATA DxgDrv;
+
+    NTSTATUS Status = STATUS_PROCEDURE_NOT_FOUND;
 
     /* FIXME: Setup of gaEngFuncs driver export list
      * but not in this api, we can add it here tempary until we figout where

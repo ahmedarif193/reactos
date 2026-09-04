@@ -48,8 +48,12 @@
 #  endif
 
 static int wimage_sse2_enabled  = 0;
+#if WIMAGE_HAVE_SSSE3 || defined(_MSC_VER)
 static int wimage_ssse3_enabled = 0;
+#endif
+#if WIMAGE_HAVE_AVX2 || defined(_MSC_VER)
 static int wimage_avx2_enabled  = 0;
+#endif
 
 /* PSHUFB masks for small-offset RLE expansion. */
 #  if WIMAGE_HAVE_SSSE3

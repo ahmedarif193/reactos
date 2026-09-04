@@ -724,6 +724,7 @@ HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
     return hr;
 }
 
+#ifndef __REACTOS__
 static void parse_msi_version_string(const char *version, int *parts)
 {
     const char *minor_start, *build_start;
@@ -952,6 +953,7 @@ end:
         CoUninitialize();
     return ret;
 }
+#endif
 
 HRESULT WINAPI DllRegisterServer(void)
 {

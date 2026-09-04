@@ -4860,7 +4860,7 @@ DxgkGpuVaAuditMappings(
         PDXGKRNL_GPUVA_PAGE_TABLE Table;
         D3DGPU_VIRTUAL_ADDRESS Va;
         ULONG Level;
-        ULONG BadLevel = ULONG_MAX;
+        ULONG BadLevel = MAXULONG;
 
         if (Range->State != GpuVaStateMapped)
             continue;
@@ -4885,7 +4885,7 @@ DxgkGpuVaAuditMappings(
             }
         }
 
-        if (BadLevel != ULONG_MAX && Broken < 16)
+        if (BadLevel != MAXULONG && Broken < 16)
         {
             Broken++;
             DXGKRNL_ERR("AUDIT va=0x%I64x size=0x%I64x prot=0x%I64x broken at level %lu\n",

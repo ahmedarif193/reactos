@@ -15,30 +15,6 @@
 #include <reactos/dwmframe.h>
 DBG_DEFAULT_CHANNEL(UserPainting);
 
-/* Send a CDD_ESCAPE_* to the canonical display driver via the screen DC. */
-static ULONG
-IntCompositionDriverEscape(_In_ ULONG iEsc, _In_ PVOID pvIn, _In_ ULONG cjIn)
-{
-    PDC pdcScreen;
-    PPDEVOBJ ppdev;
-    ULONG Result = 0;
-
-    if (ScreenDeviceContext == NULL)
-        return 0;
-    pdcScreen = DC_LockDc(ScreenDeviceContext);
-    if (pdcScreen == NULL)
-        return 0;
-
-    ppdev = pdcScreen->ppdev;
-    if (ppdev != NULL && ppdev->DriverFunctions.Escape != NULL &&
-        ppdev->pSurface != NULL)
-    {
-        Result = ppdev->DriverFunctions.Escape(&ppdev->pSurface->SurfObj, iEsc, cjIn, pvIn, 0, NULL);
-    }
-    DC_UnlockDc(pdcScreen);
-    return Result;
-}
-
 /* OFF until dwm.exe attaches (Windows model: no compositor -> direct draw;
  * redirection exists only while a compositor owns the frame). */
 BOOL gbCompositionEnabled = FALSE;

@@ -284,6 +284,7 @@ static void HEADER_GetHotDividerRect(const HEADER_INFO *infoPtr, RECT *r)
 }
 
 #ifdef __REACTOS__
+#if __WINE_COMCTL32_VERSION == 6
 static int
 HEADER_GetThemeItemState(HTHEME theme, const HEADER_ITEM *item, BOOL hottrack)
 {
@@ -297,6 +298,7 @@ HEADER_GetThemeItemState(HTHEME theme, const HEADER_ITEM *item, BOOL hottrack)
 
     return state;
 }
+#endif
 
 static BOOL
 HEADER_DrawThemeSortArrow(const HEADER_INFO *infoPtr, HDC hdc, const RECT *r, const HEADER_ITEM *item)

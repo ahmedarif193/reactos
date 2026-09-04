@@ -2125,25 +2125,6 @@ DxgkOpenAdapterFromLuid(
     return STATUS_INVALID_PARAMETER;
 }
 
-static NTSTATUS
-DxgkpOpenFirstStartedAdapter(
-    _Out_ D3DKMT_HANDLE *OutHandle,
-    _Out_ LUID *OutLuid)
-{
-    PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
-    ULONG Count;
-
-    *OutHandle = 0;
-    RtlZeroMemory(OutLuid, sizeof(*OutLuid));
-    Count = DxgkpSnapshotAdapters(Snapshot);
-    if (Count == 0)
-        return STATUS_NO_SUCH_DEVICE;
-    *OutHandle = DxgkpCreateAdapterHandle(Snapshot[0]);
-    *OutLuid = Snapshot[0]->AdapterLuid;
-    DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
-    return *OutHandle != 0 ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
-}
-
 /*
  * DxgkpOpenAdapterByDisplayOrdinal
  *
@@ -5467,7 +5448,6 @@ DxgkGetDeviceState(
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE Device;
     ULONG MinimumLevel;
-    UINT i;
     NTSTATUS Status;
 
     if (pData == NULL)
@@ -7622,7 +7602,6 @@ DxgkSignalSynchronizationObjectFromGpu2(
 {
     PDXGKRNL_CONTEXT Contexts[D3DDDI_MAX_BROADCAST_CONTEXT];
     PDXGKRNL_ADAPTER Adapter;
-    PDXGKRNL_DEVICE Device;
     ULONG ContextCount = 0;
     ULONG SignalFlags = 0;
     ULONG Index;
@@ -7657,7 +7636,6 @@ DxgkSignalSynchronizationObjectFromGpu2(
         if (Index == 0)
         {
             Adapter = ContextAdapter;
-            Device = ContextDevice;
         }
         else if (ContextAdapter != Adapter)
         {
@@ -9460,7 +9438,6 @@ DxgkAccountKmtIoctl(
 VOID
 DxgkDumpRecentKmtIoctls(VOID)
 {
-    ULONGLONG Now100ns = DxgkDiagNow100ns();
     ULONG Next = (ULONG)DxgkpKmtIoctlRingNext;
     ULONG Index;
 

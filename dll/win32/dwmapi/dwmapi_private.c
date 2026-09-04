@@ -528,7 +528,7 @@ DwmpAllocateSecurityDescriptor(PSECURITY_DESCRIPTOR *Descriptor,
                                ACCESS_MASK Access)
 {
 #ifdef __REACTOS__
-    SID_IDENTIFIER_AUTHORITY Authority = SECURITY_NT_AUTHORITY;
+    SID_IDENTIFIER_AUTHORITY Authority = {SECURITY_NT_AUTHORITY};
     PSECURITY_DESCRIPTOR NewDescriptor = NULL;
     PSID Sid = NULL;
     PACL Acl;

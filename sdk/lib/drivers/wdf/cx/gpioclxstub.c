@@ -14,7 +14,7 @@
 
 PVOID GpioClxExportedInterfaces[6];
 
-__declspec(allocate(".kmdfclassbind$b"))
+DATA_SEG(".kmdfclassbind$b")
 WDF_CLASS_BIND_INFO _GPIOClx_BIND_INFO =
 {
     sizeof(WDF_CLASS_BIND_INFO),

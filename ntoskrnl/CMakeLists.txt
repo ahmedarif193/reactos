@@ -8,7 +8,8 @@ PROJECT(NTOS)
 # page fault it exists to catch.  The mingw driver discards -fasync-exceptions
 # ("argument unused"), so hand it to cc1.  C only: Clang 23 crashes on some C++
 # translation units with asynchronous EH, and the capture code here is C.
-if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND NOT USE_DUMMY_PSEH)
+if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND
+   CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
     add_compile_options("$<$<COMPILE_LANGUAGE:C>:SHELL:-Xclang -fasync-exceptions>")
 endif()
 
