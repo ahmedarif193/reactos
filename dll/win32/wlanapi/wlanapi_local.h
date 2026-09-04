@@ -43,6 +43,24 @@ typedef struct _WLAN_BSS_LIST WLAN_BSS_LIST, *PWLAN_BSS_LIST;
 #define WLAN_MAX_NAME_LENGTH 256
 #endif
 
+/* Dependencies of the version 2 types are not emitted by wlansvc_c.h. */
+#define DOT11_HESSID_LENGTH 6
+typedef UCHAR DOT11_HESSID[DOT11_HESSID_LENGTH];
+typedef DOT11_HESSID *PDOT11_HESSID;
+
+typedef struct DOT11_ACCESSNETWORKOPTIONS {
+    UINT8 AccessNetworkType;
+    UINT8 Internet;
+    UINT8 ASRA;
+    UINT8 ESR;
+    UINT8 UESA;
+} DOT11_ACCESSNETWORKOPTIONS, *PDOT11_ACCESSNETWORKOPTIONS;
+
+typedef struct DOT11_VENUEINFO {
+    UINT8 VenueGroup;
+    UINT8 VenueType;
+} DOT11_VENUEINFO, *PDOT11_VENUEINFO;
+
 typedef struct _WLAN_AVAILABLE_NETWORK_V2 {
     WCHAR strProfileName[WLAN_MAX_NAME_LENGTH];
     DOT11_SSID dot11Ssid;
