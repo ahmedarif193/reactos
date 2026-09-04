@@ -14,15 +14,19 @@ HICON g_hIconVolume;
 HICON g_hIconMute;
 
 HMIXER g_hMixer;
-UINT   g_mixerId;
-DWORD  g_mixerLineID;
-DWORD  g_muteControlID;
+UINT   g_mixerId = (UINT)-1;
+DWORD  g_mixerLineID = (DWORD)-1;
+DWORD  g_muteControlID = (DWORD)-1;
 
 UINT g_mmDeviceChange;
 
 static BOOL g_IsMute = FALSE;
 static DWORD g_volControlID = (DWORD)-1;
+static DWORD g_volMinimum = 0;
+static DWORD g_volMaximum = 0xFFFF;
 static int g_VolLevel = 2;
+static int g_VolPercent = 50;
+static BOOL g_VolCacheValid = FALSE;
 static HICON g_hIconVolume0 = NULL;
 static HICON g_hIconVolume1 = NULL;
 
@@ -34,6 +38,17 @@ static HRESULT __stdcall Volume_FindMixerControl(CSysTray * pSysTray)
     DWORD param2 = 0;
 
     TRACE("Volume_FindDefaultMixerID\n");
+
+    if (g_hMixer)
+    {
+        mixerClose(g_hMixer);
+        g_hMixer = NULL;
+    }
+    g_mixerId = (UINT)-1;
+    g_mixerLineID = (DWORD)-1;
+    g_muteControlID = (DWORD)-1;
+    g_volControlID = (DWORD)-1;
+    g_VolCacheValid = FALSE;
 
     result = waveOutMessage((HWAVEOUT)UlongToHandle(WAVE_MAPPER), DRVM_MAPPER_PREFERRED_GET, (DWORD_PTR)&waveOutId, (DWORD_PTR)&param2);
     if (result)
@@ -57,21 +72,22 @@ static HRESULT __stdcall Volume_FindMixerControl(CSysTray * pSysTray)
     }
 
     g_mixerId = mixerId;
-    return S_OK;
 
     MIXERCAPS mixerCaps;
     MIXERLINE mixerLine;
     MIXERCONTROL mixerControl;
     MIXERLINECONTROLS mixerLineControls;
 
-    g_mixerLineID = -1;
-    g_muteControlID = -1;
+    ZeroMemory(&mixerCaps, sizeof(mixerCaps));
+    ZeroMemory(&mixerLine, sizeof(mixerLine));
+    ZeroMemory(&mixerControl, sizeof(mixerControl));
+    ZeroMemory(&mixerLineControls, sizeof(mixerLineControls));
 
     if (mixerGetDevCapsW(g_mixerId, &mixerCaps, sizeof(mixerCaps)))
-        return E_FAIL;
+        goto OpenMixer;
 
     if (mixerCaps.cDestinations == 0)
-        return S_FALSE;
+        goto OpenMixer;
 
     TRACE("mixerCaps.cDestinations %d\n", mixerCaps.cDestinations);
 
@@ -90,7 +106,7 @@ static HRESULT __stdcall Volume_FindMixerControl(CSysTray * pSysTray)
     }
 
     if (idx >= mixerCaps.cDestinations)
-        return E_FAIL;
+        goto OpenMixer;
 
     TRACE("Valid destination %d found.\n");
 
@@ -103,17 +119,32 @@ static HRESULT __stdcall Volume_FindMixerControl(CSysTray * pSysTray)
     mixerLineControls.pamxctrl = &mixerControl;
     mixerLineControls.cbmxctrl = sizeof(mixerControl);
 
-    if (mixerGetLineControlsW((HMIXEROBJ)UlongToHandle(g_mixerId), &mixerLineControls, MIXER_GETLINECONTROLSF_ONEBYTYPE))
-        return E_FAIL;
-
-    TRACE("Found control id %d for mute: %d\n", mixerControl.dwControlID);
-
-    g_muteControlID = mixerControl.dwControlID;
+    if (!mixerGetLineControlsW((HMIXEROBJ)UlongToHandle(g_mixerId), &mixerLineControls,
+                               MIXER_GETLINECONTROLSF_ONEBYTYPE))
+    {
+        TRACE("Found control id %d for mute\n", mixerControl.dwControlID);
+        g_muteControlID = mixerControl.dwControlID;
+    }
 
     g_volControlID = (DWORD)-1;
+    ZeroMemory(&mixerControl, sizeof(mixerControl));
+    mixerControl.cbStruct = sizeof(mixerControl);
     mixerLineControls.dwControlType = MIXERCONTROL_CONTROLTYPE_VOLUME;
     if (!mixerGetLineControlsW((HMIXEROBJ)UlongToHandle(g_mixerId), &mixerLineControls, MIXER_GETLINECONTROLSF_ONEBYTYPE))
+    {
         g_volControlID = mixerControl.dwControlID;
+        g_volMinimum = mixerControl.Bounds.dwMinimum;
+        g_volMaximum = mixerControl.Bounds.dwMaximum;
+        if (g_volMaximum <= g_volMinimum)
+        {
+            g_volMinimum = 0;
+            g_volMaximum = 0xFFFF;
+        }
+    }
+
+OpenMixer:
+    /* Keep the tray cache current without querying the mixer in the click path. */
+    mixerOpen(&g_hMixer, g_mixerId, (DWORD_PTR)pSysTray->GetHWnd(), 0, CALLBACK_WINDOW);
 
     return S_OK;
 }
@@ -125,6 +156,7 @@ static int Volume_Level()
 
     if (g_mixerId == (UINT)-1 || g_volControlID == (DWORD)-1)
         return 2;
+    ZeroMemory(&details, sizeof(details));
     details.cbStruct = sizeof(details);
     details.hwndOwner = 0;
     details.dwControlID = g_volControlID;
@@ -133,9 +165,17 @@ static int Volume_Level()
     details.cbDetails = sizeof(value);
     if (mixerGetControlDetailsW((HMIXEROBJ)UlongToHandle(g_mixerId), &details, 0))
         return 2;
-    if (value.dwValue == 0)
+    if (value.dwValue <= g_volMinimum)
+        g_VolPercent = 0;
+    else if (value.dwValue >= g_volMaximum)
+        g_VolPercent = 100;
+    else
+        g_VolPercent = MulDiv(value.dwValue - g_volMinimum, 100,
+                              g_volMaximum - g_volMinimum);
+    g_VolCacheValid = TRUE;
+    if (g_VolPercent == 0)
         return 0;
-    if (value.dwValue < 0xFFFF / 3)
+    if (g_VolPercent < 34)
         return 1;
     return 2;
 }
@@ -158,6 +198,7 @@ HRESULT Volume_IsMute()
     if (g_mixerId != (UINT)-1 && g_muteControlID != (DWORD)-1)
     {
         BOOL detailsResult = 0;
+        ZeroMemory(&mixerControlDetails, sizeof(mixerControlDetails));
         mixerControlDetails.cbStruct = sizeof(mixerControlDetails);
         mixerControlDetails.hwndOwner = 0;
         mixerControlDetails.dwControlID = g_muteControlID;
@@ -234,12 +275,21 @@ HRESULT STDMETHODCALLTYPE Volume_Shutdown(_In_ CSysTray * pSysTray)
 {
     TRACE("Volume_Shutdown\n");
 
+    if (g_hMixer)
+    {
+        mixerClose(g_hMixer);
+        g_hMixer = NULL;
+    }
+
     return pSysTray->NotifyIcon(NIM_DELETE, ID_ICON_VOLUME, NULL, NULL);
 }
 
 HRESULT Volume_OnDeviceChange(_In_ CSysTray * pSysTray, WPARAM wParam, LPARAM lParam)
 {
-    return Volume_FindMixerControl(pSysTray);
+    HRESULT hr = Volume_FindMixerControl(pSysTray);
+    if (SUCCEEDED(hr))
+        return Volume_Update(pSysTray);
+    return hr;
 }
 
 static void _RunVolume(BOOL bTray)
@@ -255,6 +305,19 @@ static void _RunVolume(BOOL bTray)
 static void _RunMMCpl()
 {
     CSysTray::RunDll("mmsys.cpl", "");
+}
+
+static void _ShowFlyout()
+{
+    HWND hwndTaskbar = FindWindowW(L"Shell_TrayWnd", NULL);
+    WORD state = (WORD)((g_VolCacheValid ? 0x8000 : 0) | (g_IsMute ? 1 : 0));
+    LPARAM cachedState = MAKELPARAM((WORD)g_VolPercent, state);
+
+    if (!hwndTaskbar ||
+        !SendMessageW(hwndTaskbar, WM_USER + 270, 0, cachedState))
+    {
+        _RunVolume(TRUE);
+    }
 }
 
 static void _ShowContextMenu(CSysTray * pSysTray)
@@ -295,6 +358,8 @@ HRESULT STDMETHODCALLTYPE Volume_Message(_In_ CSysTray * pSysTray, UINT uMsg, WP
 {
     if (uMsg == g_mmDeviceChange)
         return Volume_OnDeviceChange(pSysTray, wParam, lParam);
+    if (uMsg == MM_MIXM_CONTROL_CHANGE)
+        return Volume_Update(pSysTray);
 
     switch (uMsg)
     {
@@ -324,36 +389,19 @@ HRESULT STDMETHODCALLTYPE Volume_Message(_In_ CSysTray * pSysTray, UINT uMsg, WP
             }
             return S_FALSE;
 
-        case WM_TIMER:
-            if (wParam == VOLUME_TIMER_ID)
-            {
-                HWND hwndTaskbar;
-                KillTimer(pSysTray->GetHWnd(), VOLUME_TIMER_ID);
-                hwndTaskbar = FindWindowW(L"Shell_TrayWnd", NULL);
-                if (!hwndTaskbar ||
-                    !SendMessageW(hwndTaskbar, WM_USER + 270, 0, 0))
-                {
-                    _RunVolume(TRUE);
-                }
-            }
-            break;
-
         case ID_ICON_VOLUME:
             TRACE("Volume_Message uMsg=%d, w=%x, l=%x\n", uMsg, wParam, lParam);
-
-            Volume_Update(pSysTray);
 
             switch (lParam)
             {
                 case WM_LBUTTONDOWN:
-                    SetTimer(pSysTray->GetHWnd(), VOLUME_TIMER_ID, GetDoubleClickTime(), NULL);
                     break;
 
                 case WM_LBUTTONUP:
+                    _ShowFlyout();
                     break;
 
                 case WM_LBUTTONDBLCLK:
-                    KillTimer(pSysTray->GetHWnd(), VOLUME_TIMER_ID);
                     _RunVolume(FALSE);
                     break;
 

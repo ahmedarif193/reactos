@@ -90,7 +90,6 @@ extern HRESULT STDMETHODCALLTYPE MouseKeys_Message(_In_ CSysTray * pSysTray, UIN
 
 #define POLL_TIMER_ID    1 // FIXME: Use callbacks instead of polling with this timer
 #define POWER_TIMER_ID   2
-#define VOLUME_TIMER_ID  3
 #define HOTPLUG_TIMER_ID 4
 #define HOTPLUG_DEVICE_TIMER_ID 5
 
