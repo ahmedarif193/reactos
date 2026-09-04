@@ -346,6 +346,10 @@ typedef struct _VIDSCH_ENGINE
     D3DGPU_VIRTUAL_ADDRESS      LastFaultDmaGpuVa;
     ULONG                       LastFaultDmaSize;
     ULONG                       LastFaultFence;
+    /* DXGK_PAGE_FAULT_FLAGS as reported by the miniport.  The reset-required
+     * bits have to be acted on at PASSIVE_LEVEL, so the fault consumer records
+     * them here and the fault worker performs the reset. */
+    ULONG                       LastFaultFlags;
     struct _DXGKRNL_PROCESS    *LastFaultProcess;
     D3DGPU_VIRTUAL_ADDRESS      LastDispatchDmaGpuVa;
     ULONG                       LastDispatchDmaSize;
