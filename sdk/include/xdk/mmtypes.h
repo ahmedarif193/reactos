@@ -161,6 +161,11 @@ extern PBOOLEAN Mm64BitPhysicalAddress;
 #endif
 extern NTKERNELAPI PVOID MmBadPointer;
 
+typedef struct _MM_PHYSICAL_ADDRESS_LIST {
+  PHYSICAL_ADDRESS PhysicalAddress;
+  SIZE_T NumberOfBytes;
+} MM_PHYSICAL_ADDRESS_LIST, *PMM_PHYSICAL_ADDRESS_LIST;
+
 $endif (_WDMDDK_)
 $if (_NTDDK_)
 

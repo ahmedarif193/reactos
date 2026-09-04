@@ -1902,7 +1902,7 @@
 @ stdcall -arch=arm64 NtReadFileScatter()
 @ stdcall -arch=arm64 NtSetInformationToken()
 @ stdcall -arch=arm64 NtWriteFileGather()
-@ stdcall -arch=arm64 ObDereferenceObjectDeferDelete()
+@ stdcall ObDereferenceObjectDeferDelete(ptr)
 @ stdcall -arch=arm64 ObDuplicateObject()
 @ stdcall -arch=arm64 ObIsKernelHandle()
 @ stdcall -arch=arm64 ObReferenceObjectSafe()
@@ -1919,7 +1919,7 @@
 @ stdcall -arch=arm64 RtlCreateUnicodeStringFromAsciiz()
 @ stdcall -arch=arm64 RtlCreateUserThread()
 @ stdcall -arch=arm64 RtlCultureNameToLCID()
-@ stdcall -arch=arm64 RtlDowncaseUnicodeChar()
+@ stdcall RtlDowncaseUnicodeChar(long)
 @ stdcall -arch=arm64 RtlDuplicateUnicodeString()
 @ stdcall -arch=arm64 RtlFillMemoryUlonglong()
 @ stdcall -arch=arm64 RtlFindExportedRoutineByName()
@@ -2197,7 +2197,7 @@
 @ stdcall -arch=i386,x86_64,arm64 ExInitializeFastResource(ptr) ExpInitializeFastResource
 @ stub -arch=arm64 ExInitializeFastResource2
 @ stub -arch=arm64 ExInitializeFastResourceAcquired
-@ stub -arch=arm64 ExInitializePushLock
+@ stdcall ExInitializePushLock(ptr)
 @ stub -arch=arm64 ExInitializeResourceLite2
 @ stub -arch=arm64 ExInitializeRundownProtectionCacheAwareEx
 @ stdcall -arch=i386,x86_64,arm64 ExIsFastResourceContended(ptr) ExpIsFastResourceContended
@@ -2535,7 +2535,7 @@
 @ stub -arch=arm64 IoTestDependency
 @ stub -arch=arm64 IoTransferActivityId
 @ stub -arch=arm64 IoTryQueueWorkItem
-@ stub -arch=arm64 IoUninitializeWorkItem
+@ stdcall IoUninitializeWorkItem(ptr)
 @ stub -arch=arm64 IoUnregisterBootDriverCallback
 @ stub -arch=arm64 IoUnregisterContainerNotification
 @ stub -arch=arm64 IoUnregisterIoTracking
@@ -2694,7 +2694,7 @@
 @ stdcall -arch=arm64 MmAllocateContiguousMemorySpecifyCacheNode(long long long long long long long long long)
 @ stdcall -arch=arm64 MmAllocateContiguousNodeMemory(long long long long long long long long long)
 @ stub -arch=arm64 MmAllocateMappingAddressEx
-@ stub -arch=arm64 MmAllocateMdlForIoSpace
+@ stdcall MmAllocateMdlForIoSpace(ptr long ptr)
 @ stub -arch=arm64 MmAllocateMemoryRanges
 @ stdcall -arch=arm64 MmAllocateNodePagesForMdlEx(long long long long long long long long long long)
 @ stub -arch=arm64 MmAllocatePartitionNodePagesForMdlEx
@@ -3449,13 +3449,13 @@
 @ cdecl memmove_s()
 @ stub -arch=arm64 qsort_s
 @ cdecl sprintf_s()
-@ stub -arch=arm64 sscanf_s
+@ cdecl sscanf_s()
 @ cdecl strcat_s()
 @ cdecl strcpy_s()
 @ cdecl strncat_s()
 @ cdecl strncpy_s()
-@ stub -arch=arm64 strtok_s
+@ cdecl strtok_s(str str ptr)
 @ cdecl swprintf_s()
-@ stub -arch=arm64 swscanf_s
+@ cdecl swscanf_s()
 @ cdecl vsprintf_s()
 @ cdecl vswprintf_s()

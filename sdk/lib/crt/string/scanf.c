@@ -87,6 +87,22 @@ static int wchar2digit(wchar_t c, int base) {
 #undef SECURE
 #include "scanf.h"
 
+/* vsscanf_s_l */
+#undef WIDE_SCANF
+#undef CONSOLE
+#define STRING 1
+#undef STRING_LEN
+#define SECURE 1
+#include "scanf.h"
+
+/* vswscanf_s_l */
+#define WIDE_SCANF 1
+#undef CONSOLE
+#define STRING 1
+#undef STRING_LEN
+#define SECURE 1
+#include "scanf.h"
+
 /* vsnscanf_l */
 #undef WIDE_SCANF
 #undef CONSOLE
@@ -196,6 +212,39 @@ int CDECL swscanf(const wchar_t *str, const wchar_t *format, ...)
 
     __ms_va_start(valist, format);
     res = vswscanf_l(str, format, NULL, valist);
+    __ms_va_end(valist);
+    return res;
+}
+
+
+/*********************************************************************
+ *		sscanf_s (MSVCRT.@)
+ *
+ * The bounds-checked form: every %s, %S or %[ conversion takes the buffer
+ * size as an extra argument after the buffer itself.
+ */
+int CDECL sscanf_s(const char *str, const char *format, ...)
+{
+    __ms_va_list valist;
+    int res;
+
+    __ms_va_start(valist, format);
+    res = vsscanf_s_l(str, format, NULL, valist);
+    __ms_va_end(valist);
+    return res;
+}
+
+
+/*********************************************************************
+ *		swscanf_s (MSVCRT.@)
+ */
+int CDECL swscanf_s(const wchar_t *str, const wchar_t *format, ...)
+{
+    __ms_va_list valist;
+    int res;
+
+    __ms_va_start(valist, format);
+    res = vswscanf_s_l(str, format, NULL, valist);
     __ms_va_end(valist);
     return res;
 }

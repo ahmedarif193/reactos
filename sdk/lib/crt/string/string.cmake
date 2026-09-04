@@ -23,6 +23,7 @@ list(APPEND LIBCNTPR_STRING_SOURCE
     string/strset.c
     string/strspn.c
     string/strstr.c
+    string/strtok_s.c
     string/strtoi64.c
     string/strtol.c
     string/strtoul.c

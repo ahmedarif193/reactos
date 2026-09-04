@@ -2568,6 +2568,88 @@ MmProbeAndLockSelectedPages(IN OUT PMDL MemoryDescriptorList,
 }
 
 /*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+MmAllocateMdlForIoSpace(
+    _In_reads_(NumberOfEntries) PMM_PHYSICAL_ADDRESS_LIST PhysicalAddressList,
+    _In_ SIZE_T NumberOfEntries,
+    _Out_ PMDL *NewMdl)
+{
+    SIZE_T Entry;
+    SIZE_T TotalBytes = 0;
+    PFN_NUMBER PageFrameIndex, PageCount, Page;
+    PPFN_NUMBER MdlPages;
+    PMDL Mdl;
+
+    ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    *NewMdl = NULL;
+    if (NumberOfEntries == 0) return STATUS_INVALID_PARAMETER_2;
+
+    /*
+     * Every range has to start on a page boundary, span whole pages, and
+     * describe device memory rather than RAM.  A page that the memory manager
+     * has a PFN entry for is RAM, and describing it as I/O space would let the
+     * caller map it with the wrong caching attributes.
+     */
+    for (Entry = 0; Entry < NumberOfEntries; Entry++)
+    {
+        SIZE_T Bytes = PhysicalAddressList[Entry].NumberOfBytes;
+
+        if (Bytes == 0 || BYTE_OFFSET(Bytes) != 0)
+            return STATUS_INVALID_PARAMETER_1;
+        if (PhysicalAddressList[Entry].PhysicalAddress.QuadPart < 0 ||
+            BYTE_OFFSET(PhysicalAddressList[Entry].PhysicalAddress.QuadPart) != 0)
+        {
+            return STATUS_INVALID_PARAMETER_1;
+        }
+
+        /* The whole description has to stay addressable by an MDL byte count */
+        if (Bytes > (SIZE_T)(MAXULONG - TotalBytes))
+            return STATUS_INVALID_PARAMETER_1;
+        TotalBytes += Bytes;
+
+        PageFrameIndex =
+            (PFN_NUMBER)(PhysicalAddressList[Entry].PhysicalAddress.QuadPart >> PAGE_SHIFT);
+        PageCount = Bytes >> PAGE_SHIFT;
+        for (Page = 0; Page < PageCount; Page++)
+        {
+            if (MiGetPfnEntry(PageFrameIndex + Page) != NULL)
+                return STATUS_INVALID_PARAMETER_1;
+        }
+    }
+
+    Mdl = IoAllocateMdl(NULL, (ULONG)TotalBytes, FALSE, FALSE, NULL);
+    if (Mdl == NULL) return STATUS_INSUFFICIENT_RESOURCES;
+
+    /*
+     * Device memory is always present, so the pages count as locked, and the
+     * MDL is not backed by any virtual address until the caller maps it.
+     */
+    Mdl->MdlFlags |= (MDL_PAGES_LOCKED | MDL_IO_SPACE);
+    Mdl->StartVa = NULL;
+    Mdl->ByteOffset = 0;
+    Mdl->ByteCount = (ULONG)TotalBytes;
+
+    MdlPages = MmGetMdlPfnArray(Mdl);
+    for (Entry = 0; Entry < NumberOfEntries; Entry++)
+    {
+        PageFrameIndex =
+            (PFN_NUMBER)(PhysicalAddressList[Entry].PhysicalAddress.QuadPart >> PAGE_SHIFT);
+        PageCount = PhysicalAddressList[Entry].NumberOfBytes >> PAGE_SHIFT;
+        for (Page = 0; Page < PageCount; Page++)
+        {
+            *MdlPages++ = PageFrameIndex + Page;
+        }
+    }
+
+    *NewMdl = Mdl;
+    return STATUS_SUCCESS;
+}
+
+/*
  * @unimplemented
  */
 VOID

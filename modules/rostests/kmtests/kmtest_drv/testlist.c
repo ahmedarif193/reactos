@@ -155,6 +155,7 @@ KMT_TESTFUNC Test_IoTimerKM;
 KMT_TESTFUNC Test_IoVolume;
 KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KsecBcrypt;
+KMT_TESTFUNC Test_KeWddmExports;
 KMT_TESTFUNC Test_KeApc;
 KMT_TESTFUNC Test_KeApcInject;
 KMT_TESTFUNC Test_KeCacheInvalidation;
@@ -420,6 +421,7 @@ const KMT_TEST TestList[] =
     { "IoVolume",                           Test_IoVolume },
     { "KdSystemDebugControl",               Test_KdSystemDebugControl },
     { "KsecBcrypt",                         Test_KsecBcrypt },
+    { "KeWddmExports",                      Test_KeWddmExports },
     { "KeApc",                              Test_KeApc },
     { "KeApcInject",                        Test_KeApcInject },
     { "KeCacheInvalidation",                Test_KeCacheInvalidation },
