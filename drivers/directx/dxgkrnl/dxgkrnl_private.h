@@ -129,15 +129,18 @@ extern NTKERNELAPI PVOID MmSystemRangeStart;
 
 /* adapter.c flushes the TLB/store buffer after (re)mapping framebuffer pages
  * using the x86 intrinsics __invlpg/_mm_mfence. Provide ARM64 equivalents:
- * a full system DMB for the fence, and a broadcast TLB + DSB/ISB for the
- * mapping invalidation (heavier than a single-page invalidate, but correct and
- * only used on the one-time framebuffer mapping path). */
+ * a full system DSB for the fence (cache maintenance completes only at a DSB,
+ * not a DMB), and a broadcast TLB + DSB/ISB for the mapping invalidation
+ * (heavier than a single-page invalidate, but correct and only used on the
+ * one-time framebuffer mapping path). */
 #if defined(_M_ARM64) || defined(_ARM64_)
 /* Macros (not functions) so they do not clash with the weak __invlpg/_mm_mfence
  * prototypes the compiler intrinsics header declares. */
 #undef _mm_mfence
+#undef _mm_clflush
 #undef __invlpg
-#define _mm_mfence() __asm__ __volatile__("dmb sy" ::: "memory")
+#define _mm_mfence() __asm__ __volatile__("dsb sy" ::: "memory")
+#define _mm_clflush(Va) __asm__ __volatile__("dc civac, %0" :: "r"(Va) : "memory")
 #define __invlpg(Va) \
     do { (void)(Va); __asm__ __volatile__("dsb sy\n\ttlbi vmalle1is\n\tdsb sy\n\tisb" ::: "memory"); } while (0)
 #endif
