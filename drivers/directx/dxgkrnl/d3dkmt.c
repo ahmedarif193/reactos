@@ -4587,6 +4587,61 @@ Cleanup:
  * REACTOS_WIN32K_DXGKRNL_INTERFACE exchange (without IRP context).
  * ====================================================================== */
 
+static NTSTATUS
+DxgkpBeginSynchronizedLock(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ D3DDDICB_LOCKFLAGS Flags)
+{
+    BOOLEAN DoNotWait;
+    BOOLEAN SkipSynchronization;
+    NTSTATUS Status;
+
+    /* Discard requires a renamed backing store.  Until VidMm can provide
+     * one, retain synchronization; DonotWait and IgnoreSync have no effect
+     * on a discard lock. */
+    DoNotWait = (BOOLEAN)(Flags.DonotWait && !Flags.Discard);
+    SkipSynchronization =
+        (BOOLEAN)(!Flags.Discard &&
+                  (Flags.IgnoreSync ||
+                   (Flags.ReadOnly && Flags.IgnoreReadSync)));
+
+    for (;;)
+    {
+        if (!SkipSynchronization)
+        {
+            Status = DxgkVidMmWaitForTrackedSubmissions(Allocation,
+                                                        DoNotWait);
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+
+        if (!DxgkBeginKmdTransaction(Adapter))
+            return STATUS_DELETE_PENDING;
+        if (!DxgkpDeviceExecutionActive(Device))
+        {
+            DxgkEndKmdTransaction(Adapter);
+            return STATUS_DEVICE_REMOVED;
+        }
+
+        if (SkipSynchronization)
+            return STATUS_SUCCESS;
+
+        /* Submission admission uses this same adapter transaction.  Recheck
+         * after acquiring it to close the wait-to-map race, but never wait
+         * while holding it: reset and cancellation must remain able to drain
+         * tracked work. */
+        Status = DxgkVidMmWaitForTrackedSubmissions(Allocation, TRUE);
+        if (NT_SUCCESS(Status))
+            return STATUS_SUCCESS;
+
+        DxgkEndKmdTransaction(Adapter);
+        if (DoNotWait || Status != STATUS_GRAPHICS_ALLOCATION_BUSY)
+            return Status;
+    }
+}
+
 /*
  * DxgkLock -- D3DKMTLock handler.
  *
@@ -4627,18 +4682,18 @@ DxgkLock(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (!DxgkBeginKmdTransaction(LockAdapter))
+    Status = DxgkpBeginSynchronizedLock(LockAdapter,
+                                        LockDevice,
+                                        LockAlloc,
+                                        pLock->Flags);
+    if (!NT_SUCCESS(Status))
     {
         DxgkVidMmDereferenceAllocation(LockAlloc);
         DxgkDereferenceDevice(LockDevice);
-        return STATUS_DELETE_PENDING;
+        return Status;
     }
-    /* Interface callers are always kernel -- use system VA mapping.  Keep
-     * reset recovery outside the active-check-to-map interval. */
-    if (!DxgkpDeviceExecutionActive(LockDevice))
-        Status = STATUS_DEVICE_REMOVED;
-    else
-        Status = DxgkVidMmMapAllocationCpu(LockAlloc, &LockVa);
+    /* Interface callers are always kernel -- use system VA mapping. */
+    Status = DxgkVidMmMapAllocationCpu(LockAlloc, &LockVa);
     DxgkEndKmdTransaction(LockAdapter);
     DxgkVidMmDereferenceAllocation(LockAlloc);
     DxgkDereferenceDevice(LockDevice);
@@ -9421,15 +9476,17 @@ DxgkpDispatchBufferedIoctl(
              * kernel and needs a system VA for the shadow surface.
              */
             UserMappingCaller = (Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL) || (Irp->RequestorMode == UserMode);
-            if (!DxgkBeginKmdTransaction(LockAdapter))
+            Status = DxgkpBeginSynchronizedLock(LockAdapter,
+                                                LockDevice,
+                                                LockAlloc,
+                                                pLock->Flags);
+            if (!NT_SUCCESS(Status))
             {
                 DxgkVidMmDereferenceAllocation(LockAlloc);
                 DxgkDereferenceDevice(LockDevice);
-                return STATUS_DELETE_PENDING;
+                return Status;
             }
-            if (!DxgkpDeviceExecutionActive(LockDevice))
-                Status = STATUS_DEVICE_REMOVED;
-            else if (UserMappingCaller)
+            if (UserMappingCaller)
                 Status = DxgkVidMmMapAllocationUser(LockAlloc, &LockVa);
             else
                 Status = DxgkVidMmMapAllocationCpu(LockAlloc, &LockVa);

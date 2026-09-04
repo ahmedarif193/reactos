@@ -666,7 +666,12 @@ DxgkpVidMmInitializeAllocationLifetime(
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     InitializeListHead(&Allocation->ResidencyBudgetChargeList);
 #endif
+    KeInitializeSpinLock(&Allocation->TrackedSubmissionLock);
     Allocation->SubmissionResidencyPinCount = 0;
+    Allocation->TrackedSubmissionPinCount = 0;
+    KeInitializeEvent(&Allocation->TrackedSubmissionsDrainedEvent,
+                      NotificationEvent,
+                      TRUE);
     Allocation->ResidencyTransactionOwner = NULL;
     KeInitializeEvent(&Allocation->ReferencesDrainedEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Allocation->LogicalReferencesDrainedEvent, NotificationEvent, FALSE);
@@ -2868,6 +2873,7 @@ DxgkpVidMmFinalizeAllocation(
     ASSERT(InterlockedCompareExchange(&Allocation->ReferenceCount, 0, 0) == 0);
     ASSERT(InterlockedCompareExchange(&Allocation->LogicalReferenceCount, 0, 0) == 0);
     ASSERT(!DxgkSubmissionResidencyPinIsHeld(&Allocation->SubmissionResidencyPinCount));
+    ASSERT(!DxgkSubmissionResidencyPinIsHeld(&Allocation->TrackedSubmissionPinCount));
     ASSERT(InterlockedCompareExchangePointer(
                &Allocation->ResidencyTransactionOwner,
                NULL,
@@ -10834,14 +10840,16 @@ DxgkpVidMmCleanAllocationForSubmissionLocked(
 }
 #endif
 
-NTSTATUS
-DxgkVidMmAcquireSubmissionResidencyPinEx(
+static NTSTATUS
+DxgkpVidMmAcquireSubmissionResidencyPinEx(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
     _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry,
-    _In_ BOOLEAN CpuDirty)
+    _In_ BOOLEAN CpuDirty,
+    _In_ BOOLEAN TrackedSubmission)
 {
     NTSTATUS Status = STATUS_SUCCESS;
+    KIRQL OldIrql;
 
     if (Allocation == NULL || ExpectedAdapter == NULL || Allocation->Adapter != ExpectedAdapter)
         return STATUS_INVALID_PARAMETER;
@@ -10872,13 +10880,42 @@ DxgkVidMmAcquireSubmissionResidencyPinEx(
                          ExpectedAdapter);
         }
 #endif
-        if (NT_SUCCESS(Status) &&
-            !DxgkSubmissionResidencyPinTryAcquire(
-                &Allocation->SubmissionResidencyPinCount))
+        if (NT_SUCCESS(Status))
         {
-            Status = STATUS_INTEGER_OVERFLOW;
+            if (!TrackedSubmission)
+            {
+                if (!DxgkSubmissionResidencyPinTryAcquire(
+                        &Allocation->SubmissionResidencyPinCount))
+                {
+                    Status = STATUS_INTEGER_OVERFLOW;
+                }
+            }
+            else
+            {
+                KeAcquireSpinLock(&Allocation->TrackedSubmissionLock,
+                                  &OldIrql);
+                if (!DxgkSubmissionResidencyPinTryAcquire(
+                        &Allocation->SubmissionResidencyPinCount))
+                {
+                    Status = STATUS_INTEGER_OVERFLOW;
+                }
+                else if (!DxgkSubmissionResidencyPinTryAcquire(
+                             &Allocation->TrackedSubmissionPinCount))
+                {
+                    (VOID)DxgkSubmissionResidencyPinRelease(
+                              &Allocation->SubmissionResidencyPinCount);
+                    Status = STATUS_INTEGER_OVERFLOW;
+                }
+                else
+                {
+                    KeClearEvent(
+                        &Allocation->TrackedSubmissionsDrainedEvent);
+                }
+                KeReleaseSpinLock(&Allocation->TrackedSubmissionLock,
+                                  OldIrql);
+            }
         }
-        else if (NT_SUCCESS(Status) && ListEntry != NULL)
+        if (NT_SUCCESS(Status) && ListEntry != NULL)
         {
             ListEntry->Value = 0;
             ListEntry->SegmentId = Allocation->SegmentId;
@@ -10887,6 +10924,20 @@ DxgkVidMmAcquireSubmissionResidencyPinEx(
     }
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
     return Status;
+}
+
+NTSTATUS
+DxgkVidMmAcquireSubmissionResidencyPinEx(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry,
+    _In_ BOOLEAN CpuDirty)
+{
+    return DxgkpVidMmAcquireSubmissionResidencyPinEx(Allocation,
+                                                      ExpectedAdapter,
+                                                      ListEntry,
+                                                      CpuDirty,
+                                                      FALSE);
 }
 
 NTSTATUS
@@ -10901,6 +10952,19 @@ DxgkVidMmAcquireSubmissionResidencyPin(
                                                      TRUE);
 }
 
+NTSTATUS
+DxgkVidMmAcquireTrackedSubmissionResidencyPin(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _In_ BOOLEAN CpuDirty)
+{
+    return DxgkpVidMmAcquireSubmissionResidencyPinEx(Allocation,
+                                                      ExpectedAdapter,
+                                                      NULL,
+                                                      CpuDirty,
+                                                      TRUE);
+}
+
 VOID
 DxgkVidMmReleaseSubmissionResidencyPin(
     _In_ PDXGKVMM_ALLOCATION Allocation)
@@ -10910,6 +10974,74 @@ DxgkVidMmReleaseSubmissionResidencyPin(
     ASSERT(Allocation != NULL);
     Released = DxgkSubmissionResidencyPinRelease(&Allocation->SubmissionResidencyPinCount);
     ASSERT(Released);
+}
+
+VOID
+DxgkVidMmReleaseTrackedSubmissionResidencyPin(
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    BOOLEAN ResidencyReleased;
+    BOOLEAN TrackedReleased;
+    KIRQL OldIrql;
+
+    ASSERT(Allocation != NULL);
+    KeAcquireSpinLock(&Allocation->TrackedSubmissionLock, &OldIrql);
+    TrackedReleased = DxgkSubmissionResidencyPinRelease(
+                          &Allocation->TrackedSubmissionPinCount);
+    ResidencyReleased = DxgkSubmissionResidencyPinRelease(
+                            &Allocation->SubmissionResidencyPinCount);
+    if (TrackedReleased &&
+        !DxgkSubmissionResidencyPinIsHeld(
+            &Allocation->TrackedSubmissionPinCount))
+    {
+        KeSetEvent(&Allocation->TrackedSubmissionsDrainedEvent,
+                   IO_NO_INCREMENT,
+                   FALSE);
+    }
+    KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
+    ASSERT(TrackedReleased);
+    ASSERT(ResidencyReleased);
+}
+
+NTSTATUS
+DxgkVidMmWaitForTrackedSubmissions(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN DoNotWait)
+{
+    KIRQL OldIrql;
+    LONG PinCount;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Allocation == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    for (;;)
+    {
+        KeAcquireSpinLock(&Allocation->TrackedSubmissionLock, &OldIrql);
+        PinCount = InterlockedCompareExchange(
+                       &Allocation->TrackedSubmissionPinCount,
+                       0,
+                       0);
+        if (PinCount <= 0 || DoNotWait)
+        {
+            KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
+            if (PinCount < 0)
+                return STATUS_INVALID_DEVICE_STATE;
+            return PinCount == 0 ? STATUS_SUCCESS :
+                                   STATUS_GRAPHICS_ALLOCATION_BUSY;
+        }
+        KeReleaseSpinLock(&Allocation->TrackedSubmissionLock, OldIrql);
+
+        Status = KeWaitForSingleObject(
+                     &Allocation->TrackedSubmissionsDrainedEvent,
+                     Executive,
+                     KernelMode,
+                     FALSE,
+                     NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
 }
 
 static NTSTATUS
