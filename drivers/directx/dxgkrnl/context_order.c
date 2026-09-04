@@ -874,20 +874,25 @@ NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ P
     Packet->ContextOrderAbortStatus = STATUS_PENDING;
     Packet->ContextOrderOperation = Operation;
     InterlockedExchange(&Packet->ContextOrderState, VIDSCH_CONTEXT_ORDER_ADMITTED);
+    /*
+     * The mutex serializes AdmitWork against the marker publish above, and
+     * nothing after this point needs it.  It used to be handed to
+     * DxgkContextOrderPublishAdmittedPacket, which released it once the
+     * caller had published the packet; lock-free admission replaced that call
+     * with DxgkContextOrderKickContext, which does not touch the mutex, so
+     * every successful admission returned still owning it.  Owning a KMUTEX
+     * holds KernelApcDisable below zero at PASSIVE_LEVEL, so the thread
+     * reached the amd64 system-service exit with kernel APCs disabled and
+     * bugchecked APC_INDEX_MISMATCH against the user return address -- which
+     * named gdi32 rather than this function.
+     */
+    KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
     return STATUS_SUCCESS;
 
 Failure:
     KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
     DxgkpContextOrderFreeUnpublishedOperation(Operation);
     return Status;
-}
-
-VOID DxgkContextOrderPublishAdmittedPacket(_Inout_ PDXGKRNL_CONTEXT Context)
-{
-    PAGED_CODE();
-    ASSERT(Context != NULL);
-    KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
-    DxgkContextOrderScheduleReferenced(Context);
 }
 
 static VOID DxgkpContextOrderCommitClaimedPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS SubmissionStatus)
