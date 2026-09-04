@@ -37,6 +37,8 @@ class CLanStatus:
     public IOleCommandTarget
 {
     public:
+        DECLARE_CLASSFACTORY_SINGLETON(CLanStatus)
+
         CLanStatus();
 
         // IOleCommandTarget
