@@ -191,7 +191,7 @@ typedef struct __JUMP_BUFFER {
 #endif
 
 #if _VCRT_CLANG_INTRINSICS && ((_VCRT_GNU_AMD64_CODEGEN && defined(USE_MINGW_SETJMP_TWO_ARGS)) || \
-                               (_VCRT_ARM64_CODEGEN && !defined(_M_ARM64EC) && !defined(__arm64ec__)))
+                               _VCRT_ARM64_CODEGEN)
   /* Clang treats _setjmp as a 1-arg builtin on Win64. Route declarations and
    * macro expansion through the intrinsic aliases exported by the CRT. */
 #define _setjmp __intrinsic_setjmp
