@@ -87,6 +87,10 @@ CcInitializeCacheMap (
     ASSERT(FileObject);
     ASSERT(FileSizes);
 
+    /* Cc keeps the shared cache map in the stream's section object pointers,
+     * so a caller without one cannot be cached. */
+    ASSERT(FileObject->SectionObjectPointer);
+
     CCTRACE(CC_API_DEBUG, "FileObject=%p FileSizes=%p PinAccess=%d CallBacks=%p LazyWriterContext=%p\n",
         FileObject, FileSizes, PinAccess, CallBacks, LazyWriterContext);
 
