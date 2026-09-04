@@ -20,7 +20,8 @@ enum
     TFY_ANIM_CLOSE_MS = 90,
     TFY_ANIM_INITIAL_ALPHA = 48,
     TFY_ANIM_OFFSET = 8,
-    TFY_REOPEN_GUARD_MS = TFY_ANIM_CLOSE_MS + 20
+    TFY_REOPEN_GUARD_MS = TFY_ANIM_CLOSE_MS + 20,
+    TFY_FLYOUT_RADIUS = 8
 };
 
 static double
@@ -85,6 +86,8 @@ public:
         m_AnimAlpha = TFY_ANIM_INITIAL_ALPHA;
         m_AnimStartAlpha = TFY_ANIM_INITIAL_ALPHA;
         SetLayeredWindowAttributes(hWnd, 0, m_AnimAlpha, LWA_ALPHA);
+        SetPropW(hWnd, DWM_PROP_CORNER_RADIUS,
+                 (HANDLE)(ULONG_PTR)ShellScaleForDpi(TFY_FLYOUT_RADIUS));
         SetWindowPos(hWnd, HWND_TOPMOST, x, y + nOffset, cx, cy,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
         SetForegroundWindow(hWnd);
@@ -3687,7 +3690,6 @@ typedef VOID (WINAPI *PFN_WLANFREEMEMORY)(PVOID);
 #define TFY_TIMER_POLL 10
 #define TFY_TIMER_RESCAN 12
 #define TFY_NET_VISROWS 3
-#define TFY_NET_RADIUS 8
 #define TFY_TIMER_SPIN 13
 #define TFY_NET_EDIT_ID 101
 
@@ -4522,8 +4524,6 @@ public:
         else
             SetWindowPos(NULL, 0, 0, m_size.cx, m_size.cy,
                          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-        SetPropW(m_hWnd, DWM_PROP_CORNER_RADIUS,
-                 (HANDLE)(ULONG_PTR)Sc(TFY_NET_RADIUS));
         InvalidateRect(NULL, FALSE);
     }
 
