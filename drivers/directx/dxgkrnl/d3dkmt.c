@@ -2141,6 +2141,7 @@ DxgkpOpenAdapterByDisplayOrdinal(
     ULONG Count;
     ULONG Seen = 0;
     ULONG i;
+    ULONG Pass;
     NTSTATUS Status = STATUS_NO_SUCH_DEVICE;
 
     *OutHandle = 0;
@@ -2149,22 +2150,48 @@ DxgkpOpenAdapterByDisplayOrdinal(
     if (DisplayOrdinal == 0)
         return STATUS_INVALID_PARAMETER;
     Count = DxgkpSnapshotAdapters(Snapshot);
-    for (i = 0; i < Count; ++i)
-    {
-        ULONG SourceCount = Snapshot[i]->NumberOfVideoPresentSources;
 
-        if (SourceCount == 0)
-            continue;
-        if (DisplayOrdinal - Seen > SourceCount)
+    /*
+     * Order the walk so hardware adapters come before the basic-display
+     * fallback, rather than taking DxgkAdapterGlobalListHead order.
+     *
+     * That list is in AddDevice order, so which adapter answers DISPLAY1 was
+     * decided by a load race between BasicDisplay.sys and the PCI miniports.
+     * When the fallback won, D3DKMTOpenAdapterFromHdc resolved a window's DC
+     * to the basic-display adapter, and a hardware ICD asked to describe
+     * pixel formats for a DC on an adapter that is not its own answers with
+     * none -- so OpenGL silently fell back to the software rasteriser.
+     * Preferring hardware here makes DISPLAY1 deterministic and agrees with
+     * the way opengl32 picks the first render adapter's ICD.
+     *
+     * This does not make the lookup honour the HDC it was given; that is a
+     * separate gap (the caller ignores the DC and asks for ordinal 1).  It
+     * only stops the answer depending on driver load order.
+     */
+    for (Pass = 0; Pass < 2 && !NT_SUCCESS(Status); ++Pass)
+    {
+        for (i = 0; i < Count; ++i)
         {
-            Seen += SourceCount;
-            continue;
+            PDXGKRNL_ADAPTER Adapter = Snapshot[i];
+            BOOLEAN IsFallback = Adapter->MiniportContext == NULL ||
+                                 Adapter->MiniportContext->IsBasicDisplayFallback;
+            ULONG SourceCount = Adapter->NumberOfVideoPresentSources;
+
+            if (SourceCount == 0)
+                continue;
+            if ((Pass == 0) == IsFallback)
+                continue;
+            if (DisplayOrdinal - Seen > SourceCount)
+            {
+                Seen += SourceCount;
+                continue;
+            }
+            *OutHandle = DxgkpCreateAdapterHandle(Adapter);
+            *OutLuid = Adapter->AdapterLuid;
+            *OutSourceId = DisplayOrdinal - Seen - 1;
+            Status = *OutHandle != 0 ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
+            break;
         }
-        *OutHandle = DxgkpCreateAdapterHandle(Snapshot[i]);
-        *OutLuid = Snapshot[i]->AdapterLuid;
-        *OutSourceId = DisplayOrdinal - Seen - 1;
-        Status = *OutHandle != 0 ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
-        break;
     }
     DxgkpDereferenceAdapterSnapshot(Snapshot, Count);
     return Status;
