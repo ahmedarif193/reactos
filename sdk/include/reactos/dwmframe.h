@@ -207,6 +207,10 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_BACKDROP_REGION_NONCLIENT 1u
 #define DWM_BACKDROP_REGION_WINDOW    2u
 
+#define DWM_ANIM_MINIMIZE 1u
+#define DWM_ANIM_RESTORE  2u
+#define DWM_ANIM_MOVE     3u
+
 /* DwmEnableBlurBehindWindow state carried to the user-mode compositor. */
 #define DWM_BLUR_ENABLE                  0x00000001u
 #define DWM_BLUR_REGION_ENTIRE_WINDOW    0x00000002u
@@ -257,6 +261,9 @@ typedef struct _DWM_WIN
     LONG  ClientY;
     LONG  ClientWidth;
     LONG  ClientHeight;
+    ULONG AnimFlags;
+    LONG  AnimX, AnimY;
+    LONG  AnimCx, AnimCy;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER

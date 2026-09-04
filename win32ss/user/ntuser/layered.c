@@ -119,7 +119,7 @@ IntSetLayeredWindowAttributes(PWND pWnd,
       if (!was_Layered || oldKey != pLrdProp->Key ||
           oldAlpha != pLrdProp->Alpha || oldFlags != pLrdProp->Flags)
       {
-         IntCompositionDamageWindow(pWnd);
+         IntCompositionDamageWindowMetadata(pWnd);
       }
    }
    // FIXME: Now set some bits to the Window DC!!!!
@@ -179,12 +179,13 @@ IntUpdateLayeredWindowI( PWND pWnd,
 
    if (info->hdcSrc)
    {
-      HDC hdc, hdcBuffer;
+      HDC hdc, hdcBuffer, hdcBlend;
       RECT Rect;
       BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, 0 };
       COLORREF color_key = (info->dwFlags & ULW_COLORKEY) ? info->crKey : CLR_INVALID;
-      HBITMAP hOldBitmap, hOldBitmap1, hbmSrc, hbmDst;
+      HBITMAP hOldBitmap, hbmSrc;
       DIBSECTION dibs;
+      BOOL bDirect;
 
       Rect = Window;
 
@@ -195,8 +196,15 @@ IntUpdateLayeredWindowI( PWND pWnd,
       if (!info->hdcDst) hdc = UserGetDCEx(pWnd, NULL, DCX_USESTYLE);
       else hdc = info->hdcDst;
 
+      bDirect = (color_key == CLR_INVALID) && (info->prcDirty == NULL);
+      hbmSrc = NULL;
+      hdcBuffer = NULL;
+      hOldBitmap = NULL;
+      hdcBlend = info->hdcSrc;
+
+      if (!bDirect)
+      {
       hbmSrc = NtGdiCreateCompatibleBitmap(info->hdcSrc, Rect.right - Rect.left, Rect.bottom - Rect.top);
-      hbmDst = NtGdiCreateCompatibleBitmap(info->hdcSrc, Rect.right - Rect.left, Rect.bottom - Rect.top);
 
       GreGetObject(hbmSrc, sizeof(DIBSECTION), &dibs);
 
@@ -205,7 +213,7 @@ IntUpdateLayeredWindowI( PWND pWnd,
       hdcBuffer = NtGdiCreateCompatibleDC(hdc);
 
       hOldBitmap = (HBITMAP)NtGdiSelectBitmap(hdcBuffer, hbmSrc);
-      hOldBitmap1 = (HBITMAP)NtGdiSelectBitmap(hdc, hbmDst);
+      hdcBlend = hdcBuffer;
 
       NtGdiStretchBlt( hdcBuffer,
                        Rect.left,
@@ -227,6 +235,7 @@ IntUpdateLayeredWindowI( PWND pWnd,
          RECTL_bIntersectRect( &Rect, &Rect, info->prcDirty );
          NtGdiPatBlt( hdc, Rect.left, Rect.top, Rect.right - Rect.left, Rect.bottom - Rect.top, BLACKNESS );
       }
+      }
 
       if (info->dwFlags & ULW_ALPHA)
       {
@@ -239,7 +248,7 @@ IntUpdateLayeredWindowI( PWND pWnd,
                              Rect.top,
                              Rect.right - Rect.left,
                              Rect.bottom - Rect.top,
-                             hdcBuffer,
+                             hdcBlend,
                              Rect.left + (info->pptSrc ? info->pptSrc->x : 0),
                              Rect.top  + (info->pptSrc ? info->pptSrc->y : 0),
                              Rect.right - Rect.left,
@@ -247,10 +256,8 @@ IntUpdateLayeredWindowI( PWND pWnd,
                              blend,
                              0);
 
-      NtGdiSelectBitmap(hdc, hOldBitmap1);
-      NtGdiSelectBitmap(hdcBuffer, hOldBitmap);
+      if (hdcBuffer) NtGdiSelectBitmap(hdcBuffer, hOldBitmap);
       if (hbmSrc) GreDeleteObject(hbmSrc);
-      if (hbmDst) GreDeleteObject(hbmDst);
       if (hdcBuffer) IntGdiDeleteDC(hdcBuffer, FALSE);
       if (!info->hdcDst) UserReleaseDC(pWnd, hdc, FALSE);
    }
