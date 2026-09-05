@@ -4407,7 +4407,7 @@ NtUserRegisterWindowMessage(PUNICODE_STRING MessageNameUnsafe)
    UINT Ret = 0;
 
    TRACE("Enter NtUserRegisterWindowMessage\n");
-   UserEnterExclusive();
+   UserEnterShared();
 
    if(MessageNameUnsafe == NULL)
    {

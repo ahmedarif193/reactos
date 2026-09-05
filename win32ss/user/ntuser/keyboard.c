@@ -697,7 +697,8 @@ NtUserGetAsyncKeyState(INT Key)
     if (Key == 0)
         return (SHORT)0x8000;
 
-    UserEnterExclusive();
+    UserEnterShared();
+    UserDomainLockExclusive(DLT_ASYNCKEYSTATE);
 
     if (IS_KEY_DOWN(gafAsyncKeyState, Key))
         wRet |= 0x8000; // If down, windows returns 0x8000.
@@ -705,6 +706,7 @@ NtUserGetAsyncKeyState(INT Key)
         wRet |= 0x1;
     gafAsyncKeyStateRecentDown[Key / 8] &= ~(1 << (Key % 8));
 
+    UserDomainUnlockExclusive(DLT_ASYNCKEYSTATE);
     UserLeave();
 
     TRACE("Leave NtUserGetAsyncKeyState, ret=%u\n", wRet);
@@ -1790,7 +1792,8 @@ NtUserToUnicodeEx(
     }
     RtlZeroMemory(pwszBuff, sizeof(WCHAR) * cchBuff);
 
-    UserEnterExclusive(); // Note: We modify wchDead static variable
+    UserEnterShared();
+    UserDomainLockExclusive(DLT_ASYNCKEYSTATE);
 
     if (dwhkl)
         pKl = UserHklToKbl(dwhkl);
@@ -1830,6 +1833,7 @@ NtUserToUnicodeEx(
         SetLastNtError(Status);
     }
 
+    UserDomainUnlockExclusive(DLT_ASYNCKEYSTATE);
     UserLeave();
     TRACE("Leave NtUserSetKeyboardState, ret=%i\n", iRet);
     return iRet;

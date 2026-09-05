@@ -741,7 +741,7 @@ NtUserBuildHimcList(
     DWORD dwRealCount;
     PTHREADINFO pti;
 
-    UserEnterExclusive();
+    UserEnterShared();
 
     if (!phList || !pdwCount)
         goto Quit;
