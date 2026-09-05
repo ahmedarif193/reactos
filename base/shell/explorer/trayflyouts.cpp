@@ -909,6 +909,382 @@ BOOL TaskPreview_IsVisibleFor(IN INT_PTR nGroupId)
            g_pTaskPreview->m_nGroupId == nGroupId;
 }
 
+static LRESULT CALLBACK
+TfyFlyoutEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+                          UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    if (uMsg == WM_KEYDOWN && (wParam == VK_RETURN || wParam == VK_ESCAPE))
+    {
+        ::PostMessageW(::GetParent(hWnd), WM_KEYDOWN, wParam, lParam);
+        return 0;
+    }
+    if (uMsg == WM_CHAR && (wParam == VK_RETURN || wParam == VK_ESCAPE))
+        return 0;
+    if (uMsg == WM_NCDESTROY)
+        RemoveWindowSubclass(hWnd, TfyFlyoutEditSubclassProc, uIdSubclass);
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+#define TFY_CAL_KEY       L"Software\\ReactOS\\Explorer\\Calendar"
+#define TFY_CAL_MAXEVENTS 64
+#define TFY_CAL_DATA      6144
+#define TFY_CAL_EDIT_ID   111
+#define TFY_CAL_ALLDAY    (-1)
+#define TFY_CAL_STOREPFX  10
+#define TFY_CAL_HOURSVIS  7
+#define TFY_CAL_ALLDAYVIS 3
+#define TFY_CAL_AGENDAMAX 128
+#define TFY_CAL_AGENDAVIS 9
+#define TFY_CAL_MAXDATES  512
+
+struct TFYCALEVENT
+{
+    int nMinutes;
+    int nDuration;
+    WCHAR szTitle[64];
+};
+
+struct TFYCALDAY
+{
+    TFYCALEVENT ev[TFY_CAL_MAXEVENTS];
+    int count;
+};
+
+static VOID TfyCalDayName(int year, int month, int day, LPWSTR psz, size_t cch)
+{
+    StringCchPrintfW(psz, cch, L"%04d%02d%02d", year, month, day);
+}
+
+static int TfyCalDigits(LPCWSTR psz, int n)
+{
+    int v = 0, i;
+
+    for (i = 0; i < n; i++)
+    {
+        if (psz[i] < L'0' || psz[i] > L'9')
+            return -1;
+        v = v * 10 + (psz[i] - L'0');
+    }
+    return v;
+}
+
+static int TfyCalNameToDay(LPCWSTR psz, int year, int month)
+{
+    int v = TfyCalDigits(psz, 8);
+
+    if (v < 0 || psz[8] != 0)
+        return 0;
+    if (v / 10000 != year || (v / 100) % 100 != month)
+        return 0;
+    return v % 100;
+}
+
+static BOOL TfyCalParseStored(LPCWSTR psz, TFYCALEVENT *pev)
+{
+    if (lstrlenW(psz) <= TFY_CAL_STOREPFX)
+        return FALSE;
+    if (psz[0] == L'-')
+    {
+        pev->nMinutes = TFY_CAL_ALLDAY;
+        pev->nDuration = 0;
+    }
+    else
+    {
+        int hm = TfyCalDigits(psz, 4);
+        int dur = TfyCalDigits(psz + 5, 4);
+
+        if (hm < 0 || dur < 0 || hm / 100 > 23 || hm % 100 > 59)
+            return FALSE;
+        pev->nMinutes = (hm / 100) * 60 + hm % 100;
+        pev->nDuration = (dur > 0 && dur <= 1440) ? dur : 60;
+    }
+    StringCchCopyW(pev->szTitle, _countof(pev->szTitle), psz + TFY_CAL_STOREPFX);
+    return pev->szTitle[0] != 0;
+}
+
+static VOID TfyCalFormatStored(const TFYCALEVENT *pev, LPWSTR psz, size_t cch)
+{
+    if (pev->nMinutes == TFY_CAL_ALLDAY)
+    {
+        StringCchPrintfW(psz, cch, L"---- ---- %s", pev->szTitle);
+        return;
+    }
+    StringCchPrintfW(psz, cch, L"%02d%02d %04d %s", pev->nMinutes / 60,
+                     pev->nMinutes % 60, pev->nDuration, pev->szTitle);
+}
+
+static LPCWSTR TfyCalScanTime(LPCWSTR p, int *pMinutes)
+{
+    LPCWSTR q;
+    int h, m, n = 0;
+
+    while (n < 2 && p[n] >= L'0' && p[n] <= L'9')
+        n++;
+    if (n == 0 || p[n] != L':')
+        return NULL;
+    h = TfyCalDigits(p, n);
+    m = TfyCalDigits(p + n + 1, 2);
+    if (h < 0 || m < 0)
+        return NULL;
+    q = p + n + 3;
+    while (*q == L' ')
+        q++;
+    if ((*q == L'a' || *q == L'A' || *q == L'p' || *q == L'P') &&
+        (q[1] == L'm' || q[1] == L'M'))
+    {
+        if (h == 12)
+            h = 0;
+        if (*q == L'p' || *q == L'P')
+            h += 12;
+        q += 2;
+    }
+    if (h > 23 || m > 59)
+        return NULL;
+    *pMinutes = h * 60 + m;
+    return q;
+}
+
+static BOOL TfyCalParseInput(LPCWSTR psz, TFYCALEVENT *pev)
+{
+    LPCWSTR p = psz, pTitle, q;
+    int start = 0, end = 0, n;
+
+    while (*p == L' ' || *p == L'\t')
+        p++;
+    pTitle = p;
+    pev->nMinutes = TFY_CAL_ALLDAY;
+    pev->nDuration = 0;
+    q = TfyCalScanTime(p, &start);
+    if (q != NULL)
+    {
+        pev->nMinutes = start;
+        pev->nDuration = 60;
+        if (*q == L'-' || *q == L'\x2013')
+        {
+            LPCWSTR r = TfyCalScanTime(q + 1, &end);
+
+            if (r != NULL)
+            {
+                if (end > start)
+                    pev->nDuration = end - start;
+                q = r;
+            }
+        }
+        while (*q == L' ' || *q == L'\t')
+            q++;
+        pTitle = q;
+    }
+    StringCchCopyW(pev->szTitle, _countof(pev->szTitle), pTitle);
+    n = lstrlenW(pev->szTitle);
+    while (n > 0 && (pev->szTitle[n - 1] == L' ' || pev->szTitle[n - 1] == L'\t'))
+        pev->szTitle[--n] = 0;
+    if (pev->nMinutes != TFY_CAL_ALLDAY && pev->nMinutes + pev->nDuration > 1440)
+        pev->nDuration = 1440 - pev->nMinutes;
+    return pev->szTitle[0] != 0;
+}
+
+static VOID TfyCalLoadDay(int year, int month, int day, TFYCALDAY *pday)
+{
+    WCHAR szName[16];
+    WCHAR *pszData;
+    HKEY hKey = NULL;
+
+    pday->count = 0;
+    if (year <= 0)
+        return;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, TFY_CAL_KEY, 0, KEY_QUERY_VALUE,
+                      &hKey) != ERROR_SUCCESS)
+        return;
+    pszData = (WCHAR *)LocalAlloc(LPTR, TFY_CAL_DATA * sizeof(WCHAR));
+    if (pszData)
+    {
+        DWORD cb = (DWORD)((TFY_CAL_DATA - 2) * sizeof(WCHAR)), type = 0;
+
+        TfyCalDayName(year, month, day, szName, _countof(szName));
+        if (RegQueryValueExW(hKey, szName, NULL, &type, (LPBYTE)pszData, &cb) ==
+                ERROR_SUCCESS && type == REG_MULTI_SZ)
+        {
+            LPCWSTR p;
+
+            for (p = pszData; *p != 0; p += lstrlenW(p) + 1)
+            {
+                if (pday->count >= TFY_CAL_MAXEVENTS)
+                    break;
+                if (TfyCalParseStored(p, &pday->ev[pday->count]))
+                    pday->count++;
+            }
+        }
+        LocalFree(pszData);
+    }
+    RegCloseKey(hKey);
+}
+
+static VOID TfyCalSaveDay(int year, int month, int day, const TFYCALDAY *pday)
+{
+    WCHAR szName[16], szLine[96];
+    WCHAR *pszData;
+    HKEY hKey = NULL;
+    int i, o = 0;
+
+    if (year <= 0)
+        return;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, TFY_CAL_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &hKey, NULL) != ERROR_SUCCESS)
+        return;
+    TfyCalDayName(year, month, day, szName, _countof(szName));
+    if (pday->count == 0)
+    {
+        RegDeleteValueW(hKey, szName);
+        RegCloseKey(hKey);
+        return;
+    }
+    pszData = (WCHAR *)LocalAlloc(LPTR, TFY_CAL_DATA * sizeof(WCHAR));
+    if (pszData)
+    {
+        for (i = 0; i < pday->count; i++)
+        {
+            int cch;
+
+            TfyCalFormatStored(&pday->ev[i], szLine, _countof(szLine));
+            cch = lstrlenW(szLine) + 1;
+            if (o + cch + 1 > TFY_CAL_DATA)
+                break;
+            CopyMemory(&pszData[o], szLine, cch * sizeof(WCHAR));
+            o += cch;
+        }
+        pszData[o++] = 0;
+        RegSetValueExW(hKey, szName, 0, REG_MULTI_SZ, (const BYTE *)pszData,
+                       (DWORD)(o * sizeof(WCHAR)));
+        LocalFree(pszData);
+    }
+    RegCloseKey(hKey);
+}
+
+static VOID TfyCalLoadMonthCounts(int year, int month, int *pCounts)
+{
+    HKEY hKey = NULL;
+    WCHAR *pszData;
+    DWORD i = 0;
+
+    ZeroMemory(pCounts, 32 * sizeof(int));
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, TFY_CAL_KEY, 0, KEY_QUERY_VALUE,
+                      &hKey) != ERROR_SUCCESS)
+        return;
+    pszData = (WCHAR *)LocalAlloc(LPTR, TFY_CAL_DATA * sizeof(WCHAR));
+    if (!pszData)
+    {
+        RegCloseKey(hKey);
+        return;
+    }
+    for (;;)
+    {
+        WCHAR szName[32];
+        DWORD cch = _countof(szName);
+        DWORD cb = (DWORD)((TFY_CAL_DATA - 2) * sizeof(WCHAR));
+        DWORD type = 0;
+        LPCWSTR p;
+        int day, n = 0;
+
+        ZeroMemory(pszData, TFY_CAL_DATA * sizeof(WCHAR));
+        if (RegEnumValueW(hKey, i++, szName, &cch, NULL, &type,
+                          (LPBYTE)pszData, &cb) != ERROR_SUCCESS)
+            break;
+        if (type != REG_MULTI_SZ)
+            continue;
+        day = TfyCalNameToDay(szName, year, month);
+        if (day < 1 || day > 31)
+            continue;
+        for (p = pszData; *p != 0; p += lstrlenW(p) + 1)
+            n++;
+        pCounts[day] = n;
+    }
+    LocalFree(pszData);
+    RegCloseKey(hKey);
+}
+
+struct TFYCALROW
+{
+    int date;
+    int bHeader;
+    TFYCALEVENT ev;
+};
+
+static VOID TfyCalSortDates(int *pDates, int count)
+{
+    int i, j, v;
+
+    for (i = 1; i < count; i++)
+    {
+        v = pDates[i];
+        for (j = i; j > 0 && pDates[j - 1] > v; j--)
+            pDates[j] = pDates[j - 1];
+        pDates[j] = v;
+    }
+}
+
+static int TfyCalCollectDates(int fromDate, int *pDates, int maxDates)
+{
+    HKEY hKey = NULL;
+    DWORD i = 0;
+    int count = 0;
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, TFY_CAL_KEY, 0, KEY_QUERY_VALUE,
+                      &hKey) != ERROR_SUCCESS)
+        return 0;
+    for (;;)
+    {
+        WCHAR szName[32];
+        DWORD cch = _countof(szName);
+        int v;
+
+        if (count >= maxDates)
+            break;
+        if (RegEnumValueW(hKey, i++, szName, &cch, NULL, NULL, NULL,
+                          NULL) != ERROR_SUCCESS)
+            break;
+        v = TfyCalDigits(szName, 8);
+        if (v <= 0 || szName[8] != 0 || v < fromDate)
+            continue;
+        pDates[count++] = v;
+    }
+    RegCloseKey(hKey);
+    TfyCalSortDates(pDates, count);
+    return count;
+}
+
+static int TfyCalLoadAgenda(int fromDate, TFYCALROW *pRows, int maxRows)
+{
+    int *pDates;
+    int nDates, i, j, count = 0;
+
+    pDates = (int *)LocalAlloc(LPTR, TFY_CAL_MAXDATES * sizeof(int));
+    if (!pDates)
+        return 0;
+    nDates = TfyCalCollectDates(fromDate, pDates, TFY_CAL_MAXDATES);
+    for (i = 0; i < nDates && count < maxRows; i++)
+    {
+        TFYCALDAY day;
+        int date = pDates[i];
+
+        TfyCalLoadDay(date / 10000, (date / 100) % 100, date % 100, &day);
+        if (day.count == 0)
+            continue;
+        pRows[count].date = date;
+        pRows[count].bHeader = TRUE;
+        ZeroMemory(&pRows[count].ev, sizeof(TFYCALEVENT));
+        count++;
+        for (j = 0; j < day.count && count < maxRows; j++)
+        {
+            pRows[count].date = date;
+            pRows[count].bHeader = FALSE;
+            pRows[count].ev = day.ev[j];
+            count++;
+        }
+    }
+    LocalFree(pDates);
+    return count;
+}
+
 class CTrayCalendarWnd :
     public CWindowImpl<CTrayCalendarWnd, CWindow, CTrayFlyoutTraits>,
     public CTrayFlyoutAnimation
@@ -921,6 +1297,7 @@ public:
     HFONT m_hFontHeader;
     HFONT m_hFont;
     HFONT m_hFontSmall;
+    int m_Mode;
     int m_ViewYear;
     int m_ViewMonth;
     int m_Level;
@@ -932,25 +1309,62 @@ public:
     BOOL m_bTracking;
     SIZE m_size;
     RECT m_rcTime, m_rcDate, m_rcPrev, m_rcNext, m_rcHeader, m_rcGrid, m_rcLink;
+    RECT m_rcAnchor, m_rcBack, m_rcAllDay, m_rcTimeline, m_rcAdd;
+    RECT m_rcList, m_rcAgenda;
     int m_FirstDayOfWeek;
+    WORD m_TodayYear, m_TodayMonth, m_TodayDay;
+    TFYCALDAY m_Day;
+    int m_Counts[32];
+    int m_CountsYear, m_CountsMonth;
+    int m_HourTop;
+    int m_iHotEvent;
+    BOOL m_bHotDel;
+    HWND m_hwndEdit;
+    HBRUSH m_hbrEdit;
+    BOOL m_bAddMode;
+    TFYCALROW m_Rows[TFY_CAL_AGENDAMAX];
+    int m_cRows;
+    int m_RowTop;
+    int m_iHotRow;
 
-    enum { NAV_NONE = 0, NAV_PREV, NAV_NEXT, NAV_HEADER, NAV_LINK, NAV_DATE };
+    enum { MODE_MONTH = 0, MODE_DAY = 1, MODE_AGENDA = 2 };
+    enum { NAV_NONE = 0, NAV_PREV, NAV_NEXT, NAV_HEADER, NAV_LINK, NAV_DATE,
+           NAV_ADD, NAV_BACK, NAV_LIST };
 
-    CTrayCalendarWnd() : m_hFontTime(NULL), m_hFontHeader(NULL), m_hFont(NULL), m_hFontSmall(NULL),
+    CTrayCalendarWnd() : m_hFontTime(NULL), m_hFontHeader(NULL), m_hFont(NULL),
+                         m_hFontSmall(NULL), m_Mode(MODE_MONTH),
                          m_ViewYear(0), m_ViewMonth(0), m_Level(0),
                          m_SelYear(0), m_SelMonth(0), m_SelDay(0),
                          m_iHotCell(-1), m_iHotNav(NAV_NONE),
-                         m_bTracking(FALSE), m_FirstDayOfWeek(0)
+                         m_bTracking(FALSE), m_FirstDayOfWeek(0),
+                         m_TodayYear(0), m_TodayMonth(0), m_TodayDay(0),
+                         m_CountsYear(0), m_CountsMonth(0), m_HourTop(8),
+                         m_iHotEvent(-1), m_bHotDel(FALSE), m_hwndEdit(NULL),
+                         m_hbrEdit(NULL), m_bAddMode(FALSE), m_cRows(0),
+                         m_RowTop(0), m_iHotRow(-1)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
         ZeroMemory(&m_size, sizeof(m_size));
+        ZeroMemory(&m_rcAnchor, sizeof(m_rcAnchor));
+        ZeroMemory(&m_Day, sizeof(m_Day));
+        ZeroMemory(m_Counts, sizeof(m_Counts));
+        ZeroMemory(m_Rows, sizeof(m_Rows));
     }
 
     int Sc(int v) const { return ShellScaleForDpi(v); }
     int CellW() const { return Sc(40); }
-    int CellH() const { return Sc(34); }
+    int CellH() const { return Sc(38); }
     int BigCellW() const { return CellW() * 7 / 4; }
     int BigCellH() const { return CellH() * 6 / 4; }
+    int HourH() const { return Sc(30); }
+    int TimeColW() const { return Sc(52); }
+    int AllDayH() const { return Sc(22); }
+    int RowH() const { return Sc(26); }
+    int SelDate() const { return m_SelYear * 10000 + m_SelMonth * 100 + m_SelDay; }
+    int TodayDate() const
+    {
+        return (int)m_TodayYear * 10000 + (int)m_TodayMonth * 100 + (int)m_TodayDay;
+    }
 
     static int DayOfWeek(int year, int month, int day)
     {
@@ -990,31 +1404,284 @@ public:
         return (m_ViewYear / 10) * 10;
     }
 
-    VOID Layout()
+    VOID ReadFirstDayOfWeek()
+    {
+        WCHAR szFirst[4];
+
+        m_FirstDayOfWeek = 0;
+        if (GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_IFIRSTDAYOFWEEK,
+                           szFirst, _countof(szFirst)))
+            m_FirstDayOfWeek = (szFirst[0] - L'0' + 1) % 7;
+    }
+
+    BOOL LatchToday()
+    {
+        SYSTEMTIME st;
+
+        GetLocalTime(&st);
+        if (st.wYear == m_TodayYear && st.wMonth == m_TodayMonth &&
+            st.wDay == m_TodayDay)
+            return FALSE;
+        m_TodayYear = st.wYear;
+        m_TodayMonth = st.wMonth;
+        m_TodayDay = st.wDay;
+        return TRUE;
+    }
+
+    BOOL SelIsToday() const
+    {
+        return m_SelYear == m_TodayYear && m_SelMonth == m_TodayMonth &&
+               m_SelDay == m_TodayDay;
+    }
+
+    VOID InvalidateCounts()
+    {
+        m_CountsYear = 0;
+        m_CountsMonth = 0;
+    }
+
+    VOID EnsureCounts()
+    {
+        if (m_CountsYear == m_ViewYear && m_CountsMonth == m_ViewMonth)
+            return;
+        TfyCalLoadMonthCounts(m_ViewYear, m_ViewMonth, m_Counts);
+        m_CountsYear = m_ViewYear;
+        m_CountsMonth = m_ViewMonth;
+    }
+
+    VOID ReloadDay()
+    {
+        TfyCalLoadDay(m_SelYear, m_SelMonth, m_SelDay, &m_Day);
+        m_iHotEvent = -1;
+        m_bHotDel = FALSE;
+    }
+
+    VOID StoreDay()
+    {
+        TfyCalSaveDay(m_SelYear, m_SelMonth, m_SelDay, &m_Day);
+        InvalidateCounts();
+        EnsureCounts();
+    }
+
+    VOID InsertEvent(const TFYCALEVENT &ev)
+    {
+        int i, j;
+
+        if (m_Day.count >= TFY_CAL_MAXEVENTS)
+            return;
+        for (i = 0; i < m_Day.count; i++)
+        {
+            if (m_Day.ev[i].nMinutes > ev.nMinutes)
+                break;
+        }
+        for (j = m_Day.count; j > i; j--)
+            m_Day.ev[j] = m_Day.ev[j - 1];
+        m_Day.ev[i] = ev;
+        m_Day.count++;
+    }
+
+    VOID DeleteEvent(int index)
+    {
+        int i;
+
+        if (index < 0 || index >= m_Day.count)
+            return;
+        for (i = index; i < m_Day.count - 1; i++)
+            m_Day.ev[i] = m_Day.ev[i + 1];
+        m_Day.count--;
+        StoreDay();
+    }
+
+    int AllDayCount() const
+    {
+        int i, n = 0;
+
+        for (i = 0; i < m_Day.count; i++)
+        {
+            if (m_Day.ev[i].nMinutes == TFY_CAL_ALLDAY)
+                n++;
+        }
+        return n;
+    }
+
+    int FirstTimedMinute() const
+    {
+        int i;
+
+        for (i = 0; i < m_Day.count; i++)
+        {
+            if (m_Day.ev[i].nMinutes != TFY_CAL_ALLDAY)
+                return m_Day.ev[i].nMinutes;
+        }
+        return -1;
+    }
+
+    VOID ResetHourTop()
+    {
+        int first = FirstTimedMinute();
+        int hour;
+
+        if (first >= 0)
+            hour = first / 60 - 1;
+        else if (SelIsToday())
+        {
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            hour = st.wHour - 1;
+        }
+        else
+            hour = 8;
+        if (hour > 24 - TFY_CAL_HOURSVIS)
+            hour = 24 - TFY_CAL_HOURSVIS;
+        if (hour < 0)
+            hour = 0;
+        m_HourTop = hour;
+    }
+
+    VOID LayoutCommon(int &y)
     {
         int pad = Sc(16);
-        m_size.cx = pad * 2 + CellW() * 7;
 
-        int y = pad;
+        m_size.cx = pad * 2 + CellW() * 7;
+        y = pad;
         SetRect(&m_rcTime, pad, y, m_size.cx - pad, y + Sc(44));
         y += Sc(44);
         SetRect(&m_rcDate, pad, y, m_size.cx - pad, y + Sc(24));
-        y += Sc(24);
-        y += Sc(14);
-        int headerY = y;
-        SetRect(&m_rcNext, m_size.cx - pad - Sc(28), headerY, m_size.cx - pad, headerY + Sc(28));
-        SetRect(&m_rcPrev, m_rcNext.left - Sc(32), headerY, m_rcNext.left - Sc(4), headerY + Sc(28));
-        SetRect(&m_rcHeader, pad, headerY, m_rcPrev.left - Sc(8), headerY + Sc(28));
-        y += Sc(28);
-        y += Sc(24);
-        SetRect(&m_rcGrid, pad, y, pad + CellW() * 7, y + CellH() * 6);
-        y += CellH() * 6 + Sc(10);
-        RECT rcSep = { pad, y, m_size.cx - pad, y + 1 };
-        y += Sc(10);
+        y += Sc(24) + Sc(14);
+    }
+
+    VOID LayoutTail(int &y)
+    {
+        int pad = Sc(16);
+
+        y += Sc(20);
         SetRect(&m_rcLink, pad, y, m_size.cx - pad, y + Sc(22));
         y += Sc(22) + Sc(12);
         m_size.cy = y;
-        (void)rcSep;
+    }
+
+    VOID LayoutAgenda()
+    {
+        int pad = Sc(16), y, headerY;
+
+        LayoutCommon(y);
+        headerY = y;
+        SetRect(&m_rcBack, pad, headerY, pad + Sc(28), headerY + Sc(28));
+        SetRect(&m_rcHeader, m_rcBack.right + Sc(6), headerY, m_size.cx - pad,
+                headerY + Sc(28));
+        SetRectEmpty(&m_rcPrev);
+        SetRectEmpty(&m_rcNext);
+        SetRectEmpty(&m_rcList);
+        SetRectEmpty(&m_rcGrid);
+        SetRectEmpty(&m_rcAllDay);
+        SetRectEmpty(&m_rcTimeline);
+        SetRectEmpty(&m_rcAdd);
+        y += Sc(28) + Sc(8);
+        SetRect(&m_rcAgenda, pad, y, m_size.cx - pad, y + TFY_CAL_AGENDAVIS * RowH());
+        y += TFY_CAL_AGENDAVIS * RowH() + Sc(10);
+        LayoutTail(y);
+    }
+
+    VOID LayoutMonth()
+    {
+        int pad = Sc(16), y, headerY;
+
+        LayoutCommon(y);
+        headerY = y;
+        SetRect(&m_rcNext, m_size.cx - pad - Sc(28), headerY, m_size.cx - pad, headerY + Sc(28));
+        SetRect(&m_rcPrev, m_rcNext.left - Sc(32), headerY, m_rcNext.left - Sc(4), headerY + Sc(28));
+        SetRect(&m_rcList, m_rcPrev.left - Sc(32), headerY, m_rcPrev.left - Sc(4), headerY + Sc(28));
+        SetRect(&m_rcHeader, pad, headerY, m_rcList.left - Sc(8), headerY + Sc(28));
+        SetRectEmpty(&m_rcAgenda);
+        SetRectEmpty(&m_rcBack);
+        SetRectEmpty(&m_rcAllDay);
+        SetRectEmpty(&m_rcTimeline);
+        SetRectEmpty(&m_rcAdd);
+        y += Sc(28) + Sc(24);
+        SetRect(&m_rcGrid, pad, y, pad + CellW() * 7, y + CellH() * 6);
+        y += CellH() * 6 + Sc(10);
+        LayoutTail(y);
+    }
+
+    VOID LayoutDay()
+    {
+        int pad = Sc(16), y, headerY, nAllDay;
+
+        LayoutCommon(y);
+        headerY = y;
+        SetRect(&m_rcNext, m_size.cx - pad - Sc(28), headerY, m_size.cx - pad, headerY + Sc(28));
+        SetRect(&m_rcPrev, m_rcNext.left - Sc(32), headerY, m_rcNext.left - Sc(4), headerY + Sc(28));
+        SetRect(&m_rcBack, pad, headerY, pad + Sc(28), headerY + Sc(28));
+        SetRect(&m_rcHeader, m_rcBack.right + Sc(6), headerY, m_rcPrev.left - Sc(8), headerY + Sc(28));
+        SetRectEmpty(&m_rcGrid);
+        SetRectEmpty(&m_rcList);
+        SetRectEmpty(&m_rcAgenda);
+        y += Sc(28) + Sc(10);
+        nAllDay = AllDayCount();
+        if (nAllDay > TFY_CAL_ALLDAYVIS)
+            nAllDay = TFY_CAL_ALLDAYVIS;
+        SetRect(&m_rcAllDay, pad, y, m_size.cx - pad, y + nAllDay * AllDayH());
+        y += nAllDay * AllDayH();
+        if (nAllDay != 0)
+            y += Sc(8);
+        SetRect(&m_rcTimeline, pad, y, m_size.cx - pad, y + TFY_CAL_HOURSVIS * HourH());
+        y += TFY_CAL_HOURSVIS * HourH() + Sc(10);
+        SetRect(&m_rcAdd, pad, y, m_size.cx - pad, y + Sc(26));
+        y += Sc(26) + Sc(10);
+        LayoutTail(y);
+    }
+
+    VOID Layout()
+    {
+        if (m_Mode == MODE_DAY)
+            LayoutDay();
+        else if (m_Mode == MODE_AGENDA)
+            LayoutAgenda();
+        else
+            LayoutMonth();
+    }
+
+    VOID ComputePosition()
+    {
+        MONITORINFO mi;
+        POINT ptRef;
+        int xPos, yPos;
+
+        ptRef.x = m_rcAnchor.right;
+        ptRef.y = m_rcAnchor.top;
+        mi.cbSize = sizeof(mi);
+        GetMonitorInfoW(MonitorFromPoint(ptRef, MONITOR_DEFAULTTONEAREST), &mi);
+        xPos = m_rcAnchor.right - m_size.cx;
+        if (xPos + m_size.cx > mi.rcMonitor.right) xPos = mi.rcMonitor.right - m_size.cx;
+        if (xPos < mi.rcMonitor.left) xPos = mi.rcMonitor.left;
+        yPos = m_rcAnchor.top - m_size.cy - Sc(6);
+        if (yPos < mi.rcMonitor.top) yPos = m_rcAnchor.bottom + Sc(6);
+        m_ptFinal.x = xPos;
+        m_ptFinal.y = yPos;
+    }
+
+    VOID Relayout()
+    {
+        Layout();
+        ComputePosition();
+        if (m_AnimPhase == TFY_NONE)
+        {
+            SetWindowPos(NULL, m_ptFinal.x, m_ptFinal.y, m_size.cx, m_size.cy,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        else
+        {
+            SetWindowPos(NULL, 0, 0, m_size.cx, m_size.cy,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        if (m_bAddMode && m_hwndEdit)
+        {
+            ::SetWindowPos(m_hwndEdit, NULL, m_rcAdd.left, m_rcAdd.top,
+                           m_rcAdd.right - m_rcAdd.left,
+                           m_rcAdd.bottom - m_rcAdd.top,
+                           SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+        InvalidateRect(NULL, FALSE);
     }
 
     VOID GoToday()
@@ -1027,14 +1694,62 @@ public:
         m_SelMonth = st.wMonth;
         m_SelDay = st.wDay;
         m_Level = 0;
+        LatchToday();
+    }
+
+    VOID OpenDay()
+    {
+        m_Mode = MODE_DAY;
+        m_Level = 0;
+        m_iHotCell = -1;
+        m_iHotNav = NAV_NONE;
+        ReloadDay();
+        ResetHourTop();
+        Relayout();
+    }
+
+    VOID GoMonth()
+    {
+        if (m_bAddMode)
+            HideEdit();
+        m_Mode = MODE_MONTH;
+        m_ViewYear = m_SelYear;
+        m_ViewMonth = m_SelMonth;
+        m_iHotNav = NAV_NONE;
+        m_iHotEvent = -1;
+        m_iHotRow = -1;
+        EnsureCounts();
+        Relayout();
+    }
+
+    VOID ShiftDay(int delta)
+    {
+        SYSTEMTIME st;
+        FILETIME ft;
+        ULARGE_INTEGER ul;
+
+        ZeroMemory(&st, sizeof(st));
+        st.wYear = (WORD)m_SelYear;
+        st.wMonth = (WORD)m_SelMonth;
+        st.wDay = (WORD)m_SelDay;
+        if (!SystemTimeToFileTime(&st, &ft))
+            return;
+        ul.LowPart = ft.dwLowDateTime;
+        ul.HighPart = ft.dwHighDateTime;
+        ul.QuadPart += (LONGLONG)delta * 864000000000LL;
+        ft.dwLowDateTime = ul.LowPart;
+        ft.dwHighDateTime = ul.HighPart;
+        if (!FileTimeToSystemTime(&ft, &st))
+            return;
+        m_SelYear = st.wYear;
+        m_SelMonth = st.wMonth;
+        m_SelDay = st.wDay;
+        m_ViewYear = st.wYear;
+        m_ViewMonth = st.wMonth;
     }
 
     VOID Toggle(HWND hwndOwner, const RECT *prcAnchor)
     {
-        MONITORINFO mi;
-        POINT ptRef;
-        int xPos, yPos;
-
         StartMenu2_GetFlyoutPalette(&m_Pal);
 
         if (!m_hFontTime) m_hFontTime = TfyCreateFont(32, FW_LIGHT);
@@ -1042,29 +1757,21 @@ public:
         if (!m_hFont) m_hFont = TfyCreateFont(12, FW_NORMAL);
         if (!m_hFontSmall) m_hFontSmall = TfyCreateFont(11, FW_NORMAL);
 
+        m_Mode = MODE_MONTH;
         GoToday();
         m_iHotCell = -1;
         m_iHotNav = NAV_NONE;
-
-        WCHAR szFirst[4];
-        m_FirstDayOfWeek = 0;
-        if (GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_IFIRSTDAYOFWEEK, szFirst, _countof(szFirst)))
-            m_FirstDayOfWeek = (szFirst[0] - L'0' + 1) % 7;
+        ReadFirstDayOfWeek();
+        m_rcAnchor = *prcAnchor;
+        InvalidateCounts();
+        EnsureCounts();
+        ReloadDay();
 
         Layout();
+        ComputePosition();
 
-        ptRef.x = prcAnchor->right;
-        ptRef.y = prcAnchor->top;
-        mi.cbSize = sizeof(mi);
-        GetMonitorInfoW(MonitorFromPoint(ptRef, MONITOR_DEFAULTTONEAREST), &mi);
-
-        xPos = prcAnchor->right - m_size.cx;
-        if (xPos + m_size.cx > mi.rcMonitor.right) xPos = mi.rcMonitor.right - m_size.cx;
-        if (xPos < mi.rcMonitor.left) xPos = mi.rcMonitor.left;
-        yPos = prcAnchor->top - m_size.cy - Sc(6);
-        if (yPos < mi.rcMonitor.top) yPos = prcAnchor->bottom + Sc(6);
-
-        BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg);
+        BeginFlyoutOpen(m_hWnd, m_ptFinal.x, m_ptFinal.y, m_size.cx, m_size.cy,
+                        m_Pal.PanelBg);
         SetTimer(TFY_TIMER_TICK, 1000, NULL);
     }
 
@@ -1137,9 +1844,11 @@ public:
         }
     }
 
-    VOID DrawCell(HDC hdc, const RECT *prc, LPCWSTR pszText, BOOL bToday, BOOL bSel, BOOL bHot, BOOL bDim)
+    VOID DrawCell(HDC hdc, const RECT *prc, LPCWSTR pszText, BOOL bToday,
+                  BOOL bSel, BOOL bHot, BOOL bDim, int nCount)
     {
-        RECT rcFill = *prc;
+        RECT rcFill = *prc, rcNum = *prc;
+
         InflateRect(&rcFill, -Sc(2), -Sc(2));
         if (bToday)
         {
@@ -1156,55 +1865,478 @@ public:
         if (bSel)
         {
             HBRUSH hbr = CreateSolidBrush(bToday ? m_Pal.AccentText : m_Pal.AccentBg);
-            FrameRect(hdc, &rcFill, hbr);
             RECT rcInner = rcFill;
+            FrameRect(hdc, &rcFill, hbr);
             InflateRect(&rcInner, -1, -1);
             FrameRect(hdc, &rcInner, hbr);
             DeleteObject(hbr);
         }
         SetTextColor(hdc, bToday ? m_Pal.AccentText : (bDim ? m_Pal.DimText : m_Pal.PanelText));
-        DrawTextW(hdc, pszText, -1, (LPRECT)prc, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+        if (nCount > 0)
+            rcNum.bottom -= Sc(11);
+        DrawTextW(hdc, pszText, -1, &rcNum,
+                  DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+        if (nCount > 0)
+        {
+            WCHAR szCount[8];
+            RECT rcCount = *prc;
+            HGDIOBJ hOld = SelectObject(hdc, m_hFontSmall);
+
+            rcCount.top = rcCount.bottom - Sc(14);
+            StringCchPrintfW(szCount, _countof(szCount), L"%d", nCount);
+            SetTextColor(hdc, bToday ? m_Pal.AccentText : m_Pal.AccentBg);
+            DrawTextW(hdc, szCount, -1, &rcCount,
+                      DT_SINGLELINE | DT_TOP | DT_CENTER | DT_NOPREFIX);
+            SelectObject(hdc, hOld);
+        }
     }
 
-    LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    VOID FormatMinutes(int minutes, BOOL bHourOnly, LPWSTR psz, size_t cch)
     {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(&ps);
-        RECT rc;
-        GetClientRect(&rc);
+        SYSTEMTIME st;
 
-        HDC hdcMem = CreateCompatibleDC(hdc);
-        HBITMAP hbm = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
-        HGDIOBJ hbmOld = SelectObject(hdcMem, hbm);
+        ZeroMemory(&st, sizeof(st));
+        st.wYear = (WORD)m_SelYear;
+        st.wMonth = (WORD)m_SelMonth;
+        st.wDay = (WORD)m_SelDay;
+        st.wHour = (WORD)(minutes / 60);
+        st.wMinute = (WORD)(minutes % 60);
+        if (!GetTimeFormatW(LOCALE_USER_DEFAULT,
+                            bHourOnly ? TIME_NOMINUTESORSECONDS : TIME_NOSECONDS,
+                            &st, NULL, psz, (int)cch))
+            StringCchPrintfW(psz, cch, L"%02d:%02d", st.wHour, st.wMinute);
+    }
 
-        HBRUSH hbr = CreateSolidBrush(m_Pal.PanelBg);
-        FillRect(hdcMem, &rc, hbr);
-        DeleteObject(hbr);
-        HBRUSH hbrEdge = CreateSolidBrush(m_Pal.Border);
-        FrameRect(hdcMem, &rc, hbrEdge);
-        DeleteObject(hbrEdge);
+    VOID FormatRowMinutes(int date, int minutes, LPWSTR psz, size_t cch)
+    {
+        SYSTEMTIME st;
 
-        SetBkMode(hdcMem, TRANSPARENT);
+        ZeroMemory(&st, sizeof(st));
+        st.wYear = (WORD)(date / 10000);
+        st.wMonth = (WORD)((date / 100) % 100);
+        st.wDay = (WORD)(date % 100);
+        st.wHour = (WORD)(minutes / 60);
+        st.wMinute = (WORD)(minutes % 60);
+        if (!GetTimeFormatW(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &st, NULL,
+                            psz, (int)cch))
+            StringCchPrintfW(psz, cch, L"%02d:%02d", st.wHour, st.wMinute);
+    }
 
-        SYSTEMTIME stNow;
-        GetLocalTime(&stNow);
+    int AllDayIndex(int slot) const
+    {
+        int i, n = 0;
 
-        int pad = Sc(16);
+        for (i = 0; i < m_Day.count; i++)
+        {
+            if (m_Day.ev[i].nMinutes != TFY_CAL_ALLDAY)
+                continue;
+            if (n == slot)
+                return i;
+            n++;
+        }
+        return -1;
+    }
+
+    RECT EventBlockRect(int index) const
+    {
+        RECT rc = { 0, 0, 0, 0 };
+        int top, height;
+
+        if (index < 0 || index >= m_Day.count ||
+            m_Day.ev[index].nMinutes == TFY_CAL_ALLDAY)
+            return rc;
+        top = m_rcTimeline.top +
+              (m_Day.ev[index].nMinutes - m_HourTop * 60) * HourH() / 60;
+        height = m_Day.ev[index].nDuration * HourH() / 60;
+        if (height < Sc(18))
+            height = Sc(18);
+        SetRect(&rc, m_rcTimeline.left + TimeColW(), top,
+                m_rcTimeline.right, top + height);
+        return rc;
+    }
+
+    VOID DrawTimeline(HDC hdc)
+    {
+        WCHAR szBuf[64];
+        HBRUSH hbrLine = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.DimText, 70));
+        HRGN hrgn = CreateRectRgn(m_rcTimeline.left, m_rcTimeline.top,
+                                  m_rcTimeline.right, m_rcTimeline.bottom);
+        int i;
+
+        SelectClipRgn(hdc, hrgn);
+        SelectObject(hdc, m_hFontSmall);
+        for (i = 0; i < TFY_CAL_HOURSVIS; i++)
+        {
+            int hour = m_HourTop + i;
+            int rowY = m_rcTimeline.top + i * HourH();
+            RECT rcLine = { m_rcTimeline.left + TimeColW(), rowY,
+                            m_rcTimeline.right, rowY + 1 };
+            RECT rcLabel = { m_rcTimeline.left, rowY - Sc(7),
+                             m_rcTimeline.left + TimeColW() - Sc(6), rowY + Sc(9) };
+
+            if (hour > 23)
+                break;
+            FillRect(hdc, &rcLine, hbrLine);
+            if (i == 0 && m_HourTop == 0)
+                continue;
+            FormatMinutes(hour * 60, TRUE, szBuf, _countof(szBuf));
+            SetTextColor(hdc, m_Pal.DimText);
+            DrawTextW(hdc, szBuf, -1, &rcLabel,
+                      DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
+        }
+        for (i = 0; i < m_Day.count; i++)
+        {
+            RECT rcBlock = EventBlockRect(i), rcBar, rcText;
+            HBRUSH hbrBlock;
+
+            if (m_Day.ev[i].nMinutes == TFY_CAL_ALLDAY)
+                continue;
+            if (rcBlock.bottom <= m_rcTimeline.top || rcBlock.top >= m_rcTimeline.bottom)
+                continue;
+            hbrBlock = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.AccentBg,
+                                               i == m_iHotEvent ? 150 : 110));
+            InflateRect(&rcBlock, -Sc(1), 0);
+            FillRect(hdc, &rcBlock, hbrBlock);
+            DeleteObject(hbrBlock);
+            hbrBlock = CreateSolidBrush(m_Pal.AccentBg);
+            SetRect(&rcBar, rcBlock.left, rcBlock.top, rcBlock.left + Sc(3), rcBlock.bottom);
+            FillRect(hdc, &rcBar, hbrBlock);
+            DeleteObject(hbrBlock);
+            rcText = rcBlock;
+            rcText.left += Sc(8);
+            rcText.right -= (i == m_iHotEvent) ? Sc(24) : Sc(6);
+            SetTextColor(hdc, m_Pal.PanelText);
+            SelectObject(hdc, m_hFont);
+            DrawTextW(hdc, m_Day.ev[i].szTitle, -1, &rcText,
+                      DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+            if (i == m_iHotEvent)
+            {
+                RECT rcDel = { rcBlock.right - Sc(22), rcBlock.top + Sc(3),
+                               rcBlock.right - Sc(6), rcBlock.top + Sc(19) };
+                TfyDrawFluent(hdc, &rcDel, IDI_FLU_DELETEICO);
+            }
+        }
+        if (SelIsToday())
+        {
+            SYSTEMTIME st;
+            int nowY;
+
+            GetLocalTime(&st);
+            nowY = m_rcTimeline.top +
+                   (st.wHour * 60 + st.wMinute - m_HourTop * 60) * HourH() / 60;
+            if (nowY >= m_rcTimeline.top && nowY < m_rcTimeline.bottom)
+            {
+                HBRUSH hbrNow = CreateSolidBrush(m_Pal.AccentBg);
+                RECT rcNow = { m_rcTimeline.left + TimeColW() - Sc(4), nowY,
+                               m_rcTimeline.right, nowY + Sc(2) };
+                RECT rcDot = { m_rcTimeline.left + TimeColW() - Sc(4), nowY - Sc(3),
+                               m_rcTimeline.left + TimeColW() + Sc(2), nowY + Sc(5) };
+
+                FillRect(hdc, &rcNow, hbrNow);
+                FillRect(hdc, &rcDot, hbrNow);
+                DeleteObject(hbrNow);
+            }
+        }
+        SelectClipRgn(hdc, NULL);
+        DeleteObject(hrgn);
+        DeleteObject(hbrLine);
+    }
+
+    VOID DrawAllDay(HDC hdc)
+    {
+        int slots = (m_rcAllDay.bottom - m_rcAllDay.top) / AllDayH();
+        int i;
+
+        SelectObject(hdc, m_hFont);
+        for (i = 0; i < slots; i++)
+        {
+            int idx = AllDayIndex(i);
+            RECT rcRow, rcBar, rcText;
+            HBRUSH hbr;
+
+            if (idx < 0)
+                break;
+            SetRect(&rcRow, m_rcAllDay.left, m_rcAllDay.top + i * AllDayH(),
+                    m_rcAllDay.right, m_rcAllDay.top + (i + 1) * AllDayH() - Sc(2));
+            hbr = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.AccentBg,
+                                          idx == m_iHotEvent ? 150 : 110));
+            FillRect(hdc, &rcRow, hbr);
+            DeleteObject(hbr);
+            hbr = CreateSolidBrush(m_Pal.AccentBg);
+            SetRect(&rcBar, rcRow.left, rcRow.top, rcRow.left + Sc(3), rcRow.bottom);
+            FillRect(hdc, &rcBar, hbr);
+            DeleteObject(hbr);
+            rcText = rcRow;
+            rcText.left += Sc(8);
+            rcText.right -= (idx == m_iHotEvent) ? Sc(24) : Sc(6);
+            SetTextColor(hdc, m_Pal.PanelText);
+            DrawTextW(hdc, m_Day.ev[idx].szTitle, -1, &rcText,
+                      DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+            if (idx == m_iHotEvent)
+            {
+                RECT rcDel = { rcRow.right - Sc(22), rcRow.top + Sc(2),
+                               rcRow.right - Sc(6), rcRow.top + Sc(18) };
+                TfyDrawFluent(hdc, &rcDel, IDI_FLU_DELETEICO);
+            }
+        }
+    }
+
+    VOID ReloadAgenda()
+    {
+        m_cRows = TfyCalLoadAgenda(SelDate(), m_Rows, TFY_CAL_AGENDAMAX);
+        m_RowTop = 0;
+        m_iHotRow = -1;
+    }
+
+    VOID OpenAgenda()
+    {
+        if (m_bAddMode)
+            HideEdit();
+        m_Mode = MODE_AGENDA;
+        m_iHotCell = -1;
+        m_iHotNav = NAV_NONE;
+        m_iHotEvent = -1;
+        ReloadAgenda();
+        Relayout();
+    }
+
+    VOID OpenAgendaDay(int idx)
+    {
+        int date;
+
+        if (idx < 0 || idx >= m_cRows)
+            return;
+        date = m_Rows[idx].date;
+        m_SelYear = date / 10000;
+        m_SelMonth = (date / 100) % 100;
+        m_SelDay = date % 100;
+        m_ViewYear = m_SelYear;
+        m_ViewMonth = m_SelMonth;
+        EnsureCounts();
+        OpenDay();
+    }
+
+    VOID DeleteAgendaRow(int idx)
+    {
+        TFYCALDAY day;
+        int date, year, month, dayNo, i;
+
+        if (idx < 0 || idx >= m_cRows || m_Rows[idx].bHeader)
+            return;
+        date = m_Rows[idx].date;
+        year = date / 10000;
+        month = (date / 100) % 100;
+        dayNo = date % 100;
+        TfyCalLoadDay(year, month, dayNo, &day);
+        for (i = 0; i < day.count; i++)
+        {
+            int j;
+
+            if (day.ev[i].nMinutes != m_Rows[idx].ev.nMinutes ||
+                lstrcmpW(day.ev[i].szTitle, m_Rows[idx].ev.szTitle) != 0)
+                continue;
+            for (j = i; j < day.count - 1; j++)
+                day.ev[j] = day.ev[j + 1];
+            day.count--;
+            TfyCalSaveDay(year, month, dayNo, &day);
+            InvalidateCounts();
+            EnsureCounts();
+            break;
+        }
+        ReloadAgenda();
+    }
+
+    VOID ScrollRows(int delta)
+    {
+        int maxTop = m_cRows - TFY_CAL_AGENDAVIS;
+        int top = m_RowTop + delta;
+
+        if (maxTop < 0)
+            maxTop = 0;
+        if (top > maxTop)
+            top = maxTop;
+        if (top < 0)
+            top = 0;
+        if (top != m_RowTop)
+        {
+            m_RowTop = top;
+            InvalidateRect(NULL, FALSE);
+        }
+    }
+
+    int NowRowIndex() const
+    {
+        SYSTEMTIME st;
+        int i, nowDate = TodayDate(), nowMin, last = -1;
+
+        GetLocalTime(&st);
+        nowMin = st.wHour * 60 + st.wMinute;
+        for (i = 0; i < m_cRows; i++)
+        {
+            if (m_Rows[i].date != nowDate || m_Rows[i].bHeader)
+                continue;
+            last = i;
+            if (m_Rows[i].ev.nMinutes != TFY_CAL_ALLDAY &&
+                m_Rows[i].ev.nMinutes >= nowMin)
+                return i;
+        }
+        return last >= 0 ? last + 1 : -1;
+    }
+
+    VOID DrawAgendaList(HDC hdc)
+    {
         WCHAR szBuf[128];
+        int nowDate = TodayDate();
+        int nowRow = NowRowIndex();
+        int i;
 
-        GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &stNow, NULL, szBuf, _countof(szBuf));
-        HGDIOBJ hFontOld = SelectObject(hdcMem, m_hFontTime);
-        SetTextColor(hdcMem, m_Pal.PanelText);
-        DrawTextW(hdcMem, szBuf, -1, &m_rcTime, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        if (m_cRows == 0)
+        {
+            SelectObject(hdc, m_hFontSmall);
+            SetTextColor(hdc, m_Pal.DimText);
+            DrawTextW(hdc, L"No upcoming events", -1, &m_rcAgenda,
+                      DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+            return;
+        }
+        for (i = 0; i < TFY_CAL_AGENDAVIS; i++)
+        {
+            int idx = m_RowTop + i;
+            RECT rcRow, rcText;
 
-        GetDateFormatW(LOCALE_USER_DEFAULT, DATE_LONGDATE, &stNow, NULL, szBuf, _countof(szBuf));
-        SelectObject(hdcMem, m_hFont);
-        SetTextColor(hdcMem, m_iHotNav == NAV_DATE ? m_Pal.HotBorder : m_Pal.AccentBg);
-        DrawTextW(hdcMem, szBuf, -1, &m_rcDate, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+            if (idx >= m_cRows)
+                break;
+            SetRect(&rcRow, m_rcAgenda.left, m_rcAgenda.top + i * RowH(),
+                    m_rcAgenda.right, m_rcAgenda.top + (i + 1) * RowH());
+            if (m_Rows[idx].bHeader)
+            {
+                SYSTEMTIME stRow;
+                HBRUSH hbrRule;
+                RECT rcRule;
+                BOOL bToday = (m_Rows[idx].date == nowDate);
 
-        RECT rcSep = { pad, m_rcDate.bottom + Sc(6), rc.right - pad, m_rcDate.bottom + Sc(7) };
-        HBRUSH hbrSep = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.DimText, 90));
-        FillRect(hdcMem, &rcSep, hbrSep);
+                ZeroMemory(&stRow, sizeof(stRow));
+                stRow.wYear = (WORD)(m_Rows[idx].date / 10000);
+                stRow.wMonth = (WORD)((m_Rows[idx].date / 100) % 100);
+                stRow.wDay = (WORD)(m_Rows[idx].date % 100);
+                if (!GetDateFormatW(LOCALE_USER_DEFAULT, 0, &stRow, L"ddd, d MMMM",
+                                    szBuf, _countof(szBuf)))
+                    StringCchPrintfW(szBuf, _countof(szBuf), L"%d", stRow.wDay);
+                hbrRule = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.DimText, 70));
+                SetRect(&rcRule, rcRow.left, rcRow.bottom - Sc(3), rcRow.right,
+                        rcRow.bottom - Sc(2));
+                FillRect(hdc, &rcRule, hbrRule);
+                DeleteObject(hbrRule);
+                SelectObject(hdc, m_hFontHeader);
+                SetTextColor(hdc, bToday ? m_Pal.AccentBg : m_Pal.PanelText);
+                rcText = rcRow;
+                rcText.bottom -= Sc(4);
+                DrawTextW(hdc, szBuf, -1, &rcText,
+                          DT_SINGLELINE | DT_BOTTOM | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+                continue;
+            }
+            if (idx == m_iHotRow)
+            {
+                HBRUSH hbrHot = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.HotFill, 130));
+                FillRect(hdc, &rcRow, hbrHot);
+                DeleteObject(hbrHot);
+            }
+            {
+                RECT rcDot = { rcRow.left + Sc(2), (rcRow.top + rcRow.bottom) / 2 - Sc(3),
+                               rcRow.left + Sc(8), (rcRow.top + rcRow.bottom) / 2 + Sc(3) };
+                HBRUSH hbrDot = CreateSolidBrush(m_Pal.AccentBg);
+
+                FillRect(hdc, &rcDot, hbrDot);
+                DeleteObject(hbrDot);
+            }
+            rcText = rcRow;
+            rcText.left += Sc(14);
+            rcText.right = rcText.left + Sc(56);
+            SelectObject(hdc, m_hFontSmall);
+            SetTextColor(hdc, m_Pal.DimText);
+            if (m_Rows[idx].ev.nMinutes == TFY_CAL_ALLDAY)
+                StringCchCopyW(szBuf, _countof(szBuf), L"All day");
+            else
+                FormatRowMinutes(m_Rows[idx].date, m_Rows[idx].ev.nMinutes, szBuf,
+                                 _countof(szBuf));
+            DrawTextW(hdc, szBuf, -1, &rcText,
+                      DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+            rcText.left = rcText.right + Sc(6);
+            rcText.right = rcRow.right - (idx == m_iHotRow ? Sc(26) : Sc(4));
+            SelectObject(hdc, m_hFont);
+            SetTextColor(hdc, m_Pal.PanelText);
+            DrawTextW(hdc, m_Rows[idx].ev.szTitle, -1, &rcText,
+                      DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+            if (idx == m_iHotRow)
+            {
+                RECT rcDel = { rcRow.right - Sc(22), rcRow.top + Sc(5),
+                               rcRow.right - Sc(6), rcRow.top + Sc(21) };
+                TfyDrawFluent(hdc, &rcDel, IDI_FLU_DELETEICO);
+            }
+        }
+        if (nowRow >= m_RowTop && nowRow < m_RowTop + TFY_CAL_AGENDAVIS && nowRow <= m_cRows)
+        {
+            int lineY = m_rcAgenda.top + (nowRow - m_RowTop) * RowH();
+            HBRUSH hbrNow = CreateSolidBrush(m_Pal.AccentBg);
+            RECT rcNow = { m_rcAgenda.left + Sc(2), lineY, m_rcAgenda.right, lineY + Sc(2) };
+            RECT rcDot = { m_rcAgenda.left, lineY - Sc(2), m_rcAgenda.left + Sc(6), lineY + Sc(4) };
+
+            FillRect(hdc, &rcNow, hbrNow);
+            FillRect(hdc, &rcDot, hbrNow);
+            DeleteObject(hbrNow);
+        }
+    }
+
+    VOID DrawAgendaView(HDC hdc)
+    {
+        DrawNavButton(hdc, &m_rcBack, NAV_BACK, IDI_FLU_ARROWLEFT);
+        SelectObject(hdc, m_hFontHeader);
+        SetTextColor(hdc, m_Pal.PanelText);
+        {
+            RECT rcHeaderText = m_rcHeader;
+
+            rcHeaderText.left += Sc(4);
+            DrawTextW(hdc, L"Schedule", -1, &rcHeaderText,
+                      DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        }
+        DrawAgendaList(hdc);
+    }
+
+    VOID DrawAddRow(HDC hdc)
+    {
+        int cym = (m_rcAdd.top + m_rcAdd.bottom) / 2;
+        RECT rcIcon = { m_rcAdd.left, cym - Sc(7), m_rcAdd.left + Sc(14), cym + Sc(7) };
+        RECT rcText = m_rcAdd;
+
+        if (m_bAddMode)
+            return;
+        rcText.left += Sc(20);
+        TfyDrawFluent(hdc, &rcIcon, IDI_FLU_ADD);
+        SelectObject(hdc, m_hFont);
+        SetTextColor(hdc, m_iHotNav == NAV_ADD ? m_Pal.HotBorder : m_Pal.AccentBg);
+        DrawTextW(hdc, L"Add an event or reminder", -1, &rcText,
+                  DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+    }
+
+    VOID DrawNavButton(HDC hdc, const RECT *prc, int nav, int idIcon)
+    {
+        int cxm = (prc->left + prc->right) / 2;
+        int cym = (prc->top + prc->bottom) / 2;
+        RECT rcIcon = { cxm - Sc(8), cym - Sc(8), cxm + Sc(8), cym + Sc(8) };
+
+        if (m_iHotNav == nav)
+        {
+            HBRUSH hbrHot = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.HotFill, 130));
+            FillRect(hdc, prc, hbrHot);
+            DeleteObject(hbrHot);
+        }
+        TfyDrawFluent(hdc, &rcIcon, idIcon);
+    }
+
+    VOID DrawMonth(HDC hdc, const SYSTEMTIME *pNow)
+    {
+        WCHAR szBuf[128];
+        RECT rcHeaderText;
+        int i, cell;
 
         if (m_Level == 0)
         {
@@ -1223,64 +2355,64 @@ public:
         if (m_iHotNav == NAV_HEADER && m_Level < 2)
         {
             HBRUSH hbrHot = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.HotFill, 130));
-            FillRect(hdcMem, &m_rcHeader, hbrHot);
+            FillRect(hdc, &m_rcHeader, hbrHot);
             DeleteObject(hbrHot);
         }
-        RECT rcHeaderText = m_rcHeader;
+        rcHeaderText = m_rcHeader;
         rcHeaderText.left += Sc(4);
-        SelectObject(hdcMem, m_hFontHeader);
-        SetTextColor(hdcMem, m_Pal.PanelText);
-        DrawTextW(hdcMem, szBuf, -1, &rcHeaderText, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-
-        for (int nav = NAV_PREV; nav <= NAV_NEXT; nav++)
-        {
-            const RECT *prcNav = (nav == NAV_PREV) ? &m_rcPrev : &m_rcNext;
-            if (m_iHotNav == nav)
-            {
-                HBRUSH hbrHot = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.HotFill, 130));
-                FillRect(hdcMem, prcNav, hbrHot);
-                DeleteObject(hbrHot);
-            }
-            int cxm = (prcNav->left + prcNav->right) / 2;
-            int cym = (prcNav->top + prcNav->bottom) / 2;
-            RECT rcIcon = { cxm - Sc(8), cym - Sc(8), cxm + Sc(8), cym + Sc(8) };
-            TfyDrawFluent(hdcMem, &rcIcon, nav == NAV_PREV ? IDI_FLU_CHEVUP : IDI_FLU_CHEVDOWN);
-        }
+        SelectObject(hdc, m_hFontHeader);
+        SetTextColor(hdc, m_Pal.PanelText);
+        DrawTextW(hdc, szBuf, -1, &rcHeaderText,
+                  DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        DrawNavButton(hdc, &m_rcList, NAV_LIST, IDI_FLU_LIST);
+        DrawNavButton(hdc, &m_rcPrev, NAV_PREV, IDI_FLU_CHEVUP);
+        DrawNavButton(hdc, &m_rcNext, NAV_NEXT, IDI_FLU_CHEVDOWN);
 
         if (m_Level == 0)
         {
-            SelectObject(hdcMem, m_hFontSmall);
-            SetTextColor(hdcMem, m_Pal.DimText);
-            for (int i = 0; i < 7; i++)
+            static const int shortestIds[7] =
+            {
+                LOCALE_SSHORTESTDAYNAME7, LOCALE_SSHORTESTDAYNAME1, LOCALE_SSHORTESTDAYNAME2,
+                LOCALE_SSHORTESTDAYNAME3, LOCALE_SSHORTESTDAYNAME4, LOCALE_SSHORTESTDAYNAME5,
+                LOCALE_SSHORTESTDAYNAME6
+            };
+            static const int abbrevIds[7] =
+            {
+                LOCALE_SABBREVDAYNAME7, LOCALE_SABBREVDAYNAME1, LOCALE_SABBREVDAYNAME2,
+                LOCALE_SABBREVDAYNAME3, LOCALE_SABBREVDAYNAME4, LOCALE_SABBREVDAYNAME5,
+                LOCALE_SABBREVDAYNAME6
+            };
+
+            SelectObject(hdc, m_hFontSmall);
+            SetTextColor(hdc, m_Pal.DimText);
+            for (i = 0; i < 7; i++)
             {
                 int dow = (m_FirstDayOfWeek + i) % 7;
-                static const int localeIds[7] =
-                {
-                    LOCALE_SABBREVDAYNAME7, LOCALE_SABBREVDAYNAME1, LOCALE_SABBREVDAYNAME2,
-                    LOCALE_SABBREVDAYNAME3, LOCALE_SABBREVDAYNAME4, LOCALE_SABBREVDAYNAME5,
-                    LOCALE_SABBREVDAYNAME6
-                };
-                if (!GetLocaleInfoW(LOCALE_USER_DEFAULT, localeIds[dow], szBuf, _countof(szBuf)))
-                    szBuf[0] = 0;
-                szBuf[2] = 0;
                 RECT rcDay = { m_rcGrid.left + i * CellW(), m_rcGrid.top - Sc(24),
                                m_rcGrid.left + (i + 1) * CellW(), m_rcGrid.top };
-                DrawTextW(hdcMem, szBuf, -1, &rcDay, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+
+                if (!GetLocaleInfoW(LOCALE_USER_DEFAULT, shortestIds[dow], szBuf, _countof(szBuf)) &&
+                    !GetLocaleInfoW(LOCALE_USER_DEFAULT, abbrevIds[dow], szBuf, _countof(szBuf)))
+                    szBuf[0] = 0;
+                DrawTextW(hdc, szBuf, -1, &rcDay,
+                          DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
             }
         }
 
-        SelectObject(hdcMem, m_hFont);
-        for (int cell = 0; cell < CellCount(); cell++)
+        SelectObject(hdc, m_hFont);
+        for (cell = 0; cell < CellCount(); cell++)
         {
-            int year, month, day;
-            BOOL bDim;
-            CellDate(cell, year, month, day, bDim);
+            int year, month, day, nCount = 0;
+            BOOL bDim, bToday, bSel;
             RECT rcCell = CellRect(cell);
-            BOOL bToday, bSel;
+
+            CellDate(cell, year, month, day, bDim);
             if (m_Level == 0)
             {
-                bToday = (year == stNow.wYear && month == stNow.wMonth && day == stNow.wDay);
+                bToday = (year == pNow->wYear && month == pNow->wMonth && day == pNow->wDay);
                 bSel = (year == m_SelYear && month == m_SelMonth && day == m_SelDay);
+                if (!bDim && day >= 1 && day <= 31)
+                    nCount = m_Counts[day];
                 StringCchPrintfW(szBuf, _countof(szBuf), L"%d", day);
             }
             else if (m_Level == 1)
@@ -1290,21 +2422,111 @@ public:
                 stCell.wYear = (WORD)year;
                 stCell.wMonth = (WORD)month;
                 stCell.wDay = 1;
-                bToday = (year == stNow.wYear && month == stNow.wMonth);
+                bToday = (year == pNow->wYear && month == pNow->wMonth);
                 bSel = (year == m_SelYear && month == m_SelMonth);
                 if (!GetDateFormatW(LOCALE_USER_DEFAULT, 0, &stCell, L"MMM", szBuf, _countof(szBuf)))
                     StringCchPrintfW(szBuf, _countof(szBuf), L"%d", month);
             }
             else
             {
-                bToday = (year == stNow.wYear);
+                bToday = (year == pNow->wYear);
                 bSel = (year == m_SelYear);
                 StringCchPrintfW(szBuf, _countof(szBuf), L"%d", year);
             }
-            DrawCell(hdcMem, &rcCell, szBuf, bToday, bSel, cell == m_iHotCell, bDim);
+            DrawCell(hdc, &rcCell, szBuf, bToday, bSel, cell == m_iHotCell, bDim, nCount);
+            SelectObject(hdc, m_hFont);
         }
+    }
 
-        RECT rcSep2 = { pad, m_rcGrid.bottom + Sc(10), rc.right - pad, m_rcGrid.bottom + Sc(11) };
+    VOID DrawDay(HDC hdc)
+    {
+        WCHAR szBuf[128];
+        SYSTEMTIME stSel;
+        RECT rcHeaderText;
+
+        ZeroMemory(&stSel, sizeof(stSel));
+        stSel.wYear = (WORD)m_SelYear;
+        stSel.wMonth = (WORD)m_SelMonth;
+        stSel.wDay = (WORD)m_SelDay;
+        if (!GetDateFormatW(LOCALE_USER_DEFAULT, 0, &stSel, L"ddd d MMMM", szBuf, _countof(szBuf)))
+            StringCchPrintfW(szBuf, _countof(szBuf), L"%d", m_SelDay);
+
+        DrawNavButton(hdc, &m_rcBack, NAV_BACK, IDI_FLU_ARROWLEFT);
+        rcHeaderText = m_rcHeader;
+        rcHeaderText.left += Sc(4);
+        SelectObject(hdc, m_hFontHeader);
+        SetTextColor(hdc, m_Pal.PanelText);
+        DrawTextW(hdc, szBuf, -1, &rcHeaderText,
+                  DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        DrawNavButton(hdc, &m_rcPrev, NAV_PREV, IDI_FLU_CHEVUP);
+        DrawNavButton(hdc, &m_rcNext, NAV_NEXT, IDI_FLU_CHEVDOWN);
+
+        DrawAllDay(hdc);
+        DrawTimeline(hdc);
+        if (m_Day.count == 0)
+        {
+            RECT rcEmpty = m_rcTimeline;
+
+            rcEmpty.left += TimeColW();
+            SelectObject(hdc, m_hFontSmall);
+            SetTextColor(hdc, m_Pal.DimText);
+            DrawTextW(hdc, L"No events", -1, &rcEmpty,
+                      DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+        }
+        DrawAddRow(hdc);
+    }
+
+    LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(&ps);
+        SYSTEMTIME stNow;
+        WCHAR szBuf[128];
+        RECT rc, rcSep, rcSep2;
+        HDC hdcMem;
+        HBITMAP hbm;
+        HGDIOBJ hbmOld, hFontOld;
+        HBRUSH hbr, hbrSep;
+        int pad = Sc(16);
+
+        GetClientRect(&rc);
+        hdcMem = CreateCompatibleDC(hdc);
+        hbm = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+        hbmOld = SelectObject(hdcMem, hbm);
+
+        hbr = CreateSolidBrush(m_Pal.PanelBg);
+        FillRect(hdcMem, &rc, hbr);
+        DeleteObject(hbr);
+        hbr = CreateSolidBrush(m_Pal.Border);
+        FrameRect(hdcMem, &rc, hbr);
+        DeleteObject(hbr);
+
+        SetBkMode(hdcMem, TRANSPARENT);
+        GetLocalTime(&stNow);
+
+        GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &stNow, NULL, szBuf, _countof(szBuf));
+        hFontOld = SelectObject(hdcMem, m_hFontTime);
+        SetTextColor(hdcMem, m_Pal.PanelText);
+        DrawTextW(hdcMem, szBuf, -1, &m_rcTime, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+        GetDateFormatW(LOCALE_USER_DEFAULT, DATE_LONGDATE, &stNow, NULL, szBuf, _countof(szBuf));
+        SelectObject(hdcMem, m_hFont);
+        SetTextColor(hdcMem, m_iHotNav == NAV_DATE ? m_Pal.HotBorder : m_Pal.AccentBg);
+        DrawTextW(hdcMem, szBuf, -1, &m_rcDate,
+                  DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+        hbrSep = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.DimText, 90));
+        SetRect(&rcSep, pad, m_rcDate.bottom + Sc(6), rc.right - pad, m_rcDate.bottom + Sc(7));
+        FillRect(hdcMem, &rcSep, hbrSep);
+
+        if (m_Mode == MODE_DAY)
+            DrawDay(hdcMem);
+        else if (m_Mode == MODE_AGENDA)
+            DrawAgendaView(hdcMem);
+        else
+            DrawMonth(hdcMem, &stNow);
+
+        SetRect(&rcSep2, pad, m_rcLink.top - Sc(10), rc.right - pad, m_rcLink.top - Sc(9));
         FillRect(hdcMem, &rcSep2, hbrSep);
         DeleteObject(hbrSep);
 
@@ -1333,21 +2555,47 @@ public:
             return 0;
         else if (wParam == TFY_TIMER_TICK)
         {
-            InvalidateRect(&m_rcTime, FALSE);
+            if (LatchToday())
+            {
+                InvalidateCounts();
+                EnsureCounts();
+                InvalidateRect(NULL, FALSE);
+            }
+            else if (m_Mode == MODE_DAY && SelIsToday())
+                InvalidateRect(NULL, FALSE);
+            else
+                InvalidateRect(&m_rcTime, FALSE);
         }
+        return 0;
+    }
+
+    LRESULT OnTimeChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        LatchToday();
+        InvalidateRect(NULL, FALSE);
+        return 0;
+    }
+
+    LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        ReadFirstDayOfWeek();
+        LatchToday();
+        InvalidateRect(NULL, FALSE);
         return 0;
     }
 
     int CellHitTest(POINT pt) const
     {
-        if (!PtInRect(&m_rcGrid, pt))
+        int cw, ch, cols, rows, col, row;
+
+        if (m_Mode != MODE_MONTH || !PtInRect(&m_rcGrid, pt))
             return -1;
-        int cw = m_Level == 0 ? CellW() : BigCellW();
-        int ch = m_Level == 0 ? CellH() : BigCellH();
-        int cols = m_Level == 0 ? 7 : 4;
-        int rows = m_Level == 0 ? 6 : 4;
-        int col = (pt.x - m_rcGrid.left) / cw;
-        int row = (pt.y - m_rcGrid.top) / ch;
+        cw = m_Level == 0 ? CellW() : BigCellW();
+        ch = m_Level == 0 ? CellH() : BigCellH();
+        cols = m_Level == 0 ? 7 : 4;
+        rows = m_Level == 0 ? 6 : 4;
+        col = (pt.x - m_rcGrid.left) / cw;
+        row = (pt.y - m_rcGrid.top) / ch;
         if (col < 0 || col >= cols || row < 0 || row >= rows)
             return -1;
         return row * cols + col;
@@ -1357,10 +2605,130 @@ public:
     {
         if (PtInRect(&m_rcPrev, pt)) return NAV_PREV;
         if (PtInRect(&m_rcNext, pt)) return NAV_NEXT;
-        if (PtInRect(&m_rcHeader, pt) && m_Level < 2) return NAV_HEADER;
+        if (m_Mode != MODE_MONTH && PtInRect(&m_rcBack, pt)) return NAV_BACK;
+        if (m_Mode == MODE_MONTH && PtInRect(&m_rcList, pt)) return NAV_LIST;
+        if (m_Mode == MODE_MONTH && PtInRect(&m_rcHeader, pt) && m_Level < 2)
+            return NAV_HEADER;
         if (PtInRect(&m_rcLink, pt)) return NAV_LINK;
         if (PtInRect(&m_rcDate, pt)) return NAV_DATE;
+        if (m_Mode == MODE_DAY && !m_bAddMode && PtInRect(&m_rcAdd, pt)) return NAV_ADD;
         return NAV_NONE;
+    }
+
+    int EventHitTest(POINT pt) const
+    {
+        int i;
+
+        if (m_Mode != MODE_DAY)
+            return -1;
+        if (PtInRect(&m_rcAllDay, pt))
+            return AllDayIndex((pt.y - m_rcAllDay.top) / AllDayH());
+        if (!PtInRect(&m_rcTimeline, pt))
+            return -1;
+        for (i = m_Day.count - 1; i >= 0; i--)
+        {
+            RECT rcBlock = EventBlockRect(i);
+
+            if (m_Day.ev[i].nMinutes == TFY_CAL_ALLDAY)
+                continue;
+            if (PtInRect(&rcBlock, pt))
+                return i;
+        }
+        return -1;
+    }
+
+    int AgendaHitTest(POINT pt) const
+    {
+        int i;
+
+        if (m_Mode != MODE_AGENDA || m_cRows == 0 || !PtInRect(&m_rcAgenda, pt))
+            return -1;
+        i = m_RowTop + (pt.y - m_rcAgenda.top) / RowH();
+        return (i >= 0 && i < m_cRows) ? i : -1;
+    }
+
+    BOOL AgendaDelHitTest(POINT pt) const
+    {
+        return pt.x >= m_rcAgenda.right - Sc(26);
+    }
+
+    BOOL DelHitTest(POINT pt, int index) const
+    {
+        if (index < 0)
+            return FALSE;
+        if (m_Day.ev[index].nMinutes == TFY_CAL_ALLDAY)
+            return pt.x >= m_rcAllDay.right - Sc(26);
+        return pt.x >= m_rcTimeline.right - Sc(26);
+    }
+
+    int HourHitTest(POINT pt) const
+    {
+        int hour;
+
+        if (m_Mode != MODE_DAY || !PtInRect(&m_rcTimeline, pt))
+            return -1;
+        if (pt.x < m_rcTimeline.left + TimeColW())
+            return -1;
+        hour = m_HourTop + (pt.y - m_rcTimeline.top) / HourH();
+        return (hour >= 0 && hour <= 23) ? hour : -1;
+    }
+
+    VOID ShowEdit(int hour)
+    {
+        WCHAR szSeed[32];
+
+        if (m_Mode != MODE_DAY)
+            return;
+        if (!m_hwndEdit)
+        {
+            m_hwndEdit = CreateWindowExW(0, L"EDIT", NULL,
+                                         WS_CHILD | ES_AUTOHSCROLL | ES_LEFT,
+                                         0, 0, Sc(200), Sc(22), m_hWnd,
+                                         (HMENU)(INT_PTR)TFY_CAL_EDIT_ID,
+                                         hExplorerInstance, NULL);
+            if (!m_hwndEdit)
+                return;
+            ::SendMessageW(m_hwndEdit, WM_SETFONT, (WPARAM)m_hFont, FALSE);
+            ::SendMessageW(m_hwndEdit, EM_SETLIMITTEXT, 100, 0);
+            SetWindowSubclass(m_hwndEdit, TfyFlyoutEditSubclassProc, 1, 0);
+        }
+        m_bAddMode = TRUE;
+        szSeed[0] = 0;
+        if (hour >= 0)
+            StringCchPrintfW(szSeed, _countof(szSeed), L"%02d:00 ", hour);
+        ::SetWindowTextW(m_hwndEdit, szSeed);
+        ::SendMessageW(m_hwndEdit, EM_SETSEL, (WPARAM)lstrlenW(szSeed), -1);
+        ::SetWindowPos(m_hwndEdit, NULL, m_rcAdd.left, m_rcAdd.top,
+                       m_rcAdd.right - m_rcAdd.left, m_rcAdd.bottom - m_rcAdd.top,
+                       SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        ::SetFocus(m_hwndEdit);
+        InvalidateRect(NULL, FALSE);
+    }
+
+    VOID HideEdit()
+    {
+        m_bAddMode = FALSE;
+        if (m_hwndEdit)
+            ::ShowWindow(m_hwndEdit, SW_HIDE);
+        ::SetFocus(m_hWnd);
+        InvalidateRect(NULL, FALSE);
+    }
+
+    VOID CommitEdit()
+    {
+        WCHAR szText[128];
+        TFYCALEVENT ev;
+
+        if (!m_hwndEdit)
+            return;
+        ::GetWindowTextW(m_hwndEdit, szText, _countof(szText));
+        if (TfyCalParseInput(szText, &ev))
+        {
+            InsertEvent(ev);
+            StoreDay();
+        }
+        HideEdit();
+        Relayout();
     }
 
     LRESULT OnMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
@@ -1368,10 +2736,20 @@ public:
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         int iCell = CellHitTest(pt);
         int iNav = NavHitTest(pt);
-        if (iCell != m_iHotCell || iNav != m_iHotNav)
+        int iEvent = EventHitTest(pt);
+        int iRow = AgendaHitTest(pt);
+        BOOL bDel = DelHitTest(pt, iEvent);
+
+        if (iRow >= 0 && m_Rows[iRow].bHeader)
+            iRow = -1;
+        if (iCell != m_iHotCell || iNav != m_iHotNav ||
+            iEvent != m_iHotEvent || iRow != m_iHotRow || bDel != m_bHotDel)
         {
             m_iHotCell = iCell;
             m_iHotNav = iNav;
+            m_iHotEvent = iEvent;
+            m_iHotRow = iRow;
+            m_bHotDel = bDel;
             InvalidateRect(NULL, FALSE);
         }
         if (!m_bTracking)
@@ -1386,10 +2764,14 @@ public:
     LRESULT OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
         m_bTracking = FALSE;
-        if (m_iHotCell != -1 || m_iHotNav != NAV_NONE)
+        if (m_iHotCell != -1 || m_iHotNav != NAV_NONE || m_iHotEvent != -1 ||
+            m_iHotRow != -1)
         {
             m_iHotCell = -1;
             m_iHotNav = NAV_NONE;
+            m_iHotEvent = -1;
+            m_iHotRow = -1;
+            m_bHotDel = FALSE;
             InvalidateRect(NULL, FALSE);
         }
         return 0;
@@ -1397,6 +2779,19 @@ public:
 
     VOID Navigate(int dir)
     {
+        if (m_Mode == MODE_AGENDA)
+        {
+            ScrollRows(dir * TFY_CAL_AGENDAVIS);
+            return;
+        }
+        if (m_Mode == MODE_DAY)
+        {
+            ShiftDay(dir);
+            ReloadDay();
+            ResetHourTop();
+            Relayout();
+            return;
+        }
         if (m_Level == 0)
             AddMonths(m_ViewYear, m_ViewMonth, dir);
         else if (m_Level == 1)
@@ -1405,6 +2800,7 @@ public:
             m_ViewYear += dir * 10;
         if (m_ViewYear < 1601) m_ViewYear = 1601;
         if (m_ViewYear > 9999) m_ViewYear = 9999;
+        EnsureCounts();
         InvalidateRect(NULL, FALSE);
     }
 
@@ -1412,6 +2808,7 @@ public:
     {
         int year, month, day;
         BOOL bDim;
+
         if (cell < 0 || cell >= CellCount())
             return;
         CellDate(cell, year, month, day, bDim);
@@ -1422,12 +2819,16 @@ public:
             m_SelDay = day;
             m_ViewYear = year;
             m_ViewMonth = month;
+            EnsureCounts();
+            OpenDay();
+            return;
         }
-        else if (m_Level == 1)
+        if (m_Level == 1)
         {
             m_ViewYear = year;
             m_ViewMonth = month;
             m_Level = 0;
+            EnsureCounts();
         }
         else
         {
@@ -1438,31 +2839,68 @@ public:
         InvalidateRect(NULL, FALSE);
     }
 
+    int FocusCellForView() const
+    {
+        if (m_Level == 1)
+            return m_ViewMonth - 1;
+        return m_ViewYear - (DecadeStart() - 1);
+    }
+
+    VOID MoveFocus(int delta)
+    {
+        int count = CellCount();
+        int cell;
+
+        if (m_iHotCell < 0)
+            cell = FocusCellForView();
+        else
+            cell = m_iHotCell + delta;
+        if (cell < 0)
+        {
+            Navigate(-1);
+            cell += count;
+        }
+        else if (cell >= count)
+        {
+            Navigate(1);
+            cell -= count;
+        }
+        if (cell < 0)
+            cell = 0;
+        else if (cell >= count)
+            cell = count - 1;
+        m_iHotCell = cell;
+        InvalidateRect(NULL, FALSE);
+    }
+
     VOID MoveSelection(int deltaDays)
     {
-        SYSTEMTIME st;
-        FILETIME ft;
-        ULARGE_INTEGER ul;
-        ZeroMemory(&st, sizeof(st));
-        st.wYear = (WORD)m_SelYear;
-        st.wMonth = (WORD)m_SelMonth;
-        st.wDay = (WORD)m_SelDay;
-        if (!SystemTimeToFileTime(&st, &ft))
-            return;
-        ul.LowPart = ft.dwLowDateTime;
-        ul.HighPart = ft.dwHighDateTime;
-        ul.QuadPart += (LONGLONG)deltaDays * 864000000000LL;
-        ft.dwLowDateTime = ul.LowPart;
-        ft.dwHighDateTime = ul.HighPart;
-        if (!FileTimeToSystemTime(&ft, &st))
-            return;
-        m_SelYear = st.wYear;
-        m_SelMonth = st.wMonth;
-        m_SelDay = st.wDay;
-        m_ViewYear = st.wYear;
-        m_ViewMonth = st.wMonth;
+        ShiftDay(deltaDays);
         m_Level = 0;
+        EnsureCounts();
+        if (m_Mode == MODE_DAY)
+        {
+            ReloadDay();
+            ResetHourTop();
+            Relayout();
+            return;
+        }
         InvalidateRect(NULL, FALSE);
+    }
+
+    VOID ScrollHours(int delta)
+    {
+        int top = m_HourTop + delta;
+
+        if (top > 24 - TFY_CAL_HOURSVIS)
+            top = 24 - TFY_CAL_HOURSVIS;
+        if (top < 0)
+            top = 0;
+        if (top != m_HourTop)
+        {
+            m_HourTop = top;
+            InvalidateRect(NULL, FALSE);
+        }
     }
 
     VOID OpenSettings()
@@ -1475,32 +2913,124 @@ public:
     {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         int nav = NavHitTest(pt);
+        int iEvent, hour;
+
         if (nav == NAV_PREV)
+        {
             Navigate(-1);
-        else if (nav == NAV_NEXT)
+            return 0;
+        }
+        if (nav == NAV_NEXT)
+        {
             Navigate(1);
-        else if (nav == NAV_HEADER)
+            return 0;
+        }
+        if (nav == NAV_BACK)
+        {
+            GoMonth();
+            return 0;
+        }
+        if (nav == NAV_HEADER)
         {
             m_Level++;
             m_iHotCell = -1;
             InvalidateRect(NULL, FALSE);
+            return 0;
         }
-        else if (nav == NAV_LINK)
+        if (nav == NAV_LINK)
+        {
             OpenSettings();
-        else if (nav == NAV_DATE)
+            return 0;
+        }
+        if (nav == NAV_ADD)
+        {
+            ShowEdit(-1);
+            return 0;
+        }
+        if (nav == NAV_LIST)
+        {
+            OpenAgenda();
+            return 0;
+        }
+        if (m_Mode == MODE_AGENDA)
+        {
+            int iRow = AgendaHitTest(pt);
+
+            if (iRow < 0)
+                return 0;
+            if (!m_Rows[iRow].bHeader && AgendaDelHitTest(pt))
+            {
+                DeleteAgendaRow(iRow);
+                InvalidateRect(NULL, FALSE);
+                return 0;
+            }
+            OpenAgendaDay(iRow);
+            return 0;
+        }
+        if (nav == NAV_DATE)
         {
             GoToday();
-            InvalidateRect(NULL, FALSE);
+            if (m_Mode == MODE_DAY)
+            {
+                ReloadDay();
+                ResetHourTop();
+            }
+            EnsureCounts();
+            Relayout();
+            return 0;
         }
-        else
-            SelectCell(CellHitTest(pt));
+        if (m_Mode == MODE_DAY)
+        {
+            iEvent = EventHitTest(pt);
+            if (iEvent >= 0)
+            {
+                if (DelHitTest(pt, iEvent))
+                {
+                    DeleteEvent(iEvent);
+                    Relayout();
+                }
+                return 0;
+            }
+            hour = HourHitTest(pt);
+            if (hour >= 0)
+                ShowEdit(hour);
+            return 0;
+        }
+        SelectCell(CellHitTest(pt));
         return 0;
     }
 
     LRESULT OnMouseWheel(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
-        Navigate(GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? -1 : 1);
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        int dir = GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? -1 : 1;
+
+        ScreenToClient(&pt);
+        if (m_Mode == MODE_DAY && PtInRect(&m_rcTimeline, pt))
+        {
+            ScrollHours(dir);
+            return 0;
+        }
+        if (m_Mode == MODE_AGENDA)
+        {
+            ScrollRows(dir);
+            return 0;
+        }
+        Navigate(dir);
         return 0;
+    }
+
+    LRESULT OnCtlColorEdit(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        HDC hdc = (HDC)wParam;
+        COLORREF crBg = TfyMix(m_Pal.PanelBg, m_Pal.PanelText, 20);
+
+        SetBkColor(hdc, crBg);
+        SetTextColor(hdc, m_Pal.PanelText);
+        if (m_hbrEdit)
+            DeleteObject(m_hbrEdit);
+        m_hbrEdit = CreateSolidBrush(crBg);
+        return (LRESULT)m_hbrEdit;
     }
 
     LRESULT OnActivate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
@@ -1515,7 +3045,11 @@ public:
         switch (wParam)
         {
             case VK_ESCAPE:
-                if (m_Level > 0)
+                if (m_bAddMode)
+                    HideEdit();
+                else if (m_Mode != MODE_MONTH)
+                    GoMonth();
+                else if (m_Level > 0)
                 {
                     m_Level--;
                     InvalidateRect(NULL, FALSE);
@@ -1523,26 +3057,82 @@ public:
                 else
                     FadeOut();
                 break;
-            case VK_PRIOR: Navigate(-1); break;
-            case VK_NEXT: Navigate(1); break;
-            case VK_HOME: GoToday(); InvalidateRect(NULL, FALSE); break;
-            case VK_LEFT: if (m_Level == 0) MoveSelection(-1); else Navigate(-1); break;
-            case VK_RIGHT: if (m_Level == 0) MoveSelection(1); else Navigate(1); break;
-            case VK_UP: if (m_Level == 0) MoveSelection(-7); else Navigate(-1); break;
-            case VK_DOWN: if (m_Level == 0) MoveSelection(7); else Navigate(1); break;
             case VK_RETURN:
-                if (m_Level > 0)
+                if (m_bAddMode)
+                    CommitEdit();
+                else if (m_Mode == MODE_AGENDA)
+                    OpenAgendaDay(m_iHotRow);
+                else if (m_Mode == MODE_DAY)
+                    ShowEdit(-1);
+                else if (m_Level > 0)
                 {
-                    m_Level--;
+                    if (m_iHotCell >= 0)
+                        SelectCell(m_iHotCell);
+                    else
+                        m_Level--;
                     InvalidateRect(NULL, FALSE);
                 }
+                else
+                    OpenDay();
                 break;
             case VK_BACK:
-                if (m_Level < 2)
+                if (m_Mode != MODE_MONTH)
+                    GoMonth();
+                else if (m_Level < 2)
                 {
                     m_Level++;
                     InvalidateRect(NULL, FALSE);
                 }
+                break;
+            case VK_PRIOR:
+                if (m_Mode == MODE_DAY)
+                    ScrollHours(-TFY_CAL_HOURSVIS);
+                else
+                    Navigate(-1);
+                break;
+            case VK_NEXT:
+                if (m_Mode == MODE_DAY)
+                    ScrollHours(TFY_CAL_HOURSVIS);
+                else
+                    Navigate(1);
+                break;
+            case VK_HOME:
+                GoToday();
+                if (m_Mode == MODE_DAY)
+                {
+                    ReloadDay();
+                    ResetHourTop();
+                }
+                EnsureCounts();
+                Relayout();
+                break;
+            case VK_LEFT:
+                if (m_Mode == MODE_AGENDA) break;
+                if (m_Mode == MODE_DAY || m_Level == 0) MoveSelection(-1); else MoveFocus(-1);
+                break;
+            case VK_RIGHT:
+                if (m_Mode == MODE_AGENDA) break;
+                if (m_Mode == MODE_DAY || m_Level == 0) MoveSelection(1); else MoveFocus(1);
+                break;
+            case VK_UP:
+                if (m_Mode == MODE_AGENDA) ScrollRows(-1);
+                else if (m_Mode == MODE_DAY) ScrollHours(-1);
+                else if (m_Level == 0) MoveSelection(-7);
+                else MoveFocus(-4);
+                break;
+            case VK_DOWN:
+                if (m_Mode == MODE_AGENDA) ScrollRows(1);
+                else if (m_Mode == MODE_DAY) ScrollHours(1);
+                else if (m_Level == 0) MoveSelection(7);
+                else MoveFocus(4);
+                break;
+            case 'A':
+                if (m_bAddMode)
+                    break;
+                if (m_Mode == MODE_AGENDA)
+                    GoMonth();
+                else
+                    OpenAgenda();
                 break;
         }
         return 0;
@@ -1552,6 +3142,8 @@ public:
     {
         KillTimer(TFY_TIMER_ANIM);
         KillTimer(TFY_TIMER_TICK);
+        if (m_hwndEdit) { ::DestroyWindow(m_hwndEdit); m_hwndEdit = NULL; }
+        if (m_hbrEdit) { DeleteObject(m_hbrEdit); m_hbrEdit = NULL; }
         if (m_hFontTime) { DeleteObject(m_hFontTime); m_hFontTime = NULL; }
         if (m_hFontHeader) { DeleteObject(m_hFontHeader); m_hFontHeader = NULL; }
         if (m_hFont) { DeleteObject(m_hFont); m_hFont = NULL; }
@@ -1569,8 +3161,11 @@ public:
         MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
         MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
+        MESSAGE_HANDLER(WM_CTLCOLOREDIT, OnCtlColorEdit)
         MESSAGE_HANDLER(WM_ACTIVATE, OnActivate)
         MESSAGE_HANDLER(WM_KEYDOWN, OnKeyDown)
+        MESSAGE_HANDLER(WM_TIMECHANGE, OnTimeChange)
+        MESSAGE_HANDLER(WM_SETTINGCHANGE, OnSettingChange)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
     END_MSG_MAP()
 };
@@ -4058,22 +5653,6 @@ TfyXmlEscape(LPCWSTR pszIn, LPWSTR pszOut, SIZE_T cchOut)
     pszOut[o] = 0;
 }
 
-static LRESULT CALLBACK
-TfyNetEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
-                       UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
-{
-    if (uMsg == WM_KEYDOWN && (wParam == VK_RETURN || wParam == VK_ESCAPE))
-    {
-        ::PostMessageW(::GetParent(hWnd), WM_KEYDOWN, wParam, lParam);
-        return 0;
-    }
-    if (uMsg == WM_CHAR && (wParam == VK_RETURN || wParam == VK_ESCAPE))
-        return 0;
-    if (uMsg == WM_NCDESTROY)
-        RemoveWindowSubclass(hWnd, TfyNetEditSubclassProc, uIdSubclass);
-    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
-}
-
 class CTrayNetworkWnd :
     public CWindowImpl<CTrayNetworkWnd, CWindow, CTrayFlyoutTraits>,
     public CTrayFlyoutAnimation
@@ -4585,7 +6164,7 @@ public:
                 return;
             ::SendMessageW(m_hwndEdit, WM_SETFONT, (WPARAM)m_hFont, FALSE);
             ::SendMessageW(m_hwndEdit, EM_SETLIMITTEXT, 64, 0);
-            SetWindowSubclass(m_hwndEdit, TfyNetEditSubclassProc, 1, 0);
+            SetWindowSubclass(m_hwndEdit, TfyFlyoutEditSubclassProc, 1, 0);
         }
         ::SetWindowTextW(m_hwndEdit, L"");
         ::ShowWindow(m_hwndEdit, SW_SHOWNOACTIVATE);
