@@ -1577,8 +1577,8 @@ typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
     MEMORY_CACHING_TYPE         CacheType;
     PHYSICAL_ADDRESS            Physical;
 
-    /* GPU-visible placement. Aperture-backed tables use physical system
-     * pages in segment zero; local-memory tables use SegmentOffset. */
+    /* GPU-visible placement. Segment zero uses a system physical address;
+     * a declared segment uses its GPU base plus SegmentOffset. */
     ULONG                       SegmentId;
     ULONGLONG                   SegmentOffset;
     PMDL                        SegmentMdl;
@@ -1696,6 +1696,10 @@ struct _DXGKRNL_PROCESS
      * lock is accumulated here and flushed once the lock is released.
      */
     BOOLEAN                     PageTableUpdatePending;
+    /* TRUE when the pending transitions require DXGK_OPERATION_FLUSH_TLB.
+     * Invalid-to-valid transitions can omit it when the miniport promises
+     * that invalid translations are never cached. */
+    BOOLEAN                     PageTableTlbFlushPending;
     D3DGPU_VIRTUAL_ADDRESS      PageTableUpdateStart;
     D3DGPU_VIRTUAL_ADDRESS      PageTableUpdateEnd;
     /*
