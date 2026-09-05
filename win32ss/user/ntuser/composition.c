@@ -3132,8 +3132,7 @@ IntCompositionSetEnabled(_In_ BOOL bEnable)
     if (bEnable)
     {
         g_CompositionPositionDamageValid = FALSE;
-        InterlockedExchange(&g_CompositionFullDamage, TRUE);
-        InterlockedExchange(&g_CompositionDamaged, TRUE);
+        IntCompositionMarkDamage(TRUE);
     }
     else
     {
