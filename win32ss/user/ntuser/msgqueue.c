@@ -388,7 +388,9 @@ IntMsqClearWakeMask(VOID)
    if (Win32Thread == NULL || Win32Thread->MessageQueue == NULL)
       return FALSE;
    // Very hacky, but that is what they do.
+   UserDomainLockExclusive(DLT_QUEUE);
    Win32Thread->pcti->fsWakeBits = 0;
+   UserDomainUnlockExclusive(DLT_QUEUE);
 
    IdlePong();
 
@@ -410,6 +412,7 @@ MsqWakeQueue(PTHREADINFO pti, DWORD MessageBits, BOOL KeyEvent)
    {
       ERR("This Message Queue is in Destroy!\n");
    }
+   UserDomainLockExclusive(DLT_QUEUE);
    pti->pcti->fsWakeBits |= MessageBits;
    pti->pcti->fsChangeBits |= MessageBits;
 
@@ -430,6 +433,7 @@ MsqWakeQueue(PTHREADINFO pti, DWORD MessageBits, BOOL KeyEvent)
 
    if (KeyEvent)
       KeSetEvent(pti->pEventQueueServer, MESSAGE_QUEUE_INCREMENT, FALSE);
+   UserDomainUnlockExclusive(DLT_QUEUE);
 }
 
 VOID FASTCALL
@@ -437,6 +441,7 @@ ClearMsgBitsMask(PTHREADINFO pti, UINT MessageBits)
 {
    UINT ClrMask = 0;
 
+   UserDomainLockExclusive(DLT_QUEUE);
    if (MessageBits & QS_KEY)
    {
       if (--pti->nCntsQBits[QSRosKey] == 0) ClrMask |= QS_KEY;
@@ -486,6 +491,7 @@ ClearMsgBitsMask(PTHREADINFO pti, UINT MessageBits)
 
    pti->pcti->fsWakeBits &= ~ClrMask;
    pti->pcti->fsChangeBits &= ~ClrMask;
+   UserDomainUnlockExclusive(DLT_QUEUE);
 }
 
 VOID FASTCALL
@@ -736,7 +742,9 @@ MsqDestroyMessage(PUSER_MESSAGE Message)
       ERR("Double Free Message\n");
       return;
    }
+   UserDomainLockExclusive(DLT_POST);
    RemoveEntryList(&Message->ListEntry);
+   UserDomainUnlockExclusive(DLT_POST);
    Message->pti = NULL;
    ExFreeToPagedLookasideList(pgMessageLookasideList, Message);
    PostMsgCount--;
@@ -886,9 +894,11 @@ co_MsqDispatchOneSentMessage(
    }
 
    /* Now insert it to the global list of messages that can be removed Justin Case there's Trouble */
+   UserDomainLockExclusive(DLT_QUEUE);
    InsertTailList(&usmList, &Message->ListEntry);
 
    ClearMsgBitsMask(pti, Message->QS_Flags);
+   UserDomainUnlockExclusive(DLT_QUEUE);
 
    if (Message->HookMessage == MSQ_ISHOOK)
    {  // Direct Hook Call processor
@@ -919,10 +929,12 @@ co_MsqDispatchOneSentMessage(
       else
       {
          /* The message has not been processed yet, reinsert it. */
+         UserDomainLockExclusive(DLT_QUEUE);
          RemoveEntryList(&Message->ListEntry);
          InsertTailList(&Message->ptiCallBackSender->SentMessagesListHead, &Message->ListEntry);
          // List is occupied need to set the bit.
          MsqWakeQueue(Message->ptiCallBackSender, QS_SENDMESSAGE, TRUE);
+         UserDomainUnlockExclusive(DLT_QUEUE);
          ERR("Callback Message not processed yet. Requeuing the message\n"); //// <---- Need to see if this happens.
          Ret = FALSE;
          goto Exit;
@@ -945,9 +957,11 @@ co_MsqDispatchOneSentMessage(
          Message->QS_Flags |= QS_SMRESULT;
 
          /* insert it in the callers message queue */
+         UserDomainLockExclusive(DLT_QUEUE);
          RemoveEntryList(&Message->ListEntry);
          InsertTailList(&Message->ptiCallBackSender->SentMessagesListHead, &Message->ListEntry);
          MsqWakeQueue(Message->ptiCallBackSender, QS_SENDMESSAGE, TRUE);
+         UserDomainUnlockExclusive(DLT_QUEUE);
       }
       Ret = TRUE;
       goto Exit;
@@ -1029,8 +1043,10 @@ co_MsqSendMessageAsync(PTHREADINFO ptiReceiver,
     Message->QS_Flags = QS_SENDMESSAGE;
     Message->flags = SMF_RECEIVERFREE;
 
+    UserDomainLockExclusive(DLT_QUEUE);
     InsertTailList(&ptiReceiver->SentMessagesListHead, &Message->ListEntry);
     MsqWakeQueue(ptiReceiver, QS_SENDMESSAGE, TRUE);
+    UserDomainUnlockExclusive(DLT_QUEUE);
 
     return TRUE;
 }
@@ -1144,9 +1160,11 @@ co_MsqSendMessage(PTHREADINFO ptirec,
    pti->pusmSent = Message;
 
    /* Queue it in the destination's message queue */
+   UserDomainLockExclusive(DLT_QUEUE);
    InsertTailList(&ptirec->SentMessagesListHead, &Message->ListEntry);
 
    MsqWakeQueue(ptirec, QS_SENDMESSAGE, TRUE);
+   UserDomainUnlockExclusive(DLT_QUEUE);
 
    // First time in, turn off swapping of the stack.
    if (pti->cEnterCount == 0)
@@ -1179,6 +1197,7 @@ co_MsqSendMessage(PTHREADINFO ptirec,
       {
          /* Look up if the message has not yet dispatched, if so
             make sure it can't pass a result and it must not set the completion event anymore */
+         UserDomainLockExclusive(DLT_QUEUE);
          Entry = ptirec->SentMessagesListHead.Flink;
          while (Entry != &ptirec->SentMessagesListHead)
          {
@@ -1192,6 +1211,7 @@ co_MsqSendMessage(PTHREADINFO ptirec,
             }
             Entry = Entry->Flink;
          }
+         UserDomainUnlockExclusive(DLT_QUEUE);
 
          ERR("MsqSendMessage (blocked) timed out 1 Status %lx\n", WaitStatus);
       }
@@ -1232,6 +1252,7 @@ co_MsqSendMessage(PTHREADINFO ptirec,
          {
             /* Look up if the message has not yet been dispatched, if so
                make sure it can't pass a result and it must not set the completion event anymore */
+            UserDomainLockExclusive(DLT_QUEUE);
             Entry = ptirec->SentMessagesListHead.Flink;
             while (Entry != &ptirec->SentMessagesListHead)
             {
@@ -1245,6 +1266,7 @@ co_MsqSendMessage(PTHREADINFO ptirec,
                }
                Entry = Entry->Flink;
             }
+            UserDomainUnlockExclusive(DLT_QUEUE);
 
             WARN("MsqSendMessage timed out 2 Status %lx\n", WaitStatus);
             break;
@@ -1347,6 +1369,7 @@ MsqPostMessage(PTHREADINFO pti,
    Message->QS_Flags = MessageBits;
    Message->pti = pti;
 
+   UserDomainLockExclusive(DLT_POST);
    if (!HardwareMessage)
    {
        InsertTailList(&pti->PostedMessagesListHead, &Message->ListEntry);
@@ -1357,6 +1380,7 @@ MsqPostMessage(PTHREADINFO pti,
    }
 
    MsqWakeQueue(pti, MessageBits, TRUE);
+   UserDomainUnlockExclusive(DLT_POST);
    TRACE("Post Message %d\n", PostMsgCount);
 }
 
