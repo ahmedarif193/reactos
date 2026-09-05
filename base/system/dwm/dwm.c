@@ -311,25 +311,26 @@ DwmShadowCoverage(const DWM_SHADOW_KERNEL *Kernel,
     return (ULONG)((Sum * 65535u + Kernel->Total / 2) / Kernel->Total);
 }
 
-static ULONG
-DwmShadowLayerAlpha(ULONG CoverageX, ULONG CoverageY, ULONG OpacityPermille)
-{
-    const ULONGLONG Divisor = 1000ull * 65535ull * 65535ull;
-    ULONGLONG Numerator;
-
-    Numerator = (ULONGLONG)OpacityPermille * 255u * CoverageX * CoverageY;
-    return (ULONG)((Numerator + Divisor / 2) / Divisor);
-}
-
 static ULONG *g_blurSource;
 static ULONG *g_blurTemp;
+static ULONG *g_blurPass;
 static SIZE_T g_blurPixelCount;
+static ULONG *g_blurLine;
+static SIZE_T g_blurLineCount;
+static BYTE g_noiseTile[64 * 64];
+static BOOL g_noiseReady;
+
+#define DWM_BLUR_RADIUS_96          10
+#define DWM_BLUR_RADIUS_MAX         48
+#define DWM_BLUR_PASSES             3
+#define DWM_MATERIAL_SATURATION     20
+#define DWM_MATERIAL_NOISE          4
 
 static BOOL
 DwmEnsureBlurBuffers(LONG Width, LONG Height)
 {
-    ULONG *Source, *Temp;
-    SIZE_T PixelCount, Bytes;
+    ULONG *Source, *Temp, *Pass, *Line;
+    SIZE_T PixelCount, Bytes, LineCount;
 
     if (Width <= 0 || Height <= 0 ||
         (SIZE_T)Width > (SIZE_T)-1 / (SIZE_T)Height)
@@ -337,20 +338,28 @@ DwmEnsureBlurBuffers(LONG Width, LONG Height)
     PixelCount = (SIZE_T)Width * (SIZE_T)Height;
     if (PixelCount > (SIZE_T)-1 / sizeof(ULONG))
         return FALSE;
-    if (g_blurSource != NULL && g_blurTemp != NULL &&
-        g_blurPixelCount == PixelCount)
+    LineCount = (SIZE_T)(Width > Height ? Width : Height) +
+                2 * DWM_BLUR_RADIUS_MAX + 8;
+    if (g_blurSource != NULL && g_blurTemp != NULL && g_blurPass != NULL &&
+        g_blurLine != NULL && g_blurPixelCount == PixelCount &&
+        g_blurLineCount == LineCount)
         return TRUE;
 
     Bytes = PixelCount * sizeof(ULONG);
     Source = VirtualAlloc(NULL, Bytes, MEM_COMMIT | MEM_RESERVE,
                           PAGE_READWRITE);
-    if (Source == NULL)
-        return FALSE;
     Temp = VirtualAlloc(NULL, Bytes, MEM_COMMIT | MEM_RESERVE,
                         PAGE_READWRITE);
-    if (Temp == NULL)
+    Pass = VirtualAlloc(NULL, Bytes, MEM_COMMIT | MEM_RESERVE,
+                        PAGE_READWRITE);
+    Line = VirtualAlloc(NULL, LineCount * sizeof(ULONG),
+                        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (Source == NULL || Temp == NULL || Pass == NULL || Line == NULL)
     {
-        VirtualFree(Source, 0, MEM_RELEASE);
+        if (Source) VirtualFree(Source, 0, MEM_RELEASE);
+        if (Temp) VirtualFree(Temp, 0, MEM_RELEASE);
+        if (Pass) VirtualFree(Pass, 0, MEM_RELEASE);
+        if (Line) VirtualFree(Line, 0, MEM_RELEASE);
         return FALSE;
     }
 
@@ -358,10 +367,40 @@ DwmEnsureBlurBuffers(LONG Width, LONG Height)
         VirtualFree(g_blurSource, 0, MEM_RELEASE);
     if (g_blurTemp != NULL)
         VirtualFree(g_blurTemp, 0, MEM_RELEASE);
+    if (g_blurPass != NULL)
+        VirtualFree(g_blurPass, 0, MEM_RELEASE);
+    if (g_blurLine != NULL)
+        VirtualFree(g_blurLine, 0, MEM_RELEASE);
     g_blurSource = Source;
     g_blurTemp = Temp;
+    g_blurPass = Pass;
+    g_blurLine = Line;
     g_blurPixelCount = PixelCount;
+    g_blurLineCount = LineCount;
     return TRUE;
+}
+
+static void
+DwmEnsureNoise(void)
+{
+    LONG x, y;
+
+    if (g_noiseReady)
+        return;
+    for (y = 0; y < 64; ++y)
+    {
+        for (x = 0; x < 64; ++x)
+        {
+            ULONG Hash = (ULONG)x * 0x9E3779B1u ^ (ULONG)y * 0x85EBCA77u;
+
+            Hash ^= Hash >> 15;
+            Hash *= 0x2C1B3C6Du;
+            Hash ^= Hash >> 12;
+            g_noiseTile[y * 64 + x] =
+                (BYTE)(Hash % (2u * DWM_MATERIAL_NOISE + 1u));
+        }
+    }
+    g_noiseReady = TRUE;
 }
 
 static LONG
@@ -374,31 +413,79 @@ DwmClampCoordinate(LONG Value, LONG Limit)
     return Value;
 }
 
-static void
-DwmAddPixel(ULONGLONG *Red, ULONGLONG *Green, ULONGLONG *Blue, ULONG Pixel)
+static ULONGLONG
+DwmPackPixel(ULONG Pixel)
 {
-    *Red += (Pixel >> 16) & 0xffu;
-    *Green += (Pixel >> 8) & 0xffu;
-    *Blue += Pixel & 0xffu;
+    return ((ULONGLONG)((Pixel >> 16) & 0xffu) << 40) |
+           ((ULONGLONG)((Pixel >> 8) & 0xffu) << 20) |
+           (ULONGLONG)(Pixel & 0xffu);
+}
+
+static ULONG
+DwmUnpackAverage(ULONGLONG Sum, ULONGLONG Reciprocal)
+{
+    ULONG Red = (ULONG)((((Sum >> 40) & 0xfffffu) * Reciprocal) >> 24);
+    ULONG Green = (ULONG)((((Sum >> 20) & 0xfffffu) * Reciprocal) >> 24);
+    ULONG Blue = (ULONG)(((Sum & 0xfffffu) * Reciprocal) >> 24);
+
+    return 0xff000000u | (Red << 16) | (Green << 8) | Blue;
+}
+
+static ULONG
+DwmMaterialFinish(ULONG Pixel, LONG x, LONG y)
+{
+    LONG Red = (LONG)((Pixel >> 16) & 0xffu);
+    LONG Green = (LONG)((Pixel >> 8) & 0xffu);
+    LONG Blue = (LONG)(Pixel & 0xffu);
+    LONG Luma = (Red * 77 + Green * 151 + Blue * 28) >> 8;
+    LONG Noise = (LONG)g_noiseTile[((y & 63) << 6) | (x & 63)] -
+                 DWM_MATERIAL_NOISE;
+
+    Red = Luma + (Red - Luma) * (100 + DWM_MATERIAL_SATURATION) / 100 + Noise;
+    Green = Luma + (Green - Luma) * (100 + DWM_MATERIAL_SATURATION) / 100 + Noise;
+    Blue = Luma + (Blue - Luma) * (100 + DWM_MATERIAL_SATURATION) / 100 + Noise;
+    if (Red < 0) Red = 0; else if (Red > 255) Red = 255;
+    if (Green < 0) Green = 0; else if (Green > 255) Green = 255;
+    if (Blue < 0) Blue = 0; else if (Blue > 255) Blue = 255;
+    return 0xff000000u | ((ULONG)Red << 16) | ((ULONG)Green << 8) | (ULONG)Blue;
 }
 
 static void
-DwmSubtractPixel(ULONGLONG *Red, ULONGLONG *Green, ULONGLONG *Blue,
-                 ULONG Pixel)
+DwmDownsampleHalf(const ULONG *Composition, LONG Width, LONG Height,
+                  ULONG *Half, LONG HalfWidth,
+                  LONG Left, LONG Top, LONG Right, LONG Bottom)
 {
-    *Red -= (Pixel >> 16) & 0xffu;
-    *Green -= (Pixel >> 8) & 0xffu;
-    *Blue -= Pixel & 0xffu;
+    LONG hx, hy;
+
+    for (hy = Top; hy < Bottom; ++hy)
+    {
+        LONG y0 = hy * 2, y1 = (y0 + 1 < Height) ? y0 + 1 : y0;
+        const ULONG *Row0 = Composition + (SIZE_T)y0 * Width;
+        const ULONG *Row1 = Composition + (SIZE_T)y1 * Width;
+        ULONG *Out = Half + (SIZE_T)hy * HalfWidth;
+
+        for (hx = Left; hx < Right; ++hx)
+        {
+            LONG x0 = hx * 2, x1 = (x0 + 1 < Width) ? x0 + 1 : x0;
+            ULONG p0 = Row0[x0], p1 = Row0[x1], p2 = Row1[x0], p3 = Row1[x1];
+            ULONG rb = (p0 & 0xff00ffu) + (p1 & 0xff00ffu) +
+                       (p2 & 0xff00ffu) + (p3 & 0xff00ffu);
+            ULONG g = (p0 & 0xff00u) + (p1 & 0xff00u) +
+                      (p2 & 0xff00u) + (p3 & 0xff00u);
+
+            Out[hx] = 0xff000000u | ((rb >> 2) & 0xff00ffu) | ((g >> 2) & 0xff00u);
+        }
+    }
 }
 
 static void
-DwmBlurRectangle(ULONG *Composition, LONG Width, LONG Height,
-                 LONG Left, LONG Top, LONG Right, LONG Bottom, LONG Radius,
-                 ULONG Alpha)
+DwmBoxBlurPass(const ULONG *Source, ULONG *Dest, LONG Width, LONG Height,
+               LONG Left, LONG Top, LONG Right, LONG Bottom, LONG Radius)
 {
     const ULONG Divisor = (ULONG)Radius * 2u + 1u;
     const ULONGLONG Reciprocal = (0x1000000ull + Divisor - 1u) / Divisor;
-    LONG SampleTop, SampleBottom, x, y, Offset;
+    ULONG *Line = g_blurLine;
+    LONG SampleTop, SampleBottom, x, y, i, Span;
 
     if (Right <= Left || Bottom <= Top || Radius <= 0)
         return;
@@ -409,57 +496,88 @@ DwmBlurRectangle(ULONG *Composition, LONG Width, LONG Height,
     if (SampleBottom > Height)
         SampleBottom = Height;
 
-    /* Horizontal box pass over every row needed by the vertical pass. */
+    Span = Right - Left + 2 * Radius + 1;
     for (y = SampleTop; y < SampleBottom; ++y)
     {
-        ULONGLONG Red = 0, Green = 0, Blue = 0;
+        const ULONG *Row = Source + (SIZE_T)y * Width;
+        ULONG *Out = g_blurTemp + (SIZE_T)y * Width;
+        ULONGLONG Sum = 0;
 
-        for (Offset = -Radius; Offset <= Radius; ++Offset)
-        {
-            LONG SampleX = DwmClampCoordinate(Left + Offset, Width);
-            DwmAddPixel(&Red, &Green, &Blue,
-                        g_blurSource[(SIZE_T)y * Width + SampleX]);
-        }
+        for (i = 0; i < Span; ++i)
+            Line[i] = Row[DwmClampCoordinate(Left - Radius + i, Width)];
+        for (i = 0; i <= 2 * Radius; ++i)
+            Sum += DwmPackPixel(Line[i]);
         for (x = Left; x < Right; ++x)
         {
-            g_blurTemp[(SIZE_T)y * Width + x] =
-                0xff000000u |
-                ((ULONG)((Red * Reciprocal) >> 24) << 16) |
-                ((ULONG)((Green * Reciprocal) >> 24) << 8) |
-                (ULONG)((Blue * Reciprocal) >> 24);
-            DwmSubtractPixel(
-                &Red, &Green, &Blue,
-                g_blurSource[(SIZE_T)y * Width +
-                    DwmClampCoordinate(x - Radius, Width)]);
-            DwmAddPixel(
-                &Red, &Green, &Blue,
-                g_blurSource[(SIZE_T)y * Width +
-                    DwmClampCoordinate(x + Radius + 1, Width)]);
+            Out[x] = DwmUnpackAverage(Sum, Reciprocal);
+            Sum += DwmPackPixel(Line[x - Left + 2 * Radius + 1]);
+            Sum -= DwmPackPixel(Line[x - Left]);
         }
     }
 
-    /* Vertical pass writes only the requested blur region. */
+    Span = Bottom - Top + 2 * Radius + 1;
     for (x = Left; x < Right; ++x)
     {
-        ULONGLONG Red = 0, Green = 0, Blue = 0;
+        ULONGLONG Sum = 0;
 
-        for (Offset = -Radius; Offset <= Radius; ++Offset)
+        for (i = 0; i < Span; ++i)
         {
-            LONG SampleY = DwmClampCoordinate(Top + Offset, Height);
-            DwmAddPixel(&Red, &Green, &Blue,
-                        g_blurTemp[(SIZE_T)SampleY * Width + x]);
+            Line[i] = g_blurTemp[(SIZE_T)DwmClampCoordinate(Top - Radius + i,
+                                                             Height) * Width + x];
         }
+        for (i = 0; i <= 2 * Radius; ++i)
+            Sum += DwmPackPixel(Line[i]);
         for (y = Top; y < Bottom; ++y)
         {
-            ULONG Blurred =
-                0xff000000u |
-                ((ULONG)((Red * Reciprocal) >> 24) << 16) |
-                ((ULONG)((Green * Reciprocal) >> 24) << 8) |
-                (ULONG)((Blue * Reciprocal) >> 24);
+            Dest[(SIZE_T)y * Width + x] = DwmUnpackAverage(Sum, Reciprocal);
+            Sum += DwmPackPixel(Line[y - Top + 2 * Radius + 1]);
+            Sum -= DwmPackPixel(Line[y - Top]);
+        }
+    }
+}
 
+static void
+DwmBlurUpsample(const ULONG *Half, LONG HalfWidth, LONG HalfHeight,
+                ULONG *Composition, LONG Width,
+                LONG Left, LONG Top, LONG Right, LONG Bottom, ULONG Alpha)
+{
+    LONG x, y;
+
+    for (y = Top; y < Bottom; ++y)
+    {
+        LONG qy = 2 * y - 1;
+        LONG hy0 = qy >> 2, fy = qy & 3, hy1;
+        const ULONG *Row0, *Row1;
+        ULONG *Out = Composition + (SIZE_T)y * Width;
+
+        if (hy0 < 0) hy0 = 0;
+        if (hy0 > HalfHeight - 1) hy0 = HalfHeight - 1;
+        hy1 = (hy0 + 1 < HalfHeight) ? hy0 + 1 : hy0;
+        Row0 = Half + (SIZE_T)hy0 * HalfWidth;
+        Row1 = Half + (SIZE_T)hy1 * HalfWidth;
+        for (x = Left; x < Right; ++x)
+        {
+            LONG qx = 2 * x - 1;
+            LONG hx0 = qx >> 2, fx = qx & 3, hx1;
+            ULONG w00, w10, w01, w11, p00, p10, p01, p11, rb, g, Blurred;
+
+            if (hx0 < 0) hx0 = 0;
+            if (hx0 > HalfWidth - 1) hx0 = HalfWidth - 1;
+            hx1 = (hx0 + 1 < HalfWidth) ? hx0 + 1 : hx0;
+            w11 = (ULONG)(fx * fy);
+            w10 = (ULONG)(fx * (4 - fy));
+            w01 = (ULONG)((4 - fx) * fy);
+            w00 = 16u - w11 - w10 - w01;
+            p00 = Row0[hx0]; p10 = Row0[hx1]; p01 = Row1[hx0]; p11 = Row1[hx1];
+            rb = (p00 & 0xff00ffu) * w00 + (p10 & 0xff00ffu) * w10 +
+                 (p01 & 0xff00ffu) * w01 + (p11 & 0xff00ffu) * w11;
+            g = (p00 & 0xff00u) * w00 + (p10 & 0xff00u) * w10 +
+                (p01 & 0xff00u) * w01 + (p11 & 0xff00u) * w11;
+            Blurred = ((rb >> 4) & 0xff00ffu) | ((g >> 4) & 0xff00u);
+            Blurred = DwmMaterialFinish(Blurred, x, y);
             if (Alpha < 255)
             {
-                ULONG Base = g_blurSource[(SIZE_T)y * Width + x];
+                ULONG Base = Out[x];
                 ULONG Inverse = 255u - Alpha;
 
                 Blurred =
@@ -471,17 +589,56 @@ DwmBlurRectangle(ULONG *Composition, LONG Width, LONG Height,
                     (((Blurred & 0xffu) * Alpha +
                       (Base & 0xffu) * Inverse) / 255u);
             }
-            Composition[(SIZE_T)y * Width + x] = Blurred;
-            DwmSubtractPixel(
-                &Red, &Green, &Blue,
-                g_blurTemp[(SIZE_T)DwmClampCoordinate(y - Radius, Height) *
-                           Width + x]);
-            DwmAddPixel(
-                &Red, &Green, &Blue,
-                g_blurTemp[(SIZE_T)DwmClampCoordinate(y + Radius + 1,
-                                                      Height) * Width + x]);
+            Out[x] = Blurred;
         }
     }
+}
+
+static LONG
+DwmBlurRadius(void)
+{
+    LONG Radius = MulDiv(DWM_BLUR_RADIUS_96,
+                         g_shadowDpi > 0 ? g_shadowDpi : 96, 96);
+
+    if (Radius < 1)
+        Radius = 1;
+    if (Radius > DWM_BLUR_RADIUS_MAX)
+        Radius = DWM_BLUR_RADIUS_MAX;
+    return Radius;
+}
+
+static BOOL
+DwmClipBlurRect(const RECTL *Rectangle, LONG WindowX, LONG WindowY,
+                const DWM_WIN *Window,
+                LONG ClipLeft, LONG ClipTop, LONG ClipRight, LONG ClipBottom,
+                LONG Width, LONG Height, RECTL *Out)
+{
+    LONG Left = WindowX + Rectangle->left;
+    LONG Top = WindowY + Rectangle->top;
+    LONG Right = WindowX + Rectangle->right;
+    LONG Bottom = WindowY + Rectangle->bottom;
+    LONG WindowRight = WindowX + Window->cx;
+    LONG WindowBottom = WindowY + Window->cy;
+
+    if (Left < WindowX) Left = WindowX;
+    if (Top < WindowY) Top = WindowY;
+    if (Right > WindowRight) Right = WindowRight;
+    if (Bottom > WindowBottom) Bottom = WindowBottom;
+    if (Left < ClipLeft) Left = ClipLeft;
+    if (Top < ClipTop) Top = ClipTop;
+    if (Right > ClipRight) Right = ClipRight;
+    if (Bottom > ClipBottom) Bottom = ClipBottom;
+    if (Left < 0) Left = 0;
+    if (Top < 0) Top = 0;
+    if (Right > Width) Right = Width;
+    if (Bottom > Height) Bottom = Height;
+    if (Right <= Left || Bottom <= Top)
+        return FALSE;
+    Out->left = Left;
+    Out->top = Top;
+    Out->right = Right;
+    Out->bottom = Bottom;
+    return TRUE;
 }
 
 static void
@@ -490,11 +647,13 @@ DwmApplyBlur(ULONG *Composition, LONG Width, LONG Height,
              const DWM_WIN *Window, const RECTL *Rectangles)
 {
     RECTL Entire = {0, 0, Window->cx, Window->cy};
+    RECTL Union = {0, 0, 0, 0}, Clipped;
     const RECTL *Rectangle;
     ULONG Index, Count, Alpha = 255;
-    LONG Radius, WindowX, WindowY, SampleTop, SampleBottom;
-    LONG SampleLeft, SampleRight, SampleRow;
-    SIZE_T Bytes;
+    LONG Radius, HalfRadius, HalfWidth, HalfHeight, WindowX, WindowY;
+    LONG hL, hT, hR, hB, Reach, Pass;
+    const ULONG *Result;
+    BOOL HaveUnion = FALSE;
 
     if (!(Window->BlurFlags & DWM_BLUR_ENABLE) ||
         Window->cx <= 0 || Window->cy <= 0)
@@ -517,72 +676,74 @@ DwmApplyBlur(ULONG *Composition, LONG Width, LONG Height,
     }
     if (!DwmEnsureBlurBuffers(Width, Height))
         return;
+    DwmEnsureNoise();
 
-    Radius = MulDiv(12, g_shadowDpi > 0 ? g_shadowDpi : 96, 96);
-    if (Radius < 1)
-        Radius = 1;
-    if (Radius > 64)
-        Radius = 64;
+    Radius = DwmBlurRadius();
+    HalfRadius = (Radius + 1) / 2;
+    if (HalfRadius < 1)
+        HalfRadius = 1;
+    HalfWidth = (Width + 1) / 2;
+    HalfHeight = (Height + 1) / 2;
     WindowX = Window->x - g_originX;
     WindowY = Window->y - g_originY;
 
-    SampleTop = (WindowY < ClipTop) ? ClipTop : WindowY;
-    SampleTop -= Radius;
-    if (SampleTop < 0)
-        SampleTop = 0;
-    SampleBottom = WindowY + Window->cy;
-    if (SampleBottom > ClipBottom)
-        SampleBottom = ClipBottom;
-    SampleBottom += Radius;
-    if (SampleBottom > Height)
-        SampleBottom = Height;
-    if (SampleBottom <= SampleTop)
-        return;
-
-    SampleLeft = (WindowX < ClipLeft) ? ClipLeft : WindowX;
-    SampleLeft -= Radius;
-    if (SampleLeft < 0)
-        SampleLeft = 0;
-    SampleRight = WindowX + Window->cx;
-    if (SampleRight > ClipRight)
-        SampleRight = ClipRight;
-    SampleRight += Radius + 1;
-    if (SampleRight > Width)
-        SampleRight = Width;
-    if (SampleRight <= SampleLeft)
-        return;
-
-    Bytes = (SIZE_T)(SampleRight - SampleLeft) * sizeof(ULONG);
-    for (SampleRow = SampleTop; SampleRow < SampleBottom; ++SampleRow)
+    for (Index = 0; Index < Count; ++Index)
     {
-        SIZE_T Offset = (SIZE_T)SampleRow * Width + SampleLeft;
+        if (!DwmClipBlurRect(&Rectangle[Index], WindowX, WindowY, Window,
+                             ClipLeft, ClipTop, ClipRight, ClipBottom,
+                             Width, Height, &Clipped))
+            continue;
+        if (!HaveUnion)
+        {
+            Union = Clipped;
+            HaveUnion = TRUE;
+            continue;
+        }
+        if (Clipped.left < Union.left) Union.left = Clipped.left;
+        if (Clipped.top < Union.top) Union.top = Clipped.top;
+        if (Clipped.right > Union.right) Union.right = Clipped.right;
+        if (Clipped.bottom > Union.bottom) Union.bottom = Clipped.bottom;
+    }
+    if (!HaveUnion)
+        return;
 
-        RtlCopyMemory(g_blurSource + Offset, Composition + Offset, Bytes);
+    hL = Union.left / 2;
+    hT = Union.top / 2;
+    hR = (Union.right + 1) / 2;
+    hB = (Union.bottom + 1) / 2;
+    Reach = HalfRadius * DWM_BLUR_PASSES + 2;
+    DwmDownsampleHalf(Composition, Width, Height, g_blurSource, HalfWidth,
+                      (hL - Reach < 0) ? 0 : hL - Reach,
+                      (hT - Reach < 0) ? 0 : hT - Reach,
+                      (hR + Reach > HalfWidth) ? HalfWidth : hR + Reach,
+                      (hB + Reach > HalfHeight) ? HalfHeight : hB + Reach);
+
+    Result = g_blurSource;
+    for (Pass = DWM_BLUR_PASSES - 1; Pass >= 0; --Pass)
+    {
+        LONG Grow = HalfRadius * Pass;
+        LONG Left = hL - Grow, Top = hT - Grow;
+        LONG Right = hR + Grow, Bottom = hB + Grow;
+        ULONG *Dest = (Result == g_blurSource) ? g_blurPass : g_blurSource;
+
+        if (Left < 0) Left = 0;
+        if (Top < 0) Top = 0;
+        if (Right > HalfWidth) Right = HalfWidth;
+        if (Bottom > HalfHeight) Bottom = HalfHeight;
+        DwmBoxBlurPass(Result, Dest, HalfWidth, HalfHeight,
+                       Left, Top, Right, Bottom, HalfRadius);
+        Result = Dest;
     }
 
     for (Index = 0; Index < Count; ++Index)
     {
-        LONG Left = WindowX + Rectangle[Index].left;
-        LONG Top = WindowY + Rectangle[Index].top;
-        LONG Right = WindowX + Rectangle[Index].right;
-        LONG Bottom = WindowY + Rectangle[Index].bottom;
-        LONG WindowRight = WindowX + Window->cx;
-        LONG WindowBottom = WindowY + Window->cy;
-
-        if (Left < WindowX) Left = WindowX;
-        if (Top < WindowY) Top = WindowY;
-        if (Right > WindowRight) Right = WindowRight;
-        if (Bottom > WindowBottom) Bottom = WindowBottom;
-        if (Left < ClipLeft) Left = ClipLeft;
-        if (Top < ClipTop) Top = ClipTop;
-        if (Right > ClipRight) Right = ClipRight;
-        if (Bottom > ClipBottom) Bottom = ClipBottom;
-        if (Left < 0) Left = 0;
-        if (Top < 0) Top = 0;
-        if (Right > Width) Right = Width;
-        if (Bottom > Height) Bottom = Height;
-        DwmBlurRectangle(Composition, Width, Height,
-                         Left, Top, Right, Bottom, Radius, Alpha);
+        if (!DwmClipBlurRect(&Rectangle[Index], WindowX, WindowY, Window,
+                             ClipLeft, ClipTop, ClipRight, ClipBottom,
+                             Width, Height, &Clipped))
+            continue;
+        DwmBlurUpsample(Result, HalfWidth, HalfHeight, Composition, Width,
+                        Clipped.left, Clipped.top, Clipped.right,
+                        Clipped.bottom, Alpha);
     }
 }
 
@@ -668,7 +829,65 @@ DwmWindowBlursBackdrop(const DWM_WIN *Window)
 }
 
 #define DWM_CORNER_MAX_RECTS 129
+#define DWM_REFLECT_STRENGTH 34u
+
+static BYTE *g_reflectLut;
+static LONG g_reflectLen;
+
+static double
+DwmReflectBump(double t, double Center, double HalfWidth, double Peak)
+{
+    double d = (t - Center) / HalfWidth;
+
+    if (d <= -1.0 || d >= 1.0)
+        return 0.0;
+    return Peak * 0.5 * (1.0 + cos(3.14159265358979 * d));
+}
+
+static BOOL
+DwmEnsureReflection(LONG Width, LONG Height)
+{
+    LONG Length = Width + (Height * 6) / 5 + 2, u;
+    BYTE *Lut;
+
+    if (Length <= 0)
+        return FALSE;
+    if (g_reflectLut != NULL && g_reflectLen == Length)
+        return TRUE;
+    Lut = VirtualAlloc(NULL, (SIZE_T)Length, MEM_COMMIT | MEM_RESERVE,
+                       PAGE_READWRITE);
+    if (Lut == NULL)
+        return FALSE;
+    for (u = 0; u < Length; ++u)
+    {
+        double t = (double)u / (double)Length;
+        double v = DwmReflectBump(t, 0.30, 0.14, 1.0) +
+                   DwmReflectBump(t, 0.60, 0.05, 0.55) +
+                   DwmReflectBump(t, 0.80, 0.11, 0.40);
+
+        if (v > 1.0)
+            v = 1.0;
+        Lut[u] = (BYTE)(v * 255.0 + 0.5);
+    }
+    if (g_reflectLut != NULL)
+        VirtualFree(g_reflectLut, 0, MEM_RELEASE);
+    g_reflectLut = Lut;
+    g_reflectLen = Length;
+    return TRUE;
+}
+
+static ULONG
+DwmReflection(LONG ScreenX, LONG ScreenY)
+{
+    LONG u = ScreenX + (ScreenY * 6) / 5;
+
+    if (g_reflectLut == NULL || u < 0 || u >= g_reflectLen)
+        return 0;
+    return g_reflectLut[u];
+}
 #define DWM_MATERIAL_FRINGE 96u
+#define DWM_MATERIAL_TINT_BAND 48u
+#define DWM_MATERIAL_EDGE_LIGHT 26u
 
 static ULONG
 DwmChannelDistance(ULONG a, ULONG b)
@@ -844,31 +1063,25 @@ DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
 }
 
 static void
-DwmBlendShadowSpan(ULONG *Row, LONG X0, LONG X1,
-                   ULONG WideY, ULONG TightY,
-                   ULONG WideOpacity, ULONG TightOpacity, ULONG WindowAlpha)
+DwmBlendShadowSpan(ULONG *Row, LONG X0, LONG X1, ULONG WideY, ULONG TightY)
 {
     LONG x;
 
     for (x = X0; x < X1; ++x)
     {
-        ULONG WideAlpha = DwmShadowLayerAlpha(g_shadowCoverWide[x], WideY,
-                                              WideOpacity);
-        ULONG TightAlpha = DwmShadowLayerAlpha(g_shadowCoverTight[x], TightY,
-                                               TightOpacity);
-        ULONG Alpha = WideAlpha + TightAlpha - (WideAlpha * TightAlpha) / 255u;
+        ULONG WideAlpha = (g_shadowCoverWide[x] * WideY) >> 8;
+        ULONG TightAlpha = (g_shadowCoverTight[x] * TightY) >> 8;
+        ULONG Alpha = WideAlpha + TightAlpha - ((WideAlpha * TightAlpha) >> 8);
         ULONG Inverse, Pixel;
 
-        if (WindowAlpha != 255)
-            Alpha = (Alpha * WindowAlpha) / 255u;
         if (Alpha == 0)
             continue;
-
-        Inverse = 255u - Alpha;
+        if (Alpha > 255)
+            Alpha = 255;
+        Inverse = 256u - Alpha;
         Pixel = Row[x];
-        Row[x] = ((((Pixel >> 16) & 0xFFu) * Inverse / 255u) << 16) |
-                 ((((Pixel >> 8) & 0xFFu) * Inverse / 255u) << 8) |
-                 ((Pixel & 0xFFu) * Inverse / 255u);
+        Row[x] = ((((Pixel & 0xff00ffu) * Inverse) >> 8) & 0xff00ffu) |
+                 ((((Pixel & 0xff00u) * Inverse) >> 8) & 0xff00u);
     }
 }
 
@@ -990,15 +1203,28 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
 
     if (!DwmEnsureShadowCoverage(scrW))
         return;
-    for (x = x0; x < x1; ++x)
     {
-        LONGLONG Position = (LONGLONG)x - ownerX;
+        LONG xs = x1, xe = x0;
 
-        g_shadowCoverWide[x] = DwmShadowCoverage(&g_shadowWide, Position,
-                                                 w->cx);
-        g_shadowCoverTight[x] = DwmShadowCoverage(tightKernel, Position,
-                                                  w->cx);
+        for (x = x0; x < x1; ++x)
+        {
+            LONGLONG Position = (LONGLONG)x - ownerX;
+            ULONG Wide = DwmShadowCoverage(&g_shadowWide, Position, w->cx);
+            ULONG Tight = DwmShadowCoverage(tightKernel, Position, w->cx);
+
+            g_shadowCoverWide[x] = (Wide * 256u + 32767u) / 65535u;
+            g_shadowCoverTight[x] = (Tight * 256u + 32767u) / 65535u;
+            if (g_shadowCoverWide[x] != 0 || g_shadowCoverTight[x] != 0)
+            {
+                if (x < xs) xs = x;
+                xe = x + 1;
+            }
+        }
+        x0 = xs;
+        x1 = xe;
     }
+    if (x1 <= x0)
+        return;
 
     for (y = y0; y < y1; y++)
     {
@@ -1007,6 +1233,13 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
         ULONG WideY = DwmShadowCoverage(&g_shadowWide, PositionY, w->cy);
         ULONG TightY = DwmShadowCoverage(tightKernel, PositionY, w->cy);
 
+        WideY = (ULONG)(((ULONGLONG)WideY * wideOpacity * windowAlpha) /
+                        (65535ull * 1000ull));
+        TightY = (ULONG)(((ULONGLONG)TightY * tightOpacity * windowAlpha) /
+                         (65535ull * 1000ull));
+        if (WideY == 0 && TightY == 0)
+            continue;
+
         if ((LONGLONG)y >= ownerY && (LONGLONG)y < ownerBottom)
         {
             LONG leftEnd = (ownerX <= x0) ? x0 :
@@ -1014,18 +1247,12 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
             LONG rightStart = (ownerRight <= x0) ? x0 :
                               (ownerRight >= x1) ? x1 : (LONG)ownerRight;
 
-            DwmBlendShadowSpan(row, x0, leftEnd,
-                               WideY, TightY, wideOpacity, tightOpacity,
-                               windowAlpha);
-            DwmBlendShadowSpan(row, rightStart, x1,
-                               WideY, TightY, wideOpacity, tightOpacity,
-                               windowAlpha);
+            DwmBlendShadowSpan(row, x0, leftEnd, WideY, TightY);
+            DwmBlendShadowSpan(row, rightStart, x1, WideY, TightY);
         }
         else
         {
-            DwmBlendShadowSpan(row, x0, x1,
-                               WideY, TightY, wideOpacity, tightOpacity,
-                               windowAlpha);
+            DwmBlendShadowSpan(row, x0, x1, WideY, TightY);
         }
     }
 }
@@ -1048,6 +1275,8 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                        w->BackdropRegion != 0;
     LONG ncBottom = DwmBackdropNcBottom(w);
     ULONG a = w->Alpha, key = 0, backdropKey = 0, colorizationKey = 0;
+    BOOL useEdge = useBackdrop && w->BackdropRegion == DWM_BACKDROP_REGION_WINDOW;
+    BOOL edgeLeft, edgeTop, edgeRight, edgeBottom;
 
     if (w->cx <= 0 || w->cy <= 0 ||
         (ULONG)w->cx > ((ULONG)-1) / sizeof(ULONG) ||
@@ -1073,6 +1302,10 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
         ULONG c = w->ColorKey;
         key = ((c & 0xFFu) << 16) | (c & 0xFF00u) | ((c >> 16) & 0xFFu);
     }
+    edgeLeft = wx > 0;
+    edgeTop = wy > 0;
+    edgeRight = right < g_W;
+    edgeBottom = bottom < g_H;
     if (useBackdrop)
     {
         ULONG c = w->BackdropColor;
@@ -1104,10 +1337,30 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
 
         for (x = 0; x < width; x++)
         {
-            ULONG s = srcrow[x], d, pixelAlpha = 255;
+            ULONG s = srcrow[x], d, pixelAlpha = 255, cornerAlpha = 255;
             LONG sourceX = srcx0 + x;
             BOOL materialPixel = FALSE;
-            ULONG materialWeight = 0, materialKey = 0;
+            ULONG materialWeight = 0, materialKey = 0, edge = 0;
+
+            if (useCorner)
+                cornerAlpha = DwmCornerAlpha(sourceX, r, w->cx, w->cy,
+                                             w->CornerRadius);
+            if (useEdge)
+            {
+                ULONG inner;
+
+                if ((sourceX == 0 && edgeLeft) || (r == 0 && edgeTop) ||
+                    (sourceX == w->cx - 1 && edgeRight) ||
+                    (r == w->cy - 1 && edgeBottom))
+                    inner = 0;
+                else if (useCorner)
+                    inner = DwmCornerAlpha(sourceX - 1, r - 1,
+                                           w->cx - 2, w->cy - 2,
+                                           w->CornerRadius - 1);
+                else
+                    inner = 255;
+                edge = cornerAlpha > inner ? cornerAlpha - inner : 0;
+            }
 
             if (useKey && (s & 0x00FFFFFFu) == key)
                 continue;
@@ -1133,10 +1386,15 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                         materialPixel = TRUE;
                         materialWeight = 255;
                     }
+                    else if (Near <= DWM_MATERIAL_TINT_BAND)
+                    {
+                        materialWeight = 255;
+                    }
                     else if (Near < DWM_MATERIAL_FRINGE)
                     {
                         materialWeight = (DWM_MATERIAL_FRINGE - Near) * 255u /
-                                         DWM_MATERIAL_FRINGE;
+                                         (DWM_MATERIAL_FRINGE -
+                                          DWM_MATERIAL_TINT_BAND);
                     }
                 }
             }
@@ -1173,19 +1431,37 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                        (LONG)((materialKey >> 8) & 0xFFu)) * (LONG)Shift / 255;
                 sb += ((LONG)(d & 0xFFu) -
                        (LONG)(materialKey & 0xFFu)) * (LONG)Shift / 255;
+                if (w->BackdropType == DWM_BACKDROP_TRANSIENT)
+                {
+                    LONG glow = (LONG)(DWM_REFLECT_STRENGTH *
+                                       DwmReflection(x0 + x, dy) *
+                                       materialWeight / (255u * 255u));
+
+                    sr += glow;
+                    sg += glow;
+                    sb += glow;
+                }
                 if (sr < 0) sr = 0; else if (sr > 255) sr = 255;
                 if (sg < 0) sg = 0; else if (sg > 255) sg = 255;
                 if (sb < 0) sb = 0; else if (sb > 255) sb = 255;
                 s = ((ULONG)sr << 16) | ((ULONG)sg << 8) | (ULONG)sb;
             }
+            if (edge != 0)
+            {
+                ULONG lift = DWM_MATERIAL_EDGE_LIGHT * edge / 255u;
+                ULONG sr = ((s >> 16) & 0xFFu) + lift;
+                ULONG sg = ((s >> 8) & 0xFFu) + lift;
+                ULONG sb = (s & 0xFFu) + lift;
+
+                if (sr > 255) sr = 255;
+                if (sg > 255) sg = 255;
+                if (sb > 255) sb = 255;
+                s = (sr << 16) | (sg << 8) | sb;
+            }
             if (useAlpha)
                 pixelAlpha = pixelAlpha * a / 255u;
             if (useCorner)
-            {
-                pixelAlpha = pixelAlpha *
-                             DwmCornerAlpha(sourceX, r, w->cx, w->cy,
-                                            w->CornerRadius) / 255u;
-            }
+                pixelAlpha = pixelAlpha * cornerAlpha / 255u;
             if (pixelAlpha == 0)
                 continue;
             if (pixelAlpha == 255)
@@ -1209,6 +1485,30 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
 
 #define DWM_ANIM_TAPS 4
 
+static LONG *g_animCols;
+static SIZE_T g_animColCount;
+
+static BOOL
+DwmEnsureAnimColumns(LONG Width)
+{
+    LONG *Cols;
+    SIZE_T Count = (SIZE_T)Width * 3;
+
+    if (Width <= 0)
+        return FALSE;
+    if (g_animCols != NULL && g_animColCount == Count)
+        return TRUE;
+    Cols = VirtualAlloc(NULL, Count * sizeof(LONG), MEM_COMMIT | MEM_RESERVE,
+                        PAGE_READWRITE);
+    if (Cols == NULL)
+        return FALSE;
+    if (g_animCols != NULL)
+        VirtualFree(g_animCols, 0, MEM_RELEASE);
+    g_animCols = Cols;
+    g_animColCount = Count;
+    return TRUE;
+}
+
 static void
 DwmBlitScaled(ULONG *comp, LONG scrW,
               LONG clipL, LONG clipT, LONG clipR, LONG clipB,
@@ -1216,7 +1516,13 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
               LONG dstX, LONG dstY, LONG dstCx, LONG dstCy, ULONG alpha,
               const DWM_WIN *material)
 {
+    static const ULONG TapRecip[DWM_ANIM_TAPS * DWM_ANIM_TAPS + 1] =
+    {
+        0, 65536, 32768, 21846, 16384, 13108, 10923, 9363, 8192,
+        7282, 6554, 5958, 5462, 5042, 4682, 4370, 4096
+    };
     LONG y, x, y0, y1, x0, x1;
+    LONG *sx0Tab, *sx1Tab, *stepXTab;
     ULONG matKey = 0xFFFFFFFFu, matKey2 = 0xFFFFFFFFu, matOpacity = 255;
     BOOL matWholeWindow = FALSE;
     LONG matCx0 = 0, matCy0 = 0, matCx1 = 0, matCy1 = 0;
@@ -1254,6 +1560,26 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
     x1 = (dstX + dstCx > clipR) ? clipR : dstX + dstCx;
     if (y1 <= y0 || x1 <= x0)
         return;
+    if (!DwmEnsureAnimColumns(scrW))
+        return;
+    sx0Tab = g_animCols;
+    sx1Tab = g_animCols + scrW;
+    stepXTab = g_animCols + 2 * (SIZE_T)scrW;
+
+    for (x = x0; x < x1; x++)
+    {
+        LONG sx0 = (LONG)(((LONGLONG)(x - dstX) * srcCx) / dstCx);
+        LONG sx1 = (LONG)(((LONGLONG)(x - dstX + 1) * srcCx) / dstCx);
+        LONG stepX;
+
+        if (sx1 <= sx0) sx1 = sx0 + 1;
+        if (sx1 > srcCx) sx1 = srcCx;
+        stepX = (sx1 - sx0 + DWM_ANIM_TAPS - 1) / DWM_ANIM_TAPS;
+        if (stepX < 1) stepX = 1;
+        sx0Tab[x] = sx0;
+        sx1Tab[x] = sx1;
+        stepXTab[x] = stepX;
+    }
 
     for (y = y0; y < y1; y++)
     {
@@ -1269,15 +1595,9 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
 
         for (x = x0; x < x1; x++)
         {
-            LONG sx0 = (LONG)(((LONGLONG)(x - dstX) * srcCx) / dstCx);
-            LONG sx1 = (LONG)(((LONGLONG)(x - dstX + 1) * srcCx) / dstCx);
-            LONG stepX, sy, sx;
-            ULONG taps = 0, sr = 0, sg = 0, sb = 0, s, d, inverse;
-
-            if (sx1 <= sx0) sx1 = sx0 + 1;
-            if (sx1 > srcCx) sx1 = srcCx;
-            stepX = (sx1 - sx0 + DWM_ANIM_TAPS - 1) / DWM_ANIM_TAPS;
-            if (stepX < 1) stepX = 1;
+            LONG sx0 = sx0Tab[x], sx1 = sx1Tab[x], stepX = stepXTab[x];
+            LONG sy, sx;
+            ULONG taps = 0, rb = 0, g = 0, s, d, inverse, recip;
 
             for (sy = sy0; sy < sy1; sy += stepY)
             {
@@ -1288,15 +1608,18 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
                 {
                     ULONG c = srcrow[sx];
 
-                    sr += (c >> 16) & 0xFFu;
-                    sg += (c >> 8) & 0xFFu;
-                    sb += c & 0xFFu;
+                    rb += c & 0xFF00FFu;
+                    g += c & 0xFF00u;
                     taps++;
                 }
             }
             if (taps == 0)
                 continue;
-            s = ((sr / taps) << 16) | ((sg / taps) << 8) | (sb / taps);
+            recip = (taps <= DWM_ANIM_TAPS * DWM_ANIM_TAPS) ? TapRecip[taps]
+                                                            : 65536u / taps;
+            s = ((((rb >> 16) & 0xFFFFu) * recip >> 16) << 16) |
+                ((((g >> 8) & 0xFFFFu) * recip >> 16) << 8) |
+                ((rb & 0xFFFFu) * recip >> 16);
             if (matKey != 0xFFFFFFFFu &&
                 ((s & 0x00FFFFFFu) == matKey ||
                  (s & 0x00FFFFFFu) == matKey2) &&
@@ -1377,7 +1700,6 @@ static HBITMAP g_hbmBackdrop;
 static void   *g_backdropBits;
 static BYTE   *g_buf;
 static ULONG   g_bufSize;
-static LONG    g_W, g_H;
 
 static BOOL
 DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
@@ -1480,6 +1802,7 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
 
     g_W = W;
     g_H = H;
+    DwmEnsureReflection(W, H);
     return TRUE;
 }
 
@@ -1629,6 +1952,7 @@ DwmComposeLoop(HANDLE hStopEvent)
 
         {
             LONG pl, pt, pr, pb;
+            LONG cl, ct, cr, cb;
             BOOL completeFrame = TRUE;
             BOOL refreshBackdrop = forceFull || hdr->FullDamage;
 
@@ -1658,37 +1982,31 @@ DwmComposeLoop(HANDLE hStopEvent)
             if (pb > g_H) pb = g_H;
             wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
 
-            for (;;)
+            cl = pl; ct = pt; cr = pr; cb = pb;
+            for (i = 0; i < hdr->Count; i++)
             {
-                BOOL grown = FALSE;
+                LONGLONG wl, wt, wr, wb;
+                LONG margin;
 
-                for (i = 0; i < hdr->Count; i++)
-                {
-                    LONGLONG wl, wt, wr, wb;
-
-                    if (!DwmWindowBlursBackdrop(&wins[i]))
-                        continue;
-                    wl = (LONGLONG)wins[i].x - g_originX;
-                    wt = (LONGLONG)wins[i].y - g_originY;
-                    wr = wl + wins[i].cx;
-                    wb = wt + wins[i].cy;
-                    if (wl < 0) wl = 0;
-                    if (wt < 0) wt = 0;
-                    if (wr > g_W) wr = g_W;
-                    if (wb > g_H) wb = g_H;
-                    if (wr <= wl || wb <= wt ||
-                        wr <= pl || wl >= pr || wb <= pt || wt >= pb)
-                        continue;
-                    if (wl < pl) { pl = (LONG)wl; grown = TRUE; }
-                    if (wt < pt) { pt = (LONG)wt; grown = TRUE; }
-                    if (wr > pr) { pr = (LONG)wr; grown = TRUE; }
-                    if (wb > pb) { pb = (LONG)wb; grown = TRUE; }
-                }
-                if (!grown)
-                    break;
+                if (!DwmWindowBlursBackdrop(&wins[i]))
+                    continue;
+                wl = (LONGLONG)wins[i].x - g_originX;
+                wt = (LONGLONG)wins[i].y - g_originY;
+                wr = wl + wins[i].cx;
+                wb = wt + wins[i].cy;
+                if (wr <= pl || wl >= pr || wb <= pt || wt >= pb)
+                    continue;
+                margin = DwmBlurRadius() * DWM_BLUR_PASSES + 1;
+                cl = pl - margin; ct = pt - margin;
+                cr = pr + margin; cb = pb + margin;
+                if (cl < 0) cl = 0;
+                if (ct < 0) ct = 0;
+                if (cr > g_W) cr = g_W;
+                if (cb > g_H) cb = g_H;
+                break;
             }
 
-            if (pl == 0 && pt == 0 && pr == g_W && pb == g_H)
+            if (cl == 0 && ct == 0 && cr == g_W && cb == g_H)
                 refreshBackdrop = TRUE;
             forceFull = FALSE;
 
@@ -1720,7 +2038,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                         wt = (LONGLONG)wins[i].y - g_originY;
                         wr = wl + wins[i].cx;
                         wb = wt + wins[i].cy;
-                        if (wl <= pl && wt <= pt && wr >= pr && wb >= pb)
+                        if (wl <= cl && wt <= ct && wr >= cr && wb >= cb)
                         {
                             covered = TRUE;
                             break;
@@ -1728,8 +2046,8 @@ DwmComposeLoop(HANDLE hStopEvent)
                     }
 
                     if (!covered &&
-                        !BitBlt(g_hdcComp, pl, pt, pr - pl, pb - pt,
-                                g_hdcBackdrop, pl, pt, SRCCOPY))
+                        !BitBlt(g_hdcComp, cl, ct, cr - cl, cb - ct,
+                                g_hdcBackdrop, cl, ct, SRCCOPY))
                     {
                         forceFull = TRUE;
                         continue;
@@ -1743,7 +2061,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                     const BYTE *dxpix;
                     const RECTL *windowBlurRects = NULL;
 
-                    if (DwmWindowIsHidden(wins, hdr->Count, i, pl, pt, pr, pb))
+                    if (DwmWindowIsHidden(wins, hdr->Count, i, cl, ct, cr, cb))
                         continue;
                     pix = DwmGetSurfaceView(&wins[i]);
                     if (pix == NULL)
@@ -1763,7 +2081,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                     if (wins[i].AnimFlags != 0)
                     {
                         DwmBlitWindowAnimated((ULONG *)g_compBits, g_W,
-                                              pl, pt, pr, pb, pix,
+                                              cl, ct, cr, cb, pix,
                                               DwmDxGetSurfaceSnapshot(&wins[i]),
                                               &wins[i]);
                         continue;
@@ -1777,8 +2095,8 @@ DwmComposeLoop(HANDLE hStopEvent)
                      * below its owner. Since wins[] is bottom-to-top, higher
                      * windows and their shadows naturally occlude lower ones. */
                     DwmBlendShadow((ULONG *)g_compBits, g_W, g_H,
-                                   pl, pt, pr, pb, &wins[i]);
-                    DwmBlitWindow((ULONG *)g_compBits, g_W, pl, pt, pr, pb,
+                                   cl, ct, cr, cb, &wins[i]);
+                    DwmBlitWindow((ULONG *)g_compBits, g_W, cl, ct, cr, cb,
                                   pix, (const ULONG *)g_backdropBits,
                                   &wins[i]);
 
@@ -1795,7 +2113,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                         if (client.BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT)
                             client.BackdropType = 0;
                         DwmBlitWindow((ULONG *)g_compBits, g_W,
-                                      pl, pt, pr, pb, dxpix,
+                                      cl, ct, cr, cb, dxpix,
                                       (const ULONG *)g_backdropBits, &client);
                     }
                 }
