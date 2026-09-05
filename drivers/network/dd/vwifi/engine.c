@@ -409,22 +409,62 @@ VWifiIndicateLinkState(
 }
 
 /* Schedule a deferred job: a one-shot timer fires after DelayMs and queues the
- * work item.  Only one job is in flight at a time (the upper edge serializes
- * scan/connect/disconnect requests). */
-VOID
+ * work item.  Returns FALSE if the queue is full. */
+BOOLEAN
 VWifiScheduleJob(
     IN PVWIFI_ADAPTER Adapter,
     IN VWIFI_JOB Job,
     IN ULONG DelayMs)
 {
     LARGE_INTEGER Due;
+    ULONGLONG DueTime = KeQueryInterruptTime() + (ULONGLONG)DelayMs * 10000ull;
+    BOOLEAN Queued = FALSE;
+    BOOLEAN Arm = FALSE;
 
     NdisAcquireSpinLock(&Adapter->Lock);
-    Adapter->PendingJob = Job;
+    if (Adapter->JobCount < VWIFI_MAX_JOBS)
+    {
+        Adapter->JobQueue[(Adapter->JobHead + Adapter->JobCount) % VWIFI_MAX_JOBS] = Job;
+        Adapter->JobCount++;
+        Queued = TRUE;
+        if (Adapter->JobDueTime == 0 || DueTime < Adapter->JobDueTime)
+        {
+            Adapter->JobDueTime = DueTime;
+            Arm = TRUE;
+        }
+    }
     NdisReleaseSpinLock(&Adapter->Lock);
 
-    Due.QuadPart = Int32x32To64((LONG)DelayMs, -10000);     /* relative, ms */
-    NdisSetTimerObject(Adapter->EngineTimer, Due, 0, NULL);
+    if (!Queued)
+    {
+        DPRINT1("VWIFI: job queue full, dropping job %d\n", Job);
+    }
+
+    if (Arm && Adapter->EngineTimer != NULL)
+    {
+        Due.QuadPart = Int32x32To64((LONG)DelayMs, -10000);
+        NdisSetTimerObject(Adapter->EngineTimer, Due, 0, NULL);
+    }
+
+    return Queued;
+}
+
+VOID
+VWifiCompletePendingScan(
+    IN PVWIFI_ADAPTER Adapter,
+    IN NDIS_STATUS Status)
+{
+    PNDIS_OID_REQUEST ScanOid;
+
+    NdisAcquireSpinLock(&Adapter->Lock);
+    ScanOid = Adapter->PendingScanOid;
+    Adapter->PendingScanOid = NULL;
+    NdisReleaseSpinLock(&Adapter->Lock);
+
+    if (ScanOid != NULL && Adapter->MiniportAdapterHandle != NULL)
+    {
+        NdisMOidRequestComplete(Adapter->MiniportAdapterHandle, ScanOid, Status);
+    }
 }
 
 VOID
@@ -446,6 +486,10 @@ VWifiEngineTimerDpc(
         return;
     }
 
+    NdisAcquireSpinLock(&Adapter->Lock);
+    Adapter->JobDueTime = 0;
+    NdisReleaseSpinLock(&Adapter->Lock);
+
     /* Hand off to PASSIVE_LEVEL: indications are produced from the work item. */
     if (InterlockedCompareExchange(&Adapter->WorkPending, 1, 0) == 0)
     {
@@ -460,13 +504,18 @@ VWifiEngineWorker(
     IN NDIS_HANDLE NdisIoWorkItemHandle)
 {
     PVWIFI_ADAPTER Adapter = (PVWIFI_ADAPTER)WorkItemContext;
-    VWIFI_JOB Job;
+    VWIFI_JOB Job = VWifiJobNone;
+    BOOLEAN Requeue;
 
     UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
 
     NdisAcquireSpinLock(&Adapter->Lock);
-    Job = Adapter->PendingJob;
-    Adapter->PendingJob = VWifiJobNone;
+    if (Adapter->JobCount != 0)
+    {
+        Job = Adapter->JobQueue[Adapter->JobHead];
+        Adapter->JobHead = (Adapter->JobHead + 1) % VWIFI_MAX_JOBS;
+        Adapter->JobCount--;
+    }
     NdisReleaseSpinLock(&Adapter->Lock);
 
     if (Adapter->Halting)
@@ -488,18 +537,7 @@ VWifiEngineWorker(
             VWifiIndicateScanConfirm(Adapter, NDIS_STATUS_SUCCESS);
 
             /* Complete the SCAN_REQUEST that returned NDIS_STATUS_PENDING. */
-            {
-                PNDIS_OID_REQUEST ScanOid;
-                NdisAcquireSpinLock(&Adapter->Lock);
-                ScanOid = Adapter->PendingScanOid;
-                Adapter->PendingScanOid = NULL;
-                NdisReleaseSpinLock(&Adapter->Lock);
-                if (ScanOid != NULL && Adapter->MiniportAdapterHandle != NULL)
-                {
-                    NdisMOidRequestComplete(Adapter->MiniportAdapterHandle,
-                                            ScanOid, NDIS_STATUS_SUCCESS);
-                }
-            }
+            VWifiCompletePendingScan(Adapter, NDIS_STATUS_SUCCESS);
             break;
         }
 
@@ -581,4 +619,14 @@ VWifiEngineWorker(
     }
 
     InterlockedExchange(&Adapter->WorkPending, 0);
+
+    NdisAcquireSpinLock(&Adapter->Lock);
+    Requeue = (Adapter->JobCount != 0);
+    NdisReleaseSpinLock(&Adapter->Lock);
+
+    if (Requeue && !Adapter->Halting &&
+        InterlockedCompareExchange(&Adapter->WorkPending, 1, 0) == 0)
+    {
+        NdisQueueIoWorkItem(Adapter->EngineWorkItem, VWifiEngineWorker, Adapter);
+    }
 }
