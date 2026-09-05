@@ -33,6 +33,7 @@
 #include "ocidl.h"
 #include "netlistmgr.h"
 #include "olectl.h"
+#include "winreg.h"
 
 #include "wine/debug.h"
 #include "wine/list.h"
@@ -428,36 +429,94 @@ static HRESULT WINAPI network_Invoke(
     return E_NOTIMPL;
 }
 
+static const WCHAR profiles_keyW[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\Profiles";
+
+static LONG open_profile_key( const GUID *id, REGSAM access, BOOL create, HKEY *key )
+{
+    WCHAR path[sizeof(profiles_keyW) / sizeof(WCHAR) + 40];
+    swprintf( path, sizeof(path) / sizeof(path[0]), L"%s\\{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}", profiles_keyW,
+              id->Data1, id->Data2, id->Data3, id->Data4[0], id->Data4[1], id->Data4[2], id->Data4[3],
+              id->Data4[4], id->Data4[5], id->Data4[6], id->Data4[7] );
+    if (create)
+        return RegCreateKeyExW( HKEY_LOCAL_MACHINE, path, 0, NULL, 0, access, NULL, key, NULL );
+    return RegOpenKeyExW( HKEY_LOCAL_MACHINE, path, 0, access, key );
+}
+
+static HRESULT read_profile_string( const GUID *id, const WCHAR *value, const WCHAR *fallback, BSTR *ret )
+{
+    WCHAR buf[256];
+    DWORD type, size = sizeof(buf);
+    HKEY key;
+
+    buf[0] = 0;
+    if (!open_profile_key( id, KEY_QUERY_VALUE, FALSE, &key ))
+    {
+        if (RegQueryValueExW( key, value, NULL, &type, (BYTE *)buf, &size ) || type != REG_SZ) buf[0] = 0;
+        RegCloseKey( key );
+    }
+    buf[sizeof(buf) / sizeof(buf[0]) - 1] = 0;
+    if (!buf[0] && fallback) lstrcpynW( buf, fallback, sizeof(buf) / sizeof(buf[0]) );
+    if (!(*ret = SysAllocString( buf ))) return E_OUTOFMEMORY;
+    return S_OK;
+}
+
+static HRESULT write_profile_string( const GUID *id, const WCHAR *value, const WCHAR *str )
+{
+    HKEY key;
+    LONG ret;
+
+    if (!str) return E_POINTER;
+    if ((ret = open_profile_key( id, KEY_SET_VALUE, TRUE, &key ))) return HRESULT_FROM_WIN32( ret );
+    ret = RegSetValueExW( key, value, 0, REG_SZ, (const BYTE *)str, (lstrlenW( str ) + 1) * sizeof(WCHAR) );
+    RegCloseKey( key );
+    return ret ? HRESULT_FROM_WIN32( ret ) : S_OK;
+}
+
 static HRESULT WINAPI network_GetName(
     INetwork *iface,
     BSTR *pszNetworkName )
 {
-    FIXME( "%p, %p\n", iface, pszNetworkName );
-    return E_NOTIMPL;
+    struct network *network = impl_from_INetwork( iface );
+
+    TRACE( "%p, %p\n", iface, pszNetworkName );
+
+    if (!pszNetworkName) return E_POINTER;
+    return read_profile_string( &network->id, L"ProfileName", L"Network", pszNetworkName );
 }
 
 static HRESULT WINAPI network_SetName(
     INetwork *iface,
     BSTR szNetworkNewName )
 {
-    FIXME( "%p, %s\n", iface, debugstr_w(szNetworkNewName) );
-    return E_NOTIMPL;
+    struct network *network = impl_from_INetwork( iface );
+
+    TRACE( "%p, %s\n", iface, debugstr_w(szNetworkNewName) );
+
+    if (!szNetworkNewName || !szNetworkNewName[0]) return E_INVALIDARG;
+    return write_profile_string( &network->id, L"ProfileName", szNetworkNewName );
 }
 
 static HRESULT WINAPI network_GetDescription(
     INetwork *iface,
     BSTR *pszDescription )
 {
-    FIXME( "%p, %p\n", iface, pszDescription );
-    return E_NOTIMPL;
+    struct network *network = impl_from_INetwork( iface );
+
+    TRACE( "%p, %p\n", iface, pszDescription );
+
+    if (!pszDescription) return E_POINTER;
+    return read_profile_string( &network->id, L"Description", L"", pszDescription );
 }
 
 static HRESULT WINAPI network_SetDescription(
     INetwork *iface,
     BSTR szDescription )
 {
-    FIXME( "%p, %s\n", iface, debugstr_w(szDescription) );
-    return E_NOTIMPL;
+    struct network *network = impl_from_INetwork( iface );
+
+    TRACE( "%p, %s\n", iface, debugstr_w(szDescription) );
+
+    return write_profile_string( &network->id, L"Description", szDescription ? szDescription : L"" );
 }
 
 static HRESULT WINAPI network_GetNetworkId(
@@ -558,9 +617,21 @@ static HRESULT WINAPI network_GetCategory(
     INetwork *iface,
     NLM_NETWORK_CATEGORY *pCategory )
 {
-    FIXME( "%p, %p\n", iface, pCategory );
+    struct network *network = impl_from_INetwork( iface );
+    DWORD type, value = NLM_NETWORK_CATEGORY_PUBLIC, size = sizeof(value);
+    HKEY key;
 
-    *pCategory = NLM_NETWORK_CATEGORY_PUBLIC;
+    TRACE( "%p, %p\n", iface, pCategory );
+
+    if (!pCategory) return E_POINTER;
+    if (!open_profile_key( &network->id, KEY_QUERY_VALUE, FALSE, &key ))
+    {
+        if (RegQueryValueExW( key, L"Category", NULL, &type, (BYTE *)&value, &size ) || type != REG_DWORD ||
+            value > NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED)
+            value = NLM_NETWORK_CATEGORY_PUBLIC;
+        RegCloseKey( key );
+    }
+    *pCategory = value;
     return S_OK;
 }
 
@@ -568,8 +639,18 @@ static HRESULT WINAPI network_SetCategory(
     INetwork *iface,
     NLM_NETWORK_CATEGORY NewCategory )
 {
-    FIXME( "%p, %u\n", iface, NewCategory );
-    return E_NOTIMPL;
+    struct network *network = impl_from_INetwork( iface );
+    DWORD value = NewCategory;
+    HKEY key;
+    LONG ret;
+
+    TRACE( "%p, %u\n", iface, NewCategory );
+
+    if (NewCategory > NLM_NETWORK_CATEGORY_DOMAIN_AUTHENTICATED) return E_INVALIDARG;
+    if ((ret = open_profile_key( &network->id, KEY_SET_VALUE, TRUE, &key ))) return HRESULT_FROM_WIN32( ret );
+    ret = RegSetValueExW( key, L"Category", 0, REG_DWORD, (const BYTE *)&value, sizeof(value) );
+    RegCloseKey( key );
+    return ret ? HRESULT_FROM_WIN32( ret ) : S_OK;
 }
 
 static const struct INetworkVtbl network_vtbl =
