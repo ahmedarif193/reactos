@@ -39,6 +39,8 @@
 /* Maximum number of simulated BSS entries. */
 #define VWIFI_MAX_BSS               2
 
+#define VWIFI_MAX_JOBS              8
+
 /* Largest beacon-IE blob per BSS (SSID + supported-rates + DS-parameter IEs). */
 #define VWIFI_MAX_BSS_IE            64
 
@@ -127,7 +129,10 @@ typedef struct _VWIFI_ADAPTER
     NDIS_HANDLE EngineTimer;
     NDIS_HANDLE EngineWorkItem;
     volatile LONG WorkPending;      /* 0/1: a work item is queued/running     */
-    VWIFI_JOB PendingJob;
+    VWIFI_JOB JobQueue[VWIFI_MAX_JOBS];
+    ULONG JobHead;
+    ULONG JobCount;
+    ULONGLONG JobDueTime;
 
     /* Scan OID pending async completion via NdisMOidRequestComplete.
      * Guarded by Lock; at most one scan outstanding. */
@@ -159,7 +164,8 @@ VOID VWifiFree(IN PVOID Buffer);
 /* engine.c */
 NDIS_TIMER_FUNCTION       VWifiEngineTimerDpc;
 NDIS_IO_WORKITEM_FUNCTION VWifiEngineWorker;
-VOID VWifiScheduleJob(IN PVWIFI_ADAPTER Adapter, IN VWIFI_JOB Job, IN ULONG DelayMs);
+BOOLEAN VWifiScheduleJob(IN PVWIFI_ADAPTER Adapter, IN VWIFI_JOB Job, IN ULONG DelayMs);
+VOID VWifiCompletePendingScan(IN PVWIFI_ADAPTER Adapter, IN NDIS_STATUS Status);
 LONG VWifiFindDesiredBss(IN PVWIFI_ADAPTER Adapter);
 VOID VWifiInitFakeBssList(IN PVWIFI_ADAPTER Adapter);
 ULONG VWifiBuildBssList(IN PVWIFI_ADAPTER Adapter, OUT PUCHAR Buffer, IN ULONG BufferLength,

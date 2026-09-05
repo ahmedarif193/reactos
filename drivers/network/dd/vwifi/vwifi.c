@@ -159,7 +159,9 @@ VWifiMiniportInitializeEx(
     Adapter->Dot11.MulticastCipher = DOT11_CIPHER_ALGO_NONE;
 
     Adapter->ConnState = VWifiDisconnected;
-    Adapter->PendingJob = VWifiJobNone;
+    Adapter->JobHead = 0;
+    Adapter->JobCount = 0;
+    Adapter->JobDueTime = 0;
 
     VWifiInitFakeBssList(Adapter);
 
@@ -233,6 +235,8 @@ VWifiMiniportHaltEx(
         NdisMSleep(1000);
     }
 
+    VWifiCompletePendingScan(Adapter, NDIS_STATUS_FAILURE);
+
     if (Adapter->EngineWorkItem)
     {
         NdisFreeIoWorkItem(Adapter->EngineWorkItem);
@@ -271,6 +275,8 @@ VWifiMiniportPauseEx(
     {
         NdisMSleep(1000);
     }
+
+    VWifiCompletePendingScan(Adapter, NDIS_STATUS_FAILURE);
 
     return NDIS_STATUS_SUCCESS;
 }
