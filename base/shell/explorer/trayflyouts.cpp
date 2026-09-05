@@ -87,8 +87,6 @@ public:
         m_AnimAlpha = TFY_ANIM_INITIAL_ALPHA;
         m_AnimStartAlpha = TFY_ANIM_INITIAL_ALPHA;
         SetLayeredWindowAttributes(hWnd, 0, m_AnimAlpha, LWA_ALPHA);
-        SetPropW(hWnd, DWM_PROP_CORNER_RADIUS,
-                 (HANDLE)(ULONG_PTR)ShellScaleForDpi(TFY_FLYOUT_RADIUS));
         SetWindowPos(hWnd, HWND_TOPMOST, x, y + nOffset, cx, cy,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
         if (bActivate)
