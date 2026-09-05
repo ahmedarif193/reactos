@@ -1,5 +1,13 @@
 #pragma once
 
+typedef struct _USER_DEFERRED_FREE
+{
+    SINGLE_LIST_ENTRY Entry;
+    PVOID Object;
+} USER_DEFERRED_FREE, *PUSER_DEFERRED_FREE;
+
+VOID FASTCALL UserProcessDeferredFrees(PTHREADINFO pti);
+
 typedef struct _USER_REFERENCE_ENTRY
 {
    SINGLE_LIST_ENTRY Entry;

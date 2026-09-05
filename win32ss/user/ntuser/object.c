@@ -461,7 +461,10 @@ HANDLE UserAllocHandle(
     _In_ HANDLE_TYPE type,
     _In_ PVOID HandleOwner)
 {
-   PUSER_HANDLE_ENTRY entry = alloc_user_entry(ht);
+   PUSER_HANDLE_ENTRY entry;
+
+   ASSERT(UserIsEnteredExclusive());
+   entry = alloc_user_entry(ht);
    if (!entry)
       return 0;
    entry->ptr  = object;
@@ -481,29 +484,34 @@ HANDLE UserAllocHandle(
 PVOID UserGetObjectNoErr(PUSER_HANDLE_TABLE ht, HANDLE handle, HANDLE_TYPE type )
 {
    PUSER_HANDLE_ENTRY entry;
+   PVOID ptr = NULL;
 
    ASSERT(ht);
 
-   if (!(entry = handle_to_entry(ht, handle )) || entry->type != type)
+   UserDomainLockShared(DLT_HANDLEMANAGER);
+   entry = handle_to_entry(ht, handle );
+   if (entry && entry->type == type &&
+       !((entry->flags & HANDLEENTRY_INDESTROY) && UserIsEnteredShared()))
    {
-      return NULL;
+      ptr = entry->ptr;
    }
-   return entry->ptr;
+   UserDomainUnlockShared(DLT_HANDLEMANAGER);
+   return ptr;
 }
 
 /* return a pointer to a user object from its handle */
 PVOID UserGetObject(PUSER_HANDLE_TABLE ht, HANDLE handle, HANDLE_TYPE type )
 {
-   PUSER_HANDLE_ENTRY entry;
+   PVOID ptr;
 
    ASSERT(ht);
 
-   if (!(entry = handle_to_entry(ht, handle )) || entry->type != type)
+   ptr = UserGetObjectNoErr(ht, handle, type);
+   if (!ptr)
    {
       EngSetLastError(ERROR_INVALID_HANDLE);
-      return NULL;
    }
-   return entry->ptr;
+   return ptr;
 }
 
 
@@ -514,9 +522,12 @@ HANDLE get_user_full_handle(PUSER_HANDLE_TABLE ht,  HANDLE handle )
 
    if ((ULONG_PTR)handle >> 16)
       return handle;
-   if (!(entry = handle_to_entry(ht, handle )))
-      return handle;
-   return entry_to_handle( ht, entry );
+   UserDomainLockShared(DLT_HANDLEMANAGER);
+   entry = handle_to_entry(ht, handle );
+   if (entry)
+      handle = entry_to_handle( ht, entry );
+   UserDomainUnlockShared(DLT_HANDLEMANAGER);
+   return handle;
 }
 
 
@@ -525,10 +536,17 @@ void *get_user_object_handle(PUSER_HANDLE_TABLE ht,  HANDLE* handle, HANDLE_TYPE
 {
    PUSER_HANDLE_ENTRY entry;
 
-   if (!(entry = handle_to_entry(ht, *handle )) || entry->type != type)
-      return NULL;
-   *handle = entry_to_handle( ht, entry );
-   return entry->ptr;
+   PVOID ptr = NULL;
+
+   UserDomainLockShared(DLT_HANDLEMANAGER);
+   entry = handle_to_entry(ht, *handle );
+   if (entry && entry->type == type)
+   {
+      *handle = entry_to_handle( ht, entry );
+      ptr = entry->ptr;
+   }
+   UserDomainUnlockShared(DLT_HANDLEMANAGER);
+   return ptr;
 }
 
 
@@ -647,11 +665,25 @@ UserDereferenceObject(PVOID Object)
     ASSERT(ObjHead->cLockObj >= 1);
     ASSERT(ObjHead->cLockObj < 0x10000);
 
-    if (--ObjHead->cLockObj == 0)
+    if (InterlockedDecrement((PLONG)&ObjHead->cLockObj) == 0)
     {
         PUSER_HANDLE_ENTRY entry;
         HANDLE_TYPE type;
 
+        if (UserIsEnteredShared())
+        {
+            PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+            PUSER_DEFERRED_FREE pdf = pti ? ExAllocatePoolWithTag(NonPagedPool, sizeof(*pdf), USERTAG_DEFERREDFREE) : NULL;
+
+            if (pdf)
+            {
+                pdf->Object = Object;
+                PushEntryList(&pti->DeferredFreeList, &pdf->Entry);
+                return TRUE;
+            }
+        }
+
+        UserDomainLockExclusive(DLT_HANDLEMANAGER);
         entry = handle_to_entry(gHandleTable, ObjHead->h);
 
         ASSERT(entry != NULL);
@@ -664,6 +696,7 @@ UserDereferenceObject(PVOID Object)
 
         /* We can now get rid of everything */
         free_user_entry(gHandleTable, entry );
+        UserDomainUnlockExclusive(DLT_HANDLEMANAGER);
 
 #if 0
         /* Call the object destructor */
@@ -703,12 +736,16 @@ UserObjectInDestroy(HANDLE h)
 {
   PUSER_HANDLE_ENTRY entry;
 
-  if (!(entry = handle_to_entry( gHandleTable, h )))
-  {
+  BOOL Ret = TRUE;
+
+  UserDomainLockShared(DLT_HANDLEMANAGER);
+  entry = handle_to_entry( gHandleTable, h );
+  if (entry)
+     Ret = (entry->flags & HANDLEENTRY_INDESTROY) != 0;
+  UserDomainUnlockShared(DLT_HANDLEMANAGER);
+  if (!entry)
      SetLastNtError( STATUS_INVALID_HANDLE );
-     return TRUE;
-  }
-  return (entry->flags & HANDLEENTRY_INDESTROY);
+  return Ret;
 }
 
 BOOL
@@ -727,12 +764,30 @@ UserDeleteObject(HANDLE h, HANDLE_TYPE type )
 
 VOID
 FASTCALL
+UserProcessDeferredFrees(PTHREADINFO pti)
+{
+    PSINGLE_LIST_ENTRY Entry;
+    PUSER_DEFERRED_FREE pdf;
+
+    UserEnterExclusive();
+    while ((Entry = PopEntryList(&pti->DeferredFreeList)) != NULL)
+    {
+        pdf = CONTAINING_RECORD(Entry, USER_DEFERRED_FREE, Entry);
+        UserReferenceObject(pdf->Object);
+        UserDereferenceObject(pdf->Object);
+        ExFreePoolWithTag(pdf, USERTAG_DEFERREDFREE);
+    }
+    UserLeave();
+}
+
+VOID
+FASTCALL
 UserReferenceObject(PVOID obj)
 {
    PHEAD ObjHead = obj;
    ASSERT(ObjHead->cLockObj < 0x10000);
 
-   ObjHead->cLockObj++;
+   InterlockedIncrement((PLONG)&ObjHead->cLockObj);
 }
 
 PVOID
@@ -796,7 +851,8 @@ NtUserValidateHandleSecure(
    PUSER_HANDLE_ENTRY entry;
    BOOL Ret = FALSE;
 
-   UserEnterExclusive();
+   UserEnterShared();
+   UserDomainLockShared(DLT_HANDLEMANAGER);
 
    if (!(entry = handle_to_entry(gHandleTable, handle )))
    {
@@ -830,6 +886,7 @@ NtUserValidateHandleSecure(
    if (gptiCurrent->ppi->pW32Job == ppi->pW32Job) Ret = TRUE;
 
 Exit:
+   UserDomainUnlockShared(DLT_HANDLEMANAGER);
    UserLeave();
    return Ret;
 }

@@ -12,10 +12,10 @@ BOOL FASTCALL RegisterControlAtoms(VOID);
 
 /* GLOBALS ********************************************************************/
 
-PTHREADINFO gptiCurrent = NULL;
 PPROCESSINFO gppiInputProvider = NULL;
 BOOL g_AlwaysDisplayVersion = FALSE;
-ERESOURCE UserLock;
+USER_CRIT gUserCrit;
+USER_DOMAIN_LOCK gUserDomainLocks[DLT_MAX];
 ATOM AtomMessage;       // Window Message atom.
 ATOM AtomWndObj;        // Window Object atom.
 ATOM AtomLayer;         // Window Layer atom.
@@ -320,42 +320,223 @@ NtUserInitialize(
 RETURN
    True if current thread owns the lock (possibly shared)
 */
-BOOL FASTCALL UserIsEntered(VOID)
+VOID FASTCALL UserInitCrit(VOID)
 {
-    return ExIsResourceAcquiredExclusiveLite(&UserLock) ||
-           ExIsResourceAcquiredSharedLite(&UserLock);
+    ExInitializePushLock(&gUserCrit.Lock);
 }
 
 BOOL FASTCALL UserIsEnteredExclusive(VOID)
 {
-    return ExIsResourceAcquiredExclusiveLite(&UserLock);
+    return gUserCrit.OwnerExclusive == KeGetCurrentThread();
+}
+
+BOOL FASTCALL UserIsEnteredShared(VOID)
+{
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+
+    return !UserIsEnteredExclusive() && pti && pti->cSharedCrit != 0;
+}
+
+BOOL FASTCALL UserIsEntered(VOID)
+{
+    return UserIsEnteredExclusive() || UserIsEnteredShared();
 }
 
 VOID FASTCALL CleanupUserImpl(VOID)
 {
-    ExDeleteResourceLite(&UserLock);
 }
 
 VOID FASTCALL UserEnterShared(VOID)
 {
+    PTHREADINFO pti;
+
+    if (gUserCrit.OwnerExclusive == KeGetCurrentThread())
+    {
+        gUserCrit.RecursionExclusive++;
+        return;
+    }
+    pti = PsGetCurrentThreadWin32Thread();
+    if (!pti)
+    {
+        UserEnterExclusive();
+        return;
+    }
+    if (pti->cSharedCrit)
+    {
+        pti->cSharedCrit++;
+        return;
+    }
     KeEnterCriticalRegion();
-    ExAcquireResourceSharedLite(&UserLock, TRUE);
+    ExfAcquirePushLockShared(&gUserCrit.Lock);
+    gUserCrit.HandoffPending = 0;
+    pti->cSharedCrit = 1;
+}
+
+static VOID FASTCALL UserCritWaitHandoff(PKTHREAD Thread)
+{
+    LARGE_INTEGER Freq, Now;
+    LONGLONG Deadline;
+
+    Now = KeQueryPerformanceCounter(&Freq);
+    Deadline = Now.QuadPart + Freq.QuadPart / 20000;
+    while (gUserCrit.HandoffPending && gUserCrit.LastOwner == Thread)
+    {
+        YieldProcessor();
+        Now = KeQueryPerformanceCounter(NULL);
+        if (Now.QuadPart >= Deadline)
+            break;
+    }
 }
 
 VOID FASTCALL UserEnterExclusive(VOID)
 {
+    PKTHREAD Thread = KeGetCurrentThread();
+
     ASSERT_NOGDILOCKS();
+    if (gUserCrit.OwnerExclusive == Thread)
+    {
+        gUserCrit.RecursionExclusive++;
+        return;
+    }
+    ASSERT(!UserIsEnteredShared());
+    if (gUserCrit.HandoffPending && gUserCrit.LastOwner == Thread)
+        UserCritWaitHandoff(Thread);
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&UserLock, TRUE);
-    gptiCurrent = PsGetCurrentThreadWin32Thread();
+    ExfAcquirePushLockExclusive(&gUserCrit.Lock);
+    gUserCrit.HandoffPending = 0;
+    gUserCrit.OwnerExclusive = Thread;
+    gUserCrit.RecursionExclusive = 1;
 }
 
 VOID FASTCALL UserLeave(VOID)
 {
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+
     ASSERT_NOGDILOCKS();
     ASSERT(UserIsEntered());
-    ExReleaseResourceLite(&UserLock);
-    KeLeaveCriticalRegion();
+    if (gUserCrit.OwnerExclusive == KeGetCurrentThread())
+    {
+        if (--gUserCrit.RecursionExclusive)
+            return;
+        gUserCrit.OwnerExclusive = NULL;
+        gUserCrit.LastOwner = KeGetCurrentThread();
+        if (gUserCrit.Lock.Waiting)
+            InterlockedExchange(&gUserCrit.HandoffPending, 1);
+        ExfReleasePushLockExclusive(&gUserCrit.Lock);
+        KeLeaveCriticalRegion();
+    }
+    else
+    {
+        ASSERT(pti && pti->cSharedCrit);
+        if (--pti->cSharedCrit)
+            return;
+        ExfReleasePushLockShared(&gUserCrit.Lock);
+        KeLeaveCriticalRegion();
+    }
+
+    if (pti && pti->DeferredFreeList.Next && !UserIsEntered())
+        UserProcessDeferredFrees(pti);
+}
+
+VOID FASTCALL UserLeaveCo(VOID)
+{
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+
+    if (pti)
+    {
+        ULONG Depth = pti->cCritDispositionDepth++;
+
+        if (Depth < sizeof(ULONG_PTR) * 8)
+        {
+            if (UserIsEnteredExclusive())
+                pti->ulCritDisposition |= ((ULONG_PTR)1 << Depth);
+            else
+                pti->ulCritDisposition &= ~((ULONG_PTR)1 << Depth);
+        }
+    }
+    UserLeave();
+}
+
+VOID FASTCALL UserEnterCo(VOID)
+{
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+    BOOL Exclusive = TRUE;
+
+    if (pti && pti->cCritDispositionDepth)
+    {
+        ULONG Depth = --pti->cCritDispositionDepth;
+
+        if (Depth < sizeof(ULONG_PTR) * 8)
+            Exclusive = (pti->ulCritDisposition >> Depth) & 1;
+    }
+    if (Exclusive)
+        UserEnterExclusive();
+    else
+        UserEnterShared();
+}
+
+VOID FASTCALL UserInitDomainLocks(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < DLT_MAX; i++)
+    {
+        ExInitializePushLock(&gUserDomainLocks[i].Lock);
+        gUserDomainLocks[i].OwnerExclusive = NULL;
+        gUserDomainLocks[i].RecursionExclusive = 0;
+    }
+}
+
+VOID FASTCALL UserDomainLockExclusive(USER_DOMAIN_LOCK_TYPE Type)
+{
+    PUSER_DOMAIN_LOCK pLock = &gUserDomainLocks[Type];
+    PKTHREAD Thread = KeGetCurrentThread();
+
+    if (UserIsEnteredExclusive())
+        return;
+    if (pLock->OwnerExclusive == Thread)
+    {
+        pLock->RecursionExclusive++;
+        return;
+    }
+    ExfAcquirePushLockExclusive(&pLock->Lock);
+    pLock->OwnerExclusive = Thread;
+    pLock->RecursionExclusive = 1;
+}
+
+VOID FASTCALL UserDomainUnlockExclusive(USER_DOMAIN_LOCK_TYPE Type)
+{
+    PUSER_DOMAIN_LOCK pLock = &gUserDomainLocks[Type];
+
+    if (UserIsEnteredExclusive())
+        return;
+    ASSERT(pLock->OwnerExclusive == KeGetCurrentThread());
+    if (--pLock->RecursionExclusive)
+        return;
+    pLock->OwnerExclusive = NULL;
+    ExfReleasePushLockExclusive(&pLock->Lock);
+}
+
+VOID FASTCALL UserDomainLockShared(USER_DOMAIN_LOCK_TYPE Type)
+{
+    PUSER_DOMAIN_LOCK pLock = &gUserDomainLocks[Type];
+
+    if (UserIsEnteredExclusive())
+        return;
+    if (pLock->OwnerExclusive == KeGetCurrentThread())
+        return;
+    ExfAcquirePushLockShared(&pLock->Lock);
+}
+
+VOID FASTCALL UserDomainUnlockShared(USER_DOMAIN_LOCK_TYPE Type)
+{
+    PUSER_DOMAIN_LOCK pLock = &gUserDomainLocks[Type];
+
+    if (UserIsEnteredExclusive())
+        return;
+    if (pLock->OwnerExclusive == KeGetCurrentThread())
+        return;
+    ExfReleasePushLockShared(&pLock->Lock);
 }
 
 /* EOF */
