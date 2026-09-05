@@ -173,6 +173,10 @@ typedef struct _THREADINFO
     LIST_ENTRY W32CallbackListHead;
     SINGLE_LIST_ENTRY  ReferencesList;
     ULONG cExclusiveLocks;
+    ULONG_PTR ulCritDisposition;
+    ULONG cCritDispositionDepth;
+    SINGLE_LIST_ENTRY DeferredFreeList;
+    ULONG cSharedCrit;
 #if DBG
     USHORT acExclusiveLockCount[GDIObjTypeTotal + 1];
     UINT cRefObjectCo;

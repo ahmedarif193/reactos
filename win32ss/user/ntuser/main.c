@@ -1149,7 +1149,8 @@ DriverEntry(
     }
 
     /* Init the global user lock */
-    ExInitializeResourceLite(&UserLock);
+    UserInitCrit();
+    UserInitDomainLocks();
 
     /* Lock while we use the heap (UserHeapAlloc asserts on this) */
     UserEnterExclusive();

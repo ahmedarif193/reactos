@@ -1,7 +1,25 @@
 #pragma once
 
-#define UserEnterCo UserEnterExclusive
-#define UserLeaveCo UserLeave
+typedef enum _USER_DOMAIN_LOCK_TYPE
+{
+    DLT_HANDLEMANAGER,
+    DLT_ASYNCKEYSTATE,
+    DLT_QUEUE,
+    DLT_POST,
+    DLT_HOOK,
+    DLT_WINEVENT,
+    DLT_DESKTOP,
+    DLT_THREADINFO,
+    DLT_FOREGROUND,
+    DLT_MAX
+} USER_DOMAIN_LOCK_TYPE;
+
+typedef struct _USER_DOMAIN_LOCK
+{
+    EX_PUSH_LOCK Lock;
+    PKTHREAD OwnerExclusive;
+    ULONG RecursionExclusive;
+} USER_DOMAIN_LOCK, *PUSER_DOMAIN_LOCK;
 
 typedef VOID (*TL_FN_FREE)(PVOID);
 
@@ -14,7 +32,7 @@ typedef struct _TL
 } TL, *PTL;
 
 extern PSERVERINFO gpsi;
-extern PTHREADINFO gptiCurrent;
+#define gptiCurrent ((PTHREADINFO)PsGetCurrentThreadWin32Thread())
 extern PPROCESSINFO gppiList;
 extern PPROCESSINFO ppiScrnSaver;
 extern PPROCESSINFO gppiInputProvider;
@@ -31,7 +49,17 @@ extern ATOM AtomDwmBackdropColorization;
 extern ATOM AtomDwmBackdropRegion;
 extern ATOM AtomDwmBackdropNcExtend;
 extern ATOM AtomDwmCornerRadius;
-extern ERESOURCE UserLock;
+typedef struct _USER_CRIT
+{
+    EX_PUSH_LOCK Lock;
+    PKTHREAD OwnerExclusive;
+    ULONG RecursionExclusive;
+    PKTHREAD LastOwner;
+    volatile LONG HandoffPending;
+} USER_CRIT, *PUSER_CRIT;
+
+extern USER_CRIT gUserCrit;
+VOID FASTCALL UserInitCrit(VOID);
 
 CODE_SEG("INIT") NTSTATUS NTAPI InitUserImpl(VOID);
 VOID FASTCALL CleanupUserImpl(VOID);
@@ -40,6 +68,14 @@ VOID FASTCALL UserEnterExclusive(VOID);
 VOID FASTCALL UserLeave(VOID);
 BOOL FASTCALL UserIsEntered(VOID);
 BOOL FASTCALL UserIsEnteredExclusive(VOID);
+BOOL FASTCALL UserIsEnteredShared(VOID);
+VOID FASTCALL UserEnterCo(VOID);
+VOID FASTCALL UserLeaveCo(VOID);
+VOID FASTCALL UserInitDomainLocks(VOID);
+VOID FASTCALL UserDomainLockExclusive(USER_DOMAIN_LOCK_TYPE Type);
+VOID FASTCALL UserDomainUnlockExclusive(USER_DOMAIN_LOCK_TYPE Type);
+VOID FASTCALL UserDomainLockShared(USER_DOMAIN_LOCK_TYPE Type);
+VOID FASTCALL UserDomainUnlockShared(USER_DOMAIN_LOCK_TYPE Type);
 DWORD FASTCALL UserGetLanguageToggle(_In_ LPCWSTR pszType, _In_ DWORD dwDefaultValue);
 
 _Success_(return != FALSE)
