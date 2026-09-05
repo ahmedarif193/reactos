@@ -11210,6 +11210,7 @@ typedef struct _DXGKP_ADAPTER_START_PROGRESS
 {
     BOOLEAN MiniportStarted;
     BOOLEAN VidMmStarted;
+    BOOLEAN PagingSystemContextCreated;
     BOOLEAN Mms2Started;
     BOOLEAN SchedulerStarted;
     BOOLEAN VidPnCreated;
@@ -11298,6 +11299,16 @@ DxgkpRollbackAdapterStart(
     KeRemoveQueueDpc(&Adapter->DpcObject);
     KeFlushQueuedDpcs();
     DxgkpWaitForVidSchCallbacks(Adapter);
+    if (Progress->PagingSystemContextCreated)
+    {
+        StopStatus = DxgkDestroyPagingSystemContext(Adapter);
+        if (!NT_SUCCESS(StopStatus))
+        {
+            DXGKRNL_ERR("DxgkAdapterStart: rollback could not destroy the paging system context 0x%08lX\n",
+                        StopStatus);
+            return StopStatus;
+        }
+    }
     if (Progress->MiniportStarted)
         StopStatus = DxgkpStopMiniportForTeardown(Adapter);
     if (!NT_SUCCESS(StopStatus))
@@ -12312,6 +12323,17 @@ DxgkAdapterStart(
                     CapsStatus, Adapter->PhysicalAdapterCaps.NumExecutionNodes, Adapter->PhysicalAdapterCaps.PagingNodeIndex,
                     Adapter->PhysicalAdapterCaps.DxgkPhysicalAdapterHandle, Adapter->PhysicalAdapterCaps.Flags.Value);
     }
+    if (DxgkAdapterStartRoleRequiresScheduler(Role))
+    {
+        Status = DxgkCreatePagingSystemContext(Adapter);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkAdapterStart: paging system context creation failed 0x%08lX\n",
+                        Status);
+            goto StartRollback;
+        }
+        Progress.PagingSystemContextCreated = TRUE;
+    }
     DxgkVidMmDumpSegments(Adapter);
     {
         BOOLEAN ProviderStarted;
@@ -13037,6 +13059,14 @@ DxgkpAdapterStopInternal(
     DxgkWaitForAdapterRundown(Adapter);
     if (!StopDeviceEstablishedBoundary)
         DxgkVidMmQuiesceAdapter(Adapter);
+
+    Status = DxgkDestroyPagingSystemContext(Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkAdapterStop: paging system context cleanup failed 0x%08lX\n",
+                    Status);
+        goto CompleteStop;
+    }
 
     if (ReleasePostDisplayOwnership && !Adapter->MiniportDeviceStopped)
     {

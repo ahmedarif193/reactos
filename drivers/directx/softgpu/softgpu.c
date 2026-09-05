@@ -1695,9 +1695,10 @@ SoftGpuDdiCreateDevice(
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     Process = (PSOFTGPU_PROCESS)CreateDevice->hKmdProcess;
-    if (Process == NULL ||
-        Process->Magic != SOFTGPU_PROCESS_MAGIC ||
-        Process->Adapter != Device)
+    if ((!CreateDevice->Flags.SystemDevice && Process == NULL) ||
+        (Process != NULL &&
+         (Process->Magic != SOFTGPU_PROCESS_MAGIC ||
+          Process->Adapter != Device)))
     {
         return STATUS_INVALID_PARAMETER;
     }

@@ -1269,6 +1269,251 @@ DxgkpDestroyMiniportDevice(
     return Status;
 }
 
+/*
+ * Create the native VidSch-style device/context pair used exclusively by
+ * VidMm paging.  hSystemContext is a real miniport context handle, not an OS
+ * context token and not one of the caller's render contexts.  Keeping this
+ * pair adapter-owned also prevents a client-device close from invalidating
+ * the context while another process is still updating page tables.
+ */
+NTSTATUS
+DxgkCreatePagingSystemContext(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKRNL_DEVICE Device;
+    PDXGKRNL_CONTEXT Context;
+    DXGK_DEVICE_WORK_TERMINAL_STATE WorkTerminal;
+    DXGKARG_CREATEDEVICE CreateDeviceArg;
+    DXGKARG_CREATECONTEXT CreateContextArg;
+    ULONG PagingNode;
+    NTSTATUS Status;
+    NTSTATUS CleanupStatus;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL || Adapter->MiniportContext == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Adapter->PagingSystemDevice != NULL ||
+        Adapter->PagingSystemContext != NULL)
+    {
+        return (Adapter->PagingSystemDevice != NULL &&
+                Adapter->PagingSystemContext != NULL &&
+                Adapter->PagingSystemDevice->hMiniportDevice != NULL &&
+                Adapter->PagingSystemContext->hMiniportContext != NULL)
+                   ? STATUS_SUCCESS
+                   : STATUS_INVALID_DEVICE_STATE;
+    }
+    if (Adapter->MiniportContext->IsDisplayOnlyDriver)
+        return STATUS_SUCCESS;
+    if (DXGK_CB_FULL(Adapter, DxgkDdiCreateDevice) == NULL ||
+        DXGK_CB_FULL(Adapter, DxgkDdiCreateContext) == NULL)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    PagingNode = 0;
+    if (Adapter->PhysicalAdapterCapsValid)
+        PagingNode = Adapter->PhysicalAdapterCaps.PagingNodeIndex;
+    if (PagingNode >= Adapter->NodeCount)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    Device = ExAllocatePoolWithTag(NonPagedPool,
+                                   sizeof(*Device),
+                                   TAG_DXGK_DEVICE);
+    Context = ExAllocatePoolWithTag(NonPagedPool,
+                                    sizeof(*Context),
+                                    TAG_DXGK_CONTEXT);
+    if (Device == NULL || Context == NULL)
+    {
+        if (Context != NULL)
+            ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+        if (Device != NULL)
+            ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(Device, sizeof(*Device));
+    Device->Adapter = Adapter;
+    Device->OwnerProcess = PsInitialSystemProcess;
+    Device->ReferenceCount = 1;
+    Device->ExecutionState = D3DKMT_DEVICEEXECUTION_ACTIVE;
+    InitializeListHead(&Device->ContextListHead);
+    InitializeListHead(&Device->SyncObjListHead);
+    InitializeListHead(&Device->OverlayListHead);
+    InitializeListHead(&Device->DeviceListEntry);
+    DxgkProcessDeviceLinkInitialize(&Device->ProcessDeviceLink, Device);
+    RtlZeroMemory(&WorkTerminal, sizeof(WorkTerminal));
+    WorkTerminal.Destroying = &Device->Destroying;
+    WorkTerminal.ExecutionState = &Device->ExecutionState;
+    WorkTerminal.ActiveExecutionState = D3DKMT_DEVICEEXECUTION_ACTIVE;
+    WorkTerminal.TerminalStatus = STATUS_DEVICE_REMOVED;
+    DxgkDeviceWorkCoreInitializeLedger(&Device->WorkLedger, &WorkTerminal);
+    DxgkSyncWaitCoreInitializeRegistry(&Device->SyncWaitRegistry);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    KeInitializeSpinLock(&Device->PageFaultLock);
+#endif
+    DxgkPresentLimitCoreInitialize(&Device->PresentLimit,
+                                   DXGKRNL_DEFAULT_QUEUED_PRESENT_LIMIT);
+    ExInitializeFastMutex(&Device->DeviceMutex);
+    KeInitializeEvent(&Device->ReferencesDrainedEvent,
+                      NotificationEvent,
+                      FALSE);
+
+    RtlZeroMemory(Context, sizeof(*Context));
+    Context->Device = Device;
+    Context->NodeOrdinal = PagingNode;
+    Context->EngineAffinity = 1;
+    Context->ReferenceCount = 1;
+    InitializeListHead(&Context->ContextListEntry);
+    KeInitializeEvent(&Context->ReferencesDrainedEvent,
+                      NotificationEvent,
+                      FALSE);
+    DxgkpInitializeContextStreamState(Context);
+
+    Adapter->PagingSystemDevice = Device;
+    Adapter->PagingSystemContext = Context;
+
+    if (!DxgkBeginKmdTransaction(Adapter))
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto CreationFailed;
+    }
+
+    RtlZeroMemory(&CreateDeviceArg, sizeof(CreateDeviceArg));
+    CreateDeviceArg.hDevice = (HANDLE)Device;
+    CreateDeviceArg.Flags.SystemDevice = 1;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    CreateDeviceArg.hKmdProcess = NULL;
+#endif
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateDevice)(
+                 Adapter->MiniportDeviceContext,
+                 &CreateDeviceArg);
+    if (!NT_SUCCESS(Status))
+    {
+        if (CreateDeviceArg.hDevice != NULL &&
+            CreateDeviceArg.hDevice != (HANDLE)Device)
+        {
+            Device->hMiniportDevice = CreateDeviceArg.hDevice;
+        }
+        DxgkEndKmdTransaction(Adapter);
+        goto CreationFailed;
+    }
+    if (CreateDeviceArg.hDevice == NULL ||
+        CreateDeviceArg.hDevice == (HANDLE)Device)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        DxgkEndKmdTransaction(Adapter);
+        goto CreationFailed;
+    }
+    Device->hMiniportDevice = CreateDeviceArg.hDevice;
+
+    RtlZeroMemory(&CreateContextArg, sizeof(CreateContextArg));
+    CreateContextArg.hContext = (HANDLE)Context;
+    CreateContextArg.NodeOrdinal = PagingNode;
+    CreateContextArg.EngineAffinity = 1;
+    CreateContextArg.Flags.SystemContext = 1;
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateContext)(
+                 Device->hMiniportDevice,
+                 &CreateContextArg);
+    if (!NT_SUCCESS(Status))
+    {
+        if (CreateContextArg.hContext != NULL &&
+            CreateContextArg.hContext != (HANDLE)Context)
+        {
+            Context->hMiniportContext = CreateContextArg.hContext;
+        }
+        DxgkEndKmdTransaction(Adapter);
+        goto CreationFailed;
+    }
+    if (CreateContextArg.hContext == NULL ||
+        CreateContextArg.hContext == (HANDLE)Context)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        DxgkEndKmdTransaction(Adapter);
+        goto CreationFailed;
+    }
+    Context->hMiniportContext = CreateContextArg.hContext;
+    Context->ContextInfo = CreateContextArg.ContextInfo;
+    DxgkEndKmdTransaction(Adapter);
+
+    DXGKRNL_INFO("DxgkCreatePagingSystemContext: device=%p context=%p node=%lu engine=0x%x dma-size=0x%x segment-set=0x%x private=%u\n",
+                 Device->hMiniportDevice,
+                 Context->hMiniportContext,
+                 PagingNode,
+                 Context->EngineAffinity,
+                 Context->ContextInfo.DmaBufferSize,
+                 Context->ContextInfo.DmaBufferSegmentSet,
+                 Context->ContextInfo.DmaBufferPrivateDataSize);
+    return STATUS_SUCCESS;
+
+CreationFailed:
+    CleanupStatus = DxgkDestroyPagingSystemContext(Adapter);
+    if (!NT_SUCCESS(CleanupStatus))
+    {
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: creation failed 0x%08lx and cleanup failed 0x%08lx\n",
+                    Status,
+                    CleanupStatus);
+        return CleanupStatus;
+    }
+    return Status;
+}
+
+NTSTATUS
+DxgkDestroyPagingSystemContext(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKRNL_CONTEXT Context;
+    PDXGKRNL_DEVICE Device;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Context = Adapter->PagingSystemContext;
+    Device = Adapter->PagingSystemDevice;
+    if (Context != NULL)
+    {
+        InterlockedExchange(&Context->Destroying, 1);
+        if (InterlockedCompareExchange(&Context->TeardownReferencesDrained,
+                                       1,
+                                       0) == 0)
+        {
+            DxgkpWaitForContextReferences(Context);
+        }
+        Status = DxgkpDestroyMiniportContext(Adapter,
+                                             Context->hMiniportContext);
+        if (!NT_SUCCESS(Status))
+        {
+            InterlockedExchange(&Context->MiniportDestroyPending, 1);
+            return Status;
+        }
+        Context->hMiniportContext = NULL;
+        Adapter->PagingSystemContext = NULL;
+        ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
+    }
+
+    if (Device != NULL)
+    {
+        InterlockedExchange(&Device->Destroying, 1);
+        if (!DxgkpWaitForDeviceReferences(Device))
+            return STATUS_DEVICE_BUSY;
+        Status = DxgkpDestroyMiniportDevice(Adapter,
+                                            Device->hMiniportDevice);
+        if (!NT_SUCCESS(Status))
+        {
+            InterlockedExchange(&Device->MiniportDestroyPending, 1);
+            return Status;
+        }
+        Device->hMiniportDevice = NULL;
+        Adapter->PagingSystemDevice = NULL;
+        ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+    }
+
+    return STATUS_SUCCESS;
+}
+
 /* Context must be detached from Device->ContextListHead and DeviceMutex must
  * not be held. The helper waits transient references before final teardown. */
 static NTSTATUS
