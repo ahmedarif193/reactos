@@ -947,7 +947,7 @@ BOOL TaskPreview_IsHover(VOID)
 VOID TaskPreview_Hide(VOID)
 {
     if (g_pTaskPreview && g_pTaskPreview->IsWindow())
-        g_pTaskPreview->DestroyWindow();
+        ::DestroyWindow(g_pTaskPreview->m_hWnd);
     g_pTaskPreview = NULL;
 }
 
@@ -3251,7 +3251,7 @@ VOID TrayCalendar_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor)
             g_pTrayCalendar->FadeOut();
             return;
         }
-        g_pTrayCalendar->DestroyWindow();
+        ::DestroyWindow(g_pTrayCalendar->m_hWnd);
         g_pTrayCalendar = NULL;
     }
 
@@ -3273,7 +3273,7 @@ VOID TrayFlyouts_Destroy(VOID)
 {
     TaskPreview_Hide();
     if (g_pTrayCalendar && g_pTrayCalendar->IsWindow())
-        g_pTrayCalendar->DestroyWindow();
+        ::DestroyWindow(g_pTrayCalendar->m_hWnd);
     g_pTrayCalendar = NULL;
     TrayFlyoutsAux_Destroy();
 }
@@ -4279,7 +4279,7 @@ VOID TrayVolume_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor)
             g_pTrayVolume->FadeOut();
             return;
         }
-        g_pTrayVolume->DestroyWindow();
+        ::DestroyWindow(g_pTrayVolume->m_hWnd);
         g_pTrayVolume = NULL;
     }
 
@@ -5293,7 +5293,7 @@ VOID TrayMixer_Open(const RECT *prcAnchor)
 
     if (g_pVolumeMixer && g_pVolumeMixer->IsWindow())
     {
-        g_pVolumeMixer->DestroyWindow();
+        ::DestroyWindow(g_pVolumeMixer->m_hWnd);
         g_pVolumeMixer = NULL;
     }
 
@@ -7240,7 +7240,7 @@ VOID TrayNetwork_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor)
             g_pTrayNetwork->FadeOut();
             return;
         }
-        g_pTrayNetwork->DestroyWindow();
+        ::DestroyWindow(g_pTrayNetwork->m_hWnd);
         g_pTrayNetwork = NULL;
     }
     CTrayNetworkWnd *pNetwork = new CTrayNetworkWnd();
@@ -7726,7 +7726,7 @@ VOID TrayPower_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor)
             g_pTrayPower->FadeOut();
             return;
         }
-        g_pTrayPower->DestroyWindow();
+        ::DestroyWindow(g_pTrayPower->m_hWnd);
         g_pTrayPower = NULL;
     }
 
@@ -7745,12 +7745,12 @@ VOID TrayPower_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor)
 VOID TrayFlyoutsAux_Destroy(VOID)
 {
     if (g_pTrayPower && g_pTrayPower->IsWindow())
-        g_pTrayPower->DestroyWindow();
+        ::DestroyWindow(g_pTrayPower->m_hWnd);
     g_pTrayPower = NULL;
     if (g_pTrayVolume && g_pTrayVolume->IsWindow())
-        g_pTrayVolume->DestroyWindow();
+        ::DestroyWindow(g_pTrayVolume->m_hWnd);
     g_pTrayVolume = NULL;
     if (g_pTrayNetwork && g_pTrayNetwork->IsWindow())
-        g_pTrayNetwork->DestroyWindow();
+        ::DestroyWindow(g_pTrayNetwork->m_hWnd);
     g_pTrayNetwork = NULL;
 }
