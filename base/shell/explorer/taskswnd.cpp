@@ -2728,9 +2728,9 @@ public:
         BOOL bChecked = (uState & CDIS_CHECKED);
         BOOL bHot = (uState & CDIS_HOT);
         BOOL bPressed = (uState & CDIS_SELECTED);
-        INT nStep = ShellScaleForDpi(2);
+        INT nStep = ShellScaleForDpi(6);
         RECT rcFace = rc;
-        COLORREF crEdge = 0;
+        COLORREF crEdge = 0, crTop = 0, crBottom = 0;
         BOOL bFill = FALSE;
 
         if (nLayers > 3)
@@ -2742,8 +2742,8 @@ public:
         {
             BOOL bFlash = (uState & CDIS_MARKED) != 0;
             RECT rcWell = rcFace;
-            INT radius = ShellScaleForDpi(6);
-            INT liftFill, liftEdge, amp;
+            INT radius = ShellScaleForDpi(3);
+            INT liftFill, liftEdge, amp, i;
             BOOL bGlow = bHot || bChecked || bPressed || bFlash;
             COLORREF crGlow = 0;
             POINT ptGlow;
@@ -2775,6 +2775,14 @@ public:
                         ptGlow.y = pt.y;
                 }
             }
+            for (i = nLayers - 1; i >= 1; i--)
+            {
+                RECT rcBack = rcWell;
+
+                OffsetRect(&rcBack, i * nStep, 0);
+                DrawWin7Well(hdc, &rcBack, radius, max(0, liftFill - i),
+                             max(0, liftEdge - i * 6), FALSE, 0, ptGlow, 0);
+            }
             DrawWin7Well(hdc, &rcWell, radius, liftFill, liftEdge, bGlow, crGlow, ptGlow, amp);
             if (bChecked && !bPressed)
             {
@@ -2790,13 +2798,15 @@ public:
         }
         else if (bPressed || bChecked)
         {
-            DrawVertGradient(hdc, &rcFace, RGB(26, 29, 32), RGB(44, 49, 54));
+            crTop = RGB(26, 29, 32);
+            crBottom = RGB(44, 49, 54);
             crEdge = RGB(88, 95, 102);
             bFill = TRUE;
         }
         else if (bHot)
         {
-            DrawVertGradient(hdc, &rcFace, RGB(78, 84, 90), RGB(46, 51, 56));
+            crTop = RGB(78, 84, 90);
+            crBottom = RGB(46, 51, 56);
             crEdge = RGB(102, 110, 118);
             bFill = TRUE;
         }
@@ -2804,33 +2814,33 @@ public:
         if (bFill && !m_bMaterial)
         {
             HBRUSH hbrEdge = CreateSolidBrush(crEdge);
+            INT i;
+
+            for (i = nLayers - 1; i >= 1; i--)
+            {
+                RECT rcBack = rcFace;
+
+                OffsetRect(&rcBack, i * nStep, 0);
+                DrawVertGradient(hdc, &rcBack, ShellLiftColor(crTop, -8),
+                                 ShellLiftColor(crBottom, -8));
+                FrameRect(hdc, &rcBack, hbrEdge);
+            }
+            DrawVertGradient(hdc, &rcFace, crTop, crBottom);
             FrameRect(hdc, &rcFace, hbrEdge);
             DeleteObject(hbrEdge);
         }
 
-        if (nLayers > 1)
-        {
-            HBRUSH hbrPage = CreateSolidBrush(bFill ? crEdge : RGB(88, 95, 102));
-            INT i;
-            for (i = 1; i < nLayers; i++)
-            {
-                RECT rcPage;
-                rcPage.left = rcFace.right + i * nStep - 1;
-                rcPage.right = rcPage.left + 1;
-                rcPage.top = rc.top + (i * nStep) / 2;
-                rcPage.bottom = rc.bottom - (i * nStep) / 2;
-                FillRect(hdc, &rcPage, hbrPage);
-            }
-            DeleteObject(hbrPage);
-        }
-
-        if (IconIndex < 0 || !m_ImageList)
         if (IconIndex >= 0 && m_ImageList)
         {
-            int cx, cy;
-            ImageList_GetIconSize(m_ImageList, &cx, &cy);
-            int x = rcFace.left + ((rcFace.right - rcFace.left) - cx) / 2;
-            int y = rcFace.top + ((rcFace.bottom - rcFace.top) - cy) / 2;
+            INT cx = 0, cy = 0, x, y;
+
+            if (!ImageList_GetIconSize(m_ImageList, &cx, &cy) || cx <= 0 || cy <= 0)
+            {
+                cx = GetSystemMetrics(UseSmallTaskIcons() ? SM_CXSMICON : SM_CXICON);
+                cy = GetSystemMetrics(UseSmallTaskIcons() ? SM_CYSMICON : SM_CYICON);
+            }
+            x = rcFace.left + ((rcFace.right - rcFace.left) - cx) / 2;
+            y = rcFace.top + ((rcFace.bottom - rcFace.top) - cy) / 2;
             ImageList_Draw(m_ImageList, IconIndex, hdc, x, y, ILD_TRANSPARENT);
         }
 
