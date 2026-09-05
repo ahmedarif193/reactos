@@ -11793,6 +11793,8 @@ DxgkVidMmEnsureAllocationApertureMapped(
  * Page tables are implicit VidMm allocations.  A nonzero
  * DXGK_PAGE_TABLE_LEVEL_DESC.PageTableSegmentId therefore needs placement in
  * the declared segment even though it has no UMD or KMD allocation handle.
+ * Native MapVideoApertureSegmentInternal nevertheless supplies the owning
+ * VidMm device handle after CreateVidMmObjects opens the implicit allocation.
  * CPU_VIRTUAL page tables can only use a CPU-backed aperture here: reserve an
  * aperture offset and map the table's system pages into it for the lifetime
  * of the page-table object.
@@ -11800,6 +11802,7 @@ DxgkVidMmEnsureAllocationApertureMapped(
 NTSTATUS
 DxgkVidMmMapPageTableSegment(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE MiniportDeviceHandle,
     _In_ ULONG SegmentId,
     _In_ PVOID KernelVa,
     _In_ ULONG Size,
@@ -11822,7 +11825,8 @@ DxgkVidMmMapPageTableSegment(
         return STATUS_INVALID_PARAMETER;
     *OutSegmentOffset = 0;
     *OutMdl = NULL;
-    if (Adapter == NULL || KernelVa == NULL || Size == 0 ||
+    if (Adapter == NULL || MiniportDeviceHandle == NULL ||
+        KernelVa == NULL || Size == 0 ||
         (Size & (PAGE_SIZE - 1)) != 0 ||
         ((ULONG_PTR)KernelVa & (PAGE_SIZE - 1)) != 0 ||
         SegmentId == 0 || SegmentId > Adapter->SegmentCount ||
@@ -11892,6 +11896,7 @@ DxgkVidMmMapPageTableSegment(
 
     RtlZeroMemory(&Op, sizeof(Op));
     Op.Type = DxgkPagingOpMapAperture;
+    Op.hMiniportDevice = MiniportDeviceHandle;
     Op.DestinationSegmentId = SegmentId;
     Op.OffsetInPages = (SIZE_T)(Offset / PAGE_SIZE);
     Op.NumberOfPages = Size / PAGE_SIZE;
@@ -11916,6 +11921,7 @@ ReleasePlacement:
 VOID
 DxgkVidMmUnmapPageTableSegment(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE MiniportDeviceHandle,
     _In_ ULONG SegmentId,
     _In_ ULONGLONG SegmentOffset,
     _In_ ULONG Size,
@@ -11942,6 +11948,7 @@ DxgkVidMmUnmapPageTableSegment(
 
         RtlZeroMemory(&Op, sizeof(Op));
         Op.Type = DxgkPagingOpUnmapAperture;
+        Op.hMiniportDevice = MiniportDeviceHandle;
         Op.DestinationSegmentId = SegmentId;
         Op.OffsetInPages = (SIZE_T)(SegmentOffset / PAGE_SIZE);
         Op.NumberOfPages = Size / PAGE_SIZE;

@@ -1290,6 +1290,7 @@ GpuVaAllocPageTable(
     Table->SegmentId = SegmentId;
     Table->SegmentOffset = 0;
     Table->SegmentMdl = NULL;
+    Table->MiniportDeviceHandle = NULL;
     Table->PlacementPending = Table->SegmentId != 0;
 
     InsertTailList(&Process->GpuVaPageTableList, &Table->PageTableListEntry);
@@ -1373,6 +1374,7 @@ GpuVaFreePageTables(
         if (Table->SegmentId != 0 && !Table->PlacementPending)
         {
             DxgkVidMmUnmapPageTableSegment(Process->Adapter,
+                                           Table->MiniportDeviceHandle,
                                            Table->SegmentId,
                                            Table->SegmentOffset,
                                            Table->Bytes,
@@ -1622,13 +1624,14 @@ GpuVaExecutePagingBatchWithBusyRetry(
 NTSTATUS
 DxgkGpuVaPlacePendingPageTables(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_PROCESS Process)
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ HANDLE MiniportDeviceHandle)
 {
     NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
-    if (Adapter == NULL || Process == NULL)
+    if (Adapter == NULL || Process == NULL || MiniportDeviceHandle == NULL)
         return STATUS_INVALID_PARAMETER;
 
     for (;;)
@@ -1668,6 +1671,7 @@ DxgkGpuVaPlacePendingPageTables(
         ExReleaseFastMutex(&Process->GpuVaLock);
 
         Status = DxgkVidMmMapPageTableSegment(Adapter,
+                                              MiniportDeviceHandle,
                                               SegmentId,
                                               KernelVa,
                                               Bytes,
@@ -1684,6 +1688,7 @@ DxgkGpuVaPlacePendingPageTables(
         ExAcquireFastMutex(&Process->GpuVaLock);
         Table->SegmentOffset = SegmentOffset;
         Table->SegmentMdl = Mdl;
+        Table->MiniportDeviceHandle = MiniportDeviceHandle;
         Table->PlacementPending = FALSE;
         if (Table->Parent != NULL)
         {
@@ -1769,10 +1774,38 @@ DxgkpGpuVaFlushPageTableUpdates(
         goto Complete;
     }
 
+    if (OwnedDevice != NULL)
+    {
+        /* Device destruction has already closed admission and unlinked this
+         * device from Process->DeviceListHead.  The teardown owner nevertheless
+         * owns the object and hMiniportDevice until this synchronous operation
+         * retires. */
+        if (OwnedDevice->ProcessRecord != Process ||
+            OwnedDevice->Adapter != Adapter ||
+            OwnedDevice->hMiniportDevice == NULL)
+        {
+            Status = STATUS_INVALID_DEVICE_STATE;
+            goto Complete;
+        }
+        PagingMiniportDevice = OwnedDevice->hMiniportDevice;
+    }
+    else
+    {
+        Status = DxgkReferenceProcessPagingDevice(Process,
+                                                  &PagingDevice,
+                                                  &PagingMiniportDevice);
+        if (!NT_SUCCESS(Status))
+            goto Complete;
+        SubmissionDevice = PagingDevice;
+    }
+
     /* Anything allocated since the last flush is still unreachable by the GPU
-     * until it has a placement in the miniport's page-table segment, and its
-     * parent entry stays invalid until then, so place before publishing. */
-    Status = DxgkGpuVaPlacePendingPageTables(Adapter, Process);
+     * until it has a placement in the miniport's page-table segment.  Native
+     * VidMm maps it with the process device and implicit allocation identity,
+     * so acquire that identity before publishing any parent or root address. */
+    Status = DxgkGpuVaPlacePendingPageTables(Adapter,
+                                             Process,
+                                             PagingMiniportDevice);
     if (!NT_SUCCESS(Status))
         goto Complete;
 
@@ -1784,8 +1817,8 @@ DxgkpGpuVaFlushPageTableUpdates(
         if (!Process->PageTableUpdatePending)
         {
             ExReleaseFastMutex(&Process->GpuVaLock);
-            KeReleaseMutex(&Process->PageTableFlushMutex, FALSE);
-            return STATUS_SUCCESS;
+            Status = STATUS_SUCCESS;
+            goto Complete;
         }
         TableCapacity = Process->GpuVaPageTableCount;
         ExReleaseFastMutex(&Process->GpuVaLock);
@@ -1965,31 +1998,6 @@ DxgkpGpuVaFlushPageTableUpdates(
         break;
     }
 
-    if (OwnedDevice != NULL)
-    {
-        /* Device destruction has already closed admission and unlinked this
-         * device from Process->DeviceListHead.  The teardown owner nevertheless
-         * owns the object and hMiniportDevice until this synchronous operation
-         * retires.  Avoid a doomed live-device lookup, and do not ask the
-         * scheduler to acquire a new reference to a Destroying device. */
-        if (OwnedDevice->ProcessRecord != Process ||
-            OwnedDevice->Adapter != Adapter ||
-            OwnedDevice->hMiniportDevice == NULL)
-        {
-            Status = STATUS_INVALID_DEVICE_STATE;
-            goto Requeue;
-        }
-        PagingMiniportDevice = OwnedDevice->hMiniportDevice;
-    }
-    else
-    {
-        Status = DxgkReferenceProcessPagingDevice(Process,
-                                                  &PagingDevice,
-                                                  &PagingMiniportDevice);
-        if (!NT_SUCCESS(Status))
-            goto Requeue;
-        SubmissionDevice = PagingDevice;
-    }
     /* Build one ordered paging transaction, matching native VidMm's shared
      * paging-buffer path. CPU_VIRTUAL describes how dxgkrnl reaches its
      * tables; the miniport still owns conversion to its native PTE encoding.
@@ -5222,13 +5230,15 @@ DxgkGpuVaReserveDriverRange(
 NTSTATUS
 DxgkGpuVaPreparePageTable(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_PROCESS Process)
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ HANDLE MiniportDeviceHandle)
 {
     NTSTATUS Status;
 
     PAGED_CODE();
 
-    if (Adapter == NULL || Process == NULL || Process->Adapter != Adapter)
+    if (Adapter == NULL || Process == NULL || Process->Adapter != Adapter ||
+        MiniportDeviceHandle == NULL)
         return STATUS_INVALID_PARAMETER;
     if (Process->hMiniportProcess == NULL ||
         Adapter->MiniportContext == NULL ||
@@ -5246,7 +5256,9 @@ DxgkGpuVaPreparePageTable(
     Status = GpuVaEnsureRootPageTable(Process);
     ExReleaseFastMutex(&Process->GpuVaLock);
     if (NT_SUCCESS(Status))
-        Status = DxgkGpuVaPlacePendingPageTables(Adapter, Process);
+        Status = DxgkGpuVaPlacePendingPageTables(Adapter,
+                                                 Process,
+                                                 MiniportDeviceHandle);
     if (NT_SUCCESS(Status) && !DxgkGpuVaPageTableReady(Adapter, Process))
         Status = STATUS_INTERNAL_ERROR;
     return Status;
