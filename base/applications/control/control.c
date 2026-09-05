@@ -113,7 +113,15 @@ wWinMain(HINSTANCE hInstance,
 
     /* Show the control panel window if no argument or "panel" was passed */
     if (*lpCmdLine == 0 || !_wcsicmp(lpCmdLine, L"panel"))
+    {
+        WCHAR szControl11[MAX_PATH];
+        GetSystemDirectoryW(szControl11, ARRAYSIZE(szControl11));
+        StringCchCatW(szControl11, ARRAYSIZE(szControl11), L"\\control11.exe");
+        if (GetFileAttributesW(szControl11) != INVALID_FILE_ATTRIBUTES &&
+            (INT_PTR)ShellExecuteW(NULL, L"open", szControl11, NULL, NULL, SW_SHOWDEFAULT) > 32)
+            return 1;
         return OpenShellFolder(L"");
+    }
 
     /* Map legacy control panels */
     if (!_wcsicmp(lpCmdLine, L"sticpl.cpl")) lpCmdLine = (LPWSTR) L"scannercamera";
