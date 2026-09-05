@@ -81,6 +81,7 @@
 #define IDI_FLU_BATTCHG      360
 #define IDI_FLU_BATTWARN     361
 #define IDI_FLU_NETADAPTER   362
+#define IDI_FLU_ADD          363
 
 /*******************************************************************************\
 |*                               Bitmap Resources                              *|
