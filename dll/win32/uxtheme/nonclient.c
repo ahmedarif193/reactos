@@ -15,6 +15,48 @@
 /* Shared with DwmSetWindowAttribute in dwmapi.dll. */
 static const WCHAR immersive_dark_mode_propW[] = L"ReactOS.Dwm.ImmersiveDarkMode";
 
+#define CAPTION_BUTTON_WIDTH_UNITS  46
+#define CAPTION_BUTTON_HEIGHT_UNITS 32
+#define CAPTION_BUTTON_HOT_LIFT     24
+#define CAPTION_BUTTON_PRESSED_LIFT 14
+
+static BOOL
+ThemeHasCompositedFrame(void)
+{
+    PTHEME_CLASS liquid;
+    BOOL composited = FALSE;
+
+    liquid = MSSTYLES_OpenThemeClass(L"NonClient", L"Liquid", 96);
+    if (!liquid)
+        return FALSE;
+    if (FAILED(GetThemeBool(liquid, 0, 0, TMT_COMPOSITED, &composited)))
+        composited = FALSE;
+    MSSTYLES_CloseThemeClass(liquid);
+    return composited;
+}
+
+static LRESULT
+ThemeHitTestCaptionButtons(HWND hWnd, const WINDOWINFO *wi, POINT Point)
+{
+    PWND_DATA pwndData;
+    POINT pt;
+
+    if ((wi->dwStyle & (WS_CAPTION | WS_SYSMENU)) != (WS_CAPTION | WS_SYSMENU))
+        return HTNOWHERE;
+    pwndData = ThemeGetWndData(hWnd);
+    if (!pwndData)
+        return HTNOWHERE;
+    pt.x = Point.x - wi->rcWindow.left;
+    pt.y = Point.y - wi->rcWindow.top;
+    if (PtInRect(&pwndData->rcCaptionButtons[CLOSEBUTTON], pt))
+        return HTCLOSE;
+    if (PtInRect(&pwndData->rcCaptionButtons[MAXBUTTON], pt))
+        return HTMAXBUTTON;
+    if (PtInRect(&pwndData->rcCaptionButtons[MINBUTTON], pt))
+        return HTMINBUTTON;
+    return HTNOWHERE;
+}
+
 static BOOL
 IsWindowActive(HWND hWnd, DWORD ExStyle)
 {
@@ -324,6 +366,7 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
     RECT rcCurrent, rcWindow, rcLastButton;
     SIZE ButtonSize;
     BOOL hasLastButton = FALSE;
+    BOOL composited;
     UINT dpi;
 
     /* First of all check if we have something to do here */
@@ -352,7 +395,15 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
             wi->rcWindow.right - wi->rcWindow.left,
             wi->rcWindow.bottom - wi->rcWindow.top);
 
-    captionBtnHeight = buttonHeight - 4;
+    composited = ThemeHasCompositedFrame();
+    if (composited)
+    {
+        rcCurrent.top = 0;
+        rcCurrent.right = wi->rcWindow.right - wi->rcWindow.left - wi->cxWindowBorders;
+        captionBtnHeight = buttonHeight + wi->cyWindowBorders;
+    }
+    else
+        captionBtnHeight = buttonHeight - 4;
     dpi = MSSTYLES_GetThemeDPI((PTHEME_CLASS)htheme);
     if (!dpi)
         dpi = 96;
@@ -378,7 +429,11 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
 
         captionBtnWidth = MulDiv(ButtonSize.cx, captionBtnHeight, ButtonSize.cy);
 
-        hasPlacement = ThemeGetCaptionButtonPlacement(htheme, iPartId, &offset, &offsetType);
+        hasPlacement = !composited &&
+                       ThemeGetCaptionButtonPlacement(htheme, iPartId, &offset, &offsetType);
+        if (composited)
+            captionBtnWidth = MulDiv(captionBtnHeight, CAPTION_BUTTON_WIDTH_UNITS,
+                                     CAPTION_BUTTON_HEIGHT_UNITS);
         if (hasPlacement)
         {
             offset.x = MulDiv(offset.x, dpi, 96);
@@ -424,6 +479,14 @@ ThemeDarkCaptionColor(PDRAW_CONTEXT pcontext)
     return pcontext->Active ? RGB(32, 32, 32) : RGB(43, 43, 43);
 }
 
+static COLORREF
+ThemeLiftColor(COLORREF color, INT lift)
+{
+    return RGB(min(255, GetRValue(color) + lift),
+               min(255, GetGValue(color) + lift),
+               min(255, GetBValue(color) + lift));
+}
+
 static void
 ThemeFillSolidRect(HDC hDC, const RECT *rect, COLORREF color)
 {
@@ -441,7 +504,7 @@ ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade)
 {
     static const INT frames[] = { 10, 12, 14, 16, 20, 24, 32 };
     INT height = rect->bottom - rect->top;
-    INT size = MulDiv(height, 12, 22);
+    INT size = MulDiv(height, 10, CAPTION_BUTTON_HEIGHT_UNITS);
     INT i;
     HICON icon;
 
@@ -481,9 +544,11 @@ ThemeDrawDarkCaptionButton(PDRAW_CONTEXT pcontext,
     INT centerX, centerY, radius;
 
     if (iStateId == BUTTON_HOT || iStateId == BUTTON_INACTIVE_HOT)
-        background = buttonId == CLOSEBUTTON ? RGB(196, 43, 28) : RGB(55, 55, 55);
+        background = buttonId == CLOSEBUTTON ? RGB(196, 43, 28)
+                     : ThemeLiftColor(background, CAPTION_BUTTON_HOT_LIFT);
     else if (iStateId == BUTTON_PRESSED || iStateId == BUTTON_INACTIVE_PRESSED)
-        background = buttonId == CLOSEBUTTON ? RGB(153, 32, 21) : RGB(67, 67, 67);
+        background = buttonId == CLOSEBUTTON ? RGB(176, 39, 25)
+                     : ThemeLiftColor(background, CAPTION_BUTTON_PRESSED_LIFT);
 
     ThemeFillSolidRect(pcontext->hDC, rect, background);
 
@@ -1146,7 +1211,11 @@ DefWndNCHitTest(HWND hWnd, POINT Point)
         if (!PtInRect(&WindowRect, Point))
         {
             BOOL ThickFrame;
+            LRESULT Button;
 
+            if (ThemeHasCompositedFrame() &&
+                (Button = ThemeHitTestCaptionButtons(hWnd, &wi, Point)) != HTNOWHERE)
+                return Button;
             ThickFrame = (wi.dwStyle & WS_THICKFRAME);
             if (Point.y < WindowRect.top)
             {
