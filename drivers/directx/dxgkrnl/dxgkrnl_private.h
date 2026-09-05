@@ -1582,6 +1582,7 @@ typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
     ULONG                       SegmentId;
     ULONGLONG                   SegmentOffset;
     PMDL                        SegmentMdl;
+    HANDLE                      MiniportDeviceHandle;
 
     /* Portable update descriptors; not overlaid on native table storage. */
     DXGK_PTE                    *Entries;
@@ -2464,7 +2465,8 @@ DxgkGpuVaPageTableReady(
 NTSTATUS
 DxgkGpuVaPreparePageTable(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ PDXGKRNL_PROCESS Process);
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ HANDLE MiniportDeviceHandle);
 
 BOOLEAN
 DxgkGpuVaValidateRange(
@@ -3920,7 +3922,7 @@ VOID DxgkVidMmDumpContextAllocations(_In_ PDXGKRNL_ADAPTER Adapter);
 BOOLEAN DxgkVidMmApertureWindow(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PHYSICAL_ADDRESS *CpuBaseForGttZero, _Out_ ULONGLONG *GttBase, _Out_ ULONGLONG *GttSize);
 ULONG DxgkVidMmPagingBufferPrivateDataSize(_In_ PDXGKRNL_ADAPTER Adapter);
 VOID DxgkGpuVaVerifyProcessTables(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ struct _DXGKRNL_PROCESS *Process);
-NTSTATUS DxgkGpuVaPlacePendingPageTables(_In_ PDXGKRNL_ADAPTER Adapter, _In_ struct _DXGKRNL_PROCESS *Process);
+NTSTATUS DxgkGpuVaPlacePendingPageTables(_In_ PDXGKRNL_ADAPTER Adapter, _In_ struct _DXGKRNL_PROCESS *Process, _In_ HANDLE MiniportDeviceHandle);
 VOID DxgkGpuVaDumpTranslation(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ struct _DXGKRNL_PROCESS *Process, _In_ D3DGPU_VIRTUAL_ADDRESS Va);
 VOID DxgkGpuVaAuditMappings(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ struct _DXGKRNL_PROCESS *Process);
 

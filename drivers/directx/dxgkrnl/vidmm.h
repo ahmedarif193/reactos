@@ -1043,6 +1043,7 @@ DxgkVidMmCreateDmaBufferBacking(
 NTSTATUS
 DxgkVidMmMapPageTableSegment(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE MiniportDeviceHandle,
     _In_ ULONG SegmentId,
     _In_ PVOID KernelVa,
     _In_ ULONG Size,
@@ -1054,6 +1055,7 @@ DxgkVidMmMapPageTableSegment(
 VOID
 DxgkVidMmUnmapPageTableSegment(
     _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ HANDLE MiniportDeviceHandle,
     _In_ ULONG SegmentId,
     _In_ ULONGLONG SegmentOffset,
     _In_ ULONG Size,

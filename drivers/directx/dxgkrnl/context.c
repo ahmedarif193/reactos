@@ -2347,7 +2347,9 @@ DxgkCreateContextVirtual(
     }
     if (!pCreateContext->Flags.NullRendering)
     {
-        Status = DxgkGpuVaPreparePageTable(Adapter, Device->ProcessRecord);
+        Status = DxgkGpuVaPreparePageTable(Adapter,
+                                           Device->ProcessRecord,
+                                           Device->hMiniportDevice);
         if (!NT_SUCCESS(Status))
         {
             DXGKRNL_ERR("DxgkCreateContextVirtual: GPUVA preparation failed 0x%08lX mode=%u mmu=%u levels=%u\n",
