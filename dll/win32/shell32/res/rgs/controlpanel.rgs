@@ -37,6 +37,23 @@ HKLM
 							NoRemove NameSpace
 							{
 								'{0DF44EAA-FF21-4412-828E-260A8728E7F1}' = s 'Taskbar and Start Menu'
+								'{BB06C0E4-D293-4f75-8A90-CB05B6477EEE}' = s 'System'
+								'{025A5937-A6BE-4686-A844-36FE4BEC8B6D}' = s 'Power Options'
+								'{8E908FC9-BECC-40f6-915B-F4CA0E70D03D}' = s 'Network and Sharing Center'
+								'{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}' = s 'Personalization'
+								'{C555438B-3C23-4769-A71F-B6D3D9B6053A}' = s 'Display'
+								'{E2E7934B-DCE5-43C4-9576-7FE4F75E7480}' = s 'Date and Time'
+								'{62D8ED13-C9D0-4CE8-A914-47DD628FB1B0}' = s 'Region and Language'
+								'{6C8EEC18-8D75-41B2-A177-8831D59D2D50}' = s 'Mouse'
+								'{725BE8F7-668E-4C7B-8F90-46BDB0936430}' = s 'Keyboard'
+								'{F2DDFC82-8F12-4CDD-B7DC-D4FE1425AA4D}' = s 'Sound'
+								'{7b81be6a-ce2b-4676-a29e-eb907a5126c5}' = s 'Programs and Features'
+								'{60632754-c523-4b62-b45c-4172da012619}' = s 'User Accounts'
+								'{D555645E-D4F8-4c29-A827-D93C859C4F2A}' = s 'Ease of Access Center'
+								'{A3DD4F92-658A-410F-84FD-6FBBBEF2FFFE}' = s 'Internet Options'
+								'{40419485-C444-4567-851A-2DD7BFA1684D}' = s 'Phone and Modem'
+								'{74246bfc-4c96-11d0-abef-0020af6b0b7a}' = s 'Device Manager'
+								'{7A979262-40CE-46ff-AEEE-7884AC3B6136}' = s 'Add Hardware'
 							}
 						}
 						NoRemove MyComputer
@@ -82,6 +99,9 @@ HKCR
 		ForceRemove {0DF44EAA-FF21-4412-828E-260A8728E7F1} = s 'Taskbar and Start Menu'
 		{
 			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = d '1'
+			val 'System.ApplicationName' = s 'Microsoft.TaskbarAndStartMenu'
+			val 'System.ControlPanel.Category' = s '1'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
 			val InfoTip = e '@%%SystemRoot%%\system32\SHELL32.dll,-30348'
 			val LocalizedString = e '@%%SystemRoot%%\system32\SHELL32.dll,-32517'
 			DefaultIcon = e '%%SystemRoot%%\system32\SHELL32.dll,-40'
@@ -90,6 +110,482 @@ HKCR
 				Open
 				{
 					Command = s 'rundll32.exe shell32.dll,Options_RunDLL 1'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {BB06C0E4-D293-4f75-8A90-CB05B6477EEE} = s 'System'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.System'
+			val 'System.ControlPanel.Category' = s '5'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '5'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'See information about your computer, and change settings for hardware, performance, and remote connections.'
+			val LocalizedString = s 'System'
+			DefaultIcon = e '%%SystemRoot%%\system32\sysdm.cpl,-50'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\control11.exe /name Microsoft.System'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {025A5937-A6BE-4686-A844-36FE4BEC8B6D} = s 'Power Options'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.PowerOptions'
+			val 'System.ControlPanel.Category' = s '2,5'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '2,5'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Manage battery and change power-saving settings for your computer.'
+			val LocalizedString = s 'Power Options'
+			DefaultIcon = e '%%SystemRoot%%\system32\powercfg.cpl,-100'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\control11.exe /name Microsoft.PowerOptions'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {8E908FC9-BECC-40f6-915B-F4CA0E70D03D} = s 'Network and Sharing Center'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.NetworkAndSharingCenter'
+			val 'System.ControlPanel.Category' = s '3'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '3'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Check the status of your network, change network settings, and set preferences for sharing files and printers.'
+			val LocalizedString = s 'Network and Sharing Center'
+			DefaultIcon = e '%%SystemRoot%%\system32\control11.exe,-131'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\control11.exe /name Microsoft.NetworkAndSharingCenter'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {ED834ED6-4B5A-4bfe-8F11-A626DCB6A921} = s 'Personalization'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.Personalization'
+			val 'System.ControlPanel.Category' = s '1'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '1'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Change the visuals and sounds on your computer.'
+			val LocalizedString = s 'Personalization'
+			DefaultIcon = e '%%SystemRoot%%\system32\desk.cpl,-40'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\control11.exe /name Microsoft.Personalization'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {C555438B-3C23-4769-A71F-B6D3D9B6053A} = s 'Display'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.Display'
+			val 'System.ControlPanel.Category' = s '1,2'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '1,2'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Make text and other items larger or smaller, and adjust screen resolution.'
+			val LocalizedString = s 'Display'
+			DefaultIcon = e '%%SystemRoot%%\system32\desk.cpl,-40'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL desk.cpl,,@Settings'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {E2E7934B-DCE5-43C4-9576-7FE4F75E7480} = s 'Date and Time'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.DateAndTime'
+			val 'System.ControlPanel.Category' = s '6'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '6'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Set the date, time, and time zone for your computer.'
+			val LocalizedString = s 'Date and Time'
+			DefaultIcon = e '%%SystemRoot%%\system32\timedate.cpl,-1'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL timedate.cpl'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {62D8ED13-C9D0-4CE8-A914-47DD628FB1B0} = s 'Region and Language'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.RegionAndLanguage'
+			val 'System.ControlPanel.Category' = s '6'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '6'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Customize the language, number format, time, and date settings for your computer.'
+			val LocalizedString = s 'Region and Language'
+			DefaultIcon = e '%%SystemRoot%%\system32\intl.cpl,-200'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL intl.cpl'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {6C8EEC18-8D75-41B2-A177-8831D59D2D50} = s 'Mouse'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.Mouse'
+			val 'System.ControlPanel.Category' = s '2'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '2'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Customize your mouse settings, such as the button configuration, double-click speed, mouse pointers, and motion speed.'
+			val LocalizedString = s 'Mouse'
+			DefaultIcon = e '%%SystemRoot%%\system32\main.cpl,-100'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL main.cpl,@0'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {725BE8F7-668E-4C7B-8F90-46BDB0936430} = s 'Keyboard'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.Keyboard'
+			val 'System.ControlPanel.Category' = s '2'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '2'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Customize your keyboard settings, such as the cursor blink rate and the character repeat rate.'
+			val LocalizedString = s 'Keyboard'
+			DefaultIcon = e '%%SystemRoot%%\system32\main.cpl,-200'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL main.cpl,@1'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {F2DDFC82-8F12-4CDD-B7DC-D4FE1425AA4D} = s 'Sound'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.Sound'
+			val 'System.ControlPanel.Category' = s '2'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '2'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Configure your audio devices or change the sound scheme for your computer.'
+			val LocalizedString = s 'Sound'
+			DefaultIcon = e '%%SystemRoot%%\system32\mmsys.cpl,-3004'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL mmsys.cpl'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {7b81be6a-ce2b-4676-a29e-eb907a5126c5} = s 'Programs and Features'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.ProgramsAndFeatures'
+			val 'System.ControlPanel.Category' = s '8'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '8'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Uninstall or change programs on your computer.'
+			val LocalizedString = s 'Programs and Features'
+			DefaultIcon = e '%%SystemRoot%%\system32\appwiz.cpl,-1500'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL appwiz.cpl'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {60632754-c523-4b62-b45c-4172da012619} = s 'User Accounts'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.UserAccounts'
+			val 'System.ControlPanel.Category' = s '9'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '9'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Change user account settings and passwords.'
+			val LocalizedString = s 'User Accounts'
+			DefaultIcon = e '%%SystemRoot%%\system32\usrmgr.cpl,-40'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL usrmgr.cpl'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {D555645E-D4F8-4c29-A827-D93C859C4F2A} = s 'Ease of Access Center'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.EaseOfAccessCenter'
+			val 'System.ControlPanel.Category' = s '7,1'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '7,1'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Make your computer easier to use.'
+			val LocalizedString = s 'Ease of Access Center'
+			DefaultIcon = e '%%SystemRoot%%\system32\access.cpl,-110'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL access.cpl'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {A3DD4F92-658A-410F-84FD-6FBBBEF2FFFE} = s 'Internet Options'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.InternetOptions'
+			val 'System.ControlPanel.Category' = s '3'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '3'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Configure your Internet display and connection settings.'
+			val LocalizedString = s 'Internet Options'
+			DefaultIcon = e '%%SystemRoot%%\system32\inetcpl.cpl,-100'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL inetcpl.cpl'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {40419485-C444-4567-851A-2DD7BFA1684D} = s 'Phone and Modem'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.PhoneAndModem'
+			val 'System.ControlPanel.Category' = s '2'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '2'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Configure your telephone dialing rules and modem settings.'
+			val LocalizedString = s 'Phone and Modem'
+			DefaultIcon = e '%%SystemRoot%%\system32\telephon.cpl,-100'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL telephon.cpl'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {74246bfc-4c96-11d0-abef-0020af6b0b7a} = s 'Device Manager'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.DeviceManager'
+			val 'System.ControlPanel.Category' = s '2,5'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '2,5'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'View and update your hardware''s settings and driver software.'
+			val LocalizedString = s 'Device Manager'
+			DefaultIcon = e '%%SystemRoot%%\system32\devmgmt.exe,0'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\devmgmt.exe'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {7A979262-40CE-46ff-AEEE-7884AC3B6136} = s 'Add Hardware'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.AddHardware'
+			val 'System.ControlPanel.Category' = s '2'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '2'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Installs and troubleshoots hardware.'
+			val LocalizedString = s 'Add Hardware'
+			DefaultIcon = e '%%SystemRoot%%\system32\hdwwiz.cpl,-100'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL hdwwiz.cpl'
 				}
 			}
 			ShellFolder
