@@ -90,6 +90,7 @@ IDI_FLU_BATT4       ICON "res/ico/fluent/battery_10.ico"
 IDI_FLU_BATTCHG     ICON "res/ico/fluent/battery_charge.ico"
 IDI_FLU_BATTWARN    ICON "res/ico/fluent/battery_warning.ico"
 IDI_FLU_NETADAPTER  ICON "res/ico/fluent/network_wired.ico"
+IDI_FLU_ADD         ICON "res/ico/fluent/add_filled.ico"
 
 
 /*******************************************************************************\
