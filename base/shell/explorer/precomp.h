@@ -74,6 +74,42 @@ ShellScaleForDpi(INT Value)
     return MulDiv(Value, dpi, 96);
 }
 
+#define SHELL_TMT_COMPOSITED 2204
+#define SHELL_TMT_FILLCOLOR  3802
+
+static inline BOOL
+ShellGetTaskbarMaterial(COLORREF *pcr)
+{
+    HTHEME hTheme;
+    COLORREF cr = 0;
+    BOOL bComposited = FALSE;
+    HRESULT hr;
+
+    if (!IsThemeActive())
+        return FALSE;
+    hTheme = OpenThemeData(NULL, L"TaskBar::Liquid");
+    if (!hTheme)
+        return FALSE;
+    hr = GetThemeBool(hTheme, 0, 0, SHELL_TMT_COMPOSITED, &bComposited);
+    if (SUCCEEDED(hr) && bComposited)
+        hr = GetThemeColor(hTheme, 0, 0, SHELL_TMT_FILLCOLOR, &cr);
+    else
+        hr = E_FAIL;
+    CloseThemeData(hTheme);
+    if (FAILED(hr))
+        return FALSE;
+    *pcr = cr;
+    return TRUE;
+}
+
+static inline COLORREF
+ShellLiftColor(COLORREF cr, INT lift)
+{
+    return RGB(min(255, GetRValue(cr) + lift),
+               min(255, GetGValue(cr) + lift),
+               min(255, GetBValue(cr) + lift));
+}
+
 #define ASSERT(cond) \
     do if (!(cond)) { \
         Win32DbgPrint(__FILE__, __LINE__, "ASSERTION %s FAILED!\n", #cond); \
