@@ -469,6 +469,17 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
                     (PVOID)(ULONG_PTR)Context.Lr);
         }
 
+        DPRINT1("[arm64][EXC] second chance %.16s Code=0x%08lx Addr=%p Info=%Ix,%Ix PC=%p LR=%p SP=%p FP=%p\n",
+                PsGetCurrentProcess()->ImageFileName,
+                ExceptionRecord->ExceptionCode,
+                ExceptionRecord->ExceptionAddress,
+                ExceptionRecord->ExceptionInformation[0],
+                ExceptionRecord->ExceptionInformation[1],
+                (PVOID)(ULONG_PTR)Context.Pc,
+                (PVOID)(ULONG_PTR)Context.Lr,
+                (PVOID)(ULONG_PTR)Context.Sp,
+                (PVOID)(ULONG_PTR)Context.Fp);
+
         if (DbgkForwardException(ExceptionRecord, TRUE, TRUE))
         {
             return;
