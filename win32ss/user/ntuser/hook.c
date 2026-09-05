@@ -1183,7 +1183,9 @@ co_HOOK_CallHooks( INT HookId,
 
        /* Load it for the next call. */
        pti->sphkCurrent = Hook;
+       UserDomainLockExclusive(DLT_HOOK);
        Hook->phkNext = IntGetNextHook(Hook);
+       UserDomainUnlockExclusive(DLT_HOOK);
        if (ClientInfo)
        {
           _SEH2_TRY
@@ -1219,7 +1221,9 @@ co_HOOK_CallHooks( INT HookId,
           _SEH2_END;
        }
        pti->sphkCurrent = SaveHook;
+       UserDomainLockExclusive(DLT_HOOK);
        Hook->phkNext = NULL;
+       UserDomainUnlockExclusive(DLT_HOOK);
        UserDerefObjectCo(Hook);
        IntDereferenceThreadInfo(pti);
        ObDereferenceObject(pti->pEThread);
@@ -1406,7 +1410,9 @@ NtUserCallNextHookEx( int Code,
     /* Now in List run down. */
     if (ClientInfo && NextObj)
     {
+       UserDomainLockExclusive(DLT_HOOK);
        NextObj->phkNext = IntGetNextHook(NextObj);
+       UserDomainUnlockExclusive(DLT_HOOK);
        lResult = co_UserCallNextHookEx( NextObj, Code, wParam, lParam, NextObj->Ansi);
     }
 
