@@ -1298,21 +1298,21 @@ GpuVaAllocPageTable(
 }
 
 /*
- * GpuVaTableAddress
- * Physical GPU address of the table in the segment it was placed in.
+ * GpuVaTableSegmentOffset
+ * Address of the table relative to the segment it was placed in.
  *
  * Windows' SetPageTableInPde and GetPageDirectoryData pair the declared
- * segment ID with the VIDMM_PHYSICAL_ALLOC address.  For segment zero that is
- * a system physical address; for a declared segment it is the segment GPU base
- * plus the placement offset.
+ * segment ID with the VIDMM_PHYSICAL_ALLOC address. The SDK defines the
+ * nonzero-segment DXGK_PTE and D3DGPU_PHYSICAL_ADDRESS value as an offset from
+ * that segment; segment zero instead carries a system physical address.
  */
 static ULONGLONG
-GpuVaTableAddress(
+GpuVaTableSegmentOffset(
     _In_ PDXGKRNL_GPUVA_PAGE_TABLE Table)
 {
     if (Table->SegmentId == 0)
         return (ULONGLONG)Table->Physical.QuadPart;
-    return Table->PlacementPending ? 0ULL : Table->GpuAddress;
+    return Table->PlacementPending ? 0ULL : Table->SegmentOffset;
 }
 
 /*
@@ -1325,10 +1325,10 @@ GpuVaLinkChildEntry(
     _In_ ULONG Index,
     _In_ PDXGKRNL_GPUVA_PAGE_TABLE Child)
 {
-    ULONGLONG Address = GpuVaTableAddress(Child);
+    ULONGLONG Address = GpuVaTableSegmentOffset(Child);
 
     /* Windows preserves the miniport-declared page-table segment in the PDE
-     * and writes the child allocation's physical GPU address. */
+     * and writes the child allocation's offset within that segment. */
     Parent->Entries[Index].Flags = 0;
     Parent->Entries[Index].Valid =
         (Child->SegmentId != 0 && Child->PlacementPending) ? 0 : 1;
@@ -1352,7 +1352,7 @@ GpuVaPublishRootAddress(
     if (Root == NULL)
         return;
     Process->RootPageTableAddress.SegmentId = Root->SegmentId;
-    Process->RootPageTableAddress.SegmentOffset = GpuVaTableAddress(Root);
+    Process->RootPageTableAddress.SegmentOffset = GpuVaTableSegmentOffset(Root);
 }
 
 /*
@@ -1694,24 +1694,9 @@ DxgkGpuVaPlacePendingPageTables(
                         Table->Level, SegmentId, Status);
             return Status;
         }
-        if ((ULONGLONG)((PDXGKRNL_SEGMENT)Adapter->Segments)[SegmentId - 1].BaseAddress.QuadPart >
-            MAXULONGLONG - SegmentOffset)
-        {
-            DxgkVidMmUnmapPageTableSegment(Adapter,
-                                           SegmentId,
-                                           SegmentOffset,
-                                           Bytes,
-                                           (ULONGLONG)(ULONG_PTR)Table,
-                                           Mdl);
-            return STATUS_INTEGER_OVERFLOW;
-        }
-
         ExAcquireFastMutex(&Process->GpuVaLock);
         Table->SegmentOffset = SegmentOffset;
         Table->SegmentMdl = Mdl;
-        /* An object placed in a segment is addressed by the segment's GPU
-         * logical base plus its offset, the same way vidmm.c forms an
-         * allocation's address from its placement. */
         Table->PlacementPending = FALSE;
         if (Table->Parent != NULL)
         {

@@ -1578,7 +1578,7 @@ typedef struct _DXGKRNL_GPUVA_PAGE_TABLE
     PHYSICAL_ADDRESS            Physical;
 
     /* GPU-visible placement. Segment zero uses a system physical address;
-     * a declared segment uses its GPU base plus SegmentOffset. */
+     * a declared segment is addressed by SegmentOffset. */
     ULONG                       SegmentId;
     ULONGLONG                   SegmentOffset;
     PMDL                        SegmentMdl;
