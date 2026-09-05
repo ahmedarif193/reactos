@@ -311,6 +311,36 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\ShellCompatibility\Applications\
 ; Extra Control Panel Applets
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cpls",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cpls","Console",0x00020000,"%SystemRoot%\system32\console.dll"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cpls","Hotplug",0x00020000,"%SystemRoot%\system32\hotplug.dll"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cpls","Input",0x00020000,"%SystemRoot%\system32\input.dll"
+
+; Control Panel applets fronted by canonical items (see shell32 controlpanel.rgs)
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load",,0x00000012
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","access.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","appwiz.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","desk.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","hdwwiz.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","inetcpl.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","intl.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","main.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","mmsys.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","ncpa.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","powercfg.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","sysdm.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","telephon.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","timedate.cpl",0x00000000,"No"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\don't load","usrmgr.cpl",0x00000000,"No"
+
+; Control Panel categories of legacy applets
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2",,0x00000012
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","bthprops.cpl",0x00010001,2
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","console.dll",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","hotplug.dll",0x00010001,2
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","input.dll",0x00010001,6
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","joy.cpl",0x00010001,2
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","odbccp32i.cpl",0x00010001,5
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","openglcfg.cpl",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","wined3dcfg.cpl",0x00010001,1
 
 ; Cursors Schemes
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cursors\Schemes","ReactOS Default",0x00020000,""",,,,,,,,,,,,,"""
