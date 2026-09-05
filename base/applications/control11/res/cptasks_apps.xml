@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<applications xmlns="http://schemas.microsoft.com/windows/cpltasks/v1" xmlns:sh="http://schemas.microsoft.com/windows/tasks/v1" xmlns:sh2="http://schemas.microsoft.com/windows/tasks/v2">
+ <application id="{ED834ED6-4B5A-4BFE-8F11-A626DCB6A921}">
+  <sh:task id="{AF3BA0EC-B240-401E-B4EE-3E89F275205B}"><sh:name>Change the theme</sh:name><sh:keywords>theme;themes;visual style;look;appearance;</sh:keywords><sh2:controlpanel name="Microsoft.Personalization"/></sh:task>
+  <sh:task id="{B3206921-D53A-40D9-BA1A-BEA526A644A5}"><sh:name>Change desktop background</sh:name><sh:keywords>wallpaper;background;desktop;picture;</sh:keywords><sh2:controlpanel name="Microsoft.Personalization" page="pageWallpaper"/></sh:task>
+  <sh:task id="{2D8B4C10-6A6E-4F9B-9C4C-1E5F7A8B9C05}"><sh:name>Change screen saver</sh:name><sh:keywords>screensaver;screen saver;</sh:keywords><sh2:controlpanel name="Microsoft.Personalization" page="pageScreenSaver"/></sh:task>
+  <sh:task id="{3E9C5D21-7B7F-4A0C-8D5D-2F6A8B9CAD06}"><sh:name>Change window colors and metrics</sh:name><sh:keywords>window color;colors;appearance;title bar;font;</sh:keywords><sh2:controlpanel name="Microsoft.Personalization" page="pageColorization"/></sh:task>
+  <category id="1"><sh:task idref="{AF3BA0EC-B240-401E-B4EE-3E89F275205B}"/><sh:task idref="{B3206921-D53A-40D9-BA1A-BEA526A644A5}"/><sh:task idref="{2D8B4C10-6A6E-4F9B-9C4C-1E5F7A8B9C05}"/><sh:task idref="{3E9C5D21-7B7F-4A0C-8D5D-2F6A8B9CAD06}"/></category>
+ </application>
+ <application id="{C555438B-3C23-4769-A71F-B6D3D9B6053A}">
+  <sh:task id="{F3321994-6E7E-4D9E-ABDC-768477BCF916}"><sh:name>Adjust screen resolution</sh:name><sh:keywords>resolution;screen;display;monitor;refresh;pixels;</sh:keywords><sh2:controlpanel name="Microsoft.Display" page="Settings"/></sh:task>
+  <category id="1"><sh:task idref="{F3321994-6E7E-4D9E-ABDC-768477BCF916}"/></category>
+  <category id="2"><sh:task idref="{F3321994-6E7E-4D9E-ABDC-768477BCF916}"/></category>
+ </application>
+ <application id="{2227A280-3AEA-1069-A2DE-08002B30309D}">
+  <sh:task id="{DAF32862-EF3D-4D61-AB92-47AEB51DDC80}"><sh:name>View devices and printers</sh:name><sh:keywords>printer;printers;devices;print;</sh:keywords><sh2:controlpanel name="Microsoft.Printers"/></sh:task>
+  <sh:task id="{4F1E9A32-8C8F-4B1D-9E6E-3A7B9CADBE07}"><sh:name>Add a printer</sh:name><sh:keywords>add printer;install printer;</sh:keywords><sh2:controlpanel name="Microsoft.Printers"/></sh:task>
+  <category id="2"><sh:task idref="{DAF32862-EF3D-4D61-AB92-47AEB51DDC80}"/><sh:task idref="{4F1E9A32-8C8F-4B1D-9E6E-3A7B9CADBE07}"/></category>
+ </application>
+ <application id="{7A979262-40CE-46FF-AEEE-7884AC3B6136}">
+  <sh:task id="{D3D71B01-F746-499E-A426-FF63FAC98C19}"><sh:name>Add a device</sh:name><sh:keywords>add hardware;device;install;new hardware;</sh:keywords><sh2:controlpanel name="Microsoft.AddHardware"/></sh:task>
+  <category id="2"><sh:task idref="{D3D71B01-F746-499E-A426-FF63FAC98C19}"/></category>
+ </application>
+ <application id="{74246BFC-4C96-11D0-ABEF-0020AF6B0B7A}">
+  <sh:task id="{5D2D4D91-1A0E-4A4E-9A54-9B4C8C6E2A01}"><sh:name>Device Manager</sh:name><sh:keywords>device manager;drivers;hardware;devices;</sh:keywords><sh2:controlpanel name="Microsoft.DeviceManager"/></sh:task>
+  <sh:task id="{6A2B5E12-4D3C-4C7F-8E9A-0B1C2D3E4F08}"><sh:name>Update device drivers</sh:name><sh:keywords>driver;drivers;update driver;</sh:keywords><sh2:controlpanel name="Microsoft.DeviceManager"/></sh:task>
+  <category id="2"><sh:task idref="{6A2B5E12-4D3C-4C7F-8E9A-0B1C2D3E4F08}"/></category>
+  <category id="5"><sh:task idref="{6A2B5E12-4D3C-4C7F-8E9A-0B1C2D3E4F08}"/></category>
+ </application>
+ <application id="{F2DDFC82-8F12-4CDD-B7DC-D4FE1425AA4D}">
+  <sh:task id="{7B3C6F23-5E4D-4D80-9FAB-1C2D3E4F5A09}"><sh:name>Adjust system volume</sh:name><sh:keywords>volume;sound;speaker;mute;audio;</sh:keywords><sh:command>%SystemRoot%\system32\sndvol32.exe</sh:command></sh:task>
+  <sh:task id="{8C4D7A34-6F5E-4E91-A0BC-2D3E4F5A6B0A}"><sh:name>Change system sounds</sh:name><sh:keywords>sounds;sound scheme;beep;event sounds;</sh:keywords><sh2:controlpanel name="Microsoft.Sound" page="1"/></sh:task>
+  <sh:task id="{9D5E8B45-7A6F-4FA2-B1CD-3E4F5A6B7C0B}"><sh:name>Manage audio devices</sh:name><sh:keywords>audio;devices;microphone;speakers;playback;recording;</sh:keywords><sh2:controlpanel name="Microsoft.Sound"/></sh:task>
+  <category id="2"><sh:task idref="{7B3C6F23-5E4D-4D80-9FAB-1C2D3E4F5A09}"/><sh:task idref="{8C4D7A34-6F5E-4E91-A0BC-2D3E4F5A6B0A}"/><sh:task idref="{9D5E8B45-7A6F-4FA2-B1CD-3E4F5A6B7C0B}"/></category>
+ </application>
+ <application id="{025A5937-A6BE-4686-A844-36FE4BEC8B6D}">
+  <sh:task id="{AE6F9C56-8B70-4AB3-C2DE-4F5A6B7C8D0C}"><sh:name>Change power-saving settings</sh:name><sh:keywords>power;save;energy;battery;sleep;</sh:keywords><sh2:controlpanel name="Microsoft.PowerOptions"/></sh:task>
+  <sh:task id="{BF7AAD67-9C81-4BC4-D3EF-5A6B7C8D9E0D}"><sh:name>Change what the power buttons do</sh:name><sh:keywords>power button;sleep button;lid;shutdown;</sh:keywords><sh2:controlpanel name="Microsoft.PowerOptions" page="pageGlobalSettings"/></sh:task>
+  <sh:task id="{C08BBE78-AD92-4CD5-E4F0-6B7C8D9EAF0E}"><sh:name>Choose when to turn off display</sh:name><sh:keywords>display;monitor;turn off;timeout;</sh:keywords><sh2:controlpanel name="Microsoft.PowerOptions" page="pagePlanSettings"/></sh:task>
+  <sh:task id="{D19CCF89-BEA3-4DE6-F501-7C8D9EAFB00F}"><sh:name>Change when the computer sleeps</sh:name><sh:keywords>sleep;standby;suspend;hibernate;</sh:keywords><sh2:controlpanel name="Microsoft.PowerOptions" page="pagePlanSettings"/></sh:task>
+  <sh:task id="{E2ADD09A-CFB4-4EF7-0612-8D9EAFB0C110}"><sh:name>Choose a power plan</sh:name><sh:keywords>power plan;scheme;balanced;power saver;high performance;</sh:keywords><sh2:controlpanel name="Microsoft.PowerOptions"/></sh:task>
+  <category id="2"><sh:task idref="{AE6F9C56-8B70-4AB3-C2DE-4F5A6B7C8D0C}"/><sh:task idref="{BF7AAD67-9C81-4BC4-D3EF-5A6B7C8D9E0D}"/><sh:task idref="{C08BBE78-AD92-4CD5-E4F0-6B7C8D9EAF0E}"/></category>
+ </application>
+ <application id="{6C8EEC18-8D75-41B2-A177-8831D59D2D50}">
+  <sh:task id="{F3BEE1AB-D0C5-4F08-1723-9EAFB0C1D211}"><sh:name>Change mouse settings</sh:name><sh:keywords>mouse;pointer;click;buttons;</sh:keywords><sh2:controlpanel name="Microsoft.Mouse"/></sh:task>
+  <sh:task id="{04CFF2BC-E1D6-4019-2834-AFB0C1D2E312}"><sh:name>Change how the mouse pointer looks</sh:name><sh:keywords>cursor;pointer;scheme;</sh:keywords><sh2:controlpanel name="Microsoft.Mouse" page="1"/></sh:task>
+  <sh:task id="{15D003CD-F2E7-412A-3945-B0C1D2E3F413}"><sh:name>Change the mouse pointer display or speed</sh:name><sh:keywords>pointer speed;acceleration;trail;</sh:keywords><sh2:controlpanel name="Microsoft.Mouse" page="2"/></sh:task>
+  <sh:task id="{26E114DE-03F8-423B-4A56-C1D2E3F40514}"><sh:name>Change mouse wheel settings</sh:name><sh:keywords>wheel;scroll;</sh:keywords><sh2:controlpanel name="Microsoft.Mouse" page="3"/></sh:task>
+  <category id="2"><sh:task idref="{F3BEE1AB-D0C5-4F08-1723-9EAFB0C1D211}"/></category>
+ </application>
+ <application id="{725BE8F7-668E-4C7B-8F90-46BDB0936430}">
+  <sh:task id="{37F225EF-1409-434C-5B67-D2E3F4051615}"><sh:name>Change cursor blink rate</sh:name><sh:keywords>keyboard;cursor;blink;repeat;delay;</sh:keywords><sh2:controlpanel name="Microsoft.Keyboard"/></sh:task>
+  <sh:task id="{4803360F-251A-445D-6C78-E3F405162716}"><sh:name>Check keyboard status</sh:name><sh:keywords>keyboard;hardware;status;</sh:keywords><sh2:controlpanel name="Microsoft.Keyboard" page="1"/></sh:task>
+ </application>
+ <application id="{8E908FC9-BECC-40F6-915B-F4CA0E70D03D}">
+  <sh:task id="{BD256B65-94BE-4194-84BF-41D50D0EF26E}"><sh:name>View network status and tasks</sh:name><sh:keywords>network;internet;connection;status;lan;wifi;</sh:keywords><sh2:controlpanel name="Microsoft.NetworkAndSharingCenter"/></sh:task>
+  <sh:task id="{7A3E8C50-2B11-4B4E-9E6F-3F4B7C9A1D02}"><sh:name>View network connections</sh:name><sh:keywords>adapter;adapters;connections;ethernet;ncpa;</sh:keywords><sh:command>%SystemRoot%\system32\control.exe netconnections</sh:command></sh:task>
+  <sh:task id="{5914471A-362B-456E-7D89-F40516273817}"><sh:name>Change adapter settings</sh:name><sh:keywords>adapter;ip address;dns;tcp/ip;</sh:keywords><sh:command>%SystemRoot%\system32\control.exe netconnections</sh:command></sh:task>
+  <category id="3"><sh:task idref="{BD256B65-94BE-4194-84BF-41D50D0EF26E}"/><sh:task idref="{7A3E8C50-2B11-4B4E-9E6F-3F4B7C9A1D02}"/></category>
+ </application>
+ <application id="{A3DD4F92-658A-410F-84FD-6FBBBEF2FFFE}">
+  <sh:task id="{6A25582B-473C-467F-8E9A-051627384918}"><sh:name>Change your homepage</sh:name><sh:keywords>homepage;home page;browser;internet explorer;</sh:keywords><sh2:controlpanel name="Microsoft.InternetOptions"/></sh:task>
+  <sh:task id="{7B36693C-584D-4780-9FAB-162738495A19}"><sh:name>Change security settings</sh:name><sh:keywords>security;zone;internet zone;</sh:keywords><sh2:controlpanel name="Microsoft.InternetOptions" page="1"/></sh:task>
+  <sh:task id="{8C477A4D-695E-4891-A0BC-2738495A6B1A}"><sh:name>Configure proxy server</sh:name><sh:keywords>proxy;lan settings;connections;</sh:keywords><sh2:controlpanel name="Microsoft.InternetOptions" page="4"/></sh:task>
+  <sh:task id="{9D588B5E-7A6F-49A2-B1CD-38495A6B7C1B}"><sh:name>Delete browsing history and cookies</sh:name><sh:keywords>history;cookies;cache;temporary files;</sh:keywords><sh2:controlpanel name="Microsoft.InternetOptions"/></sh:task>
+  <category id="3"><sh:task idref="{6A25582B-473C-467F-8E9A-051627384918}"/><sh:task idref="{7B36693C-584D-4780-9FAB-162738495A19}"/><sh:task idref="{8C477A4D-695E-4891-A0BC-2738495A6B1A}"/></category>
+ </application>
+ <application id="{BB06C0E4-D293-4F75-8A90-CB05B6477EEE}">
+  <sh:task id="{E79BCB1B-EEB7-4180-98FD-BD47F6DCFF79}"><sh:name>View basic information about your computer</sh:name><sh:keywords>system;computer;ram;processor;cpu;memory;version;edition;</sh:keywords><sh2:controlpanel name="Microsoft.System"/></sh:task>
+  <sh:task id="{AE699C6F-8B70-4AB3-C2DE-495A6B7C8D1C}"><sh:name>See the name of this computer</sh:name><sh:keywords>computer name;workgroup;domain;hostname;</sh:keywords><sh2:controlpanel name="Microsoft.System"/></sh:task>
+  <sh:task id="{BF7AAD70-9C81-4BC4-D3EF-5A6B7C8D9E1D}"><sh:name>Rename this computer</sh:name><sh:keywords>rename;computer name;workgroup;</sh:keywords><sh2:controlpanel name="Microsoft.System" page="pageComputerName"/></sh:task>
+  <sh:task id="{C08BBE81-AD92-4CD5-E4F0-6B7C8D9EAF1E}"><sh:name>Adjust the appearance and performance of Windows</sh:name><sh:keywords>performance;visual effects;virtual memory;paging file;</sh:keywords><sh2:controlpanel name="Microsoft.System" page="pageAdvanced"/></sh:task>
+  <sh:task id="{D19CCF92-BEA3-4DE6-F501-7C8D9EAFB01F}"><sh:name>Advanced system settings</sh:name><sh:keywords>advanced;environment variables;startup and recovery;user profiles;</sh:keywords><sh2:controlpanel name="Microsoft.System" page="pageAdvanced"/></sh:task>
+  <category id="5"><sh:task idref="{E79BCB1B-EEB7-4180-98FD-BD47F6DCFF79}"/><sh:task idref="{AE699C6F-8B70-4AB3-C2DE-495A6B7C8D1C}"/></category>
+ </application>
+ <application id="{D20EA4E1-3957-11D2-A40B-0C5020524153}">
+  <sh:task id="{6CA1F1CE-1FED-4D96-A82E-08CEDB139AA3}"><sh:name>View event logs</sh:name><sh:keywords>event viewer;event log;logs;errors;</sh:keywords><sh:command>%SystemRoot%\system32\eventvwr.exe</sh:command></sh:task>
+  <sh:task id="{9E4C1A77-3D2B-4F0A-8C11-5A6B7C8D9E03}"><sh:name>Create and format hard disk partitions</sh:name><sh:keywords>disk management;partition;format;volume;</sh:keywords><sh:command>%SystemRoot%\system32\diskmgmt.exe</sh:command></sh:task>
+  <sh:task id="{0F23B8D4-1E5A-4C6B-9D7E-8F9A0B1C2D04}"><sh:name>Schedule tasks</sh:name><sh:keywords>schedule;task scheduler;scheduled tasks;</sh:keywords><sh:command>%SystemRoot%\system32\control.exe schedtasks</sh:command></sh:task>
+  <sh:task id="{E2ADDAA3-CFB4-4EF7-0612-8D9EAFB0C120}"><sh:name>View local services</sh:name><sh:keywords>services;service;servman;</sh:keywords><sh:command>%SystemRoot%\system32\servman.exe</sh:command></sh:task>
+  <sh:task id="{F3BEEBB4-D0C5-4F08-1723-9EAFB0C1D221}"><sh:name>Set up data sources (ODBC)</sh:name><sh:keywords>odbc;data source;database;</sh:keywords><sh:command>%SystemRoot%\system32\rundll32.exe shell32.dll,Control_RunDLL odbccp32.cpl</sh:command></sh:task>
+  <category id="5"><sh:task idref="{6CA1F1CE-1FED-4D96-A82E-08CEDB139AA3}"/><sh:task idref="{9E4C1A77-3D2B-4F0A-8C11-5A6B7C8D9E03}"/><sh:task idref="{0F23B8D4-1E5A-4C6B-9D7E-8F9A0B1C2D04}"/><sh:task idref="{E2ADDAA3-CFB4-4EF7-0612-8D9EAFB0C120}"/><sh:task idref="{F3BEEBB4-D0C5-4F08-1723-9EAFB0C1D221}"/></category>
+ </application>
+ <application id="{62D8ED13-C9D0-4CE8-A914-47DD628FB1B0}">
+  <sh:task id="{995D28E5-A9C1-4A82-8EFB-C1CE53C06F07}"><sh:name>Change keyboards or other input methods</sh:name><sh:keywords>keyboard layout;input language;input method;ime;</sh:keywords><sh:command>%SystemRoot%\system32\rundll32.exe shell32.dll,Control_RunDLL input.dll</sh:command></sh:task>
+  <sh:task id="{5FFAA809-0961-40CF-90A4-58037867FA50}"><sh:name>Change display language</sh:name><sh:keywords>language;locale;region;display language;</sh:keywords><sh2:controlpanel name="Microsoft.RegionAndLanguage"/></sh:task>
+  <sh:task id="{04CFFCC5-E1D6-4019-2834-AFB0C1D2E322}"><sh:name>Change the way numbers, currencies, dates, and times are displayed</sh:name><sh:keywords>format;number;currency;date;time;locale;</sh:keywords><sh2:controlpanel name="Microsoft.RegionAndLanguage"/></sh:task>
+  <sh:task id="{15D00DD6-F2E7-412A-3945-B0C1D2E3F423}"><sh:name>Change location</sh:name><sh:keywords>location;country;region;</sh:keywords><sh2:controlpanel name="Microsoft.RegionAndLanguage" page="1"/></sh:task>
+  <category id="6"><sh:task idref="{995D28E5-A9C1-4A82-8EFB-C1CE53C06F07}"/><sh:task idref="{5FFAA809-0961-40CF-90A4-58037867FA50}"/><sh:task idref="{04CFFCC5-E1D6-4019-2834-AFB0C1D2E322}"/></category>
+ </application>
+ <application id="{E2E7934B-DCE5-43C4-9576-7FE4F75E7480}">
+  <sh:task id="{4C8DBC7F-EE77-44CC-8602-88AD441B1A77}"><sh:name>Set the time and date</sh:name><sh:keywords>time;date;clock;</sh:keywords><sh2:controlpanel name="Microsoft.DateAndTime"/></sh:task>
+  <sh:task id="{26E11EE7-03F8-423B-4A56-C1D2E3F40524}"><sh:name>Change the time zone</sh:name><sh:keywords>time zone;timezone;utc;</sh:keywords><sh2:controlpanel name="Microsoft.DateAndTime" page="1"/></sh:task>
+  <sh:task id="{37F22FF8-1409-434C-5B67-D2E3F4051625}"><sh:name>Automatically adjust for daylight saving time</sh:name><sh:keywords>daylight;dst;summer time;</sh:keywords><sh2:controlpanel name="Microsoft.DateAndTime" page="1"/></sh:task>
+  <sh:task id="{48033009-251A-445D-6C78-E3F405162726}"><sh:name>Synchronize with an Internet time server</sh:name><sh:keywords>internet time;ntp;synchronize;</sh:keywords><sh2:controlpanel name="Microsoft.DateAndTime" page="2"/></sh:task>
+  <category id="6"><sh:task idref="{4C8DBC7F-EE77-44CC-8602-88AD441B1A77}"/><sh:task idref="{26E11EE7-03F8-423B-4A56-C1D2E3F40524}"/></category>
+ </application>
+ <application id="{D555645E-D4F8-4C29-A827-D93C859C4F2A}">
+  <sh:task id="{54692DB7-FC98-4D5E-AC15-CC5095FA5669}"><sh:name>Optimize visual display</sh:name><sh:keywords>high contrast;display;vision;</sh:keywords><sh2:controlpanel name="Microsoft.EaseOfAccessCenter" page="pageEasierToSee"/></sh:task>
+  <sh:task id="{7B086E4E-366C-454A-85CC-B8B533482B10}"><sh:name>Change how your keyboard works</sh:name><sh:keywords>stickykeys;filterkeys;togglekeys;keyboard;</sh:keywords><sh2:controlpanel name="Microsoft.EaseOfAccessCenter" page="pageKeyboardEasierToUse"/></sh:task>
+  <sh:task id="{EE3E6FA5-C412-4A11-9370-1ED4D42E62B2}"><sh:name>Change how your mouse works</sh:name><sh:keywords>mousekeys;mouse;keypad;</sh:keywords><sh2:controlpanel name="Microsoft.EaseOfAccessCenter" page="pageEasierToClick"/></sh:task>
+  <sh:task id="{59144A1B-362B-456E-7D89-F40516273827}"><sh:name>Replace sounds with visual cues</sh:name><sh:keywords>soundsentry;showsounds;hearing;</sh:keywords><sh2:controlpanel name="Microsoft.EaseOfAccessCenter" page="pageEasierWithSounds"/></sh:task>
+  <sh:task id="{6A255B2C-473C-467F-8E9A-051627384928}"><sh:name>Turn Magnifier on or off</sh:name><sh:keywords>magnifier;magnify;zoom;</sh:keywords><sh:command>%SystemRoot%\system32\magnify.exe</sh:command></sh:task>
+  <sh:task id="{7B366C3D-584D-4780-9FAB-162738495A29}"><sh:name>Turn On-Screen keyboard on or off</sh:name><sh:keywords>on-screen keyboard;osk;virtual keyboard;</sh:keywords><sh:command>%SystemRoot%\system32\osk.exe</sh:command></sh:task>
+  <category id="7"><sh:task idref="{54692DB7-FC98-4D5E-AC15-CC5095FA5669}"/><sh:task idref="{7B086E4E-366C-454A-85CC-B8B533482B10}"/><sh:task idref="{EE3E6FA5-C412-4A11-9370-1ED4D42E62B2}"/><sh:task idref="{6A255B2C-473C-467F-8E9A-051627384928}"/><sh:task idref="{7B366C3D-584D-4780-9FAB-162738495A29}"/></category>
+ </application>
+ <application id="{7B81BE6A-CE2B-4676-A29E-EB907A5126C5}">
+  <sh:task id="{040873CB-404A-49FE-A254-A9BB9CEFAEA5}"><sh:name>Uninstall a program</sh:name><sh:keywords>uninstall;remove;program;programs;software;add remove programs;</sh:keywords><sh2:controlpanel name="Microsoft.ProgramsAndFeatures"/></sh:task>
+  <sh:task id="{E07F215A-6022-40E0-A109-17078992E5F9}"><sh:name>Get programs</sh:name><sh:keywords>install;download;applications;rapps;store;</sh:keywords><sh:command>%SystemRoot%\system32\rapps.exe</sh:command></sh:task>
+  <category id="8"><sh:task idref="{040873CB-404A-49FE-A254-A9BB9CEFAEA5}"/><sh:task idref="{E07F215A-6022-40E0-A109-17078992E5F9}"/></category>
+ </application>
+ <application id="{60632754-C523-4B62-B45C-4172DA012619}">
+  <sh:task id="{33C29E1D-D8BE-4811-8496-1FE0F9164F63}"><sh:name>Add or remove user accounts</sh:name><sh:keywords>user;users;account;accounts;password;</sh:keywords><sh2:controlpanel name="Microsoft.UserAccounts"/></sh:task>
+  <sh:task id="{F58C814D-989E-4584-8053-A424F11D8CCF}"><sh:name>Change account type</sh:name><sh:keywords>administrator;standard user;group;</sh:keywords><sh2:controlpanel name="Microsoft.UserAccounts"/></sh:task>
+  <sh:task id="{8C477D4E-695E-4891-A0BC-2738495A6B2A}"><sh:name>Change your password</sh:name><sh:keywords>password;change password;</sh:keywords><sh2:controlpanel name="Microsoft.UserAccounts"/></sh:task>
+  <category id="9"><sh:task idref="{33C29E1D-D8BE-4811-8496-1FE0F9164F63}"/><sh:task idref="{F58C814D-989E-4584-8053-A424F11D8CCF}"/><sh:task idref="{8C477D4E-695E-4891-A0BC-2738495A6B2A}"/></category>
+ </application>
+ <application id="{6DFD7C5C-2451-11D3-A299-00C04F8EF6AF}">
+  <sh:task id="{9D588E5F-7A6F-49A2-B1CD-38495A6B7C2B}"><sh:name>Show hidden files and folders</sh:name><sh:keywords>hidden files;show hidden;folder options;</sh:keywords><sh2:controlpanel name="Microsoft.FolderOptions" page="7"/></sh:task>
+  <sh:task id="{AE699F60-8B70-4AB3-C2DE-495A6B7C8D2C}"><sh:name>Show or hide file extensions</sh:name><sh:keywords>extensions;file extension;file type;</sh:keywords><sh2:controlpanel name="Microsoft.FolderOptions" page="7"/></sh:task>
+  <sh:task id="{BF7AB071-9C81-4BC4-D3EF-5A6B7C8D9E2D}"><sh:name>Specify single- or double-click to open</sh:name><sh:keywords>single click;double click;open;</sh:keywords><sh2:controlpanel name="Microsoft.FolderOptions"/></sh:task>
+  <category id="1"><sh:task idref="{9D588E5F-7A6F-49A2-B1CD-38495A6B7C2B}"/><sh:task idref="{AE699F60-8B70-4AB3-C2DE-495A6B7C8D2C}"/><sh:task idref="{BF7AB071-9C81-4BC4-D3EF-5A6B7C8D9E2D}"/></category>
+ </application>
+ <application id="{0DF44EAA-FF21-4412-828E-260A8728E7F1}">
+  <sh:task id="{C08BC182-AD92-4CD5-E4F0-6B7C8D9EAF2E}"><sh:name>Customize the Start menu</sh:name><sh:keywords>start menu;start;customize;</sh:keywords><sh2:controlpanel name="Microsoft.TaskbarAndStartMenu" page="1"/></sh:task>
+  <sh:task id="{D19CD293-BEA3-4DE6-F501-7C8D9EAFB02F}"><sh:name>Auto-hide the taskbar</sh:name><sh:keywords>taskbar;auto-hide;hide;lock;</sh:keywords><sh2:controlpanel name="Microsoft.TaskbarAndStartMenu"/></sh:task>
+  <category id="1"><sh:task idref="{C08BC182-AD92-4CD5-E4F0-6B7C8D9EAF2E}"/><sh:task idref="{D19CD293-BEA3-4DE6-F501-7C8D9EAFB02F}"/></category>
+ </application>
+ <application id="{D20EA4E1-3957-11D2-A40B-0C5020524152}">
+  <sh:task id="{E2ADE3A4-CFB4-4EF7-0612-8D9EAFB0C130}"><sh:name>View installed fonts</sh:name><sh:keywords>font;fonts;typeface;</sh:keywords><sh2:controlpanel name="Microsoft.Fonts"/></sh:task>
+  <category id="1"><sh:task idref="{E2ADE3A4-CFB4-4EF7-0612-8D9EAFB0C130}"/></category>
+ </application>
+ <application id="{40419485-C444-4567-851A-2DD7BFA1684D}">
+  <sh:task id="{F3BEF4B5-D0C5-4F08-1723-9EAFB0C1D231}"><sh:name>Set up dialing rules</sh:name><sh:keywords>modem;dialing;phone;telephony;</sh:keywords><sh2:controlpanel name="Microsoft.PhoneAndModem"/></sh:task>
+  <category id="2"><sh:task idref="{F3BEF4B5-D0C5-4F08-1723-9EAFB0C1D231}"/></category>
+ </application>
+</applications>
