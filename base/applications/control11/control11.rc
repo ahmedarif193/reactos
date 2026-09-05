@@ -1,0 +1,39 @@
+#include <windef.h>
+#include <winuser.h>
+#include "resource.h"
+
+#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS Control Panel"
+#define REACTOS_STR_INTERNAL_NAME     "control11"
+#define REACTOS_STR_ORIGINAL_FILENAME "control11.exe"
+#include <reactos/version.rc>
+
+IDI_MAIN            ICON "res/app.ico"
+IDI_CAT_APPEARANCE  ICON "res/cat_appearance.ico"
+IDI_CAT_HARDWARE    ICON "res/cat_hardware.ico"
+IDI_CAT_NETWORK     ICON "res/cat_network.ico"
+IDI_CAT_SYSTEM      ICON "res/cat_system.ico"
+IDI_CAT_CLOCK       ICON "res/cat_clock.ico"
+IDI_CAT_ACCESS      ICON "res/cat_access.ico"
+IDI_CAT_PROGRAMS    ICON "res/cat_programs.ico"
+IDI_CAT_USERS       ICON "res/cat_users.ico"
+IDI_CAT_ALL         ICON "res/cat_all.ico"
+IDI_NAV_BACK        ICON "res/nav_back.ico"
+IDI_NAV_FWD         ICON "res/nav_fwd.ico"
+IDI_NAV_SEARCH      ICON "res/nav_search.ico"
+IDI_NAV_CHEVRON     ICON "res/nav_chevron.ico"
+IDI_NAV_CRUMB       ICON "res/nav_crumb.ico"
+IDI_NAV_CLEAR       ICON "res/nav_clear.ico"
+IDI_NET_PC          ICON "res/net_pc.ico"
+IDI_NET_ROUTER      ICON "res/net_router.ico"
+IDI_NET_GLOBE       ICON "res/net_globe.ico"
+IDI_NET_OK          ICON "res/net_ok.ico"
+IDI_NET_BAD         ICON "res/net_bad.ico"
+IDI_PWR_BATTERY     ICON "res/pwr_battery.ico"
+IDI_PWR_PLUG        ICON "res/pwr_plug.ico"
+IDI_SYS_INFO        ICON "res/sys_info.ico"
+IDI_ITEM_GENERIC    ICON "res/item_generic.ico"
+
+IDR_CPTASKS_CATEGORIES XML "res/cptasks_categories.xml"
+IDR_CPTASKS_APPS       XML "res/cptasks_apps.xml"
+
+1 MANIFEST "res/control11.exe.manifest"

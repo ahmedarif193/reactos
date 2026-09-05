@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<categories xmlns="http://schemas.microsoft.com/windows/cpltasks/v1" xmlns:sh="http://schemas.microsoft.com/windows/tasks/v1" xmlns:sh2="http://schemas.microsoft.com/windows/tasks/v2">
+ <category id="1">
+  <sh:task idref="{AF3BA0EC-B240-401E-B4EE-3E89F275205B}"/>
+  <sh:task idref="{B3206921-D53A-40D9-BA1A-BEA526A644A5}"/>
+  <sh:task idref="{F3321994-6E7E-4D9E-ABDC-768477BCF916}"/>
+ </category>
+ <category id="2">
+  <sh:task idref="{DAF32862-EF3D-4D61-AB92-47AEB51DDC80}"/>
+  <sh:task idref="{D3D71B01-F746-499E-A426-FF63FAC98C19}"/>
+ </category>
+ <category id="3">
+  <sh:task idref="{BD256B65-94BE-4194-84BF-41D50D0EF26E}"/>
+  <sh:task idref="{7A3E8C50-2B11-4B4E-9E6F-3F4B7C9A1D02}"/>
+ </category>
+ <category id="5">
+  <sh:task idref="{E79BCB1B-EEB7-4180-98FD-BD47F6DCFF79}"/>
+  <sh:task idref="{6CA1F1CE-1FED-4D96-A82E-08CEDB139AA3}"/>
+  <sh:task idref="{9E4C1A77-3D2B-4F0A-8C11-5A6B7C8D9E03}"/>
+  <sh:task idref="{0F23B8D4-1E5A-4C6B-9D7E-8F9A0B1C2D04}"/>
+ </category>
+ <category id="6">
+  <sh:task idref="{995D28E5-A9C1-4A82-8EFB-C1CE53C06F07}"/>
+  <sh:task idref="{5FFAA809-0961-40CF-90A4-58037867FA50}"/>
+  <sh:task idref="{4C8DBC7F-EE77-44CC-8602-88AD441B1A77}"/>
+ </category>
+ <category id="7">
+  <sh:task idref="{54692DB7-FC98-4D5E-AC15-CC5095FA5669}"/>
+  <sh:task idref="{7B086E4E-366C-454A-85CC-B8B533482B10}"/>
+ </category>
+ <category id="8">
+  <sh:task idref="{040873CB-404A-49FE-A254-A9BB9CEFAEA5}"/>
+  <sh:task idref="{E07F215A-6022-40E0-A109-17078992E5F9}"/>
+ </category>
+ <category id="9">
+  <sh:task idref="{33C29E1D-D8BE-4811-8496-1FE0F9164F63}"/>
+  <sh:task idref="{F58C814D-989E-4584-8053-A424F11D8CCF}"/>
+ </category>
+</categories>
