@@ -2,8 +2,11 @@
 
 VOID TaskPreview_Show(IN HWND hwndOwner, IN const RECT *prcAnchor,
                       IN const HWND *pahWnd, IN UINT cWindows, IN INT_PTR nGroupId);
+VOID TaskPreview_ShowHover(IN HWND hwndOwner, IN const RECT *prcAnchor,
+                           IN const HWND *pahWnd, IN UINT cWindows, IN INT_PTR nGroupId);
 VOID TaskPreview_Hide(VOID);
 BOOL TaskPreview_IsVisibleFor(IN INT_PTR nGroupId);
+BOOL TaskPreview_IsHover(VOID);
 
 VOID TrayCalendar_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor);
 VOID TrayVolume_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor);
