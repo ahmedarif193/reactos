@@ -10197,23 +10197,22 @@ DxgkpAcquirePostDisplayOwnership(
                 Owner->MiniportContext != NULL &&
                 Owner->MiniportContext->IsBasicDisplayFallback;
             /*
-             * Nothing to hand over: firmware left no framebuffer, so the
-             * fallback drives a headless desktop.  A display-only miniport
-             * that took that desktop would own a session with no mode to show
-             * it in -- it cannot program a mode itself, so win32k could not
-             * build its primary surface and would bugcheck
-             * VIDEO_DRIVER_INIT_FAILURE.
+             * Nothing can be transferred when firmware left no framebuffer.
+             * Native DpiFdoDetectPostDevice associates the BGFX framebuffer
+             * range with an adapter resource before designating a POST device,
+             * and native DpiAcquirePostDisplayOwnership returns an empty
+             * descriptor to a claimant that is not that device.  Do not turn
+             * an empty descriptor into ownership here.
              *
-             * A full WDDM miniport is not in that position: it enumerates its
-             * own video present sources and targets and commits its own mode
-             * through the VidPn, so it never needed the firmware framebuffer.
-             * Refusing it the desktop leaves the real GPU permanently headless
-             * behind the fallback, which is how a machine whose firmware
-             * hands over no GOP ends up rendering on nothing.  Keep the
-             * fallback only for a claimant that genuinely cannot set a mode.
+             * This matters for full WDDM miniports too.  Their StartDevice
+             * source/child counts are capacities; connected targets are found
+             * by the later child-relations query.  Stopping BasicDisplay here,
+             * before that query, leaves ReactOS' single win32ss display bridge
+             * without a PDEV when every target is disconnected and win32k
+             * bugchecks VIDEO_DRIVER_INIT_FAILURE.  Keep the headless fallback
+             * until a future boot supplies transferable POST state.
              */
             if (RetainFallback &&
-                Claimant->MiniportContext->IsDisplayOnlyDriver &&
                 Owner->PostDisplayWidth == 0 &&
                 !InbvHasValidGopFrameBuffer())
             {
