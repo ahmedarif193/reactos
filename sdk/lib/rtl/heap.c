@@ -78,7 +78,17 @@ UCHAR FillPattern[HEAP_ENTRY_SIZE] =
     HEAP_TAIL_FILL,
     HEAP_TAIL_FILL,
     HEAP_TAIL_FILL,
-    HEAP_TAIL_FILL
+    HEAP_TAIL_FILL,
+#ifdef _WIN64
+    HEAP_TAIL_FILL,
+    HEAP_TAIL_FILL,
+    HEAP_TAIL_FILL,
+    HEAP_TAIL_FILL,
+    HEAP_TAIL_FILL,
+    HEAP_TAIL_FILL,
+    HEAP_TAIL_FILL,
+    HEAP_TAIL_FILL,
+#endif
 };
 
 static
@@ -3531,6 +3541,14 @@ RtlpValidateHeapSegment(
             {
                 CurrentEntry = (PHEAP_ENTRY)((PCHAR)CurrentEntry + Size);
 
+                if (UcrDescriptor &&
+                    (PVOID)(CurrentEntry + 1) == UcrDescriptor->Address &&
+                    CurrentEntry->Flags == (HEAP_ENTRY_BUSY | HEAP_ENTRY_LAST_ENTRY) &&
+                    CurrentEntry->Size == 1)
+                {
+                    CurrentEntry = CurrentEntry + 1;
+                }
+
                 if (!UcrDescriptor)
                 {
                     /* Check if it's not really the last one */
@@ -3624,6 +3642,11 @@ RtlpValidateHeap(PHEAP Heap,
         PHEAP_FREE_ENTRY FreeEntry = CONTAINING_RECORD(NextEntry, HEAP_FREE_ENTRY, FreeList);
 
         NextEntry = NextEntry->Flink;
+        if (NextEntry == NULL || NextEntry->Blink != &FreeEntry->FreeList)
+        {
+            DPRINT1("HEAP: Free list link broken at %p (Flink %p)\n", FreeEntry, NextEntry);
+            return FALSE;
+        }
 
         if (NextEntry != ListHead)
         {
