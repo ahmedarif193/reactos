@@ -1209,16 +1209,8 @@ GpuVaAllocPageTable(
     SegmentId = GpuVaLevelDesc(Adapter, Level)->PageTableSegmentId;
     if (SegmentId != 0)
     {
-        PDXGKRNL_SEGMENT Segment;
-
         if (Adapter->Segments == NULL || SegmentId > Adapter->SegmentCount)
             return NULL;
-        Segment = &((PDXGKRNL_SEGMENT)Adapter->Segments)[SegmentId - 1];
-        /* The KMD requests system backing by naming an aperture segment.
-         * Physical references to those pages use the implicit segment zero;
-         * a GPU page walker does not translate an aperture offset. */
-        if (Segment->Flags.Aperture || Segment->Flags.Agp)
-            SegmentId = 0;
     }
 
     TableBytes = GpuVaTableBytes(Adapter, Level);
@@ -1309,8 +1301,8 @@ GpuVaAllocPageTable(
  * Where the table sits *inside the segment it was placed in*.
  *
  * D3DGPU_PHYSICAL_ADDRESS.SegmentOffset is a byte offset in the segment.
- * Segment zero uses a system physical address. Aperture-backed child PTEs
- * instead reference the backing system pages directly.
+ * Segment zero uses a system physical address. For every other segment the
+ * address is the offset assigned when VidMm places the table in that segment.
  */
 static ULONGLONG
 GpuVaTableSegmentOffset(
@@ -1327,30 +1319,18 @@ GpuVaTableSegmentOffset(
  */
 static VOID
 GpuVaLinkChildEntry(
-    _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_GPUVA_PAGE_TABLE Parent,
     _In_ ULONG Index,
     _In_ PDXGKRNL_GPUVA_PAGE_TABLE Child)
 {
-    ULONG SegmentId = Child->SegmentId;
     ULONGLONG Address = GpuVaTableSegmentOffset(Child);
 
-    /* An aperture maps system memory; its offsets are not physical RAM
-     * addresses. The GPU page walker must follow the backing pages. */
-    if (SegmentId != 0)
-    {
-        PDXGKRNL_SEGMENT Segment = &((PDXGKRNL_SEGMENT)Adapter->Segments)[SegmentId - 1];
-
-        if (Segment->Flags.Aperture || Segment->Flags.Agp)
-        {
-            SegmentId = 0;
-            Address = (ULONGLONG)Child->Physical.QuadPart;
-        }
-    }
+    /* Windows preserves the miniport-declared page-table segment in the PDE.
+     * Its address is the offset of the child within that segment. */
     Parent->Entries[Index].Flags = 0;
     Parent->Entries[Index].Valid =
         (Child->SegmentId != 0 && Child->PlacementPending) ? 0 : 1;
-    Parent->Entries[Index].Segment = SegmentId;
+    Parent->Entries[Index].Segment = Child->SegmentId;
     Parent->Entries[Index].PageTableAddress =
         GpuVaPteAddress(Address);
 }
@@ -1655,7 +1635,7 @@ DxgkGpuVaPlacePendingPageTables(
         Table->PlacementPending = FALSE;
         if (Table->Parent != NULL)
         {
-            GpuVaLinkChildEntry(Adapter, Table->Parent, Table->ParentIndex, Table);
+            GpuVaLinkChildEntry(Table->Parent, Table->ParentIndex, Table);
             (VOID)GpuVaNotifyPageTableUpdate(Process,
                                              Table->Parent,
                                              Table->ParentIndex,
@@ -2172,7 +2152,7 @@ GpuVaGetLeafTable(
             if (Child == NULL)
                 return NULL;
             Table->Children[Index] = Child;
-            GpuVaLinkChildEntry(Adapter, Table, Index, Child);
+            GpuVaLinkChildEntry(Table, Index, Child);
             if (!NT_SUCCESS(GpuVaNotifyPageTableUpdate(Process, Table, Index, 1, CoverageBase, TRUE)))
             {
                 Table->Entries[Index].Flags = 0;
