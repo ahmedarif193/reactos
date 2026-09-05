@@ -20,6 +20,7 @@
  */
 
 #include <precomp.h>
+#include <propkey.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
@@ -163,8 +164,25 @@ HRESULT CCPLExtractIcon_CreateInstance(IShellFolder * psf, LPCITEMIDLIST pidl, R
     return initIcon->QueryInterface(riid, ppvOut);
 }
 
+static BOOL IsCplDontLoad(LPCWSTR pszPath)
+{
+    static const WCHAR szKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Control Panel\\don't load";
+    LPCWSTR pszFile = PathFindFileNameW(pszPath);
+    HKEY hRoots[2] = { HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER };
+    for (UINT i = 0; i < _countof(hRoots); i++)
+    {
+        DWORD cb = 0;
+        if (SHGetValueW(hRoots[i], szKey, pszFile, NULL, NULL, &cb) == ERROR_SUCCESS)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 BOOL CControlPanelEnum::RegisterCPanelApp(LPCWSTR wpath)
 {
+    if (IsCplDontLoad(wpath))
+        return TRUE;
+
     CPlApplet* applet = Control_LoadApplet(0, wpath, NULL);
     int iconIdx;
 
@@ -571,9 +589,61 @@ HRESULT WINAPI CControlPanelFolder::GetDefaultColumnState(UINT iColumn, DWORD *p
     return S_OK;
 }
 
+static const SHCOLUMNID SCID_ControlPanelCategory = { { 0x305CA226, 0xD286, 0x468E, { 0xB8, 0x48, 0x2B, 0x2E, 0x8E, 0x69, 0x7B, 0x74 } }, 2 };
+
+static HRESULT ReadRegItemDetail(const CLSID *pclsid, LPCWSTR pszValue, VARIANT *pv)
+{
+    WCHAR szGuid[40], szKey[64], szBuf[256];
+    DWORD cb = sizeof(szBuf), dwType = 0;
+    StringFromGUID2(*pclsid, szGuid, _countof(szGuid));
+    wsprintfW(szKey, L"CLSID\\%s", szGuid);
+    if (SHGetValueW(HKEY_CLASSES_ROOT, szKey, pszValue, &dwType, szBuf, &cb) != ERROR_SUCCESS)
+        return E_FAIL;
+    if (dwType == REG_DWORD)
+        wsprintfW(szBuf, L"%d", *(DWORD*)szBuf);
+    else if (dwType != REG_SZ && dwType != REG_EXPAND_SZ)
+        return E_FAIL;
+    V_VT(pv) = VT_BSTR;
+    V_BSTR(pv) = SysAllocString(szBuf);
+    return V_BSTR(pv) ? S_OK : E_OUTOFMEMORY;
+}
+
+static HRESULT ReadCplCategory(PIDLCPanelStruct *pCPanel, VARIANT *pv)
+{
+    static const WCHAR szKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Control Panel\\Extended Properties\\{305CA226-D286-468e-B848-2B2E8E697B74} 2";
+    LPCWSTR pszNames[2] = { pCPanel->szName, PathFindFileNameW(pCPanel->szName) };
+    for (UINT i = 0; i < _countof(pszNames); i++)
+    {
+        DWORD dwCat = 0, cb = sizeof(dwCat), dwType = 0;
+        if (SHGetValueW(HKEY_LOCAL_MACHINE, szKey, pszNames[i], &dwType, &dwCat, &cb) == ERROR_SUCCESS && dwType == REG_DWORD)
+        {
+            V_VT(pv) = VT_UI4;
+            V_UI4(pv) = dwCat;
+            return S_OK;
+        }
+    }
+    return E_FAIL;
+}
+
 HRESULT WINAPI CControlPanelFolder::GetDetailsEx(PCUITEMID_CHILD pidl, const SHCOLUMNID *pscid, VARIANT *pv)
 {
-    if (IsRegItem(pidl))
+    const CLSID *pclsid = IsRegItem(pidl);
+    if (IsEqualGUID(pscid->fmtid, PKEY_ApplicationName.fmtid) && pscid->pid == PKEY_ApplicationName.pid)
+    {
+        if (pclsid)
+            return ReadRegItemDetail(pclsid, L"System.ApplicationName", pv);
+        return E_FAIL;
+    }
+    if (IsEqualGUID(pscid->fmtid, SCID_ControlPanelCategory.fmtid) && pscid->pid == SCID_ControlPanelCategory.pid)
+    {
+        if (pclsid)
+            return ReadRegItemDetail(pclsid, L"System.ControlPanel.Category", pv);
+        PIDLCPanelStruct *pCPanel = _ILGetCPanelPointer(pidl);
+        if (pCPanel)
+            return ReadCplCategory(pCPanel, pv);
+        return E_FAIL;
+    }
+    if (pclsid)
         return m_regFolder->GetDetailsEx(pidl, pscid, pv);
     return SH32_GetDetailsOfPKeyAsVariant(this, pidl, pscid, pv, FALSE);
 }
@@ -888,6 +958,70 @@ static HRESULT FindExeCplClass(LPCWSTR Canonical, LPWSTR clsid)
     return hr;
 }
 
+static BOOL IsAllDigits(LPCWSTR psz)
+{
+    if (!psz || !*psz)
+        return FALSE;
+    for (; *psz; psz++)
+        if (*psz < L'0' || *psz > L'9')
+            return FALSE;
+    return TRUE;
+}
+
+static HRESULT ExecuteCplClassCommand(LPCWSTR pszClsKey, LPCWSTR pszPage)
+{
+    WCHAR szKey[MAX_PATH], szRaw[MAX_PATH * 2], szCmd[MAX_PATH * 2], szFile[MAX_PATH];
+    DWORD cb = sizeof(szRaw);
+    StringCchPrintfW(szKey, _countof(szKey), L"%s\\Shell\\Open\\Command", pszClsKey);
+    if (SHGetValueW(HKEY_CLASSES_ROOT, szKey, NULL, NULL, szRaw, &cb) != ERROR_SUCCESS || !szRaw[0])
+        return S_FALSE;
+    ExpandEnvironmentStringsW(szRaw, szCmd, _countof(szCmd));
+    if (pszPage && *pszPage)
+    {
+        if (StrStrIW(szCmd, L"control11"))
+        {
+            StringCchCatW(szCmd, _countof(szCmd), L" /page ");
+            StringCchCatW(szCmd, _countof(szCmd), pszPage);
+        }
+        else if (StrStrIW(szCmd, L"Control_RunDLL"))
+        {
+            if (IsAllDigits(pszPage))
+            {
+                LPCWSTR pszAt = StrRChrW(szCmd, NULL, L'@');
+                StringCchCatW(szCmd, _countof(szCmd), (pszAt && !StrChrW(pszAt, L',')) ? L"," : L",,");
+                StringCchCatW(szCmd, _countof(szCmd), pszPage);
+            }
+            else
+            {
+                StringCchCatW(szCmd, _countof(szCmd), L",,");
+                StringCchCatW(szCmd, _countof(szCmd), pszPage);
+            }
+        }
+    }
+    LPWSTR p = szCmd;
+    while (*p == L' ') p++;
+    UINT i = 0;
+    if (*p == L'"')
+    {
+        p++;
+        while (*p && *p != L'"' && i < _countof(szFile) - 1) szFile[i++] = *p++;
+        if (*p == L'"') p++;
+    }
+    else
+    {
+        while (*p && *p != L' ' && i < _countof(szFile) - 1) szFile[i++] = *p++;
+    }
+    szFile[i] = 0;
+    while (*p == L' ') p++;
+    SHELLEXECUTEINFOW sei = { sizeof(sei), SEE_MASK_FLAG_DDEWAIT };
+    sei.lpFile = szFile;
+    sei.lpParameters = *p ? p : NULL;
+    sei.nShow = SW_SHOW;
+    if (!ShellExecuteExW(&sei))
+        return HRESULT_FROM_WIN32(GetLastError());
+    return S_OK;
+}
+
 HRESULT WINAPI COpenControlPanel::Open(LPCWSTR pszName, LPCWSTR pszPage, IUnknown *punkSite)
 {
     WCHAR path[MAX_PATH], clspath[MAX_PATH];
@@ -905,6 +1039,9 @@ HRESULT WINAPI COpenControlPanel::Open(LPCWSTR pszName, LPCWSTR pszPage, IUnknow
         LPWSTR clsid = clspath + wsprintfW(clspath, L"CLSID\\");
         if (SUCCEEDED(hr = FindExeCplClass(pszName, clsid)))
         {
+            hr = ExecuteCplClassCommand(clspath, pszPage);
+            if (hr != S_FALSE)
+                return hr;
             if (SUCCEEDED(hr = CreateCplAbsoluteParsingPath(L"::", clsid, path, _countof(path))))
             {
                 // NT6 will execute "::{26EE0668-A00A-44D7-9371-BEB064C98683}\0\::{clsid}[\pszPage]"
