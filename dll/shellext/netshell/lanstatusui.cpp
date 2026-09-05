@@ -215,18 +215,23 @@ static UINT
 NetShellTrayIcon(DWORD dwType, DWORD dwOperStatus, NLM_CONNECTIVITY Conn, int nQuality)
 {
     BOOL bWifi = (dwType == IF_TYPE_IEEE80211);
+    BOOL bInternet = (Conn & (NLM_CONNECTIVITY_IPV4_INTERNET |
+                              NLM_CONNECTIVITY_IPV6_INTERNET)) != 0;
 
     if (dwOperStatus != MIB_IF_OPER_STATUS_CONNECTED &&
         dwOperStatus != MIB_IF_OPER_STATUS_OPERATIONAL)
     {
-        return bWifi ? IDI_NET_TRAY_WIFI4 : IDI_NET_TRAY_WIRED_X;
+        return bWifi ? IDI_NET_TRAY_WIFIOFF : IDI_NET_TRAY_WIRED_X;
     }
 
     if (bWifi && nQuality == NS_WIFI_NOASSOC)
-        return IDI_NET_TRAY_WIFI4;
+        return IDI_NET_TRAY_WIFIOFF;
 
     if (!bWifi)
-        return IDI_NET_TRAY_WIRED;
+        return bInternet ? IDI_NET_TRAY_WIRED : IDI_NET_TRAY_WIRED_WARN;
+
+    if (!bInternet)
+        return IDI_NET_TRAY_WIFI_WARN;
 
     if (nQuality >= 75 || nQuality == NS_WIFI_NOINFO)
         return IDI_NET_TRAY_WIFI1;
