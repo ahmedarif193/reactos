@@ -538,9 +538,17 @@ VWifiDot11SetScanRequest(
     {
         Adapter->PendingScanOid = Request;
         NdisReleaseSpinLock(&Adapter->Lock);
-        DPRINT1("VWIFI: OID_DOT11_SCAN_REQUEST -> PENDING (async), scheduling SCAN_CONFIRM\n");
-        VWifiScheduleJob(Adapter, VWifiJobScan, VWIFI_SCAN_DELAY_MS);
-        return NDIS_STATUS_PENDING;
+        if (VWifiScheduleJob(Adapter, VWifiJobScan, VWIFI_SCAN_DELAY_MS))
+        {
+            DPRINT1("VWIFI: OID_DOT11_SCAN_REQUEST -> PENDING (async), scheduling SCAN_CONFIRM\n");
+            return NDIS_STATUS_PENDING;
+        }
+
+        NdisAcquireSpinLock(&Adapter->Lock);
+        if (Adapter->PendingScanOid == Request)
+        {
+            Adapter->PendingScanOid = NULL;
+        }
     }
     NdisReleaseSpinLock(&Adapter->Lock);
 
@@ -909,6 +917,22 @@ VWifiMiniportCancelOidRequest(
     IN NDIS_HANDLE MiniportAdapterContext,
     IN PVOID RequestId)
 {
-    UNREFERENCED_PARAMETER(MiniportAdapterContext);
-    UNREFERENCED_PARAMETER(RequestId);
+    PVWIFI_ADAPTER Adapter = (PVWIFI_ADAPTER)MiniportAdapterContext;
+    PNDIS_OID_REQUEST ScanOid = NULL;
+
+    NdisAcquireSpinLock(&Adapter->Lock);
+    if (Adapter->PendingScanOid != NULL &&
+        Adapter->PendingScanOid->RequestId == RequestId)
+    {
+        ScanOid = Adapter->PendingScanOid;
+        Adapter->PendingScanOid = NULL;
+    }
+    NdisReleaseSpinLock(&Adapter->Lock);
+
+    if (ScanOid != NULL && Adapter->MiniportAdapterHandle != NULL)
+    {
+        DPRINT1("VWIFI: OID_DOT11_SCAN_REQUEST cancelled\n");
+        NdisMOidRequestComplete(Adapter->MiniportAdapterHandle, ScanOid,
+                                NDIS_STATUS_REQUEST_ABORTED);
+    }
 }
