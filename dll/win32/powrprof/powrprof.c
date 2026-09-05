@@ -50,9 +50,18 @@ static const WCHAR szDiskMin[] = L"DiskSpindownMin";
 static const WCHAR szLastID[] = L"LastID";
 
 static UINT g_LastID = (UINT)-1;
+BOOLEAN WINAPI WritePwrPolicy(PUINT puiID, PPOWER_POLICY pPowerPolicy);
+static BOOLEAN POWRPROF_GetUserPowerPolicy(LPWSTR szNum, PUSER_POWER_POLICY puserPwrPolicy, DWORD cchName, LPWSTR szName, DWORD cchDesc, LPWSTR szDesc);
+static BOOLEAN POWRPROF_GetMachinePowerPolicy(LPWSTR szNum, PMACHINE_POWER_POLICY pmachinePwrPolicy);
 static HANDLE PPRegSemaphore = NULL;
 
 #ifdef __REACTOS__
+static const GUID PowrProfVideoSubgroup = { 0x7516B95F, 0xF776, 0x4464, { 0x8C, 0x53, 0x06, 0x16, 0x7F, 0x40, 0xCC, 0x99 } };
+static const GUID PowrProfVideoPowerdownTimeout = { 0x3C0BC021, 0xC8A8, 0x4E07, { 0xA9, 0x73, 0x6B, 0x14, 0xCB, 0xCB, 0x2B, 0x7E } };
+static const GUID PowrProfSleepSubgroup = { 0x238C9FA8, 0x0AAD, 0x41ED, { 0x83, 0xF4, 0x97, 0xBE, 0x24, 0x2C, 0x8F, 0x20 } };
+static const GUID PowrProfStandbyTimeout = { 0x29F6C1DB, 0x86DA, 0x48C5, { 0x9F, 0xDB, 0xF2, 0xB6, 0x7B, 0x1F, 0x44, 0xDA } };
+static const GUID PowrProfHibernateTimeout = { 0x9D7815A6, 0x7EE4, 0x497E, { 0x88, 0x88, 0x51, 0x5A, 0x05, 0xF0, 0x23, 0x64 } };
+
 typedef struct _POWRPROF_SCHEME_DEFAULTS
 {
     const GUID *Guid;
@@ -63,7 +72,21 @@ typedef struct _POWRPROF_SCHEME_DEFAULTS
     DWORD DcMaximum;
     DWORD AcEnergyPreference;
     DWORD DcEnergyPreference;
+    DWORD AcVideoTimeout;
+    DWORD DcVideoTimeout;
+    DWORD AcSleepTimeout;
+    DWORD DcSleepTimeout;
+    LPCWSTR Name;
+    LPCWSTR Description;
 } POWRPROF_SCHEME_DEFAULTS;
+
+typedef struct _POWRPROF_SETTING_INFO
+{
+    const GUID *Subgroup;
+    const GUID *Setting;
+    LPCWSTR Name;
+    LPCWSTR Description;
+} POWRPROF_SETTING_INFO;
 
 typedef struct _POWRPROF_PROCESSOR_POLICY_VALUES
 {
@@ -79,10 +102,40 @@ static const WCHAR szAcSettingIndex[] = L"ACSettingIndex";
 static const WCHAR szDcSettingIndex[] = L"DCSettingIndex";
 static const POWRPROF_SCHEME_DEFAULTS PowrProfSchemes[] =
 {
-    {&GUID_TYPICAL_POWER_SAVINGS, 0, 5, 5, 100, 100, 33, 50},
-    {&GUID_MAX_POWER_SAVINGS, 5, 5, 5, 100, 100, 60, 60},
-    {&GUID_MIN_POWER_SAVINGS, 4, 100, 5, 100, 100, 0, 0}
+    {&GUID_TYPICAL_POWER_SAVINGS, 0, 5, 5, 100, 100, 33, 50, 600, 300, 1800, 900,
+     L"Balanced", L"Automatically balances performance with energy consumption on capable hardware."},
+    {&GUID_MAX_POWER_SAVINGS, 5, 5, 5, 100, 100, 60, 60, 300, 120, 900, 600,
+     L"Power saver", L"Saves energy by reducing your computer's performance where possible."},
+    {&GUID_MIN_POWER_SAVINGS, 4, 100, 5, 100, 100, 0, 0, 900, 900, 0, 1200,
+     L"High performance", L"Favors performance, but may use more energy."}
 };
+
+static const POWRPROF_SETTING_INFO PowrProfSubgroups[] =
+{
+    {&GUID_PROCESSOR_SETTINGS_SUBGROUP, NULL, L"Processor power management", L"Settings that control the power management of the processor."},
+    {&PowrProfVideoSubgroup, NULL, L"Display", L"Display settings."},
+    {&PowrProfSleepSubgroup, NULL, L"Sleep", L"Sleep settings."}
+};
+
+static const POWRPROF_SETTING_INFO PowrProfSettings[] =
+{
+    {&GUID_PROCESSOR_SETTINGS_SUBGROUP, &GUID_PROCESSOR_THROTTLE_MINIMUM, L"Minimum processor state", L"Specify the minimum processor performance state in percent."},
+    {&GUID_PROCESSOR_SETTINGS_SUBGROUP, &GUID_PROCESSOR_THROTTLE_MAXIMUM, L"Maximum processor state", L"Specify the maximum processor performance state in percent."},
+    {&GUID_PROCESSOR_SETTINGS_SUBGROUP, &GUID_PROCESSOR_PERF_AUTONOMOUS_MODE, L"Processor performance autonomous mode", L"Specify whether the processor manages its own performance state."},
+    {&GUID_PROCESSOR_SETTINGS_SUBGROUP, &GUID_PROCESSOR_PERF_ENERGY_PERFORMANCE_PREFERENCE, L"Processor energy performance preference policy", L"Specify how much processor performance to trade for energy savings."},
+    {&PowrProfVideoSubgroup, &PowrProfVideoPowerdownTimeout, L"Turn off display after", L"Specify how long the computer is inactive before the display turns off."},
+    {&PowrProfSleepSubgroup, &PowrProfStandbyTimeout, L"Sleep after", L"Specify how long the computer is inactive before it sleeps."},
+    {&PowrProfSleepSubgroup, &PowrProfHibernateTimeout, L"Hibernate after", L"Specify how long the computer is inactive before it hibernates."}
+};
+
+static BOOL
+POWRPROF_IsPercentSetting(
+    const GUID *Setting)
+{
+    return IsEqualGUID(Setting, &GUID_PROCESSOR_THROTTLE_MINIMUM) ||
+           IsEqualGUID(Setting, &GUID_PROCESSOR_THROTTLE_MAXIMUM) ||
+           IsEqualGUID(Setting, &GUID_PROCESSOR_PERF_ENERGY_PERFORMANCE_PREFERENCE);
+}
 
 static const POWRPROF_SCHEME_DEFAULTS *
 POWRPROF_FindScheme(
@@ -156,7 +209,26 @@ POWRPROF_GetSettingDefaults(
     Defaults = POWRPROF_FindScheme(Scheme);
     if (!Defaults)
         return ERROR_FILE_NOT_FOUND;
-    if (!Subgroup || !IsEqualGUID(Subgroup, &GUID_PROCESSOR_SETTINGS_SUBGROUP))
+    if (!Subgroup)
+        return ERROR_FILE_NOT_FOUND;
+    if (IsEqualGUID(Subgroup, &PowrProfVideoSubgroup))
+    {
+        if (!IsEqualGUID(Setting, &PowrProfVideoPowerdownTimeout))
+            return ERROR_FILE_NOT_FOUND;
+        *Value = AcValue ? Defaults->AcVideoTimeout : Defaults->DcVideoTimeout;
+        return ERROR_SUCCESS;
+    }
+    if (IsEqualGUID(Subgroup, &PowrProfSleepSubgroup))
+    {
+        if (IsEqualGUID(Setting, &PowrProfStandbyTimeout))
+            *Value = AcValue ? Defaults->AcSleepTimeout : Defaults->DcSleepTimeout;
+        else if (IsEqualGUID(Setting, &PowrProfHibernateTimeout))
+            *Value = 0;
+        else
+            return ERROR_FILE_NOT_FOUND;
+        return ERROR_SUCCESS;
+    }
+    if (!IsEqualGUID(Subgroup, &GUID_PROCESSOR_SETTINGS_SUBGROUP))
         return ERROR_FILE_NOT_FOUND;
     if (IsEqualGUID(Setting, &GUID_PROCESSOR_THROTTLE_MINIMUM))
         *Value = AcValue ? Defaults->AcMinimum : Defaults->DcMinimum;
@@ -202,7 +274,9 @@ POWRPROF_ReadValueIndex(
         return ERROR_SUCCESS;
     if (Error != ERROR_SUCCESS)
         return Error;
-    if (Type != REG_DWORD || Size != sizeof(*Value) || *Value > 100)
+    if (Type != REG_DWORD || Size != sizeof(*Value))
+        return ERROR_INVALID_DATA;
+    if (POWRPROF_IsPercentSetting(Setting) && *Value > 100)
         return ERROR_INVALID_DATA;
     if (IsEqualGUID(Setting, &GUID_PROCESSOR_PERF_AUTONOMOUS_MODE) && *Value > PROCESSOR_PERF_AUTONOMOUS_MODE_ENABLED)
         return ERROR_INVALID_DATA;
@@ -224,7 +298,7 @@ POWRPROF_WriteValueIndex(
     Error = POWRPROF_GetSettingDefaults(Scheme, Subgroup, Setting, AcValue, &DefaultValue);
     if (Error != ERROR_SUCCESS)
         return Error;
-    if (IsEqualGUID(Setting, &GUID_PROCESSOR_PERF_AUTONOMOUS_MODE) ? Value > PROCESSOR_PERF_AUTONOMOUS_MODE_ENABLED : Value > 100)
+    if (IsEqualGUID(Setting, &GUID_PROCESSOR_PERF_AUTONOMOUS_MODE) ? Value > PROCESSOR_PERF_AUTONOMOUS_MODE_ENABLED : (POWRPROF_IsPercentSetting(Setting) && Value > 100))
         return ERROR_INVALID_DATA;
     Error = POWRPROF_OpenSettingKey(Scheme, Subgroup, Setting, KEY_SET_VALUE, TRUE, &Key);
     if (Error != ERROR_SUCCESS)
@@ -437,7 +511,29 @@ POWRPROF_ApplyScheme(
     if (Error == ERROR_SUCCESS)
         Error = POWRPROF_PersistActiveScheme(Scheme, Defaults->LegacyId, UpdateLegacy);
     if (Error == ERROR_SUCCESS)
+    {
+        POWER_POLICY Policy;
+        UINT LegacyId = Defaults->LegacyId;
+        WCHAR LegacyNum[16];
+        DWORD VideoAc, VideoDc, SleepAc, SleepDc;
+        swprintf(LegacyNum, L"%u", LegacyId);
+        if (POWRPROF_GetUserPowerPolicy(LegacyNum, &Policy.user, 0, NULL, 0, NULL) &&
+            POWRPROF_GetMachinePowerPolicy(LegacyNum, &Policy.mach) &&
+            POWRPROF_ReadValueIndex(Scheme, &PowrProfVideoSubgroup, &PowrProfVideoPowerdownTimeout, TRUE, &VideoAc) == ERROR_SUCCESS &&
+            POWRPROF_ReadValueIndex(Scheme, &PowrProfVideoSubgroup, &PowrProfVideoPowerdownTimeout, FALSE, &VideoDc) == ERROR_SUCCESS &&
+            POWRPROF_ReadValueIndex(Scheme, &PowrProfSleepSubgroup, &PowrProfStandbyTimeout, TRUE, &SleepAc) == ERROR_SUCCESS &&
+            POWRPROF_ReadValueIndex(Scheme, &PowrProfSleepSubgroup, &PowrProfStandbyTimeout, FALSE, &SleepDc) == ERROR_SUCCESS)
+        {
+            Policy.user.VideoTimeoutAc = VideoAc;
+            Policy.user.VideoTimeoutDc = VideoDc;
+            Policy.user.IdleTimeoutAc = SleepAc;
+            Policy.user.IdleTimeoutDc = SleepDc;
+            Policy.user.IdleAc.Action = SleepAc ? PowerActionSleep : PowerActionNone;
+            Policy.user.IdleDc.Action = SleepDc ? PowerActionSleep : PowerActionNone;
+            (void)WritePwrPolicy(&LegacyId, &Policy);
+        }
         return ERROR_SUCCESS;
+    }
 
     if (POWRPROF_ReadProcessorPolicyValues(&OldScheme, TRUE, &OldValues[PoAc]) == ERROR_SUCCESS &&
         POWRPROF_ReadProcessorPolicyValues(&OldScheme, FALSE, &OldValues[PoDc]) == ERROR_SUCCESS)
@@ -1189,19 +1285,121 @@ DWORD WINAPI PowerSetActiveScheme(HKEY UserRootPowerKey, const GUID *polguid)
 #endif
 }
 
+static DWORD
+POWRPROF_ReadValue(
+    const GUID *Scheme,
+    const GUID *SubGroup,
+    const GUID *PowerSettings,
+    BOOL AcValue,
+    PULONG Type,
+    PUCHAR Buffer,
+    DWORD *BufferSize)
+{
+    DWORD Value, Error;
+
+    if (!BufferSize)
+        return ERROR_INVALID_PARAMETER;
+    Error = AcquirePwrProfSemaphoreError();
+    if (Error != ERROR_SUCCESS)
+        return Error;
+    Error = POWRPROF_ReadValueIndex(Scheme, SubGroup, PowerSettings, AcValue, &Value);
+    ReleaseSemaphore(PPRegSemaphore, 1, NULL);
+    if (Error != ERROR_SUCCESS)
+        return Error;
+    if (Type)
+        *Type = REG_DWORD;
+    if (!Buffer || *BufferSize < sizeof(Value))
+    {
+        *BufferSize = sizeof(Value);
+        return Buffer ? ERROR_MORE_DATA : ERROR_SUCCESS;
+    }
+    memcpy(Buffer, &Value, sizeof(Value));
+    *BufferSize = sizeof(Value);
+    return ERROR_SUCCESS;
+}
+
 DWORD WINAPI
 PowerReadDCValue(HKEY RootPowerKey, const GUID *Scheme, const GUID *SubGroup, const GUID *PowerSettings, PULONG Type, PUCHAR Buffer, DWORD *BufferSize)
 {
-   FIXME("(%p,%s,%s,%s,%p,%p,%p) stub!\n", RootPowerKey, debugstr_guid(Scheme), debugstr_guid(SubGroup), debugstr_guid(PowerSettings), Type, Buffer, BufferSize);
-   return ERROR_CALL_NOT_IMPLEMENTED;
+    TRACE("(%p,%s,%s,%s,%p,%p,%p)\n", RootPowerKey, debugstr_guid(Scheme), debugstr_guid(SubGroup), debugstr_guid(PowerSettings), Type, Buffer, BufferSize);
+    return POWRPROF_ReadValue(Scheme, SubGroup, PowerSettings, FALSE, Type, Buffer, BufferSize);
+}
+
+static DWORD
+POWRPROF_ReturnString(
+    LPCWSTR String,
+    UCHAR *Buffer,
+    DWORD *BufferSize)
+{
+    DWORD Needed;
+
+    if (!BufferSize)
+        return ERROR_INVALID_PARAMETER;
+    Needed = (strlenW(String) + 1) * sizeof(WCHAR);
+    if (!Buffer || *BufferSize < Needed)
+    {
+        *BufferSize = Needed;
+        return Buffer ? ERROR_MORE_DATA : ERROR_SUCCESS;
+    }
+    memcpy(Buffer, String, Needed);
+    *BufferSize = Needed;
+    return ERROR_SUCCESS;
+}
+
+static DWORD
+POWRPROF_ReadText(
+    const GUID *Scheme,
+    const GUID *SubGroup,
+    const GUID *PowerSettings,
+    BOOL Description,
+    UCHAR *Buffer,
+    DWORD *BufferSize)
+{
+    UINT Index;
+
+    if (PowerSettings)
+    {
+        for (Index = 0; Index < sizeof(PowrProfSettings) / sizeof(PowrProfSettings[0]); Index++)
+        {
+            if (IsEqualGUID(PowrProfSettings[Index].Setting, PowerSettings) &&
+                (!SubGroup || IsEqualGUID(PowrProfSettings[Index].Subgroup, SubGroup)))
+                return POWRPROF_ReturnString(Description ? PowrProfSettings[Index].Description : PowrProfSettings[Index].Name, Buffer, BufferSize);
+        }
+        return ERROR_FILE_NOT_FOUND;
+    }
+    if (SubGroup)
+    {
+        for (Index = 0; Index < sizeof(PowrProfSubgroups) / sizeof(PowrProfSubgroups[0]); Index++)
+        {
+            if (IsEqualGUID(PowrProfSubgroups[Index].Subgroup, SubGroup))
+                return POWRPROF_ReturnString(Description ? PowrProfSubgroups[Index].Description : PowrProfSubgroups[Index].Name, Buffer, BufferSize);
+        }
+        return ERROR_FILE_NOT_FOUND;
+    }
+    if (Scheme)
+    {
+        const POWRPROF_SCHEME_DEFAULTS *Defaults = POWRPROF_FindScheme(Scheme);
+        if (!Defaults)
+            return ERROR_FILE_NOT_FOUND;
+        return POWRPROF_ReturnString(Description ? Defaults->Description : Defaults->Name, Buffer, BufferSize);
+    }
+    return ERROR_INVALID_PARAMETER;
 }
 
 DWORD WINAPI PowerReadFriendlyName(HKEY RootPowerKey, const GUID *Scheme,
 	const GUID *SubGroup, const GUID *PowerSettings, UCHAR *Buffer,
 	DWORD *BufferSize)
 {
-   FIXME("(%p,%s,%s,%s,%p,%p) stub!\n", RootPowerKey, debugstr_guid(Scheme), debugstr_guid(SubGroup), debugstr_guid(PowerSettings), Buffer, BufferSize);
-   return ERROR_CALL_NOT_IMPLEMENTED;
+    TRACE("(%p,%s,%s,%s,%p,%p)\n", RootPowerKey, debugstr_guid(Scheme), debugstr_guid(SubGroup), debugstr_guid(PowerSettings), Buffer, BufferSize);
+    return POWRPROF_ReadText(Scheme, SubGroup, PowerSettings, FALSE, Buffer, BufferSize);
+}
+
+DWORD WINAPI PowerReadDescription(HKEY RootPowerKey, const GUID *Scheme,
+	const GUID *SubGroup, const GUID *PowerSettings, UCHAR *Buffer,
+	DWORD *BufferSize)
+{
+    TRACE("(%p,%s,%s,%s,%p,%p)\n", RootPowerKey, debugstr_guid(Scheme), debugstr_guid(SubGroup), debugstr_guid(PowerSettings), Buffer, BufferSize);
+    return POWRPROF_ReadText(Scheme, SubGroup, PowerSettings, TRUE, Buffer, BufferSize);
 }
 
 POWER_PLATFORM_ROLE WINAPI PowerDeterminePlatformRole(void)
@@ -1216,12 +1414,64 @@ POWER_PLATFORM_ROLE WINAPI PowerDeterminePlatformRoleEx(ULONG version)
     return PlatformRoleDesktop;
 }
 
+static DWORD
+POWRPROF_ReturnGuid(
+    const GUID *Guid,
+    UCHAR *buffer,
+    DWORD *buffer_size)
+{
+    if (!buffer_size)
+        return ERROR_INVALID_PARAMETER;
+    if (!buffer || *buffer_size < sizeof(GUID))
+    {
+        *buffer_size = sizeof(GUID);
+        return buffer ? ERROR_MORE_DATA : ERROR_SUCCESS;
+    }
+    memcpy(buffer, Guid, sizeof(GUID));
+    *buffer_size = sizeof(GUID);
+    return ERROR_SUCCESS;
+}
+
 DWORD WINAPI PowerEnumerate(HKEY key, const GUID *scheme, const GUID *subgroup, POWER_DATA_ACCESSOR flags,
                         ULONG index, UCHAR *buffer, DWORD *buffer_size)
 {
-   FIXME("(%p,%s,%s,%d,%ld,%p,%p) stub!\n", key, debugstr_guid(scheme), debugstr_guid(subgroup),
-                flags, index, buffer, buffer_size);
-   return ERROR_CALL_NOT_IMPLEMENTED;
+    ULONG Found = 0, Count;
+
+    TRACE("(%p,%s,%s,%d,%ld,%p,%p)\n", key, debugstr_guid(scheme), debugstr_guid(subgroup),
+          flags, index, buffer, buffer_size);
+
+    switch (flags)
+    {
+        case ACCESS_SCHEME:
+            Count = sizeof(PowrProfSchemes) / sizeof(PowrProfSchemes[0]);
+            if (index >= Count)
+                return ERROR_NO_MORE_ITEMS;
+            return POWRPROF_ReturnGuid(PowrProfSchemes[index].Guid, buffer, buffer_size);
+
+        case ACCESS_SUBGROUP:
+            if (scheme && !POWRPROF_FindScheme(scheme))
+                return ERROR_FILE_NOT_FOUND;
+            Count = sizeof(PowrProfSubgroups) / sizeof(PowrProfSubgroups[0]);
+            if (index >= Count)
+                return ERROR_NO_MORE_ITEMS;
+            return POWRPROF_ReturnGuid(PowrProfSubgroups[index].Subgroup, buffer, buffer_size);
+
+        case ACCESS_INDIVIDUAL_SETTING:
+            if (scheme && !POWRPROF_FindScheme(scheme))
+                return ERROR_FILE_NOT_FOUND;
+            for (Count = 0; Count < sizeof(PowrProfSettings) / sizeof(PowrProfSettings[0]); Count++)
+            {
+                if (subgroup && !IsEqualGUID(PowrProfSettings[Count].Subgroup, subgroup))
+                    continue;
+                if (Found++ == index)
+                    return POWRPROF_ReturnGuid(PowrProfSettings[Count].Setting, buffer, buffer_size);
+            }
+            return ERROR_NO_MORE_ITEMS;
+
+        default:
+            FIXME("accessor %d not supported\n", flags);
+            return ERROR_INVALID_PARAMETER;
+    }
 }
 
 DWORD WINAPI PowerRegisterSuspendResumeNotification(DWORD flags, HANDLE recipient, PHPOWERNOTIFY handle)
@@ -1349,8 +1599,8 @@ DWORD WINAPI PowerReadDCValueIndex(
 DWORD WINAPI
 PowerReadACValue(HKEY RootPowerKey, const GUID *Scheme, const GUID *SubGroup, const GUID *PowerSettings, PULONG Type, PUCHAR Buffer, DWORD *BufferSize)
 {
-   FIXME("(%p,%s,%s,%s,%p,%p,%p) stub!\n", RootPowerKey, debugstr_guid(Scheme), debugstr_guid(SubGroup), debugstr_guid(PowerSettings), Type, Buffer, BufferSize);
-   return ERROR_CALL_NOT_IMPLEMENTED;
+    TRACE("(%p,%s,%s,%s,%p,%p,%p)\n", RootPowerKey, debugstr_guid(Scheme), debugstr_guid(SubGroup), debugstr_guid(PowerSettings), Type, Buffer, BufferSize);
+    return POWRPROF_ReadValue(Scheme, SubGroup, PowerSettings, TRUE, Type, Buffer, BufferSize);
 }
 
 BOOLEAN WINAPI

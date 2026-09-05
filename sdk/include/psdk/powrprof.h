@@ -173,6 +173,8 @@ BOOLEAN WINAPI IsPwrShutdownAllowed(VOID);
 BOOLEAN WINAPI IsPwrSuspendAllowed(VOID);
 DWORD   WINAPI PowerEnumerate(HKEY, const GUID *, const GUID *, POWER_DATA_ACCESSOR, ULONG, UCHAR *, DWORD *);
 #if (NTDDI_VERSION >= NTDDI_VISTA)
+DWORD   WINAPI PowerReadFriendlyName(_In_opt_ HKEY, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _Out_writes_bytes_opt_(*BufferSize) PUCHAR, _Inout_ LPDWORD BufferSize);
+DWORD   WINAPI PowerReadDescription(_In_opt_ HKEY, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _Out_writes_bytes_opt_(*BufferSize) PUCHAR, _Inout_ LPDWORD BufferSize);
 DWORD   WINAPI PowerReadACValueIndex(_In_opt_ HKEY, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _Out_ LPDWORD);
 DWORD   WINAPI PowerReadDCValueIndex(_In_opt_ HKEY, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _Out_ LPDWORD);
 #endif

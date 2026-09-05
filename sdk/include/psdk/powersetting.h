@@ -46,6 +46,8 @@ typedef void WINAPI EFFECTIVE_POWER_MODE_CALLBACK(EFFECTIVE_POWER_MODE mode, voi
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 DWORD WINAPI PowerWriteACValueIndex(_In_opt_ HKEY, _In_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_ DWORD);
 DWORD WINAPI PowerWriteDCValueIndex(_In_opt_ HKEY, _In_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_ DWORD);
+DWORD WINAPI PowerReadACValue(_In_opt_ HKEY, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _Out_opt_ PULONG, _Out_writes_bytes_opt_(*BufferSize) LPBYTE, _Inout_opt_ LPDWORD BufferSize);
+DWORD WINAPI PowerReadDCValue(_In_opt_ HKEY, _In_opt_ const GUID *, _In_opt_ const GUID *, _In_opt_ const GUID *, _Out_opt_ PULONG, _Out_writes_bytes_opt_(*BufferSize) PUCHAR, _Inout_ LPDWORD BufferSize);
 DWORD WINAPI PowerGetActiveScheme(_In_opt_ HKEY, _Outptr_ GUID **);
 DWORD WINAPI PowerSetActiveScheme(_In_opt_ HKEY, _In_opt_ const GUID *);
 #endif
