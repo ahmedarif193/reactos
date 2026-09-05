@@ -185,12 +185,16 @@ class CStartButton
     HFONT      m_Font;
 
     BOOL m_bOrbIcon;
+    BOOL m_bMaterial;
+    COLORREF m_crMaterial;
 
 public:
     CStartButton()
         : m_ImageList(NULL),
           m_Font(NULL),
-          m_bOrbIcon(FALSE)
+          m_bOrbIcon(FALSE),
+          m_bMaterial(FALSE),
+          m_crMaterial(0)
     {
         m_Size.cx = 0;
         m_Size.cy = 0;
@@ -245,6 +249,12 @@ public:
         SetFont(m_Font, FALSE);
     }
 
+    VOID RefreshMaterial()
+    {
+        m_bMaterial = m_bOrbIcon &&
+                      ShellGetTaskbarMaterial(&m_crMaterial);
+    }
+
     VOID Initialize()
     {
         // HACK & FIXME: CORE-18016
@@ -256,7 +266,7 @@ public:
 
         if (IsThemeActive())
         {
-            const INT cxIcon = ShellScaleForDpi(32);
+            const INT cxIcon = ShellScaleForDpi(36);
             HICON hIcon = (HICON)LoadImageW(hExplorerInstance,
                                             MAKEINTRESOURCEW(IDI_STARTORB),
                                             IMAGE_ICON, cxIcon, cxIcon, 0);
@@ -285,6 +295,7 @@ public:
             BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_LEFT};
             SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
         }
+        RefreshMaterial();
         UpdateSize();
     }
 
@@ -375,8 +386,62 @@ public:
         DeleteObject(hbr);
     }
 
+    LRESULT OnEraseBkgnd(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        if (!m_bMaterial)
+        {
+            bHandled = FALSE;
+            return 0;
+        }
+        return 1;
+    }
+
+    LRESULT OnThemeChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        RefreshMaterial();
+        bHandled = FALSE;
+        return 0;
+    }
+
     LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        if (m_bMaterial)
+        {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(&ps);
+            if (hdc)
+            {
+                RECT rc;
+                LRESULT state = SendMessageW(BM_GETSTATE, 0, 0);
+                COLORREF cr = m_crMaterial;
+                int cx = 0, cy = 0;
+
+                GetClientRect(&rc);
+                if (state & BST_PUSHED)
+                    cr = ShellLiftColor(cr, 14);
+                else if (state & BST_HOT)
+                    cr = ShellLiftColor(cr, 24);
+                HBRUSH hbr = CreateSolidBrush(cr);
+                if (hbr)
+                {
+                    FillRect(hdc, &rc, hbr);
+                    DeleteObject(hbr);
+                }
+                ImageList_GetIconSize(m_ImageList, &cx, &cy);
+                ImageList_Draw(m_ImageList, 0, hdc,
+                               (rc.right - cx) / 2, (rc.bottom - cy) / 2,
+                               ILD_TRANSPARENT);
+                {
+                    RECT rcEdge = rc;
+
+                    rcEdge.bottom = rcEdge.top + ShellScaleForDpi(2);
+                    DrawThemeParentBackground(m_hWnd, hdc, &rcEdge);
+                }
+                EndPaint(&ps);
+            }
+            return 0;
+        }
+
         LRESULT lr = DefWindowProc(uMsg, wParam, lParam);
         if (IsThemeActive() && !m_bOrbIcon)
         {
@@ -392,6 +457,8 @@ public:
 
     BEGIN_MSG_MAP(CStartButton)
         MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
+        MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBkgnd)
+        MESSAGE_HANDLER(WM_THEMECHANGED, OnThemeChanged)
         MESSAGE_HANDLER(WM_PAINT, OnPaint)
     END_MSG_MAP()
 };
@@ -2584,6 +2651,8 @@ ChangePos:
             CloseThemeData(m_Theme);
 
         m_Theme = OpenThemeData(m_hWnd, L"TaskBar");
+        if (m_StartButton.m_hWnd)
+            m_StartButton.SendMessage(WM_THEMECHANGED, 0, 0);
 
         if (m_Theme)
         {
