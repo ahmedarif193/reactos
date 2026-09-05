@@ -1032,7 +1032,12 @@ DxgkPagingExecuteSynchronous(
     Status = DxgkPagingExecute(Adapter, Device, Op, 0, 0, &FenceId);
     if (!NT_SUCCESS(Status))
         return Status;
-    return DxgkPagingWaitForFence(Adapter, FenceId, DXGKP_PAGING_SYNC_TIMEOUT_MS);
+    Status = DxgkPagingWaitForFence(Adapter,
+                                    FenceId,
+                                    DXGKP_PAGING_SYNC_TIMEOUT_MS);
+    /* STATUS_TIMEOUT has success severity. A synchronous placement caller
+     * must never publish memory whose paging packet has not retired. */
+    return Status == STATUS_TIMEOUT ? STATUS_IO_TIMEOUT : Status;
 }
 
 /* ========================================================================
