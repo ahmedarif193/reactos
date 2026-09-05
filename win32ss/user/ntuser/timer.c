@@ -452,9 +452,30 @@ PostTimerMessages(PWND Window)
   return Hit;
 }
 
-VOID
+static
+BOOL
 FASTCALL
-ProcessTimers(VOID)
+IntRitTimerDue(VOID)
+{
+  PLIST_ENTRY pLE;
+  PTIMER pTmr;
+
+  for (pLE = TimersListHead.Flink; pLE != &TimersListHead; pLE = pLE->Flink)
+  {
+    pTmr = CONTAINING_RECORD(pLE, TIMER, ptmrList);
+    if ((pTmr->flags & TMRF_RIT) &&
+        !(pTmr->flags & (TMRF_WAITING | TMRF_INIT | TMRF_READY)) &&
+        pTmr->cmsCountdown < 0)
+    {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+BOOL
+FASTCALL
+ProcessTimers(BOOL Exclusive)
 {
   LARGE_INTEGER DueTime;
   LONG Time;
@@ -463,6 +484,11 @@ ProcessTimers(VOID)
   LONG TimerCount = 0;
 
   TimerEnterExclusive();
+  if (!Exclusive && IntRitTimerDue())
+  {
+    TimerLeave();
+    return FALSE;
+  }
   pLE = TimersListHead.Flink;
   Time = EngGetTickCount32();
 
@@ -504,9 +530,11 @@ ProcessTimers(VOID)
                 // Set thread message queue for this timer.
                 if (pTmr->pti)
                 {  // Wakeup thread
+                   UserDomainLockExclusive(DLT_QUEUE);
                    pTmr->pti->cTimersReady++;
                    ASSERT(pTmr->pti->pEventQueueServer != NULL);
                    MsqWakeQueue(pTmr->pti, QS_TIMER, TRUE);
+                   UserDomainUnlockExclusive(DLT_QUEUE);
                 }
              }
           }
@@ -531,6 +559,7 @@ ProcessTimers(VOID)
    * callback. Keep this outside the timer and USER locks. */
   SynchronizeDriver(GCAPS2_SYNCTIMER);
   TRACE("TimerCount = %d\n", TimerCount);
+  return TRUE;
 }
 
 BOOL FASTCALL
