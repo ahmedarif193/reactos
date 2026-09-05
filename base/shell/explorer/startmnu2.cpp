@@ -479,7 +479,7 @@ SM2ExecRightCmd(int nCmd)
         case SM2C_MUSIC:     SM2OpenCsidlFolder(CSIDL_MYMUSIC); break;
         case SM2C_GAMES:     SM2OpenGames(); break;
         case SM2C_COMPUTER:  SM2OpenCsidlIdList(CSIDL_DRIVES); break;
-        case SM2C_CONTROL:   SM2OpenCsidlIdList(CSIDL_CONTROLS); break;
+        case SM2C_CONTROL:   ShellExecuteW(NULL, NULL, L"control.exe", NULL, NULL, SW_SHOWNORMAL); break;
         case SM2C_PRINTERS:  SM2OpenCsidlIdList(CSIDL_PRINTERS); break;
         case SM2C_HELP:      SM2OpenHelp(); break;
     }

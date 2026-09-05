@@ -1037,7 +1037,7 @@ public:
                 break;
             case TRAYCMD_CONTROL_PANEL:
                 if (!SHRestricted(REST_NOSETFOLDERS))
-                    ShowFolder(CSIDL_CONTROLS, FALSE);
+                    ShellExecuteW(NULL, NULL, L"control.exe", NULL, NULL, SW_SHOWNORMAL);
                 break;
             case TRAYCMD_SHUTDOWN_DIALOG:
                 DoExitWindows();
