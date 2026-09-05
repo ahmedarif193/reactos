@@ -3991,7 +3991,7 @@ NtUserWindowFromPoint(LONG X, LONG Y)
    USER_REFERENCE_ENTRY Ref;
 
    TRACE("Enter NtUserWindowFromPoint\n");
-   UserEnterExclusive();
+   UserEnterShared();
 
    if ((DesktopWindow = UserGetWindowObject(IntGetDesktopWindow())))
    {

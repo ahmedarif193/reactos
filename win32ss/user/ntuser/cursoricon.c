@@ -681,7 +681,7 @@ NtUserGetIconInfo(
         return FALSE;
     }
 
-    UserEnterExclusive();
+    UserEnterShared();
 
     if (!(CurIcon = UserGetCurIconObject(hCurIcon)))
     {
@@ -2388,7 +2388,7 @@ NtUserDrawIconEx(
     BOOL Ret;
 
     TRACE("Enter NtUserDrawIconEx\n");
-    UserEnterExclusive();
+    UserEnterShared();
 
     if (!(pIcon = UserGetCurIconObject(hIcon)))
     {

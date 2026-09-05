@@ -3119,7 +3119,7 @@ NtUserGetThreadDesktop(DWORD dwThreadId, HDESK hConsoleDesktop)
     PDESKTOP DesktopObject;
     OBJECT_HANDLE_INFORMATION HandleInformation;
 
-    UserEnterExclusive();
+    UserEnterShared();
     TRACE("Enter NtUserGetThreadDesktop\n");
 
     if (!dwThreadId)

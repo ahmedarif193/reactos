@@ -76,6 +76,7 @@ NtUserCallNoParam(DWORD Routine)
         case NOPARAM_ROUTINE_GETMSESSAGEPOS:
         case NOPARAM_ROUTINE_GETIMESHOWSTATUS:
         case NOPARAM_ROUTINE_ISCONSOLEMODE:
+        case NOPARAM_ROUTINE_MSQCLEARWAKEMASK:
             UserEnterShared();
             break;
         default:
@@ -193,6 +194,8 @@ NtUserCallOneParam(
         case ONEPARAM_ROUTINE_GETCURSORPOS:
         case ONEPARAM_ROUTINE_GETPROCDEFLAYOUT:
         case ONEPARAM_ROUTINE_DWMISENABLED:
+        case ONEPARAM_ROUTINE_GETINPUTEVENT:
+        case ONEPARAM_ROUTINE_GETQUEUESTATUS:
             UserEnterShared();
             break;
         default:

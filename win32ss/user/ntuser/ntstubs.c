@@ -591,7 +591,7 @@ NtUserQueryInformationThread(IN HANDLE ThreadHandle,
     if (PsGetCurrentProcess() != gpepCSRSS)
         return STATUS_ACCESS_DENIED;
 
-    UserEnterExclusive();
+    UserEnterShared();
 
     /* Get the Thread */
     Status = ObReferenceObjectByHandle(ThreadHandle,
