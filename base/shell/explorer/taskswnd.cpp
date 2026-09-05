@@ -19,6 +19,7 @@
  */
 
 #include "precomp.h"
+#include <winver.h>
 #include <commoncontrols.h>
 #include <regstr.h>
 #include <shlwapi_undoc.h>
@@ -35,6 +36,16 @@
 // Fullscreen windows (a.k.a. rude apps) checker
 
 #define TIMER_ID_VALIDATE_RUDE_APP 5
+#define TIMER_ID_HOVER_PREVIEW 6
+#define HOVER_PREVIEW_DELAY 400
+#define TSWM_TASKBUTTONMBUTTON (WM_USER + 3)
+#define IDM_JUMP_LAUNCH 1
+#define IDM_JUMP_CLOSE 2
+#define IDM_GROUP_CASCADE 3
+#define IDM_GROUP_STACKED 4
+#define IDM_GROUP_SIDEBYSIDE 5
+#define IDM_GROUP_MINIMIZE 6
+#define IDM_GROUP_CLOSE 7
 #define VALIDATE_RUDE_INTERVAL 1000
 #define VALIDATE_RUDE_MAX_COUNT 5
 
@@ -360,9 +371,37 @@ public:
         return 0;
     }
 
+    LRESULT OnMButtonUpToolbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        INT index = HitTest(&pt);
+
+        if (index >= 0)
+            ::SendMessageW(GetParent(), TSWM_TASKBUTTONMBUTTON, (WPARAM)index, 0);
+        return 0;
+    }
+
+    LRESULT OnMouseMoveToolbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        bHandled = FALSE;
+        if (m_bTrackGlow)
+        {
+            INT hot = GetHotItem();
+            RECT rc;
+
+            if (hot >= 0 && GetItemRect(hot, &rc))
+                InvalidateRect(&rc, FALSE);
+        }
+        return 0;
+    }
+
 public:
+    BOOL m_bTrackGlow;
+
     BEGIN_MSG_MAP(CNotifyToolbar)
         MESSAGE_HANDLER(WM_NCHITTEST, OnNcHitTestToolbar)
+        MESSAGE_HANDLER(WM_MBUTTONUP, OnMButtonUpToolbar)
+        MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMoveToolbar)
     END_MSG_MAP()
 
     BOOL Initialize(HWND hWndParent)
@@ -374,6 +413,7 @@ public:
         // HACK & FIXME: CORE-18016
         HWND toolbar = CToolbar::Create(hWndParent, styles);
         m_hWnd = NULL;
+        m_bTrackGlow = FALSE;
         return SubclassWindow(toolbar);
     }
 };
@@ -396,6 +436,12 @@ class CTaskSwitchWnd :
     PTASK_GROUP m_TaskGroups;
     PTASK_ITEM m_TaskItems;
     PTASK_ITEM m_ActiveTaskItem;
+    BOOL m_bMaterial;
+    COLORREF m_crMaterial;
+    INT m_HoverIndex;
+    COLORREF m_crGlowCache;
+    INT m_GlowCacheIcon;
+    INT m_GlowCacheCount;
 
     HTHEME m_Theme;
     UINT m_ButtonsPerLine;
@@ -421,6 +467,12 @@ public:
         m_TaskGroups(NULL),
         m_TaskItems(NULL),
         m_ActiveTaskItem(NULL),
+        m_bMaterial(FALSE),
+        m_crMaterial(0),
+        m_HoverIndex(-1),
+        m_crGlowCache(0),
+        m_GlowCacheIcon(-1),
+        m_GlowCacheCount(0),
         m_Theme(NULL),
         m_ButtonsPerLine(0),
         m_ButtonCount(0),
@@ -960,7 +1012,6 @@ public:
             }
             currentGroup = currentGroup->Next;
         }
-
         ImageList_Remove(m_ImageList, TaskItem->IconIndex);
     }
 
@@ -1843,6 +1894,11 @@ public:
             m_Theme = OpenThemeData(m_hWnd, L"TaskBand");
         else
             m_Theme = NULL;
+        m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial);
+        m_TaskBar.m_bTrackGlow = m_bMaterial && IsWin7Bar();
+        m_GlowCacheIcon = -1;
+        m_HoverIndex = -1;
+        TaskPreview_Hide();
 
         m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsWin7Bar();
         if (m_IsGroupingEnabled && IsWin7Bar())
@@ -1868,6 +1924,8 @@ public:
             return FALSE;
 
         SetWindowTheme(m_TaskBar.m_hWnd, L"TaskBand", NULL);
+        m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial);
+        m_TaskBar.m_bTrackGlow = m_bMaterial && IsWin7Bar();
 
         m_ImageList = ImageList_Create(GetSystemMetrics(UseSmallTaskIcons() ? SM_CXSMICON : SM_CXICON),
                                        GetSystemMetrics(UseSmallTaskIcons() ? SM_CYSMICON : SM_CYICON),
@@ -2061,6 +2119,7 @@ public:
         BOOL bIsMinimized;
         BOOL bIsActive;
 
+        TaskPreview_Hide();
         if (::IsWindow(TaskItem->hWnd))
         {
             bIsMinimized = ::IsIconic(TaskItem->hWnd);
@@ -2088,32 +2147,132 @@ public:
         }
     }
 
-    VOID HandleTaskGroupClick(IN OUT PTASK_GROUP TaskGroup)
+    UINT CollectGroupWindows(IN PTASK_GROUP TaskGroup, OUT HWND *pahWnd, IN UINT cMax)
     {
-        PTASK_ITEM TaskItem, LastItem;
+        PTASK_ITEM TaskItem, LastItem = m_TaskItems + m_TaskItemCount;
+        UINT cWindows = 0;
+
+        for (TaskItem = m_TaskItems; TaskItem != LastItem && cWindows < cMax; TaskItem++)
+        {
+            if (TaskItem->Group == TaskGroup && ::IsWindow(TaskItem->hWnd))
+                pahWnd[cWindows++] = TaskItem->hWnd;
+        }
+        return cWindows;
+    }
+
+    BOOL GetButtonScreenRect(IN INT Index, OUT RECT *prc)
+    {
+        if (Index < 0 || !m_TaskBar.GetItemRect(Index, prc))
+            return FALSE;
+        ::MapWindowPoints(m_TaskBar.m_hWnd, NULL, (LPPOINT)prc, 2);
+        return TRUE;
+    }
+
+    PTASK_GROUP GroupOfIndex(IN INT Index)
+    {
+        PTASK_GROUP TaskGroup = m_IsGroupingEnabled ? FindTaskGroupByIndex(Index) : NULL;
+        PTASK_ITEM TaskItem;
+
+        if (TaskGroup != NULL)
+            return TaskGroup;
+        TaskItem = FindTaskItemByIndex(Index);
+        return TaskItem != NULL ? TaskItem->Group : NULL;
+    }
+
+    VOID LaunchNewInstance(IN PTASK_GROUP TaskGroup)
+    {
+        if (TaskGroup == NULL || !TaskGroup->szExePath[0])
+            return;
+        TaskPreview_Hide();
+        ShellExecuteW(NULL, NULL, TaskGroup->szExePath, NULL, NULL, SW_SHOWNORMAL);
+    }
+
+    VOID CycleGroup(IN PTASK_GROUP TaskGroup)
+    {
+        PTASK_ITEM Item, Last = m_TaskItems + m_TaskItemCount, First = NULL, Next = NULL;
+        BOOL bAfterActive = FALSE;
+
+        for (Item = m_TaskItems; Item != Last; Item++)
+        {
+            if (Item->Group != TaskGroup || !::IsWindow(Item->hWnd))
+                continue;
+            if (First == NULL)
+                First = Item;
+            if (bAfterActive)
+            {
+                Next = Item;
+                break;
+            }
+            if (Item == m_ActiveTaskItem)
+                bAfterActive = TRUE;
+        }
+        if (Next == NULL)
+            Next = First;
+        if (Next != NULL)
+        {
+            TaskPreview_Hide();
+            ::SwitchToThisWindow(Next->hWnd, TRUE);
+        }
+    }
+
+    VOID ShowHoverPreview(IN INT Index)
+    {
+        PTASK_GROUP TaskGroup = m_IsGroupingEnabled ? FindTaskGroupByIndex(Index) : NULL;
+        PTASK_ITEM TaskItem;
         HWND ahWnd[16];
         UINT cWindows = 0;
+        INT_PTR id;
         RECT rcBtn;
 
-        if (TaskPreview_IsVisibleFor((INT_PTR)TaskGroup))
+        if (TaskGroup != NULL && TaskGroup->IsCollapsed)
+        {
+            cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+            id = (INT_PTR)TaskGroup;
+        }
+        else
+        {
+            TaskItem = FindTaskItemByIndex(Index);
+            if (TaskItem == NULL || !::IsWindow(TaskItem->hWnd))
+                return;
+            ahWnd[cWindows++] = TaskItem->hWnd;
+            id = (INT_PTR)TaskItem;
+        }
+        if (cWindows == 0 || TaskPreview_IsVisibleFor(id))
+            return;
+        if (!GetButtonScreenRect(Index, &rcBtn))
+            return;
+        TaskPreview_ShowHover(m_TaskBar.m_hWnd, &rcBtn, ahWnd, cWindows, id);
+    }
+
+    VOID OnHotTaskChanged(IN INT Index)
+    {
+        if (Index == m_HoverIndex)
+            return;
+        m_HoverIndex = Index;
+        KillTimer(TIMER_ID_HOVER_PREVIEW);
+        if (Index < 0)
+            return;
+        if (TaskPreview_IsHover())
+            ShowHoverPreview(Index);
+        else
+            SetTimer(TIMER_ID_HOVER_PREVIEW, HOVER_PREVIEW_DELAY, NULL);
+    }
+
+    VOID HandleTaskGroupClick(IN OUT PTASK_GROUP TaskGroup)
+    {
+        HWND ahWnd[16];
+        UINT cWindows;
+        RECT rcBtn;
+
+        if (TaskPreview_IsVisibleFor((INT_PTR)TaskGroup) && !TaskPreview_IsHover())
         {
             TaskPreview_Hide();
             return;
         }
 
-        LastItem = m_TaskItems + m_TaskItemCount;
-        for (TaskItem = m_TaskItems; TaskItem != LastItem && cWindows < _countof(ahWnd); TaskItem++)
-        {
-            if (TaskItem->Group == TaskGroup && ::IsWindow(TaskItem->hWnd))
-                ahWnd[cWindows++] = TaskItem->hWnd;
-        }
-
-        if (cWindows == 0 || TaskGroup->Index < 0)
+        cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+        if (cWindows == 0 || !GetButtonScreenRect(TaskGroup->Index, &rcBtn))
             return;
-
-        if (!m_TaskBar.SendMessage(TB_GETITEMRECT, TaskGroup->Index, (LPARAM)&rcBtn))
-            return;
-        ::MapWindowPoints(m_TaskBar.m_hWnd, NULL, (LPPOINT)&rcBtn, 2);
 
         TaskPreview_Show(m_TaskBar.m_hWnd, &rcBtn, ahWnd, cWindows, (INT_PTR)TaskGroup);
     }
@@ -2123,12 +2282,21 @@ public:
         PTASK_ITEM TaskItem;
         PTASK_GROUP TaskGroup;
 
+        if (IsWin7Bar() && (GetKeyState(VK_SHIFT) & 0x8000))
+        {
+            LaunchNewInstance(GroupOfIndex((INT) wIndex));
+            return TRUE;
+        }
+
         if (m_IsGroupingEnabled)
         {
             TaskGroup = FindTaskGroupByIndex((INT) wIndex);
             if (TaskGroup != NULL && TaskGroup->IsCollapsed)
             {
-                HandleTaskGroupClick(TaskGroup);
+                if (IsWin7Bar() && (GetKeyState(VK_CONTROL) & 0x8000))
+                    CycleGroup(TaskGroup);
+                else
+                    HandleTaskGroupClick(TaskGroup);
                 return TRUE;
             }
         }
@@ -2165,9 +2333,145 @@ public:
                                SendAsyncProc, (ULONG_PTR)TaskItem);
     }
 
+    static VOID GetAppDisplayName(IN LPCWSTR pszExe, OUT LPWSTR pszOut, IN size_t cch)
+    {
+        DWORD dwHandle = 0, cb;
+        LPVOID pData;
+        struct { WORD wLang, wCode; } *pTrans = NULL;
+        UINT cbTrans = 0, cchDesc = 0;
+        LPWSTR pszDesc = NULL;
+        WCHAR szSub[64];
+
+        pszOut[0] = 0;
+        if (!pszExe[0])
+            return;
+        cb = GetFileVersionInfoSizeW(pszExe, &dwHandle);
+        if (cb != 0)
+        {
+            pData = HeapAlloc(hProcessHeap, 0, cb);
+            if (pData != NULL)
+            {
+                if (GetFileVersionInfoW(pszExe, 0, cb, pData) &&
+                    VerQueryValueW(pData, L"\\VarFileInfo\\Translation",
+                                   (LPVOID *)&pTrans, &cbTrans) &&
+                    cbTrans >= 4)
+                {
+                    StringCchPrintfW(szSub, _countof(szSub),
+                                     L"\\StringFileInfo\\%04x%04x\\FileDescription",
+                                     pTrans->wLang, pTrans->wCode);
+                    if (VerQueryValueW(pData, szSub, (LPVOID *)&pszDesc, &cchDesc) &&
+                        pszDesc != NULL && pszDesc[0])
+                        StringCchCopyW(pszOut, cch, pszDesc);
+                }
+                HeapFree(hProcessHeap, 0, pData);
+            }
+        }
+        if (!pszOut[0])
+        {
+            StringCchCopyW(pszOut, cch, PathFindFileNameW(pszExe));
+            PathRemoveExtensionW(pszOut);
+        }
+    }
+
+    INT TrackTaskMenu(IN HMENU hMenu)
+    {
+        POINT pt;
+        INT cmd;
+
+        GetCursorPos(&pt);
+        SetForegroundWindow(m_hWnd);
+        cmd = TrackPopupMenuEx(hMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
+                               pt.x, pt.y, m_hWnd, NULL);
+        PostMessageW(WM_NULL, 0, 0);
+        return cmd;
+    }
+
+    VOID ShowJumpList(IN PTASK_GROUP TaskGroup, IN PTASK_ITEM TaskItem)
+    {
+        HMENU hMenu = CreatePopupMenu();
+        WCHAR szName[128];
+        HWND ahWnd[16];
+        UINT cWindows = 0, i;
+        INT cmd;
+
+        if (!hMenu)
+            return;
+        TaskPreview_Hide();
+        GetAppDisplayName(TaskGroup != NULL ? TaskGroup->szExePath : L"", szName, _countof(szName));
+        if (szName[0])
+        {
+            AppendMenuW(hMenu, MF_STRING, IDM_JUMP_LAUNCH, szName);
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        }
+        if (TaskItem != NULL)
+            ahWnd[cWindows++] = TaskItem->hWnd;
+        else if (TaskGroup != NULL)
+            cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+        AppendMenuW(hMenu, MF_STRING, IDM_JUMP_CLOSE,
+                    cWindows > 1 ? L"Close all windows" : L"Close window");
+        cmd = TrackTaskMenu(hMenu);
+        DestroyMenu(hMenu);
+        if (cmd == IDM_JUMP_LAUNCH)
+            LaunchNewInstance(TaskGroup);
+        else if (cmd == IDM_JUMP_CLOSE)
+        {
+            for (i = 0; i < cWindows; i++)
+                ::PostMessageW(ahWnd[i], WM_CLOSE, 0, 0);
+        }
+    }
+
+    VOID ShowGroupMenu(IN PTASK_GROUP TaskGroup)
+    {
+        HMENU hMenu = CreatePopupMenu();
+        HWND ahWnd[16];
+        UINT cWindows, i;
+        INT cmd;
+
+        if (!hMenu)
+            return;
+        TaskPreview_Hide();
+        cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+        AppendMenuW(hMenu, MF_STRING, IDM_GROUP_CASCADE, L"Cascade");
+        AppendMenuW(hMenu, MF_STRING, IDM_GROUP_STACKED, L"Show windows stacked");
+        AppendMenuW(hMenu, MF_STRING, IDM_GROUP_SIDEBYSIDE, L"Show windows side by side");
+        AppendMenuW(hMenu, MF_STRING, IDM_GROUP_MINIMIZE, L"Minimize all windows");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hMenu, MF_STRING, IDM_GROUP_CLOSE, L"Close all windows");
+        cmd = TrackTaskMenu(hMenu);
+        DestroyMenu(hMenu);
+        if (cmd == 0 || cWindows == 0)
+            return;
+        if (cmd == IDM_GROUP_CASCADE || cmd == IDM_GROUP_STACKED || cmd == IDM_GROUP_SIDEBYSIDE)
+        {
+            for (i = 0; i < cWindows; i++)
+            {
+                if (::IsIconic(ahWnd[i]))
+                    ::ShowWindow(ahWnd[i], SW_RESTORE);
+            }
+            if (cmd == IDM_GROUP_CASCADE)
+                CascadeWindows(NULL, 0, NULL, cWindows, ahWnd);
+            else
+                TileWindows(NULL, cmd == IDM_GROUP_STACKED ? MDITILE_HORIZONTAL : MDITILE_VERTICAL,
+                            NULL, cWindows, ahWnd);
+        }
+        else if (cmd == IDM_GROUP_MINIMIZE)
+        {
+            for (i = 0; i < cWindows; i++)
+                ::ShowWindowAsync(ahWnd[i], SW_MINIMIZE);
+        }
+        else if (cmd == IDM_GROUP_CLOSE)
+        {
+            for (i = 0; i < cWindows; i++)
+                ::PostMessageW(ahWnd[i], WM_CLOSE, 0, 0);
+        }
+    }
+
     VOID HandleTaskGroupRightClick(IN OUT PTASK_GROUP TaskGroup)
     {
-        /* TODO: Show task group right click menu */
+        if (GetKeyState(VK_SHIFT) & 0x8000)
+            ShowGroupMenu(TaskGroup);
+        else
+            ShowJumpList(TaskGroup, NULL);
     }
 
     BOOL HandleButtonRightClick(IN WORD wIndex)
@@ -2188,13 +2492,202 @@ public:
 
         if (TaskItem != NULL)
         {
-            HandleTaskItemRightClick(TaskItem);
+            if (IsWin7Bar() && !(GetKeyState(VK_SHIFT) & 0x8000))
+                ShowJumpList(TaskItem->Group, TaskItem);
+            else
+                HandleTaskItemRightClick(TaskItem);
             return TRUE;
         }
 
         return FALSE;
     }
 
+
+    static COLORREF IconDominantColor(HICON hIcon, COLORREF crFallback)
+    {
+        ICONINFO ii;
+        BITMAP bm;
+        BITMAPINFO bmi;
+        DWORD *pBits = NULL;
+        HDC hdc = NULL;
+        ULONGLONG sumR = 0, sumG = 0, sumB = 0, sumW = 0;
+        COLORREF cr = crFallback;
+        INT x, y, mx;
+
+        if (!hIcon || !GetIconInfo(hIcon, &ii))
+            return crFallback;
+        if (ii.hbmColor && GetObjectW(ii.hbmColor, sizeof(bm), &bm) &&
+            bm.bmWidth > 0 && bm.bmHeight > 0 && bm.bmWidth * bm.bmHeight <= 256 * 256)
+        {
+            ZeroMemory(&bmi, sizeof(bmi));
+            bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+            bmi.bmiHeader.biWidth = bm.bmWidth;
+            bmi.bmiHeader.biHeight = -bm.bmHeight;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+            pBits = (DWORD *)HeapAlloc(hProcessHeap, 0, (SIZE_T)bm.bmWidth * bm.bmHeight * 4);
+            hdc = ::GetDC(NULL);
+            if (pBits && hdc &&
+                GetDIBits(hdc, ii.hbmColor, 0, bm.bmHeight, pBits, &bmi, DIB_RGB_COLORS))
+            {
+                BOOL bHasAlpha = FALSE;
+
+                for (y = 0; y < bm.bmWidth * bm.bmHeight; y++)
+                {
+                    if (pBits[y] & 0xFF000000)
+                    {
+                        bHasAlpha = TRUE;
+                        break;
+                    }
+                }
+                for (y = 0; y < bm.bmHeight; y++)
+                {
+                    for (x = 0; x < bm.bmWidth; x++)
+                    {
+                        DWORD px = pBits[y * bm.bmWidth + x];
+                        INT a = bHasAlpha ? (INT)(px >> 24) : 255;
+                        INT r = (px >> 16) & 0xFF, g = (px >> 8) & 0xFF, b = px & 0xFF;
+                        INT hi = max(r, max(g, b)), lo = min(r, min(g, b));
+                        ULONGLONG w;
+
+                        if (a < 128 || hi < 48)
+                            continue;
+                        w = (ULONGLONG)(hi - lo + 6) * a;
+                        sumR += r * w;
+                        sumG += g * w;
+                        sumB += b * w;
+                        sumW += w;
+                    }
+                }
+                if (sumW != 0)
+                    cr = RGB(sumR / sumW, sumG / sumW, sumB / sumW);
+            }
+            if (hdc)
+                ::ReleaseDC(NULL, hdc);
+            if (pBits)
+                HeapFree(hProcessHeap, 0, pBits);
+        }
+        if (ii.hbmColor)
+            DeleteObject(ii.hbmColor);
+        if (ii.hbmMask)
+            DeleteObject(ii.hbmMask);
+        mx = max(GetRValue(cr), max(GetGValue(cr), GetBValue(cr)));
+        if (mx > 0 && mx < 255)
+        {
+            cr = RGB(min(255, GetRValue(cr) * 255 / mx),
+                     min(255, GetGValue(cr) * 255 / mx),
+                     min(255, GetBValue(cr) * 255 / mx));
+        }
+        return cr;
+    }
+
+    COLORREF GlowColorForIcon(INT IconIndex)
+    {
+        INT count = m_ImageList ? ImageList_GetImageCount(m_ImageList) : 0;
+        HICON hIcon;
+
+        if (IconIndex == m_GlowCacheIcon && count == m_GlowCacheCount)
+            return m_crGlowCache;
+        hIcon = m_ImageList ? ImageList_GetIcon(m_ImageList, IconIndex, ILD_TRANSPARENT) : NULL;
+        m_crGlowCache = IconDominantColor(hIcon, RGB(110, 170, 255));
+        if (hIcon)
+            DestroyIcon(hIcon);
+        m_GlowCacheIcon = IconIndex;
+        m_GlowCacheCount = count;
+        return m_crGlowCache;
+    }
+
+    VOID DrawWin7Well(HDC hdc, const RECT *prc, INT radius, INT liftFill, INT liftEdge,
+                      BOOL bGlow, COLORREF crGlow, POINT ptGlow, INT amp)
+    {
+        INT w = prc->right - prc->left, h = prc->bottom - prc->top;
+        COLORREF crFill = ShellLiftColor(m_crMaterial, liftFill);
+        COLORREF crEdge = ShellLiftColor(m_crMaterial, liftEdge);
+        HBRUSH hbrFill = CreateSolidBrush(crFill);
+        HPEN hpenEdge = CreatePen(PS_SOLID, 1, crEdge);
+        HGDIOBJ hbrOld, hpenOld;
+
+        if (w <= 0 || h <= 0 || !hbrFill || !hpenEdge)
+        {
+            if (hbrFill) DeleteObject(hbrFill);
+            if (hpenEdge) DeleteObject(hpenEdge);
+            return;
+        }
+        hbrOld = SelectObject(hdc, hbrFill);
+        hpenOld = SelectObject(hdc, GetStockObject(NULL_PEN));
+        RoundRect(hdc, prc->left, prc->top, prc->right + 1, prc->bottom + 1, radius, radius);
+        SelectObject(hdc, hpenOld);
+        SelectObject(hdc, hbrOld);
+        if (bGlow)
+        {
+            BITMAPINFO bmi;
+            DWORD *pBits = NULL;
+            HBITMAP hbm;
+            HDC hdcMem = CreateCompatibleDC(hdc);
+
+            ZeroMemory(&bmi, sizeof(bmi));
+            bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+            bmi.bmiHeader.biWidth = w;
+            bmi.bmiHeader.biHeight = -h;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+            hbm = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (void **)&pBits, NULL, 0);
+            if (hdcMem && hbm && pBits)
+            {
+                HGDIOBJ hbmOld = SelectObject(hdcMem, hbm);
+                HRGN hrgn = CreateRoundRectRgn(prc->left, prc->top, prc->right + 1,
+                                               prc->bottom + 1, radius, radius);
+                INT gx = ptGlow.x - prc->left, gy = ptGlow.y - prc->top;
+                INT R = max(w, h) * 4 / 5;
+                INT R2 = R * R;
+                INT gr = GetRValue(crGlow), gg = GetGValue(crGlow), gb = GetBValue(crGlow);
+                INT br = GetRValue(crFill), bg = GetGValue(crFill), bb = GetBValue(crFill);
+                INT x, y;
+
+                for (y = 0; y < h; y++)
+                {
+                    for (x = 0; x < w; x++)
+                    {
+                        INT dx = x - gx, dy = y - gy;
+                        INT d2 = dx * dx + dy * dy;
+                        INT r = br, g = bg, b = bb;
+
+                        if (d2 < R2)
+                        {
+                            INT f = 255 - d2 * 255 / R2;
+                            INT t = f * f / 255;
+                            INT add = amp * t / 255;
+
+                            r = min(255, r + gr * add / 255);
+                            g = min(255, g + gg * add / 255);
+                            b = min(255, b + gb * add / 255);
+                        }
+                        pBits[y * w + x] = ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
+                    }
+                }
+                if (hrgn)
+                    SelectClipRgn(hdc, hrgn);
+                BitBlt(hdc, prc->left, prc->top, w, h, hdcMem, 0, 0, SRCCOPY);
+                SelectClipRgn(hdc, NULL);
+                if (hrgn)
+                    DeleteObject(hrgn);
+                SelectObject(hdcMem, hbmOld);
+            }
+            if (hbm)
+                DeleteObject(hbm);
+            if (hdcMem)
+                DeleteDC(hdcMem);
+        }
+        hbrOld = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        hpenOld = SelectObject(hdc, hpenEdge);
+        RoundRect(hdc, prc->left, prc->top, prc->right, prc->bottom, radius, radius);
+        SelectObject(hdc, hpenOld);
+        SelectObject(hdc, hbrOld);
+        DeleteObject(hpenEdge);
+        DeleteObject(hbrFill);
+    }
 
     static VOID DrawVertGradient(HDC hdc, const RECT *prc, COLORREF top, COLORREF bottom)
     {
@@ -2231,7 +2724,57 @@ public:
         if (nLayers > 1)
             rcFace.right -= nStep * (nLayers - 1);
 
-        if (bPressed || bChecked)
+        if (m_bMaterial)
+        {
+            BOOL bFlash = (uState & CDIS_MARKED) != 0;
+            RECT rcWell = rcFace;
+            INT radius = ShellScaleForDpi(6);
+            INT liftFill, liftEdge, amp;
+            BOOL bGlow = bHot || bChecked || bPressed || bFlash;
+            COLORREF crGlow = 0;
+            POINT ptGlow;
+
+            InflateRect(&rcWell, -ShellScaleForDpi(1), -ShellScaleForDpi(2));
+            if (bFlash)        { liftFill = 12; liftEdge = 60; amp = 40; }
+            else if (bPressed) { liftFill = 5;  liftEdge = 40; amp = 14; }
+            else if (bChecked) { liftFill = 18; liftEdge = 56; amp = bHot ? 38 : 24; }
+            else if (bHot)     { liftFill = 12; liftEdge = 48; amp = 34; }
+            else               { liftFill = 8;  liftEdge = 28; amp = 0; }
+
+            ptGlow.x = (rcWell.left + rcWell.right) / 2;
+            ptGlow.y = rcWell.bottom - (rcWell.bottom - rcWell.top) / 4;
+            if (bGlow)
+            {
+                if (bFlash)
+                    crGlow = RGB(255, 160, 40);
+                else
+                    crGlow = GlowColorForIcon(IconIndex);
+                if (bHot && !bFlash)
+                {
+                    POINT pt;
+
+                    GetCursorPos(&pt);
+                    ::ScreenToClient(m_TaskBar.m_hWnd, &pt);
+                    if (pt.x >= rcWell.left && pt.x < rcWell.right)
+                        ptGlow.x = pt.x;
+                    if (pt.y >= rcWell.top && pt.y < rcWell.bottom)
+                        ptGlow.y = pt.y;
+                }
+            }
+            DrawWin7Well(hdc, &rcWell, radius, liftFill, liftEdge, bGlow, crGlow, ptGlow, amp);
+            if (bChecked && !bPressed)
+            {
+                RECT rcLight = { rcWell.left + radius / 2, rcWell.top + 1,
+                                 rcWell.right - radius / 2, rcWell.top + 2 };
+                HBRUSH hbrLight = CreateSolidBrush(ShellLiftColor(m_crMaterial, 72));
+
+                FillRect(hdc, &rcLight, hbrLight);
+                DeleteObject(hbrLight);
+            }
+            crEdge = ShellLiftColor(m_crMaterial, liftEdge);
+            bFill = TRUE;
+        }
+        else if (bPressed || bChecked)
         {
             DrawVertGradient(hdc, &rcFace, RGB(26, 29, 32), RGB(44, 49, 54));
             crEdge = RGB(88, 95, 102);
@@ -2244,7 +2787,7 @@ public:
             bFill = TRUE;
         }
 
-        if (bFill)
+        if (bFill && !m_bMaterial)
         {
             HBRUSH hbrEdge = CreateSolidBrush(crEdge);
             FrameRect(hdc, &rcFace, hbrEdge);
@@ -2267,6 +2810,7 @@ public:
             DeleteObject(hbrPage);
         }
 
+        if (IconIndex < 0 || !m_ImageList)
         if (IconIndex >= 0 && m_ImageList)
         {
             int cx, cy;
@@ -2301,6 +2845,8 @@ public:
                 /* Make the entire button flashing if necessary */
                 if (nmtbcd->nmcd.uItemState & CDIS_MARKED)
                 {
+                    if (IsWin7Bar() && m_bMaterial)
+                        return DrawWin7TaskButton(nmtbcd, TaskItem);
                     Ret = TBCDRF_NOBACKGROUND;
                     if (!m_Theme)
                     {
@@ -2359,6 +2905,15 @@ public:
             }
             if (pTip->pszText != NULL && pTip->cchTextMax > 0)
                 GetWndTextFromTaskItem(TaskItem, pTip->pszText, pTip->cchTextMax);
+            break;
+        }
+
+        case TBN_HOTITEMCHANGE:
+        {
+            const NMTBHOTITEM *pHot = (const NMTBHOTITEM *)nmh;
+
+            if (IsWin7Bar())
+                OnHotTaskChanged((pHot->dwFlags & HICF_LEAVING) ? -1 : pHot->idNew);
             break;
         }
 
@@ -2666,6 +3221,13 @@ public:
         return MA_NOACTIVATE;
     }
 
+    LRESULT OnTaskButtonMButton(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        if (IsWin7Bar())
+            LaunchNewInstance(GroupOfIndex((INT)wParam));
+        return 0;
+    }
+
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
         switch (wParam)
@@ -2675,6 +3237,12 @@ public:
                 DumpTasks();
                 break;
 #endif
+            case TIMER_ID_HOVER_PREVIEW:
+                KillTimer(wParam);
+                if (m_HoverIndex >= 0 && m_TaskBar.GetHotItem() == m_HoverIndex)
+                    ShowHoverPreview(m_HoverIndex);
+                break;
+
             case TIMER_ID_VALIDATE_RUDE_APP:
             {
                 // Real activation of rude app might take some time after HSHELL_...ACTIVATED.
@@ -2776,6 +3344,7 @@ public:
         MESSAGE_HANDLER(m_ShellHookMsg, OnShellHook)
         MESSAGE_HANDLER(WM_MOUSEACTIVATE, OnMouseActivate)
         MESSAGE_HANDLER(WM_KLUDGEMINRECT, OnKludgeItemRect)
+        MESSAGE_HANDLER(TSWM_TASKBUTTONMBUTTON, OnTaskButtonMButton)
         MESSAGE_HANDLER(WM_COPYDATA, OnCopyData)
         MESSAGE_HANDLER(WM_WINDOWPOSCHANGED, OnWindowPosChanged)
     END_MSG_MAP()

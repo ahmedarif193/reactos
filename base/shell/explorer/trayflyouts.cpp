@@ -8,7 +8,8 @@ enum
 {
     TFY_TIMER_ANIM = 1,
     TFY_TIMER_TICK = 2,
-    TFY_TIMER_ALIVE = 3
+    TFY_TIMER_ALIVE = 3,
+    TFY_TIMER_HOVER = 4
 };
 
 enum TFYANIM { TFY_NONE, TFY_OPEN, TFY_CLOSE };
@@ -74,7 +75,7 @@ public:
     }
 
     VOID BeginFlyoutOpen(HWND hWnd, int x, int y, int cx, int cy,
-                         COLORREF crBackground)
+                         COLORREF crBackground, BOOL bActivate = TRUE)
     {
         int nOffset = ShellScaleForDpi(TFY_ANIM_OFFSET);
 
@@ -90,7 +91,8 @@ public:
                  (HANDLE)(ULONG_PTR)ShellScaleForDpi(TFY_FLYOUT_RADIUS));
         SetWindowPos(hWnd, HWND_TOPMOST, x, y + nOffset, cx, cy,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        SetForegroundWindow(hWnd);
+        if (bActivate)
+            SetForegroundWindow(hWnd);
         InvalidateRect(hWnd, NULL, FALSE);
         UpdateWindow(hWnd);
         SetTimer(hWnd, TFY_TIMER_ANIM, TFY_ANIM_INTERVAL, NULL);
@@ -497,12 +499,17 @@ public:
     BOOL m_bCloseHot;
     BOOL m_bTracking;
     SIZE m_size;
+    BOOL m_bHover;
+    RECT m_rcAnchor;
+    ULONGLONG m_LeaveT0;
 
     CTaskPreviewWnd() : m_hFont(NULL), m_nGroupId(0), m_iHot(-1),
-                        m_bCloseHot(FALSE), m_bTracking(FALSE)
+                        m_bCloseHot(FALSE), m_bTracking(FALSE),
+                        m_bHover(FALSE), m_LeaveT0(0)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
         ZeroMemory(&m_size, sizeof(m_size));
+        ZeroMemory(&m_rcAnchor, sizeof(m_rcAnchor));
     }
 
     int Sc(int v) const { return ShellScaleForDpi(v); }
@@ -553,7 +560,8 @@ public:
         m_size.cy = CardH() + Sc(16);
     }
 
-    VOID Popup(HWND hwndOwner, const RECT *prcAnchor, const HWND *pahWnd, UINT cWindows, INT_PTR nGroupId)
+    VOID Popup(HWND hwndOwner, const RECT *prcAnchor, const HWND *pahWnd, UINT cWindows,
+               INT_PTR nGroupId, BOOL bHover)
     {
         MONITORINFO mi;
         POINT ptRef;
@@ -561,6 +569,9 @@ public:
 
         StartMenu2_GetFlyoutPalette(&m_Pal);
         m_nGroupId = nGroupId;
+        m_bHover = bHover;
+        m_rcAnchor = *prcAnchor;
+        m_LeaveT0 = 0;
         m_iHot = -1;
         m_bCloseHot = FALSE;
 
@@ -581,8 +592,10 @@ public:
         yPos = prcAnchor->top - m_size.cy - Sc(6);
         if (yPos < mi.rcMonitor.top) yPos = prcAnchor->bottom + Sc(6);
 
-        BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg);
+        BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg, !bHover);
         SetTimer(TFY_TIMER_ALIVE, 500, NULL);
+        if (bHover)
+            SetTimer(TFY_TIMER_HOVER, 100, NULL);
     }
 
     VOID FadeOut();
@@ -716,6 +729,24 @@ public:
     {
         if (HandleFlyoutAnimation(m_hWnd, wParam))
             return 0;
+        else if (wParam == TFY_TIMER_HOVER)
+        {
+            POINT pt;
+            RECT rcSelf;
+            ULONGLONG now = GetTickCount64();
+
+            if (m_AnimPhase == TFY_CLOSE)
+                return 0;
+            GetCursorPos(&pt);
+            GetWindowRect(&rcSelf);
+            InflateRect(&rcSelf, Sc(4), Sc(4));
+            if (PtInRect(&rcSelf, pt) || PtInRect(&m_rcAnchor, pt))
+                m_LeaveT0 = 0;
+            else if (m_LeaveT0 == 0)
+                m_LeaveT0 = now;
+            else if (now - m_LeaveT0 > 300)
+                FadeOut();
+        }
         else if (wParam == TFY_TIMER_ALIVE)
         {
             BOOL bChanged = FALSE;
@@ -824,6 +855,7 @@ public:
     {
         KillTimer(TFY_TIMER_ANIM);
         KillTimer(TFY_TIMER_ALIVE);
+        KillTimer(TFY_TIMER_HOVER);
         FreeCards();
         if (m_hFont)
         {
@@ -867,8 +899,9 @@ VOID CTaskPreviewWnd::FadeOut()
     g_TpDismissGroup = m_nGroupId;
 }
 
-VOID TaskPreview_Show(IN HWND hwndOwner, IN const RECT *prcAnchor,
-                      IN const HWND *pahWnd, IN UINT cWindows, IN INT_PTR nGroupId)
+static VOID TaskPreview_ShowEx(IN HWND hwndOwner, IN const RECT *prcAnchor,
+                               IN const HWND *pahWnd, IN UINT cWindows,
+                               IN INT_PTR nGroupId, IN BOOL bHover)
 {
     if (nGroupId == g_TpDismissGroup &&
         GetTickCount64() - g_TpDismissTick < TFY_REOPEN_GUARD_MS)
@@ -890,7 +923,25 @@ VOID TaskPreview_Show(IN HWND hwndOwner, IN const RECT *prcAnchor,
     }
 
     g_pTaskPreview = pPreview;
-    pPreview->Popup(hwndOwner, prcAnchor, pahWnd, cWindows, nGroupId);
+    pPreview->Popup(hwndOwner, prcAnchor, pahWnd, cWindows, nGroupId, bHover);
+}
+
+VOID TaskPreview_Show(IN HWND hwndOwner, IN const RECT *prcAnchor,
+                      IN const HWND *pahWnd, IN UINT cWindows, IN INT_PTR nGroupId)
+{
+    TaskPreview_ShowEx(hwndOwner, prcAnchor, pahWnd, cWindows, nGroupId, FALSE);
+}
+
+VOID TaskPreview_ShowHover(IN HWND hwndOwner, IN const RECT *prcAnchor,
+                           IN const HWND *pahWnd, IN UINT cWindows, IN INT_PTR nGroupId)
+{
+    TaskPreview_ShowEx(hwndOwner, prcAnchor, pahWnd, cWindows, nGroupId, TRUE);
+}
+
+BOOL TaskPreview_IsHover(VOID)
+{
+    return g_pTaskPreview != NULL && g_pTaskPreview->IsWindow() &&
+           g_pTaskPreview->m_bHover && g_pTaskPreview->m_AnimPhase != TFY_CLOSE;
 }
 
 VOID TaskPreview_Hide(VOID)
