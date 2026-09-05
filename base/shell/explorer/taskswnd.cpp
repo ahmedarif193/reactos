@@ -676,8 +676,15 @@ public:
         }
         tbbi.pszText = szText;
 
-        TaskGroup->IconIndex = ImageList_ReplaceIcon(m_ImageList, TaskGroup->IconIndex,
-                                                     GetGroupIcon(TaskGroup));
+        {
+            HICON hGroupIcon = GetGroupIcon(TaskGroup);
+            INT iImage = hGroupIcon ? ImageList_ReplaceIcon(m_ImageList,
+                                                            TaskGroup->IconIndex,
+                                                            hGroupIcon)
+                                    : -1;
+            if (iImage >= 0)
+                TaskGroup->IconIndex = iImage;
+        }
         tbbi.iImage = TaskGroup->IconIndex;
 
         if (!m_TaskBar.SetButtonInfo(TaskGroup->Index, &tbbi))
@@ -958,7 +965,13 @@ public:
         icon = GetWndIcon(TaskItem->hWnd);
         if (!icon)
             icon = static_cast<HICON>(LoadImageW(NULL, MAKEINTRESOURCEW(OIC_SAMPLE), IMAGE_ICON, 0, 0, LR_SHARED | LR_DEFAULTSIZE));
-        TaskItem->IconIndex = ImageList_ReplaceIcon(m_ImageList, TaskItem->IconIndex, icon);
+        if (icon)
+        {
+            INT iImage = ImageList_ReplaceIcon(m_ImageList, TaskItem->IconIndex, icon);
+
+            if (iImage >= 0)
+                TaskItem->IconIndex = iImage;
+        }
         tbbi.iImage = TaskItem->IconIndex;
 
         if (!m_TaskBar.SetButtonInfo(TaskItem->Index, &tbbi))
@@ -1013,6 +1026,7 @@ public:
             currentGroup = currentGroup->Next;
         }
         ImageList_Remove(m_ImageList, TaskItem->IconIndex);
+        TaskItem->IconIndex = -1;
     }
 
     PTASK_ITEM FindLastTaskItemOfGroup(
