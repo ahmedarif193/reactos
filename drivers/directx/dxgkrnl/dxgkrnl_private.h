@@ -1696,10 +1696,6 @@ struct _DXGKRNL_PROCESS
      * lock is accumulated here and flushed once the lock is released.
      */
     BOOLEAN                     PageTableUpdatePending;
-    /* TRUE when the pending transitions require DXGK_OPERATION_FLUSH_TLB.
-     * Invalid-to-valid transitions can omit it when the miniport promises
-     * that invalid translations are never cached. */
-    BOOLEAN                     PageTableTlbFlushPending;
     D3DGPU_VIRTUAL_ADDRESS      PageTableUpdateStart;
     D3DGPU_VIRTUAL_ADDRESS      PageTableUpdateEnd;
     /*
