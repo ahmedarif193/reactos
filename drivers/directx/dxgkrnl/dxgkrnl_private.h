@@ -255,6 +255,9 @@ typedef struct _DXGKRNL_DMA_BUFFER
 {
     LIST_ENTRY                  CacheListEntry;
     PDXGKRNL_ADAPTER           OwnerAdapter;
+    /* Non-NULL for a virtual DMA buffer. The backing holds the device
+     * reference; the cache key keeps GPUVA address spaces isolated. */
+    PDXGKRNL_DEVICE            OwnerDevice;
     PVOID                       VirtualAddress;
     ULONG                       Capacity;
     ULONG                       SubmissionStartOffset;
@@ -3765,6 +3768,14 @@ DxgkAllocateVirtualDmaBuffer(
     _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer);
 
 NTSTATUS
+DxgkAllocateVirtualDmaBufferWithPrivateData(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG Capacity,
+    _In_ ULONG SegmentSet,
+    _In_ ULONG PrivateDataSize,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer);
+
+NTSTATUS
 NTAPI
 DxgkAllocateDmaBufferWithPrivateData(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -3776,6 +3787,10 @@ VOID
 NTAPI
 DxgkFreeDmaBuffer(
     _In_opt_ PDXGKRNL_DMA_BUFFER DmaBuffer);
+
+VOID
+DxgkPurgeDmaBufferCacheForDevice(
+    _In_ PDXGKRNL_DEVICE Device);
 
 NTSTATUS
 NTAPI

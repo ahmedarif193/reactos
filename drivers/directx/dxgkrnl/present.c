@@ -2434,7 +2434,12 @@ DxgkpExecuteFullPresent(
     DmaBufferPrivateDataSize = DmaGeometry.DmaBufferPrivateDataSize;
     if (VirtualPresent)
     {
-        Status = DxgkAllocateVirtualDmaBuffer(Device, DmaGeometry.DmaBufferSize, DmaGeometry.DmaBufferSegmentSet, &DmaBuffer);
+        Status = DxgkAllocateVirtualDmaBufferWithPrivateData(
+                     Device,
+                     DmaGeometry.DmaBufferSize,
+                     DmaGeometry.DmaBufferSegmentSet,
+                     DmaBufferPrivateDataSize,
+                     &DmaBuffer);
     }
     else
     {
@@ -2451,23 +2456,8 @@ DxgkpExecuteFullPresent(
         goto PresentCleanup;
     }
 
-    if (!VirtualPresent)
-    {
-        DmaBufferPrivateData = DmaBuffer->PrivateData;
-        DmaBufferOwnsPrivateData = DmaBufferPrivateData != NULL;
-    }
-    else if (DmaBufferPrivateDataSize != 0)
-    {
-        DmaBufferPrivateData = ExAllocatePoolWithTag(
-                                   NonPagedPool,
-                                   DmaBufferPrivateDataSize,
-                                   TAG_DXGK_SUBMITDMA);
-        if (DmaBufferPrivateData == NULL)
-        {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto PresentCleanup;
-        }
-    }
+    DmaBufferPrivateData = DmaBuffer->PrivateData;
+    DmaBufferOwnsPrivateData = DmaBufferPrivateData != NULL;
     Status = DxgkPresentDmaCoreInitializePrivateData(
                  DmaBufferPrivateData,
                  DmaBufferPrivateDataSize);

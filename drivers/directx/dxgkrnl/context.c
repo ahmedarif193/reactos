@@ -1861,6 +1861,10 @@ DxgkpDestroyDetachedDevice(
     }
 
     Status = DxgkOverlayCleanupDevice(Device);
+    /* Virtual DMA pool entries retain this device so their GPUVA address
+     * space remains valid. Destroy those entries before waiting for the last
+     * device reference. */
+    DxgkPurgeDmaBufferCacheForDevice(Device);
     if (NT_SUCCESS(Status) && !DxgkpWaitForDeviceReferences(Device))
         Status = STATUS_DEVICE_BUSY;
     if (NT_SUCCESS(Status))

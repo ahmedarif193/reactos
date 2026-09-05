@@ -1364,13 +1364,12 @@ DxgkVidMmCreateDmaBufferBacking(
     return Status;
 }
 
-VOID
-DxgkVidMmFreeVirtualDmaBufferBacking(
+NTSTATUS
+DxgkVidMmResetVirtualDmaBufferMappings(
     _In_ PDXGKVMM_VIRTUAL_DMA_BACKING Backing)
 {
     PDXGKRNL_DEVICE Device = Backing->Device;
-    PDXGKVMM_ALLOCATION Allocation = Backing->Allocation;
-    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS FirstFailure = STATUS_SUCCESS;
     NTSTATUS CleanupStatus;
 
     PAGED_CODE();
@@ -1384,8 +1383,26 @@ DxgkVidMmFreeVirtualDmaBufferBacking(
          * were allocated privately for this Present, not reserved by a UMD. */
         CleanupStatus = DxgkGpuVaFree(Device->ProcessRecord, Backing->DataMappings[Index].Address, Backing->DataMappings[Index].Size);
         if (!NT_SUCCESS(CleanupStatus))
+        {
             DPRINT1("VidMm: Present GPUVA reservation release failed 0x%08lx\n", CleanupStatus);
+            if (NT_SUCCESS(FirstFailure))
+                FirstFailure = CleanupStatus;
+        }
     }
+    return FirstFailure;
+}
+
+VOID
+DxgkVidMmFreeVirtualDmaBufferBacking(
+    _In_ PDXGKVMM_VIRTUAL_DMA_BACKING Backing)
+{
+    PDXGKRNL_DEVICE Device = Backing->Device;
+    PDXGKVMM_ALLOCATION Allocation = Backing->Allocation;
+    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS CleanupStatus;
+
+    PAGED_CODE();
+    (VOID)DxgkVidMmResetVirtualDmaBufferMappings(Backing);
     if (Allocation != NULL)
     {
         if (Backing->MappingPinned)

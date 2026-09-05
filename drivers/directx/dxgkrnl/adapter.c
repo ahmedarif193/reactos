@@ -1958,7 +1958,8 @@ DxgkpTakeCachedDmaBuffer(
     _In_ ULONG Capacity,
     _In_ ULONG PrivateDataSize,
     _In_ DXGKRNL_DMA_BACKING_KIND BackingKind,
-    _In_ ULONG SegmentSet)
+    _In_ ULONG SegmentSet,
+    _In_opt_ PDXGKRNL_DEVICE OwnerDevice)
 {
     PDXGKRNL_DMA_BUFFER DmaBuffer = NULL;
     KIRQL OldIrql;
@@ -1980,7 +1981,7 @@ DxgkpTakeCachedDmaBuffer(
                 Candidate->PrivateDataSize != PrivateDataSize ||
                 Candidate->BackingKind != BackingKind ||
                 Candidate->SegmentSet != SegmentSet ||
-                Candidate->VirtualBacking != NULL)
+                Candidate->OwnerDevice != OwnerDevice)
             {
                 continue;
             }
@@ -2009,7 +2010,11 @@ DxgkpTakeCachedDmaBuffer(
          * allocation. A buffer retired into the pool just before or during
          * recovery can therefore outlive its old SegmentId/address. Drop it
          * and let the caller acquire a newly placed VidMm backing. */
-        if (DmaBuffer->BackingAllocation == NULL ||
+        if ((DmaBuffer->OwnerDevice != NULL &&
+             InterlockedCompareExchange(&DmaBuffer->OwnerDevice->Destroying,
+                                        0,
+                                        0) != 0) ||
+            DmaBuffer->BackingAllocation == NULL ||
             !DmaBuffer->BackingAllocation->Resident ||
             DmaBuffer->BackingAllocation->SegmentId == 0 ||
             DmaBuffer->BackingAllocation->SystemMemory == NULL)
@@ -2049,7 +2054,8 @@ DxgkAllocateDmaBufferWithPrivateData(
                     Capacity,
                     PrivateDataSize,
                     DxgkDmaBackingContiguousMemory,
-                    0);
+                    0,
+                    NULL);
     if (DmaBuffer != NULL)
     {
         *OutDmaBuffer = DmaBuffer;
@@ -2151,7 +2157,8 @@ DxgkAllocateDmaBufferInSegmentSetWithPrivateData(
                                       Capacity,
                                       PrivateDataSize,
                                       DxgkDmaBackingVidMm,
-                                      SegmentSet);
+                                      SegmentSet,
+                                      NULL);
     if (Buffer != NULL)
     {
         *OutDmaBuffer = Buffer;
@@ -2212,36 +2219,81 @@ DxgkAllocateDmaBufferInSegmentSet(
 }
 
 NTSTATUS
+DxgkAllocateVirtualDmaBufferWithPrivateData(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG Capacity,
+    _In_ ULONG SegmentSet,
+    _In_ ULONG PrivateDataSize,
+    _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer)
+{
+    PDXGKRNL_DMA_BUFFER Buffer;
+    NTSTATUS Status;
+
+    if (Device == NULL || Capacity == 0 || OutDmaBuffer == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *OutDmaBuffer = NULL;
+    Buffer = DxgkpTakeCachedDmaBuffer(Device->Adapter,
+                                      Capacity,
+                                      PrivateDataSize,
+                                      DxgkDmaBackingVidMm,
+                                      SegmentSet,
+                                      Device);
+    if (Buffer != NULL)
+    {
+        *OutDmaBuffer = Buffer;
+        return STATUS_SUCCESS;
+    }
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Buffer), TAG_DXGK_SUBMITDMA);
+    if (Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Buffer, sizeof(*Buffer));
+    InitializeListHead(&Buffer->CacheListEntry);
+    if (PrivateDataSize != 0)
+    {
+        Buffer->PrivateData = ExAllocatePoolWithTag(NonPagedPool,
+                                                    PrivateDataSize,
+                                                    TAG_DXGK_SUBMITDMA);
+        if (Buffer->PrivateData == NULL)
+        {
+            ExFreePoolWithTag(Buffer, TAG_DXGK_SUBMITDMA);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(Buffer->PrivateData, PrivateDataSize);
+        Buffer->PrivateDataSize = PrivateDataSize;
+    }
+    Status = DxgkVidMmCreateVirtualDmaBufferBacking(Device, Capacity, SegmentSet, &Buffer->BackingAllocation, &Buffer->VirtualBacking, &Buffer->GpuVirtualAddress);
+    if (!NT_SUCCESS(Status))
+    {
+        if (Buffer->PrivateData != NULL)
+            ExFreePoolWithTag(Buffer->PrivateData, TAG_DXGK_SUBMITDMA);
+        ExFreePoolWithTag(Buffer, TAG_DXGK_SUBMITDMA);
+        return Status;
+    }
+    Buffer->OwnerAdapter = Device->Adapter;
+    Buffer->OwnerDevice = Device;
+    Buffer->VirtualAddress = Buffer->BackingAllocation->SystemMemory;
+    Buffer->Capacity = Capacity;
+    Buffer->SegmentSet = SegmentSet;
+    Buffer->SegmentId = Buffer->BackingAllocation->SegmentId;
+    Buffer->SegmentAddress = Buffer->BackingAllocation->PhysicalAddress;
+    Buffer->BackingKind = DxgkDmaBackingVidMm;
+    *OutDmaBuffer = Buffer;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
 DxgkAllocateVirtualDmaBuffer(
     _In_ PDXGKRNL_DEVICE Device,
     _In_ ULONG Capacity,
     _In_ ULONG SegmentSet,
     _Out_ PDXGKRNL_DMA_BUFFER *OutDmaBuffer)
 {
-    PDXGKRNL_DMA_BUFFER Buffer;
-    NTSTATUS Status;
-
-    if (Device == NULL || OutDmaBuffer == NULL)
-        return STATUS_INVALID_PARAMETER;
-    *OutDmaBuffer = NULL;
-    Buffer = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Buffer), TAG_DXGK_SUBMITDMA);
-    if (Buffer == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-    RtlZeroMemory(Buffer, sizeof(*Buffer));
-    Status = DxgkVidMmCreateVirtualDmaBufferBacking(Device, Capacity, SegmentSet, &Buffer->BackingAllocation, &Buffer->VirtualBacking, &Buffer->GpuVirtualAddress);
-    if (!NT_SUCCESS(Status))
-    {
-        ExFreePoolWithTag(Buffer, TAG_DXGK_SUBMITDMA);
-        return Status;
-    }
-    InitializeListHead(&Buffer->CacheListEntry);
-    Buffer->OwnerAdapter = Device->Adapter;
-    Buffer->VirtualAddress = Buffer->BackingAllocation->SystemMemory;
-    Buffer->Capacity = Capacity;
-    Buffer->SegmentSet = SegmentSet;
-    Buffer->BackingKind = DxgkDmaBackingVidMm;
-    *OutDmaBuffer = Buffer;
-    return STATUS_SUCCESS;
+    return DxgkAllocateVirtualDmaBufferWithPrivateData(Device,
+                                                        Capacity,
+                                                        SegmentSet,
+                                                        0,
+                                                        OutDmaBuffer);
 }
 
 static VOID
@@ -2266,6 +2318,7 @@ DxgkpDestroyDmaBuffer(
         DmaBuffer->BackingAllocation = NULL;
     }
     DmaBuffer->OwnerAdapter = NULL;
+    DmaBuffer->OwnerDevice = NULL;
     DmaBuffer->VirtualAddress = NULL;
     if (DmaBuffer->PrivateData != NULL)
     {
@@ -2283,6 +2336,7 @@ DxgkFreeDmaBuffer(
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DMA_BUFFER EvictedBuffer = NULL;
+    BOOLEAN VirtualMappingsReusable;
     KIRQL OldIrql;
 
     if (DmaBuffer == NULL)
@@ -2291,9 +2345,23 @@ DxgkFreeDmaBuffer(
     Adapter = DmaBuffer->OwnerAdapter;
     DmaBuffer->SubmissionStartOffset = 0;
     DmaBuffer->SubmissionEndOffset = 0;
+    VirtualMappingsReusable = DmaBuffer->VirtualBacking == NULL;
+    if (DmaBuffer->VirtualBacking != NULL &&
+        DmaBuffer->OwnerDevice != NULL &&
+        InterlockedCompareExchange(&DmaBuffer->OwnerDevice->Destroying,
+                                   0,
+                                   0) == 0)
+    {
+        /* Per-present source/destination mappings belong to one submission.
+         * Retire them before pooling the persistent DMA allocation and its
+         * GPUVA mapping. */
+        VirtualMappingsReusable = NT_SUCCESS(
+            DxgkVidMmResetVirtualDmaBufferMappings(
+                DmaBuffer->VirtualBacking));
+    }
     if (Adapter != NULL &&
         DmaBuffer->VirtualAddress != NULL &&
-        DmaBuffer->VirtualBacking == NULL &&
+        VirtualMappingsReusable &&
         (DmaBuffer->BackingKind == DxgkDmaBackingContiguousMemory ||
          (DmaBuffer->BackingKind == DxgkDmaBackingVidMm &&
           DmaBuffer->BackingAllocation != NULL)) &&
@@ -2306,26 +2374,18 @@ DxgkFreeDmaBuffer(
             {
                 PLIST_ENTRY Link;
 
-                for (Link = Adapter->DmaBufferCacheListHead.Flink;
-                     Link != &Adapter->DmaBufferCacheListHead;
-                     Link = Link->Flink)
-                {
-                    PDXGKRNL_DMA_BUFFER Candidate;
-
-                    Candidate = CONTAINING_RECORD(Link, DXGKRNL_DMA_BUFFER, CacheListEntry);
-                    if (Candidate->Capacity >= DmaBuffer->Capacity ||
-                        (EvictedBuffer != NULL && Candidate->Capacity >= EvictedBuffer->Capacity))
-                    {
-                        continue;
-                    }
-                    EvictedBuffer = Candidate;
-                }
-                if (EvictedBuffer != NULL)
-                {
-                    RemoveEntryList(&EvictedBuffer->CacheListEntry);
-                    InitializeListHead(&EvictedBuffer->CacheListEntry);
-                    Adapter->DmaBufferCacheCount--;
-                }
+                /* Entries are exact-keyed by size, private-data size,
+                 * backing kind, and segment set. A larger cached buffer
+                 * cannot satisfy a smaller request, so retaining it by size
+                 * can permanently starve a new key. Free inserts at the tail
+                 * and reuse cycles an entry through the tail; evict the head
+                 * as the least-recently-used entry. */
+                Link = RemoveHeadList(&Adapter->DmaBufferCacheListHead);
+                EvictedBuffer = CONTAINING_RECORD(Link,
+                                                   DXGKRNL_DMA_BUFFER,
+                                                   CacheListEntry);
+                InitializeListHead(&EvictedBuffer->CacheListEntry);
+                Adapter->DmaBufferCacheCount--;
             }
 
             if (Adapter->DmaBufferCacheCount < DXGKP_DMA_BUFFER_CACHE_LIMIT)
@@ -2342,6 +2402,53 @@ DxgkFreeDmaBuffer(
     }
 
     DxgkpDestroyDmaBuffer(DmaBuffer);
+}
+
+VOID
+DxgkPurgeDmaBufferCacheForDevice(
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    LIST_ENTRY FreeList;
+    PLIST_ENTRY Link;
+    PLIST_ENTRY Next;
+    KIRQL OldIrql;
+
+    if (Device == NULL || Device->Adapter == NULL)
+        return;
+    Adapter = Device->Adapter;
+    InitializeListHead(&FreeList);
+
+    KeAcquireSpinLock(&Adapter->DmaBufferCacheLock, &OldIrql);
+    for (Link = Adapter->DmaBufferCacheListHead.Flink;
+         Link != &Adapter->DmaBufferCacheListHead;
+         Link = Next)
+    {
+        PDXGKRNL_DMA_BUFFER DmaBuffer;
+
+        Next = Link->Flink;
+        DmaBuffer = CONTAINING_RECORD(Link,
+                                      DXGKRNL_DMA_BUFFER,
+                                      CacheListEntry);
+        if (DmaBuffer->OwnerDevice != Device)
+            continue;
+        RemoveEntryList(Link);
+        InsertTailList(&FreeList, Link);
+        ASSERT(Adapter->DmaBufferCacheCount != 0);
+        Adapter->DmaBufferCacheCount--;
+    }
+    KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
+
+    while (!IsListEmpty(&FreeList))
+    {
+        PDXGKRNL_DMA_BUFFER DmaBuffer;
+
+        DmaBuffer = CONTAINING_RECORD(RemoveHeadList(&FreeList),
+                                      DXGKRNL_DMA_BUFFER,
+                                      CacheListEntry);
+        InitializeListHead(&DmaBuffer->CacheListEntry);
+        DxgkpDestroyDmaBuffer(DmaBuffer);
+    }
 }
 
 static VOID
