@@ -429,15 +429,19 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
 
         captionBtnWidth = MulDiv(ButtonSize.cx, captionBtnHeight, ButtonSize.cy);
 
-        hasPlacement = !composited &&
-                       ThemeGetCaptionButtonPlacement(htheme, iPartId, &offset, &offsetType);
-        if (composited)
+        hasPlacement = ThemeGetCaptionButtonPlacement(htheme, iPartId, &offset, &offsetType);
+        if (composited && !hasPlacement)
             captionBtnWidth = MulDiv(captionBtnHeight, CAPTION_BUTTON_WIDTH_UNITS,
                                      CAPTION_BUTTON_HEIGHT_UNITS);
         if (hasPlacement)
         {
             offset.x = MulDiv(offset.x, dpi, 96);
             offset.y = MulDiv(offset.y, dpi, 96);
+            if (composited)
+            {
+                captionBtnHeight = MulDiv(ButtonSize.cy, dpi, 96);
+                captionBtnWidth = MulDiv(ButtonSize.cx, dpi, 96);
+            }
         }
 
         if (!hasPlacement ||
@@ -720,27 +724,27 @@ ThemeGetButtonState(DWORD htCurrect, DWORD htHot, DWORD htDown, BOOL Active)
     return (Active ? BUTTON_NORMAL : BUTTON_INACTIVE);
 }
 
+static void
+ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent, DWORD htHot, DWORD htDown);
+
 /* Used only from mouse event handlers */
 static void
 ThemeDrawCaptionButtons(PDRAW_CONTEXT pcontext, DWORD htHot, DWORD htDown)
 {
-    /* Draw the buttons */
-    ThemeDrawCaptionButton(pcontext, NULL, CLOSEBUTTON,
-                           ThemeGetButtonState(HTCLOSE, htHot, htDown, pcontext->Active));
-    ThemeDrawCaptionButton(pcontext, NULL, MAXBUTTON,
-                           ThemeGetButtonState(HTMAXBUTTON, htHot, htDown, pcontext->Active));
-    ThemeDrawCaptionButton(pcontext, NULL, MINBUTTON,
-                           ThemeGetButtonState(HTMINBUTTON, htHot, htDown, pcontext->Active));
-    ThemeDrawCaptionButton(pcontext, NULL, HELPBUTTON,
-                           ThemeGetButtonState(HTHELP, htHot, htDown, pcontext->Active));
+    RECT rcCurrent = pcontext->wi.rcWindow;
+
+    OffsetRect(&rcCurrent, -pcontext->wi.rcWindow.left, -pcontext->wi.rcWindow.top);
+    ThemeStartBufferedPaint(pcontext, rcCurrent.right, pcontext->CaptionHeight);
+    ThemeDrawCaption(pcontext, &rcCurrent, htHot, htDown);
+    ThemeEndBufferedPaint(pcontext, 0, 0, rcCurrent.right, pcontext->CaptionHeight);
 }
 
 /* Used from WM_NCPAINT and WM_NCACTIVATE handlers */
 static void
-ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
+ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent, DWORD htHot, DWORD htDown)
 {
     RECT rcPart, rcContent;
-    int iPart, iState, iButtonState;
+    int iPart, iState;
     HICON hIcon;
 
     // See also win32ss/user/ntuser/nonclient.c!UserDrawCaptionBar
@@ -781,12 +785,14 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
     /* Draw the caption buttons */
     if (pcontext->wi.dwStyle & WS_SYSMENU)
     {
-        iButtonState = pcontext->Active ? BUTTON_NORMAL : BUTTON_INACTIVE;
-
-        ThemeDrawCaptionButton(pcontext, &rcPart, CLOSEBUTTON, iButtonState);
-        ThemeDrawCaptionButton(pcontext, &rcPart, MAXBUTTON, iButtonState);
-        ThemeDrawCaptionButton(pcontext, &rcPart, MINBUTTON, iButtonState);
-        ThemeDrawCaptionButton(pcontext, &rcPart, HELPBUTTON, iButtonState);
+        ThemeDrawCaptionButton(pcontext, &rcPart, CLOSEBUTTON,
+                               ThemeGetButtonState(HTCLOSE, htHot, htDown, pcontext->Active));
+        ThemeDrawCaptionButton(pcontext, &rcPart, MAXBUTTON,
+                               ThemeGetButtonState(HTMAXBUTTON, htHot, htDown, pcontext->Active));
+        ThemeDrawCaptionButton(pcontext, &rcPart, MINBUTTON,
+                               ThemeGetButtonState(HTMINBUTTON, htHot, htDown, pcontext->Active));
+        ThemeDrawCaptionButton(pcontext, &rcPart, HELPBUTTON,
+                               ThemeGetButtonState(HTHELP, htHot, htDown, pcontext->Active));
     }
 
     rcContent.left = rcPart.left;
@@ -961,7 +967,7 @@ ThemePaintWindow(PDRAW_CONTEXT pcontext, RECT* prcCurrent, BOOL bDoDoubleBufferi
     {
         if (bDoDoubleBuffering)
             ThemeStartBufferedPaint(pcontext, prcCurrent->right, pcontext->CaptionHeight);
-        ThemeDrawCaption(pcontext, prcCurrent);
+        ThemeDrawCaption(pcontext, prcCurrent, 0, 0);
         if (bDoDoubleBuffering)
             ThemeEndBufferedPaint(pcontext, 0, 0, prcCurrent->right, pcontext->CaptionHeight);
         ThemeDrawBorders(pcontext, prcCurrent);
