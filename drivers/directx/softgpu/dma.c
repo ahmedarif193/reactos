@@ -2717,9 +2717,10 @@ SoftGpuDdiCreateContext(
         return STATUS_INVALID_PARAMETER;
     }
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
-    if (Process == NULL ||
-        Process->Magic != SOFTGPU_PROCESS_MAGIC ||
-        Process->Adapter != Device)
+    if ((!CreateContext->Flags.SystemContext && Process == NULL) ||
+        (Process != NULL &&
+         (Process->Magic != SOFTGPU_PROCESS_MAGIC ||
+          Process->Adapter != Device)))
     {
         return STATUS_INVALID_PARAMETER;
     }

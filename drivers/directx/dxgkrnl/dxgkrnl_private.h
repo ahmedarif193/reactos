@@ -1149,6 +1149,15 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               VidSchStopping;
     volatile LONG               VidSchActiveCalls;
 
+    /* Native VidSch creates an adapter-owned SystemDevice and a
+     * SystemContext on the paging node.  BuildPagingBuffer receives the
+     * miniport context handle in hSystemContext, and MultiEngineAware
+     * paging DMA is submitted through that same context.  These objects are
+     * deliberately outside DeviceListHead: they span every client process
+     * and are destroyed only after client paging work has drained. */
+    PDXGKRNL_DEVICE             PagingSystemDevice;
+    PDXGKRNL_CONTEXT            PagingSystemContext;
+
     /*
      * GUID_DISPLAY_DEVICE_ARRIVAL device interface.
      * Registered in DxgkpAddDevice, enabled in DxgkAdapterStart,
@@ -3737,6 +3746,14 @@ DxgkMarkAdapterDevicesStoppedLocked(
 NTSTATUS
 DxgkDeviceWaitForIdle(
     _In_ PDXGKRNL_DEVICE Device);
+
+NTSTATUS
+DxgkCreatePagingSystemContext(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
+DxgkDestroyPagingSystemContext(
+    _In_ PDXGKRNL_ADAPTER Adapter);
 
 NTSTATUS
 NTAPI

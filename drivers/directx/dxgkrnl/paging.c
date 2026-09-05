@@ -107,6 +107,32 @@ DxgkpPagingFinishPrivateData(
     return STATUS_SUCCESS;
 }
 
+static VOID
+DxgkpPagingPrepareBuildBuffer(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DMA_BUFFER DmaBuffer,
+    _In_ PUCHAR Cursor,
+    _Inout_ DXGKARG_BUILDPAGINGBUFFER *BuildArgs)
+{
+    ULONG WriteOffset;
+
+    ASSERT(Adapter->PagingSystemContext != NULL);
+    ASSERT(Adapter->PagingSystemContext->hMiniportContext != NULL);
+    ASSERT(Cursor >= (PUCHAR)DmaBuffer->VirtualAddress);
+    ASSERT(Cursor <= (PUCHAR)DmaBuffer->VirtualAddress + DmaBuffer->Capacity);
+
+    WriteOffset = (ULONG)(Cursor - (PUCHAR)DmaBuffer->VirtualAddress);
+    BuildArgs->pDmaBuffer = Cursor;
+    BuildArgs->DmaSize = DmaBuffer->Capacity - WriteOffset;
+    BuildArgs->hSystemContext =
+        Adapter->PagingSystemContext->hMiniportContext;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    BuildArgs->DmaBufferGpuVirtualAddress = DmaBuffer->GpuVirtualAddress;
+    BuildArgs->DmaBufferWriteOffset = WriteOffset;
+#endif
+    DxgkpPagingPreparePrivateData(DmaBuffer, BuildArgs);
+}
+
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
 static BOOLEAN
 DxgkpPagingMonitoredFenceSignalSupported(
@@ -386,6 +412,11 @@ DxgkPagingExecuteBatch(
         return STATUS_INVALID_PARAMETER;
     if (Adapter->MiniportDeviceContext == NULL)
         return STATUS_DEVICE_NOT_READY;
+    if (Adapter->PagingSystemContext == NULL ||
+        Adapter->PagingSystemContext->hMiniportContext == NULL)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
     if (hSignalSyncObject != 0 &&
@@ -489,9 +520,10 @@ DxgkPagingExecuteBatch(
                 NTSTATUS BuildStatus;
 
                 RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
-                BuildArgs.pDmaBuffer = Cursor;
-                BuildArgs.DmaSize = (UINT)(End - Cursor);
-                DxgkpPagingPreparePrivateData(DmaBuffer, &BuildArgs);
+                DxgkpPagingPrepareBuildBuffer(Adapter,
+                                              DmaBuffer,
+                                              Cursor,
+                                              &BuildArgs);
                 BuildArgs.MultipassOffset = MultipassOffset;
                 DxgkpPagingFillBuildArgs(&Operations[OperationIndex],
                                          Pass == 0,
@@ -576,9 +608,10 @@ DxgkPagingExecuteBatch(
                 NTSTATUS BuildStatus;
 
                 RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
-                BuildArgs.pDmaBuffer = Cursor;
-                BuildArgs.DmaSize = (UINT)(End - Cursor);
-                DxgkpPagingPreparePrivateData(DmaBuffer, &BuildArgs);
+                DxgkpPagingPrepareBuildBuffer(Adapter,
+                                              DmaBuffer,
+                                              Cursor,
+                                              &BuildArgs);
                 BuildArgs.MultipassOffset = MultipassOffset;
                 BuildArgs.Operation =
                     DXGK_OPERATION_SIGNAL_MONITORED_FENCE;
@@ -732,8 +765,12 @@ DxgkPagingExecuteBatch(
                                         0,
                                         NULL,
                                         0,
-                                        Operations[0].hMiniportDevice,
-                                        NULL,
+                                        Adapter->SchedulingCaps.MultiEngineAware
+                                            ? NULL
+                                            : Operations[0].hMiniportDevice,
+                                        Adapter->SchedulingCaps.MultiEngineAware
+                                            ? Adapter->PagingSystemContext->hMiniportContext
+                                            : NULL,
                                         0,
                                         &TrackArgs,
                                         VIDSCH_SUBMITFLAG_PAGING,
@@ -813,6 +850,11 @@ DxgkPagingExecute(
         return STATUS_NOT_SUPPORTED;
     if (Adapter->MiniportDeviceContext == NULL)
         return STATUS_DEVICE_NOT_READY;
+    if (Adapter->PagingSystemContext == NULL ||
+        Adapter->PagingSystemContext->hMiniportContext == NULL)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
     if (hSignalSyncObject != 0 &&
@@ -850,9 +892,10 @@ DxgkPagingExecute(
             goto Cleanup;
 
         RtlZeroMemory(&BuildArgs, sizeof(BuildArgs));
-        BuildArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
-        BuildArgs.DmaSize = DmaBuffer->Capacity;
-        DxgkpPagingPreparePrivateData(DmaBuffer, &BuildArgs);
+        DxgkpPagingPrepareBuildBuffer(Adapter,
+                                      DmaBuffer,
+                                      DmaBuffer->VirtualAddress,
+                                      &BuildArgs);
         BuildArgs.MultipassOffset = MultipassOffset;
         DxgkpPagingFillBuildArgs(Op, Pass == 0, &BuildArgs);
 
@@ -927,7 +970,7 @@ DxgkPagingExecute(
         {
             RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
             TrackArgs.Device = Device;
-            Status = VidSchSubmitCommandTracked(Adapter, DxgkpPagingNode(Adapter, Op->NodeOrdinal), Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
+            Status = VidSchSubmitCommandTracked(Adapter, DxgkpPagingNode(Adapter, Op->NodeOrdinal), Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Adapter->SchedulingCaps.MultiEngineAware ? NULL : Op->hMiniportDevice, Adapter->SchedulingCaps.MultiEngineAware ? Adapter->PagingSystemContext->hMiniportContext : NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
             if (!NT_SUCCESS(Status))
                 goto Cleanup;
             PendingBuffer = NULL;
@@ -958,7 +1001,7 @@ DxgkPagingExecute(
     TrackArgs.Device = Device;
     TrackArgs.hSignalSyncObject = hSignalSyncObject;
     TrackArgs.SignalFenceValue = SignalFenceValue;
-    Status = VidSchSubmitCommandTracked(Adapter, DxgkpPagingNode(Adapter, Op->NodeOrdinal), Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Op->hMiniportDevice, NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
+    Status = VidSchSubmitCommandTracked(Adapter, DxgkpPagingNode(Adapter, Op->NodeOrdinal), Op->EngineOrdinal, PendingBuffer, PendingBuffer->PrivateData, PendingBuffer->PrivateDataSize, NULL, 0, NULL, 0, Adapter->SchedulingCaps.MultiEngineAware ? NULL : Op->hMiniportDevice, Adapter->SchedulingCaps.MultiEngineAware ? Adapter->PagingSystemContext->hMiniportContext : NULL, 0, &TrackArgs, VIDSCH_SUBMITFLAG_PAGING, 0, &LastFenceId);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     PendingBuffer = NULL;
