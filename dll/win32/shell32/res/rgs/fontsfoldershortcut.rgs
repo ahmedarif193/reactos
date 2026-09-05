@@ -4,7 +4,10 @@ HKCR
 	{
 		ForceRemove {D20EA4E1-3957-11d2-A40B-0C5020524152} = s 'Fonts'
 		{
-			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = d '&Hffffffff'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = d '1'
+			val 'System.ApplicationName' = s 'Microsoft.Fonts'
+			val 'System.ControlPanel.Category' = s '1'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
 			val InfoTip = e '@%%SystemRoot%%\system32\SHELL32.dll,-22920'
 			val LocalizedString = e '@%%SystemRoot%%\system32\SHELL32.dll,-22981'
 			DefaultIcon = e '%%SystemRoot%%\system32\main.cpl,-400'
