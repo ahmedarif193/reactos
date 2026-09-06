@@ -6,7 +6,12 @@
 #include <wingdi.h>
 #include <winuser.h>
 #include <winbase.h>
+#include <d3dkmthk.h>
 #include "wine/debug.h"
+
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(status) ((NTSTATUS)(status) >= 0)
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(win);
 
@@ -211,21 +216,155 @@ typedef struct DISPLAYCONFIG_MODE_INFO {
 #endif /* (WINVER < 0x601) */
 
 
+/*
+ * Display configuration.
+ *
+ * Every attached GDI display is one active path.  The WDDM adapter LUID and
+ * VidPn source of a display come from D3DKMTOpenAdapterFromGdiDisplayName,
+ * which is also what a user-mode driver uses when it later asks
+ * DisplayConfigGetDeviceInfo about the same (adapterId, id) pair.  One target
+ * per source is assumed and the target takes the source ordinal; clone and
+ * multi-target topologies are not described.
+ */
+
+#define DISPLAYCONFIG_MAX_PATHS 16
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
+#endif
+
+typedef struct _DISPLAYCONFIG_LOCAL_PATH
+{
+    WCHAR GdiDeviceName[CCHDEVICENAME];
+    WCHAR AdapterDeviceId[128];
+    LUID AdapterId;
+    UINT32 SourceId;
+    DEVMODEW Mode;
+} DISPLAYCONFIG_LOCAL_PATH;
+
+static BOOL
+DisplayConfigResolveAdapter(
+    const WCHAR *GdiDeviceName,
+    LUID *AdapterId,
+    UINT32 *SourceId)
+{
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME Open;
+    D3DKMT_CLOSEADAPTER Close;
+
+    memset(&Open, 0, sizeof(Open));
+    lstrcpynW(Open.DeviceName, GdiDeviceName, ARRAY_SIZE(Open.DeviceName));
+    if (!NT_SUCCESS(D3DKMTOpenAdapterFromGdiDisplayName(&Open)))
+        return FALSE;
+    *AdapterId = Open.AdapterLuid;
+    *SourceId = Open.VidPnSourceId;
+    Close.hAdapter = Open.hAdapter;
+    D3DKMTCloseAdapter(&Close);
+    return TRUE;
+}
+
+/* Collect the attached displays; returns the count or -1 when the WDDM
+ * adapter of a display cannot be resolved. */
+static int
+DisplayConfigCollectPaths(
+    DISPLAYCONFIG_LOCAL_PATH *Paths,
+    UINT32 Capacity)
+{
+    DISPLAY_DEVICEW Device;
+    DWORD Index;
+    UINT32 Count = 0;
+
+    for (Index = 0; Count < Capacity; Index++)
+    {
+        DISPLAYCONFIG_LOCAL_PATH *Path = &Paths[Count];
+
+        memset(&Device, 0, sizeof(Device));
+        Device.cb = sizeof(Device);
+        if (!EnumDisplayDevicesW(NULL, Index, &Device, 0))
+            break;
+        if (!(Device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) ||
+            (Device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER))
+            continue;
+
+        memset(Path, 0, sizeof(*Path));
+        lstrcpynW(Path->GdiDeviceName, Device.DeviceName, ARRAY_SIZE(Path->GdiDeviceName));
+        lstrcpynW(Path->AdapterDeviceId, Device.DeviceID, ARRAY_SIZE(Path->AdapterDeviceId));
+        Path->Mode.dmSize = sizeof(Path->Mode);
+        if (!EnumDisplaySettingsW(Device.DeviceName, ENUM_CURRENT_SETTINGS, &Path->Mode))
+            continue;
+        if (!DisplayConfigResolveAdapter(Device.DeviceName, &Path->AdapterId, &Path->SourceId))
+            return -1;
+        Count++;
+    }
+    return (int)Count;
+}
+
+static BOOL
+DisplayConfigValidQueryFlags(
+    UINT32 flags)
+{
+    UINT32 scope = flags & (QDC_ALL_PATHS | QDC_ONLY_ACTIVE_PATHS | QDC_DATABASE_CURRENT);
+
+    if (scope != QDC_ALL_PATHS && scope != QDC_ONLY_ACTIVE_PATHS && scope != QDC_DATABASE_CURRENT)
+        return FALSE;
+    return (flags & ~(scope | QDC_VIRTUAL_MODE_AWARE | QDC_INCLUDE_HMD | QDC_VIRTUAL_REFRESH_RATE_AWARE)) == 0;
+}
+
+static DISPLAYCONFIG_PIXELFORMAT
+DisplayConfigPixelFormat(
+    DWORD BitsPerPel)
+{
+    switch (BitsPerPel)
+    {
+        case 8:  return DISPLAYCONFIG_PIXELFORMAT_8BPP;
+        case 16: return DISPLAYCONFIG_PIXELFORMAT_16BPP;
+        case 24: return DISPLAYCONFIG_PIXELFORMAT_24BPP;
+        case 32: return DISPLAYCONFIG_PIXELFORMAT_32BPP;
+        default: return DISPLAYCONFIG_PIXELFORMAT_NONGDI;
+    }
+}
+
+static void
+DisplayConfigFillSignal(
+    const DEVMODEW *Mode,
+    DISPLAYCONFIG_VIDEO_SIGNAL_INFO *Signal)
+{
+    UINT32 Refresh = Mode->dmDisplayFrequency > 1 ? Mode->dmDisplayFrequency : 60;
+
+    memset(Signal, 0, sizeof(*Signal));
+    Signal->activeSize.cx = Mode->dmPelsWidth;
+    Signal->activeSize.cy = Mode->dmPelsHeight;
+    Signal->totalSize = Signal->activeSize;
+    Signal->pixelRate = (UINT64)Mode->dmPelsWidth * Mode->dmPelsHeight * Refresh;
+    Signal->hSyncFreq.Numerator = Mode->dmPelsHeight * Refresh;
+    Signal->hSyncFreq.Denominator = 1;
+    Signal->vSyncFreq.Numerator = Refresh;
+    Signal->vSyncFreq.Denominator = 1;
+    Signal->videoStandard = 0; /* D3DKMDT_VSS_OTHER */
+    Signal->scanLineOrdering = (Mode->dmDisplayFlags & DM_INTERLACED) ?
+        DISPLAYCONFIG_SCANLINE_ORDERING_INTERLACED : DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
+}
+
 LONG
-WINAPI 
+WINAPI
 GetDisplayConfigBufferSizes(
     UINT32 flags,
     UINT32 *numPathArrayElements,
     UINT32 *numModeInfoArrayElements)
 {
-    /* Validate parameters */
-    if ((numPathArrayElements == NULL) || (numModeInfoArrayElements == NULL))
-    {
-        return ERROR_INVALID_PARAMETER;
-    }
+    DISPLAYCONFIG_LOCAL_PATH Paths[DISPLAYCONFIG_MAX_PATHS];
+    int Count;
 
-    /* We don't support WDDM yet */
-    return ERROR_NOT_SUPPORTED;
+    if (numPathArrayElements == NULL || numModeInfoArrayElements == NULL)
+        return ERROR_INVALID_PARAMETER;
+    if (!DisplayConfigValidQueryFlags(flags))
+        return ERROR_INVALID_PARAMETER;
+
+    Count = DisplayConfigCollectPaths(Paths, ARRAY_SIZE(Paths));
+    if (Count < 0)
+        return ERROR_GEN_FAILURE;
+    *numPathArrayElements = Count;
+    *numModeInfoArrayElements = Count * 2;
+    return ERROR_SUCCESS;
 }
 
 LONG
@@ -238,7 +377,74 @@ QueryDisplayConfig(
     DISPLAYCONFIG_MODE_INFO   *modeInfoArray,
     DISPLAYCONFIG_TOPOLOGY_ID *currentTopologyId)
 {
-  return ERROR_ACCESS_DENIED;
+    DISPLAYCONFIG_LOCAL_PATH Paths[DISPLAYCONFIG_MAX_PATHS];
+    int Count;
+    int Index;
+
+    if (numPathArrayElements == NULL || pathArray == NULL ||
+        numModeInfoArrayElements == NULL || modeInfoArray == NULL)
+        return ERROR_INVALID_PARAMETER;
+    if (!DisplayConfigValidQueryFlags(flags))
+        return ERROR_INVALID_PARAMETER;
+    /* The topology id is defined only for the database query. */
+    if ((flags & QDC_DATABASE_CURRENT) ? currentTopologyId == NULL : currentTopologyId != NULL)
+        return ERROR_INVALID_PARAMETER;
+
+    Count = DisplayConfigCollectPaths(Paths, ARRAY_SIZE(Paths));
+    if (Count < 0)
+        return ERROR_GEN_FAILURE;
+    if (*numPathArrayElements < (UINT32)Count || *numModeInfoArrayElements < (UINT32)Count * 2)
+        return ERROR_INSUFFICIENT_BUFFER;
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        const DISPLAYCONFIG_LOCAL_PATH *Local = &Paths[Index];
+        DISPLAYCONFIG_PATH_INFO *Path = &pathArray[Index];
+        DISPLAYCONFIG_MODE_INFO *SourceMode = &modeInfoArray[Index * 2];
+        DISPLAYCONFIG_MODE_INFO *TargetMode = &modeInfoArray[Index * 2 + 1];
+        UINT32 Refresh = Local->Mode.dmDisplayFrequency > 1 ? Local->Mode.dmDisplayFrequency : 60;
+
+        memset(Path, 0, sizeof(*Path));
+        Path->sourceInfo.adapterId = Local->AdapterId;
+        Path->sourceInfo.id = Local->SourceId;
+        Path->sourceInfo.modeInfoIdx = Index * 2;
+        Path->sourceInfo.statusFlags = DISPLAYCONFIG_SOURCE_IN_USE;
+        Path->targetInfo.adapterId = Local->AdapterId;
+        Path->targetInfo.id = Local->SourceId;
+        Path->targetInfo.modeInfoIdx = Index * 2 + 1;
+        Path->targetInfo.outputTechnology = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER;
+        Path->targetInfo.rotation = DISPLAYCONFIG_ROTATION_IDENTITY;
+        Path->targetInfo.scaling = DISPLAYCONFIG_SCALING_IDENTITY;
+        Path->targetInfo.refreshRate.Numerator = Refresh;
+        Path->targetInfo.refreshRate.Denominator = 1;
+        Path->targetInfo.scanLineOrdering = (Local->Mode.dmDisplayFlags & DM_INTERLACED) ?
+            DISPLAYCONFIG_SCANLINE_ORDERING_INTERLACED : DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
+        Path->targetInfo.targetAvailable = TRUE;
+        Path->targetInfo.statusFlags = DISPLAYCONFIG_TARGET_IN_USE;
+        Path->flags = DISPLAYCONFIG_PATH_ACTIVE;
+
+        memset(SourceMode, 0, sizeof(*SourceMode));
+        SourceMode->infoType = DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE;
+        SourceMode->id = Local->SourceId;
+        SourceMode->adapterId = Local->AdapterId;
+        SourceMode->sourceMode.width = Local->Mode.dmPelsWidth;
+        SourceMode->sourceMode.height = Local->Mode.dmPelsHeight;
+        SourceMode->sourceMode.pixelFormat = DisplayConfigPixelFormat(Local->Mode.dmBitsPerPel);
+        SourceMode->sourceMode.position.x = Local->Mode.dmPosition.x;
+        SourceMode->sourceMode.position.y = Local->Mode.dmPosition.y;
+
+        memset(TargetMode, 0, sizeof(*TargetMode));
+        TargetMode->infoType = DISPLAYCONFIG_MODE_INFO_TYPE_TARGET;
+        TargetMode->id = Local->SourceId;
+        TargetMode->adapterId = Local->AdapterId;
+        DisplayConfigFillSignal(&Local->Mode, &TargetMode->targetMode.targetVideoSignalInfo);
+    }
+
+    *numPathArrayElements = Count;
+    *numModeInfoArrayElements = Count * 2;
+    if (currentTopologyId != NULL)
+        *currentTopologyId = Count > 1 ? DISPLAYCONFIG_TOPOLOGY_EXTEND : DISPLAYCONFIG_TOPOLOGY_INTERNAL;
+    return ERROR_SUCCESS;
 }
 
 typedef enum ORIENTATION_PREFERENCE {
@@ -254,8 +460,107 @@ typedef enum ORIENTATION_PREFERENCE {
  */
 LONG WINAPI DisplayConfigGetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_HEADER *packet)
 {
-    FIXME( "DisplayConfigGetDeviceInfo: stub!\n" );
-    return 1;
+    DISPLAYCONFIG_LOCAL_PATH Paths[DISPLAYCONFIG_MAX_PATHS];
+    const DISPLAYCONFIG_LOCAL_PATH *Local = NULL;
+    UINT32 ExpectedSize;
+    int Count;
+    int Index;
+
+    if (packet == NULL || packet->size < sizeof(*packet))
+        return ERROR_INVALID_PARAMETER;
+
+    switch (packet->type)
+    {
+        case DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME:
+            ExpectedSize = sizeof(DISPLAYCONFIG_SOURCE_DEVICE_NAME);
+            break;
+        case DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME:
+            ExpectedSize = sizeof(DISPLAYCONFIG_TARGET_DEVICE_NAME);
+            break;
+        case DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_PREFERRED_MODE:
+            ExpectedSize = sizeof(DISPLAYCONFIG_TARGET_PREFERRED_MODE);
+            break;
+        case DISPLAYCONFIG_DEVICE_INFO_GET_ADAPTER_NAME:
+            ExpectedSize = sizeof(DISPLAYCONFIG_ADAPTER_NAME);
+            break;
+        case DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_BASE_TYPE:
+            ExpectedSize = sizeof(DISPLAYCONFIG_TARGET_BASE_TYPE);
+            break;
+        default:
+            FIXME("DisplayConfigGetDeviceInfo: type %d not supported\n", packet->type);
+            return ERROR_INVALID_PARAMETER;
+    }
+    if (packet->size != ExpectedSize)
+        return ERROR_INVALID_PARAMETER;
+
+    Count = DisplayConfigCollectPaths(Paths, ARRAY_SIZE(Paths));
+    if (Count < 0)
+        return ERROR_GEN_FAILURE;
+    for (Index = 0; Index < Count; Index++)
+    {
+        if (Paths[Index].AdapterId.LowPart == packet->adapterId.LowPart &&
+            Paths[Index].AdapterId.HighPart == packet->adapterId.HighPart &&
+            (packet->type == DISPLAYCONFIG_DEVICE_INFO_GET_ADAPTER_NAME ||
+             Paths[Index].SourceId == packet->id))
+        {
+            Local = &Paths[Index];
+            break;
+        }
+    }
+    if (Local == NULL)
+        return ERROR_GEN_FAILURE;
+
+    switch (packet->type)
+    {
+        case DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME:
+        {
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME *Name = (DISPLAYCONFIG_SOURCE_DEVICE_NAME *)packet;
+
+            lstrcpynW(Name->viewGdiDeviceName, Local->GdiDeviceName, ARRAY_SIZE(Name->viewGdiDeviceName));
+            return ERROR_SUCCESS;
+        }
+        case DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME:
+        {
+            DISPLAYCONFIG_TARGET_DEVICE_NAME *Name = (DISPLAYCONFIG_TARGET_DEVICE_NAME *)packet;
+            DISPLAY_DEVICEW Monitor;
+
+            memset(&Name->flags, 0, (char *)(Name + 1) - (char *)&Name->flags);
+            Name->outputTechnology = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER;
+            memset(&Monitor, 0, sizeof(Monitor));
+            Monitor.cb = sizeof(Monitor);
+            if (EnumDisplayDevicesW(Local->GdiDeviceName, 0, &Monitor, 0))
+            {
+                lstrcpynW(Name->monitorFriendlyDeviceName, Monitor.DeviceString, ARRAY_SIZE(Name->monitorFriendlyDeviceName));
+                lstrcpynW(Name->monitorDevicePath, Monitor.DeviceID, ARRAY_SIZE(Name->monitorDevicePath));
+            }
+            return ERROR_SUCCESS;
+        }
+        case DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_PREFERRED_MODE:
+        {
+            DISPLAYCONFIG_TARGET_PREFERRED_MODE *Preferred = (DISPLAYCONFIG_TARGET_PREFERRED_MODE *)packet;
+
+            Preferred->width = Local->Mode.dmPelsWidth;
+            Preferred->height = Local->Mode.dmPelsHeight;
+            DisplayConfigFillSignal(&Local->Mode, &Preferred->targetMode.targetVideoSignalInfo);
+            return ERROR_SUCCESS;
+        }
+        case DISPLAYCONFIG_DEVICE_INFO_GET_ADAPTER_NAME:
+        {
+            DISPLAYCONFIG_ADAPTER_NAME *Name = (DISPLAYCONFIG_ADAPTER_NAME *)packet;
+
+            lstrcpynW(Name->adapterDevicePath, Local->AdapterDeviceId, ARRAY_SIZE(Name->adapterDevicePath));
+            return ERROR_SUCCESS;
+        }
+        case DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_BASE_TYPE:
+        {
+            DISPLAYCONFIG_TARGET_BASE_TYPE *Base = (DISPLAYCONFIG_TARGET_BASE_TYPE *)packet;
+
+            Base->baseOutputTechnology = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER;
+            return ERROR_SUCCESS;
+        }
+        default:
+            return ERROR_INVALID_PARAMETER;
+    }
 }
 
 /***********************************************************************
