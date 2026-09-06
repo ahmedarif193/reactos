@@ -554,19 +554,17 @@ acpi_bus_receive_event (
 	event_is_open--;
 	KeClearEvent(&AcpiEventQueue);
 
-	if (list_empty(&acpi_bus_event_list))
-		return_VALUE(AE_NOT_FOUND);
-
 //	spin_lock_irqsave(&acpi_bus_event_lock, flags);
 	KeAcquireSpinLock(&acpi_bus_event_lock, &OldIrql);
+	if (list_empty(&acpi_bus_event_list))
+	{
+		KeReleaseSpinLock(&acpi_bus_event_lock, OldIrql);
+		return_VALUE(AE_NOT_FOUND);
+	}
 	entry = list_entry(acpi_bus_event_list.next, struct acpi_bus_event, node);
-	if (entry)
-		list_del(&entry->node);
+	list_del(&entry->node);
 	KeReleaseSpinLock(&acpi_bus_event_lock, OldIrql);
 //	spin_unlock_irqrestore(&acpi_bus_event_lock, flags);
-
-	if (!entry)
-		return_VALUE(AE_NOT_FOUND);
 
 	memcpy(event, entry, sizeof(struct acpi_bus_event));
 
