@@ -1065,7 +1065,7 @@ LdrpApisetVersion(VOID)
             CachedApisetVersion = 0;
         }
 
-        DPRINT1("API-set schema 0x%lx selected for host version 0x%lx\n",
+        DPRINT("API-set schema 0x%lx selected for host version 0x%lx\n",
                 CachedApisetVersion, OsVersion);
     }
 
@@ -1179,7 +1179,7 @@ LdrpApplyFileNameRedirection(
             if (InterlockedCompareExchange(&ApisetPrinted[Slot],
                                            (LONG)NameHash, 0) == 0)
             {
-                DPRINT1("ApiSetResolveToHost redirected %wZ to %wZ\n",
+                DPRINT("ApiSetResolveToHost redirected %wZ to %wZ\n",
                         OriginalName, ResultPath);
             }
         }
