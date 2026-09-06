@@ -1,0 +1,21 @@
+
+set(FEXBENCH_DIR "" CACHE PATH "Directory holding fexbench_arm64.exe and fexbench_x86_64.exe, deployed to reactos/fexbench")
+set(FEXBENCH_WORKDIR "%TEMP%" CACHE STRING "Directory the storage benchmark writes its scratch file to")
+
+if(FEXBENCH_DIR AND IS_DIRECTORY "${FEXBENCH_DIR}")
+    file(GLOB _fexbench_files "${FEXBENCH_DIR}/*")
+    foreach(_file ${_fexbench_files})
+        get_filename_component(_name "${_file}" NAME)
+        add_cd_file(FILE "${_file}" DESTINATION reactos/fexbench NAME_ON_CD "${_name}" NO_CAB FOR all)
+    endforeach()
+
+    if(EXISTS "${FEXBENCH_DIR}/fexbench_arm64.exe" AND EXISTS "${FEXBENCH_DIR}/fexbench_x86_64.exe")
+        configure_file(fexbench-launch.cmd.in "${CMAKE_CURRENT_BINARY_DIR}/fexbench-launch.cmd" @ONLY)
+        add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/fexbench-launch.cmd" DESTINATION reactos/fexbench NAME_ON_CD fexbench-launch.cmd NO_CAB FOR all)
+        configure_file(hivefexbench.inf.in "${CMAKE_CURRENT_BINARY_DIR}/hivefexbench.inf" @ONLY)
+        add_registry_inf("${CMAKE_CURRENT_BINARY_DIR}/hivefexbench.inf")
+        message(STATUS "fexbench: boot-starting arm64 vs x86_64 comparison from ${FEXBENCH_DIR}")
+    else()
+        message(STATUS "fexbench: ${FEXBENCH_DIR} has no fexbench_arm64.exe/fexbench_x86_64.exe; run build-fexbench.sh")
+    endif()
+endif()
