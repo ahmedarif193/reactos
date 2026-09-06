@@ -366,6 +366,8 @@ typedef struct _VIDSCH_ENGINE
     UCHAR                       LastFaultBatchHead[256];
     ULONG                       LastFaultBatchHeadBytes;
     PVOID                       LastFaultContext;
+    LONG64                      LastFaultBaseSequence[5];
+    ULONGLONG                   LastFaultBaseAddress[5];
     D3DGPU_VIRTUAL_ADDRESS      LastDispatchDmaGpuVa;
     ULONG                       LastDispatchDmaSize;
     ULONG                       LastDispatchFence;

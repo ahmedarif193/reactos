@@ -971,6 +971,12 @@ DxgkpTdrWorker(
     DXGKRNL_ERR("DxgkpTdrWorker: preemption did not recover — resetting "
                 "adapter %p\n", Adapter);
 
+    /* Attribute the hang before the reset destroys the evidence: the oldest
+     * active packet of each engine with its submit-time batch head, and the
+     * recent GPU VA operations (the fault path prints the same). */
+    VidSchDumpEngineDiagnostics(Adapter);
+    DxgkGpuVaDumpRecentEvents();
+
     DxgkPresentBeginReset(Adapter);
     PresentResetStarted = TRUE;
     Status = VidSchPrepareAdapterReset(Adapter);

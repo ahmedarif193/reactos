@@ -2927,6 +2927,10 @@ DxgkDestroyContext(
 
     Device = Context->Device;
     DXGKRNL_TRACE("DxgkDestroyContext: Context %p on Device %p\n", Context, Context->Device);
+    /* Fault attribution: a fault on a sibling context right after a destroy
+     * is only recognisable if the destroy is in the log with a sequence. */
+    DXGKRNL_INFO("DxgkDestroyContext: ctx=%p device=%p seq=#%I64d\n",
+                 Context, Device, DxgkDiagSequence());
 
     /* --- Call miniport destroy and free ---------------------------------- */
 

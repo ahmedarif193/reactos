@@ -462,6 +462,10 @@ VidSchpRecordCompletion(
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
 }
 
+static VOID VidSchpDumpBatchHeadBytes(_In_reads_bytes_(Bytes) const UCHAR *Head, _In_ ULONG Bytes, _In_ ULONG DmaSize, _In_ PCSTR Tag);
+static BOOLEAN VidSchpFindStateBaseAddress(_In_reads_bytes_(Bytes) const UCHAR *Head, _In_ ULONG Bytes, _Out_writes_(5) ULONGLONG *Bases, _Out_writes_(5) BOOLEAN *Enabled);
+static VOID VidSchpNoteStateBaseAddress(_In_ PDXGKRNL_CONTEXT Context, _In_reads_bytes_(Bytes) const UCHAR *Head, _In_ ULONG Bytes);
+
 static LONGLONG
 VidSchpAgeUs(
     _In_ ULONGLONG Now100ns,
@@ -496,15 +500,39 @@ VidSchDumpEngineDiagnostics(
         ULONG Index;
         KIRQL OldIrql;
 
+        UCHAR OldestHead[256];
+        ULONG OldestHeadBytes = 0;
+        ULONG OldestFence = 0;
+        ULONG OldestSize = 0;
+        D3DGPU_VIRTUAL_ADDRESS OldestVa = 0;
+        PVIDSCH_DMA_PACKET Oldest;
+
         (VOID)VidSchQueryEngineStatus(Adapter, EngineIndex, &State, &Pending, &LastSubmitted, &LastCompleted);
         KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
         RtlCopyMemory(Ring, Engine->DispatchRing, sizeof(Ring));
         Next = Engine->DispatchRingNext;
+        /* The oldest active packet is the one the engine is stuck on. */
+        Oldest = VidSchpFirstActivePacketLocked(Engine);
+        if (Oldest != NULL)
+        {
+            OldestFence = Oldest->SubmissionFenceId;
+            OldestVa = Oldest->DmaBufferGpuVa;
+            OldestSize = Oldest->VirtualDmaBufferSize;
+            OldestHeadBytes = min(Oldest->BatchHeadBytes, sizeof(OldestHead));
+            if (OldestHeadBytes != 0)
+                RtlCopyMemory(OldestHead, Oldest->BatchHead, OldestHeadBytes);
+        }
         KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
 
         DXGKRNL_ERR("TDR engine %lu: state=%d pending=%lu last-submitted=%lu last-completed=%lu isr-fence=%ld workers=%ld\n",
                     EngineIndex, State, Pending, LastSubmitted, LastCompleted,
                     Engine->LastCompletedFence, Engine->OutstandingWorkers);
+        if (Oldest != NULL)
+        {
+            DXGKRNL_ERR("TDR engine %lu oldest active packet: fence=%lu dma va=0x%I64x size=%lu\n",
+                        EngineIndex, OldestFence, OldestVa, OldestSize);
+            VidSchpDumpBatchHeadBytes(OldestHead, OldestHeadBytes, OldestSize, "TDR");
+        }
         for (Index = 0; Index < VIDSCH_DISPATCH_RING_SIZE; Index++)
         {
             PVIDSCH_DISPATCH_RECORD Record = &Ring[(Next + Index) % VIDSCH_DISPATCH_RING_SIZE];
@@ -895,17 +923,82 @@ static VOID
 VidSchpDumpCapturedBatchHead(
     _In_ PVIDSCH_ENGINE Engine)
 {
-    const ULONG *Words = (const ULONG *)Engine->LastFaultBatchHead;
-    ULONG Count = Engine->LastFaultBatchHeadBytes / sizeof(ULONG);
+    VidSchpDumpBatchHeadBytes(Engine->LastFaultBatchHead, Engine->LastFaultBatchHeadBytes, Engine->LastFaultDmaSize, "fault");
+}
+#endif
+
+/* Gen8+ STATE_BASE_ADDRESS: DW1-2 general, DW4-5 surface, DW6-7 dynamic,
+ * DW8-9 indirect object, DW10-11 instruction; bit 0 of the low dword is the
+ * modify-enable.  Returns FALSE when the head carries no such command. */
+static BOOLEAN
+VidSchpFindStateBaseAddress(
+    _In_reads_bytes_(Bytes) const UCHAR *Head,
+    _In_ ULONG Bytes,
+    _Out_writes_(5) ULONGLONG *Bases,
+    _Out_writes_(5) BOOLEAN *Enabled)
+{
+    static const ULONG LowDword[5] = { 1, 4, 6, 8, 10 };
+    const ULONG *Words = (const ULONG *)Head;
+    ULONG Count = Bytes / sizeof(ULONG);
+    ULONG i, Base;
+
+    for (i = 0; i + 11 < Count; i++)
+    {
+        if ((Words[i] & 0xFFFF0000UL) != 0x61010000UL)
+            continue;
+        for (Base = 0; Base < 5; Base++)
+        {
+            ULONG Low = Words[i + LowDword[Base]];
+
+            Bases[Base] = ((((ULONGLONG)Words[i + LowDword[Base] + 1]) << 32) | Low) & ~0xFFFULL;
+            Enabled[Base] = (Low & 1) != 0;
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static VOID
+VidSchpNoteStateBaseAddress(
+    _In_ PDXGKRNL_CONTEXT Context,
+    _In_reads_bytes_(Bytes) const UCHAR *Head,
+    _In_ ULONG Bytes)
+{
+    ULONGLONG Bases[5];
+    BOOLEAN Enabled[5];
+    LONG64 Sequence;
+    ULONG Base;
+
+    if (Context == NULL || !VidSchpFindStateBaseAddress(Head, Bytes, Bases, Enabled))
+        return;
+    Sequence = DxgkDiagSequence();
+    for (Base = 0; Base < 5; Base++)
+    {
+        if (!Enabled[Base])
+            continue;
+        Context->LastBase[Base].Sequence = Sequence;
+        Context->LastBase[Base].Address = Bases[Base];
+    }
+}
+
+static VOID
+VidSchpDumpBatchHeadBytes(
+    _In_reads_bytes_(Bytes) const UCHAR *Head,
+    _In_ ULONG Bytes,
+    _In_ ULONG DmaSize,
+    _In_ PCSTR Tag)
+{
+    const ULONG *Words = (const ULONG *)Head;
+    ULONG Count = Bytes / sizeof(ULONG);
     ULONG i;
 
     if (Count == 0)
     {
-        DXGKRNL_ERR("VidSch: no submit-time batch head captured for the faulted packet\n");
+        DXGKRNL_ERR("VidSch: no submit-time batch head captured for the %s packet\n", Tag);
         return;
     }
-    DXGKRNL_ERR("VidSch: submit-time batch head (%lu bytes of %lu):\n",
-                Engine->LastFaultBatchHeadBytes, Engine->LastFaultDmaSize);
+    DXGKRNL_ERR("VidSch: submit-time batch head of the %s packet (%lu bytes of %lu):\n",
+                Tag, Bytes, DmaSize);
     for (i = 0; i < Count; i += 8)
     {
         DXGKRNL_ERR("BATCHHEAD[%04lx] %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
@@ -929,7 +1022,6 @@ VidSchpDumpCapturedBatchHead(
     if (i + 11 >= Count)
         DXGKRNL_ERR("STATE_BASE_ADDRESS: not in the captured head (bases inherited from the context image)\n");
 }
-#endif
 
 static VOID
 VidSchpDestroyPacket(
@@ -1618,6 +1710,15 @@ VidSchpFaultDumpWorker(
      * invokes the engine reset while the hardware queue still has outstanding
      * packets.
      */
+    /* Read the faulted batch first: after the reset the device is reported
+     * lost and the UMD's teardown unmaps the range within about a second
+     * (2026-09-06: "cannot read batch" on every deferred dump). */
+    if (Engine->LastFaultDmaGpuVa != 0)
+    {
+        DxgkGpuVaDumpBuffer(Engine->LastFaultProcess, Engine->LastFaultDmaGpuVa,
+                            min(Engine->LastFaultDmaSize, 8192));
+    }
+
     if ((FaultFlags & DXGK_PAGE_FAULT_ENGINE_RESET_REQUIRED) != 0)
     {
         NTSTATUS ResetStatus =
@@ -1633,6 +1734,13 @@ VidSchpFaultDumpWorker(
         DXGKRNL_ERR("VidSch: engine fault dump fence=%lu dma va=0x%I64x size=%lu process=%p ctx=%p\n",
                     Engine->LastFaultFence, Engine->LastFaultDmaGpuVa, Engine->LastFaultDmaSize, Engine->LastFaultProcess, Engine->LastFaultContext);
         VidSchpDumpCapturedBatchHead(Engine);
+        DXGKRNL_ERR("VidSch: bases last enabled on ctx %p: general #%I64d=0x%I64x surface #%I64d=0x%I64x dynamic #%I64d=0x%I64x indirect #%I64d=0x%I64x instruction #%I64d=0x%I64x (0 = never on this context)\n",
+                    Engine->LastFaultContext,
+                    Engine->LastFaultBaseSequence[0], Engine->LastFaultBaseAddress[0],
+                    Engine->LastFaultBaseSequence[1], Engine->LastFaultBaseAddress[1],
+                    Engine->LastFaultBaseSequence[2], Engine->LastFaultBaseAddress[2],
+                    Engine->LastFaultBaseSequence[3], Engine->LastFaultBaseAddress[3],
+                    Engine->LastFaultBaseSequence[4], Engine->LastFaultBaseAddress[4]);
         DXGKRNL_ERR("VidSch: engine fault target va=0x%I64x (the address the GPU could not translate)\n",
                     Engine->LastFaultVa);
         DxgkGpuVaDumpTranslation(Engine->Adapter, Engine->LastFaultProcess, Engine->LastFaultVa);
@@ -1784,9 +1892,10 @@ VidSchpConsumePageFaultInterrupt(
                 NotifyData.DmaPageFaulted.FaultedPrimitiveAPISequenceNumber,
                 NotifyData.DmaPageFaulted.FaultedProcessHandle,
                 Packet, Device);
-    VidSchDumpEngineDiagnostics(Engine->Adapter);
-    DxgkGpuVaDumpRecentEvents();
-    DxgkDumpRecentKmtIoctls();
+    /* Record the faulted packet and queue the PASSIVE worker before the
+     * ring dumps below: those take over a second of serial, and the worker
+     * needs that time to read the batch while the UMD, not yet told
+     * anything, still has it mapped. */
     if (Packet != NULL)
     {
         Engine->LastFaultDmaGpuVa = Packet->DmaBufferGpuVa;
@@ -1800,6 +1909,17 @@ VidSchpConsumePageFaultInterrupt(
         if (Engine->LastFaultProcess == NULL && Packet->Device != NULL)
             Engine->LastFaultProcess = Packet->Device->ProcessRecord;
         Engine->LastFaultContext = Packet->Context;
+        if (Packet->Context != NULL)
+        {
+            PDXGKRNL_CONTEXT FaultContext = (PDXGKRNL_CONTEXT)Packet->Context;
+            ULONG Base;
+
+            for (Base = 0; Base < 5; Base++)
+            {
+                Engine->LastFaultBaseSequence[Base] = FaultContext->LastBase[Base].Sequence;
+                Engine->LastFaultBaseAddress[Base] = FaultContext->LastBase[Base].Address;
+            }
+        }
         Engine->LastFaultBatchHeadBytes = min(Packet->BatchHeadBytes, sizeof(Engine->LastFaultBatchHead));
         if (Engine->LastFaultBatchHeadBytes != 0)
             RtlCopyMemory(Engine->LastFaultBatchHead, Packet->BatchHead, Engine->LastFaultBatchHeadBytes);
@@ -1809,6 +1929,9 @@ VidSchpConsumePageFaultInterrupt(
             ExQueueWorkItem(&Engine->FaultDumpWorkItem, DelayedWorkQueue);
         }
     }
+    VidSchDumpEngineDiagnostics(Engine->Adapter);
+    DxgkGpuVaDumpRecentEvents();
+    DxgkDumpRecentKmtIoctls();
     DxgkDeviceSetPageFaultState(Device, &PageFaultState);
     if (DxgkDeviceSetPageFaultExecutionState(Device))
     {
@@ -3014,6 +3137,10 @@ VidSchSubmitCommandVirtual(
                                       Packet->BatchHeadBytes))
         {
             Packet->BatchHeadBytes = 0;
+        }
+        else
+        {
+            VidSchpNoteStateBaseAddress(Context, Packet->BatchHead, Packet->BatchHeadBytes);
         }
     }
     Packet->Context = Context;
