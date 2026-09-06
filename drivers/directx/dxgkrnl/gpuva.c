@@ -1879,9 +1879,34 @@ DxgkpGpuVaFlushPageTableUpdates(
         Status = DxgkReferenceProcessPagingDevice(Process,
                                                   &PagingDevice,
                                                   &PagingMiniportDevice);
+        if (Status == STATUS_DEVICE_NOT_READY)
+        {
+            /* The process has no live device: its last one is mid-teardown
+             * and already unlinked from DeviceListHead.  Its page tables
+             * still have to be updated (allocation destruction clears PTEs,
+             * the fence-page unmap in sync.c, and finally the tables
+             * themselves), and native VidMm performs that work on its own
+             * paging device, never on the client's.  Use the adapter's
+             * paging system device the same way; refusing here quarantined
+             * every allocation of a closing device until adapter stop. */
+            PDXGKRNL_DEVICE SystemDevice = Adapter->PagingSystemDevice;
+
+            if (SystemDevice != NULL &&
+                SystemDevice->hMiniportDevice != NULL &&
+                DxgkReferenceDevice(SystemDevice))
+            {
+                PagingDevice = SystemDevice;
+                PagingMiniportDevice = SystemDevice->hMiniportDevice;
+                Status = STATUS_SUCCESS;
+            }
+        }
         if (!NT_SUCCESS(Status))
             goto Complete;
-        SubmissionDevice = PagingDevice;
+        /* A client device submits through itself; the paging system device
+         * submits through the paging system context (SubmissionDevice NULL),
+         * exactly as the owned-device teardown path does. */
+        SubmissionDevice = PagingDevice != Adapter->PagingSystemDevice ?
+                           PagingDevice : NULL;
     }
 
     /* Anything allocated since the last flush is still unreachable by the GPU
