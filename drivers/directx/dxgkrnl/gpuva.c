@@ -1571,6 +1571,63 @@ GpuVaAppendPagingOperation(
     return STATUS_SUCCESS;
 }
 
+static BOOLEAN
+GpuVaWaitForKmdResetBoundary(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE SubmissionDevice)
+{
+    PVOID CurrentThread;
+    NTSTATUS WaitStatus;
+    BOOLEAN AdmissionReopened;
+
+    PAGED_CODE();
+
+    if (Adapter == NULL ||
+        Adapter->State != DxgkAdapterStateStarted ||
+        InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) == 0 ||
+        InterlockedCompareExchange(&Adapter->KmdCallsBlocked, 0, 0) == 0 ||
+        (SubmissionDevice != NULL &&
+         InterlockedCompareExchange(&SubmissionDevice->Destroying, 0, 0) != 0))
+    {
+        return FALSE;
+    }
+
+    CurrentThread = PsGetCurrentThread();
+    if (Adapter->KmdExclusiveOwnerThread == CurrentThread ||
+        Adapter->KmdTransactionOwnerThread == CurrentThread)
+    {
+        return FALSE;
+    }
+
+    /*
+     * Native GPU-VA entry points wait at the adapter shared-access boundary
+     * while reset owns it.  KmdCallsBlocked is our equivalent admission edge:
+     * wait for its exclusive owner, then retry only if that owner reopened the
+     * started adapter.  A stop or failed reset releases the mutex without
+     * reopening admission and therefore remains a terminal failure.
+     */
+    DXGKRNL_WARN("DxgkGpuVa: waiting for KMD reset boundary before retrying "
+                 "page-table work\n");
+    WaitStatus = KeWaitForSingleObject(&Adapter->KmdExclusiveMutex,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       NULL);
+    if (!NT_SUCCESS(WaitStatus))
+        return FALSE;
+
+    AdmissionReopened =
+        Adapter->State == DxgkAdapterStateStarted &&
+        InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) != 0 &&
+        InterlockedCompareExchange(&Adapter->KmdCallsBlocked, 0, 0) == 0 &&
+        (SubmissionDevice == NULL ||
+         InterlockedCompareExchange(&SubmissionDevice->Destroying, 0, 0) == 0);
+    KeReleaseMutex(&Adapter->KmdExclusiveMutex, FALSE);
+    DXGKRNL_WARN("DxgkGpuVa: KMD reset boundary completed; admission %s\n",
+                 AdmissionReopened ? "reopened" : "closed");
+    return AdmissionReopened;
+}
+
 static NTSTATUS
 GpuVaExecutePagingBatchWithBusyRetry(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -1588,18 +1645,35 @@ GpuVaExecutePagingBatchWithBusyRetry(
         LARGE_INTEGER RetryInterval;
         ULONG FenceId = 0;
 
-        Status = DxgkPagingExecuteBatch(Adapter,
-                                        SubmissionDevice,
-                                        Operations,
-                                        OperationCount,
-                                        NULL,
-                                        0,
-                                        0,
-                                        0,
-                                        &FenceId,
-                                        NULL);
+        /* Keep reset from splitting one BuildPagingBuffer batch.  The
+         * transaction ends before the fence wait so TDR can still recover a
+         * paging packet which reaches hardware but does not retire. */
+        if (!DxgkBeginKmdTransaction(Adapter))
+        {
+            Status = STATUS_DELETE_PENDING;
+        }
+        else
+        {
+            Status = DxgkPagingExecuteBatch(Adapter,
+                                            SubmissionDevice,
+                                            Operations,
+                                            OperationCount,
+                                            NULL,
+                                            0,
+                                            0,
+                                            0,
+                                            &FenceId,
+                                            NULL);
+            DxgkEndKmdTransaction(Adapter);
+        }
         if (Status != STATUS_DEVICE_BUSY)
         {
+            if (Status == STATUS_DELETE_PENDING &&
+                BusyRetries < 999 &&
+                GpuVaWaitForKmdResetBoundary(Adapter, SubmissionDevice))
+            {
+                continue;
+            }
             if (!NT_SUCCESS(Status))
                 return Status;
             Status = DxgkPagingWaitForFence(
@@ -2151,10 +2225,26 @@ DxgkpGpuVaFlushPageTableUpdates(
                                                    OperationCount);
     if (!NT_SUCCESS(Status))
     {
-        DXGKRNL_ERR("DxgkGpuVa: page-table transaction rejected 0x%08lX over [0x%I64x,0x%I64x)\n",
-                           Status,
-                           Start,
-                           End);
+        if (Status == STATUS_DELETE_PENDING ||
+            Status == STATUS_DEVICE_BUSY ||
+            Status == STATUS_DEVICE_REMOVED ||
+            Status == STATUS_GRAPHICS_GPU_EXCEPTION_ON_DEVICE ||
+            Status == STATUS_IO_TIMEOUT)
+        {
+            DXGKRNL_WARN("DxgkGpuVa: page-table transaction deferred "
+                         "0x%08lX over [0x%I64x,0x%I64x)\n",
+                         Status,
+                         Start,
+                         End);
+        }
+        else
+        {
+            DXGKRNL_ERR("DxgkGpuVa: page-table transaction rejected "
+                               "0x%08lX over [0x%I64x,0x%I64x)\n",
+                               Status,
+                               Start,
+                               End);
+        }
         goto Requeue;
     }
 
