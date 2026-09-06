@@ -4829,62 +4829,745 @@ DxgkCbDestroyContextAllocation(
 }
 
 /*
- * Runtime component power is not advertised until dxgkrnl owns a registered
- * PoFx device and component table.  These void ABI slots therefore only
- * validate the adapter lifetime and perform no transition.
+ * Runtime power-management notifications declared by <d3dkmddi.h>.  dxgkrnl is
+ * the component that sends them, so it is where they are defined; the values
+ * are those of the DEFINE_GUID declarations in that header.
  */
-static VOID
-APIENTRY
-DxgkCbSetPowerComponentActiveSuppressed(
-    _In_ HANDLE DeviceHandle,
-    _In_ UINT   Component)
+const GUID GUID_DXGKDDI_POWER_MANAGEMENT_PREPARE_TO_START =
+    {0xcba549d4, 0xcf3a, 0x445c, {0x94, 0x68, 0x23, 0x83, 0xfd, 0x52, 0x31, 0x16}};
+const GUID GUID_DXGKDDI_POWER_MANAGEMENT_STARTED =
+    {0x6c929c1d, 0x7d76, 0x4538, {0x93, 0xad, 0x44, 0x9d, 0xc9, 0xfd, 0xc2, 0x39}};
+const GUID GUID_DXGKDDI_POWER_MANAGEMENT_STOPPED =
+    {0x0a9d9621, 0xbc21, 0x4dd4, {0xa0, 0xfc, 0xd9, 0x76, 0xe4, 0x28, 0xf7, 0x38}};
+
+/* A miniport declaring more than this is not describing real hardware.
+ * Windows rejects a count above 0xffff; this adapter-side bound is the same
+ * check with the array allocation it guards kept to a sane size. */
+#define DXGKP_MAX_POWER_COMPONENTS 0xffff
+
+/* ========================================================================
+ * Runtime power management (PoFx)
+ *
+ * Windows 11 dxgkrnl queries the miniport's component table
+ * (DXGKQAITYPE_NUMPOWERCOMPONENTS, then DXGKQAITYPE_POWERCOMPONENTINFO once
+ * per component), registers it with the Power Framework as a version 3
+ * PO_FX_DEVICE, and afterwards never chooses an F-state itself:
+ * DXGADAPTER::InitializePowerManagement does the registration and
+ * DXGADAPTER::PowerRuntimeComponentIdleStateCallback_Worker is the only place
+ * DxgkDdiSetPowerComponentFState is issued, in response to PoFx.
+ * DxgkCbSetPowerComponentActive/Idle are how the miniport takes and drops
+ * active references; they map onto PoFxActivateComponent/PoFxIdleComponent.
+ *
+ * DxgkDdiSetPowerComponentFState is a PASSIVE_LEVEL DDI while the PoFx
+ * callbacks may arrive at DISPATCH_LEVEL, so a transition requested at raised
+ * IRQL is recorded per component and issued from a work item.  Windows keeps
+ * a dedicated worker thread for the same reason.
+ * ====================================================================== */
+
+static NTSTATUS
+DxgkpQueryPowerComponentCount(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ PULONG ComponentCount)
 {
-    PDXGKRNL_ADAPTER Adapter;
+    DXGKARG_QUERYADAPTERINFO Query;
+    UINT Count = 0;
+    NTSTATUS Status;
 
     PAGED_CODE();
-    Adapter = DxgkpHandleToAdapter(DeviceHandle);
-    if (Adapter != NULL)
-    {
-        LONG Count = InterlockedIncrement(&Adapter->PowerActiveCalls);
 
-        InterlockedExchange(&Adapter->PowerLastActiveComponent, (LONG)Component);
-        InterlockedExchange64(&Adapter->PowerLastActiveTime100ns, (LONG64)DxgkDiagNow100ns());
-        if (Count <= 16)
-            DXGKRNL_ERR("DxgkCbSetPowerComponentActive: component %u (call %ld; no PoFx, no F-state transition)\n", Component, Count);
-        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+    *ComponentCount = 0;
+    if (DXGK_CB_FULL(Adapter, DxgkDdiQueryAdapterInfo) == NULL)
+        return STATUS_NOT_SUPPORTED;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DEVICE_NOT_READY;
+
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.Type = DXGKQAITYPE_NUMPOWERCOMPONENTS;
+    Query.pOutputData = &Count;
+    Query.OutputDataSize = sizeof(Count);
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiQueryAdapterInfo)(
+                     Adapter->MiniportDeviceContext, &Query);
     }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+
+    if (NT_SUCCESS(Status))
+        *ComponentCount = Count;
+    return Status;
+}
+
+static NTSTATUS
+DxgkpQueryPowerComponentInfo(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Component,
+    _Out_ DXGK_POWER_RUNTIME_COMPONENT *Info)
+{
+    DXGKARG_QUERYADAPTERINFO Query;
+    UINT ComponentIndex = (UINT)Component;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    RtlZeroMemory(Info, sizeof(*Info));
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DEVICE_NOT_READY;
+
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.Type = DXGKQAITYPE_POWERCOMPONENTINFO;
+    Query.pInputData = &ComponentIndex;
+    Query.InputDataSize = sizeof(ComponentIndex);
+    Query.pOutputData = Info;
+    Query.OutputDataSize = sizeof(*Info);
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiQueryAdapterInfo)(
+                     Adapter->MiniportDeviceContext, &Query);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    return Status;
 }
 
 /*
- * Matching unavailable runtime-component idle slot.
+ * Issue one F-state transition to the miniport.  PASSIVE_LEVEL only.
+ */
+static NTSTATUS
+DxgkpSetPowerComponentFState(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Component,
+    _In_ ULONG FState)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (DXGK_CB_FULL(Adapter, DxgkDdiSetPowerComponentFState) == NULL)
+        return STATUS_NOT_SUPPORTED;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DEVICE_NOT_READY;
+
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiSetPowerComponentFState)(
+                     Adapter->MiniportDeviceContext, (UINT)Component, (UINT)FState);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+
+    if (NT_SUCCESS(Status))
+        InterlockedExchange(&Adapter->PowerComponents[Component].LastFState, (LONG)FState);
+    return Status;
+}
+
+/*
+ * Complete one component's transition.  A miniport that declared
+ * DriverCompletesFStateTransition answers through
+ * DxgkCbCompleteFStateTransition instead, so PoFx is not completed here.
+ */
+static VOID
+DxgkpApplyPowerComponentFState(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Component,
+    _In_ ULONG FState)
+{
+    PDXGKRNL_POWER_COMPONENT Slot = &Adapter->PowerComponents[Component];
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Status = DxgkpSetPowerComponentFState(Adapter, Component, FState);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_WARN("PoFx: component %lu could not enter F%lu 0x%08lX\n",
+                     Component, FState, Status);
+    }
+
+    if (Slot->Info.Flags.DriverCompletesFStateTransition)
+        return;
+
+    PoFxCompleteIdleState(Adapter->PoFxHandle, Component);
+}
+
+static BOOLEAN
+DxgkpDrainPowerComponentFStates(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    BOOLEAN Applied = FALSE;
+    ULONG Component;
+
+    PAGED_CODE();
+
+    for (Component = 0; Component < Adapter->PowerComponentCount; ++Component)
+    {
+        LONG FState = InterlockedExchange(
+                          &Adapter->PowerComponents[Component].RequestedFState,
+                          DXGKP_POWER_FSTATE_NONE);
+
+        if (FState == DXGKP_POWER_FSTATE_NONE)
+            continue;
+        DxgkpApplyPowerComponentFState(Adapter, Component, (ULONG)FState);
+        Applied = TRUE;
+    }
+    return Applied;
+}
+
+static BOOLEAN
+DxgkpPowerComponentFStatePending(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG Component;
+
+    for (Component = 0; Component < Adapter->PowerComponentCount; ++Component)
+    {
+        if (InterlockedCompareExchange(&Adapter->PowerComponents[Component].RequestedFState,
+                                       DXGKP_POWER_FSTATE_NONE,
+                                       DXGKP_POWER_FSTATE_NONE) != DXGKP_POWER_FSTATE_NONE)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static VOID
+NTAPI
+DxgkpPowerFStateWorker(
+    _In_ PVOID Parameter)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Parameter;
+
+    PAGED_CODE();
+
+    for (;;)
+    {
+        (VOID)DxgkpDrainPowerComponentFStates(Adapter);
+
+        /*
+         * Signal before releasing the queue slot.  A request that arrives
+         * after the release resets this event itself, so a drain waiter never
+         * observes a stale signalled state.
+         */
+        KeSetEvent(&Adapter->PowerFStateDrainedEvent, IO_NO_INCREMENT, FALSE);
+        InterlockedExchange(&Adapter->PowerFStateWorkQueued, 0);
+        KeMemoryBarrier();
+
+        /* A request that lost the queue race between the drain and the
+         * release above is still recorded; take it over rather than leaving
+         * the component stranded in its old F-state. */
+        if (!DxgkpPowerComponentFStatePending(Adapter))
+            return;
+        if (InterlockedCompareExchange(&Adapter->PowerFStateWorkQueued, 1, 0) != 0)
+            return;
+        KeClearEvent(&Adapter->PowerFStateDrainedEvent);
+    }
+}
+
+static VOID
+DxgkpRequestPowerComponentFState(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Component,
+    _In_ ULONG FState)
+{
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+    {
+        DxgkpApplyPowerComponentFState(Adapter, Component, FState);
+        return;
+    }
+
+    InterlockedExchange(&Adapter->PowerComponents[Component].RequestedFState, (LONG)FState);
+    if (InterlockedCompareExchange(&Adapter->PowerFStateWorkQueued, 1, 0) == 0)
+    {
+        KeClearEvent(&Adapter->PowerFStateDrainedEvent);
+        ExQueueWorkItem(&Adapter->PowerFStateWorkItem, DelayedWorkQueue);
+    }
+}
+
+/* --- Power Framework callbacks ---------------------------------------- */
+
+static VOID
+DxgkpPowerRuntimeComponentActiveCallback(
+    _In_ PVOID Context,
+    _In_ ULONG Component)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
+
+    if (Component >= Adapter->PowerComponentCount)
+        return;
+    InterlockedExchange(&Adapter->PowerComponents[Component].Active, TRUE);
+}
+
+static VOID
+DxgkpPowerRuntimeComponentIdleCallback(
+    _In_ PVOID Context,
+    _In_ ULONG Component)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
+
+    if (Component >= Adapter->PowerComponentCount)
+        return;
+    InterlockedExchange(&Adapter->PowerComponents[Component].Active, FALSE);
+    /* The idle condition is acknowledged immediately; PoFx then asks for the
+     * F-state to enter.  Windows does exactly this in
+     * DxgkPowerRuntimeComponentIdleCallback. */
+    PoFxCompleteIdleCondition(Adapter->PoFxHandle, Component);
+}
+
+static VOID
+DxgkpPowerRuntimeComponentIdleStateCallback(
+    _In_ PVOID Context,
+    _In_ ULONG Component,
+    _In_ ULONG State)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
+
+    if (Component >= Adapter->PowerComponentCount)
+        return;
+    DxgkpRequestPowerComponentFState(Adapter, Component, State);
+}
+
+static VOID
+DxgkpPowerRuntimeDevicePowerRequiredCallback(
+    _In_ PVOID Context)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
+
+    /*
+     * ReactOS does not yet drive a D-state request from here.  Reporting the
+     * device as powered on keeps PoFx's device-level state consistent with
+     * the adapter, which is started and in D0 for the whole registration
+     * lifetime; the alternative would be to leave PoFx waiting forever.
+     * TODO: request D0 through the PnP power path once dxgkrnl runs adapter
+     * D-state transitions (Windows: DpiRequestDevicePowerState).
+     */
+    PoFxReportDevicePoweredOn(Adapter->PoFxHandle);
+}
+
+static VOID
+DxgkpPowerRuntimeDevicePowerNotRequiredCallback(
+    _In_ PVOID Context)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
+
+    PoFxCompleteDevicePowerNotRequired(Adapter->PoFxHandle);
+}
+
+static NTSTATUS
+DxgkpPowerRuntimeControlCallback(
+    _In_ PVOID Context,
+    _In_ LPCGUID PowerControlCode,
+    _In_opt_ PVOID InBuffer,
+    _In_ SIZE_T InBufferSize,
+    _Out_opt_ PVOID OutBuffer,
+    _In_ SIZE_T OutBufferSize,
+    _Out_opt_ PSIZE_T BytesReturned)
+{
+    PDXGKRNL_ADAPTER Adapter = (PDXGKRNL_ADAPTER)Context;
+    NTSTATUS Status;
+
+    if (DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeControlRequest) == NULL)
+        return STATUS_NOT_SUPPORTED;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DEVICE_NOT_READY;
+
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeControlRequest)(
+                     Adapter->MiniportDeviceContext, PowerControlCode,
+                     InBuffer, InBufferSize, OutBuffer, OutBufferSize,
+                     BytesReturned);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    return Status;
+}
+
+/*
+ * Build the PoFx registration table from the miniport's declarations and
+ * register it.  Mirrors DXGADAPTER::InitializePowerManagement.
+ */
+static NTSTATUS
+DxgkpInitializePowerManagement(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PPO_FX_DEVICE_V3 Registration = NULL;
+    PDXGKRNL_POWER_COMPONENT Components = NULL;
+    PPO_FX_COMPONENT_IDLE_STATE IdleStates = NULL;
+    ULONG ComponentCount = 0;
+    ULONG Component;
+    SIZE_T RegistrationSize;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    ASSERT(Adapter->PoFxHandle == NULL);
+
+    Adapter->PowerD3TransitionComponent = DXGKP_POWER_COMPONENT_NONE;
+    Adapter->PowerMemoryRefreshComponent = DXGKP_POWER_COMPONENT_NONE;
+    Adapter->PowerD3TransitionTwoStates = FALSE;
+
+    Status = DxgkpQueryPowerComponentCount(Adapter, &ComponentCount);
+    if (!NT_SUCCESS(Status))
+    {
+        /* A miniport with no runtime power components answers with a failure
+         * status; BasicDisplay returns STATUS_NOT_IMPLEMENTED.  That is not
+         * an adapter-start error. */
+        DXGKRNL_INFO("PoFx: no runtime power components 0x%08lX\n", Status);
+        return STATUS_SUCCESS;
+    }
+    if (ComponentCount == 0)
+        return STATUS_SUCCESS;
+    if (ComponentCount > DXGKP_MAX_POWER_COMPONENTS)
+    {
+        DXGKRNL_ERR("PoFx: miniport declared %lu power components, refusing\n",
+                    ComponentCount);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Components = ExAllocatePoolZero(NonPagedPool,
+                                    ComponentCount * sizeof(DXGKRNL_POWER_COMPONENT),
+                                    DXGKRNL_POOL_TAG);
+    RegistrationSize = FIELD_OFFSET(PO_FX_DEVICE_V3, Components) +
+                       ComponentCount * sizeof(PO_FX_COMPONENT_V2);
+    Registration = ExAllocatePoolZero(NonPagedPool, RegistrationSize, DXGKRNL_POOL_TAG);
+    IdleStates = ExAllocatePoolZero(NonPagedPool,
+                                    ComponentCount * DXGK_MAX_F_STATES *
+                                        sizeof(PO_FX_COMPONENT_IDLE_STATE),
+                                    DXGKRNL_POOL_TAG);
+    if (Components == NULL || Registration == NULL || IdleStates == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
+    Registration->Version = PO_FX_VERSION_V3;
+    Registration->ComponentActiveConditionCallback = DxgkpPowerRuntimeComponentActiveCallback;
+    Registration->ComponentIdleConditionCallback = DxgkpPowerRuntimeComponentIdleCallback;
+    Registration->ComponentIdleStateCallback = DxgkpPowerRuntimeComponentIdleStateCallback;
+    Registration->DevicePowerRequiredCallback = DxgkpPowerRuntimeDevicePowerRequiredCallback;
+    Registration->DevicePowerNotRequiredCallback = DxgkpPowerRuntimeDevicePowerNotRequiredCallback;
+    Registration->PowerControlCallback = DxgkpPowerRuntimeControlCallback;
+    Registration->DeviceContext = Adapter;
+    Registration->ComponentCount = ComponentCount;
+
+    for (Component = 0; Component < ComponentCount; ++Component)
+    {
+        DXGK_POWER_RUNTIME_COMPONENT *Info = &Components[Component].Info;
+        PPO_FX_COMPONENT_V2 Target = &Registration->Components[Component];
+        PPO_FX_COMPONENT_IDLE_STATE States =
+            &IdleStates[(SIZE_T)Component * DXGK_MAX_F_STATES];
+        ULONG State;
+
+        Components[Component].RequestedFState = DXGKP_POWER_FSTATE_NONE;
+        Components[Component].LastFState = 0;
+        Components[Component].Active = TRUE;
+
+        Status = DxgkpQueryPowerComponentInfo(Adapter, Component, Info);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("PoFx: QueryAdapterInfo(POWERCOMPONENTINFO) component %lu failed 0x%08lX\n",
+                        Component, Status);
+            goto Cleanup;
+        }
+        if (Info->StateCount == 0 || Info->StateCount > DXGK_MAX_F_STATES)
+        {
+            DXGKRNL_ERR("PoFx: component %lu declared %lu F-states\n",
+                        Component, Info->StateCount);
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        /* Windows rejects any component whose reserved flag bits are set. */
+        if (Info->Flags.Value > 0x1f)
+        {
+            DXGKRNL_ERR("PoFx: component %lu reserved flags 0x%08x\n",
+                        Component, Info->Flags.Value);
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        Info->ComponentName[DXGK_POWER_COMPONENT_NAME_SIZE - 1] = '\0';
+
+        /*
+         * ActiveInD3 promises the component can stay usable in D3, which
+         * Windows only accepts for a two-state component whose F1 entry is
+         * free and which has no providers.
+         */
+        if (Info->Flags.ActiveInD3 &&
+            (Info->StateCount != 2 ||
+             Info->States[1].TransitionLatency != 0 ||
+             Info->ProviderCount != 0))
+        {
+            DXGKRNL_ERR("PoFx: component %lu sets ActiveInD3 with states=%lu "
+                        "F1-latency=%I64u providers=%lu\n",
+                        Component, Info->StateCount,
+                        Info->States[1].TransitionLatency, Info->ProviderCount);
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+
+        switch (Info->ComponentMapping.ComponentType)
+        {
+            case DXGK_POWER_COMPONENT_MEMORY_REFRESH:
+                if (Adapter->PowerMemoryRefreshComponent != DXGKP_POWER_COMPONENT_NONE)
+                {
+                    DXGKRNL_ERR("PoFx: a second MEMORY_REFRESH component %lu was declared\n",
+                                Component);
+                    Status = STATUS_INVALID_PARAMETER;
+                    goto Cleanup;
+                }
+                Adapter->PowerMemoryRefreshComponent = Component;
+                break;
+
+            case DXGK_POWER_COMPONENT_D3_TRANSITION:
+                if (Adapter->PowerD3TransitionComponent != DXGKP_POWER_COMPONENT_NONE)
+                    break;
+                if (Info->StateCount > 2)
+                {
+                    DXGKRNL_ERR("PoFx: D3_TRANSITION component %lu declares %lu F-states\n",
+                                Component, Info->StateCount);
+                    Status = STATUS_INVALID_PARAMETER;
+                    goto Cleanup;
+                }
+                Adapter->PowerD3TransitionComponent = Component;
+                Adapter->PowerD3TransitionTwoStates = (Info->StateCount == 2);
+                break;
+
+            default:
+                break;
+        }
+
+        for (State = 0; State < Info->StateCount; ++State)
+        {
+            States[State].TransitionLatency = Info->States[State].TransitionLatency;
+            States[State].ResidencyRequirement = Info->States[State].ResidencyRequirement;
+            States[State].NominalPower = Info->States[State].NominalPower;
+        }
+
+        Target->Id = Info->ComponentGuid;
+        Target->IdleStateCount = Info->StateCount;
+        Target->IdleStates = States;
+        /* The deepest state a component can be woken from is the deepest it
+         * declares; ReactOS has no per-state wake capability to narrow it. */
+        Target->DeepestWakeableIdleState = Info->StateCount - 1;
+        if (Info->Flags.TransitionTo_F0_OnDx)
+            Target->Flags |= PO_FX_COMPONENT_FLAG_F0_ON_DX;
+        if (Info->Flags.NoDebounce)
+            Target->Flags |= PO_FX_COMPONENT_FLAG_NO_DEBOUNCE;
+    }
+
+    Adapter->PowerComponents = Components;
+    Adapter->PowerComponentCount = ComponentCount;
+    KeMemoryBarrier();
+
+    Status = PoFxRegisterDevice(Adapter->PhysicalDeviceObject,
+                                (PPO_FX_DEVICE)Registration,
+                                &Adapter->PoFxHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        Adapter->PowerComponents = NULL;
+        Adapter->PowerComponentCount = 0;
+        Adapter->PoFxHandle = NULL;
+        DXGKRNL_ERR("PoFx: PoFxRegisterDevice failed 0x%08lX\n", Status);
+        goto Cleanup;
+    }
+
+    ASSERT(Adapter->PoFxHandle != NULL);
+    DXGKRNL_INFO("PoFx: registered %lu runtime power component(s); D3-transition=%lu (two-state=%u) memory-refresh=%lu\n",
+                 ComponentCount, Adapter->PowerD3TransitionComponent,
+                 Adapter->PowerD3TransitionTwoStates,
+                 Adapter->PowerMemoryRefreshComponent);
+    /* PoFxRegisterDevice copies the description, including the idle-state
+     * arrays, so neither buffer outlives this call. */
+    ExFreePoolWithTag(IdleStates, DXGKRNL_POOL_TAG);
+    ExFreePoolWithTag(Registration, DXGKRNL_POOL_TAG);
+    return STATUS_SUCCESS;
+
+Cleanup:
+    if (IdleStates != NULL)
+        ExFreePoolWithTag(IdleStates, DXGKRNL_POOL_TAG);
+    if (Registration != NULL)
+        ExFreePoolWithTag(Registration, DXGKRNL_POOL_TAG);
+    if (Components != NULL)
+        ExFreePoolWithTag(Components, DXGKRNL_POOL_TAG);
+    return Status;
+}
+
+/*
+ * Hand the miniport its PoFx handle and let the framework start managing the
+ * components.  Mirrors DXGADAPTER::StartRuntimePowerManagement.
+ */
+static VOID
+DxgkpStartRuntimePowerManagement(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Adapter->PoFxHandle == NULL)
+        return;
+
+    if (DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeSetDeviceHandle) != NULL &&
+        DxgkAcquireKmdCall(Adapter))
+    {
+        _SEH2_TRY
+        {
+            Status = DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeSetDeviceHandle)(
+                         Adapter->MiniportDeviceContext, (HANDLE)Adapter->PoFxHandle);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        DxgkReleaseKmdCall(Adapter);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_WARN("PoFx: DxgkDdiPowerRuntimeSetDeviceHandle failed 0x%08lX\n",
+                         Status);
+        }
+    }
+
+    if (DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeControlRequest) != NULL)
+    {
+        DxgkpPowerRuntimeControlCallback(Adapter,
+                                         &GUID_DXGKDDI_POWER_MANAGEMENT_PREPARE_TO_START,
+                                         NULL, 0, NULL, 0, NULL);
+    }
+
+    /*
+     * A D3-transition component that does not describe its own two-state
+     * F0/F1 pair keeps a permanent active reference, so PoFx never parks the
+     * adapter through it.  Windows takes the same reference in
+     * DXGADAPTER::StartRuntimePowerManagement before starting the framework.
+     */
+    if (Adapter->PowerD3TransitionComponent != DXGKP_POWER_COMPONENT_NONE &&
+        !Adapter->PowerD3TransitionTwoStates)
+    {
+        PoFxActivateComponent(Adapter->PoFxHandle,
+                              Adapter->PowerD3TransitionComponent, 0);
+    }
+
+    InterlockedExchange(&Adapter->PowerManagementStarted, 1);
+    PoFxStartDevicePowerManagement(Adapter->PoFxHandle);
+
+    if (DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeControlRequest) != NULL)
+    {
+        DxgkpPowerRuntimeControlCallback(Adapter,
+                                         &GUID_DXGKDDI_POWER_MANAGEMENT_STARTED,
+                                         NULL, 0, NULL, 0, NULL);
+    }
+}
+
+static VOID
+DxgkpStopRuntimePowerManagement(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    POHANDLE Handle;
+
+    PAGED_CODE();
+
+    Handle = Adapter->PoFxHandle;
+    if (Handle == NULL)
+        return;
+
+    if (InterlockedExchange(&Adapter->PowerManagementStarted, 0) != 0 &&
+        DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeControlRequest) != NULL)
+    {
+        DxgkpPowerRuntimeControlCallback(Adapter,
+                                         &GUID_DXGKDDI_POWER_MANAGEMENT_STOPPED,
+                                         NULL, 0, NULL, 0, NULL);
+    }
+
+    /* Unregister first: no further callback can reference the component
+     * table once PoFxUnregisterDevice returns. */
+    Adapter->PoFxHandle = NULL;
+    KeMemoryBarrier();
+    PoFxUnregisterDevice(Handle);
+
+    /* No new deferred transition can be requested now, so waiting once is
+     * enough to know the worker is finished with the component table. */
+    KeWaitForSingleObject(&Adapter->PowerFStateDrainedEvent,
+                          Executive, KernelMode, FALSE, NULL);
+
+    if (Adapter->PowerComponents != NULL)
+    {
+        ExFreePoolWithTag(Adapter->PowerComponents, DXGKRNL_POOL_TAG);
+        Adapter->PowerComponents = NULL;
+    }
+    Adapter->PowerComponentCount = 0;
+}
+
+/*
+ * The miniport takes and drops active references on its runtime power
+ * components through these two slots.  Windows maps them onto
+ * PoFxActivateComponent and PoFxIdleComponent (DXGADAPTER::
+ * SetPowerComponentActiveCB / SetPowerComponentIdleCB); the resulting F-state
+ * transitions come back through the Power Framework's idle-state callback.
  */
 static VOID
 APIENTRY
-DxgkCbSetPowerComponentIdleSuppressed(
+DxgkCbSetPowerComponentActive(
     _In_ HANDLE DeviceHandle,
     _In_ UINT   Component)
 {
     PDXGKRNL_ADAPTER Adapter;
 
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
-    if (Adapter != NULL)
-    {
-        LONG Count = InterlockedIncrement(&Adapter->PowerIdleCalls);
+    if (Adapter == NULL)
+        return;
 
-        InterlockedExchange(&Adapter->PowerLastIdleComponent, (LONG)Component);
-        InterlockedExchange64(&Adapter->PowerLastIdleTime100ns, (LONG64)DxgkDiagNow100ns());
-        if (Count <= 16)
-            DXGKRNL_ERR("DxgkCbSetPowerComponentIdle: component %u (call %ld)\n", Component, Count);
-        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-    }
+    InterlockedIncrement(&Adapter->PowerActiveCalls);
+    InterlockedExchange(&Adapter->PowerLastActiveComponent, (LONG)Component);
+    InterlockedExchange64(&Adapter->PowerLastActiveTime100ns, (LONG64)DxgkDiagNow100ns());
+    if (Adapter->PoFxHandle != NULL && Component < Adapter->PowerComponentCount)
+        PoFxActivateComponent(Adapter->PoFxHandle, Component, 0);
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+}
+
+static VOID
+APIENTRY
+DxgkCbSetPowerComponentIdle(
+    _In_ HANDLE DeviceHandle,
+    _In_ UINT   Component)
+{
+    PDXGKRNL_ADAPTER Adapter;
+
+    Adapter = DxgkpHandleToAdapter(DeviceHandle);
+    if (Adapter == NULL)
+        return;
+
+    InterlockedIncrement(&Adapter->PowerIdleCalls);
+    InterlockedExchange(&Adapter->PowerLastIdleComponent, (LONG)Component);
+    InterlockedExchange64(&Adapter->PowerLastIdleTime100ns, (LONG64)DxgkDiagNow100ns());
+    if (Adapter->PoFxHandle != NULL && Component < Adapter->PowerComponentCount)
+        PoFxIdleComponent(Adapter->PoFxHandle, Component, 0);
+    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
 }
 
 /*
- * Power-control requests require an adapter-owned PoFx/PEP registration.
+ * A power-control request is forwarded to the platform extension through the
+ * registered PoFx device.  Without a registration there is no PEP to answer.
  */
 static NTSTATUS
 APIENTRY
-DxgkCbPowerRuntimeControlRequestNotSupported(
+DxgkCbPowerRuntimeControlRequest(
     _In_ HANDLE DeviceHandle,
     _In_ LPCGUID PowerControlCode,
     _In_opt_ PVOID InBuffer,
@@ -4910,27 +5593,29 @@ DxgkCbPowerRuntimeControlRequestNotSupported(
     if (Adapter == NULL)
         return STATUS_INVALID_HANDLE;
     {
-        LONG Count = InterlockedIncrement(&Adapter->PowerControlRequestCalls);
+        NTSTATUS Status;
 
-        if (Count <= 8)
+        InterlockedIncrement(&Adapter->PowerControlRequestCalls);
+        if (Adapter->PoFxHandle == NULL)
+            Status = STATUS_NOT_SUPPORTED;
+        else
         {
-            DXGKRNL_ERR("DxgkCbPowerRuntimeControlRequest: call %ld guid={%08lx-%04x-%04x} in=%Iu out=%Iu -> NOT_SUPPORTED\n",
-                        Count, PowerControlCode->Data1, PowerControlCode->Data2, PowerControlCode->Data3,
-                        InBufferSize, OutBufferSize);
+            Status = PoFxPowerControl(Adapter->PoFxHandle, PowerControlCode,
+                                      InBuffer, InBufferSize,
+                                      OutBuffer, OutBufferSize, BytesReturned);
         }
+        ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
+        return Status;
     }
-    ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
-    return STATUS_NOT_SUPPORTED;
 }
 
 /*
- * Runtime-component latency is meaningful only for a registered PoFx
- * component of type DXGK_POWER_COMPONENT_OTHER.  ReactOS advertises no such
- * component table, so retain the callable slot without manufacturing state.
+ * Latency and residency hints reach the platform extension through PoFx and
+ * decide which idle state PopFxSelectIdleState is allowed to pick.
  */
 static VOID
 APIENTRY
-DxgkCbSetPowerComponentLatencySuppressed(
+DxgkCbSetPowerComponentLatency(
     _In_ HANDLE DeviceHandle,
     _In_ UINT ComponentIndex,
     _In_ ULONGLONG Latency)
@@ -4940,18 +5625,17 @@ DxgkCbSetPowerComponentLatencySuppressed(
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter != NULL)
     {
-        LONG Count = InterlockedIncrement(&Adapter->PowerLatencyCalls);
-
-        if (Count <= 8)
-            DXGKRNL_ERR("DxgkCbSetPowerComponentLatency: component %u latency=%I64u (call %ld)\n", ComponentIndex, Latency, Count);
+        InterlockedIncrement(&Adapter->PowerLatencyCalls);
+        if (Adapter->PoFxHandle != NULL && ComponentIndex < Adapter->PowerComponentCount)
+            PoFxSetComponentLatency(Adapter->PoFxHandle, ComponentIndex, Latency);
         ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     }
 }
 
-/* Matching no-component expected-residency slot. */
+/* Matching expected-residency slot. */
 static VOID
 APIENTRY
-DxgkCbSetPowerComponentResidencySuppressed(
+DxgkCbSetPowerComponentResidency(
     _In_ HANDLE DeviceHandle,
     _In_ UINT ComponentIndex,
     _In_ ULONGLONG Residency)
@@ -4961,21 +5645,22 @@ DxgkCbSetPowerComponentResidencySuppressed(
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter != NULL)
     {
-        LONG Count = InterlockedIncrement(&Adapter->PowerResidencyCalls);
-
-        if (Count <= 8)
-            DXGKRNL_ERR("DxgkCbSetPowerComponentResidency: component %u residency=%I64u (call %ld)\n", ComponentIndex, Residency, Count);
+        InterlockedIncrement(&Adapter->PowerResidencyCalls);
+        if (Adapter->PoFxHandle != NULL && ComponentIndex < Adapter->PowerComponentCount)
+            PoFxSetComponentResidency(Adapter->PoFxHandle, ComponentIndex, Residency);
         ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     }
 }
 
 /*
- * No F-state completion can be pending while no component advertises
- * DriverCompletesFStateTransition.  Keep the void slot inert.
+ * A miniport that declared DriverCompletesFStateTransition finishes its
+ * transition here instead of returning from DxgkDdiSetPowerComponentFState.
+ * Windows completes the PoFx idle state at this point
+ * (DxgkCompleteFStateTransitionCB).
  */
 static VOID
 APIENTRY
-DxgkCbCompleteFStateTransitionSuppressed(
+DxgkCbCompleteFStateTransition(
     _In_ HANDLE DeviceHandle,
     _In_ UINT ComponentIndex)
 {
@@ -4984,10 +5669,9 @@ DxgkCbCompleteFStateTransitionSuppressed(
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter != NULL)
     {
-        LONG Count = InterlockedIncrement(&Adapter->PowerFStateCompleteCalls);
-
-        if (Count <= 8)
-            DXGKRNL_ERR("DxgkCbCompleteFStateTransition: component %u (call %ld)\n", ComponentIndex, Count);
+        InterlockedIncrement(&Adapter->PowerFStateCompleteCalls);
+        if (Adapter->PoFxHandle != NULL && ComponentIndex < Adapter->PowerComponentCount)
+            PoFxCompleteIdleState(Adapter->PoFxHandle, ComponentIndex);
         ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     }
 }
@@ -6072,13 +6756,13 @@ DxgkpFillInterface(
     Interface->DxgkCbExcludeAdapterAccess = DxgkCbExcludeAdapterAccessNotSupported; /* 0xb0 */
     Interface->DxgkCbCreateContextAllocation = DxgkCbCreateContextAllocation; /* 0xb8 */
     Interface->DxgkCbDestroyContextAllocation = DxgkCbDestroyContextAllocation; /* 0xc0 */
-    Interface->DxgkCbSetPowerComponentActive = DxgkCbSetPowerComponentActiveSuppressed; /* 0xc8 */
-    Interface->DxgkCbSetPowerComponentIdle = DxgkCbSetPowerComponentIdleSuppressed; /* 0xd0 */
+    Interface->DxgkCbSetPowerComponentActive = DxgkCbSetPowerComponentActive; /* 0xc8 */
+    Interface->DxgkCbSetPowerComponentIdle = DxgkCbSetPowerComponentIdle; /* 0xd0 */
     Interface->DxgkCbAcquirePostDisplayOwnership = DxgkCbAcquirePostDisplayOwnership; /* 0xd8 */
-    Interface->DxgkCbPowerRuntimeControlRequest = DxgkCbPowerRuntimeControlRequestNotSupported; /* 0xe0 */
-    Interface->DxgkCbSetPowerComponentLatency = DxgkCbSetPowerComponentLatencySuppressed; /* 0xe8 */
-    Interface->DxgkCbSetPowerComponentResidency = DxgkCbSetPowerComponentResidencySuppressed; /* 0xf0 */
-    Interface->DxgkCbCompleteFStateTransition = DxgkCbCompleteFStateTransitionSuppressed; /* 0xf8 */
+    Interface->DxgkCbPowerRuntimeControlRequest = DxgkCbPowerRuntimeControlRequest; /* 0xe0 */
+    Interface->DxgkCbSetPowerComponentLatency = DxgkCbSetPowerComponentLatency; /* 0xe8 */
+    Interface->DxgkCbSetPowerComponentResidency = DxgkCbSetPowerComponentResidency; /* 0xf0 */
+    Interface->DxgkCbCompleteFStateTransition = DxgkCbCompleteFStateTransition; /* 0xf8 */
     Interface->DxgkCbCompletePStateTransition = DxgkCbCompletePStateTransitionSuppressed; /* 0x100 */
 
     if (DxgkCapsCoreInterfaceVersionAtLeast(
@@ -12189,94 +12873,20 @@ DxgkAdapterStart(
     if (!Adapter->MiniportContext->IsDisplayOnlyDriver &&
         DXGK_CB_FULL(Adapter, DxgkDdiQueryAdapterInfo) != NULL)
     {
-        /* Windows queries the miniport's runtime power components here
-         * (DXGKQAITYPE_NUMPOWERCOMPONENTS / _POWERCOMPONENTINFO), registers
-         * them with PoFx, and drives DxgkDdiSetPowerComponentFState from the
-         * PoFx idle-state callback.  ReactOS issues neither query, so no
-         * component is ever brought to F0.  Measure what this part declares
-         * before building any of that. */
-        DXGKARG_QUERYADAPTERINFO PowerQuery;
-        UINT ComponentCount = 0;
-        NTSTATUS PowerStatus;
+        /*
+         * Register the miniport's runtime power components with the Power
+         * Framework and let it start managing them.  dxgkrnl never picks an
+         * F-state itself: every transition arrives from PoFx, which is what
+         * makes DxgkCbSetPowerComponentActive/Idle meaningful to the driver.
+         */
+        NTSTATUS PowerStatus = DxgkpInitializePowerManagement(Adapter);
 
-        RtlZeroMemory(&PowerQuery, sizeof(PowerQuery));
-        PowerQuery.Type = DXGKQAITYPE_NUMPOWERCOMPONENTS;
-        PowerQuery.pOutputData = &ComponentCount;
-        PowerQuery.OutputDataSize = sizeof(ComponentCount);
-        if (DxgkAcquireKmdCall(Adapter))
+        if (NT_SUCCESS(PowerStatus))
+            DxgkpStartRuntimePowerManagement(Adapter);
+        else
         {
-            _SEH2_TRY
-            {
-                PowerStatus = DXGK_CB_FULL(Adapter, DxgkDdiQueryAdapterInfo)(
-                                  Adapter->MiniportDeviceContext, &PowerQuery);
-            }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-            {
-                PowerStatus = _SEH2_GetExceptionCode();
-            }
-            _SEH2_END;
-            DxgkReleaseKmdCall(Adapter);
-            DXGKRNL_INFO("Runtime power components: query 0x%08lX count=%u\n",
-                         PowerStatus, ComponentCount);
-
-            /*
-             * Bring every declared component to F0 (active).
-             *
-             * Windows does this through PoFx: the miniport calls
-             * DxgkCbSetPowerComponentActive, dxgkrnl calls
-             * PoFxActivateComponent, and PoFx calls back into
-             * DxgkDdiSetPowerComponentFState with the new F-state (0 = F0).
-             * ReactOS registers no PoFx device, so that loop never runs and
-             * every component stays in its initial low-power F-state.
-             *
-             * This is the FIRST STAGE only: it pins the components active
-             * rather than following activity. It is a reduced implementation,
-             * not the contract - TODO: register a PO_FX_DEVICE
-             * (PoFxRegisterDevice exists in sdk/lib/drivers/ntoskrnl_vista/
-             * pofx.c) and drive F-states from the idle-state callback, which
-             * also restores runtime power saving.
-             */
-            if (NT_SUCCESS(PowerStatus) && ComponentCount != 0 &&
-                DXGK_CB_FULL(Adapter, DxgkDdiSetPowerComponentFState) != NULL &&
-                DxgkAcquireKmdCall(Adapter))
-            {
-                UINT Component;
-                UINT Activated = 0;
-                NTSTATUS FirstFailure = STATUS_SUCCESS;
-
-                for (Component = 0; Component < ComponentCount; ++Component)
-                {
-                    NTSTATUS FStateStatus;
-
-                    _SEH2_TRY
-                    {
-                        FStateStatus =
-                            DXGK_CB_FULL(Adapter, DxgkDdiSetPowerComponentFState)(
-                                Adapter->MiniportDeviceContext, Component, 0);
-                    }
-                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                    {
-                        FStateStatus = _SEH2_GetExceptionCode();
-                    }
-                    _SEH2_END;
-                    if (NT_SUCCESS(FStateStatus))
-                        Activated++;
-                    else if (NT_SUCCESS(FirstFailure))
-                        FirstFailure = FStateStatus;
-                }
-                DxgkReleaseKmdCall(Adapter);
-                if (Activated != ComponentCount)
-                {
-                    DXGKRNL_WARN("Runtime power components: only %u/%u reached F0, "
-                                 "first failure 0x%08lX\n",
-                                 Activated, ComponentCount, FirstFailure);
-                }
-                else
-                {
-                    DXGKRNL_INFO("Runtime power components: %u activated (F0)\n",
-                                 Activated);
-                }
-            }
+            DXGKRNL_WARN("DxgkAdapterStart: runtime power management unavailable 0x%08lX\n",
+                         PowerStatus);
         }
     }
     if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
@@ -12597,6 +13207,10 @@ DxgkAdapterStart(
     return Status;
 
 StartRollback:
+    /* Runtime power management is brought up before the last few start steps,
+     * so a rollback has to retire it; otherwise PoFx keeps a registration
+     * pointing at an adapter that is being torn down. */
+    DxgkpStopRuntimePowerManagement(Adapter);
     Status = DxgkpRollbackAdapterStart(Adapter, &Progress, Status, &Restartable);
     DxgkpCompleteAdapterStart(Adapter, StartGeneration, Status, Restartable);
     return Status;
@@ -13010,6 +13624,11 @@ DxgkpAdapterStopInternal(
             ObDereferenceObject(FunctionalDeviceObject);
         return Status;
     }
+
+    /* Retire runtime power management while the miniport is still fully
+     * callable, so it receives GUID_DXGKDDI_POWER_MANAGEMENT_STOPPED and
+     * stops referencing the PoFx handle it was given at start. */
+    DxgkpStopRuntimePowerManagement(Adapter);
 
     VsyncStatus =
         DxgkpSetVsyncInterruptState(
@@ -14535,6 +15154,8 @@ DxgkpAddDeviceRegistered(
     Adapter->SubmitDmaRetireWorkQueued = 0;
     Adapter->SubmitDmaRetireActiveWorkers = 0;
     ExInitializeWorkItem(&Adapter->SubmitDmaRetireWorkItem, DxgkpRetireSubmittedDmaBuffersWorker, Adapter);
+    ExInitializeWorkItem(&Adapter->PowerFStateWorkItem, DxgkpPowerFStateWorker, Adapter);
+    KeInitializeEvent(&Adapter->PowerFStateDrainedEvent, NotificationEvent, TRUE);
     Adapter->SubmitDmaStopping = 1;
     Adapter->DmaBufferCacheStopping = 0;
     Adapter->DmaBufferCacheCount = 0;
