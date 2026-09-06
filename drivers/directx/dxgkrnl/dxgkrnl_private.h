@@ -1192,6 +1192,10 @@ struct _DXGKRNL_ADAPTER
     D3DKMT_HANDLE               CddShadowBindingHandle;
     D3DKMT_HANDLE               CddPrimaryBindingHandle;
     ULONG64                     CddBindingGeneration;
+    /* Set by an adapter reset and by a miniport Present that rejects the
+     * persistent CDD bindings: the KMD's device-specific opens are gone and
+     * the next Present must recreate them. */
+    volatile LONG               CddBindingsStale;
     NTSTATUS                    PresentQueueInitializationStatus;
     volatile LONG               PresentQueueStopping;
     volatile LONG               VBlankResetActive;

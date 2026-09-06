@@ -1111,6 +1111,22 @@ DxgkpTdrWorker(
     PresentResetStarted = FALSE;
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
 
+    /* The miniport's allocation state did not survive the reset: every open
+     * of CDD's shared shadow and primary failed afterwards with
+     * STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE and the desktop never
+     * presented again (2026-09-06).  Windows re-commits the VidPN after a
+     * TDR so the display owner recreates its surfaces; do the same, which
+     * recreates the shared surfaces under the shared-surface mutation and
+     * lets the Present bindings rebuild on them. */
+    {
+        NTSTATUS RecommitStatus = DxgkDisplayCommitVidPn(Adapter);
+
+        if (!NT_SUCCESS(RecommitStatus))
+            DXGKRNL_ERR("DxgkpTdrWorker: VidPN recommit after reset failed 0x%08lX\n", RecommitStatus);
+        else
+            DXGKRNL_WARN("DxgkpTdrWorker: VidPN recommitted after reset; shared surfaces recreated\n");
+    }
+
 Exit:
     if (PresentResetStarted)
         DxgkPresentCompleteReset(Adapter);
