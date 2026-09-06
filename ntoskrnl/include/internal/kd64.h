@@ -565,6 +565,7 @@ extern BOOLEAN KdpPortLocked;
 extern BOOLEAN KdpControlCPressed;
 extern BOOLEAN KdpContextSent;
 extern KSPIN_LOCK KdpDebuggerLock;
+extern volatile PKPRCB KdpPortOwnerPrcb;
 extern LARGE_INTEGER KdTimerStop, KdTimerStart, KdTimerDifference;
 
 //

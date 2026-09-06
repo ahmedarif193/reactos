@@ -643,6 +643,8 @@ KdpPrint(
      * freeze all CPUs for every print, and can deadlock against a frozen
      * CPU that holds a KD lock; prints need mutual exclusion, not a freeze. */
     PrintIrql = KdpAcquireLock(&KdpDebuggerLock);
+    KdpPortOwnerPrcb = KeGetCurrentPrcb();
+    KeMemoryBarrier();
     KdSave(FALSE);
 
     if (KdpPrintString(&OutputString))
@@ -658,6 +660,12 @@ KdpPrint(
 
     KdRestore(FALSE);
     KdpReleaseLock(&KdpDebuggerLock, PrintIrql);
+    KdpPortOwnerPrcb = NULL;
+    KeMemoryBarrier();
+#if defined(_M_AMD64)
+    /* A freeze NMI that arrived while we held the port lock was deferred. */
+    KiFreezeIfRequested();
+#endif
 
     *Handled = TRUE;
     return Status;

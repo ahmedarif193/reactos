@@ -37,6 +37,8 @@
 
 PKPRCB KiFreezeOwner;
 
+static VOID KiFreezeWaitForThaw(_In_ PKPRCB CurrentPrcb);
+
 /* FUNCTIONS *****************************************************************/
 
 BOOLEAN
@@ -55,6 +57,18 @@ KiProcessorFreezeHandler(
         return FALSE;
     }
 
+    /* This processor is inside the KD port critical section without owning
+     * the freeze (KdpPrint / KdPollBreakIn take KdpDebuggerLock without
+     * freezing).  Freezing it here leaves the port lock held by a frozen
+     * CPU: the freeze owner then fails its try-lock in KdEnterDebugger
+     * ("Port lock was not acquired!") and both CPUs drive the transport.
+     * Leave the request pending; the lock release path completes it
+     * through KiFreezeIfRequested a few microseconds later. */
+    if (KdpPortOwnerPrcb == CurrentPrcb)
+    {
+        return TRUE;
+    }
+
     /* Claim the request, but do not publish a stable context before saving it. */
     if (InterlockedCompareExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_SAVING, IPI_FROZEN_STATE_TARGET_FREEZE) !=
         IPI_FROZEN_STATE_TARGET_FREEZE)
@@ -70,6 +84,24 @@ KiProcessorFreezeHandler(
     InterlockedExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_FROZEN);
 
     /* Wait for the freeze owner to release us */
+    KiFreezeWaitForThaw(CurrentPrcb);
+
+    /* Restore the processor state */
+    KiRestoreProcessorState(TrapFrame, ExceptionFrame);
+
+    /* We are running again now */
+    CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_RUNNING;
+
+    /* Return TRUE to signal that we handled the freeze */
+    return TRUE;
+}
+
+/* Frozen wait shared by the NMI path and the deferred path: spin until the
+ * owner thaws us, servicing a Kd processor switch while frozen. */
+static VOID
+KiFreezeWaitForThaw(
+    _In_ PKPRCB CurrentPrcb)
+{
     while (CurrentPrcb->IpiFrozen != IPI_FROZEN_STATE_THAW)
     {
         /* Check for Kd processor switch */
@@ -94,15 +126,47 @@ KiProcessorFreezeHandler(
         YieldProcessor();
         KeMemoryBarrier();
     }
+}
 
-    /* Restore the processor state */
-    KiRestoreProcessorState(TrapFrame, ExceptionFrame);
+/* Complete a freeze request that KiProcessorFreezeHandler deferred because
+ * this processor was inside the KD port critical section.  There is no trap
+ * frame here: the published context is the caller's own register state. */
+VOID
+NTAPI
+KiFreezeIfRequested(
+    VOID)
+{
+    PKPRCB CurrentPrcb = KeGetCurrentPrcb();
+    BOOLEAN Enable;
 
-    /* We are running again now */
-    CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_RUNNING;
+    if (CurrentPrcb->IpiFrozen != IPI_FROZEN_STATE_TARGET_FREEZE)
+    {
+        return;
+    }
 
-    /* Return TRUE to signal that we handled the freeze */
-    return TRUE;
+    Enable = KeDisableInterrupts();
+    if (InterlockedCompareExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_SAVING, IPI_FROZEN_STATE_TARGET_FREEZE) ==
+        IPI_FROZEN_STATE_TARGET_FREEZE)
+    {
+        RtlCaptureContext(&CurrentPrcb->ProcessorState.ContextFrame);
+        KiSaveProcessorControlState(&CurrentPrcb->ProcessorState);
+        CurrentPrcb->ProcessorState.ContextFrame.Dr0 = CurrentPrcb->ProcessorState.SpecialRegisters.KernelDr0;
+        CurrentPrcb->ProcessorState.ContextFrame.Dr1 = CurrentPrcb->ProcessorState.SpecialRegisters.KernelDr1;
+        CurrentPrcb->ProcessorState.ContextFrame.Dr2 = CurrentPrcb->ProcessorState.SpecialRegisters.KernelDr2;
+        CurrentPrcb->ProcessorState.ContextFrame.Dr3 = CurrentPrcb->ProcessorState.SpecialRegisters.KernelDr3;
+        CurrentPrcb->ProcessorState.ContextFrame.Dr6 = CurrentPrcb->ProcessorState.SpecialRegisters.KernelDr6;
+        CurrentPrcb->ProcessorState.ContextFrame.Dr7 = CurrentPrcb->ProcessorState.SpecialRegisters.KernelDr7;
+        KeMemoryBarrier();
+
+        /* The owner may consume ProcessorState only after this publication. */
+        InterlockedExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_FROZEN);
+
+        KiFreezeWaitForThaw(CurrentPrcb);
+
+        /* We are running again now */
+        CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_RUNNING;
+    }
+    KeRestoreInterrupts(Enable);
 }
 
 VOID
