@@ -1282,6 +1282,7 @@ DxgkCreatePagingSystemContext(
 {
     PDXGKRNL_DEVICE Device;
     PDXGKRNL_CONTEXT Context;
+    PDXGKRNL_PROCESS ProcessRecord;
     DXGK_DEVICE_WORK_TERMINAL_STATE WorkTerminal;
     DXGKARG_CREATEDEVICE CreateDeviceArg;
     DXGKARG_CREATECONTEXT CreateContextArg;
@@ -1317,6 +1318,12 @@ DxgkCreatePagingSystemContext(
     if (PagingNode >= Adapter->NodeCount)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
 
+    Status = DxgkAcquireProcessRecord(Adapter,
+                                      PsInitialSystemProcess,
+                                      &ProcessRecord);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     Device = ExAllocatePoolWithTag(NonPagedPool,
                                    sizeof(*Device),
                                    TAG_DXGK_DEVICE);
@@ -1329,12 +1336,14 @@ DxgkCreatePagingSystemContext(
             ExFreePoolWithTag(Context, TAG_DXGK_CONTEXT);
         if (Device != NULL)
             ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+        DxgkDereferenceProcessRecord(ProcessRecord);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     RtlZeroMemory(Device, sizeof(*Device));
     Device->Adapter = Adapter;
     Device->OwnerProcess = PsInitialSystemProcess;
+    Device->ProcessRecord = ProcessRecord;
     Device->ReferenceCount = 1;
     Device->ExecutionState = D3DKMT_DEVICEEXECUTION_ACTIVE;
     InitializeListHead(&Device->ContextListHead);
@@ -1383,7 +1392,7 @@ DxgkCreatePagingSystemContext(
     CreateDeviceArg.hDevice = (HANDLE)Device;
     CreateDeviceArg.Flags.SystemDevice = 1;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
-    CreateDeviceArg.hKmdProcess = NULL;
+    CreateDeviceArg.hKmdProcess = ProcessRecord->hMiniportProcess;
 #endif
     Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateDevice)(
                  Adapter->MiniportDeviceContext,
@@ -1496,6 +1505,8 @@ DxgkDestroyPagingSystemContext(
 
     if (Device != NULL)
     {
+        PDXGKRNL_PROCESS ProcessRecord = Device->ProcessRecord;
+
         InterlockedExchange(&Device->Destroying, 1);
         if (!DxgkpWaitForDeviceReferences(Device))
             return STATUS_DEVICE_BUSY;
@@ -1509,6 +1520,7 @@ DxgkDestroyPagingSystemContext(
         Device->hMiniportDevice = NULL;
         Adapter->PagingSystemDevice = NULL;
         ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
+        DxgkDereferenceProcessRecord(ProcessRecord);
     }
 
     return STATUS_SUCCESS;

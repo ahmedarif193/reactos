@@ -12323,17 +12323,6 @@ DxgkAdapterStart(
                     CapsStatus, Adapter->PhysicalAdapterCaps.NumExecutionNodes, Adapter->PhysicalAdapterCaps.PagingNodeIndex,
                     Adapter->PhysicalAdapterCaps.DxgkPhysicalAdapterHandle, Adapter->PhysicalAdapterCaps.Flags.Value);
     }
-    if (DxgkAdapterStartRoleRequiresScheduler(Role))
-    {
-        Status = DxgkCreatePagingSystemContext(Adapter);
-        if (!NT_SUCCESS(Status))
-        {
-            DXGKRNL_ERR("DxgkAdapterStart: paging system context creation failed 0x%08lX\n",
-                        Status);
-            goto StartRollback;
-        }
-        Progress.PagingSystemContextCreated = TRUE;
-    }
     DxgkVidMmDumpSegments(Adapter);
     {
         BOOLEAN ProviderStarted;
@@ -12364,6 +12353,18 @@ DxgkAdapterStart(
             goto StartRollback;
         }
         Progress.SchedulerStarted = TRUE;
+
+        /* Native VidMmInitializePagingProcess creates its paging process and
+         * system devices only after VidSch has established the scheduler
+         * objects and port-lock state used by the miniport create callbacks. */
+        Status = DxgkCreatePagingSystemContext(Adapter);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkAdapterStart: paging system context creation failed 0x%08lX\n",
+                        Status);
+            goto StartRollback;
+        }
+        Progress.PagingSystemContextCreated = TRUE;
     }
 
     /*
