@@ -159,16 +159,23 @@ DxgkpEnsureCddPresentBindings(
 {
     NTSTATUS Status;
 
-    if (Adapter->CddBindingGeneration == SharedSurface->Generation &&
+    if (InterlockedExchange(&Adapter->CddBindingsStale, 0) == 0 &&
+        Adapter->CddBindingGeneration == SharedSurface->Generation &&
         Adapter->CddShadowBindingHandle != 0 &&
         Adapter->CddPrimaryBindingHandle != 0)
     {
         return STATUS_SUCCESS;
     }
 
+    /* A teardown failure is not a reason to stop presenting: after an
+     * adapter reset the miniport may refuse to close opens it no longer
+     * knows, and the handles are dropped either way. */
     Status = DxgkpDestroyCddPresentBindings(Adapter, Device);
     if (!NT_SUCCESS(Status))
-        return Status;
+    {
+        DXGKRNL_WARN("DxgkpEnsureCddPresentBindings: stale binding teardown failed 0x%08lX; recreating\n",
+                     Status);
+    }
 
     Status = DxgkpCreateCddPresentBinding(
                  Device,
@@ -434,6 +441,9 @@ DxgkPresentCompleteReset(
         return;
     KeMemoryBarrier();
     InterlockedExchange(&Adapter->VBlankResetActive, 0);
+    /* The miniport reset invalidated its allocation opens; the persistent
+     * CDD present bindings hold such opens and must be rebuilt. */
+    InterlockedExchange(&Adapter->CddBindingsStale, 1);
 }
 
 VOID
@@ -2745,6 +2755,24 @@ DxgkpExecuteFullPresent(
     }
     _SEH2_END;
     DxgkReleaseKmdCall(Adapter);
+
+    /* The miniport no longer recognises the device-specific handles of the
+     * persistent CDD bindings (seen as INVALID_ALLOCATION_USAGE after an
+     * adapter reset): rebuild them on the next Present instead of failing
+     * every frame from here on. */
+    if ((Status == STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE ||
+         Status == STATUS_GRAPHICS_INVALID_ALLOCATION_HANDLE ||
+         Status == STATUS_GRAPHICS_ALLOCATION_CLOSED ||
+         Status == STATUS_GRAPHICS_INVALID_ALLOCATION_INSTANCE ||
+         Status == STATUS_GRAPHICS_WRONG_ALLOCATION_DEVICE ||
+         Status == STATUS_GRAPHICS_ADAPTER_WAS_RESET) &&
+        (Entry->SourceOpenBindingReference != NULL ||
+         Entry->DestinationOpenBindingReference != NULL))
+    {
+        if (InterlockedExchange(&Adapter->CddBindingsStale, 1) == 0)
+            DXGKRNL_WARN("DxgkpExecuteFullPresent: miniport rejected the CDD present bindings 0x%08lX; rebuilding\n",
+                         Status);
+    }
 
     if (NT_SUCCESS(Status) &&
         (PresentArgs.pDmaBufferPrivateData != DmaBufferPrivateData ||
