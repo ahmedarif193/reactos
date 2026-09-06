@@ -4691,123 +4691,68 @@ Cleanup:
  * REACTOS_WIN32K_DXGKRNL_INTERFACE exchange (without IRP context).
  * ====================================================================== */
 
+/* Windows LockCommon waits on the fence values stored on the allocation.
+ * Keep the same scope here: unrelated contexts must not delay a CPU lock. */
+static NTSTATUS
+DxgkpBeginSynchronizedLock(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ D3DDDICB_LOCKFLAGS Flags)
+{
+    BOOLEAN DoNotWait;
+    BOOLEAN SkipSynchronization;
+    NTSTATUS Status;
+
+    /* Discard only permits an unsynchronized lock when VidMm renames the
+     * backing store.  This implementation keeps the current backing, so it
+     * must still wait before granting CPU access. */
+    DoNotWait = (BOOLEAN)(Flags.DonotWait && !Flags.Discard);
+    SkipSynchronization =
+        (BOOLEAN)(!Flags.Discard &&
+                  (Flags.IgnoreSync ||
+                   (Flags.ReadOnly && Flags.IgnoreReadSync)));
+
+    for (;;)
+    {
+        if (!SkipSynchronization)
+        {
+            Status = DxgkVidMmWaitForTrackedSubmissions(Allocation,
+                                                        DoNotWait);
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+
+        if (!DxgkBeginKmdTransaction(Adapter))
+            return STATUS_DELETE_PENDING;
+        if (!DxgkpDeviceExecutionActive(Device))
+        {
+            DxgkEndKmdTransaction(Adapter);
+            return STATUS_DEVICE_REMOVED;
+        }
+
+        if (SkipSynchronization)
+            return STATUS_SUCCESS;
+
+        /* Submission admission is serialized by this adapter transaction.
+         * Recheck after acquiring it to close the wait-to-map race, but do
+         * not sleep while holding it: reset and retirement must keep moving. */
+        Status = DxgkVidMmWaitForTrackedSubmissions(Allocation, TRUE);
+        if (NT_SUCCESS(Status))
+            return STATUS_SUCCESS;
+
+        DxgkEndKmdTransaction(Adapter);
+        if (DoNotWait || Status != STATUS_GRAPHICS_ALLOCATION_BUSY)
+            return Status;
+    }
+}
+
 /*
  * DxgkLock -- D3DKMTLock handler.
  *
  * When called through the interface (no IRP), we assume kernel caller
  * and always use the kernel (system VA) mapping path.
  */
-/* How long D3DKMTLock waits for the GPU to release an allocation. */
-#define DXGKP_LOCK_SYNC_TIMEOUT_MS 1000
-#define DXGKP_LOCK_SYNC_MAX_CONTEXTS 16
-
-/*
- * D3DKMTLock must not hand a CPU mapping to the client while the GPU may still
- * be reading or writing the allocation: the client rewrites the buffer in
- * place, and a batch consuming it mid-flight then reads whatever was half
- * written -- including pointer fields, which is why this surfaces as a GPU
- * dereference of address 0.  Callers that know no conflict exists say so
- * through Flags (IgnoreSync, Discard); callers that cannot block say so with
- * DonotWait and get STATUS_GRAPHICS_ALLOCATION_BUSY instead.
- *
- * Nothing tracks which submitted work touches which allocation, so this waits
- * at device granularity -- every context the locking device owns.  That is
- * conservative but sound, and far narrower than idling the adapter.
- * TODO: per-allocation reference fences would let this wait only on the work
- * that actually references the allocation being locked.
- */
-static NTSTATUS
-DxgkpDeviceWaitForGpuRelease(
-    _In_ PDXGKRNL_DEVICE Device,
-    _In_ BOOLEAN DoNotWait)
-{
-    PDXGKRNL_CONTEXT Contexts[DXGKP_LOCK_SYNC_MAX_CONTEXTS];
-    ULONG ContextCount = 0;
-    ULONG Index;
-    ULONGLONG Deadline;
-    NTSTATUS Status = STATUS_SUCCESS;
-    PLIST_ENTRY Entry;
-
-    if (Device == NULL)
-        return STATUS_SUCCESS;
-
-    /* Snapshot the context list: waiting under DeviceMutex would block the
-     * very paths that retire the work being waited for. */
-    ExAcquireFastMutex(&Device->DeviceMutex);
-    for (Entry = Device->ContextListHead.Flink;
-         Entry != &Device->ContextListHead && ContextCount < DXGKP_LOCK_SYNC_MAX_CONTEXTS;
-         Entry = Entry->Flink)
-    {
-        PDXGKRNL_CONTEXT Candidate = CONTAINING_RECORD(Entry, DXGKRNL_CONTEXT, ContextListEntry);
-
-        if (DxgkReferenceContext(Candidate))
-            Contexts[ContextCount++] = Candidate;
-    }
-    ExReleaseFastMutex(&Device->DeviceMutex);
-
-    Deadline = KeQueryInterruptTime() + (ULONGLONG)DXGKP_LOCK_SYNC_TIMEOUT_MS * 10000ULL;
-    for (Index = 0; Index < ContextCount; ++Index)
-    {
-        PDXGKRNL_CONTEXT Context = Contexts[Index];
-
-        for (;;)
-        {
-            LARGE_INTEGER Timeout;
-            ULONGLONG Now;
-            BOOLEAN Outstanding;
-            KIRQL OldIrql;
-
-            /* Wait on every outstanding operation, not just dispatched work:
-             * restricting this to WORK was measured to reintroduce the crash. */
-            KeAcquireSpinLock(&Context->StreamLock, &OldIrql);
-            Outstanding = !IsListEmpty(&Context->StreamOperationList);
-            KeReleaseSpinLock(&Context->StreamLock, OldIrql);
-            if (!Outstanding)
-                break;
-            if (DoNotWait)
-            {
-                Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
-                break;
-            }
-            /*
-             * Bail out if the device is already lost -- there is nothing left
-             * to wait for.
-             */
-            if (!DxgkpDeviceExecutionActive(Device))
-            {
-                Status = STATUS_DEVICE_REMOVED;
-                break;
-            }
-            Now = KeQueryInterruptTime();
-            if (Now >= Deadline)
-            {
-                /*
-                 * Report the allocation as busy rather than waiting forever.
-                 * Blocking indefinitely here is closer to the documented
-                 * contract, but it was measured to cut glmark2 from 30-31
-                 * scenes to 22: the client recovers from a busy allocation,
-                 * whereas an unbounded wait pins the rendering thread behind
-                 * an engine that is not going to drain.
-                 */
-                Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
-                break;
-            }
-            Timeout.QuadPart = -(LONGLONG)(Deadline - Now);
-            (VOID)KeWaitForSingleObject(&Context->StreamDrainedEvent,
-                                        Executive,
-                                        KernelMode,
-                                        FALSE,
-                                        &Timeout);
-        }
-        if (!NT_SUCCESS(Status))
-            break;
-    }
-
-    for (Index = 0; Index < ContextCount; ++Index)
-        DxgkDereferenceContext(Contexts[Index]);
-    return Status;
-}
-
 NTSTATUS
 NTAPI
 DxgkLock(
@@ -4842,34 +4787,18 @@ DxgkLock(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (!DxgkBeginKmdTransaction(LockAdapter))
+    Status = DxgkpBeginSynchronizedLock(LockAdapter,
+                                        LockDevice,
+                                        LockAlloc,
+                                        pLock->Flags);
+    if (!NT_SUCCESS(Status))
     {
         DxgkVidMmDereferenceAllocation(LockAlloc);
         DxgkDereferenceDevice(LockDevice);
-        return STATUS_DELETE_PENDING;
+        return Status;
     }
-    /* Interface callers are always kernel -- use system VA mapping.  Keep
-     * reset recovery outside the active-check-to-map interval. */
-    if (!DxgkpDeviceExecutionActive(LockDevice))
-    {
-        Status = STATUS_DEVICE_REMOVED;
-    }
-    else
-    {
-        /* Synchronize before exposing the mapping unless the caller opted out. */
-        if (pLock->Flags.IgnoreSync || pLock->Flags.Discard ||
-            (pLock->Flags.ReadOnly && pLock->Flags.IgnoreReadSync))
-        {
-            Status = STATUS_SUCCESS;
-        }
-        else
-        {
-            Status = DxgkpDeviceWaitForGpuRelease(LockDevice,
-                                                  (BOOLEAN)(pLock->Flags.DonotWait != 0));
-        }
-        if (NT_SUCCESS(Status))
-            Status = DxgkVidMmMapAllocationCpu(LockAlloc, &LockVa);
-    }
+    /* Interface callers are always kernel -- use system VA mapping. */
+    Status = DxgkVidMmMapAllocationCpu(LockAlloc, &LockVa);
     DxgkEndKmdTransaction(LockAdapter);
     DxgkVidMmDereferenceAllocation(LockAlloc);
     DxgkDereferenceDevice(LockDevice);
@@ -9853,15 +9782,17 @@ DxgkpDispatchBufferedIoctlWorker(
              * kernel and needs a system VA for the shadow surface.
              */
             UserMappingCaller = (Stack->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL) || (Irp->RequestorMode == UserMode);
-            if (!DxgkBeginKmdTransaction(LockAdapter))
+            Status = DxgkpBeginSynchronizedLock(LockAdapter,
+                                                LockDevice,
+                                                LockAlloc,
+                                                pLock->Flags);
+            if (!NT_SUCCESS(Status))
             {
                 DxgkVidMmDereferenceAllocation(LockAlloc);
                 DxgkDereferenceDevice(LockDevice);
-                return STATUS_DELETE_PENDING;
+                return Status;
             }
-            if (!DxgkpDeviceExecutionActive(LockDevice))
-                Status = STATUS_DEVICE_REMOVED;
-            else if (UserMappingCaller)
+            if (UserMappingCaller)
                 Status = DxgkVidMmMapAllocationUser(LockAlloc, &LockVa);
             else
                 Status = DxgkVidMmMapAllocationCpu(LockAlloc, &LockVa);
