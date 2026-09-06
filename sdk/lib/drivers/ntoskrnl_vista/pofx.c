@@ -11,6 +11,13 @@ typedef struct _ROS_PO_FX_COMPONENT_STATE
     ULONG CurrentIdleState;
     volatile LONG IdleConditionPending;
     volatile LONG IdleStatePending;
+    /*
+     * A pending F-state transition is either an activation (the component is
+     * being returned to F0 because a driver took the first active reference)
+     * or an idle transition.  Its completion path differs, so the direction
+     * has to be remembered across the driver's PoFxCompleteIdleState.
+     */
+    volatile LONG ActiveTransitionPending;
     volatile LONG Active;
 } ROS_PO_FX_COMPONENT_STATE, *PROS_PO_FX_COMPONENT_STATE;
 
@@ -26,7 +33,14 @@ typedef struct _ROS_PO_FX_HANDLE
 {
     ULONG Signature;
     PDEVICE_OBJECT Pdo;
-    PPO_FX_DEVICE Device;
+    /*
+     * Normalized description.  PoFxRegisterDevice accepts a V1, V2 or V3
+     * PO_FX_DEVICE, because a single exported entry point serves drivers
+     * compiled against different PO_FX_VERSION defaults, and stores the
+     * result in the widest layout so the rest of this file has one shape to
+     * work with.  Windows 11 dxgkrnl registers a V3 device.
+     */
+    PPO_FX_DEVICE_V3 Device;
     KSPIN_LOCK RelationLock;
     LIST_ENTRY RelationList;
     ULONGLONG IdleTimeout;
@@ -51,7 +65,7 @@ PopFxSelectIdleState(
     _In_ PROS_PO_FX_HANDLE FxHandle,
     _In_ ULONG Component)
 {
-    PPO_FX_COMPONENT Description = &FxHandle->Device->Components[Component];
+    PPO_FX_COMPONENT_V2 Description = &FxHandle->Device->Components[Component];
     PROS_PO_FX_COMPONENT_STATE State = &FxHandle->ComponentState[Component];
     ULONG Index;
 
@@ -120,6 +134,38 @@ PopFxRequestIdleState(
         PoFxCompleteIdleState((POHANDLE)FxHandle, Component);
 }
 
+/*
+ * A component that has just taken its first active reference must be returned
+ * to F0 before its active condition is signalled.  PoFx owns that transition:
+ * it asks the driver for idle state 0 and only reports the active condition
+ * once the driver completes it.  Without this step a component registered
+ * with more than one F-state stays in whatever idle state it last entered and
+ * is never powered back up.
+ */
+static
+VOID
+PopFxRequestActiveState(
+    _In_ PROS_PO_FX_HANDLE FxHandle,
+    _In_ ULONG Component)
+{
+    PROS_PO_FX_COMPONENT_STATE State = &FxHandle->ComponentState[Component];
+
+    /*
+     * Claim the activation direction first.  If an idle transition is still
+     * outstanding, its completion observes this flag and reports the active
+     * condition instead of parking the component.
+     */
+    InterlockedExchange(&State->ActiveTransitionPending, TRUE);
+    if (InterlockedCompareExchange(&State->IdleStatePending, TRUE, FALSE) != FALSE)
+        return;
+
+    State->CurrentIdleState = 0;
+    if (FxHandle->Device->ComponentIdleStateCallback != NULL)
+        FxHandle->Device->ComponentIdleStateCallback(FxHandle->Device->DeviceContext, Component, 0);
+    else
+        PoFxCompleteIdleState((POHANDLE)FxHandle, Component);
+}
+
 static
 VOID
 PopFxRequestIdleCondition(
@@ -138,6 +184,126 @@ PopFxRequestIdleCondition(
 }
 
 
+/*
+ * Version-independent view of a caller's registration table.
+ *
+ * V1 places the callbacks directly after Version and has no device flags; V2
+ * and V3 both carry Flags and describe components with PO_FX_COMPONENT_V2; V3
+ * adds the directed-power callbacks and the directed-FX timeout.  One exported
+ * PoFxRegisterDevice serves drivers built against any of the three, because
+ * PO_FX_VERSION is a compile-time choice of the *caller*, not of the kernel.
+ */
+typedef struct _ROS_PO_FX_SOURCE
+{
+    ULONG Version;
+    ULONGLONG Flags;
+    PPO_FX_COMPONENT_ACTIVE_CONDITION_CALLBACK ComponentActiveConditionCallback;
+    PPO_FX_COMPONENT_IDLE_CONDITION_CALLBACK ComponentIdleConditionCallback;
+    PPO_FX_COMPONENT_IDLE_STATE_CALLBACK ComponentIdleStateCallback;
+    PPO_FX_DEVICE_POWER_REQUIRED_CALLBACK DevicePowerRequiredCallback;
+    PPO_FX_DEVICE_POWER_NOT_REQUIRED_CALLBACK DevicePowerNotRequiredCallback;
+    PPO_FX_POWER_CONTROL_CALLBACK PowerControlCallback;
+    PPO_FX_DIRECTED_POWER_UP_CALLBACK DirectedPowerUpCallback;
+    PPO_FX_DIRECTED_POWER_DOWN_CALLBACK DirectedPowerDownCallback;
+    ULONG DirectedFxTimeoutInSeconds;
+    PVOID DeviceContext;
+    ULONG ComponentCount;
+} ROS_PO_FX_SOURCE, *PROS_PO_FX_SOURCE;
+
+static
+NTSTATUS
+PopFxCaptureDevice(
+    _In_ PVOID Device,
+    _Out_ PROS_PO_FX_SOURCE Source)
+{
+    RtlZeroMemory(Source, sizeof(*Source));
+
+    /* Version is the first ULONG of every PO_FX_DEVICE revision. */
+    Source->Version = *(const ULONG *)Device;
+    switch (Source->Version)
+    {
+        case PO_FX_VERSION_V1:
+        {
+            PPO_FX_DEVICE_V1 V1 = (PPO_FX_DEVICE_V1)Device;
+
+            Source->ComponentActiveConditionCallback = V1->ComponentActiveConditionCallback;
+            Source->ComponentIdleConditionCallback = V1->ComponentIdleConditionCallback;
+            Source->ComponentIdleStateCallback = V1->ComponentIdleStateCallback;
+            Source->DevicePowerRequiredCallback = V1->DevicePowerRequiredCallback;
+            Source->DevicePowerNotRequiredCallback = V1->DevicePowerNotRequiredCallback;
+            Source->PowerControlCallback = V1->PowerControlCallback;
+            Source->DeviceContext = V1->DeviceContext;
+            Source->ComponentCount = V1->ComponentCount;
+            break;
+        }
+        case PO_FX_VERSION_V2:
+        {
+            PPO_FX_DEVICE_V2 V2 = (PPO_FX_DEVICE_V2)Device;
+
+            Source->Flags = V2->Flags;
+            Source->ComponentActiveConditionCallback = V2->ComponentActiveConditionCallback;
+            Source->ComponentIdleConditionCallback = V2->ComponentIdleConditionCallback;
+            Source->ComponentIdleStateCallback = V2->ComponentIdleStateCallback;
+            Source->DevicePowerRequiredCallback = V2->DevicePowerRequiredCallback;
+            Source->DevicePowerNotRequiredCallback = V2->DevicePowerNotRequiredCallback;
+            Source->PowerControlCallback = V2->PowerControlCallback;
+            Source->DeviceContext = V2->DeviceContext;
+            Source->ComponentCount = V2->ComponentCount;
+            break;
+        }
+        case PO_FX_VERSION_V3:
+        {
+            PPO_FX_DEVICE_V3 V3 = (PPO_FX_DEVICE_V3)Device;
+
+            Source->Flags = V3->Flags;
+            Source->ComponentActiveConditionCallback = V3->ComponentActiveConditionCallback;
+            Source->ComponentIdleConditionCallback = V3->ComponentIdleConditionCallback;
+            Source->ComponentIdleStateCallback = V3->ComponentIdleStateCallback;
+            Source->DevicePowerRequiredCallback = V3->DevicePowerRequiredCallback;
+            Source->DevicePowerNotRequiredCallback = V3->DevicePowerNotRequiredCallback;
+            Source->PowerControlCallback = V3->PowerControlCallback;
+            Source->DirectedPowerUpCallback = V3->DirectedPowerUpCallback;
+            Source->DirectedPowerDownCallback = V3->DirectedPowerDownCallback;
+            Source->DirectedFxTimeoutInSeconds = V3->DirectedFxTimeoutInSeconds;
+            Source->DeviceContext = V3->DeviceContext;
+            Source->ComponentCount = V3->ComponentCount;
+            break;
+        }
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+PopFxCaptureComponent(
+    _In_ ULONG Version,
+    _In_ PVOID Device,
+    _In_ ULONG Index,
+    _Out_ PPO_FX_COMPONENT_V2 Component)
+{
+    RtlZeroMemory(Component, sizeof(*Component));
+
+    if (Version == PO_FX_VERSION_V1)
+    {
+        PPO_FX_COMPONENT_V1 Source = &((PPO_FX_DEVICE_V1)Device)->Components[Index];
+
+        /* V1 has no per-component flags and no provider list. */
+        Component->Id = Source->Id;
+        Component->DeepestWakeableIdleState = Source->DeepestWakeableIdleState;
+        Component->IdleStateCount = Source->IdleStateCount;
+        Component->IdleStates = Source->IdleStates;
+        return;
+    }
+
+    if (Version == PO_FX_VERSION_V2)
+        *Component = ((PPO_FX_DEVICE_V2)Device)->Components[Index];
+    else
+        *Component = ((PPO_FX_DEVICE_V3)Device)->Components[Index];
+}
+
 NTKRNLVISTAAPI
 NTSTATUS
 NTAPI
@@ -147,63 +313,114 @@ PoFxRegisterDevice(
     _Out_ POHANDLE *Handle)
 {
     PROS_PO_FX_HANDLE NewHandle;
-    PPO_FX_DEVICE DeviceCopy;
+    PPO_FX_DEVICE_V3 DeviceCopy;
+    ROS_PO_FX_SOURCE Source;
+    NTSTATUS Status;
     SIZE_T AllocationSize;
     SIZE_T DeviceSize;
     SIZE_T IdleStatesSize;
-    PUCHAR IdleStatesCursor;
+    SIZE_T ProvidersSize;
+    PUCHAR Cursor;
     ULONG Component;
 
-    if ((Pdo == NULL) || (Device == NULL) || (Handle == NULL) ||
-        (Device->Version != PO_FX_VERSION) || (Device->ComponentCount == 0))
-    {
+    if ((Pdo == NULL) || (Device == NULL) || (Handle == NULL))
         return STATUS_INVALID_PARAMETER;
-    }
 
-    DeviceSize = FIELD_OFFSET(PO_FX_DEVICE, Components);
-    if ((SIZE_T)Device->ComponentCount > (MAXULONG_PTR - DeviceSize) / sizeof(PO_FX_COMPONENT))
+    Status = PopFxCaptureDevice(Device, &Source);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Source.ComponentCount == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    DeviceSize = FIELD_OFFSET(PO_FX_DEVICE_V3, Components);
+    if ((SIZE_T)Source.ComponentCount > (MAXULONG_PTR - DeviceSize) / sizeof(PO_FX_COMPONENT_V2))
         return STATUS_INTEGER_OVERFLOW;
-    DeviceSize += Device->ComponentCount * sizeof(PO_FX_COMPONENT);
+    DeviceSize += Source.ComponentCount * sizeof(PO_FX_COMPONENT_V2);
 
     IdleStatesSize = 0;
-    for (Component = 0; Component != Device->ComponentCount; Component++)
+    ProvidersSize = 0;
+    for (Component = 0; Component != Source.ComponentCount; Component++)
     {
-        PPO_FX_COMPONENT Description = &Device->Components[Component];
+        PO_FX_COMPONENT_V2 Description;
 
-        if ((Description->IdleStateCount == 0) || (Description->IdleStates == NULL) || (Description->DeepestWakeableIdleState >= Description->IdleStateCount))
+        PopFxCaptureComponent(Source.Version, Device, Component, &Description);
+        if ((Description.IdleStateCount == 0) || (Description.IdleStates == NULL) || (Description.DeepestWakeableIdleState >= Description.IdleStateCount))
             return STATUS_INVALID_PARAMETER;
-        if ((Description->IdleStateCount > 1) && ((Device->ComponentIdleStateCallback == NULL) || (Device->ComponentActiveConditionCallback == NULL) || (Device->ComponentIdleConditionCallback == NULL)))
+        if ((Description.IdleStateCount > 1) && ((Source.ComponentIdleStateCallback == NULL) || (Source.ComponentActiveConditionCallback == NULL) || (Source.ComponentIdleConditionCallback == NULL)))
             return STATUS_INVALID_PARAMETER;
-        if ((SIZE_T)Description->IdleStateCount > (MAXULONG_PTR - IdleStatesSize) / sizeof(PO_FX_COMPONENT_IDLE_STATE))
+        if ((Description.ProviderCount != 0) && (Description.Providers == NULL))
+            return STATUS_INVALID_PARAMETER;
+        if ((SIZE_T)Description.IdleStateCount > (MAXULONG_PTR - IdleStatesSize) / sizeof(PO_FX_COMPONENT_IDLE_STATE))
             return STATUS_INTEGER_OVERFLOW;
-        IdleStatesSize += Description->IdleStateCount * sizeof(PO_FX_COMPONENT_IDLE_STATE);
+        IdleStatesSize += Description.IdleStateCount * sizeof(PO_FX_COMPONENT_IDLE_STATE);
+        if ((SIZE_T)Description.ProviderCount > (MAXULONG_PTR - ProvidersSize) / sizeof(ULONG))
+            return STATUS_INTEGER_OVERFLOW;
+        ProvidersSize += Description.ProviderCount * sizeof(ULONG);
     }
-    if (DeviceSize > MAXULONG_PTR - IdleStatesSize)
+    if ((DeviceSize > MAXULONG_PTR - IdleStatesSize) ||
+        (DeviceSize + IdleStatesSize > MAXULONG_PTR - ProvidersSize))
+    {
         return STATUS_INTEGER_OVERFLOW;
+    }
 
-    if ((SIZE_T)Device->ComponentCount > (MAXULONG_PTR - FIELD_OFFSET(ROS_PO_FX_HANDLE, ComponentState)) / sizeof(ROS_PO_FX_COMPONENT_STATE))
+    if ((SIZE_T)Source.ComponentCount > (MAXULONG_PTR - FIELD_OFFSET(ROS_PO_FX_HANDLE, ComponentState)) / sizeof(ROS_PO_FX_COMPONENT_STATE))
         return STATUS_INTEGER_OVERFLOW;
-    AllocationSize = FIELD_OFFSET(ROS_PO_FX_HANDLE, ComponentState) + Device->ComponentCount * sizeof(ROS_PO_FX_COMPONENT_STATE);
+    AllocationSize = FIELD_OFFSET(ROS_PO_FX_HANDLE, ComponentState) + Source.ComponentCount * sizeof(ROS_PO_FX_COMPONENT_STATE);
     NewHandle = ExAllocatePoolZero(NonPagedPool, AllocationSize, ROS_PO_FX_SIGNATURE);
     if (NewHandle == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    DeviceCopy = ExAllocatePoolZero(NonPagedPool, DeviceSize + IdleStatesSize, ROS_PO_FX_SIGNATURE);
+    DeviceCopy = ExAllocatePoolZero(NonPagedPool, DeviceSize + IdleStatesSize + ProvidersSize, ROS_PO_FX_SIGNATURE);
     if (DeviceCopy == NULL)
     {
         ExFreePoolWithTag(NewHandle, ROS_PO_FX_SIGNATURE);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    RtlCopyMemory(DeviceCopy, Device, DeviceSize);
-    IdleStatesCursor = (PUCHAR)DeviceCopy + DeviceSize;
-    for (Component = 0; Component != Device->ComponentCount; Component++)
-    {
-        SIZE_T Size = Device->Components[Component].IdleStateCount * sizeof(PO_FX_COMPONENT_IDLE_STATE);
+    /*
+     * Publish the normalized description.  Idle-state and provider arrays are
+     * copied into the same allocation so nothing points back at caller memory
+     * that may be freed once registration returns.
+     */
+    DeviceCopy->Version = PO_FX_VERSION_V3;
+    DeviceCopy->Flags = Source.Flags;
+    DeviceCopy->ComponentActiveConditionCallback = Source.ComponentActiveConditionCallback;
+    DeviceCopy->ComponentIdleConditionCallback = Source.ComponentIdleConditionCallback;
+    DeviceCopy->ComponentIdleStateCallback = Source.ComponentIdleStateCallback;
+    DeviceCopy->DevicePowerRequiredCallback = Source.DevicePowerRequiredCallback;
+    DeviceCopy->DevicePowerNotRequiredCallback = Source.DevicePowerNotRequiredCallback;
+    DeviceCopy->PowerControlCallback = Source.PowerControlCallback;
+    DeviceCopy->DirectedPowerUpCallback = Source.DirectedPowerUpCallback;
+    DeviceCopy->DirectedPowerDownCallback = Source.DirectedPowerDownCallback;
+    DeviceCopy->DirectedFxTimeoutInSeconds = Source.DirectedFxTimeoutInSeconds;
+    DeviceCopy->DeviceContext = Source.DeviceContext;
+    DeviceCopy->ComponentCount = Source.ComponentCount;
 
-        DeviceCopy->Components[Component].IdleStates = (PPO_FX_COMPONENT_IDLE_STATE)IdleStatesCursor;
-        RtlCopyMemory(IdleStatesCursor, Device->Components[Component].IdleStates, Size);
-        IdleStatesCursor += Size;
+    Cursor = (PUCHAR)DeviceCopy + DeviceSize;
+    for (Component = 0; Component != Source.ComponentCount; Component++)
+    {
+        PPO_FX_COMPONENT_V2 Description = &DeviceCopy->Components[Component];
+        SIZE_T Size;
+
+        PopFxCaptureComponent(Source.Version, Device, Component, Description);
+
+        Size = Description->IdleStateCount * sizeof(PO_FX_COMPONENT_IDLE_STATE);
+        RtlCopyMemory(Cursor, Description->IdleStates, Size);
+        Description->IdleStates = (PPO_FX_COMPONENT_IDLE_STATE)Cursor;
+        Cursor += Size;
+
+        Size = Description->ProviderCount * sizeof(ULONG);
+        if (Size != 0)
+        {
+            RtlCopyMemory(Cursor, Description->Providers, Size);
+            Description->Providers = (PULONG)Cursor;
+            Cursor += Size;
+        }
+        else
+        {
+            Description->Providers = NULL;
+        }
+
         NewHandle->ComponentState[Component].Latency = PO_FX_UNKNOWN_TIME;
         NewHandle->ComponentState[Component].Residency = PO_FX_UNKNOWN_TIME;
         NewHandle->ComponentState[Component].Active = TRUE;
@@ -212,7 +429,7 @@ PoFxRegisterDevice(
     NewHandle->Signature = ROS_PO_FX_SIGNATURE;
     NewHandle->Pdo = Pdo;
     NewHandle->Device = DeviceCopy;
-    NewHandle->ComponentCount = Device->ComponentCount;
+    NewHandle->ComponentCount = Source.ComponentCount;
     NewHandle->DevicePoweredOn = TRUE;
     KeInitializeSpinLock(&NewHandle->RelationLock);
     InitializeListHead(&NewHandle->RelationList);
@@ -290,13 +507,11 @@ PoFxActivateComponent(
         if (References == 1)
         {
             InterlockedExchange(&FxHandle->ComponentState[Component].IdleConditionPending, FALSE);
-            InterlockedExchange(&FxHandle->ComponentState[Component].IdleStatePending, FALSE);
             InterlockedExchange(&FxHandle->DevicePowerNotRequiredPending, FALSE);
             if (!FxHandle->DevicePoweredOn && (FxHandle->Device->DevicePowerRequiredCallback != NULL))
                 FxHandle->Device->DevicePowerRequiredCallback(FxHandle->Device->DeviceContext);
             InterlockedExchange(&FxHandle->DevicePoweredOn, TRUE);
-            if ((InterlockedExchange(&FxHandle->ComponentState[Component].Active, TRUE) == FALSE) && (FxHandle->Device->ComponentActiveConditionCallback != NULL))
-                FxHandle->Device->ComponentActiveConditionCallback(FxHandle->Device->DeviceContext, Component);
+            PopFxRequestActiveState(FxHandle, Component);
         }
     }
 }
@@ -366,6 +581,16 @@ PoFxCompleteIdleState(
 
     if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE) && (Component < FxHandle->ComponentCount) && (InterlockedExchange(&FxHandle->ComponentState[Component].IdleStatePending, FALSE) != FALSE))
     {
+        if (InterlockedExchange(&FxHandle->ComponentState[Component].ActiveTransitionPending, FALSE) != FALSE)
+        {
+            /* The component is back at F0; report the active condition. */
+            if ((InterlockedExchange(&FxHandle->ComponentState[Component].Active, TRUE) == FALSE) &&
+                (FxHandle->Device->ComponentActiveConditionCallback != NULL))
+            {
+                FxHandle->Device->ComponentActiveConditionCallback(FxHandle->Device->DeviceContext, Component);
+            }
+            return;
+        }
         InterlockedExchange(&FxHandle->ComponentState[Component].Active, FALSE);
         PopFxRequestDevicePowerNotRequired(FxHandle);
     }
