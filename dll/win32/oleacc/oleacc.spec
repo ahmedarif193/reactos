@@ -3,8 +3,8 @@
 @ stdcall AccessibleObjectFromPoint(int64 ptr ptr)
 @ stdcall AccessibleObjectFromWindow(ptr long ptr ptr)
 @ stdcall CreateStdAccessibleObject(ptr long ptr ptr)
-@ stub CreateStdAccessibleProxyA
-@ stub CreateStdAccessibleProxyW
+@ stdcall CreateStdAccessibleProxyA(ptr str long ptr ptr)
+@ stdcall CreateStdAccessibleProxyW(ptr wstr long ptr ptr)
 @ stdcall -private DllGetClassObject(ptr ptr ptr)
 @ stdcall -private DllRegisterServer()
 @ stdcall -private DllUnregisterServer()

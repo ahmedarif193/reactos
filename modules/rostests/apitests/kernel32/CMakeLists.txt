@@ -27,6 +27,7 @@ list(APPEND SOURCE
     GetFinalPathNameByHandle.c
     GetLocaleInfo.c
     GetModuleFileName.c
+    GetOsSafeBootMode.c
     GetPackageFamilyName.c
     GetVolumeInformation.c
     InitOnce.c

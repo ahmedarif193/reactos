@@ -774,3 +774,291 @@ DWORD WINAPI CheckStagingArea(VOID)
     /* Called by native explorer */
     return 0;
 }
+
+EXTERN_C VOID
+WINAPI
+SHChangeNotifyRegisterThread(_In_ SCNRT_STATUS Status)
+{
+    /* ReactOS registers change notifications synchronously, so the
+     * asynchronous register/deregister opt-in has nothing to switch. */
+    TRACE("SHChangeNotifyRegisterThread(%d)\n", Status);
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHGetLocalizedName(
+    _In_ PCWSTR pszPath,
+    _Out_writes_(cch) PWSTR pszResModule,
+    _In_ UINT cch,
+    _Out_ int *pidsRes)
+{
+    WCHAR szIniFile[MAX_PATH];
+    WCHAR szValue[MAX_PATH + 32];
+    WCHAR szExpanded[MAX_PATH];
+    PWSTR pszComma;
+    int idsRes;
+
+    TRACE("(%s, %p, %u, %p)\n", debugstr_w(pszPath), pszResModule, cch, pidsRes);
+
+    if (!pszPath || !pszResModule || !cch || !pidsRes)
+        return E_INVALIDARG;
+
+    *pszResModule = UNICODE_NULL;
+    *pidsRes = 0;
+
+    if (FAILED(StringCchCopyW(szIniFile, _countof(szIniFile), pszPath)))
+        return E_FAIL;
+    if (!PathAppendW(szIniFile, L"desktop.ini"))
+        return E_FAIL;
+
+    if (!GetPrivateProfileStringW(L".ShellClassInfo", L"LocalizedResourceName", L"",
+                                  szValue, _countof(szValue), szIniFile) ||
+        !szValue[0])
+    {
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    }
+
+    pszComma = wcsrchr(szValue, L',');
+    if (!pszComma)
+        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+
+    *pszComma++ = UNICODE_NULL;
+    idsRes = _wtoi(pszComma);
+    if (idsRes >= 0)
+        return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+
+    if (szValue[0] == L'@')
+        StringCchCopyW(szValue, _countof(szValue), &szValue[1]);
+
+    if (!ExpandEnvironmentStringsW(szValue, szExpanded, _countof(szExpanded)))
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    if (wcslen(szExpanded) >= cch)
+        return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+
+    StringCchCopyW(pszResModule, cch, szExpanded);
+    *pidsRes = -idsRes;
+    return S_OK;
+}
+
+EXTERN_C DWORD
+WINAPI
+DisconnectWindowsDialog(_In_ HWND hwndParent)
+{
+    FIXME("DisconnectWindowsDialog(%p) stub\n", hwndParent);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+EXTERN_C int
+WINAPI
+SHMapIDListToSystemImageListIndex(
+    _In_ IShellFolder *psf,
+    _In_ PCUITEMID_CHILD pidl,
+    _In_ DWORD dwFlags,
+    _Out_opt_ int *piIndexSel)
+{
+    FIXME("SHMapIDListToSystemImageListIndex(%p, %p, 0x%lx, %p) stub\n",
+          psf, pidl, dwFlags, piIndexSel);
+
+    if (piIndexSel)
+        *piIndexSel = -1;
+    return -1;
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHMapIDListToSystemImageListIndexAsync(
+    _In_ PVOID pts,
+    _In_ IShellFolder *psf,
+    _In_ PCUITEMID_CHILD pidl,
+    _In_ DWORD dwFlags,
+    _In_opt_ PVOID pfn,
+    _In_opt_ PVOID pvData,
+    _In_opt_ PVOID pvHint,
+    _Out_opt_ int *piIndex)
+{
+    FIXME("SHMapIDListToSystemImageListIndexAsync(%p, %p, %p, 0x%lx) stub\n",
+          pts, psf, pidl, dwFlags);
+
+    UNREFERENCED_PARAMETER(pfn);
+    UNREFERENCED_PARAMETER(pvData);
+    UNREFERENCED_PARAMETER(pvHint);
+
+    if (piIndex)
+        *piIndex = -1;
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+PathGetPathDisplayName(
+    _In_ LPCWSTR pszPath,
+    _Out_writes_(cchPath) LPWSTR pszDisplayName,
+    _In_ UINT cchPath)
+{
+    FIXME("PathGetPathDisplayName(%s, %p, %u) stub\n",
+          debugstr_w(pszPath), pszDisplayName, cchPath);
+
+    if (!pszDisplayName || !cchPath)
+        return E_INVALIDARG;
+
+    *pszDisplayName = UNICODE_NULL;
+    return E_NOTIMPL;
+}
+
+EXTERN_C BOOL
+WINAPI
+PathComparePaths(_In_ LPCWSTR pszPath1, _In_ LPCWSTR pszPath2)
+{
+    if (!pszPath1 || !pszPath2)
+        return FALSE;
+
+    return (StrCmpIW(pszPath1, pszPath2) == 0);
+}
+
+EXTERN_C HRESULT
+WINAPI
+SHEnableServiceObject(_In_ REFCLSID rclsid, _In_ BOOL fEnable)
+{
+    FIXME("SHEnableServiceObject(%s, %d) stub\n", wine_dbgstr_guid(&rclsid), fEnable);
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal206(PVOID Arg1)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+
+    FIXME("shell32.#206 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal792(PVOID Arg1, PVOID Arg2, PVOID Arg3)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+    UNREFERENCED_PARAMETER(Arg3);
+
+    FIXME("shell32.#792 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal885(PVOID Arg1)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+
+    FIXME("shell32.#885 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal892(PVOID Arg1, PVOID Arg2, PVOID Arg3)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+    UNREFERENCED_PARAMETER(Arg3);
+
+    FIXME("shell32.#892 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal893(PVOID Arg1, PVOID Arg2, PVOID Arg3, PVOID Arg4, PVOID Arg5, PVOID Arg6)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+    UNREFERENCED_PARAMETER(Arg3);
+    UNREFERENCED_PARAMETER(Arg4);
+    UNREFERENCED_PARAMETER(Arg5);
+    UNREFERENCED_PARAMETER(Arg6);
+
+    FIXME("shell32.#893 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal894(PVOID Arg1, PVOID Arg2, PVOID Arg3, PVOID Arg4, PVOID Arg5, PVOID Arg6, PVOID Arg7)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+    UNREFERENCED_PARAMETER(Arg3);
+    UNREFERENCED_PARAMETER(Arg4);
+    UNREFERENCED_PARAMETER(Arg5);
+    UNREFERENCED_PARAMETER(Arg6);
+    UNREFERENCED_PARAMETER(Arg7);
+
+    FIXME("shell32.#894 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal895(PVOID Arg1, PVOID Arg2, PVOID Arg3)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+    UNREFERENCED_PARAMETER(Arg3);
+
+    FIXME("shell32.#895 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal896(PVOID Arg1)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+
+    FIXME("shell32.#896 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal899(PVOID Arg1)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+
+    FIXME("shell32.#899 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal904(PVOID Arg1, PVOID Arg2)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+
+    FIXME("shell32.#904 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal905(PVOID Arg1, PVOID Arg2)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+
+    FIXME("shell32.#905 stub\n");
+    return E_NOTIMPL;
+}
+
+EXTERN_C HRESULT
+WINAPI
+Shell32Ordinal906(VOID)
+{
+
+    FIXME("shell32.#906 stub\n");
+    return E_NOTIMPL;
+}
+

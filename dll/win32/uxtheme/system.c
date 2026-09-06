@@ -1698,3 +1698,58 @@ const WCHAR ** WINAPI GetImmersiveColorNamedTypeByIndex(UINT index)
     FIXME("%u: stub\n", index);
     return NULL;
 }
+
+/***********************************************************************
+ *      GetUserColorPreference                              (UXTHEME.120)
+ */
+HRESULT WINAPI GetUserColorPreference(PVOID pcpPreference, BOOL fForceReload)
+{
+    FIXME("(%p, %d): stub\n", pcpPreference, fForceReload);
+    return E_NOTIMPL;
+}
+
+/***********************************************************************
+ *      GetColorFromPreference                              (UXTHEME.121)
+ */
+COLORREF WINAPI GetColorFromPreference(PVOID pcpPreference, int iColor,
+                                       BOOL fUseHighContrast, int iHighContrastColor)
+{
+    FIXME("(%p, %d, %d, %d): stub\n", pcpPreference, iColor, fUseHighContrast, iHighContrastColor);
+    return RGB(0, 0, 0);
+}
+
+/***********************************************************************
+ *      @                                                    (UXTHEME.86)
+ */
+HRESULT WINAPI UxThemeOrdinal86(PVOID arg1)
+{
+    FIXME("(%p): stub\n", arg1);
+    return E_NOTIMPL;
+}
+
+/***********************************************************************
+ *      @                                                   (UXTHEME.106)
+ */
+HRESULT WINAPI UxThemeOrdinal106(PVOID arg1)
+{
+    FIXME("(%p): stub\n", arg1);
+    return E_NOTIMPL;
+}
+
+/***********************************************************************
+ *      @                                                   (UXTHEME.118)
+ */
+HRESULT WINAPI UxThemeOrdinal118(PVOID arg1, PVOID arg2)
+{
+    FIXME("(%p, %p): stub\n", arg1, arg2);
+    return E_NOTIMPL;
+}
+
+/***********************************************************************
+ *      @                                                   (UXTHEME.122)
+ */
+HRESULT WINAPI UxThemeOrdinal122(PVOID arg1, PVOID arg2)
+{
+    FIXME("(%p, %p): stub\n", arg1, arg2);
+    return E_NOTIMPL;
+}

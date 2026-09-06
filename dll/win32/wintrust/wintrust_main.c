@@ -1161,3 +1161,13 @@ HRESULT WINAPI FindCertsByIssuer(PCERT_CHAIN pCertChains, DWORD *pcbCertChains,
      debugstr_w(pwszPurpose), dwKeySpec);
     return E_FAIL;
 }
+
+/***********************************************************************
+ *              WTGetSignatureInfo (WINTRUST.@)
+ */
+HRESULT WINAPI WTGetSignatureInfo(const WCHAR *path, HANDLE file, DWORD flags,
+                                  void *info, void *state, void *unknown)
+{
+    FIXME("(%s %p %#lx %p %p %p): stub\n", debugstr_w(path), file, flags, info, state, unknown);
+    return E_NOTIMPL;
+}

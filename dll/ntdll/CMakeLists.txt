@@ -49,6 +49,7 @@ list(APPEND SOURCE
     rtl/nls.c
     rtl/registry.c
     rtl/telemetry.c
+    rtl/wnf.c
     rtl/time.c
     rtl/virtual.c
     rtl/xstate.c)

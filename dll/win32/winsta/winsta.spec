@@ -58,6 +58,7 @@
 @ stdcall WinStationInstallLicense(ptr ptr ptr)
 @ stdcall WinStationIsHelpAssistantSession(ptr ptr)
 @ stdcall WinStationIsSessionPermitted()
+@ stdcall WinStationIsSessionRemoteable(ptr long ptr)
 @ stdcall WinStationNameFromLogonIdA(ptr ptr ptr)
 @ stdcall WinStationNameFromLogonIdW(ptr ptr ptr)
 @ stdcall WinStationNtsdDebug(ptr ptr ptr ptr ptr)
@@ -122,4 +123,3 @@
 @ stdcall _WinStationUpdateSettings(ptr ptr ptr)
 @ stdcall _WinStationUpdateUserConfig(ptr)
 @ stdcall _WinStationWaitForConnect()
-

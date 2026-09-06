@@ -915,3 +915,46 @@ static HRESULT propdesc_get_by_key( const PROPERTYKEY *key, IPropertyDescription
 
     return TYPE_E_ELEMENTNOTFOUND;
 }
+
+HRESULT WINAPI PSPropertyBag_WriteDWORD(IPropertyBag *propBag, LPCWSTR propName, DWORD value)
+{
+    VARIANT var;
+    HRESULT hr;
+
+    TRACE("(%p %s %lu)\n", propBag, debugstr_w(propName), value);
+
+    if (!propBag || !propName)
+        return E_INVALIDARG;
+
+    VariantInit(&var);
+    V_VT(&var) = VT_UI4;
+    V_UI4(&var) = value;
+
+    hr = IPropertyBag_Write(propBag, propName, &var);
+    VariantClear(&var);
+    return hr;
+}
+
+HRESULT WINAPI InitVariantFromResource(HINSTANCE hinst, UINT id, VARIANT *pvar)
+{
+    WCHAR szBuffer[512];
+    int cch;
+
+    TRACE("(%p %u %p)\n", hinst, id, pvar);
+
+    if (!pvar)
+        return E_POINTER;
+
+    VariantInit(pvar);
+
+    cch = LoadStringW(hinst, id, szBuffer, ARRAY_SIZE(szBuffer));
+    if (!cch)
+        return HRESULT_FROM_WIN32(ERROR_RESOURCE_NAME_NOT_FOUND);
+
+    V_BSTR(pvar) = SysAllocStringLen(szBuffer, cch);
+    if (!V_BSTR(pvar))
+        return E_OUTOFMEMORY;
+
+    V_VT(pvar) = VT_BSTR;
+    return S_OK;
+}

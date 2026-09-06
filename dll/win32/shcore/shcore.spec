@@ -111,32 +111,32 @@
 115 stub -noname CreateRandomAccessStreamOnFileWithOptions
 116 stub -noname RandomAccessStreamCopyAsync
 117 stub -noname CreateRandomAccessStreamOnPlaceholderFile
-120 stub -noname SHRegGetCLSIDKey
-121 stub -noname SHRegSetValue
-122 stub SHRegGetValueFromHKCUHKLM
-123 stub -noname SHRegGetBoolValueFromHKCUHKLM
+120 stdcall -noname SHRegGetCLSIDKey(ptr wstr long long ptr)
+121 stdcall -noname SHRegSetValue(long wstr wstr long long ptr long)
+122 stdcall SHRegGetValueFromHKCUHKLM(wstr wstr long ptr ptr ptr)
+123 stdcall -noname SHRegGetBoolValueFromHKCUHKLM(wstr wstr long)
 124 stub -noname SHGetValueGoodBootA
 125 stub -noname SHGetValueGoodBootW
-126 stub -noname SHLoadRegUIStringW
+126 stdcall -noname SHLoadRegUIStringW(ptr wstr ptr long) shlwapi.#439
 127 stub -noname QuerySourceCreateFromKeyEx
-130 stub -noname SHGlobalCounterGetValue
+130 stdcall -noname SHGlobalCounterGetValue(long) shlwapi.#223
 131 stub -noname SHGlobalCounterIncrement
 132 stub -noname SHGlobalCounterDecrement
 133 stub -noname SHGlobalCounterSetValue
 140 stub -noname IUnknown_ProfferService
-141 stub -noname IUnknown_RemoveBackReferences
-142 stub -noname IUnknown_GetClassID
-143 stub -noname StrRetToStrW
+141 stdcall -noname IUnknown_RemoveBackReferences(ptr)
+142 stdcall -noname IUnknown_GetClassID(ptr ptr) shlwapi.#175
+143 stdcall -noname StrRetToStrW(ptr ptr ptr) shlwapi.StrRetToStrW
 144 stub -noname StrRetToBSTR
-145 stub -noname StrRetToBufW
+145 stdcall -noname StrRetToBufW(ptr ptr ptr long) shlwapi.StrRetToBufW
 150 stub -noname SHAnsiToUnicodeCP
 151 stub -noname SHUnicodeToAnsiCP
 152 stub -noname SHUnicodeToAnsiCPAlloc
 153 stub -noname SHAnsiToUnicodeCPAlloc
 160 stub -noname SHWaitForSendMessageThread
 161 stub -noname SHWaitForThreadWithWakeMask
-162 stub -noname SHQueueUserWorkItem
-170 stub -noname PathIsNetworkPathW
+162 stdcall -noname SHQueueUserWorkItem(long long long long long str long) shlwapi.#260
+170 stdcall -noname PathIsNetworkPathW(wstr) shlwapi.PathIsNetworkPathW
 171 stub -noname PathIsNetworkPathA
 172 stub -noname PathBuildRootW
 173 stub -noname PathBuildRootA
@@ -144,18 +144,18 @@
 175 stub -noname IsNetDrive
 181 stub -noname SHMapHandle
 182 stub -noname SHAllocShared
-183 stub -noname SHLockSharedEx
-184 stub -noname SHLockShared
+183 stdcall -noname SHLockSharedEx(ptr long long) shlwapi.#510
+184 stdcall -noname SHLockShared(ptr long) shlwapi.#8
 185 stub -noname SHGetSizeShared
-186 stub -noname SHUnlockShared
-187 stub -noname SHFreeShared
+186 stdcall -noname SHUnlockShared(ptr) shlwapi.#9
+187 stdcall -noname SHFreeShared(ptr long) shlwapi.#10
 188 stub -noname SHCreateWorkerWindowW
 189 stub -noname SHCreateOplockProvider
-190 stub -noname SHWindowsPolicy
-191 stub -noname SHWindowsPolicyGetValue
+190 stdcall -noname SHWindowsPolicy(long)
+191 stdcall -noname SHWindowsPolicyGetValue(ptr ptr ptr) shlwapi.#560
 192 stub -noname IsAppCompatModeEnabled
-193 stub -noname SHGetObjectCompatFlags
-200 stub -noname GUIDFromStringW
+193 stdcall -noname SHGetObjectCompatFlags(ptr ptr) shlwapi.#476
+200 stdcall -noname GUIDFromStringW(wstr ptr) shlwapi.#270
 220 stub -noname GetPhysicalDpiForDevice
 222 stub -noname ScaleRelativePixelsForDevice
 223 stub -noname PhysicalRectFromScaledRect

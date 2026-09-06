@@ -1,4 +1,4 @@
-1017 stub -noname Ordinal1017
+1017 stdcall -noname DCompositionCreateDevice2(ptr ptr ptr)
 1019 stub -noname Ordinal1019
 1028 stub -noname Ordinal1028
 1031 stub -noname Ordinal1031

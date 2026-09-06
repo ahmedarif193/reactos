@@ -212,7 +212,7 @@
 @ stdcall CM_Request_Device_EjectW(long ptr ptr long long)
 @ stub CM_Request_Device_Eject_ExA
 @ stub CM_Request_Device_Eject_ExW
-@ stub CM_Request_Eject_PC
+@ stdcall CM_Request_Eject_PC()
 @ stub CM_Request_Eject_PC_Ex
 @ stub CM_RestoreAll_DefaultPowerSchemes
 @ stub CM_Restore_DefaultPowerScheme

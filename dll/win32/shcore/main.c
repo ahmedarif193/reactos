@@ -2765,3 +2765,65 @@ HRESULT WINAPI CreateRandomAccessStreamOverStream(IStream *stream, BSOS_OPTIONS 
     FIXME("(%p, %d, %s, %p) stub\n", stream, options, debugstr_guid(riid), ppv);
     return E_NOTIMPL;
 }
+
+LSTATUS WINAPI SHRegGetValueFromHKCUHKLM(PCWSTR path, PCWSTR value, SRRF flags,
+                                         DWORD *type, void *data, DWORD *size)
+{
+    DWORD initial = size ? *size : 0;
+    LSTATUS status;
+
+    TRACE("%s %s %#lx %p %p %p\n", debugstr_w(path), debugstr_w(value), flags,
+          type, data, size);
+
+    status = RegGetValueW(HKEY_CURRENT_USER, path, value, flags, type, data, size);
+    if (status == ERROR_SUCCESS)
+        return status;
+
+    if (size)
+        *size = initial;
+
+    return RegGetValueW(HKEY_LOCAL_MACHINE, path, value, flags, type, data, size);
+}
+
+BOOL WINAPI SHRegGetBoolValueFromHKCUHKLM(PCWSTR path, PCWSTR value, BOOL default_value)
+{
+    DWORD type, data, size = sizeof(data);
+
+    TRACE("%s %s %d\n", debugstr_w(path), debugstr_w(value), default_value);
+
+    if (SHRegGetValueFromHKCUHKLM(path, value, SRRF_RT_DWORD, &type, &data, &size) != ERROR_SUCCESS)
+        return default_value;
+
+    if (type != REG_DWORD)
+        return default_value;
+
+    return data != 0;
+}
+
+HRESULT WINAPI SHRegGetCLSIDKey(REFGUID guid, const WCHAR *subkey, BOOL user, BOOL create, HKEY *retkey)
+{
+    FIXME("%s %s %d %d %p: stub\n", debugstr_guid(guid), debugstr_w(subkey), user, create, retkey);
+
+    if (retkey)
+        *retkey = NULL;
+    return E_NOTIMPL;
+}
+
+LSTATUS WINAPI SHRegSetValue(HKEY hkey, const WCHAR *subkey, const WCHAR *value, DWORD flags,
+                             DWORD type, const void *data, DWORD size)
+{
+    FIXME("%p %s %s %#lx %#lx %p %lu: stub\n", hkey, debugstr_w(subkey), debugstr_w(value),
+          flags, type, data, size);
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+void WINAPI IUnknown_RemoveBackReferences(IUnknown *unk)
+{
+    FIXME("%p: stub\n", unk);
+}
+
+BOOL WINAPI SHWindowsPolicy(int policy)
+{
+    FIXME("%d: stub\n", policy);
+    return FALSE;
+}

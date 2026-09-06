@@ -563,6 +563,7 @@
 
 571 stdcall -noname -version=0x600+ SHInvokeCommandWithFlagsAndSite(ptr ptr ptr ptr long str)
 
+635 stdcall -noname -version=0x602+ ShlwapiOrdinal635(ptr ptr ptr ptr)
 639 stdcall -noname -version=0x600+ SHInvokeCommandOnContextMenuEx(ptr ptr ptr long long str wstr)
 
 @ stdcall AssocCreate(int128 ptr ptr)

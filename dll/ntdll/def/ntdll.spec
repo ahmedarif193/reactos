@@ -3,9 +3,13 @@
 @ stdcall -version=0x502 RtlConvertVariantToProperty(ptr long ptr ptr ptr long ptr)
 @ fastcall -arch=i386 RtlActivateActivationContextUnsafeFast(ptr ptr)
 @ fastcall -arch=i386 RtlDeactivateActivationContextUnsafeFast(ptr)
+@ stdcall -version=0x600+ RtlFlushHeaps()
 @ fastcall -arch=i386 RtlInterlockedPushListSList(ptr ptr ptr long)
+@ stdcall -version=0x602+ RtlQueryWnfStateData(ptr int64 ptr ptr ptr long)
+@ stdcall -version=0x602+ RtlSubscribeWnfStateChangeNotification(ptr int64 long ptr ptr ptr long long long)
 @ fastcall -arch=i386 RtlUlongByteSwap(long)
 @ fastcall -arch=i386 -ret64 RtlUlonglongByteSwap(double)
+@ stdcall -version=0x602+ RtlUnsubscribeWnfNotificationWaitForCompletion(ptr)
 @ fastcall -arch=i386 RtlUshortByteSwap(long)
 @ stdcall -arch=i386 ExpInterlockedPopEntrySListEnd()
 @ stdcall -arch=i386 ExpInterlockedPopEntrySListFault()
@@ -1485,10 +1489,12 @@
 @ stdcall -stub -version=0x600+ WerReportSQMEvent(long long long)
 @ stdcall -stub -version=0x600+ WerReportWatsonEvent(long long long long) ; doesn't exist in win11
 @ stdcall -stub -version=0x600+ WinSqmAddToStream(ptr long long long) ; stub on Win11?
+@ stdcall -stub -version=0x600+ WinSqmAddToStreamEx(ptr long long ptr long)
 @ stdcall -stub -version=0x600+ WinSqmEndSession(ptr) ; stub on Win11?
 @ stdcall -stub -version=0x600+ WinSqmEventEnabled(long ptr) ; stub on Win11?
 @ stdcall -stub -version=0x600+ WinSqmEventWrite(long long long) ; stub on Win11?
 @ stdcall -stub -version=0x600+ WinSqmIsOptedIn() ; stub on Win11?
+@ stdcall -stub -version=0x600+ WinSqmSetDWORD(ptr long long)
 @ stdcall -stub -version=0x600+ WinSqmSetString(ptr long ptr) ; stub on Win11?
 @ stdcall -stub -version=0x600+ WinSqmStartSession(ptr) ; stub on Win11?
 @ stdcall ZwAcceptConnectPort(ptr long ptr long long ptr)

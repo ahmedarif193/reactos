@@ -610,3 +610,53 @@ GetCurrentPackageId(UINT32 *BufferLength,
     STUB;
     return APPMODEL_ERROR_NO_PACKAGE;
 }
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+GetOsSafeBootMode(OUT PDWORD Flags)
+{
+    if (!Flags)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    *Flags = SharedUserData->SafeBootMode;
+    return TRUE;
+}
+
+/*
+ * @unimplemented
+ */
+HRESULT
+WINAPI
+OpenStateExplicit(IN PVOID Arg1, OUT PVOID Arg2)
+{
+    STUB;
+    return E_NOTIMPL;
+}
+
+/*
+ * @unimplemented
+ */
+HRESULT
+WINAPI
+CloseState(IN PVOID StateHandle)
+{
+    STUB;
+    return E_NOTIMPL;
+}
+
+/*
+ * @unimplemented
+ */
+HRESULT
+WINAPI
+GetStateSettingsFolder(IN PVOID Arg1, IN PVOID Arg2, OUT PVOID Arg3)
+{
+    STUB;
+    return E_NOTIMPL;
+}

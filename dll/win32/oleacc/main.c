@@ -717,3 +717,29 @@ HRESULT WINAPI AccessibleChildren(IAccessible *container,
     *children_cnt = i;
     return i==count ? S_OK : S_FALSE;
 }
+
+HRESULT WINAPI CreateStdAccessibleProxyW( HWND hwnd, LPCWSTR class_name, LONG obj_id,
+                                          REFIID riid, void **out )
+{
+    FIXME( "%p %s %ld %s %p: stub\n", hwnd, debugstr_w(class_name), obj_id,
+           debugstr_guid(riid), out );
+
+    if (!out)
+        return E_INVALIDARG;
+
+    *out = NULL;
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI CreateStdAccessibleProxyA( HWND hwnd, LPCSTR class_name, LONG obj_id,
+                                          REFIID riid, void **out )
+{
+    FIXME( "%p %s %ld %s %p: stub\n", hwnd, debugstr_a(class_name), obj_id,
+           debugstr_guid(riid), out );
+
+    if (!out)
+        return E_INVALIDARG;
+
+    *out = NULL;
+    return E_NOTIMPL;
+}

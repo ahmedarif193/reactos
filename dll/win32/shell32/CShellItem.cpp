@@ -545,3 +545,138 @@ SHCreateShellItemArray(_In_opt_ PCIDLIST_ABSOLUTE pidlParent, _In_opt_ IShellFol
     ILFree(allocatedParent);
     return hr;
 }
+
+EXTERN_C HRESULT WINAPI SHGetKnownFolderPath(REFKNOWNFOLDERID rfid, DWORD dwFlags,
+                                             HANDLE hToken, PWSTR *ppszPath);
+
+EXTERN_C HRESULT WINAPI SHCreateItemWithParent(PCIDLIST_ABSOLUTE pidlParent, IShellFolder *psfParent,
+    PCUITEMID_CHILD pidl, REFIID riid, void **ppvItem)
+{
+    CComPtr<IShellItem> item;
+    HRESULT hr;
+
+    TRACE("(%p, %p, %p, %s, %p)\n", pidlParent, psfParent, pidl, debugstr_guid(&riid), ppvItem);
+
+    if (!ppvItem)
+        return E_INVALIDARG;
+
+    *ppvItem = NULL;
+
+    if (!pidl || (!pidlParent && !psfParent))
+        return E_INVALIDARG;
+
+    hr = SHCreateShellItem(pidlParent, psfParent, pidl, &item);
+    if (SUCCEEDED(hr))
+        hr = item->QueryInterface(riid, ppvItem);
+    return hr;
+}
+
+EXTERN_C HRESULT WINAPI SHCreateItemInKnownFolder(REFKNOWNFOLDERID kfid, DWORD dwKFFlags,
+    PCWSTR pszItem, REFIID riid, void **ppv)
+{
+    CComHeapPtr<WCHAR> folderPath;
+    WCHAR szPath[MAX_PATH];
+    HRESULT hr;
+
+    TRACE("(%s, 0x%lx, %s, %s, %p)\n", debugstr_guid(&kfid), dwKFFlags,
+          debugstr_w(pszItem), debugstr_guid(&riid), ppv);
+
+    if (!ppv)
+        return E_INVALIDARG;
+
+    *ppv = NULL;
+
+    hr = SHGetKnownFolderPath(kfid, dwKFFlags, NULL, &folderPath);
+    if (FAILED(hr))
+        return hr;
+
+    if (!pszItem || !*pszItem)
+        return SHCreateItemFromParsingName(folderPath, NULL, riid, ppv);
+
+    if (FAILED(StringCchCopyW(szPath, _countof(szPath), folderPath)))
+        return E_FAIL;
+    if (!PathAppendW(szPath, pszItem))
+        return E_FAIL;
+
+    return SHCreateItemFromParsingName(szPath, NULL, riid, ppv);
+}
+
+EXTERN_C HRESULT WINAPI SHBindToFolderIDListParentEx(IShellFolder *psfRoot, PCUIDLIST_RELATIVE pidl,
+    IBindCtx *ppbc, REFIID riid, void **ppv, PCUITEMID_CHILD *ppidlLast)
+{
+    CComPtr<IShellFolder> root;
+    LPCITEMIDLIST pidlChild;
+    LPITEMIDLIST pidlParent = NULL;
+    HRESULT hr;
+
+    TRACE("(%p, %p, %p, %s, %p, %p)\n", psfRoot, pidl, ppbc, debugstr_guid(&riid), ppv, ppidlLast);
+
+    if (!ppv)
+        return E_INVALIDARG;
+
+    *ppv = NULL;
+    if (ppidlLast)
+        *ppidlLast = NULL;
+
+    if (!pidl)
+        return E_INVALIDARG;
+
+    if (psfRoot)
+    {
+        root = psfRoot;
+    }
+    else
+    {
+        hr = SHGetDesktopFolder(&root);
+        if (FAILED(hr))
+            return hr;
+    }
+
+    pidlChild = ILFindLastID(pidl);
+    if (pidlChild == pidl)
+    {
+        hr = root->QueryInterface(riid, ppv);
+    }
+    else
+    {
+        pidlParent = ILClone(pidl);
+        if (!pidlParent)
+            return E_OUTOFMEMORY;
+        ILRemoveLastID(pidlParent);
+
+        hr = root->BindToObject(pidlParent, ppbc, riid, ppv);
+        ILFree(pidlParent);
+    }
+
+    if (SUCCEEDED(hr) && ppidlLast)
+        *ppidlLast = (PCUITEMID_CHILD)pidlChild;
+
+    return hr;
+}
+
+EXTERN_C HRESULT WINAPI SHBindToFolderIDListParent(IShellFolder *psfRoot, PCUIDLIST_RELATIVE pidl,
+    REFIID riid, void **ppv, PCUITEMID_CHILD *ppidlLast)
+{
+    return SHBindToFolderIDListParentEx(psfRoot, pidl, NULL, riid, ppv, ppidlLast);
+}
+
+EXTERN_C HRESULT WINAPI SHGetFolderPathEx(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE hToken,
+    LPWSTR pszPath, UINT cchPath)
+{
+    CComHeapPtr<WCHAR> path;
+    HRESULT hr;
+
+    TRACE("(%s, 0x%lx, %p, %p, %u)\n", debugstr_guid(&rfid), dwFlags, hToken, pszPath, cchPath);
+
+    if (!pszPath || !cchPath)
+        return E_INVALIDARG;
+
+    hr = SHGetKnownFolderPath(rfid, dwFlags, hToken, &path);
+    if (FAILED(hr))
+        return hr;
+
+    if (wcslen(path) >= cchPath)
+        return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+
+    return StringCchCopyW(pszPath, cchPath, path);
+}
