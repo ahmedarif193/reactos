@@ -134,11 +134,12 @@ private:
 /*  Theme                                                              */
 /* ------------------------------------------------------------------ */
 
-enum ThemeMode { TM_SYSTEM = 0, TM_LIGHT = 1, TM_DARK = 2 };
+enum ThemeMode { TM_SYSTEM = 0, TM_LIGHT = 1, TM_DARK = 2, TM_TRANSPARENT = 3 };
 
 struct Theme
 {
     BOOL     dark;
+    BOOL     transparent;
 
     COLORREF winBg;         /* window / mica base                     */
     COLORREF captionText;

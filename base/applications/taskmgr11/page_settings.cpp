@@ -26,7 +26,7 @@ enum
     SID_HDR_SPEED, SID_SPEED,
     SID_HDR_WINDOW, SID_ONTOP, SID_MINONUSE, SID_HIDEMIN,
     SID_HDR_OTHER, SID_FULLACCT,
-    SID_HDR_THEME, SID_TH_SYSTEM, SID_TH_LIGHT, SID_TH_DARK,
+    SID_HDR_THEME, SID_TH_SYSTEM, SID_TH_LIGHT, SID_TH_DARK, SID_TH_TRANSPARENT,
 };
 
 static SetRow s_rows[] =
@@ -45,6 +45,7 @@ static SetRow s_rows[] =
     { RW_RADIO,    L"Use system setting", SID_TH_SYSTEM },
     { RW_RADIO,    L"Light", SID_TH_LIGHT },
     { RW_RADIO,    L"Dark", SID_TH_DARK },
+    { RW_RADIO,    L"Transparent", SID_TH_TRANSPARENT },
 };
 
 static const WCHAR* s_speedNames[] = { L"High", L"Normal", L"Low", L"Paused" };
@@ -70,6 +71,7 @@ struct SettingsPage : Page
         case SID_TH_SYSTEM: return g_app.st.theme == TM_SYSTEM;
         case SID_TH_LIGHT:  return g_app.st.theme == TM_LIGHT;
         case SID_TH_DARK:   return g_app.st.theme == TM_DARK;
+        case SID_TH_TRANSPARENT: return g_app.st.theme == TM_TRANSPARENT;
         }
         return FALSE;
     }
@@ -277,7 +279,8 @@ struct SettingsPage : Page
         case RW_RADIO:
         {
             DWORD want = (row.id == SID_TH_LIGHT) ? TM_LIGHT :
-                         (row.id == SID_TH_DARK) ? TM_DARK : TM_SYSTEM;
+                         (row.id == SID_TH_DARK) ? TM_DARK :
+                         (row.id == SID_TH_TRANSPARENT) ? TM_TRANSPARENT : TM_SYSTEM;
             if (g_app.st.theme != want)
             {
                 g_app.st.theme = want;
