@@ -6386,6 +6386,18 @@ QuarantineGpuVaBatch:
             ResourceOperationLockAcquired = FALSE;
         }
         DxgkpVidMmFreeDestroyBatch(Batch);
+        /* The handles are gone from the caller's view and the backing is
+         * retained safely: the destroy has been accepted.  Windows never
+         * fails a destroy for a transient device state (reset, fault
+         * handling), and reporting one drove the Intel ICD into a
+         * recursion that ended in a stack overflow on every fault. */
+        if (Status == STATUS_DEVICE_NOT_READY ||
+            Status == STATUS_DEVICE_REMOVED ||
+            Status == STATUS_IO_TIMEOUT ||
+            Status == STATUS_DELETE_PENDING)
+        {
+            return STATUS_SUCCESS;
+        }
         return Status;
     }
 #endif
