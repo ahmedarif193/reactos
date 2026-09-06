@@ -13,7 +13,7 @@ TOOLCHAIN="${ROSBE_LLVM_MINGW:-$HOME/.local/opt/rosbe/llvm-mingw}/bin"
 [ -x "$TOOLCHAIN/x86_64-w64-mingw32-clang" ] || { echo "missing $TOOLCHAIN/x86_64-w64-mingw32-clang" >&2; exit 1; }
 
 mkdir -p "$OUT"
-"$TOOLCHAIN/aarch64-w64-mingw32-clang" -O2 -o "$OUT/fexbench_arm64.exe" "$HERE/fexbench.c"
-"$TOOLCHAIN/x86_64-w64-mingw32-clang"  -O2 -o "$OUT/fexbench_x86_64.exe" "$HERE/fexbench.c"
+"$TOOLCHAIN/aarch64-w64-mingw32-clang" -O2 -o "$OUT/fexbench_arm64.exe" "$HERE/fexbench.c" -lntdll
+"$TOOLCHAIN/x86_64-w64-mingw32-clang"  -O2 -o "$OUT/fexbench_x86_64.exe" "$HERE/fexbench.c" -lntdll
 echo "[fexbench] built:"
 ls -la "$OUT"/fexbench_*.exe
