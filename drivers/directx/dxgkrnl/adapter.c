@@ -333,6 +333,28 @@ DxgkpStopPostDisplayOwner(
     return Status;
 }
 
+static VOID
+DxgkpSetBasicDisplayUiSuppressed(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN Suppressed)
+{
+    LONG Previous;
+
+    ASSERT(Adapter != NULL);
+    ASSERT(Adapter->MiniportContext != NULL);
+    ASSERT(Adapter->MiniportContext->IsBasicDisplayFallback);
+
+    Previous = InterlockedExchange(&Adapter->BasicDisplayUiSuppressed,
+                                   Suppressed ? 1 : 0);
+    if ((Previous != 0) == (Suppressed != FALSE))
+        return;
+
+    IoInvalidateDeviceState(Adapter->PhysicalDeviceObject);
+    DXGKRNL_INFO("BASICDISPLAY_UI: adapter %p device UI %s\n",
+                 Adapter,
+                 Suppressed ? "suppressed" : "restored");
+}
+
 /*
  * Stop and retain a BasicDisplay owner as one rollback transaction bound to
  * Claimant.  The caller serializes ownership with
@@ -412,6 +434,11 @@ DxgkpRetainAndStopBasicDisplayFallback(
     Claimant->PostDisplayFallbackDeviceObject = *OwnerDeviceObject;
     Claimant->PostDisplayFallbackRemoveRundownHeld = TRUE;
     *OwnerDeviceObject = NULL;
+    /* Native DpiFdoStartAdapterThreadImpl disables MSBDD at this point and
+     * enables it again on the failure path.  Do the same before the rest of
+     * claimant startup, because display registration may remain pending while
+     * the real adapter is already driving the desktop. */
+    DxgkpSetBasicDisplayUiSuppressed(Owner, TRUE);
     return STATUS_SUCCESS;
 }
 
@@ -530,6 +557,7 @@ DxgkpCompletePostDisplayHandoff(
     PDEVICE_OBJECT OwnerDeviceObject;
     PDXGKRNL_ADAPTER Owner;
     BOOLEAN FallbackRemoveRundownHeld;
+    BOOLEAN SuppressFallbackUi;
     NTSTATUS RollbackStatus;
 
     (VOID)KeWaitForSingleObject(&g_PostDisplayOwnershipMutex,
@@ -555,12 +583,14 @@ DxgkpCompletePostDisplayHandoff(
     ASSERT(FallbackAdapter != NULL);
     ASSERT(FallbackDeviceObject != NULL);
     ASSERT(FallbackRemoveRundownHeld);
+    SuppressFallbackUi = (Action == DxgkPostDisplayCompletionCommit);
 
     if (Action == DxgkPostDisplayCompletionRollback && FallbackAdapter != NULL)
     {
         Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
         if (Owner == NULL)
         {
+            DxgkpSetBasicDisplayUiSuppressed(FallbackAdapter, FALSE);
             DXGKRNL_WARN("POSTDISPLAY_ROLLBACK: claimant %p failed "
                          "0x%08lX; restarting BasicDisplay adapter %p\n",
                          Claimant,
@@ -579,6 +609,7 @@ DxgkpCompletePostDisplayHandoff(
         }
         else
         {
+            SuppressFallbackUi = TRUE;
             DXGKRNL_WARN("POSTDISPLAY_ROLLBACK: claimant %p failed but "
                          "adapter %p already owns the boot display; "
                          "fallback remains stopped\n",
@@ -588,6 +619,9 @@ DxgkpCompletePostDisplayHandoff(
         if (OwnerDeviceObject != NULL)
             ObDereferenceObject(OwnerDeviceObject);
     }
+
+    if (FallbackAdapter != NULL)
+        DxgkpSetBasicDisplayUiSuppressed(FallbackAdapter, SuppressFallbackUi);
 
     KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
     if (FallbackRemoveRundownHeld && FallbackAdapter != NULL)
@@ -13738,6 +13772,39 @@ DxgkpMiniportPnpDispatch(
                 /* Other relation types: forward to lower driver. */
                 return DxgkpForwardIrp(Adapter, Irp);
             }
+        }
+
+        case IRP_MN_QUERY_PNP_DEVICE_STATE:
+        {
+            if (Adapter->MiniportContext != NULL &&
+                Adapter->MiniportContext->IsBasicDisplayFallback)
+            {
+                BOOLEAN Suppressed;
+
+                /* Native dxgkrnl disables its Basic Display fallback in the
+                 * adapter itself. Our fallback is a synthetic root device,
+                 * whose lower PDO has no hardware state to contribute, so
+                 * answer the optional query here. A fresh query starts with
+                 * zero flags and therefore also makes rollback visible. */
+                Suppressed = (InterlockedCompareExchange(
+                                  &Adapter->BasicDisplayUiSuppressed,
+                                  0,
+                                  0) != 0);
+                if (Suppressed)
+                {
+                    Irp->IoStatus.Information |=
+                        PNP_DEVICE_DONT_DISPLAY_IN_UI;
+                }
+                DXGKRNL_TRACE("BASICDISPLAY_UI: query adapter %p "
+                              "suppressed=%u flags=0x%Ix\n",
+                              Adapter,
+                              Suppressed,
+                              Irp->IoStatus.Information);
+                Irp->IoStatus.Status = STATUS_SUCCESS;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return STATUS_SUCCESS;
+            }
+            return DxgkpForwardIrp(Adapter, Irp);
         }
 
         case IRP_MN_STOP_DEVICE:
