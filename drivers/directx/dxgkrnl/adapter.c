@@ -2386,12 +2386,11 @@ DxgkFreeDmaBuffer(
                                    0,
                                    0) == 0)
     {
-        /* Per-present source/destination mappings belong to one submission.
-         * Retire them before pooling the persistent DMA allocation and its
-         * GPUVA mapping. */
-        VirtualMappingsReusable = NT_SUCCESS(
-            DxgkVidMmResetVirtualDmaBufferMappings(
-                DmaBuffer->VirtualBacking));
+        /* The submission's pins on the source/destination mappings end
+         * here; the mappings stay on the pooled backing for the next
+         * Present through the same bindings. */
+        DxgkVidMmUnpinVirtualDmaBufferMappings(DmaBuffer->VirtualBacking);
+        VirtualMappingsReusable = TRUE;
     }
     if (Adapter != NULL &&
         DmaBuffer->VirtualAddress != NULL &&

@@ -2487,8 +2487,15 @@ DxgkpExecuteFullPresent(
      */
     if (Entry->hSource != 0)
     {
-        if (!VirtualPresent && Entry->SourceOpenBindingReference != NULL)
+        /* A CDD entry carries persistent bindings (see
+         * DxgkpEnsureCddPresentBindings); GPUVA Present maps them once and
+         * keeps the mapping on the pooled DMA backing instead of opening,
+         * mapping, invalidating and closing a fresh binding every frame. */
+        if (Entry->SourceOpenBindingReference != NULL)
+        {
             SourceDeviceSpecificHandle = Entry->SourceOpenBindingHandle;
+            SourcePresentBinding = Entry->SourceOpenBindingReference;
+        }
         else
         {
             BOOLEAN ReadOnly = Entry->hDestination == 0 || Entry->hDestination != Entry->hSource;
@@ -2525,9 +2532,10 @@ DxgkpExecuteFullPresent(
             DestinationDeviceSpecificHandle = SourceDeviceSpecificHandle;
             DestinationPresentBinding = SourcePresentBinding;
         }
-        else if (!VirtualPresent && Entry->DestinationOpenBindingReference != NULL)
+        else if (Entry->DestinationOpenBindingReference != NULL)
         {
             DestinationDeviceSpecificHandle = Entry->DestinationOpenBindingHandle;
+            DestinationPresentBinding = Entry->DestinationOpenBindingReference;
         }
         else
         {
