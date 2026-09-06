@@ -9245,9 +9245,18 @@ DxgkpDispatchPublicOperation(_Inout_ PRXGK_PUBLIC_OPERATION_PACKET Packet)
 }
 
 /* ========================================================================
- * TDR diagnostics: ring of the most recent user-mode KMT IOCTLs.  Written on
- * every completion (a few interlocked stores), printed only by the TDR path.
+ * Optional KMT IOCTL profiling.
+ *
+ * The native entry points only enter their ETW/profiler machinery when its
+ * provider is enabled.  Keep the bring-up recorder available for targeted
+ * investigations, but do not put its timestamps, slot scan and interlocked
+ * updates on every render submission by default.
  * ====================================================================== */
+#ifndef DXGKRNL_ENABLE_KMT_IOCTL_DIAGNOSTICS
+#define DXGKRNL_ENABLE_KMT_IOCTL_DIAGNOSTICS 0
+#endif
+
+#if DXGKRNL_ENABLE_KMT_IOCTL_DIAGNOSTICS
 #define DXGKP_KMT_IOCTL_RING_SIZE 48
 
 typedef struct _DXGKP_KMT_IOCTL_RECORD
@@ -9386,6 +9395,12 @@ DxgkDumpRecentKmtIoctls(VOID)
                     Record.ProcessId, Record.ThreadId);
     }
 }
+#else
+VOID
+DxgkDumpRecentKmtIoctls(VOID)
+{
+}
+#endif
 
 /* ========================================================================
  * DxgkpDispatchBufferedIoctl
@@ -9407,6 +9422,7 @@ DxgkpDispatchBufferedIoctl(
     _In_ PIRP              Irp,
     _In_ PIO_STACK_LOCATION Stack)
 {
+#if DXGKRNL_ENABLE_KMT_IOCTL_DIAGNOSTICS
     ULONG IoControlCode = Stack->Parameters.DeviceIoControl.IoControlCode;
     ULONGLONG Start100ns = DxgkDiagNow100ns();
     ULONG Operation = 0;
@@ -9422,6 +9438,9 @@ DxgkpDispatchBufferedIoctl(
     }
     DxgkRecordKmtIoctl(IoControlCode, Operation, Status);
     return Status;
+#else
+    return DxgkpDispatchBufferedIoctlWorker(Irp, Stack);
+#endif
 }
 
 static NTSTATUS
