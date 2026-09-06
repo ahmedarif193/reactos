@@ -13099,10 +13099,15 @@ DxgkVidMmMapAllocationCpu(
     if (Allocation->ContentLost)
         return STATUS_GRAPHICS_ALLOCATION_CONTENT_LOST;
 
+    /* A non-CPU-visible allocation is a legitimate answer, not a defect:
+     * production KMDs describe shared GPU textures that way and every caller
+     * that can see one (vidpn.c redirection open, present.c CPU-copy probe,
+     * the tracked-surface sampler) treats the failure as "use the GPU path".
+     * Callers that require CPU access report their own failure. */
     if (!Allocation->CpuVisible)
     {
-        DPRINT1("DxgkVidMmMapAllocationCpu: alloc %p is not CPU-visible\n",
-                Allocation);
+        DPRINT("DxgkVidMmMapAllocationCpu: alloc %p is not CPU-visible\n",
+               Allocation);
         return STATUS_INVALID_PARAMETER;
     }
 
