@@ -2724,26 +2724,35 @@ ExFreePoolWithTag(IN PVOID P,
         else if (Tag & PROTECTED_POOL)
         {
             Tag &= ~PROTECTED_POOL;
-        }
 
-        //
-        // Check block tag
-        //
-        if (TagToFree && TagToFree != Tag)
+            //
+            // Check block tag.  Only a block allocated with PROTECTED_POOL
+            // carries a tag the caller must repeat on free; for every other
+            // block the tag is bookkeeping and a mismatch is not a caller
+            // error (production drivers free with a different family tag).
+            //
+            if (TagToFree && (TagToFree & ~PROTECTED_POOL) != Tag)
+            {
+                DPRINT1("Freeing big pool %p on processor %lu - invalid tag specified: %.4s != %.4s\n",
+                        P,
+                        KeGetCurrentProcessorNumber(),
+                        (char *)&TagToFree,
+                        (char *)&Tag);
+                /*
+                 * A tag mismatch does not make the allocation unsafe to free:
+                 * use the recorded tag for tracking and keep the diagnostic
+                 * visible. Only explicit strict tag checking turns this driver
+                 * error into a bugcheck. Pool header/link corruption checks
+                 * remain unconditional.
+                 */
+                if (ExStopBadTags && Tag != ' GIB')
+                    KeBugCheckEx(BAD_POOL_CALLER, 0x0A, (ULONG_PTR)P, Tag, TagToFree);
+            }
+        }
+        else if (TagToFree && (TagToFree & ~PROTECTED_POOL) != Tag)
         {
-            DPRINT1("Freeing big pool %p on processor %lu - invalid tag specified: %.4s != %.4s\n",
-                    P,
-                    KeGetCurrentProcessorNumber(),
-                    (char *)&TagToFree,
-                    (char *)&Tag);
-            /*
-             * A tag mismatch does not make the allocation unsafe to free: use
-             * the recorded tag for tracking and keep the diagnostic visible.
-             * Only explicit strict tag checking turns this driver error into a
-             * bugcheck. Pool header/link corruption checks remain unconditional.
-             */
-            if (ExStopBadTags && Tag != ' GIB')
-                KeBugCheckEx(BAD_POOL_CALLER, 0x0A, (ULONG_PTR)P, Tag, TagToFree);
+            DPRINT("Freeing big pool %p - tag differs: %.4s != %.4s\n",
+                   P, (char *)&TagToFree, (char *)&Tag);
         }
 
         //
@@ -2842,17 +2851,25 @@ ExFreePoolWithTag(IN PVOID P,
     // Get the pool tag and get rid of the PROTECTED_POOL flag
     //
     Tag = Entry->PoolTag;
-    if (Tag & PROTECTED_POOL) Tag &= ~PROTECTED_POOL;
-
-    //
-    // Check block tag
-    //
-    if (TagToFree && TagToFree != Tag)
+    if (Tag & PROTECTED_POOL)
     {
-        DPRINT1("Freeing pool - invalid tag specified: %.4s != %.4s\n", (char*)&TagToFree, (char*)&Tag);
-        /* See the big-pool path above: diagnose by default, stop only in strict mode. */
-        if (ExStopBadTags)
-            KeBugCheckEx(BAD_POOL_CALLER, 0x0A, (ULONG_PTR)P, Tag, TagToFree);
+        Tag &= ~PROTECTED_POOL;
+
+        //
+        // Check block tag: PROTECTED_POOL is the caller's request to have
+        // the tag validated on free (see the big-pool path above).
+        //
+        if (TagToFree && (TagToFree & ~PROTECTED_POOL) != Tag)
+        {
+            DPRINT1("Freeing pool - invalid tag specified: %.4s != %.4s\n", (char*)&TagToFree, (char*)&Tag);
+            /* See the big-pool path above: diagnose by default, stop only in strict mode. */
+            if (ExStopBadTags)
+                KeBugCheckEx(BAD_POOL_CALLER, 0x0A, (ULONG_PTR)P, Tag, TagToFree);
+        }
+    }
+    else if (TagToFree && (TagToFree & ~PROTECTED_POOL) != Tag)
+    {
+        DPRINT("Freeing pool - tag differs: %.4s != %.4s\n", (char*)&TagToFree, (char*)&Tag);
     }
 
     //
