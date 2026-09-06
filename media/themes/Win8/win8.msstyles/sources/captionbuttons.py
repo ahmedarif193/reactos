@@ -11,6 +11,8 @@ OUTLINE = 0.42
 FACE_MAX = 0.35
 RING = (255, 255, 255, 67)
 RED = {1: (176, 39, 25), 2: (196, 43, 28), 3: (140, 30, 20), 6: (196, 43, 28), 7: (140, 30, 20)}
+ACCENT = tuple(int(v) for v in os.environ.get("WIN8_ACCENT", "51,153,255").split(","))
+BUTTON_MARGINS = (2, 2, 8, 2)
 BUTTONS = {
     "close": (1015, 1016, 45, True, False, True),
     "min": (1041, 1042, 27, False, True, False),
@@ -43,7 +45,7 @@ def nine_slice(im, margins, tw, th):
     return out
 
 
-def darken(im, inactive):
+def darken(im, inactive, lift=0.0):
     out = Image.new("RGBA", im.size, (0, 0, 0, 0))
     px = im.load()
     dst = out.load()
@@ -56,11 +58,24 @@ def darken(im, inactive):
             if lum < 150:
                 dst[x, y] = (0, 0, 0, int(OUTLINE * a))
             else:
-                white = (lum - 150) / 105.0 * FACE_MAX
+                white = (lum - 150) / 105.0 * FACE_MAX + lift
                 if inactive:
                     white *= 0.7
-                dst[x, y] = (255, 255, 255, int(white * a))
+                dst[x, y] = (255, 255, 255, int(min(1.0, white) * a))
     return out
+
+
+def outline_ring(im):
+    px = im.load()
+    w, h = im.size
+    edge = (0, 0, 0, int(OUTLINE * 255))
+    for y in range(h):
+        px[0, y] = edge
+        px[w - 1, y] = edge
+    for x in range(w):
+        px[x, 0] = edge
+        px[x, h - 1] = edge
+    return im
 
 
 def square_corners(im, right_outline):
@@ -76,8 +91,7 @@ def square_corners(im, right_outline):
     return im
 
 
-def tint_red(cell, state):
-    base = RED[state]
+def tint(cell, base, top_outline, lift=0.0):
     w, h = cell.size
     src = cell.load()
     lums = [(src[x, y][0] * 299 + src[x, y][1] * 587 + src[x, y][2] * 114) // 1000
@@ -90,11 +104,11 @@ def tint_red(cell, state):
             r, g, b, a = src[x, y]
             if a == 0:
                 continue
-            if x == 0 or x == w - 1 or y == h - 1:
+            if x == 0 or x == w - 1 or y == h - 1 or (top_outline and y == 0):
                 dst[x, y] = (0, 0, 0, int(OUTLINE * 255))
                 continue
             lum = (r * 299 + g * 587 + b * 114) // 1000
-            k = (lum - lo) / float(max(1, hi - lo)) * 0.35
+            k = (lum - lo) / float(max(1, hi - lo)) * 0.35 + lift
             dst[x, y] = (int(base[0] + (255 - base[0]) * k), int(base[1] + (255 - base[1]) * k),
                          int(base[2] + (255 - base[2]) * k), 255)
     return out
@@ -114,7 +128,7 @@ def render(kind):
         cell = cell.crop((0, 0, w, H))
         mid = cell.getpixel((w // 2, H // 2))
         red = keep_color and mid[0] >= mid[1] + 40
-        cell = tint_red(cell, state) if red else darken(cell, state > 4)
+        cell = tint(cell, RED[state], False) if red else darken(cell, state > 4)
         cell = square_corners(cell, right_outline)
         x0 = 1 if ring_left else 0
         frame = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
@@ -130,6 +144,22 @@ def render(kind):
         for x in range(sw):
             px[x, sh - 1] = RING
         strip.paste(frame, (0, (state - 1) * sh))
+    return strip
+
+
+def render_button():
+    bg = load(1041)
+    w = 24
+    cells = {s: nine_slice(state_cell(bg, s), BUTTON_MARGINS, w, H) for s in (1, 3, 4)}
+    dim = tuple(int(c * 0.55 + 43 * 0.45) for c in ACCENT)
+    dark = tuple(int(c * 0.72) for c in ACCENT)
+    variants = (
+        darken(cells[1], False), darken(cells[1], False, 0.10), darken(cells[3], False), darken(cells[4], True),
+        tint(cells[1], ACCENT, True), tint(cells[1], ACCENT, True, 0.15), tint(cells[3], dark, True), tint(cells[1], dim, True),
+    )
+    strip = Image.new("RGBA", (w, H * 8), (0, 0, 0, 0))
+    for i, cell in enumerate(variants):
+        strip.paste(outline_ring(cell), (0, i * H))
     return strip
 
 
@@ -154,6 +184,7 @@ def main():
     for kind, name in (("close", "NORMAL_CLOSEBUTTON.bmp"), ("min", "NORMAL_MINBUTTON.bmp"),
                        ("max", "NORMAL_MAXBUTTON.bmp"), ("restore", "NORMAL_RESTOREBUTTON.bmp")):
         save_bmp(render(kind), os.path.join(out, name))
+    save_bmp(render_button(), os.path.join(out, "NORMAL_FLYOUTBUTTON.bmp"))
 
 
 if __name__ == "__main__":
