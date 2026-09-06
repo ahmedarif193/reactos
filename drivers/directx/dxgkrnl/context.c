@@ -1269,6 +1269,33 @@ DxgkpDestroyMiniportDevice(
     return Status;
 }
 
+static NTSTATUS
+DxgkpEnsureBaseNamedObjectsDirectory(VOID)
+{
+    static const UNICODE_STRING DirectoryName =
+        RTL_CONSTANT_STRING(L"\\BaseNamedObjects");
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE DirectoryHandle;
+    NTSTATUS Status;
+
+    /* Native WDDM miniports may publish permanent synchronization objects
+     * from their system-context CreateContext path.  That path runs before
+     * basesrv creates the session-zero namespace during ReactOS boot. */
+    InitializeObjectAttributes(&ObjectAttributes,
+                               (PUNICODE_STRING)&DirectoryName,
+                               OBJ_CASE_INSENSITIVE | OBJ_OPENIF |
+                                   OBJ_PERMANENT | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwCreateDirectoryObject(&DirectoryHandle,
+                                     DIRECTORY_ALL_ACCESS,
+                                     &ObjectAttributes);
+    if (NT_SUCCESS(Status))
+        ZwClose(DirectoryHandle);
+
+    return Status;
+}
+
 /*
  * Create the native VidSch-style device/context pair used exclusively by
  * VidMm paging.  hSystemContext is a real miniport context handle, not an OS
@@ -1327,6 +1354,15 @@ DxgkCreatePagingSystemContext(
         PagingNode = Adapter->PhysicalAdapterCaps.PagingNodeIndex;
     if (PagingNode >= Adapter->NodeCount)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    Status = DxgkpEnsureBaseNamedObjectsDirectory();
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: failed to prepare "
+                    "\\BaseNamedObjects, status 0x%08lx\n",
+                    Status);
+        return Status;
+    }
 
     Status = DxgkAcquireProcessRecord(Adapter,
                                       PsInitialSystemProcess,
