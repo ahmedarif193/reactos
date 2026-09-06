@@ -5,16 +5,17 @@ import sys
 from PIL import Image
 
 RES = os.environ.get("WIN81_AERO_RES", "/Users/mac/working_dir/win81-fs/aero_res/IMAGE")
-H = 18
-MARGINS = (2, 2, 7, 7)
+H = 20
+MARGINS = (2, 2, 7, 2)
 OUTLINE = 0.42
 FACE_MAX = 0.35
+RING = (255, 255, 255, 67)
 RED = {1: (176, 39, 25), 2: (196, 43, 28), 3: (140, 30, 20), 6: (196, 43, 28), 7: (140, 30, 20)}
 BUTTONS = {
-    "close": (1015, 1016, 45, True),
-    "min": (1041, 1042, 27, False),
-    "max": (1030, 1031, 27, False),
-    "restore": (1030, 1048, 27, False),
+    "close": (1015, 1016, 45, True, False, True),
+    "min": (1041, 1042, 27, False, True, False),
+    "max": (1030, 1031, 26, False, False, False),
+    "restore": (1030, 1048, 26, False, False, False),
 }
 
 
@@ -62,15 +63,16 @@ def darken(im, inactive):
     return out
 
 
-def square_corners(im):
+def square_corners(im, right_outline):
     px = im.load()
     w, h = im.size
-    for (x, y), (nx, ny) in (((0, 0), (1, 0)), ((w - 1, 0), (w - 2, 0)), ((0, h - 1), (1, h - 1)), ((w - 1, h - 1), (w - 2, h - 1))):
-        px[x, y] = px[nx, ny]
-    for x, y in ((0, 1), (1, 0), (w - 1, 1), (w - 2, 0), (0, h - 2), (1, h - 1), (w - 1, h - 2), (w - 2, h - 1)):
-        r, g, b, a = px[x, y]
-        if a < 255:
-            px[x, y] = (0, 0, 0, int(OUTLINE * 255))
+    edge = (0, 0, 0, int(OUTLINE * 255))
+    for y in range(h):
+        px[0, y] = edge
+        if right_outline:
+            px[w - 1, y] = edge
+    for x in range(w):
+        px[x, h - 1] = edge
     return im
 
 
@@ -88,7 +90,7 @@ def tint_red(cell, state):
             r, g, b, a = src[x, y]
             if a == 0:
                 continue
-            if x == 0 or y == 0 or x == w - 1 or y == h - 1:
+            if x == 0 or x == w - 1 or y == h - 1:
                 dst[x, y] = (0, 0, 0, int(OUTLINE * 255))
                 continue
             lum = (r * 299 + g * 587 + b * 114) // 1000
@@ -99,21 +101,35 @@ def tint_red(cell, state):
 
 
 def render(kind):
-    bg_id, glyph_id, w, keep_color = BUTTONS[kind]
+    bg_id, glyph_id, w, keep_color, ring_left, right_outline = BUTTONS[kind]
     bg = load(bg_id)
     glyph = load(glyph_id)
-    strip = Image.new("RGBA", (w, H * 8), (0, 0, 0, 0))
+    sw = w + (1 if ring_left else 0) + (1 if right_outline else 0)
+    sh = H + 1
+    strip = Image.new("RGBA", (sw, sh * 8), (0, 0, 0, 0))
     for state in range(1, 9):
-        cell = nine_slice(state_cell(bg, state), MARGINS, w, H)
+        src = state_cell(bg, state)
+        src = src.crop((0, 1, src.size[0], src.size[1]))
+        cell = nine_slice(src, MARGINS, w + (0 if right_outline else 1), H)
+        cell = cell.crop((0, 0, w, H))
         mid = cell.getpixel((w // 2, H // 2))
         red = keep_color and mid[0] >= mid[1] + 40
         cell = tint_red(cell, state) if red else darken(cell, state > 4)
-        cell = square_corners(cell)
+        cell = square_corners(cell, right_outline)
+        x0 = 1 if ring_left else 0
+        frame = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+        frame.alpha_composite(cell, (x0, 0))
         g = state_cell(glyph, state)
-        frame = Image.new("RGBA", (w, H), (0, 0, 0, 0))
-        frame.alpha_composite(cell, (0, 0))
-        frame.alpha_composite(g, ((w - g.size[0]) // 2, (H - g.size[1]) // 2))
-        strip.paste(frame, (0, (state - 1) * H))
+        frame.alpha_composite(g, (x0 + (w - g.size[0] + 1) // 2, (H - g.size[1] + 1) // 2))
+        px = frame.load()
+        for y in range(sh):
+            if ring_left:
+                px[0, y] = RING
+            if right_outline:
+                px[sw - 1, y] = RING
+        for x in range(sw):
+            px[x, sh - 1] = RING
+        strip.paste(frame, (0, (state - 1) * sh))
     return strip
 
 
