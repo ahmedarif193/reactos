@@ -126,3 +126,22 @@ WINSTAAPI _WinStationOpenSessionDirectory(PVOID A,
 {
     UNIMPLEMENTED;
 }
+
+BOOL
+WINSTAAPI WinStationIsSessionRemoteable(HANDLE hServer,
+                                        ULONG SessionId,
+                                        PBOOL pfIsRemoteable)
+{
+    UNREFERENCED_PARAMETER(hServer);
+    UNREFERENCED_PARAMETER(SessionId);
+
+    if (!pfIsRemoteable)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    *pfIsRemoteable = FALSE;
+    SetLastError(ERROR_SUCCESS);
+    return TRUE;
+}

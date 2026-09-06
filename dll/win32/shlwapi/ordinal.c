@@ -5792,3 +5792,12 @@ EXTERN_C BOOL WINAPI SHBoolSystemParametersInfo(UINT uiAction, PVOID pvParam)
     return retval;
 }
 #endif
+
+/*************************************************************************
+ *      @  [SHLWAPI.635]
+ */
+HRESULT WINAPI ShlwapiOrdinal635(void *arg1, void *arg2, void *arg3, void *arg4)
+{
+    FIXME("(%p %p %p %p): stub\n", arg1, arg2, arg3, arg4);
+    return E_NOTIMPL;
+}

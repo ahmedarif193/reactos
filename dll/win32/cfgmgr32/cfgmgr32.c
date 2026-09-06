@@ -2200,3 +2200,9 @@ WORD WINAPI CM_Get_Version( void )
     TRACE( "\n" );
     return 0x0400;
 }
+
+CONFIGRET WINAPI CM_Request_Eject_PC( void )
+{
+    FIXME( "stub\n" );
+    return CR_FAILURE;
+}

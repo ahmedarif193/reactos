@@ -55,7 +55,7 @@
 @ stub InitVariantFromInt16Array
 @ stub InitVariantFromInt32Array
 @ stub InitVariantFromInt64Array
-@ stub InitVariantFromResource
+@ stdcall InitVariantFromResource(ptr long ptr)
 @ stub InitVariantFromStrRet
 @ stub InitVariantFromStringArray
 @ stub InitVariantFromUInt16Array
@@ -87,6 +87,7 @@
 @ stdcall PSGetPropertySystem(ptr ptr)
 @ stub PSGetPropertyValue
 @ stub PSLookupPropertyHandlerCLSID
+@ stdcall PSPropertyBag_WriteDWORD(ptr wstr long)
 @ stdcall PSPropertyKeyFromString(wstr ptr)
 @ stdcall PSRefreshPropertySchema()
 @ stdcall PSRegisterPropertySchema(wstr)

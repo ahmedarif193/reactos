@@ -44,11 +44,17 @@
 62 stub -noname ServerClearStockObjects
 63 stub -noname MarkSelection
 65 stdcall -noname SetSystemVisualStyle(wstr wstr wstr long)
+86 stdcall -noname UxThemeOrdinal86(ptr)
 95 stdcall GetImmersiveColorFromColorSetEx(long long long long)
 96 stdcall -noname GetImmersiveColorTypeFromName(wstr)
 98 stdcall GetImmersiveUserColorSetPreference(long long)
 100 stdcall -noname GetImmersiveColorNamedTypeByIndex(long)
 104 stdcall -noname RefreshImmersiveColorPolicyState()
+106 stdcall -noname UxThemeOrdinal106(ptr)
+118 stdcall -noname UxThemeOrdinal118(ptr ptr)
+120 stdcall -noname GetUserColorPreference(ptr long)
+121 stdcall -noname GetColorFromPreference(ptr long long long)
+122 stdcall -noname UxThemeOrdinal122(ptr ptr)
 132 stdcall -noname ShouldAppsUseDarkMode()
 133 stdcall -noname AllowDarkModeForWindow(ptr long)
 135 stdcall -noname SetPreferredAppMode(long)

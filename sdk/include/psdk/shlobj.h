@@ -2110,6 +2110,14 @@ SHChangeNotifyRegister(
 
 BOOL WINAPI SHChangeNotifyDeregister(ULONG ulID);
 
+typedef enum
+{
+    SCNRT_ENABLE = 0,
+    SCNRT_DISABLE = 1
+} SCNRT_STATUS;
+
+VOID WINAPI SHChangeNotifyRegisterThread(_In_ SCNRT_STATUS status);
+
 HANDLE
 WINAPI
 SHChangeNotification_Lock(

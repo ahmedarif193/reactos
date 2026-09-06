@@ -3,6 +3,7 @@ add_subdirectory(makeimg)
 list(APPEND SOURCE
     AttachThreadInput.c
     ../include/msgtrace.c
+    CalculatePopupWindowPosition.c
     CharFuncs.c
     CloseWindow.c
     CopyImage.c
@@ -30,8 +31,11 @@ list(APPEND SOURCE
     GetTitleBarInfoEx.c
     GetUserObjectInformation.c
     GetWindowPlacement.c
+    GhostWindow.c
     GW_ENABLEDPOPUP.c
     InitializeLpkHooks.c
+    InputMessageSource.c
+    IsTopLevelWindow.c
     IsServerSideWindow.c
     KbdLayout.c
     keybd_event.c
@@ -43,6 +47,7 @@ list(APPEND SOURCE
     ModernUser32.c
     NextDlgItem.c
     NonClientPaint.c
+    PhysicalPoint.c
     PrivateExtractIcons.c
     RealGetWindowClass.c
     RedrawWindow.c
@@ -69,6 +74,7 @@ list(APPEND SOURCE
     TrackMouseEvent.c
     TrackPopupMenuEx.c
     VirtualKey.c
+    WindowBand.c
     WndProc.c
     wsprintf.c)
 

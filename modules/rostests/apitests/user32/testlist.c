@@ -3,6 +3,7 @@
 #include <apitest.h>
 
 extern void func_AttachThreadInput(void);
+extern void func_CalculatePopupWindowPosition(void);
 extern void func_CharFuncs(void);
 extern void func_CloseWindow(void);
 extern void func_CopyImage(void);
@@ -30,8 +31,11 @@ extern void func_GetSystemMetrics(void);
 extern void func_GetTitleBarInfoEx(void);
 extern void func_GetUserObjectInformation(void);
 extern void func_GetWindowPlacement(void);
+extern void func_GhostWindow(void);
 extern void func_GW_ENABLEDPOPUP(void);
 extern void func_InitializeLpkHooks(void);
+extern void func_InputMessageSource(void);
+extern void func_IsTopLevelWindow(void);
 extern void func_IsServerSideWindow(void);
 extern void func_KbdLayout(void);
 extern void func_keybd_event(void);
@@ -43,6 +47,7 @@ extern void func_MessageStateAnalyzer(void);
 extern void func_ModernUser32(void);
 extern void func_NextDlgItem(void);
 extern void func_NonClientPaint(void);
+extern void func_PhysicalPoint(void);
 extern void func_PrivateExtractIcons(void);
 extern void func_RealGetWindowClass(void);
 extern void func_RedrawWindow(void);
@@ -69,12 +74,14 @@ extern void func_SystemMenu(void);
 extern void func_TrackMouseEvent(void);
 extern void func_TrackPopupMenuEx(void);
 extern void func_VirtualKey(void);
+extern void func_WindowBand(void);
 extern void func_WndProc(void);
 extern void func_wsprintfApi(void);
 
 const struct test winetest_testlist[] =
 {
     { "AttachThreadInput", func_AttachThreadInput },
+    { "CalculatePopupWindowPosition", func_CalculatePopupWindowPosition },
     { "CharFuncs", func_CharFuncs },
     { "CloseWindow", func_CloseWindow },
     { "CopyImage", func_CopyImage },
@@ -102,8 +109,11 @@ const struct test winetest_testlist[] =
     { "GetTitleBarInfoEx", func_GetTitleBarInfoEx },
     { "GetUserObjectInformation", func_GetUserObjectInformation },
     { "GetWindowPlacement", func_GetWindowPlacement },
+    { "GhostWindow", func_GhostWindow },
     { "GW_ENABLEDPOPUP", func_GW_ENABLEDPOPUP },
     { "InitializeLpkHooks", func_InitializeLpkHooks },
+    { "InputMessageSource", func_InputMessageSource },
+    { "IsTopLevelWindow", func_IsTopLevelWindow },
     { "IsServerSideWindow", func_IsServerSideWindow },
     { "KbdLayout", func_KbdLayout },
     { "keybd_event", func_keybd_event },
@@ -115,6 +125,7 @@ const struct test winetest_testlist[] =
     { "ModernUser32", func_ModernUser32 },
     { "NextDlgItem", func_NextDlgItem },
     { "NonClientPaint", func_NonClientPaint },
+    { "PhysicalPoint", func_PhysicalPoint },
     { "PrivateExtractIcons", func_PrivateExtractIcons },
     { "RealGetWindowClass", func_RealGetWindowClass },
     { "RedrawWindow", func_RedrawWindow },
@@ -141,6 +152,7 @@ const struct test winetest_testlist[] =
     { "TrackMouseEvent", func_TrackMouseEvent },
     { "TrackPopupMenuEx", func_TrackPopupMenuEx },
     { "VirtualKey", func_VirtualKey },
+    { "WindowBand", func_WindowBand },
     { "WndProc", func_WndProc },
     { "wsprintfApi", func_wsprintfApi },
     { 0, 0 }
