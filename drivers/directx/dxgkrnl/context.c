@@ -1463,9 +1463,6 @@ DxgkCreatePagingSystemContext(
     CreateContextArg.NodeOrdinal = PagingNode;
     CreateContextArg.EngineAffinity = 1;
     CreateContextArg.Flags.SystemContext = 1;
-#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
-    CreateContextArg.Flags.VirtualAddressing = Adapter->GpuMmuCapsValid;
-#endif
     Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateContext)(
                  Device->hMiniportDevice,
                  &CreateContextArg);
