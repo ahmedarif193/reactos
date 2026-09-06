@@ -1213,6 +1213,33 @@ ChpepCallFlsCallback(PFLS_CALLBACK_FUNCTION Callback,
 }
 
 static
+BOOLEAN
+NTAPI
+ChpepCallRunOnceCallback(PRTL_RUN_ONCE_INIT_FN InitFn,
+                         PRTL_RUN_ONCE RunOnce,
+                         PVOID Parameter,
+                         PVOID *Context)
+{
+    NTSTATUS Status;
+
+    if (RtlIsEcCode((ULONG_PTR)InitFn))
+        return InitFn(RunOnce, Parameter, Context) ? TRUE : FALSE;
+
+    Status = ChpeInitializeThread();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[CHPE] ntdll: cannot dispatch x64 run-once callback %p, ThreadInit failed with Status = 0x%08lx\n", InitFn, Status);
+        return FALSE;
+    }
+
+    return ChpepCallX64Routine((PVOID)InitFn,
+                               (ULONG_PTR)RunOnce,
+                               (ULONG_PTR)Parameter,
+                               (ULONG_PTR)Context,
+                               0) != 0;
+}
+
+static
 VOID
 NTAPI
 ChpepCallThreadpoolCallback(PVOID Callback,
@@ -1433,6 +1460,7 @@ ChpeInitializeProcess(VOID)
     ChpeProcessInitialized = TRUE;
     RtlpSetFlsCallbackDispatcher(ChpepCallFlsCallback);
     RtlpSetThreadpoolCallbackDispatcher(ChpepCallThreadpoolCallback);
+    RtlpSetRunOnceCallbackDispatcher(ChpepCallRunOnceCallback);
 
     Status = ChpepCreateCrossProcessWorkList();
     if (!NT_SUCCESS(Status))
@@ -1695,6 +1723,59 @@ ChpepGetImportBaseName(PUNICODE_STRING ImportName,
     }
 }
 
+static
+BOOLEAN
+ChpepAppDirectoryOverridesImport(PCUNICODE_STRING BaseName)
+{
+    PRTL_USER_PROCESS_PARAMETERS Params;
+    UNICODE_STRING AppDir, SystemDir, Candidate, NtSystemRoot;
+    WCHAR SystemBuffer[MAX_PATH];
+    WCHAR CandidateBuffer[MAX_PATH];
+    USHORT Index;
+
+    if (RtlEqualUnicodeString(BaseName, &ChpeNtdllImportName, TRUE))
+        return FALSE;
+
+    Params = NtCurrentPeb()->ProcessParameters;
+    if (!Params)
+        return FALSE;
+
+    AppDir = Params->ImagePathName;
+    if (!AppDir.Buffer || !AppDir.Length)
+        return FALSE;
+
+    for (Index = AppDir.Length / sizeof(WCHAR); Index > 0; --Index)
+    {
+        if (AppDir.Buffer[Index - 1] == L'\\' || AppDir.Buffer[Index - 1] == L'/')
+            break;
+    }
+    if (Index == 0)
+        return FALSE;
+
+    AppDir.Length = Index * sizeof(WCHAR);
+    AppDir.MaximumLength = AppDir.Length;
+
+    RtlInitUnicodeString(&NtSystemRoot, SharedUserData->NtSystemRoot);
+    RtlInitEmptyUnicodeString(&SystemDir, SystemBuffer, sizeof(SystemBuffer));
+    if (!NT_SUCCESS(RtlAppendUnicodeStringToString(&SystemDir, &NtSystemRoot)) ||
+        !NT_SUCCESS(RtlAppendUnicodeToString(&SystemDir, L"\\System32\\")))
+    {
+        return FALSE;
+    }
+
+    if (RtlEqualUnicodeString(&AppDir, &SystemDir, TRUE))
+        return FALSE;
+
+    RtlInitEmptyUnicodeString(&Candidate, CandidateBuffer, sizeof(CandidateBuffer));
+    if (!NT_SUCCESS(RtlAppendUnicodeStringToString(&Candidate, &AppDir)) ||
+        !NT_SUCCESS(RtlAppendUnicodeStringToString(&Candidate, (PUNICODE_STRING)BaseName)))
+    {
+        return FALSE;
+    }
+
+    return RtlDoesFileExists_UStr(&Candidate);
+}
+
 BOOLEAN
 NTAPI
 ChpeShouldRedirectImport(PVOID ImportBase,
@@ -1707,6 +1788,9 @@ ChpeShouldRedirectImport(PVOID ImportBase,
 
     ChpepGetImportBaseName(ImportName, &BaseName);
     if (RtlEqualUnicodeString(&BaseName, &ChpeNtdllImportName, TRUE) && !ChpepIsPureAmd64Image(ImportBase))
+        return FALSE;
+
+    if (ChpepAppDirectoryOverridesImport(&BaseName))
         return FALSE;
 
     return TRUE;
@@ -1726,6 +1810,9 @@ ChpeShouldRedirectDynamicLoad(PUNICODE_STRING DllName)
     /* The host ntdll owns the loader. Pure AMD64 imports are redirected to
      * ntdll_chpe.dll while explicit ntdll.dll loads keep the host module. */
     if (RtlEqualUnicodeString(&BaseName, &ChpeNtdllImportName, TRUE))
+        return FALSE;
+
+    if (ChpepAppDirectoryOverridesImport(&BaseName))
         return FALSE;
 
     return TRUE;

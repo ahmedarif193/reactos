@@ -71,6 +71,7 @@
 @ stdcall RtlFlsSetValue(long ptr) ChpeRtlFlsSetValue
 @ stdcall RtlFreeHeap(long long long) ChpeRtlFreeHeap
 @ stdcall RtlGetFunctionTableListHead() ChpeRtlGetFunctionTableListHead
+@ stdcall RtlGetLastNtStatus() ChpeRtlGetLastNtStatus
 @ stdcall RtlGetLastWin32Error() ChpeRtlGetLastWin32Error
 @ stdcall RtlGetCurrentProcessorNumber() ChpeRtlGetCurrentProcessorNumber
 @ stdcall -version=0x601+ RtlGetCurrentProcessorNumberEx(ptr) ChpeRtlGetCurrentProcessorNumberEx

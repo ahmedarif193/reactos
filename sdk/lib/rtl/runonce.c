@@ -112,6 +112,35 @@ RtlRunOnceComplete(
     }
 }
 
+typedef BOOLEAN (NTAPI *PRTLP_RUN_ONCE_CALLBACK_DISPATCHER)(PRTL_RUN_ONCE_INIT_FN InitFn, PRTL_RUN_ONCE RunOnce, PVOID Parameter, PVOID *Context);
+
+static PRTLP_RUN_ONCE_CALLBACK_DISPATCHER volatile RtlpRunOnceCallbackDispatcher;
+
+VOID
+NTAPI
+RtlpSetRunOnceCallbackDispatcher(
+    _In_opt_ PRTLP_RUN_ONCE_CALLBACK_DISPATCHER Dispatcher)
+{
+    InterlockedExchangePointer((PVOID volatile *)&RtlpRunOnceCallbackDispatcher, (PVOID)Dispatcher);
+}
+
+static
+BOOLEAN
+RtlpCallRunOnceInitFn(
+    PRTL_RUN_ONCE_INIT_FN InitFn,
+    PRTL_RUN_ONCE RunOnce,
+    PVOID Parameter,
+    PVOID *Context)
+{
+    PRTLP_RUN_ONCE_CALLBACK_DISPATCHER Dispatcher;
+
+    Dispatcher = (PRTLP_RUN_ONCE_CALLBACK_DISPATCHER)InterlockedCompareExchangePointer((PVOID volatile *)&RtlpRunOnceCallbackDispatcher, NULL, NULL);
+    if (Dispatcher)
+        return Dispatcher(InitFn, RunOnce, Parameter, Context);
+
+    return InitFn(RunOnce, Parameter, Context) ? TRUE : FALSE;
+}
+
 /******************************************************************
  *              RtlRunOnceExecuteOnce (NTDLL.@)
  */
@@ -128,7 +157,7 @@ RtlRunOnceExecuteOnce(
 
     if (ret != STATUS_PENDING) return ret;
 
-    if (!InitFn( RunOnce, Parameter, Context ))
+    if (!RtlpCallRunOnceInitFn( InitFn, RunOnce, Parameter, Context ))
     {
         RtlRunOnceComplete( RunOnce, RTL_RUN_ONCE_INIT_FAILED, NULL );
         return STATUS_UNSUCCESSFUL;

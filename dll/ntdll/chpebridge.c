@@ -424,7 +424,6 @@ ChpepVirtualUnwindFrame(ULONG HandlerType, PDISPATCHER_CONTEXT_ARM64EC Dispatche
 
     ChpepCaptureDispatcherNonVolatiles((DISPATCHER_CONTEXT_NONVOLREG_ARM64 *)DispatcherContext->NonVolatileRegisters, ContextRecord);
     DispatcherContext->FunctionEntry = ChpeRtlLookupFunctionEntry(ControlPc, &DispatcherContext->ImageBase, DispatcherContext->HistoryTable);
-
     DispatcherContext->LanguageHandler = ChpeRtlVirtualUnwind(HandlerType, DispatcherContext->ImageBase, ControlPc, DispatcherContext->FunctionEntry, &ContextRecord->AMD64_Context, &DispatcherContext->HandlerData, &DispatcherContext->EstablisherFrame, NULL);
 
     return STATUS_SUCCESS;
@@ -1642,6 +1641,12 @@ LOGICAL NTAPI
 ChpeRtlTryEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
 {
     return RtlTryEnterCriticalSection(CriticalSection);
+}
+
+NTSTATUS NTAPI
+ChpeRtlGetLastNtStatus(VOID)
+{
+    return RtlGetLastNtStatus();
 }
 
 ULONG NTAPI
