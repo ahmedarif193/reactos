@@ -1189,6 +1189,9 @@ struct _DXGKRNL_ADAPTER
     KMUTEX                      CddPresentMutex;
     D3DKMT_HANDLE               CddDeviceHandle;
     D3DKMT_HANDLE               CddContextHandle;
+    D3DKMT_HANDLE               CddShadowBindingHandle;
+    D3DKMT_HANDLE               CddPrimaryBindingHandle;
+    ULONG64                     CddBindingGeneration;
     NTSTATUS                    PresentQueueInitializationStatus;
     volatile LONG               PresentQueueStopping;
     volatile LONG               VBlankResetActive;

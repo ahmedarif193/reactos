@@ -78,6 +78,121 @@ static NTSTATUS DxgkpExecuteFullPresent(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PDXG
 static NTSTATUS DxgkpSelectPresentNode(_In_ PDXGKRNL_ADAPTER Adapter, _In_ DXGKRNL_PRESENT_TYPE PresentType, _Out_ PULONG OutNode);
 static NTSTATUS DxgkpSelectCddPresentEngine(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PULONG OutNode, _Out_ PUINT OutEngineAffinity);
 
+static NTSTATUS
+DxgkpDestroyCddPresentBinding(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _Inout_ D3DKMT_HANDLE *BindingHandle)
+{
+    PDXGKVMM_ALLOCATION BindingReference = NULL;
+    HANDLE OpenBindingHandle = NULL;
+    D3DKMT_HANDLE Handle;
+    NTSTATUS Status;
+
+    Handle = *BindingHandle;
+    *BindingHandle = 0;
+    if (Handle == 0)
+        return STATUS_SUCCESS;
+
+    Status = DxgkVidMmReferenceOpenBinding(
+                 (HANDLE)(ULONG_PTR)Handle,
+                 Adapter,
+                 Device,
+                 &OpenBindingHandle,
+                 &BindingReference);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return DxgkVidMmDestroyPresentBinding(Device, BindingReference);
+}
+
+static NTSTATUS
+DxgkpDestroyCddPresentBindings(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device)
+{
+    NTSTATUS PrimaryStatus;
+    NTSTATUS ShadowStatus;
+
+    PrimaryStatus = DxgkpDestroyCddPresentBinding(
+                        Adapter,
+                        Device,
+                        &Adapter->CddPrimaryBindingHandle);
+    ShadowStatus = DxgkpDestroyCddPresentBinding(
+                       Adapter,
+                       Device,
+                       &Adapter->CddShadowBindingHandle);
+    Adapter->CddBindingGeneration = 0;
+    return !NT_SUCCESS(PrimaryStatus) ? PrimaryStatus : ShadowStatus;
+}
+
+static NTSTATUS
+DxgkpCreateCddPresentBinding(
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ PDXGKVMM_ALLOCATION BackingAllocation,
+    _In_ BOOLEAN ReadOnly,
+    _Out_ D3DKMT_HANDLE *BindingHandle)
+{
+    PDXGKVMM_ALLOCATION BindingReference = NULL;
+    HANDLE OpenBindingHandle = NULL;
+    NTSTATUS Status;
+
+    *BindingHandle = 0;
+    Status = DxgkVidMmCreatePresentBinding(
+                 Device,
+                 BackingAllocation,
+                 ReadOnly,
+                 &OpenBindingHandle,
+                 &BindingReference);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    *BindingHandle = BindingReference->Handle;
+    DxgkVidMmDereferenceLogicalAllocation(BindingReference);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpEnsureCddPresentBindings(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ const DXGKRNL_SHARED_SURFACE_SNAPSHOT *SharedSurface)
+{
+    NTSTATUS Status;
+
+    if (Adapter->CddBindingGeneration == SharedSurface->Generation &&
+        Adapter->CddShadowBindingHandle != 0 &&
+        Adapter->CddPrimaryBindingHandle != 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    Status = DxgkpDestroyCddPresentBindings(Adapter, Device);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = DxgkpCreateCddPresentBinding(
+                 Device,
+                 SharedSurface->ShadowAllocation,
+                 TRUE,
+                 &Adapter->CddShadowBindingHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = DxgkpCreateCddPresentBinding(
+                 Device,
+                 SharedSurface->PrimaryAllocation,
+                 FALSE,
+                 &Adapter->CddPrimaryBindingHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        (VOID)DxgkpDestroyCddPresentBindings(Adapter, Device);
+        return Status;
+    }
+
+    Adapter->CddBindingGeneration = SharedSurface->Generation;
+    return STATUS_SUCCESS;
+}
+
 static BOOLEAN
 DxgkpAcquirePresentQueues(
     _In_ PDXGKRNL_ADAPTER Adapter)
@@ -1224,6 +1339,7 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
     D3DKMT_DESTROYDEVICE DestroyDevice;
     KAPC_STATE ApcState;
     BOOLEAN Attached;
+    BOOLEAN DestroyCdd;
     PDXGKRNL_ADAPTER ContextAdapter;
     ULONG Node;
     PBYTE DestinationVa;
@@ -1289,6 +1405,7 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
     if (Attached)
         KeStackAttachProcess((PKPROCESS)PsInitialSystemProcess, &ApcState);
     RtlZeroMemory(&Entry, sizeof(Entry));
+    DestroyCdd = FALSE;
 
     if (Adapter->CddContextHandle == 0)
     {
@@ -1320,6 +1437,34 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
         goto CleanupCdd;
     ASSERT(ContextAdapter == Adapter);
     Status = DxgkDeviceWaitForIdle(Entry.Device);
+    if (!NT_SUCCESS(Status))
+        goto CleanupCdd;
+
+    /* Native CDD allocations belong to its persistent device, so Present
+     * reuses their miniport opens until the mode/allocation generation
+     * changes.  Our shared primary and shadow are adapter allocations; give
+     * the CDD device the same persistent binding lifetime instead of opening,
+     * GPUVA-invalidating, and closing both allocations after every frame. */
+    Status = DxgkpEnsureCddPresentBindings(
+                 Adapter,
+                 Entry.Device,
+                 SharedSurface);
+    if (!NT_SUCCESS(Status))
+        goto CleanupCdd;
+    Status = DxgkVidMmReferenceOpenBinding(
+                 (HANDLE)(ULONG_PTR)Adapter->CddShadowBindingHandle,
+                 Adapter,
+                 Entry.Device,
+                 &Entry.SourceOpenBindingHandle,
+                 &Entry.SourceOpenBindingReference);
+    if (!NT_SUCCESS(Status))
+        goto CleanupCdd;
+    Status = DxgkVidMmReferenceOpenBinding(
+                 (HANDLE)(ULONG_PTR)Adapter->CddPrimaryBindingHandle,
+                 Adapter,
+                 Entry.Device,
+                 &Entry.DestinationOpenBindingHandle,
+                 &Entry.DestinationOpenBindingReference);
     if (!NT_SUCCESS(Status))
         goto CleanupCdd;
 
@@ -1420,12 +1565,23 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
 CleanupCdd:
     DxgkDeviceWorkDestroy(Entry.DeviceWork);
     DxgkDeviceWorkDereference(PresentWork);
-    if (Entry.Context != NULL)
-        DxgkDereferenceContext(Entry.Context);
+    if (Entry.DestinationOpenBindingReference != NULL)
+        DxgkVidMmDereferenceLogicalAllocation(
+            Entry.DestinationOpenBindingReference);
+    if (Entry.SourceOpenBindingReference != NULL)
+        DxgkVidMmDereferenceLogicalAllocation(Entry.SourceOpenBindingReference);
     /* Reset terminalizes client devices. Recreate CDD on the next update,
      * but do not enter device teardown while the reset is still active. */
     if (Status == STATUS_DEVICE_REMOVED &&
-        InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) == 0)
+        InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) == 0 &&
+        Entry.Device != NULL)
+    {
+        (VOID)DxgkpDestroyCddPresentBindings(Adapter, Entry.Device);
+        DestroyCdd = TRUE;
+    }
+    if (Entry.Context != NULL)
+        DxgkDereferenceContext(Entry.Context);
+    if (DestroyCdd)
     {
         DestroyDevice.hDevice = Adapter->CddDeviceHandle;
         Adapter->CddContextHandle = 0;
@@ -2163,9 +2319,6 @@ DxgkpExecuteFullPresent(
     BOOLEAN Handled;
     BOOLEAN KmdTransaction = FALSE;
 
-    if (!DxgkBeginKmdTransaction(Adapter))
-        return STATUS_DELETE_PENDING;
-    KmdTransaction = TRUE;
     Device = Entry->Device;
     if (Device == NULL || Device->Adapter != Adapter)
     {
@@ -2546,6 +2699,27 @@ DxgkpExecuteFullPresent(
     PresentArgs.Color           = Entry->Color;
     PresentArgs.FlipInterval    = Entry->FlipInterval;
 
+    /*
+     * DMA backing creation may flush GPU page tables.  A preceding present's
+     * retirement can own PageTableFlushMutex while it enters the miniport to
+     * tear that backing down, so holding KmdTransactionMutex during backing
+     * creation inverts those two locks.  Prepare every allocation and GPUVA
+     * mapping first, then take the adapter transaction only for the native
+     * Present/Patch/Submit sequence.  This also keeps the transaction clear
+     * of the synchronous CDD retirement wait performed by our caller.
+     */
+    if (!DxgkBeginKmdTransaction(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto PresentCleanup;
+    }
+    KmdTransaction = TRUE;
+    if (InterlockedCompareExchange(&Device->ExecutionState, 0, 0) !=
+        D3DKMT_DEVICEEXECUTION_ACTIVE)
+    {
+        Status = STATUS_DEVICE_REMOVED;
+        goto PresentCleanup;
+    }
     if (!DxgkAcquireKmdCall(Adapter))
     {
         Status = STATUS_DELETE_PENDING;
