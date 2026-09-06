@@ -99,6 +99,7 @@ VidSchpBugCheckInvalidFence(
  * dxgkrnl asks for a move and is told whether the engine took it.
  */
 static BOOLEAN VidSchpTryTransitionEngine(_In_ PVIDSCH_ENGINE Engine, _In_ VIDSCH_ENGINE_STATE Expected, _In_ VIDSCH_ENGINE_STATE New);
+static BOOLEAN VidSchpForceEngineState(_In_ PVIDSCH_ENGINE Engine, _In_ VIDSCH_ENGINE_STATE New);
 static NTSTATUS VidSchpTransitionEngineEx(_In_ PVIDSCH_ENGINE Engine, _In_ VIDSCH_ENGINE_STATE Expected, _In_ VIDSCH_ENGINE_STATE New, _Out_ VIDSCH_ENGINE_STATE *OutPrevious);
 
 /*
@@ -708,6 +709,18 @@ VidSchpTransitionEngineEx(
     Status = Sched->SetEngineState(Sched->SchedulerHandle, Engine->SchedulerOrdinal, (ULONG)Expected, (ULONG)New, &Previous);
     *OutPrevious = (VIDSCH_ENGINE_STATE)Previous;
     return Status;
+}
+
+static BOOLEAN
+VidSchpForceEngineState(
+    _In_ PVIDSCH_ENGINE Engine,
+    _In_ VIDSCH_ENGINE_STATE New)
+{
+    PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched = VidSchpScheduler(Engine->Adapter);
+
+    if (Sched == NULL)
+        return FALSE;
+    return NT_SUCCESS(Sched->SetEngineState(Sched->SchedulerHandle, Engine->SchedulerOrdinal, DXGMMS2_ENGINE_STATE_ANY, (ULONG)New, NULL));
 }
 
 static ULONG
