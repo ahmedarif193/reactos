@@ -42,25 +42,30 @@
 
 /* ---- Minimum OS version for dxgkrnl ------------------------------------ */
 /*
- * dxgkrnl.sys uses the Windows 7 kernel API declaration set.
+ * dxgkrnl.sys uses the Windows 8 kernel API declaration set.
  * Override both _WIN32_WINNT and NTDDI_VERSION before including any kernel
- * headers so that Win7-era declarations are visible.
+ * headers so that those declarations are visible.
  *
  * The separately selected DXGKDDI interface level is WDDM 2.0; this NT target
  * controls kernel declarations and does not lower that graphics contract.
  *
- * Functions such as
- * PsSetCreateProcessNotifyRoutineEx are declared.
+ * Windows 8 is the floor rather than Windows 7 because registering the
+ * miniport's runtime power components uses the Power Framework -
+ * PoFxRegisterDevice, PoFxActivateComponent and the PO_FX_DEVICE description -
+ * which <potypes.h> declares only from NTDDI_WIN8 and which ntoskrnl exports
+ * at the same level.  Functions such as PsSetCreateProcessNotifyRoutineEx
+ * remain declared.
  *
  * The ReactOS build system sets _WIN32_WINNT=0x0502 (Server 2003) globally,
  * but dxgkrnl is a WDDM driver that only loads on Vista+.  The
  * sdkddkver.h consistency check requires (NTDDI_VERSION >> 16) == _WIN32_WINNT,
- * so both values must be updated together.
+ * so both values must be updated together, and must agree with the values the
+ * module's CMakeLists.txt puts on the command line.
  */
 #undef  _WIN32_WINNT
-#define _WIN32_WINNT  0x0601    /* Windows 7 */
+#define _WIN32_WINNT  0x0602    /* Windows 8 */
 #undef  NTDDI_VERSION
-#define NTDDI_VERSION 0x06010000 /* NTDDI_WIN7 */
+#define NTDDI_VERSION 0x06020000 /* NTDDI_WIN8 */
 
 /* ---- Standard kernel headers ------------------------------------------- */
 #include <ntifs.h>
@@ -555,6 +560,28 @@ extern TDR_CONFIG g_TdrConfig;
 
 #define DXGKP_PRESENT_RECT_COUNT DXGK_PRESENT_CORE_MAX_SUBRECTS
 
+/*
+ * One runtime power component as declared by the miniport through
+ * DXGKQAITYPE_POWERCOMPONENTINFO, plus the state dxgkrnl keeps for it while
+ * the Power Framework drives its F-state.
+ *
+ * RequestedFState is DXGKP_POWER_FSTATE_NONE when no transition is pending.
+ * A transition requested at raised IRQL is deferred to a work item, because
+ * DxgkDdiSetPowerComponentFState is a PASSIVE_LEVEL DDI.
+ */
+#define DXGKP_POWER_FSTATE_NONE (-1)
+
+/* No component of the required type was declared. */
+#define DXGKP_POWER_COMPONENT_NONE 0xFFFFFFFFu
+
+typedef struct _DXGKRNL_POWER_COMPONENT
+{
+    DXGK_POWER_RUNTIME_COMPONENT Info;
+    volatile LONG                RequestedFState;
+    volatile LONG                LastFState;
+    volatile LONG                Active;
+} DXGKRNL_POWER_COMPONENT, *PDXGKRNL_POWER_COMPONENT;
+
 /* ========================================================================
  * DXGKRNL_ADAPTER
  *
@@ -574,6 +601,28 @@ struct _DXGKRNL_ADAPTER
     PDEVICE_OBJECT              FunctionalDeviceObject;
     PDEVICE_OBJECT              PhysicalDeviceObject;
     PDEVICE_OBJECT              LowerDeviceObject;
+
+    /*
+     * Runtime power management.  PoFxHandle is non-NULL once the miniport's
+     * component table has been registered with the Power Framework; every
+     * F-state transition then originates from PoFx, never from dxgkrnl
+     * pinning components on its own.
+     */
+    POHANDLE                    PoFxHandle;
+    PDXGKRNL_POWER_COMPONENT    PowerComponents;
+    ULONG                       PowerComponentCount;
+    /* Singleton components Windows tracks by type while building the table.
+     * The D3-transition component holds a permanent active reference unless
+     * it declares exactly two F-states. */
+    ULONG                       PowerD3TransitionComponent;
+    ULONG                       PowerMemoryRefreshComponent;
+    BOOLEAN                     PowerD3TransitionTwoStates;
+    volatile LONG               PowerManagementStarted;
+    WORK_QUEUE_ITEM             PowerFStateWorkItem;
+    volatile LONG               PowerFStateWorkQueued;
+    /* Signalled while no deferred F-state transition is queued or running,
+     * so teardown can free the component table without racing the worker. */
+    KEVENT                      PowerFStateDrainedEvent;
 
     /*
      * Full registry path of the display adapter's PnP software key
