@@ -1304,7 +1304,12 @@ DxgkCreatePagingSystemContext(
                    ? STATUS_SUCCESS
                    : STATUS_INVALID_DEVICE_STATE;
     }
-    if (Adapter->MiniportContext->IsDisplayOnlyDriver)
+    /* BasicDisplay is only the firmware-framebuffer owner while a hardware
+     * adapter starts.  Native scheduler system devices belong to the
+     * hardware scheduling adapter; retaining a fallback GPU process across
+     * that handoff also changes miniport callback lifetime and pool reuse. */
+    if (Adapter->MiniportContext->IsDisplayOnlyDriver ||
+        Adapter->MiniportContext->IsBasicDisplayFallback)
         return STATUS_SUCCESS;
     if (DXGK_CB_FULL(Adapter, DxgkDdiCreateDevice) == NULL ||
         DXGK_CB_FULL(Adapter, DxgkDdiCreateContext) == NULL)
