@@ -75,6 +75,12 @@ VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 KD_CONTEXT KdpContext;
 BOOLEAN KdpPortLocked;
 KSPIN_LOCK KdpDebuggerLock;
+/* The processor inside the KD port critical section without owning the
+ * freeze (KdpPrint / KdPollBreakIn).  The freeze IPI is an NMI on x64, so it
+ * lands there regardless of IRQL; KiProcessorFreezeHandler defers freezing
+ * that processor until the port lock is released, otherwise the freeze
+ * owner fails KdEnterDebugger's port try-lock and two CPUs drive the port. */
+volatile PKPRCB KdpPortOwnerPrcb;
 BOOLEAN KdpControlCPressed;
 BOOLEAN KdpContextSent;
 

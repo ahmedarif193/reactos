@@ -529,6 +529,11 @@ KiProcessorFreezeHandler(
 
 VOID
 NTAPI
+KiFreezeIfRequested(
+    VOID);
+
+VOID
+NTAPI
 KiInitializeXStateConfiguration(
     _In_ ULONG Processor);
 

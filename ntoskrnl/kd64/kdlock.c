@@ -104,6 +104,9 @@ KdPollBreakIn(VOID)
             KeRaiseIrql(HIGH_LEVEL, &OldIrql);
             if (KeTryToAcquireSpinLockAtDpcLevel(&KdpDebuggerLock))
             {
+                KdpPortOwnerPrcb = KeGetCurrentPrcb();
+                KeMemoryBarrier();
+
                 /* Now get a packet */
                 if (KdReceivePacket(PACKET_TYPE_KD_POLL_BREAKIN,
                                     NULL,
@@ -118,12 +121,18 @@ KdPollBreakIn(VOID)
 
                 /* Let go of the port */
                 KdpPortUnlock();
+                KdpPortOwnerPrcb = NULL;
+                KeMemoryBarrier();
             }
             KeLowerIrql(OldIrql);
         }
 
         /* Re-enable interrupts */
         KeRestoreInterrupts(Enable);
+#if defined(_M_AMD64)
+        /* A freeze NMI that arrived while we held the port lock was deferred. */
+        KiFreezeIfRequested();
+#endif
     }
 
     /* Tell the caller to do a break */
