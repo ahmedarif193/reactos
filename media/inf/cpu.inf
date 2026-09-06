@@ -1,0 +1,37 @@
+; Processor devices
+
+[Version]
+Signature  = "$Windows NT$"
+Class      = Processor
+ClassGuid  = {50127DC3-0F36-415E-A6CC-4CB3BE910B65}
+Provider   = %ReactOS%
+DriverVer  = 09/06/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[ClassInstall32.NT]
+AddReg = ProcessorClass.NT.AddReg
+
+[ProcessorClass.NT.AddReg]
+HKR, , , 0, %ProcessorClassName%
+HKR, , Icon, 0, "-28"
+HKR, , NoInstallClass, 0, "1"
+
+[Manufacturer]
+%StdMfg% = StdMfg
+
+[StdMfg]
+%processor.DeviceDesc% = NO_DRV, ACPI\VEN_ACPI&DEV_0007
+%processor.DeviceDesc% = NO_DRV, ACPI\Processor
+
+[NO_DRV]
+
+[NO_DRV.Services]
+AddService = , 2
+
+[Strings]
+ReactOS = "ReactOS Team"
+ProcessorClassName = "Processors"
+StdMfg = "(Standard processor types)"
+processor.DeviceDesc = "Processor"

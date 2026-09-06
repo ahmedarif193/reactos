@@ -1205,6 +1205,16 @@ CmpInitializeProcessorClockFromFirmware(
     _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock);
 
 CODE_SEG("INIT")
+BOOLEAN
+NTAPI
+CmpGetSmbiosProcessorStrings(
+    _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _Out_writes_(ManufacturerSize) PCHAR Manufacturer,
+    _In_ SIZE_T ManufacturerSize,
+    _Out_writes_(VersionSize) PCHAR Version,
+    _In_ SIZE_T VersionSize);
+
+CODE_SEG("INIT")
 NTSTATUS
 NTAPI
 CmpInitializeRegistryNode(

@@ -95,6 +95,7 @@ struct acpi_device_pnp
 {
     char unique_id[9];
     ULONG bus_address;
+    char *hardware_id;
 };
 
 struct acpi_device

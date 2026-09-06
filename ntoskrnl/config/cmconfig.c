@@ -15,6 +15,167 @@
 
 /* FUNCTIONS *****************************************************************/
 
+static
+CODE_SEG("INIT")
+PUCHAR
+CmpMapSmbiosTable(
+    _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _Out_ PULONG TableSize)
+{
+    enum
+    {
+        SmbiosEntryPointMapSize = 32,
+        SmbiosMaximumTableSize = 16 * 1024 * 1024
+    };
+    PHYSICAL_ADDRESS PhysicalAddress;
+    PSMBIOS3_ENTRY_POINT EntryPoint;
+    PUCHAR Table;
+    UCHAR Checksum = 0;
+    UCHAR Index;
+
+    *TableSize = 0;
+    if ((LoaderBlock == NULL) ||
+        (LoaderBlock->Extension == NULL) ||
+        (LoaderBlock->Extension->SMBiosEPSHeader == NULL))
+    {
+        return NULL;
+    }
+
+    PhysicalAddress.QuadPart =
+        (ULONGLONG)(ULONG_PTR)LoaderBlock->Extension->SMBiosEPSHeader;
+    EntryPoint = MmMapIoSpace(PhysicalAddress,
+                              SmbiosEntryPointMapSize,
+                              MmCached);
+    if (EntryPoint == NULL)
+    {
+        return NULL;
+    }
+
+    if (!RtlEqualMemory(EntryPoint->Anchor, "_SM3_", 5) ||
+        (EntryPoint->Length < sizeof(*EntryPoint)) ||
+        (EntryPoint->Length > SmbiosEntryPointMapSize) ||
+        (EntryPoint->TableAddress == 0) ||
+        (EntryPoint->MaxStructureSize < sizeof(SMBIOS_HEADER)) ||
+        (EntryPoint->MaxStructureSize > SmbiosMaximumTableSize))
+    {
+        MmUnmapIoSpace(EntryPoint, SmbiosEntryPointMapSize);
+        return NULL;
+    }
+
+    for (Index = 0; Index < EntryPoint->Length; ++Index)
+    {
+        Checksum += ((PUCHAR)EntryPoint)[Index];
+    }
+    if (Checksum != 0)
+    {
+        MmUnmapIoSpace(EntryPoint, SmbiosEntryPointMapSize);
+        return NULL;
+    }
+
+    PhysicalAddress.QuadPart = EntryPoint->TableAddress;
+    *TableSize = EntryPoint->MaxStructureSize;
+    MmUnmapIoSpace(EntryPoint, SmbiosEntryPointMapSize);
+    Table = MmMapIoSpace(PhysicalAddress, *TableSize, MmCached);
+    if (Table == NULL)
+    {
+        *TableSize = 0;
+    }
+    return Table;
+}
+
+static
+CODE_SEG("INIT")
+PCSTR
+CmpSmbiosString(
+    _In_ PSMBIOS_HEADER Header,
+    _In_ PUCHAR TableEnd,
+    _In_ UCHAR Number)
+{
+    PUCHAR String = (PUCHAR)Header + Header->Length;
+    UCHAR Index;
+
+    if (Number == 0)
+        return NULL;
+    for (Index = 1; String < TableEnd; Index++)
+    {
+        SIZE_T Length = 0;
+
+        while ((String + Length < TableEnd) && (String[Length] != ANSI_NULL))
+            Length++;
+
+        if (Length == 0)
+            return NULL;
+        if (Index == Number)
+            return (PCSTR)String;
+        String += Length + 1;
+    }
+    return NULL;
+}
+
+CODE_SEG("INIT")
+BOOLEAN
+NTAPI
+CmpGetSmbiosProcessorStrings(
+    _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _Out_writes_(ManufacturerSize) PCHAR Manufacturer,
+    _In_ SIZE_T ManufacturerSize,
+    _Out_writes_(VersionSize) PCHAR Version,
+    _In_ SIZE_T VersionSize)
+{
+    PSMBIOS_HEADER Header;
+    PUCHAR Table;
+    PUCHAR TableEnd;
+    PUCHAR Next;
+    ULONG TableSize;
+    PCSTR String;
+    BOOLEAN Found = FALSE;
+
+    Manufacturer[0] = ANSI_NULL;
+    Version[0] = ANSI_NULL;
+    Table = CmpMapSmbiosTable(LoaderBlock, &TableSize);
+    if (Table == NULL)
+        return FALSE;
+
+    Header = (PSMBIOS_HEADER)Table;
+    TableEnd = Table + TableSize;
+    while (((PUCHAR)Header + sizeof(*Header)) <= TableEnd)
+    {
+        if ((Header->Length < sizeof(*Header)) ||
+            ((PUCHAR)Header + Header->Length > TableEnd))
+        {
+            break;
+        }
+
+        if ((Header->Type == 4) && (Header->Length >= 0x1A))
+        {
+            String = CmpSmbiosString(Header, TableEnd, ((PUCHAR)Header)[0x07]);
+            if (String != NULL)
+                RtlStringCbCopyA(Manufacturer, ManufacturerSize, String);
+            String = CmpSmbiosString(Header, TableEnd, ((PUCHAR)Header)[0x10]);
+            if (String != NULL)
+                RtlStringCbCopyA(Version, VersionSize, String);
+            Found = (Manufacturer[0] != ANSI_NULL) || (Version[0] != ANSI_NULL);
+            break;
+        }
+
+        if (Header->Type == 127)
+            break;
+
+        Next = (PUCHAR)Header + Header->Length;
+        while ((Next + 1 < TableEnd) &&
+               ((Next[0] != ANSI_NULL) || (Next[1] != ANSI_NULL)))
+        {
+            ++Next;
+        }
+        if (Next + 1 >= TableEnd)
+            break;
+        Header = (PSMBIOS_HEADER)(Next + 2);
+    }
+
+    MmUnmapIoSpace(Table, TableSize);
+    return Found;
+}
+
 CODE_SEG("INIT")
 VOID
 NTAPI

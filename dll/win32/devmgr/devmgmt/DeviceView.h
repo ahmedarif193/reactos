@@ -14,6 +14,15 @@ enum ViewType
 };
 
 
+typedef struct _RESOURCE_TREE_ITEMS
+{
+    HTREEITEM hMemory;
+    HTREEITEM hLargeMemory;
+    HTREEITEM hPort;
+    HTREEITEM hDma;
+    HTREEITEM hIrq;
+} RESOURCE_TREE_ITEMS, *PRESOURCE_TREE_ITEMS;
+
 class CDeviceView
 {
 
@@ -110,10 +119,16 @@ private:
 
     bool RecurseResources(
         _In_ DEVINST ParentDevice,
-        _In_ HTREEITEM hMemoryTreeItem,
-        _In_ HTREEITEM hPortTreeItem,
-        _In_ HTREEITEM hDmaTreeItem,
-        _In_ HTREEITEM hIrqTreeItem
+        _Inout_ PRESOURCE_TREE_ITEMS Items
+        );
+
+    void AddResourceNodes(
+        _In_ CDeviceNode *DeviceNode,
+        _Inout_ PRESOURCE_TREE_ITEMS Items
+        );
+
+    void SortResourceNodes(
+        _In_ HTREEITEM hTreeItem
         );
 
     bool GetNextClass(

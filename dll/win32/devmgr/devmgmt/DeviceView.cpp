@@ -606,36 +606,68 @@ CDeviceView::ListDevicesByConnection()
     return true;
 }
 
+static int CALLBACK
+ResourceNodeCompare(
+    _In_ LPARAM lParam1,
+    _In_ LPARAM lParam2,
+    _In_ LPARAM lParamSort
+    )
+{
+    CResourceNode *Node1 = dynamic_cast<CResourceNode *>((CNode *)lParam1);
+    CResourceNode *Node2 = dynamic_cast<CResourceNode *>((CNode *)lParam2);
+
+    if (Node1 == nullptr || Node2 == nullptr)
+        return 0;
+    if (Node1->GetSortKey() < Node2->GetSortKey())
+        return -1;
+    if (Node1->GetSortKey() > Node2->GetSortKey())
+        return 1;
+    return wcscmp(Node1->GetDisplayName(), Node2->GetDisplayName());
+}
+
+void
+CDeviceView::SortResourceNodes(
+    _In_ HTREEITEM hTreeItem
+    )
+{
+    TVSORTCB SortCb;
+
+    if (hTreeItem == NULL)
+        return;
+
+    SortCb.hParent = hTreeItem;
+    SortCb.lpfnCompare = ResourceNodeCompare;
+    SortCb.lParam = 0;
+    (void)TreeView_SortChildrenCB(m_hTreeView, &SortCb, 0);
+}
+
 bool
 CDeviceView::ListResourcesByType()
 {
-    HTREEITEM hMemoryTreeItem = NULL;
-    HTREEITEM hPortTreeItem = NULL;
-    HTREEITEM hDmaTreeItem = NULL;
-    HTREEITEM hIrqTreeItem = NULL;
+    RESOURCE_TREE_ITEMS Items;
+
+    ZeroMemory(&Items, sizeof(Items));
 
     CResourceTypeNode *MemoryNode = new CResourceTypeNode(IDS_TYPE_MEMORY, &m_ImageListData);
-    hMemoryTreeItem = InsertIntoTreeView(m_hTreeRoot,
-                                         MemoryNode);
+    Items.hMemory = InsertIntoTreeView(m_hTreeRoot, MemoryNode);
+
+    CResourceTypeNode *LargeMemoryNode = new CResourceTypeNode(IDS_TYPE_LARGEMEMORY, &m_ImageListData);
+    Items.hLargeMemory = InsertIntoTreeView(m_hTreeRoot, LargeMemoryNode);
 
     CResourceTypeNode *PortNode = new CResourceTypeNode(IDS_TYPE_PORT, &m_ImageListData);
-    hPortTreeItem = InsertIntoTreeView(m_hTreeRoot,
-                                       PortNode);
-
-    CResourceTypeNode *DmaNode = new CResourceTypeNode(IDS_TYPE_DMA, &m_ImageListData);
-    hDmaTreeItem = InsertIntoTreeView(m_hTreeRoot,
-                                      DmaNode);
+    Items.hPort = InsertIntoTreeView(m_hTreeRoot, PortNode);
 
     CResourceTypeNode *IrqNode = new CResourceTypeNode(IDS_TYPE_IRQ, &m_ImageListData);
-    hIrqTreeItem = InsertIntoTreeView(m_hTreeRoot,
-                                      IrqNode);
+    Items.hIrq = InsertIntoTreeView(m_hTreeRoot, IrqNode);
 
     // Walk the device tree and add all the resources
-    (void)RecurseResources(m_RootNode->GetDeviceInst(),
-                           hMemoryTreeItem,
-                           hPortTreeItem,
-                           hDmaTreeItem,
-                           hIrqTreeItem);
+    (void)RecurseResources(m_RootNode->GetDeviceInst(), &Items);
+
+    SortResourceNodes(Items.hMemory);
+    SortResourceNodes(Items.hLargeMemory);
+    SortResourceNodes(Items.hPort);
+    SortResourceNodes(Items.hIrq);
+    SortResourceNodes(Items.hDma);
 
     // Sort the resource types alphabetically
     (void)TreeView_SortChildren(m_hTreeView,
@@ -650,19 +682,69 @@ CDeviceView::ListResourcesByType()
     return true;
 }
 
+void
+CDeviceView::AddResourceNodes(
+    _In_ CDeviceNode *DeviceNode,
+    _Inout_ PRESOURCE_TREE_ITEMS Items
+    )
+{
+    ULONG Index;
+
+    PCM_RESOURCE_LIST pResourceList = (PCM_RESOURCE_LIST)GetResourceList(DeviceNode->GetDeviceId());
+    if (pResourceList == NULL)
+        return;
+
+    INTERFACE_TYPE InterfaceType = pResourceList->List[0].InterfaceType;
+
+    for (Index = 0; Index < pResourceList->List[0].PartialResourceList.Count; Index++)
+    {
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor = &pResourceList->List[0].PartialResourceList.PartialDescriptors[Index];
+        HTREEITEM hParent = NULL;
+
+        if (Descriptor->Type == CmResourceTypeInterrupt)
+        {
+            hParent = Items->hIrq;
+        }
+        else if (Descriptor->Type == CmResourceTypePort)
+        {
+            hParent = Items->hPort;
+        }
+        else if (Descriptor->Type == CmResourceTypeMemory)
+        {
+            hParent = (Descriptor->u.Memory.Start.QuadPart >= 0x100000000ULL) ? Items->hLargeMemory : Items->hMemory;
+        }
+        else if (Descriptor->Type == CmResourceTypeDma)
+        {
+            if (Items->hDma == NULL)
+            {
+                CResourceTypeNode *DmaNode = new CResourceTypeNode(IDS_TYPE_DMA, &m_ImageListData);
+                Items->hDma = InsertIntoTreeView(m_hTreeRoot, DmaNode);
+            }
+            hParent = Items->hDma;
+        }
+        else if (Descriptor->Type == CmResourceTypeDeviceSpecific)
+        {
+            Index += (Descriptor->u.DeviceSpecificData.DataSize + sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR) - 1) / sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+        }
+
+        if (hParent != NULL)
+        {
+            CResourceNode *resNode = new CResourceNode(DeviceNode, InterfaceType, Descriptor, &m_ImageListData);
+            InsertIntoTreeView(hParent, resNode);
+        }
+    }
+
+    HeapFree(GetProcessHeap(), 0, pResourceList);
+}
 
 bool
 CDeviceView::RecurseResources(
     _In_ DEVINST ParentDevice,
-    _In_ HTREEITEM hMemoryTreeItem,
-    _In_ HTREEITEM hPortTreeItem,
-    _In_ HTREEITEM hDmaTreeItem,
-    _In_ HTREEITEM hIrqTreeItem
+    _Inout_ PRESOURCE_TREE_ITEMS Items
     )
 {
     DEVINST Device;
     bool bSuccess;
-    ULONG Index;
 
     // Check if the parent has any child devices
     if (GetChildDevice(ParentDevice, &Device) == FALSE)
@@ -676,40 +758,8 @@ CDeviceView::RecurseResources(
         return false;
     }
 
-    PCM_RESOURCE_LIST pResourceList = (PCM_RESOURCE_LIST)GetResourceList(DeviceNode->GetDeviceId());
-    if (pResourceList)
-    {
-
-        for (Index = 0; Index < pResourceList->List[0].PartialResourceList.Count; Index++)
-        {
-            PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor = &pResourceList->List[0].PartialResourceList.PartialDescriptors[Index];
-
-            if (Descriptor->Type == CmResourceTypeInterrupt)
-            {
-                CResourceNode *resNode = new CResourceNode(DeviceNode, Descriptor, &m_ImageListData);
-                InsertIntoTreeView(hIrqTreeItem, resNode);
-            }
-            else if (Descriptor->Type == CmResourceTypePort)
-            {
-                CResourceNode *resNode = new CResourceNode(DeviceNode, Descriptor, &m_ImageListData);
-                InsertIntoTreeView(hPortTreeItem, resNode);
-            }
-            else if (Descriptor->Type == CmResourceTypeMemory)
-            {
-                CResourceNode *resNode = new CResourceNode(DeviceNode, Descriptor, &m_ImageListData);
-                InsertIntoTreeView(hMemoryTreeItem, resNode);
-            }
-            else if (Descriptor->Type == CmResourceTypeDma)
-            {
-                CResourceNode *resNode = new CResourceNode(DeviceNode, Descriptor, &m_ImageListData);
-                InsertIntoTreeView(hDmaTreeItem, resNode);
-            }
-        }
-
-        HeapFree(GetProcessHeap(), 0, pResourceList);
-    }
-
-    RecurseResources(Device, hMemoryTreeItem, hPortTreeItem, hDmaTreeItem, hIrqTreeItem);
+    AddResourceNodes(DeviceNode, Items);
+    RecurseResources(Device, Items);
 
     // Check for siblings
     for (;;)
@@ -725,56 +775,9 @@ CDeviceView::RecurseResources(
             continue;
         }
 
-        PCM_RESOURCE_LIST pResourceList = (PCM_RESOURCE_LIST)GetResourceList(DeviceNode->GetDeviceId());
-        if (pResourceList)
-        {
-            for (Index = 0; Index < pResourceList->List[0].PartialResourceList.Count; Index++)
-            {
-                PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor = &pResourceList->List[0].PartialResourceList.PartialDescriptors[Index];
-
-                if (Descriptor->Type == CmResourceTypeInterrupt)
-                {
-                    CResourceNode *resNode = new CResourceNode(DeviceNode, Descriptor, &m_ImageListData);
-                    InsertIntoTreeView(hIrqTreeItem, resNode);
-                }
-                else if (Descriptor->Type == CmResourceTypePort)
-                {
-                    CResourceNode *resNode = new CResourceNode(DeviceNode, Descriptor, &m_ImageListData);
-                    InsertIntoTreeView(hPortTreeItem, resNode);
-                }
-                else if (Descriptor->Type == CmResourceTypeMemory)
-                {
-                    CResourceNode *resNode = new CResourceNode(DeviceNode, Descriptor, &m_ImageListData);
-                    InsertIntoTreeView(hMemoryTreeItem, resNode);
-                }
-                else if (Descriptor->Type == CmResourceTypeDma)
-                {
-                    CResourceNode *resNode = new CResourceNode(DeviceNode, Descriptor, &m_ImageListData);
-                    InsertIntoTreeView(hDmaTreeItem, resNode);
-                }
-            }
-
-            HeapFree(GetProcessHeap(), 0, pResourceList);
-        }
-
-        RecurseResources(Device, hMemoryTreeItem, hPortTreeItem, hDmaTreeItem, hIrqTreeItem);
+        AddResourceNodes(DeviceNode, Items);
+        RecurseResources(Device, Items);
     }
-
-    (void)TreeView_SortChildren(m_hTreeView,
-                                hMemoryTreeItem,
-                                0);
-
-    (void)TreeView_SortChildren(m_hTreeView,
-                                hPortTreeItem,
-                                0);
-
-    (void)TreeView_SortChildren(m_hTreeView,
-                                hIrqTreeItem,
-                                0);
-
-    (void)TreeView_SortChildren(m_hTreeView,
-                                hDmaTreeItem,
-                                0);
 
     return true;
 }

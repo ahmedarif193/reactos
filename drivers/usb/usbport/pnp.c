@@ -2595,6 +2595,36 @@ USBPORT_CreatePdo(IN PDEVICE_OBJECT FdoDevice,
     return Status;
 }
 
+static
+VOID
+USBPORT_LimitMessageInterrupts(IN PIO_RESOURCE_REQUIREMENTS_LIST Requirements)
+{
+    PIO_RESOURCE_LIST List;
+    ULONG Limit, i, j;
+
+    if (!Requirements)
+        return;
+
+    Limit = KeQueryActiveProcessorCount(NULL) + 1;
+    List = &Requirements->List[0];
+    for (i = 0; i < Requirements->AlternativeLists; i++)
+    {
+        for (j = 0; j < List->Count; j++)
+        {
+            PIO_RESOURCE_DESCRIPTOR Descriptor = &List->Descriptors[j];
+            if (Descriptor->Type == CmResourceTypeInterrupt &&
+                (Descriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+            {
+                if (Descriptor->u.Interrupt.MaximumVector > Limit)
+                    Descriptor->u.Interrupt.MaximumVector = Limit;
+                if (Descriptor->u.Interrupt.MinimumVector > Limit)
+                    Descriptor->u.Interrupt.MinimumVector = Limit;
+            }
+        }
+        List = (PIO_RESOURCE_LIST)&List->Descriptors[List->Count];
+    }
+}
+
 NTSTATUS
 NTAPI
 USBPORT_FdoPnP(IN PDEVICE_OBJECT FdoDevice,
@@ -2891,6 +2921,7 @@ Exit:
 
         case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
             DPRINT("IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
+            USBPORT_LimitMessageInterrupts((PIO_RESOURCE_REQUIREMENTS_LIST)Irp->IoStatus.Information);
             goto ForwardIrp;
 
         case IRP_MN_READ_CONFIG:

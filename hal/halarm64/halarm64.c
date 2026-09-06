@@ -8,6 +8,7 @@
 #include <ntifs.h>
 #include <arc/arc.h>
 #include <ndk/kefuncs.h>
+#include <ndk/iofuncs.h>
 #include <ndk/inbvfuncs.h>
 #include <ioaccess.h>
 #include <halfuncs.h>
@@ -1505,8 +1506,50 @@ HalpReportResourceUsage(
     _In_ PUNICODE_STRING HalName,
     _In_ INTERFACE_TYPE InterfaceType)
 {
-    UNREFERENCED_PARAMETER(InterfaceType);
+    PCM_RESOURCE_LIST RawList, TranslatedList;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc;
+    ULONG ListSize;
+    ULONG TimerVector = 27;
+
     DbgPrint("%wZ initialized\n", HalName);
+
+    if (HalpArm64GtdtInfo.Present)
+    {
+        if (HalpArm64GtdtInfo.NonSecureEl1Interrupt)
+            TimerVector = HalpArm64GtdtInfo.NonSecureEl1Interrupt;
+        else if (HalpArm64GtdtInfo.VirtualTimerInterrupt)
+            TimerVector = HalpArm64GtdtInfo.VirtualTimerInterrupt;
+        else if (HalpArm64GtdtInfo.SecureEl1Interrupt)
+            TimerVector = HalpArm64GtdtInfo.SecureEl1Interrupt;
+    }
+
+    ListSize = sizeof(CM_RESOURCE_LIST) + sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+    RawList = ExAllocatePoolWithTag(NonPagedPool, 2 * ListSize, TAG_HAL);
+    if (!RawList)
+        return;
+
+    RtlZeroMemory(RawList, 2 * ListSize);
+    TranslatedList = (PCM_RESOURCE_LIST)((PUCHAR)RawList + ListSize);
+    RawList->Count = 1;
+    RawList->List[0].InterfaceType = InterfaceType;
+    RawList->List[0].BusNumber = 0;
+    RawList->List[0].PartialResourceList.Version = 1;
+    RawList->List[0].PartialResourceList.Revision = 1;
+    RawList->List[0].PartialResourceList.Count = 2;
+
+    Desc = RawList->List[0].PartialResourceList.PartialDescriptors;
+    Desc[0].Type = CmResourceTypeInterrupt;
+    Desc[0].ShareDisposition = CmResourceShareDriverExclusive;
+    Desc[0].Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+    Desc[0].u.Interrupt.Level = 0;
+    Desc[0].u.Interrupt.Vector = HAL_ARM64_SGI_IPI;
+    Desc[0].u.Interrupt.Affinity = 0xFFFFFFFF;
+    Desc[1] = Desc[0];
+    Desc[1].u.Interrupt.Vector = TimerVector;
+
+    RtlCopyMemory(TranslatedList, RawList, ListSize);
+    IoReportHalResourceUsage(HalName, RawList, TranslatedList, ListSize);
+    ExFreePoolWithTag(RawList, TAG_HAL);
 }
 
 VOID

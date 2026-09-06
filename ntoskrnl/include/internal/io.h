@@ -565,6 +565,12 @@ IopAssignDeviceResources(
     IN PDEVICE_NODE DeviceNode
 );
 
+VOID
+NTAPI
+IopInitializeSystemResourceMap(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock
+);
+
 NTSTATUS
 NTAPI
 IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList, OUT PCM_RESOURCE_LIST *ResourceList, _In_opt_ PDEVICE_NODE DeviceNode);

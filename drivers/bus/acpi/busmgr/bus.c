@@ -1275,8 +1275,18 @@ acpi_bus_add (
 		}
 		if (info->Valid & ACPI_VALID_HID)
 			hid = info->HardwareId.String;
-		if (info->Valid & ACPI_VALID_UID)
+		if (info->Valid & ACPI_VALID_UID) {
+			ACPI_BUFFER UidBuffer = { ACPI_ALLOCATE_BUFFER, NULL };
 			uid = info->UniqueId.String;
+			if (ACPI_SUCCESS(AcpiEvaluateObject(handle, "_UID", NULL, &UidBuffer)) && UidBuffer.Pointer) {
+				ACPI_OBJECT *UidObject = UidBuffer.Pointer;
+				if (UidObject->Type == ACPI_TYPE_INTEGER) {
+					snprintf(static_uid_buffer, sizeof(static_uid_buffer), "%llx", (unsigned long long)UidObject->Integer.Value);
+					uid = static_uid_buffer;
+				}
+				AcpiOsFree(UidBuffer.Pointer);
+			}
+		}
 		if (info->Valid & ACPI_VALID_CID) {
 			cid_list = &info->CompatibleIdList;
 			device->pnp.cid_list = ExAllocatePoolWithTag(NonPagedPool,cid_list->ListSize, 'DpcA');

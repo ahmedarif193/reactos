@@ -8,6 +8,7 @@ list(APPEND INF_FILES
     display.inf
     fdc.inf
     flpydisk.inf
+    cpu.inf
     hal.inf
     hdc.inf
     input.inf

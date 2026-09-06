@@ -989,7 +989,7 @@ HalpAcpiGetRegisterByteWidth(
 
 /* This determines the HAL type */
 BOOLEAN HalDisableFirmwareMapper = TRUE;
-PWCHAR HalHardwareIdString = L"acpipic_up";
+PWCHAR HalHardwareIdString = L"ACPIARM64";
 PWCHAR HalName = L"ACPI Compatible Eisa/Isa HAL";
 
 /* PRIVATE FUNCTIONS **********************************************************/
@@ -3073,7 +3073,7 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
      */
 #if defined(_M_ARM64) || defined(__aarch64__)
     /* ARM64 always uses GIC (Generic Interrupt Controller) */
-    HalName = L"ACPI ARM64-based System";
+    HalName = L"ACPI ARM64-based PC";
 #else
     if (HalpIsApicInterruptController())
     {
