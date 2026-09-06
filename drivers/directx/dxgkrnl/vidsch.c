@@ -1539,8 +1539,32 @@ VidSchpFaultDumpWorker(
     _In_ PVOID Parameter)
 {
     PVIDSCH_ENGINE Engine = (PVIDSCH_ENGINE)Parameter;
+    ULONG FaultFlags;
 
     PAGED_CODE();
+    FaultFlags = (ULONG)InterlockedExchange(
+                            (volatile LONG *)&Engine->LastFaultFlags,
+                            0);
+
+    /*
+     * A reset-required page fault stops this engine until the prescribed
+     * reset DDI completes.  Do that before the diagnostic walk: the walk can
+     * take seconds on a large GPU-VA space, while the miniport is waiting for
+     * DxgkDdiResetEngine and cannot retire another fence.  Native dxgmms2
+     * likewise puts the node in resetting state, flushes queued DPCs, and
+     * invokes the engine reset while the hardware queue still has outstanding
+     * packets.
+     */
+    if ((FaultFlags & DXGK_PAGE_FAULT_ENGINE_RESET_REQUIRED) != 0)
+    {
+        NTSTATUS ResetStatus =
+            VidSchResetEngine(Engine->Adapter,
+                              Engine->SchedulerOrdinal);
+
+        DXGKRNL_ERR("VidSch: engine %lu reset after page fault -> 0x%08lX\n",
+                    Engine->SchedulerOrdinal, ResetStatus);
+    }
+
     if (Engine->LastFaultDmaGpuVa != 0)
     {
         DXGKRNL_ERR("VidSch: engine fault dump fence=%lu dma va=0x%I64x size=%lu process=%p\n",
@@ -1566,39 +1590,22 @@ VidSchpFaultDumpWorker(
      * silent rather than reporting an error.  The reset DDI is PASSIVE_LEVEL
      * only, which is why it happens here and not in the fault consumer.
      */
-    if ((Engine->LastFaultFlags &
-             (DXGK_PAGE_FAULT_ENGINE_RESET_REQUIRED |
-              DXGK_PAGE_FAULT_ADAPTER_RESET_REQUIRED |
+    if ((FaultFlags &
+             (DXGK_PAGE_FAULT_ADAPTER_RESET_REQUIRED |
               DXGK_PAGE_FAULT_FATAL_HARDWARE_ERROR)) != 0)
     {
-        ULONG FaultFlags = Engine->LastFaultFlags;
-
-        Engine->LastFaultFlags = 0;
-
         /*
-         * Only the engine case is remedied here.  ADAPTER_RESET_REQUIRED asks
-         * for a full adapter reset and FATAL_HARDWARE_ERROR asks the OS to
-         * bugcheck; an engine reset is not a substitute for either, so they are
-         * reported rather than silently under-handled.
+         * ADAPTER_RESET_REQUIRED asks for a full adapter reset and
+         * FATAL_HARDWARE_ERROR asks the OS to bugcheck; an engine reset is not
+         * a substitute for either, so report them rather than silently
+         * under-handling the notification.
          * TODO: drive DxgkDdiResetFromTimeout/DxgkDdiRestartFromTimeout (see
          * TdrResetFromTimeout in dxgkrnl.c) for the adapter case.
          */
-        if ((FaultFlags & DXGK_PAGE_FAULT_ENGINE_RESET_REQUIRED) != 0)
-        {
-            NTSTATUS ResetStatus =
-                VidSchResetEngine(Engine->Adapter, Engine->SchedulerOrdinal);
-
-            DXGKRNL_ERR("VidSch: engine %lu reset after page fault -> 0x%08lX\n",
-                        Engine->SchedulerOrdinal, ResetStatus);
-        }
-        if ((FaultFlags & (DXGK_PAGE_FAULT_ADAPTER_RESET_REQUIRED |
-                           DXGK_PAGE_FAULT_FATAL_HARDWARE_ERROR)) != 0)
-        {
-            DXGKRNL_ERR("VidSch: page fault flags 0x%lx demand an adapter reset "
-                        "or bugcheck, which is not implemented; the GPU will not "
-                        "recover on its own\n",
-                        FaultFlags);
-        }
+        DXGKRNL_ERR("VidSch: page fault flags 0x%lx demand an adapter reset "
+                    "or bugcheck, which is not implemented; the GPU will not "
+                    "recover on its own\n",
+                    FaultFlags);
     }
     InterlockedExchange(&Engine->FaultDumpQueued, 0);
 }
@@ -1673,6 +1680,17 @@ VidSchpConsumePageFaultInterrupt(
                  &Device);
     if (Packet == NULL)
         goto Exit;
+
+    /* Stop new claims before diagnostics or PASSIVE_LEVEL recovery work can
+     * yield.  The miniport explicitly said this engine cannot execute more
+     * work until it is reset. */
+    if ((NotifyData.DmaPageFaulted.PageFaultFlags &
+             DXGK_PAGE_FAULT_ENGINE_RESET_REQUIRED) != 0 &&
+        !VidSchpForceEngineState(Engine, VidSchEngineResetting))
+    {
+        DXGKRNL_ERR("VidSch: unable to block engine %lu for page-fault reset\n",
+                    Engine->SchedulerOrdinal);
+    }
 
     RtlZeroMemory(&PageFaultState, sizeof(PageFaultState));
     PageFaultState.FaultedPrimitiveAPISequenceNumber =
@@ -4140,8 +4158,14 @@ VidSchResetEngine(
     PVIDSCH_CONTEXT Ctx;
     PVIDSCH_ENGINE Engine;
     DXGKARG_RESETENGINE ResetArgs;
+    PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched;
+    DXGMMS2_SCHEDULER_ENGINE_STATUS_V1 EngineStatus;
     VIDSCH_ENGINE_STATE OldState;
     KIRQL OldIrql;
+    ULONGLONG ResetCookies[DXGMMS2_SCHEDULER_MAX_RETIREMENTS];
+    ULONG ResetCount;
+    BOOLEAN KmdExclusive = FALSE;
+    BOOLEAN KmdCallAcquired = FALSE;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -4169,6 +4193,12 @@ VidSchResetEngine(
     }
 
     Engine = &Ctx->Engines[EngineOrdinal];
+    Sched = VidSchpScheduler(Adapter);
+    if (Sched == NULL)
+    {
+        VidSchpReleaseCall(Adapter);
+        return STATUS_DEVICE_NOT_READY;
+    }
     ExAcquireFastMutex(&Ctx->LifecycleMutex);
     if (VidSchpReadSchedulerState(Ctx) != VidSchSchedulerRunning && VidSchpReadSchedulerState(Ctx) != VidSchSchedulerSuspended)
     {
@@ -4176,35 +4206,44 @@ VidSchResetEngine(
         VidSchpReleaseCall(Adapter);
         return STATUS_DEVICE_BUSY;
     }
-    if (!DxgkAcquireKmdCall(Adapter))
-    {
-        ExReleaseFastMutex(&Ctx->LifecycleMutex);
-        VidSchpReleaseCall(Adapter);
-        return STATUS_DELETE_PENDING;
-    }
-
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-    if (VidSchpEnginePendingCount(Adapter, Engine->SchedulerOrdinal) != 0)
-    {
-        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
-        ExReleaseFastMutex(&Ctx->LifecycleMutex);
-        DxgkReleaseKmdCall(Adapter);
-        VidSchpReleaseCall(Adapter);
-        return STATUS_NOT_SUPPORTED;
-    }
-
     OldState = VidSchpReadState(Engine);
     if (!VidSchpTryTransitionEngine(Engine, OldState, VidSchEngineResetting))
     {
         KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
-        DxgkReleaseKmdCall(Adapter);
         VidSchpReleaseCall(Adapter);
         return STATUS_INVALID_DEVICE_STATE;
     }
     KeCancelTimer(&Engine->TdrTimer);
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
+
+    /*
+     * Native VidSchiResetEngine first publishes the resetting state, flushes
+     * queued completion DPCs, and only then snapshots the queue passed to
+     * DxgkDdiResetEngine.  The exclusive boundary additionally drains a KMD
+     * submission that acquired admission just before the state publication.
+     */
+    DxgkBeginKmdExclusive(Adapter);
+    KmdExclusive = TRUE;
+    KeFlushQueuedDpcs();
+
+    RtlZeroMemory(&EngineStatus, sizeof(EngineStatus));
+    EngineStatus.Size = DXGMMS2_SCHEDULER_ENGINE_STATUS_V1_SIZE;
+    EngineStatus.Version = DXGMMS2_SCHEDULER_VERSION_1;
+    Status = Sched->QueryEngineStatus(Sched->SchedulerHandle,
+                                      EngineOrdinal,
+                                      &EngineStatus);
+    if (!NT_SUCCESS(Status))
+        goto ResetFailed;
+
+    if (!DxgkAcquireKmdCall(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto ResetFailed;
+    }
+    KmdCallAcquired = TRUE;
 
     /*
      * Ask for the engine back before taking it.  Preemption is the graceful
@@ -4244,7 +4283,6 @@ VidSchResetEngine(
     RtlZeroMemory(&ResetArgs, sizeof(ResetArgs));
     ResetArgs.NodeOrdinal = EngineOrdinal;
     ResetArgs.EngineOrdinal = 0;
-    ResetArgs.LastAbortedFenceId = (UINT)Engine->LastCompletedFence;
 
     _SEH2_TRY
     {
@@ -4256,34 +4294,98 @@ VidSchResetEngine(
     }
     _SEH2_END;
     DxgkReleaseKmdCall(Adapter);
+    KmdCallAcquired = FALSE;
 
     if (NT_SUCCESS(Status))
     {
-        PDXGMMS2_SCHEDULER_INTERFACE_V1 ResetSched = VidSchpScheduler(Adapter);
-        DXGMMS2_SCHEDULER_ENGINE_STATUS_V1 ResetStatus;
-
-        RtlZeroMemory(&ResetStatus, sizeof(ResetStatus));
-        ResetStatus.Size = DXGMMS2_SCHEDULER_ENGINE_STATUS_V1_SIZE;
-        ResetStatus.Version = DXGMMS2_SCHEDULER_VERSION_1;
-        if (ResetSched == NULL || !NT_SUCCESS(ResetSched->QueryEngineStatus(ResetSched->SchedulerHandle, Engine->SchedulerOrdinal, &ResetStatus)))
-            Status = STATUS_DEVICE_NOT_READY;
-        else if ((LONG)(ResetArgs.LastAbortedFenceId - (ULONG)Engine->LastCompletedFence) < 0 || (LONG)(ResetStatus.LastSubmittedFenceId - ResetArgs.LastAbortedFenceId) < 0)
+        if ((LONG)(ResetArgs.LastAbortedFenceId -
+                   EngineStatus.LastCompletedFenceId) < 0 ||
+            (LONG)(EngineStatus.LastSubmittedFenceId -
+                   ResetArgs.LastAbortedFenceId) < 0)
+        {
             Status = STATUS_DEVICE_PROTOCOL_ERROR;
+        }
     }
 
     if (NT_SUCCESS(Status))
     {
-        VidSchpTryTransitionEngine(Engine, VidSchEngineResetting, VidSchEngineResetComplete);
-        if (VidSchpReadSchedulerState(Ctx) == VidSchSchedulerSuspended)
-            VidSchpTryTransitionEngine(Engine, VidSchEngineResetComplete, VidSchEngineSuspended);
-        else
-            VidSchpTryTransitionEngine(Engine, VidSchEngineResetComplete, VidSchEngineIdle);
-    }
-    else
-    {
-        VidSchpTryTransitionEngine(Engine, VidSchEngineResetting, VidSchEngineError);
+        /*
+         * LastAbortedFenceId is the native completion boundary: commands
+         * through it are terminal after the reset, while later commands in
+         * the hardware queue must be offered again.  Advance the provider to
+         * that boundary first, then clear the dispatched mark only on the
+         * surviving suffix.  The next claim carries the resubmission flag.
+         */
+        Status = Sched->NotifyCompletion(
+                            Sched->SchedulerHandle,
+                            EngineOrdinal,
+                            ResetArgs.LastAbortedFenceId);
+        if (NT_SUCCESS(Status))
+            (VOID)VidSchpDrainRetirements(Adapter);
     }
 
+    if (NT_SUCCESS(Status))
+    {
+        do
+        {
+            ResetCount = 0;
+            Status = Sched->ResetDispatched(
+                                Sched->SchedulerHandle,
+                                EngineOrdinal,
+                                ResetCookies,
+                                RTL_NUMBER_OF(ResetCookies),
+                                &ResetCount);
+        } while (NT_SUCCESS(Status) &&
+                 ResetCount == RTL_NUMBER_OF(ResetCookies));
+
+        KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+        while (!IsListEmpty(&Engine->ActivePacketList))
+        {
+            PLIST_ENTRY Entry =
+                RemoveHeadList(&Engine->ActivePacketList);
+
+            InitializeListHead(Entry);
+        }
+        KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        if (!VidSchpTryTransitionEngine(
+                 Engine,
+                 VidSchEngineResetting,
+                 VidSchEngineResetComplete) ||
+            !VidSchpTryTransitionEngine(
+                 Engine,
+                 VidSchEngineResetComplete,
+                 VidSchpReadSchedulerState(Ctx) == VidSchSchedulerSuspended
+                     ? VidSchEngineSuspended
+                     : VidSchEngineIdle))
+        {
+            Status = STATUS_INVALID_DEVICE_STATE;
+            goto ResetFailed;
+        }
+
+        DxgkEndKmdExclusive(Adapter, TRUE);
+        KmdExclusive = FALSE;
+        (VOID)VidSchpKickEngine(Engine, NULL);
+        goto Exit;
+    }
+
+ResetFailed:
+    if (KmdCallAcquired)
+    {
+        DxgkReleaseKmdCall(Adapter);
+        KmdCallAcquired = FALSE;
+    }
+    (VOID)VidSchpForceEngineState(Engine, VidSchEngineError);
+    if (KmdExclusive)
+    {
+        DxgkEndKmdExclusive(Adapter, FALSE);
+        KmdExclusive = FALSE;
+    }
+
+Exit:
     VidSchpReleaseCall(Adapter);
     return Status;
 }
