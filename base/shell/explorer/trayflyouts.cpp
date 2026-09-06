@@ -22,7 +22,7 @@ enum
     TFY_ANIM_INITIAL_ALPHA = 48,
     TFY_ANIM_OFFSET = 8,
     TFY_REOPEN_GUARD_MS = TFY_ANIM_CLOSE_MS + 20,
-    TFY_FLYOUT_RADIUS = 8
+    TFY_FLYOUT_RADIUS = 0
 };
 
 static double
@@ -44,10 +44,11 @@ public:
     BYTE m_AnimAlpha;
     BYTE m_AnimStartAlpha;
     HTHEME m_hFlyoutTheme;
+    HTHEME m_hFlyoutButtonTheme;
 
     CTrayFlyoutAnimation() : m_AnimPhase(TFY_NONE), m_AnimT0(0),
                              m_AnimAlpha(255), m_AnimStartAlpha(255),
-                             m_hFlyoutTheme(NULL)
+                             m_hFlyoutTheme(NULL), m_hFlyoutButtonTheme(NULL)
     {
         ZeroMemory(&m_ptFinal, sizeof(m_ptFinal));
     }
@@ -56,6 +57,8 @@ public:
     {
         if (m_hFlyoutTheme)
             CloseThemeData(m_hFlyoutTheme);
+        if (m_hFlyoutButtonTheme)
+            CloseThemeData(m_hFlyoutButtonTheme);
     }
 
     VOID RefreshFlyoutMaterial(HWND hWnd, COLORREF crBackground)
@@ -70,8 +73,14 @@ public:
             CloseThemeData(m_hFlyoutTheme);
             m_hFlyoutTheme = NULL;
         }
+        if (m_hFlyoutButtonTheme)
+        {
+            CloseThemeData(m_hFlyoutButtonTheme);
+            m_hFlyoutButtonTheme = NULL;
+        }
         SetWindowTheme(hWnd, pszClass, NULL);
         m_hFlyoutTheme = OpenThemeData(hWnd, pszClass);
+        m_hFlyoutButtonTheme = OpenThemeData(hWnd, L"Button");
     }
 
     VOID BeginFlyoutOpen(HWND hWnd, int x, int y, int cx, int cy,
@@ -162,6 +171,33 @@ TfyMix(COLORREF a, COLORREF b, int t)
     return RGB(GetRValue(a) + MulDiv(GetRValue(b) - GetRValue(a), t, 255),
                GetGValue(a) + MulDiv(GetGValue(b) - GetGValue(a), t, 255),
                GetBValue(a) + MulDiv(GetBValue(b) - GetBValue(a), t, 255));
+}
+
+static VOID
+TfyDrawFlyoutFrame(HDC hdc, const RECT *prc, const SM2_FLYOUT_PALETTE *pPal)
+{
+    RECT rc = *prc;
+    HBRUSH hbr = CreateSolidBrush(RGB(0, 0, 0));
+    FrameRect(hdc, &rc, hbr);
+    DeleteObject(hbr);
+    InflateRect(&rc, -1, -1);
+    hbr = CreateSolidBrush(TfyMix(pPal->PanelBg, RGB(255, 255, 255), 55));
+    FrameRect(hdc, &rc, hbr);
+    DeleteObject(hbr);
+}
+
+static VOID
+TfyDrawThemeButton(HTHEME hTheme, HDC hdc, const RECT *prc, int iState, const SM2_FLYOUT_PALETTE *pPal)
+{
+    if (hTheme && SUCCEEDED(DrawThemeBackground(hTheme, hdc, BP_PUSHBUTTON, iState, prc, NULL)))
+        return;
+    COLORREF crFill = (iState > 4) ? pPal->AccentBg : TfyMix(pPal->PanelBg, pPal->DimText, 60);
+    HBRUSH hbr = CreateSolidBrush(crFill);
+    FillRect(hdc, prc, hbr);
+    DeleteObject(hbr);
+    hbr = CreateSolidBrush(TfyMix(crFill, pPal->PanelText, 60));
+    FrameRect(hdc, prc, hbr);
+    DeleteObject(hbr);
 }
 
 static HFONT
@@ -630,9 +666,7 @@ public:
         HBRUSH hbr = CreateSolidBrush(m_Pal.PanelBg);
         FillRect(hdcMem, &rc, hbr);
         DeleteObject(hbr);
-        HBRUSH hbrEdge = CreateSolidBrush(m_Pal.Border);
-        FrameRect(hdcMem, &rc, hbrEdge);
-        DeleteObject(hbrEdge);
+        TfyDrawFlyoutFrame(hdcMem, &rc, &m_Pal);
 
         SetBkMode(hdcMem, TRANSPARENT);
         HGDIOBJ hFontOld = SelectObject(hdcMem, m_hFont);
@@ -2548,9 +2582,7 @@ public:
         hbr = CreateSolidBrush(m_Pal.PanelBg);
         FillRect(hdcMem, &rc, hbr);
         DeleteObject(hbr);
-        hbr = CreateSolidBrush(m_Pal.Border);
-        FrameRect(hdcMem, &rc, hbr);
-        DeleteObject(hbr);
+        TfyDrawFlyoutFrame(hdcMem, &rc, &m_Pal);
 
         SetBkMode(hdcMem, TRANSPARENT);
         GetLocalTime(&stNow);
@@ -3940,9 +3972,7 @@ public:
         HBRUSH hbr = CreateSolidBrush(m_Pal.PanelBg);
         FillRect(hdcMem, &rc, hbr);
         DeleteObject(hbr);
-        HBRUSH hbrEdge = CreateSolidBrush(m_Pal.Border);
-        FrameRect(hdcMem, &rc, hbrEdge);
-        DeleteObject(hbrEdge);
+        TfyDrawFlyoutFrame(hdcMem, &rc, &m_Pal);
 
         SetBkMode(hdcMem, TRANSPARENT);
         HGDIOBJ hFontOld = SelectObject(hdcMem, m_hFontSmall);
@@ -4787,9 +4817,7 @@ public:
         HBRUSH hbr = CreateSolidBrush(m_Pal.PanelBg);
         FillRect(hdcMem, &rc, hbr);
         DeleteObject(hbr);
-        HBRUSH hbrEdge = CreateSolidBrush(m_Pal.Border);
-        FrameRect(hdcMem, &rc, hbrEdge);
-        DeleteObject(hbrEdge);
+        TfyDrawFlyoutFrame(hdcMem, &rc, &m_Pal);
         SetBkMode(hdcMem, TRANSPARENT);
 
         WCHAR szHeader[192];
@@ -6468,74 +6496,22 @@ public:
                    row.nSignal >= 50 ? IDI_FLU_WIFI2 :
                    row.nSignal >= 25 ? IDI_FLU_WIFI3 : IDI_FLU_WIFI4;
         }
-        return IDI_FLU_WIFI4;
+        return IDI_FLU_WIFI1;
     }
 
     VOID DrawToggle(HDC hdc, const RECT *prc, LPCWSTR pszLabel, BOOL bOn, BOOL bHot, BOOL bEnabled, UINT nIcon, BOOL bCompact = FALSE)
     {
-        if (bHot && bEnabled)
-        {
-            HBRUSH hbrHot = CreateSolidBrush(TfyMix(m_Pal.PanelBg, m_Pal.HotFill, 130));
-            FillRect(hdc, prc, hbrHot);
-            DeleteObject(hbrHot);
-        }
-        int cyMid = (prc->top + prc->bottom) / 2;
-        COLORREF crText = bEnabled ? m_Pal.PanelText : m_Pal.DimText;
-        int nPad = bCompact ? Sc(12) : Sc(8);
-        RECT rcIcon = { prc->left + nPad, cyMid - Sc(11), prc->left + nPad + Sc(22), cyMid + Sc(11) };
+        RECT rcBtn = *prc;
+        InflateRect(&rcBtn, -Sc(2), -Sc(2));
+        int iState = (bOn ? 4 : 0) + (!bEnabled ? 4 : bHot ? 2 : 1);
+        TfyDrawThemeButton(m_hFlyoutButtonTheme, hdc, &rcBtn, iState, &m_Pal);
+        int cyMid = (rcBtn.top + rcBtn.bottom) / 2;
+        RECT rcIcon = { rcBtn.left + Sc(8), cyMid - Sc(11), rcBtn.left + Sc(8) + Sc(22), cyMid + Sc(11) };
         TfyDrawFluent(hdc, &rcIcon, nIcon);
-        RECT rcSw;
-        if (bCompact)
-            SetRect(&rcSw, rcIcon.right + Sc(8), cyMid - Sc(10),
-                    rcIcon.right + Sc(8) + Sc(44), cyMid + Sc(10));
-        else
-            SetRect(&rcSw, prc->right - nPad - Sc(44), cyMid - Sc(10),
-                    prc->right - nPad, cyMid + Sc(10));
-        if (!bCompact)
-        {
-            RECT rcLabel = { prc->left + Sc(38), prc->top, rcSw.left - Sc(40), prc->bottom };
-            SelectObject(hdc, m_hFont);
-            SetTextColor(hdc, crText);
-            DrawTextW(hdc, pszLabel, -1, &rcLabel, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-            RECT rcState = { rcSw.left - Sc(36), prc->top, rcSw.left - Sc(6), prc->bottom };
-            SelectObject(hdc, m_hFontSmall);
-            SetTextColor(hdc, bEnabled ? m_Pal.DimText : TfyMix(m_Pal.PanelBg, m_Pal.DimText, 150));
-            DrawTextW(hdc, bOn ? L"On" : L"Off", -1, &rcState, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
-        }
-
-        TFYAA aa;
-        int ss = 3;
-        HDC hdcAA = TfyAABegin(&aa, hdc, &rcSw, ss, (bHot && bEnabled) ? TfyMix(m_Pal.PanelBg, m_Pal.HotFill, 130) : m_Pal.PanelBg);
-        int w = (rcSw.right - rcSw.left) * ss;
-        int h = (rcSw.bottom - rcSw.top) * ss;
-        COLORREF crTrack = bOn ? m_Pal.AccentBg : m_Pal.PanelBg;
-        COLORREF crEdge = bOn ? m_Pal.AccentBg : m_Pal.DimText;
-        COLORREF crKnob = bOn ? m_Pal.AccentText : m_Pal.PanelText;
-        if (!bEnabled)
-        {
-            crTrack = TfyMix(m_Pal.PanelBg, crTrack, 90);
-            crEdge = TfyMix(m_Pal.PanelBg, crEdge, 90);
-            crKnob = TfyMix(m_Pal.PanelBg, crKnob, 90);
-        }
-        HBRUSH hbrTrack = CreateSolidBrush(crTrack);
-        HPEN hpenTrack = CreatePen(PS_SOLID, 2 * ss, crEdge);
-        HGDIOBJ hbrOld = SelectObject(hdcAA, hbrTrack);
-        HGDIOBJ hpenOld = SelectObject(hdcAA, hpenTrack);
-        RoundRect(hdcAA, ss, ss, w - ss, h - ss, h, h);
-        SelectObject(hdcAA, hpenOld);
-        SelectObject(hdcAA, hbrOld);
-        DeleteObject(hbrTrack);
-        DeleteObject(hpenTrack);
-        int r = (h / 2) - Sc(4) * ss;
-        int cx = bOn ? (w - h / 2) : (h / 2);
-        HBRUSH hbrKnob = CreateSolidBrush(crKnob);
-        hbrOld = SelectObject(hdcAA, hbrKnob);
-        hpenOld = SelectObject(hdcAA, GetStockObject(NULL_PEN));
-        Ellipse(hdcAA, cx - r, h / 2 - r, cx + r, h / 2 + r);
-        SelectObject(hdcAA, hpenOld);
-        SelectObject(hdcAA, hbrOld);
-        DeleteObject(hbrKnob);
-        TfyAAEnd(&aa, hdc);
+        RECT rcLabel = { rcIcon.right + Sc(6), rcBtn.top, rcBtn.right - Sc(6), rcBtn.bottom };
+        SelectObject(hdc, bCompact ? m_hFontSmall : m_hFont);
+        SetTextColor(hdc, bEnabled ? m_Pal.PanelText : m_Pal.DimText);
+        DrawTextW(hdc, pszLabel, -1, &rcLabel, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 
     VOID DrawLock(HDC hdc, int x, int y, COLORREF cr)
@@ -6556,17 +6532,9 @@ public:
 
     VOID DrawButton(HDC hdc, const RECT *prc, LPCWSTR pszText, BOOL bHot, BOOL bPrimary)
     {
-        COLORREF crFill = bPrimary ? m_Pal.HotBorder : TfyMix(m_Pal.PanelBg, m_Pal.DimText, 60);
-        if (bHot)
-            crFill = TfyMix(crFill, RGB(255, 255, 255), 40);
-        HBRUSH hbr = CreateSolidBrush(crFill);
-        FillRect(hdc, prc, hbr);
-        DeleteObject(hbr);
-        HBRUSH hbrEdge = CreateSolidBrush(TfyMix(crFill, m_Pal.PanelText, 60));
-        FrameRect(hdc, prc, hbrEdge);
-        DeleteObject(hbrEdge);
+        TfyDrawThemeButton(m_hFlyoutButtonTheme, hdc, prc, (bPrimary ? 4 : 0) + (bHot ? 2 : 1), &m_Pal);
         HGDIOBJ hOld = SelectObject(hdc, m_hFont);
-        SetTextColor(hdc, bPrimary ? RGB(255, 255, 255) : m_Pal.PanelText);
+        SetTextColor(hdc, m_Pal.PanelText);
         DrawTextW(hdc, pszText, -1, (LPRECT)prc, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
         SelectObject(hdc, hOld);
     }
@@ -7510,9 +7478,7 @@ public:
         HBRUSH hbr = CreateSolidBrush(m_Pal.PanelBg);
         FillRect(hdcMem, &rc, hbr);
         DeleteObject(hbr);
-        HBRUSH hbrEdge = CreateSolidBrush(m_Pal.Border);
-        FrameRect(hdcMem, &rc, hbrEdge);
-        DeleteObject(hbrEdge);
+        TfyDrawFlyoutFrame(hdcMem, &rc, &m_Pal);
         SetBkMode(hdcMem, TRANSPARENT);
 
         WCHAR szHeader[128], szSub[128];
