@@ -34,6 +34,30 @@ static __attribute__((unused)) VOID KiArm64DbgPrintBacktraceImpl(_In_ PCONTEXT C
 
 static
 BOOLEAN
+KiUserStackPageIsCommitted(
+    _In_ ULONG_PTR Page)
+{
+    MEMORY_BASIC_INFORMATION MemoryInfo;
+    SIZE_T ReturnLength = 0;
+    NTSTATUS Status;
+
+    if (Page == 0 || KeGetCurrentIrql() > PASSIVE_LEVEL)
+        return FALSE;
+
+    Status = ZwQueryVirtualMemory(NtCurrentProcess(),
+                                  (PVOID)Page,
+                                  MemoryBasicInformation,
+                                  &MemoryInfo,
+                                  sizeof(MemoryInfo),
+                                  &ReturnLength);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    return (MemoryInfo.State == MEM_COMMIT);
+}
+
+static
+BOOLEAN
 KiDispatchExceptionToUser(
     _In_ PKTRAP_FRAME TrapFrame,
     _In_ PCONTEXT Context,
@@ -172,6 +196,8 @@ KiDispatchExceptionToUser(
      * removed, PTEs cleared) but the thread still tries to dispatch an
      * exception — e.g., svchost.exe accessing a freed thread stack.
      */
+    _enable();
+
     {
         ULONG64 Ttbr0Val;
         __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0Val));
@@ -214,10 +240,19 @@ KiDispatchExceptionToUser(
             T = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(E & 0x0000FFFFFFFFF000ULL);
             E = T[(ChkPage >> 12) & 0x1FF];
             if ((E & 0x3ULL) != 0x3ULL) { BadPage = ChkPage; goto StackNotMapped; }
+            continue;
+
+        StackNotMapped:
+            if (KiUserStackPageIsCommitted(BadPage))
+            {
+                BadPage = 0;
+                continue;
+            }
+            goto StackUnmapped;
         }
         goto StackOk;
 
-    StackNotMapped:
+    StackUnmapped:
         DPRINT1("[arm64][EXC] KiDispatchExceptionToUser: user exception stack unmapped Start=%p End=%p BadPage=%p Pc=%p Lr=%p\n",
                 (PVOID)StartPage,
                 (PVOID)EndPage,
@@ -229,8 +264,6 @@ KiDispatchExceptionToUser(
     StackOk:
         ;
     }
-
-    _enable();
 
     _SEH2_TRY
     {

@@ -33,6 +33,13 @@ typedef struct _LDRP_TLS_DATA
 
 typedef VOID (NTAPI *PRTLP_FLS_CALLBACK_DISPATCHER)(PFLS_CALLBACK_FUNCTION Callback, PVOID Data);
 
+typedef BOOLEAN (NTAPI *PRTLP_RUN_ONCE_CALLBACK_DISPATCHER)(PRTL_RUN_ONCE_INIT_FN InitFn, PRTL_RUN_ONCE RunOnce, PVOID Parameter, PVOID *Context);
+
+VOID
+NTAPI
+RtlpSetRunOnceCallbackDispatcher(
+    _In_opt_ PRTLP_RUN_ONCE_CALLBACK_DISPATCHER Dispatcher);
+
 VOID
 NTAPI
 RtlpSetFlsCallbackDispatcher(

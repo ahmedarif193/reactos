@@ -1,0 +1,5 @@
+[Version]
+Signature = "$Windows NT$"
+
+[AddReg]
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","N64Emulator",0x00020000,"%SystemRoot%\system32\cmd.exe /c ""%SystemRoot%\n64emu\n64emu-launch.cmd"""

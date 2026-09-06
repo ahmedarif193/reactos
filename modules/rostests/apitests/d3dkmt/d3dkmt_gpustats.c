@@ -459,6 +459,168 @@ static void Test_QueryStatistics_SegmentGroups(void)
     CloseAdapter(hAdapter);
 }
 
+/* ---- Segment and segment-group memory-list usage (WDDM 3.1) ---- */
+static void Test_QueryStatistics_SegmentUsage(void)
+{
+    D3DKMT_QUERYSTATISTICS Statistics;
+    D3DKMT_HANDLE hAdapter;
+    LUID Luid;
+    NTSTATUS Status;
+    ULONGLONG SegmentAllocatedTotal = 0;
+    ULONGLONG GroupAllocatedTotal = 0;
+    ULONG Segments, i;
+    int group;
+    BOOL Available = TRUE;
+
+    LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
+
+    hAdapter = OpenAdapterFromDisplay1();
+    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
+    if (!GetAdapterLuid(hAdapter, &Luid)) { CloseAdapter(hAdapter); skip("No adapter LUID\n"); return; }
+
+    Status = Query(pfn, &Statistics, D3DKMT_QUERYSTATISTICS_ADAPTER, Luid);
+    if (!NT_SUCCESS(Status)) { CloseAdapter(hAdapter); skip("QueryStatistics(ADAPTER) failed\n"); return; }
+    Segments = Statistics.QueryResult.AdapterInformation.NbSegments;
+
+    for (i = 0; i < Segments; i++)
+    {
+        const D3DKMT_QUERYSTATISTICS_MEMORY_USAGE *Usage;
+        ULONGLONG Limit = 0;
+
+        memset(&Statistics, 0, sizeof(Statistics));
+        Statistics.Type = D3DKMT_QUERYSTATISTICS_SEGMENT;
+        Statistics.AdapterLuid = Luid;
+        Statistics.QuerySegment.SegmentId = i;
+        if (NT_SUCCESS(pfn(&Statistics)))
+            Limit = Statistics.QueryResult.SegmentInformation.CommitLimit;
+
+        memset(&Statistics, 0, sizeof(Statistics));
+        Statistics.Type = D3DKMT_QUERYSTATISTICS_SEGMENT_USAGE;
+        Statistics.AdapterLuid = Luid;
+        Statistics.QuerySegmentUsage.PhysicalAdapterIndex = 0;
+        Statistics.QuerySegmentUsage.SegmentId = (UINT16)i;
+        Status = pfn(&Statistics);
+        if (!NT_SUCCESS(Status))
+        {
+            if (StatisticsClassUnavailable(Status))
+            {
+                Available = FALSE;
+                skip("QueryStatistics(SEGMENT_USAGE %lu) unavailable (0x%08lX)\n",
+                     (unsigned long)i, (long)Status);
+                break;
+            }
+            ok_succeeded(Status, "QueryStatistics(SEGMENT_USAGE %lu) failed 0x%08lX\n",
+                         (unsigned long)i, (long)Status);
+            continue;
+        }
+
+        Usage = &Statistics.QueryResult.SegmentUsageInformation;
+        trace("Segment %lu usage: allocated=%llu free=%llu zero=%llu modified=%llu standby=%llu limit=%llu\n",
+              (unsigned long)i,
+              (unsigned long long)Usage->AllocatedBytes,
+              (unsigned long long)Usage->FreeBytes,
+              (unsigned long long)Usage->ZeroBytes,
+              (unsigned long long)Usage->ModifiedBytes,
+              (unsigned long long)Usage->StandbyBytes,
+              (unsigned long long)Limit);
+
+        SegmentAllocatedTotal += Usage->AllocatedBytes;
+
+        if (Limit != 0)
+        {
+            ok(Usage->AllocatedBytes <= Limit,
+               "Segment %lu allocated %llu exceeds its commit limit %llu\n", (unsigned long)i,
+               (unsigned long long)Usage->AllocatedBytes, (unsigned long long)Limit);
+            ok(Usage->AllocatedBytes + Usage->FreeBytes <= Limit,
+               "Segment %lu allocated+free %llu exceeds its commit limit %llu\n", (unsigned long)i,
+               (unsigned long long)(Usage->AllocatedBytes + Usage->FreeBytes),
+               (unsigned long long)Limit);
+            ok(Usage->ZeroBytes + Usage->ModifiedBytes + Usage->StandbyBytes <= Limit,
+               "Segment %lu list bytes %llu exceed its commit limit %llu\n", (unsigned long)i,
+               (unsigned long long)(Usage->ZeroBytes + Usage->ModifiedBytes + Usage->StandbyBytes),
+               (unsigned long long)Limit);
+        }
+    }
+
+    if (Available)
+    {
+        /* One past the last segment names nothing. */
+        memset(&Statistics, 0, sizeof(Statistics));
+        Statistics.Type = D3DKMT_QUERYSTATISTICS_SEGMENT_USAGE;
+        Statistics.AdapterLuid = Luid;
+        Statistics.QuerySegmentUsage.PhysicalAdapterIndex = 0;
+        Statistics.QuerySegmentUsage.SegmentId = (UINT16)(Segments + 16);
+        Status = pfn(&Statistics);
+        ok_failed(Status, "QueryStatistics(SEGMENT_USAGE out of range) should fail, got 0x%08lX\n",
+                  (long)Status);
+
+        /* This adapter has one physical adapter, so index 1 names nothing. */
+        memset(&Statistics, 0, sizeof(Statistics));
+        Statistics.Type = D3DKMT_QUERYSTATISTICS_SEGMENT_USAGE;
+        Statistics.AdapterLuid = Luid;
+        Statistics.QuerySegmentUsage.PhysicalAdapterIndex = 1;
+        Statistics.QuerySegmentUsage.SegmentId = 0;
+        Status = pfn(&Statistics);
+        ok_failed(Status, "QueryStatistics(SEGMENT_USAGE bad physical adapter) should fail, got 0x%08lX\n",
+                  (long)Status);
+    }
+
+    for (group = 0; group < 2; group++)
+    {
+        const D3DKMT_QUERYSTATISTICS_MEMORY_USAGE *Usage;
+
+        memset(&Statistics, 0, sizeof(Statistics));
+        Statistics.Type = D3DKMT_QUERYSTATISTICS_SEGMENT_GROUP_USAGE;
+        Statistics.AdapterLuid = Luid;
+        Statistics.QuerySegmentGroupUsage.PhysicalAdapterIndex = 0;
+        Statistics.QuerySegmentGroupUsage.SegmentGroup = (UINT16)((group == 0)
+            ? D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL
+            : D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL);
+        Status = pfn(&Statistics);
+        if (!NT_SUCCESS(Status))
+        {
+            if (StatisticsClassUnavailable(Status))
+                skip("QueryStatistics(SEGMENT_GROUP_USAGE %d) unavailable (0x%08lX)\n",
+                     group, (long)Status);
+            else
+                ok_succeeded(Status, "QueryStatistics(SEGMENT_GROUP_USAGE %d) failed 0x%08lX\n",
+                             group, (long)Status);
+            continue;
+        }
+
+        Usage = &Statistics.QueryResult.SegmentGroupUsageInformation;
+        trace("Segment group %d usage: allocated=%llu free=%llu zero=%llu modified=%llu standby=%llu\n",
+              group,
+              (unsigned long long)Usage->AllocatedBytes,
+              (unsigned long long)Usage->FreeBytes,
+              (unsigned long long)Usage->ZeroBytes,
+              (unsigned long long)Usage->ModifiedBytes,
+              (unsigned long long)Usage->StandbyBytes);
+
+        GroupAllocatedTotal += Usage->AllocatedBytes;
+    }
+
+    if (Available)
+    {
+        ok(GroupAllocatedTotal == SegmentAllocatedTotal,
+           "Segment groups account for %llu allocated bytes, the segments for %llu\n",
+           (unsigned long long)GroupAllocatedTotal,
+           (unsigned long long)SegmentAllocatedTotal);
+
+        /* Only LOCAL and NON_LOCAL name a group. */
+        memset(&Statistics, 0, sizeof(Statistics));
+        Statistics.Type = D3DKMT_QUERYSTATISTICS_SEGMENT_GROUP_USAGE;
+        Statistics.AdapterLuid = Luid;
+        Statistics.QuerySegmentGroupUsage.PhysicalAdapterIndex = 0;
+        Statistics.QuerySegmentGroupUsage.SegmentGroup = 7;
+        Status = pfn(&Statistics);
+        ok_failed(Status, "QueryStatistics(SEGMENT_GROUP_USAGE bad group) should fail, got 0x%08lX\n",
+                  (long)Status);
+    }
+
+    CloseAdapter(hAdapter);
+}
+
 /* ---- VidPN source present counters ---- */
 static void Test_QueryStatistics_VidPnSource(void)
 {
@@ -627,6 +789,7 @@ START_TEST(gpustats)
     Test_QueryStatistics_Nodes();
     Test_QueryStatistics_Process();
     Test_QueryStatistics_SegmentGroups();
+    Test_QueryStatistics_SegmentUsage();
     Test_QueryStatistics_VidPnSource();
     Test_QueryStatistics_PhysicalAdapter();
     Test_AdapterPerfData();

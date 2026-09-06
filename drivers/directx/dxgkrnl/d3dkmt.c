@@ -6320,10 +6320,15 @@ DxgkQueryStatistics(
             break;
 
         case D3DKMT_QUERYSTATISTICS_SEGMENT_USAGE:
+            Status = (Query.QuerySegmentUsage.PhysicalAdapterIndex == 0)
+                         ? DxgkVidMmQuerySegmentUsage(Adapter, Query.QuerySegmentUsage.SegmentId, &Query.QueryResult.SegmentUsageInformation)
+                         : STATUS_INVALID_PARAMETER;
+            break;
+
         case D3DKMT_QUERYSTATISTICS_SEGMENT_GROUP_USAGE:
-            /* These structures divide physical pages by memory-list state.
-             * The current VidMm does not own zero/modified/standby ledgers. */
-            Status = STATUS_NOT_SUPPORTED;
+            Status = (Query.QuerySegmentGroupUsage.PhysicalAdapterIndex == 0)
+                         ? DxgkVidMmQuerySegmentGroupUsage(Adapter, (D3DKMT_MEMORY_SEGMENT_GROUP)Query.QuerySegmentGroupUsage.SegmentGroup, &Query.QueryResult.SegmentGroupUsageInformation)
+                         : STATUS_INVALID_PARAMETER;
             break;
 #endif
 

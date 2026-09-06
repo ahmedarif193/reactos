@@ -14437,6 +14437,78 @@ DxgkVidMmQuerySegmentStatistics(
 }
 
 NTSTATUS
+DxgkVidMmQuerySegmentUsage(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SegmentIndex,
+    _Out_ D3DKMT_QUERYSTATISTICS_MEMORY_USAGE *Usage)
+{
+    D3DKMT_QUERYSTATISTICS_SEGMENT_INFORMATION Information;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Usage == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = DxgkVidMmQuerySegmentStatistics(Adapter, SegmentIndex, &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(Usage, sizeof(*Usage));
+    Usage->AllocatedBytes = Information.BytesCommitted;
+    if (Information.CommitLimit > Information.BytesCommitted)
+        Usage->FreeBytes = Information.CommitLimit - Information.BytesCommitted;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DxgkVidMmQuerySegmentGroupUsage(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group,
+    _Out_ D3DKMT_QUERYSTATISTICS_MEMORY_USAGE *Usage)
+{
+    D3DKMT_QUERYSTATISTICS_MEMORY_USAGE Segment;
+    PDXGKRNL_SEGMENT Descriptor;
+    ULONG Index;
+    BOOLEAN NonLocal;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Usage == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (Group != D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL &&
+        Group != D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(Usage, sizeof(*Usage));
+
+    for (Index = 0; Index < Adapter->SegmentCount; ++Index)
+    {
+        Descriptor = DxgkpVidMmSegmentFromStatisticsIndex(Adapter, Index);
+        if (Descriptor == NULL)
+            continue;
+
+        ExAcquireFastMutex(&Descriptor->Lock);
+        NonLocal = (BOOLEAN)(VidMmSegmentIsAperture(Descriptor) ||
+                             Descriptor->Flags.PopulatedFromSystemMemory);
+        ExReleaseFastMutex(&Descriptor->Lock);
+
+        if (NonLocal != (Group == D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL))
+            continue;
+
+        if (!NT_SUCCESS(DxgkVidMmQuerySegmentUsage(Adapter, Index, &Segment)))
+            continue;
+
+        Usage->AllocatedBytes += Segment.AllocatedBytes;
+        Usage->FreeBytes += Segment.FreeBytes;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
 DxgkVidMmQueryProcessSegmentStatistics(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PEPROCESS Process,

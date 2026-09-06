@@ -721,6 +721,18 @@ DxgkVidMmQueryProcessSegmentStatistics(
     _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT_INFORMATION *Information);
 
 NTSTATUS
+DxgkVidMmQuerySegmentUsage(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SegmentIndex,
+    _Out_ D3DKMT_QUERYSTATISTICS_MEMORY_USAGE *Usage);
+
+NTSTATUS
+DxgkVidMmQuerySegmentGroupUsage(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DKMT_MEMORY_SEGMENT_GROUP Group,
+    _Out_ D3DKMT_QUERYSTATISTICS_MEMORY_USAGE *Usage);
+
+NTSTATUS
 DxgkVidMmQueryProcessMemoryStatistics(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PEPROCESS Process,
