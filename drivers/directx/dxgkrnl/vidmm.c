@@ -8838,14 +8838,26 @@ DxgkpVidMmCompleteOfferedEvictionOwned(
  * ====================================================================== */
 
 static NTSTATUS
-DxgkpVidMmBeginResidencyTransaction(
+DxgkpVidMmBeginResidencyTransactionInternal(
     _In_ PDXGKVMM_ALLOCATION Allocation,
-    _In_ PVOID Owner)
+    _In_ PVOID Owner,
+    _In_ BOOLEAN AllowDestroying)
 {
+    PDXGKRNL_ADAPTER Adapter;
     NTSTATUS Status;
 
     if (Allocation == NULL || Owner == NULL)
         return STATUS_INVALID_PARAMETER;
+    Adapter = Allocation->Adapter;
+    if (AllowDestroying &&
+        (Adapter == NULL ||
+         Adapter->KmdExclusiveOwnerThread != PsGetCurrentThread() ||
+         InterlockedCompareExchange(&Adapter->VidMmDestroyQueuesBlocked,
+                                    0,
+                                    0) == 0))
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
 
     for (;;)
     {
@@ -8860,7 +8872,8 @@ DxgkpVidMmBeginResidencyTransaction(
         {
             BOOLEAN Acquired;
 
-            if (InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
+            if (!AllowDestroying &&
+                InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
             {
                 KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
                 return STATUS_DELETE_PENDING;
@@ -8893,6 +8906,16 @@ DxgkpVidMmBeginResidencyTransaction(
         if (!NT_SUCCESS(Status))
             return Status;
     }
+}
+
+static NTSTATUS
+DxgkpVidMmBeginResidencyTransaction(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PVOID Owner)
+{
+    return DxgkpVidMmBeginResidencyTransactionInternal(Allocation,
+                                                       Owner,
+                                                       FALSE);
 }
 
 /*
@@ -12377,12 +12400,31 @@ DxgkVidMmRecoverFromTimeout(
         PDXGKVMM_ALLOCATION Allocation = Snapshot.Entries[Index].Allocation;
         ULONG OwnerToken;
 
-        Status = DxgkpVidMmBeginResidencyTransaction(Allocation,
-                                                    &OwnerToken);
+        /*
+         * The reset snapshot deliberately includes quarantined destroy
+         * batches.  Their allocations already have Destroying set, so the
+         * normal public residency admission must reject them.  Recovery owns
+         * the adapter's KMD boundary and has drained the destroy workers;
+         * admit those objects here so their stale segment placement is purged
+         * before the deferred destruction is retried after restart.
+         */
+        Status = DxgkpVidMmBeginResidencyTransactionInternal(Allocation,
+                                                             &OwnerToken,
+                                                             TRUE);
         if (NT_SUCCESS(Status))
         {
             Status = DxgkpVidMmRecoverAllocationOwned(Allocation);
             DxgkpVidMmEndResidencyTransaction(Allocation, &OwnerToken);
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("DxgkVidMmRecoverFromTimeout: allocation %p recovery "
+                    "failed 0x%08lX destroying=%ld resident=%u segment=%lu\n",
+                    Allocation,
+                    Status,
+                    InterlockedCompareExchange(&Allocation->Destroying, 0, 0),
+                    Allocation->Resident,
+                    Allocation->SegmentId);
         }
         if (NT_SUCCESS(FirstFailure) && !NT_SUCCESS(Status))
             FirstFailure = Status;
