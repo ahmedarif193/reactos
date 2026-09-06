@@ -1294,10 +1294,12 @@ DxgkCreatePagingSystemContext(
 
     if (Adapter == NULL || Adapter->MiniportContext == NULL)
         return STATUS_INVALID_PARAMETER;
-    if (Adapter->PagingSystemDevice != NULL ||
+    if (Adapter->SchedulingSystemDevice != NULL ||
+        Adapter->PagingSystemDevice != NULL ||
         Adapter->PagingSystemContext != NULL)
     {
-        return (Adapter->PagingSystemDevice != NULL &&
+        return (Adapter->SchedulingSystemDevice != NULL &&
+                Adapter->PagingSystemDevice != NULL &&
                 Adapter->PagingSystemContext != NULL &&
                 Adapter->PagingSystemDevice->hMiniportDevice != NULL &&
                 Adapter->PagingSystemContext->hMiniportContext != NULL)
@@ -1393,9 +1395,10 @@ DxgkCreatePagingSystemContext(
         goto CreationFailed;
     }
 
+    /* VidSchCreateSystemDevices creates its general system device before the
+     * paging device.  Both calls carry the same public SystemDevice flag;
+     * the native 0x1/0x11 distinction remains private to VidSch. */
     RtlZeroMemory(&CreateDeviceArg, sizeof(CreateDeviceArg));
-    /* VidSchiCreateDeviceInternal passes no runtime token for its system
-     * device.  The miniport owns hDevice only after a successful return. */
     CreateDeviceArg.hDevice = NULL;
     CreateDeviceArg.Flags.SystemDevice = 1;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
@@ -1406,8 +1409,8 @@ DxgkCreatePagingSystemContext(
                  &CreateDeviceArg);
     if (!NT_SUCCESS(Status))
     {
-        DXGKRNL_ERR("DxgkCreatePagingSystemContext: DxgkDdiCreateDevice failed "
-                    "0x%08lx output=%p process=%p\n",
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: general system "
+                    "DxgkDdiCreateDevice failed 0x%08lx output=%p process=%p\n",
                     Status,
                     CreateDeviceArg.hDevice,
                     CreateDeviceArg.hKmdProcess);
@@ -1417,8 +1420,37 @@ DxgkCreatePagingSystemContext(
     if (CreateDeviceArg.hDevice == NULL)
     {
         Status = STATUS_DEVICE_CONFIGURATION_ERROR;
-        DXGKRNL_ERR("DxgkCreatePagingSystemContext: DxgkDdiCreateDevice "
-                    "returned success without a device handle\n");
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: general system "
+                    "DxgkDdiCreateDevice returned success without a handle\n");
+        DxgkEndKmdTransaction(Adapter);
+        goto CreationFailed;
+    }
+    Adapter->SchedulingSystemDevice = CreateDeviceArg.hDevice;
+
+    RtlZeroMemory(&CreateDeviceArg, sizeof(CreateDeviceArg));
+    CreateDeviceArg.hDevice = NULL;
+    CreateDeviceArg.Flags.SystemDevice = 1;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    CreateDeviceArg.hKmdProcess = ProcessRecord->hMiniportProcess;
+#endif
+    Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateDevice)(
+                 Adapter->MiniportDeviceContext,
+                 &CreateDeviceArg);
+    if (!NT_SUCCESS(Status))
+    {
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: paging system "
+                    "DxgkDdiCreateDevice failed 0x%08lx output=%p process=%p\n",
+                    Status,
+                    CreateDeviceArg.hDevice,
+                    CreateDeviceArg.hKmdProcess);
+        DxgkEndKmdTransaction(Adapter);
+        goto CreationFailed;
+    }
+    if (CreateDeviceArg.hDevice == NULL)
+    {
+        Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: paging system "
+                    "DxgkDdiCreateDevice returned success without a handle\n");
         DxgkEndKmdTransaction(Adapter);
         goto CreationFailed;
     }
@@ -1538,6 +1570,18 @@ DxgkDestroyPagingSystemContext(
             return Status;
         }
         Device->hMiniportDevice = NULL;
+        if (Adapter->SchedulingSystemDevice != NULL)
+        {
+            Status = DxgkpDestroyMiniportDevice(
+                         Adapter,
+                         Adapter->SchedulingSystemDevice);
+            if (!NT_SUCCESS(Status))
+            {
+                InterlockedExchange(&Device->MiniportDestroyPending, 1);
+                return Status;
+            }
+            Adapter->SchedulingSystemDevice = NULL;
+        }
         Adapter->PagingSystemDevice = NULL;
         ExFreePoolWithTag(Device, TAG_DXGK_DEVICE);
         DxgkDereferenceProcessRecord(ProcessRecord);

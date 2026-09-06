@@ -1149,12 +1149,13 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               VidSchStopping;
     volatile LONG               VidSchActiveCalls;
 
-    /* Native VidSch creates an adapter-owned SystemDevice and a
-     * SystemContext on the paging node.  BuildPagingBuffer receives the
-     * miniport context handle in hSystemContext, and MultiEngineAware
-     * paging DMA is submitted through that same context.  These objects are
-     * deliberately outside DeviceListHead: they span every client process
-     * and are destroyed only after client paging work has drained. */
+    /* Native VidSch creates a general system device followed by a paging
+     * system device and its context.  BuildPagingBuffer receives the
+     * miniport context handle in hSystemContext, and MultiEngineAware paging
+     * DMA is submitted through that same context.  These objects are outside
+     * DeviceListHead: they span every client process and are destroyed only
+     * after client paging work has drained. */
+    HANDLE                      SchedulingSystemDevice;
     PDXGKRNL_DEVICE             PagingSystemDevice;
     PDXGKRNL_CONTEXT            PagingSystemContext;
 
