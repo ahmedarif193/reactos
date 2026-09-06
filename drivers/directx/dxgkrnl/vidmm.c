@@ -6030,6 +6030,12 @@ DxgkpVidMmForceQuarantinedDestroyBatches(
 }
 
 #define DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS 5000
+/* How long a destroy waits for the GPU work that was already submitted when
+ * the destroy was requested.  A scene boundary drains a queue of a few
+ * packets in a few milliseconds; anything longer is queued work waiting on a
+ * CPU signal, which must not be allowed to deadlock the destroying thread,
+ * so the wait then falls back to the reference stamps alone. */
+#define DXGKP_VIDMM_DESTROY_SUBMITTED_WORK_TIMEOUT_MS 250
 
 /* Destruction has unpublished the logical handle before this wait. Fence
  * stamps name the physical backing, including for an OpenResource alias.
@@ -6042,6 +6048,11 @@ DxgkpVidMmWaitForAllocationReferences(
 {
     LARGE_INTEGER Interval;
     ULONGLONG StartTime;
+    ULONG SubmittedAtDestroy[DXGK_MAX_TRACKED_NODES];
+    LONG SubmittedEpoch;
+    BOOLEAN SubmittedSnapshotTaken = FALSE;
+    BOOLEAN SubmittedSnapshotExpired = FALSE;
+    static LONG SubmittedSnapshotExpiredTrace;
 
     PAGED_CODE();
     if (Adapter == NULL || Allocation == NULL)
@@ -6059,7 +6070,40 @@ DxgkpVidMmWaitForAllocationReferences(
 
         DxgkRetireCompletedDmaBuffers(Adapter);
         KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
-        if (Allocation->LastRefEpoch ==
+        /*
+         * D3DKMTDestroyAllocation2 without AssumeNotInUse defers destruction
+         * until the GPU work outstanding at the request has completed.  A
+         * virtual submission lists no allocations, so the reference stamps
+         * below cannot know what a queued batch reads through inherited
+         * state; every GPU fault of 2026-09-06 followed a destroy burst with
+         * packets still queued.  The work submitted on every node at the
+         * moment of the destroy is therefore a reference too.
+         */
+        if (!SubmittedSnapshotTaken)
+        {
+            for (Node = 0; Node < DXGK_MAX_TRACKED_NODES; ++Node)
+                SubmittedAtDestroy[Node] = Adapter->NodeLastSubmittedFenceId[Node];
+            SubmittedEpoch = InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0);
+            SubmittedSnapshotTaken = TRUE;
+        }
+        if (!SubmittedSnapshotExpired &&
+            SubmittedEpoch == InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0))
+        {
+            for (Node = 0; Node < DXGK_MAX_TRACKED_NODES; ++Node)
+            {
+                ULONG Submitted = SubmittedAtDestroy[Node];
+                ULONG Completed = Adapter->NodeLastCompletedFenceId[Node];
+
+                if (Submitted != 0 &&
+                    (Completed == 0 || (LONG)(Completed - Submitted) < 0))
+                {
+                    Outstanding = TRUE;
+                    break;
+                }
+            }
+        }
+        if (!Outstanding &&
+            Allocation->LastRefEpoch ==
             InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0))
         {
             for (Node = 0; Node < DXGK_MAX_TRACKED_NODES; ++Node)
@@ -6076,6 +6120,17 @@ DxgkpVidMmWaitForAllocationReferences(
             }
         }
         KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
+        if (Outstanding && !SubmittedSnapshotExpired &&
+            KeQueryInterruptTime() - StartTime >= (ULONGLONG)DXGKP_VIDMM_DESTROY_SUBMITTED_WORK_TIMEOUT_MS * 10000)
+        {
+            /* Queued work that does not drain is waiting on the CPU; do not
+             * hold the destroying thread hostage to it. */
+            SubmittedSnapshotExpired = TRUE;
+            if (InterlockedIncrement(&SubmittedSnapshotExpiredTrace) <= 8)
+                DXGKRNL_WARN("DxgkpVidMmWaitForAllocationReferences: submitted work did not drain in %u ms; destroying %p against the reference stamps only\n",
+                             DXGKP_VIDMM_DESTROY_SUBMITTED_WORK_TIMEOUT_MS, Allocation);
+            continue;
+        }
         if (!Outstanding || Adapter->MiniportDeviceStopped)
             return STATUS_SUCCESS;
         if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
