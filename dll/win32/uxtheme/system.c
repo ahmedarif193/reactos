@@ -768,6 +768,9 @@ static void UXTHEME_ApplyLiquidProperties(HWND hwnd, LPCWSTR classList,
     colorization = color;
     GetThemeColor(liquid, 0, 0, TMT_COLORIZATIONCOLOR, &colorization);
     MSSTYLES_CloseThemeClass(liquid);
+    if (region == DWM_BACKDROP_REGION_NONCLIENT &&
+        (ULONG_PTR)GetPropW(hwnd, DWM_PROP_BACKDROP_REGION) == DWM_BACKDROP_REGION_WINDOW)
+        region = DWM_BACKDROP_REGION_WINDOW;
     if (!SetPropW(hwnd, DWM_PROP_SYSTEM_BACKDROP_TYPE,
                   (HANDLE)(ULONG_PTR)backdropType) ||
         !SetPropW(hwnd, DWM_PROP_BACKDROP_OPACITY,
