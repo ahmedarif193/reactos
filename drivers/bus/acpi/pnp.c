@@ -373,6 +373,16 @@ Bus_StartFdo (
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    //
+    // Windows' AML interpreter tolerates the sloppiness that shipping firmware
+    // is full of: a control method that falls off the end returns an implicit
+    // zero, and an uninitialized LocalX/ArgX reads as zero. ACPICA is strict by
+    // default and expects the host to opt in, which Linux also does. Without
+    // this, a method that every other OS runs aborts with
+    // AE_AML_UNINITIALIZED_LOCAL and the firmware takes an untested branch.
+    //
+    AcpiGbl_EnableInterpreterSlack = TRUE;
+
     DPRINT1("Bus_StartFdo: Calling AcpiInitializeSubsystem\n");
     //
     // Initialize ACPICA robustly (let it allocate as needed).

@@ -1441,20 +1441,34 @@ AcpiOsSignal (
     switch (Function)
     {
     case ACPI_SIGNAL_FATAL:
+        /* The AML Fatal opcode asks the OS to stop. */
         if (Info)
-            DPRINT1 ("AcpiOsBreakpoint: %d %d %d ****\n", FatalInfo->Type, FatalInfo->Code, FatalInfo->Argument);
+        {
+            DPRINT1 ("AcpiOsSignal: AML Fatal opcode: Type %u Code %u Argument %u ****\n",
+                     FatalInfo->Type, FatalInfo->Code, FatalInfo->Argument);
+        }
         else
-            DPRINT1 ("AcpiOsBreakpoint ****\n");
+        {
+            DPRINT1 ("AcpiOsSignal: AML Fatal opcode ****\n");
+        }
+        ASSERT(FALSE);
         break;
+
     case ACPI_SIGNAL_BREAKPOINT:
+        /*
+         * ACPI 6.x 19.6.10: in a non-debug interpreter the AML Breakpoint
+         * opcode is equivalent to Noop, and ACPICA only calls this hook
+         * "in case OS wants a piece of the action". Shipping firmware does
+         * execute it, so this must not be fatal.
+         */
         if (Info)
-            DPRINT1 ("AcpiOsBreakpoint: %s ****\n", Info);
-        else
-            DPRINT1 ("AcpiOsBreakpoint ****\n");
+            DPRINT1 ("AcpiOsSignal: %s\n", (PCSTR)Info);
+        break;
+
+    default:
+        DPRINT1 ("AcpiOsSignal: unknown signal %u\n", Function);
         break;
     }
-
-    ASSERT(FALSE);
 
     return (AE_OK);
 }
