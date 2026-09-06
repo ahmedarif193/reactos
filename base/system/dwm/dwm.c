@@ -1462,7 +1462,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                 if (sb < 0) sb = 0; else if (sb > 255) sb = 255;
                 s = ((ULONG)sr << 16) | ((ULONG)sg << 8) | (ULONG)sb;
             }
-            if (edge != 0)
+            if (edge != 0 && (!useBackdrop || materialPixel))
             {
                 ULONG lift = DWM_MATERIAL_EDGE_LIGHT * edge / 255u;
                 ULONG sr = ((s >> 16) & 0xFFu) + lift;
