@@ -2491,7 +2491,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     if ((LoadConfig) && ConfigSize && (VALID_CONFIG_FIELD(SecurityCookie) || ConfigSize == LoadConfig->Size))
     {
         if (ConfigSize != sizeof(IMAGE_LOAD_CONFIG_DIRECTORY))
-            DPRINT1("WARN: Accepting different LOAD_CONFIG size!\n");
+            DPRINT("Accepting a LOAD_CONFIG of a different size\n");
         else
             DPRINT1("Applying LOAD_CONFIG\n");
 

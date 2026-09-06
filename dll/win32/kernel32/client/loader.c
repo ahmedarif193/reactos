@@ -447,8 +447,8 @@ done:
                 ModuleName = LdrEntry->BaseDllName;
                 Offset = (ULONG_PTR)Callers[Frame] - (ULONG_PTR)LdrEntry->DllBase;
             }
-            DPRINT1("    frame %lu: %p ('%wZ' + 0x%Ix)\n",
-                    Frame, Callers[Frame], &ModuleName, Offset);
+            DPRINT("    frame %lu: %p ('%wZ' + 0x%Ix)\n",
+                   Frame, Callers[Frame], &ModuleName, Offset);
         }
 
         BaseSetLastNTError(Status);
