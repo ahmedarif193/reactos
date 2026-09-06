@@ -77,7 +77,6 @@ typedef struct _DWM_DX_VIEW
     ULONG LastSeenFrame;
     D3DKMT_HANDLE hResource;
     D3DKMT_HANDLE hAllocation;
-    BYTE *Mapping;
     BYTE *Snapshot;
     ULONG Bytes;
     ULONGLONG LastUpdateId;
@@ -180,18 +179,6 @@ DwmDxGetDevice(const LUID *Luid, ULONG *DeviceIndex)
 static VOID
 DwmDxDropView(DWM_DX_VIEW *View)
 {
-    if (View->Mapping != NULL &&
-        View->DeviceIndex < DWM_DX_MAX_DEVICES &&
-        g_Devices[View->DeviceIndex].hDevice != 0)
-    {
-        D3DKMT_UNLOCK Unlock;
-
-        RtlZeroMemory(&Unlock, sizeof(Unlock));
-        Unlock.hDevice = g_Devices[View->DeviceIndex].hDevice;
-        Unlock.NumAllocations = 1;
-        Unlock.phAllocations = &View->hAllocation;
-        (void)D3DKMTUnlock(&Unlock);
-    }
     if (View->hResource != 0 &&
         View->DeviceIndex < DWM_DX_MAX_DEVICES &&
         g_Devices[View->DeviceIndex].hDevice != 0)
@@ -215,7 +202,6 @@ DwmDxOpenView(const DWM_DX_SOURCE *Source, DWM_DX_VIEW *View)
     D3DKMT_QUERYRESOURCEINFO Query;
     D3DKMT_OPENRESOURCE Open;
     D3DDDI_OPENALLOCATIONINFO *Allocations = NULL;
-    D3DKMT_LOCK Lock;
     PVOID ResourcePrivate = NULL, TotalPrivate = NULL;
     ULONG DeviceIndex;
     ULONGLONG Bytes;
@@ -317,32 +303,11 @@ DwmDxOpenView(const DWM_DX_SOURCE *Source, DWM_DX_VIEW *View)
         goto Failure;
     }
 
-    RtlZeroMemory(&Lock, sizeof(Lock));
-    Lock.hDevice = g_Devices[DeviceIndex].hDevice;
-    Lock.hAllocation = Allocations[0].hAllocation;
-    Status = D3DKMTLock(&Lock);
-    if (!NT_SUCCESS(Status) || Lock.pData == NULL)
-    {
-        D3DKMT_DESTROYALLOCATION Destroy;
-
-        RtlZeroMemory(&Destroy, sizeof(Destroy));
-        Destroy.hDevice = g_Devices[DeviceIndex].hDevice;
-        Destroy.hResource = Open.hResource;
-        (void)D3DKMTDestroyAllocation(&Destroy);
-        goto Failure;
-    }
-
     View->Snapshot = HeapAlloc(GetProcessHeap(), 0, (SIZE_T)Bytes);
     if (View->Snapshot == NULL)
     {
-        D3DKMT_UNLOCK Unlock;
         D3DKMT_DESTROYALLOCATION Destroy;
 
-        RtlZeroMemory(&Unlock, sizeof(Unlock));
-        Unlock.hDevice = g_Devices[DeviceIndex].hDevice;
-        Unlock.NumAllocations = 1;
-        Unlock.phAllocations = &Allocations[0].hAllocation;
-        (void)D3DKMTUnlock(&Unlock);
         RtlZeroMemory(&Destroy, sizeof(Destroy));
         Destroy.hDevice = g_Devices[DeviceIndex].hDevice;
         Destroy.hResource = Open.hResource;
@@ -357,7 +322,6 @@ DwmDxOpenView(const DWM_DX_SOURCE *Source, DWM_DX_VIEW *View)
     View->DeviceIndex = DeviceIndex;
     View->hResource = Open.hResource;
     View->hAllocation = Allocations[0].hAllocation;
-    View->Mapping = Lock.pData;
     View->Bytes = (ULONG)Bytes;
 
     if (TotalPrivate != NULL)
@@ -435,6 +399,18 @@ DwmDxGetSnapshot(const DWM_DX_SOURCE *Source)
     if (Source->UpdateId != View->LastUpdateId)
     {
         DWM_D3DKMT_INVALIDATECACHE Invalidate;
+        D3DKMT_LOCK Lock;
+        D3DKMT_UNLOCK Unlock;
+        NTSTATUS Status;
+
+        RtlZeroMemory(&Lock, sizeof(Lock));
+        Lock.hDevice = g_Devices[View->DeviceIndex].hDevice;
+        Lock.hAllocation = View->hAllocation;
+        Lock.Flags.ReadOnly = 1;
+        Lock.Flags.LockEntire = 1;
+        Status = D3DKMTLock(&Lock);
+        if (!NT_SUCCESS(Status) || Lock.pData == NULL)
+            return View->LastUpdateId != 0 ? View->Snapshot : NULL;
 
         if (!g_InvalidateCacheResolved)
         {
@@ -453,12 +429,20 @@ DwmDxGetSnapshot(const DWM_DX_SOURCE *Source)
         Invalidate.hDevice = g_Devices[View->DeviceIndex].hDevice;
         Invalidate.hAllocation = View->hAllocation;
         Invalidate.Length = View->Bytes;
-        if (g_InvalidateCache != NULL &&
-            NT_SUCCESS(g_InvalidateCache(&Invalidate)))
+        Status = STATUS_NOT_SUPPORTED;
+        if (g_InvalidateCache != NULL)
+            Status = g_InvalidateCache(&Invalidate);
+        if (NT_SUCCESS(Status))
         {
-            RtlCopyMemory(View->Snapshot, View->Mapping, View->Bytes);
+            RtlCopyMemory(View->Snapshot, Lock.pData, View->Bytes);
             View->LastUpdateId = Source->UpdateId;
         }
+
+        RtlZeroMemory(&Unlock, sizeof(Unlock));
+        Unlock.hDevice = g_Devices[View->DeviceIndex].hDevice;
+        Unlock.NumAllocations = 1;
+        Unlock.phAllocations = &View->hAllocation;
+        (void)D3DKMTUnlock(&Unlock);
     }
 
     return View->LastUpdateId != 0 ? View->Snapshot : NULL;

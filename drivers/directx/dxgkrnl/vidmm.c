@@ -9419,6 +9419,79 @@ DxgkVidMmEvict(
  */
 #define DXGKP_VIDMM_CACHE_FLUSH_CHUNK_MAX (16U * 1024U * 1024U)
 
+/* D3DKMTLock is a synchronous CPU-access boundary. Keep the wait bounded so
+ * a lost engine is reported to the caller instead of wedging its thread. */
+#define DXGKP_VIDMM_LOCK_REFERENCE_TIMEOUT_MS 1000
+
+NTSTATUS
+DxgkVidMmWaitForTrackedSubmissions(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN DoNotWait)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    LARGE_INTEGER Interval;
+    ULONGLONG StartTime;
+
+    PAGED_CODE();
+    if (Allocation == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Allocation->BackingAllocation != NULL)
+        Allocation = Allocation->BackingAllocation;
+
+    Adapter = Allocation->Adapter;
+    if (Adapter == NULL)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    StartTime = KeQueryInterruptTime();
+    Interval.QuadPart = -10000LL;
+    for (;;)
+    {
+        BOOLEAN Outstanding = FALSE;
+        KIRQL OldIrql;
+        ULONG Node;
+
+        /* Completion retirement updates the per-node watermarks used below.
+         * The allocation stamps name the physical backing, so an OpenResource
+         * alias waits for work submitted by another device or process too. */
+        DxgkRetireCompletedDmaBuffers(Adapter);
+        KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
+        if (Allocation->LastRefEpoch ==
+            InterlockedCompareExchange(
+                &Adapter->SubmittedFenceIdentityEpoch, 0, 0))
+        {
+            for (Node = 0; Node < DXGK_MAX_TRACKED_NODES; ++Node)
+            {
+                ULONG Reference = Allocation->LastRefFenceId[Node];
+                ULONG Completed = Adapter->NodeLastCompletedFenceId[Node];
+
+                if (Reference != 0 &&
+                    (Completed == 0 || (LONG)(Completed - Reference) < 0))
+                {
+                    Outstanding = TRUE;
+                    break;
+                }
+            }
+        }
+        KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
+
+        if (!Outstanding)
+            return STATUS_SUCCESS;
+        if (DoNotWait)
+            return STATUS_GRAPHICS_ALLOCATION_BUSY;
+        if (Adapter->MiniportDeviceStopped ||
+            InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
+        {
+            return STATUS_DEVICE_REMOVED;
+        }
+        if (KeQueryInterruptTime() - StartTime >=
+            (ULONGLONG)DXGKP_VIDMM_LOCK_REFERENCE_TIMEOUT_MS * 10000ULL)
+        {
+            return STATUS_GRAPHICS_ALLOCATION_BUSY;
+        }
+        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+    }
+}
+
 NTSTATUS
 DxgkVidMmInvalidateReferencedAllocationCache(
     _In_ PDXGKVMM_ALLOCATION Allocation,
