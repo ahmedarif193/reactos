@@ -2662,7 +2662,36 @@ DxgkSyncObjectCpuWaitBatch(
         DxgkpCpuWaitRequestDereference(Request);
         return STATUS_SUCCESS;
     }
-    (VOID)KeWaitForSingleObject(&Request->SynchronousEvent, Executive, KernelMode, FALSE, NULL);
+    /* Wait in slices so a wait that never completes names itself: a GL
+     * process that stalls silently at a scene boundary (2026-09-06, no
+     * fault, no TDR, queue empty) is otherwise invisible in the log. */
+    {
+        LARGE_INTEGER Slice;
+        ULONG Slices = 0;
+
+        Slice.QuadPart = -50000000LL; /* 5 s */
+        while (KeWaitForSingleObject(&Request->SynchronousEvent, Executive, KernelMode, FALSE, &Slice) == STATUS_TIMEOUT)
+        {
+            Slices++;
+            if (Slices == 1 || (Slices % 12) == 0)
+            {
+                PDXGKRNL_ADAPTER WaitAdapter = Device->Adapter;
+
+                for (Index = 0; Index < ObjectCount; ++Index)
+                {
+                    PDXGKRNL_SYNC_OBJECT Object = Request->Objects[Index];
+
+                    DXGKRNL_ERR("DxgkSyncObjectCpuWaitBatch: waiting %lu s on object %p awaiting %I64u, value %I64u (gpu page %I64u), node0 submitted=%lu completed=%lu, device state %ld\n",
+                                Slices * 5, Object, Request->Targets[Index].TargetValue,
+                                *Request->Targets[Index].FenceValue,
+                                Object->MonitoredValueKernelVa != NULL ? *(volatile UINT64 *)Object->MonitoredValueKernelVa : 0,
+                                WaitAdapter != NULL ? WaitAdapter->NodeLastSubmittedFenceId[0] : 0,
+                                WaitAdapter != NULL ? WaitAdapter->NodeLastCompletedFenceId[0] : 0,
+                                InterlockedCompareExchange(&Device->ExecutionState, 0, 0));
+                }
+            }
+        }
+    }
     Status = Request->CoreRequest.CompletionStatus;
     DxgkpCpuWaitRequestDereference(Request);
     return Status;
