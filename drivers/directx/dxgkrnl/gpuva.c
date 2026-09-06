@@ -1210,8 +1210,19 @@ GpuVaAllocPageTable(
     SegmentId = GpuVaLevelDesc(Adapter, Level)->PageTableSegmentId;
     if (SegmentId != 0)
     {
+        PDXGKRNL_SEGMENT Segment;
+
         if (Adapter->Segments == NULL || SegmentId > Adapter->SegmentCount)
             return NULL;
+        Segment = &((PDXGKRNL_SEGMENT)Adapter->Segments)[SegmentId - 1];
+        /* Native VidMm can place its implicit page-table allocation in the
+         * miniport's aperture segment because that allocation has the full
+         * VidMm open/close and residency lifecycle.  Our table is direct
+         * system backing without such an allocation.  Publishing an aperture
+         * offset for it leaves the hardware window on the scratch page, so
+         * describe the backing through segment zero instead. */
+        if (Segment->Flags.Aperture || Segment->Flags.Agp)
+            SegmentId = 0;
     }
 
     TableBytes = GpuVaTableBytes(Adapter, Level);
