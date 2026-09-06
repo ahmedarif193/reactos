@@ -124,6 +124,14 @@ typedef struct _VIDSCH_DMA_PACKET
     /* Process whose GPU VA range this packet pinned, released once. */
     struct _DXGKRNL_PROCESS    *GpuVaPinProcess;
     ULONG                       VirtualDmaBufferSize;
+    /* Submit-time copy of the batch head, taken while the mapping is pinned
+     * and the CPU-written content is what the GPU is meant to fetch.  A page
+     * fault at the batch's first access can only be attributed by comparing
+     * this against what the GPU actually executed; the deferred PASSIVE dump
+     * runs after the engine reset and DEVICE_REMOVED teardown, which unmaps
+     * the batch first (2026-09-06: "cannot read batch" 1.3 s later). */
+    UCHAR                       BatchHead[256];
+    ULONG                       BatchHeadBytes;
 
     /* Private driver data passed through to DxgkDdiSubmitCommand. */
     PVOID                       DriverPrivateData;
@@ -353,6 +361,11 @@ typedef struct _VIDSCH_ENGINE
      * them here and the fault worker performs the reset. */
     ULONG                       LastFaultFlags;
     struct _DXGKRNL_PROCESS    *LastFaultProcess;
+    /* Batch head of the faulted packet, copied in the fault DPC from the
+     * packet's submit-time capture; printed by the fault worker. */
+    UCHAR                       LastFaultBatchHead[256];
+    ULONG                       LastFaultBatchHeadBytes;
+    PVOID                       LastFaultContext;
     D3DGPU_VIRTUAL_ADDRESS      LastDispatchDmaGpuVa;
     ULONG                       LastDispatchDmaSize;
     ULONG                       LastDispatchFence;

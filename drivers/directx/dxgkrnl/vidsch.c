@@ -881,6 +881,56 @@ static VOID NTAPI VidSchpDestroyPacketWorker(_In_ PVOID Parameter);
 static VOID NTAPI VidSchpFaultCleanupWorker(_In_ PVOID Parameter);
 #endif
 
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+/*
+ * Print the submit-time copy of the faulted batch head and decode its
+ * STATE_BASE_ADDRESS (Gen8+ layout: DW1-2 general, DW4-5 surface, DW6-7
+ * dynamic, DW8-9 indirect object, DW10-11 instruction; bit 0 of the low
+ * dword is the modify-enable).  A surface-state base of zero with modify
+ * enabled explains a fault at a small address as base 0 + binding-table
+ * offset; a valid base means the GPU executed something other than what the
+ * CPU submitted (stale translation or coherency), which is the other branch.
+ */
+static VOID
+VidSchpDumpCapturedBatchHead(
+    _In_ PVIDSCH_ENGINE Engine)
+{
+    const ULONG *Words = (const ULONG *)Engine->LastFaultBatchHead;
+    ULONG Count = Engine->LastFaultBatchHeadBytes / sizeof(ULONG);
+    ULONG i;
+
+    if (Count == 0)
+    {
+        DXGKRNL_ERR("VidSch: no submit-time batch head captured for the faulted packet\n");
+        return;
+    }
+    DXGKRNL_ERR("VidSch: submit-time batch head (%lu bytes of %lu):\n",
+                Engine->LastFaultBatchHeadBytes, Engine->LastFaultDmaSize);
+    for (i = 0; i < Count; i += 8)
+    {
+        DXGKRNL_ERR("BATCHHEAD[%04lx] %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
+                    i * 4,
+                    Words[i], i + 1 < Count ? Words[i + 1] : 0, i + 2 < Count ? Words[i + 2] : 0, i + 3 < Count ? Words[i + 3] : 0,
+                    i + 4 < Count ? Words[i + 4] : 0, i + 5 < Count ? Words[i + 5] : 0, i + 6 < Count ? Words[i + 6] : 0, i + 7 < Count ? Words[i + 7] : 0);
+    }
+    for (i = 0; i + 11 < Count; i++)
+    {
+        if ((Words[i] & 0xFFFF0000UL) != 0x61010000UL)
+            continue;
+        DXGKRNL_ERR("STATE_BASE_ADDRESS at dw%lu: general=0x%I64x(en=%lu) surface=0x%I64x(en=%lu) dynamic=0x%I64x(en=%lu) indirect=0x%I64x(en=%lu) instruction=0x%I64x(en=%lu)\n",
+                    i,
+                    (((ULONGLONG)Words[i + 2] << 32) | Words[i + 1]) & ~0xFFFULL, Words[i + 1] & 1,
+                    (((ULONGLONG)Words[i + 5] << 32) | Words[i + 4]) & ~0xFFFULL, Words[i + 4] & 1,
+                    (((ULONGLONG)Words[i + 7] << 32) | Words[i + 6]) & ~0xFFFULL, Words[i + 6] & 1,
+                    (((ULONGLONG)Words[i + 9] << 32) | Words[i + 8]) & ~0xFFFULL, Words[i + 8] & 1,
+                    (((ULONGLONG)Words[i + 11] << 32) | Words[i + 10]) & ~0xFFFULL, Words[i + 10] & 1);
+        break;
+    }
+    if (i + 11 >= Count)
+        DXGKRNL_ERR("STATE_BASE_ADDRESS: not in the captured head (bases inherited from the context image)\n");
+}
+#endif
+
 static VOID
 VidSchpDestroyPacket(
     _In_ PVIDSCH_DMA_PACKET Packet)
@@ -1580,8 +1630,9 @@ VidSchpFaultDumpWorker(
 
     if (Engine->LastFaultDmaGpuVa != 0)
     {
-        DXGKRNL_ERR("VidSch: engine fault dump fence=%lu dma va=0x%I64x size=%lu process=%p\n",
-                    Engine->LastFaultFence, Engine->LastFaultDmaGpuVa, Engine->LastFaultDmaSize, Engine->LastFaultProcess);
+        DXGKRNL_ERR("VidSch: engine fault dump fence=%lu dma va=0x%I64x size=%lu process=%p ctx=%p\n",
+                    Engine->LastFaultFence, Engine->LastFaultDmaGpuVa, Engine->LastFaultDmaSize, Engine->LastFaultProcess, Engine->LastFaultContext);
+        VidSchpDumpCapturedBatchHead(Engine);
         DXGKRNL_ERR("VidSch: engine fault target va=0x%I64x (the address the GPU could not translate)\n",
                     Engine->LastFaultVa);
         DxgkGpuVaDumpTranslation(Engine->Adapter, Engine->LastFaultProcess, Engine->LastFaultVa);
@@ -1748,6 +1799,10 @@ VidSchpConsumePageFaultInterrupt(
          * batch, translation and table dumps need it. */
         if (Engine->LastFaultProcess == NULL && Packet->Device != NULL)
             Engine->LastFaultProcess = Packet->Device->ProcessRecord;
+        Engine->LastFaultContext = Packet->Context;
+        Engine->LastFaultBatchHeadBytes = min(Packet->BatchHeadBytes, sizeof(Engine->LastFaultBatchHead));
+        if (Engine->LastFaultBatchHeadBytes != 0)
+            RtlCopyMemory(Engine->LastFaultBatchHead, Packet->BatchHead, Engine->LastFaultBatchHeadBytes);
         if (InterlockedCompareExchange(&Engine->FaultDumpQueued, 1, 0) == 0)
         {
             ExInitializeWorkItem(&Engine->FaultDumpWorkItem, VidSchpFaultDumpWorker, Engine);
@@ -2951,6 +3006,15 @@ VidSchSubmitCommandVirtual(
             return STATUS_INVALID_PARAMETER;
         }
         Packet->GpuVaPinProcess = PinDevice->ProcessRecord;
+        /* Capture the batch head now, under the pin, for fault attribution. */
+        Packet->BatchHeadBytes = min(DmaBufferSize, sizeof(Packet->BatchHead));
+        if (!DxgkGpuVaCopyFromProcess(PinDevice->ProcessRecord,
+                                      DmaBufferGpuVa,
+                                      Packet->BatchHead,
+                                      Packet->BatchHeadBytes))
+        {
+            Packet->BatchHeadBytes = 0;
+        }
     }
     Packet->Context = Context;
     Packet->VirtualAddressing = TRUE;

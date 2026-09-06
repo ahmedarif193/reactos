@@ -4889,6 +4889,27 @@ DxgkpGpuVaReadProcessMemory(
     return TRUE;
 }
 
+/* Public form of the reader above for submit-time capture: PASSIVE_LEVEL,
+ * GpuVaLock not held.  FALSE when [Va, Va+Size) is not one mapped,
+ * system-memory-backed span. */
+BOOLEAN
+DxgkGpuVaCopyFromProcess(
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Va,
+    _Out_writes_bytes_(Size) PVOID Buffer,
+    _In_ ULONG Size)
+{
+    BOOLEAN Copied;
+
+    PAGED_CODE();
+    if (Process == NULL || Va == 0 || Buffer == NULL || Size == 0)
+        return FALSE;
+    ExAcquireFastMutex(&Process->GpuVaLock);
+    Copied = DxgkpGpuVaReadProcessMemory(Process, Va, Buffer, Size);
+    ExReleaseFastMutex(&Process->GpuVaLock);
+    return Copied;
+}
+
 /*
  * TDR diagnostics for a Gen12 render batch: find the surface-state base and
  * the last pixel-shader binding table in the batch, then print the surface
