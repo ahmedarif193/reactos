@@ -1394,7 +1394,9 @@ DxgkCreatePagingSystemContext(
     }
 
     RtlZeroMemory(&CreateDeviceArg, sizeof(CreateDeviceArg));
-    CreateDeviceArg.hDevice = (HANDLE)Device;
+    /* VidSchiCreateDeviceInternal passes no runtime token for its system
+     * device.  The miniport owns hDevice only after a successful return. */
+    CreateDeviceArg.hDevice = NULL;
     CreateDeviceArg.Flags.SystemDevice = 1;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     CreateDeviceArg.hKmdProcess = ProcessRecord->hMiniportProcess;
@@ -1404,45 +1406,54 @@ DxgkCreatePagingSystemContext(
                  &CreateDeviceArg);
     if (!NT_SUCCESS(Status))
     {
-        if (CreateDeviceArg.hDevice != NULL &&
-            CreateDeviceArg.hDevice != (HANDLE)Device)
-        {
-            Device->hMiniportDevice = CreateDeviceArg.hDevice;
-        }
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: DxgkDdiCreateDevice failed "
+                    "0x%08lx output=%p process=%p\n",
+                    Status,
+                    CreateDeviceArg.hDevice,
+                    CreateDeviceArg.hKmdProcess);
         DxgkEndKmdTransaction(Adapter);
         goto CreationFailed;
     }
-    if (CreateDeviceArg.hDevice == NULL ||
-        CreateDeviceArg.hDevice == (HANDLE)Device)
+    if (CreateDeviceArg.hDevice == NULL)
     {
         Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: DxgkDdiCreateDevice "
+                    "returned success without a device handle\n");
         DxgkEndKmdTransaction(Adapter);
         goto CreationFailed;
     }
     Device->hMiniportDevice = CreateDeviceArg.hDevice;
 
     RtlZeroMemory(&CreateContextArg, sizeof(CreateContextArg));
-    CreateContextArg.hContext = (HANDLE)Context;
+    /* Native VidSchiCreateContextInternal likewise supplies a NULL runtime
+     * token for an internal system context. */
+    CreateContextArg.hContext = NULL;
     CreateContextArg.NodeOrdinal = PagingNode;
     CreateContextArg.EngineAffinity = 1;
     CreateContextArg.Flags.SystemContext = 1;
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
+    CreateContextArg.Flags.VirtualAddressing = Adapter->GpuMmuCapsValid;
+#endif
     Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateContext)(
                  Device->hMiniportDevice,
                  &CreateContextArg);
     if (!NT_SUCCESS(Status))
     {
-        if (CreateContextArg.hContext != NULL &&
-            CreateContextArg.hContext != (HANDLE)Context)
-        {
-            Context->hMiniportContext = CreateContextArg.hContext;
-        }
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: DxgkDdiCreateContext failed "
+                    "0x%08lx output=%p node=%lu engine=0x%x flags=0x%08x\n",
+                    Status,
+                    CreateContextArg.hContext,
+                    CreateContextArg.NodeOrdinal,
+                    CreateContextArg.EngineAffinity,
+                    CreateContextArg.Flags.Value);
         DxgkEndKmdTransaction(Adapter);
         goto CreationFailed;
     }
-    if (CreateContextArg.hContext == NULL ||
-        CreateContextArg.hContext == (HANDLE)Context)
+    if (CreateContextArg.hContext == NULL)
     {
         Status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        DXGKRNL_ERR("DxgkCreatePagingSystemContext: DxgkDdiCreateContext "
+                    "returned success without a context handle\n");
         DxgkEndKmdTransaction(Adapter);
         goto CreationFailed;
     }
@@ -1496,8 +1507,10 @@ DxgkDestroyPagingSystemContext(
         {
             DxgkpWaitForContextReferences(Context);
         }
-        Status = DxgkpDestroyMiniportContext(Adapter,
-                                             Context->hMiniportContext);
+        Status = STATUS_SUCCESS;
+        if (Context->hMiniportContext != NULL)
+            Status = DxgkpDestroyMiniportContext(Adapter,
+                                                 Context->hMiniportContext);
         if (!NT_SUCCESS(Status))
         {
             InterlockedExchange(&Context->MiniportDestroyPending, 1);
@@ -1515,8 +1528,10 @@ DxgkDestroyPagingSystemContext(
         InterlockedExchange(&Device->Destroying, 1);
         if (!DxgkpWaitForDeviceReferences(Device))
             return STATUS_DEVICE_BUSY;
-        Status = DxgkpDestroyMiniportDevice(Adapter,
-                                            Device->hMiniportDevice);
+        Status = STATUS_SUCCESS;
+        if (Device->hMiniportDevice != NULL)
+            Status = DxgkpDestroyMiniportDevice(Adapter,
+                                                Device->hMiniportDevice);
         if (!NT_SUCCESS(Status))
         {
             InterlockedExchange(&Device->MiniportDestroyPending, 1);
