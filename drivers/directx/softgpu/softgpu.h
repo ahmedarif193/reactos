@@ -141,6 +141,7 @@ InbvGetGopFrameBufferInfo(
 #define SOFTGPU_POINTER_MAX_WIDTH       64UL
 #define SOFTGPU_POINTER_MAX_HEIGHT      64UL
 #define SOFTGPU_POINTER_PIXEL_COUNT     (SOFTGPU_POINTER_MAX_WIDTH * SOFTGPU_POINTER_MAX_HEIGHT)
+#define SOFTGPU_PRESENT_CHUNK_ROWS      SOFTGPU_POINTER_MAX_HEIGHT
 
 #ifndef SOFTGPU_MAX_OVERLAYS
 #define SOFTGPU_MAX_OVERLAYS            0UL
@@ -264,6 +265,9 @@ typedef struct _SOFTGPU_DEVICE
     KSPIN_LOCK          ScanoutLock;
     KMUTEX              ScanoutMutex;
     KMUTEX              PointerMutex;
+    KSPIN_LOCK          PointerLock;
+    PULONG              PresentStage;
+    ULONG               PresentStageWidth;
     EX_RUNDOWN_REF      ScanoutRundown;
     WORK_QUEUE_ITEM     ScanoutWorkItem;
     BOOLEAN             ScanoutRundownCompleted;
@@ -305,6 +309,8 @@ typedef struct _SOFTGPU_DEVICE
     BOOLEAN             PointerShapeValid;
     BOOLEAN             PointerVisible;
     BOOLEAN             PointerBackingValid;
+    LONG                PointerOriginX;
+    LONG                PointerOriginY;
 
     /* Optional ReactOS full-WDDM shadow-present interface. */
     KSPIN_LOCK          ShadowPresentInterfaceLock;
@@ -525,6 +531,13 @@ SoftGpuPointerRestoreLocked(
 VOID
 SoftGpuPointerDrawLocked(
     _Inout_ PSOFTGPU_DEVICE Device);
+
+VOID
+SoftGpuPointerCompositeStage(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _Inout_ PULONG Stage,
+    _In_ ULONG StageWidth,
+    _In_ const RECT *Chunk);
 
 NTSTATUS
 APIENTRY
