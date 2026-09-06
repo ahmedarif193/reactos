@@ -1183,7 +1183,9 @@ SoftGpuCopyCurrentPrimaryToScanout(
     if (Snapshot.Visible)
     {
         (VOID)SoftGpuPlatformWaitForVerticalBlank(Device);
+        KeAcquireSpinLock(&Device->PointerLock, &OldIrql);
         SoftGpuPointerRestoreLocked(Device);
+        KeReleaseSpinLock(&Device->PointerLock, OldIrql);
         PointerRestored = TRUE;
         Status = SoftGpu2dCopyRect(
                      Snapshot.Source,
@@ -1198,7 +1200,9 @@ SoftGpuCopyCurrentPrimaryToScanout(
     else
     {
         (VOID)SoftGpuPlatformWaitForVerticalBlank(Device);
+        KeAcquireSpinLock(&Device->PointerLock, &OldIrql);
         SoftGpuPointerRestoreLocked(Device);
+        KeReleaseSpinLock(&Device->PointerLock, OldIrql);
         PointerRestored = TRUE;
         Status = SoftGpu2dFillRect(
                      Snapshot.Destination,
@@ -1213,8 +1217,10 @@ SoftGpuCopyCurrentPrimaryToScanout(
 Complete:
     if (PointerRestored)
     {
+        KeAcquireSpinLock(&Device->PointerLock, &OldIrql);
         SoftGpuPointerDrawLocked(Device);
         KeMemoryBarrier();
+        KeReleaseSpinLock(&Device->PointerLock, OldIrql);
     }
     if (NT_SUCCESS(Status))
     {
@@ -1268,6 +1274,7 @@ SoftGpuScanoutInitializeDevice(
     KeInitializeSpinLock(&Device->ScanoutLock);
     KeInitializeMutex(&Device->ScanoutMutex, 0);
     KeInitializeMutex(&Device->PointerMutex, 0);
+    KeInitializeSpinLock(&Device->PointerLock);
     ExInitializeRundownProtection(&Device->ScanoutRundown);
     ExInitializeWorkItem(&Device->ScanoutWorkItem,
                          SoftGpuScanoutWorker,
@@ -1350,10 +1357,12 @@ SoftGpuScanoutStart(
     Device->CurrentPrimaryValid = FALSE;
     Device->ScanoutVisible = TRUE;
     Device->TimingActive = TRUE;
-    Device->PointerBackingValid = FALSE;
     Device->ScanoutGeneration = 1;
     Device->ScanoutPresentedGeneration = 0;
     KeReleaseSpinLock(&Device->ScanoutLock, OldIrql);
+    KeAcquireSpinLock(&Device->PointerLock, &OldIrql);
+    Device->PointerBackingValid = FALSE;
+    KeReleaseSpinLock(&Device->PointerLock, OldIrql);
     SoftGpuPlatformInitializeTiming(Device);
     return STATUS_SUCCESS;
 }
@@ -1377,17 +1386,16 @@ SoftGpuScanoutStop(
         Device->ScanoutRundownCompleted = TRUE;
     }
 
-    if (NT_SUCCESS(KeWaitForSingleObject(&Device->ScanoutMutex,
-                                         Executive,
-                                         KernelMode,
-                                         FALSE,
-                                         NULL)))
+    KeAcquireSpinLock(&Device->PointerLock, &OldIrql);
+    SoftGpuPointerRestoreLocked(Device);
+    KeMemoryBarrier();
+    KeReleaseSpinLock(&Device->PointerLock, OldIrql);
+    if (Device->PresentStage != NULL)
     {
-        SoftGpuPointerRestoreLocked(Device);
-        KeMemoryBarrier();
-        KeReleaseMutex(&Device->ScanoutMutex, FALSE);
+        ExFreePoolWithTag(Device->PresentStage, SOFTGPU_POOL_TAG);
+        Device->PresentStage = NULL;
+        Device->PresentStageWidth = 0;
     }
-
     KeAcquireSpinLock(&Device->ScanoutLock, &OldIrql);
     Mapping = Device->Scanout;
     MappingSize = Device->ScanoutSize;
@@ -1427,6 +1435,71 @@ SoftGpuClipPresentRect(
     return Output->left < Output->right && Output->top < Output->bottom;
 }
 
+static NTSTATUS
+SoftGpuPresentRectStaged(
+    _Inout_ PSOFTGPU_DEVICE Device,
+    _In_ const VOID *Source,
+    _In_ SIZE_T SourceSize,
+    _In_ ULONG SourcePitch,
+    _Inout_ PVOID Destination,
+    _In_ SIZE_T DestinationSize,
+    _In_ ULONG DestinationPitch,
+    _In_ BOOLEAN Composite,
+    _In_ const RECT *Rect)
+{
+    ULONG Width = (ULONG)(Rect->right - Rect->left);
+    SIZE_T RowBytes = (SIZE_T)Width * sizeof(ULONG);
+    LONG Top;
+    KIRQL OldIrql;
+
+    if (Device->PresentStage == NULL || Device->PresentStageWidth < Width)
+    {
+        PULONG Stage;
+
+        if (Device->Width < Width)
+            return STATUS_INVALID_PARAMETER;
+        Stage = ExAllocatePoolWithTag(NonPagedPool,
+                                      (SIZE_T)Device->Width * sizeof(ULONG) * SOFTGPU_PRESENT_CHUNK_ROWS,
+                                      SOFTGPU_POOL_TAG);
+        if (Stage == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        if (Device->PresentStage != NULL)
+            ExFreePoolWithTag(Device->PresentStage, SOFTGPU_POOL_TAG);
+        Device->PresentStage = Stage;
+        Device->PresentStageWidth = Device->Width;
+    }
+    if ((SIZE_T)(Rect->bottom - 1) * SourcePitch + (SIZE_T)Rect->right * sizeof(ULONG) > SourceSize ||
+        (SIZE_T)(Rect->bottom - 1) * DestinationPitch + (SIZE_T)Rect->right * sizeof(ULONG) > DestinationSize)
+    {
+        return STATUS_INVALID_BUFFER_SIZE;
+    }
+    for (Top = Rect->top; Top < Rect->bottom; Top += SOFTGPU_PRESENT_CHUNK_ROWS)
+    {
+        RECT Chunk;
+        LONG Rows;
+        LONG Y;
+        const UCHAR *Src;
+        PUCHAR Dst;
+
+        Chunk.left = Rect->left;
+        Chunk.top = Top;
+        Chunk.right = Rect->right;
+        Chunk.bottom = min(Top + (LONG)SOFTGPU_PRESENT_CHUNK_ROWS, Rect->bottom);
+        Rows = Chunk.bottom - Chunk.top;
+        Src = (const UCHAR *)Source + (SIZE_T)Chunk.top * SourcePitch + (SIZE_T)Chunk.left * sizeof(ULONG);
+        Dst = (PUCHAR)Destination + (SIZE_T)Chunk.top * DestinationPitch + (SIZE_T)Chunk.left * sizeof(ULONG);
+        for (Y = 0; Y < Rows; ++Y)
+            RtlCopyMemory(Device->PresentStage + (SIZE_T)Y * Width, Src + (SIZE_T)Y * SourcePitch, RowBytes);
+        KeAcquireSpinLock(&Device->PointerLock, &OldIrql);
+        if (Composite)
+            SoftGpuPointerCompositeStage(Device, Device->PresentStage, Width, &Chunk);
+        for (Y = 0; Y < Rows; ++Y)
+            RtlCopyMemory(Dst + (SIZE_T)Y * DestinationPitch, Device->PresentStage + (SIZE_T)Y * Width, RowBytes);
+        KeReleaseSpinLock(&Device->PointerLock, OldIrql);
+    }
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 APIENTRY
 SoftGpuDdiPresentDisplayOnly(
@@ -1442,6 +1515,7 @@ SoftGpuDdiPresentDisplayOnly(
     SIZE_T SourceSize;
     ULONG Index;
     BOOLEAN DirectPrimaryValid = FALSE;
+    BOOLEAN Composite;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -1548,8 +1622,7 @@ SoftGpuDdiPresentDisplayOnly(
         goto CleanupMutex;
     }
 
-    if (!Device->PlatformHardwarePointer)
-        SoftGpuPointerRestoreLocked(Device);
+    Composite = !Device->PlatformHardwarePointer && Destination == Device->Scanout;
     Status = STATUS_SUCCESS;
     for (Index = 0; Index < PresentDisplayOnly->NumMoves; ++Index)
     {
@@ -1560,16 +1633,15 @@ SoftGpuDdiPresentDisplayOnly(
         {
             continue;
         }
-
-        Status = SoftGpu2dCopyRect(
-                     PresentDisplayOnly->pSource,
-                     SourceSize,
-                     (ULONG)PresentDisplayOnly->Pitch,
-                     &Rect,
-                     Destination,
-                     DestinationSize,
-                     DestinationPitch,
-                     &Rect);
+        Status = SoftGpuPresentRectStaged(Device,
+                                          PresentDisplayOnly->pSource,
+                                          SourceSize,
+                                          (ULONG)PresentDisplayOnly->Pitch,
+                                          Destination,
+                                          DestinationSize,
+                                          DestinationPitch,
+                                          Composite,
+                                          &Rect);
         if (!NT_SUCCESS(Status))
             break;
     }
@@ -1583,20 +1655,16 @@ SoftGpuDdiPresentDisplayOnly(
         {
             continue;
         }
-
-        Status = SoftGpu2dCopyRect(
-                     PresentDisplayOnly->pSource,
-                     SourceSize,
-                     (ULONG)PresentDisplayOnly->Pitch,
-                     &Rect,
-                     Destination,
-                     DestinationSize,
-                     DestinationPitch,
-                     &Rect);
+        Status = SoftGpuPresentRectStaged(Device,
+                                          PresentDisplayOnly->pSource,
+                                          SourceSize,
+                                          (ULONG)PresentDisplayOnly->Pitch,
+                                          Destination,
+                                          DestinationSize,
+                                          DestinationPitch,
+                                          Composite,
+                                          &Rect);
     }
-
-    if (!Device->PlatformHardwarePointer)
-        SoftGpuPointerDrawLocked(Device);
     KeMemoryBarrier();
 
 CleanupMutex:
