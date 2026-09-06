@@ -5416,7 +5416,9 @@ static VOID
 DxgkpStartRuntimePowerManagement(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
+    ULONG Activated = 0;
     ULONG Component;
+    NTSTATUS FirstFailure = STATUS_SUCCESS;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -5424,58 +5426,37 @@ DxgkpStartRuntimePowerManagement(
     if (Adapter->PoFxHandle == NULL)
         return;
 
-    if (DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeSetDeviceHandle) != NULL &&
-        DxgkAcquireKmdCall(Adapter))
-    {
-        _SEH2_TRY
-        {
-            Status = DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeSetDeviceHandle)(
-                         Adapter->MiniportDeviceContext, (HANDLE)Adapter->PoFxHandle);
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Status = _SEH2_GetExceptionCode();
-        }
-        _SEH2_END;
-        DxgkReleaseKmdCall(Adapter);
-        if (!NT_SUCCESS(Status))
-        {
-            DXGKRNL_WARN("PoFx: DxgkDdiPowerRuntimeSetDeviceHandle failed 0x%08lX\n",
-                         Status);
-        }
-    }
-
-    if (DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeControlRequest) != NULL)
-    {
-        DxgkpPowerRuntimeControlCallback(Adapter,
-                                         &GUID_DXGKDDI_POWER_MANAGEMENT_PREPARE_TO_START,
-                                         NULL, 0, NULL, 0, NULL);
-    }
-
     /*
      * Native dxgkrnl keeps a reference count for every power component and
      * passes only its zero-to-one and one-to-zero edges to PoFx.  The current
      * port interface can receive active callbacks before the component table
-     * is registered, so those references cannot yet be replayed accurately.
-     * Keep one bootstrap reference on every component instead of allowing
-     * PoFxStartDevicePowerManagement to idle live display and render engines.
-     * Miniport references remain balanced above this floor, and unregistering
-     * the PoFx device discards the floor at adapter stop.
+     * is registered, so those references cannot yet be replayed accurately;
+     * handing the miniport a started framework in that state let it park a
+     * live engine during first paint.  Keep the registered framework dormant,
+     * retain one bootstrap reference per component and put each component in
+     * F0 explicitly.  Miniport references remain balanced above this floor,
+     * and unregistering the PoFx device discards it at adapter stop.
      */
     for (Component = 0; Component < Adapter->PowerComponentCount; ++Component)
-        PoFxActivateComponent(Adapter->PoFxHandle, Component, 0);
-
-    DXGKRNL_INFO("PoFx: retained %lu bootstrap F0 component reference(s)\n",
-                 Adapter->PowerComponentCount);
-
-    InterlockedExchange(&Adapter->PowerManagementStarted, 1);
-    PoFxStartDevicePowerManagement(Adapter->PoFxHandle);
-
-    if (DXGK_CB_FULL(Adapter, DxgkDdiPowerRuntimeControlRequest) != NULL)
     {
-        DxgkpPowerRuntimeControlCallback(Adapter,
-                                         &GUID_DXGKDDI_POWER_MANAGEMENT_STARTED,
-                                         NULL, 0, NULL, 0, NULL);
+        PoFxActivateComponent(Adapter->PoFxHandle, Component, 0);
+        Status = DxgkpSetPowerComponentFState(Adapter, Component, 0);
+        if (NT_SUCCESS(Status))
+            Activated++;
+        else if (NT_SUCCESS(FirstFailure))
+            FirstFailure = Status;
+    }
+
+    if (Activated == Adapter->PowerComponentCount)
+    {
+        DXGKRNL_INFO("PoFx: retained %lu component(s) in F0; runtime start deferred\n",
+                     Activated);
+    }
+    else
+    {
+        DXGKRNL_WARN("PoFx: only %lu/%lu components reached F0; first failure "
+                     "0x%08lX; runtime start deferred\n",
+                     Activated, Adapter->PowerComponentCount, FirstFailure);
     }
 }
 
