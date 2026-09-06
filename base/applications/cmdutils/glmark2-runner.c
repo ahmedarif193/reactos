@@ -12,6 +12,8 @@
 #include <string.h>
 
 #define GLMARK2_TIMEOUT_MILLISECONDS 60000
+/* The full suite is 31 scenes at glmark2's default 10 s each. */
+#define GLMARK2_FULL_TIMEOUT_MILLISECONDS 600000
 #define GLMARK2_OUTPUT_LINE_LENGTH 512
 #define GLMARK2_JELLYFISH_FLOOR_FPS 800
 #define GLMARK2_JELLYFISH_STRONG_FPS 1500
@@ -214,7 +216,7 @@ DrainChildOutput(
 }
 
 int
-main(VOID)
+main(int argc, char **argv)
 {
     CHAR ApplicationPath[MAX_PATH];
     CHAR CommandLine[MAX_PATH * 8];
@@ -230,9 +232,21 @@ main(VOID)
     DWORD WaitStatus;
     UINT Length;
     BOOL Forced = FALSE;
+    BOOL FullSuite = FALSE;
+    DWORD TimeoutMilliseconds;
+    int Argument;
     RUNNER_OUTPUT_SCAN OutputScan;
 
     ZeroMemory(&OutputScan, sizeof(OutputScan));
+    /* --full runs glmark2's complete default benchmark list; the default
+     * four-scene subset is the fast reproduction used for bring-up. */
+    for (Argument = 1; Argument < argc; Argument++)
+    {
+        if (strcmp(argv[Argument], "--full") == 0)
+            FullSuite = TRUE;
+    }
+    TimeoutMilliseconds = FullSuite ? GLMARK2_FULL_TIMEOUT_MILLISECONDS
+                                    : GLMARK2_TIMEOUT_MILLISECONDS;
 
     Length = GetSystemDirectoryA(SystemDirectory, sizeof(SystemDirectory));
     if (Length == 0 || Length >= sizeof(SystemDirectory))
@@ -253,13 +267,14 @@ main(VOID)
         _snprintf(CommandLine,
                   sizeof(CommandLine),
                   "\"%s\" --data-path \"%s\" -s 800x600 "
-                  "--swap-mode immediate "
-                  "-b ideas:speed=duration:duration=3.0 "
-                  "-b jellyfish:duration=3.0 "
-                  "-b terrain:duration=3.0 "
-                  "-b shadow:duration=3.0",
+                  "--swap-mode immediate%s",
                   ApplicationPath,
-                  DataPath) < 0)
+                  DataPath,
+                  FullSuite ? "" :
+                      " -b ideas:speed=duration:duration=3.0"
+                      " -b jellyfish:duration=3.0"
+                      " -b terrain:duration=3.0"
+                      " -b shadow:duration=3.0") < 0)
     {
         RunnerPrint("RPI5_GLMARK2_ERROR path_too_long\n");
         return 1;
@@ -293,8 +308,10 @@ main(VOID)
 
     RunnerPrint("RPI5_GLMARK2_BEGIN source=glmark2 "
                 "commit=22c527cb0556f3a1ac4445aaa52cc532760928d5 "
-                "tests=21-24 scenes=ideas,jellyfish,terrain,shadow "
-                "size=800x600 duration_s=3 swap_mode=immediate\n");
+                "%s size=800x600 swap_mode=immediate\n",
+                FullSuite ?
+                    "tests=all scenes=default duration_s=10" :
+                    "tests=21-24 scenes=ideas,jellyfish,terrain,shadow duration_s=3");
     if (!CreateProcessA(ApplicationPath,
                         CommandLine,
                         NULL,
@@ -324,7 +341,7 @@ main(VOID)
         DrainChildOutput(ReadPipe, &OutputScan);
         if (WaitStatus == WAIT_OBJECT_0)
             break;
-    } while (GetTickCount() - StartTick < GLMARK2_TIMEOUT_MILLISECONDS);
+    } while (GetTickCount() - StartTick < TimeoutMilliseconds);
 
     if (WaitStatus != WAIT_OBJECT_0)
     {
@@ -340,12 +357,14 @@ main(VOID)
         ExitCode = GetLastError();
     if (OutputScan.Unsupported)
         RunnerPrint("RPI5_GLMARK2_UNSUPPORTED detected=1\n");
-    RunnerPrint("RPI5_GLMARK2_RESULT size=800x600 ideas=%lu jellyfish=%lu "
-                "terrain=%lu shadow=%lu subset_score=%lu complete=%lu\n",
+    RunnerPrint("RPI5_GLMARK2_RESULT size=800x600 suite=%s ideas=%lu jellyfish=%lu "
+                "terrain=%lu shadow=%lu %s=%lu complete=%lu\n",
+                FullSuite ? "full" : "subset",
                 OutputScan.IdeasFps,
                 OutputScan.JellyfishFps,
                 OutputScan.TerrainFps,
                 OutputScan.ShadowFps,
+                FullSuite ? "score" : "subset_score",
                 OutputScan.Score,
                 OutputScan.IdeasSeen && OutputScan.JellyfishSeen &&
                     OutputScan.TerrainSeen && OutputScan.ShadowSeen &&

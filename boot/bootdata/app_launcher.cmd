@@ -21,7 +21,7 @@ if exist "%S%\glmark2_runner.exe" (
         call :say APPLAUNCH_WGLGEARS_EXIT !ERRORLEVEL!
     )
     call :say APPLAUNCH_GLMARK2_BEGIN
-    "%S%\glmark2_runner.exe"
+    "%S%\glmark2_runner.exe" --full
     call :say APPLAUNCH_GLMARK2_EXIT !ERRORLEVEL!
 )
 
