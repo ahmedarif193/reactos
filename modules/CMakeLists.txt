@@ -22,6 +22,9 @@ if(ENABLE_ROSV)
     add_subdirectory(rosv)
 endif()
 
+add_subdirectory(n64emu)
+add_subdirectory(fexbench)
+
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/AHK_Tests/)
     add_subdirectory(AHK_Tests)
 endif()

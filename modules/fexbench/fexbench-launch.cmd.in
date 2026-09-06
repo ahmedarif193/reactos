@@ -1,0 +1,13 @@
+@echo off
+setlocal EnableExtensions
+set S=%SystemRoot%\system32
+set BENCHDIR=%SystemRoot%\fexbench
+set WORKDIR=@FEXBENCH_WORKDIR@
+"%S%\dbgprint.exe" FEXBENCH_SUITE_BEGIN
+cd /d "%BENCHDIR%"
+"%S%\dbgprint.exe" --process "%BENCHDIR%\fexbench_arm64.exe %WORKDIR% 2>&1"
+"%S%\dbgprint.exe" FEXBENCH_NATIVE_DONE
+"%S%\dbgprint.exe" --process "%BENCHDIR%\fexbench_x86_64.exe %WORKDIR% 2>&1"
+"%S%\dbgprint.exe" FEXBENCH_FEX_DONE
+"%S%\dbgprint.exe" FEXBENCH_SUITE_EXIT 0
+endlocal & exit /b 0
