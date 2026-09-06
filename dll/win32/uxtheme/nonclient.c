@@ -217,6 +217,14 @@ ThemeInitDrawContext(PDRAW_CONTEXT pcontext,
     pcontext->Active = IsWindowActive(hWnd, pcontext->wi.dwExStyle);
     pcontext->DarkMode = GetPropW(hWnd, immersive_dark_mode_propW) != NULL;
     pcontext->theme = GetNCCaptionTheme(hWnd, pcontext->wi.dwStyle);
+    if (pcontext->DarkMode && pcontext->theme)
+    {
+        COLORREF fill;
+
+        if (SUCCEEDED(GetThemeColor(pcontext->theme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill)) &&
+            (GetRValue(fill) * 299 + GetGValue(fill) * 587 + GetBValue(fill) * 114) / 1000 < 128)
+            pcontext->DarkMode = FALSE;
+    }
     pcontext->scrolltheme = GetNCScrollbarTheme(hWnd, pcontext->wi.dwStyle);
 
     pcontext->CaptionHeight = pcontext->wi.cyWindowBorders;
