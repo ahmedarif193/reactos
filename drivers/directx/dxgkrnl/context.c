@@ -1286,6 +1286,9 @@ DxgkCreatePagingSystemContext(
     DXGK_DEVICE_WORK_TERMINAL_STATE WorkTerminal;
     DXGKARG_CREATEDEVICE CreateDeviceArg;
     DXGKARG_CREATECONTEXT CreateContextArg;
+    DXGK_NODEMETADATA NodeMetadata;
+    BOOLEAN ContextSchedulingSupported;
+    HANDLE RuntimeContextToken;
     ULONG PagingNode;
     NTSTATUS Status;
     NTSTATUS CleanupStatus;
@@ -1395,6 +1398,32 @@ DxgkCreatePagingSystemContext(
         goto CreationFailed;
     }
 
+    /* VidSchiCreateNode caches ContextSchedulingSupported and
+     * VidSchCreateSystemDevices uses that bit to choose its paging-context
+     * creation contract.  The context-scheduling path supplies a runtime
+     * context token and advertises hardware-queue support to CreateContext;
+     * the legacy path supplies a NULL token. */
+    ContextSchedulingSupported = FALSE;
+    if (DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata) != NULL)
+    {
+        RtlZeroMemory(&NodeMetadata, sizeof(NodeMetadata));
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata)(
+                     Adapter->MiniportDeviceContext,
+                     PagingNode,
+                     &NodeMetadata);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_ERR("DxgkCreatePagingSystemContext: "
+                        "DxgkDdiGetNodeMetadata failed 0x%08lx node=%lu\n",
+                        Status,
+                        PagingNode);
+            DxgkEndKmdTransaction(Adapter);
+            goto CreationFailed;
+        }
+        ContextSchedulingSupported =
+            NodeMetadata.Flags.ContextSchedulingSupported != 0;
+    }
+
     /* VidSchCreateSystemDevices creates its general system device before the
      * paging device.  Both calls carry the same public SystemDevice flag;
      * the native 0x1/0x11 distinction remains private to VidSch. */
@@ -1457,24 +1486,34 @@ DxgkCreatePagingSystemContext(
     Device->hMiniportDevice = CreateDeviceArg.hDevice;
 
     RtlZeroMemory(&CreateContextArg, sizeof(CreateContextArg));
-    /* Native VidSchiCreateContextInternal likewise supplies a NULL runtime
-     * token for an internal system context. */
-    CreateContextArg.hContext = NULL;
+    RuntimeContextToken = ContextSchedulingSupported ? (HANDLE)Context : NULL;
+    CreateContextArg.hContext = RuntimeContextToken;
     CreateContextArg.NodeOrdinal = PagingNode;
     CreateContextArg.EngineAffinity = 1;
     CreateContextArg.Flags.SystemContext = 1;
+    if (ContextSchedulingSupported)
+        CreateContextArg.Flags.HwQueueSupported = 1;
+    DXGKRNL_INFO("DxgkCreatePagingSystemContext: creating paging context "
+                 "node=%lu context-scheduling=%u runtime=%p flags=0x%08x\n",
+                 PagingNode,
+                 ContextSchedulingSupported,
+                 RuntimeContextToken,
+                 CreateContextArg.Flags.Value);
     Status = DXGK_CB_FULL(Adapter, DxgkDdiCreateContext)(
                  Device->hMiniportDevice,
                  &CreateContextArg);
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_ERR("DxgkCreatePagingSystemContext: DxgkDdiCreateContext failed "
-                    "0x%08lx output=%p node=%lu engine=0x%x flags=0x%08x\n",
+                    "0x%08lx output=%p runtime=%p node=%lu engine=0x%x "
+                    "flags=0x%08x context-scheduling=%u\n",
                     Status,
                     CreateContextArg.hContext,
+                    RuntimeContextToken,
                     CreateContextArg.NodeOrdinal,
                     CreateContextArg.EngineAffinity,
-                    CreateContextArg.Flags.Value);
+                    CreateContextArg.Flags.Value,
+                    ContextSchedulingSupported);
         DxgkEndKmdTransaction(Adapter);
         goto CreationFailed;
     }
