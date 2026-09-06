@@ -945,7 +945,10 @@ HRESULT WINAPI InitVariantFromResource(HINSTANCE hinst, UINT id, VARIANT *pvar)
     if (!pvar)
         return E_POINTER;
 
-    VariantInit(pvar);
+    /* Windows stamps VT_BSTR before it fills the string, so the variant stays
+     * VT_BSTR with a NULL BSTR when the resource cannot be loaded. */
+    V_VT(pvar) = VT_BSTR;
+    V_BSTR(pvar) = NULL;
 
     cch = LoadStringW(hinst, id, szBuffer, ARRAY_SIZE(szBuffer));
     if (!cch)
@@ -955,6 +958,5 @@ HRESULT WINAPI InitVariantFromResource(HINSTANCE hinst, UINT id, VARIANT *pvar)
     if (!V_BSTR(pvar))
         return E_OUTOFMEMORY;
 
-    V_VT(pvar) = VT_BSTR;
     return S_OK;
 }

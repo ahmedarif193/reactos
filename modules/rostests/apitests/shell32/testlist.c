@@ -63,6 +63,8 @@ extern void func_SHRestricted(void);
 extern void func_SHSetUnreadMailCountW(void);
 extern void func_StrRStr(void);
 
+extern void func_Win81Ordinals(void);
+
 const struct test winetest_testlist[] =
 {
     { "AddCommas", func_AddCommas },
@@ -126,5 +128,6 @@ const struct test winetest_testlist[] =
     { "SHSetUnreadMailCountW", func_SHSetUnreadMailCountW },
     { "StrRStr", func_StrRStr },
 
+    { "Win81Ordinals", func_Win81Ordinals },
     { 0, 0 }
 };

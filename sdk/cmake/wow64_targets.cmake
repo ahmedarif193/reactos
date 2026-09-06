@@ -13,6 +13,8 @@ set(WOW64_I386_MODULES
     advapi32
     advapi32_vista
     advpack
+    appxalluserstore
+    bcp47langs
     bcrypt
     browseui
     cabinet
@@ -26,10 +28,12 @@ set(WOW64_I386_MODULES
     cryptsp
     cryptui
     dbghelp
+    dcomp
     devmgr
     dhcpcsvc
     dinput8
     dnsapi
+    dui70
     fmifs
     gdi32
     gdiplus
@@ -63,17 +67,23 @@ set(WOW64_I386_MODULES
     oleacc
     oleaut32
     powrprof
+    profapi
     propsys
     psapi
     rpcrt4
     samlib
     sechost
     secur32
+    settingsyncpolicy
     setupapi
     shcore
     shdocvw
     shell32
     shlwapi
+    slc
+    sndvolsso
+    sspicli
+    twinapi
     ucrtbase
     urlmon
     user32
@@ -84,9 +94,12 @@ set(WOW64_I386_MODULES
     version
     windowscodecs
     wininet
+    winlangdb
     winmm
     winspool
+    winsta
     wintrust
+    wkscli
     ws2_32
     ws2help)
 

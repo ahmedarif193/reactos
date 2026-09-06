@@ -840,6 +840,22 @@ EnableNonClientDpiScaling(
 
 BOOL
 WINAPI
+GetPhysicalCursorPos(
+    _Out_ LPPOINT lpPoint)
+{
+    return GetCursorPos(lpPoint);
+}
+
+HWND
+WINAPI
+WindowFromPhysicalPoint(
+    _In_ POINT Point)
+{
+    return WindowFromPoint(Point);
+}
+
+BOOL
+WINAPI
 LogicalToPhysicalPoint(
     _In_ HWND hWnd,
     _Inout_ POINT *Point)

@@ -570,3 +570,43 @@ Win32PoolAllocationStats(DWORD dw1, DWORD dw2, DWORD dw3, DWORD dw4, DWORD dw5)
     UNIMPLEMENTED;
     return FALSE;
 }
+
+/*
+ * @unimplemented
+ */
+HRESULT
+WINAPI
+User32Ordinal2005(PVOID Arg1)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+
+    UNIMPLEMENTED;
+    return E_NOTIMPL;
+}
+
+/*
+ * @unimplemented
+ */
+HRESULT
+WINAPI
+User32Ordinal2522(PVOID Arg1)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+
+    UNIMPLEMENTED;
+    return E_NOTIMPL;
+}
+
+/*
+ * @unimplemented
+ */
+HRESULT
+WINAPI
+User32Ordinal2530(PVOID Arg1, PVOID Arg2)
+{
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+
+    UNIMPLEMENTED;
+    return E_NOTIMPL;
+}

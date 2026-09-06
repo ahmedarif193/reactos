@@ -427,6 +427,20 @@ typedef enum tagSETIMEHOTKEY_ACTION
     SETIMEHOTKEY_INITIALIZE
 } SETIMEHOTKEY_ACTION;
 
+#define ZBID_DEFAULT 0
+#define ZBID_DESKTOP 1
+#define ZBID_IMMERSIVE_RESTRICTED 15
+#define ZBID_MAX     18
+
+BOOL WINAPI IsTopLevelWindow(HWND hWnd);
+BOOL WINAPI GetWindowBand(HWND hWnd, PDWORD pdwBand);
+HWND WINAPI CreateWindowInBand(DWORD dwExStyle, LPCWSTR lpClassName, LPCWSTR lpWindowName,
+                               DWORD dwStyle, int x, int y, int nWidth, int nHeight,
+                               HWND hWndParent, HMENU hMenu, HINSTANCE hInstance,
+                               LPVOID lpParam, DWORD dwBand);
+HWND WINAPI GhostWindowFromHungWindow(HWND hwndHung);
+HWND WINAPI HungWindowFromGhostWindow(HWND hwndGhost);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif /* defined(__cplusplus) */

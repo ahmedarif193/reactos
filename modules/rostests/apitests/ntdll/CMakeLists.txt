@@ -119,6 +119,7 @@ list(APPEND SOURCE
     RtlDebugInformation.c
     RtlDeleteAce.c
     RtlDetermineDosPathNameType.c
+    RtlWnfAndSqm.c
     RtlDoesFileExists.c
     RtlDosApplyFileIsolationRedirection_Ustr.c
     RtlDosPathNameToNtPathName_U.c

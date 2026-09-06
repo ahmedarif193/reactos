@@ -1774,3 +1774,159 @@ ChangeMenuA(
     };
 }
 
+
+#define TPM_VALID_FLAGS 0x0001FDFF
+
+static BOOL
+IntMovePopupRect(UINT flags, INT *px, INT *py, INT width, INT height,
+                 const RECT *pExclude, const RECT *prcMon)
+{
+    if (flags & TPM_VERTICAL)
+    {
+        if (flags & TPM_BOTTOMALIGN)
+        {
+            if (pExclude->top - height >= prcMon->top)
+            {
+                *py = pExclude->top - height;
+                return TRUE;
+            }
+        }
+        else if (pExclude->bottom + height < prcMon->bottom)
+        {
+            *py = pExclude->bottom;
+            return TRUE;
+        }
+    }
+    else
+    {
+        if (flags & TPM_RIGHTALIGN)
+        {
+            if (pExclude->left - width >= prcMon->left)
+            {
+                *px = pExclude->left - width;
+                return TRUE;
+            }
+        }
+        else if (pExclude->right + width < prcMon->right)
+        {
+            *px = pExclude->right;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/*
+ * @implemented
+ */
+BOOL WINAPI
+CalculatePopupWindowPosition(
+    const POINT *anchorPoint,
+    const SIZE *windowSize,
+    UINT flags,
+    RECT *excludeRect,
+    RECT *popupWindowPosition)
+{
+    static const UINT FlagMods[] =
+    {
+        0,
+        TPM_BOTTOMALIGN | TPM_RIGHTALIGN,
+        TPM_VERTICAL,
+        TPM_BOTTOMALIGN | TPM_RIGHTALIGN | TPM_VERTICAL,
+    };
+    MONITORINFO mi;
+    HMONITOR hMonitor;
+    RECT rcMon, rcClean;
+    POINT pt;
+    INT x, y, width, height;
+    UINT n;
+
+    if (flags & ~TPM_VALID_FLAGS)
+    {
+        SetLastError(ERROR_INVALID_FLAGS);
+        return FALSE;
+    }
+
+    if (!popupWindowPosition)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!anchorPoint || !windowSize)
+        return FALSE;
+
+    if (windowSize->cx < 0 || windowSize->cy < 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    width = windowSize->cx;
+    height = windowSize->cy;
+    x = anchorPoint->x;
+    y = anchorPoint->y;
+
+    if (flags & TPM_LAYOUTRTL)
+        flags ^= TPM_RIGHTALIGN;
+
+    if (flags & TPM_CENTERALIGN)
+        x -= width / 2;
+    else if (flags & TPM_RIGHTALIGN)
+        x -= width;
+
+    if (flags & TPM_VCENTERALIGN)
+        y -= height / 2;
+    else if (flags & TPM_BOTTOMALIGN)
+        y -= height;
+
+    pt.x = x;
+    pt.y = y;
+    hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(hMonitor, &mi))
+    {
+        SetLastError(ERROR_INVALID_MONITOR_HANDLE);
+        return FALSE;
+    }
+    rcMon = (flags & TPM_WORKAREA) ? mi.rcWork : mi.rcMonitor;
+
+    if (x + width > rcMon.right)
+        x = rcMon.right - width;
+    if (x < rcMon.left)
+        x = rcMon.left;
+
+    if (y + height > rcMon.bottom)
+        y = rcMon.bottom - height;
+    if (y < rcMon.top)
+        y = rcMon.top;
+
+    if (excludeRect && IntersectRect(&rcClean, excludeRect, &rcMon))
+    {
+        for (n = 0; n < ARRAYSIZE(FlagMods); ++n)
+        {
+            RECT rcTry, rcHit;
+            INT tx = x, ty = y;
+
+            SetRect(&rcTry, x, y, x + width, y + height);
+            if (!IntersectRect(&rcHit, &rcClean, &rcTry))
+                break;
+
+            if (IntMovePopupRect(flags ^ FlagMods[n], &tx, &ty, width, height,
+                                 &rcClean, &rcMon))
+            {
+                SetRect(&rcTry, tx, ty, tx + width, ty + height);
+                if (!IntersectRect(&rcHit, &rcClean, &rcTry))
+                {
+                    x = tx;
+                    y = ty;
+                    break;
+                }
+            }
+        }
+    }
+
+    SetRect(popupWindowPosition, x, y, x + width, y + height);
+    return TRUE;
+}

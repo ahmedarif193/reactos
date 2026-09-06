@@ -61,6 +61,7 @@ list(APPEND SOURCE
     shelltest.cpp)
 
 list(APPEND PCH_SKIP_SOURCE
+    Win81Ordinals.c
     testlist.c)
 
 add_executable(shell32_apitest

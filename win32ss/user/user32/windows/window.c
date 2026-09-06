@@ -2143,4 +2143,76 @@ DisableProcessWindowsGhosting(VOID)
     NtUserxEnableProcessWindowGhosting(FALSE);
 }
 
+/*
+ * @implemented
+ */
+BOOL WINAPI
+IsTopLevelWindow(HWND hWnd)
+{
+    HWND hWndDesktop = GetDesktopWindow();
+
+    if (!ValidateHwnd(hWnd) || hWnd == hWndDesktop)
+        return FALSE;
+
+    return GetAncestor(hWnd, GA_PARENT) == hWndDesktop;
+}
+
+/*
+ * @implemented
+ */
+BOOL WINAPI
+GetWindowBand(HWND hWnd, PDWORD pdwBand)
+{
+    if (!pdwBand)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!ValidateHwnd(hWnd))
+    {
+        SetLastError(ERROR_INVALID_WINDOW_HANDLE);
+        return FALSE;
+    }
+
+    *pdwBand = ZBID_DESKTOP;
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
+HWND WINAPI
+CreateWindowInBand(
+    DWORD dwExStyle,
+    LPCWSTR lpClassName,
+    LPCWSTR lpWindowName,
+    DWORD dwStyle,
+    int x,
+    int y,
+    int nWidth,
+    int nHeight,
+    HWND hWndParent,
+    HMENU hMenu,
+    HINSTANCE hInstance,
+    LPVOID lpParam,
+    DWORD dwBand)
+{
+    if (dwBand > ZBID_MAX || dwBand == ZBID_IMMERSIVE_RESTRICTED)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
+
+    if (dwBand > ZBID_DESKTOP)
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return NULL;
+    }
+
+    return CreateWindowExW(dwExStyle, lpClassName, lpWindowName, dwStyle,
+                           x, y, nWidth, nHeight,
+                           hWndParent, hMenu, hInstance, lpParam);
+}
+
 /* EOF */

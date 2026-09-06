@@ -2034,6 +2034,9 @@ GetNamedPipeHandleStateW(
 BOOL WINAPI GetNamedPipeInfo(_In_ HANDLE, _Out_opt_ PDWORD, _Out_opt_ PDWORD, _Out_opt_ PDWORD, _Out_opt_ PDWORD);
 #if (_WIN32_WINNT >= 0x0501)
 VOID WINAPI GetNativeSystemInfo(LPSYSTEM_INFO);
+#if (_WIN32_WINNT >= 0x0602)
+BOOL WINAPI GetOsSafeBootMode(_Out_ PDWORD);
+#endif
 #endif
 
 BOOL

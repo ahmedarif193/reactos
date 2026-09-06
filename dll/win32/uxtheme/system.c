@@ -1704,8 +1704,12 @@ const WCHAR ** WINAPI GetImmersiveColorNamedTypeByIndex(UINT index)
  */
 HRESULT WINAPI GetUserColorPreference(PVOID pcpPreference, BOOL fForceReload)
 {
-    FIXME("(%p, %d): stub\n", pcpPreference, fForceReload);
-    return E_NOTIMPL;
+    FIXME("(%p, %d): semi-stub\n", pcpPreference, fForceReload);
+
+    if (pcpPreference)
+        ZeroMemory(pcpPreference, 2 * sizeof(DWORD));
+
+    return S_OK;
 }
 
 /***********************************************************************
@@ -1714,17 +1718,23 @@ HRESULT WINAPI GetUserColorPreference(PVOID pcpPreference, BOOL fForceReload)
 COLORREF WINAPI GetColorFromPreference(PVOID pcpPreference, int iColor,
                                        BOOL fUseHighContrast, int iHighContrastColor)
 {
-    FIXME("(%p, %d, %d, %d): stub\n", pcpPreference, iColor, fUseHighContrast, iHighContrastColor);
-    return RGB(0, 0, 0);
+    FIXME("(%p, %d, %d, %d): semi-stub\n", pcpPreference, iColor, fUseHighContrast,
+          iHighContrastColor);
+
+    if (fUseHighContrast)
+        return 0xFF000000 | GetSysColor(iHighContrastColor);
+
+    /* The immersive colours carry a fully opaque alpha channel. */
+    return 0xFF000000;
 }
 
 /***********************************************************************
  *      @                                                    (UXTHEME.86)
  */
-HRESULT WINAPI UxThemeOrdinal86(PVOID arg1)
+BOOL WINAPI UxThemeOrdinal86(PVOID arg1)
 {
     FIXME("(%p): stub\n", arg1);
-    return E_NOTIMPL;
+    return FALSE;
 }
 
 /***********************************************************************
@@ -1741,8 +1751,12 @@ HRESULT WINAPI UxThemeOrdinal106(PVOID arg1)
  */
 HRESULT WINAPI UxThemeOrdinal118(PVOID arg1, PVOID arg2)
 {
-    FIXME("(%p, %p): stub\n", arg1, arg2);
-    return E_NOTIMPL;
+    FIXME("(%p, %p): semi-stub\n", arg1, arg2);
+
+    if (arg1)
+        ZeroMemory(arg1, 2 * sizeof(DWORD));
+
+    return S_OK;
 }
 
 /***********************************************************************

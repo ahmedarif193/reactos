@@ -1,5 +1,7 @@
 list(APPEND SOURCE
     ForwardedOrdinals.c
+    RegistryHelpers.c
+    Win81ExportSurface.c
     testlist.c)
 
 add_executable(shcore_apitest ${SOURCE})
