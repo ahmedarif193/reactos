@@ -53,6 +53,16 @@ endif()
 set(FEX_ARM64EC_AVAILABLE ON)
 include(ExternalProject)
 
+# FEX is a compiler, and its own optimisation level multiplies into every block
+# it translates.  Forwarding a Debug CMAKE_BUILD_TYPE builds the JIT -O0 and
+# makes cold code catastrophically slow -- measured at 47.7us to translate one
+# ten-byte stub, against 9ns to run it once translated -- which is paid on
+# first execution and is what makes an emulated program crawl while it loads
+# and run normally afterwards.  Debugging ReactOS does not require an
+# unoptimised emulator, so pick Release here unless asked otherwise.
+set(FEX_ARM64EC_BUILD_TYPE "Release" CACHE STRING
+    "CMAKE_BUILD_TYPE used for the FEX ARM64EC emulator itself")
+
 set(FEX_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-build")
 set(FEX_DLL_SOURCE "${FEX_BINARY_DIR}/Bin/libarm64ecfex.dll")
 set(FEX_DLL_DEST   "${CMAKE_CURRENT_BINARY_DIR}/arm64ecfex.dll")
@@ -70,7 +80,7 @@ ExternalProject_Add(fex-arm64ec-build
     UPDATE_COMMAND ""
     PATCH_COMMAND ""
     CMAKE_ARGS
-        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DCMAKE_BUILD_TYPE=${FEX_ARM64EC_BUILD_TYPE}
         # FEX's ARM64EC Module.cpp needs CONTEXT with AMD64 fields (Rax etc).
         # Only the arm64ec-w64-mingw32 target provides this hybrid CONTEXT.
         # Let the target-prefixed compiler wrappers select it. Passing the

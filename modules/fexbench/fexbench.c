@@ -39,6 +39,37 @@
 
 static double g_TicksPerSecond;
 
+/* SYSTEM_EXCEPTION_INFORMATION / SystemExceptionInformation, transcribed from
+ * sdk/include/ndk/extypes.h so this file stays buildable by a bare mingw for
+ * both targets.  ARM64 maintains ExceptionDispatchCount in ke/arm64/exp.c. */
+#define FEXBENCH_SYSTEM_EXCEPTION_CLASS 33
+
+typedef struct _FEXBENCH_SYSTEM_EXCEPTION_INFORMATION
+{
+    ULONG AlignmentFixupCount;
+    ULONG ExceptionDispatchCount;
+    ULONG FloatingEmulationCount;
+    ULONG ByteWordEmulationCount;
+} FEXBENCH_SYSTEM_EXCEPTION_INFORMATION;
+
+__declspec(dllimport) LONG __stdcall NtQuerySystemInformation(ULONG SystemInformationClass,
+                                                              PVOID SystemInformation,
+                                                              ULONG SystemInformationLength,
+                                                              PULONG ReturnLength);
+
+static unsigned long ExceptionCount(void)
+{
+    FEXBENCH_SYSTEM_EXCEPTION_INFORMATION Info;
+
+    memset(&Info, 0, sizeof(Info));
+    if (NtQuerySystemInformation(FEXBENCH_SYSTEM_EXCEPTION_CLASS,
+                                 &Info, sizeof(Info), NULL) < 0)
+    {
+        return 0;
+    }
+    return (unsigned long)Info.ExceptionDispatchCount;
+}
+
 static void BenchPrint(const char *Format, ...)
 {
     char Buffer[512];
@@ -297,6 +328,122 @@ static void BenchStorage(const char *Directory)
     VirtualFree(Buffer, 0, MEM_RELEASE);
 }
 
+/* ---- Cold code: the path a recompiler actually walks ----
+ *
+ * Every phase above calibrates by running one loop until it has run long
+ * enough, which measures a binary translator at its best: the code is
+ * translated once and then re-executed from its cache.  A program that loads
+ * slowly and then runs fast is telling us about the opposite case, so this
+ * emits a large body of distinct stubs, calls each exactly once, and then
+ * rewrites the same pages and calls them again.  The first pass is cold
+ * translation; the second is what an emulator's own recompiler provokes,
+ * because writing to a page it is about to execute is what self-modifying-code
+ * detection exists to catch.
+ */
+
+#define FEXBENCH_STUB_BYTES  16
+#define FEXBENCH_CODE_BYTES  (32u * 1024u * 1024u)
+#define FEXBENCH_STUB_COUNT  (FEXBENCH_CODE_BYTES / FEXBENCH_STUB_BYTES)
+
+typedef unsigned long long (*FEXBENCH_STUB)(unsigned long long);
+
+static void EmitStub(unsigned char *At, unsigned long Immediate)
+{
+    memset(At, 0xCC, FEXBENCH_STUB_BYTES);
+#if defined(__aarch64__) || defined(_M_ARM64)
+    {
+        /* add x0, x0, #imm12 ; ret */
+        unsigned long Add = 0x91000000UL | ((Immediate & 0xFFFUL) << 10);
+        At[0] = (unsigned char)(Add & 0xFF);
+        At[1] = (unsigned char)((Add >> 8) & 0xFF);
+        At[2] = (unsigned char)((Add >> 16) & 0xFF);
+        At[3] = (unsigned char)((Add >> 24) & 0xFF);
+        At[4] = 0xC0; At[5] = 0x03; At[6] = 0x5F; At[7] = 0xD6;
+    }
+#else
+    {
+        /* mov rax, rcx ; add rax, imm32 ; ret */
+        At[0] = 0x48; At[1] = 0x89; At[2] = 0xC8;
+        At[3] = 0x48; At[4] = 0x05;
+        At[5] = (unsigned char)(Immediate & 0xFF);
+        At[6] = (unsigned char)((Immediate >> 8) & 0xFF);
+        At[7] = (unsigned char)((Immediate >> 16) & 0xFF);
+        At[8] = (unsigned char)((Immediate >> 24) & 0xFF);
+        At[9] = 0xC3;
+    }
+#endif
+}
+
+static void BenchColdCode(void)
+{
+    unsigned char *Code;
+    LARGE_INTEGER Start;
+    double Seconds;
+    unsigned long long Sum = 0;
+    unsigned long Index;
+    unsigned long Exceptions;
+    unsigned long Pass;
+
+    Code = (unsigned char *)VirtualAlloc(NULL, FEXBENCH_CODE_BYTES,
+                                         MEM_COMMIT | MEM_RESERVE,
+                                         PAGE_EXECUTE_READWRITE);
+    if (Code == NULL)
+    {
+        BenchPrint("FEXBENCH %s cold_code     unavailable (VirtualAlloc RWX failed %lu)\n",
+                   FEXBENCH_ARCH, (unsigned long)GetLastError());
+        return;
+    }
+
+    for (Index = 0; Index < FEXBENCH_STUB_COUNT; ++Index)
+        EmitStub(Code + (size_t)Index * FEXBENCH_STUB_BYTES, Index & 0xFFF);
+    FlushInstructionCache(GetCurrentProcess(), Code, FEXBENCH_CODE_BYTES);
+
+    Exceptions = ExceptionCount();
+    QueryPerformanceCounter(&Start);
+    for (Index = 0; Index < FEXBENCH_STUB_COUNT; ++Index)
+        Sum += ((FEXBENCH_STUB)(void *)(Code + (size_t)Index * FEXBENCH_STUB_BYTES))(Index);
+    Seconds = SecondsSince(Start);
+    BenchPrint("FEXBENCH %s cold_first    %10.0f stubs/s  (%.3fs, %lu stubs, %lu exc, checksum %08lx)\n",
+               FEXBENCH_ARCH,
+               (Seconds > 0.0) ? ((double)FEXBENCH_STUB_COUNT / Seconds) : 0.0,
+               Seconds, (unsigned long)FEXBENCH_STUB_COUNT,
+               ExceptionCount() - Exceptions,
+               (unsigned long)(Sum & 0xFFFFFFFFULL));
+
+    Exceptions = ExceptionCount();
+    QueryPerformanceCounter(&Start);
+    for (Index = 0; Index < FEXBENCH_STUB_COUNT; ++Index)
+        Sum += ((FEXBENCH_STUB)(void *)(Code + (size_t)Index * FEXBENCH_STUB_BYTES))(Index);
+    Seconds = SecondsSince(Start);
+    BenchPrint("FEXBENCH %s warm_again    %10.0f stubs/s  (%.3fs, %lu stubs, %lu exc)\n",
+               FEXBENCH_ARCH,
+               (Seconds > 0.0) ? ((double)FEXBENCH_STUB_COUNT / Seconds) : 0.0,
+               Seconds, (unsigned long)FEXBENCH_STUB_COUNT,
+               ExceptionCount() - Exceptions);
+
+    for (Pass = 1; Pass <= 3; ++Pass)
+    {
+        Exceptions = ExceptionCount();
+        QueryPerformanceCounter(&Start);
+        for (Index = 0; Index < FEXBENCH_STUB_COUNT; ++Index)
+        {
+            unsigned char *At = Code + (size_t)Index * FEXBENCH_STUB_BYTES;
+            EmitStub(At, (Index + Pass) & 0xFFF);
+            Sum += ((FEXBENCH_STUB)(void *)At)(Index);
+        }
+        Seconds = SecondsSince(Start);
+        BenchPrint("FEXBENCH %s smc_rewrite%lu %10.0f stubs/s  (%.3fs, %lu stubs, %lu exc)\n",
+                   FEXBENCH_ARCH, (unsigned long)Pass,
+                   (Seconds > 0.0) ? ((double)FEXBENCH_STUB_COUNT / Seconds) : 0.0,
+                   Seconds, (unsigned long)FEXBENCH_STUB_COUNT,
+                   ExceptionCount() - Exceptions);
+    }
+
+    BenchPrint("FEXBENCH %s cold_checksum %08lx\n", FEXBENCH_ARCH,
+               (unsigned long)(Sum & 0xFFFFFFFFULL));
+    VirtualFree(Code, 0, MEM_RELEASE);
+}
+
 int main(int argc, char *argv[])
 {
     LARGE_INTEGER Frequency;
@@ -315,6 +462,7 @@ int main(int argc, char *argv[])
     BenchPrint("FEXBENCH_BEGIN %s qpc=%llu Hz dir=%s\n", FEXBENCH_ARCH,
                (unsigned long long)Frequency.QuadPart, Directory);
 
+    BenchColdCode();
     BenchCpu("cpu_int", CpuIntegerChain);
     BenchCpu("cpu_branch", CpuBranchChain);
     BenchMemory();
