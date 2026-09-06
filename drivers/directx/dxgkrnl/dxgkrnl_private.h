@@ -3995,6 +3995,7 @@ VOID DxgkPagingDumpStats(_In_ struct _DXGKRNL_ADAPTER *Adapter);
 VOID DxgkGpuVaRecordEvent(_In_ CHAR Op, _In_ ULONGLONG Address, _In_ ULONGLONG Size, _In_ ULONG Handle);
 VOID DxgkGpuVaDumpRecentEvents(VOID);
 VOID DxgkGpuVaDumpBuffer(_In_opt_ struct _DXGKRNL_PROCESS *Process, _In_ D3DGPU_VIRTUAL_ADDRESS GpuVa, _In_ ULONG Size);
+BOOLEAN DxgkGpuVaCopyFromProcess(_In_ struct _DXGKRNL_PROCESS *Process, _In_ D3DGPU_VIRTUAL_ADDRESS Va, _Out_writes_bytes_(Size) PVOID Buffer, _In_ ULONG Size);
 VOID DxgkGpuVaDumpProcessRanges(_In_opt_ struct _DXGKRNL_PROCESS *Process);
 VOID DxgkVidMmDumpContextAllocations(_In_ PDXGKRNL_ADAPTER Adapter);
 BOOLEAN DxgkVidMmApertureWindow(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PHYSICAL_ADDRESS *CpuBaseForGttZero, _Out_ ULONGLONG *GttBase, _Out_ ULONGLONG *GttSize);
