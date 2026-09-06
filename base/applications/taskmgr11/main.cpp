@@ -6,6 +6,7 @@
  */
 
 #include "app.h"
+#include <reactos/dwmframe.h>
 
 #define FRAME_CLASS L"TaskManager11Frame"
 #define TRAY_ID 1
@@ -144,7 +145,7 @@ void Settings_Load(void)
 {
     Settings& st = g_app.st;
     ZeroMemory(&st, sizeof(st));
-    st.theme = TM_DARK;
+    st.theme = TM_TRANSPARENT;
     st.startPage = PG_PROCESSES;
     st.speed = SPD_NORMAL;
     st.navExpanded = TRUE;
@@ -171,7 +172,7 @@ void Settings_Load(void)
             st.wp.length = 0;
         RegCloseKey(hk);
     }
-    if (st.theme > TM_DARK) st.theme = TM_DARK;
+    if (st.theme > TM_TRANSPARENT) st.theme = TM_TRANSPARENT;
     if (st.startPage >= PG_SETTINGS) st.startPage = PG_PROCESSES;
     if (st.speed > SPD_PAUSED) st.speed = SPD_NORMAL;
 }
@@ -454,8 +455,15 @@ void Frame_UpdateCommandStates(void)
         pg->UpdateCommands(s_strip);
 }
 
+static void ApplyBackdropRegion(HWND hwnd)
+{
+    SetPropW(hwnd, DWM_PROP_BACKDROP_REGION,
+             (HANDLE)(ULONG_PTR)(g_t.transparent ? DWM_BACKDROP_REGION_WINDOW : DWM_BACKDROP_REGION_NONCLIENT));
+}
+
 static void LayoutChildren(HWND hwnd)
 {
+    ApplyBackdropRegion(hwnd);
     RECT pr;
     PageRect(hwnd, &pr);
     for (int i = 0; i < PG_COUNT; i++)
@@ -586,9 +594,11 @@ void App_ApplyTheme(void)
     {
     case TM_LIGHT: dark = FALSE; break;
     case TM_DARK:  dark = TRUE; break;
+    case TM_TRANSPARENT: dark = TRUE; break;
     default:       dark = Theme_SystemPrefersDark(); break;
     }
     Theme_Apply(dark, g_app.dpi);
+    g_t.transparent = (g_app.st.theme == TM_TRANSPARENT);
 
     if (s_search)
         SendMessageW(s_search, WM_APP_THEMECHG, 0, 0);
@@ -604,6 +614,7 @@ void App_ApplyTheme(void)
     if (g_app.hFrame)
     {
         DwmSetWindowAttribute(g_app.hFrame, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+        ApplyBackdropRegion(g_app.hFrame);
         InvalidateRect(g_app.hFrame, NULL, TRUE);
     }
 }
@@ -616,7 +627,8 @@ static void PaintFrame(HWND hwnd, HDC dc, const RECT& rcPaint)
 {
     RECT rc;
     GetClientRect(hwnd, &rc);
-    FillRect32(dc, rcPaint, g_t.winBg);
+    ULONG_PTR key = g_t.transparent ? (ULONG_PTR)GetPropW(hwnd, DWM_PROP_BACKDROP_COLOR) : 0;
+    FillRect32(dc, rcPaint, key ? (COLORREF)(key - 1) : g_t.winBg);
 
     /* ---- nav rail ---- */
     RECT nav = { rc.left, rc.top, rc.left + RailW(), rc.bottom };
