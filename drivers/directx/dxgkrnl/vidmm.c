@@ -318,10 +318,19 @@ typedef struct _DXGKVMM_VIRTUAL_DMA_BACKING
     BOOLEAN ResidencyPinned;
     BOOLEAN MappingPinned;
     ULONG DataMappingCount;
+    /* Source/destination mappings of a Present.  They outlive the
+     * submission on the pooled backing: the CDD shadow and primary are
+     * presented every frame through the same persistent bindings, and
+     * mapping them anew each time cost two synchronous page-table
+     * transactions per Present.  Binding identifies the mapping; a binding
+     * that was destroyed has had its range invalidated, which the pin on
+     * reuse detects, and the entry is then remapped. */
     struct
     {
         D3DGPU_VIRTUAL_ADDRESS Address;
         ULONGLONG Size;
+        PDXGKVMM_ALLOCATION Binding;
+        BOOLEAN Write;
         BOOLEAN Pinned;
     } DataMappings[2];
 } DXGKVMM_VIRTUAL_DMA_BACKING, *PDXGKVMM_VIRTUAL_DMA_BACKING;
@@ -1364,6 +1373,45 @@ DxgkVidMmCreateDmaBufferBacking(
     return Status;
 }
 
+/* Release this submission's pins but keep the mappings for the next
+ * Present through the same bindings. */
+VOID
+DxgkVidMmUnpinVirtualDmaBufferMappings(
+    _In_ PDXGKVMM_VIRTUAL_DMA_BACKING Backing)
+{
+    PDXGKRNL_DEVICE Device = Backing->Device;
+    ULONG Index;
+
+    PAGED_CODE();
+    for (Index = 0; Index < Backing->DataMappingCount; Index++)
+    {
+        if (!Backing->DataMappings[Index].Pinned)
+            continue;
+        DxgkGpuVaUnpinRange(Device->ProcessRecord, Backing->DataMappings[Index].Address, Backing->DataMappings[Index].Size);
+        Backing->DataMappings[Index].Pinned = FALSE;
+    }
+}
+
+static NTSTATUS
+DxgkpVidMmFreeVirtualDmaBufferMapping(
+    _In_ PDXGKVMM_VIRTUAL_DMA_BACKING Backing,
+    _In_ ULONG Index)
+{
+    PDXGKRNL_DEVICE Device = Backing->Device;
+    NTSTATUS Status;
+
+    if (Backing->DataMappings[Index].Pinned)
+        DxgkGpuVaUnpinRange(Device->ProcessRecord, Backing->DataMappings[Index].Address, Backing->DataMappings[Index].Size);
+    /* Binding invalidation leaves a reservation behind. These ranges
+     * were allocated privately for Present, not reserved by a UMD. */
+    Status = DxgkGpuVaFree(Device->ProcessRecord, Backing->DataMappings[Index].Address, Backing->DataMappings[Index].Size);
+    Backing->DataMappingCount--;
+    if (Index != Backing->DataMappingCount)
+        Backing->DataMappings[Index] = Backing->DataMappings[Backing->DataMappingCount];
+    RtlZeroMemory(&Backing->DataMappings[Backing->DataMappingCount], sizeof(Backing->DataMappings[0]));
+    return Status;
+}
+
 NTSTATUS
 DxgkVidMmResetVirtualDmaBufferMappings(
     _In_ PDXGKVMM_VIRTUAL_DMA_BACKING Backing)
@@ -1373,15 +1421,10 @@ DxgkVidMmResetVirtualDmaBufferMappings(
     NTSTATUS CleanupStatus;
 
     PAGED_CODE();
+    UNREFERENCED_PARAMETER(Device);
     while (Backing->DataMappingCount != 0)
     {
-        ULONG Index = --Backing->DataMappingCount;
-
-        if (Backing->DataMappings[Index].Pinned)
-            DxgkGpuVaUnpinRange(Device->ProcessRecord, Backing->DataMappings[Index].Address, Backing->DataMappings[Index].Size);
-        /* Binding invalidation leaves a reservation behind. These ranges
-         * were allocated privately for this Present, not reserved by a UMD. */
-        CleanupStatus = DxgkGpuVaFree(Device->ProcessRecord, Backing->DataMappings[Index].Address, Backing->DataMappings[Index].Size);
+        CleanupStatus = DxgkpVidMmFreeVirtualDmaBufferMapping(Backing, Backing->DataMappingCount - 1);
         if (!NT_SUCCESS(CleanupStatus))
         {
             DPRINT1("VidMm: Present GPUVA reservation release failed 0x%08lx\n", CleanupStatus);
@@ -1449,9 +1492,43 @@ DxgkVidMmMapVirtualPresentAllocation(
 
     PAGED_CODE();
     if (Binding == NULL || Binding->Device != Device ||
-        Allocation == NULL || OutAddress == NULL ||
-        Backing->DataMappingCount >= RTL_NUMBER_OF(Backing->DataMappings))
+        Allocation == NULL || OutAddress == NULL)
         return STATUS_INVALID_PARAMETER;
+
+    /* Reuse the mapping of an earlier Present through the same binding.
+     * The pin validates it: a binding destroyed since (allocation
+     * generation change) had its range invalidated, and the pin fails. */
+    for (Index = 0; Index < Backing->DataMappingCount; Index++)
+    {
+        if (Backing->DataMappings[Index].Binding != Binding ||
+            Backing->DataMappings[Index].Size != Allocation->Size ||
+            Backing->DataMappings[Index].Write != Write)
+            continue;
+        if (Backing->DataMappings[Index].Pinned ||
+            DxgkGpuVaPinAllocationRange(Device->Adapter, Device->ProcessRecord, Backing->DataMappings[Index].Address, Allocation->Size))
+        {
+            Backing->DataMappings[Index].Pinned = TRUE;
+            *OutAddress = Backing->DataMappings[Index].Address;
+            return STATUS_SUCCESS;
+        }
+        (VOID)DxgkpVidMmFreeVirtualDmaBufferMapping(Backing, Index);
+        break;
+    }
+    /* Make room by retiring an idle mapping of some other binding. */
+    if (Backing->DataMappingCount >= RTL_NUMBER_OF(Backing->DataMappings))
+    {
+        for (Index = 0; Index < Backing->DataMappingCount; Index++)
+        {
+            if (!Backing->DataMappings[Index].Pinned)
+            {
+                (VOID)DxgkpVidMmFreeVirtualDmaBufferMapping(Backing, Index);
+                break;
+            }
+        }
+        if (Backing->DataMappingCount >= RTL_NUMBER_OF(Backing->DataMappings))
+            return STATUS_INVALID_PARAMETER;
+    }
+
     Protection.Value = 0;
     Protection.Write = Write;
     Status = DxgkGpuVaMap(Device->Adapter, Device->ProcessRecord, Allocation, Binding->Handle, 0, 0, 0, 0, Allocation->Size, Protection, 0, OutAddress);
@@ -1462,6 +1539,8 @@ DxgkVidMmMapVirtualPresentAllocation(
     Index = Backing->DataMappingCount++;
     Backing->DataMappings[Index].Address = *OutAddress;
     Backing->DataMappings[Index].Size = Allocation->Size;
+    Backing->DataMappings[Index].Binding = Binding;
+    Backing->DataMappings[Index].Write = Write;
     Backing->DataMappings[Index].Pinned = FALSE;
     Status = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
     if (!NT_SUCCESS(Status))
@@ -1469,8 +1548,6 @@ DxgkVidMmMapVirtualPresentAllocation(
     if (!DxgkGpuVaPinAllocationRange(Device->Adapter, Device->ProcessRecord, *OutAddress, Allocation->Size))
         return STATUS_INVALID_DEVICE_STATE;
     Backing->DataMappings[Index].Pinned = TRUE;
-    /* The fresh Present binding owns the mapping. Its normal destruction
-     * invalidates it on either cancellation or tracked Present retirement. */
     return STATUS_SUCCESS;
 }
 

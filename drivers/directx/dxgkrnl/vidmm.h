@@ -1025,6 +1025,10 @@ NTSTATUS
 DxgkVidMmResetVirtualDmaBufferMappings(
     _In_ struct _DXGKVMM_VIRTUAL_DMA_BACKING *Backing);
 
+VOID
+DxgkVidMmUnpinVirtualDmaBufferMappings(
+    _In_ struct _DXGKVMM_VIRTUAL_DMA_BACKING *Backing);
+
 NTSTATUS
 DxgkVidMmMapVirtualPresentAllocation(
     _In_ struct _DXGKVMM_VIRTUAL_DMA_BACKING *Backing,
