@@ -10869,10 +10869,10 @@ DxgkpAcquirePostDisplayOwnership(
     /*
      * Boot display ownership policy (the MSBDD handover, see
      * g_PostDisplayOwnerAdapter above):
-     *   - the basic-display fallback never takes the display away from a
-     *     real miniport: it gets an empty descriptor and declines start;
-     *   - a real miniport claiming the display stops the current owner
-     *     (typically the fallback) before acquiring.
+     *   - only the first real miniport may replace the basic-display
+     *     fallback;
+     *   - a later adapter gets an empty descriptor and leaves the established
+     *     real display owner running, as native does for a non-POST device.
      */
     {
         PDEVICE_OBJECT OwnerDeviceObject;
@@ -10882,67 +10882,38 @@ DxgkpAcquirePostDisplayOwnership(
         PreviousOwner = Owner;
         if (Claimant != NULL && Owner != NULL && Owner != Claimant)
         {
-            if (Claimant->MiniportContext != NULL &&
-                Claimant->MiniportContext->IsBasicDisplayFallback &&
-                Owner->MiniportContext != NULL &&
-                !Owner->MiniportContext->IsBasicDisplayFallback)
-            {
-                DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: boot display "
-                              "already owned by adapter %p — fallback yields\n",
-                              Owner);
-                ObDereferenceObject(OwnerDeviceObject);
-                goto Complete;
-            }
-
             RetainFallback =
                 Claimant->MiniportContext != NULL &&
                 !Claimant->MiniportContext->IsBasicDisplayFallback &&
                 Owner->MiniportContext != NULL &&
                 Owner->MiniportContext->IsBasicDisplayFallback;
-            /*
-             * Nothing can be transferred when firmware left no framebuffer.
-             * Native DpiFdoDetectPostDevice associates the BGFX framebuffer
-             * range with an adapter resource before designating a POST device,
-             * and native DpiAcquirePostDisplayOwnership returns an empty
-             * descriptor to a claimant that is not that device.  Do not turn
-             * an empty descriptor into ownership here.
-             *
-             * This matters for full WDDM miniports too.  Their StartDevice
-             * source/child counts are capacities; connected targets are found
-             * by the later child-relations query.  Stopping BasicDisplay here,
-             * before that query, leaves ReactOS' single win32ss display bridge
-             * without a PDEV when every target is disconnected and win32k
-             * bugchecks VIDEO_DRIVER_INIT_FAILURE.  Keep the headless fallback
-             * until a future boot supplies transferable POST state.
-             */
-            if (RetainFallback &&
-                Owner->PostDisplayWidth == 0 &&
-                !InbvHasValidGopFrameBuffer())
+            if (!RetainFallback)
             {
-                DXGKRNL_WARN("DxgkCbAcquirePostDisplayOwnership: no firmware "
-                             "framebuffer to hand over; fallback %p keeps the "
-                             "desktop, claimant %p starts without it\n",
-                             Owner, Claimant);
-                if (OwnerDeviceObject != NULL)
-                    ObDereferenceObject(OwnerDeviceObject);
+                DXGKRNL_TRACE("DxgkCbAcquirePostDisplayOwnership: boot display "
+                              "already owned by adapter %p; claimant %p gets "
+                              "an empty descriptor\n",
+                              Owner,
+                              Claimant);
+                ObDereferenceObject(OwnerDeviceObject);
                 goto Complete;
             }
-            if (RetainFallback)
-            {
-                Status = DxgkpRetainAndStopBasicDisplayFallback(
-                             Claimant,
-                             Owner,
-                             &OwnerDeviceObject,
-                             &ReleasedDisplayInformation,
-                             &ReleasedByDriver);
-            }
-            else
-            {
-                Status = DxgkpStopPostDisplayOwner(
-                             Owner,
-                             &ReleasedDisplayInformation,
-                             &ReleasedByDriver);
-            }
+
+            /*
+             * An empty POST descriptor still permits a real miniport to
+             * cold-start its display pipeline.  Native
+             * DpiAcquirePostDisplayOwnership returns the empty descriptor for
+             * a non-POST device; it does not make the software fallback the
+             * permanent display owner.  ReactOS has one win32ss bridge, so
+             * hand that bridge to the first full miniport even when the
+             * firmware supplied no framebuffer.  The retained fallback is
+             * restarted if claimant startup subsequently fails.
+             */
+            Status = DxgkpRetainAndStopBasicDisplayFallback(
+                         Claimant,
+                         Owner,
+                         &OwnerDeviceObject,
+                         &ReleasedDisplayInformation,
+                         &ReleasedByDriver);
             if (!NT_SUCCESS(Status))
             {
                 if (OwnerDeviceObject != NULL)
