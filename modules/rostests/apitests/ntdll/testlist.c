@@ -146,6 +146,8 @@ extern void func_TimerResolution(void);
 extern void func_UserModeException(void);
 #endif
 
+extern void func_RtlWnfAndSqm(void);
+
 const struct test winetest_testlist[] =
 {
     // CRT tests from ../crt
@@ -297,5 +299,6 @@ const struct test winetest_testlist[] =
     { "RtlVirtualUnwind",               func_RtlVirtualUnwind },
 #endif
 
+    { "RtlWnfAndSqm", func_RtlWnfAndSqm },
     { 0, 0 }
 };

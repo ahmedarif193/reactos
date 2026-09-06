@@ -611,3 +611,57 @@ GhostWndProcW(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     return GhostWndProc_common(hwnd, uMsg, wParam, lParam, TRUE);
 }
+
+/*
+ * @implemented
+ */
+HWND WINAPI
+GhostWindowFromHungWindow(HWND hwndHung)
+{
+    HWND hwndGhost;
+    PWND pWnd = ValidateHwnd(hwndHung);
+
+    if (!pWnd)
+    {
+        SetLastError(ERROR_INVALID_WINDOW_HANDLE);
+        return NULL;
+    }
+
+    hwndGhost = (HWND)GetPropW(hwndHung, GHOST_PROP);
+    if (!hwndGhost)
+        return NULL;
+
+    pWnd = ValidateHwnd(hwndGhost);
+    if (!pWnd || pWnd->fnid != FNID_GHOST)
+        return NULL;
+
+    return hwndGhost;
+}
+
+/*
+ * @implemented
+ */
+HWND WINAPI
+HungWindowFromGhostWindow(HWND hwndGhost)
+{
+    HWND hwndTarget;
+    PWND pWnd = ValidateHwnd(hwndGhost);
+
+    if (!pWnd)
+    {
+        SetLastError(ERROR_INVALID_WINDOW_HANDLE);
+        return NULL;
+    }
+
+    if (pWnd->fnid != FNID_GHOST)
+    {
+        SetLastError(ERROR_INVALID_WINDOW_HANDLE);
+        return NULL;
+    }
+
+    hwndTarget = Ghost_GetTarget(hwndGhost);
+    if (!hwndTarget || !IsWindow(hwndTarget))
+        return NULL;
+
+    return hwndTarget;
+}

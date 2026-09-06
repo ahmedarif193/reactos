@@ -956,7 +956,7 @@ Shell32Ordinal885(PVOID Arg1)
     return E_NOTIMPL;
 }
 
-EXTERN_C HRESULT
+EXTERN_C BOOL
 WINAPI
 Shell32Ordinal892(PVOID Arg1, PVOID Arg2, PVOID Arg3)
 {
@@ -965,7 +965,7 @@ Shell32Ordinal892(PVOID Arg1, PVOID Arg2, PVOID Arg3)
     UNREFERENCED_PARAMETER(Arg3);
 
     FIXME("shell32.#892 stub\n");
-    return E_NOTIMPL;
+    return FALSE;
 }
 
 EXTERN_C HRESULT
@@ -1021,14 +1021,14 @@ Shell32Ordinal896(PVOID Arg1)
     return E_NOTIMPL;
 }
 
+static PVOID g_Shell32Ordinal899Value;
+
 EXTERN_C HRESULT
 WINAPI
 Shell32Ordinal899(PVOID Arg1)
 {
-    UNREFERENCED_PARAMETER(Arg1);
-
-    FIXME("shell32.#899 stub\n");
-    return E_NOTIMPL;
+    g_Shell32Ordinal899Value = Arg1;
+    return S_OK;
 }
 
 EXTERN_C HRESULT
@@ -1047,10 +1047,13 @@ WINAPI
 Shell32Ordinal905(PVOID Arg1, PVOID Arg2)
 {
     UNREFERENCED_PARAMETER(Arg1);
-    UNREFERENCED_PARAMETER(Arg2);
 
     FIXME("shell32.#905 stub\n");
-    return E_NOTIMPL;
+
+    if (Arg2)
+        *(PDWORD)Arg2 = 0;
+
+    return E_FAIL;
 }
 
 EXTERN_C HRESULT

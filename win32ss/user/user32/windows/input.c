@@ -1334,4 +1334,30 @@ mouse_event(
     NtUserSendInput(1, &Input, sizeof(INPUT));
 }
 
+/*
+ * @implemented
+ */
+BOOL WINAPI
+EnableMouseInPointer(BOOL fEnable)
+{
+    return NtUserEnableMouseInPointer(fEnable);
+}
+
+/*
+ * @implemented
+ */
+BOOL WINAPI
+GetCurrentInputMessageSource(INPUT_MESSAGE_SOURCE *inputMessageSource)
+{
+    if (!inputMessageSource)
+    {
+        SetLastError(ERROR_NOACCESS);
+        return FALSE;
+    }
+
+    inputMessageSource->deviceType = IMDT_UNAVAILABLE;
+    inputMessageSource->originId = IMO_UNAVAILABLE;
+    return TRUE;
+}
+
 /* EOF */

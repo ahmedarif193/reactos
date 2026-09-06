@@ -4418,6 +4418,9 @@ BroadcastSystemMessageExW(
 #endif /* (_WIN32_WINNT >= 0x0501) */
 
 void WINAPI CalcChildScroll(HWND, INT);
+#if (_WIN32_WINNT >= 0x0601)
+BOOL WINAPI CalculatePopupWindowPosition(_In_ const POINT*, _In_ const SIZE*, _In_ UINT, _In_opt_ RECT*, _Out_ RECT*);
+#endif
 BOOL WINAPI CallMsgFilterA(_In_ LPMSG, _In_ INT);
 BOOL WINAPI CallMsgFilterW(_In_ LPMSG, _In_ INT);
 LRESULT WINAPI CallNextHookEx(_In_opt_ HHOOK, _In_ int, _In_ WPARAM, _In_ LPARAM);
@@ -4801,6 +4804,9 @@ DrawTextExW(
 
 BOOL WINAPI EmptyClipboard(void);
 BOOL WINAPI EnableMenuItem(_In_ HMENU, _In_ UINT, _In_ UINT);
+#if (_WIN32_WINNT >= 0x0602)
+BOOL WINAPI EnableMouseInPointer(_In_ BOOL);
+#endif
 BOOL WINAPI EnableScrollBar(_In_ HWND, _In_ UINT, _In_ UINT);
 BOOL WINAPI EnableWindow(_In_ HWND, _In_ BOOL);
 #if (WINVER >= 0x0605)
@@ -4911,6 +4917,9 @@ DWORD WINAPI GetClipboardSequenceNumber(void);
 #endif
 HWND WINAPI GetClipboardViewer(void);
 BOOL WINAPI GetClipCursor(_Out_ LPRECT);
+#if (WINVER >= 0x0601)
+BOOL WINAPI GetCurrentInputMessageSource(_Out_ INPUT_MESSAGE_SOURCE*);
+#endif
 BOOL WINAPI GetCursorPos(_Out_ LPPOINT);
 HDC WINAPI GetDC(_In_opt_ HWND);
 HDC WINAPI GetDCEx(_In_opt_ HWND, _In_opt_ HRGN, _In_ DWORD);
@@ -5054,6 +5063,9 @@ GetPriorityClipboardFormat(
   _In_reads_(cFormats) UINT *paFormatPriorityList,
   _In_ int cFormats);
 
+#if (_WIN32_WINNT >= 0x0600)
+BOOL WINAPI GetPhysicalCursorPos(_Out_ LPPOINT);
+#endif
 HANDLE WINAPI GetPropA(_In_ HWND, _In_ LPCSTR);
 HANDLE WINAPI GetPropW(_In_ HWND, _In_ LPCWSTR);
 

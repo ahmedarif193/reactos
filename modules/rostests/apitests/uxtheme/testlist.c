@@ -3,6 +3,7 @@
 #include <apitest.h>
 
 extern void func_CloseThemeData(void);
+extern void func_ColorPreference(void);
 extern void func_DrawThemeParentBackground(void);
 extern void func_GetThemeParseErrorInfo(void);
 extern void func_NonClientCaption(void);
@@ -14,6 +15,7 @@ extern void func_ThemeShellTransition(void);
 const struct test winetest_testlist[] =
 {
     { "CloseThemeData", func_CloseThemeData },
+    { "ColorPreference", func_ColorPreference },
     { "DrawThemeParentBackground", func_DrawThemeParentBackground },
     { "GetThemeParseErrorInfo", func_GetThemeParseErrorInfo },
     { "NonClientCaption", func_NonClientCaption },

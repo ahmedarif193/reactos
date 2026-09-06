@@ -24,6 +24,7 @@
 @ stdcall BroadcastSystemMessageW(long ptr long long long)
 @ stdcall BuildReasonArray(ptr)
 @ stdcall CalcMenuBar(long long long long long) NtUserCalcMenuBar
+@ stdcall -version=0x601+ CalculatePopupWindowPosition(ptr ptr long ptr ptr)
 @ stdcall CallMsgFilter(ptr long) CallMsgFilterA
 @ stdcall CallMsgFilterA(ptr long)
 @ stdcall CallMsgFilterW(ptr long)
@@ -104,6 +105,7 @@
 @ stdcall -version=0xA00+ CreateSyntheticPointerDevice(long long long)
 @ stdcall CreateWindowExA(long str str long long long long long long long long ptr)
 @ stdcall CreateWindowExW(long wstr wstr long long long long long long long long ptr)
+@ stdcall -version=0x602+ CreateWindowInBand(long wstr wstr long long long long long long long long ptr long)
 @ stdcall CreateWindowStationA(str long long ptr)
 @ stdcall CreateWindowStationW(wstr long long ptr)
 @ stdcall CsrBroadcastSystemMessageExW(long ptr long long long ptr)
@@ -205,6 +207,7 @@
 @ stdcall EditWndProc(long long long long) EditWndProcA
 @ stdcall EmptyClipboard() NtUserEmptyClipboard
 @ stdcall EnableMenuItem(long long long)
+@ stdcall -version=0x602+ EnableMouseInPointer(long)
 @ stdcall EnableScrollBar(long long long)
 @ stdcall EnableWindow(long long)
 @ stdcall EndDeferWindowPos(long)
@@ -277,6 +280,7 @@
 @ stdcall GetClipboardSequenceNumber() NtUserGetClipboardSequenceNumber
 @ stdcall GetClipboardViewer() NtUserGetClipboardViewer
 @ stdcall GetComboBoxInfo(long ptr) ; Direct call NtUserGetComboBoxInfo
+@ stdcall -version=0x602+ GetCurrentInputMessageSource(ptr)
 @ stdcall GetCursor()
 @ stdcall GetCursorFrameInfo(long long long long long)
 @ stdcall GetCursorInfo(ptr) NtUserGetCursorInfo
@@ -298,6 +302,7 @@
 @ stdcall -version=0xA00+ GetDpiAwarenessContextForProcess(long)
 @ stdcall -version=0x601+ GetDpiForMonitorInternal(ptr long ptr ptr)
 @ stdcall -version=0xA00+ GetDpiForSystem()
+@ stdcall -version=0x600+ GetPhysicalCursorPos(ptr)
 @ stdcall -version=0xA00+ GetSystemMetricsForDpi(long long)
 @ stdcall -version=0xA00+ GetDpiForWindow(ptr)
 @ stdcall -version=0xA00+ GetDpiFromDpiAwarenessContext(long)
@@ -405,6 +410,7 @@
 @ stdcall GetUserObjectInformationA(long long ptr long ptr)
 @ stdcall GetUserObjectInformationW(long long ptr long ptr) NtUserGetObjectInformation
 @ stdcall GetUserObjectSecurity (long ptr ptr long ptr)
+@ stdcall -version=0x602+ GetWindowBand(long ptr)
 @ stdcall GetWinStationInfo(ptr)
 @ stdcall GetWindow(long long)
 @ stdcall GetWindowContextHelpId(long)
@@ -429,10 +435,12 @@
 @ stdcall GetWindowTextW(long ptr long)
 @ stdcall GetWindowThreadProcessId(long ptr)
 @ stdcall GetWindowWord(long long)
+@ stdcall -version=0x601+ GhostWindowFromHungWindow(long)
 @ stdcall GrayStringA(long long ptr long long long long long long)
 @ stdcall GrayStringW(long long ptr long long long long long long)
 @ stdcall HideCaret(long) NtUserHideCaret
 @ stdcall HiliteMenuItem(long long long long) NtUserHiliteMenuItem
+@ stdcall -version=0x601+ HungWindowFromGhostWindow(long)
 @ stdcall IMPGetIMEA(long ptr)
 @ stdcall IMPGetIMEW(long ptr)
 @ stdcall IMPQueryIMEA(ptr)
@@ -478,6 +486,7 @@
 @ stdcall IsRectEmpty(ptr)
 @ stdcall IsSETEnabled()
 @ stdcall IsServerSideWindow(long)
+@ stdcall -version=0x601+ IsTopLevelWindow(long)
 @ stdcall -version=0x601+ IsTouchWindow(long ptr)
 @ stdcall -version=0xA00+ IsValidDpiAwarenessContext(long)
 @ stdcall IsWinEventHookInstalled(long)
@@ -809,6 +818,7 @@
 @ stdcall VkKeyScanExW(long long)
 @ stdcall VkKeyScanW(long)
 @ stdcall WCSToMBEx(long wstr long str long long)
+@ stdcall -version=0x600+ WindowFromPhysicalPoint(double)
 @ stdcall WINNLSEnableIME(long long)
 @ stdcall WINNLSGetEnableStatus(long)
 @ stdcall WINNLSGetIMEHotkey(long)
@@ -825,3 +835,6 @@
 @ varargs wsprintfW(ptr wstr)
 @ stdcall wvsprintfA(ptr str ptr)
 @ stdcall wvsprintfW(ptr wstr ptr)
+2005 stdcall -noname -version=0x602+ User32Ordinal2005(ptr)
+2522 stdcall -noname -version=0x602+ User32Ordinal2522(ptr)
+2530 stdcall -noname -version=0x602+ User32Ordinal2530(ptr ptr)

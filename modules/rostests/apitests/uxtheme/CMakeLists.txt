@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     CloseThemeData.c
+    ColorPreference.c
     DrawThemeParentBackground.c
     GetThemeParseErrorInfo.c
     NonClientCaption.c
