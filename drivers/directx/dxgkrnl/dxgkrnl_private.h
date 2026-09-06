@@ -1408,6 +1408,16 @@ struct _DXGKRNL_CONTEXT
      * miniport association even when VidMm retains the same root address. */
     BOOLEAN                     RootPageTablePublished;
     BOOLEAN                     GpuMmuNodeKnown;
+    /* Fault attribution: the last submission on this context whose batch
+     * head carried STATE_BASE_ADDRESS with modify-enable for each base
+     * (diag sequence and value; 0 = never seen).  A fault at a small
+     * address with an inherited base is explained by which submission,
+     * and whether it was this context, last established that base. */
+    struct
+    {
+        LONG64                  Sequence;
+        ULONGLONG               Address;
+    }                           LastBase[5]; /* general, surface, dynamic, indirect, instruction */
     BOOLEAN                     GpuMmuNode;
     D3DGPU_PHYSICAL_ADDRESS      PublishedRootPageTableAddress;
     UINT                        PublishedRootPageTableEntries;

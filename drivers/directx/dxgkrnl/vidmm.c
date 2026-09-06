@@ -1846,7 +1846,7 @@ DxgkVidMmCreateContextAllocation(
                 InitOp.DestinationVirtualAddress = Allocation->CpuAddress;
             }
             InitOp.DestinationGpuVirtualAddress = ContextHandle->GpuVirtualAddress;
-            DPRINT1("context allocation init: alloc=%p segment=%lu offset=0x%I64x cpuva=%p (cpuvisible=%u protected=%u aperture=%d cpuaddr=%p sysmem=%p) gpuva=0x%I64x\n",
+            DPRINT("context allocation init: alloc=%p segment=%lu offset=0x%I64x cpuva=%p (cpuvisible=%u protected=%u aperture=%d cpuaddr=%p sysmem=%p) gpuva=0x%I64x\n",
                     Allocation, Allocation->SegmentId, (ULONGLONG)Allocation->PhysicalAddress.QuadPart, InitOp.DestinationVirtualAddress,
                     Flags.CpuVisible, Flags.Protected, (int)VidMmSegmentIsAperture(Segment), Allocation->CpuAddress, Allocation->SystemMemory,
                     InitOp.DestinationGpuVirtualAddress);
