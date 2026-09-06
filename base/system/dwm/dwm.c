@@ -1022,6 +1022,17 @@ DwmBackdropNcBottom(const DWM_WIN *Window)
     return Bottom;
 }
 
+static LONG
+DwmBackdropNcLeft(const DWM_WIN *Window)
+{
+    LONG Left = Window->ClientX + (LONG)Window->BackdropNcExtendLeft;
+    LONG Limit = Window->ClientX + Window->ClientWidth;
+
+    if (Left > Limit)
+        Left = Limit;
+    return Left;
+}
+
 static void
 DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
                      LONG ClipLeft, LONG ClipTop, LONG ClipRight,
@@ -1067,7 +1078,7 @@ DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
     Rectangles[0] = (RECTL){0, 0, Window->cx, NcBottom};
     Rectangles[1] = (RECTL){0, Window->ClientY + Window->ClientHeight,
                             Window->cx, Window->cy};
-    Rectangles[2] = (RECTL){0, NcBottom, Window->ClientX,
+    Rectangles[2] = (RECTL){0, NcBottom, DwmBackdropNcLeft(Window),
                             Window->ClientY + Window->ClientHeight};
     Rectangles[3] = (RECTL){Window->ClientX + Window->ClientWidth,
                             NcBottom, Window->cx,
@@ -1290,6 +1301,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                        w->BackdropType <= DWM_BACKDROP_TABBED &&
                        w->BackdropRegion != 0;
     LONG ncBottom = DwmBackdropNcBottom(w);
+    LONG ncLeft = DwmBackdropNcLeft(w);
     ULONG a = w->Alpha, key = 0, backdropKey = 0, colorizationKey = 0;
     BOOL useEdge = useBackdrop && w->BackdropRegion == DWM_BACKDROP_REGION_WINDOW;
     BOOL edgeLeft, edgeTop, edgeRight, edgeBottom;
@@ -1383,7 +1395,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
             if (useBackdrop)
             {
                 if (w->BackdropRegion == DWM_BACKDROP_REGION_WINDOW ||
-                    sourceX < w->ClientX ||
+                    sourceX < ncLeft ||
                     sourceX >= w->ClientX + w->ClientWidth ||
                     r < ncBottom ||
                     r >= w->ClientY + w->ClientHeight)
@@ -1552,8 +1564,8 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
 
         matWholeWindow =
             (material->BackdropRegion == DWM_BACKDROP_REGION_WINDOW);
-        matCx0 = material->ClientX;
-        matCy0 = material->ClientY;
+        matCx0 = DwmBackdropNcLeft(material);
+        matCy0 = DwmBackdropNcBottom(material);
         matCx1 = material->ClientX + material->ClientWidth;
         matCy1 = material->ClientY + material->ClientHeight;
 

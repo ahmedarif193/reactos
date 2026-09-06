@@ -48,6 +48,7 @@ extern ATOM AtomDwmBackdropColor;
 extern ATOM AtomDwmBackdropColorization;
 extern ATOM AtomDwmBackdropRegion;
 extern ATOM AtomDwmBackdropNcExtend;
+extern ATOM AtomDwmBackdropNcExtendLeft;
 extern ATOM AtomDwmCornerRadius;
 typedef struct _USER_CRIT
 {
