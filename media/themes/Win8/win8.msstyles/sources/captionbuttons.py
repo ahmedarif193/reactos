@@ -1,155 +1,119 @@
+import io
 import os
 import struct
 import sys
 from PIL import Image
 
-H = 21
+RES = os.environ.get("WIN81_AERO_RES", "/Users/mac/working_dir/win81-fs/aero_res/IMAGE")
+H = 18
+MARGINS = (2, 2, 7, 7)
 OUTLINE = 0.42
-GLYPH_OUTLINE = 0.30
-FACE = [0.61, 0.66, 0.54, 0.51, 0.49, 0.45, 0.40, 0.37, 0.34, 0.31,
-        0.29, 0.26, 0.22, 0.17, 0.13, 0.10, 0.07, 0.06, 0.28]
-RED_HOT = (196, 43, 28)
-RED_PRESSED = (176, 39, 25)
-FACE_SCALE = 0.3
+FACE_MAX = 0.35
+RED = {1: (176, 39, 25), 2: (196, 43, 28), 3: (140, 30, 20), 6: (196, 43, 28), 7: (140, 30, 20)}
+BUTTONS = {
+    "close": (1015, 1016, 45, True),
+    "min": (1041, 1042, 27, False),
+    "max": (1030, 1031, 27, False),
+    "restore": (1030, 1048, 27, False),
+}
 
 
-def over(dst, src):
-    sr, sg, sb, sa = src
-    dr, dg, db, da = dst
-    oa = sa + da * (1 - sa)
-    if oa <= 0:
-        return (0, 0, 0, 0.0)
-    return ((sr * sa + dr * da * (1 - sa)) / oa,
-            (sg * sa + dg * da * (1 - sa)) / oa,
-            (sb * sa + db * da * (1 - sa)) / oa, oa)
+def load(rid):
+    return Image.open(io.BytesIO(open(os.path.join(RES, "%d.bin" % rid), "rb").read())).convert("RGBA")
 
 
-class Canvas:
-    def __init__(self, w, h):
-        self.w, self.h = w, h
-        self.px = [[(0, 0, 0, 0.0) for _ in range(w)] for _ in range(h)]
-
-    def put(self, x, y, color, alpha):
-        if 0 <= x < self.w and 0 <= y < self.h and alpha > 0:
-            self.px[y][x] = over(self.px[y][x], (color[0], color[1], color[2], alpha))
-
-    def white(self, x, y, a):
-        self.put(x, y, (255, 255, 255), a)
-
-    def black(self, x, y, a):
-        self.put(x, y, (0, 0, 0), a)
+def state_cell(im, state, count=8):
+    h = im.size[1] // count
+    return im.crop((0, (state - 1) * h, im.size[0], state * h))
 
 
-def face_alpha(row, hot, inactive):
-    a = FACE[row - 1] * FACE_SCALE
-    if hot:
-        a = min(0.92, a + 0.11)
-    if inactive:
-        a *= 0.7
-    return a
+def nine_slice(im, margins, tw, th):
+    l, r, t, b = margins
+    w, h = im.size
+    out = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    xs = ((0, l, 0, l), (l, w - r, l, tw - r), (w - r, w, tw - r, tw))
+    ys = ((0, t, 0, t), (t, h - b, t, th - b), (h - b, h, th - b, th))
+    for sx0, sx1, dx0, dx1 in xs:
+        for sy0, sy1, dy0, dy1 in ys:
+            if sx1 <= sx0 or sy1 <= sy0 or dx1 <= dx0 or dy1 <= dy0:
+                continue
+            piece = im.crop((sx0, sy0, sx1, sy1)).resize((dx1 - dx0, dy1 - dy0), Image.NEAREST)
+            out.paste(piece, (dx0, dy0))
+    return out
 
 
-def draw_body(c, w, hot=False, pressed=False, inactive=False, red=None):
-    for y in range(H):
+def darken(im, inactive):
+    out = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    px = im.load()
+    dst = out.load()
+    for y in range(im.size[1]):
+        for x in range(im.size[0]):
+            r, g, b, a = px[x, y]
+            if a == 0:
+                continue
+            lum = (r * 299 + g * 587 + b * 114) // 1000
+            if lum < 150:
+                dst[x, y] = (0, 0, 0, int(OUTLINE * a))
+            else:
+                white = (lum - 150) / 105.0 * FACE_MAX
+                if inactive:
+                    white *= 0.7
+                dst[x, y] = (255, 255, 255, int(white * a))
+    return out
+
+
+def square_corners(im):
+    px = im.load()
+    w, h = im.size
+    for (x, y), (nx, ny) in (((0, 0), (1, 0)), ((w - 1, 0), (w - 2, 0)), ((0, h - 1), (1, h - 1)), ((w - 1, h - 1), (w - 2, h - 1))):
+        px[x, y] = px[nx, ny]
+    for x, y in ((0, 1), (1, 0), (w - 1, 1), (w - 2, 0), (0, h - 2), (1, h - 1), (w - 1, h - 2), (w - 2, h - 1)):
+        r, g, b, a = px[x, y]
+        if a < 255:
+            px[x, y] = (0, 0, 0, int(OUTLINE * 255))
+    return im
+
+
+def tint_red(cell, state):
+    base = RED[state]
+    w, h = cell.size
+    src = cell.load()
+    lums = [(src[x, y][0] * 299 + src[x, y][1] * 587 + src[x, y][2] * 114) // 1000
+            for y in range(1, h - 1) for x in range(1, w - 1) if src[x, y][3]]
+    lo, hi = min(lums), max(lums)
+    out = Image.new("RGBA", cell.size, (0, 0, 0, 0))
+    dst = out.load()
+    for y in range(h):
         for x in range(w):
-            if y == 0 or y == H - 1 or x == 0:
-                c.black(x, y, OUTLINE)
+            r, g, b, a = src[x, y]
+            if a == 0:
                 continue
-            if red:
-                c.put(x, y, red, 1.0)
-            if x == w - 1:
-                c.white(x, y, (0.24 if not inactive else 0.17) * FACE_SCALE)
+            if x == 0 or y == 0 or x == w - 1 or y == h - 1:
+                dst[x, y] = (0, 0, 0, int(OUTLINE * 255))
                 continue
-            a = face_alpha(y, hot, inactive)
-            if x == 1:
-                a = min(0.95, a + 0.12 * FACE_SCALE)
-            elif x == w - 2:
-                a = min(0.95, a + 0.05 * FACE_SCALE)
-            if red:
-                a *= 0.6
-            c.white(x, y, a)
-            if pressed:
-                c.black(x, y, 0.12)
+            lum = (r * 299 + g * 587 + b * 114) // 1000
+            k = (lum - lo) / float(max(1, hi - lo)) * 0.35
+            dst[x, y] = (int(base[0] + (255 - base[0]) * k), int(base[1] + (255 - base[1]) * k),
+                         int(base[2] + (255 - base[2]) * k), 255)
+    return out
 
 
-def outline_around(c, cells, alpha):
-    cs = set(cells)
-    ring = set()
-    for (x, y) in cs:
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            n = (x + dx, y + dy)
-            if n not in cs:
-                ring.add(n)
-    for (x, y) in ring:
-        c.black(x, y, alpha)
-
-
-def glyph(c, cells, white_alpha, outline_alpha, inner=()):
-    outline_around(c, cells, outline_alpha)
-    for (x, y) in inner:
-        c.black(x, y, outline_alpha)
-    for (x, y) in cells:
-        c.white(x, y, white_alpha)
-
-
-def rect_ring(x0, y0, x1, y1, thick):
-    return [(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)
-            if x < x0 + thick or x > x1 - thick or y < y0 + thick or y > y1 - thick]
-
-
-def min_cells():
-    return [(x, y) for y in range(12, 15) for x in range(9, 19)]
-
-
-def max_cells():
-    return rect_ring(9, 7, 17, 14, 2)
-
-
-def max_inner():
-    return [(x, y) for y in range(9, 13) for x in range(11, 16) if x in (11, 15) or y in (9, 12)]
-
-
-def restore_cells():
-    back = rect_ring(12, 5, 18, 10, 2)
-    front = rect_ring(8, 9, 14, 15, 2)
-    back = [(x, y) for (x, y) in back if not (7 <= x <= 15 and 8 <= y <= 16)]
-    return back + front
-
-
-def close_cells():
-    cells = []
-    for r in range(8):
-        d = r if r < 4 else 7 - r
-        for x in (18 + d, 19 + d, 24 - d, 25 - d):
-            cells.append((x, 7 + r))
-    return sorted(set(cells))
-
-
-def render(kind, w):
-    strip = Image.new("RGBA", (w, H * 8))
+def render(kind):
+    bg_id, glyph_id, w, keep_color = BUTTONS[kind]
+    bg = load(bg_id)
+    glyph = load(glyph_id)
+    strip = Image.new("RGBA", (w, H * 8), (0, 0, 0, 0))
     for state in range(1, 9):
-        hot = state in (2, 6)
-        pressed = state in (3, 7)
-        disabled = state in (4, 8)
-        inactive = state >= 5
-        c = Canvas(w, H)
-        red = RED_HOT if (kind == "close" and hot) else RED_PRESSED if (kind == "close" and pressed) else None
-        draw_body(c, w, hot, pressed, inactive, red)
-        ga = 0.55 if disabled else (0.8 if inactive and not hot and not pressed else 1.0)
-        oa = GLYPH_OUTLINE * (0.5 if disabled else 1.0)
-        if kind == "min":
-            glyph(c, min_cells(), ga, oa)
-        elif kind == "max":
-            glyph(c, max_cells(), ga, oa, max_inner())
-        elif kind == "restore":
-            glyph(c, restore_cells(), ga, oa)
-        else:
-            glyph(c, close_cells(), ga, oa)
-        for y in range(H):
-            for x in range(w):
-                r, g, b, a = c.px[y][x]
-                strip.putpixel((x, (state - 1) * H + y),
-                               (int(round(r)), int(round(g)), int(round(b)), int(round(a * 255))))
+        cell = nine_slice(state_cell(bg, state), MARGINS, w, H)
+        mid = cell.getpixel((w // 2, H // 2))
+        red = keep_color and mid[0] >= mid[1] + 40
+        cell = tint_red(cell, state) if red else darken(cell, state > 4)
+        cell = square_corners(cell)
+        g = state_cell(glyph, state)
+        frame = Image.new("RGBA", (w, H), (0, 0, 0, 0))
+        frame.alpha_composite(cell, (0, 0))
+        frame.alpha_composite(g, ((w - g.size[0]) // 2, (H - g.size[1]) // 2))
+        strip.paste(frame, (0, (state - 1) * H))
     return strip
 
 
@@ -171,9 +135,9 @@ def save_bmp(im, path):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "bitmaps")
-    for kind, name, w in (("close", "NORMAL_CLOSEBUTTON.bmp", 45), ("min", "NORMAL_MINBUTTON.bmp", 27),
-                          ("max", "NORMAL_MAXBUTTON.bmp", 26), ("restore", "NORMAL_RESTOREBUTTON.bmp", 26)):
-        save_bmp(render(kind, w), os.path.join(out, name))
+    for kind, name in (("close", "NORMAL_CLOSEBUTTON.bmp"), ("min", "NORMAL_MINBUTTON.bmp"),
+                       ("max", "NORMAL_MAXBUTTON.bmp"), ("restore", "NORMAL_RESTOREBUTTON.bmp")):
+        save_bmp(render(kind), os.path.join(out, name))
 
 
 if __name__ == "__main__":
