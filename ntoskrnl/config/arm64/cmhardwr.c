@@ -11,7 +11,7 @@
 #include <debug.h>
 
 /* Global configuration strings */
-PCHAR CmpFullCpuID = "%s Family %u Model %u Stepping %u";
+PCHAR CmpFullCpuID = "%s Family %u Model %X Revision %3X";
 
 static
 ULONGLONG
@@ -157,8 +157,11 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
     ULONG Implementer, Architecture, Variant, PartNumber, Revision;
     const WCHAR *VendorName;
     USHORT IndexTable[MaximumType + 1] = {0};
+    CHAR SmbiosManufacturer[64];
+    CHAR SmbiosVersion[64];
+    WCHAR SmbiosVendor[64];
+    BOOLEAN HaveSmbios;
 
-    UNREFERENCED_PARAMETER(LoaderBlock);
 
     DPRINT("ARM64: Initializing machine-dependent configuration\n");
 
@@ -178,6 +181,16 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
     PartNumber = (ULONG)((Midr >> 4) & 0xFFF);
     Revision = (ULONG)(Midr & 0xF);
     VendorName = CmpArm64GetVendorName(Implementer);
+    HaveSmbios = CmpGetSmbiosProcessorStrings(LoaderBlock,
+                                             SmbiosManufacturer,
+                                             sizeof(SmbiosManufacturer),
+                                             SmbiosVersion,
+                                             sizeof(SmbiosVersion));
+    if (HaveSmbios && SmbiosManufacturer[0] != ANSI_NULL)
+    {
+        RtlStringCbPrintfW(SmbiosVendor, sizeof(SmbiosVendor), L"%hs", SmbiosManufacturer);
+        VendorName = SmbiosVendor;
+    }
 
     /* Open the hardware description key */
     RtlInitUnicodeString(&KeyName,
@@ -240,10 +253,10 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
             RtlStringCbPrintfA(Buffer,
                                sizeof(Buffer),
                                CmpFullCpuID,
-                               (Architecture == 0xF) ? "ARM64" : "ARM",
+                               (Architecture == 0xF) ? "ARMv8 (64-bit)" : "ARM",
                                (Architecture == 0xF) ? 8 : Architecture,
                                PartNumber,
-                               (Variant << 4) | Revision);
+                               (Variant << 8) | Revision);
 
             /* Save the identifier string length */
             ConfigData.ComponentEntry.IdentifierLength = (ULONG)strlen(Buffer) + 1;
@@ -323,11 +336,18 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
                 UNICODE_STRING ValueName;
                 ULONG Length;
 
-                CmpArm64BuildProcessorName(ProcessorName,
-                                           sizeof(ProcessorName),
-                                           Implementer,
-                                           Architecture,
-                                           PartNumber);
+                if (HaveSmbios && SmbiosVersion[0] != ANSI_NULL)
+                {
+                    RtlStringCbPrintfW(ProcessorName, sizeof(ProcessorName), L"%hs", SmbiosVersion);
+                }
+                else
+                {
+                    CmpArm64BuildProcessorName(ProcessorName,
+                                               sizeof(ProcessorName),
+                                               Implementer,
+                                               Architecture,
+                                               PartNumber);
+                }
 
                 RtlInitUnicodeString(&ValueName, L"ProcessorNameString");
                 Length = (ULONG)((wcslen(ProcessorName) + 1) * sizeof(WCHAR));

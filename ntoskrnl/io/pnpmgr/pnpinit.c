@@ -306,6 +306,8 @@ IopInitializePlugPlayServices(VOID)
     Status = IopInitializeArbiters();
     if (!NT_SUCCESS(Status)) return Status;
 
+    IopInitializeSystemResourceMap(KeLoaderBlock);
+
     /* Setup the group cache */
     Status = PiInitCacheGroupInformation();
     if (!NT_SUCCESS(Status)) return Status;

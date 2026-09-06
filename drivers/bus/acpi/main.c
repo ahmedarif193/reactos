@@ -788,11 +788,13 @@ GetProcessorInformation(VOID)
         goto done;
     }
 
-    /* Change spaces to underscores */
+    Level1Length = Level2Length = Level3Length = (ULONG)wcslen(ProcessorIdentifier);
     for (i = 0; i < wcslen(ProcessorIdentifier); i++)
     {
         if (ProcessorIdentifier[i] == L' ')
             ProcessorIdentifier[i] = L'_';
+        else
+            ProcessorIdentifier[i] = RtlUpcaseUnicodeChar(ProcessorIdentifier[i]);
     }
 
     Ptr = wcsstr(ProcessorIdentifier, L"Stepping");
@@ -819,7 +821,8 @@ GetProcessorInformation(VOID)
     VendorIdentifierLength = (USHORT)wcslen(ProcessorVendorIdentifier);
 
     /* Calculate the size of the full REG_MULTI_SZ data (see swprintf below) */
-    HardwareIdsLength = (5 + VendorIdentifierLength + 3 + Level1Length + 1 +
+    HardwareIdsLength = (23 +
+                         5 + VendorIdentifierLength + 3 + Level1Length + 1 +
                          1 + VendorIdentifierLength + 3 + Level1Length + 1 +
                          5 + VendorIdentifierLength + 3 + Level2Length + 1 +
                          1 + VendorIdentifierLength + 3 + Level2Length + 1 +
@@ -836,6 +839,8 @@ GetProcessorInformation(VOID)
     }
 
     Length = 0;
+    Length += _swprintf(&HardwareIdsBuffer[Length], L"ACPI\\VEN_ACPI&DEV_0007");
+    HardwareIdsBuffer[Length++] = UNICODE_NULL;
     Length += _swprintf(&HardwareIdsBuffer[Length], L"ACPI\\%s_-_%.*s", ProcessorVendorIdentifier, Level1Length, ProcessorIdentifier);
     HardwareIdsBuffer[Length++] = UNICODE_NULL;
 

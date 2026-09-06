@@ -1222,6 +1222,8 @@ HalpQueryCapabilities(IN PDEVICE_OBJECT DeviceObject,
     return Status;
 }
 
+#define HALP_RESERVED_VECTOR_COUNT 1280
+
 NTSTATUS
 NTAPI
 HalpQueryResources(IN PDEVICE_OBJECT DeviceObject,
@@ -1247,7 +1249,8 @@ HalpQueryResources(IN PDEVICE_OBJECT DeviceObject,
 
         /* Allocate the resourcel ist */
         ResourceList = ExAllocatePoolWithTag(PagedPool,
-                                             sizeof(CM_RESOURCE_LIST),
+                                             sizeof(CM_RESOURCE_LIST) +
+                                             HALP_RESERVED_VECTOR_COUNT * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR),
                                              TAG_HAL);
         if (!ResourceList )
         {
@@ -1332,6 +1335,19 @@ HalpQueryResources(IN PDEVICE_OBJECT DeviceObject,
                 break;
             }
         }
+
+        PartialDesc = &ResourceList->List[0].PartialResourceList.PartialDescriptors[ResourceList->List[0].PartialResourceList.Count];
+        for (i = 0; i < HALP_RESERVED_VECTOR_COUNT; i++, PartialDesc++)
+        {
+            ULONG Vector = (i < 0x400) ? (0x800 + i) : (0x1000 + (i - 0x400));
+            PartialDesc->Type = CmResourceTypeInterrupt;
+            PartialDesc->ShareDisposition = CmResourceShareDeviceExclusive;
+            PartialDesc->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+            PartialDesc->u.Interrupt.Level = Vector;
+            PartialDesc->u.Interrupt.Vector = Vector;
+            PartialDesc->u.Interrupt.Affinity = 0xFFFFFFFF;
+        }
+        ResourceList->List[0].PartialResourceList.Count += HALP_RESERVED_VECTOR_COUNT;
 
         /* Return resources and success */
         *Resources = ResourceList;
@@ -2075,7 +2091,7 @@ HaliInitPnpDriver(VOID)
     PAGED_CODE();
 
     /* Create the driver */
-    RtlInitUnicodeString(&DriverString, L"\\Driver\\ACPI_HAL");
+    RtlInitUnicodeString(&DriverString, L"\\Driver\\ARM64_HAL");
     Status = IoCreateDriver(&DriverString, HalpDriverEntry);
 
     /* Return status */

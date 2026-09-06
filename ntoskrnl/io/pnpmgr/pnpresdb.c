@@ -323,6 +323,8 @@ IopResDbSeedFromRegistry(VOID)
     ULONG i1, i2, i3, need;
     NTSTATUS status;
 
+    UNICODE_STRING systemResourcesName = RTL_CONSTANT_STRING(L"System Resources");
+
     RtlInitUnicodeString(&keyName, L"\\Registry\\Machine\\HARDWARE\\RESOURCEMAP");
     InitializeObjectAttributes(&oa, &keyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
     if (!NT_SUCCESS(ZwOpenKey(&mapKey, KEY_ENUMERATE_SUB_KEYS, &oa)))
@@ -347,6 +349,11 @@ IopResDbSeedFromRegistry(VOID)
 
         keyName.Buffer = basic->Name;
         keyName.MaximumLength = keyName.Length = (USHORT)basic->NameLength;
+        if (RtlEqualUnicodeString(&keyName, &systemResourcesName, TRUE))
+        {
+            ExFreePoolWithTag(basic, TAG_IO);
+            continue;
+        }
         InitializeObjectAttributes(&oa, &keyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, mapKey, NULL);
         status = ZwOpenKey(&classKey, KEY_ENUMERATE_SUB_KEYS, &oa);
         ExFreePoolWithTag(basic, TAG_IO);

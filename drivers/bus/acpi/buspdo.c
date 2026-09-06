@@ -35,6 +35,57 @@ ACPI_TABLE_FADT AcpiGbl_FADT;
 
 static
 BOOLEAN
+BuspIsProcessorDevice(
+    _In_ struct acpi_device *Device)
+{
+    if (Device->pnp.hardware_id == NULL)
+        return FALSE;
+    return strcmp(Device->pnp.hardware_id, "Processor") == 0 ||
+           strcmp(Device->pnp.hardware_id, "ACPI0007") == 0;
+}
+
+static
+ULONG
+BuspFormatVendorDeviceId(
+    _Out_writes_(Count) PWCHAR Buffer,
+    _In_ ULONG Count,
+    _In_ PCSTR HardwareId)
+{
+    SIZE_T Length = strlen(HardwareId);
+    ULONG Written;
+
+    if (Length != 7 && Length != 8)
+        return 0;
+    Written = (ULONG)swprintf(Buffer,
+                              Count,
+                              L"ACPI\\VEN_%.*hs&DEV_%hs",
+                              (int)(Length - 4),
+                              HardwareId,
+                              HardwareId + Length - 4);
+    Buffer[Written++] = UNICODE_NULL;
+    return Written;
+}
+
+static
+BOOLEAN
+BuspIsMotherboardResourceDevice(
+    _In_ PPDO_DEVICE_DATA DeviceData)
+{
+    return DeviceData->HardwareIDs != NULL &&
+           wcsstr(DeviceData->HardwareIDs, L"PNP0C02") != NULL;
+}
+
+static
+BOOLEAN
+BuspIsPciLinkDevice(
+    _In_ PPDO_DEVICE_DATA DeviceData)
+{
+    return DeviceData->HardwareIDs != NULL &&
+           wcsstr(DeviceData->HardwareIDs, L"PNP0C0F") != NULL;
+}
+
+static
+BOOLEAN
 BuspIsPciRootDevice(
     _In_ PPDO_DEVICE_DATA DeviceData)
 {
@@ -104,6 +155,19 @@ BuspPublishDeviceProperties(
     {
         ULONG Address = (ULONG)Device->pnp.bus_address;
         BuspSetUint32DeviceProperty(DeviceData, &DEVPKEY_Device_Address, Address);
+    }
+
+    if (Device != NULL && BuspIsProcessorDevice(Device) && ProcessorNameString != NULL)
+    {
+        NTSTATUS Status = IoSetDevicePropertyData(DeviceData->Common.Self,
+                                                  &DEVPKEY_Device_FriendlyName,
+                                                  0,
+                                                  0,
+                                                  DEVPROP_TYPE_STRING,
+                                                  (ULONG)((wcslen(ProcessorNameString) + 1) * sizeof(WCHAR)),
+                                                  ProcessorNameString);
+        if (!NT_SUCCESS(Status))
+            DPRINT("ACPI: FriendlyName property failed: 0x%08lx\n", Status);
     }
 }
 
@@ -250,14 +314,7 @@ BuspEnsurePciRootBusNumber(
     else if (device && device->flags.unique_id && device->pnp.unique_id[0])
     {
         ULONG ParsedUid;
-        if (NT_SUCCESS(RtlCharToInteger(device->pnp.unique_id, 10, &ParsedUid)))
-        {
-            BusNumber = ParsedUid;
-            DPRINT1("ACPI: Using decimal _UID for PCI root %S bus=%I64u\n",
-                    DeviceData->HardwareIDs ? DeviceData->HardwareIDs : L"<unknown>",
-                    BusNumber);
-        }
-        else if (NT_SUCCESS(RtlCharToInteger(device->pnp.unique_id, 16, &ParsedUid)))
+        if (NT_SUCCESS(RtlCharToInteger(device->pnp.unique_id, 16, &ParsedUid)))
         {
             BusNumber = ParsedUid;
             DPRINT1("ACPI: Using hex _UID for PCI root %S bus=%I64u\n",
@@ -354,13 +411,13 @@ BuspLargeMemoryType(
 static
 BOOLEAN
 BuspUseAddressResource(
-    _In_ BOOLEAN IsPciRoot,
+    _In_ BOOLEAN AcceptProducers,
     _In_ UCHAR ProducerConsumer,
     _In_ ULONGLONG AddressLength)
 {
     /* PCI root _CRS address descriptors describe windows produced for
      * children.  Ordinary ACPI PDOs consume their address descriptors. */
-    if (ProducerConsumer == ACPI_PRODUCER && !IsPciRoot)
+    if (ProducerConsumer == ACPI_PRODUCER && !AcceptProducers)
         return FALSE;
 
     if (AddressLength == 0)
@@ -372,7 +429,7 @@ BuspUseAddressResource(
 static
 BOOLEAN
 BuspUseAddress64Resource(
-    _In_ BOOLEAN IsPciRoot,
+    _In_ BOOLEAN AcceptProducers,
     _In_ UCHAR ProducerConsumer,
     _In_ UCHAR ResourceType,
     _In_ ULONGLONG AddressLength,
@@ -380,7 +437,7 @@ BuspUseAddress64Resource(
 {
     ULONGLONG Alignment;
 
-    if (!BuspUseAddressResource(IsPciRoot, ProducerConsumer, AddressLength))
+    if (!BuspUseAddressResource(AcceptProducers, ProducerConsumer, AddressLength))
         return FALSE;
     if (ResourceType > ACPI_BUS_NUMBER_RANGE)
         return FALSE;
@@ -800,6 +857,7 @@ BuspCountRequirementsFromAcpiResources(
     _Out_ PULONG NumberOfResourcesOut,
     _Out_ PBOOLEAN AppendSyntheticBusOut)
 {
+    BOOLEAN AcceptProducers = IsPciRoot || BuspIsMotherboardResourceDevice(DeviceData);
     ACPI_RESOURCE *resource;
     BOOLEAN SeenStartDependent = FALSE;
     ULONG NumberOfResources = 0;
@@ -856,7 +914,7 @@ BuspCountRequirementsFromAcpiResources(
             case ACPI_RESOURCE_TYPE_ADDRESS16:
             {
                 ACPI_RESOURCE_ADDRESS16 *addr16 = &resource->Data.Address16;
-                if (BuspUseAddressResource(IsPciRoot, addr16->ProducerConsumer, addr16->Address.AddressLength))
+                if (BuspUseAddressResource(AcceptProducers, addr16->ProducerConsumer, addr16->Address.AddressLength))
                 {
                     NumberOfResources++;
                     if (addr16->ResourceType == ACPI_BUS_NUMBER_RANGE)
@@ -874,7 +932,7 @@ BuspCountRequirementsFromAcpiResources(
             case ACPI_RESOURCE_TYPE_ADDRESS32:
             {
                 ACPI_RESOURCE_ADDRESS32 *addr32 = &resource->Data.Address32;
-                if (BuspUseAddressResource(IsPciRoot, addr32->ProducerConsumer, addr32->Address.AddressLength))
+                if (BuspUseAddressResource(AcceptProducers, addr32->ProducerConsumer, addr32->Address.AddressLength))
                 {
                     NumberOfResources++;
                     if (addr32->ResourceType == ACPI_BUS_NUMBER_RANGE)
@@ -891,7 +949,7 @@ BuspCountRequirementsFromAcpiResources(
             case ACPI_RESOURCE_TYPE_ADDRESS64:
             {
                 ACPI_RESOURCE_ADDRESS64 *addr64 = &resource->Data.Address64;
-                if (BuspUseAddress64Resource(IsPciRoot,
+                if (BuspUseAddress64Resource(AcceptProducers,
                                              addr64->ProducerConsumer,
                                              addr64->ResourceType,
                                              addr64->Address.AddressLength,
@@ -912,7 +970,7 @@ BuspCountRequirementsFromAcpiResources(
             case ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64:
             {
                 ACPI_RESOURCE_EXTENDED_ADDRESS64 *addrx = &resource->Data.ExtAddress64;
-                if (BuspUseAddress64Resource(IsPciRoot,
+                if (BuspUseAddress64Resource(AcceptProducers,
                                              addrx->ProducerConsumer,
                                              addrx->ResourceType,
                                              addrx->Address.AddressLength,
@@ -986,6 +1044,7 @@ BuspCreateRequirementsListFromAcpiResources(
     _In_ ULONG RootBusNumber,
     _Outptr_result_maybenull_ PIO_RESOURCE_REQUIREMENTS_LIST *RequirementsListOut)
 {
+    BOOLEAN AcceptProducers = IsPciRoot || BuspIsMotherboardResourceDevice(DeviceData);
     ACPI_RESOURCE *resource;
     BOOLEAN SeenStartDependent = FALSE;
     BOOLEAN AppendSyntheticBus = FALSE;
@@ -1204,7 +1263,7 @@ BuspCreateRequirementsListFromAcpiResources(
             {
                 ACPI_RESOURCE_ADDRESS16 *addr16 = &resource->Data.Address16;
 
-                if (!BuspUseAddressResource(IsPciRoot, addr16->ProducerConsumer, addr16->Address.AddressLength))
+                if (!BuspUseAddressResource(AcceptProducers, addr16->ProducerConsumer, addr16->Address.AddressLength))
                     break;
 
                 RequirementDescriptor->Option = CurrentRes ? 0 : IO_RESOURCE_PREFERRED;
@@ -1221,8 +1280,8 @@ BuspCreateRequirementsListFromAcpiResources(
                 }
                 else if (addr16->ResourceType == ACPI_IO_RANGE)
                 {
-                    ULONGLONG Minimum = addr16->Address.Minimum + addr16->Address.TranslationOffset;
-                    ULONGLONG Maximum = addr16->Address.Maximum + addr16->Address.TranslationOffset;
+                    ULONGLONG Minimum = addr16->Address.Minimum + (IsPciRoot ? 0 : addr16->Address.TranslationOffset);
+                    ULONGLONG Maximum = addr16->Address.Maximum + (IsPciRoot ? 0 : addr16->Address.TranslationOffset);
                     ULONG Alignment = (ULONG)addr16->Address.Granularity + 1;
 
                     if (Alignment == 0)
@@ -1231,10 +1290,9 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Type = CmResourceTypePort;
                     RequirementDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    RequirementDescriptor->Flags = CM_RESOURCE_PORT_IO |
-                        (addr16->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
-                    if (IsPciRoot)
-                        RequirementDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
+                    RequirementDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                        (CM_RESOURCE_PORT_IO |
+                         (addr16->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     RequirementDescriptor->u.Port.Alignment = Alignment;
                     RequirementDescriptor->u.Port.Length = addr16->Address.AddressLength;
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
@@ -1279,7 +1337,7 @@ BuspCreateRequirementsListFromAcpiResources(
             {
                 ACPI_RESOURCE_ADDRESS32 *addr32 = &resource->Data.Address32;
 
-                if (!BuspUseAddressResource(IsPciRoot, addr32->ProducerConsumer, addr32->Address.AddressLength))
+                if (!BuspUseAddressResource(AcceptProducers, addr32->ProducerConsumer, addr32->Address.AddressLength))
                     break;
 
                 RequirementDescriptor->Option = CurrentRes ? 0 : IO_RESOURCE_PREFERRED;
@@ -1295,8 +1353,8 @@ BuspCreateRequirementsListFromAcpiResources(
                 }
                 else if (addr32->ResourceType == ACPI_IO_RANGE)
                 {
-                    ULONGLONG Minimum = addr32->Address.Minimum + addr32->Address.TranslationOffset;
-                    ULONGLONG Maximum = addr32->Address.Maximum + addr32->Address.TranslationOffset;
+                    ULONGLONG Minimum = addr32->Address.Minimum + (IsPciRoot ? 0 : addr32->Address.TranslationOffset);
+                    ULONGLONG Maximum = addr32->Address.Maximum + (IsPciRoot ? 0 : addr32->Address.TranslationOffset);
                     ULONG Alignment = (ULONG)addr32->Address.Granularity + 1;
 
                     if (Alignment == 0)
@@ -1305,10 +1363,9 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Type = CmResourceTypePort;
                     RequirementDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    RequirementDescriptor->Flags = CM_RESOURCE_PORT_IO |
-                        (addr32->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
-                    if (IsPciRoot)
-                        RequirementDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
+                    RequirementDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                        (CM_RESOURCE_PORT_IO |
+                         (addr32->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     RequirementDescriptor->u.Port.Alignment = Alignment;
                     RequirementDescriptor->u.Port.Length = addr32->Address.AddressLength;
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
@@ -1353,7 +1410,7 @@ BuspCreateRequirementsListFromAcpiResources(
             {
                 ACPI_RESOURCE_ADDRESS64 *addr64 = &resource->Data.Address64;
 
-                if (!BuspUseAddress64Resource(IsPciRoot,
+                if (!BuspUseAddress64Resource(AcceptProducers,
                                               addr64->ProducerConsumer,
                                               addr64->ResourceType,
                                               addr64->Address.AddressLength,
@@ -1373,8 +1430,8 @@ BuspCreateRequirementsListFromAcpiResources(
                 }
                 else if (addr64->ResourceType == ACPI_IO_RANGE)
                 {
-                    ULONGLONG Minimum = addr64->Address.Minimum + addr64->Address.TranslationOffset;
-                    ULONGLONG Maximum = addr64->Address.Maximum + addr64->Address.TranslationOffset;
+                    ULONGLONG Minimum = addr64->Address.Minimum + (IsPciRoot ? 0 : addr64->Address.TranslationOffset);
+                    ULONGLONG Maximum = addr64->Address.Maximum + (IsPciRoot ? 0 : addr64->Address.TranslationOffset);
                     ULONG Alignment = (ULONG)addr64->Address.Granularity + 1;
 
                     if (Alignment == 0)
@@ -1383,10 +1440,9 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Type = CmResourceTypePort;
                     RequirementDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    RequirementDescriptor->Flags = CM_RESOURCE_PORT_IO |
-                        (addr64->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
-                    if (IsPciRoot)
-                        RequirementDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
+                    RequirementDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                        (CM_RESOURCE_PORT_IO |
+                         (addr64->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     RequirementDescriptor->u.Port.Alignment = Alignment;
                     RequirementDescriptor->u.Port.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
@@ -1430,7 +1486,7 @@ BuspCreateRequirementsListFromAcpiResources(
             {
                 ACPI_RESOURCE_EXTENDED_ADDRESS64 *addrx = &resource->Data.ExtAddress64;
 
-                if (!BuspUseAddress64Resource(IsPciRoot,
+                if (!BuspUseAddress64Resource(AcceptProducers,
                                               addrx->ProducerConsumer,
                                               addrx->ResourceType,
                                               addrx->Address.AddressLength,
@@ -1450,8 +1506,8 @@ BuspCreateRequirementsListFromAcpiResources(
                 }
                 else if (addrx->ResourceType == ACPI_IO_RANGE)
                 {
-                    ULONGLONG Minimum = addrx->Address.Minimum + addrx->Address.TranslationOffset;
-                    ULONGLONG Maximum = addrx->Address.Maximum + addrx->Address.TranslationOffset;
+                    ULONGLONG Minimum = addrx->Address.Minimum + (IsPciRoot ? 0 : addrx->Address.TranslationOffset);
+                    ULONGLONG Maximum = addrx->Address.Maximum + (IsPciRoot ? 0 : addrx->Address.TranslationOffset);
                     ULONG Alignment = (ULONG)addrx->Address.Granularity + 1;
 
                     if (Alignment == 0)
@@ -1460,10 +1516,9 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->Type = CmResourceTypePort;
                     RequirementDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    RequirementDescriptor->Flags = CM_RESOURCE_PORT_IO |
-                        (addrx->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
-                    if (IsPciRoot)
-                        RequirementDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
+                    RequirementDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                        (CM_RESOURCE_PORT_IO |
+                         (addrx->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     RequirementDescriptor->u.Port.Alignment = Alignment;
                     RequirementDescriptor->u.Port.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
@@ -1688,6 +1743,7 @@ BuspCreateResourceListFromAcpiResources(
     _In_ ULONG RootBusNumber,
     _Outptr_result_maybenull_ PCM_RESOURCE_LIST *ResourceListOut)
 {
+    BOOLEAN AcceptProducers = IsPciRoot || BuspIsMotherboardResourceDevice(DeviceData);
     ACPI_RESOURCE *resource;
     ULONG NumberOfResources = 0;
     BOOLEAN AppendSyntheticBus = FALSE;
@@ -1897,7 +1953,7 @@ BuspCreateResourceListFromAcpiResources(
             case ACPI_RESOURCE_TYPE_ADDRESS16:
             {
                 ACPI_RESOURCE_ADDRESS16 *addr16 = &resource->Data.Address16;
-                if (!BuspUseAddressResource(IsPciRoot, addr16->ProducerConsumer, addr16->Address.AddressLength))
+                if (!BuspUseAddressResource(AcceptProducers, addr16->ProducerConsumer, addr16->Address.AddressLength))
                     break;
 
                 if (addr16->ResourceType == ACPI_BUS_NUMBER_RANGE)
@@ -1923,14 +1979,14 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->Type = CmResourceTypePort;
                     ResourceDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    ResourceDescriptor->Flags = CM_RESOURCE_PORT_IO |
-                        (addr16->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
+                    ResourceDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                        (CM_RESOURCE_PORT_IO |
+                         (addr16->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     ResourceDescriptor->u.Port.Start.QuadPart =
-                        addr16->Address.Minimum + addr16->Address.TranslationOffset;
+                        addr16->Address.Minimum + (IsPciRoot ? 0 : addr16->Address.TranslationOffset);
                     ResourceDescriptor->u.Port.Length = addr16->Address.AddressLength;
                     if (IsPciRoot)
                     {
-                        ResourceDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
                         ULONGLONG s = addr16->Address.Minimum + addr16->Address.TranslationOffset;
                         ULONGLONG e = (addr16->Address.AddressLength) ? (s + addr16->Address.AddressLength - 1) : s;
                         BuspCachePciRootIoWindow(DeviceData, s, e);
@@ -1968,7 +2024,7 @@ BuspCreateResourceListFromAcpiResources(
             case ACPI_RESOURCE_TYPE_ADDRESS32:
             {
                 ACPI_RESOURCE_ADDRESS32 *addr32 = &resource->Data.Address32;
-                if (!BuspUseAddressResource(IsPciRoot, addr32->ProducerConsumer, addr32->Address.AddressLength))
+                if (!BuspUseAddressResource(AcceptProducers, addr32->ProducerConsumer, addr32->Address.AddressLength))
                     break;
 
                 if (addr32->ResourceType == ACPI_BUS_NUMBER_RANGE)
@@ -1994,14 +2050,14 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->Type = CmResourceTypePort;
                     ResourceDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    ResourceDescriptor->Flags = CM_RESOURCE_PORT_IO |
-                        (addr32->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
+                    ResourceDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                        (CM_RESOURCE_PORT_IO |
+                         (addr32->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     ResourceDescriptor->u.Port.Start.QuadPart =
-                        addr32->Address.Minimum + addr32->Address.TranslationOffset;
+                        addr32->Address.Minimum + (IsPciRoot ? 0 : addr32->Address.TranslationOffset);
                     ResourceDescriptor->u.Port.Length = addr32->Address.AddressLength;
                     if (IsPciRoot)
                     {
-                        ResourceDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
                         ULONGLONG s = addr32->Address.Minimum + addr32->Address.TranslationOffset;
                         ULONGLONG e = (addr32->Address.AddressLength) ? (s + addr32->Address.AddressLength - 1) : s;
                         BuspCachePciRootIoWindow(DeviceData, s, e);
@@ -2039,7 +2095,7 @@ BuspCreateResourceListFromAcpiResources(
             case ACPI_RESOURCE_TYPE_ADDRESS64:
             {
                 ACPI_RESOURCE_ADDRESS64 *addr64 = &resource->Data.Address64;
-                if (!BuspUseAddress64Resource(IsPciRoot,
+                if (!BuspUseAddress64Resource(AcceptProducers,
                                               addr64->ProducerConsumer,
                                               addr64->ResourceType,
                                               addr64->Address.AddressLength,
@@ -2059,14 +2115,14 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->Type = CmResourceTypePort;
                     ResourceDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    ResourceDescriptor->Flags = CM_RESOURCE_PORT_IO |
-                        (addr64->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
+                    ResourceDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                        (CM_RESOURCE_PORT_IO |
+                         (addr64->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     ResourceDescriptor->u.Port.Start.QuadPart =
-                        addr64->Address.Minimum + addr64->Address.TranslationOffset;
+                        addr64->Address.Minimum + (IsPciRoot ? 0 : addr64->Address.TranslationOffset);
                     ResourceDescriptor->u.Port.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
                     if (IsPciRoot)
                     {
-                        ResourceDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
                         ULONGLONG s = addr64->Address.Minimum + addr64->Address.TranslationOffset;
                         ULONGLONG e = (addr64->Address.AddressLength) ? (s + addr64->Address.AddressLength - 1) : s;
                         BuspCachePciRootIoWindow(DeviceData, s, e);
@@ -2104,7 +2160,7 @@ BuspCreateResourceListFromAcpiResources(
             case ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64:
             {
                 ACPI_RESOURCE_EXTENDED_ADDRESS64 *addrx = &resource->Data.ExtAddress64;
-                if (!BuspUseAddress64Resource(IsPciRoot,
+                if (!BuspUseAddress64Resource(AcceptProducers,
                                               addrx->ProducerConsumer,
                                               addrx->ResourceType,
                                               addrx->Address.AddressLength,
@@ -2124,14 +2180,14 @@ BuspCreateResourceListFromAcpiResources(
                     ResourceDescriptor->Type = CmResourceTypePort;
                     ResourceDescriptor->ShareDisposition = IsPciRoot ?
                         CmResourceShareShared : CmResourceShareDeviceExclusive;
-                    ResourceDescriptor->Flags = CM_RESOURCE_PORT_IO |
-                        (addrx->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0);
+                    ResourceDescriptor->Flags = IsPciRoot ? CM_RESOURCE_PORT_POSITIVE_DECODE :
+                        (CM_RESOURCE_PORT_IO |
+                         (addrx->Decode == ACPI_POS_DECODE ? CM_RESOURCE_PORT_POSITIVE_DECODE : 0));
                     ResourceDescriptor->u.Port.Start.QuadPart =
-                        addrx->Address.Minimum + addrx->Address.TranslationOffset;
+                        addrx->Address.Minimum + (IsPciRoot ? 0 : addrx->Address.TranslationOffset);
                     ResourceDescriptor->u.Port.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
                     if (IsPciRoot)
                     {
-                        ResourceDescriptor->Flags |= CM_RESOURCE_PORT_WINDOW_DECODE;
                         ULONGLONG s = addrx->Address.Minimum + addrx->Address.TranslationOffset;
                         ULONGLONG e = (addrx->Address.AddressLength) ? (s + addrx->Address.AddressLength - 1) : s;
                         BuspCachePciRootIoWindow(DeviceData, s, e);
@@ -3037,7 +3093,7 @@ Bus_PDO_QueryDeviceId(
         if (DeviceData->AcpiHandle)
             acpi_bus_get_device(DeviceData->AcpiHandle, &Device);
 
-        if (Device && Device->pnp.hardware_id && strcmp(Device->pnp.hardware_id, "Processor") == 0)
+        if (Device && BuspIsProcessorDevice(Device) && ProcessorIdString != NULL)
         {
             length = (ULONG)wcslen(ProcessorIdString);
             wcscpy(temp, ProcessorIdString);
@@ -3112,13 +3168,16 @@ Bus_PDO_QueryDeviceId(
             DPRINT("Device name: %s\n", Device->pnp.device_name);
             DPRINT("Hardware ID: %s\n", Device->pnp.hardware_id);
 
-            if (strcmp(Device->pnp.hardware_id, "Processor") == 0)
+            if (BuspIsProcessorDevice(Device) && ProcessorHardwareIds.Buffer != NULL)
             {
                 length = ProcessorHardwareIds.Length / sizeof(WCHAR);
                 src = ProcessorHardwareIds.Buffer;
             }
             else
             {
+                length += BuspFormatVendorDeviceId(&temp[length],
+                                                   RTL_NUMBER_OF(temp) - length,
+                                                   Device->pnp.hardware_id);
                 length += (ULONG)swprintf(&temp[length],
                                           RTL_NUMBER_OF(temp) - length,
                                           L"ACPI\\%hs",
@@ -3132,9 +3191,9 @@ Bus_PDO_QueryDeviceId(
                 temp[length++] = UNICODE_NULL;
                 temp[length++] = UNICODE_NULL;
                 src = temp;
+                NT_ASSERT(length * sizeof(WCHAR) <= sizeof(temp));
             }
 
-            NT_ASSERT(length * sizeof(WCHAR) <= sizeof(temp));
             buffer = ExAllocatePoolWithTag(PagedPool, length * sizeof(WCHAR), 'IpcA');
             if (!buffer) { status = STATUS_INSUFFICIENT_RESOURCES; break; }
 
@@ -3184,18 +3243,11 @@ Bus_PDO_QueryDeviceId(
             DPRINT("Device name: %s\n", Device->pnp.device_name);
             DPRINT("Hardware ID: %s\n", Device->pnp.hardware_id);
 
-            if (strcmp(Device->pnp.hardware_id, "Processor") == 0)
+            if (BuspIsProcessorDevice(Device))
             {
                 length += (ULONG)swprintf(&temp[length],
                                           RTL_NUMBER_OF(temp) - length,
-                                          L"ACPI\\%hs",
-                                          Device->pnp.hardware_id);
-                temp[length++] = UNICODE_NULL;
-
-                length += (ULONG)swprintf(&temp[length],
-                                          RTL_NUMBER_OF(temp) - length,
-                                          L"*%hs",
-                                          Device->pnp.hardware_id);
+                                          L"ACPI\\Processor");
                 temp[length++] = UNICODE_NULL;
                 temp[length++] = UNICODE_NULL;
             }
@@ -3309,12 +3361,10 @@ Bus_PDO_QueryDeviceText(
                 Temp = L"PCI Interrupt Link";
             else if (wcsstr(DeviceData->HardwareIDs, L"ACPI_PWR") != 0)
                 Temp = L"ACPI Power Resource";
-            else if (wcsstr(DeviceData->HardwareIDs, L"Processor") != 0)
+            else if (wcsstr(DeviceData->HardwareIDs, L"Processor") != 0 ||
+                     wcsstr(DeviceData->HardwareIDs, L"VEN_ACPI&DEV_0007") != 0)
             {
-                if (ProcessorNameString != NULL)
-                    Temp = ProcessorNameString;
-                else
-                    Temp = L"Processor";
+                Temp = L"Processor";
             }
             else if (wcsstr(DeviceData->HardwareIDs, L"ThermalZone") != 0)
                 Temp = L"ACPI Thermal Zone";
@@ -3325,7 +3375,7 @@ Bus_PDO_QueryDeviceText(
             else if (!DeviceData->AcpiHandle)
                 Temp = L"ACPI Fixed Feature Button";
             else
-                Temp = L"Other ACPI device";
+                break;
 
             Buffer = ExAllocatePoolWithTag(PagedPool, (wcslen(Temp) + 1) * sizeof(WCHAR), 'IpcA');
             if (!Buffer) { status = STATUS_INSUFFICIENT_RESOURCES; break; }
@@ -3345,6 +3395,104 @@ Bus_PDO_QueryDeviceText(
     return status;
 }
 
+static
+VOID
+BuspAppendPciRootWindowPrivates(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _Inout_ PCM_RESOURCE_LIST *ResourceList)
+{
+    PCM_RESOURCE_LIST OldList = *ResourceList;
+    PCM_RESOURCE_LIST NewList;
+    PCM_PARTIAL_RESOURCE_LIST OldPartial;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Src, Dst;
+    ULONG i, Extra = 0, NewCount;
+    SIZE_T Size;
+
+    if (OldList->Count != 1)
+        return;
+
+    OldPartial = &OldList->List[0].PartialResourceList;
+    for (i = 0; i < OldPartial->Count; i++)
+    {
+        switch (OldPartial->PartialDescriptors[i].Type)
+        {
+            case CmResourceTypeBusNumber:
+                Extra += 1;
+                break;
+            case CmResourceTypePort:
+            case CmResourceTypeMemory:
+            case CmResourceTypeMemoryLarge:
+                Extra += 2;
+                break;
+            default:
+                break;
+        }
+    }
+    if (!Extra)
+        return;
+
+    NewCount = OldPartial->Count + Extra;
+    Size = FIELD_OFFSET(CM_RESOURCE_LIST, List[0].PartialResourceList.PartialDescriptors) +
+           NewCount * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+    NewList = ExAllocatePoolWithTag(PagedPool, Size, 'RpcA');
+    if (!NewList)
+        return;
+
+    RtlZeroMemory(NewList, Size);
+    NewList->Count = 1;
+    NewList->List[0].InterfaceType = OldList->List[0].InterfaceType;
+    NewList->List[0].BusNumber = OldList->List[0].BusNumber;
+    NewList->List[0].PartialResourceList.Version = OldPartial->Version;
+    NewList->List[0].PartialResourceList.Revision = OldPartial->Revision;
+    NewList->List[0].PartialResourceList.Count = NewCount;
+
+    Dst = NewList->List[0].PartialResourceList.PartialDescriptors;
+    for (i = 0; i < OldPartial->Count; i++)
+    {
+        Src = &OldPartial->PartialDescriptors[i];
+        *Dst++ = *Src;
+        if (Src->Type == CmResourceTypePort ||
+            Src->Type == CmResourceTypeMemory ||
+            Src->Type == CmResourceTypeMemoryLarge)
+        {
+            ULONGLONG Translated = (ULONGLONG)Src->u.Generic.Start.QuadPart;
+            if (Src->Type == CmResourceTypePort)
+            {
+                ULONG w;
+                for (w = 0; w < DeviceData->PciRootIoWindowCount; w++)
+                {
+                    if (DeviceData->PciRootIoWindows[w].End - DeviceData->PciRootIoWindows[w].Start + 1 ==
+                        (ULONGLONG)Src->u.Port.Length)
+                    {
+                        Translated = DeviceData->PciRootIoWindows[w].Start;
+                        break;
+                    }
+                }
+            }
+            Dst->Type = CmResourceTypeDevicePrivate;
+            Dst->ShareDisposition = CmResourceShareDeviceExclusive;
+            Dst->Flags = 0x6000;
+            Dst->u.DevicePrivate.Data[0] = Src->Type;
+            Dst->u.DevicePrivate.Data[1] = (ULONG)Translated;
+            Dst->u.DevicePrivate.Data[2] = (ULONG)(Translated >> 32);
+            Dst++;
+        }
+        if (Src->Type == CmResourceTypeBusNumber ||
+            Src->Type == CmResourceTypePort ||
+            Src->Type == CmResourceTypeMemory ||
+            Src->Type == CmResourceTypeMemoryLarge)
+        {
+            Dst->Type = CmResourceTypeDevicePrivate;
+            Dst->ShareDisposition = CmResourceShareDeviceExclusive;
+            Dst->Flags = 1;
+            Dst++;
+        }
+    }
+
+    ExFreePoolWithTag(OldList, 'RpcA');
+    *ResourceList = NewList;
+}
+
 NTSTATUS
 Bus_PDO_QueryResources(
      PPDO_DEVICE_DATA     DeviceData,
@@ -3360,6 +3508,9 @@ Bus_PDO_QueryResources(
     PAGED_CODE();
 
     if (!DeviceData->AcpiHandle)
+        return Irp->IoStatus.Status;
+
+    if (BuspIsPciLinkDevice(DeviceData))
         return Irp->IoStatus.Status;
 
     IsPciRoot = BuspIsPciRootDevice(DeviceData);
@@ -3403,6 +3554,9 @@ Bus_PDO_QueryResources(
         return STATUS_SUCCESS;
     }
 
+    if (IsPciRoot)
+        BuspAppendPciRootWindowPrivates(DeviceData, &ResourceList);
+
     Irp->IoStatus.Information = (ULONG_PTR)ResourceList;
     return STATUS_SUCCESS;
 }
@@ -3426,6 +3580,9 @@ Bus_PDO_QueryResourceRequirements(
     PAGED_CODE();
 
     if (!DeviceData->AcpiHandle)
+        return Irp->IoStatus.Status;
+
+    if (BuspIsPciLinkDevice(DeviceData))
         return Irp->IoStatus.Status;
 
     IsPciRoot = BuspIsPciRootDevice(DeviceData);

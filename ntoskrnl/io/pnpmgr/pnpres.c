@@ -59,6 +59,10 @@ static
 BOOLEAN
 IopCheckResourceDescriptor(IN PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc, IN PCM_RESOURCE_LIST ResourceList, IN BOOLEAN Silent, OUT OPTIONAL PCM_PARTIAL_RESOURCE_DESCRIPTOR ConflictingDescriptor);
 
+#define IOP_HAL_RESERVED_VECTOR_BASE 0x800
+
+static ULONG IopNextMessageInterruptToken = CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN;
+
 FORCEINLINE
 PIO_RESOURCE_LIST
 IopGetNextResourceList(
@@ -358,34 +362,32 @@ IopFindMemoryResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURC
         return FALSE;
     }
 
-    for (Start = Minimum;
-         Start <= Maximum - Length + 1;
-         Start += Alignment)
+    Start = Maximum - Length + 1;
+    Start -= Start % Alignment;
+    while (Start >= Minimum)
     {
+        ULONGLONG ConflictStart, NextStart;
+
         IopSetMemoryDescriptor(CmDesc, Start, Length);
 
-        if (IopCheckDescriptorForConflict(CmDesc, PendingList, &ConflictingDesc, DeviceNode))
-        {
-            ULONGLONG ConflictEnd =
-                (ULONGLONG)ConflictingDesc.u.Memory.Start.QuadPart +
-                IopMemoryDescriptorLength(&ConflictingDesc);
-            ULONGLONG NextStart;
-
-            if (ConflictEnd > MAXULONGLONG - (Alignment - 1))
-                return FALSE;
-
-            NextStart = ((ConflictEnd + Alignment - 1) / Alignment) * Alignment;
-            if (NextStart <= Start || NextStart < Alignment)
-                return FALSE;
-
-            /* The loop increment advances from here to NextStart. */
-            Start = NextStart - Alignment;
-        }
-        else
+        if (!IopCheckDescriptorForConflict(CmDesc, PendingList, &ConflictingDesc, DeviceNode))
         {
             DPRINT1("Satisfying memory requirement with 0x%I64x (length: 0x%I64x)\n", Start, Length);
             return TRUE;
         }
+
+        ConflictStart = (ULONGLONG)ConflictingDesc.u.Memory.Start.QuadPart;
+        if (ConflictStart < Length)
+            return FALSE;
+        NextStart = ConflictStart - Length;
+        NextStart -= NextStart % Alignment;
+        if (NextStart >= Start)
+        {
+            if (Start < Alignment)
+                return FALSE;
+            NextStart = Start - Alignment;
+        }
+        Start = NextStart;
     }
 
     return FALSE;
@@ -415,35 +417,38 @@ IopFindPortResource(IN PIO_RESOURCE_DESCRIPTOR IoDesc, IN OPTIONAL PCM_RESOURCE_
         return FALSE;
     }
 
-    for (Start = (ULONGLONG)IoDesc->u.Port.MinimumAddress.QuadPart;
-         Start <= (ULONGLONG)IoDesc->u.Port.MaximumAddress.QuadPart - IoDesc->u.Port.Length + 1;
-         Start += IoDesc->u.Port.Alignment)
     {
-        CmDesc->u.Port.Length = IoDesc->u.Port.Length;
-        CmDesc->u.Port.Start.QuadPart = (LONGLONG)Start;
+        ULONGLONG Alignment = IoDesc->u.Port.Alignment;
+        ULONGLONG Minimum = (ULONGLONG)IoDesc->u.Port.MinimumAddress.QuadPart;
+        ULONGLONG Length = IoDesc->u.Port.Length;
 
-        if (IopCheckDescriptorForConflict(CmDesc, PendingList, &ConflictingDesc, DeviceNode))
+        Start = (ULONGLONG)IoDesc->u.Port.MaximumAddress.QuadPart - Length + 1;
+        Start -= Start % Alignment;
+        while (Start >= Minimum)
         {
-            ULONGLONG Alignment = IoDesc->u.Port.Alignment;
-            ULONGLONG ConflictEnd =
-                (ULONGLONG)ConflictingDesc.u.Port.Start.QuadPart +
-                ConflictingDesc.u.Port.Length;
-            ULONGLONG NextStart;
+            ULONGLONG ConflictStart, NextStart;
 
-            if (ConflictEnd > MAXULONGLONG - (Alignment - 1))
+            CmDesc->u.Port.Length = IoDesc->u.Port.Length;
+            CmDesc->u.Port.Start.QuadPart = (LONGLONG)Start;
+
+            if (!IopCheckDescriptorForConflict(CmDesc, PendingList, &ConflictingDesc, DeviceNode))
+            {
+                DPRINT("Satisfying port requirement with 0x%I64x (length: 0x%x)\n", Start, CmDesc->u.Port.Length);
+                return TRUE;
+            }
+
+            ConflictStart = (ULONGLONG)ConflictingDesc.u.Port.Start.QuadPart;
+            if (ConflictStart < Length)
                 return FALSE;
-
-            NextStart = ((ConflictEnd + Alignment - 1) / Alignment) * Alignment;
-            if (NextStart <= Start || NextStart < Alignment)
-                return FALSE;
-
-            /* The loop increment advances from here to NextStart. */
-            Start = NextStart - Alignment;
-        }
-        else
-        {
-            DPRINT("Satisfying port requirement with 0x%I64x (length: 0x%x)\n", Start, CmDesc->u.Port.Length);
-            return TRUE;
+            NextStart = ConflictStart - Length;
+            NextStart -= NextStart % Alignment;
+            if (NextStart >= Start)
+            {
+                if (Start < Alignment)
+                    return FALSE;
+                NextStart = Start - Alignment;
+            }
+            Start = NextStart;
         }
     }
 
@@ -997,6 +1002,12 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                         }
                         break;
 
+                    case CmResourceTypeDevicePrivate:
+                        RtlCopyMemory(NewDesc.u.DevicePrivate.Data,
+                                      IoDesc->u.DevicePrivate.Data,
+                                      sizeof(NewDesc.u.DevicePrivate.Data));
+                        break;
+
                     default:
                         DPRINT1("Unsupported resource type: %x\n", IoDesc->Type);
                         FoundResource = FALSE;
@@ -1398,6 +1409,231 @@ IopFilterResourceRequirements(
 }
 
 
+static
+NTSTATUS
+IopWriteSystemResourceList(
+    _In_ HANDLE SystemResourcesKey,
+    _In_ PCWSTR KeyName,
+    _In_ PCWSTR ValueName,
+    _In_ PCM_RESOURCE_LIST List)
+{
+    NTSTATUS Status;
+    HANDLE KeyHandle;
+    UNICODE_STRING Name;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    ULONG Disposition;
+
+    RtlInitUnicodeString(&Name, KeyName);
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &Name,
+                               OBJ_CASE_INSENSITIVE | OBJ_OPENIF | OBJ_KERNEL_HANDLE,
+                               SystemResourcesKey,
+                               NULL);
+    Status = ZwCreateKey(&KeyHandle,
+                         KEY_ALL_ACCESS,
+                         &ObjectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_VOLATILE,
+                         &Disposition);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlInitUnicodeString(&Name, ValueName);
+    Status = ZwSetValueKey(KeyHandle,
+                           &Name,
+                           0,
+                           REG_RESOURCE_LIST,
+                           List,
+                           PnpDetermineResourceListSize(List));
+    ZwClose(KeyHandle);
+    return Status;
+}
+
+static
+BOOLEAN
+IopSystemResourceTypeInSet(
+    _In_ TYPE_OF_MEMORY MemoryType,
+    _In_ ULONG Set)
+{
+    switch (Set)
+    {
+        case 0:
+            return (MemoryType != LoaderBad &&
+                    MemoryType != LoaderFirmwarePermanent &&
+                    MemoryType != LoaderReserve &&
+                    MemoryType != LoaderBBTMemory);
+        case 1:
+            return (MemoryType == LoaderSpecialMemory ||
+                    MemoryType == LoaderBBTMemory);
+        default:
+            return (MemoryType == LoaderSpecialMemory ||
+                    MemoryType == LoaderBBTMemory ||
+                    MemoryType == LoaderFirmwarePermanent ||
+                    MemoryType == LoaderReserve);
+    }
+}
+
+static
+PCM_RESOURCE_LIST
+IopBuildSystemResourceList(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ ULONG Set)
+{
+    PLIST_ENTRY Entry;
+    PMEMORY_ALLOCATION_DESCRIPTOR Md;
+    PCM_RESOURCE_LIST List;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc;
+    ULONG Count = 0, Index = 0;
+    ULONGLONG RunStart = 0, RunEnd = 0;
+    BOOLEAN InRun = FALSE;
+    SIZE_T Size;
+
+    for (Entry = LoaderBlock->MemoryDescriptorListHead.Flink;
+         Entry != &LoaderBlock->MemoryDescriptorListHead;
+         Entry = Entry->Flink)
+    {
+        Md = CONTAINING_RECORD(Entry, MEMORY_ALLOCATION_DESCRIPTOR, ListEntry);
+        if (IopSystemResourceTypeInSet(Md->MemoryType, Set))
+            Count++;
+    }
+
+    Size = FIELD_OFFSET(CM_RESOURCE_LIST, List[0].PartialResourceList.PartialDescriptors) +
+           (Count ? Count : 1) * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+    List = ExAllocatePoolWithTag(PagedPool, Size, TAG_IO_RESOURCE);
+    if (!List)
+        return NULL;
+
+    RtlZeroMemory(List, Size);
+    List->Count = 1;
+    List->List[0].InterfaceType = Internal;
+    List->List[0].BusNumber = 0;
+    List->List[0].PartialResourceList.Version = 1;
+    List->List[0].PartialResourceList.Revision = 1;
+    Desc = List->List[0].PartialResourceList.PartialDescriptors;
+
+    for (Entry = LoaderBlock->MemoryDescriptorListHead.Flink;
+         ;
+         Entry = Entry->Flink)
+    {
+        ULONGLONG Start = 0, End = 0;
+        BOOLEAN Include = FALSE;
+
+        if (Entry != &LoaderBlock->MemoryDescriptorListHead)
+        {
+            Md = CONTAINING_RECORD(Entry, MEMORY_ALLOCATION_DESCRIPTOR, ListEntry);
+            Include = IopSystemResourceTypeInSet(Md->MemoryType, Set);
+            Start = (ULONGLONG)Md->BasePage << PAGE_SHIFT;
+            End = Start + ((ULONGLONG)Md->PageCount << PAGE_SHIFT);
+        }
+
+        if (Include && InRun && Start == RunEnd)
+        {
+            RunEnd = End;
+        }
+        else
+        {
+            if (InRun)
+            {
+                ULONGLONG Length = RunEnd - RunStart;
+                Desc[Index].ShareDisposition = CmResourceShareDeviceExclusive;
+                Desc[Index].u.Memory.Start.QuadPart = (LONGLONG)RunStart;
+                if (Length > 0xFFFFFFFFULL)
+                {
+                    Desc[Index].Type = CmResourceTypeMemoryLarge;
+                    Desc[Index].Flags = CM_RESOURCE_MEMORY_LARGE_40;
+                    Desc[Index].u.Memory40.Length40 = (ULONG)(Length >> 8);
+                }
+                else
+                {
+                    Desc[Index].Type = CmResourceTypeMemory;
+                    Desc[Index].Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+                    Desc[Index].u.Memory.Length = (ULONG)Length;
+                }
+                Index++;
+            }
+            InRun = Include;
+            RunStart = Start;
+            RunEnd = End;
+        }
+
+        if (Entry == &LoaderBlock->MemoryDescriptorListHead)
+            break;
+    }
+
+    List->List[0].PartialResourceList.Count = Index;
+    return List;
+}
+
+VOID
+NTAPI
+IopInitializeSystemResourceMap(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    NTSTATUS Status;
+    HANDLE ResourceMapKey, SystemResourcesKey;
+    UNICODE_STRING KeyName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    ULONG Disposition;
+    PCM_RESOURCE_LIST List;
+
+    if (!LoaderBlock)
+        return;
+
+    RtlInitUnicodeString(&KeyName, L"\\Registry\\Machine\\HARDWARE\\RESOURCEMAP");
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_OPENIF | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwCreateKey(&ResourceMapKey,
+                         KEY_ALL_ACCESS,
+                         &ObjectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_VOLATILE,
+                         &Disposition);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    RtlInitUnicodeString(&KeyName, L"System Resources");
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_OPENIF | OBJ_KERNEL_HANDLE,
+                               ResourceMapKey,
+                               NULL);
+    Status = ZwCreateKey(&SystemResourcesKey,
+                         KEY_ALL_ACCESS,
+                         &ObjectAttributes,
+                         0,
+                         NULL,
+                         REG_OPTION_VOLATILE,
+                         &Disposition);
+    ZwClose(ResourceMapKey);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    List = IopBuildSystemResourceList(LoaderBlock, 0);
+    if (List)
+    {
+        IopWriteSystemResourceList(SystemResourcesKey, L"Physical Memory", L".Translated", List);
+        ExFreePoolWithTag(List, TAG_IO_RESOURCE);
+    }
+    List = IopBuildSystemResourceList(LoaderBlock, 1);
+    if (List)
+    {
+        IopWriteSystemResourceList(SystemResourcesKey, L"Reserved", L".Translated", List);
+        ExFreePoolWithTag(List, TAG_IO_RESOURCE);
+    }
+    List = IopBuildSystemResourceList(LoaderBlock, 2);
+    if (List)
+    {
+        IopWriteSystemResourceList(SystemResourcesKey, L"Loader Reserved", L".Raw", List);
+        ExFreePoolWithTag(List, TAG_IO_RESOURCE);
+    }
+    ZwClose(SystemResourcesKey);
+}
+
 NTSTATUS
 IopUpdateResourceMap(
     IN PDEVICE_NODE DeviceNode,
@@ -1654,7 +1890,20 @@ IopTranslateDeviceResources(
                 * the translated copy already has the final values
                 * from the earlier RtlCopyMemory. */
                if (DescriptorRaw->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+               {
+                   DescriptorRaw->u.MessageInterrupt.Raw.Reserved = 0;
+                   DescriptorRaw->u.MessageInterrupt.Raw.MessageCount = 1;
+                   DescriptorRaw->u.MessageInterrupt.Raw.Vector = IopNextMessageInterruptToken--;
+                   DescriptorRaw->u.MessageInterrupt.Raw.Affinity = DescriptorTranslated->u.Interrupt.Affinity;
                    break;
+               }
+
+               if (DeviceNode->ResourceList->List[i].InterfaceType == PNPBus &&
+                   DeviceNode->ResourceList->List[i].BusNumber == (ULONG)-1 &&
+                   DescriptorRaw->u.Interrupt.Vector >= IOP_HAL_RESERVED_VECTOR_BASE)
+               {
+                   break;
+               }
 
                DescriptorTranslated->u.Interrupt.Vector = HalGetInterruptVector(
                   DeviceNode->ResourceList->List[i].InterfaceType,

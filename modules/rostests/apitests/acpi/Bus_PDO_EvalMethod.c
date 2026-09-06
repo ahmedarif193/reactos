@@ -672,6 +672,32 @@ AcpiEvaluateObject (
     return AE_NOT_FOUND;
 }
 
+ACPI_STATUS
+AcpiGetHandle (
+    ACPI_HANDLE             Parent,
+    ACPI_STRING             Pathname,
+    ACPI_HANDLE             *RetHandle)
+{
+    if (RetHandle)
+        *RetHandle = NULL;
+    return AE_NOT_FOUND;
+}
+
+ACPI_STATUS
+AcpiWalkNamespace (
+    ACPI_OBJECT_TYPE        Type,
+    ACPI_HANDLE             StartObject,
+    UINT32                  MaxDepth,
+    ACPI_WALK_CALLBACK      DescendingCallback,
+    ACPI_WALK_CALLBACK      AscendingCallback,
+    void                    *Context,
+    void                    **ReturnValue)
+{
+    if (ReturnValue)
+        *ReturnValue = NULL;
+    return AE_NOT_FOUND;
+}
+
 #include "../../../../drivers/bus/acpi/eval.c"
 
 /* GLOBALS ********************************************************************/

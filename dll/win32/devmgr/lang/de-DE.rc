@@ -321,6 +321,7 @@ BEGIN
   IDS_TYPE_PORT             "Ein-/Ausgabe (E/A)"
   IDS_TYPE_DMA              "Direkter Speicherzugriff (DMA)"
   IDS_TYPE_IRQ              "Interruptanfrage (IRQ)"
+  IDS_TYPE_LARGEMEMORY      "Large Memory"
 END
 
 /* Hints */
