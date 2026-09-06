@@ -665,6 +665,14 @@ struct _DXGKRNL_ADAPTER
     PDEVICE_OBJECT             PostDisplayFallbackDeviceObject;
     BOOLEAN                    PostDisplayFallbackRemoveRundownHeld;
 
+    /*
+     * Native dxgkrnl disables its Basic Display fallback while a real
+     * adapter takes over. Our fallback is a separate, synthetic
+     * ROOT\BASICDISPLAY PDO, so suppress that devnode in device UI while it
+     * is disabled and expose it again if rollback restarts it.
+     */
+    volatile LONG               BasicDisplayUiSuppressed;
+
     /* Serializes concurrent PnP and boot-display handover stop requests. */
     KEVENT                      AdapterStopCompletedEvent;
     volatile LONG               AdapterStopInProgress;
