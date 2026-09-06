@@ -5416,6 +5416,7 @@ static VOID
 DxgkpStartRuntimePowerManagement(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
+    ULONG Component;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -5452,17 +5453,20 @@ DxgkpStartRuntimePowerManagement(
     }
 
     /*
-     * A D3-transition component that does not describe its own two-state
-     * F0/F1 pair keeps a permanent active reference, so PoFx never parks the
-     * adapter through it.  Windows takes the same reference in
-     * DXGADAPTER::StartRuntimePowerManagement before starting the framework.
+     * Native dxgkrnl keeps a reference count for every power component and
+     * passes only its zero-to-one and one-to-zero edges to PoFx.  The current
+     * port interface can receive active callbacks before the component table
+     * is registered, so those references cannot yet be replayed accurately.
+     * Keep one bootstrap reference on every component instead of allowing
+     * PoFxStartDevicePowerManagement to idle live display and render engines.
+     * Miniport references remain balanced above this floor, and unregistering
+     * the PoFx device discards the floor at adapter stop.
      */
-    if (Adapter->PowerD3TransitionComponent != DXGKP_POWER_COMPONENT_NONE &&
-        !Adapter->PowerD3TransitionTwoStates)
-    {
-        PoFxActivateComponent(Adapter->PoFxHandle,
-                              Adapter->PowerD3TransitionComponent, 0);
-    }
+    for (Component = 0; Component < Adapter->PowerComponentCount; ++Component)
+        PoFxActivateComponent(Adapter->PoFxHandle, Component, 0);
+
+    DXGKRNL_INFO("PoFx: retained %lu bootstrap F0 component reference(s)\n",
+                 Adapter->PowerComponentCount);
 
     InterlockedExchange(&Adapter->PowerManagementStarted, 1);
     PoFxStartDevicePowerManagement(Adapter->PoFxHandle);
