@@ -1418,6 +1418,8 @@ struct _DXGKRNL_CONTEXT
         LONG64                  Sequence;
         ULONGLONG               Address;
     }                           LastBase[5]; /* general, surface, dynamic, indirect, instruction */
+    LONG64                      SubmissionCount;   /* virtual submissions on this context */
+    LONG64                      BaseCommandCount;  /* STATE_BASE_ADDRESS seen in their scanned prefix */
     BOOLEAN                     GpuMmuNode;
     D3DGPU_PHYSICAL_ADDRESS      PublishedRootPageTableAddress;
     UINT                        PublishedRootPageTableEntries;
@@ -3985,6 +3987,13 @@ NTAPI
 DxgkDebugInit(VOID);
 
 VOID DxgkDumpRecentKmtIoctls(VOID);
+VOID DxgkKmtReportStuckIoctls(_In_ ULONGLONG Now100ns);
+VOID DxgkVidMmNoteApertureOp(_In_ BOOLEAN Map, _In_ ULONG SegmentId, _In_ ULONGLONG OffsetInPages, _In_ ULONGLONG Pages, _In_opt_ HANDLE hAllocation, _In_opt_ PVOID Allocation);
+VOID DxgkVidMmDumpApertureOps(VOID);
+VOID DxgkPagingDumpRecentOps(VOID);
+VOID DxgkPagingNoteBuffer(_In_ ULONG Type, _In_ ULONG Node, _In_ ULONG Bytes, _In_reads_bytes_(Bytes) const VOID *Buffer);
+VOID DxgkVidMmTagContextAllocation(_In_ HANDLE ContextAllocationHandle, _In_ HANDLE hContext);
+VOID DxgkVidMmDumpContextImages(_In_opt_ HANDLE hContext, _In_opt_ HANDLE ContextAllocationHandle, _In_ PCSTR Tag);
 VOID DxgkAccountKmtIoctl(_In_ ULONG IoControlCode, _In_ ULONGLONG Elapsed100ns);
 VOID DxgkRecordKmtIoctl(_In_ ULONG IoControlCode, _In_ ULONG Operation, _In_ NTSTATUS Status);
 

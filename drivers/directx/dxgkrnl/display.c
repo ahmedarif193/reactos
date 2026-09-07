@@ -495,15 +495,50 @@ DxgkpDisplayCommitVidPnCandidate(
             VidPn->TargetModeSets[ActiveTargetIndex] != NULL)
         {
             PDXGKP_VIDPN_TARGET_MODESET TgtSet = VidPn->TargetModeSets[ActiveTargetIndex];
+            BOOLEAN SourcePinned;
+
+            /*
+             * Naming the source pivot is a promise that a source mode is
+             * pinned, and a driver that keeps the contract will not touch the
+             * pivot's mode set.  Keep the promise before making it, or the
+             * source mode set stays the synthetic VESA table dxgkrnl invented
+             * and the mode pinned out of it below is one the panel may not be
+             * able to scan out at all -- which is how a 720x480 Raspberry Pi 3
+             * ended up being offered an 800x600 source and refusing the VidPN.
+             */
+            SourcePinned = DxgkVidPnEnsurePinnedSourceMode(VidPn,
+                                                           ActiveSourceId,
+                                                           Adapter->PostDisplayWidth,
+                                                           Adapter->PostDisplayHeight);
 
             DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: clearing %Iu synthetic target "
                           "modes so the miniport enumerates its own\n", TgtSet->NumModes);
             TgtSet->NumModes = 0;
             TgtSet->PinnedModeId = (UINT)-1;
             TgtSet->NextModeId = 0;
-            EnumArgs.EnumPivotType = D3DKMDT_EPT_VIDPNSOURCE;
-            EnumArgs.EnumPivot.VidPnSourceId = ActiveSourceId;
-            EnumArgs.EnumPivot.VidPnTargetId = ActiveTargetId;
+
+            if (SourcePinned)
+            {
+                EnumArgs.EnumPivotType = D3DKMDT_EPT_VIDPNSOURCE;
+                EnumArgs.EnumPivot.VidPnSourceId = ActiveSourceId;
+                EnumArgs.EnumPivot.VidPnTargetId = ActiveTargetId;
+            }
+            else
+            {
+                /*
+                 * Nothing authoritative to pin -- no EDID timing and no POST
+                 * size, so this adapter did not light the boot display.  Then
+                 * dxgkrnl has no desktop mode to hold the driver to, and the
+                 * honest request is the one with no pivot at all: enumerate
+                 * both sets.  The target set is still cleared above, so the
+                 * driver answers with its own timings either way.
+                 */
+                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: no source mode to pin "
+                             "(POST size %ux%u); asking for cofunctional modality "
+                             "without a pivot\n",
+                             Adapter->PostDisplayWidth,
+                             Adapter->PostDisplayHeight);
+            }
         }
 
         if (!DxgkAcquireKmdCall(Adapter))

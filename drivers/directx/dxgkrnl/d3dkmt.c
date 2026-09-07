@@ -9417,30 +9417,104 @@ DxgkpDispatchBufferedIoctlWorker(
     _In_ PIRP              Irp,
     _In_ PIO_STACK_LOCATION Stack);
 
+/* In-flight KMT requests, for the silent stall: a GL process that stops
+ * without a fault, a TDR or a logged CPU wait (2026-09-06 runs 4 and 7) is
+ * blocked inside some request; the TDR tick names any request older than
+ * DXGKP_KMT_STUCK_SECONDS. */
+#define DXGKP_KMT_INFLIGHT_SLOTS 32
+#define DXGKP_KMT_STUCK_SECONDS 10
+typedef struct _DXGKP_KMT_INFLIGHT
+{
+    PVOID       Thread;      /* PsGetCurrentThread(); NULL = free slot */
+    HANDLE      ProcessId;
+    ULONG       IoControlCode;
+    ULONG       Operation;
+    ULONGLONG   Enter100ns;
+    ULONG       ReportedSeconds;
+} DXGKP_KMT_INFLIGHT;
+static DXGKP_KMT_INFLIGHT DxgkpKmtInFlight[DXGKP_KMT_INFLIGHT_SLOTS];
+
+static DXGKP_KMT_INFLIGHT *
+DxgkpKmtEnterInFlight(
+    _In_ ULONG IoControlCode,
+    _In_ ULONG Operation)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < DXGKP_KMT_INFLIGHT_SLOTS; Index++)
+    {
+        DXGKP_KMT_INFLIGHT *Slot = &DxgkpKmtInFlight[Index];
+
+        if (Slot->Thread != NULL ||
+            InterlockedCompareExchangePointer(&Slot->Thread, PsGetCurrentThread(), NULL) != NULL)
+            continue;
+        Slot->ProcessId = PsGetCurrentProcessId();
+        Slot->IoControlCode = IoControlCode;
+        Slot->Operation = Operation;
+        Slot->ReportedSeconds = 0;
+        KeMemoryBarrier();
+        Slot->Enter100ns = KeQueryInterruptTime();
+        return Slot;
+    }
+    return NULL;
+}
+
+/* DISPATCH_LEVEL, from the TDR tick. */
+VOID
+DxgkKmtReportStuckIoctls(
+    _In_ ULONGLONG Now100ns)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < DXGKP_KMT_INFLIGHT_SLOTS; Index++)
+    {
+        DXGKP_KMT_INFLIGHT *Slot = &DxgkpKmtInFlight[Index];
+        ULONGLONG Enter = Slot->Enter100ns;
+        ULONG Seconds;
+
+        if (Slot->Thread == NULL || Enter == 0 || Now100ns < Enter)
+            continue;
+        Seconds = (ULONG)((Now100ns - Enter) / 10000000ULL);
+        if (Seconds < DXGKP_KMT_STUCK_SECONDS || Seconds < Slot->ReportedSeconds + 30)
+            continue;
+        Slot->ReportedSeconds = Seconds;
+        DXGKRNL_ERR("DxgkKmt: ioctl 0x%08lx op=%lu on thread %p pid=%p in flight for %lu s\n",
+                    Slot->IoControlCode, Slot->Operation, Slot->Thread, Slot->ProcessId, Seconds);
+    }
+}
+
 NTSTATUS
 DxgkpDispatchBufferedIoctl(
     _In_ PIRP              Irp,
     _In_ PIO_STACK_LOCATION Stack)
 {
-#if DXGKRNL_ENABLE_KMT_IOCTL_DIAGNOSTICS
     ULONG IoControlCode = Stack->Parameters.DeviceIoControl.IoControlCode;
-    ULONGLONG Start100ns = DxgkDiagNow100ns();
     ULONG Operation = 0;
+    DXGKP_KMT_INFLIGHT *InFlight;
     NTSTATUS Status;
+#if DXGKRNL_ENABLE_KMT_IOCTL_DIAGNOSTICS
+    ULONGLONG Start100ns = DxgkDiagNow100ns();
+#endif
 
-    Status = DxgkpDispatchBufferedIoctlWorker(Irp, Stack);
-    DxgkAccountKmtIoctl(IoControlCode, DxgkDiagNow100ns() - Start100ns);
     if (IoControlCode == IOCTL_D3DKMT_PUBLIC_OPERATION &&
         Stack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(RXGK_PUBLIC_OPERATION_PACKET) &&
         Irp->AssociatedIrp.SystemBuffer != NULL)
     {
         Operation = ((PRXGK_PUBLIC_OPERATION_PACKET)Irp->AssociatedIrp.SystemBuffer)->Operation;
     }
+    InFlight = DxgkpKmtEnterInFlight(IoControlCode, Operation);
+    Status = DxgkpDispatchBufferedIoctlWorker(Irp, Stack);
+    if (InFlight != NULL)
+    {
+        InFlight->Enter100ns = 0;
+        KeMemoryBarrier();
+        InterlockedExchangePointer(&InFlight->Thread, NULL);
+    }
+#if DXGKRNL_ENABLE_KMT_IOCTL_DIAGNOSTICS
+    DxgkAccountKmtIoctl(IoControlCode, DxgkDiagNow100ns() - Start100ns);
     DxgkRecordKmtIoctl(IoControlCode, Operation, Status);
-    return Status;
-#else
-    return DxgkpDispatchBufferedIoctlWorker(Irp, Stack);
 #endif
+    return Status;
 }
 
 static NTSTATUS

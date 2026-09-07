@@ -1654,6 +1654,282 @@ DxgkVidMmCreateVirtualDmaBufferBacking(
  * DxgkDdiCreateAllocation result at destruction.  INIT_CONTEXT_RESOURCE is
  * different: its hAllocation is the OS handle returned by the callback.
  */
+static VOID DxgkpVidMmTrackContextAllocation(_In_ PDXGKVMM_ALLOCATION Allocation, _In_ BOOLEAN Live);
+
+/* Aperture-segment bookkeeping for the lost-context-image fault (T2.6,
+ * 2026-09-06): the miniport's context images live in the aperture segment
+ * next to UMD allocations, so a map or unmap of another allocation whose
+ * range overlaps a live context allocation would replace the image the GPU
+ * restores.  Every aperture op is kept in a ring dumped at fault time and
+ * checked against the live context allocations as it happens. */
+#define DXGKP_APERTURE_OP_RING 64
+#define DXGKP_CONTEXT_ALLOCATION_SLOTS 64
+typedef struct _DXGKP_APERTURE_OP
+{
+    LONG64      Sequence;
+    ULONGLONG   OffsetInPages;
+    ULONGLONG   Pages;
+    HANDLE      hAllocation;
+    PVOID       Allocation;
+    ULONG       SegmentId;
+    BOOLEAN     Map;
+    BOOLEAN     Context;
+} DXGKP_APERTURE_OP;
+typedef struct _DXGKP_CONTEXT_ALLOCATION_RANGE
+{
+    PVOID       Allocation;
+    HANDLE      hAllocation;
+    HANDLE      hContext;       /* miniport context the allocation was created for */
+    ULONGLONG   OffsetInPages;
+    ULONGLONG   Pages;
+    ULONG       SegmentId;
+} DXGKP_CONTEXT_ALLOCATION_RANGE;
+static DXGKP_APERTURE_OP DxgkpApertureOpRing[DXGKP_APERTURE_OP_RING];
+static volatile LONG DxgkpApertureOpRingNext;
+static DXGKP_CONTEXT_ALLOCATION_RANGE DxgkpContextAllocationRanges[DXGKP_CONTEXT_ALLOCATION_SLOTS];
+static KSPIN_LOCK DxgkpContextAllocationRangeLock;
+static LONG DxgkpContextAllocationRangeLockInitialized;
+static LONG DxgkpApertureOverlapTrace;
+
+static VOID
+DxgkpVidMmTrackContextAllocation(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ BOOLEAN Live)
+{
+    KIRQL OldIrql;
+    ULONG Index;
+
+    if (InterlockedCompareExchange(&DxgkpContextAllocationRangeLockInitialized, 1, 0) == 0)
+        KeInitializeSpinLock(&DxgkpContextAllocationRangeLock);
+    KeAcquireSpinLock(&DxgkpContextAllocationRangeLock, &OldIrql);
+    for (Index = 0; Index < DXGKP_CONTEXT_ALLOCATION_SLOTS; Index++)
+    {
+        DXGKP_CONTEXT_ALLOCATION_RANGE *Slot = &DxgkpContextAllocationRanges[Index];
+
+        if (Live ? Slot->Allocation == NULL : Slot->Allocation == Allocation)
+        {
+            if (Live)
+            {
+                Slot->hContext = NULL;
+                Slot->hAllocation = Allocation->MiniportHandle;
+                Slot->SegmentId = Allocation->SegmentId;
+                Slot->OffsetInPages = Allocation->SegmentOffset / PAGE_SIZE;
+                Slot->Pages = (Allocation->Size + PAGE_SIZE - 1) / PAGE_SIZE;
+                Slot->Allocation = Allocation;
+            }
+            else
+            {
+                Slot->Allocation = NULL;
+            }
+            break;
+        }
+    }
+    KeReleaseSpinLock(&DxgkpContextAllocationRangeLock, OldIrql);
+    DXGKRNL_INFO("context allocation %s seq=#%I64d: alloc=%p kmd=%p segment=%lu offset=0x%I64x size=0x%I64x\n",
+                 Live ? "live" : "gone", DxgkDiagSequence(), Allocation, Allocation->MiniportHandle,
+                 Allocation->SegmentId, (ULONGLONG)Allocation->SegmentOffset, (ULONGLONG)Allocation->Size);
+}
+
+/* Called by DxgkCbCreateContextAllocation once the miniport's context handle
+ * is known (the create path in this file only sees the allocation). */
+VOID
+DxgkVidMmTagContextAllocation(
+    _In_ HANDLE ContextAllocationHandle,
+    _In_ HANDLE hContext)
+{
+    KIRQL OldIrql;
+    ULONG Index;
+
+    if (InterlockedCompareExchange(&DxgkpContextAllocationRangeLockInitialized, 0, 0) == 0)
+        return;
+    KeAcquireSpinLock(&DxgkpContextAllocationRangeLock, &OldIrql);
+    for (Index = 0; Index < DXGKP_CONTEXT_ALLOCATION_SLOTS; Index++)
+    {
+        PDXGKVMM_ALLOCATION Allocation = (PDXGKVMM_ALLOCATION)DxgkpContextAllocationRanges[Index].Allocation;
+
+        if (Allocation != NULL && (HANDLE)Allocation->ContextAllocationHandle == ContextAllocationHandle)
+        {
+            DxgkpContextAllocationRanges[Index].hContext = hContext;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&DxgkpContextAllocationRangeLock, OldIrql);
+}
+
+/* Print the head of every live context allocation of hContext (all of them
+ * when NULL): the first dwords of the image's second page are the LRC's
+ * MI_LOAD_REGISTER_IMM register block (ring head/tail/start/control, batch
+ * buffer state, indirect context pointers), which tells a freshly
+ * re-initialised image from one the GPU has been saving into. */
+VOID
+DxgkVidMmDumpContextImages(
+    _In_opt_ HANDLE hContext,
+    _In_opt_ HANDLE ContextAllocationHandle,
+    _In_ PCSTR Tag)
+{
+    KIRQL OldIrql;
+    ULONG Index;
+
+    if (InterlockedCompareExchange(&DxgkpContextAllocationRangeLockInitialized, 0, 0) == 0)
+        return;
+    KeAcquireSpinLock(&DxgkpContextAllocationRangeLock, &OldIrql);
+    for (Index = 0; Index < DXGKP_CONTEXT_ALLOCATION_SLOTS; Index++)
+    {
+        DXGKP_CONTEXT_ALLOCATION_RANGE *Range = &DxgkpContextAllocationRanges[Index];
+        PDXGKVMM_ALLOCATION Allocation = (PDXGKVMM_ALLOCATION)Range->Allocation;
+        const ULONG *Words;
+        ULONG Page, Row, Word, Limit;
+
+        if (Allocation == NULL)
+            continue;
+        if (hContext != NULL && Range->hContext != hContext)
+            continue;
+        if (ContextAllocationHandle != NULL && (HANDLE)Allocation->ContextAllocationHandle != ContextAllocationHandle)
+            continue;
+        if (Allocation->CpuAddress == NULL)
+        {
+            DXGKRNL_ERR("CTXIMG(%s) alloc %p kmd=%p ctx=%p seg=%lu off=0x%I64x size=0x%I64x: no CPU address\n",
+                        Tag, Allocation, Range->hAllocation, Range->hContext, Range->SegmentId,
+                        Range->OffsetInPages << PAGE_SHIFT, (ULONGLONG)Allocation->Size);
+            continue;
+        }
+        DXGKRNL_ERR("CTXIMG(%s) alloc %p kmd=%p ctx=%p seg=%lu off=0x%I64x size=0x%I64x cpu=%p:\n",
+                    Tag, Allocation, Range->hAllocation, Range->hContext, Range->SegmentId,
+                    Range->OffsetInPages << PAGE_SHIFT, (ULONGLONG)Allocation->Size, Allocation->CpuAddress);
+        /* First two rows of each of the first six pages, then the first
+         * MI_LOAD_REGISTER_IMM block (0x1100xxxx / 0x1108xxxx) found in them:
+         * that block is the LRC register state (ring head/tail/start/ctl,
+         * BB state, indirect context, PDPs). */
+        Limit = (ULONG)min(Allocation->Size, 6 * PAGE_SIZE);
+        for (Page = 0; (Page + 1) * PAGE_SIZE <= Limit; Page++)
+        {
+            Words = (const ULONG *)((PUCHAR)Allocation->CpuAddress + Page * PAGE_SIZE);
+            for (Row = 0; Row < 2; Row++)
+            {
+                DXGKRNL_ERR("CTXIMG[%04lx] %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
+                            Page * PAGE_SIZE + Row * 32,
+                            Words[Row * 8], Words[Row * 8 + 1], Words[Row * 8 + 2], Words[Row * 8 + 3],
+                            Words[Row * 8 + 4], Words[Row * 8 + 5], Words[Row * 8 + 6], Words[Row * 8 + 7]);
+            }
+        }
+        Words = (const ULONG *)Allocation->CpuAddress;
+        for (Word = 0; Word + 48 < Limit / sizeof(ULONG); Word++)
+        {
+            if ((Words[Word] & 0xFFF70000UL) != 0x11000000UL)
+                continue;
+            DXGKRNL_ERR("CTXIMG LRI block at 0x%lx:\n", Word * 4);
+            for (Row = 0; Row < 8; Row++)
+            {
+                DXGKRNL_ERR("CTXIMG[%04lx] %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
+                            (Word + Row * 8) * 4,
+                            Words[Word + Row * 8], Words[Word + Row * 8 + 1], Words[Word + Row * 8 + 2], Words[Word + Row * 8 + 3],
+                            Words[Word + Row * 8 + 4], Words[Word + Row * 8 + 5], Words[Word + Row * 8 + 6], Words[Word + Row * 8 + 7]);
+            }
+            break;
+        }
+        /* Where the saved image keeps the UMD's bases: every 64-bit value
+         * whose high dword names the general (0x8000....) or instruction
+         * (0x8001....) heap, canonical or not, across the whole image. */
+        {
+            ULONG Hits = 0;
+
+            for (Word = 1; Word < Allocation->Size / sizeof(ULONG) && Hits < 24; Word++)
+            {
+                ULONG Hi = Words[Word] & 0x0000FFFFUL;
+
+                if ((Words[Word] & 0xFFFF0000UL) != 0 && (Words[Word] & 0xFFFF0000UL) != 0xFFFF0000UL)
+                    continue;
+                if (Hi != 0x8000 && Hi != 0x8001)
+                    continue;
+                Hits++;
+                DXGKRNL_ERR("CTXIMG base-like at 0x%05lx: %08lx %08lx (next %08lx %08lx)\n",
+                            (Word - 1) * 4, Words[Word - 1], Words[Word],
+                            Word + 1 < Allocation->Size / sizeof(ULONG) ? Words[Word + 1] : 0,
+                            Word + 2 < Allocation->Size / sizeof(ULONG) ? Words[Word + 2] : 0);
+            }
+            DXGKRNL_ERR("CTXIMG %lu base-like values in %I64u KB\n", Hits, (ULONGLONG)Allocation->Size / 1024);
+        }
+    }
+    KeReleaseSpinLock(&DxgkpContextAllocationRangeLock, OldIrql);
+}
+
+VOID
+DxgkVidMmNoteApertureOp(
+    _In_ BOOLEAN Map,
+    _In_ ULONG SegmentId,
+    _In_ ULONGLONG OffsetInPages,
+    _In_ ULONGLONG Pages,
+    _In_opt_ HANDLE hAllocation,
+    _In_opt_ PVOID Allocation)
+{
+    ULONG Slot = (ULONG)(InterlockedIncrement(&DxgkpApertureOpRingNext) - 1) % DXGKP_APERTURE_OP_RING;
+    DXGKP_APERTURE_OP *Record = &DxgkpApertureOpRing[Slot];
+    BOOLEAN Context = Allocation != NULL && ((PDXGKVMM_ALLOCATION)Allocation)->ContextAllocation;
+    KIRQL OldIrql;
+    ULONG Index;
+
+    Record->Sequence = DxgkDiagSequence();
+    Record->OffsetInPages = OffsetInPages;
+    Record->Pages = Pages;
+    Record->hAllocation = hAllocation;
+    Record->Allocation = Allocation;
+    Record->SegmentId = SegmentId;
+    Record->Map = Map;
+    Record->Context = Context;
+    if (Context || InterlockedCompareExchange(&DxgkpContextAllocationRangeLockInitialized, 0, 0) == 0)
+        return;
+    KeAcquireSpinLock(&DxgkpContextAllocationRangeLock, &OldIrql);
+    for (Index = 0; Index < DXGKP_CONTEXT_ALLOCATION_SLOTS; Index++)
+    {
+        DXGKP_CONTEXT_ALLOCATION_RANGE *Range = &DxgkpContextAllocationRanges[Index];
+
+        if (Range->Allocation == NULL || Range->SegmentId != SegmentId ||
+            Range->hAllocation == hAllocation ||
+            OffsetInPages >= Range->OffsetInPages + Range->Pages ||
+            Range->OffsetInPages >= OffsetInPages + Pages)
+            continue;
+        if (InterlockedIncrement(&DxgkpApertureOverlapTrace) <= 16)
+            DXGKRNL_ERR("APERTURE OVERLAP seq=#%I64d: %s of alloc %p (kmd %p) segment %lu pages [0x%I64x+0x%I64x) hits context allocation %p (kmd %p) at [0x%I64x+0x%I64x)\n",
+                        Record->Sequence, Map ? "map" : "unmap", Allocation, hAllocation, SegmentId, OffsetInPages, Pages,
+                        Range->Allocation, Range->hAllocation, Range->OffsetInPages, Range->Pages);
+    }
+    KeReleaseSpinLock(&DxgkpContextAllocationRangeLock, OldIrql);
+}
+
+VOID
+DxgkVidMmDumpApertureOps(VOID)
+{
+    ULONG Next = (ULONG)DxgkpApertureOpRingNext;
+    ULONG Index;
+
+    DXGKRNL_ERR("recent aperture ops (oldest first; #=global seq, C=context allocation):\n");
+    for (Index = 0; Index < DXGKP_APERTURE_OP_RING; Index++)
+    {
+        DXGKP_APERTURE_OP Record = DxgkpApertureOpRing[(Next + Index) % DXGKP_APERTURE_OP_RING];
+
+        if (Record.Sequence == 0)
+            continue;
+        DXGKRNL_ERR("  #%I64d %s%s seg=%lu pages=[0x%I64x+0x%I64x) kmd=%p alloc=%p\n",
+                    Record.Sequence, Record.Map ? "map  " : "unmap", Record.Context ? " C" : "  ",
+                    Record.SegmentId, Record.OffsetInPages, Record.Pages, Record.hAllocation, Record.Allocation);
+    }
+    if (InterlockedCompareExchange(&DxgkpContextAllocationRangeLockInitialized, 0, 0) != 0)
+    {
+        KIRQL OldIrql;
+
+        KeAcquireSpinLock(&DxgkpContextAllocationRangeLock, &OldIrql);
+        for (Index = 0; Index < DXGKP_CONTEXT_ALLOCATION_SLOTS; Index++)
+        {
+            DXGKP_CONTEXT_ALLOCATION_RANGE *Range = &DxgkpContextAllocationRanges[Index];
+
+            if (Range->Allocation != NULL)
+                DXGKRNL_ERR("  live context allocation %p kmd=%p seg=%lu pages=[0x%I64x+0x%I64x)\n",
+                            Range->Allocation, Range->hAllocation, Range->SegmentId, Range->OffsetInPages, Range->Pages);
+        }
+        KeReleaseSpinLock(&DxgkpContextAllocationRangeLock, OldIrql);
+    }
+}
+
 NTSTATUS
 DxgkVidMmCreateContextAllocation(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -1846,8 +2122,9 @@ DxgkVidMmCreateContextAllocation(
                 InitOp.DestinationVirtualAddress = Allocation->CpuAddress;
             }
             InitOp.DestinationGpuVirtualAddress = ContextHandle->GpuVirtualAddress;
-            DPRINT("context allocation init: alloc=%p segment=%lu offset=0x%I64x cpuva=%p (cpuvisible=%u protected=%u aperture=%d cpuaddr=%p sysmem=%p) gpuva=0x%I64x\n",
-                    Allocation, Allocation->SegmentId, (ULONGLONG)Allocation->PhysicalAddress.QuadPart, InitOp.DestinationVirtualAddress,
+            DxgkpVidMmTrackContextAllocation(Allocation, TRUE);
+            DPRINT1("context allocation init seq=#%I64d: alloc=%p segment=%lu offset=0x%I64x cpuva=%p (cpuvisible=%u protected=%u aperture=%d cpuaddr=%p sysmem=%p) gpuva=0x%I64x\n",
+                    DxgkDiagSequence(), Allocation, Allocation->SegmentId, (ULONGLONG)Allocation->PhysicalAddress.QuadPart, InitOp.DestinationVirtualAddress,
                     Flags.CpuVisible, Flags.Protected, (int)VidMmSegmentIsAperture(Segment), Allocation->CpuAddress, Allocation->SystemMemory,
                     InitOp.DestinationGpuVirtualAddress);
 
@@ -3710,6 +3987,8 @@ DxgkpVidMmFinalizeAllocation(
             ExFreePoolWithTag(Allocation->PrivateDriverData, TAG_VIDMM_ALLOC);
         Allocation->PrivateDriverData = NULL;
         Allocation->PrivateDriverDataSize = 0;
+        if (Allocation->ContextAllocation)
+            DxgkpVidMmTrackContextAllocation(Allocation, FALSE);
         if (Allocation->ContextAllocationHandle != NULL)
             ExFreePoolWithTag(Allocation->ContextAllocationHandle,
                               TAG_VIDMM_ALLOC);
@@ -6030,11 +6309,9 @@ DxgkpVidMmForceQuarantinedDestroyBatches(
 }
 
 #define DXGKP_VIDMM_DESTROY_QUEUED_WORK_TIMEOUT_MS 5000
-/* How long a destroy waits for the GPU work that was already submitted when
- * the destroy was requested.  A scene boundary drains a queue of a few
- * packets in a few milliseconds; anything longer is queued work waiting on a
- * CPU signal, which must not be allowed to deadlock the destroying thread,
- * so the wait then falls back to the reference stamps alone. */
+/* Bound the synchronous drain without discarding its lifetime protection.
+ * On expiry the caller retains the batch until a hardware stop boundary;
+ * elapsed time is not proof that the GPU stopped accessing its backing. */
 #define DXGKP_VIDMM_DESTROY_SUBMITTED_WORK_TIMEOUT_MS 250
 
 /* Destruction has unpublished the logical handle before this wait. Fence
@@ -6051,8 +6328,6 @@ DxgkpVidMmWaitForAllocationReferences(
     ULONG SubmittedAtDestroy[DXGK_MAX_TRACKED_NODES];
     LONG SubmittedEpoch;
     BOOLEAN SubmittedSnapshotTaken = FALSE;
-    BOOLEAN SubmittedSnapshotExpired = FALSE;
-    static LONG SubmittedSnapshotExpiredTrace;
 
     PAGED_CODE();
     if (Adapter == NULL || Allocation == NULL)
@@ -6060,6 +6335,7 @@ DxgkpVidMmWaitForAllocationReferences(
     if (Allocation->BackingAllocation != NULL)
         Allocation = Allocation->BackingAllocation;
 
+    TimeoutMs = min(TimeoutMs, DXGKP_VIDMM_DESTROY_SUBMITTED_WORK_TIMEOUT_MS);
     StartTime = KeQueryInterruptTime();
     Interval.QuadPart = -10000LL; /* 1 ms; the clock, not sleep count, sets the deadline. */
     for (;;)
@@ -6086,8 +6362,7 @@ DxgkpVidMmWaitForAllocationReferences(
             SubmittedEpoch = InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0);
             SubmittedSnapshotTaken = TRUE;
         }
-        if (!SubmittedSnapshotExpired &&
-            SubmittedEpoch == InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0))
+        if (SubmittedEpoch == InterlockedCompareExchange(&Adapter->SubmittedFenceIdentityEpoch, 0, 0))
         {
             for (Node = 0; Node < DXGK_MAX_TRACKED_NODES; ++Node)
             {
@@ -6120,17 +6395,6 @@ DxgkpVidMmWaitForAllocationReferences(
             }
         }
         KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
-        if (Outstanding && !SubmittedSnapshotExpired &&
-            KeQueryInterruptTime() - StartTime >= (ULONGLONG)DXGKP_VIDMM_DESTROY_SUBMITTED_WORK_TIMEOUT_MS * 10000)
-        {
-            /* Queued work that does not drain is waiting on the CPU; do not
-             * hold the destroying thread hostage to it. */
-            SubmittedSnapshotExpired = TRUE;
-            if (InterlockedIncrement(&SubmittedSnapshotExpiredTrace) <= 8)
-                DXGKRNL_WARN("DxgkpVidMmWaitForAllocationReferences: submitted work did not drain in %u ms; destroying %p against the reference stamps only\n",
-                             DXGKP_VIDMM_DESTROY_SUBMITTED_WORK_TIMEOUT_MS, Allocation);
-            continue;
-        }
         if (!Outstanding || Adapter->MiniportDeviceStopped)
             return STATUS_SUCCESS;
         if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
@@ -6606,6 +6870,8 @@ DxgkVidMmDestroyContextAllocation(
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
 
+    if (Allocation != NULL)
+        DxgkpVidMmTrackContextAllocation(Allocation, FALSE);
     Status = Allocation != NULL ?
              DxgkpVidMmDestroyAllocation(Adapter, NULL, NULL,
                                          InternalAllocationHandle) :
@@ -9681,7 +9947,7 @@ DxgkVidMmInvalidateReferencedAllocationCache(
                      DXGKP_VIDMM_PAGING_ADMISSION_TIMEOUT_MS);
         if (!NT_SUCCESS(Status))
         {
-            if (Status == STATUS_TIMEOUT)
+            if (Status == STATUS_IO_TIMEOUT)
                 Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
             return Status;
         }
@@ -10178,7 +10444,7 @@ DxgkVidMmUpdateAllocationProperty(
                      DXGKP_VIDMM_PAGING_ADMISSION_TIMEOUT_MS);
         if (!NT_SUCCESS(Status))
         {
-            if (Status == STATUS_TIMEOUT)
+            if (Status == STATUS_IO_TIMEOUT)
                 Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
             goto CleanupTransaction;
         }
@@ -10286,7 +10552,7 @@ DxgkVidMmUpdateAllocationProperty(
                          DXGKP_VIDMM_PAGING_ADMISSION_TIMEOUT_MS);
             if (!NT_SUCCESS(Status))
             {
-                if (Status == STATUS_TIMEOUT)
+                if (Status == STATUS_IO_TIMEOUT)
                     Status = STATUS_GRAPHICS_ALLOCATION_BUSY;
                 goto CleanupTransaction;
             }
@@ -11861,6 +12127,8 @@ DxgkpVidMmReleaseApertureMapping(
             BuildArgs.UnmapApertureSegment.OffsetInPages = (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
             BuildArgs.UnmapApertureSegment.NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(Allocation->SystemMemory, Allocation->Size);
             BuildArgs.UnmapApertureSegment.DummyPage = Segment->DummyPage;
+            DxgkVidMmNoteApertureOp(FALSE, Allocation->SegmentId, BuildArgs.UnmapApertureSegment.OffsetInPages,
+                                    BuildArgs.UnmapApertureSegment.NumberOfPages, Allocation->MiniportHandle, Allocation);
             Status = DXGK_CB_FULL(Adapter, DxgkDdiBuildPagingBuffer)(Adapter->MiniportDeviceContext, &BuildArgs);
             DxgkReleaseMiniportCallback(Adapter);
         }
@@ -12772,7 +13040,7 @@ DxgkVidMmAcquireSubmissionResidencyPinEx(
     {
         Status = DxgkPagingWaitForFence(ExpectedAdapter, Allocation->PagingFenceId, DXGKP_VIDMM_PAGING_ADMISSION_TIMEOUT_MS);
         if (!NT_SUCCESS(Status))
-            return Status == STATUS_TIMEOUT ? STATUS_GRAPHICS_ALLOCATION_BUSY : Status;
+            return Status == STATUS_IO_TIMEOUT ? STATUS_GRAPHICS_ALLOCATION_BUSY : Status;
     }
     Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
     if (!NT_SUCCESS(Status))
@@ -14755,6 +15023,8 @@ DxgkVidMmSubmitAperturePagingPacket(
         BuildArgs.UnmapApertureSegment.OffsetInPages = (SIZE_T)(Allocation->SegmentOffset / PAGE_SIZE);
         BuildArgs.UnmapApertureSegment.NumberOfPages = NumberOfPages;
     }
+    DxgkVidMmNoteApertureOp(Map, Allocation->SegmentId, Allocation->SegmentOffset / PAGE_SIZE,
+                            NumberOfPages, Allocation->MiniportHandle, Allocation);
 
     if (!DxgkAcquireKmdCall(Adapter))
     {

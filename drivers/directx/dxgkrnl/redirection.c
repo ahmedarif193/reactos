@@ -293,15 +293,16 @@ DxgkpWaitForRedirectionFence(
     _In_ ULONG SubmissionFenceId)
 {
     LARGE_INTEGER Interval;
-    ULONG Waited;
+    ULONGLONG Start100ns;
 
     if (SubmissionFenceId == 0)
         return STATUS_SUCCESS;
     if (Adapter == NULL || NodeOrdinal >= DXGK_MAX_TRACKED_NODES)
         return STATUS_INVALID_PARAMETER;
 
+    Start100ns = KeQueryInterruptTime();
     Interval.QuadPart = -10 * 1000;
-    for (Waited = 0; Waited <= DXGKP_REDIRECTION_SYNC_TIMEOUT_MS; ++Waited)
+    for (;;)
     {
         ULONG CompletedFenceId;
 
@@ -317,10 +318,15 @@ DxgkpWaitForRedirectionFence(
         }
         if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
             return STATUS_DEVICE_REMOVED;
+        if (KeQueryInterruptTime() - Start100ns >=
+            (ULONGLONG)DXGKP_REDIRECTION_SYNC_TIMEOUT_MS * 10000)
+        {
+            /* The caller must retain the outstanding fence and avoid
+             * publishing a synchronized surface until GPU work retires. */
+            return STATUS_IO_TIMEOUT;
+        }
         KeDelayExecutionThread(KernelMode, FALSE, &Interval);
     }
-
-    return STATUS_TIMEOUT;
 }
 
 NTSTATUS
