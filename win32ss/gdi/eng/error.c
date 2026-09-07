@@ -22,7 +22,16 @@ EngSetLastError(_In_ ULONG iError)
 {
     PTEB pTeb = NtCurrentTeb();
     if (pTeb)
+    {
         pTeb->LastErrorValue = iError;
+#ifdef _WIN64
+        if (PsGetProcessWow64Process(PsGetCurrentProcess()))
+        {
+            PTEB32 pTeb32 = (PTEB32)((PUCHAR)pTeb + ROUND_TO_PAGES(sizeof(TEB)));
+            pTeb32->LastErrorValue = iError;
+        }
+#endif
+    }
 }
 
 VOID
