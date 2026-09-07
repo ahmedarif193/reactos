@@ -1541,6 +1541,13 @@ DWORD WINAPI
 GetWindowThreadProcessId(HWND hWnd,
                          LPDWORD lpdwProcessId)
 {
+#ifdef WOW64_I386_RUNTIME
+    DWORD Ret = NtUserQueryWindow(hWnd, QUERY_WINDOW_UNIQUE_THREAD_ID);
+
+    if (Ret && lpdwProcessId)
+        *lpdwProcessId = NtUserQueryWindow(hWnd, QUERY_WINDOW_UNIQUE_PROCESS_ID);
+    return Ret;
+#else
     DWORD Ret = 0;
     PTHREADINFO ti;
     PWND pWnd = ValidateHwnd(hWnd);
@@ -1567,6 +1574,7 @@ GetWindowThreadProcessId(HWND hWnd,
         }
     }
     return Ret;
+#endif
 }
 
 
