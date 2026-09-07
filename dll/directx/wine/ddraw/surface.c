@@ -7033,6 +7033,16 @@ HRESULT ddraw_surface_create(struct ddraw *ddraw, const DDSURFACEDESC2 *surface_
              * right after creation. */
             desc->ddsCaps.dwCaps |= DDSCAPS_LOCALVIDMEM | DDSCAPS_VIDEOMEMORY;
         }
+#ifdef __REACTOS__
+        else if (FAILED(wined3d_check_device_format(ddraw->wined3d,
+                ddraw->wined3d_adapter, WINED3D_DEVICE_TYPE_HAL, mode.format_id,
+                0, WINED3D_BIND_SHADER_RESOURCE, WINED3D_RTYPE_TEXTURE_2D,
+                wined3dformat_from_ddrawformat(&desc->ddpfPixelFormat))))
+        {
+            free(texture);
+            return DDERR_NOTEXTUREHW;
+        }
+#endif
     }
 
     if ((desc->ddsCaps.dwCaps & (DDSCAPS_OVERLAY | DDSCAPS_SYSTEMMEMORY))
