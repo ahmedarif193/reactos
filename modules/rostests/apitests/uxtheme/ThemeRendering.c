@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <uxtheme.h>
 #include <vsstyle.h>
+#include <vssym32.h>
 
 #define SURFACE_WIDTH 96
 #define SURFACE_HEIGHT 48
@@ -86,6 +87,45 @@ render_scrollbar_state(HTHEME Theme, HDC Dc, DWORD *Pixels, INT State, UINT *Ren
 
     *RenderedPixels = count_rendered_pixels(Pixels);
     return hash_pixels(Pixels);
+}
+
+/* Exercise the class-level fill inherited by progress parts without images. */
+static void
+test_progress_fill(HWND Window, HDC Dc, DWORD *Pixels)
+{
+    HTHEME Theme = OpenThemeData(Window, VSCLASS_PROGRESS);
+    RECT Rect = { 0, 0, SURFACE_WIDTH, SURFACE_HEIGHT };
+    COLORREF Color, Gradient;
+    HRESULT Result;
+    int Background, Fill;
+    UINT Index;
+
+    ok(Theme != NULL, "OpenThemeData(PROGRESS) failed\n");
+    if (!Theme)
+        return;
+
+    if (FAILED(GetThemeEnumValue(Theme, 0, 0, TMT_BGTYPE, &Background)) ||
+        Background != BT_BORDERFILL ||
+        FAILED(GetThemeColor(Theme, 0, 0, TMT_FILLCOLOR, &Color)) ||
+        SUCCEEDED(GetThemeColor(Theme, 0, 0, TMT_GRADIENTCOLOR1, &Gradient)))
+    {
+        skip("Current progress theme does not use the solid-color class fallback\n");
+        CloseThemeData(Theme);
+        return;
+    }
+
+    Fill = FT_SOLID;
+    GetThemeEnumValue(Theme, 0, 0, TMT_FILLTYPE, &Fill);
+    ok(Fill == FT_SOLID, "Progress has a fill color but no gradient colors, fill type %d\n", Fill);
+    for (Index = 0; Index < SURFACE_WIDTH * SURFACE_HEIGHT; ++Index)
+        Pixels[Index] = SURFACE_SENTINEL;
+
+    Result = DrawThemeBackground(Theme, Dc, 0, 0, &Rect, NULL);
+    ok(Result == S_OK, "Progress class fill returned 0x%08lx\n", Result);
+    GdiFlush();
+    ok(GetPixel(Dc, SURFACE_WIDTH / 2, SURFACE_HEIGHT / 2) == Color,
+       "Progress interior was not painted with its fill color 0x%06lx\n", Color);
+    CloseThemeData(Theme);
 }
 
 static LRESULT CALLBACK
@@ -254,6 +294,7 @@ START_TEST(ThemeRendering)
         goto DeleteDc;
 
     OldBitmap = SelectObject(MemoryDc, Bitmap);
+    test_progress_fill(Window, MemoryDc, Pixels);
     NormalHash = render_scrollbar_state(g_Theme, MemoryDc, Pixels, ABS_RIGHTNORMAL, &NormalPixels);
     HotHash = render_scrollbar_state(g_Theme, MemoryDc, Pixels, ABS_RIGHTHOT, &HotPixels);
     ok(NormalPixels != 0, "The normal scrollbar state rendered no pixels\n");
