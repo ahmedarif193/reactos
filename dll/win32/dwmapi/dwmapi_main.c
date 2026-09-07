@@ -34,11 +34,164 @@
 #include "winuser.h"
 #ifdef __REACTOS__
 #include <reactos/user32_vista.h>
+#include <reactos/dwmframe.h>
 #endif
 #include "dwmapi.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(dwmapi);
+
+#ifdef __REACTOS__
+/* Chromium intentionally discovers DirectComposition with GetModuleHandleW()
+ * after loading the desktop composition stack. Keep dcomp.dll resident as a
+ * real dwmapi dependency, matching that system-level availability contract. */
+extern HRESULT WINAPI DCompositionCreateDevice3(IUnknown *, REFIID, void **);
+static HRESULT (WINAPI * volatile dcomp_create_device3_import)(IUnknown *, REFIID, void **)
+        = DCompositionCreateDevice3;
+DWORD_PTR NTAPI NtUserCallOneParam(DWORD_PTR Param, DWORD Routine);
+#endif
+
+/* Shared with the themed non-client renderer in uxtheme.dll. */
+static const WCHAR immersive_dark_mode_propW[] = L"ReactOS.Dwm.ImmersiveDarkMode";
+static const WCHAR nc_rendering_policy_propW[] = L"ReactOS.Dwm.NcRenderingPolicy";
+static const WCHAR transitions_disabled_propW[] = L"ReactOS.Dwm.TransitionsDisabled";
+static const WCHAR allow_ncpaint_propW[] = L"ReactOS.Dwm.AllowNcPaint";
+static const WCHAR nc_rtl_layout_propW[] = L"ReactOS.Dwm.NcRtlLayout";
+static const WCHAR force_iconic_propW[] = L"ReactOS.Dwm.ForceIconicRepresentation";
+static const WCHAR has_iconic_bitmap_propW[] = L"ReactOS.Dwm.HasIconicBitmap";
+static const WCHAR disallow_peek_propW[] = L"ReactOS.Dwm.DisallowPeek";
+static const WCHAR excluded_from_peek_propW[] = L"ReactOS.Dwm.ExcludedFromPeek";
+static const WCHAR cloak_propW[] = L"ReactOS.Dwm.Cloak";
+static const WCHAR freeze_representation_propW[] = L"ReactOS.Dwm.FreezeRepresentation";
+static const WCHAR passive_update_propW[] = L"ReactOS.Dwm.PassiveUpdateMode";
+static const WCHAR host_backdrop_propW[] = L"ReactOS.Dwm.UseHostBackdropBrush";
+static const WCHAR corner_preference_propW[] = L"ReactOS.Dwm.WindowCornerPreference";
+static const WCHAR border_color_propW[] = L"ReactOS.Dwm.BorderColor";
+static const WCHAR caption_color_propW[] = L"ReactOS.Dwm.CaptionColor";
+static const WCHAR text_color_propW[] = L"ReactOS.Dwm.TextColor";
+static const WCHAR system_backdrop_propW[] = L"ReactOS.Dwm.SystemBackdropType";
+static const WCHAR mica_effect_propW[] = L"ReactOS.Dwm.MicaEffect";
+
+BOOL WINAPI
+DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
+{
+    UNREFERENCED_PARAMETER(reserved);
+
+    if (reason == DLL_PROCESS_ATTACH)
+        DisableThreadLibraryCalls(instance);
+    return TRUE;
+}
+
+HRESULT WINAPI
+DllCanUnloadNow(void)
+{
+    return S_OK;
+}
+
+HRESULT WINAPI
+DllGetClassObject(REFCLSID class_id, REFIID interface_id, void **object)
+{
+    UNREFERENCED_PARAMETER(class_id);
+    UNREFERENCED_PARAMETER(interface_id);
+
+    if (object == NULL)
+        return E_POINTER;
+    *object = NULL;
+    return CLASS_E_CLASSNOTAVAILABLE;
+}
+
+/* These compatibility entry points are literal return stubs in native Win11.
+ * Their private parameter lists are intentionally not inferred here: the
+ * ARM64 ABI permits ignored register arguments and the implementation does not
+ * inspect caller state. */
+HRESULT WINAPI DwmpRestartComposition(void) { return S_OK; }
+HRESULT WINAPI DwmpSetColorizationColor(void) { return E_NOTIMPL; }
+HRESULT WINAPI DwmpStartOrStopFlip3D(void) { return S_OK; }
+HRESULT WINAPI DwmpEnableRedirection(void) { return E_NOTIMPL; }
+HRESULT WINAPI DwmpOpenGraphicsStream(void) { return DWM_E_COMPOSITIONDISABLED; }
+HRESULT WINAPI DwmpCloseGraphicsStream(void) { return DWM_E_COMPOSITIONDISABLED; }
+HRESULT WINAPI DwmpSetGraphicsStreamTransformHint(void) { return DWM_E_COMPOSITIONDISABLED; }
+HRESULT WINAPI DwmpEnableDDASupport(void) { return S_OK; }
+HRESULT WINAPI DwmTetherTextContact(void) { return S_OK; }
+
+HRESULT WINAPI
+DwmpIsCompositionCapable(void *reserved, BOOL *capable)
+{
+    UNREFERENCED_PARAMETER(reserved);
+
+    if (capable == NULL)
+        return E_INVALIDARG;
+    *capable = TRUE;
+    return S_OK;
+}
+
+HRESULT WINAPI
+DwmpGetTitleBarVisual(HWND hwnd, ULONGLONG *visual)
+{
+    UNREFERENCED_PARAMETER(hwnd);
+
+    *visual = ~(ULONGLONG)0;
+    return E_NOTIMPL;
+}
+
+static const WCHAR *
+dwm_get_attribute_property(DWORD attribute)
+{
+    switch (attribute)
+    {
+        case DWMWA_NCRENDERING_POLICY: return nc_rendering_policy_propW;
+        case DWMWA_TRANSITIONS_FORCEDISABLED: return transitions_disabled_propW;
+        case DWMWA_ALLOW_NCPAINT: return allow_ncpaint_propW;
+        case DWMWA_NONCLIENT_RTL_LAYOUT: return nc_rtl_layout_propW;
+        case DWMWA_FORCE_ICONIC_REPRESENTATION: return force_iconic_propW;
+        case DWMWA_HAS_ICONIC_BITMAP: return has_iconic_bitmap_propW;
+        case DWMWA_DISALLOW_PEEK: return disallow_peek_propW;
+        case DWMWA_EXCLUDED_FROM_PEEK: return excluded_from_peek_propW;
+        case DWMWA_CLOAK: return cloak_propW;
+        case DWMWA_FREEZE_REPRESENTATION: return freeze_representation_propW;
+        case DWMWA_PASSIVE_UPDATE_MODE: return passive_update_propW;
+        case DWMWA_USE_HOSTBACKDROPBRUSH: return host_backdrop_propW;
+        case 19: /* Pre-release alias retained by native Win11. */
+        case DWMWA_USE_IMMERSIVE_DARK_MODE: return immersive_dark_mode_propW;
+        case DWMWA_WINDOW_CORNER_PREFERENCE: return corner_preference_propW;
+        case DWMWA_BORDER_COLOR: return border_color_propW;
+        case DWMWA_CAPTION_COLOR: return caption_color_propW;
+        case DWMWA_TEXT_COLOR: return text_color_propW;
+        case DWMWA_SYSTEMBACKDROP_TYPE: return system_backdrop_propW;
+        case 39: return mica_effect_propW;
+        default: return NULL;
+    }
+}
+
+static DWORD
+dwm_get_dword_attribute(HWND hwnd, DWORD attribute)
+{
+    const WCHAR *property = dwm_get_attribute_property(attribute);
+
+    if (property == NULL)
+        return 0;
+    return (DWORD)(ULONG_PTR)GetPropW(hwnd, property);
+}
+
+static HRESULT
+dwm_set_dword_attribute(HWND hwnd, DWORD attribute, DWORD value)
+{
+    const WCHAR *property = dwm_get_attribute_property(attribute);
+
+    if (property == NULL)
+        return E_INVALIDARG;
+    if (value == 0)
+    {
+        RemovePropW(hwnd, property);
+    }
+    else if (!SetPropW(hwnd, property, (HANDLE)(ULONG_PTR)value))
+    {
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+    RedrawWindow(hwnd, NULL, NULL,
+                 RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+    return S_OK;
+}
 
 
 /**********************************************************************
@@ -46,9 +199,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(dwmapi);
  */
 HRESULT WINAPI DwmIsCompositionEnabled(BOOL *enabled)
 {
-#ifdef __REACTOS__
-    RTL_OSVERSIONINFOW version;
-#else
+#ifndef __REACTOS__
     RTL_OSVERSIONINFOEXW version;
 #endif
 
@@ -57,10 +208,17 @@ HRESULT WINAPI DwmIsCompositionEnabled(BOOL *enabled)
     if (!enabled)
         return E_INVALIDARG;
 
+#ifdef __REACTOS__
+    (void)dcomp_create_device3_import;
+#endif
     *enabled = FALSE;
+#ifdef __REACTOS__
+    *enabled = NtUserCallOneParam(0, DWM_ROUTINE_ISENABLED) != 0;
+#else
     version.dwOSVersionInfoSize = sizeof(version);
     if (!RtlGetVersion(&version))
         *enabled = (version.dwMajorVersion > 6 || (version.dwMajorVersion == 6 && version.dwMinorVersion >= 3));
+#endif
 
     return S_OK;
 }
@@ -80,9 +238,23 @@ HRESULT WINAPI DwmEnableComposition(UINT uCompositionAction)
  */
 HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND hwnd, const MARGINS* margins)
 {
+#ifdef __REACTOS__
+    TRACE("(%p, %p)\n", hwnd, margins);
+
+    if (!IsWindow(hwnd))
+        return E_HANDLE;
+    if (!margins)
+        return E_INVALIDARG;
+
+    /* The frame margins are compositor metadata. Do not rewrite USER window
+     * styles here: doing so changes Chromium's output-device selection before
+     * DirectComposition has attached its target. */
+    return S_OK;
+#else
     FIXME("(%p, %p) stub\n", hwnd, margins);
 
     return S_OK;
+#endif
 }
 
 /**********************************************************************
@@ -113,10 +285,59 @@ HRESULT WINAPI DwmInvalidateIconicBitmaps(HWND hwnd)
 HRESULT WINAPI DwmSetWindowAttribute(HWND hwnd, DWORD attributenum, LPCVOID attribute, DWORD size)
 {
     static BOOL once;
+    DWORD value;
 
-    if (!once++) FIXME("(%p, %lx, %p, %lx) stub\n", hwnd, attributenum, attribute, size);
+    TRACE("(%p, %lx, %p, %lx)\n", hwnd, attributenum, attribute, size);
 
-    return S_OK;
+    /* Native rejects the buffer before it contacts the window manager. */
+    if (!attribute || size < sizeof(value))
+        return E_INVALIDARG;
+    if (!IsWindow(hwnd))
+        return E_HANDLE;
+
+    value = *(const DWORD *)attribute;
+    switch (attributenum)
+    {
+        case DWMWA_NCRENDERING_POLICY:
+        case DWMWA_TRANSITIONS_FORCEDISABLED:
+        case DWMWA_ALLOW_NCPAINT:
+        case DWMWA_NONCLIENT_RTL_LAYOUT:
+        case DWMWA_FORCE_ICONIC_REPRESENTATION:
+        case DWMWA_HAS_ICONIC_BITMAP:
+        case DWMWA_DISALLOW_PEEK:
+        case DWMWA_EXCLUDED_FROM_PEEK:
+        case DWMWA_CLOAK:
+        case DWMWA_FREEZE_REPRESENTATION:
+        case DWMWA_PASSIVE_UPDATE_MODE:
+        case 19:
+        case DWMWA_USE_IMMERSIVE_DARK_MODE:
+        case DWMWA_WINDOW_CORNER_PREFERENCE:
+        case DWMWA_BORDER_COLOR:
+        case DWMWA_CAPTION_COLOR:
+        case DWMWA_TEXT_COLOR:
+        case DWMWA_SYSTEMBACKDROP_TYPE:
+        case 39:
+            return dwm_set_dword_attribute(hwnd, attributenum, value);
+
+        case DWMWA_USE_HOSTBACKDROPBRUSH:
+            /* Native's special path requires the exact DWORD shape. */
+            if (size != sizeof(value))
+                return E_INVALIDARG;
+            return dwm_set_dword_attribute(hwnd, attributenum, value);
+
+        case DWMWA_NCRENDERING_ENABLED:
+        case DWMWA_CAPTION_BUTTON_BOUNDS:
+        case DWMWA_EXTENDED_FRAME_BOUNDS:
+        case DWMWA_CLOAKED:
+        case DWMWA_VISIBLE_FRAME_BORDER_THICKNESS:
+            return E_INVALIDARG;
+
+        default:
+            break;
+    }
+
+    if (!once++) FIXME("attribute %lu is not implemented\n", attributenum);
+    return E_INVALIDARG;
 }
 
 /**********************************************************************
@@ -126,7 +347,7 @@ HRESULT WINAPI DwmGetGraphicsStreamClient(UINT uIndex, UUID *pClientUuid)
 {
     FIXME("(%d, %p) stub\n", uIndex, pClientUuid);
 
-    return E_NOTIMPL;
+    return DWM_E_COMPOSITIONDISABLED;
 }
 
 /**********************************************************************
@@ -136,7 +357,22 @@ HRESULT WINAPI DwmGetTransportAttributes(BOOL *pfIsRemoting, BOOL *pfIsConnected
 {
     FIXME("(%p, %p, %p) stub\n", pfIsRemoting, pfIsConnected, pDwGeneration);
 
-    return DWM_E_COMPOSITIONDISABLED;
+    *pfIsRemoting = FALSE;
+    *pfIsConnected = TRUE;
+    *pDwGeneration = 1;
+    return S_OK;
+}
+
+/**********************************************************************
+ *           DwmGetUnmetTabRequirements         (DWMAPI.@)
+ */
+HRESULT WINAPI DwmGetUnmetTabRequirements(
+    HWND hwnd, enum DWM_TAB_WINDOW_REQUIREMENTS *requirements)
+{
+    FIXME("(%p, %p) stub\n", hwnd, requirements);
+
+    *requirements = DWMTWR_IMPLEMENTED_BY_SYSTEM;
+    return S_OK;
 }
 
 /**********************************************************************
@@ -147,6 +383,20 @@ HRESULT WINAPI DwmUnregisterThumbnail(HTHUMBNAIL thumbnail)
     FIXME("(%p) stub\n", thumbnail);
 
     return E_NOTIMPL;
+}
+
+/**********************************************************************
+ *           DwmQueryThumbnailSourceSize         (DWMAPI.@)
+ */
+HRESULT WINAPI DwmQueryThumbnailSourceSize(HTHUMBNAIL thumbnail, SIZE *size)
+{
+    FIXME("(%p, %p) stub\n", thumbnail, size);
+
+    if (size == NULL)
+        return E_INVALIDARG;
+    size->cx = 0;
+    size->cy = 0;
+    return E_INVALIDARG;
 }
 
 /**********************************************************************
@@ -166,7 +416,7 @@ HRESULT WINAPI DwmGetGraphicsStreamTransformHint(UINT uIndex, MilMatrix3x2D *pTr
 {
     FIXME("(%d, %p) stub\n", uIndex, pTransform);
 
-    return E_NOTIMPL;
+    return DWM_E_COMPOSITIONDISABLED;
 }
 
 /**********************************************************************
@@ -174,9 +424,43 @@ HRESULT WINAPI DwmGetGraphicsStreamTransformHint(UINT uIndex, MilMatrix3x2D *pTr
  */
 HRESULT WINAPI DwmEnableBlurBehindWindow(HWND hWnd, const DWM_BLURBEHIND *pBlurBuf)
 {
-    FIXME("%p %p\n", hWnd, pBlurBuf);
+#ifdef __REACTOS__
+    DWM_BLUR_REQUEST Request;
+    NTSTATUS Status;
+#endif
 
+    TRACE("%p %p\n", hWnd, pBlurBuf);
+
+    /* Native Win11 validates this shape before allocating or submitting its
+     * 0x40000022 composition-channel command. */
+    if (!IsWindow(hWnd) || pBlurBuf == NULL || pBlurBuf->dwFlags == 0 ||
+        (pBlurBuf->dwFlags & ~(DWM_BB_ENABLE | DWM_BB_BLURREGION |
+                              DWM_BB_TRANSITIONONMAXIMIZED)) != 0)
+    {
+        return E_INVALIDARG;
+    }
+
+#ifdef __REACTOS__
+    RtlZeroMemory(&Request, sizeof(Request));
+    Request.StructSize = sizeof(Request);
+    Request.Flags = pBlurBuf->dwFlags;
+    Request.Window = (ULONGLONG)(ULONG_PTR)hWnd;
+    Request.Region = (ULONGLONG)(ULONG_PTR)pBlurBuf->hRgnBlur;
+    Request.Enable = !!pBlurBuf->fEnable;
+    Request.TransitionOnMaximized = !!pBlurBuf->fTransitionOnMaximized;
+
+    Status = (NTSTATUS)(LONG)NtUserCallOneParam(
+        (DWORD_PTR)&Request, DWM_ROUTINE_SETBLUR);
+    if (NT_SUCCESS(Status))
+        return S_OK;
+    if (Status == STATUS_DEVICE_NOT_READY)
+        return DWM_E_COMPOSITIONDISABLED;
+    if (Status == STATUS_INVALID_PARAMETER)
+        return E_INVALIDARG;
+    return HRESULT_FROM_NT(Status);
+#else
     return E_NOTIMPL;
+#endif
 }
 
 /**********************************************************************
@@ -196,24 +480,56 @@ BOOL WINAPI DwmDefWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, 
  */
 HRESULT WINAPI DwmGetWindowAttribute(HWND hwnd, DWORD attribute, PVOID pv_attribute, DWORD size)
 {
-    BOOL enabled = FALSE;
     HRESULT hr;
 
     TRACE("(%p %ld %p %ld)\n", hwnd, attribute, pv_attribute, size);
 
-    if (DwmIsCompositionEnabled(&enabled) == S_OK && !enabled)
-        return E_HANDLE;
+    /* Native performs this common shape check before attribute dispatch. */
+    if (!pv_attribute || size < sizeof(DWORD))
+        return E_INVALIDARG;
     if (!IsWindow(hwnd))
         return E_HANDLE;
 
     switch (attribute) {
+    case DWMWA_NCRENDERING_ENABLED:
+    {
+        BOOL *enabled = (BOOL *)pv_attribute;
+
+        hr = DwmIsCompositionEnabled(enabled);
+        break;
+    }
+    case DWMWA_NCRENDERING_POLICY:
+    case DWMWA_TRANSITIONS_FORCEDISABLED:
+    case DWMWA_ALLOW_NCPAINT:
+    case DWMWA_NONCLIENT_RTL_LAYOUT:
+    case DWMWA_FORCE_ICONIC_REPRESENTATION:
+    case DWMWA_HAS_ICONIC_BITMAP:
+    case DWMWA_DISALLOW_PEEK:
+    case DWMWA_EXCLUDED_FROM_PEEK:
+    case DWMWA_CLOAK:
+    case DWMWA_FREEZE_REPRESENTATION:
+    case DWMWA_PASSIVE_UPDATE_MODE:
+    case DWMWA_USE_HOSTBACKDROPBRUSH:
+    case 19:
+    case DWMWA_USE_IMMERSIVE_DARK_MODE:
+    case DWMWA_WINDOW_CORNER_PREFERENCE:
+    case DWMWA_BORDER_COLOR:
+    case DWMWA_CAPTION_COLOR:
+    case DWMWA_TEXT_COLOR:
+    case DWMWA_SYSTEMBACKDROP_TYPE:
+    case 39:
+    {
+        DWORD *value = (DWORD *)pv_attribute;
+
+        *value = dwm_get_dword_attribute(hwnd, attribute);
+        hr = S_OK;
+        break;
+    }
     case DWMWA_EXTENDED_FRAME_BOUNDS:
     {
         RECT *rect = (RECT *)pv_attribute;
         DPI_AWARENESS_CONTEXT context;
 
-        if (!rect)
-            return E_INVALIDARG;
         if (size < sizeof(*rect))
             return E_NOT_SUFFICIENT_BUFFER;
         if (GetWindowLongW(hwnd, GWL_STYLE) & WS_CHILD)
@@ -236,8 +552,6 @@ HRESULT WINAPI DwmGetWindowAttribute(HWND hwnd, DWORD attribute, PVOID pv_attrib
         DWORD style, ex_style;
         LONG border_x, border_y, button_w, button_h, count;
 
-        if (!rect)
-            return E_INVALIDARG;
         if (size < sizeof(*rect))
             return E_NOT_SUFFICIENT_BUFFER;
 
@@ -286,17 +600,32 @@ HRESULT WINAPI DwmGetWindowAttribute(HWND hwnd, DWORD attribute, PVOID pv_attrib
     {
         DWORD *cloaked = (DWORD *)pv_attribute;
 
-        if (!cloaked)
-            return E_INVALIDARG;
-        if (size < sizeof(*cloaked))
-            return E_NOT_SUFFICIENT_BUFFER;
-        *cloaked = 0;
+        *cloaked = dwm_get_dword_attribute(hwnd, DWMWA_CLOAK) != 0;
+        hr = S_OK;
+        break;
+    }
+    case DWMWA_VISIBLE_FRAME_BORDER_THICKNESS:
+    {
+        DWORD *thickness = (DWORD *)pv_attribute;
+        DWORD style = GetWindowLongW(hwnd, GWL_STYLE);
+        DWORD ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+
+        if (style & WS_THICKFRAME)
+            *thickness = GetSystemMetrics(SM_CXSIZEFRAME) +
+                         GetSystemMetrics(SM_CXPADDEDBORDER);
+        else if ((style & (WS_DLGFRAME | WS_BORDER)) == WS_DLGFRAME ||
+                 (ex_style & WS_EX_DLGMODALFRAME))
+            *thickness = GetSystemMetrics(SM_CXFIXEDFRAME);
+        else if (style & WS_BORDER)
+            *thickness = GetSystemMetrics(SM_CXBORDER);
+        else
+            *thickness = 0;
         hr = S_OK;
         break;
     }
     default:
         FIXME("attribute %ld not implemented.\n", attribute);
-        hr = E_NOTIMPL;
+        hr = E_INVALIDARG;
         break;
     }
 
@@ -397,7 +726,7 @@ HRESULT WINAPI DwmFlush(void)
 HRESULT WINAPI DwmAttachMilContent(HWND hwnd)
 {
     FIXME("(%p) stub\n", hwnd);
-    return E_NOTIMPL;
+    return DWM_E_COMPOSITIONDISABLED;
 }
 
 /**********************************************************************
@@ -406,6 +735,25 @@ HRESULT WINAPI DwmAttachMilContent(HWND hwnd)
 HRESULT WINAPI DwmDetachMilContent(HWND hwnd)
 {
     FIXME("(%p) stub\n", hwnd);
+    return DWM_E_COMPOSITIONDISABLED;
+}
+
+/**********************************************************************
+ *           DwmModifyPreviousDxFrameDuration         (DWMAPI.@)
+ */
+HRESULT WINAPI DwmModifyPreviousDxFrameDuration(HWND hwnd, INT refreshes,
+                                                BOOL relative)
+{
+    FIXME("(%p, %d, %d) stub\n", hwnd, refreshes, relative);
+    return E_NOTIMPL;
+}
+
+/**********************************************************************
+ *           DwmSetDxFrameDuration         (DWMAPI.@)
+ */
+HRESULT WINAPI DwmSetDxFrameDuration(HWND hwnd, INT refreshes)
+{
+    FIXME("(%p, %d) stub\n", hwnd, refreshes);
     return E_NOTIMPL;
 }
 
@@ -424,7 +772,7 @@ HRESULT WINAPI DwmUpdateThumbnailProperties(HTHUMBNAIL thumbnail, const DWM_THUM
 HRESULT WINAPI DwmSetPresentParameters(HWND hwnd, DWM_PRESENT_PARAMETERS *params)
 {
     FIXME("(%p %p) stub\n", hwnd, params);
-    return S_OK;
+    return E_NOTIMPL;
 };
 
 /**********************************************************************
@@ -460,5 +808,49 @@ HRESULT WINAPI DwmpGetColorizationParameters(void *params)
 HRESULT WINAPI DwmShowContact(DWORD pointer_id, enum DWM_SHOWCONTACT showcontact)
 {
     FIXME("pointer_id %#lx, showcontact %#x stub\n", pointer_id, showcontact);
+    return S_OK;
+}
+
+/**********************************************************************
+ *           DwmRenderGesture         (DWMAPI.@)
+ */
+HRESULT WINAPI DwmRenderGesture(enum GESTURE_TYPE gesture, UINT contact_count,
+                                const DWORD *pointer_ids,
+                                const POINT *points)
+{
+    if (pointer_ids == NULL || points == NULL ||
+        contact_count < 1 || contact_count > 2 ||
+        (contact_count == 2 && gesture != GT_TOUCH_PRESSANDTAP) ||
+        (contact_count == 1 && gesture == GT_TOUCH_PRESSANDTAP))
+    {
+        return E_INVALIDARG;
+    }
+
+    return S_OK;
+}
+
+/**********************************************************************
+ *           DwmTetherContact         (DWMAPI.@)
+ */
+HRESULT WINAPI DwmTetherContact(DWORD pointer_id, BOOL enable,
+                                POINT tether_point)
+{
+    UNREFERENCED_PARAMETER(pointer_id);
+    UNREFERENCED_PARAMETER(enable);
+    UNREFERENCED_PARAMETER(tether_point);
+    return S_OK;
+}
+
+/**********************************************************************
+ *           DwmTransitionOwnedWindow         (DWMAPI.@)
+ */
+HRESULT WINAPI DwmTransitionOwnedWindow(
+    HWND hwnd, enum DWMTRANSITION_OWNEDWINDOW_TARGET target)
+{
+    UNREFERENCED_PARAMETER(target);
+
+    if (!IsWindow(hwnd))
+        return E_INVALIDARG;
+    RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_FRAME);
     return S_OK;
 }
