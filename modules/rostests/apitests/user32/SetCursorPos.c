@@ -30,23 +30,24 @@ static struct _test_info info[] =
 
 static struct _test_info results[8];
 static int test_no = 0;
+static BOOL record_messages = TRUE;
 
 
 LRESULT CALLBACK MouseLLHookProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    results[test_no].ll_hook_called++;
+    if (record_messages) results[test_no].ll_hook_called++;
     return CallNextHookEx(hMouseHookLL, nCode, wParam, lParam);
 }
 
 LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    results[test_no].hook_called++;
+    if (record_messages) results[test_no].hook_called++;
     return CallNextHookEx(hMouseHook, nCode, wParam, lParam);
 }
 
 static LRESULT CALLBACK WndProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam )
 {
-    if(msg == WM_MOUSEMOVE)
+    if(record_messages && msg == WM_MOUSEMOVE)
         results[test_no].mouse_move_called++;
 
     return DefWindowProcA( hWnd, msg, wParam, lParam );
@@ -91,7 +92,8 @@ void Test_SetCursorPos()
 {
     HWND hwnd;
     MSG msg;
-    int i;
+    POINT position;
+    int i, previous;
 
     hMouseHookLL = SetWindowsHookEx(WH_MOUSE_LL, MouseLLHookProc, GetModuleHandleA( NULL ), 0);
     hMouseHook = SetWindowsHookExW(WH_MOUSE, MouseHookProc, GetModuleHandleW( NULL ), GetCurrentThreadId());
@@ -106,10 +108,12 @@ void Test_SetCursorPos()
     mouse_event(MOUSEEVENTF_MOVE, 2,2, 0,0);
     while (PeekMessage( &msg, 0, 0, 0, PM_REMOVE )) DispatchMessageA( &msg );
 
+    record_messages = FALSE;
     hwnd = CreateTestWindow();
     SetCapture(hwnd);
 
     test_no = 2;
+    record_messages = TRUE;
     SetCursorPos(50,50);
     while (PeekMessage( &msg, 0, 0, 0, PM_REMOVE )) DispatchMessageA( &msg );
 
@@ -148,6 +152,20 @@ void Test_SetCursorPos()
         //TEST("WM_MOUSEMOVE", info[i].mouse_move_called, results[i].mouse_move_called);
     }
 
+    previous = results[test_no].ll_hook_called;
+    mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, 0);
+    while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) DispatchMessageA(&msg);
+    ok(results[test_no].ll_hook_called == previous + 1,
+       "Stationary injected move called WH_MOUSE_LL %d times instead of 1\n",
+       results[test_no].ll_hook_called - previous);
+
+    GetCursorPos(&position);
+    previous = results[test_no].ll_hook_called;
+    SetCursorPos(position.x, position.y);
+    while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) DispatchMessageA(&msg);
+    ok(results[test_no].ll_hook_called == previous,
+       "Stationary SetCursorPos unexpectedly called WH_MOUSE_LL\n");
+
     SetCapture(NULL);
     DestroyWindow(hwnd);
 
@@ -169,8 +187,10 @@ void Test_DesktopAccess()
     ok(ret == TRUE, "GetCursorPos should succed\n");
 
     hDesk = CreateDesktopW(L"testDesktop", NULL, NULL, 0, 0x01ff, NULL);
-    ok(hDesk != 0, "Failed to create a new desktop\n");
-    SetThreadDesktop(hDesk);
+    ok(hDesk != 0, "Failed to create a new desktop, error %lu\n", GetLastError());
+    if (!hDesk) return;
+    ret = SetThreadDesktop(hDesk);
+    ok(ret, "SetThreadDesktop failed, error %lu\n", GetLastError());
     ok(GetThreadDesktop(GetCurrentThreadId()) == hDesk, "SetThreadDesktop had no effect\n");
 
     SetLastError(0xdeadbeef);
@@ -190,7 +210,10 @@ void Test_DesktopAccess()
     ret = GetCursorPos(&curPoint);
     ok(ret == FALSE, "GetCursorPos should fail\n");
 
-    SetThreadDesktop(hDeskInitial);
+    ret = SetThreadDesktop(hDeskInitial);
+    ok(ret, "Restoring initial desktop failed, error %lu\n", GetLastError());
+    ret = CloseDesktop(hDesk);
+    ok(ret, "Closing test desktop failed, error %lu\n", GetLastError());
 
     ret = GetCursorPos(&curPoint);
     ok(ret == TRUE, "GetCursorPos should succed\n");
