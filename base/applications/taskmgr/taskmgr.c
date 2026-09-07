@@ -1115,13 +1115,18 @@ LPWSTR GetLastErrorText(LPWSTR lpszBuf, DWORD dwSize)
 DWORD EndLocalThread(HANDLE *hThread, DWORD dwThread)
 {
     DWORD dwExitCodeThread = 0;
+    DWORD Wait;
 
     if (*hThread != NULL) {
-        PostThreadMessage(dwThread,WM_QUIT,0,0);
+        PostThreadMessage(dwThread, WM_QUIT, 0, 0);
         for (;;) {
             MSG msg;
 
-            if (WAIT_OBJECT_0 == WaitForSingleObject(*hThread, 500))
+            Wait = MsgWaitForMultipleObjects(1, hThread, FALSE, INFINITE,
+                                             QS_ALLINPUT);
+            if (Wait == WAIT_OBJECT_0)
+                break;
+            if (Wait != WAIT_OBJECT_0 + 1)
                 break;
             while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
                 TranslateMessage(&msg);
@@ -1134,4 +1139,3 @@ DWORD EndLocalThread(HANDLE *hThread, DWORD dwThread)
     }
     return dwExitCodeThread;
 }
-
