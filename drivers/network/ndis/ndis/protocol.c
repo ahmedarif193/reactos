@@ -335,17 +335,7 @@ ProRequest(
 
   MacBlock->Binding = &AdapterBinding->NdisOpenBlock;
 
-#if WORKER_TEST
-  MiniQueueWorkItem(Adapter, NdisWorkItemRequest, NdisRequest, FALSE);
-  Status = NDIS_STATUS_PENDING;
-#else
-  if (MiniIsBusy(Adapter, NdisWorkItemRequest)) {
-      MiniQueueWorkItem(Adapter, NdisWorkItemRequest, NdisRequest, FALSE);
-      Status = NDIS_STATUS_PENDING;
-  }
-  else
-      Status = MiniDoRequest(Adapter, NdisRequest);
-#endif
+  Status = MiniStartRequest(Adapter, NdisRequest);
 
   if (Status != NDIS_STATUS_PENDING)
       NdisDereferenceAdapterBinding(AdapterBinding);

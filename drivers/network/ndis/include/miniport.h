@@ -181,6 +181,11 @@ MiniDoRequest(
     PLOGICAL_ADAPTER Adapter,
     PNDIS_REQUEST NdisRequest);
 
+NDIS_STATUS
+MiniStartRequest(
+    PLOGICAL_ADAPTER Adapter,
+    PNDIS_REQUEST NdisRequest);
+
 BOOLEAN
 NdisFindDevice(
     UINT   VendorID,
