@@ -220,6 +220,15 @@ extern LIST_ENTRY g_Ndis6DriverList;
 extern KSPIN_LOCK g_Ndis6DriverListLock;
 
 #define NDIS6_ATTR_TAG 'aANn' /* "nNAa" */
+#define NDIS6_PORT_TAG 'pPNn' /* "nNPp" */
+
+typedef struct _NDIS6_PORT_ENTRY
+{
+    LIST_ENTRY                  ListEntry;
+    NDIS_PORT_CHARACTERISTICS   Characteristics;
+    BOOLEAN                     Active;
+    BOOLEAN                     Transitioning;
+} NDIS6_PORT_ENTRY, *PNDIS6_PORT_ENTRY;
 
 /* ============================================================================
  *  NDIS 6 adapter extension — one per device instance the bridge owns
@@ -272,6 +281,25 @@ typedef struct _NDIS6_ADAPTER_EXT
      * invoked — this flag gates that. */
     BOOLEAN                                         Initialized;
     BOOLEAN                                         SurpriseRemoved;
+
+    /* NDIS port state. Port zero is implicit; additional ports live in
+     * PortList from NdisMAllocatePort until NdisMFreePort. Transitioning
+     * prevents a port from being freed while a synchronous activation or
+     * deactivation event is travelling through filters and protocols. */
+    LIST_ENTRY                                      PortList;
+    KSPIN_LOCK                                      PortListLock;
+    NDIS_PORT_NUMBER                                NextPortNumber;
+    BOOLEAN                                         DefaultPortActive;
+    BOOLEAN                                         DefaultPortTransitioning;
+    NDIS_PORT_AUTHENTICATION_PARAMETERS             DefaultPortAuthStates;
+
+    /* NdisMResetMiniport must invoke ResetHandlerEx asynchronously. One
+     * embedded work item avoids allocation at DISPATCH_LEVEL; ResetState
+     * serializes requests and the lifecycle rundown protects both the
+     * queued worker and an asynchronously pending reset. */
+    WORK_QUEUE_ITEM                                 ResetWorkItem;
+    volatile LONG                                   ResetState;
+    volatile LONG                                   ResetWorkerActive;
 
     /* Optional MiniportAddDevice state and the persistent context registered
      * from that callback. This context survives halt/reinitialize cycles and
@@ -582,6 +610,25 @@ NDIS_STATUS
 Ndis6SetMiniportDevicePowerState(
     _In_ PNDIS6_ADAPTER_EXT Ext,
     _In_ DEVICE_POWER_STATE DevicePowerState);
+
+NDIS_STATUS
+Ndis6QueueMiniportReset(
+    _In_ PLOGICAL_ADAPTER Adapter);
+
+NDIS_STATUS
+Ndis6CallResetHandlerEx(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _Out_ BOOLEAN *AddressingReset);
+
+VOID
+Ndis6ResetMiniportComplete(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ NDIS_STATUS Status,
+    _In_ BOOLEAN AddressingReset);
+
+VOID
+Ndis6FreePorts(
+    _In_ PNDIS6_ADAPTER_EXT Ext);
 
 /* Returns KMDF's saved dispatch when DeviceObject is a KMDF-owned device
  * object on a hybrid driver, NULL when the IRP is ours to handle. */

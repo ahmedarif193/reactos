@@ -603,6 +603,8 @@ NdisMSetMiniportAttributes(
             RtlZeroMemory(&Ext->RegistrationAttrs, sizeof(Ext->RegistrationAttrs));
             RtlCopyMemory(&Ext->RegistrationAttrs, Reg, Reg->Header.Size);
             Ext->RegistrationAttrsValid = TRUE;
+            Ext->DefaultPortActive =
+                (Reg->AttributeFlags & NDIS_MINIPORT_ATTRIBUTES_CONTROLS_DEFAULT_PORT) == 0;
 
             /* The MiniportAdapterContext field is the driver's per-instance
              * cookie. Every subsequent call into the driver passes this. */

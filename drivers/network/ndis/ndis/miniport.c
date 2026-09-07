@@ -1193,18 +1193,18 @@ MiniReset(
    KIRQL OldIrql;
    BOOLEAN AddressingReset = TRUE;
 
+   /* NDIS 6 resets are always serialized through the bridge worker. This
+    * also gives NdisMResetMiniport and protocol-requested resets one shared
+    * pending/completion state machine. */
+   if (Adapter->IsNdis6)
+   {
+       extern NDIS_STATUS Ndis6QueueMiniportReset(PLOGICAL_ADAPTER);
+       return Ndis6QueueMiniportReset(Adapter);
+   }
+
    if (MiniIsBusy(Adapter, NdisWorkItemResetRequested)) {
        MiniQueueWorkItem(Adapter, NdisWorkItemResetRequested, NULL, FALSE);
        return NDIS_STATUS_PENDING;
-   }
-
-   /* dev-nt6-1: NDIS 6 adapters use ResetHandlerEx via the bridge helper.
-    * Returns NOT_SUPPORTED if the driver didn't register one — legacy
-    * protocols tolerate this. Pause/Restart-based reset is Phase 6. */
-   if (Adapter->IsNdis6)
-   {
-       extern NDIS_STATUS Ndis6CallResetHandlerEx(PLOGICAL_ADAPTER, BOOLEAN*);
-       return Ndis6CallResetHandlerEx(Adapter, &AddressingReset);
    }
 
    NdisMIndicateStatus(Adapter, NDIS_STATUS_RESET_START, NULL, 0);
@@ -1721,10 +1721,8 @@ MiniportWorker(IN PDEVICE_OBJECT DeviceObject, IN PVOID Context)
              * is NULL for them and the deref below would crash. */
             if (Adapter->IsNdis6)
             {
-                extern NDIS_STATUS Ndis6CallResetHandlerEx(PLOGICAL_ADAPTER, BOOLEAN*);
-                NdisStatus = Ndis6CallResetHandlerEx(Adapter, &AddressingReset);
-                if (NdisStatus != NDIS_STATUS_PENDING)
-                    MiniResetComplete(Adapter, NdisStatus, AddressingReset);
+                extern NDIS_STATUS Ndis6QueueMiniportReset(PLOGICAL_ADAPTER);
+                Ndis6QueueMiniportReset(Adapter);
                 break;
             }
 
@@ -3296,6 +3294,15 @@ NdisMResetComplete(
     IN NDIS_STATUS Status,
     IN BOOLEAN     AddressingReset)
 {
+  PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
+
+  if (Adapter != NULL && Adapter->IsNdis6)
+  {
+      extern VOID Ndis6ResetMiniportComplete(PLOGICAL_ADAPTER, NDIS_STATUS, BOOLEAN);
+      Ndis6ResetMiniportComplete(Adapter, Status, AddressingReset);
+      return;
+  }
+
   MiniResetComplete(MiniportAdapterHandle, Status, AddressingReset);
 }
 

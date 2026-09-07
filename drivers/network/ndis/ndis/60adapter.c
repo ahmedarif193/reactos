@@ -396,6 +396,17 @@ Ndis6InitializeLogicalAdapter(
     Ext->PhysicalDeviceObject   = Pdo;
     Ext->FunctionalDeviceObject = Fdo;
     Ext->MiniportAdapterContext = MiniportAdapterContext;
+    KeInitializeSpinLock(&Ext->PortListLock);
+    InitializeListHead(&Ext->PortList);
+    Ext->NextPortNumber = 1;
+    Ext->DefaultPortActive = TRUE;
+    Ext->DefaultPortAuthStates.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    Ext->DefaultPortAuthStates.Header.Revision = NDIS_PORT_AUTHENTICATION_PARAMETERS_REVISION_1;
+    Ext->DefaultPortAuthStates.Header.Size = NDIS_SIZEOF_PORT_AUTHENTICATION_PARAMETERS_REVISION_1;
+    Ext->DefaultPortAuthStates.SendControlState = NdisPortControlStateUncontrolled;
+    Ext->DefaultPortAuthStates.RcvControlState = NdisPortControlStateUncontrolled;
+    Ext->DefaultPortAuthStates.SendAuthorizationState = NdisPortAuthorized;
+    Ext->DefaultPortAuthStates.RcvAuthorizationState = NdisPortAuthorized;
     KeInitializeSpinLock(&Ext->WdfReferenceLock);
     KeInitializeEvent(&Ext->WdfReferenceDrainEvent, NotificationEvent, TRUE);
     KeInitializeSpinLock(&Ext->IsrLock);
@@ -762,7 +773,7 @@ Ndis6CallMiniportInitializeEx(
     Params.MiniportAddDeviceContext  = Ext->MiniportAddDeviceContext;
     Params.IfIndex                   = Ext->IfIndex;
     Params.NetLuid                   = Ext->NetLuid;
-    Params.DefaultPortAuthStates     = NULL;
+    Params.DefaultPortAuthStates     = &Ext->DefaultPortAuthStates;
     Params.PciDeviceCustomProperties = NULL;
 
     /* Call the driver. The handle we hand it is the LOGICAL_ADAPTER
@@ -781,6 +792,7 @@ Ndis6CallMiniportInitializeEx(
          * followed by HaltEx. Discard any attributes it published before
          * returning so a later START begins with an empty NDIS instance. */
         Ndis6ResetMiniportAttributes(Adapter);
+        Ndis6FreePorts(Ext);
     }
     else if (!Ext->GeneralAttrsValid)
     {
@@ -793,6 +805,7 @@ Ndis6CallMiniportInitializeEx(
                 NdisHaltDeviceInitializationFailed);
         }
         Ndis6ResetMiniportAttributes(Adapter);
+        Ndis6FreePorts(Ext);
         Status = NDIS_STATUS_FAILURE;
     }
 
@@ -901,6 +914,7 @@ Ndis6CallMiniportHaltEx(
      * identity intentionally survive so STOP followed by START can create a
      * fresh miniport instance on the same devnode. */
     Ndis6ResetMiniportAttributes(Adapter);
+    Ndis6FreePorts(Ext);
 }
 
 /* ============================================================================
@@ -1363,6 +1377,7 @@ Ndis6DestroyLogicalAdapter(
         }
 
         Ndis6ResetMiniportAttributes(Adapter);
+        Ndis6FreePorts(Ext);
     }
 
     Ndis6FreeAdapterName(&Adapter->NdisMiniportBlock.MiniportName);
@@ -1445,6 +1460,17 @@ Ndis6CreateImInstance(
     Ext->DriverBlock            = DriverBlock;
     Ext->PhysicalDeviceObject   = Fdo;   /* self-PDO: no bus underneath */
     Ext->FunctionalDeviceObject = Fdo;
+    KeInitializeSpinLock(&Ext->PortListLock);
+    InitializeListHead(&Ext->PortList);
+    Ext->NextPortNumber = 1;
+    Ext->DefaultPortActive = TRUE;
+    Ext->DefaultPortAuthStates.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    Ext->DefaultPortAuthStates.Header.Revision = NDIS_PORT_AUTHENTICATION_PARAMETERS_REVISION_1;
+    Ext->DefaultPortAuthStates.Header.Size = NDIS_SIZEOF_PORT_AUTHENTICATION_PARAMETERS_REVISION_1;
+    Ext->DefaultPortAuthStates.SendControlState = NdisPortControlStateUncontrolled;
+    Ext->DefaultPortAuthStates.RcvControlState = NdisPortControlStateUncontrolled;
+    Ext->DefaultPortAuthStates.SendAuthorizationState = NdisPortAuthorized;
+    Ext->DefaultPortAuthStates.RcvAuthorizationState = NdisPortAuthorized;
     KeInitializeSpinLock(&Ext->IsrLock);
     Ext->InterruptRundownState = NDIS6_INTERRUPT_RUNDOWN_STOPPING;
     KeInitializeEvent(&Ext->InterruptDrainEvent, NotificationEvent, TRUE);

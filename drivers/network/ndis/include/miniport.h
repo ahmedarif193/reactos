@@ -212,6 +212,12 @@ NDIS_STATUS
 MiniReset(
     PLOGICAL_ADAPTER Adapter);
 
+VOID NTAPI
+MiniResetComplete(
+    IN NDIS_HANDLE MiniportAdapterHandle,
+    IN NDIS_STATUS Status,
+    IN BOOLEAN AddressingReset);
+
 VOID
 MiniDoAddressingReset(
     PLOGICAL_ADAPTER Adapter);
