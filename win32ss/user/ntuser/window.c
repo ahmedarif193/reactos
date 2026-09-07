@@ -1575,6 +1575,7 @@ NtUserBuildHwndList(
        return STATUS_INVALID_PARAMETER;
 
    UserEnterShared();
+   UserDomainLockExclusive(DLT_DESKTOP);
 
    if (dwThreadId)
    {
@@ -1787,6 +1788,7 @@ Quit:
    if (Thread)
       ObDereferenceObject(Thread);
    SetLastNtError(Status);
+   UserDomainUnlockExclusive(DLT_DESKTOP);
    UserLeave();
    return Status;
 }
