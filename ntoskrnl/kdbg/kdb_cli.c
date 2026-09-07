@@ -4188,7 +4188,7 @@ KdbpCmdBreakPointList(ULONG Argc, PCHAR Argv[])
         else
         {
             GlobalOrLocal = Buffer;
-            sprintf(Buffer, "  PID 0x%Ix", (ULONG_PTR)(Process ? Process->UniqueProcessId : INVALID_HANDLE_VALUE));
+            sprintf(Buffer, "  PID 0x%llx", (unsigned long long)(ULONG_PTR)(Process ? Process->UniqueProcessId : INVALID_HANDLE_VALUE));
         }
 
         if (Type == KdbBreakPointSoftware || Type == KdbBreakPointTemporary)

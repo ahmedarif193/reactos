@@ -793,7 +793,8 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     Ki386InitializeTss(Tss, Idt, Gdt);
 
     /* Initialize the PCR */
-    RtlZeroMemory(Pcr, PAGE_SIZE);
+    C_ASSERT(sizeof(KIPCR) <= KIPCR_BOOT_SIZE);
+    RtlZeroMemory(Pcr, sizeof(*Pcr));
     KiInitializePcr(Cpu,
                     Pcr,
                     Idt,

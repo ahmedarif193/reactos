@@ -1045,7 +1045,7 @@ FxDmaScatterGatherTransaction::StageTransfer(
                                         m_CurrentFragmentOffset,
                                         (ULONG) m_CurrentFragmentLength,
 #pragma prefast(suppress: __WARNING_CLASS_MISMATCH_NONE, "This warning requires a wrapper class for the DRIVER_LIST_CONTROL type.")
-                                        (PDRIVER_LIST_CONTROL)_AdapterListControl,
+                                        _AdapterListControl,
                                         this,
                                         m_LookasideBuffer,
                                         (ULONG) m_AdapterInfo->PreallocatedSGListSize);
@@ -1056,7 +1056,7 @@ FxDmaScatterGatherTransaction::StageTransfer(
                                       m_CurrentFragmentOffset,
                                       (ULONG) m_CurrentFragmentLength,
 #pragma prefast(suppress: __WARNING_CLASS_MISMATCH_NONE, "This warning requires a wrapper class for the DRIVER_LIST_CONTROL type.")
-                                      (PDRIVER_LIST_CONTROL)_AdapterListControl,
+                                      _AdapterListControl,
                                       this);
     }
 
@@ -1089,6 +1089,7 @@ FxDmaScatterGatherTransaction::StageTransfer(
 
 
 VOID
+NTAPI
 FxDmaScatterGatherTransaction::_AdapterListControl(
     __in  PDEVICE_OBJECT         DeviceObject,
     __in  PIRP                   Irp,            // UNUSED

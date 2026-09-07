@@ -105,9 +105,9 @@ typedef struct _DXGKP_CONTEXT_ALLOCATION_HANDLE
     ULONGLONG SegmentAddress;
     UCHAR Reserved2[0x530 - 0x520];
     PVOID CpuVirtualAddress;
-    UCHAR Reserved3[0x758 - 0x538];
+    UCHAR Reserved3[0x758 - 0x530 - sizeof(PVOID)];
     PVOID ContextResource;
-    UCHAR Reserved4[0x8B0 - 0x760];
+    UCHAR Reserved4[0x8B0 - 0x758 - sizeof(PVOID)];
     D3DGPU_VIRTUAL_ADDRESS GpuVirtualAddress;
     UCHAR Reserved5[0x920 - 0x8B8];
 } DXGKP_CONTEXT_ALLOCATION_HANDLE, *PDXGKP_CONTEXT_ALLOCATION_HANDLE;
@@ -492,15 +492,20 @@ DxgkpVidMmFlushCpuCache(
     _In_reads_bytes_(Size) PVOID Address,
     _In_ SIZE_T Size)
 {
-    PUCHAR Line = (PUCHAR)((ULONG_PTR)Address & ~(ULONG_PTR)63);
-    PUCHAR End = (PUCHAR)Address + Size;
+    PUCHAR Current = Address;
 
     if (Address == NULL || Size == 0)
         return;
-    _mm_mfence();
-    for (; Line < End; Line += 64)
-        _mm_clflush(Line);
-    _mm_mfence();
+    /* Let the kernel select the architecture's cache maintenance operation.
+     * Its length is ULONG, while allocation sizes can be wider. */
+    while (Size != 0)
+    {
+        ULONG Length = (ULONG)min(Size, (SIZE_T)MAXULONG);
+        KeInvalidateRangeAllCaches(Current, Length);
+        Size -= Length;
+        if (Size != 0)
+            Current += Length;
+    }
 }
 
 /*

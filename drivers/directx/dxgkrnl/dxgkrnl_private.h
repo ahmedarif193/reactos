@@ -2686,7 +2686,7 @@ DxgkPresent(
     _In_ ULONG InputLength);
 
 NTSTATUS
-NTAPI
+__cdecl
 DxgkPresentCallback(
     _Inout_ D3DKMT_PRESENT *pPresent);
 

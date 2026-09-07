@@ -539,7 +539,9 @@ typedef struct _OBJECT_HEADER_NAME_INFO
         LONG ReferenceCount;
         ULONG QueryReferences;
     };
+#ifdef _WIN64
     ULONG Reserved;
+#endif
 } OBJECT_HEADER_NAME_INFO, *POBJECT_HEADER_NAME_INFO;
 
 typedef struct _OBJECT_HANDLE_COUNT_ENTRY
@@ -570,7 +572,9 @@ typedef struct _OBJECT_HEADER_CREATOR_INFO
     PVOID CreatorUniqueProcess;
     USHORT CreatorBackTraceIndex;
     USHORT Reserved1;
+#ifdef _WIN64
     ULONG Reserved2;
+#endif
 } OBJECT_HEADER_CREATOR_INFO, *POBJECT_HEADER_CREATOR_INFO;
 
 typedef struct _OBJECT_HEADER_QUOTA_INFO

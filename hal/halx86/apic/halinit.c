@@ -70,6 +70,11 @@ HalpInitProcessor(
 {
     if (ProcessorNumber == 0)
     {
+        /* Quiesce firmware's virtual-wire source before changing the LAPIC's
+         * LINT0 routing. Masking it only in HalpInitializePICs is too late:
+         * a pending legacy IRQ can already have asserted CPU INTR. */
+        __outbyte(PIC1_DATA_PORT, 0xFF);
+        __outbyte(PIC2_DATA_PORT, 0xFF);
         HalpParseApicTables(LoaderBlock);
     }
 

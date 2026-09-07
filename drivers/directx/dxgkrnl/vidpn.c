@@ -3179,7 +3179,7 @@ VidPnTargetModeSet_AcquireNextModeInfo(
     }
 
     /* Fallback: match by ID. */
-    if ((ULONG_PTR)pVidPnTargetModeInfo >= 0xFFFF800000000000ULL)
+    if ((ULONG_PTR)pVidPnTargetModeInfo >= (ULONG_PTR)MmSystemRangeStart)
     {
         for (i = 0; i < ModeSet->NumModes; i++)
         {

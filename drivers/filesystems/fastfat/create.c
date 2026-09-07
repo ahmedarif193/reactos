@@ -397,8 +397,9 @@ Return Value:
 #if (NTDDI_VERSION >= NTDDI_WINTHRESHOLD)
 _Requires_lock_held_(_Global_critical_region_)
 VOID
+NTAPI
 FatCommonCreateCallout (
-    _In_ PFAT_CALLOUT_PARAMETERS CalloutParameters
+    _In_ PVOID Context
     )
 
 /*++
@@ -421,6 +422,8 @@ Return Value:
 --*/
 
 {
+    PFAT_CALLOUT_PARAMETERS CalloutParameters = Context;
+
     PAGED_CODE();
 
     //
@@ -495,7 +498,7 @@ Return Value:
 
     SetFlag( IrpContext->Flags, IRP_CONTEXT_FLAG_SWAPPED_STACK );
 
-    status = KeExpandKernelStackAndCalloutEx( (PEXPAND_STACK_CALLOUT)FatCommonCreateCallout,
+    status = KeExpandKernelStackAndCalloutEx( FatCommonCreateCallout,
                                               &CalloutParameters,
                                               KERNEL_STACK_SIZE,
                                               FALSE,

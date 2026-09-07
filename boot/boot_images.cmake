@@ -135,6 +135,28 @@ if(ENABLE_BOOT_TEST_RUN)
                                 "${_freeldr_preinstall_default}")
 endif()
 
+# On x86 hal.dll is the UP PIC HAL, unlike the SMP HAL named hal.dll on
+# amd64. Pair our SMP media entries explicitly without changing other
+# architectures or overriding a HAL explicitly requested by an entry.
+if(ARCH STREQUAL "i386" AND NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
+    foreach(_media BOOTCD PREINSTALL)
+        set(_source "${FREELDR_${_media}_INI}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_source}")
+        file(READ "${_source}" _contents)
+        string(REGEX MATCHALL "Options=[^\r\n]*" _options "${_contents}")
+        foreach(_option IN LISTS _options)
+            if(_option MATCHES "/KERNEL=ntkrnlmp\\.exe([ /]|$)" AND
+               NOT _option MATCHES "/HAL=")
+                string(REPLACE "/KERNEL=ntkrnlmp.exe"
+                    "/KERNEL=ntkrnlmp.exe /HAL=halmacpi.dll" _paired "${_option}")
+                string(REPLACE "${_option}" "${_paired}" _contents "${_contents}")
+            endif()
+        endforeach()
+        set(FREELDR_${_media}_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/${_media}_i386.ini")
+        file(CONFIGURE OUTPUT "${FREELDR_${_media}_INI}" CONTENT "${_contents}" @ONLY)
+    endforeach()
+endif()
+
 # EFI platform ID - Used for naming the EFI boot image on supported platforms.
 if(ARCH STREQUAL "i386")
     if(NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))

@@ -1185,13 +1185,18 @@ KeInvalidateRangeAllCaches(
     Address = (ULONG_PTR)BaseAddress & ~((ULONG_PTR)CacheLineSize - 1);
     EndAddress = (ULONG_PTR)BaseAddress + Length;
 
-    _mm_mfence();
+    /* Keep the baseline kernel usable without SSE2. CLFLUSH is checked above. */
+    KeMemoryBarrier();
     do
     {
+#if defined(__GNUC__)
+        __asm__ __volatile__("clflush (%0)" :: "r" (Address) : "memory");
+#else
         _mm_clflush((PVOID)Address);
+#endif
         Address += CacheLineSize;
     } while ((Address < EndAddress) && (Address != 0));
-    _mm_mfence();
+    KeMemoryBarrier();
 }
 
 VOID
