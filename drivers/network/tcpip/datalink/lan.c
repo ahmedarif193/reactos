@@ -42,6 +42,12 @@ BOOLEAN ProtocolRegistered     = FALSE;
 LIST_ENTRY AdapterListHead;
 KSPIN_LOCK AdapterListLock;
 
+typedef struct _LAN_REQUEST {
+    NDIS_REQUEST Request;
+    KEVENT Event;
+    NDIS_STATUS Status;
+} LAN_REQUEST, *PLAN_REQUEST;
+
 NDIS_STATUS NDISCall(
     PLAN_ADAPTER Adapter,
     NDIS_REQUEST_TYPE Type,
@@ -60,34 +66,38 @@ NDIS_STATUS NDISCall(
  *     Status of operation
  */
 {
-    NDIS_REQUEST Request;
+    LAN_REQUEST Context;
+    PNDIS_REQUEST Request = &Context.Request;
     NDIS_STATUS NdisStatus;
 
-    Request.RequestType = Type;
+    RtlZeroMemory(&Context, sizeof(Context));
+    KeInitializeEvent(&Context.Event, NotificationEvent, FALSE);
+    Context.Status = NDIS_STATUS_PENDING;
+    Request->RequestType = Type;
     if (Type == NdisRequestSetInformation) {
-        Request.DATA.SET_INFORMATION.Oid                     = OID;
-        Request.DATA.SET_INFORMATION.InformationBuffer       = Buffer;
-        Request.DATA.SET_INFORMATION.InformationBufferLength = Length;
+        Request->DATA.SET_INFORMATION.Oid                     = OID;
+        Request->DATA.SET_INFORMATION.InformationBuffer       = Buffer;
+        Request->DATA.SET_INFORMATION.InformationBufferLength = Length;
     } else {
-        Request.DATA.QUERY_INFORMATION.Oid                     = OID;
-        Request.DATA.QUERY_INFORMATION.InformationBuffer       = Buffer;
-        Request.DATA.QUERY_INFORMATION.InformationBufferLength = Length;
+        Request->DATA.QUERY_INFORMATION.Oid                     = OID;
+        Request->DATA.QUERY_INFORMATION.InformationBuffer       = Buffer;
+        Request->DATA.QUERY_INFORMATION.InformationBufferLength = Length;
     }
 
     if (Adapter->State != LAN_STATE_RESETTING) {
-        NdisRequest(&NdisStatus, Adapter->NdisHandle, &Request);
+        NdisRequest(&NdisStatus, Adapter->NdisHandle, Request);
     } else {
         NdisStatus = NDIS_STATUS_NOT_ACCEPTED;
     }
 
     /* Wait for NDIS to complete the request */
     if (NdisStatus == NDIS_STATUS_PENDING) {
-        KeWaitForSingleObject(&Adapter->Event,
+        KeWaitForSingleObject(&Context.Event,
                               UserRequest,
                               KernelMode,
                               FALSE,
                               NULL);
-        NdisStatus = Adapter->NdisStatus;
+        NdisStatus = Context.Status;
     }
 
     return NdisStatus;
@@ -282,14 +292,16 @@ VOID NTAPI ProtocolRequestComplete(
  *     Status         = Status of the operation
  */
 {
-    PLAN_ADAPTER Adapter = (PLAN_ADAPTER)BindingContext;
+    PLAN_REQUEST Context = CONTAINING_RECORD(NdisRequest, LAN_REQUEST, Request);
+
+    UNREFERENCED_PARAMETER(BindingContext);
 
     TI_DbgPrint(DEBUG_DATALINK, ("Called.\n"));
 
-    /* Save status of request and signal an event */
-    Adapter->NdisStatus = Status;
-
-    KeSetEvent(&Adapter->Event, 0, FALSE);
+    /* Concurrent OIDs must not consume each other's completion or status.
+     * Adapter->Event is reserved for adapter lifecycle operations. */
+    Context->Status = Status;
+    KeSetEvent(&Context->Event, 0, FALSE);
 }
 
 

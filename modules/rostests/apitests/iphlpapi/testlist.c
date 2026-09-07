@@ -4,6 +4,7 @@
 
 extern void func_GetExtendedTcpTable(void);
 extern void func_GetExtendedUdpTable(void);
+extern void func_GetIfEntry(void);
 extern void func_GetInterfaceName(void);
 extern void func_GetNetworkParams(void);
 extern void func_GetOwnerModuleFromTcpEntry(void);
@@ -16,6 +17,7 @@ const struct test winetest_testlist[] =
 {
     { "GetExtendedTcpTable",        func_GetExtendedTcpTable },
     { "GetExtendedUdpTable",        func_GetExtendedUdpTable },
+    { "GetIfEntry",                 func_GetIfEntry },
     { "GetInterfaceName",           func_GetInterfaceName },
     { "GetNetworkParams",           func_GetNetworkParams },
     { "GetOwnerModuleFromTcpEntry", func_GetOwnerModuleFromTcpEntry },
