@@ -2767,7 +2767,7 @@ QSI_DEF(SystemEmulationBasicInformation)
     NTSTATUS Status;
 
     Status = QSISystemBasicInformation(Buffer, Size, ReqSize);
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     if (NT_SUCCESS(Status))
     {
         PSYSTEM_BASIC_INFORMATION Sbi = (PSYSTEM_BASIC_INFORMATION)Buffer;

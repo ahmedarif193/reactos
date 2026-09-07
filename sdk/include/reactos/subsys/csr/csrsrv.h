@@ -92,7 +92,8 @@ typedef enum _CSR_PROCESS_FLAGS
     CsrProcessTerminated           = 0x200,
     CsrProcessLastThreadTerminated = 0x400,
     CsrProcessIsConsoleApp         = 0x800,
-    CsrProcessIsWow64              = 0x1000
+    CsrProcessIsWow64              = 0x1000,
+    CsrProcessSharedSectionMapped  = 0x2000
 } CSR_PROCESS_FLAGS, *PCSR_PROCESS_FLAGS;
 
 #define CsrProcessPriorityFlags (CsrProcessNormalPriority | \

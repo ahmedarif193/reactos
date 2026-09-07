@@ -19,9 +19,12 @@ RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
 {
     ULONG Index, Present = 0;
 
-    *ZeroBits = 0;
+    if (ZeroBits)
+        *ZeroBits = 0;
     *EcCode = FALSE;
     if (ExtendedParameterCount && !ExtendedParameters)
+        return STATUS_INVALID_PARAMETER;
+    if (ExtendedParameterCount > MemExtendedParameterMax)
         return STATUS_INVALID_PARAMETER;
 
     _SEH2_TRY
@@ -40,6 +43,8 @@ RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
                 {
                     PMEM_ADDRESS_REQUIREMENTS Requirements = ExtendedParameters[Index].Pointer;
 
+                    if (!ZeroBits)
+                        break;
                     if (!Requirements)
                         _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
                     if (Requirements->LowestStartingAddress || Requirements->Alignment)

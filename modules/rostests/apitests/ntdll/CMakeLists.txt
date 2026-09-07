@@ -52,6 +52,7 @@ set(ALPC_SOURCE
 list(APPEND SOURCE
     DllLoadNotification.c
     arm64_chpe.c
+    wow64_startup.c
     LdrEnumResources.c
     LdrFindResource_U.c
     LdrLoadDll.c

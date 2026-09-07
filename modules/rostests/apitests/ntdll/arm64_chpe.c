@@ -87,6 +87,109 @@ Arm64ChpeTestNtAllocateVirtualMemoryExSmoke(VOID)
 
 static
 VOID
+Arm64ChpeTestAddressRequirements(VOID)
+{
+    PFN_NtAllocateVirtualMemoryEx Allocate = LookupProc("NtAllocateVirtualMemoryEx");
+    MEM_EXTENDED_PARAMETER Parameter = {0};
+    MEM_ADDRESS_REQUIREMENTS Requirements = {0};
+    PVOID BaseAddress;
+    SIZE_T RegionSize, FreeSize;
+    NTSTATUS Status;
+    ULONG Index;
+    struct
+    {
+        ULONG_PTR Low;
+        ULONG_PTR High;
+        SIZE_T Alignment;
+        SIZE_T Size;
+        NTSTATUS Status;
+    } Cases[] =
+    {
+#ifdef _WIN64
+        {0x100000000ULL, 0, 0, PAGE_SIZE, STATUS_SUCCESS},
+        {0x100000000ULL, 0x18002ffffULL, 0x200000, PAGE_SIZE, STATUS_SUCCESS},
+        {0x100000000ULL, 0x10000ffffULL, 0, 0x20000, STATUS_NO_MEMORY},
+#endif
+        {0, 0, 0, PAGE_SIZE, STATUS_SUCCESS},
+        {0x20000000, 0x3002ffff, 0x200000, PAGE_SIZE, STATUS_SUCCESS},
+        {1, 0, 0, PAGE_SIZE, STATUS_INVALID_PARAMETER},
+        {MAXULONG_PTR, 0, 0, PAGE_SIZE, STATUS_INVALID_PARAMETER},
+        {0, 0x30020000, 0, PAGE_SIZE, STATUS_INVALID_PARAMETER},
+        {0x30030000, 0x3002ffff, 0, PAGE_SIZE, STATUS_INVALID_PARAMETER},
+        {0, 0, PAGE_SIZE, PAGE_SIZE, STATUS_INVALID_PARAMETER},
+        {0, 0, 0x30000, PAGE_SIZE, STATUS_INVALID_PARAMETER}
+    };
+
+    if (!Allocate)
+        return;
+
+    Parameter.Type = MemExtendedParameterAddressRequirements;
+    Parameter.Pointer = &Requirements;
+    for (Index = 0; Index < RTL_NUMBER_OF(Cases); ++Index)
+    {
+        Requirements.LowestStartingAddress = (PVOID)Cases[Index].Low;
+        Requirements.HighestEndingAddress = (PVOID)Cases[Index].High;
+        Requirements.Alignment = Cases[Index].Alignment;
+        BaseAddress = NULL;
+        RegionSize = Cases[Index].Size;
+        Status = Allocate(NtCurrentProcess(), &BaseAddress, &RegionSize,
+                          MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE, &Parameter, 1);
+        ok(Status == Cases[Index].Status, "Case %lu: status %lx, expected %lx\n",
+           Index, Status, Cases[Index].Status);
+        if (!NT_SUCCESS(Status))
+            continue;
+
+        ok((ULONG_PTR)BaseAddress >= Cases[Index].Low, "Case %lu: base %p below lower bound\n", Index, BaseAddress);
+        if (Cases[Index].High)
+            ok((ULONG_PTR)BaseAddress + RegionSize - 1 <= Cases[Index].High,
+               "Case %lu: base %p size %Ix exceeds upper bound\n", Index, BaseAddress, RegionSize);
+        if (Cases[Index].Alignment)
+            ok(!((ULONG_PTR)BaseAddress & (Cases[Index].Alignment - 1)),
+               "Case %lu: base %p is misaligned\n", Index, BaseAddress);
+        *(volatile ULONG *)BaseAddress = 0x12345678;
+        ok(*(volatile ULONG *)BaseAddress == 0x12345678, "Case %lu: committed memory is not writable\n", Index);
+        FreeSize = 0;
+        Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &FreeSize, MEM_RELEASE);
+        ok_hex(Status, STATUS_SUCCESS);
+    }
+
+    Requirements.LowestStartingAddress = (PVOID)0x20000000;
+    Requirements.HighestEndingAddress = NULL;
+    Requirements.Alignment = 0;
+    BaseAddress = (PVOID)0x20000000;
+    RegionSize = PAGE_SIZE;
+    Status = Allocate(NtCurrentProcess(), &BaseAddress, &RegionSize,
+                      MEM_RESERVE, PAGE_READWRITE, &Parameter, 1);
+    ok_hex(Status, STATUS_INVALID_PARAMETER);
+    if (NT_SUCCESS(Status))
+    {
+        FreeSize = 0;
+        NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &FreeSize, MEM_RELEASE);
+    }
+}
+
+static
+VOID
+Arm64ChpeTestEmulationAddressLimit(VOID)
+{
+#ifdef _WIN64
+    SYSTEM_BASIC_INFORMATION Information;
+    NTSTATUS Status;
+
+    Status = NtQuerySystemInformation(SystemEmulationBasicInformation, &Information, sizeof(Information), NULL);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok(Information.MaximumUserModeAddress < 0x100000000ULL,
+           "Emulated address limit is not 32-bit: %Ix\n", Information.MaximumUserModeAddress);
+        ok(Information.MaximumUserModeAddress >= 0x7ffeffff,
+           "Emulated address limit is too small: %Ix\n", Information.MaximumUserModeAddress);
+    }
+#endif
+}
+
+static
+VOID
 Arm64ChpeTestNtOpenKeyExSmoke(VOID)
 {
     PFN_NtOpenKeyEx pNtOpenKeyEx;
@@ -177,6 +280,8 @@ START_TEST(arm64_chpe)
 
     Arm64ChpeTestRequiredImports();
     Arm64ChpeTestNtAllocateVirtualMemoryExSmoke();
+    Arm64ChpeTestAddressRequirements();
+    Arm64ChpeTestEmulationAddressLimit();
     Arm64ChpeTestNtOpenKeyExSmoke();
     Arm64ChpeTestWaitOnAddressSmoke();
     Arm64ChpeTestRtlPerformanceSmoke();

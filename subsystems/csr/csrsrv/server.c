@@ -514,7 +514,7 @@ CsrSrvAttachSharedSection(IN PCSR_PROCESS CsrProcess OPTIONAL,
     SIZE_T ViewSize = 0;
 
     /* Check if we have a process */
-    if (CsrProcess)
+    if (CsrProcess && !(CsrProcess->Flags & CsrProcessSharedSectionMapped))
     {
         /* Map the section into this process */
         Status = NtMapViewOfSection(CsrSrvSharedSection,
@@ -528,6 +528,7 @@ CsrSrvAttachSharedSection(IN PCSR_PROCESS CsrProcess OPTIONAL,
                                     SEC_NO_CHANGE,
                                     PAGE_EXECUTE_READ);
         if (!NT_SUCCESS(Status)) return Status;
+        CsrProcess->Flags |= CsrProcessSharedSectionMapped;
     }
 
     /* Write the values in the Connection Info structure */

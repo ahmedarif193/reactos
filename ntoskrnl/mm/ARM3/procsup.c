@@ -1038,7 +1038,7 @@ MmCreateTeb(IN PEPROCESS Process,
     return Status;
 }
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
 static
 NTSTATUS
 MiInsertSharedUserPageVad(
@@ -1231,8 +1231,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     /* Release the process working set */
     MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
 
-#ifdef _M_AMD64
-    /* On x64 we need a VAD for the shared user page */
+#if defined(_M_AMD64) || defined(_M_ARM64)
     Status = MiInsertSharedUserPageVad(Process);
     if (!NT_SUCCESS(Status))
     {
