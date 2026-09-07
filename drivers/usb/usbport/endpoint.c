@@ -1658,10 +1658,61 @@ ExitWithError:
         {
             KeAcquireSpinLock(&FdoExtension->TtSpinLock, &OldIrql);
             RemoveEntryList(&Endpoint->TtLink);
+            Endpoint->TtExtension = NULL;
             KeReleaseSpinLock(&FdoExtension->TtSpinLock, OldIrql);
         }
 
-        ExFreePoolWithTag(Endpoint, USB_PORT_TAG);
+        if (Endpoint->Flags & ENDPOINT_FLAG_OPENED)
+        {
+            /*
+             * ACTIVE timed out after the miniport opened the endpoint. A
+             * state-change DPC may already have dequeued StateChangeLink,
+             * so purging the list alone does not make it safe to free.
+             * Exclude state-change handlers while replacing ACTIVE with
+             * REMOVE. Raise IRQL before taking their reentrancy guard so a
+             * local DPC cannot repeatedly requeue itself and starve us.
+             * Unpublished endpoints cannot be queued to the worker yet.
+             */
+            for (;;)
+            {
+                KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+                if (InterlockedCompareExchange(&FdoExtension->IsrDpcHandlerCounter,
+                                               0, -1) == -1)
+                {
+                    break;
+                }
+                KeLowerIrql(OldIrql);
+                USBPORT_Wait(FdoDevice, 1);
+            }
+
+            USBPORT_PurgeEndpointStateChange(Endpoint);
+
+            KeAcquireSpinLockAtDpcLevel(&Endpoint->EndpointSpinLock);
+            Endpoint->DeviceHandle = NULL;
+            USBPORT_SetEndpointState(Endpoint, USBPORT_ENDPOINT_REMOVE);
+            KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
+
+            /*
+             * The normal REMOVE path waits for a subsequent hardware frame
+             * before the passive worker closes the miniport and frees its
+             * DMA buffer and endpoint. Retain that lifetime even if frames
+             * have stopped; NUKE would bypass the hardware retirement wait.
+             */
+            ExInterlockedInsertTailList(&FdoExtension->EndpointList,
+                                        &Endpoint->EndpointLink,
+                                        &FdoExtension->EndpointListSpinLock);
+
+            InterlockedDecrement(&FdoExtension->IsrDpcHandlerCounter);
+            KeLowerIrql(OldIrql);
+        }
+        else
+        {
+            /* No state transition was queued if the miniport did not open. */
+            if (Endpoint->HeaderBuffer)
+                USBPORT_FreeCommonBuffer(FdoDevice, Endpoint->HeaderBuffer);
+
+            ExFreePoolWithTag(Endpoint, USB_PORT_TAG);
+        }
     }
 
     DPRINT1("USBPORT_OpenPipe: Status - %lx\n", Status);
@@ -1875,7 +1926,10 @@ USBPORT_InvalidateEndpointHandler(IN PDEVICE_OBJECT FdoDevice,
         KeAcquireSpinLock(&FdoExtension->EndpointListSpinLock, &OldIrql);
         DPRINT_CORE("USBPORT_InvalidateEndpointHandler: KeAcquireSpinLock \n");
 
+        /* OpenPipe publishes the endpoint only after opening succeeds
+         * or after handing a failed open to deferred removal. */
         if ((!WorkerLink->Flink || !WorkerLink->Blink) &&
+            Endpoint->EndpointLink.Flink && Endpoint->EndpointLink.Blink &&
             !(Endpoint->Flags & ENDPOINT_FLAG_IDLE) &&
             USBPORT_GetEndpointState(Endpoint) != USBPORT_ENDPOINT_CLOSED)
         {
