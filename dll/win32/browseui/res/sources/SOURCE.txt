@@ -1,0 +1,11 @@
+Source: Microsoft Fluent UI System Icons
+Repository: https://github.com/microsoft/fluentui-system-icons
+Revision: 4d685f77b2cb8f3f412a74ec8d920c8c91149528
+License: MIT (see LICENSE)
+
+Files used:
+- assets/Chevron Right/SVG/ic_fluent_chevron_right_20_filled.svg
+
+The bitmaps rasterise the path unmodified at its native 20x20 viewBox and fill
+it with a vertical ramp derived from the Win8 theme accent (54 127 239); the
+hot bitmap is the same path over a lifted ramp.
