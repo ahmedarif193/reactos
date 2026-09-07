@@ -209,8 +209,8 @@ cmake_dependent_option(ARM64EC_RUNTIME
                        "Whether this ARM64 build provides the ARM64EC user runtime for FEX." OFF
                        "ARCH STREQUAL arm64" OFF)
 
-cmake_dependent_option(ENABLE_WOW64 "Whether to build the amd64 WoW64 subsystem." OFF
-                       "ARCH STREQUAL amd64" OFF)
+cmake_dependent_option(ENABLE_WOW64 "Whether to build the 32-bit WoW64 subsystem." OFF
+                       "ARCH STREQUAL amd64 OR ARCH STREQUAL arm64" OFF)
 
 cmake_dependent_option(ENABLE_ROSV
                        "Whether to build the ROSV VMX hypervisor driver and its user-mode tools." OFF

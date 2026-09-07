@@ -207,7 +207,7 @@ KiSwapContextResume(
         KiSwapProcess(NewProcess, OldProcess);
     }
 
-    if (NewThread->Teb && ((PEPROCESS)NewProcess)->Wow64Process) CompatTeb = (PUCHAR)NewThread->Teb + ROUND_TO_PAGES(sizeof(TEB));
+    if (NewThread->Teb && THREAD_TO_PROCESS((PETHREAD)NewThread)->Wow64Process) CompatTeb = (PUCHAR)NewThread->Teb + ROUND_TO_PAGES(sizeof(TEB));
 
     /* Set TEB pointer and GS base */
     Pcr->NtTib.Self = (PVOID)NewThread->Teb;
@@ -217,6 +217,10 @@ KiSwapContextResume(
        __writemsr(MSR_GS_SWAP, (ULONG64)NewThread->Teb);
     }
     KiSetGdtDescriptorBase(KiGetGdtEntry(Pcr->GdtBase, KGDT64_R3_CMTEB), (ULONG64)CompatTeb);
+    if (NewThread->Teb)
+    {
+        __asm__ __volatile__("mov %0, %%ax\n\tmov %%ax, %%fs" :: "i"(KGDT64_R3_CMTEB | RPL_MASK) : "ax", "memory");
+    }
 
     /* Increase context switch count */
     Pcr->ContextSwitches++;

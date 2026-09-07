@@ -15,7 +15,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#ifdef _M_AMD64
+#ifdef _WIN64
 static NTSTATUS
 PspCopyThreadWow64Context(IN PETHREAD Thread,
                           IN OUT PWOW64_CONTEXT Context,
@@ -1662,7 +1662,7 @@ NtQueryInformationProcess(
                                                         &Process);
             if (!NT_SUCCESS(Status)) break;
 
-#if defined(_WIN64) && defined(_M_AMD64)
+#ifdef _WIN64
             /* Make sure the process isn't dying */
             if (ExAcquireRundownProtection(&Process->RundownProtect))
             {
@@ -3813,7 +3813,7 @@ NtSetInformationThread(
 
         case ThreadWow64Context:
         {
-#ifdef _M_AMD64
+#ifdef _WIN64
             WOW64_CONTEXT Wow64Context;
 
             _SEH2_TRY
@@ -4645,7 +4645,7 @@ NtQueryInformationThread(
 
         case ThreadWow64Context:
         {
-#ifdef _M_AMD64
+#ifdef _WIN64
             WOW64_CONTEXT Wow64Context;
 
             Length = sizeof(Wow64Context);

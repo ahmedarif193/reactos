@@ -15,6 +15,11 @@
 #include <debug.h>
 
 typedef NTSTATUS (NTAPI *USER_CALL)(PVOID Argument, ULONG ArgumentLength);
+typedef VOID (NTAPI *WOW64_PREPARE_FOR_EXCEPTION)(PEXCEPTION_RECORD, PCONTEXT);
+
+#if defined(_M_ARM64)
+PVOID LdrpWow64PrepareForException = NULL;
+#endif
 
 /* FUNCTIONS ****************************************************************/
 
@@ -36,6 +41,11 @@ KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord,
 
     /* Dispatch the exception and check the result */
 #if defined(_M_ARM64)
+    if (LdrpWow64PrepareForException != NULL)
+    {
+        ((WOW64_PREPARE_FOR_EXCEPTION)LdrpWow64PrepareForException)(ExceptionRecord, Context);
+    }
+
     if (ChpeIsChpeProcess() && ChpeDispatchException(ExceptionRecord, Context))
     {
         Status = NtContinue(Context, FALSE);

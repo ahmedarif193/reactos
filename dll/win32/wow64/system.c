@@ -336,6 +336,14 @@ NTSTATUS WINAPI wow64_NtQuerySystemInformation( UINT *args )
     case SystemWineVersionInformation:  /* char[] */
         return NtQuerySystemInformation( class, ptr, len, retlen );
 
+#ifdef __REACTOS__
+    case SystemRangeStartInformation:  /* ULONG_PTR */
+        if (len != sizeof(ULONG)) return STATUS_INFO_LENGTH_MISMATCH;
+        *(ULONG *)ptr = (ULONG)(ULONG_PTR)highest_user_address + 1;
+        if (retlen) *retlen = sizeof(ULONG);
+        return STATUS_SUCCESS;
+#endif
+
     case SystemCpuInformation:  /* SYSTEM_CPU_INFORMATION */
     case SystemEmulationProcessorInformation:  /* SYSTEM_CPU_INFORMATION */
         status = NtQuerySystemInformation( SystemEmulationProcessorInformation, ptr, len, retlen );
@@ -602,7 +610,11 @@ NTSTATUS WINAPI wow64_NtQuerySystemInformation( UINT *args )
         return STATUS_INVALID_INFO_CLASS;
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtQuerySystemInformation: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_INVALID_INFO_CLASS;
     }
 }
@@ -683,7 +695,11 @@ NTSTATUS WINAPI wow64_NtQuerySystemInformationEx( UINT *args )
         return NtQuerySystemInformationEx( class, &handle, sizeof(handle), ptr, len, retlen );
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtQuerySystemInformationEx: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_INVALID_INFO_CLASS;
     }
 }

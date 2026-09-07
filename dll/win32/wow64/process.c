@@ -351,11 +351,65 @@ NTSTATUS WINAPI wow64_NtCreateThread( UINT *args )
     HANDLE process = get_handle( &args );
     CLIENT_ID32 *id32 = get_ptr( &args );
     I386_CONTEXT *context = get_ptr( &args );
+#ifdef __REACTOS__
+    ULONG *initial_teb32 = get_ptr( &args );
+#else
     void *initial_teb = get_ptr( &args );
+#endif
     BOOLEAN suspended = get_ulong( &args );
 
+#ifdef __REACTOS__
+    struct object_attr64 attr;
+    CONTEXT ctx;
+    INITIAL_TEB teb;
+    CLIENT_ID id;
+    HANDLE handle = 0;
+    NTSTATUS status;
+    int i;
+
+    *handle_ptr = 0;
+    if (!is_process_wow64( process )) return STATUS_ACCESS_DENIED;
+    if (!context || !initial_teb32) return STATUS_INVALID_PARAMETER;
+
+#ifdef __x86_64__
+    memset( &ctx, 0, sizeof(ctx) );
+    ctx.ContextFlags = CONTEXT_FULL;
+    ctx.Rip = context->Eip;
+    ctx.Rsp = context->Esp;
+    ctx.Rax = context->Eax;
+    ctx.Rbx = context->Ebx;
+    ctx.Rcx = context->Ecx;
+    ctx.Rdx = context->Edx;
+    ctx.Rsi = context->Esi;
+    ctx.Rdi = context->Edi;
+    ctx.Rbp = context->Ebp;
+    ctx.EFlags = context->EFlags;
+    ctx.SegCs = 0x23;
+    ctx.SegDs = 0x2b;
+    ctx.SegEs = 0x2b;
+    ctx.SegFs = 0x53;
+    ctx.SegGs = 0x2b;
+    ctx.SegSs = 0x2b;
+
+#endif
+    C_ASSERT( sizeof(teb) == 5 * sizeof(void *) );
+    for (i = 0; i < 5; i++) ((void **)&teb)[i] = ULongToPtr( initial_teb32[i] );
+
+#ifdef __x86_64__
+    status = NtCreateThread( &handle, access, objattr_32to64( &attr, attr32 ), process, &id, &ctx, &teb, suspended );
+#else
+    status = NtCreateThread( &handle, access, objattr_32to64( &attr, attr32 ), process, &id, (CONTEXT *)context, &teb, suspended );
+#endif
+    if (NT_SUCCESS(status))
+    {
+        put_handle( handle_ptr, handle );
+        if (id32) put_client_id( id32, &id );
+    }
+    return status;
+#else
     FIXME( "%p %lx %p %p %p %p %p %u: stub\n", handle_ptr, access, attr32, process, id32, context, initial_teb, suspended );
     return STATUS_NOT_IMPLEMENTED;
+#endif
 }
 
 
@@ -420,6 +474,16 @@ NTSTATUS WINAPI wow64_NtCreateUserProcess( UINT *args )
     NTSTATUS status;
 
     *process_handle_ptr = *thread_handle_ptr = 0;
+#ifdef __REACTOS__
+    memset( &info, 0, sizeof(info) );
+    info.Size = sizeof(info);
+    info.State = info32->State;
+    if (info32->State == PsCreateInitialState)
+    {
+        info.InitState.InitFlags = info32->InitState.InitFlags;
+        info.InitState.AdditionalFileAccess = info32->InitState.AdditionalFileAccess;
+    }
+#endif
     status = NtCreateUserProcess( &process_handle, &thread_handle, process_access, thread_access, objattr_32to64( &process_attr, process_attr32 ), objattr_32to64( &thread_attr, thread_attr32 ), process_flags, thread_flags, process_params_32to64( &params, params32), &info, ps_attributes_32to64( &attr, attr32 ));
     put_handle( process_handle_ptr, process_handle );
     put_handle( thread_handle_ptr, thread_handle );
@@ -573,10 +637,18 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
 
             if (!(status = NtQueryInformationProcess( handle, class, &info, sizeof(info), NULL )))
             {
+#ifdef __REACTOS__
+                {
+                    ULONG_PTR peb32 = 0;
+                    if (NtQueryInformationProcess( handle, ProcessWow64Information, &peb32, sizeof(peb32), NULL )) peb32 = 0;
+                    info32->PebBaseAddress = (ULONG)peb32;
+                }
+#else
                 if (is_process_wow64( handle ))
                     info32->PebBaseAddress = PtrToUlong( info.PebBaseAddress ) + 0x1000;
                 else
                     info32->PebBaseAddress = 0;
+#endif
                 info32->ExitStatus = info.ExitStatus;
                 info32->AffinityMask = info.AffinityMask;
                 info32->BasePriority = info.BasePriority;
@@ -698,7 +770,11 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
         return STATUS_INFO_LENGTH_MISMATCH;
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtQueryInformationProcess: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_INVALID_INFO_CLASS;
     }
 }
@@ -814,7 +890,11 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
     }
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtQueryInformationThread: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_INVALID_INFO_CLASS;
     }
 }
@@ -1004,7 +1084,11 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
         else return STATUS_INFO_LENGTH_MISMATCH;
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtSetInformationProcess: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_INVALID_INFO_CLASS;
     }
 }
@@ -1077,7 +1161,11 @@ NTSTATUS WINAPI wow64_NtSetInformationThread( UINT *args )
         else return STATUS_INFO_LENGTH_MISMATCH;
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtSetInformationThread: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_INVALID_INFO_CLASS;
     }
 }

@@ -18,6 +18,12 @@
 /* DATA ***********************************************************************/
 
 PCSR_SERVER_DLL CsrLoadedServerDll[CSR_SERVER_DLL_MAX];
+#ifdef _WIN64
+#define CSR_WOW64_ADDRESS_LIMIT    0x80000000ULL
+#define CSR_WOW64_RESERVED_TAIL    0x00100000ULL
+#define MM_ALLOCATION_GRANULARITY  0x10000
+#endif
+
 PVOID CsrSrvSharedSectionHeap = NULL;
 PVOID CsrSrvSharedSectionBase = NULL;
 PVOID *CsrSrvSharedStaticServerData = NULL;
@@ -418,6 +424,25 @@ CsrSrvCreateSharedSection(IN PCHAR ParameterValue)
         NtClose(CsrSrvSharedSection);
         return Status;
     }
+
+#ifdef _WIN64
+    if ((ULONG_PTR)CsrSrvSharedSectionBase + CsrSrvSharedSectionSize >
+        CSR_WOW64_ADDRESS_LIMIT - CSR_WOW64_RESERVED_TAIL)
+    {
+        NtUnmapViewOfSection(NtCurrentProcess(), CsrSrvSharedSectionBase);
+
+        CsrSrvSharedSectionBase =
+            (PVOID)ALIGN_DOWN_BY(CSR_WOW64_ADDRESS_LIMIT - CSR_WOW64_RESERVED_TAIL - CsrSrvSharedSectionSize,
+                                 MM_ALLOCATION_GRANULARITY);
+        ViewSize = 0;
+        Status = NtMapViewOfSection(CsrSrvSharedSection, NtCurrentProcess(), &CsrSrvSharedSectionBase, 0, 0, NULL, &ViewSize, ViewUnmap, 0, PAGE_EXECUTE_READWRITE);
+        if (!NT_SUCCESS(Status))
+        {
+            NtClose(CsrSrvSharedSection);
+            return Status;
+        }
+    }
+#endif
 
     /* FIXME: Write the value to registry */
 

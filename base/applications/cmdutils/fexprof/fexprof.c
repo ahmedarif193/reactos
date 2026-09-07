@@ -51,6 +51,16 @@ typedef struct _FEXPROF_PROCESS_SAMPLE
     ULONGLONG WorkingSet;
 } FEXPROF_PROCESS_SAMPLE;
 
+#define FEXPROF_MAX_TRACKED 512
+#define FEXPROF_TOP_COUNT    5
+
+typedef struct _FEXPROF_PROCESS_SLOT
+{
+    ULONG ProcessId;
+    ULONGLONG Cpu100ns;
+    CHAR Name[32];
+} FEXPROF_PROCESS_SLOT;
+
 typedef struct _FEXPROF_SYSTEM_SAMPLE
 {
     ULONG CpuCount;
@@ -134,6 +144,46 @@ FexProfImageNameMatches(PCUNICODE_STRING ImageName, PCSTR Needle)
 }
 
 static VOID
+FexProfReportThreads(PSYSTEM_PROCESS_INFORMATION Info)
+{
+    static PCSTR const WaitReasons[] =
+    {
+        "Executive", "FreePage", "PageIn", "PoolAllocation", "DelayExecution",
+        "Suspended", "UserRequest", "WrExecutive", "WrFreePage", "WrPageIn",
+        "WrPoolAllocation", "WrDelayExecution", "WrSuspended", "WrUserRequest",
+        "WrEventPair", "WrQueue", "WrLpcReceive", "WrLpcReply", "WrVirtualMemory",
+        "WrPageOut", "WrRendezvous", "WrKeyedEvent", "WrTerminated",
+        "WrProcessInSwap", "WrCpuRateControl", "WrCalloutStack", "WrKernel",
+        "WrResource", "WrPushLock", "WrMutex", "WrQuantumEnd", "WrDispatchInt",
+        "WrPreempted", "WrYieldExecution", "WrFastMutex", "WrGuardedMutex",
+        "WrRundown"
+    };
+    static PCSTR const States[] =
+    {
+        "Initialized", "Ready", "Running", "Standby", "Terminated", "Waiting",
+        "Transition", "DeferredReady", "GateWait"
+    };
+    PSYSTEM_THREAD_INFORMATION Thread = (PSYSTEM_THREAD_INFORMATION)(Info + 1);
+    ULONG Index;
+
+    for (Index = 0; Index < Info->NumberOfThreads; ++Index)
+    {
+        ULONG State = (ULONG)Thread[Index].ThreadState;
+        ULONG Reason = (ULONG)Thread[Index].WaitReason;
+
+        FexProfPrint("FEXPROF_THREAD tid=%lu start=%p state=%s wait=%s pri=%ld/%ld switches=%lu user_ms=%lu kernel_ms=%lu\n",
+                     (unsigned long)(ULONG_PTR)Thread[Index].ClientId.UniqueThread,
+                     Thread[Index].StartAddress,
+                     State < RTL_NUMBER_OF(States) ? States[State] : "?",
+                     Reason < RTL_NUMBER_OF(WaitReasons) ? WaitReasons[Reason] : "?",
+                     (long)Thread[Index].Priority, (long)Thread[Index].BasePriority,
+                     (unsigned long)Thread[Index].ContextSwitches,
+                     (unsigned long)(Thread[Index].UserTime.QuadPart / 10000),
+                     (unsigned long)(Thread[Index].KernelTime.QuadPart / 10000));
+    }
+}
+
+static VOID
 FexProfSampleProcess(PCSTR Needle, FEXPROF_PROCESS_SAMPLE *Sample)
 {
     PSYSTEM_PROCESS_INFORMATION Info;
@@ -163,6 +213,7 @@ FexProfSampleProcess(PCSTR Needle, FEXPROF_PROCESS_SAMPLE *Sample)
             Sample->OtherBytes = (ULONGLONG)Info->OtherTransferCount.QuadPart;
             Sample->PageFaults = Info->PageFaultCount;
             Sample->WorkingSet = (ULONGLONG)Info->WorkingSetSize;
+            FexProfReportThreads(Info);
             break;
         }
 
@@ -172,6 +223,110 @@ FexProfSampleProcess(PCSTR Needle, FEXPROF_PROCESS_SAMPLE *Sample)
     }
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+}
+
+static ULONGLONG FexProfDelta(ULONGLONG Now, ULONGLONG Before);
+
+static FEXPROF_PROCESS_SLOT g_Previous[FEXPROF_MAX_TRACKED];
+static ULONG g_PreviousCount;
+
+static VOID
+FexProfCopyImageName(PCUNICODE_STRING ImageName, PCHAR Name, ULONG Size)
+{
+    ULONG Count;
+    ULONG Index;
+
+    Name[0] = '\0';
+    if (ImageName->Buffer == NULL || ImageName->Length == 0)
+    {
+        strncpy(Name, "(idle)", Size - 1);
+        Name[Size - 1] = '\0';
+        return;
+    }
+
+    Count = ImageName->Length / sizeof(WCHAR);
+    if (Count >= Size)
+        Count = Size - 1;
+    for (Index = 0; Index < Count; ++Index)
+    {
+        WCHAR Char = ImageName->Buffer[Index];
+        Name[Index] = (Char < 0x80) ? (CHAR)Char : '?';
+    }
+    Name[Count] = '\0';
+}
+
+static VOID
+FexProfReportTop(VOID)
+{
+    FEXPROF_PROCESS_SLOT Current[FEXPROF_MAX_TRACKED];
+    ULONGLONG Delta[FEXPROF_MAX_TRACKED];
+    PSYSTEM_PROCESS_INFORMATION Info;
+    PVOID Buffer;
+    ULONG Length = 0;
+    ULONG Count = 0;
+    ULONG Index;
+    ULONG Inner;
+    ULONG Reported;
+
+    Buffer = FexProfQuery(SystemProcessInformation, &Length);
+    if (Buffer == NULL)
+        return;
+
+    Info = (PSYSTEM_PROCESS_INFORMATION)Buffer;
+    for (;;)
+    {
+        if (Count < FEXPROF_MAX_TRACKED)
+        {
+            Current[Count].ProcessId = (ULONG)(ULONG_PTR)Info->UniqueProcessId;
+            Current[Count].Cpu100ns = (ULONGLONG)Info->UserTime.QuadPart +
+                                      (ULONGLONG)Info->KernelTime.QuadPart;
+            FexProfCopyImageName(&Info->ImageName, Current[Count].Name,
+                                 sizeof(Current[Count].Name));
+            ++Count;
+        }
+        if (Info->NextEntryOffset == 0)
+            break;
+        Info = (PSYSTEM_PROCESS_INFORMATION)((PUCHAR)Info + Info->NextEntryOffset);
+    }
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+
+    for (Index = 0; Index < Count; ++Index)
+    {
+        Delta[Index] = 0;
+        for (Inner = 0; Inner < g_PreviousCount; ++Inner)
+        {
+            if (g_Previous[Inner].ProcessId == Current[Index].ProcessId)
+            {
+                Delta[Index] = FexProfDelta(Current[Index].Cpu100ns,
+                                            g_Previous[Inner].Cpu100ns);
+                break;
+            }
+        }
+    }
+
+    for (Reported = 0; Reported < FEXPROF_TOP_COUNT; ++Reported)
+    {
+        ULONG Best = Count;
+        for (Index = 0; Index < Count; ++Index)
+        {
+            if (Delta[Index] == 0)
+                continue;
+            if (Best == Count || Delta[Index] > Delta[Best])
+                Best = Index;
+        }
+        if (Best == Count)
+            break;
+
+        FexProfPrint("FEXPROF_TOP  %-24s pid=%-6lu cpu_ms=%llu\n",
+                     Current[Best].Name,
+                     (unsigned long)Current[Best].ProcessId,
+                     (unsigned long long)(Delta[Best] / 10000ULL));
+        Delta[Best] = 0;
+    }
+
+    for (Index = 0; Index < Count; ++Index)
+        g_Previous[Index] = Current[Index];
+    g_PreviousCount = Count;
 }
 
 static VOID
@@ -295,6 +450,8 @@ int __cdecl main(int argc, char *argv[])
         {
             FexProfPrint("FEXPROF_PROC absent target=%s\n", Needle);
         }
+
+        FexProfReportTop();
 
         ProcessBefore = ProcessNow;
         SystemBefore = SystemNow;

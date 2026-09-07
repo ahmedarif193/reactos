@@ -136,7 +136,7 @@ RtlIsCurrentProcess(HANDLE process)
     return RtlpIsCurrentProcess(process);
 }
 
-#if defined(_WIN64) && (!defined(__REACTOS__) || !defined(_M_ARM64))
+#if defined(_WIN64)
 
 NTSTATUS
 WINAPI
@@ -184,6 +184,8 @@ RtlWow64GetCpuAreaInfo(WOW64_CPURESERVED *cpu, ULONG reserved, WOW64_CPU_AREA_IN
     return STATUS_INVALID_PARAMETER;
 }
 
+#if !defined(__REACTOS__) || !defined(_M_ARM64)
+
 NTSTATUS
 WINAPI
 RtlWow64GetCurrentCpuArea(USHORT *machine, void **context, void **context_ex)
@@ -203,6 +205,8 @@ RtlWow64GetCurrentCpuArea(USHORT *machine, void **context, void **context_ex)
     }
     return status;
 }
+
+#endif
 
 NTSTATUS
 WINAPI
@@ -235,8 +239,13 @@ RtlWow64GetThreadSelectorEntry(HANDLE handle,
     if (RtlWow64GetThreadContext(handle, &context))
     {
         context.SegCs = 0x23;
+#if defined(__REACTOS__) && defined(_M_ARM64)
+        context.SegFs = 0x53;
+        context.SegSs = 0x2b;
+#else
         __asm__("movw %%fs,%0" : "=m" (context.SegFs));
         __asm__("movw %%ss,%0" : "=m" (context.SegSs));
+#endif
     }
 
     selector = info->Selector | 3;
@@ -289,7 +298,7 @@ done:
     return STATUS_SUCCESS;
 }
 
-#endif /* _WIN64 && !(ReactOS ARM64) */
+#endif /* _WIN64 */
 
 #if defined(_WIN64)
 

@@ -1188,9 +1188,15 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
  */
 static void thread_init(void)
 {
+#ifdef __REACTOS__
+    NtCurrentTeb()->TlsSlots[WOW64_TLS_WOW64INFO] = wow64info;
+    if (pBTCpuThreadInit) pBTCpuThreadInit();
+    NtCurrentTeb32()->WOW32Reserved = PtrToUlong( pBTCpuGetBopCode() );
+#else
     NtCurrentTeb32()->WOW32Reserved = PtrToUlong( pBTCpuGetBopCode() );
     NtCurrentTeb()->TlsSlots[WOW64_TLS_WOW64INFO] = wow64info;
     if (pBTCpuThreadInit) pBTCpuThreadInit();
+#endif
 
     /* update initial context to jump to 32-bit LdrInitializeThunk (cf. 32-bit call_init_thunk) */
     switch (current_machine)
@@ -1201,7 +1207,11 @@ static void thread_init(void)
             ULONG *stack;
 
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+#ifdef __REACTOS__
+            ctx_ptr = (I386_CONTEXT *)ULongToPtr( ((ctx.Esp & ~3) - 8) & ~3 ) - 1;
+#else
             ctx_ptr = (I386_CONTEXT *)ULongToPtr( ctx.Esp ) - 1;
+#endif
             *ctx_ptr = ctx;
             stack = (ULONG *)ctx_ptr;
 #ifdef __REACTOS__
@@ -1452,32 +1462,48 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
                 UINT              arg1;          /* 004 */
                 UINT              arg2;          /* 008 */
                 UINT              arg3;          /* 00c */
+#ifdef __REACTOS__
+                I386_CONTEXT      context;       /* 010 */
+#else
                 UINT              alertable;     /* 010 */
                 I386_CONTEXT      context;       /* 014 */
                 CONTEXT_EX32      xctx;          /* 2e0 */
                 UINT              unk2[4];       /* 2f8 */
+#endif
             } *stack;
             I386_CONTEXT ctx = { CONTEXT_I386_FULL };
 
+#ifdef __REACTOS__
+            C_ASSERT( offsetof(struct apc_stack_layout32, context) == 0x10 );
+            C_ASSERT( sizeof(struct apc_stack_layout32) == 0x2dc );
+#else
             C_ASSERT( offsetof(struct apc_stack_layout32, context) == 0x14 );
             C_ASSERT( sizeof(struct apc_stack_layout32) == 0x308 );
+#endif
 
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
 
+#ifdef __REACTOS__
+            stack = (struct apc_stack_layout32 *)ULongToPtr( ((ctx.Esp & ~3) - 8) & ~3 ) - 1;
+#else
             stack = (struct apc_stack_layout32 *)ULongToPtr( ctx.Esp & ~3 ) - 1;
+#endif
             stack->func      = arg1 >> 32;
             stack->arg1      = arg1;
             stack->arg2      = arg2;
             stack->arg3      = arg3;
+#ifndef __REACTOS__
             stack->alertable = TRUE;
+#endif
             stack->context   = ctx;
+#ifndef __REACTOS__
             stack->xctx.Legacy.Offset = -(LONG)sizeof(stack->context);
             stack->xctx.Legacy.Length = sizeof(stack->context);
             stack->xctx.All.Offset    = -(LONG)sizeof(stack->context);
             stack->xctx.All.Length    = sizeof(stack->context) + sizeof(stack->xctx);
             stack->xctx.XState.Offset = 25;
             stack->xctx.XState.Length = 0;
-
+#endif
             ctx.Esp = PtrToUlong( stack );
             ctx.Eip = pLdrSystemDllInitBlock->pKiUserApcDispatcher;
             frame.wow_context = &stack->context;
@@ -1667,7 +1693,12 @@ void WINAPI Wow64PrepareForException( EXCEPTION_RECORD *rec, CONTEXT *context )
 {
     EXCEPTION_POINTERS ptrs = { rec, context };
 
+#ifdef __REACTOS__
+    if (pBTCpuResetToConsistentState && NtCurrentTeb32()->WOW32Reserved)
+        pBTCpuResetToConsistentState( &ptrs );
+#else
     pBTCpuResetToConsistentState( &ptrs );
+#endif
 }
 #endif
 

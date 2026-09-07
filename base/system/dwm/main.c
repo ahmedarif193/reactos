@@ -342,6 +342,8 @@ wWinMain(HINSTANCE Instance, HINSTANCE PreviousInstance,
     UNREFERENCED_PARAMETER(CommandLine);
     UNREFERENCED_PARAMETER(ShowCommand);
 
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+
     ZeroMemory(&Host, sizeof(Host));
     Host.IUnknown_iface.lpVtbl = (IUnknownVtbl *)&g_DwmAppHostVtbl;
     Host.References = 1;

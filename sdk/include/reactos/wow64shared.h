@@ -74,7 +74,7 @@ typedef struct _WOW64_CONTEXT
     ULONG Esp;
     ULONG SegSs;
     UCHAR ExtendedRegisters[WOW64_MAXIMUM_SUPPORTED_EXTENSION];
-} WOW64_CONTEXT;
+} WOW64_CONTEXT, *PWOW64_CONTEXT;
 #include <poppack.h>
 #endif
 

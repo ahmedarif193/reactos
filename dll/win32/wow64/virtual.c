@@ -700,7 +700,11 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
 #endif
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtQueryVirtualMemory: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_INVALID_INFO_CLASS;
     }
     if (!status || status == STATUS_INFO_LENGTH_MISMATCH) put_size( retlen, res_len );

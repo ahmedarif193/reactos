@@ -1616,7 +1616,7 @@ NtCreateProcess(OUT PHANDLE ProcessHandle,
 }
 
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-#ifdef _M_AMD64
+#ifdef _WIN64
 static NTSTATUS
 PspInitializeWow64Process(IN PEPROCESS Process,
                           IN PSECTION_IMAGE_INFORMATION ImageInformation)
@@ -1706,7 +1706,7 @@ PspAllocateUserStack(IN HANDLE ProcessHandle,
     return STATUS_SUCCESS;
 }
 
-#ifdef _M_AMD64
+#ifdef _WIN64
 static NTSTATUS
 PspAppendWow64String(IN PUNICODE_STRING Source,
                      OUT PWOW64_UNICODE_STRING Destination,
@@ -1860,6 +1860,62 @@ PspCreateWow64ProcessParameters(IN HANDLE ProcessHandle,
  * on XP/2003. It creates the process, section, PEB, initial thread, TEB,
  * and returns both handles in a single call.
  */
+#ifdef _WIN64
+NTSTATUS
+NTAPI
+PspPrepareWow64Thread(IN HANDLE ProcessHandle,
+                      IN PWOW64_CONTEXT Wow64Context,
+                      OUT PCONTEXT ThreadContext,
+                      IN PINITIAL_TEB Wow64InitialTeb,
+                      OUT PINITIAL_TEB InitialTeb)
+{
+    WOW64_CPU_INIT CpuInit;
+    ULONG_PTR CpuAddress;
+    NTSTATUS Status;
+
+    Status = PspAllocateUserStack(ProcessHandle, MM_SYSTEM_RANGE_START_WOW64 - 1, 0x40000, 0x40000, FALSE, InitialTeb);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    RtlZeroMemory(&CpuInit, sizeof(CpuInit));
+    CpuInit.Cpu.Machine = IMAGE_FILE_MACHINE_I386;
+    CpuInit.Context = *Wow64Context;
+    CpuInit.Context.ContextFlags = WOW64_CONTEXT_FULL;
+    CpuInit.Context.EFlags = (Wow64Context->EFlags & 0x3000) | EFLAGS_INTERRUPT_MASK;
+    CpuInit.Context.SegCs = KGDT64_R3_CMCODE | RPL_MASK;
+    CpuInit.Context.SegDs = KGDT64_R3_DATA | RPL_MASK;
+    CpuInit.Context.SegEs = KGDT64_R3_DATA | RPL_MASK;
+    CpuInit.Context.SegFs = KGDT64_R3_CMTEB | RPL_MASK;
+    CpuInit.Context.SegGs = KGDT64_R3_DATA | RPL_MASK;
+    CpuInit.Context.SegSs = KGDT64_R3_DATA | RPL_MASK;
+
+    CpuAddress = ALIGN_DOWN_BY((ULONG_PTR)InitialTeb->StackBase - sizeof(CpuInit), 16);
+    InitialTeb->StackBase = (PVOID)CpuAddress;
+    Status = ZwWriteVirtualMemory(ProcessHandle, InitialTeb->StackBase, &CpuInit, sizeof(CpuInit), NULL);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    RtlZeroMemory(ThreadContext, sizeof(*ThreadContext));
+    ThreadContext->ContextFlags = CONTEXT_FULL;
+#ifdef _M_AMD64
+    ThreadContext->Rip = CpuInit.Context.Eip;
+    ThreadContext->Rax = CpuInit.Context.Eax;
+    ThreadContext->Rsp = ((CpuAddress - 6 * sizeof(PVOID)) & ~15ULL) - 8;
+    ThreadContext->EFlags = EFLAGS_INTERRUPT_MASK;
+    ThreadContext->SegCs = KGDT64_R3_CODE | RPL_MASK;
+    ThreadContext->SegDs = KGDT64_R3_DATA | RPL_MASK;
+    ThreadContext->SegEs = KGDT64_R3_DATA | RPL_MASK;
+    ThreadContext->SegFs = KGDT64_R3_CMTEB | RPL_MASK;
+    ThreadContext->SegGs = KGDT64_R3_DATA | RPL_MASK;
+    ThreadContext->SegSs = KGDT64_R3_DATA | RPL_MASK;
+    ThreadContext->MxCsr = INITIAL_MXCSR;
+#elif defined(_M_ARM64)
+    ThreadContext->Pc = CpuInit.Context.Eip;
+    ThreadContext->Sp = CpuAddress & ~15ULL;
+    ThreadContext->Cpsr = 0;
+#endif
+    return STATUS_SUCCESS;
+}
+#endif
+
 NTSTATUS
 NTAPI
 NtCreateUserProcess(OUT PHANDLE ProcessHandle,
@@ -1883,7 +1939,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     HANDLE ExceptionPort = NULL;
     HANDLE TokenHandle = NULL;
     PVOID NativeProcessParameters = NULL;
-#ifdef _M_AMD64
+#ifdef _WIN64
     PVOID Wow64ProcessParameters = NULL;
 #endif
     ULONG PspProcessFlags = 0;
@@ -1901,12 +1957,12 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     CLIENT_ID ClientId;
     INITIAL_TEB InitialTeb;
     PINITIAL_TEB Wow64InitialTebPointer = NULL;
-#ifdef _M_AMD64
+#ifdef _WIN64
     INITIAL_TEB Wow64InitialTeb;
 #endif
     CONTEXT ThreadContext;
     PROCESS_BASIC_INFORMATION ProcessBasicInfo;
-#ifdef _M_AMD64
+#ifdef _WIN64
     PEB32 *Wow64Peb = NULL;
 #endif
     PAGED_CODE();
@@ -2267,7 +2323,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     {
         PVOID ActualBase = Process->SectionBaseAddress;
 
-#ifdef _M_AMD64
+#ifdef _WIN64
         if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386)
         {
             Status = PspInitializeWow64Process(Process, &ImageInformation);
@@ -2482,7 +2538,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         Status = STATUS_SUCCESS;
     }
 
-#ifdef _M_AMD64
+#ifdef _WIN64
     if (Wow64Peb && ProcessParameters)
     {
         Status = PspCreateWow64ProcessParameters(hProcess, ProcessParameters, Wow64Peb, &Wow64ProcessParameters);
@@ -2503,7 +2559,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
      */
 
     /* WoW64 uses a low 32-bit application stack and a separate emulator stack. */
-#ifdef _M_AMD64
+#ifdef _WIN64
     if (Wow64Peb)
     {
         WOW64_CPU_INIT CpuInit;
@@ -2599,7 +2655,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
 #endif
 
     /* Create the initial thread via PspCreateThread */
-#ifdef _M_AMD64
+#ifdef _WIN64
     Wow64InitialTebPointer = Wow64Peb ? &Wow64InitialTeb : NULL;
 #endif
     Status = PspCreateThread(&hThread, ThreadDesiredAccess, ThreadObjectAttributes, hProcess, NULL, &ClientId, &ThreadContext, &InitialTeb, Wow64InitialTebPointer, (ThreadFlags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) ? TRUE : FALSE, NULL, NULL);
@@ -2627,14 +2683,14 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         CreateInfo->SuccessState.FileHandle = hFile;
         CreateInfo->SuccessState.SectionHandle = hSection;
         CreateInfo->SuccessState.UserProcessParametersNative = (ULONGLONG)(ULONG_PTR)NativeProcessParameters;
-#ifdef _M_AMD64
+#ifdef _WIN64
         CreateInfo->SuccessState.UserProcessParametersWow64 = PtrToUlong(Wow64ProcessParameters);
 #else
         CreateInfo->SuccessState.UserProcessParametersWow64 = 0;
 #endif
         CreateInfo->SuccessState.CurrentParameterFlags = 0;
         CreateInfo->SuccessState.PebAddressNative = (ULONGLONG)(ULONG_PTR)ProcessBasicInfo.PebBaseAddress;
-#ifdef _M_AMD64
+#ifdef _WIN64
         CreateInfo->SuccessState.PebAddressWow64 = PtrToUlong(Wow64Peb);
 #else
         CreateInfo->SuccessState.PebAddressWow64 = 0;

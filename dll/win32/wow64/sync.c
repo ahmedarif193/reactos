@@ -115,6 +115,174 @@ static NTSTATUS lpc_message_64to32( CSR_PORT_MESSAGE32 *out, const CSR_PORT_MESS
 }
 
 
+#ifdef __REACTOS__
+
+#define WOW64_CSR_API(server, api) (((ULONG)(server) << 16) | (ULONG)(api))
+#define WOW64_BASESRV_INDEX 1
+#define WOW64_BASESRV_CREATE_PROCESS WOW64_CSR_API(WOW64_BASESRV_INDEX, 0)
+#define WOW64_BASESRV_CREATE_THREAD  WOW64_CSR_API(WOW64_BASESRV_INDEX, 1)
+
+typedef struct _WOW64_BASE_CREATE_PROCESS32
+{
+    ULONG ProcessHandle;
+    ULONG ThreadHandle;
+    ULONG UniqueProcess;
+    ULONG UniqueThread;
+    ULONG CreationFlags;
+    ULONG VdmBinaryType;
+    ULONG VdmTask;
+    ULONG hVDM;
+    ULONG SxsFlags;
+    ULONG SxsProcessParameterFlags;
+    ULONG SxsFileHandle;
+    ULONG SxsRest[21];
+    ULONG PebAddressNative;
+    ULONG PebAddressWow64;
+    USHORT ProcessorArchitecture;
+} WOW64_BASE_CREATE_PROCESS32;
+
+typedef struct _WOW64_BASE_CREATE_PROCESS64
+{
+    ULONGLONG ProcessHandle;
+    ULONGLONG ThreadHandle;
+    ULONGLONG UniqueProcess;
+    ULONGLONG UniqueThread;
+    ULONG CreationFlags;
+    ULONG VdmBinaryType;
+    ULONG VdmTask;
+    ULONG Padding0;
+    ULONGLONG hVDM;
+    ULONG SxsFlags;
+    ULONG SxsProcessParameterFlags;
+    ULONGLONG SxsFileHandle;
+    ULONGLONG SxsRest[18];
+    ULONGLONG PebAddressNative;
+    ULONG PebAddressWow64;
+    USHORT ProcessorArchitecture;
+    USHORT Padding1;
+} WOW64_BASE_CREATE_PROCESS64;
+
+typedef struct _WOW64_BASE_CREATE_THREAD32
+{
+    ULONG ThreadHandle;
+    ULONG UniqueProcess;
+    ULONG UniqueThread;
+} WOW64_BASE_CREATE_THREAD32;
+
+typedef struct _WOW64_BASE_CREATE_THREAD64
+{
+    ULONGLONG ThreadHandle;
+    ULONGLONG UniqueProcess;
+    ULONGLONG UniqueThread;
+} WOW64_BASE_CREATE_THREAD64;
+
+C_ASSERT(sizeof(WOW64_BASE_CREATE_PROCESS32) == 140);
+C_ASSERT(sizeof(WOW64_BASE_CREATE_PROCESS64) == 232);
+
+static NTSTATUS csr_api_message_32to64( CSR_API_MESSAGE64 *out, const CSR_API_MESSAGE32 *in, ULONG *data_size32 )
+{
+    ULONG payload = in->Header.TotalLength - FIELD_OFFSET(CSR_API_MESSAGE32, Data);
+    ULONG size = payload;
+
+    if (in->Header.TotalLength < FIELD_OFFSET(CSR_API_MESSAGE32, Data) ||
+        payload > sizeof(in->Data.ApiMessageData))
+    {
+        ERR( "CSRAPI: api %08lx total %u (bad length)\n", (ULONG)in->ApiNumber, in->Header.TotalLength );
+        return STATUS_INVALID_PARAMETER;
+    }
+    memset( out, 0, sizeof(*out) );
+    put_port_message_header64( &out->Header, &in->Header );
+    out->CsrCaptureData = in->CsrCaptureData;
+    out->ApiNumber = in->ApiNumber;
+    out->Status = in->Status;
+    out->Reserved = in->Reserved;
+
+    switch (in->ApiNumber)
+    {
+    case 0:
+    {
+        if (payload < sizeof(in->Data.CsrClientConnect)) return STATUS_INVALID_PARAMETER;
+        out->Data.CsrClientConnect.ServerId = in->Data.CsrClientConnect.ServerId;
+        out->Data.CsrClientConnect.ConnectionInfo = in->Data.CsrClientConnect.ConnectionInfo;
+        out->Data.CsrClientConnect.ConnectionInfoSize = in->Data.CsrClientConnect.ConnectionInfoSize;
+        size = sizeof(out->Data.CsrClientConnect);
+        break;
+    }
+    case WOW64_BASESRV_CREATE_PROCESS:
+    {
+        const WOW64_BASE_CREATE_PROCESS32 *cp32 = (const WOW64_BASE_CREATE_PROCESS32 *)in->Data.ApiMessageData;
+        WOW64_BASE_CREATE_PROCESS64 *cp64 = (WOW64_BASE_CREATE_PROCESS64 *)out->Data.ApiMessageData;
+        if (payload < sizeof(*cp32)) return STATUS_INVALID_PARAMETER;
+        cp64->ProcessHandle = (LONG)cp32->ProcessHandle;
+        cp64->ThreadHandle = (LONG)cp32->ThreadHandle;
+        cp64->UniqueProcess = cp32->UniqueProcess;
+        cp64->UniqueThread = cp32->UniqueThread;
+        cp64->CreationFlags = cp32->CreationFlags;
+        cp64->VdmBinaryType = cp32->VdmBinaryType;
+        cp64->VdmTask = cp32->VdmTask;
+        cp64->hVDM = (LONG)cp32->hVDM;
+        cp64->SxsFlags = cp32->SxsFlags;
+        cp64->SxsProcessParameterFlags = cp32->SxsProcessParameterFlags;
+        cp64->SxsFileHandle = (LONG)cp32->SxsFileHandle;
+        cp64->PebAddressNative = cp32->PebAddressNative;
+        cp64->PebAddressWow64 = cp32->PebAddressWow64;
+        cp64->ProcessorArchitecture = cp32->ProcessorArchitecture;
+        size = sizeof(*cp64);
+        break;
+    }
+    case WOW64_BASESRV_CREATE_THREAD:
+    {
+        const WOW64_BASE_CREATE_THREAD32 *ct32 = (const WOW64_BASE_CREATE_THREAD32 *)in->Data.ApiMessageData;
+        WOW64_BASE_CREATE_THREAD64 *ct64 = (WOW64_BASE_CREATE_THREAD64 *)out->Data.ApiMessageData;
+        if (payload < sizeof(*ct32)) return STATUS_INVALID_PARAMETER;
+        ct64->ThreadHandle = (LONG)ct32->ThreadHandle;
+        ct64->UniqueProcess = ct32->UniqueProcess;
+        ct64->UniqueThread = ct32->UniqueThread;
+        size = sizeof(*ct64);
+        break;
+    }
+    default:
+        memcpy( out->Data.ApiMessageData, in->Data.ApiMessageData, payload );
+        break;
+    }
+    *data_size32 = payload;
+    out->Header.DataLength = FIELD_OFFSET(CSR_API_MESSAGE64, Data) - sizeof(out->Header) + size;
+    out->Header.TotalLength = FIELD_OFFSET(CSR_API_MESSAGE64, Data) + size;
+    return STATUS_SUCCESS;
+}
+
+
+static NTSTATUS csr_api_message_64to32( CSR_API_MESSAGE32 *out, const CSR_API_MESSAGE64 *in, ULONG data_size32 )
+{
+    NTSTATUS status;
+
+    if ((status = put_port_message_header32( &out->Header, &in->Header ))) return status;
+    out->Header.DataLength = FIELD_OFFSET(CSR_API_MESSAGE32, Data) - sizeof(out->Header) + data_size32;
+    out->Header.TotalLength = FIELD_OFFSET(CSR_API_MESSAGE32, Data) + data_size32;
+    out->CsrCaptureData = in->CsrCaptureData;
+    out->ApiNumber = in->ApiNumber;
+    out->Status = in->Status;
+    out->Reserved = in->Reserved;
+
+    switch (in->ApiNumber)
+    {
+    case 0:
+        out->Data.CsrClientConnect.ServerId = in->Data.CsrClientConnect.ServerId;
+        out->Data.CsrClientConnect.ConnectionInfo = in->Data.CsrClientConnect.ConnectionInfo;
+        out->Data.CsrClientConnect.ConnectionInfoSize = in->Data.CsrClientConnect.ConnectionInfoSize;
+        break;
+    case WOW64_BASESRV_CREATE_PROCESS:
+    case WOW64_BASESRV_CREATE_THREAD:
+        break;
+    default:
+        memcpy( out->Data.ApiMessageData, in->Data.ApiMessageData, data_size32 );
+        break;
+    }
+    return STATUS_SUCCESS;
+}
+
+#else
+
 static NTSTATUS csr_client_connect_32to64( CSR_API_MESSAGE64 *out, const CSR_API_MESSAGE32 *in )
 {
     const USHORT data_length = FIELD_OFFSET(CSR_API_MESSAGE64, Data) - sizeof(out->Header) + sizeof(out->Data.CsrClientConnect);
@@ -153,6 +321,8 @@ static NTSTATUS csr_client_connect_64to32( CSR_API_MESSAGE32 *out, const CSR_API
     out->Data.CsrClientConnect.ConnectionInfoSize = in->Data.CsrClientConnect.ConnectionInfoSize;
     return STATUS_SUCCESS;
 }
+
+#endif
 
 
 static void put_object_type_info( OBJECT_TYPE_INFORMATION32 *info32, const OBJECT_TYPE_INFORMATION *info )
@@ -1076,7 +1246,11 @@ NTSTATUS WINAPI wow64_NtQueryInformationJobObject( UINT *args )
 
     default:
         if (class >= MaxJobObjectInfoClass) return STATUS_INVALID_PARAMETER;
+#ifdef __REACTOS__
+        FIXME( "wow64_NtQueryInformationJobObject: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_NOT_IMPLEMENTED;
     }
 }
@@ -1209,7 +1383,11 @@ NTSTATUS WINAPI wow64_NtQueryObject( UINT *args )
     }
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtQueryObject: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_NOT_IMPLEMENTED;
     }
 }
@@ -1471,11 +1649,19 @@ NTSTATUS WINAPI wow64_NtRequestWaitReplyPort( UINT *args )
     {
         CSR_API_MESSAGE32 *csr32 = (CSR_API_MESSAGE32 *)msg_in;
         CSR_API_MESSAGE64 *csr64 = (CSR_API_MESSAGE64 *)request_buffer.Data;
+#ifdef __REACTOS__
+        ULONG data_size32 = 0;
 
+        status = csr_api_message_32to64( csr64, csr32, &data_size32 );
+        if (!NT_SUCCESS(status)) return status;
+        status = NtRequestWaitReplyPort( handle, (LPC_MESSAGE *)csr64, (LPC_MESSAGE *)csr64 );
+        if (NT_SUCCESS(status)) status = csr_api_message_64to32( (CSR_API_MESSAGE32 *)msg_out, csr64, data_size32 );
+#else
         status = csr_client_connect_32to64( csr64, csr32 );
         if (!NT_SUCCESS(status)) return status;
         status = NtRequestWaitReplyPort( handle, (LPC_MESSAGE *)csr64, (LPC_MESSAGE *)csr64 );
         if (NT_SUCCESS(status)) status = csr_client_connect_64to32( (CSR_API_MESSAGE32 *)msg_out, csr64 );
+#endif
         return status;
     }
 
@@ -1692,7 +1878,11 @@ NTSTATUS WINAPI wow64_NtSetInformationJobObject( UINT *args )
 
     default:
         if (class >= MaxJobObjectInfoClass) return STATUS_INVALID_PARAMETER;
+#ifdef __REACTOS__
+        FIXME( "wow64_NtSetInformationJobObject: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_NOT_IMPLEMENTED;
     }
 }
@@ -1714,7 +1904,11 @@ NTSTATUS WINAPI wow64_NtSetInformationObject( UINT *args )
         return NtSetInformationObject( handle, class, ptr, len );
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtSetInformationObject: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_NOT_IMPLEMENTED;
     }
 }

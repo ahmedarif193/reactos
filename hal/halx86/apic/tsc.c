@@ -19,6 +19,7 @@ LARGE_INTEGER HalpCpuClockFrequency = {{INITIAL_STALL_COUNT * 1000000}};
 UCHAR TscCalibrationPhase;
 ULONG64 TscCalibrationArray[NUM_SAMPLES];
 
+#define HALP_PERFORMANCE_FREQUENCY 10000000ULL
 #define RTC_MODE 6 /* Mode 6 is 1024 Hz */
 #define SAMPLE_FREQUENCY ((32768 << 1) >> RTC_MODE)
 
@@ -132,6 +133,7 @@ KeQueryPerformanceCounter(
     OUT PLARGE_INTEGER PerformanceFrequency OPTIONAL)
 {
     LARGE_INTEGER Result;
+    ULONG64 Tsc, Seconds, Remainder, Frequency;
 
     /* Make sure it's calibrated */
     ASSERT(HalpCpuClockFrequency.QuadPart != 0);
@@ -140,11 +142,15 @@ KeQueryPerformanceCounter(
     if (PerformanceFrequency)
     {
         /* Return tsc frequency */
-        *PerformanceFrequency = HalpCpuClockFrequency;
+        PerformanceFrequency->QuadPart = HALP_PERFORMANCE_FREQUENCY;
     }
 
     /* Return the current value */
-    Result.QuadPart = __rdtsc();
+    Frequency = HalpCpuClockFrequency.QuadPart;
+    Tsc = __rdtsc();
+    Seconds = Tsc / Frequency;
+    Remainder = Tsc % Frequency;
+    Result.QuadPart = Seconds * HALP_PERFORMANCE_FREQUENCY + (Remainder * HALP_PERFORMANCE_FREQUENCY) / Frequency;
     return Result;
 }
 

@@ -643,6 +643,7 @@ IntEngStretchBlt(SURFOBJ *psoDest,
     INT Case0100, Case0101, Case0110, Case0111;
     INT Case1000, Case1001, Case1010, Case1011;
     INT Case1100, Case1101, Case1110;
+    RECTL rclBounds;
 
     DPRINT("Source cx/cy (%d/%d) and Destination cx/cy (%d/%d).\n",
             psoSource->sizlBitmap.cx, psoSource->sizlBitmap.cy, psoDest->sizlBitmap.cx, psoDest->sizlBitmap.cy);
@@ -908,10 +909,19 @@ IntEngStretchBlt(SURFOBJ *psoDest,
         InputRect.left, InputRect.top, InputRect.right, InputRect.bottom,
         InputClippedRect.left, InputClippedRect.top, InputClippedRect.right, InputClippedRect.bottom);
 
-    if (ClipRegion->iDComplexity != DC_TRIVIAL)
+    rclBounds.left = 0;
+    rclBounds.top = 0;
+    rclBounds.right = psoDest->sizlBitmap.cx;
+    rclBounds.bottom = psoDest->sizlBitmap.cy;
+    if (ClipRegion->iDComplexity != DC_TRIVIAL &&
+        !RECTL_bIntersectRect(&rclBounds, &rclBounds, &ClipRegion->rclBounds))
     {
-        if (!RECTL_bIntersectRect(&OutputRect, &InputClippedRect,
-                               &ClipRegion->rclBounds))
+        DPRINT("Returning TRUE.\n");
+        return TRUE;
+    }
+
+    {
+        if (!RECTL_bIntersectRect(&OutputRect, &InputClippedRect, &rclBounds))
         {
             DPRINT("Returning TRUE.\n");
             return TRUE;
@@ -948,11 +958,6 @@ IntEngStretchBlt(SURFOBJ *psoDest,
             InputRect.top += (InputHeight * (OutputRect.top - InputClippedRect.top)) / InputClHeight;
             InputRect.bottom -= (InputHeight * (InputClippedRect.bottom - OutputRect.bottom)) / InputClHeight;
         }
-    }
-    else
-    {
-        DPRINT("Complexity = DC_TRIVIAL.\n");
-        OutputRect = InputClippedRect;
     }
 
 

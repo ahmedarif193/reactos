@@ -433,7 +433,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     include(sdk/cmake/rosconfig/profiles/apply.cmake)
     rosconfig_validate_profile_packages()
 
-    if(ARCH STREQUAL "amd64" AND ENABLE_WOW64)
+    if(ENABLE_WOW64)
         include(sdk/cmake/wow64.cmake)
     endif()
 

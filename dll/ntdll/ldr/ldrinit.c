@@ -102,7 +102,11 @@ extern BOOLEAN RtlpUse16ByteSLists;
 
 #ifdef _M_AMD64
 extern ULONG NTAPI RtlGetCurrentDirectory_U_RtlpMsysDecoy(ULONG MaximumLength, PWSTR Buffer);
+#endif
+
+#ifdef _WIN64
 extern PVOID LdrpWow64PrepareForException;
+static VOID (WINAPI *LdrpWow64LdrpInitialize)(PCONTEXT);
 #endif
 
 #ifdef _WIN64
@@ -113,7 +117,7 @@ extern PVOID LdrpWow64PrepareForException;
 
 /* FUNCTIONS *****************************************************************/
 
-#ifdef _M_AMD64
+#ifdef _WIN64
 
 static NTSTATUS
 LdrpGetWow64Export(
@@ -238,11 +242,11 @@ LdrpInitializeWow64(
     if (!Wow64LdrpInitialize || !Wow64PrepareForException) return STATUS_ENTRYPOINT_NOT_FOUND;
 
     LdrpWow64PrepareForException = Wow64PrepareForException;
-    Wow64LdrpInitialize(Context);
+    LdrpWow64LdrpInitialize = Wow64LdrpInitialize;
     return STATUS_SUCCESS;
 }
 
-#endif /* _M_AMD64 */
+#endif /* _WIN64 */
 
 /*
  * @implemented
@@ -2388,7 +2392,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     /* Get the NT Headers */
     NtHeader = RtlImageNtHeader(Peb->ImageBaseAddress);
 
-#ifdef _M_AMD64
+#ifdef _WIN64
     IsWow64 = Teb->WowTebOffset && NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_I386;
 #endif
 #if defined(_M_ARM64)
@@ -2921,7 +2925,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
         LdrpInitializeDotLocalSupport(ProcessParameters);
     }
 
-#ifdef _M_AMD64
+#ifdef _WIN64
     if (IsWow64)
     {
         LdrpLdrDatabaseIsSetup = TRUE;
@@ -3324,6 +3328,9 @@ LdrpInit(PCONTEXT Context,
         {
             /* Set the process as Initialized */
             _InterlockedIncrement(&LdrpProcessInitialized);
+#ifdef _WIN64
+            if (LdrpWow64LdrpInitialize) LdrpWow64LdrpInitialize(Context);
+#endif
 
 #if defined(_M_ARM64)
             /*
@@ -3358,6 +3365,9 @@ LdrpInit(PCONTEXT Context,
         {
             /* This is a new thread initializing */
             LdrpInitializeThread(Context);
+#ifdef _WIN64
+            if (LdrpWow64LdrpInitialize) LdrpWow64LdrpInitialize(Context);
+#endif
         }
     }
 
