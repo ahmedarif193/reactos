@@ -507,8 +507,7 @@ BOOL UserSetCursorPos( INT x, INT y, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Ho
     if (y >= rcClip.bottom) y = rcClip.bottom - 1;
     if (y < rcClip.top)     y = rcClip.top;
 
-    /* Nothing to do if position did not actually change */
-    if (x == gpsi->ptCursor.x && y == gpsi->ptCursor.y)
+    if (!Hook && x == gpsi->ptCursor.x && y == gpsi->ptCursor.y)
         return TRUE;
 
     pt.x = x;
