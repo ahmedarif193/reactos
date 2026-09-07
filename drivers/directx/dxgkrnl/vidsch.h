@@ -368,12 +368,17 @@ typedef struct _VIDSCH_ENGINE
     PVOID                       LastFaultContext;
     LONG64                      LastFaultBaseSequence[5];
     ULONGLONG                   LastFaultBaseAddress[5];
+    LONG64                      LastFaultSubmissionCount;
+    LONG64                      LastFaultBaseCommandCount;
     D3DGPU_VIRTUAL_ADDRESS      LastDispatchDmaGpuVa;
     ULONG                       LastDispatchDmaSize;
     ULONG                       LastDispatchFence;
     struct _DXGKRNL_PROCESS    *LastDispatchProcess;
     WORK_QUEUE_ITEM             FaultDumpWorkItem;
     volatile LONG               FaultDumpQueued;
+    /* Retains the command mapping, context and device for the deferred dump.
+     * QueueLock protects ownership and coalesced reset flags. */
+    PVIDSCH_DMA_PACKET           FaultDumpPacket;
 
 } VIDSCH_ENGINE, *PVIDSCH_ENGINE;
 

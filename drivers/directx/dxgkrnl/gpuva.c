@@ -1680,7 +1680,7 @@ GpuVaExecutePagingBatchWithBusyRetry(
                          Adapter,
                          FenceId,
                          GPUVA_PAGING_SYNC_TIMEOUT_MS);
-            return Status == STATUS_TIMEOUT ? STATUS_IO_TIMEOUT : Status;
+            return Status;
         }
         if (BusyRetries >= 999)
             return STATUS_DEVICE_BUSY;
@@ -4460,6 +4460,8 @@ DxgkGpuVaSetRootPageTable(
             return STATUS_DEVICE_REMOVED;
         }
         DXGK_CB_FULL(Adapter, DxgkDdiSetRootPageTable)(Adapter->MiniportDeviceContext, &SetArgs);
+        DXGKRNL_INFO("DxgkGpuVaSetRootPageTable: published root seg=%u off=0x%I64x entries=%u for ctx %p (kmd %p) seq=#%I64d\n",
+                     SetArgs.Address.SegmentId, (ULONGLONG)SetArgs.Address.SegmentOffset, SetArgs.NumEntries, Context, SetArgs.hContext, DxgkDiagSequence());
         Context->PublishedRootPageTableAddress = SetArgs.Address;
         Context->PublishedRootPageTableEntries = SetArgs.NumEntries;
         Context->PublishedRootPageTableEpoch =

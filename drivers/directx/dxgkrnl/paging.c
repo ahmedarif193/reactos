@@ -206,6 +206,7 @@ DxgkpPagingFillBuildArgs(
             BuildArgs->MapApertureSegment.NumberOfPages = Op->NumberOfPages;
             BuildArgs->MapApertureSegment.pMdl = Op->SourceMdl;
             BuildArgs->MapApertureSegment.MdlOffset = Op->MdlOffset;
+            DxgkVidMmNoteApertureOp(TRUE, Op->DestinationSegmentId, Op->OffsetInPages, Op->NumberOfPages, Op->hMiniportAllocation, NULL);
             break;
 
         case DxgkPagingOpUnmapAperture:
@@ -216,6 +217,7 @@ DxgkpPagingFillBuildArgs(
             BuildArgs->UnmapApertureSegment.OffsetInPages = Op->OffsetInPages;
             BuildArgs->UnmapApertureSegment.NumberOfPages = Op->NumberOfPages;
             BuildArgs->UnmapApertureSegment.DummyPage = Op->DummyPage;
+            DxgkVidMmNoteApertureOp(FALSE, Op->DestinationSegmentId, Op->OffsetInPages, Op->NumberOfPages, Op->hMiniportAllocation, NULL);
             break;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
@@ -818,6 +820,66 @@ Cleanup:
  *
  * IRQL: PASSIVE_LEVEL
  */
+/* The paging DMA buffers the miniport builds, for the lost-context-image
+ * fault (T2.6): every fault of 2026-09-06 followed a paging packet on the
+ * system context a few fences earlier.  What those packets contain decides
+ * whether they can disturb the render context they interleave with. */
+#define DXGKP_PAGING_RING 16
+#define DXGKP_PAGING_RING_WORDS 32
+typedef struct _DXGKP_PAGING_RECORD
+{
+    LONG64  Sequence;
+    ULONG   Type;
+    ULONG   Node;
+    ULONG   Bytes;
+    ULONG   Words[DXGKP_PAGING_RING_WORDS];
+} DXGKP_PAGING_RECORD;
+static DXGKP_PAGING_RECORD DxgkpPagingRing[DXGKP_PAGING_RING];
+static volatile LONG DxgkpPagingRingNext;
+
+VOID
+DxgkPagingNoteBuffer(
+    _In_ ULONG Type,
+    _In_ ULONG Node,
+    _In_ ULONG Bytes,
+    _In_reads_bytes_(Bytes) const VOID *Buffer)
+{
+    ULONG Slot = (ULONG)(InterlockedIncrement(&DxgkpPagingRingNext) - 1) % DXGKP_PAGING_RING;
+    DXGKP_PAGING_RECORD *Record = &DxgkpPagingRing[Slot];
+    ULONG Copy = min(Bytes, sizeof(Record->Words));
+
+    Record->Sequence = DxgkDiagSequence();
+    Record->Type = Type;
+    Record->Node = Node;
+    Record->Bytes = Bytes;
+    RtlZeroMemory(Record->Words, sizeof(Record->Words));
+    if (Buffer != NULL && Copy != 0)
+        RtlCopyMemory(Record->Words, Buffer, Copy);
+}
+
+VOID
+DxgkPagingDumpRecentOps(VOID)
+{
+    ULONG Next = (ULONG)DxgkpPagingRingNext;
+    ULONG Index, Row;
+
+    DXGKRNL_ERR("recent paging buffers (oldest first; #=global seq, type=DXGKRNL_PAGING_OP_TYPE):\n");
+    for (Index = 0; Index < DXGKP_PAGING_RING; Index++)
+    {
+        DXGKP_PAGING_RECORD Record = DxgkpPagingRing[(Next + Index) % DXGKP_PAGING_RING];
+
+        if (Record.Sequence == 0)
+            continue;
+        DXGKRNL_ERR("  #%I64d type=%lu node=%lu bytes=%lu\n", Record.Sequence, Record.Type, Record.Node, Record.Bytes);
+        for (Row = 0; Row < DXGKP_PAGING_RING_WORDS / 8 && Row * 32 < Record.Bytes; Row++)
+        {
+            DXGKRNL_ERR("  PAGING[%04lx] %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n", Row * 32,
+                        Record.Words[Row * 8], Record.Words[Row * 8 + 1], Record.Words[Row * 8 + 2], Record.Words[Row * 8 + 3],
+                        Record.Words[Row * 8 + 4], Record.Words[Row * 8 + 5], Record.Words[Row * 8 + 6], Record.Words[Row * 8 + 7]);
+        }
+    }
+}
+
 NTSTATUS
 DxgkPagingExecute(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -932,6 +994,7 @@ DxgkPagingExecute(
             goto Cleanup;
         }
         BytesUsed = (ULONG)((PUCHAR)BuildArgs.pDmaBuffer - (PUCHAR)DmaBuffer->VirtualAddress);
+        DxgkPagingNoteBuffer((ULONG)Op->Type, DxgkpPagingNode(Adapter, Op->NodeOrdinal), BytesUsed, DmaBuffer->VirtualAddress);
         MultipassOffset = BuildArgs.MultipassOffset;
         Complete = NT_SUCCESS(BuildStatus);
 
@@ -1033,7 +1096,7 @@ DxgkPagingWaitForFence(
     _In_ ULONG TimeoutMs)
 {
     LARGE_INTEGER Interval;
-    ULONG Waited;
+    ULONGLONG Start100ns;
 
     PAGED_CODE();
     if (PagingFenceId == 0)
@@ -1041,17 +1104,21 @@ DxgkPagingWaitForFence(
     if (Adapter == NULL)
         return STATUS_INVALID_PARAMETER;
 
+    Start100ns = KeQueryInterruptTime();
     Interval.QuadPart = -1000LL;
-    for (Waited = 0; Waited <= TimeoutMs * 10; Waited++)
+    for (;;)
     {
         DxgkRetireCompletedDmaBuffers(Adapter);
         if (DxgkPagingFenceCompleted(Adapter, PagingFenceId))
             return STATUS_SUCCESS;
         if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
             return STATUS_DEVICE_REMOVED;
+        /* Delays are rounded to the timer resolution. Count elapsed time,
+         * not requested 100-us sleeps, and never report a timeout as success. */
+        if (KeQueryInterruptTime() - Start100ns >= (ULONGLONG)TimeoutMs * 10000)
+            return STATUS_IO_TIMEOUT;
         KeDelayExecutionThread(KernelMode, FALSE, &Interval);
     }
-    return STATUS_TIMEOUT;
 }
 
 /*
@@ -1078,9 +1145,7 @@ DxgkPagingExecuteSynchronous(
     Status = DxgkPagingWaitForFence(Adapter,
                                     FenceId,
                                     DXGKP_PAGING_SYNC_TIMEOUT_MS);
-    /* STATUS_TIMEOUT has success severity. A synchronous placement caller
-     * must never publish memory whose paging packet has not retired. */
-    return Status == STATUS_TIMEOUT ? STATUS_IO_TIMEOUT : Status;
+    return Status;
 }
 
 /* ========================================================================

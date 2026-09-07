@@ -504,7 +504,22 @@ DxgkpShouldRegisterDisplayBridge(
     if (TakeOverFromFallback)
     {
         DXGK_DISPLAY_INFORMATION DisplayInformation;
+        BOOLEAN Connected;
         NTSTATUS OwnershipStatus;
+
+        /* A successful StartDevice can describe a GPU with no display
+         * attached. Keep the working fallback until the claimant has an
+         * output to drive; stopping it here otherwise leaves win32k with
+         * only a zero-path VidPN and causes VIDEO_DRIVER_INIT_FAILURE. */
+        OwnershipStatus = DxgkPnpQueryInitialDisplayConnection(Claimant,
+                                                               &Connected);
+        if (!NT_SUCCESS(OwnershipStatus) || !Connected)
+        {
+            DXGKRNL_INFO("DISPLAY_BRIDGE: adapter %p has no confirmed output "
+                         "(query=0x%08lX); BasicDisplay retains the desktop\n",
+                         Claimant, OwnershipStatus);
+            return FALSE;
+        }
 
         RtlZeroMemory(&DisplayInformation, sizeof(DisplayInformation));
         OwnershipStatus = DxgkpAcquirePostDisplayOwnership((HANDLE)Claimant,
@@ -976,6 +991,9 @@ DxgkpTdrWorker(
      * recent GPU VA operations (the fault path prints the same). */
     VidSchDumpEngineDiagnostics(Adapter);
     DxgkGpuVaDumpRecentEvents();
+    DxgkVidMmDumpApertureOps();
+    DxgkPagingDumpRecentOps();
+    DxgkVidMmDumpContextImages(NULL, NULL, "tdr");
 
     DxgkPresentBeginReset(Adapter);
     PresentResetStarted = TRUE;
@@ -1172,6 +1190,7 @@ DxgkpTdrDpcRoutine(
     if (Adapter == NULL || InterlockedCompareExchange(&Adapter->TdrTimerActive, 0, 0) == 0)
         return;
     Now100ns = KeQueryInterruptTime();
+    DxgkKmtReportStuckIoctls(Now100ns);
 
     KeAcquireSpinLockAtDpcLevel(&Adapter->SubmitDmaLock);
     if (!IsListEmpty(&Adapter->SubmitDmaListHead))
@@ -4798,13 +4817,17 @@ DxgkCbCreateContextAllocation(
                  ContextAllocation->Flags,
                  ContextAllocation->ContextAllocationFlags.MapGpuVirtualAddress != 0,
                  &ContextAllocation->hAllocation);
+    if (NT_SUCCESS(Status) && ContextAllocation->hAllocation != NULL)
+    {
+        DxgkVidMmTagContextAllocation(ContextAllocation->hAllocation, ContextAllocation->hContext);
+        DxgkVidMmDumpContextImages(NULL, ContextAllocation->hAllocation, "create");
+    }
     {
         LONG Count = InterlockedIncrement(&Adapter->ContextAllocationCreateCount);
 
-        if (Count <= 24 || !NT_SUCCESS(Status))
         {
-            DXGKRNL_INFO("DxgkCbCreateContextAllocation #%ld: size=%Iu flags=0x%x (shared=%u mapva=%u) allocflags=0x%08x (cpuvisible=%u protected=%u cached=%u) segset=0x%x evict=0x%x pref=0x%x align=%u ctx=%p dev=%p -> status=0x%08lx handle=%p va=0x%I64x\n",
-                        Count, ContextAllocation->Size, ContextAllocation->ContextAllocationFlags.Value,
+            DXGKRNL_INFO("DxgkCbCreateContextAllocation #%ld seq=#%I64d: size=%Iu flags=0x%x (shared=%u mapva=%u) allocflags=0x%08x (cpuvisible=%u protected=%u cached=%u) segset=0x%x evict=0x%x pref=0x%x align=%u ctx=%p dev=%p -> status=0x%08lx handle=%p va=0x%I64x\n",
+                        Count, DxgkDiagSequence(), ContextAllocation->Size, ContextAllocation->ContextAllocationFlags.Value,
                         ContextAllocation->ContextAllocationFlags.SharedAcrossContexts,
                         ContextAllocation->ContextAllocationFlags.MapGpuVirtualAddress,
                         ContextAllocation->Flags.Value, ContextAllocation->Flags.CpuVisible, ContextAllocation->Flags.Protected, ContextAllocation->Flags.Cached,
@@ -5735,10 +5758,9 @@ DxgkCbMapContextAllocation(
                                            Args->DriverProtection,
                                            &Address);
     Count = InterlockedIncrement(&Adapter->ContextAllocationMapCount);
-    if (Count <= 24 || !NT_SUCCESS(Status))
     {
-        DXGKRNL_INFO("DxgkCbMapContextAllocation #%ld: alloc=%p base=0x%I64x min=0x%I64x max=0x%I64x offset=%I64u pages=%I64u prot=0x%I64x -> status=0x%08lx va=0x%I64x\n",
-                    Count, Args->hAllocation, Args->BaseAddress, Args->MinimumAddress, Args->MaximumAddress,
+        DXGKRNL_INFO("DxgkCbMapContextAllocation #%ld seq=#%I64d: alloc=%p base=0x%I64x min=0x%I64x max=0x%I64x offset=%I64u pages=%I64u prot=0x%I64x -> status=0x%08lx va=0x%I64x\n",
+                    Count, DxgkDiagSequence(), Args->hAllocation, Args->BaseAddress, Args->MinimumAddress, Args->MaximumAddress,
                     (ULONGLONG)Args->OffsetInPages, (ULONGLONG)Args->SizeInPages, Args->Protection.Value, Status, Address);
     }
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
@@ -5770,8 +5792,7 @@ DxgkCbUpdateContextAllocation(
         return STATUS_INVALID_HANDLE;
     Status = DxgkVidMmUpdateContextAllocation(Adapter, Args->hAllocation, Args->pPrivateDriverData, Args->PrivateDriverDataSize);
     Count = InterlockedIncrement(&Adapter->ContextAllocationUpdateCount);
-    if (Count <= 8 || !NT_SUCCESS(Status))
-        DXGKRNL_INFO("DxgkCbUpdateContextAllocation #%ld: alloc=%p private=%u bytes -> 0x%08lx\n", Count, Args->hAllocation, Args->PrivateDriverDataSize, Status);
+    DXGKRNL_INFO("DxgkCbUpdateContextAllocation #%ld seq=#%I64d: alloc=%p private=%u bytes -> 0x%08lx\n", Count, DxgkDiagSequence(), Args->hAllocation, Args->PrivateDriverDataSize, Status);
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return Status;
 }
@@ -5922,6 +5943,8 @@ DxgkCbIndicateConnectorChangeNotSupported(
     Adapter = DxgkpHandleToAdapter(DeviceHandle);
     if (Adapter == NULL)
         return STATUS_INVALID_HANDLE;
+    DXGKRNL_WARN("CONNECTOR_CHANGE: adapter %p requested a connection-queue "
+                 "drain; no provider is available\n", Adapter);
     ExReleaseRundownProtection(&Adapter->ReverseCallbackRundownRef);
     return STATUS_NOT_SUPPORTED;
 }
@@ -9960,6 +9983,11 @@ DxgkCbIndicateChildStatus(
                  ChildStatus->ChildUid,
                  ChildStatus->HotPlug.Connected,
                  &Changed);
+    DXGKRNL_INFO("CHILD_INDICATION: adapter=%p uid=%lu connected=%u "
+                 "state=%u changed=%u status=0x%08lX\n",
+                 Adapter, ChildStatus->ChildUid,
+                 (UINT)ChildStatus->HotPlug.Connected,
+                 (UINT)Adapter->State, (UINT)Changed, Status);
     if (NT_SUCCESS(Status) && Changed)
     {
         Status = DxgkVidPnQueueHotPlugRebuild(Adapter);
@@ -12944,6 +12972,24 @@ DxgkAdapterStart(
                     CapsStatus, Adapter->PhysicalAdapterCaps.NumExecutionNodes, Adapter->PhysicalAdapterCaps.PagingNodeIndex,
                     Adapter->PhysicalAdapterCaps.DxgkPhysicalAdapterHandle, Adapter->PhysicalAdapterCaps.Flags.Value);
     }
+    /* Name every node's engine once: which node is the copy engine decides
+     * where paging belongs when the physical adapter caps are refused. */
+    if (DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata) != NULL && DxgkAcquireKmdCall(Adapter))
+    {
+        ULONG NodeOrdinal;
+
+        for (NodeOrdinal = 0; NodeOrdinal < Adapter->NodeCount && NodeOrdinal < 16; NodeOrdinal++)
+        {
+            DXGK_NODEMETADATA Metadata;
+            NTSTATUS MetaStatus;
+
+            RtlZeroMemory(&Metadata, sizeof(Metadata));
+            MetaStatus = DXGK_CB_FULL(Adapter, DxgkDdiGetNodeMetadata)(Adapter->MiniportDeviceContext, NodeOrdinal, &Metadata);
+            DXGKRNL_INFO("DxgkAdapterStart: node %lu metadata status=0x%08lx engine-type=%u gpummu=%u iommu=%u\n",
+                         NodeOrdinal, MetaStatus, (UINT)Metadata.EngineType, (UINT)Metadata.GpuMmuSupported, (UINT)Metadata.IoMmuSupported);
+        }
+        DxgkReleaseKmdCall(Adapter);
+    }
     DxgkVidMmDumpSegments(Adapter);
     {
         BOOLEAN ProviderStarted;
@@ -13254,7 +13300,7 @@ DxgkpWaitForTrackedDmaIdle(
     _In_ ULONG TimeoutMs)
 {
     LARGE_INTEGER Delay;
-    ULONG ElapsedMs = 0;
+    ULONGLONG Start100ns = KeQueryInterruptTime();
 
     Delay.QuadPart = -(LONGLONG)(10 * 10 * 1000);
     for (;;)
@@ -13268,10 +13314,9 @@ DxgkpWaitForTrackedDmaIdle(
         KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
         if (!Outstanding)
             return STATUS_SUCCESS;
-        if (ElapsedMs >= TimeoutMs)
-            return STATUS_TIMEOUT;
+        if (KeQueryInterruptTime() - Start100ns >= (ULONGLONG)TimeoutMs * 10000)
+            return STATUS_IO_TIMEOUT;
         KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-        ElapsedMs += 10;
     }
 }
 

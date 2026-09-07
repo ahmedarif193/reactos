@@ -2165,6 +2165,7 @@ DxgkpSelectCddPresentEngine(
     if (!NT_SUCCESS(Status))
         return Status;
     *OutEngineAffinity = 1;
+
     return STATUS_SUCCESS;
 }
 
@@ -2790,6 +2791,12 @@ DxgkpExecuteFullPresent(
             DmaBufferNext - DmaBufferStart > DmaBuffer->Capacity)
         {
             Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+        }
+        else if (DmaBufferNext != DmaBufferStart &&
+                 (DxgkPagingNoteBuffer(100 + (VirtualPresent ? 1 : 0), PresentNode, (ULONG)(DmaBufferNext - DmaBufferStart), DmaBuffer->VirtualAddress),
+                  DxgkPagingNoteBuffer(102, PresentNode, DmaBufferPrivateDataSize, DmaBufferPrivateData), FALSE))
+        {
+            /* not reached: the note is recorded for the fault-time dump */
         }
         else
         {

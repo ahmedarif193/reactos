@@ -1181,6 +1181,89 @@ DxgkpPopulateDefaultModes(
     }
 }
 
+/*
+ * Make the pivot statement true before it is made.
+ *
+ * D3DKMDT_EPT_VIDPNSOURCE tells the miniport that the source mode set named
+ * by the pivot is *fixed* -- that a mode is pinned in it -- and asks it to
+ * enumerate everything cofunctional with that mode.  A driver that honours
+ * the contract therefore leaves the pivot's source mode set exactly as it
+ * found it.
+ *
+ * Naming the pivot without pinning anything turns that into a trap: the
+ * driver skips the one mode set it was going to replace with a mode it can
+ * actually scan out, and dxgkrnl is left pinning a mode out of its own
+ * g_DefaultModes table -- a table of VESA sizes that cannot describe a panel
+ * running an off-list raster.  On a Raspberry Pi 3 whose GOP comes up at
+ * 720x480 the closest entry is 800x600; the miniport published 720x480 as its
+ * only target timing, was handed an 800x600 source to go with it, and refused
+ * the VidPN.  Nothing was ever committed, so the adapter kept a zero-sized
+ * mode and win32k bugchecked with VIDEO_DRIVER_INIT_FAILURE.
+ *
+ * An already-pinned mode is the answer when there is one: DxgkpAddEdidPreferredModes
+ * pins the monitor's own detailed timing, and that outranks anything inferred
+ * here.  Otherwise the POST size is the authoritative one -- it is the raster
+ * the display is lit at right now, and the same size the miniport read back
+ * from DxgkCbAcquirePostDisplayOwnership -- so add it to the set if the
+ * synthetic defaults do not already carry it, and pin it.
+ *
+ * Returns FALSE when no source mode could be pinned, which means the caller
+ * has no business claiming a source pivot.
+ */
+BOOLEAN
+DxgkVidPnEnsurePinnedSourceMode(
+    _In_ PDXGKP_VIDPN VidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId,
+    _In_ UINT FallbackWidth,
+    _In_ UINT FallbackHeight)
+{
+    PDXGKP_VIDPN_SOURCE_MODESET SrcSet;
+    D3DKMDT_VIDPN_SOURCE_MODE Mode;
+    SIZE_T Index;
+
+    if (VidPn == NULL || VidPn->Signature != DXGKP_VIDPN_SIGNATURE)
+        return FALSE;
+    if (SourceId >= VidPn->NumSources || SourceId >= DXGKP_MAX_SOURCES)
+        return FALSE;
+
+    SrcSet = VidPn->SourceModeSets[SourceId];
+    if (SrcSet == NULL)
+        return FALSE;
+
+    /* A pin that resolves to a mode the set still holds is already the truth. */
+    if (SrcSet->PinnedModeId != (UINT)-1)
+    {
+        for (Index = 0; Index < SrcSet->NumModes; Index++)
+        {
+            if (SrcSet->Modes[Index].Id == SrcSet->PinnedModeId)
+                return TRUE;
+        }
+        SrcSet->PinnedModeId = (UINT)-1;
+    }
+
+    if (FallbackWidth == 0 || FallbackHeight == 0)
+        return FALSE;
+
+    DxgkpPopulateDefaultSourceMode(&Mode, SrcSet->NextModeId,
+                                   FallbackWidth, FallbackHeight);
+
+    for (Index = 0; Index < SrcSet->NumModes; Index++)
+    {
+        if (!DxgkpAreEquivalentSourceModes(&SrcSet->Modes[Index], &Mode))
+            continue;
+        SrcSet->PinnedModeId = SrcSet->Modes[Index].Id;
+        return TRUE;
+    }
+
+    if (SrcSet->NumModes >= DXGKP_MAX_MODES)
+        return FALSE;
+
+    Mode.Id = SrcSet->NextModeId++;
+    SrcSet->Modes[SrcSet->NumModes++] = Mode;
+    SrcSet->PinnedModeId = Mode.Id;
+    return TRUE;
+}
+
 /* ========================================================================
  * VidPN object lifecycle
  * ====================================================================== */
@@ -2481,10 +2564,8 @@ DxgkpVidPnRebuildForHotPlugGeneration(
     if (!DxgkpHotPlugSnapshotCurrentLocked(Adapter, &Snapshot, ExpectedGeneration, &MatchingChild))
     {
         KeReleaseSpinLock(&Adapter->ChildListLock, ChildOldIrql);
-        /* STATUS_RETRY is a success code, so the !NT_SUCCESS test this used to
-         * carry never fired: the candidate was committed to the miniport from
-         * a snapshot that had just been proved stale, and only the second
-         * re-check below undid it with a full rollback mode set. */
+        /* Retire the stale snapshot before making a mode-set DDI call. The
+         * worker retries STATUS_RETRY against the current generation. */
         Status = STATUS_RETRY;
         goto Cleanup;
     }

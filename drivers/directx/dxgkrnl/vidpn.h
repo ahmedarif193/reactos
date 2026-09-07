@@ -272,6 +272,26 @@ DxgkVidPnTargetIndexFromId(
     _In_ D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId);
 
 /*
+ * DxgkVidPnEnsurePinnedSourceMode
+ *
+ * Guarantees that the source mode set for SourceId has a mode pinned, so a
+ * caller may honestly name that source as the D3DKMDT_EPT_VIDPNSOURCE pivot
+ * of DxgkDdiEnumVidPnCofuncModality.
+ *
+ * An existing pin is kept.  Otherwise FallbackWidth x FallbackHeight -- the
+ * adapter's POST size -- is added to the set if absent and pinned.
+ *
+ * Returns FALSE when nothing could be pinned; the caller must then not claim
+ * a source pivot.
+ */
+BOOLEAN
+DxgkVidPnEnsurePinnedSourceMode(
+    _In_ PDXGKP_VIDPN VidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId,
+    _In_ UINT FallbackWidth,
+    _In_ UINT FallbackHeight);
+
+/*
  * DxgkVidPnClone
  *
  * Creates a deep copy of an existing VidPN.  The clone is independent

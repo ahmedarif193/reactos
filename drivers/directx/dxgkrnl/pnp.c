@@ -661,7 +661,7 @@ DxgkpDeleteChildPdo(
 static NTSTATUS DxgkpWaitForQueryChildDmaIdle(_In_ PDXGKRNL_ADAPTER Adapter)
 {
     LARGE_INTEGER Delay;
-    ULONG ElapsedMs = 0;
+    ULONGLONG Start100ns = KeQueryInterruptTime();
 
     Delay.QuadPart = -(LONGLONG)(10 * 10 * 1000);
     for (;;)
@@ -675,19 +675,19 @@ static NTSTATUS DxgkpWaitForQueryChildDmaIdle(_In_ PDXGKRNL_ADAPTER Adapter)
         KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
         if (!Outstanding)
             return STATUS_SUCCESS;
-        if (ElapsedMs >= DXGK_QUERY_CHILD_DMA_DRAIN_TIMEOUT_MS)
-            return STATUS_TIMEOUT;
+        if (KeQueryInterruptTime() - Start100ns >=
+            (ULONGLONG)DXGK_QUERY_CHILD_DMA_DRAIN_TIMEOUT_MS * 10000)
+            return STATUS_IO_TIMEOUT;
         KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-        ElapsedMs += 10;
     }
 }
 
-static BOOLEAN DxgkpCanRunQueryChildRelations(_In_ PDXGKRNL_ADAPTER Adapter)
+static BOOLEAN DxgkpCanRunQueryChildRelations(_In_ PDXGKRNL_ADAPTER Adapter, _In_ BOOLEAN DuringStart)
 {
-    return Adapter->State == DxgkAdapterStateStarted && Adapter->DevicePowerState == PowerDeviceD0 && !Adapter->MiniportDeviceStopped && InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) != 0 && InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) == 0 && InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) == 0 && Adapter->MiniportContext != NULL && Adapter->MiniportDeviceContext != NULL && Adapter->MiniportContext->InitData.s.DxgkDdiQueryChildRelations != NULL;
+    return (Adapter->State == DxgkAdapterStateStarted || (DuringStart && Adapter->State == DxgkAdapterStateStarting)) && Adapter->DevicePowerState == PowerDeviceD0 && !Adapter->MiniportDeviceStopped && InterlockedCompareExchange(&Adapter->MiniportCallbacksValid, 0, 0) != 0 && InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) == 0 && InterlockedCompareExchange(&Adapter->RemoveRundownStarted, 0, 0) == 0 && Adapter->MiniportContext != NULL && Adapter->MiniportDeviceContext != NULL && Adapter->MiniportContext->InitData.s.DxgkDdiQueryChildRelations != NULL;
 }
 
-static NTSTATUS DxgkpCallQueryChildRelationsLevel3(_In_ PDXGKRNL_ADAPTER Adapter, _Out_writes_bytes_(ChildRelationsSize) PDXGK_CHILD_DESCRIPTOR ChildRelations, _In_ ULONG ChildRelationsSize)
+static NTSTATUS DxgkpCallQueryChildRelationsLevel3(_In_ PDXGKRNL_ADAPTER Adapter, _Out_writes_bytes_(ChildRelationsSize) PDXGK_CHILD_DESCRIPTOR ChildRelations, _In_ ULONG ChildRelationsSize, _In_ BOOLEAN DuringStart)
 {
     NTSTATUS ResumeStatus = STATUS_SUCCESS;
     NTSTATUS SchedulerStatus;
@@ -725,7 +725,7 @@ static NTSTATUS DxgkpCallQueryChildRelationsLevel3(_In_ PDXGKRNL_ADAPTER Adapter
     KmdExclusiveHeld = TRUE;
     DxgkVidMmQuiesceAdapter(Adapter);
     VidMmQuiesced = TRUE;
-    if (!DxgkpCanRunQueryChildRelations(Adapter))
+    if (!DxgkpCanRunQueryChildRelations(Adapter, DuringStart))
     {
         KeepAdmissionBlocked = TRUE;
         Status = STATUS_DELETE_PENDING;
@@ -736,7 +736,7 @@ static NTSTATUS DxgkpCallQueryChildRelationsLevel3(_In_ PDXGKRNL_ADAPTER Adapter
         goto Cleanup;
     InterruptAdmissionClosed = InterlockedCompareExchange(&Adapter->InterruptCallbacksBlocked, 1, 0) == 0;
     DxgkBlockInterruptCallbacks(Adapter);
-    if (!DxgkpCanRunQueryChildRelations(Adapter))
+    if (!DxgkpCanRunQueryChildRelations(Adapter, DuringStart))
     {
         KeepAdmissionBlocked = TRUE;
         Status = STATUS_DELETE_PENDING;
@@ -753,7 +753,7 @@ static NTSTATUS DxgkpCallQueryChildRelationsLevel3(_In_ PDXGKRNL_ADAPTER Adapter
     DxgkReleaseMiniportCallback(Adapter);
 
 Cleanup:
-    if (!KeepAdmissionBlocked && !DxgkpCanRunQueryChildRelations(Adapter))
+    if (!KeepAdmissionBlocked && !DxgkpCanRunQueryChildRelations(Adapter, DuringStart))
         KeepAdmissionBlocked = TRUE;
     if (!KeepAdmissionBlocked && VidMmQuiesced)
         DxgkVidMmResumeAdapter(Adapter);
@@ -769,7 +769,7 @@ Cleanup:
                 Status = ResumeStatus;
         }
     }
-    if (InterruptAdmissionClosed && !KeepAdmissionBlocked && !DxgkpCanRunQueryChildRelations(Adapter))
+    if (InterruptAdmissionClosed && !KeepAdmissionBlocked && !DxgkpCanRunQueryChildRelations(Adapter, DuringStart))
         KeepAdmissionBlocked = TRUE;
     if (InterruptAdmissionClosed && !KeepAdmissionBlocked)
         DxgkUnblockInterruptCallbacks(Adapter);
@@ -830,6 +830,12 @@ DxgkpQueryChildConnectionForEnumeration(
     }
     _SEH2_END;
     DxgkReleaseKmdCall(Adapter);
+    DXGKRNL_INFO("CHILD_CONNECTION: adapter=%p uid=%lu hpd=%u nondestructive=%u "
+                 "status=0x%08lX connected=%u\n",
+                 Adapter, Descriptor->ChildUid,
+                 (UINT)Descriptor->ChildCapabilities.HpdAwareness,
+                 1U, Status,
+                 (UINT)(NT_SUCCESS(Status) && ChildStatus.HotPlug.Connected));
     if (NT_SUCCESS(Status))
     {
         *ConnectionKnown = TRUE;
@@ -838,6 +844,55 @@ DxgkpQueryChildConnectionForEnumeration(
     }
     DXGKRNL_WARN("DxgkpQueryBusRelations: QueryChildStatus failed 0x%08lX for ChildUid %lu; retaining the last interrupt observation\n", Status, Descriptor->ChildUid);
     return STATUS_SUCCESS;
+}
+
+/* Check the initial connector state before the automatic BasicDisplay
+ * handoff. This does not publish PDOs or a new enumeration epoch: normal
+ * BusRelations still owns those, after adapter start has completed. */
+NTSTATUS
+DxgkPnpQueryInitialDisplayConnection(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ PBOOLEAN Connected)
+{
+    PDXGK_CHILD_DESCRIPTOR Children;
+    ULONG ChildrenSize;
+    ULONG Index;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    *Connected = FALSE;
+    if (Adapter->NumberOfChildren == 0)
+        return STATUS_SUCCESS;
+    if (Adapter->NumberOfChildren >= MAXULONG / sizeof(*Children))
+        return STATUS_INTEGER_OVERFLOW;
+
+    ChildrenSize = (Adapter->NumberOfChildren + 1) * sizeof(*Children);
+    Children = ExAllocatePoolWithTag(PagedPool, ChildrenSize, TAG_DXGK_RESOURCES);
+    if (Children == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(Children, ChildrenSize);
+    Status = DxgkpCallQueryChildRelationsLevel3(Adapter, Children,
+                                               ChildrenSize, TRUE);
+    if (NT_SUCCESS(Status))
+    {
+        for (Index = 0; Index < Adapter->NumberOfChildren; Index++)
+        {
+            BOOLEAN Known;
+            BOOLEAN ChildConnected;
+
+            Status = DxgkpQueryChildConnectionForEnumeration(Adapter,
+                         &Children[Index], &Known, &ChildConnected);
+            if (!NT_SUCCESS(Status))
+                break;
+            if (Known && ChildConnected)
+            {
+                *Connected = TRUE;
+                break;
+            }
+        }
+    }
+    ExFreePoolWithTag(Children, TAG_DXGK_RESOURCES);
+    return Status;
 }
 
 /*
@@ -959,7 +1014,7 @@ DxgkpQueryBusRelations(
      * DXGK_CHILD_DESCRIPTOR element with the child type, capabilities,
      * and ChildUid.
      */
-    Status = DxgkpCallQueryChildRelationsLevel3(Adapter, ChildRelations, ChildRelationsSize);
+    Status = DxgkpCallQueryChildRelationsLevel3(Adapter, ChildRelations, ChildRelationsSize, FALSE);
 
     if (!NT_SUCCESS(Status))
     {

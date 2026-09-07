@@ -99,6 +99,11 @@ DxgkpQueryBusRelations(
     _In_  PDXGKRNL_ADAPTER  Adapter,
     _Out_ PDEVICE_RELATIONS *Relations);
 
+NTSTATUS
+DxgkPnpQueryInitialDisplayConnection(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_ PBOOLEAN Connected);
+
 /*
  * DxgkpPollDisplayChildrenRequest
  *   Execute or enqueue the D3DKMT connector-poll contract for one adapter or
