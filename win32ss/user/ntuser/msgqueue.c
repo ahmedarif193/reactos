@@ -2134,6 +2134,9 @@ co_MsqWaitForNewMessages(PTHREADINFO pti, PWND WndFilter,
       IntCoalesceMouseMove(pti);
    }
 
+   /* A thread that is about to block in GetMessage is input-idle. */
+   IdlePing();
+
    UserLeaveCo();
 
    ZwYieldExecution(); // Let someone else run!

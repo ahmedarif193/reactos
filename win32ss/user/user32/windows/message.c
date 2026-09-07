@@ -3429,7 +3429,15 @@ RealMsgWaitForMultipleObjectsEx(
       if ( (pcti->fsChangeBits & LOWORD(dwWakeMask)) ||
            ( (dwFlags & MWMO_INPUTAVAILABLE) && (pcti->fsWakeBits & LOWORD(dwWakeMask)) ) )
       {
-         //FIXME("Return Chg 0x%x Wake 0x%x Mask 0x%x nCnt %d\n",pcti->fsChangeBits, pcti->fsWakeBits, dwWakeMask, nCount);
+         if (nCount)
+         {
+            Result = WaitForMultipleObjectsEx(nCount, pHandles, FALSE, 0, FALSE);
+            if (Result < WAIT_OBJECT_0 + nCount ||
+                (Result >= WAIT_ABANDONED_0 && Result < WAIT_ABANDONED_0 + nCount))
+            {
+               return Result;
+            }
+         }
          return nCount;
       }
    }
