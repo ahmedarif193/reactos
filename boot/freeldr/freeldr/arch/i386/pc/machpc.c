@@ -17,6 +17,7 @@
  */
 
 #include <freeldr.h>
+#include <reactos/drivers/bootvid/framebuf.h>
 #include <cportlib/cportlib.h>
 
 #include "../ntldr/ntldropts.h"
@@ -1567,6 +1568,8 @@ DetectDisplayController(PCONFIGURATION_COMPONENT_DATA BusKey)
 {
     PCSTR Identifier;
     PCONFIGURATION_COMPONENT_DATA ControllerKey;
+    PCM_PARTIAL_RESOURCE_LIST ResourceList = NULL;
+    ULONG ResourceListSize = 0;
     USHORT VesaVersion;
 
     /* FIXME: Set 'ComponentInformation' value */
@@ -1588,6 +1591,54 @@ DetectDisplayController(PCONFIGURATION_COMPONENT_DATA BusKey)
     else
         Identifier = "VGA Display";
 
+    if (VesaVersion >= 0x0200)
+    {
+        LOADER_PARAMETER_FRAMEBUFFER FrameBuffer;
+
+        if (PcVideoInitializeBootFramebuffer(&FrameBuffer))
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
+            PCM_FRAMEBUF_DEVICE_DATA Data;
+
+            ResourceListSize =
+                FIELD_OFFSET(CM_PARTIAL_RESOURCE_LIST, PartialDescriptors[2]) +
+                sizeof(*Data);
+            ResourceList = FrLdrHeapAlloc(ResourceListSize, TAG_HW_RESOURCE_LIST);
+            if (ResourceList)
+            {
+                RtlZeroMemory(ResourceList, ResourceListSize);
+                ResourceList->Version = 1;
+                ResourceList->Revision = 2;
+                ResourceList->Count = 2;
+
+                Descriptor = &ResourceList->PartialDescriptors[0];
+                Descriptor->Type = CmResourceTypeMemory;
+                Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
+                Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+                Descriptor->u.Memory.Start = FrameBuffer.FrameBufferBase;
+                Descriptor->u.Memory.Length = FrameBuffer.FrameBufferSize;
+
+                Descriptor = &ResourceList->PartialDescriptors[1];
+                Descriptor->Type = CmResourceTypeDeviceSpecific;
+                Descriptor->ShareDisposition = CmResourceShareUndetermined;
+                Descriptor->u.DeviceSpecificData.DataSize = sizeof(*Data);
+                Data = (PCM_FRAMEBUF_DEVICE_DATA)(Descriptor + 1);
+                Data->Version = 1;
+                Data->Revision = 4;
+                Data->ScreenWidth = FrameBuffer.HorizontalResolution;
+                Data->ScreenHeight = FrameBuffer.VerticalResolution;
+                Data->PixelsPerScanLine = FrameBuffer.PixelsPerScanLine;
+                Data->BitsPerPixel = FrameBuffer.PixelFormat;
+                Data->PixelMasks.RedMask = FrameBuffer.RedMask;
+                Data->PixelMasks.GreenMask = FrameBuffer.GreenMask;
+                Data->PixelMasks.BlueMask = FrameBuffer.BlueMask;
+                Data->PixelMasks.ReservedMask = FrameBuffer.Reserved;
+                Data->Dpi = FrameBuffer.Dpi;
+                Identifier = "VBE Linear Framebuffer";
+            }
+        }
+    }
+
     FldrCreateComponentKey(BusKey,
                            ControllerClass,
                            DisplayController,
@@ -1595,8 +1646,8 @@ DetectDisplayController(PCONFIGURATION_COMPONENT_DATA BusKey)
                            0,
                            0xFFFFFFFF,
                            Identifier,
-                           NULL,
-                           0,
+                           ResourceList,
+                           ResourceListSize,
                            &ControllerKey);
 
     /* FIXME: Add display peripheral (monitor) data */

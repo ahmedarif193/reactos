@@ -120,6 +120,7 @@ static VIDEODISPLAYMODE DisplayMode = VideoTextMode;    /* Current display mode 
 static BOOLEAN VesaVideoMode = FALSE;                   /* Are we using a VESA mode? */
 static SVGA_MODE_INFORMATION VesaVideoModeInformation;  /* Only valid when in VESA mode */
 static ULONG CurrentMemoryBank = 0;                     /* Currently selected VESA bank */
+static LOADER_PARAMETER_FRAMEBUFFER BootFrameBuffer = {0};
 
 enum
 {
@@ -1307,9 +1308,126 @@ PcVideoSync(VOID)
 VOID
 PcVideoPrepareForReactOS(VOID)
 {
-    // PcVideoSetMode80x50_80x43();
-    PcVideoSetMode80x25();
+    /* Preserve the VBE linear framebuffer selected during hardware detect. */
+    if (BootFrameBuffer.FrameBufferBase.QuadPart == 0)
+        PcVideoSetMode80x25();
     PcVideoHideShowTextCursor(FALSE);
+}
+
+static ULONG
+PcVideoMaskFromField(
+    _In_ UCHAR Size,
+    _In_ UCHAR Position)
+{
+    if (Size == 0 || Size > 31 || Position > 31 || Size + Position > 32)
+        return 0;
+
+    return ((1UL << Size) - 1) << Position;
+}
+
+BOOLEAN
+PcVideoInitializeBootFramebuffer(
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBuffer)
+{
+    SVGA_MODE_INFORMATION Candidate;
+    SVGA_MODE_INFORMATION Best = {0};
+    USHORT Mode, BestMode = 0;
+    ULONG BestPixels = 0, Pitch;
+    ULONGLONG Size;
+
+    RtlZeroMemory(FrameBuffer, sizeof(*FrameBuffer));
+
+    for (Mode = 0x100; Mode < 0x200; ++Mode)
+    {
+        ULONG Pixels;
+        UCHAR RedSize, RedPosition, GreenSize, GreenPosition;
+        UCHAR BlueSize, BluePosition;
+
+        if (!PcVideoVesaGetSVGAModeInformation(Mode, &Candidate))
+            continue;
+
+        RedSize = Candidate.LinearRedMaskSize ?
+                      Candidate.LinearRedMaskSize : Candidate.RedMaskSize;
+        RedPosition = Candidate.LinearRedMaskSize ?
+                          Candidate.LinearRedMaskPosition : Candidate.RedMaskPosition;
+        GreenSize = Candidate.LinearGreenMaskSize ?
+                        Candidate.LinearGreenMaskSize : Candidate.GreenMaskSize;
+        GreenPosition = Candidate.LinearGreenMaskSize ?
+                            Candidate.LinearGreenMaskPosition : Candidate.GreenMaskPosition;
+        BlueSize = Candidate.LinearBlueMaskSize ?
+                       Candidate.LinearBlueMaskSize : Candidate.BlueMaskSize;
+        BluePosition = Candidate.LinearBlueMaskSize ?
+                           Candidate.LinearBlueMaskPosition : Candidate.BlueMaskPosition;
+
+        if ((Candidate.ModeAttributes & 0x91) != 0x91 ||
+            Candidate.MemoryModel != 6 || Candidate.BitsPerPixel != 32 ||
+            Candidate.LinearVideoBufferAddress == 0 ||
+            Candidate.WidthInPixels == 0 || Candidate.HeightInPixels == 0 ||
+            Candidate.WidthInPixels > 1024 || Candidate.HeightInPixels > 768 ||
+            RedSize != 8 || RedPosition != 16 ||
+            GreenSize != 8 || GreenPosition != 8 ||
+            BlueSize != 8 || BluePosition != 0)
+        {
+            continue;
+        }
+
+        Pixels = (ULONG)Candidate.WidthInPixels * Candidate.HeightInPixels;
+        if (Pixels > BestPixels)
+        {
+            Best = Candidate;
+            BestMode = Mode;
+            BestPixels = Pixels;
+        }
+    }
+
+    if (BestMode == 0 || !PcVideoSetBiosVesaMode(BestMode | 0x4000))
+        return FALSE;
+
+    Pitch = Best.LinearBytesPerScanLine ?
+                Best.LinearBytesPerScanLine : Best.BytesPerScanLine;
+    Size = (ULONGLONG)Pitch * Best.HeightInPixels;
+    if (Pitch < (ULONG)Best.WidthInPixels * sizeof(ULONG) ||
+        Size == 0 || Size > MAXULONG)
+    {
+        PcVideoSetMode80x25();
+        return FALSE;
+    }
+
+    VesaVideoModeInformation = Best;
+    ScreenWidth = Best.WidthInPixels;
+    ScreenHeight = Best.HeightInPixels;
+    BytesPerScanLine = Pitch;
+    BiosVideoMode = BestMode | 0x4000;
+    DisplayMode = VideoGraphicsMode;
+    VesaVideoMode = TRUE;
+
+    BootFrameBuffer.FrameBufferBase.QuadPart = Best.LinearVideoBufferAddress;
+    BootFrameBuffer.FrameBufferSize = (ULONG)Size;
+    BootFrameBuffer.HorizontalResolution = Best.WidthInPixels;
+    BootFrameBuffer.VerticalResolution = Best.HeightInPixels;
+    BootFrameBuffer.PixelsPerScanLine = Pitch / sizeof(ULONG);
+    BootFrameBuffer.PixelFormat = Best.BitsPerPixel;
+    BootFrameBuffer.RedMask = PcVideoMaskFromField(
+        Best.LinearRedMaskSize ? Best.LinearRedMaskSize : Best.RedMaskSize,
+        Best.LinearRedMaskSize ? Best.LinearRedMaskPosition : Best.RedMaskPosition);
+    BootFrameBuffer.GreenMask = PcVideoMaskFromField(
+        Best.LinearGreenMaskSize ? Best.LinearGreenMaskSize : Best.GreenMaskSize,
+        Best.LinearGreenMaskSize ? Best.LinearGreenMaskPosition : Best.GreenMaskPosition);
+    BootFrameBuffer.BlueMask = PcVideoMaskFromField(
+        Best.LinearBlueMaskSize ? Best.LinearBlueMaskSize : Best.BlueMaskSize,
+        Best.LinearBlueMaskSize ? Best.LinearBlueMaskPosition : Best.BlueMaskPosition);
+    BootFrameBuffer.Reserved = PcVideoMaskFromField(
+        Best.LinearReservedMaskSize ? Best.LinearReservedMaskSize : Best.ReservedMaskSize,
+        Best.LinearReservedMaskSize ? Best.LinearReservedMaskPosition : Best.ReservedMaskPosition);
+    BootFrameBuffer.Dpi = LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT;
+
+    *FrameBuffer = BootFrameBuffer;
+    TRACE("Selected BIOS VBE framebuffer 0x%lx, %lux%lu pitch=%lu\n",
+          (ULONG_PTR)BootFrameBuffer.FrameBufferBase.QuadPart,
+          BootFrameBuffer.HorizontalResolution,
+          BootFrameBuffer.VerticalResolution,
+          Pitch);
+    return TRUE;
 }
 
 /* EOF */

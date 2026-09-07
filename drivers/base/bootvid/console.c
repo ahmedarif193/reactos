@@ -21,6 +21,7 @@ ULONG VidpPhysicalHeight = SCREEN_HEIGHT;
 ULONG VidpDisplayDpi = 96;
 ULONG VidpCharacterWidth = BOOTCHAR_WIDTH;
 ULONG VidpCharacterHeight = BOOTCHAR_HEIGHT + 1;
+LOADER_PARAMETER_FRAMEBUFFER VidpFrameBufferInfo = {0};
 URECT VidpScrollRegion = {0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1};
 
 static BOOLEAN ClearRow = FALSE;
@@ -41,6 +42,22 @@ VidQueryDisplayInfo(_Out_ PVID_DISPLAY_INFO DisplayInfo)
     DisplayInfo->CharacterWidth = VidpCharacterWidth;
     DisplayInfo->CharacterHeight = VidpCharacterHeight;
     DisplayInfo->Dpi = VidpDisplayDpi;
+    return TRUE;
+}
+
+BOOLEAN
+NTAPI
+VidQueryFrameBufferInfo(
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo)
+{
+    if (!FrameBufferInfo ||
+        VidpFrameBufferInfo.FrameBufferBase.QuadPart == 0 ||
+        VidpFrameBufferInfo.FrameBufferSize == 0)
+    {
+        return FALSE;
+    }
+
+    *FrameBufferInfo = VidpFrameBufferInfo;
     return TRUE;
 }
 
