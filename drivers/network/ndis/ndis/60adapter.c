@@ -495,6 +495,11 @@ Ndis6InitializeLogicalAdapter(
     InitializeListHead(&Adapter->ProtocolListHead);
     KeInitializeSpinLock(&Adapter->NdisMiniportBlock.Lock);
 
+    /* Queued legacy OIDs complete through these callbacks, including requests
+     * which the NDIS 6 bridge services synchronously from cached attributes. */
+    Adapter->NdisMiniportBlock.QueryCompleteHandler = MiniRequestComplete;
+    Adapter->NdisMiniportBlock.SetCompleteHandler = MiniRequestComplete;
+
     /* Stash the synthesized name in the miniport block so legacy code
      * (MiniLocateDevice) can match it. */
     Adapter->NdisMiniportBlock.MiniportName = *AdapterName;
@@ -1525,6 +1530,8 @@ Ndis6CreateImInstance(
     Adapter->Ndis6Context = Ext;
     InitializeListHead(&Adapter->ProtocolListHead);
     KeInitializeSpinLock(&Adapter->NdisMiniportBlock.Lock);
+    Adapter->NdisMiniportBlock.QueryCompleteHandler = MiniRequestComplete;
+    Adapter->NdisMiniportBlock.SetCompleteHandler = MiniRequestComplete;
     Adapter->NdisMiniportBlock.MiniportName          = AdapterName;
     Adapter->NdisMiniportBlock.PhysicalDeviceObject  = Fdo;
     Adapter->NdisMiniportBlock.DeviceObject          = Fdo;
