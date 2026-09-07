@@ -56,6 +56,7 @@ set(WOW64_I386_MODULES
     lpk
     mbedtls
     mlang
+    mmdevapi
     mpr
     msacm32
     msimg32
