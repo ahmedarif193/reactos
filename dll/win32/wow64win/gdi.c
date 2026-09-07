@@ -981,6 +981,15 @@ NTSTATUS WINAPI wow64_NtGdiDdDDIOpenAdapterFromDeviceName( UINT *args )
     return status;
 }
 
+#ifdef __REACTOS__
+NTSTATUS WINAPI wow64_NtGdiDdDDIOpenAdapterFromGdiDisplayName( UINT *args )
+{
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME *desc = get_ptr( &args );
+
+    return NtGdiDdDDIOpenAdapterFromGdiDisplayName( desc );
+}
+#endif
+
 NTSTATUS WINAPI wow64_NtGdiDdDDIOpenAdapterFromHdc( UINT *args )
 {
     struct

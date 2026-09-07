@@ -1677,6 +1677,16 @@ NTSTATUS WINAPI wow64_NtUserCallHwnd( UINT *args )
     return NtUserCallHwnd(hwnd, code);
 }
 
+#ifdef __REACTOS__
+NTSTATUS WINAPI wow64_NtUserCallHwndLock( UINT *args )
+{
+    HWND hwnd = get_handle( &args );
+    DWORD code = get_ulong( &args );
+
+    return NtUserCallHwndLock( hwnd, code );
+}
+#endif
+
 NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
 {
     HWND hwnd = get_handle( &args );
@@ -1935,6 +1945,22 @@ NTSTATUS WINAPI wow64_NtUserCreateCaret( UINT *args )
 
     return NtUserCreateCaret( hwnd, bitmap, width, height );
 }
+
+#ifdef __REACTOS__
+NTSTATUS WINAPI wow64_NtUserCreateDesktop( UINT *args )
+{
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+    UNICODE_STRING32 *device32 = get_ptr( &args );
+    DEVMODEW *devmode = get_ptr( &args );
+    DWORD flags = get_ulong( &args );
+    ACCESS_MASK access = get_ulong( &args );
+    struct object_attr64 attr;
+    UNICODE_STRING device;
+
+    return HandleToUlong( NtUserCreateDesktop( objattr_32to64( &attr, attr32 ),
+                         unicode_str_32to64( &device, device32 ), devmode, flags, access ));
+}
+#endif
 
 NTSTATUS WINAPI wow64_NtUserCreateDesktopEx( UINT *args )
 {
@@ -3320,7 +3346,13 @@ NTSTATUS WINAPI wow64_NtUserGetThreadDesktop( UINT *args )
 {
     DWORD thread = get_ulong( &args );
 
+#ifdef __REACTOS__
+    HDESK console_desktop = get_handle( &args );
+
+    return HandleToUlong( NtUserGetThreadDesktop( thread, console_desktop ));
+#else
     return HandleToUlong( NtUserGetThreadDesktop( thread ));
+#endif
 }
 
 NTSTATUS WINAPI wow64_NtUserGetThreadState( UINT *args )

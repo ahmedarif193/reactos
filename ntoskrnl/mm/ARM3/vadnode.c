@@ -263,7 +263,21 @@ MiInsertVadEx(
     _In_ ULONG_PTR Alignment,
     _In_ ULONG AllocationType)
 {
-    ULONG_PTR StartingAddress, EndingAddress;
+    return MiInsertVadWithRange(Vad, BaseAddress, ViewSize, 0, HighestAddress, Alignment, AllocationType);
+}
+
+NTSTATUS
+NTAPI
+MiInsertVadWithRange(
+    _Inout_ PMMVAD Vad,
+    _In_ ULONG_PTR *BaseAddress,
+    _In_ SIZE_T ViewSize,
+    _In_ ULONG_PTR LowestAddress,
+    _In_ ULONG_PTR HighestAddress,
+    _In_ ULONG_PTR Alignment,
+    _In_ ULONG AllocationType)
+{
+    ULONG_PTR StartingAddress = 0, EndingAddress;
     PEPROCESS CurrentProcess;
     PETHREAD CurrentThread;
     TABLE_SEARCH_RESULT Result;
@@ -294,12 +308,21 @@ MiInsertVadEx(
         HighestAddress = min(HighestAddress, (ULONG_PTR)MI_HIGHEST_AUTOMATIC_USER_ADDRESS);
 #endif
 
+        if ((LowestAddress > HighestAddress) ||
+            (ViewSize > HighestAddress - LowestAddress + 1))
+        {
+            MmUnlockAddressSpace(&CurrentProcess->Vm);
+            return STATUS_NO_MEMORY;
+        }
+
         /* Explicit low address constraints must override the automatic floor. */
         SearchTopDown = ((AllocationType & MEM_TOP_DOWN) != 0) || CurrentProcess->VmTopDown;
 #ifdef _M_ARM64
         if (HighestAddress < MI_LOWEST_AUTOMATIC_USER_ADDRESS)
             SearchTopDown = TRUE;
 #endif
+        if (LowestAddress != 0)
+            SearchTopDown = TRUE;
 
         /* Which way should we search? */
         if (SearchTopDown)
@@ -325,7 +348,8 @@ MiInsertVadEx(
         EndingAddress = StartingAddress + ViewSize - 1;
 
         /* Check if we found a suitable location */
-        if ((Result == TableFoundNode) || (EndingAddress > HighestAddress))
+        if ((Result == TableFoundNode) || (EndingAddress > HighestAddress) ||
+            (StartingAddress < LowestAddress))
         {
             DPRINT1("Not enough free space to insert this VAD node!\n");
             MmUnlockAddressSpace(&CurrentProcess->Vm);

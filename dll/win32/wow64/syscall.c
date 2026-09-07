@@ -87,7 +87,9 @@ static const struct reactos_syscall reactos_syscalls[] =
 {
 #define SVC_(name,argcount) { "Nt" #name, (argcount) * sizeof(ULONG) },
 #define SVC_WRAP_(name,argcount) SVC_(name,argcount)
+#define SYSFUNCS_WOW64
 #include <sysfuncs.h>
+#undef SYSFUNCS_WOW64
 #undef SVC_WRAP_
 #undef SVC_
 };

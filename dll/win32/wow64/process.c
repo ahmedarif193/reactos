@@ -667,6 +667,9 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
     case ProcessPriorityClass:  /* PROCESS_PRIORITY_CLASS */
     case ProcessPriorityBoost:  /* ULONG */
     case ProcessHandleCount:  /* ULONG */
+#ifdef __REACTOS__
+    case ProcessDeviceMap:  /* PROCESS_DEVICEMAP_INFORMATION.Query */
+#endif
     case ProcessSessionInformation:  /* ULONG */
     case ProcessDebugFlags:  /* ULONG */
     case ProcessExecuteFlags:  /* ULONG */

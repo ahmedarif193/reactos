@@ -6078,13 +6078,17 @@ MiParseExtendedAllocationParameters(
     _In_reads_opt_(ExtendedParameterCount) PMEM_EXTENDED_PARAMETER ExtendedParameters,
     _In_ ULONG ExtendedParameterCount,
     _In_ KPROCESSOR_MODE PreviousMode,
-    _Out_ PULONG_PTR ZeroBits,
+    _Out_ PULONG_PTR HighestAddress,
+    _Out_ PULONG_PTR LowestAddress,
+    _Out_ PULONG_PTR Alignment,
     _Out_ PBOOLEAN EcCode)
 {
     ULONG Index;
     ULONG Present = 0;
 
-    *ZeroBits = 0;
+    *HighestAddress = 0;
+    *LowestAddress = 0;
+    *Alignment = 0;
     *EcCode = FALSE;
     if (ExtendedParameterCount && !ExtendedParameters)
         return STATUS_INVALID_PARAMETER;
@@ -6116,12 +6120,23 @@ MiParseExtendedAllocationParameters(
                     if (PreviousMode != KernelMode)
                         ProbeForRead(Parameter.Pointer, sizeof(Requirements), TYPE_ALIGNMENT(MEM_ADDRESS_REQUIREMENTS));
                     Requirements = *(PMEM_ADDRESS_REQUIREMENTS)Parameter.Pointer;
-                    if (Requirements.LowestStartingAddress || Requirements.Alignment)
-                        _SEH2_YIELD(return STATUS_NOT_SUPPORTED);
+                    if (Requirements.Alignment)
+                    {
+                        if ((Requirements.Alignment & (Requirements.Alignment - 1)) ||
+                            (Requirements.Alignment < MM_VIRTMEM_GRANULARITY))
+                            _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+                        *Alignment = Requirements.Alignment;
+                    }
+                    *LowestAddress = (ULONG_PTR)Requirements.LowestStartingAddress;
+                    if ((*LowestAddress & (MM_VIRTMEM_GRANULARITY - 1)) ||
+                        (*LowestAddress > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS))
+                        _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
                     if (Requirements.HighestEndingAddress)
                     {
-                        *ZeroBits = (ULONG_PTR)Requirements.HighestEndingAddress | (MM_VIRTMEM_GRANULARITY - 1);
-                        if (*ZeroBits < (MM_VIRTMEM_GRANULARITY - 1))
+                        *HighestAddress = (ULONG_PTR)Requirements.HighestEndingAddress;
+                        if ((*HighestAddress > (ULONG_PTR)MmHighestUserAddress) ||
+                            ((*HighestAddress & (MM_VIRTMEM_GRANULARITY - 1)) != (MM_VIRTMEM_GRANULARITY - 1)) ||
+                            (*LowestAddress > *HighestAddress))
                             _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
                     }
                     break;
@@ -6157,6 +6172,9 @@ NTAPI
 MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
                         IN OUT PVOID* UBaseAddress,
                         IN ULONG_PTR ZeroBits,
+                        IN ULONG_PTR HighestAddressRequirement,
+                        IN ULONG_PTR LowestAddress,
+                        IN ULONG_PTR Alignment,
                         IN OUT PSIZE_T URegionSize,
                         IN ULONG AllocationType,
                         IN ULONG Protect,
@@ -6313,6 +6331,15 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
         _SEH2_YIELD(return _SEH2_GetExceptionCode());
     }
     _SEH2_END;
+
+    if (HighestAddressRequirement || LowestAddress || Alignment)
+    {
+        if (PBaseAddress)
+            return STATUS_INVALID_PARAMETER;
+        if (HighestAddressRequirement)
+            HighestAddress = min(HighestAddress, HighestAddressRequirement);
+        AllocationType |= MEM_TOP_DOWN;
+    }
 
     /* Make sure the allocation isn't past the VAD area */
     if (PBaseAddress > MM_HIGHEST_VAD_ADDRESS)
@@ -6542,12 +6569,13 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
         //
         // Insert the VAD
         //
-        Status = MiInsertVadEx(Vad,
-                               &StartingAddress,
-                               PRegionSize,
-                               HighestAddress,
-                               MM_VIRTMEM_GRANULARITY,
-                               AllocationType);
+        Status = MiInsertVadWithRange(Vad,
+                                      &StartingAddress,
+                                      PRegionSize,
+                                      LowestAddress,
+                                      HighestAddress,
+                                      max(Alignment, MM_VIRTMEM_GRANULARITY),
+                                      AllocationType);
         if (!NT_SUCCESS(Status))
         {
             /* Expected for hinted allocations (e.g. LLVM JIT near-code
@@ -7070,7 +7098,7 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
                         IN ULONG AllocationType,
                         IN ULONG Protect)
 {
-    return MiAllocateVirtualMemory(ProcessHandle, UBaseAddress, ZeroBits, URegionSize, AllocationType, Protect, FALSE);
+    return MiAllocateVirtualMemory(ProcessHandle, UBaseAddress, ZeroBits, 0, 0, 0, URegionSize, AllocationType, Protect, FALSE);
 }
 
 /*
@@ -7087,15 +7115,15 @@ NtAllocateVirtualMemoryEx(IN HANDLE ProcessHandle,
                           IN ULONG ExtendedParameterCount)
 {
     KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
-    ULONG_PTR ZeroBits;
+    ULONG_PTR HighestAddress, LowestAddress, Alignment;
     BOOLEAN EcCode;
     NTSTATUS Status;
 
-    Status = MiParseExtendedAllocationParameters(ExtendedParameters, ExtendedParameterCount, PreviousMode, &ZeroBits, &EcCode);
+    Status = MiParseExtendedAllocationParameters(ExtendedParameters, ExtendedParameterCount, PreviousMode, &HighestAddress, &LowestAddress, &Alignment, &EcCode);
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return MiAllocateVirtualMemory(ProcessHandle, UBaseAddress, ZeroBits, URegionSize, AllocationType, Protect, EcCode);
+    return MiAllocateVirtualMemory(ProcessHandle, UBaseAddress, 0, HighestAddress, LowestAddress, Alignment, URegionSize, AllocationType, Protect, EcCode);
 }
 
 /*
