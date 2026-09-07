@@ -477,6 +477,7 @@ HalpGetRootInterruptVector(
         NT_ASSERT(HalpVectorToIndex[Vector] == BusInterruptLevel);
         *OutIrql = HalpVectorToIrql(Vector);
     }
+#ifdef _M_AMD64
     else if (BusInterruptLevel < APIC_MAX_IRQ)
     {
         /* Fixed mapping bounded to 0x30..0x47, disjoint from the MSI pool
@@ -495,7 +496,6 @@ HalpGetRootInterruptVector(
     }
     else
     {
-#ifdef _M_AMD64
         /* GSIs past the fixed line window get a spillover vector below the
          * MSI pool; first-fit, never freed. */
         ULONG Candidate;
@@ -518,13 +518,28 @@ HalpGetRootInterruptVector(
 
         Vector = HalpAllocateSystemInterrupt((UCHAR)BusInterruptLevel, Vector);
         *OutIrql = HalpVectorToIrql(Vector);
-#else
-        /* The i386 TPR tables map the spillover window onto software
-         * IRQLs, so high GSIs stay unroutable there. */
-        DPRINT1("HalpGetRootInterruptVector: GSI %lu beyond the fixed line window\n", BusInterruptLevel);
-        goto Reject;
-#endif
     }
+#else
+    else
+    {
+        ULONG Candidate;
+
+        /* x86 reserves priority classes 0x30 and 0x40 for APCs and DPCs.
+         * Allocate from device priority classes, consulting the same vector
+         * ownership table as MSI so neither allocator reuses a live vector. */
+        for (Candidate = 0x50; Candidate < 0xC0; ++Candidate)
+        {
+            if (HalpVectorToIndex[Candidate] == APIC_FREE_VECTOR)
+                break;
+        }
+        if (Candidate == 0xC0)
+            goto Reject;
+
+        Vector = HalpAllocateSystemInterrupt((UCHAR)BusInterruptLevel,
+                                            (UCHAR)Candidate);
+        *OutIrql = HalpVectorToIrql(Vector);
+    }
+#endif
 
     *OutAffinity = HalpDefaultInterruptAffinity;
     ASSERT(HalpDefaultInterruptAffinity);

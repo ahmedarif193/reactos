@@ -19,6 +19,10 @@ Author:
 #ifndef _I386_KETYPES_H
 #define _I386_KETYPES_H
 
+/* Loader/kernel contract, independent of the NTDDI-selected KPRCB layout.
+ * Vista+ PCRs exceed one page. Shared user data must not alias this storage. */
+#define KIPCR_BOOT_SIZE 0x2000
+
 //
 // Dependencies
 //

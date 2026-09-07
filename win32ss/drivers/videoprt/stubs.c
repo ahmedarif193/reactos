@@ -127,7 +127,7 @@ WdDdiWatchdogDpcCallback(
  * DISPATCH_LEVEL from DPC or interrupt synchronization callbacks.
  */
 VOID
-NTAPI
+__cdecl
 VideoPortNotification(
     _In_ VIDEO_NOTIFICATION_TYPE NotificationType,
     _In_ PVOID HwDeviceExtension,

@@ -358,7 +358,8 @@ PATH_bRoundToLong(FLOATOBJ *pf, PLONG pl)
     LONG l;
 
     tmp = *pf;
-    FLOATOBJ_SetFloat(&back, 0.5f);
+    FLOATOBJ_SetLong(&back, 1);
+    FLOATOBJ_DivLong(&back, 2);
     FLOATOBJ_Add(&tmp, &back);
     if (!FLOATOBJ_bConvertToLong(&tmp, &l))
         return FALSE;

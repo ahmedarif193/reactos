@@ -665,7 +665,11 @@ PrintName(FILE *fileDest, EXPORT *pexp, PSTRING pstr, int fDeco)
 void
 PrintExportName(FILE *fileDest, EXPORT *pexp, int fDeco)
 {
-    if ((giArch != ARCH_X86) &&
+    /* Parsing a decorated stub strips its suffix from the implementation name.
+     * Preserve the original public name in DLL definitions on x86 as well,
+     * otherwise decorated and plain exports collapse onto the same name. */
+    if (((giArch != ARCH_X86) ||
+         (!fDeco && (pexp->strExportName.len != pexp->strName.len))) &&
         !((pexp->strExportName.len == 1) && (pexp->strExportName.buf[0] == '@')))
     {
         fprintf(fileDest, "%.*s", pexp->strExportName.len, pexp->strExportName.buf);

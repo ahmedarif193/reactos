@@ -2443,8 +2443,9 @@ FatCommonCreateOnNewStack (        //  implemented in Create.c
 
 _Requires_lock_held_(_Global_critical_region_)
 VOID
+NTAPI
 FatCommonCreateCallout (              //  implemented in Create.c
-    _In_ PFAT_CALLOUT_PARAMETERS CalloutParameters
+    _In_ PVOID Context
     );
 
 #endif

@@ -1540,18 +1540,20 @@ MmMakeSegmentResident(
         {
             /* Move forward if there is a hole */
             ULONG BitSet;
-            if (!_BitScanForward64(&BitSet, ToReadPageBits))
+            LONG BitIndex = RtlFindLeastSignificantBit(ToReadPageBits);
+            if (BitIndex < 0)
             {
                 /* Nothing more to read */
                 break;
             }
+            BitSet = (ULONG)BitIndex;
             ToReadPageBits >>= BitSet;
             ChunkOffset += BitSet * PAGE_SIZE;
             ASSERT(ChunkOffset < ChunkEnd);
 
             /* Get the range we have to read */
-            if (!_BitScanForward64(&BitSet, ~ToReadPageBits))
-                BitSet = MM_PAGEIN_CLUSTER_PAGES;
+            BitIndex = RtlFindLeastSignificantBit(~ToReadPageBits);
+            BitSet = BitIndex < 0 ? MM_PAGEIN_CLUSTER_PAGES : (ULONG)BitIndex;
             ULONG ReadLength = BitSet * PAGE_SIZE;
 
             ASSERT(ReadLength <= MM_PAGEIN_CLUSTER);

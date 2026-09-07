@@ -575,8 +575,10 @@ IntLPtoDP_RoundOrigin(PDC pdc, PPOINTL ppt)
     FLOATOBJ_Add(&foY, &foTmp);
     FLOATOBJ_Add(&foY, &pmx->efDy);
 
-    FLOATOBJ_AddFloat(&foX, 0.5f);
-    FLOATOBJ_AddFloat(&foY, 0.5f);
+    FLOATOBJ_SetLong(&foTmp, 1);
+    FLOATOBJ_DivLong(&foTmp, 2);
+    FLOATOBJ_Add(&foX, &foTmp);
+    FLOATOBJ_Add(&foY, &foTmp);
     lX = FLOATOBJ_GetLong(&foX);
     lY = FLOATOBJ_GetLong(&foY);
     if (FLOATOBJ_LessThanLong(&foX, lX)) lX--;

@@ -1,4 +1,8 @@
 
+/* Suppress the public header's x86 inline definition in this implementation. */
+#ifndef _CRTBLD
+#define _CRTBLD
+#endif
 #include <math.h>
 
 _Check_return_

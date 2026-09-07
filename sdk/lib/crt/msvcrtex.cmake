@@ -32,7 +32,8 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 
 if(ARCH STREQUAL "i386")
-    list(APPEND MSVCRTEX_SOURCE math/powf.c)
+    # The x86 CRT does not export modff; libc++ still needs an out-of-line copy.
+    list(APPEND MSVCRTEX_SOURCE math/powf.c math/modff.c)
     # Clang wants __aulldiv for its optimizations
     list(APPEND MSVCRTEX_ASM_SOURCE
         except/i386/chkstk_asm.s

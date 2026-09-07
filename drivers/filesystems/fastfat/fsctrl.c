@@ -902,16 +902,17 @@ Return Value:
     PDIRENT Dirent;
     ULONG ByteOffset;
 
-    BOOLEAN MountNewVolume = FALSE;
-    BOOLEAN WeClearedVerifyRequiredBit = FALSE;
-    BOOLEAN DoARemount = FALSE;
+    /* These values are changed in the try block and consumed by finally. */
+    BOOLEAN _SEH2_VOLATILE MountNewVolume = FALSE;
+    BOOLEAN _SEH2_VOLATILE WeClearedVerifyRequiredBit = FALSE;
+    BOOLEAN _SEH2_VOLATILE DoARemount = FALSE;
 
-    PVCB OldVcb = NULL;
+    PVCB _SEH2_VOLATILE OldVcb = NULL;
     PVPB OldVpb = NULL;
 
-    PDEVICE_OBJECT RealDevice = NULL;
-    PVOLUME_DEVICE_OBJECT VolDo = NULL;
-    PVCB Vcb = NULL;
+    PDEVICE_OBJECT _SEH2_VOLATILE RealDevice = NULL;
+    PVOLUME_DEVICE_OBJECT _SEH2_VOLATILE VolDo = NULL;
+    PVCB _SEH2_VOLATILE Vcb = NULL;
     PFILE_OBJECT RootDirectoryFile = NULL;
 
     PLIST_ENTRY Links;

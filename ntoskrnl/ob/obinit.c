@@ -57,6 +57,17 @@ ULONG ObpInitializationPhase;
 ULONG ObpObjectSecurityMode = 1;
 ULONG ObpProtectionMode = 0;
 
+/* Optional headers must preserve the low bits used for handle attributes. */
+C_ASSERT((sizeof(OBJECT_HEADER_NAME_INFO) & OBJ_HANDLE_ATTRIBUTES) == 0);
+C_ASSERT((sizeof(OBJECT_HEADER_CREATOR_INFO) & OBJ_HANDLE_ATTRIBUTES) == 0);
+C_ASSERT((sizeof(OBJECT_HEADER_HANDLE_INFO) & OBJ_HANDLE_ATTRIBUTES) == 0);
+C_ASSERT((sizeof(OBJECT_HEADER_QUOTA_INFO) & OBJ_HANDLE_ATTRIBUTES) == 0);
+C_ASSERT((sizeof(OBJECT_HEADER_PROCESS_INFO) & OBJ_HANDLE_ATTRIBUTES) == 0);
+#ifndef _WIN64
+C_ASSERT(sizeof(OBJECT_HEADER_NAME_INFO) == 16);
+C_ASSERT(sizeof(OBJECT_HEADER_CREATOR_INFO) == 16);
+#endif
+
 #ifdef _WIN64
 C_ASSERT(sizeof(OBJECT_HEADER) == 56);
 C_ASSERT(FIELD_OFFSET(OBJECT_HEADER, PointerCount) == 0);

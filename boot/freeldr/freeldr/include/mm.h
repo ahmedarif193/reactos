@@ -21,8 +21,13 @@
 
 extern char __ImageBase;
 #ifdef __clang__
+#ifdef _M_IX86
+/* x86 has no .pdata unwind section: .text, .rdata, .buildid, .data, .reloc. */
+#define FREELDR_SECTION_COUNT 5
+#else
 /* .text, .rdata, .buildid, .data, .pdata and .reloc */
 #define FREELDR_SECTION_COUNT 6
+#endif
 #elif defined(__GNUC__)
   /* .text/.data/.rdata, .edata and .bss */
   #define FREELDR_SECTION_COUNT 3

@@ -4786,7 +4786,8 @@ Return Value:
 
     PFAT_WINDOW CurrentWindow = NULL;
 
-    PVOID NewBitMapBuffer = NULL;
+    /* Preserve ownership changes for the out-of-line PSEH finally handler. */
+    PVOID _SEH2_VOLATILE NewBitMapBuffer = NULL;
     PRTL_BITMAP BitMap = NULL;
     RTL_BITMAP PrivateBitMap;
 

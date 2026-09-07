@@ -930,7 +930,9 @@ ObpAllocateObject(IN POBJECT_CREATE_INFORMATION ObjectCreateInfo,
         NameInfo->Name.Buffer = ObjectName->Buffer;
         NameInfo->Directory = NULL;
         NameInfo->QueryReferences = 1;
+#ifdef _WIN64
         NameInfo->Reserved = 0;
+#endif
 
         /* Set the header pointer */
         Header = (POBJECT_HEADER)(NameInfo + 1);
@@ -944,10 +946,15 @@ ObpAllocateObject(IN POBJECT_CREATE_INFORMATION ObjectCreateInfo,
         CreatorInfo->CreatorBackTraceIndex = 0;
         CreatorInfo->CreatorUniqueProcess = PsGetCurrentProcessId();
         CreatorInfo->Reserved1 = 0;
+#ifdef _WIN64
         CreatorInfo->Reserved2 = 0;
+#endif
         InitializeListHead(&CreatorInfo->TypeList);
         Header = (POBJECT_HEADER)(CreatorInfo + 1);
     }
+
+    /* Handle entries reserve the low pointer bits for attributes. */
+    ASSERT(((ULONG_PTR)Header & OBJ_HANDLE_ATTRIBUTES) == 0);
 
     /* Record the optional headers using the native information mask */
     Header->InfoMask = 0;

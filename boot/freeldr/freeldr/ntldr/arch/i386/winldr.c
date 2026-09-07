@@ -319,19 +319,24 @@ static
 BOOLEAN
 WinLdrMapSpecialPages(void)
 {
+    ULONG Page;
     TRACE("HalPageTable: 0x%X\n", HalPageTable);
 
     /*
      * The Page Tables have been setup, make special handling
      * for the boot processor PCR and KI_USER_SHARED_DATA.
      */
-    HalPageTable[(KI_USER_SHARED_DATA - 0xFFC00000) >> MM_PAGE_SHIFT].PageFrameNumber = PcrBasePage+1;
+    HalPageTable[(KI_USER_SHARED_DATA - 0xFFC00000) >> MM_PAGE_SHIFT].PageFrameNumber = PcrBasePage + KIPCR_BOOT_SIZE / MM_PAGE_SIZE;
     HalPageTable[(KI_USER_SHARED_DATA - 0xFFC00000) >> MM_PAGE_SHIFT].Valid = 1;
     HalPageTable[(KI_USER_SHARED_DATA - 0xFFC00000) >> MM_PAGE_SHIFT].Write = 1;
 
-    HalPageTable[(KIP0PCRADDRESS - 0xFFC00000) >> MM_PAGE_SHIFT].PageFrameNumber = PcrBasePage;
-    HalPageTable[(KIP0PCRADDRESS - 0xFFC00000) >> MM_PAGE_SHIFT].Valid = 1;
-    HalPageTable[(KIP0PCRADDRESS - 0xFFC00000) >> MM_PAGE_SHIFT].Write = 1;
+    for (Page = 0; Page < KIPCR_BOOT_SIZE / MM_PAGE_SIZE; ++Page)
+    {
+        ULONG Index = ((KIP0PCRADDRESS - 0xFFC00000) >> MM_PAGE_SHIFT) + Page;
+        HalPageTable[Index].PageFrameNumber = PcrBasePage + Page;
+        HalPageTable[Index].Valid = 1;
+        HalPageTable[Index].Write = 1;
+    }
 
     /* Map APIC */
     WinLdrpMapApic();
@@ -379,8 +384,8 @@ void WinLdrSetupMachineDependent(PLOADER_PARAMETER_BLOCK LoaderBlock)
     LoaderBlock->u.I386.CommonDataArea = NULL; // Force No ABIOS support
     LoaderBlock->u.I386.MachineType = MACHINE_TYPE_ISA;
 
-    /* Allocate 2 pages for PCR: one for the boot processor PCR and one for KI_USER_SHARED_DATA */
-    Pcr = (ULONG_PTR)MmAllocateMemoryWithType(2 * MM_PAGE_SIZE, LoaderStartupPcrPage);
+    /* Reserve the full kernel PCR extent and a separate shared-data page. */
+    Pcr = (ULONG_PTR)MmAllocateMemoryWithType(KIPCR_BOOT_SIZE + MM_PAGE_SIZE, LoaderStartupPcrPage);
     PcrBasePage = Pcr >> MM_PAGE_SHIFT;
     if (Pcr == 0)
     {
@@ -468,7 +473,7 @@ WinLdrSetProcessorContext(
     __writecr0(__readcr0() | CR0_PG);
 
     /* The Kernel expects the boot processor PCR to be zero-filled on startup */
-    RtlZeroMemory((PVOID)Pcr, MM_PAGE_SIZE);
+    RtlZeroMemory((PVOID)Pcr, KIPCR_BOOT_SIZE);
 
     /* Get old values of GDT and IDT */
     Ke386GetGlobalDescriptorTable(&GdtDesc);
@@ -542,7 +547,7 @@ WinLdrSetProcessorContext(
     else
     {
         /* Vista+ way */
-        KiSetGdtEntry(KiGetGdtEntry(pGdt, KGDT_R0_PCR), (ULONG32)Pcr, MM_PAGE_SIZE - 1,
+        KiSetGdtEntry(KiGetGdtEntry(pGdt, KGDT_R0_PCR), (ULONG32)Pcr, KIPCR_BOOT_SIZE - 1,
                       TYPE_DATA, DPL_SYSTEM, 2);
     }
 
