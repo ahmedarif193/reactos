@@ -763,6 +763,9 @@ W32KAPI LRESULT WINAPI NtUserCallNextHookEx( HHOOK hhook, INT code, WPARAM wpara
 W32KAPI BOOL    WINAPI NtUserCallMsgFilter( MSG *msg, INT code );
 W32KAPI ULONG_PTR WINAPI NtUserCallNoParam( ULONG code );
 W32KAPI ULONG_PTR WINAPI NtUserCallOneParam( ULONG_PTR arg, ULONG code );
+#ifdef __REACTOS__
+W32KAPI DWORD WINAPI NtUserCallHwndLock( HWND hwnd, DWORD code );
+#endif
 W32KAPI ULONG_PTR WINAPI NtUserCallTwoParam( ULONG_PTR arg1, ULONG_PTR arg2, ULONG code );
 W32KAPI BOOL    WINAPI NtUserChangeClipboardChain( HWND hwnd, HWND next );
 W32KAPI LONG    WINAPI NtUserChangeDisplaySettings( UNICODE_STRING *devname, DEVMODEW *devmode, HWND hwnd,
@@ -777,6 +780,10 @@ W32KAPI INT     WINAPI NtUserCopyAcceleratorTable( HACCEL src, ACCEL *dst, INT c
 W32KAPI INT     WINAPI NtUserCountClipboardFormats(void);
 W32KAPI HACCEL  WINAPI NtUserCreateAcceleratorTable( ACCEL *table, INT count );
 W32KAPI BOOL    WINAPI NtUserCreateCaret( HWND hwnd, HBITMAP bitmap, int width, int height );
+#ifdef __REACTOS__
+W32KAPI HDESK   WINAPI NtUserCreateDesktop( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *device,
+                                            DEVMODEW *devmode, DWORD flags, ACCESS_MASK access );
+#endif
 W32KAPI HDESK   WINAPI NtUserCreateDesktopEx( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *device,
                                               DEVMODEW *devmode, DWORD flags, ACCESS_MASK access,
                                               ULONG heap_size );
@@ -897,7 +904,11 @@ W32KAPI UINT    WINAPI NtUserGetRegisteredRawInputDevices( RAWINPUTDEVICE *devic
 W32KAPI BOOL    WINAPI NtUserGetScrollBarInfo( HWND hwnd, LONG id, SCROLLBARINFO *info );
 W32KAPI ULONG   WINAPI NtUserGetSystemDpiForProcess( HANDLE process );
 W32KAPI HMENU   WINAPI NtUserGetSystemMenu( HWND hwnd, BOOL revert );
+#ifdef __REACTOS__
+W32KAPI HDESK   WINAPI NtUserGetThreadDesktop( DWORD thread, HDESK console_desktop );
+#else
 W32KAPI HDESK   WINAPI NtUserGetThreadDesktop( DWORD thread );
+#endif
 W32KAPI ULONG   WINAPI NtUserGetThreadDpiAwarenessContext(void);
 W32KAPI ULONG_PTR WINAPI NtUserGetThreadState( USERTHREADSTATECLASS cls );
 W32KAPI BOOL    WINAPI NtUserGetTitleBarInfo( HWND hwnd, TITLEBARINFO *info );
