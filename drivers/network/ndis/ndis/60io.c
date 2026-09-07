@@ -1071,6 +1071,45 @@ NdisMDeregisterInterruptEx(
     Ndis6DisconnectInterrupt((PNDIS6_ADAPTER_EXT)NdisInterruptHandle);
 }
 
+BOOLEAN
+NTAPI
+NdisMSynchronizeWithInterruptEx(
+    _In_ NDIS_HANDLE NdisInterruptHandle,
+    _In_ ULONG MessageId,
+    _In_ MINIPORT_SYNCHRONIZE_INTERRUPT_HANDLER SynchronizeFunction,
+    _In_opt_ PVOID SynchronizeContext)
+{
+    PNDIS6_ADAPTER_EXT Ext = (PNDIS6_ADAPTER_EXT)NdisInterruptHandle;
+    PKINTERRUPT InterruptObject;
+
+    if (Ext == NULL || SynchronizeFunction == NULL ||
+        Ext->Adapter == NULL || !Ext->Adapter->IsNdis6 ||
+        NDIS6_EXT(Ext->Adapter) != Ext)
+    {
+        return FALSE;
+    }
+
+    if (Ext->MsiConnected)
+    {
+        if (Ext->MsiTable == NULL || MessageId >= Ext->MsiTable->MessageCount)
+            return FALSE;
+
+        InterruptObject = Ext->MsiTable->MessageInfo[MessageId].InterruptObject;
+    }
+    else
+    {
+        /* MessageId is ignored for line-based interrupts. */
+        InterruptObject = Ext->InterruptObject;
+    }
+
+    if (InterruptObject == NULL)
+        return FALSE;
+
+    return KeSynchronizeExecution(InterruptObject,
+                                  (PKSYNCHRONIZE_ROUTINE)SynchronizeFunction,
+                                  SynchronizeContext);
+}
+
 KAFFINITY
 NTAPI
 NdisMQueueDpcEx(

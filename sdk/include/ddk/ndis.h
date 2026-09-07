@@ -7389,6 +7389,15 @@ NdisSetTimerObject(
 
 BOOLEAN
 NDISAPI
+NdisSetCoalescableTimerObject(
+  _In_     NDIS_HANDLE TimerObject,
+  _In_     LARGE_INTEGER DueTime,
+  _In_opt_ LONG MillisecondsPeriod,
+  _In_opt_ PVOID FunctionContext,
+  _In_     ULONG Tolerance);
+
+BOOLEAN
+NDISAPI
 NdisCancelTimerObject(
   _In_ NDIS_HANDLE TimerObject);
 
@@ -7409,6 +7418,84 @@ NdisFreeTimerObject(
 
 typedef NET_IF_MEDIA_CONNECT_STATE NDIS_MEDIA_CONNECT_STATE, *PNDIS_MEDIA_CONNECT_STATE;
 typedef NET_IF_MEDIA_DUPLEX_STATE  NDIS_MEDIA_DUPLEX_STATE,  *PNDIS_MEDIA_DUPLEX_STATE;
+
+typedef enum _NDIS_PORT_TYPE {
+  NdisPortTypeUndefined,
+  NdisPortTypeBridge,
+  NdisPortTypeRasConnection,
+  NdisPortType8021xSupplicant,
+  NdisPortTypeMax
+} NDIS_PORT_TYPE, *PNDIS_PORT_TYPE;
+
+typedef enum _NDIS_PORT_CONTROL_STATE {
+  NdisPortControlStateUnknown,
+  NdisPortControlStateControlled,
+  NdisPortControlStateUncontrolled
+} NDIS_PORT_CONTROL_STATE, *PNDIS_PORT_CONTROL_STATE;
+
+typedef enum _NDIS_PORT_AUTHORIZATION_STATE {
+  NdisPortAuthorizationUnknown,
+  NdisPortAuthorized,
+  NdisPortUnauthorized,
+  NdisPortReauthorizing
+} NDIS_PORT_AUTHORIZATION_STATE, *PNDIS_PORT_AUTHORIZATION_STATE;
+
+#define NDIS_PORT_AUTHENTICATION_PARAMETERS_REVISION_1 1
+typedef struct _NDIS_PORT_AUTHENTICATION_PARAMETERS {
+  NDIS_OBJECT_HEADER            Header;
+  NDIS_PORT_CONTROL_STATE       SendControlState;
+  NDIS_PORT_CONTROL_STATE       RcvControlState;
+  NDIS_PORT_AUTHORIZATION_STATE SendAuthorizationState;
+  NDIS_PORT_AUTHORIZATION_STATE RcvAuthorizationState;
+} NDIS_PORT_AUTHENTICATION_PARAMETERS, *PNDIS_PORT_AUTHENTICATION_PARAMETERS;
+#define NDIS_SIZEOF_PORT_AUTHENTICATION_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_PORT_AUTHENTICATION_PARAMETERS, RcvAuthorizationState)
+
+#define NDIS_PORT_CHAR_USE_DEFAULT_AUTH_SETTINGS 0x00000001
+#define NDIS_PORT_CHARACTERISTICS_REVISION_1      1
+
+typedef struct _NDIS_PORT_CHARACTERISTICS {
+  NDIS_OBJECT_HEADER            Header;
+  NDIS_PORT_NUMBER              PortNumber;
+  ULONG                         Flags;
+  NDIS_PORT_TYPE                Type;
+  NDIS_MEDIA_CONNECT_STATE      MediaConnectState;
+  ULONG64                       XmitLinkSpeed;
+  ULONG64                       RcvLinkSpeed;
+  NET_IF_DIRECTION_TYPE         Direction;
+  NDIS_PORT_CONTROL_STATE       SendControlState;
+  NDIS_PORT_CONTROL_STATE       RcvControlState;
+  NDIS_PORT_AUTHORIZATION_STATE SendAuthorizationState;
+  NDIS_PORT_AUTHORIZATION_STATE RcvAuthorizationState;
+} NDIS_PORT_CHARACTERISTICS, *PNDIS_PORT_CHARACTERISTICS;
+
+#define NDIS_SIZEOF_PORT_CHARACTERISTICS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_PORT_CHARACTERISTICS, RcvAuthorizationState)
+
+typedef struct _NDIS_PORT {
+  struct _NDIS_PORT            *Next;
+  PVOID                         NdisReserved;
+  PVOID                         MiniportReserved;
+  PVOID                         ProtocolReserved;
+  NDIS_PORT_CHARACTERISTICS     PortCharacteristics;
+} NDIS_PORT, *PNDIS_PORT;
+
+NDIS_STATUS
+NDISAPI
+NdisMAllocatePort(
+  _In_    NDIS_HANDLE NdisMiniportHandle,
+  _Inout_ PNDIS_PORT_CHARACTERISTICS PortCharacteristics);
+
+NDIS_STATUS
+NDISAPI
+NdisMFreePort(
+  _In_ NDIS_HANDLE NdisMiniportHandle,
+  _In_ NDIS_PORT_NUMBER PortNumber);
+
+VOID
+NDISAPI
+NdisMResetMiniport(
+  _In_ NDIS_HANDLE NdisMiniportHandle);
 
 typedef enum _NDIS_SUPPORTED_PAUSE_FUNCTIONS {
   NdisPauseFunctionsUnsupported,
@@ -7935,6 +8022,11 @@ typedef VOID
 typedef MINIPORT_ENABLE_INTERRUPT (*MINIPORT_ENABLE_INTERRUPT_HANDLER);
 
 typedef BOOLEAN
+(NTAPI MINIPORT_SYNCHRONIZE_INTERRUPT)(
+  _In_ NDIS_HANDLE SynchronizeContext);
+typedef MINIPORT_SYNCHRONIZE_INTERRUPT (*MINIPORT_SYNCHRONIZE_INTERRUPT_HANDLER);
+
+typedef BOOLEAN
 (NTAPI MINIPORT_MESSAGE_INTERRUPT)(
   _In_  NDIS_HANDLE MiniportInterruptContext,
   _In_  ULONG       MessageId,
@@ -8042,6 +8134,14 @@ VOID
 NDISAPI
 NdisMDeregisterInterruptEx(
   _In_ NDIS_HANDLE NdisInterruptHandle);
+
+BOOLEAN
+NDISAPI
+NdisMSynchronizeWithInterruptEx(
+  _In_ NDIS_HANDLE NdisInterruptHandle,
+  _In_ ULONG MessageId,
+  _In_ MINIPORT_SYNCHRONIZE_INTERRUPT_HANDLER SynchronizeFunction,
+  _In_opt_ PVOID SynchronizeContext);
 
 #if (NDIS_SUPPORT_NDIS620)
 KAFFINITY
@@ -8790,8 +8890,6 @@ NdisFSynchronousOidRequest(
 #define NDIS_MAX_PHYS_ADDRESS_LENGTH 32
 #endif
 
-typedef struct _NDIS_PORT NDIS_PORT, *PNDIS_PORT;
-
 #define NDIS_BIND_PARAMETERS_REVISION_1 1
 #if NDIS_SUPPORT_NDIS61
 #define NDIS_BIND_PARAMETERS_REVISION_2 2
@@ -8911,6 +9009,12 @@ typedef struct _NET_PNP_EVENT_NOTIFICATION {
 #define NDIS_SIZEOF_NET_PNP_EVENT_NOTIFICATION_REVISION_2 \
   RTL_SIZEOF_THROUGH_FIELD(NET_PNP_EVENT_NOTIFICATION, VPortId)
 #endif
+
+NDIS_STATUS
+NDISAPI
+NdisMNetPnPEvent(
+  _In_ NDIS_HANDLE NdisMiniportHandle,
+  _In_ PNET_PNP_EVENT_NOTIFICATION NetPnPEventNotification);
 
 #define NDIS_PROTOCOL_PAUSE_PARAMETERS_REVISION_1 1
 typedef struct _NDIS_PROTOCOL_PAUSE_PARAMETERS {
