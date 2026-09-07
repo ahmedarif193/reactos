@@ -461,9 +461,10 @@ if(PREINSTALL_EXTRA_FILE_LIST)
     list(APPEND _preinstall_overlay_deps "${_preinstall_extra_file_list}")
 endif()
 
-# Disk image size configuration (in MB). The default provides a 400-MB NTFS
-# partition after the 1-MB alignment gap and 64-MB FAT boot partition.
-set(_preinstall_image_size_default 465)
+# Disk image size configuration (in MiB). The 1-GiB default provides a
+# 959-MiB NTFS partition after the 1-MiB alignment gap and 64-MiB FAT boot
+# partition.
+set(_preinstall_image_size_default 1024)
 set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Disk image size in MB, including the alignment gap, boot partition, and system partition")
 set(_rosprofiler_package_pdbs_default OFF)
 if(MSVC AND (CMAKE_BUILD_TYPE MATCHES "^[Dd]ebug$" OR
