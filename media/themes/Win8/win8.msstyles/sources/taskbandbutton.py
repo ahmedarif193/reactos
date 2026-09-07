@@ -3,15 +3,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from showdesktop import STYLES, png, resource, save_bmp, straighten
+from showdesktop import HORIZONTAL_IMAGE, VERTICAL_IMAGE, STYLES, png, resource, save_bmp, straighten
 
-HORIZONTAL_IMAGE = 1129
-VERTICAL_IMAGE = 1141
-SOURCE_STATES = 7
-TOOLBAR_STATES = (0, 3, 5, 0, 3, 4)
+SOURCE_STATES = 3
+TOOLBAR_STATES = (0, 1, 2, 0, 1, 2)
 
 
-def remap(w, h, rows):
+def restate(w, h, rows):
     band = h // SOURCE_STATES
     out = []
     for src in TOOLBAR_STATES:
@@ -24,7 +22,7 @@ def main():
     for ident, name in ((HORIZONTAL_IMAGE, "NORMAL_TASKBANDBUTTON.bmp"),
                         (VERTICAL_IMAGE, "NORMAL_TASKBANDBUTTONVERTICAL.bmp")):
         w, h, rows = png(resource(STYLES, "IMAGE", ident))
-        w, h, rows = remap(w, h, straighten(rows))
+        w, h, rows = restate(w, h, straighten(rows))
         save_bmp(w, h, rows, os.path.join(out, name))
 
 
