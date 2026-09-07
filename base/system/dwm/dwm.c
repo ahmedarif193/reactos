@@ -902,7 +902,6 @@ DwmReflection(LONG ScreenX, LONG ScreenY)
     return g_reflectLut[u];
 }
 #define DWM_MATERIAL_FRINGE 96u
-#define DWM_MATERIAL_TINT_BAND 48u
 #define DWM_MATERIAL_EDGE_LIGHT 26u
 
 static ULONG
