@@ -210,6 +210,18 @@ PspCreateProcess(
 //
 // Thread Routines
 //
+#ifdef _WIN64
+NTSTATUS
+NTAPI
+PspPrepareWow64Thread(
+    _In_ HANDLE ProcessHandle,
+    _In_ PWOW64_CONTEXT Wow64Context,
+    _Out_ PCONTEXT ThreadContext,
+    _In_ PINITIAL_TEB Wow64InitialTeb,
+    _Out_ PINITIAL_TEB InitialTeb
+);
+#endif
+
 NTSTATUS
 NTAPI
 PspCreateThread(

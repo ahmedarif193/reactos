@@ -2114,7 +2114,25 @@ RtlWow64GetCurrentCpuArea(USHORT *Machine, void **Context, void **CpuArea)
     PCHPE_V2_CPU_AREA_INFO Area = ChpepGetCurrentCpuArea();
 
     if (!Area)
-        return STATUS_NOT_SUPPORTED;
+    {
+        WOW64_CPU_AREA_INFO Info;
+        NTSTATUS Status;
+
+        Status = RtlWow64GetCpuAreaInfo(NtCurrentTeb()->TlsSlots[WOW64_TLS_CPURESERVED], 0, &Info);
+        if (!NT_SUCCESS(Status))
+            return STATUS_NOT_SUPPORTED;
+
+        if (Machine)
+            *Machine = Info.Machine;
+
+        if (Context)
+            *Context = Info.Context;
+
+        if (CpuArea)
+            *CpuArea = *(void **)Info.ContextEx;
+
+        return STATUS_SUCCESS;
+    }
 
     if (Machine)
         *Machine = IMAGE_FILE_MACHINE_AMD64;

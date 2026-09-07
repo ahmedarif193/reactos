@@ -2322,7 +2322,7 @@ BasepCaptureExtendedAttributes(
     return TRUE;
 }
 
-#ifdef _WIN64
+#if defined(_WIN64) || defined(WOW64_I386_RUNTIME)
 static BOOL
 BasepCreateWow64Process(IN HANDLE UserToken,
                         IN HANDLE SaferToken,
@@ -3984,7 +3984,7 @@ StartScan:
 
     /* Make sure the image was compiled for this processor */
     if (
-#ifdef _WIN64
+#if defined(_WIN64) || defined(WOW64_I386_RUNTIME)
         (ImageInformation.Machine != IMAGE_FILE_MACHINE_I386) &&
 #endif
         ((ImageInformation.Machine < SharedUserData->ImageNumberLow) ||
@@ -4158,7 +4158,7 @@ StartScan:
         goto AppNameRetry;
     }
 
-#ifdef _WIN64
+#if defined(_WIN64) || defined(WOW64_I386_RUNTIME)
     if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386)
     {
         Result = BasepCreateWow64Process(hUserToken, TokenHandle, JobHandle, &PathName, lpApplicationName, lpCommandLine, lpEnvironment, lpCurrentDirectory, &StartupInfo, dwCreationFlags | NoWindow, bInheritHandles, lpProcessAttributes, lpThreadAttributes, ParameterFlags, Flags, ParentProcess, InheritHandleList, InheritHandleCount, &PriorityClass, lpProcessInformation);

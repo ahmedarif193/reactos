@@ -165,53 +165,88 @@ WindowFromPoint(POINT Point)
 int WINAPI
 MapWindowPoints(HWND hWndFrom, HWND hWndTo, LPPOINT lpPoints, UINT cPoints)
 {
-    PWND FromWnd = NULL, ToWnd = NULL;
     BOOL mirror_from, mirror_to;
+    BOOL HaveFrom = FALSE, HaveTo = FALSE;
+    RECT rcFrom = {0, 0, 0, 0}, rcTo = {0, 0, 0, 0};
+    DWORD ExStyleFrom = 0, ExStyleTo = 0;
     POINT Delta;
     UINT i;
     int Change = 1;
 
-    if (hWndFrom)
+#ifdef WOW64_I386_RUNTIME
     {
-       FromWnd = ValidateHwnd(hWndFrom);
-       if (!FromWnd)
-           return 0;
+        ROS_WINDOWINFO Info;
+
+        if (hWndFrom)
+        {
+            if (!NtUserCallHwndParam(hWndFrom, (DWORD_PTR)&Info, HWNDPARAM_ROUTINE_ROS_GETWINDOWINFO))
+                return 0;
+            rcFrom = Info.rcClient;
+            ExStyleFrom = Info.ExStyle;
+            HaveFrom = TRUE;
+        }
+        if (hWndTo)
+        {
+            if (!NtUserCallHwndParam(hWndTo, (DWORD_PTR)&Info, HWNDPARAM_ROUTINE_ROS_GETWINDOWINFO))
+                return 0;
+            rcTo = Info.rcClient;
+            ExStyleTo = Info.ExStyle;
+            HaveTo = TRUE;
+        }
     }
-    if (hWndTo)
+#else
     {
-       ToWnd = ValidateHwnd(hWndTo);
-       if (!ToWnd)
-           return 0;
+        PWND FromWnd = NULL, ToWnd = NULL;
+
+        if (hWndFrom)
+        {
+            FromWnd = ValidateHwnd(hWndFrom);
+            if (!FromWnd)
+                return 0;
+            rcFrom = FromWnd->rcClient;
+            ExStyleFrom = FromWnd->ExStyle;
+            HaveFrom = TRUE;
+        }
+        if (hWndTo)
+        {
+            ToWnd = ValidateHwnd(hWndTo);
+            if (!ToWnd)
+                return 0;
+            rcTo = ToWnd->rcClient;
+            ExStyleTo = ToWnd->ExStyle;
+            HaveTo = TRUE;
+        }
     }
+#endif
 
     /* Note: Desktop Top and Left is always 0! */
     Delta.x = Delta.y = 0;
     mirror_from = mirror_to = FALSE;
 
-    if (FromWnd && hWndFrom != GetDesktopWindow()) // FromWnd->fnid != FNID_DESKTOP)
+    if (HaveFrom && hWndFrom != GetDesktopWindow()) // FromWnd->fnid != FNID_DESKTOP)
     {
-       if (FromWnd->ExStyle & WS_EX_LAYOUTRTL)
+       if (ExStyleFrom & WS_EX_LAYOUTRTL)
        {
           mirror_from = TRUE;
           Change = -Change;
-          Delta.x = -FromWnd->rcClient.right;
+          Delta.x = -rcFrom.right;
        }
        else
-          Delta.x = FromWnd->rcClient.left;
-       Delta.y = FromWnd->rcClient.top;
+          Delta.x = rcFrom.left;
+       Delta.y = rcFrom.top;
     }
 
-    if (ToWnd && hWndTo != GetDesktopWindow()) // ToWnd->fnid != FNID_DESKTOP)
+    if (HaveTo && hWndTo != GetDesktopWindow()) // ToWnd->fnid != FNID_DESKTOP)
     {
-       if (ToWnd->ExStyle & WS_EX_LAYOUTRTL)
+       if (ExStyleTo & WS_EX_LAYOUTRTL)
        {
           mirror_to = TRUE;
           Change = -Change;
-          Delta.x += Change * ToWnd->rcClient.right;
+          Delta.x += Change * rcTo.right;
        }
        else
-          Delta.x -= Change * ToWnd->rcClient.left;
-       Delta.y -= ToWnd->rcClient.top;
+          Delta.x -= Change * rcTo.left;
+       Delta.y -= rcTo.top;
     }
 
     for (i = 0; i != cPoints; i++)
@@ -237,19 +272,31 @@ MapWindowPoints(HWND hWndFrom, HWND hWndTo, LPPOINT lpPoints, UINT cPoints)
 BOOL WINAPI
 ScreenToClient(HWND hWnd, LPPOINT lpPoint)
 {
+    RECT rcClient;
+    DWORD ExStyle;
+#ifdef WOW64_I386_RUNTIME
+    ROS_WINDOWINFO Info;
+    if (!NtUserCallHwndParam(hWnd, (DWORD_PTR)&Info, HWNDPARAM_ROUTINE_ROS_GETWINDOWINFO))
+        return FALSE;
+    rcClient = Info.rcClient;
+    ExStyle = Info.ExStyle;
+#else
     PWND Wnd;
     /* Note: Desktop Top and Left is always 0! */
     Wnd = ValidateHwnd(hWnd);
     if (!Wnd)
         return FALSE;
+    rcClient = Wnd->rcClient;
+    ExStyle = Wnd->ExStyle;
+#endif
 
     if (hWnd != GetDesktopWindow()) // Wnd->fnid != FNID_DESKTOP )
     {
-       if (Wnd->ExStyle & WS_EX_LAYOUTRTL)
-          lpPoint->x = Wnd->rcClient.right - lpPoint->x;
+       if (ExStyle & WS_EX_LAYOUTRTL)
+          lpPoint->x = rcClient.right - lpPoint->x;
        else
-          lpPoint->x -= Wnd->rcClient.left;
-       lpPoint->y -= Wnd->rcClient.top;
+          lpPoint->x -= rcClient.left;
+       lpPoint->y -= rcClient.top;
     }
     return TRUE;
 }
@@ -260,19 +307,31 @@ ScreenToClient(HWND hWnd, LPPOINT lpPoint)
 BOOL WINAPI
 ClientToScreen(HWND hWnd, LPPOINT lpPoint)
 {
+    RECT rcClient;
+    DWORD ExStyle;
+#ifdef WOW64_I386_RUNTIME
+    ROS_WINDOWINFO Info;
+    if (!NtUserCallHwndParam(hWnd, (DWORD_PTR)&Info, HWNDPARAM_ROUTINE_ROS_GETWINDOWINFO))
+        return FALSE;
+    rcClient = Info.rcClient;
+    ExStyle = Info.ExStyle;
+#else
     PWND Wnd;
     /* Note: Desktop Top and Left is always 0! */
     Wnd = ValidateHwnd(hWnd);
     if (!Wnd)
         return FALSE;
+    rcClient = Wnd->rcClient;
+    ExStyle = Wnd->ExStyle;
+#endif
 
     if ( hWnd != GetDesktopWindow()) // Wnd->fnid != FNID_DESKTOP )
     {
-       if (Wnd->ExStyle & WS_EX_LAYOUTRTL)
-          lpPoint->x = Wnd->rcClient.right - lpPoint->x;
+       if (ExStyle & WS_EX_LAYOUTRTL)
+          lpPoint->x = rcClient.right - lpPoint->x;
        else
-          lpPoint->x += Wnd->rcClient.left;
-       lpPoint->y += Wnd->rcClient.top;
+          lpPoint->x += rcClient.left;
+       lpPoint->y += rcClient.top;
     }
     return TRUE;
 }

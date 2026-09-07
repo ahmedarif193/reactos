@@ -1012,6 +1012,71 @@ NtCreateThread(OUT PHANDLE ThreadHandle,
         SafeInitialTeb = *InitialTeb;
     }
 
+#ifdef _WIN64
+    {
+        PEPROCESS Process;
+        CONTEXT SafeContext;
+        WOW64_CONTEXT Wow64Context;
+        INITIAL_TEB Wow64InitialTeb;
+        NTSTATUS Status;
+        BOOLEAN IsWow64Context = FALSE;
+
+        _SEH2_TRY
+        {
+#ifdef _M_AMD64
+            SafeContext = *ThreadContext;
+            if (SafeContext.SegCs == (KGDT64_R3_CMCODE | RPL_MASK))
+            {
+                RtlZeroMemory(&Wow64Context, sizeof(Wow64Context));
+                Wow64Context.Eip = (ULONG)SafeContext.Rip;
+                Wow64Context.Esp = (ULONG)SafeContext.Rsp;
+                Wow64Context.Eax = (ULONG)SafeContext.Rax;
+                Wow64Context.Ebx = (ULONG)SafeContext.Rbx;
+                Wow64Context.Ecx = (ULONG)SafeContext.Rcx;
+                Wow64Context.Edx = (ULONG)SafeContext.Rdx;
+                Wow64Context.Esi = (ULONG)SafeContext.Rsi;
+                Wow64Context.Edi = (ULONG)SafeContext.Rdi;
+                Wow64Context.Ebp = (ULONG)SafeContext.Rbp;
+                Wow64Context.EFlags = SafeContext.EFlags;
+                IsWow64Context = TRUE;
+            }
+#else
+            {
+                ULONG Flags = *(volatile ULONG *)ThreadContext;
+                if ((Flags & WOW64_CONTEXT_i386) && !(Flags & CONTEXT_ARM64))
+                {
+                    Wow64Context = *(volatile WOW64_CONTEXT *)ThreadContext;
+                    IsWow64Context = TRUE;
+                }
+            }
+#endif
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+
+        if (IsWow64Context)
+        {
+            Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_CREATE_THREAD, PsProcessType, KeGetPreviousMode(), (PVOID *)&Process, NULL);
+            if (!NT_SUCCESS(Status)) return Status;
+            if (Process->Wow64Process == NULL)
+            {
+                ObDereferenceObject(Process);
+                return STATUS_INVALID_PARAMETER;
+            }
+            ObDereferenceObject(Process);
+
+            Wow64InitialTeb = SafeInitialTeb;
+            Status = PspPrepareWow64Thread(ProcessHandle, &Wow64Context, &SafeContext, &Wow64InitialTeb, &SafeInitialTeb);
+            if (!NT_SUCCESS(Status)) return Status;
+
+            return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, &SafeContext, &SafeInitialTeb, &Wow64InitialTeb, CreateSuspended, NULL, NULL);
+        }
+    }
+#endif
+
     /* Call the shared function */
     return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, ThreadContext, &SafeInitialTeb, NULL, CreateSuspended, NULL, NULL);
 }

@@ -63,6 +63,8 @@ DIB_32BPP_BitBltSrcCopy(PBLTINFO BltInfo)
   BOOLEAN  bTopToBottom, bLeftToRight;
   BOOLEAN  blDeltaSrcNeg, blDeltaDestNeg;
   BOOLEAN  blDeltaAdjustDone = FALSE;
+  PEXLATEOBJ pexlo = (PEXLATEOBJ)BltInfo->XlateSourceToDest;
+  PFN_XLATE pfnXlate = pexlo ? pexlo->pfnXlate : gexloTrivial.pfnXlate;
 
   DPRINT("DIB_32BPP_BitBltSrcCopy: SourcePoint (%d, %d), SourceSurface cx/cy (%d/%d), "
          "DestSurface cx/cy (%d/%d) DestRect: (%d,%d)-(%d,%d)\n",
@@ -278,12 +280,27 @@ DIB_32BPP_BitBltSrcCopy(PBLTINFO BltInfo)
         SourceBits += (DestWidth - 1) * 2;
       }
 
-      for (i = BltInfo->DestRect.left; i < BltInfo->DestRect.right; i++)
+      if (pexlo != NULL && pexlo->pfnXlate == EXLATEOBJ_iXlateShiftAndMask)
       {
-        xColor = *((PWORD) SourceBits);
-        *((PDWORD) DestBits) = (DWORD)XLATEOBJ_iXlate(BltInfo->XlateSourceToDest, xColor);
-        DEC_OR_INC(SourceBits, bLeftToRight, 2);
-        DestBits += 4;
+        for (i = BltInfo->DestRect.left; i < BltInfo->DestRect.right; i++)
+        {
+          xColor = *((PWORD) SourceBits);
+          *((PDWORD) DestBits) = (_rotl(xColor, pexlo->ulRedShift) & pexlo->ulRedMask) |
+                                 (_rotl(xColor, pexlo->ulGreenShift) & pexlo->ulGreenMask) |
+                                 (_rotl(xColor, pexlo->ulBlueShift) & pexlo->ulBlueMask);
+          DEC_OR_INC(SourceBits, bLeftToRight, 2);
+          DestBits += 4;
+        }
+      }
+      else
+      {
+        for (i = BltInfo->DestRect.left; i < BltInfo->DestRect.right; i++)
+        {
+          xColor = *((PWORD) SourceBits);
+          *((PDWORD) DestBits) = (DWORD)pfnXlate(pexlo, xColor);
+          DEC_OR_INC(SourceBits, bLeftToRight, 2);
+          DestBits += 4;
+        }
       }
 
       DEC_OR_INC(SourceLine, bTopToBottom, BltInfo->SourceSurface->lDelta);

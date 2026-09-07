@@ -27,15 +27,19 @@ set(WOW64_I386_MODULES
     cryptnet
     cryptsp
     cryptui
+    d3dwine
     dbghelp
+    ddraw
     dcomp
     devmgr
     dhcpcsvc
     dinput8
+    dsound
     dnsapi
     dui70
     fmifs
     gdi32
+    gdi32_vista
     gdiplus
     hid
     ieframe
@@ -56,6 +60,7 @@ set(WOW64_I386_MODULES
     msacm32
     msimg32
     msvcrt
+    mswsock
     ncrypt
     netapi32
     newdev
@@ -66,6 +71,7 @@ set(WOW64_I386_MODULES
     ole32
     oleacc
     oleaut32
+    opengl32
     powrprof
     profapi
     propsys
@@ -101,10 +107,12 @@ set(WOW64_I386_MODULES
     wintrust
     wkscli
     ws2_32
-    ws2help)
+    ws2help
+    wsock32)
 
 set(WOW64_I386_EXECUTABLES
     notepad
+    regsvr32
     winver)
 
 # Additional names under which a built module must be shipped. Keep the

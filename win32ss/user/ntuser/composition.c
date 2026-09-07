@@ -3094,8 +3094,8 @@ IntCompositionWatchdog(VOID)
 {
     if (!g_DwmAttached || g_DwmProcess == NULL)
         return;
-    if ((LONGLONG)KeQueryInterruptTime() - g_DwmLastFrameTime <= (20LL * 1000000LL))
-        return; /* alive within 2 s */
+    if ((LONGLONG)KeQueryInterruptTime() - g_DwmLastFrameTime <= (300LL * 1000000LL))
+        return; /* alive within 30 s */
 
     ERR("DWM went silent - tearing down composition, reverting to direct draw\n");
 

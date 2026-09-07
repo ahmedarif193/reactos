@@ -1011,6 +1011,43 @@ NtUserCallHwndParam(
             return Ret;
         }
 
+        case HWNDPARAM_ROUTINE_ROS_GETWINDOWINFO:
+        {
+            PWND Window;
+            ROS_WINDOWINFO Info;
+            BOOL Ret = FALSE;
+
+            UserEnterShared();
+            Window = UserGetWindowObject(hWnd);
+            if (Window)
+            {
+                Info.rcWindow = Window->rcWindow;
+                Info.rcClient = Window->rcClient;
+                Info.style = Window->style;
+                Info.ExStyle = Window->ExStyle;
+                Info.state = Window->state;
+                Info.state2 = Window->state2;
+                Info.atomClassName = Window->pcls ? Window->pcls->atomClassName : 0;
+                Ret = TRUE;
+            }
+            UserLeave();
+
+            if (Ret)
+            {
+                _SEH2_TRY
+                {
+                    ProbeForWrite((PROS_WINDOWINFO)Param, sizeof(Info), 1);
+                    *(PROS_WINDOWINFO)Param = Info;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Ret = FALSE;
+                }
+                _SEH2_END;
+            }
+            return Ret;
+        }
+
         case HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGA:
         case HWNDPARAM_ROUTINE_ROS_GETWINDOWLONGW:
         {

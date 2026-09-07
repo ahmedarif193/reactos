@@ -84,10 +84,21 @@ typedef struct
 } OUTLINETEXTMETRIC32;
 
 
+#if defined(__REACTOS__) && !defined(GDI_OBJECT_TYPE_BITMAP)
+#define GDI_OBJECT_TYPE_BITMAP 0x00050000
+#endif
+
 static DWORD gdi_handle_type( HGDIOBJ obj )
 {
     unsigned int handle = HandleToUlong( obj );
+#ifdef __REACTOS__
+    unsigned int type = handle & NTGDI_HANDLE_TYPE_MASK;
+
+    if (type == GDI_OBJECT_TYPE_BITMAP) return NTGDI_OBJ_BITMAP;
+    return type;
+#else
     return handle & NTGDI_HANDLE_TYPE_MASK;
+#endif
 }
 
 NTSTATUS WINAPI wow64_NtGdiAbortDoc( UINT *args )

@@ -2768,6 +2768,23 @@ RtlCreateProcessParameters (
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlCreateProcessParametersEx (
+    _Out_ PRTL_USER_PROCESS_PARAMETERS *ProcessParameters,
+    _In_ PUNICODE_STRING ImagePathName,
+    _In_opt_ PUNICODE_STRING DllPath,
+    _In_opt_ PUNICODE_STRING CurrentDirectory,
+    _In_opt_ PUNICODE_STRING CommandLine,
+    _In_opt_ PWSTR Environment,
+    _In_opt_ PUNICODE_STRING WindowTitle,
+    _In_opt_ PUNICODE_STRING DesktopInfo,
+    _In_opt_ PUNICODE_STRING ShellInfo,
+    _In_opt_ PUNICODE_STRING RuntimeInfo,
+    _In_ ULONG Flags
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlCreateUserProcess(
     _In_ PUNICODE_STRING ImageFileName,
     _In_ ULONG Attributes,
@@ -4225,6 +4242,15 @@ RtlZombifyActivationContext(
 //
 // WOW64 Functions
 //
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlWow64GetCpuAreaInfo(
+    _In_ PWOW64_CPURESERVED CpuReserved,
+    _In_ ULONG Reserved,
+    _Out_ PWOW64_CPU_AREA_INFO CpuAreaInfo
+);
+
 NTSYSAPI
 USHORT
 NTAPI

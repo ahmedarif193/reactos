@@ -1237,6 +1237,36 @@ GetWindowInfo(HWND hWnd,
     if ( !pwi || pwi->cbSize != sizeof(WINDOWINFO))
        SetLastError(ERROR_INVALID_PARAMETER); // Just set the error and go!
 
+#ifdef WOW64_I386_RUNTIME
+    {
+        ROS_WINDOWINFO Info;
+
+        if (!NtUserCallHwndParam(hWnd, (DWORD_PTR)&Info, HWNDPARAM_ROUTINE_ROS_GETWINDOWINFO))
+            return FALSE;
+
+        UserGetWindowBorders(Info.style, Info.ExStyle, &Size, FALSE);
+        pwi->rcWindow = Info.rcWindow;
+        pwi->rcClient = Info.rcClient;
+        pwi->dwStyle = Info.style;
+        pwi->dwExStyle = Info.ExStyle;
+        pwi->cxWindowBorders = Size.cx;
+        pwi->cyWindowBorders = Size.cy;
+        pwi->dwWindowStatus = 0;
+        if (Info.state & WNDS_ACTIVEFRAME || (GetActiveWindow() == hWnd))
+            pwi->dwWindowStatus = WS_ACTIVECAPTION;
+        pwi->atomWindowType = Info.atomClassName;
+        if (Info.state2 & WNDS2_WIN50COMPAT)
+            pwi->wCreatorVersion = 0x500;
+        else if (Info.state2 & WNDS2_WIN40COMPAT)
+            pwi->wCreatorVersion = 0x400;
+        else if (Info.state2 & WNDS2_WIN31COMPAT)
+            pwi->wCreatorVersion = 0x30A;
+        else
+            pwi->wCreatorVersion = 0x300;
+        return TRUE;
+    }
+#endif
+
     pWnd = ValidateHwnd(hWnd);
     if (!pWnd)
         return Ret;

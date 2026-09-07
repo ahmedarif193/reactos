@@ -52,6 +52,13 @@ typedef struct _EXLATEOBJ
 
 extern EXLATEOBJ gexloTrivial;
 
+_Function_class_(FN_XLATE)
+ULONG
+FASTCALL
+EXLATEOBJ_iXlateShiftAndMask(
+    _In_ PEXLATEOBJ pexlo,
+    _In_ ULONG iColor);
+
 _Notnull_
 FORCEINLINE
 PFN_XLATE

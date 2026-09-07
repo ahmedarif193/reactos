@@ -532,7 +532,11 @@ NTSTATUS WINAPI wow64_NtQueryInformationToken( UINT *args )
     }
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtQueryInformationToken: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_INVALID_INFO_CLASS;
     }
 }
@@ -592,7 +596,11 @@ NTSTATUS WINAPI wow64_NtSetInformationToken( UINT *args )
         else return STATUS_INFO_LENGTH_MISMATCH;
 
     default:
+#ifdef __REACTOS__
+        FIXME( "wow64_NtSetInformationToken: unsupported class %u\n", class );
+#else
         FIXME( "unsupported class %u\n", class );
+#endif
         return STATUS_NOT_IMPLEMENTED;
     }
 }

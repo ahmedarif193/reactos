@@ -313,6 +313,12 @@ RtlpCollapsePath(PWSTR Path, /* ULONG PathBufferSize, ULONG PathLength, */ ULONG
     PWSTR EndBuffer = Path + PathLength; // Path + PathBufferSize / sizeof(WCHAR);
     PWSTR EndPath;
 
+    if (mark > PathLength)
+    {
+        DPRINT("RtlpCollapsePath: mark %lu beyond path '%S' len %Iu\n", mark, Path, PathLength);
+        mark = (ULONG)PathLength;
+    }
+
     /* Convert slashes into backslashes */
     for (p = Path; *p; p++)
     {
@@ -410,7 +416,11 @@ RtlpCollapsePath(PWSTR Path, /* ULONG PathBufferSize, ULONG PathLength, */ ULONG
      * the path string and going up to the end of the buffer.
      * It also NULL-terminate the path string.
      */
-    ASSERT(EndBuffer >= p);
+    if (p > EndBuffer)
+    {
+        DPRINT("RtlpCollapsePath: overrun path '%S' mark %lu len %Iu\n", Path, mark, PathLength);
+        p = EndBuffer;
+    }
     RtlZeroMemory(p, (EndBuffer - p + 1) * sizeof(WCHAR));
 
     /* Return the real path length */

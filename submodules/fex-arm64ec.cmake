@@ -61,7 +61,20 @@ include(ExternalProject)
 # and run normally afterwards.  Debugging ReactOS does not require an
 # unoptimised emulator, so pick Release here unless asked otherwise.
 set(FEX_ARM64EC_BUILD_TYPE "Release" CACHE STRING
-    "CMAKE_BUILD_TYPE used for the FEX ARM64EC emulator itself")
+    "CMAKE_BUILD_TYPE used for the FEX emulators themselves")
+
+# FEX picks exactly one Windows front-end per configure:
+#   Source/Windows/CMakeLists.txt
+#     if (ARCHITECTURE_arm64ec)  -> ARM64EC -> libarm64ecfex.dll, x86-64 guests
+#     elseif (ARCHITECTURE_arm64) -> WOW64  -> libwow64fex.dll,   i386 guests
+# They are mutually exclusive, so shipping both needs a second build of the
+# same source configured for plain aarch64.  It shares FEX_ARM64EC_BUILD_TYPE:
+# the i386 emulator is a compiler too and pays the same -O0 penalty.
+set(FEX_WOW64_AVAILABLE ON)
+set(FEX_WOW64_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-wow64-build")
+set(FEX_WOW64_DLL_SOURCE "${FEX_WOW64_BINARY_DIR}/Bin/libwow64fex.dll")
+set(FEX_WOW64_DLL_DEST   "${CMAKE_CURRENT_BINARY_DIR}/wow64fex.dll")
+set(FEX_WOW64_DLL_SYMBOLS "${REACTOS_BINARY_DIR}/symbols/wow64fex.dll")
 
 set(FEX_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-build")
 set(FEX_DLL_SOURCE "${FEX_BINARY_DIR}/Bin/libarm64ecfex.dll")
@@ -142,6 +155,60 @@ ExternalProject_Add(fex-arm64ec-build
     USES_TERMINAL_BUILD OFF
 )
 
+# The i386 emulator, from the same source configured for aarch64 rather than
+# arm64ec.  DEPENDS on the ARM64EC build because both drive the one shared
+# source directory, whose prepared state configure.sh writes in place.
+ExternalProject_Add(fex-wow64-build
+    DEPENDS fex-arm64ec-build
+    SOURCE_DIR "${FEX_SOURCE_DIR}"
+    BINARY_DIR "${FEX_WOW64_BINARY_DIR}"
+    DOWNLOAD_COMMAND ""
+    UPDATE_COMMAND ""
+    PATCH_COMMAND ""
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=${FEX_ARM64EC_BUILD_TYPE}
+        -DCMAKE_C_COMPILER=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/aarch64-w64-mingw32-clang
+        -DCMAKE_CXX_COMPILER=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/aarch64-w64-mingw32-clang++
+        -DCMAKE_ASM_COMPILER=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/aarch64-w64-mingw32-clang
+        -DCMAKE_AR=${CMAKE_AR}
+        -DCMAKE_DLLTOOL=${CMAKE_DLLTOOL}
+        -DCMAKE_LINKER=${CMAKE_LINKER}
+        -DCMAKE_RC_COMPILER=${CMAKE_RC_COMPILER}
+        -DCMAKE_SYSROOT=${CMAKE_SYSROOT}
+        -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+        "-DCMAKE_C_FLAGS=-D__REACTOS__ -isystem${FEX_ARM64EC_INCLUDE_DIR}"
+        "-DCMAKE_CXX_FLAGS=-D__REACTOS__ -isystem${FEX_ARM64EC_CXX_INCLUDE_DIR} -isystem${FEX_ARM64EC_INCLUDE_DIR}"
+        -DCMAKE_ASM_FLAGS=-D__REACTOS__
+        "-DCMAKE_SHARED_LINKER_FLAGS=-L${FEX_ARM64EC_LIBRARY_DIR}"
+        -DTUNE_CPU=none
+        -DCMAKE_DISABLE_FIND_PACKAGE_fmt=ON
+        -DREACTOS=ON
+        -DCMAKE_SYSTEM_NAME=Windows
+        -DCMAKE_SYSTEM_PROCESSOR=aarch64
+        -DBUILD_TESTING=OFF
+        -DBUILD_FEX_LINUX_TESTS=OFF
+        -DBUILD_THUNKS=OFF
+        -DBUILD_FEXCONFIG=OFF
+        -DENABLE_JEMALLOC_GLIBC_ALLOC=OFF
+        -DENABLE_GDB_SYMBOLS=OFF
+        -DENABLE_VIXL_DISASSEMBLER=OFF
+        -DENABLE_VIXL_SIMULATOR=OFF
+        -DENABLE_ZYDIS=OFF
+        -DENABLE_FEXCORE_PROFILER=OFF
+        -DENABLE_OFFLINE_TELEMETRY=OFF
+        -DENABLE_LTO=OFF
+        -DUSE_PDB_DEBUGINFO=OFF
+        -DOVERRIDE_VERSION=ReactOS
+        -DOVERRIDE_HASH=0000000000000000000000000000000000000000
+        -DPython_EXECUTABLE=${FEX_PYTHON_EXECUTABLE}
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target wow64fex
+    INSTALL_COMMAND ${CMAKE_COMMAND} -E make_directory "${REACTOS_BINARY_DIR}/symbols"
+    COMMAND ${FEX_LLVM_STRIP} --only-keep-debug "${FEX_WOW64_DLL_SOURCE}" -o "${FEX_WOW64_DLL_SYMBOLS}"
+    COMMAND ${FEX_LLVM_STRIP} --strip-debug "${FEX_WOW64_DLL_SOURCE}" -o "${FEX_WOW64_DLL_DEST}"
+    BUILD_BYPRODUCTS "${FEX_WOW64_DLL_DEST}" "${FEX_WOW64_DLL_SYMBOLS}"
+    USES_TERMINAL_BUILD OFF
+)
+
 # configure.sh writes this state file from the FEX revision and recursive FEX
 # submodule revisions.  Updating it invalidates the external
 # configure and build stamps without rebuilding FEX on every image invocation.
@@ -158,6 +225,14 @@ add_cd_file(
     FILE "${FEX_DLL_DEST}"
     DESTINATION reactos/system32
     NAME_ON_CD arm64ecfex.dll
+    NO_CAB
+    FOR all)
+
+add_cd_file(
+    TARGET fex-wow64-build
+    FILE "${FEX_WOW64_DLL_DEST}"
+    DESTINATION reactos/system32
+    NAME_ON_CD wow64fex.dll
     NO_CAB
     FOR all)
 

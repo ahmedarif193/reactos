@@ -161,3 +161,7 @@ if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND CMAKE_C_COMPILER_ID STRE
 endif()
 add_dependencies(kernel32 psdk errcodes asm)
 add_cd_file(TARGET kernel32 DESTINATION reactos/system32 FOR all)
+
+if(WOW64_I386_RUNTIME AND ARCH STREQUAL "i386")
+    target_compile_definitions(kernel32 PRIVATE WOW64_I386_RUNTIME)
+endif()
