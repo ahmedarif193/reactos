@@ -429,6 +429,20 @@ VidInitialize(
     }
     PhysicalFrameBufferStart = FrameBufferStart;
 
+    /* Publish the active scanout for the later WDDM ownership transfer. */
+    RtlZeroMemory(&VidpFrameBufferInfo, sizeof(VidpFrameBufferInfo));
+    VidpFrameBufferInfo.FrameBufferBase = TranslatedAddress;
+    VidpFrameBufferInfo.FrameBufferSize = FrameBufferSize;
+    VidpFrameBufferInfo.HorizontalResolution = ScreenWidth;
+    VidpFrameBufferInfo.VerticalResolution = ScreenHeight;
+    VidpFrameBufferInfo.PixelsPerScanLine = VideoConfigData.PixelsPerScanLine;
+    VidpFrameBufferInfo.PixelFormat = VideoConfigData.BitsPerPixel;
+    VidpFrameBufferInfo.RedMask = VideoConfigData.PixelMasks.RedMask;
+    VidpFrameBufferInfo.GreenMask = VideoConfigData.PixelMasks.GreenMask;
+    VidpFrameBufferInfo.BlueMask = VideoConfigData.PixelMasks.BlueMask;
+    VidpFrameBufferInfo.Reserved = VideoConfigData.PixelMasks.ReservedMask;
+    VidpFrameBufferInfo.Dpi = Dpi;
+
 
     /*
      * Reserve off-screen area for the backbuffer that contains
@@ -471,6 +485,7 @@ VidInitialize(
     return TRUE;
 
 Failure:
+    RtlZeroMemory(&VidpFrameBufferInfo, sizeof(VidpFrameBufferInfo));
     BootFontCleanup(&BootVidFont);
 
     /* We failed somewhere; unmap the framebuffer if we mapped it */

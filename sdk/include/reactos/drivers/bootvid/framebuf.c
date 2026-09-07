@@ -471,8 +471,7 @@ FindBootDisplayFromLoaderGop(
         return FALSE;
 
     Extension = KeLoaderBlock->Extension;
-    if ((Extension->Size < RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, GopFramebuffer)) ||
-        !Extension->BootViaEFI)
+    if (Extension->Size < RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, GopFramebuffer))
     {
         return FALSE;
     }
@@ -510,7 +509,7 @@ FindBootDisplayFromLoaderGop(
     if (BusNumber)
         *BusNumber = 0;
 
-    DPRINT1("Display: loader UEFI GOP framebuffer 0x%I64X size=%lu %lux%lu stride=%lu bpp=%lu\n",
+    DPRINT1("Display: loader firmware framebuffer 0x%I64X size=%lu %lux%lu stride=%lu bpp=%lu\n",
             VideoRamAddress->QuadPart,
             *VideoRamSize,
             VideoConfigData->ScreenWidth,

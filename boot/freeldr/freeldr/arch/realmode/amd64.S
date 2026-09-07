@@ -131,7 +131,6 @@ Msg_Starting:
 //Msg_SwitchToLongMode:
 //    .ascii "Switching to long mode....", CR, LF, NUL
 
-.align 8
 gdt:
     .word HEX(0000), HEX(0000), HEX(0000), HEX(0000) /* 00: NULL descriptor */
     .word HEX(0000), HEX(0000), HEX(0000), HEX(0000) /* 08:  */
@@ -352,6 +351,9 @@ ExitToLongMode:
 
     /* Save current stack pointer */
     mov word ptr ds:[stack16], sp
+
+    /* BIOS callbacks may leave their own temporary GDT loaded. */
+    lgdt lXdtPrefix ds:[gdtptr]
 
     /* Set PAE and PGE: 10100000b */
     mov eax, cr4

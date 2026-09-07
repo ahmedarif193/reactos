@@ -45,6 +45,9 @@ VOID PcVideoSetPaletteColor(UCHAR Color, UCHAR Red, UCHAR Green, UCHAR Blue);
 VOID PcVideoGetPaletteColor(UCHAR Color, UCHAR* Red, UCHAR* Green, UCHAR* Blue);
 VOID PcVideoSync(VOID);
 VOID PcVideoPrepareForReactOS(VOID);
+BOOLEAN
+PcVideoInitializeBootFramebuffer(
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBuffer);
 VOID PcPrepareForReactOS(VOID);
 
 PFREELDR_MEMORY_DESCRIPTOR PcMemGetMemoryMap(ULONG *MemoryMapSize);

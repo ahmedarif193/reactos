@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <arc/arc.h>
 #include "display.h"
 
 /*
@@ -36,6 +37,11 @@ VidInitialize(
 BOOLEAN
 NTAPI
 VidQueryDisplayInfo(_Out_ PVID_DISPLAY_INFO DisplayInfo);
+
+BOOLEAN
+NTAPI
+VidQueryFrameBufferInfo(
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
 
 NTSTATUS
 NTAPI

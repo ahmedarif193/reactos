@@ -222,7 +222,11 @@ InbvDriverInitialize(
          * framebuffer at kernel handoff. Resetting the boot display here
          * clears that framebuffer before the UEFI logo path can draw.
          */
-        if (LoaderBlock->Extension && LoaderBlock->Extension->BootViaEFI)
+        if (LoaderBlock->Extension &&
+            LoaderBlock->Extension->Size >=
+                RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, GopFramebuffer) &&
+            LoaderBlock->Extension->GopFramebuffer.FrameBufferBase.QuadPart != 0 &&
+            LoaderBlock->Extension->GopFramebuffer.FrameBufferSize != 0)
             ResetMode = FALSE;
     }
 
@@ -254,6 +258,17 @@ InbvDriverInitialize(
     InbvBootDriverInstalled = VidInitialize(ResetMode);
     if (InbvBootDriverInstalled)
     {
+        /*
+         * Legacy BIOS loaders describe linear scanout in the ARC hardware
+         * tree instead of LOADER_PARAMETER_EXTENSION.  Preserve the exact
+         * framebuffer selected by bootvid for the WDDM ownership handoff.
+         */
+        if (!InbvGopInfoValid &&
+            VidQueryFrameBufferInfo(&InbvGopFramebuffer))
+        {
+            InbvGopInfoValid = TRUE;
+        }
+
         /* Find bitmap resources in the kernel */
         ResourceCount = min(Count, RTL_NUMBER_OF(ResourceList) - 1);
         for (i = 1; i <= ResourceCount; i++)
