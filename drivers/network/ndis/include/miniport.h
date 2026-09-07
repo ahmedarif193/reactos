@@ -203,6 +203,11 @@ MiniportWorker(
     IN PVOID WorkItem);
 
 VOID NTAPI
+MiniRequestComplete(
+    IN NDIS_HANDLE MiniportAdapterHandle,
+    IN NDIS_STATUS Status);
+
+VOID NTAPI
 MiniSendComplete(
     IN  NDIS_HANDLE     MiniportAdapterHandle,
     IN  PNDIS_PACKET    Packet,
