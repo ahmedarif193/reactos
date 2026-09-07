@@ -188,6 +188,27 @@ ChkDskDlg(
     return FALSE;
 }
 
+static DWORD
+ShadePixel(COLORREF cr, double fFactor)
+{
+    INT r = GetRValue(cr), g = GetGValue(cr), b = GetBValue(cr);
+
+    if (fFactor <= 1.0)
+    {
+        r = (INT)(r * fFactor);
+        g = (INT)(g * fFactor);
+        b = (INT)(b * fFactor);
+    }
+    else
+    {
+        double t = (fFactor - 1.0 > 1.0) ? 1.0 : fFactor - 1.0;
+        r += (INT)((255 - r) * t);
+        g += (INT)((255 - g) * t);
+        b += (INT)((255 - b) * t);
+    }
+    return (r << 16) | (g << 8) | b;
+}
+
 VOID
 CDrvDefExt::PaintStaticControls(HWND hwndDlg, LPDRAWITEMSTRUCT pDrawItem)
 {
@@ -195,7 +216,7 @@ CDrvDefExt::PaintStaticControls(HWND hwndDlg, LPDRAWITEMSTRUCT pDrawItem)
 
     if (pDrawItem->CtlID == 14013)
     {
-        hBrush = CreateSolidBrush(RGB(0, 0, 255));
+        hBrush = CreateSolidBrush(RGB(38, 160, 218));
         if (hBrush)
         {
             FillRect(pDrawItem->hDC, &pDrawItem->rcItem, hBrush);
@@ -204,7 +225,7 @@ CDrvDefExt::PaintStaticControls(HWND hwndDlg, LPDRAWITEMSTRUCT pDrawItem)
     }
     else if (pDrawItem->CtlID == 14014)
     {
-        hBrush = CreateSolidBrush(RGB(255, 0, 255));
+        hBrush = CreateSolidBrush(RGB(176, 176, 176));
         if (hBrush)
         {
             FillRect(pDrawItem->hDC, &pDrawItem->rcItem, hBrush);
@@ -213,86 +234,162 @@ CDrvDefExt::PaintStaticControls(HWND hwndDlg, LPDRAWITEMSTRUCT pDrawItem)
     }
     else if (pDrawItem->CtlID == 14015)
     {
-        HBRUSH hBlueBrush = CreateSolidBrush(RGB(0, 0, 255));
-        HBRUSH hMagBrush = CreateSolidBrush(RGB(255, 0, 255));
-        HBRUSH hbrOld;
-        HPEN hBlackPen = (HPEN)GetStockObject(BLACK_PEN);
-        HPEN hDarkBluePen = CreatePen(PS_SOLID, 1, RGB(0, 0, 128));
-        HPEN hDarkMagPen = CreatePen(PS_SOLID, 1, RGB(128, 0, 128));
-        HPEN hOldPen = (HPEN)SelectObject(pDrawItem->hDC, hDarkMagPen);
-        INT xCenter = (pDrawItem->rcItem.left + pDrawItem->rcItem.right) / 2;
-        INT yCenter = (pDrawItem->rcItem.top + pDrawItem->rcItem.bottom - 10) / 2;
-        INT cx = pDrawItem->rcItem.right - pDrawItem->rcItem.left;
-        INT cy = pDrawItem->rcItem.bottom - pDrawItem->rcItem.top - 10;
-        INT xRadial = xCenter + (INT)(cos(M_PI + m_FreeSpacePerc / 100.0f * M_PI * 2.0f) * cx / 2);
-        INT yRadial = yCenter - (INT)(sin(M_PI + m_FreeSpacePerc / 100.0f * M_PI * 2.0f) * cy / 2);
+        const COLORREF crUsed = RGB(38, 160, 218), crFree = RGB(176, 176, 176);
+        const INT nScale = 4, nDepth = 10;
+        RECT rc = pDrawItem->rcItem;
+        INT cx = rc.right - rc.left, cy = rc.bottom - rc.top;
+        if (cx <= 0 || cy <= nDepth ||
+            cx > MAXLONG / (nScale * nScale * 4) / cy)
+            return;
+        INT bw = cx * nScale, bh = cy * nScale;
+        INT ew = bw, eh = (cy - nDepth) * nScale, dep = nDepth * nScale;
+        INT xc = ew / 2, yc = eh / 2, xRadial, yRadial, x, y, i, j, k;
+        double aFree = m_FreeSpacePerc / 100.0 * M_PI * 2.0;
+        BITMAPINFO bmi = { { sizeof(BITMAPINFOHEADER), bw, -bh, 1, 32, BI_RGB } };
+        PDWORD pBig = NULL, pSmall = NULL;
+        HDC hdcBig = NULL, hdcSmall = NULL;
+        HBITMAP hbmBig = NULL, hbmSmall = NULL, hbmOldBig, hbmOldSmall;
+        HBRUSH hbrFree, hbrUsed, hbrOld;
+        HPEN hpenOld;
 
-        TRACE("FreeSpace %u a %f cx %d\n", m_FreeSpacePerc, M_PI+m_FreeSpacePerc / 100.0f * M_PI * 2.0f, cx);
-
-        for (INT x = pDrawItem->rcItem.left; x < pDrawItem->rcItem.right; ++x)
+        hdcBig = CreateCompatibleDC(pDrawItem->hDC);
+        hdcSmall = CreateCompatibleDC(pDrawItem->hDC);
+        if (hdcBig && hdcSmall)
         {
-            double cos_val = (x - xCenter) * 2.0f / cx;
-            INT y = yCenter + (INT)(sin(acos(cos_val)) * cy / 2) - 1;
-            HPEN hCenterPen;
-
-            if (m_FreeSpacePerc < 50 && x == xRadial)
-                SelectObject(pDrawItem->hDC, hDarkBluePen);
-            
-            /* Temporarily change pens to draw edges */
-            if (x == pDrawItem->rcItem.left)
-                hCenterPen = (HPEN)SelectObject(pDrawItem->hDC, hBlackPen);
-            else if (x == pDrawItem->rcItem.right - 1)
-                SelectObject(pDrawItem->hDC, hBlackPen);
-
-            MoveToEx(pDrawItem->hDC, x, y, NULL);
-            LineTo(pDrawItem->hDC, x, y + 10);
-            SetPixel(pDrawItem->hDC, x, y + 10, RGB(0, 0, 0));
-            
-            /* Restore fill section pens */
-            if (x == pDrawItem->rcItem.left)
-                SelectObject(pDrawItem->hDC, hCenterPen);
+            hbmBig = CreateDIBSection(hdcBig, &bmi, DIB_RGB_COLORS, (PVOID *)&pBig, NULL, 0);
+            bmi.bmiHeader.biWidth = cx;
+            bmi.bmiHeader.biHeight = -cy;
+            hbmSmall = CreateDIBSection(hdcSmall, &bmi, DIB_RGB_COLORS, (PVOID *)&pSmall, NULL, 0);
         }
 
-        SelectObject(pDrawItem->hDC, hBlackPen);
-
-        if (m_FreeSpacePerc > 50)
+        hbrFree = CreateSolidBrush(crFree);
+        hbrUsed = CreateSolidBrush(crUsed);
+        if (!hbmBig || !hbmSmall || !hbrFree || !hbrUsed)
         {
-            hbrOld = (HBRUSH)SelectObject(pDrawItem->hDC, hMagBrush);
+            if (hbrFree) DeleteObject(hbrFree);
+            if (hbrUsed) DeleteObject(hbrUsed);
+            if (hbmBig) DeleteObject(hbmBig);
+            if (hbmSmall) DeleteObject(hbmSmall);
+            if (hdcBig) DeleteDC(hdcBig);
+            if (hdcSmall) DeleteDC(hdcSmall);
+            return;
+        }
 
-            Ellipse(pDrawItem->hDC, pDrawItem->rcItem.left, pDrawItem->rcItem.top,
-                    pDrawItem->rcItem.right, pDrawItem->rcItem.bottom - 10);
+        hbmOldBig = (HBITMAP)SelectObject(hdcBig, hbmBig);
+        hbmOldSmall = (HBITMAP)SelectObject(hdcSmall, hbmSmall);
 
-            SelectObject(pDrawItem->hDC, hBlueBrush);
+        SetStretchBltMode(hdcBig, COLORONCOLOR);
+        StretchBlt(hdcBig, 0, 0, bw, bh, pDrawItem->hDC, rc.left, rc.top, cx, cy, SRCCOPY);
+        GdiFlush();
 
-            if (m_FreeSpacePerc < 100)
+        for (x = 0; x < ew; ++x)
+        {
+            double cos_val = (x - xc + 0.5) * 2.0 / ew, sin_val, fCurve;
+            COLORREF crBase;
+            INT yb;
+
+            if (cos_val < -1.0) cos_val = -1.0;
+            else if (cos_val > 1.0) cos_val = 1.0;
+
+            sin_val = sin(acos(cos_val));
+            yb = yc + (INT)(sin_val * eh / 2) - 1;
+            crBase = ((M_PI - acos(cos_val)) < aFree) ? crFree : crUsed;
+            fCurve = 0.36 + 0.42 * sin_val;
+
+            for (k = 0; k <= dep; ++k)
             {
-                Pie(pDrawItem->hDC, pDrawItem->rcItem.left, pDrawItem->rcItem.top, pDrawItem->rcItem.right,
-                    pDrawItem->rcItem.bottom - 10, xRadial, yRadial, pDrawItem->rcItem.left, yCenter);
+                INT yy = yb + k;
+                double f;
+
+                if (yy < 0 || yy >= bh)
+                    continue;
+                f = (k == dep) ? 0.20 : fCurve * (1.0 - 0.30 * k / dep);
+                pBig[yy * bw + x] = ShadePixel(crBase, f);
             }
         }
-        else
+
+        xRadial = xc + (INT)(cos(M_PI + aFree) * xc);
+        yRadial = yc - (INT)(sin(M_PI + aFree) * yc);
+
+        hpenOld = (HPEN)SelectObject(hdcBig, GetStockObject(NULL_PEN));
+        hbrOld = (HBRUSH)SelectObject(hdcBig, (m_FreeSpacePerc > 50) ? hbrFree : hbrUsed);
+
+        Ellipse(hdcBig, 0, 0, ew + 1, eh + 1);
+
+        if (m_FreeSpacePerc > 0 && m_FreeSpacePerc < 100)
         {
-            hbrOld = (HBRUSH)SelectObject(pDrawItem->hDC, hBlueBrush);
-
-            Ellipse(pDrawItem->hDC, pDrawItem->rcItem.left, pDrawItem->rcItem.top,
-                    pDrawItem->rcItem.right, pDrawItem->rcItem.bottom - 10);
-
-            SelectObject(pDrawItem->hDC, hMagBrush);
-
-            if (m_FreeSpacePerc > 0)
+            if (m_FreeSpacePerc > 50)
             {
-                Pie(pDrawItem->hDC, pDrawItem->rcItem.left, pDrawItem->rcItem.top, pDrawItem->rcItem.right,
-                    pDrawItem->rcItem.bottom - 10, pDrawItem->rcItem.left, yCenter, xRadial, yRadial);
+                SelectObject(hdcBig, hbrUsed);
+                Pie(hdcBig, 0, 0, ew + 1, eh + 1, xRadial, yRadial, 0, yc);
+            }
+            else
+            {
+                SelectObject(hdcBig, hbrFree);
+                Pie(hdcBig, 0, 0, ew + 1, eh + 1, 0, yc, xRadial, yRadial);
             }
         }
 
-        SelectObject(pDrawItem->hDC, hbrOld);
-        SelectObject(pDrawItem->hDC, hOldPen);
+        SelectObject(hdcBig, hbrOld);
+        SelectObject(hdcBig, hpenOld);
+        DeleteObject(hbrFree);
+        DeleteObject(hbrUsed);
+        GdiFlush();
 
-        DeleteObject(hBlueBrush);
-        DeleteObject(hMagBrush);
-        DeleteObject(hDarkBluePen);
-        DeleteObject(hDarkMagPen);
+        for (y = 0; y < eh; ++y)
+        {
+            double t = (double)y / eh, dy = (y - eh * 0.30) / (eh * 0.5);
+
+            for (x = 0; x < ew; ++x)
+            {
+                DWORD px = pBig[y * bw + x];
+                COLORREF crBase;
+                double dx, dist, hl;
+
+                if (px == 0x26A0DA)
+                    crBase = crUsed;
+                else if (px == 0xB0B0B0)
+                    crBase = crFree;
+                else
+                    continue;
+
+                dx = (x - ew * 0.36) / (ew * 0.5);
+                dist = sqrt(dx * dx + dy * dy);
+                hl = (dist < 0.9) ? (1.0 - dist / 0.9) : 0.0;
+                pBig[y * bw + x] = ShadePixel(crBase, 1.42 - 0.70 * t + 0.30 * hl * hl);
+            }
+        }
+
+        for (y = 0; y < cy; ++y)
+        {
+            for (x = 0; x < cx; ++x)
+            {
+                UINT r = 0, g = 0, b = 0;
+
+                for (j = 0; j < nScale; ++j)
+                {
+                    for (i = 0; i < nScale; ++i)
+                    {
+                        DWORD px = pBig[(y * nScale + j) * bw + x * nScale + i];
+                        r += (px >> 16) & 0xff;
+                        g += (px >> 8) & 0xff;
+                        b += px & 0xff;
+                    }
+                }
+                pSmall[y * cx + x] = ((r / (nScale * nScale)) << 16) |
+                                     ((g / (nScale * nScale)) << 8) |
+                                     (b / (nScale * nScale));
+            }
+        }
+
+        BitBlt(pDrawItem->hDC, rc.left, rc.top, cx, cy, hdcSmall, 0, 0, SRCCOPY);
+
+        SelectObject(hdcBig, hbmOldBig);
+        SelectObject(hdcSmall, hbmOldSmall);
+        DeleteObject(hbmBig);
+        DeleteObject(hbmSmall);
+        DeleteDC(hdcBig);
+        DeleteDC(hdcSmall);
     }
 }
 
