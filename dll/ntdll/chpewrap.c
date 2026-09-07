@@ -149,16 +149,14 @@ NtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
                           ULONG ExtendedParameterCount)
 {
     CHPE_CROSS_PROCESS_CONNECTION Connection = {0};
-    ULONG_PTR ZeroBits;
     PVOID CallbackToken;
     NTSTATUS Status;
     BOOLEAN IsCurrent;
     BOOLEAN EcCode;
 
-    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, &ZeroBits, &EcCode);
+    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, NULL, &EcCode);
     if (!NT_SUCCESS(Status))
         return Status;
-    UNREFERENCED_PARAMETER(ZeroBits);
 
     IsCurrent = ChpeIsCurrentProcessHandle(ProcessHandle);
     CallbackToken = ChpeEnterEmulatorCallback();

@@ -100,7 +100,7 @@ NTSTATUS
 RtlpGetExtendedParameterZeroBits(
     _In_reads_opt_(ExtendedParameterCount) PMEM_EXTENDED_PARAMETER ExtendedParameters,
     _In_ ULONG ExtendedParameterCount,
-    _Out_ PULONG_PTR ZeroBits,
+    _Out_opt_ PULONG_PTR ZeroBits,
     _Out_ PBOOLEAN EcCode);
 
 /* ldrinit.c */

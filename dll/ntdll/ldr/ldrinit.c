@@ -12,6 +12,7 @@
 #include <ntdll.h>
 #include <compat_undoc.h>
 #include <compatguid_undoc.h>
+#include <reactos/wow64shared.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -765,7 +766,7 @@ LdrpInitializeThread(IN PCONTEXT Context)
     }
 
     /* Check for TLS */
-    if (LdrpImageHasTls && !LdrpShutdownInProgress)
+    if (LdrpImageEntry->TlsIndex && !LdrpShutdownInProgress)
     {
         /* Set up the Act Ctx */
         ActCtx.Size = sizeof(ActCtx);
@@ -1072,7 +1073,7 @@ LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL)
     }
 
     /* Check for TLS */
-    if (LdrpImageHasTls && Context)
+    if (LdrpImageEntry->TlsIndex && Context)
     {
         /* Set up the Act Ctx */
         ActCtx.Size = sizeof(ActCtx);
@@ -1222,7 +1223,7 @@ LdrShutdownProcess(VOID)
     }
 
     /* Check for TLS */
-    if (LdrpImageHasTls)
+    if (LdrpImageEntry->TlsIndex)
     {
         /* Set up the Act Ctx */
         ActCtx.Size = sizeof(ActCtx);
@@ -1368,7 +1369,7 @@ LdrShutdownThread(VOID)
     }
 
     /* Check for TLS */
-    if (LdrpImageHasTls)
+    if (LdrpImageEntry->TlsIndex)
     {
         /* Set up the Act Ctx */
         ActCtx.Size = sizeof(ActCtx);
@@ -2568,7 +2569,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     RtlInitializeBitMap(&TlsBitMap,
                         Peb->TlsBitmapBits,
                         TLS_MINIMUM_AVAILABLE);
-    RtlSetBit(&TlsBitMap, 0);
+    RtlSetBits(&TlsBitMap, 0, IsWow64 ? WOW64_TLS_MAX_NUMBER : 1);
     RtlInitializeBitMap(&TlsExpansionBitMap,
                         Peb->TlsExpansionBitmapBits,
                         TLS_EXPANSION_SLOTS);

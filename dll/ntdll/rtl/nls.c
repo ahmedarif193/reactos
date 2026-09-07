@@ -130,7 +130,11 @@ NlsMapFile(
     if (!NT_SUCCESS(Status)) return Status;
     Status = RtlAppendUnicodeToString(&Path, SharedUserData->NtSystemRoot);
     if (!NT_SUCCESS(Status)) return Status;
+#ifdef _M_IX86
+    Status = RtlAppendUnicodeToString(&Path, NtCurrentTeb()->WOW32Reserved ? L"\\Sysnative\\" : L"\\System32\\");
+#else
     Status = RtlAppendUnicodeToString(&Path, L"\\System32\\");
+#endif
     if (!NT_SUCCESS(Status)) return Status;
     Status = RtlAppendUnicodeToString(&Path, FileName);
     if (!NT_SUCCESS(Status)) return Status;
