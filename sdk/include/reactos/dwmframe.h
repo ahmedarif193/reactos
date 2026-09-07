@@ -210,6 +210,10 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_BACKDROP_REGION_NONCLIENT 1u
 #define DWM_BACKDROP_REGION_WINDOW    2u
 
+/* Per-channel distance from the material key within which a painted pixel is
+ * still composited as full glass plus the difference as additive light. */
+#define DWM_MATERIAL_TINT_BAND 48u
+
 #define DWM_ANIM_MINIMIZE 1u
 #define DWM_ANIM_RESTORE  2u
 #define DWM_ANIM_MOVE     3u

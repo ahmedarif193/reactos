@@ -7,6 +7,7 @@
  */
 
 #include "uxthemep.h"
+#include <reactos/dwmframe.h>
 
 #define NC_PREVIEW_MSGBOX_HALF_WIDTH 75
 #define NC_PREVIEW_MSGBOX_OFFSET_X -29
@@ -15,10 +16,191 @@
 /* Shared with DwmSetWindowAttribute in dwmapi.dll. */
 static const WCHAR immersive_dark_mode_propW[] = L"ReactOS.Dwm.ImmersiveDarkMode";
 
+#define CAPTION_GLOW_RADIUS 5
+#define CAPTION_GLOW_PASSES 3
+#define CAPTION_GLOW_GAIN   3
+#define CAPTION_GLOW_LIGHT  35
+
 #define CAPTION_BUTTON_WIDTH_UNITS  46
 #define CAPTION_BUTTON_HEIGHT_UNITS 32
 #define CAPTION_BUTTON_HOT_LIFT     24
 #define CAPTION_BUTTON_PRESSED_LIFT 14
+
+static BOOL
+ThemeGetGlassKey(HWND hWnd, COLORREF *pcrKey)
+{
+    ULONG_PTR color;
+
+    if (!GetPropW(hWnd, DWM_PROP_BACKDROP_REGION))
+        return FALSE;
+    color = (ULONG_PTR)GetPropW(hWnd, DWM_PROP_BACKDROP_COLOR);
+    if (!color)
+        return FALSE;
+    *pcrKey = (COLORREF)(color - 1);
+    return TRUE;
+}
+
+static void
+ThemeGlowBlur(BYTE *pMask, BYTE *pTemp, INT cx, INT cy, INT nRadius)
+{
+    INT x, y, i, nSum, nWindow = nRadius * 2 + 1;
+
+    for (y = 0; y < cy; y++)
+    {
+        const BYTE *pSrc = pMask + y * cx;
+        BYTE *pDst = pTemp + y * cx;
+
+        nSum = 0;
+        for (i = 0; i <= nRadius && i < cx; i++)
+            nSum += pSrc[i];
+        for (x = 0; x < cx; x++)
+        {
+            pDst[x] = (BYTE)(nSum / nWindow);
+            if (x + nRadius + 1 < cx)
+                nSum += pSrc[x + nRadius + 1];
+            if (x - nRadius >= 0)
+                nSum -= pSrc[x - nRadius];
+        }
+    }
+    for (x = 0; x < cx; x++)
+    {
+        nSum = 0;
+        for (i = 0; i <= nRadius && i < cy; i++)
+            nSum += pTemp[i * cx + x];
+        for (y = 0; y < cy; y++)
+        {
+            pMask[y * cx + x] = (BYTE)(nSum / nWindow);
+            if (y + nRadius + 1 < cy)
+                nSum += pTemp[(y + nRadius + 1) * cx + x];
+            if (y - nRadius >= 0)
+                nSum -= pTemp[(y - nRadius) * cx + x];
+        }
+    }
+}
+
+static void
+ThemeGlowGain(BYTE *pMask, INT nCount, INT nGain)
+{
+    INT i;
+
+    for (i = 0; i < nCount; i++)
+    {
+        INT v = pMask[i] * nGain;
+
+        pMask[i] = (BYTE)(v > 255 ? 255 : v);
+    }
+}
+
+static INT
+ThemeGlowLift(INT nValue, INT nKey, INT nLift)
+{
+    INT nLimit = nKey + DWM_MATERIAL_TINT_BAND;
+
+    if (nLimit > 255)
+        nLimit = 255;
+    if (nValue + nLift > nLimit)
+        nLift = nLimit - nValue;
+    return nLift > 0 ? nLift : 0;
+}
+
+static BOOL
+ThemeDrawGlowText(HDC hDC, const RECT *prcText, const RECT *prcClip, COLORREF crKey,
+                  COLORREF crText, LPCWSTR pszText, INT cch, DWORD dwFlags)
+{
+    BITMAPINFO bmi;
+    RECT rc, rcText;
+    HDC hdcMem;
+    HBITMAP hbmMem, hbmOld;
+    DWORD *pBits;
+    BYTE *pMask, *pTemp;
+    INT cx, cy, i, nRadius, nCount;
+    INT nKeyR = GetRValue(crKey), nKeyG = GetGValue(crKey), nKeyB = GetBValue(crKey);
+
+    nRadius = MulDiv(CAPTION_GLOW_RADIUS, GetDeviceCaps(hDC, LOGPIXELSY), 96);
+    if (nRadius < 1)
+        nRadius = 1;
+    rc = *prcText;
+    InflateRect(&rc, nRadius * (CAPTION_GLOW_PASSES + 1),
+                nRadius * (CAPTION_GLOW_PASSES + 1));
+    if (!IntersectRect(&rc, &rc, prcClip))
+        return FALSE;
+    cx = rc.right - rc.left;
+    cy = rc.bottom - rc.top;
+    if (cx <= 0 || cy <= 0 || cx > MAXLONG / 4 / cy)
+        return FALSE;
+
+    hdcMem = CreateCompatibleDC(hDC);
+    if (!hdcMem)
+        return FALSE;
+
+    ZeroMemory(&bmi, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = cx;
+    bmi.bmiHeader.biHeight = -cy;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    hbmMem = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, (void **)&pBits, NULL, 0);
+    nCount = cx * cy;
+    pMask = hbmMem ? HeapAlloc(GetProcessHeap(), 0, nCount * 2) : NULL;
+    if (!pMask)
+    {
+        if (hbmMem)
+            DeleteObject(hbmMem);
+        DeleteDC(hdcMem);
+        return FALSE;
+    }
+    pTemp = pMask + nCount;
+
+    hbmOld = SelectObject(hdcMem, hbmMem);
+    SelectObject(hdcMem, GetCurrentObject(hDC, OBJ_FONT));
+    SetBkMode(hdcMem, TRANSPARENT);
+
+    rcText = *prcText;
+    OffsetRect(&rcText, -rc.left, -rc.top);
+
+    for (i = 0; i < nCount; i++)
+        pBits[i] = 0;
+    SetTextColor(hdcMem, RGB(255, 255, 255));
+    DrawTextW(hdcMem, pszText, cch, &rcText, dwFlags);
+    GdiFlush();
+    for (i = 0; i < nCount; i++)
+        pMask[i] = (BYTE)(pBits[i] & 0xff);
+
+    for (i = 0; i < CAPTION_GLOW_PASSES; i++)
+    {
+        ThemeGlowBlur(pMask, pTemp, cx, cy, nRadius);
+        if (i + 1 < CAPTION_GLOW_PASSES)
+            ThemeGlowGain(pMask, nCount, CAPTION_GLOW_GAIN);
+    }
+
+    BitBlt(hdcMem, 0, 0, cx, cy, hDC, rc.left, rc.top, SRCCOPY);
+    GdiFlush();
+    for (i = 0; i < nCount; i++)
+    {
+        INT lift = pMask[i] * CAPTION_GLOW_LIGHT / 255;
+        INT r = (pBits[i] >> 16) & 0xff;
+        INT g = (pBits[i] >> 8) & 0xff;
+        INT b = pBits[i] & 0xff;
+
+        r += ThemeGlowLift(r, nKeyR, lift);
+        g += ThemeGlowLift(g, nKeyG, lift);
+        b += ThemeGlowLift(b, nKeyB, lift);
+        pBits[i] = (r << 16) | (g << 8) | b;
+    }
+
+    SetTextColor(hdcMem, crText);
+    rcText = *prcText;
+    OffsetRect(&rcText, -rc.left, -rc.top);
+    DrawTextW(hdcMem, pszText, cch, &rcText, dwFlags);
+    BitBlt(hDC, rc.left, rc.top, cx, cy, hdcMem, 0, 0, SRCCOPY);
+
+    SelectObject(hdcMem, hbmOld);
+    DeleteObject(hbmMem);
+    DeleteDC(hdcMem);
+    HeapFree(GetProcessHeap(), 0, pMask);
+    return TRUE;
+}
 
 static BOOL
 ThemeHasCompositedFrame(void)
@@ -139,8 +321,11 @@ HRESULT WINAPI ThemeDrawCaptionText(PDRAW_CONTEXT pcontext, RECT* pRect, int iPa
     LOGFONTW logfont;
     COLORREF textColor;
     COLORREF oldTextColor;
+    COLORREF crKey;
+    RECT rcText;
     int align = CA_LEFT;
     int drawStyles = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
+    BOOL drawn = FALSE;
 
     WCHAR buffer[50];
     WCHAR *pszText = buffer;
@@ -174,23 +359,54 @@ HRESULT WINAPI ThemeDrawCaptionText(PDRAW_CONTEXT pcontext, RECT* pRect, int iPa
         textColor = GetThemeSysColor(pcontext->theme, pcontext->Active ? COLOR_CAPTIONTEXT : COLOR_INACTIVECAPTIONTEXT);
 
     GetThemeEnumValue(pcontext->theme, iPartId, iStateId, TMT_CONTENTALIGNMENT, &align);
+    rcText = *pRect;
     if (align == CA_CENTER)
-        drawStyles |= DT_CENTER;
+    {
+        RECT rcCalc = rcText;
+        int width;
+
+        DrawTextW(pcontext->hDC, pszText, len - 1, &rcCalc,
+                  (drawStyles & ~DT_END_ELLIPSIS) | DT_CALCRECT);
+        width = rcCalc.right - rcCalc.left;
+        if (width < rcText.right - rcText.left)
+        {
+            int left = (pcontext->wi.rcWindow.right -
+                        pcontext->wi.rcWindow.left - width) / 2;
+
+            if (left < rcText.left)
+                left = rcText.left;
+            if (left + width > rcText.right)
+                left = rcText.right - width;
+            rcText.left = left;
+            rcText.right = left + width;
+        }
+    }
     else if (align == CA_RIGHT)
         drawStyles |= DT_RIGHT;
 
     oldTextColor = SetTextColor(pcontext->hDC, textColor);
-    if (pcontext->DarkMode)
+    if (ThemeGetGlassKey(pcontext->hWnd, &crKey))
+    {
+        RECT rcClip;
+
+        rcClip.left = 0;
+        rcClip.top = 0;
+        rcClip.right = pRect->right;
+        rcClip.bottom = pcontext->CaptionHeight;
+        drawn = ThemeDrawGlowText(pcontext->hDC, &rcText, &rcClip, crKey, textColor,
+                                  pszText, len - 1, drawStyles);
+    }
+    if (!drawn && pcontext->DarkMode)
     {
         options.dwFlags = DTT_TEXTCOLOR;
         options.crText = textColor;
         DrawThemeTextEx(pcontext->theme, pcontext->hDC, iPartId, iStateId,
-                        pszText, len - 1, drawStyles, pRect, &options);
+                        pszText, len - 1, drawStyles, &rcText, &options);
     }
-    else
+    else if (!drawn)
     {
         DrawThemeText(pcontext->theme, pcontext->hDC, iPartId, iStateId,
-                      pszText, len - 1, drawStyles, 0, pRect);
+                      pszText, len - 1, drawStyles, 0, &rcText);
     }
     SetTextColor(pcontext->hDC, oldTextColor);
 
