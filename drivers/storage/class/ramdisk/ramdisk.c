@@ -2198,13 +2198,11 @@ RamdiskCreateDiskDevice(IN PRAMDISK_BUS_EXTENSION DeviceExtension,
                 DriveExtension->SectorsPerTrack = BiosBlock.SectorsPerTrack;
                 DriveExtension->NumberOfHeads = BiosBlock.Heads;
 
-                /* Only overwrite HiddenSectors from BPB if it matches the MBR-derived value,
-                   or if we didn't find an MBR partition table */
-                if (PartitionStartLba == 0 || BiosBlock.HiddenSectors == (ULONG)PartitionStartLba)
-                {
-                    DriveExtension->HiddenSectors = BiosBlock.HiddenSectors;
-                }
-                /* Otherwise keep the MBR-derived value already set in DriveExtension->HiddenSectors */
+                /* I/O offsets are relative to the loaded image. A standalone
+                 * volume may retain the original USB disk's BPB HiddenSectors;
+                 * that prefix is not present in RAM. Only an actual MBR in
+                 * this image supplies an offset that we must add to reads. */
+                DriveExtension->HiddenSectors = (ULONG)PartitionStartLba;
             }
 
 SkipBootSectorProbe:
@@ -2422,6 +2420,45 @@ RamdiskBuildPartitionInfo(IN PRAMDISK_DRIVE_EXTENSION DeviceExtension,
     PartitionInfo->PartitionNumber = 1;
     PartitionInfo->RewritePartition = FALSE;
 
+    /* A volume image starts with a BPB, not an MBR. FAT boot sectors can
+     * contain a synthetic partition table too (for example mformat's), so
+     * the 55AA signature alone does not distinguish the two layouts. */
+    if (BytesRead >= 512 && !DeviceExtension->DiskOptions.ExportAsCd)
+    {
+        PPACKED_BOOT_SECTOR BootSector = BaseAddress;
+        BIOS_PARAMETER_BLOCK Bpb;
+        ULONGLONG Sectors, FatSectors, DataStart, Clusters;
+
+        RtlZeroMemory(&Bpb, sizeof(Bpb));
+        FatUnpackBios(&Bpb, &BootSector->PackedBpb);
+        /* fs_rec's unpacker covers only the common FAT12/16 BPB fields. */
+        CopyUchar4(&Bpb.LargeSectorsPerFat, (PUCHAR)BaseAddress + 36);
+        Sectors = Bpb.Sectors ? Bpb.Sectors : Bpb.LargeSectors;
+        FatSectors = Bpb.SectorsPerFat ? Bpb.SectorsPerFat : Bpb.LargeSectorsPerFat;
+        if (RamdiskBootSectorHasSignature(BootSector) &&
+            (BootSector->Jump[0] == 0xEB || BootSector->Jump[0] == 0xE9) &&
+            Bpb.BytesPerSector >= 512 && Bpb.BytesPerSector <= 4096 &&
+            !(Bpb.BytesPerSector & (Bpb.BytesPerSector - 1)) &&
+            Bpb.SectorsPerCluster && !(Bpb.SectorsPerCluster & (Bpb.SectorsPerCluster - 1)) &&
+            Bpb.ReservedSectors && Bpb.Fats && FatSectors && Sectors &&
+            Sectors <= (ULONGLONG)DeviceExtension->DiskLength.QuadPart / Bpb.BytesPerSector)
+        {
+            DataStart = Bpb.ReservedSectors + Bpb.Fats * FatSectors +
+                        ((ULONGLONG)Bpb.RootEntries * 32 + Bpb.BytesPerSector - 1) / Bpb.BytesPerSector;
+            if (DataStart < Sectors)
+            {
+                Clusters = (Sectors - DataStart) / Bpb.SectorsPerCluster;
+                PartitionInfo->PartitionLength.QuadPart = Sectors * Bpb.BytesPerSector;
+                PartitionInfo->PartitionType = Clusters < 4085 ? PARTITION_FAT_12 :
+                                               Clusters < 65525 ? PARTITION_FAT_16 : PARTITION_FAT32;
+                PartitionInfo->BootIndicator = TRUE;
+                PartitionInfo->RecognizedPartition = TRUE;
+                RamdiskUnmapPages(DeviceExtension, BaseAddress, Zero, MapSpan);
+                return STATUS_SUCCESS;
+            }
+        }
+    }
+
     if (BytesRead >= 0x200 && DeviceExtension->BytesPerSector != 0)
     {
         USHORT Signature = *((PUSHORT)((PUCHAR)BaseAddress + 0x1FE));
@@ -2433,7 +2470,9 @@ RamdiskBuildPartitionInfo(IN PRAMDISK_DRIVE_EXTENSION DeviceExtension,
             ULONG StartLba = *(PULONG)(Entry + 8);
             ULONG SectorCount = *(PULONG)(Entry + 12);
 
-            if (Type != 0 && SectorCount != 0)
+            if (Type != 0 && SectorCount != 0 &&
+                StartLba < (ULONGLONG)DeviceExtension->DiskLength.QuadPart / DeviceExtension->BytesPerSector &&
+                SectorCount <= (ULONGLONG)DeviceExtension->DiskLength.QuadPart / DeviceExtension->BytesPerSector - StartLba)
             {
                 ULONG effectiveSectorSize = DeviceExtension->BytesPerSector;
 
