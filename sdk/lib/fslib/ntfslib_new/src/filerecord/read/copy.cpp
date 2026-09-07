@@ -104,9 +104,8 @@ FileRecord::CopyData(_In_    PAttribute Attr,
     {
         if (Offset >= Attr->Resident.DataLength)
         {
-            // Don't read past the file data.
-            DPRINT1("Offset is greater than or equal to the data size!\n");
-            DPRINT1("Offset: %ld, Data Size: %ld\n", Offset, Attr->Resident.DataLength);
+            /* EOF (including an empty stream) is a normal read result.
+             * Length counts bytes still requested, so leave it unchanged. */
             return STATUS_END_OF_FILE;
         }
 
@@ -136,8 +135,7 @@ FileRecord::CopyData(_In_    PAttribute Attr,
 
         if (Offset >= Attr->NonResident.DataSize)
         {
-            // Don't read past the file data.
-            DPRINT1("Offset >= DataSize! (%ld >= %ld)\n", Offset, Attr->NonResident.DataSize);
+            /* As for resident data, no bytes were transferred at EOF. */
             return STATUS_END_OF_FILE;
         }
 
