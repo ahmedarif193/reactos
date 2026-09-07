@@ -19,6 +19,7 @@ list(APPEND SHELL_SOURCE
     ../explorer/rshell.cpp
     ../explorer/settings.cpp
     ../explorer/shellservice.cpp
+    ../explorer/startbutton.cpp
     ../explorer/startctxmnu.cpp
     ../explorer/startmnu.cpp
     ../explorer/startmnu2.cpp
@@ -38,7 +39,7 @@ list(APPEND SHELL_SOURCE
     ../explorer/util.cpp)
 
 file(GLOB explorer11_rc_deps ${CMAKE_CURRENT_SOURCE_DIR}/../explorer/res/*.* ${CMAKE_CURRENT_SOURCE_DIR}/../explorer/res/ico/fluent/*.ico ${CMAKE_CURRENT_SOURCE_DIR}/../explorer/explorer.rc ${CMAKE_CURRENT_SOURCE_DIR}/../explorer/resource.h)
-add_rc_deps(explorer11.rc ${explorer11_rc_deps})
+add_rc_deps(explorer11.rc ${explorer11_rc_deps} ${REACTOS_SOURCE_DIR}/media/graphics/start-orb.png)
 add_executable(explorer11 ${SOURCE} ${SHELL_SOURCE} explorer11.rc)
 target_compile_definitions(explorer11 PRIVATE EXPLORER11_BUILD)
 target_include_directories(explorer11 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../explorer)

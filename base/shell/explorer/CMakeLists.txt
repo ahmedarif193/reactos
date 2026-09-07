@@ -12,6 +12,7 @@ list(APPEND SOURCE
     rshell.cpp
     settings.cpp
     shellservice.cpp
+    startbutton.cpp
     startctxmnu.cpp
     startmnu.cpp
     startmnu2.cpp
@@ -32,7 +33,7 @@ list(APPEND SOURCE
     precomp.h)
 
 file(GLOB explorer_rc_deps res/*.*)
-add_rc_deps(explorer.rc ${explorer_rc_deps})
+add_rc_deps(explorer.rc ${explorer_rc_deps} ${REACTOS_SOURCE_DIR}/media/graphics/start-orb.png)
 add_executable(explorer ${SOURCE} explorer.rc)
 target_link_libraries(explorer uuid wine cpprt atl_classes)
 set_module_type(explorer win32gui UNICODE)

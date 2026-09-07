@@ -267,20 +267,39 @@ public:
         if (IsThemeActive())
         {
             const INT cxIcon = ShellScaleForDpi(36);
-            HICON hIcon = (HICON)LoadImageW(hExplorerInstance,
+            HBITMAP hBitmap = CreateStartOrbBitmap(cxIcon);
+            m_ImageList = ImageList_Create(cxIcon, cxIcon, ILC_COLOR32 | ILC_MASK, 1, 1);
+            INT iImage = -1;
+            if (hBitmap)
+            {
+                if (m_ImageList)
+                    iImage = ImageList_Add(m_ImageList, hBitmap, NULL);
+                DeleteObject(hBitmap);
+            }
+
+            /* Keep the resource icon as a fallback if the PNG decoder is unavailable. */
+            if (m_ImageList && iImage < 0)
+            {
+                HICON hIcon = (HICON)LoadImageW(hExplorerInstance,
                                             MAKEINTRESOURCEW(IDI_STARTORB),
                                             IMAGE_ICON, cxIcon, cxIcon, 0);
-            if (hIcon)
-            {
-                m_ImageList = ImageList_Create(cxIcon, cxIcon, ILC_COLOR32 | ILC_MASK, 1, 1);
-                if (m_ImageList && ImageList_AddIcon(m_ImageList, hIcon) >= 0)
+                if (hIcon)
                 {
-                    const INT Margin = ShellScaleForDpi(1);
-                    BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_CENTER};
-                    SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
-                    m_bOrbIcon = TRUE;
+                    iImage = ImageList_AddIcon(m_ImageList, hIcon);
+                    DestroyIcon(hIcon);
                 }
-                DestroyIcon(hIcon);
+            }
+            if (iImage >= 0)
+            {
+                const INT Margin = ShellScaleForDpi(1);
+                BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_CENTER};
+                SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
+                m_bOrbIcon = TRUE;
+            }
+            else if (m_ImageList)
+            {
+                ImageList_Destroy(m_ImageList);
+                m_ImageList = NULL;
             }
         }
         else
