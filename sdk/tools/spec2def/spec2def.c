@@ -771,7 +771,12 @@ OutputLine_def_GCC(FILE *fileDest, EXPORT *pexp)
 
         /* print the target name, don't decorate if it is external */
         fprintf(fileDest, pexp->uFlags & FL_IMPSYM ? "==" : "=");
+        /* GNU .def parsers require ordinal forwarders containing '#' to be quoted. */
+        if (fIsExternal && ScanToken(pexp->strTarget.buf, '#'))
+            fprintf(fileDest, "\"");
         PrintName(fileDest, pexp, &pexp->strTarget, !fIsExternal);
+        if (fIsExternal && ScanToken(pexp->strTarget.buf, '#'))
+            fprintf(fileDest, "\"");
     }
     else if (ExportNameNeedsRedirect(pexp))
     {
