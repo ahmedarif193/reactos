@@ -789,6 +789,43 @@ HaliAcpiTimerInit(IN ULONG TimerPort,
     //HalaAcpiTimerInit(TimerPort, TimerValExt);
 }
 
+BOOLEAN
+NTAPI
+HalpGetPmTimer(OUT PULONG Port,
+               OUT PULONG Mask)
+{
+    PFADT Fadt = &HalpFixedAcpiDescTable;
+    ULONGLONG Address;
+
+    /* The fixed PM timer is optional, including on hardware-reduced ACPI. */
+    if (Fadt->Header.Length < RTL_SIZEOF_THROUGH_FIELD(FADT, flags) ||
+        (Fadt->flags & (1UL << 20)) || Fadt->pm_tmr_len != sizeof(ULONG))
+    {
+        return FALSE;
+    }
+
+    Address = Fadt->pm_tmr_blk_io_port;
+    if (Fadt->Header.Length >= RTL_SIZEOF_THROUGH_FIELD(FADT, x_pm_tmr_blk) &&
+        Fadt->x_pm_tmr_blk.Address.QuadPart != 0)
+    {
+        /* The extended address takes precedence. Only port I/O is used here;
+         * an MMIO-only timer falls back to the existing RTC calibration. */
+        if (Fadt->x_pm_tmr_blk.AddressSpaceID != 1 ||
+            Fadt->x_pm_tmr_blk.BitOffset != 0)
+        {
+            return FALSE;
+        }
+        Address = Fadt->x_pm_tmr_blk.Address.QuadPart;
+    }
+
+    if (!Address || Address > 0xFFFC)
+        return FALSE;
+
+    *Port = (ULONG)Address;
+    *Mask = (Fadt->flags & ACPI_TMR_VAL_EXT) ? MAXULONG : 0x00FFFFFF;
+    return TRUE;
+}
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI

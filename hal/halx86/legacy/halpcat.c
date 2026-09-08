@@ -29,6 +29,14 @@ PWCHAR HalName = L"PC Compatible Eisa/Isa HAL";
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+BOOLEAN
+NTAPI
+HalpGetPmTimer(OUT PULONG Port,
+               OUT PULONG Mask)
+{
+    return FALSE;
+}
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI
