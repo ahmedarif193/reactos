@@ -124,9 +124,6 @@ HalpInitializeClock(VOID)
     /* Set initial rate */
     RtcSetClockRate(HalpCurrentClockRate);
 
-    /* Restore interrupt state */
-    __writeeflags(EFlags);
-
     /* Calculate minumum and maximum increment */
     HalpMinimumTimeIncrement = RtcClockRateToPreciseIncrement(RtcMinimumClockRate) / 1000;
     HalpMaximumTimeIncrement = RtcClockRateToPreciseIncrement(RtcMaximumClockRate) / 1000;
@@ -136,6 +133,19 @@ HalpInitializeClock(VOID)
 
     /* Enable the timer interrupt */
     HalEnableSystemInterrupt(APIC_CLOCK_VECTOR, CLOCK_LEVEL, Latched);
+
+    /*
+     * Firmware can leave an RTC interrupt pending, and calibrating the TSC
+     * against the PM timer does not acknowledge it. Clear register C after
+     * unmasking the IOAPIC route so the next periodic interrupt produces a
+     * fresh edge. Keep CPU interrupts disabled until the RTC is rearmed.
+     */
+    HalpAcquireCmosSpinLock();
+    HalpReadCmos(RTC_REGISTER_C);
+    HalpReleaseCmosSpinLock();
+
+    /* Restore interrupt state */
+    __writeeflags(EFlags);
 
     DPRINT1("Clock initialized\n");
 }
