@@ -782,6 +782,13 @@ MiDeletePte(IN PMMPTE PointerPte,
                 /* This will put it back in free list and clean properly up */
                 MiDecrementReferenceCount(Pfn1, PageFrameIndex);
             }
+            /* The private page was charged when it first faulted in. Its
+             * transition state does not remove that process ownership. */
+            if ((ULONG_PTR)CurrentProcess > 1) /* Exclude system/session sentinels. */
+            {
+                ASSERT(CurrentProcess->NumberOfPrivatePages != 0);
+                InterlockedExchangeAddSizeT(&CurrentProcess->NumberOfPrivatePages, -1);
+            }
             return;
         }
     }
@@ -897,8 +904,11 @@ MiDeletePte(IN PMMPTE PointerPte,
         MI_SET_PFN_DELETED(Pfn1);
         MiDecrementShareCount(Pfn1, PageFrameIndex);
 
-        /* We should eventually do this */
-        //CurrentProcess->NumberOfPrivatePages--;
+        if ((ULONG_PTR)CurrentProcess > 1) /* Exclude system/session sentinels. */
+        {
+            ASSERT(CurrentProcess->NumberOfPrivatePages != 0);
+            InterlockedExchangeAddSizeT(&CurrentProcess->NumberOfPrivatePages, -1);
+        }
     }
 
     if (FlushTb)
@@ -3453,10 +3463,6 @@ MiDecommitPages(IN PVOID StartingAddress,
             }
             else
             {
-                //
-                // Remove it from the counters, and check if it was valid or not
-                //
-                //Process->NumberOfPrivatePages--;
                 if (PteContents.u.Hard.Valid)
                 {
                     //
@@ -3466,6 +3472,11 @@ MiDecommitPages(IN PVOID StartingAddress,
                     Pfn1 = MiGetPfnEntry(PteContents.u.Hard.PageFrameNumber);
                     ASSERT(MI_IS_ROS_PFN(Pfn1) == FALSE);
                     ASSERT(Pfn1->u3.e1.PrototypePte == FALSE);
+
+                    /* Only faulted-in private pages were charged. Demand-zero
+                     * and already-decommitted PTEs must not decrement this. */
+                    ASSERT(Process->NumberOfPrivatePages != 0);
+                    InterlockedExchangeAddSizeT(&Process->NumberOfPrivatePages, -1);
 
                     //
                     // Flush any pending PTEs that we had not yet flushed, if our
@@ -3490,11 +3501,9 @@ MiDecommitPages(IN PVOID StartingAddress,
                     ASSERT(PteContents.u.Soft.PageFileHigh == 0);
 
                     //
-                    // So the only other possibility is that it is still a demand
-                    // zero PTE, in which case we undo the accounting we did
-                    // earlier and simply make the page decommitted.
+                    // It is still demand-zero: no physical private-page charge
+                    // exists to return. Simply make the page decommitted.
                     //
-                    //Process->NumberOfPrivatePages++;
                     MI_WRITE_SOFTWARE_PTE(PointerPte, MmDecommittedPte);
                 }
             }

@@ -648,6 +648,86 @@ cleanup:
 }
 
 
+/* Separate entry point so this small regression can run without exhausting
+ * the address space in the allocation stress tests above. */
+START_TEST(MmPrivatePages)
+{
+    PEPROCESS Process;
+    PVOID Base = NULL, Part;
+    SIZE_T Size, Before, AfterTouch;
+    NTSTATUS Status;
+    ULONG Round, Page;
+
+    if (skip(IsReactOS(), "NumberOfPrivatePages is a ReactOS-internal layout\n"))
+        return;
+
+    Process = PsGetCurrentProcess();
+    Size = 256 * PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &Size,
+                                     MEM_RESERVE, PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+
+    for (Round = 0; Round < 8; ++Round)
+    {
+        Part = Base;
+        Size = 256 * PAGE_SIZE;
+        Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Part, 0, &Size,
+                                         MEM_COMMIT, PAGE_READWRITE);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status)) break;
+
+        /* Touch half; the other half must not incur a private-page return.
+         * Page-table faults may also charge this process, so compare the
+         * exact decommit delta after all touches, not the fault-in delta. */
+        Before = Process->NumberOfPrivatePages;
+        for (Page = 0; Page < 128; ++Page)
+            *(volatile UCHAR *)((PUCHAR)Base + Page * PAGE_SIZE) = (UCHAR)Round;
+        AfterTouch = Process->NumberOfPrivatePages;
+        ok(AfterTouch >= Before + 128,
+           "touch did not charge private pages: before=%Iu after=%Iu\n",
+           Before, AfterTouch);
+        Part = Base;
+        Size = 256 * PAGE_SIZE;
+        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Part, &Size, MEM_DECOMMIT);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status)) break;
+        ok_eq_size(Process->NumberOfPrivatePages, AfterTouch - 128);
+
+        Before = Process->NumberOfPrivatePages;
+        Part = Base;
+        Size = 256 * PAGE_SIZE;
+        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Part, &Size, MEM_DECOMMIT);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_size(Process->NumberOfPrivatePages, Before);
+    }
+
+    /* Release valid private PTEs through MiDeletePte rather than the batched
+     * decommit path. Retain the reservation's first half to keep PTs alive. */
+    Part = Base;
+    Size = 256 * PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Part, 0, &Size,
+                                     MEM_COMMIT, PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        for (Page = 0; Page < 256; ++Page)
+            *(volatile UCHAR *)((PUCHAR)Base + Page * PAGE_SIZE) = 1;
+        AfterTouch = Process->NumberOfPrivatePages;
+        Part = (PUCHAR)Base + 128 * PAGE_SIZE;
+        Size = 128 * PAGE_SIZE;
+        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Part, &Size, MEM_RELEASE);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+            ok(Process->NumberOfPrivatePages <= AfterTouch - 128,
+               "release did not return private pages: before=%Iu after=%Iu\n",
+               AfterTouch, (SIZE_T)Process->NumberOfPrivatePages);
+    }
+    Size = 0;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Base, &Size, MEM_RELEASE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+}
+
 START_TEST(ZwAllocateVirtualMemory)
 {
     NTSTATUS Status;
