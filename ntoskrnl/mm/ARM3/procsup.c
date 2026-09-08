@@ -192,6 +192,8 @@ MmDeleteTeb(IN PEPROCESS Process,
         /* Remove the VAD */
         ExFreePool(Vad);
 
+        Process->VirtualSize -= (TebEnd - (ULONG_PTR)Teb + 1);
+
         /* Return the quota the VAD used */
         PsReturnProcessNonPagedPoolQuota(Process, sizeof(MMVAD_LONG));
     }
