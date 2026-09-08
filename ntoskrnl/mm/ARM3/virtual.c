@@ -220,6 +220,11 @@ MiChargeProcessCommitment(
     }
 
     OldProcessCommit = InterlockedExchangeAddSizeT(&Process->CommitCharge, PageCount);
+    /* Include the ARM3 virtual allocation ledger in public system counters.
+     * MC_USER only tracks legacy physical pages and cannot represent these
+     * reservations (in particular, committed pages not yet faulted in). */
+    InterlockedExchangeAddSizeT(&MmProcessCommit, PageCount);
+    UpdateTotalCommittedPages((LONG_PTR)PageCount);
     NewProcessCommit = OldProcessCommit + PageCount;
     if (NewProcessCommit > Process->CommitChargePeak)
     {
@@ -241,6 +246,8 @@ MiReturnProcessCommitment(
     ASSERT(Process->CommitCharge >= PageCount);
     InterlockedExchangeAddSizeT(&Process->CommitCharge, -(LONG_PTR)PageCount);
     InterlockedExchangeAddSizeT(&MiTotalCommitCharge, -(LONG_PTR)PageCount);
+    InterlockedExchangeAddSizeT(&MmProcessCommit, -(LONG_PTR)PageCount);
+    UpdateTotalCommittedPages(-(LONG_PTR)PageCount);
     PsReturnProcessPageFileQuota(Process, PageCount);
 }
 
