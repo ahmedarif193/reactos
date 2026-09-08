@@ -962,7 +962,7 @@ MmDeleteKernelStack(PVOID Stack,
 
 /* balance.c / pagefile.c******************************************************/
 
-FORCEINLINE VOID UpdateTotalCommittedPages(LONG Delta)
+FORCEINLINE VOID UpdateTotalCommittedPages(LONG_PTR Delta)
 {
     /*
      * Add up all the used "Committed" memory + pagefile.
@@ -970,7 +970,8 @@ FORCEINLINE VOID UpdateTotalCommittedPages(LONG Delta)
      * MmTotalCommittedPages should be adjusted consistently with
      * other counters at different places.
      *
-       MmTotalCommittedPages = MiMemoryConsumers[MC_SYSTEM].PagesUsed +
+       MmTotalCommittedPages = MmProcessCommit +
+                               MiMemoryConsumers[MC_SYSTEM].PagesUsed +
                                MiMemoryConsumers[MC_USER].PagesUsed +
                                MiUsedSwapPages;
      */
