@@ -212,7 +212,7 @@ SymCryptScsTableLoadC(
     UNREFERENCED_PARAMETER( cbData );
 
 #if SYMCRYPT_SCSTABLE_USE64
-#define SCS_MASK_EQUAL32( _a, _b )  ( ~(UINT64) ((INT64) ((UINT64)0 - (_a ^ _b)) >> 32 ) )
+#define SCS_MASK_EQUAL32( _a, _b )  ( ~(UINT64) ((INT64) ((UINT64)0 - ((_a) ^ (_b))) >> 32 ) )
 #else
 #define SCS_MASK_EQUAL32( _a, _b )  (SYMCRYPT_MASK32_EQ( _a, _b ))
 #endif

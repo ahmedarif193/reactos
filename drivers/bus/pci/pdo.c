@@ -1128,9 +1128,6 @@ PciPdoDetermineInterruptPolicy(
              * only one leaves the miniport unable to assign its command queue a
              * vector, so present completions never raise an MSI and the queue
              * stalls.  Request the device's full table for them. */
-            BOOLEAN IsDisplay =
-                (DeviceExtension->PciDevice->PciConfig.BaseClass == PCI_CLASS_DISPLAY_CTLR);
-
             if (DeviceExtension->PciDevice->MsixCapability)
             {
                 UseMsix = TRUE;
