@@ -284,7 +284,7 @@ TrimWsList(PMMWSL WsList)
             ASSERT(!MI_IS_ROS_PFN(Pfn));
 
             /* FIXME: Remove this hack when possible */
-            if (Pfn->Wsle.u1.e1.LockedInMemory || (Pfn->Wsle.u1.e1.LockedInWs))
+            if (MI_PFN_LOCKED_IN_MEMORY(Pfn) || MI_PFN_LOCKED_IN_WS(Pfn))
             {
                 continue;
             }
