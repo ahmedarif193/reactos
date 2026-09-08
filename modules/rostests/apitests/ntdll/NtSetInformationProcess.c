@@ -298,8 +298,52 @@ Test_ProcSetAlignmentProbe(void)
     }
 }
 
+static
+void
+Test_ProcessAffinity(void)
+{
+    PROCESS_BASIC_INFORMATION BasicInfo;
+    KAFFINITY Original, Mask;
+    NTSTATUS Status;
+    ULONG i;
+
+    Status = NtQueryInformationProcess(NtCurrentProcess(), ProcessBasicInformation,
+                                       &BasicInfo, sizeof(BasicInfo), NULL);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    Original = BasicInfo.AffinityMask;
+    ok(Original != 0, "Process has an empty affinity mask\n");
+    if (!Original)
+        return;
+
+    /* Exercise a user-mode system-call return after updating effective thread
+     * affinity. Copying KTHREAD's entire GROUP_AFFINITY would overwrite the
+     * overlaid ApcStateIndex with PreviousMode and bugcheck on this return. */
+    for (i = 0; i < 3; ++i)
+    {
+        Mask = (i == 1) ? Original & (~Original + 1) : Original;
+        Status = NtSetInformationProcess(NtCurrentProcess(), ProcessAffinityMask,
+                                         &Mask, sizeof(Mask));
+        ok_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status))
+            break;
+        Status = NtQueryInformationProcess(NtCurrentProcess(), ProcessBasicInformation,
+                                           &BasicInfo, sizeof(BasicInfo), NULL);
+        ok_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+            ok(BasicInfo.AffinityMask == Mask, "Affinity is %Ix, expected %Ix\n",
+               BasicInfo.AffinityMask, Mask);
+    }
+
+    Status = NtSetInformationProcess(NtCurrentProcess(), ProcessAffinityMask,
+                                     &Original, sizeof(Original));
+    ok_hex(Status, STATUS_SUCCESS);
+}
+
 START_TEST(NtSetInformationProcess)
 {
+    Test_ProcessAffinity();
     Test_ProcForegroundBackgroundClass();
     Test_ProcBasePriorityClass();
     Test_ProcRaisePriorityClass();

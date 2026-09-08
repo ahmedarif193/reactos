@@ -1453,7 +1453,9 @@ KiUpdateEffectiveAffinityThread(
     KiAcquirePrcbLock(Prcb);
 
     /* Set the thread's affinity and ideal processor */
-    Thread->Affinity = Thread->UserAffinity;
+    /* GROUP_AFFINITY's reserved bytes overlap other KTHREAD state, including
+     * ApcStateIndex. Copy only the mask for our single processor group. */
+    KiThreadAffinityMask(Thread) = KiThreadUserAffinityMask(Thread);
     Thread->IdealProcessor = Thread->UserIdealProcessor;
 
     /* Check if the affinity doesn't match with the current processor */
