@@ -711,7 +711,7 @@ CDeviceView::AddResourceNodes(
         }
         else if (Descriptor->Type == CmResourceTypeMemory)
         {
-            hParent = (Descriptor->u.Memory.Start.QuadPart >= 0x100000000ULL) ? Items->hLargeMemory : Items->hMemory;
+            hParent = ((ULONGLONG)Descriptor->u.Memory.Start.QuadPart >= 0x100000000ULL) ? Items->hLargeMemory : Items->hMemory;
         }
         else if (Descriptor->Type == CmResourceTypeDma)
         {
