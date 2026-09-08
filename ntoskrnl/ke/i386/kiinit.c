@@ -31,6 +31,26 @@ ULONGLONG BootCycles, BootCyclesEnd;
 
 /* FUNCTIONS *****************************************************************/
 
+/* The i386 AP path below does not yet bring secondary CPUs into the scheduler.
+ * Keep their parking code outside INIT, and acknowledge startup only after
+ * entering this resident routine: the BSP may then reclaim all INIT pages. */
+static
+DECLSPEC_NORETURN
+DECLSPEC_NOINLINE
+VOID
+NTAPI
+KiParkUninitializedProcessor(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    _disable();
+    KeMemoryBarrier();
+    LoaderBlock->Prcb = 0;
+
+    for (;;)
+    {
+        __halt();
+    }
+}
+
 CODE_SEG("INIT")
 VOID
 NTAPI
@@ -835,13 +855,7 @@ AppCpuInit:
     //TODO: We don't setup IPIs yet so freeze other processors here.
     if (Cpu)
     {
-        KeMemoryBarrier();
-        LoaderBlock->Prcb = 0;
-
-        for (;;)
-        {
-            YieldProcessor();
-        }
+        KiParkUninitializedProcessor(LoaderBlock);
     }
 
     /* Loop until we can release the freeze lock */
