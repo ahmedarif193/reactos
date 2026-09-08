@@ -1750,6 +1750,7 @@ QSI_DEF(SystemVdmBopInformation)
 QSI_DEF(SystemFileCacheInformation)
 {
     SYSTEM_FILECACHE_INFORMATION *Sci = (SYSTEM_FILECACHE_INFORMATION *) Buffer;
+    SIZE_T CachePages;
 
     *ReqSize = sizeof(SYSTEM_FILECACHE_INFORMATION);
 
@@ -1760,12 +1761,13 @@ QSI_DEF(SystemFileCacheInformation)
 
     RtlZeroMemory(Sci, sizeof(SYSTEM_FILECACHE_INFORMATION));
 
-    /* Return the Byte size not the page size. */
-    Sci->CurrentSize = MiMemoryConsumers[MC_USER].PagesUsed; /* FIXME */
-    Sci->PeakSize = MiMemoryConsumers[MC_USER].PagesUsed; /* FIXME */
-    /* Taskmgr multiplies this one by page size right away */
-    Sci->CurrentSizeIncludingTransitionInPages = MiMemoryConsumers[MC_USER].PagesUsed; /* FIXME: Should be */
-    /* system working set and standby pages. */
+    /* FIXME: MC_USER is a legacy resident-section proxy, not the system cache
+     * working set. Keep that limitation explicit, but honor the ABI units.
+     * Capture once so the byte and page fields refer to the same sample. */
+    CachePages = MiMemoryConsumers[MC_USER].PagesUsed;
+    Sci->CurrentSize = CachePages << PAGE_SHIFT;
+    Sci->PeakSize = Sci->CurrentSize; /* FIXME: track the actual cache peak. */
+    Sci->CurrentSizeIncludingTransitionInPages = CachePages;
     Sci->PageFaultCount = 0; /* FIXME */
     Sci->MinimumWorkingSet = 0; /* FIXME */
     Sci->MaximumWorkingSet = 0; /* FIXME */
