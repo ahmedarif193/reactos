@@ -59,6 +59,107 @@ TestTimerFunctional(
     CheckTimer(Timer, TimerNotificationObject + Type, 0L, FALSE, OriginalIrql, (PVOID *)NULL, 0);
 }
 
+typedef struct _TIMER_WAIT_APC_CONTEXT
+{
+    KAPC Apc;
+    KEVENT ApcDone;
+    volatile LONG Delivered;
+    BOOLEAN Inserted;
+} TIMER_WAIT_APC_CONTEXT;
+
+static VOID NTAPI
+TimerWaitApc(
+    PKAPC Apc,
+    PKNORMAL_ROUTINE *NormalRoutine,
+    PVOID *NormalContext,
+    PVOID *SystemArgument1,
+    PVOID *SystemArgument2)
+{
+    TIMER_WAIT_APC_CONTEXT *Context;
+
+    UNREFERENCED_PARAMETER(NormalRoutine);
+    UNREFERENCED_PARAMETER(NormalContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+    Context = CONTAINING_RECORD(Apc, TIMER_WAIT_APC_CONTEXT, Apc);
+    InterlockedIncrement(&Context->Delivered);
+    KeSetEvent(&Context->ApcDone, IO_NO_INCREMENT, FALSE);
+}
+
+static VOID NTAPI
+TimerWaitDpc(PKDPC Dpc, PVOID DeferredContext,
+             PVOID SystemArgument1, PVOID SystemArgument2)
+{
+    TIMER_WAIT_APC_CONTEXT *Context = DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+    Context->Inserted = KeInsertQueueApc(&Context->Apc, NULL, NULL, 0);
+}
+
+static VOID
+TestInterruptedTimerWait(VOID)
+{
+    TIMER_WAIT_APC_CONTEXT Context;
+    KTIMER ApcTimer;
+    KDPC Dpc;
+    KEVENT Events[4];
+    PVOID Objects[4];
+    KWAIT_BLOCK WaitBlocks[4];
+    LARGE_INTEGER DueTime, Timeout;
+    NTSTATUS Status;
+    ULONG Test, Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Events); ++Index)
+    {
+        KeInitializeEvent(&Events[Index], NotificationEvent, FALSE);
+        Objects[Index] = &Events[Index];
+    }
+
+    /* Interrupt an outstanding timeout with a special kernel APC. The wait
+     * must unlink its old blocks, deliver the APC, and resume until timeout.
+     * In particular, the delay-only block must not interpret the overlaid
+     * KTHREAD.WaitTime field as a dispatcher-object pointer on x86. */
+    for (Test = 0; Test < 4; ++Test)
+    {
+        RtlZeroMemory(&Context, sizeof(Context));
+        KeInitializeEvent(&Context.ApcDone, NotificationEvent, FALSE);
+        KeInitializeApc(&Context.Apc, KeGetCurrentThread(),
+                        OriginalApcEnvironment, TimerWaitApc, NULL,
+                        NULL, KernelMode, NULL);
+        KeInitializeTimer(&ApcTimer);
+        KeInitializeDpc(&Dpc, TimerWaitDpc, &Context);
+        DueTime.QuadPart = -50 * 10000;
+        Timeout.QuadPart = -250 * 10000;
+        KeSetTimer(&ApcTimer, DueTime, &Dpc);
+
+        if (Test == 0)
+            Status = KeDelayExecutionThread(KernelMode, FALSE, &Timeout);
+        else if (Test == 1)
+            Status = KeWaitForSingleObject(Objects[0], Executive,
+                                           KernelMode, FALSE, &Timeout);
+        else
+            Status = KeWaitForMultipleObjects(Test == 2 ? 3 : 4, Objects,
+                                               WaitAny, Executive, KernelMode,
+                                               FALSE, &Timeout,
+                                               Test == 2 ? NULL : WaitBlocks);
+
+        ok_eq_hex(Status, Test == 0 ? STATUS_SUCCESS : STATUS_TIMEOUT);
+        ok_eq_long(Context.Delivered, 1);
+
+        /* Drain the DPC before its stack storage or the APC can go away,
+         * including on a failing implementation that returned too early. */
+        KeCancelTimer(&ApcTimer);
+        KeFlushQueuedDpcs();
+        if (Context.Inserted)
+            KeWaitForSingleObject(&Context.ApcDone, Executive,
+                                  KernelMode, FALSE, NULL);
+        ok(Context.Inserted, "APC was not queued for timer wait %lu\n", Test);
+        ok_irql(PASSIVE_LEVEL);
+    }
+}
+
 START_TEST(KeTimer)
 {
     KTIMER Timer;
@@ -79,4 +180,5 @@ START_TEST(KeTimer)
 
     ok_irql(PASSIVE_LEVEL);
     KmtSetIrql(PASSIVE_LEVEL);
+    TestInterruptedTimerWait();
 }
