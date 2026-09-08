@@ -4467,6 +4467,7 @@ FAST486_OPCODE_HANDLER(Fast486OpcodeInt)
         {
             /* Should not happen */
             ASSERT(FALSE);
+            return;
         }
     }
 

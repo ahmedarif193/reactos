@@ -407,6 +407,7 @@ Fast486InterruptInternal(PFAST486_STATE State,
                 {
                     /* Should never reach here! */
                     ASSERT(FALSE);
+                    return FALSE;
                 }
             }
 
@@ -1244,6 +1245,7 @@ Fast486CallGate(PFAST486_STATE State,
                 {
                     /* Should never reach here! */
                     ASSERT(FALSE);
+                    return FALSE;
                 }
             }
 

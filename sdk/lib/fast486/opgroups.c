@@ -144,6 +144,7 @@ Fast486ArithmeticOperation(PFAST486_STATE State,
         {
             /* Shouldn't happen */
             ASSERT(FALSE);
+            return 0;
         }
     }
 
