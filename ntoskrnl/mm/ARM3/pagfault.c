@@ -1007,7 +1007,8 @@ MiResolveDemandZeroFault(IN PVOID Address,
         MiReleasePfnLock(OldIrql);
 
         /* Update performance counters */
-        if (Process > HYDRA_PROCESS) Process->NumberOfPrivatePages++;
+        if (Process > HYDRA_PROCESS)
+            InterlockedExchangeAddSizeT(&Process->NumberOfPrivatePages, 1);
     }
 
     /* Zero the page if need be */
@@ -1673,6 +1674,9 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
         /* Fix the protection */
         Protection &= ~MM_WRITECOPY;
         Protection |= MM_READWRITE;
+        /* The shared prototype page was not a private charge. The copy is. */
+        if (Process > HYDRA_PROCESS)
+            InterlockedExchangeAddSizeT(&Process->NumberOfPrivatePages, 1);
         if (Address < MmSystemRangeStart)
         {
             /* Build the user PTE */
@@ -2848,6 +2852,8 @@ Arm64UserLeafReady:
                 TempPte.u.Hard.Write = 1;
                 TempPte.u.Hard.CopyOnWrite = 0;
 
+                InterlockedExchangeAddSizeT(&CurrentProcess->NumberOfPrivatePages, 1);
+
 #if defined(_M_ARM64)
                 MiArm64WriteFaultPte(Address, PointerPte, TempPte);
 #else
@@ -3074,7 +3080,7 @@ Arm64UserLeafReady:
 #endif
 
             /* Increment the count of pages in the process */
-            CurrentProcess->NumberOfPrivatePages++;
+            InterlockedExchangeAddSizeT(&CurrentProcess->NumberOfPrivatePages, 1);
 
             /* One more demand-zero fault */
             KeGetCurrentPrcb()->MmDemandZeroCount++;
