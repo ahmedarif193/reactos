@@ -1,5 +1,12 @@
 #pragma once
 
+BOOLEAN
+NTAPI
+HalpGetPmTimer(
+    OUT PULONG Port,
+    OUT PULONG Mask
+);
+
 //
 // Internal HAL structure
 //
