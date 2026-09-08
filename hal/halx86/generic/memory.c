@@ -104,6 +104,7 @@ HalpAllocPhysicalMemory(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
             FreeBlock = &HalpAllocationDescriptorArray[UsedDescriptors];
             FreeBlock->PageCount = MdBlock->PageCount - Alignment - (ULONG)PageCount;
             FreeBlock->BasePage = MdBlock->BasePage + Alignment + (ULONG)PageCount;
+            FreeBlock->MemoryType = MdBlock->MemoryType;
 
             /* One more */
             HalpUsedAllocDescriptors++;
