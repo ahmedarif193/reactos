@@ -917,7 +917,9 @@ SRomReadMacAddress(
 
     /* Sanity check */
     if (*(PULONG)SRom == 0xFFFFFFFF || *(PULONG)SRom == 0)
+    {
         return FALSE;
+    }
 
     WARN("Legacy/unknown board found\n");
     MacOffset = 0;
