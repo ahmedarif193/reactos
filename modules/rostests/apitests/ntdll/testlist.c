@@ -32,6 +32,7 @@ extern void func_LdrFindResource_U(void);
 extern void func_LdrLoadDll(void);
 extern void func_load_notifications(void);
 extern void func_memmove(void);
+extern void func_MemoryAccounting(void);
 extern void func_NtAcceptConnectPort(void);
 extern void func_NtAccessCheck(void);
 extern void func_NtAccessCheckByType(void);
@@ -62,6 +63,7 @@ extern void func_NtOpenProcessToken(void);
 extern void func_NtOpenThreadToken(void);
 extern void func_NtProtectVirtualMemory(void);
 extern void func_NtQueryInformationFile(void);
+extern void func_NtQueryDirectoryFile(void);
 extern void func_NtQueryInformationProcess(void);
 extern void func_NtQueryInformationThread(void);
 extern void func_NtQueryInformationToken(void);
@@ -181,6 +183,7 @@ const struct test winetest_testlist[] =
     { "LdrLoadDll",                     func_LdrLoadDll },
     { "load_notifications",             func_load_notifications },
     { "memmove",                        func_memmove },
+    { "MemoryAccounting",               func_MemoryAccounting },
     { "NtAcceptConnectPort",            func_NtAcceptConnectPort },
     { "NtAccessCheck",                  func_NtAccessCheck },
     { "NtAccessCheckByType",            func_NtAccessCheckByType },
@@ -211,6 +214,7 @@ const struct test winetest_testlist[] =
     { "NtOpenThreadToken",              func_NtOpenThreadToken },
     { "NtProtectVirtualMemory",         func_NtProtectVirtualMemory },
     { "NtQueryInformationFile",         func_NtQueryInformationFile },
+    { "NtQueryDirectoryFile",           func_NtQueryDirectoryFile },
     { "NtQueryInformationProcess",      func_NtQueryInformationProcess },
     { "NtQueryInformationThread",       func_NtQueryInformationThread },
     { "NtQueryInformationToken",        func_NtQueryInformationToken },

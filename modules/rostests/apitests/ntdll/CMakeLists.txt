@@ -59,6 +59,7 @@ list(APPEND SOURCE
     load_notifications.c
     locale.c
     memmove.c
+    MemoryAccounting.c
     NtAcceptConnectPort.c
     NtAccessCheck.c
     NtAccessCheckByType.c
@@ -87,6 +88,7 @@ list(APPEND SOURCE
     NtOpenThreadToken.c
     NtProtectVirtualMemory.c
     NtQueryInformationFile.c
+    NtQueryDirectoryFile.c
     NtQueryInformationProcess.c
     NtQueryInformationThread.c
     NtQueryInformationToken.c
