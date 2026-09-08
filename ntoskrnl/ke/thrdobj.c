@@ -1149,7 +1149,9 @@ KeRevertToUserAffinityThread(VOID)
     KiAcquireThreadLock(CurrentThread);
 
     /* Set the user affinity and processor and disable system affinity */
-    CurrentThread->Affinity = CurrentThread->UserAffinity;
+    /* Do not copy GROUP_AFFINITY's reserved bytes: KTHREAD overlays APC and
+     * scheduler state there. ReactOS currently uses only processor group 0. */
+    KiThreadAffinityMask(CurrentThread) = KiThreadUserAffinityMask(CurrentThread);
     CurrentThread->IdealProcessor = CurrentThread->UserIdealProcessor;
     CurrentThread->SystemAffinityActive = FALSE;
 

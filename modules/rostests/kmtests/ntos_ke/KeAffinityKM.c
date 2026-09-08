@@ -46,6 +46,8 @@ TestAffinityPinning(VOID)
 {
     KAFFINITY Active = KeQueryActiveProcessors();
     KAFFINITY Old;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    BOOLEAN Attached = KeIsAttachedProcess();
     ULONG OriginalCpu, Cpu, i;
 
     OriginalCpu = KeGetCurrentProcessorNumberEx(NULL);
@@ -58,11 +60,15 @@ TestAffinityPinning(VOID)
         Cpu = KeGetCurrentProcessorNumberEx(NULL);
         ok_eq_ulong(Cpu, i);
         KeRevertToUserAffinityThreadEx(Old);
+        ok_eq_int(ExGetPreviousMode(), PreviousMode);
+        ok_eq_bool(KeIsAttachedProcess(), Attached);
     }
 
     KeSetSystemAffinityThread((KAFFINITY)1 << OriginalCpu);
     ok_eq_ulong(KeGetCurrentProcessorNumberEx(NULL), OriginalCpu);
     KeRevertToUserAffinityThread();
+    ok_eq_int(ExGetPreviousMode(), PreviousMode);
+    ok_eq_bool(KeIsAttachedProcess(), Attached);
 }
 
 static
