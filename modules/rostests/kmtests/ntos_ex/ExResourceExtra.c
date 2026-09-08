@@ -9,6 +9,75 @@
 #define NDEBUG
 #include <debug.h>
 
+/* Windows 11 26100 WDK layout, corroborated by the ARM64 kernel symbols. */
+#ifdef _WIN64
+C_ASSERT(sizeof(ERESOURCE) == 0x68);
+C_ASSERT(sizeof(OWNER_ENTRY) == 0x10);
+C_ASSERT(FIELD_OFFSET(ERESOURCE, Flag) == 0x1a);
+C_ASSERT(FIELD_OFFSET(ERESOURCE, OwnerEntry) == 0x30);
+C_ASSERT(FIELD_OFFSET(ERESOURCE, MiscFlags) == 0x50);
+C_ASSERT(FIELD_OFFSET(ERESOURCE, ResourceTimeoutCount) == 0x54);
+C_ASSERT(FIELD_OFFSET(ERESOURCE, SpinLock) == 0x60);
+#else
+C_ASSERT(sizeof(ERESOURCE) == 0x38);
+C_ASSERT(sizeof(OWNER_ENTRY) == 0x8);
+C_ASSERT(FIELD_OFFSET(ERESOURCE, Flag) == 0xe);
+C_ASSERT(FIELD_OFFSET(ERESOURCE, OwnerEntry) == 0x18);
+C_ASSERT(FIELD_OFFSET(ERESOURCE, SpinLock) == 0x34);
+#endif
+
+static
+VOID
+TestOwnerEntryLayout(VOID)
+{
+    OWNER_ENTRY Owner = {0};
+    ERESOURCE Res;
+    RTL_OSVERSIONINFOW Version = {sizeof(Version)};
+    NTSTATUS Status;
+
+    Owner.IoPriorityBoosted = 1;
+    ok_eq_ulong(Owner.TableSize, 1UL);
+    Owner.OwnerReferenced = 1;
+    ok_eq_ulong(Owner.TableSize, 3UL);
+    Owner.IoQoSPriorityBoosted = 1;
+    ok_eq_ulong(Owner.TableSize, 7UL);
+    Owner.OwnerCount = 1;
+    ok_eq_ulong(Owner.TableSize, 15UL);
+    Owner.OwnerCount = 0x1fffffff;
+    ok_eq_ulong(Owner.TableSize, MAXULONG);
+
+    /* Older Windows kernels use a different owner-count bit position. */
+    Status = RtlGetVersion(&Version);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status) || Version.dwBuildNumber < 26100)
+    {
+        skip(FALSE, "Live OWNER_ENTRY layout requires Windows build 26100 or later\n");
+        return;
+    }
+
+    Status = ExInitializeResourceLite(&Res);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+
+    KeEnterCriticalRegion();
+    if (ExAcquireResourceExclusiveLite(&Res, FALSE))
+    {
+        ok_eq_ulong(Res.OwnerEntry.TableSize, 1UL << 3);
+        ok_eq_ulong(Res.OwnerEntry.OwnerCount, 1UL);
+        ok_bool_true(ExIsResourceAcquiredExclusiveLite(&Res), "held exclusive");
+        ExReleaseResourceLite(&Res);
+        ok_eq_ulong(Res.OwnerEntry.TableSize, 0UL);
+    }
+    else
+    {
+        ok(FALSE, "Cannot acquire a newly initialized resource\n");
+    }
+    KeLeaveCriticalRegion();
+
+    Status = ExDeleteResourceLite(&Res);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+}
+
 static
 VOID
 TestRecursiveExclusive(VOID)
@@ -114,6 +183,7 @@ TestReinitIntegrity(VOID)
 
 START_TEST(ExResourceExtra)
 {
+    TestOwnerEntryLayout();
     TestRecursiveExclusive();
     TestRecursiveShared();
     TestSharedToExclusiveStarve();

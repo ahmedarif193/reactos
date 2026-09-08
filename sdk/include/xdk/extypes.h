@@ -289,7 +289,8 @@ typedef struct _OWNER_ENTRY {
     _ANONYMOUS_STRUCT struct {
       ULONG IoPriorityBoosted:1;
       ULONG OwnerReferenced:1;
-      ULONG OwnerCount:30;
+      ULONG IoQoSPriorityBoosted:1;
+      ULONG OwnerCount:29;
     } DUMMYSTRUCTNAME;
     ULONG TableSize;
   } DUMMYUNIONNAME;
@@ -299,7 +300,13 @@ typedef struct _ERESOURCE {
   LIST_ENTRY SystemResourcesList;
   POWNER_ENTRY OwnerTable;
   SHORT ActiveCount;
-  USHORT Flag;
+  _ANONYMOUS_UNION union {
+    USHORT Flag;
+    _ANONYMOUS_STRUCT struct {
+      UCHAR ReservedLowFlags;
+      UCHAR WaiterPriority;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
   volatile PKSEMAPHORE SharedWaiters;
   volatile PKEVENT ExclusiveWaiters;
   OWNER_ENTRY OwnerEntry;
@@ -308,7 +315,9 @@ typedef struct _ERESOURCE {
   ULONG NumberOfSharedWaiters;
   ULONG NumberOfExclusiveWaiters;
 #if defined(_WIN64)
-  PVOID Reserved2;
+  volatile CHAR MiscFlags;
+  UCHAR Reserved1[3];
+  ULONG ResourceTimeoutCount;
 #endif
   _ANONYMOUS_UNION union {
     PVOID Address;
