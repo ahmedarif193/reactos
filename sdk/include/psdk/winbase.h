@@ -3130,6 +3130,11 @@ DWORD WINAPI SetTapePosition(_In_ HANDLE, _In_ DWORD, _In_ DWORD, _In_ DWORD, _I
 DWORD_PTR WINAPI SetThreadAffinityMask(_In_ HANDLE, _In_ DWORD_PTR);
 BOOL WINAPI SetThreadContext(HANDLE,const CONTEXT*);
 DWORD WINAPI SetThreadIdealProcessor(_In_ HANDLE, _In_ DWORD);
+#if (_WIN32_WINNT >= 0x0601)
+BOOL WINAPI GetThreadIdealProcessorEx(_In_ HANDLE, _Out_ PPROCESSOR_NUMBER);
+BOOL WINAPI SetThreadIdealProcessorEx(_In_ HANDLE, _In_ PPROCESSOR_NUMBER, _Out_opt_ PPROCESSOR_NUMBER);
+BOOL WINAPI GetNumaProcessorNodeEx(_In_ PPROCESSOR_NUMBER, _Out_ PUSHORT);
+#endif
 BOOL WINAPI SetThreadPriority(HANDLE,int);
 BOOL WINAPI SetThreadPriorityBoost(HANDLE,BOOL);
 BOOL WINAPI SetThreadToken (PHANDLE,HANDLE);

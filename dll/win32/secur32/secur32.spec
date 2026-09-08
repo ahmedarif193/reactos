@@ -74,3 +74,9 @@
 @ stdcall TranslateNameW(wstr long long ptr ptr)
 @ stdcall UnsealMessage(ptr ptr long ptr) DecryptMessage
 @ stdcall VerifySignature(ptr ptr long ptr)
+
+@ stdcall SetCredentialsAttributesA(ptr long ptr long)
+@ stdcall SetCredentialsAttributesW(ptr long ptr long)
+
+@ stdcall QueryContextAttributesExA(ptr long ptr long)
+@ stdcall QueryContextAttributesExW(ptr long ptr long)

@@ -98,6 +98,18 @@ HRESULT WINAPI WerSetFlags( DWORD flags )
     return S_OK;
 }
 
+HRESULT WINAPI WerRegisterMemoryBlock(void *block, DWORD size)
+{
+    FIXME("(%p %lu): crash-report memory registration is not implemented\n", block, size);
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI WerUnregisterMemoryBlock(void *block)
+{
+    FIXME("(%p): crash-report memory registration is not implemented\n", block);
+    return E_NOTIMPL;
+}
+
 #else /* __REACTOS__ */
 
 #include <stdio.h>

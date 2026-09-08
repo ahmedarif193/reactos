@@ -59,3 +59,9 @@
 @ stdcall UnsealMessage(ptr ptr long ptr) secur32.UnsealMessage
 @ stdcall VerifySignature(ptr ptr long ptr) secur32.VerifySignature
 @ stdcall -private DllInitialize(long long ptr) DllMain
+
+@ stdcall SetCredentialsAttributesA(ptr long ptr long) secur32.SetCredentialsAttributesA
+@ stdcall SetCredentialsAttributesW(ptr long ptr long) secur32.SetCredentialsAttributesW
+
+@ stdcall QueryContextAttributesExA(ptr long ptr long) secur32.QueryContextAttributesExA
+@ stdcall QueryContextAttributesExW(ptr long ptr long) secur32.QueryContextAttributesExW

@@ -879,6 +879,23 @@ typedef SECURITY_STATUS (SEC_ENTRY *SET_CONTEXT_ATTRIBUTES_FN_A)(PCtxtHandle,
 typedef SECURITY_STATUS (SEC_ENTRY *SET_CONTEXT_ATTRIBUTES_FN_W)(PCtxtHandle,
  ULONG, void *, ULONG);
 
+SECURITY_STATUS SEC_ENTRY SetCredentialsAttributesA(PCredHandle, ULONG, void *, ULONG);
+SECURITY_STATUS SEC_ENTRY SetCredentialsAttributesW(PCredHandle, ULONG, void *, ULONG);
+#define SetCredentialsAttributes WINELIB_NAME_AW(SetCredentialsAttributes)
+typedef SECURITY_STATUS (SEC_ENTRY *SET_CREDENTIALS_ATTRIBUTES_FN_A)(PCredHandle, ULONG, void *, ULONG);
+typedef SECURITY_STATUS (SEC_ENTRY *SET_CREDENTIALS_ATTRIBUTES_FN_W)(PCredHandle, ULONG, void *, ULONG);
+
+SECURITY_STATUS SEC_ENTRY QueryContextAttributesExA(PCtxtHandle, ULONG, void *, ULONG);
+SECURITY_STATUS SEC_ENTRY QueryContextAttributesExW(PCtxtHandle, ULONG, void *, ULONG);
+#define QueryContextAttributesEx WINELIB_NAME_AW(QueryContextAttributesEx)
+typedef SECURITY_STATUS (SEC_ENTRY *QUERY_CONTEXT_ATTRIBUTES_EX_FN_A)(PCtxtHandle, ULONG, void *, ULONG);
+typedef SECURITY_STATUS (SEC_ENTRY *QUERY_CONTEXT_ATTRIBUTES_EX_FN_W)(PCtxtHandle, ULONG, void *, ULONG);
+typedef SECURITY_STATUS (SEC_ENTRY *QUERY_CREDENTIALS_ATTRIBUTES_EX_FN_A)(PCredHandle, ULONG, void *, ULONG);
+typedef SECURITY_STATUS (SEC_ENTRY *QUERY_CREDENTIALS_ATTRIBUTES_EX_FN_W)(PCredHandle, ULONG, void *, ULONG);
+typedef SECURITY_STATUS (SEC_ENTRY *CHANGE_PASSWORD_FN_A)(SEC_CHAR *, SEC_CHAR *, SEC_CHAR *, SEC_CHAR *, SEC_CHAR *, BOOLEAN, ULONG, PSecBufferDesc);
+typedef SECURITY_STATUS (SEC_ENTRY *CHANGE_PASSWORD_FN_W)(SEC_WCHAR *, SEC_WCHAR *, SEC_WCHAR *, SEC_WCHAR *, SEC_WCHAR *, BOOLEAN, ULONG, PSecBufferDesc);
+
+
 #define SECURITY_ENTRYPOINT_ANSIA "InitSecurityInterfaceA"
 #define SECURITY_ENTRYPOINT_ANSIW "InitSecurityInterfaceW"
 #define SECURITY_ENTRYPOINT_ANSI WINELIB_NAME_AW(SECURITY_ENTRYPOINT_ANSI)
@@ -913,6 +930,10 @@ typedef struct _SECURITY_FUNCTION_TABLE_A
     ENCRYPT_MESSAGE_FN                EncryptMessage;
     DECRYPT_MESSAGE_FN                DecryptMessage;
     SET_CONTEXT_ATTRIBUTES_FN_A       SetContextAttributesA;
+    SET_CREDENTIALS_ATTRIBUTES_FN_A   SetCredentialsAttributesA;
+    CHANGE_PASSWORD_FN_A             ChangeAccountPasswordA;
+    QUERY_CONTEXT_ATTRIBUTES_EX_FN_A QueryContextAttributesExA;
+    QUERY_CREDENTIALS_ATTRIBUTES_EX_FN_A QueryCredentialsAttributesExA;
 } SecurityFunctionTableA, *PSecurityFunctionTableA;
 
 typedef struct _SECURITY_FUNCTION_TABLE_W
@@ -945,6 +966,10 @@ typedef struct _SECURITY_FUNCTION_TABLE_W
     ENCRYPT_MESSAGE_FN                EncryptMessage;
     DECRYPT_MESSAGE_FN                DecryptMessage;
     SET_CONTEXT_ATTRIBUTES_FN_W       SetContextAttributesW;
+    SET_CREDENTIALS_ATTRIBUTES_FN_W   SetCredentialsAttributesW;
+    CHANGE_PASSWORD_FN_W             ChangeAccountPasswordW;
+    QUERY_CONTEXT_ATTRIBUTES_EX_FN_W QueryContextAttributesExW;
+    QUERY_CREDENTIALS_ATTRIBUTES_EX_FN_W QueryCredentialsAttributesExW;
 } SecurityFunctionTableW, *PSecurityFunctionTableW;
 
 #define SecurityFunctionTable WINELIB_NAME_AW(SecurityFunctionTable)
@@ -952,6 +977,8 @@ typedef struct _SECURITY_FUNCTION_TABLE_W
 
 #define SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION   1
 #define SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION_2 2
+#define SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION_3 3
+#define SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION_4 4
 
 PSecurityFunctionTableA SEC_ENTRY InitSecurityInterfaceA(void);
 PSecurityFunctionTableW SEC_ENTRY InitSecurityInterfaceW(void);

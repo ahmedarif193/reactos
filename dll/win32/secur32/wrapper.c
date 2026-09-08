@@ -1119,3 +1119,77 @@ SECURITY_STATUS WINAPI SetContextAttributesW(PCtxtHandle phContext,
         ret = SEC_E_INVALID_HANDLE;
     return ret;
 }
+
+/***********************************************************************
+ * SetCredentialsAttributesA (SECUR32.@)
+ */
+SECURITY_STATUS WINAPI SetCredentialsAttributesA(PCredHandle credential, ULONG attribute, void *buffer, ULONG size)
+{
+    SecurePackage *package;
+    PCredHandle handle;
+
+    if (!credential || !credential->dwUpper || !credential->dwLower)
+        return SEC_E_INVALID_HANDLE;
+    package = (SecurePackage *)credential->dwUpper;
+    handle = (PCredHandle)credential->dwLower;
+    if (!package->provider)
+        return SEC_E_INVALID_HANDLE;
+    if (!package->provider->fnTableA.SetCredentialsAttributesA)
+        return SEC_E_INVALID_HANDLE;
+    return package->provider->fnTableA.SetCredentialsAttributesA(handle, attribute, buffer, size);
+}
+
+/***********************************************************************
+ * SetCredentialsAttributesW (SECUR32.@)
+ */
+SECURITY_STATUS WINAPI SetCredentialsAttributesW(PCredHandle credential, ULONG attribute, void *buffer, ULONG size)
+{
+    SecurePackage *package;
+    PCredHandle handle;
+
+    if (!credential || !credential->dwUpper || !credential->dwLower)
+        return SEC_E_INVALID_HANDLE;
+    package = (SecurePackage *)credential->dwUpper;
+    handle = (PCredHandle)credential->dwLower;
+    if (!package->provider)
+        return SEC_E_INVALID_HANDLE;
+    if (!package->provider->fnTableW.SetCredentialsAttributesW)
+        return SEC_E_INVALID_HANDLE;
+    return package->provider->fnTableW.SetCredentialsAttributesW(handle, attribute, buffer, size);
+}
+
+SECURITY_STATUS WINAPI QueryContextAttributesExA(PCtxtHandle context, ULONG attribute, void *buffer, ULONG size)
+{
+    SecurePackage *package;
+    PCtxtHandle handle;
+
+    if (!context || !context->dwUpper || !context->dwLower)
+        return SEC_E_INVALID_HANDLE;
+    package = (SecurePackage *)context->dwUpper;
+    handle = (PCtxtHandle)context->dwLower;
+    if (!package->provider)
+        return SEC_E_INVALID_HANDLE;
+    if (package->provider->fnTableA.QueryContextAttributesExA)
+        return package->provider->fnTableA.QueryContextAttributesExA(handle, attribute, buffer, size);
+
+    /* Legacy providers do not receive cbBuffer, including on native Windows. */
+    return QueryContextAttributesA(context, attribute, buffer);
+}
+
+SECURITY_STATUS WINAPI QueryContextAttributesExW(PCtxtHandle context, ULONG attribute, void *buffer, ULONG size)
+{
+    SecurePackage *package;
+    PCtxtHandle handle;
+
+    if (!context || !context->dwUpper || !context->dwLower)
+        return SEC_E_INVALID_HANDLE;
+    package = (SecurePackage *)context->dwUpper;
+    handle = (PCtxtHandle)context->dwLower;
+    if (!package->provider)
+        return SEC_E_INVALID_HANDLE;
+    if (package->provider->fnTableW.QueryContextAttributesExW)
+        return package->provider->fnTableW.QueryContextAttributesExW(handle, attribute, buffer, size);
+
+    /* Legacy providers do not receive cbBuffer, including on native Windows. */
+    return QueryContextAttributesW(context, attribute, buffer);
+}

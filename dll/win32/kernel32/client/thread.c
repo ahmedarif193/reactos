@@ -920,6 +920,50 @@ SetThreadIdealProcessor(IN HANDLE hThread,
 /*
  * @implemented
  */
+BOOL
+WINAPI
+GetThreadIdealProcessorEx(IN HANDLE Thread, OUT PPROCESSOR_NUMBER IdealProcessor)
+{
+    PROCESSOR_NUMBER Processor;
+    NTSTATUS Status;
+
+    Status = NtQueryInformationThread(Thread, ThreadIdealProcessorEx, &Processor, sizeof(Processor), NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    *IdealProcessor = Processor;
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+SetThreadIdealProcessorEx(IN HANDLE Thread, IN PPROCESSOR_NUMBER IdealProcessor, OUT PPROCESSOR_NUMBER PreviousIdealProcessor OPTIONAL)
+{
+    PROCESSOR_NUMBER Processor = *IdealProcessor;
+    NTSTATUS Status;
+
+    /* The native information class exchanges the requested and previous values. */
+    Status = NtSetInformationThread(Thread, ThreadIdealProcessorEx, &Processor, sizeof(Processor));
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    if (PreviousIdealProcessor)
+        *PreviousIdealProcessor = Processor;
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
 DWORD
 WINAPI
 GetProcessIdOfThread(IN HANDLE Thread)
