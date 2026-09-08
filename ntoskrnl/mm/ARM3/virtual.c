@@ -4454,12 +4454,9 @@ MI_IS_LOCKED_VA(
     PMMPFN Pfn1,
     ULONG LockType)
 {
-    // HACK until we have proper WSLIST support
-    PMMWSLE Wsle = &Pfn1->Wsle;
-
-    if ((LockType & MAP_PROCESS) && (Wsle->u1.e1.LockedInWs))
+    if ((LockType & MAP_PROCESS) && MI_PFN_LOCKED_IN_WS(Pfn1))
         return TRUE;
-    if ((LockType & MAP_SYSTEM) && (Wsle->u1.e1.LockedInMemory))
+    if ((LockType & MAP_SYSTEM) && MI_PFN_LOCKED_IN_MEMORY(Pfn1))
         return TRUE;
 
     return FALSE;
@@ -4471,19 +4468,16 @@ MI_LOCK_VA(
     PMMPFN Pfn1,
     ULONG LockType)
 {
-    // HACK until we have proper WSLIST support
-    PMMWSLE Wsle = &Pfn1->Wsle;
-
-    if (!Wsle->u1.e1.LockedInWs &&
-        !Wsle->u1.e1.LockedInMemory)
+    if (!MI_PFN_LOCKED_IN_WS(Pfn1) &&
+        !MI_PFN_LOCKED_IN_MEMORY(Pfn1))
     {
         MiReferenceProbedPageAndBumpLockCount(Pfn1);
     }
 
     if (LockType & MAP_PROCESS)
-        Wsle->u1.e1.LockedInWs = 1;
+        MI_PFN_SET_LOCKED_IN_WS(Pfn1, 1);
     if (LockType & MAP_SYSTEM)
-        Wsle->u1.e1.LockedInMemory = 1;
+        MI_PFN_SET_LOCKED_IN_MEMORY(Pfn1, 1);
 }
 
 FORCEINLINE
@@ -4492,16 +4486,13 @@ MI_UNLOCK_VA(
     PMMPFN Pfn1,
     ULONG LockType)
 {
-    // HACK until we have proper WSLIST support
-    PMMWSLE Wsle = &Pfn1->Wsle;
-
     if (LockType & MAP_PROCESS)
-        Wsle->u1.e1.LockedInWs = 0;
+        MI_PFN_SET_LOCKED_IN_WS(Pfn1, 0);
     if (LockType & MAP_SYSTEM)
-        Wsle->u1.e1.LockedInMemory = 0;
+        MI_PFN_SET_LOCKED_IN_MEMORY(Pfn1, 0);
 
-    if (!Wsle->u1.e1.LockedInWs &&
-        !Wsle->u1.e1.LockedInMemory)
+    if (!MI_PFN_LOCKED_IN_WS(Pfn1) &&
+        !MI_PFN_LOCKED_IN_MEMORY(Pfn1))
     {
         MiDereferencePfnAndDropLockCount(Pfn1);
     }

@@ -447,7 +447,7 @@ typedef struct _MMPFNENTRY
 } MMPFNENTRY;
 
 #ifdef _WIN64
-#define MI_PTE_FRAME_BITS 57
+#define MI_PTE_FRAME_BITS 55
 #else
 #define MI_PTE_FRAME_BITS 25
 #endif
@@ -507,6 +507,10 @@ typedef struct _MMPFN
             ULONG_PTR AweAllocation:1;
             ULONG_PTR Priority:3;
             ULONG_PTR MustBeCached:1;
+#ifdef _WIN64
+            ULONG_PTR LockedInWs:1;
+            ULONG_PTR LockedInMemory:1;
+#endif
         };
     } u4;
 #if MI_TRACE_PFNS
@@ -516,11 +520,30 @@ typedef struct _MMPFN
     PVOID CallSite;
 #endif
 
-    // HACK until WS lists are supported
+    /* Only these two WS lock flags are used; on 64-bit they live in u4. */
+#ifndef _WIN64
     MMWSLE Wsle;
+#endif
+    /* Keep full-width links: physical page numbers can exceed 32 bits. */
     struct _MMPFN* NextLRU;
     struct _MMPFN* PreviousLRU;
 } MMPFN, *PMMPFN;
+
+#if defined(_WIN64) && !MI_TRACE_PFNS
+C_ASSERT(sizeof(MMPFN) == 64);
+#endif
+
+#ifdef _WIN64
+#define MI_PFN_LOCKED_IN_WS(p)              ((p)->u4.LockedInWs)
+#define MI_PFN_LOCKED_IN_MEMORY(p)          ((p)->u4.LockedInMemory)
+#define MI_PFN_SET_LOCKED_IN_WS(p, v)       ((p)->u4.LockedInWs = (v))
+#define MI_PFN_SET_LOCKED_IN_MEMORY(p, v)   ((p)->u4.LockedInMemory = (v))
+#else
+#define MI_PFN_LOCKED_IN_WS(p)              ((p)->Wsle.u1.e1.LockedInWs)
+#define MI_PFN_LOCKED_IN_MEMORY(p)          ((p)->Wsle.u1.e1.LockedInMemory)
+#define MI_PFN_SET_LOCKED_IN_WS(p, v)       ((p)->Wsle.u1.e1.LockedInWs = (v))
+#define MI_PFN_SET_LOCKED_IN_MEMORY(p, v)   ((p)->Wsle.u1.e1.LockedInMemory = (v))
+#endif
 
 extern PMMPFN MmPfnDatabase;
 
