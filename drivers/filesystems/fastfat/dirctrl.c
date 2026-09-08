@@ -249,7 +249,7 @@ Return Value:
 --*/
 
 {
-    NTSTATUS Status;
+    NTSTATUS _SEH2_VOLATILE Status;
     PIO_STACK_LOCATION IrpSp;
 
     PVCB Vcb;
@@ -273,8 +273,10 @@ Return Value:
     BOOLEAN IndexSpecified;
 
     BOOLEAN InitialQuery;
-    VBO CurrentVbo = 0;
-    BOOLEAN UpdateCcb;
+    /* The finally block must see the current cursor and completion status,
+     * not their initial values when PSEH re-enters the registration frame. */
+    VBO _SEH2_VOLATILE CurrentVbo = 0;
+    BOOLEAN _SEH2_VOLATILE UpdateCcb;
     PDIRENT Dirent;
     UCHAR Fat8Dot3Buffer[12];
     OEM_STRING Fat8Dot3String;
@@ -1480,7 +1482,7 @@ Return Value:
     ULONG CompletionFilter;
     BOOLEAN WatchTree;
 
-    BOOLEAN CompleteRequest;
+    BOOLEAN _SEH2_VOLATILE CompleteRequest;
 
     PAGED_CODE();
 
