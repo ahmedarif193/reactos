@@ -1253,6 +1253,25 @@ SkipCheck:
     LdrEntry->BaseDllName = BaseDllName;
     LdrEntry->EntryPoint = LdrpFetchAddressOfEntryPoint(LdrEntry->DllBase);
 
+#if defined(_M_ARM64)
+    /* AnyCPU assemblies can carry an i386 bootstrap thunk. It is not ARM64
+     * code: the managed runtime consumes the IL without calling that thunk. */
+    if (NtHeaders->FileHeader.Machine == IMAGE_FILE_MACHINE_I386)
+    {
+        ULONG CorSize;
+        PIMAGE_COR20_HEADER CorHeader;
+
+        CorHeader = RtlImageDirectoryEntryToData(ViewBase, TRUE, IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR, &CorSize);
+        if (CorHeader && CorSize >= sizeof(*CorHeader) &&
+            CorHeader->cb >= sizeof(*CorHeader) &&
+            (CorHeader->Flags & (COMIMAGE_FLAGS_ILONLY | COMIMAGE_FLAGS_32BITREQUIRED | COMIMAGE_FLAGS_NATIVE_ENTRYPOINT)) == COMIMAGE_FLAGS_ILONLY)
+        {
+            LdrEntry->Flags |= LDRP_COR_IMAGE;
+            LdrEntry->EntryPoint = NULL;
+        }
+    }
+#endif
+
     /* Show debug message */
     if (ShowSnaps)
     {

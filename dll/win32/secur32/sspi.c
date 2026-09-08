@@ -56,7 +56,7 @@ static SecurePackageTable *packageTable = NULL;
 static SecureProviderTable *providerTable = NULL;
 
 static SecurityFunctionTableA securityFunctionTableA = {
-    SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION,
+    SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION_3,
     EnumerateSecurityPackagesA,
     QueryCredentialsAttributesA,
     AcquireCredentialsHandleA,
@@ -83,11 +83,15 @@ static SecurityFunctionTableA securityFunctionTableA = {
     QuerySecurityContextToken,
     EncryptMessage,
     DecryptMessage,
-    NULL
+    SetContextAttributesA,
+    SetCredentialsAttributesA,
+    NULL, /* ChangeAccountPassword */
+    QueryContextAttributesExA,
+    NULL /* QueryCredentialsAttributesEx */
 };
 
 static SecurityFunctionTableW securityFunctionTableW = {
-    SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION,
+    SECURITY_SUPPORT_PROVIDER_INTERFACE_VERSION_3,
     EnumerateSecurityPackagesW,
     QueryCredentialsAttributesW,
     AcquireCredentialsHandleW,
@@ -114,7 +118,11 @@ static SecurityFunctionTableW securityFunctionTableW = {
     QuerySecurityContextToken,
     EncryptMessage,
     DecryptMessage,
-    NULL
+    SetContextAttributesW,
+    SetCredentialsAttributesW,
+    NULL, /* ChangeAccountPassword */
+    QueryContextAttributesExW,
+    NULL /* QueryCredentialsAttributesEx */
 };
 
 /***********************************************************************
@@ -211,7 +219,9 @@ static void _makeFnTableA(PSecurityFunctionTableA fnTableA,
              */
             size_t tableSize = inFnTableA->dwVersion == 1 ?
              (const BYTE *)&inFnTableA->SetContextAttributesA -
-             (const BYTE *)inFnTableA : sizeof(SecurityFunctionTableA);
+             (const BYTE *)inFnTableA : inFnTableA->dwVersion == 2 ?
+             FIELD_OFFSET(SecurityFunctionTableA, SetCredentialsAttributesA) : inFnTableA->dwVersion == 3 ?
+             FIELD_OFFSET(SecurityFunctionTableA, QueryContextAttributesExA) : sizeof(SecurityFunctionTableA);
 
             memcpy(fnTableA, inFnTableA, tableSize);
             /* override this, since we can do it internally anyway */
@@ -282,7 +292,9 @@ static void _makeFnTableW(PSecurityFunctionTableW fnTableW,
              */
             size_t tableSize = inFnTableW->dwVersion == 1 ?
              (const BYTE *)&inFnTableW->SetContextAttributesW -
-             (const BYTE *)inFnTableW : sizeof(SecurityFunctionTableW);
+             (const BYTE *)inFnTableW : inFnTableW->dwVersion == 2 ?
+             FIELD_OFFSET(SecurityFunctionTableW, SetCredentialsAttributesW) : inFnTableW->dwVersion == 3 ?
+             FIELD_OFFSET(SecurityFunctionTableW, QueryContextAttributesExW) : sizeof(SecurityFunctionTableW);
 
             memcpy(fnTableW, inFnTableW, tableSize);
             /* override this, since we can do it internally anyway */

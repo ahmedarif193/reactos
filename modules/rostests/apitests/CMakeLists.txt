@@ -85,3 +85,5 @@ add_subdirectory(wlanapi)
 add_subdirectory(ws2_32)
 add_subdirectory(wscript)
 add_subdirectory(zipfldr)
+
+add_subdirectory(runtimeexports)

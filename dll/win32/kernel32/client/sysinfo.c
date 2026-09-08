@@ -388,6 +388,49 @@ GetNumaProcessorNode(IN UCHAR Processor,
  */
 BOOL
 WINAPI
+GetNumaProcessorNodeEx(IN PPROCESSOR_NUMBER Processor, OUT PUSHORT NodeNumber)
+{
+    SYSTEM_NUMA_INFORMATION Information;
+    NTSTATUS Status;
+    ULONG Node;
+    ULONGLONG Mask;
+
+    /* ReactOS currently exposes one processor group. */
+    if (Processor->Group != 0 || Processor->Reserved != 0 || Processor->Number >= 64)
+    {
+        *NodeNumber = 0xffff;
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Status = NtQuerySystemInformation(SystemNumaProcessorMap, &Information, sizeof(Information), NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        *NodeNumber = 0xffff;
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    Mask = 1ULL << Processor->Number;
+    for (Node = 0; Node <= Information.HighestNodeNumber && Node < RTL_NUMBER_OF(Information.ActiveProcessorsAffinityMask); ++Node)
+    {
+        if (Information.ActiveProcessorsAffinityMask[Node] & Mask)
+        {
+            *NodeNumber = (USHORT)Node;
+            return TRUE;
+        }
+    }
+
+    *NodeNumber = 0xffff;
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return FALSE;
+}
+
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
 GetNumaAvailableMemoryNode(IN UCHAR Node,
                            OUT PULONGLONG AvailableBytes)
 {

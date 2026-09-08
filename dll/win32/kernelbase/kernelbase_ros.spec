@@ -370,7 +370,7 @@
 #@ stdcall FindFirstStreamW(wstr long ptr long)
 #@ stdcall FindFirstVolumeW(ptr long)
 #@ stdcall FindNLSString(long long wstr long wstr long ptr)
-#@ stdcall FindNLSStringEx(wstr long wstr long wstr long ptr ptr ptr long)
+@ stdcall FindNLSStringEx(wstr long wstr long wstr long ptr ptr ptr long)
 #@ stdcall FindNextChangeNotification(long)
 #@ stdcall FindNextFileA(long ptr)
 # #@ stub FindNextFileNameW
@@ -750,7 +750,7 @@
 #@ stdcall GetThreadGroupAffinity(long ptr)
 #@ stdcall GetThreadIOPendingFlag(long ptr)
 #@ stdcall GetThreadId(ptr)
-#@ stdcall GetThreadIdealProcessorEx(long ptr)
+@ stdcall GetThreadIdealProcessorEx(long ptr) kernel32.GetThreadIdealProcessorEx
 @ stdcall GetThreadInformation(long long ptr long)
 #@ stdcall GetThreadLocale()
 #@ stdcall GetThreadPreferredUILanguages(long ptr ptr ptr)
@@ -1526,7 +1526,7 @@
 @ stdcall SetThreadErrorMode(long ptr)
 #@ stdcall SetThreadGroupAffinity(long ptr ptr)
 #@ stdcall SetThreadIdealProcessor(long long)
-#@ stdcall SetThreadIdealProcessorEx(long ptr ptr)
+@ stdcall SetThreadIdealProcessorEx(long ptr ptr) kernel32.SetThreadIdealProcessorEx
 @ stdcall SetThreadInformation(long long ptr long)
 #@ stdcall SetThreadLocale(long)
 #@ stdcall SetThreadPreferredUILanguages(long ptr ptr)
@@ -1751,11 +1751,11 @@
 @ stdcall WakeConditionVariable(ptr) ntdll.RtlWakeConditionVariable
 @ stdcall WerGetFlags(ptr ptr)
 #@ stdcall WerRegisterFile(wstr long long)
-#@ stdcall WerRegisterMemoryBlock(ptr long)
+@ stdcall WerRegisterMemoryBlock(ptr long)
 @ stdcall WerRegisterRuntimeExceptionModule(wstr ptr)
 @ stdcall WerSetFlags(long)
 #@ stdcall WerUnregisterFile(wstr)
-#@ stdcall WerUnregisterMemoryBlock(ptr)
+@ stdcall WerUnregisterMemoryBlock(ptr)
 @ stdcall WerUnregisterRuntimeExceptionModule(wstr ptr)
 # #@ stub WerpNotifyLoadStringResource
 # #@ stub WerpNotifyUseStringResource
@@ -1821,3 +1821,5 @@
 #@ stdcall lstrlenW(wstr) KERNELBASE_lstrlenW
 # #@ stub time
 # #@ stub wprintf
+
+@ stdcall GetNumaProcessorNodeEx(ptr ptr) kernel32.GetNumaProcessorNodeEx
