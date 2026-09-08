@@ -169,7 +169,7 @@ Return Value:
 --*/
 
 {
-    NTSTATUS Status;
+    NTSTATUS _SEH2_VOLATILE Status;
 
     PIO_STACK_LOCATION IrpSp;
 
@@ -181,8 +181,9 @@ Return Value:
     PFCB NextFcb;
     PCCB Ccb;
 
-    BOOLEAN VcbAcquired = FALSE;
-    BOOLEAN FcbAcquired = FALSE;
+    /* Preserve resource ownership across PSEH's finally-handler re-entry. */
+    BOOLEAN _SEH2_VOLATILE VcbAcquired = FALSE;
+    BOOLEAN _SEH2_VOLATILE FcbAcquired = FALSE;
     BOOLEAN FatFlushRequired = FALSE;
 
     PAGED_CODE();

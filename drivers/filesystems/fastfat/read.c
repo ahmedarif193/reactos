@@ -523,7 +523,7 @@ _Requires_lock_held_(_Global_critical_region_)
 NTSTATUS
 FatCommonRead (
     IN PIRP_CONTEXT IrpContext,
-    IN PIRP Irp
+    IN PIRP _SEH2_VOLATILE Irp
     )
 
 /*++
@@ -562,10 +562,11 @@ Return Value:
     PFILE_OBJECT FileObject;
     TYPE_OF_OPEN TypeOfOpen;
 
-    BOOLEAN PostIrp = FALSE;
+    BOOLEAN _SEH2_VOLATILE PostIrp = FALSE;
     BOOLEAN OplockPostIrp = FALSE;
 
-    BOOLEAN FcbOrDcbAcquired = FALSE;
+    /* Preserve cleanup decisions across PSEH's returns-twice finally path. */
+    BOOLEAN _SEH2_VOLATILE FcbOrDcbAcquired = FALSE;
 
     BOOLEAN Wait;
     BOOLEAN PagingIo;
@@ -573,7 +574,7 @@ Return Value:
     BOOLEAN SynchronousIo;
 
 
-    NTSTATUS Status = STATUS_SUCCESS;
+    NTSTATUS _SEH2_VOLATILE Status = STATUS_SUCCESS;
 
     FAT_IO_CONTEXT StackFatIoContext;
 
