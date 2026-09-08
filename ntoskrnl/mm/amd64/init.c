@@ -524,8 +524,15 @@ MiBuildNonPagedPool(VOID)
     /* Check if we had a registry value for the initial non-paged pool size */
     if (MmSizeOfNonPagedPoolInBytes == 0)
     {
-        /* Default initial non-paged pool size is 3% of system RAM */
-        MmSizeOfNonPagedPoolInBytes = (SizeOfSystemRamInBytes * 3 / 100);
+        /*
+         * The initial pool is physically backed and free blocks remain pinned.
+         * Scaling it past the existing 40-MiB bootstrap baseline wastes RAM on
+         * large machines even when no driver has requested that memory. Keep
+         * the maximum pool size above unchanged; expansion is backed on demand.
+         * An explicit registry initial-size override still takes precedence.
+         */
+        MmSizeOfNonPagedPoolInBytes = min(SizeOfSystemRamInBytes * 3 / 100,
+                                          40 * _1MB);
     }
 
     /* Check if this is less than 40 MB */
