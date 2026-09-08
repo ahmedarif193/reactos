@@ -143,6 +143,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_fsrtl/FsRtlExpression.c
     ntos_fsrtl/FsRtlLegal.c
     ntos_fsrtl/FsRtlMcb.c
+    ntos_fsrtl/FsRtlQueryFileLock.c
     ntos_fsrtl/FsRtlTunnel.c
     ntos_io/IoBuildIoctlKM.c
     ntos_io/IoLargeMemoryResource.c
