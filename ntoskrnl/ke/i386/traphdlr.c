@@ -1259,15 +1259,19 @@ KiCheckForSListFault(PKTRAP_FRAME TrapFrame)
         ULARGE_INTEGER SListHeader;
         PVOID ResumeAddress;
 
-        /* Sanity check that the assembly is correct:
-           This must be mov ebx, [eax]
-           Followed by cmpxchg8b [ebp] */
-        ASSERT((((UCHAR*)TrapFrame->Eip)[0] == 0x8B) &&
-               (((UCHAR*)TrapFrame->Eip)[1] == 0x18) &&
-               (((UCHAR*)TrapFrame->Eip)[2] == 0x0F) &&
-               (((UCHAR*)TrapFrame->Eip)[3] == 0xC7) &&
-               (((UCHAR*)TrapFrame->Eip)[4] == 0x4D) &&
-               (((UCHAR*)TrapFrame->Eip)[5] == 0x00));
+#if DBG
+        {
+            const UCHAR *Instruction = (const UCHAR *)TrapFrame->Eip;
+
+            /* mov ebx, [eax], followed by cmpxchg8b [ebp]. The MP
+             * kernel and ntdll include LOCK; the UP kernel omits it. */
+            ASSERT(Instruction[0] == 0x8B && Instruction[1] == 0x18);
+            Instruction += 2;
+            if (*Instruction == 0xF0) ++Instruction;
+            ASSERT(Instruction[0] == 0x0F && Instruction[1] == 0xC7 &&
+                   Instruction[2] == 0x4D && Instruction[3] == 0x00);
+        }
+#endif
 
         /* Check if this is a user fault */
         if (TrapFrame->Eip == (ULONG_PTR)KeUserPopEntrySListFault)
