@@ -59,15 +59,14 @@ static int aqs_error( struct aqs_parser *parser, const char *str )
 %token TK_INTEGER TK_WHITESPACE TK_ILLEGAL TK_MINUS
 %token TK_TRUE TK_FALSE
 %token <str> TK_STRING TK_ID
+%token TK_AND TK_OR TK_NOT TK_COLON TK_EQUAL TK_NOTEQUAL TK_LT TK_LTE TK_GT TK_GTE TK_TILDE TK_EXCLAM TK_DOLLAR
 
 %type <propval> id string number boolean null
 %type <propval> propval
-%type <expr> expr query
-
-%left TK_AND TK_OR TK_NOT TK_COLON TK_EQUAL TK_NOTEQUAL TK_LT TK_LTE TK_GT TK_GTE TK_TILDE TK_EXCLAM TK_DOLLAR
+%type <expr> expr unary atom query
 
 %destructor { PropVariantClear( &$$ ); } propval
-%destructor { free_aqs_expr( $$ ); } expr
+%destructor { free_aqs_expr( $$ ); } expr unary atom
 
 %debug
 
@@ -81,7 +80,35 @@ static int aqs_error( struct aqs_parser *parser, const char *str )
 
 query: expr { ctx->expr = $1; }
         ;
+/* Explicit and implicit binary operators associate from left to right.
+ * NOT applies to the following operand, not to the remaining query. */
 expr:
+    unary
+    | expr TK_AND unary
+        {
+            if (FAILED(get_boolean_binary_expr( ctx, DEVPROP_OPERATOR_AND_OPEN, $1, $3, &$$ )))
+                YYABORT;
+        }
+    | expr TK_OR unary
+        {
+            if (FAILED(get_boolean_binary_expr( ctx, DEVPROP_OPERATOR_OR_OPEN, $1, $3, &$$ )))
+                YYABORT;
+        }
+    | expr unary
+        {
+            if (FAILED(join_expr( ctx, $1, $2, &$$ )))
+                YYABORT;
+        }
+    ;
+unary:
+    atom
+    | TK_NOT unary
+        {
+            if (FAILED(get_boolean_not_expr( ctx, $2, &$$ )))
+                YYABORT;
+        }
+    ;
+atom:
     TK_LEFTPAREN expr TK_RIGHTPAREN
         {
             $$ = $2;
@@ -89,53 +116,6 @@ expr:
             (void)yysymbol_name; /* avoid unused function warning */
 #endif
             (void)yynerrs; /* avoid unused variable warning */
-        }
-    | TK_NOT expr expr
-        {
-            struct aqs_expr *expr;
-
-            if (FAILED(get_boolean_not_expr( ctx, $2, &expr )))
-                YYABORT;
-            if (FAILED(join_expr( ctx, expr, $3, &$$ )))
-                YYABORT;
-        }
-    | expr expr TK_OR expr
-        {
-            struct aqs_expr *expr;
-
-            if (FAILED(join_expr( ctx, $1, $2, &expr )))
-                YYABORT;
-            if (FAILED(get_boolean_binary_expr( ctx, DEVPROP_OPERATOR_OR_OPEN, expr, $4, &$$ )))
-                YYABORT;
-        }
-    | expr TK_OR expr expr
-        {
-            struct aqs_expr *expr;
-
-            if (FAILED(get_boolean_binary_expr( ctx, DEVPROP_OPERATOR_OR_OPEN, $1, $3, &expr )))
-                YYABORT;
-            if (FAILED(join_expr( ctx, expr, $4, &$$ )))
-                YYABORT;
-        }
-    | expr TK_AND expr
-        {
-            if (FAILED(get_boolean_binary_expr( ctx, DEVPROP_OPERATOR_AND_OPEN, $1, $3, &$$ )))
-                YYABORT;
-        }
-    | expr TK_OR expr
-        {
-            if (FAILED(get_boolean_binary_expr( ctx, DEVPROP_OPERATOR_OR_OPEN, $1, $3, &$$ )))
-                YYABORT;
-        }
-    | TK_NOT expr
-        {
-            if (FAILED(get_boolean_not_expr( ctx, $2, &$$ )))
-                YYABORT;
-        }
-    | expr expr
-        {
-            if (FAILED(join_expr( ctx, $1, $2, &$$ )))
-                YYABORT;
         }
     | id TK_COLON propval
         {
