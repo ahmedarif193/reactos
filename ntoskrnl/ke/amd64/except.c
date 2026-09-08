@@ -709,7 +709,10 @@ NTAPI
 KiXmmExceptionHandler(
     IN PKTRAP_FRAME TrapFrame)
 {
-    ULONG ExceptionCode;
+    /* #XM must have at least one unmasked status bit. Keep a defined generic
+     * floating-point exception for release builds if hardware or a restored
+     * trap frame violates that invariant; ASSERT below is compiled out there. */
+    ULONG ExceptionCode = STATUS_FLOAT_INVALID_OPERATION;
 
     if ((TrapFrame->MxCsr & _MM_EXCEPT_INVALID) &&
         !(TrapFrame->MxCsr & _MM_MASK_INVALID))
