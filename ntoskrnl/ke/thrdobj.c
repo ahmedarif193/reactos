@@ -917,7 +917,9 @@ KeInitThread(IN OUT PKTHREAD Thread,
     Timer = &Thread->Timer;
     KeInitializeTimer(Timer);
     TimerWaitBlock = &Thread->WaitBlock[TIMER_WAIT_BLOCK];
+#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64))
     TimerWaitBlock->Object = Timer;
+#endif
     TimerWaitBlock->WaitKey = STATUS_TIMEOUT;
     TimerWaitBlock->WaitType = WaitAny;
 #if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64))

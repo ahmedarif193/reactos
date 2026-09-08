@@ -152,7 +152,15 @@ KiUnlinkWaitBlocks(IN PKTHREAD Thread)
     for (Index = 0; Index < Count; Index++)
     {
         PKWAIT_BLOCK WaitBlock = &WaitBlockArray[Index];
-        PDISPATCHER_HEADER Object = (PDISPATCHER_HEADER)WaitBlock->Object;
+        PDISPATCHER_HEADER Object;
+
+        /* The built-in timer block's Object slot is overlaid by WaitTime
+         * on x86 (and Ucb on x64). It is not an object pointer. A delay
+         * interrupted by an APC still has an active timer block to unlink. */
+        if (WaitBlock == &Thread->WaitBlock[TIMER_WAIT_BLOCK])
+            Object = &Thread->Timer.Header;
+        else
+            Object = (PDISPATCHER_HEADER)WaitBlock->Object;
 
         if (!Object) continue;
         if (WaitBlock->BlockState != WaitBlockActive) continue;
