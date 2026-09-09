@@ -800,6 +800,9 @@ struct _DXGKRNL_ADAPTER
      * NodeCount never indexes past this array and the accounting path never
      * has to allocate at DISPATCH_LEVEL.
      */
+    /* Serializes packet charges and timestamped snapshots for the adapter,
+     * its processes and system work. Never acquired from the miniport ISR. */
+    KSPIN_LOCK                 NodeStatisticsLock[DXGK_MAX_TRACKED_NODES];
     DXGKRNL_NODE_STATISTICS     NodeStatistics[DXGK_MAX_TRACKED_NODES];
 
     /*

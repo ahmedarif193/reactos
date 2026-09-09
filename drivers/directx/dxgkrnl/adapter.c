@@ -12814,7 +12814,10 @@ DxgkAdapterStart(
     RtlZeroMemory(Adapter->SystemNodeStatistics, sizeof(Adapter->SystemNodeStatistics));
     {
         LARGE_INTEGER PerformanceFrequency;
+        ULONG NodeIndex;
 
+        for (NodeIndex = 0; NodeIndex < RTL_NUMBER_OF(Adapter->NodeStatisticsLock); ++NodeIndex)
+            KeInitializeSpinLock(&Adapter->NodeStatisticsLock[NodeIndex]);
         (VOID)KeQueryPerformanceCounter(&PerformanceFrequency);
         Adapter->PerformanceFrequency = PerformanceFrequency.QuadPart;
     }
