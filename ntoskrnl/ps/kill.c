@@ -556,6 +556,9 @@ PspExitThread(IN NTSTATUS ExitStatus)
     /* Call the WMI Callback for Threads */
     //WmiTraceThread(Thread, NULL, FALSE);
 
+    /* Cancel registry event registrations owned by this thread. */
+    CmpFlushNotifyThread(Thread);
+
     /* Run Thread Notify Routines before we desintegrate the thread */
     PspRunCreateThreadNotifyRoutines(Thread, FALSE);
 

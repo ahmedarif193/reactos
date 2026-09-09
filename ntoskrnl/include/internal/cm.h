@@ -241,6 +241,7 @@ typedef struct _CM_KEY_BODY
 
     /* ReactOS specific -- boolean flag to avoid recursive locking of the KCB */
     BOOLEAN KcbLocked;
+    BOOLEAN NotifyClosed;
 } CM_KEY_BODY, *PCM_KEY_BODY;
 
 //
@@ -325,13 +326,13 @@ typedef struct _CM_KEY_CONTROL_BLOCK
 //
 typedef struct _CM_NOTIFY_BLOCK
 {
-    LIST_ENTRY ListEntry;
-    struct _CM_NOTIFY_BLOCK *Next;
+    LIST_ENTRY HiveList;
+    LIST_ENTRY PostList;
+    PCM_KEY_CONTROL_BLOCK KeyControlBlock;
     PCM_KEY_BODY KeyBody;
-    KEVENT Event;
-    NTSTATUS Status;
-    ULONG Filter;
-    BOOLEAN WatchTree;
+    ULONG Filter:29;
+    ULONG WatchTree:1;
+    ULONG NotifyPending:1;
 } CM_NOTIFY_BLOCK, *PCM_NOTIFY_BLOCK;
 
 //
@@ -632,17 +633,12 @@ CmpSetGlobalQuotaAllowed(
 //
 // Notification Routines
 //
-VOID
-NTAPI
-CmpInitNotify(VOID);
-
-NTSTATUS
-NTAPI
-CmpWaitForNotify(IN PCM_KEY_BODY KeyBody, IN ULONG Filter, IN BOOLEAN WatchTree, IN KPROCESSOR_MODE PreviousMode);
-
-VOID
-NTAPI
-CmpFlushNotifyOnKcb(IN PCM_KEY_CONTROL_BLOCK Kcb);
+CODE_SEG("INIT")
+VOID NTAPI CmpInitNotify(VOID);
+VOID NTAPI CmpFlushNotifyOnKcb(IN PCM_KEY_CONTROL_BLOCK Kcb);
+VOID NTAPI CmpCloseNotify(PCM_KEY_BODY KeyBody);
+VOID NTAPI CmpFlushNotifyThread(PETHREAD Thread);
+NTSTATUS NTAPI CmpNotifyChangeKey(PCM_KEY_BODY KeyBody, PKEVENT Event, ULONG Filter, BOOLEAN WatchTree, BOOLEAN Asynchronous, KPROCESSOR_MODE PreviousMode);
 
 VOID
 NTAPI
