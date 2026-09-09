@@ -259,9 +259,9 @@ CmpFileFlush(IN PHHIVE RegistryHive,
 
     Status = ZwFlushBuffersFile(HiveHandle, &IoStatusBlock);
 
-    /* This operation is always synchronous */
+    /* This operation is synchronous. On failure, the I/O status block may
+     * remain unwritten; the system call's return status is authoritative. */
     ASSERT(Status != STATUS_PENDING);
-    ASSERT(Status == IoStatusBlock.Status);
 
     return NT_SUCCESS(Status) ? TRUE : FALSE;
 }
