@@ -1770,7 +1770,10 @@ void wined3d_context_gl_bind_dummy_textures(const struct wined3d_context_gl *con
         if (gl_info->supported[ARB_TEXTURE_MULTISAMPLE])
         {
             gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, textures->tex_2d_ms);
-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, textures->tex_2d_ms_array);
+#ifdef __REACTOS__
+            if (gl_info->supported[EXT_TEXTURE_ARRAY])
+#endif
+                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, textures->tex_2d_ms_array);
         }
     }
 
