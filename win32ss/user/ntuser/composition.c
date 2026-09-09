@@ -2956,6 +2956,9 @@ IntCompositionRedirectDC(_In_opt_ PWND Wnd, _In_ HDC hDC, _In_ ULONG DcxFlags, _
      * top-left from screen space to backing space, absolutely (idempotent).
      */
     rcOwn = (DcxFlags & DCX_WINDOW) ? Wnd->rcWindow : Wnd->rcClient;
+    /* Public DC queries still use screen coordinates, including when a
+     * move leaves the origin within the backing surface unchanged. */
+    pdc->erclWindow = rcOwn;
 
     /* Cached DCE with a still-valid clip (no DCHF_VALIDATEVISRGN, no new clip
      * region) already redirected at the current backing and origin: the VisRgn

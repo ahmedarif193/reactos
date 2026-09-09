@@ -343,6 +343,63 @@ void Test_GetRandomRgn_RGN5()
     DeleteDC(hdc);
 }
 
+static void Test_WindowScreenRegion(HWND Window)
+{
+    HDC Dc = GetDC(Window);
+    HRGN Region = CreateRectRgn(0, 0, 0, 0);
+    RECT Expected, Actual;
+    POINT Origin, ScreenOrigin = {0, 0};
+
+    if (!Dc || !Region)
+    {
+        skip("Could not create region test objects\n");
+        if (Region) DeleteObject(Region);
+        if (Dc) ReleaseDC(Window, Dc);
+        return;
+    }
+
+    GetClientRect(Window, &Expected);
+    MapWindowPoints(Window, NULL, (POINT *)&Expected, 2);
+    ok_int(GetRandomRgn(Dc, Region, SYSRGN), 1);
+    GetRgnBox(Region, &Actual);
+    ok(EqualRect(&Actual, &Expected),
+       "SYSRGN (%ld,%ld)-(%ld,%ld), expected screen rect (%ld,%ld)-(%ld,%ld)\n",
+       Actual.left, Actual.top, Actual.right, Actual.bottom,
+       Expected.left, Expected.top, Expected.right, Expected.bottom);
+
+    ClientToScreen(Window, &ScreenOrigin);
+    ok_int(GetDCOrgEx(Dc, &Origin), TRUE);
+    ok_long(Origin.x, ScreenOrigin.x);
+    ok_long(Origin.y, ScreenOrigin.y);
+    DeleteObject(Region);
+    ReleaseDC(Window, Dc);
+}
+
+static void Test_GetRandomRgn_WindowCoordinates(void)
+{
+    HWND Window, Child;
+
+    Window = CreateWindowExW(WS_EX_TOPMOST, L"STATIC", L"Screen region",
+                             WS_POPUP | WS_VISIBLE, 80, 90, 200, 160,
+                             NULL, NULL, NULL, NULL);
+    if (!Window)
+    {
+        skip("Could not create screen region window\n");
+        return;
+    }
+    Test_WindowScreenRegion(Window);
+    SetWindowPos(Window, NULL, 120, 110, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    Test_WindowScreenRegion(Window);
+
+    Child = CreateWindowW(L"STATIC", L"Child", WS_CHILD | WS_VISIBLE,
+                           20, 30, 80, 60, Window, NULL, NULL, NULL);
+    if (Child)
+        Test_WindowScreenRegion(Child);
+    else
+        skip("Could not create child region window\n");
+    DestroyWindow(Window);
+}
+
 START_TEST(GetRandomRgn)
 {
 
@@ -362,6 +419,6 @@ START_TEST(GetRandomRgn)
     Test_GetRandomRgn_APIRGN();
     Test_GetRandomRgn_SYSRGN();
     Test_GetRandomRgn_RGN5();
+    Test_GetRandomRgn_WindowCoordinates();
 
 }
-
