@@ -1,0 +1,275 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
+ */
+
+/* GPU backdrop dependencies. These compare metadata, never window pixels. */
+#pragma once
+
+typedef struct _DWM_GPU_SCENE_SPACE
+{
+    LONG OriginX, OriginY, Width, Height;
+    ULONG BlurRadius;
+    RECT ShadowMargins;
+} DWM_GPU_SCENE_SPACE;
+
+typedef struct _DWM_GPU_SCENE_CACHE
+{
+    DWM_WIN Windows[DWM_MAX_WINDOWS];
+    RECTL BlurRects[DWM_MAX_BLUR_RECTS];
+    ULONG Count, BlurRectCount;
+    DWM_GPU_SCENE_SPACE Space;
+    RECT AnimationDamage;
+    BOOL Valid;
+} DWM_GPU_SCENE_CACHE;
+
+static DWM_WIN
+DwmGpuCacheBlurOwner(const DWM_WIN *Window)
+{
+    DWM_WIN Key = *Window;
+
+    /* Own pixels and a packed region-array offset do not change the lower
+     * scene. The filter key separately checks the actual capture rectangle. */
+    Key.Damaged = 0;
+    Key.BaseUpdateId = 0;
+    Key.DxUpdateId = 0;
+    Key.BlurRectBase = 0;
+    return Key;
+}
+
+static BOOL
+DwmGpuSceneRegionsSame(const DWM_WIN *A, const DWM_WIN *B,
+                       const RECTL *ARects, ULONG ACount,
+                       const RECTL *BRects, ULONG BCount)
+{
+    if (A->BlurRectBase > ACount || A->BlurRectCount > ACount - A->BlurRectBase ||
+        B->BlurRectBase > BCount || B->BlurRectCount > BCount - B->BlurRectBase)
+        return FALSE;
+    return A->BlurRectCount == B->BlurRectCount &&
+           (A->BlurRectCount == 0 ||
+            memcmp(ARects + A->BlurRectBase, BRects + B->BlurRectBase,
+                   A->BlurRectCount * sizeof(*ARects)) == 0);
+}
+
+static BOOL
+DwmGpuSceneWindowSame(const DWM_WIN *A, const DWM_WIN *B,
+                      const RECTL *ARects, ULONG ACount,
+                      const RECTL *BRects, ULONG BCount)
+{
+    DWM_WIN Left = *A, Right = *B;
+
+    Left.Damaged = Right.Damaged = 0;
+    Left.BlurRectBase = Right.BlurRectBase = 0;
+    return memcmp(&Left, &Right, sizeof(Left)) == 0 &&
+           DwmGpuSceneRegionsSame(A, B, ARects, ACount, BRects, BCount);
+}
+
+static BOOL
+DwmGpuSceneWindowBounds(const DWM_WIN *Window, const DWM_GPU_SCENE_SPACE *Space,
+                        BOOL Capture, RECT *Bounds)
+{
+    BOOL Glass = Window->BackdropType == DWM_BACKDROP_TRANSIENT &&
+                 Window->BackdropRegion != 0 && Window->BackdropOpacity < 255;
+    BOOL Blur = (Window->BlurFlags & DWM_BLUR_ENABLE) &&
+                ((Window->BlurFlags & DWM_BLUR_REGION_ENTIRE_WINDOW) ||
+                 Window->BlurRectCount != 0);
+    DWM_GPU_WINDOW_GEOMETRY Geometry, Client;
+    LONGLONG Left, Top, Right, Bottom;
+    ULONG Radius = max(Glass ? DWM_GPU_MATERIAL_BLUR_RADIUS : 0,
+                       Blur ? Space->BlurRadius : 0);
+
+    if (!DwmGpuWindowGeometry(Window, Space->OriginX, Space->OriginY, &Geometry) ||
+        ((Window->LayerFlags & DWM_LWA_ALPHA) && Window->Alpha == 0) ||
+        (Capture && Radius == 0))
+        return FALSE;
+    Left = Geometry.Left; Top = Geometry.Top;
+    Right = Left + Geometry.Width; Bottom = Top + Geometry.Height;
+    if (Capture)
+    {
+        Left -= Radius; Top -= Radius;
+        Right += Radius; Bottom += Radius;
+    }
+    else if (Window->LayerFlags & DWM_WINDOW_NC_SHADOW)
+    {
+        Left -= Space->ShadowMargins.left; Top -= Space->ShadowMargins.top;
+        Right += Space->ShadowMargins.right; Bottom += Space->ShadowMargins.bottom;
+    }
+    /* Client DX surfaces can extend beyond the base window bounds. A whole
+     * glass material also captures their lower scene independently. */
+    if (Window->DxGlobalShare != 0 && Window->DxUpdateId != 0 &&
+        DwmGpuClientGeometry(Window, &Geometry, &Client) &&
+        (!Capture || (Glass && Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW)))
+    {
+        ULONG Margin = Capture ? DWM_GPU_MATERIAL_BLUR_RADIUS : 0;
+
+        Left = min(Left, Client.Left - Margin); Top = min(Top, Client.Top - Margin);
+        Right = max(Right, Client.Left + Client.Width + Margin);
+        Bottom = max(Bottom, Client.Top + Client.Height + Margin);
+    }
+    return DwmGpuDamageBounds(Bounds, Space->Width, Space->Height, Left, Top, Right, Bottom);
+}
+
+static void
+DwmGpuSceneIncludeWindow(RECT *Damage, const DWM_WIN *Window,
+                         const DWM_GPU_SCENE_SPACE *Space)
+{
+    RECT Bounds;
+
+    if (DwmGpuSceneWindowBounds(Window, Space, FALSE, &Bounds))
+        DwmGpuDamageUnion(Damage, &Bounds);
+}
+
+static RECT
+DwmGpuSceneAnimationDamage(const DWM_GPU_SCENE_CACHE *Cache,
+                           const DWM_WIN *Windows, ULONG Count,
+                           const DWM_GPU_SCENE_SPACE *Space)
+{
+    RECT Damage = {0};
+    ULONG Index, Other;
+
+    /* Retain the last presented footprint as well as the new destination.
+     * Include client surfaces and shadows outside the kernel's base-window
+     * damage, including animation start, cancellation and disappearance.
+     * A replaced surface needs both footprints too: matching its slot here
+     * only unions damage, and never permits resource or blur-cache reuse. */
+    for (Index = 0; Index < Count; ++Index)
+    {
+        if (Windows[Index].AnimFlags == 0)
+            continue;
+        DwmGpuSceneIncludeWindow(&Damage, &Windows[Index], Space);
+        for (Other = 0; Cache->Valid && Other < Cache->Count; ++Other)
+        {
+            if (Windows[Index].SurfaceId == Cache->Windows[Other].SurfaceId)
+            {
+                DwmGpuSceneIncludeWindow(&Damage, &Cache->Windows[Other], &Cache->Space);
+                break;
+            }
+        }
+    }
+    for (Index = 0; Cache->Valid && Index < Cache->Count; ++Index)
+    {
+        if (Cache->Windows[Index].AnimFlags == 0)
+            continue;
+        DwmGpuSceneIncludeWindow(&Damage, &Cache->Windows[Index], &Cache->Space);
+        for (Other = 0; Other < Count; ++Other)
+        {
+            if (Cache->Windows[Index].SurfaceId == Windows[Other].SurfaceId)
+            {
+                DwmGpuSceneIncludeWindow(&Damage, &Windows[Other], Space);
+                break;
+            }
+        }
+    }
+    return Damage;
+}
+
+static BOOL
+DwmGpuSceneDependencies(const DWM_WIN *Windows, ULONG Count,
+                        const DWM_GPU_SCENE_SPACE *Space, RECT Interest,
+                        BOOL *Relevant)
+{
+    /* Walk downward: another glass layer can bring more lower pixels into
+     * the capture, but windows above that layer cannot affect its backdrop. */
+    while (Count != 0)
+    {
+        const DWM_WIN *Window = &Windows[--Count];
+        RECT Bounds, Capture;
+
+        Relevant[Count] = DwmGpuSceneWindowBounds(Window, Space, FALSE, &Bounds) &&
+                          DwmGpuDamageIntersects(&Bounds, &Interest);
+        if (Relevant[Count] && DwmGpuSceneWindowBounds(Window, Space, TRUE, &Capture))
+        {
+            Interest.left = min(Interest.left, Capture.left);
+            Interest.top = min(Interest.top, Capture.top);
+            Interest.right = max(Interest.right, Capture.right);
+            Interest.bottom = max(Interest.bottom, Capture.bottom);
+        }
+    }
+    return TRUE;
+}
+
+static BOOL
+DwmGpuSceneLowerSame(const DWM_GPU_SCENE_CACHE *Cache,
+                     const DWM_WIN *Windows, ULONG OwnerIndex,
+                     const RECTL *BlurRects, ULONG BlurRectCount)
+{
+    DWM_WIN Owner = DwmGpuCacheBlurOwner(&Windows[OwnerIndex]), Previous;
+    BOOL CurrentRelevant[DWM_MAX_WINDOWS], PreviousRelevant[DWM_MAX_WINDOWS];
+    ULONG OldOwner, CurrentIndex = 0, PreviousIndex = 0;
+    RECT Capture;
+
+    if (Owner.AnimFlags != 0 || !DwmGpuSceneWindowBounds(&Owner, &Cache->Space, TRUE, &Capture))
+        return FALSE;
+    for (OldOwner = 0; OldOwner < Cache->Count; ++OldOwner)
+        if (Cache->Windows[OldOwner].SurfaceId == Owner.SurfaceId &&
+            Cache->Windows[OldOwner].Generation == Owner.Generation)
+            break;
+    if (OldOwner == Cache->Count)
+        return FALSE;
+    Previous = DwmGpuCacheBlurOwner(&Cache->Windows[OldOwner]);
+    if (memcmp(&Owner, &Previous, sizeof(Owner)) != 0 ||
+        !DwmGpuSceneRegionsSame(&Windows[OwnerIndex], &Cache->Windows[OldOwner],
+                                 BlurRects, BlurRectCount, Cache->BlurRects, Cache->BlurRectCount) ||
+        !DwmGpuSceneDependencies(Windows, OwnerIndex, &Cache->Space, Capture, CurrentRelevant) ||
+        !DwmGpuSceneDependencies(Cache->Windows, OldOwner, &Cache->Space, Capture, PreviousRelevant))
+        return FALSE;
+    for (;;)
+    {
+        while (CurrentIndex < OwnerIndex && !CurrentRelevant[CurrentIndex]) ++CurrentIndex;
+        while (PreviousIndex < OldOwner && !PreviousRelevant[PreviousIndex]) ++PreviousIndex;
+        if (CurrentIndex == OwnerIndex || PreviousIndex == OldOwner)
+            return CurrentIndex == OwnerIndex && PreviousIndex == OldOwner;
+        if (!DwmGpuSceneWindowSame(&Windows[CurrentIndex++], &Cache->Windows[PreviousIndex++],
+                                   BlurRects, BlurRectCount, Cache->BlurRects, Cache->BlurRectCount))
+            return FALSE;
+    }
+}
+
+static void
+DwmGpuCacheScene(DWM_GPU_SCENE_CACHE *Cache, const DWM_WIN *Windows,
+                 ULONG Count, const RECTL *BlurRects, ULONG BlurRectCount,
+                 const DWM_GPU_SCENE_SPACE *Space, BOOL RefreshBackdrop,
+                 BOOL *LowerUnchanged)
+{
+    ULONG Index;
+    BOOL Valid = Cache->Valid && !RefreshBackdrop &&
+                 memcmp(&Cache->Space, Space, sizeof(*Space)) == 0;
+    BOOL Same = Valid;
+    RECT AnimationDamage = DwmGpuSceneAnimationDamage(Cache, Windows, Count, Space);
+
+    for (Index = 0; Index < Count; ++Index)
+    {
+        DWM_WIN Current = Windows[Index];
+
+        /* Damage is an edge notification; the publication IDs identify the
+         * pixels. Keep every visual property and both publication IDs in the
+         * lower-scene comparison, including order and surface generation. */
+        Current.Damaged = 0;
+        /* The same owner must terminate the unchanged prefix. Its regions
+         * also determine whether an explicit blur precedes its own shadow
+         * and material, so they must preserve the first capture's meaning. */
+        LowerUnchanged[Index] = Same && Index < Cache->Count &&
+                Cache->Windows[Index].SurfaceId == Current.SurfaceId &&
+                Cache->Windows[Index].Generation == Current.Generation &&
+                DwmGpuSceneRegionsSame(&Cache->Windows[Index], &Current,
+                                        Cache->BlurRects, Cache->BlurRectCount, BlurRects, BlurRectCount);
+        if (Valid && !LowerUnchanged[Index])
+            LowerUnchanged[Index] = DwmGpuSceneLowerSame(Cache, Windows, Index, BlurRects, BlurRectCount);
+        Same = Same && Index < Cache->Count && Current.AnimFlags == 0 &&
+                DwmGpuSceneWindowSame(&Cache->Windows[Index], &Current,
+                                      Cache->BlurRects, Cache->BlurRectCount, BlurRects, BlurRectCount);
+    }
+    /* Preserve the complete old stack until every dependency comparison is done. */
+    for (Index = 0; Index < Count; ++Index)
+    {
+        Cache->Windows[Index] = Windows[Index];
+        Cache->Windows[Index].Damaged = 0;
+    }
+    if (BlurRectCount != 0)
+        memcpy(Cache->BlurRects, BlurRects, BlurRectCount * sizeof(*BlurRects));
+    Cache->Count = Count;
+    Cache->BlurRectCount = BlurRectCount;
+    Cache->Space = *Space;
+    Cache->AnimationDamage = AnimationDamage;
+    /* The caller commits this snapshot only after a successful GPU present. */
+    Cache->Valid = FALSE;
+}
