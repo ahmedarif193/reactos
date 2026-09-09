@@ -74,7 +74,8 @@ elseif(ARCH STREQUAL "arm")
 elseif(ARCH STREQUAL "arm64")
     list(APPEND ASM_SOURCE
         dispatch/arm64/dispatch.S
-        ldr/arm64/guardcheck.S)
+        ldr/arm64/guardcheck.S
+        rtl/arm64/memcpy.S)
     list(APPEND SOURCE dispatch/dispatch.c)
 else()
     list(APPEND SOURCE dispatch/dispatch.c)
