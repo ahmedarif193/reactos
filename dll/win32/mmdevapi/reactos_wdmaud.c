@@ -114,6 +114,8 @@ struct reactos_stream
     BOOL render_locked;
     UINT32 render_locked_frames;
     float *channel_volumes;
+    INT32 *render_history;
+    BOOL render_history_valid;
     BOOL volume_passthrough;
     BOOL rt_enabled;
     BOOL rt_packet_mode;
@@ -903,8 +905,19 @@ static BOOL shared_render_conversion_supported(const WAVEFORMATEX *client,
 {
     return SUCCEEDED(validate_render_client_format(client)) &&
            SUCCEEDED(validate_pcm_format(device)) &&
-           client->nSamplesPerSec == device->nSamplesPerSec &&
            client->nChannels == device->nChannels;
+}
+
+static HRESULT shared_render_client_padding(struct reactos_stream *stream, UINT32 *padding)
+{
+    HRESULT hr = reactos_shared_render_get_padding(stream->shared_render, padding);
+
+    if (SUCCEEDED(hr))
+    {
+        *padding = ((UINT64)*padding * stream->format.Format.nSamplesPerSec + stream->device_format.Format.nSamplesPerSec - 1) / stream->device_format.Format.nSamplesPerSec;
+        *padding = min(*padding, stream->buffer_frames);
+    }
+    return hr;
 }
 
 static HRESULT validate_format(const char *device, EDataFlow flow, const WAVEFORMATEX *fmt)
@@ -1577,6 +1590,51 @@ static void convert_render_frames(const struct reactos_stream *stream,
                              sample);
         }
     }
+}
+
+/* Linear interpolation with a rational phase accumulator. Retaining the last
+ * frame and phase across ReleaseBuffer calls avoids discontinuities and rate
+ * drift when clients submit small or unevenly sized buffers. */
+static UINT32 resample_render_frames(struct reactos_stream *stream, const BYTE *source, UINT32 frames, BYTE *destination)
+{
+    UINT32 source_rate = stream->format.Format.nSamplesPerSec;
+    UINT32 destination_rate = stream->device_format.Format.nSamplesPerSec;
+    UINT source_sample_size = stream->format.Format.wBitsPerSample / 8;
+    UINT destination_sample_size = stream->device_format.Format.wBitsPerSample / 8;
+    UINT32 frame, output = 0;
+    WORD channel;
+    UINT64 phase = stream->resample_offset;
+
+    for (frame = 0; frame < frames; ++frame)
+    {
+        const BYTE *input = source + (SIZE_T)frame * stream->frame_size;
+
+        if (!stream->render_history_valid)
+        {
+            for (channel = 0; channel < stream->format.Format.nChannels; ++channel)
+                stream->render_history[channel] = read_render_sample(stream, input + channel * source_sample_size);
+            stream->render_history_valid = TRUE;
+        }
+        phase += destination_rate;
+        while (phase >= source_rate)
+        {
+            BYTE *output_frame = destination + (SIZE_T)output++ * stream->device_frame_size;
+
+            phase -= source_rate;
+            for (channel = 0; channel < stream->format.Format.nChannels; ++channel)
+            {
+                INT32 current = read_render_sample(stream, input + channel * source_sample_size);
+                INT64 previous = stream->render_history[channel];
+                INT32 sample = previous + ((INT64)current - previous) * (INT64)(destination_rate - phase) / destination_rate;
+
+                write_pcm_sample(output_frame + channel * destination_sample_size, stream->device_format.Format.wBitsPerSample, stream->device_format.Samples.wValidBitsPerSample, sample);
+            }
+        }
+        for (channel = 0; channel < stream->format.Format.nChannels; ++channel)
+            stream->render_history[channel] = read_render_sample(stream, input + channel * source_sample_size);
+    }
+    stream->resample_offset = phase;
+    return output;
 }
 
 static BOOL fill_wavert_period(struct reactos_stream *stream, UINT32 period)
@@ -2312,7 +2370,7 @@ static NTSTATUS reactos_create_stream(struct create_stream_params *params)
     }
 
     stream = calloc(1, sizeof(*stream) +
-                       params->fmt->nChannels * sizeof(*stream->channel_volumes));
+                       params->fmt->nChannels * (sizeof(*stream->channel_volumes) + sizeof(*stream->render_history)));
     if (!stream)
     {
         params->result = E_OUTOFMEMORY;
@@ -2335,6 +2393,7 @@ static NTSTATUS reactos_create_stream(struct create_stream_params *params)
     }
     copy_wdmaud_format(&stream->format, params->fmt);
     stream->channel_volumes = (float *)(stream + 1);
+    stream->render_history = (INT32 *)(stream->channel_volumes + params->fmt->nChannels);
     stream->volume_passthrough = TRUE;
     for (i = 0; i < params->fmt->nChannels; ++i)
         stream->channel_volumes[i] = 1.0f;
@@ -2379,10 +2438,24 @@ static NTSTATUS reactos_create_stream(struct create_stream_params *params)
 
     if (shared_render)
     {
-        hr = reactos_shared_render_create(
-            stream->index, &stream->device_format, stream->buffer_frames,
-            &shared_render_transport_ops, &stream->shared_render,
-            &stream->buffer_frames);
+        UINT64 device_frames = ((UINT64)stream->buffer_frames * stream->device_format.Format.nSamplesPerSec + params->fmt->nSamplesPerSec - 1) / params->fmt->nSamplesPerSec;
+        UINT32 capacity;
+
+        if (device_frames > MAXDWORD)
+        {
+            params->result = AUDCLNT_E_BUFFER_SIZE_ERROR;
+            goto failed;
+        }
+        hr = reactos_shared_render_create(stream->index, &stream->device_format, device_frames, &shared_render_transport_ops, &stream->shared_render, &capacity);
+        if (SUCCEEDED(hr))
+        {
+            /* The engine counts device frames; the public buffer counts
+             * client frames. Round capacity down and padding up so a buffer
+             * accepted by GetBuffer always fits after rate conversion. */
+            stream->buffer_frames = (UINT64)capacity * params->fmt->nSamplesPerSec / stream->device_format.Format.nSamplesPerSec;
+            if (!stream->buffer_frames)
+                hr = AUDCLNT_E_BUFFER_SIZE_ERROR;
+        }
         if (FAILED(hr))
         {
             params->result = hr;
@@ -2598,6 +2671,8 @@ static NTSTATUS reactos_reset(struct reset_params *params)
             EnterCriticalSection(&stream->lock);
             stream->render_locked = FALSE;
             stream->render_locked_frames = 0;
+            stream->resample_offset = 0;
+            stream->render_history_valid = FALSE;
             LeaveCriticalSection(&stream->lock);
         }
         return STATUS_SUCCESS;
@@ -2649,8 +2724,7 @@ static NTSTATUS reactos_get_render_buffer(struct get_render_buffer_params *param
 
     if (stream->shared_render)
     {
-        hr = reactos_shared_render_get_padding(stream->shared_render,
-                                               &padding);
+        hr = shared_render_client_padding(stream, &padding);
         if (FAILED(hr))
         {
             params->result = hr;
@@ -2831,30 +2905,33 @@ static NTSTATUS reactos_release_render_buffer(struct release_render_buffer_param
     if (stream->shared_render)
     {
         const BYTE *render_data = stream->buffer;
+        UINT32 device_frames = params->written_frames;
+        BOOL resample = stream->format.Format.nSamplesPerSec != stream->device_format.Format.nSamplesPerSec;
 
+        if (resample)
+            device_frames = (stream->resample_offset + (UINT64)params->written_frames * stream->device_format.Format.nSamplesPerSec) / stream->format.Format.nSamplesPerSec;
         if (params->written_frames)
         {
             apply_render_volume(stream, stream->buffer,
                                 params->written_frames);
             if (stream->render_conversion)
             {
-                if (!ensure_frame_buffer(&stream->device_buffer,
-                                         &stream->device_buffer_alloc_frames,
-                                         params->written_frames,
-                                         stream->device_frame_size))
+                if (!ensure_frame_buffer(&stream->device_buffer, &stream->device_buffer_alloc_frames, device_frames, stream->device_frame_size))
                 {
                     LeaveCriticalSection(&stream->lock);
                     params->result = E_OUTOFMEMORY;
                     return STATUS_SUCCESS;
                 }
-                convert_render_frames(stream, stream->buffer,
-                                      params->written_frames,
-                                      stream->device_buffer);
+                if (resample)
+                    device_frames = resample_render_frames(stream, stream->buffer, params->written_frames, stream->device_buffer);
+                else
+                    convert_render_frames(stream, stream->buffer, params->written_frames, stream->device_buffer);
                 render_data = stream->device_buffer;
             }
         }
-        hr = reactos_shared_render_write(stream->shared_render, render_data,
-                                         params->written_frames);
+        hr = reactos_shared_render_write(stream->shared_render, render_data, device_frames);
+        if (FAILED(hr))
+            stream->render_error = ERROR_GEN_FAILURE;
         LeaveCriticalSection(&stream->lock);
         if (stream->event)
             SetEvent(stream->event);
@@ -3261,8 +3338,7 @@ static void reactos_shared_render_timer_loop(struct reactos_stream *stream)
 
         if (WaitForSingleObject(stream->stop_event, wait_ms) != WAIT_TIMEOUT)
             break;
-        if (FAILED(reactos_shared_render_get_padding(stream->shared_render,
-                                                     &padding)))
+        if (FAILED(shared_render_client_padding(stream, &padding)))
             break;
 
         EnterCriticalSection(&stream->lock);
@@ -3378,8 +3454,7 @@ static NTSTATUS reactos_get_current_padding(struct get_current_padding_params *p
 
     if (stream->shared_render)
     {
-        params->result = reactos_shared_render_get_padding(
-            stream->shared_render, params->padding);
+        params->result = shared_render_client_padding(stream, params->padding);
     }
     else
     {
@@ -3435,8 +3510,15 @@ static NTSTATUS reactos_get_position(struct get_position_params *params)
 
     if (stream->shared_render)
     {
-        params->result = reactos_shared_render_get_position(
-            stream->shared_render, params->pos, params->qpctime);
+        params->result = reactos_shared_render_get_position(stream->shared_render, params->pos, params->qpctime);
+        if (SUCCEEDED(params->result))
+        {
+            UINT64 position = *params->pos;
+            UINT32 device_rate = stream->device_format.Format.nSamplesPerSec;
+            UINT32 client_rate = stream->format.Format.nSamplesPerSec;
+
+            *params->pos = (position / device_rate) * client_rate + (position % device_rate) * client_rate / device_rate;
+        }
         return STATUS_SUCCESS;
     }
 

@@ -9,6 +9,7 @@
 #include <apitest.h>
 
 extern void func_deviceenum(void);
+extern void func_renderstream(void);
 extern void func_sessionapi(void);
 extern void func_sessioncrossproc(void);
 extern void func_sessionregistry(void);
@@ -17,6 +18,7 @@ extern void func_sessionpublic(void);
 const struct test winetest_testlist[] =
 {
     { "deviceenum", func_deviceenum },
+    { "renderstream", func_renderstream },
     { "sessionapi", func_sessionapi },
     { "sessioncrossproc", func_sessioncrossproc },
     { "sessionregistry", func_sessionregistry },
