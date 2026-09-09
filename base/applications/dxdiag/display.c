@@ -389,7 +389,7 @@ DisplayPageWndProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
             {
                 case IDC_BUTTON_TESTDD:
                 case IDC_BUTTON_TEST3D:
-                    hMainDialog = GetWindow(hDlg, GW_OWNER);
+                    hMainDialog = GetAncestor(hDlg, GA_ROOT);
                     GetWindowRect(hMainDialog, &rect);
                     /* FIXME log result errors */
                     if (IDC_BUTTON_TESTDD == LOWORD(wParam))
