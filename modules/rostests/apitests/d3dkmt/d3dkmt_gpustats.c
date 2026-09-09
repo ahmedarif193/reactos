@@ -86,6 +86,8 @@ static NTSTATUS Query(PFN_QueryStatistics pfn, D3DKMT_QUERYSTATISTICS *Statistic
     memset(Statistics, 0, sizeof(*Statistics));
     Statistics->Type = Type;
     Statistics->AdapterLuid = Luid;
+    if (Type == D3DKMT_QUERYSTATISTICS_PROCESS || Type == D3DKMT_QUERYSTATISTICS_PROCESS_ADAPTER)
+        Statistics->hProcess = GetCurrentProcess();
     return pfn(Statistics);
 }
 
@@ -358,6 +360,7 @@ static void Test_QueryStatistics_Process(void)
         memset(&Statistics, 0, sizeof(Statistics));
         Statistics.Type = D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT;
         Statistics.AdapterLuid = Luid;
+        Statistics.hProcess = GetCurrentProcess();
         Statistics.QueryProcessSegment.SegmentId = i;
         Status = pfn(&Statistics);
         if (!NT_SUCCESS(Status))
@@ -383,21 +386,24 @@ static void Test_QueryStatistics_Process(void)
     {
         D3DKMT_QUERYSTATISTICS NodeGlobal;
 
-        memset(&NodeGlobal, 0, sizeof(NodeGlobal));
-        NodeGlobal.Type = D3DKMT_QUERYSTATISTICS_NODE;
-        NodeGlobal.AdapterLuid = Luid;
-        NodeGlobal.QueryNode.NodeId = i;
-        if (!NT_SUCCESS(pfn(&NodeGlobal)))
-            continue;
-
         memset(&Statistics, 0, sizeof(Statistics));
         Statistics.Type = D3DKMT_QUERYSTATISTICS_PROCESS_NODE;
         Statistics.AdapterLuid = Luid;
+        Statistics.hProcess = GetCurrentProcess();
         Statistics.QueryProcessNode.NodeId = i;
         Status = pfn(&Statistics);
         ok_succeeded(Status, "QueryStatistics(PROCESS_NODE %lu) failed 0x%08lX\n",
                      (unsigned long)i, (long)Status);
         if (!NT_SUCCESS(Status))
+            continue;
+
+        /* Sample the total after the process so work completed between the
+         * calls cannot make a newer process counter exceed an older total. */
+        memset(&NodeGlobal, 0, sizeof(NodeGlobal));
+        NodeGlobal.Type = D3DKMT_QUERYSTATISTICS_NODE;
+        NodeGlobal.AdapterLuid = Luid;
+        NodeGlobal.QueryNode.NodeId = i;
+        if (!NT_SUCCESS(pfn(&NodeGlobal)))
             continue;
 
         ok(Statistics.QueryResult.ProcessNodeInformation.RunningTime.QuadPart <=
@@ -431,6 +437,7 @@ static void Test_QueryStatistics_SegmentGroups(void)
         memset(&Statistics, 0, sizeof(Statistics));
         Statistics.Type = D3DKMT_QUERYSTATISTICS_PROCESS_SEGMENT_GROUP;
         Statistics.AdapterLuid = Luid;
+        Statistics.hProcess = GetCurrentProcess();
         Statistics.QueryProcessSegmentGroup = (group == 0)
             ? D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL
             : D3DKMT_MEMORY_SEGMENT_GROUP_NON_LOCAL;
