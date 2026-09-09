@@ -172,9 +172,12 @@ C_ASSERT(sizeof(QUERY_INTERFACE) == 0x10);
 #endif
 #endif
 
-/* Multi-GPU linked adapter descriptor (no public header yet) */
-typedef struct _LINKED_DEVICE          LINKED_DEVICE;
-typedef struct _LINKED_DEVICE         *PLINKED_DEVICE;
+typedef struct _LINKED_DEVICE
+{
+    ULONG ChainUid;
+    ULONG NumberOfLinksInChain;
+    BOOLEAN LeadLink;
+} LINKED_DEVICE, *PLINKED_DEVICE;
 
 /* =========================================================================
  * Interface version constants
@@ -244,6 +247,7 @@ typedef enum _DXGK_CHILD_DEVICE_TYPE
     TypeVideoOutput     = 1,
     TypeOther           = 2,
     TypeIntegratedDisplay = 3,
+    TypeLogicalGpu      = 4,
 } DXGK_CHILD_DEVICE_TYPE, *PDXGK_CHILD_DEVICE_TYPE;
 
 
@@ -1169,13 +1173,11 @@ typedef struct _DXGK_START_INFO
  */
 typedef enum _DXGK_EVENT_TYPE
 {
-    DpEventType_Uninitialized   = 0,
-    DpEventTypePowerStateChange = 1,
-    DpEventTypeDisplaySwitch    = 2,
-    DpEventTypeDockingEvent     = 3,
-    DpEventTypeAcpiEvent        = 4,
-    DpEventTypeResumeEvent      = 5,
-    DpEventTypeDPCRoutineEvent  = 6,
+    DxgkUndefinedEvent    = 0,
+    DxgkAcpiEvent         = 1,
+    DxgkPowerStateEvent   = 2,
+    DxgkDockingEvent      = 3,
+    DxgkChainedAcpiEvent  = 4,
 } DXGK_EVENT_TYPE, *PDXGK_EVENT_TYPE;
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
