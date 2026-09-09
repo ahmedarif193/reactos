@@ -618,21 +618,22 @@ DC_vPrepareDCsForBlit(
 #endif
 }
 
-/* Finishes a blit for one or two DCs */
-VOID
+/* Release the locks and cursor exclusion for one or two prepared DCs. */
+static VOID
 FASTCALL
-DC_vFinishBlit(PDC pdc1, PDC pdc2)
+DC_vFinishBlitInternal(PDC pdc1, PDC pdc2, BOOL WriteDest)
 {
-    /* A blit touched a composition backing — or the primary directly (desktop
+    /* The first DC is the destination. Reading a redirected source (for
+     * example GetPixel or a capture into a memory DC) does not change that
+     * window and must not wake the compositor.
+     * A blit touched a composition backing — or the primary directly (desktop
      * paint, XOR drag/focus artists) — schedule a recompose so composited
      * windows are re-asserted over direct draws. The compose itself runs on
      * the throttled tick, under the USER lock; its own primary blits are
      * excluded inside the damage calls. */
-    if (pdc1->fs & DC_REDIRECTION)
+    if (WriteDest && (pdc1->fs & DC_REDIRECTION))
         IntCompositionDamageBacking(pdc1->dclevel.pSurface);
-    else if (pdc2 != NULL && (pdc2->fs & DC_REDIRECTION))
-        IntCompositionDamageBacking(pdc2->dclevel.pSurface);
-    else if (pdc1->dctype == DCTYPE_DIRECT)
+    else if (WriteDest && pdc1->dctype == DCTYPE_DIRECT)
         IntCompositionDamageFromGdi();
 
     if (pdc1->dctype == DCTYPE_DIRECT)
@@ -657,6 +658,20 @@ DC_vFinishBlit(PDC pdc1, PDC pdc2)
         pdc2->fs &= ~DC_PREPARED;
 #endif
     }
+}
+
+VOID
+FASTCALL
+DC_vFinishBlit(PDC pdcDest, PDC pdcSrc)
+{
+    DC_vFinishBlitInternal(pdcDest, pdcSrc, TRUE);
+}
+
+VOID
+FASTCALL
+DC_vFinishRead(PDC pdc)
+{
+    DC_vFinishBlitInternal(pdc, NULL, FALSE);
 }
 
 HDC
