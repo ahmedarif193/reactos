@@ -190,6 +190,16 @@ option(ENABLE_ALPC
 
 option(ROSSYM_COMPRESSION "Whether to compress the embedded .rossym symbol section." OFF)
 
+# The boot application launcher is bring-up scaffolding: it registers an HKCU
+# Run entry that opens a console at logon to run benchmarks and to scan for an
+# attached app disk.  A shipped image must come up to a clean desktop, so this
+# stays off unless a harness asks for it.  The benchmark binaries themselves
+# (glmark2, glgears and their _runner wrappers) are installed regardless and
+# can be started by hand.
+option(ENABLE_BOOT_APP_LAUNCHER
+       "Whether logon auto-runs the boot application launcher console."
+       OFF)
+
 option(ENABLE_EXPERIMENTAL_EARLY_SPLASH
        "Whether Winlogon displays the experimental early PNG background until the user desktop is ready."
        ON)

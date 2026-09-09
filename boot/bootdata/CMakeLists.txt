@@ -116,7 +116,9 @@ if(ENABLE_BOOT_TEST_RUN)
     endif()
 endif()
 
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/app_launcher.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd preinstall)
+if(ENABLE_BOOT_APP_LAUNCHER)
+    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/app_launcher.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd preinstall)
+endif()
 # LiveImage shortcuts
 add_custom_target(livecd_links)
 function(add_livecd_shortcut name path)
