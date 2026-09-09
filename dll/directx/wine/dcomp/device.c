@@ -67,6 +67,8 @@ struct dcomp_visual
 {
     IDCompositionVisual IDCompositionVisual_iface;
     LONG refcount;
+    struct dcomp_device *device;
+    struct dcomp_target *target;
     IUnknown *content;
     struct dcomp_visual *parent;
     struct list entry;
@@ -109,6 +111,9 @@ static const IDCompositionDevice3Vtbl dcomp_device3_vtbl;
 static const IDCompositionDesktopDeviceVtbl dcomp_desktop_device_vtbl;
 static const IDCompositionTargetVtbl dcomp_target_vtbl;
 static const IDCompositionVisualVtbl dcomp_visual_vtbl;
+
+static ULONG dcomp_device_addref(struct dcomp_device *device);
+static ULONG dcomp_device_release(struct dcomp_device *device);
 
 static inline struct dcomp_device *impl_from_IDCompositionDevice(IDCompositionDevice *iface)
 {
@@ -182,6 +187,7 @@ static ULONG STDMETHODCALLTYPE dcomp_visual_Release(IDCompositionVisual *iface)
         }
         if (visual->content)
             IUnknown_Release(visual->content);
+        dcomp_device_release(visual->device);
         free(visual);
     }
     return refcount;
@@ -320,7 +326,7 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_AddVisual(IDCompositionVisual *ifa
     if (!visual || visual->lpVtbl != &dcomp_visual_vtbl || visual == iface)
         return E_INVALIDARG;
     child = impl_from_IDCompositionVisual(visual);
-    if (child->parent)
+    if (child->parent || child->target)
         return E_INVALIDARG;
 
     if (reference_visual)
@@ -582,7 +588,10 @@ static ULONG STDMETHODCALLTYPE dcomp_target_Release(IDCompositionTarget *iface)
     {
         list_remove(&target->entry);
         if (target->root)
+        {
+            impl_from_IDCompositionVisual(target->root)->target = NULL;
             target->root->lpVtbl->Release(target->root);
+        }
         dcomp_device_Release(&target->device->IDCompositionDevice_iface);
         free(target);
     }
@@ -593,14 +602,30 @@ static HRESULT STDMETHODCALLTYPE dcomp_target_SetRoot(IDCompositionTarget *iface
         IDCompositionVisual *root)
 {
     struct dcomp_target *target = impl_from_IDCompositionTarget(iface);
+    struct dcomp_visual *visual = NULL;
+    IDCompositionVisual *previous;
 
     TRACE("target %p window %p root %p.\n", iface, target->window, root);
 
     if (root)
+    {
+        if (root->lpVtbl != &dcomp_visual_vtbl)
+            return E_INVALIDARG;
+        visual = impl_from_IDCompositionVisual(root);
+        if (visual->device != target->device || visual->parent
+                || (visual->target && visual->target != target))
+            return E_INVALIDARG;
         root->lpVtbl->AddRef(root);
-    if (target->root)
-        target->root->lpVtbl->Release(target->root);
+    }
+
+    previous = target->root;
+    if (previous)
+        impl_from_IDCompositionVisual(previous)->target = NULL;
     target->root = root;
+    if (visual)
+        visual->target = target;
+    if (previous)
+        previous->lpVtbl->Release(previous);
     return S_OK;
 }
 
@@ -805,6 +830,7 @@ static HRESULT STDMETHODCALLTYPE dcomp_device_CreateTargetForHwnd(IDCompositionD
 static HRESULT STDMETHODCALLTYPE dcomp_device_CreateVisual(IDCompositionDevice *iface,
         IDCompositionVisual **out)
 {
+    struct dcomp_device *device = impl_from_IDCompositionDevice(iface);
     struct dcomp_visual *visual;
 
     TRACE("iface %p, out %p.\n", iface, out);
@@ -817,6 +843,8 @@ static HRESULT STDMETHODCALLTYPE dcomp_device_CreateVisual(IDCompositionDevice *
 
     visual->IDCompositionVisual_iface.lpVtbl = &dcomp_visual_vtbl;
     visual->refcount = 1;
+    visual->device = device;
+    dcomp_device_addref(device);
     visual->opacity = 1.0f;
     visual->visible = TRUE;
     list_init(&visual->entry);
