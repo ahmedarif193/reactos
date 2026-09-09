@@ -496,12 +496,17 @@ ImmActivateLayout(_In_ HKL hKL)
 /***********************************************************************
  *		ImmAssociateContext (IMM32.@)
  */
+static BOOL Imm32GetWindowInfo(HWND hWnd, PROS_WINDOWINFO pInfo)
+{
+    return NtUserCallHwndParam(hWnd, (DWORD_PTR)pInfo, HWNDPARAM_ROUTINE_ROS_GETWINDOWINFO) != 0;
+}
+
 HIMC WINAPI
 ImmAssociateContext(
     _In_ HWND hWnd,
     _In_opt_ HIMC hIMC)
 {
-    PWND pWnd;
+    ROS_WINDOWINFO Info;
     HWND hwndFocus;
     DWORD dwValue;
     HIMC hOldIMC;
@@ -514,14 +519,13 @@ ImmAssociateContext(
         return NULL;
     }
 
-    pWnd = ValidateHwnd(hWnd);
-    if (IS_NULL_UNEXPECTEDLY(pWnd))
+    if (!Imm32GetWindowInfo(hWnd, &Info))
         return NULL;
 
     if (hIMC && IS_CROSS_THREAD_HIMC(hIMC))
         return NULL;
 
-    hOldIMC = pWnd->hImc;
+    hOldIMC = UlongToHandle(Info.hImc);
     if (hOldIMC == hIMC)
         return hIMC;
 
@@ -555,7 +559,7 @@ ImmAssociateContextEx(
     _In_ DWORD dwFlags)
 {
     HWND hwndFocus;
-    PWND pFocusWnd;
+    ROS_WINDOWINFO Info;
     HIMC hOldIMC = NULL;
     DWORD dwValue;
 
@@ -571,9 +575,8 @@ ImmAssociateContextEx(
         return FALSE;
 
     hwndFocus = (HWND)NtUserQueryWindow(hWnd, QUERY_WINDOW_FOCUS);
-    pFocusWnd = ValidateHwnd(hwndFocus);
-    if (pFocusWnd)
-        hOldIMC = pFocusWnd->hImc;
+    if (Imm32GetWindowInfo(hwndFocus, &Info))
+        hOldIMC = UlongToHandle(Info.hImc);
 
     dwValue = NtUserAssociateInputContext(hWnd, hIMC, dwFlags);
     switch (dwValue)
@@ -582,10 +585,9 @@ ImmAssociateContextEx(
             return TRUE;
 
         case 1:
-            pFocusWnd = ValidateHwnd(hwndFocus);
-            if (pFocusWnd)
+            if (Imm32GetWindowInfo(hwndFocus, &Info))
             {
-                hIMC = pFocusWnd->hImc;
+                hIMC = UlongToHandle(Info.hImc);
                 if (hIMC != hOldIMC)
                 {
                     ImmSetActiveContext(hwndFocus, hOldIMC, FALSE);
@@ -662,7 +664,6 @@ Imm32DestroyInputContext(HIMC hIMC, HKL hKL, BOOL bKeep)
     PIMEDPI pImeDpi;
     LPINPUTCONTEXTDX pIC;
     PCLIENTIMC pClientImc;
-    PIMC pIMC;
 
     if (hIMC == NULL)
         return FALSE;
@@ -673,17 +674,13 @@ Imm32DestroyInputContext(HIMC hIMC, HKL hKL, BOOL bKeep)
         return FALSE;
     }
 
-    pIMC = ValidateHandle(hIMC, TYPE_INPUTCONTEXT);
-    if (IS_NULL_UNEXPECTEDLY(pIMC))
-        return FALSE;
-
-    if (pIMC->head.pti != Imm32CurrentPti())
+    if (NtUserQueryInputContext(hIMC, QIC_INPUTTHREADID) != GetCurrentThreadId())
     {
         ERR("Thread mismatch\n");
         return FALSE;
     }
 
-    pClientImc = (PCLIENTIMC)pIMC->dwClientImcData;
+    pClientImc = (PCLIENTIMC)NtUserQueryInputContext(hIMC, QIC_ROS_CLIENTIMCDATA);
     if (pClientImc == NULL)
     {
         TRACE("pClientImc == NULL\n");
@@ -701,7 +698,7 @@ Imm32DestroyInputContext(HIMC hIMC, HKL hKL, BOOL bKeep)
 
     InterlockedIncrement(&pClientImc->cLockObj);
 
-    if (IS_NULL_UNEXPECTEDLY(pClientImc->hInputContext))
+    if (!pClientImc->hInputContext)
         goto Quit;
 
     pIC = (LPINPUTCONTEXTDX)ImmLockIMC(hIMC);
@@ -954,7 +951,6 @@ ImmDestroyContext(_In_ HIMC hIMC)
 PCLIENTIMC WINAPI
 ImmLockClientImc(_In_ HIMC hImc)
 {
-    PIMC pIMC;
     PCLIENTIMC pClientImc;
 
     TRACE("(%p)\n", hImc);
@@ -962,11 +958,10 @@ ImmLockClientImc(_In_ HIMC hImc)
     if (!hImc)
         return NULL;
 
-    pIMC = ValidateHandle(hImc, TYPE_INPUTCONTEXT);
-    if (!pIMC || !Imm32CheckImcProcess(pIMC))
+    if (NtUserQueryInputContext(hImc, QIC_INPUTPROCESSID) != GetCurrentProcessId())
         return NULL;
 
-    pClientImc = (PCLIENTIMC)pIMC->dwClientImcData;
+    pClientImc = (PCLIENTIMC)NtUserQueryInputContext(hImc, QIC_ROS_CLIENTIMCDATA);
     if (pClientImc)
     {
         if (pClientImc->dwFlags & CLIENTIMC_DESTROY)
@@ -984,6 +979,7 @@ ImmLockClientImc(_In_ HIMC hImc)
     if (!NtUserUpdateInputContext(hImc, UIC_CLIENTIMCDATA, (DWORD_PTR)pClientImc))
     {
         ERR("\n");
+        RtlDeleteCriticalSection(&pClientImc->cs);
         ImmLocalFree(pClientImc);
         return NULL;
     }
@@ -1025,7 +1021,7 @@ ImmGetSaveContext(
 {
     HIMC hIMC;
     PCLIENTIMC pClientImc;
-    PWND pWnd;
+    ROS_WINDOWINFO Info;
 
     if (!IS_IMM_MODE())
     {
@@ -1039,11 +1035,10 @@ ImmGetSaveContext(
         goto Quit;
     }
 
-    pWnd = ValidateHwnd(hWnd);
-    if (IS_NULL_UNEXPECTEDLY(pWnd) || IS_CROSS_PROCESS_HWND(hWnd))
+    if (!Imm32GetWindowInfo(hWnd, &Info) || IS_CROSS_PROCESS_HWND(hWnd))
         return NULL;
 
-    hIMC = pWnd->hImc;
+    hIMC = UlongToHandle(Info.hImc);
     if (!hIMC && (dwContextFlags & 1))
         hIMC = (HIMC)NtUserQueryWindow(hWnd, QUERY_WINDOW_DEFAULT_ICONTEXT);
 
@@ -1150,7 +1145,7 @@ ImmEnumInputContext(
     for (dwIndex = 0; dwIndex < dwCount; ++dwIndex)
     {
         hIMC = phList[dwIndex];
-        if (hIMC && gpsi && ValidateHandle(hIMC, TYPE_INPUTCONTEXT))
+        if (hIMC && gpsi && NtUserQueryInputContext(hIMC, QIC_INPUTPROCESSID) == GetCurrentProcessId())
         {
             ret = (*lpfn)(hIMC, lParam);
             if (!ret)

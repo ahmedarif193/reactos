@@ -1782,7 +1782,7 @@ IntAssociateInputContextEx(_In_ PWND pWnd, _In_ PIMC pIMC, _In_ DWORD dwFlags)
         }
     }
 
-    if (!bIgnoreNullImc || pWnd->hImc)
+    if (!(dwFlags & IACE_CHILDREN) && (!bIgnoreNullImc || pWnd->hImc))
     {
         hIMC = (pIMC ? UserHMGetHandle(pIMC) : NULL);
         if (pWnd->hImc != hIMC)
@@ -1935,6 +1935,15 @@ NtUserQueryInputContext(HIMC hIMC, DWORD dwType)
         case QIC_DEFAULTIMC:
             if (ptiIMC->spDefaultImc)
                 ret = (DWORD_PTR)UserHMGetHandle(ptiIMC->spDefaultImc);
+            break;
+
+        case QIC_ROS_IMEWINDOW:
+            ret = (DWORD_PTR)pIMC->hImeWnd;
+            break;
+
+        case QIC_ROS_CLIENTIMCDATA:
+            if (ptiIMC->ppi == GetW32ThreadInfo()->ppi)
+                ret = pIMC->dwClientImcData;
             break;
 
         default:

@@ -416,7 +416,9 @@ typedef enum _QUERY_INPUT_CONTEXT
     QIC_INPUTPROCESSID = 0,
     QIC_INPUTTHREADID,
     QIC_DEFAULTWINDOWIME,
-    QIC_DEFAULTIMC
+    QIC_DEFAULTIMC,
+    QIC_ROS_IMEWINDOW = 0x10000, /* ReactOS: IME window associated with this context */
+    QIC_ROS_CLIENTIMCDATA /* ReactOS: client data, accessible only within the owning process */
 } QUERY_INPUT_CONTEXT;
 
 /* NtUserSetImeHotKey actions */

@@ -5,6 +5,9 @@
 
 #define ROS_WOW64_FNID_NUM 31
 
+W32KAPI BOOL WINAPI NtUserGetImeInfoEx(void *info, UINT search_type);
+W32KAPI BOOL WINAPI NtUserSetImeInfoEx(const void *info);
+
 typedef struct
 {
     ULONG Length;

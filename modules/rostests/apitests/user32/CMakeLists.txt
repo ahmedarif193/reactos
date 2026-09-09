@@ -36,6 +36,7 @@ list(APPEND SOURCE
     GetWindowPlacement.c
     GhostWindow.c
     GW_ENABLEDPOPUP.c
+    ImeWindow.c
     InitializeLpkHooks.c
     InputMessageSource.c
     IsTopLevelWindow.c

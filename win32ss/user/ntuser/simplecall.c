@@ -1053,6 +1053,8 @@ NtUserCallHwndParam(
                 Info.state = Window->state;
                 Info.state2 = Window->state2;
                 Info.atomClassName = Window->pcls ? Window->pcls->atomClassName : 0;
+                Info.fnid = Window->fnid;
+                Info.hImc = HandleToUlong(Window->hImc);
                 Ret = TRUE;
             }
             UserLeave();
