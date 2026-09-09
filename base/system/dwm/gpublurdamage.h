@@ -7,6 +7,12 @@
 
 #define DWM_GPU_MATERIAL_BLUR_RADIUS 24
 
+static ULONG
+DwmGpuMaterialBlurRadius(const DWM_WIN *Window)
+{
+    return (Window->BlurFlags & DWM_BLUR_DISABLE_FILTER) ? 0 : DWM_GPU_MATERIAL_BLUR_RADIUS;
+}
+
 static BOOL
 DwmGpuDamageIntersects(const RECT *A, const RECT *B)
 {
@@ -80,7 +86,8 @@ DwmGpuDamageExpandBlur(RECT *Damage, LONG Width, LONG Height,
             BOOL Blur = (Window->BlurFlags & DWM_BLUR_ENABLE) &&
                         ((Window->BlurFlags & DWM_BLUR_REGION_ENTIRE_WINDOW) ||
                          Window->BlurRectCount != 0);
-            LONG Radius = max(Glass ? DWM_GPU_MATERIAL_BLUR_RADIUS : 0,
+            LONG MaterialRadius = Glass ? (LONG)DwmGpuMaterialBlurRadius(Window) : 0;
+            LONG Radius = max(MaterialRadius,
                               Blur ? (LONG)BlurRadius : 0);
             DWM_GPU_WINDOW_GEOMETRY Geometry, Client;
             RECT Capture;
@@ -89,7 +96,7 @@ DwmGpuDamageExpandBlur(RECT *Damage, LONG Width, LONG Height,
              * frame, so drawing it does not sample the composition buffer. */
             if (CachedCapture != NULL && CachedCapture[Index])
                 continue;
-            if (Radius == 0 || !DwmGpuWindowGeometry(Window, OriginX, OriginY, &Geometry) ||
+            if ((!Glass && !Blur) || !DwmGpuWindowGeometry(Window, OriginX, OriginY, &Geometry) ||
                 ((Window->LayerFlags & DWM_LWA_ALPHA) && Window->Alpha == 0))
                 continue;
             /* Explicit regions are conservatively bounded by their window.
@@ -102,10 +109,10 @@ DwmGpuDamageExpandBlur(RECT *Damage, LONG Width, LONG Height,
                 Window->DxGlobalShare != 0 && Window->DxUpdateId != 0 &&
                 DwmGpuClientGeometry(Window, &Geometry, &Client) &&
                 DwmGpuDamageBounds(&Capture, Width, Height,
-                    Client.Left - DWM_GPU_MATERIAL_BLUR_RADIUS,
-                    Client.Top - DWM_GPU_MATERIAL_BLUR_RADIUS,
-                    Client.Left + Client.Width + DWM_GPU_MATERIAL_BLUR_RADIUS,
-                    Client.Top + Client.Height + DWM_GPU_MATERIAL_BLUR_RADIUS))
+                    Client.Left - MaterialRadius,
+                    Client.Top - MaterialRadius,
+                    Client.Left + Client.Width + MaterialRadius,
+                    Client.Top + Client.Height + MaterialRadius))
                 Changed |= DwmGpuDamageIncludeCapture(Damage, &Capture);
         }
     } while (Changed);

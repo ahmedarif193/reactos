@@ -14,7 +14,7 @@ BEGIN
     AUTOCHECKBOX "&Window animations", IDC_ANIMATIONS, 24, 58, 230, 12
     AUTOCHECKBOX "Window &shadows", IDC_SHADOWS, 24, 76, 230, 12
     AUTOCHECKBOX "&Rounded window corners", IDC_CORNERS, 24, 94, 230, 12
-    AUTOCHECKBOX "Application &blur behind windows", IDC_BLUR, 24, 112, 230, 12
+    AUTOCHECKBOX "&Blur behind windows", IDC_BLUR, 24, 112, 230, 12
     AUTOCHECKBOX "&Translucent window backgrounds", IDC_ACRYLIC, 24, 130, 230, 12
     LTEXT "", IDC_STATUS, 12, 162, 258, 28
     DEFPUSHBUTTON "Close", IDCANCEL, 210, 194, 60, 14

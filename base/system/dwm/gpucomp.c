@@ -1566,9 +1566,9 @@ typedef struct _DWM_GPU_BLUR_TARGET
 
 static BOOL
 DwmGpuBlurTargetMatches(const DWM_GPU_BLUR_TARGET *Target, LONG Width, LONG Height,
-                        LONG FilterWidth, LONG FilterHeight, BOOL Downsample, BOOL NeedCapture)
+                        LONG FilterWidth, LONG FilterHeight, BOOL Downsample, BOOL NeedCapture, BOOL NeedPass)
 {
-    return Target->Texture != 0 && Target->Pass != 0 &&
+    return Target->Texture != 0 && (!NeedPass || Target->Pass != 0) &&
            (!NeedCapture || Target->Capture != 0) &&
            Target->Width == Width && Target->Height == Height &&
            Target->FilterWidth == FilterWidth && Target->FilterHeight == FilterHeight &&
@@ -1737,7 +1737,7 @@ DwmGpuComposePinBlurResults(const RECT *Repair)
                      Window->BackdropRegion != 0 && Window->BackdropOpacity < 255;
         BOOL Blur = (Window->BlurFlags & DWM_BLUR_ENABLE) &&
                     ((Window->BlurFlags & DWM_BLUR_REGION_ENTIRE_WINDOW) || Window->BlurRectCount != 0);
-        ULONG Radius = Glass ? DWM_GPU_MATERIAL_BLUR_RADIUS : g_composeBlurRadius;
+        ULONG Radius = Glass ? DwmGpuMaterialBlurRadius(Window) : g_composeBlurRadius;
         DWM_WIN Owner;
 
         if (!g_composeLowerUnchanged[Index] || Window->AnimFlags != 0 ||
@@ -1773,7 +1773,7 @@ DwmGpuComposePinBlurResults(const RECT *Repair)
                 !DwmGpuBlurOutputCovers(Target, &Output, &Excluded) ||
                 !DwmGpuBlurTargetMatches(Target, Width, Height,
                     Downsample ? (Width + 1) / 2 : Width, Downsample ? (Height + 1) / 2 : Height,
-                    Downsample, Downsample && g_composeBlitFramebuffer == NULL))
+                    Downsample, Downsample && g_composeBlitFramebuffer == NULL, Radius != 0))
                 continue;
             /* Matching ownership and continuous lower-scene validity also
              * preserve the capture geometry and explicit region contents. */
@@ -1947,7 +1947,7 @@ DwmGpuComposeEnsureBlurTargets(LONG Width, LONG Height,
              !DwmGpuBlurOutputCovers(Current, Output, Excluded) ||
              memcmp(&Current->Owner, &g_composeBlurOwner, sizeof(Current->Owner)) != 0))
             continue;
-        if (DwmGpuBlurTargetMatches(Current, Width, Height, FilterWidth, FilterHeight, Downsample, NeedCapture))
+        if (DwmGpuBlurTargetMatches(Current, Width, Height, FilterWidth, FilterHeight, Downsample, NeedCapture, Radius != 0))
         {
             /* Equal geometry does not identify equal pixels. Preserve each
              * owner's result before reusing scratch storage or evicting LRU. */
@@ -1969,12 +1969,12 @@ DwmGpuComposeEnsureBlurTargets(LONG Width, LONG Height,
         Target = Reusable != NULL ? Reusable : Oldest;
     if (Target == NULL)
         return FALSE;
-    if (!DwmGpuBlurTargetMatches(Target, Width, Height, FilterWidth, FilterHeight, Downsample, NeedCapture))
+    if (!DwmGpuBlurTargetMatches(Target, Width, Height, FilterWidth, FilterHeight, Downsample, NeedCapture, Radius != 0))
     {
         g_composeBlurTex = g_composeBlurPass = g_composeBlurCapture = 0;
         DwmGpuComposeDeleteBlurTarget(Target);
         if (!DwmGpuMakeTexture(&Target->Texture, FilterWidth, FilterHeight) ||
-            !DwmGpuMakeTexture(&Target->Pass, FilterWidth, FilterHeight) ||
+            (Radius != 0 && !DwmGpuMakeTexture(&Target->Pass, FilterWidth, FilterHeight)) ||
             (NeedCapture &&
              !DwmGpuMakeTexture(&Target->Capture, Width, Height)))
         {
@@ -2014,7 +2014,7 @@ DwmGpuComposeFilterRectMeasured(const RECT *Rect, ULONG Radius, BOOL Restore, co
     RECT HorizontalExcluded = {0}, VerticalExcluded = {0};
     BOOL ClipOutput;
 
-    if (!g_composeActive || Rect == NULL || Radius == 0 ||
+    if (!g_composeActive || Rect == NULL ||
         Radius > DWM_GPU_MAX_RADIUS)
     {
         return FALSE;
@@ -2053,7 +2053,7 @@ DwmGpuComposeFilterRectMeasured(const RECT *Rect, ULONG Radius, BOOL Restore, co
     FilterHeight = Downsample ? (Height + 1) / 2 : Height;
     KernelRadius = Downsample ? (Radius + 1) / 2 : Radius;
     Taps = 1 + (KernelRadius + 1) / 2;
-    if (!DwmGpuComposeBuildBlur(Taps) ||
+    if ((Radius != 0 && !DwmGpuComposeBuildBlur(Taps)) ||
         !DwmGpuComposeEnsureBlurTargets(Width, Height, FilterWidth,
                                          FilterHeight, Downsample, Cacheable, Rect, Radius, &RequiredOutput, &RequiredExcluded))
     {
@@ -2074,8 +2074,11 @@ DwmGpuComposeFilterRectMeasured(const RECT *Rect, ULONG Radius, BOOL Restore, co
         goto Done;
     }
     Target->ResultValid = FALSE;
-    DptCount(&g_DwmPresentTrace, DPT_BLUR_FILTER, (ULONGLONG)Width * Height * 4);
-    ++g_composeFiltered;
+    if (Radius != 0)
+    {
+        DptCount(&g_DwmPresentTrace, DPT_BLUR_FILTER, (ULONGLONG)Width * Height * 4);
+        ++g_composeFiltered;
+    }
 
     pglActiveTexture(GL_TEXTURE0);
     glDisable(GL_BLEND);
@@ -2113,6 +2116,13 @@ DwmGpuComposeFilterRectMeasured(const RECT *Rect, ULONG Radius, BOOL Restore, co
             DwmGpuDrawQuad();
         }
     }
+    /* A disabled blur keeps the material's tint and transparency, sampling
+     * a full-resolution GPU capture without either Gaussian pass. */
+    if (Radius == 0)
+    {
+        Result = TRUE;
+        goto CacheResult;
+    }
     pglUseProgram(g_composeBlurProgram);
     if (g_composeBlurKernelRadius != KernelRadius)
     {
@@ -2149,6 +2159,7 @@ DwmGpuComposeFilterRectMeasured(const RECT *Rect, ULONG Radius, BOOL Restore, co
     pglUniform2f(g_composeBlurStepLoc, 0.0f, 1.0f / (GLfloat)FilterHeight);
     DwmGpuDrawFilter(&Vertical, &VerticalExcluded);
     Result = glGetError() == GL_NO_ERROR;
+CacheResult:
     if (Result && Cacheable)
     {
         Target->Owner = g_composeBlurOwner;
@@ -2425,7 +2436,7 @@ DwmGpuComposeMaterial(const DWM_WIN *Window, GLuint Texture,
 {
     BOOL Glass = Window->BackdropType == DWM_BACKDROP_TRANSIENT &&
                  Window->BackdropRegion != 0 && Window->BackdropOpacity < 255;
-    LONG Radius = DWM_GPU_MATERIAL_BLUR_RADIUS;
+    LONG Radius = DwmGpuMaterialBlurRadius(Window);
     RECT Capture, Output, Excluded, Parts[5];
     ULONG Count, Index;
     DWM_GPU_MATERIAL_PROGRAM *Shader, *Previous = NULL;
