@@ -5876,11 +5876,16 @@ DxgkpQueryStatisticsNode(
                                           &Information->SystemInformation);
 
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_4)
-    Information->NodePerfData.NodeOrdinal = NodeId;
-    Information->NodePerfData.PhysicalAdapterIndex = 0;
-    Status = DxgkpQueryMiniportPerfData(Adapter, DXGKQAITYPE_NODEPERFDATA, &Information->NodePerfData, sizeof(Information->NodePerfData));
-    if (!NT_SUCCESS(Status))
-        return Status;
+    /* Scheduler statistics predate WDDM 2.4 clock/power telemetry. Use the
+     * negotiated driver version, not the build's DDI compatibility ceiling. */
+    if (DxgkpGetReportedDriverVersion(Adapter) >= KMT_DRIVERVERSION_WDDM_2_4)
+    {
+        Information->NodePerfData.NodeOrdinal = NodeId;
+        Information->NodePerfData.PhysicalAdapterIndex = 0;
+        Status = DxgkpQueryMiniportPerfData(Adapter, DXGKQAITYPE_NODEPERFDATA, &Information->NodePerfData, sizeof(Information->NodePerfData));
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
 #endif
     return STATUS_SUCCESS;
 }
