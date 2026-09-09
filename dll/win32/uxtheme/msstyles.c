@@ -653,7 +653,7 @@ static void MSSTYLES_ApplyStoredMetrics(PTHEME_FILE tf)
         }
     }
 
-    ERR("THEMECOLORS: applying %d theme colors (WindowText metric %s)\n", count,
+    TRACE("THEMECOLORS: applying %d theme colors (WindowText metric %s)\n", count,
         MSSTYLES_FFindMetric(tf, TMT_COLOR, TMT_WINDOWTEXT) ? "present" : "MISSING");
     if (count > 0)
         SetSysColors(count, elements, colors);

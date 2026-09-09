@@ -366,7 +366,7 @@ IntMsqSetWakeMask(DWORD WakeMask)
       if ( (Win32Thread->pcti->fsChangeBits & LOWORD(WakeMask)) ||
            ( (dwFlags & MWMO_INPUTAVAILABLE) && (Win32Thread->pcti->fsWakeBits & LOWORD(WakeMask)) ) )
       {
-         ERR("Chg 0x%x Wake 0x%x Mask 0x%x\n",Win32Thread->pcti->fsChangeBits, Win32Thread->pcti->fsWakeBits, WakeMask);
+         TRACE("Chg 0x%x Wake 0x%x Mask 0x%x\n",Win32Thread->pcti->fsChangeBits, Win32Thread->pcti->fsWakeBits, WakeMask);
          KeSetEvent(Win32Thread->pEventQueueServer,
                     MESSAGE_QUEUE_INCREMENT,
                     FALSE);

@@ -1472,7 +1472,7 @@ MiniDequeueWorkItem(
     }
     else
     {
-        NDIS_DbgPrint(MIN_TRACE, ("No work item to dequeue\n"));
+        NDIS_DbgPrint(MAX_TRACE, ("No work item to dequeue\n"));
 
         return NDIS_STATUS_FAILURE;
     }

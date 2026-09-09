@@ -26,7 +26,7 @@ target_include_directories(rpiwav BEFORE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/EndpointsCommon
     ${CMAKE_CURRENT_SOURCE_DIR}/rpiwav)
 
-target_compile_definitions(rpiwav PRIVATE _USE_WAVERT_)
+target_compile_definitions(rpiwav PRIVATE _USE_WAVERT_ DEBUG_LEVEL=DEBUGLVL_ERROR)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     target_compile_options(rpiwav PRIVATE

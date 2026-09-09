@@ -2493,7 +2493,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
         if (ConfigSize != sizeof(IMAGE_LOAD_CONFIG_DIRECTORY))
             DPRINT("Accepting a LOAD_CONFIG of a different size\n");
         else
-            DPRINT1("Applying LOAD_CONFIG\n");
+            DPRINT("Applying LOAD_CONFIG\n");
 
         if (VALID_CONFIG_FIELD(GlobalFlagsSet) && LoadConfig->GlobalFlagsSet)
             Peb->NtGlobalFlag |= LoadConfig->GlobalFlagsSet;
