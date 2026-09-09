@@ -7,6 +7,10 @@ device_tree=bcm2710-rpi-3-b.dtb
 armstub=RPI3_EFI.fd
 arm_freq=1200
 arm_freq_min=1000
+# Keep a 1080p HDMI boot mode when the display EDID cannot be read.
+hdmi_force_hotplug=1
+hdmi_group=1
+hdmi_mode=16
 
 [pi3+]
 device_tree_address=0x1f0000
