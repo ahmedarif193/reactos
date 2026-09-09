@@ -68,35 +68,6 @@ MiArm64IsValidTablePa(
 
 static
 BOOLEAN
-MiArm64EnsureTablePageMapped(
-    _In_ ULONG64 TablePa)
-{
-    PFN_NUMBER Pfn;
-
-    if (!MiArm64IsValidTablePa(TablePa))
-    {
-        return FALSE;
-    }
-
-    Pfn = (PFN_NUMBER)(TablePa >> PAGE_SHIFT);
-
-    /*
-     * Fast path: probe the KSEG0 alias translation with AT S1E1R. Frames
-     * already covered by the boot KSEG0 direct map (the steady state) skip
-     * the identity-mapping machinery, which costs several table walks per
-     * call and runs four times per user PTE walk.
-     */
-    if (MiArm64ProbeForAccess((PVOID)MI_ARM64_PFN_TO_VA(Pfn), FALSE))
-    {
-        return TRUE;
-    }
-
-    MiArm64MapKseg0Page(Pfn);
-    return MiArm64ProbeForAccess((PVOID)MI_ARM64_PFN_TO_VA(Pfn), FALSE);
-}
-
-static
-BOOLEAN
 MiArm64GetUserPteAddress(
     _In_ PVOID Address,
     _Out_ PMI_ARM64_USER_PTE_WALK Walk);
@@ -238,7 +209,7 @@ MiArm64GetUserPteAddressForProcess(
     L2Idx = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
     L3Idx = ((ULONG64)(ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64;
 
-    if (!MiArm64EnsureTablePageMapped(RootPa))
+    if (!MiArm64IsValidTablePa(RootPa))
     {
         return FALSE;
     }
@@ -529,7 +500,7 @@ MiArm64EnsureUserPte(
     LevelPteAddress[1] = MiAddressToPpe(Address);
     LevelPteAddress[2] = MiAddressToPde(Address);
 
-    if (!MiArm64EnsureTablePageMapped(RootPa))
+    if (!MiArm64IsValidTablePa(RootPa))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -582,7 +553,7 @@ MiArm64EnsureUserPte(
             return STATUS_CONFLICTING_ADDRESSES;
         }
 
-        if (!MiArm64EnsureTablePageMapped((ULONG64)ChildPfn << PAGE_SHIFT))
+        if (!MiArm64IsValidTablePa((ULONG64)ChildPfn << PAGE_SHIFT))
         {
             if (AllocatedTable)
             {
@@ -766,7 +737,7 @@ MiArm64WritePteEntry(
     _In_ ULONG64 Value)
 {
     *Entry = Value;
-    MiArm64CleanEntryToPoC(Entry);
+    MiArm64PublishPageTableEntry(Entry);
 }
 
 FORCEINLINE
@@ -791,7 +762,7 @@ MiArm64ExchangePteEntry(
         OldValue = Observed;
     } while (TRUE);
 
-    MiArm64CleanEntryToPoC(Entry);
+    MiArm64PublishPageTableEntry(Entry);
     return OldValue;
 }
 
@@ -1073,6 +1044,14 @@ MiArm64ReleaseUserPageTableReferenceLockedInternal(
             {
                 break;
             }
+        }
+
+        /* The maintained count is the fast path. Only inspect the table
+           before freeing it; rescanning all 512 slots after every removed
+           leaf needlessly serializes unmaps under the PFN lock. */
+        if (TablePfn->OriginalPte.u.Soft.UsedPageTableEntries != 0)
+        {
+            break;
         }
 
         ActualEntries = MiArm64CountUserTableEntries(Walk->LevelTable[Level],
@@ -1408,7 +1387,7 @@ MmCreateVirtualMappingUnsafeEx(
         }
 
         PointerPte->u.Long = FinalPte.u.Long;
-        MiArm64CleanEntryToPoC(PointerPte);
+        MiArm64PublishPageTableEntry(PointerPte);
         if (FinalPte.u.Hard.UserNoExecute == 0)
         {
             /* I-fetch coherency publish for executable mappings only (see

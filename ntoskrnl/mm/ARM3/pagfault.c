@@ -146,7 +146,6 @@ MiArm64WriteFaultPte(
     {
         /* Real user leaf slot (KSEG0): publish, then invalidate the mapped VA */
         MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
-        MiArm64CleanEntryToPoC(PointerPte);
         MiArm64InvalidateUserAddress(FaultAddress);
     }
     else if (((ULONG_PTR)FaultAddress < (ULONG_PTR)MmSystemRangeStart) &&
@@ -156,7 +155,6 @@ MiArm64WriteFaultPte(
          * hardware - no TLBI; the hardware-leaf install that follows does
          * its own invalidate */
         MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
-        MiArm64CleanEntryToPoC(PointerPte);
     }
     else if (MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
     {
