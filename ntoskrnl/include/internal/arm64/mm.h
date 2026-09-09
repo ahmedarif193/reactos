@@ -733,6 +733,26 @@ MiArm64CleanEntryToPoC(
     __asm__ __volatile__("dsb ish" ::: "memory");
 }
 
+/* Publish cached page-table stores to the hardware walker. With both
+ * translation regimes using Inner Shareable WB/WA walks, the walker is a
+ * coherent observer; a store barrier is sufficient. Keep the PoC fallback
+ * for firmware/early-boot configurations which do not meet that contract. */
+FORCEINLINE
+VOID
+MiArm64PublishPageTableEntry(_In_ volatile VOID *Entry)
+{
+    ULONG64 Tcr, Sctlr;
+
+    __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(Tcr));
+    __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
+    if ((Sctlr & (1ULL << 2)) && ((Tcr & 0x3F003F00ULL) == 0x35003500ULL))
+    {
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+        return;
+    }
+    MiArm64CleanEntryToPoC(Entry);
+}
+
 FORCEINLINE
 VOID
 MiArm64CleanPteRangeToPoC(
@@ -842,7 +862,7 @@ MiArm64SyncPxeWrite(
 
     RootL0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Root);
     RootL0[Index] = PointerPxe->u.Long;
-    MiArm64CleanEntryToPoC(&RootL0[Index]);
+    MiArm64PublishPageTableEntry(&RootL0[Index]);
 }
 
 /*
@@ -1040,7 +1060,7 @@ MiArm64SyncKernelLeafPteWriteTo(
     _In_ PMMPTE Kseg0Pte)
 {
     *(volatile ULONG64 *)Kseg0Pte = PointerPte->u.Long;
-    MiArm64CleanEntryToPoC(Kseg0Pte);
+    MiArm64PublishPageTableEntry(Kseg0Pte);
 }
 
 /*
@@ -1063,14 +1083,14 @@ MiArm64SyncKernelLeafPteWrite(
     if (((ULONG_PTR)PointerPte < PTE_BASE) ||
         ((ULONG_PTR)PointerPte > PTE_TOP))
     {
-        MiArm64CleanEntryToPoC(PointerPte);
+        MiArm64PublishPageTableEntry(PointerPte);
         return;
     }
 
     VirtualAddress = MiPteToAddress(PointerPte);
     if ((ULONG_PTR)VirtualAddress < (ULONG_PTR)MmSystemRangeStart)
     {
-        MiArm64CleanEntryToPoC(PointerPte);
+        MiArm64PublishPageTableEntry(PointerPte);
         return;
     }
     if (((ULONG_PTR)VirtualAddress >= PTE_BASE) &&
@@ -1122,7 +1142,7 @@ MiArm64SyncKernelHierarchyEntryWrite(
         VirtualAddress = MiPpeToAddress(PointerEntry);
         if ((ULONG_PTR)VirtualAddress < (ULONG_PTR)MmSystemRangeStart)
         {
-            MiArm64CleanEntryToPoC(PointerEntry);
+            MiArm64PublishPageTableEntry(PointerEntry);
             return;
         }
         Kseg0Entry = MiArm64KernelPpeKseg0(VirtualAddress);
@@ -1132,7 +1152,7 @@ MiArm64SyncKernelHierarchyEntryWrite(
         VirtualAddress = MiPdeToAddress(PointerEntry);
         if ((ULONG_PTR)VirtualAddress < (ULONG_PTR)MmSystemRangeStart)
         {
-            MiArm64CleanEntryToPoC(PointerEntry);
+            MiArm64PublishPageTableEntry(PointerEntry);
             return;
         }
         Kseg0Entry = MiArm64KernelPdeKseg0(VirtualAddress);
@@ -1153,7 +1173,7 @@ MiArm64SyncKernelHierarchyEntryWrite(
         return;
 
     *(volatile ULONG64 *)Kseg0Entry = PointerEntry->u.Long;
-    MiArm64CleanEntryToPoC(Kseg0Entry);
+    MiArm64PublishPageTableEntry(Kseg0Entry);
 }
 
 //
