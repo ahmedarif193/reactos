@@ -134,6 +134,35 @@ LdrpCallInitRoutine(IN PDLL_INIT_ROUTINE EntryPoint,
     return EntryPoint(BaseAddress, Reason, Context);
 }
 
+static
+BOOLEAN
+LdrpCheckForLoadedImport(IN PVOID ImportBase,
+                        IN PUNICODE_STRING ImportName,
+                        IN BOOLEAN RedirectedDll,
+                        OUT PLDR_DATA_TABLE_ENTRY *Entry)
+{
+#if defined(_M_ARM64)
+    UNICODE_STRING ChpeName;
+    BOOLEAN Found;
+    NTSTATUS Status;
+
+    /* Reference counting must select the same ABI and SxS image as import snapping. */
+    if (ChpeShouldRedirectImport(ImportBase, ImportName))
+    {
+        Status = LdrpBuildArm64EcImportName(ImportName, &ChpeName);
+        if (!NT_SUCCESS(Status))
+            return FALSE;
+
+        Found = LdrpCheckForLoadedDll(NULL, &ChpeName, TRUE, TRUE, Entry);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, ChpeName.Buffer);
+        if (Found)
+            return TRUE;
+    }
+#endif
+
+    return LdrpCheckForLoadedDll(NULL, ImportName, TRUE, RedirectedDll, Entry);
+}
+
 /* NOTE: This function is broken */
 VOID
 NTAPI
@@ -228,11 +257,7 @@ LdrpUpdateLoadCount3(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
 
                 if (NT_SUCCESS(Status))
                 {
-                    if (LdrpCheckForLoadedDll(NULL,
-                                              RedirectedImportName,
-                                              TRUE,
-                                              RedirectedDll,
-                                              &Entry))
+                    if (LdrpCheckForLoadedImport(LdrEntry->DllBase, RedirectedImportName, RedirectedDll, &Entry))
                     {
                         if (Entry->LoadCount != 0xFFFF)
                         {
@@ -300,11 +325,7 @@ LdrpUpdateLoadCount3(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
 
                     if (NT_SUCCESS(Status))
                     {
-                        if (LdrpCheckForLoadedDll(NULL,
-                                                  RedirectedImportName,
-                                                  TRUE,
-                                                  RedirectedDll,
-                                                  &Entry))
+                        if (LdrpCheckForLoadedImport(LdrEntry->DllBase, RedirectedImportName, RedirectedDll, &Entry))
                         {
                             if (Entry->LoadCount != 0xFFFF)
                             {
@@ -397,11 +418,7 @@ LdrpUpdateLoadCount3(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
 
                 if (NT_SUCCESS(Status))
                 {
-                    if (LdrpCheckForLoadedDll(NULL,
-                                              RedirectedImportName,
-                                              TRUE,
-                                              RedirectedDll,
-                                              &Entry))
+                    if (LdrpCheckForLoadedImport(LdrEntry->DllBase, RedirectedImportName, RedirectedDll, &Entry))
                     {
                         if (Entry->LoadCount != 0xFFFF)
                         {

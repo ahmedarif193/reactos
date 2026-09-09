@@ -1421,7 +1421,9 @@ FailurePath:
                         ChpeCandidateName = &ForwarderDllName;
                     }
 
-                    if (NT_SUCCESS(Status) && ChpeShouldRedirectImport(ImportBase, ChpeCandidateName))
+                    /* Dynamic lookups use a synthetic import-name buffer.
+                     * Use the exporting image to select its forwarder's ABI. */
+                    if (NT_SUCCESS(Status) && ChpeShouldRedirectImport(Static ? ImportBase : ExportBase, ChpeCandidateName))
                     {
                         Status = LdrpBuildArm64EcImportName(ChpeCandidateName, &ChpeImportName);
                         if (NT_SUCCESS(Status) && RtlDoesFileExists_UStr(&ChpeImportName))
