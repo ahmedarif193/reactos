@@ -927,6 +927,7 @@ DxgkpQueryBusRelations(
     KIRQL                      OldIrql;
     NTSTATUS                   Status;
     BOOLEAN                    TopologyChanged = FALSE;
+    BOOLEAN                    HaveDescriptors = FALSE;
 
     PAGED_CODE();
 
@@ -996,7 +997,7 @@ DxgkpQueryBusRelations(
                          sizeof(DXGK_CHILD_DESCRIPTOR);
 
     ChildRelations = (PDXGK_CHILD_DESCRIPTOR)ExAllocatePoolWithTag(
-                         PagedPool,
+                         NonPagedPool,
                          ChildRelationsSize,
                          TAG_DXGK_RESOURCES);
     if (ChildRelations == NULL)
@@ -1009,12 +1010,21 @@ DxgkpQueryBusRelations(
 
     RtlZeroMemory(ChildRelations, ChildRelationsSize);
 
-    /*
-     * Call DxgkDdiQueryChildRelations.  The miniport fills in each
-     * DXGK_CHILD_DESCRIPTOR element with the child type, capabilities,
-     * and ChildUid.
-     */
-    Status = DxgkpCallQueryChildRelationsLevel3(Adapter, ChildRelations, ChildRelationsSize, FALSE);
+    /* The connector descriptors include all potential children for this
+     * start epoch. Hotplug changes their connection status, not this list.
+     * Reuse the published descriptors without idling and evicting a live
+     * adapter on every BusRelations query. The buffers are nonpaged because
+     * ChildListLock also protects their lifetime and publication below. */
+    KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
+    if (Adapter->ChildEnumerationEpoch == ExpectedEpoch &&
+        Adapter->ChildRelationsEnumerated && Adapter->ChildDescriptors != NULL)
+    {
+        RtlCopyMemory(ChildRelations, Adapter->ChildDescriptors, ChildRelationsSize);
+        HaveDescriptors = TRUE;
+    }
+    KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+    Status = HaveDescriptors ? STATUS_SUCCESS :
+        DxgkpCallQueryChildRelationsLevel3(Adapter, ChildRelations, ChildRelationsSize, FALSE);
 
     if (!NT_SUCCESS(Status))
     {
