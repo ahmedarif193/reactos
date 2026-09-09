@@ -1467,8 +1467,69 @@ NtNotifyChangeMultipleKeys(IN HANDLE MasterKeyHandle,
                            IN ULONG Length,
                            IN BOOLEAN Asynchronous)
 {
-    UNIMPLEMENTED_ONCE;
-    return STATUS_NOT_IMPLEMENTED;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PCM_KEY_BODY KeyBody;
+    PKEVENT EventObject = NULL;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (!CompletionFilter || (CompletionFilter & ~REG_LEGAL_CHANGE_FILTER))
+        return STATUS_INVALID_PARAMETER;
+
+    /* Name/value notifications are wired to the mutation paths below. */
+    if (Count || Asynchronous || ApcRoutine || (CompletionFilter & ~(REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET)))
+        return STATUS_NOT_IMPLEMENTED;
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(IoStatusBlock, sizeof(*IoStatusBlock), sizeof(ULONG));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    Status = ObReferenceObjectByHandle(MasterKeyHandle, KEY_NOTIFY, CmpKeyObjectType, PreviousMode, (PVOID *)&KeyBody, NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Event)
+    {
+        Status = ObReferenceObjectByHandle(Event, EVENT_MODIFY_STATE, ExEventObjectType, PreviousMode, (PVOID *)&EventObject, NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            ObDereferenceObject(KeyBody);
+            return Status;
+        }
+        KeClearEvent(EventObject);
+    }
+
+    _SEH2_TRY
+    {
+        IoStatusBlock->Status = STATUS_PENDING;
+        IoStatusBlock->Information = 0;
+        Status = CmpWaitForNotify(KeyBody, CompletionFilter, WatchTree, PreviousMode);
+        IoStatusBlock->Status = Status;
+        IoStatusBlock->Information = 0;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (EventObject)
+    {
+        KeSetEvent(EventObject, IO_NO_INCREMENT, FALSE);
+        ObDereferenceObject(EventObject);
+    }
+    ObDereferenceObject(KeyBody);
+    return Status;
 }
 
 NTSTATUS

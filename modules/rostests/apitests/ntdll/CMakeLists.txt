@@ -190,6 +190,7 @@ elseif(ARCH STREQUAL "amd64")
 endif()
 
 list(APPEND PCH_SKIP_SOURCE
+    NtNotifyChangeKey.c
     testlist.c)
 
 add_rc_deps(testdata.rc ${CMAKE_CURRENT_BINARY_DIR}/load_notifications/load_notifications.dll)

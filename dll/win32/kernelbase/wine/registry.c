@@ -2733,7 +2733,7 @@ LSTATUS WINAPI RegNotifyChangeKeyValue( HKEY hkey, BOOL fWatchSubTree,
                                 fdwNotifyFilter, fWatchSubTree, NULL, 0,
                                 fAsync);
 
-    if (status && status != STATUS_PENDING)
+    if (status && status != STATUS_PENDING && status != STATUS_NOTIFY_ENUM_DIR && status != STATUS_NOTIFY_CLEANUP)
         return RtlNtStatusToDosError( status );
 
     return ERROR_SUCCESS;

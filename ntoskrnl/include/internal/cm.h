@@ -325,13 +325,13 @@ typedef struct _CM_KEY_CONTROL_BLOCK
 //
 typedef struct _CM_NOTIFY_BLOCK
 {
-    LIST_ENTRY HiveList;
-    LIST_ENTRY PostList;
-    PCM_KEY_CONTROL_BLOCK KeyControlBlock;
+    LIST_ENTRY ListEntry;
+    struct _CM_NOTIFY_BLOCK *Next;
     PCM_KEY_BODY KeyBody;
-    ULONG Filter:29;
-    ULONG WatchTree:30;
-    ULONG NotifyPending:31;
+    KEVENT Event;
+    NTSTATUS Status;
+    ULONG Filter;
+    BOOLEAN WatchTree;
 } CM_NOTIFY_BLOCK, *PCM_NOTIFY_BLOCK;
 
 //
@@ -632,6 +632,18 @@ CmpSetGlobalQuotaAllowed(
 //
 // Notification Routines
 //
+VOID
+NTAPI
+CmpInitNotify(VOID);
+
+NTSTATUS
+NTAPI
+CmpWaitForNotify(IN PCM_KEY_BODY KeyBody, IN ULONG Filter, IN BOOLEAN WatchTree, IN KPROCESSOR_MODE PreviousMode);
+
+VOID
+NTAPI
+CmpFlushNotifyOnKcb(IN PCM_KEY_CONTROL_BLOCK Kcb);
+
 VOID
 NTAPI
 CmpReportNotify(
