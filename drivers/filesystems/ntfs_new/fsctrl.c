@@ -1160,7 +1160,7 @@ NtfsFlushVolume(
     if (Streams)
         ExFreePoolWithTag(Streams, TAG_NTFS);
 
-    DiskStatus = NtfsDiskFlushKm();
+    DiskStatus = NtfsDiskFlushVolumeKm(VolCB->StorageDevice);
     if (!NT_SUCCESS(DiskStatus) && NT_SUCCESS(Status))
         Status = DiskStatus;
     return Status;
@@ -1542,7 +1542,8 @@ NtfsFsdFlushBuffers(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     /* Metadata the library is holding back has to reach the disk too. */
     if (NT_SUCCESS(Status))
-        Status = NtfsDiskFlushKm();
+        Status = NtfsDiskFlushVolumeKm(
+            ((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension)->StorageDevice);
 
     ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();

@@ -76,7 +76,8 @@ typedef struct _NTFS_CACHE_SLOT
 {
     ULONGLONG Tag;
     PUCHAR Data;
-    PDEVICE_OBJECT Owner;
+    PDEVICE_OBJECT Owner; // referenced while the slot is occupied
+    ULONGLONG Generation;
     BOOLEAN Dirty;
 } NTFS_CACHE_SLOT;
 
@@ -93,7 +94,10 @@ static ULONG NtfsCacheDirtyCount = 0;
 #define NTFS_CACHE_DIRTY_LIMIT 1280
 #define NTFS_CACHE_DIRTY_SLICE 128
 static FAST_MUTEX NtfsCacheMutex;
-static BOOLEAN NtfsCacheReady = FALSE;
+/* Serialize disk writebacks without holding the cache mutex at APC_LEVEL. */
+static KMUTEX NtfsCacheWritebackMutex;
+static volatile LONG NtfsCacheReady = 0;
+static volatile LONG NtfsCacheInitializing = 0;
 
 #define NTFS_CACHE_EMPTY ((ULONGLONG)~0ULL)
 
@@ -157,12 +161,20 @@ static
 VOID
 NtfsCacheInitialize(VOID)
 {
-    if (!NtfsCacheReady)
+    if (InterlockedCompareExchange(&NtfsCacheInitializing, 1, 0) == 0)
     {
         ExInitializeFastMutex(&NtfsCacheMutex);
+        KeInitializeMutex(&NtfsCacheWritebackMutex, 0);
         RtlZeroMemory(NtfsCacheSlots, sizeof(NtfsCacheSlots));
         NtfsCacheDiscardAll();
-        NtfsCacheReady = TRUE;
+        InterlockedExchange(&NtfsCacheReady, TRUE);
+    }
+    else
+    {
+        LARGE_INTEGER Interval;
+        Interval.QuadPart = -10000; // Only contended during first initialization.
+        while (!InterlockedCompareExchange(&NtfsCacheReady, 0, 0))
+            KeDelayExecutionThread(KernelMode, FALSE, &Interval);
     }
 }
 
@@ -195,6 +207,9 @@ NtfsCacheInvalidateRange(_In_ PDEVICE_OBJECT Owner,
                 NtfsCacheDirtyCount--;
             }
             Slot->Tag = NTFS_CACHE_EMPTY;
+            Slot->Generation++;
+            ObDereferenceObjectDeferDelete(Slot->Owner);
+            Slot->Owner = NULL;
         }
     }
     ExReleaseFastMutex(&NtfsCacheMutex);
@@ -227,7 +242,10 @@ NtfsCacheUpdateRange(_In_ PDEVICE_OBJECT Owner,
         NTFS_CACHE_SLOT* Slot = NtfsCacheProbe(Owner, Block);
 
         if (Slot && Slot->Data)
+        {
             RtlCopyMemory(Slot->Data + BlockOffset, In, Chunk);
+            Slot->Generation++;
+        }
 
         In += Chunk;
         Current += Chunk;
@@ -251,49 +269,45 @@ NtfsCacheWriteBackOne(_In_ PDEVICE_OBJECT Owner,
                       _In_ ULONGLONG Block)
 {
     PUCHAR Staged;
-    BOOLEAN Pending = FALSE;
     NTSTATUS Status = STATUS_SUCCESS;
     NTFS_CACHE_SLOT* Slot;
     PDEVICE_OBJECT Target = NULL;
+    ULONGLONG Generation = 0;
 
     Staged = (PUCHAR)ExAllocatePoolUninitialized(NonPagedPool,
-                                                 NTFS_CACHE_BLOCK_SIZE,
-                                                 'CftN');
+                                                NTFS_CACHE_BLOCK_SIZE, 'CftN');
     if (!Staged)
         return STATUS_INSUFFICIENT_RESOURCES;
 
+    KeWaitForSingleObject(&NtfsCacheWritebackMutex, Executive, KernelMode, FALSE, NULL);
     ExAcquireFastMutex(&NtfsCacheMutex);
     Slot = NtfsCacheProbe(Owner, Block);
     if (Slot && Slot->Dirty && Slot->Data)
     {
         RtlCopyMemory(Staged, Slot->Data, NTFS_CACHE_BLOCK_SIZE);
         Target = Slot->Owner;
-        Slot->Dirty = FALSE;
-        NtfsCacheDirtyCount--;
-        Pending = TRUE;
+        ObReferenceObject(Target);
+        Generation = Slot->Generation;
+        // Keep dirty data unevictable until the write actually succeeds.
     }
     ExReleaseFastMutex(&NtfsCacheMutex);
 
-    if (Pending)
+    if (Target)
     {
-        Status = WriteDisk(Target,
-                           Block << NTFS_CACHE_BLOCK_SHIFT,
-                           NTFS_CACHE_BLOCK_SIZE,
-                           Staged);
-        if (!NT_SUCCESS(Status))
+        Status = WriteDisk(Target, Block << NTFS_CACHE_BLOCK_SHIFT,
+                           NTFS_CACHE_BLOCK_SIZE, Staged);
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        Slot = NtfsCacheProbe(Target, Block);
+        if (NT_SUCCESS(Status) && Slot && Slot->Dirty &&
+            Slot->Generation == Generation)
         {
-            /* Put it back so the data is not simply lost. */
-            ExAcquireFastMutex(&NtfsCacheMutex);
-            Slot = NtfsCacheProbe(Owner, Block);
-            if (Slot && !Slot->Dirty)
-            {
-                Slot->Dirty = TRUE;
-                NtfsCacheDirtyCount++;
-            }
-            ExReleaseFastMutex(&NtfsCacheMutex);
+            Slot->Dirty = FALSE;
+            NtfsCacheDirtyCount--;
         }
+        ExReleaseFastMutex(&NtfsCacheMutex);
+        ObDereferenceObject(Target);
     }
-
+    KeReleaseMutex(&NtfsCacheWritebackMutex, FALSE);
     ExFreePoolWithTag(Staged, 'CftN');
     return Status;
 }
@@ -319,6 +333,8 @@ NtfsCacheFlushSome(_In_ ULONG Budget)
         Block = NtfsCacheSlots[Index].Tag;
         Dirty = NtfsCacheSlots[Index].Dirty;
         Owner = NtfsCacheSlots[Index].Owner;
+        if (Owner)
+            ObReferenceObject(Owner);
         ExReleaseFastMutex(&NtfsCacheMutex);
 
         if (Dirty && Owner && Block != NTFS_CACHE_EMPTY)
@@ -329,13 +345,15 @@ NtfsCacheFlushSome(_In_ ULONG Budget)
                 Status = One;
             Written++;
         }
+        if (Owner)
+            ObDereferenceObject(Owner);
     }
     return Status;
 }
 
 static
 NTSTATUS
-NtfsCacheFlushAll(VOID)
+NtfsCacheFlushAll(_In_opt_ PDEVICE_OBJECT OnlyOwner)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG Index;
@@ -353,15 +371,20 @@ NtfsCacheFlushAll(VOID)
         Block = NtfsCacheSlots[Index].Tag;
         Dirty = NtfsCacheSlots[Index].Dirty;
         Owner = NtfsCacheSlots[Index].Owner;
+        if (Owner)
+            ObReferenceObject(Owner);
         ExReleaseFastMutex(&NtfsCacheMutex);
 
-        if (Dirty && Owner && Block != NTFS_CACHE_EMPTY)
+        if (Dirty && Owner && Block != NTFS_CACHE_EMPTY &&
+            (!OnlyOwner || OnlyOwner == Owner))
         {
             NTSTATUS One = NtfsCacheWriteBackOne(Owner, Block);
 
             if (!NT_SUCCESS(One))
                 Status = One;
         }
+        if (Owner)
+            ObDereferenceObject(Owner);
     }
     return Status;
 }
@@ -452,11 +475,22 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
     {
         ULONGLONG Victim = Slot->Tag;
         PDEVICE_OBJECT VictimOwner = Slot->Owner;
+        ObReferenceObject(VictimOwner);
 
         ExReleaseFastMutex(&NtfsCacheMutex);
-        NtfsCacheWriteBackOne(VictimOwner, Victim);
+        NTSTATUS Status = NtfsCacheWriteBackOne(VictimOwner, Victim);
+        ObDereferenceObject(VictimOwner);
+        if (!NT_SUCCESS(Status))
+            return;
         ExAcquireFastMutex(&NtfsCacheMutex);
         Slot = NtfsCacheVictim(Owner, Block);
+    }
+    // A concurrent writer may have dirtied the newly selected victim.
+    // Cache fills must also preserve newer dirty data for this same block.
+    if (Slot->Dirty)
+    {
+        ExReleaseFastMutex(&NtfsCacheMutex);
+        return;
     }
     if (!Slot->Data)
     {
@@ -471,7 +505,11 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
     }
     RtlCopyMemory(Slot->Data, Data, NTFS_CACHE_BLOCK_SIZE);
     Slot->Tag = Block;
+    ObReferenceObject(Owner);
+    if (Slot->Owner)
+        ObDereferenceObjectDeferDelete(Slot->Owner);
     Slot->Owner = Owner;
+    Slot->Generation++;
     Slot->Dirty = FALSE;
     ExReleaseFastMutex(&NtfsCacheMutex);
 }
@@ -521,6 +559,9 @@ NtfsDiskPrepareMountKm(
             !NtfsCacheSlots[Index].Dirty)
         {
             NtfsCacheSlots[Index].Tag = NTFS_CACHE_EMPTY;
+            NtfsCacheSlots[Index].Generation++;
+            ObDereferenceObjectDeferDelete(NtfsCacheSlots[Index].Owner);
+            NtfsCacheSlots[Index].Owner = NULL;
         }
     }
     ExReleaseFastMutex(&NtfsCacheMutex);
@@ -793,7 +834,9 @@ NtfsReadVolumeContext(_In_opt_ void* Context,
     }
 
     /* This read goes to the disk, so anything held back for it must be there. */
-    NtfsCacheFlushRange(DeviceObject, Offset, Length);
+    NTSTATUS FlushStatus = NtfsCacheFlushRange(DeviceObject, Offset, Length);
+    if (!NT_SUCCESS(FlushStatus))
+        return FlushStatus;
 
     SectorAlignedOffset = Offset - (Offset % SectorBytes);
     SectorAlignedLength = ALIGN_UP_BY((Offset - SectorAlignedOffset) + Length,
@@ -873,6 +916,7 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
             if (Slot && Slot->Data)
             {
                 RtlCopyMemory(Slot->Data + BlockOffset, Buffer, Length);
+                Slot->Generation++;
                 if (!Slot->Dirty)
                 {
                     Slot->Dirty = TRUE;
@@ -925,6 +969,9 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
                         Slot = NtfsCacheProbe(DeviceObject, Block);
                         if (Slot && Slot->Data)
                         {
+                            // Install may preserve a concurrently modified block.
+                            RtlCopyMemory(Slot->Data + BlockOffset, Buffer, Length);
+                            Slot->Generation++;
                             if (!Slot->Dirty)
                             {
                                 Slot->Dirty = TRUE;
@@ -948,7 +995,9 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
     }
 
     /* Going to the disk directly: commit anything held for these bytes. */
-    NtfsCacheFlushRange(DeviceObject, Offset, Length);
+    NTSTATUS FlushStatus = NtfsCacheFlushRange(DeviceObject, Offset, Length);
+    if (!NT_SUCCESS(FlushStatus))
+        return FlushStatus;
 
     NTSTATUS Status;
     PUCHAR WriteBuffer;
@@ -1051,5 +1100,14 @@ extern "C"
 NTSTATUS
 NtfsDiskFlushKm(VOID)
 {
-    return NtfsCacheFlushAll();
+    return NtfsCacheFlushAll(NULL);
+}
+
+extern "C"
+NTSTATUS
+NtfsDiskFlushVolumeKm(_In_ PDEVICE_OBJECT DeviceObject)
+{
+    if (!DeviceObject)
+        return STATUS_INVALID_PARAMETER;
+    return NtfsCacheFlushAll(DeviceObject);
 }
