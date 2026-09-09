@@ -1,131 +1,17 @@
-# Single source of truth for the WoW64 i386 double-build.
-#
-# Every target named here is built a second time as i386 in the nested
-# build tree (_wow64_i386) and shipped to reactos/SysWOW64. Nothing is
-# discovered implicitly: when a listed module starts importing a DLL that
-# is not listed here, configuration fails and names the targets to add.
-#
-# List a module when the 32-bit loader must be able to find it: every DLL
-# imported by another listed module, DLLs loaded dynamically at run time,
-# and every 32-bit program we ship.
+# Both compatibility runtimes share the portable DLL set. Only their
+# architecture-specific loader and guest executables remain separate.
+include("${CMAKE_CURRENT_LIST_DIR}/compat_runtime_targets.cmake")
 
-set(WOW64_I386_MODULES
-    advapi32
-    advapi32_vista
-    advpack
-    appxalluserstore
-    bcp47langs
-    bcrypt
-    browseui
-    cabinet
-    cfgmgr32
-    combase
-    comctl32
-    comdlg32
-    coml2
-    crypt32
-    cryptnet
-    cryptsp
-    cryptui
-    d3dwine
-    dbghelp
-    ddraw
-    dcomp
-    devmgr
-    dhcpcsvc
-    dinput8
-    dsound
-    dnsapi
-    dui70
-    fmifs
-    gdi32
-    gdi32_vista
-    gdiplus
-    hid
-    ieframe
-    iertutil
-    imagehlp
-    imm32
-    iphlpapi
-    kernel32
-    kernel32_vista
-    kernelbase_ros
-    libjpeg
-    libpng
-    libtiff
-    lpk
-    mbedtls
-    mlang
-    mmdevapi
-    mpr
-    msacm32
-    msimg32
-    msvcrt
-    mswsock
-    ncrypt
-    netapi32
-    newdev
-    normaliz
-    nsi
-    ntdll
-    ntdll_vista
-    ole32
-    oleacc
-    oleaut32
-    opengl32
-    powrprof
-    profapi
-    propsys
-    psapi
-    rpcrt4
-    samlib
-    sechost
-    secur32
-    settingsyncpolicy
-    setupapi
-    shcore
-    shdocvw
-    shell32
-    shlwapi
-    slc
-    sndvolsso
-    sspicli
-    twinapi
-    ucrtbase
-    urlmon
-    user32
-    user32_vista
-    userenv
-    usp10
-    uxtheme
-    version
-    windowscodecs
-    wininet
-    winlangdb
-    winmm
-    winspool
-    winsta
-    wintrust
-    wkscli
-    ws2_32
-    ws2help
-    wsock32)
+set(WOW64_I386_MODULES ${COMPAT_RUNTIME_MODULES} ntdll)
+set(WOW64_I386_AUXILIARY_MODULES ${COMPAT_RUNTIME_AUXILIARY_MODULES})
+set(WOW64_I386_ALIASES ${COMPAT_RUNTIME_ALIASES})
 
 set(WOW64_I386_EXECUTABLES
     notepad
     regsvr32
     winver)
 
-# Additional names under which a built module must be shipped. Keep the
-# implementation name too because existing ReactOS forwarders use it.
-set(WOW64_I386_ALIASES
-    "kernelbase_ros=kernelbase.dll")
-
 if(ENABLE_ROSTESTS)
-    # The win32u tests import win32u.dll directly; the regular guest runtime
-    # reaches it through its own syscall stubs instead.
-    list(APPEND WOW64_I386_MODULES
-        win32u)
     list(APPEND WOW64_I386_EXECUTABLES
         user32_winetest
         win32u_apitest

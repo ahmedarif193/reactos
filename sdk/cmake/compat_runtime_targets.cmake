@@ -1,0 +1,144 @@
+# PROJECT:     ReactOS Build System
+# PURPOSE:     Define the shared compatibility runtime target manifest
+# LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+# COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+
+# Portable system DLLs shared by the ARM64EC and i386 WoW64 runtimes.
+# Include dynamically loaded DLLs as well as static import dependencies.
+# Each nested build compiles these targets for its own architecture.
+
+set(COMPAT_RUNTIME_MODULES
+    advapi32
+    advapi32_vista
+    advpack
+    apphelp
+    appxalluserstore
+    avrt
+    bcp47langs
+    bcrypt
+    bcryptprimitives
+    browseui
+    cabinet
+    cfgmgr32
+    combase
+    comctl32
+    comdlg32
+    coml2
+    crypt32
+    cryptnet
+    cryptsp
+    cryptui
+    d3dwine
+    dbghelp
+    dcomp
+    ddraw
+    devmgr
+    dhcpcsvc
+    dinput8
+    dnsapi
+    dsound
+    dui70
+    dwmapi
+    dwrite
+    dxgi
+    fmifs
+    gdi32
+    gdi32_vista
+    gdiplus
+    glu32
+    hid
+    ieframe
+    iertutil
+    imagehlp
+    imm32
+    iphlpapi
+    jsproxy
+    kernel32
+    kernel32_vista
+    kernelbase_ros
+    libjpeg
+    libpng
+    libtiff
+    lpk
+    mbedtls
+    mlang
+    mmdevapi
+    mpr
+    msacm32
+    msafd
+    msctf
+    msctfime
+    msimg32
+    msvcrt
+    mswsock
+    ncrypt
+    netapi32
+    newdev
+    nfs41_np
+    normaliz
+    nsi
+    ntdll_vista
+    ole32
+    oleacc
+    oleaut32
+    opengl32
+    powrprof
+    profapi
+    propsys
+    psapi
+    riched20
+    rpcrt4
+    rsaenh
+    samlib
+    sechost
+    secur32
+    sensapi
+    settingsyncpolicy
+    setupapi
+    shcore
+    shdocvw
+    shell32
+    shfolder
+    shlwapi
+    slc
+    sndvolsso
+    sspicli
+    twinapi
+    ucrtbase
+    uiautomationcore
+    urlmon
+    user32
+    user32_vista
+    userenv
+    usp10
+    uxtheme
+    version
+    win32u
+    windowscodecs
+    winhttp
+    wininet
+    winlangdb
+    winmm
+    winspool
+    winsta
+    wintrust
+    wkscli
+    wldap32
+    ws2_32
+    ws2help
+    wshtcpip
+    wsock32
+    xinput1_1
+    xinput1_2
+    xinput1_3
+    xinput1_4
+    xinput9_1_0)
+
+# These targets share an output basename with a regular module. Package them
+# only under these aliases so they cannot overwrite the regular DLL.
+set(COMPAT_RUNTIME_AUXILIARY_MODULES
+    comctl32_v6)
+
+set(COMPAT_RUNTIME_ALIASES
+    "comctl32_v6=comctl32_v6.dll"
+    "kernelbase_ros=kernelbase.dll")
