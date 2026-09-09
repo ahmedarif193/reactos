@@ -14,6 +14,7 @@
 
 #include "dxsurface.h"
 #include "gpucomp.h"
+#include "settings.h"
 
 DWORD_PTR NTAPI NtUserCallOneParam(DWORD_PTR Param, DWORD Routine);
 LONG NTAPI NtSetTimerResolution(ULONG DesiredResolution, BOOLEAN SetResolution,
@@ -3006,6 +3007,8 @@ DwmComposeLoop(HANDLE hStopEvent)
     DWM_ATTACH att;
     HANDLE hWake;
     HANDLE hConnection;
+    HWND SettingsWindow;
+    DWM_SETTINGS Settings = {DWM_EFFECT_ALL, FALSE, DwmGpuComposeIsActive};
     BOOL forceFull = TRUE;
     LONG vw, vh, primW, primH;
     ULONG ViewIndex;
@@ -3098,6 +3101,10 @@ DwmComposeLoop(HANDLE hStopEvent)
     if (DwmGpuComposeEnabled() && DwmGpuComposeInitialize(g_W, g_H))
         OutputDebugStringA("DWM: GPU composition enabled; GPU copy to scanout\n");
 
+    if (DwmSettingsRead(&Settings.Effects) != ERROR_SUCCESS)
+        DwmLog("DWM: could not read effect preferences\n");
+    SettingsWindow = DwmSettingsCreateWindow(GetModuleHandleW(NULL), &Settings);
+
     for (;;)
     {
         PDWM_FRAME_HEADER hdr = (PDWM_FRAME_HEADER)g_buf;
@@ -3113,6 +3120,14 @@ DwmComposeLoop(HANDLE hStopEvent)
         {
             TranslateMessage(&message);
             DispatchMessageW(&message);
+        }
+
+        if (Settings.Changed)
+        {
+            /* A preference change can expose pixels outside ordinary
+             * window damage. Rebuild the scene and its cached backdrops. */
+            forceFull = TRUE;
+            Settings.Changed = FALSE;
         }
 
         if (WaitForSingleObject(hStopEvent, 0) == WAIT_OBJECT_0)
@@ -3223,6 +3238,11 @@ DwmComposeLoop(HANDLE hStopEvent)
             if (pr > g_W) pr = g_W;
             if (pb > g_H) pb = g_H;
             wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
+            if (DwmGpuComposeIsActive())
+            {
+                for (i = 0; i < hdr->Count; ++i)
+                    DwmSettingsApplyWindow(&Settings, &wins[i]);
+            }
 
             cl = pl; ct = pt; cr = pr; cb = pb;
             for (i = 0; i < hdr->Count; i++)
@@ -3501,6 +3521,8 @@ DwmComposeLoop(HANDLE hStopEvent)
     }
 
     DwmSetTimerPrecision(FALSE);
+    if (SettingsWindow != NULL)
+        DestroyWindow(SettingsWindow);
     DwmGpuComposeShutdown();
     DwmFreeBackdropCache();
     DwmDxCleanupSurfaces();
