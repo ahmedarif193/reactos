@@ -8,12 +8,14 @@
 
 #include <windows.h>
 #include <math.h>
+#include <stdio.h>
 #include <reactos/dwmcore.h>
 #include <reactos/dwmframe.h>
 #include <reactos/ntdcomp.h>
 
 #include "dxsurface.h"
 #include "gpucomp.h"
+#include "presenttrace.h"
 #include "settings.h"
 
 DWORD_PTR NTAPI NtUserCallOneParam(DWORD_PTR Param, DWORD Routine);
@@ -34,6 +36,10 @@ DwmSetTimerPrecision(BOOL Precise)
 }
 
 static void DwmLog(const char *s) { OutputDebugStringA(s); }
+
+static BOOL g_frameStats;
+static ULONGLONG g_statBlurDownTicks, g_statBlurFilterTicks, g_statBlurUpTicks;
+static void DwmStatCounter(LARGE_INTEGER *Counter);
 
 static LONG g_originX, g_originY;
 static LONG g_W, g_H;
@@ -949,6 +955,7 @@ DwmApplyBlur(const ULONG *Input, ULONG *Composition, LONG Width, LONG Height,
     const ULONG *Result = NULL;
     BOOL HaveUnion = FALSE;
     ULONG RegionCount = 0;
+    LARGE_INTEGER BlurStart, BlurDown, BlurFilter, BlurEnd;
 
     if (!(Window->BlurFlags & DWM_BLUR_ENABLE) ||
         Window->cx <= 0 || Window->cy <= 0)
@@ -1004,6 +1011,8 @@ DwmApplyBlur(const ULONG *Input, ULONG *Composition, LONG Width, LONG Height,
     if (!HaveUnion)
         return;
 
+    DwmStatCounter(&BlurStart);
+    BlurDown = BlurStart;
 
     /* Non-client glass is four thin strips, not the opaque client between
      * them. Filter the strips separately when their halos cost less than the
@@ -1045,6 +1054,7 @@ DwmApplyBlur(const ULONG *Input, ULONG *Composition, LONG Width, LONG Height,
                       (hR + Reach > HalfWidth) ? HalfWidth : hR + Reach,
                       (hB + Reach > HalfHeight) ? HalfHeight : hB + Reach);
 
+    DwmStatCounter(&BlurDown);
 
     /*
      * The software passes below are a sliding-window box blur: O(1) work per
@@ -1164,6 +1174,7 @@ DwmApplyBlur(const ULONG *Input, ULONG *Composition, LONG Width, LONG Height,
                                    HalfRadius);
 
 Upsample:
+    DwmStatCounter(&BlurFilter);
 
     for (Index = 0; Index < Count; ++Index)
     {
@@ -1174,6 +1185,13 @@ Upsample:
         DwmBlurUpsample(Result, HalfWidth, HalfHeight, Composition, Width,
                         Clipped.left, Clipped.top, Clipped.right,
                         Clipped.bottom, Alpha);
+    }
+    DwmStatCounter(&BlurEnd);
+    if (g_frameStats)
+    {
+        g_statBlurDownTicks += BlurDown.QuadPart - BlurStart.QuadPart;
+        g_statBlurFilterTicks += BlurFilter.QuadPart - BlurDown.QuadPart;
+        g_statBlurUpTicks += BlurEnd.QuadPart - BlurFilter.QuadPart;
     }
 }
 
@@ -1460,6 +1478,9 @@ static BOOL g_backdropCacheValid;
 static DWM_WIN g_backdropCacheLower[DWM_MAX_WINDOWS];
 static ULONG g_backdropCacheLowerCount;
 static ULONG g_backdropCacheOwnerId, g_backdropCacheOwnerGeneration;
+static ULONGLONG g_statBackdropCacheHits, g_statBackdropCachePartials;
+static ULONGLONG g_statBackdropCacheMisses;
+static ULONGLONG g_statBackdropMetadataHits;
 
 static void
 DwmFreeBackdropCache(void)
@@ -1761,11 +1782,14 @@ DwmApplyBackdropBlurCached(ULONG *Composition, LONG Width, LONG Height,
                 DwmRectContains(&g_backdropCacheSource, &OverlapSource) &&
                 (SceneEqual ||
                  DwmBackdropInputEqual(Composition, Width, &OverlapSource));
+        if (Reuse && SceneEqual && g_frameStats)
+            ++g_statBackdropMetadataHits;
     }
     CurrentSource = DwmBackdropSourceBounds(&Current, Radius, Width, Height);
     if (Reuse && DwmRectContains(&g_backdropCacheBounds, &Current))
     {
         DwmBackdropStoreScene(Window, Lower, LowerCount);
+        if (g_frameStats) ++g_statBackdropCacheHits;
         if (Direct)
             return g_backdropCacheOutput;
         DwmCopyBackdropShape(Composition, g_backdropCacheOutput, Width, Height,
@@ -1791,6 +1815,7 @@ DwmApplyBackdropBlurCached(ULONG *Composition, LONG Width, LONG Height,
         DwmApplyBlur(g_backdropCacheInput, g_backdropCacheOutput,
                      Width, Height, Current.left, Current.top,
                      Current.right, Current.bottom, &CacheWindow, NULL);
+        if (g_frameStats) ++g_statBackdropCacheMisses;
     }
     else
     {
@@ -1813,6 +1838,7 @@ DwmApplyBackdropBlurCached(ULONG *Composition, LONG Width, LONG Height,
                          Missing[Index].right, Missing[Index].bottom,
                          &CacheWindow, NULL);
         }
+        if (g_frameStats) ++g_statBackdropCachePartials;
     }
     g_backdropCacheBounds = Current;
     g_backdropCacheSource = CurrentSource;
@@ -2109,6 +2135,8 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
 }
 
 
+static ULONGLONG g_statGlassPixels, g_statBlitPixels;
+static ULONGLONG g_statConstantGlassPixels, g_statFullWeightGlassPixels;
 
 /* Exact signed /255 for every channel delta times an opacity.  Keeping this
  * in 32-bit arithmetic lets the ARM64 compiler process four pixels per
@@ -2268,6 +2296,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
         LONG directStart = 0, directEnd = 0;
         const BYTE *reflection = NULL;
 
+        if (g_frameStats) g_statBlitPixels += width;
         dy = (LONG)(wy + r);
         srcrow = (const ULONG *)(pix + (SIZE_T)r * w->Stride) + srcx0;
         dstrow = comp + (SIZE_T)dy * scrW + x0;
@@ -2404,6 +2433,13 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                         DwmBlendConstantGlass(dstrow + x, baserow + x,
                                              End - x, Color, Key,
                                              w->BackdropOpacity, Weight, reflection + x);
+                        if (g_frameStats)
+                        {
+                            g_statGlassPixels += End - x;
+                            g_statConstantGlassPixels += End - x;
+                            if (Weight == 255)
+                                g_statFullWeightGlassPixels += End - x;
+                        }
                         x = End - 1;
                         continue;
                     }
@@ -2416,6 +2452,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                                       End - x,
                                       backdropKey, colorizationKey,
                                       w->BackdropOpacity, reflection + x);
+                    if (g_frameStats) g_statGlassPixels += End - x;
                     x = End - 1;
                     continue;
                 }
@@ -2876,6 +2913,28 @@ static ULONGLONG g_qpcPerSecond;
 static ULONGLONG g_refreshPeriodQpc;
 static ULONGLONG g_lastFrameQpc;
 
+/*
+ * Frame accounting.  The compositor's cost is dominated by whole-surface work
+ * -- clearing the backdrop, blitting each window, and the final blit to the
+ * screen -- all of which scale with the damaged area rather than with the
+ * number of effects, so the useful measure is nanoseconds per damaged pixel
+ * alongside the wall-clock split between composing and presenting.
+ * Set DWM_FRAME_STATS=1 to enable the stage timers and serial reports.
+ */
+/* Amortize serial output so an enabled diagnostic does not dominate a drag. */
+#define DWM_STAT_FRAMES 60
+static ULONG g_statFrames;
+static ULONG g_statFirstFrames;
+
+static void
+DwmStatCounter(LARGE_INTEGER *Counter)
+{
+    if (g_frameStats)
+        QueryPerformanceCounter(Counter);
+    else
+        Counter->QuadPart = 0;
+}
+
 /* Prefer full-frame GPU composition when the adapter supports it. The
  * environment override remains available for diagnosis. The registered output
  * swapchain is promoted to a KMT flip and never read back to the CPU. */
@@ -2887,6 +2946,190 @@ DwmGpuComposeEnabled(void)
                                            ARRAYSIZE(Value));
 
     return !(Length == 1 && Value[0] == L'0');
+}
+static ULONGLONG g_statBlurTicks;
+static ULONGLONG g_statBackdropBlurTicks;
+static ULONGLONG g_statShadowTicks;
+static ULONGLONG g_statBlitTicks;
+static ULONGLONG g_statAnimTicks;
+static ULONG g_statWindows;
+static ULONGLONG g_statComposeTicks;
+static ULONGLONG g_statPresentTicks;
+static ULONGLONG g_statBackdropTicks;
+static ULONGLONG g_statPixels;
+static ULONGLONG g_statFrameMin;
+static ULONGLONG g_statFrameMax;
+static ULONGLONG g_statFetchTicks;
+static ULONGLONG g_statPrepareTicks;
+static ULONGLONG g_frameFetchTicks;
+static ULONGLONG g_framePrepareTicks;
+static ULONGLONG g_statGpuDrawKernel100ns;
+static ULONGLONG g_statGpuDrawUser100ns;
+
+typedef struct
+{
+    ULONGLONG Kernel, User;
+    BOOL Valid;
+} DWM_THREAD_TIME;
+
+static void
+DwmStatThreadTime(DWM_THREAD_TIME *Time)
+{
+    FILETIME Creation, Exit, Kernel, User;
+    Time->Valid = g_frameStats && GetThreadTimes(GetCurrentThread(), &Creation,
+                                                &Exit, &Kernel, &User);
+    if (Time->Valid)
+    {
+        Time->Kernel = ((ULONGLONG)Kernel.dwHighDateTime << 32) | Kernel.dwLowDateTime;
+        Time->User = ((ULONGLONG)User.dwHighDateTime << 32) | User.dwLowDateTime;
+    }
+}
+
+
+static void
+DwmFrameStat(ULONGLONG BackdropTicks, ULONGLONG ComposeTicks,
+             ULONGLONG PresentTicks, ULONGLONG Pixels)
+{
+    ULONGLONG Total = BackdropTicks + ComposeTicks + PresentTicks;
+    char Message[224];
+
+    if (!g_frameStats)
+        return;
+
+    g_statFetchTicks += g_frameFetchTicks;
+    g_statPrepareTicks += g_framePrepareTicks;
+    g_statBackdropTicks += BackdropTicks;
+    g_statComposeTicks += ComposeTicks;
+    g_statPresentTicks += PresentTicks;
+    g_statPixels += Pixels;
+    if (g_statFrames == 0 || Total < g_statFrameMin)
+        g_statFrameMin = Total;
+    if (Total > g_statFrameMax)
+        g_statFrameMax = Total;
+    if (g_qpcPerSecond == 0)
+        return;
+
+    if (g_statFirstFrames < 4)
+    {
+        _snprintf(Message, sizeof(Message) - 1,
+                  "DWM: frame#%lu %llu us (backdrop %llu, compose %llu, "
+                  "present %llu) %llu px\n",
+                  (unsigned long)g_statFirstFrames,
+                  (Total * 1000000ull) / g_qpcPerSecond,
+                  (BackdropTicks * 1000000ull) / g_qpcPerSecond,
+                  (ComposeTicks * 1000000ull) / g_qpcPerSecond,
+                  (PresentTicks * 1000000ull) / g_qpcPerSecond,
+                  Pixels);
+        Message[sizeof(Message) - 1] = '\0';
+        OutputDebugStringA(Message);
+
+        ++g_statFirstFrames;
+    }
+
+    if (++g_statFrames < DWM_STAT_FRAMES)
+        return;
+
+    {
+        ULONGLONG Us = 1000000ull;
+        ULONGLONG Frames = g_statFrames;
+        ULONGLONG AllTicks = g_statBackdropTicks + g_statComposeTicks +
+                             g_statPresentTicks;
+
+        _snprintf(Message, sizeof(Message) - 1,
+                  "DWM: GPU draw CPU avg user %llu us, kernel %llu us over %llu frames\n",
+                  g_statGpuDrawUser100ns / (10 * Frames),
+                  g_statGpuDrawKernel100ns / (10 * Frames), Frames);
+        Message[sizeof(Message) - 1] = '\0';
+        OutputDebugStringA(Message);
+
+        _snprintf(Message, sizeof(Message) - 1,
+                  "DWM: preparation avg fetch %llu us, backdrop/metadata %llu us, "
+                  "render %llu us over %llu frames\n",
+                  (g_statFetchTicks * Us) / (g_qpcPerSecond * Frames),
+                  (g_statPrepareTicks * Us) / (g_qpcPerSecond * Frames),
+                  (AllTicks * Us) / (g_qpcPerSecond * Frames), Frames);
+        Message[sizeof(Message) - 1] = '\0';
+        OutputDebugStringA(Message);
+
+        _snprintf(Message, sizeof(Message) - 1,
+                  "DWM: frame avg %llu us (backdrop %llu, compose %llu, "
+                  "present %llu) min %llu max %llu, %llu Mpix, %llu ns/pix\n",
+                  (AllTicks * Us) / (g_qpcPerSecond * Frames),
+                  (g_statBackdropTicks * Us) / (g_qpcPerSecond * Frames),
+                  (g_statComposeTicks * Us) / (g_qpcPerSecond * Frames),
+                  (g_statPresentTicks * Us) / (g_qpcPerSecond * Frames),
+                  (g_statFrameMin * Us) / g_qpcPerSecond,
+                  (g_statFrameMax * Us) / g_qpcPerSecond,
+                  g_statPixels / 1048576ull,
+                  g_statPixels ? (AllTicks * 1000000000ull) /
+                                     (g_qpcPerSecond * g_statPixels) : 0);
+        Message[sizeof(Message) - 1] = '\0';
+        OutputDebugStringA(Message);
+
+        if (DwmGpuComposeIsActive())
+        {
+            ULONGLONG Filtered, Reused;
+            DwmGpuComposeBlurStats(&Filtered, &Reused);
+            _snprintf(Message, sizeof(Message) - 1,
+                      "DWM: GPU blur filtered %llu, reused %llu over %llu frames\n",
+                      Filtered, Reused, Frames);
+            Message[sizeof(Message) - 1] = '\0';
+            OutputDebugStringA(Message);
+        }
+
+        _snprintf(Message, sizeof(Message) - 1,
+                  "DWM: compose split blur %llu, backdrop %llu, shadow %llu, "
+                  "blit %llu, anim %llu us/frame over %lu window-visits, glass %llu/%llu px\n",
+                  (g_statBlurTicks * Us) / (g_qpcPerSecond * Frames),
+                  (g_statBackdropBlurTicks * Us) / (g_qpcPerSecond * Frames),
+                  (g_statShadowTicks * Us) / (g_qpcPerSecond * Frames),
+                  (g_statBlitTicks * Us) / (g_qpcPerSecond * Frames),
+                  (g_statAnimTicks * Us) / (g_qpcPerSecond * Frames),
+                  (unsigned long)g_statWindows, g_statGlassPixels, g_statBlitPixels);
+        Message[sizeof(Message) - 1] = '\0';
+        OutputDebugStringA(Message);
+
+        _snprintf(Message, sizeof(Message) - 1,
+                  "DWM: glass constant %llu px, full-weight %llu px of %llu fast px\n",
+                  g_statConstantGlassPixels, g_statFullWeightGlassPixels,
+                  g_statGlassPixels);
+        Message[sizeof(Message) - 1] = '\0';
+        OutputDebugStringA(Message);
+    }
+    {
+        char Message[192];
+        _snprintf(Message, sizeof(Message) - 1,
+                  "DWM: blur split down %llu, filter %llu, finish %llu us/frame, "
+                  "backdrop cache %llu full/%llu partial/%llu miss, %llu metadata\n",
+                  g_statBlurDownTicks * 1000000ull / (g_qpcPerSecond * g_statFrames),
+                  g_statBlurFilterTicks * 1000000ull / (g_qpcPerSecond * g_statFrames),
+                  g_statBlurUpTicks * 1000000ull / (g_qpcPerSecond * g_statFrames),
+                  g_statBackdropCacheHits, g_statBackdropCachePartials,
+                  g_statBackdropCacheMisses, g_statBackdropMetadataHits);
+        Message[sizeof(Message) - 1] = '\0';
+        OutputDebugStringA(Message);
+    }
+    g_statBlurDownTicks = g_statBlurFilterTicks = g_statBlurUpTicks = 0;
+    g_statBackdropCacheHits = g_statBackdropCachePartials = 0;
+    g_statBackdropCacheMisses = 0;
+    g_statBackdropMetadataHits = 0;
+    g_statFrames = 0;
+    g_statBlurTicks = 0;
+    g_statBackdropBlurTicks = 0;
+    g_statShadowTicks = 0;
+    g_statBlitTicks = 0;
+    g_statAnimTicks = 0;
+    g_statWindows = 0;
+    g_statGlassPixels = g_statBlitPixels = 0;
+    g_statConstantGlassPixels = g_statFullWeightGlassPixels = 0;
+    g_statBackdropTicks = 0;
+    g_statComposeTicks = 0;
+    g_statPresentTicks = 0;
+    g_statPixels = 0;
+    g_statFrameMin = 0;
+    g_statFrameMax = 0;
+    g_statFetchTicks = g_statPrepareTicks = 0;
+    g_statGpuDrawKernel100ns = g_statGpuDrawUser100ns = 0;
 }
 static HDC     g_hdcBackdrop;
 static HBITMAP g_hbmBackdrop;
@@ -3002,7 +3245,15 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
 static void
 DwmComposeLoop(HANDLE hStopEvent)
 {
-    LARGE_INTEGER statFrameStart;
+    LARGE_INTEGER stgA = {{0}};
+    LARGE_INTEGER stgB = {{0}};
+    LARGE_INTEGER statFrameStart = {{0}};
+    LARGE_INTEGER statFetchStart = {{0}};
+    LARGE_INTEGER statFetchEnd = {{0}};
+    DWM_THREAD_TIME statDrawCpuStart, statDrawCpuEnd;
+    LARGE_INTEGER statBackdropEnd = {{0}};
+    LARGE_INTEGER statComposeEnd = {{0}};
+    LARGE_INTEGER statPresentEnd = {{0}};
     HDC hdcScreen = GetDC(NULL);
     DWM_ATTACH att;
     HANDLE hWake;
@@ -3038,6 +3289,14 @@ DwmComposeLoop(HANDLE hStopEvent)
         return;
     }
     DwmShadowInit(hdcScreen);
+
+    {
+        WCHAR Value[8];
+        DWORD Length = GetEnvironmentVariableW(L"DWM_FRAME_STATS", Value,
+                                               ARRAYSIZE(Value));
+        /* Profiling must not add thread queries or serial traffic by default. */
+        g_frameStats = Length == 1 && Value[0] == L'1';
+    }
 
     /* Allow a known-working software renderer while GPU effects are tested. */
     {
@@ -3113,6 +3372,7 @@ DwmComposeLoop(HANDLE hStopEvent)
         LONG st;
         ULONG i;
         MSG message;
+        DPT_SCOPE FetchTrace;
 
         /* This thread owns the GPU carrier. Service sent messages even
          * while composition is idle, so broadcasts cannot block Explorer. */
@@ -3158,7 +3418,12 @@ DwmComposeLoop(HANDLE hStopEvent)
         hdr->Magic = DWM_FRAME_MAGIC;
         hdr->BufBytes = g_bufSize;
 
+        DwmStatCounter(&statFetchStart);
+        FetchTrace = DptBegin(&g_DwmPresentTrace, DPT_FETCH);
         st = (LONG)NtUserCallOneParam((DWORD_PTR)g_buf, DWM_ROUTINE_GETFRAME);
+        DptEnd(&g_DwmPresentTrace, FetchTrace, st >= 0, 0);
+        DwmStatCounter(&statFetchEnd);
+        g_frameFetchTicks = (ULONGLONG)(statFetchEnd.QuadPart - statFetchStart.QuadPart);
         if (st < 0)
         {
             Sleep(50);
@@ -3294,7 +3559,8 @@ DwmComposeLoop(HANDLE hStopEvent)
                 }
 
                 QueryPerformanceCounter(&statFrameStart);
-
+                g_framePrepareTicks = g_frameStats ?
+                    (ULONGLONG)(statFrameStart.QuadPart - statFetchEnd.QuadPart) : 0;
 
                 /*
                  * Hardware frame.  Every window is drawn from a resident
@@ -3305,10 +3571,16 @@ DwmComposeLoop(HANDLE hStopEvent)
                  */
                 if (DwmGpuComposeIsActive())
                 {
+                    DPT_SCOPE FrameTrace = DptBegin(&g_DwmPresentTrace, DPT_FRAME);
+                    DPT_SCOPE AckTrace;
                     BOOL gpuFrame;
                     RECT gpuDamage = {pl, pt, pr, pb};
                     RECT gpuShadowMargins = {g_shadowMarginLeft, g_shadowMarginTop,
                                               g_shadowMarginRight, g_shadowMarginBottom};
+                    /* A dirty frame includes metadata/preparation before Begin.
+                     * The fetch counter also exposes an unfinished metadata call. */
+                    if (FrameTrace.Epoch && FrameTrace.Epoch == FetchTrace.Epoch)
+                        FrameTrace.Start = FetchTrace.Start;
                     DwmGpuComposeScene(wins, hdr->Count,
                                         (const RECTL *)(g_buf + hdr->BlurRectArrayBase),
                                         hdr->BlurRectCount, g_originX, g_originY,
@@ -3317,7 +3589,9 @@ DwmComposeLoop(HANDLE hStopEvent)
                                                        g_backdropBits, refreshBackdrop,
                                                        &gpuDamage);
 
+                    DwmStatCounter(&statBackdropEnd);
 
+                    DwmStatThreadTime(&statDrawCpuStart);
                     for (i = 0; gpuFrame && i < hdr->Count; i++)
                     {
                         const BYTE *gpix;
@@ -3344,11 +3618,35 @@ DwmComposeLoop(HANDLE hStopEvent)
                         }
                     }
 
+                    DwmStatThreadTime(&statDrawCpuEnd);
+                    if (statDrawCpuStart.Valid && statDrawCpuEnd.Valid)
+                    {
+                        g_statGpuDrawKernel100ns += statDrawCpuEnd.Kernel - statDrawCpuStart.Kernel;
+                        g_statGpuDrawUser100ns += statDrawCpuEnd.User - statDrawCpuStart.User;
+                    }
+                    DwmStatCounter(&statComposeEnd);
+
                     if (gpuFrame && DwmGpuComposeEnd())
                     {
                         g_lastFrameQpc = (ULONGLONG)statFrameStart.QuadPart;
+                        DwmStatCounter(&statPresentEnd);
+                        /* On the GPU path these fields mean clear/context,
+                         * window draw/upload, and swap/direct-flip.  Keeping
+                         * the existing labels makes the serial format stable
+                         * while exposing where a slow hardware frame waits. */
+                        DwmFrameStat(
+                                     (ULONGLONG)(statBackdropEnd.QuadPart -
+                                                 statFrameStart.QuadPart),
+                                     (ULONGLONG)(statComposeEnd.QuadPart -
+                                                 statBackdropEnd.QuadPart),
+                                     (ULONGLONG)(statPresentEnd.QuadPart -
+                                                 statComposeEnd.QuadPart),
+                                     (ULONGLONG)((pr - pl) * (pb - pt)));
+                        AckTrace = DptBegin(&g_DwmPresentTrace, DPT_ACK);
                         for (i = 0; i < hdr->Count; ++i)
                             DwmDxAcknowledgeSurface(&wins[i]);
+                        DptEnd(&g_DwmPresentTrace, AckTrace, TRUE, 0);
+                        DptEnd(&g_DwmPresentTrace, FrameTrace, TRUE, 0);
                         ++g_frameSeq;
                         if ((g_frameSeq & 255) == 0)
                         {
@@ -3358,6 +3656,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                         forceFull = FALSE;
                         continue;
                     }
+                    DptEnd(&g_DwmPresentTrace, FrameTrace, FALSE, 0);
                     /* A failed GPU frame leaves no reusable CPU composition.
                      * Retire the context and rebuild the entire scene. */
                     DwmGpuComposeShutdown();
@@ -3395,6 +3694,8 @@ DwmComposeLoop(HANDLE hStopEvent)
                     }
                 }
 
+                DwmStatCounter(&statBackdropEnd);
+
                 blurRects = (PRECTL)(g_buf + hdr->BlurRectArrayBase);
                 for (i = 0; i < hdr->Count; i++)
                 {
@@ -3424,30 +3725,49 @@ DwmComposeLoop(HANDLE hStopEvent)
                     }
                     if (wins[i].BlurRectCount != 0)
                         windowBlurRects = &blurRects[wins[i].BlurRectBase];
+                    if (g_frameStats)
+                        ++g_statWindows;
                     if (wins[i].AnimFlags != 0)
                     {
+                        DwmStatCounter(&stgA);
                         DwmBlitWindowAnimated((ULONG *)g_compBits, g_W,
                                               cl, ct, cr, cb, pix,
                                               DwmDxGetSurfaceSnapshot(&wins[i]),
                                               &wins[i]);
+                        DwmStatCounter(&stgB);
+                        if (g_frameStats)
+                            g_statAnimTicks += (ULONGLONG)(stgB.QuadPart - stgA.QuadPart);
                         continue;
                     }
+                    DwmStatCounter(&stgA);
                     DwmApplyBlur((const ULONG *)g_compBits,
                                  (ULONG *)g_compBits, g_W, g_H,
                                  pl, pt, pr, pb, &wins[i],
                                  windowBlurRects);
+                    DwmStatCounter(&stgB);
+                    if (g_frameStats)
+                        g_statBlurTicks += (ULONGLONG)(stgB.QuadPart - stgA.QuadPart);
                     backdropBase = DwmApplyBackdropBlur(
                         (ULONG *)g_compBits, g_W, g_H,
                         pl, pt, pr, pb, &wins[i], wins, i);
+                    DwmStatCounter(&stgA);
+                    if (g_frameStats)
+                        g_statBackdropBlurTicks += (ULONGLONG)(stgA.QuadPart - stgB.QuadPart);
                     /* A non-client shadow is a compositor layer immediately
                      * below its owner. Since wins[] is bottom-to-top, higher
                      * windows and their shadows naturally occlude lower ones. */
                     DwmBlendShadow((ULONG *)g_compBits, g_W, g_H,
                                    cl, ct, cr, cb, &wins[i]);
+                    DwmStatCounter(&stgB);
+                    if (g_frameStats)
+                        g_statShadowTicks += (ULONGLONG)(stgB.QuadPart - stgA.QuadPart);
                     DwmBlitWindowVisible((ULONG *)g_compBits, g_W, cl, ct, cr, cb,
                                          pix, (const ULONG *)g_backdropBits,
                                          backdropBase, &wins[i],
                                          HaveCover ? &Cover : NULL);
+                    DwmStatCounter(&stgA);
+                    if (g_frameStats)
+                        g_statBlitTicks += (ULONGLONG)(stgA.QuadPart - stgB.QuadPart);
 
                     dxpix = DwmDxGetSurfaceSnapshot(&wins[i]);
                     if (dxpix != NULL)
@@ -3482,6 +3802,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                     BOOL bltResult;
                     BOOL flushResult;
 
+                    DwmStatCounter(&statComposeEnd);
                     DWM_PRESENT_BITMAP publication;
                     publication.Bitmap = (ULONG_PTR)g_hbmComp;
                     publication.Rect = (RECTL){pl, pt, pr, pb};
@@ -3491,7 +3812,13 @@ DwmComposeLoop(HANDLE hStopEvent)
                                   0, NULL) > 0;
                     if (bltResult)
                     {
+                        static BOOL Reported;
                         flushResult = TRUE; /* The escape completes synchronously. */
+                        if (g_frameStats && !Reported)
+                        {
+                            OutputDebugStringA("DWM: cached bitmap presentation active\n");
+                            Reported = TRUE;
+                        }
                     }
                     else
                     {
@@ -3500,6 +3827,12 @@ DwmComposeLoop(HANDLE hStopEvent)
                                            SRCCOPY);
                         flushResult = GdiFlush();
                     }
+                    DwmStatCounter(&statPresentEnd);
+                    DwmFrameStat(
+                        (ULONGLONG)(statBackdropEnd.QuadPart - statFrameStart.QuadPart),
+                        (ULONGLONG)(statComposeEnd.QuadPart - statBackdropEnd.QuadPart),
+                        (ULONGLONG)(statPresentEnd.QuadPart - statComposeEnd.QuadPart),
+                        (ULONGLONG)((pr - pl) * (pb - pt)));
                     if (!bltResult || !flushResult)
                         forceFull = TRUE;
                     else
