@@ -1914,6 +1914,7 @@ NtGdiGetPixel(
 {
     PDC pdc;
     ULONG ulRGBColor = CLR_INVALID;
+    BOOL Prepared = FALSE;
     POINTL ptlSrc;
     RECT rcDest;
     PSURFACE psurfSrc, psurfDest;
@@ -1949,6 +1950,7 @@ NtGdiGetPixel(
 
     /* Prepare DC for blit */
     DC_vPrepareDCsForBlit(pdc, &rcDest, NULL, NULL);
+    Prepared = TRUE;
 
     /* Check if the pixel is outside the surface */
     psurfSrc = pdc->dclevel.pSurface;
@@ -2003,8 +2005,10 @@ NtGdiGetPixel(
 
 leave:
 
-    /* Unlock the DC */
-    DC_vFinishBlit(pdc, NULL);
+    /* GetPixel only read the surface. Release the prepared DC without
+     * scheduling a new composition of an unchanged window or desktop. */
+    if (Prepared)
+        DC_vFinishRead(pdc);
     DC_UnlockDc(pdc);
 
     /* Return the new RGB color or -1 on failure */
