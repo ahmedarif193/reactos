@@ -139,6 +139,8 @@ CmpDeleteKeyObject(PVOID DeletedObject)
     /* Make sure this is a valid key body */
     if (KeyBody->Type == CM_KEY_BODY_TYPE)
     {
+        CmpFlushNotify(KeyBody, KeyBody->KcbLocked);
+
         /* Get the KCB */
         Kcb = KeyBody->KeyControlBlock;
         if (Kcb)
@@ -175,10 +177,7 @@ CmpCloseKeyObject(IN PEPROCESS Process OPTIONAL,
     /* Make sure we're a valid key body */
     if (KeyBody->Type == CM_KEY_BODY_TYPE)
     {
-        /* Don't do anything if we don't have a notify block */
-        if (!KeyBody->NotifyBlock) return;
-
-        CmpFlushNotify(KeyBody, FALSE);
+        CmpCloseNotify(KeyBody);
     }
 }
 

@@ -1474,12 +1474,14 @@ NtNotifyChangeMultipleKeys(IN HANDLE MasterKeyHandle,
 
     PAGED_CODE();
 
-    if (!CompletionFilter || (CompletionFilter & ~REG_LEGAL_CHANGE_FILTER))
+    if (!(CompletionFilter & REG_LEGAL_CHANGE_FILTER) ||
+        (CompletionFilter & ~(REG_LEGAL_CHANGE_FILTER | REG_NOTIFY_THREAD_AGNOSTIC)))
         return STATUS_INVALID_PARAMETER;
 
     /* Name/value notifications are wired to the mutation paths below. */
-    if (Count || Asynchronous || ApcRoutine || (CompletionFilter & ~(REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET)))
+    if (Count || ApcRoutine || (CompletionFilter & ~(REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET | REG_NOTIFY_THREAD_AGNOSTIC)))
         return STATUS_NOT_IMPLEMENTED;
+    if (Asynchronous && !Event) return STATUS_INVALID_PARAMETER;
 
     if (PreviousMode != KernelMode)
     {
@@ -1506,26 +1508,34 @@ NtNotifyChangeMultipleKeys(IN HANDLE MasterKeyHandle,
             ObDereferenceObject(KeyBody);
             return Status;
         }
-        KeClearEvent(EventObject);
+        if (!Asynchronous) KeClearEvent(EventObject);
     }
 
-    _SEH2_TRY
+    /* Event registrations must not retain the caller's stack-local IOSB. */
+    if (Asynchronous)
     {
-        IoStatusBlock->Status = STATUS_PENDING;
-        IoStatusBlock->Information = 0;
-        Status = CmpWaitForNotify(KeyBody, CompletionFilter, WatchTree, PreviousMode);
-        IoStatusBlock->Status = Status;
-        IoStatusBlock->Information = 0;
+        Status = CmpNotifyChangeKey(KeyBody, EventObject, CompletionFilter, WatchTree, TRUE, PreviousMode);
     }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    else
     {
-        Status = _SEH2_GetExceptionCode();
+        _SEH2_TRY
+        {
+            IoStatusBlock->Status = STATUS_PENDING;
+            IoStatusBlock->Information = 0;
+            Status = CmpNotifyChangeKey(KeyBody, EventObject, CompletionFilter, WatchTree, FALSE, PreviousMode);
+            IoStatusBlock->Status = Status;
+            IoStatusBlock->Information = 0;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
     }
-    _SEH2_END;
 
     if (EventObject)
     {
-        KeSetEvent(EventObject, IO_NO_INCREMENT, FALSE);
+        if (!Asynchronous) KeSetEvent(EventObject, IO_NO_INCREMENT, FALSE);
         ObDereferenceObject(EventObject);
     }
     ObDereferenceObject(KeyBody);
