@@ -143,7 +143,7 @@ NTSTATUS NTAPI RtlUTF8ToUnicodeN(WCHAR *uni_dest, ULONG uni_bytes_max,
 
     if (!utf8_src)
         return STATUS_INVALID_PARAMETER_4;
-    if (!uni_bytes_written)
+    if (!uni_dest && !uni_bytes_written)
         return STATUS_INVALID_PARAMETER;
 
     written = 0;
@@ -259,6 +259,7 @@ NTSTATUS NTAPI RtlUTF8ToUnicodeN(WCHAR *uni_dest, ULONG uni_bytes_max,
         }
     }
 
-    *uni_bytes_written = written * sizeof(WCHAR);
+    if (uni_bytes_written)
+        *uni_bytes_written = written * sizeof(WCHAR);
     return status;
 }
