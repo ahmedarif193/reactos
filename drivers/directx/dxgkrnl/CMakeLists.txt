@@ -54,6 +54,7 @@ list(APPEND SOURCE
     context_order.c
     dma.c
     present.c
+    presenttrace.c
     redirection.c
     ntgdi_exports.c
     sync.c

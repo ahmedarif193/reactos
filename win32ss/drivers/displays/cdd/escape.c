@@ -15,6 +15,8 @@
  */
 
 #include "cdd.h"
+#define DPT_KERNEL
+#include <reactos/dwmpresenttrace.h>
 #include <reactos/rpi5vc4_xpdm.h>
 
 #define CDD_OPENGL_ICD_VERSION 1
@@ -130,7 +132,8 @@ RcddEscape(
 
       RequestedEscape = *(PULONG)pvIn;
       if (RequestedEscape == CDD_ESCAPE_SUPPRESS_CURSOR ||
-          RequestedEscape == CDD_ESCAPE_PRESENT_STATS)
+          RequestedEscape == CDD_ESCAPE_PRESENT_STATS ||
+          RequestedEscape == CDD_ESCAPE_PRESENT_CAPTURE)
       {
          return 1;
       }
@@ -249,6 +252,16 @@ RcddEscape(
        pvOut != NULL && cjOut >= sizeof(RPI5VC4_VBLANK_RESULT))
    {
       return RcddGpuEscape(ppdev, iEsc, NULL, 0, pvOut, cjOut);
+   }
+
+   if (iEsc == CDD_ESCAPE_PRESENT_CAPTURE)
+   {
+      ULONG Returned;
+      if (!pvIn || cjIn != sizeof(DPT_REQUEST) || !pvOut || cjOut < sizeof(DPT_DOMAIN))
+         return 0;
+      return EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_DXGK_PRESENT_CAPTURE,
+                 pvIn, cjIn, pvOut, sizeof(DPT_DOMAIN), &Returned) == 0 &&
+             Returned == sizeof(DPT_DOMAIN);
    }
 
    if (iEsc == CDD_ESCAPE_PRESENT_STATS)

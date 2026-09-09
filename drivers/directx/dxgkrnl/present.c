@@ -44,6 +44,7 @@
  */
 
 #include "dxgkrnl_private.h"
+#include "presenttrace.h"
 #include "vidmm.h"
 #include "vidsch.h"
 #include "present.h"
@@ -2286,7 +2287,7 @@ DxgkpExecuteCpuPresent(
  * IRQL: PASSIVE_LEVEL
  * ====================================================================== */
 static NTSTATUS
-DxgkpExecuteFullPresent(
+DxgkpExecuteFullPresentMeasured(
     _In_ PDXGKRNL_ADAPTER        Adapter,
     _In_ PDXGKRNL_PRESENT_ENTRY  Entry)
 {
@@ -3045,7 +3046,11 @@ DxgkpExecuteFullPresent(
         }
         Entry->DeviceWork = NULL;
         DxgkPublishSubmittedFence(Adapter, PresentNode, SubmissionFenceId);
-        Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
+        {
+            DPT_SCOPE DdiTrace = DptBegin(&g_DxgPresentTrace, DPT_KMD_SUBMIT);
+            Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
+            DptEnd(&g_DxgPresentTrace, DdiTrace, NT_SUCCESS(Status), 0);
+        }
         DxgkReleaseKmdCall(Adapter);
         if (!NT_SUCCESS(Status))
             KeBugCheckEx(0x119, 0x2, (ULONG_PTR)Status, (ULONG_PTR)&SubmitArgs, (ULONG_PTR)Adapter);
@@ -3163,6 +3168,17 @@ PresentCleanup:
     if (KmdTransaction)
         DxgkEndKmdTransaction(Adapter);
     return Status;
+}
+
+static NTSTATUS
+DxgkpExecuteFullPresent(
+    _In_ PDXGKRNL_ADAPTER        Adapter,
+    _In_ PDXGKRNL_PRESENT_ENTRY  Entry)
+{
+    DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_PRESENT);
+    NTSTATUS Result = DxgkpExecuteFullPresentMeasured(Adapter, Entry);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Result), 0);
+    return Result;
 }
 
 /* ========================================================================

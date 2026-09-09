@@ -10,6 +10,7 @@
  */
 
 #include "dxgkrnl_private.h"
+#include "presenttrace.h"
 #include <ndk/psfuncs.h>
 
 #define DXGK_CPU_SIGNAL_ALLOW_FENCE_REWIND 0x00000004UL
@@ -2287,7 +2288,7 @@ DxgkSyncPublishFenceBatch(
 }
 
 static NTSTATUS
-DxgkpSyncObjectPublishRetiredFence(
+DxgkpSyncObjectPublishRetiredFenceMeasured(
     _In_ PDXGKRNL_SYNC_OBJECT SyncObj,
     _In_ UINT64 FenceValue)
 {
@@ -2297,6 +2298,17 @@ DxgkpSyncObjectPublishRetiredFence(
     Objects[0] = SyncObj;
     FenceValues[0] = FenceValue;
     return DxgkSyncPublishFenceBatch(Objects, FenceValues, RTL_NUMBER_OF(Objects), FALSE, FALSE);
+}
+
+static NTSTATUS
+DxgkpSyncObjectPublishRetiredFence(
+    _In_ PDXGKRNL_SYNC_OBJECT SyncObj,
+    _In_ UINT64 FenceValue)
+{
+    DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_SIGNAL);
+    NTSTATUS Result = DxgkpSyncObjectPublishRetiredFenceMeasured(SyncObj, FenceValue);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Result), 0);
+    return Result;
 }
 
 VOID
