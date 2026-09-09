@@ -23,6 +23,7 @@ add_dependencies(mmdevapi_child dxsdk)
 
 add_executable(mmdevapi_apitest
     deviceenum.c
+    renderstream.c
     sessionapi.c
     sessioncrossproc.c
     sessionpublic.c
