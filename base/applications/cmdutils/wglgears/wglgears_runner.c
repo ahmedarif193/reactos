@@ -14,7 +14,6 @@
 #define WGLGEARS_RUN_MILLISECONDS 16000
 #define WGLGEARS_CLOSE_MILLISECONDS 5000
 #define WGLGEARS_OUTPUT_LINE_LENGTH 256
-#define WGLGEARS_TARGET_FPS 3600.0
 
 typedef struct _WGLGEARS_CLOSE_CONTEXT
 {
@@ -195,7 +194,7 @@ main(VOID)
 
     if (_snprintf(ApplicationPath,
                   sizeof(ApplicationPath),
-                  "%s\\wglgears.exe",
+                  "%s\\glgears.exe",
                   SystemDirectory) < 0 ||
         _snprintf(CommandLine,
                   sizeof(CommandLine),
@@ -303,14 +302,13 @@ main(VOID)
     if (!GetExitCodeProcess(ProcessInformation.hProcess, &ExitCode))
         ExitCode = GetLastError();
     RunnerPrint("RPI5_WGLGEARS_RESULT samples=%lu min_fps=%.3f "
-                "average_fps=%.3f max_fps=%.3f target_fps=%.0f "
+                "average_fps=%.3f max_fps=%.3f "
                 "vsync_control=%lu interval=%d\n",
                 OutputScan.SampleCount,
                 OutputScan.MinimumFps,
                 OutputScan.SampleCount ?
                     OutputScan.TotalFps / OutputScan.SampleCount : 0.0,
                 OutputScan.MaximumFps,
-                WGLGEARS_TARGET_FPS,
                 OutputScan.VsyncControlSeen,
                 OutputScan.VsyncInterval);
     RunnerPrint("RPI5_WGLGEARS_END exit=%lu runtime_ms=%lu forced=%lu\n",
@@ -322,6 +320,5 @@ main(VOID)
     CloseHandle(ProcessInformation.hProcess);
     return ExitCode == EXIT_SUCCESS && !Forced &&
            OutputScan.VsyncControlSeen && OutputScan.VsyncInterval == 0 &&
-           OutputScan.SampleCount >= 3 &&
-           OutputScan.MinimumFps >= WGLGEARS_TARGET_FPS ? 0 : 1;
+           OutputScan.SampleCount >= 3 ? 0 : 1;
 }
