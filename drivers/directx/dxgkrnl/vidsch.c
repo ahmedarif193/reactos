@@ -2078,27 +2078,16 @@ Exit:
  * Queued by VidSchNotifyInterrupt from ISR context.  Runs at
  * DISPATCH_LEVEL and processes completed commands.
  * ====================================================================== */
-static KDEFERRED_ROUTINE VidSchpCompletionDpcRoutine;
-
 static VOID
-NTAPI
-VidSchpCompletionDpcRoutine(
-    _In_     PKDPC  Dpc,
-    _In_opt_ PVOID  DeferredContext,
-    _In_opt_ PVOID  SystemArgument1,
-    _In_opt_ PVOID  SystemArgument2)
+VidSchpProcessCompletion(
+    _In_ PVIDSCH_ENGINE Engine)
 {
-    PVIDSCH_ENGINE Engine = (PVIDSCH_ENGINE)DeferredContext;
     PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched;
     LONG Completed;
     KIRQL OldIrql;
     BOOLEAN PreemptionInterrupt;
     BOOLEAN PreemptionCompleted = FALSE;
     ULONG CompletedPreemptionFence = 0;
-
-    UNREFERENCED_PARAMETER(Dpc);
-    UNREFERENCED_PARAMETER(SystemArgument1);
-    UNREFERENCED_PARAMETER(SystemArgument2);
 
     if (Engine == NULL)
         return;
@@ -2230,7 +2219,6 @@ VidSchpCompletionDpcRoutine(
     /* Signal completion event so VidSchWaitForIdle can wake up. */
     KeSetEvent(&Engine->CompletionEvent, IO_NO_INCREMENT, FALSE);
 
-    VidSchpReleaseCall(Engine->Adapter);
 }
 
 /* ========================================================================
@@ -2784,7 +2772,6 @@ VidSchInitialize(
         KeInitializeEvent(&Engine->PreemptionCompletedEvent, NotificationEvent, FALSE);
         KeInitializeEvent(&Engine->WorkersDrainedEvent, NotificationEvent, TRUE);
 
-        KeInitializeDpc(&Engine->CompletionDpc, VidSchpCompletionDpcRoutine, Engine);
 
         KeInitializeTimer(&Engine->TdrTimer);
         KeInitializeDpc(&Engine->TdrDpc, VidSchpTdrDpcRoutine, Engine);
@@ -2840,8 +2827,6 @@ VidSchPrepareForStop(
 
         KeCancelTimer(&Engine->TdrTimer);
         KeRemoveQueueDpc(&Engine->TdrDpc);
-        if (KeRemoveQueueDpc(&Engine->CompletionDpc))
-            VidSchpReleaseCall(Adapter);
     }
     KeFlushQueuedDpcs();
 
@@ -3756,12 +3741,7 @@ VidSchNotifyInterrupt(
         InterlockedExchange(
             &Engine->PageFaultInterruptState, 2);
 
-        VidSchpReferenceActiveCall(Adapter);
-        if (!KeInsertQueueDpc(
-                &Engine->CompletionDpc, NULL, NULL))
-        {
-            VidSchpReleaseCall(Adapter);
-        }
+        InterlockedExchange(&Engine->CompletionPending, 1);
         return;
     }
 #endif
@@ -3816,26 +3796,54 @@ VidSchNotifyInterrupt(
         VidSchpUpdateFence(&Engine->LastCompletedFence, FenceSnapshot.LastCompletedFence);
 
     if (Engine != NULL)
-    {
-        VidSchpReferenceActiveCall(Adapter);
-        if (!KeInsertQueueDpc(&Engine->CompletionDpc, NULL, NULL))
-            VidSchpReleaseCall(Adapter);
-    }
+        InterlockedExchange(&Engine->CompletionPending, 1);
 }
 
 /*
  * VidSchNotifyDpc
  *
- * Called from DISPATCH_LEVEL after the miniport's DPC routine. Interrupt
- * publication already queued the relevant per-engine completion DPC, so this
- * is the explicit protocol boundary and does not duplicate that queueing.
+ * Called by the miniport at DISPATCH_LEVEL for events it published through
+ * NotifyInterrupt. Process them here rather than queueing a second DPC.
  */
 VOID
 VidSchNotifyDpc(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    /* The per-engine CompletionDpc handles actual work. */
-    UNREFERENCED_PARAMETER(Adapter);
+    PVIDSCH_CONTEXT Ctx;
+    ULONG Index;
+
+    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
+    if (!VidSchpAcquireCall(Adapter))
+        return;
+    Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    if (Ctx != NULL && Ctx->Initialized)
+    {
+        for (Index = 0; Index < Ctx->EngineCount; ++Index)
+        {
+            PVIDSCH_ENGINE Engine = &Ctx->Engines[Index];
+
+            /* A submit made during cleanup may synchronously notify another
+             * completion. Concurrent miniport DPCs can do the same. Publish
+             * pending work first, and let one owner consume it. Never spin
+             * waiting for that owner: it may be this CPU's outer callback. */
+            while (InterlockedCompareExchange(
+                       &Engine->CompletionPending, 0, 0) != 0)
+            {
+                if (InterlockedCompareExchange(
+                        &Engine->CompletionActive, 1, 0) != 0)
+                    break;
+
+                while (InterlockedExchange(&Engine->CompletionPending, 0) != 0)
+                    VidSchpProcessCompletion(Engine);
+
+                InterlockedExchange(&Engine->CompletionActive, 0);
+                /* Recheck after releasing ownership. A publisher could
+                 * have set Pending and observed Active just before release;
+                 * without this check its notification would be stranded. */
+            }
+        }
+    }
+    VidSchpReleaseCall(Adapter);
 }
 
 /*

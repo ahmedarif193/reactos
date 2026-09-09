@@ -334,10 +334,12 @@ typedef struct _VIDSCH_ENGINE
     KEVENT                      CompletionEvent;
 
     /*
-     * DPC object for deferred completion processing.
-     * Queued by VidSchNotifyInterrupt from ISR context.
+     * ISR publishes pending work; the miniport's NotifyDpc drains it.
+     * A separate ownership bit serializes concurrent/reentrant NotifyDpc
+     * callbacks without holding a spin lock across terminal cleanup.
      */
-    KDPC                        CompletionDpc;
+    volatile LONG               CompletionPending;
+    volatile LONG               CompletionActive;
 
     /*
      * Reserved per-engine TDR timer. The adapter watchdog currently owns
