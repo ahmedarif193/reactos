@@ -13,6 +13,7 @@
 #include <reactos/ntdcomp.h>
 
 #include "dxsurface.h"
+#include "gpucomp.h"
 
 DWORD_PTR NTAPI NtUserCallOneParam(DWORD_PTR Param, DWORD Routine);
 LONG NTAPI NtSetTimerResolution(ULONG DesiredResolution, BOOLEAN SetResolution,
@@ -352,11 +353,14 @@ DwmEnsureBlurBuffers(LONG Width, LONG Height)
     if (Width <= 0 || Height <= 0 ||
         (SIZE_T)Width > (SIZE_T)-1 / (SIZE_T)Height)
         return FALSE;
-    PixelCount = (SIZE_T)Width * (SIZE_T)Height;
+    /* All three convolution surfaces are half-resolution. */
+    PixelCount = (((SIZE_T)Width + 1) / 2) * (((SIZE_T)Height + 1) / 2);
     if (PixelCount > (SIZE_T)-1 / sizeof(ULONG))
         return FALSE;
     LineCount = (SIZE_T)(Width > Height ? Width : Height) +
                 2 * DWM_BLUR_RADIUS_MAX + 8;
+    if (LineCount > (SIZE_T)-1 / (3 * sizeof(ULONG)))
+        return FALSE;
     if (g_blurSource != NULL && g_blurTemp != NULL && g_blurPass != NULL &&
         g_blurLine != NULL && g_blurPixelCount == PixelCount &&
         g_blurLineCount == LineCount)
@@ -369,7 +373,9 @@ DwmEnsureBlurBuffers(LONG Width, LONG Height)
                         PAGE_READWRITE);
     Pass = VirtualAlloc(NULL, Bytes, MEM_COMMIT | MEM_RESERVE,
                         PAGE_READWRITE);
-    Line = VirtualAlloc(NULL, LineCount * sizeof(ULONG),
+    /* The horizontal pass uses pixels; the vertical pass reuses this
+     * scratch for three 32-bit channel sums per column. */
+    Line = VirtualAlloc(NULL, LineCount * 3 * sizeof(ULONG),
                         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (Source == NULL || Temp == NULL || Pass == NULL || Line == NULL)
     {
@@ -469,10 +475,11 @@ DwmMaterialFinish(ULONG Pixel, LONG x, LONG y)
 
 static void
 DwmDownsampleHalf(const ULONG *Composition, LONG Width, LONG Height,
-                  ULONG *Half, LONG HalfWidth,
+                  ULONG * __restrict Half, LONG HalfWidth,
                   LONG Left, LONG Top, LONG Right, LONG Bottom)
 {
     LONG hx, hy;
+    LONG InteriorRight = Right < Width / 2 ? Right : Width / 2;
 
     for (hy = Top; hy < Bottom; ++hy)
     {
@@ -481,9 +488,9 @@ DwmDownsampleHalf(const ULONG *Composition, LONG Width, LONG Height,
         const ULONG *Row1 = Composition + (SIZE_T)y1 * Width;
         ULONG *Out = Half + (SIZE_T)hy * HalfWidth;
 
-        for (hx = Left; hx < Right; ++hx)
+        for (hx = Left; hx < InteriorRight; ++hx)
         {
-            LONG x0 = hx * 2, x1 = (x0 + 1 < Width) ? x0 + 1 : x0;
+            LONG x0 = hx * 2, x1 = x0 + 1;
             ULONG p0 = Row0[x0], p1 = Row0[x1], p2 = Row1[x0], p3 = Row1[x1];
             ULONG rb = (p0 & 0xff00ffu) + (p1 & 0xff00ffu) +
                        (p2 & 0xff00ffu) + (p3 & 0xff00ffu);
@@ -491,6 +498,15 @@ DwmDownsampleHalf(const ULONG *Composition, LONG Width, LONG Height,
                       (p2 & 0xff00u) + (p3 & 0xff00u);
 
             Out[hx] = 0xff000000u | ((rb >> 2) & 0xff00ffu) | ((g >> 2) & 0xff00u);
+        }
+        /* Only an odd-width last column needs a replicated neighbour.
+         * Keeping it outside the interior loop permits paired vector loads. */
+        if (hx < Right)
+        {
+            ULONG p0 = Row0[hx * 2], p1 = Row1[hx * 2];
+            ULONG rb = (p0 & 0xff00ffu) + (p1 & 0xff00ffu);
+            ULONG g = (p0 & 0xff00u) + (p1 & 0xff00u);
+            Out[hx] = 0xff000000u | ((rb >> 1) & 0xff00ffu) | ((g >> 1) & 0xff00u);
         }
     }
 }
@@ -532,24 +548,99 @@ DwmBoxBlurPass(const ULONG *Source, ULONG *Dest, LONG Width, LONG Height,
         }
     }
 
-    Span = Bottom - Top + 2 * Radius + 1;
-    for (x = Left; x < Right; ++x)
+    /* Separate channel sums keep the vertical pass contiguous and permit
+     * four 32-bit channels to be averaged together by the compiler. Each
+     * sum is at most Divisor*255; multiplying by ceil(2^24/Divisor) fits in
+     * 32 bits for every supported radius and preserves the original floor. */
     {
-        ULONGLONG Sum = 0;
+        ULONG * __restrict Red = Line;
+        ULONG * __restrict Green = Line + (Right - Left);
+        ULONG * __restrict Blue = Line + 2 * (Right - Left);
+        ULONG Factor = (ULONG)Reciprocal;
 
-        for (i = 0; i < Span; ++i)
+        for (x = Left; x < Right; ++x)
+            Red[x - Left] = Green[x - Left] = Blue[x - Left] = 0;
+        for (i = -Radius; i <= Radius; ++i)
         {
-            Line[i] = g_blurTemp[(SIZE_T)DwmClampCoordinate(Top - Radius + i,
-                                                             Height) * Width + x];
+            const ULONG *Row = g_blurTemp +
+                (SIZE_T)DwmClampCoordinate(Top + i, Height) * Width;
+            for (x = Left; x < Right; ++x)
+            {
+                ULONG Pixel = Row[x];
+                Red[x - Left] += (Pixel >> 16) & 255;
+                Green[x - Left] += (Pixel >> 8) & 255;
+                Blue[x - Left] += Pixel & 255;
+            }
         }
-        for (i = 0; i <= 2 * Radius; ++i)
-            Sum += DwmPackPixel(Line[i]);
         for (y = Top; y < Bottom; ++y)
         {
-            Dest[(SIZE_T)y * Width + x] = DwmUnpackAverage(Sum, Reciprocal);
-            Sum += DwmPackPixel(Line[y - Top + 2 * Radius + 1]);
-            Sum -= DwmPackPixel(Line[y - Top]);
+            ULONG * __restrict Out = Dest + (SIZE_T)y * Width;
+            const ULONG *Entering = g_blurTemp +
+                (SIZE_T)DwmClampCoordinate(y + Radius + 1, Height) * Width;
+            const ULONG *Leaving = g_blurTemp +
+                (SIZE_T)DwmClampCoordinate(y - Radius, Height) * Width;
+
+            for (x = Left; x < Right; ++x)
+            {
+                Out[x] = 0xff000000u |
+                         ((Red[x - Left] * Factor) >> 24 << 16) |
+                         ((Green[x - Left] * Factor) >> 24 << 8) |
+                         ((Blue[x - Left] * Factor) >> 24);
+            }
+            if (y + 1 < Bottom)
+            {
+                for (x = Left; x < Right; ++x)
+                {
+                    ULONG In = Entering[x], Old = Leaving[x];
+                    Red[x - Left] += ((In >> 16) & 255) - ((Old >> 16) & 255);
+                    Green[x - Left] += ((In >> 8) & 255) - ((Old >> 8) & 255);
+                    Blue[x - Left] += (In & 255) - (Old & 255);
+                }
+            }
         }
+    }
+}
+
+
+/* A channel-minus-luma difference is in [-255,255]. In that domain this
+ * 16-bit reciprocal gives exactly the scalar /100, including truncation
+ * toward zero, while keeping the multiply in 32-bit SIMD lanes. */
+static LONG
+DwmSaturateDelta(LONG Delta)
+{
+    const ULONG Factor = (65536u * (100u + DWM_MATERIAL_SATURATION) + 99u) / 100u;
+    ULONG Magnitude = Delta < 0 ? (ULONG)-Delta : (ULONG)Delta;
+    LONG Value = (LONG)((Magnitude * Factor) >> 16);
+    return Delta < 0 ? -Value : Value;
+}
+
+static void
+DwmMaterialFinishRow(ULONG * __restrict Row, LONG Left, LONG Right, LONG y)
+{
+    while (Left < Right)
+    {
+        LONG Count = 64 - (Left & 63), i;
+        const BYTE * __restrict Noise = g_noiseTile + ((y & 63) << 6) + (Left & 63);
+        ULONG * __restrict Out = Row + Left;
+        if (Count > Right - Left) Count = Right - Left;
+        /* Contiguous noise loads let the compiler process several pixels
+         * together, without a wraparound lookup in each SIMD lane. */
+        for (i = 0; i < Count; ++i)
+        {
+            ULONG Pixel = Out[i];
+            LONG Red = (Pixel >> 16) & 255, Green = (Pixel >> 8) & 255;
+            LONG Blue = Pixel & 255;
+            LONG Luma = (Red * 77 + Green * 151 + Blue * 28) >> 8;
+            LONG Grain = (LONG)Noise[i] - DWM_MATERIAL_NOISE;
+            Red = Luma + DwmSaturateDelta(Red - Luma) + Grain;
+            Green = Luma + DwmSaturateDelta(Green - Luma) + Grain;
+            Blue = Luma + DwmSaturateDelta(Blue - Luma) + Grain;
+            if (Red < 0) Red = 0; else if (Red > 255) Red = 255;
+            if (Green < 0) Green = 0; else if (Green > 255) Green = 255;
+            if (Blue < 0) Blue = 0; else if (Blue > 255) Blue = 255;
+            Out[i] = 0xff000000u | ((ULONG)Red << 16) | ((ULONG)Green << 8) | (ULONG)Blue;
+        }
+        Left += Count;
     }
 }
 
@@ -574,6 +665,28 @@ DwmBlurUpsample(const ULONG *Half, LONG HalfWidth, LONG HalfHeight,
         Row1 = Half + (SIZE_T)hy1 * HalfWidth;
         for (x = Left; x < Right; ++x)
         {
+            /* Adjacent interior pixels share the same four samples. Keep
+             * the unrounded vertical sums until the final /16, so both
+             * outputs are identical to the original bilinear weights. */
+            if (Alpha == 255 && x > 0 && (x & 1) && x + 1 < Right &&
+                x / 2 + 1 < HalfWidth)
+            {
+                LONG hx = x / 2;
+                ULONG p00 = Row0[hx], p10 = Row0[hx + 1];
+                ULONG p01 = Row1[hx], p11 = Row1[hx + 1];
+                ULONG rb0 = (p00 & 0xff00ffu) * (4 - fy) + (p01 & 0xff00ffu) * fy;
+                ULONG rb1 = (p10 & 0xff00ffu) * (4 - fy) + (p11 & 0xff00ffu) * fy;
+                ULONG g0 = (p00 & 0xff00u) * (4 - fy) + (p01 & 0xff00u) * fy;
+                ULONG g1 = (p10 & 0xff00u) * (4 - fy) + (p11 & 0xff00u) * fy;
+                ULONG First = (((rb0 * 3 + rb1) >> 4) & 0xff00ffu) |
+                              (((g0 * 3 + g1) >> 4) & 0xff00u);
+                ULONG Second = (((rb0 + rb1 * 3) >> 4) & 0xff00ffu) |
+                               (((g0 + g1 * 3) >> 4) & 0xff00u);
+                Out[x] = First;
+                Out[x + 1] = Second;
+                ++x;
+                continue;
+            }
             LONG qx = 2 * x - 1;
             LONG hx0 = qx >> 2, fx = qx & 3, hx1;
             ULONG w00, w10, w01, w11, p00, p10, p01, p11, rb, g, Blurred;
@@ -608,6 +721,7 @@ DwmBlurUpsample(const ULONG *Half, LONG HalfWidth, LONG HalfHeight,
             }
             Out[x] = Blurred;
         }
+        if (Alpha == 255) DwmMaterialFinishRow(Out, Left, Right, y);
     }
 }
 
@@ -658,19 +772,182 @@ DwmClipBlurRect(const RECTL *Rectangle, LONG WindowX, LONG WindowY,
     return TRUE;
 }
 
+/*
+ * Which blur path won on this machine: negative while still measuring, 0 for
+ * software, positive for hardware. Small taskbar strips and large window
+ * backdrops have separate decisions because GPU setup and transfer costs do
+ * not scale like the software filter.
+ */
+#define DWM_BLUR_CALIBRATION_SAMPLES 12
+#define DWM_BLUR_LARGE_PIXELS 65536
+static int g_blurUseGpu = -1;
+static int g_blurLargeUseGpu = -1;
+static ULONG g_blurCalibrationFrames;
+static ULONG g_blurLargeCalibrationFrames;
+static ULONGLONG g_blurGpuTicks, g_blurGpuPixels;
+static ULONGLONG g_blurCpuTicks, g_blurCpuPixels;
+static ULONGLONG g_blurLargeGpuTicks, g_blurLargeGpuPixels;
+static ULONGLONG g_blurLargeCpuTicks, g_blurLargeCpuPixels;
+static ULONG g_blurGpuDeclines;
+static ULONG g_blurLargeGpuDeclines;
+static BOOL g_blurGpuWarmed;
+
+/* The software cascade, factored out so both callers run the same code. */
+static const ULONG *
+DwmBlurSoftwarePasses(LONG hL, LONG hT, LONG hR, LONG hB,
+                      LONG HalfWidth, LONG HalfHeight, LONG HalfRadius)
+{
+    const ULONG *Result = g_blurSource;
+    LONG Pass;
+
+    for (Pass = DWM_BLUR_PASSES - 1; Pass >= 0; --Pass)
+    {
+        LONG Grow = HalfRadius * Pass;
+        LONG Left = hL - Grow, Top = hT - Grow;
+        LONG Right = hR + Grow, Bottom = hB + Grow;
+        ULONG *Dest = (Result == g_blurSource) ? g_blurPass : g_blurSource;
+
+        if (Left < 0) Left = 0;
+        if (Top < 0) Top = 0;
+        if (Right > HalfWidth) Right = HalfWidth;
+        if (Bottom > HalfHeight) Bottom = HalfHeight;
+        DwmBoxBlurPass(Result, Dest, HalfWidth, HalfHeight,
+                       Left, Top, Right, Bottom, HalfRadius);
+        Result = Dest;
+    }
+    return Result;
+}
+
+static RECTL
+DwmBlurHalfBounds(const RECTL *Rect, LONG Grow, LONG Width, LONG Height)
+{
+    /* Bilinear upsampling reads the neighbour on either side of the output
+     * interval. Include it before adding the convolution's dependency halo. */
+    RECTL Half = {Rect->left / 2 - 1 - Grow,
+                  Rect->top / 2 - 1 - Grow,
+                  (Rect->right + 1) / 2 + 1 + Grow,
+                  (Rect->bottom + 1) / 2 + 1 + Grow};
+
+    if (Half.left < 0) Half.left = 0;
+    if (Half.top < 0) Half.top = 0;
+    if (Half.right > Width) Half.right = Width;
+    if (Half.bottom > Height) Half.bottom = Height;
+    return Half;
+}
+
+static const ULONG *
+DwmBlurSoftwareRegions(const ULONG *Composition, LONG Width, LONG Height,
+                        const RECTL *Regions, ULONG Count, LONG HalfRadius)
+{
+    LONG HalfWidth = (Width + 1) / 2, HalfHeight = (Height + 1) / 2;
+    const ULONG *Result = g_blurSource;
+    LONG Pass;
+    ULONG Index;
+
+    /* Snapshot every input before filtering. Processing one strip all the
+     * way through upsampling first would blur its neighbours a second time. */
+    for (Index = 0; Index < Count; ++Index)
+    {
+        RECTL Half = DwmBlurHalfBounds(&Regions[Index],
+                                       HalfRadius * DWM_BLUR_PASSES,
+                                       HalfWidth, HalfHeight);
+        DwmDownsampleHalf(Composition, Width, Height, g_blurSource, HalfWidth,
+                          Half.left, Half.top, Half.right, Half.bottom);
+    }
+    for (Pass = DWM_BLUR_PASSES - 1; Pass >= 0; --Pass)
+    {
+        ULONG *Dest = (Result == g_blurSource) ? g_blurPass : g_blurSource;
+
+        for (Index = 0; Index < Count; ++Index)
+        {
+            RECTL Half = DwmBlurHalfBounds(&Regions[Index], HalfRadius * Pass,
+                                           HalfWidth, HalfHeight);
+            DwmBoxBlurPass(Result, Dest, HalfWidth, HalfHeight,
+                           Half.left, Half.top, Half.right, Half.bottom,
+                           HalfRadius);
+        }
+        Result = Dest;
+    }
+    return Result;
+}
+
+/*
+ * Accumulates one timing sample and, once both paths have been exercised
+ * enough, latches the faster.  Comparing time per pixel rather than per frame
+ * keeps regions of different sizes commensurable.
+ */
 static void
-DwmApplyBlur(ULONG *Composition, LONG Width, LONG Height,
+DwmBlurRecordSample(BOOL Gpu, BOOL Large, const RECT *Region, LONGLONG Ticks)
+{
+    ULONGLONG Pixels;
+    int *UseGpu = Large ? &g_blurLargeUseGpu : &g_blurUseGpu;
+    ULONG *Frames = Large ? &g_blurLargeCalibrationFrames :
+                            &g_blurCalibrationFrames;
+    ULONGLONG *GpuTicks = Large ? &g_blurLargeGpuTicks : &g_blurGpuTicks;
+    ULONGLONG *GpuPixels = Large ? &g_blurLargeGpuPixels : &g_blurGpuPixels;
+    ULONGLONG *CpuTicks = Large ? &g_blurLargeCpuTicks : &g_blurCpuTicks;
+    ULONGLONG *CpuPixels = Large ? &g_blurLargeCpuPixels : &g_blurCpuPixels;
+
+    if (Ticks < 0)
+        return;
+    Pixels = (ULONGLONG)(Region->right - Region->left) *
+             (ULONGLONG)(Region->bottom - Region->top);
+    if (Pixels == 0)
+        return;
+
+    if (Gpu)
+    {
+        *GpuTicks += (ULONGLONG)Ticks;
+        *GpuPixels += Pixels;
+    }
+    else
+    {
+        *CpuTicks += (ULONGLONG)Ticks;
+        *CpuPixels += Pixels;
+    }
+    ++*Frames;
+
+    if (*Frames < DWM_BLUR_CALIBRATION_SAMPLES ||
+        *GpuPixels == 0 || *CpuPixels == 0)
+    {
+        return;
+    }
+
+    /*
+     * Cross-multiplied so the comparison stays in integers:
+     *   gpuTicks/gpuPixels < cpuTicks/cpuPixels
+     */
+    if (*GpuTicks * *CpuPixels < *CpuTicks * *GpuPixels)
+    {
+        *UseGpu = 1;
+        OutputDebugStringA(Large ?
+            "DWM: large blur path = GPU (measured faster)\n" :
+            "DWM: small blur path = GPU (measured faster)\n");
+    }
+    else
+    {
+        *UseGpu = 0;
+        OutputDebugStringA(Large ?
+            "DWM: large blur path = software (measured faster)\n" :
+            "DWM: small blur path = software (measured faster)\n");
+    }
+}
+
+static void
+DwmApplyBlur(const ULONG *Input, ULONG *Composition, LONG Width, LONG Height,
              LONG ClipLeft, LONG ClipTop, LONG ClipRight, LONG ClipBottom,
              const DWM_WIN *Window, const RECTL *Rectangles)
 {
     RECTL Entire = {0, 0, Window->cx, Window->cy};
     RECTL Union = {0, 0, 0, 0}, Clipped;
+    RECTL Regions[4];
     const RECTL *Rectangle;
     ULONG Index, Count, Alpha = 255;
     LONG Radius, HalfRadius, HalfWidth, HalfHeight, WindowX, WindowY;
-    LONG hL, hT, hR, hB, Reach, Pass;
-    const ULONG *Result;
+    LONG hL, hT, hR, hB, Reach;
+    const ULONG *Result = NULL;
     BOOL HaveUnion = FALSE;
+    ULONG RegionCount = 0;
 
     if (!(Window->BlurFlags & DWM_BLUR_ENABLE) ||
         Window->cx <= 0 || Window->cy <= 0)
@@ -710,6 +987,8 @@ DwmApplyBlur(ULONG *Composition, LONG Width, LONG Height,
                              ClipLeft, ClipTop, ClipRight, ClipBottom,
                              Width, Height, &Clipped))
             continue;
+        if (RegionCount < ARRAYSIZE(Regions))
+            Regions[RegionCount++] = Clipped;
         if (!HaveUnion)
         {
             Union = Clipped;
@@ -724,33 +1003,166 @@ DwmApplyBlur(ULONG *Composition, LONG Width, LONG Height,
     if (!HaveUnion)
         return;
 
-    hL = Union.left / 2;
-    hT = Union.top / 2;
-    hR = (Union.right + 1) / 2;
-    hB = (Union.bottom + 1) / 2;
+
+    /* Non-client glass is four thin strips, not the opaque client between
+     * them. Filter the strips separately when their halos cost less than the
+     * bounding box. Keep the existing GPU calibration for dense regions. */
+    if (Count <= ARRAYSIZE(Regions) && RegionCount > 1 &&
+        (g_blurUseGpu == 0 || !DwmGpuIsActive()))
+    {
+        ULONGLONG SparsePixels = 0;
+        RECTL Dense = DwmBlurHalfBounds(&Union,
+                                        HalfRadius * DWM_BLUR_PASSES,
+                                        HalfWidth, HalfHeight);
+
+        for (Index = 0; Index < RegionCount; ++Index)
+        {
+            RECTL Half = DwmBlurHalfBounds(&Regions[Index],
+                                           HalfRadius * DWM_BLUR_PASSES,
+                                           HalfWidth, HalfHeight);
+            SparsePixels += (ULONGLONG)(Half.right - Half.left) *
+                            (Half.bottom - Half.top);
+        }
+        if (SparsePixels < (ULONGLONG)(Dense.right - Dense.left) *
+                           (Dense.bottom - Dense.top))
+        {
+            Result = DwmBlurSoftwareRegions(Input, Width, Height,
+                                             Regions, RegionCount, HalfRadius);
+            goto Upsample;
+        }
+    }
+
+    Clipped = DwmBlurHalfBounds(&Union, 0, HalfWidth, HalfHeight);
+    hL = Clipped.left;
+    hT = Clipped.top;
+    hR = Clipped.right;
+    hB = Clipped.bottom;
     Reach = HalfRadius * DWM_BLUR_PASSES + 2;
-    DwmDownsampleHalf(Composition, Width, Height, g_blurSource, HalfWidth,
+    DwmDownsampleHalf(Input, Width, Height, g_blurSource, HalfWidth,
                       (hL - Reach < 0) ? 0 : hL - Reach,
                       (hT - Reach < 0) ? 0 : hT - Reach,
                       (hR + Reach > HalfWidth) ? HalfWidth : hR + Reach,
                       (hB + Reach > HalfHeight) ? HalfHeight : hB + Reach);
 
-    Result = g_blurSource;
-    for (Pass = DWM_BLUR_PASSES - 1; Pass >= 0; --Pass)
-    {
-        LONG Grow = HalfRadius * Pass;
-        LONG Left = hL - Grow, Top = hT - Grow;
-        LONG Right = hR + Grow, Bottom = hB + Grow;
-        ULONG *Dest = (Result == g_blurSource) ? g_blurPass : g_blurSource;
 
-        if (Left < 0) Left = 0;
-        if (Top < 0) Top = 0;
-        if (Right > HalfWidth) Right = HalfWidth;
-        if (Bottom > HalfHeight) Bottom = HalfHeight;
-        DwmBoxBlurPass(Result, Dest, HalfWidth, HalfHeight,
-                       Left, Top, Right, Bottom, HalfRadius);
-        Result = Dest;
+    /*
+     * The software passes below are a sliding-window box blur: O(1) work per
+     * pixel per axis, roughly six integer operations, independent of radius.
+     * That is already cheap, so a GPU is not automatically the faster choice
+     * here -- the hardware path has to pay an upload and a readback per
+     * frame, which on a small GPU with uncached memory can cost more than
+     * the convolution it saves.
+     *
+     * Rather than assume either way, measure both on this machine: spend the
+     * first frames alternating between the two, accumulate time per pixel,
+     * then latch whichever actually won and use it from then on.  Both paths
+     * produce a blur, so the alternation is not visible.  The software path
+     * remains the fallback and is what runs whenever the hardware path is
+     * absent, declines a region, or loses the comparison.
+     */
+    {
+        LONG GpuLeft = hL - HalfRadius * DWM_BLUR_PASSES;
+        LONG GpuTop = hT - HalfRadius * DWM_BLUR_PASSES;
+        LONG GpuRight = hR + HalfRadius * DWM_BLUR_PASSES;
+        LONG GpuBottom = hB + HalfRadius * DWM_BLUR_PASSES;
+        RECT GpuRect;
+        BOOL TryGpu;
+        BOOL Large;
+        int *UseGpu;
+        ULONG *CalibrationFrames, *GpuDeclines;
+
+        if (GpuLeft < 0) GpuLeft = 0;
+        if (GpuTop < 0) GpuTop = 0;
+        if (GpuRight > HalfWidth) GpuRight = HalfWidth;
+        if (GpuBottom > HalfHeight) GpuBottom = HalfHeight;
+        GpuRect.left = GpuLeft;
+        GpuRect.top = GpuTop;
+        GpuRect.right = GpuRight;
+        GpuRect.bottom = GpuBottom;
+        Large = (ULONGLONG)(GpuRight - GpuLeft) *
+                (ULONGLONG)(GpuBottom - GpuTop) >= DWM_BLUR_LARGE_PIXELS;
+        UseGpu = Large ? &g_blurLargeUseGpu : &g_blurUseGpu;
+        CalibrationFrames = Large ? &g_blurLargeCalibrationFrames :
+                                    &g_blurCalibrationFrames;
+        GpuDeclines = Large ? &g_blurLargeGpuDeclines : &g_blurGpuDeclines;
+
+        if (!DwmGpuIsActive())
+            TryGpu = FALSE;
+        else if (*UseGpu > 0)
+            TryGpu = TRUE;
+        else if (*UseGpu == 0)
+            TryGpu = FALSE;
+        else
+            TryGpu = (*CalibrationFrames & 1) != 0;
+
+        if (TryGpu)
+        {
+            LARGE_INTEGER Start, End;
+            BOOL Blurred;
+
+            QueryPerformanceCounter(&Start);
+            /* Match the reach of the box cascade so both paths look alike. */
+            Blurred = DwmGpuBlurRect(g_blurSource, HalfWidth, HalfHeight,
+                                     &GpuRect,
+                                     (ULONG)(HalfRadius * DWM_BLUR_PASSES));
+            QueryPerformanceCounter(&End);
+            if (Blurred)
+            {
+                if (*UseGpu < 0)
+                {
+                    /* The first hardware call allocates persistent VC4
+                     * resources. Exclude that one-time cost from the path
+                     * decision, then immediately retry a measured sample. */
+                    if (!g_blurGpuWarmed)
+                    {
+                        g_blurGpuWarmed = TRUE;
+                        OutputDebugStringA(
+                            "DWM: GPU blur warmup complete (sample ignored)\n");
+                    }
+                    else
+                    {
+                        DwmBlurRecordSample(TRUE, Large, &GpuRect,
+                                            End.QuadPart - Start.QuadPart);
+                    }
+                }
+                /* The hardware path blurs g_blurSource in place. */
+                Result = g_blurSource;
+                goto Upsample;
+            }
+            /*
+             * Declined.  Every attempt still costs a context switch, and a
+             * hardware path that never accepts a region would otherwise keep
+             * the comparison open forever, since it contributes no samples.
+             * Give up on it after a bounded number of refusals.
+             */
+            if (*UseGpu < 0 &&
+                ++*GpuDeclines >= DWM_BLUR_CALIBRATION_SAMPLES)
+            {
+                *UseGpu = 0;
+                OutputDebugStringA(Large ?
+                    "DWM: large blur path = software (hardware declined)\n" :
+                    "DWM: small blur path = software (hardware declined)\n");
+            }
+        }
+
+        if (*UseGpu < 0 && DwmGpuIsActive())
+        {
+            LARGE_INTEGER Start, End;
+
+            QueryPerformanceCounter(&Start);
+            Result = DwmBlurSoftwarePasses(hL, hT, hR, hB, HalfWidth,
+                                           HalfHeight, HalfRadius);
+            QueryPerformanceCounter(&End);
+            DwmBlurRecordSample(FALSE, Large, &GpuRect,
+                                End.QuadPart - Start.QuadPart);
+            goto Upsample;
+        }
     }
+
+    Result = DwmBlurSoftwarePasses(hL, hT, hR, hB, HalfWidth, HalfHeight,
+                                   HalfRadius);
+
+Upsample:
 
     for (Index = 0; Index < Count; ++Index)
     {
@@ -1033,17 +1445,399 @@ DwmBackdropNcLeft(const DWM_WIN *Window)
     return Left;
 }
 
+/* Retain the last dense, screen-space backdrop blur. During a move, nearly
+ * all of the new glass overlaps the preceding frame and the pixels below it
+ * are usually identical. The cache compares those source pixels exactly;
+ * changed content therefore takes the ordinary blur path with no stale
+ * result. A source snapshot also lets the exposed edge strips be filtered
+ * independently without one strip feeding another one's convolution. */
+static ULONG *g_backdropCacheInput, *g_backdropCacheOutput;
+static LONG g_backdropCacheWidth, g_backdropCacheHeight;
+static LONG g_backdropCacheRadius;
+static RECTL g_backdropCacheBounds, g_backdropCacheSource;
+static BOOL g_backdropCacheValid;
+static DWM_WIN g_backdropCacheLower[DWM_MAX_WINDOWS];
+static ULONG g_backdropCacheLowerCount;
+static ULONG g_backdropCacheOwnerId, g_backdropCacheOwnerGeneration;
+
 static void
+DwmFreeBackdropCache(void)
+{
+    if (g_backdropCacheInput != NULL)
+        VirtualFree(g_backdropCacheInput, 0, MEM_RELEASE);
+    if (g_backdropCacheOutput != NULL)
+        VirtualFree(g_backdropCacheOutput, 0, MEM_RELEASE);
+    g_backdropCacheInput = g_backdropCacheOutput = NULL;
+    g_backdropCacheValid = FALSE;
+    g_backdropCacheWidth = g_backdropCacheHeight = 0;
+    g_backdropCacheLowerCount = 0;
+}
+
+static BOOL
+DwmEnsureBackdropCache(LONG Width, LONG Height)
+{
+    SIZE_T Pixels, Bytes;
+
+    if (Width <= 0 || Height <= 0 ||
+        (SIZE_T)Width > (SIZE_T)-1 / (SIZE_T)Height)
+        return FALSE;
+    if (g_backdropCacheInput != NULL && g_backdropCacheOutput != NULL &&
+        g_backdropCacheWidth == Width && g_backdropCacheHeight == Height)
+        return TRUE;
+    DwmFreeBackdropCache();
+    Pixels = (SIZE_T)Width * Height;
+    if (Pixels > (SIZE_T)-1 / sizeof(ULONG))
+        return FALSE;
+    Bytes = Pixels * sizeof(ULONG);
+    g_backdropCacheInput = VirtualAlloc(NULL, Bytes,
+                                        MEM_COMMIT | MEM_RESERVE,
+                                        PAGE_READWRITE);
+    g_backdropCacheOutput = VirtualAlloc(NULL, Bytes,
+                                         MEM_COMMIT | MEM_RESERVE,
+                                         PAGE_READWRITE);
+    if (g_backdropCacheInput == NULL || g_backdropCacheOutput == NULL)
+    {
+        DwmFreeBackdropCache();
+        return FALSE;
+    }
+    g_backdropCacheWidth = Width;
+    g_backdropCacheHeight = Height;
+    return TRUE;
+}
+
+static RECTL
+DwmBackdropSourceBounds(const RECTL *Output, LONG Radius,
+                        LONG Width, LONG Height)
+{
+    LONG HalfRadius = (Radius + 1) / 2;
+    LONG Margin = 2 * (HalfRadius * DWM_BLUR_PASSES + 3);
+    RECTL Source = {Output->left - Margin, Output->top - Margin,
+                    Output->right + Margin, Output->bottom + Margin};
+
+    if (Source.left < 0) Source.left = 0;
+    if (Source.top < 0) Source.top = 0;
+    if (Source.right > Width) Source.right = Width;
+    if (Source.bottom > Height) Source.bottom = Height;
+    return Source;
+}
+
+static BOOL
+DwmRectContains(const RECTL *Outer, const RECTL *Inner)
+{
+    return Inner->left >= Outer->left && Inner->top >= Outer->top &&
+           Inner->right <= Outer->right && Inner->bottom <= Outer->bottom;
+}
+
+static void
+DwmCopyBackdropRect(ULONG *Dest, const ULONG *Source, LONG Width,
+                    const RECTL *Rect)
+{
+    LONG y;
+    SIZE_T Bytes = (SIZE_T)(Rect->right - Rect->left) * sizeof(ULONG);
+
+    for (y = Rect->top; y < Rect->bottom; ++y)
+    {
+        SIZE_T Offset = (SIZE_T)y * Width + Rect->left;
+        RtlCopyMemory(Dest + Offset, Source + Offset, Bytes);
+    }
+}
+
+static void
+DwmCopyBackdropDifference(ULONG *Dest, const ULONG *Source, LONG Width,
+                          const RECTL *Current, const RECTL *Overlap)
+{
+    RECTL Missing[4] = {
+        {Current->left, Current->top, Current->right, Overlap->top},
+        {Current->left, Overlap->bottom, Current->right, Current->bottom},
+        {Current->left, Overlap->top, Overlap->left, Overlap->bottom},
+        {Overlap->right, Overlap->top, Current->right, Overlap->bottom}
+    };
+    ULONG Index;
+
+    for (Index = 0; Index < ARRAYSIZE(Missing); ++Index)
+    {
+        if (Missing[Index].right > Missing[Index].left &&
+            Missing[Index].bottom > Missing[Index].top)
+            DwmCopyBackdropRect(Dest, Source, Width, &Missing[Index]);
+    }
+}
+
+static BOOL
+DwmBackdropInputEqual(const ULONG *Current, LONG Width, const RECTL *Rect)
+{
+    LONG y;
+    SIZE_T Bytes = (SIZE_T)(Rect->right - Rect->left) * sizeof(ULONG);
+
+    for (y = Rect->top; y < Rect->bottom; ++y)
+    {
+        SIZE_T Offset = (SIZE_T)y * Width + Rect->left;
+        if (memcmp(Current + Offset, g_backdropCacheInput + Offset, Bytes))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL
+DwmBackdropSceneEqual(const DWM_WIN *Window, const DWM_WIN *Lower,
+                      ULONG LowerCount)
+{
+    ULONG Index;
+
+    if (Window == NULL || Lower == NULL || LowerCount > DWM_MAX_WINDOWS ||
+        Window->SurfaceId != g_backdropCacheOwnerId ||
+        Window->Generation != g_backdropCacheOwnerGeneration ||
+        LowerCount != g_backdropCacheLowerCount)
+        return FALSE;
+    for (Index = 0; Index < LowerCount; ++Index)
+    {
+        DWM_WIN Current = Lower[Index];
+
+        /* Update IDs cover shared CPU/GPU surfaces. The section fallback
+         * has no persistent update ID, so its one-frame damage flag is the
+         * conservative invalidation signal. Custom blur rectangles are not
+         * copied into this small snapshot and retain the pixel comparison. */
+        if (Current.Damaged || Current.BlurRectCount != 0)
+            return FALSE;
+        Current.Damaged = 0;
+        if (memcmp(&Current, &g_backdropCacheLower[Index], sizeof(Current)))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+static void
+DwmBackdropStoreScene(const DWM_WIN *Window, const DWM_WIN *Lower,
+                      ULONG LowerCount)
+{
+    ULONG Index;
+
+    if (Window == NULL || LowerCount > DWM_MAX_WINDOWS)
+    {
+        g_backdropCacheLowerCount = 0;
+        return;
+    }
+    for (Index = 0; Index < LowerCount; ++Index)
+    {
+        g_backdropCacheLower[Index] = Lower[Index];
+        g_backdropCacheLower[Index].Damaged = 0;
+    }
+    g_backdropCacheOwnerId = Window->SurfaceId;
+    g_backdropCacheOwnerGeneration = Window->Generation;
+    g_backdropCacheLowerCount = LowerCount;
+}
+
+static void
+DwmCopyBackdropShape(ULONG *Dest, const ULONG *Source, LONG Width, LONG Height,
+                     LONG ClipLeft, LONG ClipTop, LONG ClipRight,
+                     LONG ClipBottom, const DWM_WIN *Window,
+                     const RECTL *Rectangles)
+{
+    RECTL Entire = {0, 0, Window->cx, Window->cy};
+    const RECTL *Rectangle;
+    RECTL Clipped;
+    ULONG Count, Index;
+    LONG WindowX = Window->x - g_originX;
+    LONG WindowY = Window->y - g_originY;
+
+    if (Window->BlurFlags & DWM_BLUR_REGION_ENTIRE_WINDOW)
+    {
+        Rectangle = &Entire;
+        Count = 1;
+    }
+    else
+    {
+        Rectangle = Rectangles;
+        Count = Window->BlurRectCount;
+    }
+    for (Index = 0; Rectangle != NULL && Index < Count; ++Index)
+    {
+        if (DwmClipBlurRect(&Rectangle[Index], WindowX, WindowY, Window,
+                            ClipLeft, ClipTop, ClipRight, ClipBottom,
+                            Width, Height, &Clipped))
+            DwmCopyBackdropRect(Dest, Source, Width, &Clipped);
+    }
+}
+
+static BOOL
+DwmBackdropBlurBounds(LONG Width, LONG Height,
+                      LONG ClipLeft, LONG ClipTop, LONG ClipRight,
+                      LONG ClipBottom, const DWM_WIN *Window,
+                      const RECTL *Rectangles, RECTL *Union,
+                      ULONGLONG *Pixels)
+{
+    RECTL Entire = {0, 0, Window->cx, Window->cy};
+    const RECTL *Rectangle;
+    RECTL Clipped;
+    ULONG Count, Index;
+    LONG WindowX = Window->x - g_originX;
+    LONG WindowY = Window->y - g_originY;
+    BOOL Found = FALSE;
+
+    *Pixels = 0;
+    if (Window->BlurFlags & DWM_BLUR_REGION_ENTIRE_WINDOW)
+    {
+        Rectangle = &Entire;
+        Count = 1;
+    }
+    else
+    {
+        Rectangle = Rectangles;
+        Count = Window->BlurRectCount;
+    }
+    for (Index = 0; Rectangle != NULL && Index < Count; ++Index)
+    {
+        if (!DwmClipBlurRect(&Rectangle[Index], WindowX, WindowY, Window,
+                             ClipLeft, ClipTop, ClipRight, ClipBottom,
+                             Width, Height, &Clipped))
+            continue;
+        *Pixels += (ULONGLONG)(Clipped.right - Clipped.left) *
+                   (ULONGLONG)(Clipped.bottom - Clipped.top);
+        if (!Found)
+        {
+            *Union = Clipped;
+            Found = TRUE;
+        }
+        else
+        {
+            if (Clipped.left < Union->left) Union->left = Clipped.left;
+            if (Clipped.top < Union->top) Union->top = Clipped.top;
+            if (Clipped.right > Union->right) Union->right = Clipped.right;
+            if (Clipped.bottom > Union->bottom) Union->bottom = Clipped.bottom;
+        }
+    }
+    return Found;
+}
+
+static const ULONG *
+DwmApplyBackdropBlurCached(ULONG *Composition, LONG Width, LONG Height,
+                           LONG ClipLeft, LONG ClipTop, LONG ClipRight,
+                           LONG ClipBottom, const DWM_WIN *Window,
+                           const RECTL *Rectangles, BOOL Direct,
+                           const DWM_WIN *Lower, ULONG LowerCount)
+{
+    RECTL Current, CurrentSource, Overlap, OverlapSource, Missing[4];
+    DWM_WIN CacheWindow;
+    ULONGLONG Pixels, CurrentArea, OverlapArea;
+    LONG Radius = DwmBlurRadius();
+    ULONG Index;
+    BOOL Reuse = FALSE;
+    BOOL SceneEqual = FALSE;
+
+    if (!DwmBackdropBlurBounds(Width, Height, ClipLeft, ClipTop,
+                               ClipRight, ClipBottom, Window, Rectangles,
+                               &Current, &Pixels))
+        return NULL;
+    CurrentArea = (ULONGLONG)(Current.right - Current.left) *
+                  (ULONGLONG)(Current.bottom - Current.top);
+    if (((Window->LayerFlags & DWM_LWA_ALPHA) && Window->Alpha < 255) ||
+        (Pixels >= DWM_BLUR_LARGE_PIXELS * 4ull ?
+             g_blurLargeUseGpu : g_blurUseGpu) != 0 || Pixels < 65536 ||
+        Pixels < CurrentArea / 2 || !DwmEnsureBackdropCache(Width, Height))
+    {
+        DwmApplyBlur(Composition, Composition, Width, Height,
+                     ClipLeft, ClipTop, ClipRight, ClipBottom,
+                     Window, Rectangles);
+        return NULL;
+    }
+
+    Overlap.left = Current.left > g_backdropCacheBounds.left ?
+                   Current.left : g_backdropCacheBounds.left;
+    Overlap.top = Current.top > g_backdropCacheBounds.top ?
+                  Current.top : g_backdropCacheBounds.top;
+    Overlap.right = Current.right < g_backdropCacheBounds.right ?
+                    Current.right : g_backdropCacheBounds.right;
+    Overlap.bottom = Current.bottom < g_backdropCacheBounds.bottom ?
+                     Current.bottom : g_backdropCacheBounds.bottom;
+    if (g_backdropCacheValid && g_backdropCacheRadius == Radius &&
+        Overlap.right > Overlap.left && Overlap.bottom > Overlap.top)
+    {
+        OverlapArea = (ULONGLONG)(Overlap.right - Overlap.left) *
+                      (ULONGLONG)(Overlap.bottom - Overlap.top);
+        OverlapSource = DwmBackdropSourceBounds(&Overlap, Radius,
+                                                Width, Height);
+        SceneEqual = DwmBackdropSceneEqual(Window, Lower, LowerCount);
+        Reuse = OverlapArea * 2 >= CurrentArea &&
+                DwmRectContains(&g_backdropCacheSource, &OverlapSource) &&
+                (SceneEqual ||
+                 DwmBackdropInputEqual(Composition, Width, &OverlapSource));
+    }
+    CurrentSource = DwmBackdropSourceBounds(&Current, Radius, Width, Height);
+    if (Reuse && DwmRectContains(&g_backdropCacheBounds, &Current))
+    {
+        DwmBackdropStoreScene(Window, Lower, LowerCount);
+        if (Direct)
+            return g_backdropCacheOutput;
+        DwmCopyBackdropShape(Composition, g_backdropCacheOutput, Width, Height,
+                             ClipLeft, ClipTop, ClipRight, ClipBottom,
+                             Window, Rectangles);
+        return NULL;
+    }
+
+    /* Preserve the complete lower-layer input before either cached pixels or
+     * newly filtered strips are written into the composition surface. */
+    if (Reuse)
+        DwmCopyBackdropDifference(g_backdropCacheInput, Composition, Width,
+                                  &CurrentSource, &OverlapSource);
+    else
+        DwmCopyBackdropRect(g_backdropCacheInput, Composition, Width,
+                            &CurrentSource);
+    CacheWindow = *Window;
+    CacheWindow.BlurFlags = DWM_BLUR_ENABLE |
+                            DWM_BLUR_REGION_ENTIRE_WINDOW;
+    CacheWindow.BlurRectCount = 0;
+    if (!Reuse)
+    {
+        DwmApplyBlur(g_backdropCacheInput, g_backdropCacheOutput,
+                     Width, Height, Current.left, Current.top,
+                     Current.right, Current.bottom, &CacheWindow, NULL);
+    }
+    else
+    {
+        Missing[0] = (RECTL){Current.left, Current.top,
+                             Current.right, Overlap.top};
+        Missing[1] = (RECTL){Current.left, Overlap.bottom,
+                             Current.right, Current.bottom};
+        Missing[2] = (RECTL){Current.left, Overlap.top,
+                             Overlap.left, Overlap.bottom};
+        Missing[3] = (RECTL){Overlap.right, Overlap.top,
+                             Current.right, Overlap.bottom};
+        for (Index = 0; Index < ARRAYSIZE(Missing); ++Index)
+        {
+            if (Missing[Index].right <= Missing[Index].left ||
+                Missing[Index].bottom <= Missing[Index].top)
+                continue;
+            DwmApplyBlur(g_backdropCacheInput, g_backdropCacheOutput,
+                         Width, Height,
+                         Missing[Index].left, Missing[Index].top,
+                         Missing[Index].right, Missing[Index].bottom,
+                         &CacheWindow, NULL);
+        }
+    }
+    g_backdropCacheBounds = Current;
+    g_backdropCacheSource = CurrentSource;
+    g_backdropCacheRadius = Radius;
+    g_backdropCacheValid = TRUE;
+    DwmBackdropStoreScene(Window, Lower, LowerCount);
+    if (Direct)
+        return g_backdropCacheOutput;
+    DwmCopyBackdropShape(Composition, g_backdropCacheOutput, Width, Height,
+                         ClipLeft, ClipTop, ClipRight, ClipBottom,
+                         Window, Rectangles);
+    return NULL;
+}
+
+static const ULONG *
 DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
                      LONG ClipLeft, LONG ClipTop, LONG ClipRight,
-                     LONG ClipBottom, const DWM_WIN *Window)
+                     LONG ClipBottom, const DWM_WIN *Window,
+                     const DWM_WIN *Lower, ULONG LowerCount)
 {
     DWM_WIN BlurWindow;
     RECTL Rectangles[4];
     LONG NcBottom;
 
     if (Window->BackdropType != DWM_BACKDROP_TRANSIENT)
-        return;
+        return NULL;
 
     BlurWindow = *Window;
     BlurWindow.BlurFlags = DWM_BLUR_ENABLE;
@@ -1058,21 +1852,25 @@ DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
             if (Count != 0)
             {
                 BlurWindow.BlurRectCount = Count;
-                DwmApplyBlur(Composition, Width, Height,
-                             ClipLeft, ClipTop, ClipRight, ClipBottom,
-                             &BlurWindow, Rounded);
-                return;
+                return DwmApplyBackdropBlurCached(
+                    Composition, Width, Height, ClipLeft, ClipTop,
+                    ClipRight, ClipBottom, &BlurWindow, Rounded,
+                    !(Window->LayerFlags & (DWM_LWA_ALPHA |
+                                             DWM_LWA_COLORKEY)) &&
+                    !(Window->BlurFlags & DWM_BLUR_ENABLE),
+                    Lower, LowerCount);
             }
         }
         BlurWindow.BlurFlags |= DWM_BLUR_REGION_ENTIRE_WINDOW;
         BlurWindow.BlurRectCount = 0;
-        DwmApplyBlur(Composition, Width, Height,
-                     ClipLeft, ClipTop, ClipRight, ClipBottom,
-                     &BlurWindow, NULL);
-        return;
+        return DwmApplyBackdropBlurCached(
+            Composition, Width, Height, ClipLeft, ClipTop, ClipRight,
+            ClipBottom, &BlurWindow, NULL,
+            !(Window->LayerFlags & (DWM_LWA_ALPHA | DWM_LWA_COLORKEY)) &&
+            !(Window->BlurFlags & DWM_BLUR_ENABLE), Lower, LowerCount);
     }
     if (Window->BackdropRegion != DWM_BACKDROP_REGION_NONCLIENT)
-        return;
+        return NULL;
 
     NcBottom = DwmBackdropNcBottom(Window);
     Rectangles[0] = (RECTL){0, 0, Window->cx, NcBottom};
@@ -1084,9 +1882,11 @@ DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
                             NcBottom, Window->cx,
                             Window->ClientY + Window->ClientHeight};
     BlurWindow.BlurRectCount = ARRAYSIZE(Rectangles);
-    DwmApplyBlur(Composition, Width, Height,
-                 ClipLeft, ClipTop, ClipRight, ClipBottom,
-                 &BlurWindow, Rectangles);
+    DwmApplyBackdropBlurCached(Composition, Width, Height,
+                               ClipLeft, ClipTop, ClipRight, ClipBottom,
+                               &BlurWindow, Rectangles, FALSE,
+                               Lower, LowerCount);
+    return NULL;
 }
 
 static void
@@ -1284,10 +2084,99 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
     }
 }
 
+
+
+/* Exact signed /255 for every channel delta times an opacity.  Keeping this
+ * in 32-bit arithmetic lets the ARM64 compiler process four pixels per
+ * vector instead of widening each product to 64 bits. */
+static LONG
+DwmDivideChannel255(LONG Value)
+{
+    ULONG Magnitude = Value < 0 ? (ULONG)-Value : (ULONG)Value;
+    LONG Quotient = (LONG)((Magnitude * 65794u) >> 24);
+
+    return Value < 0 ? -Quotient : Quotient;
+}
+
+/* Uniform glass runs share all material classification. Keep the signed
+ * division used by the scalar path: a weighted average rounds differently
+ * when the backdrop channel is darker than the tint. */
+static void
+DwmBlendConstantGlass(ULONG * __restrict Dest,
+                      const ULONG * __restrict Base, LONG Count,
+                      ULONG Color, ULONG Key, ULONG Opacity, ULONG Weight,
+                      const BYTE * __restrict Reflection)
+{
+    LONG Red = (Color >> 16) & 255, Green = (Color >> 8) & 255;
+    LONG Blue = Color & 255;
+    LONG KeyRed = (Key >> 16) & 255, KeyGreen = (Key >> 8) & 255;
+    LONG KeyBlue = Key & 255;
+    LONG Shift = (255u - Opacity) * Weight / 255u;
+    LONG Index;
+
+    for (Index = 0; Index < Count; ++Index)
+    {
+        ULONG Under = Base[Index];
+        LONG Glow = DWM_REFLECT_STRENGTH * Reflection[Index] * Weight / (255u * 255u);
+        LONG R = Red + DwmDivideChannel255(
+            ((LONG)((Under >> 16) & 255) - KeyRed) * Shift) + Glow;
+        LONG G = Green + DwmDivideChannel255(
+            ((LONG)((Under >> 8) & 255) - KeyGreen) * Shift) + Glow;
+        LONG B = Blue + DwmDivideChannel255(
+            ((LONG)(Under & 255) - KeyBlue) * Shift) + Glow;
+
+        if (R < 0) R = 0; else if (R > 255) R = 255;
+        if (G < 0) G = 0; else if (G > 255) G = 255;
+        if (B < 0) B = 0; else if (B > 255) B = 255;
+        Dest[Index] = ((ULONG)R << 16) | ((ULONG)G << 8) | (ULONG)B;
+    }
+}
+
+static void
+DwmBlendGlassSpan(ULONG * __restrict Dest, const ULONG * __restrict Base,
+                  const ULONG * __restrict Source,
+                  LONG Count, ULONG BackdropKey, ULONG ColorizationKey,
+                  ULONG Opacity, const BYTE * __restrict Reflection)
+{
+    LONG Index;
+
+    for (Index = 0; Index < Count; ++Index)
+    {
+        ULONG Color = Source[Index], Under = Base[Index];
+        ULONG Near = DwmChannelDistance(Color, BackdropKey);
+        ULONG Other = DwmChannelDistance(Color, ColorizationKey);
+        ULONG Key = Other < Near ? ColorizationKey : BackdropKey;
+        ULONG Weight, Shift;
+        LONG Red, Green, Blue, Glow;
+
+        if (Other < Near) Near = Other;
+        Weight = Near <= DWM_MATERIAL_TINT_BAND ? 255 :
+                 Near < DWM_MATERIAL_FRINGE ?
+                 (DWM_MATERIAL_FRINGE - Near) * 255u /
+                 (DWM_MATERIAL_FRINGE - DWM_MATERIAL_TINT_BAND) : 0;
+        Shift = (255u - Opacity) * Weight / 255u;
+        Glow = DWM_REFLECT_STRENGTH * Reflection[Index] * Weight /
+               (255u * 255u);
+        Red = ((Color >> 16) & 255) + DwmDivideChannel255(
+            ((LONG)((Under >> 16) & 255) -
+             (LONG)((Key >> 16) & 255)) * (LONG)Shift) + Glow;
+        Green = ((Color >> 8) & 255) + DwmDivideChannel255(
+            ((LONG)((Under >> 8) & 255) -
+             (LONG)((Key >> 8) & 255)) * (LONG)Shift) + Glow;
+        Blue = (Color & 255) + DwmDivideChannel255(
+            ((LONG)(Under & 255) - (LONG)(Key & 255)) * (LONG)Shift) + Glow;
+        if (Red < 0) Red = 0; else if (Red > 255) Red = 255;
+        if (Green < 0) Green = 0; else if (Green > 255) Green = 255;
+        if (Blue < 0) Blue = 0; else if (Blue > 255) Blue = 255;
+        Dest[Index] = ((ULONG)Red << 16) | ((ULONG)Green << 8) | (ULONG)Blue;
+    }
+}
+
 static void
 DwmBlitWindow(ULONG *comp, LONG scrW,
               LONG clipL, LONG clipT, LONG clipR, LONG clipB,
-              const BYTE *pix, const ULONG *wallpaper, const DWM_WIN *w)
+              const BYTE *pix, const ULONG *wallpaper,
+              const ULONG *backdropBase, const DWM_WIN *w)
 {
     LONG r, r0, r1, x0, x1, srcx0, dy, x, width;
     LONGLONG wx = (LONGLONG)w->x - g_originX;
@@ -1348,13 +2237,41 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
     {
         const ULONG *srcrow;
         const ULONG *wallpaperrow = NULL;
+        const ULONG *baserow;
         ULONG *dstrow;
+        LONG opaqueStart = 0, opaqueEnd = 0;
+        LONG reflectStart, glassStart = 0, glassEnd = width;
+        LONG directStart = 0, directEnd = 0;
+        const BYTE *reflection = NULL;
 
         dy = (LONG)(wy + r);
         srcrow = (const ULONG *)(pix + (SIZE_T)r * w->Stride) + srcx0;
         dstrow = comp + (SIZE_T)dy * scrW + x0;
+        baserow = dstrow;
         if (wallpaper != NULL)
             wallpaperrow = wallpaper + (SIZE_T)dy * scrW + x0;
+        if (backdropBase != NULL)
+        {
+            LONG Radius = (LONG)w->CornerRadius;
+            LONG Inset = 0;
+
+            baserow = backdropBase + (SIZE_T)dy * scrW + x0;
+            if (Radius > w->cx / 2) Radius = w->cx / 2;
+            if (Radius > w->cy / 2) Radius = w->cy / 2;
+            if (Radius > 0 && (r < Radius || r >= w->cy - Radius))
+            {
+                double CornerY = r < Radius ?
+                    (double)Radius - ((double)r + 0.5) :
+                    ((double)r + 0.5) - (double)(w->cy - Radius);
+                double CornerX = sqrt((double)Radius * Radius -
+                                      CornerY * CornerY);
+                Inset = Radius - (LONG)(CornerX + 0.5);
+                if (Inset < 0) Inset = 0;
+            }
+            directStart = Inset > srcx0 ? Inset - srcx0 : 0;
+            directEnd = w->cx - Inset - srcx0;
+            if (directEnd > width) directEnd = width;
+        }
 
         if (!useKey && !useAlpha && !usePixelAlpha && !useBackdrop &&
             !useCorner)
@@ -1363,8 +2280,122 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
             continue;
         }
 
+        /* Glass and rounded corners do not make the interior of a normal
+         * client translucent. Copy its span without evaluating material,
+         * corner coverage and alpha for every pixel during a drag. */
+        if (!useKey && !useAlpha && !usePixelAlpha && !useEdge &&
+            (!useBackdrop ||
+             (w->BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT &&
+              r >= ncBottom && r < w->ClientY + w->ClientHeight)))
+        {
+            LONG left = useBackdrop ? ncLeft : 0;
+            LONG right = useBackdrop ? w->ClientX + w->ClientWidth : w->cx;
+            LONG radius = (LONG)w->CornerRadius;
+
+            if (radius > w->cx / 2) radius = w->cx / 2;
+            if (radius > w->cy / 2) radius = w->cy / 2;
+            if (useCorner && (r < radius || r >= w->cy - radius))
+            {
+                if (left < radius) left = radius;
+                if (right > w->cx - radius) right = w->cx - radius;
+            }
+            opaqueStart = left > srcx0 ? left - srcx0 : 0;
+            opaqueEnd = right - srcx0;
+            if (opaqueEnd > width) opaqueEnd = width;
+        }
+
+        reflectStart = x0 + (dy * 6) / 5;
+        if (!useKey && !useAlpha && !usePixelAlpha &&
+            w->BackdropType == DWM_BACKDROP_TRANSIENT &&
+            (w->BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT ||
+             w->BackdropRegion == DWM_BACKDROP_REGION_WINDOW) &&
+            w->BackdropOpacity <= 255 && g_reflectLut != NULL &&
+            reflectStart >= 0 && reflectStart <= g_reflectLen - width)
+        {
+            LONG Radius = (LONG)w->CornerRadius;
+            LONG Inset = 0;
+
+            if (Radius > w->cx / 2) Radius = w->cx / 2;
+            if (Radius > w->cy / 2) Radius = w->cy / 2;
+            if (useCorner && (r < Radius || r >= w->cy - Radius))
+                Inset = Radius;
+            /* The scalar path still handles rounded coverage and the
+             * one-pixel material rim. Interior runs have full coverage. */
+            if (useEdge && Inset < 1) Inset = 1;
+            if (glassStart < Inset - srcx0) glassStart = Inset - srcx0;
+            if (glassEnd > w->cx - Inset - srcx0)
+                glassEnd = w->cx - Inset - srcx0;
+            if (backdropBase != NULL)
+            {
+                if (glassStart < directStart) glassStart = directStart;
+                if (glassEnd > directEnd) glassEnd = directEnd;
+            }
+            if (!useEdge || (r > 0 && r < w->cy - 1))
+                reflection = g_reflectLut + reflectStart;
+        }
+
         for (x = 0; x < width; x++)
         {
+            if (x == opaqueStart && opaqueEnd > opaqueStart)
+            {
+                for (; x < opaqueEnd; ++x)
+                    dstrow[x] = srcrow[x] & 0x00ffffffu;
+                --x;
+                continue;
+            }
+            if (reflection != NULL && x >= glassStart && x < glassEnd)
+            {
+                LONG sourceX = srcx0 + x;
+                LONG Limit = glassEnd, End;
+                ULONG Color = srcrow[x] & 0x00ffffffu;
+                BOOL Material = w->BackdropRegion == DWM_BACKDROP_REGION_WINDOW ||
+                                r < ncBottom || r >= w->ClientY + w->ClientHeight;
+
+                if (!Material && sourceX < ncLeft)
+                {
+                    Material = TRUE;
+                    if (Limit > ncLeft - srcx0) Limit = ncLeft - srcx0;
+                }
+                if (sourceX >= w->ClientX + w->ClientWidth) Material = TRUE;
+                if (Material)
+                {
+                    for (End = x + 1; End < Limit; ++End)
+                        if ((srcrow[End] & 0x00ffffffu) != Color) break;
+                    if (End - x >= 8)
+                    {
+                        ULONG Near = DwmChannelDistance(Color, backdropKey);
+                        ULONG Other = DwmChannelDistance(Color, colorizationKey);
+                        ULONG Key = backdropKey, Weight = 0;
+
+                        if (Other < Near)
+                        {
+                            Near = Other;
+                            Key = colorizationKey;
+                        }
+                        if (Near <= DWM_MATERIAL_TINT_BAND)
+                            Weight = 255;
+                        else if (Near < DWM_MATERIAL_FRINGE)
+                            Weight = (DWM_MATERIAL_FRINGE - Near) * 255u /
+                                     (DWM_MATERIAL_FRINGE - DWM_MATERIAL_TINT_BAND);
+                        DwmBlendConstantGlass(dstrow + x, baserow + x,
+                                             End - x, Color, Key,
+                                             w->BackdropOpacity, Weight, reflection + x);
+                        x = End - 1;
+                        continue;
+                    }
+                    /* This interior span has no key, alpha, edge or corner
+                     * work. Classify varying source colours in a bounded
+                     * batch so the compiler can vectorize the channel math. */
+                    End = x + 64;
+                    if (End > Limit) End = Limit;
+                    DwmBlendGlassSpan(dstrow + x, baserow + x, srcrow + x,
+                                      End - x,
+                                      backdropKey, colorizationKey,
+                                      w->BackdropOpacity, reflection + x);
+                    x = End - 1;
+                    continue;
+                }
+            }
             ULONG s = srcrow[x], d, pixelAlpha = 255, cornerAlpha = 255;
             LONG sourceX = srcx0 + x;
             BOOL materialPixel = FALSE;
@@ -1429,7 +2460,8 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
             if (usePixelAlpha)
                 pixelAlpha = (s >> 24) & 0xffu;
 
-            d = dstrow[x];
+            d = backdropBase != NULL && x >= directStart && x < directEnd ?
+                baserow[x] : dstrow[x];
             if (materialPixel &&
                 (w->BackdropType == DWM_BACKDROP_MAIN ||
                  w->BackdropType == DWM_BACKDROP_TABBED) &&
@@ -1509,6 +2541,102 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
             }
         }
     }
+}
+
+/* Find one opaque cover, inset by the sampling reach of every intervening
+ * blur. A skipped lower pixel can only affect pixels inside this cover before
+ * its opaque client overwrites them. Keep shadows and blur passes intact. */
+static BOOL
+DwmFindOpaqueCover(const DWM_WIN *Windows, ULONG Count, ULONG Index,
+                   LONG ClipLeft, LONG ClipTop, LONG ClipRight, LONG ClipBottom,
+                   RECTL *Result)
+{
+    LONGLONG Reach = 0, BestArea = 0;
+    LONG FilterReach = 2 * (((DwmBlurRadius() + 1) / 2) * DWM_BLUR_PASSES + 2);
+    ULONG Above;
+
+    /* GPU blur has its own sampling footprint. Use the uncropped path while
+     * calibrating or using that filter. */
+    if ((g_blurUseGpu != 0 || g_blurLargeUseGpu != 0) &&
+        DwmGpuIsActive())
+        return FALSE;
+    for (Above = Index + 1; Above < Count; ++Above)
+    {
+        const DWM_WIN *Cover = &Windows[Above];
+        LONGLONG Left = 0, Top = 0, Right = Cover->cx, Bottom = Cover->cy;
+        LONGLONG X = (LONGLONG)Cover->x - g_originX;
+        LONGLONG Y = (LONGLONG)Cover->y - g_originY;
+        LONGLONG Radius = Cover->CornerRadius, Area;
+        BOOL Backdrop = Cover->BackdropType >= DWM_BACKDROP_MAIN &&
+                        Cover->BackdropType <= DWM_BACKDROP_TABBED &&
+                        Cover->BackdropRegion != 0;
+
+        if (Cover->AnimFlags != 0)
+            return FALSE;
+        if (Cover->BlurFlags & DWM_BLUR_ENABLE)
+            Reach += FilterReach;
+        if (Cover->BackdropType == DWM_BACKDROP_TRANSIENT && Cover->BackdropRegion != 0)
+            Reach += FilterReach;
+        if (Cover->cx <= 0 || Cover->cy <= 0 ||
+            (Cover->LayerFlags & DWM_LWA_COLORKEY) ||
+            ((Cover->LayerFlags & DWM_LWA_ALPHA) && Cover->Alpha < 255) ||
+            (Cover->BlurFlags & DWM_BLUR_ENABLE))
+            continue;
+        if (Backdrop)
+        {
+            if (Cover->BackdropRegion != DWM_BACKDROP_REGION_NONCLIENT)
+                continue;
+            Left = DwmBackdropNcLeft(Cover);
+            Top = DwmBackdropNcBottom(Cover);
+            Right = (LONGLONG)Cover->ClientX + Cover->ClientWidth;
+            Bottom = (LONGLONG)Cover->ClientY + Cover->ClientHeight;
+        }
+        if (Radius > Cover->cx / 2) Radius = Cover->cx / 2;
+        if (Radius > Cover->cy / 2) Radius = Cover->cy / 2;
+        if (Left < Radius) Left = Radius;
+        if (Top < Radius) Top = Radius;
+        if (Right > Cover->cx - Radius) Right = Cover->cx - Radius;
+        if (Bottom > Cover->cy - Radius) Bottom = Cover->cy - Radius;
+        Left += X + Reach; Top += Y + Reach;
+        Right += X - Reach; Bottom += Y - Reach;
+        if (Left < ClipLeft) Left = ClipLeft;
+        if (Top < ClipTop) Top = ClipTop;
+        if (Right > ClipRight) Right = ClipRight;
+        if (Bottom > ClipBottom) Bottom = ClipBottom;
+        if (Right <= Left || Bottom <= Top)
+            continue;
+        Area = (Right - Left) * (Bottom - Top);
+        if (Area > BestArea)
+        {
+            Result->left = (LONG)Left; Result->top = (LONG)Top;
+            Result->right = (LONG)Right; Result->bottom = (LONG)Bottom;
+            BestArea = Area;
+        }
+    }
+    return BestArea != 0;
+}
+
+static void
+DwmBlitWindowVisible(ULONG *Composition, LONG Width,
+                     LONG Left, LONG Top, LONG Right, LONG Bottom,
+                     const BYTE *Pixels, const ULONG *Wallpaper,
+                     const ULONG *BackdropBase, const DWM_WIN *Window,
+                     const RECTL *Cover)
+{
+    if (Cover == NULL)
+    {
+        DwmBlitWindow(Composition, Width, Left, Top, Right, Bottom,
+                      Pixels, Wallpaper, BackdropBase, Window);
+        return;
+    }
+    DwmBlitWindow(Composition, Width, Left, Top, Right, Cover->top,
+                  Pixels, Wallpaper, BackdropBase, Window);
+    DwmBlitWindow(Composition, Width, Left, Cover->bottom, Right, Bottom,
+                  Pixels, Wallpaper, BackdropBase, Window);
+    DwmBlitWindow(Composition, Width, Left, Cover->top, Cover->left, Cover->bottom,
+                  Pixels, Wallpaper, BackdropBase, Window);
+    DwmBlitWindow(Composition, Width, Cover->right, Cover->top, Right, Cover->bottom,
+                  Pixels, Wallpaper, BackdropBase, Window);
 }
 
 #define DWM_ANIM_TAPS 4
@@ -1871,6 +2999,22 @@ DwmComposeLoop(HANDLE hStopEvent)
     }
     DwmShadowInit(hdcScreen);
 
+    /* Allow a known-working software renderer while GPU effects are tested. */
+    {
+        WCHAR Value[8];
+        DWORD Length = GetEnvironmentVariableW(L"DWM_GPU_EFFECTS", Value,
+                                               ARRAYSIZE(Value));
+        if (Length == 1 && Value[0] == L'0')
+        {
+            g_blurUseGpu = g_blurLargeUseGpu = 0;
+            OutputDebugStringA("DWM: standalone GPU readback effects disabled\n");
+        }
+        else if (DwmGpuInitialize(hdcScreen))
+            OutputDebugStringA("DWM: GPU effects active\n");
+        else
+            OutputDebugStringA("DWM: GPU effects unavailable, using software\n");
+    }
+
     {
         LARGE_INTEGER Frequency;
         LONG Hz = GetDeviceCaps(hdcScreen, VREFRESH);
@@ -2061,6 +3205,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                 {
                     RECT fullBackdrop = {0, 0, g_W, g_H};
 
+                    g_backdropCacheValid = FALSE;
                     if (!PaintDesktop(g_hdcBackdrop) &&
                         !FillRect(g_hdcBackdrop, &fullBackdrop,
                                   GetSysColorBrush(COLOR_DESKTOP)))
@@ -2104,10 +3249,15 @@ DwmComposeLoop(HANDLE hStopEvent)
                 {
                     const BYTE *pix;
                     const BYTE *dxpix;
+                    const ULONG *backdropBase;
                     const RECTL *windowBlurRects = NULL;
+                    RECTL Cover;
+                    BOOL HaveCover;
 
                     if (DwmWindowIsHidden(wins, hdr->Count, i, cl, ct, cr, cb))
                         continue;
+                    HaveCover = DwmFindOpaqueCover(wins, hdr->Count, i,
+                                                    cl, ct, cr, cb, &Cover);
                     pix = DwmGetSurfaceView(&wins[i]);
                     if (pix == NULL)
                     {
@@ -2131,19 +3281,22 @@ DwmComposeLoop(HANDLE hStopEvent)
                                               &wins[i]);
                         continue;
                     }
-                    DwmApplyBlur((ULONG *)g_compBits, g_W, g_H,
+                    DwmApplyBlur((const ULONG *)g_compBits,
+                                 (ULONG *)g_compBits, g_W, g_H,
                                  pl, pt, pr, pb, &wins[i],
                                  windowBlurRects);
-                    DwmApplyBackdropBlur((ULONG *)g_compBits, g_W, g_H,
-                                         pl, pt, pr, pb, &wins[i]);
+                    backdropBase = DwmApplyBackdropBlur(
+                        (ULONG *)g_compBits, g_W, g_H,
+                        pl, pt, pr, pb, &wins[i], wins, i);
                     /* A non-client shadow is a compositor layer immediately
                      * below its owner. Since wins[] is bottom-to-top, higher
                      * windows and their shadows naturally occlude lower ones. */
                     DwmBlendShadow((ULONG *)g_compBits, g_W, g_H,
                                    cl, ct, cr, cb, &wins[i]);
-                    DwmBlitWindow((ULONG *)g_compBits, g_W, cl, ct, cr, cb,
-                                  pix, (const ULONG *)g_backdropBits,
-                                  &wins[i]);
+                    DwmBlitWindowVisible((ULONG *)g_compBits, g_W, cl, ct, cr, cb,
+                                         pix, (const ULONG *)g_backdropBits,
+                                         backdropBase, &wins[i],
+                                         HaveCover ? &Cover : NULL);
 
                     dxpix = DwmDxGetSurfaceSnapshot(&wins[i]);
                     if (dxpix != NULL)
@@ -2157,9 +3310,11 @@ DwmComposeLoop(HANDLE hStopEvent)
                         client.Stride = wins[i].DxPitch;
                         if (client.BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT)
                             client.BackdropType = 0;
-                        DwmBlitWindow((ULONG *)g_compBits, g_W,
-                                      cl, ct, cr, cb, dxpix,
-                                      (const ULONG *)g_backdropBits, &client);
+                        DwmBlitWindowVisible((ULONG *)g_compBits, g_W,
+                                             cl, ct, cr, cb, dxpix,
+                                             (const ULONG *)g_backdropBits,
+                                             NULL, &client,
+                                             HaveCover ? &Cover : NULL);
                     }
                 }
 
@@ -2218,6 +3373,7 @@ DwmComposeLoop(HANDLE hStopEvent)
     }
 
     DwmSetTimerPrecision(FALSE);
+    DwmFreeBackdropCache();
     DwmDxCleanupSurfaces();
     for (ViewIndex = 0; ViewIndex < DWM_VIEW_CACHE_SIZE; ++ViewIndex)
         DwmDropView(&g_views[ViewIndex]);
