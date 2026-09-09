@@ -223,18 +223,11 @@ int OnPostWinPosChanged(HWND hWnd, WINDOWPOS* pWinPos)
     PWND_DATA pwndData;
     DWORD style;
 
-    /* We only proceed to change the window shape if it has a caption */
     style = GetWindowLongW(hWnd, GWL_STYLE);
-    if((style & WS_CAPTION)!=WS_CAPTION)
-        return 0;
 
     /* Get theme data for this window */
     pwndData = ThemeGetWndData(hWnd);
     if (pwndData == NULL)
-        return 0;
-
-    /* Do not change the region of the window if its size wasn't changed */
-    if ((pWinPos->flags & SWP_NOSIZE) != 0 && pwndData->DirtyThemeRegion == FALSE)
         return 0;
 
     /* We don't touch the shape of the window if the application sets it on its own */
@@ -245,15 +238,23 @@ int OnPostWinPosChanged(HWND hWnd, WINDOWPOS* pWinPos)
     if (pwndData->UpdatingRgn != FALSE)
         return 0;
 
-    if(!IsAppThemed() || !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
+    /* A former caption must not keep clipping a borderless window to the
+     * old themed frame, even when the style change did not resize it. */
+    if ((style & WS_CAPTION) != WS_CAPTION || !IsAppThemed() || !(GetThemeAppProperties() & STAP_ALLOW_NONCLIENT))
     {
         if(pwndData->HasThemeRgn)
         {
-            pwndData->HasThemeRgn = FALSE;
-            g_user32ApiHook.SetWindowRgn(hWnd, 0, TRUE);
+            pwndData->UpdatingRgn = TRUE;
+            if (g_user32ApiHook.SetWindowRgn(hWnd, 0, TRUE))
+                pwndData->HasThemeRgn = FALSE;
+            pwndData->UpdatingRgn = FALSE;
         }
         return 0;
     }
+
+    /* Do not rebuild an unchanged themed frame. */
+    if ((pWinPos->flags & SWP_NOSIZE) != 0 && pwndData->DirtyThemeRegion == FALSE)
+        return 0;
 
     pwndData->DirtyThemeRegion = FALSE;
     pwndData->HasThemeRgn = TRUE;

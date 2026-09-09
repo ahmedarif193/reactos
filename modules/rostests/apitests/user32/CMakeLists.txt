@@ -25,6 +25,7 @@ list(APPEND SOURCE
     GetClassInfo.c
     GetDCEx.c
     GetProp.c
+    WindowRegionDC.c
     GetIconInfo.c
     GetKeyState.c
     GetMessageTime.c
