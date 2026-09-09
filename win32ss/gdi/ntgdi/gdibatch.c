@@ -62,7 +62,21 @@ SynchronizeDriver(FLONG Flags)
         return;
     }
 
-    EngAcquireSemaphore(Device->hsemDevLock);
+    /* The periodic callback runs on the raw input thread. It must not wait
+     * behind a present while mouse/button packets are waiting to be read.
+     * Dirty pixels remain pending for the next tick or explicit GdiFlush. */
+    if (Event == DSS_TIMER_EVENT)
+    {
+        if (!EngAcquireSemaphoreNoWait(Device->hsemDevLock))
+        {
+            PDEVOBJ_vRelease(Device);
+            return;
+        }
+    }
+    else
+    {
+        EngAcquireSemaphore(Device->hsemDevLock);
+    }
     if (!(Device->flFlags & PDEV_DISABLED) && Device->pSurface != NULL)
         DoDeviceSync(&Device->pSurface->SurfObj, NULL, Event);
     EngReleaseSemaphore(Device->hsemDevLock);

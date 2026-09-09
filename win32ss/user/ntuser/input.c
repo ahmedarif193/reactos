@@ -154,6 +154,7 @@ RawInputThreadMain(VOID)
     PVOID ShutdownEvent;
     HWINSTA hWinSta;
     BOOL MouseInputProcessed;
+    BOOL SyncDisplay;
 
     ByteOffset.QuadPart = (LONGLONG)0;
     //WaitTimeout.QuadPart = (LONGLONG)(-10000000);
@@ -194,6 +195,7 @@ RawInputThreadMain(VOID)
     PoRequestShutdownEvent(&ShutdownEvent);
     for (;;)
     {
+        SyncDisplay = FALSE;
         if (!ghMouseDevice)
         {
             /* Check if mouse device already exists */
@@ -312,6 +314,7 @@ RawInputThreadMain(VOID)
                         ProcessTimers(TRUE);
                     }
                     UserLeave();
+                    SyncDisplay = TRUE;
                 }
                 else if (pSignaledObject == ShutdownEvent)
                 {
@@ -378,6 +381,11 @@ RawInputThreadMain(VOID)
         }
         else if (KbdStatus != STATUS_PENDING)
             ERR("Failed to read from keyboard: %x.\n", KbdStatus);
+
+        /* A display-only synchronization can copy a whole frame. Do not
+         * hold USER across it or delay input already in this batch. */
+        if (SyncDisplay)
+            SynchronizeDriver(GCAPS2_SYNCTIMER);
     }
 
     if (ghMouseDevice)
