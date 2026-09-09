@@ -807,6 +807,7 @@ NTSTATUS WINAPI wow64_NtSetInformationFile( UINT *args )
     {
     case FileBasicInformation:   /* FILE_BASIC_INFORMATION */
     case FilePositionInformation:   /* FILE_POSITION_INFORMATION */
+    case FileAllocationInformation:   /* FILE_ALLOCATION_INFORMATION */
     case FileEndOfFileInformation:   /* FILE_END_OF_FILE_INFORMATION */
     case FilePipeInformation:   /* FILE_PIPE_INFORMATION */
     case FileMailslotSetInformation:   /* FILE_MAILSLOT_SET_INFORMATION */
