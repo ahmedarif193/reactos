@@ -1,0 +1,41 @@
+diff --git a/src/gallium/frontends/wgl/gldrv.h b/src/gallium/frontends/wgl/gldrv.h
+--- a/src/gallium/frontends/wgl/gldrv.h
++++ b/src/gallium/frontends/wgl/gldrv.h
+@@ -513,8 +513,6 @@ typedef struct _PRESENTBUFFERS {
+     IN LUID luidAdapter;
+     IN ULONGLONG ullPresentToken;
+     IN LPVOID pPrivData;
+-    IN UINT nVersion;
+-    IN HANDLE hCompletionEvent;
+ } PRESENTBUFFERS, *LPPRESENTBUFFERS;
+ typedef BOOL (APIENTRY *PFN_PRESENTBUFFERS)(HDC hdc, LPPRESENTBUFFERSCB pprsbcbData);
+ 
+diff --git a/src/gallium/frontends/wgl/stw_framebuffer.c b/src/gallium/frontends/wgl/stw_framebuffer.c
+--- a/src/gallium/frontends/wgl/stw_framebuffer.c
++++ b/src/gallium/frontends/wgl/stw_framebuffer.c
+@@ -639,8 +639,7 @@ DrvPresentBuffers(HDC hdc, LPPRESENTBUFFERS data)
+                                            fb->shared_surface,
+                                            &fb->client_rect,
+                                            data->ullPresentToken,
+-                                           data->nVersion >= 3 ?
+-                                              data->hCompletionEvent : NULL)) {
++                                           NULL)) {
+             stw_framebuffer_update(fb);
+             stw_notify_current_locked(fb);
+             stw_framebuffer_unlock(fb);
+@@ -687,11 +686,12 @@ stw_framebuffer_present_locked(HDC hdc,
+       PRESENTBUFFERSCB data;
+ 
+       memset(&data, 0, sizeof data);
+-      data.nVersion = 3;
++      data.nVersion = 2;
+       data.syncType = PRESCB_SYNCTYPE_NONE;
+       data.luidAdapter = stw_dev->AdapterLuid;
+-      data.updateRect.right = fb->width;
+-      data.updateRect.bottom = fb->height;
++      /* The callback rectangle is window-relative. opengl32 converts it
++       * to the client-sized shared allocation when publishing to DWM. */
++      data.updateRect = fb->client_rect;
+       data.pPrivData = (void *)res;
+ 
+       stw_notify_current_locked(fb);
