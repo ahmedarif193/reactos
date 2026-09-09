@@ -555,9 +555,8 @@ ProcessTimers(BOOL Exclusive)
 
   TimerLeave();
 
-  /* Service display drivers that requested GDI's periodic synchronization
-   * callback. Keep this outside the timer and USER locks. */
-  SynchronizeDriver(GCAPS2_SYNCTIMER);
+  /* The raw input loop services periodic display synchronization after it
+   * drops the USER lock and dispatches any input already read. */
   TRACE("TimerCount = %d\n", TimerCount);
   return TRUE;
 }
