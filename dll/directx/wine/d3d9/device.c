@@ -21,6 +21,9 @@
  */
 
 #include "d3d9_private.h"
+#ifdef __REACTOS__
+#include <float.h>
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d9);
 
@@ -4972,6 +4975,10 @@ static void setup_fpu(void)
     __asm__ volatile ("fnstcw %0" : "=m" (cw));
     cw = (cw & ~0xf3f) | 0x3f;
     __asm__ volatile ("fldcw %0" : : "m" (cw));
+#elif defined(__REACTOS__) && defined(__aarch64__)
+    /* ARM64 has fixed precision; preserve denormal handling and reset only
+     * exception masks and rounding, as required without FPU_PRESERVE. */
+    _control87(_MCW_EM | _RC_NEAR, _MCW_EM | _MCW_RC);
 #else
     FIXME("FPU setup not implemented for this platform.\n");
 #endif
