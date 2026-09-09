@@ -423,7 +423,7 @@ DwmChannel_SynchronizedCommit(IDwmChannelPrivate *Interface, void *Context)
     return DwmChannel_Commit(Interface);
 }
 
-static BOOL STDMETHODCALLTYPE
+static BOOLEAN STDMETHODCALLTYPE
 DwmChannel_PeekNextMessage(IDwmChannelPrivate *Interface, void *Message)
 {
     DWM_CHANNEL *Channel = DwmChannelFromInterface(Interface);
@@ -637,7 +637,7 @@ DwmChannel_CreateSharedResource(IDwmChannelPrivate *Interface, UINT Type,
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_DuplicateSharedResource(IDwmChannelPrivate *Interface,
                                    HANDLE SharedHandle, UINT Type,
-                                   BOOL ReadOnly, UINT *Handle)
+                                   BOOLEAN ReadOnly, UINT *Handle)
 {
     DWM_CHANNEL *Channel = DwmChannelFromInterface(Interface);
     HANDLE Duplicate = NULL;
@@ -1516,7 +1516,7 @@ DwmChannel_ColorTransformResourceUpdate(IDwmChannelPrivate *Interface,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_PartitionRegisterForNotifications(IDwmChannelPrivate *Interface,
-                                              BOOL Enabled)
+                                              BOOLEAN Enabled)
 {
     DWM_CHANNEL *Channel = DwmChannelFromInterface(Interface);
     DWM_COMMAND_PARTITION_BOOL Command = {0x102, !!Enabled, {0}};
@@ -1572,7 +1572,7 @@ DwmChannelAppendResourceBool(IDwmChannelPrivate *Interface, UINT CommandId,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_PartitionSetCursor(IDwmChannelPrivate *Interface, UINT Resource,
-                              BOOL Enabled)
+                              BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x105, Resource, Enabled,
                                         FALSE);
@@ -1580,7 +1580,7 @@ DwmChannel_PartitionSetCursor(IDwmChannelPrivate *Interface, UINT Resource,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_PartitionSetMagnifier(IDwmChannelPrivate *Interface,
-                                 UINT Resource, BOOL Enabled)
+                                 UINT Resource, BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x107, Resource, Enabled,
                                         TRUE);
@@ -1588,7 +1588,7 @@ DwmChannel_PartitionSetMagnifier(IDwmChannelPrivate *Interface,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_PartitionSetExcludeFromDDA(IDwmChannelPrivate *Interface,
-                                      UINT Resource, BOOL Enabled)
+                                      UINT Resource, BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x106, Resource, Enabled,
                                         FALSE);
@@ -1596,7 +1596,7 @@ DwmChannel_PartitionSetExcludeFromDDA(IDwmChannelPrivate *Interface,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_PartitionToggleHolographicSuspension(
-    IDwmChannelPrivate *Interface, BOOL Enabled)
+    IDwmChannelPrivate *Interface, BOOLEAN Enabled)
 {
     DWM_CHANNEL *Channel = DwmChannelFromInterface(Interface);
     DWM_COMMAND_PARTITION_BOOL Command = {0x10b, !!Enabled, {0}};
@@ -1624,7 +1624,7 @@ DwmChannel_VisualSetTouchTargetRect(IDwmChannelPrivate *Interface,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_VisualSetOptions(IDwmChannelPrivate *Interface, UINT Resource,
-                            BOOL First, BOOL Second, BOOL Third)
+                            BOOLEAN First, BOOLEAN Second, BOOLEAN Third)
 {
     DWM_CHANNEL *Channel = DwmChannelFromInterface(Interface);
     DWM_COMMAND_VISUAL_OPTIONS Command =
@@ -1671,7 +1671,7 @@ DwmChannel_VisualSetColorTransform(IDwmChannelPrivate *Interface,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_VisualTopLevelNode(IDwmChannelPrivate *Interface, UINT Resource,
-                              HWND Window, BOOL Enabled)
+                              HWND Window, BOOLEAN Enabled)
 {
     DWM_CHANNEL *Channel = DwmChannelFromInterface(Interface);
     DWM_COMMAND_RESOURCE_WINDOW_BOOL Command;
@@ -1687,7 +1687,7 @@ DwmChannel_VisualTopLevelNode(IDwmChannelPrivate *Interface, UINT Resource,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_VisualSetPassiveUpdateMode(IDwmChannelPrivate *Interface,
-                                      UINT Resource, BOOL Enabled)
+                                      UINT Resource, BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x18d, Resource, Enabled,
                                         FALSE);
@@ -1695,7 +1695,7 @@ DwmChannel_VisualSetPassiveUpdateMode(IDwmChannelPrivate *Interface,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_VisualSetExcludeSubtree(IDwmChannelPrivate *Interface,
-                                   UINT Resource, BOOL Enabled)
+                                   UINT Resource, BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x187, Resource, Enabled,
                                         FALSE);
@@ -1748,7 +1748,7 @@ DwmChannel_WindowNodeInitialize(IDwmChannelPrivate *Interface, UINT Resource,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_WindowNodeSetIsComposeOnce(IDwmChannelPrivate *Interface,
-                                      UINT Resource, BOOL Enabled)
+                                      UINT Resource, BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x28f, Resource, Enabled,
                                         FALSE);
@@ -1843,7 +1843,7 @@ DwmChannel_CursorVisualSetCursorId(IDwmChannelPrivate *Interface,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_CursorVisualSetIsHardwareCursorEnabled(
-    IDwmChannelPrivate *Interface, UINT Resource, BOOL Enabled)
+    IDwmChannelPrivate *Interface, UINT Resource, BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x1f1, Resource, Enabled,
                                         FALSE);
@@ -1851,7 +1851,7 @@ DwmChannel_CursorVisualSetIsHardwareCursorEnabled(
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_CursorVisualSetIsSynchronized(IDwmChannelPrivate *Interface,
-                                         UINT Resource, BOOL Enabled)
+                                         UINT Resource, BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x1f2, Resource, Enabled,
                                         FALSE);
@@ -2156,7 +2156,7 @@ DwmChannel_CaptureControllerSetRootVisual(IDwmChannelPrivate *Interface,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_CaptureControllerSetCaptureState(IDwmChannelPrivate *Interface,
-                                            UINT Resource, BOOL Enabled)
+                                            UINT Resource, BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x1e0, Resource, Enabled,
                                         FALSE);
@@ -2198,7 +2198,7 @@ DwmChannel_CaptureControllerSetReferenceVisual(
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_CaptureControllerSetSuspendOnScreenOff(
-    IDwmChannelPrivate *Interface, UINT Resource, BOOL Enabled)
+    IDwmChannelPrivate *Interface, UINT Resource, BOOLEAN Enabled)
 {
     return DwmChannelAppendResourceBool(Interface, 0x1e9, Resource, Enabled,
                                         FALSE);
@@ -2345,7 +2345,7 @@ DwmChannel_RectangleGeometrySetRectangle(
     IDwmChannelPrivate *Interface, UINT Resource,
     float First, float Second, float Third, float Fourth,
     float Fifth, float Sixth, float Seventh, float Eighth,
-    float Ninth, float Tenth, float Eleventh, float Twelfth, BOOL Enabled)
+    float Ninth, float Tenth, float Eleventh, float Twelfth, BOOLEAN Enabled)
 {
     const float Values[] =
         {First, Second, Third, Fourth, Fifth, Sixth, Seventh, Eighth,
@@ -2492,7 +2492,7 @@ DwmChannel_AtlasedRectsGroupUpdate(IDwmChannelPrivate *Interface,
 
 static HRESULT STDMETHODCALLTYPE
 DwmChannel_AtlasedRectsMeshUpdate(IDwmChannelPrivate *Interface,
-                                  UINT Resource, BOOL Enabled, INT Opacity,
+                                  UINT Resource, BOOLEAN Enabled, INT Opacity,
                                   const void *FirstRects,
                                   const void *SecondRects, UINT Count)
 {
@@ -2545,7 +2545,7 @@ DwmChannel_MeshGeometry2DUpdate(IDwmChannelPrivate *Interface, UINT Resource,
 
 static void STDMETHODCALLTYPE
 DwmChannel_GetCommandBatch(IDwmChannelPrivate *Interface, void **Batch,
-                           BOOL *MoreCommands)
+                           BOOLEAN *MoreCommands)
 {
     DWM_CHANNEL *Channel = DwmChannelFromInterface(Interface);
     DWM_COMMAND_BATCH *NewBatch = NULL;
@@ -2590,7 +2590,7 @@ DwmChannel_ReleaseCommandBatch(IDwmChannelPrivate *Interface)
     HeapFree(GetProcessHeap(), 0, Batch);
 }
 
-static BOOL STDMETHODCALLTYPE
+static BOOLEAN STDMETHODCALLTYPE
 DwmChannel_IsRemoteTreeEnabled(IDwmChannelPrivate *Interface)
 {
     UNREFERENCED_PARAMETER(Interface);
