@@ -173,6 +173,9 @@ double modf(double x, double *iptr)
 	} else if (j_0>51) {		/* no fraction part */
 	    __uint32_t high;
 	    *iptr = x*one;
+	    /* NaN has no integer/fraction split: propagate it to both results. */
+	    if (j_0 == 0x400 && ((i0 & 0x000fffff) | i1) != 0)
+	        return *iptr;
 	    GET_HIGH_WORD(high,x);
 	    INSERT_WORDS(x,high&0x80000000U,0);	/* return +-0 */
 	    return x;
