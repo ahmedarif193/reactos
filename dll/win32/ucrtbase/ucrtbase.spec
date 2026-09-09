@@ -2505,7 +2505,7 @@
 @ cdecl memmove_s(ptr long ptr long)
 @ cdecl memset(ptr long long)
 @ cdecl modf(double ptr)
-@ cdecl -stub -arch=!i386 modff(float ptr)
+@ cdecl -arch=!i386 modff(float ptr)
 @ cdecl -stub nan(str)
 @ cdecl -stub nanf(str)
 @ cdecl nanl(str) nan
