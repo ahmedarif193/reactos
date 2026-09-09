@@ -12837,10 +12837,11 @@ DxgkAdapterStart(
                     Adapter->SupportSurpriseRemoval = Caps->SupportSurpriseRemoval;
                 if (!Adapter->MiniportContext->IsDisplayOnlyDriver)
                 {
-                    Adapter->NodeCount = Caps->GpuEngineTopology.NbAsymetricProcessingNodes;
+                    /* The topology count is defined only for multi-engine miniports. */
+                    Adapter->NodeCount = Caps->SchedulingCaps.MultiEngineAware ? Caps->GpuEngineTopology.NbAsymetricProcessingNodes : 1;
                     Adapter->HighestAcceptableAddress = Caps->HighestAcceptableAddress;
                     DXGKRNL_INFO("DxgkAdapterStart: driver caps: HighestAcceptableAddress=0x%I64x nodes=%lu scheduling=0x%08x\n",
-                                (ULONGLONG)Caps->HighestAcceptableAddress.QuadPart, Caps->GpuEngineTopology.NbAsymetricProcessingNodes, Caps->SchedulingCaps.Value);
+                                (ULONGLONG)Caps->HighestAcceptableAddress.QuadPart, Adapter->NodeCount, Caps->SchedulingCaps.Value);
                     Adapter->SchedulingCaps.Value = Caps->SchedulingCaps.Value;
                     DXGKRNL_TRACE("DxgkAdapterStart: %lu GPU node(s) reported\n", Adapter->NodeCount);
                 }

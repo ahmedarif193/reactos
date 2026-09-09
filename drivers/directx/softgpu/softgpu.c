@@ -285,8 +285,7 @@ SoftGpuAllocateFrameBuffer(
  * All capability fields left at zero except what softgpu actually supports:
  *   - PointerCaps.Color: 64x64 cursor composited directly into scanout
  *   - MaxAllocationListSlotId: 255
- *   - GpuEngineTopology: SOFTGPU_ENGINE_COUNT nodes (3D, copy, video
- *     decode, video encode), each an independently scheduled queue
+ *   - GpuEngineTopology: one 3D node, also used for copy work
  *   - WDDMVersion: the highest completed tier, matching the registered table
  */
 static const DXGK_DRIVERCAPS SOFTGPU_DRIVER_CAPS =

@@ -199,22 +199,11 @@ typedef struct _SOFTGPU_SUBMIT
 /*
  * GPU nodes.
  *
- * WDDM calls an independently schedulable execution queue a node, and gives
- * each one an engine type so the OS can tell rendering from copying from
- * video work.  This adapter exposes four of them, and each is a real queue:
- * it has its own fence stream, its own submission ring, and its own
- * completion DPC, so work submitted to one node runs and retires without
- * waiting on any other.
- *
- * The engines are asymmetric in name only -- one software execution core
- * serves all four -- which is exactly what an adapter with one execution
- * unit and several command queues looks like to the scheduler.
+ * Both platform providers accept contexts on node zero. Copies execute on
+ * that same node; neither provider implements separate copy or video nodes.
  */
 #define SOFTGPU_NODE_3D             0
-#define SOFTGPU_NODE_COPY           1
-#define SOFTGPU_NODE_VIDEO_DECODE   2
-#define SOFTGPU_NODE_VIDEO_ENCODE   3
-#define SOFTGPU_ENGINE_COUNT        4
+#define SOFTGPU_ENGINE_COUNT        1
 
 typedef struct _SOFTGPU_ENGINE
 {
