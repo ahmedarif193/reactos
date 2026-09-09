@@ -112,7 +112,6 @@ PVOID MmHighSectionBase;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
-static
 BOOLEAN
 MiIsProtectionCompatible(IN ULONG SectionPageProtection,
                          IN ULONG NewSectionPageProtection)
@@ -1991,10 +1990,9 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
     OldIrql = MiAcquirePfnLock();
 
     //
-    // We don't support I/O mappings in this path yet
+    // This path requires a managed physical page.
     //
     ASSERT(Pfn1 != NULL);
-    ASSERT(Pfn1->u3.e1.CacheAttribute != MiWriteCombined);
 
     //
     // Make sure new protection mask doesn't get in conflict and fix it if it does
@@ -2022,9 +2020,20 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
             ProtectionMask |= MM_NOCACHE;
         }
     }
+    else if (Pfn1->u3.e1.CacheAttribute == MiWriteCombined)
+    {
+        if ((ProtectionMask & MM_PROTECT_SPECIAL) != MM_WRITECOMBINE)
+        {
+            RebuildPte = TRUE;
+            ProtectionMask &= ~MM_PROTECT_SPECIAL;
+            ProtectionMask |= MM_WRITECOMBINE;
+        }
+    }
 
     if (RebuildPte)
     {
+        /* Preserve the effective cache policy for queries and later faults. */
+        Pfn1->OriginalPte.u.Soft.Protection = ProtectionMask;
 #if defined(_M_ARM64)
         MI_MAKE_HARDWARE_PTE_USER(&TempPte,
                                   MiAddressToPte(VirtualAddress),
@@ -2064,13 +2073,8 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
     //
     // Windows updates the relevant PFN1 information, we currently don't.
     //
-    if (UpdateDirty && PreviousPte.u.Hard.Dirty)
-    {
-        if (!Pfn1->u3.e1.Modified)
-        {
-            DPRINT1("FIXME: Mark PFN as dirty\n");
-        }
-    }
+    if (UpdateDirty && MI_IS_PAGE_DIRTY(&PreviousPte))
+        Pfn1->u3.e1.Modified = 1;
 
     //
     // Not supported in ARM3

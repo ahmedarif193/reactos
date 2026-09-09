@@ -475,6 +475,41 @@ typedef enum _MI_PFN_CACHE_ATTRIBUTE
     MiNotMapped
 } MI_PFN_CACHE_ATTRIBUTE, *PMI_PFN_CACHE_ATTRIBUTE;
 
+#if defined(_M_ARM64)
+VOID
+MiArm64PrepareAllocatedPfnCache(_In_ PFN_NUMBER PageFrameIndex, _In_ ULONG_PTR MappingBits);
+
+FORCEINLINE
+VOID
+MiArm64SyncMappedPfnCacheAttribute(
+    _In_ PMMPFN Pfn1,
+    _In_ MMPTE FinalPte)
+{
+    MI_PFN_CACHE_ATTRIBUTE NewCache;
+
+    /* MAIR indices are not MI_PFN_CACHE_ATTRIBUTE values. In particular,
+       Normal-WB index 4 would truncate to MiNonCached in the two-bit PFN field.
+       MAIR slots 4-7 mirror slots 0-3. */
+    switch (MiGetPteCacheAttribute(&FinalPte) & 3)
+    {
+        case (MI_ARM64_MAIR_NORMAL_WB_IDX & 3):
+            NewCache = MiCached;
+            break;
+        case (MI_ARM64_MAIR_NORMAL_WC_IDX & 3):
+            NewCache = MiWriteCombined;
+            break;
+        default:
+            NewCache = MiNonCached;
+            break;
+    }
+
+    if (Pfn1->u3.e1.CacheAttribute != NewCache)
+    {
+        Pfn1->u3.e1.CacheAttribute = NewCache;
+    }
+}
+#endif
+
 typedef struct _PHYSICAL_MEMORY_RUN
 {
     PFN_NUMBER BasePage;
@@ -2746,6 +2781,10 @@ NTAPI
 MiSessionAddProcess(
     IN PEPROCESS NewProcess
 );
+
+BOOLEAN
+MiIsProtectionCompatible(IN ULONG SectionPageProtection,
+                         IN ULONG NewSectionPageProtection);
 
 ULONG
 NTAPI

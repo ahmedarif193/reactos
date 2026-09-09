@@ -1830,11 +1830,6 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         return STATUS_SUCCESS;
     }
 
-    if (MmIsDisabledPage(Process, PAddress))
-    {
-        return STATUS_ACCESS_VIOLATION;
-    }
-
     /*
      * Check for the virtual memory area being deleted.
      */
@@ -1872,6 +1867,11 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         }
 
         return STATUS_GUARD_PAGE_VIOLATION;
+    }
+
+    if (MmIsDisabledPage(Process, PAddress))
+    {
+        return STATUS_ACCESS_VIOLATION;
     }
 
     HasSwapEntry = MmIsPageSwapEntry(Process, Address);
