@@ -1912,11 +1912,25 @@ DwmBlendShadowSpan(ULONG *Row, LONG X0, LONG X1, ULONG WideY, ULONG TightY)
     }
 }
 
-static void
+static BOOL
 DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
                LONG clipL, LONG clipT, LONG clipR, LONG clipB,
                const DWM_WIN *w)
 {
+    DWM_WIN AnimatedWindow;
+
+    if (w->AnimFlags != 0)
+    {
+        if (w->AnimCx <= 0 || w->AnimCy <= 0)
+            return TRUE;
+        AnimatedWindow = *w;
+        AnimatedWindow.x = w->AnimX;
+        AnimatedWindow.y = w->AnimY;
+        AnimatedWindow.cx = w->AnimCx;
+        AnimatedWindow.cy = w->AnimCy;
+        w = &AnimatedWindow;
+    }
+
     MONITORINFO monitorInfo;
     HMONITOR monitor;
     RECT ownerRect;
@@ -1939,7 +1953,7 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
         g_shadowInactiveTight.Prefix == NULL ||
         w->cx <= 0 || w->cy <= 0 ||
         !(w->LayerFlags & DWM_WINDOW_NC_SHADOW))
-        return;
+        return TRUE;
 
     ownerRect.left = w->x;
     ownerRect.top = w->y;
@@ -1966,7 +1980,7 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
             (monitorInfo.rcWork.bottom < monitorInfo.rcMonitor.bottom &&
              ownerRect.top >= monitorInfo.rcWork.bottom))
         {
-            return;
+            return TRUE;
         }
 
         if (monitorInfo.rcWork.left > monitorInfo.rcMonitor.left &&
@@ -1985,7 +1999,7 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
 
     if (shadowRight <= clipL || shadowLeft >= clipR ||
         shadowBottom <= clipT || shadowTop >= clipB)
-        return;
+        return TRUE;
 
     x0 = (shadowLeft < clipL) ? clipL : (LONG)shadowLeft;
     x1 = (shadowRight > clipR) ? clipR : (LONG)shadowRight;
@@ -1996,7 +2010,7 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
     if (x1 > scrW) x1 = scrW;
     if (y1 > scrH) y1 = scrH;
     if (x1 <= x0 || y1 <= y0)
-        return;
+        return TRUE;
 
     active = (w->LayerFlags & DWM_WINDOW_ACTIVE) != 0;
     dark = (w->LayerFlags & DWM_WINDOW_DARK) != 0;
@@ -2028,8 +2042,16 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
     if (w->LayerFlags & DWM_LWA_ALPHA)
         windowAlpha = w->Alpha;
 
+    if (DwmGpuComposeIsActive())
+    {
+        RECT Bounds = {x0, y0, x1, y1};
+        return DwmGpuComposeShadow(&Bounds, ownerX, ownerY, w->cx, w->cy,
+                                  verticalOffset, g_shadowMarginLeft, active,
+                                  wideOpacity, tightOpacity, windowAlpha);
+    }
+
     if (!DwmEnsureShadowCoverage(scrW))
-        return;
+        return TRUE;
     {
         LONG xs = x1, xe = x0;
 
@@ -2051,7 +2073,7 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
         x1 = xe;
     }
     if (x1 <= x0)
-        return;
+        return TRUE;
 
     for (y = y0; y < y1; y++)
     {
@@ -2082,6 +2104,7 @@ DwmBlendShadow(ULONG *comp, LONG scrW, LONG scrH,
             DwmBlendShadowSpan(row, x0, x1, WideY, TightY);
         }
     }
+    return TRUE;
 }
 
 
@@ -2851,6 +2874,19 @@ static void   *g_compBits;
 static ULONGLONG g_qpcPerSecond;
 static ULONGLONG g_refreshPeriodQpc;
 static ULONGLONG g_lastFrameQpc;
+
+/* Prefer full-frame GPU composition when the adapter supports it. The
+ * environment override remains available for diagnosis. The registered output
+ * swapchain is promoted to a KMT flip and never read back to the CPU. */
+static BOOL
+DwmGpuComposeEnabled(void)
+{
+    WCHAR Value[8];
+    DWORD Length = GetEnvironmentVariableW(L"DWM_GPU_COMPOSE", Value,
+                                           ARRAYSIZE(Value));
+
+    return !(Length == 1 && Value[0] == L'0');
+}
 static HDC     g_hdcBackdrop;
 static HBITMAP g_hbmBackdrop;
 static void   *g_backdropBits;
@@ -3057,6 +3093,11 @@ DwmComposeLoop(HANDLE hStopEvent)
         return;
     }
 
+    /* Registration of the trusted scanout swapchain is accepted only after
+     * this process has attached as the desktop compositor. */
+    if (DwmGpuComposeEnabled() && DwmGpuComposeInitialize(g_W, g_H))
+        OutputDebugStringA("DWM: GPU composition enabled; GPU copy to scanout\n");
+
     for (;;)
     {
         PDWM_FRAME_HEADER hdr = (PDWM_FRAME_HEADER)g_buf;
@@ -3064,6 +3105,15 @@ DwmComposeLoop(HANDLE hStopEvent)
         PRECTL blurRects;
         LONG st;
         ULONG i;
+        MSG message;
+
+        /* This thread owns the GPU carrier. Service sent messages even
+         * while composition is idle, so broadcasts cannot block Explorer. */
+        while (PeekMessageW(&message, NULL, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
 
         if (WaitForSingleObject(hStopEvent, 0) == WAIT_OBJECT_0)
             break;
@@ -3136,8 +3186,8 @@ DwmComposeLoop(HANDLE hStopEvent)
             HANDLE WaitHandles[2] = {hStopEvent, hWake};
 
             DwmSetTimerPrecision(FALSE);
-            if (WaitForMultipleObjects(ARRAYSIZE(WaitHandles), WaitHandles,
-                                       FALSE, 200) == WAIT_OBJECT_0)
+            if (MsgWaitForMultipleObjects(ARRAYSIZE(WaitHandles), WaitHandles,
+                                          FALSE, 200, QS_ALLINPUT) == WAIT_OBJECT_0)
                 break;
             continue;
         }
@@ -3198,7 +3248,12 @@ DwmComposeLoop(HANDLE hStopEvent)
                 break;
             }
 
-            if (cl == 0 && ct == 0 && cr == g_W && cb == g_H)
+            /* A GPU redraw covering the screen does not change wallpaper.
+             * Repainting/uploading it here makes large window moves perform
+             * a full-screen CPU copy on every frame. Explicit full damage
+             * and surface recreation still refresh the cached wallpaper. */
+            if (!DwmGpuComposeIsActive() &&
+                cl == 0 && ct == 0 && cr == g_W && cb == g_H)
                 refreshBackdrop = TRUE;
             forceFull = FALSE;
 
@@ -3219,6 +3274,78 @@ DwmComposeLoop(HANDLE hStopEvent)
                 }
 
                 QueryPerformanceCounter(&statFrameStart);
+
+
+                /*
+                 * Hardware frame.  Every window is drawn from a resident
+                 * texture, so an unchanged one costs a quad and no upload,
+                 * and the finished frame is copied to scanout by the GPU
+                 * without CPU readback. If any step declines, the software
+                 * path below can rebuild the frame.
+                 */
+                if (DwmGpuComposeIsActive())
+                {
+                    BOOL gpuFrame;
+                    RECT gpuDamage = {pl, pt, pr, pb};
+                    RECT gpuShadowMargins = {g_shadowMarginLeft, g_shadowMarginTop,
+                                              g_shadowMarginRight, g_shadowMarginBottom};
+                    DwmGpuComposeScene(wins, hdr->Count,
+                                        (const RECTL *)(g_buf + hdr->BlurRectArrayBase),
+                                        hdr->BlurRectCount, g_originX, g_originY,
+                                        refreshBackdrop, DwmBlurRadius(), &gpuShadowMargins);
+                    gpuFrame = DwmGpuComposeBegin(GetSysColor(COLOR_DESKTOP),
+                                                       g_backdropBits, refreshBackdrop,
+                                                       &gpuDamage);
+
+
+                    for (i = 0; gpuFrame && i < hdr->Count; i++)
+                    {
+                        const BYTE *gpix;
+
+                        /* Submit the scene in order. Begin's scissor limits
+                         * raster work to the repaired buffer region. */
+                        gpix = NULL;
+                        DwmGpuComposePrepareWindow(&wins[i], i);
+                        if (wins[i].BlurRectBase > hdr->BlurRectCount ||
+                            wins[i].BlurRectCount > hdr->BlurRectCount - wins[i].BlurRectBase)
+                        {
+                            gpuFrame = FALSE;
+                            break;
+                        }
+                        if (!DwmGpuComposeBlurWindow(&wins[i],
+                                wins[i].BlurRectCount != 0 ?
+                                    &((const RECTL *)(g_buf + hdr->BlurRectArrayBase))[wins[i].BlurRectBase] : NULL,
+                                g_originX, g_originY, DwmBlurRadius()) ||
+                            !DwmBlendShadow(NULL, g_W, g_H, 0, 0, g_W, g_H, &wins[i]) ||
+                            !DwmGpuComposeWindow(&wins[i], gpix,
+                                                 g_originX, g_originY))
+                        {
+                            gpuFrame = FALSE;
+                        }
+                    }
+
+                    if (gpuFrame && DwmGpuComposeEnd())
+                    {
+                        g_lastFrameQpc = (ULONGLONG)statFrameStart.QuadPart;
+                        for (i = 0; i < hdr->Count; ++i)
+                            DwmDxAcknowledgeSurface(&wins[i]);
+                        ++g_frameSeq;
+                        if ((g_frameSeq & 255) == 0)
+                        {
+                            DwmSweepViews();
+                            DwmDxSweepSurfaces(g_frameSeq);
+                        }
+                        forceFull = FALSE;
+                        continue;
+                    }
+                    /* A failed GPU frame leaves no reusable CPU composition.
+                     * Retire the context and rebuild the entire scene. */
+                    DwmGpuComposeShutdown();
+                    OutputDebugStringA("DWM: GPU frame failed; restoring software composition\n");
+                    pl = cl = 0; pt = ct = 0;
+                    pr = cr = g_W; pb = cb = g_H;
+                }
+
                 {
                     BOOL covered = FALSE;
 
@@ -3374,6 +3501,7 @@ DwmComposeLoop(HANDLE hStopEvent)
     }
 
     DwmSetTimerPrecision(FALSE);
+    DwmGpuComposeShutdown();
     DwmFreeBackdropCache();
     DwmDxCleanupSurfaces();
     for (ViewIndex = 0; ViewIndex < DWM_VIEW_CACHE_SIZE; ++ViewIndex)
