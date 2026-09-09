@@ -23,6 +23,10 @@ NtfsDiskPrepareMountKm(
 NTSTATUS
 NtfsDiskFlushKm(VOID);
 
+/* Flush one mounted volume without submitting writes to previous devices. */
+NTSTATUS
+NtfsDiskFlushVolumeKm(_In_ PDEVICE_OBJECT DeviceObject);
+
 /* Declared here rather than in the public header because
  * FILE_BOTH_DIR_INFORMATION is a kernel-mode type.
  */
