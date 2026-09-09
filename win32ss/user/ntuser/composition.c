@@ -825,6 +825,11 @@ IntCompositionStartAnimation(_Inout_ REDIRECT_ENTRY *Entry,
                              _In_ const RECTL *Window, _In_ const RECTL *Target,
                              _In_ ULONG Flags)
 {
+    if (!gspv.animationinfo.iMinAnimate)
+    {
+        Entry->AnimFlags = 0;
+        return;
+    }
     if (Window->right <= Window->left || Window->bottom <= Window->top ||
         Target->right <= Target->left || Target->bottom <= Target->top)
     {
@@ -896,7 +901,7 @@ IntCompositionEvaluateAnimation(_Inout_ REDIRECT_ENTRY *Entry,
     ULONG u, s;
     RECTL rc;
 
-    if (Entry->AnimDuration <= 0 || Elapsed >= Entry->AnimDuration)
+    if (!gspv.animationinfo.iMinAnimate || Entry->AnimDuration <= 0 || Elapsed >= Entry->AnimDuration)
     {
         RECTL_bUnionRect(prcDamage, &Entry->AnimDamage, &Entry->AnimRect);
         Entry->AnimFlags = 0;

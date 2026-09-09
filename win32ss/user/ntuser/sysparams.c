@@ -89,6 +89,7 @@ static const WCHAR* VAL_BORDER = L"BorderWidth";
 static const WCHAR* VAL_ICONSPC = L"IconSpacing";
 static const WCHAR* VAL_ICONVSPC = L"IconVerticalspacing";
 static const WCHAR* VAL_ITWRAP = L"IconTitleWrap";
+static const WCHAR* VAL_MINANIMATE = L"MinAnimate";
 
 static const WCHAR* KEY_SOUND = L"Control Panel\\Sound";
 static const WCHAR* VAL_BEEP = L"Beep";
@@ -500,6 +501,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.soundsentry.cbSize = sizeof(SOUNDSENTRYW);
     gspv.highcontrast.cbSize = sizeof(HIGHCONTRASTW);
     gspv.animationinfo.cbSize = sizeof(ANIMATIONINFO);
+    gspv.animationinfo.iMinAnimate = !!SpiLoadInt(KEY_METRIC, VAL_MINANIMATE, TRUE);
 
     g_bWindowSnapEnabled = SpiLoadInt(KEY_DESKTOP, VAL_SNAP_ENABLED, TRUE);
     gspv.bDockMoving = SpiLoadInt(KEY_DESKTOP, VAL_SNAP_DOCKMOVING, TRUE);
@@ -1711,13 +1713,26 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             return SpiGet(pvParam, &gspv.animationinfo, sizeof(ANIMATIONINFO), fl);
 
         case SPI_SETANIMATION:
-            if (!SpiSet(&gspv.animationinfo, pvParam, sizeof(ANIMATIONINFO), fl))
+        {
+            ANIMATIONINFO Animation;
+            WCHAR Value[2];
+
+            if (!SpiSet(&Animation, pvParam, sizeof(Animation), fl))
                 return 0;
+            Animation.iMinAnimate = !!Animation.iMinAnimate;
             if (fl & SPIF_UPDATEINIFILE)
             {
-                // FIXME: What to do?
+                Value[0] = Animation.iMinAnimate ? L'1' : L'0';
+                Value[1] = UNICODE_NULL;
+                if (!RegWriteUserSetting(KEY_METRIC, VAL_MINANIMATE, REG_SZ, Value, sizeof(Value)))
+                {
+                    EngSetLastError(ERROR_WRITE_FAULT);
+                    return 0;
+                }
             }
-            return (UINT_PTR)KEY_DESKTOP;
+            gspv.animationinfo = Animation;
+            return (UINT_PTR)KEY_METRIC;
+        }
 
         case SPI_GETFONTSMOOTHING:
             return SpiGetInt(pvParam, &gspv.bFontSmoothing, fl);
