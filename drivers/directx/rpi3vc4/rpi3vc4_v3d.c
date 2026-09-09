@@ -6,6 +6,7 @@
  */
 
 #include "rpi3vc4.h"
+#include "ordered_nop.h"
 
 #define RPI3VC4_RPIQ_PATH                  L"\\DosDevices\\RPIQ"
 #define RPI3VC4_FILE_DEVICE_RPIQ           2836UL
@@ -1029,6 +1030,7 @@ Rpi3Vc4SubmitCommand(
     PUCHAR Mapping = NULL;
     BOOLEAN PhysicalMapping = FALSE;
     BOOLEAN PrivatePacket = FALSE;
+    BOOLEAN OrderedNop = FALSE;
     ULONG BinnerOverflowEnd;
     KIRQL OldIrql;
 
@@ -1047,6 +1049,7 @@ Rpi3Vc4SubmitCommand(
     {
         if (SubmitCommand->DmaBufferSubmissionEndOffset <
                 SubmitCommand->DmaBufferSubmissionStartOffset ||
+            SubmitCommand->DmaBufferSubmissionEndOffset > SubmitCommand->DmaBufferSize ||
             sizeof(Packet) >
                 SubmitCommand->DmaBufferSubmissionEndOffset -
                     SubmitCommand->DmaBufferSubmissionStartOffset)
@@ -1067,7 +1070,9 @@ Rpi3Vc4SubmitCommand(
                 (const UCHAR *)SubmitCommand->pDmaBufferPrivateData +
                     SubmitCommand->DmaBufferPrivateDataSubmissionStartOffset,
                 sizeof(Packet));
-            PrivatePacket = TRUE;
+            /* Paging buffers can have reserved private storage without a
+             * VC4 packet in it. Inspect their actual DMA stream below. */
+            PrivatePacket = Packet.Magic == RPI3VC4_DMA_PACKET_MAGIC;
         }
         if (!PrivatePacket)
         {
@@ -1087,10 +1092,25 @@ Rpi3Vc4SubmitCommand(
                               SubmitCommand->DmaBufferSubmissionStartOffset,
                           sizeof(Packet));
         }
+        /* Paging/residency NOPs share node zero's cumulative fence stream.
+         * Completing them in the software DPC could retire earlier live V3D
+         * buffers. Put them in the same ordered queue as rendering instead. */
+        if (Packet.Magic == SOFTGPU_CMD_MAGIC && Mapping != NULL)
+        {
+            OrderedNop = Rpi3Vc4IsOrderedNopStream(
+                Mapping + SubmitCommand->DmaBufferSubmissionStartOffset,
+                SubmitCommand->DmaBufferSubmissionEndOffset -
+                    SubmitCommand->DmaBufferSubmissionStartOffset);
+        }
         if (PhysicalMapping)
         {
             MmUnmapIoSpace(Mapping,
                            SubmitCommand->DmaBufferSubmissionEndOffset);
+        }
+        if (OrderedNop)
+        {
+            RtlZeroMemory(&Packet, sizeof(Packet));
+            goto QueueSubmit;
         }
         if (Packet.Magic != RPI3VC4_DMA_PACKET_MAGIC)
             return STATUS_NOT_SUPPORTED;
@@ -1123,6 +1143,7 @@ Rpi3Vc4SubmitCommand(
         }
     }
 
+QueueSubmit:
     KeAcquireSpinLock(&Context->V3dQueueLock, &OldIrql);
     if (!Context->V3dReady ||
         Context->V3dSubmitTail - Context->V3dSubmitHead >=
