@@ -80,7 +80,9 @@ IntTopLevelWindowFromPoint(INT x, INT y)
             continue;
         }
 
-        if ((pWnd->style & WS_VISIBLE) &&
+        /* The compositor carrier must not own the mouse queue or cursor. */
+        if (!IntCompositionIsGpuOutputWindow(pWnd) &&
+            (pWnd->style & WS_VISIBLE) &&
             (pWnd->ExStyle & (WS_EX_LAYERED|WS_EX_TRANSPARENT)) != (WS_EX_LAYERED|WS_EX_TRANSPARENT) &&
             IntPtInWindow(pWnd, x, y))
             return pWnd;

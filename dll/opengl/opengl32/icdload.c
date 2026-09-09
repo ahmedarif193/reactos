@@ -436,6 +436,12 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     if (IsIconic(Window) || IsRectEmpty(&ClientRect))
         return wglPresentBuffersDirect(hdc, IcdData, CallbackData);
 
+    /* DWM's registered output swapchain is already the completed desktop.
+     * Keep it in its render allocation so win32k can promote the ensuing KMT
+     * present to a direct scanout flip. */
+    if (GetPropW(Window, DWM_PROP_GPU_OUTPUT) != NULL)
+        return wglPresentBuffersDirect(hdc, IcdData, CallbackData);
+
     (void)InitOnceExecuteOnce(&DwmDxInitOnce, IntLoadDwmDxCallbacks,
                               NULL, NULL);
     if (DwmDxGetWindowSharedSurface == NULL ||

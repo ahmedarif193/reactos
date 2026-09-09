@@ -86,6 +86,9 @@ static PKEVENT         g_DwmWakeEvent = NULL;
 /* The attached compositor process: every DWM entry point is rejected for
  * anyone else (frame metadata + window surfaces are session-global state). */
 static PEPROCESS       g_DwmProcess = NULL;
+static volatile PVOID  g_DwmGpuOutputWindow = NULL;
+static volatile LONG   g_DwmGpuOutputWidth;
+static volatile LONG   g_DwmGpuOutputHeight;
 /* Scanout pacing event (referenced; also registered with the display path,
  * whose present timer signals it every period). */
 
@@ -271,6 +274,12 @@ static BOOL
 IntCompositionIsCompositable(_In_ PWND Wnd)
 {
     if (Wnd == NULL || Wnd->head.pti == NULL)
+        return FALSE;
+    /* The registered fullscreen OpenGL window is DWM's final GPU scanout
+     * carrier.  Redirecting or returning it in GETFRAME would make DWM
+     * compose its own previous output and can also force the ICD back through
+     * a CPU/GDI present. */
+    if (IntCompositionIsGpuOutputWindow(Wnd))
         return FALSE;
     if (!(Wnd->style & WS_VISIBLE))
         return FALSE;
@@ -1429,6 +1438,46 @@ IntCompositionIsAttachedProcess(VOID)
         (PVOID volatile *)&g_DwmProcess, NULL, NULL);
 }
 
+BOOL
+IntCompositionIsGpuOutputWindow(_In_opt_ PWND Window)
+{
+    ULONG_PTR Registered;
+
+    if (Window == NULL || !g_DwmAttached)
+        return FALSE;
+
+    Registered = (ULONG_PTR)InterlockedCompareExchangePointer(
+        (PVOID volatile *)&g_DwmGpuOutputWindow, NULL, NULL);
+    return Registered != 0 &&
+           Registered == (ULONG_PTR)UserHMGetHandle(Window);
+}
+
+BOOL
+IntCompositionIsGpuOutputPresent(_In_opt_ HWND Window,
+                                 _In_ const RECT *SourceRect,
+                                 _In_ const RECT *DestinationRect)
+{
+    ULONG_PTR Registered;
+    LONG Width, Height;
+
+    if (Window == NULL || SourceRect == NULL || DestinationRect == NULL ||
+        !g_DwmAttached || PsGetCurrentProcess() != g_DwmProcess)
+    {
+        return FALSE;
+    }
+
+    Registered = (ULONG_PTR)InterlockedCompareExchangePointer(
+        (PVOID volatile *)&g_DwmGpuOutputWindow, NULL, NULL);
+    Width = InterlockedCompareExchange(&g_DwmGpuOutputWidth, 0, 0);
+    Height = InterlockedCompareExchange(&g_DwmGpuOutputHeight, 0, 0);
+    return Registered == (ULONG_PTR)Window && Width > 0 && Height > 0 &&
+           SourceRect->left == 0 && SourceRect->top == 0 &&
+           SourceRect->right == Width && SourceRect->bottom == Height &&
+           DestinationRect->left == 0 && DestinationRect->top == 0 &&
+           DestinationRect->right == Width &&
+           DestinationRect->bottom == Height;
+}
+
 VOID
 IntCompositionDamageFromGdi(VOID)
 {
@@ -2194,6 +2243,9 @@ IntCompositionDwmTeardown(VOID)
     PKEVENT WakeEvent;
 
     g_DwmAttached = FALSE;
+    InterlockedExchangePointer((PVOID volatile *)&g_DwmGpuOutputWindow, NULL);
+    InterlockedExchange(&g_DwmGpuOutputWidth, 0);
+    InterlockedExchange(&g_DwmGpuOutputHeight, 0);
     /* Damage raised from the GDI finish path holds this same PDEV lock while
      * reading/signaling g_DwmWakeEvent. Clear it before dropping the object
      * reference so KeSetEvent can never race a freed event. */
@@ -2227,6 +2279,60 @@ IntCompositionCleanupProcess(_In_ PEPROCESS Process)
     Desktop = UserGetDesktopWindow();
     if (Desktop != NULL)
         co_UserRedrawWindow(Desktop, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+}
+
+NTSTATUS
+IntCompositionDwmSetGpuOutput(_In_ PVOID pUser)
+{
+    DWM_GPU_OUTPUT Request;
+    PWND Window;
+
+    if (pUser == NULL)
+        return STATUS_INVALID_PARAMETER;
+    _SEH2_TRY
+    {
+        ProbeForRead(pUser, sizeof(Request), sizeof(ULONG));
+        Request = *(PDWM_GPU_OUTPUT)pUser;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Request.StructSize != sizeof(Request) || Request.Reserved != 0 ||
+        !g_DwmAttached || PsGetCurrentProcess() != g_DwmProcess)
+    {
+        return STATUS_ACCESS_DENIED;
+    }
+    if (Request.Window == 0)
+    {
+        InterlockedExchangePointer(
+            (PVOID volatile *)&g_DwmGpuOutputWindow, NULL);
+        InterlockedExchange(&g_DwmGpuOutputWidth, 0);
+        InterlockedExchange(&g_DwmGpuOutputHeight, 0);
+        return STATUS_SUCCESS;
+    }
+    if (Request.Width == 0 || Request.Height == 0 ||
+        Request.Width > MAXLONG || Request.Height > MAXLONG ||
+        Request.Window > MAXULONG_PTR)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Window = UserGetWindowObject((HWND)(ULONG_PTR)Request.Window);
+    if (Window == NULL || Window->head.pti == NULL ||
+        Window->head.pti->ppi != PsGetCurrentProcessWin32Process())
+    {
+        return STATUS_ACCESS_DENIED;
+    }
+
+    InterlockedExchange(&g_DwmGpuOutputWidth, (LONG)Request.Width);
+    InterlockedExchange(&g_DwmGpuOutputHeight, (LONG)Request.Height);
+    KeMemoryBarrier();
+    InterlockedExchangePointer((PVOID volatile *)&g_DwmGpuOutputWindow,
+                               (PVOID)(ULONG_PTR)Request.Window);
+    return STATUS_SUCCESS;
 }
 
 /*

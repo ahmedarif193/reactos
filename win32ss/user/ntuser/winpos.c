@@ -3015,6 +3015,14 @@ co_WinPosSearchChildren(
     HWND *List, *phWnd;
     PWND pwndChild = NULL;
 
+    /* DWM's visible fullscreen GPU output is a scanout carrier rather than
+     * an input surface.  Let hit testing continue to the real application
+     * windows below it. */
+    if (IntCompositionIsGpuOutputWindow(ScopeWin))
+    {
+        return NULL;
+    }
+
     /* not visible */
     if (!(ScopeWin->style & WS_VISIBLE))
     {

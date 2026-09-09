@@ -31,6 +31,7 @@
 #define DWM_ROUTINE_OPENSURFACE  0xfffe0016
 #define DWM_ROUTINE_DXSURFACE    0xfffe0017
 #define DWM_ROUTINE_SETBLUR      0xfffe0018
+#define DWM_ROUTINE_SETGPUOUTPUT 0xfffe0019
 
 /*
  * Internal win32k control channel to the canonical display driver (DrvEscape).
@@ -220,6 +221,7 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_PROP_BACKDROP_NC_EXTEND   L"ReactOS.Dwm.BackdropNcExtend"
 #define DWM_PROP_BACKDROP_NC_EXTEND_LEFT L"ReactOS.Dwm.BackdropNcExtendLeft"
 #define DWM_PROP_CORNER_RADIUS        L"ReactOS.Dwm.CornerRadius"
+#define DWM_PROP_GPU_OUTPUT           L"ReactOS.Dwm.GpuOutput"
 
 /* Values intentionally match DWM_SYSTEMBACKDROP_TYPE in dwmapi.h. */
 #define DWM_BACKDROP_NONE       1u
@@ -343,6 +345,18 @@ typedef struct _DWM_ATTACH
     HANDLE hWake;        /* out : damage wake event                */
     HANDLE hVblank;      /* out : reserved, always NULL            */
 } DWM_ATTACH, *PDWM_ATTACH;
+
+/* Registers the one full-screen swapchain whose completed GPU allocations
+ * the attached compositor is allowed to flip directly to the VidPn source.
+ * A zero Window unregisters it. */
+typedef struct _DWM_GPU_OUTPUT
+{
+    ULONG StructSize;
+    ULONG Reserved;
+    ULONGLONG Window;
+    ULONG Width;
+    ULONG Height;
+} DWM_GPU_OUTPUT, *PDWM_GPU_OUTPUT;
 
 /* Runtime-private metadata stored in the D3DKMT shared resource. This is an
  * OS presentation contract, not miniport-private data: DWM and any OpenGL ICD

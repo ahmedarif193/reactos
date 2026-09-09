@@ -1007,6 +1007,28 @@ NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
         return STATUS_INVALID_PARAMETER;
     }
 
+    /* Mesa reports a normal windowed blit for every WGL swap. The attached
+     * compositor registers exactly one screen-sized output HWND; promote only
+     * that trusted, complete surface to a flip. dxgkrnl then retires the V3D
+     * fence before programming the allocation for scanout. */
+    {
+        BOOL GpuOutput = IntCompositionIsGpuOutputPresent(
+                             Captured.hWindow, &Captured.SrcRect,
+                             &Captured.DstRect);
+
+        if (Captured.Flags.Blt && !Captured.Flags.Flip &&
+            Captured.hSource != 0 && Captured.hDestination == 0 &&
+            Captured.SubRectCnt == 0 && Captured.Flags.SrcRectValid &&
+            Captured.Flags.DstRectValid && GpuOutput)
+        {
+            Captured.Flags.Blt = 0;
+            Captured.Flags.Flip = 1;
+            Captured.Flags.RestrictVidPnSource = 1;
+            Captured.VidPnSourceId = 0;
+            Captured.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
+        }
+    }
+
     Status = DxgAdapterCallbacks.RxgkIntPfnPresent(&Captured);
     if (NT_SUCCESS(Status))
     {
