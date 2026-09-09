@@ -89,6 +89,10 @@ add_executable(ntoskrnl
     ${CMAKE_CURRENT_BINARY_DIR}/ntoskrnl.def)
 set_module_type(ntoskrnl kernel)
 
+if(ARCH STREQUAL "arm64")
+    target_link_libraries(ntoskrnl rtl_kernel_context)
+endif()
+
 source_group(TREE ${REACTOS_SOURCE_DIR}/ntoskrnl PREFIX "Source Files" FILES ${NTOSKRNL_SOURCE})
 
 target_link_libraries(ntoskrnl ntoskrnl_vista cportlib csq ${PSEH_LIB} apisets arbiter cmlib ntlsalib rtl cryptlib ${ROSSYM_LIB} libcntpr setjmp wdmguid poguid ioevent)

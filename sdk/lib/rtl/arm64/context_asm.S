@@ -110,7 +110,7 @@ RtlpRestoreContextInternal:
     /* Target PC into x17 (IP1) for the final branch */
     ldr     x17, [x16, #CxPc]
 
-    /* Volatile registers x2..x15 and x18 (x16/x17 stay as scratch) */
+    /* Volatile registers x2..x15 (x16/x17 stay as scratch) */
     ldp     x2,  x3,  [x16, #CxX2]
     ldp     x4,  x5,  [x16, #CxX4]
     ldp     x6,  x7,  [x16, #CxX6]
@@ -118,7 +118,17 @@ RtlpRestoreContextInternal:
     ldp     x10, x11, [x16, #CxX10]
     ldp     x12, x13, [x16, #CxX12]
     ldp     x14, x15, [x16, #CxX14]
+#ifndef RTL_KERNEL_CONTEXT
+    /* User-mode x18 belongs to the restored thread context (TEB). */
     ldr     x18,      [x16, #CxX18]
+#else
+    /*
+     * Kernel x18 identifies the current processor, not the saved thread.
+     * An unwind handler may have migrated since RtlCaptureContext. Keep the
+     * live PCR pointer installed by the scheduler instead of restoring the
+     * previous processor's pointer from the context.
+     */
+#endif
 
     /* x0/x1 last, since x16 aliases the context pointer until now */
     ldp     x0,  x1,  [x16, #CxX0]

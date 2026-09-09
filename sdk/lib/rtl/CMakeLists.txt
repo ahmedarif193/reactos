@@ -159,6 +159,16 @@ target_link_libraries(rtl PRIVATE pseh)
 add_pch(rtl rtl.h SOURCE)
 add_dependencies(rtl psdk asm)
 
+if(ARCH STREQUAL "arm64")
+    # The kernel must preserve its current PCR in x18 across a context restore.
+    # Supply these definitions as objects so the kernel never pulls the
+    # user-mode context assembly from the shared rtl archive.
+    add_asm_files(rtl_kernel_context_asm arm64/context_asm.S)
+    add_library(rtl_kernel_context OBJECT ${rtl_kernel_context_asm})
+    target_compile_definitions(rtl_kernel_context PRIVATE RTL_KERNEL_CONTEXT)
+    add_dependencies(rtl_kernel_context asm)
+endif()
+
 list(APPEND SOURCE_VISTA
     ${RTL_WINE_SOURCE_VISTA}
     condvar.c
