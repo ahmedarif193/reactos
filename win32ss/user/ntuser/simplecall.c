@@ -552,6 +552,31 @@ NtUserCallTwoParam(
 
     switch (Routine)
     {
+        case TWOPARAM_ROUTINE_ROS_GETCALLPROCINFO:
+        {
+            WNDPROC_INFO ProcInfo;
+            ROS_CALLPROCINFO Info = {0};
+
+            Ret = UserGetCallProcInfo((HANDLE)Param1, &ProcInfo);
+            if (!Ret)
+                break;
+
+            Info.WindowProc = (ULONG_PTR)ProcInfo.WindowProc;
+            Info.IsUnicode = ProcInfo.IsUnicode;
+            _SEH2_TRY
+            {
+                ProbeForWrite((PVOID)Param2, sizeof(Info), sizeof(ULONG));
+                RtlCopyMemory((PVOID)Param2, &Info, sizeof(Info));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                SetLastNtError(_SEH2_GetExceptionCode());
+                Ret = FALSE;
+            }
+            _SEH2_END;
+            break;
+        }
+
         case TWOPARAM_ROUTINE_REDRAWTITLE:
         {
             Window = UserGetWindowObject((HWND)Param1);
