@@ -749,7 +749,8 @@
 @ stdcall RtlCopyLuidAndAttributesArray(long ptr ptr)
 @ stdcall RtlCopyMappedMemory(ptr ptr long)
 @ stdcall -version=0x600+ -arch=x86_64,arm64 RtlCopyExtendedContext(ptr long ptr)
-@ cdecl -version=0x600+ -arch=x86_64,arm64 RtlCopyMemory(ptr ptr long) memmove
+@ cdecl -version=0x600+ -arch=x86_64 RtlCopyMemory(ptr ptr long) memmove
+@ cdecl -version=0x600+ -arch=arm64 RtlCopyMemory(ptr ptr long) RtlpUserMemmove
 @ stdcall -stub -version=0x600+ -arch=x86_64,arm64 RtlCopyMemoryNonTemporal(ptr ptr long)
 @ stdcall RtlCopyMemoryStreamTo(ptr ptr int64 ptr ptr)
 @ stdcall RtlCopyOutOfProcessMemoryStreamTo(ptr ptr int64 ptr ptr) RtlCopyMemoryStreamTo
@@ -1130,7 +1131,8 @@
 @ stdcall RtlMakeSelfRelativeSD(ptr ptr ptr)
 @ stdcall RtlMapGenericMask(long ptr)
 @ stdcall RtlMapSecurityErrorToNtStatus(long)
-@ stdcall RtlMoveMemory(ptr ptr long)
+@ stdcall -arch=i386,x86_64,arm RtlMoveMemory(ptr ptr long)
+@ stdcall -arch=arm64 RtlMoveMemory(ptr ptr long) RtlpUserMemmove
 @ stdcall RtlMultiAppendUnicodeStringBuffer(ptr long ptr)
 @ stdcall RtlMultiByteToUnicodeN(ptr long ptr ptr long)
 @ stdcall RtlMultiByteToUnicodeSize(ptr str long)
@@ -2008,8 +2010,10 @@
 @ cdecl mbstowcs(ptr str long)
 @ cdecl memchr(ptr long long)
 @ cdecl memcmp(ptr ptr long)
-@ cdecl memcpy(ptr ptr long) memmove
-@ cdecl memmove(ptr ptr long)
+@ cdecl -arch=i386,x86_64,arm memcpy(ptr ptr long) memmove
+@ cdecl -arch=arm64 memcpy(ptr ptr long) RtlpUserMemmove
+@ cdecl -arch=i386,x86_64,arm memmove(ptr ptr long)
+@ cdecl -arch=arm64 memmove(ptr ptr long) RtlpUserMemmove
 @ cdecl memset(ptr long long)
 @ cdecl -arch=i386,x86_64,arm,arm64 pow(double double)
 @ cdecl qsort(ptr long long ptr)
