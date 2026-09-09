@@ -2062,6 +2062,15 @@ SoftGpuDdiGetStandardAllocationDriverData(
             if (Width > MAXULONG / SOFTGPU_DISPLAY_BYTES_PER_PIXEL)
                 return STATUS_INTEGER_OVERFLOW;
             Surface->Pitch = Width * SOFTGPU_DISPLAY_BYTES_PER_PIXEL;
+#ifdef SOFTGPU_PLATFORM_GDI_PITCH_ALIGNMENT
+            /* VC4 tile-buffer loads need a 16-byte raster stride. Report
+             * the padded pitch through the standard allocation ABI so GDI
+             * and shared-surface consumers use the same row layout. */
+            if (Surface->Pitch > MAXULONG - (SOFTGPU_PLATFORM_GDI_PITCH_ALIGNMENT - 1))
+                return STATUS_INTEGER_OVERFLOW;
+            Surface->Pitch = (Surface->Pitch + SOFTGPU_PLATFORM_GDI_PITCH_ALIGNMENT - 1) &
+                             ~(SOFTGPU_PLATFORM_GDI_PITCH_ALIGNMENT - 1);
+#endif
             Pitch = Surface->Pitch;
             break;
         }
