@@ -4,7 +4,9 @@
     .global memcpy
     .global memmove
 
-// Naturally-aligned accesses only (MMU-off safe): 64B ldp/stp blocks when co-aligned to 8, word pairs when co-aligned to 4, bytes otherwise; overlap handled via direction + block-distance guards.
+// Naturally-aligned accesses only (MMU-off safe): doubleword, word,
+// halfword or byte blocks according to common alignment. Overlap is handled
+// via direction and block-distance guards. No FP/SIMD state is touched.
 memcpy:
 memmove:
     mov     x15, x0
@@ -65,7 +67,7 @@ memmove:
 
 .Lcpy_fwd_c4:
     tst     x4, #3
-    b.ne    .Lcpy_fwd_bytes
+    b.ne    .Lcpy_fwd_c2
     ands    x5, x0, #3
     b.eq    .Lcpy_fwd_a4
     mov     x6, #4
@@ -78,6 +80,25 @@ memmove:
     subs    x5, x5, #1
     b.ne    1b
 .Lcpy_fwd_a4:
+    // Amortize loop overhead without requiring 8-byte alignment.
+    cmp     x3, #32
+    b.lo    .Lcpy_fwd_a4_short
+.Lcpy_fwd_a4_blocks:
+    cmp     x2, #32
+    b.lo    .Lcpy_fwd_a4_short
+    ldp     w4, w5, [x1]
+    ldp     w6, w7, [x1, #8]
+    ldp     w8, w9, [x1, #16]
+    ldp     w10, w11, [x1, #24]
+    stp     w4, w5, [x0]
+    stp     w6, w7, [x0, #8]
+    stp     w8, w9, [x0, #16]
+    stp     w10, w11, [x0, #24]
+    add     x1, x1, #32
+    add     x0, x0, #32
+    sub     x2, x2, #32
+    b       .Lcpy_fwd_a4_blocks
+.Lcpy_fwd_a4_short:
     cmp     x3, #8
     b.lo    .Lcpy_fwd_a4_single
 .Lcpy_fwd_a4_pairs:
@@ -95,12 +116,86 @@ memmove:
     sub     x2, x2, #4
     b       .Lcpy_fwd_a4_single
 
+.Lcpy_fwd_c2:
+    // Differing word alignment can still share halfword alignment.
+    tst     x4, #1
+    b.ne    .Lcpy_fwd_bytes
+    tst     x0, #1
+    b.eq    .Lcpy_fwd_c2_aligned
+    ldrb    w7, [x1], #1
+    strb    w7, [x0], #1
+    sub     x2, x2, #1
+.Lcpy_fwd_c2_aligned:
+    cmp     x3, #16
+    b.lo    .Lcpy_fwd_c2_small
+.Lcpy_fwd_c2_blocks:
+    cmp     x2, #16
+    b.lo    .Lcpy_fwd_c2_small
+    ldrh    w4, [x1]
+    ldrh    w5, [x1, #2]
+    ldrh    w6, [x1, #4]
+    ldrh    w7, [x1, #6]
+    ldrh    w8, [x1, #8]
+    ldrh    w9, [x1, #10]
+    ldrh    w10, [x1, #12]
+    ldrh    w11, [x1, #14]
+    strh    w4, [x0]
+    strh    w5, [x0, #2]
+    strh    w6, [x0, #4]
+    strh    w7, [x0, #6]
+    strh    w8, [x0, #8]
+    strh    w9, [x0, #10]
+    strh    w10, [x0, #12]
+    strh    w11, [x0, #14]
+    add     x1, x1, #16
+    add     x0, x0, #16
+    sub     x2, x2, #16
+    b       .Lcpy_fwd_c2_blocks
+.Lcpy_fwd_c2_small:
+    cmp     x2, #2
+    b.lo    .Lcpy_fwd_bytes
+    ldrh    w4, [x1], #2
+    strh    w4, [x0], #2
+    sub     x2, x2, #2
+    b       .Lcpy_fwd_c2_small
+
 .Lcpy_fwd_bytes:
     cbz     x2, .Lcpy_ret
+    // Keep byte accesses for differing alignments and MMU-off callers.
+    cmp     x2, #8
+    b.lo    .Lcpy_fwd_bytes_single
+    cmp     x3, #8
+    b.lo    .Lcpy_fwd_bytes_single
+.Lcpy_fwd_bytes_blocks:
+    ldrb    w4, [x1]
+    ldrb    w5, [x1, #1]
+    ldrb    w6, [x1, #2]
+    ldrb    w7, [x1, #3]
+    ldrb    w8, [x1, #4]
+    ldrb    w9, [x1, #5]
+    ldrb    w10, [x1, #6]
+    ldrb    w11, [x1, #7]
+    strb    w4, [x0]
+    strb    w5, [x0, #1]
+    strb    w6, [x0, #2]
+    strb    w7, [x0, #3]
+    strb    w8, [x0, #4]
+    strb    w9, [x0, #5]
+    strb    w10, [x0, #6]
+    strb    w11, [x0, #7]
+    add     x1, x1, #8
+    add     x0, x0, #8
+    sub     x2, x2, #8
+    cmp     x2, #8
+    b.hs    .Lcpy_fwd_bytes_blocks
+.Lcpy_fwd_bytes_tail:
+    cbz     x2, .Lcpy_ret
+.Lcpy_fwd_bytes_single:
     ldrb    w4, [x1], #1
     strb    w4, [x0], #1
-    sub     x2, x2, #1
-    b       .Lcpy_fwd_bytes
+    subs    x2, x2, #1
+    b.ne    .Lcpy_fwd_bytes_single
+    b       .Lcpy_ret
 
 .Lcpy_bwd:
     sub     x3, x0, x1               // overlap distance (> 0 here)
@@ -147,7 +242,7 @@ memmove:
 
 .Lcpy_bwd_c4:
     tst     x4, #3
-    b.ne    .Lcpy_bwd_bytes
+    b.ne    .Lcpy_bwd_c2
     ands    x5, x0, #3
     b.eq    .Lcpy_bwd_a4
     cmp     x2, x5
@@ -158,6 +253,25 @@ memmove:
     subs    x5, x5, #1
     b.ne    1b
 .Lcpy_bwd_a4:
+    // Amortize loop overhead without requiring 8-byte alignment.
+    cmp     x3, #32
+    b.lo    .Lcpy_bwd_a4_short
+.Lcpy_bwd_a4_blocks:
+    cmp     x2, #32
+    b.lo    .Lcpy_bwd_a4_short
+    ldp     w4, w5, [x1, #-8]
+    ldp     w6, w7, [x1, #-16]
+    ldp     w8, w9, [x1, #-24]
+    ldp     w10, w11, [x1, #-32]
+    stp     w4, w5, [x0, #-8]
+    stp     w6, w7, [x0, #-16]
+    stp     w8, w9, [x0, #-24]
+    stp     w10, w11, [x0, #-32]
+    sub     x1, x1, #32
+    sub     x0, x0, #32
+    sub     x2, x2, #32
+    b       .Lcpy_bwd_a4_blocks
+.Lcpy_bwd_a4_short:
     cmp     x3, #8
     b.lo    .Lcpy_bwd_a4_single
 .Lcpy_bwd_a4_pairs:
@@ -175,12 +289,86 @@ memmove:
     sub     x2, x2, #4
     b       .Lcpy_bwd_a4_single
 
+.Lcpy_bwd_c2:
+    // Differing word alignment can still share halfword alignment.
+    tst     x4, #1
+    b.ne    .Lcpy_bwd_bytes
+    tst     x0, #1
+    b.eq    .Lcpy_bwd_c2_aligned
+    ldrb    w7, [x1, #-1]!
+    strb    w7, [x0, #-1]!
+    sub     x2, x2, #1
+.Lcpy_bwd_c2_aligned:
+    cmp     x3, #16
+    b.lo    .Lcpy_bwd_c2_small
+.Lcpy_bwd_c2_blocks:
+    cmp     x2, #16
+    b.lo    .Lcpy_bwd_c2_small
+    ldrh    w4, [x1, #-2]
+    ldrh    w5, [x1, #-4]
+    ldrh    w6, [x1, #-6]
+    ldrh    w7, [x1, #-8]
+    ldrh    w8, [x1, #-10]
+    ldrh    w9, [x1, #-12]
+    ldrh    w10, [x1, #-14]
+    ldrh    w11, [x1, #-16]
+    strh    w4, [x0, #-2]
+    strh    w5, [x0, #-4]
+    strh    w6, [x0, #-6]
+    strh    w7, [x0, #-8]
+    strh    w8, [x0, #-10]
+    strh    w9, [x0, #-12]
+    strh    w10, [x0, #-14]
+    strh    w11, [x0, #-16]
+    sub     x1, x1, #16
+    sub     x0, x0, #16
+    sub     x2, x2, #16
+    b       .Lcpy_bwd_c2_blocks
+.Lcpy_bwd_c2_small:
+    cmp     x2, #2
+    b.lo    .Lcpy_bwd_bytes
+    ldrh    w4, [x1, #-2]!
+    strh    w4, [x0, #-2]!
+    sub     x2, x2, #2
+    b       .Lcpy_bwd_c2_small
+
 .Lcpy_bwd_bytes:
     cbz     x2, .Lcpy_ret
+    // Keep byte accesses for differing alignments and MMU-off callers.
+    cmp     x2, #8
+    b.lo    .Lcpy_bwd_bytes_single
+    cmp     x3, #8
+    b.lo    .Lcpy_bwd_bytes_single
+.Lcpy_bwd_bytes_blocks:
+    ldrb    w4, [x1, #-1]
+    ldrb    w5, [x1, #-2]
+    ldrb    w6, [x1, #-3]
+    ldrb    w7, [x1, #-4]
+    ldrb    w8, [x1, #-5]
+    ldrb    w9, [x1, #-6]
+    ldrb    w10, [x1, #-7]
+    ldrb    w11, [x1, #-8]
+    strb    w4, [x0, #-1]
+    strb    w5, [x0, #-2]
+    strb    w6, [x0, #-3]
+    strb    w7, [x0, #-4]
+    strb    w8, [x0, #-5]
+    strb    w9, [x0, #-6]
+    strb    w10, [x0, #-7]
+    strb    w11, [x0, #-8]
+    sub     x1, x1, #8
+    sub     x0, x0, #8
+    sub     x2, x2, #8
+    cmp     x2, #8
+    b.hs    .Lcpy_bwd_bytes_blocks
+.Lcpy_bwd_bytes_tail:
+    cbz     x2, .Lcpy_ret
+.Lcpy_bwd_bytes_single:
     ldrb    w4, [x1, #-1]!
     strb    w4, [x0, #-1]!
-    sub     x2, x2, #1
-    b       .Lcpy_bwd_bytes
+    subs    x2, x2, #1
+    b.ne    .Lcpy_bwd_bytes_single
+    b       .Lcpy_ret
 
 .Lcpy_ret:
     mov     x0, x15
