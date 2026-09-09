@@ -2323,6 +2323,36 @@ DxgkpFirstRenderPair(
     return First;
 }
 
+static BOOLEAN
+DxgkpEqualDeviceInterfaceName(
+    _In_ PCUNICODE_STRING Name,
+    _In_ PCUNICODE_STRING InterfaceName)
+{
+    UNICODE_STRING NativeName = *Name;
+    UNICODE_STRING RegisteredName = *InterfaceName;
+
+    if (RtlEqualUnicodeString(Name, InterfaceName, TRUE))
+        return TRUE;
+
+    /* SetupAPI returns the Win32 \\?\ spelling of the \??\ interface
+     * registered by IoRegisterDeviceInterface. Compare the same interface
+     * without conflating device names from other namespaces. */
+    if (Name->Length < 4 * sizeof(WCHAR) ||
+        InterfaceName->Length < 4 * sizeof(WCHAR) ||
+        wcsncmp(Name->Buffer, L"\\\\?\\", 4) != 0 ||
+        wcsncmp(InterfaceName->Buffer, L"\\??\\", 4) != 0)
+    {
+        return FALSE;
+    }
+    NativeName.Buffer += 4;
+    NativeName.Length -= 4 * sizeof(WCHAR);
+    NativeName.MaximumLength = NativeName.Length;
+    RegisteredName.Buffer += 4;
+    RegisteredName.Length -= 4 * sizeof(WCHAR);
+    RegisteredName.MaximumLength = RegisteredName.Length;
+    return RtlEqualUnicodeString(&NativeName, &RegisteredName, TRUE);
+}
+
 static NTSTATUS
 DxgkpOpenAdapterByDeviceObjectName(
     _In_ PCWSTR DeviceName,
@@ -2353,7 +2383,7 @@ DxgkpOpenAdapterByDeviceObjectName(
 
         if (Snapshot[i]->State != DxgkAdapterStateStarted)
             continue;
-        Match = Snapshot[i]->DeviceInterfaceName.Buffer != NULL && RtlEqualUnicodeString(&Name, &Snapshot[i]->DeviceInterfaceName, TRUE);
+        Match = Snapshot[i]->DeviceInterfaceName.Buffer != NULL && DxgkpEqualDeviceInterfaceName(&Name, &Snapshot[i]->DeviceInterfaceName);
         if (!Match && Snapshot[i]->DisplayDeviceName[0] != L'\0')
         {
             RtlInitUnicodeString(&DisplayName, Snapshot[i]->DisplayDeviceName);
