@@ -2755,11 +2755,12 @@ SoftGpuDdiCreateContext(
      * DmaBufferSize:            64 KB — sufficient for a Vista-era command batch.
      * AllocationListSize:       256 entries.
      * PatchLocationListSize:    256 entries.
-     * DmaBufferSegmentSet:      0 requests physically contiguous system memory.
+     * DmaBufferSegmentSet:      selected by the linked platform provider.
      * DmaBufferPrivateDataSize: selected by the linked platform provider.
      */
     CreateContext->ContextInfo.DmaBufferSize            = 64 * 1024;
-    CreateContext->ContextInfo.DmaBufferSegmentSet      = 0;
+    CreateContext->ContextInfo.DmaBufferSegmentSet      =
+        SoftGpuPlatformDmaBufferSegmentSet();
     CreateContext->ContextInfo.DmaBufferPrivateDataSize =
         SoftGpuPlatformDmaBufferPrivateDataSize();
     CreateContext->ContextInfo.AllocationListSize       = 256;

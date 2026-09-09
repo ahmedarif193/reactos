@@ -138,6 +138,12 @@ SoftGpuPlatformDmaBufferPrivateDataSize(VOID)
     return 0;
 }
 
+ULONG
+SoftGpuPlatformDmaBufferSegmentSet(VOID)
+{
+    return 0;
+}
+
 NTSTATUS
 SoftGpuPlatformStartScanout(
     _Inout_ PSOFTGPU_DEVICE Device)

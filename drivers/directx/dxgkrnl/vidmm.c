@@ -1298,8 +1298,9 @@ DxgkVidMmCreateDmaBufferBacking(
     PDXGKVMM_ALLOCATION Allocation = NULL;
     PDXGKVMM_DESTROY_BATCH Batch;
     HANDLE Handle;
-    ULONG ApertureSet = 0;
+    ULONG CpuAccessibleSet = 0;
     ULONG Index;
+    PVOID CpuAddress;
     BOOLEAN Pinned = FALSE;
     NTSTATUS Status, CleanupStatus;
 
@@ -1310,18 +1311,21 @@ DxgkVidMmCreateDmaBufferBacking(
     if (Adapter == NULL || Size == 0 || SegmentSet == 0 || Adapter->Segments == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    /* CPU-generated commands need backing mapped into a declared aperture. */
+    /* CPU-generated commands can live in an aperture or CPU-visible VRAM.
+     * The latter also covers reserved contiguous RAM on GPUs without an MMU. */
     for (Index = 0; Index < Adapter->SegmentCount && Index < 31; ++Index)
     {
         PDXGKRNL_SEGMENT Segment = &ADAPTER_SEGMENTS(Adapter)[Index];
 
         if ((SegmentSet & (1UL << Index)) != 0 &&
-            VidMmSegmentIsAperture(Segment) && !Segment->Flags.PitchAlignment)
+            (VidMmSegmentIsAperture(Segment) ||
+             VidMmSegmentIsCpuVisible(Segment)) &&
+            !Segment->Flags.PitchAlignment)
         {
-            ApertureSet |= 1UL << Index;
+            CpuAccessibleSet |= 1UL << Index;
         }
     }
-    if (ApertureSet == 0)
+    if (CpuAccessibleSet == 0)
         return STATUS_NOT_SUPPORTED;
     if (!DxgkBeginKmdTransaction(Adapter))
         return STATUS_DEVICE_NOT_READY;
@@ -1336,8 +1340,8 @@ DxgkVidMmCreateDmaBufferBacking(
     RtlZeroMemory(&Info, sizeof(Info));
     Info.Size = Size;
     Info.Alignment = PAGE_SIZE;
-    Info.SupportedReadSegmentSet = ApertureSet;
-    Info.SupportedWriteSegmentSet = ApertureSet;
+    Info.SupportedReadSegmentSet = CpuAccessibleSet;
+    Info.SupportedWriteSegmentSet = CpuAccessibleSet;
     Info.Flags.CpuVisible = TRUE;
     Info.Flags.Cached = TRUE;
     Info.FlagsWddm2.AccessedPhysically = TRUE;
@@ -1349,6 +1353,8 @@ DxgkVidMmCreateDmaBufferBacking(
         Status = DxgkVidMmAcquireSubmissionResidencyPinEx(Allocation, Adapter, NULL, FALSE);
         Pinned = NT_SUCCESS(Status);
     }
+    if (NT_SUCCESS(Status))
+        Status = DxgkVidMmMapAllocationCpu(Allocation, &CpuAddress);
 
     if (Allocation != NULL)
     {
