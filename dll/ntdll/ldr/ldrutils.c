@@ -2428,8 +2428,9 @@ LdrpGetProcedureAddress(
 
         if (!ExportDir)
         {
-            DPRINT1("Image %wZ has no exports, but were trying to get procedure %Z. BaseAddress asked 0x%p, got entry BA 0x%p\n",
-                    &LdrEntry->BaseDllName, Name, BaseAddress, LdrEntry->DllBase);
+            if (ShowSnaps)
+                DPRINT1("LDR: Image %wZ has no exports (requested name %Z, ordinal %lu)\n",
+                        &LdrEntry->BaseDllName, Name, Ordinal);
             Status = STATUS_PROCEDURE_NOT_FOUND;
             _SEH2_YIELD(goto Quickie;)
         }
