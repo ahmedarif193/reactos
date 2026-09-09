@@ -8,7 +8,7 @@
 include("${REACTOS_SOURCE_DIR}/sdk/cmake/wow64_targets.cmake")
 
 set(WOW64_I386_BINARY_DIR "${REACTOS_BINARY_DIR}/_wow64_i386")
-set(WOW64_I386_TARGETS ${WOW64_I386_MODULES} ${WOW64_I386_EXECUTABLES})
+set(WOW64_I386_TARGETS ${WOW64_I386_MODULES} ${WOW64_I386_AUXILIARY_MODULES} ${WOW64_I386_EXECUTABLES})
 
 # Walk a target's link closure to find the DLL modules it imports. ReactOS
 # links DLL imports through "lib<module>" import libraries, so those names
@@ -74,7 +74,7 @@ if(_wow64_missing_modules)
     list(SORT _wow64_missing_modules)
     list(JOIN _wow64_missing_modules "\n    " _wow64_missing_text)
     message(FATAL_ERROR "WoW64 targets import DLLs that are not listed in "
-        "sdk/cmake/wow64_targets.cmake. Add these modules to WOW64_I386_MODULES:\n"
+        "sdk/cmake/compat_runtime_targets.cmake. Add these modules to COMPAT_RUNTIME_MODULES:\n"
         "    ${_wow64_missing_text}")
 endif()
 
@@ -110,9 +110,15 @@ function(_wow64_get_target_file _target _output)
 endfunction()
 
 set(WOW64_I386_FILES)
-foreach(_target IN LISTS WOW64_I386_TARGETS)
+foreach(_target IN LISTS WOW64_I386_MODULES WOW64_I386_EXECUTABLES)
     _wow64_get_target_file("${_target}" _file)
     list(APPEND WOW64_I386_FILES "${_file}")
+endforeach()
+
+set(WOW64_I386_VALIDATION_FILES ${WOW64_I386_FILES})
+foreach(_target IN LISTS WOW64_I386_AUXILIARY_MODULES)
+    _wow64_get_target_file("${_target}" _file)
+    list(APPEND WOW64_I386_VALIDATION_FILES "${_file}")
 endforeach()
 
 set(WOW64_I386_ALIAS_FILES)
@@ -177,8 +183,8 @@ add_dependencies(wow64_i386_configure host-tools)
 list(LENGTH WOW64_I386_TARGETS _wow64_i386_target_count)
 add_custom_target(wow64_i386 ALL
     COMMAND ${CMAKE_COMMAND} --build "${WOW64_I386_BINARY_DIR}" --target ${WOW64_I386_TARGETS}
-    COMMAND ${CMAKE_COMMAND} -P "${REACTOS_SOURCE_DIR}/sdk/cmake/wow64-validate.cmake" -- ${WOW64_I386_FILES}
-    BYPRODUCTS ${WOW64_I386_FILES}
+    COMMAND ${CMAKE_COMMAND} -P "${REACTOS_SOURCE_DIR}/sdk/cmake/wow64-validate.cmake" -- ${WOW64_I386_VALIDATION_FILES}
+    BYPRODUCTS ${WOW64_I386_VALIDATION_FILES}
     COMMENT "Building ${_wow64_i386_target_count} i386 WoW64 targets"
     USES_TERMINAL
     VERBATIM)
