@@ -541,10 +541,11 @@ config ENABLE_FEX_ARM64EC
 config ENABLE_WOW64
     prompt "WoW64 subsystem (run IA-32 binaries)"
     type bool
-    default n
-    depends ARCH=amd64
+    default auto
+    depends ARCH=amd64 || ARCH=arm64
     help
       Whether to build the native WoW64 support DLLs and the supporting
-      ntdll and kernel paths needed to run 32-bit applications on amd64.
+      ntdll and kernel paths needed to run 32-bit applications on amd64
+      or ARM64. "auto" enables it by default on ARM64.
 
 endmenu
