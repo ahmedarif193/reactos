@@ -116,6 +116,7 @@ struct reactos_stream
     float *channel_volumes;
     BOOL volume_passthrough;
     BOOL rt_enabled;
+    BOOL rt_packet_mode;
     BOOL started;
     struct reactos_shared_render_client *shared_render;
 };
@@ -1026,9 +1027,11 @@ static BOOL initialize_wavert(struct reactos_stream *stream)
 {
     KSRTAUDIO_BUFFER_PROPERTY_WITH_NOTIFICATION property;
     KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY event_property;
+    KSPROPERTY packet_property;
     KSRTAUDIO_BUFFER buffer;
     UINT64 requested_size;
-    DWORD returned;
+    DWORD returned, error;
+    ULONG packet_count;
 
     requested_size = (UINT64)stream->device_period_frames *
                      stream->device_frame_size *
@@ -1084,6 +1087,29 @@ static BOOL initialize_wavert(struct reactos_stream *stream)
     }
 
     stream->rt_enabled = TRUE;
+
+    /* Notification-capable WaveRT miniports need not implement the newer
+     * IMiniportWaveRTOutputStream packet protocol. Their cyclic DMA buffer
+     * runs directly when the pin enters KSSTATE_RUN. */
+    ZeroMemory(&packet_property, sizeof(packet_property));
+    packet_property.Set = rt_audio_property_set;
+    packet_property.Id = KSPROPERTY_RTAUDIO_PACKETCOUNT;
+    packet_property.Flags = KSPROPERTY_TYPE_GET;
+    if (pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY, &packet_property, sizeof(packet_property), &packet_count, sizeof(packet_count), &returned))
+    {
+        if (returned < sizeof(packet_count))
+        {
+            SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
+        }
+        stream->rt_packet_mode = TRUE;
+    }
+    else
+    {
+        error = GetLastError();
+        if (error != ERROR_NOT_SUPPORTED && error != ERROR_INVALID_FUNCTION && error != ERROR_CALL_NOT_IMPLEMENTED)
+            return FALSE;
+    }
     return TRUE;
 }
 
@@ -1104,6 +1130,7 @@ static void cleanup_wavert(struct reactos_stream *stream)
     }
 
     stream->rt_enabled = FALSE;
+    stream->rt_packet_mode = FALSE;
     stream->rt_buffer = NULL;
     stream->rt_buffer_frames = 0;
     stream->rt_period_frames = 0;
@@ -1947,7 +1974,7 @@ static HRESULT start_physical_stream(struct reactos_stream *stream)
             return hr;
         }
 
-        if (!submit_primed_wavert_buffer(stream))
+        if (stream->rt_packet_mode && !submit_primed_wavert_buffer(stream))
         {
             hr = wdmaud_error_hresult();
             set_stream_state(stream, KSSTATE_PAUSE);
@@ -3203,7 +3230,7 @@ static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
         }
         LeaveCriticalSection(&stream->lock);
 
-        if (period_ready &&
+        if (stream->rt_packet_mode && period_ready &&
             !set_wavert_write_packet(stream, packet_number))
         {
             packet_error = GetLastError();
