@@ -375,7 +375,7 @@ WinLdrInitializePhase1(
     }
 
 #ifdef UEFIBOOT
-    /* Hand the firmware SMBIOS 3.0 entry point to the kernel (WMI raw
+    /* Hand the firmware SMBIOS 2.x or 3.x entry point to the kernel (WMI raw
      * SMBIOS provider); the pointer is the identity-mapped physical EPS. */
     Extension->SMBiosEPSHeader = UefiGetSmbiosEpsPointer();
 

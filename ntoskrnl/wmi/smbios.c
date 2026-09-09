@@ -70,7 +70,8 @@ GetEntryPointData(
     EntryPoint21 = (PSMBIOS21_ENTRY_POINT)EntryPointAddress;
     if (RtlEqualMemory(EntryPoint21->AnchorString, "_SM_", 4))
     {
-        if (EntryPoint21->Length > 32)
+        if (EntryPoint21->Length < FIELD_OFFSET(SMBIOS21_ENTRY_POINT, BCDRevision) + sizeof(UCHAR) ||
+            EntryPoint21->Length > 32)
             return FALSE;
 
         /* Calculate the checksum */
@@ -97,7 +98,8 @@ GetEntryPointData(
     EntryPoint30 = (PSMBIOS30_ENTRY_POINT)EntryPointAddress;
     if (RtlEqualMemory(EntryPoint30->AnchorString, "_SM3_", 5))
     {
-        if (EntryPoint30->Length > 32)
+        if (EntryPoint30->Length < sizeof(SMBIOS30_ENTRY_POINT) ||
+            EntryPoint30->Length > 32)
             return FALSE;
 
         /* Calculate the checksum */
@@ -123,10 +125,11 @@ GetEntryPointData(
     return FALSE;
 }
 
-/* SMBIOS 3.0 entry point captured from the loader block at WMI init:
+/* SMBIOS entry point metadata captured from the loader block at WMI init:
  * UEFI systems have no 0xF0000 BIOS range to scan. */
-static SMBIOS3_TABLE_HEADER WmipSMBios3Eps;
-static BOOLEAN WmipSMBios3EpsValid = FALSE;
+static MSSmBios_RawSMBiosTables WmipSMBiosHeader;
+static ULONG64 WmipSMBiosTableAddress;
+static ULONG WmipSMBiosTableSize;
 
 VOID
 NTAPI
@@ -134,9 +137,10 @@ WmipCaptureSMBiosFromLoader(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     PHYSICAL_ADDRESS Phys;
-    PSMBIOS3_TABLE_HEADER Mapping;
-    UCHAR Checksum;
-    ULONG i;
+    PUCHAR Mapping;
+    MSSmBios_RawSMBiosTables Header;
+    ULONG64 TableAddress;
+    ULONG TableSize;
 
     if (LoaderBlock == NULL ||
         LoaderBlock->Extension == NULL ||
@@ -147,28 +151,21 @@ WmipCaptureSMBiosFromLoader(
 
     /* The loader stores the identity-mapped physical address of the EPS. */
     Phys.QuadPart = (ULONGLONG)(ULONG_PTR)LoaderBlock->Extension->SMBiosEPSHeader;
-    Mapping = MmMapIoSpace(Phys, sizeof(SMBIOS3_TABLE_HEADER), MmCached);
+    Mapping = MmMapIoSpace(Phys, 32, MmCached);
     if (Mapping == NULL)
         return;
 
-    if (RtlEqualMemory(Mapping->Signature, "_SM3_", 5) &&
-        Mapping->Length >= sizeof(SMBIOS3_TABLE_HEADER) &&
-        Mapping->Length <= 32 &&
-        Mapping->StructureTableAddress != 0)
+    /* Use the same parser as the legacy BIOS scan for both entry-point formats. */
+    RtlZeroMemory(&Header, sizeof(Header));
+    if (GetEntryPointData(Mapping, &TableAddress, &TableSize, &Header) &&
+        TableAddress != 0 && TableSize != 0)
     {
-        Checksum = 0;
-        for (i = 0; i < Mapping->Length; i++)
-        {
-            Checksum += ((PUCHAR)Mapping)[i];
-        }
-        if (Checksum == 0)
-        {
-            RtlCopyMemory(&WmipSMBios3Eps, Mapping, sizeof(WmipSMBios3Eps));
-            WmipSMBios3EpsValid = TRUE;
-        }
+        WmipSMBiosHeader = Header;
+        WmipSMBiosTableAddress = TableAddress;
+        WmipSMBiosTableSize = TableSize;
     }
 
-    MmUnmapIoSpace(Mapping, sizeof(SMBIOS3_TABLE_HEADER));
+    MmUnmapIoSpace(Mapping, 32);
 }
 
 _At_(*OutTableData, __drv_allocatesMem(Mem))
@@ -187,16 +184,12 @@ WmipGetRawSMBiosTableData(
     ULONG Offset, TableSize;
     ULONG64 TableAddress = 0;
 
-    if (WmipSMBios3EpsValid)
+    if (WmipSMBiosTableAddress != 0)
     {
         /* Entry point handed over by the loader (UEFI firmware). */
-        TableAddress = WmipSMBios3Eps.StructureTableAddress;
-        TableSize = WmipSMBios3Eps.StructureTableMaximumSize;
-        BiosTablesHeader.Used20CallingMethod = 0;
-        BiosTablesHeader.SmbiosMajorVersion = WmipSMBios3Eps.MajorVersion;
-        BiosTablesHeader.SmbiosMinorVersion = WmipSMBios3Eps.MinorVersion;
-        BiosTablesHeader.DmiRevision = 3;
-        BiosTablesHeader.Size = TableSize;
+        TableAddress = WmipSMBiosTableAddress;
+        TableSize = WmipSMBiosTableSize;
+        BiosTablesHeader = WmipSMBiosHeader;
     }
     else
     {
