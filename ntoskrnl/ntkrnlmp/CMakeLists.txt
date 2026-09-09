@@ -40,6 +40,10 @@ add_executable(ntkrnlmp
 set_module_type(ntkrnlmp kernel)
 target_compile_definitions(ntkrnlmp PRIVATE CONFIG_SMP)
 
+if(ARCH STREQUAL "arm64")
+    target_link_libraries(ntkrnlmp rtl_kernel_context)
+endif()
+
 # dynamic analysis switches
 if(STACK_PROTECTOR)
     target_link_libraries(ntkrnlmp gcc_ssp_nt)

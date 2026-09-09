@@ -301,7 +301,9 @@ if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
 endif()
 
 if(ARCH STREQUAL "arm64")
+    add_asm_files(KMTEST_ARM64_CONTEXT_ASM kmArm64/RtlArm64Context-asm.S)
     list(APPEND KMTEST_DRV_SOURCE
+        ${KMTEST_ARM64_CONTEXT_ASM}
         kmArm64/HalArm64Ipi.c
         kmArm64/HalArm64Layout.c
         kmArm64/KdArm64Layout.c
@@ -320,6 +322,7 @@ if(ARCH STREQUAL "arm64")
         kmArm64/KeArm64SmpChurn.c
         kmArm64/KeArm64SpinLock.c
         kmArm64/KeArm64ThreadProcess.c
+        kmArm64/RtlArm64Context.c
         kmArm64/RtlArm64UnwindLayout.c
         kmArm64/KeArm64SubNodeSched.c
         kmArm64/KeArm64Smt.c
@@ -385,6 +388,9 @@ if(KMT_PERSISTENT_POWER_TESTS)
         KMT_PERSISTENT_POWER_TESTS)
 endif()
 add_dependencies(kmtest_drv bugcodes xdk)
+if(ARCH STREQUAL "arm64")
+    add_dependencies(kmtest_drv asm)
+endif()
 target_compile_definitions(kmtest_drv PRIVATE KMT_KERNEL_MODE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 #add_pch(kmtest_drv include/kmt_test.h)
 add_rostests_file(TARGET kmtest_drv)

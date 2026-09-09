@@ -185,6 +185,7 @@ KMT_TESTFUNC Test_KeArm64Smp;
 KMT_TESTFUNC Test_KeArm64SmpChurn;
 KMT_TESTFUNC Test_KeArm64SpinLock;
 KMT_TESTFUNC Test_KeArm64ThreadProcess;
+KMT_TESTFUNC Test_RtlArm64Context;
 KMT_TESTFUNC Test_RtlArm64UnwindLayout;
 KMT_TESTFUNC Test_KeArm64SubNodeSched;
 KMT_TESTFUNC Test_KeArm64Smt;
@@ -453,6 +454,7 @@ const KMT_TEST TestList[] =
     { "KeArm64SmpChurn",                    Test_KeArm64SmpChurn },
     { "KeArm64SpinLock",                    Test_KeArm64SpinLock },
     { "KeArm64ThreadProcess",               Test_KeArm64ThreadProcess },
+    { "RtlArm64Context",                    Test_RtlArm64Context },
     { "RtlArm64UnwindLayout",               Test_RtlArm64UnwindLayout },
     { "KeArm64SubNodeSched",                Test_KeArm64SubNodeSched },
     { "KeArm64Smt",                         Test_KeArm64Smt },
