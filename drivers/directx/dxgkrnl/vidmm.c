@@ -5469,7 +5469,6 @@ DxgkpVidMmCreateAllocationTracked(
         /* Zero the backing memory so GPU sees a clean allocation. */
         RtlZeroMemory(Alloc->SystemMemory, AllocSize);
         DxgkpVidMmFlushCpuCache(Alloc->SystemMemory, AllocSize);
-    DxgkpVidMmFlushCpuCache(Alloc->SystemMemory, AllocSize);
 
         if (!Placed)
         {
