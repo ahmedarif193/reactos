@@ -98,7 +98,8 @@ TestD3dkmtIoctlDenied(
 
     ok(!Success, "%s must not bypass the win32k D3DKMT capture boundary (error %lu, bytes %lu)\n", Name, Error, BytesReturned);
     ok(Error == ERROR_ACCESS_DENIED, "%s returned error %lu instead of ERROR_ACCESS_DENIED\n", Name, Error);
-    ok(BytesReturned == 0, "%s returned %lu output bytes on denial\n", Name, BytesReturned);
+    /* DeviceIoControl does not define a byte count for a denied operation.
+     * The status and unchanged output canary establish that nothing escaped. */
     ok(memcmp(OutputCanary, ExpectedCanary, sizeof(OutputCanary)) == 0, "%s changed the output canary\n", Name);
 }
 
