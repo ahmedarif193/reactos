@@ -203,9 +203,8 @@ Dxgmms2VidMmCoreSetSegment(
 /*
  * Dxgmms2VidMmCoreReserve
  *
- * Virgin space first — the high-water cursor never hands back a retired
- * offset, which some GPUs require (recycled GPU VA wedges the V3D vertex
- * pipe) — then first-fit over the gaps once the tail is exhausted.
+ * Prefer the high-water cursor, then search recycled gaps when the tail is
+ * exhausted. The range list must stay sorted for that first-fit search.
  */
 NTSTATUS
 Dxgmms2VidMmCoreReserve(
@@ -297,7 +296,10 @@ Dxgmms2VidMmCoreReserve(
 
     /* Keep the list sorted; append is the common case so scan from the tail. */
     {
-        PLIST_ENTRY InsertBefore = &Segment->RangeList;
+        /* No predecessor means the new lowest range goes before the first
+         * entry. Appending it at the sentinel would hide it from first-fit
+         * and allow the next request to overlap the live allocation. */
+        PLIST_ENTRY InsertBefore = Segment->RangeList.Flink;
 
         for (Entry = Segment->RangeList.Blink; Entry != &Segment->RangeList; Entry = Entry->Blink)
         {
