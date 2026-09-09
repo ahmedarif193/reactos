@@ -63,12 +63,15 @@ PartitionCreateDevice(
 
     partExt->DeviceObject = partitionDevice;
     partExt->LowerDevice = FDObject;
+    ObReferenceObject(FDObject);
+    IoInitializeRemoveLock(&partExt->RemoveLock, TAG_PARTMGR, 0, 0);
 
     // NOTE: See comment above.
     // PFDO_EXTENSION fdoExtension = FDObject->DeviceExtension;
     // partitionDevice->DeviceType = /*fdoExtension->LowerDevice*/FDObject->DeviceType;
 
-    partitionDevice->StackSize = FDObject->StackSize;
+    // Both the PDO and parent FDO now install a completion routine.
+    partitionDevice->StackSize = FDObject->StackSize + 1;
     partitionDevice->Flags |= DO_DIRECT_IO;
 
     if (PartitionStyle == PARTITION_STYLE_MBR)
@@ -289,6 +292,29 @@ PartitionHandleRemove(
 
     PAGED_CODE();
 
+    InterlockedExchange(&PartExt->Removed, TRUE);
+    if (FinalRemove)
+    {
+        IoAcquireRemoveLock(&PartExt->RemoveLock, PartExt);
+        IoReleaseRemoveLockAndWait(&PartExt->RemoveLock, PartExt);
+
+        PFDO_EXTENSION parent = PartExt->LowerDevice->DeviceExtension;
+        if (PartExt->Attached)
+        {
+            PartMgrAcquireLayoutLock(parent);
+            PSINGLE_LIST_ENTRY previous = &parent->PartitionList;
+            while (previous->Next && previous->Next != &PartExt->ListEntry)
+                previous = previous->Next;
+            if (previous->Next)
+            {
+                previous->Next = PartExt->ListEntry.Next;
+                parent->EnumeratedPartitionsTotal--;
+            }
+            PartExt->Attached = FALSE;
+            PartMgrReleaseLayoutLock(parent);
+        }
+    }
+
     // remove the symbolic link
     if (PartExt->SymlinkCreated)
     {
@@ -305,7 +331,7 @@ PartitionHandleRemove(
 
         if (!NT_SUCCESS(status))
         {
-            return status;
+            ERR("Failed to remove partition symlink: 0x%08lx\n", status);
         }
         PartExt->SymlinkCreated = FALSE;
 
@@ -318,7 +344,7 @@ PartitionHandleRemove(
         status = IoSetDeviceInterfaceState(&PartExt->PartitionInterfaceName, FALSE);
         if (!NT_SUCCESS(status))
         {
-            return status;
+            ERR("Failed to disable partition interface: 0x%08lx\n", status);
         }
         RtlFreeUnicodeString(&PartExt->PartitionInterfaceName);
         RtlInitUnicodeString(&PartExt->PartitionInterfaceName, NULL);
@@ -342,7 +368,7 @@ PartitionHandleRemove(
         status = IoSetDeviceInterfaceState(&PartExt->VolumeInterfaceName, FALSE);
         if (!NT_SUCCESS(status))
         {
-            return status;
+            ERR("Failed to disable volume interface: 0x%08lx\n", status);
         }
         RtlFreeUnicodeString(&PartExt->VolumeInterfaceName);
         RtlInitUnicodeString(&PartExt->VolumeInterfaceName, NULL);
@@ -357,7 +383,9 @@ PartitionHandleRemove(
             RtlFreeUnicodeString(&PartExt->DeviceName);
         }
 
+        PDEVICE_OBJECT parent = PartExt->LowerDevice;
         IoDeleteDevice(PartExt->DeviceObject);
+        ObDereferenceObject(parent);
     }
 
     return STATUS_SUCCESS;

@@ -59,6 +59,8 @@ typedef struct _FDO_EXTENSION
     BOOLEAN IsFDO;
     PDEVICE_OBJECT DeviceObject;
     PDEVICE_OBJECT LowerDevice;
+    IO_REMOVE_LOCK RemoveLock;
+    volatile LONG Removed;
     PDEVICE_OBJECT PhysicalDiskDO;
     KEVENT SyncEvent;
 
@@ -86,11 +88,9 @@ typedef struct _FDO_EXTENSION
     UNICODE_STRING DiskInterfaceName;
 
     // IOCTL_DISK_PERFORMANCE counters; everything except the lookaside
-    // list is guarded by Lock. RemoveLock keeps the extension and the
-    // lookaside alive while a read/write with an armed completion routine
-    // is in flight below us.
+    // list is guarded by Lock. The device-wide RemoveLock also protects
+    // requests when these optional counters are disabled.
     struct {
-        IO_REMOVE_LOCK RemoveLock;
         KSPIN_LOCK Lock;
         NPAGED_LOOKASIDE_LIST ContextLookaside;
         LONG ReferenceCount;
@@ -116,6 +116,8 @@ typedef struct _PARTITION_EXTENSION
     BOOLEAN IsFDO;
     PDEVICE_OBJECT DeviceObject;
     PDEVICE_OBJECT LowerDevice;
+    IO_REMOVE_LOCK RemoveLock;
+    volatile LONG Removed;
     PDEVICE_OBJECT Part0Device;
 
     UINT64 StartingOffset;
@@ -149,6 +151,19 @@ typedef struct _PARTITION_EXTENSION
     UNICODE_STRING VolumeInterfaceName;
     UNICODE_STRING DeviceName;
 } PARTITION_EXTENSION, *PPARTITION_EXTENSION;
+
+C_ASSERT(FIELD_OFFSET(FDO_EXTENSION, RemoveLock) == FIELD_OFFSET(PARTITION_EXTENSION, RemoveLock));
+C_ASSERT(FIELD_OFFSET(FDO_EXTENSION, Removed) == FIELD_OFFSET(PARTITION_EXTENSION, Removed));
+
+FORCEINLINE
+NTSTATUS
+PartMgrFailIrp(_In_ PIRP Irp, _In_ NTSTATUS Status)
+{
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return Status;
+}
 
 CODE_SEG("PAGE")
 NTSTATUS
