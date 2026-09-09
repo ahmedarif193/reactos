@@ -169,6 +169,30 @@ MiArm64WriteFaultPte(
     }
 }
 
+VOID
+MiArm64PrepareAllocatedPfnCache(
+    _In_ PFN_NUMBER PageFrameIndex,
+    _In_ ULONG_PTR MappingBits)
+{
+    PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
+    MI_PFN_CACHE_ATTRIBUTE OldCache;
+    MMPTE CachePte;
+
+    MI_ASSERT_PFN_LOCK_HELD();
+    ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
+    OldCache = Pfn1->u3.e1.CacheAttribute;
+    CachePte.u.Long = MappingBits;
+    MiArm64SyncMappedPfnCacheAttribute(Pfn1, CachePte);
+    if (OldCache != Pfn1->u3.e1.CacheAttribute)
+    {
+        /* This page is owned by the fault but has no new mapping yet. Retire
+           stale translations and cached contents before zeroing or copying it
+           through an alias with the new cache type. */
+        KeFlushEntireTb(TRUE, TRUE);
+        MiArm64CleanPageToPoC((PVOID)MI_ARM64_PFN_TO_VA(PageFrameIndex));
+    }
+}
+
 static
 VOID
 MiArm64InitializeFaultPfn(
@@ -435,8 +459,8 @@ MiAccessCheck(IN PVOID FaultAddress,
         /* Attached processes can't expand their stack */
         if (KeIsAttachedProcess()) return STATUS_ACCESS_VIOLATION;
 
-        /* No support for prototype PTEs yet */
-        ASSERT(TempPte.u.Soft.Prototype == 0);
+        /* A view-local prototype override stores protection in this PTE. */
+        ASSERT(!TempPte.u.Soft.Prototype || (TempPte.u.Soft.PageFileHigh == MI_PTE_LOOKUP_NEEDED));
 
         /* Remove the guard page bit, and return a guard page violation */
         TempPte.u.Soft.Protection = ProtectionMask & ~MM_GUARDPAGE;
@@ -992,6 +1016,7 @@ MiResolveDemandZeroFault(IN PVOID Address,
 
     /* Initialize it */
 #if defined(_M_ARM64)
+    MiArm64PrepareAllocatedPfnCache(PageFrameNumber, MmProtectToPteMask[Protection]);
     MiArm64InitializeFaultPfn(PageFrameNumber, Address, PointerPte, TRUE);
 #else
     MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
@@ -1319,6 +1344,7 @@ MiResolvePageFileFault(_In_ BOOLEAN StoreInstruction,
 
     /* Initialize this PFN */
 #if defined(_M_ARM64)
+    MiArm64PrepareAllocatedPfnCache(Page, MmProtectToPteMask[Protection]);
     MiArm64InitializeFaultPfn(Page, FaultingAddress, PointerPte, StoreInstruction);
 #else
     MiInitializePfn(Page, PointerPte, StoreInstruction);
@@ -1487,13 +1513,20 @@ MiResolveTransitionFault(IN BOOLEAN StoreInstruction,
         }
     }
 
+    if (!Pfn1->u3.e1.PrototypePte)
+        Pfn1->OriginalPte.u.Soft.Protection = PointerPte->u.Trans.Protection;
+
     /* Build the final PTE */
     ASSERT(PointerPte->u.Hard.Valid == 0);
     ASSERT(PointerPte->u.Trans.Prototype == 0);
     ASSERT(PointerPte->u.Trans.Transition == 1);
     TempPte.u.Long = (PointerPte->u.Long & ~0xFFF) |
                      (MmProtectToPteMask[PointerPte->u.Trans.Protection]) |
+#if defined(_M_ARM64)
+                     MiDetermineUserGlobalPteMask(MiArm64IsUserFaultPte(FaultingAddress, PointerPte) ? MiAddressToPte(FaultingAddress) : PointerPte);
+#else
                      MiDetermineUserGlobalPteMask(PointerPte);
+#endif
 
     /* Is the PTE writeable? */
     if ((Pfn1->u3.e1.Modified) &&
@@ -1653,6 +1686,9 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
             return STATUS_NO_MEMORY;
         }
 
+#if defined(_M_ARM64)
+        MiArm64PrepareAllocatedPfnCache(PageFrameIndex, MmProtectToPteMask[Protection]);
+#endif
         /* Perform the copy */
         MiCopyPfn(PageFrameIndex, ProtoPageFrameIndex);
 
@@ -2778,6 +2814,15 @@ Arm64UserLeafReady:
     /* Check if the PTE is valid */
     if (TempPte.u.Hard.Valid)
     {
+#if defined(_M_ARM64)
+        /* A valid EL1-only descriptor still denies EL0 access. Retrying it
+           without changing AP[0] would repeat the same permission fault. */
+        if ((Mode == UserMode) && !TempPte.u.Hard.Owner)
+        {
+            MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
+            return STATUS_ACCESS_VIOLATION;
+        }
+#endif
         /* Check if this is a write on a readonly PTE */
         if (MI_IS_WRITE_ACCESS(FaultCode))
         {
@@ -2814,6 +2859,24 @@ Arm64UserLeafReady:
 
                 LockIrql = MiAcquirePfnLock();
 
+                Pfn1 = MI_PFN_ELEMENT(PFN_FROM_PTE(&TempPte));
+                if (!Pfn1->u3.e1.PrototypePte)
+                {
+                    /* A previously copied page is already private. A later
+                       WRITECOPY protection needs no second allocation. */
+                    MI_MAKE_WRITE_PAGE(&TempPte);
+                    TempPte.u.Hard.CopyOnWrite = 0;
+                    MI_MAKE_DIRTY_PAGE(&TempPte);
+                    Pfn1->OriginalPte.u.Soft.Protection &= ~MM_WRITECOPY;
+                    Pfn1->OriginalPte.u.Soft.Protection |= MM_READWRITE;
+                    Pfn1->u3.e1.Modified = 1;
+                    MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+                    MiFlushTbForAddress(Address);
+                    MiReleasePfnLock(LockIrql);
+                    MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
+                    return STATUS_PAGE_FAULT_COPY_ON_WRITE;
+                }
+
                 ASSERT(MmAvailablePages > 0);
 
                 MI_SET_USAGE(MI_USAGE_COW);
@@ -2829,6 +2892,9 @@ Arm64UserLeafReady:
                 }
                 OldPageFrameIndex = PFN_FROM_PTE(&TempPte);
 
+#if defined(_M_ARM64)
+                MiArm64PrepareAllocatedPfnCache(PageFrameIndex, TempPte.u.Long);
+#endif
                 MiCopyPfn(PageFrameIndex, OldPageFrameIndex);
 
                 /* Dereference whatever this PTE is referencing */
@@ -2848,8 +2914,13 @@ Arm64UserLeafReady:
 #else
                 MiInitializePfn(PageFrameIndex, PointerPte, TRUE);
 #endif
+                Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
+                Pfn1->OriginalPte.u.Soft.Protection = MI_IS_PAGE_EXECUTABLE(&TempPte) ? MM_EXECUTE_READWRITE : MM_READWRITE;
+                if (Pfn1->u3.e1.CacheAttribute == MiNonCached) Pfn1->OriginalPte.u.Soft.Protection |= MM_NOCACHE;
+                else if (Pfn1->u3.e1.CacheAttribute == MiWriteCombined) Pfn1->OriginalPte.u.Soft.Protection |= MM_WRITECOMBINE;
                 TempPte.u.Hard.PageFrameNumber = PageFrameIndex;
-                TempPte.u.Hard.Write = 1;
+                MI_MAKE_WRITE_PAGE(&TempPte);
+                MI_MAKE_DIRTY_PAGE(&TempPte);
                 TempPte.u.Hard.CopyOnWrite = 0;
 
                 InterlockedExchangeAddSizeT(&CurrentProcess->NumberOfPrivatePages, 1);
@@ -3056,6 +3127,12 @@ Arm64UserLeafReady:
                 /* Grab a page out of there. Later we should grab a colored zero page */
                 PageFrameIndex = MiRemoveAnyPage(Color);
 
+#if defined(_M_ARM64)
+                if (PageFrameIndex != 0)
+                {
+                    MiArm64PrepareAllocatedPfnCache(PageFrameIndex, MmProtectToPteMask[PointerPte->u.Soft.Protection]);
+                }
+#endif
                 /* Release the lock since we need to do some zeroing */
                 MiReleasePfnLock(OldIrql);
 
@@ -3074,6 +3151,7 @@ Arm64UserLeafReady:
 
             /* Initialize the PFN entry now */
 #if defined(_M_ARM64)
+            MiArm64PrepareAllocatedPfnCache(PageFrameIndex, MmProtectToPteMask[PointerPte->u.Soft.Protection]);
             MiArm64InitializeFaultPfn(PageFrameIndex, Address, PointerPte, 1);
 #else
             MiInitializePfn(PageFrameIndex, PointerPte, 1);
@@ -3152,6 +3230,9 @@ Arm64UserLeafReady:
                 ProtoPte = MiCheckVirtualAddress(Address,
                                                  &ProtectionCode,
                                                  &Vad);
+                /* The VAD supplies the prototype identity; the process PTE
+                   retains this page's protection override. */
+                ProtectionCode = TempPte.u.Soft.Protection;
                 if (!ProtoPte)
                 {
                     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);

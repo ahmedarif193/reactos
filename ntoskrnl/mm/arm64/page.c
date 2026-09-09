@@ -33,6 +33,15 @@ MiArm64ReadUserPtePhysically(
     _In_ PVOID Address,
     _Out_opt_ PULONG64 OutPte);
 
+/* A disabled resident mapping uses the transition format, never the
+ * hardware descriptor's overlapping AF/Prototype and nG/Transition bits. */
+FORCEINLINE
+BOOLEAN
+MiArm64IsResidentPte(_In_ MMPTE Pte)
+{
+    return Pte.u.Hard.Valid || (!Pte.u.Soft.Prototype && Pte.u.Soft.Transition);
+}
+
 /* MI_ARM64_USER_PTE_WALK lives in internal/arm64/mm.h; the AWE support in
  * ARM3/awesup.c shares the walk and release helpers. */
 
@@ -179,16 +188,6 @@ MiArm64MaintainPageCache(
 
 FORCEINLINE
 VOID
-MiArm64InvalidatePageByPfnAlias(
-    _In_ PFN_NUMBER PageFrameNumber)
-{
-    MiArm64MaintainPageCache((PVOID)MI_ARM64_PFN_TO_VA(PageFrameNumber),
-                             MiArm64DcacheInvalidate,
-                             FALSE);
-}
-
-FORCEINLINE
-VOID
 MiArm64PublishPageByPfnAlias(
     _In_ PFN_NUMBER PageFrameNumber,
     _In_ BOOLEAN SweepIcache)
@@ -196,20 +195,6 @@ MiArm64PublishPageByPfnAlias(
     MiArm64MaintainPageCache((PVOID)MI_ARM64_PFN_TO_VA(PageFrameNumber),
                              MiArm64DcacheCleanInvalidate,
                              SweepIcache);
-}
-
-FORCEINLINE
-VOID
-MiArm64SyncMappedPfnCacheAttribute(
-    _In_ PMMPFN Pfn1,
-    _In_ MMPTE FinalPte)
-{
-    MI_PFN_CACHE_ATTRIBUTE NewCache = MiGetPteCacheAttribute(&FinalPte);
-
-    if (Pfn1->u3.e1.CacheAttribute != NewCache)
-    {
-        Pfn1->u3.e1.CacheAttribute = NewCache;
-    }
 }
 
 BOOLEAN
@@ -253,7 +238,7 @@ MiArm64GetUserPteAddressForProcess(
     L2Idx = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
     L3Idx = ((ULONG64)(ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64;
 
-    if (!MiArm64IsValidTablePa(RootPa))
+    if (!MiArm64EnsureTablePageMapped(RootPa))
     {
         return FALSE;
     }
@@ -384,14 +369,14 @@ MiArm64AllocateCleanPage(
 
         NeedZero = TRUE;
     }
+    MiArm64PrepareAllocatedPfnCache(PageFrameIndex, PTE_ENABLE_CACHE);
     MiReleasePfnLock(OldIrql);
 
+    MiArm64MapKseg0Page(PageFrameIndex);
     if (NeedZero)
     {
         MiZeroPhysicalPage(PageFrameIndex);
     }
-
-    MiArm64MapKseg0Page(PageFrameIndex);
     MiArm64CleanPageToPoC((PVOID)MI_ARM64_PFN_TO_VA(PageFrameIndex));
     *PageFrame = PageFrameIndex;
     return STATUS_SUCCESS;
@@ -708,7 +693,7 @@ MiArm64ProbeAndLockUserPages(
             if (PteSlot != NULL)
             {
                 Pte.u.Long = *PteSlot;
-                if (Pte.u.Hard.Valid)
+                if (Pte.u.Hard.Valid && ((AccessMode == KernelMode) || Pte.u.Hard.Owner))
                 {
                     if ((Operation == IoReadAccess) ||
                         (MI_IS_PAGE_WRITEABLE(&Pte) && MI_IS_PAGE_DIRTY(&Pte)))
@@ -791,8 +776,21 @@ MiArm64ExchangePteEntry(
     _In_ ULONG64 Value)
 {
     ULONG64 OldValue = MiArm64ReadPteEntry(Entry);
+    ULONG64 Observed, NewValue;
 
-    *Entry = Value;
+    do
+    {
+        NewValue = Value;
+        /* A hardware AF update can race the software read even with the
+           working-set lock held. Preserve it when retaining the same page. */
+        if ((OldValue & Value & 1) && !((OldValue ^ Value) & ARM64_PTE_ADDR_MASK))
+            NewValue |= OldValue & (1ULL << 10);
+        Observed = InterlockedCompareExchange64((volatile LONG64 *)Entry, NewValue, OldValue);
+        if (Observed == OldValue)
+            break;
+        OldValue = Observed;
+    } while (TRUE);
+
     MiArm64CleanEntryToPoC(Entry);
     return OldValue;
 }
@@ -903,12 +901,12 @@ MiArm64ConsumeDirtyState(
     KIRQL OldIrql;
     BOOLEAN Dirty;
 
-    if (!OldPte.u.Hard.Valid)
+    if (!MiArm64IsResidentPte(OldPte))
     {
         return FALSE;
     }
 
-    if (MI_IS_PAGE_DIRTY(&OldPte))
+    if (OldPte.u.Hard.Valid && MI_IS_PAGE_DIRTY(&OldPte))
     {
         return TRUE;
     }
@@ -929,7 +927,7 @@ MiArm64ConsumeDirtyState(
     PfnEntry = MiGetPfnEntry(PageFrameNumber);
     if ((PfnEntry != NULL) && PfnEntry->u3.e1.Modified)
     {
-        PfnEntry->u3.e1.Modified = 0;
+        /* Another mapping may still need this PFN-wide dirty indication. */
         Dirty = TRUE;
     }
     MiReleasePfnLock(OldIrql);
@@ -949,7 +947,7 @@ MiArm64PreserveDirtyStateForProtect(
 
     if (!OldPte.u.Hard.Valid ||
         !MI_IS_PAGE_DIRTY(&OldPte) ||
-        MI_IS_PAGE_DIRTY(&NewPte))
+        (NewPte.u.Hard.Valid && MI_IS_PAGE_DIRTY(&NewPte)))
     {
         return;
     }
@@ -1198,7 +1196,7 @@ MiArm64GetUserPfn(
     }
 
     Pte.u.Long = Walk.PteValue;
-    return Pte.u.Hard.Valid ? Pte.u.Hard.PageFrameNumber : 0;
+    return MiArm64IsResidentPte(Pte) ? Pte.u.Hard.PageFrameNumber : 0;
 }
 
 static
@@ -1332,6 +1330,13 @@ MmCreateVirtualMappingUnsafeEx(
         }
 
         OldPte = *PointerPte;
+        if (OldPte.u.Long != 0)
+        {
+            /* Replacing an owned mapping requires the unmap path to retire
+               its translation, data-page reference and reverse mapping. */
+            MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
         OldEntryEmpty = (OldPte.u.Long == 0);
         OldEntryHasPageTableShare = OldPte.u.Hard.Valid || OldPte.u.Soft.Transition;
 
@@ -1402,11 +1407,6 @@ MmCreateVirtualMappingUnsafeEx(
             MiReleasePfnLock(OldIrql);
         }
 
-        if (OldPte.u.Hard.Valid && OldPte.u.Hard.NotLargePage)
-        {
-            MiArm64InvalidatePageByPfnAlias(OldPte.u.Hard.PageFrameNumber);
-        }
-
         PointerPte->u.Long = FinalPte.u.Long;
         MiArm64CleanEntryToPoC(PointerPte);
         if (FinalPte.u.Hard.UserNoExecute == 0)
@@ -1424,6 +1424,11 @@ MmCreateVirtualMappingUnsafeEx(
 
     /* Kernel address path - uses self-mapping */
     PointerPte = MiAddressToPte(Address);
+    if (PointerPte->u.Long != 0)
+    {
+        DPRINT1("Mapping collision at %p\n", Address);
+        KeBugCheck(MEMORY_MANAGEMENT);
+    }
     MI_MAKE_HARDWARE_PTE_KERNEL(&TempPte, PointerPte, ProtectionMask, Page);
 
     if (!IsPhysical)
@@ -1437,23 +1442,8 @@ MmCreateVirtualMappingUnsafeEx(
         MiReleasePfnLock(OldIrql);
     }
 
-    if (PointerPte->u.Hard.Valid)
-    {
-        MiArm64MaintainPageCache(Address, MiArm64DcacheCleanInvalidate, FALSE);
-    }
-
-    {
-        ULONG_PTR OldPteValue = PointerPte->u.Long;
-
-        PointerPte->u.Long = TempPte.u.Long;
-        MiArm64SyncKernelLeafPteWrite(PointerPte);
-
-        if (OldPteValue != 0)
-        {
-            DPRINT1("Mapping collision at %p\n", Address);
-            KeBugCheck(MEMORY_MANAGEMENT);
-        }
-    }
+    PointerPte->u.Long = TempPte.u.Long;
+    MiArm64SyncKernelLeafPteWrite(PointerPte);
 
     KeInvalidateTlbEntry(Address);
 
@@ -1545,7 +1535,7 @@ MmDeleteVirtualMappingEx(
             *Page = 0;
     }
 
-    if (!IsPhysical && OldPte.u.Hard.Valid)
+    if (!IsPhysical && MiArm64IsResidentPte(OldPte))
     {
         MiArm64ReleaseMappedPageReference(OldPte.u.Hard.PageFrameNumber);
     }
@@ -1763,28 +1753,26 @@ MmIsDisabledPage(
     _Inout_opt_ PEPROCESS Process,
     _In_ PVOID Address)
 {
+    MMPTE Pte;
+    MI_ARM64_USER_PTE_WALK Walk;
+
     if (Address >= MmSystemRangeStart)
     {
         ASSERT(Process == NULL);
-        return FALSE;
+        if (!MiIsPdeForAddressValid(Address))
+            return FALSE;
+        Pte = *MiAddressToPte(Address);
     }
-
-    ASSERT(Process != NULL);
-    ASSERT(Process == PsGetCurrentProcess());
-
+    else
     {
-        ULONG64 PteValue;
-        MMPTE TempPte;
-
-        if (!MiArm64ReadUserPtePhysically(Address, &PteValue))
+        ASSERT(Process != NULL);
+        ASSERT(Process == PsGetCurrentProcess());
+        if (!MiArm64GetUserPteAddress(Address, &Walk))
             return FALSE;
-
-        TempPte.u.Long = PteValue;
-        if (!TempPte.u.Hard.Valid)
-            return FALSE;
-
-        return (TempPte.u.Hard.Writable == 0) && (TempPte.u.Hard.CopyOnWrite == 0);
+        Pte.u.Long = Walk.PteValue;
     }
+
+    return !Pte.u.Hard.Valid && MiArm64IsResidentPte(Pte);
 }
 
 BOOLEAN
@@ -1860,6 +1848,48 @@ MmGetPageProtect(
 }
 
 static
+MMPTE
+MiArm64BuildProtectedPte(_In_ MMPTE OldPte, _In_ ULONG ProtectionMask, _In_ BOOLEAN UserMapping)
+{
+    MMPTE Pte;
+    PMMPFN Pfn;
+
+    if (!(ProtectionMask & MM_PROTECT_ACCESS) ||
+        ((ProtectionMask & MM_PROTECT_SPECIAL) == MM_GUARDPAGE))
+    {
+        MI_MAKE_TRANSITION_PTE(&Pte, OldPte.u.Hard.PageFrameNumber, ProtectionMask);
+        return Pte;
+    }
+
+    Pte.u.Long = UserMapping ? MmProtectToPteMask[ProtectionMask] : MmProtectToPteMaskKernel[ProtectionMask];
+    Pte.u.Hard.Valid = 1;
+    Pte.u.Hard.NotLargePage = 1;
+    Pte.u.Hard.PageFrameNumber = OldPte.u.Hard.PageFrameNumber;
+    Pte.u.Hard.Owner = UserMapping;
+    Pte.u.Hard.Shareability = 3;
+    Pte.u.Hard.Accessed = 1;
+
+    /* Changing access must not change the cache type of an owned page. */
+    if (OldPte.u.Hard.Valid)
+    {
+        Pte.u.Long = (Pte.u.Long & ~ARM64_PTE_CACHE_MASK) | (OldPte.u.Long & ARM64_PTE_CACHE_MASK);
+    }
+    else if ((Pfn = MiGetPfnEntry(OldPte.u.Trans.PageFrameNumber)) != NULL)
+    {
+        if (Pfn->u3.e1.CacheAttribute == MiNonCached)
+            MI_PAGE_DISABLE_CACHE(&Pte);
+        else if (Pfn->u3.e1.CacheAttribute == MiWriteCombined)
+            MI_PAGE_WRITE_COMBINED(&Pte);
+    }
+
+    if (Pte.u.Hard.Writable)
+        MI_MAKE_DIRTY_PAGE(&Pte);
+    else
+        MI_MAKE_CLEAN_PAGE(&Pte);
+    return Pte;
+}
+
+static
 VOID
 MiArm64SetPageProtect(
     _Inout_ PEPROCESS Process,
@@ -1887,39 +1917,16 @@ MiArm64SetPageProtect(
 
         PointerPte = MiAddressToPte(Address);
         OldPte.u.Long = PointerPte->u.Long;
-        if (!OldPte.u.Hard.Valid)
+        if (!MiArm64IsResidentPte(OldPte))
             return;
 
-        TempPte.u.Long = OldPte.u.Long;
-        TempPte.u.Long &= ~PTE_PROTECT_MASK;
-        TempPte.u.Long |= MmProtectToPteMaskKernel[ProtectionMask];
-
-        if ((ProtectionMask != MM_NOACCESS) && !FlagOn(ProtectionMask, MM_GUARDPAGE))
-        {
-            TempPte.u.Hard.Valid = 1;
-            TempPte.u.Hard.NotLargePage = 1;
-        }
-        else
-        {
-            TempPte.u.Hard.Valid = 0;
-        }
-
-        if (TempPte.u.Hard.Writable)
-        {
-            MI_MAKE_DIRTY_PAGE(&TempPte);
-        }
-        else
-        {
-            MI_MAKE_CLEAN_PAGE(&TempPte);
-        }
-
-        PointerPte->u.Long = TempPte.u.Long;
-        MiArm64SyncKernelLeafPteWriteTo(PointerPte, Kseg0Pte);
-
-        MiArm64PreserveDirtyStateForProtect(OldPte, TempPte);
+        TempPte = MiArm64BuildProtectedPte(OldPte, ProtectionMask, FALSE);
 
         if (OldPte.u.Long != TempPte.u.Long)
         {
+            PointerPte->u.Long = TempPte.u.Long;
+            MiArm64SyncKernelLeafPteWriteTo(PointerPte, Kseg0Pte);
+            MiArm64PreserveDirtyStateForProtect(OldPte, TempPte);
             KeInvalidateTlbEntry(Address);
         }
 
@@ -1942,22 +1949,15 @@ MiArm64SetPageProtect(
 
         OldPte.u.Long = Walk.PteValue;
 
-        TempPte.u.Long = 0;
-        TempPte.u.Long |= MmProtectToPteMask[ProtectionMask];
-        TempPte.u.Hard.PageFrameNumber = OldPte.u.Hard.PageFrameNumber;
-        TempPte.u.Hard.Owner = 1;          /* User accessible (AP[0]=1) */
-        TempPte.u.Hard.Shareability = 3;   /* Inner Shareable for SMP coherency */
+        if (!MiArm64IsResidentPte(OldPte))
+        {
+            MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
+            return;
+        }
 
-        if ((ProtectionMask != MM_NOACCESS) && !FlagOn(ProtectionMask, MM_GUARDPAGE))
-            TempPte.u.Hard.Valid = 1;
+        TempPte = MiArm64BuildProtectedPte(OldPte, ProtectionMask, TRUE);
 
-        if (OldPte.u.Hard.Accessed)
-            TempPte.u.Hard.Accessed = 1;
-
-        if (TempPte.u.Hard.Valid)
-            TempPte.u.Hard.NotLargePage = 1;
-
-        if (TempPte.u.Hard.Writable &&
+        if (TempPte.u.Hard.Valid && TempPte.u.Hard.Writable &&
             Process->ExecutableWriteExceptions &&
             MiIsExecutableWriteProtection(ProtectionMask) &&
             !MiIsEcCodeAddress(Process, Address) &&
@@ -1967,17 +1967,11 @@ MiArm64SetPageProtect(
             TempPte.u.Hard.Writable = 0;
             MI_MAKE_CLEAN_PAGE(&TempPte);
         }
-        else if (TempPte.u.Hard.Writable)
-            MI_MAKE_DIRTY_PAGE(&TempPte);
-        else
-            MI_MAKE_CLEAN_PAGE(&TempPte);
-
-        OldPte.u.Long = MiArm64ExchangePteEntry(Walk.PointerPte, TempPte.u.Long);
-
-        MiArm64PreserveDirtyStateForProtect(OldPte, TempPte);
 
         if (OldPte.u.Long != TempPte.u.Long)
         {
+            OldPte.u.Long = MiArm64ExchangePteEntry(Walk.PointerPte, TempPte.u.Long);
+            MiArm64PreserveDirtyStateForProtect(OldPte, TempPte);
             MiArm64InvalidateUserAddress(Address);
         }
     }
@@ -2036,11 +2030,10 @@ MmSetDirtyBit(
         else
             MI_MAKE_CLEAN_PAGE(&TempPte);
 
-        PointerPte->u.Long = TempPte.u.Long;
-        MiArm64SyncKernelLeafPteWriteTo(PointerPte, Kseg0Pte);
-
         if (OldPte.u.Long != TempPte.u.Long)
         {
+            PointerPte->u.Long = TempPte.u.Long;
+            MiArm64SyncKernelLeafPteWriteTo(PointerPte, Kseg0Pte);
             KeInvalidateTlbEntry(Address);
         }
 
@@ -2071,10 +2064,9 @@ MmSetDirtyBit(
         else
             MI_MAKE_CLEAN_PAGE(&TempPte);
 
-        MiArm64WritePteEntry(Walk.PointerPte, TempPte.u.Long);
-
         if (OldPte.u.Long != TempPte.u.Long)
         {
+            MiArm64ExchangePteEntry(Walk.PointerPte, TempPte.u.Long);
             MiArm64InvalidateUserAddress(Address);
         }
     }
@@ -2107,7 +2099,7 @@ MmGetPfnForProcess(
         }
 
         PointerPte = MiAddressToPte(Address);
-        if (PointerPte->u.Hard.Valid)
+        if (MiArm64IsResidentPte(*PointerPte))
             PageFrame = PointerPte->u.Hard.PageFrameNumber;
 
         return PageFrame;
@@ -2122,13 +2114,34 @@ ULONG
 MiProtectionFromPte(
     _In_ MMPTE Pte)
 {
-    ULONG Mask = Pte.u.Long & PTE_PROTECT_MASK;
+    ULONG Protect;
 
-    for (ULONG i = 0; i < ARRAYSIZE(MmProtectToPteMask); ++i)
+    if (!Pte.u.Hard.Valid)
+        return PAGE_NOACCESS;
+
+    /* Permissions occupy bits 53-56 and cannot be decoded through ULONG.
+       PXN controls kernel execution; UXN controls user execution. */
+    if (Pte.u.Hard.CopyOnWrite)
+        Protect = PAGE_WRITECOPY;
+    else if (Pte.u.Hard.Writable)
+        Protect = PAGE_READWRITE;
+    else
+        Protect = PAGE_READONLY;
+
+    if (Pte.u.Hard.Owner ? !Pte.u.Hard.UserNoExecute : !Pte.u.Hard.PrivilegedNoExecute)
+        Protect <<= 4;
+
+    switch (MiGetPteCacheAttribute(&Pte) & 3)
     {
-        if ((MmProtectToPteMask[i] & PTE_PROTECT_MASK) == Mask)
-            return MmProtectToValue[i];
+        case (MI_ARM64_MAIR_NORMAL_WB_IDX & 3):
+            break;
+        case (MI_ARM64_MAIR_NORMAL_WC_IDX & 3):
+            Protect |= PAGE_WRITECOMBINE;
+            break;
+        default:
+            Protect |= PAGE_NOCACHE;
+            break;
     }
 
-    return PAGE_NOACCESS;
+    return Protect;
 }

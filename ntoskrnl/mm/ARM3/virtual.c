@@ -2024,12 +2024,20 @@ MiGetPageProtection(IN PMMPTE PointerPte)
         return MmProtectToValue[Pfn->OriginalPte.u.Soft.Protection];
     }
 
-    /* This is software PTE */
-    DPRINT("Prototype PTE: %lx %p\n", TempPte.u.Hard.PageFrameNumber, Pfn);
-    DPRINT("VA: %p\n", MiPteToAddress(&TempPte));
-    DPRINT("Mask: %lx\n", TempPte.u.Soft.Protection);
-    DPRINT("Mask2: %lx\n", Pfn->OriginalPte.u.Soft.Protection);
-    return MmProtectToValue[TempPte.u.Soft.Protection];
+    /* A shared PFN's original protection belongs to the section, while the
+       valid process descriptor contains this view's effective permissions. */
+    if (MI_IS_PAGE_COPY_ON_WRITE(&TempPte))
+        Protect = PAGE_WRITECOPY;
+    else if (MI_IS_PAGE_WRITEABLE(&TempPte))
+        Protect = PAGE_READWRITE;
+    else
+        Protect = PAGE_READONLY;
+#if _MI_HAS_NO_EXECUTE
+    if (MI_IS_PAGE_EXECUTABLE(&TempPte)) Protect <<= 4;
+#endif
+    if (Pfn->u3.e1.CacheAttribute == MiNonCached) Protect |= PAGE_NOCACHE;
+    else if (Pfn->u3.e1.CacheAttribute == MiWriteCombined) Protect |= PAGE_WRITECOMBINE;
+    return Protect;
 }
 
 ULONG
@@ -2234,8 +2242,14 @@ MiQueryAddressState(IN PVOID Va,
                     (Vad->u.VadFlags.PrivateMemory == 0) &&
                     (Vad->ControlArea))
                 {
-                    DPRINT1("Not supported\n");
-                    ASSERT(FALSE);
+                    /* A local protection override does not commit a page in
+                       a SEC_RESERVE section. Commitment remains shared. */
+                    ProtoPte = MI_GET_PROTOTYPE_PTE_FOR_VPN(Vad, (ULONG_PTR)Va >> PAGE_SHIFT);
+                    if (ProtoPte->u.Long == 0)
+                    {
+                        State = MEM_RESERVE;
+                        Protect = 0;
+                    }
                 }
             }
         }
@@ -2551,7 +2565,6 @@ MiQueryMemoryBasicInformation(IN HANDLE ProcessHandle,
         MemoryInfo.BaseAddress = Address;
         MemoryInfo.AllocationBase = (PVOID)(Vad->StartingVpn << PAGE_SHIFT);
         MemoryInfo.AllocationProtect = MmProtectToValue[Vad->u.VadFlags.Protection];
-        MemoryInfo.Type = MEM_PRIVATE;
 
         /* Acquire the working set lock (shared is enough) */
         MiLockProcessWorkingSetShared(TargetProcess, PsGetCurrentThread());
@@ -2945,36 +2958,39 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
             goto FailPath;
         }
 
-        /* Check if data or page file mapping protection PTE is compatible */
-        if (!Vad->ControlArea->u.Flags.Image)
+        /* A view may only request access allowed by its original mapping. */
+        if (!MiIsProtectionCompatible(MmProtectToValue[Vad->u.VadFlags.Protection], NewAccessProtection))
         {
-            /* Not yet */
-            DPRINT1("Fixme: Not checking for valid protection\n");
-        }
-
-        /* This is a section, and this is not yet supported */
-        DPRINT1("Section protection not yet supported\n");
-        OldProtect = 0;
-    }
-    else
-    {
-        /* Private memory, check protection flags */
-        if ((NewAccessProtection & PAGE_WRITECOPY) ||
-            (NewAccessProtection & PAGE_EXECUTE_WRITECOPY))
-        {
-            DPRINT1("Invalid protection flags for private memory\n");
-            Status = STATUS_INVALID_PARAMETER_4;
+            Status = STATUS_SECTION_PROTECTION;
             goto FailPath;
         }
 
+        /* Section commitment belongs to the prototype array, not the view's
+           demand-zero PTEs. Check it before making any protection changes. */
+        Committed = TRUE;
+        for (CurrentAddress = StartingAddress; CurrentAddress <= EndingAddress; CurrentAddress += PAGE_SIZE)
+        {
+            PointerPte = MI_GET_PROTOTYPE_PTE_FOR_VPN(Vad, CurrentAddress >> PAGE_SHIFT);
+            if (PointerPte->u.Long == 0)
+            {
+                Committed = FALSE;
+                break;
+            }
+        }
+    }
+    else if (NewAccessProtection & (PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY))
+    {
+        Status = STATUS_INVALID_PARAMETER_4;
+        goto FailPath;
+    }
+
+    {
         /* Lock the working set */
         MiLockProcessWorkingSetUnsafe(Process, Thread);
 
-        /* Check if all pages in this range are committed */
-        Committed = MiIsEntireRangeCommitted(StartingAddress,
-                                             EndingAddress,
-                                             Vad,
-                                             Process);
+        /* Private commitment is recorded by the VAD and process PTEs. */
+        if (Vad->u.VadFlags.PrivateMemory)
+            Committed = MiIsEntireRangeCommitted(StartingAddress, EndingAddress, Vad, Process);
         if (!Committed)
         {
             /* Fail */
@@ -3073,25 +3089,32 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                 /* Get the PFN entry */
                 Pfn1 = MiGetPfnEntry(PFN_FROM_PTE(&PteContents));
 
-                /* We don't support this yet */
-                ASSERT(Pfn1->u3.e1.PrototypePte == 0);
-
                 /* Check if the page should not be accessible at all */
                 if ((NewAccessProtection & PAGE_NOACCESS) ||
                     (NewAccessProtection & PAGE_GUARD))
                 {
                     KIRQL OldIrql = MiAcquirePfnLock();
 
-                    /* Mark the PTE as transition and change its protection */
-                    PageFrameIndex = PFN_FROM_PTE(&PteContents);
-                    MI_MAKE_TRANSITION_PTE(&PteContents, PageFrameIndex, ProtectionMask);
-                    /* Decrease PFN share count and write the PTE */
-                    MiDecrementShareCount(Pfn1, PageFrameIndex);
-                    // FIXME: remove the page from the WS
-                    MI_WRITE_INVALID_PTE(PointerPte, PteContents);
-                    /* Invalidate this mapping on every CPU before releasing the
-                       PFN lock and making the page available for reuse. */
-                    MiFlushTbForAddress((PVOID)CurrentAddress);
+                    if (Pfn1->u3.e1.PrototypePte)
+                    {
+                        /* Keep the shared page in the section. Only this
+                           view loses its resident mapping and protection. */
+                        if (MI_IS_PAGE_DIRTY(&PteContents)) Pfn1->u3.e1.Modified = 1;
+                        MiDeletePte(PointerPte, (PVOID)CurrentAddress, Process, Pfn1->PteAddress, TRUE);
+                        PteContents = PrototypePte;
+                        PteContents.u.Soft.Protection = ProtectionMask;
+                        MI_WRITE_SOFTWARE_PTE(PointerPte, PteContents);
+                    }
+                    else
+                    {
+                        /* A private page retains its data in transition. */
+                        if (MI_IS_PAGE_DIRTY(&PteContents)) Pfn1->u3.e1.Modified = 1;
+                        PageFrameIndex = PFN_FROM_PTE(&PteContents);
+                        MI_MAKE_TRANSITION_PTE(&PteContents, PageFrameIndex, ProtectionMask);
+                        MI_WRITE_INVALID_PTE(PointerPte, PteContents);
+                        MiFlushTbForAddress((PVOID)CurrentAddress);
+                        MiDecrementShareCount(Pfn1, PageFrameIndex);
+                    }
 
                     /* We are done for this PTE */
                     MiReleasePfnLock(OldIrql);
@@ -3099,7 +3122,8 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                 else
                 {
                     /* Write the protection mask and write it with a TLB flush */
-                    Pfn1->OriginalPte.u.Soft.Protection = ProtectionMask;
+                    if (!Pfn1->u3.e1.PrototypePte)
+                        Pfn1->OriginalPte.u.Soft.Protection = ProtectionMask;
 #if defined(_M_AMD64) || defined(_M_ARM64)
                     MiFlushTbAndCapture(Vad,
                                         PointerPte,
@@ -3122,9 +3146,13 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
             }
             else
             {
-                /* We don't support these cases yet */
-                ASSERT(PteContents.u.Soft.Prototype == 0);
-                //ASSERT(PteContents.u.Soft.Transition == 0);
+                /* A section view's local override must retain its prototype
+                   identity even when the page has never been faulted in. */
+                if (!Vad->u.VadFlags.PrivateMemory &&
+                    ((PteContents.u.Long == 0) || PteContents.u.Soft.Prototype))
+                {
+                    PteContents = PrototypePte;
+                }
 
                 /* The PTE is already demand-zero, just update the protection mask */
                 PteContents.u.Soft.Protection = ProtectionMask;
@@ -4279,7 +4307,7 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
                        OUT PULONG UnsafeOldAccessProtection)
 {
     PEPROCESS Process;
-    ULONG OldAccessProtection;
+    ULONG OldAccessProtection = PAGE_NOACCESS;
     ULONG Protection;
     PEPROCESS CurrentProcess = PsGetCurrentProcess();
     PVOID BaseAddress = NULL;
