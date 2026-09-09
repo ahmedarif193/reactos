@@ -29,6 +29,48 @@ static
 VOID
 USBPORT_ComputeLpmPolicy(IN PUSBPORT_DEVICE_HANDLE DeviceHandle);
 
+/* Internal setup requests have no IRP to cancel. Find the request only while
+ * holding the lock protecting its current queue; completion may already have
+ * detached and freed its transfer. The caller retries if DMA mapping has it
+ * temporarily off all three queues. */
+static
+VOID
+USBPORT_CancelSetupPacket(IN PDEVICE_OBJECT FdoDevice,
+                         IN PUSBPORT_ENDPOINT Endpoint,
+                         IN PURB Urb)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension = FdoDevice->DeviceExtension;
+    PLIST_ENTRY Lists[3];
+    PKSPIN_LOCK Locks[3];
+    PLIST_ENTRY Entry;
+    PUSBPORT_TRANSFER Transfer;
+    KIRQL OldIrql;
+    ULONG Index;
+
+    Lists[0] = &Endpoint->PendingTransferList;
+    Lists[1] = &Endpoint->TransferList;
+    Lists[2] = &FdoExtension->MapTransferList;
+    Locks[0] = &Endpoint->EndpointSpinLock;
+    Locks[1] = &Endpoint->EndpointSpinLock;
+    Locks[2] = &FdoExtension->MapTransferSpinLock;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Lists); ++Index)
+    {
+        KeAcquireSpinLock(Locks[Index], &OldIrql);
+        for (Entry = Lists[Index]->Flink; Entry != Lists[Index]; Entry = Entry->Flink)
+        {
+            Transfer = CONTAINING_RECORD(Entry, USBPORT_TRANSFER, TransferLink);
+            if (Transfer->Urb == Urb && !(Transfer->Flags & TRANSFER_FLAG_COMPLETED))
+                InterlockedOr((volatile LONG *)&Transfer->Flags, TRANSFER_FLAG_ABORTED);
+        }
+        KeReleaseSpinLock(Locks[Index], OldIrql);
+    }
+
+    USBPORT_InvalidateEndpointHandler(FdoDevice, Endpoint, INVALIDATE_ENDPOINT_WORKER_THREAD);
+    USBPORT_FlushPendingTransfers(Endpoint);
+    USBPORT_FlushCancelList(Endpoint);
+}
+
 NTSTATUS
 NTAPI
 USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
@@ -43,6 +85,8 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     PMDL Mdl;
     USBD_STATUS USBDStatus = USBD_STATUS_SUCCESS;
     KEVENT Event;
+    LARGE_INTEGER Timeout;
+    BOOLEAN TimedOut;
     NTSTATUS Status;
 
     DPRINT("USBPORT_SendSetupPacket: DeviceHandle - %p, FdoDevice - %p, SetupPacket - %p, Buffer - %p, Length - %x, TransferedLen - %x, pUSBDStatus - %x\n",
@@ -127,13 +171,31 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
 
                 USBPORT_QueueTransferUrb(Urb);
 
-                KeWaitForSingleObject(&Event,
-                                      Suspended,
-                                      KernelMode,
-                                      FALSE,
-                                      NULL);
+                Timeout.QuadPart = -5LL * 1000 * 10000;
+                Status = KeWaitForSingleObject(&Event, Suspended, KernelMode, FALSE, &Timeout);
+                TimedOut = (Status == STATUS_TIMEOUT);
+
+                if (TimedOut)
+                {
+                    DPRINT1("USBPORT_SendSetupPacket: timeout addr=%u port=%u request=%02x value=%04x index=%04x length=%u\n",
+                            DeviceHandle->DeviceAddress, DeviceHandle->PortNumber,
+                            SetupPacket->bRequest, SetupPacket->wValue.W,
+                            SetupPacket->wIndex.W, SetupPacket->wLength);
+
+                    /* Keep the URB, MDL, buffer and stack event alive until
+                     * the normal abort/completion path has stopped DMA. */
+                    do
+                    {
+                        USBPORT_CancelSetupPacket(FdoDevice, DeviceHandle->PipeHandle.Endpoint, Urb);
+                        Timeout.QuadPart = -100LL * 10000;
+                        Status = KeWaitForSingleObject(&Event, Suspended, KernelMode, FALSE, &Timeout);
+                    }
+                    while (Status == STATUS_TIMEOUT);
+                }
 
                 USBDStatus = Urb->UrbHeader.Status;
+                if (TimedOut && USBDStatus == USBD_STATUS_CANCELED)
+                    USBDStatus = USBD_STATUS_TIMEOUT;
             }
 
             Status = USBPORT_USBDStatusToNtStatus(Urb, USBDStatus);
