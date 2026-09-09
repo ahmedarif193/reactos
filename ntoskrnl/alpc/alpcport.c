@@ -28,14 +28,27 @@ NTSTATUS
 AlpcpCaptureMessageHeader(
     _In_ PPORT_MESSAGE UserMessage,
     _In_ KPROCESSOR_MODE PreviousMode,
+    _In_ BOOLEAN TaggedLayout,
     _Out_ PPORT_MESSAGE Header)
 {
+    ULONG Length = sizeof(*Header);
+#ifdef _WIN64
+    ALPC_PORT_MESSAGE32 Header32;
+    USHORT Type;
+#endif
+
     if (PreviousMode != KernelMode)
     {
         _SEH2_TRY
         {
-            ProbeForRead(UserMessage, sizeof(*UserMessage), sizeof(ULONG));
-            *Header = *(volatile PORT_MESSAGE*)UserMessage;
+            ProbeForRead(UserMessage, FIELD_OFFSET(PORT_MESSAGE, ClientId), sizeof(ULONG));
+#ifdef _WIN64
+            Type = UserMessage->u2.s2.Type;
+            if (TaggedLayout && (Type & 0x1000)) Length = sizeof(Header32);
+#endif
+            ProbeForRead(UserMessage, Length, sizeof(ULONG));
+            RtlZeroMemory(Header, sizeof(*Header));
+            RtlCopyMemory(Header, UserMessage, Length);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -47,6 +60,20 @@ AlpcpCaptureMessageHeader(
     {
         *Header = *UserMessage;
     }
+#ifdef _WIN64
+    /* QueryInformationMessage accepts either header layout, independent of the
+     * caller architecture. The type bit selects the 24-byte message header. */
+    if (TaggedLayout && (Header->u2.s2.Type & 0x1000))
+    {
+        RtlCopyMemory(&Header32, Header, sizeof(Header32));
+        Header->ClientId.UniqueProcess = ULongToHandle(Header32.UniqueProcess);
+        Header->ClientId.UniqueThread = ULongToHandle(Header32.UniqueThread);
+        Header->MessageId = Header32.MessageId;
+        Header->ClientViewSize = Header32.CallbackId;
+    }
+#else
+    UNREFERENCED_PARAMETER(TaggedLayout);
+#endif
     return STATUS_SUCCESS;
 }
 
@@ -239,6 +266,10 @@ AlpcpQueryServerInformation(
     AlpcpAcquireLock();
     Message = Thread->AlpcMessage;
     CommunicationInfo = Message ? Message->CommunicationInfo : NULL;
+    /* Client requests are queued on the connection port, which has no
+       communication information. The sender retains the connected endpoint. */
+    if (!CommunicationInfo && Message && Message->SenderPort)
+        CommunicationInfo = Message->SenderPort->CommunicationInfo;
     if (!CommunicationInfo && Message && Message->QueuePort)
         CommunicationInfo = Message->QueuePort->CommunicationInfo;
 
@@ -696,7 +727,7 @@ NtAlpcSetInformation(
         case AlpcMessageZoneInformation:
             if (Length != sizeof(MessageZoneInformation))
             {
-                Status = STATUS_INFO_LENGTH_MISMATCH;
+                Status = STATUS_INVALID_PARAMETER;
                 break;
             }
             if (PreviousMode != KernelMode)
@@ -803,7 +834,7 @@ NtAlpcQueryInformationMessage(
 
     PAGED_CODE();
 
-    Status = AlpcpCaptureMessageHeader(PortMessage, PreviousMode, &Header);
+    Status = AlpcpCaptureMessageHeader(PortMessage, PreviousMode, TRUE, &Header);
     if (!NT_SUCCESS(Status)) return Status;
 
     if ((MessageInformationClass == AlpcMessageHandleInformation) &&
@@ -951,7 +982,7 @@ NtAlpcImpersonateClientOfPort(
 
     PAGED_CODE();
 
-    Status = AlpcpCaptureMessageHeader(Message, PreviousMode, &Header);
+    Status = AlpcpCaptureMessageHeader(Message, PreviousMode, FALSE, &Header);
     if (!NT_SUCCESS(Status)) return Status;
 
     Status = AlpcpReferencePortByHandle(PortHandle, PORT_CONNECT, PreviousMode, &Port);
@@ -1012,7 +1043,7 @@ NtAlpcImpersonateClientContainerOfPort(
 
     if (Flags) return STATUS_INVALID_PARAMETER;
 
-    Status = AlpcpCaptureMessageHeader(Message, PreviousMode, &Header);
+    Status = AlpcpCaptureMessageHeader(Message, PreviousMode, FALSE, &Header);
     if (!NT_SUCCESS(Status)) return Status;
 
     Status = AlpcpReferencePortByHandle(PortHandle, READ_CONTROL, PreviousMode, &Port);

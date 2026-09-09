@@ -261,7 +261,7 @@ static inline ALPC_PORT_MESSAGE *alpc_port_message_32to64( ALPC_PORT_MESSAGE **o
 
     msg->DataLength = in->DataLength;
     msg->TotalLength = sizeof(*msg) + msg->DataLength;
-    msg->Type = in->Type;
+    msg->Type = in->Type & ~0x1000; /* The converted header has native layout. */
     msg->DataInfoOffset = in->DataInfoOffset;
     client_id_32to64( &msg->ClientId, &in->ClientId );
     msg->MessageId = in->MessageId;
@@ -404,7 +404,7 @@ static inline ALPC_PORT_MESSAGE32 *alpc_port_message_64to32( ALPC_PORT_MESSAGE32
 
     out->DataLength = in->DataLength;
     out->TotalLength = sizeof(*out) + in->DataLength;
-    out->Type = in->Type;
+    out->Type = in->Type | 0x1000; /* Identify the returned 32-bit ALPC header. */
     out->DataInfoOffset = in->DataInfoOffset;
     out->ClientId.UniqueProcess = HandleToUlong( in->ClientId.UniqueProcess );
     out->ClientId.UniqueThread = HandleToUlong( in->ClientId.UniqueThread );

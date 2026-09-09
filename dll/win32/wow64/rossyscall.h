@@ -19,6 +19,23 @@
     ROS_SYSCALL_ENTRY( NtAddBootEntry ) \
     ROS_SYSCALL_ENTRY( NtAddDriverEntry ) \
     ROS_SYSCALL_ENTRY( NtAllocateUserPhysicalPages ) \
+    ROS_SYSCALL_ENTRY( NtAlpcCancelMessage ) \
+    ROS_SYSCALL_ENTRY( NtAlpcConnectPortEx ) \
+    ROS_SYSCALL_ENTRY( NtAlpcCreatePortSection ) \
+    ROS_SYSCALL_ENTRY( NtAlpcCreateResourceReserve ) \
+    ROS_SYSCALL_ENTRY( NtAlpcCreateSectionView ) \
+    ROS_SYSCALL_ENTRY( NtAlpcCreateSecurityContext ) \
+    ROS_SYSCALL_ENTRY( NtAlpcDeletePortSection ) \
+    ROS_SYSCALL_ENTRY( NtAlpcDeleteResourceReserve ) \
+    ROS_SYSCALL_ENTRY( NtAlpcDeleteSectionView ) \
+    ROS_SYSCALL_ENTRY( NtAlpcDeleteSecurityContext ) \
+    ROS_SYSCALL_ENTRY( NtAlpcImpersonateClientContainerOfPort ) \
+    ROS_SYSCALL_ENTRY( NtAlpcOpenSenderProcess ) \
+    ROS_SYSCALL_ENTRY( NtAlpcOpenSenderThread ) \
+    ROS_SYSCALL_ENTRY( NtAlpcQueryInformation ) \
+    ROS_SYSCALL_ENTRY( NtAlpcQueryInformationMessage ) \
+    ROS_SYSCALL_ENTRY( NtAlpcRevokeSecurityContext ) \
+    ROS_SYSCALL_ENTRY( NtAlpcSetInformation ) \
     ROS_SYSCALL_ENTRY( NtCancelDeviceWakeupRequest ) \
     ROS_SYSCALL_ENTRY( NtCompactKeys ) \
     ROS_SYSCALL_ENTRY( NtCompressKey ) \
