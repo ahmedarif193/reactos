@@ -154,7 +154,7 @@ static DWORD get_keyboard_subtype(void)
     kbd_type = GetKeyboardType(0);
     kbd_subtype = GetKeyboardType(1);
 
-    if (kbd_type == 4 || (kbd_type == 7 && kbd_subtype == 0))
+    if (kbd_type == 4 || kbd_type == 0x51 || (kbd_type == 7 && kbd_subtype == 0))
         dev_subtype = DIDEVTYPEKEYBOARD_PCENH;
     else if (kbd_type == 7 && kbd_subtype == 2)
         dev_subtype = DIDEVTYPEKEYBOARD_JAPAN106;
