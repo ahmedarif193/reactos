@@ -32,6 +32,7 @@
 #include <wingdi.h>
 #include <winuser.h>
 #include <winbase.h>
+#include <reactos/usertouch.h>
 typedef enum
 {
     POINTER_FEEDBACK_DEFAULT = 1,
@@ -838,8 +839,18 @@ BOOL WINAPI GetTouchInputInfo( HTOUCHINPUT handle, UINT count, TOUCHINPUT *ptr, 
  */
 BOOL WINAPI IsTouchWindow( HWND hwnd, ULONG *flags )
 {
+#ifdef __REACTOS__
+    ULONG state = NtUserCallTwoParam((DWORD_PTR)hwnd, 0, ROS_TOUCH_QUERY);
+
+    if (!(state & ROS_TOUCH_REGISTERED))
+        return FALSE;
+    if (flags)
+        *flags = state & ROS_TOUCH_VALID_FLAGS;
+    return TRUE;
+#else
     FIXME( "hwnd %p, flags %p stub!\n", hwnd, flags );
     return FALSE;
+#endif
 }
 
 /*****************************************************************************
@@ -847,8 +858,12 @@ BOOL WINAPI IsTouchWindow( HWND hwnd, ULONG *flags )
  */
 BOOL WINAPI RegisterTouchWindow( HWND hwnd, ULONG flags )
 {
+#ifdef __REACTOS__
+    return NtUserCallTwoParam((DWORD_PTR)hwnd, flags, ROS_TOUCH_REGISTER);
+#else
     FIXME( "hwnd %p, flags %#lx stub!\n", hwnd, flags );
     return TRUE;
+#endif
 }
 
 /*****************************************************************************
@@ -856,8 +871,12 @@ BOOL WINAPI RegisterTouchWindow( HWND hwnd, ULONG flags )
  */
 BOOL WINAPI UnregisterTouchWindow( HWND hwnd )
 {
+#ifdef __REACTOS__
+    return NtUserCallTwoParam((DWORD_PTR)hwnd, 0, ROS_TOUCH_UNREGISTER);
+#else
     FIXME( "hwnd %p stub!\n", hwnd );
     return TRUE;
+#endif
 }
 
 /*****************************************************************************

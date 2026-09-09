@@ -26,6 +26,7 @@ HINSTANCE hModClient = NULL;
 BOOL ClientPfnInit = FALSE;
 ATOM gaGuiConsoleWndClass;
 ATOM AtomImeLevel;
+ATOM AtomTouchWindow;
 ATOM AtomDwmDarkMode;
 ATOM AtomDwmSystemBackdropType;
 ATOM AtomDwmBackdropOpacity;
@@ -146,6 +147,7 @@ InitUserAtoms(VOID)
     AtomDDETrack = IntAddGlobalAtom(L"SysDT", TRUE);
     AtomQOS      = IntAddGlobalAtom(L"SysQOS", TRUE);
     AtomImeLevel = IntAddGlobalAtom(L"SysIMEL", TRUE);
+    AtomTouchWindow = IntAddGlobalAtom(L"ReactOS.TouchWindow", TRUE);
     AtomDwmDarkMode = IntAddUserPropertyAtom(L"ReactOS.Dwm.ImmersiveDarkMode");
     AtomDwmSystemBackdropType = IntAddUserPropertyAtom(DWM_PROP_SYSTEM_BACKDROP_TYPE);
     AtomDwmBackdropOpacity = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_OPACITY);

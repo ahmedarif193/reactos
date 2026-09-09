@@ -85,6 +85,7 @@ list(APPEND SOURCE
     wsprintf.c)
 
 list(APPEND PCH_SKIP_SOURCE
+    RegisterTouchWindow.c
     testlist.c)
 
 add_executable(user32_apitest
