@@ -114,7 +114,7 @@ VOID DDTests(GUID *lpDevice)
 }
 
 BOOL DDPrimarySurfaceTest(GUID *lpDevice, HWND hWnd){
-    UINT TimerID;
+    UINT_PTR TimerID;
     MSG msg;
 
     LPDIRECTDRAW lpDD = NULL;
