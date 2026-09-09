@@ -2295,6 +2295,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    if (pti == NULL || pti->rpdesk == NULL)
    {
       ERR("Thread is not attached to a desktop! Cannot create window (%wZ)\n", ClassName);
+      EngSetLastError(ERROR_ACCESS_DENIED);
       return NULL; // There is nothing to cleanup.
    }
    WinSta = pti->rpdesk->rpwinstaParent;
