@@ -712,6 +712,18 @@ NtOpenProcessToken(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtGetNextThread(
+    _In_ HANDLE ProcessHandle,
+    _In_opt_ HANDLE ThreadHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG HandleAttributes,
+    _In_ ULONG Flags,
+    _Out_ PHANDLE NewThreadHandle
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtOpenThread(
     _Out_ PHANDLE ThreadHandle,
     _In_ ACCESS_MASK DesiredAccess,

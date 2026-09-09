@@ -378,4 +378,7 @@
 #if (NTDDI_VERSION >= NTDDI_WIN10)
     SVC_(AlpcImpersonateClientContainerOfPort, 3)
 #endif
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    SVC_(GetNextThread, 6)
+#endif
 #endif // SYSFUNCS_NT5_ONLY
