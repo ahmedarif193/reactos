@@ -44,10 +44,9 @@ if(NOT FEX_ARM64EC_UNAVAILABLE_REASON)
 endif()
 
 if(FEX_ARM64EC_UNAVAILABLE_REASON)
-    message(WARNING "FEX ARM64EC is enabled but unavailable: ${FEX_ARM64EC_UNAVAILABLE_REASON}. "
-        "Continuing without the optional emulator. Run configure.sh to prepare FEX, "
+    message(FATAL_ERROR "FEX ARM64EC is enabled but unavailable: ${FEX_ARM64EC_UNAVAILABLE_REASON}. "
+        "Run configure.sh to prepare FEX, "
         "or use -DENABLE_FEX_ARM64EC=OFF to disable it explicitly.")
-    return()
 endif()
 
 set(FEX_ARM64EC_AVAILABLE ON)
