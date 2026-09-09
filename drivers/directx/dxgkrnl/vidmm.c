@@ -8918,7 +8918,7 @@ DxgkVidMmTryPlaceInSegment(
     ExAcquireFastMutex(&Segment->Lock);
     {
         PLIST_ENTRY Entry;
-        PLIST_ENTRY InsertBefore = &Segment->AllocationList;
+        PLIST_ENTRY InsertBefore = Segment->AllocationList.Flink;
 
         for (Entry = Segment->AllocationList.Blink;
              Entry != &Segment->AllocationList;
