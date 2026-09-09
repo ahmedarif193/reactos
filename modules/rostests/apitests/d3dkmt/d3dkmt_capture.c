@@ -312,9 +312,11 @@ Test_EscapePrivateCapture(void)
     Data.pPrivateDriverData = ReadOnlyPage;
     Data.PrivateDriverDataSize = sizeof(Expected);
     Before = Data;
+    ok(memcmp(ReadOnlyPage, Expected, sizeof(Expected)) == 0, "Protecting the Escape canary read-only changed its contents\n");
     CAPTURE_CALL(Status, Faulted, pfn(&Data));
     ok(Status == STATUS_INVALID_PARAMETER, "Escape with read-only private data returned 0x%08lX%s, expected STATUS_INVALID_PARAMETER (Win11)\n", (long)Status, Faulted ? " (faulted)" : "");
     ok(memcmp(&Data, &Before, sizeof(Data)) == 0, "Escape changed its descriptor after rejecting read-only private data\n");
+    ok(memcmp(ReadOnlyPage, Expected, sizeof(Expected)) == 0, "Escape changed the canary while it was read-only\n");
     if (VirtualProtect(ReadOnlyPage, PageSize, PAGE_READWRITE, &OldProtect))
         ok(memcmp(ReadOnlyPage, Expected, sizeof(Expected)) == 0, "Escape modified a read-only private-data canary before reporting failure\n");
     else
