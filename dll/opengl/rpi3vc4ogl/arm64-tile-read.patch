@@ -1,0 +1,61 @@
+diff --git a/src/broadcom/common/v3d_cpu_tiling.h b/src/broadcom/common/v3d_cpu_tiling.h
+index 4cfd98f961b..9cfa4c32d6f 100644
+--- a/src/broadcom/common/v3d_cpu_tiling.h
++++ b/src/broadcom/common/v3d_cpu_tiling.h
+@@ -83,10 +83,12 @@ v3d_load_utile(void *cpu, uint32_t cpu_stride,
+ #elif DETECT_ARCH_AARCH64
+         if (gpu_stride == 8) {
+                 __asm__ volatile (
+-                        /* Load from the GPU in one shot, no interleave, to
+-                         * d0-d7.
++                        /* Paired 128-bit loads avoid the slow LD1 read sequence
++                         * on Cortex-A53 Normal-NC/WC mappings. Read the
++                         * whole utile before scattering its rows.
+                          */
+-                        "ld1 {v0.2d, v1.2d, v2.2d, v3.2d}, [%[gpu]]\n"
++                        "ldp q0, q1, [%[gpu]]\n"
++                        "ldp q2, q3, [%[gpu], #32]\n"
+                         /* Store each 8-byte line to cpu-side destination,
+                          * incrementing it by the stride each time.
+                          */
+@@ -98,18 +100,20 @@ v3d_load_utile(void *cpu, uint32_t cpu_stride,
+                         "st1 {v2.D}[1], [%[cpu]], %[cpu_stride]\n"
+                         "st1 {v3.D}[0], [%[cpu]], %[cpu_stride]\n"
+                         "st1 {v3.D}[1], [%[cpu]]\n"
+-                        : [cpu]         "+r"(cpu)
++                        : [cpu]         "+&r"(cpu)
+                         : [gpu]         "r"(gpu),
+                           [cpu_stride]  "r"(cpu_stride)
+-                        : "v0", "v1", "v2", "v3");
++                        : "v0", "v1", "v2", "v3", "memory");
+                 return;
+         } else if (gpu_stride == 16) {
+                 void *cpu2 = cpu + 8;
+                 __asm__ volatile (
+-                        /* Load from the GPU in one shot, no interleave, to
+-                         * d0-d7.
++                        /* Paired 128-bit loads avoid the slow LD1 read sequence
++                         * on Cortex-A53 Normal-NC/WC mappings. Read the
++                         * whole utile before scattering its rows.
+                          */
+-                        "ld1 {v0.2d, v1.2d, v2.2d, v3.2d}, [%[gpu]]\n"
++                        "ldp q0, q1, [%[gpu]]\n"
++                        "ldp q2, q3, [%[gpu], #32]\n"
+                         /* Store each 16-byte line in 2 parts to the cpu-side
+                          * destination.  (vld1 can only store one d-register
+                          * at a time).
+@@ -122,11 +126,11 @@ v3d_load_utile(void *cpu, uint32_t cpu_stride,
+                         "st1 {v2.D}[1], [%[cpu2]],%[cpu_stride]\n"
+                         "st1 {v3.D}[0], [%[cpu]]\n"
+                         "st1 {v3.D}[1], [%[cpu2]]\n"
+-                        : [cpu]         "+r"(cpu),
+-                          [cpu2]        "+r"(cpu2)
++                        : [cpu]         "+&r"(cpu),
++                          [cpu2]        "+&r"(cpu2)
+                         : [gpu]         "r"(gpu),
+                           [cpu_stride]  "r"(cpu_stride)
+-                        : "v0", "v1", "v2", "v3");
++                        : "v0", "v1", "v2", "v3", "memory");
+                 return;
+         }
+ #endif

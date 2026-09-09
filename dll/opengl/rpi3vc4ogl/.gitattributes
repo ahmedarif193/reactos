@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
+
+# Preserve unified-diff context markers and the source files' line endings.
+*.patch -text whitespace=-blank-at-eol
