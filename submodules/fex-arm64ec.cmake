@@ -170,7 +170,8 @@ ExternalProject_Add(fex-wow64-build
         -DCMAKE_CXX_COMPILER=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/aarch64-w64-mingw32-clang++
         -DCMAKE_ASM_COMPILER=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/aarch64-w64-mingw32-clang
         -DCMAKE_AR=${CMAKE_AR}
-        -DCMAKE_DLLTOOL=${CMAKE_DLLTOOL}
+        # Generic llvm-dlltool defaults to x64; WOW64 needs ARM64 import libraries.
+        -DCMAKE_DLLTOOL=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/aarch64-w64-mingw32-dlltool
         -DCMAKE_LINKER=${CMAKE_LINKER}
         -DCMAKE_RC_COMPILER=${CMAKE_RC_COMPILER}
         -DCMAKE_SYSROOT=${CMAKE_SYSROOT}
@@ -178,7 +179,8 @@ ExternalProject_Add(fex-wow64-build
         "-DCMAKE_C_FLAGS=-D__REACTOS__ -isystem${FEX_ARM64EC_INCLUDE_DIR}"
         "-DCMAKE_CXX_FLAGS=-D__REACTOS__ -isystem${FEX_ARM64EC_CXX_INCLUDE_DIR} -isystem${FEX_ARM64EC_INCLUDE_DIR}"
         -DCMAKE_ASM_FLAGS=-D__REACTOS__
-        "-DCMAKE_SHARED_LINKER_FLAGS=-L${FEX_ARM64EC_LIBRARY_DIR}"
+        # ReactOS disables FEX's CRT substitutes; match the ARM64EC CRT libraries.
+        "-DCMAKE_SHARED_LINKER_FLAGS=-L${FEX_ARM64EC_LIBRARY_DIR} -lucrt -lmingwex"
         -DTUNE_CPU=none
         -DCMAKE_DISABLE_FIND_PACKAGE_fmt=ON
         -DREACTOS=ON
