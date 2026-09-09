@@ -34,8 +34,8 @@
 
 /*
  * Internal win32k control channel to the canonical display driver (DrvEscape).
- * NtGdiExtEscape rejects the mutating codes below; they are ReactOS-private
- * kernel plumbing, not Windows public APIs. The values spell "DWM" in the
+ * NtGdiExtEscape rejects kernel-only mutations and restricts bitmap publication
+ * to attached DWM; these are ReactOS-private contracts, not Windows public APIs. The values spell "DWM" in the
  * high bytes:
  *   SUPPRESS_CURSOR  - the compositor draws the cursor itself, so cdd stops
  *                      drawing the hardware/software cursor while suppressed.
@@ -45,6 +45,26 @@
  */
 #define CDD_ESCAPE_SUPPRESS_CURSOR  0x44574D01
 #define CDD_ESCAPE_PRESENT_STATS    0x44574D04
+/* User-facing bitmap-handle request, accepted only from attached DWM. The
+ * source form is kernel-only; NtGdiExtEscape resolves and pins the bitmap. */
+#define DWM_ESCAPE_PRESENT_BITMAP  0x44574D05
+#define CDD_ESCAPE_PRESENT_SOURCE  0x44574D06
+
+typedef struct _DWM_PRESENT_BITMAP
+{
+    ULONG_PTR Bitmap;
+    RECTL Rect;
+} DWM_PRESENT_BITMAP;
+
+typedef struct _CDD_PRESENT_SOURCE
+{
+    ULONG_PTR Bits;
+    ULONG Width;
+    ULONG Height;
+    ULONG Pitch;
+    RECTL Rect;
+} CDD_PRESENT_SOURCE;
+
 
 /*
  * cdd -> dxgkrnl present-path IOCTLs (kernel side of the same contract).

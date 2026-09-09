@@ -2173,10 +2173,27 @@ DwmComposeLoop(HANDLE hStopEvent)
                 }
                 else
                 {
-                    BOOL bltResult = BitBlt(hdcScreen, g_originX + pl, g_originY + pt,
-                                            pr - pl, pb - pt, g_hdcComp, pl, pt,
-                                            SRCCOPY);
-                    BOOL flushResult = GdiFlush();
+                    BOOL bltResult;
+                    BOOL flushResult;
+
+                    DWM_PRESENT_BITMAP publication;
+                    publication.Bitmap = (ULONG_PTR)g_hbmComp;
+                    publication.Rect = (RECTL){pl, pt, pr, pb};
+                    bltResult = g_originX == 0 && g_originY == 0 &&
+                        ExtEscape(hdcScreen, DWM_ESCAPE_PRESENT_BITMAP,
+                                  sizeof(publication), (LPCSTR)&publication,
+                                  0, NULL) > 0;
+                    if (bltResult)
+                    {
+                        flushResult = TRUE; /* The escape completes synchronously. */
+                    }
+                    else
+                    {
+                        bltResult = BitBlt(hdcScreen, g_originX + pl, g_originY + pt,
+                                           pr - pl, pb - pt, g_hdcComp, pl, pt,
+                                           SRCCOPY);
+                        flushResult = GdiFlush();
+                    }
                     if (!bltResult || !flushResult)
                         forceFull = TRUE;
                     else

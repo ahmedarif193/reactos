@@ -100,7 +100,16 @@ NtGdiExtEscape(
     * issue them can hide the cursor, suppress scan-out, or replace DWM's
     * vblank event. The compositor invokes the driver directly in
     * composition.c, so no legitimate user-mode caller needs this path. */
-   if (Escape == CDD_ESCAPE_SUPPRESS_CURSOR)
+   if (Escape == CDD_ESCAPE_SUPPRESS_CURSOR ||
+       Escape == CDD_ESCAPE_PRESENT_SOURCE)
+   {
+      EngSetLastError(ERROR_ACCESS_DENIED);
+      return 0;
+   }
+
+   if (Escape == DWM_ESCAPE_PRESENT_BITMAP &&
+       (!IntCompositionIsAttachedProcess() || hDC == NULL || pDriver != NULL ||
+        InSize != sizeof(DWM_PRESENT_BITMAP) || OutSize != 0))
    {
       EngSetLastError(ERROR_ACCESS_DENIED);
       return 0;
@@ -223,6 +232,39 @@ NtGdiExtEscape(
          EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
          goto Exit;
       }
+   }
+
+   if (Escape == DWM_ESCAPE_PRESENT_BITMAP)
+   {
+      const DWM_PRESENT_BITMAP *Request = SafeInData;
+      PSURFACE Source = SURFACE_ShareLockSurface((HBITMAP)Request->Bitmap);
+      CDD_PRESENT_SOURCE Input;
+
+      Result = 0;
+      if (Source == NULL)
+         goto Exit;
+      /* No software cursor exclusion or format conversion is bypassed. */
+      if (Source != psurf && Source->SurfObj.iType == STYPE_BITMAP &&
+          Source->SurfObj.iBitmapFormat == BMF_32BPP &&
+          Source->SurfObj.pvScan0 != NULL && Source->SurfObj.lDelta > 0 &&
+          Source->SurfObj.sizlBitmap.cy > 0 &&
+          (ULONGLONG)Source->SurfObj.lDelta * Source->SurfObj.sizlBitmap.cy <=
+              Source->SurfObj.cjBits &&
+          psurf == ppdev->pSurface &&
+          (ppdev->flFlags & PDEV_HARDWARE_POINTER) &&
+          !(ppdev->flFlags & (PDEV_SOFTWARE_POINTER | PDEV_DISABLED)) &&
+          !(ppdev->devinfo.flGraphicsCaps & GCAPS_PANNING))
+      {
+         Input.Bits = (ULONG_PTR)Source->SurfObj.pvScan0;
+         Input.Width = Source->SurfObj.sizlBitmap.cx;
+         Input.Height = Source->SurfObj.sizlBitmap.cy;
+         Input.Pitch = Source->SurfObj.lDelta;
+         Input.Rect = Request->Rect;
+         Result = ppdev->DriverFunctions.Escape(&psurf->SurfObj,
+                     CDD_ESCAPE_PRESENT_SOURCE, sizeof(Input), &Input, 0, NULL);
+      }
+      SURFACE_ShareUnlockSurface(Source);
+      goto Exit;
    }
 
    /* Finally call the driver */
