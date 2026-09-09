@@ -79,8 +79,10 @@
 #define DXGKP_MMS2_FAILURE_FINAL_DESTROY 4
 #define DXGKP_MINIPORT_CONTEXT_SIGNATURE 'MkgD'
 #define DXGKP_DIAGNOSTIC_BUFFER_SIZE 0x80000UL
-#define DXGKP_DMA_BUFFER_CACHE_LIMIT 4
+#define DXGKP_DMA_BUFFER_CACHE_LIMIT 16
 #define DXGKP_DMA_BUFFER_CACHE_MAX_CAPACITY (4 * 1024 * 1024)
+/* Retain more small buffers within the former four-by-4 MiB backing limit. */
+#define DXGKP_DMA_BUFFER_CACHE_MAX_BYTES (16 * 1024 * 1024)
 
 /* ========================================================================
  * InbV forward declarations
@@ -2023,6 +2025,13 @@ static VOID
 DxgkpDestroyDmaBuffer(
     _In_ PDXGKRNL_DMA_BUFFER DmaBuffer);
 
+static ULONG
+DxgkpDmaBufferCacheCharge(
+    _In_ PDXGKRNL_DMA_BUFFER DmaBuffer)
+{
+    return (ULONG)ROUND_TO_PAGES(DmaBuffer->Capacity);
+}
+
 /* Windows PresentFromCdd obtains a retired buffer from VidMm's DMA pool. Keep
  * the same ownership shape here for both physically contiguous and VidMm
  * segment-backed buffers. The exact segment set is part of the pool key: a
@@ -2065,6 +2074,8 @@ DxgkpTakeCachedDmaBuffer(
             InitializeListHead(&Candidate->CacheListEntry);
             ASSERT(Adapter->DmaBufferCacheCount != 0);
             Adapter->DmaBufferCacheCount--;
+            ASSERT(Adapter->DmaBufferCacheBytes >= DxgkpDmaBufferCacheCharge(Candidate));
+            Adapter->DmaBufferCacheBytes -= DxgkpDmaBufferCacheCharge(Candidate);
             DmaBuffer = Candidate;
             break;
         }
@@ -2410,8 +2421,10 @@ DxgkFreeDmaBuffer(
     _In_opt_ PDXGKRNL_DMA_BUFFER DmaBuffer)
 {
     PDXGKRNL_ADAPTER Adapter;
-    PDXGKRNL_DMA_BUFFER EvictedBuffer = NULL;
+    LIST_ENTRY FreeList;
     BOOLEAN VirtualMappingsReusable;
+    BOOLEAN Cached = FALSE;
+    ULONG Charge;
     KIRQL OldIrql;
 
     if (DmaBuffer == NULL)
@@ -2439,14 +2452,19 @@ DxgkFreeDmaBuffer(
         (DmaBuffer->BackingKind == DxgkDmaBackingContiguousMemory ||
          (DmaBuffer->BackingKind == DxgkDmaBackingVidMm &&
           DmaBuffer->BackingAllocation != NULL)) &&
+        DmaBuffer->Capacity != 0 &&
         DmaBuffer->Capacity <= DXGKP_DMA_BUFFER_CACHE_MAX_CAPACITY)
     {
+        InitializeListHead(&FreeList);
+        Charge = DxgkpDmaBufferCacheCharge(DmaBuffer);
         KeAcquireSpinLock(&Adapter->DmaBufferCacheLock, &OldIrql);
         if (InterlockedCompareExchange(&Adapter->DmaBufferCacheStopping, 0, 0) == 0)
         {
-            if (Adapter->DmaBufferCacheCount == DXGKP_DMA_BUFFER_CACHE_LIMIT)
+            while (Adapter->DmaBufferCacheCount >= DXGKP_DMA_BUFFER_CACHE_LIMIT ||
+                   Adapter->DmaBufferCacheBytes > DXGKP_DMA_BUFFER_CACHE_MAX_BYTES - Charge)
             {
                 PLIST_ENTRY Link;
+                PDXGKRNL_DMA_BUFFER EvictedBuffer;
 
                 /* Entries are exact-keyed by size, private-data size,
                  * backing kind, and segment set. A larger cached buffer
@@ -2458,21 +2476,29 @@ DxgkFreeDmaBuffer(
                 EvictedBuffer = CONTAINING_RECORD(Link,
                                                    DXGKRNL_DMA_BUFFER,
                                                    CacheListEntry);
-                InitializeListHead(&EvictedBuffer->CacheListEntry);
+                InsertTailList(&FreeList, Link);
                 Adapter->DmaBufferCacheCount--;
+                ASSERT(Adapter->DmaBufferCacheBytes >= DxgkpDmaBufferCacheCharge(EvictedBuffer));
+                Adapter->DmaBufferCacheBytes -= DxgkpDmaBufferCacheCharge(EvictedBuffer);
             }
 
-            if (Adapter->DmaBufferCacheCount < DXGKP_DMA_BUFFER_CACHE_LIMIT)
-            {
-                InsertTailList(&Adapter->DmaBufferCacheListHead, &DmaBuffer->CacheListEntry);
-                Adapter->DmaBufferCacheCount++;
-                KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
-                if (EvictedBuffer != NULL)
-                    DxgkpDestroyDmaBuffer(EvictedBuffer);
-                return;
-            }
+            InsertTailList(&Adapter->DmaBufferCacheListHead, &DmaBuffer->CacheListEntry);
+            Adapter->DmaBufferCacheCount++;
+            Adapter->DmaBufferCacheBytes += Charge;
+            Cached = TRUE;
         }
         KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
+
+        while (!IsListEmpty(&FreeList))
+        {
+            PDXGKRNL_DMA_BUFFER EvictedBuffer;
+
+            EvictedBuffer = CONTAINING_RECORD(RemoveHeadList(&FreeList), DXGKRNL_DMA_BUFFER, CacheListEntry);
+            InitializeListHead(&EvictedBuffer->CacheListEntry);
+            DxgkpDestroyDmaBuffer(EvictedBuffer);
+        }
+        if (Cached)
+            return;
     }
 
     DxgkpDestroyDmaBuffer(DmaBuffer);
@@ -2510,6 +2536,8 @@ DxgkPurgeDmaBufferCacheForDevice(
         InsertTailList(&FreeList, Link);
         ASSERT(Adapter->DmaBufferCacheCount != 0);
         Adapter->DmaBufferCacheCount--;
+        ASSERT(Adapter->DmaBufferCacheBytes >= DxgkpDmaBufferCacheCharge(DmaBuffer));
+        Adapter->DmaBufferCacheBytes -= DxgkpDmaBufferCacheCharge(DmaBuffer);
     }
     KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
 
@@ -2538,10 +2566,13 @@ DxgkpDrainDmaBufferCache(
     while (!IsListEmpty(&Adapter->DmaBufferCacheListHead))
     {
         PLIST_ENTRY Link = RemoveHeadList(&Adapter->DmaBufferCacheListHead);
+        PDXGKRNL_DMA_BUFFER DmaBuffer = CONTAINING_RECORD(Link, DXGKRNL_DMA_BUFFER, CacheListEntry);
 
         InsertTailList(&FreeList, Link);
         ASSERT(Adapter->DmaBufferCacheCount != 0);
         Adapter->DmaBufferCacheCount--;
+        ASSERT(Adapter->DmaBufferCacheBytes >= DxgkpDmaBufferCacheCharge(DmaBuffer));
+        Adapter->DmaBufferCacheBytes -= DxgkpDmaBufferCacheCharge(DmaBuffer);
     }
     KeReleaseSpinLock(&Adapter->DmaBufferCacheLock, OldIrql);
 
@@ -12765,6 +12796,7 @@ DxgkAdapterStart(
     /* A previous stop drained every segment-backed DMA buffer before tearing
      * VidMm down. Reopen the pool only after the new VidMm lifetime begins. */
     ASSERT(Adapter->DmaBufferCacheCount == 0);
+    ASSERT(Adapter->DmaBufferCacheBytes == 0);
     InterlockedExchange(&Adapter->DmaBufferCacheStopping, 0);
 
     /* Cache surprise-removal support while hardware is still present.  The
@@ -15181,6 +15213,7 @@ DxgkpAddDeviceRegistered(
     Adapter->SubmitDmaStopping = 1;
     Adapter->DmaBufferCacheStopping = 0;
     Adapter->DmaBufferCacheCount = 0;
+    Adapter->DmaBufferCacheBytes = 0;
     Adapter->SubmitDmaActiveReservations = 0;
     Adapter->PresentQueueInitializationStatus = STATUS_DEVICE_NOT_READY;
     Adapter->PresentQueueStopping = 1;
