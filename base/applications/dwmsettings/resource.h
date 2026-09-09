@@ -1,0 +1,24 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
+ */
+
+#pragma once
+
+#define IDD_SETTINGS 100
+#define IDI_SETTINGS 101
+#define IDC_ANIMATIONS 1000
+#define IDC_SHADOWS 1001
+#define IDC_CORNERS 1002
+#define IDC_BLUR 1003
+#define IDC_ACRYLIC 1004
+#define IDC_STATUS 1010
+#define IDS_ACTIVE 2000
+#define IDS_APPLIED 2001
+#define IDS_INACTIVE 2002
+#define IDS_UNAVAILABLE 2003
+#define IDS_RELOAD_FAILED 2004
+#define IDS_READ_FAILED 2005
+#define IDS_WRITE_FAILED 2006
+#define IDS_MISMATCH 2007
+#define IDS_DISCONNECTED 2008
+#define IDS_GPU_UNAVAILABLE 2009

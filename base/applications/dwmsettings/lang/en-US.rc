@@ -1,0 +1,35 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
+ */
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+IDD_SETTINGS DIALOGEX 0, 0, 282, 218
+STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "DWM Settings"
+FONT 9, "MS Shell Dlg"
+BEGIN
+    LTEXT "Customize desktop window effects. Each change is saved immediately.", -1, 12, 12, 258, 26
+    GROUPBOX "GPU window effects", -1, 12, 42, 258, 110
+    AUTOCHECKBOX "&Window animations", IDC_ANIMATIONS, 24, 58, 230, 12
+    AUTOCHECKBOX "Window &shadows", IDC_SHADOWS, 24, 76, 230, 12
+    AUTOCHECKBOX "&Rounded window corners", IDC_CORNERS, 24, 94, 230, 12
+    AUTOCHECKBOX "Application &blur behind windows", IDC_BLUR, 24, 112, 230, 12
+    AUTOCHECKBOX "&Translucent window backgrounds", IDC_ACRYLIC, 24, 130, 230, 12
+    LTEXT "", IDC_STATUS, 12, 162, 258, 28
+    DEFPUSHBUTTON "Close", IDCANCEL, 210, 194, 60, 14
+END
+
+STRINGTABLE
+BEGIN
+    IDS_ACTIVE "GPU composition is active. Changes apply without restarting DWM."
+    IDS_APPLIED "Saved. DWM has reloaded the effects for its next GPU frame. No restart is needed."
+    IDS_INACTIVE "Saved. GPU composition is unavailable. Restart DWM after GPU support is available to apply these effects."
+    IDS_UNAVAILABLE "Saved. DWM did not acknowledge the change. Restart DWM if the effects do not update."
+    IDS_RELOAD_FAILED "Saved, but DWM could not read all preferences. Some effects may still use their previous settings."
+    IDS_READ_FAILED "The saved settings could not be read. Error %lu."
+    IDS_WRITE_FAILED "The change could not be saved. Error %lu."
+    IDS_MISMATCH "Saved, but the active DWM settings differ. Select the option again to retry."
+    IDS_DISCONNECTED "DWM is not connected to this panel. Changes will be saved; restart DWM if they do not apply."
+    IDS_GPU_UNAVAILABLE "GPU composition is unavailable. Effects can be saved for use when DWM starts with GPU support."
+END
