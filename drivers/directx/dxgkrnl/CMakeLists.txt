@@ -56,6 +56,7 @@ list(APPEND SOURCE
     present.c
     presenttrace.c
     redirection.c
+    composition_frame.c
     ntgdi_exports.c
     sync.c
     keyedmutex.c
