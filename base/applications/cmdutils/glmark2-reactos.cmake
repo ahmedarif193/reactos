@@ -141,10 +141,10 @@ set(GLMARK2_SOURCES
     ${GLMARK2_SOURCE_DIR}/src/glad/src/gl.c
     ${GLMARK2_SOURCE_DIR}/src/glad/src/wgl.c)
 
-add_executable(glmark2-win32 ${GLMARK2_SOURCES})
-set_property(TARGET glmark2-win32 PROPERTY CXX_STANDARD 17)
-set_property(TARGET glmark2-win32 PROPERTY CXX_STANDARD_REQUIRED ON)
-target_include_directories(glmark2-win32 BEFORE PRIVATE
+add_executable(glmark2 ${GLMARK2_SOURCES})
+set_property(TARGET glmark2 PROPERTY CXX_STANDARD 17)
+set_property(TARGET glmark2 PROPERTY CXX_STANDARD_REQUIRED ON)
+target_include_directories(glmark2 BEFORE PRIVATE
     "$<$<COMPILE_LANGUAGE:C>:${REACTOS_SOURCE_DIR}/sdk/include/ucrt>"
     "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:${REACTOS_SOURCE_DIR}/sdk/include/ucrt>"
     ${GLMARK2_SOURCE_DIR}/src
@@ -156,10 +156,10 @@ target_include_directories(glmark2-win32 BEFORE PRIVATE
     ${GLMARK2_SOURCE_DIR}/src/zlib
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/libjpeg
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib)
-target_compile_definitions(glmark2-win32 PRIVATE
+target_compile_definitions(glmark2 PRIVATE
     GLMARK_VERSION="2023.01"
     GLMARK_DATA_PATH="C:/ReactOS/system32/glmark2"
-    GLMARK2_EXECUTABLE="glmark2-win32"
+    GLMARK2_EXECUTABLE="glmark2"
     GLMARK2_USE_GL=1
     GLMARK2_USE_WIN32=1
     GLMARK2_USE_WGL=1
@@ -168,7 +168,7 @@ target_compile_definitions(glmark2-win32 PRIVATE
     WIN32
     _WIN32)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(glmark2-win32 PRIVATE
+    target_compile_options(glmark2 PRIVATE
         -DWIN32
         -include ${CMAKE_CURRENT_SOURCE_DIR}/glmark2-reactos-compat.h
         -fexceptions
@@ -176,14 +176,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         -O2)
 endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
-    target_compile_options(glmark2-win32 PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wno-template-body>")
+    target_compile_options(glmark2 PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wno-template-body>")
 endif()
 # The target-local startup bridge exposes LLVM's .ctors to the normal UCRT
 # startup path, keeping every FILE operation and the process startup in UCRT.
-target_link_libraries(glmark2-win32 cppstl cpprt getopt glmark2-png glmark2-zlib)
-set_module_type(glmark2-win32 win32cui)
-add_importlibs(glmark2-win32 libjpeg opengl32 gdi32 user32 ucrtbase kernel32 ntdll)
-add_cd_file(TARGET glmark2-win32 DESTINATION reactos/system32 FOR all)
+target_link_libraries(glmark2 cppstl cpprt getopt glmark2-png glmark2-zlib)
+set_module_type(glmark2 win32cui)
+add_importlibs(glmark2 libjpeg opengl32 gdi32 user32 ucrtbase kernel32 ntdll)
+add_cd_file(TARGET glmark2 DESTINATION reactos/system32 FOR all)
 
 add_executable(glmark2_runner glmark2-runner.c)
 set_module_type(glmark2_runner win32cui)

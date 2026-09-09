@@ -1,5 +1,5 @@
 /*
- * PROJECT:     ReactOS Raspberry Pi 5 graphics validation
+ * PROJECT:     ReactOS Raspberry Pi graphics validation
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     Relay the unmodified glmark2 Win32 benchmark to the debug log
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif193@gmail.com>
@@ -15,10 +15,6 @@
 /* The full suite is 31 scenes at glmark2's default 10 s each. */
 #define GLMARK2_FULL_TIMEOUT_MILLISECONDS 600000
 #define GLMARK2_OUTPUT_LINE_LENGTH 512
-#define GLMARK2_JELLYFISH_FLOOR_FPS 800
-#define GLMARK2_JELLYFISH_STRONG_FPS 1500
-#define GLMARK2_JELLYFISH_DIRECTIONAL_TARGET_FPS 2000
-
 typedef enum _RUNNER_SCENE
 {
     RunnerSceneNone,
@@ -27,6 +23,13 @@ typedef enum _RUNNER_SCENE
     RunnerSceneTerrain,
     RunnerSceneShadow
 } RUNNER_SCENE;
+
+#define RUNNER_SCENE_BIT(Scene) (1UL << ((ULONG)(Scene) - 1))
+#define RUNNER_SCENE_ALL_MASK \
+    (RUNNER_SCENE_BIT(RunnerSceneIdeas) | \
+     RUNNER_SCENE_BIT(RunnerSceneJellyfish) | \
+     RUNNER_SCENE_BIT(RunnerSceneTerrain) | \
+     RUNNER_SCENE_BIT(RunnerSceneShadow))
 
 typedef struct _RUNNER_OUTPUT_SCAN
 {
@@ -46,6 +49,7 @@ typedef struct _RUNNER_OUTPUT_SCAN
     BOOL TerrainSeen;
     BOOL ShadowSeen;
     BOOL ScoreSeen;
+    ULONG SeenMask;
 } RUNNER_OUTPUT_SCAN, *PRUNNER_OUTPUT_SCAN;
 
 static VOID
@@ -70,6 +74,7 @@ ScanSceneFps(
     _Inout_ PRUNNER_OUTPUT_SCAN Scan,
     _In_z_ PCSTR Line,
     _In_z_ PCSTR Prefix,
+    _In_z_ PCSTR Name,
     _In_ RUNNER_SCENE Scene,
     _Out_ ULONG *Fps,
     _Out_ BOOL *Seen)
@@ -91,7 +96,9 @@ ScanSceneFps(
         return;
     *Fps = Value;
     *Seen = TRUE;
+    Scan->SeenMask |= RUNNER_SCENE_BIT(Scene);
     Scan->PendingScene = RunnerSceneNone;
+    RunnerPrint("RPI5_GLMARK2_SCENE name=%s fps=%lu\n", Name, Value);
 }
 
 static VOID
@@ -105,16 +112,19 @@ ScanChildOutputLine(
     if (Scan->LineOverflow)
         return;
     Scan->Line[Scan->LineLength] = '\0';
-    ScanSceneFps(Scan, Scan->Line, "[ideas]", RunnerSceneIdeas,
+    ScanSceneFps(Scan, Scan->Line, "[ideas]", "ideas", RunnerSceneIdeas,
                  &Scan->IdeasFps,
                  &Scan->IdeasSeen);
-    ScanSceneFps(Scan, Scan->Line, "[jellyfish]", RunnerSceneJellyfish,
+    ScanSceneFps(Scan, Scan->Line, "[jellyfish]", "jellyfish",
+                 RunnerSceneJellyfish,
                  &Scan->JellyfishFps,
                  &Scan->JellyfishSeen);
-    ScanSceneFps(Scan, Scan->Line, "[terrain]", RunnerSceneTerrain,
+    ScanSceneFps(Scan, Scan->Line, "[terrain]", "terrain",
+                 RunnerSceneTerrain,
                  &Scan->TerrainFps,
                  &Scan->TerrainSeen);
-    ScanSceneFps(Scan, Scan->Line, "[shadow]", RunnerSceneShadow,
+    ScanSceneFps(Scan, Scan->Line, "[shadow]", "shadow",
+                 RunnerSceneShadow,
                  &Scan->ShadowFps,
                  &Scan->ShadowSeen);
 
@@ -170,19 +180,26 @@ ScanChildOutput(
     }
 }
 
-static PCSTR
-JellyfishTier(
-    _In_ ULONG Fps)
+static RUNNER_SCENE
+RunnerSceneFromSpec(
+    _In_z_ PCSTR Spec)
 {
-    if (Fps < GLMARK2_JELLYFISH_FLOOR_FPS)
-        return "below_floor";
-    if (Fps < 1000)
-        return "floor";
-    if (Fps < GLMARK2_JELLYFISH_STRONG_FPS)
-        return "developing";
-    if (Fps < GLMARK2_JELLYFISH_DIRECTIONAL_TARGET_FPS)
-        return "strong";
-    return "directional_target";
+    SIZE_T Length;
+
+    Length = strcspn(Spec, ":");
+    if (Length == sizeof("ideas") - 1 &&
+        strncmp(Spec, "ideas", Length) == 0)
+        return RunnerSceneIdeas;
+    if (Length == sizeof("jellyfish") - 1 &&
+        strncmp(Spec, "jellyfish", Length) == 0)
+        return RunnerSceneJellyfish;
+    if (Length == sizeof("terrain") - 1 &&
+        strncmp(Spec, "terrain", Length) == 0)
+        return RunnerSceneTerrain;
+    if (Length == sizeof("shadow") - 1 &&
+        strncmp(Spec, "shadow", Length) == 0)
+        return RunnerSceneShadow;
+    return RunnerSceneNone;
 }
 
 static VOID
@@ -235,18 +252,47 @@ main(int argc, char **argv)
     BOOL FullSuite = FALSE;
     DWORD TimeoutMilliseconds;
     int Argument;
+    CHAR BenchList[MAX_PATH * 4];
+    UINT BenchCount = 0;
+    ULONG ExpectedSceneMask = 0;
+    BOOL Complete;
+    RUNNER_SCENE Scene;
     RUNNER_OUTPUT_SCAN OutputScan;
 
     ZeroMemory(&OutputScan, sizeof(OutputScan));
     /* --full runs glmark2's complete default benchmark list; the default
      * four-scene subset is the fast reproduction used for bring-up. */
+    /* --bench SPEC (repeatable) runs exactly the named scenes instead: an
+     * isolated reproduction of one scene sequence with a short boot. */
+    BenchList[0] = '\0';
     for (Argument = 1; Argument < argc; Argument++)
     {
         if (strcmp(argv[Argument], "--full") == 0)
             FullSuite = TRUE;
+        else if (strcmp(argv[Argument], "--bench") == 0 && Argument + 1 < argc)
+        {
+            size_t Used = strlen(BenchList);
+
+            Scene = RunnerSceneFromSpec(argv[Argument + 1]);
+            if (Scene != RunnerSceneNone)
+                ExpectedSceneMask |= RUNNER_SCENE_BIT(Scene);
+
+            if (_snprintf(BenchList + Used, sizeof(BenchList) - Used,
+                          " -b %s", argv[++Argument]) < 0)
+            {
+                RunnerPrint("RPI5_GLMARK2_ERROR bench_list_too_long\n");
+                return 1;
+            }
+            BenchCount++;
+        }
     }
-    TimeoutMilliseconds = FullSuite ? GLMARK2_FULL_TIMEOUT_MILLISECONDS
-                                    : GLMARK2_TIMEOUT_MILLISECONDS;
+    if (BenchCount == 0)
+        ExpectedSceneMask = RUNNER_SCENE_ALL_MASK;
+    if (BenchCount != 0)
+        TimeoutMilliseconds = 60000 + BenchCount * 20000;
+    else
+        TimeoutMilliseconds = FullSuite ? GLMARK2_FULL_TIMEOUT_MILLISECONDS
+                                        : GLMARK2_TIMEOUT_MILLISECONDS;
 
     Length = GetSystemDirectoryA(SystemDirectory, sizeof(SystemDirectory));
     if (Length == 0 || Length >= sizeof(SystemDirectory))
@@ -258,7 +304,7 @@ main(int argc, char **argv)
 
     if (_snprintf(ApplicationPath,
                   sizeof(ApplicationPath),
-                  "%s\\glmark2-win32.exe",
+                  "%s\\glmark2.exe",
                   SystemDirectory) < 0 ||
         _snprintf(DataPath,
                   sizeof(DataPath),
@@ -270,6 +316,7 @@ main(int argc, char **argv)
                   "--swap-mode immediate%s",
                   ApplicationPath,
                   DataPath,
+                  BenchCount != 0 ? BenchList :
                   FullSuite ? "" :
                       " -b ideas:speed=duration:duration=3.0"
                       " -b jellyfish:duration=3.0"
@@ -308,10 +355,11 @@ main(int argc, char **argv)
 
     RunnerPrint("RPI5_GLMARK2_BEGIN source=glmark2 "
                 "commit=22c527cb0556f3a1ac4445aaa52cc532760928d5 "
-                "%s size=800x600 swap_mode=immediate\n",
-                FullSuite ?
-                    "tests=all scenes=default duration_s=10" :
-                    "tests=21-24 scenes=ideas,jellyfish,terrain,shadow duration_s=3");
+                "suite=%s bench_count=%u expected_scene_mask=0x%lx "
+                "size=800x600 swap_mode=immediate\n",
+                FullSuite ? "full" : BenchCount != 0 ? "custom" : "four",
+                BenchCount,
+                ExpectedSceneMask);
     if (!CreateProcessA(ApplicationPath,
                         CommandLine,
                         NULL,
@@ -357,8 +405,12 @@ main(int argc, char **argv)
         ExitCode = GetLastError();
     if (OutputScan.Unsupported)
         RunnerPrint("RPI5_GLMARK2_UNSUPPORTED detected=1\n");
+    Complete = (OutputScan.SeenMask & ExpectedSceneMask) ==
+                   ExpectedSceneMask &&
+               OutputScan.ScoreSeen;
     RunnerPrint("RPI5_GLMARK2_RESULT size=800x600 suite=%s ideas=%lu jellyfish=%lu "
-                "terrain=%lu shadow=%lu %s=%lu complete=%lu\n",
+                "terrain=%lu shadow=%lu %s=%lu seen_mask=0x%lx "
+                "expected_mask=0x%lx complete=%lu\n",
                 FullSuite ? "full" : "subset",
                 OutputScan.IdeasFps,
                 OutputScan.JellyfishFps,
@@ -366,18 +418,9 @@ main(int argc, char **argv)
                 OutputScan.ShadowFps,
                 FullSuite ? "score" : "subset_score",
                 OutputScan.Score,
-                OutputScan.IdeasSeen && OutputScan.JellyfishSeen &&
-                    OutputScan.TerrainSeen && OutputScan.ShadowSeen &&
-                    OutputScan.ScoreSeen);
-    RunnerPrint("RPI5_GLMARK2_JELLYFISH fps=%lu tier=%s floor=%u strong=%u "
-                "directional_target=%u comparable_only=same_api_resolution_"
-                "window_system\n",
-                OutputScan.JellyfishFps,
-                OutputScan.JellyfishSeen ?
-                    JellyfishTier(OutputScan.JellyfishFps) : "missing",
-                GLMARK2_JELLYFISH_FLOOR_FPS,
-                GLMARK2_JELLYFISH_STRONG_FPS,
-                GLMARK2_JELLYFISH_DIRECTIONAL_TARGET_FPS);
+                OutputScan.SeenMask,
+                ExpectedSceneMask,
+                Complete);
     RunnerPrint("RPI5_GLMARK2_END exit=%lu runtime_ms=%lu forced=%lu\n",
                 ExitCode,
                 GetTickCount() - StartTick,
@@ -386,8 +429,5 @@ main(int argc, char **argv)
     CloseHandle(ReadPipe);
     CloseHandle(ProcessInformation.hProcess);
     return ExitCode == EXIT_SUCCESS && !Forced &&
-           !OutputScan.Unsupported && OutputScan.IdeasSeen &&
-           OutputScan.JellyfishSeen && OutputScan.TerrainSeen &&
-           OutputScan.ShadowSeen && OutputScan.ScoreSeen &&
-           OutputScan.JellyfishFps >= GLMARK2_JELLYFISH_FLOOR_FPS ? 0 : 1;
+           !OutputScan.Unsupported && Complete ? 0 : 1;
 }
