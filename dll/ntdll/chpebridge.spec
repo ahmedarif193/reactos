@@ -6,6 +6,11 @@
 @ stdcall DbgBreakPoint() ChpeDbgBreakPoint
 @ varargs DbgPrint(str) ChpeDbgPrint
 @ varargs DbgPrintEx(long long str) ChpeDbgPrintEx
+@ stdcall -version=0x600+ EtwEventActivityIdControl(long ptr) ChpeEtwEventActivityIdControl
+@ stdcall -version=0x600+ EtwEventRegister(ptr ptr ptr ptr) ChpeEtwEventRegister
+@ stdcall -version=0x600+ EtwEventUnregister(int64) ChpeEtwEventUnregister
+@ stdcall -version=0x600+ EtwEventWrite(int64 ptr long ptr) ChpeEtwEventWrite
+@ stdcall -version=0x600+ EtwEventWriteTransfer(int64 ptr ptr ptr long ptr) ChpeEtwEventWriteTransfer
 @ cdecl __C_specific_handler(ptr long ptr ptr) ChpeCSpecificHandler
 @ stdcall ChpeDispatchExceptionNative(ptr ptr)
 @ stdcall LdrGetDllHandle(wstr ptr ptr ptr) ChpeLdrGetDllHandle
@@ -20,11 +25,14 @@
 @ stdcall NtClose(long) ChpeNtClose
 @ stdcall NtContinue(ptr long) ChpeNtContinue
 @ stdcall -version=0xA00+ NtContinueEx(ptr ptr) ChpeNtContinueEx
+@ stdcall NtCreateFile(ptr long ptr ptr ptr long long long long ptr long) ChpeNtCreateFile
 @ stdcall NtCreateNamedPipeFile(ptr long ptr ptr long long long long long long long long long ptr) ChpeNtCreateNamedPipeFile
+@ stdcall NtDeviceIoControlFile(long long ptr ptr ptr long ptr long ptr long) ChpeNtDeviceIoControlFile
 @ stdcall -version=0x600+ NtFlushProcessWriteBuffers() ChpeNtFlushProcessWriteBuffers
 @ stdcall NtFlushInstructionCache(long ptr long) ChpeNtFlushInstructionCache
 @ stdcall NtFreeVirtualMemory(long ptr ptr long) ChpeNtFreeVirtualMemory
 @ stdcall NtGetContextThread(long ptr) ChpeNtGetContextThread
+@ stdcall -version=0x600+ NtGetNextThread(ptr ptr long long long ptr) ChpeNtGetNextThread
 @ stdcall NtMapViewOfSection(long long ptr long ptr ptr ptr long long long) ChpeNtMapViewOfSection
 @ stdcall NtMapViewOfSectionEx(long long ptr ptr ptr long long ptr long) ChpeNtMapViewOfSectionEx
 @ stdcall NtOpenFile(ptr long ptr ptr long long) ChpeNtOpenFile
@@ -33,6 +41,7 @@
 @ stdcall NtQueryInformationFile(long ptr ptr long long) ChpeNtQueryInformationFile
 @ stdcall NtQueryObject(long long long long long) ChpeNtQueryObject
 @ stdcall NtQuerySystemInformation(long ptr long ptr) ChpeNtQuerySystemInformation
+@ stdcall NtQueryVirtualMemory(long ptr long ptr long ptr) ChpeNtQueryVirtualMemory
 @ stdcall NtRaiseException(ptr ptr long) ChpeNtRaiseException
 @ stdcall NtReadFile(long long ptr ptr ptr ptr long ptr ptr) ChpeNtReadFile
 @ stdcall NtSetContextThread(long ptr) ChpeNtSetContextThread
@@ -48,6 +57,7 @@
 @ stdcall RtlAddVectoredContinueHandler(long ptr) ChpeRtlAddVectoredContinueHandler
 @ stdcall RtlAddVectoredExceptionHandler(long ptr) ChpeRtlAddVectoredExceptionHandler
 @ stdcall RtlAllocateHeap(ptr long ptr) ChpeRtlAllocateHeap
+@ stdcall RtlAcquirePrivilege(ptr long long ptr) ChpeRtlAcquirePrivilege
 @ stdcall RtlAcquireSRWLockExclusive(ptr) ChpeRtlAcquireSRWLockExclusive
 @ stdcall RtlAcquireSRWLockShared(ptr) ChpeRtlAcquireSRWLockShared
 @ stdcall RtlCaptureContext(ptr) ChpeRtlCaptureContext
@@ -102,12 +112,14 @@
 @ stdcall RtlRaiseStatus(long) ChpeRtlRaiseStatus
 @ stdcall RtlRandom(ptr) ChpeRtlRandom
 @ stdcall RtlReAllocateHeap(long long ptr long) ChpeRtlReAllocateHeap
+@ stdcall RtlReleasePrivilege(ptr) ChpeRtlReleasePrivilege
 @ stdcall RtlReleaseSRWLockExclusive(ptr) ChpeRtlReleaseSRWLockExclusive
 @ stdcall RtlReleaseSRWLockShared(ptr) ChpeRtlReleaseSRWLockShared
 @ stdcall RtlRemoveVectoredContinueHandler(ptr) ChpeRtlRemoveVectoredContinueHandler
 @ stdcall RtlRemoveVectoredExceptionHandler(ptr) ChpeRtlRemoveVectoredExceptionHandler
 @ stdcall RtlRestoreContext(ptr ptr) ChpeRtlRestoreContext
 @ stdcall RtlRestoreLastWin32Error(long) ChpeRtlRestoreLastWin32Error
+@ stdcall -version=0x600+ RtlRunOnceExecuteOnce(ptr ptr ptr ptr) ChpeRtlRunOnceExecuteOnce
 @ stdcall -version=0x600+ RtlRunOnceInitialize(ptr) ChpeRtlRunOnceInitialize
 @ stdcall RtlSizeHeap(long long ptr) ChpeRtlSizeHeap
 @ stdcall RtlSetCriticalSectionSpinCount(ptr long) ChpeRtlSetCriticalSectionSpinCount
@@ -115,6 +127,7 @@
 @ stdcall RtlTryAcquireSRWLockExclusive(ptr) ChpeRtlTryAcquireSRWLockExclusive
 @ stdcall RtlTryAcquireSRWLockShared(ptr) ChpeRtlTryAcquireSRWLockShared
 @ stdcall RtlTryEnterCriticalSection(ptr) ChpeRtlTryEnterCriticalSection
+@ stdcall -version=0x601+ RtlUTF8ToUnicodeN(ptr long ptr str long) ChpeRtlUTF8ToUnicodeN
 @ stdcall RtlUnwind(ptr ptr ptr ptr) ChpeRtlUnwind
 @ stdcall RtlUnwindEx(ptr ptr ptr ptr ptr ptr) ChpeRtlUnwindEx
 @ stdcall RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr) ChpeRtlVirtualUnwind

@@ -13,7 +13,14 @@
 
 #include <ntdll.h>
 #include <delayloadhandler.h>
+#include <evntprov.h>
 #include <setjmp.h>
+
+ULONG WINAPI EtwEventRegister(LPCGUID ProviderId, PENABLECALLBACK EnableCallback, PVOID CallbackContext, PREGHANDLE RegHandle);
+ULONG WINAPI EtwEventUnregister(REGHANDLE RegHandle);
+ULONG WINAPI EtwEventWrite(REGHANDLE RegHandle, PCEVENT_DESCRIPTOR EventDescriptor, ULONG UserDataCount, PEVENT_DATA_DESCRIPTOR UserData);
+ULONG WINAPI EtwEventActivityIdControl(ULONG ControlCode, LPGUID ActivityId);
+ULONG WINAPI EtwEventWriteTransfer(REGHANDLE RegHandle, PCEVENT_DESCRIPTOR EventDescriptor, LPCGUID ActivityId, LPCGUID RelatedActivityId, ULONG UserDataCount, PEVENT_DATA_DESCRIPTOR UserData);
 
 BOOLEAN NTAPI ChpeIsProcessorFeaturePresent(ULONG ProcessorFeature);
 PVOID NTAPI LdrResolveDelayLoadedAPI(PVOID ParentBase, PCIMAGE_DELAYLOAD_DESCRIPTOR Descriptor, PDELAYLOAD_FAILURE_DLL_CALLBACK DllHook, PDELAYLOAD_FAILURE_SYSTEM_ROUTINE SystemHook, PIMAGE_THUNK_DATA ThunkAddress, ULONG Flags);
@@ -2471,4 +2478,82 @@ ChpeRtlUnwind(PVOID TargetFrame, PVOID TargetIp, PEXCEPTION_RECORD ExceptionReco
     CONTEXT ContextRecord;
 
     ChpeRtlUnwindEx(TargetFrame, TargetIp, ExceptionRecord, ReturnValue, &ContextRecord, NULL);
+}
+
+ULONG WINAPI
+ChpeEtwEventRegister(LPCGUID ProviderId, PENABLECALLBACK EnableCallback, PVOID CallbackContext, PREGHANDLE RegHandle)
+{
+    return EtwEventRegister(ProviderId, EnableCallback, CallbackContext, RegHandle);
+}
+
+ULONG WINAPI
+ChpeEtwEventUnregister(REGHANDLE RegHandle)
+{
+    return EtwEventUnregister(RegHandle);
+}
+
+ULONG WINAPI
+ChpeEtwEventWrite(REGHANDLE RegHandle, PCEVENT_DESCRIPTOR EventDescriptor, ULONG UserDataCount, PEVENT_DATA_DESCRIPTOR UserData)
+{
+    return EtwEventWrite(RegHandle, EventDescriptor, UserDataCount, UserData);
+}
+
+ULONG WINAPI
+ChpeEtwEventActivityIdControl(ULONG ControlCode, LPGUID ActivityId)
+{
+    return EtwEventActivityIdControl(ControlCode, ActivityId);
+}
+
+ULONG WINAPI
+ChpeEtwEventWriteTransfer(REGHANDLE RegHandle, PCEVENT_DESCRIPTOR EventDescriptor, LPCGUID ActivityId, LPCGUID RelatedActivityId, ULONG UserDataCount, PEVENT_DATA_DESCRIPTOR UserData)
+{
+    return EtwEventWriteTransfer(RegHandle, EventDescriptor, ActivityId, RelatedActivityId, UserDataCount, UserData);
+}
+
+NTSTATUS NTAPI
+ChpeNtCreateFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes, PIO_STATUS_BLOCK IoStatusBlock, PLARGE_INTEGER AllocationSize, ULONG FileAttributes, ULONG ShareAccess, ULONG CreateDisposition, ULONG CreateOptions, PVOID EaBuffer, ULONG EaLength)
+{
+    return NtCreateFile(FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock, AllocationSize, FileAttributes, ShareAccess, CreateDisposition, CreateOptions, EaBuffer, EaLength);
+}
+
+NTSTATUS NTAPI
+ChpeNtDeviceIoControlFile(HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock, ULONG IoControlCode, PVOID InputBuffer, ULONG InputBufferLength, PVOID OutputBuffer, ULONG OutputBufferLength)
+{
+    return NtDeviceIoControlFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, IoControlCode, InputBuffer, InputBufferLength, OutputBuffer, OutputBufferLength);
+}
+
+NTSTATUS NTAPI
+ChpeNtGetNextThread(HANDLE ProcessHandle, HANDLE ThreadHandle, ACCESS_MASK DesiredAccess, ULONG HandleAttributes, ULONG Flags, PHANDLE NewThreadHandle)
+{
+    return NtGetNextThread(ProcessHandle, ThreadHandle, DesiredAccess, HandleAttributes, Flags, NewThreadHandle);
+}
+
+NTSTATUS NTAPI
+ChpeNtQueryVirtualMemory(HANDLE ProcessHandle, PVOID BaseAddress, MEMORY_INFORMATION_CLASS MemoryInformationClass, PVOID MemoryInformation, SIZE_T MemoryInformationLength, PSIZE_T ReturnLength)
+{
+    return NtQueryVirtualMemory(ProcessHandle, BaseAddress, MemoryInformationClass, MemoryInformation, MemoryInformationLength, ReturnLength);
+}
+
+NTSTATUS NTAPI
+ChpeRtlAcquirePrivilege(PULONG Privilege, ULONG NumPriv, ULONG Flags, PVOID *ReturnedState)
+{
+    return RtlAcquirePrivilege(Privilege, NumPriv, Flags, ReturnedState);
+}
+
+VOID NTAPI
+ChpeRtlReleasePrivilege(PVOID State)
+{
+    RtlReleasePrivilege(State);
+}
+
+NTSTATUS NTAPI
+ChpeRtlRunOnceExecuteOnce(PRTL_RUN_ONCE RunOnce, PRTL_RUN_ONCE_INIT_FN InitFn, PVOID Parameter, PVOID *Context)
+{
+    return RtlRunOnceExecuteOnce(RunOnce, InitFn, Parameter, Context);
+}
+
+NTSTATUS NTAPI
+ChpeRtlUTF8ToUnicodeN(PWSTR UnicodeStringDestination, ULONG UnicodeStringMaxByteCount, PULONG UnicodeStringActualByteCount, PCCH UTF8StringSource, ULONG UTF8StringByteCount)
+{
+    return RtlUTF8ToUnicodeN(UnicodeStringDestination, UnicodeStringMaxByteCount, UnicodeStringActualByteCount, UTF8StringSource, UTF8StringByteCount);
 }
