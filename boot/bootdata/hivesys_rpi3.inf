@@ -5,6 +5,7 @@
 ; PURPOSE:     Raspberry Pi 3 profile-specific boot driver bindings
 
 [AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","DWM_GPU_EFFECTS",0x00000000,"0"
 
 ; The RPi3 UEFI publishes VC4 V3D, HVS, PixelValve and HDMI resources under
 ; the physical display adapter ACPI\BCM2850. Bind the profile-owned WDDM
