@@ -2850,7 +2850,7 @@ static HBITMAP g_hbmComp;
 static void   *g_compBits;
 static ULONGLONG g_qpcPerSecond;
 static ULONGLONG g_refreshPeriodQpc;
-static ULONGLONG g_lastPresentQpc;
+static ULONGLONG g_lastFrameQpc;
 static HDC     g_hdcBackdrop;
 static HBITMAP g_hbmBackdrop;
 static void   *g_backdropBits;
@@ -2965,6 +2965,7 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
 static void
 DwmComposeLoop(HANDLE hStopEvent)
 {
+    LARGE_INTEGER statFrameStart;
     HDC hdcScreen = GetDC(NULL);
     DWM_ATTACH att;
     HANDLE hWake;
@@ -3067,12 +3068,14 @@ DwmComposeLoop(HANDLE hStopEvent)
         if (WaitForSingleObject(hStopEvent, 0) == WAIT_OBJECT_0)
             break;
 
-        if (g_refreshPeriodQpc != 0 && g_lastPresentQpc != 0)
+        /* Budget from the start of the last frame. Waiting a full refresh
+         * period after presentation adds rendering time to every interval. */
+        if (g_refreshPeriodQpc != 0 && g_lastFrameQpc != 0)
         {
             LARGE_INTEGER Counter;
             ULONGLONG Elapsed;
             QueryPerformanceCounter(&Counter);
-            Elapsed = (ULONGLONG)Counter.QuadPart - g_lastPresentQpc;
+            Elapsed = (ULONGLONG)Counter.QuadPart - g_lastFrameQpc;
             if (Elapsed < g_refreshPeriodQpc)
             {
                 DWORD WaitMs = (DWORD)(((g_refreshPeriodQpc - Elapsed) *
@@ -3215,6 +3218,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                     }
                 }
 
+                QueryPerformanceCounter(&statFrameStart);
                 {
                     BOOL covered = FALSE;
 
@@ -3353,10 +3357,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                         forceFull = TRUE;
                     else
                     {
-                        LARGE_INTEGER Counter;
-
-                        QueryPerformanceCounter(&Counter);
-                        g_lastPresentQpc = (ULONGLONG)Counter.QuadPart;
+                        g_lastFrameQpc = (ULONGLONG)statFrameStart.QuadPart;
                         for (i = 0; i < hdr->Count; ++i)
                             DwmDxAcknowledgeSurface(&wins[i]);
                     }
