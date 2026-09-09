@@ -1426,7 +1426,13 @@ GreGetDCPoint(
             break;
 
         case GdiGetDCOrg:
-            *Point = pdc->ptlDCOrig;
+            if (pdc->fs & DC_REDIRECTION)
+            {
+                Point->x = pdc->erclWindow.left;
+                Point->y = pdc->erclWindow.top;
+            }
+            else
+                *Point = pdc->ptlDCOrig;
             break;
 
         case GdiGetAspectRatioFilter:

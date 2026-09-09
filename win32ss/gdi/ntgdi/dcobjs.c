@@ -812,7 +812,10 @@ NtGdiGetRandomRgn(
             if ((ret == 1) && (iCode == SYSRGN))
             {
                 /// \todo FIXME This is not really correct, since we already modified the region
-                ret = REGION_bOffsetRgn(prgnDest, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
+                if (pdc->fs & DC_REDIRECTION)
+                    ret = REGION_bOffsetRgn(prgnDest, pdc->erclWindow.left, pdc->erclWindow.top);
+                else
+                    ret = REGION_bOffsetRgn(prgnDest, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
             }
             REGION_UnlockRgn(prgnDest);
         }
