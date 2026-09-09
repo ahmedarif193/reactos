@@ -354,6 +354,11 @@ static const struct driver_version_information driver_version_table[] =
  * found on a board containing a specific GPU. */
 static const struct wined3d_gpu_description gpu_description_table[] =
 {
+    /* Generic identity for VideoCore SoC GPUs. The memory value is only a
+     * fallback when the GL driver cannot report memory; capabilities still
+     * come from GL, and DRIVER_WINE names the wrapper, not a software GPU. */
+    {HW_VENDOR_BROADCOM, CARD_BROADCOM_VIDEOCORE, "Broadcom VideoCore", DRIVER_WINE, 128},
+
     /* Nvidia cards */
     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_RIVA_128,           "NVIDIA RIVA 128",                  DRIVER_NVIDIA_TNT,       4   },
     {HW_VENDOR_NVIDIA,     CARD_NVIDIA_RIVA_TNT,           "NVIDIA RIVA TNT",                  DRIVER_NVIDIA_TNT,       16  },
@@ -1009,6 +1014,9 @@ enum wined3d_pci_device wined3d_gpu_from_feature_level(enum wined3d_pci_vendor *
     const struct wined3d_fallback_card *cards;
     enum wined3d_pci_device device_id;
     unsigned int i;
+
+    if (*vendor == HW_VENDOR_BROADCOM)
+        return CARD_BROADCOM_VIDEOCORE;
 
     cards = NULL;
     for (i = 0; i < ARRAY_SIZE(fallbacks); ++i)

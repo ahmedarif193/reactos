@@ -1249,6 +1249,12 @@ static enum wined3d_pci_vendor wined3d_guess_card_vendor(const char *gl_vendor_s
     if (strstr(gl_renderer, "SVGA3D"))
         return HW_VENDOR_VMWARE;
 
+    if (strstr(gl_vendor_string, "Broadcom")
+            || strstr(gl_renderer, "VideoCore")
+            || strstr(gl_renderer, "VC4 ")
+            || strstr(gl_renderer, "V3D "))
+        return HW_VENDOR_BROADCOM;
+
     if (strstr(gl_vendor_string, "Mesa")
             || strstr(gl_vendor_string, "Brian Paul")
             || strstr(gl_vendor_string, "Tungsten Graphics, Inc")
@@ -1998,6 +2004,11 @@ static enum wined3d_pci_device wined3d_guess_card(enum wined3d_feature_level fea
 
     enum wined3d_pci_device device;
     unsigned int i;
+
+    /* VideoCore has no PCI model to infer from its OpenGL feature level.
+     * Keep its hardware vendor for both adapter identity and quirk matching. */
+    if (*card_vendor == HW_VENDOR_BROADCOM)
+        return wined3d_gpu_from_feature_level(card_vendor, feature_level);
 
     for (i = 0; i < ARRAY_SIZE(card_vendor_table); ++i)
     {
