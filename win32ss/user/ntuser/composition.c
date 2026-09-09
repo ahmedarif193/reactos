@@ -1769,8 +1769,17 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             BOOL bBackingDrawn =
                 InterlockedCompareExchange(&e->BackingDrawn, FALSE, FALSE) != FALSE;
             BOOL bTreePending = IntCompositionTreeHasPendingPaint(w);
+            /* An OpenGL client can publish its first complete shared surface
+             * without ever drawing through GDI. Waiting for BackingDrawn in
+             * that case excludes the window from GETFRAME forever, so DWM
+             * cannot acknowledge it and every later swap remains busy.
+             * Pending GDI/non-client paints still defer publication below.
+             */
+            BOOL bDxPublished = e->Redirect.DxGlobalShare != 0 &&
+                                e->Redirect.DxPublishedUpdateId != 0;
             BOOL bFirstPaintPending = !e->Redirect.FrontValid &&
-                                      (!bBackingDrawn || bTreePending);
+                                      ((!bBackingDrawn && !bDxPublished) ||
+                                       bTreePending);
 
             if ((fullDamage || e->Damaged) && !bBusy && !bTreePending &&
                 !bFirstPaintPending &&
