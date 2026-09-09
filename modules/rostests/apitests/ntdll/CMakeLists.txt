@@ -47,6 +47,7 @@ set(ALPC_SOURCE
     NtAlpcPort.c
     NtAlpcResources.c
     NtAlpcValidation.c
+    NtAlpcWow64.c
     TpAlpc.c)
 
 list(APPEND SOURCE

@@ -1,6 +1,7 @@
 spec2def(wow64.dll wow64.spec ADD_IMPORTLIB)
 
 add_library(wow64 MODULE
+    alpc.c
     file.c
     process.c
     registry.c

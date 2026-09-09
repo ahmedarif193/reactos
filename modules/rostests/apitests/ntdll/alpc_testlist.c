@@ -18,6 +18,7 @@ extern void func_NtAlpcMessageBoundary(void);
 extern void func_NtAlpcPort(void);
 extern void func_NtAlpcResources(void);
 extern void func_NtAlpcValidation(void);
+extern void func_NtAlpcWow64(void);
 extern void func_TpAlpc(void);
 
 const struct test winetest_testlist[] =
@@ -32,6 +33,7 @@ const struct test winetest_testlist[] =
     { "NtAlpcPort",               func_NtAlpcPort },
     { "NtAlpcResources",          func_NtAlpcResources },
     { "NtAlpcValidation",         func_NtAlpcValidation },
+    { "NtAlpcWow64",              func_NtAlpcWow64 },
     { "TpAlpc",                   func_TpAlpc },
     { 0, 0 }
 };
