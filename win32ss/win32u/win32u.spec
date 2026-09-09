@@ -711,3 +711,10 @@
 @ stdcall NtGdiBRUSHOBJ_DeleteRbrush(ptr ptr)
 @ stdcall NtGdiUMPDEngFreeUserMem(ptr)
 @ stdcall NtGdiDrawStream(ptr long ptr)
+
+@ stdcall NtDCompositionCreateConnection(long ptr ptr)
+@ stdcall NtDCompositionDestroyConnection(ptr)
+@ stdcall NtDCompositionCreateChannel(ptr ptr ptr)
+@ stdcall NtDCompositionDestroyChannel(long)
+@ stdcall NtDCompositionProcessChannelBatchBuffer(long long ptr ptr)
+@ stdcall NtDCompositionCommitChannel(long ptr ptr long ptr ptr ptr long)

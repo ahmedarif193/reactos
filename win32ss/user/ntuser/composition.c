@@ -12,6 +12,7 @@
 
 #include <win32k.h>
 #include "composition.h"
+#include "dcomposition.h"
 #include <reactos/dwmframe.h>
 DBG_DEFAULT_CHANNEL(UserPainting);
 
@@ -1403,6 +1404,15 @@ IntCompositionCompleteRedirectedBltPresent(
     return STATUS_SUCCESS;
 }
 
+BOOL
+IntCompositionIsAttachedProcess(VOID)
+{
+    /* The attachment owns a process reference until its pointer is cleared.
+     * Comparing identity does not dereference a concurrently detached owner. */
+    return PsGetCurrentProcess() == InterlockedCompareExchangePointer(
+        (PVOID volatile *)&g_DwmProcess, NULL, NULL);
+}
+
 VOID
 IntCompositionDamageFromGdi(VOID)
 {
@@ -2174,7 +2184,24 @@ IntCompositionDwmTeardown(VOID)
     Process = g_DwmProcess;
     g_DwmProcess = NULL;
     if (Process != NULL)
+    {
+        IntDCompositionDisconnectProcess(Process);
         ObDereferenceObject(Process);
+    }
+}
+
+VOID
+IntCompositionCleanupProcess(_In_ PEPROCESS Process)
+{
+    PWND Desktop;
+
+    if (g_DwmProcess != Process)
+        return;
+    IntCompositionDwmTeardown();
+    IntCompositionSetEnabled(FALSE);
+    Desktop = UserGetDesktopWindow();
+    if (Desktop != NULL)
+        co_UserRedrawWindow(Desktop, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
 /*

@@ -85,6 +85,9 @@ NTSTATUS IntCompositionSetEnabled(BOOL bEnable);
  * returns the damage wake + vblank pacing event handles in dwm's process. */
 NTSTATUS IntCompositionDwmAttach(_In_ PVOID pUser);
 
+/* Called under USER before the exiting process loses its GDI state. */
+VOID IntCompositionCleanupProcess(_In_ PEPROCESS Process);
+
 /* User-mode dwm.exe frame pull (ONEPARAM_ROUTINE_DWMGETFRAME): fills the
  * dwm-provided buffer with the Z-ordered compositable windows + their backing
  * pixels. See sdk/include/reactos/dwmframe.h for the layout. */
@@ -177,6 +180,7 @@ IntCompositionCompleteRedirectedBltPresent(
 /* Damage from a direct write to the primary (drag/focus artists, desktop
  * paint): the whole frame is re-asserted on the next compose. */
 VOID IntCompositionDamageFromGdi(VOID);
+BOOL IntCompositionIsAttachedProcess(VOID);
 
 /* BeginPaint/EndPaint bracket for redirected composition. */
 VOID IntCompositionPaintBegin(_In_ PWND Wnd);

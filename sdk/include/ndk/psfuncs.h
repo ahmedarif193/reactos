@@ -56,6 +56,13 @@ PsGetProcessWin32Process(
 );
 
 NTKERNELAPI
+ULONGLONG
+NTAPI
+PsGetProcessSequenceNumber(
+    _In_ PEPROCESS Process
+);
+
+NTKERNELAPI
 PEJOB
 NTAPI
 PsGetProcessJob(

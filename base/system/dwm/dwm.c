@@ -10,6 +10,7 @@
 #include <math.h>
 #include <reactos/dwmcore.h>
 #include <reactos/dwmframe.h>
+#include <reactos/ntdcomp.h>
 
 #include "dxsurface.h"
 
@@ -1839,6 +1840,7 @@ DwmComposeLoop(HANDLE hStopEvent)
     HDC hdcScreen = GetDC(NULL);
     DWM_ATTACH att;
     HANDLE hWake;
+    HANDLE hConnection;
     BOOL forceFull = TRUE;
     LONG vw, vh, primW, primH;
     ULONG ViewIndex;
@@ -1898,6 +1900,17 @@ DwmComposeLoop(HANDLE hStopEvent)
         return;
     }
     DwmLog("DWM: attached\n");
+
+    if (NtDCompositionCreateConnection(FALSE, hWake, &hConnection) < 0)
+    {
+        DwmLog("DWM: composition connection creation failed\n");
+        RtlZeroMemory(&att, sizeof(att));
+        att.Attach = 0;
+        (void)NtUserCallOneParam((DWORD_PTR)&att, DWM_ROUTINE_ATTACH);
+        CloseHandle(hWake);
+        ReleaseDC(NULL, hdcScreen);
+        return;
+    }
 
     for (;;)
     {
@@ -2191,6 +2204,7 @@ DwmComposeLoop(HANDLE hStopEvent)
     DwmDxCleanupSurfaces();
     for (ViewIndex = 0; ViewIndex < DWM_VIEW_CACHE_SIZE; ++ViewIndex)
         DwmDropView(&g_views[ViewIndex]);
+    (void)NtDCompositionDestroyConnection(hConnection);
     RtlZeroMemory(&att, sizeof(att));
     att.Attach = 0;
     (void)NtUserCallOneParam((DWORD_PTR)&att, DWM_ROUTINE_ATTACH);
