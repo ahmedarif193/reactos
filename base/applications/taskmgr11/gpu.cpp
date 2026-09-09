@@ -48,7 +48,6 @@ static PFN_D3DKMTOpenAdapterFromDeviceName pOpenAdapterFromDeviceName;
 
 static BOOL      s_available;
 static BOOL      s_identityResolved;
-static ULONGLONG s_lastSampleQpc;
 static double    s_qpcFrequency;
 
 static BOOL LoadD3DKMT(void)
@@ -592,7 +591,7 @@ static void ProbeDirectXVersion(GpuSnapshot* gpu)
 /* ------------------------------------------------------------------ */
 
 static void CollectEngines(GpuSnapshot* gpu, D3DKMT_HANDLE hAdapter,
-                           ULONG nodeCount, double dt)
+                           ULONG nodeCount)
 {
     ULONG node;
 
@@ -600,6 +599,7 @@ static void CollectEngines(GpuSnapshot* gpu, D3DKMT_HANDLE hAdapter,
         nodeCount = TM_MAX_GPU_ENGINES;
 
     gpu->utilPct = 0.0;
+    gpu->hasUtilization = FALSE;
     for (node = 0; node < nodeCount; node++)
     {
         GpuEngineSnapshot* engine = &gpu->engines[node];
@@ -607,7 +607,10 @@ static void CollectEngines(GpuSnapshot* gpu, D3DKMT_HANDLE hAdapter,
         D3DKMT_NODEMETADATA metadata;
         D3DKMT_QUERYSTATISTICS stats;
         ULONGLONG previous = engine->runningTime;
+        BOOL previousValid = engine->counterValid;
         ULONGLONG current;
+        LARGE_INTEGER sample = {0};
+        double dt = 0.0;
         double util;
 
         ZeroMemory(&metadata, sizeof(metadata));
@@ -628,29 +631,49 @@ static void CollectEngines(GpuSnapshot* gpu, D3DKMT_HANDLE hAdapter,
         stats.AdapterLuid = gpu->luid;
         stats.QueryNode.NodeId = node;
         if (!NT_SUCCESS(pQueryStatistics(&stats)))
+        {
+            /* A gap cannot be divided by just the next tick's duration. */
+            engine->counterValid = FALSE;
+            engine->hasUtilization = FALSE;
+            engine->utilPct = 0.0;
+            engine->history.Push(0.0f);
             continue;
+        }
 
         current = (ULONGLONG)stats.QueryResult.NodeInformation
                       .GlobalInformation.RunningTime.QuadPart;
+        engine->counterValid = QueryPerformanceCounter(&sample) &&
+                               sample.QuadPart >= 0 && s_qpcFrequency > 0.0 &&
+                               stats.QueryResult.NodeInformation.GlobalInformation.RunningTime.QuadPart >= 0;
+        if (engine->counterValid && (ULONGLONG)sample.QuadPart > engine->sampleQpc)
+            dt = (sample.QuadPart - engine->sampleQpc) / s_qpcFrequency;
 
         /*
          * Utilization is the share of the sample interval this engine spent
-         * executing.  The first sample has no interval behind it, and a
-         * counter that went backwards means the adapter restarted, so both
-         * report nothing rather than a spike.
+         * executing. Timestamp its actual counter read: enumeration and
+         * earlier queries can vary in duration between timer ticks. The
+         * first sample, failed clock or reset counter has no valid interval.
          */
         util = 0.0;
-        if (previous != 0 && current >= previous && dt > 0.0)
+        engine->hasUtilization = previousValid && engine->counterValid && current >= previous && dt > 0.0;
+        if (engine->hasUtilization)
         {
             util = (double)(current - previous) / (dt * 10000000.0) * 100.0;
             if (util < 0.0) util = 0.0;
             if (util > 100.0) util = 100.0;
         }
         engine->runningTime = current;
+        engine->sampleQpc = sample.QuadPart;
         engine->utilPct = util;
         engine->history.Push((float)util);
+        gpu->hasUtilization |= engine->hasUtilization;
         if (util > gpu->utilPct)
             gpu->utilPct = util;
+    }
+    for (node = nodeCount; node < TM_MAX_GPU_ENGINES; ++node)
+    {
+        gpu->engines[node].counterValid = FALSE;
+        gpu->engines[node].hasUtilization = FALSE;
     }
     gpu->engineCount = (int)nodeCount;
 }
@@ -745,7 +768,7 @@ static void CollectThermal(GpuSnapshot* gpu, D3DKMT_HANDLE hAdapter)
     gpu->temperatureC = perf.Temperature / 10.0;   /* deci-Celsius */
 }
 
-static void CollectAdapter(GpuSnapshot* gpu, D3DKMT_HANDLE hAdapter, double dt)
+static void CollectAdapter(GpuSnapshot* gpu, D3DKMT_HANDLE hAdapter)
 {
     D3DKMT_QUERYSTATISTICS stats;
     D3DKMT_QUERYADAPTERINFO info;
@@ -762,7 +785,7 @@ static void CollectAdapter(GpuSnapshot* gpu, D3DKMT_HANDLE hAdapter, double dt)
         nodeCount = stats.QueryResult.AdapterInformation.NodeCount;
     }
 
-    CollectEngines(gpu, hAdapter, nodeCount, dt);
+    CollectEngines(gpu, hAdapter, nodeCount);
     gpu->hUtil.Push((float)gpu->utilPct);
     CollectMemory(gpu, hAdapter, segmentCount);
     CollectThermal(gpu, hAdapter);
@@ -816,9 +839,8 @@ void GpuInit(void)
     LARGE_INTEGER frequency;
 
     s_available = LoadD3DKMT();
-    QueryPerformanceFrequency(&frequency);
-    s_qpcFrequency = (double)frequency.QuadPart;
-    s_lastSampleQpc = 0;
+    s_qpcFrequency = QueryPerformanceFrequency(&frequency) && frequency.QuadPart > 0 ?
+                     (double)frequency.QuadPart : 0.0;
     s_identityResolved = FALSE;
     g.gpuCount = 0;
     ZeroMemory(g.gpus, sizeof(g.gpus));
@@ -833,17 +855,11 @@ void GpuTick(void)
 {
     D3DKMT_ENUMADAPTERS2 enumeration;
     D3DKMT_ADAPTERINFO adapters[TM_MAX_GPUS];
-    LARGE_INTEGER now;
-    double dt;
     UINT i;
     int previousCount = g.gpuCount;
 
     if (!s_available)
         return;
-
-    QueryPerformanceCounter(&now);
-    dt = s_lastSampleQpc ? (now.QuadPart - s_lastSampleQpc) / s_qpcFrequency : 0.0;
-    s_lastSampleQpc = now.QuadPart;
 
     ZeroMemory(adapters, sizeof(adapters));
     ZeroMemory(&enumeration, sizeof(enumeration));
@@ -888,7 +904,7 @@ void GpuTick(void)
 
         gpu->luid = adapters[i].AdapterLuid;
         gpu->index = (int)i;
-        CollectAdapter(gpu, adapters[i].hAdapter, dt);
+        CollectAdapter(gpu, adapters[i].hAdapter);
         if (!gpu->name[0])
             StringCchPrintfW(gpu->name, _countof(gpu->name), L"GPU %u", i);
         if (!gpu->directX[0])

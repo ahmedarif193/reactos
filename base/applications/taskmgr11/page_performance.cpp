@@ -379,7 +379,9 @@ struct PerformancePage : Page
                 StringCchCopyW(buf, cch, L"Not available");
                 break;
             }
-            if (gpu->hasTemperature)
+            if (!gpu->hasUtilization)
+                StringCchCopyW(buf, cch, L"Not available");
+            else if (gpu->hasTemperature)
                 StringCchPrintfW(buf, cch, L"%.0f%% (%.0f \u00B0C)",
                                  gpu->utilPct, gpu->temperatureC);
             else
@@ -700,7 +702,10 @@ struct PerformancePage : Page
             if (!gpu)
                 break;
 
-            FmtPct(gpu->utilPct, st[n].value, 64);
+            if (gpu->hasUtilization)
+                FmtPct(gpu->utilPct, st[n].value, 64);
+            else
+                StringCchCopyW(st[n].value, 64, L"Not available");
             st[n++].label = L"Utilization";
             FmtMemoryPair(gpu->dedicatedUsed, gpu->dedicatedTotal, st[n].value, 64);
             st[n++].label = L"Dedicated GPU memory";
@@ -1078,8 +1083,10 @@ struct PerformancePage : Page
 
             DrawTextClip(dc, gpu->engines[i].name, label, g_t.fSmall, g_t.textSec,
                          DT_LEFT | DT_SINGLELINE | DT_BOTTOM);
-            StringCchPrintfW(percent, _countof(percent), L"%.0f%%",
-                             gpu->engines[i].utilPct);
+            if (gpu->engines[i].hasUtilization)
+                StringCchPrintfW(percent, _countof(percent), L"%.0f%%", gpu->engines[i].utilPct);
+            else
+                StringCchCopyW(percent, _countof(percent), L"N/A");
             DrawTextClip(dc, percent, label, g_t.fSmall, g_t.textSec,
                          DT_RIGHT | DT_SINGLELINE | DT_BOTTOM);
         }

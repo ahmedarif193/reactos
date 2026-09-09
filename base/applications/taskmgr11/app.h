@@ -449,6 +449,9 @@ struct GpuEngineSnapshot
     WCHAR     name[64];         /* engine name from the node metadata      */
     ULONG     engineType;       /* DXGK_ENGINE_TYPE the node reported      */
     ULONGLONG runningTime;      /* cumulative busy time, 100ns             */
+    ULONGLONG sampleQpc;        /* timestamp of this engine's counter read */
+    BOOL      counterValid;
+    BOOL      hasUtilization;
     double    utilPct;          /* 0..100 over the last sample interval    */
     HistRing  history;
 };
@@ -467,6 +470,7 @@ struct GpuSnapshot
 
     double    utilPct;          /* busiest engine, which is what Windows
                                  * calls the GPU's utilization             */
+    BOOL      hasUtilization;
     ULONGLONG dedicatedTotal, dedicatedUsed;
     ULONGLONG sharedTotal, sharedUsed;
     ULONGLONG reserved;         /* memory the hardware kept for itself     */
