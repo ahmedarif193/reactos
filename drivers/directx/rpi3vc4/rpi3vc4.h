@@ -207,6 +207,7 @@ typedef struct _RPI3VC4_CONTEXT
     ULONG V3dBinActiveIndex;
     ULONG V3dRenderActiveIndex;
     ULONG V3dInterruptPending;
+    ULONG V3dNotifiedFaultFence; /* FenceLock + synchronized publication */
     ULONG V3dBinOverflowUsed;
     ULONG V3dBinOverflowCurrent;
     BOOLEAN V3dBinActive;
