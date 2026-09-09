@@ -508,7 +508,7 @@ typedef enum _DXGKMDT_OPM_CONNECTOR_TYPE
     DXGKMDT_OPM_CONNECTOR_TYPE_MIRACAST                             = 15,
     DXGKMDT_OPM_CONNECTOR_TYPE_TRANSPORT_AGNOSTIC_DIGITAL_MODE_A    = 16,
     DXGKMDT_OPM_CONNECTOR_TYPE_TRANSPORT_AGNOSTIC_DIGITAL_MODE_B    = 17,
-    DXGKMDT_OPM_COPP_COMPATIBLE_CONNECTOR_TYPE_INTERNAL = 0x80000000
+    DXGKMDT_OPM_COPP_COMPATIBLE_CONNECTOR_TYPE_INTERNAL = (-2147483647 - 1)
 } DXGKMDT_OPM_CONNECTOR_TYPE;
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2433,7 +2433,8 @@ typedef union _DXGK_MONITORLINKINFO_USAGEHINTS
     struct
     {
         UINT Hidden             : 1;    // 0x00000001
-        UINT Reserved           :31;    // 0xFFFFFFFE
+        UINT HeadMounted        : 1;    // 0x00000002
+        UINT Reserved           :30;    // 0xFFFFFFFC
     };
     UINT Value;
 } DXGK_MONITORLINKINFO_USAGEHINTS, *PDXGK_MONITORLINKINFO_USAGEHINTS;

@@ -688,7 +688,8 @@ typedef struct _D3DDDI_CREATECONTEXTFLAGS
      (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_3_1))
             UINT    HwQueueSupported    : 1;      // 0x00000010
             UINT    NoKmdAccess         : 1;      // 0x00000020
-            UINT    Reserved            :26;      // 0xFFFFFFC0
+            UINT    TestContext         : 1;      // 0x00000040
+            UINT    Reserved            :25;      // 0xFFFFFF80
 #else
             UINT    Reserved            :28;      // 0xFFFFFFF0
 #endif // DXGKDDI_INTERFACE_VERSION

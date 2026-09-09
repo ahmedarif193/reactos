@@ -49,7 +49,12 @@ typedef struct _D3DKMT_CREATEDEVICEFLAGS
     UINT    RequestVSync             :  1;   // 0x00000002
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
     UINT    DisableGpuTimeout        :  1;   // 0x00000004
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_1)
+    UINT    TestDevice               :  1;   // 0x00000008
+    UINT    Reserved                 : 28;   // 0xFFFFFFF0
+#else
     UINT    Reserved                 : 29;   // 0xFFFFFFF8
+#endif
 #else
     UINT    Reserved                 : 30;   // 0xFFFFFFFC
 #endif
@@ -502,7 +507,12 @@ typedef struct _D3DKMT_FLIPMODEL_PRESENTHISTORYTOKENFLAGS
             UINT  IndependentFlipDoNotFlip      :  1;   // 0x04000000
             UINT  RequirePairedToken            :  1;   // 0x08000000
             UINT  VariableRefreshOverrideEligible :1;   // 0x10000000
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+            UINT  VailToken                     :  1;   // 0x20000000
+            UINT  Reserved                      :  2;   // 0xC0000000
+#else
             UINT  Reserved                      :  3;   // 0xE0000000
+#endif
 #else
             UINT  Reserved                      : 29;   // 0xFFFFFFF8
 #endif
@@ -580,6 +590,9 @@ typedef struct _D3DKMT_FLIPMANAGER_AUXILIARYPRESENTINFO
 
     // out: Whether or not the present was canceled in the scheduler
     BOOL WasCanceled;
+
+    // out: Resubmit the canceled independent flip through composition
+    BOOL ConvertedToNonIFlip;
 } D3DKMT_FLIPMANAGER_AUXILIARYPRESENTINFO;
 
 typedef struct _D3DKMT_GDIMODEL_PRESENTHISTORYTOKEN
@@ -649,7 +662,6 @@ typedef struct _D3DKMT_FLIPMODEL_PRESENTHISTORYTOKEN
     LUID                                       compSurfLuid;
     D3DKMT_ALIGN64 UINT64                      confirmationCookie;
     D3DKMT_ALIGN64 UINT64                      CompositionSyncKey;
-    UINT                                       RemainingTokens;
     RECT                                       ScrollRect;
     POINT                                      ScrollOffset;
     UINT                                       PresentCount;
@@ -1299,7 +1311,9 @@ typedef struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY_FLAGS
             UINT HDRMetaDataValid           : 1;    // 0x00000080
             UINT HMD                        : 1;    // 0x00000100
             UINT TrueImmediate              : 1;    // 0x00000200 If a present interval is 0, allow tearing rather than override a previously queued flip
-            UINT Reserved                   :22;    // 0xFFFFFE00
+            UINT FromDDisplay               : 1;    // 0x00000400
+            UINT IndirectDisplay            : 1;    // 0x00000800
+            UINT Reserved                   :20;    // 0xFFFFF000
         };
         UINT Value;
     };
@@ -1574,7 +1588,12 @@ typedef struct _D3DKMT_CREATEALLOCATIONFLAGS
     UINT    NoKmdAccess                 :  1;    // 0x00100000  // in: KMD is not notified about the allocation
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
     UINT    SharedDisplayable           :  1;    // 0x00200000
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
+    UINT    NoImplicitSynchronization   :  1;    // 0x00400000
+    UINT    Reserved                    :  9;    // 0xFF800000
+#else
     UINT    Reserved                    : 10;    // 0xFFC00000
+#endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
 #else
     UINT    Reserved                    : 11;    // 0xFFE00000
 #endif // (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
@@ -2568,7 +2587,8 @@ typedef union _D3DKMT_ENUMADAPTERS_FILTER
     {
         ULONGLONG IncludeComputeOnly            : 1;
         ULONGLONG IncludeDisplayOnly            : 1;
-        ULONGLONG Reserved                      : 62;
+        ULONGLONG IncludeVirtualGpuOnly         : 1;
+        ULONGLONG Reserved                      : 61;
     };
     D3DKMT_ALIGN64 ULONGLONG Value;
 } D3DKMT_ENUMADAPTERS_FILTER;
@@ -3275,7 +3295,8 @@ typedef union _D3DKMT_PROCESS_VERIFIER_VIDMM_FLAGS
         UINT NeverDeferEvictions          : 1;
         UINT AlwaysFailCommitOnReclaim    : 1;
         UINT AlwaysPlaceInDemotedLocation : 1;
-        UINT Reserved : 28;
+        UINT IgnoreBudgetCap              : 1;
+        UINT Reserved : 27;
     };
     UINT32 Value;
 } D3DKMT_PROCESS_VERIFIER_VIDMM_FLAGS;
@@ -3341,7 +3362,9 @@ typedef union _D3DKMT_ADAPTER_VERIFIER_VIDMM_FLAGS
         UINT NeverMoveDefrag                    : 1;
         UINT AlwaysRelocateDisplayableResources : 1;
         UINT AlwaysFailGrowVPRMoves             : 1;
-        UINT Reserved                           : 12;
+        UINT NeverFlushTemporaryResources         : 1;
+        UINT AllocateTemporaryResourcesInAperture : 1;
+        UINT Reserved                           : 10;
     };
     UINT32 Value;
 } D3DKMT_ADAPTER_VERIFIER_VIDMM_FLAGS;
@@ -4192,6 +4215,10 @@ typedef struct _D3DKMT_PRESENT_STATS_DWM2
     UINT                         CustomPresentDuration;
     UINT                         VirtualSyncRefreshCount;
     D3DKMT_ALIGN64 LARGE_INTEGER VirtualSyncQPCTime;
+    D3DKMT_ALIGN64 LARGE_INTEGER VSyncDurationQPCTime;
+    UINT                         VSyncMultiplier;
+    UINT                         VirtualPresentRefreshCount;
+    D3DKMT_ALIGN64 LARGE_INTEGER VirtualPresentQPCTime;
 } D3DKMT_PRESENT_STATS_DWM2;
 
 

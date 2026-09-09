@@ -1503,8 +1503,7 @@ typedef union _DXGK_CREATEALLOCATIONFLAGS
     struct
     {
         UINT Resource     : 1;
-        UINT Shared       : 1;
-        UINT Reserved     : 30;
+        UINT Reserved     : 31;
     };
     UINT Value;
 } DXGK_CREATEALLOCATIONFLAGS, *PDXGK_CREATEALLOCATIONFLAGS;
@@ -1986,9 +1985,25 @@ typedef struct _DXGKARG_PREEMPTCOMMAND
 
 typedef struct _DXGKARG_CANCELCOMMAND
 {
-    UINT    SubmissionFenceId;
-    UINT    NodeOrdinal;
-    UINT    EngineOrdinal;
+    HANDLE                         hContext;
+    PVOID                          pDmaBuffer;
+    UINT                           DmaBufferSize;
+    UINT                           DmaBufferSubmissionStartOffset;
+    UINT                           DmaBufferSubmissionEndOffset;
+    PVOID                          pDmaBufferPrivateData;
+    UINT                           DmaBufferPrivateDataSize;
+    UINT                           DmaBufferPrivateDataSubmissionStartOffset;
+    UINT                           DmaBufferPrivateDataSubmissionEndOffset;
+    CONST struct _DXGK_ALLOCATIONLIST *pAllocationList;
+    UINT                           AllocationListSize;
+    CONST D3DDDI_PATCHLOCATIONLIST *pPatchLocationList;
+    UINT                           PatchLocationListSize;
+    UINT                           PatchLocationListSubmissionStart;
+    UINT                           PatchLocationListSubmissionLength;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
+    D3DGPU_VIRTUAL_ADDRESS          DmaBufferVirtualAddress;
+    UINT                           DmaBufferUmdPrivateDataSize;
+#endif
 } DXGKARG_CANCELCOMMAND, *PDXGKARG_CANCELCOMMAND;
 
 
@@ -2833,6 +2848,9 @@ typedef struct _DXGKARG_ESCAPE
     PVOID              pPrivateDriverData;
     UINT               PrivateDriverDataSize;
     HANDLE             hContext;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+    HANDLE             hKmdProcessHandle;
+#endif
 } DXGKARG_ESCAPE, *PDXGKARG_ESCAPE;
 
 
@@ -3776,12 +3794,8 @@ typedef struct _DXGKCB_NOTIFY_INTERRUPT_DATA_FLAGS
             UINT ValidPhysicalAdapterMask : 1;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
             UINT HsyncFlipCompletion : 1;
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_2)
             UINT EvaluateLegacyMonitoredFences : 1;
             UINT Reserved : 29;
-#else
-            UINT Reserved : 30;
-#endif
 #else
             UINT Reserved : 31;
 #endif
@@ -10122,7 +10136,12 @@ C_ASSERT(FIELD_OFFSET(DXGKARG_RECOMMENDVIDPNTOPOLOGY, hVidPn) == 0);
 C_ASSERT(FIELD_OFFSET(DXGKARG_RECOMMENDVIDPNTOPOLOGY, VidPnSourceId) == 8);
 C_ASSERT(FIELD_OFFSET(DXGKARG_RECOMMENDVIDPNTOPOLOGY, RequestReason) == 12);
 C_ASSERT(FIELD_OFFSET(DXGKARG_RECOMMENDVIDPNTOPOLOGY, hFallbackTopology) == 16);
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+C_ASSERT(sizeof(DXGKARG_ESCAPE) == 48);
+C_ASSERT(FIELD_OFFSET(DXGKARG_ESCAPE, hKmdProcessHandle) == 40);
+#else
 C_ASSERT(sizeof(DXGKARG_ESCAPE) == 40);
+#endif
 C_ASSERT(FIELD_OFFSET(DXGKARG_ESCAPE, hDevice) == 0);
 C_ASSERT(FIELD_OFFSET(DXGKARG_ESCAPE, Flags) == 8);
 C_ASSERT(FIELD_OFFSET(DXGKARG_ESCAPE, pPrivateDriverData) == 16);
