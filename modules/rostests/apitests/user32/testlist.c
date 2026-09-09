@@ -75,6 +75,7 @@ extern void func_TopmostBand(void);
 extern void func_SystemMenu(void);
 extern void func_TrackMouseEvent(void);
 extern void func_TrackPopupMenuEx(void);
+extern void func_UpdateRegion(void);
 extern void func_VirtualKey(void);
 extern void func_WindowBand(void);
 extern void func_CallWindowProc(void);
@@ -156,6 +157,7 @@ const struct test winetest_testlist[] =
     { "TopmostBand", func_TopmostBand },
     { "TrackMouseEvent", func_TrackMouseEvent },
     { "TrackPopupMenuEx", func_TrackPopupMenuEx },
+    { "UpdateRegion", func_UpdateRegion },
     { "VirtualKey", func_VirtualKey },
     { "WindowBand", func_WindowBand },
     { "CallWindowProc", func_CallWindowProc },

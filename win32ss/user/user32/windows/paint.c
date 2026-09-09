@@ -98,6 +98,9 @@ GetUpdateRect(
   LPRECT Rect,
   BOOL Erase)
 {
+#ifdef WOW64_I386_RUNTIME
+  return NtUserGetUpdateRect(Wnd, Rect, Erase);
+#else
   PWND pWnd;
 
   pWnd = ValidateHwnd(Wnd);
@@ -115,7 +118,7 @@ GetUpdateRect(
      Rect->left = Rect->right = Rect->top = Rect->bottom = 0;
   }
   return FALSE;  // msdn: "If there is no update region, the return value is zero."
-
+#endif
 }
 
 
@@ -129,7 +132,9 @@ GetUpdateRgn(
   HRGN hRgn,
   BOOL bErase)
 {
+#ifndef WOW64_I386_RUNTIME
   PWND pWnd;
+#endif
 
   if (!hRgn)
   {
@@ -137,6 +142,9 @@ GetUpdateRgn(
      return ERROR;
   }
 
+#ifdef WOW64_I386_RUNTIME
+  return NtUserGetUpdateRgn(hWnd, hRgn, bErase);
+#else
   pWnd = ValidateHwnd(hWnd);
   if (!pWnd)
      return ERROR;
@@ -148,6 +156,7 @@ GetUpdateRgn(
   }
   SetRectRgn(hRgn, 0, 0, 0, 0);
   return NULLREGION;
+#endif
 }
 
 
@@ -231,6 +240,9 @@ WINAPI
 UpdateWindow(
   HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+  return NtUserxUpdateWindow(hWnd);
+#else
   PWND pWnd = ValidateHwnd(hWnd);
 
   if (!pWnd)
@@ -243,6 +255,7 @@ UpdateWindow(
      return NtUserxUpdateWindow(hWnd);
   }
   return TRUE;
+#endif
 }
 
 /*
