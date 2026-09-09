@@ -9,6 +9,8 @@
 #include <win32k.h>
 #include <napi.h>
 #include <winbase_undoc.h>
+#include "dcomposition.h"
+#include "composition.h"
 
 #define NDEBUG
 #include <debug.h>
@@ -357,6 +359,10 @@ ExitProcessCallback(PEPROCESS Process)
     }
     ASSERT(*pppi == ppiCurrent);
     *pppi = ppiCurrent->ppiNext;
+
+    /* Retire compositor ownership and channel mappings before GDI teardown. */
+    IntCompositionCleanupProcess(Process);
+    IntDCompositionCleanupProcess(ppiCurrent);
 
     /* Cleanup GDI info */
     GdiProcessDestroy(Process);

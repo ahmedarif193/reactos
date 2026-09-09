@@ -107,6 +107,7 @@ extern "C" {
 #ifndef __cplusplus
 #include <include/ntusrtyp.h>
 #include <include/ntuser.h>
+#include <reactos/ntdcomp.h>
 #include <include/callback.h>
 #endif // __cplusplus
 

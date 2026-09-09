@@ -313,6 +313,8 @@ typedef struct _PROCESSINFO
     LIST_ENTRY PrivateMemFontListHead;
     UINT PrivateMemFontHandleCount;
 
+    struct _DCOMP_PROCESS *CompositionData;
+
     FAST_MUTEX DriverObjListLock;
     LIST_ENTRY DriverObjListHead;
     W32HEAP_USER_MAPPING HeapMappings;
