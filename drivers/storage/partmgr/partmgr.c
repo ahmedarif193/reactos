@@ -1198,8 +1198,7 @@ FdoHandleDeviceRelations(
         Irp->IoStatus.Status = STATUS_SUCCESS;
     }
 
-    IoSkipCurrentIrpStackLocation(Irp);
-    return IoCallDriver(FdoExtension->LowerDevice, Irp);
+    return ForwardIrpAndForget(FdoExtension->DeviceObject, Irp);
 }
 
 static
@@ -1218,15 +1217,14 @@ FdoHandleRemoveDevice(
         RtlInitUnicodeString(&FdoExtension->DiskInterfaceName, NULL);
     }
 
-    // Block new perf-counted I/O and wait for in-flight requests whose
-    // completion routine still references this extension and its lookaside
-    IoAcquireRemoveLock(&FdoExtension->Perf.RemoveLock, Irp);
-    IoReleaseRemoveLockAndWait(&FdoExtension->Perf.RemoveLock, Irp);
+    InterlockedExchange(&FdoExtension->Removed, TRUE);
+    IoAcquireRemoveLock(&FdoExtension->RemoveLock, Irp);
 
-    // Send the IRP down the stack
+    // The lower driver must see removal before we wait for its pending I/O.
     IoSkipCurrentIrpStackLocation(Irp);
     Irp->IoStatus.Status = STATUS_SUCCESS;
     NTSTATUS status = IoCallDriver(FdoExtension->LowerDevice, Irp);
+    IoReleaseRemoveLockAndWait(&FdoExtension->RemoveLock, Irp);
 
     IoDetachDevice(FdoExtension->LowerDevice);
     ExDeleteNPagedLookasideList(&FdoExtension->Perf.ContextLookaside);
@@ -1243,26 +1241,32 @@ FdoHandleSurpriseRemoval(
 {
     PAGED_CODE();
 
-    // all enumerated child devices should receive IRP_MN_REMOVE_DEVICE
-    // removing only non-enumerated ones here
-    for (PSINGLE_LIST_ENTRY curEntry = FdoExtension->PartitionList.Next;
-         curEntry != NULL;
-         curEntry = curEntry->Next)
+    InterlockedExchange(&FdoExtension->Removed, TRUE);
+
+    // PnP owns reported PDOs. Unlink before deleting unreported children;
+    // never read a list entry after deleting its containing device.
+    PartMgrAcquireLayoutLock(FdoExtension);
+    PSINGLE_LIST_ENTRY previous = &FdoExtension->PartitionList;
+    while (previous->Next)
     {
-        PPARTITION_EXTENSION partExt = CONTAINING_RECORD(curEntry,
+        PPARTITION_EXTENSION partExt = CONTAINING_RECORD(previous->Next,
                                                          PARTITION_EXTENSION,
                                                          ListEntry);
-
-        if (partExt->IsEnumerated)
+        if (!partExt->IsEnumerated)
         {
+            previous->Next = partExt->ListEntry.Next;
+            partExt->Attached = FALSE;
             PartitionHandleRemove(partExt, TRUE);
         }
+        else
+        {
+            previous = &partExt->ListEntry;
+        }
     }
+    PartMgrReleaseLayoutLock(FdoExtension);
 
-    // Send the IRP down the stack
-    IoSkipCurrentIrpStackLocation(Irp);
     Irp->IoStatus.Status = STATUS_SUCCESS;
-    return IoCallDriver(FdoExtension->LowerDevice, Irp);
+    return ForwardIrpAndForget(FdoExtension->DeviceObject, Irp);
 }
 
 static
@@ -1311,7 +1315,7 @@ PartMgrAddDevice(
     }
     deviceExtension->PhysicalDiskDO = PhysicalDeviceObject;
     KeInitializeEvent(&deviceExtension->SyncEvent, SynchronizationEvent, TRUE);
-    IoInitializeRemoveLock(&deviceExtension->Perf.RemoveLock, TAG_PARTMGR, 0, 0);
+    IoInitializeRemoveLock(&deviceExtension->RemoveLock, TAG_PARTMGR, 0, 0);
     KeInitializeSpinLock(&deviceExtension->Perf.Lock);
     ExInitializeNPagedLookasideList(&deviceExtension->Perf.ContextLookaside,
                                     NULL,
@@ -1478,8 +1482,7 @@ PartMgrPnp(
         }
         default:
         {
-            IoSkipCurrentIrpStackLocation(Irp);
-            return IoCallDriver(fdoExtension->LowerDevice, Irp);
+            return ForwardIrpAndForget(DeviceObject, Irp);
         }
     }
 }
@@ -1527,7 +1530,7 @@ PartMgrReadWriteCompletion(
 
     ExFreeToNPagedLookasideList(&fdoExtension->Perf.ContextLookaside,
                                 perfContext);
-    IoReleaseRemoveLock(&fdoExtension->Perf.RemoveLock, Irp);
+    IoReleaseRemoveLock(&fdoExtension->RemoveLock, Irp);
 
     if (Irp->PendingReturned)
         IoMarkIrpPending(Irp);
@@ -1566,14 +1569,15 @@ PartMgrReadWrite(
 
     // The armed completion routine will touch the extension and the
     // lookaside after this dispatch returns; hold the device alive
-    if (!NT_SUCCESS(IoAcquireRemoveLock(&fdoExtension->Perf.RemoveLock, Irp)))
-        return ForwardIrpAndForget(DeviceObject, Irp);
+    NTSTATUS status = IoAcquireRemoveLock(&fdoExtension->RemoveLock, Irp);
+    if (!NT_SUCCESS(status))
+        return PartMgrFailIrp(Irp, status);
 
     PPARTMGR_PERFORMANCE_CONTEXT perfContext =
         ExAllocateFromNPagedLookasideList(&fdoExtension->Perf.ContextLookaside);
     if (!perfContext)
     {
-        IoReleaseRemoveLock(&fdoExtension->Perf.RemoveLock, Irp);
+        IoReleaseRemoveLock(&fdoExtension->RemoveLock, Irp);
         return ForwardIrpAndForget(DeviceObject, Irp);
     }
 
@@ -1589,7 +1593,7 @@ PartMgrReadWrite(
         KeReleaseSpinLock(&fdoExtension->Perf.Lock, oldIrql);
         ExFreeToNPagedLookasideList(&fdoExtension->Perf.ContextLookaside,
                                     perfContext);
-        IoReleaseRemoveLock(&fdoExtension->Perf.RemoveLock, Irp);
+        IoReleaseRemoveLock(&fdoExtension->RemoveLock, Irp);
         return ForwardIrpAndForget(DeviceObject, Irp);
     }
     if (fdoExtension->Perf.OutstandingRequests == 0)
@@ -1648,8 +1652,7 @@ PartMgrPower(
     }
     else
     {
-        IoSkipCurrentIrpStackLocation(Irp);
-        return PoCallDriver(partExt->LowerDevice, Irp);
+        return ForwardIrpAndForget(DeviceObject, Irp);
     }
 }
 
@@ -1661,30 +1664,94 @@ PartMgrShutdownFlush(
     _In_ PIRP Irp)
 {
     PPARTITION_EXTENSION partExt = DeviceObject->DeviceExtension;
-    PDEVICE_OBJECT lowerDevice;
+    if (!partExt->IsFDO && !partExt->IsEnumerated)
+        return PartMgrFailIrp(Irp, STATUS_DEVICE_DOES_NOT_EXIST);
 
-    // forward to the partition0 device in both cases
-    if (!partExt->IsFDO)
+    // Traverse the parent FDO too, so its removal lease covers the flush.
+    return ForwardIrpAndForget(DeviceObject, Irp);
+}
+
+/* A dispatch lease also covers synchronous completions and local IOCTLs.
+ * Forwarded requests acquire a second lease released by their completion.
+ * Child IOCTLs sometimes access the disk directly, so lease the parent too. */
+static NTSTATUS NTAPI
+PartMgrDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
+{
+    PFDO_EXTENSION extension = DeviceObject->DeviceExtension;
+    PFDO_EXTENSION parent = NULL;
+    PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
+    UCHAR major = stack->MajorFunction;
+    NTSTATUS status;
+
+    // Final removal performs rundown itself; do not wait on our own lease.
+    if (major == IRP_MJ_PNP && stack->MinorFunction == IRP_MN_REMOVE_DEVICE)
+        return PartMgrPnp(DeviceObject, Irp);
+
+    status = IoAcquireRemoveLock(&extension->RemoveLock, &status);
+    if (!NT_SUCCESS(status))
+        return PartMgrFailIrp(Irp, status);
+
+    if (major != IRP_MJ_PNP)
     {
-        if (!partExt->IsEnumerated)
+        if (extension->Removed)
         {
-            Irp->IoStatus.Status = STATUS_DEVICE_DOES_NOT_EXIST;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-            return STATUS_DEVICE_DOES_NOT_EXIST;
+            status = STATUS_DEVICE_REMOVED;
+            goto Reject;
         }
-        else
+        if (!extension->IsFDO)
         {
-            PFDO_EXTENSION fdoExtension = partExt->LowerDevice->DeviceExtension;
-            lowerDevice = fdoExtension->LowerDevice;
+            parent = extension->LowerDevice->DeviceExtension;
+            status = IoAcquireRemoveLock(&parent->RemoveLock, &parent);
+            if (!NT_SUCCESS(status))
+            {
+                parent = NULL;
+                goto Reject;
+            }
+            if (parent->Removed)
+            {
+                status = STATUS_DEVICE_REMOVED;
+                goto Reject;
+            }
         }
     }
-    else
-    {
-        lowerDevice = partExt->LowerDevice;
-    }
 
-    IoSkipCurrentIrpStackLocation(Irp);
-    return IoCallDriver(lowerDevice, Irp);
+    switch (major)
+    {
+        case IRP_MJ_READ:
+        case IRP_MJ_WRITE:
+            status = PartMgrReadWrite(DeviceObject, Irp);
+            break;
+        case IRP_MJ_DEVICE_CONTROL:
+            status = PartMgrDeviceControl(DeviceObject, Irp);
+            break;
+        case IRP_MJ_PNP:
+            status = PartMgrPnp(DeviceObject, Irp);
+            break;
+        case IRP_MJ_SHUTDOWN:
+        case IRP_MJ_FLUSH_BUFFERS:
+            status = PartMgrShutdownFlush(DeviceObject, Irp);
+            break;
+        case IRP_MJ_POWER:
+            status = PartMgrPower(DeviceObject, Irp);
+            break;
+        default:
+            status = ForwardIrpAndForget(DeviceObject, Irp);
+            break;
+    }
+    goto Release;
+
+Reject:
+    if (major == IRP_MJ_POWER)
+        PoStartNextPowerIrp(Irp);
+    // Closing a handle must still succeed after surprise removal.
+    if (major == IRP_MJ_CLOSE)
+        status = STATUS_SUCCESS;
+    PartMgrFailIrp(Irp, status);
+Release:
+    if (parent)
+        IoReleaseRemoveLock(&parent->RemoveLock, &parent);
+    IoReleaseRemoveLock(&extension->RemoveLock, &status);
+    return status;
 }
 
 CODE_SEG("PAGE")
@@ -1705,15 +1772,15 @@ DriverEntry(
 {
     DriverObject->DriverUnload = PartMgrUnload;
     DriverObject->DriverExtension->AddDevice = PartMgrAddDevice;
-    DriverObject->MajorFunction[IRP_MJ_CREATE]         = ForwardIrpAndForget;
-    DriverObject->MajorFunction[IRP_MJ_CLOSE]          = ForwardIrpAndForget;
-    DriverObject->MajorFunction[IRP_MJ_READ]           = PartMgrReadWrite;
-    DriverObject->MajorFunction[IRP_MJ_WRITE]          = PartMgrReadWrite;
-    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = PartMgrDeviceControl;
-    DriverObject->MajorFunction[IRP_MJ_PNP]            = PartMgrPnp;
-    DriverObject->MajorFunction[IRP_MJ_SHUTDOWN]       = PartMgrShutdownFlush;
-    DriverObject->MajorFunction[IRP_MJ_FLUSH_BUFFERS]  = PartMgrShutdownFlush;
-    DriverObject->MajorFunction[IRP_MJ_POWER]          = PartMgrPower;
+    DriverObject->MajorFunction[IRP_MJ_CREATE]         = PartMgrDispatch;
+    DriverObject->MajorFunction[IRP_MJ_CLOSE]          = PartMgrDispatch;
+    DriverObject->MajorFunction[IRP_MJ_READ]           = PartMgrDispatch;
+    DriverObject->MajorFunction[IRP_MJ_WRITE]          = PartMgrDispatch;
+    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = PartMgrDispatch;
+    DriverObject->MajorFunction[IRP_MJ_PNP]            = PartMgrDispatch;
+    DriverObject->MajorFunction[IRP_MJ_SHUTDOWN]       = PartMgrDispatch;
+    DriverObject->MajorFunction[IRP_MJ_FLUSH_BUFFERS]  = PartMgrDispatch;
+    DriverObject->MajorFunction[IRP_MJ_POWER]          = PartMgrDispatch;
 
     return STATUS_SUCCESS;
 }

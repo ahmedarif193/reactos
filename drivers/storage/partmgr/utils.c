@@ -1,5 +1,17 @@
 #include "partmgr.h"
 
+static NTSTATUS NTAPI
+PartMgrForwardCompletion(PDEVICE_OBJECT DeviceObject, PIRP Irp, PVOID Context)
+{
+    PFDO_EXTENSION Extension = Context;
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (Irp->PendingReturned)
+        IoMarkIrpPending(Irp);
+    IoReleaseRemoveLock(&Extension->RemoveLock, Irp);
+    return STATUS_CONTINUE_COMPLETION;
+}
+
 NTSTATUS
 NTAPI
 ForwardIrpAndForget(
@@ -7,12 +19,18 @@ ForwardIrpAndForget(
     _In_ PIRP Irp)
 {
     // this part of a structure is identical in both FDO and PDO
-    PDEVICE_OBJECT LowerDevice = ((PFDO_EXTENSION)DeviceObject->DeviceExtension)->LowerDevice;
+    PFDO_EXTENSION Extension = DeviceObject->DeviceExtension;
+    BOOLEAN Power = IoGetCurrentIrpStackLocation(Irp)->MajorFunction == IRP_MJ_POWER;
+    NTSTATUS Status = IoAcquireRemoveLock(&Extension->RemoveLock, Irp);
+    if (!NT_SUCCESS(Status))
+        return PartMgrFailIrp(Irp, Status);
 
-    ASSERT(LowerDevice);
-
-    IoSkipCurrentIrpStackLocation(Irp);
-    return IoCallDriver(LowerDevice, Irp);
+    /* The dispatch lease protects setup; this lease survives STATUS_PENDING. */
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    IoSetCompletionRoutine(Irp, PartMgrForwardCompletion, Extension, TRUE, TRUE, TRUE);
+    if (Power)
+        return PoCallDriver(Extension->LowerDevice, Irp);
+    return IoCallDriver(Extension->LowerDevice, Irp);
 }
 
 NTSTATUS
