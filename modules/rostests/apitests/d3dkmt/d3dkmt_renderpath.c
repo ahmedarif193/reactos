@@ -726,14 +726,17 @@ static void Test_VirtualAddressingSubmission(void)
     hContext = ccv.hContext;
     trace("virtual context 0x%08lX\n", (unsigned long)hContext);
 
-    /* A submission naming a mapped range must be accepted. */
+    /* Exercise virtual submission without executing driver-private commands.
+     * A mapped allocation alone is not a valid command stream. NullRendering
+     * still queues and completes the submission, but never executes its bytes. */
     memset(&submit, 0, sizeof(submit));
     submit.BroadcastContextCount = 1;
     submit.BroadcastContext[0] = hContext;
     submit.Commands = CommandVa;
-    submit.CommandLength = sizeof(TEST_SOFTGPU_CMD);
+    submit.CommandLength = sizeof(ULONG);
+    submit.Flags.NullRendering = 1;
     Status = pSubmit(&submit);
-    ok_succeeded(Status, "SubmitCommand against a mapped GPU VA failed 0x%08lX\n", (long)Status);
+    ok_succeeded(Status, "SubmitCommand with NullRendering failed 0x%08lX\n", (long)Status);
 
     /* A submission naming an address nothing is mapped at must not be: the
      * engine would dereference a GPU address with no page table entry. */
@@ -741,7 +744,7 @@ static void Test_VirtualAddressingSubmission(void)
     submit.BroadcastContextCount = 1;
     submit.BroadcastContext[0] = hContext;
     submit.Commands = CommandVa + 0x40000000ULL;
-    submit.CommandLength = sizeof(TEST_SOFTGPU_CMD);
+    submit.CommandLength = sizeof(ULONG);
     Status = pSubmit(&submit);
     ok_failed(Status, "SubmitCommand accepted an unmapped GPU VA (0x%08lX)\n", (long)Status);
 
