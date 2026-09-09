@@ -130,6 +130,22 @@ IntCompositionAccumulatePositionDamage(_In_ const RECTL *Rect)
     return TRUE;
 }
 
+/* A DX publication replaces client content in its own shared allocation.
+ * Recompose its bounds without republishing the unchanged GDI BACK surface.
+ * Keep pending GDI damage intact and initialize FRONT on the first frame.
+ * Called under the same exclusive USER lock as GETFRAME. */
+static VOID
+IntCompositionDamageDxPublication(_Inout_ REDIRECT_ENTRY *Entry,
+                                  _In_ PWND TopWnd)
+{
+    if (!Entry->Redirect.FrontValid ||
+        !IntCompositionAccumulatePositionDamage((PRECTL)&TopWnd->rcWindow))
+    {
+        Entry->Damaged = TRUE;
+    }
+    IntCompositionMarkDamage(FALSE);
+}
+
 /* Hold the display PDEV across direct surface access. The same lock guards
  * normal GDI draws and pointer exclusion, so BACK snapshots cannot race a
  * writer or a software-cursor update. */
@@ -2657,8 +2673,7 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             }
 
             Entry->Redirect.DxPublishedUpdateId = Request.UpdateId;
-            Entry->Damaged = TRUE;
-            IntCompositionMarkDamage(FALSE);
+            IntCompositionDamageDxPublication(Entry, TopWnd);
             break;
 
         default:
