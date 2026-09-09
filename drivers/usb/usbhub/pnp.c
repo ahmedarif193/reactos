@@ -991,7 +991,9 @@ USBH_StartHubFdoDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (HubExtension->LowerPDO == HubExtension->RootHubPdo)
     {
-        USBD_RegisterRootHubCallBack(HubExtension);
+        Status = USBD_RegisterRootHubCallBack(HubExtension);
+        if (!NT_SUCCESS(Status))
+            goto ErrorExit;
     }
     else
     {
@@ -1002,6 +1004,8 @@ USBH_StartHubFdoDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
     goto Exit;
 
   ErrorExit:
+
+    HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_DEVICE_STARTED;
 
     if (HubExtension->HubDescriptor)
     {
@@ -1476,46 +1480,44 @@ EnumStart:
             goto PortEnumerationFailure;
         }
 
-        NtStatus = USBH_SyncGetPortStatus(HubExtension,
-                                          Port,
-                                          &PortData->PortStatus,
-                                          sizeof(USB_PORT_STATUS_AND_CHANGE));
-
-        if (!NT_SUCCESS(NtStatus))
-        {
-            DPRINT_ENUM("USBH_EnumerateHubPorts: get status failed after reset (port %u)\n",
-                        Port);
-            ResetFailed = TRUE;
-            goto PortEnumerationFailure;
-        }
-
-        UsbPortStatus = PortData->PortStatus.PortStatus;
-
         if (NT_SUCCESS(NtStatus))
         {
-            ULONG ix = 0;
+            ULONG ix;
 
-            for (NtStatus = USBH_CreateDevice(HubExtension, Port, UsbPortStatus, ix);
-                 !NT_SUCCESS(NtStatus);
-                 NtStatus = USBH_CreateDevice(HubExtension, Port, UsbPortStatus, ix))
+            for (ix = 0; ix < 3; ++ix)
             {
-                USBH_Wait(500);
-
-                if (ix >= 2)
+                if (ix != 0)
                 {
+                    USBH_Wait(500);
+
+                    if (PortData->DeviceObject)
+                    {
+                        IoDeleteDevice(PortData->DeviceObject);
+                        PortData->DeviceObject = NULL;
+                        PortData->ConnectionStatus = NoDeviceConnected;
+                    }
+
+                    NtStatus = USBH_SyncResetPort(HubExtension, Port);
+                    if (!NT_SUCCESS(NtStatus))
+                    {
+                        ResetFailed = TRUE;
+                        break;
+                    }
+                }
+
+                /* Reset and disconnect can change the status between retries. */
+                NtStatus = USBH_SyncGetPortStatus(HubExtension, Port, &PortData->PortStatus, sizeof(USB_PORT_STATUS_AND_CHANGE));
+                if (!NT_SUCCESS(NtStatus) || !USBH_PortStatusIsResetComplete(&PortData->PortStatus))
+                {
+                    NtStatus = NT_SUCCESS(NtStatus) ? STATUS_DEVICE_DATA_ERROR : NtStatus;
+                    ResetFailed = TRUE;
                     break;
                 }
 
-                if (PortData->DeviceObject)
-                {
-                    IoDeleteDevice(PortData->DeviceObject);
-                    PortData->DeviceObject = NULL;
-                    PortData->ConnectionStatus = NoDeviceConnected;
-                }
-
-                USBH_SyncResetPort(HubExtension, Port);
-
-                ix++;
+                UsbPortStatus = PortData->PortStatus.PortStatus;
+                NtStatus = USBH_CreateDevice(HubExtension, Port, UsbPortStatus, ix);
+                if (NT_SUCCESS(NtStatus))
+                    break;
             }
 
             if (NT_SUCCESS(NtStatus))
@@ -1771,6 +1773,24 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (HubExtension->HubFlags & USBHUB_FDO_FLAG_NOT_ENUMERATED)
     {
+        if (HubExtension->LowerPDO == HubExtension->RootHubPdo)
+        {
+            LARGE_INTEGER Timeout;
+
+            /* USBPORT finishes power/chirp before notifying the root hub.
+             * Starting a hub reset earlier races that worker's PORTSC writes,
+             * which can disable a port after our reset has enabled it. */
+            Timeout.QuadPart = -10LL * 1000 * 10000;
+            Status = KeWaitForSingleObject(&HubExtension->RootHubNotificationEvent, Executive, KernelMode, FALSE, &Timeout);
+            if (Status != STATUS_SUCCESS)
+            {
+                DPRINT1("USBH_FdoQueryBusRelations: root hub initialization did not complete (0x%08lx)\n", Status);
+                if (Status == STATUS_TIMEOUT)
+                    Status = STATUS_IO_TIMEOUT;
+                goto RelationsWorker;
+            }
+        }
+
         /*
          * The initial BusRelations query is a discovery barrier. Returning an
          * empty snapshot while enumeration runs on a work item lets the PnP

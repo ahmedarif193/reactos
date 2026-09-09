@@ -79,11 +79,15 @@ EHCI_RH_ChirpRootPort(IN PVOID ehciExtension,
            EhciExtension,
            Port);
 
+    PortSC.ConnectStatusChange = 0;
+    PortSC.PortEnableDisableChange = 0;
+    PortSC.OverCurrentChange = 0;
     PortSC.PortEnabledDisabled = 0;
     PortSC.PortReset = 1;
     WRITE_REGISTER_ULONG(PortStatusReg, PortSC.AsULONG);
 
-    RegPacket.UsbPortWait(EhciExtension, 10);
+    /* USB 2.0 section 7.1.7.5: root ports must drive reset for at least 50 ms. */
+    RegPacket.UsbPortWait(EhciExtension, 50);
 
     ResetLoopCount = 0;
 
@@ -115,12 +119,15 @@ EHCI_RH_ChirpRootPort(IN PVOID ehciExtension,
             DPRINT1("EHCI_RH_ChirpRootPort: Port reset timeout on port %x, PortSC=0x%08lx\n",
                     Port,
                     PortSC.AsULONG);
-            break;
+            return MP_STATUS_FAILURE;
         }
     }
     while (PortSC.PortReset == 1 && PortSC.AsULONG != (ULONG)-1);
 
     PortSC.AsULONG = READ_REGISTER_ULONG(PortStatusReg);
+
+    if (PortSC.AsULONG == (ULONG)-1 || !PortSC.CurrentConnectStatus)
+        return MP_STATUS_FAILURE;
 
     if (PortSC.PortEnabledDisabled == 1)
     {
@@ -262,7 +269,10 @@ EHCI_RH_GetPortStatus(IN PVOID ehciExtension,
     if (status.PortStatus.Usb20PortStatus.CurrentConnectStatus)
         status.PortStatus.Usb20PortStatus.LowSpeedDeviceAttached = 0;
 
-    status.PortStatus.Usb20PortStatus.HighSpeedDeviceAttached = 1;
+    /* EHCI enables a port only after a successful high-speed reset. */
+    status.PortStatus.Usb20PortStatus.HighSpeedDeviceAttached =
+        PortSC.CurrentConnectStatus && PortSC.PortEnabledDisabled &&
+        PortSC.PortOwner != EHCI_PORT_OWNER_COMPANION_CONTROLLER;
 
     /* Latch connect-change either from HW bit or from cached state difference */
     if (PortSC.ConnectStatusChange || (ConnectedNow != ConnectedBefore))

@@ -818,7 +818,7 @@ NTAPI
 USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                    IN USHORT Port)
 {
-    USB_PORT_STATUS_AND_CHANGE PortStatus;
+    USB_PORT_STATUS_AND_CHANGE PortStatus = {0};
     KEVENT Event;
     LARGE_INTEGER Timeout;
     BM_REQUEST_TYPE RequestType;
@@ -840,8 +840,12 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                     &PortStatus,
                                     sizeof(USB_PORT_STATUS_AND_CHANGE));
 
-    if (NT_SUCCESS(Status) &&
-        !USBH_PortStatusIsConnected(&PortStatus))
+    if (!NT_SUCCESS(Status))
+        goto Exit;
+
+    if (!USBH_PortStatusIsConnected(&PortStatus) ||
+        (PortStatus.PortStatus.Usb20PortStatus.Reserved1 &
+         USB20_PORT_STATUS_RESERVED1_OWNED_BY_COMPANION))
     {
         Status = STATUS_UNSUCCESSFUL;
         goto Exit;
@@ -904,11 +908,9 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                         &PortStatus,
                                         sizeof(USB_PORT_STATUS_AND_CHANGE));
 
-        /* If the reset bit has already dropped and the device is still present,
-         * consider the reset complete even if no interrupt ever arrived. */
+        /* A cleared reset bit alone does not mean the port was enabled. */
         if (NT_SUCCESS(Status) &&
-            USBH_PortStatusIsConnected(&PortStatus) &&
-            !(PortStatus.PortStatus.AsUshort16 & USB_PORT_STATUS_RESET))
+            USBH_PortStatusIsResetComplete(&PortStatus))
         {
             Status = STATUS_SUCCESS;
             break;
@@ -951,10 +953,10 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                     &PortStatus,
                                     sizeof(USB_PORT_STATUS_AND_CHANGE));
 
-    if (!USBH_PortStatusIsConnected(&PortStatus) &&
-        NT_SUCCESS(Status) &&
-        HubExtension->HubFlags & USBHUB_FDO_FLAG_USB20_HUB)
+    if (NT_SUCCESS(Status) && !USBH_PortStatusIsResetComplete(&PortStatus))
     {
+        DPRINT1("USBH_SyncResetPort: Port %u did not enable after reset, PortStatus=0x%04X\n",
+                Port, PortStatus.PortStatus.AsUshort16);
         Status = STATUS_DEVICE_DATA_ERROR;
     }
 

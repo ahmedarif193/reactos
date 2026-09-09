@@ -125,6 +125,19 @@ USBH_PortStatusIsConnected(
 }
 
 FORCEINLINE
+BOOLEAN
+USBH_PortStatusIsResetComplete(
+    _In_ const USB_PORT_STATUS_AND_CHANGE *PortStatus)
+{
+    /* Connect, enable and reset occupy the same bits in USB 2 and USB 3. */
+    return USBH_PortStatusIsConnected(PortStatus) &&
+           PortStatus->PortStatus.Usb20PortStatus.PortEnabledDisabled &&
+           !PortStatus->PortStatus.Usb20PortStatus.Reset &&
+           !(PortStatus->PortStatus.Usb20PortStatus.Reserved1 &
+             USB20_PORT_STATUS_RESERVED1_OWNED_BY_COMPANION);
+}
+
+FORCEINLINE
 VOID
 USBH_PortStatusForceConnected(
     _Inout_ USB_PORT_STATUS_AND_CHANGE *PortStatus)
