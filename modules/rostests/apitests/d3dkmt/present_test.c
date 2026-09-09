@@ -10,10 +10,12 @@
  */
 
 #include "precomp.h"
+#include <reactos/drivers/directx/softgpu_2d_shared.h>
 
 /*
- * Helper: create a single allocation with embedded width/height/bpp
- * for the miniport's private driver data.
+ * Positive presents use the software/VC4 miniports' linear surface contract.
+ * Supply the complete versioned record so the miniport receives pitch and
+ * format as well as the compact size prefix consumed by dxgkrnl.
  */
 static D3DKMT_HANDLE
 CreateSurfaceAllocation(
@@ -23,16 +25,20 @@ CreateSurfaceAllocation(
 {
     D3DKMT_CREATEALLOCATION ca;
     D3DDDI_ALLOCATIONINFO ai;
-    struct {
-        UINT Width;
-        UINT Height;
-        UINT Bpp;
-    } privData;
+    SOFTGPU_ALLOCATION_PRIVATE_DATA privData;
     NTSTATUS Status;
 
+    memset(&privData, 0, sizeof(privData));
     privData.Width = Width;
     privData.Height = Height;
-    privData.Bpp = Bpp;
+    privData.BitsPerPixel = Bpp;
+    privData.Magic = SOFTGPU_ALLOCATION_PRIVATE_MAGIC;
+    privData.Version = SOFTGPU_ALLOCATION_PRIVATE_VERSION;
+    privData.Pitch = Width * (Bpp / 8);
+    privData.Format = D3DDDIFMT_X8R8G8B8;
+    privData.StorageHeight = Height;
+    privData.PlaneCount = 1;
+    privData.PlanePitches[0] = privData.Pitch;
 
     memset(&ai, 0, sizeof(ai));
     ai.pPrivateDriverData = &privData;
