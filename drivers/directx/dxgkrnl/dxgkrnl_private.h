@@ -1160,6 +1160,7 @@ struct _DXGKRNL_ADAPTER
     KSPIN_LOCK                  DmaBufferCacheLock;
     LIST_ENTRY                  DmaBufferCacheListHead;
     ULONG                       DmaBufferCacheCount;
+    ULONG                       DmaBufferCacheBytes;
     volatile LONG               DmaBufferCacheStopping;
     WORK_QUEUE_ITEM             SubmitDmaRetireWorkItem;
     volatile LONG               SubmitDmaRetireWorkQueued;
