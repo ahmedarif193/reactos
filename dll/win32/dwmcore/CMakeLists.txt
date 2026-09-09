@@ -8,6 +8,7 @@ add_library(dwmcore MODULE
     ../../../base/system/dwm/presenttrace.c
     ../../../base/system/dwm/dwm.c
     ../../../base/system/dwm/dxsurface.c
+    ../../../base/system/dwm/gpucomp.c
     ${CMAKE_CURRENT_BINARY_DIR}/dwmcore.def)
 
 target_include_directories(dwmcore PRIVATE
@@ -21,5 +22,5 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
         -Wl,--minor-subsystem-version,0)
 endif()
 target_link_libraries(dwmcore uuid)
-add_importlibs(dwmcore win32u user32 gdi32 msvcrt kernel32 ntdll)
+add_importlibs(dwmcore win32u opengl32 user32 gdi32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET dwmcore DESTINATION reactos/system32 FOR all)
