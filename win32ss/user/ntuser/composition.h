@@ -100,6 +100,7 @@ NTSTATUS IntCompositionDwmOpenSurface(_In_ PVOID pUser);
 /* Register, publish and retire a D3DKMT window redirection surface. */
 NTSTATUS IntCompositionDwmDxSurface(_In_ PVOID pUser);
 NTSTATUS IntCompositionDwmSetBlur(_In_ PVOID pUser);
+NTSTATUS IntCompositionDwmSetGpuOutput(_In_ PVOID pUser);
 
 /* Layered-window alpha/colorkey for the dwm frame descriptor (layered.c). */
 BOOL FASTCALL IntCompositionGetLayered(PWND pWnd, BYTE *pAlpha, COLORREF *pKey, DWORD *pFlags);
@@ -181,6 +182,10 @@ IntCompositionCompleteRedirectedBltPresent(
  * paint): the whole frame is re-asserted on the next compose. */
 VOID IntCompositionDamageFromGdi(VOID);
 BOOL IntCompositionIsAttachedProcess(VOID);
+BOOL IntCompositionIsGpuOutputWindow(_In_opt_ PWND Window);
+BOOL IntCompositionIsGpuOutputPresent(_In_opt_ HWND Window,
+                                      _In_ const RECT *SourceRect,
+                                      _In_ const RECT *DestinationRect);
 
 /* BeginPaint/EndPaint bracket for redirected composition. */
 VOID IntCompositionPaintBegin(_In_ PWND Wnd);
