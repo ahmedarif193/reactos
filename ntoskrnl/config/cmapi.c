@@ -2059,14 +2059,13 @@ CmDeleteKey(IN PCM_KEY_BODY KeyBody)
     if (!(Node->SubKeyCounts[Stable] + Node->SubKeyCounts[Volatile]) &&
         !(Node->Flags & KEY_NO_DELETE))
     {
-        /* Send notification to registered callbacks */
-        CmpReportNotify(Kcb, Hive, Cell, REG_NOTIFY_CHANGE_NAME);
-
         /* Get the parent and free the cell */
         ParentCell = Node->Parent;
         Status = CmpFreeKeyByCell(Hive, Cell, TRUE);
         if (NT_SUCCESS(Status))
         {
+            CmpReportNotify(Kcb, Hive, Cell, REG_NOTIFY_CHANGE_NAME);
+
             /* Flush any notifications */
             CmpFlushNotifiesOnKeyBodyList(Kcb, FALSE);
 

@@ -2,6 +2,7 @@
 #define STANDALONE
 #include <apitest.h>
 
+extern void func_NtNotifyChangeKey(void);
 extern void func__snprintf(void);
 extern void func__snwprintf(void);
 extern void func__stricmp(void);
@@ -153,6 +154,7 @@ extern void func_RtlWnfAndSqm(void);
 
 const struct test winetest_testlist[] =
 {
+    { "NtNotifyChangeKey", func_NtNotifyChangeKey },
     // CRT tests from ../crt
     { "_snprintf", func__snprintf },
     { "_snwprintf", func__snwprintf },

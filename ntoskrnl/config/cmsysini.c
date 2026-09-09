@@ -178,8 +178,7 @@ CmpCloseKeyObject(IN PEPROCESS Process OPTIONAL,
         /* Don't do anything if we don't have a notify block */
         if (!KeyBody->NotifyBlock) return;
 
-        /* This shouldn't happen yet */
-        ASSERT(FALSE);
+        CmpFlushNotify(KeyBody, FALSE);
     }
 }
 
@@ -1686,6 +1685,7 @@ CmInitSystem1(VOID)
 
     /* Initialize registry lock */
     ExInitializeResourceLite(&CmpRegistryLock);
+    CmpInitNotify();
 
     /* Initialize the cache */
     CmpInitializeCache();
