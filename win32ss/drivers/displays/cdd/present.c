@@ -4,8 +4,8 @@
  * PURPOSE:     Present seam + dirty-rectangle tracking + GDI draw delegation.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * cdd implements NO raster ops of its own. GDI's engine paints into the cached
- * shadow surface; the BitBlt/CopyBits/SynchronizeSurface hooks below exist only
+ * cdd implements NO raster ops of its own. GDI's engine paints into the mapped
+ * primary; the BitBlt/CopyBits/SynchronizeSurface hooks below exist only
  * to learn which rectangles changed. Individual primitives accumulate damage;
  * a synchronized GDI flush publishes the completed batch to the WDDM scan-out.
  */
@@ -165,6 +165,20 @@ RcddAccumulateDirtyRect(
    ppdev->PendingSeq = ppdev->DrawSeq;
 }
 
+static VOID
+RcddCopyPresentRect(PVOID Destination, ULONG DestinationPitch,
+                    const VOID *Source, ULONG SourcePitch, const RECTL *Rect)
+{
+   LONG Row;
+   SIZE_T Bytes = (SIZE_T)(Rect->right - Rect->left) * sizeof(ULONG);
+
+   for (Row = Rect->top; Row < Rect->bottom; ++Row)
+      RtlCopyMemory((PUCHAR)Destination + (SIZE_T)Row * DestinationPitch +
+                       (SIZE_T)Rect->left * sizeof(ULONG),
+                    (const UCHAR *)Source + (SIZE_T)Row * SourcePitch +
+                       (SIZE_T)Rect->left * sizeof(ULONG), Bytes);
+}
+
 static BOOL
 RcddPublishPending(
    PRCDD_PDEV ppdev,
@@ -217,6 +231,61 @@ RcddPublishPending(
    ppdev->PendingRectCount = 0;
    ppdev->SentSeq = ppdev->PendingSeq;
    ppdev->SentRect = SentRect;
+   return TRUE;
+}
+
+BOOL
+RcddPresentComposition(PRCDD_PDEV ppdev, const CDD_PRESENT_SOURCE *Source)
+{
+   SIZE_T SourceBytes;
+   const RECTL *Rect = &Source->Rect;
+   BOOL Notified;
+
+   if (ppdev->ScreenPtr == NULL || ppdev->BitsPerPixel != 32 ||
+       ppdev->RedMask != 0x00ff0000 || ppdev->GreenMask != 0x0000ff00 ||
+       ppdev->BlueMask != 0x000000ff || Source->Bits == 0 ||
+       Source->Width != ppdev->ScreenWidth || Source->Height != ppdev->ScreenHeight ||
+       Source->Width > MAXULONG / sizeof(ULONG) ||
+       Source->Pitch < Source->Width * sizeof(ULONG) ||
+       Rect->left < 0 || Rect->top < 0 || Rect->left >= Rect->right ||
+       Rect->top >= Rect->bottom || Rect->right > (LONG)Source->Width ||
+       Rect->bottom > (LONG)Source->Height ||
+       ppdev->ScreenHeight == 0 ||
+       ppdev->ScreenDelta > MAXULONG / ppdev->ScreenHeight ||
+       Source->Pitch > MAXULONG / Source->Height)
+      return FALSE;
+
+   /* Retire any earlier GDI update from its canonical primary before the DWM
+    * source becomes the next completed publication. EngDeviceIoControl and
+    * the miniport copy are synchronous, so DWM's secured bitmap remains
+    * valid for the complete direct notification below. */
+   if (ppdev->PendingRectCount != 0 &&
+       !RcddPublishPending(ppdev, DXGK_PRESENT_DIRTY_FLUSH))
+      return FALSE;
+
+   /* Keep the shared GDI primary authoritative for GetPixel, capture and
+    * shared-allocation users. The scanout copy reads DWM's cached user bitmap
+    * directly, without another full-screen staging copy. */
+   RcddCopyPresentRect(ppdev->ScreenPtr, ppdev->ScreenDelta,
+                       (PVOID)Source->Bits, Source->Pitch, Rect);
+   InterlockedIncrement((volatile LONG *)&ppdev->DrawSeq);
+   RcddAccumulateDirtyRect(ppdev, Rect);
+   InterlockedIncrement((volatile LONG *)&ppdev->PresentQueuedCount);
+   SourceBytes = (SIZE_T)Source->Pitch * Source->Height;
+   Notified = RcddNotifyDirtyRects(ppdev, (PVOID)Source->Bits, Source->Pitch,
+                                   (ULONG)SourceBytes, Rect, 1,
+                                   DXGK_PRESENT_DIRTY_FLUSH);
+   if (!Notified)
+   {
+      InterlockedIncrement((volatile LONG *)&ppdev->PresentFailedCount);
+      return FALSE;
+   }
+
+   InterlockedIncrement((volatile LONG *)&ppdev->PresentCompletedCount);
+   InterlockedIncrement((volatile LONG *)&ppdev->PresentSynchronousCount);
+   ppdev->PendingRectCount = 0;
+   ppdev->SentSeq = ppdev->PendingSeq;
+   ppdev->SentRect = *Rect;
    return TRUE;
 }
 

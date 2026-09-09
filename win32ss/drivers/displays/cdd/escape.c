@@ -119,6 +119,14 @@ RcddEscape(
 
    ppdev = (PRCDD_PDEV)pso->dhpdev;
 
+   if (iEsc == CDD_ESCAPE_PRESENT_SOURCE)
+   {
+      if (pso->pvScan0 != ppdev->ScreenPtr || pvIn == NULL ||
+          cjIn != sizeof(CDD_PRESENT_SOURCE) || cjOut != 0)
+         return 0;
+      return RcddPresentComposition(ppdev, pvIn);
+   }
+
    /*
     * QUERYESCSUPPORT lets a caller probe which escapes we implement; the queried
     * escape code is passed in pvIn.

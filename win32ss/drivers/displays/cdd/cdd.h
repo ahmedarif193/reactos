@@ -487,4 +487,6 @@ RcddEscape(
    IN ULONG cjOut,
    OUT PVOID pvOut);
 
+BOOL RcddPresentComposition(PRCDD_PDEV ppdev, const CDD_PRESENT_SOURCE *Source);
+
 #endif /* _CDD_PCH_ */
