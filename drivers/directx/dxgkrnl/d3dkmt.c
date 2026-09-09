@@ -4931,6 +4931,7 @@ DxgkpEscapeCaptured(
     PDXGKRNL_DEVICE  EscDevice = NULL;
     PDXGKRNL_DEVICE  EscContextDevice = NULL;
     PDXGKRNL_CONTEXT EscContext = NULL;
+    PDXGKRNL_PROCESS ProcessRecord = NULL;
     DXGKARG_ESCAPE   EscapeArgs;
     CONST VOID       *CommandBuffer;
     UINT             CommandBytes;
@@ -5048,6 +5049,14 @@ DxgkpEscapeCaptured(
     }
 #endif
 
+    /* Only driver-private data belongs to the miniport. Device and context
+     * handles are optional for an adapter-wide driver escape. */
+    if (pEscape->Type != D3DKMT_ESCAPE_DRIVERPRIVATE)
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
+    }
+
     {
         D3DKMT_HANDLE SignalSyncObject = 0;
         ULONG64 SignalFenceValue = 0;
@@ -5077,12 +5086,6 @@ DxgkpEscapeCaptured(
         }
     }
 
-    if (pEscape->hDevice == 0)
-    {
-        Status = STATUS_NOT_SUPPORTED;
-        goto Cleanup;
-    }
-
     if (DXGK_CB_FULL(Adapter, DxgkDdiEscape) == NULL)
     {
         DXGKRNL_WARN("DxgkEscape: miniport has no DxgkDdiEscape\n");
@@ -5096,6 +5099,13 @@ DxgkpEscapeCaptured(
     EscapeArgs.PrivateDriverDataSize = pEscape->PrivateDriverDataSize;
     EscapeArgs.Flags.Value         = pEscape->Flags.Value;
     EscapeArgs.hContext            = EscContext ? EscContext->hMiniportContext : NULL;
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_2)
+    /* Pin the driver's process handle until the escape callback returns. */
+    Status = DxgkReferenceProcessRecordByAdapter(Adapter, PsGetCurrentProcess(), &ProcessRecord);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    EscapeArgs.hKmdProcessHandle = ProcessRecord->hMiniportProcess;
+#endif
 
     DXGKRNL_VERBOSE("DxgkEscape: adapter=0x%X size=%u flags=0x%X\n",
                     pEscape->hAdapter,
@@ -5119,7 +5129,7 @@ DxgkpEscapeCaptured(
         }
         MiniportCallbackAcquired = TRUE;
     }
-    if (!DxgkpDeviceExecutionActive(EscDevice))
+    if (EscDevice != NULL && !DxgkpDeviceExecutionActive(EscDevice))
     {
         if (MiniportCallbackAcquired)
             DxgkReleaseMiniportCallback(Adapter);
@@ -5150,6 +5160,8 @@ Cleanup:
     if (CpuEventSyncObject != NULL)
         DxgkSyncObjectDereferenceKmdCpuEvent(CpuEventSyncObject);
 #endif
+    if (ProcessRecord != NULL)
+        DxgkDereferenceProcessRecord(ProcessRecord);
     if (EscContext != NULL)
         DxgkDereferenceContext(EscContext);
     if (EscDevice != NULL)
