@@ -328,6 +328,14 @@ ContinueWorker:
         if (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WORK)
         {
             Packet = Operation->Payload;
+            /* A DPC may temporarily own the provider dispatch claim after
+             * our earlier peek.  The logical context claim remains valid;
+             * retry it without claiming the same action a second time. */
+            if (Packet != NULL && InterlockedCompareExchange(&Packet->ContextOrderState, 0, 0) == VIDSCH_CONTEXT_ORDER_CLAIMED)
+            {
+                VidSchDispatchClaimedContextOrderPacket(Packet);
+                break;
+            }
             if (Packet == NULL || (!VidSchIsContextOrderPacketDispatchable(Packet) && InterlockedCompareExchange((volatile LONG *)&Packet->ContextOrderAbortStatus, 0, 0) == STATUS_PENDING))
                 break;
         }

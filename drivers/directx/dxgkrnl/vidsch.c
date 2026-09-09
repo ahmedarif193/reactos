@@ -872,6 +872,11 @@ VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
 
     if (Packet == NULL || Packet->OwnerEngine == NULL)
         return;
+    if (Packet->ContextOrderAbortStatus != STATUS_PENDING)
+    {
+        DxgkContextOrderAbortPacket(Packet, Packet->ContextOrderAbortStatus);
+        return;
+    }
     if (InterlockedCompareExchange(&Packet->ContextOrderState, VIDSCH_CONTEXT_ORDER_DISPATCHING, VIDSCH_CONTEXT_ORDER_CLAIMED) != VIDSCH_CONTEXT_ORDER_CLAIMED)
         return;
     Engine = Packet->OwnerEngine;
@@ -883,26 +888,23 @@ VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
     Dispatched = VidSchpKickEngine(Engine, Packet);
     if (!Dispatched)
     {
-        /* dxgmms2 owns removal: it withdraws only packets it never
-          * dispatched and emits their retirement records. */
-        if (!Packet->Kicked)
-        {
-            PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched = VidSchpScheduler(Engine->Adapter);
-
-            if (Sched != NULL)
-            {
-                (VOID)Sched->CancelOwnerPackets(Sched->SchedulerHandle, (ULONGLONG)(ULONG_PTR)Packet->Context, STATUS_CANCELLED);
-                VidSchpDrainRetirements(Engine->Adapter);
-            }
-        }
         /*
-         * The provider retirement owns the scheduler reference and terminal
-         * device-work completion.  The context-stream operation keeps its
-         * separate packet reference until that stream retires; consuming it
-         * here would complete the same work twice and leave the stream with a
-         * dangling payload.
+         * A completion DPC can claim this packet after the worker's peek,
+         * then hand it back because only this worker may dispatch ordered
+         * work.  Failure to acquire that temporary claim is not a failed
+         * submission.  CancelOwnerPackets skips claimed packets: cancelling
+         * the context action here would therefore leave a terminal packet
+         * at the head of the provider queue, blocking every later job.
+         *
+         * Keep the context claim and retry when the holder returns its
+         * provider claim and schedules this context.  Do not self-schedule
+         * while the engine is unavailable; completion, reset and teardown
+         * own the wake-up or cancellation.  A concurrent abort may already
+         * have advanced the state, so never overwrite it.
          */
-        DxgkContextOrderCommitPacket(Packet, STATUS_CANCELLED);
+        (VOID)InterlockedCompareExchange(&Packet->ContextOrderState,
+                                         VIDSCH_CONTEXT_ORDER_CLAIMED,
+                                         VIDSCH_CONTEXT_ORDER_DISPATCHING);
     }
     VidSchpReleaseCall(Engine->Adapter);
 }
