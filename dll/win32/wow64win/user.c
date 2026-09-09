@@ -4288,6 +4288,40 @@ NTSTATUS WINAPI wow64_NtUserQueryInputContext( UINT *args )
     return NtUserQueryInputContext( handle, attr );
 }
 
+#ifdef __REACTOS__
+NTSTATUS WINAPI wow64_NtUserGetImeInfoEx( UINT *args )
+{
+    ROS_IMEINFOEX32 *info32 = get_ptr( &args );
+    UINT search_type = get_ulong( &args );
+    ROS_IMEINFOEX64 info;
+    BOOL ret;
+
+    if (!info32) return NtUserGetImeInfoEx(NULL, search_type);
+    memset(&info, 0, sizeof(info));
+    info.hkl = LongToHandle(info32->hkl);
+    memcpy(&info.ImeInfo, &info32->ImeInfo, sizeof(*info32) - FIELD_OFFSET(ROS_IMEINFOEX32, ImeInfo));
+    ret = NtUserGetImeInfoEx(&info, search_type);
+    if (ret)
+    {
+        info32->hkl = HandleToUlong(info.hkl);
+        memcpy(&info32->ImeInfo, &info.ImeInfo, sizeof(*info32) - FIELD_OFFSET(ROS_IMEINFOEX32, ImeInfo));
+    }
+    return ret;
+}
+
+NTSTATUS WINAPI wow64_NtUserSetImeInfoEx( UINT *args )
+{
+    const ROS_IMEINFOEX32 *info32 = get_ptr( &args );
+    ROS_IMEINFOEX64 info;
+
+    if (!info32) return NtUserSetImeInfoEx(NULL);
+    memset(&info, 0, sizeof(info));
+    info.hkl = LongToHandle(info32->hkl);
+    memcpy(&info.ImeInfo, &info32->ImeInfo, sizeof(*info32) - FIELD_OFFSET(ROS_IMEINFOEX32, ImeInfo));
+    return NtUserSetImeInfoEx(&info);
+}
+#endif
+
 NTSTATUS WINAPI wow64_NtUserQueryWindow( UINT *args )
 {
     HWND hwnd = get_handle( &args );

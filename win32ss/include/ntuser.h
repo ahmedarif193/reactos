@@ -1278,11 +1278,13 @@ typedef struct tagCURSORDATA
 
 typedef struct tagIMEUI
 {
-    PWND spwnd;
-    HIMC hIMC;
-    HWND hwndIMC;
-    HKL hKL;
-    HWND hwndUI;
+    /* Win32k also accesses this user allocation in WoW64 processes. Keep
+     * the handle slots and flag offsets identical for both pointer sizes. */
+    union { HWND hwnd; ULONGLONG hwnd64; };
+    union { HIMC hIMC; ULONGLONG hIMC64; };
+    union { HWND hwndIMC; ULONGLONG hwndIMC64; };
+    union { HKL hKL; ULONGLONG hKL64; };
+    union { HWND hwndUI; ULONGLONG hwndUI64; };
     LONG nCntInIMEProc;
     struct {
         UINT fShowStatus:1;
@@ -1295,6 +1297,9 @@ typedef struct tagIMEUI
     };
     DWORD dwLastStatus;
 } IMEUI, *PIMEUI;
+
+C_ASSERT(FIELD_OFFSET(IMEUI, nCntInIMEProc) == 40);
+C_ASSERT(sizeof(IMEUI) == 56);
 
 typedef struct tagIMEWND
 {
@@ -1774,6 +1779,8 @@ typedef struct _ROS_WINDOWINFO
     DWORD state;
     DWORD state2;
     ATOM atomClassName;
+    WORD fnid;
+    ULONG hImc;
 } ROS_WINDOWINFO, *PROS_WINDOWINFO;
 
 DWORD_PTR
