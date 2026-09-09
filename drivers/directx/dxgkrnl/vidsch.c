@@ -1224,15 +1224,18 @@ VidSchAccountNodeDispatch(
     D3DKMT_QUERYSTATISTICS_DMA_PACKET_TYPE PacketType;
     LARGE_INTEGER Now;
     ULONG NodeOrdinal;
+    KIRQL OldIrql;
 
     Adapter = VidSchpAccountingTarget(Packet, &NodeOrdinal);
     if (Adapter == NULL)
         return;
 
+    KeAcquireSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], &OldIrql);
     Now = KeQueryPerformanceCounter(NULL);
     if (InterlockedCompareExchange64(&Packet->ExecutionChargeStart,
                                      Now.QuadPart, 0) != 0)
     {
+        KeReleaseSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], OldIrql);
         return;
     }
 
@@ -1259,6 +1262,7 @@ VidSchAccountNodeDispatch(
         /* Contextless work belongs to no client, so it is dxgkrnl's own. */
         DxgkNodeStatsCoreOpen(&Adapter->SystemNodeStatistics[NodeOrdinal], PacketType, Now.QuadPart);
     }
+    KeReleaseSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], OldIrql);
 }
 
 VOID
@@ -1270,12 +1274,17 @@ VidSchAccountNodeRetire(
     D3DKMT_QUERYSTATISTICS_DMA_PACKET_TYPE PacketType;
     LARGE_INTEGER Now;
     ULONG NodeOrdinal;
+    KIRQL OldIrql;
 
     Adapter = VidSchpAccountingTarget(Packet, &NodeOrdinal);
     if (Adapter == NULL)
         return;
+    KeAcquireSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], &OldIrql);
     if (InterlockedExchange64(&Packet->ExecutionChargeStart, 0) == 0)
+    {
+        KeReleaseSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], OldIrql);
         return;
+    }
 
     Now = KeQueryPerformanceCounter(NULL);
     PacketType = VidSchpPacketType(Packet);
@@ -1299,6 +1308,7 @@ VidSchAccountNodeRetire(
         DxgkNodeStatsCoreClose(&Adapter->SystemNodeStatistics[NodeOrdinal], PacketType, Now.QuadPart);
     }
     DxgkNodeStatsCoreClose(&Adapter->NodeStatistics[NodeOrdinal], PacketType, Now.QuadPart);
+    KeReleaseSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], OldIrql);
 }
 
 /*
@@ -1372,6 +1382,8 @@ VidSchQueryNodeStatistics(
     _In_ ULONG NodeOrdinal,
     _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_NODE_INFORMATION *Information)
 {
+    KIRQL OldIrql;
+
     if (Adapter == NULL || Information == NULL)
         return STATUS_INVALID_PARAMETER;
     if (NodeOrdinal >= Adapter->NodeCount ||
@@ -1380,11 +1392,13 @@ VidSchQueryNodeStatistics(
         return STATUS_INVALID_PARAMETER;
     }
 
+    KeAcquireSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], &OldIrql);
     VidSchpSnapshotNodeStatistics(
         (ProcessRecord != NULL) ? &ProcessRecord->NodeStatistics[NodeOrdinal]
                                 : &Adapter->NodeStatistics[NodeOrdinal],
         Adapter->PerformanceFrequency,
         Information);
+    KeReleaseSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], OldIrql);
     return STATUS_SUCCESS;
 }
 
@@ -1394,6 +1408,8 @@ VidSchQuerySystemNodeStatistics(
     _In_ ULONG NodeOrdinal,
     _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_NODE_INFORMATION *Information)
 {
+    KIRQL OldIrql;
+
     if (Adapter == NULL || Information == NULL)
         return STATUS_INVALID_PARAMETER;
     if (NodeOrdinal >= Adapter->NodeCount ||
@@ -1402,10 +1418,12 @@ VidSchQuerySystemNodeStatistics(
         return STATUS_INVALID_PARAMETER;
     }
 
+    KeAcquireSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], &OldIrql);
     VidSchpSnapshotNodeStatistics(
         &Adapter->SystemNodeStatistics[NodeOrdinal],
         Adapter->PerformanceFrequency,
         Information);
+    KeReleaseSpinLock(&Adapter->NodeStatisticsLock[NodeOrdinal], OldIrql);
     return STATUS_SUCCESS;
 }
 

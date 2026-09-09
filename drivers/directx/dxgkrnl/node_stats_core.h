@@ -28,6 +28,8 @@
  */
 #define DXGK_NODE_STATS_PACKET_TYPES 4
 
+/* The caller serializes Open, Close and RunningTicks for a node, including
+ * acquisition of Now. Independent atomic fields do not form one snapshot. */
 typedef struct _DXGK_NODE_STATS
 {
     /* Busy time charged to this node, in performance-counter ticks. */
