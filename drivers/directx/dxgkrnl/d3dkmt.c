@@ -4276,6 +4276,16 @@ DxgkpReferenceRenderAllocation(
     Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)AllocationHandle, Adapter, Device, AllocationReference);
     if (!NT_SUCCESS(Status))
         return Status;
+    /* This private physical-submit transport has an allocation list rather
+     * than a user-managed GPUVA residency set. Imported textures may have
+     * pageable backing; admit them through VidMm paging before resolving
+     * their physical addresses and taking the submission pin. */
+    if (!(*AllocationReference)->Resident)
+    {
+        Status = DxgkVidMmMakeResident(*AllocationReference, Adapter);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
     Status = DxgkVidMmAcquireSubmissionResidencyPinEx(*AllocationReference,
                                                        Adapter,
                                                        AllocationListEntry,

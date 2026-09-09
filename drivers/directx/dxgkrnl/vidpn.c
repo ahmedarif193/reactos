@@ -4408,16 +4408,23 @@ DxgkCreateRedirectionSurface(
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     /*
-     * A CDD redirection bitmap is a pageable GDI texture, not a permanently
-     * resident CPU-visible primary.  Keep its authoritative contents in the
-     * VidMm system backing while GDI and the software compositor access it;
-     * a later GPU consumer can make the allocation resident through the
-     * normal paging path.  Besides matching the native type-1 allocation,
-     * this avoids pinning every window surface in the scan-out segment.
+     * CDD keeps CpuAddress in its SURFOBJ for the bitmap's lifetime.  Its
+     * CPU mapping must therefore address the same backing that a shared GPU
+     * consumer reads.  Evicting here maps the system copy permanently, and
+     * later MakeResident moves only the GPU view: subsequent GDI writes
+     * would never reach the imported texture.
+     *
+     * Publish GPU-resident backing for both CDD bitmaps and user-owned
+     * redirection textures.  An ICD can CPU-map the latter before DWM's
+     * first GPU submission.  Forcing eviction at creation leaves that map
+     * pinning the system copy, so admission cannot move it back into a
+     * segment until the ICD unlocks it (possibly only at destruction).
+     * Normal residency policy still applies after publication; do not
+     * introduce an unconditional eviction before the first producer access.
      */
-    if (Allocation->Resident)
+    if (!Allocation->Resident)
     {
-        Status = DxgkVidMmEvict(Allocation);
+        Status = DxgkVidMmMakeResident(Allocation, Adapter);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
     }
