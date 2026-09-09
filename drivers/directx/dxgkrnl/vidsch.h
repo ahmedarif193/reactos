@@ -21,6 +21,7 @@
 
 #ifndef _VIDSCH_H_
 #define _VIDSCH_H_
+#include "presenttrace.h"
 
 /* Pool tag: 'VScD' (DScV in tools) */
 #define TAG_VIDSCH  'DcSV'
@@ -213,6 +214,8 @@ typedef struct _VIDSCH_DMA_PACKET
     PDXGKRNL_DEVICE_WORK        DeviceWork;
     D3DKMT_HANDLE               SignalSyncObject;   /* fired at retire */
     ULONG64                     SignalFenceValue;
+    DPT_SCOPE                   PresentationQueueTrace;
+    DPT_SCOPE                   PresentationRetireTrace;
     D3DDDI_PATCHLOCATIONLIST    InlinePatchList[VIDSCH_INLINE_PATCHES];
     ULONG                       InlinePatchCount;
     WORK_QUEUE_ITEM             CleanupWorkItem;

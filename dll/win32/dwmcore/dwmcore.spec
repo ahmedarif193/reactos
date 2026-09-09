@@ -8,3 +8,4 @@
 1004 cdecl MilCompositionEngine_GetComposedEventId(ptr)
 1005 cdecl MilCompositionEngine_Initialize(long ptr)
 1006 cdecl MilCompositionEngine_Uninitialize(ptr)
+1008 stdcall DwmPresentationTraceDispatch(ptr ptr ptr)

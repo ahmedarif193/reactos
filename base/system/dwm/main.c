@@ -82,6 +82,14 @@ DwmNotificationWindowProc(HWND Window, UINT Message, WPARAM WParam,
             SetWindowLongPtrW(Window, GWLP_USERDATA, (LONG_PTR)Host);
             return TRUE;
 
+        case WM_COPYDATA:
+        {
+            HMODULE Core = GetModuleHandleW(L"dwmcore.dll");
+            LRESULT (WINAPI *Dispatch)(HWND, HWND, const COPYDATASTRUCT *);
+            Dispatch = Core ? (void *)GetProcAddress(Core, "DwmPresentationTraceDispatch") : NULL;
+            return Dispatch ? Dispatch(Window, (HWND)WParam, (const COPYDATASTRUCT *)LParam) : FALSE;
+        }
+
         case WM_QUERYENDSESSION:
             return TRUE;
 

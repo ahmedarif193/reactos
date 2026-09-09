@@ -34,6 +34,7 @@
 
 #include "dxgkrnl_private.h"
 #include "present.h"
+#include "presenttrace.h"
 #include "vidpn.h"
 #include "d3dkmt.h"
 #include <ntddvdeo.h>
@@ -2467,6 +2468,25 @@ DxgkpDisplayDispatch(
             }
 
             Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_VIDEO_DXGK_PRESENT_CAPTURE:
+        {
+            DPT_REQUEST Request;
+            PVOID Buffer = Irp->AssociatedIrp.SystemBuffer;
+            LONG Result;
+            if (!Buffer || Stack->Parameters.DeviceIoControl.InputBufferLength != sizeof(Request) ||
+                Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(DPT_DOMAIN))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+            RtlCopyMemory(&Request, Buffer, sizeof(Request));
+            Result = DptControl(&g_DxgPresentTrace, &Request, Buffer, sizeof(DPT_DOMAIN), 0);
+            Status = Result == 0 ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+            if (NT_SUCCESS(Status))
+                BytesReturned = sizeof(DPT_DOMAIN);
             break;
         }
 

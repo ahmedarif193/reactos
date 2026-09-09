@@ -38,6 +38,7 @@
  */
 
 #include "dxgkrnl_private.h"
+#include "presenttrace.h"
 #include "vidsch.h"
 
 #include "vidsch_policy_core.h"
@@ -400,7 +401,19 @@ VidSchpAdmitPacket(
         Info.SubmissionFenceId = Packet->SubmissionFenceId;
     }
     Packet->SchedulerCookie = Info.PacketCookie;
-    return Sched->AdmitPacket(Sched->SchedulerHandle, &Info, OutFenceId);
+    {
+        NTSTATUS Status;
+        DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_QUEUE);
+        Packet->PresentationQueueTrace = Trace;
+        Status = Sched->AdmitPacket(Sched->SchedulerHandle, &Info, OutFenceId);
+        /* After successful publication, Packet may already have retired. */
+        if (!NT_SUCCESS(Status))
+        {
+            DptEnd(&g_DxgPresentTrace, Trace, FALSE, 0);
+            Packet->PresentationQueueTrace.Epoch = 0;
+        }
+        return Status;
+    }
 }
 
 /* TDR diagnostics: remember what was handed to the miniport.  Called right
@@ -414,6 +427,10 @@ VidSchpRecordDispatch(
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
+    DptEnd(&g_DxgPresentTrace, Packet->PresentationQueueTrace, TRUE, 0);
+    Packet->PresentationQueueTrace.Epoch = 0;
+    if (!Packet->PresentationRetireTrace.Epoch)
+        Packet->PresentationRetireTrace = DptBegin(&g_DxgPresentTrace, DPT_RETIRE);
     Record = &Engine->DispatchRing[Engine->DispatchRingNext % VIDSCH_DISPATCH_RING_SIZE];
     Engine->DispatchRingNext++;
     RtlZeroMemory(Record, sizeof(*Record));
@@ -631,6 +648,11 @@ VidSchpDrainRetirements(_In_ PDXGKRNL_ADAPTER Adapter)
             /* Every record here is a packet the miniport has handed back,
              * whatever the reason, so this is the one place the node's busy
              * charge has to close. */
+            DptEnd(&g_DxgPresentTrace, Packet->PresentationQueueTrace, FALSE, 0);
+            Packet->PresentationQueueTrace.Epoch = 0;
+            DptEnd(&g_DxgPresentTrace, Packet->PresentationRetireTrace,
+                   Records[Index].Reason == Dxgmms2RetireCompleted, 0);
+            Packet->PresentationRetireTrace.Epoch = 0;
             VidSchAccountNodeRetire(Packet);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
             Faulted =
@@ -1109,6 +1131,9 @@ VidSchpDestroyPacket(
         DxgkDereferenceContext((PDXGKRNL_CONTEXT)Packet->Context);
     if (Packet->Device != NULL)
         DxgkDereferenceDevice(Packet->Device);
+    /* Cancelled before dispatch, or destroyed on a fault/teardown path. */
+    DptEnd(&g_DxgPresentTrace, Packet->PresentationQueueTrace, FALSE, 0);
+    DptEnd(&g_DxgPresentTrace, Packet->PresentationRetireTrace, FALSE, 0);
     ExFreePoolWithTag(Packet, TAG_VIDSCH);
 }
 
@@ -2344,15 +2369,19 @@ VidSchpSubmitVirtualPacket(
          * explicit fence, so without this the engine can fetch a partially
          * written batch and dereference a not-yet-written pointer. */
         KeMemoryBarrier();
-        _SEH2_TRY
         {
-            Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual)(Adapter->MiniportDeviceContext, &SubmitArgs);
+            DPT_SCOPE DdiTrace = DptBegin(&g_DxgPresentTrace, DPT_KMD_SUBMIT);
+            _SEH2_TRY
+            {
+                Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual)(Adapter->MiniportDeviceContext, &SubmitArgs);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            DptEnd(&g_DxgPresentTrace, DdiTrace, NT_SUCCESS(Status), 0);
         }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Status = _SEH2_GetExceptionCode();
-        }
-        _SEH2_END;
         if (!NT_SUCCESS(Status))
             KeBugCheckEx(0x119, 0x2, (ULONG_PTR)Status, (ULONG_PTR)&SubmitArgs, (ULONG_PTR)Engine);
     }
@@ -2621,15 +2650,19 @@ VidSchpKickEngine(
             /* Same publication requirement as the virtual submission path. */
             KeMemoryBarrier();
             KeRaiseIrql(DISPATCH_LEVEL, &CallIrql);
-            _SEH2_TRY
             {
-                Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
+                DPT_SCOPE DdiTrace = DptBegin(&g_DxgPresentTrace, DPT_KMD_SUBMIT);
+                _SEH2_TRY
+                {
+                    Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                DptEnd(&g_DxgPresentTrace, DdiTrace, NT_SUCCESS(Status), 0);
             }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-            {
-                Status = _SEH2_GetExceptionCode();
-            }
-            _SEH2_END;
             KeLowerIrql(CallIrql);
 
             if (!NT_SUCCESS(Status))
@@ -3334,8 +3367,8 @@ VidSchSubmitCommandVirtual(
     return STATUS_SUCCESS;
 }
 
-NTSTATUS
-VidSchSubmitCommandTracked(
+static NTSTATUS
+VidSchSubmitCommandTrackedMeasured(
     _In_  PDXGKRNL_ADAPTER Adapter,
     _In_  ULONG            NodeOrdinal,
     _In_  ULONG            EngineOrdinal,
@@ -3663,6 +3696,32 @@ VidSchSubmitCommandTracked(
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+VidSchSubmitCommandTracked(
+    _In_  PDXGKRNL_ADAPTER Adapter,
+    _In_  ULONG            NodeOrdinal,
+    _In_  ULONG            EngineOrdinal,
+    _In_  PDXGKRNL_DMA_BUFFER DmaBuffer,
+    _In_reads_bytes_opt_(DriverPrivateDataSize) CONST VOID *DriverPrivateData,
+    _In_  ULONG            DriverPrivateDataSize,
+    _In_reads_opt_(AllocationListCount) CONST DXGK_ALLOCATIONLIST *AllocationList,
+    _In_  ULONG            AllocationListCount,
+    _In_reads_opt_(PatchLocationListCount) CONST D3DDDI_PATCHLOCATIONLIST *PatchLocationList,
+    _In_  ULONG            PatchLocationListCount,
+    _In_opt_ HANDLE        MiniportDeviceHandle,
+    _In_opt_ HANDLE        MiniportContextHandle,
+    _In_  LONG             Priority,
+    _In_  const DXGKRNL_TRACK_DMA_ARGS *TrackArgs,
+    _In_  ULONG            SubmitFlags,
+    _In_  ULONG            VidPnSourceId,
+    _Out_ ULONG           *OutFenceId)
+{
+    DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_TRACK);
+    NTSTATUS Result = VidSchSubmitCommandTrackedMeasured(Adapter, NodeOrdinal, EngineOrdinal, DmaBuffer, DriverPrivateData, DriverPrivateDataSize, AllocationList, AllocationListCount, PatchLocationList, PatchLocationListCount, MiniportDeviceHandle, MiniportContextHandle, Priority, TrackArgs, SubmitFlags, VidPnSourceId, OutFenceId);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Result), 0);
+    return Result;
 }
 
 /*

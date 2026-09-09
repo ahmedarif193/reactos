@@ -22,6 +22,7 @@
  */
 
 #include "dxgkrnl_private.h"
+#include "presenttrace.h"
 #include <ndk/obfuncs.h>
 #include <ndk/psfuncs.h>
 #include "vidmm.h"
@@ -4308,7 +4309,7 @@ Cleanup:
 }
 
 static NTSTATUS
-DxgkpSubmitVirtGpuCommandEscape(
+DxgkpSubmitVirtGpuCommandEscapeMeasured(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE Device,
     _In_opt_ PDXGKRNL_CONTEXT Context,
@@ -4518,11 +4519,15 @@ DxgkpSubmitVirtGpuCommandEscape(
         Status = STATUS_DELETE_PENDING;
         goto Cleanup;
     }
-    Status = DXGK_CB_FULL(Adapter, DxgkDdiRender)(
+    {
+        DPT_SCOPE DdiTrace = DptBegin(&g_DxgPresentTrace, DPT_KMD_RENDER);
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiRender)(
                  Adapter->SchedulingCaps.MultiEngineAware
                      ? Context->hMiniportContext
                      : Device->hMiniportDevice,
                  &RenderArgs);
+        DptEnd(&g_DxgPresentTrace, DdiTrace, NT_SUCCESS(Status), 0);
+    }
     DxgkReleaseKmdCall(Adapter);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
@@ -4682,7 +4687,11 @@ DxgkpSubmitVirtGpuCommandEscape(
         goto Cleanup;
     }
     DxgkPublishSubmittedFence(Adapter, NodeOrdinal, SubmissionFenceId);
-    Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
+    {
+        DPT_SCOPE DdiTrace = DptBegin(&g_DxgPresentTrace, DPT_KMD_SUBMIT);
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
+        DptEnd(&g_DxgPresentTrace, DdiTrace, NT_SUCCESS(Status), 0);
+    }
     DxgkReleaseKmdCall(Adapter);
 
     if (!NT_SUCCESS(Status))
@@ -4730,6 +4739,26 @@ Cleanup:
         DxgkFreeDmaBuffer(DmaBuffer);
 
     return Status;
+}
+
+static NTSTATUS
+DxgkpSubmitVirtGpuCommandEscape(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_opt_ PDXGKRNL_CONTEXT Context,
+    _In_reads_bytes_(CommandBytes) CONST VOID *CommandBuffer,
+    _In_ UINT CommandBytes,
+    _In_reads_bytes_opt_(ResourceHandleCount * ResourceEntrySize) CONST VOID *ResourceEntries,
+    _In_ UINT ResourceHandleCount,
+    _In_ UINT ResourceEntrySize,
+    _In_ UINT RequestedDmaBufferBytes,
+    _In_ D3DKMT_HANDLE SignalSyncObject,
+    _In_ ULONG64 SignalFenceValue)
+{
+    DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_ADMIT);
+    NTSTATUS Result = DxgkpSubmitVirtGpuCommandEscapeMeasured(Adapter, Device, Context, CommandBuffer, CommandBytes, ResourceEntries, ResourceHandleCount, ResourceEntrySize, RequestedDmaBufferBytes, SignalSyncObject, SignalFenceValue);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Result), CommandBytes);
+    return Result;
 }
 
 /* ========================================================================

@@ -5,6 +5,7 @@ spec2def(dwmcore.dll dwmcore.spec ADD_IMPORTLIB)
 
 add_library(dwmcore MODULE
     dwmcore.c
+    ../../../base/system/dwm/presenttrace.c
     ../../../base/system/dwm/dwm.c
     ../../../base/system/dwm/dxsurface.c
     ${CMAKE_CURRENT_BINARY_DIR}/dwmcore.def)
