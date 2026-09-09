@@ -1257,4 +1257,97 @@ NtOpenThread(OUT PHANDLE ThreadHandle,
     return Status;
 }
 
+/*
+ * Enumerate referenced threads and open the first accessible successor.
+ * The process iterator consumes its previous-thread reference on each step.
+ */
+NTSTATUS
+NTAPI
+NtGetNextThread(
+    _In_ HANDLE ProcessHandle,
+    _In_opt_ HANDLE ThreadHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG HandleAttributes,
+    _In_ ULONG Flags,
+    _Out_ PHANDLE NewThreadHandle)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PEPROCESS Process;
+    PETHREAD Thread = NULL;
+    HANDLE Handle = NULL;
+    ACCESS_STATE AccessState;
+    AUX_ACCESS_DATA AuxData;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode) ProbeForWriteHandle(NewThreadHandle);
+        *NewThreadHandle = NULL;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Flags) return STATUS_INVALID_PARAMETER;
+
+    Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_QUERY_INFORMATION, PsProcessType, PreviousMode, (PVOID *)&Process, NULL);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    if (ThreadHandle)
+    {
+        Status = ObReferenceObjectByHandle(ThreadHandle, 0, PsThreadType, PreviousMode, (PVOID *)&Thread, NULL);
+        if (!NT_SUCCESS(Status)) goto Cleanup;
+        if (PsGetThreadProcess(Thread) != Process)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+    }
+
+    HandleAttributes = ObpValidateAttributes(HandleAttributes, PreviousMode);
+    Status = STATUS_NO_MORE_ENTRIES;
+    while ((Thread = PsGetNextProcessThread(Process, Thread)) != NULL)
+    {
+        Status = SeCreateAccessState(&AccessState, &AuxData, DesiredAccess, &PsThreadType->TypeInfo.GenericMapping);
+        if (!NT_SUCCESS(Status)) break;
+
+        if (SeSinglePrivilegeCheck(SeDebugPrivilege, PreviousMode))
+        {
+            if (AccessState.RemainingDesiredAccess & MAXIMUM_ALLOWED)
+                AccessState.PreviouslyGrantedAccess |= THREAD_ALL_ACCESS;
+            else
+                AccessState.PreviouslyGrantedAccess |= AccessState.RemainingDesiredAccess;
+            AccessState.RemainingDesiredAccess = 0;
+        }
+
+        Status = ObOpenObjectByPointer(Thread, HandleAttributes, &AccessState, 0, PsThreadType, PreviousMode, &Handle);
+        SeDeleteAccessState(&AccessState);
+        if (Status != STATUS_ACCESS_DENIED) break;
+        Status = STATUS_NO_MORE_ENTRIES;
+    }
+
+Cleanup:
+    if (Thread) ObDereferenceObject(Thread);
+    ObDereferenceObject(Process);
+
+    if (NT_SUCCESS(Status))
+    {
+        _SEH2_TRY
+        {
+            *NewThreadHandle = Handle;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+            ObCloseHandle(Handle, PreviousMode);
+        }
+        _SEH2_END;
+    }
+
+    return Status;
+}
+
 /* EOF */

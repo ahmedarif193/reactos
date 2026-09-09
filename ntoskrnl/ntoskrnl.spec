@@ -3372,7 +3372,7 @@
 @ stdcall -arch=arm64 ZwFlushBuffersFileEx(ptr long ptr long ptr)
 @ stub -arch=arm64 ZwGetCachedSigningLevel
 @ stub -arch=arm64 ZwGetNextProcess
-@ stub -arch=arm64 ZwGetNextThread
+@ stdcall -version=0x600+ ZwGetNextThread(ptr ptr long long long ptr)
 @ stub -arch=arm64 ZwGetNotificationResourceManager
 @ stdcall -arch=i386,x86_64,arm64 ZwManagePartition(ptr ptr long ptr long)
 @ stub -arch=arm64 ZwMapViewOfSectionEx
