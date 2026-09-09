@@ -1399,7 +1399,7 @@ struct _DXGKRNL_CONTEXT
      */
     UINT                        NodeOrdinal;
     UINT                        EngineAffinity;
-    INT                         SchedulingPriority;
+    volatile LONG               SchedulingPriority;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1300)
     volatile LONG               InProcessSchedulingPriority;
 #endif

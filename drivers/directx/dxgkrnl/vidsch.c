@@ -384,6 +384,12 @@ VidSchpAdmitPacket(
      */
     Info.EngineOrdinal = Packet->OwnerEngine->SchedulerOrdinal;
     Info.Flags = Flags;
+    /* Snapshot the context at the common admission boundary. Physical
+     * escapes and GPU-VA submissions must not silently become priority zero
+     * just because their caller did not fill the packet's default priority. */
+    if (Packet->Context != NULL)
+        Packet->Priority = InterlockedCompareExchange(
+            &((PDXGKRNL_CONTEXT)Packet->Context)->SchedulingPriority, 0, 0);
     Info.Priority = Packet->Priority;
     Info.PacketCookie = (ULONGLONG)(ULONG_PTR)Packet;
     Info.OwnerCookie = (ULONGLONG)(ULONG_PTR)

@@ -5323,7 +5323,8 @@ DxgkGetContextSchedulingPriority(
     if (Context == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    pData->Priority = Context->SchedulingPriority;
+    pData->Priority = InterlockedCompareExchange(
+        &Context->SchedulingPriority, 0, 0);
     DxgkDereferenceContext(Context);
     return STATUS_SUCCESS;
 }
@@ -5346,7 +5347,7 @@ DxgkSetContextSchedulingPriority(
     if (Context == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    Context->SchedulingPriority = pData->Priority;
+    InterlockedExchange(&Context->SchedulingPriority, pData->Priority);
     DxgkDereferenceContext(Context);
     return STATUS_SUCCESS;
 }
@@ -8625,9 +8626,12 @@ static VOID
 DxgkpEnsureProcessPriorityLock(VOID)
 {
     if (InterlockedCompareExchange(&DxgkProcessPriorityLockReady, 1, 0) == 0)
+    {
         ExInitializeFastMutex(&DxgkProcessPriorityLock);
+        InterlockedExchange(&DxgkProcessPriorityLockReady, 2);
+    }
     else
-        while (InterlockedCompareExchange(&DxgkProcessPriorityLockReady, 1, 1) != 1)
+        while (InterlockedCompareExchange(&DxgkProcessPriorityLockReady, 0, 0) != 2)
             YieldProcessor();
 }
 
@@ -8683,6 +8687,15 @@ DxgkSetProcessSchedulingPriorityClass(
 
     DxgkpEnsureProcessPriorityLock();
     ExAcquireFastMutex(&DxgkProcessPriorityLock);
+    /* Process cleanup takes this same lock after ExitStatus is published.
+     * A racing setter must not recreate a record after that cleanup. */
+    if (PsGetProcessExitStatus(Process) != STATUS_PENDING)
+    {
+        ExReleaseFastMutex(&DxgkProcessPriorityLock);
+        if (Referenced)
+            ObDereferenceObject(Process);
+        return STATUS_PROCESS_IS_TERMINATING;
+    }
     for (Entry = DxgkProcessPriorityList.Flink; Entry != &DxgkProcessPriorityList; Entry = Entry->Flink)
     {
         PDXGKRNL_PROCESS_PRIORITY Existing = CONTAINING_RECORD(Entry, DXGKRNL_PROCESS_PRIORITY, Link);
@@ -8695,17 +8708,19 @@ DxgkSetProcessSchedulingPriorityClass(
     }
     if (Record == NULL)
     {
-        ExReleaseFastMutex(&DxgkProcessPriorityLock);
+        /* Nonpaged allocation is legal at the mutex's APC_LEVEL. Keep the
+         * lookup and insertion atomic so two first setters cannot create
+         * duplicate records with conflicting priorities for one process. */
         Record = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Record), TAG_DXGK_CAPTURE);
         if (Record == NULL)
         {
+            ExReleaseFastMutex(&DxgkProcessPriorityLock);
             if (Referenced)
                 ObDereferenceObject(Process);
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         RtlZeroMemory(Record, sizeof(*Record));
         Record->Process = Process;
-        ExAcquireFastMutex(&DxgkProcessPriorityLock);
         InsertTailList(&DxgkProcessPriorityList, &Record->Link);
     }
     Record->Class = Class;
@@ -8765,8 +8780,9 @@ DxgkProcessPriorityCleanup(
     PLIST_ENTRY Entry;
     PLIST_ENTRY Next;
 
-    if (InterlockedCompareExchange(&DxgkProcessPriorityLockReady, 1, 1) != 1)
+    if (InterlockedCompareExchange(&DxgkProcessPriorityLockReady, 0, 0) == 0)
         return;
+    DxgkpEnsureProcessPriorityLock();
     InitializeListHead(&Removed);
     ExAcquireFastMutex(&DxgkProcessPriorityLock);
     for (Entry = DxgkProcessPriorityList.Flink; Entry != &DxgkProcessPriorityList; Entry = Next)
