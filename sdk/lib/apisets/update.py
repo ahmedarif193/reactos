@@ -24,6 +24,9 @@ REDIRECT_HOSTS = {
 # These contracts are implemented by a more specific ReactOS host than the
 # module-wide fallback above. Contract overrides always take precedence.
 CONTRACT_HOST_OVERRIDES = {
+    'api-ms-win-core-localregistry-l1-1-0.dll': 'kernelbase.dll',
+    'api-ms-win-core-processthreads-l1-1-0.dll': 'kernelbase.dll',
+    'api-ms-win-eventing-provider-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-core-registry-l1-1-0.dll': 'advapi32.dll',
     'api-ms-win-core-registry-l1-1-2.dll': 'advapi32.dll',
     'api-ms-win-core-version-l1-1-0.dll': 'version.dll',
