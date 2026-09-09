@@ -218,7 +218,8 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             FO_FILE_MODIFIED |
             FO_FILE_SIZE_CHANGED;
 
-        if (IrpSp->FileObject->Flags & FO_SYNCHRONOUS_IO)
+        /* A cache flush must not change the application's file pointer. */
+        if (!PagingIo && (IrpSp->FileObject->Flags & FO_SYNCHRONOUS_IO))
         {
             // Advance file pointer
             IrpSp->FileObject->CurrentByteOffset.QuadPart = ByteOffset.QuadPart + Length;

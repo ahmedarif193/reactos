@@ -555,7 +555,9 @@ ReadDone:
             }
         }
 
-        if (FileObject->Flags & FO_SYNCHRONOUS_IO)
+        /* Cache page-ins and read-ahead use this file object too. Their
+         * explicit offsets must not move the application's file pointer. */
+        if (!PagingIo && (FileObject->Flags & FO_SYNCHRONOUS_IO))
         {
             FileObject->CurrentByteOffset.QuadPart =
                 ReadOffset.QuadPart + BytesRead;
