@@ -11,8 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define GLMARK2_TIMEOUT_MILLISECONDS 60000
-/* The full suite is 31 scenes at glmark2's default 10 s each. */
+/* Allow time for the full suite and scene initialization. */
 #define GLMARK2_FULL_TIMEOUT_MILLISECONDS 600000
 #define GLMARK2_OUTPUT_LINE_LENGTH 512
 typedef enum _RUNNER_SCENE
@@ -249,7 +248,7 @@ main(int argc, char **argv)
     DWORD WaitStatus;
     UINT Length;
     BOOL Forced = FALSE;
-    BOOL FullSuite = FALSE;
+    BOOL FullSuite;
     DWORD TimeoutMilliseconds;
     int Argument;
     CHAR BenchList[MAX_PATH * 4];
@@ -260,15 +259,15 @@ main(int argc, char **argv)
     RUNNER_OUTPUT_SCAN OutputScan;
 
     ZeroMemory(&OutputScan, sizeof(OutputScan));
-    /* --full runs glmark2's complete default benchmark list; the default
-     * four-scene subset is the fast reproduction used for bring-up. */
+    /* Run glmark2's complete default benchmark list unless --bench selects
+     * a custom sequence. --full remains accepted for existing launchers. */
     /* --bench SPEC (repeatable) runs exactly the named scenes instead: an
      * isolated reproduction of one scene sequence with a short boot. */
     BenchList[0] = '\0';
     for (Argument = 1; Argument < argc; Argument++)
     {
         if (strcmp(argv[Argument], "--full") == 0)
-            FullSuite = TRUE;
+            continue;
         else if (strcmp(argv[Argument], "--bench") == 0 && Argument + 1 < argc)
         {
             size_t Used = strlen(BenchList);
@@ -286,13 +285,13 @@ main(int argc, char **argv)
             BenchCount++;
         }
     }
-    if (BenchCount == 0)
+    FullSuite = (BenchCount == 0);
+    if (FullSuite)
         ExpectedSceneMask = RUNNER_SCENE_ALL_MASK;
     if (BenchCount != 0)
         TimeoutMilliseconds = 60000 + BenchCount * 20000;
     else
-        TimeoutMilliseconds = FullSuite ? GLMARK2_FULL_TIMEOUT_MILLISECONDS
-                                        : GLMARK2_TIMEOUT_MILLISECONDS;
+        TimeoutMilliseconds = GLMARK2_FULL_TIMEOUT_MILLISECONDS;
 
     Length = GetSystemDirectoryA(SystemDirectory, sizeof(SystemDirectory));
     if (Length == 0 || Length >= sizeof(SystemDirectory))
@@ -316,12 +315,7 @@ main(int argc, char **argv)
                   "--swap-mode immediate%s",
                   ApplicationPath,
                   DataPath,
-                  BenchCount != 0 ? BenchList :
-                  FullSuite ? "" :
-                      " -b ideas:speed=duration:duration=3.0"
-                      " -b jellyfish:duration=3.0"
-                      " -b terrain:duration=3.0"
-                      " -b shadow:duration=3.0") < 0)
+                  BenchList) < 0)
     {
         RunnerPrint("RPI5_GLMARK2_ERROR path_too_long\n");
         return 1;
@@ -357,7 +351,7 @@ main(int argc, char **argv)
                 "commit=22c527cb0556f3a1ac4445aaa52cc532760928d5 "
                 "suite=%s bench_count=%u expected_scene_mask=0x%lx "
                 "size=800x600 swap_mode=immediate\n",
-                FullSuite ? "full" : BenchCount != 0 ? "custom" : "four",
+                FullSuite ? "full" : "custom",
                 BenchCount,
                 ExpectedSceneMask);
     if (!CreateProcessA(ApplicationPath,
