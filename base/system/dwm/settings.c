@@ -146,11 +146,13 @@ DwmSettingsApplyWindow(const DWM_SETTINGS *Settings, DWM_WIN *Window)
         Window->LayerFlags &= ~DWM_WINDOW_NC_SHADOW;
     if (!(Settings->Effects & DWM_EFFECT_CORNERS))
         Window->CornerRadius = 0;
+    Window->BlurFlags &= ~DWM_BLUR_DISABLE_FILTER;
     if (!(Settings->Effects & DWM_EFFECT_BLUR))
     {
         /* DWM_BLUR_ENABLE also marks textures with meaningful pixel alpha.
          * Suppress filtering regions without changing that blending rule. */
         Window->BlurFlags &= ~DWM_BLUR_REGION_ENTIRE_WINDOW;
+        Window->BlurFlags |= DWM_BLUR_DISABLE_FILTER;
         Window->BlurRectCount = 0;
     }
     if (!(Settings->Effects & DWM_EFFECT_ACRYLIC) && Window->BackdropType == DWM_BACKDROP_TRANSIENT)

@@ -244,6 +244,8 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_BLUR_ENABLE                  0x00000001u
 #define DWM_BLUR_REGION_ENTIRE_WINDOW    0x00000002u
 #define DWM_BLUR_TRANSITION_ON_MAXIMIZED 0x00000004u
+/* Compositor-local preference; does not change application pixel alpha. */
+#define DWM_BLUR_DISABLE_FILTER          0x00000008u
 #define DWM_BLUR_REQUEST_ENABLE          0x00000001u
 #define DWM_BLUR_REQUEST_REGION          0x00000002u
 #define DWM_BLUR_REQUEST_TRANSITION      0x00000004u

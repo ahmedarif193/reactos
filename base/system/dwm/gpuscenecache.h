@@ -74,12 +74,12 @@ DwmGpuSceneWindowBounds(const DWM_WIN *Window, const DWM_GPU_SCENE_SPACE *Space,
                  Window->BlurRectCount != 0);
     DWM_GPU_WINDOW_GEOMETRY Geometry, Client;
     LONGLONG Left, Top, Right, Bottom;
-    ULONG Radius = max(Glass ? DWM_GPU_MATERIAL_BLUR_RADIUS : 0,
+    ULONG Radius = max(Glass ? DwmGpuMaterialBlurRadius(Window) : 0,
                        Blur ? Space->BlurRadius : 0);
 
     if (!DwmGpuWindowGeometry(Window, Space->OriginX, Space->OriginY, &Geometry) ||
         ((Window->LayerFlags & DWM_LWA_ALPHA) && Window->Alpha == 0) ||
-        (Capture && Radius == 0))
+        (Capture && !Glass && !Blur))
         return FALSE;
     Left = Geometry.Left; Top = Geometry.Top;
     Right = Left + Geometry.Width; Bottom = Top + Geometry.Height;
@@ -99,7 +99,7 @@ DwmGpuSceneWindowBounds(const DWM_WIN *Window, const DWM_GPU_SCENE_SPACE *Space,
         DwmGpuClientGeometry(Window, &Geometry, &Client) &&
         (!Capture || (Glass && Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW)))
     {
-        ULONG Margin = Capture ? DWM_GPU_MATERIAL_BLUR_RADIUS : 0;
+        ULONG Margin = Capture ? DwmGpuMaterialBlurRadius(Window) : 0;
 
         Left = min(Left, Client.Left - Margin); Top = min(Top, Client.Top - Margin);
         Right = max(Right, Client.Left + Client.Width + Margin);

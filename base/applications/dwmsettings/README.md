@@ -14,13 +14,16 @@ Every checkbox saves on `BN_CLICKED`. The panel uses native Win32 controls.
 | Window animations | `SPI_SETANIMATION`, `HKCU\Control Panel\Desktop\WindowMetrics\MinAnimate`, `REG_SZ` `0` / `1` | win32k starts or cancels animation geometry; DWM renders the transformed GPU textures |
 | Window shadows | `HKCU\Software\ReactOS\DWM\EnableShadows`, `REG_DWORD` `0` / `1` | Enables the existing GPU window shadow |
 | Rounded window corners | Same key, `EnableRoundedCorners`, `REG_DWORD` | Enables the existing GPU corner mask |
-| Application blur behind windows | Same key, `EnableBlur`, `REG_DWORD` | Enables explicit application blur-behind requests while retaining per-pixel alpha |
-| Translucent window backgrounds | Same key, `EnableAcrylic`, `REG_DWORD` | Enables the existing transient backdrop material and its GPU blur |
+| Blur behind windows | Same key, `EnableBlur`, `REG_DWORD` | Controls application blur and glass backdrop filtering, including Taskmgr11 and Explorer; disabling it keeps sharp, tinted transparency |
+| Translucent window backgrounds | Same key, `EnableAcrylic`, `REG_DWORD` | Enables the existing transient backdrop material; its filtering follows `EnableBlur` |
 
 The four ReactOS preferences default to enabled when absent. They control GPU
 composition; they do not enable software effects. Window alpha and color-key
-semantics remain application-owned. Explicit blur and translucent material
-blur have independent switches. Mica and Mica Alt are not exposed because
+semantics remain application-owned. Blur and translucent backgrounds have
+independent switches: disabling blur preserves the material's tint and opacity
+while sampling the sharp backdrop entirely on the GPU; disabling translucent
+backgrounds makes the material opaque. Both changes apply to open windows.
+Mica and Mica Alt are not exposed because
 their wallpaper material is not implemented by the active GPU renderer.
 
 The Windows-compatible animation API now loads and saves `MinAnimate` in
