@@ -461,11 +461,9 @@ KiArm64SyncVectorCommon:
     str xzr, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     str xzr, [sp, #ARM64_EARLY_STATE_EXC_PTR]
 
-    /* Allow IRQs during the C handler only when the interrupted context had them enabled (SPSR.I clear) */
-    tbnz x14, #7, .Lsync_keep_irq_masked
-    msr daifclr, #0x2
-.Lsync_keep_irq_masked:
-    isb
+    /* C releases its per-CPU recursion guard after constructing the frames,
+     * then restores the interrupted IRQ mask. Do not allow scheduling while
+     * that guard belongs to an unfinished frame on this CPU. */
 
     /* Call C handler */
     mov x0, sp
