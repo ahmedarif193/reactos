@@ -5939,10 +5939,12 @@ DxgkpVidMmTryCommitDestroyBatch(
             ASSERT(Resource != NULL);
             ASSERT(Resource->AllocationCount == 0);
             ASSERT(IsListEmpty(&Resource->AllocationList));
-            ASSERT(!IsListEmpty(&Resource->GlobalResourceEntry));
             InterlockedExchange(&Resource->Destroying, 1);
-            RemoveEntryList(&Resource->GlobalResourceEntry);
-            InitializeListHead(&Resource->GlobalResourceEntry);
+            if (!IsListEmpty(&Resource->GlobalResourceEntry))
+            {
+                RemoveEntryList(&Resource->GlobalResourceEntry);
+                InitializeListHead(&Resource->GlobalResourceEntry);
+            }
         }
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
@@ -6567,6 +6569,22 @@ DxgkpVidMmDestroyAllocationList(
                 InitializeListHead(&Allocation->ResourceEntry);
                 Resource->AllocationCount--;
             }
+        }
+        if (Batch->DestroyResourceWrapper)
+        {
+            /* The batch owns the resource handle reference from this point,
+             * including when the GPU drain below times out. Unpublish the
+             * parent with its allocations so the wrapper cannot interpret
+             * accepted, deferred destruction as permission to free it now.
+             * Miniport destruction and reference release remain with the
+             * batch, after retirement or the adapter-stop boundary. */
+            ASSERT(Resource != NULL);
+            ASSERT(Resource->AllocationCount == 0);
+            ASSERT(IsListEmpty(&Resource->AllocationList));
+            ASSERT(Batch->ResourceHandleReferenceOwned != 0);
+            InterlockedExchange(&Resource->Destroying, 1);
+            RemoveEntryList(&Resource->GlobalResourceEntry);
+            InitializeListHead(&Resource->GlobalResourceEntry);
         }
     }
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
