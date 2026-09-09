@@ -478,8 +478,10 @@ ReapplyThemeColors(VOID)
     if (pReapply)
     {
         hr = pReapply();
-        ERR("THEMECOLORS: ReapplyThemeSysMetrics returned 0x%lx, WindowText now %06lx\n",
-            hr, GetSysColor(COLOR_WINDOWTEXT));
+        if (FAILED(hr))
+            ERR("ReapplyThemeSysMetrics failed: 0x%lx\n", hr);
+        else
+            TRACE("ReapplyThemeSysMetrics succeeded, WindowText now %06lx\n", GetSysColor(COLOR_WINDOWTEXT));
     }
     else
     {

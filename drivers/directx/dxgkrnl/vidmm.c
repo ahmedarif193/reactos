@@ -450,7 +450,7 @@ DxgkpVidMmAllocateBacking(
                 if (Pass == 0)
                 {
                     if ((InterlockedIncrement(&LowCount) % 256) == 1)
-                        DPRINT1("VidMm backing: %ld low (<4G) MDL allocations, %ld high, %ld contiguous WC, %ld pool fallbacks\n", LowCount, HighCount, WcContiguousCount, PoolCount);
+                        DPRINT("VidMm backing: %ld low (<4G) MDL allocations, %ld high, %ld contiguous WC, %ld pool fallbacks\n", LowCount, HighCount, WcContiguousCount, PoolCount);
                 }
                 else if ((InterlockedIncrement(&HighCount) % 256) == 1)
                 {

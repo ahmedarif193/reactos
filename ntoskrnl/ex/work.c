@@ -428,7 +428,7 @@ ExpCheckDynamicThreadCount(VOID)
         if (ExpNewThreadNecessary((WORK_QUEUE_TYPE)i))
         {
             /* Create a new thread */
-            DPRINT1("EX: Creating new dynamic thread as requested\n");
+            DPRINT("EX: Creating new dynamic thread as requested\n");
             ExpCreateWorkerThread(i, TRUE);
         }
     }
