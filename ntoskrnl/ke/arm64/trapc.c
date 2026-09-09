@@ -1372,12 +1372,19 @@ KiArm64HandleSynchronousException(
         }
     }
 
+    /* The per-CPU guard protects only nonpageable frame construction. Keep
+     * IRQs masked until it is released: a scheduler interrupt could otherwise
+     * move this thread and leave a guard that belongs to another thread. */
+    TrapFrame = &Context->TrapFrame;
+    KiArm64InitializeTrapFrame(Context, TrapFrame);
+    KiArm64ClearTrapActive();
+    if ((Context->State.Spsr & 0x80) == 0)
+        _enable();
+
     switch (EsrClass)
     {
         case ESR_EC_FP_TRAP:  /* FP/ASIMD access when trapped */
         {
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
             break;
         }
 
@@ -1386,8 +1393,6 @@ KiArm64HandleSynchronousException(
         {
             EXCEPTION_RECORD ExceptionRecord;
 
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
             PreviousMode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
             RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
@@ -1405,8 +1410,6 @@ KiArm64HandleSynchronousException(
 	        case 0x11: /* SVC from lower EL */
 	        case 0x15: /* SVC from same EL */
 	        {
-	            TrapFrame = &Context->TrapFrame;
-	            KiArm64InitializeTrapFrame(Context, TrapFrame);
             return KiArm64HandleSystemService(Context);
         }
 
@@ -1416,8 +1419,6 @@ KiArm64HandleSynchronousException(
 	            EXCEPTION_RECORD ExceptionRecord;
             KIRQL AbortIrql;
 
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
 
 	            PreviousMode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 	            WriteAccess = FALSE;
@@ -1568,8 +1569,6 @@ KiArm64HandleSynchronousException(
                 KPROCESSOR_MODE Mode;
                 BOOLEAN IsWrite = (Iss & (1u << 6)) != 0;
 
-                TrapFrame = &Context->TrapFrame;
-                KiArm64InitializeTrapFrame(Context, TrapFrame);
                 Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
                 RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
@@ -1591,8 +1590,6 @@ KiArm64HandleSynchronousException(
             }
 
 
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
             PreviousMode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
             /* An unsupported exclusive/atomic access is not a page fault.
@@ -2185,8 +2182,6 @@ KiArm64HandleSynchronousException(
             EXCEPTION_RECORD ExceptionRecord;
             KPROCESSOR_MODE Mode;
 
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
 
             Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
@@ -2216,8 +2211,6 @@ KiArm64HandleSynchronousException(
              * KiSErrorHandler will BUGCHECK for kernel faults. For user faults
              * it requests process termination and returns TRUE to continue.
              */
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
 
             if (KiSErrorHandler(TrapFrame))
             {
@@ -2240,8 +2233,6 @@ KiArm64HandleSynchronousException(
             BOOLEAN IsWatchpoint = (EsrClass == 0x34) || (EsrClass == 0x35);
             ULONG64 WatchpointAddress = 0;
 
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
 
             Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
@@ -2290,8 +2281,6 @@ KiArm64HandleSynchronousException(
                 ULONG DebugService = (ULONG)Context->State.Registers.X[0];
                 ULONG64 ServiceElr;
 
-                TrapFrame = &Context->TrapFrame;
-                KiArm64InitializeTrapFrame(Context, TrapFrame);
 
                 switch (DebugService)
                 {
@@ -2385,8 +2374,6 @@ KiArm64HandleSynchronousException(
                 goto HandledExit;
             }
 
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
 
             {
                 EXCEPTION_RECORD ExceptionRecord;
@@ -2446,8 +2433,6 @@ KiArm64HandleSynchronousException(
             EXCEPTION_RECORD ExceptionRecord;
             KPROCESSOR_MODE Mode;
 
-            TrapFrame = &Context->TrapFrame;
-            KiArm64InitializeTrapFrame(Context, TrapFrame);
 
             Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
             if (KiArm64TryEmulateCurrentEl(Context, TrapFrame, Mode)) goto HandledExit;
