@@ -33,9 +33,14 @@ struct _EXPAND_DEVICE
 #define EXPAND_NO_ROOM          8
 #define EXPAND_BAD_PARAMETER    9
 #define EXPAND_TOO_LARGE        10
+#define EXPAND_STALE_GPT        11
+
+#define EXPAND_TABLE_MBR        0
+#define EXPAND_TABLE_GPT        1
 
 typedef struct _EXPAND_PLAN
 {
+    uint32_t TableStyle;
     uint32_t PartitionSlot;
     uint32_t PartitionNumber;
     uint32_t PartitionType;

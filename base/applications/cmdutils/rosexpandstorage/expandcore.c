@@ -28,6 +28,19 @@
 #define MBR_TYPE_EXTENDED_LBA 0x0F
 #define MBR_TYPE_GPT          0xEE
 
+/*
+ * "EFI PART", the GPT header signature, as it appears on disk.  A GPT keeps
+ * two copies: the primary header in LBA 1 and a backup in the very last
+ * sector, each followed (or preceded) by 32 sectors of partition entries.
+ */
+#define GPT_SIGNATURE         0x5452415020494645ULL
+#define GPT_SIGNATURE_LOW     0x20494645
+#define GPT_SIGNATURE_HIGH    0x54524150
+#define GPT_RESERVED_SECTORS  33
+#define GPT_HEADER_MIN_SIZE   92
+#define GPT_ENTRY_MIN_SIZE    128
+#define GPT_MAX_ENTRY_BYTES   32768
+
 #define NTFS_FILE_MAGIC       0x454C4946
 #define NTFS_RECORD_BITMAP    6
 #define NTFS_RECORD_BADCLUS   8
@@ -56,6 +69,34 @@ typedef struct _MBR_ENTRY
     uint32_t StartLba;
     uint32_t SectorCount;
 } MBR_ENTRY;
+
+typedef struct _GPT_HEADER
+{
+    uint64_t Signature;
+    uint32_t Revision;
+    uint32_t HeaderSize;
+    uint32_t HeaderCrc32;
+    uint32_t Reserved;
+    uint64_t MyLba;
+    uint64_t AlternateLba;
+    uint64_t FirstUsableLba;
+    uint64_t LastUsableLba;
+    uint8_t  DiskGuid[16];
+    uint64_t EntryArrayLba;
+    uint32_t EntryCount;
+    uint32_t EntrySize;
+    uint32_t EntryArrayCrc32;
+} GPT_HEADER;
+
+typedef struct _GPT_ENTRY
+{
+    uint8_t  TypeGuid[16];
+    uint8_t  UniqueGuid[16];
+    uint64_t StartingLba;
+    uint64_t EndingLba;
+    uint64_t Attributes;
+    uint8_t  Name[72];
+} GPT_ENTRY;
 
 typedef struct _NTFS_BOOT_SECTOR
 {
@@ -161,6 +202,10 @@ ExpandStatusText(int Status)
         case EXPAND_NO_ROOM: return "no room for the new run list";
         case EXPAND_BAD_PARAMETER: return "invalid parameter";
         case EXPAND_TOO_LARGE: return "the requested size does not fit an MBR partition entry";
+        case EXPAND_STALE_GPT:
+            return "the disk still carries GPT metadata (a leftover header in "
+                   "LBA 1 or the last sector); erase it before expanding, or "
+                   "firmware will keep reading the stale table";
         default: return "unknown error";
     }
 }
@@ -591,6 +636,411 @@ ReadMbr(EXPAND_DEVICE* Device, uint8_t* Sector)
     return EXPAND_OK;
 }
 
+/*
+ * GPT protects both of its copies with CRC32 (the reflected IEEE polynomial),
+ * over the header with its own CRC field taken as zero, and separately over
+ * the whole partition entry array.  Firmware checks both, so a table written
+ * without recomputing them reads as corrupt and is silently discarded in
+ * favour of the other copy -- or of nothing at all.
+ */
+static uint32_t
+Crc32(const uint8_t* Data, uint32_t Length)
+{
+    uint32_t Crc = 0xFFFFFFFFu;
+    uint32_t i;
+    int Bit;
+
+    for (i = 0; i < Length; i++)
+    {
+        Crc ^= Data[i];
+        for (Bit = 0; Bit < 8; Bit++)
+            Crc = (Crc >> 1) ^ (0xEDB88320u & (uint32_t)-(int32_t)(Crc & 1));
+    }
+    return ~Crc;
+}
+
+static uint32_t
+GptHeaderCrc(const GPT_HEADER* Header)
+{
+    uint8_t Copy[sizeof(*Header)];
+    uint32_t Size = Header->HeaderSize;
+
+    if (Size != sizeof(Copy))
+        return 0;
+    memcpy(Copy, Header, Size);
+    /* The field is defined to read as zero while its own value is computed. */
+    memset(Copy + 16, 0, 4);
+    return Crc32(Copy, Size);
+}
+
+static int
+GptReadHeader(EXPAND_DEVICE* Device, uint64_t Lba, GPT_HEADER* Header)
+{
+    uint8_t Sector[MAX_SECTOR_SIZE];
+
+    if (!Device->Read(Device->Context, Lba * Device->SectorSize,
+                      Device->SectorSize, Sector))
+    {
+        return EXPAND_IO_ERROR;
+    }
+    memcpy(Header, Sector, sizeof(*Header));
+
+    if (Header->Signature != GPT_SIGNATURE)
+        return EXPAND_NO_MBR;
+    /* Only the fixed header is retained and rewritten by this implementation.
+     * Reject extensions before computing a CRC over the captured structure. */
+    if (Header->HeaderSize != sizeof(*Header))
+    {
+        return EXPAND_CORRUPT;
+    }
+    if (GptHeaderCrc(Header) != Header->HeaderCrc32)
+        return EXPAND_CORRUPT;
+    if (Header->EntrySize < GPT_ENTRY_MIN_SIZE ||
+        (Header->EntrySize % 8) != 0 ||
+        Header->EntryCount == 0 ||
+        (uint64_t)Header->EntryCount * Header->EntrySize > GPT_MAX_ENTRY_BYTES)
+    {
+        return EXPAND_CORRUPT;
+    }
+    return EXPAND_OK;
+}
+
+static int
+GptReadEntries(EXPAND_DEVICE* Device, const GPT_HEADER* Header, uint8_t* Entries)
+{
+    uint32_t Bytes = Header->EntryCount * Header->EntrySize;
+
+    if (!Device->Read(Device->Context, Header->EntryArrayLba * Device->SectorSize,
+                      Bytes, Entries))
+    {
+        return EXPAND_IO_ERROR;
+    }
+    if (Crc32(Entries, Bytes) != Header->EntryArrayCrc32)
+        return EXPAND_CORRUPT;
+    return EXPAND_OK;
+}
+
+static GPT_ENTRY*
+GptEntryAt(uint8_t* Entries, const GPT_HEADER* Header, uint32_t Index)
+{
+    return (GPT_ENTRY*)(Entries + (uint64_t)Index * Header->EntrySize);
+}
+
+static int
+GptEntryUsed(const GPT_ENTRY* Entry)
+{
+    int i;
+
+    /* An unused slot is an all-zero type GUID. */
+    for (i = 0; i < 16; i++)
+    {
+        if (Entry->TypeGuid[i] != 0)
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * Where the last usable sector falls once the backup copy is placed at the end
+ * of *this* disk.  A GPT written for a smaller disk leaves its backup stranded
+ * mid-disk, so the value is always recomputed rather than trusted.
+ */
+static uint64_t
+GptLastUsable(EXPAND_DEVICE* Device, const GPT_HEADER* Header)
+{
+    uint64_t DiskSectors = Device->DiskSize / Device->SectorSize;
+    uint64_t EntrySectors;
+
+    EntrySectors = ((uint64_t)Header->EntryCount * Header->EntrySize +
+                    Device->SectorSize - 1) / Device->SectorSize;
+    if (DiskSectors < EntrySectors + 2)
+        return 0;
+    /* Backup header in the last sector, its entry array immediately before. */
+    return DiskSectors - EntrySectors - 2;
+}
+
+/*
+ * Chooses the GPT partition to grow and how far it may run.  Only the extent
+ * is decided here; the NTFS sizing that follows is identical for either table
+ * style, because it works from the partition's byte range alone.
+ */
+static int ExpandFinishPlan(EXPAND_DEVICE* Device, EXPAND_PLAN* Plan,
+                            uint64_t MinimumGain);
+
+static int
+GptBuildPlan(EXPAND_DEVICE* Device,
+             uint32_t PartitionNumber,
+             uint64_t PadSectors,
+             EXPAND_PLAN* Plan,
+             uint64_t* PartitionSectors)
+{
+    uint8_t Entries[GPT_MAX_ENTRY_BYTES];
+    GPT_HEADER Header;
+    GPT_ENTRY* Entry;
+    uint64_t LastUsable;
+    uint64_t EndLba;
+    uint64_t TargetEnd;
+    uint32_t Index;
+    uint32_t Ordinal = 0;
+    int Target = -1;
+    int Status;
+
+    /*
+     * Prefer the primary copy, but a disk whose primary was overwritten is
+     * still described completely by the backup, which is the copy firmware
+     * would fall back to as well.
+     */
+    Status = GptReadHeader(Device, 1, &Header);
+    if (Status != EXPAND_OK)
+    {
+        uint64_t DiskSectors = Device->DiskSize / Device->SectorSize;
+
+        if (DiskSectors == 0)
+            return EXPAND_CORRUPT;
+        Status = GptReadHeader(Device, DiskSectors - 1, &Header);
+        if (Status != EXPAND_OK)
+            return Status;
+    }
+
+    Status = GptReadEntries(Device, &Header, Entries);
+    if (Status != EXPAND_OK)
+        return Status;
+
+    for (Index = 0; Index < Header.EntryCount; Index++)
+    {
+        Entry = GptEntryAt(Entries, &Header, Index);
+        if (!GptEntryUsed(Entry) || Entry->EndingLba < Entry->StartingLba)
+            continue;
+
+        Ordinal++;
+
+        if (PartitionNumber != 0)
+        {
+            if (Ordinal == PartitionNumber)
+            {
+                Target = (int)Index;
+                Plan->PartitionNumber = Ordinal;
+            }
+        }
+        else if (Target < 0 ||
+                 Entry->StartingLba >
+                     GptEntryAt(Entries, &Header, (uint32_t)Target)->StartingLba)
+        {
+            Target = (int)Index;
+            Plan->PartitionNumber = Ordinal;
+        }
+    }
+
+    if (Target < 0)
+        return EXPAND_BAD_PARAMETER;
+
+    Entry = GptEntryAt(Entries, &Header, (uint32_t)Target);
+    TargetEnd = Entry->EndingLba;
+
+    for (Index = 0; Index < Header.EntryCount; Index++)
+    {
+        GPT_ENTRY* Other = GptEntryAt(Entries, &Header, Index);
+
+        if (Index == (uint32_t)Target || !GptEntryUsed(Other))
+            continue;
+        if (Other->EndingLba > TargetEnd)
+            return EXPAND_NOT_LAST;
+    }
+
+    LastUsable = GptLastUsable(Device, &Header);
+    if (LastUsable <= Entry->StartingLba)
+        return EXPAND_BAD_PARAMETER;
+
+    EndLba = LastUsable;
+    if (PadSectors != 0)
+    {
+        if (EndLba <= PadSectors)
+            return EXPAND_BAD_PARAMETER;
+        EndLba -= PadSectors;
+    }
+    if (EndLba < Entry->EndingLba)
+        EndLba = Entry->EndingLba;
+    if (EndLba <= Entry->StartingLba)
+        return EXPAND_BAD_PARAMETER;
+
+    Plan->TableStyle = EXPAND_TABLE_GPT;
+    Plan->PartitionSlot = (uint32_t)Target;
+    Plan->PartitionType = 0;
+    Plan->PartitionStart = Entry->StartingLba * Device->SectorSize;
+    Plan->OldPartitionBytes =
+        (Entry->EndingLba - Entry->StartingLba + 1) * Device->SectorSize;
+    Plan->NewPartitionBytes =
+        (EndLba - Entry->StartingLba + 1) * Device->SectorSize;
+    Plan->PartitionGain = Plan->NewPartitionBytes - Plan->OldPartitionBytes;
+    Plan->RewritePartitionTable = EndLba != Entry->EndingLba;
+    *PartitionSectors = EndLba - Entry->StartingLba + 1;
+    return EXPAND_OK;
+}
+
+/*
+ * Rewrites both copies.  Order matters: the backup is written first, so that
+ * an interruption leaves the primary still describing the smaller partition
+ * rather than leaving the two copies disagreeing about a partition that the
+ * volume has already been told it owns.
+ */
+static int
+GptApplyPlan(EXPAND_DEVICE* Device, const EXPAND_PLAN* Plan)
+{
+    uint8_t Entries[GPT_MAX_ENTRY_BYTES];
+    uint8_t Sector[MAX_SECTOR_SIZE];
+    GPT_HEADER Primary;
+    GPT_HEADER Backup;
+    GPT_ENTRY* Entry;
+    uint64_t DiskSectors = Device->DiskSize / Device->SectorSize;
+    uint64_t LastUsable;
+    uint64_t EntrySectors;
+    uint64_t BackupArrayLba;
+    uint32_t Bytes;
+    uint32_t Crc;
+    int Status;
+
+    Status = GptReadHeader(Device, 1, &Primary);
+    if (Status != EXPAND_OK)
+    {
+        if (DiskSectors == 0)
+            return EXPAND_CORRUPT;
+        Status = GptReadHeader(Device, DiskSectors - 1, &Primary);
+        if (Status != EXPAND_OK)
+            return Status;
+    }
+
+    Status = GptReadEntries(Device, &Primary, Entries);
+    if (Status != EXPAND_OK)
+        return Status;
+
+    Bytes = Primary.EntryCount * Primary.EntrySize;
+    EntrySectors = (Bytes + Device->SectorSize - 1) / Device->SectorSize;
+    LastUsable = GptLastUsable(Device, &Primary);
+    if (LastUsable == 0 || DiskSectors < EntrySectors + 2)
+        return EXPAND_CORRUPT;
+    BackupArrayLba = DiskSectors - 1 - EntrySectors;
+
+    Entry = GptEntryAt(Entries, &Primary, Plan->PartitionSlot);
+    Entry->EndingLba =
+        Entry->StartingLba + Plan->NewPartitionBytes / Device->SectorSize - 1;
+    if (Entry->EndingLba > LastUsable)
+        return EXPAND_NO_ROOM;
+
+    Crc = Crc32(Entries, Bytes);
+
+    /* Both copies describe this disk, so both get the recomputed geometry. */
+    Primary.EntryArrayCrc32 = Crc;
+    Primary.LastUsableLba = LastUsable;
+    Primary.MyLba = 1;
+    Primary.AlternateLba = DiskSectors - 1;
+    Primary.EntryArrayLba = 2;
+    Primary.HeaderCrc32 = 0;
+    Primary.HeaderCrc32 = GptHeaderCrc(&Primary);
+
+    Backup = Primary;
+    Backup.MyLba = DiskSectors - 1;
+    Backup.AlternateLba = 1;
+    Backup.EntryArrayLba = BackupArrayLba;
+    Backup.HeaderCrc32 = 0;
+    Backup.HeaderCrc32 = GptHeaderCrc(&Backup);
+
+    /* Backup array and header first. */
+    if (!Device->Write(Device->Context, BackupArrayLba * Device->SectorSize,
+                       Bytes, Entries))
+    {
+        return EXPAND_IO_ERROR;
+    }
+    memset(Sector, 0, Device->SectorSize);
+    memcpy(Sector, &Backup, sizeof(Backup));
+    if (!Device->Write(Device->Context, (DiskSectors - 1) * Device->SectorSize,
+                       Device->SectorSize, Sector))
+    {
+        return EXPAND_IO_ERROR;
+    }
+
+    /* Then the primary, which is the copy firmware reads first. */
+    if (!Device->Write(Device->Context, Primary.EntryArrayLba * Device->SectorSize,
+                       Bytes, Entries))
+    {
+        return EXPAND_IO_ERROR;
+    }
+    memset(Sector, 0, Device->SectorSize);
+    memcpy(Sector, &Primary, sizeof(Primary));
+    if (!Device->Write(Device->Context, 1 * Device->SectorSize,
+                       Device->SectorSize, Sector))
+    {
+        return EXPAND_IO_ERROR;
+    }
+
+    Report(Device,
+           "GPT partition %lu now ends at LBA %llu (both copies rewritten)\n",
+           (unsigned long)Plan->PartitionNumber,
+           (unsigned long long)Entry->EndingLba);
+    return EXPAND_OK;
+}
+
+/*
+ * A protective MBR entry is only one of the ways a GPT announces itself, and
+ * it is the one most easily lost: writing a plain MBR image over the front of
+ * a disk replaces LBA 0 and LBA 1 but leaves the backup header at the far end
+ * untouched, because the image is far shorter than the disk.  What remains is
+ * a disk whose partition table says MBR and whose trailing metadata still
+ * says GPT.
+ *
+ * Firmware resolves that disagreement in favour of the GPT -- a valid backup
+ * with a missing primary reads as a GPT whose primary needs recovering -- so
+ * it looks for the EFI system partition where the stale table says it is,
+ * finds nothing there, and reports that the disk holds no bootable device.
+ * Growing the MBR partition over such a disk is what turns a merely stale
+ * backup into that contradiction, so refuse before writing anything and name
+ * the leftover, which the caller can erase.
+ */
+static int
+ProbeStaleGpt(EXPAND_DEVICE* Device, int* Stale)
+{
+    uint8_t Sector[MAX_SECTOR_SIZE];
+    uint64_t LastSector;
+    uint32_t Low;
+    uint32_t High;
+
+    *Stale = 0;
+
+    if (Device->SectorSize == 0 || Device->DiskSize < 2 * Device->SectorSize)
+        return EXPAND_OK;
+
+    /* Primary header, immediately after the MBR. */
+    if (!Device->Read(Device->Context, Device->SectorSize, Device->SectorSize,
+                      Sector))
+    {
+        return EXPAND_IO_ERROR;
+    }
+    Low = *(uint32_t*)Sector;
+    High = *(uint32_t*)(Sector + 4);
+    if (Low == GPT_SIGNATURE_LOW && High == GPT_SIGNATURE_HIGH)
+    {
+        *Stale = 1;
+        return EXPAND_OK;
+    }
+
+    /* Backup header, in the last sector of the disk. */
+    LastSector = Device->DiskSize / Device->SectorSize;
+    if (LastSector == 0)
+        return EXPAND_OK;
+    LastSector--;
+
+    if (!Device->Read(Device->Context, LastSector * Device->SectorSize,
+                      Device->SectorSize, Sector))
+    {
+        return EXPAND_IO_ERROR;
+    }
+    Low = *(uint32_t*)Sector;
+    High = *(uint32_t*)(Sector + 4);
+    if (Low == GPT_SIGNATURE_LOW && High == GPT_SIGNATURE_HIGH)
+        *Stale = 1;
+
+    return EXPAND_OK;
+}
+
 int
 ExpandBuildPlan(EXPAND_DEVICE* Device,
                 uint32_t PartitionNumber,
@@ -599,20 +1049,19 @@ ExpandBuildPlan(EXPAND_DEVICE* Device,
                 EXPAND_PLAN* Plan)
 {
     uint8_t Sector[MAX_SECTOR_SIZE];
-    uint8_t Boot[MAX_SECTOR_SIZE];
     MBR_ENTRY* Table;
-    NTFS_BOOT_SECTOR* BootSector;
     uint64_t DiskSectors;
     uint64_t PadSectors;
     uint64_t EndSector;
     uint64_t TargetEnd;
     uint64_t NewSectors;
     uint64_t FinalSectors;
-    uint64_t VolumeSectors;
     uint32_t SectorSize = Device->SectorSize;
     uint32_t Slot;
     uint32_t Ordinal = 0;
     int Target = -1;
+    int StaleGpt = 0;
+    int Protective = 0;
     int Status;
 
     if (SectorSize < 512 || SectorSize > MAX_SECTOR_SIZE || !IsPowerOfTwo(SectorSize))
@@ -626,11 +1075,49 @@ ExpandBuildPlan(EXPAND_DEVICE* Device,
 
     Table = (MBR_ENTRY*)(Sector + MBR_TABLE_OFFSET);
 
+    /*
+     * A protective MBR means the real table is the GPT, so grow that instead.
+     * Anything else in the MBR alongside GPT metadata is a disk describing
+     * itself two contradictory ways, which is handled below.
+     */
     for (Slot = 0; Slot < MBR_ENTRY_COUNT; Slot++)
     {
         if (Table[Slot].Type == MBR_TYPE_GPT)
-            return EXPAND_GPT_UNSUPPORTED;
+            Protective = 1;
     }
+
+    Status = ProbeStaleGpt(Device, &StaleGpt);
+    if (Status != EXPAND_OK)
+        return Status;
+
+    if (Protective)
+    {
+        uint64_t GptSectors = 0;
+
+        if (!StaleGpt)
+            return EXPAND_CORRUPT;
+        Status = GptBuildPlan(Device, PartitionNumber,
+                              (PadBytes + SectorSize - 1) / SectorSize,
+                              Plan, &GptSectors);
+        if (Status != EXPAND_OK)
+            return Status;
+        return ExpandFinishPlan(Device, Plan, MinimumGain);
+    }
+
+    /*
+     * No protective entry, yet a GPT header survives somewhere.  Writing an
+     * MBR image over the front of a formerly-GPT disk leaves exactly that:
+     * the backup header at the far end outlives the image, which is far
+     * shorter than the disk.  Firmware then resolves the disagreement in
+     * favour of the GPT, looks for the EFI system partition where the stale
+     * table says it is, and reports the disk as holding nothing bootable.
+     * Growing the MBR partition here would cement that contradiction, so
+     * stop and name the leftover instead.
+     */
+    if (StaleGpt)
+        return EXPAND_STALE_GPT;
+
+    Plan->TableStyle = EXPAND_TABLE_MBR;
 
     for (Slot = 0; Slot < MBR_ENTRY_COUNT; Slot++)
     {
@@ -685,6 +1172,17 @@ ExpandBuildPlan(EXPAND_DEVICE* Device,
         return EXPAND_BAD_PARAMETER;
 
     EndSector = DiskSectors - PadSectors;
+
+    /*
+     * Keep the trailing GPT area out of the partition even on a disk that
+     * carries no GPT today.  Ending exactly at the last sector puts the NTFS
+     * backup boot sector on top of where a backup GPT header belongs, so the
+     * two would overwrite each other depending on which was written last, and
+     * a disk left that way cannot be diagnosed from either table.
+     */
+    if (EndSector > GPT_RESERVED_SECTORS)
+        EndSector -= GPT_RESERVED_SECTORS;
+
     if (EndSector > 0xFFFFFFFFULL)
         EndSector = 0xFFFFFFFFULL;
     if (EndSector <= Table[Target].StartLba)
@@ -702,6 +1200,21 @@ ExpandBuildPlan(EXPAND_DEVICE* Device,
     Plan->NewPartitionBytes = FinalSectors * SectorSize;
     Plan->PartitionGain = Plan->NewPartitionBytes - Plan->OldPartitionBytes;
     Plan->RewritePartitionTable = FinalSectors != Table[Target].SectorCount;
+
+    return ExpandFinishPlan(Device, Plan, MinimumGain);
+}
+
+/*
+ * The volume half of the plan, shared by both table styles: it needs only the
+ * partition's byte range, which each planner has already settled.
+ */
+static int
+ExpandFinishPlan(EXPAND_DEVICE* Device, EXPAND_PLAN* Plan, uint64_t MinimumGain)
+{
+    uint8_t Boot[MAX_SECTOR_SIZE];
+    NTFS_BOOT_SECTOR* BootSector;
+    uint64_t VolumeSectors;
+    uint32_t SectorSize = Device->SectorSize;
 
     if (!Device->Read(Device->Context, Plan->PartitionStart, SectorSize, Boot))
         return EXPAND_IO_ERROR;
@@ -1027,7 +1540,13 @@ ExpandApplyPlan(EXPAND_DEVICE* Device, const EXPAND_PLAN* Plan)
         Report(Device, "$BadClus:$Bad now spans the whole cluster space\n");
     }
 
-    if (Plan->RewritePartitionTable)
+    if (Plan->RewritePartitionTable && Plan->TableStyle == EXPAND_TABLE_GPT)
+    {
+        Status = GptApplyPlan(Device, Plan);
+        if (Status != EXPAND_OK)
+            return Status;
+    }
+    else if (Plan->RewritePartitionTable)
     {
         Status = ReadMbr(Device, Sector);
         if (Status != EXPAND_OK)
