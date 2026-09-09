@@ -1213,6 +1213,7 @@ NC_DoNCPaint(PWND pWnd, HDC hDC, INT Flags)
          FillRect(hDC, &CurrentRect, IntGetSysColorBrush(COLOR_MENU));
          if (hbrFrame)
          {
+            GreSetObjectOwner(hbrFrame, GDI_OBJ_HMGR_POWNED);
             FrameRect(hDC, &CurrentRect, hbrFrame);
             GreDeleteObject(hbrFrame);
          }
