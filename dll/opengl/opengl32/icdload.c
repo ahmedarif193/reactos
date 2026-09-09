@@ -389,6 +389,7 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
     WGL_PRESENTBUFFERS2 PresentData2;
     HWND Window;
     POINT ClientOrigin = {0, 0};
+    RECT ClientRect;
     RECT WindowRect;
     RECT UpdateRect;
     HANDLE SharedSurface = NULL;
@@ -427,6 +428,13 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
         IntReportDwmDxPresentFailure("icd_callback", E_NOINTERFACE);
         return FALSE;
     }
+
+    /* An empty client has no shared allocation. Still call the ICD so it
+     * can finish the present and update its framebuffer after a resize. */
+    if (!GetClientRect(Window, &ClientRect))
+        return FALSE;
+    if (IsIconic(Window) || IsRectEmpty(&ClientRect))
+        return wglPresentBuffersDirect(hdc, IcdData, CallbackData);
 
     (void)InitOnceExecuteOnce(&DwmDxInitOnce, IntLoadDwmDxCallbacks,
                               NULL, NULL);
