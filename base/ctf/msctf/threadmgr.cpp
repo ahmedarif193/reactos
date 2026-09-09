@@ -242,6 +242,7 @@ protected:
 
     ITfDocumentMgr *m_focus;
     LONG m_activationCount;
+    DWORD m_activationFlags;
 
     ITfKeyEventSink *m_foregroundKeyEventSink;
     CLSID m_foregroundTextService;
@@ -368,6 +369,7 @@ CThreadMgr::CThreadMgr()
     , m_CompartmentMgr(NULL)
     , m_focus(NULL)
     , m_activationCount(0)
+    , m_activationFlags(0)
     , m_foregroundKeyEventSink(NULL)
 {
     m_foregroundTextService = GUID_NULL;
@@ -503,6 +505,7 @@ STDMETHODIMP CThreadMgr::Deactivate()
 
     if (m_activationCount == 0)
     {
+        m_activationFlags = 0;
         if (m_focus)
         {
             OnSetFocus(NULL, m_focus);
@@ -776,11 +779,20 @@ STDMETHODIMP CThreadMgr::ActivateEx(
 {
     TRACE("(%p) %p, %#x\n", this, id, flags);
 
-    if (!id)
+    if (!id || (flags & ~0x7f))
         return E_INVALIDARG;
 
-    if (flags)
-        FIXME("Unimplemented flags %#x\n", flags);
+    if (m_activationCount)
+    {
+        /* The first activation selects the mode. A nested activation may
+         * enable TIPs that were deferred by NOACTIVATETIP. */
+        if (!(flags & TF_TMAE_NOACTIVATETIP))
+            m_activationFlags &= ~TF_TMF_NOACTIVATETIP;
+        ++m_activationCount;
+        *id = g_processId;
+        activate_textservices(this);
+        return S_FALSE;
+    }
 
     if (!g_processId)
     {
@@ -789,16 +801,20 @@ STDMETHODIMP CThreadMgr::ActivateEx(
         GetClientId(guid, &g_processId);
     }
 
-    activate_textservices(this);
+    m_activationFlags = (flags & ~TF_TMAE_NOACTIVATEKEYBOARDLAYOUT) | TF_TMF_ACTIVATED;
     ++m_activationCount;
+    activate_textservices(this);
     *id = g_processId;
     return S_OK;
 }
 
 STDMETHODIMP CThreadMgr::GetActiveFlags(_Out_ DWORD *flags)
 {
-    FIXME("STUB:(%p)\n", this);
-    return E_NOTIMPL;
+    if (!flags)
+        return E_INVALIDARG;
+
+    *flags = m_activationFlags;
+    return S_OK;
 }
 
 STDMETHODIMP CThreadMgr::AdviseSink(
