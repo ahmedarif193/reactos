@@ -13,6 +13,7 @@ set(VCOS_WIN32_KERN_GENERIC_SOURCE
     vcos_msgqueue.c)
 
 add_library(vcos_win32_kern_generic STATIC ${VCOS_WIN32_KERN_GENERIC_SOURCE})
+add_dependencies(vcos_win32_kern_generic bugcodes xdk)
 
 target_include_directories(vcos_win32_kern_generic PRIVATE
     ${_vchiq_userland_root}
