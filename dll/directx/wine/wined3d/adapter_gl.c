@@ -3041,6 +3041,13 @@ static void wined3d_adapter_init_limits(struct wined3d_gl_info *gl_info)
         gl_info->gl_ops.gl.p_glGetIntegerv(GL_MAX_3D_TEXTURE_SIZE_EXT, &gl_max);
         gl_info->limits.texture3d_size = gl_max;
         TRACE("Max texture3D size: %d.\n", gl_info->limits.texture3d_size);
+#ifdef __REACTOS__
+        if (gl_max <= 0)
+        {
+            gl_info->supported[EXT_TEXTURE3D] = FALSE;
+            gl_info->limits.texture3d_size = 0;
+        }
+#endif
     }
     if (gl_info->supported[ARB_TEXTURE_FILTER_ANISOTROPIC])
     {
