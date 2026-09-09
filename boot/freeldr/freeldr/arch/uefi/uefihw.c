@@ -40,6 +40,8 @@ PVOID
 UefiGetSmbiosEpsPointer(VOID)
 {
     EFI_GUID Smbios3Guid = SMBIOS3_TABLE_GUID;
+    EFI_GUID SmbiosGuid = SMBIOS_TABLE_GUID;
+    PSMBIOS_ENTRY_POINT LegacyEntry = NULL;
     UINTN Index;
 
     if (!GlobalSystemTable)
@@ -60,9 +62,21 @@ UefiGetSmbiosEpsPointer(VOID)
                 return Entry->VendorTable;
             }
         }
+        else if (!memcmp(&Entry->VendorGuid, &SmbiosGuid, sizeof(EFI_GUID)))
+        {
+            PSMBIOS_ENTRY_POINT Entry2 = (PSMBIOS_ENTRY_POINT)Entry->VendorTable;
+
+            if (Entry2 &&
+                (memcmp(Entry2->Anchor, "_SM_", sizeof(Entry2->Anchor)) == 0) &&
+                (Entry2->TableAddress != 0))
+            {
+                LegacyEntry = Entry2;
+            }
+        }
     }
 
-    return NULL;
+    /* Prefer SMBIOS 3.x, but UEFI firmware can publish only a 2.x entry point. */
+    return LegacyEntry;
 }
 
 #if defined(_M_ARM) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
