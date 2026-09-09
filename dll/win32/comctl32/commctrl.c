@@ -152,6 +152,12 @@ classes[] =
 #endif /* __WINE_COMCTL32_VERSION == 6 */
 };
 
+static void register_classes(void)
+{
+    for (unsigned int i = 0; i < ARRAY_SIZE(classes); i++)
+        classes[i].fn_register();
+}
+
 static void unregister_classes(void)
 {
     for (unsigned int i = 0; i < ARRAY_SIZE(classes); i++)
@@ -222,6 +228,10 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 
 	    /* Get all the colors at DLL load */
 	    COMCTL32_RefreshSysColors();
+
+#if __WINE_COMCTL32_VERSION != 6
+            register_classes();
+#endif
             break;
 
 	case DLL_PROCESS_DETACH:
