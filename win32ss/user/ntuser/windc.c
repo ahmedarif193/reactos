@@ -346,16 +346,24 @@ DceReleaseDC(DCE* dce, BOOL EndPaint)
          IntCompositionUnredirectDC(dce->hDC);
    }
 
-   /* Restore previous visible region */
-   if (EndPaint)
-   {
-      DceUpdateVisRgn(dce, dce->pwndOrg, dce->DCXFlags);
-   }
-
    if ((dce->DCXFlags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN)) &&
          ((dce->DCXFlags & DCX_CACHE) || EndPaint))
    {
       DceDeleteClipRgn(dce);
+   }
+
+   /* Restore visibility after removing the paint clip. A retained redirected
+    * DC needs backing-relative clipping, including for CS_OWNDC windows. */
+   if (EndPaint)
+   {
+      PDC dc = DC_LockDc(dce->hDC);
+      BOOL bRedirected = dc && (dc->fs & DC_REDIRECTION);
+
+      if (dc) DC_UnlockDc(dc);
+      if (bRedirected)
+         IntCompositionRedirectDC(dce->pwndOrg, dce->hDC, dce->DCXFlags, dce->hrgnClip, TRUE);
+      else
+         DceUpdateVisRgn(dce, dce->pwndOrg, dce->DCXFlags);
    }
 
    if (dce->DCXFlags & DCX_CACHE)
@@ -997,20 +1005,13 @@ DceResetActiveDCEs(PWND Window)
          {
             DC_UnlockDc(dc);
 
-            /* Match the ordinary DCE path below: a window-position change
-             * affects only that window and its descendants. Redirected
-             * origins are relative to the top-level backing, so a pure
-             * top-level move is already valid. The non-forced redirect call
-             * returns immediately in that case, but rebuilds the DC when a
-             * resize replaced its backing or changed its relative origin. */
+            /* Visibility can change without replacing the backing or moving
+             * its origin, for example after SetWindowRgn. Revalidate the clip
+             * of every affected retained DC, as in the ordinary path below. */
             if (Window == CurrentWindow ||
                 IntIsChildWindow(Window, CurrentWindow))
             {
-               IntCompositionRedirectDC(CurrentWindow,
-                                        pDCE->hDC,
-                                        pDCE->DCXFlags,
-                                        pDCE->hrgnClip,
-                                        FALSE);
+               IntCompositionRedirectDC(CurrentWindow, pDCE->hDC, pDCE->DCXFlags, pDCE->hrgnClip, TRUE);
             }
             continue;
          }
