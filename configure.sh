@@ -284,8 +284,8 @@ prepare_arm64_fex_source() {
 		optional_fex_warning "the FEX source revision cannot be identified"
 		return 0
 	fi
-	if ! git -C "$FEX_UPSTREAM_DIR" diff --quiet --ignore-submodules=dirty HEAD --; then
-		optional_fex_warning "the FEX source contains local changes"
+	if ! FEX_SOURCE_DIFF=$(git -C "$FEX_UPSTREAM_DIR" diff --binary --ignore-submodules=dirty HEAD --); then
+		optional_fex_warning "the FEX source changes cannot be identified"
 		return 0
 	fi
 
@@ -302,7 +302,9 @@ prepare_arm64_fex_source() {
 		optional_fex_warning "FEX submodule dependencies are incomplete"
 		return 0
 	fi
-	FEX_SOURCE_ID=$(printf '%s\n%s\n' "$FEX_SOURCE_REV" "$FEX_SUBMODULE_STATE" | cksum | awk '{print $1 "-" $2}')
+	# Local tracked changes are part of the prepared source, just like the
+	# checked-out revision. Refresh the copy when either changes.
+	FEX_SOURCE_ID=$(printf '%s\n%s\n%s\n' "$FEX_SOURCE_REV" "$FEX_SUBMODULE_STATE" "$FEX_SOURCE_DIFF" | cksum | awk '{print $1 "-" $2}')
 	FEX_PREPARED_STAMP="$FEX_PREPARED_DIR/.reactos-source-id"
 	if [ -f "$FEX_PREPARED_DIR/CMakeLists.txt" ] && [ "$(sed -n '1p' "$FEX_PREPARED_STAMP" 2>/dev/null)" = "$FEX_SOURCE_ID" ]; then
 		echo "Prepared FEX ARM64EC source is current; reusing it."
@@ -312,7 +314,7 @@ prepare_arm64_fex_source() {
 	echo "Preparing FEX ARM64EC source..."
 	rm -rf "$FEX_PREPARED_DIR"
 	mkdir -p "$(dirname "$FEX_PREPARED_DIR")"
-	cp -a "$FEX_UPSTREAM_DIR" "$FEX_PREPARED_DIR"
+	cp -a "$FEX_UPSTREAM_DIR" "$FEX_PREPARED_DIR" || fail "failed to prepare FEX source"
 	rm -rf "$FEX_PREPARED_DIR/.git"
 	printf '%s\n' "$FEX_SOURCE_ID" > "$FEX_PREPARED_STAMP"
 }
