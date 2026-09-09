@@ -1591,6 +1591,44 @@ KiArm64HandleSynchronousException(
             KiArm64InitializeTrapFrame(Context, TrapFrame);
             PreviousMode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
+            /* An unsupported exclusive/atomic access is not a page fault.
+               MmAccessFault can succeed on the valid mapping and leave the
+               instruction faulting forever. Windows reports a hardware memory
+               error for this abort, including atomics on noncached memory. */
+            if (FaultStatus == 0x35)
+            {
+                EXCEPTION_RECORD ExceptionRecord;
+                ULONG Instruction;
+
+                RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+                ExceptionRecord.ExceptionCode = STATUS_HARDWARE_MEMORY_ERROR;
+                ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
+
+                /* Windows distinguishes unsupported exclusive load/store
+                   instructions from LSE atomics. Read the opcode defensively:
+                   another thread can unmap user code during exception entry. */
+                KiArm64ClearTrapActive();
+                _SEH2_TRY
+                {
+                    if (PreviousMode == UserMode)
+                    {
+                        ProbeForRead(ExceptionRecord.ExceptionAddress, sizeof(Instruction), TYPE_ALIGNMENT(ULONG));
+                    }
+                    Instruction = *(volatile ULONG *)ExceptionRecord.ExceptionAddress;
+                    if ((Instruction & 0x3F800000) == 0x08000000)
+                    {
+                        ExceptionRecord.ExceptionCode = STATUS_ILLEGAL_INSTRUCTION;
+                    }
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    NOTHING;
+                }
+                _SEH2_END;
+                KiDispatchException(&ExceptionRecord, Context->ExceptionFramePointer, TrapFrame, PreviousMode, TRUE);
+                goto HandledExit;
+            }
+
             /*
              * Check the interrupted kernel SP, not this C handler's SP. The
              * vector/common handler and this function allocate a large frame
