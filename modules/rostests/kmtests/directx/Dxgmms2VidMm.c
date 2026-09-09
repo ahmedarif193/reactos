@@ -146,9 +146,7 @@ TestStartAndSegmentDescription(
 }
 
 /*
- * Virgin space first: the high-water cursor never hands back a retired offset,
- * which some GPUs require.  First-fit over the gaps is the fallback once the
- * tail is exhausted.
+ * Virgin space first, then first-fit over the gaps once the tail is exhausted.
  */
 static VOID
 TestVirginSpaceThenFirstFit(
@@ -236,6 +234,23 @@ TestFirstFitReusesHoles(
     NtStatus = ReserveSimple(State, 1, DXGMMS2_VIDMM_TEST_PAGE, 0x2007, &Reused);
     ok_eq_hex(NtStatus, STATUS_SUCCESS);
     ok_eq_ulonglong(Reused, DXGMMS2_VIDMM_TEST_PAGE);
+
+    /* Reinsert the lowest range while higher ranges remain live. The next
+     * search must skip it and find the other hole, not return offset zero
+     * twice. This reproduces the live VC4 DMA overlap after pool reuse. */
+    NtStatus = Dxgmms2VidMmCoreRelease(&State->Core, 1, 0x2001);
+    ok_eq_hex(NtStatus, STATUS_SUCCESS);
+    NtStatus = Dxgmms2VidMmCoreRelease(&State->Core, 1, 0x2004);
+    ok_eq_hex(NtStatus, STATUS_SUCCESS);
+    NtStatus = ReserveSimple(State, 1, DXGMMS2_VIDMM_TEST_PAGE, 0x2008, &Reused);
+    ok_eq_hex(NtStatus, STATUS_SUCCESS);
+    ok_eq_ulonglong(Reused, 0ULL);
+    NtStatus = ReserveSimple(State, 1, DXGMMS2_VIDMM_TEST_PAGE, 0x2009, &Offset);
+    ok_eq_hex(NtStatus, STATUS_SUCCESS);
+    ok_eq_ulonglong(Offset, DXGMMS2_VIDMM_TEST_PAGE * 3);
+    ok(Offset != Reused, "two live placements must not share a range\n");
+    NtStatus = ReserveSimple(State, 1, DXGMMS2_VIDMM_TEST_PAGE, 0x200a, &Offset);
+    ok_eq_hex(NtStatus, STATUS_NO_MEMORY);
 
     {
         ULONGLONG Cookies[DXGMMS2_VIDMM_TEST_BATCH];
