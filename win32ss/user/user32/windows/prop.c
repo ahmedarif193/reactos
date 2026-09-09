@@ -375,8 +375,10 @@ HANDLE WINAPI
 GetPropW(HWND hWnd, LPCWSTR lpString)
 {
   ATOM Atom;
+#ifndef WOW64_I386_RUNTIME
   HANDLE Data = NULL;
   PPROPERTY Prop;
+#endif
   if (HIWORD(lpString))
   {
      Atom = GlobalFindAtomW(lpString);
@@ -385,9 +387,15 @@ GetPropW(HWND hWnd, LPCWSTR lpString)
   {
      Atom = LOWORD((DWORD_PTR)lpString);
   }
+#ifdef WOW64_I386_RUNTIME
+  /* The shared property list contains native pointers and cannot be walked
+   * using the 32-bit WND and PROPERTY layouts. */
+  return NtUserGetProp(hWnd, Atom);
+#else
   Prop = IntGetProp(hWnd, Atom, FALSE);
   if (Prop != NULL) Data = Prop->Data;
   return Data;
+#endif
 }
 
 
