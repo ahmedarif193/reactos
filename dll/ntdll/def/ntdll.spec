@@ -1314,6 +1314,7 @@
 @ stdcall RtlUnhandledExceptionFilter2(ptr long)
 @ stdcall RtlUnhandledExceptionFilter(ptr)
 @ stdcall RtlUnicodeStringToAnsiSize(ptr) RtlxUnicodeStringToAnsiSize
+@ stdcall -version=0x601+ RtlUTF8ToUnicodeN(ptr long ptr str long)
 @ stdcall RtlUnicodeStringToAnsiString(ptr ptr long)
 @ stdcall RtlUnicodeStringToCountedOemString(ptr ptr long)
 @ stdcall RtlUnicodeStringToInteger(ptr long ptr)
