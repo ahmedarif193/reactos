@@ -1925,7 +1925,7 @@ ExReturnPoolQuota(IN PVOID P)
         ASSERT(Process != NULL);
         if (Process)
         {
-            if (Process->Pcb.Header.Type != ProcessObject)
+            if ((Process->Pcb.Header.Type & KOBJECT_TYPE_MASK) != ProcessObject)
             {
                 DPRINT1("Object %p is not a process. Type %u, pool type 0x%x, block size %u\n",
                         Process, Process->Pcb.Header.Type, Entry->PoolType, BlockSize);
@@ -2887,16 +2887,8 @@ ExFreePoolWithTag(IN PVOID P,
         Process = ((PVOID *)POOL_NEXT_BLOCK(Entry))[-1];
         if (Process)
         {
-            if (Process->Pcb.Header.Type != ProcessObject)
+            if ((Process->Pcb.Header.Type & KOBJECT_TYPE_MASK) != ProcessObject)
             {
-                //
-                // Rare SMP header-scribble: the billed-owner slot doesn't hold
-                // a process. Dereferencing it faults and charging quota against
-                // it corrupts accounting, so skip the quota return — the block
-                // still frees normally below. Non-fatal, unlike the Windows
-                // bugcheck this replaces (which turns a transient corruption
-                // into a hard boot crash).
-                //
                 DPRINT1("Object %p is not a process. Type %u, pool type 0x%x, block size %u\n",
                         Process, Process->Pcb.Header.Type, Entry->PoolType, BlockSize);
             }
