@@ -24,6 +24,7 @@ list(APPEND SOURCE
     EnumDisplaySettings.c
     GetClassInfo.c
     GetDCEx.c
+    GetProp.c
     GetIconInfo.c
     GetKeyState.c
     GetMessageTime.c
