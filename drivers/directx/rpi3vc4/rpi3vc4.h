@@ -8,6 +8,7 @@
 #pragma once
 
 #include "softgpu.h"
+#include "rpi3vc4_damage.h"
 #include <reactos/rpi3vc4_umd.h>
 
 #define RPI3VC4_POOL_TAG                  '3cVR'
@@ -241,8 +242,7 @@ typedef struct _RPI3VC4_CONTEXT
     SIZE_T ScanoutAllocationSize;
     ULONG FrontBufferIndex;
     BOOLEAN FullDamage[RPI3VC4_SCANOUT_BUFFER_COUNT];
-    BOOLEAN PendingDamageValid[RPI3VC4_SCANOUT_BUFFER_COUNT];
-    RECT PendingDamage[RPI3VC4_SCANOUT_BUFFER_COUNT];
+    RPI3VC4_DAMAGE PendingDamage[RPI3VC4_SCANOUT_BUFFER_COUNT];
 
     PHYSICAL_ADDRESS SourcePrimaryPhysical;
     PHYSICAL_ADDRESS PrimaryPhysical;
