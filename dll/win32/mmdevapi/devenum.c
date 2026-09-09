@@ -1403,6 +1403,7 @@ static BOOL notify_if_changed(EDataFlow flow, ERole role, HKEY key,
 static DWORD WINAPI notif_thread_proc(void *user)
 {
     HKEY key;
+    LSTATUS status;
     WCHAR reg_key[256];
     WCHAR out_name[64], vout_name[64], in_name[64], vin_name[64];
     DWORD size;
@@ -1413,9 +1414,9 @@ static DWORD WINAPI notif_thread_proc(void *user)
     lstrcatW(reg_key, L"\\");
     lstrcatW(reg_key, drvs.module_name);
 
-    if(RegCreateKeyExW(HKEY_CURRENT_USER, reg_key, 0, NULL, 0,
-                MAXIMUM_ALLOWED, NULL, &key, NULL) != ERROR_SUCCESS){
-        ERR("RegCreateKeyEx failed: %lu\n", GetLastError());
+    status = RegCreateKeyExW(HKEY_CURRENT_USER, reg_key, 0, NULL, 0, MAXIMUM_ALLOWED, NULL, &key, NULL);
+    if(status != ERROR_SUCCESS){
+        ERR("RegCreateKeyEx failed: %ld\n", status);
         return 1;
     }
 
@@ -1436,9 +1437,9 @@ static DWORD WINAPI notif_thread_proc(void *user)
         vin_name[0] = 0;
 
     while(1){
-        if(RegNotifyChangeKeyValue(key, FALSE, REG_NOTIFY_CHANGE_LAST_SET,
-                    NULL, FALSE) != ERROR_SUCCESS){
-            ERR("RegNotifyChangeKeyValue failed: %lu\n", GetLastError());
+        status = RegNotifyChangeKeyValue(key, FALSE, REG_NOTIFY_CHANGE_LAST_SET, NULL, FALSE);
+        if(status != ERROR_SUCCESS){
+            ERR("RegNotifyChangeKeyValue failed: %ld\n", status);
             RegCloseKey(key);
             g_notif_thread = NULL;
             return 1;
