@@ -7,6 +7,7 @@ list(APPEND SOURCE
     CallWindowProc.c
     CharFuncs.c
     CloseWindow.c
+    ComboBox.c
     CopyImage.c
     CursorPresentation.c
     CreateDialog.c

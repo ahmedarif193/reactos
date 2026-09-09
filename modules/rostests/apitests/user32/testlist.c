@@ -6,6 +6,7 @@ extern void func_AttachThreadInput(void);
 extern void func_CalculatePopupWindowPosition(void);
 extern void func_CharFuncs(void);
 extern void func_CloseWindow(void);
+extern void func_ComboBox(void);
 extern void func_CopyImage(void);
 extern void func_CursorPresentation(void);
 extern void func_CreateDialog(void);
@@ -85,6 +86,7 @@ const struct test winetest_testlist[] =
     { "CalculatePopupWindowPosition", func_CalculatePopupWindowPosition },
     { "CharFuncs", func_CharFuncs },
     { "CloseWindow", func_CloseWindow },
+    { "ComboBox", func_ComboBox },
     { "CopyImage", func_CopyImage },
     { "CursorPresentation", func_CursorPresentation },
     { "CreateDialog", func_CreateDialog },
