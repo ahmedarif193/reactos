@@ -2174,8 +2174,10 @@ LRESULT WINAPI ComboWndProc_common( HWND hwnd, UINT message, WPARAM wParam, LPAR
             return lphc->droppedWidth;
         return  lphc->droppedRect.right - lphc->droppedRect.left;
     case CB_GETDROPPEDCONTROLRECT:
-        if (lParam) CBGetDroppedControlRect(lphc, (LPRECT)lParam );
-        return  CB_OKAY;
+        if (!lParam)
+            return FALSE;
+        CBGetDroppedControlRect(lphc, (LPRECT)lParam);
+        return TRUE;
     case CB_GETDROPPEDSTATE:
         return (lphc->wState & CBF_DROPPED) != 0;
     case CB_DIR:
