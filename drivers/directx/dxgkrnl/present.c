@@ -3370,7 +3370,10 @@ DxgkpQueuePresent(
         NTSTATUS Status;
 
         Status = DxgkpProcessPresentQueue(Adapter, Entry->VidPnSourceId);
-        if (!NT_SUCCESS(Status))
+        /* Enqueue already transferred ownership. The VSync worker may have
+         * consumed the entry before this opportunistic drain acquired the
+         * queue lock; an empty queue is not a rejected present. */
+        if (!NT_SUCCESS(Status) && Status != STATUS_NO_MORE_ENTRIES)
         {
             DxgkpReleasePresentQueues(Adapter);
             return Status;
