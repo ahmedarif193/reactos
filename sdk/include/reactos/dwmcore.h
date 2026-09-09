@@ -60,7 +60,8 @@ struct IRenderDataBuilder
 /*
  * Native Win11 IDwmChannelPrivate vtable.  The order and signatures below
  * are taken from the public dwmcore PDB and the corresponding ARM64 vtable.
- * Pointer-only private structures stay opaque on purpose.
+ * Pointer-only private structures stay opaque on purpose. Native C++ bool
+ * values use BOOLEAN; in particular, bool output storage is one byte.
  */
 typedef struct IDwmChannelPrivateVtbl
 {
@@ -71,7 +72,7 @@ typedef struct IDwmChannelPrivateVtbl
     HRESULT (STDMETHODCALLTYPE *Commit)(IDwmChannelPrivate *);
     HRESULT (STDMETHODCALLTYPE *SynchronizedCommit)(IDwmChannelPrivate *,
                                                     void *);
-    BOOL (STDMETHODCALLTYPE *PeekNextMessage)(IDwmChannelPrivate *, void *);
+    BOOLEAN (STDMETHODCALLTYPE *PeekNextMessage)(IDwmChannelPrivate *, void *);
     HRESULT (STDMETHODCALLTYPE *SyncFlush)(IDwmChannelPrivate *);
     HRESULT (STDMETHODCALLTYPE *WaitForNextMessage)(IDwmChannelPrivate *,
                                                     void *, UINT,
@@ -83,7 +84,7 @@ typedef struct IDwmChannelPrivateVtbl
     HRESULT (STDMETHODCALLTYPE *CreateSharedResource)(IDwmChannelPrivate *,
                                                       UINT, UINT *, HANDLE *);
     HRESULT (STDMETHODCALLTYPE *DuplicateSharedResource)(IDwmChannelPrivate *,
-                                                         HANDLE, UINT, BOOL,
+                                                         HANDLE, UINT, BOOLEAN,
                                                          UINT *);
     HRESULT (STDMETHODCALLTYPE *ReleaseResource)(IDwmChannelPrivate *, UINT);
     HRESULT (STDMETHODCALLTYPE *CreateRenderDataBuilder)(IDwmChannelPrivate *,
@@ -92,13 +93,13 @@ typedef struct IDwmChannelPrivateVtbl
                                                        UINT, REFIID, void **);
     HRESULT (STDMETHODCALLTYPE *RoundTripRequest)(IDwmChannelPrivate *, UINT);
     HRESULT (STDMETHODCALLTYPE *AsyncFlush)(IDwmChannelPrivate *, UINT, UINT);
-    HRESULT (STDMETHODCALLTYPE *PartitionRegisterForNotifications)(IDwmChannelPrivate *, BOOL);
+    HRESULT (STDMETHODCALLTYPE *PartitionRegisterForNotifications)(IDwmChannelPrivate *, BOOLEAN);
     HRESULT (STDMETHODCALLTYPE *PartitionSetCurrentMmTask)(IDwmChannelPrivate *, const void *);
     HRESULT (STDMETHODCALLTYPE *PartitionSwitchRemotingMode)(IDwmChannelPrivate *, UINT, UINT);
-    HRESULT (STDMETHODCALLTYPE *PartitionSetCursor)(IDwmChannelPrivate *, UINT, BOOL);
-    HRESULT (STDMETHODCALLTYPE *PartitionSetMagnifier)(IDwmChannelPrivate *, UINT, BOOL);
-    HRESULT (STDMETHODCALLTYPE *PartitionSetExcludeFromDDA)(IDwmChannelPrivate *, UINT, BOOL);
-    HRESULT (STDMETHODCALLTYPE *PartitionToggleHolographicSuspension)(IDwmChannelPrivate *, BOOL);
+    HRESULT (STDMETHODCALLTYPE *PartitionSetCursor)(IDwmChannelPrivate *, UINT, BOOLEAN);
+    HRESULT (STDMETHODCALLTYPE *PartitionSetMagnifier)(IDwmChannelPrivate *, UINT, BOOLEAN);
+    HRESULT (STDMETHODCALLTYPE *PartitionSetExcludeFromDDA)(IDwmChannelPrivate *, UINT, BOOLEAN);
+    HRESULT (STDMETHODCALLTYPE *PartitionToggleHolographicSuspension)(IDwmChannelPrivate *, BOOLEAN);
     HRESULT (STDMETHODCALLTYPE *BitmapSource)(IDwmChannelPrivate *, UINT, void *);
     HRESULT (STDMETHODCALLTYPE *DoubleResourceUpdate)(IDwmChannelPrivate *, UINT, double);
     HRESULT (STDMETHODCALLTYPE *RectResourceUpdate)(IDwmChannelPrivate *, UINT, const void *);
@@ -110,17 +111,17 @@ typedef struct IDwmChannelPrivateVtbl
     HRESULT (STDMETHODCALLTYPE *SyncLegacyVisualCaptureRenderTargetCaptureBits)(IDwmChannelPrivate *, UINT, UINT, float, INT, INT, INT, INT, ULONGLONG, UINT *, void **);
     HRESULT (STDMETHODCALLTYPE *VisualSetBlurredWallpaperSurface)(IDwmChannelPrivate *, UINT, UINT, const RECT *);
     HRESULT (STDMETHODCALLTYPE *VisualSetTouchTargetRect)(IDwmChannelPrivate *, UINT, const RECT *);
-    HRESULT (STDMETHODCALLTYPE *VisualSetOptions)(IDwmChannelPrivate *, UINT, BOOL, BOOL, BOOL);
+    HRESULT (STDMETHODCALLTYPE *VisualSetOptions)(IDwmChannelPrivate *, UINT, BOOLEAN, BOOLEAN, BOOLEAN);
     HRESULT (STDMETHODCALLTYPE *VisualSetContent)(IDwmChannelPrivate *, UINT, UINT);
     HRESULT (STDMETHODCALLTYPE *VisualSetColorTransform)(IDwmChannelPrivate *, UINT, UINT);
-    HRESULT (STDMETHODCALLTYPE *VisualTopLevelNode)(IDwmChannelPrivate *, UINT, HWND, BOOL);
-    HRESULT (STDMETHODCALLTYPE *VisualSetPassiveUpdateMode)(IDwmChannelPrivate *, UINT, BOOL);
-    HRESULT (STDMETHODCALLTYPE *VisualSetExcludeSubtree)(IDwmChannelPrivate *, UINT, BOOL);
+    HRESULT (STDMETHODCALLTYPE *VisualTopLevelNode)(IDwmChannelPrivate *, UINT, HWND, BOOLEAN);
+    HRESULT (STDMETHODCALLTYPE *VisualSetPassiveUpdateMode)(IDwmChannelPrivate *, UINT, BOOLEAN);
+    HRESULT (STDMETHODCALLTYPE *VisualSetExcludeSubtree)(IDwmChannelPrivate *, UINT, BOOLEAN);
     HRESULT (STDMETHODCALLTYPE *VisualTargetSetRoot)(IDwmChannelPrivate *, UINT, UINT);
     HRESULT (STDMETHODCALLTYPE *WindowNodeInitialize)(IDwmChannelPrivate *, UINT, HWND, HANDLE, ULONG, ULONGLONG);
-    HRESULT (STDMETHODCALLTYPE *WindowNodeSetIsComposeOnce)(IDwmChannelPrivate *, UINT, BOOL);
+    HRESULT (STDMETHODCALLTYPE *WindowNodeSetIsComposeOnce)(IDwmChannelPrivate *, UINT, BOOLEAN);
     HRESULT (STDMETHODCALLTYPE *VisualGroupUpdate)(IDwmChannelPrivate *, UINT, const UINT *, UINT);
-    HRESULT (STDMETHODCALLTYPE *RectangleGeometrySetRectangle)(IDwmChannelPrivate *, UINT, float, float, float, float, float, float, float, float, float, float, float, float, BOOL);
+    HRESULT (STDMETHODCALLTYPE *RectangleGeometrySetRectangle)(IDwmChannelPrivate *, UINT, float, float, float, float, float, float, float, float, float, float, float, float, BOOLEAN);
     HRESULT (STDMETHODCALLTYPE *RenderTargetSetRoot)(IDwmChannelPrivate *, UINT, UINT);
     HRESULT (STDMETHODCALLTYPE *SyncDesktopCaptureBits)(IDwmChannelPrivate *, ULONGLONG, INT, INT, UINT, UINT, UINT, ULONGLONG, HANDLE);
     HRESULT (STDMETHODCALLTYPE *SyncMagnifierRenderTargetCaptureBits)(IDwmChannelPrivate *, UINT, UINT, UINT, ULONGLONG, UINT, const void *);
@@ -144,7 +145,7 @@ typedef struct IDwmChannelPrivateVtbl
     HRESULT (STDMETHODCALLTYPE *AnimationTriggerTrigger)(IDwmChannelPrivate *, UINT, ULONGLONG);
     HRESULT (STDMETHODCALLTYPE *MeshGeometry2DUpdate)(IDwmChannelPrivate *, UINT, INT, const void *, const void *, UINT, const UINT *, UINT);
     HRESULT (STDMETHODCALLTYPE *Geometry2DGroupUpdate)(IDwmChannelPrivate *, UINT, const UINT *, UINT);
-    HRESULT (STDMETHODCALLTYPE *AtlasedRectsMeshUpdate)(IDwmChannelPrivate *, UINT, BOOL, INT, const void *, const void *, UINT);
+    HRESULT (STDMETHODCALLTYPE *AtlasedRectsMeshUpdate)(IDwmChannelPrivate *, UINT, BOOLEAN, INT, const void *, const void *, UINT);
     HRESULT (STDMETHODCALLTYPE *AtlasedRectsMeshSetOpacity)(IDwmChannelPrivate *, UINT, INT);
     HRESULT (STDMETHODCALLTYPE *AtlasedRectsGroupUpdate)(IDwmChannelPrivate *, UINT, UINT, const UINT *, UINT);
     HRESULT (STDMETHODCALLTYPE *GaussianBlurEffectUpdate)(IDwmChannelPrivate *, UINT, float, UINT, UINT);
@@ -164,22 +165,22 @@ typedef struct IDwmChannelPrivateVtbl
     HRESULT (STDMETHODCALLTYPE *VisualSetResampleMode)(IDwmChannelPrivate *, UINT, UINT);
     HRESULT (STDMETHODCALLTYPE *MagnifierRenderTargetSetResampleMode)(IDwmChannelPrivate *, UINT, UINT);
     HRESULT (STDMETHODCALLTYPE *CaptureControllerSetRootVisual)(IDwmChannelPrivate *, UINT, UINT);
-    HRESULT (STDMETHODCALLTYPE *CaptureControllerSetCaptureState)(IDwmChannelPrivate *, UINT, BOOL);
+    HRESULT (STDMETHODCALLTYPE *CaptureControllerSetCaptureState)(IDwmChannelPrivate *, UINT, BOOLEAN);
     HRESULT (STDMETHODCALLTYPE *CaptureControllerSetContentSize)(IDwmChannelPrivate *, UINT, double, double);
     HRESULT (STDMETHODCALLTYPE *CaptureControllerSetTransform)(IDwmChannelPrivate *, UINT, UINT);
     HRESULT (STDMETHODCALLTYPE *CaptureControllerSetDefaultSDRBoost)(IDwmChannelPrivate *, UINT, float);
     HRESULT (STDMETHODCALLTYPE *CaptureControllerSetReferenceVisual)(IDwmChannelPrivate *, UINT, UINT);
-    HRESULT (STDMETHODCALLTYPE *CaptureControllerSetSuspendOnScreenOff)(IDwmChannelPrivate *, UINT, BOOL);
+    HRESULT (STDMETHODCALLTYPE *CaptureControllerSetSuspendOnScreenOff)(IDwmChannelPrivate *, UINT, BOOLEAN);
     HRESULT (STDMETHODCALLTYPE *CursorVisualSetCursorId)(IDwmChannelPrivate *, UINT, ULONGLONG);
-    HRESULT (STDMETHODCALLTYPE *CursorVisualSetIsHardwareCursorEnabled)(IDwmChannelPrivate *, UINT, BOOL);
-    HRESULT (STDMETHODCALLTYPE *CursorVisualSetIsSynchronized)(IDwmChannelPrivate *, UINT, BOOL);
+    HRESULT (STDMETHODCALLTYPE *CursorVisualSetIsHardwareCursorEnabled)(IDwmChannelPrivate *, UINT, BOOLEAN);
+    HRESULT (STDMETHODCALLTYPE *CursorVisualSetIsSynchronized)(IDwmChannelPrivate *, UINT, BOOLEAN);
     HRESULT (STDMETHODCALLTYPE *CursorVisualSetPosition)(IDwmChannelPrivate *, UINT, INT, INT);
     HRESULT (STDMETHODCALLTYPE *CaptureControllerSetWindowInfos)(IDwmChannelPrivate *, UINT, const void *, UINT);
     HRESULT (STDMETHODCALLTYPE *CaptureControllerSetContentOffset)(IDwmChannelPrivate *, UINT, INT, INT);
     void (STDMETHODCALLTYPE *GetCommandBatch)(IDwmChannelPrivate *,
-                                             void **, BOOL *);
+                                             void **, BOOLEAN *);
     void (STDMETHODCALLTYPE *ReleaseCommandBatch)(IDwmChannelPrivate *);
-    BOOL (STDMETHODCALLTYPE *IsRemoteTreeEnabled)(IDwmChannelPrivate *);
+    BOOLEAN (STDMETHODCALLTYPE *IsRemoteTreeEnabled)(IDwmChannelPrivate *);
 } IDwmChannelPrivateVtbl;
 
 struct IDwmChannelPrivate
