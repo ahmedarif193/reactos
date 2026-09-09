@@ -309,6 +309,44 @@ void free_sinks(struct list *sink_list)
 static HRESULT activate_given_ts(ActivatedTextService *actsvr, ITfThreadMgrEx *tm)
 {
     HRESULT hr;
+    DWORD flags = 0;
+    ITfCategoryMgr *catmgr;
+    ITfTextInputProcessorEx *processorEx;
+    static const struct
+    {
+        DWORD flag;
+        const GUID *category;
+    } required[] = {
+        {TF_TMF_SECUREMODE, &GUID_TFCAT_TIPCAP_SECUREMODE},
+        {TF_TMF_UIELEMENTENABLEDONLY, &GUID_TFCAT_TIPCAP_UIELEMENTENABLED},
+        {TF_TMF_COMLESS, &GUID_TFCAT_TIPCAP_COMLESS},
+    };
+
+    tm->GetActiveFlags(&flags);
+    if (flags & TF_TMF_NOACTIVATETIP)
+        return S_OK;
+
+    if (flags & (TF_TMF_SECUREMODE | TF_TMF_UIELEMENTENABLEDONLY | TF_TMF_COMLESS))
+    {
+        hr = CategoryMgr_Constructor(NULL, (IUnknown **)&catmgr);
+        if (FAILED(hr))
+            return hr;
+
+        for (const auto &entry : required)
+        {
+            GUID category;
+            const GUID *requiredCategory = entry.category;
+            if (!(flags & entry.flag))
+                continue;
+            hr = catmgr->FindClosestCategory(actsvr->LanguageProfile.clsid, &category, &requiredCategory, 1);
+            if (hr != S_OK || category != *entry.category)
+            {
+                catmgr->Release();
+                return S_OK;
+            }
+        }
+        catmgr->Release();
+    }
 
     /* Already Active? */
     if (actsvr->pITfTextInputProcessor)
@@ -318,7 +356,16 @@ static HRESULT activate_given_ts(ActivatedTextService *actsvr, ITfThreadMgrEx *t
                           IID_ITfTextInputProcessor, (void **)&actsvr->pITfTextInputProcessor);
     if (FAILED(hr)) return hr;
 
-    hr = actsvr->pITfTextInputProcessor->Activate((ITfThreadMgr *)tm, actsvr->tid);
+    hr = actsvr->pITfTextInputProcessor->QueryInterface(IID_ITfTextInputProcessorEx, (void **)&processorEx);
+    if (SUCCEEDED(hr))
+    {
+        hr = processorEx->ActivateEx((ITfThreadMgr *)tm, actsvr->tid, flags & ~TF_TMF_ACTIVATED);
+        processorEx->Release();
+    }
+    else if (flags & TF_TMF_UIELEMENTENABLEDONLY)
+        hr = E_NOINTERFACE;
+    else
+        hr = actsvr->pITfTextInputProcessor->Activate((ITfThreadMgr *)tm, actsvr->tid);
     if (FAILED(hr))
     {
         actsvr->pITfTextInputProcessor->Release();
@@ -394,6 +441,7 @@ HRESULT add_active_textservice(TF_LANGUAGEPROFILE *lp)
     }
 
     actsvr->pITfTextInputProcessor = NULL;
+    actsvr->pITfThreadMgrEx = NULL;
     actsvr->LanguageProfile = *lp;
     actsvr->pITfKeyEventSink = NULL;
 
@@ -454,8 +502,6 @@ HRESULT activate_textservices(ITfThreadMgrEx *tm)
     AtsEntry *ats;
 
     activated ++;
-    if (activated > 1)
-        return S_OK;
 
     LIST_FOR_EACH_ENTRY(ats, &AtsList, AtsEntry, entry)
     {

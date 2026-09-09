@@ -82,6 +82,9 @@ cpp_quote("EXTERN_C const GUID GUID_TFCAT_TIP_KEYBOARD;")
 cpp_quote("EXTERN_C const GUID GUID_TFCAT_TIP_SPEECH;")
 cpp_quote("EXTERN_C const GUID GUID_TFCAT_TIP_HANDWRITING;")
 cpp_quote("EXTERN_C const GUID GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER;")
+cpp_quote("EXTERN_C const GUID GUID_TFCAT_TIPCAP_SECUREMODE;")
+cpp_quote("EXTERN_C const GUID GUID_TFCAT_TIPCAP_UIELEMENTENABLED;")
+cpp_quote("EXTERN_C const GUID GUID_TFCAT_TIPCAP_COMLESS;")
 
 typedef [uuid(7213778c-7bb0-4270-b050-6189ee594e97)]  DWORD TfEditCookie;
 typedef [uuid(de403c21-89fd-4f85-8b87-64584d063fbc)] DWORD TfClientId;
@@ -248,6 +251,22 @@ interface ITfThreadMgrEx : ITfThreadMgr
     HRESULT GetActiveFlags(
         [out] DWORD *flags);
 }
+
+cpp_quote("#define TF_TMAE_NOACTIVATETIP            0x00000001")
+cpp_quote("#define TF_TMAE_SECUREMODE               0x00000002")
+cpp_quote("#define TF_TMAE_UIELEMENTENABLEDONLY     0x00000004")
+cpp_quote("#define TF_TMAE_COMLESS                  0x00000008")
+cpp_quote("#define TF_TMAE_WOW16                    0x00000010")
+cpp_quote("#define TF_TMAE_NOACTIVATEKEYBOARDLAYOUT  0x00000020")
+cpp_quote("#define TF_TMAE_CONSOLE                  0x00000040")
+cpp_quote("#define TF_TMF_NOACTIVATETIP             TF_TMAE_NOACTIVATETIP")
+cpp_quote("#define TF_TMF_SECUREMODE                TF_TMAE_SECUREMODE")
+cpp_quote("#define TF_TMF_UIELEMENTENABLEDONLY      TF_TMAE_UIELEMENTENABLEDONLY")
+cpp_quote("#define TF_TMF_COMLESS                   TF_TMAE_COMLESS")
+cpp_quote("#define TF_TMF_WOW16                     TF_TMAE_WOW16")
+cpp_quote("#define TF_TMF_CONSOLE                   TF_TMAE_CONSOLE")
+cpp_quote("#define TF_TMF_IMMERSIVEMODE             0x40000000")
+cpp_quote("#define TF_TMF_ACTIVATED                 0x80000000")
 
 [
     object,
@@ -1030,6 +1049,17 @@ interface ITfTextInputProcessor : IUnknown
         [in] TfClientId tid);
 
     HRESULT Deactivate();
+}
+
+[
+  object,
+  local,
+  uuid(6e4e2102-f9cd-433d-b496-303ce03a6507),
+  pointer_default(unique)
+]
+interface ITfTextInputProcessorEx : ITfTextInputProcessor
+{
+    HRESULT ActivateEx([in] ITfThreadMgr *ptim, [in] TfClientId tid, [in] DWORD dwFlags);
 }
 
 [
