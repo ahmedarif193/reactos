@@ -493,10 +493,26 @@ DwmDxGetRedirectionSnapshot(const DWM_WIN *Window)
 void
 DwmDxAcknowledgeSurface(const DWM_WIN *Window)
 {
+    static struct
+    {
+        ULONG SurfaceId, Generation, Share, DxGeneration;
+        ULONGLONG UpdateId;
+    } Acknowledged[DWM_MAX_WINDOWS];
     DWM_DX_SURFACE_EXCHANGE Exchange;
+    ULONG Index;
 
     if (Window == NULL || Window->DxGlobalShare == 0 ||
         Window->DxGeneration == 0 || Window->DxUpdateId == 0)
+    {
+        return;
+    }
+
+    Index = Window->SurfaceId % ARRAYSIZE(Acknowledged);
+    if (Acknowledged[Index].SurfaceId == Window->SurfaceId &&
+        Acknowledged[Index].Generation == Window->Generation &&
+        Acknowledged[Index].Share == Window->DxGlobalShare &&
+        Acknowledged[Index].DxGeneration == Window->DxGeneration &&
+        Acknowledged[Index].UpdateId == Window->DxUpdateId)
     {
         return;
     }
@@ -507,7 +523,16 @@ DwmDxAcknowledgeSurface(const DWM_WIN *Window)
     Exchange.SurfaceId = Window->SurfaceId;
     Exchange.Generation = Window->DxGeneration;
     Exchange.UpdateId = Window->DxUpdateId;
-    (void)NtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    /* Failed acknowledgements must be retried; a reused surface slot or a
+     * replaced shared resource must not inherit another publication's ack. */
+    if ((LONG)NtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE) >= 0)
+    {
+        Acknowledged[Index].SurfaceId = Window->SurfaceId;
+        Acknowledged[Index].Generation = Window->Generation;
+        Acknowledged[Index].Share = Window->DxGlobalShare;
+        Acknowledged[Index].DxGeneration = Window->DxGeneration;
+        Acknowledged[Index].UpdateId = Window->DxUpdateId;
+    }
 }
 
 void
