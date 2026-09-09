@@ -806,6 +806,15 @@ Rpi3Vc4StartRenderLocked(
     if (!Submit->BinComplete || Submit->RenderStarted)
         return;
 
+    /* VideoCore IV table 51 permits CTnCA writes only with CTRUN clear.
+     * A pipeline completion interrupt does not replace that condition. */
+    if (Submit->Packet.Ct1Start != 0 &&
+        (READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
+            Context, RPI3VC4_V3D_CT1CS)) & RPI3VC4_V3D_CTRUN) != 0)
+    {
+        return;
+    }
+
     Submit->RenderStarted = TRUE;
     Submit->RenderStartTime100ns = KeQueryInterruptTime();
     Submit->RenderLastProgressTime100ns = Submit->RenderStartTime100ns;
@@ -857,6 +866,15 @@ Rpi3Vc4StartBinLocked(
             continue;
         }
 
+        /* FLDONE reports tile-list memory completion. The control thread
+         * can still be executing the trailing semaphore record. Do not
+         * overwrite CT0CA until the executor has stopped (table 51). */
+        if ((READ_REGISTER_ULONG(Rpi3Vc4V3dRegister(
+                Context, RPI3VC4_V3D_CT0CS)) & RPI3VC4_V3D_CTRUN) != 0)
+        {
+            return;
+        }
+
         WRITE_REGISTER_ULONG(Rpi3Vc4V3dRegister(Context,
                                                  RPI3VC4_V3D_L2CACTL),
                              RPI3VC4_V3D_L2CCLR);
@@ -897,57 +915,90 @@ Rpi3Vc4StartPipelinesLocked(
     Rpi3Vc4StartRenderLocked(Context, Context->V3dSubmitHead);
     Rpi3Vc4StartBinLocked(Context);
     Rpi3Vc4StartRenderLocked(Context, Context->V3dSubmitHead);
-    if (Context->V3dBinActive || Context->V3dRenderActive)
+    if (Context->V3dSubmitHead != Context->V3dSubmitTail)
         Rpi3Vc4ArmPollTimer(Context);
 }
 
-static VOID
+typedef struct _RPI3VC4_RETIREMENT_NOTIFICATION
+{
+    PSOFTGPU_DEVICE Device;
+    ULONG Fence;
+    NTSTATUS Status;
+} RPI3VC4_RETIREMENT_NOTIFICATION;
+
+static BOOLEAN NTAPI
+Rpi3Vc4NotifyRetirementSynchronized(PVOID Parameter)
+{
+    RPI3VC4_RETIREMENT_NOTIFICATION *Notification = Parameter;
+    PSOFTGPU_DEVICE Device = Notification->Device;
+    PRPI3VC4_CONTEXT Context = Device->PlatformContext;
+    PSOFTGPU_ENGINE Engine = &Device->Engines[SOFTGPU_NODE_3D];
+    DXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyData;
+    ULONG Fence = Notification->Fence;
+
+    /* FenceLock is held by the outer DPC. The interrupt synchronization
+     * boundary serializes this callback with real ISRs too. Never acquire
+     * FenceLock here: submission holds it while synchronizing with the ISR.
+     * Check, watermark update and actual publication are one operation. */
+    ASSERT(KeGetCurrentIrql() > DISPATCH_LEVEL);
+    RtlZeroMemory(&NotifyData, sizeof(NotifyData));
+    if (NT_SUCCESS(Notification->Status))
+    {
+        if (Engine->NotifiedFence != 0 &&
+            (LONG)(Fence - Engine->NotifiedFence) <= 0)
+            return TRUE;
+        if (Engine->CompletedFence == 0 ||
+            (LONG)(Fence - Engine->CompletedFence) > 0)
+            Engine->CompletedFence = Fence;
+        Engine->NotifiedFence = Fence;
+        NotifyData.InterruptType = DXGK_INTERRUPT_DMA_COMPLETED;
+        NotifyData.DmaCompleted.SubmissionFenceId = Fence;
+        NotifyData.DmaCompleted.NodeOrdinal = 0;
+        NotifyData.DmaCompleted.EngineOrdinal = 0;
+    }
+    else
+    {
+        if (Context->V3dNotifiedFaultFence != 0 &&
+            (LONG)(Fence - Context->V3dNotifiedFaultFence) <= 0)
+            return TRUE;
+        Context->V3dNotifiedFaultFence = Fence;
+        NotifyData.InterruptType = DXGK_INTERRUPT_DMA_FAULTED;
+        NotifyData.DmaFaulted.FaultedFenceId = Fence;
+        NotifyData.DmaFaulted.Status = Notification->Status;
+        NotifyData.DmaFaulted.NodeOrdinal = 0;
+        NotifyData.DmaFaulted.EngineOrdinal = 0;
+    }
+    Device->DxgkInterface.DxgkCbNotifyInterrupt(
+        Device->DxgkInterface.DeviceHandle, &NotifyData);
+    Device->DxgkInterface.DxgkCbQueueDpc(
+        Device->DxgkInterface.DeviceHandle);
+    return TRUE;
+}
+
+/* Called with FenceLock held. A failed synchronization must leave the ring
+ * entry owned by the miniport, so a later DPC can retry without losing its
+ * completion. NotifyDpc is deliberately outside both miniport locks. */
+static BOOLEAN
 Rpi3Vc4NotifyRetirement(
     _Inout_ PSOFTGPU_DEVICE Device,
     _In_ ULONG Fence,
     _In_ NTSTATUS CompletionStatus)
 {
-    DXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyData;
-    PSOFTGPU_ENGINE Engine;
-    KIRQL OldIrql;
+    RPI3VC4_RETIREMENT_NOTIFICATION Notification;
+    BOOLEAN Published = FALSE;
+    NTSTATUS Status;
 
-    Engine = &Device->Engines[SOFTGPU_NODE_3D];
-    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
-    if (NT_SUCCESS(CompletionStatus) &&
-        (LONG)(Fence - Engine->CompletedFence) > 0)
-    {
-        Engine->CompletedFence = Fence;
-        Engine->NotifiedFence = Fence;
-    }
-    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
-
-    if (Device->DxgkInterface.DxgkCbNotifyInterrupt != NULL)
-    {
-        RtlZeroMemory(&NotifyData, sizeof(NotifyData));
-        if (NT_SUCCESS(CompletionStatus))
-        {
-            NotifyData.InterruptType = DXGK_INTERRUPT_DMA_COMPLETED;
-            NotifyData.DmaCompleted.SubmissionFenceId = Fence;
-            NotifyData.DmaCompleted.NodeOrdinal = 0;
-            NotifyData.DmaCompleted.EngineOrdinal = 0;
-        }
-        else
-        {
-            NotifyData.InterruptType = DXGK_INTERRUPT_DMA_FAULTED;
-            NotifyData.DmaFaulted.FaultedFenceId = Fence;
-            NotifyData.DmaFaulted.Status = CompletionStatus;
-            NotifyData.DmaFaulted.NodeOrdinal = 0;
-            NotifyData.DmaFaulted.EngineOrdinal = 0;
-        }
-        Device->DxgkInterface.DxgkCbNotifyInterrupt(
-            Device->DxgkInterface.DeviceHandle,
-            &NotifyData);
-    }
-    if (Device->DxgkInterface.DxgkCbNotifyDpc != NULL)
-    {
-        Device->DxgkInterface.DxgkCbNotifyDpc(
-            Device->DxgkInterface.DeviceHandle);
-    }
+    if (Device->DxgkInterface.DxgkCbSynchronizeExecution == NULL ||
+        Device->DxgkInterface.DxgkCbNotifyInterrupt == NULL ||
+        Device->DxgkInterface.DxgkCbQueueDpc == NULL)
+        return FALSE;
+    Notification.Device = Device;
+    Notification.Fence = Fence;
+    Notification.Status = CompletionStatus;
+    Status = Device->DxgkInterface.DxgkCbSynchronizeExecution(
+        Device->DxgkInterface.DeviceHandle,
+        Rpi3Vc4NotifyRetirementSynchronized, &Notification, 0, &Published);
+    return NT_SUCCESS(Status) && Published;
 }
 
 NTSTATUS
@@ -1114,6 +1165,10 @@ Rpi3Vc4Interrupt(
     }
     InterlockedOr((volatile LONG *)&Context->V3dInterruptPending,
                   InterruptStatus);
+    /* The ISR may interrupt a submitter holding FenceLock/V3dQueueLock.
+     * Even try-acquiring an already-owned executive lock is invalid in a
+     * checked kernel. Keep bin/render transitions in ProcessDpcLocked, whose
+     * interrupt-synchronized capture consumes this latch exactly once. */
     if (Device->DxgkInterface.DxgkCbQueueDpc != NULL)
     {
         Device->DxgkInterface.DxgkCbQueueDpc(
@@ -1126,8 +1181,38 @@ Rpi3Vc4Interrupt(
     return TRUE;
 }
 
-VOID
-Rpi3Vc4Dpc(
+typedef struct _RPI3VC4_INTERRUPT_CAPTURE
+{
+    PRPI3VC4_CONTEXT Context;
+    ULONG Status;
+} RPI3VC4_INTERRUPT_CAPTURE;
+
+static BOOLEAN NTAPI
+Rpi3Vc4CaptureInterruptSynchronized(PVOID Parameter)
+{
+    RPI3VC4_INTERRUPT_CAPTURE *Capture = Parameter;
+    PRPI3VC4_CONTEXT Context = Capture->Context;
+    ULONG Status;
+
+    Status = (ULONG)InterlockedExchange(
+        (volatile LONG *)&Context->V3dInterruptPending, 0);
+    Status |= READ_REGISTER_ULONG(
+        Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_INTCTL)) &
+        RPI3VC4_V3D_INTERRUPT_MASK;
+    if (Status & RPI3VC4_V3D_INT_OUTOMEM)
+        WRITE_REGISTER_ULONG(
+            Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_INTDIS),
+            RPI3VC4_V3D_INT_OUTOMEM);
+    if (Status & ~RPI3VC4_V3D_INT_OUTOMEM)
+        WRITE_REGISTER_ULONG(
+            Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_INTCTL),
+            Status & ~RPI3VC4_V3D_INT_OUTOMEM);
+    Capture->Status = Status;
+    return TRUE;
+}
+
+static VOID
+Rpi3Vc4ProcessDpcLocked(
     _Inout_ PSOFTGPU_DEVICE Device)
 {
     PRPI3VC4_CONTEXT Context;
@@ -1138,14 +1223,15 @@ Rpi3Vc4Dpc(
     ULONG Ct1Address;
     ULONG OverflowAddress;
     ULONG OverflowSlot;
-    ULONG CompletedFences[RPI3VC4_V3D_SUBMIT_RING_SIZE];
-    ULONG CompletedCount = 0;
     ULONG Index;
     ULONGLONG Now;
     BOOLEAN Faulted;
     KIRQL OldIrql;
     PRPI3VC4_V3D_SUBMIT Submit;
     PRPI3VC4_V3D_SUBMIT OverflowOwner;
+    RPI3VC4_INTERRUPT_CAPTURE Capture;
+    BOOLEAN Captured = FALSE;
+    NTSTATUS CaptureStatus;
 
     if (Device == NULL)
         return;
@@ -1160,28 +1246,26 @@ Rpi3Vc4Dpc(
     }
 
     /*
-     * The interrupt and polling DPCs may execute concurrently on different
-     * processors.  Capture and acknowledge status while holding the queue
-     * lock so that a completion observed by both callers cannot be applied to
-     * two successive hardware jobs.
+     * The queue lock serializes the polling and interrupt DPCs, but not the
+     * ISR. Consume the software latch and acknowledge hardware status under
+     * the interrupt lock too. Otherwise the ISR can latch a completion that
+     * this DPC already read from hardware; the next DPC would incorrectly
+     * apply that duplicate completion to the next bin/render job.
      */
-    InterruptStatus = (ULONG)InterlockedExchange(
-        (volatile LONG *)&Context->V3dInterruptPending, 0);
-    InterruptStatus |= READ_REGISTER_ULONG(
-        Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_INTCTL)) &
-        RPI3VC4_V3D_INTERRUPT_MASK;
-    if ((InterruptStatus & RPI3VC4_V3D_INT_OUTOMEM) != 0)
+    Capture.Context = Context;
+    Capture.Status = 0;
+    CaptureStatus = Device->DxgkInterface.DxgkCbSynchronizeExecution != NULL ?
+        Device->DxgkInterface.DxgkCbSynchronizeExecution(
+            Device->DxgkInterface.DeviceHandle,
+            Rpi3Vc4CaptureInterruptSynchronized, &Capture, 0, &Captured) :
+        STATUS_NOT_SUPPORTED;
+    if (!NT_SUCCESS(CaptureStatus) || !Captured)
     {
-        WRITE_REGISTER_ULONG(
-            Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_INTDIS),
-            RPI3VC4_V3D_INT_OUTOMEM);
+        Rpi3Vc4ArmPollTimer(Context);
+        KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
+        return;
     }
-    if ((InterruptStatus & ~RPI3VC4_V3D_INT_OUTOMEM) != 0)
-    {
-        WRITE_REGISTER_ULONG(
-            Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_INTCTL),
-            InterruptStatus & ~RPI3VC4_V3D_INT_OUTOMEM);
-    }
+    InterruptStatus = Capture.Status;
     Ct0Status = READ_REGISTER_ULONG(
         Rpi3Vc4V3dRegister(Context, RPI3VC4_V3D_CT0CS));
     Ct1Status = READ_REGISTER_ULONG(
@@ -1311,15 +1395,21 @@ Rpi3Vc4Dpc(
 
     if (Faulted)
     {
-        Context->V3dRecovering = TRUE;
         for (Index = Context->V3dSubmitHead;
              Index != Context->V3dSubmitTail;
              ++Index)
         {
-            CompletedFences[CompletedCount++] =
-                Context->V3dSubmitRing[
-                    Index % RPI3VC4_V3D_SUBMIT_RING_SIZE].Fence;
+            if (!Rpi3Vc4NotifyRetirement(
+                    Device, Context->V3dSubmitRing[
+                        Index % RPI3VC4_V3D_SUBMIT_RING_SIZE].Fence,
+                    STATUS_DEVICE_HARDWARE_ERROR))
+            {
+                Rpi3Vc4ArmPollTimer(Context);
+                KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
+                return;
+            }
         }
+        Context->V3dRecovering = TRUE;
         Context->V3dSubmitHead = Context->V3dSubmitTail;
         Context->V3dBinNext = Context->V3dSubmitTail;
         Context->V3dBinOverflowUsed = 0;
@@ -1327,15 +1417,6 @@ Rpi3Vc4Dpc(
         Context->V3dBinActive = FALSE;
         Context->V3dRenderActive = FALSE;
         Rpi3Vc4ResetCommandThreads(Context);
-        KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
-
-        for (Index = 0; Index < CompletedCount; ++Index)
-        {
-            Rpi3Vc4NotifyRetirement(Device, CompletedFences[Index],
-                                    STATUS_DEVICE_HARDWARE_ERROR);
-        }
-
-        KeAcquireSpinLock(&Context->V3dQueueLock, &OldIrql);
         Context->V3dRecovering = FALSE;
         Rpi3Vc4StartPipelinesLocked(Context);
         KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
@@ -1351,7 +1432,12 @@ Rpi3Vc4Dpc(
             if (!Submit->RenderComplete)
                 break;
 
-            CompletedFences[CompletedCount++] = Submit->Fence;
+            if (!Rpi3Vc4NotifyRetirement(Device, Submit->Fence, STATUS_SUCCESS))
+            {
+                Rpi3Vc4ArmPollTimer(Context);
+                KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
+                return;
+            }
             Context->V3dBinOverflowUsed &= ~Submit->BinnerOverflowSlots;
             ++Context->V3dSubmitHead;
         }
@@ -1367,8 +1453,30 @@ Rpi3Vc4Dpc(
     }
     KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
 
-    for (Index = 0; Index < CompletedCount; ++Index)
-        Rpi3Vc4NotifyRetirement(Device, CompletedFences[Index], STATUS_SUCCESS);
+}
+
+VOID
+Rpi3Vc4Dpc(
+    _Inout_ PSOFTGPU_DEVICE Device)
+{
+    KIRQL OldIrql;
+
+    if (Device == NULL)
+        return;
+
+    /* Match the submission order: FenceLock -> V3dQueueLock -> interrupt
+     * synchronization. This also prevents a second DPC from overtaking a
+     * retired batch before its fence notification reaches dxgkrnl. */
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    if (!Device->Stopped)
+        Rpi3Vc4ProcessDpcLocked(Device);
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+
+    /* Scheduler retirement can submit more work. It must run after releasing
+     * the miniport locks, at DPC level, rather than inside the ISR callback. */
+    if (Device->DxgkInterface.DxgkCbNotifyDpc != NULL)
+        Device->DxgkInterface.DxgkCbNotifyDpc(
+            Device->DxgkInterface.DeviceHandle);
 }
 
 static VOID
