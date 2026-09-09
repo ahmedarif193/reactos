@@ -41,6 +41,7 @@ extern ATOM gaGuiConsoleWndClass;
 extern ATOM AtomDDETrack;
 extern ATOM AtomQOS;
 extern ATOM AtomImeLevel;
+extern ATOM AtomTouchWindow;
 extern ATOM AtomDwmDarkMode;
 extern ATOM AtomDwmSystemBackdropType;
 extern ATOM AtomDwmBackdropOpacity;

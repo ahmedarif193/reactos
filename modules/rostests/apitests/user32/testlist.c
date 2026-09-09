@@ -2,6 +2,7 @@
 #define STANDALONE
 #include <apitest.h>
 
+extern void func_RegisterTouchWindow(void);
 extern void func_AttachThreadInput(void);
 extern void func_CalculatePopupWindowPosition(void);
 extern void func_CharFuncs(void);
@@ -86,6 +87,7 @@ extern void func_wsprintfApi(void);
 
 const struct test winetest_testlist[] =
 {
+    { "RegisterTouchWindow", func_RegisterTouchWindow },
     { "AttachThreadInput", func_AttachThreadInput },
     { "CalculatePopupWindowPosition", func_CalculatePopupWindowPosition },
     { "CharFuncs", func_CharFuncs },

@@ -9,6 +9,7 @@
 
 #include <win32k.h>
 #include <reactos/dwmframe.h>
+#include <reactos/usertouch.h>
 
 DBG_DEFAULT_CHANNEL(UserMisc);
 
@@ -552,6 +553,39 @@ NtUserCallTwoParam(
 
     switch (Routine)
     {
+        case ROS_TOUCH_REGISTER:
+        case ROS_TOUCH_UNREGISTER:
+        case ROS_TOUCH_QUERY:
+        {
+            Window = UserGetWindowObject((HWND)Param1);
+            Ret = FALSE;
+            if (!Window)
+                break;
+
+            if (Window->head.pti->rpdesk != gptiCurrent->rpdesk ||
+                (Routine != ROS_TOUCH_QUERY && Window->head.pti != gptiCurrent))
+            {
+                EngSetLastError(ERROR_ACCESS_DENIED);
+                break;
+            }
+
+            if (Routine == ROS_TOUCH_QUERY)
+                Ret = (DWORD_PTR)UserGetProp(Window, AtomTouchWindow, TRUE);
+            else if (Routine == ROS_TOUCH_UNREGISTER)
+            {
+                UserRemoveProp(Window, AtomTouchWindow, TRUE);
+                Ret = TRUE;
+            }
+            else if (Param2 & ~ROS_TOUCH_VALID_FLAGS)
+                EngSetLastError(ERROR_INVALID_FLAGS);
+            else
+            {
+                Ret = UserSetProp(Window, AtomTouchWindow, (HANDLE)(Param2 | ROS_TOUCH_REGISTERED), TRUE);
+                if (!Ret)
+                    EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            }
+            break;
+        }
         case TWOPARAM_ROUTINE_ROS_GETCALLPROCINFO:
         {
             WNDPROC_INFO ProcInfo;
