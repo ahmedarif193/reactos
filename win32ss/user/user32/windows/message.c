@@ -1997,7 +1997,11 @@ CallWindowProcA(WNDPROC lpPrevWndFunc,
 		LPARAM lParam)
 {
     PWND pWnd;
+#ifdef WOW64_I386_RUNTIME
+    ROS_CALLPROCINFO Info;
+#else
     PCALLPROCDATA CallProc;
+#endif
 
     if (lpPrevWndFunc == NULL)
     {
@@ -2005,6 +2009,22 @@ CallWindowProcA(WNDPROC lpPrevWndFunc,
         return 0;
     }
 
+#ifdef WOW64_I386_RUNTIME
+    /* Native USER heap objects have a different layout in a WoW64 process. */
+    pWnd = NULL;
+    if (IsCallProcHandle(lpPrevWndFunc))
+    {
+        if (!NtUserCallTwoParam((DWORD_PTR)lpPrevWndFunc, (DWORD_PTR)&Info, TWOPARAM_ROUTINE_ROS_GETCALLPROCINFO))
+            return 0;
+        if (Info.WindowProc > MAXULONG)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return 0;
+        }
+        return IntCallWindowProcA(!Info.IsUnicode, (WNDPROC)(ULONG_PTR)Info.WindowProc, pWnd, hWnd, Msg, wParam, lParam);
+    }
+    return IntCallWindowProcA(TRUE, lpPrevWndFunc, pWnd, hWnd, Msg, wParam, lParam);
+#else
     pWnd = ValidateHwnd(hWnd);
 
     if (!IsCallProcHandle(lpPrevWndFunc))
@@ -2028,6 +2048,7 @@ CallWindowProcA(WNDPROC lpPrevWndFunc,
             return 0;
         }
     }
+#endif
 }
 
 
@@ -2042,7 +2063,11 @@ CallWindowProcW(WNDPROC lpPrevWndFunc,
 		LPARAM lParam)
 {
     PWND pWnd;
+#ifdef WOW64_I386_RUNTIME
+    ROS_CALLPROCINFO Info;
+#else
     PCALLPROCDATA CallProc;
+#endif
 
     /* FIXME - can the first parameter be NULL? */
     if (lpPrevWndFunc == NULL)
@@ -2051,6 +2076,21 @@ CallWindowProcW(WNDPROC lpPrevWndFunc,
         return 0;
     }
 
+#ifdef WOW64_I386_RUNTIME
+    pWnd = NULL;
+    if (IsCallProcHandle(lpPrevWndFunc))
+    {
+        if (!NtUserCallTwoParam((DWORD_PTR)lpPrevWndFunc, (DWORD_PTR)&Info, TWOPARAM_ROUTINE_ROS_GETCALLPROCINFO))
+            return 0;
+        if (Info.WindowProc > MAXULONG)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return 0;
+        }
+        return IntCallWindowProcW(!Info.IsUnicode, (WNDPROC)(ULONG_PTR)Info.WindowProc, pWnd, hWnd, Msg, wParam, lParam);
+    }
+    return IntCallWindowProcW(FALSE, lpPrevWndFunc, pWnd, hWnd, Msg, wParam, lParam);
+#else
     pWnd = ValidateHwnd(hWnd);
 
     if (!IsCallProcHandle(lpPrevWndFunc))
@@ -2074,6 +2114,7 @@ CallWindowProcW(WNDPROC lpPrevWndFunc,
             return 0;
         }
     }
+#endif
 }
 
 

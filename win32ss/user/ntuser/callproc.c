@@ -69,11 +69,13 @@ UserGetCallProcInfo(IN HANDLE hCallProc,
         return FALSE;
     }
 
-/* Use Handle pEntry->ppi!
-    if (CallProc->pi != GetW32ProcessInfo())
+    /* Callproc objects contain process-local code addresses. */
+    if (CallProc->head.hTaskWow != (DWORD_PTR)GetW32ProcessInfo() ||
+        UserObjectInDestroy(hCallProc))
     {
+        EngSetLastError(ERROR_INVALID_HANDLE);
         return FALSE;
-    }*/
+    }
 
     wpInfo->WindowProc = CallProc->pfnClientPrevious;
     wpInfo->IsUnicode = !!(CallProc->wType & UserGetCPDA2U);
@@ -195,4 +197,3 @@ Cleanup:
    UserLeave();
    return Result;
 }
-

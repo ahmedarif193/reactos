@@ -4,6 +4,7 @@ list(APPEND SOURCE
     AttachThreadInput.c
     ../include/msgtrace.c
     CalculatePopupWindowPosition.c
+    CallWindowProc.c
     CharFuncs.c
     CloseWindow.c
     CopyImage.c

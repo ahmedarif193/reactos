@@ -75,6 +75,7 @@ extern void func_TrackMouseEvent(void);
 extern void func_TrackPopupMenuEx(void);
 extern void func_VirtualKey(void);
 extern void func_WindowBand(void);
+extern void func_CallWindowProc(void);
 extern void func_WndProc(void);
 extern void func_wsprintfApi(void);
 
@@ -153,6 +154,7 @@ const struct test winetest_testlist[] =
     { "TrackPopupMenuEx", func_TrackPopupMenuEx },
     { "VirtualKey", func_VirtualKey },
     { "WindowBand", func_WindowBand },
+    { "CallWindowProc", func_CallWindowProc },
     { "WndProc", func_WndProc },
     { "wsprintfApi", func_wsprintfApi },
     { 0, 0 }
