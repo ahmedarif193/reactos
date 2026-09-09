@@ -1394,25 +1394,26 @@ SoftGpuDdiGetNodeMetadata(
  */
 /* The QUERYSEGMENT flavours share field names; fill them uniformly.
  * Count pass (pSegmentDescriptor == NULL): */
+#define SOFTGPU_SEGMENT_COUNT(Dev) ((Dev)->DmaWorkspaceSize != 0 ? 2U : 1U)
 #define SOFTGPU_FILL_SEGMENT_COUNTS(pOut)                                   \
     do {                                                                    \
-        (pOut)->NbSegment                   = 1;                            \
+        (pOut)->NbSegment                   = SOFTGPU_SEGMENT_COUNT(Device); \
         (pOut)->PagingBufferSegmentId       = 0;                            \
         (pOut)->PagingBufferSize            = 64 * 1024;                    \
         (pOut)->PagingBufferPrivateDataSize = 0;                            \
     } while (0)
 
-/* Fill pass: one CPU-visible segment over the validated mode-sized buffer. */
-#define SOFTGPU_FILL_SEGMENT_DESC(pDesc, Dev)                               \
+/* General allocations use segment 1; an optional DMA workspace is segment 2. */
+#define SOFTGPU_FILL_SEGMENT_DESC(pDesc, Dev, Index)                        \
     do {                                                                    \
         RtlZeroMemory((pDesc), sizeof(*(pDesc)));                           \
         (pDesc)->Flags.CpuVisible                = 1;                       \
         (pDesc)->Flags.PopulatedFromSystemMemory = 1;                       \
         (pDesc)->Flags.LocalBudgetGroup          = 1;                       \
-        (pDesc)->BaseAddress.QuadPart          = (Dev)->FrameBufferPhys.QuadPart; \
-        (pDesc)->CpuTranslatedAddress.QuadPart = (Dev)->FrameBufferPhys.QuadPart; \
-        (pDesc)->Size                          = (Dev)->FrameBufferSize;    \
-        (pDesc)->CommitLimit                   = (Dev)->FrameBufferSize;    \
+        (pDesc)->BaseAddress = (Index) == 0 ? (Dev)->FrameBufferPhys : (Dev)->DmaWorkspacePhysical; \
+        (pDesc)->CpuTranslatedAddress = (pDesc)->BaseAddress;                \
+        (pDesc)->Size = (Index) == 0 ? (Dev)->FrameBufferSize : (Dev)->DmaWorkspaceSize; \
+        (pDesc)->CommitLimit = (pDesc)->Size;                                \
     } while (0)
 
 NTSTATUS
@@ -1424,6 +1425,7 @@ SoftGpuDdiQueryAdapterInfo(
     PSOFTGPU_DEVICE     Device = (PSOFTGPU_DEVICE)MiniportDeviceContext;
     PDXGK_QUERYSEGMENTOUT pSegOut;
     PDXGK_SEGMENTDESCRIPTOR pDesc;
+    ULONG SegmentIndex;
 
     if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC ||
         pQueryAdapterInfo == NULL)
@@ -1582,7 +1584,7 @@ SoftGpuDdiQueryAdapterInfo(
         }
 
         /* Phase 2: fill the descriptor array.  NbSegment must be >= 1. */
-        if (pSegOut->NbSegment < 1)
+        if (pSegOut->NbSegment < SOFTGPU_SEGMENT_COUNT(Device))
         {
             DPRINT1("SOFTGPU: QueryAdapterInfo QUERYSEGMENT phase 2: "
                     "NbSegment=%u\n", pSegOut->NbSegment);
@@ -1592,8 +1594,11 @@ SoftGpuDdiQueryAdapterInfo(
         DPRINT("SOFTGPU: QueryAdapterInfo QUERYSEGMENT phase 2: "
                "filling %u segment(s)\n", pSegOut->NbSegment);
 
-        pDesc = &pSegOut->pSegmentDescriptor[0];
-        SOFTGPU_FILL_SEGMENT_DESC(pDesc, Device);
+        for (SegmentIndex = 0; SegmentIndex < SOFTGPU_SEGMENT_COUNT(Device); ++SegmentIndex)
+        {
+            pDesc = &pSegOut->pSegmentDescriptor[SegmentIndex];
+            SOFTGPU_FILL_SEGMENT_DESC(pDesc, Device, SegmentIndex);
+        }
 
         return STATUS_SUCCESS;
     }
@@ -1619,14 +1624,18 @@ SoftGpuDdiQueryAdapterInfo(
             return STATUS_SUCCESS;
         }
 
-        if (pSegOut4->NbSegment < 1 ||
+        if (pSegOut4->NbSegment < SOFTGPU_SEGMENT_COUNT(Device) ||
             pSegOut4->SegmentDescriptorStride < sizeof(DXGK_SEGMENTDESCRIPTOR4))
         {
             return STATUS_INVALID_PARAMETER;
         }
 
-        pDesc4 = (PDXGK_SEGMENTDESCRIPTOR4)pSegOut4->pSegmentDescriptor;
-        SOFTGPU_FILL_SEGMENT_DESC(pDesc4, Device);
+        for (SegmentIndex = 0; SegmentIndex < SOFTGPU_SEGMENT_COUNT(Device); ++SegmentIndex)
+        {
+            pDesc4 = (PDXGK_SEGMENTDESCRIPTOR4)((PUCHAR)pSegOut4->pSegmentDescriptor +
+                (SIZE_T)SegmentIndex * pSegOut4->SegmentDescriptorStride);
+            SOFTGPU_FILL_SEGMENT_DESC(pDesc4, Device, SegmentIndex);
+        }
 
         return STATUS_SUCCESS;
     }
@@ -1653,11 +1662,14 @@ SoftGpuDdiQueryAdapterInfo(
             return STATUS_SUCCESS;
         }
 
-        if (pSegOut3->NbSegment < 1)
+        if (pSegOut3->NbSegment < SOFTGPU_SEGMENT_COUNT(Device))
             return STATUS_INVALID_PARAMETER;
 
-        pDesc3 = &pSegOut3->pSegmentDescriptor[0];
-        SOFTGPU_FILL_SEGMENT_DESC(pDesc3, Device);
+        for (SegmentIndex = 0; SegmentIndex < SOFTGPU_SEGMENT_COUNT(Device); ++SegmentIndex)
+        {
+            pDesc3 = &pSegOut3->pSegmentDescriptor[SegmentIndex];
+            SOFTGPU_FILL_SEGMENT_DESC(pDesc3, Device, SegmentIndex);
+        }
 
         return STATUS_SUCCESS;
     }

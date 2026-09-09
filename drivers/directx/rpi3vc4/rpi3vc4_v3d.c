@@ -124,19 +124,20 @@ Rpi3Vc4ReserveV3dMemory(
     PHYSICAL_ADDRESS HighAddress;
     PHYSICAL_ADDRESS BoundaryAddressMultiple;
     PHYSICAL_ADDRESS PhysicalAddress;
+    PMDL Mdl;
 
     if (Context->V3dBinOverflow != NULL)
         return STATUS_SUCCESS;
 
+    /* Tile-state pointers carry only 28 address bits. Reserve overflow and
+     * DMA workspaces together so all tile scratch shares one high nibble.
+     * Ordinary textures keep their independent general allocation segment. */
     LowAddress.QuadPart = 0;
     HighAddress.QuadPart = RPI3VC4_HIGHEST_SCANOUT_ADDRESS;
     BoundaryAddressMultiple.QuadPart = 0x10000000ULL;
     Context->V3dBinOverflow = MmAllocateContiguousMemorySpecifyCache(
-        RPI3VC4_V3D_BIN_OVERFLOW_SIZE,
-        LowAddress,
-        HighAddress,
-        BoundaryAddressMultiple,
-        MmNonCached);
+        RPI3VC4_V3D_WORKING_SIZE, LowAddress, HighAddress,
+        BoundaryAddressMultiple, MmCached);
     if (Context->V3dBinOverflow == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -144,22 +145,36 @@ Rpi3Vc4ReserveV3dMemory(
     if (PhysicalAddress.QuadPart <= 0 ||
         (ULONGLONG)PhysicalAddress.QuadPart >
             RPI3VC4_HIGHEST_SCANOUT_ADDRESS -
-                (RPI3VC4_V3D_BIN_OVERFLOW_SIZE - 1) ||
+                (RPI3VC4_V3D_WORKING_SIZE - 1) ||
         ((ULONG)PhysicalAddress.QuadPart & 0xf0000000UL) !=
             ((ULONG)(PhysicalAddress.QuadPart +
-                     RPI3VC4_V3D_BIN_OVERFLOW_SIZE - 1) & 0xf0000000UL))
+                     RPI3VC4_V3D_WORKING_SIZE - 1) & 0xf0000000UL))
     {
-        MmFreeContiguousMemorySpecifyCache(
-            Context->V3dBinOverflow,
-            RPI3VC4_V3D_BIN_OVERFLOW_SIZE,
-            MmNonCached);
+        MmFreeContiguousMemorySpecifyCache(Context->V3dBinOverflow,
+            RPI3VC4_V3D_WORKING_SIZE, MmCached);
         Context->V3dBinOverflow = NULL;
         return STATUS_CONFLICTING_ADDRESSES;
     }
 
-    RtlZeroMemory(Context->V3dBinOverflow,
-                  RPI3VC4_V3D_BIN_OVERFLOW_SIZE);
+    /* Remove dirty CPU cache lines before any portion becomes GPU output. */
+    Mdl = IoAllocateMdl(Context->V3dBinOverflow,
+                       RPI3VC4_V3D_WORKING_SIZE, FALSE, FALSE, NULL);
+    if (Mdl == NULL)
+    {
+        MmFreeContiguousMemorySpecifyCache(Context->V3dBinOverflow,
+            RPI3VC4_V3D_WORKING_SIZE, MmCached);
+        Context->V3dBinOverflow = NULL;
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlZeroMemory(Context->V3dBinOverflow, RPI3VC4_V3D_WORKING_SIZE);
+    MmBuildMdlForNonPagedPool(Mdl);
+    KeFlushIoBuffers(Mdl, FALSE, TRUE);
+    IoFreeMdl(Mdl);
+
     Context->V3dBinOverflowPhysical = PhysicalAddress;
+    Context->Device->DmaWorkspacePhysical.QuadPart =
+        PhysicalAddress.QuadPart + RPI3VC4_V3D_BIN_OVERFLOW_SIZE;
+    Context->Device->DmaWorkspaceSize = RPI3VC4_V3D_DMA_WORKSPACE_SIZE;
     Context->V3dBinOverflowUsed = 0;
     Context->V3dBinOverflowCurrent = 0;
     return STATUS_SUCCESS;
@@ -701,9 +716,11 @@ Rpi3Vc4StopV3d(
     {
         MmFreeContiguousMemorySpecifyCache(
             Context->V3dBinOverflow,
-            RPI3VC4_V3D_BIN_OVERFLOW_SIZE,
-            MmNonCached);
+            RPI3VC4_V3D_WORKING_SIZE,
+            MmCached);
         Context->V3dBinOverflow = NULL;
+        Context->Device->DmaWorkspacePhysical.QuadPart = 0;
+        Context->Device->DmaWorkspaceSize = 0;
         Context->V3dBinOverflowPhysical.QuadPart = 0;
         Context->V3dBinOverflowUsed = 0;
         Context->V3dBinOverflowCurrent = 0;

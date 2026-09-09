@@ -4336,6 +4336,7 @@ DxgkpSubmitVirtGpuCommandEscape(
     DXGKRNL_TRACK_DMA_ARGS TrackArgs;
     PVOID DmaBufferPrivateData = NULL;
     ULONG DmaBufferPrivateDataSize = 0;
+    ULONG DmaBufferSegmentSet = 0;
     ULONG SubmissionFenceId;
     ULONG VidSchFence = 0;
     UINT DmaBytesUsed = 0;
@@ -4375,11 +4376,17 @@ DxgkpSubmitVirtGpuCommandEscape(
         return STATUS_INVALID_PARAMETER;
 
     if (Context != NULL)
+    {
         DmaBufferPrivateDataSize =
             Context->ContextInfo.DmaBufferPrivateDataSize;
+        DmaBufferSegmentSet = Context->ContextInfo.DmaBufferSegmentSet;
+    }
     else if (Device->LegacyDeviceInfoValid)
+    {
         DmaBufferPrivateDataSize =
             Device->LegacyDeviceInfo.DmaBufferPrivateDataSize;
+        DmaBufferSegmentSet = Device->LegacyDeviceInfo.DmaBufferSegmentSet;
+    }
     if (DmaBufferPrivateDataSize > DXGK_VIRTGPU_MAX_PRIVATE_DATA_BYTES)
         return STATUS_INVALID_PARAMETER;
 
@@ -4387,9 +4394,11 @@ DxgkpSubmitVirtGpuCommandEscape(
         RequestedDmaBufferBytes = CommandBytes;
     if (RequestedDmaBufferBytes > DXGK_VIRTGPU_MAX_DMA_BUFFER_BYTES)
         return STATUS_INVALID_BUFFER_SIZE;
-    Status = DxgkAllocateDmaBuffer(Adapter,
-                                   RequestedDmaBufferBytes,
-                                   &DmaBuffer);
+    /* Escapes must honor the same miniport placement contract as Render. */
+    Status = DxgkAllocateDmaBufferInSegmentSet(Adapter,
+                                             RequestedDmaBufferBytes,
+                                             DmaBufferSegmentSet,
+                                             &DmaBuffer);
     if (!NT_SUCCESS(Status))
         return Status;
     if (DmaBufferPrivateDataSize != 0)

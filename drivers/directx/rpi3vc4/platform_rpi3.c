@@ -103,6 +103,14 @@ SoftGpuPlatformDmaBufferPrivateDataSize(VOID)
     return sizeof(RPI3VC4_DMA_PACKET);
 }
 
+ULONG
+SoftGpuPlatformDmaBufferSegmentSet(VOID)
+{
+    /* Tile state and overflow pointers must share their high address nibble.
+     * The dedicated workspace segment enforces this via the WDDM allocator. */
+    return 1UL << (RPI3VC4_V3D_DMA_SEGMENT_ID - 1);
+}
+
 NTSTATUS
 SoftGpuPlatformOpenAllocation(
     _Inout_ PSOFTGPU_OPENALLOC OpenAllocation)

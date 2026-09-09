@@ -837,6 +837,17 @@ Rpi3Vc4ValidateRender(
         Packet->BinnerOverflowAddress = Rpi3Vc4BusAddress(
             Platform, Platform->V3dBinOverflowPhysical);
         Packet->BinnerOverflowSize = RPI3VC4_V3D_BIN_OVERFLOW_SIZE;
+        /* Never allow a truncated tile pointer to address a different bank. */
+        if (Packet->TileAllocationSize == 0 ||
+            Packet->TileAllocationAddress > MAXULONG - (Packet->TileAllocationSize - 1) ||
+            ((Packet->TileStateAddress ^ Packet->BinnerOverflowAddress) & 0xf0000000UL) != 0 ||
+            ((Packet->TileStateAddress ^ Packet->TileAllocationAddress) & 0xf0000000UL) != 0 ||
+            ((Packet->TileStateAddress ^ (Packet->TileAllocationAddress +
+                Packet->TileAllocationSize - 1)) & 0xf0000000UL) != 0)
+        {
+            Status = STATUS_CONFLICTING_ADDRESSES;
+            goto Cleanup;
+        }
     }
     if (Validation->ArenaCursor > Validation->ArenaSize)
     {

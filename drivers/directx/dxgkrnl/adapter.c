@@ -2109,6 +2109,18 @@ DxgkpTakeCachedDmaBuffer(
             return NULL;
         }
         DmaBuffer->VirtualAddress = DmaBuffer->BackingAllocation->SystemMemory;
+        if (DmaBuffer->OwnerDevice == NULL)
+        {
+            /* Physical DMA in VRAM must use the resident segment mapping,
+             * not the allocation's separate system-memory staging backing. */
+            if (!NT_SUCCESS(DxgkVidMmMapAllocationCpu(
+                                DmaBuffer->BackingAllocation,
+                                &DmaBuffer->VirtualAddress)))
+            {
+                DxgkpDestroyDmaBuffer(DmaBuffer);
+                return NULL;
+            }
+        }
         DmaBuffer->SegmentId = DmaBuffer->BackingAllocation->SegmentId;
         DmaBuffer->SegmentAddress =
             DmaBuffer->BackingAllocation->PhysicalAddress;
@@ -2278,7 +2290,7 @@ DxgkAllocateDmaBufferInSegmentSetWithPrivateData(
         return Status;
     }
     Buffer->OwnerAdapter = Adapter;
-    Buffer->VirtualAddress = Allocation->SystemMemory;
+    Buffer->VirtualAddress = Allocation->CpuAddress;
     Buffer->Capacity = Capacity;
     Buffer->SegmentSet = SegmentSet;
     Buffer->SegmentId = Allocation->SegmentId;

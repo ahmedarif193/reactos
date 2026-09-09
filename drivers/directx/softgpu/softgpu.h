@@ -260,6 +260,9 @@ typedef struct _SOFTGPU_DEVICE
     PVOID               FrameBuffer;
     PHYSICAL_ADDRESS    FrameBufferPhys;
     SIZE_T              FrameBufferSize;
+    /* Optional platform-owned segment for constrained DMA workspaces. */
+    PHYSICAL_ADDRESS    DmaWorkspacePhysical;
+    SIZE_T              DmaWorkspaceSize;
     PHYSICAL_ADDRESS    HighestDmaAddress;
 
     /*
@@ -432,6 +435,9 @@ SoftGpuPlatformFillNodeMetadata(
 
 ULONG
 SoftGpuPlatformDmaBufferPrivateDataSize(VOID);
+
+ULONG
+SoftGpuPlatformDmaBufferSegmentSet(VOID);
 
 VOID
 SoftGpuPlatformInitializeTiming(
