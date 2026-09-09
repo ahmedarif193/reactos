@@ -1173,7 +1173,10 @@ IntDispatchMessage(PMSG pMsg)
     {
         Window->state2 &= ~WNDS2_WMPAINTSENT;
         /* send a WM_ERASEBKGND if the non-client area is still invalid */
-        ERR("Message WM_PAINT count %d Internal Paint Set? %s\n",Window->head.pti->cPaintsReady, Window->state & WNDS_INTERNALPAINT ? "TRUE" : "FALSE");
+        /* An internal or application-posted WM_PAINT may have no update
+         * region. In that case the application need not call BeginPaint. */
+        if (Window->hrgnUpdate)
+            ERR("Message WM_PAINT count %d Internal Paint Set? %s\n",Window->head.pti->cPaintsReady, Window->state & WNDS_INTERNALPAINT ? "TRUE" : "FALSE");
         IntPaintWindow( Window );
     }
 
