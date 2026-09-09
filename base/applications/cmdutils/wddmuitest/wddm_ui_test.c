@@ -6,8 +6,12 @@
  */
 
 #include <windows.h>
+#include <dwmapi.h>
+#include <tlhelp32.h>
+#include <d3dkmthk.h>
 #include <GL/gl.h>
 #include <reactos/dwmframe.h>
+#include <reactos/dwmprof.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -22,6 +26,7 @@
 #define SUBMENU_ITEM_COUNT 5
 #define SUBMENU_SWITCH_COUNT 40
 #define CURSOR_MOVE_COUNT 180
+#define DESKTOP_PERF_LONG_COUNT 600
 #define CURSOR_FRAME_MS 16
 #define GL_FRAME_COUNT 240
 #define GL_FRAME_MS 16
@@ -56,6 +61,8 @@ static const WCHAR OwnerClassName[] = L"WddmUiTestOwner";
 static const WCHAR BackgroundClassName[] = L"WddmUiTestBackground";
 static const WCHAR GlClassName[] = L"WddmUiTestGl";
 static LARGE_INTEGER PerformanceFrequency;
+static BOOL DesktopPerfClicks;
+static ULONG DesktopPerfClickUps, DesktopPerfDoubleClicks;
 
 static VOID
 TestPrint(
@@ -145,7 +152,7 @@ Percentile95(
     _In_reads_(Count) const ULONGLONG *Samples,
     _In_ ULONG Count)
 {
-    ULONGLONG Sorted[CURSOR_MOVE_COUNT];
+    ULONGLONG Sorted[DESKTOP_PERF_LONG_COUNT];
     ULONG Index;
 
     if (Count == 0 || Count > ARRAYSIZE(Sorted))
@@ -822,6 +829,11 @@ OwnerWindowProcedure(
     _In_ WPARAM wParam,
     _In_ LPARAM lParam)
 {
+    if (DesktopPerfClicks)
+    {
+        if (Message == WM_LBUTTONUP) ++DesktopPerfClickUps;
+        if (Message == WM_LBUTTONDBLCLK) ++DesktopPerfDoubleClicks;
+    }
     if (Message == WM_ERASEBKGND)
         return 1;
     if (Message == WM_PAINT)
@@ -1176,6 +1188,7 @@ RegisterTestClasses(
     WNDCLASSW WindowClass;
 
     ZeroMemory(&WindowClass, sizeof(WindowClass));
+    WindowClass.style = CS_DBLCLKS;
     WindowClass.lpfnWndProc = OwnerWindowProcedure;
     WindowClass.hInstance = Instance;
     WindowClass.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(32512));
@@ -1207,8 +1220,552 @@ RegisterTestClasses(
     return TRUE;
 }
 
+static BOOL
+QueryDesktopFrames(ULONG *Frames, ULONG *Queued)
+{
+    typedef LONG (APIENTRY *OPEN)(D3DKMT_OPENADAPTERFROMHDC *);
+    typedef LONG (APIENTRY *CLOSE)(const D3DKMT_CLOSEADAPTER *);
+    typedef LONG (APIENTRY *QUERY)(D3DKMT_QUERYSTATISTICS *);
+    HMODULE Gdi = GetModuleHandleW(L"gdi32.dll");
+    OPEN Open = (OPEN)GetProcAddress(Gdi, "D3DKMTOpenAdapterFromHdc");
+    CLOSE Close = (CLOSE)GetProcAddress(Gdi, "D3DKMTCloseAdapter");
+    QUERY Query = (QUERY)GetProcAddress(Gdi, "D3DKMTQueryStatistics");
+    D3DKMT_OPENADAPTERFROMHDC Adapter = {0};
+    D3DKMT_CLOSEADAPTER Closing = {0};
+    D3DKMT_QUERYSTATISTICS Stats = {0};
+    BOOL Result = FALSE;
+
+    if (!Open || !Close || !Query) return FALSE;
+    Adapter.hDc = GetDC(NULL);
+    if (!Adapter.hDc) return FALSE;
+    if (Open(&Adapter) >= 0 && Adapter.hAdapter)
+    {
+        Stats.Type = D3DKMT_QUERYSTATISTICS_VIDPNSOURCE;
+        Stats.AdapterLuid = Adapter.AdapterLuid;
+        Stats.QueryVidPnSource.VidPnSourceId = Adapter.VidPnSourceId;
+        if (Query(&Stats) >= 0)
+        {
+            *Frames = Stats.QueryResult.VidPnSourceInformation.GlobalInformation.Frame;
+            *Queued = Stats.QueryResult.VidPnSourceInformation.GlobalInformation.QueuedPresent;
+            Result = TRUE;
+        }
+        Closing.hAdapter = Adapter.hAdapter;
+        Close(&Closing);
+    }
+    ReleaseDC(NULL, Adapter.hDc);
+    return Result;
+}
+
+static ULONGLONG
+ProcessCpuTime(HANDLE Process)
+{
+    FILETIME Created, Exited, Kernel, User;
+
+    if (Process == NULL ||
+        !GetProcessTimes(Process, &Created, &Exited, &Kernel, &User))
+        return 0;
+    return ((ULONGLONG)Kernel.dwHighDateTime << 32) + Kernel.dwLowDateTime +
+           ((ULONGLONG)User.dwHighDateTime << 32) + User.dwLowDateTime;
+}
+
+
+typedef struct _TASKMGR_WINDOW_SEARCH
+{
+    DWORD ProcessId;
+    HWND Window;
+} TASKMGR_WINDOW_SEARCH;
+
+static BOOL CALLBACK
+FindTaskmgrWindow(HWND Window, LPARAM Parameter)
+{
+    TASKMGR_WINDOW_SEARCH *Search = (TASKMGR_WINDOW_SEARCH *)Parameter;
+    DWORD ProcessId;
+
+    GetWindowThreadProcessId(Window, &ProcessId);
+    if (ProcessId == Search->ProcessId && IsWindowVisible(Window) &&
+        GetWindow(Window, GW_OWNER) == NULL)
+    {
+        Search->Window = Window;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static INT
+RunTaskmgrPerf(BOOL ProfileDrag, BOOL PreciseTimer)
+{
+    static const char *Names[] = {"desktop", "taskmgr_default", "taskmgr_maximized", "taskmgr_drag"};
+    PROCESSENTRY32W Entry = {0};
+    PROCESS_INFORMATION Process = {0};
+    STARTUPINFOW Startup = {0};
+    SYSTEM_INFO System;
+    TASKMGR_WINDOW_SEARCH Search = {0};
+    HWND Console = GetConsoleWindow();
+    HANDLE Snapshot, Dwm = NULL;
+    WCHAR Path[MAX_PATH];
+    RECT Original = {0};
+    ULONG Phase, Failures = 0;
+    HMODULE Profiler = NULL;
+    HRESULT (WINAPI *StartCapture)(ULONG *) = NULL;
+    HRESULT (WINAPI *StopCapture)(ULONG, DPT_SNAPSHOT *, ULONG) = NULL;
+    DPT_SNAPSHOT *Capture = NULL;
+    ULONG CaptureSession = 0;
+    LONG (NTAPI *QueryTimerResolution)(ULONG *, ULONG *, ULONG *);
+    LONG (NTAPI *SetTimerResolution)(ULONG, BOOLEAN, ULONG *);
+    BOOL TimerRequested = FALSE;
+
+    QueryTimerResolution = (void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryTimerResolution");
+    SetTimerResolution = (void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetTimerResolution");
+    if (PreciseTimer && (!QueryTimerResolution || !SetTimerResolution))
+        return 1;
+
+    if (ProfileDrag)
+    {
+        Profiler = LoadLibraryW(L"dwmprof.dll");
+        if (Profiler)
+        {
+            StartCapture = (void *)GetProcAddress(Profiler, "DwmProfileStartCapture");
+            StopCapture = (void *)GetProcAddress(Profiler, "DwmProfileStopCapture");
+            Capture = HeapAlloc(GetProcessHeap(), 0, sizeof(*Capture));
+        }
+        if (!StartCapture || !StopCapture || !Capture)
+        {
+            if (Capture) HeapFree(GetProcessHeap(), 0, Capture);
+            if (Profiler) FreeLibrary(Profiler);
+            TestPrint("TASKMGR_PERF_ERROR profiler_unavailable=1\n");
+            return 1;
+        }
+    }
+
+    if (Console) ShowWindow(Console, SW_HIDE);
+    GetSystemInfo(&System);
+    Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    Entry.dwSize = sizeof(Entry);
+    if (Snapshot != INVALID_HANDLE_VALUE)
+    {
+        if (Process32FirstW(Snapshot, &Entry)) do
+        {
+            if (!_wcsicmp(Entry.szExeFile, L"dwm.exe"))
+                Dwm = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, Entry.th32ProcessID);
+        } while (Dwm == NULL && Process32NextW(Snapshot, &Entry));
+        CloseHandle(Snapshot);
+    }
+    if (!Dwm || !GetSystemDirectoryW(Path, ARRAYSIZE(Path)-32))
+    {
+        TestPrint("TASKMGR_PERF_ERROR setup=%lu\n", GetLastError());
+        if (Dwm) CloseHandle(Dwm);
+        if (Capture) HeapFree(GetProcessHeap(), 0, Capture);
+        if (Profiler) FreeLibrary(Profiler);
+        return 1;
+    }
+    lstrcatW(Path, L"\\taskmgr11.exe");
+    TestPrint("TASKMGR_PERF_BEGIN processors=%lu\n", System.dwNumberOfProcessors);
+    for (Phase = 0; Phase < ARRAYSIZE(Names); ++Phase)
+    {
+        LARGE_INTEGER Start, End;
+        DXGK_PRESENT_STATS Before, After;
+        ULONGLONG DwmStart, DwmEnd, AppStart, AppEnd, Wall, DwmUs, AppUs;
+        DWORD Begin, Next, Duration = Phase == 0 || Phase == 3 ? 10000 : 20000;
+        ULONG FramesBefore = 0, FramesAfter = 0, QueuedBefore = 0, QueuedAfter = 0;
+        BOOL HaveFrames;
+        ULONG Index = 0;
+        LONG Delay;
+        RECT Rect;
+
+        if (Phase == 1)
+        {
+            Startup.cb = sizeof(Startup);
+            if (!CreateProcessW(Path, NULL, NULL, NULL, FALSE, 0, NULL, NULL,
+                                &Startup, &Process))
+            {
+                TestPrint("TASKMGR_PERF_ERROR launch=%lu\n", GetLastError());
+                ++Failures;
+                break;
+            }
+            CloseHandle(Process.hThread);
+            Search.ProcessId = Process.dwProcessId;
+            Begin = GetTickCount();
+            do
+            {
+                EnumWindows(FindTaskmgrWindow, (LPARAM)&Search);
+                if (Search.Window) break;
+                PumpMessages();
+                Sleep(100);
+            } while (GetTickCount()-Begin < 15000);
+            /* Taskmgr11 is single-instance. A manually opened instance makes
+             * our child exit after activating the existing frame. Measure
+             * that frame's actual process instead of timing the exited child. */
+            if (!Search.Window)
+            {
+                HWND Existing = FindWindowW(L"TaskManager11Frame", NULL);
+                DWORD ExistingPid = 0;
+                HANDLE ExistingProcess;
+                if (Existing && IsWindowVisible(Existing))
+                {
+                    GetWindowThreadProcessId(Existing, &ExistingPid);
+                    ExistingProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, ExistingPid);
+                    if (ExistingProcess)
+                    {
+                        CloseHandle(Process.hProcess);
+                        Process.hProcess = ExistingProcess;
+                        Search.ProcessId = ExistingPid;
+                        Search.Window = Existing;
+                        TestPrint("TASKMGR_PERF_ATTACH pid=%lu\n", ExistingPid);
+                    }
+                }
+            }
+            if (!Search.Window)
+            {
+                TestPrint("TASKMGR_PERF_ERROR window_not_found=1\n");
+                ++Failures;
+                break;
+            }
+            GetWindowRect(Search.Window, &Original);
+            SetForegroundWindow(Search.Window);
+        }
+        if (Phase == 2) ShowWindow(Search.Window, SW_MAXIMIZE);
+        if (Phase == 3)
+        {
+            ShowWindow(Search.Window, SW_RESTORE);
+            SetWindowPos(Search.Window, HWND_TOP, Original.left, Original.top,
+                         Original.right-Original.left, Original.bottom-Original.top, 0);
+        }
+        PumpMessages();
+        Sleep(3000);
+        if (Search.Window) GetWindowRect(Search.Window, &Rect);
+        else SetRectEmpty(&Rect);
+        TestPrint("TASKMGR_PERF_PHASE name=%s window=%p rect=%ld,%ld,%ld,%ld duration_ms=%lu\n",
+                  Names[Phase], Search.Window, Rect.left, Rect.top, Rect.right, Rect.bottom, Duration);
+        {
+            HWND Shell = GetShellWindow();
+            HWND Tray = FindWindowW(L"Shell_TrayWnd", NULL);
+            POINT Probe = {20, 20};
+            HWND Hit = WindowFromPoint(Probe);
+            WCHAR HitClass[64] = L"";
+            DWORD_PTR Reply;
+            BOOL ShellResponsive = Shell && SendMessageTimeoutW(Shell, WM_NULL,
+                0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &Reply);
+            BOOL TrayResponsive = Tray && SendMessageTimeoutW(Tray, WM_NULL,
+                0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &Reply);
+            if (Hit) GetClassNameW(Hit, HitClass, ARRAYSIZE(HitClass));
+            TestPrint("DWMGPU_SHELL phase=%s shell=%p responsive=%u tray=%p responsive=%u hit=%p class=%ls\n",
+                      Names[Phase], Shell, ShellResponsive, Tray, TrayResponsive,
+                      Hit, HitClass);
+        }
+        if (ProfileDrag && Phase == 3)
+        {
+            ULONG Minimum = 0, Maximum = 0, Current = 0;
+            if (QueryTimerResolution && QueryTimerResolution(&Minimum, &Maximum, &Current) >= 0)
+                TestPrint("TASKMGR_TIMER before_100ns=%lu minimum=%lu maximum=%lu\n", Current, Minimum, Maximum);
+            if (PreciseTimer)
+            {
+                LONG TimerStatus = SetTimerResolution(10000, TRUE, &Current);
+                TimerRequested = TimerStatus >= 0;
+                TestPrint("TASKMGR_TIMER request_status=0x%08lx requested_100ns=10000 current_100ns=%lu\n", TimerStatus, Current);
+                if (!TimerRequested) ++Failures;
+            }
+            HRESULT Status = StartCapture(&CaptureSession);
+            TestPrint("TASKMGR_PERF_CAPTURE_BEGIN status=0x%08lx session=%lu\n", Status, CaptureSession);
+            if (FAILED(Status)) ++Failures;
+        }
+        QueryPresentStats(&Before);
+        HaveFrames = QueryDesktopFrames(&FramesBefore, &QueuedBefore);
+        DwmStart = ProcessCpuTime(Dwm);
+        AppStart = ProcessCpuTime(Process.hProcess);
+        QueryPerformanceCounter(&Start);
+        Begin = Next = GetTickCount();
+        while (GetTickCount()-Begin < Duration)
+        {
+            if (Phase == 3)
+            {
+                LONG Offset = (Index % 80 < 40 ? Index % 40 : 39-Index % 40) * 2;
+                if (!SetWindowPos(Search.Window, NULL, Original.left+Offset,
+                                  Original.top+Offset/2, 0, 0,
+                                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE))
+                    ++Failures;
+            }
+            ++Index;
+            PumpMessages();
+            Next += 16;
+            Delay = (LONG)(Next-GetTickCount());
+            if (Delay > 0) Sleep(Delay);
+            else if (Delay < -100) Next = GetTickCount();
+        }
+        QueryPerformanceCounter(&End);
+        DwmEnd = ProcessCpuTime(Dwm);
+        AppEnd = ProcessCpuTime(Process.hProcess);
+        QueryPresentStats(&After);
+        HaveFrames = QueryDesktopFrames(&FramesAfter, &QueuedAfter) && HaveFrames;
+        if (CaptureSession)
+        {
+            HRESULT Status = StopCapture(CaptureSession, Capture, sizeof(*Capture));
+            TestPrint("TASKMGR_PERF_CAPTURE_END status=0x%08lx session=%lu\n", Status, CaptureSession);
+            if (FAILED(Status)) ++Failures;
+            CaptureSession = 0;
+        }
+        if (TimerRequested)
+        {
+            ULONG Current = 0;
+            LONG Status = SetTimerResolution(10000, FALSE, &Current);
+            TestPrint("TASKMGR_TIMER restore_status=0x%08lx current_100ns=%lu\n", Status, Current);
+            if (Status < 0) ++Failures;
+            TimerRequested = FALSE;
+        }
+        Wall = ElapsedMicroseconds(Start,End);
+        DwmUs = (DwmEnd-DwmStart)/10;
+        AppUs = (AppEnd-AppStart)/10;
+        TestPrint("TASKMGR_PERF_RESULT phase=%s wall_us=%llu dwm_cpu_us=%llu app_cpu_us=%llu "
+                  "dwm_core_pct_milli=%llu dwm_machine_pct_milli=%llu app_core_pct_milli=%llu "
+                  "presents=%lu scanout=%lu completed=%lu failed=%lu pointer=%lu iterations=%lu "
+                  "full_stats=%u full_frames=%lu queued=%lu\n",
+                  Names[Phase], Wall, DwmUs, AppUs, DwmUs*100000/Wall,
+                  DwmUs*100000/Wall/System.dwNumberOfProcessors, AppUs*100000/Wall,
+                  After.PresentCalls-Before.PresentCalls, After.ScanoutCopies-Before.ScanoutCopies,
+                  After.PresentCompleted-Before.PresentCompleted, After.PresentFailed-Before.PresentFailed,
+                  After.PointerPositionCalls-Before.PointerPositionCalls, Index,
+                  HaveFrames, FramesAfter-FramesBefore, QueuedAfter-QueuedBefore);
+    }
+    if (Search.Window) PostMessageW(Search.Window, WM_CLOSE, 0, 0);
+    if (Process.hProcess) CloseHandle(Process.hProcess);
+    CloseHandle(Dwm);
+    if (Capture) HeapFree(GetProcessHeap(), 0, Capture);
+    if (Profiler) FreeLibrary(Profiler);
+    TestPrint("TASKMGR_PERF_END failures=%lu\n", Failures);
+    return Failures ? 1 : 0;
+}
+
+static INT
+RunTaskmgrTimerComparison(VOID)
+{
+    ULONG Phase;
+    INT Failures = 0;
+
+    TestPrint("TASKMGR_TIMER_COMPARISON_BEGIN\n");
+    for (Phase = 0; Phase < 2; ++Phase)
+    {
+        WCHAR Path[MAX_PATH], Command[MAX_PATH + 32];
+        STARTUPINFOW Startup = {sizeof(Startup)};
+        PROCESS_INFORMATION Process;
+        DWORD ExitCode = 1;
+
+        Failures += RunTaskmgrPerf(TRUE, Phase != 0);
+        if (!GetSystemDirectoryW(Path, ARRAYSIZE(Path) - 16))
+            return 1;
+        lstrcatW(Path, L"\\dwmprof.exe");
+        _snwprintf(Command, ARRAYSIZE(Command), L"\"%ls\" dump --serial", Path);
+        if (!CreateProcessW(Path, Command, NULL, NULL, FALSE, 0, NULL, NULL, &Startup, &Process))
+        {
+            TestPrint("TASKMGR_TIMER_COMPARISON_ERROR dump_launch=%lu\n", GetLastError());
+            return 1;
+        }
+        WaitForSingleObject(Process.hProcess, INFINITE);
+        GetExitCodeProcess(Process.hProcess, &ExitCode);
+        CloseHandle(Process.hThread);
+        CloseHandle(Process.hProcess);
+        if (ExitCode) ++Failures;
+    }
+    TestPrint("TASKMGR_TIMER_COMPARISON_END failures=%d\n", Failures);
+    return Failures ? 1 : 0;
+}
+
+#include "primary_probe.h"
+#include "blur_probe.h"
+#include "blur_cache_probe.h"
+#include "damage_probe.h"
+#include "gpu_stats_probe.h"
+
+static INT
+RunDesktopPerf(HWND Owner, ULONG SampleCount)
+{
+    static const char *Names[] = {"idle_desktop", "idle_window", "readback", "cursor", "drag", "double_click", "drag_clean"};
+    HANDLE Snapshot, Dwm = NULL;
+    HWND Console = GetConsoleWindow();
+    BOOL ConsoleVisible = Console && IsWindowVisible(Console);
+    PROCESSENTRY32W Entry;
+    RECT Original;
+    POINT Cursor;
+    ULONG Phase, Index, TotalFailures = 0;
+    ULONGLONG DragFpsMilli = 0, CleanDragFpsMilli = 0;
+    BOOL ExternalInput = FALSE;
+
+    {
+        HDC Screen = GetDC(NULL);
+        DWM_PRESENT_BITMAP Request = {0};
+        BOOL BitmapDenied, SourceDenied;
+        SetLastError(ERROR_SUCCESS);
+        BitmapDenied = ExtEscape(Screen, DWM_ESCAPE_PRESENT_BITMAP, sizeof(Request),
+                                 (LPCSTR)&Request, 0, NULL) == 0 &&
+                       GetLastError() == ERROR_ACCESS_DENIED;
+        SetLastError(ERROR_SUCCESS);
+        SourceDenied = ExtEscape(Screen, CDD_ESCAPE_PRESENT_SOURCE, 0, NULL, 0, NULL) == 0 &&
+                       GetLastError() == ERROR_ACCESS_DENIED;
+        ReleaseDC(NULL, Screen);
+        TestPrint("DWM_PERF_ACCESS bitmap_denied=%u source_denied=%u\n", BitmapDenied, SourceDenied);
+        if (!BitmapDenied || !SourceDenied) ++TotalFailures;
+    }
+    Snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    Entry.dwSize = sizeof(Entry);
+    if (Snapshot != INVALID_HANDLE_VALUE)
+    {
+        if (Process32FirstW(Snapshot, &Entry)) do
+        {
+            if (!_wcsicmp(Entry.szExeFile, L"dwm.exe"))
+                Dwm = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, Entry.th32ProcessID);
+        } while (Dwm == NULL && Process32NextW(Snapshot, &Entry));
+        CloseHandle(Snapshot);
+    }
+    GetWindowRect(Owner, &Original);
+    GetCursorPos(&Cursor);
+    TestPrint("DWM_PERF_BEGIN dwm_cpu_available=%u target_hz=60 samples=%u\n",
+              Dwm != NULL, SampleCount);
+    for (Phase = 0; Phase < ARRAYSIZE(Names); ++Phase)
+    {
+        LARGE_INTEGER Start, End, A, B;
+        ULONGLONG Samples[DESKTOP_PERF_LONG_COUNT], CpuStart, CpuEnd, Wall;
+        DXGK_PRESENT_STATS Before, After;
+        ULONG Failures = 0, FramesBefore = 0, FramesAfter = 0, QueuedBefore = 0, QueuedAfter = 0;
+        BOOL HaveFrames;
+        DWORD Next;
+        LONG Delay;
+        HDC Dc;
+
+        if (Phase == 1)
+        {
+            ShowWindow(Owner, SW_SHOW);
+            UpdateWindow(Owner);
+        }
+        if (Phase == 6 && ConsoleVisible)
+            ShowWindow(Console, SW_HIDE);
+        if (Phase == 5)
+        {
+            SetWindowPos(Owner, HWND_TOP, Original.left, Original.top, 0, 0,
+                         SWP_NOSIZE);
+            SetForegroundWindow(Owner);
+            DesktopPerfClicks = TRUE;
+        }
+        PumpMessages();
+        Sleep(500);
+        Dc = GetDC(Owner);
+        if (Phase == 2)
+        {
+            static const POINT Points[] = {{40, 120}, {180, 150}, {320, 300}};
+            HDC Screen = GetDC(NULL);
+            ULONG PointIndex, Matches = 0;
+            for (PointIndex = 0; PointIndex < ARRAYSIZE(Points); ++PointIndex)
+            {
+                POINT Point = Points[PointIndex];
+                COLORREF Expected = GetPixel(Dc, Point.x, Point.y);
+                COLORREF Actual;
+                ClientToScreen(Owner, &Point);
+                Actual = GetPixel(Screen, Point.x, Point.y);
+                (void)ReadSharedPrimaryPixel(Screen, Point);
+                TestPrint("DWM_SHARED_PIXEL x=%ld y=%ld expected=%08lx actual=%08lx\n",
+                          Point.x, Point.y, Expected, Actual);
+                if (Expected != CLR_INVALID && Actual == Expected)
+                    ++Matches;
+                else
+                    ++TotalFailures;
+            }
+            ReleaseDC(NULL, Screen);
+            TestPrint("DWM_PERF_PIXELS matches=%lu expected=%u\n", Matches, ARRAYSIZE(Points));
+        }
+        ZeroMemory(&Before, sizeof(Before));
+        ZeroMemory(&After, sizeof(After));
+        QueryPresentStats(&Before);
+        HaveFrames = QueryDesktopFrames(&FramesBefore, &QueuedBefore);
+        CpuStart = ProcessCpuTime(Dwm);
+        QueryPerformanceCounter(&Start);
+        Next = GetTickCount();
+        for (Index = 0; Index < SampleCount; ++Index)
+        {
+            QueryPerformanceCounter(&A);
+            if (Phase == 2)
+            {
+                if (GetPixel(Dc, 20, 20) == CLR_INVALID) ++Failures;
+            }
+            if (Phase == 3 || Phase == 4 || Phase == 6)
+            {
+                if (!SetCursorPos(Original.left + 40 + Index % 120,
+                                   Original.top + 40 + Index % 80)) ++Failures;
+            }
+            if ((Phase == 4 || Phase == 6) &&
+                !SetWindowPos(Owner, NULL, Original.left + Index % 120,
+                               Original.top + Index % 80, 0, 0,
+                               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)) ++Failures;
+            if (Phase == 5)
+            {
+                INPUT Clicks[4] = {{0}};
+                POINT Point = {80, 80};
+                ULONG Target = DesktopPerfClickUps + 2;
+                DWORD Deadline = GetTickCount() + 100;
+                ClientToScreen(Owner, &Point);
+                if (!SetCursorPos(Point.x, Point.y)) ++Failures;
+                Clicks[0].type = Clicks[1].type = Clicks[2].type = Clicks[3].type = INPUT_MOUSE;
+                Clicks[0].mi.dwFlags = Clicks[2].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+                Clicks[1].mi.dwFlags = Clicks[3].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+                if (SendInput(4, Clicks, sizeof(INPUT)) != 4) ++Failures;
+                do
+                {
+                    PumpMessages();
+                    if (DesktopPerfClickUps >= Target) break;
+                    Sleep(1);
+                } while ((LONG)(Deadline - GetTickCount()) > 0);
+                if (DesktopPerfClickUps < Target) ++Failures;
+            }
+            QueryPerformanceCounter(&B);
+            Samples[Index] = ElapsedMicroseconds(A, B);
+            PumpMessages();
+            Next += CURSOR_FRAME_MS;
+            Delay = (LONG)(Next - GetTickCount());
+            if (Delay > 0)
+                Sleep((DWORD)Delay);
+        }
+        QueryPerformanceCounter(&End);
+        CpuEnd = ProcessCpuTime(Dwm);
+        HaveFrames = QueryDesktopFrames(&FramesAfter, &QueuedAfter) && HaveFrames;
+        QueryPresentStats(&After);
+        ReleaseDC(Owner, Dc);
+        Wall = ElapsedMicroseconds(Start, End);
+        TotalFailures += Failures;
+        if (Phase <= 2 && After.PointerPositionCalls - Before.PointerPositionCalls > 4)
+            ExternalInput = TRUE;
+        if (Wall != 0 && (Phase == 4 || Phase == 6))
+        {
+            ULONGLONG Fps = (ULONGLONG)(HaveFrames ? FramesAfter - FramesBefore :
+                                       After.PresentCalls - Before.PresentCalls) * 1000000000ULL / Wall;
+            if (Phase == 4) DragFpsMilli = Fps;
+            else CleanDragFpsMilli = Fps;
+        }
+        TestPrint("DWM_PERF phase=%s wall_us=%llu cpu_us=%llu cpu_core_pct=%llu "
+                  "p95_us=%llu presents=%lu scanout=%lu pointer=%lu pointer_fail=%lu failures=%lu kmd_avg_us=%llu hw_pointer=%lu full_stats=%u full_frames=%lu queued=%lu\n",
+                  Names[Phase], Wall, (CpuEnd - CpuStart) / 10,
+                  Wall ? (CpuEnd - CpuStart) * 10 / Wall : 0,
+                  Percentile95(Samples, SampleCount),
+                  After.PresentCalls - Before.PresentCalls,
+                  After.ScanoutCopies - Before.ScanoutCopies,
+                  After.PointerPositionCalls - Before.PointerPositionCalls,
+                  After.PointerFailures - Before.PointerFailures, Failures,
+                  After.PresentCalls != Before.PresentCalls ?
+                      (After.PresentTotalUs - Before.PresentTotalUs) /
+                      (After.PresentCalls - Before.PresentCalls) : 0,
+                  After.HardwarePointerSupported, HaveFrames,
+                  FramesAfter - FramesBefore, QueuedAfter - QueuedBefore);
+    }
+    DesktopPerfClicks = FALSE;
+    if (ConsoleVisible) ShowWindow(Console, SW_SHOWNOACTIVATE);
+    TestPrint("DWM_PERF_INPUT button_ups=%lu double_clicks=%lu expected_pairs=%u\n",
+              DesktopPerfClickUps, DesktopPerfDoubleClicks, SampleCount);
+    SetCursorPos(Cursor.x, Cursor.y);
+    if (Dwm) CloseHandle(Dwm);
+    TestPrint("DWM_PERF_RESULT failures=%lu drag_fps_milli=%llu clean_drag_fps_milli=%llu target_fps_gt=30 external_input=%u target_met=%u\n",
+              TotalFailures, DragFpsMilli, CleanDragFpsMilli, ExternalInput,
+              !ExternalInput && TotalFailures == 0 && DragFpsMilli > 30000 && CleanDragFpsMilli > 30000);
+    TestPrint("DWM_PERF_END\n");
+    return TotalFailures ? 1 : ExternalInput ? 3 : (DragFpsMilli > 30000 && CleanDragFpsMilli > 30000 ? 0 : 2);
+}
+
 int
-main(VOID)
+main(int argc, char **argv)
 {
     HINSTANCE Instance = GetModuleHandleW(NULL);
     HWND Owner = NULL;
@@ -1226,6 +1783,8 @@ main(VOID)
         TestPrint("WDDM_UI_TEST_ERROR performance_counter_unavailable\n");
         return 1;
     }
+    if (argc > 1 && !strcmp(argv[1], "--gpustats"))
+        return RunGpuStatsProbe();
     if (!QueryPresentStats(&Stats))
     {
         TestPrint("WDDM_UI_TEST_ERROR cdd_present_stats_unavailable\n");
@@ -1245,13 +1804,24 @@ main(VOID)
                 GetSystemMetrics(SM_CYSCREEN));
     }
 
+    if (argc > 1 && !strcmp(argv[1], "--blurprobe"))
+        return RunBlurProbe(&WorkArea);
+    if (argc > 1 && !strcmp(argv[1], "--blurcacheprobe"))
+        return RunBlurCacheProbe(&WorkArea);
+    if (argc > 1 && !strcmp(argv[1], "--damageprobe"))
+        return RunDamageProbe(&WorkArea);
+    if (argc > 1 && !strcmp(argv[1], "--glprimaryprobe"))
+        return RunGlPrimaryProbe(&WorkArea, FALSE);
+    if (argc > 1 && !strcmp(argv[1], "--glmixedprobe"))
+        return RunGlPrimaryProbe(&WorkArea, TRUE);
+
     Owner = CreateWindowExW(WS_EX_TOOLWINDOW,
                             OwnerClassName,
                             L"WDDM UI presentation diagnostics",
                             WS_OVERLAPPEDWINDOW,
                             WorkArea.left + 30,
                             WorkArea.top + 30,
-                            min(760, WorkArea.right - WorkArea.left - 60),
+                            min(759, WorkArea.right - WorkArea.left - 60),
                             min(480, WorkArea.bottom - WorkArea.top - 60),
                             NULL,
                             NULL,
@@ -1278,6 +1848,29 @@ main(VOID)
               Stats.PresentRejected,
               Stats.PresentSynchronous);
     PrintGuiResources("owner_ready");
+
+    if (argc > 1 && !strcmp(argv[1], "--taskmgrtimers"))
+    {
+        INT Result = RunTaskmgrTimerComparison();
+        DestroyWindow(Owner);
+        return Result;
+    }
+
+    if (argc > 1 && (!strcmp(argv[1], "--taskmgrperf") || !strcmp(argv[1], "--taskmgrprofile") || !strcmp(argv[1], "--taskmgrprofile-timer")))
+    {
+        INT Result = RunTaskmgrPerf(strcmp(argv[1], "--taskmgrperf") != 0, !strcmp(argv[1], "--taskmgrprofile-timer"));
+        DestroyWindow(Owner);
+        return Result;
+    }
+
+    if (argc > 1 && (!strcmp(argv[1], "--dwmperf") ||
+                     !strcmp(argv[1], "--dwmperf-long")))
+    {
+        INT Result = RunDesktopPerf(Owner, !strcmp(argv[1], "--dwmperf-long") ?
+                                    DESKTOP_PERF_LONG_COUNT : CURSOR_MOVE_COUNT);
+        DestroyWindow(Owner);
+        return Result;
+    }
 
     MenuPassed = RunMenuHoverTest(Owner);
     PrintGuiResources("after_menu");
