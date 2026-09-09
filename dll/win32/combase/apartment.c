@@ -574,7 +574,13 @@ static struct apartment *apartment_get_or_create(DWORD model)
 
             LeaveCriticalSection(&apt_cs);
 
+#ifdef __REACTOS__
+            /* CSRSS can use an STA to load an in-process shell link without a
+             * desktop. Defer its message window until marshalling needs one. */
+            if (apt->main && GetThreadDesktop(GetCurrentThreadId()))
+#else
             if (apt->main)
+#endif
                 apartment_createwindowifneeded(apt);
         }
         else
