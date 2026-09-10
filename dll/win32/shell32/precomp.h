@@ -343,7 +343,15 @@ typedef enum _FILEOPCALLBACKEVENT {
 } FILEOPCALLBACKEVENT;
 typedef HRESULT (CALLBACK *FILEOPCALLBACK)(FILEOPCALLBACKEVENT Event, LPCWSTR Source, LPCWSTR Destination,
                                            UINT Attributes, HRESULT hr, void *CallerData);
-int SHELL32_FileOperation(LPSHFILEOPSTRUCTW lpFileOp, FILEOPCALLBACK Callback, void *CallerData);
+struct FILEOP_PROGRESS
+{
+    IOperationsProgressDialog *Dialog;
+    ULONGLONG TotalBytes, TotalItems, CompletedBytes, CompletedItems;
+};
+int SHELL32_FileOperation(LPSHFILEOPSTRUCTW lpFileOp, FILEOPCALLBACK Callback, void *CallerData, FILEOP_PROGRESS *Progress = NULL);
+HRESULT SHELL32_CountFileOperation(PCWSTR Path, ULONGLONG *Bytes, ULONGLONG *Items, IOperationsProgressDialog *Dialog = NULL);
 HRESULT SHELL_SingleFileOperation(HWND hWnd, UINT Op, PCWSTR Src, PCWSTR Dest, UINT Flags, PWSTR *ppNewName);
+
+#include "CFileOperation.h"
 
 #endif /* _PRECOMP_H__ */

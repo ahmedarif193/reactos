@@ -1,0 +1,13 @@
+HKCR
+{
+    NoRemove CLSID
+    {
+        ForceRemove {3AD05575-8857-4850-9277-11B85BDB8E09} = s 'File Operation'
+        {
+            InprocServer32 = s '%MODULE%'
+            {
+                val ThreadingModel = s 'Apartment'
+            }
+        }
+    }
+}

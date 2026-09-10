@@ -969,3 +969,4 @@
 #define IDR_SYSTEMFILEASSOC     164
 #define IDR_WINECLASSES         165
 #define IDR_STARTMENUPIN        166
+#define IDR_FILEOPERATION       167
