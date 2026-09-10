@@ -38,7 +38,7 @@ typedef BOOLEAN (*PFN_DIB_BitBlt)(PBLTINFO);
 typedef BOOLEAN (*PFN_DIB_StretchBlt)(SURFOBJ*,SURFOBJ*,SURFOBJ*,SURFOBJ*,RECTL*,RECTL*,POINTL*,BRUSHOBJ*,POINTL*,XLATEOBJ*,ULONG,ROP4);
 typedef BOOLEAN (*PFN_DIB_TransparentBlt)(SURFOBJ*,SURFOBJ*,RECTL*,RECTL*,XLATEOBJ*,ULONG);
 typedef BOOLEAN (*PFN_DIB_ColorFill)(SURFOBJ*, RECTL*, ULONG);
-typedef BOOLEAN (*PFN_DIB_AlphaBlend)(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, CLIPOBJ*, XLATEOBJ*, BLENDOBJ*);
+typedef BOOLEAN (*PFN_DIB_AlphaBlend)(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, const RECTL*, XLATEOBJ*, BLENDOBJ*);
 
 typedef struct
 {
@@ -64,7 +64,7 @@ BOOLEAN Dummy_BitBlt(PBLTINFO);
 BOOLEAN Dummy_StretchBlt(SURFOBJ*,SURFOBJ*,SURFOBJ*,SURFOBJ*,RECTL*,RECTL*,POINTL*,BRUSHOBJ*,POINTL*,XLATEOBJ*,ULONG,ROP4);
 BOOLEAN Dummy_TransparentBlt(SURFOBJ*,SURFOBJ*,RECTL*,RECTL*,XLATEOBJ*,ULONG);
 BOOLEAN Dummy_ColorFill(SURFOBJ*, RECTL*, ULONG);
-BOOLEAN Dummy_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, CLIPOBJ*, XLATEOBJ*, BLENDOBJ*);
+BOOLEAN Dummy_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, const RECTL*, XLATEOBJ*, BLENDOBJ*);
 
 VOID DIB_1BPP_PutPixel(SURFOBJ*,LONG,LONG,ULONG);
 ULONG DIB_1BPP_GetPixel(SURFOBJ*,LONG,LONG);
@@ -101,7 +101,7 @@ BOOLEAN DIB_16BPP_BitBlt(PBLTINFO);
 BOOLEAN DIB_16BPP_BitBltSrcCopy(PBLTINFO);
 BOOLEAN DIB_16BPP_TransparentBlt(SURFOBJ*,SURFOBJ*,RECTL*,RECTL*,XLATEOBJ*,ULONG);
 BOOLEAN DIB_16BPP_ColorFill(SURFOBJ*, RECTL*, ULONG);
-BOOLEAN DIB_16BPP_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, CLIPOBJ*, XLATEOBJ*, BLENDOBJ*);
+BOOLEAN DIB_16BPP_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, const RECTL*, XLATEOBJ*, BLENDOBJ*);
 
 VOID DIB_24BPP_PutPixel(SURFOBJ*,LONG,LONG,ULONG);
 ULONG DIB_24BPP_GetPixel(SURFOBJ*,LONG,LONG);
@@ -111,7 +111,7 @@ BOOLEAN DIB_24BPP_BitBlt(PBLTINFO);
 BOOLEAN DIB_24BPP_BitBltSrcCopy(PBLTINFO);
 BOOLEAN DIB_24BPP_TransparentBlt(SURFOBJ*,SURFOBJ*,RECTL*,RECTL*,XLATEOBJ*,ULONG);
 BOOLEAN DIB_24BPP_ColorFill(SURFOBJ*, RECTL*, ULONG);
-BOOLEAN DIB_24BPP_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, CLIPOBJ*, XLATEOBJ*, BLENDOBJ*);
+BOOLEAN DIB_24BPP_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, const RECTL*, XLATEOBJ*, BLENDOBJ*);
 
 VOID DIB_32BPP_PutPixel(SURFOBJ*,LONG,LONG,ULONG);
 ULONG DIB_32BPP_GetPixel(SURFOBJ*,LONG,LONG);
@@ -121,7 +121,7 @@ BOOLEAN DIB_32BPP_BitBlt(PBLTINFO);
 BOOLEAN DIB_32BPP_BitBltSrcCopy(PBLTINFO);
 BOOLEAN DIB_32BPP_TransparentBlt(SURFOBJ*,SURFOBJ*,RECTL*,RECTL*,XLATEOBJ*,ULONG);
 BOOLEAN DIB_32BPP_ColorFill(SURFOBJ*, RECTL*, ULONG);
-BOOLEAN DIB_32BPP_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, CLIPOBJ*, XLATEOBJ*, BLENDOBJ*);
+BOOLEAN DIB_32BPP_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, const RECTL*, XLATEOBJ*, BLENDOBJ*);
 
 BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ*,SURFOBJ*,SURFOBJ*,SURFOBJ*,RECTL*,RECTL*,POINTL*,BRUSHOBJ*,POINTL*,XLATEOBJ*,ULONG,ROP4);
 static __inline LONG DIB_PatternIndex(LONG v, LONG size)
@@ -131,7 +131,7 @@ static __inline LONG DIB_PatternIndex(LONG v, LONG size)
 }
 
 BOOLEAN DIB_XXBPP_FloodFillSolid(SURFOBJ*, BRUSHOBJ*, RECTL*, POINTL*, ULONG, UINT, PVOID);
-BOOLEAN DIB_XXBPP_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, CLIPOBJ*, XLATEOBJ*, BLENDOBJ*);
+BOOLEAN DIB_XXBPP_AlphaBlend(SURFOBJ*, SURFOBJ*, RECTL*, RECTL*, const RECTL*, XLATEOBJ*, BLENDOBJ*);
 
 extern unsigned char notmask[2];
 extern unsigned char altnotmask[2];
@@ -147,6 +147,20 @@ ULONG DIB_DoRop(ULONG Rop, ULONG Dest, ULONG Source, ULONG Pattern);
 #define DIB_GetSourceIndex(SourceSurf,sx,sy)                \
   DibFunctionsForBitmapFormat[SourceSurf->iBitmapFormat].   \
     DIB_GetPixel(SourceSurf, sx, sy)
+
+/* Sample at destination pixel centers, relative to the original blit bounds.
+   Clipping must not change the scale or restart its sampling phase. Use 64-bit
+   arithmetic before subtracting coordinates or multiplying large extents. */
+static __inline LONG
+DIB_AlphaBlendSourceCoord(LONG Coordinate, LONG DestStart, LONG DestEnd, LONG SourceStart, LONG SourceEnd)
+{
+  LONGLONG Span = (LONGLONG)DestEnd - DestStart;
+  ULONGLONG Center = 2 * (ULONGLONG)((LONGLONG)Coordinate - DestStart) + 1;
+  ULONGLONG Extent = 2 * (ULONGLONG)Span;
+  if (Span == SourceEnd - SourceStart)
+    return SourceStart + (LONG)((LONGLONG)Coordinate - DestStart);
+  return SourceStart + (LONG)(Center * (SourceEnd - SourceStart) / Extent);
+}
 
 /* Shared per-channel alpha blend math (rounding to nearest like Windows,
    see the gdi32:dib winetest hashes) */

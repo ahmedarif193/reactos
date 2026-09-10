@@ -29,7 +29,7 @@ typedef union
 
 BOOLEAN
 DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
-                     RECTL* SourceRect, CLIPOBJ* ClipRegion,
+                     RECTL* SourceRect, const RECTL* OrigDestRect,
                      XLATEOBJ* ColorTranslation, BLENDOBJ* BlendObj)
 {
   INT DstX, DstY, SrcX, SrcY;
@@ -127,14 +127,14 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
     lC1Blue = pexlo->ppalDst->IndexedColors[1].peBlue;
   }
 
-  SrcY = SourceRect->top;
   DstY = DestRect->top;
   while ( DstY < DestRect->bottom )
   {
-    SrcX = SourceRect->left;
+    SrcY = DIB_AlphaBlendSourceCoord(DstY, OrigDestRect->top, OrigDestRect->bottom, SourceRect->top, SourceRect->bottom);
     DstX = DestRect->left;
     while(DstX < DestRect->right)
     {
+      SrcX = DIB_AlphaBlendSourceCoord(DstX, OrigDestRect->left, OrigDestRect->right, SourceRect->left, SourceRect->right);
       SrcPixel32.ul = DIB_GetSource(Source, SrcX, SrcY, &exloSrcRGB.xlo);
       DstPixel32.ul = DIB_GetSource(Dest, DstX, DstY, &exloDstRGB.xlo);
 
@@ -213,12 +213,8 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
       }
 
       DstX++;
-      SrcX = SourceRect->left + ((DstX-DestRect->left)*(SourceRect->right - SourceRect->left))
-                                            /(DestRect->right-DestRect->left);
     }
     DstY++;
-    SrcY = SourceRect->top + ((DstY-DestRect->top)*(SourceRect->bottom - SourceRect->top))
-                                            /(DestRect->bottom-DestRect->top);
   }
 
   EXLATEOBJ_vCleanup(&exloDstRGB);

@@ -5,6 +5,7 @@ list(APPEND SOURCE
     AddFontMemResourceEx.c
     AddFontResource.c
     AddFontResourceEx.c
+    AlphaBlend.c
     BeginPath.c
     CombineRgn.c
     CombineTransform.c

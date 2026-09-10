@@ -716,7 +716,7 @@ typedef union {
 
 BOOLEAN
 DIB_24BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
-                     RECTL* SourceRect, CLIPOBJ* ClipRegion,
+                     RECTL* SourceRect, const RECTL* OrigDestRect,
                      XLATEOBJ* ColorTranslation, BLENDOBJ* BlendObj)
 {
    INT Rows, Cols, SrcX, SrcY;
@@ -758,13 +758,13 @@ DIB_24BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
    //SrcBpp = BitsPerFormat(Source->iBitmapFormat);
 
    Rows = 0;
-   SrcY = SourceRect->top;
    while (++Rows <= DestRect->bottom - DestRect->top)
   {
+    SrcY = DIB_AlphaBlendSourceCoord(DestRect->top + Rows - 1, OrigDestRect->top, OrigDestRect->bottom, SourceRect->top, SourceRect->bottom);
     Cols = 0;
-    SrcX = SourceRect->left;
     while (++Cols <= DestRect->right - DestRect->left)
     {
+      SrcX = DIB_AlphaBlendSourceCoord(DestRect->left + Cols - 1, OrigDestRect->left, OrigDestRect->right, SourceRect->left, SourceRect->right);
       SrcPixel.ul = DIB_GetSource(Source, SrcX, SrcY, ColorTranslation);
 
       if ((BlendFunc.AlphaFormat & AC_SRC_ALPHA) != 0)
@@ -792,11 +792,9 @@ DIB_24BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
       *Dst++ = DstPixel.col.red;
       *Dst++ = DstPixel.col.green;
       *Dst++ = DstPixel.col.blue;
-      SrcX = SourceRect->left + (Cols*(SourceRect->right - SourceRect->left))/(DestRect->right - DestRect->left);
     }
     Dst = (PUCHAR)((ULONG_PTR)Dest->pvScan0 + ((DestRect->top + Rows) * Dest->lDelta) +
                 (DestRect->left*3));
-    SrcY = SourceRect->top + (Rows*(SourceRect->bottom - SourceRect->top))/(DestRect->bottom - DestRect->top);
   }
 
    return TRUE;

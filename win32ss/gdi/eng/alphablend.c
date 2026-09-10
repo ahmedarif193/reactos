@@ -30,7 +30,6 @@ EngAlphaBlend(
     RECTL              OutputRect;
     RECTL              ClipRect;
     RECTL              CombinedRect;
-    RECTL              Rect;
     POINTL             Translate;
     INTENG_ENTER_LEAVE EnterLeaveSource;
     INTENG_ENTER_LEAVE EnterLeaveDest;
@@ -147,8 +146,7 @@ EngAlphaBlend(
     switch (ClippingType)
     {
         case DC_TRIVIAL:
-            Ret = pfnAlphaBlend(
-                      OutputObj, InputObj, &OutputRect, &InputRect, ClipRegion, ColorTranslation, BlendObj);
+            Ret = pfnAlphaBlend(OutputObj, InputObj, &OutputRect, &InputRect, &OutputRect, ColorTranslation, BlendObj);
             break;
 
         case DC_RECT:
@@ -159,15 +157,9 @@ EngAlphaBlend(
             ClipRect.bottom = ClipRegion->rclBounds.bottom + Translate.y;
             if (RECTL_bIntersectRect(&CombinedRect, &OutputRect, &ClipRect))
             {
-                /* take into acount clipping results when calculating new input rect (scaled to input rect size) */
-                Rect.left = InputRect.left + (CombinedRect.left - OutputRect.left) * (InputRect.right - InputRect.left) / (OutputRect.right - OutputRect.left);
-                Rect.right = InputRect.right + (CombinedRect.right - OutputRect.right) * (InputRect.right - InputRect.left) / (OutputRect.right - OutputRect.left);
-                Rect.top = InputRect.top + (CombinedRect.top - OutputRect.top) * (InputRect.bottom - InputRect.top) / (OutputRect.bottom - OutputRect.top);
-                Rect.bottom = InputRect.bottom + (CombinedRect.bottom - OutputRect.bottom) * (InputRect.bottom - InputRect.top) / (OutputRect.bottom - OutputRect.top);
-
-                /* Aplha blend one rect */
-                Ret = pfnAlphaBlend(
-                          OutputObj, InputObj, &CombinedRect, &Rect, ClipRegion, ColorTranslation, BlendObj);
+                /* Clip only the destination writes. Keep the original mapping
+                   so fractional scaling has the same phase in every clip. */
+                Ret = pfnAlphaBlend(OutputObj, InputObj, &CombinedRect, &InputRect, &OutputRect, ColorTranslation, BlendObj);
             }
             break;
 
@@ -187,15 +179,7 @@ EngAlphaBlend(
                     ClipRect.bottom = RectEnum.arcl[i].bottom + Translate.y;
                     if (RECTL_bIntersectRect(&CombinedRect, &OutputRect, &ClipRect))
                     {
-                        /* take into acount clipping results when calculating new input rect (scaled to input rect size) */
-                        Rect.left = InputRect.left + (CombinedRect.left - OutputRect.left) * (InputRect.right - InputRect.left) / (OutputRect.right - OutputRect.left);
-                        Rect.right = InputRect.right + (CombinedRect.right - OutputRect.right) * (InputRect.right - InputRect.left) / (OutputRect.right - OutputRect.left);
-                        Rect.top = InputRect.top + (CombinedRect.top - OutputRect.top) * (InputRect.bottom - InputRect.top) / (OutputRect.bottom - OutputRect.top);
-                        Rect.bottom = InputRect.bottom + (CombinedRect.bottom - OutputRect.bottom) * (InputRect.bottom - InputRect.top) / (OutputRect.bottom - OutputRect.top);
-
-                        /* Alpha blend one rect */
-                        Ret = pfnAlphaBlend(
-                                  OutputObj, InputObj, &CombinedRect, &Rect, ClipRegion, ColorTranslation, BlendObj) && Ret;
+                        Ret = pfnAlphaBlend(OutputObj, InputObj, &CombinedRect, &InputRect, &OutputRect, ColorTranslation, BlendObj) && Ret;
                     }
                 }
             }
