@@ -37,6 +37,7 @@ DRIVER_INITIALIZE DriverEntry;
 /* Globals */
 static PDRIVER_OBJECT TestDriverObject;
 static PDEVICE_OBJECT KmtestDeviceObject;
+static PMDL ResultBufferMdl;
 static FILTER_DATA FilterData;
 static PFLT_OPERATION_REGISTRATION Callbacks = NULL;
 static ULONG CallbacksCount = 0;
@@ -137,8 +138,7 @@ DriverEntry(
     UNICODE_STRING DeviceName;
     WCHAR DeviceNameBuffer[128] = L"\\Device\\Kmtest-";
     UNICODE_STRING KmtestDeviceName;
-    PFILE_OBJECT KmtestFileObject;
-    PKMT_DEVICE_EXTENSION KmtestDeviceExtension;
+    PFILE_OBJECT KmtestFileObject = NULL;
     PCWSTR DeviceNameSuffix = NULL;
     INT Flags = 0;
     PKPRCB Prcb;
@@ -161,6 +161,7 @@ DriverEntry(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to get Kmtest device object pointer\n");
+        KmtestDeviceObject = NULL;
         goto cleanup;
     }
 
@@ -169,15 +170,16 @@ DriverEntry(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to reference Kmtest device object\n");
+        KmtestDeviceObject = NULL;
         goto cleanup;
     }
 
     ObDereferenceObject(KmtestFileObject);
     KmtestFileObject = NULL;
-    KmtestDeviceExtension = KmtestDeviceObject->DeviceExtension;
-    ResultBuffer = KmtestDeviceExtension->ResultBuffer;
+    Status = KmtMapResultBuffer(KmtestDeviceObject, &ResultBufferMdl, &ResultBuffer);
+    if (!NT_SUCCESS(Status))
+        goto cleanup;
     DPRINT("KmtestDeviceObject: %p\n", (PVOID)KmtestDeviceObject);
-    DPRINT("KmtestDeviceExtension: %p\n", (PVOID)KmtestDeviceExtension);
     DPRINT("Setting ResultBuffer: %p\n", (PVOID)ResultBuffer);
 
 
@@ -260,7 +262,20 @@ cleanup:
         {
             FltUnregisterFilter(FilterData.Filter);
         }
+        if (ResultBufferMdl)
+        {
+            KmtUnmapResultBuffer(ResultBufferMdl);
+            ResultBufferMdl = NULL;
+            ResultBuffer = NULL;
+        }
+        if (KmtestDeviceObject)
+        {
+            ObDereferenceObject(KmtestDeviceObject);
+            KmtestDeviceObject = NULL;
+        }
     }
+    if (KmtestFileObject)
+        ObDereferenceObject(KmtestFileObject);
 
     return Status;
 }
@@ -304,6 +319,15 @@ FilterUnload(
         Callbacks = NULL;
         CallbacksCount = 0;
     }
+
+    if (ResultBufferMdl)
+    {
+        KmtUnmapResultBuffer(ResultBufferMdl);
+        ResultBufferMdl = NULL;
+        ResultBuffer = NULL;
+    }
+    if (KmtestDeviceObject)
+        ObDereferenceObject(KmtestDeviceObject);
 
     return STATUS_SUCCESS;
 }

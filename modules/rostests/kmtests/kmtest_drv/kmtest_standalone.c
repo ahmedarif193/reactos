@@ -41,6 +41,7 @@ static KMT_IRP_HANDLER DeviceControlHandler;
 /* Globals */
 static PDEVICE_OBJECT TestDeviceObject;
 static PDEVICE_OBJECT KmtestDeviceObject;
+static PMDL ResultBufferMdl;
 
 #define KMT_MAX_IRP_HANDLERS 256
 static KMT_IRP_HANDLER_ENTRY IrpHandlers[KMT_MAX_IRP_HANDLERS] = { { 0 } };
@@ -68,8 +69,7 @@ DriverEntry(
     NTSTATUS Status = STATUS_SUCCESS;
     WCHAR DeviceNameBuffer[128] = L"\\Device\\Kmtest-";
     UNICODE_STRING KmtestDeviceName;
-    PFILE_OBJECT KmtestFileObject;
-    PKMT_DEVICE_EXTENSION KmtestDeviceExtension;
+    PFILE_OBJECT KmtestFileObject = NULL;
     UNICODE_STRING DeviceName;
     PCWSTR DeviceNameSuffix;
     INT Flags = 0;
@@ -91,6 +91,7 @@ DriverEntry(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to get Kmtest device object pointer\n");
+        KmtestDeviceObject = NULL;
         goto cleanup;
     }
 
@@ -99,15 +100,16 @@ DriverEntry(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to reference Kmtest device object\n");
+        KmtestDeviceObject = NULL;
         goto cleanup;
     }
 
     ObDereferenceObject(KmtestFileObject);
     KmtestFileObject = NULL;
-    KmtestDeviceExtension = KmtestDeviceObject->DeviceExtension;
-    ResultBuffer = KmtestDeviceExtension->ResultBuffer;
+    Status = KmtMapResultBuffer(KmtestDeviceObject, &ResultBufferMdl, &ResultBuffer);
+    if (!NT_SUCCESS(Status))
+        goto cleanup;
     DPRINT("KmtestDeviceObject: %p\n", (PVOID)KmtestDeviceObject);
-    DPRINT("KmtestDeviceExtension: %p\n", (PVOID)KmtestDeviceExtension);
     DPRINT("Setting ResultBuffer: %p\n", (PVOID)ResultBuffer);
 
     /* call TestEntry */
@@ -147,6 +149,13 @@ DriverEntry(
             DriverObject->MajorFunction[i] = DriverDispatch;
 
 cleanup:
+    if (ResultBufferMdl && !NT_SUCCESS(Status))
+    {
+        KmtUnmapResultBuffer(ResultBufferMdl);
+        ResultBufferMdl = NULL;
+        ResultBuffer = NULL;
+    }
+
     if (TestDeviceObject && !NT_SUCCESS(Status))
     {
         IoDeleteDevice(TestDeviceObject);
@@ -157,9 +166,9 @@ cleanup:
     {
         ObDereferenceObject(KmtestDeviceObject);
         KmtestDeviceObject = NULL;
-        if (KmtestFileObject)
-            ObDereferenceObject(KmtestFileObject);
     }
+    if (KmtestFileObject)
+        ObDereferenceObject(KmtestFileObject);
 
     return Status;
 }
@@ -188,6 +197,13 @@ DriverUnload(
 
     if (TestDeviceObject)
         IoDeleteDevice(TestDeviceObject);
+
+    if (ResultBufferMdl)
+    {
+        KmtUnmapResultBuffer(ResultBufferMdl);
+        ResultBufferMdl = NULL;
+        ResultBuffer = NULL;
+    }
 
     if (KmtestDeviceObject)
         ObDereferenceObject(KmtestDeviceObject);
