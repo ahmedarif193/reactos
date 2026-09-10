@@ -367,6 +367,10 @@ InitializePnPManager(VOID)
     }
     InitializeListHead(&DeviceInstallListHead);
 
+    /* PnpEventThread can consume notifications before RpcServerThread runs. */
+    InitializeListHead(&NotificationListHead);
+    RtlInitializeResource(&NotificationListLock);
+
     /* Query the SuppressUI registry value and cache it for our whole lifetime */
     GetBooleanRegValue(HKEY_LOCAL_MACHINE,
                        L"System\\CurrentControlSet\\Services\\PlugPlay\\Parameters",
