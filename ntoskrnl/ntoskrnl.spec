@@ -2988,8 +2988,8 @@
 @ stdcall -arch=x86_64,arm64 RtlClearAllBitsEx(ptr) RtlClearAllBits64
 @ stdcall -arch=x86_64,arm64 RtlClearBitEx(ptr int64) RtlClearBit64
 @ stub -arch=arm64 RtlClearBitsEx
-@ stub -arch=arm64 RtlCmDecodeMemIoResource
-@ stub -arch=arm64 RtlCmEncodeMemIoResource
+@ stdcall RtlCmDecodeMemIoResource(ptr ptr)
+@ stdcall RtlCmEncodeMemIoResource(ptr long int64 int64)
 @ stub -arch=arm64 RtlCompareAltitudes
 @ stub -arch=arm64 RtlCompareExchangePointerMapping
 @ stub -arch=arm64 RtlCompareExchangePropertyStore

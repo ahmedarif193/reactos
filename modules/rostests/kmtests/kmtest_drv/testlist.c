@@ -278,6 +278,7 @@ KMT_TESTFUNC Test_RtlTimeKM;
 KMT_TESTFUNC Test_RtlGenericTableKM;
 KMT_TESTFUNC Test_RtlMemory;
 KMT_TESTFUNC Test_RtlRangeList;
+KMT_TESTFUNC Test_RtlCmResource;
 KMT_TESTFUNC Test_RtlRegistry;
 KMT_TESTFUNC Test_RtlSplayTree;
 KMT_TESTFUNC Test_RtlStack;
@@ -549,6 +550,7 @@ const KMT_TEST TestList[] =
     { "RtlHashTableKM",                     Test_RtlHashTableKM },
     { "RtlMemoryKM",                        Test_RtlMemory },
     { "RtlRangeList",                       Test_RtlRangeList },
+    { "RtlCmResource",                      Test_RtlCmResource },
     { "RtlRegistryKM",                      Test_RtlRegistry },
     { "RtlTimeKM",                          Test_RtlTimeKM },
     { "RtlStringSupportKM",                 Test_RtlStringSupportKM },
