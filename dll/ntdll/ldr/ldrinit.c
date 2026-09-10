@@ -1294,6 +1294,34 @@ LdrShutdownThread(VOID)
         DPRINT1("We don't support Etw yet.\n");
     }
 
+    /* FLS callbacks may use static TLS and must precede thread-detach callbacks. */
+    if (Teb->FlsData)
+    {
+        /* Mimic BaseRundownFls */
+        ULONG n, FlsHighIndex;
+        PRTL_FLS_DATA pFlsData;
+        PFLS_CALLBACK_FUNCTION lpCallback;
+
+        pFlsData = Teb->FlsData;
+
+        RtlAcquirePebLock();
+        FlsHighIndex = NtCurrentPeb()->FlsHighIndex;
+        RemoveEntryList(&pFlsData->ListEntry);
+        RtlReleasePebLock();
+
+        for (n = 1; n <= FlsHighIndex; ++n)
+        {
+            lpCallback = NtCurrentPeb()->FlsCallback[n];
+            if (lpCallback && pFlsData->Data[n])
+            {
+                RtlpCallFlsCallback(lpCallback, pFlsData->Data[n]);
+            }
+        }
+
+        RtlFreeHeap(RtlGetProcessHeap(), 0, pFlsData);
+        Teb->FlsData = NULL;
+    }
+
     /* Get the Ldr Lock */
     RtlEnterCriticalSection(&LdrpLoaderLock);
 
@@ -1404,34 +1432,6 @@ LdrShutdownThread(VOID)
     {
         /* Free expansion slots */
         RtlFreeHeap(RtlGetProcessHeap(), 0, Teb->TlsExpansionSlots);
-    }
-
-    /* Check for FLS Data */
-    if (Teb->FlsData)
-    {
-        /* Mimic BaseRundownFls */
-        ULONG n, FlsHighIndex;
-        PRTL_FLS_DATA pFlsData;
-        PFLS_CALLBACK_FUNCTION lpCallback;
-
-        pFlsData = Teb->FlsData;
-
-        RtlAcquirePebLock();
-        FlsHighIndex = NtCurrentPeb()->FlsHighIndex;
-        RemoveEntryList(&pFlsData->ListEntry);
-        RtlReleasePebLock();
-
-        for (n = 1; n <= FlsHighIndex; ++n)
-        {
-            lpCallback = NtCurrentPeb()->FlsCallback[n];
-            if (lpCallback && pFlsData->Data[n])
-            {
-                RtlpCallFlsCallback(lpCallback, pFlsData->Data[n]);
-            }
-        }
-
-        RtlFreeHeap(RtlGetProcessHeap(), 0, pFlsData);
-        Teb->FlsData = NULL;
     }
 
     /* Check for Fiber data */
