@@ -86,8 +86,8 @@ EHCI_RH_ChirpRootPort(IN PVOID ehciExtension,
     PortSC.PortReset = 1;
     WRITE_REGISTER_ULONG(PortStatusReg, PortSC.AsULONG);
 
-    /* USB 2.0 section 7.1.7.5: root ports must drive reset for at least 50 ms. */
-    RegPacket.UsbPortWait(EhciExtension, 50);
+    /* Probe high-speed negotiation; the hub performs the full 50 ms reset. */
+    RegPacket.UsbPortWait(EhciExtension, 10);
 
     ResetLoopCount = 0;
 
