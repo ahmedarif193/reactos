@@ -329,8 +329,10 @@ RcddSetCursorSuppressed(
    SURFOBJ *pso,
    BOOL Suppressed)
 {
+   KeWaitForSingleObject(&ppdev->PointerMutex, Executive, KernelMode, FALSE, NULL);
+
    if (ppdev->CursorSuppressed == Suppressed)
-      return;
+      goto done;
 
    ppdev->CursorSuppressed = Suppressed;
    if (Suppressed)
@@ -338,11 +340,11 @@ RcddSetCursorSuppressed(
       RcddHideHardwarePointer(ppdev);
       if (ppdev->SoftwarePointerActive)
          EngMovePointer(pso, -1, -1, NULL);
-      return;
+      goto done;
    }
 
    if (!ppdev->PointerPositionValid)
-      return;
+      goto done;
 
    if (ppdev->HwPointerShapeValid)
    {
@@ -352,6 +354,9 @@ RcddSetCursorSuppressed(
    {
       EngMovePointer(pso, ppdev->PointerX, ppdev->PointerY, NULL);
    }
+
+done:
+   KeReleaseMutex(&ppdev->PointerMutex, FALSE);
 }
 
 /*
@@ -375,45 +380,50 @@ RcddSetPointerShape(
    IN FLONG fl)
 {
    PRCDD_PDEV ppdev = pso ? (PRCDD_PDEV)pso->dhpdev : NULL;
+   ULONG Result = SPS_DECLINE;
 
-   if (ppdev != NULL)
-   {
-      ppdev->PointerPositionValid = (x != -1);
-      ppdev->PointerX = x;
-      ppdev->PointerY = y;
-   }
+   if (ppdev == NULL)
+      return SPS_DECLINE;
 
-   if (ppdev != NULL && ppdev->CursorSuppressed)
+   KeWaitForSingleObject(&ppdev->PointerMutex, Executive, KernelMode, FALSE, NULL);
+   ppdev->PointerPositionValid = (x != -1);
+   ppdev->PointerX = x;
+   ppdev->PointerY = y;
+
+   if (ppdev->CursorSuppressed)
    {
       if (RcddSetHardwarePointerShape(ppdev, psoMask, psoColor, xHot, yHot, -1, -1, fl))
       {
          ppdev->SoftwarePointerActive = FALSE;
          RcddClearPointerExclude(prcl);
-         return SPS_ACCEPT_NOEXCLUDE;
+         Result = SPS_ACCEPT_NOEXCLUDE;
+         goto done;
       }
       ppdev->SoftwarePointerActive = TRUE;
-      return EngSetPointerShape(pso, psoMask, psoColor, pxlo, xHot, yHot, -1, -1, prcl, fl);
+      Result = EngSetPointerShape(pso, psoMask, psoColor, pxlo, xHot, yHot, -1, -1, prcl, fl);
+      goto done;
    }
 
-   if (pso != NULL &&
-       RcddSetHardwarePointerShape((PRCDD_PDEV)pso->dhpdev, psoMask, psoColor, xHot, yHot, x, y, fl))
+   if (RcddSetHardwarePointerShape(ppdev, psoMask, psoColor, xHot, yHot, x, y, fl))
    {
       ppdev->SoftwarePointerActive = FALSE;
       RcddClearPointerExclude(prcl);
-      return SPS_ACCEPT_NOEXCLUDE;
+      Result = SPS_ACCEPT_NOEXCLUDE;
+      goto done;
    }
 
-   if (ppdev != NULL)
-      ppdev->SoftwarePointerActive = TRUE;
-   return SPS_DECLINE;
+   ppdev->SoftwarePointerActive = TRUE;
+
+done:
+   KeReleaseMutex(&ppdev->PointerMutex, FALSE);
+   return Result;
 }
 
 /*
  * RcddMovePointer
  *
  * Moves the pointer to a new position. While suppressed the cursor stays
- * hidden; otherwise we use the hardware pointer or fall back to the GDI
- * software cursor.
+ * hidden; otherwise we use the path selected by RcddSetPointerShape.
  */
 VOID APIENTRY
 RcddMovePointer(
@@ -424,29 +434,32 @@ RcddMovePointer(
 {
    PRCDD_PDEV ppdev = pso ? (PRCDD_PDEV)pso->dhpdev : NULL;
 
-   if (ppdev != NULL)
-   {
-      ppdev->PointerPositionValid = (x != -1);
-      ppdev->PointerX = x;
-      ppdev->PointerY = y;
-   }
+   if (ppdev == NULL)
+      return;
 
-   if (ppdev != NULL && ppdev->CursorSuppressed)
+   KeWaitForSingleObject(&ppdev->PointerMutex, Executive, KernelMode, FALSE, NULL);
+   ppdev->PointerPositionValid = (x != -1);
+   ppdev->PointerX = x;
+   ppdev->PointerY = y;
+
+   if (ppdev->CursorSuppressed)
    {
       RcddHideHardwarePointer(ppdev);
       RcddClearPointerExclude(prcl);
-      return;
+      goto done;
    }
 
-   if (pso != NULL &&
-       RcddMoveHardwarePointer((PRCDD_PDEV)pso->dhpdev, x, y))
+   if (!ppdev->SoftwarePointerActive)
    {
-      ppdev->SoftwarePointerActive = FALSE;
+      /* GDI may call a hardware move concurrently with drawing. A failed
+       * position update must not start software drawing without its lock. */
+      RcddMoveHardwarePointer(ppdev, x, y);
       RcddClearPointerExclude(prcl);
-      return;
+      goto done;
    }
 
-   if (ppdev != NULL)
-      ppdev->SoftwarePointerActive = TRUE;
    EngMovePointer(pso, x, y, prcl);
+
+done:
+   KeReleaseMutex(&ppdev->PointerMutex, FALSE);
 }

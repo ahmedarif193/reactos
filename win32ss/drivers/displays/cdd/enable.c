@@ -154,6 +154,7 @@ RcddEnablePDEV(
    }
 
    ppdev->hDriver = hDriver;
+   KeInitializeMutex(&ppdev->PointerMutex, 0);
 
    RtlZeroMemory(&GdiInfo, sizeof(GdiInfo));
    RtlZeroMemory(&DevInfo, sizeof(DevInfo));
