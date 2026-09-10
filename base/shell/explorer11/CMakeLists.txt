@@ -28,6 +28,7 @@ list(APPEND SHELL_SOURCE
     ../explorer/startup.cpp
     ../explorer/syspager.cpp
     ../explorer/taskband.cpp
+    ../explorer/taskbarpin.cpp
     ../explorer/taskswnd.cpp
     ../explorer/tbsite.cpp
     ../explorer/trayclock.cpp

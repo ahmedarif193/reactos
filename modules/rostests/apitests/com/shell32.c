@@ -984,6 +984,7 @@ static const CLASS_AND_INTERFACES ExpectedInterfaces[] =
             { NTDDI_MIN,          NTDDI_MAX,          &IID_IContextMenu },
             { NTDDI_MIN,          NTDDI_MAX,          &IID_IObjectWithSite },
 
+            { NTDDI_VISTA,        NTDDI_MAX,          &IID_IStartMenuPinnedList },
             {NTDDI_VISTA,         NTDDI_VISTASP4,     &IID_IPinnedListOld},
 
             {NTDDI_WIN7,          NTDDI_WINBLUE,      &IID_IPinnedList},

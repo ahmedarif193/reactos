@@ -62,7 +62,8 @@ public:
     enum IDCMD
     {
         IDCMD_OPEN = 0,
-        IDCMD_OPENFILELOCATION
+        IDCMD_OPENFILELOCATION,
+        IDCMD_RUNAS
     };
 
 private:
@@ -105,7 +106,7 @@ private:
     HRESULT SetTargetFromPIDLOrPath(LPCITEMIDLIST pidl, LPCWSTR pszFile);
     HICON CreateShortcutIcon(LPCWSTR wszIconPath, INT IconIndex);
 
-    HRESULT DoOpen(LPCMINVOKECOMMANDINFO lpici);
+    HRESULT DoOpen(LPCMINVOKECOMMANDINFO lpici, PCWSTR pszVerb = NULL);
     HRESULT DoOpenFileLocation();
 
 public:

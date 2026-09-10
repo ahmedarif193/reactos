@@ -61,6 +61,7 @@ static BOOL RecentHasShortcut(HWND hwnd)
 static const PCWSTR g_MruKeys[] = 
 {
     L"Software\\Microsoft\\Internet Explorer\\TypedURLs",
+    L"Software\\ReactOS\\StartMenu2\\RecentApps",
     L"Explorer\\RunMRU",
     L"Explorer\\Comdlg32\\OpenSaveMRU",
     L"Explorer\\Comdlg32\\LastVisitedMRU",

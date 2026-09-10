@@ -90,6 +90,7 @@
 #include "CSendToMenu.h"
 #include "CCopyMoveToMenu.h"
 #include "CCopyAsPathMenu.h"
+#include "CStartMenuPin.h"
 #include "dialogs/filedefext.h"
 #include "dialogs/drvdefext.h"
 #include "CQueryAssociations.h"

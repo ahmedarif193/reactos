@@ -2316,6 +2316,20 @@ interface ITaskbarList4 : ITaskbarList3
 }
 
 /*****************************************************************************
+ * IStartMenuPinnedList interface
+ */
+[
+    object,
+    uuid(4CD19ADA-25A5-4A32-B3B7-347BEE5BE36B),
+    pointer_default(unique)
+]
+interface IStartMenuPinnedList : IUnknown
+{
+    HRESULT RemoveFromList(
+            [in] IShellItem *pitem);
+}
+
+/*****************************************************************************
  * IDefaultExtractIconInit interface
  */
 
@@ -4687,6 +4701,14 @@ library ShellObjects
     coclass TaskbarList
     {
         interface ITaskbarList4;
+    }
+
+    [
+        uuid(A2A9545D-A0C2-42B4-9708-A0B2BADD77C8)
+    ]
+    coclass StartMenuPin
+    {
+        interface IStartMenuPinnedList;
     }
 
     [

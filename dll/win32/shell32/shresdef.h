@@ -968,3 +968,4 @@
 #define IDR_EXPLORER            163
 #define IDR_SYSTEMFILEASSOC     164
 #define IDR_WINECLASSES         165
+#define IDR_STARTMENUPIN        166

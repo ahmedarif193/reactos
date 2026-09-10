@@ -132,6 +132,7 @@ LPVOID       WINAPI SHAlloc(SIZE_T) __WINE_ALLOC_SIZE(1);
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 HRESULT WINAPI SHBindToObject(_In_opt_ IShellFolder *, _In_ PCUIDLIST_RELATIVE, _In_opt_ IBindCtx *, _In_ REFIID, _Outptr_ void **);
 HRESULT WINAPI SHGetKnownFolderIDList(_In_ REFKNOWNFOLDERID, _In_ DWORD, _In_opt_ HANDLE, _Outptr_ PIDLIST_ABSOLUTE *);
+HRESULT WINAPI SHGetKnownFolderPath(_In_ REFKNOWNFOLDERID, _In_ DWORD, _In_opt_ HANDLE, _Outptr_ PWSTR *);
 #endif
 
 HRESULT

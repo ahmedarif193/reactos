@@ -321,6 +321,7 @@ static KNOWN_INTERFACE KnownInterfaces[] =
     { ID_NAME(IID_IObjectWithSelection),           RegisteredOnVistaOrNewer },
     { ID_NAME(IID_IPersistString2),                RegisteredOnVistaOrNewer },
     { ID_NAME(IID_IRootAndRelativeParsingFolder),  RegisteredOnVistaOrNewer },
+    { ID_NAME(IID_IStartMenuPinnedList),           RegisteredOnVistaOrNewer },
 
     { ID_NAME(IID_IAssociationArray),              RegisteredOnVistaAndWin7 },
     { ID_NAME(IID_IObjectWithAssociationList),     RegisteredOnVistaAndWin7 },
