@@ -545,16 +545,17 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
     ULONG EntrySize;
     ULONG RealLength;
     NTSTATUS Status;
-    BOOLEAN ReturnSingleEntry, RestartScan;
+    BOOLEAN ReturnSingleEntry, RestartScan, InitialQuery;
 
     if (!FileCB)
         return STATUS_INVALID_PARAMETER;
 
     FileDir = FileCB->FileDir;
+    InitialQuery = !FileCB->DirScanStarted;
     RestartScan = !!(IrpFlags & SL_RESTART_SCAN);
     /* A fresh handle starts at the beginning even without the flag; the
      * shared directory tree may hold another handle's cursor. */
-    if (!FileCB->DirScanStarted)
+    if (InitialQuery)
     {
         RestartScan = TRUE;
         FileCB->DirScanStarted = TRUE;
@@ -620,6 +621,11 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
         Previous->NextEntryOffset = 0;
         return STATUS_SUCCESS;
     }
+    /* An empty first query is different from exhausting an existing scan.
+     * FindFirstFile maps this status to ERROR_FILE_NOT_FOUND; callers such
+     * as SetupCopyOEMInf use it to start a new OEM INF namespace. */
+    if (InitialQuery && Status == STATUS_NO_MORE_FILES)
+        return STATUS_NO_SUCH_FILE;
     return Status;
  }
 
