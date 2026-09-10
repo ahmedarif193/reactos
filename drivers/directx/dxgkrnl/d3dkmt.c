@@ -10928,7 +10928,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
 
             pMakeResident = (D3DDDI_MAKERESIDENT_LOCAL *)SystemBuffer;
-            if (pMakeResident->hPagingQueue == 0 || pMakeResident->NumAllocations > DXGKP_MAX_D3DKMT_LIST_COUNT || (pMakeResident->NumAllocations != 0 && pMakeResident->AllocationList == NULL) || pMakeResident->Flags.Reserved != 0)
+            if (pMakeResident->hPagingQueue == 0 || pMakeResident->NumAllocations == 0 || pMakeResident->NumAllocations > DXGKP_MAX_D3DKMT_LIST_COUNT || pMakeResident->AllocationList == NULL || pMakeResident->Flags.Reserved != 0)
                 return STATUS_INVALID_PARAMETER;
             /*
              * D3DDDI_MAKERESIDENT_FLAGS documents MustSucceed as valid only
