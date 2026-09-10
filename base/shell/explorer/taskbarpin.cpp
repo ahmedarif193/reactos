@@ -262,6 +262,123 @@ GetTaskbarPinFolder(BOOL bCreate, CStringW &Folder)
     return S_OK;
 }
 
+typedef struct _TASKBAR_PIN_DIR_ENTRY
+{
+    ULONG NextEntryOffset;
+    ULONG FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG FileAttributes;
+    ULONG FileNameLength;
+    WCHAR FileName[1];
+} TASKBAR_PIN_DIR_ENTRY;
+
+typedef struct _TASKBAR_PIN_IO_STATUS
+{
+    union
+    {
+        LONG Status;
+        PVOID Pointer;
+    };
+    ULONG_PTR Information;
+} TASKBAR_PIN_IO_STATUS;
+
+extern "C" LONG NTAPI
+NtQueryDirectoryFile(HANDLE FileHandle,
+                     HANDLE Event,
+                     PVOID ApcRoutine,
+                     PVOID ApcContext,
+                     TASKBAR_PIN_IO_STATUS *IoStatusBlock,
+                     PVOID FileInformation,
+                     ULONG Length,
+                     ULONG FileInformationClass,
+                     BOOLEAN ReturnSingleEntry,
+                     PVOID FileName,
+                     BOOLEAN RestartScan);
+
+// FindFirstFile cannot open these directories for enumeration on this build,
+// so the pin folder is read through a directory handle instead.
+static HRESULT
+EnumTaskbarPinFolder(PCWSTR pszFolder, TASKBAR_PIN_ENUM_PROC pfnCallback, LPARAM lParam)
+{
+    BYTE Buffer[8192];
+    HRESULT hrRead = S_OK;
+    BOOLEAN bRestart = TRUE;
+
+    HANDLE hFolder = CreateFileW(pszFolder, FILE_LIST_DIRECTORY,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                 OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (hFolder == INVALID_HANDLE_VALUE)
+    {
+        DWORD error = GetLastError();
+        return (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+                   ? S_OK
+                   : HRESULT_FROM_WIN32(error);
+    }
+
+    for (;;)
+    {
+        TASKBAR_PIN_IO_STATUS IoStatus;
+
+        ZeroMemory(&IoStatus, sizeof(IoStatus));
+        if (NtQueryDirectoryFile(hFolder, NULL, NULL, NULL, &IoStatus, Buffer, sizeof(Buffer),
+                                 1, FALSE, NULL, bRestart) < 0)
+        {
+            break;
+        }
+        bRestart = FALSE;
+
+        for (ULONG Offset = 0;;)
+        {
+            const TASKBAR_PIN_DIR_ENTRY *pEntry = (const TASKBAR_PIN_DIR_ENTRY *)&Buffer[Offset];
+            WCHAR szName[MAX_PATH], szShortcut[MAX_PATH];
+            CStringW Target;
+            ULONG cchName = pEntry->FileNameLength / sizeof(WCHAR);
+
+            if (cchName && cchName < _countof(szName) &&
+                !(pEntry->FileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            {
+                CopyMemory(szName, pEntry->FileName, pEntry->FileNameLength);
+                szName[cchName] = UNICODE_NULL;
+                if (!lstrcmpiW(PathFindExtensionW(szName), L".lnk") &&
+                    SUCCEEDED(StringCchPrintfW(szShortcut, _countof(szShortcut), L"%s\\%s",
+                                               pszFolder, szName)))
+                {
+                    if (!TaskbarPin_ResolveTarget(szShortcut, Target))
+                    {
+                        hrRead = HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+                    }
+                    else
+                    {
+                        FILETIME CreationTime;
+
+                        CreationTime.dwLowDateTime = pEntry->CreationTime.LowPart;
+                        CreationTime.dwHighDateTime = (DWORD)pEntry->CreationTime.HighPart;
+                        if (!pfnCallback(szShortcut, Target, &CreationTime, lParam))
+                        {
+                            CloseHandle(hFolder);
+                            return S_OK;
+                        }
+                    }
+                }
+            }
+
+            if (!pEntry->NextEntryOffset)
+                break;
+            Offset += pEntry->NextEntryOffset;
+            if (Offset >= sizeof(Buffer))
+                break;
+        }
+    }
+
+    CloseHandle(hFolder);
+    return hrRead;
+}
+
 HRESULT
 TaskbarPin_Enum(TASKBAR_PIN_ENUM_PROC pfnCallback, LPARAM lParam)
 {
@@ -271,50 +388,19 @@ TaskbarPin_Enum(TASKBAR_PIN_ENUM_PROC pfnCallback, LPARAM lParam)
     CStringW Folder;
     HRESULT hr = GetTaskbarPinFolder(FALSE, Folder);
     if (FAILED(hr))
-        return (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || hr == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)) ? S_OK : hr;
+    {
+        return (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) ||
+                hr == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND))
+                   ? S_OK
+                   : hr;
+    }
 
     CTaskbarPinLock Lock;
     hr = Lock.Acquire(Folder);
     if (FAILED(hr))
         return hr;
 
-    WCHAR szPattern[MAX_PATH];
-    hr = StringCchPrintfW(szPattern, _countof(szPattern), L"%s\\*.lnk", Folder.GetString());
-    if (FAILED(hr))
-        return hr;
-
-    WIN32_FIND_DATAW FindData;
-    HANDLE hFind = FindFirstFileW(szPattern, &FindData);
-    if (hFind == INVALID_HANDLE_VALUE)
-    {
-        DWORD error = GetLastError();
-        return (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) ? S_OK : HRESULT_FROM_WIN32(error);
-    }
-
-    HRESULT hrRead = S_OK;
-    do
-    {
-        if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            continue;
-
-        WCHAR szShortcut[MAX_PATH];
-        CStringW Target;
-        hr = StringCchPrintfW(szShortcut, _countof(szShortcut), L"%s\\%s", Folder.GetString(), FindData.cFileName);
-        if (FAILED(hr) || !TaskbarPin_ResolveTarget(szShortcut, Target))
-        {
-            hrRead = FAILED(hr) ? hr : HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
-            continue;
-        }
-        if (!pfnCallback(szShortcut, Target, &FindData.ftCreationTime, lParam))
-        {
-            FindClose(hFind);
-            return S_OK;
-        }
-    } while (FindNextFileW(hFind, &FindData));
-
-    DWORD error = GetLastError();
-    FindClose(hFind);
-    return error == ERROR_NO_MORE_FILES ? hrRead : HRESULT_FROM_WIN32(error);
+    return EnumTaskbarPinFolder(Folder, pfnCallback, lParam);
 }
 
 struct TASKBAR_PIN_FIND_DATA
@@ -397,12 +483,13 @@ ChooseTaskbarPinDestination(PCWSTR pszSource, PCWSTR pszTarget, CStringW &Destin
 static VOID
 StampTaskbarPin(PCWSTR pszPath)
 {
-    HANDLE hFile = CreateFileW(pszPath, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE hFile = CreateFileW(pszPath, FILE_WRITE_ATTRIBUTES | FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE)
     {
         FILETIME Time;
         GetSystemTimeAsFileTime(&Time);
         SetFileTime(hFile, &Time, &Time, &Time);
+        FlushFileBuffers(hFile);
         CloseHandle(hFile);
     }
 }
