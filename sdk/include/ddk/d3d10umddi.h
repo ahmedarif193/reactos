@@ -1,13 +1,12 @@
 /*
  * PROJECT:     ReactOS SDK
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Direct3D 10 user-mode display driver shared allocation types
+ * PURPOSE:     Direct3D 10/11 user-mode driver adapter and allocation types
  * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
  *
- * These structures are shared with a display miniport through its private
- * allocation data. Keep their values and field order aligned with the public
- * Windows 11 24H2 WDK contract. The wider D3D10 UMD callback surface remains
- * to be added as consumers require it.
+ * Keep values and field order aligned with the public Windows 11 24H2 WDK
+ * contract. The device callback surface remains to be added as consumers
+ * require it.
  */
 
 #pragma once
@@ -15,6 +14,78 @@
 #include <windef.h>
 #include <dxgicommon.h>
 #include <dxgiddi.h>
+
+typedef struct D3D10DDI_HADAPTER
+{
+    VOID *pDrvPrivate;
+} D3D10DDI_HADAPTER;
+
+typedef struct D3D10DDI_HRTADAPTER
+{
+    VOID *handle;
+} D3D10DDI_HRTADAPTER;
+
+typedef struct D3D10DDIARG_CALCPRIVATEDEVICESIZE D3D10DDIARG_CALCPRIVATEDEVICESIZE;
+typedef struct D3D10DDIARG_CREATEDEVICE D3D10DDIARG_CREATEDEVICE;
+typedef enum D3D10_2DDICAPS_TYPE
+{
+    D3D11DDICAPS_THREADING = 128,
+    D3D11DDICAPS_SHADER = 129,
+    D3D11DDICAPS_3DPIPELINESUPPORT = 130,
+} D3D10_2DDICAPS_TYPE;
+
+typedef struct D3D10_2DDIARG_GETCAPS
+{
+    D3D10_2DDICAPS_TYPE Type;
+    VOID *pInfo;
+    VOID *pData;
+    UINT DataSize;
+} D3D10_2DDIARG_GETCAPS;
+
+typedef struct D3D11DDI_3DPIPELINESUPPORT_CAPS
+{
+    UINT Caps;
+} D3D11DDI_3DPIPELINESUPPORT_CAPS;
+
+struct _D3DDDI_ADAPTERCALLBACKS;
+
+typedef SIZE_T (APIENTRY *PFND3D10DDI_CALCPRIVATEDEVICESIZE)(D3D10DDI_HADAPTER, const D3D10DDIARG_CALCPRIVATEDEVICESIZE *);
+typedef HRESULT (APIENTRY *PFND3D10DDI_CREATEDEVICE)(D3D10DDI_HADAPTER, D3D10DDIARG_CREATEDEVICE *);
+typedef HRESULT (APIENTRY *PFND3D10DDI_CLOSEADAPTER)(D3D10DDI_HADAPTER);
+typedef HRESULT (APIENTRY *PFND3D10_2DDI_GETSUPPORTEDVERSIONS)(D3D10DDI_HADAPTER, UINT32 *, UINT64 *);
+typedef HRESULT (APIENTRY *PFND3D10_2DDI_GETCAPS)(D3D10DDI_HADAPTER, const D3D10_2DDIARG_GETCAPS *);
+
+typedef struct D3D10DDI_ADAPTERFUNCS
+{
+    PFND3D10DDI_CALCPRIVATEDEVICESIZE pfnCalcPrivateDeviceSize;
+    PFND3D10DDI_CREATEDEVICE pfnCreateDevice;
+    PFND3D10DDI_CLOSEADAPTER pfnCloseAdapter;
+} D3D10DDI_ADAPTERFUNCS;
+
+typedef struct D3D10_2DDI_ADAPTERFUNCS
+{
+    PFND3D10DDI_CALCPRIVATEDEVICESIZE pfnCalcPrivateDeviceSize;
+    PFND3D10DDI_CREATEDEVICE pfnCreateDevice;
+    PFND3D10DDI_CLOSEADAPTER pfnCloseAdapter;
+    PFND3D10_2DDI_GETSUPPORTEDVERSIONS pfnGetSupportedVersions;
+    PFND3D10_2DDI_GETCAPS pfnGetCaps;
+} D3D10_2DDI_ADAPTERFUNCS;
+
+typedef struct D3D10DDIARG_OPENADAPTER
+{
+    D3D10DDI_HRTADAPTER hRTAdapter;
+    D3D10DDI_HADAPTER hAdapter;
+    UINT Interface;
+    UINT Version;
+    const struct _D3DDDI_ADAPTERCALLBACKS *pAdapterCallbacks;
+    union
+    {
+        D3D10DDI_ADAPTERFUNCS *pAdapterFuncs;
+        D3D10_2DDI_ADAPTERFUNCS *pAdapterFuncs_2;
+    };
+} D3D10DDIARG_OPENADAPTER;
+
+typedef HRESULT (APIENTRY *PFND3D10DDI_OPENADAPTER)(D3D10DDIARG_OPENADAPTER *);
 
 typedef enum D3D10DDIRESOURCE_TYPE
 {

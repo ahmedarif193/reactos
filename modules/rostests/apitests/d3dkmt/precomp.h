@@ -255,9 +255,9 @@ DestroyTestDevice(D3DKMT_HANDLE hDevice)
  * Microsoft Basic Display Adapter) on which render objects (contexts, GPU-VA,
  * etc.) cannot be created. Windows always also exposes the WARP software render
  * adapter ("Microsoft Basic Render Driver"), which IS render-capable. This
- * enumerates adapters, finds one whose ADAPTERTYPE reports RenderSupported, and
- * re-opens it by LUID so render-path positive tests actually execute instead of
- * degrading to skip. The returned handle must be closed with CloseAdapter().
+ * enumerates adapters and prefers a hardware adapter whose ADAPTERTYPE reports
+ * RenderSupported, falling back to WARP when no hardware renderer is available.
+ * The selected adapter is reopened by LUID and must be closed with CloseAdapter().
  * Out params (optional): *pLuid receives the adapter LUID; *pSoftware whether it
  * is the WARP software adapter.
  */
@@ -295,7 +295,8 @@ OpenRenderAdapterEx(LUID *pLuid, BOOL *pSoftware)
         qai.Type = KMTQAITYPE_ADAPTERTYPE;
         qai.pPrivateDriverData = &at;
         qai.PrivateDriverDataSize = sizeof(at);
-        if (!found && NT_SUCCESS(pfnQAI(&qai)) && at.RenderSupported)
+        if (NT_SUCCESS(pfnQAI(&qai)) && at.RenderSupported &&
+            (!found || (software && !at.SoftwareDevice)))
         {
             renderLuid = ea.Adapters[i].AdapterLuid;
             software = at.SoftwareDevice ? TRUE : FALSE;
@@ -323,6 +324,8 @@ OpenRenderAdapterEx(LUID *pLuid, BOOL *pSoftware)
 
     if (pLuid) *pLuid = renderLuid;
     if (pSoftware) *pSoftware = software;
+    trace("Render adapter LUID=%08lx:%08lx software=%u\n",
+          (ULONG)renderLuid.HighPart, renderLuid.LowPart, software);
     return ol.hAdapter;
 }
 

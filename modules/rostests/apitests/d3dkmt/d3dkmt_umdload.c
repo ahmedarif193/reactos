@@ -4,25 +4,16 @@
  * PURPOSE:     Load the user-mode driver the way the D3D runtime does
  * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
  *
- * This is the sequence the Direct3D runtime performs, and the first place the
- * two halves of a WDDM driver actually meet:
- *
- *   open the adapter -> ask dxgkrnl for KMTQAITYPE_UMDRIVERNAME
- *     -> LoadLibrary that name -> GetProcAddress("OpenAdapter10_2")
- *     -> call it -> receive D3DDDI_ADAPTERFUNCS
- *     -> pfnCreateDevice -> receive D3DDDI_DEVICEFUNCS
- *
- * Every step is a real contract with a real failure mode, and until now not one
- * of them had ever been executed on this OS: the kernel half was tested against
- * the kernel half, and no user-mode driver existed to load.
- *
- * What this pins is that the contract connects and the lifecycle table can be
- * exchanged without a runtime implementation. The separate umd2d test supplies
- * real callbacks and drives the implemented linear 2D execution path.
+ * OpenAdapter10_2 uses D3D10DDIARG_OPENADAPTER and the five-entry
+ * D3D10_2DDI_ADAPTERFUNCS table. The Direct3D 9 D3DDDIARG_OPENADAPTER
+ * layout belongs to OpenAdapter and cannot be passed to this entry point.
+ * This test loads the selected renderer's DX11 UMD, exchanges the adapter
+ * table, queries supported DDI versions, and closes the adapter.
  */
 
 #include "precomp.h"
 #include <d3dumddi.h>
+#include <d3d10umddi.h>
 
 static PFND3DKMT_QUERYADAPTERINFO pfnQueryAdapterInfo;
 
@@ -55,38 +46,55 @@ static BOOL UmdLoadQueryDriverName(D3DKMT_HANDLE hAdapter, KMTUMDVERSION Version
     return TRUE;
 }
 
-/* ------------------------------------------------------------------ *
- * The whole chain, in the runtime's order.
- * ------------------------------------------------------------------ */
+static HRESULT APIENTRY
+UmdLoadQueryAdapterInfo(HANDLE RuntimeAdapter, const D3DDDICB_QUERYADAPTERINFO *Info)
+{
+    D3DKMT_QUERYADAPTERINFO Query;
+    NTSTATUS Status;
+
+    if (Info == NULL)
+        return E_INVALIDARG;
+    memset(&Query, 0, sizeof(Query));
+    Query.hAdapter = (D3DKMT_HANDLE)(ULONG_PTR)RuntimeAdapter;
+    Query.Type = KMTQAITYPE_UMDRIVERPRIVATE;
+    Query.pPrivateDriverData = Info->pPrivateDriverData;
+    Query.PrivateDriverDataSize = Info->PrivateDriverDataSize;
+    Status = pfnQueryAdapterInfo(&Query);
+    return NT_SUCCESS(Status) ? S_OK : HRESULT_FROM_NT(Status);
+}
+
 static void Test_LoadUserModeDriver(void)
 {
     D3DKMT_HANDLE hAdapter;
     WCHAR Name[MAX_PATH];
     HMODULE Umd;
-    PFND3DDDI_OPENADAPTER pfnOpenAdapter;
-    D3DDDIARG_OPENADAPTER Open;
-    D3DDDI_ADAPTERFUNCS AdapterFuncs;
+    PFND3D10DDI_OPENADAPTER pfnOpenAdapter;
+    D3D10DDIARG_OPENADAPTER Open;
+    D3D10_2DDI_ADAPTERFUNCS AdapterFuncs;
     D3DDDI_ADAPTERCALLBACKS AdapterCallbacks;
+    UINT32 Count, Capacity, Index;
+    UINT64 *Versions = NULL;
     HRESULT hr;
+    BOOL Faulted = FALSE;
+    DWORD LoadFlags = 0;
 
-    hAdapter = OpenAdapterFromDisplay1();
+    hAdapter = OpenRenderAdapter();
     if (!hAdapter)
     {
-        skip("No adapter on \\\\.\\DISPLAY1\n");
+        skip("No render-capable adapter\n");
         return;
     }
-
-    if (!UmdLoadQueryDriverName(hAdapter, KMTUMDVERSION_DX9, Name, ARRAYSIZE(Name)))
+    if (!UmdLoadQueryDriverName(hAdapter, KMTUMDVERSION_DX11, Name, ARRAYSIZE(Name)))
     {
-        skip("adapter reports no user-mode driver\n");
+        skip("adapter reports no Direct3D 11 user-mode driver\n");
         CloseAdapter(hAdapter);
         return;
     }
     trace("adapter's user-mode driver: %S\n", Name);
-
-    /* Step 3.  A name that cannot be loaded is worse than no name: the runtime
-     * has already committed to this adapter by the time it gets here. */
-    Umd = LoadLibraryW(Name);
+    if ((Name[0] == L'\\' && Name[1] == L'\\') ||
+        (Name[0] != 0 && Name[1] == L':' && Name[2] == L'\\'))
+        LoadFlags = LOAD_WITH_ALTERED_SEARCH_PATH;
+    Umd = LoadLibraryExW(Name, NULL, LoadFlags);
     ok(Umd != NULL, "LoadLibrary(%S) failed, error %lu\n", Name, GetLastError());
     if (Umd == NULL)
     {
@@ -94,135 +102,95 @@ static void Test_LoadUserModeDriver(void)
         return;
     }
 
-    /* Step 4.  Exactly one export is resolved by name; everything else in the
-     * driver is reached through the tables it hands back. */
-    pfnOpenAdapter = (PFND3DDDI_OPENADAPTER)GetProcAddress(Umd, "OpenAdapter10_2");
-    ok(pfnOpenAdapter != NULL, "%S exports no OpenAdapter10_2\n", Name);
+    pfnOpenAdapter = (PFND3D10DDI_OPENADAPTER)GetProcAddress(Umd, "OpenAdapter10_2");
+    ok(pfnOpenAdapter != NULL, "GetProcAddress(%S, OpenAdapter10_2) failed, error %lu\n", Name, GetLastError());
     if (pfnOpenAdapter == NULL)
-    {
-        FreeLibrary(Umd);
-        CloseAdapter(hAdapter);
-        return;
-    }
+        goto unload;
 
-    /* Step 5.  The runtime hands over its callbacks and a handle of its own,
-     * and takes back the driver's handle plus the adapter function table. */
     memset(&AdapterFuncs, 0, sizeof(AdapterFuncs));
     memset(&AdapterCallbacks, 0, sizeof(AdapterCallbacks));
+    AdapterCallbacks.pfnQueryAdapterInfoCb = UmdLoadQueryAdapterInfo;
     memset(&Open, 0, sizeof(Open));
-    Open.hAdapter = (HANDLE)(ULONG_PTR)hAdapter;
-    Open.Interface = REACTOS_EXPECTED_UMD_INTERFACE_VERSION;
-    Open.Version = REACTOS_EXPECTED_UMD_INTERFACE_VERSION;
+    Open.hRTAdapter.handle = (HANDLE)(ULONG_PTR)hAdapter;
     Open.pAdapterCallbacks = &AdapterCallbacks;
-    Open.pAdapterFuncs = &AdapterFuncs;
-
-    /* The adapter may name a third-party user-mode driver (the Windows 11
-     * reference image names its own), which expects a complete Direct3D
-     * runtime behind the callback tables and faults without one. That is
-     * not a defect in the OS under test, so a fault here is reported and
-     * the test stops instead of taking the process down. */
+    Open.pAdapterFuncs_2 = &AdapterFuncs;
+    /* OpenAdapter10_2 negotiates DDI versions through GetSupportedVersions;
+     * no device or device-function table is exchanged by this probe. */
     hr = E_FAIL;
     _SEH2_TRY { hr = pfnOpenAdapter(&Open); }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        skip("%S faulted inside OpenAdapter10_2 (needs a full D3D runtime)\n", Name);
-        FreeLibrary(Umd);
-        CloseAdapter(hAdapter);
-        _SEH2_YIELD(return);
-    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { Faulted = TRUE; }
     _SEH2_END;
+    ok(!Faulted, "%S faulted inside OpenAdapter10_2\n", Name);
+    if (Faulted)
+        goto unload;
     ok(hr == S_OK, "OpenAdapter10_2 failed 0x%08lX\n", (long)hr);
     if (hr != S_OK)
-    {
-        FreeLibrary(Umd);
-        CloseAdapter(hAdapter);
-        return;
-    }
+        goto unload;
 
-    /* The driver must have swapped in its own handle and filled every adapter
-     * entry: the runtime calls all three by position, so a NULL is a wild
-     * call the first time that slot is used. */
-    ok(Open.hAdapter != (HANDLE)(ULONG_PTR)hAdapter,
-       "driver did not publish a handle of its own\n");
-    ok(AdapterFuncs.pfnGetCaps != NULL, "no pfnGetCaps\n");
+    ok(AdapterFuncs.pfnCalcPrivateDeviceSize != NULL, "no pfnCalcPrivateDeviceSize\n");
     ok(AdapterFuncs.pfnCreateDevice != NULL, "no pfnCreateDevice\n");
     ok(AdapterFuncs.pfnCloseAdapter != NULL, "no pfnCloseAdapter\n");
-    ok(Open.DriverVersion != 0, "driver reported no interface version\n");
-    trace("UMD opened: driver version 0x%04X\n", (unsigned)Open.DriverVersion);
+    ok(AdapterFuncs.pfnGetSupportedVersions != NULL, "no pfnGetSupportedVersions\n");
+    ok(AdapterFuncs.pfnGetCaps != NULL, "no pfnGetCaps\n");
+    if (AdapterFuncs.pfnGetSupportedVersions == NULL)
+        goto close_adapter;
 
-    /*
-     * Step 6: create a device, which is where the device function table is
-     * exchanged.
-     *
-     * A runtime refuses a driver built against a different interface version
-     * before it gets here, and must: D3DDDI_DEVICEFUNCS is version-guarded, so
-     * the two sides disagree about its length and the driver would zero past
-     * the end of the caller's table.  That is a stack overflow written by the
-     * driver into the runtime, and no field in the DDI carries a size to catch
-     * it -- the version *is* the size contract.
-     */
-    if (Open.DriverVersion != REACTOS_EXPECTED_UMD_INTERFACE_VERSION)
+    Count = 0;
+    hr = AdapterFuncs.pfnGetSupportedVersions(Open.hAdapter, &Count, NULL);
+    ok(hr == S_OK, "GetSupportedVersions(count) failed 0x%08lX\n", (long)hr);
+    if (hr != S_OK)
+        goto close_adapter;
+    ok(Count != 0 && Count <= MAXDWORD / sizeof(*Versions), "invalid DDI version count %u\n", Count);
+    if (Count == 0 || Count > MAXDWORD / sizeof(*Versions))
+        goto close_adapter;
+    Capacity = Count;
+    Versions = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)Capacity * sizeof(*Versions));
+    ok(Versions != NULL, "allocating DDI version list failed\n");
+    if (Versions == NULL)
+        goto close_adapter;
+    hr = AdapterFuncs.pfnGetSupportedVersions(Open.hAdapter, &Count, Versions);
+    ok(hr == S_OK, "GetSupportedVersions(list) failed 0x%08lX\n", (long)hr);
+    ok(Count != 0 && Count <= Capacity, "DDI version count %u exceeds capacity %u\n", Count, Capacity);
+    if (hr == S_OK && Count <= Capacity)
     {
-        skip("driver built at interface 0x%04X, this caller at 0x%04X -- a runtime refuses "
-             "the mismatch rather than exchanging a table whose length they disagree on\n",
-             (unsigned)Open.DriverVersion,
-             (unsigned)REACTOS_EXPECTED_UMD_INTERFACE_VERSION);
-        AdapterFuncs.pfnCloseAdapter(Open.hAdapter);
-        FreeLibrary(Umd);
-        CloseAdapter(hAdapter);
-        return;
+        for (Index = 0; Index < Count; ++Index)
+            trace("supported DDI version[%u] = 0x%I64x\n", Index, Versions[Index]);
     }
+    HeapFree(GetProcessHeap(), 0, Versions);
 
-    if (AdapterFuncs.pfnCreateDevice != NULL)
+    if (AdapterFuncs.pfnGetCaps != NULL)
     {
-        D3DDDIARG_CREATEDEVICE Create;
-        D3DDDI_DEVICEFUNCS DeviceFuncs;
-        D3DDDI_DEVICECALLBACKS DeviceCallbacks;
+        D3D10_2DDIARG_GETCAPS Query;
+        D3D11DDI_3DPIPELINESUPPORT_CAPS Pipeline;
 
-        memset(&DeviceFuncs, 0, sizeof(DeviceFuncs));
-        memset(&DeviceCallbacks, 0, sizeof(DeviceCallbacks));
-        memset(&Create, 0, sizeof(Create));
-        Create.hDevice = (HANDLE)(ULONG_PTR)0x1234;   /* the runtime's handle */
-        Create.Interface = REACTOS_EXPECTED_UMD_INTERFACE_VERSION;
-        Create.Version = REACTOS_EXPECTED_UMD_INTERFACE_VERSION;
-        Create.pCallbacks = &DeviceCallbacks;
-        Create.pDeviceFuncs = &DeviceFuncs;
-
+        memset(&Query, 0, sizeof(Query));
+        memset(&Pipeline, 0, sizeof(Pipeline));
+        Query.Type = D3D11DDICAPS_3DPIPELINESUPPORT;
+        Query.pData = &Pipeline;
+        Query.DataSize = sizeof(Pipeline);
         hr = E_FAIL;
-        _SEH2_TRY { hr = AdapterFuncs.pfnCreateDevice(Open.hAdapter, &Create); }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            skip("user-mode driver faulted inside pfnCreateDevice (needs a full D3D runtime)\n");
-            hr = E_FAIL;
-        }
+        _SEH2_TRY { hr = AdapterFuncs.pfnGetCaps(Open.hAdapter, &Query); }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { Faulted = TRUE; }
         _SEH2_END;
-        if (hr != E_FAIL)
-            ok(hr == S_OK, "pfnCreateDevice failed 0x%08lX\n", (long)hr);
-        if (hr == S_OK)
+        ok(!Faulted, "%S faulted inside GetCaps(3DPIPELINESUPPORT)\n", Name);
+        if (!Faulted)
         {
-            ok(DeviceFuncs.pfnDestroyDevice != NULL,
-               "device table has no pfnDestroyDevice -- the device could never be released\n");
-            ok(Create.hDevice != (HANDLE)(ULONG_PTR)0x1234,
-               "driver did not publish a device handle of its own\n");
-
-            /* Closing the adapter with a device still open is the runtime
-             * breaking its own contract, and the driver must say so rather
-             * than freeing memory that device still points at. */
-            hr = AdapterFuncs.pfnCloseAdapter(Open.hAdapter);
-            ok(FAILED(hr), "adapter closed while a device was still open (0x%08lX)\n", (long)hr);
-
-            if (DeviceFuncs.pfnDestroyDevice != NULL)
+            ok(hr == S_OK, "GetCaps(3DPIPELINESUPPORT) failed 0x%08lX\n", (long)hr);
+            if (hr == S_OK)
             {
-                hr = DeviceFuncs.pfnDestroyDevice(Create.hDevice);
-                ok(hr == S_OK, "pfnDestroyDevice failed 0x%08lX\n", (long)hr);
+                trace("UMD 3D pipeline support mask = 0x%08X\n", Pipeline.Caps);
+                ok(Pipeline.Caps != 0, "UMD reports no supported 3D pipeline\n");
             }
         }
     }
 
-    /* Step 7: and now the adapter closes cleanly. */
-    hr = AdapterFuncs.pfnCloseAdapter(Open.hAdapter);
-    ok(hr == S_OK, "pfnCloseAdapter failed 0x%08lX\n", (long)hr);
-
+close_adapter:
+    if (AdapterFuncs.pfnCloseAdapter != NULL)
+    {
+        hr = AdapterFuncs.pfnCloseAdapter(Open.hAdapter);
+        ok(hr == S_OK, "CloseAdapter failed 0x%08lX\n", (long)hr);
+    }
+unload:
     FreeLibrary(Umd);
     CloseAdapter(hAdapter);
 }
