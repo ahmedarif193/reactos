@@ -26,6 +26,14 @@ static MSI_ALLOCATION_STATE HalpMsiVectorState[MSI_VECTOR_COUNT];
 static KSPIN_LOCK HalpMsiVectorLock;
 extern PPROCESSOR_IDENTITY HalpProcessorIdentity;
 
+static BOOLEAN
+HalpAllocateMsiVectorBlock(
+    _In_ KIRQL DesiredIrql,
+    _In_ ULONG MessageCount,
+    _Out_ PUCHAR OutVector,
+    _Out_ PKIRQL OutIrql,
+    _Out_ PKAFFINITY OutAffinity);
+
 static
 ULONG
 NTAPI
@@ -134,7 +142,8 @@ HalpGetMessageRoutingInfo(
     {
         DesiredIrql = RoutingInfo->DesiredIrql ? RoutingInfo->DesiredIrql
                                                : (CLOCK_LEVEL - 1);
-        Allocated = HalpAllocateMsiVector(DesiredIrql,
+        Allocated = HalpAllocateMsiVectorBlock(DesiredIrql,
+                                          RoutingInfo->MessageCount ? RoutingInfo->MessageCount : 1,
                                           &AllocatedVector,
                                           &AllocatedIrql,
                                           &AllocatedAffinity);
@@ -207,10 +216,10 @@ HalpMsiVectorToIrql(
     return TprToIrql(Vector);
 }
 
-BOOLEAN
-NTAPI
-HalpAllocateMsiVector(
+static BOOLEAN
+HalpAllocateMsiVectorBlock(
     _In_ KIRQL DesiredIrql,
+    _In_ ULONG MessageCount,
     _Out_ PUCHAR OutVector,
     _Out_ PKIRQL OutIrql,
     _Out_ PKAFFINITY OutAffinity)
@@ -219,6 +228,8 @@ HalpAllocateMsiVector(
     UCHAR Vector;
     KIRQL AllocatedIrql;
     ULONG Offset;
+    ULONG Message;
+    ULONG Alignment = 1;
     UCHAR Index;
 
     /* Validate parameters */
@@ -226,6 +237,12 @@ HalpAllocateMsiVector(
     {
         return FALSE;
     }
+
+    /* A message block must stay within one APIC priority class. */
+    if (MessageCount == 0 || MessageCount > 16)
+        return FALSE;
+    while (Alignment < MessageCount)
+        Alignment <<= 1;
 
     /* Validate desired IRQL is in valid range for MSI (DEVICE_LEVEL range) */
     if (DesiredIrql < CMCI_LEVEL || DesiredIrql >= HIGH_LEVEL)
@@ -249,7 +266,10 @@ HalpAllocateMsiVector(
             Vector = IrqlToTpr(AllocatedIrql) + (UCHAR)Offset;
 
             /* Check if vector is in MSI range */
-            if (Vector < MSI_VECTOR_MIN || Vector > MSI_VECTOR_MAX)
+            if (Vector < MSI_VECTOR_MIN ||
+                (ULONG)Vector + MessageCount - 1 > MSI_VECTOR_MAX ||
+                (Vector & (Alignment - 1)) != 0 ||
+                (Vector & 0xf) + MessageCount > 16)
             {
                 continue;
             }
@@ -257,24 +277,22 @@ HalpAllocateMsiVector(
             /* Calculate index into our allocation state array */
             Index = Vector - MSI_VECTOR_MIN;
 
-            /* Check if this vector is already allocated (in general HAL sense) */
-            if (HalpVectorToIndex[Vector] != APIC_FREE_VECTOR)
+            for (Message = 0; Message < MessageCount; Message++)
             {
-                continue;
+                if (HalpVectorToIndex[Vector + Message] != APIC_FREE_VECTOR ||
+                    HalpMsiVectorState[Index + Message].Allocated)
+                    break;
             }
+            if (Message != MessageCount)
+                continue;
 
-            /* Check if this vector is already allocated for MSI */
-            if (HalpMsiVectorState[Index].Allocated)
+            /* Reserve the complete block atomically with respect to allocators. */
+            for (Message = 0; Message < MessageCount; Message++)
             {
-                continue;
+                HalpMsiVectorState[Index + Message].Allocated = TRUE;
+                HalpMsiVectorState[Index + Message].Irql = AllocatedIrql;
+                HalpVectorToIndex[Vector + Message] = APIC_RESERVED_VECTOR;
             }
-
-            /* Found a free vector! Allocate it */
-            HalpMsiVectorState[Index].Allocated = TRUE;
-            HalpMsiVectorState[Index].Irql = AllocatedIrql;
-
-            /* Mark in the general HAL vector table as reserved */
-            HalpVectorToIndex[Vector] = APIC_RESERVED_VECTOR;
 
             /* Return results */
             *OutVector = Vector;
@@ -296,6 +314,17 @@ HalpAllocateMsiVector(
     KeReleaseSpinLock(&HalpMsiVectorLock, OldIrql);
 
     return FALSE;
+}
+
+BOOLEAN
+NTAPI
+HalpAllocateMsiVector(
+    _In_ KIRQL DesiredIrql,
+    _Out_ PUCHAR OutVector,
+    _Out_ PKIRQL OutIrql,
+    _Out_ PKAFFINITY OutAffinity)
+{
+    return HalpAllocateMsiVectorBlock(DesiredIrql, 1, OutVector, OutIrql, OutAffinity);
 }
 
 BOOLEAN
