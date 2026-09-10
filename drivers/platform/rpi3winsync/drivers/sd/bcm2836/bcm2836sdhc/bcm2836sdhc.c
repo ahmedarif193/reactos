@@ -749,7 +749,7 @@ SdhcSlotIssueRequest (
     PSDHC_EXTENSION SdhcExtension = (PSDHC_EXTENSION)PrivateExtension;
     NTSTATUS Status;
 
-    if (InterlockedExchangePointer(&SdhcExtension->OutstandingRequest,
+    if (InterlockedExchangePointer((PVOID volatile *)&SdhcExtension->OutstandingRequest,
                                    Request) != NULL) {
         TraceMessage(TRACE_LEVEL_WARNING,
                      DRVR_LVL_WARN,
@@ -887,7 +887,7 @@ SdhcRequestDpc (
     // SDPORT does not maintain a request state, so we may get a request that
     // has not been issued yet!
     //
-    if (InterlockedExchangePointer(&SdhcExtension->OutstandingRequest,
+    if (InterlockedExchangePointer((PVOID volatile *)&SdhcExtension->OutstandingRequest,
                                    SdhcExtension->OutstandingRequest) 
         == NULL) {
         return;
@@ -1100,7 +1100,7 @@ SdhcResetHost (
         return STATUS_INVALID_PARAMETER;
     } // switch (ResetType)
 
-    if (InterlockedExchangePointer(&SdhcExtension->OutstandingRequest,
+    if (InterlockedExchangePointer((PVOID volatile *)&SdhcExtension->OutstandingRequest,
                                    NULL) != NULL) {
         InterlockedIncrement(&SdhcExtension->CmdAborted);
     }
@@ -3446,7 +3446,7 @@ SdhcCompleteRequest(
 
     if (IsCommandCompleted) {
         CurRequest = (const SDPORT_REQUEST*)
-            InterlockedExchangePointer(&SdhcExtension->OutstandingRequest,
+            InterlockedExchangePointer((PVOID volatile *)&SdhcExtension->OutstandingRequest,
                                        NULL);
         if (CurRequest != Request) {
             NT_ASSERT(FALSE);

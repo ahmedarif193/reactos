@@ -444,8 +444,8 @@ SerialSetupNewHandFlow(
                                                 (SERIAL_LSR_THRE |
                                                  SERIAL_LSR_TEMT)) ||
                 (Extension->CurrentWriteRequest || Extension->TransmitImmediate ||
-                 (!IsQueueEmpty(Extension->WriteQueue)) &&
-                 (!Extension->TXHolding))) {
+                 ((!IsQueueEmpty(Extension->WriteQueue)) &&
+                  (!Extension->TXHolding)))) {
 
                 SerialSetRTS(Extension->WdfInterrupt, Extension);
 
@@ -1333,8 +1333,8 @@ SerialPerhapsLowerRTS(
 
         if ((extension->TXHolding & SERIAL_TX_BREAK) ||
             (extension->CurrentWriteRequest || extension->TransmitImmediate ||
-             (!IsQueueEmpty(extension->WriteQueue)) &&
-             (!extension->TXHolding))) {
+             ((!IsQueueEmpty(extension->WriteQueue)) &&
+              (!extension->TXHolding)))) {
 
             NOTHING;
 

@@ -354,7 +354,7 @@ NTSTATUS VchiqInit (
             *PsThreadType,
             KernelMode,
             VCHIQ_ALLOC_TAG_GLOBAL_OBJ,
-            &DeviceContextPtr->VchiqThreadObj[threadCount],
+            (PVOID *)&DeviceContextPtr->VchiqThreadObj[threadCount],
             NULL);
         if (!NT_SUCCESS(status)) {
             VCHIQ_LOG_ERROR(
@@ -2233,7 +2233,7 @@ NTSTATUS VchiqRemovePendingMsg (
     status = WdfRequestRetrieveOutputBuffer(
         WdfRequest,
         sizeof(*totalMsgPtr),
-        &totalMsgPtr,
+        (PVOID *)&totalMsgPtr,
         &bufSize);
     if (!NT_SUCCESS(status)) {
         VCHIQ_LOG_ERROR(
@@ -2248,7 +2248,7 @@ NTSTATUS VchiqRemovePendingMsg (
     status = WdfRequestRetrieveInputBuffer(
         WdfRequest,
         sizeof(*awaitCompletionPtr),
-        &awaitCompletionPtr,
+        (PVOID *)&awaitCompletionPtr,
         &bufSize);
     if (!NT_SUCCESS(status)) {
         VCHIQ_LOG_ERROR(
@@ -2755,7 +2755,7 @@ NTSTATUS VchiqRemovePendingVchiMsg (
     status = WdfRequestRetrieveInputBuffer(
         WdfRequest,
         sizeof(*dequeueMsgPtr),
-        &dequeueMsgPtr,
+        (PVOID *)&dequeueMsgPtr,
         &bufSize);
     if (!NT_SUCCESS(status)) {
         VCHIQ_LOG_ERROR(
@@ -2770,7 +2770,7 @@ NTSTATUS VchiqRemovePendingVchiMsg (
     status = WdfRequestRetrieveOutputBuffer(
         WdfRequest,
         sizeof(*totalMsgSizePtr),
-        &totalMsgSizePtr,
+        (PVOID *)&totalMsgSizePtr,
         &bufSize);
     if (!NT_SUCCESS(status)) {
         VCHIQ_LOG_ERROR(

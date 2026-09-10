@@ -330,7 +330,7 @@ const WDF_OBJECT_CONTEXT_TYPE_INFO                                      \
 WDF_TYPE_NAME_TO_TYPE_INFO(_contexttype) =                              \
 {                                                                       \
     sizeof(WDF_OBJECT_CONTEXT_TYPE_INFO),                               \
-    #_contexttype,                                                      \
+    (PCHAR)#_contexttype,                                               \
     sizeof(_contexttype),                                               \
     _UniqueType,                                                        \
     _GetUniqueType,                                                     \

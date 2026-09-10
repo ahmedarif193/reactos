@@ -44,8 +44,8 @@
 
 #define VALIDATE_ARGS \
 	struct vc4_exec_info *exec,			\
-	void *validated,				\
-	void *untrusted
+	uint8_t *validated,				\
+	const uint8_t *untrusted
 
 /** Return the width in pixels of a 64-byte microtile. */
 static uint32_t
@@ -123,12 +123,12 @@ vc4_use_handle(struct vc4_exec_info *exec, uint32_t gem_handles_packet_index)
 }
 
 static bool
-validate_bin_pos(struct vc4_exec_info *exec, void *untrusted, uint32_t pos)
+validate_bin_pos(struct vc4_exec_info *exec, const uint8_t *untrusted, uint32_t pos)
 {
 	/* Note that the untrusted pointer passed to these functions is
 	 * incremented past the packet byte.
 	 */
-	return (untrusted - 1 == exec->bin_u + pos);
+	return (untrusted - 1 == (uint8_t *)exec->bin_u + pos);
 }
 
 static uint32_t
@@ -444,8 +444,8 @@ validate_gem_handles(VALIDATE_ARGS)
 static const struct cmd_info {
 	uint16_t len;
 	const char *name;
-	int (*func)(struct vc4_exec_info *exec, void *validated,
-		    void *untrusted);
+	int (*func)(struct vc4_exec_info *exec, uint8_t *validated,
+		    const uint8_t *untrusted);
 } cmd_info[] = {
 	VC4_DEFINE_PACKET(VC4_PACKET_HALT, NULL),
 	VC4_DEFINE_PACKET(VC4_PACKET_NOP, NULL),
@@ -496,8 +496,8 @@ vc4_validate_bin_cl(struct drm_device *dev,
 	uint32_t src_offset = 0;
 
 	while (src_offset < len) {
-		void *dst_pkt = validated + dst_offset;
-		void *src_pkt = unvalidated + src_offset;
+		uint8_t *dst_pkt = (uint8_t *)validated + dst_offset;
+		const uint8_t *src_pkt = (const uint8_t *)unvalidated + src_offset;
 		u8 cmd = *(uint8_t *)src_pkt;
 		const struct cmd_info *info;
 
@@ -568,7 +568,7 @@ vc4_validate_bin_cl(struct drm_device *dev,
 
 static bool
 reloc_tex(struct vc4_exec_info *exec,
-	  void *uniform_data_u,
+	  const uint8_t *uniform_data_u,
 	  struct vc4_texture_sample_info *sample,
 	  uint32_t texture_handle_index)
 
@@ -580,7 +580,7 @@ reloc_tex(struct vc4_exec_info *exec,
 		       *(uint32_t *)(uniform_data_u + sample->p_offset[2]) : 0);
 	uint32_t p3 = (sample->p_offset[3] != ~0 ?
 		       *(uint32_t *)(uniform_data_u + sample->p_offset[3]) : 0);
-	uint32_t *validated_p0 = exec->uniforms_v + sample->p_offset[0];
+	uint32_t *validated_p0 = (uint32_t *)((uint8_t *)exec->uniforms_v + sample->p_offset[0]);
 	uint32_t offset = p0 & VC4_TEX_P0_OFFSET_MASK;
 	uint32_t miplevels = VC4_GET_FIELD(p0, VC4_TEX_P0_MIPLVLS);
 	uint32_t width = VC4_GET_FIELD(p1, VC4_TEX_P1_WIDTH);
@@ -751,7 +751,7 @@ validate_gl_shader_rec(struct drm_device *dev,
 		       struct vc4_shader_state *state)
 {
 	uint32_t *src_handles;
-	void *pkt_u, *pkt_v;
+	uint8_t *pkt_u, *pkt_v;
 	static const uint32_t shader_reloc_offsets[] = {
 		4, /* fs */
 		16, /* vs */
@@ -775,7 +775,7 @@ validate_gl_shader_rec(struct drm_device *dev,
 		return -EINVAL;
 	}
 	src_handles = exec->shader_rec_u;
-	exec->shader_rec_u += nr_relocs * 4;
+	exec->shader_rec_u = (uint8_t *)exec->shader_rec_u + nr_relocs * 4;
 	exec->shader_rec_size -= nr_relocs * 4;
 
 	if (packet_size > exec->shader_rec_size) {
@@ -787,14 +787,14 @@ validate_gl_shader_rec(struct drm_device *dev,
 	pkt_u = exec->shader_rec_u;
 	pkt_v = exec->shader_rec_v;
 	memcpy(pkt_v, pkt_u, packet_size);
-	exec->shader_rec_u += packet_size;
+	exec->shader_rec_u = (uint8_t *)exec->shader_rec_u + packet_size;
 	/* Shader recs have to be aligned to 16 bytes (due to the attribute
 	 * flags being in the low bytes), so round the next validated shader
 	 * rec address up.  This should be safe, since we've got so many
 	 * relocations in a shader rec packet.
 	 */
 	BUG_ON(roundup(packet_size, 16) - packet_size > nr_relocs * 4);
-	exec->shader_rec_v += roundup(packet_size, 16);
+	exec->shader_rec_v = (uint8_t *)exec->shader_rec_v + roundup(packet_size, 16);
 	exec->shader_rec_size -= packet_size;
 
 	for (i = 0; i < shader_reloc_count; i++) {
@@ -882,8 +882,8 @@ validate_gl_shader_rec(struct drm_device *dev,
 
 		*(uint32_t *)(pkt_v + o + 4) = exec->uniforms_p;
 
-		exec->uniforms_u += validated_shader->uniforms_src_size;
-		exec->uniforms_v += validated_shader->uniforms_size;
+		exec->uniforms_u = (uint8_t *)exec->uniforms_u + validated_shader->uniforms_src_size;
+		exec->uniforms_v = (uint8_t *)exec->uniforms_v + validated_shader->uniforms_size;
 		exec->uniforms_p += validated_shader->uniforms_size;
 	}
 
