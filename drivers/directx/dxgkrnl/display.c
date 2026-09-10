@@ -102,6 +102,7 @@ DxgkpSelectDisplayDriver(
  * and needed by the registry path writes.
  */
 static ULONG g_DisplayDeviceNumber = 0;
+static BOOLEAN g_DisplayInitialModePending;
 static volatile LONG g_PresentShadowTraceCount = 0;
 static volatile LONG g_PresentDirtyTraceCount = 0;
 static volatile LONG g_ScanoutCopyCount = 0;
@@ -163,6 +164,58 @@ DxgkpRegWriteDword(
     RtlInitUnicodeString(&Name, ValueName);
     return ZwSetValueKey(KeyHandle, &Name, 0, REG_DWORD,
                          &Value, sizeof(Value));
+}
+
+/* SharedPrimaryMutex is held after publishing a successful VidPN. The bridge
+ * is registered before monitor negotiation finishes, so its POST defaults
+ * must be replaced once by the first committed native mode. Later mode changes
+ * leave registry persistence to ChangeDisplaySettingsEx. */
+VOID
+DxgkpDisplayPublishInitialMode(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    D3DKMT_CURRENTDISPLAYMODE Current;
+    WCHAR KeyBuffer[128];
+    UNICODE_STRING KeyName;
+    OBJECT_ATTRIBUTES Attributes;
+    HANDLE Key;
+    ULONG Index;
+    NTSTATUS Status;
+    PCWSTR Names[] = {L"DefaultSettings.XResolution", L"DefaultSettings.YResolution",
+                      L"DefaultSettings.XPanning", L"DefaultSettings.YPanning",
+                      L"DefaultSettings.VRefresh"};
+    ULONG Values[RTL_NUMBER_OF(Names)];
+
+    if (g_DisplayAdapter != Adapter || !g_DisplayInitialModePending || !Adapter->VidPnCommitted)
+        return;
+    RtlZeroMemory(&Current, sizeof(Current));
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+    if (Adapter->VidPn != NULL && ((PDXGKP_VIDPN)Adapter->VidPn)->NumPaths != 0)
+        Current.VidPnSourceId = ((PDXGKP_VIDPN)Adapter->VidPn)->Paths[0].VidPnSourceId;
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    Status = DxgkVidPnQueryCurrentDisplayMode(Adapter, &Current);
+    if (!NT_SUCCESS(Status))
+        return;
+    RtlStringCchPrintfW(KeyBuffer, RTL_NUMBER_OF(KeyBuffer),
+                        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\dxgkrnl\\Device%lu",
+                        g_DisplayDeviceNumber);
+    RtlInitUnicodeString(&KeyName, KeyBuffer);
+    InitializeObjectAttributes(&Attributes, &KeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenKey(&Key, KEY_SET_VALUE, &Attributes);
+    if (!NT_SUCCESS(Status))
+        return;
+    Values[0] = Values[2] = Current.DisplayMode.Width;
+    Values[1] = Values[3] = Current.DisplayMode.Height;
+    Values[4] = Current.DisplayMode.IntegerRefreshRate;
+    for (Index = 0; Index < RTL_NUMBER_OF(Names); ++Index)
+    {
+        Status = DxgkpRegWriteDword(Key, Names[Index], Values[Index]);
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+    ZwClose(Key);
+    if (NT_SUCCESS(Status))
+        g_DisplayInitialModePending = FALSE;
 }
 
 /* ========================================================================
@@ -324,9 +377,10 @@ DxgkpAskMiniportIsVidPnSupported(
 
 
 NTSTATUS
-DxgkpDisplayCommitVidPnCandidate(
+DxgkpDisplayCommitVidPnCandidateWithTarget(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_opt_ CONST D3DKMDT_VIDEO_SIGNAL_INFO *RequestedTarget,
     _Out_ PDXGKP_DISPLAY_COMMIT_RESULT Result)
 {
     NTSTATUS Status;
@@ -587,6 +641,7 @@ DxgkpDisplayCommitVidPnCandidate(
         UINT DesiredWidth = 0, DesiredHeight = 0;
         UINT SourceWidth = 0, SourceHeight = 0;
         UINT DodDesktopW = 0, DodDesktopH = 0;
+        UINT PinnedSourceModeId = (UINT)-1;
         BOOLEAN PreferPostSourceMode = FALSE;
         BOOLEAN PreferClosestPostSourceMode = FALSE;
 
@@ -622,7 +677,38 @@ DxgkpDisplayCommitVidPnCandidate(
              */
             BOOLEAN FoundPreferredTarget = FALSE;
 
-            for (i = 0; i < TgtSet->NumModes; i++)
+            if (RequestedTarget != NULL)
+            {
+                /* The requested timing came from this miniport's cofunctional
+                 * enumeration. Never substitute a different refresh or raster. */
+                for (i = 0; i < TgtSet->NumModes; i++)
+                {
+                    CONST D3DKMDT_VIDEO_SIGNAL_INFO *Signal = &TgtSet->Modes[i].VideoSignalInfo;
+
+                    if (Signal->ActiveSize.cx == RequestedTarget->ActiveSize.cx &&
+                        Signal->ActiveSize.cy == RequestedTarget->ActiveSize.cy &&
+                        Signal->TotalSize.cx == RequestedTarget->TotalSize.cx &&
+                        Signal->TotalSize.cy == RequestedTarget->TotalSize.cy &&
+                        Signal->PixelRate == RequestedTarget->PixelRate &&
+                        Signal->ScanLineOrdering == RequestedTarget->ScanLineOrdering &&
+                        (ULONGLONG)Signal->VSyncFreq.Numerator * RequestedTarget->VSyncFreq.Denominator ==
+                            (ULONGLONG)RequestedTarget->VSyncFreq.Numerator * Signal->VSyncFreq.Denominator &&
+                        (ULONGLONG)Signal->HSyncFreq.Numerator * RequestedTarget->HSyncFreq.Denominator ==
+                            (ULONGLONG)RequestedTarget->HSyncFreq.Numerator * Signal->HSyncFreq.Denominator)
+                    {
+                        TargetIndex = i;
+                        FoundPreferredTarget = TRUE;
+                        break;
+                    }
+                }
+                if (!FoundPreferredTarget)
+                {
+                    Status = STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+                    goto Cleanup;
+                }
+            }
+
+            for (i = 0; RequestedTarget == NULL && i < TgtSet->NumModes; i++)
             {
                 if (TgtSet->Modes[i].Preference == D3DKMDT_MP_PREFERRED)
                 {
@@ -662,15 +748,31 @@ DxgkpDisplayCommitVidPnCandidate(
                           "(%ux%u)\n", TgtSet->PinnedModeId,
                           TargetWidth, TargetHeight);
         }
+        else if (RequestedTarget != NULL)
+        {
+            Status = STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+            goto Cleanup;
+        }
 
-        /*
-         * Default to the pinned target resolution as the desired source mode.
-         * If the target set collapses to a bogus single mode during early
-         * bring-up, prefer the POST/shared-primary resolution instead when
-         * the source mode set still advertises it.
-         */
+        /* A source used as the cofunctional pivot must keep its pinned mode. */
         DesiredWidth = TargetWidth;
         DesiredHeight = TargetHeight;
+        if (FullMiniportNegotiatesModes &&
+            VidPn->SourceModeSets[ActiveSourceId] != NULL)
+        {
+            PDXGKP_VIDPN_SOURCE_MODESET SrcSet = VidPn->SourceModeSets[ActiveSourceId];
+
+            for (i = 0; i < SrcSet->NumModes; i++)
+            {
+                if (SrcSet->Modes[i].Id == SrcSet->PinnedModeId)
+                {
+                    PinnedSourceModeId = SrcSet->PinnedModeId;
+                    DesiredWidth = SrcSet->Modes[i].Format.Graphics.PrimSurfSize.cx;
+                    DesiredHeight = SrcSet->Modes[i].Format.Graphics.PrimSurfSize.cy;
+                    break;
+                }
+            }
+        }
 
         /*
          * Display-only driver (viogpudo): the POST/GOP resolution is an
@@ -768,7 +870,9 @@ DxgkpDisplayCommitVidPnCandidate(
                          Adapter->PostDisplayWidth, Adapter->PostDisplayHeight);
         }
 
-        if (DodDesktopW == 0 &&
+        /* POST is a fallback for adapters without full mode negotiation.
+         * It must not replace an EDID source mode already used as a pivot. */
+        if (!FullMiniportNegotiatesModes && DodDesktopW == 0 &&
             Adapter->PostDisplayWidth > 0 &&
             Adapter->PostDisplayHeight > 0 &&
             VidPn->SourceModeSets[ActiveSourceId] != NULL)
@@ -819,6 +923,8 @@ DxgkpDisplayCommitVidPnCandidate(
             for (i = 0; i < SrcSet->NumModes; i++)
             {
                 if (!PreferClosestPostSourceMode &&
+                    (PinnedSourceModeId == (UINT)-1 ||
+                     SrcSet->Modes[i].Id == PinnedSourceModeId) &&
                     (UINT)SrcSet->Modes[i].Format.Graphics.PrimSurfSize.cx == DesiredWidth &&
                     (UINT)SrcSet->Modes[i].Format.Graphics.PrimSurfSize.cy == DesiredHeight)
                 {
@@ -858,7 +964,7 @@ DxgkpDisplayCommitVidPnCandidate(
                 }
             }
 
-            if (!FoundSource &&
+            if (!FoundSource && RequestedTarget == NULL &&
                 BestSourceIndex != (SIZE_T)-1 &&
                 Adapter->PostDisplayWidth > 0 &&
                 Adapter->PostDisplayHeight > 0)
@@ -884,6 +990,11 @@ DxgkpDisplayCommitVidPnCandidate(
                              Adapter->PostDisplayHeight);
             }
 
+            if (!FoundSource && RequestedTarget != NULL)
+            {
+                Status = STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+                goto Cleanup;
+            }
             if (!FoundSource && SrcSet->NumModes > 0)
             {
                 SrcSet->PinnedModeId = SrcSet->Modes[0].Id;
@@ -1135,6 +1246,15 @@ Cleanup:
 }
 
 NTSTATUS
+DxgkpDisplayCommitVidPnCandidate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _Out_ PDXGKP_DISPLAY_COMMIT_RESULT Result)
+{
+    return DxgkpDisplayCommitVidPnCandidateWithTarget(Adapter, hVidPn, NULL, Result);
+}
+
+NTSTATUS
 DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
@@ -1167,6 +1287,8 @@ DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(
     }
     if (hVidPn != NULL)
         DxgkVidPnDestroy(hVidPn);
+    if (NT_SUCCESS(Status))
+        DxgkpDisplayPublishInitialMode(Adapter);
     DxgkpEndSharedSurfaceMutationLocked(Adapter);
     return Status;
 }
@@ -2046,10 +2168,6 @@ DxgkpDisplayDispatch(
 
         case IOCTL_VIDEO_QUERY_NUM_AVAIL_MODES:
         {
-            /*
-             * framebuf.dll asks how many video modes are available.
-             * Return 1 mode: our committed 1024x768x32 mode.
-             */
             PVIDEO_NUM_MODES NumModes =
                 (PVIDEO_NUM_MODES)Irp->AssociatedIrp.SystemBuffer;
 
@@ -2058,7 +2176,17 @@ DxgkpDisplayDispatch(
             if (NumModes != NULL &&
                 Stack->Parameters.DeviceIoControl.OutputBufferLength >= sizeof(VIDEO_NUM_MODES))
             {
-                NumModes->NumModes = 1;
+                if (g_DisplayAdapter != NULL &&
+                    g_DisplayAdapter->MiniportContext != NULL &&
+                    !g_DisplayAdapter->MiniportContext->IsDisplayOnlyDriver &&
+                    !g_DisplayAdapter->MiniportContext->IsBasicDisplayFallback)
+                {
+                    Status = DxgkVidPnQueryVideoModes(g_DisplayAdapter, NULL, 0, &NumModes->NumModes, FALSE);
+                    if (!NT_SUCCESS(Status))
+                        break;
+                }
+                else
+                    NumModes->NumModes = 1;
                 NumModes->ModeInformationLength = sizeof(VIDEO_MODE_INFORMATION);
                 BytesReturned = sizeof(VIDEO_NUM_MODES);
                 Status = STATUS_SUCCESS;
@@ -2073,10 +2201,6 @@ DxgkpDisplayDispatch(
         case IOCTL_VIDEO_QUERY_AVAIL_MODES:
         case IOCTL_VIDEO_QUERY_CURRENT_MODE:
         {
-            /*
-             * Return the single 1024x768x32 mode.
-             * framebuf.dll uses this to set up GDI rendering.
-             */
             PVIDEO_MODE_INFORMATION ModeInfo =
                 (PVIDEO_MODE_INFORMATION)Irp->AssociatedIrp.SystemBuffer;
             ULONG CommittedWidth;
@@ -2089,6 +2213,20 @@ DxgkpDisplayDispatch(
             if (ModeInfo != NULL &&
                 Stack->Parameters.DeviceIoControl.OutputBufferLength >= sizeof(VIDEO_MODE_INFORMATION))
             {
+                if (g_DisplayAdapter != NULL &&
+                    g_DisplayAdapter->MiniportContext != NULL &&
+                    !g_DisplayAdapter->MiniportContext->IsDisplayOnlyDriver &&
+                    !g_DisplayAdapter->MiniportContext->IsBasicDisplayFallback)
+                {
+                    ULONG ModeCount;
+
+                    Status = DxgkVidPnQueryVideoModes(g_DisplayAdapter, ModeInfo,
+                                Stack->Parameters.DeviceIoControl.OutputBufferLength / sizeof(*ModeInfo),
+                                &ModeCount, Stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_VIDEO_QUERY_CURRENT_MODE);
+                    if (NT_SUCCESS(Status))
+                        BytesReturned = ModeCount * sizeof(*ModeInfo);
+                    break;
+                }
                 DxgkpSnapshotCommittedDisplayState(g_DisplayAdapter, &CommittedWidth, &CommittedHeight, NULL);
                 RtlZeroMemory(ModeInfo, sizeof(VIDEO_MODE_INFORMATION));
 
@@ -2131,29 +2269,15 @@ DxgkpDisplayDispatch(
 
         case IOCTL_VIDEO_SET_CURRENT_MODE:
         {
-            BOOLEAN VidPnCommitted;
-            /*
-             * framebuf.dll requests a mode change.
-             * This is our trigger to call CommitVidPn on the miniport,
-             * which creates the GPU scanout resource and configures the
-             * display pipeline.
-             */
+            PVIDEO_MODE Mode = Irp->AssociatedIrp.SystemBuffer;
+
             DXGKRNL_TRACE("DxgkpDisplayDispatch: IOCTL_VIDEO_SET_CURRENT_MODE\n");
-
-            DxgkpSnapshotCommittedDisplayState(g_DisplayAdapter, NULL, NULL, &VidPnCommitted);
-            if (g_DisplayAdapter != NULL && !VidPnCommitted)
+            if (Mode == NULL || Stack->Parameters.DeviceIoControl.InputBufferLength < sizeof(*Mode))
             {
-                NTSTATUS CommitStatus = DxgkDisplayCommitVidPn(g_DisplayAdapter);
-                if (!NT_SUCCESS(CommitStatus))
-                {
-                    DXGKRNL_ERR("DxgkpDisplayDispatch: CommitVidPn failed 0x%08lX\n",
-                                CommitStatus);
-                    Status = CommitStatus;
-                    break;
-                }
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
             }
-
-            Status = STATUS_SUCCESS;
+            Status = DxgkVidPnSetVideoMode(g_DisplayAdapter, Mode->RequestedMode);
             break;
         }
 
@@ -3136,6 +3260,7 @@ DxgkDisplayRegister(
 
     /* Store the device number we actually got. */
     g_DisplayDeviceNumber = DeviceNumber;
+    g_DisplayInitialModePending = TRUE;
     (VOID)RtlStringCchCopyW(Adapter->DisplayDeviceName, RTL_NUMBER_OF(Adapter->DisplayDeviceName), DeviceBuffer);
 
     /* Store adapter back-pointer in the device extension */

@@ -121,6 +121,7 @@
 #include <reactos/rddm/rxgkinterface.h>
 
 struct _DXGK_REDIRECTION_SURFACE_CREATE;
+struct _VIDEO_MODE_INFORMATION;
 struct _DXGK_REDIRECTION_SURFACE_DESTROY;
 struct _DXGK_REDIRECTION_SURFACE_ASSOCIATE;
 struct _DXGK_REDIRECTION_SURFACES_SYNC;
@@ -1072,6 +1073,8 @@ struct _DXGKRNL_ADAPTER
     ULONG                       CommittedWidth;
     ULONG                       CommittedHeight;
     BOOLEAN                     VidPnCommitted;
+    struct _DXGKP_DISPLAY_MODE_CACHE *DisplayModeCache;
+    ULONG                       DisplayModeGeneration;
     DECLSPEC_ALIGN(8) volatile LONG64 HotPlugGeneration;
     volatile LONG               HotPlugWorkActive;
     WORK_QUEUE_ITEM             HotPlugWorkItem;
@@ -3325,6 +3328,10 @@ NTSTATUS
 DxgkDisplayCommitVidPn(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+VOID
+DxgkpDisplayPublishInitialMode(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
 NTSTATUS
 DxgkVidPnResolveTargetForSource(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -3343,6 +3350,30 @@ DxgkpDisplayCommitVidPnCandidate(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ D3DKMDT_HVIDPN hVidPn,
     _Out_ PDXGKP_DISPLAY_COMMIT_RESULT Result);
+
+NTSTATUS
+DxgkpDisplayCommitVidPnCandidateWithTarget(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ D3DKMDT_HVIDPN hVidPn,
+    _In_opt_ CONST D3DKMDT_VIDEO_SIGNAL_INFO *RequestedTarget,
+    _Out_ PDXGKP_DISPLAY_COMMIT_RESULT Result);
+
+NTSTATUS
+DxgkVidPnQueryVideoModes(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_writes_opt_(Capacity) struct _VIDEO_MODE_INFORMATION *Modes,
+    _In_ ULONG Capacity,
+    _Out_ PULONG Count,
+    _In_ BOOLEAN CurrentOnly);
+
+NTSTATUS
+DxgkVidPnSetVideoMode(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG ModeIndex);
+
+VOID
+DxgkVidPnDestroyDisplayModeCache(
+    _In_ PDXGKRNL_ADAPTER Adapter);
 
 NTSTATUS
 DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(
