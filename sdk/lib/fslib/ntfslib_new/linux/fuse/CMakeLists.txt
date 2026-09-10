@@ -4,7 +4,7 @@ if(PkgConfig_FOUND)
 endif()
 
 add_executable(ntfslib_fuse ntfslib_fuse.cpp)
-target_link_libraries(ntfslib_fuse PRIVATE ntfslib_linux)
+target_link_libraries(ntfslib_fuse PRIVATE ntfslib_linux ntfslib_format_host)
 
 if(NTFSLIB_STATIC_CXX_RUNTIME AND
    CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
