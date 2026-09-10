@@ -11,13 +11,13 @@
 @ stub D3DKMTCreateContext
 @ stdcall D3DKMTCreateDevice(ptr) gdi32.D3DKMTCreateDevice
 @ stub D3DKMTCreateSynchronizationObject
-@ stub D3DKMTDestroyAllocation
+@ stdcall D3DKMTDestroyAllocation(ptr) gdi32.D3DKMTDestroyAllocation
 @ stub D3DKMTDestroyContext
 @ stdcall D3DKMTDestroyDevice(ptr) gdi32.D3DKMTDestroyDevice
 @ stub D3DKMTDestroySynchronizationObject
 @ stub D3DKMTEscape
 @ stub D3DKMTGetContextSchedulingPriority
-@ stub D3DKMTGetDeviceState
+@ stdcall D3DKMTGetDeviceState(ptr) gdi32.D3DKMTGetDeviceState
 @ stub D3DKMTGetDisplayModeList
 @ stub D3DKMTGetMultisampleMethodList
 @ stub D3DKMTGetRuntimeData
@@ -25,11 +25,11 @@
 @ stub D3DKMTLock
 @ stdcall D3DKMTOpenAdapterFromGdiDisplayName(ptr) gdi32.D3DKMTOpenAdapterFromGdiDisplayName
 @ stub D3DKMTOpenAdapterFromHdc
-@ stub D3DKMTOpenResource
-@ stub D3DKMTPresent
+@ stdcall D3DKMTOpenResource(ptr) gdi32.D3DKMTOpenResource
+@ stdcall D3DKMTPresent(ptr) gdi32.D3DKMTPresent
 @ stdcall D3DKMTQueryAdapterInfo(ptr) gdi32.D3DKMTQueryAdapterInfo
 @ stub D3DKMTQueryAllocationResidency
-@ stub D3DKMTQueryResourceInfo
+@ stdcall D3DKMTQueryResourceInfo(ptr) gdi32.D3DKMTQueryResourceInfo
 @ stub D3DKMTRender
 @ stub D3DKMTSetAllocationPriority
 @ stub D3DKMTSetContextSchedulingPriority
