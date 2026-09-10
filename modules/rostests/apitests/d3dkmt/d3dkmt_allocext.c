@@ -587,6 +587,76 @@ AllocationInfoFlags_Malformed(void)
     CloseAdapter(hAdapter);
 }
 
+static void
+PrimaryAllocation_InvalidSource(void)
+{
+    D3DKMT_HANDLE hAdapter, hDevice;
+    D3DKMT_CREATEALLOCATION ca;
+    D3DDDI_ALLOCATIONINFO ai;
+    D3DDDI_ALLOCATIONINFO2 ai2;
+    FARPROC Procedures[2];
+    UINT Version;
+
+    Procedures[0] = LoadD3DKMTProc("D3DKMTCreateAllocation");
+    Procedures[1] = LoadD3DKMTProc("D3DKMTCreateAllocation2");
+    if (!Procedures[0] || !Procedures[1])
+    {
+        skip("CreateAllocation/CreateAllocation2 are required for primary source validation\n");
+        return;
+    }
+
+    hAdapter = OpenRenderAdapterEx(NULL, NULL);
+    if (!hAdapter)
+    {
+        skip("No render adapter for primary source validation\n");
+        return;
+    }
+    hDevice = CreateTestDevice(hAdapter);
+    if (!hDevice)
+    {
+        skip("No device for primary source validation\n");
+        CloseAdapter(hAdapter);
+        return;
+    }
+
+    for (Version = 0; Version < ARRAYSIZE(Procedures); ++Version)
+    {
+        NTSTATUS Status;
+        BOOL Faulted;
+        D3DKMT_HANDLE Allocation;
+
+        memset(&ca, 0, sizeof(ca));
+        memset(&ai, 0, sizeof(ai));
+        memset(&ai2, 0, sizeof(ai2));
+        ca.hDevice = hDevice;
+        ca.NumAllocations = 1;
+        ca.Flags.CreateResource = 1;
+        if (Version == 0)
+        {
+            ai.Flags.Primary = 1;
+            ai.VidPnSourceId = 0x7fffffff;
+            ca.pAllocationInfo = &ai;
+        }
+        else
+        {
+            ai2.Flags.Primary = 1;
+            ai2.VidPnSourceId = 0x7fffffff;
+            ca.pAllocationInfo2 = &ai2;
+        }
+
+        SafeCallPtr(Procedures[Version], &ca, &Status, &Faulted);
+        Allocation = Version == 0 ? ai.hAllocation : ai2.hAllocation;
+        ok(!Faulted, "CreateAllocation%s faulted for an invalid primary source\n", Version ? "2" : "");
+        ok(Status == STATUS_INVALID_PARAMETER, "CreateAllocation%s invalid primary source returned 0x%08lX\n", Version ? "2" : "", (long)Status);
+        ok(!Allocation && !ca.hResource && !ca.hGlobalShare, "CreateAllocation%s published handles for an invalid primary source: %lx/%lx/%lx\n", Version ? "2" : "", (long)Allocation, (long)ca.hResource, (long)ca.hGlobalShare);
+        if (!Faulted && NT_SUCCESS(Status) && (Allocation || ca.hResource))
+            DestroyByList(hDevice, ca.hResource, &Allocation, Allocation ? 1 : 0);
+    }
+
+    DestroyTestDevice(hDevice);
+    CloseAdapter(hAdapter);
+}
+
 START_TEST(allocflags)
 {
     /* Valid combinations (skip on failure -- Win11 lacks UMD data). */
@@ -621,6 +691,7 @@ START_TEST(allocflags)
     /* Malformed request shapes (assert refusal). */
     Flags_Malformed();
     AllocationInfoFlags_Malformed();
+    PrimaryAllocation_InvalidSource();
 }
 
 /* =====================================================================

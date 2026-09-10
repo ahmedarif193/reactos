@@ -915,6 +915,13 @@ DxgkPresent(
             DxgkpReleasePresentEntry(&Entry);
             return Status;
         }
+        if (Entry.Type == DxgkPresentTypeFlip &&
+            Entry.SourceAllocation->PrimaryVidPnSourceId != D3DDDI_ID_UNINITIALIZED &&
+            Entry.SourceAllocation->PrimaryVidPnSourceId != Entry.VidPnSourceId)
+        {
+            DxgkpReleasePresentEntry(&Entry);
+            return STATUS_INVALID_PARAMETER;
+        }
         Status = DxgkVidMmReferenceOpenBinding((HANDLE)(ULONG_PTR)Entry.hSource, Adapter, Device, &Entry.SourceOpenBindingHandle, &Entry.SourceOpenBindingReference);
         if (!NT_SUCCESS(Status) && Status != STATUS_NOT_FOUND)
         {

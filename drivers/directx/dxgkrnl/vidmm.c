@@ -667,6 +667,28 @@ static BOOLEAN DxgkpVidMmValidateAllocationSegmentSets(_In_ PDXGKRNL_ADAPTER Ada
     return TRUE;
 }
 
+static BOOLEAN
+DxgkpVidMmPrimarySegmentsCpuVisible(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG SupportedSegmentSet)
+{
+    ULONG Index;
+
+    if (Adapter->Segments == NULL)
+        return SupportedSegmentSet == 0;
+    for (Index = 0; Index < Adapter->SegmentCount && Index < 32; ++Index)
+    {
+        PDXGKRNL_SEGMENT Segment = &ADAPTER_SEGMENTS(Adapter)[Index];
+
+        /* Apertures map the allocation's CPU-accessible system backing.
+         * CpuVisible describes direct access to memory segments only. */
+        if ((SupportedSegmentSet & (1UL << Index)) != 0 &&
+            !VidMmSegmentIsAperture(Segment) && !VidMmSegmentIsCpuVisible(Segment))
+            return FALSE;
+    }
+    return TRUE;
+}
+
 static VOID
 DxgkpVidMmEnsureGlobalsInitialized(VOID)
 {
@@ -872,6 +894,7 @@ static VOID
 DxgkpVidMmInitializeAllocationLifetime(
     _Inout_ PDXGKVMM_ALLOCATION Allocation)
 {
+    Allocation->PrimaryVidPnSourceId = D3DDDI_ID_UNINITIALIZED;
     Allocation->ReferenceCount = 1;
     Allocation->Destroying = 0;
     Allocation->FinalizeQueued = 0;
@@ -5097,6 +5120,7 @@ DxgkpVidMmCreateAllocationTracked(
     _In_      UINT                     CreatePrivateDriverDataSize,
     _In_opt_  HANDLE                   ResourceHandle,
     _In_      DXGK_CREATEALLOCATIONFLAGS CreateFlags,
+    _In_      D3DDDI_VIDEO_PRESENT_SOURCE_ID PrimaryVidPnSourceId,
     _Out_     PHANDLE                  OutHandle,
     _Out_opt_ PHANDLE                  OutResourceHandle,
     _Out_opt_ PDXGKVMM_ALLOCATION     *OutAllocation)
@@ -5122,6 +5146,9 @@ DxgkpVidMmCreateAllocationTracked(
         *OutAllocation = NULL;
     if (Adapter == NULL || AllocInfo == NULL || OutHandle == NULL)
         return STATUS_INVALID_PARAMETER;
+    if (PrimaryVidPnSourceId != D3DDDI_ID_UNINITIALIZED &&
+        PrimaryVidPnSourceId >= Adapter->NumberOfVideoPresentSources)
+        return STATUS_INVALID_PARAMETER;
     *OutHandle = NULL;
     if (OutResourceHandle != NULL)
         *OutResourceHandle = ResourceHandle;
@@ -5144,6 +5171,7 @@ DxgkpVidMmCreateAllocationTracked(
     KeInitializeMutex(&Alloc->ResidencyLock, 0);
     Alloc->Adapter = Adapter;
     Alloc->Device = Device;
+    Alloc->PrimaryVidPnSourceId = PrimaryVidPnSourceId;
     Alloc->MiniportDeviceHandle = Device != NULL ? Device->hMiniportDevice : NULL;
     Alloc->Initializing = Device != NULL;
     Alloc->Handle = DxgkpVidMmAllocateHandle(&DxgkVidMmNextAllocationHandle, DxgkVidMmAllocationHandleCookie);
@@ -5294,6 +5322,25 @@ DxgkpVidMmCreateAllocationTracked(
         goto FailMiniportAllocation;
     }
 
+    if (PrimaryVidPnSourceId != D3DDDI_ID_UNINITIALIZED)
+    {
+        /* D3DDDI_ALLOCATIONINFO.Primary makes the allocation implicitly
+         * CPU-accessible. The miniport still owns its layout and placement,
+         * but must not return storage incompatible with a primary. */
+        if (AllocInfo->Flags.PermanentSysMem || AllocInfo->Flags.Cached ||
+            AllocInfo->Flags.Protected || AllocInfo->Flags.ExistingSysMem ||
+            AllocInfo->Flags.ExistingKernelSysMem)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto FailMiniportAllocation;
+        }
+        if (!DxgkpVidMmPrimarySegmentsCpuVisible(Adapter, AllocInfo->SupportedWriteSegmentSet))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto FailMiniportAllocation;
+        }
+    }
+
     /* -----------------------------------------------------------------------
      * Step 2: Allocate DXGKVMM_ALLOCATION tracking object.
      * Pool tag 'AlxD' — displayed as 'DxlA' in pool-tag dumps.
@@ -5311,7 +5358,8 @@ DxgkpVidMmCreateAllocationTracked(
     Alloc->AllocationPriority = AllocInfo->AllocationPriority
                                 ? AllocInfo->AllocationPriority
                                 : VIDMM_PRIORITY_NORMAL;
-    Alloc->CpuVisible         = (AllocInfo->Flags.CpuVisible != 0);
+    Alloc->CpuVisible         = (AllocInfo->Flags.CpuVisible != 0 ||
+                                PrimaryVidPnSourceId != D3DDDI_ID_UNINITIALIZED);
     Alloc->Cached             = (AllocInfo->Flags.Cached != 0);
     Alloc->ExplicitResidencyNotification = (AllocInfo->Flags.ExplicitResidencyNotification != 0);
     {
@@ -5571,6 +5619,7 @@ DxgkVidMmCreateAllocation(
     _In_      UINT                     CreatePrivateDriverDataSize,
     _In_opt_  HANDLE                   ResourceHandle,
     _In_      DXGK_CREATEALLOCATIONFLAGS CreateFlags,
+    _In_      D3DDDI_VIDEO_PRESENT_SOURCE_ID PrimaryVidPnSourceId,
     _Out_     PHANDLE                  OutHandle,
     _Out_opt_ PHANDLE                  OutResourceHandle)
 {
@@ -5584,6 +5633,7 @@ DxgkVidMmCreateAllocation(
                                                 CreatePrivateDriverDataSize,
                                                 ResourceHandle,
                                                 CreateFlags,
+                                                PrimaryVidPnSourceId,
                                                 OutHandle,
                                                 OutResourceHandle,
                                                 &Allocation);
@@ -7343,7 +7393,7 @@ DxgkpValidateAllocationInfo(
     if ((Info->Flags.Value & ~KnownFlags) != 0 ||
         ((Info->Flags.Value & 0x2U) != 0 && (Info->Flags.Value & 0x1U) == 0))
         return STATUS_INVALID_PARAMETER;
-    if (CheckImplemented && (Info->Flags.Value & KnownFlags) != 0)
+    if (CheckImplemented && (Info->Flags.Value & (KnownFlags & ~0x1U)) != 0)
         return STATUS_NOT_SUPPORTED;
     return STATUS_SUCCESS;
 }
@@ -7375,7 +7425,7 @@ DxgkpValidateAllocationInfo2(
         return STATUS_INVALID_PARAMETER;
     if ((Info->Flags.Value & 0x2U) != 0 && (Info->Flags.Value & 0x1U) == 0)
         return STATUS_INVALID_PARAMETER;
-    if (CheckImplemented && (Info->Flags.Value & KnownFlags) != 0)
+    if (CheckImplemented && (Info->Flags.Value & (KnownFlags & ~0x1U)) != 0)
         return STATUS_NOT_SUPPORTED;
     /* CreateAllocation2 is also valid for physical-addressing adapters. Zero
      * records that common-prefix result; it is not a process GPUVA mapping. */
@@ -7898,6 +7948,8 @@ DxgkpCreateAllocationCaptured(
         goto Cleanup;
     for (i = 0; i < pCreateAllocation->NumAllocations; ++i)
     {
+        DXGKP_ALLOCATION_INFO_VIEW AllocationInfo;
+
         Status = InfoVersion == DxgkpAllocationInfoVersion2 ?
             DxgkpValidateAllocationInfo2(
                 &pCreateAllocation->pAllocationInfo2[i],
@@ -7909,6 +7961,15 @@ DxgkpCreateAllocationCaptured(
                 TRUE);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
+        DxgkpReadAllocationInfo(pCreateAllocation, InfoVersion, i, &AllocationInfo);
+        if ((AllocationInfo.Flags & 0x1U) != 0 &&
+            (AllocationInfo.VidPnSourceId >= Adapter->NumberOfVideoPresentSources ||
+             AllocationInfo.pSystemMem != NULL ||
+             pCreateAllocation->Flags.ExistingSysMem))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
     }
 
     if (DxgkpCreateDwmRedirectionAllocation(pCreateAllocation,
@@ -7976,10 +8037,13 @@ DxgkpCreateAllocationCaptured(
         HANDLE AllocationHandle = NULL;
         HANDLE MiniportResourceHandle = NULL;
         PDXGKVMM_ALLOCATION TrackedAlloc = NULL;
+        D3DDDI_VIDEO_PRESENT_SOURCE_ID PrimaryVidPnSourceId;
         BOOLEAN UseSystemAllocation = FALSE;
 
         RtlZeroMemory(&DxgkAllocInfo, sizeof(DxgkAllocInfo));
         DxgkpReadAllocationInfo(pCreateAllocation, InfoVersion, i, &AllocationInfo);
+        PrimaryVidPnSourceId = (AllocationInfo.Flags & 0x1U) != 0 ?
+            AllocationInfo.VidPnSourceId : D3DDDI_ID_UNINITIALIZED;
 
         DxgkAllocInfo.pPrivateDriverData = AllocationInfo.pPrivateDriverData;
         DxgkAllocInfo.PrivateDriverDataSize = AllocationInfo.PrivateDriverDataSize;
@@ -8096,6 +8160,7 @@ DxgkpCreateAllocationCaptured(
                                                            pCreateAllocation->PrivateDriverDataSize,
                                                            Resource->MiniportHandle,
                                                            CreateFlags,
+                                                           PrimaryVidPnSourceId,
                                                            &AllocationHandle,
                                                            &MiniportResourceHandle,
                                                            &TrackedAlloc);
@@ -8110,6 +8175,7 @@ DxgkpCreateAllocationCaptured(
                                                            pCreateAllocation->PrivateDriverDataSize,
                                                            NULL,
                                                            CreateFlags,
+                                                           PrimaryVidPnSourceId,
                                                            &AllocationHandle,
                                                            &MiniportResourceHandle,
                                                            &TrackedAlloc);
@@ -8131,6 +8197,9 @@ DxgkpCreateAllocationCaptured(
             break;
         }
         CreateRollbackAllocations[CreatedAllocationCount++] = TrackedAlloc;
+        /* The synthetic system-allocation path has no miniport callback;
+         * both paths publish the identity before clearing Initializing. */
+        TrackedAlloc->PrimaryVidPnSourceId = PrimaryVidPnSourceId;
 
         if (AllocationInfo.pSystemMem != NULL)
         {
@@ -10518,6 +10587,12 @@ DxgkVidMmUpdateAllocationProperty(
         !DxgkpVidMmValidateAllocationSegmentSets(
              Adapter,
              &ValidationInfo))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto CleanupTransaction;
+    }
+    if (Allocation->PrimaryVidPnSourceId != D3DDDI_ID_UNINITIALIZED &&
+        !DxgkpVidMmPrimarySegmentsCpuVisible(Adapter, NewSupportedSegmentSet))
     {
         Status = STATUS_INVALID_PARAMETER;
         goto CleanupTransaction;

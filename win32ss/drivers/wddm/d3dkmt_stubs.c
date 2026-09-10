@@ -958,7 +958,7 @@ WddmBridgeValidateAllocationInfo(
 {
     if ((Info->Flags.Value & ~0x3U) != 0 || ((Info->Flags.Value & 0x2U) != 0 && (Info->Flags.Value & 0x1U) == 0))
         return STATUS_INVALID_PARAMETER;
-    if ((Info->Flags.Value & 0x3U) != 0)
+    if ((Info->Flags.Value & 0x2U) != 0)
         return STATUS_NOT_SUPPORTED;
     return STATUS_SUCCESS;
 }
@@ -981,7 +981,7 @@ WddmBridgeValidateAllocationInfo2(
         return STATUS_INVALID_PARAMETER;
     if ((Info->Flags.Value & 0x2U) != 0 && (Info->Flags.Value & 0x1U) == 0)
         return STATUS_INVALID_PARAMETER;
-    if ((Info->Flags.Value & 0x7U) != 0)
+    if ((Info->Flags.Value & 0x6U) != 0)
         return STATUS_NOT_SUPPORTED;
 
     /* This field is output-only.  Zero is the physical-addressing/common-prefix
