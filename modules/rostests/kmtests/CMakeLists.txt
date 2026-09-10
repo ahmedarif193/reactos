@@ -31,7 +31,10 @@ list(APPEND COMMON_SOURCE
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Plain faulting loads and stores must remain covered by native SEH scopes.
     if(NOT USE_DUMMY_PSEH)
-        set_property(SOURCE rtl/RtlException.c APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
+        set_property(SOURCE
+            ntos_mm/MmMapLockedPagesSpecifyCache_user.c
+            rtl/RtlException.c
+            APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
     endif()
 
     # Preserve every noinline helper in the stack-walk chain.
