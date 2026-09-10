@@ -44,6 +44,32 @@
     }                                                           \
 }
 
+static VOID
+TestQueryMapping(PVOID Address, SIZE_T Length, ULONG Protection)
+{
+    MEMORY_BASIC_INFORMATION Information;
+    SIZE_T ReturnedLength = 0;
+    NTSTATUS Status;
+
+    Status = NtQueryVirtualMemory(NtCurrentProcess(), Address,
+                                   MemoryBasicInformation, &Information,
+                                   sizeof(Information), &ReturnedLength);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    ok_eq_size(ReturnedLength, sizeof(Information));
+    ok_eq_pointer(Information.BaseAddress, (PVOID)PAGE_ROUND_DOWN(Address));
+    ok_eq_pointer(Information.AllocationBase, (PVOID)PAGE_ROUND_DOWN(Address));
+    ok_eq_size(Information.RegionSize,
+               PAGE_ROUND_UP(Length + ((ULONG_PTR)Address & (PAGE_SIZE - 1))));
+    ok_eq_hex(Information.State, MEM_COMMIT);
+    ok_eq_hex(Information.Protect & 0xff, Protection);
+    ok_eq_hex(Information.AllocationProtect & 0xff, Protection);
+    trace("MDL query: size=%Iu state=%lx protect=%lx allocation=%lx type=%lx\n",
+          Information.RegionSize, Information.State, Information.Protect,
+          Information.AllocationProtect, Information.Type);
+}
+
 #define CHECK_ALLOC(MappedBuffer, BufferLength)                 \
 {                                                               \
     NTSTATUS Status;                                            \
@@ -167,6 +193,7 @@ START_TEST(MmMapLockedPagesSpecifyCache)
     ok(KmtSendBufferToDriver(IOCTL_QUERY_BUFFER, &QueryBuffer, sizeof(QUERY_BUFFER), &Length) == ERROR_SUCCESS, "\n");
     ok_eq_int(QueryBuffer.Length, BufferLength);
     ok(QueryBuffer.Buffer != NULL, "Buffer is NULL\n");
+    TestQueryMapping(QueryBuffer.Buffer, BufferLength, PAGE_READWRITE);
     CHECK_ALLOC(QueryBuffer.Buffer, BufferLength);
 
     Length = 0;
@@ -191,6 +218,7 @@ START_TEST(MmMapLockedPagesSpecifyCache)
     ok(KmtSendBufferToDriver(IOCTL_QUERY_BUFFER, &QueryBuffer, sizeof(QUERY_BUFFER), &Length) == ERROR_SUCCESS, "\n");
     ok_eq_int(QueryBuffer.Length, BufferLength);
     ok(QueryBuffer.Buffer != NULL, "Buffer is NULL\n");
+    TestQueryMapping(QueryBuffer.Buffer, BufferLength, PAGE_READONLY);
     CHECK_ALLOC(QueryBuffer.Buffer, BufferLength);
     KmtStartSeh()
     *(volatile ULONG *)QueryBuffer.Buffer;
