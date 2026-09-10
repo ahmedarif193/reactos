@@ -243,7 +243,7 @@ BOOLEAN Dummy_ColorFill(SURFOBJ* Dest, RECTL* DestRect, ULONG Color)
 
 BOOLEAN
 Dummy_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
-                 RECTL* SourceRect, CLIPOBJ* ClipRegion,
+                 RECTL* SourceRect, const RECTL* OrigDestRect,
                  XLATEOBJ* ColorTranslation, BLENDOBJ* BlendObj)
 {
   return FALSE;

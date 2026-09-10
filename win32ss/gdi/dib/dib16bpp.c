@@ -843,7 +843,7 @@ typedef union
 
 BOOLEAN
 DIB_16BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
-                     RECTL* SourceRect, CLIPOBJ* ClipRegion,
+                     RECTL* SourceRect, const RECTL* OrigDestRect,
                      XLATEOBJ* ColorTranslation, BLENDOBJ* BlendObj)
 {
   INT DstX, DstY, SrcX, SrcY;
@@ -893,16 +893,16 @@ DIB_16BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
   {
       NICEPIXEL16_555 DstPixel16;
 
-      SrcY = SourceRect->top;
       DstY = DestRect->top;
       while ( DstY < DestRect->bottom )
       {
-        SrcX = SourceRect->left;
+        SrcY = DIB_AlphaBlendSourceCoord(DstY, OrigDestRect->top, OrigDestRect->bottom, SourceRect->top, SourceRect->bottom);
         DstX = DestRect->left;
         while(DstX < DestRect->right)
         {
           UCHAR DstR, DstG, DstB;
 
+          SrcX = DIB_AlphaBlendSourceCoord(DstX, OrigDestRect->left, OrigDestRect->right, SourceRect->left, SourceRect->right);
           SrcPixel32.ul = DIB_GetSource(Source, SrcX, SrcY, &exloSrcRGB.xlo);
           DstPixel16.us = DIB_16BPP_GetPixel(Dest, DstX, DstY) & 0xFFFF;
 
@@ -941,28 +941,24 @@ DIB_16BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
           DIB_16BPP_PutPixel(Dest, DstX, DstY, DstPixel16.us);
 
           DstX++;
-          SrcX = SourceRect->left + ((DstX-DestRect->left)*(SourceRect->right - SourceRect->left))
-                                                /(DestRect->right-DestRect->left);
         }
         DstY++;
-        SrcY = SourceRect->top + ((DstY-DestRect->top)*(SourceRect->bottom - SourceRect->top))
-                                                /(DestRect->bottom-DestRect->top);
       }
   }
   else
   {
       NICEPIXEL16_565 DstPixel16;
 
-      SrcY = SourceRect->top;
       DstY = DestRect->top;
       while ( DstY < DestRect->bottom )
       {
-        SrcX = SourceRect->left;
+        SrcY = DIB_AlphaBlendSourceCoord(DstY, OrigDestRect->top, OrigDestRect->bottom, SourceRect->top, SourceRect->bottom);
         DstX = DestRect->left;
         while(DstX < DestRect->right)
         {
           UCHAR DstR, DstG, DstB;
 
+          SrcX = DIB_AlphaBlendSourceCoord(DstX, OrigDestRect->left, OrigDestRect->right, SourceRect->left, SourceRect->right);
           SrcPixel32.ul = DIB_GetSource(Source, SrcX, SrcY, &exloSrcRGB.xlo);
           DstPixel16.us = DIB_16BPP_GetPixel(Dest, DstX, DstY) & 0xFFFF;
 
@@ -1001,12 +997,8 @@ DIB_16BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
           DIB_16BPP_PutPixel(Dest, DstX, DstY, DstPixel16.us);
 
           DstX++;
-          SrcX = SourceRect->left + ((DstX-DestRect->left)*(SourceRect->right - SourceRect->left))
-                                                /(DestRect->right-DestRect->left);
         }
         DstY++;
-        SrcY = SourceRect->top + ((DstY-DestRect->top)*(SourceRect->bottom - SourceRect->top))
-                                                /(DestRect->bottom-DestRect->top);
       }
   }
 
