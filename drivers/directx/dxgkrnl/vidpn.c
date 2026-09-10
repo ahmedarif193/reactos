@@ -38,6 +38,7 @@
 #include "present.h"
 #include "pnp.h"
 #include "hotplug_work_core.h"
+#include <ntddvdeo.h>
 #include <reactos/dwmframe.h>
 
 /* ========================================================================
@@ -2613,6 +2614,8 @@ DxgkpVidPnRebuildForHotPlugGeneration(
     Candidate = NULL;
     KeReleaseSpinLock(&Adapter->ChildListLock, ChildOldIrql);
     KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    DxgkpDisplayPublishInitialMode(Adapter);
+    DxgkVidPnDestroyDisplayModeCache(Adapter);
     if (CommitResult.CommittedWidth != OldCommittedWidth || CommitResult.CommittedHeight != OldCommittedHeight || !Snapshot.Connected)
         DxgkpDestroySharedPrimaryLocked(Adapter);
     /* After the new VidPn is published and the VidPn mutex is dropped, but
@@ -5564,21 +5567,6 @@ Cleanup:
     return Status;
 }
 
-typedef struct _DXGKP_DEFAULT_DISPLAY_MODE
-{
-    UINT Width;
-    UINT Height;
-} DXGKP_DEFAULT_DISPLAY_MODE;
-
-static const DXGKP_DEFAULT_DISPLAY_MODE DxgkpDefaultDisplayModes[] =
-{
-    { 800, 600 },
-    { 1024, 768 },
-    { 1280, 720 },
-    { 1280, 768 },
-    { 1920, 1080 }
-};
-
 static VOID
 DxgkpInitializeDisplayMode(
     _Out_ D3DKMT_DISPLAYMODE *Mode,
@@ -5723,46 +5711,407 @@ Cleanup:
     return Status;
 }
 
-static NTSTATUS
-DxgkpReturnDefaultDisplayModeList(
-    _Inout_ D3DKMT_GETDISPLAYMODELIST *pGetDisplayModeList)
+typedef struct _DXGKP_DISPLAY_MODE_ENTRY
 {
-    UINT i;
+    D3DKMDT_VIDPN_SOURCE_MODE Source;
+    D3DKMDT_VIDEO_SIGNAL_INFO Target;
+    D3DKMT_DISPLAYMODE Mode;
+} DXGKP_DISPLAY_MODE_ENTRY;
 
-    if (pGetDisplayModeList->pModeList == NULL ||
-        pGetDisplayModeList->ModeCount == 0)
+/* The top two VIDEO_MODE bits belong to the caller, not the mode index. */
+#define DXGKP_DISPLAY_MODE_INDEX_BITS 12
+#define DXGKP_DISPLAY_MODE_INDEX_MASK ((1UL << DXGKP_DISPLAY_MODE_INDEX_BITS) - 1)
+#define DXGKP_DISPLAY_MODE_GENERATION_MASK 0x3ffff
+
+typedef struct _DXGKP_DISPLAY_MODE_CACHE
+{
+    DXGKP_DISPLAY_MODE_ENTRY *Entries;
+    ULONG Count;
+    ULONG Capacity;
+    ULONG Generation;
+    LONG64 HotPlugGeneration;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId;
+    D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId;
+    BOOLEAN CanSetMode;
+} DXGKP_DISPLAY_MODE_CACHE;
+
+static VOID
+DxgkpFreeDisplayModeCache(
+    _In_opt_ DXGKP_DISPLAY_MODE_CACHE *Cache)
+{
+    if (Cache != NULL)
     {
-        pGetDisplayModeList->ModeCount =
-            RTL_NUMBER_OF(DxgkpDefaultDisplayModes);
+        if (Cache->Entries != NULL)
+            ExFreePoolWithTag(Cache->Entries, TAG_DXGK_MODE);
+        ExFreePoolWithTag(Cache, TAG_DXGK_MODESET);
+    }
+}
+
+VOID
+DxgkVidPnDestroyDisplayModeCache(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
+    DxgkpFreeDisplayModeCache(Adapter->DisplayModeCache);
+    Adapter->DisplayModeCache = NULL;
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
+}
+
+static VOID
+DxgkpDisplayModeFromVidPnModes(
+    _Out_ D3DKMT_DISPLAYMODE *Mode,
+    _In_ CONST D3DKMDT_VIDPN_SOURCE_MODE *Source,
+    _In_ CONST D3DKMDT_VIDEO_SIGNAL_INFO *Target)
+{
+    DxgkpInitializeDisplayMode(Mode, Source->Format.Graphics.PrimSurfSize.cx, Source->Format.Graphics.PrimSurfSize.cy);
+    Mode->Format = Source->Format.Graphics.PixelFormat;
+    if (Target->VSyncFreq.Numerator != 0 && Target->VSyncFreq.Denominator != 0)
+    {
+        Mode->RefreshRate = Target->VSyncFreq;
+        Mode->IntegerRefreshRate = (UINT)(((ULONGLONG)Mode->RefreshRate.Numerator + Mode->RefreshRate.Denominator / 2) / Mode->RefreshRate.Denominator);
+    }
+    Mode->ScanLineOrdering = Target->ScanLineOrdering;
+}
+
+static BOOLEAN
+DxgkpDisplayModesEqual(
+    _In_ CONST D3DKMT_DISPLAYMODE *Left,
+    _In_ CONST D3DKMT_DISPLAYMODE *Right)
+{
+    return Left->Width == Right->Width && Left->Height == Right->Height &&
+           Left->Format == Right->Format && Left->ScanLineOrdering == Right->ScanLineOrdering &&
+           (ULONGLONG)Left->RefreshRate.Numerator * Right->RefreshRate.Denominator ==
+               (ULONGLONG)Right->RefreshRate.Numerator * Left->RefreshRate.Denominator;
+}
+
+static BOOLEAN
+DxgkpDisplayModeSupportsGdi(
+    _In_ CONST DXGKP_DISPLAY_MODE_ENTRY *Entry)
+{
+    return Entry->Mode.Format == D3DDDIFMT_X8R8G8B8 || Entry->Mode.Format == D3DDDIFMT_A8R8G8B8;
+}
+
+static NTSTATUS
+DxgkpAppendDisplayMode(
+    _Inout_ DXGKP_DISPLAY_MODE_CACHE *Cache,
+    _In_ CONST D3DKMDT_VIDPN_SOURCE_MODE *Source,
+    _In_ CONST D3DKMDT_VIDEO_SIGNAL_INFO *Target)
+{
+    D3DKMT_DISPLAYMODE Mode;
+    DXGKP_DISPLAY_MODE_ENTRY *Entries;
+    ULONG Index, Capacity;
+
+    if (Source->Type != D3DKMDT_RMT_GRAPHICS ||
+        Source->Format.Graphics.PrimSurfSize.cx == 0 ||
+        Source->Format.Graphics.PrimSurfSize.cy == 0)
         return STATUS_SUCCESS;
-    }
-
-    if (pGetDisplayModeList->ModeCount <
-        RTL_NUMBER_OF(DxgkpDefaultDisplayModes))
+    DxgkpDisplayModeFromVidPnModes(&Mode, Source, Target);
+    for (Index = 0; Index < Cache->Count; ++Index)
     {
-        pGetDisplayModeList->ModeCount =
-            RTL_NUMBER_OF(DxgkpDefaultDisplayModes);
-        return STATUS_BUFFER_TOO_SMALL;
+        if (DxgkpDisplayModesEqual(&Cache->Entries[Index].Mode, &Mode))
+            return STATUS_SUCCESS;
     }
+    if (Cache->Count == Cache->Capacity)
+    {
+        Capacity = Cache->Capacity == 0 ? 8 : Cache->Capacity * 2;
+        if (Capacity > DXGKP_DISPLAY_MODE_INDEX_MASK + 1)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        Entries = ExAllocatePoolWithTag(PagedPool, Capacity * sizeof(*Entries), TAG_DXGK_MODE);
+        if (Entries == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        if (Cache->Entries != NULL)
+        {
+            RtlCopyMemory(Entries, Cache->Entries, Cache->Count * sizeof(*Entries));
+            ExFreePoolWithTag(Cache->Entries, TAG_DXGK_MODE);
+        }
+        Cache->Entries = Entries;
+        Cache->Capacity = Capacity;
+    }
+    Cache->Entries[Cache->Count].Source = *Source;
+    Cache->Entries[Cache->Count].Target = *Target;
+    Cache->Entries[Cache->Count++].Mode = Mode;
+    return STATUS_SUCCESS;
+}
 
+static NTSTATUS
+DxgkpEnumerateDisplayModeCandidate(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKP_VIDPN Candidate,
+    _In_ BOOLEAN SourcePivot)
+{
+    DXGKARG_ENUMVIDPNCOFUNCMODALITY Args;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Args, sizeof(Args));
+    Args.hConstrainingVidPn = (D3DKMDT_HVIDPN)Candidate;
+    Args.EnumPivotType = SourcePivot ? D3DKMDT_EPT_VIDPNSOURCE : D3DKMDT_EPT_NOPIVOT;
+    Args.EnumPivot.VidPnSourceId = Candidate->Paths[0].VidPnSourceId;
+    Args.EnumPivot.VidPnTargetId = Candidate->Paths[0].VidPnTargetId;
+    if (!DxgkAcquireKmdCall(Adapter))
+        return STATUS_DELETE_PENDING;
     _SEH2_TRY
     {
-        for (i = 0; i < RTL_NUMBER_OF(DxgkpDefaultDisplayModes); i++)
-        {
-            DxgkpInitializeDisplayMode(&pGetDisplayModeList->pModeList[i],
-                                       DxgkpDefaultDisplayModes[i].Width,
-                                       DxgkpDefaultDisplayModes[i].Height);
-        }
+        Status = DXGK_CB(Adapter, DxgkDdiEnumVidPnCofuncModality)(Adapter->MiniportDeviceContext, &Args);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        return _SEH2_GetExceptionCode();
+        Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
+    DxgkReleaseKmdCall(Adapter);
+    return Status;
+}
 
-    pGetDisplayModeList->ModeCount =
-        RTL_NUMBER_OF(DxgkpDefaultDisplayModes);
-    return STATUS_SUCCESS;
+/* SharedPrimaryMutex keeps the published mode indices stable across a normal
+ * switch. A monitor change invalidates them rather than reusing an old index
+ * for a different resolution. Enumeration never mutates the live VidPN. */
+static NTSTATUS
+DxgkpEnsureDisplayModeCacheLocked(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    DXGKP_DISPLAY_MODE_CACHE *Cache = NULL;
+    PDXGKP_VIDPN Current = NULL, Candidate = NULL;
+    PDXGKP_VIDPN_SOURCE_MODESET Sources;
+    PDXGKP_VIDPN_TARGET_MODESET Targets;
+    D3DKMDT_VIDPN_SOURCE_MODE *SourceModes = NULL;
+    CONST D3DKMDT_VIDPN_SOURCE_MODE *PinnedSource = NULL;
+    CONST D3DKMDT_VIDPN_TARGET_MODE *PinnedTarget = NULL;
+    LONG64 Generation = InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0);
+    ULONG SourceId, TargetIndex;
+    SIZE_T SourceCount, SourceIndex, TargetModeIndex;
+    BOOLEAN Transaction = FALSE;
+    NTSTATUS Status;
+
+    if (Adapter->DisplayModeCache != NULL && Adapter->DisplayModeCache->HotPlugGeneration == Generation)
+        return STATUS_SUCCESS;
+    if (!DxgkBeginKmdTransaction(Adapter))
+        return STATUS_DELETE_PENDING;
+    Transaction = TRUE;
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+    Current = (PDXGKP_VIDPN)Adapter->VidPn;
+    if (!DxgkVidPnReference((D3DKMDT_HVIDPN)Current))
+        Current = NULL;
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    if (Current == NULL || Current->NumPaths == 0)
+    {
+        Status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+        goto Cleanup;
+    }
+    SourceId = Current->Paths[0].VidPnSourceId;
+    TargetIndex = DxgkVidPnTargetIndexFromId(Current, Current->Paths[0].VidPnTargetId);
+    if (SourceId >= DXGKP_MAX_SOURCES || TargetIndex == MAXULONG ||
+        Current->SourceModeSets[SourceId] == NULL || Current->TargetModeSets[TargetIndex] == NULL)
+    {
+        Status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+        goto Cleanup;
+    }
+    Cache = ExAllocatePoolZero(PagedPool, sizeof(*Cache), TAG_DXGK_MODESET);
+    if (Cache == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+    Cache->HotPlugGeneration = Generation;
+    Cache->SourceId = SourceId;
+    Cache->TargetId = Current->Paths[0].VidPnTargetId;
+    Sources = Current->SourceModeSets[SourceId];
+    Targets = Current->TargetModeSets[TargetIndex];
+    for (SourceIndex = 0; SourceIndex < Sources->NumModes; ++SourceIndex)
+    {
+        if (Sources->Modes[SourceIndex].Id == Sources->PinnedModeId)
+            PinnedSource = &Sources->Modes[SourceIndex];
+    }
+    for (TargetModeIndex = 0; TargetModeIndex < Targets->NumModes; ++TargetModeIndex)
+    {
+        if (Targets->Modes[TargetModeIndex].Id == Targets->PinnedModeId)
+            PinnedTarget = &Targets->Modes[TargetModeIndex];
+    }
+    /* Keep the committed mode first, including custom modes absent from a
+     * later enumeration. It is also the only mode for fixed-mode adapters. */
+    if (PinnedSource != NULL && PinnedTarget != NULL)
+    {
+        Status = DxgkpAppendDisplayMode(Cache, PinnedSource, &PinnedTarget->VideoSignalInfo);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+    Cache->CanSetMode = Current->NumPaths == 1 && Adapter->MiniportContext != NULL &&
+                        !Adapter->MiniportContext->IsDisplayOnlyDriver &&
+                        !Adapter->MiniportContext->IsBasicDisplayFallback &&
+                        DXGK_CB(Adapter, DxgkDdiEnumVidPnCofuncModality) != NULL;
+    if (Cache->CanSetMode)
+    {
+        Status = DxgkVidPnClone((D3DKMDT_HVIDPN)Current, (D3DKMDT_HVIDPN *)&Candidate);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        Sources = Candidate->SourceModeSets[SourceId];
+        Targets = Candidate->TargetModeSets[TargetIndex];
+        Sources->NumModes = Targets->NumModes = 0;
+        Sources->PinnedModeId = Targets->PinnedModeId = (UINT)-1;
+        Sources->NextModeId = Targets->NextModeId = 0;
+        Status = DxgkpEnumerateDisplayModeCandidate(Adapter, Candidate, FALSE);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        Sources = Candidate->SourceModeSets[SourceId];
+        SourceCount = Sources->NumModes;
+        if (SourceCount != 0)
+        {
+            SourceModes = ExAllocatePoolWithTag(PagedPool, SourceCount * sizeof(*SourceModes), TAG_DXGK_MODE);
+            if (SourceModes == NULL)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                goto Cleanup;
+            }
+            RtlCopyMemory(SourceModes, Sources->Modes, SourceCount * sizeof(*SourceModes));
+        }
+        for (SourceIndex = 0; SourceIndex < SourceCount; ++SourceIndex)
+        {
+            /* A fixed source pivot asks for the target timings that actually
+             * drive it, rather than forming a source/target Cartesian product. */
+            Sources = Candidate->SourceModeSets[SourceId];
+            Sources->Modes[0] = SourceModes[SourceIndex];
+            Sources->NumModes = 1;
+            Sources->PinnedModeId = SourceModes[SourceIndex].Id;
+            Sources->NextModeId = Sources->PinnedModeId + 1;
+            Targets = Candidate->TargetModeSets[TargetIndex];
+            Targets->NumModes = 0;
+            Targets->PinnedModeId = (UINT)-1;
+            Targets->NextModeId = 0;
+            Status = DxgkpEnumerateDisplayModeCandidate(Adapter, Candidate, TRUE);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+            Targets = Candidate->TargetModeSets[TargetIndex];
+            for (TargetModeIndex = 0; TargetModeIndex < Targets->NumModes; ++TargetModeIndex)
+            {
+                Status = DxgkpAppendDisplayMode(Cache, &SourceModes[SourceIndex], &Targets->Modes[TargetModeIndex].VideoSignalInfo);
+                if (!NT_SUCCESS(Status))
+                    goto Cleanup;
+            }
+        }
+    }
+    if (Cache->Count == 0)
+    {
+        Status = STATUS_GRAPHICS_NO_AVAILABLE_VIDPN_TARGET;
+        goto Cleanup;
+    }
+    if (Generation != InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0))
+    {
+        Status = STATUS_RETRY;
+        goto Cleanup;
+    }
+    Adapter->DisplayModeGeneration = (Adapter->DisplayModeGeneration + 1) & DXGKP_DISPLAY_MODE_GENERATION_MASK;
+    if (Adapter->DisplayModeGeneration == 0)
+        Adapter->DisplayModeGeneration = 1;
+    Cache->Generation = Adapter->DisplayModeGeneration;
+    DxgkpFreeDisplayModeCache(Adapter->DisplayModeCache);
+    Adapter->DisplayModeCache = Cache;
+    Cache = NULL;
+    Status = STATUS_SUCCESS;
+
+Cleanup:
+    if (SourceModes != NULL)
+        ExFreePoolWithTag(SourceModes, TAG_DXGK_MODE);
+    if (Candidate != NULL)
+        DxgkVidPnDestroy((D3DKMDT_HVIDPN)Candidate);
+    if (Current != NULL)
+        DxgkVidPnDestroy((D3DKMDT_HVIDPN)Current);
+    DxgkpFreeDisplayModeCache(Cache);
+    if (Transaction)
+        DxgkEndKmdTransaction(Adapter);
+    return Status;
+}
+
+static VOID
+DxgkpVideoModeFromDisplayMode(
+    _Out_ PVIDEO_MODE_INFORMATION VideoMode,
+    _In_ CONST DXGKP_DISPLAY_MODE_ENTRY *Entry,
+    _In_ ULONG ModeIndex)
+{
+    RtlZeroMemory(VideoMode, sizeof(*VideoMode));
+    VideoMode->Length = sizeof(*VideoMode);
+    VideoMode->ModeIndex = ModeIndex;
+    VideoMode->VisScreenWidth = Entry->Mode.Width;
+    VideoMode->VisScreenHeight = Entry->Mode.Height;
+    /* The CDD maps dxgkrnl's packed CPU shadow, not the miniport's pitch. */
+    VideoMode->ScreenStride = Entry->Mode.Width * 4;
+    VideoMode->NumberOfPlanes = 1;
+    VideoMode->BitsPerPlane = 32;
+    VideoMode->Frequency = Entry->Mode.IntegerRefreshRate;
+    VideoMode->XMillimeter = 320;
+    VideoMode->YMillimeter = 240;
+    VideoMode->NumberRedBits = VideoMode->NumberGreenBits = VideoMode->NumberBlueBits = 8;
+    VideoMode->RedMask = 0x00ff0000;
+    VideoMode->GreenMask = 0x0000ff00;
+    VideoMode->BlueMask = 0x000000ff;
+    VideoMode->AttributeFlags = VIDEO_MODE_COLOR | VIDEO_MODE_GRAPHICS;
+    if (Entry->Mode.ScanLineOrdering == D3DDDI_VSSLO_INTERLACED_UPPERFIELDFIRST ||
+        Entry->Mode.ScanLineOrdering == D3DDDI_VSSLO_INTERLACED_LOWERFIELDFIRST)
+        VideoMode->AttributeFlags |= VIDEO_MODE_INTERLACED;
+    VideoMode->VideoMemoryBitmapWidth = Entry->Mode.Width;
+    VideoMode->VideoMemoryBitmapHeight = Entry->Mode.Height;
+    VideoMode->DriverSpecificAttributeFlags = 1; /* DXGK_DISP_DRIVERSPEC_SYSMEM_FB */
+}
+
+NTSTATUS
+DxgkVidPnQueryVideoModes(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_writes_opt_(Capacity) PVIDEO_MODE_INFORMATION Modes,
+    _In_ ULONG Capacity,
+    _Out_ PULONG Count,
+    _In_ BOOLEAN CurrentOnly)
+{
+    DXGKP_DISPLAY_MODE_CACHE *Cache;
+    D3DKMT_CURRENTDISPLAYMODE Current;
+    ULONG Index, Required = 0, Output = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Count == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *Count = 0;
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
+    Status = DxgkpEnsureDisplayModeCacheLocked(Adapter);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Cache = Adapter->DisplayModeCache;
+    if (CurrentOnly)
+    {
+        RtlZeroMemory(&Current, sizeof(Current));
+        Current.VidPnSourceId = Cache->SourceId;
+        Status = DxgkVidPnQueryCurrentDisplayMode(Adapter, &Current);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+    for (Index = 0; Index < Cache->Count; ++Index)
+    {
+        if (DxgkpDisplayModeSupportsGdi(&Cache->Entries[Index]) &&
+            (!CurrentOnly || DxgkpDisplayModesEqual(&Cache->Entries[Index].Mode, &Current.DisplayMode)))
+            ++Required;
+    }
+    *Count = Required;
+    if (Required == 0)
+    {
+        Status = STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+        goto Cleanup;
+    }
+    if (Modes == NULL)
+        goto Cleanup;
+    if (Capacity < Required)
+    {
+        Status = STATUS_BUFFER_TOO_SMALL;
+        goto Cleanup;
+    }
+    for (Index = 0; Index < Cache->Count; ++Index)
+    {
+        if (DxgkpDisplayModeSupportsGdi(&Cache->Entries[Index]) &&
+            (!CurrentOnly || DxgkpDisplayModesEqual(&Cache->Entries[Index].Mode, &Current.DisplayMode)))
+        {
+            DxgkpVideoModeFromDisplayMode(&Modes[Output++], &Cache->Entries[Index],
+                                          (Cache->Generation << DXGKP_DISPLAY_MODE_INDEX_BITS) | Index);
+        }
+    }
+Cleanup:
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
+    return Status;
 }
 
 NTSTATUS
@@ -5771,8 +6120,9 @@ DxgkGetDisplayModeList(
     _Inout_ D3DKMT_GETDISPLAYMODELIST *pGetDisplayModeList)
 {
     PDXGKRNL_ADAPTER Adapter = NULL;
-    PDXGKP_VIDPN VidPn = NULL;
-    PDXGKP_VIDPN_SOURCE_MODESET SrcSet;
+    DXGKP_DISPLAY_MODE_CACHE *Cache;
+    D3DKMT_CURRENTDISPLAYMODE Current;
+    BOOLEAN Locked = FALSE;
     NTSTATUS Status = STATUS_SUCCESS;
     UINT NumModes, i;
 
@@ -5791,41 +6141,23 @@ DxgkGetDisplayModeList(
         goto Cleanup;
     }
 
-    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
-    if (Adapter->CommittedWidth != 0 && Adapter->CommittedHeight != 0)
-    {
-        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
-        Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
+    Locked = TRUE;
+    Status = DxgkpEnsureDisplayModeCacheLocked(Adapter);
+    if (!NT_SUCCESS(Status))
         goto Cleanup;
-    }
-    VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
-    if (!DxgkVidPnReference((D3DKMDT_HVIDPN)VidPn))
+    Cache = Adapter->DisplayModeCache;
+    NumModes = Cache->Count;
+    if (pGetDisplayModeList->VidPnSourceId != Cache->SourceId)
     {
-        VidPn = NULL;
-        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
-        Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
-        goto Cleanup;
-    }
-    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
-
-    if (pGetDisplayModeList->VidPnSourceId >= VidPn->NumSources)
-    {
-        Status = STATUS_INVALID_PARAMETER;
-        goto Cleanup;
-    }
-
-    SrcSet = VidPn->SourceModeSets[pGetDisplayModeList->VidPnSourceId];
-    if (SrcSet == NULL)
-    {
-        Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
-        goto Cleanup;
-    }
-
-    NumModes = (UINT)SrcSet->NumModes;
-    if (NumModes < RTL_NUMBER_OF(DxgkpDefaultDisplayModes))
-    {
-        Status = DxgkpReturnDefaultDisplayModeList(pGetDisplayModeList);
-        goto Cleanup;
+        /* The legacy display device switches its primary path only. Other
+         * active sources can still report their exact committed mode. */
+        RtlZeroMemory(&Current, sizeof(Current));
+        Current.VidPnSourceId = pGetDisplayModeList->VidPnSourceId;
+        Status = DxgkVidPnQueryCurrentDisplayMode(Adapter, &Current);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        NumModes = 1;
     }
 
     /* Pass 1: caller wants the mode count only. */
@@ -5846,10 +6178,8 @@ DxgkGetDisplayModeList(
     {
         for (i = 0; i < NumModes; i++)
         {
-            D3DKMT_DISPLAYMODE *pOut = &pGetDisplayModeList->pModeList[i];
-            const D3DKMDT_VIDPN_SOURCE_MODE *pSrc = &SrcSet->Modes[i];
-
-            DxgkpInitializeDisplayMode(pOut, pSrc->Format.Graphics.PrimSurfSize.cx, pSrc->Format.Graphics.PrimSurfSize.cy);
+            pGetDisplayModeList->pModeList[i] = pGetDisplayModeList->VidPnSourceId == Cache->SourceId ?
+                                               Cache->Entries[i].Mode : Current.DisplayMode;
         }
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -5862,9 +6192,179 @@ DxgkGetDisplayModeList(
         pGetDisplayModeList->ModeCount = NumModes;
 
 Cleanup:
-    if (VidPn != NULL)
-        DxgkVidPnDestroy((D3DKMDT_HVIDPN)VidPn);
+    if (Locked)
+        KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
     DxgkDereferenceAdapter(Adapter);
+    return Status;
+}
+
+NTSTATUS
+DxgkVidPnSetVideoMode(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG ModeIndex)
+{
+    DXGKP_DISPLAY_MODE_CACHE *Cache;
+    CONST DXGKP_DISPLAY_MODE_ENTRY *Entry;
+    PDXGKP_VIDPN Current = NULL, Candidate = NULL, Rollback = NULL, Detached = NULL;
+    PDXGKP_VIDPN_SOURCE_MODESET Sources;
+    PDXGKP_VIDPN_TARGET_MODESET Targets;
+    D3DKMDT_VIDEO_SIGNAL_INFO OldTarget;
+    D3DKMT_CURRENTDISPLAYMODE CurrentMode;
+    DXGKP_DISPLAY_COMMIT_RESULT Result, RollbackResult;
+    ULONG Index, TargetIndex, OldWidth, OldHeight;
+    SIZE_T TargetModeIndex;
+    BOOLEAN Transaction = FALSE, Mutation = FALSE, RecoveryRequired = FALSE;
+    BOOLEAN HaveOldTarget = FALSE;
+    KIRQL OldIrql;
+    NTSTATUS Status, RollbackStatus;
+
+    PAGED_CODE();
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    ModeIndex &= ~(VIDEO_MODE_NO_ZERO_MEMORY | VIDEO_MODE_MAP_MEM_LINEAR);
+    (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
+    if (ModeIndex == 0)
+    {
+        Status = Adapter->VidPnCommitted ? STATUS_SUCCESS : DxgkpDisplayCommitVidPnWhileSharedPrimaryLocked(Adapter);
+        goto Cleanup;
+    }
+    Status = DxgkpEnsureDisplayModeCacheLocked(Adapter);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Cache = Adapter->DisplayModeCache;
+    Index = ModeIndex & DXGKP_DISPLAY_MODE_INDEX_MASK;
+    if ((ModeIndex >> DXGKP_DISPLAY_MODE_INDEX_BITS) != Cache->Generation || Index >= Cache->Count)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+    Entry = &Cache->Entries[Index];
+    RtlZeroMemory(&CurrentMode, sizeof(CurrentMode));
+    CurrentMode.VidPnSourceId = Cache->SourceId;
+    Status = DxgkVidPnQueryCurrentDisplayMode(Adapter, &CurrentMode);
+    if (NT_SUCCESS(Status) && DxgkpDisplayModesEqual(&CurrentMode.DisplayMode, &Entry->Mode))
+        goto Cleanup;
+    if (!Cache->CanSetMode || !DxgkpDisplayModeSupportsGdi(Entry))
+    {
+        Status = STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+        goto Cleanup;
+    }
+    DxgkpBeginSharedSurfaceMutationLocked(Adapter);
+    Mutation = TRUE;
+    if (!DxgkBeginKmdTransaction(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    Transaction = TRUE;
+    (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+    Current = (PDXGKP_VIDPN)Adapter->VidPn;
+    if (!DxgkVidPnReference((D3DKMDT_HVIDPN)Current))
+        Current = NULL;
+    OldWidth = Adapter->CommittedWidth;
+    OldHeight = Adapter->CommittedHeight;
+    KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    if (Current == NULL || Current->NumPaths != 1 ||
+        Current->Paths[0].VidPnSourceId != Cache->SourceId || Current->Paths[0].VidPnTargetId != Cache->TargetId)
+    {
+        Status = STATUS_RETRY;
+        goto Cleanup;
+    }
+    TargetIndex = DxgkVidPnTargetIndexFromId(Current, Cache->TargetId);
+    if (TargetIndex != MAXULONG && (Targets = Current->TargetModeSets[TargetIndex]) != NULL)
+    {
+        for (TargetModeIndex = 0; TargetModeIndex < Targets->NumModes; ++TargetModeIndex)
+        {
+            if (Targets->Modes[TargetModeIndex].Id == Targets->PinnedModeId)
+            {
+                OldTarget = Targets->Modes[TargetModeIndex].VideoSignalInfo;
+                HaveOldTarget = TRUE;
+                break;
+            }
+        }
+    }
+    if (!HaveOldTarget)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Cleanup;
+    }
+    Status = DxgkVidPnClone((D3DKMDT_HVIDPN)Current, (D3DKMDT_HVIDPN *)&Candidate);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    /* Allocate the rollback object before hardware changes. The miniport is
+     * allowed to replace mode sets, so rollback must not mutate the live one. */
+    Status = DxgkVidPnClone((D3DKMDT_HVIDPN)Current, (D3DKMDT_HVIDPN *)&Rollback);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Sources = Candidate->SourceModeSets[Cache->SourceId];
+    Sources->Modes[0] = Entry->Source;
+    Sources->NumModes = 1;
+    Sources->PinnedModeId = Entry->Source.Id;
+    Sources->NextModeId = Entry->Source.Id + 1;
+    if (Cache->HotPlugGeneration != InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0))
+    {
+        Status = STATUS_RETRY;
+        goto Cleanup;
+    }
+    Status = DxgkpDisplayCommitVidPnCandidateWithTarget(Adapter, (D3DKMDT_HVIDPN)Candidate, &Entry->Target, &Result);
+    if (NT_SUCCESS(Status) && (!Result.VidPnCommitted || Result.CommittedWidth != Entry->Mode.Width || Result.CommittedHeight != Entry->Mode.Height))
+        Status = STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+    if (NT_SUCCESS(Status))
+    {
+        (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+        KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
+        if (Adapter->VidPn == (HANDLE)Current &&
+            Cache->HotPlugGeneration == InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0))
+        {
+            Detached = (PDXGKP_VIDPN)Adapter->VidPn;
+            Adapter->VidPn = (HANDLE)Candidate;
+            Adapter->CommittedWidth = Result.CommittedWidth;
+            Adapter->CommittedHeight = Result.CommittedHeight;
+            Adapter->VidPnCommitted = TRUE;
+            Candidate = NULL;
+        }
+        else
+            Status = STATUS_RETRY;
+        KeReleaseSpinLock(&Adapter->ChildListLock, OldIrql);
+        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        /* A failed commit can have changed hardware partially. Reapply the
+         * old pinned source and exact timing before exposing its old state. */
+        RollbackStatus = DxgkpDisplayCommitVidPnCandidateWithTarget(Adapter, (D3DKMDT_HVIDPN)Rollback, &OldTarget, &RollbackResult);
+        if (!NT_SUCCESS(RollbackStatus) || !RollbackResult.VidPnCommitted ||
+            RollbackResult.CommittedWidth != OldWidth || RollbackResult.CommittedHeight != OldHeight)
+        {
+            (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
+            Adapter->VidPnCommitted = FALSE;
+            KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
+            RecoveryRequired = TRUE;
+            DXGKRNL_ERR("DxgkVidPnSetVideoMode: commit 0x%08lX, rollback 0x%08lX; failing adapter closed\n", Status, RollbackStatus);
+        }
+        goto Cleanup;
+    }
+    if (OldWidth != Result.CommittedWidth || OldHeight != Result.CommittedHeight)
+        DxgkpDestroySharedPrimaryLocked(Adapter);
+    DxgkpDisplayPublishInitialMode(Adapter);
+    DxgkpNotifyActivePathChanged(Adapter, &Current->Paths[0], &((PDXGKP_VIDPN)Adapter->VidPn)->Paths[0]);
+
+Cleanup:
+    if (Transaction)
+        DxgkEndKmdTransaction(Adapter);
+    if (RecoveryRequired)
+        Status = DxgkpRecoverFailedHotPlugRollback(Adapter);
+    if (Mutation)
+        DxgkpEndSharedSurfaceMutationLocked(Adapter);
+    KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
+    if (Detached != NULL)
+        DxgkVidPnDestroy((D3DKMDT_HVIDPN)Detached);
+    if (Current != NULL)
+        DxgkVidPnDestroy((D3DKMDT_HVIDPN)Current);
+    if (Candidate != NULL)
+        DxgkVidPnDestroy((D3DKMDT_HVIDPN)Candidate);
+    if (Rollback != NULL)
+        DxgkVidPnDestroy((D3DKMDT_HVIDPN)Rollback);
     return Status;
 }
 

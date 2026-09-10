@@ -11994,6 +11994,7 @@ DxgkpDestroyAdapterVidPn(
 {
     D3DKMDT_HVIDPN VidPn;
 
+    DxgkVidPnDestroyDisplayModeCache(Adapter);
     (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
     VidPn = (D3DKMDT_HVIDPN)Adapter->VidPn;
     Adapter->VidPn = NULL;
@@ -13868,17 +13869,8 @@ DxgkpAdapterStopInternal(
     /* Unregister the display device from win32ss. */
     DxgkDisplayUnregister(Adapter);
 
-    /* Tear down the VidPN. */
-    {
-        D3DKMDT_HVIDPN hVidPn;
-
-        (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
-        hVidPn = (D3DKMDT_HVIDPN)Adapter->VidPn;
-        Adapter->VidPn = NULL;
-        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
-        if (hVidPn != NULL)
-            DxgkVidPnDestroy(hVidPn);
-    }
+    /* Tear down the VidPN and its published mode indices. */
+    DxgkpDestroyAdapterVidPn(Adapter);
 
     /* Tracker retirement can reference both objects, so destroy them last. */
     DxgkDestroySharedPrimary(Adapter);
@@ -14096,16 +14088,7 @@ DxgkAdapterRemove(
     }
 
     VidSchDestroy(Adapter);
-    {
-        D3DKMDT_HVIDPN hVidPn;
-
-        (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
-        hVidPn = (D3DKMDT_HVIDPN)Adapter->VidPn;
-        Adapter->VidPn = NULL;
-        KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
-        if (hVidPn != NULL)
-            DxgkVidPnDestroy(hVidPn);
-    }
+    DxgkpDestroyAdapterVidPn(Adapter);
     DxgkDestroySharedPrimary(Adapter);
     DxgkpDrainDmaBufferCache(Adapter);
     DxgkVidMmTeardownAdapter(Adapter);
