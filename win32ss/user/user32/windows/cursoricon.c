@@ -2264,6 +2264,80 @@ BITMAP_CopyImage(
     return res;
 }
 
+/* CopyImage resizes the color plane before the icon reaches an image list or
+   DrawIconEx. Keep all four straight-BGRA channels; using an RGB-only halftone
+   blit here would discard the icon's alpha channel. */
+static HBITMAP
+CURSORICON_ResizeColorBitmap(HBITMAP Bitmap, INT Width, INT Height)
+{
+    BITMAP bm;
+    BITMAPINFO info = { 0 };
+    HDC dc;
+    HBITMAP result = NULL;
+    BYTE *source = NULL, *dest;
+    SIZE_T size;
+    ULONGLONG stepX, stepY;
+    INT x, y, c;
+
+    if (!GetObjectW(Bitmap, sizeof(bm), &bm) || bm.bmWidth <= 0 || bm.bmHeight <= 0)
+        return NULL;
+    if ((SIZE_T)bm.bmWidth > (SIZE_T)-1 / 4 / bm.bmHeight)
+        return NULL;
+    size = (SIZE_T)bm.bmWidth * bm.bmHeight * 4;
+    dc = CreateCompatibleDC(NULL);
+    if (!dc)
+        return NULL;
+    source = HeapAlloc(GetProcessHeap(), 0, size);
+    if (!source)
+        goto done;
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = bm.bmWidth;
+    info.bmiHeader.biHeight = -bm.bmHeight;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    if (GetDIBits(dc, Bitmap, 0, bm.bmHeight, source, &info, DIB_RGB_COLORS) != bm.bmHeight)
+        goto done;
+
+    info.bmiHeader.biWidth = Width;
+    info.bmiHeader.biHeight = -Height;
+    info.bmiHeader.biSizeImage = 0;
+    result = CreateDIBSection(dc, &info, DIB_RGB_COLORS, (void **)&dest, NULL, 0);
+    if (!result)
+        goto done;
+
+    stepX = Width > 1 ? ((ULONGLONG)(bm.bmWidth - 1) << 16) / (Width - 1) : 0;
+    stepY = Height > 1 ? ((ULONGLONG)(bm.bmHeight - 1) << 16) / (Height - 1) : 0;
+    for (y = 0; y < Height; ++y)
+    {
+        /* Native half-size copies average pairs; other sizes interpolate
+           between the endpoints. A one-pixel axis samples the first pixel. */
+        ULONGLONG py = (ULONGLONG)Height * 2 == bm.bmHeight ? ((ULONGLONG)y * 2 << 16) + 0x8000 : y * stepY;
+        INT sy = py >> 16, sy1 = min(sy + 1, bm.bmHeight - 1);
+        ULONG fy = py & 0xffff;
+        for (x = 0; x < Width; ++x)
+        {
+            ULONGLONG px = (ULONGLONG)Width * 2 == bm.bmWidth ? ((ULONGLONG)x * 2 << 16) + 0x8000 : x * stepX;
+            INT sx = px >> 16, sx1 = min(sx + 1, bm.bmWidth - 1);
+            ULONG fx = px & 0xffff;
+            const BYTE *p00 = source + ((SIZE_T)sy * bm.bmWidth + sx) * 4;
+            const BYTE *p01 = source + ((SIZE_T)sy * bm.bmWidth + sx1) * 4;
+            const BYTE *p10 = source + ((SIZE_T)sy1 * bm.bmWidth + sx) * 4;
+            const BYTE *p11 = source + ((SIZE_T)sy1 * bm.bmWidth + sx1) * 4;
+            ULONGLONG w00 = (ULONGLONG)(0x10000 - fx) * (0x10000 - fy);
+            ULONGLONG w01 = (ULONGLONG)fx * (0x10000 - fy);
+            ULONGLONG w10 = (ULONGLONG)(0x10000 - fx) * fy;
+            ULONGLONG w11 = (ULONGLONG)fx * fy;
+            for (c = 0; c < 4; ++c)
+                dest[((SIZE_T)y * Width + x) * 4 + c] = (BYTE)((p00[c] * w00 + p01[c] * w01 + p10[c] * w10 + p11[c] * w11) >> 32);
+        }
+    }
+
+done:
+    HeapFree(GetProcessHeap(), 0, source);
+    DeleteDC(dc);
+    return result;
+}
+
 static
 HICON
 CURSORICON_CopyImage(
@@ -2277,6 +2351,15 @@ CURSORICON_CopyImage(
     HICON ret = NULL;
     ICONINFO ii;
     CURSORDATA CursorData;
+    BITMAP bm;
+    INT width, height;
+    DWORD xHotspot, yHotspot;
+
+    if (cxDesired < 0 || cyDesired < 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return NULL;
+    }
 
     if (fuFlags & LR_COPYFROMRESOURCE)
     {
@@ -2375,7 +2458,7 @@ CURSORICON_CopyImage(
     }
 
     /* This is a regular copy */
-    if (fuFlags & ~(LR_COPYDELETEORG | LR_SHARED))
+    if (fuFlags & ~(LR_COPYDELETEORG | LR_COPYRETURNORG | LR_DEFAULTSIZE | LR_SHARED))
         FIXME("Unimplemented flags: 0x%08x\n", fuFlags);
 
     if (!GetIconInfo(hicon, &ii))
@@ -2384,20 +2467,70 @@ CURSORICON_CopyImage(
         return NULL;
     }
 
+    if (!GetObjectW(ii.hbmMask, sizeof(bm), &bm))
+        goto Leave;
+    width = bm.bmWidth;
+    height = ii.hbmColor ? bm.bmHeight : bm.bmHeight / 2;
+    if (width <= 0 || height <= 0)
+        goto Leave;
+    if (!cxDesired)
+        cxDesired = (fuFlags & LR_DEFAULTSIZE) ? GetSystemMetrics(bIcon ? SM_CXICON : SM_CXCURSOR) : width;
+    if (!cyDesired)
+        cyDesired = (fuFlags & LR_DEFAULTSIZE) ? GetSystemMetrics(bIcon ? SM_CYICON : SM_CYCURSOR) : height;
+    xHotspot = ii.xHotspot;
+    yHotspot = ii.yHotspot;
+
+    if (cxDesired == width && cyDesired == height && (fuFlags & LR_COPYRETURNORG))
+    {
+        ret = hicon;
+        goto Leave;
+    }
+    if (cxDesired != width || cyDesired != height)
+    {
+        HBITMAP mask, color = NULL;
+        if (!ii.hbmColor && cyDesired > INT_MAX / 2)
+            goto Leave;
+        mask = CopyImage(ii.hbmMask, IMAGE_BITMAP, cxDesired, cyDesired * (ii.hbmColor ? 1 : 2), LR_MONOCHROME);
+        if (!mask)
+            goto Leave;
+        if (ii.hbmColor)
+        {
+            color = CURSORICON_ResizeColorBitmap(ii.hbmColor, cxDesired, cyDesired);
+            if (!color)
+            {
+                DeleteObject(mask);
+                goto Leave;
+            }
+        }
+        DeleteObject(ii.hbmMask);
+        if (ii.hbmColor) DeleteObject(ii.hbmColor);
+        ii.hbmMask = mask;
+        ii.hbmColor = color;
+        xHotspot = MulDiv(xHotspot, cxDesired, width);
+        yHotspot = MulDiv(yHotspot, cyDesired, height);
+    }
+
     /* This is CreateIconIndirect with the LR_SHARED coat added */
     if  (!CURSORICON_GetCursorDataFromIconInfo(&CursorData, &ii))
         goto Leave;
+    CursorData.xHotspot = xHotspot;
+    CursorData.yHotspot = yHotspot;
 
     if (fuFlags & LR_SHARED)
         CursorData.CURSORF_flags |= CURSORF_LRSHARED;
 
     ret = NtUserxCreateEmptyCurObject(FALSE);
     if (!ret)
+    {
+        CURSORICON_FreeCursorData(&CursorData);
         goto Leave;
+    }
 
     if (!NtUserSetCursorIconData(ret, NULL, NULL, &CursorData))
     {
         NtUserDestroyCursor(ret, TRUE);
+        ret = NULL;
+        CURSORICON_FreeCursorData(&CursorData);
         goto Leave;
     }
 
@@ -2405,7 +2538,7 @@ Leave:
     DeleteObject(ii.hbmMask);
     if (ii.hbmColor) DeleteObject(ii.hbmColor);
 
-    if (ret && (fuFlags & LR_COPYDELETEORG))
+    if (ret && ret != hicon && (fuFlags & LR_COPYDELETEORG))
         DestroyIcon(hicon);
 
     return ret;
@@ -2474,31 +2607,9 @@ HANDLE WINAPI CopyImage(
             handle = CURSORICON_CopyImage(hImage, uType == IMAGE_ICON, cxDesired, cyDesired, fuFlags);
             if (!handle && (fuFlags & LR_COPYFROMRESOURCE))
             {
-                /* Test if the hImage is the same size as what we want by getting
-                 * its BITMAP and comparing its dimensions to the desired size. */
-                BITMAP bm;
-
-                ICONINFO iconinfo = { 0 };
-                if (!GetIconInfo(hImage, &iconinfo))
-                {
-                    ERR("GetIconInfo Failed. hImage %p\n", hImage);
-                    return NULL;
-                }
-                if (!GetObject(iconinfo.hbmColor, sizeof(bm), &bm))
-                {
-                    ERR("GetObject Failed. iconinfo %p\n", iconinfo);
-                    return NULL;
-                }
-
-                DeleteObject(iconinfo.hbmMask);
-                DeleteObject(iconinfo.hbmColor);
-
-                /* If the images are the same size remove LF_COPYFROMRESOURCE and try again */
-                if (cxDesired == bm.bmWidth && cyDesired == bm.bmHeight)
-                {
-                    handle = CURSORICON_CopyImage(hImage, uType == IMAGE_ICON, cxDesired,
-                                                  cyDesired, (fuFlags & ~LR_COPYFROMRESOURCE));
-                }
+                /* Generated and copied icons have no resource to reload.
+                   Resize their existing planes, including monochrome masks. */
+                handle = CURSORICON_CopyImage(hImage, uType == IMAGE_ICON, cxDesired, cyDesired, fuFlags & ~LR_COPYFROMRESOURCE);
             }
             return handle;
         }

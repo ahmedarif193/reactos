@@ -9,6 +9,7 @@ list(APPEND SOURCE
     CloseWindow.c
     ComboBox.c
     CopyImage.c
+    CopyImage_Icon.c
     CursorPresentation.c
     CreateDialog.c
     CreateIconFromResourceEx.c
