@@ -731,6 +731,20 @@ public:
                 icon = ImageList_GetIcon((HIMAGELIST)Images, sfi.iIcon, ILD_TRANSPARENT);
                 *pbDestroy = icon != NULL;
             }
+            if (!icon && TaskGroup->szExePath[0])
+            {
+                HICON hLarge = NULL, hSmall = NULL;
+
+                if (ExtractIconExW(TaskGroup->szExePath, 0, &hLarge, &hSmall, 1))
+                {
+                    icon = UseSmallTaskIcons() ? hSmall : hLarge;
+                    if (!icon)
+                        icon = UseSmallTaskIcons() ? hLarge : hSmall;
+                    else if (hLarge && hSmall)
+                        DestroyIcon(UseSmallTaskIcons() ? hLarge : hSmall);
+                    *pbDestroy = icon != NULL;
+                }
+            }
         }
         if (!icon && First)
             icon = GetWndIcon(First->hWnd);
