@@ -66,13 +66,14 @@ static void Test_MakeResident_BadHandle(void)
        (long)Status);
 }
 
-static void Test_MakeResident_MustSucceedRequiresCantTrimFurther(void)
+static void Test_MakeResident_EmptyList(void)
 {
     D3DKMT_HANDLE hAdapter, hDevice;
     D3DKMT_CREATEPAGINGQUEUE cpq;
     D3DDDI_DESTROYPAGINGQUEUE dpq;
     D3DDDI_MAKERESIDENT mr;
     NTSTATUS Status;
+    UINT Flags;
 
     LOADFN(PFND3DKMT_CREATEPAGINGQUEUE, pCreate, "D3DKMTCreatePagingQueue");
     LOADFN(PFND3DKMT_DESTROYPAGINGQUEUE, pDestroy, "D3DKMTDestroyPagingQueue");
@@ -89,18 +90,18 @@ static void Test_MakeResident_MustSucceedRequiresCantTrimFurther(void)
     Status = pCreate(&cpq);
     if (!NT_SUCCESS(Status) || cpq.hPagingQueue == 0) { skip("CreatePagingQueue not supported on this adapter (0x%08lX)\n", (long)Status); goto cleanup_device; }
 
-    memset(&mr, 0, sizeof(mr));
-    mr.hPagingQueue = cpq.hPagingQueue;
-    Status = pMakeResident(&mr);
-    if (!NT_SUCCESS(Status)) { skip("Empty MakeResident baseline not supported (0x%08lX)\n", (long)Status); goto cleanup_queue; }
+    /* Windows rejects an empty allocation list before flags can make the
+     * request meaningful. Exercise it directly instead of using a successful
+     * empty call as a prerequisite for testing residency policy. */
+    for (Flags = 0; Flags <= 4; ++Flags)
+    {
+        memset(&mr, 0, sizeof(mr));
+        mr.hPagingQueue = cpq.hPagingQueue;
+        mr.Flags.Value = Flags;
+        Status = pMakeResident(&mr);
+        ok(Status == STATUS_INVALID_PARAMETER, "Empty MakeResident flags=0x%X returned 0x%08lX, expected STATUS_INVALID_PARAMETER\n", Flags, (long)Status);
+    }
 
-    memset(&mr, 0, sizeof(mr));
-    mr.hPagingQueue = cpq.hPagingQueue;
-    mr.Flags.MustSucceed = 1;
-    Status = pMakeResident(&mr);
-    ok(Status == STATUS_INVALID_PARAMETER, "MakeResident MustSucceed without CantTrimFurther returned 0x%08lX, expected STATUS_INVALID_PARAMETER\n", (long)Status);
-
-cleanup_queue:
     memset(&dpq, 0, sizeof(dpq));
     dpq.hPagingQueue = cpq.hPagingQueue;
     Status = pDestroy(&dpq);
@@ -262,7 +263,7 @@ START_TEST(residency)
     Test_OfferAllocations_NullArg();
     Test_ReclaimAllocations_NullArg();
     Test_MakeResident_BadHandle();
-    Test_MakeResident_MustSucceedRequiresCantTrimFurther();
+    Test_MakeResident_EmptyList();
     Test_Evict_BadHandle();
     Test_ResidencyCycle_EvictMakeResidentWait();
 }
