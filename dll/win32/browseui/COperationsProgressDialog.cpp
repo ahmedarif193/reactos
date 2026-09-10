@@ -27,6 +27,8 @@ UINT Luminance(COLORREF color)
     return (GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114) / 1000;
 }
 
+COLORREF Translucent(COLORREF back, COLORREF color, int spread);
+
 COLORREF Mix(COLORREF a, COLORREF b, int t)
 {
     if (t <= 0) return a;
@@ -34,6 +36,15 @@ COLORREF Mix(COLORREF a, COLORREF b, int t)
     return RGB(GetRValue(a) + MulDiv(GetRValue(b) - GetRValue(a), t, 255),
                GetGValue(a) + MulDiv(GetGValue(b) - GetGValue(a), t, 255),
                GetBValue(a) + MulDiv(GetBValue(b) - GetBValue(a), t, 255));
+}
+
+COLORREF Translucent(COLORREF back, COLORREF color, int spread)
+{
+    int dr = GetRValue(back) - GetRValue(color), dg = GetGValue(back) - GetGValue(color);
+    int db = GetBValue(back) - GetBValue(color);
+    int distance = max(max(dr < 0 ? -dr : dr, dg < 0 ? -dg : dg), db < 0 ? -db : db);
+    if (distance <= spread) return color;
+    return Mix(back, color, spread * 255 / distance);
 }
 
 BOOL DarkTheme()
@@ -652,18 +663,32 @@ void COperationsProgressDialog::LayoutLocations(const CStringW &prefix, BOOL sou
     ReleaseDC(m_Window, dc);
 }
 
+void COperationsProgressDialog::PaintGraphFrame(HDC dc, RECT rect, HRGN clip, int radius)
+{
+    SelectClipRgn(dc, NULL);
+    DeleteObject(clip);
+    HPEN pen = CreatePen(PS_SOLID, 1, m_Palette.Border);
+    HGDIOBJ oldPen = SelectObject(dc, pen);
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius * 2, radius * 2);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
+}
+
 void COperationsProgressDialog::PaintGraph(HDC dc, RECT rect)
 {
     BOOL highContrast = HighContrast();
     COLORREF base = highContrast ? GetSysColor(COLOR_HIGHLIGHT) : RGB(6, 176, 37);
     if (!highContrast && m_Status == PDOPS_PAUSED) base = RGB(234, 181, 0);
     if (!highContrast && (m_Mode & PDM_ERRORSBLOCKING)) base = RGB(210, 35, 35);
-    COLORREF ink = base;
+    COLORREF ink = m_Palette.Material ? Translucent(m_Palette.Back, base, 72) : base;
     COLORREF pale = highContrast ? m_Palette.Back : Mix(m_Palette.Back, base, m_Palette.Dark ? 70 : 130);
+    RECT frame = rect;
+    int radius = Scale(6);
     Fill(dc, rect, m_Palette.Back);
-    HBRUSH border = CreateSolidBrush(m_Palette.Border);
-    FrameRect(dc, &rect, border);
-    DeleteObject(border);
+    HRGN clip = CreateRoundRectRgn(rect.left, rect.top, rect.right + 1, rect.bottom + 1, radius * 2, radius * 2);
+    SelectClipRgn(dc, clip);
     InflateRect(&rect, -1, -1);
     RECT filled = rect;
     filled.right = rect.left + MulDiv(rect.right - rect.left, Percentage(m_Points, m_TotalPoints), 100);
@@ -673,12 +698,14 @@ void COperationsProgressDialog::PaintGraph(HDC dc, RECT rect)
         filled.left = rect.left + (GetTickCount() / 12) % max(width, 1);
         filled.right = min(rect.right, filled.left + width / 5);
         Fill(dc, filled, ink);
+        PaintGraphFrame(dc, frame, clip, radius);
         return;
     }
     if (!m_Expanded)
     {
         Fill(dc, rect, m_Palette.Track);
         Fill(dc, filled, ink);
+        PaintGraphFrame(dc, frame, clip, radius);
         return;
     }
     Fill(dc, rect, pale);
@@ -720,6 +747,7 @@ void COperationsProgressDialog::PaintGraph(HDC dc, RECT rect)
     }
     SelectObject(dc, oldPen);
     DeleteObject(grid);
+    PaintGraphFrame(dc, frame, clip, radius);
     WCHAR size[80];
     StrFormatByteSizeW(m_Speed >= (double)MAXLONGLONG ? MAXLONGLONG : (LONGLONG)m_Speed, size, _countof(size));
     CStringW speed;
