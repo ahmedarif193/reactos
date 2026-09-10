@@ -17,6 +17,7 @@ typedef struct _DWM_APP_HOST
     IDwmSettingsManager Settings;
     DWORD PolicyBits;
     DWORD PreferenceBits;
+    HMIL_CONNECTION *Connection;
 } DWM_APP_HOST;
 
 typedef struct _DWM_APP_HOST_VTBL
@@ -72,8 +73,15 @@ static LRESULT CALLBACK
 DwmNotificationWindowProc(HWND Window, UINT Message, WPARAM WParam,
                           LPARAM LParam)
 {
+    DWM_APP_HOST *Host = (DWM_APP_HOST *)GetWindowLongPtrW(Window, GWLP_USERDATA);
+
     switch (Message)
     {
+        case WM_NCCREATE:
+            Host = (DWM_APP_HOST *)((CREATESTRUCTW *)LParam)->lpCreateParams;
+            SetWindowLongPtrW(Window, GWLP_USERDATA, (LONG_PTR)Host);
+            return TRUE;
+
         case WM_QUERYENDSESSION:
             return TRUE;
 
@@ -87,6 +95,13 @@ DwmNotificationWindowProc(HWND Window, UINT Message, WPARAM WParam,
             return 0;
 
         case WM_DESTROY:
+            /* Release mapped composition buffers before acknowledging shutdown. */
+            if (Host && Host->Connection)
+            {
+                HMIL_CONNECTION *Connection = Host->Connection;
+                Host->Connection = NULL;
+                DwmUninitializeEngine(Connection);
+            }
             PostQuitMessage(0);
             return 0;
 
@@ -104,7 +119,7 @@ DwmNotificationWindowProc(HWND Window, UINT Message, WPARAM WParam,
 }
 
 static HWND
-DwmCreateNotificationWindow(HINSTANCE Instance)
+DwmCreateNotificationWindow(HINSTANCE Instance, DWM_APP_HOST *Host)
 {
     static const WCHAR ClassName[] = L"ReactOS.Dwm.Notification";
     WNDCLASSEXW Class;
@@ -117,9 +132,10 @@ DwmCreateNotificationWindow(HINSTANCE Instance)
     if (!RegisterClassExW(&Class) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         return NULL;
 
+    /* A message-only window does not receive session-ending notifications. */
     return CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, ClassName,
                            L"DWM Notification", WS_POPUP,
-                           0, 0, 0, 0, HWND_MESSAGE, NULL, Instance, NULL);
+                           0, 0, 0, 0, NULL, NULL, Instance, Host);
 }
 
 static HRESULT
@@ -331,7 +347,6 @@ wWinMain(HINSTANCE Instance, HINSTANCE PreviousInstance,
          LPWSTR CommandLine, int ShowCommand)
 {
     DWM_APP_HOST Host;
-    HMIL_CONNECTION *Connection = NULL;
     HWND NotificationWindow;
     HRESULT Result;
     MSG Message;
@@ -349,11 +364,11 @@ wWinMain(HINSTANCE Instance, HINSTANCE PreviousInstance,
     Host.References = 1;
     Host.Settings.lpVtbl = &g_DwmSettingsVtbl;
 
-    NotificationWindow = DwmCreateNotificationWindow(Instance);
+    NotificationWindow = DwmCreateNotificationWindow(Instance, &Host);
     if (NotificationWindow == NULL)
         return (int)HRESULT_FROM_WIN32(GetLastError());
 
-    Result = MilCompositionEngine_Initialize(0x0F, &Connection);
+    Result = MilCompositionEngine_Initialize(0x0F, &Host.Connection);
     if (FAILED(Result))
     {
         DestroyWindow(NotificationWindow);
@@ -363,7 +378,6 @@ wWinMain(HINSTANCE Instance, HINSTANCE PreviousInstance,
     Result = DwmClientStartup(&Host.IUnknown_iface);
     if (FAILED(Result))
     {
-        DwmUninitializeEngine(Connection);
         DestroyWindow(NotificationWindow);
         return (int)Result;
     }
@@ -375,7 +389,6 @@ wWinMain(HINSTANCE Instance, HINSTANCE PreviousInstance,
         TranslateMessage(&Message);
         DispatchMessageW(&Message);
     }
-    DwmUninitializeEngine(Connection);
     if (IsWindow(NotificationWindow))
         DestroyWindow(NotificationWindow);
     if (MessageResult == (BOOL)-1)
