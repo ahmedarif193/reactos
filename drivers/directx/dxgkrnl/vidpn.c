@@ -862,15 +862,8 @@ DxgkpPopulateDefaultSourceMode(
     Mode->Format.Graphics.VisibleRegionSize.cy = Height;
     Mode->Format.Graphics.Stride               = Width * 4;
     Mode->Format.Graphics.PixelFormat          = D3DDDIFMT_A8R8G8B8;
-    /*
-     * sRGB, not scRGB.  scRGB is the linear wide-gamut basis defined for 16
-     * bits of float per channel; naming it on an 8-bit integer A8R8G8B8
-     * surface describes a mode that cannot exist, and dxgkrnl's own monitor
-     * modes declare sRGB, so the path claimed one basis at the source and
-     * another at the monitor.  A miniport that checks the pinned source mode
-     * refuses the whole VidPN over it.
-     */
-    Mode->Format.Graphics.ColorBasis           = D3DKMDT_CB_SRGB;
+    /* WDDM source modes use scRGB independently of their pixel format. */
+    Mode->Format.Graphics.ColorBasis           = D3DKMDT_CB_SCRGB;
     Mode->Format.Graphics.PixelValueAccessMode = D3DKMDT_PVAM_DIRECT;
 }
 
@@ -1012,9 +1005,7 @@ DxgkpPopulateDefaultPath(
     Path->GammaRamp.Type = D3DDDI_GAMMARAMP_DEFAULT;
     Path->GammaRamp.DataSize = 0;
 
-    /* Same reasoning as the source mode, and the dynamic ranges right below
-     * say 8 bits per channel -- which scRGB never is. */
-    Path->VidPnTargetColorBasis = D3DKMDT_CB_SRGB;
+    Path->VidPnTargetColorBasis = D3DKMDT_CB_SCRGB;
     Path->VidPnTargetColorCoeffDynamicRanges.FirstChannel  = 8;
     Path->VidPnTargetColorCoeffDynamicRanges.SecondChannel = 8;
     Path->VidPnTargetColorCoeffDynamicRanges.ThirdChannel  = 8;
