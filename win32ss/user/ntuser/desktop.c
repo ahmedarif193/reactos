@@ -1187,13 +1187,8 @@ IntResolveDesktop(
         if (bInherit)
             ObjectAttributes->Attributes |= OBJ_INHERIT;
 
-        Status = ObOpenObjectByName(ObjectAttributes,
-                                    ExDesktopObjectType,
-                                    UserMode,
-                                    NULL,
-                                    DESKTOP_ALL_ACCESS,
-                                    NULL,
-                                    (PHANDLE)&hDesktop);
+        /* Startup connects with the rights allowed by the desktop's DACL. */
+        Status = ObOpenObjectByName(ObjectAttributes, ExDesktopObjectType, UserMode, NULL, MAXIMUM_ALLOWED, NULL, (PHANDLE)&hDesktop);
         if (!NT_SUCCESS(Status))
         {
             ERR("Failed to open the desktop '%wZ' on window station 0x%p, Status 0x%08lx\n",
