@@ -572,3 +572,90 @@ TaskbarPin_Remove(PCWSTR pszTarget)
     }
     return FAILED(hr) ? hr : S_OK;
 }
+
+#define TASKBAR_PIN_ORDER_KEY   L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Taskband"
+#define TASKBAR_PIN_ORDER_VALUE L"ReactOSPinOrder"
+#define TASKBAR_PIN_ORDER_MAX   0x10000
+
+HRESULT
+TaskbarPin_LoadOrder(CAtlArray<TASKBAR_PIN_ORDER> &Order)
+{
+    HKEY hKey;
+    DWORD cbData = 0, dwType = 0;
+
+    Order.SetCount(0);
+    LONG error = RegOpenKeyExW(HKEY_CURRENT_USER, TASKBAR_PIN_ORDER_KEY, 0, KEY_QUERY_VALUE, &hKey);
+    if (error != ERROR_SUCCESS)
+        return error == ERROR_FILE_NOT_FOUND ? S_FALSE : HRESULT_FROM_WIN32(error);
+
+    error = RegQueryValueExW(hKey, TASKBAR_PIN_ORDER_VALUE, NULL, &dwType, NULL, &cbData);
+    if (error != ERROR_SUCCESS || dwType != REG_MULTI_SZ ||
+        cbData < 2 * sizeof(WCHAR) || cbData > TASKBAR_PIN_ORDER_MAX ||
+        cbData % sizeof(WCHAR))
+    {
+        RegCloseKey(hKey);
+        if (error == ERROR_SUCCESS || error == ERROR_FILE_NOT_FOUND)
+            return S_FALSE;
+        return HRESULT_FROM_WIN32(error);
+    }
+
+    CAtlArray<WCHAR> Buffer;
+    SIZE_T cch = cbData / sizeof(WCHAR);
+    if (!Buffer.SetCount(cch + 2))
+    {
+        RegCloseKey(hKey);
+        return E_OUTOFMEMORY;
+    }
+    ZeroMemory(Buffer.GetData(), (cch + 2) * sizeof(WCHAR));
+    error = RegQueryValueExW(hKey, TASKBAR_PIN_ORDER_VALUE, NULL, &dwType,
+                             (LPBYTE)Buffer.GetData(), &cbData);
+    RegCloseKey(hKey);
+    if (error != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32(error);
+    if (dwType != REG_MULTI_SZ || cbData % sizeof(WCHAR))
+        return S_FALSE;
+
+    for (PCWSTR pszEntry = Buffer.GetData(); *pszEntry; pszEntry += lstrlenW(pszEntry) + 1)
+    {
+        TASKBAR_PIN_ORDER Entry;
+        if (SUCCEEDED(StringCchCopyW(Entry.szTarget, _countof(Entry.szTarget), pszEntry)) &&
+            Order.Add(Entry) == (SIZE_T)-1)
+        {
+            return E_OUTOFMEMORY;
+        }
+    }
+    return S_OK;
+}
+
+HRESULT
+TaskbarPin_SaveOrder(const CAtlArray<TASKBAR_PIN_ORDER> &Order)
+{
+    CAtlArray<WCHAR> Buffer;
+    SIZE_T i, cch = Order.GetCount() ? 1 : 2;
+
+    for (i = 0; i < Order.GetCount(); ++i)
+        cch += lstrlenW(Order[i].szTarget) + 1;
+    if (cch * sizeof(WCHAR) > TASKBAR_PIN_ORDER_MAX || !Buffer.SetCount(cch + 1))
+        return E_OUTOFMEMORY;
+    ZeroMemory(Buffer.GetData(), (cch + 1) * sizeof(WCHAR));
+
+    PWSTR pszWrite = Buffer.GetData();
+    for (i = 0; i < Order.GetCount(); ++i)
+    {
+        INT Length = lstrlenW(Order[i].szTarget);
+        CopyMemory(pszWrite, Order[i].szTarget, Length * sizeof(WCHAR));
+        pszWrite += Length + 1;
+    }
+
+    HKEY hKey;
+    LONG error = RegCreateKeyExW(HKEY_CURRENT_USER, TASKBAR_PIN_ORDER_KEY, 0, NULL, 0,
+                                 KEY_SET_VALUE, NULL, &hKey, NULL);
+    if (error != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32(error);
+    error = RegSetValueExW(hKey, TASKBAR_PIN_ORDER_VALUE, 0, REG_MULTI_SZ,
+                           (const BYTE *)Buffer.GetData(), (DWORD)(cch * sizeof(WCHAR)));
+    if (error == ERROR_SUCCESS)
+        RegFlushKey(hKey);
+    RegCloseKey(hKey);
+    return error == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(error);
+}

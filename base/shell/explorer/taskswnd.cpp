@@ -50,6 +50,12 @@
 #define IDM_JUMP_UNPIN 9
 #define VALIDATE_RUDE_INTERVAL 1000
 #define VALIDATE_RUDE_MAX_COUNT 5
+#define TIMER_ID_BUTTON_ANIM 7
+#define BUTTON_ANIM_INTERVAL 15
+#define BUTTON_ANIM_DURATION 180
+#define TSWM_TASKDRAGBEGIN (WM_USER + 4)
+#define TSWM_TASKDRAGMOVE (WM_USER + 5)
+#define TSWM_TASKDRAGEND (WM_USER + 6)
 
 static BOOL
 SHELL_GetMonitorRect(
@@ -153,6 +159,16 @@ const struct {
 };
 #endif
 
+typedef struct _TASK_ANIM
+{
+    INT dx;
+    INT dy;
+    DWORD dwStart;
+    INT SnapX;
+    INT SnapY;
+    BOOL bSnapped;
+} TASK_ANIM, *PTASK_ANIM;
+
 typedef struct _TASK_GROUP
 {
     /* We have to use a linked list instead of an array so we don't have to
@@ -169,6 +185,7 @@ typedef struct _TASK_GROUP
     WCHAR szExePath[MAX_PATH];
     WCHAR szLinkPath[MAX_PATH];
     FILETIME PinCreationTime;
+    TASK_ANIM Anim;
     union
     {
         DWORD dwFlags;
@@ -189,6 +206,7 @@ typedef struct _TASK_ITEM
     PTASK_GROUP Group;
     INT Index;
     INT IconIndex;
+    TASK_ANIM Anim;
 
     union
     {
@@ -342,6 +360,11 @@ public:
 class CTaskToolbar :
     public CWindowImplBaseT< CToolbar<TASK_ITEM>, CControlWinTraits >
 {
+    BOOL m_bDragArmed;
+    BOOL m_bDragging;
+    INT m_iPressIndex;
+    POINT m_ptPress;
+
 public:
     INT UpdateTbButtonSpacing(IN BOOL bHorizontal, IN BOOL bThemed, IN UINT uiRows = 0, IN UINT uiBtnsPerLine = 0)
     {
@@ -427,8 +450,41 @@ public:
         return 0;
     }
 
+    static BOOL ExceedsDragThreshold(IN POINT pt, IN POINT ptPress)
+    {
+        INT dx = pt.x - ptPress.x, dy = pt.y - ptPress.y;
+
+        if (dx < 0)
+            dx = -dx;
+        if (dy < 0)
+            dy = -dy;
+        return dx >= GetSystemMetrics(SM_CXDRAG) || dy >= GetSystemMetrics(SM_CYDRAG);
+    }
+
     LRESULT OnMouseMoveToolbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+
+        if (m_bDragging)
+        {
+            ::SendMessageW(GetParent(), TSWM_TASKDRAGMOVE, 0, MAKELPARAM(pt.x, pt.y));
+            return 0;
+        }
+
+        if (m_bDragArmed && (wParam & MK_LBUTTON) && ExceedsDragThreshold(pt, m_ptPress))
+        {
+            m_bDragArmed = FALSE;
+            SendMessageW(WM_LBUTTONUP, 0, MAKELPARAM(-32000, -32000));
+            if (::SendMessageW(GetParent(), TSWM_TASKDRAGBEGIN, (WPARAM)m_iPressIndex,
+                               MAKELPARAM(m_ptPress.x, m_ptPress.y)))
+            {
+                m_bDragging = TRUE;
+                SetCapture();
+                ::SendMessageW(GetParent(), TSWM_TASKDRAGMOVE, 0, MAKELPARAM(pt.x, pt.y));
+                return 0;
+            }
+        }
+
         bHandled = FALSE;
         if (m_bTrackGlow)
         {
@@ -441,13 +497,103 @@ public:
         return 0;
     }
 
+    LRESULT OnLButtonDownToolbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+
+        m_iPressIndex = HitTest(&pt);
+        m_bDragArmed = m_iPressIndex >= 0;
+        m_ptPress = pt;
+        bHandled = FALSE;
+        return 0;
+    }
+
+    LRESULT OnLButtonUpToolbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        m_bDragArmed = FALSE;
+        if (!m_bDragging)
+        {
+            bHandled = FALSE;
+            return 0;
+        }
+        m_bDragging = FALSE;
+        if (::GetCapture() == m_hWnd)
+            ::ReleaseCapture();
+        ::SendMessageW(GetParent(), TSWM_TASKDRAGEND, 0, 0);
+        return 0;
+    }
+
+    LRESULT OnCaptureChangedToolbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        bHandled = FALSE;
+        if (m_bDragging)
+        {
+            m_bDragging = FALSE;
+            ::SendMessageW(GetParent(), TSWM_TASKDRAGEND, 0, 0);
+        }
+        return 0;
+    }
+
+    LRESULT OnPaintToolbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        RECT rc;
+        PAINTSTRUCT ps;
+        HDC hdc, hdcMem;
+        HBITMAP hbm;
+
+        if (!m_bBuffered || wParam || !GetClientRect(&rc) || rc.right <= 0 || rc.bottom <= 0)
+        {
+            bHandled = FALSE;
+            return 0;
+        }
+
+        hdc = BeginPaint(&ps);
+        if (!hdc)
+            return 0;
+
+        hdcMem = CreateCompatibleDC(hdc);
+        hbm = hdcMem ? CreateCompatibleBitmap(hdc, rc.right, rc.bottom) : NULL;
+        if (hbm)
+        {
+            HGDIOBJ hbmOld = SelectObject(hdcMem, hbm);
+
+            SendMessageW(WM_PRINTCLIENT, (WPARAM)hdcMem, PRF_CLIENT);
+            BitBlt(hdc, 0, 0, rc.right, rc.bottom, hdcMem, 0, 0, SRCCOPY);
+            SelectObject(hdcMem, hbmOld);
+            DeleteObject(hbm);
+        }
+        else
+        {
+            SendMessageW(WM_PRINTCLIENT, (WPARAM)hdc, PRF_CLIENT);
+        }
+        if (hdcMem)
+            DeleteDC(hdcMem);
+        EndPaint(&ps);
+        return 0;
+    }
+
+    VOID CancelDrag()
+    {
+        m_bDragArmed = FALSE;
+        if (!m_bDragging)
+            return;
+        m_bDragging = FALSE;
+        if (m_hWnd && ::GetCapture() == m_hWnd)
+            ::ReleaseCapture();
+    }
+
 public:
     BOOL m_bTrackGlow;
+    BOOL m_bBuffered;
 
     BEGIN_MSG_MAP(CNotifyToolbar)
         MESSAGE_HANDLER(WM_NCHITTEST, OnNcHitTestToolbar)
         MESSAGE_HANDLER(WM_MBUTTONUP, OnMButtonUpToolbar)
         MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMoveToolbar)
+        MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDownToolbar)
+        MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUpToolbar)
+        MESSAGE_HANDLER(WM_CAPTURECHANGED, OnCaptureChangedToolbar)
+        MESSAGE_HANDLER(WM_PAINT, OnPaintToolbar)
     END_MSG_MAP()
 
     BOOL Initialize(HWND hWndParent)
@@ -460,6 +606,11 @@ public:
         HWND toolbar = CToolbar::Create(hWndParent, styles);
         m_hWnd = NULL;
         m_bTrackGlow = FALSE;
+        m_bBuffered = FALSE;
+        m_bDragArmed = FALSE;
+        m_bDragging = FALSE;
+        m_iPressIndex = -1;
+        m_ptPress.x = m_ptPress.y = 0;
         return SubclassWindow(toolbar);
     }
 };
@@ -468,7 +619,8 @@ class CTaskSwitchWnd :
     public CComCoClass<CTaskSwitchWnd>,
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public CWindowImpl < CTaskSwitchWnd, CWindow, CControlWinTraits >,
-    public IOleWindow
+    public IOleWindow,
+    public IDropTarget
 {
     CTaskToolbar m_TaskBar;
 
@@ -504,6 +656,15 @@ class CTaskSwitchWnd :
 
     SIZE m_ButtonSize;
 
+    BOOL m_bDragging;
+    CStringW m_DropPath;
+    INT m_DropIndex;
+    PTASK_GROUP m_DragGroup;
+    HWND m_DragWnd;
+    POINT m_DragGrab;
+    POINT m_DragPos;
+    BOOL m_bAnimTimer;
+
     UINT m_uHardErrorMsg;
     CHardErrorThread m_HardErrorThread;
 
@@ -529,9 +690,16 @@ public:
         m_ImageList(NULL),
         m_IsGroupingEnabled(FALSE),
         m_IsDestroying(FALSE),
-        m_nRudeAppValidationCounter(0)
+        m_nRudeAppValidationCounter(0),
+        m_bDragging(FALSE),
+        m_DropIndex(-1),
+        m_DragGroup(NULL),
+        m_DragWnd(NULL),
+        m_bAnimTimer(FALSE)
     {
         ZeroMemory(&m_ButtonSize, sizeof(m_ButtonSize));
+        ZeroMemory(&m_DragGrab, sizeof(m_DragGrab));
+        ZeroMemory(&m_DragPos, sizeof(m_DragPos));
         m_uHardErrorMsg = RegisterWindowMessageW(L"HardError");
         m_TaskbarPinChangedMsg = RegisterWindowMessageW(TASKBAR_PIN_CHANGED_MESSAGE);
     }
@@ -905,6 +1073,8 @@ public:
 
     VOID FreeTaskGroup(IN PTASK_GROUP TaskGroup)
     {
+        if (m_DragGroup == TaskGroup)
+            AbortTaskDrag();
         ClearTaskGroupLaunch(TaskGroup);
         if (TaskGroup->hPinnedIcon)
             DestroyIcon(TaskGroup->hPinnedIcon);
@@ -1081,16 +1251,105 @@ public:
         }
 
         // Use the same order for existing running groups and pins loaded at logon.
-        INT iPin = 0;
-        for (SIZE_T i = 0; i < Records.GetCount(); ++i)
+        ApplyPinOrder(Records);
+        if (Records.GetCount())
+            SaveTaskbarPinOrder();
+    }
+
+    static BOOL IsGroupListed(IN const CAtlArray<PTASK_GROUP> &List, IN PTASK_GROUP TaskGroup)
+    {
+        for (SIZE_T i = 0; i < List.GetCount(); ++i)
         {
-            TaskGroup = FindTaskGroupByPath(Records[i].szTarget);
-            if (TaskGroup && TaskGroup->IsPinned && TaskGroup->Index >= iPin)
+            if (List[i] == TaskGroup)
+                return TRUE;
+        }
+        return FALSE;
+    }
+
+    INT NthPinnedButtonIndex(IN SIZE_T n)
+    {
+        INT Last = -1;
+
+        for (SIZE_T i = 0; i <= n; ++i)
+        {
+            INT Best = -1;
+
+            for (PTASK_GROUP TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
             {
-                MoveTaskButton(TaskGroup->Index, iPin);
-                ++iPin;
+                if (!TaskGroup->IsPinned || TaskGroup->Index <= Last)
+                    continue;
+                if (Best < 0 || TaskGroup->Index < Best)
+                    Best = TaskGroup->Index;
+            }
+            if (Best < 0)
+                return -1;
+            Last = Best;
+        }
+        return Last;
+    }
+
+    VOID ApplyPinOrder(IN const CAtlArray<TASKBAR_PIN_RECORD> &Records)
+    {
+        CAtlArray<TASKBAR_PIN_ORDER> Saved;
+        CAtlArray<PTASK_GROUP> Desired;
+        PTASK_GROUP TaskGroup;
+        SIZE_T i;
+
+        TaskbarPin_LoadOrder(Saved);
+        for (i = 0; i < Saved.GetCount(); ++i)
+        {
+            TaskGroup = FindTaskGroupByPath(Saved[i].szTarget);
+            if (TaskGroup && TaskGroup->IsPinned && TaskGroup->Index >= 0 &&
+                !IsGroupListed(Desired, TaskGroup))
+            {
+                Desired.Add(TaskGroup);
             }
         }
+        for (i = 0; i < Records.GetCount(); ++i)
+        {
+            TaskGroup = FindTaskGroupByPath(Records[i].szTarget);
+            if (TaskGroup && TaskGroup->IsPinned && TaskGroup->Index >= 0 &&
+                !IsGroupListed(Desired, TaskGroup))
+            {
+                Desired.Add(TaskGroup);
+            }
+        }
+        for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+        {
+            if (TaskGroup->IsPinned && TaskGroup->Index >= 0 &&
+                !IsGroupListed(Desired, TaskGroup))
+            {
+                Desired.Add(TaskGroup);
+            }
+        }
+
+        for (i = 0; i < Desired.GetCount(); ++i)
+        {
+            INT Slot = NthPinnedButtonIndex(i);
+
+            if (Slot >= 0 && Desired[i]->Index != Slot)
+                MoveTaskButton(Desired[i]->Index, Slot);
+        }
+    }
+
+    VOID SaveTaskbarPinOrder()
+    {
+        CAtlArray<TASKBAR_PIN_ORDER> Order;
+
+        for (INT i = 0; i < (INT)m_ButtonCount; ++i)
+        {
+            PTASK_GROUP TaskGroup = FindTaskGroupByIndex(i);
+            TASKBAR_PIN_ORDER Entry;
+
+            if (!TaskGroup || !TaskGroup->IsPinned || !TaskGroup->szExePath[0])
+                continue;
+            if (SUCCEEDED(StringCchCopyW(Entry.szTarget, _countof(Entry.szTarget),
+                                         TaskGroup->szExePath)))
+            {
+                Order.Add(Entry);
+            }
+        }
+        TaskbarPin_SaveOrder(Order);
     }
 
     static INT IndexAfterMove(INT index, INT from, INT to)
@@ -1128,6 +1387,353 @@ public:
             }
         }
         UpdateButtonsSize(TRUE);
+    }
+
+    static INT AnimEaseOut(IN INT Elapsed, IN INT Duration)
+    {
+        INT Left;
+
+        if (Duration <= 0 || Elapsed >= Duration)
+            return 1000;
+        if (Elapsed <= 0)
+            return 0;
+        Left = 1000 - (Elapsed * 1000 / Duration);
+        return 1000 - (Left * Left * Left / 1000000);
+    }
+
+    static BOOL GetAnimOffset(IN const TASK_ANIM *pAnim, OUT POINT *ppt)
+    {
+        INT Eased;
+
+        ppt->x = ppt->y = 0;
+        if (!pAnim->dwStart)
+            return FALSE;
+        Eased = AnimEaseOut((INT)(GetTickCount() - pAnim->dwStart), BUTTON_ANIM_DURATION);
+        if (Eased >= 1000)
+            return FALSE;
+        ppt->x = pAnim->dx * (1000 - Eased) / 1000;
+        ppt->y = pAnim->dy * (1000 - Eased) / 1000;
+        return TRUE;
+    }
+
+    static VOID ClearAnim(IN OUT TASK_ANIM *pAnim)
+    {
+        pAnim->dx = pAnim->dy = 0;
+        pAnim->dwStart = 0;
+        pAnim->bSnapped = FALSE;
+    }
+
+    static VOID StartAnim(IN OUT TASK_ANIM *pAnim, IN INT dx, IN INT dy)
+    {
+        DWORD Now = GetTickCount();
+
+        pAnim->dx = dx;
+        pAnim->dy = dy;
+        pAnim->dwStart = Now ? Now : 1;
+    }
+
+    PTASK_ANIM GetButtonAnim(IN INT Index)
+    {
+        PTASK_GROUP TaskGroup;
+        PTASK_ITEM TaskItem;
+
+        if (Index < 0)
+            return NULL;
+        TaskGroup = FindTaskGroupByIndex(Index);
+        if (TaskGroup)
+            return &TaskGroup->Anim;
+        TaskItem = FindTaskItemByIndex(Index);
+        return TaskItem ? &TaskItem->Anim : NULL;
+    }
+
+    BOOL GetSlotStride(OUT POINT *ppt)
+    {
+        RECT rc0, rc1;
+
+        ppt->x = ppt->y = 0;
+        if (!m_ButtonCount || !m_TaskBar.GetItemRect(0, &rc0))
+            return FALSE;
+        if (m_ButtonCount > 1 && m_TaskBar.GetItemRect(1, &rc1) &&
+            (rc1.left != rc0.left || rc1.top != rc0.top))
+        {
+            ppt->x = rc1.left - rc0.left;
+            ppt->y = rc1.top - rc0.top;
+            return TRUE;
+        }
+        if (m_Tray->IsHorizontal())
+            ppt->x = rc0.right - rc0.left;
+        else
+            ppt->y = rc0.bottom - rc0.top;
+        return TRUE;
+    }
+
+    VOID GetDropShift(IN INT Index, OUT POINT *ppt)
+    {
+        POINT Stride;
+
+        ppt->x = ppt->y = 0;
+        if (m_DropIndex < 0 || Index < m_DropIndex || !GetSlotStride(&Stride))
+            return;
+        *ppt = Stride;
+    }
+
+    VOID GetButtonVisualOffset(IN PTASK_ANIM pAnim, IN INT Index, OUT POINT *ppt)
+    {
+        POINT ptShift;
+
+        ppt->x = ppt->y = 0;
+        if (pAnim)
+            GetAnimOffset(pAnim, ppt);
+        GetDropShift(Index, &ptShift);
+        ppt->x += ptShift.x;
+        ppt->y += ptShift.y;
+    }
+
+    VOID CaptureButtonPositions()
+    {
+        RECT rc;
+        POINT pt;
+
+        for (INT i = 0; i < (INT)m_ButtonCount; ++i)
+        {
+            PTASK_ANIM pAnim = GetButtonAnim(i);
+
+            if (!pAnim || !m_TaskBar.GetItemRect(i, &rc))
+                continue;
+            GetButtonVisualOffset(pAnim, i, &pt);
+            pAnim->SnapX = rc.left + pt.x;
+            pAnim->SnapY = rc.top + pt.y;
+            pAnim->bSnapped = TRUE;
+        }
+    }
+
+    VOID AnimateButtonPositions()
+    {
+        RECT rc;
+        INT DragIndex = DragButtonIndex();
+        BOOL bAny = FALSE;
+
+        for (INT i = 0; i < (INT)m_ButtonCount; ++i)
+        {
+            PTASK_ANIM pAnim = GetButtonAnim(i);
+            INT dx, dy;
+
+            if (!pAnim || !pAnim->bSnapped)
+                continue;
+            pAnim->bSnapped = FALSE;
+            if (i == DragIndex || !m_TaskBar.GetItemRect(i, &rc))
+            {
+                ClearAnim(pAnim);
+                continue;
+            }
+            POINT ptShift;
+
+            GetDropShift(i, &ptShift);
+            dx = pAnim->SnapX - (rc.left + ptShift.x);
+            dy = pAnim->SnapY - (rc.top + ptShift.y);
+            if (!dx && !dy)
+            {
+                ClearAnim(pAnim);
+                continue;
+            }
+            StartAnim(pAnim, dx, dy);
+            bAny = TRUE;
+        }
+        if (bAny)
+            StartButtonAnimation();
+    }
+
+    BOOL HasButtonAnimation()
+    {
+        POINT pt;
+        BOOL bAny = FALSE;
+
+        for (INT i = 0; i < (INT)m_ButtonCount; ++i)
+        {
+            PTASK_ANIM pAnim = GetButtonAnim(i);
+
+            if (!pAnim || !pAnim->dwStart)
+                continue;
+            if (GetAnimOffset(pAnim, &pt))
+                bAny = TRUE;
+            else
+                ClearAnim(pAnim);
+        }
+        return bAny;
+    }
+
+    VOID StartButtonAnimation()
+    {
+        if (!m_bAnimTimer)
+            m_bAnimTimer = SetTimer(TIMER_ID_BUTTON_ANIM, BUTTON_ANIM_INTERVAL, NULL) != 0;
+        if (IsWin7Bar())
+            m_TaskBar.m_bBuffered = TRUE;
+        m_TaskBar.InvalidateRect(NULL, TRUE);
+    }
+
+    VOID MoveTaskButtonAnimated(IN INT from, IN INT to)
+    {
+        BOOL bAnimate = IsWin7Bar();
+
+        if (from == to)
+            return;
+        if (bAnimate)
+            CaptureButtonPositions();
+        MoveTaskButton(from, to);
+        if (bAnimate)
+            AnimateButtonPositions();
+    }
+
+    INT DragButtonIndex()
+    {
+        PTASK_ITEM TaskItem;
+
+        if (!m_bDragging)
+            return -1;
+        if (m_DragGroup)
+            return m_DragGroup->IsCollapsed ? m_DragGroup->Index : -1;
+        TaskItem = m_DragWnd ? FindTaskItem(m_DragWnd) : NULL;
+        return TaskItem ? TaskItem->Index : -1;
+    }
+
+    BOOL GetDragOffset(OUT POINT *ppt)
+    {
+        RECT rc, rcClient;
+        INT Index = DragButtonIndex();
+        INT x, y, cx, cy;
+
+        ppt->x = ppt->y = 0;
+        if (Index < 0 || !m_TaskBar.GetItemRect(Index, &rc) ||
+            !m_TaskBar.GetClientRect(&rcClient))
+        {
+            return FALSE;
+        }
+
+        cx = rc.right - rc.left;
+        cy = rc.bottom - rc.top;
+        x = m_DragPos.x - m_DragGrab.x;
+        y = m_DragPos.y - m_DragGrab.y;
+        if (x > rcClient.right - cx)
+            x = rcClient.right - cx;
+        if (x < rcClient.left)
+            x = rcClient.left;
+        if (y > rcClient.bottom - cy)
+            y = rcClient.bottom - cy;
+        if (y < rcClient.top)
+            y = rcClient.top;
+        ppt->x = x - rc.left;
+        ppt->y = y - rc.top;
+        return TRUE;
+    }
+
+    INT CalcDragTarget(IN INT DragIndex)
+    {
+        RECT rc, rcDrag;
+        POINT pt, ptCentre;
+        INT Target = 0;
+
+        if (DragIndex < 0 || !m_TaskBar.GetItemRect(DragIndex, &rcDrag) || !GetDragOffset(&pt))
+            return -1;
+        ptCentre.x = rcDrag.left + pt.x + (rcDrag.right - rcDrag.left) / 2;
+        ptCentre.y = rcDrag.top + pt.y + (rcDrag.bottom - rcDrag.top) / 2;
+
+        for (INT i = 0; i < (INT)m_ButtonCount; ++i)
+        {
+            BOOL bBefore;
+
+            if (i == DragIndex || !m_TaskBar.GetItemRect(i, &rc))
+                continue;
+            if (rc.bottom <= ptCentre.y)
+                bBefore = TRUE;
+            else if (rc.top > ptCentre.y)
+                bBefore = FALSE;
+            else
+                bBefore = ((rc.left + rc.right) / 2) < ptCentre.x;
+            if (bBefore)
+                ++Target;
+        }
+        return Target;
+    }
+
+    BOOL BeginTaskDrag(IN INT Index, IN POINT ptPress)
+    {
+        RECT rc;
+        PTASK_GROUP TaskGroup;
+        PTASK_ITEM TaskItem;
+
+        m_bDragging = FALSE;
+        m_DragGroup = NULL;
+        m_DragWnd = NULL;
+        if (Index < 0 || Index >= (INT)m_ButtonCount)
+            return FALSE;
+        if (!m_TaskBar.GetItemRect(Index, &rc))
+            return FALSE;
+        TaskGroup = FindTaskGroupByIndex(Index);
+        TaskItem = TaskGroup ? NULL : FindTaskItemByIndex(Index);
+        if (!TaskGroup && !TaskItem)
+            return FALSE;
+
+        m_DragGroup = TaskGroup;
+        m_DragWnd = TaskItem ? TaskItem->hWnd : NULL;
+        m_DragGrab.x = ptPress.x - rc.left;
+        m_DragGrab.y = ptPress.y - rc.top;
+        m_DragPos = ptPress;
+        m_bDragging = TRUE;
+        CancelTaskPreview();
+        m_HoverIndex = -1;
+        if (IsWin7Bar())
+            m_TaskBar.m_bBuffered = TRUE;
+        UpdateButtonsSize(TRUE);
+        return TRUE;
+    }
+
+    VOID UpdateTaskDrag(IN POINT pt)
+    {
+        INT Index = DragButtonIndex(), Target;
+
+        if (!m_bDragging)
+            return;
+        if (Index < 0)
+        {
+            EndTaskDrag();
+            return;
+        }
+        m_DragPos = pt;
+        Target = CalcDragTarget(Index);
+        if (Target >= 0 && Target != Index)
+            MoveTaskButtonAnimated(Index, Target);
+        m_TaskBar.InvalidateRect(NULL, TRUE);
+    }
+
+    VOID EndTaskDrag()
+    {
+        POINT pt = { 0, 0 };
+        INT Index;
+        PTASK_ANIM pAnim;
+
+        if (!m_bDragging)
+            return;
+        Index = DragButtonIndex();
+        pAnim = GetButtonAnim(Index);
+        GetDragOffset(&pt);
+        m_bDragging = FALSE;
+        m_DragGroup = NULL;
+        m_DragWnd = NULL;
+        if (pAnim && IsWin7Bar() && (pt.x || pt.y))
+            StartAnim(pAnim, pt.x, pt.y);
+        SaveTaskbarPinOrder();
+        StartButtonAnimation();
+    }
+
+    VOID AbortTaskDrag()
+    {
+        if (!m_bDragging)
+            return;
+        m_bDragging = FALSE;
+        m_DragGroup = NULL;
+        m_DragWnd = NULL;
+        m_TaskBar.CancelDrag();
+        m_TaskBar.m_bBuffered = FALSE;
     }
 
     VOID FreeAllTaskGroups()
@@ -2401,6 +3007,9 @@ public:
 
         RegisterShellHook(m_hWnd, 3); /* 1 if no NT! We're targeting NT so we don't care! */
 
+        RegisterDragDrop(m_TaskBar.m_hWnd, static_cast<IDropTarget *>(this));
+        RegisterDragDrop(m_hWnd, static_cast<IDropTarget *>(this));
+
         SyncTaskbarPins();
         RefreshWindowList();
 
@@ -2417,7 +3026,11 @@ public:
     {
         m_IsDestroying = TRUE;
 
+        RevokeDragDrop(m_TaskBar.m_hWnd);
+        RevokeDragDrop(m_hWnd);
+        AbortTaskDrag();
         CancelTaskPreview();
+        KillTimer(TIMER_ID_BUTTON_ANIM);
         KillTimer(TIMER_ID_VALIDATE_RUDE_APP);
 
         /* Unregister the shell hook */
@@ -3486,6 +4099,34 @@ public:
         return DrawWin7TaskButtonWorker(nmtbcd, TaskItem->IconIndex, 1);
     }
 
+    VOID DrawDraggedTaskButton(IN const NMTBCUSTOMDRAW *nmtbcd)
+    {
+        NMTBCUSTOMDRAW cd;
+        RECT rc;
+        POINT pt;
+        INT Index = DragButtonIndex();
+        PTASK_GROUP TaskGroup;
+        PTASK_ITEM TaskItem;
+
+        if (Index < 0 || !m_TaskBar.GetItemRect(Index, &rc) || !GetDragOffset(&pt))
+            return;
+        OffsetRect(&rc, pt.x, pt.y);
+        TaskGroup = FindTaskGroupByIndex(Index);
+        TaskItem = TaskGroup ? NULL : FindTaskItemByIndex(Index);
+
+        ZeroMemory(&cd, sizeof(cd));
+        cd.nmcd.hdc = nmtbcd->nmcd.hdc;
+        cd.nmcd.rc = rc;
+        cd.nmcd.dwItemSpec = (DWORD_PTR)Index;
+        cd.nmcd.uItemState = CDIS_HOT;
+        if (TaskGroup ? GroupContainsActive(TaskGroup) : (TaskItem && m_ActiveTaskItem == TaskItem))
+            cd.nmcd.uItemState |= CDIS_CHECKED;
+        if (TaskGroup)
+            DrawWin7TaskButtonWorker(&cd, TaskGroup->IconIndex, (INT)TaskGroup->dwTaskCount);
+        else if (TaskItem)
+            DrawWin7TaskButton(&cd, TaskItem);
+    }
+
     LRESULT HandleItemPaint(IN OUT NMTBCUSTOMDRAW *nmtbcd)
     {
         LRESULT Ret = CDRF_DODEFAULT;
@@ -3494,6 +4135,17 @@ public:
 
         TaskItem = FindTaskItemByIndex((INT) nmtbcd->nmcd.dwItemSpec);
         TaskGroup = FindTaskGroupByIndex((INT) nmtbcd->nmcd.dwItemSpec);
+        if (IsWin7Bar())
+        {
+            PTASK_ANIM pAnim = TaskGroup ? &TaskGroup->Anim : TaskItem ? &TaskItem->Anim : NULL;
+            POINT pt;
+
+            if ((INT)nmtbcd->nmcd.dwItemSpec == DragButtonIndex())
+                return CDRF_SKIPDEFAULT;
+            GetButtonVisualOffset(pAnim, (INT)nmtbcd->nmcd.dwItemSpec, &pt);
+            if (pt.x || pt.y)
+                OffsetRect(&nmtbcd->nmcd.rc, pt.x, pt.y);
+        }
         if (TaskGroup == NULL && TaskItem != NULL)
         {
             ASSERT(TaskItem != NULL);
@@ -3594,6 +4246,14 @@ public:
 
             case CDDS_PREPAINT:
                 Ret = CDRF_NOTIFYITEMDRAW;
+                if (m_bDragging && IsWin7Bar())
+                    Ret |= CDRF_NOTIFYPOSTPAINT;
+                break;
+
+            case CDDS_POSTPAINT:
+                if (m_bDragging && IsWin7Bar())
+                    DrawDraggedTaskButton(nmtbcd);
+                Ret = CDRF_DODEFAULT;
                 break;
 
             default:
@@ -3893,6 +4553,27 @@ public:
         return MA_NOACTIVATE;
     }
 
+    LRESULT OnTaskDragBegin(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+
+        return BeginTaskDrag((INT)wParam, pt);
+    }
+
+    LRESULT OnTaskDragMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+
+        UpdateTaskDrag(pt);
+        return 0;
+    }
+
+    LRESULT OnTaskDragEnd(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        EndTaskDrag();
+        return 0;
+    }
+
     LRESULT OnTaskButtonMButton(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
         if (IsWin7Bar())
@@ -3916,6 +4597,19 @@ public:
                 m_HoverPreviewPending = FALSE;
                 if (bPending && m_HoverIndex >= 0 && m_TaskBar.GetHotItem() == m_HoverIndex)
                     ShowHoverPreview(m_HoverIndex);
+                break;
+            }
+
+            case TIMER_ID_BUTTON_ANIM:
+            {
+                if (!HasButtonAnimation())
+                {
+                    KillTimer(TIMER_ID_BUTTON_ANIM);
+                    m_bAnimTimer = FALSE;
+                    if (!m_bDragging)
+                        m_TaskBar.m_bBuffered = FALSE;
+                }
+                m_TaskBar.InvalidateRect(NULL, TRUE);
                 break;
             }
 
@@ -3990,6 +4684,157 @@ public:
         return S_OK;
     }
 
+    VOID SetDropIndex(IN INT Index)
+    {
+        BOOL bAnimate = IsWin7Bar();
+
+        if (Index == m_DropIndex)
+            return;
+        if (bAnimate)
+            CaptureButtonPositions();
+        m_DropIndex = Index;
+        if (bAnimate)
+            AnimateButtonPositions();
+        m_TaskBar.InvalidateRect(NULL, TRUE);
+    }
+
+    static BOOL GetDropPinPath(IN IDataObject *pDataObj, OUT CStringW &Path)
+    {
+        FORMATETC Format = { CF_HDROP, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        STGMEDIUM Medium;
+        BOOL bResult = FALSE;
+
+        Path.Empty();
+        if (!pDataObj || FAILED(pDataObj->GetData(&Format, &Medium)))
+            return FALSE;
+
+        HDROP hDrop = (HDROP)Medium.hGlobal;
+        if (Medium.tymed == TYMED_HGLOBAL && hDrop)
+        {
+            WCHAR szFile[MAX_PATH];
+            UINT Length = DragQueryFileW(hDrop, 0, NULL, 0);
+
+            if (DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0) == 1 &&
+                Length && Length < _countof(szFile) &&
+                DragQueryFileW(hDrop, 0, szFile, _countof(szFile)) == Length &&
+                TaskbarPin_IsPinnable(szFile, NULL))
+            {
+                Path = szFile;
+                bResult = TRUE;
+            }
+        }
+        ReleaseStgMedium(&Medium);
+        return bResult;
+    }
+
+    INT DropIndexFromPoint(IN POINTL ptScreen)
+    {
+        POINT pt = { ptScreen.x, ptScreen.y };
+        RECT rc;
+        INT Index = 0;
+
+        ::ScreenToClient(m_TaskBar.m_hWnd, &pt);
+        for (INT i = 0; i < (INT)m_ButtonCount; ++i)
+        {
+            BOOL bBefore;
+
+            if (!m_TaskBar.GetItemRect(i, &rc))
+                continue;
+            if (rc.bottom <= pt.y)
+                bBefore = TRUE;
+            else if (rc.top > pt.y)
+                bBefore = FALSE;
+            else
+                bBefore = ((rc.left + rc.right) / 2) < pt.x;
+            if (bBefore)
+                ++Index;
+        }
+        return Index;
+    }
+
+    // *** IDropTarget methods ***
+
+    STDMETHODIMP
+    DragEnter(IDataObject *pDataObj, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect) override
+    {
+        if (!pdwEffect)
+            return E_INVALIDARG;
+
+        m_DropPath.Empty();
+        if ((*pdwEffect & DROPEFFECT_LINK) && !TaskbarPin_IsDisabled() &&
+            GetDropPinPath(pDataObj, m_DropPath))
+        {
+            *pdwEffect = DROPEFFECT_LINK;
+            SetDropIndex(DropIndexFromPoint(pt));
+        }
+        else
+        {
+            *pdwEffect = DROPEFFECT_NONE;
+            SetDropIndex(-1);
+        }
+        return S_OK;
+    }
+
+    STDMETHODIMP
+    DragOver(DWORD grfKeyState, POINTL pt, DWORD *pdwEffect) override
+    {
+        if (!pdwEffect)
+            return E_INVALIDARG;
+
+        if (m_DropPath.IsEmpty() || !(*pdwEffect & DROPEFFECT_LINK))
+        {
+            *pdwEffect = DROPEFFECT_NONE;
+            SetDropIndex(-1);
+            return S_OK;
+        }
+        *pdwEffect = DROPEFFECT_LINK;
+        SetDropIndex(DropIndexFromPoint(pt));
+        return S_OK;
+    }
+
+    STDMETHODIMP
+    DragLeave() override
+    {
+        m_DropPath.Empty();
+        SetDropIndex(-1);
+        return S_OK;
+    }
+
+    STDMETHODIMP
+    Drop(IDataObject *pDataObj, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect) override
+    {
+        CStringW Path, Target;
+        INT Index;
+        DWORD AllowedEffects;
+
+        if (!pdwEffect)
+            return E_INVALIDARG;
+
+        AllowedEffects = *pdwEffect;
+        *pdwEffect = DROPEFFECT_NONE;
+        Index = m_DropIndex >= 0 ? m_DropIndex : DropIndexFromPoint(pt);
+        m_DropPath.Empty();
+        SetDropIndex(-1);
+        if (!(AllowedEffects & DROPEFFECT_LINK) || TaskbarPin_IsDisabled() ||
+            !GetDropPinPath(pDataObj, Path))
+            return S_OK;
+
+        if (FAILED(TaskbarPin_Create(Path)))
+            return S_OK;
+
+        SyncTaskbarPins();
+        if (TaskbarPin_ResolveTarget(Path, Target))
+        {
+            PTASK_GROUP TaskGroup = FindTaskGroupByPath(Target);
+
+            if (TaskGroup && TaskGroup->Index >= 0 && Index >= 0 && Index < (INT)m_ButtonCount)
+                MoveTaskButtonAnimated(TaskGroup->Index, Index);
+            SaveTaskbarPinOrder();
+        }
+        *pdwEffect = DROPEFFECT_LINK;
+        return S_OK;
+    }
+
     // *** IOleWindow methods ***
 
     STDMETHODIMP
@@ -4029,6 +4874,9 @@ public:
         MESSAGE_HANDLER(WM_MOUSEACTIVATE, OnMouseActivate)
         MESSAGE_HANDLER(WM_KLUDGEMINRECT, OnKludgeItemRect)
         MESSAGE_HANDLER(TSWM_TASKBUTTONMBUTTON, OnTaskButtonMButton)
+        MESSAGE_HANDLER(TSWM_TASKDRAGBEGIN, OnTaskDragBegin)
+        MESSAGE_HANDLER(TSWM_TASKDRAGMOVE, OnTaskDragMove)
+        MESSAGE_HANDLER(TSWM_TASKDRAGEND, OnTaskDragEnd)
         MESSAGE_HANDLER(WM_COPYDATA, OnCopyData)
         MESSAGE_HANDLER(WM_WINDOWPOSCHANGED, OnWindowPosChanged)
     END_MSG_MAP()
@@ -4038,6 +4886,7 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
     BEGIN_COM_MAP(CTaskSwitchWnd)
         COM_INTERFACE_ENTRY_IID(IID_IOleWindow, IOleWindow)
+        COM_INTERFACE_ENTRY_IID(IID_IDropTarget, IDropTarget)
     END_COM_MAP()
 };
 
