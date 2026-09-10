@@ -5268,7 +5268,14 @@ MmCreateSection (OUT PVOID  * Section,
             }
 #else
             if ((AllocationAttributes & SEC_IMAGE) && (Status == STATUS_FILE_LOCKED_WITH_WRITERS))
+            {
+                if (ReadAcquire(&PsGetCurrentProcess()->SignatureMitigationPolicy) & 1)
+                {
+                    Status = STATUS_SHARING_VIOLATION;
+                    goto Exit;
+                }
                 DPRINT1("Creating image map with writers open on the file!\n");
+            }
 #endif
         }
     }
@@ -5292,6 +5299,9 @@ MmCreateSection (OUT PVOID  * Section,
         }
         else
         {
+            Status = MiValidateImageSigningPolicy(FileObject);
+            if (!NT_SUCCESS(Status))
+                goto Exit;
             Status = MmCreateImageSection(SectionObject,
                                           DesiredAccess,
                                           ObjectAttributes,

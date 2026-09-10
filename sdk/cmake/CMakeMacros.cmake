@@ -309,6 +309,17 @@ function(add_cd_file)
         message(FATAL_ERROR "You must provide a cd name (or \"all\" for all of them) to install the file on!")
     endif()
 
+    # Trust exact OS build artifacts, independently of their runtime path.
+    # The kernel embeds these hashes for code-integrity image policy checks.
+    if(_CD_TARGET AND _CD_DESTINATION MATCHES "^reactos/(system32|winsxs)(/|$)")
+        if(TARGET ${_CD_TARGET})
+            get_target_property(_ci_module_type ${_CD_TARGET} REACTOS_MODULE_TYPE)
+            if(_ci_module_type MATCHES "^(nativedll|win32dll|win32ocx|cpl|module)$")
+                set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_TARGETS ${_CD_TARGET})
+            endif()
+        endif()
+    endif()
+
     # get file if we need to
     if(NOT _CD_FILE)
         set(_CD_FILE "$<TARGET_FILE:${_CD_TARGET}>")
