@@ -25,9 +25,17 @@ link_count()
         awk '/Number of Hard Links/ { print $5 }'
 }
 
+mft_allocation()
+{
+    "$ntfsinfo" -i 0 "$image" |
+        awk '/^[[:space:]]+Allocated size:/ { total += $3 } END { print total + 0 }'
+}
+
 truncate -s 256M "$image"
 "$mkntfs" -F -Q -q -L NAMESPACE "$image"
 baseline=$(free_clusters)
+mft_before=$(mft_allocation)
+cluster_size=$("$ntfsinfo" -m "$image" | awk '/Cluster Size:/ { print $3; exit }')
 
 # Deletion reclaims a file's name, record, and clusters.
 "$driver" --create-dir "$image" /dir >/dev/null
@@ -145,6 +153,6 @@ test "$("$driver" --list "$image" /grow | wc -l)" -eq 0
 # Every cluster except permanent chunked $MFT growth must be free again.
 final=$(free_clusters)
 test "$final" -le "$baseline"
-test $((baseline - final)) -le 400
+test $(((baseline - final) * cluster_size)) -eq $(($(mft_allocation) - mft_before))
 
 "$ntfsfix" -n "$image" >/dev/null
