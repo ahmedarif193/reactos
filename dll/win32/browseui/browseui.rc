@@ -26,6 +26,7 @@
 #include "resource.h"
 
 #include "version.rc"
+#include "res/operationsprogress.rc"
 
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 

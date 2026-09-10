@@ -58,7 +58,7 @@
 #include "regtreeoptions.h"
 #include "CShellTaskScheduler.h"
 #include "CTaskbarList.h"
-#include "CProgressDialog.h"
+#include "COperationsProgressDialog.h"
 #include "CUserAssist.h"
 #include "browseui.h"
 #include <stdio.h>
