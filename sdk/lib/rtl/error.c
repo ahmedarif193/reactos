@@ -32,7 +32,7 @@ struct error_table
     const DWORD *table;
 };
 
-static const struct error_table error_table[20];
+static const struct error_table error_table[21];
 
 /**************************************************************************
  *           RtlNtStatusToDosErrorNoTeb (NTDLL.@)
@@ -1534,6 +1534,11 @@ static const DWORD table_c0150001[39] =
    ERROR_SXS_FILE_HASH_MISSING             /* c0150027 (STATUS_SXS_FILE_HASH_MISSING) */
 };
 
+static const DWORD table_c0000428[] =
+{
+    ERROR_INVALID_IMAGE_HASH              /* c0000428 (STATUS_INVALID_IMAGE_HASH) */
+};
+
 static const struct error_table error_table[] =
 {
     { 0x00000102, 0x00000122, table_00000102 },
@@ -1549,6 +1554,7 @@ static const struct error_table error_table[] =
     { 0x80130001, 0x80130006, table_80130001 },
     { 0xc0000001, 0xc000019c, table_c0000001 },
     { 0xc0000202, 0xc000038e, table_c0000202 },
+    { 0xc0000428, 0xc0000429, table_c0000428 },
     { 0xc0020001, 0xc0020064, table_c0020001 },
     { 0xc0030001, 0xc003000d, table_c0030001 },
     { 0xc0030059, 0xc0030062, table_c0030059 },
