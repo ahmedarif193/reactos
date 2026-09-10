@@ -2065,9 +2065,10 @@ MiQueryAddressState(IN PVOID Va,
     ASSERT((Vad->StartingVpn <= ((ULONG_PTR)Va >> PAGE_SHIFT)) &&
            (Vad->EndingVpn >= ((ULONG_PTR)Va >> PAGE_SHIFT)));
 
-    /* Only normal and AWE VADs supported */
+    /* Normal, AWE, and driver-owned MDL mappings are handled below. */
     ASSERT((Vad->u.VadFlags.VadType == VadNone) ||
-           (Vad->u.VadFlags.VadType == VadAwe));
+           (Vad->u.VadFlags.VadType == VadAwe) ||
+           (Vad->u.VadFlags.VadType == VadDevicePhysicalMemory));
 
     /* ARM64 user leaves live under TTBR0, not the recursive TTBR1 view. */
 #if defined(_M_ARM64)
@@ -2182,6 +2183,21 @@ MiQueryAddressState(IN PVOID Va,
 
     } while (FALSE);
 #endif
+
+    /* An MDL mapping owns its PTEs, not the physical pages they describe.
+       In particular, a device BAR need not have entries in the PFN database.
+       Its user protection is fixed when the VAD is created. */
+    if (Vad->u.VadFlags.VadType == VadDevicePhysicalMemory)
+    {
+        if (ValidPte && PointerPte->u.Hard.Valid)
+        {
+            *ReturnedProtect = MmProtectToValue[Vad->u.VadFlags.Protection];
+            return MEM_COMMIT;
+        }
+
+        *ReturnedProtect = 0;
+        return MEM_RESERVE;
+    }
 
     /* An AWE address is committed exactly while a physical page is mapped
        there; its PTE is only ever zero or valid */
