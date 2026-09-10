@@ -3191,9 +3191,8 @@ VidSchSubmitCommandVirtual(
     KmdPrivateDataSize = Context->ContextInfo.DmaBufferPrivateDataSize;
     if (DriverPrivateDataSize > KmdPrivateDataSize)
         return STATUS_INVALID_PARAMETER;
-    /* A non-null virtual submission needs a miniport that executes GPU
-     * virtual addresses; the caller has already validated the buffer range
-     * against the submitting process's page tables. */
+    /* A non-null virtual submission needs the miniport's virtual submission
+     * callback, which interprets the command address and private payload. */
     if (!NullRendering && DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL)
         return STATUS_NOT_SUPPORTED;
 
@@ -3250,39 +3249,42 @@ VidSchSubmitCommandVirtual(
     Packet->DmaBufferGpuVa = DmaBufferGpuVa;
     Packet->VirtualDmaBufferSize = DmaBufferSize;
     /*
-     * Pin the mapping containing the command start before queueing.  This
-     * closes the unmap/remap window without treating the KMD-owned
-     * DmaBufferSize as a dxgkrnl GPU-VA span; native dxgkrnl passes that size
-     * through rather than requiring Commands + DmaBufferSize to fit one
-     * mapping.
+     * Pin an existing command-start mapping before queueing. Miniports can
+     * instead carry their commands in private data, with no VidMm mapping
+     * at DmaBufferGpuVa. The lookup and optional pin are atomic, and CPU
+     * inspection below is only valid when a mapping was actually pinned.
      */
     if (!NullRendering)
     {
         PDXGKRNL_DEVICE PinDevice = (PDXGKRNL_DEVICE)Context->Device;
+        BOOLEAN Pinned;
 
         if (PinDevice == NULL || PinDevice->ProcessRecord == NULL ||
-            !DxgkGpuVaPinRange(Adapter,
-                               PinDevice->ProcessRecord,
-                               DmaBufferGpuVa,
-                               1))
+            !DxgkGpuVaPinCommandStart(Adapter,
+                                      PinDevice->ProcessRecord,
+                                      DmaBufferGpuVa,
+                                      &Pinned))
         {
             VidSchpDereferencePacket(Packet);
             VidSchpReleaseCall(Adapter);
             return STATUS_INVALID_PARAMETER;
         }
-        Packet->GpuVaPinProcess = PinDevice->ProcessRecord;
-        /* Capture the batch head now, under the pin, for fault attribution. */
-        Packet->BatchHeadBytes = min(DmaBufferSize, sizeof(Packet->BatchHead));
-        if (!DxgkGpuVaCopyFromProcess(PinDevice->ProcessRecord,
-                                      DmaBufferGpuVa,
-                                      Packet->BatchHead,
-                                      Packet->BatchHeadBytes))
+        if (Pinned)
         {
-            Packet->BatchHeadBytes = 0;
-        }
-        else
-        {
-            VidSchpScanStateBaseAddress(Context, PinDevice->ProcessRecord, DmaBufferGpuVa, DmaBufferSize);
+            Packet->GpuVaPinProcess = PinDevice->ProcessRecord;
+            /* Capture the batch head now, under the pin, for fault attribution. */
+            Packet->BatchHeadBytes = min(DmaBufferSize, sizeof(Packet->BatchHead));
+            if (!DxgkGpuVaCopyFromProcess(PinDevice->ProcessRecord,
+                                          DmaBufferGpuVa,
+                                          Packet->BatchHead,
+                                          Packet->BatchHeadBytes))
+            {
+                Packet->BatchHeadBytes = 0;
+            }
+            else
+            {
+                VidSchpScanStateBaseAddress(Context, PinDevice->ProcessRecord, DmaBufferGpuVa, DmaBufferSize);
+            }
         }
     }
     Packet->Context = Context;

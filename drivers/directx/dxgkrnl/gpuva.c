@@ -3954,12 +3954,16 @@ DxgkpGpuVaPinRange(
     _In_ PDXGKRNL_PROCESS Process,
     _In_ D3DGPU_VIRTUAL_ADDRESS Address,
     _In_ ULONGLONG Size,
-    _In_ BOOLEAN RequireExecute)
+    _In_ BOOLEAN RequireExecute,
+    _In_ BOOLEAN AllowUnmapped,
+    _Out_opt_ PBOOLEAN Pinned)
 {
     BOOLEAN Valid;
 
     PAGED_CODE();
 
+    if (Pinned != NULL)
+        *Pinned = FALSE;
     if (Process == NULL || Address == 0 || Size == 0)
         return FALSE;
     if (!DxgkGpuVaPageTableReady(Adapter, Process))
@@ -3967,6 +3971,11 @@ DxgkpGpuVaPinRange(
 
     ExAcquireFastMutex(&Process->GpuVaLock);
     Valid = GpuVaListCoversRange(&Process->GpuVaRangeList, Address, Size, GpuVaStateMapped);
+    if (!Valid && AllowUnmapped)
+    {
+        ExReleaseFastMutex(&Process->GpuVaLock);
+        return TRUE;
+    }
     if (Valid && RequireExecute &&
         Adapter->GpuMmuCaps.NoExecuteMemorySupported &&
         !GpuVaListAllowsExecute(&Process->GpuVaRangeList,
@@ -3977,6 +3986,8 @@ DxgkpGpuVaPinRange(
     }
     if (Valid)
         Valid = GpuVaPinAcquire(Process, Address, Size);
+    if (Pinned != NULL)
+        *Pinned = Valid;
     ExReleaseFastMutex(&Process->GpuVaLock);
     return Valid;
 }
@@ -3988,7 +3999,20 @@ DxgkGpuVaPinRange(
     _In_ D3DGPU_VIRTUAL_ADDRESS Address,
     _In_ ULONGLONG Size)
 {
-    return DxgkpGpuVaPinRange(Adapter, Process, Address, Size, TRUE);
+    return DxgkpGpuVaPinRange(Adapter, Process, Address, Size, TRUE, FALSE, NULL);
+}
+
+/* Some miniports interpret Commands using their private command payload.
+ * Pin a VidMm mapping if one exists, while allowing that opaque address
+ * contract. Lookup and pin remain atomic with respect to unmap/remap. */
+BOOLEAN
+DxgkGpuVaPinCommandStart(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _Out_ PBOOLEAN Pinned)
+{
+    return DxgkpGpuVaPinRange(Adapter, Process, Address, 1, TRUE, TRUE, Pinned);
 }
 
 BOOLEAN
@@ -3998,7 +4022,7 @@ DxgkGpuVaPinAllocationRange(
     _In_ D3DGPU_VIRTUAL_ADDRESS Address,
     _In_ ULONGLONG Size)
 {
-    return DxgkpGpuVaPinRange(Adapter, Process, Address, Size, FALSE);
+    return DxgkpGpuVaPinRange(Adapter, Process, Address, Size, FALSE, FALSE, NULL);
 }
 
 VOID

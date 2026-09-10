@@ -2572,6 +2572,13 @@ DxgkGpuVaPinRange(
     _In_ D3DGPU_VIRTUAL_ADDRESS Address,
     _In_ ULONGLONG Size);
 
+BOOLEAN
+DxgkGpuVaPinCommandStart(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PROCESS Process,
+    _In_ D3DGPU_VIRTUAL_ADDRESS Address,
+    _Out_ PBOOLEAN Pinned);
+
 VOID
 DxgkGpuVaUnpinRange(
     _In_ PDXGKRNL_PROCESS Process,
