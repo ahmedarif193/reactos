@@ -145,9 +145,9 @@ PopProcessShutDownLists(VOID)
     }
 }
 
-VOID
+static VOID
 NTAPI
-PopShutdownHandler(VOID)
+PopDisplayShutdownScreen(VOID)
 {
     /* Stop all interrupts */
     KeRaiseIrqlToDpcLevel();
@@ -167,6 +167,13 @@ PopShutdownHandler(VOID)
         /* Do it in text-mode */
         DisplayShutdownText();
     }
+}
+
+VOID
+NTAPI
+PopShutdownHandler(VOID)
+{
+    PopDisplayShutdownScreen();
 
     /* Hang the system */
     for (;;) HalHaltSystem();
@@ -194,7 +201,11 @@ PopShutdownSystem(IN POWER_ACTION SystemAction)
             /* Try platform driver first, then legacy */
             //PopInvokeSystemStateHandler(PowerStateShutdownReset, NULL);
             PopSetSystemPowerState(PowerSystemShutdown, SystemAction);
+            PopDisplayShutdownScreen();
             HalReturnToFirmware(HalRebootRoutine);
+
+            /* The firmware refused to restart us */
+            for (;;) HalHaltSystem();
             break;
 
         case PowerActionShutdown:
@@ -202,8 +213,8 @@ PopShutdownSystem(IN POWER_ACTION SystemAction)
             /* Check for group policy that says to use "it is now safe" screen */
             if (PopShutdownPowerOffPolicy)
             {
-                /* FIXFIX: Switch to legacy shutdown handler */
-                //PopPowerStateHandlers[PowerStateShutdownOff].Handler = PopShutdownHandler;
+                PopSetSystemPowerState(PowerSystemShutdown, SystemAction);
+                PopShutdownHandler();
             }
 
         case PowerActionShutdownOff:
@@ -211,12 +222,17 @@ PopShutdownSystem(IN POWER_ACTION SystemAction)
             /* Call shutdown handler */
             //PopInvokeSystemStateHandler(PowerStateShutdownOff, NULL);
 
-            /* ReactOS Hack */
             PopSetSystemPowerState(PowerSystemShutdown, SystemAction);
-            PopShutdownHandler();
-
-            /* If that didn't work, call the HAL */
+#if defined(_M_ARM64)
+            /* The ARM64 HAL provides the PSCI power-off fallback. */
+            PopDisplayShutdownScreen();
             HalReturnToFirmware(HalPowerDownRoutine);
+
+            /* The firmware refused to power us off */
+            for (;;) HalHaltSystem();
+#else
+            PopShutdownHandler();
+#endif
             break;
 
         default:
