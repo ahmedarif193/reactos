@@ -822,6 +822,7 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
     KEVENT Event;
     LARGE_INTEGER Timeout;
     BM_REQUEST_TYPE RequestType;
+    ULONGLONG ResetStartTime;
     ULONG ResetElapsed = 0;
     NTSTATUS Status;
 
@@ -853,7 +854,7 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     HubExtension->HubFlags |= USBHUB_FDO_FLAG_RESET_PORT_LOCK;
 
-    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
 
     InterlockedExchangePointer((PVOID)&HubExtension->pResetPortEvent,
                                &Event);
@@ -886,6 +887,7 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
         goto Exit;
     }
 
+    ResetStartTime = KeQueryInterruptTime();
     while (TRUE)
     {
         /* Poll at a short interval if controllers fail to raise a change
@@ -898,11 +900,9 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                        FALSE,
                                        &Timeout);
 
-        if (Status != STATUS_TIMEOUT)
-        {
-            break;
-        }
-
+        /* Enable-change acknowledgements also signal this event, including
+         * when reset first disables the port. Recheck the port after every
+         * wake; the notification alone does not complete the reset. */
         Status = USBH_SyncGetPortStatus(HubExtension,
                                         Port,
                                         &PortStatus,
@@ -916,7 +916,7 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
             break;
         }
 
-        ResetElapsed += USBHUB_RESET_PORT_POLL_MS;
+        ResetElapsed = (ULONG)((KeQueryInterruptTime() - ResetStartTime) / 10000);
 
         if (!NT_SUCCESS(Status) ||
             !USBH_PortStatusIsConnected(&PortStatus) ||
