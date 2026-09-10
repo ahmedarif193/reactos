@@ -718,6 +718,10 @@ DxgkPresent(
     else
         Entry.VidPnSourceId = 0;
 
+    Entry.Window = (ULONG_PTR)pPresent->hWindow;
+    Entry.CompositorGeneration = DxgkVidPnCaptureCompositorGeneration(
+        Adapter, Device, Entry.VidPnSourceId, Entry.Window);
+
     /* Source rectangle. */
     if (pPresent->Flags.SrcRectValid)
     {

@@ -55,6 +55,7 @@
 #include "vidmm.h"
 #include "vidmm_worker_drain_core.h"
 #include "vidsch.h"
+#include "present.h"
 #include "debug.h"
 #include <ndk/psfuncs.h>
 #include <reactos/dwmframe.h>
@@ -12945,9 +12946,10 @@ DxgkpVidMmRecoverAllocationOwned(
     return Status;
 }
 
-NTSTATUS
-DxgkVidMmPrepareForIdle(
-    _In_ PDXGKRNL_ADAPTER Adapter)
+static NTSTATUS
+DxgkpVidMmPrepareForIdle(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN PreserveScanout)
 {
     DXGKVMM_ALLOCATION_SNAPSHOT Snapshot;
     NTSTATUS Status;
@@ -12966,6 +12968,7 @@ DxgkVidMmPrepareForIdle(
     for (Index = 0; Index < Snapshot.EntryCount; ++Index)
     {
         PDXGKVMM_ALLOCATION Allocation = Snapshot.Entries[Index].Allocation;
+        ULONG ScanoutPins = PreserveScanout ? DxgkPresentGetScanoutPinCount(Adapter, Allocation) : 0;
 
         Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
         if (!NT_SUCCESS(Status))
@@ -12973,9 +12976,9 @@ DxgkVidMmPrepareForIdle(
             FirstFailure = Status;
             break;
         }
-        if (DxgkSubmissionResidencyPinIsHeld(&Allocation->SubmissionResidencyPinCount))
+        if (InterlockedCompareExchange(&Allocation->SubmissionResidencyPinCount, 0, 0) != (LONG)ScanoutPins)
             FirstFailure = STATUS_DEVICE_BUSY;
-        else if (Allocation->Resident && Adapter->Segments != NULL && Allocation->SegmentId >= 1 && Allocation->SegmentId <= Adapter->SegmentCount && !VidMmSegmentIsAperture(&ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1]) && InterlockedCompareExchange(&Allocation->UserModeMappingCount, 0, 0) != 0)
+        else if (ScanoutPins == 0 && Allocation->Resident && Adapter->Segments != NULL && Allocation->SegmentId >= 1 && Allocation->SegmentId <= Adapter->SegmentCount && !VidMmSegmentIsAperture(&ADAPTER_SEGMENTS(Adapter)[Allocation->SegmentId - 1]) && InterlockedCompareExchange(&Allocation->UserModeMappingCount, 0, 0) != 0)
             FirstFailure = STATUS_DEVICE_BUSY;
         KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
         if (!NT_SUCCESS(FirstFailure))
@@ -12991,6 +12994,10 @@ DxgkVidMmPrepareForIdle(
             BOOLEAN ReleaseAperture;
             ULONG OwnerToken;
 
+            /* The DAC still owns these exact placements until StopDevice
+             * succeeds. Other residency pins continue to reject stop above. */
+            if (PreserveScanout && DxgkPresentGetScanoutPinCount(Adapter, Allocation) != 0)
+                continue;
             Status = DxgkpVidMmLockResidencyForExternalOperation(Allocation);
             if (!NT_SUCCESS(Status))
             {
@@ -13031,6 +13038,26 @@ DxgkVidMmPrepareForIdle(
 
     DxgkpVidMmReleaseAllocationSnapshot(&Snapshot);
     return FirstFailure;
+}
+
+NTSTATUS
+DxgkVidMmPrepareForIdle(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    return DxgkpVidMmPrepareForIdle(Adapter, FALSE);
+}
+
+NTSTATUS
+DxgkVidMmPrepareForStop(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (Adapter == NULL ||
+        InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) == 0 ||
+        InterlockedCompareExchange(&Adapter->PresentQueueActiveCalls, 0, 0) != 0)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    return DxgkpVidMmPrepareForIdle(Adapter, TRUE);
 }
 
 NTSTATUS

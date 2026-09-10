@@ -92,6 +92,114 @@ static PEPROCESS       g_DwmProcess = NULL;
 static volatile PVOID  g_DwmGpuOutputWindow = NULL;
 static volatile LONG   g_DwmGpuOutputWidth;
 static volatile LONG   g_DwmGpuOutputHeight;
+/* USER lock protects the claim tuple. Keep it separately from the published
+ * HWND so forced teardown can disable presents and retry a failed release.
+ * The PID is an identity already held by dxgkrnl, not a process to reopen. */
+typedef struct _DWM_GPU_OUTPUT_OWNER
+{
+    LUID AdapterLuid;
+    ULONG VidPnSourceId;
+    HANDLE ProcessId;
+    ULONG_PTR Window;
+    ULONGLONG Generation;
+} DWM_GPU_OUTPUT_OWNER;
+
+static DWM_GPU_OUTPUT_OWNER g_DwmGpuOutputOwner;
+static ULONGLONG g_DwmGpuOutputSequence;
+
+static VOID
+IntCompositionClearGpuOutputWindow(VOID)
+{
+    InterlockedExchangePointer(
+        (PVOID volatile *)&g_DwmGpuOutputWindow, NULL);
+    InterlockedExchange(&g_DwmGpuOutputWidth, 0);
+    InterlockedExchange(&g_DwmGpuOutputHeight, 0);
+}
+
+static NTSTATUS
+IntCompositionReleaseGpuOutput(_In_ BOOL Force)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (g_DwmGpuOutputOwner.Generation != 0)
+    {
+#if defined(REACTOS_GRAPHICS_DRIVER_MODEL_WDDM)
+        Status = WddmBridgeSetCompositorSourceOwner(
+                     &g_DwmGpuOutputOwner.AdapterLuid,
+                     g_DwmGpuOutputOwner.VidPnSourceId,
+                     g_DwmGpuOutputOwner.ProcessId,
+                     g_DwmGpuOutputOwner.Window,
+                     g_DwmGpuOutputOwner.Generation, 0, 0, FALSE);
+#else
+        Status = STATUS_NOT_SUPPORTED;
+#endif
+        /* Device/process rundown may have retired this exact generation.
+         * Ownership release never acknowledges a GPU surface read. */
+        if (Status == STATUS_NOT_FOUND)
+            Status = STATUS_SUCCESS;
+        if (NT_SUCCESS(Status))
+            RtlZeroMemory(&g_DwmGpuOutputOwner, sizeof(g_DwmGpuOutputOwner));
+    }
+
+    if (NT_SUCCESS(Status) || Force)
+        IntCompositionClearGpuOutputWindow();
+    return Status;
+}
+
+static NTSTATUS
+IntCompositionClaimGpuOutput(_In_ const DWM_GPU_OUTPUT *Request)
+{
+#if defined(REACTOS_GRAPHICS_DRIVER_MODEL_WDDM)
+    DWM_GPU_OUTPUT_OWNER Owner;
+    NTSTATUS Status;
+
+    if (g_DwmGpuOutputWindow != NULL)
+    {
+        if ((ULONG_PTR)g_DwmGpuOutputWindow == (ULONG_PTR)Request->Window &&
+            g_DwmGpuOutputWidth == (LONG)Request->Width &&
+            g_DwmGpuOutputHeight == (LONG)Request->Height)
+        {
+            return STATUS_SUCCESS;
+        }
+        return STATUS_DEVICE_BUSY;
+    }
+
+    /* Finish an earlier forced teardown before admitting another output.
+     * Its adapter/PID must remain the saved values across topology changes. */
+    Status = IntCompositionReleaseGpuOutput(FALSE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (g_DwmGpuOutputSequence == MAXULONGLONG)
+        return STATUS_INTEGER_OVERFLOW;
+
+    RtlZeroMemory(&Owner, sizeof(Owner));
+    Status = WddmBridgeQueryPrimarySource(&Owner.AdapterLuid,
+                                         &Owner.VidPnSourceId);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Owner.ProcessId = PsGetProcessId(g_DwmProcess);
+    Owner.Window = (ULONG_PTR)Request->Window;
+    Owner.Generation = ++g_DwmGpuOutputSequence;
+    Status = WddmBridgeSetCompositorSourceOwner(
+                 &Owner.AdapterLuid, Owner.VidPnSourceId, Owner.ProcessId,
+                 Owner.Window, Owner.Generation,
+                 Request->Width, Request->Height, TRUE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    g_DwmGpuOutputOwner = Owner;
+    InterlockedExchange(&g_DwmGpuOutputWidth, (LONG)Request->Width);
+    InterlockedExchange(&g_DwmGpuOutputHeight, (LONG)Request->Height);
+    KeMemoryBarrier();
+    InterlockedExchangePointer((PVOID volatile *)&g_DwmGpuOutputWindow,
+                               (PVOID)Owner.Window);
+    return STATUS_SUCCESS;
+#else
+    UNREFERENCED_PARAMETER(Request);
+    return STATUS_NOT_SUPPORTED;
+#endif
+}
+
 /* Native producers retain their GPU allocations until these events signal.
  * Keep publications independent of WND lifetime: destroying a window does
  * not finish a read from a frame which DWM has already received. */
@@ -822,6 +930,12 @@ IntCompositionOnWindowDestroy(_In_ PWND Wnd)
 {
     REDIRECT_ENTRY *e;
     ULONG i;
+
+    if (Wnd != NULL &&
+        g_DwmGpuOutputOwner.Window == (ULONG_PTR)UserHMGetHandle(Wnd))
+    {
+        (VOID)IntCompositionReleaseGpuOutput(TRUE);
+    }
 
     /* Drop any GL mark: the PWND may be recycled for an unrelated window. */
     for (i = 0; i < COMPOSITION_MAX_GL; i++)
@@ -2382,9 +2496,7 @@ IntCompositionDwmTeardown(VOID)
     PKEVENT WakeEvent;
 
     g_DwmAttached = FALSE;
-    InterlockedExchangePointer((PVOID volatile *)&g_DwmGpuOutputWindow, NULL);
-    InterlockedExchange(&g_DwmGpuOutputWidth, 0);
-    InterlockedExchange(&g_DwmGpuOutputHeight, 0);
+    (VOID)IntCompositionReleaseGpuOutput(TRUE);
     /* Damage raised from the GDI finish path holds this same PDEV lock while
      * reading/signaling g_DwmWakeEvent. Clear it before dropping the object
      * reference so KeSetEvent can never race a freed event. */
@@ -2445,13 +2557,7 @@ IntCompositionDwmSetGpuOutput(_In_ PVOID pUser)
         return STATUS_ACCESS_DENIED;
     }
     if (Request.Window == 0)
-    {
-        InterlockedExchangePointer(
-            (PVOID volatile *)&g_DwmGpuOutputWindow, NULL);
-        InterlockedExchange(&g_DwmGpuOutputWidth, 0);
-        InterlockedExchange(&g_DwmGpuOutputHeight, 0);
-        return STATUS_SUCCESS;
-    }
+        return IntCompositionReleaseGpuOutput(FALSE);
     if (Request.Width == 0 || Request.Height == 0 ||
         Request.Width > MAXLONG || Request.Height > MAXLONG ||
         Request.Window > MAXULONG_PTR)
@@ -2466,12 +2572,7 @@ IntCompositionDwmSetGpuOutput(_In_ PVOID pUser)
         return STATUS_ACCESS_DENIED;
     }
 
-    InterlockedExchange(&g_DwmGpuOutputWidth, (LONG)Request.Width);
-    InterlockedExchange(&g_DwmGpuOutputHeight, (LONG)Request.Height);
-    KeMemoryBarrier();
-    InterlockedExchangePointer((PVOID volatile *)&g_DwmGpuOutputWindow,
-                               (PVOID)(ULONG_PTR)Request.Window);
-    return STATUS_SUCCESS;
+    return IntCompositionClaimGpuOutput(&Request);
 }
 
 /*
@@ -3553,6 +3654,9 @@ IntCompositionRedirectDC(_In_opt_ PWND Wnd, _In_ HDC hDC, _In_ ULONG DcxFlags, _
 VOID
 IntCompositionWatchdog(VOID)
 {
+    if (g_DwmGpuOutputWindow == NULL && g_DwmGpuOutputOwner.Generation != 0)
+        (VOID)IntCompositionReleaseGpuOutput(TRUE);
+
     if (!g_DwmAttached || g_DwmProcess == NULL)
         return;
     if ((LONGLONG)KeQueryInterruptTime() - g_DwmLastFrameTime <= (300LL * 1000000LL))

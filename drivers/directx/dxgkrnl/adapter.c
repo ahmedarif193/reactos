@@ -1070,6 +1070,8 @@ DxgkpTdrWorker(
     DxgkDrainVidSchCallbacks(Adapter);
     AdapterStartedAfterReset = Adapter->State == DxgkAdapterStateStarted;
     DxgkTdrResetAdapterSynchronizationObjects(Adapter);
+    /* Successful ResetFromTimeout guarantees no further GPU memory access. */
+    DxgkPresentRetireScanout(Adapter);
     Status = DxgkVidMmRecoverFromTimeout(Adapter);
     if (!NT_SUCCESS(Status))
         DxgkpBugCheckTdrFailure(Adapter, Status);
@@ -2986,6 +2988,10 @@ DxgkPrepareTrackedDmaBuffer(
         }
     }
     Entry->RefreshVidPnSourceId = Args->RefreshVidPnSourceId;
+    Entry->ScanoutWindow = Args->ScanoutWindow;
+    Entry->CompositorGeneration = Args->CompositorGeneration;
+    Entry->CddPresent = Args->CddPresent;
+    Entry->FlipInterval = Args->FlipInterval;
     if (Args->RefreshDstRect != NULL)
         Entry->RefreshDstRect = *Args->RefreshDstRect;
     else
@@ -3551,7 +3557,9 @@ DxgkpProgramTrackedScanout(
         DxgkpTraceTrackedRefreshSamples(Adapter, Entry, Allocation);
 
     PrimaryAddress = DxgkVidMmGetAllocationPrimaryAddress(Allocation);
-    Status = DxgkpProgramSharedPrimaryScanout(Adapter, Allocation, Entry->RefreshVidPnSourceId, (D3DKMT_HANDLE)(ULONG_PTR)AllocationHandle, Entry->RefreshPresentId);
+    Status = DxgkpProgramSharedPrimaryScanout(Adapter, Allocation, Entry->RefreshVidPnSourceId, (D3DKMT_HANDLE)(ULONG_PTR)AllocationHandle, Entry->RefreshPresentId, Entry->FlipInterval,
+                 Entry->CddPresent ? NULL : Entry->Device,
+                 Entry->ScanoutWindow, Entry->CompositorGeneration);
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkpProgramTrackedScanout: SetVidPnSourceAddress failed 0x%08lX fence=%u alloc=%p seg=%u addr=0x%I64x\n", Status, Entry->SubmissionFenceId, AllocationHandle, Allocation->SegmentId, PrimaryAddress.QuadPart);
@@ -7164,8 +7172,13 @@ DxgkCbNotifyInterrupt(
     {
         ULONG TargetId = NotifyInterruptData->CrtcVsync.VidPnTargetId;
 
-        if (TargetId < Adapter->PresentQueueCount && TargetId < 32)
+        if (TargetId < RTL_NUMBER_OF(Adapter->VsyncScanoutAddress))
+        {
+            InterlockedExchange64(&Adapter->VsyncScanoutAddress[TargetId],
+                                  NotifyInterruptData->CrtcVsync.PhysicalAddress.QuadPart);
+            InterlockedIncrement64(&Adapter->VsyncScanoutSequence[TargetId]);
             InterlockedOr(&Adapter->VsyncPending, (LONG)(1UL << TargetId));
+        }
     }
 
     VidSchNotifyInterrupt(Adapter, NotifyInterruptData);
@@ -12817,6 +12830,9 @@ DxgkAdapterStart(
     Adapter->NodeCount = 0;
     Adapter->SupportSurpriseRemoval = FALSE;
     Adapter->ApertureSegmentCommitLimit = 0;
+    Adapter->FlipCaps.Value = 0;
+    RtlZeroMemory((PVOID)Adapter->VsyncScanoutAddress, sizeof(Adapter->VsyncScanoutAddress));
+    RtlZeroMemory((PVOID)Adapter->VsyncScanoutSequence, sizeof(Adapter->VsyncScanoutSequence));
 
     /*
      * Node accounting starts from zero on every start, and the clock it is
@@ -12856,6 +12872,7 @@ DxgkAdapterStart(
                     DXGKRNL_INFO("DxgkAdapterStart: driver caps: HighestAcceptableAddress=0x%I64x nodes=%lu scheduling=0x%08x\n",
                                 (ULONGLONG)Caps->HighestAcceptableAddress.QuadPart, Adapter->NodeCount, Caps->SchedulingCaps.Value);
                     Adapter->SchedulingCaps.Value = Caps->SchedulingCaps.Value;
+                    Adapter->FlipCaps.Value = Caps->FlipCaps.Value;
                     DXGKRNL_TRACE("DxgkAdapterStart: %lu GPU node(s) reported\n", Adapter->NodeCount);
                 }
             }
@@ -13308,7 +13325,7 @@ DxgkpStopMiniportForTeardown(
         return STATUS_NOT_SUPPORTED;
     DxgkBeginKmdExclusive(Adapter);
     DxgkVidMmQuiesceAdapter(Adapter);
-    Status = DxgkVidMmPrepareForIdle(Adapter);
+    Status = DxgkVidMmPrepareForStop(Adapter);
     if (!NT_SUCCESS(Status))
     {
         DxgkEndKmdExclusive(Adapter, FALSE);
@@ -13333,6 +13350,7 @@ DxgkpStopMiniportForTeardown(
     {
         Adapter->MiniportDeviceStopped = TRUE;
         InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
+        DxgkPresentRetireScanout(Adapter);
     }
     else
     {
@@ -13340,6 +13358,8 @@ DxgkpStopMiniportForTeardown(
     }
     DxgkReleaseMiniportCallback(Adapter);
     DxgkEndKmdExclusive(Adapter, FALSE);
+    if (NT_SUCCESS(Status))
+        DxgkPresentTeardown(Adapter);
     return Status;
 }
 
@@ -13412,6 +13432,7 @@ DxgkpResetMiniportForTeardown(
     DxgkReleaseMiniportCallback(Adapter);
     if (!NT_SUCCESS(Status))
         goto ResetFailed;
+    DxgkPresentRetireScanout(Adapter);
     Status = DxgkVidMmRecoverFromTimeout(Adapter);
     if (!NT_SUCCESS(Status))
         goto ResetFailed;
@@ -13579,6 +13600,72 @@ DxgkEndKmdExclusive(
     KeReleaseMutex(&Adapter->KmdExclusiveMutex, FALSE);
     if (ReopenAdmission)
         DxgkVidMmKickDeferredDestroyBatches(Adapter);
+}
+
+static VOID
+DxgkpStopMiniportPostDisplayOwner(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Out_opt_ PDXGK_DISPLAY_INFORMATION ReleasedPostDisplayInformation,
+    _Out_opt_ PBOOLEAN ReleasedByDriver)
+{
+    NTSTATUS Status;
+
+    if (!Adapter->MiniportDeviceStopped)
+    {
+        PDXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP PfnRelease = DXGK_CB(Adapter, DxgkDdiStopDeviceAndReleasePostDisplayOwnership);
+
+        if (PfnRelease != NULL)
+        {
+            DXGK_DISPLAY_INFORMATION LocalReleasedInfo;
+            PDXGK_DISPLAY_INFORMATION ReleasedInfo;
+
+            ReleasedInfo = ReleasedPostDisplayInformation != NULL ?
+                               ReleasedPostDisplayInformation :
+                               &LocalReleasedInfo;
+            RtlZeroMemory(ReleasedInfo, sizeof(*ReleasedInfo));
+            DxgkBeginKmdExclusive(Adapter);
+            if (DxgkPresentHasScanoutPins(Adapter))
+            {
+                DxgkVidMmQuiesceAdapter(Adapter);
+                Status = DxgkVidMmPrepareForStop(Adapter);
+                if (!NT_SUCCESS(Status))
+                {
+                    DxgkEndKmdExclusive(Adapter, FALSE);
+                    return;
+                }
+            }
+            if (DxgkAcquireMiniportCallback(Adapter))
+            {
+                _SEH2_TRY
+                {
+                    Status = PfnRelease(Adapter->MiniportDeviceContext,
+                                        0,
+                                        ReleasedInfo);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                if (NT_SUCCESS(Status))
+                {
+                    Adapter->MiniportDeviceStopped = TRUE;
+                    DxgkPresentRetireScanout(Adapter);
+                    if (ReleasedByDriver != NULL)
+                        *ReleasedByDriver = TRUE;
+                }
+                else
+                {
+                    RtlZeroMemory(ReleasedInfo, sizeof(*ReleasedInfo));
+                    DXGKRNL_WARN("DxgkpStopPostDisplayOwner: StopDeviceAndReleasePostDisplayOwnership failed 0x%08lX\n", Status);
+                }
+                DxgkReleaseMiniportCallback(Adapter);
+            }
+            DxgkEndKmdExclusive(Adapter, FALSE);
+            if (Adapter->MiniportDeviceStopped)
+                DxgkPresentTeardown(Adapter);
+        }
+    }
 }
 
 static NTSTATUS
@@ -13753,8 +13840,11 @@ DxgkpAdapterStopInternal(
     DxgkpDisablePeriodicInterruptHandoff(Adapter);
     KeRemoveQueueDpc(&Adapter->DpcObject);
     KeFlushQueuedDpcs();
-    if (InterlockedCompareExchange(&Adapter->TdrOwnershipUncertain, 0, 0) != 0)
+    if (InterlockedCompareExchange(&Adapter->TdrOwnershipUncertain, 0, 0) != 0 ||
+        DxgkPresentHasScanoutPins(Adapter))
     {
+        if (ReleasePostDisplayOwnership && DxgkPresentHasScanoutPins(Adapter))
+            DxgkpStopMiniportPostDisplayOwner(Adapter, ReleasedPostDisplayInformation, ReleasedByDriver);
         Status = DxgkpStopMiniportForTeardown(Adapter);
         if (!NT_SUCCESS(Status))
         {
@@ -13793,49 +13883,8 @@ DxgkpAdapterStopInternal(
         goto CompleteStop;
     }
 
-    if (ReleasePostDisplayOwnership && !Adapter->MiniportDeviceStopped)
-    {
-        PDXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP PfnRelease = DXGK_CB(Adapter, DxgkDdiStopDeviceAndReleasePostDisplayOwnership);
-
-        if (PfnRelease != NULL)
-        {
-            DXGK_DISPLAY_INFORMATION LocalReleasedInfo;
-            PDXGK_DISPLAY_INFORMATION ReleasedInfo;
-
-            ReleasedInfo = ReleasedPostDisplayInformation != NULL ?
-                               ReleasedPostDisplayInformation :
-                               &LocalReleasedInfo;
-            RtlZeroMemory(ReleasedInfo, sizeof(*ReleasedInfo));
-            DxgkBeginKmdExclusive(Adapter);
-            if (DxgkAcquireMiniportCallback(Adapter))
-            {
-                _SEH2_TRY
-                {
-                    Status = PfnRelease(Adapter->MiniportDeviceContext,
-                                        0,
-                                        ReleasedInfo);
-                }
-                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                {
-                    Status = _SEH2_GetExceptionCode();
-                }
-                _SEH2_END;
-                if (NT_SUCCESS(Status))
-                {
-                    Adapter->MiniportDeviceStopped = TRUE;
-                    if (ReleasedByDriver != NULL)
-                        *ReleasedByDriver = TRUE;
-                }
-                else
-                {
-                    RtlZeroMemory(ReleasedInfo, sizeof(*ReleasedInfo));
-                    DXGKRNL_WARN("DxgkpStopPostDisplayOwner: StopDeviceAndReleasePostDisplayOwnership failed 0x%08lX\n", Status);
-                }
-                DxgkReleaseMiniportCallback(Adapter);
-            }
-            DxgkEndKmdExclusive(Adapter, FALSE);
-        }
-    }
+    if (ReleasePostDisplayOwnership)
+        DxgkpStopMiniportPostDisplayOwner(Adapter, ReleasedPostDisplayInformation, ReleasedByDriver);
 
     Status = DxgkpStopMiniportForTeardown(Adapter);
     if (!NT_SUCCESS(Status))
@@ -14062,6 +14111,8 @@ DxgkAdapterRemove(
      * could not complete. Only now may OS tracking force-release storage. */
     Adapter->MiniportDeviceStopped = TRUE;
     Adapter->MiniportRemoveDeviceComplete = TRUE;
+    DxgkPresentRetireScanout(Adapter);
+    DxgkPresentTeardown(Adapter);
     InterlockedExchange(&Adapter->TdrOwnershipUncertain, 0);
     VidSchAbortAllPackets(Adapter, STATUS_DEVICE_REMOVED);
     if (!MiniportCleanupBeforeRemove)

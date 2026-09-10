@@ -41,6 +41,9 @@ C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE_EXCHANGE_IN, ConfiguredWddmLevel) ==
          DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE);
 C_ASSERT(sizeof(DXGKRNL_INTERFACE_EXCHANGE_IN) == (3 * sizeof(ULONG)));
 C_ASSERT(sizeof(RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET) == RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET_V1_SIZE);
+C_ASSERT(sizeof(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET) == RXGK_SETCOMPOSITORSOURCEOWNER_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET, ProcessId) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET, Generation) == 40);
 
 /* ---- Global state -------------------------------------------------------- */
 
@@ -598,6 +601,42 @@ WddmBridgeValidateSharedResourceOwner(
     Packet.AdapterLuidLowPart = AdapterLuid->LowPart;
     Packet.AdapterLuidHighPart = AdapterLuid->HighPart;
     return WddmBridgeSendIoctl(IOCTL_RXGK_VALIDATESHAREDRESOURCEOWNER,
+                               &Packet, sizeof(Packet), NULL, 0);
+}
+
+NTSTATUS
+WddmBridgeSetCompositorSourceOwner(
+    _In_ const LUID *AdapterLuid,
+    _In_ ULONG VidPnSourceId,
+    _In_ HANDLE ProcessId,
+    _In_ ULONG_PTR Window,
+    _In_ ULONGLONG Generation,
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _In_ BOOLEAN Claim)
+{
+    RXGK_SETCOMPOSITORSOURCEOWNER_PACKET Packet;
+
+    if (AdapterLuid == NULL || ProcessId == NULL || Window == 0 ||
+        Generation == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = sizeof(Packet);
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.Action = Claim ? RXGK_COMPOSITOR_SOURCE_CLAIM :
+                            RXGK_COMPOSITOR_SOURCE_RELEASE;
+    Packet.VidPnSourceId = VidPnSourceId;
+    Packet.AdapterLuidLowPart = AdapterLuid->LowPart;
+    Packet.AdapterLuidHighPart = AdapterLuid->HighPart;
+    Packet.ProcessId = (ULONG_PTR)ProcessId;
+    Packet.Window = Window;
+    Packet.Generation = Generation;
+    Packet.Width = Claim ? Width : 0;
+    Packet.Height = Claim ? Height : 0;
+    return WddmBridgeSendIoctl(IOCTL_RXGK_SETCOMPOSITORSOURCEOWNER,
                                &Packet, sizeof(Packet), NULL, 0);
 }
 

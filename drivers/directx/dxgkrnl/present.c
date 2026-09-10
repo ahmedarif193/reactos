@@ -22,6 +22,8 @@
  *      Present = call DxgkDdiPresent on the miniport with the
  *      appropriate blit/flip/colour-fill flags.  The miniport writes
  *      a DMA packet that the GPU scheduler submits to the hardware.
+ *      MMIO flips instead validate on the producer thread without DMA,
+ *      then retire when CRTC_VSYNC reports the requested scan address.
  *
  * VSync synchronisation:
  *   Each queue tracks a VBlankCount incremented by DxgkpNotifyVSync
@@ -46,6 +48,7 @@
 #include "dxgkrnl_private.h"
 #include "presenttrace.h"
 #include "vidmm.h"
+#include "vidpn.h"
 #include "vidsch.h"
 #include "present.h"
 #include "present_queue_core.h"
@@ -54,6 +57,7 @@
 #define DXGK_PRESENT_EXEC_SLOW_US    5000ULL
 #define DXGK_PRESENT_TRACE_BURST     8
 #define DXGK_PRESENT_TRACE_PERIOD    128
+#define DXGK_MMIO_FLIP_TIMEOUT_100NS  (2000ULL * 10000ULL)
 
 static volatile LONG g_DodPresentTraceCount = 0;
 static volatile LONG g_SharedPrimaryPresentTraceCount = 0;
@@ -286,6 +290,8 @@ DxgkpSignalQueueVBlankWaiters(
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
 
+    if (Force)
+        KeSetEvent(&Queue->MmioVSyncEvent, IO_NO_INCREMENT, FALSE);
     KeAcquireSpinLock(&Queue->VBlankWaitLock, &OldIrql);
     for (Entry = Queue->VBlankWaiterList.Flink; Entry != &Queue->VBlankWaiterList; Entry = Entry->Flink)
     {
@@ -1097,7 +1103,8 @@ DxgkpProgramScanoutViaMpo(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
     _In_ LARGE_INTEGER PrimaryAddress,
-    _In_ ULONG64 PresentId)
+    _In_ ULONG64 PresentId,
+    _In_ D3DDDI_FLIPINTERVAL_TYPE FlipInterval)
 {
     DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY MpoArgs;
     DXGK_MULTIPLANE_OVERLAY_PLANE Plane;
@@ -1118,7 +1125,8 @@ DxgkpProgramScanoutViaMpo(
         RtlZeroMemory(&Plane3, sizeof(Plane3));
         Plane3.PresentId = PresentId;
         Plane3.InputFlags.Enabled = 1;
-        Plane3.InputFlags.FlipImmediate = 1;
+        Plane3.InputFlags.FlipImmediate = (FlipInterval == D3DDDI_FLIPINTERVAL_IMMEDIATE);
+        Plane3.InputFlags.FlipOnNextVSync = !Plane3.InputFlags.FlipImmediate;
         Plane3.ContextCount = 1;
         Plane3.ppContextData = &PrimaryPointer;
         Plane3.PlaneAttributes.SrcRect.right = (LONG)Adapter->CommittedWidth;
@@ -1179,7 +1187,8 @@ DxgkpProgramScanoutViaMpo(
     MpoArgs.VidPnSourceId = VidPnSourceId;
     MpoArgs.PlaneCount = 1;
     MpoArgs.pPlanes = &Plane;
-    MpoArgs.Flags.FlipImmediate = 1;
+    MpoArgs.Flags.FlipImmediate = (FlipInterval == D3DDDI_FLIPINTERVAL_IMMEDIATE);
+    MpoArgs.Flags.FlipOnNextVSync = !MpoArgs.Flags.FlipImmediate;
 
     if (!DxgkAcquireKmdCall(Adapter))
         return STATUS_DELETE_PENDING;
@@ -1203,13 +1212,18 @@ DxgkpProgramSharedPrimaryScanout(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
     _In_ D3DKMT_HANDLE AllocationHandle,
-    _In_ ULONG64 PresentId)
+    _In_ ULONG64 PresentId,
+    _In_ D3DDDI_FLIPINTERVAL_TYPE FlipInterval,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG_PTR Window,
+    _In_ ULONG64 CompositorGeneration)
 {
     PDXGKARG_SETVIDPNSOURCEADDRESS SetSourceAddress = NULL;
     LARGE_INTEGER PrimaryAddress;
     LONG TraceSeq;
     NTSTATUS Status;
-    BOOLEAN KmdTransaction;
+    BOOLEAN KmdTransaction = FALSE;
+    BOOLEAN Program;
 
     if (Adapter == NULL ||
         Allocation == NULL ||
@@ -1220,8 +1234,14 @@ DxgkpProgramSharedPrimaryScanout(
         return STATUS_NOT_SUPPORTED;
     }
 
+    Status = DxgkVidPnAcquireScanoutLease(Adapter, Device, VidPnSourceId, Window, CompositorGeneration, &Program);
+    if (!NT_SUCCESS(Status) || !Program)
+        return Status;
     if (!DxgkBeginKmdTransaction(Adapter))
-        return STATUS_DELETE_PENDING;
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
     KmdTransaction = TRUE;
 
     Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
@@ -1237,7 +1257,7 @@ DxgkpProgramSharedPrimaryScanout(
     PrimaryAddress = DxgkVidMmGetAllocationPrimaryAddress(Allocation);
 
     /* MPO-capable miniports get the flip as a one-plane configuration. */
-    Status = DxgkpProgramScanoutViaMpo(Adapter, Allocation, VidPnSourceId, PrimaryAddress, PresentId);
+    Status = DxgkpProgramScanoutViaMpo(Adapter, Allocation, VidPnSourceId, PrimaryAddress, PresentId, FlipInterval);
 
     if (NT_SUCCESS(Status))
     {
@@ -1275,7 +1295,10 @@ DxgkpProgramSharedPrimaryScanout(
     SetSourceAddress->hAllocation = Allocation->MiniportHandle;
     SetSourceAddress->PrimaryAddress = PrimaryAddress;
     SetSourceAddress->PrimarySegment = Allocation->SegmentId;
-    SetSourceAddress->Flags.FlipImmediate = 1;
+    /* GPU completion need not coincide with a vertical blank. Keep the
+     * caller's synchronization request when arming the retired surface. */
+    SetSourceAddress->Flags.FlipImmediate = (FlipInterval == D3DDDI_FLIPINTERVAL_IMMEDIATE);
+    SetSourceAddress->Flags.FlipOnNextVSync = !SetSourceAddress->Flags.FlipImmediate;
 
     TraceSeq = InterlockedIncrement(&g_SharedPrimaryScanoutTraceCount);
     if (DxgkpShouldTraceOrdinal(TraceSeq))
@@ -1333,6 +1356,7 @@ Cleanup:
         ExFreePoolWithTag(SetSourceAddress, TAG_DXGK_PRESENT);
     if (KmdTransaction)
         DxgkEndKmdTransaction(Adapter);
+    DxgkVidPnReleaseScanoutLease();
     return Status;
 }
 
@@ -1542,6 +1566,7 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
     Entry.DestinationAllocation = SharedSurface->PrimaryAllocation;
     Entry.SourceIsSharedShadow = TRUE;
     Entry.DestinationIsSharedPrimary = TRUE;
+    Entry.CddPresent = TRUE;
     Entry.SharedSurface = *SharedSurface;
     Entry.VidPnSourceId = SharedSurface->VidPnSourceId;
     Entry.SrcRect.right = Width;
@@ -1667,7 +1692,8 @@ DxgkpRefreshSharedPrimaryScanout(
         return Status;
     }
 
-    Status = DxgkpProgramSharedPrimaryScanout(Adapter, Allocation, Entry->SharedSurface.VidPnSourceId, Entry->hSource, Entry->PresentId);
+    Status = DxgkpProgramSharedPrimaryScanout(Adapter, Allocation, Entry->SharedSurface.VidPnSourceId, Entry->hSource, Entry->PresentId, Entry->FlipInterval,
+                 Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration);
 
     return Status;
 }
@@ -1732,6 +1758,8 @@ DxgkPresentInit(
         Queues[i].PendingVBlanks = 0;
         KeInitializeSpinLock(&Queues[i].QueueLock);
         KeInitializeSpinLock(&Queues[i].VBlankWaitLock);
+        KeInitializeMutex(&Queues[i].MmioPresentMutex, 0);
+        KeInitializeEvent(&Queues[i].MmioVSyncEvent, SynchronizationEvent, FALSE);
         InitializeListHead(&Queues[i].VBlankWaiterList);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
         Status = DxgkpCreateDwmVBlankEvent(&Queues[i].DwmVBlankEvent);
@@ -1760,6 +1788,92 @@ DxgkPresentInit(
                   NumSources, Queues);
 
     return STATUS_SUCCESS;
+}
+
+BOOLEAN
+DxgkPresentHasScanoutPins(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKRNL_PRESENT_QUEUE Queues = Adapter->PresentQueues;
+    ULONG Index;
+
+    /* Lifecycle callers have closed admission and drained present calls. */
+    if (Queues == NULL)
+        return FALSE;
+    for (Index = 0; Index < Adapter->PresentQueueCount; ++Index)
+    {
+        if (Queues[Index].MmioCurrentAllocation != NULL ||
+            Queues[Index].MmioPendingAllocation != NULL)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+ULONG
+DxgkPresentGetScanoutPinCount(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKVMM_ALLOCATION Allocation)
+{
+    PDXGKRNL_PRESENT_QUEUE Queues = Adapter->PresentQueues;
+    ULONG Index;
+    ULONG Pins = 0;
+
+    ASSERT(InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) != 0);
+    ASSERT(InterlockedCompareExchange(&Adapter->PresentQueueActiveCalls, 0, 0) == 0);
+    if (Queues == NULL || Allocation == NULL)
+        return 0;
+    for (Index = 0; Index < Adapter->PresentQueueCount; ++Index)
+    {
+        Pins += Queues[Index].MmioCurrentAllocation == Allocation;
+        Pins += Queues[Index].MmioPendingAllocation == Allocation;
+    }
+    return Pins;
+}
+
+static VOID
+DxgkpReleaseScanoutAllocation(
+    _In_opt_ PDXGKVMM_ALLOCATION Allocation)
+{
+    if (Allocation != NULL)
+    {
+        DxgkVidMmReleaseSubmissionResidencyPin(Allocation);
+        DxgkVidMmDereferenceAllocation(Allocation);
+    }
+}
+
+VOID
+DxgkPresentRetireScanout(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDXGKRNL_PRESENT_QUEUE Queues = Adapter->PresentQueues;
+    ULONG Index;
+
+    PAGED_CODE();
+    /* The caller owns a successful reset/stop or final RemoveDevice
+     * boundary. A timeout or failed SetVidPnSourceAddress is insufficient. */
+    ASSERT(Adapter->MiniportDeviceStopped || Adapter->MiniportRemoveDeviceComplete ||
+           InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) != 0 ||
+           InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) != 0);
+    if (Queues == NULL)
+        return;
+    for (Index = 0; Index < Adapter->PresentQueueCount; ++Index)
+    {
+        PDXGKVMM_ALLOCATION Current;
+        PDXGKVMM_ALLOCATION Pending;
+
+        KeWaitForSingleObject(&Queues[Index].MmioPresentMutex, Executive, KernelMode, FALSE, NULL);
+        Current = Queues[Index].MmioCurrentAllocation;
+        Pending = Queues[Index].MmioPendingAllocation;
+        Queues[Index].MmioCurrentAllocation = NULL;
+        Queues[Index].MmioPendingAllocation = NULL;
+        Queues[Index].MmioFailureStatus = STATUS_SUCCESS;
+        Queues[Index].MmioLastFlipSequence = 0;
+        KeReleaseMutex(&Queues[Index].MmioPresentMutex, FALSE);
+        DxgkpReleaseScanoutAllocation(Pending);
+        DxgkpReleaseScanoutAllocation(Current);
+    }
 }
 
 typedef struct _DXGKP_PRESENT_QUEUE_MATCH_CONTEXT
@@ -1892,6 +2006,11 @@ DxgkPresentTeardown(
     DxgkpWaitForPresentQueues(Adapter);
 
     DxgkPresentCancelAllStopped(Adapter);
+
+    /* Stop closes producers before the miniport releases scanout. Keep the
+     * last confirmed and any unconfirmed primary resident across that gap. */
+    if (DxgkPresentHasScanoutPins(Adapter))
+        return;
 
     if (Adapter->PresentQueues != NULL)
     {
@@ -2257,7 +2376,8 @@ DxgkpExecuteCpuPresent(
 
         if (Entry->DestinationIsSharedPrimary)
         {
-            Status = DxgkpProgramSharedPrimaryScanout(Adapter, DestinationAllocation, Entry->SharedSurface.VidPnSourceId, Entry->hDestination, Entry->PresentId);
+            Status = DxgkpProgramSharedPrimaryScanout(Adapter, DestinationAllocation, Entry->SharedSurface.VidPnSourceId, Entry->hDestination, Entry->PresentId, Entry->FlipInterval,
+                         Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration);
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_WARN("DxgkpExecuteCpuPresent: shared-primary scanout "
@@ -2897,6 +3017,7 @@ DxgkpExecuteFullPresentMeasured(
 
         RtlZeroMemory(&TrackArgs, sizeof(TrackArgs));
         TrackArgs.PresentId = Entry->PresentId;
+        TrackArgs.FlipInterval = Entry->FlipInterval;
         TrackArgs.Device = Device;
         TrackArgs.DeviceWork = Entry->DeviceWork;
         TrackArgs.Context = Context;
@@ -2907,6 +3028,9 @@ DxgkpExecuteFullPresentMeasured(
         TrackArgs.SourceAllocationHandle = (HANDLE)(ULONG_PTR)Entry->hSource;
         TrackArgs.RefreshAllocationHandle = TrackRefresh ? (HANDLE)(ULONG_PTR)Entry->hDestination : NULL;
         TrackArgs.RefreshVidPnSourceId = Entry->VidPnSourceId;
+        TrackArgs.ScanoutWindow = Entry->Window;
+        TrackArgs.CompositorGeneration = Entry->CompositorGeneration;
+        TrackArgs.CddPresent = Entry->CddPresent;
         TrackArgs.RefreshDstRect = &Entry->DstRect;
         TrackArgs.SharedSurfaceGeneration = Entry->SharedSurface.Generation;
         TrackArgs.SourceIsSharedPrimary = Entry->SourceIsSharedPrimary;
@@ -3180,6 +3304,293 @@ DxgkpExecuteFullPresent(
     return Result;
 }
 
+static BOOLEAN
+DxgkpIsMmioFlip(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ const DXGKRNL_PRESENT_ENTRY *Entry)
+{
+    if (Adapter->MiniportContext->IsDisplayOnlyDriver ||
+        Entry->Type != DxgkPresentTypeFlip)
+    {
+        return FALSE;
+    }
+    return Entry->FlipInterval == D3DDDI_FLIPINTERVAL_IMMEDIATE
+               ? Adapter->FlipCaps.FlipImmediateMmIo
+               : Adapter->FlipCaps.FlipOnVSyncMmIo;
+}
+
+static NTSTATUS
+DxgkpWaitForMmioScanout(
+    _In_ PDXGKRNL_PRESENT_QUEUE Queue,
+    _In_ PDXGKRNL_PRESENT_ENTRY Entry,
+    _In_ LONG64 ResetGeneration,
+    _In_ LONG64 TargetSequence,
+    _In_ BOOLEAN MatchAddress,
+    _In_ PHYSICAL_ADDRESS Address,
+    _Out_ PLONG64 ObservedSequence)
+{
+    PDXGKRNL_ADAPTER Adapter = Queue->Adapter;
+    ULONG SourceId = Queue->VidPnSourceId;
+    ULONGLONG Start = KeQueryInterruptTime();
+    LARGE_INTEGER Timeout;
+    LONG64 Sequence;
+    LONG64 EffectiveAddress;
+    NTSTATUS Status;
+
+    /* A periodic bounded wait also observes device/reset teardown when the
+     * hardware stops generating interrupts. Timeout never retires storage. */
+    Timeout.QuadPart = -(100 * 10000LL);
+    for (;;)
+    {
+        if (InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) != 0 ||
+            InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) != 0 ||
+            InterlockedCompareExchange64(&Adapter->VBlankResetGeneration, 0, 0) != ResetGeneration ||
+            InterlockedCompareExchange(&Entry->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE ||
+            InterlockedCompareExchange(&Entry->Device->Destroying, 0, 0) != 0 ||
+            (Entry->Context != NULL && InterlockedCompareExchange(&Entry->Context->Destroying, 0, 0) != 0))
+        {
+            return STATUS_DEVICE_REMOVED;
+        }
+
+        Sequence = InterlockedCompareExchange64(&Adapter->VsyncScanoutSequence[SourceId], 0, 0);
+        EffectiveAddress = InterlockedCompareExchange64(&Adapter->VsyncScanoutAddress[SourceId], 0, 0);
+        if (Sequence == InterlockedCompareExchange64(&Adapter->VsyncScanoutSequence[SourceId], 0, 0) &&
+            Sequence >= TargetSequence && (!MatchAddress || EffectiveAddress == Address.QuadPart))
+        {
+            *ObservedSequence = Sequence;
+            return STATUS_SUCCESS;
+        }
+        if (KeQueryInterruptTime() - Start >= DXGK_MMIO_FLIP_TIMEOUT_100NS)
+            return STATUS_IO_TIMEOUT;
+        Status = KeWaitForSingleObject(&Queue->MmioVSyncEvent, Executive, KernelMode, FALSE, &Timeout);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+}
+
+typedef struct _DXGKP_MMIO_FLIP_CALL
+{
+    PDXGKRNL_ADAPTER Adapter;
+    DXGKARG_SETVIDPNSOURCEADDRESS Args;
+    LONG64 ArmSequence;
+    NTSTATUS Status;
+} DXGKP_MMIO_FLIP_CALL;
+
+static BOOLEAN NTAPI
+DxgkpSetMmioSourceAddress(
+    _In_ PVOID Context)
+{
+    DXGKP_MMIO_FLIP_CALL *Call = Context;
+
+    /* Runs at the adapter's interrupt IRQL, under its interrupt lock. */
+    Call->ArmSequence = InterlockedCompareExchange64(
+                            &Call->Adapter->VsyncScanoutSequence[Call->Args.VidPnSourceId], 0, 0);
+    Call->Status = DXGK_CB_FULL(Call->Adapter, DxgkDdiSetVidPnSourceAddress)(
+                       Call->Adapter->MiniportDeviceContext, &Call->Args);
+    return NT_SUCCESS(Call->Status);
+}
+
+static NTSTATUS
+DxgkpExecuteMmioFlip(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGKRNL_PRESENT_QUEUE Queue,
+    _Inout_ PDXGKRNL_PRESENT_ENTRY Entry)
+{
+    DXGKARG_PRESENT PresentArgs;
+    DXGK_ALLOCATIONLIST AllocationList[DXGK_PRESENT_MAX_INDEX + 1];
+    DXGK_PRESENTALLOCATIONINFO AllocationInfo[DXGK_PRESENT_MAX_INDEX + 1];
+    DXGKP_MMIO_FLIP_CALL FlipCall;
+    PDXGKVMM_ALLOCATION Allocation = Entry->SourceAllocation;
+    PDXGKVMM_ALLOCATION Binding = NULL;
+    HANDLE OpenHandle = Entry->SourceOpenBindingHandle;
+    HANDLE PresentContext;
+    LONG64 ResetGeneration;
+    LONG64 ObservedSequence;
+    LONG64 TargetSequence;
+    PHYSICAL_ADDRESS Address;
+    BOOLEAN PinOwned = FALSE;
+    BOOLEAN KmdTransaction = FALSE;
+    BOOLEAN DriverCalled = FALSE;
+    BOOLEAN ScanoutLease = FALSE;
+    BOOLEAN Synchronized;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Queue->VidPnSourceId >= RTL_NUMBER_OF(Adapter->VsyncScanoutAddress) ||
+        Allocation == NULL || Entry->hDestination != 0 ||
+        Allocation->MiniportHandle == NULL ||
+        Allocation->PrimaryVidPnSourceId != Entry->VidPnSourceId ||
+        DXGK_CB_FULL(Adapter, DxgkDdiPresent) == NULL ||
+        DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+    PresentContext = Entry->Context != NULL ? Entry->Context->hMiniportContext : Entry->Device->hMiniportDevice;
+    if (PresentContext == NULL || (Entry->Context == NULL && Adapter->SchedulingCaps.MultiEngineAware))
+        return STATUS_INVALID_HANDLE;
+
+    KeWaitForSingleObject(&Queue->MmioPresentMutex, Executive, KernelMode, FALSE, NULL);
+    Status = Queue->MmioFailureStatus;
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    ASSERT(Queue->MmioPendingAllocation == NULL);
+    Status = DxgkVidPnAcquireScanoutLease(Adapter, Entry->Device, Entry->VidPnSourceId,
+                 Entry->Window, Entry->CompositorGeneration, &ScanoutLease);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    ASSERT(ScanoutLease);
+    ResetGeneration = InterlockedCompareExchange64(&Adapter->VBlankResetGeneration, 0, 0);
+    Address.QuadPart = 0;
+    TargetSequence = Queue->MmioLastFlipSequence;
+    if (Entry->FlipInterval > D3DDDI_FLIPINTERVAL_ONE)
+        TargetSequence += Entry->FlipInterval - 1;
+    Status = DxgkpWaitForMmioScanout(Queue, Entry, ResetGeneration, TargetSequence, FALSE, Address, &ObservedSequence);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (Entry->SourceOpenBindingReference == NULL)
+    {
+        Status = DxgkVidMmCreatePresentBinding(Entry->Device, Allocation, TRUE, &OpenHandle, &Binding);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+    if (OpenHandle == NULL)
+    {
+        Status = STATUS_INVALID_HANDLE;
+        goto Cleanup;
+    }
+
+    Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    RtlZeroMemory(AllocationList, sizeof(AllocationList));
+    Status = DxgkVidMmAcquireSubmissionResidencyPinEx(Allocation, Adapter, &AllocationList[DXGK_PRESENT_SOURCE_INDEX], TRUE);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    PinOwned = TRUE;
+    Address = DxgkVidMmGetAllocationPrimaryAddress(Allocation);
+    AllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = OpenHandle;
+
+    /* FlipOnVSyncMmIo explicitly requests Present(NULL DMA). A GPUVA
+     * context still uses PRESENTALLOCATIONINFO, but a flip needs the resident
+     * segment/address, not an invented command-buffer GPU mapping. */
+    RtlZeroMemory(&PresentArgs, sizeof(PresentArgs));
+    PresentArgs.pAllocationList = AllocationList;
+    if (Entry->Context != NULL && Entry->Context->VirtualAddressing)
+    {
+        RtlZeroMemory(AllocationInfo, sizeof(AllocationInfo));
+        AllocationInfo[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation = OpenHandle;
+        AllocationInfo[DXGK_PRESENT_SOURCE_INDEX].SegmentId = Allocation->SegmentId;
+        AllocationInfo[DXGK_PRESENT_SOURCE_INDEX].PhysicalAddress = Address;
+        PresentArgs.pAllocationInfo = AllocationInfo;
+    }
+    PresentArgs.NumSrcAllocations = 1;
+    PresentArgs.SrcRect = Entry->SrcRect;
+    PresentArgs.DstRect = Entry->DstRect;
+    PresentArgs.FlipInterval = Entry->FlipInterval;
+    PresentArgs.Flags.Flip = 1;
+
+    RtlZeroMemory(&FlipCall, sizeof(FlipCall));
+    FlipCall.Adapter = Adapter;
+    FlipCall.Args.VidPnSourceId = Entry->VidPnSourceId;
+    FlipCall.Args.hAllocation = Allocation->MiniportHandle;
+    FlipCall.Args.PrimarySegment = Allocation->SegmentId;
+    FlipCall.Args.PrimaryAddress = Address;
+    if (Entry->Context != NULL)
+    {
+        FlipCall.Args.ContextCount = 1;
+        FlipCall.Args.Context[0] = PresentContext;
+    }
+    FlipCall.Args.Flags.FlipImmediate = Entry->FlipInterval == D3DDDI_FLIPINTERVAL_IMMEDIATE;
+    FlipCall.Args.Flags.FlipOnNextVSync = !FlipCall.Args.Flags.FlipImmediate;
+
+    if (!DxgkBeginKmdTransaction(Adapter))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    KmdTransaction = TRUE;
+    if (InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) != 0 ||
+        InterlockedCompareExchange(&Adapter->VBlankResetActive, 0, 0) != 0 ||
+        InterlockedCompareExchange64(&Adapter->VBlankResetGeneration, 0, 0) != ResetGeneration ||
+        InterlockedCompareExchange(&Entry->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE ||
+        InterlockedCompareExchange(&Entry->Device->Destroying, 0, 0) != 0 ||
+        (Entry->Context != NULL && InterlockedCompareExchange(&Entry->Context->Destroying, 0, 0) != 0))
+    {
+        Status = STATUS_DEVICE_REMOVED;
+        goto Cleanup;
+    }
+    /* Keep the producer thread across Present and SetSourceAddress. Drivers
+     * can associate a preceding UMD escape/render dependency with this call. */
+    Queue->MmioPendingAllocation = Allocation;
+    Entry->SourceAllocation = NULL;
+    PinOwned = FALSE;
+    DriverCalled = TRUE;
+    _SEH2_TRY
+    {
+        Status = DXGK_CB_FULL(Adapter, DxgkDdiPresent)(PresentContext, &PresentArgs);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    if (PresentArgs.pDmaBuffer != NULL)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto Cleanup;
+    }
+    Status = DxgkCbSynchronizeExecution(Adapter, DxgkpSetMmioSourceAddress, &FlipCall, 0, &Synchronized);
+    if (NT_SUCCESS(Status))
+        Status = FlipCall.Status;
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    DxgkEndKmdTransaction(Adapter);
+    KmdTransaction = FALSE;
+
+    Status = DxgkpWaitForMmioScanout(Queue, Entry, ResetGeneration, FlipCall.ArmSequence + 1, TRUE, Address, &ObservedSequence);
+    if (NT_SUCCESS(Status))
+    {
+        PDXGKVMM_ALLOCATION Displaced = Queue->MmioCurrentAllocation;
+
+        Queue->MmioCurrentAllocation = Queue->MmioPendingAllocation;
+        Queue->MmioPendingAllocation = NULL;
+        Queue->MmioLastFlipSequence = ObservedSequence;
+        DxgkpReleaseScanoutAllocation(Displaced);
+        InterlockedIncrement(&Queue->PresentedFrameCount);
+    }
+
+Cleanup:
+    if (KmdTransaction)
+        DxgkEndKmdTransaction(Adapter);
+    if (!NT_SUCCESS(Status) && DriverCalled)
+    {
+        Queue->MmioFailureStatus = Status;
+        DxgkDeviceCompletePresent(Entry->Device, Entry->DeviceWork, Status);
+        DXGKRNL_WARN("DxgkpExecuteMmioFlip: PresentId=%llu failed 0x%08lX "
+                     "source=0x%X address=0x%I64x observed=0x%I64x "
+                     "armed=%I64d sequence=%I64d; retaining scanout allocations\n",
+                     Entry->PresentId, Status, Entry->hSource, Address.QuadPart,
+                     InterlockedCompareExchange64(&Adapter->VsyncScanoutAddress[Queue->VidPnSourceId], 0, 0),
+                     FlipCall.ArmSequence,
+                     InterlockedCompareExchange64(&Adapter->VsyncScanoutSequence[Queue->VidPnSourceId], 0, 0));
+    }
+    if (Binding != NULL)
+    {
+        NTSTATUS BindingStatus = DxgkVidMmDestroyPresentBinding(Entry->Device, Binding);
+        if (!NT_SUCCESS(BindingStatus))
+            DXGKRNL_WARN("DxgkpExecuteMmioFlip: binding teardown deferred 0x%08lX\n", BindingStatus);
+    }
+    if (PinOwned)
+        DxgkVidMmReleaseSubmissionResidencyPin(Allocation);
+    if (ScanoutLease)
+        DxgkVidPnReleaseScanoutLease();
+    KeReleaseMutex(&Queue->MmioPresentMutex, FALSE);
+    return Status;
+}
+
 /* ========================================================================
  * DxgkpQueuePresent
  *
@@ -3315,6 +3726,24 @@ DxgkpQueuePresent(
         return STATUS_DEVICE_BUSY;
     }
     Entry->PresentLimitReservationOwned = TRUE;
+
+    if (DxgkpIsMmioFlip(Adapter, Entry))
+    {
+        Status = DxgkDeviceWorkActivate(DeviceWork);
+        if (NT_SUCCESS(Status))
+        {
+            Entry->DeviceWork = DeviceWork;
+            DeviceWork = NULL;
+            Entry->PresentId = InterlockedIncrement64(&Queue->NextPresentId);
+            *OutPresentId = Entry->PresentId;
+            Status = DxgkpExecuteMmioFlip(Adapter, Queue, Entry);
+            DxgkDeviceWorkCompleteWithStatus(Entry->DeviceWork, Status);
+        }
+        DxgkDeviceWorkDestroy(DeviceWork);
+        DxgkpReleasePresentEntry(Entry);
+        DxgkpReleasePresentQueues(Adapter);
+        return Status;
+    }
 
     KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
 
@@ -3571,6 +4000,7 @@ DxgkpNotifyVSync(
 
     Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[VidPnSourceId];
     InterlockedIncrement64(&Queue->VBlankCount);
+    KeSetEvent(&Queue->MmioVSyncEvent, IO_NO_INCREMENT, FALSE);
     DxgkpSignalQueueVBlankWaiters(Queue, FALSE);
 
     KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);

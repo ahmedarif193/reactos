@@ -40,6 +40,7 @@
 #include "hotplug_work_core.h"
 #include <ntddvdeo.h>
 #include <reactos/dwmframe.h>
+#include <reactos/rddm/rxgkioctl.h>
 
 /* ========================================================================
  * Forward declarations for all interface functions
@@ -283,7 +284,25 @@ typedef struct _DXGKP_SOURCE_OWNER_ADAPTER_STATE
 #define TAG_DXGK_SOURCE_OWNER 'OxgD'
 
 static LIST_ENTRY g_SourceOwnerAdapterList;
+typedef struct _DXGKP_COMPOSITOR_SOURCE_OWNER
+{
+    LIST_ENTRY Entry;
+    LUID AdapterLuid;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId;
+    PEPROCESS Process;
+    PDXGKRNL_DEVICE Device;
+    ULONGLONG Window;
+    ULONGLONG Generation;
+    UINT Width;
+    UINT Height;
+} DXGKP_COMPOSITOR_SOURCE_OWNER, *PDXGKP_COMPOSITOR_SOURCE_OWNER;
+
+static LIST_ENTRY g_CompositorSourceOwnerList;
 static FAST_MUTEX g_SourceOwnerMutex;
+/* Programming holds this shared; ownership transitions take it exclusive.
+ * A late CDD DMA retirement must check ownership at SetSourceAddress time,
+ * and a new claim must drain any CDD programming admitted before it. */
+static ERESOURCE g_SourceProgrammingResource;
 static volatile LONG g_SourceOwnerState = 0;
 
 static VOID
@@ -295,6 +314,8 @@ DxgkpEnsureSourceOwnerMutex(VOID)
     {
         ExInitializeFastMutex(&g_SourceOwnerMutex);
         InitializeListHead(&g_SourceOwnerAdapterList);
+        InitializeListHead(&g_CompositorSourceOwnerList);
+        ExInitializeResourceLite(&g_SourceProgrammingResource);
         InterlockedExchange(&g_SourceOwnerState, 2);
         return;
     }
@@ -318,6 +339,250 @@ DxgkpFindSourceOwnerAdapterLocked(
     }
 
     return NULL;
+}
+
+static PDXGKP_COMPOSITOR_SOURCE_OWNER
+DxgkpFindCompositorSourceOwnerLocked(
+    _In_ CONST LUID *AdapterLuid,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = g_CompositorSourceOwnerList.Flink;
+         Entry != &g_CompositorSourceOwnerList;
+         Entry = Entry->Flink)
+    {
+        PDXGKP_COMPOSITOR_SOURCE_OWNER Owner =
+            CONTAINING_RECORD(Entry, DXGKP_COMPOSITOR_SOURCE_OWNER, Entry);
+
+        if (Owner->AdapterLuid.LowPart == AdapterLuid->LowPart &&
+            Owner->AdapterLuid.HighPart == AdapterLuid->HighPart &&
+            Owner->SourceId == SourceId)
+            return Owner;
+    }
+    return NULL;
+}
+
+NTSTATUS
+DxgkpSetCompositorSourceOwner(
+    _In_ CONST RXGK_SETCOMPOSITORSOURCEOWNER_PACKET *Packet)
+{
+    PDXGKRNL_ADAPTER Adapters[16];
+    PDXGKRNL_ADAPTER Adapter = NULL;
+    PDXGKP_SOURCE_OWNER_ADAPTER_STATE State;
+    PDXGKP_COMPOSITOR_SOURCE_OWNER Owner, NewOwner = NULL, RetiredOwner = NULL;
+    PEPROCESS Process = PsGetCurrentProcess();
+    LUID AdapterLuid;
+    ULONG Count = 0, Index;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+    if (Packet == NULL || Packet->Size != sizeof(*Packet) ||
+        Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+        Packet->VidPnSourceId >= DXGKP_MAX_SOURCES ||
+        Packet->ProcessId == 0 || Packet->Window == 0 || Packet->Generation == 0 ||
+        (Packet->Action != RXGK_COMPOSITOR_SOURCE_CLAIM &&
+         Packet->Action != RXGK_COMPOSITOR_SOURCE_RELEASE))
+        return STATUS_INVALID_PARAMETER;
+
+    AdapterLuid.LowPart = Packet->AdapterLuidLowPart;
+    AdapterLuid.HighPart = Packet->AdapterLuidHighPart;
+    if (Packet->Action == RXGK_COMPOSITOR_SOURCE_CLAIM)
+    {
+        if (Packet->ProcessId != (ULONGLONG)(ULONG_PTR)PsGetProcessId(Process))
+            return STATUS_ACCESS_DENIED;
+        if (Packet->Width == 0 || Packet->Height == 0 ||
+            Packet->Width > MAXLONG || Packet->Height > MAXLONG)
+            return STATUS_INVALID_PARAMETER;
+        Count = DxgkReferenceStartedAdapters(Adapters, RTL_NUMBER_OF(Adapters));
+        for (Index = 0; Index < Count; ++Index)
+        {
+            if (Adapters[Index]->AdapterLuid.LowPart == AdapterLuid.LowPart &&
+                Adapters[Index]->AdapterLuid.HighPart == AdapterLuid.HighPart)
+                Adapter = Adapters[Index];
+        }
+        if (Adapter == NULL || Packet->VidPnSourceId >= Adapter->NumberOfVideoPresentSources)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        NewOwner = ExAllocatePoolWithTag(NonPagedPool, sizeof(*NewOwner), TAG_DXGK_SOURCE_OWNER);
+        if (NewOwner == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        RtlZeroMemory(NewOwner, sizeof(*NewOwner));
+        NewOwner->AdapterLuid = AdapterLuid;
+        NewOwner->SourceId = Packet->VidPnSourceId;
+        NewOwner->Process = Process;
+        ObReferenceObject(Process);
+        NewOwner->Window = Packet->Window;
+        NewOwner->Generation = Packet->Generation;
+        NewOwner->Width = Packet->Width;
+        NewOwner->Height = Packet->Height;
+    }
+    else if (Packet->Width != 0 || Packet->Height != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    DxgkpEnsureSourceOwnerMutex();
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&g_SourceProgrammingResource, TRUE);
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    Owner = DxgkpFindCompositorSourceOwnerLocked(&AdapterLuid, Packet->VidPnSourceId);
+    if (Packet->Action == RXGK_COMPOSITOR_SOURCE_RELEASE)
+    {
+        /* Release may run after process exit or adapter rundown. Compare the
+         * saved identity against the referenced process, never a reused PID. */
+        if (Owner == NULL ||
+            Packet->ProcessId != (ULONGLONG)(ULONG_PTR)PsGetProcessId(Owner->Process) ||
+            Owner->Window != Packet->Window || Owner->Generation != Packet->Generation)
+            Status = STATUS_NOT_FOUND;
+        else
+        {
+            RemoveEntryList(&Owner->Entry);
+            RetiredOwner = Owner;
+        }
+    }
+    else if (PsGetProcessExitStatus(Process) != STATUS_PENDING)
+        Status = STATUS_PROCESS_IS_TERMINATING;
+    else if (Adapter->State != DxgkAdapterStateStarted ||
+             InterlockedCompareExchange(&Adapter->RundownStarted, 0, 0) != 0)
+        Status = STATUS_DELETE_PENDING;
+    else if (Owner != NULL)
+    {
+        if (Owner->Process != Process || Owner->Window != Packet->Window ||
+            Owner->Generation != Packet->Generation ||
+            Owner->Width != Packet->Width || Owner->Height != Packet->Height)
+            Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+    }
+    else
+    {
+        State = DxgkpFindSourceOwnerAdapterLocked(Adapter);
+        if (State != NULL && State->Owners[Packet->VidPnSourceId].OwnerDevice != NULL)
+            Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+        else
+        {
+            InsertTailList(&g_CompositorSourceOwnerList, &NewOwner->Entry);
+            NewOwner = NULL;
+        }
+    }
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
+    ExReleaseResourceLite(&g_SourceProgrammingResource);
+    KeLeaveCriticalRegion();
+
+Cleanup:
+    if (NewOwner != NULL)
+    {
+        ObDereferenceObject(NewOwner->Process);
+        ExFreePoolWithTag(NewOwner, TAG_DXGK_SOURCE_OWNER);
+    }
+    if (RetiredOwner != NULL)
+    {
+        ObDereferenceObject(RetiredOwner->Process);
+        ExFreePoolWithTag(RetiredOwner, TAG_DXGK_SOURCE_OWNER);
+    }
+    for (Index = 0; Index < Count; ++Index)
+        DxgkDereferenceAdapter(Adapters[Index]);
+    return Status;
+}
+
+ULONG64
+DxgkVidPnCaptureCompositorGeneration(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId,
+    _In_ ULONG_PTR Window)
+{
+    PDXGKP_COMPOSITOR_SOURCE_OWNER Owner;
+    ULONG64 Generation = 0;
+
+    DxgkpEnsureSourceOwnerMutex();
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    Owner = DxgkpFindCompositorSourceOwnerLocked(&Adapter->AdapterLuid, SourceId);
+    if (Owner != NULL && Owner->Process == Device->OwnerProcess && Owner->Window == Window)
+        Generation = Owner->Generation;
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
+    return Generation;
+}
+
+NTSTATUS
+DxgkVidPnAcquireScanoutLease(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId,
+    _In_ ULONG_PTR Window,
+    _In_ ULONG64 Generation,
+    _Out_ PBOOLEAN Program)
+{
+    PDXGKP_COMPOSITOR_SOURCE_OWNER Compositor;
+    PDXGKP_SOURCE_OWNER_ADAPTER_STATE State;
+    PDXGKP_VIDPN_SOURCE_OWNER Owner = NULL;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    PAGED_CODE();
+    *Program = FALSE;
+    if (SourceId >= DXGKP_MAX_SOURCES || SourceId >= Adapter->NumberOfVideoPresentSources)
+        return STATUS_INVALID_PARAMETER;
+    DxgkpEnsureSourceOwnerMutex();
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&g_SourceProgrammingResource, TRUE);
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    Compositor = DxgkpFindCompositorSourceOwnerLocked(&Adapter->AdapterLuid, SourceId);
+    State = DxgkpFindSourceOwnerAdapterLocked(Adapter);
+    if (State != NULL && State->Owners[SourceId].OwnerDevice != NULL &&
+        State->Owners[SourceId].OwnerType != D3DKMT_VIDPNSOURCEOWNER_EMULATED)
+        Owner = &State->Owners[SourceId];
+
+    if (Device == NULL)
+    {
+        /* The CDD copy has completed. Suppressing its address update does not
+         * discard pixels or fabricate completion of any GPU work. */
+        *Program = Compositor == NULL && Owner == NULL;
+    }
+    else if (Device->Adapter != Adapter ||
+             InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 ||
+             InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+        Status = STATUS_DEVICE_REMOVED;
+    else if (Generation != 0)
+    {
+        if (Compositor == NULL || Compositor->Generation != Generation ||
+            Compositor->Window != Window || Compositor->Process != Device->OwnerProcess ||
+            (Compositor->Device != NULL && Compositor->Device != Device))
+            Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+        else if (Owner != NULL && Owner->OwnerDevice != Device)
+        {
+            /* An exclusive application temporarily occludes the registered
+             * compositor. Its identity remains valid when that owner yields. */
+            Status = Owner->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE ||
+                     Owner->OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI
+                         ? STATUS_GRAPHICS_PRESENT_OCCLUDED
+                         : STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+        }
+        else
+        {
+            Compositor->Device = Device;
+            *Program = TRUE;
+        }
+    }
+    else if (Owner != NULL && Owner->OwnerDevice == Device)
+        *Program = TRUE;
+    else
+        Status = STATUS_GRAPHICS_VIDPN_SOURCE_IN_USE;
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
+    if (!*Program)
+    {
+        ExReleaseResourceLite(&g_SourceProgrammingResource);
+        KeLeaveCriticalRegion();
+    }
+    return Status;
+}
+
+VOID
+DxgkVidPnReleaseScanoutLease(VOID)
+{
+    ExReleaseResourceLite(&g_SourceProgrammingResource);
+    KeLeaveCriticalRegion();
 }
 
 static BOOLEAN
@@ -462,7 +727,20 @@ DxgkVidPnCleanupDeviceOwners(
     if (Device == NULL || Device->Adapter == NULL || Device->Handle == 0)
         return;
     DxgkpEnsureSourceOwnerMutex();
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&g_SourceProgrammingResource, TRUE);
     ExAcquireFastMutex(&g_SourceOwnerMutex);
+    {
+        PLIST_ENTRY Entry;
+        for (Entry = g_CompositorSourceOwnerList.Flink;
+             Entry != &g_CompositorSourceOwnerList; Entry = Entry->Flink)
+        {
+            PDXGKP_COMPOSITOR_SOURCE_OWNER Owner =
+                CONTAINING_RECORD(Entry, DXGKP_COMPOSITOR_SOURCE_OWNER, Entry);
+            if (Owner->Device == Device)
+                Owner->Device = NULL;
+        }
+    }
     State = DxgkpFindSourceOwnerAdapterLocked(Device->Adapter);
     if (State != NULL)
     {
@@ -482,6 +760,8 @@ DxgkVidPnCleanupDeviceOwners(
         }
     }
     ExReleaseFastMutex(&g_SourceOwnerMutex);
+    ExReleaseResourceLite(&g_SourceProgrammingResource);
+    KeLeaveCriticalRegion();
     if (StateToFree != NULL)
     {
         RtlZeroMemory(StateToFree->Owners, sizeof(StateToFree->Owners));
@@ -494,14 +774,31 @@ DxgkVidPnReleaseProcessOwners(
     _In_ PEPROCESS Process)
 {
     LIST_ENTRY FreeList;
+    LIST_ENTRY CompositorFreeList;
     PLIST_ENTRY Entry;
 
     PAGED_CODE();
     if (Process == NULL)
         return STATUS_INVALID_PARAMETER;
     InitializeListHead(&FreeList);
+    InitializeListHead(&CompositorFreeList);
     DxgkpEnsureSourceOwnerMutex();
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&g_SourceProgrammingResource, TRUE);
     ExAcquireFastMutex(&g_SourceOwnerMutex);
+    Entry = g_CompositorSourceOwnerList.Flink;
+    while (Entry != &g_CompositorSourceOwnerList)
+    {
+        PDXGKP_COMPOSITOR_SOURCE_OWNER Owner =
+            CONTAINING_RECORD(Entry, DXGKP_COMPOSITOR_SOURCE_OWNER, Entry);
+        PLIST_ENTRY Next = Entry->Flink;
+        if (Owner->Process == Process)
+        {
+            RemoveEntryList(Entry);
+            InsertTailList(&CompositorFreeList, Entry);
+        }
+        Entry = Next;
+    }
     Entry = g_SourceOwnerAdapterList.Flink;
     while (Entry != &g_SourceOwnerAdapterList)
     {
@@ -526,6 +823,15 @@ DxgkVidPnReleaseProcessOwners(
         Entry = Next;
     }
     ExReleaseFastMutex(&g_SourceOwnerMutex);
+    ExReleaseResourceLite(&g_SourceProgrammingResource);
+    KeLeaveCriticalRegion();
+    while (!IsListEmpty(&CompositorFreeList))
+    {
+        PDXGKP_COMPOSITOR_SOURCE_OWNER Owner = CONTAINING_RECORD(
+            RemoveHeadList(&CompositorFreeList), DXGKP_COMPOSITOR_SOURCE_OWNER, Entry);
+        ObDereferenceObject(Owner->Process);
+        ExFreePoolWithTag(Owner, TAG_DXGK_SOURCE_OWNER);
+    }
     while (!IsListEmpty(&FreeList))
     {
         PDXGKP_SOURCE_OWNER_ADAPTER_STATE State = CONTAINING_RECORD(RemoveHeadList(&FreeList), DXGKP_SOURCE_OWNER_ADAPTER_STATE, Entry);
@@ -6478,6 +6784,8 @@ DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(
     }
 
     DxgkpEnsureSourceOwnerMutex();
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&g_SourceProgrammingResource, TRUE);
     ExAcquireFastMutex(&g_SourceOwnerMutex);
     if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
     {
@@ -6539,6 +6847,8 @@ DxgkpSetVidPnSourceOwnerWithFlagsAndAccessMode(
 
 Unlock:
     ExReleaseFastMutex(&g_SourceOwnerMutex);
+    ExReleaseResourceLite(&g_SourceProgrammingResource);
+    KeLeaveCriticalRegion();
     if (StateToFree != NULL)
     {
         RtlZeroMemory(StateToFree->Owners, sizeof(StateToFree->Owners));

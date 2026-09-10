@@ -19,6 +19,9 @@
  *        - DOD adapters: DxgkDdiPresentDisplayOnly (shadow FB copy).
  *        - Full WDDM: DxgkDdiPresent (blit/flip DMA packet).
  *   4. A monotonic PresentId is returned to the caller for tracking.
+ * MMIO flips preserve the producer thread for Present, program the source
+ * at interrupt IRQL, and keep the displaced allocation until CRTC confirms
+ * the replacement address. They do not manufacture a DMA submission.
  */
 
 #pragma once
@@ -117,6 +120,11 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
 
     /* VidPn source targeted by this present. */
     D3DDDI_VIDEO_PRESENT_SOURCE_ID  VidPnSourceId;
+
+    /* Captured registration identity survives queueing and DMA retirement. */
+    ULONG_PTR                       Window;
+    ULONG64                         CompositorGeneration;
+    BOOLEAN                         CddPresent;
 
     /* Source and destination allocation handles (D3DKMT_HANDLE). */
     D3DKMT_HANDLE                   hSource;
@@ -236,6 +244,15 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
      */
     volatile LONG64                 VBlankCount;
     LONG64                          LastPresentVBlank;
+    /* One MMIO flip is armed at a time. Both slots own an allocation
+     * reference and one residency pin; a matching CRTC address releases
+     * only the displaced slot. An unconfirmed flip survives caller exit. */
+    KMUTEX                          MmioPresentMutex;
+    KEVENT                          MmioVSyncEvent;
+    PDXGKVMM_ALLOCATION             MmioCurrentAllocation;
+    PDXGKVMM_ALLOCATION             MmioPendingAllocation;
+    NTSTATUS                        MmioFailureStatus;
+    LONG64                          MmioLastFlipSequence;
     KSPIN_LOCK                      VBlankWaitLock;
     LIST_ENTRY                      VBlankWaiterList;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
@@ -257,6 +274,12 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
     volatile LONG                  PendingVBlanks;
 
 } DXGKRNL_PRESENT_QUEUE, *PDXGKRNL_PRESENT_QUEUE;
+
+BOOLEAN DxgkPresentHasScanoutPins(_In_ struct _DXGKRNL_ADAPTER *Adapter);
+ULONG DxgkPresentGetScanoutPinCount(_In_ struct _DXGKRNL_ADAPTER *Adapter,
+                                  _In_ PDXGKVMM_ALLOCATION Allocation);
+/* Only a successful reset/stop or final removal permits forced retirement. */
+VOID DxgkPresentRetireScanout(_In_ struct _DXGKRNL_ADAPTER *Adapter);
 
 /* ========================================================================
  * Function prototypes — present.c
@@ -384,7 +407,11 @@ DxgkpProgramSharedPrimaryScanout(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId,
     _In_ D3DKMT_HANDLE AllocationHandle,
-    _In_ ULONG64 PresentId);
+    _In_ ULONG64 PresentId,
+    _In_ D3DDDI_FLIPINTERVAL_TYPE FlipInterval,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ ULONG_PTR Window,
+    _In_ ULONG64 CompositorGeneration);
 
 NTSTATUS
 DxgkpPresentDisplayOnlyToSharedPrimary(

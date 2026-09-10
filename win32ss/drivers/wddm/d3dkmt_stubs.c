@@ -650,6 +650,50 @@ Cleanup:
 /* ---- Adapter management -------------------------------------------------- */
 
 NTSTATUS
+WddmBridgeQueryPrimarySource(
+    _Out_ LUID *AdapterLuid,
+    _Out_ ULONG *VidPnSourceId)
+{
+    D3DKMT_OPENADAPTERFROMHDC OpenAdapter;
+    D3DKMT_CLOSEADAPTER CloseAdapter;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+    NTSTATUS CloseStatus;
+
+    if (AdapterLuid == NULL || VidPnSourceId == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* The internal HDC bridge selects the primary display source. Resolve
+     * its identity once; a later release must not reselect DISPLAY1. */
+    RtlZeroMemory(&OpenAdapter, sizeof(OpenAdapter));
+    Status = WddmBridgeSendIoctlWithInformation(
+                 IOCTL_D3DKMT_OPENADAPTERFROMHDC,
+                 &OpenAdapter, sizeof(OpenAdapter),
+                 &OpenAdapter, sizeof(OpenAdapter), &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Information != sizeof(OpenAdapter) || OpenAdapter.hAdapter == 0)
+        Status = Information != sizeof(OpenAdapter) ?
+                 STATUS_INFO_LENGTH_MISMATCH : STATUS_INVALID_HANDLE;
+
+    if (OpenAdapter.hAdapter != 0)
+    {
+        CloseAdapter.hAdapter = OpenAdapter.hAdapter;
+        CloseStatus = WddmBridgeSendIoctl(IOCTL_D3DKMT_CLOSEADAPTER,
+                                         &CloseAdapter, sizeof(CloseAdapter),
+                                         NULL, 0);
+        if (NT_SUCCESS(Status))
+            Status = CloseStatus;
+    }
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    *AdapterLuid = OpenAdapter.AdapterLuid;
+    *VidPnSourceId = OpenAdapter.VidPnSourceId;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
 APIENTRY
 D3DKMTOpenAdapterFromHdc(
     _Inout_ D3DKMT_OPENADAPTERFROMHDC *pData)

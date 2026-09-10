@@ -3105,6 +3105,11 @@ DxgkProcessCleanup(
         DxgkDereferenceAdapter(Adapter);
     }
 
+    /* A compositor may exit before its first device binds the output claim,
+     * or while win32k cannot reach the bridge. Retire those process-owned
+     * claims after closing device admission, independently of win32k cleanup. */
+    (VOID)DxgkVidPnReleaseProcessOwners(Process);
+
     /*
      * The early pass closes admission through the ExitStatus-backed VidMm
      * tombstone; this idempotent pass also retires any zero-charge record

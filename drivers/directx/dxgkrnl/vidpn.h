@@ -146,6 +146,31 @@ DxgkpDeviceOwnsVidPnSource(
     _In_ D3DKMT_HANDLE hDevice,
     _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId);
 
+struct _RXGK_SETCOMPOSITORSOURCEOWNER_PACKET;
+NTSTATUS
+DxgkpSetCompositorSourceOwner(
+    _In_ CONST struct _RXGK_SETCOMPOSITORSOURCEOWNER_PACKET *Packet);
+
+ULONG64
+DxgkVidPnCaptureCompositorGeneration(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_DEVICE Device,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId,
+    _In_ ULONG_PTR Window);
+
+/* Device == NULL identifies CDD backing-only work. Program == TRUE owns a
+ * programming lease until ReleaseScanoutLease; FALSE owns no lease. */
+NTSTATUS
+DxgkVidPnAcquireScanoutLease(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_DEVICE Device,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId,
+    _In_ ULONG_PTR Window,
+    _In_ ULONG64 Generation,
+    _Out_ PBOOLEAN Program);
+
+VOID DxgkVidPnReleaseScanoutLease(VOID);
+
 VOID
 DxgkVidPnCleanupDeviceOwners(
     _In_ PDXGKRNL_DEVICE Device);

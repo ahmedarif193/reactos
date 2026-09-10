@@ -2321,7 +2321,7 @@ VidSchpSubmitVirtualPacket(
             SubmitArgs.DmaBufferUmdPrivateDataSize = Packet->UmdPrivateDataSize;
             SubmitArgs.SubmissionFenceId = Packet->SubmissionFenceId;
             SubmitArgs.VidPnSourceId = Packet->VidPnSourceId;
-            SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
+            SubmitArgs.FlipInterval = Packet->FlipInterval;
             SubmitArgs.Flags.Value = Packet->SubmitFlags;
             SubmitArgs.EngineOrdinal = Packet->EngineOrdinal;
             SubmitArgs.NodeOrdinal = Packet->NodeOrdinal;
@@ -2627,7 +2627,7 @@ VidSchpKickEngine(
         SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = Packet->DriverPrivateDataSize;
         SubmitArgs.SubmissionFenceId = Packet->SubmissionFenceId;
         SubmitArgs.VidPnSourceId = Packet->VidPnSourceId;
-        SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
+        SubmitArgs.FlipInterval = Packet->FlipInterval;
         SubmitArgs.NodeOrdinal = Packet->NodeOrdinal;
         SubmitArgs.EngineOrdinal = Packet->EngineOrdinal;
         SubmitArgs.Flags.Value = Packet->SubmitFlags;
@@ -3477,6 +3477,7 @@ VidSchSubmitCommandTrackedMeasured(
     Packet->SubmitFlags = SubmitFlags;
     Packet->IsPresent = ((SubmitFlags & VIDSCH_SUBMITFLAG_PRESENT) != 0);
     Packet->VidPnSourceId = VidPnSourceId;
+    Packet->FlipInterval = TrackArgs->FlipInterval;
 
     if (DmaBuffer->VirtualBacking != NULL)
     {
