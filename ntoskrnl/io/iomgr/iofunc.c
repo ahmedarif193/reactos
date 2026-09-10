@@ -4670,10 +4670,9 @@ NtWriteFile(IN HANDLE FileHandle,
             return Status;
         }
 
-        /* Check if we don't have a byte offset available */
-        if (!(ByteOffset) ||
-            ((CapturedByteOffset.u.LowPart == FILE_USE_FILE_POINTER_POSITION) &&
-             (CapturedByteOffset.u.HighPart == -1)))
+        /* An append-only handle must retain the forced end-of-file offset. */
+        if (CapturedByteOffset.QuadPart != (LONG)FILE_WRITE_TO_END_OF_FILE &&
+            (!ByteOffset || CapturedByteOffset.QuadPart == (LONG)FILE_USE_FILE_POINTER_POSITION))
         {
             /* Use the Current Byte Offset instead */
             CapturedByteOffset = FileObject->CurrentByteOffset;
