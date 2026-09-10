@@ -29,6 +29,7 @@ list(APPEND SOURCE
     GetModuleFileName.c
     GetOsSafeBootMode.c
     GetPackageFamilyName.c
+    GetSystemWow64Directory.c
     GetVolumeInformation.c
     InitOnce.c
     interlck.c
