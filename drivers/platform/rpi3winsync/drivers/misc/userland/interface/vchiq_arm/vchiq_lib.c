@@ -1778,7 +1778,7 @@ VCHIQ_STATUS_T vchiq_dump_phys_mem( VCHIQ_SERVICE_HANDLE_T handle,
                              void *ptr,
                              size_t num_bytes )
 {
-   VCHIQ_SERVICE_T *service = (VCHIQ_SERVICE_T *)handle;
+   VCHIQ_SERVICE_T *service = find_service_by_handle(handle);
    VCHIQ_DUMP_MEM_T  dump_mem;
    int ret;
 
