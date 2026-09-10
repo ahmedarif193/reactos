@@ -663,32 +663,20 @@ void COperationsProgressDialog::LayoutLocations(const CStringW &prefix, BOOL sou
     ReleaseDC(m_Window, dc);
 }
 
-void COperationsProgressDialog::PaintGraphFrame(HDC dc, RECT rect, HRGN clip, int radius)
-{
-    SelectClipRgn(dc, NULL);
-    DeleteObject(clip);
-    HPEN pen = CreatePen(PS_SOLID, 1, m_Palette.Border);
-    HGDIOBJ oldPen = SelectObject(dc, pen);
-    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius * 2, radius * 2);
-    SelectObject(dc, oldBrush);
-    SelectObject(dc, oldPen);
-    DeleteObject(pen);
-}
-
 void COperationsProgressDialog::PaintGraph(HDC dc, RECT rect)
 {
     BOOL highContrast = HighContrast();
     COLORREF base = highContrast ? GetSysColor(COLOR_HIGHLIGHT) : RGB(6, 176, 37);
     if (!highContrast && m_Status == PDOPS_PAUSED) base = RGB(234, 181, 0);
     if (!highContrast && (m_Mode & PDM_ERRORSBLOCKING)) base = RGB(210, 35, 35);
-    COLORREF ink = m_Palette.Material ? Translucent(m_Palette.Back, base, 56) : base;
-    COLORREF pale = highContrast ? m_Palette.Back : Mix(m_Palette.Back, base, m_Palette.Dark ? 70 : 130);
-    RECT frame = rect;
-    int radius = Scale(6);
+    COLORREF ink = m_Palette.Material ? Translucent(m_Palette.Back, base, 80) : base;
+    COLORREF pale = highContrast ? m_Palette.Back
+                                 : m_Palette.Material ? Translucent(m_Palette.Back, base, 28)
+                                                      : Mix(m_Palette.Back, base, m_Palette.Dark ? 70 : 130);
     Fill(dc, rect, m_Palette.Back);
-    HRGN clip = CreateRoundRectRgn(rect.left, rect.top, rect.right + 1, rect.bottom + 1, radius * 2, radius * 2);
-    SelectClipRgn(dc, clip);
+    HBRUSH border = CreateSolidBrush(m_Palette.Border);
+    FrameRect(dc, &rect, border);
+    DeleteObject(border);
     InflateRect(&rect, -1, -1);
     RECT filled = rect;
     filled.right = rect.left + MulDiv(rect.right - rect.left, Percentage(m_Points, m_TotalPoints), 100);
@@ -698,14 +686,12 @@ void COperationsProgressDialog::PaintGraph(HDC dc, RECT rect)
         filled.left = rect.left + (GetTickCount() / 12) % max(width, 1);
         filled.right = min(rect.right, filled.left + width / 5);
         Fill(dc, filled, ink);
-        PaintGraphFrame(dc, frame, clip, radius);
         return;
     }
     if (!m_Expanded)
     {
         Fill(dc, rect, m_Palette.Track);
         Fill(dc, filled, ink);
-        PaintGraphFrame(dc, frame, clip, radius);
         return;
     }
     Fill(dc, rect, pale);
@@ -766,7 +752,6 @@ void COperationsProgressDialog::PaintGraph(HDC dc, RECT rect)
     }
     SelectObject(dc, oldPen);
     DeleteObject(grid);
-    PaintGraphFrame(dc, frame, clip, radius);
     WCHAR size[80];
     StrFormatByteSizeW(m_Speed >= (double)MAXLONGLONG ? MAXLONGLONG : (LONGLONG)m_Speed, size, _countof(size));
     CStringW speed;

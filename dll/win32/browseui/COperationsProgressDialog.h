@@ -57,7 +57,6 @@ class COperationsProgressDialog :
     void Refresh();
     void ApplyTheme();
     UINT Glyph(UINT id) const;
-    void PaintGraphFrame(HDC dc, RECT rect, HRGN clip, int radius);
     void PaintGraph(HDC dc, RECT rect);
     void PaintButton(DRAWITEMSTRUCT *draw);
     void Pause(BOOL paused);
