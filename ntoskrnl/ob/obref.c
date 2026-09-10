@@ -508,6 +508,31 @@ Quickie:
     return Status;
 }
 
+BOOLEAN
+NTAPI
+ObpIsStrictHandleCheckingEnabled(VOID)
+{
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    PHANDLE_TABLE HandleTable = PsGetCurrentProcess()->ObjectTable;
+    return HandleTable && HandleTable->EnableHandleExceptions;
+#else
+    return FALSE;
+#endif
+}
+
+VOID
+NTAPI
+ObpCheckInvalidHandleReference(IN HANDLE Handle,
+                              IN KPROCESSOR_MODE AccessMode)
+{
+    if (Handle && AccessMode == UserMode && !KeIsAttachedProcess() && ObpIsStrictHandleCheckingEnabled())
+    {
+        /* Defer the exception until return to user mode. Keep returning the
+         * failure status to kernel callers so they can release resources. */
+        KeRaiseUserException(STATUS_INVALID_HANDLE);
+    }
+}
+
 NTSTATUS
 NTAPI
 ObReferenceObjectByHandle(IN HANDLE Handle,
@@ -647,6 +672,7 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
         else
         {
             /* Invalid access, fail */
+            ObpCheckInvalidHandleReference(Handle, AccessMode);
             return STATUS_INVALID_HANDLE;
         }
     }
@@ -728,6 +754,7 @@ ObReferenceObjectByHandle(IN HANDLE Handle,
     /* Return failure status */
     KeLeaveCriticalRegion();
     *Object = NULL;
+    if (Status == STATUS_INVALID_HANDLE) ObpCheckInvalidHandleReference(Handle, AccessMode);
     return Status;
 }
 
