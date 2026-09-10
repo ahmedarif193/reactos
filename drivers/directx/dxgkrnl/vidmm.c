@@ -12742,17 +12742,17 @@ DxgkpVidMmUnmapAllocationUserProcess(
             return STATUS_NOT_FOUND;
         }
 
-        Mapping->LockCount--;
-        if (Mapping->LockCount == 0)
+        if (Mapping->LockCount > 1)
         {
-            MappingCount = InterlockedDecrement(
-                               &Allocation->UserModeMappingCount);
-            ASSERT(MappingCount >= 0);
+            Mapping->LockCount--;
+            KeReleaseMutex(&Allocation->UserModeLock, FALSE);
+            return STATUS_SUCCESS;
         }
-        KeReleaseMutex(&Allocation->UserModeLock, FALSE);
-        return STATUS_SUCCESS;
+
+        /* The final unlock must retire the user VAD. Allocation destruction
+         * can be deferred after its handle leaves the process-cleanup list. */
     }
-    if (!IncludeActive && Mapping->LockCount != 0)
+    if (Force && !IncludeActive && Mapping->LockCount != 0)
     {
         KeReleaseMutex(&Allocation->UserModeLock, FALSE);
         return STATUS_DEVICE_BUSY;
