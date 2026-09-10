@@ -12,6 +12,58 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(dxgi);
 
+HRESULT dxgi_get_wddm_adapter_desc(LUID luid, DXGI_ADAPTER_DESC3 *desc)
+{
+    D3DKMT_OPENADAPTERFROMLUID open_adapter = {0};
+    D3DKMT_CLOSEADAPTER close_adapter;
+    D3DKMT_QUERYADAPTERINFO query = {0};
+    D3DKMT_QUERY_DEVICE_IDS ids = {0};
+    D3DKMT_ADAPTERREGISTRYINFO registry = {0};
+    D3DKMT_SEGMENTSIZEINFO segments = {0};
+    D3DKMT_ADAPTERTYPE type = {0};
+    HRESULT hr = E_FAIL;
+
+    open_adapter.AdapterLuid = luid;
+    if (!NT_SUCCESS(D3DKMTOpenAdapterFromLuid(&open_adapter)))
+        return E_FAIL;
+    query.hAdapter = open_adapter.hAdapter;
+    query.Type = KMTQAITYPE_ADAPTERTYPE;
+    query.pPrivateDriverData = &type;
+    query.PrivateDriverDataSize = sizeof(type);
+    if (!NT_SUCCESS(D3DKMTQueryAdapterInfo(&query)))
+        goto done;
+    query.Type = KMTQAITYPE_PHYSICALADAPTERDEVICEIDS;
+    query.pPrivateDriverData = &ids;
+    query.PrivateDriverDataSize = sizeof(ids);
+    if (!NT_SUCCESS(D3DKMTQueryAdapterInfo(&query)))
+        goto done;
+
+    desc->VendorId = ids.DeviceIds.VendorID;
+    desc->DeviceId = ids.DeviceIds.DeviceID;
+    desc->SubSysId = ids.DeviceIds.SubVendorID | (ids.DeviceIds.SubSystemID << 16);
+    desc->Revision = ids.DeviceIds.RevisionID;
+    desc->Flags = type.SoftwareDevice ? DXGI_ADAPTER_FLAG3_SOFTWARE : 0;
+    query.Type = KMTQAITYPE_ADAPTERREGISTRYINFO;
+    query.pPrivateDriverData = &registry;
+    query.PrivateDriverDataSize = sizeof(registry);
+    if (NT_SUCCESS(D3DKMTQueryAdapterInfo(&query)) && registry.AdapterString[0])
+        lstrcpynW(desc->Description, registry.AdapterString, ARRAY_SIZE(desc->Description));
+    query.Type = KMTQAITYPE_GETSEGMENTSIZE;
+    query.pPrivateDriverData = &segments;
+    query.PrivateDriverDataSize = sizeof(segments);
+    if (NT_SUCCESS(D3DKMTQueryAdapterInfo(&query)))
+    {
+        desc->DedicatedVideoMemory = segments.DedicatedVideoMemorySize;
+        desc->DedicatedSystemMemory = segments.DedicatedSystemMemorySize;
+        desc->SharedSystemMemory = segments.SharedSystemMemorySize;
+    }
+    hr = S_OK;
+done:
+    close_adapter.hAdapter = open_adapter.hAdapter;
+    D3DKMTCloseAdapter(&close_adapter);
+    return hr;
+}
+
 static unsigned int dxgi_get_wddm_adapter_priority(const D3DKMT_ADAPTERINFO *adapter)
 {
     D3DKMT_QUERYADAPTERINFO query_info = {0};
