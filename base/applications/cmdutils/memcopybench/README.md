@@ -61,6 +61,10 @@ For direct comparisons of Mesa's actual tile helper, configure the optional
 `MEMCOPYBENCH_MESA_BEFORE` and `MEMCOPYBENCH_MESA_AFTER` CMake paths to two
 `v3d_cpu_tiling.h` snapshots. The default build has no Mesa dependency. Such a
 build also measures both 8-byte and 16-byte utile-row layouts from each header.
+Both files must exist when the comparison is enabled. These paths persist in
+the local build cache; the snapshots are not required by a fresh checkout.
+To disable the comparison in an existing build, run
+`cmake -S <source> -B <build> -UMEMCOPYBENCH_MESA_BEFORE -UMEMCOPYBENCH_MESA_AFTER`.
 
 `--pi-clocks` optionally opens the Raspberry Pi RPIQ mailbox driver and captures
 configured/maximum clocks plus measured ARM/core/SDRAM clocks and temperature
