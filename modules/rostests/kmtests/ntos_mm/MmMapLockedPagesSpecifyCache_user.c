@@ -77,6 +77,72 @@
     ok_eq_hex(Status, STATUS_NOT_MAPPED_VIEW);                  \
 }
 
+static VOID
+TestProcessExitMappings(VOID)
+{
+    static const ULONG Sizes[] = {PAGE_SIZE, 1024 * 1024, 4 * 1024 * 1024};
+    WCHAR Image[MAX_PATH];
+    ULONG Index;
+
+    if (!GetModuleFileNameW(NULL, Image, ARRAYSIZE(Image)))
+    {
+        ok(0, "Could not obtain the child executable path: %lu\n", GetLastError());
+        return;
+    }
+    for (Index = 0; Index < ARRAYSIZE(Sizes); ++Index)
+    {
+        STARTUPINFOW Startup = {sizeof(Startup)};
+        PROCESS_INFORMATION Child;
+        EXIT_BUFFER Request = {0};
+        DWORD Length = sizeof(Request);
+        DWORD Error;
+        DWORD Wait;
+        BOOL Created;
+        ULONG Value = 0;
+        SIZE_T Read;
+
+        /* The child never executes user code or a driver cleanup callback. */
+        Created = CreateProcessW(Image, NULL, NULL, NULL, FALSE,
+                                 CREATE_SUSPENDED, NULL, NULL, &Startup, &Child);
+        ok(Created, "Could not create the suspended child: %lu\n", GetLastError());
+        if (!Created)
+            return;
+        Request.Process = Child.hProcess;
+        Request.Length = Sizes[Index];
+        Request.Pattern = WRITE_PATTERN;
+        Error = KmtSendBufferToDriver(IOCTL_MAP_EXIT_BUFFER, &Request,
+                                     sizeof(Request), &Length);
+        ok_eq_ulong(Error, ERROR_SUCCESS);
+        if (Error == ERROR_SUCCESS)
+        {
+            ok(Request.Address != NULL, "No mapping returned for the child\n");
+            ok(ReadProcessMemory(Child.hProcess, Request.Address, &Value,
+                                 sizeof(Value), &Read), "Cannot read child mapping: %lu\n", GetLastError());
+            ok_eq_ulong(Value, WRITE_PATTERN);
+            Value = 0;
+            ok(ReadProcessMemory(Child.hProcess,
+                                 (PUCHAR)Request.Address + Request.Length - sizeof(Value),
+                                 &Value, sizeof(Value), &Read),
+               "Cannot read the end of the child mapping: %lu\n", GetLastError());
+            ok_eq_ulong(Value, WRITE_PATTERN);
+        }
+        ok(TerminateProcess(Child.hProcess, 0), "Cannot terminate child: %lu\n", GetLastError());
+        Wait = WaitForSingleObject(Child.hProcess, 10000);
+        ok_eq_ulong(Wait, WAIT_OBJECT_0);
+        if (Wait == WAIT_OBJECT_0 && Error == ERROR_SUCCESS)
+        {
+            Length = sizeof(Request);
+            Error = KmtSendBufferToDriver(IOCTL_CHECK_EXIT_BUFFER, &Request,
+                                         sizeof(Request), &Length);
+            ok_eq_ulong(Error, ERROR_SUCCESS);
+        }
+        CloseHandle(Child.hThread);
+        CloseHandle(Child.hProcess);
+        if (Wait != WAIT_OBJECT_0 || Error != ERROR_SUCCESS)
+            return;
+    }
+}
+
 START_TEST(MmMapLockedPagesSpecifyCache)
 {
     QUERY_BUFFER QueryBuffer;
@@ -295,6 +361,8 @@ START_TEST(MmMapLockedPagesSpecifyCache)
 
     Length = 0;
     ok(KmtSendBufferToDriver(IOCTL_CLEAN, NULL, 0, &Length) == ERROR_SUCCESS, "\n");
+
+    TestProcessExitMappings();
 
     KmtCloseDriver();
     KmtUnloadDriver();

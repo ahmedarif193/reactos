@@ -25,9 +25,19 @@ typedef struct _READ_BUFFER
     ULONG Pattern;
 } READ_BUFFER, *PREAD_BUFFER;
 
+typedef struct _EXIT_BUFFER
+{
+    HANDLE Process;
+    PVOID Address;
+    ULONG Length;
+    ULONG Pattern;
+} EXIT_BUFFER, *PEXIT_BUFFER;
+
 #define IOCTL_QUERY_BUFFER 1
 #define IOCTL_READ_BUFFER  2
 #define IOCTL_CLEAN        3
+#define IOCTL_MAP_EXIT_BUFFER 4
+#define IOCTL_CHECK_EXIT_BUFFER 5
 
 #define WRITE_PATTERN 0xA4A5A6A7
 #define TEST_MDL_MAPPING_NO_WRITE   0x80000000UL

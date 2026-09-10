@@ -1512,25 +1512,21 @@ MmCleanProcessAddressSpace(IN PEPROCESS Process)
             continue;
         }
 
-        /*
-         * A rotated framebuffer view is an MDL mapping whose VAD carries the
-         * source MDL until the view is rotated back.  Convert it to the MDL
-         * mapper's native VAD type and let MmUnmapLockedPages tear down the
-         * PTEs and VAD before continuing the normal process cleanup.  The MDL
-         * remains owned by the caller.
-         */
-        if ((Vad->u.VadFlags.VadType == VadRotatePhysical) &&
-            (Vad->ControlArea != NULL))
+        /* MDL views may outlive the process in the driver's allocation
+         * bookkeeping. Remove only this process's PTEs and VAD; the driver
+         * continues to own the MDL and its physical backing. */
+        if (Vad->u.VadFlags.VadType == VadDevicePhysicalMemory ||
+            (Vad->u.VadFlags.VadType == VadRotatePhysical &&
+             Vad->ControlArea != NULL))
         {
             PVOID MappedAddress = (PVOID)(Vad->StartingVpn << PAGE_SHIFT);
-            PMDL MappedMdl = (PMDL)Vad->ControlArea;
 
             ASSERT(Process == PsGetCurrentProcess());
             Vad->u.VadFlags.VadType = VadDevicePhysicalMemory;
             Vad->ControlArea = NULL;
             Vad->FirstPrototypePte = NULL;
             MmUnlockAddressSpace(&Process->Vm);
-            MmUnmapLockedPages(MappedAddress, MappedMdl);
+            MiUnmapLockedPagesInUserSpace(MappedAddress);
             MmLockAddressSpace(&Process->Vm);
             continue;
         }
