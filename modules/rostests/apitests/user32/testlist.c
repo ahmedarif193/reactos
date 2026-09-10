@@ -9,6 +9,7 @@ extern void func_CharFuncs(void);
 extern void func_CloseWindow(void);
 extern void func_ComboBox(void);
 extern void func_CopyImage(void);
+extern void func_CopyImage_Icon(void);
 extern void func_CursorPresentation(void);
 extern void func_CreateDialog(void);
 extern void func_CreateIconFromResourceEx(void);
@@ -94,6 +95,7 @@ const struct test winetest_testlist[] =
     { "CloseWindow", func_CloseWindow },
     { "ComboBox", func_ComboBox },
     { "CopyImage", func_CopyImage },
+    { "CopyImage_Icon", func_CopyImage_Icon },
     { "CursorPresentation", func_CursorPresentation },
     { "CreateDialog", func_CreateDialog },
     { "CreateIconFromResourceEx", func_CreateIconFromResourceEx },
