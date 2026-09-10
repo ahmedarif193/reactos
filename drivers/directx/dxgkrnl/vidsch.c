@@ -3238,14 +3238,6 @@ VidSchSubmitCommandVirtual(
     }
     Packet->UmdPrivateDataSize = DriverPrivateDataSize;
 
-    Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
-    if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, Context->NodeOrdinal, Packet->SubmissionFenceId, &Packet->FenceIdentityEpoch))
-    {
-        VidSchpDereferencePacket(Packet);
-        VidSchpReleaseCall(Adapter);
-        return STATUS_DEVICE_BUSY;
-    }
-    Packet->FenceIdentityReserved = TRUE;
     Packet->DmaBufferGpuVa = DmaBufferGpuVa;
     Packet->VirtualDmaBufferSize = DmaBufferSize;
     /*
@@ -3297,8 +3289,6 @@ VidSchSubmitCommandVirtual(
         VidSchpReleaseCall(Adapter);
         return Status;
     }
-    FenceId = Packet->SubmissionFenceId;
-
     Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
     ExAcquireFastMutex(&Ctx->LifecycleMutex);
     if (VidSchpReadSchedulerState(Ctx) != VidSchSchedulerRunning)
@@ -3335,30 +3325,67 @@ VidSchSubmitCommandVirtual(
         VidSchpReleaseCall(Adapter);
         return Status;
     }
+    /* Teardown must not cancel the logical marker before its packet reaches
+     * the scheduler, then miss that packet when cancelling the owner queue. */
+    if (!ExAcquireRundownProtection(&Context->StreamAdmissionRundown))
+    {
+        Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
+        ExReleaseFastMutex(&Ctx->LifecycleMutex);
+        VidSchpDereferencePacket(Packet);
+        VidSchpReleaseCall(Adapter);
+        return STATUS_DELETE_PENDING;
+    }
     Status = DxgkContextOrderAdmitPacket(Context, Packet);
     if (!NT_SUCCESS(Status))
     {
+        ExReleaseRundownProtection(&Context->StreamAdmissionRundown);
         Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
         VidSchpDereferencePacket(Packet);
         VidSchpReleaseCall(Adapter);
         return Status;
     }
+    /*
+     * Secure both admission slots before assigning the hardware fence.
+     * SubmitCommand retries a full context stream internally; assigning a
+     * fence before that check consumed IDs for packets the miniport never
+     * received, stranding its completion window behind those missing IDs.
+     * LifecycleMutex keeps assignment ordered with scheduler admission.
+     */
+    Packet->SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
+    if (Packet->SubmissionFenceId == 0 || !DxgkReserveSubmissionFenceIdentity(Adapter, Context->NodeOrdinal, Packet->SubmissionFenceId, &Packet->FenceIdentityEpoch))
+    {
+        Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
+        ExReleaseFastMutex(&Ctx->LifecycleMutex);
+        DxgkContextOrderAbortPacket(Packet, STATUS_DEVICE_BUSY);
+        VidSchpDereferencePacket(Packet);
+        ExReleaseRundownProtection(&Context->StreamAdmissionRundown);
+        VidSchpReleaseCall(Adapter);
+        return STATUS_DEVICE_BUSY;
+    }
+    Packet->FenceIdentityReserved = TRUE;
+    FenceId = Packet->SubmissionFenceId;
+    /* Publication can retire the packet and its original context reference
+     * before AdmitPacket returns. Pin the later kick before that transfer. */
+    KickContext = DxgkReferenceContext(Context) ? Context : NULL;
     Packet->HoldsContextReference = TRUE;
     Status = VidSchpAdmitPacket(Adapter, Packet, DXGMMS2_SCHEDULER_ADMIT_CONSUME_RESERVATION, &AdmittedFenceId);
     if (!NT_SUCCESS(Status))
     {
+        /* The caller still owns its context reference on failed admission. */
+        Packet->HoldsContextReference = FALSE;
         Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
         DxgkContextOrderAbortPacket(Packet, Status);
         VidSchpDereferencePacket(Packet);
+        if (KickContext != NULL)
+            DxgkDereferenceContext(KickContext);
+        ExReleaseRundownProtection(&Context->StreamAdmissionRundown);
         VidSchpReleaseCall(Adapter);
         return Status;
     }
-    /* Keep the context alive across the kick: once the packet is published it
-     * can complete and drop its context reference at any moment. */
-    KickContext = DxgkReferenceContext(Context) ? Context : NULL;
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
+    ExReleaseRundownProtection(&Context->StreamAdmissionRundown);
     if (KickContext != NULL)
     {
         DxgkContextOrderKickContext(KickContext);
