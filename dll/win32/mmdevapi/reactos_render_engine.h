@@ -11,7 +11,7 @@ struct reactos_shared_render_client;
 
 struct reactos_render_transport_ops
 {
-    HRESULT (*create)(DWORD endpoint_index, const WAVEFORMATEXTENSIBLE *format, void **transport);
+    HRESULT (*create)(DWORD endpoint_index, const WAVEFORMATEXTENSIBLE *format, HANDLE completion_event, void **transport);
     void (*destroy)(void *transport);
     HRESULT (*start)(void *transport);
     HRESULT (*stop)(void *transport);
@@ -43,3 +43,6 @@ HRESULT
 reactos_shared_render_get_padding(struct reactos_shared_render_client *client, UINT32 *padding);
 HRESULT
 reactos_shared_render_get_position(struct reactos_shared_render_client *client, UINT64 *position, UINT64 *qpc_time);
+
+HANDLE
+reactos_shared_render_get_event(struct reactos_shared_render_client *client);
