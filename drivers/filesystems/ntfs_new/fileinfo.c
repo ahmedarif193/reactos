@@ -953,6 +953,8 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
 
     if (BufferLength < FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) || RenameInfo->FileNameLength == 0 || (RenameInfo->FileNameLength & (sizeof(WCHAR) - 1)) != 0 || BufferLength - FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) < RenameInfo->FileNameLength)
         return STATUS_INVALID_PARAMETER;
+    if (RenameInfo->FileNameLength > MAXUSHORT)
+        return STATUS_NAME_TOO_LONG;
     if (!(FileCB->DesiredAccess & DELETE))
         return STATUS_ACCESS_DENIED;
     if (FileCB->DeletePending)
@@ -964,11 +966,24 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
     TargetFileObject = IrpSp->Parameters.SetFile.FileObject;
     if (TargetFileObject)
     {
+        USHORT NameOffset;
+
         TargetFileCB = NtfsGetFileContext(TargetFileObject);
         if (!TargetFileCB || !TargetFileCB->FileRec || !(NtfsFileRecordGetHeader(TargetFileCB->FileRec)->Flags & FR_IS_DIRECTORY))
             return STATUS_INVALID_PARAMETER;
         ParentName = TargetFileCB->FileName;
-        LeafName = TargetFileObject->FileName;
+        /* The target object describes the opened parent directory. The
+         * destination's final component remains in the rename request. */
+        LeafName.Buffer = RenameInfo->FileName;
+        LeafName.Length = (USHORT)RenameInfo->FileNameLength;
+        for (NameOffset = LeafName.Length / sizeof(WCHAR); NameOffset != 0; --NameOffset)
+        {
+            if (LeafName.Buffer[NameOffset - 1] == L'\\')
+                break;
+        }
+        LeafName.Buffer += NameOffset;
+        LeafName.Length -= NameOffset * sizeof(WCHAR);
+        LeafName.MaximumLength = LeafName.Length;
     }
     else
     {
