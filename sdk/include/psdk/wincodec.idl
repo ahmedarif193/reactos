@@ -81,6 +81,7 @@ typedef enum WICBitmapInterpolationMode {
     WICBitmapInterpolationModeLinear = 0x00000001,
     WICBitmapInterpolationModeCubic = 0x00000002,
     WICBitmapInterpolationModeFant = 0x00000003,
+    WICBitmapInterpolationModeHighQualityCubic = 0x00000004,
     WICBITMAPINTERPOLATIONMODE_FORCE_DWORD = CODEC_FORCE_DWORD
 } WICBitmapInterpolationMode;
 

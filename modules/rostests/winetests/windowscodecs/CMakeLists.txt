@@ -15,6 +15,7 @@ list(APPEND SOURCE
     palette.c
     pngformat.c
     propertybag.c
+    scaler.c
     stream.c
     tiffformat.c
     wmpformat.c)

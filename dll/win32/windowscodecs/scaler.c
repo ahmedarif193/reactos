@@ -18,6 +18,8 @@
  */
 
 #include <stdarg.h>
+#include <math.h>
+#include <limits.h>
 
 #define COBJMACROS
 
@@ -40,6 +42,7 @@ typedef struct BitmapScaler {
     UINT src_width, src_height;
     WICBitmapInterpolationMode mode;
     UINT bpp;
+    BOOL straight_alpha;
     void (*fn_get_required_source_rect)(struct BitmapScaler*,UINT,UINT,WICRect*);
     void (*fn_copy_scanline)(struct BitmapScaler*,UINT,UINT,UINT,BYTE**,UINT,UINT,BYTE*);
     CRITICAL_SECTION lock; /* must be held when initialized */
@@ -203,6 +206,161 @@ static void NearestNeighbor_CopyScanline(BitmapScaler *This,
     }
 }
 
+struct resample_weights
+{
+    LONGLONG first;
+    SIZE_T count;
+    double *values;
+};
+
+/* Catmull-Rom with scale-dependent support. Keeping the support in source
+ * coordinates avoids aliasing when a small destination covers many pixels. */
+static double cubic_weight(double x)
+{
+    x = fabs(x);
+    if (x < 1.0) return ((1.5 * x - 2.5) * x) * x + 1.0;
+    if (x < 2.0) return ((-0.5 * x + 2.5) * x - 4.0) * x + 2.0;
+    return 0.0;
+}
+
+static void resample_range(BitmapScaler *This, UINT position, UINT source_size, UINT dest_size,
+    LONGLONG *first, LONGLONG *last)
+{
+    double scale = (double)source_size / dest_size;
+    if (This->mode == WICBitmapInterpolationModeFant)
+    {
+        *first = (ULONGLONG)position * source_size / dest_size;
+        *last = ((ULONGLONG)(position + 1) * source_size + dest_size - 1) / dest_size - 1;
+    }
+    else
+    {
+        double center = (position + 0.5) * scale - 0.5;
+        double radius = 2.0 * max(scale, 1.0);
+        *first = floor(center - radius);
+        *last = ceil(center + radius);
+    }
+}
+
+static void Resample_GetRequiredSourceRect(BitmapScaler *This, UINT x, UINT y, WICRect *rect)
+{
+    LONGLONG first, last;
+    resample_range(This, x, This->src_width, This->width, &first, &last);
+    rect->X = max(first, 0);
+    rect->Width = min(last, This->src_width - 1) - rect->X + 1;
+    resample_range(This, y, This->src_height, This->height, &first, &last);
+    rect->Y = max(first, 0);
+    rect->Height = min(last, This->src_height - 1) - rect->Y + 1;
+}
+
+static BOOL make_resample_weights(BitmapScaler *This, UINT position, UINT source_size, UINT dest_size,
+    struct resample_weights *weights)
+{
+    LONGLONG last;
+    SIZE_T i;
+    double scale = (double)source_size / dest_size, total = 0.0;
+    double center = (position + 0.5) * scale - 0.5;
+
+    resample_range(This, position, source_size, dest_size, &weights->first, &last);
+    if ((ULONGLONG)(last - weights->first + 1) > ~(SIZE_T)0 / sizeof(double))
+        return FALSE;
+    weights->count = last - weights->first + 1;
+    weights->values = malloc(weights->count * sizeof(double));
+    if (!weights->values)
+        return FALSE;
+    for (i = 0; i < weights->count; ++i)
+    {
+        double source = weights->first + (LONGLONG)i, value;
+        if (This->mode == WICBitmapInterpolationModeFant)
+            value = max(0.0, min(source + 1.0, (position + 1.0) * scale) - max(source, position * scale));
+        else
+            value = cubic_weight((source - center) / max(scale, 1.0));
+        weights->values[i] = value;
+        total += value;
+    }
+    for (i = 0; i < weights->count; ++i)
+        weights->values[i] /= total;
+    return TRUE;
+}
+
+static BYTE resample_byte(double value)
+{
+    if (value <= 0.0) return 0;
+    if (value >= 255.0) return 255;
+    return (BYTE)(value + 0.5);
+}
+
+static HRESULT Resample_CopyPixels(BitmapScaler *This, const WICRect *dest_rect, const WICRect *src_rect,
+    const BYTE *source, UINT source_stride, BYTE *dest, UINT dest_stride)
+{
+    struct resample_weights *horizontal = NULL, *vertical = NULL;
+    double *intermediate = NULL;
+    UINT channels = This->bpp / 8, x, y, c;
+    SIZE_T i, line_size;
+    HRESULT hr = E_OUTOFMEMORY;
+
+    if ((SIZE_T)dest_rect->Width > ~(SIZE_T)0 / channels / sizeof(double) / src_rect->Height)
+        return E_OUTOFMEMORY;
+    line_size = (SIZE_T)dest_rect->Width * channels;
+    horizontal = calloc(dest_rect->Width, sizeof(*horizontal));
+    vertical = calloc(dest_rect->Height, sizeof(*vertical));
+    intermediate = calloc(src_rect->Height, line_size * sizeof(double));
+    if (!horizontal || !vertical || !intermediate)
+        goto done;
+    for (x = 0; x < dest_rect->Width; ++x)
+        if (!make_resample_weights(This, dest_rect->X + x, This->src_width, This->width, horizontal + x))
+            goto done;
+    for (y = 0; y < dest_rect->Height; ++y)
+        if (!make_resample_weights(This, dest_rect->Y + y, This->src_height, This->height, vertical + y))
+            goto done;
+
+    /* Filter separably, retaining fractional premultiplied values between
+     * passes. This bounds work for large PNGs and prevents transparent RGB
+     * from bleeding into visible pixels. */
+    for (y = 0; y < src_rect->Height; ++y)
+        for (x = 0; x < dest_rect->Width; ++x)
+            for (i = 0; i < horizontal[x].count; ++i)
+            {
+                LONGLONG sx = horizontal[x].first + (LONGLONG)i;
+                const BYTE *pixel;
+                double alpha, weight = horizontal[x].values[i];
+                sx = min(max(sx, 0), This->src_width - 1);
+                pixel = source + (SIZE_T)y * source_stride + (sx - src_rect->X) * channels;
+                alpha = This->straight_alpha ? pixel[3] / 255.0 : 1.0;
+                for (c = 0; c < channels; ++c)
+                    intermediate[y * line_size + x * channels + c] += pixel[c] * weight * (c == 3 ? 1.0 : alpha);
+            }
+
+    for (y = 0; y < dest_rect->Height; ++y)
+        for (x = 0; x < dest_rect->Width; ++x)
+        {
+            double pixel[4] = {0};
+            BYTE *output = dest + (SIZE_T)y * dest_stride + x * channels;
+            for (i = 0; i < vertical[y].count; ++i)
+            {
+                LONGLONG sy = vertical[y].first + (LONGLONG)i;
+                sy = min(max(sy, 0), This->src_height - 1);
+                for (c = 0; c < channels; ++c)
+                    pixel[c] += intermediate[(sy - src_rect->Y) * line_size + x * channels + c] * vertical[y].values[i];
+            }
+            if (This->straight_alpha)
+                for (c = 0; c < 3; ++c)
+                    pixel[c] = pixel[3] > 0.0 ? pixel[c] * 255.0 / pixel[3] : 0.0;
+            for (c = 0; c < channels; ++c)
+                output[c] = resample_byte(pixel[c]);
+        }
+    hr = S_OK;
+
+done:
+    if (horizontal)
+        for (x = 0; x < dest_rect->Width; ++x) free(horizontal[x].values);
+    if (vertical)
+        for (y = 0; y < dest_rect->Height; ++y) free(vertical[y].values);
+    free(horizontal);
+    free(vertical);
+    free(intermediate);
+    return hr;
+}
+
 static HRESULT WINAPI BitmapScaler_CopyPixels(IWICBitmapScaler *iface,
     const WICRect *prc, UINT cbStride, UINT cbBufferSize, BYTE *pbBuffer)
 {
@@ -236,14 +394,15 @@ static HRESULT WINAPI BitmapScaler_CopyPixels(IWICBitmapScaler *iface,
         dest_rect.Height = This->height;
     }
 
-    if (dest_rect.X < 0 || dest_rect.Y < 0 ||
-        dest_rect.X+dest_rect.Width > This->width|| dest_rect.Y+dest_rect.Height > This->height)
+    if (!pbBuffer || dest_rect.X < 0 || dest_rect.Y < 0 || dest_rect.Width <= 0 || dest_rect.Height <= 0 ||
+        (ULONGLONG)dest_rect.X + dest_rect.Width > This->width || (ULONGLONG)dest_rect.Y + dest_rect.Height > This->height ||
+        ((ULONGLONG)This->bpp * dest_rect.Width + 7) / 8 > UINT_MAX)
     {
         hr = E_INVALIDARG;
         goto end;
     }
 
-    bytesperrow = ((This->bpp * dest_rect.Width)+7)/8;
+    bytesperrow = ((ULONGLONG)This->bpp * dest_rect.Width + 7) / 8;
 
     if (cbStride < bytesperrow)
     {
@@ -251,7 +410,7 @@ static HRESULT WINAPI BitmapScaler_CopyPixels(IWICBitmapScaler *iface,
         goto end;
     }
 
-    if (cbStride * (dest_rect.Height - 1) + bytesperrow > cbBufferSize)
+    if ((ULONGLONG)cbStride * (dest_rect.Height - 1) + bytesperrow > cbBufferSize)
     {
         hr = E_INVALIDARG;
         goto end;
@@ -274,7 +433,13 @@ static HRESULT WINAPI BitmapScaler_CopyPixels(IWICBitmapScaler *iface,
     src_rect.Width = src_rect_br.Width + src_rect_br.X - src_rect_ul.X;
     src_rect.Height = src_rect_br.Height + src_rect_br.Y - src_rect_ul.Y;
 
-    src_bytesperrow = (src_rect.Width * This->bpp + 7)/8;
+    if (((ULONGLONG)src_rect.Width * This->bpp + 7) / 8 > UINT_MAX / src_rect.Height ||
+        (SIZE_T)src_rect.Height > ~(SIZE_T)0 / sizeof(BYTE *))
+    {
+        hr = E_OUTOFMEMORY;
+        goto end;
+    }
+    src_bytesperrow = ((ULONGLONG)src_rect.Width * This->bpp + 7) / 8;
     buffer_size = src_bytesperrow * src_rect.Height;
 
     src_rows = malloc(sizeof(BYTE*) * src_rect.Height);
@@ -294,7 +459,11 @@ static HRESULT WINAPI BitmapScaler_CopyPixels(IWICBitmapScaler *iface,
     hr = IWICBitmapSource_CopyPixels(This->source, &src_rect, src_bytesperrow,
         buffer_size, src_bits);
 
-    if (SUCCEEDED(hr))
+    if (SUCCEEDED(hr) && !This->fn_copy_scanline)
+    {
+        hr = Resample_CopyPixels(This, &dest_rect, &src_rect, src_bits, src_bytesperrow, pbBuffer, cbStride);
+    }
+    else if (SUCCEEDED(hr))
     {
         for (y=0; y < dest_rect.Height; y++)
         {
@@ -322,7 +491,7 @@ static HRESULT WINAPI BitmapScaler_Initialize(IWICBitmapScaler *iface,
 
     TRACE("(%p,%p,%u,%u,%u)\n", iface, pISource, uiWidth, uiHeight, mode);
 
-    if (!pISource || !uiWidth || !uiHeight)
+    if (!pISource || !uiWidth || !uiHeight || uiWidth > INT_MAX || uiHeight > INT_MAX)
         return E_INVALIDARG;
 
     EnterCriticalSection(&This->lock);
@@ -338,6 +507,8 @@ static HRESULT WINAPI BitmapScaler_Initialize(IWICBitmapScaler *iface,
     This->mode = mode;
 
     hr = IWICBitmapSource_GetSize(pISource, &This->src_width, &This->src_height);
+    if (SUCCEEDED(hr) && (!This->src_width || !This->src_height || This->src_width > INT_MAX || This->src_height > INT_MAX))
+        hr = E_INVALIDARG;
 
     if (SUCCEEDED(hr))
         hr = IWICBitmapSource_GetPixelFormat(pISource, &src_pixelformat);
@@ -351,6 +522,23 @@ static HRESULT WINAPI BitmapScaler_Initialize(IWICBitmapScaler *iface,
     {
         switch (mode)
         {
+        case WICBitmapInterpolationModeFant:
+        case WICBitmapInterpolationModeHighQualityCubic:
+            This->straight_alpha = IsEqualGUID(&src_pixelformat, &GUID_WICPixelFormat32bppBGRA) || IsEqualGUID(&src_pixelformat, &GUID_WICPixelFormat32bppRGBA);
+            if ((mode == WICBitmapInterpolationModeHighQualityCubic || (This->src_width >= uiWidth && This->src_height >= uiHeight)) &&
+                (This->straight_alpha || IsEqualGUID(&src_pixelformat, &GUID_WICPixelFormat32bppPBGRA) ||
+                 IsEqualGUID(&src_pixelformat, &GUID_WICPixelFormat32bppPRGBA) || IsEqualGUID(&src_pixelformat, &GUID_WICPixelFormat32bppBGR) ||
+                 IsEqualGUID(&src_pixelformat, &GUID_WICPixelFormat24bppBGR) || IsEqualGUID(&src_pixelformat, &GUID_WICPixelFormat24bppRGB) ||
+                 IsEqualGUID(&src_pixelformat, &GUID_WICPixelFormat8bppGray)))
+            {
+                IWICBitmapSource_AddRef(pISource);
+                This->source = pISource;
+                This->fn_get_required_source_rect = Resample_GetRequiredSourceRect;
+                This->fn_copy_scanline = NULL;
+                break;
+            }
+            /* Keep the existing path for formats not yet filtered. */
+            /* fall-through */
         default:
             FIXME("unsupported mode %i\n", mode);
             /* fall-through */
