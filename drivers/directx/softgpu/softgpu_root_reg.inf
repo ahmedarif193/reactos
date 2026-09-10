@@ -7,8 +7,8 @@ HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay","ImagePath",0x00020000,"sy
 HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay","Start",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay","Tag",0x00010001,0x00000003
-HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay","UserModeDriverName",0x00010000,"softgpuum.dll","softgpuum.dll","softgpuum.dll","softgpuum.dll"
-HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay","UserModeDriverNameWow",0x00010000,"softgpuum.dll","softgpuum.dll","softgpuum.dll","softgpuum.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay","UserModeDriverName",0x00010000,"softgpuum.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay","UserModeDriverNameWow",0x00010000,"softgpuum.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay\Video","Service",0x00000000,"BasicDisplay"
 HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
 HKLM,"SYSTEM\CurrentControlSet\Services\BasicDisplay\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001

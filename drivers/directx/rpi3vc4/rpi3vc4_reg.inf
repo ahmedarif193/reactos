@@ -8,8 +8,8 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","Group",0x00000000,"Video"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","ImagePath",0x00020000,"system32\drivers\rpi3vc4.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","Start",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","Type",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","UserModeDriverName",0x00010000,"rpi3vc4um.dll","rpi3vc4um.dll","rpi3vc4um.dll","rpi3vc4um.dll"
-HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","UserModeDriverNameWow",0x00010000,"rpi3vc4um.dll","rpi3vc4um.dll","rpi3vc4um.dll","rpi3vc4um.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","UserModeDriverName",0x00010000,"rpi3vc4um.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","UserModeDriverNameWow",0x00010000,"rpi3vc4um.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","OpenGLDriverName",0x00000000,"rpi3vc4ogl.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","OpenGLVersion",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi3vc4","OpenGLFlags",0x00010001,0x00000000

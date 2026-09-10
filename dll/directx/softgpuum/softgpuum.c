@@ -2294,7 +2294,7 @@ SoftGpuUmCloseAdapter(
  * ------------------------------------------------------------------------ */
 
 HRESULT APIENTRY
-OpenAdapter10_2(
+OpenAdapter(
     D3DDDIARG_OPENADAPTER *pOpenData)
 {
     PSOFTGPUUM_ADAPTER Adapter;

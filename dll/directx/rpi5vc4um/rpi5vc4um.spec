@@ -1,1 +1,1 @@
-@ stdcall OpenAdapter10_2(ptr)
+@ stdcall OpenAdapter(ptr)

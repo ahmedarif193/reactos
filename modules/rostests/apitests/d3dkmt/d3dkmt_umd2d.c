@@ -302,9 +302,9 @@ Test_SoftGpu2DEndToEnd(void)
     if (Umd == NULL)
         goto Cleanup;
     pOpenAdapter = (PFND3DDDI_OPENADAPTER)
-        GetProcAddress(Umd, "OpenAdapter10_2");
+        GetProcAddress(Umd, "OpenAdapter");
     ok(pOpenAdapter != NULL,
-       "softgpuum.dll exports no OpenAdapter10_2\n");
+       "softgpuum.dll exports no OpenAdapter\n");
     if (pOpenAdapter == NULL)
         goto Cleanup;
 
@@ -318,7 +318,7 @@ Test_SoftGpu2DEndToEnd(void)
     Open.pAdapterFuncs = &AdapterFuncs;
     Result = pOpenAdapter(&Open);
     ok(Result == S_OK,
-       "OpenAdapter10_2 failed 0x%08lX\n",
+       "OpenAdapter failed 0x%08lX\n",
        (long)Result);
     if (FAILED(Result))
         goto Cleanup;

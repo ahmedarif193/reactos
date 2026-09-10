@@ -101,8 +101,8 @@ static void Test_ExportNameIsTheOneTheRuntimeResolves(void)
 {
     /* The runtime resolves this by name; a driver exporting anything else is
      * simply not loaded, with no diagnostic. */
-    ok(strcmp(D3DDDI_OPENADAPTER_PROCNAME, "OpenAdapter10_2") == 0,
-       "UMD entry point name is \"%s\", not OpenAdapter10_2\n", D3DDDI_OPENADAPTER_PROCNAME);
+    ok(strcmp(D3DDDI_OPENADAPTER_PROCNAME, "OpenAdapter") == 0,
+       "UMD entry point name is \"%s\", not OpenAdapter\n", D3DDDI_OPENADAPTER_PROCNAME);
 }
 
 START_TEST(umdabi)
