@@ -301,7 +301,9 @@ LdrpValidateUserCallTarget(
             return FALSE;
 
         LoadConfig = RtlImageDirectoryEntryToData(LdrEntry->DllBase, TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &ConfigSize);
-        if (LoadConfig == NULL ||
+        /* Instrumentation alone does not opt an image into CFG enforcement. */
+        if (!(NtHeaders->OptionalHeader.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_GUARD_CF) ||
+            LoadConfig == NULL ||
             ConfigSize < RTL_SIZEOF_THROUGH_FIELD(IMAGE_LOAD_CONFIG_DIRECTORY, GuardFlags) ||
             !(LoadConfig->GuardFlags & IMAGE_GUARD_CF_INSTRUMENTED))
         {
