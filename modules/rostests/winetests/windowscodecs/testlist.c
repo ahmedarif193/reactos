@@ -15,6 +15,7 @@ extern void func_metadata(void);
 extern void func_palette(void);
 extern void func_pngformat(void);
 extern void func_propertybag(void);
+extern void func_scaler(void);
 extern void func_stream(void);
 extern void func_tiffformat(void);
 extern void func_wmpformat(void);
@@ -33,6 +34,7 @@ const struct test winetest_testlist[] =
     { "palette", func_palette },
     { "pngformat", func_pngformat },
     { "propertybag", func_propertybag },
+    { "scaler", func_scaler },
     { "stream", func_stream },
     { "tiffformat", func_tiffformat },
     { "wmpformat", func_wmpformat },
