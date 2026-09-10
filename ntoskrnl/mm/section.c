@@ -2334,10 +2334,10 @@ MmAccessFaultSectionView(KPROCESSOR_MODE Mode,
             NewProtect |= PAGE_EXECUTE_READWRITE;
         else
             NewProtect |= PAGE_READWRITE;
-        MmAlterRegion(AddressSpace, (PVOID)MA_GetStartingAddress(MemoryArea),
-                &MemoryArea->SectionData.RegionListHead,
-                Address, PAGE_SIZE, Region->Type, NewProtect,
-                MmAlterViewAttributes);
+        /* A write inside the page must not change the following page's protection. */
+        Status = MmAlterRegion(AddressSpace, (PVOID)MA_GetStartingAddress(MemoryArea), &MemoryArea->SectionData.RegionListHead, PAddress, PAGE_SIZE, Region->Type, NewProtect, MmAlterViewAttributes);
+        if (!NT_SUCCESS(Status))
+            return Status;
     }
 
     /*
