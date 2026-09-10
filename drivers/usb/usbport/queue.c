@@ -1042,8 +1042,8 @@ USBPORT_QueuePendingUrbToEndpoint(IN PUSBPORT_ENDPOINT Endpoint,
 
     Transfer = Urb->UrbControlTransfer.hca.Reserved8[0];
     USBPORT_ResetEndpointIdle(Endpoint);
-    InsertTailList(&Endpoint->PendingTransferList, &Transfer->TransferLink);
     Urb->UrbHeader.Status = USBD_STATUS_PENDING;
+    ExInterlockedInsertTailList(&Endpoint->PendingTransferList, &Transfer->TransferLink, &Endpoint->EndpointSpinLock);
 }
 
 BOOLEAN

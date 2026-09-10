@@ -83,6 +83,7 @@ C_ASSERT(sizeof(EHCI_HCD_TD) == 0x100);
 #define EHCI_QH_FLAG_STATIC_FAST  0x08
 #define EHCI_QH_FLAG_UPDATING     0x10
 #define EHCI_QH_FLAG_NUKED        0x20
+#define EHCI_QH_FLAG_RECLAIM      0x40
 
 typedef struct _EHCI_STATIC_QH {
   /* Hardware part */
@@ -117,10 +118,12 @@ C_ASSERT(sizeof(EHCI_STATIC_QH) == 0xA0);
 
 typedef struct _EHCI_HCD_QH {
   EHCI_STATIC_QH sqh;
+  ULONG ReclaimGeneration;
+  ULONG TransferType;
 #ifdef _WIN64
-  ULONG Pad[23];
+  ULONG Pad[21];
 #else
-  ULONG Pad[24];
+  ULONG Pad[22];
 #endif
 } EHCI_HCD_QH, *PEHCI_HCD_QH;
 
@@ -131,6 +134,7 @@ typedef struct _EHCI_ENDPOINT {
   ULONG Reserved;
   ULONG EndpointStatus;
   ULONG EndpointState;
+  ULONG RequestedState;
   USBPORT_ENDPOINT_PROPERTIES EndpointProperties;
   PVOID DmaBufferVA;
   ULONG DmaBufferPA;
@@ -211,6 +215,14 @@ typedef struct _EHCI_EXTENSION {
   ULONG BackupAsynclistaddr;
   ULONG BackupCtrlDSSegment;
   ULONG BackupUSBCmd;
+  /* Serialized by USBPORT's MiniportSpinLock; no hardware-visible pointers. */
+  ULONG AsyncReclaimRequested;
+  ULONG AsyncReclaimIssued;
+  ULONG AsyncReclaimCompleted;
+  ULONG AsyncReclaimState;
+  ULONGLONG AsyncReclaimDeadline;
+  BOOLEAN AsyncReclaimRestoreEnable;
+  BOOLEAN AsyncReclaimFailed;
 } EHCI_EXTENSION, *PEHCI_EXTENSION;
 
 /* debug.c */
