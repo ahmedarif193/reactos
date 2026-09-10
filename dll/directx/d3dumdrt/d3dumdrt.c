@@ -1178,6 +1178,7 @@ D3DUmdRtDestroyOverlayCb(
 
 static HRESULT APIENTRY D3DUmdRtEscapeCb(HANDLE hAdapter, CONST D3DDDICB_ESCAPE *pData)
 {
+    PD3DUMDRT_DEVICE Device;
     D3DKMT_ESCAPE Escape;
 
     if (pData == NULL || pfnEscape == NULL)
@@ -1187,7 +1188,13 @@ static HRESULT APIENTRY D3DUmdRtEscapeCb(HANDLE hAdapter, CONST D3DDDICB_ESCAPE 
     /* Escape is the one callback keyed on the adapter rather than the device,
      * because a driver may need it before any device exists. */
     Escape.hAdapter = (D3DKMT_HANDLE)(ULONG_PTR)hAdapter;
-    Escape.hDevice = (D3DKMT_HANDLE)(ULONG_PTR)pData->hDevice;
+    if (pData->hDevice != NULL)
+    {
+        Device = D3DUmdRtDevice(pData->hDevice);
+        if (Device == NULL || Device->hAdapter != Escape.hAdapter)
+            return E_INVALIDARG;
+        Escape.hDevice = Device->hDevice;
+    }
     Escape.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
     Escape.Flags = *(D3DDDI_ESCAPEFLAGS *)&pData->Flags;
     Escape.pPrivateDriverData = pData->pPrivateDriverData;
