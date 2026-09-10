@@ -910,7 +910,11 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                FileObject->FileName.Buffer,
                                FileObject->FileName.Length / sizeof(WCHAR)))
     {
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
         Status = NtfsTranslateNotFoundStatus(Mft, &FileObject->FileName);
+        ExReleaseResourceLite(&VolCB->MetadataResource);
+        KeLeaveCriticalRegion();
         Irp->IoStatus.Information = FILE_DOES_NOT_EXIST;
         Irp->IoStatus.Status = Status;
         IoCompleteRequest(Irp, IO_DISK_INCREMENT);
