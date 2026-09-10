@@ -1034,7 +1034,11 @@ KiArm64HandleSystemService(
     TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)Thread->TrapFrame;
     Thread->TrapFrame = TrapFrame;
 
-    Instruction = (ULONG)(TrapFrame->X[8] & 0x1FFF);
+    /* Native ARM64 veneers carry the service number in the SVC immediate. */
+    Instruction = (ULONG)(Context->State.ExceptionSyndrome & 0xFFFF);
+    /* FEX's direct-call bridge supplies a runtime service number in x8. */
+    if (Instruction == 0xFFFF)
+        Instruction = (ULONG)(TrapFrame->X[8] & 0x1FFF);
 
     /* Only a nested kernel SVC can inherit the synchronous-exception guard. */
     if (TrapFrame->PreviousMode == KernelMode)

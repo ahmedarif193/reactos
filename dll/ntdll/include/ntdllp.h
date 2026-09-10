@@ -336,6 +336,11 @@ ChpeLeaveEmulatorCallback(
 
 NTSTATUS
 NTAPI
+ChpeInitializeSyscallWrappers(
+    VOID);
+
+NTSTATUS
+NTAPI
 ChpeInitializeProcess(
     VOID);
 
