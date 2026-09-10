@@ -15,7 +15,14 @@ add_cd_file(TARGET memcopybench DESTINATION reactos/system32 FOR all)
 # on Mesa is introduced for ordinary builds of this diagnostic.
 set(MEMCOPYBENCH_MESA_BEFORE "" CACHE FILEPATH "Previous v3d_cpu_tiling.h for copy measurements")
 set(MEMCOPYBENCH_MESA_AFTER "" CACHE FILEPATH "Current v3d_cpu_tiling.h for copy measurements")
-if(MEMCOPYBENCH_MESA_BEFORE AND MEMCOPYBENCH_MESA_AFTER)
+if(MEMCOPYBENCH_MESA_BEFORE OR MEMCOPYBENCH_MESA_AFTER)
+    foreach(snapshot MEMCOPYBENCH_MESA_BEFORE MEMCOPYBENCH_MESA_AFTER)
+        if(NOT EXISTS "${${snapshot}}" OR IS_DIRECTORY "${${snapshot}}")
+            message(FATAL_ERROR
+                "${snapshot} must name an existing v3d_cpu_tiling.h snapshot. "
+                "Set both MEMCOPYBENCH_MESA_BEFORE and MEMCOPYBENCH_MESA_AFTER to empty strings to disable the comparison.")
+        endif()
+    endforeach()
     target_compile_definitions(memcopybench PRIVATE
         MEMCOPYBENCH_MESA_BEFORE="${MEMCOPYBENCH_MESA_BEFORE}"
         MEMCOPYBENCH_MESA_AFTER="${MEMCOPYBENCH_MESA_AFTER}")
