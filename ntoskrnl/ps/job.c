@@ -1160,7 +1160,11 @@ PspSetJobLimitsBasicOrExtended(
      */
 
     /* Acquire the memory limits lock */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExAcquirePushLockExclusive(&Job->MemoryLimitsLock);
+#else
     KeAcquireGuardedMutexUnsafe(&Job->MemoryLimitsLock);
+#endif
 
     if (ExtendedLimit->BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY)
     {
@@ -1179,7 +1183,11 @@ PspSetJobLimitsBasicOrExtended(
 
     /* Release locks */
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExReleasePushLockExclusive(&Job->MemoryLimitsLock);
+#else
     KeReleaseGuardedMutexUnsafe(&Job->MemoryLimitsLock);
+#endif
 
     ApplyAffinity = ((Job->LimitFlags & JOB_OBJECT_LIMIT_AFFINITY) &&
                      (!(OldLimitFlags & JOB_OBJECT_LIMIT_AFFINITY) ||
@@ -1465,14 +1473,22 @@ PspQueryJobLimitInformation(
     /* If extended limits are requested, include memory limits */
     if (Extended)
     {
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        ExAcquirePushLockExclusive(&Job->MemoryLimitsLock);
+#else
         KeAcquireGuardedMutexUnsafe(&Job->MemoryLimitsLock);
+#endif
 
         ExtendedLimit->ProcessMemoryLimit = (SIZE_T)Job->ProcessMemoryLimit << PAGE_SHIFT;
         ExtendedLimit->JobMemoryLimit = (SIZE_T)Job->JobMemoryLimit << PAGE_SHIFT;
         ExtendedLimit->PeakProcessMemoryUsed = (SIZE_T)Job->PeakProcessMemoryUsed << PAGE_SHIFT;
         ExtendedLimit->PeakJobMemoryUsed = (SIZE_T)Job->PeakJobMemoryUsed << PAGE_SHIFT;
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        ExReleasePushLockExclusive(&Job->MemoryLimitsLock);
+#else
         KeReleaseGuardedMutexUnsafe(&Job->MemoryLimitsLock);
+#endif
 
         /* Zero out IoInfo to avoid kernel memory leaks */
         RtlZeroMemory(&ExtendedLimit->IoInfo, sizeof(ExtendedLimit->IoInfo));
@@ -1851,7 +1867,11 @@ NtCreateJobObject(
     Job->SessionId = PsGetProcessSessionId(CurrentProcess);
 
     /* Initialize the job limits lock */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExInitializePushLock(&Job->MemoryLimitsLock);
+#else
     KeInitializeGuardedMutex(&Job->MemoryLimitsLock);
+#endif
 
     /* Initialize the job lock */
     (VOID)ExInitializeResource(&Job->JobLock);
@@ -2134,7 +2154,7 @@ NtIsProcessInJob(
             if (NT_SUCCESS(Status))
             {
                 /* Compare the job objects */
-                if ((ProcessJob == JobObjectFromHandle))
+                if (ProcessJob == JobObjectFromHandle)
                 {
                     Status = STATUS_PROCESS_IN_JOB;
                 }
