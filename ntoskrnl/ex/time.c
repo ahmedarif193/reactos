@@ -276,7 +276,7 @@ ExSetTimerResolution(IN ULONG DesiredTime,
         if (ExpKernelResolutionCount)
         {
             /* Obey remark 4 */
-            if (--ExpKernelResolutionCount)
+            if (!--ExpKernelResolutionCount)
             {
                 /*
                  * All kernel drivers have requested the original frequency to
@@ -284,7 +284,7 @@ ExSetTimerResolution(IN ULONG DesiredTime,
                  * ongoing clock interrupt frequency change, so make sure that
                  * this isn't the case.
                  */
-                if (--ExpTimerResolutionCount)
+                if (!--ExpTimerResolutionCount)
                 {
                     /* Force this thread on one CPU so that it doesn't drift */
                     KeSetSystemAffinityThread(1);
