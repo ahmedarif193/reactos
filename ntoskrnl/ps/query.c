@@ -1415,6 +1415,79 @@ NtQueryInformationProcess(
             ObDereferenceObject(Process);
             break;
 
+        case ProcessMitigationPolicy:
+        case ProcessHandleCheckingMode:
+        {
+            PSP_MITIGATION_POLICY_INFORMATION Information;
+            PHANDLE_TABLE HandleTable;
+            ULONG Flags;
+
+            if (ProcessInformationClass == ProcessMitigationPolicy)
+            {
+                _SEH2_TRY
+                {
+                    Information = *(PSP_MITIGATION_POLICY_INFORMATION*)ProcessInformation;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                    _SEH2_YIELD(break);
+                }
+                _SEH2_END;
+
+                if (Information.Policy != PSP_STRICT_HANDLE_CHECK_POLICY && Information.Policy != PSP_SIGNATURE_POLICY)
+                {
+                    Status = STATUS_NOT_SUPPORTED;
+                    break;
+                }
+                Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
+            }
+            else
+            {
+                Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_QUERY_INFORMATION, PsProcessType, PreviousMode, (PVOID*)&Process, NULL);
+            }
+            if (!NT_SUCCESS(Status)) break;
+
+            if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_SIGNATURE_POLICY)
+            {
+                Flags = ReadAcquire(&Process->SignatureMitigationPolicy);
+            }
+            else
+            {
+                HandleTable = ObReferenceProcessHandleTable(Process);
+                if (!HandleTable)
+                {
+                    ObDereferenceObject(Process);
+                    Status = STATUS_PROCESS_IS_TERMINATING;
+                    break;
+                }
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                Flags = HandleTable->EnableHandleExceptions ? 1 : 0;
+#else
+                Flags = 0;
+#endif
+                ObDereferenceProcessHandleTable(Process);
+                if (ProcessInformationClass == ProcessMitigationPolicy)
+                    Flags = Flags ? 3 : 0;
+            }
+            ObDereferenceObject(Process);
+
+            _SEH2_TRY
+            {
+                if (ProcessInformationClass == ProcessMitigationPolicy)
+                    ((PSP_MITIGATION_POLICY_INFORMATION*)ProcessInformation)->Flags = Flags;
+                else
+                    *(PULONG)ProcessInformation = Flags;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            /* These two classes leave ReturnLength untouched on Windows. */
+            break;
+        }
+
         /* Per-process security cookie */
         case ProcessCookie:
         {
@@ -2448,6 +2521,104 @@ NtSetInformationProcess(
                 Status = STATUS_PROCESS_IS_TERMINATING;
             }
             break;
+
+        case ProcessMitigationPolicy:
+        case ProcessHandleCheckingMode:
+        {
+            PSP_MITIGATION_POLICY_INFORMATION Information;
+            PHANDLE_TABLE HandleTable;
+            ULONG Flags;
+
+            _SEH2_TRY
+            {
+                if (ProcessInformationClass == ProcessMitigationPolicy)
+                {
+                    Information = *(PSP_MITIGATION_POLICY_INFORMATION*)ProcessInformation;
+                    Flags = Information.Flags;
+                }
+                else
+                {
+                    Information.Policy = PSP_STRICT_HANDLE_CHECK_POLICY;
+                    Flags = *(PULONG)ProcessInformation;
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if (Information.Policy == PSP_SIGNATURE_POLICY)
+            {
+                LONG OldPolicy, NewPolicy;
+
+                if ((Flags & ~0x1f) || (Flags & 3) == 3)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+                /* Store-only signing cannot be enabled through the runtime setter. */
+                if (Flags & 2)
+                {
+                    Status = STATUS_ACCESS_DENIED;
+                    break;
+                }
+                if (!(Flags & 1) && (Flags & 0x18) == 0x18)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+                /* Store signature classification is not implemented yet. */
+                if (!(Flags & 1) && (Flags & 0x10))
+                {
+                    Status = STATUS_NOT_SUPPORTED;
+                    break;
+                }
+                do
+                {
+                    OldPolicy = ReadAcquire(&Process->SignatureMitigationPolicy);
+                    NewPolicy = Flags & 1 ? 5 : Flags | (OldPolicy & 4);
+                    if (NewPolicy)
+                        NewPolicy |= 4;
+                    if (((OldPolicy & 1) && !(NewPolicy & 1)) || ((OldPolicy & 8) && !(NewPolicy & 9)))
+                    {
+                        Status = STATUS_ACCESS_DENIED;
+                        break;
+                    }
+                } while (InterlockedCompareExchange(&Process->SignatureMitigationPolicy, NewPolicy, OldPolicy) != OldPolicy);
+                break;
+            }
+            if (Information.Policy != PSP_STRICT_HANDLE_CHECK_POLICY)
+            {
+                Status = STATUS_NOT_SUPPORTED;
+                break;
+            }
+            if (Flags != 0 && Flags != (ProcessInformationClass == ProcessMitigationPolicy ? 3 : 1))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            HandleTable = ObReferenceProcessHandleTable(Process);
+            if (!HandleTable)
+            {
+                Status = STATUS_PROCESS_IS_TERMINATING;
+                break;
+            }
+#if (NTDDI_VERSION >= NTDDI_LONGHORN) && (defined(_M_ARM64) || defined(_M_IX86))
+            if (Flags)
+                InterlockedOr((PLONG)&HandleTable->Flags, OB_HANDLE_EXCEPTIONS_ENABLED);
+            else if (ProcessInformationClass == ProcessMitigationPolicy && HandleTable->EnableHandleExceptions)
+                Status = STATUS_ACCESS_DENIED;
+            /* ProcessHandleCheckingMode(0) is a no-op even after enabling. */
+#else
+            /* Do not claim enforcement where KeRaiseUserException is a stub. */
+            if (Flags) Status = STATUS_NOT_SUPPORTED;
+#endif
+            ObDereferenceProcessHandleTable(Process);
+            break;
+        }
 
         case ProcessBreakOnTermination:
 

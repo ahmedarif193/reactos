@@ -12,6 +12,16 @@
 #define PSP_PAGE_PRIORITY_MINIMUM 1
 #define PSP_PAGE_PRIORITY_NORMAL  5
 
+/* The fixed-size header and policy flags used by ProcessMitigationPolicy. */
+typedef struct _PSP_MITIGATION_POLICY_INFORMATION
+{
+    ULONG Policy;
+    ULONG Flags;
+} PSP_MITIGATION_POLICY_INFORMATION;
+
+#define PSP_STRICT_HANDLE_CHECK_POLICY 3
+#define PSP_SIGNATURE_POLICY 8
+
 //
 // Process Information Classes
 //
@@ -384,11 +394,11 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     /* ProcessHandleInformation */
     IQS_NONE,
     /* ProcessMitigationPolicy */
-    IQS_NONE,
+    IQS_SAME(PSP_MITIGATION_POLICY_INFORMATION, ULONG, ICIF_QUERY | ICIF_SET),
     /* ProcessDynamicFunctionTableInformation */
     IQS_NONE,
     /* ProcessHandleCheckingMode */
-    IQS_NONE,
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_SET),
     /* ProcessKeepAliveCount */
     IQS_NONE,
     /* ProcessRevokeFileHandles */
