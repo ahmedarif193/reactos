@@ -899,6 +899,12 @@ DxgkVidMmReferenceResource(
     _Out_ PDXGKVMM_RESOURCE *OutResource);
 
 NTSTATUS
+DxgkVidMmValidateSharedResourceOwner(
+    _In_ ULONG GlobalShare,
+    _In_ const LUID *AdapterLuid,
+    _In_ PEPROCESS ExpectedProcess);
+
+NTSTATUS
 DxgkVidMmCreateOpenResource(
     _In_ PDXGKRNL_DEVICE Device,
     _In_ PDXGKVMM_RESOURCE BackingResource,

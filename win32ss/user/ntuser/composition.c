@@ -14,6 +14,9 @@
 #include "composition.h"
 #include "dcomposition.h"
 #include <reactos/dwmframe.h>
+#if defined(REACTOS_GRAPHICS_DRIVER_MODEL_WDDM)
+#include "drivers/wddm/wddm_bridge.h"
+#endif
 DBG_DEFAULT_CHANNEL(UserPainting);
 
 /* OFF until dwm.exe attaches (Windows model: no compositor -> direct draw;
@@ -89,10 +92,57 @@ static PEPROCESS       g_DwmProcess = NULL;
 static volatile PVOID  g_DwmGpuOutputWindow = NULL;
 static volatile LONG   g_DwmGpuOutputWidth;
 static volatile LONG   g_DwmGpuOutputHeight;
+/* Native producers retain their GPU allocations until these events signal.
+ * Keep publications independent of WND lifetime: destroying a window does
+ * not finish a read from a frame which DWM has already received. */
+typedef struct _DWM_DX_PUBLICATION
+{
+    PKEVENT ReadyEvent;
+    PEPROCESS Compositor;
+    ULONG SurfaceId;
+    ULONG Generation;
+    ULONGLONG UpdateId;
+    BOOL Retired;
+} DWM_DX_PUBLICATION;
+
+static DWM_DX_PUBLICATION g_DxPublications[COMPOSITION_MAX_WINDOWS];
 /* Scanout pacing event (referenced; also registered with the display path,
  * whose present timer signals it every period). */
 
 static BOOL IntCompositionTreeHasPendingPaint(_In_ PWND Root);
+
+static VOID
+IntCompositionCompleteDxPublication(_Inout_ DWM_DX_PUBLICATION *Publication)
+{
+    if (Publication->SurfaceId < g_RedirectHighWater)
+    {
+        PWND_REDIRECT Redirect = &g_Redirects[Publication->SurfaceId].Redirect;
+        if (Redirect->DxGeneration == Publication->Generation &&
+            Redirect->DxPublishedUpdateId == Publication->UpdateId)
+        {
+            Redirect->DxConsumedUpdateId = Publication->UpdateId;
+        }
+    }
+    KeSetEvent(Publication->ReadyEvent, IO_NO_INCREMENT, FALSE);
+    ObDereferenceObject(Publication->ReadyEvent);
+    ObDereferenceObject(Publication->Compositor);
+    RtlZeroMemory(Publication, sizeof(*Publication));
+}
+
+static VOID
+IntCompositionDrainDxPublications(_In_ PEPROCESS Compositor, _In_ BOOL RetiredOnly)
+{
+    ULONG Index;
+    for (Index = 0; Index < ARRAYSIZE(g_DxPublications); ++Index)
+    {
+        DWM_DX_PUBLICATION *Publication = &g_DxPublications[Index];
+        if (Publication->ReadyEvent != NULL && Publication->Compositor == Compositor &&
+            (!RetiredOnly || Publication->Retired))
+        {
+            IntCompositionCompleteDxPublication(Publication);
+        }
+    }
+}
 
 /* Wake dwm after marking damage (no-op when no dwm is attached). */
 static VOID
@@ -293,14 +343,48 @@ IntCompositionIsCompositable(_In_ PWND Wnd)
 }
 
 static VOID
-IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r)
+IntCompositionFreeDxSurface(_Inout_ PWND_REDIRECT r)
 {
     if (r->DxReadyEvent != NULL)
     {
-        KeSetEvent(r->DxReadyEvent, IO_NO_INCREMENT, FALSE);
+        if (r->DxInfo.Version == DWM_DX_SURFACE_INFO_VERSION_GPU &&
+            r->DxPublishedUpdateId > r->DxConsumedUpdateId)
+        {
+            ULONG Index;
+            for (Index = 0; Index < ARRAYSIZE(g_DxPublications); ++Index)
+            {
+                DWM_DX_PUBLICATION *Publication = &g_DxPublications[Index];
+                if (Publication->ReadyEvent == r->DxReadyEvent &&
+                    Publication->Generation == r->DxGeneration &&
+                    Publication->UpdateId == r->DxPublishedUpdateId)
+                {
+                    Publication->Retired = TRUE;
+                    break;
+                }
+            }
+        }
+        else
+            KeSetEvent(r->DxReadyEvent, IO_NO_INCREMENT, FALSE);
         ObDereferenceObject(r->DxReadyEvent);
         r->DxReadyEvent = NULL;
     }
+    r->DxGlobalShare = 0;
+    r->DxGeneration = 0;
+    RtlZeroMemory(&r->DxAdapterLuid, sizeof(r->DxAdapterLuid));
+    r->DxWindow = 0;
+    r->DxClientX = 0;
+    r->DxClientY = 0;
+    r->DxIssuedUpdateId = 0;
+    r->DxPublishedUpdateId = 0;
+    r->DxConsumedUpdateId = 0;
+    RtlZeroMemory(&r->DxInfo, sizeof(r->DxInfo));
+}
+
+static VOID
+IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r, _In_ BOOL PreserveDx)
+{
+    if (!PreserveDx)
+        IntCompositionFreeDxSurface(r);
     if (r->psurf != NULL)
     {
         SURFACE_ShareUnlockSurface(r->psurf);
@@ -356,20 +440,10 @@ IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r)
     RECTL_vSetEmptyRect(&r->BackDirtyRect);
     r->BackDirtyValid = FALSE;
     r->FrontValid = FALSE;
-    r->DxGlobalShare = 0;
-    r->DxGeneration = 0;
-    RtlZeroMemory(&r->DxAdapterLuid, sizeof(r->DxAdapterLuid));
-    r->DxWindow = 0;
-    r->DxClientX = 0;
-    r->DxClientY = 0;
-    r->DxIssuedUpdateId = 0;
-    r->DxPublishedUpdateId = 0;
-    r->DxConsumedUpdateId = 0;
     r->GdiIssuedUpdateId = 0;
     r->GdiAdmittedUpdateId = 0;
     r->GdiPublishedUpdateId = 0;
     r->GdiConsumedUpdateId = 0;
-    RtlZeroMemory(&r->DxInfo, sizeof(r->DxInfo));
     r->cx = r->cy = 0;
 }
 
@@ -606,7 +680,7 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
             NewRedirect.FrontSection = pFrontSectionNew;
             NewRedirect.FrontView = pFrontViewNew;
             NewRedirect.FrontGlobalShare = FrontGlobalShareNew;
-            IntCompositionFreeSurface(&NewRedirect);
+            IntCompositionFreeSurface(&NewRedirect, FALSE);
             r->AllocFailTime = (LONGLONG)KeQueryInterruptTime();
             return r->psurf;
         }
@@ -624,7 +698,10 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
 
     {
         BOOL bFrontValid = r->FrontValid && (ppdev != NULL) && (r->psurfFront != NULL);
-        IntCompositionFreeSurface(r);
+        /* A GDI resize does not complete an outstanding GPU client read.
+         * Keep that publication and its consumed event until the producer
+         * replaces or unregisters it after DWM's fence. */
+        IntCompositionFreeSurface(r, TRUE);
         r->psurf = psurfNew;
         r->hbmp = hbmpNew;
         r->BackSection = pBackSectionNew;
@@ -760,7 +837,7 @@ IntCompositionOnWindowDestroy(_In_ PWND Wnd)
     {
         IntCompositionMarkDamage(FALSE);
     }
-    IntCompositionFreeSurface(&e->Redirect);
+    IntCompositionFreeSurface(&e->Redirect, FALSE);
     IntCompositionFreeBlur(e);
     e->Wnd = NULL;
     e->WindowRectValid = FALSE;
@@ -998,7 +1075,7 @@ IntCompositionOnDisplayChangeBegin(VOID)
 
         if (e->Wnd == NULL)
             continue;
-        IntCompositionFreeSurface(&e->Redirect);
+        IntCompositionFreeSurface(&e->Redirect, FALSE);
         InterlockedExchange(&e->BackComplete, FALSE);
         e->Damaged = TRUE;
         DceResetActiveDCEs(e->Wnd);
@@ -1779,6 +1856,11 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     if (Input.BufBytes < DWM_FRAME_BYTES)
         return STATUS_BUFFER_TOO_SMALL;
 
+    /* Each new pull follows completion of the compositor's preceding GPU
+     * reads. A removed window absent from this frame can now release an old
+     * publication even when its old-tuple acknowledgement raced destruction. */
+    IntCompositionDrainDxPublications(g_DwmProcess, TRUE);
+
     pwndDesktop = UserGetDesktopWindow();
     if (pwndDesktop == NULL || ScreenDeviceContext == NULL)
         return STATUS_DEVICE_NOT_READY;
@@ -1851,9 +1933,15 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         BOOL BackingChanged = FALSE;
         BOOL BackingDeferred = FALSE;
         BOOL PaintDeferred = FALSE;
+        BOOL NativeDxPublished;
+        BOOL NativeDxPending;
 
         if (e == NULL || e->Redirect.cx <= 0 || e->Redirect.cy <= 0)
             continue;
+        NativeDxPublished = e->Redirect.DxInfo.Version == DWM_DX_SURFACE_INFO_VERSION_GPU &&
+                            e->Redirect.DxGlobalShare != 0 && e->Redirect.DxPublishedUpdateId != 0;
+        NativeDxPending = NativeDxPublished &&
+                          e->Redirect.DxPublishedUpdateId > e->Redirect.DxConsumedUpdateId;
 
         /* Sync a window's BACK->FRONT only when it is not mid-paint. The
          * device lock is acquired on the first actual copy and then held for
@@ -1951,8 +2039,12 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             }
         }
 
-        /* Present the FRONT (a complete frame); skip until one exists. */
-        if (!e->Redirect.FrontValid || e->Redirect.psurfFront == NULL ||
+        /* A native client present cannot wait for its owner to dispatch a
+         * pending GDI paint: that thread may be inside Present waiting for
+         * our consumed event. Keep the last complete GDI FRONT, or expose
+         * BaseUpdateId 0 until one exists, and publish the completed GPU layer
+         * independently. Never copy an unfinished GDI BACK for this case. */
+        if ((!e->Redirect.FrontValid && !NativeDxPublished) || e->Redirect.psurfFront == NULL ||
             (e->Redirect.FrontSection == NULL &&
              e->Redirect.FrontGlobalShare == 0))
         {
@@ -1970,7 +2062,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         /* A GDI write can arrive after this entry's dirty hint was read on
          * the previous pull. Its pending bounds survive independently of the
          * metadata damage flag; publishing them must always wake a redraw. */
-        wasDamaged |= BackingChanged;
+        wasDamaged |= BackingChanged || NativeDxPending;
         if (wasDamaged)
             ReadyDamage = TRUE;
         if (PaintDeferred)
@@ -2470,6 +2562,9 @@ IntCompositionDwmAttach(_In_ PVOID pUser)
     }
     else
     {
+        /* The attached compositor drains its GPU before explicitly detaching.
+         * A watchdog timeout cannot provide this completion guarantee. */
+        IntCompositionDrainDxPublications(CurrentProcess, FALSE);
         /* No compositor: back to classic direct drawing. */
         IntCompositionDwmTeardown();
         IntCompositionSetEnabled(FALSE);
@@ -2591,9 +2686,6 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
     PPROCESSINFO ProcessInfo;
     NTSTATUS Status = STATUS_SUCCESS;
 
-    if (!gbCompositionEnabled || !g_DwmAttached)
-        return STATUS_DEVICE_NOT_READY;
-
     _SEH2_TRY
     {
         ProbeForWrite(pUser, sizeof(Request), sizeof(ULONG));
@@ -2610,6 +2702,20 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
 
     if (Request.Action == DWM_DX_SURFACE_CONSUMED)
     {
+        ULONG Index;
+        for (Index = 0; Index < ARRAYSIZE(g_DxPublications); ++Index)
+        {
+            DWM_DX_PUBLICATION *Publication = &g_DxPublications[Index];
+            if (Publication->ReadyEvent != NULL &&
+                Publication->Compositor == PsGetCurrentProcess() &&
+                Publication->SurfaceId == Request.SurfaceId &&
+                Publication->Generation == Request.Generation &&
+                Publication->UpdateId == Request.UpdateId)
+            {
+                IntCompositionCompleteDxPublication(Publication);
+                goto CopyOutput;
+            }
+        }
         if (PsGetCurrentProcess() != g_DwmProcess)
             return STATUS_ACCESS_DENIED;
         if (Request.SurfaceId >= g_RedirectHighWater)
@@ -2631,6 +2737,9 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
         goto CopyOutput;
     }
 
+    if (!gbCompositionEnabled || !g_DwmAttached)
+        return STATUS_DEVICE_NOT_READY;
+
     if (Request.Window == 0 ||
         Request.Window > (ULONGLONG)MAXULONG_PTR)
     {
@@ -2640,6 +2749,8 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
     SourceWnd = UserGetWindowObject((HWND)(ULONG_PTR)Request.Window);
     TopWnd = IntCompositionTopLevel(SourceWnd);
     ProcessInfo = PsGetCurrentProcessWin32Process();
+    if (SourceWnd == NULL && Request.Action == DWM_DX_SURFACE_UNREGISTER)
+        return STATUS_NOT_FOUND;
     if (SourceWnd == NULL || TopWnd == NULL || SourceWnd->head.pti == NULL ||
         ProcessInfo == NULL || SourceWnd->head.pti->ppi != ProcessInfo)
     {
@@ -2647,7 +2758,9 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
     }
 
     Entry = IntCompositionFind(TopWnd);
-    if (Entry == NULL && Request.Action == DWM_DX_SURFACE_REGISTER &&
+    if (Entry == NULL &&
+        (Request.Action == DWM_DX_SURFACE_REGISTER ||
+         Request.Action == DWM_DX_SURFACE_PUBLISH) &&
         IntCompositionIsCompositable(TopWnd))
     {
         IntCompositionOnWindowCreate(TopWnd);
@@ -2659,24 +2772,70 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
     switch (Request.Action)
     {
         case DWM_DX_SURFACE_REGISTER:
+        case DWM_DX_SURFACE_PUBLISH:
         {
             ULONG ClientWidth = SourceWnd->rcClient.right - SourceWnd->rcClient.left;
             ULONG ClientHeight = SourceWnd->rcClient.bottom - SourceWnd->rcClient.top;
+            BOOL Publish = Request.Action == DWM_DX_SURFACE_PUBLISH;
+            BOOL SameResource;
             PKEVENT ReadyEvent;
+            DWM_DX_PUBLICATION *Publication = NULL;
 
             if (Request.GlobalShare == 0 || Request.ReadyEvent == 0 ||
                 Request.ReadyEvent > (ULONGLONG)MAXULONG_PTR ||
                 Request.Info.Magic != DWM_DX_SURFACE_INFO_MAGIC ||
-                Request.Info.Version != DWM_DX_SURFACE_INFO_VERSION ||
                 Request.Info.Width == 0 || Request.Info.Height == 0 ||
                 Request.Info.Width != ClientWidth ||
                 Request.Info.Height != ClientHeight ||
-                Request.Info.Width > MAXULONG / sizeof(ULONG) ||
-                Request.Info.Pitch < Request.Info.Width * sizeof(ULONG) ||
-                Request.Info.Height > MAXULONG / Request.Info.Pitch ||
-                Request.Info.Format != DWM_DX_FORMAT_B8G8R8A8_UNORM)
+                Request.Info.Width > MAXLONG || Request.Info.Height > MAXLONG)
             {
                 return STATUS_INVALID_PARAMETER;
+            }
+            if (Publish)
+            {
+                if (Request.Info.Version != DWM_DX_SURFACE_INFO_VERSION_GPU ||
+                    Request.Info.Pitch != 0 || Request.Flags != 0 ||
+                    (Request.Info.Format != DWM_DX_FORMAT_B8G8R8A8_UNORM &&
+                     Request.Info.Format != DWM_DX_FORMAT_R8G8B8A8_UNORM) ||
+                    Request.UpdateRect.left != 0 || Request.UpdateRect.top != 0 ||
+                    (ULONG)Request.UpdateRect.right != ClientWidth ||
+                    (ULONG)Request.UpdateRect.bottom != ClientHeight)
+                {
+                    return STATUS_INVALID_PARAMETER;
+                }
+            }
+            else if (Request.Info.Version != DWM_DX_SURFACE_INFO_VERSION ||
+                     Request.Info.Format != DWM_DX_FORMAT_B8G8R8A8_UNORM ||
+                     Request.Info.Width > MAXULONG / sizeof(ULONG) ||
+                     Request.Info.Pitch < Request.Info.Width * sizeof(ULONG) ||
+                     Request.Info.Height > MAXULONG / Request.Info.Pitch)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            /* Replacing a registration must not release a buffer which the
+             * compositor has already received and may still be reading. */
+            if (Entry->Redirect.DxIssuedUpdateId > Entry->Redirect.DxConsumedUpdateId)
+                return STATUS_DEVICE_BUSY;
+            if (Publish)
+            {
+                ULONG Index;
+#if defined(REACTOS_GRAPHICS_DRIVER_MODEL_WDDM)
+                Status = WddmBridgeValidateSharedResourceOwner(&Request.AdapterLuid, Request.GlobalShare);
+#else
+                Status = STATUS_NOT_SUPPORTED;
+#endif
+                if (!NT_SUCCESS(Status))
+                    return Status;
+                for (Index = 0; Index < ARRAYSIZE(g_DxPublications); ++Index)
+                {
+                    if (g_DxPublications[Index].ReadyEvent == NULL)
+                    {
+                        Publication = &g_DxPublications[Index];
+                        break;
+                    }
+                }
+                if (Publication == NULL)
+                    return STATUS_INSUFFICIENT_RESOURCES;
             }
 
             Status = ObReferenceObjectByHandle(
@@ -2688,6 +2847,49 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 NULL);
             if (!NT_SUCCESS(Status))
                 return Status;
+            if (Publish && ReadyEvent->Header.Type != NotificationEvent)
+            {
+                ObDereferenceObject(ReadyEvent);
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            SameResource = Entry->Redirect.DxWindow == Request.Window &&
+                           Entry->Redirect.DxGlobalShare == Request.GlobalShare &&
+                           RtlEqualMemory(&Entry->Redirect.DxAdapterLuid,
+                                          &Request.AdapterLuid, sizeof(Request.AdapterLuid)) &&
+                           RtlEqualMemory(&Entry->Redirect.DxInfo, &Request.Info, sizeof(Request.Info));
+
+            if (Publish)
+            {
+                Request.SurfaceId = (ULONG)(Entry - g_Redirects);
+                Request.Generation = Entry->Redirect.DxGeneration;
+                if (!SameResource)
+                {
+                    Request.Generation = ++g_FrontGeneration;
+                    if (Request.Generation == 0)
+                        Request.Generation = ++g_FrontGeneration;
+                }
+                if (++g_DxUpdateSequence == 0)
+                    ++g_DxUpdateSequence;
+                Request.UpdateId = g_DxUpdateSequence;
+                /* A failed output copy must not leave an admitted frame that
+                 * its producer believes failed. USER excludes GETFRAME while
+                 * the complete result is copied and then committed below. */
+                _SEH2_TRY
+                {
+                    *(PDWM_DX_SURFACE_EXCHANGE)pUser = Request;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                if (!NT_SUCCESS(Status))
+                {
+                    ObDereferenceObject(ReadyEvent);
+                    return Status;
+                }
+            }
 
             if (Entry->Redirect.DxReadyEvent != NULL)
             {
@@ -2705,18 +2907,58 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
                 SourceWnd->rcClient.left - TopWnd->rcWindow.left;
             Entry->Redirect.DxClientY =
                 SourceWnd->rcClient.top - TopWnd->rcWindow.top;
-            Entry->Redirect.DxIssuedUpdateId = 0;
-            Entry->Redirect.DxPublishedUpdateId = 0;
-            Entry->Redirect.DxConsumedUpdateId = 0;
             Entry->Redirect.DxReadyEvent = ReadyEvent;
-            Entry->Redirect.DxGeneration = ++g_FrontGeneration;
-            if (Entry->Redirect.DxGeneration == 0)
+            if (!Publish)
+            {
                 Entry->Redirect.DxGeneration = ++g_FrontGeneration;
+                if (Entry->Redirect.DxGeneration == 0)
+                    Entry->Redirect.DxGeneration = ++g_FrontGeneration;
+            }
+
+            if (Publish)
+            {
+                Entry->Redirect.DxGeneration = Request.Generation;
+                Entry->Redirect.DxIssuedUpdateId = Request.UpdateId;
+                Entry->Redirect.DxPublishedUpdateId = Request.UpdateId;
+                KeClearEvent(ReadyEvent);
+                ObReferenceObject(ReadyEvent);
+                Publication->ReadyEvent = ReadyEvent;
+                ObReferenceObject(g_DwmProcess);
+                Publication->Compositor = g_DwmProcess;
+                Publication->SurfaceId = (ULONG)(Entry - g_Redirects);
+                Publication->Generation = Entry->Redirect.DxGeneration;
+                Publication->UpdateId = Request.UpdateId;
+                IntCompositionDamageDxPublication(Entry, TopWnd);
+                return STATUS_SUCCESS;
+            }
+            else
+            {
+                Entry->Redirect.DxIssuedUpdateId = 0;
+                Entry->Redirect.DxPublishedUpdateId = 0;
+                Entry->Redirect.DxConsumedUpdateId = 0;
+            }
 
             Request.SurfaceId = (ULONG)(Entry - g_Redirects);
             Request.Generation = Entry->Redirect.DxGeneration;
             break;
         }
+
+        case DWM_DX_SURFACE_UNREGISTER:
+            if (Request.Window != Entry->Redirect.DxWindow ||
+                Request.GlobalShare != Entry->Redirect.DxGlobalShare ||
+                Request.Generation != Entry->Redirect.DxGeneration ||
+                !RtlEqualMemory(&Request.AdapterLuid, &Entry->Redirect.DxAdapterLuid,
+                                sizeof(Request.AdapterLuid)))
+            {
+                /* The old tuple was retired or replaced. Do not unregister
+                 * a new owner's publication when an old swapchain releases. */
+                return STATUS_NOT_FOUND;
+            }
+            if (Entry->Redirect.DxIssuedUpdateId > Entry->Redirect.DxConsumedUpdateId)
+                return STATUS_DEVICE_BUSY;
+            IntCompositionFreeDxSurface(&Entry->Redirect);
+            IntCompositionDamageDxPublication(Entry, TopWnd);
+            break;
 
         case DWM_DX_SURFACE_ISSUE:
             if (Request.Window != Entry->Redirect.DxWindow ||
@@ -2804,6 +3046,13 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
 
             if (Request.Flags & DWM_DX_UPDATE_CANCEL)
             {
+                if (Request.Flags != DWM_DX_UPDATE_CANCEL ||
+                    Request.UpdateId <= Entry->Redirect.DxConsumedUpdateId)
+                {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                if (Request.UpdateId == Entry->Redirect.DxPublishedUpdateId)
+                    return STATUS_DEVICE_BUSY;
                 Entry->Redirect.DxConsumedUpdateId = Request.UpdateId;
                 if (Entry->Redirect.DxReadyEvent != NULL)
                     KeSetEvent(Entry->Redirect.DxReadyEvent,
@@ -3365,7 +3614,7 @@ IntCompositionSetEnabled(_In_ BOOL bEnable)
         {
             if (g_Redirects[i].Wnd != NULL)
             {
-                IntCompositionFreeSurface(&g_Redirects[i].Redirect);
+                IntCompositionFreeSurface(&g_Redirects[i].Redirect, FALSE);
                 IntCompositionFreeBlur(&g_Redirects[i]);
                 g_Redirects[i].Wnd = NULL;
             }

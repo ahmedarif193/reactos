@@ -57,6 +57,7 @@ C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, ObjectAttributesPresent) == 28);
 C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, SharedNtHandle) == 32);
 C_ASSERT(sizeof(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET) ==
          RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE);
+C_ASSERT(sizeof(RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET) == RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET_V1_SIZE);
 C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, NtHandle) == 8);
 C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, GlobalShareHandle) == 16);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
@@ -563,6 +564,7 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_DXGKRNL_REGISTER_WIN32K_CDD_INTERFACE:
         case IOCTL_DXGKRNL_GET_LEGACY_FULL_INIT_ENTRY:
         case IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY:
+        case IOCTL_RXGK_VALIDATESHAREDRESOURCEOWNER:
             return DXGK_CAPS_CORE_LEVEL_WDDM_1_0;
 
         /* WDDM 1.1 / Windows 7 additions. */
@@ -11441,6 +11443,27 @@ DxgkpDispatchBufferedIoctlWorker(
             return Status;
         }
 
+        case IOCTL_RXGK_VALIDATESHAREDRESOURCEOWNER:
+        {
+            PRXGK_VALIDATESHAREDRESOURCEOWNER_PACKET Packet;
+            LUID AdapterLuid;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+                return STATUS_ACCESS_DENIED;
+            if (InputLength != sizeof(*Packet) || OutputLength != 0 || SystemBuffer == NULL)
+                return STATUS_INFO_LENGTH_MISMATCH;
+            Packet = (PRXGK_VALIDATESHAREDRESOURCEOWNER_PACKET)SystemBuffer;
+            if (Packet->Size != sizeof(*Packet) ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                Packet->Reserved != 0)
+                return STATUS_INVALID_PARAMETER;
+            AdapterLuid.LowPart = Packet->AdapterLuidLowPart;
+            AdapterLuid.HighPart = Packet->AdapterLuidHighPart;
+            return DxgkVidMmValidateSharedResourceOwner(Packet->GlobalShareHandle,
+                                                       &AdapterLuid, PsGetCurrentProcess());
+        }
+
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         case IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP:
         {
@@ -12830,6 +12853,7 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_PUBLIC_OPERATION:
         case IOCTL_D3DKMT_SHAREOBJECTS:
         case IOCTL_RXGK_RESOLVESHAREDRESOURCENTHANDLE:
+        case IOCTL_RXGK_VALIDATESHAREDRESOURCEOWNER:
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER:
         case IOCTL_D3DKMT_GETDEVICESTATE:
         case IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS:

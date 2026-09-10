@@ -227,3 +227,13 @@ WddmBridgeSendIoctlWithInformation(
     UNREFERENCED_PARAMETER(Information);
     return STATUS_NOT_SUPPORTED;
 }
+
+NTSTATUS
+WddmBridgeValidateSharedResourceOwner(
+    _In_ const LUID *AdapterLuid,
+    _In_ ULONG GlobalShare)
+{
+    UNREFERENCED_PARAMETER(AdapterLuid);
+    UNREFERENCED_PARAMETER(GlobalShare);
+    return STATUS_NOT_SUPPORTED;
+}
