@@ -352,7 +352,8 @@ NtGdiEllipse(
         tmpFillBrushObj.ptOrigin.x += dc->ptlDCOrig.x;
         tmpFillBrushObj.ptOrigin.y += dc->ptlDCOrig.y;
 
-        DC_vPrepareDCsForBlit(dc, &RectBounds, NULL, NULL);
+        /* The stroked outline can extend outside the nominal fill bounds. */
+        DC_vPrepareDCsForBlit(dc, (dc->fs & DC_REDIRECTION) ? NULL : &RectBounds, NULL, NULL);
 
         ret = IntFillEllipse( dc,
                               CenterX - RadiusX,
@@ -686,7 +687,8 @@ IntRectangle(PDC dc,
         DestRect.bottom--;
     }
 
-    DC_vPrepareDCsForBlit(dc, &DestRect, NULL, NULL);
+    /* DestRect includes the outline's last edge and is not half-open. */
+    DC_vPrepareDCsForBlit(dc, (dc->fs & DC_REDIRECTION) ? NULL : &DestRect, NULL, NULL);
 
     if (pdcattr->ulDirty_ & (DIRTY_FILL | DC_BRUSH_DIRTY))
         DC_vUpdateFillBrush(dc);
@@ -961,7 +963,8 @@ IntRoundRect(
     else
     {
 
-        DC_vPrepareDCsForBlit(dc, &RectBounds, NULL, NULL);
+        /* The stroked outline can extend outside the nominal fill bounds. */
+        DC_vPrepareDCsForBlit(dc, (dc->fs & DC_REDIRECTION) ? NULL : &RectBounds, NULL, NULL);
 
         RtlCopyMemory(&brushTemp, pbrFill, sizeof(brushTemp));
         brushTemp.ptOrigin.x += RectBounds.left - Left;

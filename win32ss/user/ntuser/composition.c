@@ -351,6 +351,10 @@ IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r)
     r->FrontGlobalShare = 0;
     r->BaseGeneration = 0;
     r->BaseUpdateId = 0;
+    r->BasePreviousUpdateId = 0;
+    RECTL_vSetEmptyRect(&r->BaseDirtyRect);
+    RECTL_vSetEmptyRect(&r->BackDirtyRect);
+    r->BackDirtyValid = FALSE;
     r->FrontValid = FALSE;
     r->DxGlobalShare = 0;
     r->DxGeneration = 0;
@@ -636,9 +640,12 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
         r->Generation = ++g_FrontGeneration;
         r->FrontGlobalShare = FrontGlobalShareNew;
         r->BaseGeneration = FrontGlobalShareNew != 0 ? r->Generation : 0;
-        r->BaseUpdateId = bFrontValid && FrontGlobalShareNew != 0
-                              ? ++g_BaseUpdateSequence
-                              : 0;
+        r->BaseUpdateId = bFrontValid ? ++g_BaseUpdateSequence : 0;
+        r->BaseDirtyRect.left = r->BaseDirtyRect.top = 0;
+        r->BaseDirtyRect.right = cx;
+        r->BaseDirtyRect.bottom = cy;
+        r->BackDirtyRect = r->BaseDirtyRect;
+        r->BackDirtyValid = TRUE;
         r->FrontValid = bFrontValid;
     }
 
@@ -1180,7 +1187,8 @@ IntCompositionDamageWindowMetadata(_In_opt_ PWND Wnd)
  * frame must be re-asserted.
  */
 VOID
-IntCompositionDamageBacking(_In_opt_ PSURFACE psurf)
+IntCompositionDamageBacking(_In_opt_ PSURFACE psurf,
+                              _In_ const RECTL *Bounds)
 {
     ULONG i;
 
@@ -1198,6 +1206,20 @@ IntCompositionDamageBacking(_In_opt_ PSURFACE psurf)
         {
             if (g_Redirects[i].Redirect.psurf == psurf)
             {
+                PWND_REDIRECT Redirect = &g_Redirects[i].Redirect;
+                RECTL SurfaceBounds = {0, 0, Redirect->cx, Redirect->cy};
+                RECTL Dirty;
+
+                if (!RECTL_bIntersectRect(&Dirty, (PRECTL)Bounds, &SurfaceBounds))
+                    return;
+                /* FinishBlit still owns the PDEV semaphore. GETFRAME takes
+                 * that same semaphore before consuming these bounds. */
+                if (Redirect->BackDirtyValid)
+                    RECTL_bUnionRect(&Redirect->BackDirtyRect,
+                                     &Redirect->BackDirtyRect, &Dirty);
+                else
+                    Redirect->BackDirtyRect = Dirty;
+                InterlockedExchange(&Redirect->BackDirtyValid, TRUE);
                 InterlockedExchange(&g_Redirects[i].BackingDrawn, TRUE);
                 g_Redirects[i].Damaged = TRUE;
                 /* A bounded GetDC/ReleaseDC or BeginPaint/EndPaint bracket
@@ -1415,6 +1437,16 @@ IntCompositionCompleteRedirectedBltPresent(
     Entry = IntCompositionFind(Wnd);
     ASSERT(Entry != NULL);
 
+    /* The GPU has completed its redirected blit. DestinationRect bounds its
+     * writes even when the native presentation supplied several dirty rects. */
+    {
+        PPDEVOBJ ppdev = IntCompositionLockDevice();
+        if (ppdev == NULL)
+            return STATUS_DEVICE_NOT_READY;
+        IntCompositionDamageBacking(Entry->Redirect.psurf,
+                                      (const RECTL *)&Present->DestinationRect);
+        IntCompositionUnlockDevice(ppdev);
+    }
     Entry->Redirect.GdiPublishedUpdateId = Present->UpdateId;
     InterlockedExchange(&Entry->BackingDrawn, TRUE);
     if (Present->DestinationRect.left == Entry->Redirect.rcClient.left &&
@@ -1816,6 +1848,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         PWND w = s_stack[n - 1 - i];
         REDIRECT_ENTRY *e = IntCompositionFind(w);
         BOOL wasDamaged;
+        BOOL BackingChanged = FALSE;
         BOOL BackingDeferred = FALSE;
         BOOL PaintDeferred = FALSE;
 
@@ -1833,6 +1866,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                          PaintAge < COMPOSITION_PAINT_STALE_100NS;
             BOOL bBackingDrawn =
                 InterlockedCompareExchange(&e->BackingDrawn, FALSE, FALSE) != FALSE;
+            BOOL bBackingDirty =
+                InterlockedCompareExchange(&e->Redirect.BackDirtyValid, FALSE, FALSE) != FALSE;
             BOOL bTreePending = IntCompositionTreeHasPendingPaint(w);
             /* An OpenGL client can publish its first complete shared surface
              * without ever drawing through GDI. Waiting for BackingDrawn in
@@ -1846,11 +1881,13 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                                       ((!bBackingDrawn && !bDxPublished) ||
                                        bTreePending);
 
-            if ((fullDamage || e->Damaged) && !bBusy && !bTreePending &&
+            if ((!e->Redirect.FrontValid || bBackingDirty) &&
+                !bBusy && !bTreePending &&
                 !bFirstPaintPending &&
                 e->Redirect.psurf != NULL && e->Redirect.psurfFront != NULL)
             {
                 BOOL BackingPublished = FALSE;
+                RECTL PublishedBounds = {0, 0, e->Redirect.cx, e->Redirect.cy};
 
                 if (ppdev == NULL)
                     ppdev = IntCompositionLockDevice();
@@ -1871,16 +1908,15 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                 }
                 else
                 {
-                    RECTL rcBuf;
-                    POINTL ptZero = {0, 0};
-                    rcBuf.left = 0;
-                    rcBuf.top = 0;
-                    rcBuf.right = e->Redirect.cx;
-                    rcBuf.bottom = e->Redirect.cy;
+                    POINTL Source;
+                    if (e->Redirect.FrontValid && e->Redirect.BackDirtyValid)
+                        PublishedBounds = e->Redirect.BackDirtyRect;
+                    Source.x = PublishedBounds.left;
+                    Source.y = PublishedBounds.top;
                     BackingPublished = IntEngBitBlt(
                         &e->Redirect.psurfFront->SurfObj,
                         &e->Redirect.psurf->SurfObj,
-                        NULL, NULL, NULL, &rcBuf, &ptZero,
+                        NULL, NULL, NULL, &PublishedBounds, &Source,
                         NULL, NULL, NULL, ROP4_SRCCOPY);
                     if (BackingPublished)
                         InterlockedExchange(&e->BackComplete, FALSE);
@@ -1888,8 +1924,11 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                 if (BackingPublished)
                 {
                     e->Redirect.FrontValid = TRUE;
-                    if (e->Redirect.FrontGlobalShare != 0)
-                        e->Redirect.BaseUpdateId = ++g_BaseUpdateSequence;
+                    e->Redirect.BasePreviousUpdateId = e->Redirect.BaseUpdateId;
+                    e->Redirect.BaseUpdateId = ++g_BaseUpdateSequence;
+                    e->Redirect.BaseDirtyRect = PublishedBounds;
+                    e->Redirect.BackDirtyValid = FALSE;
+                    BackingChanged = TRUE;
                     if (e->Redirect.GdiPublishedUpdateId >
                         e->Redirect.GdiConsumedUpdateId)
                     {
@@ -1903,7 +1942,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                     DeferredDamage = TRUE;
                 }
             }
-            else if (e->Damaged)
+            else if (e->Damaged && (!e->Redirect.FrontValid || bBackingDirty))
             {
                 if (bBusy || bTreePending || bFirstPaintPending)
                     PaintDeferred = TRUE;
@@ -1928,6 +1967,10 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             wasDamaged = InterlockedExchange((volatile LONG *)&e->Damaged, FALSE) != FALSE;
         else
             wasDamaged = FALSE;
+        /* A GDI write can arrive after this entry's dirty hint was read on
+         * the previous pull. Its pending bounds survive independently of the
+         * metadata damage flag; publishing them must always wake a redraw. */
+        wasDamaged |= BackingChanged;
         if (wasDamaged)
             ReadyDamage = TRUE;
         if (PaintDeferred)
@@ -1957,6 +2000,10 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             e->Redirect.BaseGeneration;
         g_DwmFrameWindows[count].BaseUpdateId =
             e->Redirect.BaseUpdateId;
+        g_DwmFrameWindows[count].BasePreviousUpdateId =
+            e->Redirect.BasePreviousUpdateId;
+        g_DwmFrameWindows[count].BaseDirtyRect =
+            e->Redirect.BaseDirtyRect;
         g_DwmFrameWindows[count].BaseWidth = (ULONG)e->Redirect.cx;
         g_DwmFrameWindows[count].BaseHeight = (ULONG)e->Redirect.cy;
         g_DwmFrameWindows[count].BasePitch =

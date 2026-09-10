@@ -526,7 +526,9 @@ NtGdiLineTo(HDC  hDC,
     rcLockRect.right += dc->ptlDCOrig.x;
     rcLockRect.bottom += dc->ptlDCOrig.y;
 
-    DC_vPrepareDCsForBlit(dc, &rcLockRect, NULL, NULL);
+    /* Endpoints are not half-open pixel bounds: a horizontal/vertical line
+     * has an empty axis here and a wide pen extends beyond both endpoints. */
+    DC_vPrepareDCsForBlit(dc, (dc->fs & DC_REDIRECTION) ? NULL : &rcLockRect, NULL, NULL);
 
     Ret = IntGdiLineTo(dc, XEnd, YEnd);
 

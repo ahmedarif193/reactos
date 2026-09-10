@@ -586,6 +586,17 @@ DC_vPrepareDCsForBlit(
     pdcFirst->fs |= DC_PREPARED;
 #endif
 
+    if (pdcDest->fs & DC_REDIRECTION)
+    {
+        RECTL Bounds = rcDest ? *(const RECTL *)rcDest : pdcDest->erclClip;
+
+        /* Prepared rectangles and erclClip already include the redirected
+         * DC origin. Reflected blits can supply reversed edges. */
+        RECTL_vMakeWellOrdered(&Bounds);
+        RECTL_bIntersectRect(&pdcDest->erclRedirectionDraw,
+                             &Bounds, &pdcDest->erclClip);
+    }
+
     if (!pdcSecond)
         return;
 
@@ -632,7 +643,8 @@ DC_vFinishBlitInternal(PDC pdc1, PDC pdc2, BOOL WriteDest)
      * the throttled tick, under the USER lock; its own primary blits are
      * excluded inside the damage calls. */
     if (WriteDest && (pdc1->fs & DC_REDIRECTION))
-        IntCompositionDamageBacking(pdc1->dclevel.pSurface);
+        IntCompositionDamageBacking(pdc1->dclevel.pSurface,
+                                      &pdc1->erclRedirectionDraw);
     else if (WriteDest && pdc1->dctype == DCTYPE_DIRECT)
         IntCompositionDamageFromGdi();
 
