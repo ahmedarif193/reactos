@@ -3146,6 +3146,7 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
     HBITMAP hbmBackdropNew;
     void *bitsNew = NULL;
     void *backdropBitsNew = NULL;
+    BOOL restoreGpu;
 
     if (W <= 0 || H <= 0 || (ULONG)W > ((ULONG)-1) / sizeof(ULONG) ||
         (ULONG)H > ((ULONG)-1) / ((ULONG)W * sizeof(ULONG)))
@@ -3220,6 +3221,13 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
         }
     }
 
+    /* Allocate every replacement before retiring the old output. The GPU
+     * canvas and wallpaper use that output's dimensions; they must stop
+     * reading before either CPU bitmap is replaced by a different size. */
+    restoreGpu = DwmGpuComposeIsActive();
+    if (restoreGpu)
+        DwmGpuComposeShutdown();
+
     if (g_hdcComp != NULL)
         DeleteDC(g_hdcComp);
     if (g_hbmComp != NULL)
@@ -3238,6 +3246,14 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
     g_W = W;
     g_H = H;
     DwmEnsureReflection(W, H);
+    if (restoreGpu && !DwmGpuComposeInitialize(W, H))
+    {
+        /* Registration has immutable geometry. Recreate the carrier and
+         * its source claim together; a failed recreation leaves a usable
+         * CPU composition, never an old texture with the new bitmap. */
+        DwmGpuComposeShutdown();
+        DwmLog("DWM: GPU output recreation failed; restoring software composition\n");
+    }
     return TRUE;
 }
 
@@ -3479,19 +3495,25 @@ DwmComposeLoop(HANDLE hStopEvent)
 
         if ((LONG)hdr->ScreenW != primW || (LONG)hdr->ScreenH != primH)
         {
-            primW = (LONG)hdr->ScreenW;
-            primH = (LONG)hdr->ScreenH;
+            LONG newPrimW = (LONG)hdr->ScreenW;
+            LONG newPrimH = (LONG)hdr->ScreenH;
+            LONG newOriginX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            LONG newOriginY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+
             vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
             vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-            g_originX = GetSystemMetrics(SM_XVIRTUALSCREEN);
-            g_originY = GetSystemMetrics(SM_YVIRTUALSCREEN);
-            if (vw <= 0 || vh <= 0) { vw = primW; vh = primH; g_originX = g_originY = 0; }
-            if (primW == 0 || primH == 0 || !DwmCreateSurfaces(hdcScreen, vw, vh))
+            if (vw <= 0 || vh <= 0) { vw = newPrimW; vh = newPrimH; newOriginX = newOriginY = 0; }
+            if (newPrimW == 0 || newPrimH == 0 || !DwmCreateSurfaces(hdcScreen, vw, vh))
             {
                 Sleep(50);
                 continue;
             }
+            primW = newPrimW;
+            primH = newPrimH;
+            g_originX = newOriginX;
+            g_originY = newOriginY;
             DwmShadowInit(hdcScreen);
+            g_lastFrameQpc = 0;
             forceFull = TRUE;
             continue;
         }
