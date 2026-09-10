@@ -65,6 +65,9 @@ typedef struct _OBP_EXTENDED_OBJECT_TYPE_INITIALIZER
 //
 #define ObpAccessProtectCloseBit 0x02000000L
 
+/* HANDLE_TABLE.EnableHandleExceptions, updated atomically with other flags. */
+#define OB_HANDLE_EXCEPTIONS_ENABLED 0x2
+
 #ifdef _WIN64
 #define OBP_HANDLE_REFERENCE_INCREMENT 0x8000UL
 #else
@@ -311,6 +314,17 @@ VOID
 NTAPI
 ObDereferenceProcessHandleTable(
     IN PEPROCESS Process
+);
+
+BOOLEAN
+NTAPI
+ObpIsStrictHandleCheckingEnabled(VOID);
+
+VOID
+NTAPI
+ObpCheckInvalidHandleReference(
+    IN HANDLE Handle,
+    IN KPROCESSOR_MODE AccessMode
 );
 
 VOID

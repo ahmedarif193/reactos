@@ -1958,6 +1958,7 @@ typedef struct _EPROCESS
     ULONG ProcessWindowState;
     PVOID ProcessWindowStateContext;
     PROCESS_ENERGY_VALUES EnergyValues;
+    volatile LONG SignatureMitigationPolicy;
 #endif
 } EPROCESS;
 

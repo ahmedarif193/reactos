@@ -38,6 +38,12 @@ typedef struct _K32_PROCESS_MITIGATION_DEP_POLICY
     BOOLEAN Permanent;
 } K32_PROCESS_MITIGATION_DEP_POLICY, *PK32_PROCESS_MITIGATION_DEP_POLICY;
 
+typedef struct _K32_PROCESS_MITIGATION_INFORMATION
+{
+    ULONG Policy;
+    ULONG Flags;
+} K32_PROCESS_MITIGATION_INFORMATION;
+
 #define K32_MITIGATION_OPTION_DEP_ENABLE 0x1ULL
 
 static BOOL
@@ -109,6 +115,26 @@ GetProcessMitigationPolicy(
         return TRUE;
     }
 
+    if (MitigationPolicy == ProcessStrictHandleCheckPolicy || MitigationPolicy == ProcessSignaturePolicy)
+    {
+        K32_PROCESS_MITIGATION_INFORMATION Information = {MitigationPolicy, 0};
+        NTSTATUS Status;
+
+        if (dwLength != sizeof(DWORD))
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        Status = NtQueryInformationProcess(hProcess, ProcessMitigationPolicy, &Information, sizeof(Information), NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            BaseSetLastNTError(Status);
+            return FALSE;
+        }
+        *(PDWORD)lpBuffer = Information.Flags;
+        return TRUE;
+    }
+
     if (MitigationPolicy != ProcessDEPPolicy || dwLength != sizeof(*DepPolicy))
     {
         SetLastError(ERROR_NOT_SUPPORTED);
@@ -144,6 +170,26 @@ SetProcessMitigationPolicy(
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
+    }
+
+    if (MitigationPolicy == ProcessStrictHandleCheckPolicy || MitigationPolicy == ProcessSignaturePolicy)
+    {
+        K32_PROCESS_MITIGATION_INFORMATION Information = {MitigationPolicy, 0};
+        NTSTATUS Status;
+
+        if (!lpBuffer || dwLength != sizeof(DWORD))
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        Information.Flags = *(PDWORD)lpBuffer;
+        Status = NtSetInformationProcess(NtCurrentProcess(), ProcessMitigationPolicy, &Information, sizeof(Information));
+        if (!NT_SUCCESS(Status))
+        {
+            BaseSetLastNTError(Status);
+            return FALSE;
+        }
+        return TRUE;
     }
 
     if (MitigationPolicy != ProcessDEPPolicy || !lpBuffer || dwLength != sizeof(*DepPolicy))
