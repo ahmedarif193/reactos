@@ -47,6 +47,74 @@ PCSTR KmtMajorFunctionNames[] =
     "Pnp/PnpPower"
 };
 
+NTSTATUS
+KmtMapResultBuffer(
+    IN PDEVICE_OBJECT DeviceObject,
+    OUT PMDL *Mdl,
+    OUT PKMT_RESULTBUFFER *Buffer)
+{
+    PKMT_DEVICE_EXTENSION DeviceExtension = DeviceObject->DeviceExtension;
+    PMDL BufferMdl = NULL;
+    NTSTATUS Status = STATUS_DEVICE_NOT_READY;
+
+    *Mdl = NULL;
+    *Buffer = NULL;
+
+    /* The main handle may close before a standalone driver's cleanup runs.
+     * Pin the pages independently before the owner's mapping can disappear. */
+    ExAcquireFastMutex(&DeviceExtension->ResultBufferLock);
+    if (DeviceExtension->Mdl && DeviceExtension->ResultBuffer)
+    {
+        BufferMdl = IoAllocateMdl(DeviceExtension->ResultBuffer,
+                                 MmGetMdlByteCount(DeviceExtension->Mdl),
+                                 FALSE, FALSE, NULL);
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        if (BufferMdl)
+        {
+            _SEH2_TRY
+            {
+                MmProbeAndLockPages(BufferMdl, KernelMode, IoModifyAccess);
+                Status = STATUS_SUCCESS;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+        }
+    }
+    ExReleaseFastMutex(&DeviceExtension->ResultBufferLock);
+
+    if (NT_SUCCESS(Status))
+    {
+        *Buffer = MmGetSystemAddressForMdlSafe(BufferMdl, NormalPagePriority);
+        if (!*Buffer)
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        if (BufferMdl)
+        {
+            if (BufferMdl->MdlFlags & MDL_PAGES_LOCKED)
+                MmUnlockPages(BufferMdl);
+            IoFreeMdl(BufferMdl);
+        }
+        return Status;
+    }
+
+    *Mdl = BufferMdl;
+    return STATUS_SUCCESS;
+}
+
+VOID
+KmtUnmapResultBuffer(
+    IN PMDL Mdl)
+{
+    MmUnlockPages(Mdl);
+    IoFreeMdl(Mdl);
+}
+
 VOID KmtSetIrql(IN KIRQL NewIrql)
 {
     KIRQL Irql = KeGetCurrentIrql();

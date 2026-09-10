@@ -112,6 +112,7 @@ DriverEntry(
     DeviceExtension = MainDeviceObject->DeviceExtension;
     DeviceExtension->ResultBuffer = NULL;
     DeviceExtension->Mdl = NULL;
+    ExInitializeFastMutex(&DeviceExtension->ResultBufferLock);
 
     DriverObject->DriverUnload = DriverUnload;
     DriverObject->MajorFunction[IRP_MJ_CREATE] = DriverCreate;
@@ -240,17 +241,20 @@ DriverCleanup(
 
     ASSERT(IoStackLocation->FileObject->FsContext2 == NULL);
     DeviceExtension = DeviceObject->DeviceExtension;
+    ExAcquireFastMutex(&DeviceExtension->ResultBufferLock);
     if (DeviceExtension->Mdl && IoStackLocation->FileObject->FsContext == DeviceExtension->Mdl)
     {
         MmUnlockPages(DeviceExtension->Mdl);
         IoFreeMdl(DeviceExtension->Mdl);
         DeviceExtension->Mdl = NULL;
         ResultBuffer = DeviceExtension->ResultBuffer = NULL;
+        IoStackLocation->FileObject->FsContext = NULL;
     }
     else
     {
         ASSERT(IoStackLocation->FileObject->FsContext == NULL);
     }
+    ExReleaseFastMutex(&DeviceExtension->ResultBufferLock);
 
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = 0;
@@ -397,15 +401,17 @@ DriverIoControl(
                     IoStackLocation->Parameters.DeviceIoControl.InputBufferLength,
                     IoStackLocation->Parameters.DeviceIoControl.OutputBufferLength);
 
+            ExAcquireFastMutex(&DeviceExtension->ResultBufferLock);
             if (DeviceExtension->Mdl)
             {
                 if (IoStackLocation->FileObject->FsContext != DeviceExtension->Mdl)
                 {
                     Status = STATUS_ACCESS_DENIED;
-                    break;
+                    goto resultbuffer_done;
                 }
                 MmUnlockPages(DeviceExtension->Mdl);
                 IoFreeMdl(DeviceExtension->Mdl);
+                DeviceExtension->Mdl = NULL;
                 IoStackLocation->FileObject->FsContext = NULL;
                 ResultBuffer = DeviceExtension->ResultBuffer = NULL;
             }
@@ -416,7 +422,7 @@ DriverIoControl(
             if (!DeviceExtension->Mdl)
             {
                 Status = STATUS_INSUFFICIENT_RESOURCES;
-                break;
+                goto resultbuffer_done;
             }
 
             _SEH2_TRY
@@ -426,17 +432,31 @@ DriverIoControl(
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
                 Status = _SEH2_GetExceptionCode();
-                IoFreeMdl(DeviceExtension->Mdl);
-                DeviceExtension->Mdl = NULL;
-                break;
             } _SEH2_END;
 
+            if (!NT_SUCCESS(Status))
+            {
+                IoFreeMdl(DeviceExtension->Mdl);
+                DeviceExtension->Mdl = NULL;
+                goto resultbuffer_done;
+            }
+
             ResultBuffer = DeviceExtension->ResultBuffer = MmGetSystemAddressForMdlSafe(DeviceExtension->Mdl, NormalPagePriority);
+            if (!ResultBuffer)
+            {
+                MmUnlockPages(DeviceExtension->Mdl);
+                IoFreeMdl(DeviceExtension->Mdl);
+                DeviceExtension->Mdl = NULL;
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                goto resultbuffer_done;
+            }
             IoStackLocation->FileObject->FsContext = DeviceExtension->Mdl;
 
             DPRINT("DriverIoControl. ResultBuffer: %ld %ld %ld %ld\n",
                     ResultBuffer->Successes, ResultBuffer->Failures,
                     ResultBuffer->LogBufferLength, ResultBuffer->LogBufferMaxLength);
+resultbuffer_done:
+            ExReleaseFastMutex(&DeviceExtension->ResultBufferLock);
             break;
         }
         case IOCTL_KMTEST_USERMODE_AWAIT_REQ:

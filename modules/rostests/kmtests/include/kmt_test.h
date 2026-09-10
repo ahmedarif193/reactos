@@ -174,6 +174,7 @@ typedef struct
 {
     PKMT_RESULTBUFFER ResultBuffer;
     PMDL Mdl;
+    FAST_MUTEX ResultBufferLock;
 } KMT_DEVICE_EXTENSION, *PKMT_DEVICE_EXTENSION;
 
 extern BOOLEAN KmtIsCheckedBuild;
@@ -193,6 +194,8 @@ BOOLEAN KmtAreInterruptsEnabled(VOID);
 ULONG KmtGetPoolTag(PVOID Memory);
 USHORT KmtGetPoolType(PVOID Memory);
 PVOID KmtGetSystemRoutineAddress(IN PCWSTR RoutineName);
+NTSTATUS KmtMapResultBuffer(IN PDEVICE_OBJECT DeviceObject, OUT PMDL *Mdl, OUT PKMT_RESULTBUFFER *Buffer);
+VOID KmtUnmapResultBuffer(IN PMDL Mdl);
 PKTHREAD KmtStartThread(IN PKSTART_ROUTINE StartRoutine, IN PVOID StartContext OPTIONAL);
 VOID KmtFinishThread(IN PKTHREAD Thread OPTIONAL, IN PKEVENT Event OPTIONAL);
 #elif defined KMT_USER_MODE
