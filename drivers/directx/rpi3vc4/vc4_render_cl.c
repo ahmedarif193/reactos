@@ -48,19 +48,19 @@ struct vc4_rcl_setup {
 
 static inline void rcl_u8(struct vc4_rcl_setup *setup, u8 val)
 {
-	*(u8 *)(setup->rcl->vaddr + setup->next_offset) = val;
+	*((u8 *)setup->rcl->vaddr + setup->next_offset) = val;
 	setup->next_offset += 1;
 }
 
 static inline void rcl_u16(struct vc4_rcl_setup *setup, u16 val)
 {
-	*(u16 *)(setup->rcl->vaddr + setup->next_offset) = val;
+	*(u16 *)((u8 *)setup->rcl->vaddr + setup->next_offset) = val;
 	setup->next_offset += 2;
 }
 
 static inline void rcl_u32(struct vc4_rcl_setup *setup, u32 val)
 {
-	*(u32 *)(setup->rcl->vaddr + setup->next_offset) = val;
+	*(u32 *)((u8 *)setup->rcl->vaddr + setup->next_offset) = val;
 	setup->next_offset += 4;
 }
 

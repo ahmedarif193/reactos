@@ -248,6 +248,7 @@ Return Value:
     ASSERT(Unknown);
 
     NTSTATUS ntStatus;
+    CAdapterCommon *p;
 
     //
     // This sample supports only one instance of this object.
@@ -264,7 +265,7 @@ Return Value:
     //
     // Allocate an adapter object.
     //
-    CAdapterCommon *p = new(PoolType, MINADAPTER_POOLTAG) CAdapterCommon(UnknownOuter);
+    p = new(PoolType, MINADAPTER_POOLTAG) CAdapterCommon(UnknownOuter);
     if (p == NULL)
     {
         ntStatus = STATUS_INSUFFICIENT_RESOURCES;

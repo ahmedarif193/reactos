@@ -41,8 +41,8 @@ public:
         _In_        eDeviceType             DeviceType, 
         _In_opt_    PVOID                   DeviceContext
     )
-    : CUnknown(UnknownOuter),
-      CMiniportTopologyRPIWAV(FilterDesc, DeviceMaxChannels),
+    : CMiniportTopologyRPIWAV(FilterDesc, DeviceMaxChannels),
+      CUnknown(UnknownOuter),
       m_DeviceType(DeviceType),
       m_DeviceContext(DeviceContext)
     {

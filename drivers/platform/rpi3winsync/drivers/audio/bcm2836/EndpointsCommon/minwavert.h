@@ -110,12 +110,12 @@ public:
         )
         :CUnknown(0),
         m_ulMaxSystemStreams(0),
-        m_DeviceType(MiniportPair->DeviceType),
-        m_DeviceContext(DeviceContext), 
-        m_DeviceMaxChannels(MiniportPair->DeviceMaxChannels),
         m_DeviceFormatsAndModes(MiniportPair->PinDeviceFormatsAndModes),
         m_DeviceFormatsAndModesCount(MiniportPair->PinDeviceFormatsAndModesCount),
+        m_DeviceMaxChannels(MiniportPair->DeviceMaxChannels),
+        m_DeviceContext(DeviceContext),
         m_DeviceFlags(MiniportPair->DeviceFlags),
+        m_DeviceType(MiniportPair->DeviceType),
         m_pMiniportPair(MiniportPair)
     {
         PAGED_CODE();
