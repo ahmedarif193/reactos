@@ -273,7 +273,7 @@ BitBltExpandedFooter(IN PVOID Image, IN UCHAR CenterColor, IN PVID_DISPLAY_INFO 
     Y = DisplayInfo->Height - FooterHeight - MarginBottom;
     if (DisplayInfo->Width <= FooterWidth)
     {
-        BitBltPalette(Image, TRUE, 0, Y);
+        BitBltPalette(Image, FALSE, 0, Y);
         return;
     }
 
@@ -285,8 +285,8 @@ BitBltExpandedFooter(IN PVOID Image, IN UCHAR CenterColor, IN PVID_DISPLAY_INFO 
      */
     LeftWidth = FooterWidth / 2;
     RightWidth = FooterWidth - LeftWidth;
-    BitBltPalette(Image, TRUE, 0, Y);
-    BitBltPalette(Image, TRUE, DisplayInfo->Width - FooterWidth, Y);
+    BitBltPalette(Image, FALSE, 0, Y);
+    BitBltPalette(Image, FALSE, DisplayInfo->Width - FooterWidth, Y);
     InbvSolidColorFill(LeftWidth, Y, DisplayInfo->Width - RightWidth - 1, Y + FooterHeight - 1, CenterColor);
 }
 
@@ -519,6 +519,55 @@ IsXmasTime(VOID)
 #endif // REACTOS_FANCY_BOOT
 
 CODE_SEG("INIT")
+static VOID
+InitializeWorkstationTextPalette(
+    _In_opt_ PVOID Header,
+    _In_opt_ PVOID Footer)
+{
+    /* RGBQUAD stores blue, green, red: charcoal body, slate bands, soft text. */
+    static const RGBQUAD Palette[16] =
+    {
+        {0x00, 0x00, 0x00, 0}, /*  0: black */
+        {0x36, 0x2C, 0x24, 0}, /*  1: #242C36 header and footer */
+        {0x24, 0x1D, 0x18, 0},
+        {0x28, 0x20, 0x1B, 0},
+        {0x4E, 0x40, 0x34, 0},
+        {0x62, 0x52, 0x44, 0},
+        {0x2D, 0x24, 0x1E, 0},
+        {0x22, 0x1B, 0x17, 0}, /*  7: #171B22 text area */
+        {0x30, 0x27, 0x20, 0},
+        {0x76, 0x65, 0x56, 0},
+        {0x33, 0x2A, 0x22, 0},
+        {0x36, 0x2C, 0x24, 0}, /* 11: footer separator center */
+        {0x91, 0x7F, 0x6E, 0},
+        {0xAA, 0x99, 0x89, 0},
+        {0xBE, 0xAF, 0xA2, 0},
+        {0xCE, 0xC2, 0xB8, 0}, /* 15: #B8C2CE text and wordmark */
+    };
+    struct
+    {
+        BITMAPINFOHEADER Header;
+        RGBQUAD Colors[RTL_NUMBER_OF(Palette)];
+    } PaletteBitmap = {0};
+
+    /* Install the palette before filling any region to avoid a bright flash. */
+    PaletteBitmap.Header.biSize = sizeof(BITMAPINFOHEADER);
+    PaletteBitmap.Header.biPlanes = 1;
+    PaletteBitmap.Header.biBitCount = 4;
+    PaletteBitmap.Header.biClrUsed = RTL_NUMBER_OF(Palette);
+    RtlCopyMemory(PaletteBitmap.Colors, Palette, sizeof(Palette));
+    InbvBitBlt((PUCHAR)&PaletteBitmap, 0, 0);
+
+    /* Both resources must retain the palette while their pixels are drawn. */
+    if (Header)
+        RtlCopyMemory((PUCHAR)Header + ((PBITMAPINFOHEADER)Header)->biSize,
+                      Palette, sizeof(Palette));
+    if (Footer)
+        RtlCopyMemory((PUCHAR)Footer + ((PBITMAPINFOHEADER)Footer)->biSize,
+                      Palette, sizeof(Palette));
+}
+
+CODE_SEG("INIT")
 VOID
 NTAPI
 DisplayBootBitmap(
@@ -573,19 +622,21 @@ DisplayBootBitmap(
         /* Check the type of the OS: workstation or server */
         if (SharedUserData->NtProductType == NtProductWinNt)
         {
-            /* Workstation; set colors */
-            InbvSetTextColor(BV_COLOR_WHITE);
-            InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_DARK_GRAY);
-            InbvSolidColorFill(0, DisplayInfo.Height - 59, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_RED);
-
             /* Get resources */
             Header = InbvGetResourceAddress(IDB_WKSTA_HEADER);
             Footer = InbvGetResourceAddress(IDB_WKSTA_FOOTER);
             FooterCenterColor = BV_COLOR_YELLOW;
+
+            /* Workstation; apply the dark palette before painting the screen. */
+            InitializeWorkstationTextPalette(Header, Footer);
+            InbvSetTextColor(BV_COLOR_WHITE);
+            InbvSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_DARK_GRAY);
+            InbvSolidColorFill(0, DisplayInfo.Height - 59, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_RED);
+
             if (Header && ((PBITMAPINFOHEADER)Header)->biHeight > 2)
             {
                 /*
-                 * The fixed header uses palette entry 1 for its solid blue
+                 * The fixed header uses palette entry 1 for its solid slate
                  * background. Leave its last two separator rows in the body
                  * color and extend both regions across the wider canvas.
                  */
