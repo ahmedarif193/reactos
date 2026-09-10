@@ -61,6 +61,7 @@ list(APPEND SOURCE
     shelltest.cpp)
 
 list(APPEND PCH_SKIP_SOURCE
+    StartMenuPin.c
     Win81Ordinals.c
     testlist.c)
 

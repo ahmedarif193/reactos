@@ -586,6 +586,8 @@ SHOpenFolderAndSelectItems(PCIDLIST_ABSOLUTE pidlFolder,
                            DWORD dwFlags)
 {
     ERR("SHOpenFolderAndSelectItems() is hackplemented\n");
+    if (!pidlFolder || (cidl && !apidl))
+        return E_INVALIDARG;
     CComHeapPtr<ITEMIDLIST> freeItem;
     PCIDLIST_ABSOLUTE pidlItem;
     if (cidl)
@@ -624,9 +626,10 @@ SHOpenFolderAndSelectItems(PCIDLIST_ABSOLUTE pidlFolder,
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
 
-    WCHAR wszParams[MAX_PATH];
-    wcscpy(wszParams, L"/select,");
-    wcscat(wszParams, wszBuf);
+    WCHAR wszParams[MAX_PATH + 16];
+    hr = StringCchPrintfW(wszParams, _countof(wszParams), L"/select,\"%s\"", wszBuf);
+    if (FAILED(hr))
+        return hr;
 
     SHELLEXECUTEINFOW sei;
     memset(&sei, 0, sizeof sei);
@@ -634,6 +637,7 @@ SHOpenFolderAndSelectItems(PCIDLIST_ABSOLUTE pidlFolder,
     sei.fMask = SEE_MASK_WAITFORINPUTIDLE;
     sei.lpFile = L"explorer.exe";
     sei.lpParameters = wszParams;
+    sei.nShow = SW_SHOWNORMAL;
 
     if (ShellExecuteExW(&sei))
         return S_OK;

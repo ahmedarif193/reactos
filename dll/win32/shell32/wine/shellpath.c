@@ -5936,6 +5936,7 @@ typedef enum _CSIDL_Type {
     CSIDL_Type_User,
 #ifdef __REACTOS__
     CSIDL_Type_InMyDocuments,
+    CSIDL_Type_InAppData,
 #endif
     CSIDL_Type_AllUsers,
     CSIDL_Type_CurrVer,
@@ -6667,9 +6668,9 @@ static const CSIDL_DATA CSIDL_Data[] =
     },
     { /* 0x6c */
         &FOLDERID_UserPinned,
-        CSIDL_Type_Disallowed, /* FIXME */
+        CSIDL_Type_InAppData,
         NULL,
-        NULL
+        L"Microsoft\\Internet Explorer\\Quick Launch\\User Pinned"
     },
     { /* 0x6d */
         &FOLDERID_UserProfiles,
@@ -6932,6 +6933,11 @@ static HRESULT _SHGetDefaultValue(HANDLE hToken, BYTE folder, LPWSTR pszPath)
             strcpyW(pszPath, L"%USERPROFILE%");
             break;
 #ifdef __REACTOS__
+        case CSIDL_Type_InAppData:
+            hr = _SHGetDefaultValue(hToken, CSIDL_APPDATA, pszPath);
+            if (FAILED(hr))
+                return hr;
+            break;
         case CSIDL_Type_InMyDocuments:
             strcpyW(pszPath, L"%USERPROFILE%");
             if (DoGetProductType(&ProductType) && ProductType == NtProductWinNt)
@@ -7120,7 +7126,8 @@ static HRESULT _SHGetUserProfilePath(HANDLE hToken, DWORD dwFlags, BYTE folder,
         return E_INVALIDARG;
 #ifdef __REACTOS__
     if (CSIDL_Data[folder].type != CSIDL_Type_User &&
-        CSIDL_Data[folder].type != CSIDL_Type_InMyDocuments)
+        CSIDL_Data[folder].type != CSIDL_Type_InMyDocuments &&
+        CSIDL_Data[folder].type != CSIDL_Type_InAppData)
 #else
     if (CSIDL_Data[folder].type != CSIDL_Type_User)
 #endif
@@ -7180,7 +7187,14 @@ static HRESULT _SHGetUserProfilePath(HANDLE hToken, DWORD dwFlags, BYTE folder,
         hr = _SHGetUserShellFolderPath(hRootKey, hToken, userPrefix, szValueName, pszPath);
         if (FAILED(hr) && hRootKey != HKEY_LOCAL_MACHINE)
             hr = _SHGetUserShellFolderPath(HKEY_LOCAL_MACHINE, hToken, NULL, szValueName, pszPath);
-        if (FAILED(hr))
+        if (FAILED(hr) && CSIDL_Data[folder].type == CSIDL_Type_InAppData)
+        {
+            /* Inherit an AppData redirection unless this folder has its own. */
+            hr = _SHGetUserProfilePath(hToken, dwFlags, CSIDL_APPDATA, pszPath);
+            if (SUCCEEDED(hr) && !PathAppendW(pszPath, CSIDL_Data[folder].szDefaultPath))
+                hr = HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+        }
+        else if (FAILED(hr))
             hr = _SHGetDefaultValue(hToken, folder, pszPath);
 #endif
         if (userPrefix != NULL && userPrefix != DefaultW)
@@ -7716,6 +7730,7 @@ HRESULT WINAPI SHGetFolderPathAndSubDirW(
         case CSIDL_Type_User:
 #ifdef __REACTOS__
         case CSIDL_Type_InMyDocuments:
+        case CSIDL_Type_InAppData:
 #endif
             hr = _SHGetUserProfilePath(hToken, dwFlags, folder, szTemp);
             break;
@@ -7887,7 +7902,8 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
 #ifdef __REACTOS__
         if (!szValueName &&
             (CSIDL_Data[folders[i]].type == CSIDL_Type_User ||
-             CSIDL_Data[folders[i]].type == CSIDL_Type_InMyDocuments))
+             CSIDL_Data[folders[i]].type == CSIDL_Type_InMyDocuments ||
+             CSIDL_Data[folders[i]].type == CSIDL_Type_InAppData))
 #else
         if (!szValueName && CSIDL_Data[folders[i]].type == CSIDL_Type_User)
 #endif
@@ -7908,7 +7924,8 @@ static HRESULT _SHRegisterFolders(HKEY hRootKey, HANDLE hToken,
             *path = '\0';
 #ifdef __REACTOS__
             if (CSIDL_Data[folders[i]].type == CSIDL_Type_User ||
-                CSIDL_Data[folders[i]].type == CSIDL_Type_InMyDocuments)
+                CSIDL_Data[folders[i]].type == CSIDL_Type_InMyDocuments ||
+                CSIDL_Data[folders[i]].type == CSIDL_Type_InAppData)
 #else
             if (CSIDL_Data[folders[i]].type == CSIDL_Type_User)
 #endif

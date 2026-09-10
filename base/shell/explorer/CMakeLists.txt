@@ -21,6 +21,7 @@ list(APPEND SOURCE
     startup.cpp
     syspager.cpp
     taskband.cpp
+    taskbarpin.cpp
     taskswnd.cpp
     tbsite.cpp
     trayclock.cpp

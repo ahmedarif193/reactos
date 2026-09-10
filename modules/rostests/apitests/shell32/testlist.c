@@ -62,11 +62,13 @@ extern void func_SHSimpleIDListFromPath(void);
 extern void func_SHRestricted(void);
 extern void func_SHSetUnreadMailCountW(void);
 extern void func_StrRStr(void);
+extern void func_StartMenuPin(void);
 
 extern void func_Win81Ordinals(void);
 
 const struct test winetest_testlist[] =
 {
+    { "StartMenuPin", func_StartMenuPin },
     { "AddCommas", func_AddCommas },
     { "AssocCreateElement", func_AssocCreateElement },
     { "Control_RunDLLW", func_Control_RunDLLW },

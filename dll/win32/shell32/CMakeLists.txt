@@ -80,6 +80,7 @@ list(APPEND SOURCE
     CSendToMenu.cpp
     CCopyMoveToMenu.cpp
     CCopyAsPathMenu.cpp
+    CStartMenuPin.cpp
     CShellDispatch.cpp
     CFolder.cpp
     CFolderItems.cpp

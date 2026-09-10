@@ -1362,6 +1362,8 @@ CDefaultContextMenu::MapVerbToCmdId(PVOID Verb, PUINT idCmd, BOOL IsUnicode)
     /* Loop through all the static verbs looking for a match */
     for (UINT i = 0; i < _countof(g_StaticInvokeCmdMap); i++)
     {
+        if (!g_StaticInvokeCmdMap[i].IntVerb)
+            continue;
         /* We can match both ANSI and unicode strings */
         if (IsUnicode)
         {
@@ -1396,6 +1398,21 @@ CDefaultContextMenu::MapVerbToCmdId(PVOID Verb, PUINT idCmd, BOOL IsUnicode)
             return TRUE;
         }
     }
+    CStringW Name;
+    if (IsUnicode)
+        Name = (PCWSTR)Verb;
+    else
+        Name = (PCSTR)Verb;
+    UINT index = 0;
+    for (POSITION it = m_StaticEntries.GetHeadPosition(); it != NULL; ++index)
+    {
+        StaticShellEntry &entry = m_StaticEntries.GetNext(it);
+        if (!entry.Verb.CompareNoCase(Name))
+        {
+            *idCmd = m_iIdSCMFirst + index;
+            return TRUE;
+        }
+    }
     return FALSE;
 }
 
@@ -1412,6 +1429,7 @@ CDefaultContextMenu::InvokeShellExt(
 
     /* invoke the dynamic context menu */
     lpcmi->lpVerb = MAKEINTRESOURCEA(idCmd - pEntry->iIdCmdFirst);
+    lpcmi->lpVerbW = MAKEINTRESOURCEW(idCmd - pEntry->iIdCmdFirst);
     return pEntry->pCM->InvokeCommand((LPCMINVOKECOMMANDINFO)lpcmi);
 }
 
@@ -1659,15 +1677,19 @@ CDefaultContextMenu::InvokeCommand(
     HRESULT Result;
     UINT CmdId;
 
+    if (!lpcmi || lpcmi->cbSize < sizeof(*lpcmi))
+        return E_INVALIDARG;
+
     /* Take a local copy of the fixed members of the
        struct as we might need to modify the verb */
     memcpy(&LocalInvokeInfo, lpcmi, min(sizeof(LocalInvokeInfo), lpcmi->cbSize));
 
     /* Check if this is a string verb */
-    if (!IS_INTRESOURCE(LocalInvokeInfo.lpVerb))
+    BOOL UnicodeVerb = IsUnicode(LocalInvokeInfo) && !IS_INTRESOURCE(LocalInvokeInfo.lpVerbW);
+    if (UnicodeVerb || !IS_INTRESOURCE(LocalInvokeInfo.lpVerb))
     {
         /* Get the ID which corresponds to this verb, and update our local copy */
-        if (MapVerbToCmdId((LPVOID)LocalInvokeInfo.lpVerb, &CmdId, FALSE))
+        if (MapVerbToCmdId(UnicodeVerb ? (LPVOID)LocalInvokeInfo.lpVerbW : (LPVOID)LocalInvokeInfo.lpVerb, &CmdId, UnicodeVerb))
             LocalInvokeInfo.lpVerb = MAKEINTRESOURCEA(CmdId);
         else
             return E_INVALIDARG;

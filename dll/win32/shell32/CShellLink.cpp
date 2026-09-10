@@ -2544,8 +2544,10 @@ HRESULT STDMETHODCALLTYPE CShellLink::QueryContextMenu(HMENU hMenu, UINT indexMe
     TRACE("%p %p %u %u %u %u\n", this,
           hMenu, indexMenu, idCmdFirst, idCmdLast, uFlags);
 
-    if (!hMenu)
+    if (!hMenu || idCmdFirst > idCmdLast)
         return E_INVALIDARG;
+    if (uFlags & CMF_NOVERBS)
+        return MAKE_HRESULT(SEVERITY_SUCCESS, 0, 0);
 
     CStringW strOpen(MAKEINTRESOURCEW(IDS_OPEN_VERB));
     CStringW strOpenFileLoc(MAKEINTRESOURCEW(IDS_OPENFILELOCATION));
@@ -2562,6 +2564,9 @@ HRESULT STDMETHODCALLTYPE CShellLink::QueryContextMenu(HMENU hMenu, UINT indexMe
     if (!InsertMenuItemW(hMenu, indexMenu++, TRUE, &mii))
         return E_FAIL;
 
+    if ((uFlags & CMF_DEFAULTONLY) || idCmdLast - idCmdFirst < IDCMD_OPENFILELOCATION)
+        return MAKE_HRESULT(SEVERITY_SUCCESS, 0, id);
+
     mii.fMask = MIIM_TYPE | MIIM_ID | MIIM_STATE;
     mii.dwTypeData = strOpenFileLoc.GetBuffer();
     mii.cch = wcslen(mii.dwTypeData);
@@ -2571,32 +2576,58 @@ HRESULT STDMETHODCALLTYPE CShellLink::QueryContextMenu(HMENU hMenu, UINT indexMe
     if (!InsertMenuItemW(hMenu, indexMenu++, TRUE, &mii))
         return E_FAIL;
 
+    if (idCmdLast - idCmdFirst >= IDCMD_RUNAS && m_sPath && !lstrcmpiW(PathFindExtensionW(m_sPath), L".exe"))
+    {
+        CStringW strRunAs(MAKEINTRESOURCEW(IDS_RUNAS_VERB));
+        mii.dwTypeData = strRunAs.GetBuffer();
+        mii.cch = strRunAs.GetLength();
+        mii.wID = idCmdFirst + id++;
+        if (!InsertMenuItemW(hMenu, indexMenu++, TRUE, &mii))
+            return E_FAIL;
+    }
+
     return MAKE_HRESULT(SEVERITY_SUCCESS, 0, id);
 }
 
 HRESULT CShellLink::DoOpenFileLocation()
 {
-    // TODO: SHOpenFolderAndSelectItems
-    WCHAR szParams[MAX_PATH + 64];
-    StringCbPrintfW(szParams, sizeof(szParams), L"/select,%s", m_sPath);
-
-    INT_PTR ret;
-    ret = reinterpret_cast<INT_PTR>(ShellExecuteW(NULL, NULL, L"explorer.exe", szParams,
-                                                  NULL, m_Header.nShowCommand));
-    if (ret <= 32)
-    {
-        ERR("ret: %08lX\n", ret);
-        return E_FAIL;
-    }
-
-    return S_OK;
+    if (m_pPidl)
+        return SHOpenFolderAndSelectItems(m_pPidl, 0, NULL, 0);
+    CComHeapPtr<ITEMIDLIST> pidl;
+    pidl.Attach(m_sPath ? ILCreateFromPathW(m_sPath) : NULL);
+    return pidl ? SHOpenFolderAndSelectItems(pidl, 0, NULL, 0) : HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 }
 
 HRESULT STDMETHODCALLTYPE CShellLink::InvokeCommand(LPCMINVOKECOMMANDINFO lpici)
 {
     TRACE("%p %p\n", this, lpici);
 
-    if (lpici->cbSize < sizeof(CMINVOKECOMMANDINFO))
+    if (!lpici || lpici->cbSize < sizeof(CMINVOKECOMMANDINFO))
+        return E_INVALIDARG;
+
+    UINT idCmd;
+    CStringW Verb;
+    const CMINVOKECOMMANDINFOEX *pEx = (const CMINVOKECOMMANDINFOEX *)lpici;
+    if (IsUnicode(*lpici) && !IS_INTRESOURCE(pEx->lpVerbW))
+        Verb = pEx->lpVerbW;
+    else if (!IS_INTRESOURCE(lpici->lpVerb))
+        Verb = lpici->lpVerb;
+    if (!Verb.IsEmpty())
+    {
+        if (!Verb.CompareNoCase(L"open"))
+            idCmd = IDCMD_OPEN;
+        else if (!Verb.CompareNoCase(L"opencontaining"))
+            idCmd = IDCMD_OPENFILELOCATION;
+        else if (!Verb.CompareNoCase(L"runas"))
+            idCmd = IDCMD_RUNAS;
+        else
+            return E_INVALIDARG;
+    }
+    else if (IS_INTRESOURCE(lpici->lpVerb))
+        idCmd = LOWORD(lpici->lpVerb);
+    else
+        return E_INVALIDARG;
+    if (idCmd > IDCMD_RUNAS)
         return E_INVALIDARG;
 
     // NOTE: We could use lpici->hwnd (certainly in case lpici->fMask doesn't contain CMIC_MASK_FLAG_NO_UI)
@@ -2610,7 +2641,6 @@ HRESULT STDMETHODCALLTYPE CShellLink::InvokeCommand(LPCMINVOKECOMMANDINFO lpici)
         return hr;
     }
 
-    UINT idCmd = LOWORD(lpici->lpVerb);
     TRACE("idCmd: %d\n", idCmd);
 
     switch (idCmd)
@@ -2619,12 +2649,14 @@ HRESULT STDMETHODCALLTYPE CShellLink::InvokeCommand(LPCMINVOKECOMMANDINFO lpici)
         return DoOpen(lpici);
     case IDCMD_OPENFILELOCATION:
         return DoOpenFileLocation();
+    case IDCMD_RUNAS:
+        return DoOpen(lpici, L"runas");
     default:
         return E_NOTIMPL;
     }
 }
 
-HRESULT CShellLink::DoOpen(LPCMINVOKECOMMANDINFO lpici)
+HRESULT CShellLink::DoOpen(LPCMINVOKECOMMANDINFO lpici, PCWSTR pszVerb)
 {
     LPCMINVOKECOMMANDINFOEX iciex = (LPCMINVOKECOMMANDINFOEX)lpici;
     const BOOL unicode = IsUnicode(*lpici);
@@ -2653,6 +2685,8 @@ HRESULT CShellLink::DoOpen(LPCMINVOKECOMMANDINFO lpici)
 
     WCHAR dir[MAX_PATH];
     SHELLEXECUTEINFOW sei = { sizeof(sei) };
+    sei.hwnd = lpici->hwnd;
+    sei.lpVerb = pszVerb;
     sei.fMask = SEE_MASK_HASLINKNAME | SEE_MASK_UNICODE | SEE_MASK_DOENVSUBST |
                (lpici->fMask & (SEE_MASK_NOASYNC | SEE_MASK_ASYNCOK | SEE_MASK_FLAG_NO_UI));
     sei.lpDirectory = m_sWorkDir;
@@ -2699,8 +2733,23 @@ HRESULT CShellLink::DoOpen(LPCMINVOKECOMMANDINFO lpici)
 
 HRESULT STDMETHODCALLTYPE CShellLink::GetCommandString(UINT_PTR idCmd, UINT uType, UINT* pwReserved, LPSTR pszName, UINT cchMax)
 {
-    FIXME("%p %lu %u %p %p %u\n", this, idCmd, uType, pwReserved, pszName, cchMax);
-    return E_NOTIMPL;
+    static PCWSTR const Verbs[] = { L"open", L"opencontaining", L"runas" };
+    static const UINT HelpIds[] = { IDS_OPEN_VERB, IDS_OPENFILELOCATION, IDS_RUNAS_VERB };
+    if (uType == GCS_VALIDATEA || uType == GCS_VALIDATEW)
+        return idCmd < _countof(Verbs) ? S_OK : S_FALSE;
+    if (idCmd >= _countof(Verbs) || !pszName || !cchMax)
+        return E_INVALIDARG;
+
+    CStringW Text;
+    if (uType == GCS_VERBA || uType == GCS_VERBW)
+        Text = Verbs[idCmd];
+    else if (uType == GCS_HELPTEXTA || uType == GCS_HELPTEXTW)
+        Text.LoadString(HelpIds[idCmd]);
+    else
+        return E_NOTIMPL;
+    if (uType & GCS_UNICODE)
+        return StringCchCopyW((LPWSTR)pszName, cchMax, Text);
+    return WideCharToMultiByte(CP_ACP, 0, Text, -1, pszName, cchMax, NULL, NULL) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
 }
 
 INT_PTR CALLBACK ExtendedShortcutProc(HWND hwndDlg, UINT uMsg,

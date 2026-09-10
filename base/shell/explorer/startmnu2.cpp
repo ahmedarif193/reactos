@@ -2,13 +2,14 @@
 #include <commctrl.h>
 #include <windowsx.h>
 
-#define SM2_MFU_KEY L"Software\\ReactOS\\StartMenu2\\MFU"
+#define SM2_RECENT_LINK_KEY L"Software\\ReactOS\\StartMenu2\\RecentApps\\Links"
+#define SM2_RECENT_EXE_KEY  L"Software\\ReactOS\\StartMenu2\\RecentApps\\Executables"
 
 enum SM2VIEW { SM2V_MAIN, SM2V_PROGRAMS, SM2V_SEARCH };
 
 enum SM2ROWTYPE
 {
-    SM2R_MFU,
+    SM2R_RECENT,
     SM2R_ALLPROGRAMS,
     SM2R_BACK,
     SM2R_TREE,
@@ -28,7 +29,6 @@ enum SM2RCMD
     SM2C_COMPUTER,
     SM2C_CONTROL,
     SM2C_PRINTERS,
-    SM2C_HELP,
     SM2C_GAP
 };
 
@@ -44,6 +44,9 @@ enum
 {
     SM2_TIMER_ANIM = 1,
     SM2_IDC_SEARCH = 1000,
+    SM2_CONTEXT_FIRST = 1,
+    SM2_CONTEXT_LAST = 0x6FFF,
+    SM2_CONTEXT_REMOVE_RECENT = 0x7000,
     SM2M_FLYOUTCMD = WM_APP + 41,
     SM2M_FLYOUTGONE = WM_APP + 42
 };
@@ -168,14 +171,17 @@ struct SM2ITEM
 {
     CStringW szName;
     CStringW szPath;
+    CStringW szTargetPath;
     BOOL bFolder;
     BOOL bExpanded;
     HICON hSmallIcon;
     HICON hLargeIcon;
     BOOL bSmallTried;
+    BOOL bTargetTried;
     CAtlArray<SM2ITEM*> Children;
 
-    SM2ITEM() : bFolder(FALSE), bExpanded(FALSE), hSmallIcon(NULL), hLargeIcon(NULL), bSmallTried(FALSE) {}
+    SM2ITEM() : bFolder(FALSE), bExpanded(FALSE), hSmallIcon(NULL), hLargeIcon(NULL),
+                bSmallTried(FALSE), bTargetTried(FALSE) {}
 
     ~SM2ITEM()
     {
@@ -190,6 +196,8 @@ struct SM2ITEM
         if (hSmallIcon) { DestroyIcon(hSmallIcon); hSmallIcon = NULL; }
         if (hLargeIcon) { DestroyIcon(hLargeIcon); hLargeIcon = NULL; }
         bSmallTried = FALSE;
+        bTargetTried = FALSE;
+        szTargetPath.Empty();
         bExpanded = FALSE;
     }
 };
@@ -326,20 +334,85 @@ SM2FlattenTree(SM2ITEM *pParent, CAtlArray<SM2ITEM*> &Flat)
     }
 }
 
-static DWORD
-SM2GetLaunchCount(LPCWSTR pszPath)
+static BOOL
+SM2NormalizePath(LPCWSTR pszPath, CStringW &Path)
 {
-    DWORD dwCount = 0, cbData = sizeof(dwCount), dwType;
-    if (SHGetValueW(HKEY_CURRENT_USER, SM2_MFU_KEY, pszPath, &dwType, &dwCount, &cbData) != ERROR_SUCCESS)
+    WCHAR szExpanded[MAX_PATH], szFull[MAX_PATH];
+    LPCWSTR pszExpanded = pszPath;
+
+    if (!pszPath || !*pszPath)
+        return FALSE;
+
+    DWORD cch = ExpandEnvironmentStringsW(pszPath, szExpanded, _countof(szExpanded));
+    if (cch && cch <= _countof(szExpanded))
+        pszExpanded = szExpanded;
+
+    cch = GetFullPathNameW(pszExpanded, _countof(szFull), szFull, NULL);
+    if (cch && cch < _countof(szFull))
+        Path = szFull;
+    else
+        Path = pszExpanded;
+
+    return !Path.IsEmpty();
+}
+
+static ULONGLONG
+SM2GetLastUsed(LPCWSTR pszKey, LPCWSTR pszPath)
+{
+    ULONGLONG Time = 0;
+    DWORD cbData = sizeof(Time), dwType = 0;
+
+    if (SHGetValueW(HKEY_CURRENT_USER, pszKey, pszPath,
+                    &dwType, &Time, &cbData) != ERROR_SUCCESS ||
+        dwType != REG_QWORD || cbData != sizeof(Time))
+    {
         return 0;
-    return dwCount;
+    }
+    return Time;
 }
 
 static VOID
-SM2BumpLaunchCount(LPCWSTR pszPath)
+SM2SetLastUsed(LPCWSTR pszKey, LPCWSTR pszPath)
 {
-    DWORD dwCount = SM2GetLaunchCount(pszPath) + 1;
-    SHSetValueW(HKEY_CURRENT_USER, SM2_MFU_KEY, pszPath, REG_DWORD, &dwCount, sizeof(dwCount));
+    FILETIME ft;
+    ULARGE_INTEGER Time;
+
+    GetSystemTimeAsFileTime(&ft);
+    Time.LowPart = ft.dwLowDateTime;
+    Time.HighPart = ft.dwHighDateTime;
+    SHSetValueW(HKEY_CURRENT_USER, pszKey, pszPath,
+                REG_QWORD, &Time.QuadPart, sizeof(Time.QuadPart));
+}
+
+static BOOL
+SM2GetTargetPath(SM2ITEM *pItem)
+{
+    if (pItem->bTargetTried)
+        return !pItem->szTargetPath.IsEmpty();
+
+    pItem->bTargetTried = TRUE;
+    if (lstrcmpiW(PathFindExtensionW(pItem->szPath), L".lnk") != 0)
+        return FALSE;
+
+    CComPtr<IShellLinkW> pLink;
+    if (FAILED(pLink.CoCreateInstance(CLSID_ShellLink, IID_IShellLinkW)))
+        return FALSE;
+
+    CComPtr<IPersistFile> pPersist;
+    if (FAILED(pLink->QueryInterface(IID_PPV_ARG(IPersistFile, &pPersist))) ||
+        FAILED(pPersist->Load(pItem->szPath, STGM_READ)))
+    {
+        return FALSE;
+    }
+
+    WCHAR szTarget[MAX_PATH] = L"";
+    if (FAILED(pLink->GetPath(szTarget, _countof(szTarget), NULL, SLGP_UNCPRIORITY)) ||
+        !szTarget[0])
+    {
+        return FALSE;
+    }
+
+    return SM2NormalizePath(szTarget, pItem->szTargetPath);
 }
 
 static HICON
@@ -357,8 +430,10 @@ SM2LaunchItem(SM2ITEM *pItem)
 {
     if (!pItem || pItem->bFolder)
         return;
-    SM2BumpLaunchCount(pItem->szPath);
-    ShellExecuteW(NULL, NULL, pItem->szPath, NULL, NULL, SW_SHOWNORMAL);
+
+    HINSTANCE hResult = ShellExecuteW(NULL, NULL, pItem->szPath, NULL, NULL, SW_SHOWNORMAL);
+    if ((INT_PTR)hResult > 32)
+        SM2SetLastUsed(SM2_RECENT_LINK_KEY, pItem->szPath);
 }
 
 static VOID
@@ -451,24 +526,6 @@ SM2OpenGames(VOID)
 }
 
 static VOID
-SM2OpenHelp(VOID)
-{
-    WCHAR szCommand[256];
-    LPWSTR pszParameters;
-
-    if (!LoadStringW(hExplorerInstance, IDS_HELP_COMMAND, szCommand, _countof(szCommand)))
-        return;
-
-    pszParameters = wcschr(szCommand, L'>');
-    if (pszParameters)
-    {
-        *pszParameters = 0;
-        pszParameters++;
-    }
-    ShellExecuteW(NULL, NULL, szCommand, pszParameters, NULL, SW_SHOWNORMAL);
-}
-
-static VOID
 SM2ExecRightCmd(int nCmd)
 {
     switch (nCmd)
@@ -481,7 +538,6 @@ SM2ExecRightCmd(int nCmd)
         case SM2C_COMPUTER:  SM2OpenCsidlIdList(CSIDL_DRIVES); break;
         case SM2C_CONTROL:   ShellExecuteW(NULL, NULL, L"control.exe", NULL, NULL, SW_SHOWNORMAL); break;
         case SM2C_PRINTERS:  SM2OpenCsidlIdList(CSIDL_PRINTERS); break;
-        case SM2C_HELP:      SM2OpenHelp(); break;
     }
 }
 
@@ -502,7 +558,6 @@ static const SM2RIGHTDEF g_SM2RightDefs[] =
     { NULL,                    SM2C_GAP },
     { L"Control Panel",        SM2C_CONTROL },
     { L"Devices and Printers", SM2C_PRINTERS },
-    { L"Help and Support",     SM2C_HELP },
 };
 
 struct SM2ROW
@@ -804,8 +859,8 @@ public:
 const CStartMenu2Flyout::FLYITEM CStartMenu2Flyout::c_Items[3] =
 {
     { L"Restart", SM2F_RESTART },
-    { L"Log off", SM2F_LOGOFF },
-    { L"Lock",    SM2F_LOCK },
+    { L"Log off (soon)", SM2F_LOGOFF },
+    { L"Lock (soon)",    SM2F_LOCK },
 };
 
 class CStartMenu2Wnd :
@@ -834,7 +889,8 @@ public:
 
     SM2ITEM m_Root;
     CAtlArray<SM2ITEM*> m_Flat;
-    CAtlArray<SM2ITEM*> m_Mfu;
+    CAtlArray<SM2ITEM*> m_RecentExecutables;
+    CAtlArray<SM2ITEM*> m_Recent;
     CAtlArray<SM2ITEM*> m_Results;
     CAtlArray<SM2ITEM*> m_TreeVis;
     CAtlArray<int> m_TreeDepth;
@@ -875,6 +931,9 @@ public:
     UINT m_uPosition;
     WCHAR m_szUser[128];
     BOOL m_bTracking;
+    BOOL m_bInContextMenu;
+    CComPtr<IContextMenu2> m_ContextMenu2;
+    CComPtr<IContextMenu3> m_ContextMenu3;
 
     CStartMenu2Wnd() :
         m_Tray(NULL), m_hwndTray(NULL), m_hwndEdit(NULL),
@@ -885,7 +944,7 @@ public:
         m_iHot(-1), m_iSel(-1), m_iPressed(-1),
         m_AnimPhase(SM2A_NONE), m_AnimT0(0), m_dxSlide(0), m_dySlide(0),
         m_hwndFlyout(NULL), m_LastDismiss(0), m_uPosition(ABE_BOTTOM),
-        m_bTracking(FALSE)
+        m_bTracking(FALSE), m_bInContextMenu(FALSE)
     {
         ZeroMemory(&m_HotIn, sizeof(m_HotIn));
         ZeroMemory(&m_HotOut, sizeof(m_HotOut));
@@ -906,7 +965,7 @@ public:
     int MenuW() const { return Sc(430); }
     int MenuH() const { return Sc(488); }
     int LeftW() const { return Sc(250); }
-    int MfuRowH() const { return Sc(40); }
+    int RecentRowH() const { return Sc(40); }
     int ListRowH() const { return Sc(26); }
     int RightRowH() const { return Sc(30); }
 
@@ -938,29 +997,68 @@ public:
         return IsWindow() && IsWindowVisible() && m_AnimPhase != SM2A_CLOSE;
     }
 
-    VOID BuildMfu()
+    VOID BuildRecent()
     {
-        m_Mfu.SetCount(0);
+        m_Recent.SetCount(0);
 
-        CAtlArray<DWORD> Counts;
-        Counts.SetCount(m_Flat.GetCount());
+        CAtlArray<ULONGLONG> LastUsed;
+        LastUsed.SetCount(m_Flat.GetCount());
         for (SIZE_T i = 0; i < m_Flat.GetCount(); i++)
-            Counts[i] = SM2GetLaunchCount(m_Flat[i]->szPath);
+            LastUsed[i] = SM2GetLastUsed(SM2_RECENT_LINK_KEY, m_Flat[i]->szPath);
+
+        /* A shell-window notification identifies an executable rather than the
+           shortcut used to start it. Fold shortcuts with the same target into
+           one entry, preferring the shortcut most recently launched directly. */
+        CAtlArray<BOOL> Grouped;
+        Grouped.SetCount(m_Flat.GetCount());
+        for (SIZE_T i = 0; i < m_Flat.GetCount(); i++)
+            Grouped[i] = FALSE;
+
+        for (SIZE_T i = 0; i < m_Flat.GetCount(); i++)
+        {
+            if (Grouped[i] || !SM2GetTargetPath(m_Flat[i]))
+                continue;
+
+            SIZE_T representative = i;
+            ULONGLONG groupTime = SM2GetLastUsed(SM2_RECENT_EXE_KEY,
+                                                  m_Flat[i]->szTargetPath);
+            ULONGLONG linkTime = LastUsed[i];
+
+            for (SIZE_T j = i; j < m_Flat.GetCount(); j++)
+            {
+                if (!SM2GetTargetPath(m_Flat[j]) ||
+                    m_Flat[j]->szTargetPath.CompareNoCase(m_Flat[i]->szTargetPath) != 0)
+                {
+                    continue;
+                }
+
+                Grouped[j] = TRUE;
+                if (LastUsed[j] > linkTime)
+                {
+                    representative = j;
+                    linkTime = LastUsed[j];
+                }
+                if (LastUsed[j] > groupTime)
+                    groupTime = LastUsed[j];
+                LastUsed[j] = 0;
+            }
+            LastUsed[representative] = groupTime;
+        }
 
         CAtlArray<BOOL> Used;
         Used.SetCount(m_Flat.GetCount());
         for (SIZE_T i = 0; i < m_Flat.GetCount(); i++)
             Used[i] = FALSE;
 
-        while (m_Mfu.GetCount() < 10)
+        while (m_Recent.GetCount() < 10)
         {
             int best = -1;
             for (SIZE_T i = 0; i < m_Flat.GetCount(); i++)
             {
-                if (Used[i] || Counts[i] == 0)
+                if (Used[i] || LastUsed[i] == 0)
                     continue;
-                if (best < 0 || Counts[i] > Counts[best] ||
-                    (Counts[i] == Counts[best] &&
+                if (best < 0 || LastUsed[i] > LastUsed[best] ||
+                    (LastUsed[i] == LastUsed[best] &&
                      lstrcmpiW(m_Flat[i]->szName, m_Flat[best]->szName) < 0))
                 {
                     best = (int)i;
@@ -969,22 +1067,13 @@ public:
             if (best < 0)
                 break;
             Used[best] = TRUE;
-            m_Mfu.Add(m_Flat[best]);
+            m_Recent.Add(m_Flat[best]);
         }
 
-        for (SIZE_T i = 0; i < m_Flat.GetCount() && m_Mfu.GetCount() < 10; i++)
+        for (SIZE_T i = 0; i < m_Recent.GetCount(); i++)
         {
-            if (!Used[i])
-            {
-                Used[i] = TRUE;
-                m_Mfu.Add(m_Flat[i]);
-            }
-        }
-
-        for (SIZE_T i = 0; i < m_Mfu.GetCount(); i++)
-        {
-            if (!m_Mfu[i]->hLargeIcon)
-                m_Mfu[i]->hLargeIcon = SM2LoadShellIcon(m_Mfu[i]->szPath, TRUE);
+            if (!m_Recent[i]->hLargeIcon)
+                m_Recent[i]->hLargeIcon = SM2LoadShellIcon(m_Recent[i]->szPath, TRUE);
         }
     }
 
@@ -1007,17 +1096,78 @@ public:
         AddTreeVis(&m_Root, 0);
     }
 
+    VOID ClearRecentExecutables()
+    {
+        for (SIZE_T i = 0; i < m_RecentExecutables.GetCount(); ++i)
+            delete m_RecentExecutables[i];
+        m_RecentExecutables.SetCount(0);
+    }
+
+    VOID AddRecentExecutables()
+    {
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, SM2_RECENT_EXE_KEY, 0, KEY_QUERY_VALUE, &hKey) != ERROR_SUCCESS)
+            return;
+        for (DWORD i = 0;; ++i)
+        {
+            WCHAR szPath[MAX_PATH], szKey[MAX_PATH];
+            DWORD cchPath = _countof(szPath), type, cbTime = sizeof(ULONGLONG);
+            ULONGLONG Time;
+            LONG error = RegEnumValueW(hKey, i, szPath, &cchPath, NULL, &type, (LPBYTE)&Time, &cbTime);
+            if (error == ERROR_MORE_DATA)
+                continue;
+            if (error != ERROR_SUCCESS)
+                break;
+            if (type != REG_QWORD || cbTime != sizeof(Time) || !Time || lstrcmpiW(PathFindExtensionW(szPath), L".exe"))
+                continue;
+            DWORD attributes = GetFileAttributesW(szPath);
+            if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
+                continue;
+            StringCchPrintfW(szKey, _countof(szKey), L"Applications\\%s", PathFindFileNameW(szPath));
+            if (SHGetValueW(HKEY_CLASSES_ROOT, szKey, L"NoStartPage", NULL, NULL, NULL) == ERROR_SUCCESS)
+                continue;
+
+            BOOL bHasShortcut = FALSE;
+            for (SIZE_T j = 0; j < m_Flat.GetCount(); ++j)
+            {
+                if (SM2GetTargetPath(m_Flat[j]) && !m_Flat[j]->szTargetPath.CompareNoCase(szPath))
+                {
+                    bHasShortcut = TRUE;
+                    break;
+                }
+            }
+            if (bHasShortcut)
+                continue;
+            SM2ITEM *pItem = new SM2ITEM;
+            if (!pItem)
+                break;
+            pItem->szPath = szPath;
+            pItem->szTargetPath = szPath;
+            pItem->bTargetTried = TRUE;
+            pItem->szName = PathFindFileNameW(szPath);
+            PathRemoveExtensionW(pItem->szName.GetBuffer());
+            pItem->szName.ReleaseBuffer();
+            m_RecentExecutables.Add(pItem);
+            m_Flat.Add(pItem);
+        }
+        RegCloseKey(hKey);
+    }
+
     VOID RebuildData()
     {
+        ClearHotAnims();
+        ClearViewAnim();
+        ClearRecentExecutables();
         m_Flat.SetCount(0);
-        m_Mfu.SetCount(0);
+        m_Recent.SetCount(0);
         m_Results.SetCount(0);
         m_TreeVis.SetCount(0);
         m_TreeDepth.SetCount(0);
         m_Rows.SetCount(0);
         SM2BuildTree(&m_Root);
         SM2FlattenTree(&m_Root, m_Flat);
-        BuildMfu();
+        AddRecentExecutables();
+        BuildRecent();
         BuildTreeVis();
     }
 
@@ -1132,13 +1282,13 @@ public:
             case SM2V_MAIN:
             {
                 int y = m_rcList.top + Sc(2);
-                for (SIZE_T i = 0; i < m_Mfu.GetCount(); i++)
+                for (SIZE_T i = 0; i < m_Recent.GetCount(); i++)
                 {
-                    RECT rc = { m_rcList.left, y, m_rcList.right, y + MfuRowH() };
+                    RECT rc = { m_rcList.left, y, m_rcList.right, y + RecentRowH() };
                     if (rc.bottom > m_rcList.bottom)
                         break;
-                    AddRow(rc, SM2R_MFU, m_Mfu[i], (int)i);
-                    y += MfuRowH();
+                    AddRow(rc, SM2R_RECENT, m_Recent[i], (int)i);
+                    y += RecentRowH();
                 }
                 AddRow(m_rcBottomRow, SM2R_ALLPROGRAMS, NULL, 0);
                 break;
@@ -1277,7 +1427,7 @@ public:
 
             switch (row.nType)
             {
-                case SM2R_MFU:
+                case SM2R_RECENT:
                 {
                     DrawHighlight(hdc, rc, alpha, SM2_CLR_LEFT_BG, SM2_CLR_HOT_FILL, TRUE);
                     int cy = (rc.top + rc.bottom) / 2;
@@ -1783,7 +1933,7 @@ public:
         {
             int nType = m_Rows[i].nType;
             if (m_ViewAnim.bActive &&
-                (nType == SM2R_MFU || nType == SM2R_TREE || nType == SM2R_RESULT ||
+                (nType == SM2R_RECENT || nType == SM2R_TREE || nType == SM2R_RESULT ||
                  nType == SM2R_ALLPROGRAMS || nType == SM2R_BACK))
                 continue;
             if (PtInRect(&m_Rows[i].rc, pt))
@@ -1833,7 +1983,7 @@ public:
         SM2ROW row = m_Rows[i];
         switch (row.nType)
         {
-            case SM2R_MFU:
+            case SM2R_RECENT:
             case SM2R_RESULT:
                 SM2LaunchItem(row.pItem);
                 Hide();
@@ -1871,6 +2021,301 @@ public:
                 ShowFlyout();
                 break;
         }
+    }
+
+    BOOL IsContextRow(int i) const
+    {
+        if (i < 0 || i >= (int)m_Rows.GetCount() || !m_Rows[i].pItem)
+            return FALSE;
+        return m_Rows[i].nType == SM2R_RECENT ||
+               m_Rows[i].nType == SM2R_RESULT ||
+               m_Rows[i].nType == SM2R_TREE;
+    }
+
+    VOID RemoveContextVerb(IContextMenu *pContextMenu, HMENU hMenu,
+                           UINT cCommands, PCWSTR pszVerb)
+    {
+        for (UINT i = 0; i < cCommands; ++i)
+        {
+            WCHAR szVerb[64] = L"";
+            if (SUCCEEDED(pContextMenu->GetCommandString(i, GCS_VERBW, NULL,
+                                                         (LPSTR)szVerb,
+                                                         _countof(szVerb))) &&
+                !lstrcmpiW(szVerb, pszVerb))
+            {
+                DeleteMenu(hMenu, SM2_CONTEXT_FIRST + i, MF_BYCOMMAND);
+            }
+        }
+    }
+
+    VOID CleanContextSeparators(HMENU hMenu)
+    {
+        BOOL bPreviousSeparator = TRUE;
+        for (INT i = 0; i < GetMenuItemCount(hMenu);)
+        {
+            MENUITEMINFOW mii = { sizeof(mii), MIIM_FTYPE };
+            if (!GetMenuItemInfoW(hMenu, i, TRUE, &mii))
+                break;
+            if (mii.fType & MFT_SEPARATOR)
+            {
+                if (bPreviousSeparator)
+                {
+                    DeleteMenu(hMenu, i, MF_BYPOSITION);
+                    continue;
+                }
+                bPreviousSeparator = TRUE;
+            }
+            else
+            {
+                bPreviousSeparator = FALSE;
+            }
+            ++i;
+        }
+
+        INT count = GetMenuItemCount(hMenu);
+        if (count > 0)
+        {
+            MENUITEMINFOW mii = { sizeof(mii), MIIM_FTYPE };
+            if (GetMenuItemInfoW(hMenu, count - 1, TRUE, &mii) &&
+                (mii.fType & MFT_SEPARATOR))
+            {
+                DeleteMenu(hMenu, count - 1, MF_BYPOSITION);
+            }
+        }
+    }
+
+    VOID RemoveRecentItem(SM2ITEM *pItem)
+    {
+        if (!pItem)
+            return;
+
+        SHDeleteValueW(HKEY_CURRENT_USER, SM2_RECENT_LINK_KEY, pItem->szPath);
+        if (SM2GetTargetPath(pItem))
+        {
+            SHDeleteValueW(HKEY_CURRENT_USER, SM2_RECENT_EXE_KEY, pItem->szTargetPath);
+            for (SIZE_T i = 0; i < m_Flat.GetCount(); ++i)
+            {
+                if (SM2GetTargetPath(m_Flat[i]) && !m_Flat[i]->szTargetPath.CompareNoCase(pItem->szTargetPath))
+                    SHDeleteValueW(HKEY_CURRENT_USER, SM2_RECENT_LINK_KEY, m_Flat[i]->szPath);
+            }
+        }
+
+        BuildRecent();
+        ClearHotAnims();
+        m_iHot = m_iSel = -1;
+        LayoutRows();
+        InvalidateRect(NULL, FALSE);
+    }
+
+    static INT_PTR CALLBACK RenameDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+    {
+        PWSTR pszName = (PWSTR)::GetWindowLongPtrW(hwnd, DWLP_USER);
+        if (msg == WM_INITDIALOG)
+        {
+            pszName = (PWSTR)lParam;
+            ::SetWindowLongPtrW(hwnd, DWLP_USER, lParam);
+            ::SendDlgItemMessageW(hwnd, IDC_STARTMENU_NAME, EM_SETLIMITTEXT, MAX_PATH - 1, 0);
+            ::SetDlgItemTextW(hwnd, IDC_STARTMENU_NAME, pszName);
+            ::SendDlgItemMessageW(hwnd, IDC_STARTMENU_NAME, EM_SETSEL, 0, -1);
+            return TRUE;
+        }
+        if (msg == WM_COMMAND)
+        {
+            if (LOWORD(wParam) == IDOK && pszName && ::GetDlgItemTextW(hwnd, IDC_STARTMENU_NAME, pszName, MAX_PATH))
+                ::EndDialog(hwnd, IDOK);
+            else if (LOWORD(wParam) == IDCANCEL)
+                ::EndDialog(hwnd, IDCANCEL);
+            return TRUE;
+        }
+        return FALSE;
+    }
+
+    HRESULT RenameContextItem(IShellFolder *pParent, PCUITEMID_CHILD pidlChild, PCWSTR pszOldPath)
+    {
+        STRRET Name;
+        WCHAR szName[MAX_PATH];
+        HRESULT hr = pParent->GetDisplayNameOf(pidlChild, SHGDN_INFOLDER | SHGDN_FOREDITING, &Name);
+        if (FAILED(hr))
+            return hr;
+        hr = StrRetToBufW(&Name, pidlChild, szName, _countof(szName));
+        if (FAILED(hr))
+            return hr;
+        if (DialogBoxParamW(hExplorerInstance, MAKEINTRESOURCEW(IDD_STARTMENU_RENAME), m_hWnd, RenameDialogProc, (LPARAM)szName) != IDOK)
+            return S_FALSE;
+
+        PITEMID_CHILD pidlNew = NULL;
+        hr = pParent->SetNameOf(m_hWnd, pidlChild, szName, SHGDN_INFOLDER | SHGDN_FOREDITING, &pidlNew);
+        if (SUCCEEDED(hr) && pidlNew)
+        {
+            WCHAR szNewPath[MAX_PATH];
+            if (SUCCEEDED(pParent->GetDisplayNameOf(pidlNew, SHGDN_FORPARSING, &Name)) && SUCCEEDED(StrRetToBufW(&Name, pidlNew, szNewPath, _countof(szNewPath))))
+            {
+                ULONGLONG LastUsed = SM2GetLastUsed(SM2_RECENT_LINK_KEY, pszOldPath);
+                if (LastUsed && lstrcmpiW(szNewPath, pszOldPath) && SHSetValueW(HKEY_CURRENT_USER, SM2_RECENT_LINK_KEY, szNewPath, REG_QWORD, &LastUsed, sizeof(LastUsed)) == ERROR_SUCCESS)
+                    SHDeleteValueW(HKEY_CURRENT_USER, SM2_RECENT_LINK_KEY, pszOldPath);
+            }
+        }
+        ILFree(pidlNew);
+        if (FAILED(hr))
+        {
+            WCHAR szError[512];
+            if (!FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, HRESULT_CODE(hr), 0, szError, _countof(szError), NULL))
+                StringCchCopyW(szError, _countof(szError), L"The item could not be renamed.");
+            MessageBoxW(szError, L"Rename", MB_OK | MB_ICONERROR);
+        }
+        return hr;
+    }
+
+    VOID ShowItemContextMenu(int iRow, POINT ptScreen)
+    {
+        if (!IsContextRow(iRow))
+            return;
+
+        SM2ROW Row = m_Rows[iRow];
+        CStringW ItemPath = Row.pItem->szPath;
+        PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(Row.pItem->szPath);
+        if (!pidl)
+            return;
+
+        CComPtr<IShellFolder> Parent;
+        PCUITEMID_CHILD pidlChild = NULL;
+        HRESULT hr = SHBindToParent(pidl, IID_PPV_ARG(IShellFolder, &Parent),
+                                    &pidlChild);
+        if (FAILED(hr))
+        {
+            ILFree(pidl);
+            return;
+        }
+
+        CComPtr<IContextMenu> ContextMenu;
+        hr = Parent->GetUIObjectOf(m_hWnd, 1, &pidlChild,
+                                   IID_NULL_PPV_ARG(IContextMenu, &ContextMenu));
+        if (FAILED(hr))
+        {
+            ILFree(pidl);
+            return;
+        }
+
+        HMENU hMenu = CreatePopupMenu();
+        if (!hMenu)
+        {
+            ILFree(pidl);
+            return;
+        }
+
+        UINT uFlags = CMF_NORMAL | CMF_CANRENAME;
+        if (GetKeyState(VK_SHIFT) & 0x8000)
+            uFlags |= CMF_EXTENDEDVERBS;
+        hr = ContextMenu->QueryContextMenu(hMenu, 0, SM2_CONTEXT_FIRST,
+                                           SM2_CONTEXT_LAST, uFlags);
+        UINT cCommands = SUCCEEDED(hr) ? HRESULT_CODE(hr) : 0;
+        if (SUCCEEDED(hr) && Row.nType == SM2R_RECENT)
+        {
+            RemoveContextVerb(ContextMenu, hMenu, cCommands, L"cut");
+            RemoveContextVerb(ContextMenu, hMenu, cCommands, L"delete");
+            RemoveContextVerb(ContextMenu, hMenu, cCommands, L"link");
+            RemoveContextVerb(ContextMenu, hMenu, cCommands, L"createlink");
+            if (lstrcmpiW(PathFindExtensionW(ItemPath), L".lnk"))
+                RemoveContextVerb(ContextMenu, hMenu, cCommands, L"rename");
+            CleanContextSeparators(hMenu);
+            if (GetMenuItemCount(hMenu) > 0)
+                AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(hMenu, MF_STRING, SM2_CONTEXT_REMOVE_RECENT,
+                        L"Remove from this list");
+        }
+
+        if (SUCCEEDED(hr) && GetMenuItemCount(hMenu) > 0)
+        {
+            m_ContextMenu2.Release();
+            m_ContextMenu3.Release();
+            ContextMenu->QueryInterface(IID_PPV_ARG(IContextMenu3, &m_ContextMenu3));
+            if (!m_ContextMenu3)
+                ContextMenu->QueryInterface(IID_PPV_ARG(IContextMenu2, &m_ContextMenu2));
+
+            m_bInContextMenu = TRUE;
+            SetForegroundWindow(m_hWnd);
+            UINT idCommand = TrackPopupMenuEx(hMenu,
+                                              TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                              ptScreen.x, ptScreen.y,
+                                              m_hWnd, NULL);
+            m_ContextMenu3.Release();
+            m_ContextMenu2.Release();
+            PostMessageW(WM_NULL, 0, 0);
+
+            if (idCommand == SM2_CONTEXT_REMOVE_RECENT)
+            {
+                RemoveRecentItem(Row.pItem);
+            }
+            else if (idCommand >= SM2_CONTEXT_FIRST &&
+                     idCommand < SM2_CONTEXT_FIRST + cCommands)
+            {
+                WCHAR szVerb[64] = L"";
+                ContextMenu->GetCommandString(idCommand - SM2_CONTEXT_FIRST, GCS_VERBW, NULL, (LPSTR)szVerb, _countof(szVerb));
+                BOOL bLaunch = !Row.pItem->bFolder && (!lstrcmpiW(szVerb, L"open") || !lstrcmpiW(szVerb, L"runas") || !lstrcmpiW(szVerb, L"runasuser"));
+                BOOL bRename = !lstrcmpiW(szVerb, L"rename");
+                BOOL bKeepOpen = bRename || !lstrcmpiW(szVerb, L"taskbarpin") || !lstrcmpiW(szVerb, L"taskbarunpin") || !lstrcmpiW(szVerb, L"copy");
+                if (!bKeepOpen)
+                    Hide();
+                CMINVOKECOMMANDINFOEX Info = { sizeof(Info) };
+                Info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+                if (GetKeyState(VK_SHIFT) & 0x8000)
+                    Info.fMask |= CMIC_MASK_SHIFT_DOWN;
+                if (GetKeyState(VK_CONTROL) & 0x8000)
+                    Info.fMask |= CMIC_MASK_CONTROL_DOWN;
+                Info.hwnd = m_hWnd;
+                Info.lpVerb = MAKEINTRESOURCEA(idCommand - SM2_CONTEXT_FIRST);
+                Info.lpVerbW = MAKEINTRESOURCEW(idCommand - SM2_CONTEXT_FIRST);
+                Info.nShow = SW_SHOWNORMAL;
+                Info.ptInvoke = ptScreen;
+                if (bRename)
+                    hr = RenameContextItem(Parent, pidlChild, ItemPath);
+                else if (!lstrcmpiW(szVerb, L"opencontaining"))
+                    hr = SHOpenFolderAndSelectItems(pidl, 0, NULL, 0);
+                else
+                    hr = ContextMenu->InvokeCommand((LPCMINVOKECOMMANDINFO)&Info);
+                if (bLaunch && SUCCEEDED(hr))
+                    SM2SetLastUsed(SM2_RECENT_LINK_KEY, ItemPath);
+
+                RebuildData();
+                UpdateSearch();
+                LayoutRows();
+                InvalidateRect(NULL, FALSE);
+            }
+            m_bInContextMenu = FALSE;
+            if (IsMenuVisible() && ::GetForegroundWindow() == m_hWnd)
+            {
+                ::SetFocus(m_hwndEdit);
+            }
+        }
+
+        DestroyMenu(hMenu);
+        ILFree(pidl);
+    }
+
+    VOID ShowKeyboardContextMenu()
+    {
+        int iRow = IsContextRow(m_iSel) ? m_iSel : m_iHot;
+        if (!IsContextRow(iRow))
+        {
+            for (SIZE_T i = 0; i < m_Rows.GetCount(); ++i)
+            {
+                if (IsContextRow((int)i))
+                {
+                    iRow = (int)i;
+                    break;
+                }
+            }
+        }
+        if (!IsContextRow(iRow))
+            return;
+
+        m_iSel = iRow;
+        m_iHot = -1;
+        InvalidateRect(NULL, FALSE);
+        RECT rc = m_Rows[iRow].rc;
+        POINT pt = { rc.left + Sc(24), rc.bottom };
+        ClientToScreen(&pt);
+        ShowItemContextMenu(iRow, pt);
     }
 
     VOID MoveSel(int dir)
@@ -1926,6 +2371,10 @@ public:
             case VK_DOWN:
                 MoveSel(1);
                 break;
+            case VK_APPS:
+            case VK_F10:
+                ShowKeyboardContextMenu();
+                break;
         }
     }
 
@@ -1969,7 +2418,9 @@ public:
         {
             case WM_KEYDOWN:
                 if (wParam == VK_ESCAPE || wParam == VK_RETURN ||
-                    wParam == VK_UP || wParam == VK_DOWN)
+                    wParam == VK_UP || wParam == VK_DOWN ||
+                    wParam == VK_APPS ||
+                    (wParam == VK_F10 && (GetKeyState(VK_SHIFT) & 0x8000)))
                 {
                     pThis->OnEditKey((UINT)wParam);
                     return 0;
@@ -2073,6 +2524,7 @@ public:
             m_hLiquidTheme = NULL;
         }
         m_Root.Clear();
+        ClearRecentExecutables();
         return 0;
     }
 
@@ -2258,6 +2710,8 @@ public:
     {
         if (LOWORD(wParam) == WA_INACTIVE)
         {
+            if (m_bInContextMenu)
+                return 0;
             HWND hwndOther = (HWND)lParam;
             if (m_hwndFlyout && hwndOther == m_hwndFlyout)
                 return 0;
@@ -2267,6 +2721,55 @@ public:
                 Hide();
             }
         }
+        return 0;
+    }
+
+    LRESULT OnContextMenu(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        if ((HWND)wParam == m_hwndEdit)
+        {
+            bHandled = FALSE;
+            return 0;
+        }
+
+        if ((SHORT)LOWORD(lParam) == -1 && (SHORT)HIWORD(lParam) == -1)
+        {
+            ShowKeyboardContextMenu();
+            return 0;
+        }
+
+        POINT ptScreen = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        POINT ptClient = ptScreen;
+        ScreenToClient(&ptClient);
+        int iRow = HitTest(ptClient);
+        if (IsContextRow(iRow))
+        {
+            m_iSel = iRow;
+            m_iHot = -1;
+            InvalidateRect(NULL, FALSE);
+            ShowItemContextMenu(iRow, ptScreen);
+        }
+        return 0;
+    }
+
+    LRESULT OnContextMenuMessage(UINT uMsg, WPARAM wParam, LPARAM lParam,
+                                 BOOL &bHandled)
+    {
+        if (m_ContextMenu3)
+        {
+            LRESULT lResult = 0;
+            HRESULT hr = m_ContextMenu3->HandleMenuMsg2(uMsg, wParam, lParam,
+                                                        &lResult);
+            bHandled = SUCCEEDED(hr);
+            return lResult;
+        }
+        if (m_ContextMenu2)
+        {
+            HRESULT hr = m_ContextMenu2->HandleMenuMsg(uMsg, wParam, lParam);
+            bHandled = SUCCEEDED(hr);
+            return 0;
+        }
+        bHandled = FALSE;
         return 0;
     }
 
@@ -2336,6 +2839,11 @@ public:
         MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
         MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
+        MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
+        MESSAGE_HANDLER(WM_INITMENUPOPUP, OnContextMenuMessage)
+        MESSAGE_HANDLER(WM_DRAWITEM, OnContextMenuMessage)
+        MESSAGE_HANDLER(WM_MEASUREITEM, OnContextMenuMessage)
+        MESSAGE_HANDLER(WM_MENUCHAR, OnContextMenuMessage)
         MESSAGE_HANDLER(WM_ACTIVATE, OnActivate)
         MESSAGE_HANDLER(WM_SETFOCUS, OnSetFocus)
         MESSAGE_HANDLER(WM_COMMAND, OnCommand)
@@ -2383,6 +2891,31 @@ VOID StartMenu2_Hide(VOID)
 BOOL StartMenu2_IsVisible(VOID)
 {
     return g_pStartMenu2 && g_pStartMenu2->IsMenuVisible();
+}
+
+VOID StartMenu2_RecordUsage(IN HWND hWnd)
+{
+    DWORD dwProcessId;
+    WCHAR szPath[MAX_PATH];
+    DWORD cchPath = _countof(szPath);
+
+    if (!hWnd || !GetWindowThreadProcessId(hWnd, &dwProcessId))
+        return;
+
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, dwProcessId);
+    if (!hProcess)
+        hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwProcessId);
+    if (!hProcess)
+        return;
+
+    szPath[0] = 0;
+    if (QueryFullProcessImageNameW(hProcess, 0, szPath, &cchPath))
+    {
+        CStringW Path;
+        if (SM2NormalizePath(szPath, Path))
+            SM2SetLastUsed(SM2_RECENT_EXE_KEY, Path);
+    }
+    CloseHandle(hProcess);
 }
 
 VOID StartMenu2_Destroy(VOID)
