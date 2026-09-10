@@ -1560,8 +1560,7 @@ DxgkpPresentDisplayOnlyToSharedPrimary(
         /* A synchronous present retains ownership in Entry. An asynchronous
          * present transfers it to the scheduler and publishes its result
          * after scanout, while this observer keeps the result alive. */
-        if (NT_SUCCESS(Status) && Entry.DeviceWork != NULL)
-            DxgkDeviceWorkCompleteWithStatus(Entry.DeviceWork, Status);
+        DxgkDeviceCompletePresent(Entry.Device, Entry.DeviceWork, Status);
     }
     if (NT_SUCCESS(Status))
         Status = DxgkDeviceWaitForIdle(Entry.Device);
@@ -3300,6 +3299,7 @@ DxgkpQueuePresent(
 
         Status = DxgkpExecuteDodPresent(Adapter, Entry);
         Status = DxgkpCompleteRedirectedBltPresent(Entry, Status);
+        DxgkDeviceCompletePresent(Entry->Device, Entry->DeviceWork, Status);
         DxgkpReleasePresentEntry(Entry);
         DxgkpReleasePresentQueues(Adapter);
         return Status;
@@ -3514,6 +3514,7 @@ DxgkpProcessPresentQueue(
     }
 
     Status = DxgkpCompleteRedirectedBltPresent(&Entry, Status);
+    DxgkDeviceCompletePresent(Entry.Device, Entry.DeviceWork, Status);
 
     if (NT_SUCCESS(Status))
         InterlockedIncrement(&Queue->PresentedFrameCount);

@@ -155,6 +155,67 @@ DxgkDeviceWorkGetStatus(_In_ PDXGKRNL_DEVICE_WORK Work)
 }
 
 VOID
+DxgkDeviceCompletePresent(
+    _In_ PDXGKRNL_DEVICE Device,
+    _Inout_opt_ PDXGKRNL_DEVICE_WORK Work,
+    _In_ NTSTATUS Status)
+{
+    D3DKMT_DEVICEEXECUTION_STATE ExecutionState;
+
+    ASSERT(Status != STATUS_PENDING);
+    if (Device == NULL || Status == STATUS_PENDING)
+        return;
+    if (Work != NULL)
+    {
+        ASSERT(Work->Device == Device);
+        if (Work->Device != Device ||
+            InterlockedCompareExchange(&Work->CompletionStatus, Status,
+                                       STATUS_PENDING) != STATUS_PENDING)
+        {
+            return;
+        }
+    }
+
+    /* An accepted present can fail after its caller has returned. Publish
+     * that failure before waking ledger waiters; cleanup must not turn it
+     * into successful execution. Preserve an earlier reset or DMA fault.
+     * An exclusive owner's temporary scanout takeover does not fault the
+     * rendering device; the work item still records its occluded result. */
+    if (!NT_SUCCESS(Status) && Status != STATUS_GRAPHICS_PRESENT_OCCLUDED)
+    {
+        switch (Status)
+        {
+            case STATUS_DEVICE_REMOVED:
+            case STATUS_DELETE_PENDING:
+                ExecutionState = D3DKMT_DEVICEEXECUTION_STOPPED;
+                break;
+            case STATUS_GRAPHICS_ADAPTER_WAS_RESET:
+                ExecutionState = D3DKMT_DEVICEEXECUTION_RESET;
+                break;
+            case STATUS_GRAPHICS_NO_VIDEO_MEMORY:
+            case STATUS_NO_MEMORY:
+            case STATUS_INSUFFICIENT_RESOURCES:
+                ExecutionState = D3DKMT_DEVICEEXECUTION_ERROR_OUTOFMEMORY;
+                break;
+            default:
+                ExecutionState = D3DKMT_DEVICEEXECUTION_ERROR_DMAFAULT;
+                break;
+        }
+        DxgkDeviceWorkCoreTryTransitionTerminal(
+            &Device->WorkLedger,
+            &Device->ExecutionState,
+            D3DKMT_DEVICEEXECUTION_ACTIVE,
+            ExecutionState);
+    }
+
+    /* This retires only the present whose execution has finished. Other
+     * accepted GPU work retains its own ledger items and allocation pins;
+     * a failed execution state is not proof that those reads have drained. */
+    if (Work != NULL)
+        DxgkDeviceWorkCoreComplete(&Work->CoreItem);
+}
+
+VOID
 DxgkDeviceWorkDestroy(
     _Inout_opt_ PDXGKRNL_DEVICE_WORK Work)
 {

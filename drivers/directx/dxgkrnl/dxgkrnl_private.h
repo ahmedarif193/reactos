@@ -3815,6 +3815,14 @@ VOID DxgkDeviceWorkCompleteWithStatus(_Inout_opt_ PDXGKRNL_DEVICE_WORK Work,
                                     _In_ NTSTATUS Status);
 NTSTATUS DxgkDeviceWorkGetStatus(_In_ PDXGKRNL_DEVICE_WORK Work);
 
+/* Only for the final execution result of an accepted present, not validation
+ * before admission. A NULL Work remains owned by the submitted DMA tracker. */
+VOID
+DxgkDeviceCompletePresent(
+    _In_ PDXGKRNL_DEVICE Device,
+    _Inout_opt_ PDXGKRNL_DEVICE_WORK Work,
+    _In_ NTSTATUS Status);
+
 VOID
 DxgkDeviceWorkDestroy(
     _Inout_opt_ PDXGKRNL_DEVICE_WORK Work);
