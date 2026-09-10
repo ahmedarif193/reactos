@@ -48,11 +48,19 @@ mft_bitmap_bit()
     echo $(((_byte >> (_record % 8)) & 1))
 }
 
+mft_allocation()
+{
+    "$ntfsinfo" -i 0 "$image" |
+        awk '/^[[:space:]]+Allocated size:/ { total += $3 } END { print total + 0 }'
+}
+
 truncate -s 64M "$image"
 "$mkntfs" -F -Q -q -L CREATE_TEST "$image"
 
 free_before=$("$driver" --probe "$image" |
     awk '/^free clusters:/ { print $3 }')
+mft_before=$(mft_allocation)
+cluster_size=$("$ntfsinfo" -m "$image" | awk '/Cluster Size:/ { print $3; exit }')
 
 # Empty file creation publishes an ordinary base record.
 file_record=$("$driver" --create-file "$image" /alpha.txt)
@@ -151,13 +159,12 @@ test "$2" -eq "$old_time"
 test "$3" -gt "$old_time"
 test "$4" -gt "$old_time"
 
-# Every record so far is resident-only: clusters may go only to the
-# chunked $MFT data preallocation, at most one 16-cluster reservation
-# beyond the handful of freshly initialized 1 KiB records.
+# Every record so far is resident-only: all allocated clusters must be
+# accounted for by $MFT growth, measured with the independent reader.
 free_after=$("$driver" --probe "$image" |
     awk '/^free clusters:/ { print $3 }')
 test "$free_after" -le "$free_before"
-test $((free_before - free_after)) -le 16
+test $(((free_before - free_after) * cluster_size)) -eq $(($(mft_allocation) - mft_before))
 
 # Grow one directory far past its resident root using only the shared
 # core: the first insertion overflow promotes the root into an index
