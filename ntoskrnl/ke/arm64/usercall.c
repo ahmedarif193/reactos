@@ -236,24 +236,16 @@ KiSystemService(
                 }
 
                 ConvertStatus = PsConvertToGuiThread();
+
+                /*
+                 * The stack may have moved even when a win32k callout failed.
+                 * Refresh the frame before either dispatch or failure writes;
+                 * PsConvertToGuiThread has already released the old stack.
+                 */
+                TrapFrame = Thread->TrapFrame;
                 if (NT_SUCCESS(ConvertStatus) ||
                     ConvertStatus == STATUS_ALREADY_WIN32)
                 {
-                    /*
-                     * ARM64 FIX: Re-read TrapFrame after stack switch.
-                     *
-                     * PsConvertToGuiThread() calls KeSwitchKernelStack() which
-                     * copies the entire kernel stack to a new (larger) location
-                     * and adjusts Thread->TrapFrame accordingly. Our local
-                     * TrapFrame pointer still references the OLD stack which
-                     * has been freed by MmDeleteKernelStack(). We MUST update
-                     * our local pointer to the new location.
-                     *
-                     * TrapFrame->TrapFrame (the linked list pointer to the
-                     * previous trap frame) was also adjusted by
-                     * KeSwitchKernelStack, so the linked list is correct.
-                     */
-                    TrapFrame = Thread->TrapFrame;
                     for (Index = 0; Index < RTL_NUMBER_OF(RegisterArguments); Index++)
                     {
                         TrapFrame->X[Index] = RegisterArguments[Index];
