@@ -6,6 +6,7 @@
  */
 
 #include "precomp.h"
+#include <ndk/iofuncs.h>
 #include <taskbarpinlock.h>
 #include <taskbarpinicon.h>
 
@@ -181,6 +182,23 @@ NotifyTaskbarPinChange(LONG lEvent, PCWSTR pszPath)
         EnumChildWindows(hwndTray, NotifyTaskbarChild, (LPARAM)uMessage);
 }
 
+typedef struct _PIN_DIR_ENTRY
+{
+    ULONG NextEntryOffset;
+    ULONG FileIndex;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastAccessTime;
+    LARGE_INTEGER LastWriteTime;
+    LARGE_INTEGER ChangeTime;
+    LARGE_INTEGER EndOfFile;
+    LARGE_INTEGER AllocationSize;
+    ULONG FileAttributes;
+    ULONG FileNameLength;
+    WCHAR FileName[1];
+} PIN_DIR_ENTRY;
+
+// FindFirstFile cannot open the pin folder for enumeration on this build,
+// so it is read through a directory handle instead.
 static HRESULT
 FindPinnedShortcut(PCWSTR pszTarget, CStringW *pShortcut)
 {
@@ -194,58 +212,85 @@ FindPinnedShortcut(PCWSTR pszTarget, CStringW *pShortcut)
     if (FAILED(hr))
         return hr;
 
-    WCHAR szPattern[MAX_PATH];
-    if (FAILED(StringCchPrintfW(szPattern, _countof(szPattern), L"%s\\*.lnk", Folder.GetString())))
-    {
-        return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
-    }
-
-    WIN32_FIND_DATAW FindData;
-    HANDLE hFind = FindFirstFileW(szPattern, &FindData);
-    if (hFind == INVALID_HANDLE_VALUE)
+    HANDLE hFolder = CreateFileW(Folder, FILE_LIST_DIRECTORY,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                 OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (hFolder == INVALID_HANDLE_VALUE)
     {
         DWORD error = GetLastError();
         return (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) ? S_FALSE : HRESULT_FROM_WIN32(error);
     }
 
+    BYTE Buffer[8192];
+    BOOLEAN bRestart = TRUE;
     BOOL bFound = FALSE;
     HRESULT hrRead = S_OK;
-    do
-    {
-        if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            continue;
 
-        WCHAR szShortcut[MAX_PATH];
-        CStringW Target;
-        hr = StringCchPrintfW(szShortcut, _countof(szShortcut), L"%s\\%s", Folder.GetString(), FindData.cFileName);
-        if (FAILED(hr) || !ResolvePinTarget(szShortcut, Target))
+    while (!bFound)
+    {
+        IO_STATUS_BLOCK IoStatus;
+
+        RtlZeroMemory(&IoStatus, sizeof(IoStatus));
+        if (!NT_SUCCESS(NtQueryDirectoryFile(hFolder, NULL, NULL, NULL, &IoStatus, Buffer,
+                                             sizeof(Buffer), FileDirectoryInformation, FALSE,
+                                             NULL, bRestart)))
         {
-            hrRead = FAILED(hr) ? hr : HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
-            continue;
-        }
-        if (Target.CompareNoCase(pszTarget) == 0)
-        {
-            if (pShortcut)
-                *pShortcut = szShortcut;
-            bFound = TRUE;
             break;
         }
-    } while (FindNextFileW(hFind, &FindData));
+        bRestart = FALSE;
 
-    DWORD error = GetLastError();
-    FindClose(hFind);
-    return bFound ? S_OK : error != ERROR_NO_MORE_FILES ? HRESULT_FROM_WIN32(error) : FAILED(hrRead) ? hrRead : S_FALSE;
+        for (ULONG Offset = 0;;)
+        {
+            const PIN_DIR_ENTRY *pEntry = (const PIN_DIR_ENTRY *)&Buffer[Offset];
+            WCHAR szName[MAX_PATH], szShortcut[MAX_PATH];
+            CStringW Target;
+            ULONG cchName = pEntry->FileNameLength / sizeof(WCHAR);
+
+            if (cchName && cchName < _countof(szName) &&
+                !(pEntry->FileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            {
+                CopyMemory(szName, pEntry->FileName, pEntry->FileNameLength);
+                szName[cchName] = UNICODE_NULL;
+                if (!lstrcmpiW(PathFindExtensionW(szName), L".lnk") &&
+                    SUCCEEDED(StringCchPrintfW(szShortcut, _countof(szShortcut), L"%s\\%s",
+                                               Folder.GetString(), szName)))
+                {
+                    if (!ResolvePinTarget(szShortcut, Target))
+                    {
+                        hrRead = HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+                    }
+                    else if (Target.CompareNoCase(pszTarget) == 0)
+                    {
+                        if (pShortcut)
+                            *pShortcut = szShortcut;
+                        bFound = TRUE;
+                        break;
+                    }
+                }
+            }
+
+            if (!pEntry->NextEntryOffset)
+                break;
+            Offset += pEntry->NextEntryOffset;
+            if (Offset >= sizeof(Buffer))
+                break;
+        }
+    }
+
+    CloseHandle(hFolder);
+    return bFound ? S_OK : FAILED(hrRead) ? hrRead : S_FALSE;
 }
 
 static VOID
 StampNewPin(PCWSTR pszPath)
 {
-    HANDLE hFile = CreateFileW(pszPath, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE hFile = CreateFileW(pszPath, FILE_WRITE_ATTRIBUTES | FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE)
     {
         FILETIME Time;
         GetSystemTimeAsFileTime(&Time);
         SetFileTime(hFile, &Time, &Time, &Time);
+        FlushFileBuffers(hFile);
         CloseHandle(hFile);
     }
 }
