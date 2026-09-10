@@ -1954,8 +1954,8 @@ ObpCloseHandle(IN HANDLE Handle,
             /* Check if we came from user mode */
             if (AccessMode != KernelMode)
             {
-                /* Check if we have no debug port */
-                if (Process->DebugPort)
+                /* Debuggers and the permanent strict-handle opt-in raise. */
+                if (Process->DebugPort || ObpIsStrictHandleCheckingEnabled())
                 {
                     /* Make sure we're not attached */
                     if (!KeIsAttachedProcess())
