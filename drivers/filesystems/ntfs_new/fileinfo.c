@@ -1742,6 +1742,17 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     if (IrpSp->MinorFunction == IRP_MN_QUERY_DIRECTORY)
     {
+        if (!FileCB)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Complete;
+        }
+
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+        /* Enumeration shares the volume index buffer with file lookups. */
+        ExAcquireResourceExclusiveLite(&VolCB->MetadataResource, TRUE);
+
         FileInformationRequest = IrpSp->Parameters.QueryDirectory.FileInformationClass;
 
         switch(FileInformationRequest)
@@ -1773,6 +1784,10 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 Status = STATUS_INVALID_INFO_CLASS;
                 break;
         }
+
+        ExReleaseResourceLite(&VolCB->MetadataResource);
+        ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+        KeLeaveCriticalRegion();
     }
 
     else
@@ -1808,6 +1823,7 @@ NtfsFsdDirectoryControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
     }
 
+Complete:
     // Set to number of bytes written
     if (NT_SUCCESS(Status))
     {
