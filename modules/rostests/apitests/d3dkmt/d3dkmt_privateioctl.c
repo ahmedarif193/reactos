@@ -7,6 +7,7 @@
 
 #include "precomp.h"
 #include <winioctl.h>
+#include <reactos/rddm/rxgkioctl.h>
 
 #define IOCTL_DXGKRNL_GET_LEGACY_FULL_INIT_ENTRY 0x23003F
 #define IOCTL_DXGKRNL_GET_DOD_INIT_ENTRY 0x230043
@@ -73,6 +74,42 @@ TestExchangeInterfaceIoctl(HANDLE Device)
 }
 
 static void
+TestCompositorSourceOwnerIoctlDenied(HANDLE Device)
+{
+    RXGK_SETCOMPOSITORSOURCEOWNER_PACKET Packet;
+    RXGK_SETCOMPOSITORSOURCEOWNER_PACKET Expected;
+    DWORD BytesReturned;
+    DWORD Error;
+    BOOL Success;
+    ULONG Action;
+
+    for (Action = RXGK_COMPOSITOR_SOURCE_CLAIM; Action <= RXGK_COMPOSITOR_SOURCE_RELEASE; ++Action)
+    {
+        memset(&Packet, 0, sizeof(Packet));
+        Packet.Size = sizeof(Packet);
+        Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+        Packet.Action = Action;
+        Packet.AdapterLuidLowPart = 1;
+        Packet.ProcessId = GetCurrentProcessId();
+        Packet.Window = 1;
+        Packet.Generation = 1;
+        if (Action == RXGK_COMPOSITOR_SOURCE_CLAIM)
+            Packet.Width = Packet.Height = 1;
+        Expected = Packet;
+
+        /* Zero output length is required by this input-only kernel packet.
+         * Denial must happen before adapter or window identity is examined. */
+        BytesReturned = 0xFFFFFFFF;
+        SetLastError(ERROR_SUCCESS);
+        Success = DeviceIoControl(Device, IOCTL_RXGK_SETCOMPOSITORSOURCEOWNER, &Packet, sizeof(Packet), NULL, 0, &BytesReturned, NULL);
+        Error = GetLastError();
+        ok(!Success, "Compositor source action %lu succeeded from user mode\n", Action);
+        ok(Error == ERROR_ACCESS_DENIED, "Compositor source action %lu returned error %lu instead of ERROR_ACCESS_DENIED\n", Action, Error);
+        ok(memcmp(&Packet, &Expected, sizeof(Packet)) == 0, "Compositor source action %lu changed its input\n", Action);
+    }
+}
+
+static void
 TestD3dkmtIoctlDenied(
     HANDLE Device,
     DWORD IoControlCode,
@@ -123,6 +160,7 @@ START_TEST(privateioctl)
     TestResolverIoctl(Device, IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY, "IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY (0x230047)");
     TestResolverIoctl(Device, IOCTL_DXGKRNL_GET_UNINIT_ENTRY, "IOCTL_DXGKRNL_GET_UNINIT_ENTRY (0x23004B)");
     TestExchangeInterfaceIoctl(Device);
+    TestCompositorSourceOwnerIoctlDenied(Device);
     memset(&ModeList, 0, sizeof(ModeList));
     ModeList.pModeList = (D3DKMT_DISPLAYMODE *)(ULONG_PTR)-4096;
     ModeList.ModeCount = 1;

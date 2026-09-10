@@ -58,6 +58,14 @@ C_ASSERT(FIELD_OFFSET(RXGK_SHAREOBJECTS_PACKET, SharedNtHandle) == 32);
 C_ASSERT(sizeof(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET) ==
          RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE);
 C_ASSERT(sizeof(RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET) == RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET_V1_SIZE);
+C_ASSERT(sizeof(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET) == RXGK_SETCOMPOSITORSOURCEOWNER_PACKET_V1_SIZE);
+C_ASSERT(FIELD_OFFSET(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET, Action) == 8);
+C_ASSERT(FIELD_OFFSET(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET, VidPnSourceId) == 12);
+C_ASSERT(FIELD_OFFSET(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET, AdapterLuidLowPart) == 16);
+C_ASSERT(FIELD_OFFSET(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET, ProcessId) == 24);
+C_ASSERT(FIELD_OFFSET(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET, Window) == 32);
+C_ASSERT(FIELD_OFFSET(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET, Generation) == 40);
+C_ASSERT(FIELD_OFFSET(RXGK_SETCOMPOSITORSOURCEOWNER_PACKET, Width) == 48);
 C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, NtHandle) == 8);
 C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, GlobalShareHandle) == 16);
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
@@ -565,6 +573,7 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_DXGKRNL_GET_LEGACY_FULL_INIT_ENTRY:
         case IOCTL_DXGKRNL_GET_FULL_INIT_ENTRY:
         case IOCTL_RXGK_VALIDATESHAREDRESOURCEOWNER:
+        case IOCTL_RXGK_SETCOMPOSITORSOURCEOWNER:
             return DXGK_CAPS_CORE_LEVEL_WDDM_1_0;
 
         /* WDDM 1.1 / Windows 7 additions. */
@@ -11464,6 +11473,49 @@ DxgkpDispatchBufferedIoctlWorker(
                                                        &AdapterLuid, PsGetCurrentProcess());
         }
 
+        case IOCTL_RXGK_SETCOMPOSITORSOURCEOWNER:
+        {
+            const RXGK_SETCOMPOSITORSOURCEOWNER_PACKET *Packet;
+
+            if (Stack->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL ||
+                Irp->RequestorMode != KernelMode)
+            {
+                return STATUS_ACCESS_DENIED;
+            }
+            if (InputLength != sizeof(*Packet) || OutputLength != 0 || SystemBuffer == NULL)
+                return STATUS_INFO_LENGTH_MISMATCH;
+
+            Packet = (const RXGK_SETCOMPOSITORSOURCEOWNER_PACKET *)SystemBuffer;
+            if (Packet->Size != sizeof(*Packet) ||
+                Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
+                (Packet->Action != RXGK_COMPOSITOR_SOURCE_CLAIM &&
+                 Packet->Action != RXGK_COMPOSITOR_SOURCE_RELEASE) ||
+                Packet->VidPnSourceId >= DXGKP_MAX_SOURCES ||
+                (Packet->AdapterLuidLowPart == 0 && Packet->AdapterLuidHighPart == 0) ||
+                Packet->ProcessId == 0 || Packet->ProcessId > MAXULONG_PTR ||
+                Packet->Window == 0 || Packet->Window > MAXULONG_PTR ||
+                Packet->Generation == 0)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (Packet->Action == RXGK_COMPOSITOR_SOURCE_CLAIM)
+            {
+                if (Packet->Width == 0 || Packet->Height == 0 ||
+                    Packet->Width > MAXLONG || Packet->Height > MAXLONG)
+                {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                if (Packet->ProcessId != (ULONGLONG)(ULONG_PTR)PsGetCurrentProcessId())
+                    return STATUS_ACCESS_DENIED;
+            }
+            else if (Packet->Width != 0 || Packet->Height != 0)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+
+            return DxgkpSetCompositorSourceOwner(Packet);
+        }
+
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         case IOCTL_D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP:
         {
@@ -12854,6 +12906,7 @@ DxgkDispatchDeviceControl(
         case IOCTL_D3DKMT_SHAREOBJECTS:
         case IOCTL_RXGK_RESOLVESHAREDRESOURCENTHANDLE:
         case IOCTL_RXGK_VALIDATESHAREDRESOURCEOWNER:
+        case IOCTL_RXGK_SETCOMPOSITORSOURCEOWNER:
         case IOCTL_D3DKMT_SETVIDPNSOURCEOWNER:
         case IOCTL_D3DKMT_GETDEVICESTATE:
         case IOCTL_DXGKRNL_PREPAREMAPGPUVIRTUALADDRESS:

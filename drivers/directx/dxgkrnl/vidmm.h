@@ -505,6 +505,10 @@ DxgkVidMmPrepareForIdle(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
 NTSTATUS
+DxgkVidMmPrepareForStop(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
 DxgkVidMmRecoverFromTimeout(
     _In_ PDXGKRNL_ADAPTER Adapter);
 

@@ -59,6 +59,8 @@
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1D3, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_RXGK_VALIDATESHAREDRESOURCEOWNER \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1D4, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_RXGK_SETCOMPOSITORSOURCEOWNER \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1D5, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2100)
 #define IOCTL_D3DKMT_SETFSEBLOCK \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1CC, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -100,6 +102,9 @@
 #define RXGK_SHAREOBJECTS_PACKET_V1_SIZE       40U
 #define RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET_V1_SIZE 24U
 #define RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET_V1_SIZE 24U
+#define RXGK_SETCOMPOSITORSOURCEOWNER_PACKET_V1_SIZE 56U
+#define RXGK_COMPOSITOR_SOURCE_CLAIM             1U
+#define RXGK_COMPOSITOR_SOURCE_RELEASE           2U
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 #define RXGK_QUERYVIDPNEXCLUSIVEOWNERSHIP_PACKET_V1_SIZE 48U
 #endif
@@ -441,6 +446,28 @@ typedef struct _RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET
     ULONG       Reserved;
 } RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET,
  *PRXGK_VALIDATESHAREDRESOURCEOWNER_PACKET;
+
+/* Win32k claims the validated compositor output before publishing its HWND.
+ * The referenced owner process and registration generation distinguish a
+ * later output from queued work belonging to an earlier registration.
+ * Release uses the saved identity and may run on a watchdog thread after
+ * the compositor has exited. No process lookup is required to release it.
+ * This packet is accepted only through the internal kernel bridge. */
+typedef struct _RXGK_SETCOMPOSITORSOURCEOWNER_PACKET
+{
+    ULONG       Size;
+    ULONG       Version;
+    ULONG       Action;
+    ULONG       VidPnSourceId;
+    ULONG       AdapterLuidLowPart;
+    LONG        AdapterLuidHighPart;
+    ULONGLONG   ProcessId;
+    ULONGLONG   Window;
+    ULONGLONG   Generation;
+    ULONG       Width;
+    ULONG       Height;
+} RXGK_SETCOMPOSITORSOURCEOWNER_PACKET,
+ *PRXGK_SETCOMPOSITORSOURCEOWNER_PACKET;
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 /*

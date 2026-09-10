@@ -1025,7 +1025,6 @@ NtGdiDdDDIPresent(_In_ D3DKMT_PRESENT* unnamedParam1)
             Captured.Flags.Flip = 1;
             Captured.Flags.RestrictVidPnSource = 1;
             Captured.VidPnSourceId = 0;
-            Captured.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
         }
     }
 

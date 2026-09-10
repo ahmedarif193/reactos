@@ -436,6 +436,7 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
     DXGK_TRACKED_WORK_CORE      TrackedWork;
     ULONG                       SubmissionFenceId;
     ULONG64                     RefreshPresentId;
+    D3DDDI_FLIPINTERVAL_TYPE     FlipInterval;
     PDXGKRNL_DMA_BUFFER         DmaBuffer;
     PDXGKRNL_DEVICE             Device;
     PDXGKRNL_CONTEXT            Context;
@@ -446,6 +447,9 @@ typedef struct _DXGKRNL_SUBMIT_DMA_BUFFER
     PDXGKVMM_ALLOCATION         SourceOpenBindingReference;
     PDXGKVMM_ALLOCATION         DestinationOpenBindingReference;
     D3DDDI_VIDEO_PRESENT_SOURCE_ID RefreshVidPnSourceId;
+    ULONG_PTR                   ScanoutWindow;
+    ULONG64                     CompositorGeneration;
+    BOOLEAN                     CddPresent;
     RECT                        RefreshDstRect;
     BOOLEAN                     RefreshSharedPrimaryOnRetire;
     BOOLEAN                     ProgramSourceScanoutOnRetire;
@@ -828,6 +832,7 @@ struct _DXGKRNL_ADAPTER
     PHYSICAL_ADDRESS            HighestAcceptableAddress;
     ULONGLONG                   ApertureSegmentCommitLimit;
     DXGK_SCHEDULINGCAPS         SchedulingCaps;
+    DXGK_FLIPCAPS              FlipCaps;
 
     /* GPU MMU declaration cached from DXGKQAITYPE_GPUMMUCAPS at start.
      * Valid only when the miniport reports a nonzero virtual address
@@ -1155,6 +1160,11 @@ struct _DXGKRNL_ADAPTER
      * by the adapter DPC for the ordinary presentation queues.
      */
     volatile LONG               VsyncPending;
+    /* The ISR records the effective scan address independently of the
+     * dynamically allocated present queues. Queue teardown can therefore
+     * close admission without racing a DIRQL callback. */
+    DECLSPEC_ALIGN(8) volatile LONG64 VsyncScanoutAddress[32];
+    DECLSPEC_ALIGN(8) volatile LONG64 VsyncScanoutSequence[32];
 
     /*
      * Tracks DMA buffers that remain owned by the miniport until it signals
@@ -1249,6 +1259,8 @@ struct _DXGKRNL_ADAPTER
 
 C_ASSERT((FIELD_OFFSET(DXGKRNL_ADAPTER, SubmittedFenceIdentities) & (sizeof(LONG64) - 1)) == 0);
 C_ASSERT((FIELD_OFFSET(DXGKRNL_ADAPTER, VBlankResetGeneration) & (sizeof(LONG64) - 1)) == 0);
+C_ASSERT((FIELD_OFFSET(DXGKRNL_ADAPTER, VsyncScanoutAddress) & (sizeof(LONG64) - 1)) == 0);
+C_ASSERT((FIELD_OFFSET(DXGKRNL_ADAPTER, VsyncScanoutSequence) & (sizeof(LONG64) - 1)) == 0);
 C_ASSERT((DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY & (DXGK_SUBMITTED_FENCE_IDENTITY_CAPACITY - 1)) == 0);
 
 /* Convenience macro: cast a PDEVICE_OBJECT to its DXGKRNL_ADAPTER extension. */
@@ -3568,6 +3580,7 @@ typedef struct _DXGKRNL_TRACK_DMA_ARGS
     BOOLEAN                         SignalWrittenByGpu;
 #endif
     ULONG64                         PresentId;
+    D3DDDI_FLIPINTERVAL_TYPE          FlipInterval;
     PDXGKRNL_DMA_BUFFER             DmaBuffer;
     PDXGKRNL_DEVICE                 Device;
     BOOLEAN                         EnforceSubmissionQuota;
@@ -3580,6 +3593,9 @@ typedef struct _DXGKRNL_TRACK_DMA_ARGS
     HANDLE                          SourceAllocationHandle;
     HANDLE                          RefreshAllocationHandle;
     D3DDDI_VIDEO_PRESENT_SOURCE_ID  RefreshVidPnSourceId;
+    ULONG_PTR                       ScanoutWindow;
+    ULONG64                         CompositorGeneration;
+    BOOLEAN                         CddPresent;
     const RECT                     *RefreshDstRect;
     ULONG64                         SharedSurfaceGeneration;
     BOOLEAN                         SourceIsSharedPrimary;

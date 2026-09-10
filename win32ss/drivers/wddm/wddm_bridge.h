@@ -51,6 +51,22 @@ WddmBridgeValidateSharedResourceOwner(
     _In_ const LUID *AdapterLuid,
     _In_ ULONG GlobalShare);
 
+NTSTATUS
+WddmBridgeQueryPrimarySource(
+    _Out_ LUID *AdapterLuid,
+    _Out_ ULONG *VidPnSourceId);
+
+NTSTATUS
+WddmBridgeSetCompositorSourceOwner(
+    _In_ const LUID *AdapterLuid,
+    _In_ ULONG VidPnSourceId,
+    _In_ HANDLE ProcessId,
+    _In_ ULONG_PTR Window,
+    _In_ ULONGLONG Generation,
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _In_ BOOLEAN Claim);
+
 /* Cached device object pointer (set by WddmBridgeInit) */
 extern PFILE_OBJECT   g_DxgkrnlFileObject;
 extern PDEVICE_OBJECT g_DxgkrnlDeviceObject;

@@ -180,6 +180,7 @@ typedef struct _VIDSCH_DMA_PACKET
     DXGK_ALLOCATIONLIST         InlineAllocationList[VIDSCH_INLINE_ALLOCATIONS];
     ULONG                       InlineAllocationCount;
     ULONG                       VidPnSourceId;
+    D3DDDI_FLIPINTERVAL_TYPE     FlipInterval;
     ULONG                       SubmitFlags;
     BOOLEAN                     Tracked;
     BOOLEAN                     VirtualAddressing;
