@@ -1950,7 +1950,7 @@
 @ stdcall -arch=i386,x86_64,arm64 ZwCreateIoCompletion(ptr long ptr long)
 @ stdcall -arch=arm64 ZwCreateProcessEx()
 @ stdcall -arch=arm64 ZwCreateSemaphore()
-@ stdcall -arch=arm64 ZwFlushBuffersFile()
+@ stdcall ZwFlushBuffersFile(ptr ptr)
 @ stdcall -arch=arm64 ZwGetWriteWatch()
 @ stdcall -arch=arm64 ZwImpersonateAnonymousToken()
 @ stdcall -arch=arm64 ZwLoadKeyEx()
