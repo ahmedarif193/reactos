@@ -92,6 +92,7 @@ struct reactos_stream
     UINT32 rt_buffer_frames;
     UINT32 rt_period_frames;
     UINT32 rt_period_index;
+    BOOL rt_refill_ready;
     ULONG rt_next_packet_number;
     UINT32 rt_period_queued_frames[REACTOS_RT_NOTIFICATION_COUNT];
     UINT64 position_qpc_100ns;
@@ -130,6 +131,7 @@ static DWORD WINAPI reactos_timer_thread(void *param);
 
 static const GUID wdmaud_category = {STATIC_KSCATEGORY_WDMAUD};
 static const GUID rt_audio_property_set = {STATIC_KSPROPSETID_RtAudio};
+static const GUID audio_property_set = {STATIC_KSPROPSETID_Audio};
 
 static struct reactos_stream *stream_from_handle(stream_handle handle)
 {
@@ -1148,6 +1150,7 @@ static void cleanup_wavert(struct reactos_stream *stream)
     stream->rt_buffer_frames = 0;
     stream->rt_period_frames = 0;
     stream->rt_period_index = 0;
+    stream->rt_refill_ready = FALSE;
     stream->rt_next_packet_number = 0;
     ZeroMemory(stream->rt_period_queued_frames, sizeof(stream->rt_period_queued_frames));
     if (stream->rt_event)
@@ -1637,7 +1640,7 @@ static UINT32 resample_render_frames(struct reactos_stream *stream, const BYTE *
     return output;
 }
 
-static BOOL fill_wavert_period(struct reactos_stream *stream, UINT32 period)
+static BOOL fill_wavert_period_at(struct reactos_stream *stream, UINT32 period, UINT32 offset)
 {
     BYTE *destination;
     BYTE *source;
@@ -1645,14 +1648,14 @@ static BOOL fill_wavert_period(struct reactos_stream *stream, UINT32 period)
     UINT32 frames;
 
     if (!stream->rt_buffer || !stream->render_ring ||
-        period >= REACTOS_RT_NOTIFICATION_COUNT)
+        period >= REACTOS_RT_NOTIFICATION_COUNT || offset > stream->rt_period_frames)
     {
         return FALSE;
     }
 
-    frames = min(stream->rt_period_frames, stream->render_ring_frames);
+    frames = min(stream->rt_period_frames - offset, stream->render_ring_frames);
     destination = stream->rt_buffer +
-                  (SIZE_T)period * stream->rt_period_frames *
+                  ((SIZE_T)period * stream->rt_period_frames + offset) *
                       stream->device_frame_size;
     source = destination;
 
@@ -1686,20 +1689,56 @@ static BOOL fill_wavert_period(struct reactos_stream *stream, UINT32 period)
 
     if (frames && stream->render_conversion)
         convert_render_frames(stream, source, frames, destination);
-    if (frames < stream->rt_period_frames)
+    if (frames < stream->rt_period_frames - offset)
     {
         ZeroMemory(destination +
                        (SIZE_T)frames * stream->device_frame_size,
-                   (SIZE_T)(stream->rt_period_frames - frames) *
+                   (SIZE_T)(stream->rt_period_frames - offset - frames) *
                        stream->device_frame_size);
     }
 
     stream->render_ring_read_frame =
         (stream->render_ring_read_frame + frames) % stream->buffer_frames;
     stream->render_ring_frames -= frames;
-    stream->rt_period_queued_frames[period] = frames;
+    stream->rt_period_queued_frames[period] = offset + frames;
     MemoryBarrier();
     return TRUE;
+}
+
+static BOOL fill_wavert_period(struct reactos_stream *stream, UINT32 period)
+{
+    return fill_wavert_period_at(stream, period, 0);
+}
+
+static void refill_cyclic_period(struct reactos_stream *stream)
+{
+    KSPROPERTY property;
+    KSAUDIO_POSITION position;
+    DWORD returned;
+    UINT32 period, offset, period_bytes;
+
+    if (!stream->rt_enabled || stream->rt_packet_mode || !stream->rt_refill_ready)
+        return;
+    period = (stream->rt_period_index + REACTOS_RT_NOTIFICATION_COUNT - 1) % REACTOS_RT_NOTIFICATION_COUNT;
+    offset = stream->rt_period_queued_frames[period];
+    if (offset == stream->rt_period_frames || !stream->render_ring_frames)
+        return;
+
+    ZeroMemory(&property, sizeof(property));
+    property.Set = audio_property_set;
+    property.Id = KSPROPERTY_AUDIO_POSITION;
+    property.Flags = KSPROPERTY_TYPE_GET;
+    if (!pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY, &property, sizeof(property), &position, sizeof(position), &returned) || returned < sizeof(position))
+        return;
+
+    /* A completion can precede the producer's next packet. Fill the remaining
+     * space in the released period when that packet arrives, while both the
+     * link cursor and the controller's prefetch cursor are in the other half.
+     * A late or coalesced notification must not let us overwrite live DMA. */
+    period_bytes = stream->rt_period_frames * stream->device_frame_size;
+    if (position.PlayOffset >= (UINT64)period_bytes * REACTOS_RT_NOTIFICATION_COUNT || position.WriteOffset >= (UINT64)period_bytes * REACTOS_RT_NOTIFICATION_COUNT || position.PlayOffset / period_bytes != stream->rt_period_index || position.WriteOffset / period_bytes == period)
+        return;
+    fill_wavert_period_at(stream, period, offset);
 }
 
 static BOOL prime_wavert_buffer(struct reactos_stream *stream)
@@ -1716,6 +1755,7 @@ static BOOL prime_wavert_buffer(struct reactos_stream *stream)
     }
 
     stream->rt_period_index = 0;
+    stream->rt_refill_ready = FALSE;
     stream->rt_next_packet_number = 0;
     return TRUE;
 }
@@ -2116,7 +2156,7 @@ static HRESULT stop_physical_stream(struct reactos_stream *stream)
 }
 
 static HRESULT create_shared_render_transport(
-    DWORD endpoint_index, const WAVEFORMATEXTENSIBLE *format,
+    DWORD endpoint_index, const WAVEFORMATEXTENSIBLE *format, HANDLE completion_event,
     void **transport)
 {
     struct reactos_stream *stream;
@@ -2145,6 +2185,7 @@ static HRESULT create_shared_render_transport(
         stream->period_frames = 1;
     stream->device_period_frames = stream->period_frames;
     stream->volume_passthrough = TRUE;
+    stream->event = completion_event; /* Borrowed from the shared engine. */
     InitializeCriticalSection(&stream->lock);
 
     stream->stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -2277,6 +2318,7 @@ static BOOL shared_render_transport_queue_frames(void *transport,
         (stream->render_ring_write_frame + frames) % stream->buffer_frames;
     stream->render_ring_frames += frames;
     stream->padding += frames;
+    refill_cyclic_period(stream);
     LeaveCriticalSection(&stream->lock);
 
     if (stream->render_wake_event)
@@ -3304,6 +3346,7 @@ static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
             stream->rt_period_index =
                 (stream->rt_period_index + 1) %
                     REACTOS_RT_NOTIFICATION_COUNT;
+            stream->rt_refill_ready = TRUE;
         }
         LeaveCriticalSection(&stream->lock);
 
@@ -3327,7 +3370,8 @@ static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
 
 static void reactos_shared_render_timer_loop(struct reactos_stream *stream)
 {
-    DWORD wait_ms;
+    HANDLE wait_handles[2] = {stream->stop_event, reactos_shared_render_get_event(stream->shared_render)};
+    DWORD wait_ms, wait;
 
     wait_ms = (DWORD)max(1ULL,
         (UINT64)stream->period_frames * 1000ULL /
@@ -3336,7 +3380,8 @@ static void reactos_shared_render_timer_loop(struct reactos_stream *stream)
     {
         UINT32 padding;
 
-        if (WaitForSingleObject(stream->stop_event, wait_ms) != WAIT_TIMEOUT)
+        wait = WaitForMultipleObjects(2, wait_handles, FALSE, wait_ms);
+        if (wait != WAIT_TIMEOUT && wait != WAIT_OBJECT_0 + 1)
             break;
         if (FAILED(shared_render_client_padding(stream, &padding)))
             break;

@@ -73,6 +73,7 @@ struct local_render_endpoint
     HANDLE mapping;
     HANDLE mutex;
     HANDLE wake_event;
+    HANDLE completion_event;
     HANDLE stop_event;
     HANDLE worker_thread;
     struct shared_render_region *region;
@@ -85,6 +86,8 @@ struct local_render_endpoint
     UINT32 pending_chunk_head;
     UINT32 pending_chunk_count;
     struct pending_render_chunk *pending_chunks;
+    HANDLE client_events[RENDER_CLIENT_CAPACITY];
+    DWORD event_tokens[RENDER_CLIENT_CAPACITY];
 };
 
 struct reactos_shared_render_client
@@ -92,6 +95,7 @@ struct reactos_shared_render_client
     struct local_render_endpoint *endpoint;
     DWORD slot_index;
     DWORD token;
+    HANDLE event;
 };
 
 struct pending_consumption
@@ -443,7 +447,7 @@ create_transport(struct local_render_endpoint *endpoint, BOOL require_success)
     if (!create_here)
         return S_OK;
 
-    hr = endpoint->transport_ops.create(endpoint->endpoint_index, &endpoint->format, &transport);
+    hr = endpoint->transport_ops.create(endpoint->endpoint_index, &endpoint->format, endpoint->completion_event, &transport);
     if (SUCCEEDED(hr) && !endpoint->transport_ops.completed_frames(transport, &endpoint->completed_frames, NULL))
     {
         endpoint->transport_ops.destroy(transport);
@@ -596,6 +600,34 @@ ensure_mix_buffer(struct local_render_endpoint *endpoint, UINT32 frames)
     endpoint->mix_buffer = buffer;
     endpoint->mix_buffer_frames = frames;
     return TRUE;
+}
+
+static HANDLE
+open_client_event(DWORD endpoint_index, DWORD process_id, DWORD slot_index, BOOL create)
+{
+    WCHAR name[112];
+
+    /* The slot identity survives Reset, which changes the queued-data token. */
+    swprintf(name, ARRAY_SIZE(name), L"Local\\ReactOS.CoreAudio.Render.%lu.v2.Client.%lu.%lu", endpoint_index, process_id, slot_index);
+    return create ? CreateEventW(NULL, FALSE, FALSE, name) : OpenEventW(EVENT_MODIFY_STATE, FALSE, name);
+}
+
+static void
+notify_render_client(struct local_render_endpoint *endpoint, UINT32 index)
+{
+    const struct shared_render_slot *slot = &endpoint->region->clients[index];
+
+    if (endpoint->event_tokens[index] != slot->token)
+    {
+        if (endpoint->client_events[index])
+            CloseHandle(endpoint->client_events[index]);
+        endpoint->client_events[index] = NULL;
+        endpoint->event_tokens[index] = slot->token;
+    }
+    if (!endpoint->client_events[index])
+        endpoint->client_events[index] = open_client_event(endpoint->endpoint_index, slot->process_id, index, FALSE);
+    if (endpoint->client_events[index])
+        SetEvent(endpoint->client_events[index]);
 }
 
 static void
@@ -783,6 +815,7 @@ mix_one_chunk(struct local_render_endpoint *endpoint)
         slot->read_frame = (slot->read_frame + entry->frames) % slot->capacity_frames;
         slot->queued_frames -= entry->frames;
         slot->pending_frames += entry->frames;
+        notify_render_client(endpoint, client_index);
     }
     unlock_endpoint(endpoint);
     SetEvent(endpoint->wake_event);
@@ -818,7 +851,7 @@ static DWORD WINAPI
 render_worker(void *parameter)
 {
     struct local_render_endpoint *endpoint = parameter;
-    HANDLE wait_handles[2] = {endpoint->stop_event, endpoint->wake_event};
+    HANDLE wait_handles[3] = {endpoint->stop_event, endpoint->wake_event, endpoint->completion_event};
     DWORD wait, owner_retry = 0;
 
     SetThreadDescription(GetCurrentThread(), L"shared_audio_engine");
@@ -827,11 +860,13 @@ render_worker(void *parameter)
         BOOL active = FALSE;
         UINT32 submits;
 
-        wait = WaitForMultipleObjects(2, wait_handles, FALSE, RENDER_WORKER_INTERVAL_MS);
+        /* Only the owner consumes producer wakes. Hardware completions are
+         * local to it, so a non-owner cannot steal a completion notification. */
+        wait = WaitForMultipleObjects(endpoint->transport ? 3 : 1, wait_handles, FALSE, RENDER_WORKER_INTERVAL_MS);
         if (wait == WAIT_OBJECT_0)
             break;
 
-        if (!endpoint->transport && (!owner_retry || GetTickCount() - owner_retry >= RENDER_OWNER_RETRY_MS))
+        if (!endpoint->transport && (!owner_retry || !endpoint->region->owner_process_id || GetTickCount() - owner_retry >= RENDER_OWNER_RETRY_MS))
         {
             create_transport(endpoint, FALSE);
             owner_retry = GetTickCount();
@@ -888,6 +923,8 @@ render_worker(void *parameter)
 static void
 destroy_local_endpoint(struct local_render_endpoint *endpoint)
 {
+    UINT32 i;
+
     if (!endpoint)
         return;
 
@@ -919,9 +956,14 @@ destroy_local_endpoint(struct local_render_endpoint *endpoint)
         CloseHandle(endpoint->mutex);
     if (endpoint->wake_event)
         CloseHandle(endpoint->wake_event);
+    if (endpoint->completion_event)
+        CloseHandle(endpoint->completion_event);
     if (endpoint->stop_event)
         CloseHandle(endpoint->stop_event);
     free(endpoint->mix_buffer);
+    for (i = 0; i < RENDER_CLIENT_CAPACITY; ++i)
+        if (endpoint->client_events[i])
+            CloseHandle(endpoint->client_events[i]);
     free(endpoint->pending_chunks);
     free(endpoint);
 }
@@ -959,10 +1001,11 @@ create_local_endpoint(
 
     endpoint->mutex = CreateMutexW(NULL, FALSE, mutex_name);
     endpoint->wake_event = CreateEventW(NULL, FALSE, FALSE, wake_name);
+    endpoint->completion_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     endpoint->stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
     endpoint->mapping =
         CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(*endpoint->region), mapping_name);
-    if (!endpoint->mutex || !endpoint->wake_event || !endpoint->stop_event || !endpoint->mapping)
+    if (!endpoint->mutex || !endpoint->wake_event || !endpoint->completion_event || !endpoint->stop_event || !endpoint->mapping)
     {
         hr = HRESULT_FROM_WIN32(GetLastError());
         goto failed;
@@ -1063,6 +1106,12 @@ reactos_shared_render_create(
     new_client->endpoint = endpoint;
     new_client->slot_index = slot_index;
     new_client->token = token;
+    new_client->event = open_client_event(endpoint_index, GetCurrentProcessId(), slot_index, TRUE);
+    if (!new_client->event)
+    {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        goto failed_client_locked;
+    }
 
     if (new_endpoint)
     {
@@ -1108,6 +1157,8 @@ failed_locked:
         destroy_local_endpoint(endpoint);
     }
     LeaveCriticalSection(&endpoint_list_lock);
+    if (new_client->event)
+        CloseHandle(new_client->event);
     free(new_client);
     return hr;
 }
@@ -1148,6 +1199,7 @@ reactos_shared_render_release(struct reactos_shared_render_client *client)
         LeaveCriticalSection(&endpoint_list_lock);
     }
 
+    CloseHandle(client->event);
     free(client);
     if (destroy)
         destroy_local_endpoint(endpoint);
@@ -1251,8 +1303,7 @@ reactos_shared_render_write(struct reactos_shared_render_client *client, const B
         return AUDCLNT_E_DEVICE_INVALIDATED;
     }
     if (slot->queued_frames > slot->capacity_frames ||
-        slot->pending_frames > slot->capacity_frames - slot->queued_frames ||
-        frames > slot->capacity_frames - slot->queued_frames - slot->pending_frames)
+        frames > slot->capacity_frames - slot->queued_frames)
     {
         unlock_endpoint(client->endpoint);
         return AUDCLNT_E_BUFFER_TOO_LARGE;
@@ -1292,7 +1343,9 @@ reactos_shared_render_get_padding(struct reactos_shared_render_client *client, U
         unlock_endpoint(client->endpoint);
         return AUDCLNT_E_DEVICE_INVALIDATED;
     }
-    *padding = slot->queued_frames + slot->pending_frames;
+    /* Padding is unread data in the client buffer. Frames already copied to
+     * the transport remain pending for the clock, but no longer occupy it. */
+    *padding = slot->queued_frames;
     unlock_endpoint(client->endpoint);
     return S_OK;
 }
@@ -1315,4 +1368,10 @@ reactos_shared_render_get_position(struct reactos_shared_render_client *client, 
         *qpc_time = slot->qpc_time ? slot->qpc_time : query_performance_time_100ns();
     unlock_endpoint(client->endpoint);
     return S_OK;
+}
+
+HANDLE
+reactos_shared_render_get_event(struct reactos_shared_render_client *client)
+{
+    return client->event;
 }
