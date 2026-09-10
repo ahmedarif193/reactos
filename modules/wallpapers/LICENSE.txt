@@ -1,0 +1,59 @@
+Wallpaper asset license record
+==============================
+
+Copyright (C) 2026 Ahmed ARIF
+SPDX-License-Identifier: GPL-3.0-or-later
+
+The text of this notice is licensed under GPL-3.0-or-later. That license does
+not apply to the image files. Each image remains subject to the rights and
+restrictions attached to its source or generation account.
+
+Covered files
+-------------
+
+Calm Lake.jpg
+Feather Droplets.jpg
+Forest Canopy.jpg
+Lake Mountains.jpg
+Lugano Reflections.jpg
+Modern Villa.jpg
+Mountain Lake.jpg
+Night Sky.jpg
+Oil and Water.jpg
+Plant Textures.jpg
+Rain Lights.jpg
+Sea Bridge.jpg
+Sea Bridge.png
+
+Source and governing terms
+--------------------------
+
+Service: Magnific, operated by Freepik Company, S.L.
+Website: https://www.magnific.com/
+Terms: https://www.magnific.com/legal/terms-of-use
+Terms reviewed: 2026-09-10
+
+The acquisition record does not currently identify whether each file is
+downloaded Magnific Content or AI Generated Content, the source item URL, the
+account tier, or the download/generation date. Redistribution clearance cannot
+be established without that information.
+
+The terms reviewed above state that downloaded Magnific Content is licensed on
+a limited, non-transferable basis and may not be distributed, transferred, or
+sublicensed. Content obtained without a paid subscription also requires the
+attribution specified by the service. For AI-generated output, the terms assign
+Magnific's rights to subscribers subject to the account and product conditions;
+free-account output receives only a personal, non-commercial, revocable
+license.
+
+Repository handling
+-------------------
+
+These files are for private/local builds only. Do not push them to an upstream
+or public repository and do not ship them in public installation media until a
+per-file acquisition record proves redistribution rights. Resampling,
+re-encoding, metadata removal, or format conversion does not change the
+underlying license.
+
+An asset described as "free" or downloaded at no charge is not automatically
+public domain, Creative Commons, or redistributable.
