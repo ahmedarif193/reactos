@@ -529,6 +529,28 @@ PspReferenceProcessForLimitedQuery(
 }
 
 
+typedef struct _PSP_HANDLE_TABLE_QUERY
+{
+    PULONG Handles;
+    ULONG Capacity;
+    ULONG Count;
+} PSP_HANDLE_TABLE_QUERY, *PPSP_HANDLE_TABLE_QUERY;
+
+static
+BOOLEAN
+NTAPI
+PspEnumerateProcessHandle(
+    _In_ PHANDLE_TABLE_ENTRY HandleTableEntry,
+    _In_ HANDLE Handle,
+    _Inout_ PVOID Context)
+{
+    PPSP_HANDLE_TABLE_QUERY Query = Context;
+
+    UNREFERENCED_PARAMETER(HandleTableEntry);
+    Query->Handles[Query->Count++] = HandleToUlong(Handle);
+    return Query->Count == Query->Capacity;
+}
+
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*
@@ -550,6 +572,10 @@ NtQueryInformationProcess(
     ULONG Length = 0;
 
     PAGED_CODE();
+
+    /* This variable-size class still requires room for one handle value. */
+    if (ProcessInformationClass == ProcessHandleTable && ProcessInformationLength < sizeof(ULONG))
+        return STATUS_INFO_LENGTH_MISMATCH;
 
     /* Validate the information class */
     Status = DefaultQueryInfoBufferCheck(ProcessInformationClass,
@@ -879,6 +905,47 @@ NtQueryInformationProcess(
             /* Dereference the process */
             ObDereferenceObject(Process);
             break;
+        }
+
+        case ProcessHandleTable:
+        {
+            PSP_HANDLE_TABLE_QUERY Query = {NULL, ProcessInformationLength / sizeof(ULONG), 0};
+            PHANDLE_TABLE HandleTable;
+            PMDL Mdl;
+
+            Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_QUERY_INFORMATION | PROCESS_DUP_HANDLE, PsProcessType, PreviousMode, (PVOID*)&Process, NULL);
+            if (!NT_SUCCESS(Status)) break;
+
+            HandleTable = ObReferenceProcessHandleTable(Process);
+            if (HandleTable)
+            {
+                /* The callback runs with an entry locked: never fault on user memory. */
+                Status = ExLockUserBuffer(ProcessInformation, Query.Capacity * sizeof(ULONG), PreviousMode, IoWriteAccess, (PVOID*)&Query.Handles, &Mdl);
+                if (NT_SUCCESS(Status))
+                {
+                    ExEnumHandleTable(HandleTable, PspEnumerateProcessHandle, &Query, NULL);
+                    ExUnlockUserBuffer(Mdl);
+                }
+                ObDereferenceProcessHandleTable(Process);
+            }
+            else
+                Status = STATUS_PROCESS_IS_TERMINATING;
+            ObDereferenceObject(Process);
+
+            /* A short buffer succeeds with the handles that fit, even if empty. */
+            if (ReturnLength)
+            {
+                _SEH2_TRY
+                {
+                    *ReturnLength = Query.Count * sizeof(ULONG);
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+            }
+            return Status;
         }
 
         /* Session ID for the process */
