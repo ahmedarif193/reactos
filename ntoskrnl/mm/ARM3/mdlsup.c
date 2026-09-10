@@ -403,12 +403,10 @@ Error:
     ExRaiseStatus(Status);
 }
 
-static
 VOID
 NTAPI
 MiUnmapLockedPagesInUserSpace(
-    _In_ PVOID BaseAddress,
-    _In_ PMDL Mdl)
+    _In_ PVOID BaseAddress)
 {
     PEPROCESS Process = PsGetCurrentProcess();
     PETHREAD Thread = PsGetCurrentThread();
@@ -421,21 +419,15 @@ MiUnmapLockedPagesInUserSpace(
 #endif
     KIRQL OldIrql;
     ULONG NumberOfPages;
-    PPFN_NUMBER MdlPages;
 #if !defined(_M_ARM64)
     PFN_NUMBER PageTablePage;
 #endif
 #if defined(_M_AMD64) || defined(_M_ARM64)
     PVOID FlushBase;
-    ULONG FlushPages = 0;
+    ULONG FlushPages;
 #endif
 
-    DPRINT("MiUnmapLockedPagesInUserSpace(%p, %p)\n", BaseAddress, Mdl);
-
-    NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(Mdl),
-                                                   MmGetMdlByteCount(Mdl));
-    ASSERT(NumberOfPages != 0);
-    MdlPages = MmGetMdlPfnArray(Mdl);
+    DPRINT("MiUnmapLockedPagesInUserSpace(%p)\n", BaseAddress);
 
     /* Find the VAD */
     MmLockAddressSpace(&Process->Vm);
@@ -450,6 +442,14 @@ MiUnmapLockedPagesInUserSpace(
 
     MiLockProcessWorkingSetUnsafe(Process, Thread);
 
+    /* The view owns its PTEs, but neither the MDL nor its physical pages.
+     * Use the original view extent so process exit can remove a mapping
+     * independently of the driver's remaining allocation lifetime. */
+    ASSERT(Vad->EndingVpn >= Vad->StartingVpn);
+    ASSERT(Vad->EndingVpn - Vad->StartingVpn < MAXULONG);
+    NumberOfPages = (ULONG)(Vad->EndingVpn - Vad->StartingVpn + 1);
+    BaseAddress = (PVOID)(Vad->StartingVpn << PAGE_SHIFT);
+
     /* Remove it from the process VAD tree */
     ASSERT(Process->VadRoot.NumberGenericTableElements >= 1);
     MiRemoveNode((PMMADDRESS_NODE)Vad, &Process->VadRoot);
@@ -463,10 +463,10 @@ MiUnmapLockedPagesInUserSpace(
 #endif
 #if defined(_M_AMD64) || defined(_M_ARM64)
     FlushBase = BaseAddress;
+    FlushPages = NumberOfPages;
 #endif
     OldIrql = MiAcquirePfnLock();
-    while (NumberOfPages != 0 &&
-           *MdlPages != LIST_HEAD)
+    while (NumberOfPages != 0)
     {
 #if defined(_M_ARM64)
         if (!MiArm64GetUserPteAddressForProcess(Process,
@@ -474,23 +474,20 @@ MiUnmapLockedPagesInUserSpace(
                                                 &Arm64Walk) ||
             Arm64Walk.Depth != 4)
         {
-            KeBugCheckEx(MEMORY_MANAGEMENT,
-                         0xA647,
-                         (ULONG_PTR)BaseAddress,
-                         Arm64Walk.Depth,
-                         0);
+            goto NextPage;
         }
         PointerPte = (PMMPTE)Arm64Walk.PointerPte;
 #else
-        ASSERT(MiAddressToPte(PointerPte)->u.Hard.Valid == 1);
+        if (!MmIsAddressValid(PointerPte))
+            goto NextPage;
 #endif
+        /* A partial MDL can leave the end of its reserved view unmapped. */
+        if (PointerPte->u.Long == 0)
+            goto NextPage;
         ASSERT(PointerPte->u.Hard.Valid == 1);
 
         /* Invalidate it */
         MI_ERASE_PTE(PointerPte);
-#if defined(_M_AMD64) || defined(_M_ARM64)
-        FlushPages++;
-#endif
 
 #if defined(_M_ARM64)
         (VOID)MiArm64ReleaseUserPageTableReferenceLocked(Process,
@@ -505,19 +502,18 @@ MiUnmapLockedPagesInUserSpace(
 
         if (MiDecrementPageTableReferences(BaseAddress) == 0)
         {
-            ASSERT(MiIsPteOnPdeBoundary(PointerPte + 1) || (NumberOfPages == 1));
             /* Flush recursive aliases before the page-table page can be reused. */
             MiDeletePde(PointerPde, Process, TRUE);
         }
 #endif
 
+NextPage:
         /* Next page */
 #if !defined(_M_ARM64)
         PointerPte++;
 #endif
         NumberOfPages--;
         BaseAddress = (PVOID)((ULONG_PTR)BaseAddress + PAGE_SIZE);
-        MdlPages++;
     }
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
@@ -526,6 +522,22 @@ MiUnmapLockedPagesInUserSpace(
     KeFlushProcessTb();
 #endif
     MiReleasePfnLock(OldIrql);
+#if defined(_M_ARM64)
+    /* The mapper may have prepared empty tables beyond a partial MDL. */
+    BaseAddress = FlushBase;
+    for (;;)
+    {
+        MiArm64PruneEmptyUserPageTables(Process, BaseAddress);
+        if (((ULONG_PTR)BaseAddress >> PAGE_SHIFT) >= Vad->EndingVpn ||
+            ALIGN_DOWN_BY((ULONG_PTR)BaseAddress, PDE_MAPPED_VA) ==
+                ALIGN_DOWN_BY(Vad->EndingVpn << PAGE_SHIFT, PDE_MAPPED_VA))
+        {
+            break;
+        }
+        BaseAddress = (PVOID)(ALIGN_DOWN_BY((ULONG_PTR)BaseAddress,
+                                          PDE_MAPPED_VA) + PDE_MAPPED_VA);
+    }
+#endif
     MiUnlockProcessWorkingSetUnsafe(Process, Thread);
     MmUnlockAddressSpace(&Process->Vm);
     ExFreePoolWithTag(Vad, 'ldaV');
@@ -1131,7 +1143,7 @@ MmUnmapLockedPages(IN PVOID BaseAddress,
     }
     else
     {
-        MiUnmapLockedPagesInUserSpace(BaseAddress, Mdl);
+        MiUnmapLockedPagesInUserSpace(BaseAddress);
     }
 }
 

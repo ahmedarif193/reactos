@@ -2794,6 +2794,11 @@ MiMakeProtectionMask(
 
 VOID
 NTAPI
+MiUnmapLockedPagesInUserSpace(
+    _In_ PVOID BaseAddress);
+
+VOID
+NTAPI
 MiDeleteVirtualAddresses(
     _In_ ULONG_PTR Va,
     _In_ ULONG_PTR EndingAddress,
