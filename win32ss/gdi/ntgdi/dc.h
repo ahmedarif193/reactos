@@ -134,6 +134,9 @@ typedef struct _DC
   ULONG       ulCopyCount;
   PVOID       pSurfInfo;
   POINTL      ptlDoBanding;
+  /* Bounds of the prepared destination operation in backing coordinates.
+   * Kept until FinishBlit distinguishes a write from a read-only operation. */
+  RECTL       erclRedirectionDraw;
 } DC;
 // typedef struct _DC *PDC;
 

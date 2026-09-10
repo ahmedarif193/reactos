@@ -1614,9 +1614,8 @@ DwmBackdropSceneEqual(const DWM_WIN *Window, const DWM_WIN *Lower,
     {
         DWM_WIN Current = Lower[Index];
 
-        /* Update IDs cover shared CPU/GPU surfaces. The section fallback
-         * has no persistent update ID, so its one-frame damage flag is the
-         * conservative invalidation signal. Custom blur rectangles are not
+        /* Update IDs cover shared and section-backed surfaces. Retain the
+         * damage check for metadata changes. Custom blur rectangles are not
          * copied into this small snapshot and retain the pixel comparison. */
         if (Current.Damaged || Current.BlurRectCount != 0)
             return FALSE;

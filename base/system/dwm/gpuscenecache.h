@@ -31,6 +31,8 @@ DwmGpuCacheBlurOwner(const DWM_WIN *Window)
      * scene. The filter key separately checks the actual capture rectangle. */
     Key.Damaged = 0;
     Key.BaseUpdateId = 0;
+    Key.BasePreviousUpdateId = 0;
+    memset(&Key.BaseDirtyRect, 0, sizeof(Key.BaseDirtyRect));
     Key.DxUpdateId = 0;
     Key.BlurRectBase = 0;
     return Key;

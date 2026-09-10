@@ -59,6 +59,10 @@ typedef struct _WND_REDIRECT
     ULONG     FrontGlobalShare;
     ULONG     BaseGeneration;
     ULONGLONG BaseUpdateId;
+    ULONGLONG BasePreviousUpdateId;
+    RECTL     BaseDirtyRect;
+    RECTL     BackDirtyRect;
+    volatile LONG BackDirtyValid;
     RECTL     rcClient;     /* client rectangle in backing coordinates         */
     ULONG     DxGlobalShare;
     ULONG     DxGeneration;
@@ -150,7 +154,8 @@ VOID IntCompositionDamageWindowMetadata(_In_opt_ PWND Wnd);
 /* Damage from the GDI blit path (DC_vFinishBlit): a backing surface was drawn
  * into outside a paint cycle (e.g. an OpenGL present) — psurf resolves to its
  * window. Only flags the damage — the compose runs on the next tick. */
-VOID IntCompositionDamageBacking(_In_opt_ PSURFACE psurf);
+VOID IntCompositionDamageBacking(_In_opt_ PSURFACE psurf,
+                                  _In_ const RECTL *Bounds);
 
 /* Mark a completed full-client OpenGL DIB present. The buffer exchange is
  * deferred until DWM's next frame pull, after it has finished reading the

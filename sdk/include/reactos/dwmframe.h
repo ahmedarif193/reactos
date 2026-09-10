@@ -20,7 +20,7 @@
  */
 #pragma once
 
-#define DWM_FRAME_MAGIC   0x344d5744u   /* 'DWM4' (CDD + app DX surfaces) */
+#define DWM_FRAME_MAGIC   0x354d5744u   /* 'DWM5' (versioned FRONT dirty bounds) */
 #define DWM_MAX_WINDOWS    256
 
 /* NtUserCallOneParam routine numbers of the DWM entry points (must match
@@ -299,6 +299,12 @@ typedef struct _DWM_WIN
     LONG  AnimX, AnimY;
     LONG  AnimCx, AnimCy;
     ULONG CornerRadius;
+    /* BaseDirtyRect describes the pixels changed from BasePreviousUpdateId
+     * to BaseUpdateId, in backing coordinates. Consumers that missed that
+     * predecessor must refresh the complete FRONT. These IDs also apply to
+     * section-backed GDI surfaces; movement alone does not change them. */
+    ULONGLONG BasePreviousUpdateId;
+    RECTL BaseDirtyRect;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER

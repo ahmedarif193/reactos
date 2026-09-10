@@ -247,7 +247,7 @@ C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, ReadyEvent) == 64);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, UpdateId) == 72);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, UpdateRect) == 80);
 
-C_ASSERT(sizeof(DWM_WIN) == 204);
+C_ASSERT(sizeof(DWM_WIN) == 228);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxGlobalShare) == 44);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxGeneration) == 48);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxAdapterLuid) == 52);
@@ -265,11 +265,13 @@ C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseWidth) == 108);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseHeight) == 112);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, BasePitch) == 116);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseFormat) == 120);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, BasePreviousUpdateId) == 204);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseDirtyRect) == 212);
 
 C_ASSERT(sizeof(DWM_FRAME_HEADER) == 56);
 C_ASSERT(DWM_WINARRAY_BASE == 56);
-C_ASSERT(DWM_BLURRECTARRAY_BASE == 56 + 256 * 204);
-C_ASSERT(DWM_FRAME_BYTES == 56 + 256 * 204 + 4096 * 16);
+C_ASSERT(DWM_BLURRECTARRAY_BASE == 56 + 256 * 228);
+C_ASSERT(DWM_FRAME_BYTES == 56 + 256 * 228 + 4096 * 16);
 
 START_TEST(dwmdxabi)
 {
@@ -307,8 +309,8 @@ START_TEST(dwmdxabi)
     ok(DWM_ROUTINE_DXSURFACE == 0xfffe0017u,
        "DWM_ROUTINE_DXSURFACE must stay 0xfffe0017, got 0x%08lX\n",
        (unsigned long)DWM_ROUTINE_DXSURFACE);
-    ok(DWM_FRAME_MAGIC == 0x344d5744u,
-       "the frame magic must be 'DWM4' for CDD and app surfaces, got 0x%08lX\n",
+    ok(DWM_FRAME_MAGIC == 0x354d5744u,
+       "the frame magic must be 'DWM5' for CDD and app surfaces, got 0x%08lX\n",
        (unsigned long)DWM_FRAME_MAGIC);
 }
 
