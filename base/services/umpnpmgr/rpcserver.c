@@ -54,9 +54,6 @@ RpcServerThread(LPVOID lpParameter)
 
     DPRINT("RpcServerThread() called\n");
 
-    InitializeListHead(&NotificationListHead);
-    RtlInitializeResource(&NotificationListLock);
-
 #if 0
     /* 2k/XP/2k3-compatible protocol sequence/endpoint */
     Status = RpcServerUseProtseqEpW(L"ncacn_np",
