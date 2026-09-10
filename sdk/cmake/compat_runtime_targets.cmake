@@ -68,7 +68,9 @@ set(COMPAT_RUNTIME_MODULES
     msafd
     msctf
     msctfime
+    msi
     msimg32
+    mspatcha
     msvcrt
     mswsock
     ncrypt
@@ -78,6 +80,7 @@ set(COMPAT_RUNTIME_MODULES
     normaliz
     nsi
     ntdll_vista
+    odbccp32
     ole32
     oleacc
     oleaut32
@@ -103,6 +106,7 @@ set(COMPAT_RUNTIME_MODULES
     slc
     sndvolsso
     sspicli
+    sxs
     twinapi
     ucrtbase
     uiautomationcore
