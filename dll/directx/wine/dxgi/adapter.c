@@ -199,6 +199,11 @@ static HRESULT dxgi_adapter_get_desc(struct dxgi_adapter *adapter, DXGI_ADAPTER_
     desc->GraphicsPreemptionGranularity = 0; /* FIXME */
     desc->ComputePreemptionGranularity = 0; /* FIXME */
 
+#if defined(__REACTOS__) && defined(REACTOS_DXGI_D3DKMT_ADAPTER_ORDER)
+    if (!adapter->factory->software)
+        dxgi_get_wddm_adapter_desc(desc->AdapterLuid, desc);
+#endif
+
     return hr;
 }
 
