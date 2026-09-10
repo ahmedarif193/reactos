@@ -202,6 +202,7 @@ typedef struct _USBPORT_TIMESYNC_CONTEXT {
 #define TRANSFER_FLAG_REUSABLE   0x00001000
 #define TRANSFER_FLAG_ALLOCATED_MDL 0x00002000
 #define TRANSFER_FLAG_DUMP       0x00004000
+#define TRANSFER_FLAG_TIMED_OUT  0x00008000
 
 extern KSPIN_LOCK USBPORT_SpinLock;
 extern LIST_ENTRY USBPORT_MiniPortDrivers;
@@ -333,7 +334,19 @@ typedef struct _USBPORT_ENDPOINT {
   LIST_ENTRY FlushAbortLink;
   LIST_ENTRY TtLink;
   LIST_ENTRY RebalanceLink;
+  LIST_ENTRY TimeoutLink;
 } USBPORT_ENDPOINT, *PUSBPORT_ENDPOINT;
+
+FORCEINLINE
+BOOLEAN
+USBPORT_EndpointHasAsyncState(
+    IN PUSBPORT_ENDPOINT Endpoint,
+    IN PUSBPORT_REGISTRATION_PACKET Packet)
+{
+    return (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_ASYNC_ENDPOINT_STATE) &&
+           (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_CONTROL ||
+            Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK);
+}
 
 typedef struct _USBPORT_TRANSFER {
   ULONG Flags;

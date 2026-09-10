@@ -29,6 +29,12 @@ EHCI_DumpSetupPacket(IN PUSB_DEFAULT_PIPE_SETUP_PACKET Setup)
 }
 #endif
 
+#define EHCI_RECLAIM_IDLE      0
+#define EHCI_RECLAIM_SCHEDULE  1
+#define EHCI_RECLAIM_DOORBELL  2
+#define EHCI_RECLAIM_STOPPING  3
+#define EHCI_RECLAIM_TIMEOUT  (100ULL * 10000)
+
 USBPORT_REGISTRATION_PACKET RegPacket;
 
 /* Runtime trace control (DBG builds):
@@ -47,8 +53,11 @@ VOID
 NTAPI
 EHCI_EnableInterrupts(IN PVOID ehciExtension);
 
+VOID NTAPI EHCI_InsertQhInAsyncList(IN PEHCI_EXTENSION EhciExtension, IN PEHCI_HCD_QH QH);
+VOID NTAPI EHCI_SetAsyncEndpointState(IN PEHCI_EXTENSION EhciExtension, IN PEHCI_ENDPOINT EhciEndpoint, IN ULONG EndpointState);
+
 /* Forward decls for helpers used before definition */
-VOID
+BOOLEAN
 NTAPI
 EHCI_RemoveQhFromAsyncList(IN PEHCI_EXTENSION EhciExtension,
                            IN PEHCI_HCD_QH QH);
@@ -717,6 +726,9 @@ EHCI_OpenEndpoint(IN PVOID ehciExtension,
             MPStatus = MP_STATUS_NOT_SUPPORTED;
             break;
     }
+
+    if (MPStatus == MP_STATUS_SUCCESS && EhciEndpoint->QH)
+        EhciEndpoint->QH->TransferType = TransferType;
 
     return MPStatus;
 }
@@ -2147,6 +2159,11 @@ EHCI_EnableAsyncList(IN PEHCI_EXTENSION EhciExtension)
     WRITE_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG, IntrEn.AsULONG);
 
     UsbCmd.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
+    if (EhciExtension->AsyncReclaimState == EHCI_RECLAIM_STOPPING)
+    {
+        EhciExtension->AsyncReclaimRestoreEnable = TRUE;
+        return;
+    }
     UsbCmd.AsynchronousEnable = 1;
     WRITE_REGISTER_ULONG((&OperationalRegs->HcCommand.AsULONG), UsbCmd.AsULONG);
     DPRINT_EHCI("EHCI_EnableAsyncList: HcCommand=0x%08lx\n", UsbCmd.AsULONG);
@@ -2192,104 +2209,119 @@ EHCI_EnablePeriodicList(IN PEHCI_EXTENSION EhciExtension)
     DPRINT_EHCI("EHCI_EnablePeriodicList: HcCommand=0x%08lx\n", Command.AsULONG);
 }
 
+/* Each unlink gets a ticket. An acknowledgement covers only the unlinks
+ * published before that doorbell, never a later unlink in the same batch.
+ * All callers hold MiniportSpinLock. No polling loop holds up the DPC. */
+
+static
 VOID
-NTAPI
-EHCI_FlushAsyncCache(IN PEHCI_EXTENSION EhciExtension)
+EHCI_PollAsyncReclaim(IN PEHCI_EXTENSION EhciExtension)
 {
-    PEHCI_HW_REGISTERS OperationalRegs;
+    PEHCI_HW_REGISTERS Regs = EhciExtension->OperationalRegs;
     EHCI_USB_COMMAND Command;
     EHCI_USB_STATUS Status;
-    LARGE_INTEGER CurrentTime;
-    LARGE_INTEGER EndTime;
-    EHCI_USB_COMMAND Cmd;
+    ULONGLONG Now;
 
-    DPRINT_EHCI("EHCI_FlushAsyncCache: EhciExtension=%p\n", EhciExtension);
-
-    OperationalRegs = EhciExtension->OperationalRegs;
-    Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
-    Status.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
-
-    if (!Status.AsynchronousStatus && !Command.AsynchronousEnable)
-    {
-        DPRINT_EHCI("EHCI_FlushAsyncCache: nothing to flush (AsyncEnable=0, AsyncStatus=0)\n");
+    if (EhciExtension->AsyncReclaimState == EHCI_RECLAIM_IDLE)
         return;
-    }
 
-    if (Status.AsynchronousStatus && !Command.AsynchronousEnable)
+    Command.AsULONG = READ_REGISTER_ULONG(&Regs->HcCommand.AsULONG);
+    Status.AsULONG = READ_REGISTER_ULONG(&Regs->HcStatus.AsULONG);
+    Now = KeQueryInterruptTime();
+
+    if (Command.AsULONG == (ULONG)-1 ||
+        (!Command.AsynchronousEnable && !Status.AsynchronousStatus))
     {
-        KeQuerySystemTime(&EndTime);
-        EndTime.QuadPart += 100 * 10000;  //100 ms
-
-        do
+        /* A stopped schedule/controller cannot retain live async references. */
+        EhciExtension->AsyncReclaimCompleted = EhciExtension->AsyncReclaimRequested;
+        EhciExtension->AsyncReclaimState = EHCI_RECLAIM_IDLE;
+        if (Command.AsULONG != (ULONG)-1)
         {
-            Status.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
-            Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
-            KeQuerySystemTime(&CurrentTime);
-
-            if (CurrentTime.QuadPart > EndTime.QuadPart)
-                RegPacket.UsbPortBugCheck(EhciExtension);
-        }
-        while (Status.AsynchronousStatus && Command.AsULONG != -1 && Command.Run);
-
-        DPRINT_EHCI("EHCI_FlushAsyncCache: waited for async when disabled\n");
-        return;
-    }
-
-    if (!Status.AsynchronousStatus && Command.AsynchronousEnable)
-    {
-        KeQuerySystemTime(&EndTime);
-        EndTime.QuadPart += 100 * 10000;  //100 ms
-
-        do
-        {
-            Status.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG);
-            Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
-            KeQuerySystemTime(&CurrentTime);
-        }
-        while (!Status.AsynchronousStatus && Command.AsULONG != -1 && Command.Run);
-        DPRINT_EHCI("EHCI_FlushAsyncCache: async engine active\n");
-    }
-
-    Command.InterruptAdvanceDoorbell = 1;
-    WRITE_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG, Command.AsULONG);
-    DPRINT_EHCI("EHCI_FlushAsyncCache: doorbell rung\n");
-
-    KeQuerySystemTime(&EndTime);
-    EndTime.QuadPart += 100 * 10000;  //100 ms
-
-    Cmd.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
-
-    if (Cmd.InterruptAdvanceDoorbell)
-    {
-        while (Cmd.Run)
-        {
-            if (Cmd.AsULONG == (ULONG)-1)
-                break;
-
-            KeStallExecutionProcessor(1);
-            Command.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcCommand.AsULONG);
-            KeQuerySystemTime(&CurrentTime);
-
-            if (!Command.InterruptAdvanceDoorbell)
-                break;
-
-            if (CurrentTime.QuadPart > EndTime.QuadPart)
+            WRITE_REGISTER_ULONG(&Regs->HcStatus.AsULONG, 0x20);
+            /* ASYNCLISTADDR may still point to a removed QH. Rebase only
+             * after both ASE and ASS are clear (EHCI 4.8), before restart. */
+            WRITE_REGISTER_ULONG(&Regs->AsyncListBase, EhciExtension->AsyncHead->PhysicalAddress);
+            Command.InterruptAdvanceDoorbell = 0;
+            if (EhciExtension->AsyncReclaimRestoreEnable && Command.Run && !Status.HCHalted)
             {
-                DPRINT_EHCI("EHCI_FlushAsyncCache: doorbell timeout, Cmd=0x%08lx\n",
-                        Command.AsULONG);
-                break;
+                Command.AsynchronousEnable = 1;
             }
-
-            Cmd = Command;
+            WRITE_REGISTER_ULONG(&Regs->HcCommand.AsULONG, Command.AsULONG);
         }
+        EhciExtension->AsyncReclaimRestoreEnable = FALSE;
+        EhciExtension->AsyncReclaimFailed = FALSE;
+        return;
     }
 
-    /* InterruptOnAsyncAdvance */
-    WRITE_REGISTER_ULONG(&OperationalRegs->HcStatus.AsULONG, 0x20);
-    DPRINT_EHCI("EHCI_FlushAsyncCache: InterruptOnAsyncAdvance acked\n");
+    if (EhciExtension->AsyncReclaimState == EHCI_RECLAIM_STOPPING)
+    {
+        if (Now >= EhciExtension->AsyncReclaimDeadline && !EhciExtension->AsyncReclaimFailed)
+        {
+            EhciExtension->AsyncReclaimFailed = TRUE;
+            DPRINT1("EHCI: asynchronous schedule did not stop; retaining DMA storage\n");
+        }
+        goto Pending;
+    }
+
+    if (EhciExtension->AsyncReclaimState == EHCI_RECLAIM_DOORBELL && !Command.InterruptAdvanceDoorbell)
+    {
+        /* EHCI 4.8.2: hardware clears IAAD when it releases cached pointers.
+         * The ISR may already have acknowledged the corresponding IAA bit. */
+        WRITE_REGISTER_ULONG(&Regs->HcStatus.AsULONG, 0x20);
+        EhciExtension->AsyncReclaimCompleted = EhciExtension->AsyncReclaimIssued;
+        if (EhciExtension->AsyncReclaimCompleted == EhciExtension->AsyncReclaimRequested)
+        {
+            EhciExtension->AsyncReclaimState = EHCI_RECLAIM_IDLE;
+            return;
+        }
+        EhciExtension->AsyncReclaimState = EHCI_RECLAIM_SCHEDULE;
+        EhciExtension->AsyncReclaimDeadline = Now + EHCI_RECLAIM_TIMEOUT;
+    }
+
+    if (Now >= EhciExtension->AsyncReclaimDeadline)
+    {
+        DPRINT1("EHCI: asynchronous reclaim timeout; stopping schedule\n");
+        EhciExtension->AsyncReclaimRestoreEnable = Command.AsynchronousEnable;
+        Command.AsynchronousEnable = 0;
+        Command.InterruptAdvanceDoorbell = 0;
+        WRITE_REGISTER_ULONG(&Regs->HcCommand.AsULONG, Command.AsULONG);
+        EhciExtension->AsyncReclaimState = EHCI_RECLAIM_STOPPING;
+        EhciExtension->AsyncReclaimDeadline = Now + EHCI_RECLAIM_TIMEOUT;
+        goto Pending;
+    }
+
+    if (EhciExtension->AsyncReclaimState == EHCI_RECLAIM_SCHEDULE &&
+        Command.Run && Command.AsynchronousEnable && Status.AsynchronousStatus &&
+        !Command.InterruptAdvanceDoorbell)
+    {
+        WRITE_REGISTER_ULONG(&Regs->HcStatus.AsULONG, 0x20);
+        KeMemoryBarrier();
+        EhciExtension->AsyncReclaimIssued = EhciExtension->AsyncReclaimRequested;
+        Command.InterruptAdvanceDoorbell = 1;
+        WRITE_REGISTER_ULONG(&Regs->HcCommand.AsULONG, Command.AsULONG);
+        EhciExtension->AsyncReclaimState = EHCI_RECLAIM_DOORBELL;
+    }
+
+Pending:
+    RegPacket.UsbPortInvalidateController(EhciExtension, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT);
 }
 
-VOID
+static
+BOOLEAN
+EHCI_AsyncReclaimComplete(IN PEHCI_EXTENSION EhciExtension, IN PEHCI_HCD_QH QH)
+{
+    if (!(QH->sqh.QhFlags & EHCI_QH_FLAG_RECLAIM))
+        return TRUE;
+
+    EHCI_PollAsyncReclaim(EhciExtension);
+    if ((LONG)(EhciExtension->AsyncReclaimCompleted - QH->ReclaimGeneration) < 0)
+        return FALSE;
+
+    QH->sqh.QhFlags &= ~EHCI_QH_FLAG_RECLAIM;
+    return TRUE;
+}
+
+BOOLEAN
 NTAPI
 EHCI_LockQH(IN PEHCI_EXTENSION EhciExtension,
             IN PEHCI_HCD_QH QH,
@@ -2307,6 +2339,14 @@ EHCI_LockQH(IN PEHCI_EXTENSION EhciExtension,
                 TransferType);
 
     OperationalRegs = EhciExtension->OperationalRegs;
+
+    if (TransferType == USBPORT_TRANSFER_TYPE_CONTROL || TransferType == USBPORT_TRANSFER_TYPE_BULK)
+    {
+        if (!EHCI_RemoveQhFromAsyncList(EhciExtension, QH))
+            return FALSE;
+        QH->sqh.QhFlags |= EHCI_QH_FLAG_UPDATING;
+        return TRUE;
+    }
 
     ASSERT((QH->sqh.QhFlags & EHCI_QH_FLAG_UPDATING) == 0);
     ASSERT(EhciExtension->LockQH == NULL);
@@ -2346,10 +2386,7 @@ EHCI_LockQH(IN PEHCI_EXTENSION EhciExtension,
         while (READ_REGISTER_ULONG(&OperationalRegs->FrameIndex) ==
                FrameIndexReg && (Command.AsULONG != -1) && Command.Run);
     }
-    else
-    {
-        EHCI_FlushAsyncCache(EhciExtension);
-    }
+    return TRUE;
 }
 
 VOID
@@ -2362,6 +2399,12 @@ EHCI_UnlockQH(IN PEHCI_EXTENSION EhciExtension,
     DPRINT_EHCI("EHCI_UnlockQH: QH=%p\n", QH);
 
     ASSERT(QH->sqh.QhFlags & EHCI_QH_FLAG_UPDATING);
+    if (QH->TransferType == USBPORT_TRANSFER_TYPE_CONTROL || QH->TransferType == USBPORT_TRANSFER_TYPE_BULK)
+    {
+        QH->sqh.QhFlags &= ~EHCI_QH_FLAG_UPDATING;
+        EHCI_InsertQhInAsyncList(EhciExtension, QH);
+        return;
+    }
     ASSERT(EhciExtension->LockQH);
     ASSERT(EhciExtension->LockQH == QH);
 
@@ -2406,9 +2449,10 @@ EHCI_LinkTransferToQueue(IN PEHCI_EXTENSION EhciExtension,
     {
         if (IsPresent)
         {
-            EHCI_LockQH(EhciExtension,
-                        QH,
-                        EhciEndpoint->EndpointProperties.TransferType);
+            if (QH->TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT)
+                EHCI_LockQH(EhciExtension, QH, QH->TransferType);
+            else
+                ASSERT(QH->sqh.QhFlags & EHCI_QH_FLAG_UPDATING);
         }
 
         QH->sqh.HwQH.CurrentTD = EhciEndpoint->DmaBufferPA;
@@ -3023,6 +3067,12 @@ EHCI_SubmitTransfer(IN PVOID ehciExtension,
                 EhciEndpoint,
                 EhciTransfer);
 
+    if ((EhciEndpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_CONTROL ||
+         EhciEndpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK) &&
+        EhciEndpoint->HcdHeadP == EhciEndpoint->HcdTailP &&
+        !EHCI_LockQH(EhciExtension, EhciEndpoint->QH, EhciEndpoint->EndpointProperties.TransferType))
+        return MP_STATUS_BUSY;
+
     RtlZeroMemory(EhciTransfer, sizeof(EHCI_TRANSFER));
 
     EhciTransfer->TransferParameters = TransferParameters;
@@ -3059,6 +3109,9 @@ EHCI_SubmitTransfer(IN PVOID ehciExtension,
             MPStatus = MP_STATUS_NOT_SUPPORTED;
             break;
     }
+
+    if (EhciEndpoint->QH && (EhciEndpoint->QH->sqh.QhFlags & EHCI_QH_FLAG_UPDATING))
+        EHCI_UnlockQH(EhciExtension, EhciEndpoint->QH);
 
     return MPStatus;
 }
@@ -3251,18 +3304,14 @@ EHCI_AbortTransfer(IN PVOID ehciExtension,
 
 ULONG
 NTAPI
-EHCI_GetEndpointState(IN PVOID ehciExtension,
-                      IN PVOID ehciEndpoint)
+EHCI_GetEndpointState(IN PVOID ehciExtension, IN PVOID ehciEndpoint)
 {
-    PEHCI_ENDPOINT EhciEndpoint = ehciEndpoint;
-    UNREFERENCED_PARAMETER(ehciExtension);
-
-    /* Report the cached state maintained by SetEndpointState */
-    DPRINT("EHCI_GetEndpointState: EhciEndpoint - %p state=%lu\n",
-           EhciEndpoint,
-           EhciEndpoint ? EhciEndpoint->EndpointState : 0);
-
-    return EhciEndpoint ? EhciEndpoint->EndpointState : 0;
+    PEHCI_ENDPOINT Endpoint = ehciEndpoint;
+    if (!Endpoint)
+        return USBPORT_ENDPOINT_UNKNOWN;
+    if (Endpoint->EndpointState == USBPORT_ENDPOINT_UNKNOWN)
+        EHCI_SetAsyncEndpointState(ehciExtension, Endpoint, Endpoint->RequestedState);
+    return Endpoint->EndpointState;
 }
 
 VOID
@@ -3312,7 +3361,7 @@ EHCI_RemoveQhFromPeriodicList(IN PEHCI_EXTENSION EhciExtension,
     QH->sqh.PrevHead = NULL;
 }
 
-VOID
+BOOLEAN
 NTAPI
 EHCI_RemoveQhFromAsyncList(IN PEHCI_EXTENSION EhciExtension,
                            IN PEHCI_HCD_QH QH)
@@ -3320,8 +3369,6 @@ EHCI_RemoveQhFromAsyncList(IN PEHCI_EXTENSION EhciExtension,
     PEHCI_HCD_QH NextHead;
     ULONG NextHeadPA;
     PEHCI_HCD_QH PrevHead;
-    PEHCI_STATIC_QH AsyncHead;
-    ULONG AsyncHeadPA;
 
     DPRINT("EHCI_RemoveQhFromAsyncList: QH - %p\n", QH);
 
@@ -3329,12 +3376,6 @@ EHCI_RemoveQhFromAsyncList(IN PEHCI_EXTENSION EhciExtension,
     {
         NextHead = QH->sqh.NextHead;
         PrevHead = QH->sqh.PrevHead;
-
-        AsyncHead = EhciExtension->AsyncHead;
-
-        AsyncHeadPA = AsyncHead->PhysicalAddress;
-        AsyncHeadPA &= LINK_POINTER_MASK + TERMINATE_POINTER;
-        AsyncHeadPA |= (EHCI_LINK_TYPE_QH << 1);
 
         NextHeadPA = NextHead->sqh.PhysicalAddress;
         NextHeadPA &= LINK_POINTER_MASK + TERMINATE_POINTER;
@@ -3345,17 +3386,17 @@ EHCI_RemoveQhFromAsyncList(IN PEHCI_EXTENSION EhciExtension,
         PrevHead->sqh.NextHead = NextHead;
         NextHead->sqh.PrevHead = PrevHead;
 
-        EHCI_FlushAsyncCache(EhciExtension);
-
-        if (READ_REGISTER_ULONG(&EhciExtension->OperationalRegs->AsyncListBase) ==
-            QH->sqh.PhysicalAddress)
-        {
-            WRITE_REGISTER_ULONG(&EhciExtension->OperationalRegs->AsyncListBase,
-                                 AsyncHeadPA);
-        }
-
         QH->sqh.QhFlags &= ~EHCI_QH_FLAG_IN_SCHEDULE;
+        KeMemoryBarrier();
+        QH->ReclaimGeneration = ++EhciExtension->AsyncReclaimRequested;
+        QH->sqh.QhFlags |= EHCI_QH_FLAG_RECLAIM;
+        if (EhciExtension->AsyncReclaimState == EHCI_RECLAIM_IDLE)
+        {
+            EhciExtension->AsyncReclaimState = EHCI_RECLAIM_SCHEDULE;
+            EhciExtension->AsyncReclaimDeadline = KeQueryInterruptTime() + EHCI_RECLAIM_TIMEOUT;
+        }
     }
+    return EHCI_AsyncReclaimComplete(EhciExtension, QH);
 }
 
 VOID
@@ -3436,6 +3477,7 @@ EHCI_InsertQhInAsyncList(IN PEHCI_EXTENSION EhciExtension,
 
     ASSERT((QH->sqh.QhFlags & EHCI_QH_FLAG_IN_SCHEDULE) == 0);
     ASSERT((QH->sqh.QhFlags & EHCI_QH_FLAG_NUKED) == 0);
+    ASSERT((QH->sqh.QhFlags & EHCI_QH_FLAG_RECLAIM) == 0);
 
     AsyncHead = EhciExtension->AsyncHead;
     NextHead = AsyncHead->NextHead;
@@ -3451,9 +3493,9 @@ EHCI_InsertQhInAsyncList(IN PEHCI_EXTENSION EhciExtension,
     QhPA &= LINK_POINTER_MASK + TERMINATE_POINTER;
     QhPA |= (EHCI_LINK_TYPE_QH << 1);
 
-    AsyncHead->HwQH.HorizontalLink.AsULONG = QhPA;
-
     AsyncHead->NextHead = QH;
+    KeMemoryBarrier();
+    AsyncHead->HwQH.HorizontalLink.AsULONG = QhPA;
 }
 
 VOID
@@ -3483,6 +3525,17 @@ EHCI_SetAsyncEndpointState(IN PEHCI_EXTENSION EhciExtension,
     QH = EhciEndpoint->QH;
 
     TransferType = EhciEndpoint->EndpointProperties.TransferType;
+
+    EhciEndpoint->RequestedState = EndpointState;
+    if (TransferType == USBPORT_TRANSFER_TYPE_CONTROL || TransferType == USBPORT_TRANSFER_TYPE_BULK)
+    {
+        if ((EndpointState != USBPORT_ENDPOINT_ACTIVE && !EHCI_RemoveQhFromAsyncList(EhciExtension, QH)) ||
+            (EndpointState == USBPORT_ENDPOINT_ACTIVE && !EHCI_AsyncReclaimComplete(EhciExtension, QH)))
+        {
+            EhciEndpoint->EndpointState = USBPORT_ENDPOINT_UNKNOWN;
+            return;
+        }
+    }
 
     switch (EndpointState)
     {
@@ -3853,9 +3906,11 @@ EHCI_PollActiveAsyncEndpoint(IN PEHCI_EXTENSION EhciExtension,
 
     if (IsScheduled)
     {
-        EHCI_LockQH(EhciExtension,
-                    QH,
-                    EhciEndpoint->EndpointProperties.TransferType);
+        if (!EHCI_LockQH(EhciExtension, QH, EhciEndpoint->EndpointProperties.TransferType))
+        {
+            EhciEndpoint->HcdHeadP = TD;
+            return;
+        }
     }
 
     QH->sqh.HwQH.CurrentTD = EhciEndpoint->DmaBufferPA;
@@ -3926,9 +3981,8 @@ EHCI_PollHaltedAsyncEndpoint(IN PEHCI_EXTENSION EhciExtension,
 
     if (IsScheduled)
     {
-        EHCI_LockQH(EhciExtension,
-                    QH,
-                    EhciEndpoint->EndpointProperties.TransferType);
+        if (!EHCI_LockQH(EhciExtension, QH, EhciEndpoint->EndpointProperties.TransferType))
+            return;
     }
 
     TD = EhciEndpoint->HcdHeadP;
@@ -4007,6 +4061,9 @@ EHCI_PollAsyncEndpoint(IN PEHCI_EXTENSION EhciExtension,
     if (QH->sqh.QhFlags & EHCI_QH_FLAG_CLOSED)
         return;
 
+    if (!EHCI_AsyncReclaimComplete(EhciExtension, QH))
+        return;
+
     if (QH->sqh.HwQH.Token.Status & EHCI_TOKEN_STATUS_ACTIVE ||
         !(QH->sqh.HwQH.Token.Status & EHCI_TOKEN_STATUS_HALTED))
     {
@@ -4017,6 +4074,14 @@ EHCI_PollAsyncEndpoint(IN PEHCI_EXTENSION EhciExtension,
         EhciEndpoint->EndpointStatus |= USBPORT_ENDPOINT_HALT;
         EHCI_PollHaltedAsyncEndpoint(EhciExtension, EhciEndpoint);
     }
+
+    if (QH->sqh.QhFlags & EHCI_QH_FLAG_RECLAIM)
+        return;
+
+    if (!(QH->sqh.QhFlags & EHCI_QH_FLAG_IN_SCHEDULE) &&
+        EhciEndpoint->EndpointState == USBPORT_ENDPOINT_ACTIVE &&
+        (QH->TransferType == USBPORT_TRANSFER_TYPE_CONTROL || QH->TransferType == USBPORT_TRANSFER_TYPE_BULK))
+        EHCI_InsertQhInAsyncList(EhciExtension, QH);
 
     DoneList = &EhciEndpoint->ListTDs;
 
@@ -4637,6 +4702,7 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     RegPacket.MiniPortFlags = USB_MINIPORT_FLAGS_INTERRUPT |
                               USB_MINIPORT_FLAGS_MEMORY_IO |
                               USB_MINIPORT_FLAGS_USB2 |
+                              USB_MINIPORT_FLAGS_ASYNC_ENDPOINT_STATE |
                               USB_MINIPORT_FLAGS_WAKE_SUPPORT |
                               USB_MINIPORT_FLAGS_POLLING;
 

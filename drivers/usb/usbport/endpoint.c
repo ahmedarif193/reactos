@@ -557,7 +557,8 @@ USBPORT_SetEndpointState(IN PUSBPORT_ENDPOINT Endpoint,
          * worker processes the REMOVE state.
          */
         if ((Endpoint->Flags & ENDPOINT_FLAG_ABORTING) &&
-            State == USBPORT_ENDPOINT_REMOVE)
+            State == USBPORT_ENDPOINT_REMOVE &&
+            !USBPORT_EndpointHasAsyncState(Endpoint, Packet))
         {
             DPRINT1("USBPORT_SetEndpointState: ABORTING+REMOVE fast path Endpoint=%p\n",
                     Endpoint);
@@ -744,11 +745,10 @@ USBPORT_DeleteEndpoint(IN PDEVICE_OBJECT FdoDevice,
 
     FdoExtension = FdoDevice->DeviceExtension;
 
+    KeAcquireSpinLock(&FdoExtension->EndpointListSpinLock, &OldIrql);
     if ((Endpoint->WorkerLink.Flink && Endpoint->WorkerLink.Blink) ||
         Endpoint->LockCounter != -1)
     {
-        KeAcquireSpinLock(&FdoExtension->EndpointListSpinLock, &OldIrql);
-
         ExInterlockedInsertTailList(&FdoExtension->EndpointClosedList,
                                     &Endpoint->CloseLink,
                                     &FdoExtension->EndpointClosedSpinLock);
@@ -759,8 +759,6 @@ USBPORT_DeleteEndpoint(IN PDEVICE_OBJECT FdoDevice,
     }
     else
     {
-        KeAcquireSpinLock(&FdoExtension->EndpointListSpinLock, &OldIrql);
-
         RemoveEntryList(&Endpoint->EndpointLink);
         Endpoint->EndpointLink.Flink = NULL;
         Endpoint->EndpointLink.Blink = NULL;
@@ -1732,6 +1730,7 @@ USBPORT_ReopenPipe(IN PDEVICE_OBJECT FdoDevice,
     PUSBPORT_REGISTRATION_PACKET Packet;
     KIRQL MiniportOldIrql;
     BOOLEAN IsDefaultControlPipe;
+    ULONG Retry, State;
     NTSTATUS Status;
 
     DPRINT("USBPORT_ReopenPipe ... \n");
@@ -1768,7 +1767,24 @@ USBPORT_ReopenPipe(IN PDEVICE_OBJECT FdoDevice,
      * remove transition to settle before CloseEndpoint/OpenEndpoint rebuilds
      * the software endpoint view.
      */
-    if (!IsDefaultControlPipe)
+    if (USBPORT_EndpointHasAsyncState(Endpoint, Packet))
+    {
+        for (Retry = 0; Retry < 1000; ++Retry)
+        {
+            KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &MiniportOldIrql);
+            State = Packet->GetEndpointState(FdoExtension->MiniPortExt, Endpoint + 1);
+            KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, MiniportOldIrql);
+            if (State == USBPORT_ENDPOINT_REMOVE)
+                break;
+            USBPORT_Wait(FdoDevice, 1);
+        }
+        if (State != USBPORT_ENDPOINT_REMOVE)
+        {
+            InterlockedDecrement(&Endpoint->LockCounter);
+            return STATUS_IO_TIMEOUT;
+        }
+    }
+    else if (!IsDefaultControlPipe)
     {
         USBPORT_Wait(FdoDevice, 2);
     }
@@ -2131,7 +2147,6 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
     PUSBPORT_REGISTRATION_PACKET Packet;
     PLIST_ENTRY Entry;
     PUSBPORT_TRANSFER Transfer;
-    LARGE_INTEGER TimeOut;
     MPSTATUS MpStatus;
     BOOLEAN IsochronousInFlight = FALSE;
     BOOLEAN QueueIsochronous;
@@ -2193,6 +2208,10 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
 
             Packet = &FdoExtension->MiniPortInterface->Packet;
 
+            /* Arm once, before the first miniport attempt, including BUSY. */
+            if (Transfer->TimeOut && !Transfer->Time.QuadPart)
+                Transfer->Time.QuadPart = KeQueryInterruptTime() + (ULONGLONG)Transfer->TimeOut * 10000;
+
             if (Transfer->Flags & TRANSFER_FLAG_ISO)
             {
                 MpStatus = Packet->SubmitIsoTransfer(FdoExtension->MiniPortExt,
@@ -2219,6 +2238,9 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
                 DPRINT("USBPORT_DmaEndpointActive: SubmitTransfer MpStatus=%lu\n",
                        MpStatus);
             }
+
+            if (MpStatus == MP_STATUS_BUSY)
+                return USBPORT_ENDPOINT_ACTIVE;
 
             if (MpStatus)
             {
@@ -2249,10 +2271,6 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
             Transfer->Flags |= TRANSFER_FLAG_SUBMITED;
             if (QueueIsochronous)
                 IsochronousInFlight = TRUE;
-            KeQuerySystemTime(&Transfer->Time);
-
-            TimeOut.QuadPart = 10000 * Transfer->TimeOut;
-            Transfer->Time.QuadPart += TimeOut.QuadPart;
 
             if (!QueueIsochronous)
                 return USBPORT_ENDPOINT_ACTIVE;
@@ -2269,6 +2287,7 @@ NTAPI
 USBPORT_DmaEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
 {
     PDEVICE_OBJECT FdoDevice;
+    PUSBPORT_REGISTRATION_PACKET Packet;
     ULONG PrevState;
     ULONG EndpointState;
     BOOLEAN IsPaused = FALSE;
@@ -2277,6 +2296,7 @@ USBPORT_DmaEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
     DPRINT_CORE("USBPORT_DmaEndpointWorker ... \n");
 
     FdoDevice = Endpoint->FdoDevice;
+    Packet = &((PUSBPORT_DEVICE_EXTENSION)FdoDevice->DeviceExtension)->MiniPortInterface->Packet;
 
     KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &Endpoint->EndpointOldIrql);
 
@@ -2301,7 +2321,8 @@ USBPORT_DmaEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
          * try to drain transfers. Process them as if we were in PAUSED state
          * to avoid indefinite stalls during device disconnect.
          */
-        if (Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING))
+        if ((Endpoint->Flags & ENDPOINT_FLAG_NUKE) ||
+            ((Endpoint->Flags & ENDPOINT_FLAG_ABORTING) && !USBPORT_EndpointHasAsyncState(Endpoint, Packet)))
         {
             DPRINT1("USBPORT_DmaEndpointWorker: state=%x but NUKE/ABORTING set, forcing PAUSED processing\n",
                     PrevState);
@@ -2528,7 +2549,8 @@ USBPORT_EndpointWorker(IN PUSBPORT_ENDPOINT Endpoint,
             return FALSE;
         }
 
-        if (Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING))
+        if ((Endpoint->Flags & ENDPOINT_FLAG_NUKE) ||
+            ((Endpoint->Flags & ENDPOINT_FLAG_ABORTING) && !USBPORT_EndpointHasAsyncState(Endpoint, Packet)))
         {
             /* Force the transition to complete so the DMA worker can drain
              * outstanding transfers during device removal/shutdown. */

@@ -29,48 +29,6 @@ static
 VOID
 USBPORT_ComputeLpmPolicy(IN PUSBPORT_DEVICE_HANDLE DeviceHandle);
 
-/* Internal setup requests have no IRP to cancel. Find the request only while
- * holding the lock protecting its current queue; completion may already have
- * detached and freed its transfer. The caller retries if DMA mapping has it
- * temporarily off all three queues. */
-static
-VOID
-USBPORT_CancelSetupPacket(IN PDEVICE_OBJECT FdoDevice,
-                         IN PUSBPORT_ENDPOINT Endpoint,
-                         IN PURB Urb)
-{
-    PUSBPORT_DEVICE_EXTENSION FdoExtension = FdoDevice->DeviceExtension;
-    PLIST_ENTRY Lists[3];
-    PKSPIN_LOCK Locks[3];
-    PLIST_ENTRY Entry;
-    PUSBPORT_TRANSFER Transfer;
-    KIRQL OldIrql;
-    ULONG Index;
-
-    Lists[0] = &Endpoint->PendingTransferList;
-    Lists[1] = &Endpoint->TransferList;
-    Lists[2] = &FdoExtension->MapTransferList;
-    Locks[0] = &Endpoint->EndpointSpinLock;
-    Locks[1] = &Endpoint->EndpointSpinLock;
-    Locks[2] = &FdoExtension->MapTransferSpinLock;
-
-    for (Index = 0; Index < RTL_NUMBER_OF(Lists); ++Index)
-    {
-        KeAcquireSpinLock(Locks[Index], &OldIrql);
-        for (Entry = Lists[Index]->Flink; Entry != Lists[Index]; Entry = Entry->Flink)
-        {
-            Transfer = CONTAINING_RECORD(Entry, USBPORT_TRANSFER, TransferLink);
-            if (Transfer->Urb == Urb && !(Transfer->Flags & TRANSFER_FLAG_COMPLETED))
-                InterlockedOr((volatile LONG *)&Transfer->Flags, TRANSFER_FLAG_ABORTED);
-        }
-        KeReleaseSpinLock(Locks[Index], OldIrql);
-    }
-
-    USBPORT_InvalidateEndpointHandler(FdoDevice, Endpoint, INVALIDATE_ENDPOINT_WORKER_THREAD);
-    USBPORT_FlushPendingTransfers(Endpoint);
-    USBPORT_FlushCancelList(Endpoint);
-}
-
 NTSTATUS
 NTAPI
 USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
@@ -85,8 +43,6 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     PMDL Mdl;
     USBD_STATUS USBDStatus = USBD_STATUS_SUCCESS;
     KEVENT Event;
-    LARGE_INTEGER Timeout;
-    BOOLEAN TimedOut;
     NTSTATUS Status;
 
     DPRINT("USBPORT_SendSetupPacket: DeviceHandle - %p, FdoDevice - %p, SetupPacket - %p, Buffer - %p, Length - %x, TransferedLen - %x, pUSBDStatus - %x\n",
@@ -171,31 +127,10 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
 
                 USBPORT_QueueTransferUrb(Urb);
 
-                Timeout.QuadPart = -5LL * 1000 * 10000;
-                Status = KeWaitForSingleObject(&Event, Suspended, KernelMode, FALSE, &Timeout);
-                TimedOut = (Status == STATUS_TIMEOUT);
-
-                if (TimedOut)
-                {
-                    DPRINT1("USBPORT_SendSetupPacket: timeout addr=%u port=%u request=%02x value=%04x index=%04x length=%u\n",
-                            DeviceHandle->DeviceAddress, DeviceHandle->PortNumber,
-                            SetupPacket->bRequest, SetupPacket->wValue.W,
-                            SetupPacket->wIndex.W, SetupPacket->wLength);
-
-                    /* Keep the URB, MDL, buffer and stack event alive until
-                     * the normal abort/completion path has stopped DMA. */
-                    do
-                    {
-                        USBPORT_CancelSetupPacket(FdoDevice, DeviceHandle->PipeHandle.Endpoint, Urb);
-                        Timeout.QuadPart = -100LL * 10000;
-                        Status = KeWaitForSingleObject(&Event, Suspended, KernelMode, FALSE, &Timeout);
-                    }
-                    while (Status == STATUS_TIMEOUT);
-                }
-
+                /* The transfer core owns the deadline and cancellation. Keep
+                 * caller-owned storage alive until hardware retirement completes. */
+                KeWaitForSingleObject(&Event, Suspended, KernelMode, FALSE, NULL);
                 USBDStatus = Urb->UrbHeader.Status;
-                if (TimedOut && USBDStatus == USBD_STATUS_CANCELED)
-                    USBDStatus = USBD_STATUS_TIMEOUT;
             }
 
             Status = USBPORT_USBDStatusToNtStatus(Urb, USBDStatus);
@@ -1426,11 +1361,9 @@ USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
 
     /*
      * Wait for all transfers to be drained from the device's endpoints.
-     * Use a timeout (5 seconds) to prevent infinite stalls when the
-     * hardware cannot complete aborts (e.g., device disconnected and
-     * the miniport's AbortTransfer returns early). After the timeout,
-     * set ENDPOINT_FLAG_NUKE on all endpoints to force-complete any
-     * remaining transfers.
+     * After five seconds, retry legacy aborts with NUKE. Miniports that
+     * acknowledge asynchronous retirement must retain DMA storage until
+     * that acknowledgement; elapsed time cannot establish DMA safety.
      */
     WaitCount = 0;
     MaxWaitCount = 50; /* 50 * 100ms = 5 seconds */
@@ -1444,18 +1377,11 @@ USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
 
         WaitCount++;
 
-        if (WaitCount >= MaxWaitCount)
+        if (WaitCount % MaxWaitCount == 0)
         {
-            DPRINT1("USBPORT_AbortTransfers: timeout after %lu ms, forcing NUKE on endpoints\n",
+            DPRINT1("USBPORT_AbortTransfers: still draining after %lu ms; retrying aborts\n",
                     WaitCount * 100);
 
-            /*
-             * Timeout reached: transfers are stuck because the hardware
-             * cannot abort them (e.g., device physically disconnected).
-             * Set ENDPOINT_FLAG_NUKE on all device endpoints to allow
-             * USBPORT_DmaEndpointPaused to skip the miniport abort call
-             * and directly complete the transfers.
-             */
             HandleList = DeviceHandle->PipeHandleList.Flink;
 
             while (HandleList != &DeviceHandle->PipeHandleList)
@@ -1470,10 +1396,11 @@ USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
                     PipeHandle->Endpoint)
                 {
                     KeAcquireSpinLock(&PipeHandle->Endpoint->EndpointSpinLock, &OldIrql);
-                    PipeHandle->Endpoint->Flags |= ENDPOINT_FLAG_NUKE;
+                    if (!USBPORT_EndpointHasAsyncState(PipeHandle->Endpoint, &FdoExtension->MiniPortInterface->Packet))
+                        PipeHandle->Endpoint->Flags |= ENDPOINT_FLAG_NUKE;
                     KeReleaseSpinLock(&PipeHandle->Endpoint->EndpointSpinLock, OldIrql);
 
-                    /* Re-trigger abort processing with NUKE flag set */
+                    /* Retry without bypassing hardware retirement. */
                     USBPORT_AbortEndpoint(FdoDevice, PipeHandle->Endpoint, NULL);
                 }
             }

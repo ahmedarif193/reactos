@@ -1624,6 +1624,7 @@ USBPORT_IsrDpcHandler(IN PDEVICE_OBJECT FdoDevice,
     PUSBPORT_ENDPOINT Endpoint;
     PLIST_ENTRY List;
     ULONG FrameNumber;
+    BOOLEAN StateReady;
 
     ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
 
@@ -1654,11 +1655,18 @@ USBPORT_IsrDpcHandler(IN PDEVICE_OBJECT FdoDevice,
         KeAcquireSpinLockAtDpcLevel(&Endpoint->EndpointSpinLock);
 
         KeAcquireSpinLockAtDpcLevel(&FdoExtension->MiniportSpinLock);
-        FrameNumber = Packet->Get32BitFrameNumber(FdoExtension->MiniPortExt);
+        if (USBPORT_EndpointHasAsyncState(Endpoint, Packet))
+        {
+            StateReady = Packet->GetEndpointState(FdoExtension->MiniPortExt, Endpoint + 1) == Endpoint->StateNext;
+        }
+        else
+        {
+            FrameNumber = Packet->Get32BitFrameNumber(FdoExtension->MiniPortExt);
+            StateReady = FrameNumber > Endpoint->FrameNumber;
+        }
         KeReleaseSpinLockFromDpcLevel(&FdoExtension->MiniportSpinLock);
 
-        if (FrameNumber <= Endpoint->FrameNumber &&
-            !(Endpoint->Flags & ENDPOINT_FLAG_NUKE))
+        if (!StateReady && !(Endpoint->Flags & ENDPOINT_FLAG_NUKE))
         {
             KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
 
@@ -1673,11 +1681,13 @@ USBPORT_IsrDpcHandler(IN PDEVICE_OBJECT FdoDevice,
             break;
         }
 
-        KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
-
+        /* Publishing REMOVE allows the worker to close this endpoint. Keep
+         * it alive until the corresponding invalidation has been queued. */
+        InterlockedIncrement(&Endpoint->LockCounter);
         KeAcquireSpinLockAtDpcLevel(&Endpoint->StateChangeSpinLock);
         Endpoint->StateLast = Endpoint->StateNext;
         KeReleaseSpinLockFromDpcLevel(&Endpoint->StateChangeSpinLock);
+        KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
 
         DPRINT_CORE("USBPORT_IsrDpcHandler: Endpoint->StateLast - %x\n",
                     Endpoint->StateLast);
@@ -1694,6 +1704,7 @@ USBPORT_IsrDpcHandler(IN PDEVICE_OBJECT FdoDevice,
                                               Endpoint,
                                               INVALIDATE_ENDPOINT_WORKER_THREAD);
         }
+        InterlockedDecrement(&Endpoint->LockCounter);
     }
 
     if (IsDpcHandler)
@@ -2704,6 +2715,57 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
     DPRINT_TIMER("USBPORT_SynchronizeControllersStart: exit\n");
 }
 
+static
+VOID
+USBPORT_TimeoutAllEndpoints(IN PDEVICE_OBJECT FdoDevice)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension = FdoDevice->DeviceExtension;
+    PUSBPORT_ENDPOINT Endpoint;
+    PUSBPORT_TRANSFER Transfer;
+    PLIST_ENTRY Entry, TransferEntry;
+    LIST_ENTRY Endpoints;
+    ULONGLONG Now = KeQueryInterruptTime();
+    BOOLEAN Expired;
+    KIRQL OldIrql;
+
+    InitializeListHead(&Endpoints);
+    KeAcquireSpinLock(&FdoExtension->EndpointListSpinLock, &OldIrql);
+    for (Entry = FdoExtension->EndpointList.Flink; Entry != &FdoExtension->EndpointList; Entry = Entry->Flink)
+    {
+        Endpoint = CONTAINING_RECORD(Entry, USBPORT_ENDPOINT, EndpointLink);
+        /* TimerFlagsSpinLock serializes the use of TimeoutLink. Pin while
+         * holding the list lock, also used by DeleteEndpoint's final check. */
+        InterlockedIncrement(&Endpoint->LockCounter);
+        InsertTailList(&Endpoints, &Endpoint->TimeoutLink);
+    }
+    KeReleaseSpinLock(&FdoExtension->EndpointListSpinLock, OldIrql);
+
+    while (!IsListEmpty(&Endpoints))
+    {
+        Entry = RemoveHeadList(&Endpoints);
+        Endpoint = CONTAINING_RECORD(Entry, USBPORT_ENDPOINT, TimeoutLink);
+        Expired = FALSE;
+        KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &OldIrql);
+        for (TransferEntry = Endpoint->TransferList.Flink; TransferEntry != &Endpoint->TransferList; TransferEntry = TransferEntry->Flink)
+        {
+            Transfer = CONTAINING_RECORD(TransferEntry, USBPORT_TRANSFER, TransferLink);
+            if (!Transfer->TimeOut || !Transfer->Time.QuadPart || Now < (ULONGLONG)Transfer->Time.QuadPart ||
+                (Transfer->Flags & (TRANSFER_FLAG_COMPLETED | TRANSFER_FLAG_ABORTED | TRANSFER_FLAG_CANCELED)))
+                continue;
+
+            InterlockedOr((PLONG)&Transfer->Flags, TRANSFER_FLAG_TIMED_OUT | TRANSFER_FLAG_ABORTED);
+            Expired = TRUE;
+            DPRINT1("USBPORT: transfer timeout addr=%lu ep=%lu request=%02x after %lu ms\n",
+                    Endpoint->EndpointProperties.DeviceAddress, Endpoint->EndpointProperties.EndpointAddress,
+                    Transfer->TransferParameters.SetupPacket.bRequest, Transfer->TimeOut);
+        }
+        KeReleaseSpinLock(&Endpoint->EndpointSpinLock, OldIrql);
+        if (Expired)
+            USBPORT_InvalidateEndpointHandler(FdoDevice, Endpoint, INVALIDATE_ENDPOINT_WORKER_THREAD);
+        InterlockedDecrement(&Endpoint->LockCounter);
+    }
+}
+
 VOID
 NTAPI
 USBPORT_TimerDpc(IN PRKDPC Dpc,
@@ -2799,8 +2861,7 @@ USBPORT_TimerDpc(IN PRKDPC Dpc,
 
     USBPORT_IsrDpcHandler(FdoDevice, FALSE);
 
-    DPRINT_TIMER("USBPORT_TimerDpc: USBPORT_TimeoutAllEndpoints UNIMPLEMENTED.\n");
-    //USBPORT_TimeoutAllEndpoints(FdoDevice);
+    USBPORT_TimeoutAllEndpoints(FdoDevice);
     DPRINT_TIMER("USBPORT_TimerDpc: USBPORT_CheckIdleEndpoints UNIMPLEMENTED.\n");
     //USBPORT_CheckIdleEndpoints(FdoDevice);
 
@@ -3809,6 +3870,9 @@ if (!Urb)
         return;
     }
 
+    if (TransferStatus == USBD_STATUS_CANCELED && (Transfer->Flags & TRANSFER_FLAG_TIMED_OUT))
+        TransferStatus = USBD_STATUS_TIMEOUT;
+
     Transfer->USBDStatus = TransferStatus;
     Status = USBPORT_USBDStatusToNtStatus(Urb, TransferStatus);
 
@@ -4613,6 +4677,8 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
     Transfer->Endpoint = PipeHandle->Endpoint;
     Transfer->FdoDevice = FdoDevice;
     Transfer->Event = Event;
+    if (Event && !Irp && Urb->UrbHeader.Function == URB_FUNCTION_CONTROL_TRANSFER)
+        Transfer->TimeOut = 5000;
     Transfer->PortTransferLength = PortTransferLength;
     Transfer->FullTransferLength = FullTransferLength;
     Transfer->IsoBlockPtr = NULL;

@@ -219,6 +219,8 @@ typedef ULONG RHSTATUS; // Roothub status
 #define MP_STATUS_NOT_SUPPORTED 6
 #define MP_STATUS_HW_ERROR      7
 #define MP_STATUS_UNSUCCESSFUL  8
+/* Request was not consumed; retry after the miniport invalidates the endpoint. */
+#define MP_STATUS_BUSY          9
 
 #define RH_STATUS_SUCCESS       0
 #define RH_STATUS_NO_CHANGES    1
@@ -654,6 +656,8 @@ typedef VOID
 /* USB 2.0 controller can transact directly with root-attached FS/LS devices
  * without an EHCI companion controller or an external high-speed hub TT. */
 #define USB_MINIPORT_FLAGS_USB2_DIRECT_FSLS 0x2000
+/* GetEndpointState acknowledges control/bulk schedule retirement. */
+#define USB_MINIPORT_FLAGS_ASYNC_ENDPOINT_STATE 0x4000
 
 #define TOTAL_USB11_BUS_BANDWIDTH        12000
 #define TOTAL_USB20_BUS_BANDWIDTH       400000
