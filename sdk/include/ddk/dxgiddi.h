@@ -62,3 +62,106 @@ typedef struct DXGI_DDI_PRIMARY_DESC
     DXGI_DDI_MODE_DESC ModeDesc;
     UINT DriverFlags;
 } DXGI_DDI_PRIMARY_DESC;
+
+/* User-mode DXGI DDI entry points and runtime callbacks. */
+typedef UINT_PTR DXGI_DDI_HDEVICE;
+typedef UINT_PTR DXGI_DDI_HRESOURCE;
+
+typedef enum DXGI_DDI_FLIP_INTERVAL_TYPE
+{
+    DXGI_DDI_FLIP_INTERVAL_IMMEDIATE = 0,
+    DXGI_DDI_FLIP_INTERVAL_ONE = 1,
+    DXGI_DDI_FLIP_INTERVAL_TWO = 2,
+    DXGI_DDI_FLIP_INTERVAL_THREE = 3,
+    DXGI_DDI_FLIP_INTERVAL_FOUR = 4,
+    DXGI_DDI_FLIP_INTERVAL_IMMEDIATE_ALLOW_TEARING = 5,
+} DXGI_DDI_FLIP_INTERVAL_TYPE;
+
+typedef struct DXGI_DDI_PRESENT_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT Blt : 1;
+            UINT Flip : 1;
+            UINT PreferRight : 1;
+            UINT TemporaryMono : 1;
+            UINT AllowTearing : 1;
+            UINT AllowFlexibleRefresh : 1;
+            UINT Reserved : 26;
+        };
+        UINT Value;
+    };
+} DXGI_DDI_PRESENT_FLAGS;
+
+typedef struct DXGI_DDI_ARG_PRESENT
+{
+    DXGI_DDI_HDEVICE hDevice;
+    DXGI_DDI_HRESOURCE hSurfaceToPresent;
+    UINT SrcSubResourceIndex;
+    DXGI_DDI_HRESOURCE hDstResource;
+    UINT DstSubResourceIndex;
+    void *pDXGIContext;
+    DXGI_DDI_PRESENT_FLAGS Flags;
+    DXGI_DDI_FLIP_INTERVAL_TYPE FlipInterval;
+} DXGI_DDI_ARG_PRESENT;
+
+typedef struct DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES
+{
+    DXGI_DDI_HDEVICE hDevice;
+    const DXGI_DDI_HRESOURCE *pResources;
+    UINT Resources;
+} DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES;
+typedef struct DXGI_DDI_ARG_BLT DXGI_DDI_ARG_BLT;
+typedef struct DXGI_DDI_ARG_SETDISPLAYMODE
+{
+    DXGI_DDI_HDEVICE hDevice;
+    DXGI_DDI_HRESOURCE hResource;
+    UINT SubResourceIndex;
+} DXGI_DDI_ARG_SETDISPLAYMODE;
+typedef struct DXGI_DDI_ARG_SETRESOURCEPRIORITY DXGI_DDI_ARG_SETRESOURCEPRIORITY;
+typedef struct DXGI_DDI_ARG_QUERYRESOURCERESIDENCY DXGI_DDI_ARG_QUERYRESOURCERESIDENCY;
+typedef struct DXGI_DDI_ARG_RESOLVESHAREDRESOURCE DXGI_DDI_ARG_RESOLVESHAREDRESOURCE;
+
+typedef struct DXGI1_1_DDI_BASE_FUNCTIONS
+{
+    HRESULT (APIENTRY *pfnPresent)(DXGI_DDI_ARG_PRESENT *);
+    HRESULT (APIENTRY *pfnGetGammaCaps)(void *);
+    HRESULT (APIENTRY *pfnSetDisplayMode)(DXGI_DDI_ARG_SETDISPLAYMODE *);
+    HRESULT (APIENTRY *pfnSetResourcePriority)(DXGI_DDI_ARG_SETRESOURCEPRIORITY *);
+    HRESULT (APIENTRY *pfnQueryResourceResidency)(DXGI_DDI_ARG_QUERYRESOURCERESIDENCY *);
+    HRESULT (APIENTRY *pfnRotateResourceIdentities)(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *);
+    HRESULT (APIENTRY *pfnBlt)(DXGI_DDI_ARG_BLT *);
+    HRESULT (APIENTRY *pfnResolveSharedResource)(DXGI_DDI_ARG_RESOLVESHAREDRESOURCE *);
+} DXGI1_1_DDI_BASE_FUNCTIONS;
+
+typedef struct DXGIDDICB_PRESENT
+{
+    D3DKMT_HANDLE hSrcAllocation;
+    D3DKMT_HANDLE hDstAllocation;
+    void *pDXGIContext;
+    HANDLE hContext;
+    UINT BroadcastContextCount;
+    HANDLE BroadcastContext[D3DDDI_MAX_BROADCAST_CONTEXT];
+    D3DKMT_HANDLE *BroadcastSrcAllocation;
+    D3DKMT_HANDLE *BroadcastDstAllocation;
+    UINT PrivateDriverDataSize;
+    void *pPrivateDriverData;
+    BOOLEAN bOptimizeForComposition;
+    BOOL SyncIntervalOverrideValid;
+    DXGI_DDI_FLIP_INTERVAL_TYPE SyncIntervalOverride;
+} DXGIDDICB_PRESENT;
+
+typedef struct DXGI_DDI_BASE_CALLBACKS
+{
+    HRESULT (APIENTRY *pfnPresentCb)(HANDLE, DXGIDDICB_PRESENT *);
+    HRESULT (APIENTRY *pfnPresentMultiplaneOverlayCb)(HANDLE, const void *);
+    HRESULT (APIENTRY *pfnPresentMultiplaneOverlay1Cb)(HANDLE, const void *);
+} DXGI_DDI_BASE_CALLBACKS;
+
+typedef struct DXGI_DDI_BASE_ARGS
+{
+    DXGI_DDI_BASE_CALLBACKS *pDXGIBaseCallbacks;
+    DXGI1_1_DDI_BASE_FUNCTIONS *pDXGIDDIBaseFunctions2;
+} DXGI_DDI_BASE_ARGS;
