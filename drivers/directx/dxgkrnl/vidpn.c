@@ -4389,7 +4389,7 @@ DxgkCreateRedirectionSurface(
     CreateFlags.Resource = 1;
     Status = DxgkVidMmCreateAllocation(
         Adapter, Device, &AllocInfo, ResourcePrivateData,
-        ResourcePrivateDataSize, NULL, CreateFlags,
+        ResourcePrivateDataSize, NULL, CreateFlags, D3DDDI_ID_UNINITIALIZED,
         &AllocationHandle, &MiniportResourceHandle);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
@@ -4665,7 +4665,7 @@ DxgkpEnsureSharedShadowSurfaceLocked(
                   AllocationPrivateDataSize,
                   ResourcePrivateDataSize);
 
-    Status = DxgkVidMmCreateAllocation(Adapter, NULL, &AllocInfo, ResourcePrivateData, ResourcePrivateDataSize, NULL, CreateFlags, &AllocationHandle, &MiniportResourceHandle);
+    Status = DxgkVidMmCreateAllocation(Adapter, NULL, &AllocInfo, ResourcePrivateData, ResourcePrivateDataSize, NULL, CreateFlags, D3DDDI_ID_UNINITIALIZED, &AllocationHandle, &MiniportResourceHandle);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -4936,7 +4936,7 @@ DxgkpEnsureSharedPrimaryLocked(
                   "PrivDataSize=%u ResPrivDataSize=%u\n",
                   AllocationPrivateDataSize, ResourcePrivateDataSize);
 
-    Status = DxgkVidMmCreateAllocation(Adapter, NULL, &AllocInfo, ResourcePrivateData, ResourcePrivateDataSize, NULL, CreateFlags, &AllocationHandle, &MiniportResourceHandle);
+    Status = DxgkVidMmCreateAllocation(Adapter, NULL, &AllocInfo, ResourcePrivateData, ResourcePrivateDataSize, NULL, CreateFlags, VidPnSourceId, &AllocationHandle, &MiniportResourceHandle);
     if (!NT_SUCCESS(Status))
     {
         DXGKRNL_WARN("DxgkpEnsureSharedPrimary: CreateAllocation failed 0x%08lX\n",
@@ -5118,6 +5118,7 @@ DxgkSetDisplayMode(
     PDXGKVMM_ALLOCATION Allocation = NULL;
     PDXGKARG_SETVIDPNSOURCEADDRESS SetSourceAddress = NULL;
     LARGE_INTEGER PrimaryAddress;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
     NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
@@ -5134,6 +5135,19 @@ DxgkSetDisplayMode(
         return STATUS_INVALID_PARAMETER;
     }
 
+    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)pSetDisplayMode->hPrimaryAllocation, Adapter, Device, &Allocation);
+    if (!NT_SUCCESS(Status))
+    {
+        Status = STATUS_INVALID_HANDLE;
+        goto Cleanup;
+    }
+    VidPnSourceId = Allocation->PrimaryVidPnSourceId;
+    if (VidPnSourceId >= Adapter->NumberOfVideoPresentSources)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
     (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
     VidPn = (PDXGKP_VIDPN)Adapter->VidPn;
     if (VidPn == NULL || VidPn->Signature != DXGKP_VIDPN_SIGNATURE)
@@ -5146,17 +5160,10 @@ DxgkSetDisplayMode(
     KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
 
     (VOID)KeWaitForSingleObject(&Adapter->SharedPrimaryMutex, Executive, KernelMode, FALSE, NULL);
-    Status = DxgkpEnsureSharedPrimaryLocked(Adapter, 0);
+    Status = DxgkpEnsureSharedPrimaryLocked(Adapter, VidPnSourceId);
     KeReleaseMutex(&Adapter->SharedPrimaryMutex, FALSE);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
-
-    Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)pSetDisplayMode->hPrimaryAllocation, Adapter, Device, &Allocation);
-    if (!NT_SUCCESS(Status))
-    {
-        Status = STATUS_INVALID_HANDLE;
-        goto Cleanup;
-    }
 
     Status = DxgkVidMmEnsureAllocationApertureMapped(Allocation);
     if (!NT_SUCCESS(Status))
@@ -5178,7 +5185,7 @@ DxgkSetDisplayMode(
     }
 
     RtlZeroMemory(SetSourceAddress, sizeof(*SetSourceAddress));
-    SetSourceAddress->VidPnSourceId = 0;
+    SetSourceAddress->VidPnSourceId = VidPnSourceId;
     SetSourceAddress->hAllocation = Allocation->MiniportHandle;
     SetSourceAddress->PrimaryAddress = PrimaryAddress;
     SetSourceAddress->PrimarySegment = Allocation->SegmentId;
@@ -5205,7 +5212,7 @@ DxgkSetDisplayMode(
     if (DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL && DxgkAcquireKmdCall(Adapter))
     {
         DXGKARG_SETVIDPNSOURCEVISIBILITY Visibility;
-        Visibility.VidPnSourceId = 0;
+        Visibility.VidPnSourceId = VidPnSourceId;
         Visibility.Visible = TRUE;
         DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility)(Adapter->MiniportDeviceContext, &Visibility);
         DxgkReleaseKmdCall(Adapter);

@@ -261,6 +261,11 @@ typedef struct _DXGKVMM_ALLOCATION
     /* Source allocation retained by a per-device OpenResource alias. */
     struct _DXGKVMM_ALLOCATION *BackingAllocation;
 
+    /* Immutable on the backing allocation; UNINITIALIZED means non-primary
+     * (NOTAPPLICABLE is zero and would collide with source 0). Open aliases
+     * resolve here. Creation does not grant VidPn source ownership. */
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID PrimaryVidPnSourceId;
+
     /* Miniport binding created by DxgkDdiOpenAllocation for an open alias. */
     HANDLE               OpenBindingHandle;
     UINT                 OpenBindingIndex;

@@ -2410,6 +2410,7 @@ DxgkVidMmCreateAllocation(
     _In_      UINT                   CreatePrivateDriverDataSize,
     _In_opt_  HANDLE                 ResourceHandle,
     _In_      DXGK_CREATEALLOCATIONFLAGS CreateFlags,
+    _In_      D3DDDI_VIDEO_PRESENT_SOURCE_ID PrimaryVidPnSourceId,
     _Out_     PHANDLE                OutHandle,
     _Out_opt_ PHANDLE                OutResourceHandle);
 
