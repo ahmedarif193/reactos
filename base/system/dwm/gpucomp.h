@@ -11,11 +11,10 @@
 
 /*
  * The compositor keeps its software path as the always-available baseline.
- * These entry points are the optional hardware path: they engage only on a
- * display adapter that publishes a real OpenGL ICD able to run shaders, and
- * every one of them reports failure rather than degrading, so the caller can
- * fall back to the software routine for that frame without any visible
- * difference beyond speed.
+ * The standalone blur uses an OpenGL ICD. Full-frame composition can also
+ * use a native Direct3D 11 device on the output adapter. Each backend reports
+ * failed imports and rendering operations to the caller; it never disguises
+ * a CPU texture upload as shared GPU composition.
  */
 
 /*
@@ -43,20 +42,28 @@ BOOL DwmGpuBlurRect(ULONG *Composition, LONG Width, LONG Height,
 void DwmGpuShutdown(void);
 
 /*
- * Full-frame composition on the GPU. Dynamic windows use shared allocation
- * imports; completed publication IDs invalidate derived GPU textures only
- * when their content changes. Moving an unchanged window does not upload it.
+ * Full-frame composition on the GPU. Windows use shared allocation imports
+ * where supported. The D3D backend uploads completed GDI dirty bounds from
+ * section-backed windows; publication IDs preserve unchanged GPU textures.
+ * Moving an unchanged window does not upload it.
  * Wallpaper has a separate cached upload. Blur and final presentation remain
  * on the GPU. Calls report failure to the compositor; runtime recovery policy
  * is owned by that caller.
  */
 struct _DWM_WIN;
 
+typedef enum _DWM_GPU_RESULT
+{
+    DWM_GPU_FAILED,
+    DWM_GPU_COMPLETE,
+    DWM_GPU_DEFERRED
+} DWM_GPU_RESULT;
+
 BOOL DwmGpuComposeInitialize(LONG Width, LONG Height);
 BOOL DwmGpuComposeIsActive(void);
 
 /* Starts with cached wallpaper. NULL damage requests a full redraw. Buffer
- * preservation is queried from WGL; unknown swap methods redraw in full. */
+ * preservation follows the selected backend's actual swap contract. */
 BOOL DwmGpuComposeBegin(ULONG BackdropColor, const BYTE *BackdropPixels,
                         BOOL RefreshBackdrop, const RECT *Damage);
 
@@ -67,10 +74,11 @@ void DwmGpuComposeScene(const struct _DWM_WIN *Windows, ULONG Count,
                         ULONG BlurRadius, const RECT *ShadowMargins);
 void DwmGpuComposePrepareWindow(const struct _DWM_WIN *Window, ULONG Index);
 void DwmGpuComposeBlurStats(ULONGLONG *Filtered, ULONGLONG *Reused);
+BOOL DwmGpuComposeNeedsSurfacePixels(const struct _DWM_WIN *Window);
 
 /*
- * Draws shared base and optional shared client content. Pixels is NULL for
- * dynamic windows; only the reserved wallpaper surface accepts CPU pixels.
+ * Draws the window base and optional shared client content. Supply the raw
+ * GDI FRONT section pixels only when NeedsSurfacePixels requests an update.
  */
 BOOL DwmGpuComposeWindow(const struct _DWM_WIN *Window, const BYTE *Pixels,
                          LONG OriginX, LONG OriginY);
@@ -88,7 +96,12 @@ BOOL DwmGpuComposeShadow(const RECT *Bounds, LONGLONG X, LONGLONG Y,
                           BOOL Active, ULONG WideOpacity, ULONG TightOpacity,
                           ULONG WindowAlpha);
 
-/* Presents the frame. */
-BOOL DwmGpuComposeEnd(void);
+/* COMPLETE means presentation was accepted. DEFERRED means the output is
+ * temporarily unavailable and GPU reads have completed, so client copies
+ * may be acknowledged without counting the frame as presented. */
+DWM_GPU_RESULT DwmGpuComposeEnd(void);
+
+/* Tests a deferred output without rendering, presenting or rotating buffers. */
+DWM_GPU_RESULT DwmGpuComposeCheckOutput(void);
 
 void DwmGpuComposeShutdown(void);

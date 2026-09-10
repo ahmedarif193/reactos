@@ -3260,6 +3260,8 @@ DwmComposeLoop(HANDLE hStopEvent)
     HWND SettingsWindow;
     DWM_SETTINGS Settings = {DWM_EFFECT_ALL, FALSE, DwmGpuComposeIsActive};
     BOOL forceFull = TRUE;
+    BOOL gpuDeferred = FALSE;
+    DWORD gpuLastOutputCheck = 0;
     LONG vw, vh, primW, primH;
     ULONG ViewIndex;
 
@@ -3391,6 +3393,40 @@ DwmComposeLoop(HANDLE hStopEvent)
 
         if (WaitForSingleObject(hStopEvent, 0) == WAIT_OBJECT_0)
             break;
+
+        if (gpuDeferred)
+        {
+            DWORD Elapsed = GetTickCount() - gpuLastOutputCheck;
+            DWM_GPU_RESULT Output;
+
+            /* Keep servicing this thread's windows while an exclusive owner
+             * has the output. Dirty notifications must not turn suspension
+             * into a render loop; only test output availability periodically. */
+            DwmSetTimerPrecision(FALSE);
+            if (Elapsed < 200)
+            {
+                if (MsgWaitForMultipleObjects(1, &hStopEvent, FALSE,
+                                              200 - Elapsed, QS_ALLINPUT) == WAIT_OBJECT_0)
+                    break;
+                continue;
+            }
+            Output = DwmGpuComposeCheckOutput();
+            gpuLastOutputCheck = GetTickCount();
+            if (Output == DWM_GPU_DEFERRED)
+                continue;
+            gpuDeferred = FALSE;
+            forceFull = TRUE;
+            g_lastFrameQpc = 0;
+            if (Output == DWM_GPU_FAILED)
+            {
+                DwmGpuComposeShutdown();
+                DwmLog("DWM: GPU output recovery failed; restoring software composition\n");
+            }
+            else
+            {
+                DwmLog("DWM: GPU output available; repairing the desktop\n");
+            }
+        }
 
         /* Budget from the start of the last frame. Waiting a full refresh
          * period after presentation adds rendering time to every interval. */
@@ -3573,6 +3609,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                     DPT_SCOPE FrameTrace = DptBegin(&g_DwmPresentTrace, DPT_FRAME);
                     DPT_SCOPE AckTrace;
                     BOOL gpuFrame;
+                    DWM_GPU_RESULT gpuResult;
                     RECT gpuDamage = {pl, pt, pr, pb};
                     RECT gpuShadowMargins = {g_shadowMarginLeft, g_shadowMarginTop,
                                               g_shadowMarginRight, g_shadowMarginBottom};
@@ -3597,7 +3634,8 @@ DwmComposeLoop(HANDLE hStopEvent)
 
                         /* Submit the scene in order. Begin's scissor limits
                          * raster work to the repaired buffer region. */
-                        gpix = NULL;
+                        gpix = DwmGpuComposeNeedsSurfacePixels(&wins[i]) ?
+                                   DwmGetSurfaceView(&wins[i]) : NULL;
                         DwmGpuComposePrepareWindow(&wins[i], i);
                         if (wins[i].BlurRectBase > hdr->BlurRectCount ||
                             wins[i].BlurRectCount > hdr->BlurRectCount - wins[i].BlurRectBase)
@@ -3625,10 +3663,21 @@ DwmComposeLoop(HANDLE hStopEvent)
                     }
                     DwmStatCounter(&statComposeEnd);
 
-                    if (gpuFrame && DwmGpuComposeEnd())
+                    gpuResult = gpuFrame ? DwmGpuComposeEnd() : DWM_GPU_FAILED;
+                    if (gpuResult != DWM_GPU_FAILED)
+                    {
+                        DwmStatCounter(&statPresentEnd);
+                        /* A deferred present has still completed the GPU
+                         * copies into DWM-owned textures. Release those client
+                         * publications without claiming output was displayed. */
+                        AckTrace = DptBegin(&g_DwmPresentTrace, DPT_ACK);
+                        for (i = 0; i < hdr->Count; ++i)
+                            DwmDxAcknowledgeSurface(&wins[i]);
+                        DptEnd(&g_DwmPresentTrace, AckTrace, TRUE, 0);
+                    }
+                    if (gpuResult == DWM_GPU_COMPLETE)
                     {
                         g_lastFrameQpc = (ULONGLONG)statFrameStart.QuadPart;
-                        DwmStatCounter(&statPresentEnd);
                         /* On the GPU path these fields mean clear/context,
                          * window draw/upload, and swap/direct-flip.  Keeping
                          * the existing labels makes the serial format stable
@@ -3641,10 +3690,6 @@ DwmComposeLoop(HANDLE hStopEvent)
                                      (ULONGLONG)(statPresentEnd.QuadPart -
                                                  statComposeEnd.QuadPart),
                                      (ULONGLONG)((pr - pl) * (pb - pt)));
-                        AckTrace = DptBegin(&g_DwmPresentTrace, DPT_ACK);
-                        for (i = 0; i < hdr->Count; ++i)
-                            DwmDxAcknowledgeSurface(&wins[i]);
-                        DptEnd(&g_DwmPresentTrace, AckTrace, TRUE, 0);
                         DptEnd(&g_DwmPresentTrace, FrameTrace, TRUE, 0);
                         ++g_frameSeq;
                         if ((g_frameSeq & 255) == 0)
@@ -3656,6 +3701,14 @@ DwmComposeLoop(HANDLE hStopEvent)
                         continue;
                     }
                     DptEnd(&g_DwmPresentTrace, FrameTrace, FALSE, 0);
+                    if (gpuResult == DWM_GPU_DEFERRED)
+                    {
+                        gpuDeferred = TRUE;
+                        gpuLastOutputCheck = GetTickCount();
+                        forceFull = TRUE;
+                        DwmLog("DWM: GPU output occluded; retaining composition until it is available\n");
+                        continue;
+                    }
                     /* A failed GPU frame leaves no reusable CPU composition.
                      * Retire the context and rebuild the entire scene. */
                     DwmGpuComposeShutdown();
