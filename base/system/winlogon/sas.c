@@ -45,6 +45,7 @@ typedef struct tagLOGOFF_SHUTDOWN_DATA
 } LOGOFF_SHUTDOWN_DATA, *PLOGOFF_SHUTDOWN_DATA;
 
 static BOOL ExitReactOSInProgress = FALSE;
+static UINT ExitWindowsFlags = 0;
 
 LUID LuidNone = {0, 0};
 
@@ -778,7 +779,9 @@ LogoffShutdownThread(
     // uFlags = EWX_INTERNAL_KILL_USER_APPS | (LSData->Flags & EWX_FLAGS_MASK) |
              // ((LSData->Flags & EWX_ACTION_MASK) == EWX_LOGOFF ? EWX_CALLER_WINLOGON_LOGOFF : 0);
 
-    uFlags = EWX_CALLER_WINLOGON | (LSData->Flags & 0x0F);
+    uFlags = EWX_CALLER_WINLOGON |
+             (LSData->Flags & (EWX_SHUTDOWN | EWX_REBOOT | EWX_POWEROFF |
+                              EWX_FORCE | EWX_FORCEIFHUNG));
 
     TRACE("In LogoffShutdownThread with uFlags == 0x%x; exit_in_progress == %s\n",
         uFlags, ExitReactOSInProgress ? "TRUE" : "FALSE");
@@ -842,13 +845,13 @@ RunLogoffShutdownThread(
     }
     else // if (WLX_SHUTTINGDOWN(wlxAction))
     {
-        /* Because we are shutting down the OS, force processes termination too */
-        LSData->Flags = EWX_SHUTDOWN | EWX_FORCE;
+        LSData->Flags = EWX_SHUTDOWN;
         if (wlxAction == WLX_SAS_ACTION_SHUTDOWN_POWER_OFF)
             LSData->Flags |= EWX_POWEROFF;
         else if (wlxAction == WLX_SAS_ACTION_SHUTDOWN_REBOOT)
             LSData->Flags |= EWX_REBOOT;
     }
+    LSData->Flags |= ExitWindowsFlags & (EWX_FORCE | EWX_FORCEIFHUNG);
 
     LSData->Session = Session;
 
@@ -1187,14 +1190,27 @@ HandleShutdown(
     // SwitchDesktop(Session->WinlogonDesktop);
     DisplayStatusMessage(Session, Session->WinlogonDesktop, uMsgId);
 
-    /* Invoke Shutdown notifications and notify GINA */
-    CallNotificationDlls(Session, ShutdownHandler);
-    Session->Gina.Functions.WlxShutdown(Session->Gina.Context, wlxAction);
+    if (Session->LogonState != STATE_INIT)
+    {
+        /* The interactive user has already agreed to log off. */
+        CallNotificationDlls(Session, ShutdownHandler);
+        Session->Gina.Functions.WlxShutdown(Session->Gina.Context, wlxAction);
+    }
 
-    /* Run the shutdown thread. *IGNORE* all failures as we want to force shutting down! */
+    /* Setup and LiveCD shells also need a chance to save work or cancel. */
     Status = RunLogoffShutdownThread(Session, NULL, wlxAction);
     if (!NT_SUCCESS(Status))
+    {
         ERR("Failed to start the Shutdown thread, Status 0x%08lx\n", Status);
+        return Status;
+    }
+
+    if (Session->LogonState == STATE_INIT)
+    {
+        /* A setup shell has no separate user-logoff phase. */
+        CallNotificationDlls(Session, ShutdownHandler);
+        Session->Gina.Functions.WlxShutdown(Session->Gina.Context, wlxAction);
+    }
 
     /* Show again the shutdown message */
     // SwitchDesktop(Session->WinlogonDesktop); // Re-enable if you notice the desktop may have switched to something else.
@@ -1306,8 +1322,13 @@ DoGenericAction(
                 if (!NT_SUCCESS(HandleShutdown(Session, wlxAction)))
                 {
                     RemoveStatusMessage(Session);
-                    Session->LogonState = STATE_LOGGED_OFF;
-                    Session->Gina.Functions.WlxDisplaySASNotice(Session->Gina.Context);
+                    if (Session->LogonState == STATE_INIT)
+                        SwitchDesktop(Session->ApplicationDesktop);
+                    else
+                    {
+                        Session->LogonState = STATE_LOGGED_OFF;
+                        Session->Gina.Functions.WlxDisplaySASNotice(Session->Gina.Context);
+                    }
                 }
             }
             else
@@ -1700,6 +1721,7 @@ SASWindowProc(
                             wlxAction = WLX_SAS_ACTION_LOGOFF;
                         Action &= ~(EWX_LOGOFF | EWX_FORCE);
                     }
+                    Action &= ~EWX_FORCE;
                     if (Action)
                         ERR("Unhandled EWX_* action flags: 0x%x\n", Action);
 
@@ -1724,7 +1746,9 @@ SASWindowProc(
                     }
 #endif
                     /* Now do the shutdown action proper */
+                    ExitWindowsFlags = Flags & (EWX_FORCE | EWX_FORCEIFHUNG);
                     DoGenericAction(Session, wlxAction);
+                    ExitWindowsFlags = 0;
                     return 1;
                 }
                 case LN_LOGOFF_CANCELED:
