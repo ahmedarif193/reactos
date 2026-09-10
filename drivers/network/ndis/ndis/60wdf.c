@@ -271,6 +271,7 @@ NdisWdfRegisterMiniportDriver(
         MiniportDriverContext,
         Characteristics,
         CxDriver,
+        NULL,
         NdisMiniportDriverHandle);
 }
 

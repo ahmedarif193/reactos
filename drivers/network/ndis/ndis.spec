@@ -336,6 +336,8 @@
  @ stdcall NdisIfGetInterfaceIndexFromNetLuid(double ptr)
  @ stdcall NdisMRegisterMiniportDriver(ptr ptr ptr ptr ptr)
  @ stdcall NdisMDeregisterMiniportDriver(ptr)
+ @ cdecl NdisMRegisterWdiMiniportDriver(ptr ptr ptr ptr ptr ptr)
+ @ cdecl NdisMDeregisterWdiMiniportDriver(ptr)
  @ stdcall NdisMSetMiniportAttributes(ptr ptr)
  @ stdcall NdisWdfAsyncPowerReferenceCompleteNotification(ptr long)
  @ stdcall NdisWdfChangeSingleInstance(ptr ptr ptr)
