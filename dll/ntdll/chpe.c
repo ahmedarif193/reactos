@@ -1434,6 +1434,10 @@ ChpeInitializeProcess(VOID)
     if (ChpeProcessInitialized)
         return STATUS_SUCCESS;
 
+    Status = ChpeInitializeSyscallWrappers();
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     if (!ChpeEmulatorLoaded)
     {
         Status = ChpepLoadEmulator();

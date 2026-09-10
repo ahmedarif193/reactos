@@ -6,9 +6,9 @@
  * COPYRIGHT:       Copyright 2023 Alexandre Julliard
  * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  *
- * SVC_WRAP_ emits only the raw Zw* syscall stubs for the selected ARM64
- * services.  This file provides the corresponding Nt* entry points and
- * brackets address-space changes with CHPE emulator notifications.
+ * SVC_WRAP_ emits separate native Nt* and raw Zw* syscall stubs. CHPE
+ * processes redirect the Nt* entries to the wrappers in this file, which
+ * bracket address-space changes with emulator notifications.
  * Callback ordering and cross-process notifications are adapted from Wine's
  * dlls/ntdll/signal_arm64ec.c.
  */
@@ -93,14 +93,15 @@ ChpepSendCrossProcessNotification(PCHPE_CROSS_PROCESS_CONNECTION Connection,
 /*
  * @implemented
  */
+static
 NTSTATUS
 NTAPI
-NtAllocateVirtualMemory(HANDLE ProcessHandle,
-                        PVOID *BaseAddress,
-                        ULONG_PTR ZeroBits,
-                        PSIZE_T RegionSize,
-                        ULONG AllocationType,
-                        ULONG Protect)
+ChpepNtAllocateVirtualMemory(HANDLE ProcessHandle,
+                             PVOID *BaseAddress,
+                             ULONG_PTR ZeroBits,
+                             PSIZE_T RegionSize,
+                             ULONG AllocationType,
+                             ULONG Protect)
 {
     CHPE_CROSS_PROCESS_CONNECTION Connection = {0};
     PVOID CallbackToken;
@@ -138,15 +139,16 @@ NtAllocateVirtualMemory(HANDLE ProcessHandle,
 /*
  * @implemented
  */
+static
 NTSTATUS
 NTAPI
-NtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
-                          PVOID *BaseAddress,
-                          PSIZE_T RegionSize,
-                          ULONG AllocationType,
-                          ULONG Protect,
-                          PMEM_EXTENDED_PARAMETER ExtendedParameters,
-                          ULONG ExtendedParameterCount)
+ChpepNtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
+                               PVOID *BaseAddress,
+                               PSIZE_T RegionSize,
+                               ULONG AllocationType,
+                               ULONG Protect,
+                               PMEM_EXTENDED_PARAMETER ExtendedParameters,
+                               ULONG ExtendedParameterCount)
 {
     CHPE_CROSS_PROCESS_CONNECTION Connection = {0};
     PVOID CallbackToken;
@@ -196,12 +198,13 @@ NtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
 /*
  * @implemented
  */
+static
 NTSTATUS
 NTAPI
-NtFreeVirtualMemory(HANDLE ProcessHandle,
-                    PVOID *BaseAddress,
-                    PSIZE_T RegionSize,
-                    ULONG FreeType)
+ChpepNtFreeVirtualMemory(HANDLE ProcessHandle,
+                         PVOID *BaseAddress,
+                         PSIZE_T RegionSize,
+                         ULONG FreeType)
 {
     CHPE_CROSS_PROCESS_CONNECTION Connection = {0};
     PVOID CallbackToken;
@@ -236,13 +239,14 @@ NtFreeVirtualMemory(HANDLE ProcessHandle,
 /*
  * @implemented
  */
+static
 NTSTATUS
 NTAPI
-NtProtectVirtualMemory(HANDLE ProcessHandle,
-                       PVOID *BaseAddress,
-                       PSIZE_T RegionSize,
-                       ULONG NewProtect,
-                       PULONG OldProtect)
+ChpepNtProtectVirtualMemory(HANDLE ProcessHandle,
+                            PVOID *BaseAddress,
+                            PSIZE_T RegionSize,
+                            ULONG NewProtect,
+                            PULONG OldProtect)
 {
     CHPE_CROSS_PROCESS_CONNECTION Connection = {0};
     PVOID CallbackToken;
@@ -277,18 +281,19 @@ NtProtectVirtualMemory(HANDLE ProcessHandle,
 /*
  * @implemented
  */
+static
 NTSTATUS
 NTAPI
-NtMapViewOfSection(HANDLE SectionHandle,
-                   HANDLE ProcessHandle,
-                   PVOID *BaseAddress,
-                   ULONG_PTR ZeroBits,
-                   SIZE_T CommitSize,
-                   PLARGE_INTEGER SectionOffset,
-                   PSIZE_T ViewSize,
-                   SECTION_INHERIT InheritDisposition,
-                   ULONG AllocationType,
-                   ULONG Protect)
+ChpepNtMapViewOfSection(HANDLE SectionHandle,
+                        HANDLE ProcessHandle,
+                        PVOID *BaseAddress,
+                        ULONG_PTR ZeroBits,
+                        SIZE_T CommitSize,
+                        PLARGE_INTEGER SectionOffset,
+                        PSIZE_T ViewSize,
+                        SECTION_INHERIT InheritDisposition,
+                        ULONG AllocationType,
+                        ULONG Protect)
 {
     PVOID CallbackToken;
     NTSTATUS Status;
@@ -320,9 +325,10 @@ NtMapViewOfSection(HANDLE SectionHandle,
 /*
  * @implemented
  */
+static
 NTSTATUS
 NTAPI
-NtUnmapViewOfSection(HANDLE ProcessHandle, PVOID BaseAddress)
+ChpepNtUnmapViewOfSection(HANDLE ProcessHandle, PVOID BaseAddress)
 {
     PVOID CallbackToken;
     NTSTATUS Status;
@@ -344,11 +350,12 @@ NtUnmapViewOfSection(HANDLE ProcessHandle, PVOID BaseAddress)
 /*
  * @implemented
  */
+static
 NTSTATUS
 NTAPI
-NtFlushInstructionCache(HANDLE ProcessHandle,
-                        PVOID BaseAddress,
-                        SIZE_T NumberOfBytesToFlush)
+ChpepNtFlushInstructionCache(HANDLE ProcessHandle,
+                             PVOID BaseAddress,
+                             SIZE_T NumberOfBytesToFlush)
 {
     CHPE_CROSS_PROCESS_CONNECTION Connection = {0};
     PVOID CallbackToken;
@@ -377,17 +384,18 @@ NtFlushInstructionCache(HANDLE ProcessHandle,
     return Status;
 }
 
+static
 NTSTATUS
 NTAPI
-NtReadFile(HANDLE FileHandle,
-           HANDLE Event,
-           PIO_APC_ROUTINE ApcRoutine,
-           PVOID ApcContext,
-           PIO_STATUS_BLOCK IoStatusBlock,
-           PVOID Buffer,
-           ULONG Length,
-           PLARGE_INTEGER ByteOffset,
-           PULONG Key)
+ChpepNtReadFile(HANDLE FileHandle,
+                HANDLE Event,
+                PIO_APC_ROUTINE ApcRoutine,
+                PVOID ApcContext,
+                PIO_STATUS_BLOCK IoStatusBlock,
+                PVOID Buffer,
+                ULONG Length,
+                PLARGE_INTEGER ByteOffset,
+                PULONG Key)
 {
     PVOID CallbackToken;
     NTSTATUS Status;
@@ -403,12 +411,13 @@ NtReadFile(HANDLE FileHandle,
     return Status;
 }
 
+static
 NTSTATUS
 NTAPI
-NtQuerySystemInformation(SYSTEM_INFORMATION_CLASS SystemInformationClass,
-                         PVOID SystemInformation,
-                         ULONG SystemInformationLength,
-                         PULONG ReturnLength)
+ChpepNtQuerySystemInformation(SYSTEM_INFORMATION_CLASS SystemInformationClass,
+                              PVOID SystemInformation,
+                              ULONG SystemInformationLength,
+                              PULONG ReturnLength)
 {
     NTSTATUS Status;
 
@@ -419,9 +428,10 @@ NtQuerySystemInformation(SYSTEM_INFORMATION_CLASS SystemInformationClass,
     return Status;
 }
 
+static
 NTSTATUS
 NTAPI
-NtTerminateProcess(HANDLE ProcessHandle, NTSTATUS ExitStatus)
+ChpepNtTerminateProcess(HANDLE ProcessHandle, NTSTATUS ExitStatus)
 {
     PVOID CallbackToken;
     NTSTATUS Status;
@@ -440,9 +450,10 @@ NtTerminateProcess(HANDLE ProcessHandle, NTSTATUS ExitStatus)
     return Status;
 }
 
+static
 NTSTATUS
 NTAPI
-NtTerminateThread(HANDLE ThreadHandle, NTSTATUS ExitStatus)
+ChpepNtTerminateThread(HANDLE ThreadHandle, NTSTATUS ExitStatus)
 {
     PVOID CallbackToken;
     NTSTATUS Status;
@@ -459,6 +470,65 @@ NtTerminateThread(HANDLE ThreadHandle, NTSTATUS ExitStatus)
 
     ChpeLeaveEmulatorCallback(CallbackToken);
     return Status;
+}
+
+/*
+ * Keep native NTDLL service entries interceptable in a suspended ARM64 child.
+ * A CHPE process installs its notification wrappers before loading the emulator;
+ * separate Zw entries remain unpatched for the wrappers and FEX's direct calls.
+ */
+NTSTATUS
+NTAPI
+ChpeInitializeSyscallWrappers(VOID)
+{
+    static const struct
+    {
+        PVOID Entry;
+        PVOID Wrapper;
+    } Wrappers[] = {
+        {(PVOID)NtAllocateVirtualMemory, (PVOID)ChpepNtAllocateVirtualMemory},
+        {(PVOID)NtAllocateVirtualMemoryEx, (PVOID)ChpepNtAllocateVirtualMemoryEx},
+        {(PVOID)NtFreeVirtualMemory, (PVOID)ChpepNtFreeVirtualMemory},
+        {(PVOID)NtProtectVirtualMemory, (PVOID)ChpepNtProtectVirtualMemory},
+        {(PVOID)NtMapViewOfSection, (PVOID)ChpepNtMapViewOfSection},
+        {(PVOID)NtUnmapViewOfSection, (PVOID)ChpepNtUnmapViewOfSection},
+        {(PVOID)NtFlushInstructionCache, (PVOID)ChpepNtFlushInstructionCache},
+        {(PVOID)NtReadFile, (PVOID)ChpepNtReadFile},
+        {(PVOID)NtQuerySystemInformation, (PVOID)ChpepNtQuerySystemInformation},
+        {(PVOID)NtTerminateProcess, (PVOID)ChpepNtTerminateProcess},
+        {(PVOID)NtTerminateThread, (PVOID)ChpepNtTerminateThread},
+    };
+    struct
+    {
+        ULONG LoadTarget;
+        ULONG BranchTarget;
+        ULONG_PTR Target;
+    } Patch = {0x58000050, 0xD61F0200, 0}; /* ldr x16, +8; br x16; address */
+    PVOID Base;
+    SIZE_T Size;
+    ULONG Index, OldProtect, IgnoredProtect;
+    NTSTATUS Status, FlushStatus;
+
+    C_ASSERT(sizeof(Patch) == 16);
+    for (Index = 0; Index < RTL_NUMBER_OF(Wrappers); ++Index)
+    {
+        Base = Wrappers[Index].Entry;
+        Size = sizeof(Patch);
+        Status = ZwProtectVirtualMemory(NtCurrentProcess(), &Base, &Size, PAGE_EXECUTE_READWRITE, &OldProtect);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        Patch.Target = (ULONG_PTR)Wrappers[Index].Wrapper;
+        RtlCopyMemory(Wrappers[Index].Entry, &Patch, sizeof(Patch));
+        FlushStatus = ZwFlushInstructionCache(NtCurrentProcess(), Wrappers[Index].Entry, sizeof(Patch));
+        Status = ZwProtectVirtualMemory(NtCurrentProcess(), &Base, &Size, OldProtect, &IgnoredProtect);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        if (!NT_SUCCESS(FlushStatus))
+            return FlushStatus;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 #endif /* _M_ARM64 */

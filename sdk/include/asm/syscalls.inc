@@ -238,24 +238,31 @@ Zw\Name:
     .endm
 
     .macro STUB_WRAP Name, ArgCount
-    .align 2
+    .align 4
+    .global Nt\Name
+Nt\Name:
+    svc #SyscallId
+    ret
+    .quad 0
+    /* Keep the raw service callable after CHPE patches the Nt entry. */
     .global Zw\Name
 Zw\Name:
-    mov x8, #SyscallId
-    svc #0
+    svc #SyscallId
     ret
+    .quad 0
     .set SyscallId, SyscallId + 1
     .endm
 
     .macro STUB_U Name, ArgCount
-    .align 2
+    .align 4
     .global Nt\Name
     .global Zw\Name
 Nt\Name:
 Zw\Name:
-    mov x8, #SyscallId
-    svc #0
+    /* Native ARM64 service veneers occupy one patchable 16-byte slot. */
+    svc #SyscallId
     ret
+    .quad 0
     .set SyscallId, SyscallId + 1
     .endm
 

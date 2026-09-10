@@ -37,9 +37,9 @@ typedef unsigned long long ARM64EC_SYSCALL_ARGUMENT;
 #define ARM64EC_SYSCALL_ARGS_16 ARM64EC_SYSCALL_ARGS_15, ARM64EC_SYSCALL_ARGUMENT Argument16
 
 #define ARM64EC_DECLARE_SYSCALL(Name, ArgCount, ServiceId) \
-    __attribute__((naked)) ARM64EC_SYSCALL_ARGUMENT Nt##Name(ARM64EC_SYSCALL_ARGS_##ArgCount) \
+    __attribute__((naked, aligned(16))) ARM64EC_SYSCALL_ARGUMENT Nt##Name(ARM64EC_SYSCALL_ARGS_##ArgCount) \
     { \
-        __asm__ volatile("mov x8, %0\nsvc #0\nret" : : "i" (ServiceId)); \
+        __asm__ volatile("svc %0\nret\n.quad 0" : : "i" (ServiceId)); \
     } \
     extern __typeof(Nt##Name) Zw##Name __attribute__((alias("Nt" #Name)));
 
