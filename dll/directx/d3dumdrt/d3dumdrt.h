@@ -7,6 +7,10 @@
 
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Build the callback table a user-mode display driver receives at
  * pfnCreateDevice.  hAdapter and hDevice are the caller's own D3DKMT handles;
@@ -25,6 +29,19 @@ D3DUmdRtCreateDeviceCallbacks(
     D3DDDI_DEVICECALLBACKS *pCallbacks,
     HANDLE *phRuntimeDevice);
 
+/* The front end selects the allocation-info layout negotiated with its UMD.
+ * The original entry point retains version 1 for legacy callers. */
+#define D3DUMDRT_ALLOCATION_INFO_VERSION_1 1u
+#define D3DUMDRT_ALLOCATION_INFO_VERSION_2 2u
+
+HRESULT WINAPI
+D3DUmdRtCreateDeviceCallbacksEx(
+    D3DKMT_HANDLE hAdapter,
+    D3DKMT_HANDLE hDevice,
+    UINT AllocationInfoVersion,
+    D3DDDI_DEVICECALLBACKS *pCallbacks,
+    HANDLE *phRuntimeDevice);
+
 /*
  * Release the runtime device.  Refuses with E_FAIL while resources, contexts,
  * synchronization objects, or paging queues created through the table are
@@ -33,5 +50,39 @@ D3DUmdRtCreateDeviceCallbacks(
  */
 HRESULT WINAPI
 D3DUmdRtDestroyDeviceCallbacks(HANDLE hRuntimeDevice);
+
+/* Register runtime-owned sharing policy and a copied descriptor before the
+ * UMD creates its resource. Driver-private data remains owned by the UMD. */
+HRESULT WINAPI
+D3DUmdRtRegisterResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
+                        D3DKMT_CREATEALLOCATIONFLAGS Flags,
+                        CONST VOID *RuntimeData, UINT RuntimeDataSize);
+
+/* Either output may be NULL. An unshared resource has a zero global handle. */
+HRESULT WINAPI
+D3DUmdRtGetResourceHandles(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
+                          D3DKMT_HANDLE *KernelResource, D3DKMT_HANDLE *GlobalShare);
+
+/* Transfers an opened kernel resource to this runtime only on success. The
+ * runtime handle must not already be registered. */
+HRESULT WINAPI
+D3DUmdRtAdoptResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
+                     D3DKMT_HANDLE KernelResource, D3DKMT_HANDLE GlobalShare);
+
+/* Call after UMD destruction or failed creation. This closes any remaining
+ * kernel resource and releases registration, including copied metadata. */
+HRESULT WINAPI
+D3DUmdRtReleaseResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource);
+
+/* Rotate 2..16 registered resource identities after the same successful UMD
+ * rotation. The caller serializes resource destruction and both rotations.
+ * Object keys stay fixed; slot zero receives slot one's backing. */
+HRESULT WINAPI
+D3DUmdRtRotateResourceIdentities(HANDLE hRuntimeDevice, CONST HANDLE *RuntimeResources,
+                                UINT Count);
+
+#ifdef __cplusplus
+}
+#endif
 
 /* EOF */

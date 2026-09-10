@@ -41,6 +41,12 @@ typedef struct _D3DUMDRT_RESOURCE
 {
     HANDLE hRuntimeResource;
     D3DKMT_HANDLE hKMResource;
+    D3DKMT_HANDLE hGlobalShare;
+    D3DKMT_CREATEALLOCATIONFLAGS CreateFlags;
+    VOID *PrivateRuntimeData;
+    UINT PrivateRuntimeDataSize;
+    BOOL Registered;
+    BOOL Allocating;
     BOOL Destroying;
     struct _D3DUMDRT_RESOURCE *Next;
 } D3DUMDRT_RESOURCE, *PD3DUMDRT_RESOURCE;
@@ -84,6 +90,7 @@ typedef struct _D3DUMDRT_DEVICE
     ULONG                    Magic;
     D3DKMT_HANDLE            hAdapter;
     D3DKMT_HANDLE            hDevice;
+    UINT                     AllocationInfoVersion;
     /*
      * Objects this device handed the driver and has not been given back.
      * Teardown is ordered -- contexts and paging queues before the device that
@@ -117,6 +124,7 @@ static BOOL D3DUmdRtDeviceLockReady;
 
 /* Resolved once; every callback goes through these. */
 static PFND3DKMT_CREATEALLOCATION  pfnCreateAllocation;
+static PFND3DKMT_CREATEALLOCATION2 pfnCreateAllocation2;
 static PFND3DKMT_DESTROYALLOCATION pfnDestroyAllocation;
 static PFND3DKMT_LOCK              pfnLock;
 static PFND3DKMT_UNLOCK            pfnUnlock;
@@ -185,6 +193,7 @@ static BOOL D3DUmdRtResolveProcs(VOID)
     pfn##Lower = (PFND3DKMT_##Upper)(PVOID)GetProcAddress(Gdi32, "D3DKMT" #Lower)
 
     RESOLVE(CreateAllocation, CREATEALLOCATION);
+    RESOLVE(CreateAllocation2, CREATEALLOCATION2);
     RESOLVE(DestroyAllocation, DESTROYALLOCATION);
     RESOLVE(Lock, LOCK);
     RESOLVE(Unlock, UNLOCK);
@@ -458,6 +467,251 @@ static HRESULT D3DUmdRtStatusToHresult(NTSTATUS Status)
  * Allocation
  * ------------------------------------------------------------------------ */
 
+/* D3DUmdRtDeviceLock must be held. */
+static PD3DUMDRT_RESOURCE
+D3DUmdRtResourceLocked(PD3DUMDRT_DEVICE Device, HANDLE RuntimeResource)
+{
+    PD3DUMDRT_RESOURCE Resource;
+    for (Resource = Device->Resources; Resource != NULL; Resource = Resource->Next)
+        if (Resource->hRuntimeResource == RuntimeResource)
+            return Resource;
+    return NULL;
+}
+
+/* D3DUmdRtDeviceLock must be held. */
+static VOID
+D3DUmdRtUnlinkResourceLocked(PD3DUMDRT_DEVICE Device, PD3DUMDRT_RESOURCE Resource)
+{
+    PD3DUMDRT_RESOURCE *Link;
+    for (Link = &Device->Resources; *Link != NULL; Link = &(*Link)->Next)
+    {
+        if (*Link == Resource)
+        {
+            *Link = Resource->Next;
+            InterlockedDecrement(&Device->LiveObjectCount);
+            return;
+        }
+    }
+}
+
+static VOID
+D3DUmdRtFreeResource(PD3DUMDRT_RESOURCE Resource)
+{
+    if (Resource->PrivateRuntimeData != NULL)
+        HeapFree(GetProcessHeap(), 0, Resource->PrivateRuntimeData);
+    HeapFree(GetProcessHeap(), 0, Resource);
+}
+
+HRESULT WINAPI
+D3DUmdRtRegisterResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
+                        D3DKMT_CREATEALLOCATIONFLAGS Flags,
+                        CONST VOID *RuntimeData, UINT RuntimeDataSize)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hRuntimeDevice);
+    PD3DUMDRT_RESOURCE Resource;
+    BOOL Captured = TRUE;
+
+    if (Device == NULL || hRuntimeResource == NULL ||
+        (RuntimeDataSize != 0 && RuntimeData == NULL))
+        return E_INVALIDARG;
+    Resource = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Resource));
+    if (Resource == NULL)
+        return E_OUTOFMEMORY;
+    if (RuntimeDataSize != 0)
+    {
+        Resource->PrivateRuntimeData = HeapAlloc(GetProcessHeap(), 0, RuntimeDataSize);
+        if (Resource->PrivateRuntimeData == NULL)
+        {
+            D3DUmdRtFreeResource(Resource);
+            return E_OUTOFMEMORY;
+        }
+        _SEH2_TRY
+        {
+            CopyMemory(Resource->PrivateRuntimeData, RuntimeData, RuntimeDataSize);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Captured = FALSE;
+        }
+        _SEH2_END;
+        if (!Captured)
+        {
+            D3DUmdRtFreeResource(Resource);
+            return E_INVALIDARG;
+        }
+    }
+    Resource->hRuntimeResource = hRuntimeResource;
+    Resource->CreateFlags = Flags;
+    Resource->CreateFlags.CreateResource = 1;
+    Resource->PrivateRuntimeDataSize = RuntimeDataSize;
+    Resource->Registered = TRUE;
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    if (D3DUmdRtResourceLocked(Device, hRuntimeResource) != NULL)
+    {
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        D3DUmdRtFreeResource(Resource);
+        return E_INVALIDARG;
+    }
+    Resource->Next = Device->Resources;
+    Device->Resources = Resource;
+    InterlockedIncrement(&Device->LiveObjectCount);
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+    return S_OK;
+}
+
+HRESULT WINAPI
+D3DUmdRtGetResourceHandles(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
+                          D3DKMT_HANDLE *KernelResource, D3DKMT_HANDLE *GlobalShare)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hRuntimeDevice);
+    PD3DUMDRT_RESOURCE Resource;
+    HRESULT Result = E_INVALIDARG;
+
+    if (KernelResource != NULL) *KernelResource = 0;
+    if (GlobalShare != NULL) *GlobalShare = 0;
+    if (Device == NULL || (KernelResource == NULL && GlobalShare == NULL))
+        return E_INVALIDARG;
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    Resource = D3DUmdRtResourceLocked(Device, hRuntimeResource);
+    if (Resource != NULL && !Resource->Allocating && !Resource->Destroying && Resource->hKMResource != 0)
+    {
+        if (KernelResource != NULL) *KernelResource = Resource->hKMResource;
+        if (GlobalShare != NULL) *GlobalShare = Resource->hGlobalShare;
+        Result = S_OK;
+    }
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+    return Result;
+}
+
+HRESULT WINAPI
+D3DUmdRtAdoptResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
+                     D3DKMT_HANDLE KernelResource, D3DKMT_HANDLE GlobalShare)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hRuntimeDevice);
+    PD3DUMDRT_RESOURCE Resource;
+
+    if (Device == NULL || hRuntimeResource == NULL || KernelResource == 0)
+        return E_INVALIDARG;
+    Resource = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Resource));
+    if (Resource == NULL)
+        return E_OUTOFMEMORY;
+    Resource->hRuntimeResource = hRuntimeResource;
+    Resource->hKMResource = KernelResource;
+    Resource->hGlobalShare = GlobalShare;
+    Resource->Registered = TRUE;
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    if (D3DUmdRtResourceLocked(Device, hRuntimeResource) != NULL)
+    {
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        D3DUmdRtFreeResource(Resource);
+        return E_INVALIDARG;
+    }
+    Resource->Next = Device->Resources;
+    Device->Resources = Resource;
+    InterlockedIncrement(&Device->LiveObjectCount);
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+    return S_OK;
+}
+
+HRESULT WINAPI
+D3DUmdRtReleaseResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hRuntimeDevice);
+    PD3DUMDRT_RESOURCE Resource;
+    D3DKMT_DESTROYALLOCATION Destroy;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (Device == NULL || pfnDestroyAllocation == NULL)
+        return E_INVALIDARG;
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    Resource = D3DUmdRtResourceLocked(Device, hRuntimeResource);
+    if (Resource == NULL || Resource->Allocating || Resource->Destroying)
+    {
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        return E_INVALIDARG;
+    }
+    Resource->Destroying = TRUE;
+    ZeroMemory(&Destroy, sizeof(Destroy));
+    Destroy.hDevice = Device->hDevice;
+    Destroy.hResource = Resource->hKMResource;
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+    if (Destroy.hResource != 0)
+        Status = pfnDestroyAllocation(&Destroy);
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    if (Status >= 0)
+        D3DUmdRtUnlinkResourceLocked(Device, Resource);
+    else
+        Resource->Destroying = FALSE;
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+    if (Status >= 0)
+        D3DUmdRtFreeResource(Resource);
+    return D3DUmdRtStatusToHresult(Status);
+}
+
+static VOID
+D3DUmdRtCopyResourceIdentity(PD3DUMDRT_RESOURCE Destination,
+                            CONST D3DUMDRT_RESOURCE *Source)
+{
+    Destination->hKMResource = Source->hKMResource;
+    Destination->hGlobalShare = Source->hGlobalShare;
+    Destination->CreateFlags = Source->CreateFlags;
+    Destination->PrivateRuntimeData = Source->PrivateRuntimeData;
+    Destination->PrivateRuntimeDataSize = Source->PrivateRuntimeDataSize;
+}
+
+HRESULT WINAPI
+D3DUmdRtRotateResourceIdentities(HANDLE hRuntimeDevice, CONST HANDLE *RuntimeResources,
+                                UINT Count)
+{
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hRuntimeDevice);
+    PD3DUMDRT_RESOURCE Resources[16];
+    HANDLE Handles[16];
+    D3DUMDRT_RESOURCE First;
+    UINT Index, Previous;
+    BOOL Captured = TRUE;
+
+    /* DXGI flip chains have at most 16 buffers. No heap allocation is allowed
+     * here: the UMD has already completed the corresponding rotation. */
+    if (Device == NULL || RuntimeResources == NULL || Count < 2 || Count > ARRAYSIZE(Resources))
+        return E_INVALIDARG;
+    _SEH2_TRY
+    {
+        CopyMemory(Handles, RuntimeResources, Count * sizeof(*Handles));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Captured = FALSE;
+    }
+    _SEH2_END;
+    if (!Captured)
+        return E_INVALIDARG;
+
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    for (Index = 0; Index < Count; ++Index)
+    {
+        Resources[Index] = D3DUmdRtResourceLocked(Device, Handles[Index]);
+        if (Resources[Index] == NULL || !Resources[Index]->Registered ||
+            Resources[Index]->Allocating || Resources[Index]->Destroying)
+            break;
+        for (Previous = 0; Previous < Index; ++Previous)
+            if (Resources[Previous] == Resources[Index])
+                break;
+        if (Previous != Index)
+            break;
+    }
+    if (Index != Count)
+    {
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        return E_INVALIDARG;
+    }
+    First = *Resources[0];
+    for (Index = 0; Index + 1 < Count; ++Index)
+        D3DUmdRtCopyResourceIdentity(Resources[Index], Resources[Index + 1]);
+    D3DUmdRtCopyResourceIdentity(Resources[Count - 1], &First);
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+    return S_OK;
+}
+
 static HRESULT APIENTRY D3DUmdRtAllocateCb(HANDLE hDevice, D3DDDICB_ALLOCATE *pData)
 {
     PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
@@ -466,62 +720,74 @@ static HRESULT APIENTRY D3DUmdRtAllocateCb(HANDLE hDevice, D3DDDICB_ALLOCATE *pD
     D3DKMT_CREATEALLOCATION Create;
     D3DKMT_DESTROYALLOCATION Destroy;
     NTSTATUS Status;
-    BOOL CreatesResource;
+    BOOL CreatesResource = FALSE;
+    BOOL NewResource = FALSE;
 
-    if (Device == NULL || pData == NULL || pfnCreateAllocation == NULL)
+    if (Device == NULL || pData == NULL)
         return E_INVALIDARG;
     if (pData->NumAllocations == 0 || pData->pAllocationInfo == NULL)
         return E_INVALIDARG;
 
-    CreatesResource =
-        pData->hResource != NULL && pData->hKMResource == 0;
-    if (CreatesResource)
+    ZeroMemory(&Create, sizeof(Create));
+    if (pData->hResource != NULL)
     {
-        Resource = (PD3DUMDRT_RESOURCE)HeapAlloc(
+        Existing = (PD3DUMDRT_RESOURCE)HeapAlloc(
                        GetProcessHeap(),
                        HEAP_ZERO_MEMORY,
-                       sizeof(*Resource));
-        if (Resource == NULL)
+                       sizeof(*Existing));
+        if (Existing == NULL)
             return E_OUTOFMEMORY;
 
         EnterCriticalSection(&D3DUmdRtDeviceLock);
-        for (Existing = Device->Resources;
-             Existing != NULL;
-             Existing = Existing->Next)
+        Resource = D3DUmdRtResourceLocked(Device, pData->hResource);
+        if (Resource != NULL && (Resource->Allocating || Resource->Destroying))
         {
-            if (Existing->hRuntimeResource == pData->hResource)
-                break;
+            LeaveCriticalSection(&D3DUmdRtDeviceLock);
+            HeapFree(GetProcessHeap(), 0, Existing);
+            return E_INVALIDARG;
+        }
+        if (Resource == NULL)
+        {
+            Resource = Existing;
+            Existing = NULL;
+            Resource->hRuntimeResource = pData->hResource;
+            Resource->Next = Device->Resources;
+            Device->Resources = Resource;
+            InterlockedIncrement(&Device->LiveObjectCount);
+            NewResource = TRUE;
+        }
+        Resource->Allocating = TRUE;
+        /* hKMResource in the callback is output-only. Resolve both the first
+         * allocation and subsequent appends from the opaque runtime handle. */
+        Create.hResource = Resource->hKMResource;
+        CreatesResource = Create.hResource == 0;
+        if (CreatesResource && Resource->Registered)
+        {
+            Create.Flags = Resource->CreateFlags;
+            Create.pPrivateRuntimeData = Resource->PrivateRuntimeData;
+            Create.PrivateRuntimeDataSize = Resource->PrivateRuntimeDataSize;
         }
         LeaveCriticalSection(&D3DUmdRtDeviceLock);
         if (Existing != NULL)
-        {
-            HeapFree(GetProcessHeap(), 0, Resource);
-            return E_INVALIDARG;
-        }
+            HeapFree(GetProcessHeap(), 0, Existing);
     }
 
-    ZeroMemory(&Create, sizeof(Create));
     Create.hDevice = Device->hDevice;
-    /* A zero hKMResource creates a new kernel resource for the runtime's
-     * opaque handle; a nonzero value appends allocations to that resource. */
-    Create.hResource = pData->hKMResource;
     Create.pPrivateDriverData = (VOID *)pData->pPrivateDriverData;
     Create.PrivateDriverDataSize = pData->PrivateDriverDataSize;
     Create.NumAllocations = pData->NumAllocations;
-    Create.pAllocationInfo = pData->pAllocationInfo;
+    if (Device->AllocationInfoVersion == D3DUMDRT_ALLOCATION_INFO_VERSION_2)
+        Create.pAllocationInfo2 = pData->pAllocationInfo2;
+    else
+        Create.pAllocationInfo = pData->pAllocationInfo;
     Create.Flags.CreateResource = CreatesResource ? 1 : 0;
     Create.hPrivateRuntimeResourceHandle = pData->hResource;
-
-    Status = pfnCreateAllocation(&Create);
+    Status = Device->AllocationInfoVersion == D3DUMDRT_ALLOCATION_INFO_VERSION_2 ?
+        pfnCreateAllocation2(&Create) : pfnCreateAllocation(&Create);
     if (Status < 0)
-    {
-        if (Resource != NULL)
-            HeapFree(GetProcessHeap(), 0, Resource);
-        return D3DUmdRtStatusToHresult(Status);
-    }
+        goto Failed;
 
-    pData->hKMResource = Create.hResource;
-    if (CreatesResource)
+    if (Resource != NULL)
     {
         if (Create.hResource == 0)
         {
@@ -530,6 +796,8 @@ static HRESULT APIENTRY D3DUmdRtAllocateCb(HANDLE hDevice, D3DDDICB_ALLOCATE *pD
             for (Index = 0; Index < pData->NumAllocations; ++Index)
             {
                 D3DKMT_HANDLE Allocation =
+                    Device->AllocationInfoVersion == D3DUMDRT_ALLOCATION_INFO_VERSION_2 ?
+                    pData->pAllocationInfo2[Index].hAllocation :
                     pData->pAllocationInfo[Index].hAllocation;
 
                 if (Allocation == 0)
@@ -540,28 +808,41 @@ static HRESULT APIENTRY D3DUmdRtAllocateCb(HANDLE hDevice, D3DDDICB_ALLOCATE *pD
                 Destroy.AllocationCount = 1;
                 (VOID)pfnDestroyAllocation(&Destroy);
             }
-            HeapFree(GetProcessHeap(), 0, Resource);
-            return E_FAIL;
+            Status = STATUS_UNSUCCESSFUL;
+            goto Failed;
         }
 
-        Resource->hRuntimeResource = pData->hResource;
-        Resource->hKMResource = Create.hResource;
         EnterCriticalSection(&D3DUmdRtDeviceLock);
-        Resource->Next = Device->Resources;
-        Device->Resources = Resource;
-        InterlockedIncrement(&Device->LiveObjectCount);
+        Resource->hKMResource = Create.hResource;
+        if (CreatesResource)
+            Resource->hGlobalShare = Create.hGlobalShare;
+        Resource->Allocating = FALSE;
         LeaveCriticalSection(&D3DUmdRtDeviceLock);
     }
+    pData->hKMResource = Create.hResource;
     return S_OK;
+
+Failed:
+    if (Resource != NULL)
+    {
+        EnterCriticalSection(&D3DUmdRtDeviceLock);
+        Resource->Allocating = FALSE;
+        if (NewResource)
+            D3DUmdRtUnlinkResourceLocked(Device, Resource);
+        LeaveCriticalSection(&D3DUmdRtDeviceLock);
+        if (NewResource)
+            D3DUmdRtFreeResource(Resource);
+    }
+    return D3DUmdRtStatusToHresult(Status);
 }
 
 static HRESULT APIENTRY D3DUmdRtDeallocateCb(HANDLE hDevice, CONST D3DDDICB_DEALLOCATE *pData)
 {
     PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
     PD3DUMDRT_RESOURCE Resource = NULL;
-    PD3DUMDRT_RESOURCE *Link;
     D3DKMT_DESTROYALLOCATION Destroy;
     NTSTATUS Status;
+    BOOL FreeResource = FALSE;
 
     if (Device == NULL || pData == NULL || pfnDestroyAllocation == NULL)
         return E_INVALIDARG;
@@ -583,7 +864,7 @@ static HRESULT APIENTRY D3DUmdRtDeallocateCb(HANDLE hDevice, CONST D3DDDICB_DEAL
             if (Resource->hRuntimeResource == pData->hResource)
                 break;
         }
-        if (Resource == NULL || Resource->Destroying)
+        if (Resource == NULL || Resource->Allocating || Resource->Destroying || Resource->hKMResource == 0)
         {
             LeaveCriticalSection(&D3DUmdRtDeviceLock);
             return E_INVALIDARG;
@@ -604,25 +885,25 @@ static HRESULT APIENTRY D3DUmdRtDeallocateCb(HANDLE hDevice, CONST D3DDDICB_DEAL
         EnterCriticalSection(&D3DUmdRtDeviceLock);
         if (Status >= 0)
         {
-            for (Link = &Device->Resources;
-                 *Link != NULL;
-                 Link = &(*Link)->Next)
+            if (Resource->Registered)
             {
-                if (*Link == Resource)
-                {
-                    *Link = Resource->Next;
-                    break;
-                }
+                Resource->hKMResource = 0;
+                Resource->hGlobalShare = 0;
+                Resource->Destroying = FALSE;
             }
-            InterlockedDecrement(&Device->LiveObjectCount);
+            else
+            {
+                D3DUmdRtUnlinkResourceLocked(Device, Resource);
+                FreeResource = TRUE;
+            }
         }
         else
         {
             Resource->Destroying = FALSE;
         }
         LeaveCriticalSection(&D3DUmdRtDeviceLock);
-        if (Status >= 0)
-            HeapFree(GetProcessHeap(), 0, Resource);
+        if (FreeResource)
+            D3DUmdRtFreeResource(Resource);
     }
     return D3DUmdRtStatusToHresult(Status);
 }
@@ -2112,12 +2393,15 @@ static HRESULT APIENTRY D3DUmdRtDeallocate2Cb(HANDLE hDevice, CONST D3DDDICB_DEA
 {
     PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
     PD3DUMDRT_RESOURCE Resource = NULL;
-    PD3DUMDRT_RESOURCE *Link;
     D3DKMT_DESTROYALLOCATION2 Destroy;
     NTSTATUS Status;
+    BOOL FreeResource = FALSE;
 
     if (Device == NULL || pData == NULL || pfnDestroyAllocation2 == NULL)
         return E_INVALIDARG;
+    /* Either a resource or a handle list, never neither: with both empty there
+     * is nothing named to free, and succeeding would tell the driver its memory
+     * was released when it was not. */
     if (pData->hResource == NULL && (pData->NumAllocations == 0 || pData->HandleList == NULL))
         return E_INVALIDARG;
 
@@ -2139,7 +2423,7 @@ static HRESULT APIENTRY D3DUmdRtDeallocate2Cb(HANDLE hDevice, CONST D3DDDICB_DEA
             if (Resource->hRuntimeResource == pData->hResource)
                 break;
         }
-        if (Resource == NULL || Resource->Destroying)
+        if (Resource == NULL || Resource->Allocating || Resource->Destroying || Resource->hKMResource == 0)
         {
             LeaveCriticalSection(&D3DUmdRtDeviceLock);
             return E_INVALIDARG;
@@ -2161,25 +2445,25 @@ static HRESULT APIENTRY D3DUmdRtDeallocate2Cb(HANDLE hDevice, CONST D3DDDICB_DEA
         EnterCriticalSection(&D3DUmdRtDeviceLock);
         if (Status >= 0)
         {
-            for (Link = &Device->Resources;
-                 *Link != NULL;
-                 Link = &(*Link)->Next)
+            if (Resource->Registered)
             {
-                if (*Link == Resource)
-                {
-                    *Link = Resource->Next;
-                    break;
-                }
+                Resource->hKMResource = 0;
+                Resource->hGlobalShare = 0;
+                Resource->Destroying = FALSE;
             }
-            InterlockedDecrement(&Device->LiveObjectCount);
+            else
+            {
+                D3DUmdRtUnlinkResourceLocked(Device, Resource);
+                FreeResource = TRUE;
+            }
         }
         else
         {
             Resource->Destroying = FALSE;
         }
         LeaveCriticalSection(&D3DUmdRtDeviceLock);
-        if (Status >= 0)
-            HeapFree(GetProcessHeap(), 0, Resource);
+        if (FreeResource)
+            D3DUmdRtFreeResource(Resource);
     }
     return D3DUmdRtStatusToHresult(Status);
 }
@@ -2656,14 +2940,32 @@ D3DUmdRtCreateDeviceCallbacks(
     D3DDDI_DEVICECALLBACKS *pCallbacks,
     HANDLE *phRuntimeDevice)
 {
+    return D3DUmdRtCreateDeviceCallbacksEx(hAdapter, hDevice,
+        D3DUMDRT_ALLOCATION_INFO_VERSION_1, pCallbacks, phRuntimeDevice);
+}
+
+HRESULT WINAPI
+D3DUmdRtCreateDeviceCallbacksEx(
+    D3DKMT_HANDLE hAdapter,
+    D3DKMT_HANDLE hDevice,
+    UINT AllocationInfoVersion,
+    D3DDDI_DEVICECALLBACKS *pCallbacks,
+    HANDLE *phRuntimeDevice)
+{
     PD3DUMDRT_DEVICE Device;
 
     if (pCallbacks == NULL || phRuntimeDevice == NULL)
         return E_INVALIDARG;
     if (hAdapter == 0 || hDevice == 0)
         return E_INVALIDARG;
+    if (AllocationInfoVersion != D3DUMDRT_ALLOCATION_INFO_VERSION_1 &&
+        AllocationInfoVersion != D3DUMDRT_ALLOCATION_INFO_VERSION_2)
+        return E_INVALIDARG;
     if (!D3DUmdRtResolveProcs())
         return E_FAIL;
+    if ((AllocationInfoVersion == D3DUMDRT_ALLOCATION_INFO_VERSION_1 && pfnCreateAllocation == NULL) ||
+        (AllocationInfoVersion == D3DUMDRT_ALLOCATION_INFO_VERSION_2 && pfnCreateAllocation2 == NULL))
+        return E_NOINTERFACE;
 
     Device = (PD3DUMDRT_DEVICE)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Device));
     if (Device == NULL)
@@ -2671,6 +2973,7 @@ D3DUmdRtCreateDeviceCallbacks(
     Device->Magic = D3DUMDRT_DEVICE_MAGIC;
     Device->hAdapter = hAdapter;
     Device->hDevice = hDevice;
+    Device->AllocationInfoVersion = AllocationInfoVersion;
 
     EnterCriticalSection(&D3DUmdRtDeviceLock);
     Device->Next = D3DUmdRtDeviceList;

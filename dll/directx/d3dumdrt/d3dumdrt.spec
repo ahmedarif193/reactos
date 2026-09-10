@@ -1,2 +1,8 @@
 @ stdcall D3DUmdRtCreateDeviceCallbacks(long long ptr ptr)
+@ stdcall D3DUmdRtCreateDeviceCallbacksEx(long long long ptr ptr)
 @ stdcall D3DUmdRtDestroyDeviceCallbacks(ptr)
+@ stdcall D3DUmdRtRegisterResource(ptr ptr long ptr long)
+@ stdcall D3DUmdRtGetResourceHandles(ptr ptr ptr ptr)
+@ stdcall D3DUmdRtAdoptResource(ptr ptr long long)
+@ stdcall D3DUmdRtReleaseResource(ptr ptr)
+@ stdcall D3DUmdRtRotateResourceIdentities(ptr ptr long)
