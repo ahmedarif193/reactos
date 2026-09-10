@@ -521,7 +521,7 @@ class CMiniportWaveRTStream : public CUnknownImpl<IMiniportWaveRTStreamNotificat
         PULONG Nodes,
         PPCFILTER_DESCRIPTOR FilterDescription)
         : m_Adapter(Adapter), m_OutNode(OutNode), m_Pin(Pin), m_Capture(Capture), m_DmaEngine(DmaEngine),
-          m_NodeCount(NodeCount), m_Nodes(Nodes), m_FilterDescription(FilterDescription)
+          m_BufferSize(0), m_NodeCount(NodeCount), m_Nodes(Nodes), m_FilterDescription(FilterDescription)
     {
        RtlCopyMemory(&m_Interface, Interface, sizeof(HDAUDIO_BUS_INTERFACE_V2));
        RtlCopyMemory(&m_StreamFormat, StreamFormat, sizeof(HDAUDIO_STREAM_FORMAT));
@@ -546,6 +546,7 @@ class CMiniportWaveRTStream : public CUnknownImpl<IMiniportWaveRTStreamNotificat
     HDAUDIO_BUS_INTERFACE_V2 m_Interface;
     UCHAR m_StreamId;
     ULONG m_FifoSize;
+    ULONG m_BufferSize;
     ULONG m_NodeCount;
     PULONG m_Nodes;
     PPCFILTER_DESCRIPTOR m_FilterDescription;

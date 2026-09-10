@@ -44,10 +44,7 @@ CMiniportWaveRTStream::AllocateAudioBuffer(
     ULONG* OffsetFromFirstPage,
     MEMORY_CACHING_TYPE* CacheType)
 {
-    *CacheType = MmWriteCombined;
-    return m_Interface.AllocateDmaBufferWithNotification(
-        m_Interface.Context, m_DmaEngine, 1, RequestedBufferSize, AudioBufferMdl, (PSIZE_T)ActualSize, (PSIZE_T)OffsetFromFirstPage,
-        &m_StreamId, &m_FifoSize);
+    return AllocateBufferWithNotification(1, RequestedBufferSize, AudioBufferMdl, ActualSize, OffsetFromFirstPage, CacheType);
 }
 
 NTSTATUS
@@ -88,6 +85,7 @@ CMiniportWaveRTStream::FreeAudioBuffer(
     HANDLE Handles[1] = {m_DmaEngine};
     m_Interface.SetDmaEngineState(m_Interface.Context, ResetState, 1, Handles);
     m_Interface.FreeDmaBuffer(m_Interface.Context, m_DmaEngine);
+    m_BufferSize = 0;
 }
 
 NTSTATUS
@@ -95,8 +93,23 @@ NTAPI
 CMiniportWaveRTStream::GetPosition(
     OUT PKSAUDIO_POSITION Position)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PULONG Register;
+    NTSTATUS Status;
+    ULONG Offset;
+
+    if (m_Capture)
+        return STATUS_NOT_IMPLEMENTED;
+
+    Status = m_Interface.GetLinkPositionRegister(m_Interface.Context, m_DmaEngine, &Register);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Offset = READ_REGISTER_ULONG(Register);
+    Position->PlayOffset = m_BufferSize ? Offset % m_BufferSize : 0;
+    /* The controller can have prefetched up to one FIFO beyond the link
+     * cursor. Keep that part of the render buffer outside the writable area. */
+    Position->WriteOffset = m_BufferSize ? (Position->PlayOffset + m_FifoSize) % m_BufferSize : 0;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -152,10 +165,24 @@ CMiniportWaveRTStream::AllocateBufferWithNotification(
     ULONG* OffsetFromFirstPage,
     MEMORY_CACHING_TYPE* CacheType)
 {
+    SIZE_T BufferSize, BufferOffset;
+    NTSTATUS Status;
+
     *CacheType = MmWriteCombined;
-    return m_Interface.AllocateDmaBufferWithNotification(
-        m_Interface.Context, m_DmaEngine, NotificationCount, RequestedBufferSize, AudioBufferMdl, (PSIZE_T)ActualSize,
-        (PSIZE_T)OffsetFromFirstPage, &m_StreamId, &m_FifoSize);
+    Status = m_Interface.AllocateDmaBufferWithNotification(m_Interface.Context, m_DmaEngine, NotificationCount, RequestedBufferSize, AudioBufferMdl, &BufferSize, &BufferOffset, &m_StreamId, &m_FifoSize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (BufferSize > MAXULONG || BufferOffset > MAXULONG)
+    {
+        m_Interface.FreeDmaBufferWithNotification(m_Interface.Context, m_DmaEngine, *AudioBufferMdl, BufferSize);
+        *AudioBufferMdl = NULL;
+        return STATUS_INTEGER_OVERFLOW;
+    }
+    /* The bus DDI returns SIZE_T; WaveRT's outputs are ULONG even on 64-bit. */
+    *ActualSize = (ULONG)BufferSize;
+    *OffsetFromFirstPage = (ULONG)BufferOffset;
+    m_BufferSize = (ULONG)BufferSize;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -183,6 +210,7 @@ CMiniportWaveRTStream::FreeBufferWithNotification(PMDL AudioBufferMdl, ULONG Buf
     HANDLE Handles[1] = {m_DmaEngine};
     m_Interface.SetDmaEngineState(m_Interface.Context, ResetState, 1, Handles);
     m_Interface.FreeDmaBufferWithNotification(m_Interface.Context, m_DmaEngine, AudioBufferMdl, BufferSize);
+    m_BufferSize = 0;
 }
 
 NTSTATUS

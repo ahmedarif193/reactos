@@ -61,6 +61,7 @@ protected:
     friend VOID NTAPI WorkerStreamRoutine(IN PVOID Context);
     friend NTSTATUS NTAPI PinWaveRTAudioGetAudioBuffer(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
     friend NTSTATUS NTAPI PinWaveRTAudioGetHwLatency(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
+    friend NTSTATUS NTAPI PinWaveRTAudioPosition(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
     friend NTSTATUS NTAPI PinWaveRTAudioGetRTAudioPosition(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
     friend NTSTATUS NTAPI PinWaveRTAudioGetClockRegister(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
     friend NTSTATUS NTAPI PinWaveRTAudioGetBufferWithNotification(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
@@ -85,6 +86,7 @@ typedef struct
 
 NTSTATUS NTAPI PinWaveRTAudioGetAudioBuffer(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
 NTSTATUS NTAPI PinWaveRTAudioGetHwLatency(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
+NTSTATUS NTAPI PinWaveRTAudioPosition(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
 NTSTATUS NTAPI PinWaveRTAudioGetRTAudioPosition(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
 NTSTATUS NTAPI PinWaveRTAudioGetClockRegister(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
 NTSTATUS NTAPI PinWaveRTAudioGetBufferWithNotification(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
@@ -118,7 +120,18 @@ DEFINE_KSPROPERTY_TABLE(PinWaveRTAudioSet) {
 };
 
 
+DEFINE_KSPROPERTY_TABLE(PinWaveRTPositionSet) {
+    DEFINE_KSPROPERTY_ITEM(KSPROPERTY_AUDIO_POSITION, PinWaveRTAudioPosition, sizeof(KSPROPERTY), sizeof(KSAUDIO_POSITION), NULL, NULL, 0, NULL, NULL, 0)
+};
+
 KSPROPERTY_SET PinWaveRTPropertySet[] = {
+    {
+        &KSPROPSETID_Audio,
+        RTL_NUMBER_OF(PinWaveRTPositionSet),
+        PinWaveRTPositionSet,
+        0,
+        NULL
+    },
     {
         &KSPROPSETID_RtAudio,
         sizeof(PinWaveRTAudioSet) / sizeof(KSPROPERTY_ITEM),
@@ -128,6 +141,20 @@ KSPROPERTY_SET PinWaveRTPropertySet[] = {
     }
 };
 //==================================================================================================================================
+NTSTATUS
+NTAPI
+PinWaveRTAudioPosition(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data)
+{
+    PSUBDEVICE_DESCRIPTOR Descriptor = (PSUBDEVICE_DESCRIPTOR)KSPROPERTY_ITEM_IRP_STORAGE(Irp);
+    CPortPinWaveRT *Pin = (CPortPinWaveRT *)Descriptor->PortPin;
+    NTSTATUS Status;
+
+    Status = Pin->m_Stream->GetPosition((PKSAUDIO_POSITION)Data);
+    if (NT_SUCCESS(Status))
+        Irp->IoStatus.Information = sizeof(KSAUDIO_POSITION);
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 PinWaveRTAudioGetAudioBuffer(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data)
@@ -208,13 +235,9 @@ PinWaveRTAudioGetBufferWithNotification(IN PIRP Irp, IN PKSIDENTIFIER Request, I
     // Get input buffer
     Property = (PKSRTAUDIO_BUFFER_PROPERTY_WITH_NOTIFICATION)Request;
 
-    Status = Pin->m_StreamNotification->AllocateBufferWithNotification(
-        Property->NotificationCount,
-        ROUND_UP(Property->RequestedBufferSize, PAGE_SIZE),
-        &Pin->m_Mdl,
-        &Pin->m_CommonBufferSize,
-        &Pin->m_CommonBufferOffset,
-        &Pin->m_CacheType);
+    /* The request describes audio duration, not the backing allocation size.
+     * Let the miniport choose its byte/frame alignment and allocate the MDL. */
+    Status = Pin->m_StreamNotification->AllocateBufferWithNotification(Property->NotificationCount, Property->RequestedBufferSize, &Pin->m_Mdl, &Pin->m_CommonBufferSize, &Pin->m_CommonBufferOffset, &Pin->m_CacheType);
     if (!NT_SUCCESS(Status))
     {
         // Failed to allocate buffer
