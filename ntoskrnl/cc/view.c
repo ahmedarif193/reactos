@@ -227,6 +227,7 @@ CcRosFlushVacb (
     NTSTATUS Status;
     BOOLEAN HaveLock = FALSE;
     PROS_SHARED_CACHE_MAP SharedCacheMap = Vacb->SharedCacheMap;
+    ULONGLONG BcbGeneration = CcpBeginBcbFlush(SharedCacheMap);
 
     CcRosUnmarkDirtyVacb(Vacb, TRUE);
 
@@ -243,6 +244,9 @@ CcRosFlushVacb (
                             &Vacb->FileOffset,
                             VACB_MAPPING_GRANULARITY,
                             Iosb);
+
+    if (NT_SUCCESS(Status) && CcpCompleteBcbFlush(SharedCacheMap, Vacb->FileOffset.QuadPart, Vacb->FileOffset.QuadPart + VACB_MAPPING_GRANULARITY, BcbGeneration))
+        CcRosMarkDirtyVacb(Vacb);
 
     if (HaveLock)
     {
@@ -311,6 +315,7 @@ CcRosDeleteFileCache (
     KeReleaseQueuedSpinLock(LockQueueMasterLock, *OldIrql);
 
     /* Now that we're out of the locks, free everything for real */
+    NT_VERIFY(CcpPurgeBcbs(SharedCacheMap, 0, MAXLONGLONG));
     while (!IsListEmpty(&SharedCacheMap->CacheMapVacbListHead))
     {
         PROS_VACB Vacb = CONTAINING_RECORD(RemoveHeadList(&SharedCacheMap->CacheMapVacbListHead), ROS_VACB, CacheMapVacbListEntry);
@@ -774,7 +779,13 @@ CcRosMarkDirtyVacb (
     oldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
     KeAcquireSpinLockAtDpcLevel(&SharedCacheMap->CacheMapLock);
 
-    ASSERT(!Vacb->Dirty);
+    /* Unpinning and writeback can both request that the view stay dirty. */
+    if (Vacb->Dirty)
+    {
+        KeReleaseSpinLockFromDpcLevel(&SharedCacheMap->CacheMapLock);
+        KeReleaseQueuedSpinLock(LockQueueMasterLock, oldIrql);
+        return;
+    }
 
     InsertTailList(&DirtyVacbListHead, &Vacb->DirtyVacbListEntry);
     /* FIXME: There is no reason to account for the whole VACB. */

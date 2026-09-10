@@ -190,6 +190,7 @@ typedef struct _ROS_SHARED_CACHE_MAP
     LIST_ENTRY PrivateList;
     ULONG DirtyPageThreshold;
     KSPIN_LOCK BcbSpinLock;
+    ULONGLONG DirtyBcbGeneration; /* Protected by BcbSpinLock. */
     PRIVATE_CACHE_MAP PrivateCacheMap;
 
     /* ROS specific */
@@ -249,6 +250,9 @@ typedef struct _INTERNAL_BCB
     ULONG ExclusivePinCount;
     ERESOURCE_THREAD ExclusiveOwner;
     CSHORT RefCount; /* (At offset 0x34 on WinNT4) */
+    BOOLEAN PinAccess;
+    BOOLEAN Dirty;
+    ULONGLONG DirtyGeneration;
     LIST_ENTRY BcbEntry;
 } INTERNAL_BCB, *PINTERNAL_BCB;
 
@@ -328,6 +332,15 @@ CcRosFlushVacb(
     _In_ PROS_VACB Vacb,
     _Out_opt_ PIO_STATUS_BLOCK Iosb
 );
+
+ULONGLONG
+CcpBeginBcbFlush(PROS_SHARED_CACHE_MAP SharedCacheMap);
+
+BOOLEAN
+CcpCompleteBcbFlush(PROS_SHARED_CACHE_MAP SharedCacheMap, LONGLONG Start, LONGLONG End, ULONGLONG Generation);
+
+BOOLEAN
+CcpPurgeBcbs(PROS_SHARED_CACHE_MAP SharedCacheMap, LONGLONG Start, LONGLONG End);
 
 NTSTATUS
 CcRosGetVacb(

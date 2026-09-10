@@ -35,6 +35,7 @@ static KMT_MESSAGE_HANDLER TestMessageHandler;
 static BOOLEAN TestWriteCalled = FALSE;
 static ULONGLONG Memory = 0;
 static BOOLEAN TS = FALSE;
+static BOOLEAN FailWrites = FALSE;
 
 LARGE_INTEGER WriteOffset;
 ULONG WriteLength;
@@ -561,6 +562,43 @@ PerformTest(
                 }
                 else if (TestId == 5)
                 {
+                    IO_STATUS_BLOCK Iosb;
+                    ULONG Attempt;
+
+                    /* Metadata must remain findable after its last pin is dropped,
+                     * including when the preceding writeback failed. */
+                    for (Attempt = 0; Attempt < 2; ++Attempt)
+                    {
+                        Offset.QuadPart = 0;
+                        Ret = CcPinRead(TestFileObject, &Offset, PAGE_SIZE, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
+                        if (ok(Ret, "Initial metadata pin failed\n"))
+                        {
+                            Buffer[0] = 0x12345678 + Attempt;
+                            CcSetDirtyPinnedData(Bcb, NULL);
+                            CcUnpinData(Bcb);
+                            if (Attempt)
+                            {
+                                FailWrites = TRUE;
+                                CcFlushCache(TestFileObject->SectionObjectPointer, &Offset, PAGE_SIZE, &Iosb);
+                                FailWrites = FALSE;
+                                ok(!NT_SUCCESS(Iosb.Status), "Failed writeback returned %lx\n", Iosb.Status);
+                            }
+                            Ret = CcPinRead(TestFileObject, &Offset, PAGE_SIZE, PIN_WAIT | PIN_IF_BCB, &Bcb, (PVOID *)&Buffer);
+                            if (ok(Ret, "Dirty BCB lost after unpin, attempt %lu\n", Attempt))
+                            {
+                                ok_eq_ulong(Buffer[0], 0x12345678 + Attempt);
+                                CcRepinBcb(Bcb);
+                                CcUnpinData(Bcb);
+                                WriteOffset.QuadPart = -1;
+                                WriteLength = 0;
+                                CcUnpinRepinnedBcb(Bcb, TRUE, &Iosb);
+                                ok_eq_hex(Iosb.Status, STATUS_SUCCESS);
+                                ok(WriteOffset.QuadPart == 0 && WriteLength >= PAGE_SIZE, "Metadata was not written: %I64d/%lu\n", WriteOffset.QuadPart, WriteLength);
+                            }
+                        }
+                    }
+                    trace("DIRTY_BCB_RETENTION_DONE\n");
+
                     FileSizes.AllocationSize.QuadPart += VACB_MAPPING_GRANULARITY;
                     CcSetFileSizes(TestFileObject, &FileSizes);
 
@@ -882,8 +920,8 @@ TestIrpHandler(
             TestWriteCalled = TRUE;
         }
 
-        Status = STATUS_SUCCESS;
-        Irp->IoStatus.Information = Length;
+        Status = FailWrites ? STATUS_IO_DEVICE_ERROR : STATUS_SUCCESS;
+        Irp->IoStatus.Information = FailWrites ? 0 : Length;
     }
 
     if (Status == STATUS_PENDING)

@@ -232,6 +232,10 @@ CcPurgeCacheSection (
         ASSERT(EndOffset > StartOffset);
     }
 
+    /* Drop idle BCBs before their view references prevent cache purging. */
+    if (!CcpPurgeBcbs(SharedCacheMap, ROUND_DOWN(StartOffset, VACB_MAPPING_GRANULARITY), EndOffset > MAXLONGLONG - (VACB_MAPPING_GRANULARITY - 1) ? MAXLONGLONG : ROUND_UP(EndOffset, VACB_MAPPING_GRANULARITY)))
+        return FALSE;
+
     InitializeListHead(&FreeList);
 
     /* Assume success */
