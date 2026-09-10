@@ -3619,7 +3619,7 @@ DxgkpFreeTrackedDmaBufferEntry(
         (Entry->RefreshSharedPrimaryOnRetire ||
          Entry->ProgramSourceScanoutOnRetire))
     {
-        DxgkDeviceWorkCompleteWithStatus(Entry->DeviceWork, PresentStatus);
+        DxgkDeviceCompletePresent(Entry->Device, Entry->DeviceWork, PresentStatus);
     }
 
     /* GPU completion drives the retained monitored fence even when user mode
