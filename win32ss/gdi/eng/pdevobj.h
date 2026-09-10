@@ -89,7 +89,7 @@ typedef struct _PDEVOBJ
     FLONG                     flFlags;  // flags
 //  FLONG                     flAccelerated;
     HSEMAPHORE                hsemDevLock;    /* Device lock. */
-//  HSEMAPHORE                hsemPointer;
+    HSEMAPHORE                hsemPointer;    /* Pointer state; acquired after hsemDevLock when both are needed. */
     POINTL                    ptlPointer;
 //  SIZEL                     szlPointer;
 //  SPRITESTATE               SpriteState;
@@ -113,6 +113,7 @@ typedef struct _PDEVOBJ
 //  PFN_DrvSetPointerShape    pfnDrvSetPointerShape;
 //  PFN_DrvMovePointer        pfnDrvMovePointer;
     PFN_DrvMovePointer        pfnMovePointer;
+    PFN_DrvMovePointer        pfnAsyncMovePointer; /* Selected hardware pointer, protected by hsemPointer. */
 //  PFN_DrvSynchronize        pfnDrvSynchronize;
 //  PFN_DrvSynchronizeSurface pfnDrvSynchronizeSurface;
 //  PFN_DrvSetPalette         pfnDrvSetPalette;

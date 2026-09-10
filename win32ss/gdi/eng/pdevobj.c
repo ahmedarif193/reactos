@@ -77,6 +77,14 @@ PDEVOBJ_AllocPDEV(VOID)
         return NULL;
     }
 
+    ppdev->hsemPointer = EngCreateSemaphore();
+    if (ppdev->hsemPointer == NULL)
+    {
+        EngDeleteSemaphore(ppdev->hsemDevLock);
+        ExFreePoolWithTag(ppdev, GDITAG_PDEV);
+        return NULL;
+    }
+
     /* Allocate EDD_DIRECTDRAW_GLOBAL for our ReactX driver */
     ppdev->pEDDgpl = ExAllocatePoolWithTag(PagedPool, sizeof(EDD_DIRECTDRAW_GLOBAL), GDITAG_PDEV);
     if (ppdev->pEDDgpl)
@@ -92,6 +100,7 @@ VOID
 PDEVOBJ_vDeletePDEV(
     PPDEVOBJ ppdev)
 {
+    EngDeleteSemaphore(ppdev->hsemPointer);
     EngDeleteSemaphore(ppdev->hsemDevLock);
     if (ppdev->pdmwDev)
         ExFreePoolWithTag(ppdev->pdmwDev, GDITAG_DEVMODE);
@@ -324,6 +333,9 @@ PDEVOBJ_pSurface(
     PPDEVOBJ ppdev)
 {
     HSURF hsurf;
+    PSURFACE pSurface;
+
+    EngAcquireSemaphore(ppdev->hsemPointer);
 
     /* Check if there is no surface for this PDEV yet */
     if (ppdev->pSurface == NULL)
@@ -335,6 +347,7 @@ PDEVOBJ_pSurface(
         if (hsurf== NULL)
         {
             ERR("Failed to create PDEV surface!\n");
+            EngReleaseSemaphore(ppdev->hsemPointer);
             return NULL;
         }
 
@@ -346,7 +359,9 @@ PDEVOBJ_pSurface(
     /* Increment reference count */
     GDIOBJ_vReferenceObjectByPointer(&ppdev->pSurface->BaseObject);
 
-    return ppdev->pSurface;
+    pSurface = ppdev->pSurface;
+    EngReleaseSemaphore(ppdev->hsemPointer);
+    return pSurface;
 }
 
 BOOL
@@ -417,8 +432,12 @@ PDEVOBJ_vEnableDisplay(
 {
     BOOL assertVal;
 
+    EngAcquireSemaphore(ppdev->hsemPointer);
     if (!(ppdev->flFlags & PDEV_DISABLED))
+    {
+        EngReleaseSemaphore(ppdev->hsemPointer);
         return;
+    }
 
     /* Try to enable display until success */
     do
@@ -429,6 +448,7 @@ PDEVOBJ_vEnableDisplay(
     } while (!assertVal);
 
     ppdev->flFlags &= ~PDEV_DISABLED;
+    EngReleaseSemaphore(ppdev->hsemPointer);
 }
 
 BOOL
@@ -437,8 +457,12 @@ PDEVOBJ_bDisableDisplay(
 {
     BOOL assertVal;
 
+    EngAcquireSemaphore(ppdev->hsemPointer);
     if (ppdev->flFlags & PDEV_DISABLED)
+    {
+        EngReleaseSemaphore(ppdev->hsemPointer);
         return TRUE;
+    }
 
     PDEVOBJ_vSuspendDirectDraw(ppdev);
 
@@ -447,8 +471,12 @@ PDEVOBJ_bDisableDisplay(
     TRACE("DrvAssertMode(dhpdev %p, FALSE) => %d\n", ppdev->dhpdev, assertVal);
 
     if (assertVal)
+    {
         ppdev->flFlags |= PDEV_DISABLED;
+        ppdev->pfnAsyncMovePointer = NULL;
+    }
 
+    EngReleaseSemaphore(ppdev->hsemPointer);
     return assertVal;
 }
 
@@ -677,6 +705,8 @@ PDEVOBJ_bDynamicModeChange(
     PPDEVOBJ ppdev,
     PPDEVOBJ ppdev2)
 {
+    PPDEVOBJ ppdevFirst = (ULONG_PTR)ppdev < (ULONG_PTR)ppdev2 ? ppdev : ppdev2;
+    PPDEVOBJ ppdevSecond = ppdevFirst == ppdev ? ppdev2 : ppdev;
     union
     {
         DRIVER_FUNCTIONS pfn;
@@ -685,10 +715,19 @@ PDEVOBJ_bDynamicModeChange(
         DWORD StateFlags;
     } temp;
 
+    EngAcquireSemaphore(ppdevFirst->hsemPointer);
+    EngAcquireSemaphore(ppdevSecond->hsemPointer);
+    /* A pointer must be selected for the replacement surface before it can
+     * move independently of drawing again. */
+    ppdev->pfnAsyncMovePointer = NULL;
+    ppdev2->pfnAsyncMovePointer = NULL;
+
     /* Exchange driver functions */
     temp.pfn = ppdev->pfn;
     ppdev->pfn = ppdev2->pfn;
     ppdev2->pfn = temp.pfn;
+    ppdev->pfnMovePointer = ppdev->pfn.MovePointer ? ppdev->pfn.MovePointer : EngMovePointer;
+    ppdev2->pfnMovePointer = ppdev2->pfn.MovePointer ? ppdev2->pfn.MovePointer : EngMovePointer;
 
     /* Exchange LDEVs */
     SwitchPointer(&ppdev->pldev, &ppdev2->pldev);
@@ -726,6 +765,8 @@ PDEVOBJ_bDynamicModeChange(
     /* Switch DirectDraw mode */
     PDEVOBJ_vSwitchDirectDraw(ppdev, ppdev2);
 
+    EngReleaseSemaphore(ppdevSecond->hsemPointer);
+    EngReleaseSemaphore(ppdevFirst->hsemPointer);
     return TRUE;
 }
 

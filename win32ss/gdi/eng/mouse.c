@@ -441,6 +441,10 @@ EngSetPointerShape(
     ppdev = GDIDEV(pso);
     pgp = &ppdev->Pointer;
 
+    /* Software drawing requires the display lock, even when a driver punts
+     * here and returns SPS_ACCEPT_NOEXCLUDE to claim the pointer. */
+    ppdev->pfnAsyncMovePointer = NULL;
+
     /* Handle the case where we have no XLATEOBJ */
     if (pxlo == NULL)
         pxlo = &gexloTrivial.xlo;
@@ -747,6 +751,10 @@ IntEngSetPointerShape(
 
     if (pfnSetPointerShape)
     {
+        /* A driver that punts to EngSetPointerShape clears this again. A
+         * software pointer can also return SPS_ACCEPT_NOEXCLUDE. */
+        ppdev->pfnAsyncMovePointer = (ppdev->devinfo.flGraphicsCaps & GCAPS_ASYNCMOVE) ? ppdev->pfn.MovePointer : NULL;
+
         /* Drivers expect to get an XLATEOBJ */
         if (pxlo == NULL)
             pxlo = &gexloTrivial.xlo;
@@ -772,6 +780,7 @@ IntEngSetPointerShape(
 
     if (bSoftwarePointer)
     {
+        ppdev->pfnAsyncMovePointer = NULL;
         /* Set software pointer */
         ulResult = EngSetPointerShape(pso,
                                       psoMask,
@@ -784,6 +793,9 @@ IntEngSetPointerShape(
                                       prcl,
                                       fl);
     }
+
+    if (ppdev->pfnAsyncMovePointer != NULL && prcl != NULL)
+        prcl->left = prcl->top = prcl->right = prcl->bottom = -1;
 
     if (!bSoftwarePointer && ppdev->flFlags & PDEV_SOFTWARE_POINTER)
     {
@@ -837,11 +849,13 @@ GreSetPointerShape(
 
     ASSERT(pdc->dctype == DCTYPE_DIRECT);
     EngAcquireSemaphore(pdc->ppdev->hsemDevLock);
+    EngAcquireSemaphore(pdc->ppdev->hsemPointer);
     /* We're not sure DC surface is the good one */
     psurf = pdc->ppdev->pSurface;
     if (!psurf)
     {
         DPRINT1("DC has no surface.\n");
+        EngReleaseSemaphore(pdc->ppdev->hsemPointer);
         EngReleaseSemaphore(pdc->ppdev->hsemDevLock);
         DC_UnlockDc(pdc);
         return 0;
@@ -898,6 +912,7 @@ GreSetPointerShape(
     if (psurfMask)
         SURFACE_ShareUnlockSurface(psurfMask);
 
+    EngReleaseSemaphore(pdc->ppdev->hsemPointer);
     EngReleaseSemaphore(pdc->ppdev->hsemDevLock);
 
     /* Unlock the DC */
@@ -926,11 +941,32 @@ GreMovePointer(
     }
     ASSERT(pdc->dctype == DCTYPE_DIRECT);
 
+    /* GCAPS_ASYNCMOVE permits the selected hardware pointer to move while a
+     * different DC is drawing. Keep its shape, callback and surface stable
+     * without taking the display lock used by synchronous presents. */
+    EngAcquireSemaphore(pdc->ppdev->hsemPointer);
+    if (pdc->ppdev->pfnAsyncMovePointer != NULL)
+    {
+        if (!(pdc->ppdev->flFlags & PDEV_DISABLED) && pdc->ppdev->pSurface != NULL)
+        {
+            SURFOBJ *pso = &pdc->ppdev->pSurface->SurfObj;
+
+            pdc->ppdev->pfnAsyncMovePointer(pso, x, y, NULL);
+            if (pdc->ppdev->devinfo.flGraphicsCaps & GCAPS_PANNING && y >= 0)
+                pdc->ppdev->pfnAsyncMovePointer(pso, x, y - pso->sizlBitmap.cy, NULL);
+        }
+        EngReleaseSemaphore(pdc->ppdev->hsemPointer);
+        DC_UnlockDc(pdc);
+        return;
+    }
+    EngReleaseSemaphore(pdc->ppdev->hsemPointer);
+
     /* Acquire PDEV lock */
     EngAcquireSemaphore(pdc->ppdev->hsemDevLock);
+    EngAcquireSemaphore(pdc->ppdev->hsemPointer);
 
     /* Check if we need to move it */
-    if(pdc->ppdev->SafetyRemoveLevel == 0)
+    if (!(pdc->ppdev->flFlags & PDEV_DISABLED) && pdc->ppdev->pSurface != NULL && pdc->ppdev->SafetyRemoveLevel == 0)
     {
         SURFOBJ* pso = &pdc->ppdev->pSurface->SurfObj;
 
@@ -950,6 +986,7 @@ GreMovePointer(
     }
 
     /* Release PDEV lock */
+    EngReleaseSemaphore(pdc->ppdev->hsemPointer);
     EngReleaseSemaphore(pdc->ppdev->hsemDevLock);
 
     /* Unlock the DC */

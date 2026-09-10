@@ -56,6 +56,7 @@ typedef struct _RCDD_PDEV
    PALETTEENTRY *PaletteEntries;
 
    /* Hardware pointer (declined by the software GPU -> GDI draws a SW cursor) */
+   KMUTEX PointerMutex;       /* Serializes pointer DDIs with suppression escapes. */
    VIDEO_POINTER_CAPABILITIES HwPointerCapabilities;
    PVIDEO_POINTER_ATTRIBUTES HwPointerAttributes;
    ULONG HwPointerAttributesSize;

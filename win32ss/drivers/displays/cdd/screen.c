@@ -314,6 +314,8 @@ RcddInitScreenInfo(
    }
 
    RcddInitHardwarePointer(ppdev);
+   if (ppdev->HwPointerSupported)
+      pDevInfo->flGraphicsCaps |= GCAPS_ASYNCMOVE;
 
    EngFreeMem(ModeInfo);
    return TRUE;
