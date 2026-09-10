@@ -317,8 +317,14 @@ Return Value:
                 // Set audio clock configuration to use a 100 MHz PWM clock.
                 //
 
+#ifdef __REACTOS__
+                // PLLC follows the core clock; use the fixed 500 MHz PLLD source.
+                deviceContext->pwmClockConfig.ClockSource = BCM_PWM_CLOCKSOURCE_PLLD;
+                deviceContext->pwmClockConfig.Divisor = 5;
+#else
                 deviceContext->pwmClockConfig.ClockSource = BCM_PWM_CLOCKSOURCE_PLLC;
                 deviceContext->pwmClockConfig.Divisor = 10;
+#endif
                 SetClockConfig(deviceContext);
 
                 //
@@ -359,8 +365,13 @@ Return Value:
                 // Note: We do not calculate at runtime to prevent usage of floating point operations.
                 //
 
+#ifdef __REACTOS__
+                NT_ASSERT(deviceContext->pwmClockConfig.ClockSource == BCM_PWM_CLOCKSOURCE_PLLD);
+                NT_ASSERT(deviceContext->pwmClockConfig.Divisor == 5);
+#else
                 NT_ASSERT(deviceContext->pwmClockConfig.ClockSource == BCM_PWM_CLOCKSOURCE_PLLC);
                 NT_ASSERT(deviceContext->pwmClockConfig.Divisor == 10);
+#endif
                 ULONG correctionDropSampleCount = 5320;
                 ULONG bytesPerPwmSample = 8;
                 ULONG samplesPerPacket = packetSize / bytesPerPwmSample;
