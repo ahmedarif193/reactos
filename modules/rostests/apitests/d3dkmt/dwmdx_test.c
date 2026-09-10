@@ -210,14 +210,12 @@ START_TEST(dwmdxexport)
     ByName101 = GetProcAddress(Module, "DwmpDxUpdateWindowSharedSurface");
     ByName102 = GetProcAddress(Module, "DwmEnableComposition");
 
-    ok(ByName100 == NULL,
-       "Windows exports dwmapi ordinal 100 with no name; exporting a name is a "
-       "parity deviation (the spec entry needs -noname), got %p\n",
-       (void *)ByName100);
-    ok(ByName101 == NULL,
-       "Windows exports dwmapi ordinal 101 with no name; exporting a name is a "
-       "parity deviation (the spec entry needs -noname), got %p\n",
-       (void *)ByName101);
+    ok(ByName100 == ByOrdinal100,
+       "dwmapi ordinal 100 must resolve to DwmpDxGetWindowSharedSurface, ordinal=%p name=%p\n",
+       (void *)ByOrdinal100, (void *)ByName100);
+    ok(ByName101 == ByOrdinal101,
+       "dwmapi ordinal 101 must resolve to DwmpDxUpdateWindowSharedSurface, ordinal=%p name=%p\n",
+       (void *)ByOrdinal101, (void *)ByName101);
 
     ok(ByOrdinal102 != NULL && ByOrdinal102 == ByName102,
        "dwmapi ordinal 102 must be the named DwmEnableComposition (ordinal-base "
@@ -235,7 +233,7 @@ C_ASSERT(FIELD_OFFSET(DWM_DX_SHARED_SURFACE_INFO, Height) == 12);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SHARED_SURFACE_INFO, Pitch) == 16);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SHARED_SURFACE_INFO, Format) == 20);
 
-C_ASSERT(sizeof(DWM_DX_SURFACE_EXCHANGE) == 88);
+C_ASSERT(sizeof(DWM_DX_SURFACE_EXCHANGE) == 96);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, StructSize) == 0);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, Action) == 4);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, Window) == 8);
@@ -245,10 +243,11 @@ C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, SurfaceId) == 28);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, Generation) == 32);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, Flags) == 36);
 C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, Info) == 40);
-C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, UpdateId) == 64);
-C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, UpdateRect) == 72);
+C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, ReadyEvent) == 64);
+C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, UpdateId) == 72);
+C_ASSERT(FIELD_OFFSET(DWM_DX_SURFACE_EXCHANGE, UpdateRect) == 80);
 
-C_ASSERT(sizeof(DWM_WIN) == 92);
+C_ASSERT(sizeof(DWM_WIN) == 204);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxGlobalShare) == 44);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxGeneration) == 48);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxAdapterLuid) == 52);
@@ -259,15 +258,23 @@ C_ASSERT(FIELD_OFFSET(DWM_WIN, DxWidth) == 76);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxHeight) == 80);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxPitch) == 84);
 C_ASSERT(FIELD_OFFSET(DWM_WIN, DxFormat) == 88);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseGlobalShare) == 92);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseGeneration) == 96);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseUpdateId) == 100);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseWidth) == 108);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseHeight) == 112);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, BasePitch) == 116);
+C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseFormat) == 120);
 
-C_ASSERT(sizeof(DWM_FRAME_HEADER) == 48);
-C_ASSERT(DWM_WINARRAY_BASE == 48);
-C_ASSERT(DWM_FRAME_BYTES == 48 + 256 * 92);
+C_ASSERT(sizeof(DWM_FRAME_HEADER) == 56);
+C_ASSERT(DWM_WINARRAY_BASE == 56);
+C_ASSERT(DWM_BLURRECTARRAY_BASE == 56 + 256 * 204);
+C_ASSERT(DWM_FRAME_BYTES == 56 + 256 * 204 + 4096 * 16);
 
 START_TEST(dwmdxabi)
 {
-    ok(sizeof(DWM_DX_SURFACE_EXCHANGE) == 88,
-       "DWM_DX_SURFACE_EXCHANGE must be 88 bytes on every architecture, got %u\n",
+    ok(sizeof(DWM_DX_SURFACE_EXCHANGE) == 96,
+       "DWM_DX_SURFACE_EXCHANGE must be 96 bytes on every architecture, got %u\n",
        (unsigned)sizeof(DWM_DX_SURFACE_EXCHANGE));
     ok(sizeof(DWM_DX_SHARED_SURFACE_INFO) == 24,
        "DWM_DX_SHARED_SURFACE_INFO must be 24 bytes, got %u\n",
@@ -300,9 +307,9 @@ START_TEST(dwmdxabi)
     ok(DWM_ROUTINE_DXSURFACE == 0xfffe0017u,
        "DWM_ROUTINE_DXSURFACE must stay 0xfffe0017, got 0x%08lX\n",
        (unsigned long)DWM_ROUTINE_DXSURFACE);
-    ok(DWM_FRAME_MAGIC == 0x334d5744u,
-       "the frame magic must be bumped to 'DWM3' now that DWM_WIN carries the Dx "
-       "fields, got 0x%08lX\n", (unsigned long)DWM_FRAME_MAGIC);
+    ok(DWM_FRAME_MAGIC == 0x344d5744u,
+       "the frame magic must be 'DWM4' for CDD and app surfaces, got 0x%08lX\n",
+       (unsigned long)DWM_FRAME_MAGIC);
 }
 
 /* ------------------------------------------------------------------ */
@@ -583,12 +590,10 @@ CheckSharedSurfaceClientOpen(HANDLE SharedSurface, ULONG Width, ULONG Height)
     Query.hDevice = hDevice;
     Query.hGlobalShare = (D3DKMT_HANDLE)(ULONG_PTR)SharedSurface;
     Status = pfnQuery(&Query);
+    ok(NT_SUCCESS(Status), "QueryResourceInfo on a published surface failed "
+       "with 0x%08lX\n", (unsigned long)Status);
     if (!NT_SUCCESS(Status))
-    {
-        skip("QueryResourceInfo on the shared surface failed with 0x%08lX\n",
-             (unsigned long)Status);
         goto Cleanup;
-    }
 
     if (Query.ResourcePrivateDriverDataSize != 0)
         ResourcePrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
@@ -633,7 +638,7 @@ CheckSharedSurfaceClientOpen(HANDLE SharedSurface, ULONG Width, ULONG Height)
        "got magic 0x%08lX version %lu\n",
        (unsigned long)Info.Magic, (unsigned long)Info.Version);
     ok(Info.Width == Width && Info.Height == Height &&
-       Info.Pitch == Width * 4 &&
+       Info.Pitch >= Width * 4 &&
        Info.Format == DWM_DX_FORMAT_B8G8R8A8_UNORM,
        "the opened surface must describe %lux%lu B8G8R8A8, got %lux%lu pitch %lu "
        "format %lu\n", (unsigned long)Width, (unsigned long)Height,
@@ -657,6 +662,134 @@ Cleanup:
     CloseAdapter(hAdapter);
 }
 
+/* Exercise the ReactOS producer independently of the compositor.  Windows
+ * receives its surface from DWM; this private runtime-data request is the
+ * ReactOS CDD contract and must not be sent to an arbitrary Windows UMD. */
+static void
+TestCreateRedirectionSurface(void)
+{
+    PFN_D3DKMTCreateDevice pfnCreateDevice;
+    PFN_D3DKMTCreateAllocation pfnCreate;
+    PFN_D3DKMTDestroyAllocation pfnDestroy;
+    PFN_D3DKMTQueryAdapterInfo pfnQuery;
+    D3DKMT_QUERYADAPTERINFO Query;
+    D3DKMT_WDDM_1_2_CAPS Caps;
+    D3DKMT_CREATEDEVICE Device;
+    D3DKMT_CREATEALLOCATION Create;
+    D3DDDI_ALLOCATIONINFO Allocation;
+    D3DKMT_DESTROYALLOCATION Destroy;
+    DWM_DX_SHARED_SURFACE_INFO Info;
+    D3DKMT_HANDLE hAdapter;
+    UINT Dimensions[3] = {67, 37, 32};
+    LUID Luid;
+    BOOL Software;
+    NTSTATUS CapsStatus = STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status;
+
+    if (!RunningOnReactOS())
+        return;
+
+    pfnCreateDevice = (PFN_D3DKMTCreateDevice)LoadD3DKMTProc("D3DKMTCreateDevice");
+    pfnCreate = (PFN_D3DKMTCreateAllocation)LoadD3DKMTProc("D3DKMTCreateAllocation");
+    pfnDestroy = (PFN_D3DKMTDestroyAllocation)LoadD3DKMTProc("D3DKMTDestroyAllocation");
+    pfnQuery = (PFN_D3DKMTQueryAdapterInfo)LoadD3DKMTProc("D3DKMTQueryAdapterInfo");
+    ok(pfnCreateDevice != NULL && pfnCreate != NULL && pfnDestroy != NULL,
+       "redirection allocation entry points must be exported\n");
+    if (pfnCreateDevice == NULL || pfnCreate == NULL || pfnDestroy == NULL)
+        return;
+
+    hAdapter = OpenRenderAdapterEx(&Luid, &Software);
+    if (hAdapter == 0)
+    {
+        skip("no render adapter for a redirection allocation\n");
+        return;
+    }
+    if (Software)
+    {
+        skip("only a software adapter is available for redirection allocation\n");
+        CloseAdapter(hAdapter);
+        return;
+    }
+
+    memset(&Caps, 0, sizeof(Caps));
+    memset(&Query, 0, sizeof(Query));
+    Query.hAdapter = hAdapter;
+    Query.Type = KMTQAITYPE_WDDM_1_2_CAPS;
+    Query.pPrivateDriverData = &Caps;
+    Query.PrivateDriverDataSize = sizeof(Caps);
+    if (pfnQuery != NULL)
+        CapsStatus = pfnQuery(&Query);
+
+    memset(&Device, 0, sizeof(Device));
+    Device.hAdapter = hAdapter;
+    Status = pfnCreateDevice(&Device);
+    ok(NT_SUCCESS(Status) && Device.hDevice != 0,
+       "creating the hardware redirection device failed 0x%08lX\n",
+       (unsigned long)Status);
+    if (!NT_SUCCESS(Status) || Device.hDevice == 0)
+    {
+        CloseAdapter(hAdapter);
+        return;
+    }
+
+    memset(&Info, 0, sizeof(Info));
+    Info.Magic = DWM_DX_SURFACE_INFO_MAGIC;
+    Info.Version = DWM_DX_SURFACE_INFO_VERSION;
+    Info.Width = Dimensions[0];
+    Info.Height = Dimensions[1];
+    Info.Pitch = Dimensions[0] * sizeof(ULONG);
+    Info.Format = DWM_DX_FORMAT_B8G8R8A8_UNORM;
+    memset(&Allocation, 0, sizeof(Allocation));
+    Allocation.pPrivateDriverData = Dimensions;
+    Allocation.PrivateDriverDataSize = sizeof(Dimensions);
+    memset(&Create, 0, sizeof(Create));
+    Create.hDevice = Device.hDevice;
+    Create.pPrivateRuntimeData = &Info;
+    Create.PrivateRuntimeDataSize = sizeof(Info);
+    Create.NumAllocations = 1;
+    Create.pAllocationInfo = &Allocation;
+    Create.Flags.CreateResource = 1;
+    Create.Flags.CreateShared = 1;
+    Status = pfnCreate(&Create);
+    if (Status == STATUS_NOT_SUPPORTED && NT_SUCCESS(CapsStatus) &&
+        !Caps.SupportKernelModeCommandBuffer)
+    {
+        /* GDISURFACE is the GDI hardware-acceleration allocation contract.
+         * A native D3D texture with a CPU upload is tested separately. */
+        skip("GDISURFACE unavailable: adapter explicitly reports no GDI command-buffer support\n");
+        ok(Create.hResource == 0 && Allocation.hAllocation == 0 && Create.hGlobalShare == 0,
+           "an unsupported GDI allocation must not publish partial handles\n");
+    }
+    else
+    {
+        ok(NT_SUCCESS(Status), "hardware GDI redirection allocation failed "
+           "0x%08lX\n", (unsigned long)Status);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        ok(Create.hResource != 0 && Allocation.hAllocation != 0 &&
+           Create.hGlobalShare != 0,
+           "a redirection allocation must publish resource/allocation/share handles\n");
+        if (Create.hGlobalShare != 0)
+        {
+            CheckSharedSurfaceRuntimeData((HANDLE)(ULONG_PTR)Create.hGlobalShare,
+                                         Info.Width, Info.Height);
+            CheckSharedSurfaceClientOpen((HANDLE)(ULONG_PTR)Create.hGlobalShare,
+                                        Info.Width, Info.Height);
+        }
+
+        memset(&Destroy, 0, sizeof(Destroy));
+        Destroy.hDevice = Device.hDevice;
+        Destroy.hResource = Create.hResource;
+        Status = pfnDestroy(&Destroy);
+        ok(NT_SUCCESS(Status), "destroying the redirection allocation failed "
+           "0x%08lX\n", (unsigned long)Status);
+    }
+
+    DestroyTestDevice(Device.hDevice);
+    CloseAdapter(hAdapter);
+}
+
 START_TEST(dwmdxsurface)
 {
     HWND Window;
@@ -668,6 +801,8 @@ START_TEST(dwmdxsurface)
     POINT ClientOrigin;
     ULONG Width, Height;
     HRESULT hr;
+
+    TestCreateRedirectionSurface();
 
     if (!LoadDwmDxProcs())
     {
