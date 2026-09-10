@@ -354,6 +354,9 @@ CreateInfFileDetails(
     IN LPCWSTR FullInfFileName);
 
 VOID
+ReferenceInfFile(struct InfFileDetails* infFile);
+
+VOID
 DereferenceInfFile(struct InfFileDetails* infFile);
 
 BOOL

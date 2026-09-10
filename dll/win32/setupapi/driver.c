@@ -35,7 +35,7 @@ static const WCHAR INF_DRIVER_VER[]  = {'D','r','i','v','e','r','V','e','r',0};
 /***********************************************************************
  *		struct InfFileDetails management
  */
-static VOID
+VOID
 ReferenceInfFile(struct InfFileDetails* infFile)
 {
     InterlockedIncrement(&infFile->References);

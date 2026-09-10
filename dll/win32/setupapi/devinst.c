@@ -6078,6 +6078,7 @@ SetupDiInstallDevice(
     struct DeviceInfo *deviceInfo;
     SP_DEVINSTALL_PARAMS_W InstallParams;
     struct DriverInfoElement *SelectedDriver;
+    struct InfFileDetails *SourceInfFileDetails = NULL;
     SYSTEMTIME DriverDate;
     WCHAR SectionName[MAX_PATH];
     WCHAR Buffer[32];
@@ -6162,6 +6163,11 @@ SetupDiInstallDevice(
         SetLastError(ERROR_NO_DRIVER_SELECTED);
         goto cleanup;
     }
+
+    /* Publishing the INF changes InfFileDetails to the system INF directory.
+     * Keep the package's original source directory alive for CopyFiles. */
+    SourceInfFileDetails = SelectedDriver->InfFileDetails;
+    ReferenceInfFile(SourceInfFileDetails);
 
     FileTimeToSystemTime(&SelectedDriver->Info.DriverDate, &DriverDate);
 
@@ -6251,7 +6257,7 @@ SetupDiInstallDevice(
     *pSectionName = '\0';
     Result = SetupInstallFromInfSectionW(InstallParams.hwndParent,
         SelectedDriver->InfFileDetails->hInf, SectionName,
-        DoAction, hKey, SelectedDriver->InfFileDetails->DirectoryName, SP_COPY_NEWER,
+        DoAction, hKey, SourceInfFileDetails->DirectoryName, SP_COPY_NEWER,
         SetupDefaultQueueCallbackW, Context,
         DeviceInfoSet, DeviceInfoData);
     if (!Result)
@@ -6412,6 +6418,8 @@ cleanup:
     HeapFree(GetProcessHeap(), 0, lpFullGuidString);
     if (Context)
         SetupTermDefaultQueueCallback(Context);
+    if (SourceInfFileDetails)
+        DereferenceInfFile(SourceInfFileDetails);
     TRACE("Returning %d\n", ret);
     return ret;
 }
