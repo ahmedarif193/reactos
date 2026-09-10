@@ -703,39 +703,19 @@ RecoverCorruptPageFile:
 
 NTSTATUS
 NTAPI
-SmpCreatePagingFileOnAnyDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
-                              IN PLARGE_INTEGER FuzzFactor,
-                              IN PLARGE_INTEGER MinimumSize)
+SmpCreatePagingFileOnSystemDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
+                                IN PLARGE_INTEGER FuzzFactor,
+                                IN PLARGE_INTEGER MinimumSize)
 {
-    PSMP_VOLUME_DESCRIPTOR Volume;
-    NTSTATUS Status = STATUS_DISK_FULL;
-    PLIST_ENTRY NextEntry;
+    NTSTATUS Status;
     ASSERT(Descriptor->Name.Buffer[STANDARD_DRIVE_LETTER_OFFSET] == L'?');
 
-    /* Loop the volume list */
-    NextEntry = SmpVolumeDescriptorList.Flink;
-    while (NextEntry != &SmpVolumeDescriptorList)
-    {
-        /* Get the volume */
-        Volume = CONTAINING_RECORD(NextEntry, SMP_VOLUME_DESCRIPTOR, Entry);
-
-        /* Make sure it's inserted and on a valid drive letter */
-        ASSERT(Volume->Flags & SMP_VOLUME_INSERTED); // Volume->Initialized in ASSERT
-        ASSERT(Volume->DriveLetter >= L'A' && Volume->DriveLetter <= L'Z');
-
-        /* Write the drive letter to try creating it on this volume */
-        Descriptor->Name.Buffer[STANDARD_DRIVE_LETTER_OFFSET] = Volume->DriveLetter;
-        Status = SmpCreatePagingFileOnFixedDrive(Descriptor,
-                                                 FuzzFactor,
-                                                 MinimumSize);
-        if (NT_SUCCESS(Status)) break;
-
-        /* It didn't work, make it an any pagefile again and keep going */
+    /* Automatic and emergency pagefiles stay on the ReactOS volume. */
+    Descriptor->Name.Buffer[STANDARD_DRIVE_LETTER_OFFSET] = RtlUpcaseUnicodeChar(SharedUserData->NtSystemRoot[0]);
+    Status = SmpCreatePagingFileOnFixedDrive(Descriptor, FuzzFactor, MinimumSize);
+    if (!NT_SUCCESS(Status))
         Descriptor->Name.Buffer[STANDARD_DRIVE_LETTER_OFFSET] = L'?';
-        NextEntry = NextEntry->Flink;
-    }
 
-    /* Return disk full or success */
     return Status;
 }
 
@@ -860,8 +840,8 @@ SmpCreateSystemManagedPagingFile(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
     /* Check if this should be a fixed pagefile or an any pagefile */
     if (Descriptor->Name.Buffer[STANDARD_DRIVE_LETTER_OFFSET] == '?')
     {
-        /* Find a disk for it */
-        return SmpCreatePagingFileOnAnyDrive(Descriptor, &FuzzFactor, &Size);
+        /* Use the system drive without falling back to attached data disks. */
+        return SmpCreatePagingFileOnSystemDrive(Descriptor, &FuzzFactor, &Size);
     }
 
     /* Use the disk that was given */
@@ -1158,20 +1138,16 @@ SmpCreatePagingFiles(VOID)
                     &Descriptor->Name);
             if (Descriptor->Name.Buffer[STANDARD_DRIVE_LETTER_OFFSET] == L'?')
             {
-                /* It's an any pagefile, try to create it wherever possible */
+                /* Resolve an automatic drive to the ReactOS volume. */
                 Size = Descriptor->MinSize;
-                Status = SmpCreatePagingFileOnAnyDrive(Descriptor,
-                                                       &FuzzFactor,
-                                                       &Size);
+                Status = SmpCreatePagingFileOnSystemDrive(Descriptor, &FuzzFactor, &Size);
                 if (!NT_SUCCESS(Status))
                 {
                     /* We failed to create it. Try again with a smaller size */
                     DPRINT("SMSS:PFILE: Trying lower sizes for (`%wZ')\n",
                             &Descriptor->Name);
                     Size.QuadPart = 16 * MEGABYTE;
-                    Status = SmpCreatePagingFileOnAnyDrive(Descriptor,
-                                                           &FuzzFactor,
-                                                           &Size);
+                    Status = SmpCreatePagingFileOnSystemDrive(Descriptor, &FuzzFactor, &Size);
                 }
             }
             else
