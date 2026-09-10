@@ -608,8 +608,7 @@ SystemFunction036(PVOID pbBuffer, ULONG dwLen)
         return TRUE;
     }
 
-    RosCsprngFill(pbBuffer, dwLen);
-    return TRUE;
+    return RosCsprngFill(pbBuffer, dwLen);
 }
 
 HANDLE KsecDeviceHandle;
