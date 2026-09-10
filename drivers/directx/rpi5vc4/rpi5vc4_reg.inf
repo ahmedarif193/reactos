@@ -14,14 +14,10 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","ImagePath",0x00020000,"system3
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Start",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Video","Service",0x00000000,"rpi5vc4"
-; The user-mode half.  The D3D runtime asks dxgkrnl for KMTQAITYPE_UMDRIVERNAME,
-; which reads this REG_MULTI_SZ, and loads the DLL it names.  The value is
-; indexed by KMTUMDVERSION (DX9, DX10, DX11, DX12), and a runtime asks for its
-; own slot -- a driver listed only at DX9 is invisible to D3D11, so all four
-; name the same DLL.  Without this key the kernel half can start perfectly and
-; the runtime still has nothing to load.
-HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverName",0x00010000,"rpi5vc4um.dll","rpi5vc4um.dll","rpi5vc4um.dll","rpi5vc4um.dll"
-HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverNameWow",0x00010000,"rpi5vc4um.dll","rpi5vc4um.dll","rpi5vc4um.dll","rpi5vc4um.dll"
+; The user-mode half implements the D3D9 OpenAdapter ABI. Publish only its
+; DX9 slot in KMTQAITYPE_UMDRIVERNAME; newer runtimes require their own DDI.
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverName",0x00010000,"rpi5vc4um.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverNameWow",0x00010000,"rpi5vc4um.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLDriverName",0x00000000,"rpi5vc4ogl.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLVersion",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLFlags",0x00010001,0x00000000

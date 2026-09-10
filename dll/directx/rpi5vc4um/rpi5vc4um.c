@@ -12,7 +12,7 @@
  * The runtime finds this DLL the way Windows does: it asks dxgkrnl for
  * KMTQAITYPE_UMDRIVERNAME, which reads `UserModeDriverName` from the adapter's
  * software key (rpi5vc4_reg.inf sets it), loads that DLL, and resolves exactly
- * one export -- OpenAdapter10_2.  Everything else is reached through the
+ * one export -- OpenAdapter.  Everything else is reached through the
  * function tables handed back from there.
  *
  * Scope, stated plainly.  The adapter and device lifecycle is real: open, get
@@ -169,7 +169,7 @@ static HRESULT APIENTRY Rpi5Vc4UmCloseAdapter(HANDLE hAdapter)
 /* ------------------------------------------------------------------------ *
  * The one export the runtime resolves by name.
  * ------------------------------------------------------------------------ */
-HRESULT APIENTRY OpenAdapter10_2(D3DDDIARG_OPENADAPTER *pOpenData)
+HRESULT APIENTRY OpenAdapter(D3DDDIARG_OPENADAPTER *pOpenData)
 {
     PRPI5VC4UM_ADAPTER Adapter;
 

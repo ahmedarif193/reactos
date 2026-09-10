@@ -3,4 +3,4 @@
 # PURPOSE:     VideoCore Direct3D 9 user-mode driver exports
 # COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
 
-@ stdcall OpenAdapter10_2(ptr)
+@ stdcall OpenAdapter(ptr)

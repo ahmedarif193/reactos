@@ -917,6 +917,8 @@ DxgkpQueryDriverStringValue(
     PKEY_VALUE_PARTIAL_INFORMATION ValueInfo = NULL;
     ULONG ValueChars;
     const WCHAR *Selected;
+    const WCHAR *ValueEnd;
+    const WCHAR *StringEnd;
     ULONG Index;
     NTSTATUS OpenStatus;
     NTSTATUS Status;
@@ -958,7 +960,8 @@ DxgkpQueryDriverStringValue(
     if ((ValueInfo->Type != REG_SZ &&
          ValueInfo->Type != REG_MULTI_SZ &&
          ValueInfo->Type != REG_EXPAND_SZ) ||
-        ValueInfo->DataLength < sizeof(WCHAR))
+        ValueInfo->DataLength < sizeof(WCHAR) ||
+        ValueInfo->DataLength % sizeof(WCHAR) != 0)
     {
         Status = STATUS_OBJECT_TYPE_MISMATCH;
         goto Cleanup;
@@ -972,26 +975,29 @@ DxgkpQueryDriverStringValue(
     }
 
     Selected = (const WCHAR *)ValueInfo->Data;
-    if (ValueInfo->Type == REG_MULTI_SZ)
+    ValueEnd = Selected + ValueChars;
+    for (Index = 0; ; ++Index)
     {
-        const WCHAR *Walker = Selected;
-
-        for (Index = 0; Index < MultiSzIndex && *Walker != UNICODE_NULL; ++Index)
+        if (Selected == ValueEnd || *Selected == UNICODE_NULL)
         {
-            while (*Walker != UNICODE_NULL)
-                ++Walker;
-
-            ++Walker;
+            Status = STATUS_OBJECT_NAME_NOT_FOUND;
+            goto Cleanup;
         }
 
-        if (*Walker != UNICODE_NULL)
-            Selected = Walker;
-    }
+        for (StringEnd = Selected;
+             StringEnd != ValueEnd && *StringEnd != UNICODE_NULL;
+             ++StringEnd)
+        {
+        }
+        if (StringEnd == ValueEnd)
+        {
+            Status = STATUS_OBJECT_TYPE_MISMATCH;
+            goto Cleanup;
+        }
 
-    if (*Selected == UNICODE_NULL)
-    {
-        Status = STATUS_OBJECT_NAME_NOT_FOUND;
-        goto Cleanup;
+        if (ValueInfo->Type != REG_MULTI_SZ || Index == MultiSzIndex)
+            break;
+        Selected = StringEnd + 1;
     }
 
     for (Index = 0; Index + 1 < BufferCount && Selected[Index] != UNICODE_NULL; ++Index)

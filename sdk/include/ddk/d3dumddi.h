@@ -9,7 +9,7 @@
  * cannot be built at all.
  *
  * What is frozen here is the entry surface and the two tables that cross it:
- * the runtime calls OpenAdapter10_2, receives D3DDDI_ADAPTERFUNCS, calls
+ * the runtime calls OpenAdapter, receives D3DDDI_ADAPTERFUNCS, calls
  * pfnCreateDevice, and receives D3DDDI_DEVICEFUNCS while handing the driver
  * D3DDDI_DEVICECALLBACKS to call back through.  Member order and count are the
  * ABI: a table entry in the wrong slot dispatches the runtime into the wrong
@@ -46,7 +46,7 @@ typedef LONGLONG REFERENCE_TIME;
 #endif
 
 /* The exported entry point the D3D runtime resolves by name. */
-#define D3DDDI_OPENADAPTER_PROCNAME "OpenAdapter10_2"
+#define D3DDDI_OPENADAPTER_PROCNAME "OpenAdapter"
 
 /* ------------------------------------------------------------------------ *
  * The entry structures are declared here and defined at the end.
