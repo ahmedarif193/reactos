@@ -1770,46 +1770,38 @@ BOOL GetStringField( PINFCONTEXT context, DWORD index, PWSTR *value)
     return ret;
 }
 
-static VOID FixupServiceBinaryPath(
+static BOOL FixupServiceBinaryPath(
     IN DWORD ServiceType,
     IN OUT LPWSTR *ServiceBinary)
 {
     LPWSTR Buffer;
-    WCHAR ReactOSDir[MAX_PATH];
-    DWORD RosDirLength, ServiceLength, Win32Length;
+    LPCWSTR Prefix;
+    WCHAR WindowsDirectory[MAX_PATH];
+    DWORD DirectoryLength, ServiceLength, PrefixLength;
 
-    GetWindowsDirectoryW(ReactOSDir, MAX_PATH);
-    RosDirLength = strlenW(ReactOSDir);
+    DirectoryLength = GetWindowsDirectoryW(WindowsDirectory, ARRAYSIZE(WindowsDirectory));
+    if (!DirectoryLength || DirectoryLength >= ARRAYSIZE(WindowsDirectory))
+        return FALSE;
     ServiceLength = strlenW(*ServiceBinary);
+    if (ServiceLength <= DirectoryLength || (*ServiceBinary)[DirectoryLength] != L'\\' || wcsnicmp(*ServiceBinary, WindowsDirectory, DirectoryLength))
+        return TRUE;
 
-    /* Check and fix two things:
-       1. Get rid of C:\ReactOS and use relative
-          path instead.
-       2. Add %SystemRoot% for Win32 services */
-
-    if (ServiceLength < RosDirLength)
-        return;
-
-    if (!wcsnicmp(*ServiceBinary, ReactOSDir, RosDirLength))
+    /* Drivers also read ImagePath to locate companion firmware. Preserve
+     * an absolute NT path for them, as native SetupAPI does. A bare
+     * System32 path only works when the service loader resolves it. */
+    Prefix = (ServiceType & SERVICE_WIN32) ? L"%SystemRoot%" : L"\\SystemRoot";
+    PrefixLength = strlenW(Prefix);
+    Buffer = MyMalloc((PrefixLength + ServiceLength - DirectoryLength + 1) * sizeof(WCHAR));
+    if (!Buffer)
     {
-        /* Yes, the first part is the C:\ReactOS\, just skip it */
-        MoveMemory(*ServiceBinary, *ServiceBinary + RosDirLength + 1,
-            (ServiceLength - RosDirLength) * sizeof(WCHAR));
-
-        /* Handle Win32-services differently */
-        if (ServiceType & SERVICE_WIN32)
-        {
-            Win32Length = (ServiceLength - RosDirLength) * sizeof(WCHAR)
-                        - sizeof(L'\\') + sizeof(L"%SystemRoot%\\");
-            Buffer = MyMalloc(Win32Length);
-
-            wcscpy(Buffer, L"%SystemRoot%\\");
-            wcscat(Buffer, *ServiceBinary);
-            MyFree(*ServiceBinary);
-
-            *ServiceBinary = Buffer;
-        }
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
     }
+    memcpy(Buffer, Prefix, PrefixLength * sizeof(WCHAR));
+    memcpy(Buffer + PrefixLength, *ServiceBinary + DirectoryLength, (ServiceLength - DirectoryLength + 1) * sizeof(WCHAR));
+    MyFree(*ServiceBinary);
+    *ServiceBinary = Buffer;
+    return TRUE;
 }
 
 static BOOL InstallOneService(
@@ -1869,7 +1861,8 @@ static BOOL InstallOneService(
     }
 
     /* Adjust binary path according to the service type */
-    FixupServiceBinaryPath(ServiceType, &ServiceBinary);
+    if (!FixupServiceBinaryPath(ServiceType, &ServiceBinary))
+        goto cleanup;
 
     /* Don't check return value, as these fields are optional and
      * GetLineText initialize output parameter even on failure */
