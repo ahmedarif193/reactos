@@ -436,43 +436,114 @@ SM2LaunchItem(SM2ITEM *pItem)
         SM2SetLastUsed(SM2_RECENT_LINK_KEY, pItem->szPath);
 }
 
-static VOID
-SM2EnableShutdownPriv(VOID)
+static DWORD
+SM2ExitWindows(UINT uFlags)
 {
     HANDLE hToken;
     TOKEN_PRIVILEGES tp;
+    TOKEN_PRIVILEGES PreviousState;
+    DWORD cbPreviousState = sizeof(PreviousState);
+    DWORD dwError;
+
+    if (uFlags == EWX_LOGOFF)
+        return ExitWindowsEx(uFlags, SHTDN_REASON_MAJOR_OTHER) ? ERROR_SUCCESS : GetLastError();
 
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
-        return;
+        return GetLastError();
 
     tp.PrivilegeCount = 1;
     tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-    if (LookupPrivilegeValueW(NULL, SE_SHUTDOWN_NAME, &tp.Privileges[0].Luid))
-        AdjustTokenPrivileges(hToken, FALSE, &tp, 0, NULL, NULL);
+    if (!LookupPrivilegeValueW(NULL, SE_SHUTDOWN_NAME, &tp.Privileges[0].Luid))
+    {
+        dwError = GetLastError();
+        CloseHandle(hToken);
+        return dwError;
+    }
+
+    /* A successful return can still mean that the token lacks the privilege. */
+    if (!AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(PreviousState), &PreviousState, &cbPreviousState))
+    {
+        dwError = GetLastError();
+        CloseHandle(hToken);
+        return dwError;
+    }
+    dwError = GetLastError();
+    if (dwError != ERROR_SUCCESS)
+    {
+        CloseHandle(hToken);
+        return dwError;
+    }
+
+    /* Let Winlogon end the session normally, including application vetoes. */
+    dwError = ExitWindowsEx(uFlags, SHTDN_REASON_MAJOR_OTHER) ? ERROR_SUCCESS : GetLastError();
+
+    /* Explorer survives a cancelled shutdown: restore its original privileges. */
+    if (!AdjustTokenPrivileges(hToken, FALSE, &PreviousState, 0, NULL, NULL) &&
+        dwError == ERROR_SUCCESS)
+    {
+        dwError = GetLastError();
+    }
 
     CloseHandle(hToken);
+    return dwError;
 }
 
 static VOID
-SM2DoShutdownCmd(int nCmd)
+SM2DoShutdownCmd(HWND hwndOwner, int nCmd)
 {
+    static BOOL bInProgress = FALSE;
+    DWORD dwError = ERROR_SUCCESS;
+    LPCWSTR pszAction;
+
+    /* ExitWindowsEx can pump messages while the shutdown request is pending. */
+    if (bInProgress)
+        return;
+
     switch (nCmd)
     {
         case SM2F_SHUTDOWN:
-            SM2EnableShutdownPriv();
-            ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF, SHTDN_REASON_MAJOR_OTHER);
+            pszAction = L"Shut down";
             break;
         case SM2F_RESTART:
-            SM2EnableShutdownPriv();
-            ExitWindowsEx(EWX_REBOOT, SHTDN_REASON_MAJOR_OTHER);
+            pszAction = L"Restart";
             break;
         case SM2F_LOGOFF:
-            ExitWindowsEx(EWX_LOGOFF, SHTDN_REASON_MAJOR_OTHER);
+            pszAction = L"Log off";
             break;
         case SM2F_LOCK:
-            LockWorkStation();
+            pszAction = L"Lock";
+            break;
+        default:
+            return;
+    }
+
+    bInProgress = TRUE;
+    switch (nCmd)
+    {
+        case SM2F_SHUTDOWN:
+        case SM2F_RESTART:
+            if (SHRestricted(REST_NOCLOSE))
+                dwError = ERROR_ACCESS_DISABLED_BY_POLICY;
+            else
+                dwError = SM2ExitWindows(nCmd == SM2F_RESTART ? EWX_REBOOT : EWX_POWEROFF);
+            break;
+        case SM2F_LOGOFF:
+            dwError = SM2ExitWindows(EWX_LOGOFF);
+            break;
+        case SM2F_LOCK:
+            if (!LockWorkStation())
+                dwError = GetLastError();
             break;
     }
+
+    if (dwError != ERROR_SUCCESS && dwError != ERROR_CANCELLED)
+    {
+        WCHAR szError[512];
+        if (!FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, dwError, 0, szError, _countof(szError), NULL))
+            StringCchPrintfW(szError, _countof(szError), L"The operation could not be completed (error %lu).", dwError);
+        ::MessageBoxW(hwndOwner, szError, pszAction, MB_OK | MB_ICONERROR);
+    }
+    bInProgress = FALSE;
 }
 
 static VOID
@@ -2015,7 +2086,8 @@ public:
                 break;
             case SM2R_SHUTDOWN:
                 Hide();
-                SM2DoShutdownCmd(SM2F_SHUTDOWN);
+                FinishHide();
+                SM2DoShutdownCmd(m_hwndTray, SM2F_SHUTDOWN);
                 break;
             case SM2R_SHUTARROW:
                 ShowFlyout();
@@ -2801,7 +2873,8 @@ public:
     {
         m_hwndFlyout = NULL;
         Hide();
-        SM2DoShutdownCmd((int)wParam);
+        FinishHide();
+        SM2DoShutdownCmd(m_hwndTray, (int)wParam);
         return 0;
     }
 
