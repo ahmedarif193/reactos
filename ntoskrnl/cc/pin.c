@@ -56,7 +56,7 @@ CcpFindBcb(
             (Bcb->PFCB.MappedFileOffset.QuadPart + Bcb->PFCB.MappedLength) >=
             (FileOffset->QuadPart + Length))
         {
-            if ((Pinned && Bcb->PinCount > 0) || (!Pinned && Bcb->PinCount == 0))
+            if (Pinned == Bcb->PinAccess)
             {
                 Found = TRUE;
                 break;
@@ -65,6 +65,95 @@ CcpFindBcb(
     }
 
     return (Found ? Bcb : NULL);
+}
+
+static
+VOID
+CcpFreeBcb(PINTERNAL_BCB Bcb)
+{
+    ASSERT(Bcb->RefCount == 0 && Bcb->PinCount == 0);
+    if (Bcb->MappedBase != NULL)
+        MmUnmapViewInSystemSpace(Bcb->MappedBase);
+    else
+        CcRosReleaseVacb(Bcb->SharedCacheMap, Bcb->Vacb, FALSE, FALSE);
+    ExDeleteResourceLite(&Bcb->Lock);
+    ExFreeToNPagedLookasideList(&iBcbLookasideList, Bcb);
+}
+
+/* Dirty BCBs remain discoverable by PIN_IF_BCB until writeback completes. */
+ULONGLONG
+CcpBeginBcbFlush(PROS_SHARED_CACHE_MAP SharedCacheMap)
+{
+    KIRQL OldIrql;
+    ULONGLONG Generation;
+    KeAcquireSpinLock(&SharedCacheMap->BcbSpinLock, &OldIrql);
+    Generation = SharedCacheMap->DirtyBcbGeneration;
+    KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
+    return Generation;
+}
+
+BOOLEAN
+CcpCompleteBcbFlush(PROS_SHARED_CACHE_MAP SharedCacheMap, LONGLONG Start, LONGLONG End, ULONGLONG Generation)
+{
+    LIST_ENTRY Retired;
+    PLIST_ENTRY Entry, Next;
+    KIRQL OldIrql;
+    BOOLEAN Dirty = FALSE;
+    InitializeListHead(&Retired);
+    KeAcquireSpinLock(&SharedCacheMap->BcbSpinLock, &OldIrql);
+    for (Entry = SharedCacheMap->BcbList.Flink; Entry != &SharedCacheMap->BcbList; Entry = Next)
+    {
+        PINTERNAL_BCB Bcb = CONTAINING_RECORD(Entry, INTERNAL_BCB, BcbEntry);
+        Next = Entry->Flink;
+        if (Bcb->PFCB.MappedFileOffset.QuadPart < Start || Bcb->PFCB.MappedFileOffset.QuadPart + Bcb->PFCB.MappedLength > End)
+            continue;
+        if (Bcb->Dirty && Bcb->PinCount == 0 && Bcb->DirtyGeneration <= Generation)
+        {
+            Bcb->Dirty = FALSE;
+            if (Bcb->RefCount == 0)
+            {
+                RemoveEntryList(Entry);
+                InsertTailList(&Retired, Entry);
+            }
+        }
+        Dirty |= Bcb->Dirty;
+    }
+    KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
+    while (!IsListEmpty(&Retired))
+        CcpFreeBcb(CONTAINING_RECORD(RemoveHeadList(&Retired), INTERNAL_BCB, BcbEntry));
+    return Dirty;
+}
+
+BOOLEAN
+CcpPurgeBcbs(PROS_SHARED_CACHE_MAP SharedCacheMap, LONGLONG Start, LONGLONG End)
+{
+    LIST_ENTRY Retired;
+    PLIST_ENTRY Entry, Next;
+    KIRQL OldIrql;
+    InitializeListHead(&Retired);
+    KeAcquireSpinLock(&SharedCacheMap->BcbSpinLock, &OldIrql);
+    for (Entry = SharedCacheMap->BcbList.Flink; Entry != &SharedCacheMap->BcbList; Entry = Entry->Flink)
+    {
+        PINTERNAL_BCB Bcb = CONTAINING_RECORD(Entry, INTERNAL_BCB, BcbEntry);
+        if (Bcb->PFCB.MappedFileOffset.QuadPart < End && Bcb->PFCB.MappedFileOffset.QuadPart + Bcb->PFCB.MappedLength > Start && Bcb->RefCount != 0)
+        {
+            KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
+            return FALSE;
+        }
+    }
+    for (Entry = SharedCacheMap->BcbList.Flink; Entry != &SharedCacheMap->BcbList; Entry = Next)
+    {
+        PINTERNAL_BCB Bcb = CONTAINING_RECORD(Entry, INTERNAL_BCB, BcbEntry);
+        Next = Entry->Flink;
+        if (Bcb->PFCB.MappedFileOffset.QuadPart >= End || Bcb->PFCB.MappedFileOffset.QuadPart + Bcb->PFCB.MappedLength <= Start)
+            continue;
+        RemoveEntryList(Entry);
+        InsertTailList(&Retired, Entry);
+    }
+    KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
+    while (!IsListEmpty(&Retired))
+        CcpFreeBcb(CONTAINING_RECORD(RemoveHeadList(&Retired), INTERNAL_BCB, BcbEntry));
+    return TRUE;
 }
 
 static
@@ -78,31 +167,12 @@ CcpDereferenceBcb(
 
     KeAcquireSpinLock(&SharedCacheMap->BcbSpinLock, &OldIrql);
     RefCount = --Bcb->RefCount;
-    if (RefCount == 0)
+    if (RefCount == 0 && !Bcb->Dirty)
     {
         RemoveEntryList(&Bcb->BcbEntry);
         KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
 
-        ASSERT(Bcb->PinCount == 0);
-        if (Bcb->MappedBase != NULL)
-        {
-            MmUnmapViewInSystemSpace(Bcb->MappedBase);
-        }
-        else
-        {
-            /*
-             * Don't mark dirty, if it was dirty,
-             * the VACB was already marked as such
-             * following the call to CcSetDirtyPinnedData
-             */
-            CcRosReleaseVacb(SharedCacheMap,
-                             Bcb->Vacb,
-                             FALSE,
-                             FALSE);
-        }
-
-        ExDeleteResourceLite(&Bcb->Lock);
-        ExFreeToNPagedLookasideList(&iBcbLookasideList, Bcb);
+        CcpFreeBcb(Bcb);
     }
     else
     {
@@ -141,6 +211,7 @@ CcpGetAppropriateBcb(
     iBcb->MappedBase = NULL;
     iBcb->MappedBaseOffset.QuadPart = 0;
     iBcb->PinCount = 0;
+    iBcb->PinAccess = ToPin;
     iBcb->RefCount = 1;
     ExInitializeResourceLite(&iBcb->Lock);
 
@@ -164,7 +235,6 @@ CcpGetAppropriateBcb(
             {
                 DupBcb->ExclusivePinCount++;
                 DupBcb->ExclusiveOwner = ExGetCurrentResourceThread();
-                DupBcb->PinCount++;
             }
             else
             {
@@ -175,6 +245,12 @@ CcpGetAppropriateBcb(
 
         if (DupBcb != NULL)
         {
+            if (ToPin)
+            {
+                KeAcquireSpinLock(&SharedCacheMap->BcbSpinLock, &OldIrql);
+                DupBcb->PinCount++;
+                KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
+            }
             /* Delete the loser */
             CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
             ExDeleteResourceLite(&iBcb->Lock);
@@ -419,7 +495,9 @@ CcpPinData(
             NewBcb->ExclusivePinCount++;
             NewBcb->ExclusiveOwner = ExGetCurrentResourceThread();
         }
+        KeAcquireSpinLock(&SharedCacheMap->BcbSpinLock, &OldIrql);
         NewBcb->PinCount++;
+        KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
     }
     else
     {
@@ -734,8 +812,14 @@ CcSetDirtyPinnedData (
 {
     PINTERNAL_BCB iBcb = CONTAINING_RECORD(Bcb, INTERNAL_BCB, PFCB);
     PROS_VACB Vacb = iBcb->Vacb;
+    KIRQL OldIrql;
 
     CCTRACE(CC_API_DEBUG, "Bcb=%p Lsn=%p\n", Bcb, Lsn);
+
+    KeAcquireSpinLock(&iBcb->SharedCacheMap->BcbSpinLock, &OldIrql);
+    iBcb->Dirty = TRUE;
+    iBcb->DirtyGeneration = ++iBcb->SharedCacheMap->DirtyBcbGeneration;
+    KeReleaseSpinLock(&iBcb->SharedCacheMap->BcbSpinLock, OldIrql);
 
     /* Tell Mm */
     MmMakeSegmentDirty(iBcb->SharedCacheMap->FileObject->SectionObjectPointer,
@@ -771,6 +855,8 @@ CcUnpinDataForThread (
     IN	ERESOURCE_THREAD ResourceThreadId)
 {
     PINTERNAL_BCB iBcb = CONTAINING_RECORD(Bcb, INTERNAL_BCB, PFCB);
+    KIRQL OldIrql;
+    BOOLEAN Dirty;
 
     CCTRACE(CC_API_DEBUG, "Bcb=%p ResourceThreadId=%lu\n", Bcb, ResourceThreadId);
 
@@ -785,10 +871,19 @@ CcUnpinDataForThread (
         }
     }
 
+    KeAcquireSpinLock(&iBcb->SharedCacheMap->BcbSpinLock, &OldIrql);
     if (iBcb->PinCount != 0)
     {
         iBcb->PinCount--;
     }
+    Dirty = iBcb->Dirty;
+    if (Dirty)
+        iBcb->DirtyGeneration = ++iBcb->SharedCacheMap->DirtyBcbGeneration;
+    KeReleaseSpinLock(&iBcb->SharedCacheMap->BcbSpinLock, OldIrql);
+
+    /* A write may finish after a concurrent flush took its dirty snapshot. */
+    if (Dirty && iBcb->Vacb != NULL)
+        CcRosMarkDirtyVacb(iBcb->Vacb);
 
     CcpDereferenceBcb(iBcb->SharedCacheMap, iBcb);
 }
@@ -802,10 +897,13 @@ CcRepinBcb (
     IN	PVOID Bcb)
 {
     PINTERNAL_BCB iBcb = CONTAINING_RECORD(Bcb, INTERNAL_BCB, PFCB);
+    KIRQL OldIrql;
 
     CCTRACE(CC_API_DEBUG, "Bcb=%p\n", Bcb);
 
+    KeAcquireSpinLock(&iBcb->SharedCacheMap->BcbSpinLock, &OldIrql);
     iBcb->RefCount++;
+    KeReleaseSpinLock(&iBcb->SharedCacheMap->BcbSpinLock, OldIrql);
 }
 
 /*
@@ -819,7 +917,6 @@ CcUnpinRepinnedBcb (
     IN	PIO_STATUS_BLOCK IoStatus)
 {
     PINTERNAL_BCB iBcb = CONTAINING_RECORD(Bcb, INTERNAL_BCB, PFCB);
-    KIRQL OldIrql;
     PROS_SHARED_CACHE_MAP SharedCacheMap;
 
     CCTRACE(CC_API_DEBUG, "Bcb=%p WriteThrough=%d\n", Bcb, WriteThrough);
@@ -840,41 +937,5 @@ CcUnpinRepinnedBcb (
         IoStatus->Information = 0;
     }
 
-    KeAcquireSpinLock(&SharedCacheMap->BcbSpinLock, &OldIrql);
-    if (--iBcb->RefCount == 0)
-    {
-        RemoveEntryList(&iBcb->BcbEntry);
-        KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
-
-        if (iBcb->PinCount != 0)
-        {
-            ExReleaseResourceLite(&iBcb->Lock);
-            iBcb->PinCount--;
-            ASSERT(iBcb->PinCount == 0);
-        }
-
-        /*
-         * Don't mark dirty, if it was dirty,
-         * the VACB was already marked as such
-         * following the call to CcSetDirtyPinnedData
-         */
-        if (iBcb->MappedBase != NULL)
-        {
-            MmUnmapViewInSystemSpace(iBcb->MappedBase);
-        }
-        else
-        {
-            CcRosReleaseVacb(iBcb->SharedCacheMap,
-                             iBcb->Vacb,
-                             FALSE,
-                             FALSE);
-        }
-
-        ExDeleteResourceLite(&iBcb->Lock);
-        ExFreeToNPagedLookasideList(&iBcbLookasideList, iBcb);
-    }
-    else
-    {
-        KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
-    }
+    CcpDereferenceBcb(SharedCacheMap, iBcb);
 }
