@@ -548,12 +548,19 @@ IopFindInterruptResource(
         {
             HAL_MESSAGE_ROUTING_INFO RoutingInfo;
             NTSTATUS RoutingStatus;
+            ULONG MessageCount = 1;
+
+            if (IoDesc->u.Interrupt.MinimumVector == IoDesc->u.Interrupt.MaximumVector &&
+                IoDesc->u.Interrupt.MaximumVector >= 1)
+            {
+                MessageCount = IoDesc->u.Interrupt.MaximumVector;
+            }
 
             RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
             RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
             RoutingInfo.Flags = HAL_MSI_ROUTING_ALLOCATE_VECTOR;
             RoutingInfo.DesiredIrql = CLOCK_LEVEL - 1;
-            RoutingInfo.MessageCount = 1;
+            RoutingInfo.MessageCount = MessageCount;
 
             RoutingStatus = HalpGetMessageRoutingInfo(&RoutingInfo);
             if (NT_SUCCESS(RoutingStatus))
@@ -563,6 +570,8 @@ IopFindInterruptResource(
                 CmDesc->u.Interrupt.Vector   = RoutingInfo.Vector;
                 CmDesc->u.Interrupt.Level    = RoutingInfo.Irql;
                 CmDesc->u.Interrupt.Affinity = RoutingInfo.TargetProcessors;
+                if (MessageCountOut)
+                    *MessageCountOut = MessageCount;
                 DPRINT1("MSI: allocated vector 0x%02x at irql %u\n",
                         RoutingInfo.Vector, RoutingInfo.Irql);
                 return TRUE;
