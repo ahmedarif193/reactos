@@ -1,0 +1,63 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright 2026 Ahmed ARIF */
+#include "../operationsprogress.h"
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+IDD_OPERATIONS_PROGRESS DIALOGEX 0, 0, 350, 110
+STYLE DS_SHELLFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+EXSTYLE WS_EX_CONTROLPARENT
+CAPTION "File operation"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT "", IDC_OP_LOCATION, 0, 0, 0, 0, SS_NOPREFIX | SS_ENDELLIPSIS
+    CONTROL "", IDC_OP_SOURCE, "SysLink", WS_CHILD | WS_TABSTOP, 0, 0, 0, 0
+    LTEXT "", IDC_OP_TO, 0, 0, 0, 0, SS_NOPREFIX
+    CONTROL "", IDC_OP_TARGET, "SysLink", WS_CHILD | WS_TABSTOP, 0, 0, 0, 0
+    LTEXT "", IDC_OP_PERCENT, 0, 0, 0, 0, SS_NOPREFIX
+    CONTROL "Pause", IDC_OP_PAUSE, "BUTTON", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0
+    CONTROL "Cancel", IDCANCEL, "BUTTON", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0
+    CONTROL "", IDC_OP_GRAPH, "STATIC", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 0, 0, 0, 0
+    LTEXT "", IDC_OP_NAME, 0, 0, 0, 0, SS_NOPREFIX | SS_PATHELLIPSIS
+    LTEXT "", IDC_OP_TIME, 0, 0, 0, 0, SS_NOPREFIX
+    LTEXT "", IDC_OP_ITEMS, 0, 0, 0, 0, SS_NOPREFIX
+    CONTROL "More details", IDC_OP_DETAILS, "BUTTON", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 0, 0, 0, 0
+END
+
+STRINGTABLE
+BEGIN
+    IDS_OP_PERCENT "%u%% complete"
+    IDS_OP_MORE "More details"
+    IDS_OP_FEWER "Fewer details"
+    IDS_OP_PAUSE "Pause"
+    IDS_OP_RESUME "Resume"
+    IDS_OP_CANCEL "Cancel"
+    IDS_OP_PAUSED "Paused"
+    IDS_OP_CANCELLING "Cancelling..."
+    IDS_OP_CALCULATING "Calculating..."
+    IDS_OP_NAME "Name: %s"
+    IDS_OP_TIME "Time remaining: %s"
+    IDS_OP_ITEMS "Items remaining: %s (%s)"
+    IDS_OP_SPEED "Speed: %s/s"
+    IDS_OP_FROMTO "%s %s items from %s to %s"
+    IDS_OP_FROM "%s %s items from %s"
+    IDS_OP_COUNT "%s %s items"
+    IDS_OP_ERRORS "Waiting for your response"
+    IDS_OP_UNDO "Undo"
+    IDS_OP_TO "%s %s items to %s"
+    IDS_OP_CONNECT " to "
+    IDS_OP_ACTION "Working"
+    IDS_OP_ACTION+1 "Moving"
+    IDS_OP_ACTION+2 "Copying"
+    IDS_OP_ACTION+3 "Recycling"
+    IDS_OP_ACTION+4 "Applying attributes to"
+    IDS_OP_ACTION+5 "Downloading"
+    IDS_OP_ACTION+6 "Searching for"
+    IDS_OP_ACTION+7 "Calculating"
+    IDS_OP_ACTION+8 "Uploading"
+    IDS_OP_ACTION+9 "Searching for"
+    IDS_OP_ACTION+10 "Deleting"
+    IDS_OP_ACTION+11 "Renaming"
+    IDS_OP_ACTION+12 "Formatting"
+    IDS_OP_ACTION+13 "Moving"
+END

@@ -22,6 +22,7 @@ list(APPEND SOURCE
     CShellTaskScheduler.h
     CTaskbarList.cpp
     CTaskbarList.h
+    COperationsProgressDialog.cpp
     commonbrowser.cpp
     desktopipc.cpp
     globalfoldersettings.cpp
@@ -40,8 +41,7 @@ list(APPEND PCH_SKIP_SOURCE
     aclsource.c
     browseui_main.c
     compcatcachedaemon.c
-    dllinstall.c
-    progressdlg.c)
+    dllinstall.c)
 
 set_source_files_properties(browseui_main.c PROPERTIES COMPILE_DEFINITIONS
     "DllMain=WineBrowseUI_DllMain;DllCanUnloadNow=WineBrowseUI_DllCanUnloadNow;DllGetClassObject=WineBrowseUI_DllGetClassObject;DllInstall=WineBrowseUI_DllInstall;ACLShellSource_Constructor=ReactOS_ACLShellSource_Constructor")
@@ -52,7 +52,6 @@ set_property(SOURCE
     aclsource.c
     browseui_main.c
     compcatcachedaemon.c
-    progressdlg.c
     APPEND PROPERTY COMPILE_DEFINITIONS __WINESRC__)
 
 add_library(browseui MODULE
@@ -60,6 +59,12 @@ add_library(browseui MODULE
     ${PCH_SKIP_SOURCE}
     browseui.rc
     ${CMAKE_CURRENT_BINARY_DIR}/browseui.def)
+
+# The RC compiler does not scan includes; rebuild the template when its
+# separately maintained layout or control IDs change.
+set_property(SOURCE browseui.rc APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/res/operationsprogress.rc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/operationsprogress.h")
 
 set_module_type(browseui win32dll UNICODE)
 add_idl_reg_scripts(browseui registry browseui_classes.idl)
