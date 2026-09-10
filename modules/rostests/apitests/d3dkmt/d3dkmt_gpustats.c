@@ -26,58 +26,8 @@ typedef NTSTATUS (APIENTRY *PFN_QueryStatistics)(const D3DKMT_QUERYSTATISTICS *)
 
 static BOOL StatisticsClassUnavailable(NTSTATUS Status)
 {
-    return Status == STATUS_INVALID_PARAMETER || Status == STATUS_NOT_SUPPORTED;
-}
-
-static BOOL GetAdapterLuid(D3DKMT_HANDLE hAdapter, LUID *Luid)
-{
-    D3DKMT_QUERYADAPTERINFO Query;
-    D3DKMT_ADAPTERREGISTRYINFO Unused;
-    D3DKMT_OPENADAPTERFROMLUID Open;
-    PFN_D3DKMTEnumAdapters pfnEnum;
-    PFN_D3DKMTCloseAdapter pfnClose;
-    D3DKMT_ENUMADAPTERS Adapters;
-    ULONG i;
-    BOOL found = FALSE;
-
-    (void)Query; (void)Unused; (void)Open;
-
-    pfnEnum = (PFN_D3DKMTEnumAdapters)LoadD3DKMTProc("D3DKMTEnumAdapters");
-    pfnClose = (PFN_D3DKMTCloseAdapter)LoadD3DKMTProc("D3DKMTCloseAdapter");
-    if (!pfnEnum || !pfnClose)
-        return FALSE;
-
-    memset(&Adapters, 0, sizeof(Adapters));
-    if (!NT_SUCCESS(pfnEnum(&Adapters)))
-        return FALSE;
-
-    for (i = 0; i < Adapters.NumAdapters; i++)
-    {
-        D3DKMT_CLOSEADAPTER Close;
-
-        if (!found && Adapters.Adapters[i].hAdapter == hAdapter)
-        {
-            *Luid = Adapters.Adapters[i].AdapterLuid;
-            found = TRUE;
-        }
-        memset(&Close, 0, sizeof(Close));
-        Close.hAdapter = Adapters.Adapters[i].hAdapter;
-        if (Close.hAdapter && Close.hAdapter != hAdapter)
-            pfnClose(&Close);
-    }
-
-    /*
-     * EnumAdapters hands back its own handles, so the LUID has to be taken
-     * from the enumeration itself rather than from the handle under test.
-     * Re-enumerating for the first adapter is what makes this work when the
-     * caller's handle came from a different open.
-     */
-    if (!found && Adapters.NumAdapters > 0)
-    {
-        *Luid = Adapters.Adapters[0].AdapterLuid;
-        found = TRUE;
-    }
-    return found;
+    return Status == STATUS_INVALID_PARAMETER || Status == STATUS_NOT_SUPPORTED ||
+           Status == STATUS_NOT_IMPLEMENTED;
 }
 
 static NTSTATUS Query(PFN_QueryStatistics pfn, D3DKMT_QUERYSTATISTICS *Statistics,
@@ -107,6 +57,72 @@ static void Test_QueryStatistics_Contract(void)
     ok_failed(Status, "QueryStatistics on an adapter that does not exist should fail, got 0x%08lX\n", (long)Status);
 }
 
+/* Run before any test creates a device in this process. An open adapter alone
+ * is insufficient; adapter statistics survive the last device, node statistics
+ * do not. Neither query requires a context or any GPU submission. */
+static void Test_QueryStatistics_ProcessLifecycle(void)
+{
+    static const char *Phases[] = {"before device", "after device", "after destroy"};
+    D3DKMT_CREATEDEVICE Create;
+    D3DKMT_DESTROYDEVICE Destroy;
+    D3DKMT_QUERYSTATISTICS Statistics;
+    D3DKMT_HANDLE hAdapter;
+    NTSTATUS Status, Expected;
+    LUID Luid;
+    ULONG Phase;
+
+    LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
+    LOADFN(PFN_D3DKMTCreateDevice, pfnCreate, "D3DKMTCreateDevice");
+    LOADFN(PFN_D3DKMTDestroyDevice, pfnDestroy, "D3DKMTDestroyDevice");
+
+    hAdapter = OpenRenderAdapterEx(&Luid, NULL);
+    if (!hAdapter) { skip("No render adapter\n"); return; }
+
+    memset(&Create, 0, sizeof(Create));
+    Create.hAdapter = hAdapter;
+    for (Phase = 0; Phase < ARRAYSIZE(Phases); ++Phase)
+    {
+        if (Phase == 1)
+        {
+            Status = pfnCreate(&Create);
+            ok_succeeded(Status, "Lifecycle CreateDevice failed 0x%08lX\n", (long)Status);
+            if (!NT_SUCCESS(Status))
+                break;
+            ok(Create.hDevice != 0, "CreateDevice returned no device\n");
+            if (!Create.hDevice)
+                break;
+        }
+        else if (Phase == 2)
+        {
+            memset(&Destroy, 0, sizeof(Destroy));
+            Destroy.hDevice = Create.hDevice;
+            Status = pfnDestroy(&Destroy);
+            ok_succeeded(Status, "Lifecycle DestroyDevice failed 0x%08lX\n", (long)Status);
+            if (!NT_SUCCESS(Status))
+                break;
+            Create.hDevice = 0;
+        }
+
+        Status = Query(pfn, &Statistics, D3DKMT_QUERYSTATISTICS_PROCESS_ADAPTER, Luid);
+        Expected = Phase == 0 ? STATUS_INVALID_PARAMETER : STATUS_SUCCESS;
+        ok(Status == Expected, "PROCESS_ADAPTER %s returned 0x%08lX, expected 0x%08lX\n",
+           Phases[Phase], (long)Status, (long)Expected);
+
+        memset(&Statistics, 0, sizeof(Statistics));
+        Statistics.Type = D3DKMT_QUERYSTATISTICS_PROCESS_NODE;
+        Statistics.AdapterLuid = Luid;
+        Statistics.hProcess = GetCurrentProcess();
+        Statistics.QueryProcessNode.NodeId = 0;
+        Status = pfn(&Statistics);
+        Expected = Phase == 1 ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+        ok(Status == Expected, "PROCESS_NODE %s returned 0x%08lX, expected 0x%08lX\n",
+           Phases[Phase], (long)Status, (long)Expected);
+    }
+    if (Create.hDevice)
+        DestroyTestDevice(Create.hDevice);
+    CloseAdapter(hAdapter);
+}
+
 /* ---- Adapter topology, and the segment/node counts everything else uses ---- */
 static void Test_QueryStatistics_Adapter(void)
 {
@@ -118,9 +134,8 @@ static void Test_QueryStatistics_Adapter(void)
 
     LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
-    if (!GetAdapterLuid(hAdapter, &Luid)) { CloseAdapter(hAdapter); skip("No adapter LUID\n"); return; }
+    hAdapter = OpenRenderAdapterEx(&Luid, NULL);
+    if (!hAdapter) { skip("No render adapter\n"); return; }
 
     Status = Query(pfn, &Statistics, D3DKMT_QUERYSTATISTICS_ADAPTER, Luid);
     ok_succeeded(Status, "QueryStatistics(ADAPTER) failed 0x%08lX\n", (long)Status);
@@ -154,9 +169,8 @@ static void Test_QueryStatistics_Segments(void)
 
     LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
-    if (!GetAdapterLuid(hAdapter, &Luid)) { CloseAdapter(hAdapter); skip("No adapter LUID\n"); return; }
+    hAdapter = OpenRenderAdapterEx(&Luid, NULL);
+    if (!hAdapter) { skip("No render adapter\n"); return; }
 
     Status = Query(pfn, &Statistics, D3DKMT_QUERYSTATISTICS_ADAPTER, Luid);
     if (!NT_SUCCESS(Status)) { CloseAdapter(hAdapter); skip("QueryStatistics(ADAPTER) failed\n"); return; }
@@ -215,9 +229,8 @@ static void Test_QueryStatistics_Nodes(void)
 
     LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
-    if (!GetAdapterLuid(hAdapter, &Luid)) { CloseAdapter(hAdapter); skip("No adapter LUID\n"); return; }
+    hAdapter = OpenRenderAdapterEx(&Luid, NULL);
+    if (!hAdapter) { skip("No render adapter\n"); return; }
 
     Status = Query(pfn, &First, D3DKMT_QUERYSTATISTICS_ADAPTER, Luid);
     if (!NT_SUCCESS(Status)) { CloseAdapter(hAdapter); skip("QueryStatistics(ADAPTER) failed\n"); return; }
@@ -294,21 +307,30 @@ static void Test_QueryStatistics_Nodes(void)
 static void Test_QueryStatistics_Process(void)
 {
     D3DKMT_QUERYSTATISTICS Statistics, Global;
-    D3DKMT_HANDLE hAdapter;
+    D3DKMT_HANDLE hAdapter, hDevice;
     LUID Luid;
     NTSTATUS Status;
     ULONG Nodes, Segments, i;
 
     LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
-    if (!GetAdapterLuid(hAdapter, &Luid)) { CloseAdapter(hAdapter); skip("No adapter LUID\n"); return; }
+    hAdapter = OpenRenderAdapterEx(&Luid, NULL);
+    if (!hAdapter) { skip("No render adapter\n"); return; }
 
     Status = Query(pfn, &Global, D3DKMT_QUERYSTATISTICS_ADAPTER, Luid);
     if (!NT_SUCCESS(Status)) { CloseAdapter(hAdapter); skip("QueryStatistics(ADAPTER) failed\n"); return; }
     Nodes = Global.QueryResult.AdapterInformation.NodeCount;
     Segments = Global.QueryResult.AdapterInformation.NbSegments;
+
+    /* Windows creates process-node statistics when this process opens a
+     * device on the queried adapter, and removes them on device teardown. */
+    hDevice = CreateTestDevice(hAdapter);
+    ok(hDevice != 0, "CreateDevice for process statistics failed\n");
+    if (hDevice == 0)
+    {
+        CloseAdapter(hAdapter);
+        return;
+    }
 
     Status = Query(pfn, &Statistics, D3DKMT_QUERYSTATISTICS_PROCESS, Luid);
     ok_succeeded(Status, "QueryStatistics(PROCESS) failed 0x%08lX\n", (long)Status);
@@ -414,6 +436,7 @@ static void Test_QueryStatistics_Process(void)
            (long long)NodeGlobal.QueryResult.NodeInformation.GlobalInformation.RunningTime.QuadPart);
     }
 
+    DestroyTestDevice(hDevice);
     CloseAdapter(hAdapter);
 }
 
@@ -428,9 +451,8 @@ static void Test_QueryStatistics_SegmentGroups(void)
 
     LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
-    if (!GetAdapterLuid(hAdapter, &Luid)) { CloseAdapter(hAdapter); skip("No adapter LUID\n"); return; }
+    hAdapter = OpenRenderAdapterEx(&Luid, NULL);
+    if (!hAdapter) { skip("No render adapter\n"); return; }
 
     for (group = 0; group < 2; group++)
     {
@@ -481,9 +503,8 @@ static void Test_QueryStatistics_SegmentUsage(void)
 
     LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
-    if (!GetAdapterLuid(hAdapter, &Luid)) { CloseAdapter(hAdapter); skip("No adapter LUID\n"); return; }
+    hAdapter = OpenRenderAdapterEx(&Luid, NULL);
+    if (!hAdapter) { skip("No render adapter\n"); return; }
 
     Status = Query(pfn, &Statistics, D3DKMT_QUERYSTATISTICS_ADAPTER, Luid);
     if (!NT_SUCCESS(Status)) { CloseAdapter(hAdapter); skip("QueryStatistics(ADAPTER) failed\n"); return; }
@@ -638,9 +659,8 @@ static void Test_QueryStatistics_VidPnSource(void)
 
     LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
-    if (!GetAdapterLuid(hAdapter, &Luid)) { CloseAdapter(hAdapter); skip("No adapter LUID\n"); return; }
+    hAdapter = OpenRenderAdapterEx(&Luid, NULL);
+    if (!hAdapter) { skip("No render adapter\n"); return; }
 
     memset(&Statistics, 0, sizeof(Statistics));
     Statistics.Type = D3DKMT_QUERYSTATISTICS_VIDPNSOURCE;
@@ -672,21 +692,38 @@ static void Test_QueryStatistics_VidPnSource(void)
 static void Test_QueryStatistics_PhysicalAdapter(void)
 {
     D3DKMT_QUERYSTATISTICS Statistics;
+    D3DKMT_QUERYADAPTERINFO QueryInfo;
+    D3DKMT_DRIVERVERSION DriverVersion = 0;
     D3DKMT_HANDLE hAdapter;
+    BOOL Software;
     LUID Luid;
-    NTSTATUS Status;
+    NTSTATUS Status, InitialStatus, VersionStatus, Expected;
+    ULONG i;
 
     LOADFN(PFN_QueryStatistics, pfn, "D3DKMTQueryStatistics");
+    LOADFN(PFN_D3DKMTQueryAdapterInfo, pfnQai, "D3DKMTQueryAdapterInfo");
 
-    hAdapter = OpenAdapterFromDisplay1();
-    if (!hAdapter) { skip("No adapter on \\\\.\\DISPLAY1\n"); return; }
-    if (!GetAdapterLuid(hAdapter, &Luid)) { CloseAdapter(hAdapter); skip("No adapter LUID\n"); return; }
+    hAdapter = OpenRenderAdapterEx(&Luid, &Software);
+    if (!hAdapter) { skip("No render adapter\n"); return; }
+
+    memset(&QueryInfo, 0, sizeof(QueryInfo));
+    QueryInfo.hAdapter = hAdapter;
+    QueryInfo.Type = KMTQAITYPE_DRIVERVERSION;
+    QueryInfo.pPrivateDriverData = &DriverVersion;
+    QueryInfo.PrivateDriverDataSize = sizeof(DriverVersion);
+    VersionStatus = pfnQai(&QueryInfo);
 
     memset(&Statistics, 0, sizeof(Statistics));
     Statistics.Type = D3DKMT_QUERYSTATISTICS_PHYSICAL_ADAPTER;
     Statistics.AdapterLuid = Luid;
     Statistics.QueryPhysAdapter.PhysicalAdapterIndex = 0;
     Status = pfn(&Statistics);
+    InitialStatus = Status;
+    if (Software)
+        ok(Status == STATUS_INVALID_PARAMETER, "Software PHYSICAL_ADAPTER returned 0x%08lX\n", (long)Status);
+    else if (NT_SUCCESS(VersionStatus) && DriverVersion < KMT_DRIVERVERSION_WDDM_2_4 && !NT_SUCCESS(Status))
+        ok(Status == STATUS_NOT_IMPLEMENTED, "Pre-WDDM2.4 PHYSICAL_ADAPTER returned 0x%08lX, expected NOT_IMPLEMENTED\n", (long)Status);
+
     if (StatisticsClassUnavailable(Status))
         skip("QueryStatistics(PHYSICAL_ADAPTER) unavailable (0x%08lX)\n", (long)Status);
     else
@@ -699,13 +736,21 @@ static void Test_QueryStatistics_PhysicalAdapter(void)
               (unsigned long long)Statistics.QueryResult.PhysAdapterInformation.AdapterPerfData.MemoryFrequency);
     }
 
-    /* An index past the only physical adapter names nothing. */
-    memset(&Statistics, 0, sizeof(Statistics));
-    Statistics.Type = D3DKMT_QUERYSTATISTICS_PHYSICAL_ADAPTER;
-    Statistics.AdapterLuid = Luid;
-    Statistics.QueryPhysAdapter.PhysicalAdapterIndex = 7;
-    Status = pfn(&Statistics);
-    ok_failed(Status, "QueryStatistics(PHYSICAL_ADAPTER index 7) should fail, got 0x%08lX\n", (long)Status);
+    /* Class availability is checked before the physical index. hProcess is
+     * irrelevant to this adapter-wide class, with or without a live device. */
+    for (i = 1; i < 4; ++i)
+    {
+        memset(&Statistics, 0, sizeof(Statistics));
+        Statistics.Type = D3DKMT_QUERYSTATISTICS_PHYSICAL_ADAPTER;
+        Statistics.AdapterLuid = Luid;
+        Statistics.hProcess = (i & 1) ? GetCurrentProcess() : NULL;
+        Statistics.QueryPhysAdapter.PhysicalAdapterIndex = i < 2 ? 0 : 7;
+        Status = pfn(&Statistics);
+        Expected = i < 2 ? InitialStatus :
+                   InitialStatus == STATUS_NOT_IMPLEMENTED ? STATUS_NOT_IMPLEMENTED : STATUS_INVALID_PARAMETER;
+        ok(Status == Expected, "PHYSICAL_ADAPTER index %lu process %lu returned 0x%08lX, expected 0x%08lX\n",
+           Statistics.QueryPhysAdapter.PhysicalAdapterIndex, i & 1, (long)Status, (long)Expected);
+    }
 
     CloseAdapter(hAdapter);
 }
@@ -791,6 +836,7 @@ static void Test_AdapterPerfData(void)
 START_TEST(gpustats)
 {
     Test_QueryStatistics_Contract();
+    Test_QueryStatistics_ProcessLifecycle();
     Test_QueryStatistics_Adapter();
     Test_QueryStatistics_Segments();
     Test_QueryStatistics_Nodes();
