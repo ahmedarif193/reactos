@@ -30,6 +30,7 @@
 
 #include <ntifs.h>
 #include <ndis.h>
+#include <dot11wdi.h>
 #include "miniport.h"
 #include "protocol.h"
 
@@ -191,6 +192,8 @@ typedef struct _NDIS6_DRIVER_BLOCK
     UNICODE_STRING                          RegistryPath;
     PVOID                                   MiniportDriverContext;
     NDIS_MINIPORT_DRIVER_CHARACTERISTICS    Characteristics;
+    BOOLEAN                                 IsWdi;
+    NDIS_MINIPORT_DRIVER_WDI_CHARACTERISTICS WdiCharacteristics;
     NDIS_MINIPORT_PNP_CHARACTERISTICS       PnpCharacteristics;
     BOOLEAN                                 PnpCharacteristicsValid;
 #if NDIS_SUPPORT_NDIS630
@@ -583,6 +586,7 @@ Ndis6RegisterMiniportDriverInternal(
     _In_opt_ NDIS_HANDLE MiniportDriverContext,
     _In_ PNDIS_MINIPORT_DRIVER_CHARACTERISTICS MiniportDriverCharacteristics,
     _In_opt_ PNDIS6_WDF_CX_DRIVER WdfCxDriver,
+    _In_opt_ PNDIS_MINIPORT_DRIVER_WDI_CHARACTERISTICS WdiCharacteristics,
     _Out_ PNDIS_HANDLE NdisMiniportDriverHandle);
 
 PNDIS6_DRIVER_BLOCK

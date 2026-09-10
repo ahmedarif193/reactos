@@ -247,6 +247,7 @@ Ndis6RegisterMiniportDriverInternal(
     _In_opt_ NDIS_HANDLE                             MiniportDriverContext,
     _In_     PNDIS_MINIPORT_DRIVER_CHARACTERISTICS   MiniportDriverCharacteristics,
     _In_opt_ PNDIS6_WDF_CX_DRIVER                    WdfCxDriver,
+    _In_opt_ PNDIS_MINIPORT_DRIVER_WDI_CHARACTERISTICS WdiCharacteristics,
     _Out_    PNDIS_HANDLE                            NdisMiniportDriverHandle)
 {
     PNDIS6_DRIVER_BLOCK Block;
@@ -277,10 +278,10 @@ Ndis6RegisterMiniportDriverInternal(
     if (Status != NDIS_STATUS_SUCCESS)
         return Status;
 
-    /* These two callbacks are required for every NDIS 6 miniport. Other
-     * handlers remain optional or depend on the miniport type. */
-    if (MiniportDriverCharacteristics->InitializeHandlerEx == NULL ||
-        MiniportDriverCharacteristics->HaltHandlerEx == NULL)
+    /* Ordinary miniports provide InitializeEx/HaltEx. WDI drivers register
+     * separate adapter lifecycle callbacks in their WDI characteristics. */
+    if (!WdiCharacteristics && (MiniportDriverCharacteristics->InitializeHandlerEx == NULL ||
+        MiniportDriverCharacteristics->HaltHandlerEx == NULL))
     {
         return NDIS_STATUS_BAD_CHARACTERISTICS;
     }
@@ -298,6 +299,9 @@ Ndis6RegisterMiniportDriverInternal(
     Block->MiniportDriverContext = MiniportDriverContext;
     Block->IsWdfManaged          = (WdfCxDriver != NULL);
     Block->WdfCxDriver           = WdfCxDriver;
+    Block->IsWdi                 = (WdiCharacteristics != NULL);
+    if (WdiCharacteristics)
+        Block->WdiCharacteristics = *WdiCharacteristics;
     RtlCopyMemory(&Block->Characteristics, MiniportDriverCharacteristics, CharacteristicsSize);
 
     /* Copy the registry path so the driver can free its own copy if it
@@ -403,6 +407,7 @@ NdisMRegisterMiniportDriver(
                                                RegistryPath,
                                                MiniportDriverContext,
                                                MiniportDriverCharacteristics,
+                                               NULL,
                                                NULL,
                                                NdisMiniportDriverHandle);
 }

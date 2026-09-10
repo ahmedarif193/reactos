@@ -51,6 +51,7 @@ set(NDIS6_SOURCE
     ndis/60driver.c
     ndis/60adapter.c
     ndis/60wdf.c
+    ndis/60wdi.c
     ndis/60oid.c
     ndis/60thunk_tx.c
     ndis/60thunk_rx.c
