@@ -41,14 +41,18 @@ typedef struct
     DWORD dwYesToAllMask;
     BOOL bManyItems;
     BOOL bCancelled;
-    IProgressDialog *progress;
+    IOperationsProgressDialog *progress;
+    FILEOP_PROGRESS *sharedProgress;
     ULARGE_INTEGER completedSize;
     ULARGE_INTEGER totalSize;
-    WCHAR szBuilderString[50];
+    ULONGLONG currentSize;
+    ULONGLONG totalItems;
+    ULONGLONG completedItems;
     FILEOPCALLBACK Callback;
     void *CallerCallbackData;
     HWND hWndOwner;
     BOOL bHasDisplayedError;
+    DWORD dwFatalError;
 } FILE_OPERATION;
 
 #define ERROR_SHELL_INTERNAL_FILE_NOT_FOUND 1026
@@ -85,6 +89,59 @@ static DWORD move_files(FILE_OPERATION *op, BOOL multiDest, const FILE_LIST *flF
 
 DWORD WINAPI _FileOpCountManager(FILE_OPERATION *op, const FILE_LIST *flFrom);
 static BOOL _FileOpCount(FILE_OPERATION *op, LPWSTR pwszBuf, BOOL bFolder, DWORD *ticks);
+
+static BOOL _OperationCancelled(FILE_OPERATION *op)
+{
+    if (!op) return FALSE;
+    if (op->progress)
+    {
+        PDOPSTATUS status = PDOPS_RUNNING;
+        do
+        {
+            if (FAILED(op->progress->GetOperationStatus(&status))) break;
+            if (status == PDOPS_CANCELLED || status == PDOPS_STOPPED) op->bCancelled = TRUE;
+            if (status == PDOPS_PAUSED && !op->bCancelled) Sleep(50);
+        } while (status == PDOPS_PAUSED && !op->bCancelled);
+    }
+    return op->bCancelled;
+}
+
+static void _OperationProgress(FILE_OPERATION *op, ULONGLONG current = 0)
+{
+    if (!op || !op->progress) return;
+    ULONGLONG bytes = op->completedSize.QuadPart + min(current, MAXULONGLONG - op->completedSize.QuadPart);
+    ULONGLONG points = op->totalSize.QuadPart ? bytes : op->completedItems;
+    ULONGLONG total = op->totalSize.QuadPart ? op->totalSize.QuadPart : op->totalItems;
+    op->progress->UpdateProgress(points, total, bytes, op->totalSize.QuadPart, op->completedItems, op->totalItems);
+}
+
+static void _OperationBlockUI(FILE_OPERATION *op, BOOL blocked)
+{
+    if (!op || !op->progress) return;
+    if (blocked)
+    {
+        op->progress->SetMode((PDMODE)(PDM_RUN | PDM_ERRORSBLOCKING));
+        op->progress->PauseTimer();
+    }
+    else
+    {
+        op->progress->ResumeTimer();
+        op->progress->SetMode(PDM_RUN);
+    }
+}
+
+static void _OperationItemComplete(FILE_OPERATION *op, ULONGLONG size, ULONGLONG items = 1)
+{
+    if (!op) return;
+    op->completedSize.QuadPart += min(size, MAXULONGLONG - op->completedSize.QuadPart);
+    op->completedItems += min(items, MAXULONGLONG - op->completedItems);
+    if (op->sharedProgress)
+    {
+        op->sharedProgress->CompletedBytes = op->completedSize.QuadPart;
+        op->sharedProgress->CompletedItems = op->completedItems;
+    }
+    _OperationProgress(op);
+}
 
 static HRESULT SHELL32_FileOpErrorToHResult(int err, BOOL AnyOperationsAborted = FALSE)
 {
@@ -231,6 +288,7 @@ static INT_PTR CALLBACK ConfirmMsgBoxProc(HWND hDlg, UINT uMsg, WPARAM wParam, L
     switch (uMsg)
     {
         case WM_INITDIALOG:
+            SetWindowPos(hDlg, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             return ConfirmMsgBox_Init(hDlg, lParam);
         case WM_PAINT:
             return ConfirmMsgBox_Paint(hDlg);
@@ -356,7 +414,9 @@ static BOOL SHELL_ConfirmDialogW(HWND hWnd, int nKindOfDialog, LPCWSTR szDir, FI
                    szText, 0, 0, szBuffer, sizeof(szBuffer), (va_list*)args);
     hIcon = LoadIconW(ids.hIconInstance, (LPWSTR)MAKEINTRESOURCE(ids.icon_resource_id));
 
+    _OperationBlockUI(op, TRUE);
     ret = SHELL_ConfirmMsgBox(hWnd, szBuffer, szCaption, hIcon, op && op->bManyItems);
+    _OperationBlockUI(op, FALSE);
     if (op)
     {
         if (ret == IDC_YESTOALL)
@@ -407,6 +467,9 @@ EXTERN_C HRESULT WINAPI SHIsFileAvailableOffline(LPCWSTR path, LPDWORD status)
 static HRESULT FileOpCallback(FILE_OPERATION *op, FILEOPCALLBACKEVENT Event, LPCWSTR Source,
                               LPCWSTR Destination, UINT Attributes, HRESULT hrOp = S_OK)
 {
+    if (!op) return S_OK;
+    if ((Event == FOCE_PRECOPYITEM || Event == FOCE_PREMOVEITEM || Event == FOCE_PREDELETEITEM || Event == FOCE_PRERENAMEITEM) && _OperationCancelled(op))
+        return HRESULT_FROM_WIN32(ERROR_CANCELLED);
     if ((Attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_SYSTEM)) == FILE_ATTRIBUTE_SYSTEM)
     {
         if (Event == FOCE_POSTDELETEITEM)
@@ -464,14 +527,14 @@ BOOL SHELL_DeleteDirectoryW(FILE_OPERATION *op, LPCWSTR pszDir, BOOL bShowUI)
             else
                 ret = (SHNotifyDeleteFileW(op, szTemp) == ERROR_SUCCESS);
 
-            if (op->progress != NULL)
-                op->bCancelled |= op->progress->HasUserCancelled();
+            _OperationCancelled(op);
         } while (ret && FindNextFileW(hFind, &wfd) && !op->bCancelled);
     }
     FindClose(hFind);
     if (ret)
         ret = (SHNotifyRemoveDirectoryW(pszDir) == ERROR_SUCCESS);
     FileOpCallback(op, FOCE_POSTDELETEITEM, pszDir, NULL, wfd.dwFileAttributes, ret ? S_OK : E_FAIL);
+    if (ret) _OperationItemComplete(op, 0);
     return ret;
 }
 
@@ -546,86 +609,40 @@ EXTERN_C BOOL WINAPI Win32RemoveDirectoryW(LPCWSTR path)
     return (SHNotifyRemoveDirectoryW(path) == ERROR_SUCCESS);
 }
 
-static void _SetOperationTitle(FILE_OPERATION *op) {
-    if (op->progress == NULL)
-        return;
-    WCHAR szTitle[50], szPreflight[50];
-    UINT animation_id = NULL;
-
+static void _SetOperationTitle(FILE_OPERATION *op)
+{
+    if (!op->progress) return;
+    SPACTION action = SPACTION_COPYING;
     switch (op->req->wFunc)
     {
-        case FO_COPY:
-            LoadStringW(shell32_hInstance, IDS_FILEOOP_COPYING, szTitle, sizeof(szTitle)/sizeof(WCHAR));
-            LoadStringW(shell32_hInstance, IDS_FILEOOP_FROM_TO, op->szBuilderString, sizeof( op->szBuilderString)/sizeof(WCHAR));
-            animation_id = IDA_SHELL_COPY;
-            break;
-        case FO_DELETE:
-            LoadStringW(shell32_hInstance, IDS_FILEOOP_DELETING, szTitle, sizeof(szTitle)/sizeof(WCHAR));
-            LoadStringW(shell32_hInstance, IDS_FILEOOP_FROM, op->szBuilderString, sizeof( op->szBuilderString)/sizeof(WCHAR));
-            animation_id = IDA_SHELL_DELETE;
-            break;
-        case FO_MOVE:
-            LoadStringW(shell32_hInstance, IDS_FILEOOP_MOVING, szTitle, sizeof(szTitle)/sizeof(WCHAR));
-            LoadStringW(shell32_hInstance, IDS_FILEOOP_FROM_TO, op->szBuilderString, sizeof( op->szBuilderString)/sizeof(WCHAR));
-            animation_id = IDA_SHELL_COPY;
-            break;
-        default:
-            return;
+        case FO_MOVE: action = SPACTION_MOVING; break;
+        case FO_DELETE: action = (op->req->fFlags & FOF_ALLOWUNDO) ? SPACTION_RECYCLING : SPACTION_DELETING; break;
+        case FO_RENAME: action = SPACTION_RENAMING; break;
     }
-    LoadStringW(shell32_hInstance, IDS_FILEOOP_PREFLIGHT, szPreflight, sizeof(szPreflight)/sizeof(WCHAR));
-
-    op->progress->SetTitle(szTitle);
-    op->progress->SetLine(1, szPreflight, false, NULL);
-    op->progress->SetAnimation(shell32_hInstance, animation_id);
+    op->progress->SetOperation(action);
+    op->progress->SetMode(PDM_PREFLIGHT);
 }
 
-static void _SetOperationTexts(FILE_OPERATION *op, LPCWSTR src, LPCWSTR dest) {
-    if (op->progress == NULL || src == NULL)
-        return;
-    LPWSTR fileSpecS, pathSpecS, fileSpecD, pathSpecD;
-    WCHAR szFolderS[50], szFolderD[50], szFinalString[260];
+static void _SetOperationTexts(FILE_OPERATION *op, LPCWSTR src, LPCWSTR dest)
+{
+    if (!op) return;
+    op->currentSize = 0;
+    if (!src) return;
+    WIN32_FILE_ATTRIBUTE_DATA attributes;
+    if (GetFileAttributesExW(src, GetFileExInfoStandard, &attributes) && !(attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        op->currentSize = ((ULONGLONG)attributes.nFileSizeHigh << 32) | attributes.nFileSizeLow;
+    if (!op->progress) return;
 
-    DWORD_PTR args[2];
-
-    fileSpecS = (pathSpecS = (LPWSTR) src);
-    fileSpecD = (pathSpecD = (LPWSTR) dest);
-
-    // March across the string to get the file path and it's parent dir.
-    for (LPWSTR ptr = (LPWSTR) src; *ptr; ptr++) {
-        if (*ptr == '\\') {
-            pathSpecS = fileSpecS;
-            fileSpecS = ptr+1;
-        }
-    }
-    lstrcpynW(szFolderS, pathSpecS, min(50, fileSpecS - pathSpecS));
-    args[0] = (DWORD_PTR) szFolderS;
-
-    switch (op->req->wFunc)
+    CComPtr<IShellItem> item, source, target;
+    SHCreateItemFromParsingName(src, NULL, IID_PPV_ARG(IShellItem, &item));
+    if (item) item->GetParent(&source);
+    if (dest)
     {
-        case FO_COPY:
-        case FO_MOVE:
-            if (dest == NULL)
-                return;
-            for (LPWSTR ptr = (LPWSTR) dest; *ptr; ptr++) {
-                if (*ptr == '\\') {
-                    pathSpecD = fileSpecD;
-                    fileSpecD = ptr + 1;
-                }
-            }
-            lstrcpynW(szFolderD, pathSpecD, min(50, fileSpecD - pathSpecD));
-            args[1] = (DWORD_PTR) szFolderD;
-            break;
-        case FO_DELETE:
-            break;
-        default:
-            return;
+        WCHAR folder[MAX_PATH];
+        if (SUCCEEDED(StringCchCopyW(folder, _countof(folder), dest)) && PathRemoveFileSpecW(folder))
+            SHCreateItemFromParsingName(folder, NULL, IID_PPV_ARG(IShellItem, &target));
     }
-
-    FormatMessageW(FORMAT_MESSAGE_FROM_STRING|FORMAT_MESSAGE_ARGUMENT_ARRAY,
-                   op->szBuilderString, 0, 0, szFinalString, sizeof(szFinalString), (va_list*)args);
-
-    op->progress->SetLine(1, fileSpecS, false, NULL);
-    op->progress->SetLine(2, szFinalString, false, NULL);
+    op->progress->UpdateLocations(source, target, item);
 }
 
 
@@ -642,25 +659,8 @@ DWORD CALLBACK SHCopyProgressRoutine(
 ) {
     FILE_OPERATION *op = (FILE_OPERATION *) lpData;
 
-    if (op->progress) {
-        /*
-         * This is called at the start of each file. To keop less state,
-         * I'm adding the file to the completed size here, and the re-subtracting
-         * it when drawing the progress bar.
-         */
-        if (dwCallbackReason & CALLBACK_STREAM_SWITCH)
-            op->completedSize.QuadPart += TotalFileSize.QuadPart;
-
-        op->progress->SetProgress64(op->completedSize.QuadPart -
-                                    TotalFileSize.QuadPart +
-                                    TotalBytesTransferred.QuadPart
-                                  , op->totalSize.QuadPart);
-
-
-        op->bCancelled = op->progress->HasUserCancelled();
-    }
-
-    return 0;
+    _OperationProgress(op, TotalBytesTransferred.QuadPart);
+    return _OperationCancelled(op) ? PROGRESS_CANCEL : PROGRESS_CONTINUE;
 }
 
 
@@ -713,8 +713,7 @@ static DWORD SHNotifyDeleteFileW(FILE_OPERATION *op, LPCWSTR path)
     FileOpCallback(op, FOCE_POSTDELETEITEM, path, NULL, attrib, ret ? S_OK : E_FAIL);
     if (ret)
     {
-        // Bit of a hack to make the progress bar move. We don't have progress inside the file, so inform when done.
-        SHCopyProgressRoutine(FileSize, FileSize, FileSize, FileSize, 0, CALLBACK_STREAM_SWITCH, NULL, NULL, op);
+        _OperationItemComplete(op, FileSize.QuadPart);
         SHChangeNotify(SHCNE_DELETE, SHCNF_PATHW, path, NULL);
         return ERROR_SUCCESS;
     }
@@ -770,9 +769,13 @@ static DWORD CheckForError(FILE_OPERATION *op, DWORD error, LPCWSTR src)
                    PathFindFileNameW(src),
                    lpMsgBuffer);
 
-    MessageBoxW(op->hWndOwner, strText, strTitle, MB_ICONERROR);
+    _OperationBlockUI(op, TRUE);
+    MessageBoxW(op->hWndOwner, strText, strTitle, MB_ICONERROR | MB_TOPMOST | MB_SETFOREGROUND);
     LocalFree(lpMsgBuffer);
     op->bHasDisplayedError++;
+    op->bCancelled = TRUE;
+    op->dwFatalError = error;
+    if (op->req) op->req->fAnyOperationsAborted = TRUE;
     return error;
 }
 
@@ -806,6 +809,10 @@ static DWORD SHNotifyMoveFileW(FILE_OPERATION *op, LPCWSTR src, LPCWSTR dest, BO
 
     ret = MoveFileWithProgressW(src, dest, SHCopyProgressRoutine, op, MOVEFILE_REPLACE_EXISTING);
 
+    // A cancelled move must not be retried by the non-cancellable fallback.
+    if (!ret && (op->bCancelled || GetLastError() == ERROR_REQUEST_ABORTED))
+        return ERROR_CANCELLED;
+
     /* MOVEFILE_REPLACE_EXISTING fails with dirs, so try MoveFile */
     if (!ret)
         ret = MoveFileW(src, dest);
@@ -830,6 +837,7 @@ static DWORD SHNotifyMoveFileW(FILE_OPERATION *op, LPCWSTR src, LPCWSTR dest, BO
         }
     }
     FileOpCallback(op, IsRen ? FOCE_POSTRENAMEITEM : FOCE_POSTMOVEITEM, src, dest, attrib, ret ? S_OK : E_FAIL);
+    if (ret) _OperationItemComplete(op, op->currentSize);
     if (ret)
     {
         if (IsRen)
@@ -886,8 +894,12 @@ static DWORD SHNotifyCopyFileW(FILE_OPERATION *op, LPCWSTR src, LPCWSTR dest, BO
 
     /* Destination file may already exist with read only attribute */
     attribs = GetFileAttributesW(dest);
-    if (FAILED(FileOpCallback(op, FOCE_PRECOPYITEM, src, dest, attribs)))
+    HRESULT pre = FileOpCallback(op, FOCE_PRECOPYITEM, src, dest, attribs);
+    if (FAILED(pre))
+    {
+        FileOpCallback(op, FOCE_POSTCOPYITEM, src, dest, attribs, pre);
         return ERROR_CANCELLED;
+    }
 
     if (IsAttrib(attribs, FILE_ATTRIBUTE_READONLY))
         SetFileAttributesW(dest, attribs & ~FILE_ATTRIBUTE_READONLY);
@@ -906,6 +918,7 @@ static DWORD SHNotifyCopyFileW(FILE_OPERATION *op, LPCWSTR src, LPCWSTR dest, BO
     FileOpCallback(op, FOCE_POSTCOPYITEM, src, dest, attribs, HRESULT_FROM_WIN32(error));
     if (!error)
     {
+        _OperationItemComplete(op, op->currentSize);
         // We are copying from a CD-ROM volume, which is readonly
         if (SHIsCdRom(src))
         {
@@ -1468,7 +1481,7 @@ static void copy_dir_to_dir(FILE_OPERATION *op, const FILE_ENTRY *feFrom, LPCWST
     parse_file_list(&flFromNew, szFrom);
     parse_file_list(&flToNew, szTo);
 
-    copy_files(op, FALSE, &flFromNew, &flToNew);
+    if (!copy_files(op, FALSE, &flFromNew, &flToNew) && !op->bCancelled) _OperationItemComplete(op, 0);
 
     destroy_file_list(&flFromNew);
     destroy_file_list(&flToNew);
@@ -1648,8 +1661,7 @@ static HRESULT copy_files(FILE_OPERATION *op, BOOL multiDest, const FILE_LIST *f
             }
         }
 
-        if (op->progress != NULL)
-            op->bCancelled |= op->progress->HasUserCancelled();
+        _OperationCancelled(op);
         /* Vista return code. XP would return e.g. ERROR_FILE_NOT_FOUND, ERROR_ALREADY_EXISTS */
         if (op->bCancelled)
             return ERROR_CANCELLED;
@@ -1721,6 +1733,7 @@ static HRESULT delete_files(FILE_OPERATION *op, const FILE_LIST *flFrom)
 
     for (i = 0; i < flFrom->dwNumFiles; i++)
     {
+        if (_OperationCancelled(op)) return ERROR_CANCELLED;
         bPathExists = TRUE;
         fileEntry = &flFrom->feFiles[i];
 
@@ -1731,8 +1744,20 @@ static HRESULT delete_files(FILE_OPERATION *op, const FILE_LIST *flFrom)
         if (bTrash)
         {
             BOOL bDelete;
+            ULONGLONG bytes = 0, items = 1;
+            _SetOperationTexts(op, fileEntry->szFullPath, NULL);
+            HRESULT hr = SHELL32_CountFileOperation(fileEntry->szFullPath, &bytes, &items, op->progress);
+            if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return ERROR_CANCELLED;
+            hr = FileOpCallback(op, FOCE_PREDELETEITEM, fileEntry->szFullPath, NULL, fileEntry->attributes);
+            if (FAILED(hr))
+            {
+                FileOpCallback(op, FOCE_POSTDELETEITEM, fileEntry->szFullPath, NULL, fileEntry->attributes, hr);
+                return ERROR_CANCELLED;
+            }
             if (TRASH_TrashFile(fileEntry->szFullPath))
             {
+                FileOpCallback(op, FOCE_POSTDELETEITEM, fileEntry->szFullPath, NULL, fileEntry->attributes, S_OK);
+                _OperationItemComplete(op, bytes, items);
                 UINT event = IsAttribFile(fileEntry->attributes) ? SHCNE_DELETE : SHCNE_RMDIR;
                 SHChangeNotify(event, SHCNF_PATHW, fileEntry->szFullPath, NULL);
                 continue;
@@ -1773,8 +1798,7 @@ static HRESULT delete_files(FILE_OPERATION *op, const FILE_LIST *flFrom)
             }
         }
 
-        if (op->progress != NULL)
-            op->bCancelled |= op->progress->HasUserCancelled();
+        _OperationCancelled(op);
         /* Should fire on progress dialog only */
         if (op->bCancelled)
             return ERROR_CANCELLED;
@@ -1817,6 +1841,7 @@ static void move_dir_to_dir(FILE_OPERATION *op, const FILE_ENTRY *feFrom, LPCWST
     if (PathIsDirectoryEmptyW(feFrom->szFullPath))
         success = Win32RemoveDirectoryW(feFrom->szFullPath);
     FileOpCallback(op, FOCE_POSTMOVEITEM, feFrom->szFullPath, szDestPath, attrib, success ? S_OK : E_FAIL);
+    if (success) _OperationItemComplete(op, 0);
 }
 
 static BOOL move_file_to_file(FILE_OPERATION *op, const WCHAR *szFrom, const WCHAR *szTo)
@@ -1936,8 +1961,7 @@ static DWORD move_files(FILE_OPERATION *op, BOOL multiDest, const FILE_LIST *flF
             }
         }
 
-        if (op->progress != NULL)
-            op->bCancelled |= op->progress->HasUserCancelled();
+        _OperationCancelled(op);
         /* Should fire on progress dialog only */
         if (op->bCancelled)
             return ERROR_CANCELLED;
@@ -2090,7 +2114,7 @@ validate_operation(FILE_OPERATION &op, FILE_LIST *flFrom, FILE_LIST *flTo)
     return ERROR_SUCCESS;
 }
 
-int SHELL32_FileOperation(LPSHFILEOPSTRUCTW lpFileOp, FILEOPCALLBACK Callback, void *CallerData)
+int SHELL32_FileOperation(LPSHFILEOPSTRUCTW lpFileOp, FILEOPCALLBACK Callback, void *CallerData, FILEOP_PROGRESS *Progress)
 {
     FILE_OPERATION op;
     FILE_LIST flFrom, flTo;
@@ -2110,7 +2134,11 @@ int SHELL32_FileOperation(LPSHFILEOPSTRUCTW lpFileOp, FILEOPCALLBACK Callback, v
     ZeroMemory(&flTo, sizeof(FILE_LIST));
 
     if ((ret = parse_file_list(&flFrom, lpFileOp->pFrom)))
+    {
+        destroy_file_list(&flFrom);
+        CoUninitialize();
         return ret;
+    }
 
     if (lpFileOp->wFunc != FO_DELETE)
         parse_file_list(&flTo, lpFileOp->pTo);
@@ -2123,22 +2151,39 @@ int SHELL32_FileOperation(LPSHFILEOPSTRUCTW lpFileOp, FILEOPCALLBACK Callback, v
     op.Callback = Callback;
     op.CallerCallbackData = CallerData;
     op.hWndOwner = GetAncestor(lpFileOp->hwnd, GA_ROOT);
+    op.sharedProgress = Progress;
+    if (Progress)
+    {
+        op.progress = Progress->Dialog;
+        op.totalSize.QuadPart = Progress->TotalBytes;
+        op.totalItems = Progress->TotalItems;
+        op.completedSize.QuadPart = Progress->CompletedBytes;
+        op.completedItems = Progress->CompletedItems;
+    }
 
     ret = validate_operation(op, &flFrom, &flTo);
     if (ret)
         goto cleanup;
 
-    if (lpFileOp->wFunc != FO_RENAME && !(lpFileOp->fFlags & FOF_SILENT)) {
-        ret = CoCreateInstance(CLSID_ProgressDialog,
-                               NULL,
-                               CLSCTX_INPROC_SERVER,
-                               IID_PPV_ARG(IProgressDialog, &op.progress));
+    if (!Progress && lpFileOp->wFunc != FO_RENAME && !(lpFileOp->fFlags & FOF_SILENT)) {
+        ret = CoCreateInstance(CLSID_ProgressDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARG(IOperationsProgressDialog, &op.progress));
         if (FAILED(ret))
             goto cleanup;
 
-        op.progress->StartProgressDialog(op.hWndOwner, NULL, PROGDLG_NORMAL & PROGDLG_AUTOTIME, NULL);
+        ret = op.progress->StartProgressDialog(op.hWndOwner, OPPROGDLG_ENABLEPAUSE);
+        if (FAILED(ret)) goto cleanup;
         _SetOperationTitle(&op);
         _FileOpCountManager(&op, &flFrom);
+        op.progress->SetMode(PDM_RUN);
+        op.progress->ResetTimer();
+        _OperationProgress(&op);
+        if (_OperationCancelled(&op)) { ret = ERROR_CANCELLED; goto cleanup; }
+    }
+    else if (Progress && op.progress)
+    {
+        _SetOperationTitle(&op);
+        op.progress->SetMode(PDM_RUN);
+        _OperationProgress(&op);
     }
 
     FileOpCallback(&op, FOCE_STARTOPERATIONS, NULL, NULL, 0);
@@ -2162,12 +2207,12 @@ int SHELL32_FileOperation(LPSHFILEOPSTRUCTW lpFileOp, FILEOPCALLBACK Callback, v
             break;
     }
 
-    if (op.progress) {
+cleanup:
+    if (op.progress && !Progress) {
         op.progress->StopProgressDialog();
         op.progress->Release();
     }
 
-cleanup:
     destroy_file_list(&flFrom);
 
     if (lpFileOp->wFunc != FO_DELETE)
@@ -2175,7 +2220,9 @@ cleanup:
     else if (lpFileOp->fFlags & FOF_ALLOWUNDO)
         SHUpdateRecycleBinIcon();
 
-    if (ret == ERROR_CANCELLED)
+    if (ret == ERROR_REQUEST_ABORTED) ret = ERROR_CANCELLED;
+    if (ret == ERROR_CANCELLED && op.dwFatalError) ret = op.dwFatalError;
+    if (ret == ERROR_CANCELLED || op.bCancelled)
         lpFileOp->fAnyOperationsAborted = TRUE;
     if (ret == ERROR_SHELL_INTERNAL_FILE_NOT_FOUND && LOBYTE(GetVersion()) >= 6)
         ret = ERROR_FILE_NOT_FOUND;
@@ -2504,6 +2551,7 @@ _FileOpCountManager(FILE_OPERATION *op, const FILE_LIST *from)
         WCHAR theFileName[MAX_PATH];
         StringCchCopyW(theFileName, MAX_PATH, entryToCount->szFullPath);
         _FileOpCount(op, theFileName, IsAttribDir(entryToCount->attributes), &ticks);
+        if (op->bCancelled) break;
     }
     return 0;
 }
@@ -2520,6 +2568,7 @@ _FileOpCount(FILE_OPERATION *op, LPWSTR pwszBuf, BOOL bFolder, DWORD *ticks)
         return FALSE;
 
     if (bFolder) {
+        if (op->totalItems < MAXULONGLONG) ++op->totalItems;
         *(pwszFilename++) = '\\';
         --cchFilenameMax;
         /* Find all files, FIXME: shouldn't be "*"? */
@@ -2550,13 +2599,14 @@ _FileOpCount(FILE_OPERATION *op, LPWSTR pwszBuf, BOOL bFolder, DWORD *ticks)
             ULARGE_INTEGER FileSize;
             FileSize.u.LowPart  = wfd.nFileSizeLow;
             FileSize.u.HighPart = wfd.nFileSizeHigh;
-            op->totalSize.QuadPart += FileSize.QuadPart;
+            op->totalSize.QuadPart += min(FileSize.QuadPart, MAXULONGLONG - op->totalSize.QuadPart);
+            if (op->totalItems < MAXULONGLONG) ++op->totalItems;
         }
         if (GetTickCount() - *ticks > (DWORD) 500)
         {
             // Check if the dialog has ended. If it has, we'll spin down.
-            if (op->progress != NULL)
-                op->bCancelled = op->progress->HasUserCancelled();
+            _OperationProgress(op);
+            _OperationCancelled(op);
 
             if (op->bCancelled)
                 break;
@@ -2566,4 +2616,21 @@ _FileOpCount(FILE_OPERATION *op, LPWSTR pwszBuf, BOOL bFolder, DWORD *ticks)
 
     FindClose(hFind);
     return TRUE;
+}
+
+HRESULT SHELL32_CountFileOperation(PCWSTR Path, ULONGLONG *Bytes, ULONGLONG *Items, IOperationsProgressDialog *Dialog)
+{
+    WCHAR path[MAX_PATH];
+    HRESULT hr = StringCchCopyW(path, _countof(path), Path);
+    if (FAILED(hr)) return hr;
+    DWORD attributes = GetFileAttributesW(path);
+    if (attributes == INVALID_FILE_ATTRIBUTES) return HRESULT_FROM_WIN32(GetLastError());
+    FILE_OPERATION op = {0};
+    op.progress = Dialog;
+    DWORD ticks = GetTickCount();
+    if (!_FileOpCount(&op, path, !!(attributes & FILE_ATTRIBUTE_DIRECTORY), &ticks)) return HRESULT_FROM_WIN32(GetLastError());
+    if (op.bCancelled) return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+    *Bytes = op.totalSize.QuadPart;
+    *Items = op.totalItems;
+    return S_OK;
 }

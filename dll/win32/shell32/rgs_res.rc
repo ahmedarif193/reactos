@@ -33,6 +33,7 @@ IDR_SENDTOMENU REGISTRY "res/rgs/sendtomenu.rgs"
 IDR_COPYASPATHMENU REGISTRY "res/rgs/copyaspathmenu.rgs"
 // startmenupin.rgs is licensed in startmenupin.rgs.license; RGS does not accept comments.
 IDR_STARTMENUPIN REGISTRY "res/rgs/startmenupin.rgs"
+IDR_FILEOPERATION REGISTRY "res/rgs/fileoperation.rgs"
 IDR_COPYTOMENU REGISTRY "res/rgs/copytomenu.rgs"
 IDR_MOVETOMENU REGISTRY "res/rgs/movetomenu.rgs"
 IDR_RECYCLEBINCLEANER REGISTRY "res/rgs/recyclebincleaner.rgs"
