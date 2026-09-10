@@ -492,6 +492,9 @@ NotifyUserProcessForShutdown(PCSR_PROCESS CsrProcess,
     DWORD QueryResult = QUERY_RESULT_CONTINUE;
     PCSR_PROCESS Process;
     PCSR_THREAD Thread;
+    PCSR_THREAD *Threads;
+    ULONG ThreadCount, Index;
+    ULONG Result = CsrShutdownNonCsrProcess;
     PLIST_ENTRY NextEntry;
     NOTIFY_CONTEXT Context;
     BOOL FoundWindows = FALSE;
@@ -503,27 +506,44 @@ NotifyUserProcessForShutdown(PCSR_PROCESS CsrProcess,
     Context.ShutdownSettings = ShutdownSettings;
     Context.QueryResult = QUERY_RESULT_CONTINUE; // We continue shutdown by default.
 
-    /* Lock the process */
-    CsrLockProcessByClientId(CsrProcess->ClientId.UniqueProcess, &Process);
+    /* Keep a referenced snapshot: notification handlers can exit threads. */
+    if (!NT_SUCCESS(CsrLockProcessByClientId(CsrProcess->ClientId.UniqueProcess, &Process)))
+        return CsrShutdownNonCsrProcess;
+    if (Process->ThreadCount == 0)
+    {
+        CsrUnlockProcess(Process);
+        return CsrShutdownNonCsrProcess;
+    }
+    if (Process->ThreadCount > MAXULONG / sizeof(*Threads))
+    {
+        CsrUnlockProcess(Process);
+        return CsrShutdownCancelled;
+    }
+    Threads = HeapAlloc(UserServerHeap, 0, Process->ThreadCount * sizeof(*Threads));
+    if (Threads == NULL)
+    {
+        CsrUnlockProcess(Process);
+        return CsrShutdownCancelled;
+    }
 
-    /* Send first the QUERYENDSESSION messages to all the threads of the process */
-    MY_DPRINT2("Sending the QUERYENDSESSION messages...\n");
-
+    ThreadCount = 0;
     NextEntry = CsrProcess->ThreadList.Flink;
     while (NextEntry != &CsrProcess->ThreadList)
     {
-        /* Get the current thread entry */
         Thread = CONTAINING_RECORD(NextEntry, CSR_THREAD, Link);
-
-        /* Move to the next entry */
         NextEntry = NextEntry->Flink;
-
-        /* If the thread is being terminated, just skip it */
         if (Thread->Flags & CsrThreadTerminated) continue;
-
-        /* Reference the thread and temporarily unlock the process */
         CsrReferenceThread(Thread);
-        CsrUnlockProcess(Process);
+        Threads[ThreadCount++] = Thread;
+    }
+    CsrUnlockProcess(Process);
+
+    /* Send first the QUERYENDSESSION messages to all the threads of the process */
+    MY_DPRINT2("Sending the QUERYENDSESSION messages...\n");
+    for (Index = 0; Index < ThreadCount; ++Index)
+    {
+        Thread = Threads[Index];
+        if (Thread->Flags & CsrThreadTerminated) continue;
 
         Context.QueryResult = QUERY_RESULT_CONTINUE;
         if (ThreadShutdownNotify(Thread, Flags, MCS_QUERYENDSESSION, &Context))
@@ -531,20 +551,15 @@ NotifyUserProcessForShutdown(PCSR_PROCESS CsrProcess,
             FoundWindows = TRUE;
         }
 
-        /* Lock the process again and dereference the thread */
-        CsrLockProcessByClientId(CsrProcess->ClientId.UniqueProcess, &Process);
-        CsrDereferenceThread(Thread);
-
-        // FIXME: Analyze Context.QueryResult !!
-        /**/if (Context.QueryResult == QUERY_RESULT_ABORT) goto Quit;/**/
+        if (Context.QueryResult == QUERY_RESULT_ABORT)
+            break;
     }
 
     if (!FoundWindows)
     {
         /* We looped all threads but no top level window was found so we didn't send any message */
         /* Let the console server run the generic process shutdown handler */
-        CsrUnlockProcess(Process);
-        return CsrShutdownNonCsrProcess;
+        goto Cleanup;
     }
 
     QueryResult = Context.QueryResult;
@@ -554,35 +569,16 @@ NotifyUserProcessForShutdown(PCSR_PROCESS CsrProcess,
     /* Now send the ENDSESSION messages to the threads */
     MY_DPRINT2("Now sending the ENDSESSION messages...\n");
 
-    NextEntry = CsrProcess->ThreadList.Flink;
-    while (NextEntry != &CsrProcess->ThreadList)
+    for (Index = 0; Index < ThreadCount; ++Index)
     {
-        /* Get the current thread entry */
-        Thread = CONTAINING_RECORD(NextEntry, CSR_THREAD, Link);
-
-        /* Move to the next entry */
-        NextEntry = NextEntry->Flink;
-
-        /* If the thread is being terminated, just skip it */
+        Thread = Threads[Index];
         if (Thread->Flags & CsrThreadTerminated) continue;
-
-        /* Reference the thread and temporarily unlock the process */
-        CsrReferenceThread(Thread);
-        CsrUnlockProcess(Process);
 
         Context.QueryResult = QUERY_RESULT_CONTINUE;
         ThreadShutdownNotify(Thread, Flags,
                              (QUERY_RESULT_ABORT != QueryResult) ? MCS_ENDSESSION : 0,
                              &Context);
-
-        /* Lock the process again and dereference the thread */
-        CsrLockProcessByClientId(CsrProcess->ClientId.UniqueProcess, &Process);
-        CsrDereferenceThread(Thread);
     }
-
-Quit:
-    /* Unlock the process */
-    CsrUnlockProcess(Process);
 
 #if 0
     if (Context.UIThread)
@@ -600,10 +596,13 @@ Quit:
 #endif
 
     /* Kill the process unless we abort shutdown */
-    if (QueryResult == QUERY_RESULT_ABORT)
-        return CsrShutdownCancelled;
+    Result = (QueryResult == QUERY_RESULT_ABORT) ? CsrShutdownCancelled : CsrShutdownCsrProcess;
 
-    return CsrShutdownCsrProcess;
+Cleanup:
+    for (Index = 0; Index < ThreadCount; ++Index)
+        CsrDereferenceThread(Threads[Index]);
+    HeapFree(UserServerHeap, 0, Threads);
+    return Result;
 }
 
 static NTSTATUS FASTCALL
@@ -769,7 +768,10 @@ UserClientShutdown(IN PCSR_PROCESS CsrProcess,
     if (result == CsrShutdownCancelled || result == CsrShutdownNonCsrProcess)
     {
         if (result == CsrShutdownCancelled)
+        {
             DPRINT1("Process 0x%x aborted shutdown\n", CsrProcess->ClientId.UniqueProcess);
+            CsrDereferenceProcess(CsrProcess);
+        }
         return result;
     }
 
