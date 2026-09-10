@@ -298,6 +298,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/tls.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/win32.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/avltree.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/cmresource.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/guid.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/libsupp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/locale.c
