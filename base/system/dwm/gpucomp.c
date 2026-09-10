@@ -880,9 +880,45 @@ DwmGpuComposeQuad(LONGLONG Left, LONGLONG Top, LONGLONG Right, LONGLONG Bottom, 
     DwmGpuComposeQuadOriented(Left, Top, Right, Bottom, Alpha, FALSE);
 }
 
+/* Preserve the original quad's interpolation while omitting pixels that the
+ * following opaque client layer overwrites. Blur captures still see the full
+ * lower scene; only this window's base draw is clipped. */
+static void
+DwmGpuComposeUncoveredQuad(LONGLONG Left, LONGLONG Top, LONGLONG Right, LONGLONG Bottom,
+                           GLfloat Alpha, const RECT *Bounds, const RECT *Cover)
+{
+    RECT Cut, Parts[4];
+    ULONG Index;
+
+    if (Cover == NULL || !DwmGpuDamageIntersects(Bounds, Cover))
+    {
+        DwmGpuComposeQuad(Left, Top, Right, Bottom, Alpha);
+        return;
+    }
+    SetRect(&Cut, max(Bounds->left, Cover->left), max(Bounds->top, Cover->top),
+             min(Bounds->right, Cover->right), min(Bounds->bottom, Cover->bottom));
+    SetRect(&Parts[0], Bounds->left, Bounds->top, Bounds->right, Cut.top);
+    SetRect(&Parts[1], Bounds->left, Cut.bottom, Bounds->right, Bounds->bottom);
+    SetRect(&Parts[2], Bounds->left, Cut.top, Cut.left, Cut.bottom);
+    SetRect(&Parts[3], Cut.right, Cut.top, Bounds->right, Cut.bottom);
+    for (Index = 0; Index < ARRAYSIZE(Parts); ++Index)
+    {
+        const RECT *Part = &Parts[Index];
+
+        if (Part->left >= Part->right || Part->top >= Part->bottom)
+            continue;
+        glScissor(Part->left, g_composeHeight - Part->bottom,
+                   Part->right - Part->left, Part->bottom - Part->top);
+        DwmGpuComposeQuad(Left, Top, Right, Bottom, Alpha);
+    }
+    glScissor(Bounds->left, g_composeHeight - Bounds->bottom,
+               Bounds->right - Bounds->left, Bounds->bottom - Bounds->top);
+}
+
 static void DwmGpuComposeReleaseBlur(void);
 static BOOL DwmGpuComposeMaterial(const DWM_WIN *Window, GLuint Texture,
-                                   LONGLONG Left, LONGLONG Top, LONG Width, LONG Height, GLfloat Alpha);
+                       LONGLONG Left, LONGLONG Top, LONG Width, LONG Height, GLfloat Alpha,
+                       const RECT *Cover);
 static GLuint g_shadowProgram;
 static struct { GLint Owner, Size, Sigma, Opacity, ScreenHeight, Offset, WindowAlpha; } g_shadowLoc;
 /* Locations belong to this linked program and are refreshed after context
@@ -1181,7 +1217,8 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     DWM_GPU_TEXTURE *Slot;
     GLfloat Alpha = 1.0f;
     DWM_GPU_WINDOW_GEOMETRY Geometry;
-    RECT Bounds;
+    RECT Bounds, Cover;
+    const RECT *OpaqueClient = NULL;
 
     if (!g_composeActive || Window == NULL ||
         Window->cx <= 0 || Window->cy <= 0 ||
@@ -1338,15 +1375,27 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     if (Alpha <= 0.0f)
         return TRUE;
 
+    if (!Client && Window->DxGlobalShare != 0 && Window->DxUpdateId != 0 &&
+        Window->AnimFlags == 0 && Alpha >= 1.0f &&
+        !(Window->LayerFlags & DWM_LWA_COLORKEY) &&
+        !(Window->BlurFlags & DWM_BLUR_ENABLE) &&
+        (Window->BackdropType != DWM_BACKDROP_TRANSIENT ||
+         Window->BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT) &&
+        DwmGpuDamageBounds(&Cover, g_composeWidth, g_composeHeight,
+            Geometry.Left + Window->DxClientX, Geometry.Top + Window->DxClientY,
+            Geometry.Left + Window->DxClientX + Window->DxWidth,
+            Geometry.Top + Window->DxClientY + Window->DxHeight))
+        OpaqueClient = &Cover;
+
     if (Window->BackdropType == DWM_BACKDROP_TRANSIENT ||
         Window->CornerRadius != 0 || (Window->LayerFlags & DWM_LWA_COLORKEY))
-        return DwmGpuComposeMaterial(Window, Slot->Texture, Geometry.Left, Geometry.Top, Geometry.Width, Geometry.Height, Alpha);
+        return DwmGpuComposeMaterial(Window, Slot->Texture, Geometry.Left, Geometry.Top, Geometry.Width, Geometry.Height, Alpha, OpaqueClient);
     /* BGRX rectangles with full global opacity overwrite their destination.
      * Avoid destination blending for the desktop and opaque window content;
      * glass/rounded/color-key materials returned through the shader above. */
     if (Alpha >= 1.0f && !(Window->BlurFlags & DWM_BLUR_ENABLE))
         glDisable(GL_BLEND);
-    DwmGpuComposeQuad(Geometry.Left, Geometry.Top, Geometry.Left + Geometry.Width, Geometry.Top + Geometry.Height, Alpha);
+    DwmGpuComposeUncoveredQuad(Geometry.Left, Geometry.Top, Geometry.Left + Geometry.Width, Geometry.Top + Geometry.Height, Alpha, &g_composeDamage.Draw, OpaqueClient);
     glEnable(GL_BLEND);
     return glGetError() == GL_NO_ERROR;
 }
@@ -2432,7 +2481,8 @@ DwmGpuMaterialParts(const DWM_WIN *Window, LONGLONG Left, LONGLONG Top,
 
 static BOOL
 DwmGpuComposeMaterial(const DWM_WIN *Window, GLuint Texture,
-                       LONGLONG Left, LONGLONG Top, LONG Width, LONG Height, GLfloat Alpha)
+                       LONGLONG Left, LONGLONG Top, LONG Width, LONG Height, GLfloat Alpha,
+                       const RECT *Cover)
 {
     BOOL Glass = Window->BackdropType == DWM_BACKDROP_TRANSIENT &&
                  Window->BackdropRegion != 0 && Window->BackdropOpacity < 255;
@@ -2514,7 +2564,7 @@ DwmGpuComposeMaterial(const DWM_WIN *Window, GLuint Texture,
             glEnable(GL_BLEND);
         glScissor(Part->left, g_composeHeight - Part->bottom,
                   Part->right - Part->left, Part->bottom - Part->top);
-        DwmGpuComposeQuad(Left, Top, Left + Width, Top + Height, Alpha);
+        DwmGpuComposeUncoveredQuad(Left, Top, Left + Width, Top + Height, Alpha, &Parts[Index], Cover);
     }
     glEnable(GL_BLEND);
     glScissor(g_composeDamage.Draw.left, g_composeHeight - g_composeDamage.Draw.bottom,
