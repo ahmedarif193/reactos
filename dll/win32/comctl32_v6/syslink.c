@@ -94,6 +94,7 @@ struct SYSLINK_INFO
     int       MouseDownID;  /* ID of the link that the mouse button first selected */
     HFONT     Font;         /* Handle to the font for text */
     HFONT     LinkFont;     /* Handle to the font for links */
+    PDOC_ITEM HotItem;      /* Link the pointer is currently over */
     COLORREF  TextColor;    /* Color of the text */
     COLORREF  LinkColor;    /* Color of links */
     COLORREF  VisitedColor; /* Color of visited links */
@@ -717,6 +718,7 @@ static VOID SYSLINK_ClearDoc (SYSLINK_INFO *infoPtr)
 {
     DOC_ITEM *Item, *Item2;
 
+    infoPtr->HotItem = NULL;
     LIST_FOR_EACH_ENTRY_SAFE(Item, Item2, &infoPtr->Items, DOC_ITEM, entry)
     {
         list_remove(&Item->entry);
@@ -1383,7 +1385,10 @@ static LRESULT SYSLINK_Draw (const SYSLINK_INFO *infoPtr, HDC hdc)
             }
             else
             {
-                 SelectObject(hdc, infoPtr->LinkFont);
+                 /* Links are underlined while hot or focused, as they are on Windows */
+                 BOOL Highlight = (Current == infoPtr->HotItem) ||
+                                  ((Current->u.Link.state & LIS_FOCUSED) && infoPtr->HasFocus);
+                 SelectObject(hdc, Highlight ? infoPtr->LinkFont : infoPtr->Font);
                  SetTextColor(hdc, (!(Current->u.Link.state & LIS_VISITED) ? infoPtr->LinkColor : infoPtr->VisitedColor));
             }
 
@@ -2090,6 +2095,36 @@ static LRESULT WINAPI SysLinkWindowProc(HWND hwnd, UINT message,
             FillRect( hdc, &rect, brush );
             DeleteObject( brush );
             return 1;
+        }
+        return 0;
+
+    case WM_MOUSEMOVE:
+    {
+        TRACKMOUSEEVENT track;
+        POINT pt;
+        PDOC_ITEM Hot;
+
+        pt.x = (short)LOWORD(lParam);
+        pt.y = (short)HIWORD(lParam);
+        Hot = SYSLINK_LinkAtPt(infoPtr, &pt, NULL, TRUE);
+        if(Hot != infoPtr->HotItem)
+        {
+            infoPtr->HotItem = Hot;
+            InvalidateRect(infoPtr->Self, NULL, TRUE);
+        }
+        track.cbSize = sizeof(track);
+        track.dwFlags = TME_LEAVE;
+        track.hwndTrack = infoPtr->Self;
+        track.dwHoverTime = HOVER_DEFAULT;
+        TrackMouseEvent(&track);
+        return 0;
+    }
+
+    case WM_MOUSELEAVE:
+        if(infoPtr->HotItem != NULL)
+        {
+            infoPtr->HotItem = NULL;
+            InvalidateRect(infoPtr->Self, NULL, TRUE);
         }
         return 0;
 
