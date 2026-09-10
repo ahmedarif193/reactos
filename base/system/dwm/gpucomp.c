@@ -16,6 +16,7 @@
 #include <reactos/dwmgpuinterop.h>
 
 #include "gpucomp.h"
+#include "gpud3d.h"
 #include "presenttrace.h"
 #include "gpumaterial.h"
 #include "gpushadow.h"
@@ -617,6 +618,8 @@ DwmGpuIsActive(void)
 const char *
 DwmGpuRendererName(void)
 {
+    if (DwmD3dIsActive())
+        return DwmD3dRendererName();
     return g_gpuActive ? g_gpuRenderer : NULL;
 }
 
@@ -786,6 +789,11 @@ static void DwmGpuComposeUnpinBlurResults(void);
 void
 DwmGpuComposePrepareWindow(const DWM_WIN *Window, ULONG Index)
 {
+    if (DwmD3dIsActive())
+    {
+        DwmD3dPrepareWindow(Window, Index);
+        return;
+    }
     g_composeBlurOwner = DwmGpuCacheBlurOwner(Window);
     g_composeBlurOwnerValid = Window->AnimFlags == 0;
     g_composeBlurLowerUnchanged = g_composeLowerUnchanged[Index];
@@ -796,6 +804,11 @@ DwmGpuComposePrepareWindow(const DWM_WIN *Window, ULONG Index)
 void
 DwmGpuComposeBlurStats(ULONGLONG *Filtered, ULONGLONG *Reused)
 {
+    if (DwmD3dIsActive())
+    {
+        DwmD3dBlurStats(Filtered, Reused);
+        return;
+    }
     *Filtered = g_composeFiltered;
     *Reused = g_composeReused;
     g_composeFiltered = g_composeReused = 0;
@@ -843,6 +856,14 @@ DwmGpuComposeScene(const DWM_WIN *Windows, ULONG Count,
                     LONG OriginX, LONG OriginY, BOOL RefreshBackdrop,
                     ULONG BlurRadius, const RECT *ShadowMargins)
 {
+    if (DwmD3dIsActive())
+    {
+        DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_PREPARE);
+        DwmD3dScene(Windows, Count, BlurRects, BlurRectCount, OriginX, OriginY,
+                    RefreshBackdrop, BlurRadius, ShadowMargins);
+        DptEnd(&g_DwmPresentTrace, Trace, TRUE, 0);
+        return;
+    }
     DWM_GPU_SCENE_SPACE Space = {OriginX, OriginY, g_composeWidth, g_composeHeight,
                                  BlurRadius, *ShadowMargins};
     DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_PREPARE);
@@ -960,8 +981,8 @@ DwmGpuComposeFindTexture(const DWM_WIN *Window, BOOL Client)
     return Oldest;
 }
 
-BOOL
-DwmGpuComposeInitialize(LONG Width, LONG Height)
+static BOOL
+DwmGlComposeInitialize(LONG Width, LONG Height)
 {
     WNDCLASSEXW Class;
     PIXELFORMATDESCRIPTOR Descriptor;
@@ -1129,9 +1150,18 @@ DwmGpuComposeInitialize(LONG Width, LONG Height)
 }
 
 BOOL
+DwmGpuComposeInitialize(LONG Width, LONG Height)
+{
+    /* Preserve the working ICD path on adapters that provide it. A native
+     * Direct3D-only adapter can compose without an OpenGL ICD. */
+    return DwmD3dIsActive() || DwmGlComposeInitialize(Width, Height) ||
+           DwmD3dInitialize(Width, Height);
+}
+
+BOOL
 DwmGpuComposeIsActive(void)
 {
-    return g_composeActive;
+    return g_composeActive || DwmD3dIsActive();
 }
 
 static BOOL
@@ -1201,6 +1231,13 @@ BOOL
 DwmGpuComposeBegin(ULONG BackdropColor, const BYTE *BackdropPixels,
                     BOOL RefreshBackdrop, const RECT *Damage)
 {
+    if (DwmD3dIsActive())
+    {
+        DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BEGIN);
+        BOOL Result = DwmD3dBegin(BackdropColor, BackdropPixels, RefreshBackdrop, Damage);
+        DptEnd(&g_DwmPresentTrace, Trace, Result, 0);
+        return Result;
+    }
     DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BEGIN);
     BOOL Result = DwmGpuComposeBeginMeasured(BackdropColor, BackdropPixels, RefreshBackdrop, Damage);
     ULONGLONG Bytes = Result ?
@@ -1473,11 +1510,18 @@ DwmGpuComposeWindowMeasured(const DWM_WIN *Window, const BYTE *Pixels,
 }
 
 BOOL
+DwmGpuComposeNeedsSurfacePixels(const DWM_WIN *Window)
+{
+    return DwmD3dIsActive() && DwmD3dNeedsSurfacePixels(Window);
+}
+
+BOOL
 DwmGpuComposeWindow(const DWM_WIN *Window, const BYTE *Pixels,
                     LONG OriginX, LONG OriginY)
 {
     DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_WINDOW);
-    BOOL Result = DwmGpuComposeWindowMeasured(Window, Pixels, OriginX, OriginY);
+    BOOL Result = DwmD3dIsActive() ? DwmD3dWindow(Window, Pixels, OriginX, OriginY) :
+                    DwmGpuComposeWindowMeasured(Window, Pixels, OriginX, OriginY);
     DptEnd(&g_DwmPresentTrace, Trace, Result, 0);
     return Result;
 }
@@ -1506,13 +1550,21 @@ DwmGpuComposeEndMeasured(void)
     return Result;
 }
 
-BOOL
+DWM_GPU_RESULT
 DwmGpuComposeEnd(void)
 {
     DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_SWAP);
-    BOOL Result = DwmGpuComposeEndMeasured();
-    DptEnd(&g_DwmPresentTrace, Trace, Result, 0);
+    DWM_GPU_RESULT Result = DwmD3dIsActive() ? DwmD3dEnd() :
+        (DwmGpuComposeEndMeasured() ? DWM_GPU_COMPLETE : DWM_GPU_FAILED);
+    DptEnd(&g_DwmPresentTrace, Trace, Result == DWM_GPU_COMPLETE, 0);
     return Result;
+}
+
+DWM_GPU_RESULT
+DwmGpuComposeCheckOutput(void)
+{
+    return DwmD3dIsActive() ? DwmD3dCheckOutput() :
+        (g_composeActive ? DWM_GPU_COMPLETE : DWM_GPU_FAILED);
 }
 
 void
@@ -1520,6 +1572,7 @@ DwmGpuComposeShutdown(void)
 {
     ULONG i;
 
+    DwmD3dShutdown();
     if (g_composeOutputRegistered)
     {
         DWM_GPU_OUTPUT Output;
@@ -2262,6 +2315,13 @@ DwmGpuComposeFilterRect(const RECT *Rect, ULONG Radius, BOOL Restore)
 BOOL
 DwmGpuComposeBlurRect(const RECT *Rect, ULONG Radius)
 {
+    if (DwmD3dIsActive())
+    {
+        DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BLUR);
+        BOOL Result = DwmD3dBlurRect(Rect, Radius);
+        DptEnd(&g_DwmPresentTrace, Trace, Result, 0);
+        return Result;
+    }
     return DwmGpuComposeFilterRect(Rect, Radius, TRUE);
 }
 
@@ -2295,6 +2355,13 @@ BOOL
 DwmGpuComposeBlurWindow(const DWM_WIN *Window, const RECTL *Rectangles,
                         LONG OriginX, LONG OriginY, ULONG Radius)
 {
+    if (DwmD3dIsActive())
+    {
+        DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BLUR);
+        BOOL Result = DwmD3dBlurWindow(Window, Rectangles, OriginX, OriginY, Radius);
+        DptEnd(&g_DwmPresentTrace, Trace, Result, 0);
+        return Result;
+    }
     RECTL Entire = {0, 0, Window->cx, Window->cy};
     RECT Capture = {0, 0, 0, 0}, Region, Output;
     DWM_GPU_WINDOW_GEOMETRY Geometry;
@@ -2658,7 +2725,9 @@ DwmGpuComposeShadow(const RECT *Bounds, LONGLONG X, LONGLONG Y,
                     ULONG WindowAlpha)
 {
     DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_SHADOW);
-    BOOL Result = DwmGpuComposeShadowMeasured(Bounds, X, Y, Width, Height, Offset, WideExtent, Active, WideOpacity, TightOpacity, WindowAlpha);
+    BOOL Result = DwmD3dIsActive() ?
+                    DwmD3dShadow(Bounds, X, Y, Width, Height, Offset, WideExtent, Active, WideOpacity, TightOpacity, WindowAlpha) :
+                    DwmGpuComposeShadowMeasured(Bounds, X, Y, Width, Height, Offset, WideExtent, Active, WideOpacity, TightOpacity, WindowAlpha);
     DptEnd(&g_DwmPresentTrace, Trace, Result, 0);
     return Result;
 }

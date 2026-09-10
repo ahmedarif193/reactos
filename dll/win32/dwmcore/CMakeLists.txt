@@ -10,6 +10,7 @@ add_library(dwmcore MODULE
     ../../../base/system/dwm/settings.c
     ../../../base/system/dwm/dxsurface.c
     ../../../base/system/dwm/gpucomp.c
+    ../../../base/system/dwm/gpud3d.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/dwmcore.def)
 
 target_include_directories(dwmcore PRIVATE
@@ -22,6 +23,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
         -Wl,--major-subsystem-version,10
         -Wl,--minor-subsystem-version,0)
 endif()
-target_link_libraries(dwmcore uuid)
+target_link_libraries(dwmcore uuid dx10guid)
 add_importlibs(dwmcore win32u opengl32 advapi32 user32 gdi32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET dwmcore DESTINATION reactos/system32 FOR all)
