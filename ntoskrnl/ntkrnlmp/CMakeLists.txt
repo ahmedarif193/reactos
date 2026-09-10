@@ -53,7 +53,7 @@ target_link_libraries(ntkrnlmp ntoskrnl_vista cportlib csq ${PSEH_LIB} apisets a
 if(KDBG AND (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
     target_link_libraries(ntkrnlmp kdb_zydis)
 endif()
-target_link_libraries(ntkrnlmp rtl_vista)
+target_link_libraries(ntkrnlmp rtl_vista ci)
 add_importlibs(ntkrnlmp hal kdcom bootvid)
 if(NOT (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND ARCH STREQUAL "i386"))
     add_pch(ntkrnlmp ${REACTOS_SOURCE_DIR}/ntoskrnl/include/ntoskrnl.h "${NTKRNLMP_PCH_SKIP_SOURCE}")

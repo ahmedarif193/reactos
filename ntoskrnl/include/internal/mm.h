@@ -1,5 +1,8 @@
 #pragma once
 
+NTSTATUS
+MiValidateImageSigningPolicy(_In_ PFILE_OBJECT FileObject);
+
 #include <internal/arch/mm.h>
 
 #ifdef __cplusplus
