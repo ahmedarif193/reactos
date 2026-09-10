@@ -107,6 +107,7 @@ typedef struct _SMP_PAGEFILE_DESCRIPTOR
 // Structure and flags describing each volume
 //
 #define SMP_VOLUME_INSERTED             0x01
+#define SMP_VOLUME_PAGEFILE_UNAVAILABLE 0x02
 #define SMP_VOLUME_PAGEFILE_CREATED     0x04
 #define SMP_VOLUME_IS_BOOT              0x08
 typedef struct _SMP_VOLUME_DESCRIPTOR
@@ -344,6 +345,7 @@ SmpDeletePagingFile(IN PUNICODE_STRING FileName)
     IO_STATUS_BLOCK IoStatusBlock;
     HANDLE FileHandle;
     FILE_DISPOSITION_INFORMATION Disposition;
+    FILE_BASIC_INFORMATION BasicInfo;
 
     /* Open the page file */
     InitializeObjectAttributes(&ObjectAttributes,
@@ -371,13 +373,22 @@ SmpDeletePagingFile(IN PUNICODE_STRING FileName)
             DPRINT1("SMSS:PFILE: Failed to delete page file `%wZ' (status %X)\n",
                     FileName, Status);
         }
-        else
-        {
-            DPRINT("SMSS:PFILE: Deleted stale paging file - %wZ\n", FileName);
-        }
-
         /* Close the handle */
         NtClose(FileHandle);
+
+        /* A filesystem can accept deletion but fail it during cleanup. */
+        if (NT_SUCCESS(Status))
+        {
+            Status = NtQueryAttributesFile(&ObjectAttributes, &BasicInfo);
+            if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+            {
+                Status = STATUS_SUCCESS;
+            }
+            else if (NT_SUCCESS(Status))
+            {
+                Status = STATUS_CANNOT_DELETE;
+            }
+        }
     }
     else
     {
@@ -538,6 +549,7 @@ SmpCreatePagingFileOnFixedDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
 {
     PSMP_VOLUME_DESCRIPTOR Volume;
     BOOLEAN ShouldDelete;
+    BOOLEAN CorruptFileDeleted = FALSE;
     NTSTATUS Status;
     LARGE_INTEGER PageFileSize;
     ASSERT(Descriptor->Name.Buffer[STANDARD_DRIVE_LETTER_OFFSET] != L'?');
@@ -552,6 +564,10 @@ SmpCreatePagingFileOnFixedDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
                 &Descriptor->Name);
         return STATUS_INVALID_PARAMETER;
     }
+
+    /* Do not repeatedly retry a corrupt pagefile that could not be removed. */
+    if (Volume->Flags & SMP_VOLUME_PAGEFILE_UNAVAILABLE)
+        return STATUS_FILE_CORRUPT_ERROR;
 
     /* Check if this is the boot volume */
     if (Volume->Flags & SMP_VOLUME_IS_BOOT)
@@ -589,12 +605,15 @@ SmpCreatePagingFileOnFixedDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
                 Volume->DriveLetter);
     }
 
-    /* Update the size after dump extraction */
+RetryPageFile:
+    /* Update the size after dump extraction or removal of a corrupt pagefile. */
     Descriptor->ActualMinSize = Descriptor->MinSize;
     Descriptor->ActualMaxSize = Descriptor->MaxSize;
 
     /* Check how big we can make the pagefile */
     Status = SmpGetPagingFileSize(&Descriptor->Name, &PageFileSize);
+    if (Status == STATUS_FILE_CORRUPT_ERROR)
+        goto RecoverCorruptPageFile;
     if (NT_SUCCESS(Status) && PageFileSize.QuadPart > 0) ShouldDelete = TRUE;
     DPRINT("SMSS:PFILE: Detected size 0x%I64X for future paging file `%wZ'\n",
             PageFileSize,
@@ -635,6 +654,9 @@ SmpCreatePagingFileOnFixedDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
             break;
         }
 
+        if (Status == STATUS_FILE_CORRUPT_ERROR)
+            goto RecoverCorruptPageFile;
+
         /* We failed, try a slightly smaller pagefile */
         Descriptor->ActualMinSize.QuadPart -= FuzzFactor->QuadPart;
     }
@@ -645,10 +667,8 @@ SmpCreatePagingFileOnFixedDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
         /* Delete the current page file and fail */
         if (ShouldDelete)
         {
-            SmpDeletePagingFile(&Descriptor->Name);
-
-            /* FIXFIX: Windows Vista does this, and it seems like we should too, so try to see if this fixes KVM */
-            Volume->FreeSpace.QuadPart = PageFileSize.QuadPart;
+            if (NT_SUCCESS(SmpDeletePagingFile(&Descriptor->Name)))
+                SmpGetVolumeFreeSpace(Volume);
         }
         DPRINT1("SMSS:PFILE: Failing for min 0x%I64X, max 0x%I64X, real min 0x%I64X\n",
                 Descriptor->ActualMinSize.QuadPart,
@@ -658,6 +678,26 @@ SmpCreatePagingFileOnFixedDrive(IN PSMP_PAGEFILE_DESCRIPTOR Descriptor,
     }
 
     /* Return the status */
+    return Status;
+
+RecoverCorruptPageFile:
+    /* Only a stale pagefile is disposable. Let the filesystem remove it safely. */
+    if (!CorruptFileDeleted)
+    {
+        CorruptFileDeleted = TRUE;
+        Status = SmpDeletePagingFile(&Descriptor->Name);
+        if (NT_SUCCESS(Status))
+        {
+            Status = SmpGetVolumeFreeSpace(Volume);
+            if (NT_SUCCESS(Status))
+            {
+                ShouldDelete = FALSE;
+                goto RetryPageFile;
+            }
+        }
+    }
+
+    Volume->Flags |= SMP_VOLUME_PAGEFILE_UNAVAILABLE;
     return Status;
 }
 
