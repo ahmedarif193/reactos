@@ -541,3 +541,37 @@ DwmDxSweepSurfaces(ULONG FrameSequence)
         }
     }
 }
+
+void
+DwmDxCleanupSurfaces(void)
+{
+    ULONG Index;
+
+    /* Release locked mappings before destroying their owning devices. */
+    for (Index = 0; Index < DWM_DX_MAX_VIEWS; ++Index)
+        DwmDxDropView(&g_Views[Index]);
+
+    for (Index = 0; Index < DWM_DX_MAX_DEVICES; ++Index)
+    {
+        DWM_DX_DEVICE *Device = &g_Devices[Index];
+
+        if (Device->hDevice != 0)
+        {
+            D3DKMT_DESTROYDEVICE DestroyDevice;
+
+            RtlZeroMemory(&DestroyDevice, sizeof(DestroyDevice));
+            DestroyDevice.hDevice = Device->hDevice;
+            (void)D3DKMTDestroyDevice(&DestroyDevice);
+        }
+        if (Device->hAdapter != 0)
+        {
+            D3DKMT_CLOSEADAPTER CloseAdapter;
+
+            RtlZeroMemory(&CloseAdapter, sizeof(CloseAdapter));
+            CloseAdapter.hAdapter = Device->hAdapter;
+            (void)D3DKMTCloseAdapter(&CloseAdapter);
+        }
+        RtlZeroMemory(Device, sizeof(*Device));
+    }
+    g_CurrentFrame = 0;
+}

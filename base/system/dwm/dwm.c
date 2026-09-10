@@ -1841,6 +1841,7 @@ DwmComposeLoop(HANDLE hStopEvent)
     HANDLE hWake;
     BOOL forceFull = TRUE;
     LONG vw, vh, primW, primH;
+    ULONG ViewIndex;
 
     if (hdcScreen == NULL)
     {
@@ -2187,6 +2188,9 @@ DwmComposeLoop(HANDLE hStopEvent)
     }
 
     DwmSetTimerPrecision(FALSE);
+    DwmDxCleanupSurfaces();
+    for (ViewIndex = 0; ViewIndex < DWM_VIEW_CACHE_SIZE; ++ViewIndex)
+        DwmDropView(&g_views[ViewIndex]);
     RtlZeroMemory(&att, sizeof(att));
     att.Attach = 0;
     (void)NtUserCallOneParam((DWORD_PTR)&att, DWM_ROUTINE_ATTACH);
