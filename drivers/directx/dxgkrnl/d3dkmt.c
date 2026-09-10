@@ -9125,23 +9125,10 @@ DxgkSubmitCommand(
             return STATUS_NOT_SUPPORTED;
         }
     }
-    /*
-     * Commands is the GPU-VA anchor passed to DxgkDdiSubmitCommandVirtual;
-     * CommandLength is KMD-owned DMA-buffer geometry.  It need not describe
-     * one contiguous dxgkrnl allocation mapping. Native dxgkrnl likewise does
-     * not validate Commands + CommandLength as a GPU-VA span. Require only
-     * that the command start is mapped; vidsch pins
-     * the containing mapping atomically before queueing the packet.
-     */
-    else if (!SubmitCommand->Flags.NullRendering &&
-             !DxgkGpuVaValidateRange(Adapter,
-                                     Device->ProcessRecord,
-                                     SubmitCommand->Commands,
-                                     1))
-    {
-        DxgkDereferenceContext(Context);
-        return STATUS_INVALID_PARAMETER;
-    }
+    /* Commands and CommandLength are interpreted by the miniport. A driver
+     * can carry its command body in private data without mapping Commands
+     * through VidMm. The scheduler pins an existing command mapping when
+     * present, but an absent mapping must not reject that driver contract. */
 
     if (!DxgkBeginKmdTransaction(Adapter))
     {

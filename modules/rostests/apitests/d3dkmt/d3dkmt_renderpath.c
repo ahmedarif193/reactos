@@ -738,23 +738,17 @@ static void Test_VirtualAddressingSubmission(void)
     Status = pSubmit(&submit);
     ok_succeeded(Status, "SubmitCommand with NullRendering failed 0x%08lX\n", (long)Status);
 
-    /* A submission naming an address nothing is mapped at must not be: the
-     * engine would dereference a GPU address with no page table entry. */
+    /* NullRendering must also avoid executing an unmapped command address.
+     * A real submission's address is interpreted by the miniport, so an
+     * unmapped address does not imply synchronous rejection by dxgkrnl. */
     memset(&submit, 0, sizeof(submit));
     submit.BroadcastContextCount = 1;
     submit.BroadcastContext[0] = hContext;
     submit.Commands = CommandVa + 0x40000000ULL;
     submit.CommandLength = sizeof(ULONG);
+    submit.Flags.NullRendering = 1;
     Status = pSubmit(&submit);
-    ok_failed(Status, "SubmitCommand accepted an unmapped GPU VA (0x%08lX)\n", (long)Status);
-
-    /*
-     * Do not infer a GPU-VA span from CommandLength here.  It is DMA-buffer
-     * geometry interpreted by the KMD, while Commands is the mapped GPU-VA
-     * anchor.  Native dxgkrnl validates the request and passes both values to
-     * the KMD separately; the unmapped-anchor case above is the dxgkrnl
-     * boundary this test owns.
-     */
+    ok_succeeded(Status, "SubmitCommand with unmapped NullRendering address failed 0x%08lX\n", (long)Status);
 
 cleanup:
     if (hQueue && pDestroyQueue)
