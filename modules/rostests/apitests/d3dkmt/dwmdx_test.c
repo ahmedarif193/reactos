@@ -294,6 +294,9 @@ START_TEST(dwmdxabi)
     ok(DWM_DX_SURFACE_INFO_VERSION == 1u,
        "the runtime-data version must be 1, got %lu\n",
        (unsigned long)DWM_DX_SURFACE_INFO_VERSION);
+    ok(DWM_DX_SURFACE_INFO_VERSION_GPU == 2u &&
+       DWM_DX_SURFACE_PUBLISH == 7u && DWM_DX_SURFACE_UNREGISTER == 8u,
+       "native GPU publication must retain version 2 and actions 7/8\n");
 
     ok(DWM_DX_SURFACE_REGISTER == 1u && DWM_DX_SURFACE_ISSUE == 2u &&
        DWM_DX_SURFACE_UPDATE == 3u && DWM_DX_SURFACE_CONSUMED == 4u,
@@ -1072,6 +1075,74 @@ START_TEST(dwmdxluid)
 /* ------------------------------------------------------------------ */
 /* The raw win32k exchange -- validation dwmapi cannot reach            */
 /* ------------------------------------------------------------------ */
+static void
+TestNativePublicationArguments(PFN_NTUSERCALLONEPARAM pNtUserCallOneParam,
+                               HWND Window, const LUID *Luid)
+{
+    DWM_DX_SURFACE_EXCHANGE Exchange;
+    HANDLE ReadyEvent;
+    RECT Client;
+    NTSTATUS Status;
+
+    ReadyEvent = CreateEventW(NULL, TRUE, TRUE, NULL);
+    ok(ReadyEvent != NULL, "could not create the publication completion event\n");
+    if (ReadyEvent == NULL)
+        return;
+    GetClientRect(Window, &Client);
+    memset(&Exchange, 0, sizeof(Exchange));
+    Exchange.StructSize = sizeof(Exchange);
+    Exchange.Action = DWM_DX_SURFACE_PUBLISH;
+    Exchange.Window = (ULONGLONG)(ULONG_PTR)Window;
+    Exchange.AdapterLuid = *Luid;
+    Exchange.GlobalShare = 0xDEADBEEF;
+    Exchange.ReadyEvent = (ULONGLONG)(ULONG_PTR)ReadyEvent;
+    Exchange.Info.Magic = DWM_DX_SURFACE_INFO_MAGIC;
+    Exchange.Info.Version = DWM_DX_SURFACE_INFO_VERSION_GPU;
+    Exchange.Info.Width = Client.right;
+    Exchange.Info.Height = Client.bottom;
+    Exchange.Info.Format = DWM_DX_FORMAT_B8G8R8A8_UNORM;
+    Exchange.UpdateRect.left = Client.left;
+    Exchange.UpdateRect.top = Client.top;
+    Exchange.UpdateRect.right = Client.right;
+    Exchange.UpdateRect.bottom = Client.bottom;
+    Exchange.Generation = 0xabcdef;
+    Exchange.UpdateId = 0x123456;
+
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_HANDLE,
+       "PUBLISH must reject a fabricated GPU share, got 0x%08lX\n", (unsigned long)Status);
+    ok(Exchange.Generation == 0xabcdef && Exchange.UpdateId == 0x123456 &&
+       WaitForSingleObject(ReadyEvent, 0) == WAIT_OBJECT_0,
+       "rejected PUBLISH must preserve output identity and completion event\n");
+
+    Exchange.Info.Pitch = Client.right * sizeof(ULONG);
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "native GPU publication must reject a supplied linear pitch, got 0x%08lX\n", (unsigned long)Status);
+    Exchange.Info.Pitch = 0;
+    Exchange.UpdateRect.right++;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "PUBLISH damage outside the client must be rejected, got 0x%08lX\n", (unsigned long)Status);
+    Exchange.UpdateRect.right--;
+    Exchange.UpdateRect.left = 1;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "native publication must require a complete client image, got 0x%08lX\n", (unsigned long)Status);
+    Exchange.UpdateRect.left = 0;
+    Exchange.Window = (ULONGLONG)(ULONG_PTR)GetDesktopWindow();
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_ACCESS_DENIED,
+       "PUBLISH must reject a foreign-process window, got 0x%08lX\n", (unsigned long)Status);
+
+    Exchange.Window = (ULONGLONG)(ULONG_PTR)Window;
+    Exchange.Action = DWM_DX_SURFACE_ISSUE;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "a rejected PUBLISH must leave the window unregistered, got 0x%08lX\n", (unsigned long)Status);
+    CloseHandle(ReadyEvent);
+}
+
 START_TEST(dwmdxntuser)
 {
     PFN_NTUSERCALLONEPARAM pNtUserCallOneParam;
@@ -1225,5 +1296,6 @@ START_TEST(dwmdxntuser)
        "an unreadable exchange pointer must be refused, got 0x%08lX\n",
        (unsigned long)Status);
 
+    TestNativePublicationArguments(pNtUserCallOneParam, Window, &Luid);
     DestroyWindow(Window);
 }

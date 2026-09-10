@@ -366,12 +366,15 @@ typedef struct _DWM_GPU_OUTPUT
     ULONG Height;
 } DWM_GPU_OUTPUT, *PDWM_GPU_OUTPUT;
 
-/* Runtime-private metadata stored in the D3DKMT shared resource. This is an
- * OS presentation contract, not miniport-private data: DWM and any OpenGL ICD
- * can validate the same linear client-surface description after OpenResource. */
+/* Version 1 also serves as runtime-private metadata for a linear D3DKMT
+ * shared resource. Version 2 describes a native GPU texture for publication
+ * only: its layout is opaque, Pitch must be zero, and the compositor validates
+ * the actual texture descriptor through the owning graphics runtime. */
 #define DWM_DX_SURFACE_INFO_MAGIC   0x53585744u /* 'DWXS' */
 #define DWM_DX_SURFACE_INFO_VERSION 1u
+#define DWM_DX_SURFACE_INFO_VERSION_GPU 2u
 #define DWM_DX_FORMAT_B8G8R8A8_UNORM 87u
+#define DWM_DX_FORMAT_R8G8B8A8_UNORM 28u
 
 typedef struct _DWM_DX_SHARED_SURFACE_INFO
 {
@@ -389,6 +392,8 @@ typedef struct _DWM_DX_SHARED_SURFACE_INFO
 #define DWM_DX_SURFACE_CONSUMED  4u
 #define DWM_DX_SURFACE_ISSUE_GDI 5u
 #define DWM_DX_SURFACE_CANCEL_GDI 6u
+#define DWM_DX_SURFACE_PUBLISH    7u
+#define DWM_DX_SURFACE_UNREGISTER 8u
 
 #define DWM_DX_REDIRECTION_GDI_SURFACE 0x00000010u
 
@@ -396,8 +401,15 @@ typedef struct _DWM_DX_SHARED_SURFACE_INFO
 
 /* Fixed-width NtUser exchange used by dwmapi, OpenGL32 and dwm.exe. Window is
  * a zero-extended HWND so the structure has one layout for native and WOW64
- * clients. REGISTER/ISSUE/UPDATE are restricted to the window owner;
- * CONSUMED is restricted to the attached compositor. */
+ * clients. Producer actions are restricted to the window owner; CONSUMED is
+ * restricted to the attached compositor. PUBLISH atomically registers a
+ * completed native GPU texture and issues/publishes its update. Its manual
+ * reset ReadyEvent remains clear until DWM has finished copying that texture;
+ * neither replacement nor UNREGISTER may retire an unconsumed publication.
+ * The producer must finish GPU writes before PUBLISH and keep its resource
+ * alive and unchanged until consumption. PUBLISH currently requires the
+ * complete client rectangle; partial client publications need a damage
+ * history contract that this frame format does not carry. */
 typedef struct _DWM_DX_SURFACE_EXCHANGE
 {
     ULONG StructSize;

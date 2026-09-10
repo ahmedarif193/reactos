@@ -3838,7 +3838,12 @@ DwmComposeLoop(HANDLE hStopEvent)
                     {
                         g_lastFrameQpc = (ULONGLONG)statFrameStart.QuadPart;
                         for (i = 0; i < hdr->Count; ++i)
-                            DwmDxAcknowledgeSurface(&wins[i]);
+                        {
+                            /* Native GPU textures have no linear CPU view.
+                             * A software frame cannot acknowledge their use. */
+                            if (wins[i].DxPitch != 0)
+                                DwmDxAcknowledgeSurface(&wins[i]);
+                        }
                     }
                 }
             }

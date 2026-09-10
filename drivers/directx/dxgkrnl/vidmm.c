@@ -2922,6 +2922,79 @@ DxgkVidMmDereferenceResource(
     }
 }
 
+NTSTATUS
+DxgkVidMmValidateSharedResourceOwner(
+    _In_ ULONG GlobalShare,
+    _In_ const LUID *AdapterLuid,
+    _In_ PEPROCESS ExpectedProcess)
+{
+    PDXGKVMM_RESOURCE Resource;
+    PLIST_ENTRY Entry;
+    ULONG Count = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (GlobalShare == 0 || AdapterLuid == NULL || ExpectedProcess == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Status = DxgkVidMmReferenceResource(GlobalShare, TRUE, NULL, &Resource);
+    if (!NT_SUCCESS(Status))
+        return STATUS_INVALID_HANDLE;
+
+    /* These locks also cover device detachment and allocation membership.
+     * Publication validates ownership; the producer retains the resource
+     * until DWM acknowledges the completed GPU read. */
+    ExAcquireFastMutex(&DxgkVidMmResourceListLock);
+    if (InterlockedCompareExchange(&Resource->Destroying, 0, 0) != 0 ||
+        InterlockedCompareExchange(&Resource->CloseUncertain, 0, 0) != 0 ||
+        InterlockedCompareExchange(&Resource->DestroyFailureUncertain, 0, 0) != 0 ||
+        !Resource->Shareable || Resource->NtSecuritySharing ||
+        Resource->GlobalShareHandle != GlobalShare ||
+        Resource->BackingResource != NULL || Resource->Device == NULL ||
+        Resource->AllocationCount == 0 ||
+        InterlockedCompareExchange(&Resource->Device->Destroying, 0, 0) != 0)
+    {
+        Status = STATUS_INVALID_HANDLE;
+    }
+    else if (Resource->Device->OwnerProcess != ExpectedProcess)
+    {
+        Status = STATUS_ACCESS_DENIED;
+    }
+    else if (Resource->Adapter == NULL ||
+             Resource->Adapter->AdapterLuid.LowPart != AdapterLuid->LowPart ||
+             Resource->Adapter->AdapterLuid.HighPart != AdapterLuid->HighPart)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+    }
+    else
+    {
+        ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
+        for (Entry = Resource->AllocationList.Flink;
+             Entry != &Resource->AllocationList;
+             Entry = Entry->Flink)
+        {
+            PDXGKVMM_ALLOCATION Allocation =
+                CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, ResourceEntry);
+
+            if (Count >= Resource->AllocationCount || Allocation->Initializing ||
+                Allocation->Resource != Resource ||
+                Allocation->Device != Resource->Device ||
+                Allocation->Adapter != Resource->Adapter ||
+                InterlockedCompareExchange(&Allocation->Destroying, 0, 0) != 0)
+            {
+                Status = STATUS_INVALID_HANDLE;
+                break;
+            }
+            ++Count;
+        }
+        if (NT_SUCCESS(Status) && Count != Resource->AllocationCount)
+            Status = STATUS_INVALID_HANDLE;
+        ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
+    }
+    ExReleaseFastMutex(&DxgkVidMmResourceListLock);
+    DxgkVidMmDereferenceResource(Resource);
+    return Status;
+}
+
 /*
  * External dxgmms2 lifetime boundary. The caller transfers one live resource
  * reference; destruction and rundown remain owned by the ReactOS VidMm

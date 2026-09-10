@@ -40,6 +40,7 @@ C_ASSERT(DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE == (2 * sizeof(ULONG)));
 C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE_EXCHANGE_IN, ConfiguredWddmLevel) ==
          DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE);
 C_ASSERT(sizeof(DXGKRNL_INTERFACE_EXCHANGE_IN) == (3 * sizeof(ULONG)));
+C_ASSERT(sizeof(RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET) == RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET_V1_SIZE);
 
 /* ---- Global state -------------------------------------------------------- */
 
@@ -579,6 +580,25 @@ WddmBridgeSendIoctl(
     _In_      ULONG  OutputSize)
 {
     return WddmBridgeSendIoctlWithInformation(IoControlCode, InputBuffer, InputSize, OutputBuffer, OutputSize, NULL);
+}
+
+NTSTATUS
+WddmBridgeValidateSharedResourceOwner(
+    _In_ const LUID *AdapterLuid,
+    _In_ ULONG GlobalShare)
+{
+    RXGK_VALIDATESHAREDRESOURCEOWNER_PACKET Packet;
+
+    if (AdapterLuid == NULL || GlobalShare == 0)
+        return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(&Packet, sizeof(Packet));
+    Packet.Size = sizeof(Packet);
+    Packet.Version = RXGK_WDDM_PACKET_VERSION_1;
+    Packet.GlobalShareHandle = GlobalShare;
+    Packet.AdapterLuidLowPart = AdapterLuid->LowPart;
+    Packet.AdapterLuidHighPart = AdapterLuid->HighPart;
+    return WddmBridgeSendIoctl(IOCTL_RXGK_VALIDATESHAREDRESOURCEOWNER,
+                               &Packet, sizeof(Packet), NULL, 0);
 }
 
 NTSTATUS

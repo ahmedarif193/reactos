@@ -46,6 +46,11 @@ WddmBridgeSendIoctlWithInformation(
     _In_      ULONG      OutputSize,
     _Out_opt_ PULONG_PTR Information);
 
+NTSTATUS
+WddmBridgeValidateSharedResourceOwner(
+    _In_ const LUID *AdapterLuid,
+    _In_ ULONG GlobalShare);
+
 /* Cached device object pointer (set by WddmBridgeInit) */
 extern PFILE_OBJECT   g_DxgkrnlFileObject;
 extern PDEVICE_OBJECT g_DxgkrnlDeviceObject;
