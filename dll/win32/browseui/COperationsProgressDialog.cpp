@@ -682,7 +682,7 @@ void COperationsProgressDialog::PaintGraph(HDC dc, RECT rect)
     COLORREF base = highContrast ? GetSysColor(COLOR_HIGHLIGHT) : RGB(6, 176, 37);
     if (!highContrast && m_Status == PDOPS_PAUSED) base = RGB(234, 181, 0);
     if (!highContrast && (m_Mode & PDM_ERRORSBLOCKING)) base = RGB(210, 35, 35);
-    COLORREF ink = m_Palette.Material ? Translucent(m_Palette.Back, base, 72) : base;
+    COLORREF ink = m_Palette.Material ? Translucent(m_Palette.Back, base, 56) : base;
     COLORREF pale = highContrast ? m_Palette.Back : Mix(m_Palette.Back, base, m_Palette.Dark ? 70 : 130);
     RECT frame = rect;
     int radius = Scale(6);
@@ -725,23 +725,42 @@ void COperationsProgressDialog::PaintGraph(HDC dc, RECT rect)
     {
         double maximum = 1;
         for (UINT i = 0; i < m_HistoryCount; ++i) maximum = max(maximum, m_History[i]);
-        POINT points[122];
+        POINT samples[_countof(m_History)], curve[3 * (_countof(m_History) - 1)];
         int height = rect.bottom - rect.top;
         int width = rect.right - rect.left;
-        points[0].x = rect.left;
-        points[0].y = rect.bottom;
-        for (UINT i = 0; i < m_HistoryCount; ++i)
+        UINT count = m_HistoryCount;
+        for (UINT i = 0; i < count; ++i)
         {
-            UINT index = (m_HistoryNext + _countof(m_History) - m_HistoryCount + i) % _countof(m_History);
-            points[i + 1].x = rect.left + MulDiv(width, i + 1, m_HistoryCount);
-            points[i + 1].y = rect.bottom - (int)(m_History[index] / maximum * height * 0.82);
+            UINT index = (m_HistoryNext + _countof(m_History) - count + i) % _countof(m_History);
+            samples[i].x = count > 1 ? rect.left + MulDiv(width, i, count - 1) : rect.right;
+            samples[i].y = rect.bottom - (int)(m_History[index] / maximum * height * 0.82);
         }
-        points[m_HistoryCount + 1].x = rect.right;
-        points[m_HistoryCount + 1].y = rect.bottom;
+        for (UINT i = 0; i + 1 < count; ++i)
+        {
+            const POINT &previous = samples[i ? i - 1 : 0];
+            const POINT &next = samples[min(i + 2, count - 1)];
+            curve[3 * i].x = samples[i].x + (samples[i + 1].x - previous.x) / 6;
+            curve[3 * i].y = samples[i].y + (samples[i + 1].y - previous.y) / 6;
+            curve[3 * i + 1].x = samples[i + 1].x - (next.x - samples[i].x) / 6;
+            curve[3 * i + 1].y = samples[i + 1].y - (next.y - samples[i].y) / 6;
+            curve[3 * i + 2] = samples[i + 1];
+            for (int k = 0; k < 2; ++k)
+            {
+                LONG &y = curve[3 * i + k].y;
+                y = max((LONG)rect.top, min((LONG)rect.bottom, y));
+            }
+        }
         HBRUSH brush = CreateSolidBrush(ink);
         HGDIOBJ oldBrush = SelectObject(dc, brush);
-        SelectObject(dc, GetStockObject(NULL_PEN));
-        Polygon(dc, points, m_HistoryCount + 2);
+        BeginPath(dc);
+        MoveToEx(dc, rect.left, rect.bottom, NULL);
+        LineTo(dc, rect.left, samples[0].y);
+        if (count > 1) PolyBezierTo(dc, curve, 3 * (count - 1));
+        LineTo(dc, rect.right, samples[count - 1].y);
+        LineTo(dc, rect.right, rect.bottom);
+        CloseFigure(dc);
+        EndPath(dc);
+        FillPath(dc);
         SelectObject(dc, oldBrush);
         DeleteObject(brush);
     }
