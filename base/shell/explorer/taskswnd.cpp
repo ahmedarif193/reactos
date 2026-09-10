@@ -1937,7 +1937,7 @@ public:
         if (!m_TaskBar.Initialize(m_hWnd))
             return FALSE;
 
-        SetWindowTheme(m_TaskBar.m_hWnd, L"TaskBand", NULL);
+        SetWindowTheme(m_TaskBar.m_hWnd, m_Tray->IsHorizontal() ? L"TaskBand" : L"TaskBandVert", NULL);
         m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial);
         m_TaskBar.m_bTrackGlow = m_bMaterial && IsWin7Bar();
 
@@ -2613,7 +2613,8 @@ public:
     }
 
     VOID DrawWin7Well(HDC hdc, const RECT *prc, INT radius, INT liftFill, INT liftEdge,
-                      BOOL bGlow, COLORREF crGlow, POINT ptGlow, INT amp)
+                      BOOL bGlow, COLORREF crGlow, POINT ptGlow, INT amp,
+                      HTHEME hTheme, INT state)
     {
         INT w = prc->right - prc->left, h = prc->bottom - prc->top;
         COLORREF crFill = ShellLiftColor(m_crMaterial, liftFill);
@@ -2628,11 +2629,17 @@ public:
             if (hpenEdge) DeleteObject(hpenEdge);
             return;
         }
-        hbrOld = SelectObject(hdc, hbrFill);
-        hpenOld = SelectObject(hdc, GetStockObject(NULL_PEN));
-        RoundRect(hdc, prc->left, prc->top, prc->right + 1, prc->bottom + 1, radius, radius);
-        SelectObject(hdc, hpenOld);
-        SelectObject(hdc, hbrOld);
+        /* Use the task-band artwork, including its translucent face and inner
+           highlight. An opaque material fill hides both the glass and theme. */
+        BOOL bThemed = hTheme && SUCCEEDED(DrawThemeBackground(hTheme, hdc, TP_BUTTON, state, prc, prc));
+        if (!bThemed)
+        {
+            hbrOld = SelectObject(hdc, hbrFill);
+            hpenOld = SelectObject(hdc, GetStockObject(NULL_PEN));
+            RoundRect(hdc, prc->left, prc->top, prc->right + 1, prc->bottom + 1, radius, radius);
+            SelectObject(hdc, hpenOld);
+            SelectObject(hdc, hbrOld);
+        }
         if (bGlow)
         {
             BITMAPINFO bmi;
@@ -2657,16 +2664,20 @@ public:
                 INT R = max(w, h) * 4 / 5;
                 INT R2 = R * R;
                 INT gr = GetRValue(crGlow), gg = GetGValue(crGlow), gb = GetBValue(crGlow);
-                INT br = GetRValue(crFill), bg = GetGValue(crFill), bb = GetBValue(crFill);
                 INT x, y;
 
-                for (y = 0; y < h; y++)
+                /* Add the icon glow to the rendered glass, preserving its
+                   reflection and the backdrop underneath it. */
+                BOOL bCopied = BitBlt(hdcMem, 0, 0, w, h, hdc, prc->left, prc->top, SRCCOPY);
+                GdiFlush();
+                for (y = 0; bCopied && y < h; y++)
                 {
                     for (x = 0; x < w; x++)
                     {
                         INT dx = x - gx, dy = y - gy;
                         INT d2 = dx * dx + dy * dy;
-                        INT r = br, g = bg, b = bb;
+                        DWORD px = pBits[y * w + x];
+                        INT r = (px >> 16) & 0xFF, g = (px >> 8) & 0xFF, b = px & 0xFF;
 
                         if (d2 < R2)
                         {
@@ -2681,10 +2692,17 @@ public:
                         pBits[y * w + x] = ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
                     }
                 }
-                if (hrgn)
-                    SelectClipRgn(hdc, hrgn);
-                BitBlt(hdc, prc->left, prc->top, w, h, hdcMem, 0, 0, SRCCOPY);
-                SelectClipRgn(hdc, NULL);
+                INT saved = bCopied ? SaveDC(hdc) : 0;
+                if (saved)
+                {
+                    if (hrgn)
+                        ExtSelectClipRgn(hdc, hrgn, RGN_AND);
+                    /* Keep the theme's two edge pixels crisp. */
+                    if (bThemed)
+                        IntersectClipRect(hdc, prc->left + 2, prc->top + 2, prc->right - 2, prc->bottom - 2);
+                    BitBlt(hdc, prc->left, prc->top, w, h, hdcMem, 0, 0, SRCCOPY);
+                    RestoreDC(hdc, saved);
+                }
                 if (hrgn)
                     DeleteObject(hrgn);
                 SelectObject(hdcMem, hbmOld);
@@ -2694,11 +2712,14 @@ public:
             if (hdcMem)
                 DeleteDC(hdcMem);
         }
-        hbrOld = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        hpenOld = SelectObject(hdc, hpenEdge);
-        RoundRect(hdc, prc->left, prc->top, prc->right, prc->bottom, radius, radius);
-        SelectObject(hdc, hpenOld);
-        SelectObject(hdc, hbrOld);
+        if (!bThemed)
+        {
+            hbrOld = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            hpenOld = SelectObject(hdc, hpenEdge);
+            RoundRect(hdc, prc->left, prc->top, prc->right, prc->bottom, radius, radius);
+            SelectObject(hdc, hpenOld);
+            SelectObject(hdc, hbrOld);
+        }
         DeleteObject(hpenEdge);
         DeleteObject(hbrFill);
     }
@@ -2741,6 +2762,10 @@ public:
         if (m_bMaterial)
         {
             BOOL bFlash = (uState & CDIS_MARKED) != 0;
+            HTHEME hButtonTheme = GetWindowTheme(m_TaskBar.m_hWnd);
+            INT state = bPressed ? TS_PRESSED :
+                        bChecked ? (bHot ? TS_HOTCHECKED : TS_CHECKED) :
+                        bHot ? TS_HOT : TS_NORMAL;
             RECT rcWell = rcFace;
             INT radius = ShellScaleForDpi(3);
             INT liftFill, liftEdge, amp, i;
@@ -2748,6 +2773,10 @@ public:
             COLORREF crGlow = 0;
             POINT ptGlow;
 
+            if (hButtonTheme && !IsThemePartDefined(hButtonTheme, TP_BUTTON, 0))
+                hButtonTheme = NULL;
+            /* The transparent toolbar has already painted the parent backdrop
+               before notifying us, including on mouse-move redraws. */
             InflateRect(&rcWell, -ShellScaleForDpi(1), -ShellScaleForDpi(2));
             if (bFlash)        { liftFill = 12; liftEdge = 60; amp = 40; }
             else if (bPressed) { liftFill = 5;  liftEdge = 40; amp = 14; }
@@ -2780,11 +2809,19 @@ public:
                 RECT rcBack = rcWell;
 
                 OffsetRect(&rcBack, i * nStep, 0);
-                DrawWin7Well(hdc, &rcBack, radius, max(0, liftFill - i),
-                             max(0, liftEdge - i * 6), FALSE, 0, ptGlow, 0);
+                INT saved = SaveDC(hdc);
+                if (!saved)
+                    continue;
+                /* Only the exposed strip belongs to a rear layer. Blending
+                   whole translucent buttons stacks their reflections across
+                   the front face and leaks their left edges through it. */
+                if (hButtonTheme)
+                    IntersectClipRect(hdc, rcBack.right - nStep, rcBack.top, rcBack.right, rcBack.bottom);
+                DrawWin7Well(hdc, &rcBack, radius, max(0, liftFill - i), max(0, liftEdge - i * 6), FALSE, 0, ptGlow, 0, hButtonTheme, TS_NORMAL);
+                RestoreDC(hdc, saved);
             }
-            DrawWin7Well(hdc, &rcWell, radius, liftFill, liftEdge, bGlow, crGlow, ptGlow, amp);
-            if (bChecked && !bPressed)
+            DrawWin7Well(hdc, &rcWell, radius, liftFill, liftEdge, bGlow, crGlow, ptGlow, amp, hButtonTheme, state);
+            if (!hButtonTheme && bChecked && !bPressed)
             {
                 RECT rcLight = { rcWell.left + radius / 2, rcWell.top + 1,
                                  rcWell.right - radius / 2, rcWell.top + 2 };
@@ -3161,6 +3198,7 @@ public:
 
     LRESULT OnUpdateTaskbarPos(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        SetWindowTheme(m_TaskBar.m_hWnd, m_Tray->IsHorizontal() ? L"TaskBand" : L"TaskBandVert", NULL);
         /* Update the button spacing */
         m_TaskBar.UpdateTbButtonSpacing(m_Tray->IsHorizontal(), m_Theme != NULL);
         return TRUE;
