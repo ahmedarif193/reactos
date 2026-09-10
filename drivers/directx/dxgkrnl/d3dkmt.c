@@ -5900,6 +5900,18 @@ DxgkpQueryStatisticsPhysicalAdapter(
 
     PAGED_CODE();
 
+    if (Adapter->MiniportContext == NULL ||
+        Adapter->MiniportContext->IsBasicDisplayFallback)
+        return STATUS_INVALID_PARAMETER;
+
+    /* These telemetry DDIs were introduced in WDDM 2.4. Check the miniport's
+     * declared ABI before interpreting its physical-adapter selector. The
+     * public OS/provider version ceiling does not disable a telemetry path
+     * that the miniport can already implement. */
+    if (DxgkCapsCoreInterfaceVersionToLevel(Adapter->MiniportContext->InitData.s.Version) <
+        DXGK_CAPS_CORE_LEVEL_WDDM_2_4)
+        return STATUS_NOT_IMPLEMENTED;
+
     /* One physical adapter per DXGKRNL_ADAPTER: any other index names
      * something that does not exist. */
     if (PhysicalAdapterIndex != 0)
@@ -5986,10 +5998,9 @@ DxgkpQueryStatisticsVidPnSource(
 }
 
 /*
- * A process that never opened this adapter has no record, and that is a
- * truthful answer of zero rather than an error: the caller asked what that
- * process is using and it is using nothing.  ProcessRecord comes back NULL
- * in that case and every per-process class reports zeroes.
+ * Looking up a process must not create graphics state. Each statistics class
+ * applies its own prerequisites to the optional process record: process-wide
+ * memory can be zero, while adapter/node queries require device history.
  */
 static NTSTATUS
 DxgkpQueryStatisticsResolveProcess(
@@ -6034,23 +6045,73 @@ DxgkpQueryStatisticsProcessAdapter(
     _In_opt_ PDXGKRNL_PROCESS ProcessRecord,
     _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_ADAPTER_INFORMATION *Information)
 {
+    BOOLEAN HasCreatedDevice;
+    ULONGLONG Reserved;
+
     PAGED_CODE();
+
+    if (ProcessRecord == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    ExAcquireFastMutex(&ProcessRecord->ProcessMutex);
+    HasCreatedDevice = ProcessRecord->HasCreatedDevice;
+    ExReleaseFastMutex(&ProcessRecord->ProcessMutex);
+    if (!HasCreatedDevice)
+        return STATUS_INVALID_PARAMETER;
 
     RtlZeroMemory(Information, sizeof(*Information));
     Information->NbSegments = Adapter->SegmentCount;
     Information->NodeCount = Adapter->NodeCount;
     Information->VidPnSourceCount = Adapter->NumberOfVideoPresentSources;
-    if (ProcessRecord != NULL)
-    {
-        ULONGLONG Reserved;
-
-        ExAcquireFastMutex(&ProcessRecord->GpuVaLock);
-        Reserved = ProcessRecord->GpuVaTotalReserved;
-        ExReleaseFastMutex(&ProcessRecord->GpuVaLock);
-        Information->VirtualMemoryUsage =
-            (ULONG)((Reserved > MAXULONG) ? MAXULONG : Reserved);
-    }
+    ExAcquireFastMutex(&ProcessRecord->GpuVaLock);
+    Reserved = ProcessRecord->GpuVaTotalReserved;
+    ExReleaseFastMutex(&ProcessRecord->GpuVaLock);
+    Information->VirtualMemoryUsage =
+        (ULONG)((Reserved > MAXULONG) ? MAXULONG : Reserved);
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpQueryStatisticsProcessNode(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_opt_ PDXGKRNL_PROCESS ProcessRecord,
+    _In_ ULONG NodeOrdinal,
+    _Out_ D3DKMT_QUERYSTATISTICS_PROCESS_NODE_INFORMATION *Information)
+{
+    PLIST_ENTRY Entry;
+    BOOLEAN HasDevice = FALSE;
+
+    PAGED_CODE();
+
+    if (ProcessRecord == NULL || NodeOrdinal >= Adapter->NodeCount)
+        return STATUS_INVALID_PARAMETER;
+
+    /* A retained process record can outlive its last device. Node statistics
+     * are queryable only while the process owns a live device on this adapter;
+     * creating a context or submitting GPU work is not required. */
+    ExAcquireFastMutex(&ProcessRecord->ProcessMutex);
+    for (Entry = ProcessRecord->DeviceListHead.Flink;
+         Entry != &ProcessRecord->DeviceListHead;
+         Entry = Entry->Flink)
+    {
+        PDXGK_PROCESS_DEVICE_LINK Link =
+            CONTAINING_RECORD(Entry, DXGK_PROCESS_DEVICE_LINK, Entry);
+        PDXGKRNL_DEVICE Device = (PDXGKRNL_DEVICE)Link->Device;
+
+        if (Device != NULL &&
+            InterlockedCompareExchange(&Device->Destroying, 0, 0) == 0)
+        {
+            HasDevice = TRUE;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&ProcessRecord->ProcessMutex);
+
+    if (!HasDevice)
+        return STATUS_INVALID_PARAMETER;
+
+    return VidSchQueryNodeStatistics(Adapter, ProcessRecord, NodeOrdinal,
+                                     Information);
 }
 
 static NTSTATUS
@@ -6300,19 +6361,7 @@ DxgkQueryStatistics(
 #endif
 
         case D3DKMT_QUERYSTATISTICS_PROCESS_NODE:
-            /* Bound the ordinal even when the process has no record, so an
-             * out-of-range node is refused for every caller alike. */
-            if (Query.QueryProcessNode.NodeId >= Adapter->NodeCount)
-            {
-                Status = STATUS_INVALID_PARAMETER;
-                break;
-            }
-            if (ProcessRecord == NULL)
-            {
-                Status = STATUS_SUCCESS;
-                break;
-            }
-            Status = VidSchQueryNodeStatistics(
+            Status = DxgkpQueryStatisticsProcessNode(
                          Adapter, ProcessRecord,
                          Query.QueryProcessNode.NodeId,
                          &Query.QueryResult.ProcessNodeInformation);
@@ -6325,7 +6374,7 @@ DxgkQueryStatistics(
                 Status = STATUS_INVALID_PARAMETER;
                 break;
             }
-            Status = (ProcessRecord != NULL) ? VidSchQueryNodeStatistics(Adapter, ProcessRecord, Query.QueryProcessNode2.NodeOrdinal, &Query.QueryResult.ProcessNodeInformation) : STATUS_SUCCESS;
+            Status = DxgkpQueryStatisticsProcessNode(Adapter, ProcessRecord, Query.QueryProcessNode2.NodeOrdinal, &Query.QueryResult.ProcessNodeInformation);
             break;
 #endif
 

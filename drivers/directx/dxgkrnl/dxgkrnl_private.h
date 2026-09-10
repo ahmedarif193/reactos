@@ -1762,6 +1762,11 @@ struct _DXGKRNL_PROCESS
      */
     LIST_ENTRY                  DeviceListHead;
 
+    /* Process-adapter statistics begin with the first successfully published
+     * device and remain available while this process record is retained.
+     * Protected by ProcessMutex; device teardown does not clear it. */
+    BOOLEAN                     HasCreatedDevice;
+
     /*
      * List of DXGKRNL_ALLOCATION objects directly owned by this process.
      * Protected by ProcessMutex.

@@ -2128,6 +2128,7 @@ DxgkpCreateDevice(
         return STATUS_INVALID_DEVICE_STATE;
     }
     InsertTailList(&Adapter->DeviceListHead, &Device->DeviceListEntry);
+    Device->ProcessRecord->HasCreatedDevice = TRUE;
     ExReleaseFastMutex(&Device->ProcessRecord->ProcessMutex);
     KeReleaseMutex(&Adapter->AdapterMutex, FALSE);
 
