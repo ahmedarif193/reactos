@@ -3,7 +3,7 @@
 # PURPOSE:     Build the Raspberry Pi VCOS kernel export DLL
 # COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
 
-add_library(vcos_win32_kern SHARED vcos_pthreads.c)
+add_library(vcos_win32_kern SHARED vcos_pthreads.c vcos_reactos.c)
 set_module_type(vcos_win32_kern kerneldll ENTRYPOINT DriverEntry)
 
 target_include_directories(vcos_win32_kern PRIVATE
