@@ -605,9 +605,11 @@ static DWORD custom_start_server(MSIPACKAGE *package, DWORD arch)
     PROCESS_INFORMATION pi = {0};
     STARTUPINFOW si = {0};
     WCHAR buffer[24];
+    DWORD error, len;
     HANDLE token;
     void *cookie;
     HANDLE pipe;
+    BOOL ret;
 
     if ((arch == SCS_32BIT_BINARY && package->custom_server_32_process) ||
         (arch == SCS_64BIT_BINARY && package->custom_server_64_process))
@@ -618,29 +620,74 @@ static DWORD custom_start_server(MSIPACKAGE *package, DWORD arch)
     pipe = CreateNamedPipeW(buffer, PIPE_ACCESS_DUPLEX, 0, 1, sizeof(DWORD64),
         sizeof(GUID), 0, NULL);
     if (pipe == INVALID_HANDLE_VALUE)
-        ERR("failed to create custom action client pipe: %lu\n", GetLastError());
+    {
+        error = GetLastError();
+        ERR("failed to create custom action client pipe: %lu\n", error);
+        return error;
+    }
 
     if ((sizeof(void *) == 8 || is_wow64) && arch == SCS_32BIT_BINARY)
-        GetSystemWow64DirectoryW(path, MAX_PATH - ARRAY_SIZE(L"\\msiexec.exe"));
+    {
+        len = GetSystemWow64DirectoryW(path, ARRAY_SIZE(path) - ARRAY_SIZE(L"\\msiexec.exe") + 1);
+        if (!len || len >= ARRAY_SIZE(path) - ARRAY_SIZE(L"\\msiexec.exe") + 1)
+        {
+            error = len ? ERROR_INSUFFICIENT_BUFFER : GetLastError();
+            if (!error) error = ERROR_FUNCTION_FAILED;
+            ERR("failed to get the WoW64 system directory: %lu\n", error);
+            CloseHandle(pipe);
+            return error;
+        }
+    }
     else
         wcscpy(path, sysdir);
     lstrcatW(path, L"\\msiexec.exe");
     swprintf(cmdline, ARRAY_SIZE(cmdline), L"%s -Embedding %d", path, GetCurrentProcessId());
 
     token = get_admin_token();
+    si.cb = sizeof(si);
 
     if (is_wow64 && arch == SCS_64BIT_BINARY)
     {
-        Wow64DisableWow64FsRedirection(&cookie);
-        CreateProcessAsUserW(token, path, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
-        Wow64RevertWow64FsRedirection(cookie);
+        ret = Wow64DisableWow64FsRedirection(&cookie);
+        if (ret)
+        {
+            ret = CreateProcessAsUserW(token, path, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+            error = ret ? ERROR_SUCCESS : GetLastError();
+            Wow64RevertWow64FsRedirection(cookie);
+        }
+        else
+            error = GetLastError();
     }
     else
-        CreateProcessAsUserW(token, path, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    {
+        ret = CreateProcessAsUserW(token, path, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+        error = ret ? ERROR_SUCCESS : GetLastError();
+    }
 
     if (token) CloseHandle(token);
 
+    if (!ret)
+    {
+        if (!error) error = ERROR_FUNCTION_FAILED;
+        ERR("failed to start custom action server %s: %lu\n", debugstr_w(path), error);
+        if (pi.hThread) CloseHandle(pi.hThread);
+        if (pi.hProcess) CloseHandle(pi.hProcess);
+        CloseHandle(pipe);
+        return error;
+    }
+
     CloseHandle(pi.hThread);
+
+    if (!ConnectNamedPipe(pipe, NULL) && (error = GetLastError()) != ERROR_PIPE_CONNECTED)
+    {
+        if (!error) error = ERROR_FUNCTION_FAILED;
+        ERR("failed to connect to custom action server: %lu\n", error);
+        TerminateProcess(pi.hProcess, error);
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pipe);
+        return error;
+    }
 
     if (arch == SCS_32BIT_BINARY)
     {
@@ -651,12 +698,6 @@ static DWORD custom_start_server(MSIPACKAGE *package, DWORD arch)
     {
         package->custom_server_64_process = pi.hProcess;
         package->custom_server_64_pipe = pipe;
-    }
-
-    if (!ConnectNamedPipe(pipe, NULL))
-    {
-        ERR("failed to connect to custom action server: %lu\n", GetLastError());
-        return GetLastError();
     }
 
     return ERROR_SUCCESS;
@@ -789,6 +830,7 @@ static custom_action_info *do_msidbCustomActionTypeDll(
     info->target = wcsdup( target );
     info->source = wcsdup( source );
     info->action = wcsdup( action );
+    info->handle = NULL;
     CoCreateGuid( &info->guid );
 
     EnterCriticalSection( &custom_action_cs );
@@ -805,6 +847,7 @@ static custom_action_info *do_msidbCustomActionTypeDll(
         if (status != RPC_S_OK)
         {
             ERR("RpcServerUseProtseqEp failed: %#lx\n", status);
+            free_custom_action_data( info );
             return NULL;
         }
 
@@ -813,6 +856,7 @@ static custom_action_info *do_msidbCustomActionTypeDll(
         if (status != RPC_S_OK)
         {
             ERR("RpcServerRegisterIfEx failed: %#lx\n", status);
+            free_custom_action_data( info );
             return NULL;
         }
 
@@ -830,7 +874,11 @@ static custom_action_info *do_msidbCustomActionTypeDll(
         return NULL;
     }
 
-    custom_start_server(package, info->arch);
+    if (custom_start_server(package, info->arch) != ERROR_SUCCESS)
+    {
+        free_custom_action_data( info );
+        return NULL;
+    }
 
     info->handle = CreateThread(NULL, 0, custom_client_thread, info, 0, NULL);
     if (!info->handle)
