@@ -35,6 +35,8 @@
 @ stdcall -version=0x600+ NtGetNextThread(ptr ptr long long long ptr) ChpeNtGetNextThread
 @ stdcall NtMapViewOfSection(long long ptr long ptr ptr ptr long long long) ChpeNtMapViewOfSection
 @ stdcall NtMapViewOfSectionEx(long long ptr ptr ptr long long ptr long) ChpeNtMapViewOfSectionEx
+@ stdcall NtNotifyChangeKey(ptr ptr ptr ptr ptr long long ptr long long) ChpeNtNotifyChangeKey
+@ stdcall NtNotifyChangeMultipleKeys(ptr long ptr ptr ptr ptr ptr long long ptr long long) ChpeNtNotifyChangeMultipleKeys
 @ stdcall NtOpenFile(ptr long ptr ptr long long) ChpeNtOpenFile
 @ stdcall NtProtectVirtualMemory(long ptr ptr long ptr) ChpeNtProtectVirtualMemory
 @ stdcall NtQueryDirectoryFile(long long ptr ptr ptr ptr long long long ptr long) ChpeNtQueryDirectoryFile
