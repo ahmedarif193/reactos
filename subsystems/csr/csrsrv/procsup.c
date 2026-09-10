@@ -1170,10 +1170,10 @@ PCSR_PROCESS
 NTAPI
 FindProcessForShutdown(IN PLUID CallerLuid)
 {
-    PCSR_PROCESS CsrProcess, ReturnCsrProcess = NULL;
+    PCSR_PROCESS CsrProcess, ReturnCsrProcess = NULL, SystemCsrProcess = NULL;
     PCSR_THREAD CsrThread;
     NTSTATUS Status;
-    ULONG Level = 0;
+    ULONG Level = 0, SystemLevel = 0;
     LUID ProcessLuid;
     LUID SystemLuid = SYSTEM_LUID;
     PLIST_ENTRY NextEntry;
@@ -1235,8 +1235,19 @@ FindProcessForShutdown(IN PLUID CallerLuid)
             CsrProcess->ShutdownFlags |= CsrShutdownOther;
         }
 
-        /* Check if we're past the previous level */
-        if ((CsrProcess->ShutdownLevel > Level) || !ReturnCsrProcess)
+        /* The caller's session goes down before the system one does */
+        if (CsrProcess->ShutdownFlags & CsrShutdownSystem)
+        {
+            if ((CsrProcess->ShutdownLevel >= SystemLevel) || !SystemCsrProcess)
+            {
+                SystemLevel = CsrProcess->ShutdownLevel;
+                SystemCsrProcess = CsrProcess;
+            }
+            continue;
+        }
+
+        /* Equal levels shut the youngest process down first */
+        if ((CsrProcess->ShutdownLevel >= Level) || !ReturnCsrProcess)
         {
             /* Update the level */
             Level = CsrProcess->ShutdownLevel;
@@ -1245,6 +1256,9 @@ FindProcessForShutdown(IN PLUID CallerLuid)
             ReturnCsrProcess = CsrProcess;
         }
     }
+
+    if (!ReturnCsrProcess)
+        ReturnCsrProcess = SystemCsrProcess;
 
     /* Check if we found a process */
     if (ReturnCsrProcess)
