@@ -25,6 +25,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d11);
 
+#if defined(__REACTOS__) && defined(REACTOS_D3D11_NATIVE_UMD)
+HRESULT d3d11_native_create_device(IDXGIAdapter *adapter, UINT flags,
+        const D3D_FEATURE_LEVEL *levels, UINT count, ID3D11Device **out);
+#endif
+
 static const char *debug_d3d_driver_type(D3D_DRIVER_TYPE driver_type)
 {
     switch (driver_type)
@@ -290,7 +295,11 @@ static HRESULT d3d11_create_device(IDXGIAdapter *adapter, D3D_DRIVER_TYPE driver
         feature_levels = default_feature_levels;
         levels = ARRAY_SIZE(default_feature_levels);
     }
-    hr = D3D11CoreCreateDevice(factory, adapter, flags, feature_levels, levels, &device);
+#if defined(__REACTOS__) && defined(REACTOS_D3D11_NATIVE_UMD)
+    hr = d3d11_native_create_device(adapter, flags, feature_levels, levels, &device);
+    if (hr == DXGI_ERROR_UNSUPPORTED)
+#endif
+        hr = D3D11CoreCreateDevice(factory, adapter, flags, feature_levels, levels, &device);
     IDXGIAdapter_Release(adapter);
     IDXGIFactory_Release(factory);
     if (FAILED(hr))
