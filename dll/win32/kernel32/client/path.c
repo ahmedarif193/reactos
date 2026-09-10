@@ -21,6 +21,8 @@ UNICODE_STRING BaseWindowsSystemDirectory, BaseWindowsDirectory;
 UNICODE_STRING BaseDefaultPathAppend, BaseDefaultPath, BaseDllDirectory;
 DWORD BaseDefaultDllDirectoriesFlags;
 
+static const WCHAR BaseWow64DirectorySuffix[] = L"\\SysWOW64";
+
 PVOID gpTermsrvGetWindowsDirectoryA;
 PVOID gpTermsrvGetWindowsDirectoryW;
 
@@ -2497,37 +2499,79 @@ GetSystemWindowsDirectoryW(OUT LPWSTR lpBuffer,
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 UINT
 WINAPI
 GetSystemWow64DirectoryW(OUT LPWSTR lpBuffer,
                          IN UINT uSize)
 {
-#ifdef _WIN64
-    UNIMPLEMENTED;
-    return 0;
-#else
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return 0;
+#ifndef _WIN64
+    BOOL Wow64Process;
+
+    if (!IsWow64Process(GetCurrentProcess(), &Wow64Process) || !Wow64Process)
+    {
+        SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+        return 0;
+    }
 #endif
+
+    if (uSize >= BaseWindowsDirectory.Length / sizeof(WCHAR) + RTL_NUMBER_OF(BaseWow64DirectorySuffix))
+    {
+        RtlCopyMemory(lpBuffer, BaseWindowsDirectory.Buffer, BaseWindowsDirectory.Length);
+        RtlCopyMemory((PBYTE)lpBuffer + BaseWindowsDirectory.Length, BaseWow64DirectorySuffix, sizeof(BaseWow64DirectorySuffix));
+        return BaseWindowsDirectory.Length / sizeof(WCHAR) + RTL_NUMBER_OF(BaseWow64DirectorySuffix) - 1;
+    }
+
+    return BaseWindowsDirectory.Length / sizeof(WCHAR) + RTL_NUMBER_OF(BaseWow64DirectorySuffix);
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 UINT
 WINAPI
 GetSystemWow64DirectoryA(OUT LPSTR lpBuffer,
                          IN UINT uSize)
 {
-#ifdef _WIN64
-    UNIMPLEMENTED;
-    return 0;
-#else
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return 0;
+    WCHAR Wow64DirectoryBuffer[MAX_PATH];
+    UNICODE_STRING Wow64Directory;
+    ANSI_STRING AnsiString;
+    ULONG AnsiLength;
+    NTSTATUS Status;
+
+#ifndef _WIN64
+    BOOL Wow64Process;
+
+    if (!IsWow64Process(GetCurrentProcess(), &Wow64Process) || !Wow64Process)
+    {
+        SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+        return 0;
+    }
 #endif
+
+    Wow64Directory.Length = BaseWindowsDirectory.Length + sizeof(BaseWow64DirectorySuffix) - sizeof(WCHAR);
+    Wow64Directory.MaximumLength = Wow64Directory.Length + sizeof(WCHAR);
+    if (Wow64Directory.MaximumLength > sizeof(Wow64DirectoryBuffer))
+    {
+        BaseSetLastNTError(STATUS_NAME_TOO_LONG);
+        return 0;
+    }
+
+    Wow64Directory.Buffer = Wow64DirectoryBuffer;
+    RtlCopyMemory(Wow64Directory.Buffer, BaseWindowsDirectory.Buffer, BaseWindowsDirectory.Length);
+    RtlCopyMemory((PBYTE)Wow64Directory.Buffer + BaseWindowsDirectory.Length, BaseWow64DirectorySuffix, sizeof(BaseWow64DirectorySuffix));
+
+    Status = RtlUnicodeToMultiByteSize(&AnsiLength, Wow64Directory.Buffer, Wow64Directory.MaximumLength);
+    if (!NT_SUCCESS(Status)) return 0;
+
+    if (uSize < AnsiLength) return AnsiLength;
+
+    RtlInitEmptyAnsiString(&AnsiString, lpBuffer, uSize);
+    Status = BasepUnicodeStringTo8BitString(&AnsiString, &Wow64Directory, FALSE);
+    if (!NT_SUCCESS(Status)) return 0;
+
+    return AnsiString.Length;
 }
 
 /* EOF */
