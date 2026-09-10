@@ -14,6 +14,7 @@
 #include <d3d10umddi.h>
 #include <wine/winedxgi.h>
 #include <dwmframe.h>
+#include <vkd3d_shader.h>
 #include <wine/debug.h>
 #include <stddef.h>
 
@@ -107,6 +108,19 @@ class NativeContext;
 class NativeTexture2D;
 class NativeRenderTargetView;
 class NativeSwapChain;
+class NativeShaderResourceView;
+
+static DXGI_FORMAT NativeDepthResourceFormat(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_D16_UNORM: return DXGI_FORMAT_R16_TYPELESS;
+        case DXGI_FORMAT_D24_UNORM_S8_UINT: return DXGI_FORMAT_R24G8_TYPELESS;
+        case DXGI_FORMAT_D32_FLOAT: return DXGI_FORMAT_R32_TYPELESS;
+        case DXGI_FORMAT_D32_FLOAT_S8X24_UINT: return DXGI_FORMAT_R32G8X24_TYPELESS;
+        default: return DXGI_FORMAT_UNKNOWN;
+    }
+}
 
 struct NativeSharedTextureData
 {
@@ -194,8 +208,8 @@ public:
     HRESULT STDMETHODCALLTYPE CreateShaderResourceView(ID3D11Resource *pResource, const D3D11_SHADER_RESOURCE_VIEW_DESC *pDesc, ID3D11ShaderResourceView **ppSRView) override;
     HRESULT STDMETHODCALLTYPE CreateUnorderedAccessView(ID3D11Resource *pResource, const D3D11_UNORDERED_ACCESS_VIEW_DESC *pDesc, ID3D11UnorderedAccessView **ppUAView) override { if (ppUAView) *ppUAView = NULL; Unimplemented("CreateUnorderedAccessView"); return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE CreateRenderTargetView(ID3D11Resource *pResource, const D3D11_RENDER_TARGET_VIEW_DESC *pDesc, ID3D11RenderTargetView **ppRTView) override;
-    HRESULT STDMETHODCALLTYPE CreateDepthStencilView(ID3D11Resource *pResource, const D3D11_DEPTH_STENCIL_VIEW_DESC *pDesc, ID3D11DepthStencilView **ppDepthStencilView) override { if (ppDepthStencilView) *ppDepthStencilView = NULL; Unimplemented("CreateDepthStencilView"); return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE CreateInputLayout(const D3D11_INPUT_ELEMENT_DESC *pInputElementDescs, UINT NumElements, const void *pShaderBytecodeWithInputSignature, SIZE_T BytecodeLength, ID3D11InputLayout **ppInputLayout) override { if (ppInputLayout) *ppInputLayout = NULL; Unimplemented("CreateInputLayout"); return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateDepthStencilView(ID3D11Resource *pResource, const D3D11_DEPTH_STENCIL_VIEW_DESC *pDesc, ID3D11DepthStencilView **ppDepthStencilView) override;
+    HRESULT STDMETHODCALLTYPE CreateInputLayout(const D3D11_INPUT_ELEMENT_DESC *pInputElementDescs, UINT NumElements, const void *pShaderBytecodeWithInputSignature, SIZE_T BytecodeLength, ID3D11InputLayout **ppInputLayout) override;
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const void *pShaderBytecode, SIZE_T BytecodeLength, ID3D11ClassLinkage *pClassLinkage, ID3D11VertexShader **ppVertexShader) override;
     HRESULT STDMETHODCALLTYPE CreateGeometryShader(const void *pShaderBytecode, SIZE_T BytecodeLength, ID3D11ClassLinkage *pClassLinkage, ID3D11GeometryShader **ppGeometryShader) override;
     HRESULT STDMETHODCALLTYPE CreateGeometryShaderWithStreamOutput(const void *pShaderBytecode, SIZE_T BytecodeLength, const D3D11_SO_DECLARATION_ENTRY *pSODeclaration, UINT NumEntries, const UINT *pBufferStrides, UINT NumStrides, UINT RasterizedStream, ID3D11ClassLinkage *pClassLinkage, ID3D11GeometryShader **ppGeometryShader) override { if (ppGeometryShader) *ppGeometryShader = NULL; Unimplemented("CreateGeometryShaderWithStreamOutput"); return E_NOTIMPL; }
@@ -249,6 +263,13 @@ public:
     ID3D11SamplerState *samplers[3][16] = {};
     ID3D11Buffer *constant_buffers[3][14] = {};
     ID3D11RenderTargetView *render_targets[8] = {};
+    ID3D11DepthStencilView *depth_view = NULL;
+    ID3D11InputLayout *input_layout = NULL;
+    ID3D11Buffer *vertex_buffers[32] = {};
+    UINT vertex_strides[32] = {}, vertex_offsets[32] = {};
+    ID3D11Buffer *index_buffer = NULL;
+    DXGI_FORMAT index_format = DXGI_FORMAT_UNKNOWN;
+    UINT index_offset = 0;
     ID3D11BlendState *blend_state = NULL;
     ID3D11RasterizerState *rasterizer_state = NULL;
     ID3D11DepthStencilState *depth_stencil_state = NULL;
@@ -283,8 +304,8 @@ public:
     void STDMETHODCALLTYPE Unmap(ID3D11Resource *pResource, UINT Subresource) override;
     void STDMETHODCALLTYPE PSSetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer *const *ppConstantBuffers) override;
     void STDMETHODCALLTYPE IASetInputLayout(ID3D11InputLayout *pInputLayout) override;
-    void STDMETHODCALLTYPE IASetVertexBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer *const *ppVertexBuffers, const UINT *pStrides, const UINT *pOffsets) override { Unimplemented("IASetVertexBuffers"); }
-    void STDMETHODCALLTYPE IASetIndexBuffer(ID3D11Buffer *pIndexBuffer, DXGI_FORMAT Format, UINT Offset) override { Unimplemented("IASetIndexBuffer"); }
+    void STDMETHODCALLTYPE IASetVertexBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer *const *ppVertexBuffers, const UINT *pStrides, const UINT *pOffsets) override;
+    void STDMETHODCALLTYPE IASetIndexBuffer(ID3D11Buffer *pIndexBuffer, DXGI_FORMAT Format, UINT Offset) override;
     void STDMETHODCALLTYPE DrawIndexedInstanced(UINT IndexCountPerInstance, UINT InstanceCount, UINT StartIndexLocation, INT BaseVertexLocation, UINT StartInstanceLocation) override;
     void STDMETHODCALLTYPE DrawInstanced(UINT VertexCountPerInstance, UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation) override;
     void STDMETHODCALLTYPE GSSetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer *const *ppConstantBuffers) override;
@@ -318,7 +339,7 @@ public:
     void STDMETHODCALLTYPE ClearRenderTargetView(ID3D11RenderTargetView *pRenderTargetView, const FLOAT ColorRGBA[4]) override;
     void STDMETHODCALLTYPE ClearUnorderedAccessViewUint(ID3D11UnorderedAccessView *pUnorderedAccessView, const UINT Values[4]) override { Unimplemented("ClearUnorderedAccessViewUint"); }
     void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(ID3D11UnorderedAccessView *pUnorderedAccessView, const FLOAT Values[4]) override { Unimplemented("ClearUnorderedAccessViewFloat"); }
-    void STDMETHODCALLTYPE ClearDepthStencilView(ID3D11DepthStencilView *pDepthStencilView, UINT ClearFlags, FLOAT Depth, UINT8 Stencil) override { Unimplemented("ClearDepthStencilView"); }
+    void STDMETHODCALLTYPE ClearDepthStencilView(ID3D11DepthStencilView *pDepthStencilView, UINT ClearFlags, FLOAT Depth, UINT8 Stencil) override;
     void STDMETHODCALLTYPE GenerateMips(ID3D11ShaderResourceView *pShaderResourceView) override { Unimplemented("GenerateMips"); }
     void STDMETHODCALLTYPE SetResourceMinLOD(ID3D11Resource *pResource, FLOAT MinLOD) override { Unimplemented("SetResourceMinLOD"); }
     FLOAT STDMETHODCALLTYPE GetResourceMinLOD(ID3D11Resource *pResource) override { Unimplemented("GetResourceMinLOD"); return 0; }
@@ -337,31 +358,31 @@ public:
     void STDMETHODCALLTYPE CSSetShader(ID3D11ComputeShader *pComputeShader, ID3D11ClassInstance *const *ppClassInstances, UINT NumClassInstances) override { Unimplemented("CSSetShader"); }
     void STDMETHODCALLTYPE CSSetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState *const *ppSamplers) override { Unimplemented("CSSetSamplers"); }
     void STDMETHODCALLTYPE CSSetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer *const *ppConstantBuffers) override { Unimplemented("CSSetConstantBuffers"); }
-    void STDMETHODCALLTYPE VSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppConstantBuffers) override { if (ppConstantBuffers) *ppConstantBuffers = NULL; Unimplemented("VSGetConstantBuffers"); }
-    void STDMETHODCALLTYPE PSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView **ppShaderResourceViews) override { if (ppShaderResourceViews) *ppShaderResourceViews = NULL; Unimplemented("PSGetShaderResources"); }
-    void STDMETHODCALLTYPE PSGetShader(ID3D11PixelShader **ppPixelShader, ID3D11ClassInstance **ppClassInstances, UINT *pNumClassInstances) override { if (ppPixelShader) *ppPixelShader = NULL; if (ppClassInstances) *ppClassInstances = NULL; Unimplemented("PSGetShader"); }
-    void STDMETHODCALLTYPE PSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState **ppSamplers) override { if (ppSamplers) *ppSamplers = NULL; Unimplemented("PSGetSamplers"); }
-    void STDMETHODCALLTYPE VSGetShader(ID3D11VertexShader **ppVertexShader, ID3D11ClassInstance **ppClassInstances, UINT *pNumClassInstances) override { if (ppVertexShader) *ppVertexShader = NULL; if (ppClassInstances) *ppClassInstances = NULL; Unimplemented("VSGetShader"); }
-    void STDMETHODCALLTYPE PSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppConstantBuffers) override { if (ppConstantBuffers) *ppConstantBuffers = NULL; Unimplemented("PSGetConstantBuffers"); }
-    void STDMETHODCALLTYPE IAGetInputLayout(ID3D11InputLayout **ppInputLayout) override { if (ppInputLayout) *ppInputLayout = NULL; Unimplemented("IAGetInputLayout"); }
-    void STDMETHODCALLTYPE IAGetVertexBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppVertexBuffers, UINT *pStrides, UINT *pOffsets) override { if (ppVertexBuffers) *ppVertexBuffers = NULL; Unimplemented("IAGetVertexBuffers"); }
-    void STDMETHODCALLTYPE IAGetIndexBuffer(ID3D11Buffer **pIndexBuffer, DXGI_FORMAT *Format, UINT *Offset) override { if (pIndexBuffer) *pIndexBuffer = NULL; Unimplemented("IAGetIndexBuffer"); }
-    void STDMETHODCALLTYPE GSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppConstantBuffers) override { if (ppConstantBuffers) *ppConstantBuffers = NULL; Unimplemented("GSGetConstantBuffers"); }
-    void STDMETHODCALLTYPE GSGetShader(ID3D11GeometryShader **ppGeometryShader, ID3D11ClassInstance **ppClassInstances, UINT *pNumClassInstances) override { if (ppGeometryShader) *ppGeometryShader = NULL; if (ppClassInstances) *ppClassInstances = NULL; Unimplemented("GSGetShader"); }
-    void STDMETHODCALLTYPE IAGetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY *pTopology) override { Unimplemented("IAGetPrimitiveTopology"); }
-    void STDMETHODCALLTYPE VSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView **ppShaderResourceViews) override { if (ppShaderResourceViews) *ppShaderResourceViews = NULL; Unimplemented("VSGetShaderResources"); }
-    void STDMETHODCALLTYPE VSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState **ppSamplers) override { if (ppSamplers) *ppSamplers = NULL; Unimplemented("VSGetSamplers"); }
+    void STDMETHODCALLTYPE VSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppConstantBuffers) override;
+    void STDMETHODCALLTYPE PSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView **ppShaderResourceViews) override;
+    void STDMETHODCALLTYPE PSGetShader(ID3D11PixelShader **ppPixelShader, ID3D11ClassInstance **ppClassInstances, UINT *pNumClassInstances) override;
+    void STDMETHODCALLTYPE PSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState **ppSamplers) override;
+    void STDMETHODCALLTYPE VSGetShader(ID3D11VertexShader **ppVertexShader, ID3D11ClassInstance **ppClassInstances, UINT *pNumClassInstances) override;
+    void STDMETHODCALLTYPE PSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppConstantBuffers) override;
+    void STDMETHODCALLTYPE IAGetInputLayout(ID3D11InputLayout **ppInputLayout) override;
+    void STDMETHODCALLTYPE IAGetVertexBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppVertexBuffers, UINT *pStrides, UINT *pOffsets) override;
+    void STDMETHODCALLTYPE IAGetIndexBuffer(ID3D11Buffer **pIndexBuffer, DXGI_FORMAT *Format, UINT *Offset) override;
+    void STDMETHODCALLTYPE GSGetConstantBuffers(UINT StartSlot, UINT NumBuffers, ID3D11Buffer **ppConstantBuffers) override;
+    void STDMETHODCALLTYPE GSGetShader(ID3D11GeometryShader **ppGeometryShader, ID3D11ClassInstance **ppClassInstances, UINT *pNumClassInstances) override;
+    void STDMETHODCALLTYPE IAGetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY *pTopology) override;
+    void STDMETHODCALLTYPE VSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView **ppShaderResourceViews) override;
+    void STDMETHODCALLTYPE VSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState **ppSamplers) override;
     void STDMETHODCALLTYPE GetPredication(ID3D11Predicate **ppPredicate, BOOL *pPredicateValue) override { if (ppPredicate) *ppPredicate = NULL; Unimplemented("GetPredication"); }
-    void STDMETHODCALLTYPE GSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView **ppShaderResourceViews) override { if (ppShaderResourceViews) *ppShaderResourceViews = NULL; Unimplemented("GSGetShaderResources"); }
-    void STDMETHODCALLTYPE GSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState **ppSamplers) override { if (ppSamplers) *ppSamplers = NULL; Unimplemented("GSGetSamplers"); }
-    void STDMETHODCALLTYPE OMGetRenderTargets(UINT NumViews, ID3D11RenderTargetView **ppRenderTargetViews, ID3D11DepthStencilView **ppDepthStencilView) override { if (ppRenderTargetViews) *ppRenderTargetViews = NULL; if (ppDepthStencilView) *ppDepthStencilView = NULL; Unimplemented("OMGetRenderTargets"); }
+    void STDMETHODCALLTYPE GSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView **ppShaderResourceViews) override;
+    void STDMETHODCALLTYPE GSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState **ppSamplers) override;
+    void STDMETHODCALLTYPE OMGetRenderTargets(UINT NumViews, ID3D11RenderTargetView **ppRenderTargetViews, ID3D11DepthStencilView **ppDepthStencilView) override;
     void STDMETHODCALLTYPE OMGetRenderTargetsAndUnorderedAccessViews(UINT NumRTVs, ID3D11RenderTargetView **ppRenderTargetViews, ID3D11DepthStencilView **ppDepthStencilView, UINT UAVStartSlot, UINT NumUAVs, ID3D11UnorderedAccessView **ppUnorderedAccessViews) override { if (ppRenderTargetViews) *ppRenderTargetViews = NULL; if (ppDepthStencilView) *ppDepthStencilView = NULL; if (ppUnorderedAccessViews) *ppUnorderedAccessViews = NULL; Unimplemented("OMGetRenderTargetsAndUnorderedAccessViews"); }
-    void STDMETHODCALLTYPE OMGetBlendState(ID3D11BlendState **ppBlendState, FLOAT BlendFactor[4], UINT *pSampleMask) override { if (ppBlendState) *ppBlendState = NULL; Unimplemented("OMGetBlendState"); }
-    void STDMETHODCALLTYPE OMGetDepthStencilState(ID3D11DepthStencilState **ppDepthStencilState, UINT *pStencilRef) override { if (ppDepthStencilState) *ppDepthStencilState = NULL; Unimplemented("OMGetDepthStencilState"); }
+    void STDMETHODCALLTYPE OMGetBlendState(ID3D11BlendState **ppBlendState, FLOAT BlendFactor[4], UINT *pSampleMask) override;
+    void STDMETHODCALLTYPE OMGetDepthStencilState(ID3D11DepthStencilState **ppDepthStencilState, UINT *pStencilRef) override;
     void STDMETHODCALLTYPE SOGetTargets(UINT NumBuffers, ID3D11Buffer **ppSOTargets) override { if (ppSOTargets) *ppSOTargets = NULL; Unimplemented("SOGetTargets"); }
-    void STDMETHODCALLTYPE RSGetState(ID3D11RasterizerState **ppRasterizerState) override { if (ppRasterizerState) *ppRasterizerState = NULL; Unimplemented("RSGetState"); }
-    void STDMETHODCALLTYPE RSGetViewports(UINT *pNumViewports, D3D11_VIEWPORT *pViewports) override { Unimplemented("RSGetViewports"); }
-    void STDMETHODCALLTYPE RSGetScissorRects(UINT *pNumRects, D3D11_RECT *pRects) override { Unimplemented("RSGetScissorRects"); }
+    void STDMETHODCALLTYPE RSGetState(ID3D11RasterizerState **ppRasterizerState) override;
+    void STDMETHODCALLTYPE RSGetViewports(UINT *pNumViewports, D3D11_VIEWPORT *pViewports) override;
+    void STDMETHODCALLTYPE RSGetScissorRects(UINT *pNumRects, D3D11_RECT *pRects) override;
     void STDMETHODCALLTYPE HSGetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView **ppShaderResourceViews) override { if (ppShaderResourceViews) *ppShaderResourceViews = NULL; Unimplemented("HSGetShaderResources"); }
     void STDMETHODCALLTYPE HSGetShader(ID3D11HullShader **ppHullShader, ID3D11ClassInstance **ppClassInstances, UINT *pNumClassInstances) override { if (ppHullShader) *ppHullShader = NULL; if (ppClassInstances) *ppClassInstances = NULL; Unimplemented("HSGetShader"); }
     void STDMETHODCALLTYPE HSGetSamplers(UINT StartSlot, UINT NumSamplers, ID3D11SamplerState **ppSamplers) override { if (ppSamplers) *ppSamplers = NULL; Unimplemented("HSGetSamplers"); }
@@ -532,6 +553,50 @@ public:
     void STDMETHODCALLTYPE GetDesc(D3D11_RENDER_TARGET_VIEW_DESC *out) override { if (out) *out = desc; }
 };
 
+class NativeDepthView : public NativeChild<ID3D11DepthStencilView, &IID_ID3D11DepthStencilView>
+{
+public:
+    NativeTexture2D *texture = NULL;
+    D3D11_DEPTH_STENCIL_VIEW_DESC desc = {};
+    D3D10DDI_HDEPTHSTENCILVIEW handle = {};
+    UINT mip_slice = 0, first_slice = 0, slice_count = 1;
+    bool created = false;
+    explicit NativeDepthView(NativeDevice *d) : NativeChild(d) {}
+    bool ConflictsWith(const NativeShaderResourceView *) const;
+    ~NativeDepthView()
+    {
+        NativeLock guard(device);
+        if (created) device->functions.pfnDestroyDepthStencilView(device->driver_device, handle);
+        HeapFree(GetProcessHeap(), 0, handle.pDrvPrivate);
+        if (texture) texture->Release();
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (IsEqualGUID(iid, IID_ID3D11View))
+        {
+            if (!out) return E_INVALIDARG;
+            *out = static_cast<ID3D11DepthStencilView *>(this); AddRef(); return S_OK;
+        }
+        return NativeChild::QueryInterface(iid, out);
+    }
+    void STDMETHODCALLTYPE GetResource(ID3D11Resource **out) override { if (out) { *out = texture; texture->AddRef(); } }
+    void STDMETHODCALLTYPE GetDesc(D3D11_DEPTH_STENCIL_VIEW_DESC *out) override { if (out) *out = desc; }
+};
+
+class NativeInputLayout : public NativeChild<ID3D11InputLayout, &IID_ID3D11InputLayout>
+{
+public:
+    D3D10DDI_HELEMENTLAYOUT handle = {};
+    bool created = false;
+    explicit NativeInputLayout(NativeDevice *d) : NativeChild(d) {}
+    ~NativeInputLayout()
+    {
+        NativeLock guard(device);
+        if (created) device->functions.pfnDestroyElementLayout(device->driver_device, handle);
+        HeapFree(GetProcessHeap(), 0, handle.pDrvPrivate);
+    }
+};
+
 template<class Interface, const GUID *iid, class Desc, class Handle>
 class NativeState : public NativeChild<Interface, iid>
 {
@@ -600,6 +665,33 @@ public:
     void STDMETHODCALLTYPE GetResource(ID3D11Resource **out) override { if (out) { *out = texture; texture->AddRef(); } }
     void STDMETHODCALLTYPE GetDesc(D3D11_SHADER_RESOURCE_VIEW_DESC *out) override { if (out) *out = desc; }
 };
+
+bool NativeDepthView::ConflictsWith(const NativeShaderResourceView *view) const
+{
+    if (!view || view->texture != texture) return false;
+    UINT mip, mips, first, count;
+    switch (view->desc.ViewDimension)
+    {
+        case D3D11_SRV_DIMENSION_TEXTURE2D:
+            mip = view->desc.Texture2D.MostDetailedMip;
+            mips = view->desc.Texture2D.MipLevels;
+            first = 0;
+            count = 1;
+            break;
+        case D3D11_SRV_DIMENSION_TEXTURE2DARRAY:
+            mip = view->desc.Texture2DArray.MostDetailedMip;
+            mips = view->desc.Texture2DArray.MipLevels;
+            first = view->desc.Texture2DArray.FirstArraySlice;
+            count = view->desc.Texture2DArray.ArraySize;
+            break;
+        default: return true;
+    }
+    if (mip_slice < mip || mip_slice - mip >= mips
+            || first_slice >= first + count || first >= first_slice + slice_count) return false;
+    bool stencil = view->desc.Format == DXGI_FORMAT_X24_TYPELESS_G8_UINT
+            || view->desc.Format == DXGI_FORMAT_X32_TYPELESS_G8X24_UINT;
+    return !(desc.Flags & (stencil ? D3D11_DSV_READ_ONLY_STENCIL : D3D11_DSV_READ_ONLY_DEPTH));
+}
 
 class NativeQuery : public NativeChild<ID3D11Query, &IID_ID3D11Query>
 {
@@ -1355,6 +1447,10 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CheckFormatSupport(DXGI_FORMAT format, U
     if (ddi_support & 0x4000) *support |= D3D11_FORMAT_SUPPORT_SHADER_GATHER;
     if (!(ddi_support & 0x80000000) && (ddi_support & 0x7))
         *support |= D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_MIP | D3D11_FORMAT_SUPPORT_SHADER_LOAD;
+    /* The DDI has no depth-stencil bit. For a supported typed depth format,
+     * its output-merger role follows from the format itself. */
+    if (!(ddi_support & 0x80000000) && NativeDepthResourceFormat(format) != DXGI_FORMAT_UNKNOWN)
+        *support |= D3D11_FORMAT_SUPPORT_DEPTH_STENCIL | D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_MIP;
     return S_OK;
 }
 
@@ -1708,6 +1804,8 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateShaderResourceView(ID3D11Resource 
     view->texture = texture;
     texture->AddRef();
     view->desc = desc;
+    view->desc.Format = args.Format;
+    view->desc.Texture2D.MipLevels = args.Tex2D.MipLevels;
     SIZE_T size = functions.pfnCalcPrivateShaderResourceViewSize(driver_device, &args);
     view->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
     if (!view->handle.pDrvPrivate) { view->Release(); return E_OUTOFMEMORY; }
@@ -1878,6 +1976,7 @@ void NativeContext::SetShaderResources(UINT stage, UINT start, UINT count, ID3D1
         bool conflict = false;
         for (UINT j = 0; j < 8; ++j)
             if (render_targets[j] && static_cast<NativeRenderTargetView *>(render_targets[j])->texture == view->texture) conflict = true;
+        if (depth_view && static_cast<NativeDepthView *>(depth_view)->ConflictsWith(view)) conflict = true;
         if (conflict) continue;
         handles[i] = view->handle;
         accepted[i] = view;
@@ -1894,7 +1993,8 @@ void STDMETHODCALLTYPE NativeContext::GSSetShaderResources(UINT start, UINT coun
 void STDMETHODCALLTYPE NativeContext::OMSetRenderTargets(UINT count, ID3D11RenderTargetView *const *targets, ID3D11DepthStencilView *depth)
 {
     if (count > 8 || (count && !targets)) return;
-    if (depth) { Unimplemented("OMSetRenderTargets depth view"); return; }
+    NativeDepthView *depth_target = static_cast<NativeDepthView *>(depth);
+    if (depth_target && depth_target->device != device) return;
     if (!device->functions.pfnSetRenderTargets) return;
     NativeLock guard(device);
     D3D10DDI_HRENDERTARGETVIEW handles[8] = {};
@@ -1915,9 +2015,23 @@ void STDMETHODCALLTYPE NativeContext::OMSetRenderTargets(UINT count, ID3D11Rende
         if (device->functions.pfnResourceReadAfterWriteHazard)
             device->functions.pfnResourceReadAfterWriteHazard(device->driver_device, view->texture->handle);
     }
-    D3D10DDI_HDEPTHSTENCILVIEW null_depth = {};
-    device->functions.pfnSetRenderTargets(device->driver_device, handles, count, 8 - count, null_depth, NULL, NULL, 0, 0, 0, 0);
+    D3D10DDI_HDEPTHSTENCILVIEW depth_handle = {};
+    if (depth_target)
+    {
+        depth_handle = depth_target->handle;
+        for (UINT stage = 0; stage < 3; ++stage)
+            for (UINT slot = 0; slot < 128; ++slot)
+                if (depth_target->ConflictsWith(static_cast<NativeShaderResourceView *>(shader_resources[stage][slot])))
+                {
+                    ID3D11ShaderResourceView *null_view = NULL;
+                    SetShaderResources(stage, slot, 1, &null_view);
+                }
+        if (device->functions.pfnResourceReadAfterWriteHazard)
+            device->functions.pfnResourceReadAfterWriteHazard(device->driver_device, depth_target->texture->handle);
+    }
+    device->functions.pfnSetRenderTargets(device->driver_device, handles, count, 8 - count, depth_handle, NULL, NULL, 0, 0, 0, 0);
     for (UINT i = 0; i < 8; ++i) ReplaceObject(render_targets[i], i < count ? targets[i] : NULL);
+    ReplaceObject(depth_view, depth);
 }
 
 void STDMETHODCALLTYPE NativeContext::OMSetBlendState(ID3D11BlendState *state, const FLOAT factors[4], UINT mask)
@@ -2034,6 +2148,9 @@ void STDMETHODCALLTYPE NativeContext::ClearState()
     OMSetRenderTargets(0, NULL, NULL);
     OMSetBlendState(NULL, NULL, ~0u);
     OMSetDepthStencilState(NULL, 0);
+    IASetInputLayout(NULL);
+    IASetVertexBuffers(0, 32, NULL, NULL, NULL);
+    IASetIndexBuffer(NULL, DXGI_FORMAT_UNKNOWN, 0);
     RSSetState(NULL);
     RSSetViewports(0, NULL);
     RSSetScissorRects(0, NULL);
@@ -2042,11 +2159,14 @@ void STDMETHODCALLTYPE NativeContext::ClearState()
 
 void STDMETHODCALLTYPE NativeContext::IASetInputLayout(ID3D11InputLayout *layout)
 {
-    if (layout) { Unimplemented("IASetInputLayout"); return; }
+    NativeInputLayout *object = static_cast<NativeInputLayout *>(layout);
+    if (object && object->device != device) return;
     if (!device->functions.pfnIaSetInputLayout) return;
     NativeLock guard(device);
     D3D10DDI_HELEMENTLAYOUT handle = {};
+    if (object) handle = object->handle;
     device->functions.pfnIaSetInputLayout(device->driver_device, handle);
+    ReplaceObject(input_layout, layout);
 }
 
 class NativeSwapChain final : public IDXGISwapChain1, public NativeAllocation
@@ -2584,4 +2704,326 @@ HRESULT STDMETHODCALLTYPE NativeSwapChain::Present1(UINT interval, UINT flags, c
         device->context->OMSetRenderTargets(8, targets, NULL);
     }
     return S_OK;
+}
+
+static UINT NativeVertexFormatSize(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+        case DXGI_FORMAT_R32G32B32A32_FLOAT: case DXGI_FORMAT_R32G32B32A32_UINT: case DXGI_FORMAT_R32G32B32A32_SINT: return 16;
+        case DXGI_FORMAT_R32G32B32_FLOAT: case DXGI_FORMAT_R32G32B32_UINT: case DXGI_FORMAT_R32G32B32_SINT: return 12;
+        case DXGI_FORMAT_R16G16B16A16_FLOAT: case DXGI_FORMAT_R16G16B16A16_UNORM: case DXGI_FORMAT_R16G16B16A16_UINT:
+        case DXGI_FORMAT_R16G16B16A16_SNORM: case DXGI_FORMAT_R16G16B16A16_SINT:
+        case DXGI_FORMAT_R32G32_FLOAT: case DXGI_FORMAT_R32G32_UINT: case DXGI_FORMAT_R32G32_SINT: return 8;
+        case DXGI_FORMAT_R10G10B10A2_UNORM: case DXGI_FORMAT_R10G10B10A2_UINT: case DXGI_FORMAT_R11G11B10_FLOAT:
+        case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UINT: case DXGI_FORMAT_R8G8B8A8_SNORM: case DXGI_FORMAT_R8G8B8A8_SINT:
+        case DXGI_FORMAT_R16G16_FLOAT: case DXGI_FORMAT_R16G16_UNORM: case DXGI_FORMAT_R16G16_UINT:
+        case DXGI_FORMAT_R16G16_SNORM: case DXGI_FORMAT_R16G16_SINT:
+        case DXGI_FORMAT_R32_FLOAT: case DXGI_FORMAT_R32_UINT: case DXGI_FORMAT_R32_SINT: return 4;
+        case DXGI_FORMAT_R8G8_UNORM: case DXGI_FORMAT_R8G8_UINT: case DXGI_FORMAT_R8G8_SNORM: case DXGI_FORMAT_R8G8_SINT:
+        case DXGI_FORMAT_R16_FLOAT: case DXGI_FORMAT_R16_UNORM: case DXGI_FORMAT_R16_UINT: case DXGI_FORMAT_R16_SNORM: case DXGI_FORMAT_R16_SINT: return 2;
+        case DXGI_FORMAT_R8_UNORM: case DXGI_FORMAT_R8_UINT: case DXGI_FORMAT_R8_SNORM: case DXGI_FORMAT_R8_SINT: return 1;
+        default: return 0;
+    }
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::CreateInputLayout(const D3D11_INPUT_ELEMENT_DESC *elements, UINT count,
+        const void *code, SIZE_T length, ID3D11InputLayout **out)
+{
+    if (out) *out = NULL;
+    if ((count && !elements) || count > D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT || !code || !length) return E_INVALIDARG;
+    if (!functions.pfnCalcPrivateElementLayoutSize || !functions.pfnCreateElementLayout || !functions.pfnDestroyElementLayout) return E_NOTIMPL;
+    struct InputSignature
+    {
+        vkd3d_shader_signature value = {};
+        ~InputSignature() { vkd3d_shader_free_shader_signature(&value); }
+    } signature;
+    vkd3d_shader_code bytecode = {code, length};
+    int result = vkd3d_shader_parse_input_signature(&bytecode, &signature.value, NULL);
+    if (result < 0) return result == VKD3D_ERROR_OUT_OF_MEMORY ? E_OUTOFMEMORY : E_INVALIDARG;
+    D3D10DDIARG_INPUT_ELEMENT_DESC declarations[D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT] = {};
+    UINT offsets[32] = {}, slot_classes[32] = {}, step_rates[32] = {}, used = 0;
+    bool used_slots[32] = {};
+    for (UINT i = 0; i < count; ++i)
+    {
+        const D3D11_INPUT_ELEMENT_DESC &input = elements[i];
+        UINT size = NativeVertexFormatSize(input.Format), support = 0;
+        if (!input.SemanticName || !size || input.InputSlot >= 32
+                || (input.InputSlotClass != D3D11_INPUT_PER_VERTEX_DATA && input.InputSlotClass != D3D11_INPUT_PER_INSTANCE_DATA)
+                || (input.InputSlotClass == D3D11_INPUT_PER_VERTEX_DATA && input.InstanceDataStepRate)) return E_INVALIDARG;
+        if (used_slots[input.InputSlot] && (slot_classes[input.InputSlot] != input.InputSlotClass
+                || step_rates[input.InputSlot] != input.InstanceDataStepRate)) return E_INVALIDARG;
+        used_slots[input.InputSlot] = true;
+        slot_classes[input.InputSlot] = input.InputSlotClass;
+        step_rates[input.InputSlot] = input.InstanceDataStepRate;
+        if (FAILED(CheckFormatSupport(input.Format, &support)) || !(support & D3D11_FORMAT_SUPPORT_IA_VERTEX_BUFFER)) return E_INVALIDARG;
+        UINT alignment = min(size, 4u);
+        UINT offset = input.AlignedByteOffset == D3D11_APPEND_ALIGNED_ELEMENT
+                ? (offsets[input.InputSlot] + alignment - 1) & ~(alignment - 1) : input.AlignedByteOffset;
+        if (offset % alignment || offset > D3D11_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES - size) return E_INVALIDARG;
+        offsets[input.InputSlot] = offset + size;
+        vkd3d_shader_signature_element *entry = vkd3d_shader_find_signature_element(&signature.value,
+                input.SemanticName, input.SemanticIndex, 0);
+        if (!entry) continue;
+        for (UINT j = 0; j < used; ++j)
+            if (declarations[j].InputRegister == entry->register_index) return E_INVALIDARG;
+        D3D10DDIARG_INPUT_ELEMENT_DESC &declaration = declarations[used++];
+        declaration.InputSlot = input.InputSlot;
+        declaration.AlignedByteOffset = offset;
+        declaration.Format = input.Format;
+        declaration.InputSlotClass = static_cast<D3D10_DDI_INPUT_CLASSIFICATION>(input.InputSlotClass);
+        declaration.InstanceDataStepRate = input.InstanceDataStepRate;
+        declaration.InputRegister = entry->register_index;
+    }
+    for (UINT i = 0; i < signature.value.element_count; ++i)
+    {
+        const vkd3d_shader_signature_element &entry = signature.value.elements[i];
+        if (!_stricmp(entry.semantic_name, "SV_VertexID") || !_stricmp(entry.semantic_name, "SV_InstanceID")) continue;
+        bool found = false;
+        for (UINT j = 0; j < used; ++j) if (declarations[j].InputRegister == entry.register_index) found = true;
+        if (!found) return E_INVALIDARG;
+    }
+    if (!out) return S_FALSE;
+    NativeLock guard(this);
+    NativeInputLayout *layout = new NativeInputLayout(this);
+    if (!layout) return E_OUTOFMEMORY;
+    D3D10DDIARG_CREATEELEMENTLAYOUT args = {declarations, used};
+    SIZE_T size = functions.pfnCalcPrivateElementLayoutSize(driver_device, &args);
+    layout->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
+    if (!layout->handle.pDrvPrivate) { layout->Release(); return E_OUTOFMEMORY; }
+    D3D10DDI_HRTELEMENTLAYOUT runtime_layout = {layout};
+    BeginCall();
+    functions.pfnCreateElementLayout(driver_device, &args, layout->handle, runtime_layout);
+    HRESULT hr = operation_error;
+    if (FAILED(hr)) { layout->Release(); return hr; }
+    layout->created = true;
+    *out = layout;
+    return S_OK;
+}
+
+void STDMETHODCALLTYPE NativeContext::IASetVertexBuffers(UINT start, UINT count, ID3D11Buffer *const *buffers,
+        const UINT *strides, const UINT *offsets)
+{
+    if (start > 32 || count > 32 - start || (buffers && count && (!strides || !offsets))
+            || !device->functions.pfnIaSetVertexBuffers) return;
+    NativeLock guard(device);
+    D3D10DDI_HRESOURCE handles[32] = {};
+    UINT new_strides[32] = {}, new_offsets[32] = {};
+    for (UINT i = 0; i < count; ++i)
+    {
+        new_strides[i] = strides ? strides[i] : 0;
+        new_offsets[i] = offsets ? offsets[i] : 0;
+        if (!buffers || !buffers[i]) continue;
+        NativeBuffer *buffer = GetNativeBuffer(buffers[i], device);
+        if (!buffer || !(buffer->desc.BindFlags & D3D11_BIND_VERTEX_BUFFER)
+                || strides[i] > D3D11_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES) return;
+        handles[i] = buffer->handle;
+    }
+    device->functions.pfnIaSetVertexBuffers(device->driver_device, start, count, handles, new_strides, new_offsets);
+    for (UINT i = 0; i < count; ++i)
+    {
+        ReplaceObject(vertex_buffers[start + i], buffers ? buffers[i] : NULL);
+        vertex_strides[start + i] = new_strides[i];
+        vertex_offsets[start + i] = new_offsets[i];
+    }
+}
+
+void STDMETHODCALLTYPE NativeContext::IASetIndexBuffer(ID3D11Buffer *buffer, DXGI_FORMAT format, UINT offset)
+{
+    if (!device->functions.pfnIaSetIndexBuffer) return;
+    NativeLock guard(device);
+    D3D10DDI_HRESOURCE handle = {};
+    if (buffer)
+    {
+        NativeBuffer *object = GetNativeBuffer(buffer, device);
+        UINT alignment = format == DXGI_FORMAT_R16_UINT ? 2 : format == DXGI_FORMAT_R32_UINT ? 4 : 0;
+        if (!object || !(object->desc.BindFlags & D3D11_BIND_INDEX_BUFFER) || !alignment || offset % alignment) return;
+        handle = object->handle;
+    }
+    device->functions.pfnIaSetIndexBuffer(device->driver_device, handle, format, offset);
+    ReplaceObject(index_buffer, buffer);
+    index_format = format;
+    index_offset = offset;
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::CreateDepthStencilView(ID3D11Resource *resource,
+        const D3D11_DEPTH_STENCIL_VIEW_DESC *input, ID3D11DepthStencilView **out)
+{
+    if (out) *out = NULL;
+    NativeTexture2D *texture = NativeTexture(resource, this);
+    if (!texture || !(texture->desc.BindFlags & D3D11_BIND_DEPTH_STENCIL)) return E_INVALIDARG;
+    if (!functions.pfnCalcPrivateDepthStencilViewSize || !functions.pfnCreateDepthStencilView
+            || !functions.pfnDestroyDepthStencilView) return E_NOTIMPL;
+    D3D11_DEPTH_STENCIL_VIEW_DESC desc = {};
+    if (input) desc = *input;
+    else
+    {
+        desc.Format = texture->desc.Format;
+        if (texture->desc.SampleDesc.Count > 1)
+            desc.ViewDimension = texture->desc.ArraySize > 1 ? D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY : D3D11_DSV_DIMENSION_TEXTURE2DMS;
+        else
+            desc.ViewDimension = texture->desc.ArraySize > 1 ? D3D11_DSV_DIMENSION_TEXTURE2DARRAY : D3D11_DSV_DIMENSION_TEXTURE2D;
+        if (desc.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE2DARRAY) desc.Texture2DArray.ArraySize = texture->desc.ArraySize;
+        if (desc.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY) desc.Texture2DMSArray.ArraySize = texture->desc.ArraySize;
+    }
+    if (desc.Flags & ~(D3D11_DSV_READ_ONLY_DEPTH | D3D11_DSV_READ_ONLY_STENCIL)) return E_INVALIDARG;
+    D3D11DDIARG_CREATEDEPTHSTENCILVIEW args = {};
+    args.hDrvResource = texture->handle;
+    args.Format = desc.Format == DXGI_FORMAT_UNKNOWN ? texture->desc.Format : desc.Format;
+    args.Flags = desc.Flags;
+    args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE2D;
+    DXGI_FORMAT base_format = NativeDepthResourceFormat(args.Format);
+    if (base_format == DXGI_FORMAT_UNKNOWN || (texture->desc.Format != args.Format
+            && texture->desc.Format != base_format)) return E_INVALIDARG;
+    switch (desc.ViewDimension)
+    {
+        case D3D11_DSV_DIMENSION_TEXTURE2D:
+            if (texture->desc.SampleDesc.Count != 1 || texture->desc.ArraySize != 1) return E_INVALIDARG;
+            args.Tex2D.MipSlice = desc.Texture2D.MipSlice;
+            args.Tex2D.ArraySize = 1;
+            break;
+        case D3D11_DSV_DIMENSION_TEXTURE2DARRAY:
+            if (texture->desc.SampleDesc.Count != 1) return E_INVALIDARG;
+            args.Tex2D.MipSlice = desc.Texture2DArray.MipSlice;
+            args.Tex2D.FirstArraySlice = desc.Texture2DArray.FirstArraySlice;
+            args.Tex2D.ArraySize = desc.Texture2DArray.ArraySize;
+            break;
+        case D3D11_DSV_DIMENSION_TEXTURE2DMS:
+            if (texture->desc.SampleDesc.Count == 1 || texture->desc.ArraySize != 1) return E_INVALIDARG;
+            args.Tex2D.ArraySize = 1;
+            break;
+        case D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY:
+            if (texture->desc.SampleDesc.Count == 1) return E_INVALIDARG;
+            args.Tex2D.FirstArraySlice = desc.Texture2DMSArray.FirstArraySlice;
+            args.Tex2D.ArraySize = desc.Texture2DMSArray.ArraySize;
+            break;
+        default: return E_INVALIDARG;
+    }
+    if (args.Tex2D.MipSlice >= texture->desc.MipLevels || !args.Tex2D.ArraySize
+            || args.Tex2D.FirstArraySlice >= texture->desc.ArraySize
+            || args.Tex2D.ArraySize > texture->desc.ArraySize - args.Tex2D.FirstArraySlice) return E_INVALIDARG;
+    if (!out) return S_FALSE;
+    NativeLock guard(this);
+    NativeDepthView *view = new NativeDepthView(this);
+    if (!view) return E_OUTOFMEMORY;
+    view->texture = texture;
+    texture->AddRef();
+    view->desc = desc;
+    view->desc.Format = args.Format;
+    view->mip_slice = args.Tex2D.MipSlice;
+    view->first_slice = args.Tex2D.FirstArraySlice;
+    view->slice_count = args.Tex2D.ArraySize;
+    SIZE_T size = functions.pfnCalcPrivateDepthStencilViewSize(driver_device, &args);
+    view->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
+    if (!view->handle.pDrvPrivate) { view->Release(); return E_OUTOFMEMORY; }
+    D3D10DDI_HRTDEPTHSTENCILVIEW runtime_view = {view};
+    BeginCall();
+    functions.pfnCreateDepthStencilView(driver_device, &args, view->handle, runtime_view);
+    HRESULT hr = operation_error;
+    if (FAILED(hr)) { view->Release(); return hr; }
+    view->created = true;
+    *out = view;
+    return S_OK;
+}
+
+void STDMETHODCALLTYPE NativeContext::ClearDepthStencilView(ID3D11DepthStencilView *input, UINT flags, FLOAT depth, UINT8 stencil)
+{
+    NativeDepthView *view = static_cast<NativeDepthView *>(input);
+    if (!view || view->device != device || !device->functions.pfnClearDepthStencilView
+            || (flags & ~(D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL))) return;
+    NativeLock guard(device);
+    device->functions.pfnClearDepthStencilView(device->driver_device, view->handle, flags, min(1.0f, max(0.0f, depth)), stencil);
+}
+
+template<class Interface>
+static void NativeReturnObject(Interface *object, Interface **out)
+{
+    if (!out) return;
+    *out = object;
+    if (object) object->AddRef();
+}
+
+template<class Interface, UINT capacity>
+static void NativeGetSlots(NativeDevice *device, Interface *const (&slots)[capacity], UINT start, UINT count, Interface **out)
+{
+    if (!out || start > capacity || count > capacity - start) return;
+    NativeLock guard(device);
+    for (UINT i = 0; i < count; ++i) NativeReturnObject(slots[start + i], out + i);
+}
+
+#define NATIVE_STAGE_GETTERS(Prefix, Stage, Interface, Shader) \
+void STDMETHODCALLTYPE NativeContext::Prefix##GetConstantBuffers(UINT start, UINT count, ID3D11Buffer **out) { NativeGetSlots(device, constant_buffers[Stage], start, count, out); } \
+void STDMETHODCALLTYPE NativeContext::Prefix##GetShaderResources(UINT start, UINT count, ID3D11ShaderResourceView **out) { NativeGetSlots(device, shader_resources[Stage], start, count, out); } \
+void STDMETHODCALLTYPE NativeContext::Prefix##GetSamplers(UINT start, UINT count, ID3D11SamplerState **out) { NativeGetSlots(device, samplers[Stage], start, count, out); } \
+void STDMETHODCALLTYPE NativeContext::Prefix##GetShader(Interface **out, ID3D11ClassInstance **, UINT *count) \
+{ NativeLock guard(device); NativeReturnObject(Shader, out); if (count) *count = 0; }
+NATIVE_STAGE_GETTERS(VS, 0, ID3D11VertexShader, vertex_shader)
+NATIVE_STAGE_GETTERS(PS, 1, ID3D11PixelShader, pixel_shader)
+NATIVE_STAGE_GETTERS(GS, 2, ID3D11GeometryShader, geometry_shader)
+#undef NATIVE_STAGE_GETTERS
+
+void STDMETHODCALLTYPE NativeContext::IAGetInputLayout(ID3D11InputLayout **out) { NativeLock guard(device); NativeReturnObject(input_layout, out); }
+void STDMETHODCALLTYPE NativeContext::IAGetVertexBuffers(UINT start, UINT count, ID3D11Buffer **out, UINT *strides, UINT *offsets)
+{
+    if (start > 32 || count > 32 - start) return;
+    NativeLock guard(device);
+    for (UINT i = 0; i < count; ++i)
+    {
+        if (out) NativeReturnObject(vertex_buffers[start + i], out + i);
+        if (strides) strides[i] = vertex_strides[start + i];
+        if (offsets) offsets[i] = vertex_offsets[start + i];
+    }
+}
+void STDMETHODCALLTYPE NativeContext::IAGetIndexBuffer(ID3D11Buffer **out, DXGI_FORMAT *format, UINT *offset)
+{
+    NativeLock guard(device);
+    NativeReturnObject(index_buffer, out);
+    if (format) *format = index_format;
+    if (offset) *offset = index_offset;
+}
+void STDMETHODCALLTYPE NativeContext::IAGetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY *out) { if (out) { NativeLock guard(device); *out = topology; } }
+void STDMETHODCALLTYPE NativeContext::OMGetRenderTargets(UINT count, ID3D11RenderTargetView **targets, ID3D11DepthStencilView **depth)
+{
+    if (count > 8) return;
+    NativeLock guard(device);
+    if (targets) for (UINT i = 0; i < count; ++i) NativeReturnObject(render_targets[i], targets + i);
+    NativeReturnObject(depth_view, depth);
+}
+void STDMETHODCALLTYPE NativeContext::OMGetBlendState(ID3D11BlendState **out, FLOAT factors[4], UINT *mask)
+{
+    NativeLock guard(device);
+    NativeReturnObject(blend_state, out);
+    if (factors) memcpy(factors, blend_factor, sizeof(blend_factor));
+    if (mask) *mask = sample_mask;
+}
+void STDMETHODCALLTYPE NativeContext::OMGetDepthStencilState(ID3D11DepthStencilState **out, UINT *reference)
+{
+    NativeLock guard(device);
+    NativeReturnObject(depth_stencil_state, out);
+    if (reference) *reference = stencil_ref;
+}
+void STDMETHODCALLTYPE NativeContext::RSGetState(ID3D11RasterizerState **out) { NativeLock guard(device); NativeReturnObject(rasterizer_state, out); }
+void STDMETHODCALLTYPE NativeContext::RSGetViewports(UINT *count, D3D11_VIEWPORT *out)
+{
+    if (!count) return;
+    NativeLock guard(device);
+    if (out)
+    {
+        UINT copied = min(*count, viewport_count);
+        memcpy(out, viewports, copied * sizeof(*out));
+        if (*count > copied) ZeroMemory(out + copied, (*count - copied) * sizeof(*out));
+    }
+    *count = viewport_count;
+}
+void STDMETHODCALLTYPE NativeContext::RSGetScissorRects(UINT *count, D3D11_RECT *out)
+{
+    if (!count) return;
+    NativeLock guard(device);
+    if (out)
+    {
+        UINT copied = min(*count, scissor_count);
+        memcpy(out, scissors, copied * sizeof(*out));
+        if (*count > copied) ZeroMemory(out + copied, (*count - copied) * sizeof(*out));
+    }
+    *count = scissor_count;
 }
