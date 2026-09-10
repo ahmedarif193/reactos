@@ -228,16 +228,26 @@ TaskbarPin_IsPinnable(PCWSTR pszSource, CStringW *pTarget)
 static HRESULT
 GetTaskbarPinFolder(BOOL bCreate, CStringW &Folder)
 {
+    WCHAR szFolder[MAX_PATH];
     PWSTR pszFolder = NULL;
     HRESULT hr = SHGetKnownFolderPath(FOLDERID_UserPinned, bCreate ? KF_FLAG_CREATE : KF_FLAG_DONT_VERIFY, NULL, &pszFolder);
-    if (FAILED(hr))
-        return hr;
-
-    WCHAR szFolder[MAX_PATH];
-    hr = StringCchCopyW(szFolder, _countof(szFolder), pszFolder);
-    CoTaskMemFree(pszFolder);
+    if (SUCCEEDED(hr))
+    {
+        hr = StringCchCopyW(szFolder, _countof(szFolder), pszFolder);
+        CoTaskMemFree(pszFolder);
+    }
+    else
+    {
+        hr = SHGetFolderPathW(NULL, CSIDL_APPDATA | (bCreate ? CSIDL_FLAG_CREATE : 0), NULL,
+                              SHGFP_TYPE_CURRENT, szFolder);
+        if (SUCCEEDED(hr) &&
+            !PathAppendW(szFolder, L"Microsoft\\Internet Explorer\\Quick Launch\\User Pinned"))
+        {
+            hr = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+        }
+    }
     if (FAILED(hr) || !PathAppendW(szFolder, L"TaskBar"))
-        return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+        return FAILED(hr) ? hr : HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
 
     if (bCreate)
     {
