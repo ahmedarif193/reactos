@@ -872,27 +872,48 @@ public:
         return 0;
     }
 
+    VOID ActivateItem(int i)
+    {
+        if (i < 0 || i >= (int)_countof(c_Items))
+            return;
+
+        HWND hwndOwner = m_hwndOwner;
+        int nCmd = c_Items[i].nCmd;
+        DestroyWindow();
+        ::PostMessageW(hwndOwner, SM2M_FLYOUTCMD, nCmd, 0);
+    }
+
     LRESULT OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        int i = HitTest(pt);
-        HWND hwndOwner = m_hwndOwner;
-        if (i >= 0)
-        {
-            int nCmd = c_Items[i].nCmd;
-            DestroyWindow();
-            ::PostMessageW(hwndOwner, SM2M_FLYOUTCMD, nCmd, 0);
-        }
+        ActivateItem(HitTest(pt));
         return 0;
     }
 
     LRESULT OnKeyDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
-        if (wParam == VK_ESCAPE)
+        if (wParam == VK_ESCAPE || wParam == VK_LEFT)
         {
             HWND hwndOwner = m_hwndOwner;
             DestroyWindow();
             ::PostMessageW(hwndOwner, SM2M_FLYOUTGONE, 0, 0);
+        }
+        else if (wParam == VK_UP || wParam == VK_DOWN || wParam == VK_HOME || wParam == VK_END)
+        {
+            int count = (int)_countof(c_Items);
+            if (wParam == VK_HOME)
+                m_iHot = 0;
+            else if (wParam == VK_END)
+                m_iHot = count - 1;
+            else if (m_iHot < 0)
+                m_iHot = (wParam == VK_UP) ? count - 1 : 0;
+            else
+                m_iHot = (m_iHot + (wParam == VK_UP ? count - 1 : 1)) % count;
+            InvalidateRect(NULL, FALSE);
+        }
+        else if (wParam == VK_RETURN || wParam == VK_SPACE)
+        {
+            ActivateItem(m_iHot);
         }
         return 0;
     }
@@ -2396,7 +2417,7 @@ public:
         if (count == 0)
             return;
 
-        int start = (m_iSel >= 0) ? m_iSel : ((m_iHot >= 0) ? m_iHot : -dir);
+        int start = (m_iSel >= 0) ? m_iSel : ((m_iHot >= 0) ? m_iHot : (dir > 0 ? -1 : 0));
         for (int step = 1; step <= count; step++)
         {
             int i = start + dir * step;
