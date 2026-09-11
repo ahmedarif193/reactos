@@ -203,6 +203,7 @@ MiAweRemovePageFromList(
 {
     PFN_NUMBER Page;
     PMMPFN Pfn1;
+    USHORT OldColor, OldCache;
 
     MI_ASSERT_PFN_LOCK_HELD();
 
@@ -214,7 +215,14 @@ MiAweRemovePageFromList(
         ASSERT(Pfn1 != NULL);
         if (Page >= LowestPage)
         {
-            return MiRemovePageByColor(Page, (ULONG)(Page & MmSecondaryColorMask));
+            /* This page need not be the head of its color list. */
+            OldColor = Pfn1->u3.e1.PageColor;
+            OldCache = Pfn1->u3.e1.CacheAttribute;
+            MiUnlinkFreeOrZeroedPage(Pfn1);
+            Pfn1->u3.e2.ShortFlags = 0;
+            Pfn1->u3.e1.PageColor = OldColor;
+            Pfn1->u3.e1.CacheAttribute = OldCache;
+            return Page;
         }
         Page = Pfn1->u2.Blink;
     }
