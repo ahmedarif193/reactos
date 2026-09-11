@@ -1906,6 +1906,27 @@ public:
         return g_TaskbarSettings.bSmallIcons && !IsWin7Bar();
     }
 
+    VOID ApplyTaskRowHeight()
+    {
+        DWORD dwSize;
+        INT cxIcon, cyIcon, cyPad, cyWant;
+
+        if (!IsWin7Bar() || !m_Tray->IsHorizontal() || !m_ImageList)
+            return;
+
+        if (!ImageList_GetIconSize(m_ImageList, &cxIcon, &cyIcon))
+            return;
+
+        dwSize = (DWORD)m_TaskBar.SendMessageW(TB_GETBUTTONSIZE, 0, 0);
+        cyPad = (INT)HIWORD(dwSize) - cyIcon;
+        cyWant = ShellScaleForDpi(48);
+        if (cyPad < 0 || cyWant - cyPad <= cyIcon)
+            return;
+
+        m_TaskBar.SendMessageW(TB_SETBITMAPSIZE, 0, MAKELPARAM(cxIcon, cyWant - cyPad));
+        m_TaskBar.SendMessageW(TB_SETBUTTONSIZE, 0, MAKELPARAM(LOWORD(dwSize), cyWant));
+    }
+
     HICON GetWndIcon(HWND hwnd)
     {
         HICON hIcon = NULL;
@@ -2818,6 +2839,7 @@ public:
                 TaskGroup = TaskGroup->Next;
             }
             m_TaskBar.SetImageList(m_ImageList);
+            ApplyTaskRowHeight();
         }
 
         if (GetClientRect(&rcClient) && !IsRectEmpty(&rcClient))
@@ -2996,6 +3018,7 @@ public:
                                        GetSystemMetrics(UseSmallTaskIcons() ? SM_CYSMICON : SM_CYICON),
                                        ILC_COLOR32 | ILC_MASK, 0, 1000);
         m_TaskBar.SetImageList(m_ImageList);
+        ApplyTaskRowHeight();
 
         /* Set proper spacing between buttons */
         m_TaskBar.UpdateTbButtonSpacing(m_Tray->IsHorizontal(), m_Theme != NULL);
