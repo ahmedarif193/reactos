@@ -19,7 +19,7 @@ TestCancelRoutine(
     _Inout_ PDEVICE_OBJECT DeviceObject,
     _Inout_ PIRP Irp)
 {
-    ok(DeviceObject == NULL, "unexpected device %p\n", DeviceObject);
+    ok_eq_pointer(DeviceObject, KmtDriverObject->DeviceObject);
     CancelledIrp = Irp;
     InterlockedIncrement(&CancelCalls);
     IoReleaseCancelSpinLock(Irp->CancelIrql);
@@ -59,6 +59,8 @@ TestCancel(VOID)
     CancelCalls = 0;
     CancelledIrp = NULL;
 
+    IoSetNextIrpStackLocation(Irp);
+    IoGetCurrentIrpStackLocation(Irp)->DeviceObject = KmtDriverObject->DeviceObject;
     OldRoutine = IoSetCancelRoutine(Irp, TestCancelRoutine);
     ok_eq_pointer(OldRoutine, NULL);
 
