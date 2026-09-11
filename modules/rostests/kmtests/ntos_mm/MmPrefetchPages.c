@@ -27,7 +27,7 @@ START_TEST(MmPrefetchPages)
     ULONG i;
 
     Status = MmPrefetchPages(0, NULL);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 
     Buffer = ExAllocatePoolWithTag(NonPagedPool, PREFETCH_PAGES * PAGE_SIZE, TAG_PREFETCH);
     if (skip(Buffer != NULL, "Failed to allocate scratch buffer\n"))

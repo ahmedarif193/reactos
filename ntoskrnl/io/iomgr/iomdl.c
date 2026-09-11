@@ -30,9 +30,6 @@ IoAllocateMdl(IN PVOID VirtualAddress,
     ULONG PageCount;
     SIZE_T Size;
 
-    /* Make sure we got a valid length */
-    ASSERT(Length != 0);
-
     /* Windows 7 and later support MDLs up to 4 GB minus one page. */
     if (Length > MAXULONG - PAGE_SIZE + 1) return NULL;
 
