@@ -1019,17 +1019,19 @@ static BOOL do_file_copyW( LPCWSTR source, LPCWSTR target, DWORD style,
     OFSTRUCT OfStruct;
     WCHAR TempPath[MAX_PATH];
     WCHAR TempFile[MAX_PATH];
+    WCHAR *Filename;
     LONG lRes;
-    DWORD dwLastError;
+    DWORD dwLastError, Length;
 #endif
 
     TRACE("copy %s to %s style 0x%x\n",debugstr_w(source),debugstr_w(target),style);
 
 #ifdef __REACTOS__
-    /* Get a temp file name */
-    if (!GetTempPathW(ARRAYSIZE(TempPath), TempPath))
+    /* A forced no-overwrite does not require the source to exist. */
+    if ((style & SP_COPY_FORCE_NOOVERWRITE) &&
+        GetFileAttributesW(target) != INVALID_FILE_ATTRIBUTES)
     {
-        ERR("GetTempPathW error\n");
+        SetLastError(ERROR_SUCCESS);
         return FALSE;
     }
 
@@ -1040,6 +1042,37 @@ static BOOL do_file_copyW( LPCWSTR source, LPCWSTR target, DWORD style,
         TRACE("LZOpenFileW(1) error %d %s\n", (int)hSource, debugstr_w(source));
         return FALSE;
     }
+
+    /* Decide whether to copy before creating or extracting any temporary file. */
+    if ((style & SP_COPY_REPLACEONLY) &&
+        GetFileAttributesW(target) == INVALID_FILE_ATTRIBUTES)
+        docopy = FALSE;
+    if (docopy && (style & SP_COPY_NOOVERWRITE) &&
+        GetFileAttributesW(target) != INVALID_FILE_ATTRIBUTES)
+    {
+        FILEPATHS_W filepaths = { target, source, ERROR_SUCCESS, 0 };
+        docopy = handler && handler(context, SPFILENOTIFY_TARGETEXISTS, (UINT_PTR)&filepaths, 0);
+    }
+    if (!docopy)
+    {
+        LZClose(hSource);
+        SetLastError(ERROR_SUCCESS);
+        return FALSE;
+    }
+    /* An explicit overwrite decision must survive the remaining copy checks. */
+    style &= ~SP_COPY_NOOVERWRITE;
+
+    /* Extract beside the destination: TEMP need not exist or be writable,
+     * and the final rename must stay on the destination volume. */
+    Length = GetFullPathNameW(target, ARRAYSIZE(TempPath), TempPath, &Filename);
+    if (!Length || Length >= ARRAYSIZE(TempPath) || !Filename)
+    {
+        dwLastError = !Length ? GetLastError() : ERROR_FILENAME_EXCED_RANGE;
+        LZClose(hSource);
+        SetLastError(dwLastError);
+        return FALSE;
+    }
+    *Filename = 0;
 
     if (!GetTempFileNameW(TempPath, L"", 0, TempFile))
     {
@@ -1220,6 +1253,10 @@ static BOOL do_file_copyW( LPCWSTR source, LPCWSTR target, DWORD style,
         rc = MoveFileExW(TempFile,target,MOVEFILE_REPLACE_EXISTING);
         TRACE("Did copy... rc was %i\n",rc);
     }
+#ifdef __REACTOS__
+    dwLastError = docopy && !rc ? GetLastError() : ERROR_SUCCESS;
+    DeleteFileW(TempFile);
+#endif
 
     /* after copy processing */
     if (style & SP_COPY_DELETESOURCE)
@@ -1228,6 +1265,9 @@ static BOOL do_file_copyW( LPCWSTR source, LPCWSTR target, DWORD style,
             DeleteFileW(source);
     }
 
+#ifdef __REACTOS__
+    SetLastError(dwLastError);
+#endif
     return rc;
 }
 
@@ -1467,6 +1507,10 @@ BOOL WINAPI SetupCommitFileQueueW( HWND owner, HSPFILEQ handle, PSP_FILE_CALLBAC
                 }
                 if (do_file_copyW( op_result == FILEOP_NEWPATH ? newpath : paths.Source,
                                paths.Target, op->style, handler, context )) break;  /* success */
+#ifdef __REACTOS__
+                /* FALSE with no error means the copy policy preserved the target. */
+                if (GetLastError() == ERROR_SUCCESS) break;
+#endif
                 /* try to extract it from the cabinet file */
                 if (op->src_tag)
                 {
