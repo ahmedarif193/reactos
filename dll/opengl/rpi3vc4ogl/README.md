@@ -5,12 +5,41 @@ SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
 
 # Raspberry Pi 3 VC4 OpenGL ICD
 
-`rpi3vc4ogl.dll.tar.xz` holds a prebuilt Windows WGL ICD: Mesa's gallium
-`vc4` driver for the Raspberry Pi 3's VideoCore IV, built for ReactOS ARM64.
-It is what gives the board hardware OpenGL 2.1; without it `opengl32` falls
-back to its GL 1.1 software rasteriser.
+The default RPi3 build compiles Mesa's `vc4` Windows WGL ICD from
+`submodules/mesa`, using the ReactOS Mesa fork's `ros-dev` branch. The
+superproject pins the source revision; builds do not follow a moving remote
+branch. `rpi3vc4ogl.dll` provides hardware OpenGL for VideoCore IV.
 
-The current package was rebuilt on September 9 in Release mode (`-O3`, `NDEBUG`, no debug information), including the linked KMT and zlib libraries from `output-Clang-arm64-release`. Its DLL SHA256 is `68b6584ab2f03c39cff2c3c0ad9a0fffeb3fbd9f26215805adb554bc1418cebd`. The same archive is embedded by default in Debug and Release ReactOS images. Build provenance and the previous archive are saved in `validation/graphics-errors-20260909/`. The current package also fixes WGL framebuffer lookup when a cached window DC is reassigned to a different window. Hardware verification of this update is pending.
+Mesa and its statically linked ReactOS KMT/zlib dependencies always use
+Release settings, including when the destination ReactOS image is Debug.
+The normal `rpi3vc4_mesa_icd_stage` target builds and stages the DLL, and
+image targets consume that staged result. The KMT/zlib Release build lives
+under this target's build directory and uses the same ReactOS source tree;
+it does not require a sibling Mesa checkout or a pre-existing Release build.
+
+Initialize the pinned submodule before configuring:
+
+    git submodule update --init --depth 1 -- submodules/mesa
+
+The source build requires llvm-mingw, Meson, Ninja, and Python with Mako,
+packaging and PyYAML. If Meson is outside `PATH`, pass
+`-DMESA_MESON=/path/to/meson` to CMake. `MESA_BUILD_JOBS` limits parallel
+build jobs and defaults to four.
+
+The DWM integration also supplies shared-texture imports, tracked content
+updates, GPU window publication, partial-primary presentation and on-demand
+profiling. A source switch must retain these interfaces; a basic VC4 WGL
+port alone does not provide the current desktop composition path.
+
+## Selecting the packaged rollback
+
+`rpi3vc4ogl.dll.tar.xz` is retained unchanged as the previous packaged ICD.
+Select it with `-DRPI3VC4_MESA_FROM_SOURCE=OFF`. An explicit
+`RPI3VC4_MESA_VC4_ICD` path takes precedence over both source and archive
+selection. The archive details and historical measurements below describe
+that rollback binary, not the newly built Mesa DLL.
+
+The rollback package was rebuilt on September 9 in Release mode (`-O3`, `NDEBUG`, no debug information), including the linked KMT and zlib libraries from `output-Clang-arm64-release`. Its DLL SHA256 is `68b6584ab2f03c39cff2c3c0ad9a0fffeb3fbd9f26215805adb554bc1418cebd`. Build provenance and the previous archive are saved in `validation/graphics-errors-20260909/`. This package also fixes WGL framebuffer lookup when a cached window DC is reassigned to a different window.
 
 Earlier candidate039 added partial-primary GPU copies from037 plus VC4 GPU copying for WGL shared-window publication. Its unchanged benchmark suites completed, and run040 passed 73 final-primary pixel samples covering GDI and WGL movement/repaint/resize. Effects were off.
 See `validation/rpi3-gpu-performance-20260908/GPU_WINDOW039.md` and the saved
@@ -18,15 +47,15 @@ See `validation/rpi3-gpu-performance-20260908/GPU_WINDOW039.md` and the saved
 The copy still waits for its completion fence; zero-copy, full effects and
 Windows scheduler parity remain open. Older results below are historical.
 
-## Why a binary lives here
+## Rollback provenance
 
-Mesa does not build inside this tree, so the artifact is vendored to keep a
-default RPi3 image hardware accelerated. Its matching source and cross-build
-configuration are kept in `/home/ahmed/WorkDir/TTE/mesa-reactos-rpi3`, based
+The previous artifact was vendored before the source build was integrated.
+Its matching source and cross-build configuration were kept in
+`/home/ahmed/WorkDir/TTE/mesa-reactos-rpi3`, based
 on Mesa commit `e7f6c8ab7ed2ff61185caa3082c693284b0cbcaa`. The archive is
-unpacked at build time by `CMakeLists.txt` using CMake's built-in tar.
+unpacked by `CMakeLists.txt` when the packaged rollback is selected.
 
-## Contents
+## Packaged rollback contents
 
 | | |
 |---|---|
@@ -115,9 +144,9 @@ bytes). That ABI was introduced by commit `0b59cb64953`.
 **Changing `sdk/include/reactos/rpi3vc4kmt.h` or
 `sdk/lib/rpi3vc4kmt/rpi3vc4kmt.c` requires rebuilding this binary.**
 
-## Rebuilding / overriding
+## Historical external rebuild / overriding
 
-The durable Mesa build uses `reactos-aarch64.cross` and this configuration:
+The previous external Mesa build used `reactos-aarch64.cross` and this configuration:
 
     /tmp/mesa-meson-env/bin/meson setup build-reactos-arm64 \
         --cross-file reactos-aarch64.cross --buildtype release -Db_ndebug=true \

@@ -2,19 +2,12 @@
 # LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
 # COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
 
-# The Raspberry Pi 3 gets hardware OpenGL 2.1 from Mesa's gallium "vc4"
-# driver built as a Windows WGL ICD.  Mesa does not build inside this tree,
-# so the ICD ships as a prebuilt artifact (see README.md for provenance) and
-# is unpacked at build time.  Shipping it here rather than requiring an
-# externally configured path is deliberate: without the ICD present,
-# opengl32 silently falls back to its GL 1.1 software rasteriser and the
-# board loses hardware acceleration, so a default build must carry it.
-#
-# Set RPI3VC4_MESA_VC4_ICD to override with a locally built Mesa when
-# iterating on the driver itself.
+# Build the VC4 WGL ICD from the pinned ReactOS Mesa submodule. Keep the
+# packaged ICD available for explicit rollback and external comparisons.
+option(RPI3VC4_MESA_FROM_SOURCE "Build the RPi3 VC4 ICD from the Mesa submodule in Release mode" ON)
 
 set(RPI3VC4_MESA_VC4_ICD "$ENV{REACTOS_MESA_VC4_ICD}" CACHE FILEPATH
-    "Override: external Mesa VC4 WGL ICD to deploy instead of the in-tree one")
+    "Override: external Mesa VC4 WGL ICD to deploy instead of building Mesa")
 
 # reactos.cab stores the source basename and ignores NAME_ON_CD, so the file
 # handed to add_cd_file must already be named rpi3vc4ogl.dll.
@@ -38,6 +31,8 @@ if(RPI3VC4_MESA_VC4_ICD)
         COMMAND ${CMAKE_STRIP} --strip-debug "${RPI3VC4_MESA_ICD_STAGE}"
         DEPENDS "${RPI3VC4_MESA_VC4_ICD}"
         VERBATIM)
+elseif(RPI3VC4_MESA_FROM_SOURCE)
+    include(mesa-source.cmake)
 else()
     set(RPI3VC4_MESA_ICD_ARCHIVE
         "${CMAKE_CURRENT_SOURCE_DIR}/rpi3vc4ogl.dll.tar.xz")

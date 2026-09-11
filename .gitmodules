@@ -5,4 +5,5 @@
 [submodule "mesa"]
 	path = submodules/mesa
 	url = https://github.com/eotics-com/reactos-mesa.git
+	branch = ros-dev
 	shallow = true
