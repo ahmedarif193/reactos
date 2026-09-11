@@ -15380,11 +15380,40 @@ DxgkpVidMmSumSegmentResidency(
     _Out_ PULONGLONG ResidentBytes,
     _Out_ PULONG ResidentCount)
 {
+    PDXGKRNL_SEGMENT Segment;
     PLIST_ENTRY Entry;
 
     *ResidentBytes = 0;
     *ResidentCount = 0;
 
+    if (Process == NULL)
+    {
+        if (Adapter->Segments == NULL || SegmentId == 0 ||
+            SegmentId > Adapter->SegmentCount)
+            return;
+        Segment = &ADAPTER_SEGMENTS(Adapter)[SegmentId - 1];
+
+        /* Internal DMA/context allocations own segment placements too, but
+         * do not enter the user allocation registry. Count each physical
+         * placement once, independently of the number of shared handles. */
+        ExAcquireFastMutex(&Segment->Lock);
+        for (Entry = Segment->AllocationList.Flink;
+             Entry != &Segment->AllocationList;
+             Entry = Entry->Flink)
+        {
+            PDXGKVMM_ALLOCATION Allocation =
+                CONTAINING_RECORD(Entry, DXGKVMM_ALLOCATION, SegmentEntry);
+
+            if (!Allocation->Resident || Allocation->SegmentId != SegmentId)
+                continue;
+            DxgkpVidMmSaturatingAdd(ResidentBytes, Allocation->Size);
+            (*ResidentCount)++;
+        }
+        ExReleaseFastMutex(&Segment->Lock);
+        return;
+    }
+
+    /* Device teardown clears process ownership under the registry lock. */
     DxgkpVidMmEnsureGlobalsInitialized();
     ExAcquireFastMutex(&DxgkVidMmAllocationListLock);
     for (Entry = DxgkVidMmAllocationListHead.Flink;
