@@ -6640,8 +6640,8 @@ public:
             }
             int nHeadH = (row.nType == 2) ? Sc(40) : Sc(46);
             int cyMid = rcRow.top + nHeadH / 2;
-            RECT rcNetIcon = { rcRow.left + Sc(8), cyMid - Sc(11),
-                               rcRow.left + Sc(30), cyMid + Sc(11) };
+            RECT rcNetIcon = { rcRow.left + Sc(8), cyMid - Sc(12),
+                               rcRow.left + Sc(32), cyMid + Sc(12) };
             if (row.nType == 2)
             {
                 UINT nWifi = row.nSignal >= 75 ? IDI_FLU_WIFI1 :
@@ -6660,12 +6660,12 @@ public:
                 TfyDrawFluent(hdcMem, &rcNetIcon,
                               row.bConnected ? IDI_FLU_NETADAPTER : IDI_FLU_GLOBE);
             }
-            RECT rcText = { rcRow.left + Sc(38), rcRow.top + Sc(4), rcRow.right - Sc(8), cyMid + Sc(4) };
+            RECT rcText = { rcRow.left + Sc(40), rcRow.top + Sc(4), rcRow.right - Sc(8), cyMid + Sc(4) };
             SelectObject(hdcMem, m_hFont);
             SetTextColor(hdcMem, m_Pal.PanelText);
             if (row.nType == 2)
             {
-                RECT rcSsid = { rcRow.left + Sc(38), rcRow.top, rcRow.right - Sc(86), rcRow.top + nHeadH };
+                RECT rcSsid = { rcRow.left + Sc(40), rcRow.top, rcRow.right - Sc(86), rcRow.top + nHeadH };
                 if (bExpanded)
                 {
                     rcSsid.bottom = rcRow.top + nHeadH / 2 + Sc(3);
@@ -6694,7 +6694,7 @@ public:
                 {
                     if (m_bPassMode)
                     {
-                        RECT rcPrompt = { rcRow.left + Sc(38), rcRow.top + nHeadH, rcRow.right - Sc(8), rcRow.top + nHeadH + Sc(22) };
+                        RECT rcPrompt = { rcRow.left + Sc(40), rcRow.top + nHeadH, rcRow.right - Sc(8), rcRow.top + nHeadH + Sc(22) };
                         SelectObject(hdcMem, m_hFontSmall);
                         SetTextColor(hdcMem, m_Pal.PanelText);
                         DrawTextW(hdcMem, L"Enter the network security key", -1, &rcPrompt,

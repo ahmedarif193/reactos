@@ -21,6 +21,7 @@
 #include <atlwin.h>
 #include <atlstr.h>
 #include <setupapi.h>
+#include <reactos/trayicons.h>
 #include <shellapi.h>
 
 #include <wine/debug.h>

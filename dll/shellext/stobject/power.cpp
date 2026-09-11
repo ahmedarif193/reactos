@@ -87,7 +87,7 @@ static HICON DynamicLoadIcon(HINSTANCE hinst)
         PowerStatus.ACLineStatus == AC_LINE_UNKNOWN ||
         PowerStatus.BatteryFlag == BATTERY_FLAG_UNKNOWN)
     {
-        hBatIcon = LoadIcon(hinst, MAKEINTRESOURCE(IDI_BATTCAP_ERR));
+        hBatIcon = StoLoadTrayIcon(hinst, IDI_BATTCAP_ERR);
         g_strTooltip.LoadStringW(IDS_PWR_UNKNOWN_REMAINING);
         return hBatIcon;
     }
@@ -95,28 +95,28 @@ static HICON DynamicLoadIcon(HINSTANCE hinst)
     if (((PowerStatus.BatteryFlag & BATTERY_FLAG_NO_BATTERY) == 0) &&
         (PowerStatus.BatteryLifePercent == BATTERY_PERCENTAGE_UNKNOWN))
     {
-        hBatIcon = LoadIcon(hinst, MAKEINTRESOURCE(IDI_BATTCAP_ERR));
+        hBatIcon = StoLoadTrayIcon(hinst, IDI_BATTCAP_ERR);
         g_strTooltip.LoadStringW(IDS_PWR_UNKNOWN_REMAINING);
     }
     else if (((PowerStatus.BatteryFlag & BATTERY_FLAG_NO_BATTERY) == 0) &&
         ((PowerStatus.BatteryFlag & BATTERY_FLAG_CHARGING) == BATTERY_FLAG_CHARGING))
     {
         index = Quantize(PowerStatus.BatteryLifePercent);
-        hBatIcon = LoadIcon(hinst, MAKEINTRESOURCE(bc_icons[index]));
+        hBatIcon = StoLoadTrayIcon(hinst, bc_icons[index]);
         g_strTooltip.Format(IDS_PWR_CHARGING, PowerStatus.BatteryLifePercent);
     }
     else if (PowerStatus.ACLineStatus == AC_LINE_ONLINE &&
              PowerStatus.BatteryLifePercent == 100)
     {
         index = Quantize(PowerStatus.BatteryLifePercent);
-        hBatIcon = LoadIcon(hinst, MAKEINTRESOURCE(bc_icons[index]));
+        hBatIcon = StoLoadTrayIcon(hinst, bc_icons[index]);
         g_strTooltip.LoadStringW(IDS_PWR_FULLY_CHARGED);
     }
     else if (((PowerStatus.BatteryFlag & BATTERY_FLAG_NO_BATTERY) == 0) &&
              ((PowerStatus.BatteryFlag & BATTERY_FLAG_CHARGING) == 0))
     {
         index = Quantize(PowerStatus.BatteryLifePercent);
-        hBatIcon = LoadIcon(hinst, MAKEINTRESOURCE(br_icons[index]));
+        hBatIcon = StoLoadTrayIcon(hinst, br_icons[index]);
 
         if (PowerStatus.BatteryLifeTime != BATTERY_UNKNOWN_TIME)
         {
@@ -139,7 +139,7 @@ static HICON DynamicLoadIcon(HINSTANCE hinst)
     }
     else
     {
-        hBatIcon = LoadIcon(hinst, MAKEINTRESOURCE(IDI_POWER_AC));
+        hBatIcon = StoLoadTrayIcon(hinst, IDI_POWER_AC);
         g_strTooltip.LoadStringW(IDS_PWR_AC);
     }
 

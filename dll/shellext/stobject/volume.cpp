@@ -232,10 +232,10 @@ HRESULT STDMETHODCALLTYPE Volume_Init(_In_ CSysTray * pSysTray)
         g_mmDeviceChange = RegisterWindowMessageW(L"winmm_devicechange");
     }
 
-    g_hIconVolume = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_VOLUME));
-    g_hIconMute = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_VOLMUTE));
-    g_hIconVolume0 = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_VOLUME0));
-    g_hIconVolume1 = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_VOLUME1));
+    g_hIconVolume = StoLoadTrayIcon(g_hInstance, IDI_VOLUME);
+    g_hIconMute = StoLoadTrayIcon(g_hInstance, IDI_VOLMUTE);
+    g_hIconVolume0 = StoLoadTrayIcon(g_hInstance, IDI_VOLUME0);
+    g_hIconVolume1 = StoLoadTrayIcon(g_hInstance, IDI_VOLUME1);
 
     Volume_IsMute();
     g_VolLevel = Volume_Level();

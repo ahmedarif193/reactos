@@ -12,6 +12,12 @@
 
 extern const GUID CLSID_SysTray;
 
+static inline HICON StoLoadTrayIcon(_In_ HINSTANCE hInstance, _In_ UINT nId)
+{
+    return (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(nId), IMAGE_ICON,
+                             ShellTrayIconSize(), ShellTrayIconSize(), 0);
+}
+
 
 typedef CWinTraits <
     WS_POPUP | WS_DLGFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,

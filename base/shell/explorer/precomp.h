@@ -48,6 +48,7 @@
 #include <ui/rosctrls.h>
 #include <ui/rosdlgs.h>
 #include <shellutils.h>
+#include <reactos/trayicons.h>
 
 #include "tmschema.h"
 #include "resource.h"
