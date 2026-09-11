@@ -147,7 +147,7 @@ RtlInitializeSidEx(
     va_list Arguments;
 
     if (SubAuthorityCount > SID_MAX_SUB_AUTHORITIES)
-        return STATUS_INVALID_SID;
+        return STATUS_INVALID_PARAMETER;
 
     Status = RtlInitializeSid(Sid, IdentifierAuthority, SubAuthorityCount);
     if (!NT_SUCCESS(Status))
