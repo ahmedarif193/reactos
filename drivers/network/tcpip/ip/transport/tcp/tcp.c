@@ -323,6 +323,8 @@ NTSTATUS TCPConnect
     PTDI_BUCKET Bucket;
     PNEIGHBOR_CACHE_ENTRY NCE;
 
+    UNREFERENCED_PARAMETER(ReturnInfo);
+
     TI_DbgPrint(DEBUG_TCP,("[IP, TCPConnect] Called\n"));
 
     Status = AddrBuildAddress
@@ -414,7 +416,6 @@ NTSTATUS TCPConnect
 
     Bucket->Request.RequestNotifyObject = (PVOID)Complete;
     Bucket->Request.RequestContext = Context;
-    Bucket->ReturnInfo = ReturnInfo;
 
     InsertTailList( &Connection->ConnectRequest, &Bucket->Entry );
 

@@ -103,7 +103,8 @@ TestTcpConnect(void)
         FileInfo,
         FileInfoSize);
     ExFreePoolWithTag(FileInfo, TAG_TEST);
-    if (skip(NT_SUCCESS(Status), "\\Device\\Tcp address file is unavailable: 0x%lx\n", Status))
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
         return;
 
     /* Create a TCP connection file */
@@ -132,7 +133,8 @@ TestTcpConnect(void)
         FileInfo,
         FileInfoSize);
     ExFreePoolWithTag(FileInfo, TAG_TEST);
-    if (skip(NT_SUCCESS(Status), "\\Device\\Tcp connection file is unavailable: 0x%lx\n", Status))
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
     {
         ZwClose(AddressHandle);
         return;
@@ -246,11 +248,23 @@ TestTcpConnect(void)
     ok_eq_long(ReturnInfo.UserDataLength, 0);
     ok_eq_pointer(ReturnInfo.UserData, NULL);
 
-    ok_eq_long(ReturnAddress.TAAddressCount, 1);
-    ok_eq_hex(ReturnAddress.Address[0].AddressType, TDI_ADDRESS_TYPE_IP);
-    ok_eq_hex(ReturnAddress.Address[0].AddressLength, TDI_ADDRESS_LENGTH_IP);
-    ok_eq_hex(ReturnAddress.Address[0].Address[0].sin_port, htons(TEST_CONNECT_SERVER_PORT));
-    ok_eq_hex(ReturnAddress.Address[0].Address[0].in_addr, InAddr.S_un.S_addr);
+    if (GetNTVersion() >= _WIN32_WINNT_WIN10)
+    {
+        /* Windows 11 also leaves the caller's address buffer unchanged. */
+        ok_eq_long(ReturnAddress.TAAddressCount, 0);
+        ok_eq_hex(ReturnAddress.Address[0].AddressType, 0);
+        ok_eq_hex(ReturnAddress.Address[0].AddressLength, 0);
+        ok_eq_hex(ReturnAddress.Address[0].Address[0].sin_port, 0);
+        ok_eq_hex(ReturnAddress.Address[0].Address[0].in_addr, 0);
+    }
+    else
+    {
+        ok_eq_long(ReturnAddress.TAAddressCount, 1);
+        ok_eq_hex(ReturnAddress.Address[0].AddressType, TDI_ADDRESS_TYPE_IP);
+        ok_eq_hex(ReturnAddress.Address[0].AddressLength, TDI_ADDRESS_LENGTH_IP);
+        ok_eq_hex(ReturnAddress.Address[0].Address[0].sin_port, htons(TEST_CONNECT_SERVER_PORT));
+        ok_eq_hex(ReturnAddress.Address[0].Address[0].in_addr, InAddr.S_un.S_addr);
+    }
 
     ObDereferenceObject(ConnectionFileObject);
 

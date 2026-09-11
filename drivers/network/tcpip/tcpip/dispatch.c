@@ -752,10 +752,10 @@ NTSTATUS DispTdiQueryInformation(
         ProviderInfo = (PTDI_PROVIDER_INFO)MmGetSystemAddressForMdl(Irp->MdlAddress);
         RtlZeroMemory(ProviderInfo, sizeof(*ProviderInfo));
 
-        ProviderInfo->Version = 0x0100;
-        ProviderInfo->MaxSendSize = 0xFFFFFFFF;
+        ProviderInfo->Version = 2;
+        ProviderInfo->MaxSendSize = 0x3FFFFFFF;
         ProviderInfo->MaxConnectionUserData = 0;
-        ProviderInfo->MaxDatagramSize = 65507;
+        ProviderInfo->MaxDatagramSize = DeviceObject == UDPDeviceObject ? 65507 : 65515;
         ProviderInfo->ServiceFlags = TDI_SERVICE_CONNECTION_MODE |
                                      TDI_SERVICE_ORDERLY_RELEASE |
                                      TDI_SERVICE_CONNECTIONLESS_MODE |
@@ -766,11 +766,10 @@ NTSTATUS DispTdiQueryInformation(
                                      TDI_SERVICE_NO_ZERO_LENGTH |
                                      TDI_SERVICE_DGRAM_CONNECTION |
                                      TDI_SERVICE_FORCE_ACCESS_CHECK |
-                                     TDI_SERVICE_SEND_AND_DISCONNECT |
-                                     TDI_SERVICE_ACCEPT_LOCAL_ADDR |
-                                     TDI_SERVICE_ADDRESS_SECURITY |
-                                     TDI_SERVICE_PREPOST_RECVS |
-                                     TDI_SERVICE_NO_PUSH;
+                                     TDI_SERVICE_DIRECT_ACCEPT |
+                                     TDI_SERVICE_ADDRESS_SECURITY;
+        if (DeviceObject == TCPDeviceObject)
+          ProviderInfo->ServiceFlags |= TDI_SERVICE_NO_PUSH;
         ProviderInfo->MinimumLookaheadData = 1;
         ProviderInfo->MaximumLookaheadData = 65535;
         ProviderInfo->NumberOfResources = 0;
