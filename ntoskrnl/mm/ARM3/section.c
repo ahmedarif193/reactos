@@ -877,6 +877,13 @@ MiUnmapViewOfSection(IN PEPROCESS Process,
 
     /* Find the VAD for the address and make sure it's a section VAD */
     Vad = MiLocateVad(&Process->VadRoot, BaseAddress);
+    if (Vad && Vad->u.VadFlags.PrivateMemory && !MI_IS_MEMORY_AREA_VAD(Vad) &&
+        Vad->u.VadFlags.VadType == VadDevicePhysicalMemory)
+    {
+        /* MDL mappings remain owned by MmUnmapLockedPages. */
+        if (!Flags) MmUnlockAddressSpace(&Process->Vm);
+        return STATUS_INVALID_PAGE_PROTECTION;
+    }
     if (!(Vad) || (Vad->u.VadFlags.PrivateMemory))
     {
         /* Couldn't find it, or invalid VAD, fail */
@@ -3147,12 +3154,14 @@ NTSTATUS
 MiCaptureRotateVad(
     _In_ PVOID VirtualAddress,
     _In_ SIZE_T NumberOfBytes,
+    _In_ BOOLEAN RequireCommitted,
     _Out_ PULONG Protect,
     _Out_ PMDL *MappedMdl)
 {
     PEPROCESS Process = PsGetCurrentProcess();
     PMMVAD Vad;
     ULONG_PTR EndAddress;
+    BOOLEAN Committed;
     NTSTATUS Status;
 
     EndAddress = (ULONG_PTR)VirtualAddress + NumberOfBytes - 1;
@@ -3179,6 +3188,18 @@ MiCaptureRotateVad(
     {
         Status = STATUS_NOT_SUPPORTED;
         goto Exit;
+    }
+
+    if (RequireCommitted && Vad->ControlArea == NULL)
+    {
+        MiLockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
+        Committed = MiIsEntireRangeCommitted((ULONG_PTR)VirtualAddress, EndAddress, Vad, Process);
+        MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
+        if (!Committed)
+        {
+            Status = STATUS_INVALID_PAGE_PROTECTION;
+            goto Exit;
+        }
     }
 
     *Protect = Vad->FirstPrototypePte != NULL ? (ULONG)(ULONG_PTR)Vad->FirstPrototypePte : MmProtectToValue[Vad->u.VadFlags.Protection];
@@ -3289,7 +3310,7 @@ MiRotateToFrameBuffer(
     if (Copy && (CopyFunction == NULL))
         return STATUS_INVALID_PARAMETER_5;
 
-    Status = MiCaptureRotateVad(VirtualAddress, NumberOfBytes, &Protect, &CurrentMdl);
+    Status = MiCaptureRotateVad(VirtualAddress, NumberOfBytes, TRUE, &Protect, &CurrentMdl);
     if (!NT_SUCCESS(Status))
         return Status;
     if (CurrentMdl != NULL)
@@ -3372,7 +3393,7 @@ MiRotateToRegularMemory(
     if (Copy && (CopyFunction == NULL))
         return STATUS_INVALID_PARAMETER_5;
 
-    Status = MiCaptureRotateVad(VirtualAddress, NumberOfBytes, &Protect, &SourceMdl);
+    Status = MiCaptureRotateVad(VirtualAddress, NumberOfBytes, FALSE, &Protect, &SourceMdl);
     if (!NT_SUCCESS(Status))
         return Status;
     if (SourceMdl == NULL)

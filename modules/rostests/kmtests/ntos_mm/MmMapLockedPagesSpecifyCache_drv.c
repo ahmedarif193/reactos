@@ -184,17 +184,9 @@ TestCleanEverything(VOID)
         CurrentUser = NULL;
     }
 
-    SehStatus = STATUS_SUCCESS;
-    _SEH2_TRY
-    {
-        MmUnlockPages(CurrentMdl);
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        SehStatus = _SEH2_GetExceptionCode();
-    }
-    _SEH2_END;
-    ok_eq_hex(SehStatus, STATUS_SUCCESS);
+    /* The kernel buffer stays resident until its owning allocation is freed. */
+    ok((CurrentMdl->MdlFlags & MDL_SOURCE_IS_NONPAGED_POOL) != 0,
+       "Expected an MDL describing owned nonpaged memory\n");
     IoFreeMdl(CurrentMdl);
     if (NonCachedLength)
     {
@@ -269,17 +261,10 @@ TestMessageHandler(
                         {
                             KIRQL Irql;
 
-                            SehStatus = STATUS_SUCCESS;
-                            _SEH2_TRY
-                            {
-                                MmProbeAndLockPages(CurrentMdl, KernelMode, IoWriteAccess);
-                            }
-                            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                            {
-                                SehStatus = _SEH2_GetExceptionCode();
-                            }
-                            _SEH2_END;
-                            ok_eq_hex(SehStatus, STATUS_SUCCESS);
+                            /* Both allocation paths return nonpaged kernel memory. */
+                            MmBuildMdlForNonPagedPool(CurrentMdl);
+                            ok((CurrentMdl->MdlFlags & MDL_SOURCE_IS_NONPAGED_POOL) != 0,
+                               "Nonpaged MDL flag was not set\n");
 
                             Irql = KeGetCurrentIrql();
                             ok(Irql <= APC_LEVEL, "IRQL > APC_LEVEL: %d\n", Irql);

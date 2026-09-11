@@ -43,111 +43,140 @@ TestRotateValidation(VOID)
     trace("MmRotatePhysicalView(misaligned VA) returned 0x%08lx, bytes %Iu\n", Status, NumberOfBytes);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER_1);
     ok_eq_size(NumberOfBytes, 0);
-
     NumberOfBytes = PAGE_SIZE + 1;
     Status = MmRotatePhysicalView((PVOID)(ULONG_PTR)PAGE_SIZE, &NumberOfBytes, NULL, MmToFrameBuffer, NULL, NULL);
     trace("MmRotatePhysicalView(misaligned size) returned 0x%08lx, bytes %Iu\n", Status, NumberOfBytes);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER_2);
     ok_eq_size(NumberOfBytes, 0);
-
     NumberOfBytes = PAGE_SIZE;
     Status = MmRotatePhysicalView((PVOID)(ULONG_PTR)PAGE_SIZE, &NumberOfBytes, NULL, MmMaximumRotateDirection, NULL, NULL);
     trace("MmRotatePhysicalView(invalid direction) returned 0x%08lx, bytes %Iu\n", Status, NumberOfBytes);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER_3);
     ok_eq_size(NumberOfBytes, 0);
-
     NumberOfBytes = PAGE_SIZE;
-    Status = MmRotatePhysicalView((PVOID)(ULONG_PTR)PAGE_SIZE, &NumberOfBytes, NULL, (MM_ROTATE_DIRECTION)-1, NULL, NULL);
-    trace("MmRotatePhysicalView(negative direction) returned 0x%08lx, bytes %Iu\n", Status, NumberOfBytes);
+    Status = MmRotatePhysicalView((PVOID)(ULONG_PTR)PAGE_SIZE,
+                                  &NumberOfBytes,
+                                  NULL,
+                                  (MM_ROTATE_DIRECTION)-1,
+                                  NULL,
+                                  NULL);
+    trace("MmRotatePhysicalView(negative direction) returned 0x%08lx, bytes %Iu\n",
+          Status,
+          NumberOfBytes);
     ok_eq_hex(Status, STATUS_ACCESS_VIOLATION);
     ok_eq_size(NumberOfBytes, 0);
 }
 
 static
 VOID
-TestRotateLifecycle(VOID)
+TestRotateLifecycle(
+    _In_ ULONG AllocationType,
+    _In_ BOOLEAN ReleaseMapped)
 {
-    PVOID BaseAddress;
-    PVOID FrameBuffer;
+    PVOID BaseAddress = NULL;
+    PVOID FrameBuffer = NULL;
+    PMDL FrameBufferMdl = NULL;
     PVOID FreeBase;
-    PMDL FrameBufferMdl;
-    SIZE_T FreeSize;
     SIZE_T NumberOfBytes;
-    SIZE_T RegionSize;
-    BOOLEAN IsReactOS;
+    SIZE_T RegionSize = PAGE_SIZE;
+    MEMORY_BASIC_INFORMATION MemoryInfo;
+    BOOLEAN Mapped = FALSE;
     NTSTATUS Status;
 
-    BaseAddress = NULL;
-    RegionSize = PAGE_SIZE;
-    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &BaseAddress, 0, &RegionSize, MEM_RESERVE | MEM_ROTATE, PAGE_READWRITE);
-    trace("MEM_ROTATE reserve returned 0x%08lx, base %p, size %Iu\n", Status, BaseAddress, RegionSize);
-    if (skip(NT_SUCCESS(Status), "MEM_ROTATE reservations are unavailable\n"))
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &BaseAddress, 0, &RegionSize, AllocationType | MEM_RESERVE | MEM_ROTATE, PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
         return;
 
-    IsReactOS = *(volatile ULONG *)(KI_USER_SHARED_DATA + PAGE_SIZE - sizeof(ULONG)) == 0x8eac705;
-    if (IsReactOS)
-    {
-        NumberOfBytes = PAGE_SIZE;
-        Status = MmRotatePhysicalView(BaseAddress, &NumberOfBytes, NULL, MmToRegularMemoryNoCopy, NULL, NULL);
-        trace("MmToRegularMemoryNoCopy on an unrotated VAD returned 0x%08lx, bytes %Iu\n", Status, NumberOfBytes);
-        ok_eq_hex(Status, STATUS_NOT_MAPPED_VIEW);
-        ok_eq_size(NumberOfBytes, 0);
-    }
-
     FrameBuffer = ExAllocatePoolZero(NonPagedPool, PAGE_SIZE, 'bFmK');
-    if (skip(FrameBuffer != NULL, "could not allocate the test frame-buffer page\n"))
-        goto CleanupVad;
-
+    ok(FrameBuffer != NULL, "could not allocate the frame-buffer page\n");
+    if (FrameBuffer == NULL)
+        goto Cleanup;
     FrameBufferMdl = IoAllocateMdl(FrameBuffer, PAGE_SIZE, FALSE, FALSE, NULL);
-    if (skip(FrameBufferMdl != NULL, "could not allocate the test frame-buffer MDL\n"))
-        goto CleanupFrameBuffer;
-
+    ok(FrameBufferMdl != NULL, "could not allocate the frame-buffer MDL\n");
+    if (FrameBufferMdl == NULL)
+        goto Cleanup;
     MmBuildMdlForNonPagedPool(FrameBufferMdl);
     *(PULONG)FrameBuffer = 0x12345678;
+
     NumberOfBytes = PAGE_SIZE;
     Status = MmRotatePhysicalView(BaseAddress, &NumberOfBytes, FrameBufferMdl, MmToFrameBufferNoCopy, NULL, NULL);
-    trace("MmToFrameBufferNoCopy returned 0x%08lx, bytes %Iu\n", Status, NumberOfBytes);
-    if (!IsReactOS && (Status == STATUS_INVALID_PAGE_PROTECTION))
+    Mapped = NT_SUCCESS(Status);
+    if (!(AllocationType & MEM_COMMIT))
     {
-        skip(FALSE, "native requires a display aperture; the RAM-backed test MDL was rejected\n");
-        goto CleanupMdl;
+        ok_eq_hex(Status, STATUS_INVALID_PAGE_PROTECTION);
+        ok_eq_size(NumberOfBytes, 0);
+        goto Cleanup;
     }
-
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_size(NumberOfBytes, PAGE_SIZE);
-    if (NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    ok_eq_hex(*(volatile ULONG *)BaseAddress, 0x12345678);
+    *(volatile ULONG *)BaseAddress = 0x87654321;
+    ok_eq_hex(*(PULONG)FrameBuffer, 0x87654321);
+
+    if (ReleaseMapped)
     {
-        ok_eq_hex(*(volatile ULONG *)BaseAddress, 0x12345678);
-        *(volatile ULONG *)BaseAddress = 0x87654321;
-        ok_eq_hex(*(PULONG)FrameBuffer, 0x87654321);
-
         FreeBase = BaseAddress;
-        FreeSize = 0;
-        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &FreeBase, &FreeSize, MEM_RELEASE);
-        trace("free of mapped rotate VAD returned 0x%08lx\n", Status);
-        ok_eq_hex(Status, STATUS_UNABLE_TO_DELETE_SECTION);
-
+        RegionSize = 0;
+        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &FreeBase, &RegionSize, MEM_RELEASE);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+        {
+            ok_eq_pointer(FreeBase, BaseAddress);
+            ok_eq_size(RegionSize, PAGE_SIZE);
+            BaseAddress = NULL;
+            Mapped = FALSE;
+            Status = ZwQueryVirtualMemory(NtCurrentProcess(), FreeBase, MemoryBasicInformation, &MemoryInfo, sizeof(MemoryInfo), NULL);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+            if (NT_SUCCESS(Status))
+            {
+                ok_eq_hex(MemoryInfo.State, MEM_FREE);
+                ok_eq_pointer(MemoryInfo.AllocationBase, NULL);
+            }
+            ok_eq_hex(*(PULONG)FrameBuffer, 0x87654321);
+        }
+    }
+    else
+    {
         NumberOfBytes = PAGE_SIZE;
         Status = MmRotatePhysicalView(BaseAddress, &NumberOfBytes, NULL, MmToRegularMemoryNoCopy, NULL, NULL);
-        trace("MmToRegularMemoryNoCopy returned 0x%08lx, bytes %Iu\n", Status, NumberOfBytes);
         ok_eq_hex(Status, STATUS_SUCCESS);
         ok_eq_size(NumberOfBytes, PAGE_SIZE);
         if (NT_SUCCESS(Status))
         {
+            Mapped = FALSE;
             ok_eq_hex(*(volatile ULONG *)BaseAddress, 0);
             *(volatile ULONG *)BaseAddress = 0xABCDEF01;
             ok_eq_hex(*(PULONG)FrameBuffer, 0x87654321);
         }
     }
 
-CleanupMdl:
-    IoFreeMdl(FrameBufferMdl);
-CleanupFrameBuffer:
-    ExFreePoolWithTag(FrameBuffer, 'bFmK');
-CleanupVad:
-    RegionSize = 0;
-    Status = ZwFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, MEM_RELEASE);
-    ok_eq_hex(Status, STATUS_SUCCESS);
+Cleanup:
+    if (BaseAddress != NULL)
+    {
+        RegionSize = 0;
+        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, MEM_RELEASE);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status) && Mapped)
+        {
+            /* Older implementations require restoring regular memory first. */
+            NumberOfBytes = PAGE_SIZE;
+            Status = MmRotatePhysicalView(BaseAddress, &NumberOfBytes, NULL, MmToRegularMemoryNoCopy, NULL, NULL);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+            if (NT_SUCCESS(Status))
+            {
+                RegionSize = 0;
+                Status = ZwFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, MEM_RELEASE);
+                ok_eq_hex(Status, STATUS_SUCCESS);
+            }
+        }
+    }
+    if (FrameBufferMdl != NULL)
+        IoFreeMdl(FrameBufferMdl);
+    if (FrameBuffer != NULL)
+        ExFreePoolWithTag(FrameBuffer, 'bFmK');
 }
 
 static
@@ -161,13 +190,28 @@ TestRotateCopyCallback(
     PTEST_ROTATE_COPY_CONTEXT CopyContext = Context;
     PVOID Destination;
     PVOID Source;
+    PHYSICAL_ADDRESS DestinationAddress;
+    PHYSICAL_ADDRESS SourceAddress;
 
-    Destination = MmGetSystemAddressForMdlSafe(DestinationMdl, NormalPagePriority);
-    Source = MmGetSystemAddressForMdlSafe(SourceMdl, NormalPagePriority);
-    if ((Destination == NULL) || (Source == NULL))
+    /* The rotate callback may receive a user alias that is being replaced.
+     * Map the locked physical pages without touching that alias. This fixture
+     * uses one aligned, cached RAM page for each side of the copy. */
+    if (CopyContext->NumberOfBytes != PAGE_SIZE || MmGetMdlByteOffset(DestinationMdl) || MmGetMdlByteOffset(SourceMdl) || MmGetMdlByteCount(DestinationMdl) != PAGE_SIZE || MmGetMdlByteCount(SourceMdl) != PAGE_SIZE)
+        return STATUS_INVALID_BUFFER_SIZE;
+    DestinationAddress.QuadPart = (ULONGLONG)MmGetMdlPfnArray(DestinationMdl)[0] << PAGE_SHIFT;
+    SourceAddress.QuadPart = (ULONGLONG)MmGetMdlPfnArray(SourceMdl)[0] << PAGE_SHIFT;
+    Destination = MmMapIoSpace(DestinationAddress, PAGE_SIZE, MmCached);
+    if (Destination == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
-
-    RtlCopyMemory(Destination, Source, CopyContext->NumberOfBytes);
+    Source = MmMapIoSpace(SourceAddress, PAGE_SIZE, MmCached);
+    if (Source == NULL)
+    {
+        MmUnmapIoSpace(Destination, PAGE_SIZE);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlCopyMemory(Destination, Source, PAGE_SIZE);
+    MmUnmapIoSpace(Source, PAGE_SIZE);
+    MmUnmapIoSpace(Destination, PAGE_SIZE);
     CopyContext->Calls++;
     return STATUS_SUCCESS;
 }
@@ -177,43 +221,37 @@ VOID
 TestRotateCopyLifecycle(VOID)
 {
     PVOID BaseAddress;
-    PVOID FrameBuffer;
-    PMDL FrameBufferMdl;
+    PVOID FrameBuffer = NULL;
+    PMDL FrameBufferMdl = NULL;
     TEST_ROTATE_COPY_CONTEXT CopyContext;
     SIZE_T NumberOfBytes;
     SIZE_T RegionSize;
-    BOOLEAN IsReactOS;
     NTSTATUS Status;
 
     BaseAddress = NULL;
     RegionSize = PAGE_SIZE;
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &BaseAddress, 0, &RegionSize, MEM_COMMIT | MEM_RESERVE | MEM_ROTATE, PAGE_READWRITE);
     trace("committed MEM_ROTATE allocation returned 0x%08lx, base %p, size %Iu\n", Status, BaseAddress, RegionSize);
-    if (skip(NT_SUCCESS(Status), "committed MEM_ROTATE allocations are unavailable\n"))
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
         return;
 
     FrameBuffer = ExAllocatePoolZero(NonPagedPool, PAGE_SIZE, 'cFmK');
-    if (skip(FrameBuffer != NULL, "could not allocate the copy test frame-buffer page\n"))
-        goto CleanupVad;
-
+    ok(FrameBuffer != NULL, "could not allocate the copy test frame-buffer page\n");
+    if (FrameBuffer == NULL)
+        goto Cleanup;
     FrameBufferMdl = IoAllocateMdl(FrameBuffer, PAGE_SIZE, FALSE, FALSE, NULL);
-    if (skip(FrameBufferMdl != NULL, "could not allocate the copy test frame-buffer MDL\n"))
-        goto CleanupFrameBuffer;
-
+    ok(FrameBufferMdl != NULL, "could not allocate the copy test frame-buffer MDL\n");
+    if (FrameBufferMdl == NULL)
+        goto Cleanup;
     MmBuildMdlForNonPagedPool(FrameBufferMdl);
+
     *(PULONG)BaseAddress = 0x13572468;
     CopyContext.Calls = 0;
     CopyContext.NumberOfBytes = PAGE_SIZE;
     NumberOfBytes = PAGE_SIZE;
     Status = MmRotatePhysicalView(BaseAddress, &NumberOfBytes, FrameBufferMdl, MmToFrameBuffer, TestRotateCopyCallback, &CopyContext);
     trace("MmToFrameBuffer returned 0x%08lx, bytes %Iu, callbacks %lu\n", Status, NumberOfBytes, CopyContext.Calls);
-    IsReactOS = *(volatile ULONG *)(KI_USER_SHARED_DATA + PAGE_SIZE - sizeof(ULONG)) == 0x8eac705;
-    if (!IsReactOS && (Status == STATUS_INVALID_PAGE_PROTECTION))
-    {
-        skip(FALSE, "native requires a display aperture; the RAM-backed copy test MDL was rejected\n");
-        goto CleanupMdl;
-    }
-
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_size(NumberOfBytes, PAGE_SIZE);
     ok_eq_ulong(CopyContext.Calls, 1);
@@ -231,14 +269,14 @@ TestRotateCopyLifecycle(VOID)
             ok_eq_hex(*(PULONG)BaseAddress, 0x24681357);
     }
 
-CleanupMdl:
-    IoFreeMdl(FrameBufferMdl);
-CleanupFrameBuffer:
-    ExFreePoolWithTag(FrameBuffer, 'cFmK');
-CleanupVad:
+Cleanup:
     RegionSize = 0;
     Status = ZwFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, MEM_RELEASE);
     ok_eq_hex(Status, STATUS_SUCCESS);
+    if (FrameBufferMdl != NULL)
+        IoFreeMdl(FrameBufferMdl);
+    if (FrameBuffer != NULL)
+        ExFreePoolWithTag(FrameBuffer, 'cFmK');
 }
 
 START_TEST(MmWddmRanges)
@@ -253,6 +291,8 @@ START_TEST(MmWddmRotate)
 
 START_TEST(MmWddmRotateValid)
 {
-    TestRotateLifecycle();
+    TestRotateLifecycle(0, FALSE);
+    TestRotateLifecycle(MEM_COMMIT, FALSE);
+    TestRotateLifecycle(MEM_COMMIT, TRUE);
     TestRotateCopyLifecycle();
 }
