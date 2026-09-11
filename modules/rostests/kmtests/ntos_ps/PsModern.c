@@ -85,8 +85,8 @@ NTKERNELAPI
 CHAR
 NTAPI
 PsAdjustWin32kPriorityFloor(
-    _Inout_ PEPROCESS Process,
-    _In_ CHAR PriorityFloor);
+    _Inout_ PETHREAD Thread,
+    _In_ LONG PriorityFloor);
 
 NTKERNELAPI
 VOID
@@ -151,7 +151,6 @@ static
 VOID
 TestPriorityAndStackReferences(VOID)
 {
-    PEPROCESS Process = PsGetCurrentProcess();
     PETHREAD Thread = PsGetCurrentThread();
     BOOLEAN ApcsDisabled;
     BOOLEAN AllApcsDisabled;
@@ -167,8 +166,8 @@ TestPriorityAndStackReferences(VOID)
     ok_eq_bool(KeAreApcsDisabled(), ApcsDisabled);
     ok_eq_bool(KeAreAllApcsDisabled(), AllApcsDisabled);
 
-    PreviousFloor = PsAdjustWin32kPriorityFloor(Process, 0);
-    RestoredFloor = PsAdjustWin32kPriorityFloor(Process, PreviousFloor);
+    PreviousFloor = PsAdjustWin32kPriorityFloor(Thread, 0);
+    RestoredFloor = PsAdjustWin32kPriorityFloor(Thread, PreviousFloor);
     trace("Win32k priority floor previous %d, set-zero previous %d\n",
           PreviousFloor,
           RestoredFloor);
@@ -254,9 +253,145 @@ START_TEST(PsModernPriority)
     TestPriorityAndStackReferences();
 }
 
+START_TEST(PsWin32kPriorityFloor)
+{
+    static const LONG Floors[] = {0, 4, 8, 15, 16, -1, 17, 256, MINLONG, MAXLONG, 8, 0};
+    PETHREAD Thread = PsGetCurrentThread();
+    CHAR OriginalFloor, ExpectedFloor, PreviousFloor, CurrentFloor;
+    KPRIORITY Priority;
+    ULONG Index;
+
+    OriginalFloor = PsAdjustWin32kPriorityFloor(Thread, MAXLONG);
+    ExpectedFloor = OriginalFloor;
+    for (Index = 0; Index < RTL_NUMBER_OF(Floors); ++Index)
+    {
+        PreviousFloor = PsAdjustWin32kPriorityFloor(Thread, Floors[Index]);
+        ok_eq_int(PreviousFloor, ExpectedFloor);
+        if ((ULONG)Floors[Index] <= 16)
+            ExpectedFloor = (CHAR)Floors[Index];
+        CurrentFloor = PsAdjustWin32kPriorityFloor(Thread, MAXLONG);
+        ok_eq_int(CurrentFloor, ExpectedFloor);
+        Priority = KeQueryPriorityThread((PKTHREAD)Thread);
+        trace("floor request %ld, previous %d, current %d, priority %ld\n",
+              Floors[Index], PreviousFloor, CurrentFloor, Priority);
+        ok(Priority >= CurrentFloor,
+           "thread priority %ld is below its floor %d\n", Priority, CurrentFloor);
+    }
+    PsAdjustWin32kPriorityFloor(Thread, OriginalFloor);
+}
+
 START_TEST(PsModernPolicy)
 {
     TestProcessPolicyState();
+}
+
+static VOID NTAPI
+TestPriorityFloorScheduling(_In_opt_ PVOID Context)
+{
+    PETHREAD Thread = PsGetCurrentThread();
+    PKTHREAD KernelThread = (PKTHREAD)Thread;
+    LARGE_INTEGER Interval;
+    KPRIORITY Priority, PreviousPriority;
+    CHAR Floor, PreviousFloor;
+    ULONG Index;
+    NTSTATUS Status;
+    ULONG DisableBoost = 1;
+
+    UNREFERENCED_PARAMETER(Context);
+    Interval.QuadPart = -50 * 10 * 1000;
+    Status = ZwSetInformationThread(NtCurrentThread(), ThreadPriorityBoost, &DisableBoost, sizeof(DisableBoost));
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    for (Index = 0; Index < 2; ++Index)
+    {
+        Floor = (CHAR)(15 + Index);
+        KeSetBasePriorityThread(KernelThread, 0);
+        KeSetPriorityThread(KernelThread, 8);
+        PreviousFloor = PsAdjustWin32kPriorityFloor(Thread, Floor);
+        ok_eq_int(PreviousFloor, 0);
+        Priority = KeQueryPriorityThread(KernelThread);
+        ok(Priority >= Floor, "initial priority %ld below floor %d\n", Priority, Floor);
+
+        Status = KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Priority = KeQueryPriorityThread(KernelThread);
+        ok(Priority >= Floor, "priority %ld below floor %d after wait\n", Priority, Floor);
+
+        KeSetBasePriorityThread(KernelThread, -4);
+        Priority = KeQueryPriorityThread(KernelThread);
+        trace("floor %d, reduced base: priority %ld\n", Floor, Priority);
+        ok(Priority >= Floor, "base change lowered priority %ld below floor %d\n", Priority, Floor);
+
+        PreviousFloor = PsAdjustWin32kPriorityFloor(Thread, 0);
+        ok_eq_int(PreviousFloor, Floor);
+        Priority = KeQueryPriorityThread(KernelThread);
+        trace("floor removed after base change: priority %ld\n", Priority);
+        ok_eq_long(Priority, 4);
+
+        KeSetPriorityThread(KernelThread, 8);
+        PsAdjustWin32kPriorityFloor(Thread, Floor);
+        PreviousPriority = KeSetPriorityThread(KernelThread, 4);
+        Priority = KeQueryPriorityThread(KernelThread);
+        trace("floor %d, explicit priority 4: previous %ld, current %ld\n", Floor, PreviousPriority, Priority);
+        ok(Priority >= Floor, "explicit change lowered priority %ld below floor %d\n", Priority, Floor);
+        PsAdjustWin32kPriorityFloor(Thread, 0);
+        Priority = KeQueryPriorityThread(KernelThread);
+        trace("floor removed after explicit change: priority %ld\n", Priority);
+        ok_eq_long(Priority, 4);
+    }
+
+    KeSetPriorityThread(KernelThread, 18);
+    PsAdjustWin32kPriorityFloor(Thread, 15);
+    Priority = KeQueryPriorityThread(KernelThread);
+    ok_eq_long(Priority, 18);
+    PsAdjustWin32kPriorityFloor(Thread, 0);
+    Priority = KeQueryPriorityThread(KernelThread);
+    ok_eq_long(Priority, 18);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+START_TEST(PsWin32kPriorityFloorScheduling)
+{
+    PKTHREAD Thread = KmtStartThread(TestPriorityFloorScheduling, NULL);
+    KmtFinishThread(Thread, NULL);
+}
+
+START_TEST(PsThreadPriorityBoost)
+{
+    static const ULONG InvalidLengths[] = { 0, 1, 3, 5, 8 };
+    ULONG Original, Value[2], Returned, Length, Index;
+    NTSTATUS Status;
+
+    Original = MAXULONG;
+    Length = 0;
+    Status = ZwQueryInformationThread(NtCurrentThread(), ThreadPriorityBoost, &Original, sizeof(Original), &Length);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    ok_eq_ulong(Length, sizeof(Original));
+    ok(Original <= 1, "unexpected boost flag %lu\n", Original);
+
+    Value[0] = Value[1] = 0;
+    for (Index = 0; Index < RTL_NUMBER_OF(InvalidLengths); ++Index)
+    {
+        Status = ZwSetInformationThread(NtCurrentThread(), ThreadPriorityBoost, Value, InvalidLengths[Index]);
+        ok_eq_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    }
+
+    for (Value[0] = 0; Value[0] <= 1; ++Value[0])
+    {
+        Status = ZwSetInformationThread(NtCurrentThread(), ThreadPriorityBoost, Value, sizeof(Value[0]));
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Returned = MAXULONG;
+        Length = 0;
+        Status = ZwQueryInformationThread(NtCurrentThread(), ThreadPriorityBoost, &Returned, sizeof(Returned), &Length);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_ulong(Returned, Value[0]);
+        ok_eq_ulong(Length, sizeof(Returned));
+    }
+
+    Status = ZwSetInformationThread(NtCurrentThread(), ThreadPriorityBoost, &Original, sizeof(Original));
+    ok_eq_hex(Status, STATUS_SUCCESS);
 }
 
 START_TEST(PsUnEstablishWin32Callouts)

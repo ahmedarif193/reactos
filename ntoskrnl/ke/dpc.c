@@ -552,7 +552,7 @@ KiQuantumEnd(VOID)
             KiSetThreadQuantum(Thread, Thread->QuantumReset);
 
             /* Calculate new priority */
-            Thread->Priority = KiComputeNewPriority(Thread, 1);
+            Thread->Priority = (SCHAR)KiApplyPriorityFloor(Thread, KiComputeNewPriority(Thread, 1));
 
             /* Check if a new thread is scheduled */
             if (!Prcb->NextThread)

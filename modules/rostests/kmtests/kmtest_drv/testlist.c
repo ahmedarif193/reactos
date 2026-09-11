@@ -91,6 +91,9 @@ KMT_TESTFUNC Test_PsModern;
 KMT_TESTFUNC Test_PsModernIdentity;
 KMT_TESTFUNC Test_PsModernPolicy;
 KMT_TESTFUNC Test_PsModernPriority;
+KMT_TESTFUNC Test_PsWin32kPriorityFloor;
+KMT_TESTFUNC Test_PsWin32kPriorityFloorScheduling;
+KMT_TESTFUNC Test_PsThreadPriorityBoost;
 KMT_TESTFUNC Test_PsUnEstablishWin32Callouts;
 KMT_TESTFUNC Test_PsWddmFault;
 KMT_TESTFUNC Test_PsWddmWindow;
@@ -529,6 +532,9 @@ const KMT_TEST TestList[] =
     { "PsModernIdentity",                   Test_PsModernIdentity },
     { "PsModernPolicy",                     Test_PsModernPolicy },
     { "PsModernPriority",                   Test_PsModernPriority },
+    { "PsWin32kPriorityFloor",               Test_PsWin32kPriorityFloor },
+    { "PsWin32kPriorityFloorScheduling",     Test_PsWin32kPriorityFloorScheduling },
+    { "PsThreadPriorityBoost",              Test_PsThreadPriorityBoost },
     { "PsUnEstablishWin32Callouts",         Test_PsUnEstablishWin32Callouts },
     { "PsWddmFault",                        Test_PsWddmFault },
     { "PsWddmWindow",                       Test_PsWddmWindow },

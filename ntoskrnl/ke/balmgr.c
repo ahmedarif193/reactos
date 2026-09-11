@@ -95,12 +95,12 @@ KiScanReadyQueuesOnPrcb(IN PKPRCB Prcb,
                     ASSERT((Thread->PriorityDecrement >= 0) &&
                            (Thread->PriorityDecrement <= Thread->Priority));
                     Thread->PriorityDecrement +=
-                        (THREAD_BOOST_PRIORITY - Thread->Priority);
+                        (THREAD_BOOST_PRIORITY - KiGetUnflooredPriority(Thread));
                     ASSERT((Thread->PriorityDecrement >= 0) &&
                            (Thread->PriorityDecrement <=
                             THREAD_BOOST_PRIORITY));
 
-                    Thread->Priority = THREAD_BOOST_PRIORITY;
+                    Thread->Priority = (SCHAR)KiApplyPriorityFloor(Thread, THREAD_BOOST_PRIORITY);
                     KiSetThreadQuantum(Thread, WAIT_QUANTUM_DECREMENT * 4);
                     KiInsertDeferredReadyList(Thread);
                     ThreadsBoosted++;
