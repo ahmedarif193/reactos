@@ -30,6 +30,20 @@ class CDropTargetHelper :
 	public IDropTargetHelper
 {
 private:
+	HWND m_hwndImage;
+	HDC m_hdcImage;
+	HBITMAP m_hbmImage;
+	HGDIOBJ m_hbmOld;
+	SIZE m_Size;
+	POINT m_Offset;
+	POINT m_Position;
+	BOOL m_bVisible;
+
+	BOOL CreateImage(IDataObject *pDataObject);
+	void DestroyImage();
+	void MoveImage(const POINT *ppt);
+	static LRESULT CALLBACK ImageWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+
 public:
 	CDropTargetHelper();
 	~CDropTargetHelper();

@@ -536,12 +536,12 @@ public:
 
     LRESULT OnPaintToolbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
-        RECT rc;
         PAINTSTRUCT ps;
         HDC hdc, hdcMem;
         HBITMAP hbm;
+        INT cx, cy;
 
-        if (!m_bBuffered || wParam || !GetClientRect(&rc) || rc.right <= 0 || rc.bottom <= 0)
+        if (wParam)
         {
             bHandled = FALSE;
             return 0;
@@ -551,18 +551,22 @@ public:
         if (!hdc)
             return 0;
 
-        hdcMem = CreateCompatibleDC(hdc);
-        hbm = hdcMem ? CreateCompatibleBitmap(hdc, rc.right, rc.bottom) : NULL;
+        cx = ps.rcPaint.right - ps.rcPaint.left;
+        cy = ps.rcPaint.bottom - ps.rcPaint.top;
+        hdcMem = (cx > 0 && cy > 0) ? CreateCompatibleDC(hdc) : NULL;
+        hbm = hdcMem ? CreateCompatibleBitmap(hdc, cx, cy) : NULL;
         if (hbm)
         {
             HGDIOBJ hbmOld = SelectObject(hdcMem, hbm);
 
+            SetViewportOrgEx(hdcMem, -ps.rcPaint.left, -ps.rcPaint.top, NULL);
             SendMessageW(WM_PRINTCLIENT, (WPARAM)hdcMem, PRF_CLIENT);
-            BitBlt(hdc, 0, 0, rc.right, rc.bottom, hdcMem, 0, 0, SRCCOPY);
+            SetViewportOrgEx(hdcMem, 0, 0, NULL);
+            BitBlt(hdc, ps.rcPaint.left, ps.rcPaint.top, cx, cy, hdcMem, 0, 0, SRCCOPY);
             SelectObject(hdcMem, hbmOld);
             DeleteObject(hbm);
         }
-        else
+        else if (cx > 0 && cy > 0)
         {
             SendMessageW(WM_PRINTCLIENT, (WPARAM)hdc, PRF_CLIENT);
         }
@@ -584,7 +588,6 @@ public:
 
 public:
     BOOL m_bTrackGlow;
-    BOOL m_bBuffered;
 
     BEGIN_MSG_MAP(CNotifyToolbar)
         MESSAGE_HANDLER(WM_NCHITTEST, OnNcHitTestToolbar)
@@ -606,7 +609,6 @@ public:
         HWND toolbar = CToolbar::Create(hWndParent, styles);
         m_hWnd = NULL;
         m_bTrackGlow = FALSE;
-        m_bBuffered = FALSE;
         m_bDragArmed = FALSE;
         m_bDragging = FALSE;
         m_iPressIndex = -1;
@@ -658,11 +660,14 @@ class CTaskSwitchWnd :
 
     BOOL m_bDragging;
     CStringW m_DropPath;
+    CComPtr<IDropTargetHelper> m_DropTargetHelper;
     INT m_DropIndex;
     PTASK_GROUP m_DragGroup;
     HWND m_DragWnd;
     POINT m_DragGrab;
     POINT m_DragPos;
+    RECT m_rcDragPaint;
+    RECT m_rcAnimBounds;
     BOOL m_bAnimTimer;
 
     UINT m_uHardErrorMsg;
@@ -700,6 +705,8 @@ public:
         ZeroMemory(&m_ButtonSize, sizeof(m_ButtonSize));
         ZeroMemory(&m_DragGrab, sizeof(m_DragGrab));
         ZeroMemory(&m_DragPos, sizeof(m_DragPos));
+        SetRectEmpty(&m_rcDragPaint);
+        SetRectEmpty(&m_rcAnimBounds);
         m_uHardErrorMsg = RegisterWindowMessageW(L"HardError");
         m_TaskbarPinChangedMsg = RegisterWindowMessageW(TASKBAR_PIN_CHANGED_MESSAGE);
     }
@@ -1566,9 +1573,54 @@ public:
     {
         if (!m_bAnimTimer)
             m_bAnimTimer = SetTimer(TIMER_ID_BUTTON_ANIM, BUTTON_ANIM_INTERVAL, NULL) != 0;
-        if (IsWin7Bar())
-            m_TaskBar.m_bBuffered = TRUE;
-        m_TaskBar.InvalidateRect(NULL, TRUE);
+        AddAnimBounds();
+        m_TaskBar.InvalidateRect(IsRectEmpty(&m_rcAnimBounds) ? NULL : &m_rcAnimBounds, TRUE);
+    }
+
+    VOID AddAnimBounds()
+    {
+        RECT rc, rcVisual;
+        POINT pt;
+
+        for (INT i = 0; i < (INT)m_ButtonCount; ++i)
+        {
+            PTASK_ANIM pAnim = GetButtonAnim(i);
+
+            if (!pAnim || !pAnim->dwStart || !m_TaskBar.GetItemRect(i, &rc))
+                continue;
+            rcVisual = rc;
+            GetDropShift(i, &pt);
+            OffsetRect(&rc, pt.x, pt.y);
+            GetButtonVisualOffset(pAnim, i, &pt);
+            OffsetRect(&rcVisual, pt.x, pt.y);
+            UnionRect(&m_rcAnimBounds, &m_rcAnimBounds, &rc);
+            UnionRect(&m_rcAnimBounds, &m_rcAnimBounds, &rcVisual);
+        }
+    }
+
+    VOID InvalidateDragButton()
+    {
+        RECT rc;
+        POINT pt;
+        INT Index = DragButtonIndex();
+
+        if (Index < 0 || !m_TaskBar.GetItemRect(Index, &rc) || !GetDragOffset(&pt))
+        {
+            m_TaskBar.InvalidateRect(NULL, TRUE);
+            return;
+        }
+        OffsetRect(&rc, pt.x, pt.y);
+        InvalidateDragPaint();
+        m_TaskBar.InvalidateRect(&rc, TRUE);
+        m_rcDragPaint = rc;
+    }
+
+    VOID InvalidateDragPaint()
+    {
+        if (IsRectEmpty(&m_rcDragPaint))
+            return;
+        m_TaskBar.InvalidateRect(&m_rcDragPaint, TRUE);
+        SetRectEmpty(&m_rcDragPaint);
     }
 
     VOID MoveTaskButtonAnimated(IN INT from, IN INT to)
@@ -1679,10 +1731,9 @@ public:
         m_DragGrab.y = ptPress.y - rc.top;
         m_DragPos = ptPress;
         m_bDragging = TRUE;
+        SetRectEmpty(&m_rcDragPaint);
         CancelTaskPreview();
         m_HoverIndex = -1;
-        if (IsWin7Bar())
-            m_TaskBar.m_bBuffered = TRUE;
         UpdateButtonsSize(TRUE);
         return TRUE;
     }
@@ -1702,7 +1753,7 @@ public:
         Target = CalcDragTarget(Index);
         if (Target >= 0 && Target != Index)
             MoveTaskButtonAnimated(Index, Target);
-        m_TaskBar.InvalidateRect(NULL, TRUE);
+        InvalidateDragButton();
     }
 
     VOID EndTaskDrag()
@@ -1714,14 +1765,15 @@ public:
         if (!m_bDragging)
             return;
         Index = DragButtonIndex();
-        pAnim = GetButtonAnim(Index);
         GetDragOffset(&pt);
         m_bDragging = FALSE;
         m_DragGroup = NULL;
         m_DragWnd = NULL;
+        InvalidateDragPaint();
+        SaveTaskbarPinOrder();
+        pAnim = GetButtonAnim(Index);
         if (pAnim && IsWin7Bar() && (pt.x || pt.y))
             StartAnim(pAnim, pt.x, pt.y);
-        SaveTaskbarPinOrder();
         StartButtonAnimation();
     }
 
@@ -1732,8 +1784,8 @@ public:
         m_bDragging = FALSE;
         m_DragGroup = NULL;
         m_DragWnd = NULL;
+        InvalidateDragPaint();
         m_TaskBar.CancelDrag();
-        m_TaskBar.m_bBuffered = FALSE;
     }
 
     VOID FreeAllTaskGroups()
@@ -3032,6 +3084,8 @@ public:
 
         RegisterDragDrop(m_TaskBar.m_hWnd, static_cast<IDropTarget *>(this));
         RegisterDragDrop(m_hWnd, static_cast<IDropTarget *>(this));
+        CoCreateInstance(CLSID_DragDropHelper, NULL, CLSCTX_INPROC_SERVER,
+                         IID_PPV_ARG(IDropTargetHelper, &m_DropTargetHelper));
 
         SyncTaskbarPins();
         RefreshWindowList();
@@ -3051,6 +3105,7 @@ public:
 
         RevokeDragDrop(m_TaskBar.m_hWnd);
         RevokeDragDrop(m_hWnd);
+        m_DropTargetHelper.Release();
         AbortTaskDrag();
         CancelTaskPreview();
         KillTimer(TIMER_ID_BUTTON_ANIM);
@@ -4625,14 +4680,15 @@ public:
 
             case TIMER_ID_BUTTON_ANIM:
             {
+                RECT rcAnim = m_rcAnimBounds;
+
                 if (!HasButtonAnimation())
                 {
                     KillTimer(TIMER_ID_BUTTON_ANIM);
                     m_bAnimTimer = FALSE;
-                    if (!m_bDragging)
-                        m_TaskBar.m_bBuffered = FALSE;
+                    SetRectEmpty(&m_rcAnimBounds);
                 }
-                m_TaskBar.InvalidateRect(NULL, TRUE);
+                m_TaskBar.InvalidateRect(IsRectEmpty(&rcAnim) ? NULL : &rcAnim, TRUE);
                 break;
             }
 
@@ -4795,6 +4851,11 @@ public:
             *pdwEffect = DROPEFFECT_NONE;
             SetDropIndex(-1);
         }
+        if (m_DropTargetHelper)
+        {
+            POINT ptScreen = { pt.x, pt.y };
+            m_DropTargetHelper->DragEnter(m_hWnd, pDataObj, &ptScreen, *pdwEffect);
+        }
         return S_OK;
     }
 
@@ -4808,10 +4869,17 @@ public:
         {
             *pdwEffect = DROPEFFECT_NONE;
             SetDropIndex(-1);
-            return S_OK;
         }
-        *pdwEffect = DROPEFFECT_LINK;
-        SetDropIndex(DropIndexFromPoint(pt));
+        else
+        {
+            *pdwEffect = DROPEFFECT_LINK;
+            SetDropIndex(DropIndexFromPoint(pt));
+        }
+        if (m_DropTargetHelper)
+        {
+            POINT ptScreen = { pt.x, pt.y };
+            m_DropTargetHelper->DragOver(&ptScreen, *pdwEffect);
+        }
         return S_OK;
     }
 
@@ -4820,6 +4888,8 @@ public:
     {
         m_DropPath.Empty();
         SetDropIndex(-1);
+        if (m_DropTargetHelper)
+            m_DropTargetHelper->DragLeave();
         return S_OK;
     }
 
@@ -4838,6 +4908,11 @@ public:
         Index = m_DropIndex >= 0 ? m_DropIndex : DropIndexFromPoint(pt);
         m_DropPath.Empty();
         SetDropIndex(-1);
+        if (m_DropTargetHelper)
+        {
+            POINT ptScreen = { pt.x, pt.y };
+            m_DropTargetHelper->Drop(pDataObj, &ptScreen, AllowedEffects);
+        }
         if (!(AllowedEffects & DROPEFFECT_LINK) || TaskbarPin_IsDisabled() ||
             !GetDropPinPath(pDataObj, Path))
             return S_OK;
