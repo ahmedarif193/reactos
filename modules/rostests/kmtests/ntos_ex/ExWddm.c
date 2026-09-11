@@ -6,6 +6,7 @@
  */
 
 #include <kmt_test.h>
+#include <reactos/drivers/acpi/acpi.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -396,7 +397,7 @@ BOOLEAN
 NTAPI
 ExQueryFastCacheDevLicense(VOID);
 
-PCSTR
+ULONGLONG
 NTAPI
 HvlGetHypervisorVendorId(VOID);
 
@@ -1216,6 +1217,62 @@ TestProcessMachine(VOID)
     ok_eq_bool(PsIsProtectedProcessLight(Process), FALSE);
 }
 
+#if defined(_M_ARM64)
+static
+VOID
+TestHypervisorVendorId(VOID)
+{
+    SYSTEM_FIRMWARE_TABLE_INFORMATION Query = {0};
+    PSYSTEM_FIRMWARE_TABLE_INFORMATION Table;
+    PFADT Fadt;
+    ULONGLONG VendorId, FirmwareId = 0;
+    ULONG Length;
+    NTSTATUS Status;
+
+    VendorId = HvlGetHypervisorVendorId();
+    trace("platform state: ARM64 hypervisor vendor 0x%I64x\n", VendorId);
+    {
+        ULONGLONG SecondVendorId = HvlGetHypervisorVendorId();
+        ok_eq_ulonglong(SecondVendorId, VendorId);
+    }
+
+    Query.ProviderSignature = 'ACPI';
+    Query.Action = SystemFirmwareTable_Get;
+    Query.TableID = FADT_SIGNATURE;
+    Status = ZwQuerySystemInformation(SystemFirmwareTableInformation, &Query, FIELD_OFFSET(SYSTEM_FIRMWARE_TABLE_INFORMATION, TableBuffer), &Length);
+    ok_eq_hex(Status, STATUS_BUFFER_TOO_SMALL);
+    if (Status != STATUS_BUFFER_TOO_SMALL)
+        return;
+    ok(Query.TableBufferLength >= sizeof(DESCRIPTION_HEADER) && Query.TableBufferLength <= 65536,
+       "Invalid FADT length %lu\n", Query.TableBufferLength);
+    if (Query.TableBufferLength < sizeof(DESCRIPTION_HEADER) || Query.TableBufferLength > 65536)
+        return;
+
+    Length = FIELD_OFFSET(SYSTEM_FIRMWARE_TABLE_INFORMATION, TableBuffer) + Query.TableBufferLength;
+    Table = ExAllocatePoolWithTag(PagedPool, Length, 'tFvH');
+    ok(Table != NULL, "Could not allocate the FADT query buffer\n");
+    if (!Table)
+        return;
+    RtlCopyMemory(Table, &Query, FIELD_OFFSET(SYSTEM_FIRMWARE_TABLE_INFORMATION, TableBuffer));
+    Status = ZwQuerySystemInformation(SystemFirmwareTableInformation, Table, Length, &Length);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        Fadt = (PFADT)Table->TableBuffer;
+        ok_eq_ulong(Fadt->Header.Signature, FADT_SIGNATURE);
+        ok(Fadt->Header.Length <= Table->TableBufferLength, "FADT extends past the query buffer\n");
+        if (Fadt->Header.Length >= RTL_SIZEOF_THROUGH_FIELD(FADT, hypervisor_id) &&
+            Table->TableBufferLength >= RTL_SIZEOF_THROUGH_FIELD(FADT, hypervisor_id))
+            FirmwareId = Fadt->hypervisor_id;
+        /* The native export excludes this exact Qualcomm identity. */
+        if (FirmwareId == 0x4D4F4351ULL)
+            FirmwareId = 0;
+        ok_eq_ulonglong(VendorId, FirmwareId);
+    }
+    ExFreePoolWithTag(Table, 'tFvH');
+}
+#endif
+
 static
 VOID
 TestPlatformState(VOID)
@@ -1231,31 +1288,12 @@ TestPlatformState(VOID)
     PTEST_API_SET_NAMESPACE Namespace;
     BOOLEAN Found = FALSE;
     ULONG Index;
-#if defined(_M_ARM64)
-    PCSTR HypervisorVendorId;
-    PCSTR SecondHypervisorVendorId;
-    BOOLEAN IsReactOS;
-#endif
 
     HostSilo = PsGetHostSilo();
     ok_eq_pointer(HostSilo, NULL);
 
 #if defined(_M_ARM64)
-    IsReactOS = *(volatile ULONG *)(KI_USER_SHARED_DATA + PAGE_SIZE - sizeof(ULONG)) == 0x8eac705;
-    HypervisorVendorId = HvlGetHypervisorVendorId();
-    SecondHypervisorVendorId = HvlGetHypervisorVendorId();
-    trace("platform state: ARM64 hypervisor vendor %s\n",
-          HypervisorVendorId != NULL ? HypervisorVendorId : "<none>");
-    ok_eq_pointer(SecondHypervisorVendorId, HypervisorVendorId);
-    if (IsReactOS)
-    {
-        ok(HypervisorVendorId != NULL,
-           "QEMU FADT did not expose a hypervisor vendor identity\n");
-        if (HypervisorVendorId != NULL)
-            ok(RtlCompareMemory(HypervisorVendorId, "QEMU", 4) == 4,
-               "unexpected QEMU hypervisor identity %.8s\n",
-               HypervisorVendorId);
-    }
+    TestHypervisorVendorId();
 #endif
 
     ApiSetSchema = PsQueryCurrentApiSetSchema();

@@ -15,12 +15,12 @@
 
 /* GLOBALS *******************************************************************/
 
-static CHAR HvlHypervisorVendorId[sizeof(ULONGLONG) + 1];
+static ULONGLONG HvlHypervisorVendorId;
 static volatile LONG HvlHypervisorVendorState;
 
 /* PUBLIC FUNCTIONS **********************************************************/
 
-PCSTR
+ULONGLONG
 NTAPI
 HvlGetHypervisorVendorId(VOID)
 {
@@ -31,8 +31,8 @@ HvlGetHypervisorVendorId(VOID)
     /*
      * ACPI 6.0 defines the FADT Hypervisor Vendor Identity as the ARM64
      * platform source of truth.  The HAL cache owns the table for the life of
-     * the system, while this local copy gives callers a stable NUL-terminated
-     * string.  A zero identity means that the firmware advertised no vendor.
+     * the system, while this local copy gives callers the 64-bit identity.
+     * A zero identity means that the firmware advertised no vendor.
      */
     State = ReadAcquire(&HvlHypervisorVendorState);
     if (State != 2)
@@ -44,21 +44,18 @@ HvlGetHypervisorVendorId(VOID)
                 (Fadt->Header.Length <
                     RTL_SIZEOF_THROUGH_FIELD(FADT, hypervisor_id)))
             {
-                return NULL;
+                return 0;
             }
 
             VendorId = Fadt->hypervisor_id;
             if (VendorId == 0)
-                return NULL;
+                return 0;
 
             if (InterlockedCompareExchange(&HvlHypervisorVendorState,
                                            1,
                                            0) == 0)
             {
-                RtlCopyMemory(HvlHypervisorVendorId,
-                              &VendorId,
-                              sizeof(VendorId));
-                HvlHypervisorVendorId[sizeof(VendorId)] = ANSI_NULL;
+                HvlHypervisorVendorId = VendorId;
                 WriteRelease(&HvlHypervisorVendorState, 2);
                 State = 2;
             }
@@ -67,12 +64,12 @@ HvlGetHypervisorVendorId(VOID)
         while ((State = ReadAcquire(&HvlHypervisorVendorState)) == 1)
             YieldProcessor();
         if (State != 2)
-            return NULL;
+            return 0;
     }
 
     /* Windows treats the Qualcomm platform identity as a non-hypervisor. */
-    if (RtlCompareMemory(HvlHypervisorVendorId, "QCOM", 4) == 4)
-        return NULL;
+    if (HvlHypervisorVendorId == 0x4D4F4351ULL)
+        return 0;
 
     return HvlHypervisorVendorId;
 }
