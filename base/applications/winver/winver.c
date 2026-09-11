@@ -31,5 +31,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         OSInfo.szCompatInfo[0] = UNICODE_NULL;
     }
 
+    if (lstrcmpiW(OSInfo.szName, L"ReactOS") == 0)
+        StringCchCopyW(OSInfo.szName, _countof(OSInfo.szName), L"ReactOS Unofficial Build");
+
     return ShellAboutW(NULL, OSInfo.szName, OSInfo.szCompatInfo, NULL);
 }

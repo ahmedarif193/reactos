@@ -146,7 +146,8 @@ static int PaintSystem(HDC hdc, int x, int y, int cx)
     RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"ProductName", szProduct, _countof(szProduct));
     RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"CurrentVersion", szVersion, _countof(szVersion));
     RegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"CurrentBuildNumber", szBuild, _countof(szBuild));
-    if (!szProduct[0]) StringCchCopyW(szProduct, _countof(szProduct), L"ReactOS");
+    if (!szProduct[0] || lstrcmpiW(szProduct, L"ReactOS") == 0)
+        StringCchCopyW(szProduct, _countof(szProduct), L"ReactOS Unofficial Build");
 
     y += SectionTitle(hdc, x, y, cx, L"Windows edition");
     int lx = x + S(16);
