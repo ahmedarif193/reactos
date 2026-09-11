@@ -1351,6 +1351,12 @@ BOOL CDefView::CreateList()
 
     m_ListView.SetExtendedListViewStyle(ListExStyle);
 
+    /* Enumeration finishes asynchronously, after the desktop can be shown.
+     * Make its list view transparent before the first paint instead of
+     * covering the wallpaper with COLOR_WINDOW until FinishFillList. */
+    if (m_FolderSettings.fFlags & FWF_DESKTOP)
+        UpdateListColors();
+
     /*  UpdateShellSettings(); */
     return TRUE;
 }
