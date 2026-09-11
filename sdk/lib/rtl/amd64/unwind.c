@@ -1111,7 +1111,7 @@ RtlpWalkFrameChain(OUT PVOID *Callers,
             {
                 /* Check if we left the user range */
                 if ((Context.Rip < 0x10000) ||
-                    (Context.Rip > 0x000007FFFFFEFFFFULL))
+                    (Context.Rip > (ULONG_PTR)MI_HIGHEST_USER_ADDRESS))
                 {
                     break;
                 }
