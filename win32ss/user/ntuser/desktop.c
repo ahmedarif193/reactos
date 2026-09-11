@@ -1873,8 +1873,8 @@ IntFreeDesktopHeap(IN OUT PDESKTOP Desktop)
 #endif
 }
 
-BOOL FASTCALL
-IntPaintDesktop(HDC hDC)
+static BOOL
+IntPaintDesktopContent(HDC hDC)
 {
     static WCHAR s_wszSafeMode[] = L"Safe Mode"; // FIXME: Localize!
 
@@ -1994,7 +1994,7 @@ IntPaintDesktop(HDC hDC)
                        can be replaced with "NtGdiPatBlt(hDC, x, y, gspv.cxWallpaper, gspv.cyWallpaper, PATCOPY | DSTINVERT);"
                        once we support DSTINVERT */
                     PreviousBrush = NtGdiSelectBrush(hDC, DesktopBrush);
-                    NtGdiPatBlt(hDC, Rect.left, Rect.top, Rect.right, Rect.bottom, PATCOPY);
+                    NtGdiPatBlt(hDC, Rect.left, Rect.top, Rect.right - Rect.left, Rect.bottom - Rect.top, PATCOPY);
                     NtGdiSelectBrush(hDC, PreviousBrush);
                 }
 
@@ -2114,7 +2114,7 @@ IntPaintDesktop(HDC hDC)
     if (doPatBlt)
     {
         PreviousBrush = NtGdiSelectBrush(hDC, DesktopBrush);
-        NtGdiPatBlt(hDC, Rect.left, Rect.top, Rect.right, Rect.bottom, PATCOPY);
+        NtGdiPatBlt(hDC, Rect.left, Rect.top, Rect.right - Rect.left, Rect.bottom - Rect.top, PATCOPY);
         NtGdiSelectBrush(hDC, PreviousBrush);
     }
 
@@ -2307,6 +2307,64 @@ IntPaintDesktop(HDC hDC)
     }
 
     return TRUE;
+}
+
+BOOL FASTCALL
+IntPaintDesktop(HDC hDC)
+{
+    RECTL Rect;
+    PDC Dc;
+    HDC BufferDc;
+    HBITMAP Bitmap, OldBitmap;
+    BOOL BufferDisplay, Result;
+    INT ClipType;
+    FLONG TransformFlags;
+
+    ClipType = GdiGetClipBox(hDC, &Rect);
+    if (ClipType == ERROR)
+        return FALSE;
+    if (ClipType == NULLREGION)
+        return TRUE;
+
+    Dc = DC_LockDc(hDC);
+    if (!Dc)
+        return FALSE;
+    TransformFlags = DC_pmxWorldToDevice(Dc)->flAccel;
+    BufferDisplay = Dc->dctype == DCTYPE_DIRECT &&
+                    (TransformFlags & (XFORM_SCALE | XFORM_UNITY)) == (XFORM_SCALE | XFORM_UNITY);
+    DC_UnlockDc(Dc);
+
+    /* Memory DCs are already buffered. Preserve the caller's mapping for
+     * scaled or rotated DCs; ordinary desktop DCs only translate pixels. */
+    if (!BufferDisplay)
+        return IntPaintDesktopContent(hDC);
+
+    BufferDc = NtGdiCreateCompatibleDC(hDC);
+    if (!BufferDc)
+        return IntPaintDesktopContent(hDC);
+
+    Bitmap = NtGdiCreateCompatibleBitmap(hDC, Rect.right - Rect.left, Rect.bottom - Rect.top);
+    OldBitmap = Bitmap ? NtGdiSelectBitmap(BufferDc, Bitmap) : NULL;
+    if (!OldBitmap)
+    {
+        if (Bitmap)
+            GreDeleteObject(Bitmap);
+        IntGdiDeleteDC(BufferDc, FALSE);
+        return IntPaintDesktopContent(hDC);
+    }
+
+    /* Wallpaper erasure and the individual watermark glyphs must not reach
+     * scan-out separately. Render the complete damaged area before copying
+     * it to the display, retaining the destination's exact clipping region. */
+    GreSetViewportOrgEx(BufferDc, -Rect.left, -Rect.top, NULL);
+    Result = IntPaintDesktopContent(BufferDc);
+    if (Result)
+        Result = NtGdiBitBlt(hDC, Rect.left, Rect.top, Rect.right - Rect.left, Rect.bottom - Rect.top, BufferDc, Rect.left, Rect.top, SRCCOPY, 0, 0);
+
+    NtGdiSelectBitmap(BufferDc, OldBitmap);
+    GreDeleteObject(Bitmap);
+    IntGdiDeleteDC(BufferDc, FALSE);
+    return Result;
 }
 
 static NTSTATUS
