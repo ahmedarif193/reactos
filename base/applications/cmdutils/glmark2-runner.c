@@ -243,6 +243,9 @@ main(int argc, char **argv)
     PROCESS_INFORMATION ProcessInformation;
     HANDLE ReadPipe = NULL;
     HANDLE WritePipe = NULL;
+    HWND Console;
+    BOOL RestoreConsole = FALSE;
+    BOOL ShowConsole = FALSE;
     DWORD ExitCode = ERROR_GEN_FAILURE;
     DWORD StartTick;
     DWORD WaitStatus;
@@ -268,6 +271,8 @@ main(int argc, char **argv)
     {
         if (strcmp(argv[Argument], "--full") == 0)
             continue;
+        else if (strcmp(argv[Argument], "--show-console") == 0)
+            ShowConsole = TRUE;
         else if (strcmp(argv[Argument], "--bench") == 0 && Argument + 1 < argc)
         {
             size_t Used = strlen(BenchList);
@@ -347,13 +352,20 @@ main(int argc, char **argv)
     StartupInfo.hStdError = WritePipe;
     ZeroMemory(&ProcessInformation, sizeof(ProcessInformation));
 
+    /* Keep the logging window out of the measured desktop workload, as in
+     * the isolated baseline. Preserve stdout and restore its visibility. */
+    Console = GetConsoleWindow();
+    if (!ShowConsole && Console != NULL && IsWindowVisible(Console))
+        RestoreConsole = ShowWindow(Console, SW_HIDE);
+
     RunnerPrint("RPI5_GLMARK2_BEGIN source=glmark2 "
                 "commit=22c527cb0556f3a1ac4445aaa52cc532760928d5 "
                 "suite=%s bench_count=%u expected_scene_mask=0x%lx "
-                "size=800x600 swap_mode=immediate\n",
+                "size=800x600 swap_mode=immediate console_visible=%u\n",
                 FullSuite ? "full" : "custom",
                 BenchCount,
-                ExpectedSceneMask);
+                ExpectedSceneMask,
+                Console != NULL && IsWindowVisible(Console));
     if (!CreateProcessA(ApplicationPath,
                         CommandLine,
                         NULL,
@@ -369,6 +381,8 @@ main(int argc, char **argv)
                     GetLastError());
         CloseHandle(ReadPipe);
         CloseHandle(WritePipe);
+        if (RestoreConsole)
+            ShowWindow(Console, SW_SHOWNA);
         return 1;
     }
 
@@ -415,13 +429,15 @@ main(int argc, char **argv)
                 OutputScan.SeenMask,
                 ExpectedSceneMask,
                 Complete);
-    RunnerPrint("RPI5_GLMARK2_END exit=%lu runtime_ms=%lu forced=%lu\n",
-                ExitCode,
-                GetTickCount() - StartTick,
-                Forced);
-
     CloseHandle(ReadPipe);
     CloseHandle(ProcessInformation.hProcess);
+    if (RestoreConsole)
+        ShowWindow(Console, SW_SHOWNA);
+    RunnerPrint("RPI5_GLMARK2_END exit=%lu runtime_ms=%lu forced=%lu console_visible=%u\n",
+                ExitCode,
+                GetTickCount() - StartTick,
+                Forced,
+                Console != NULL && IsWindowVisible(Console));
     return ExitCode == EXIT_SUCCESS && !Forced &&
            !OutputScan.Unsupported && Complete ? 0 : 1;
 }
