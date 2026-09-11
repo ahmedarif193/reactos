@@ -52,10 +52,10 @@ DwmSettingsNotify(HWND Dialog, BOOL Reload)
         String = Reload ? IDS_UNAVAILABLE : IDS_DISCONNECTED;
     else if (Reply & DWM_SETTINGS_ERROR)
         String = IDS_RELOAD_FAILED;
-    else if (!(Reply & DWM_SETTINGS_GPU))
-        String = Reload ? IDS_INACTIVE : IDS_GPU_UNAVAILABLE;
     else if (Reload && (Reply & DWM_EFFECT_ALL) != (DWORD)GetWindowLongPtrW(Dialog, DWLP_USER))
         String = IDS_MISMATCH;
+    else if (!(Reply & DWM_SETTINGS_GPU))
+        String = Reload ? IDS_INACTIVE : IDS_GPU_UNAVAILABLE;
     else
         String = Reload ? IDS_APPLIED : IDS_ACTIVE;
     DwmSettingsStatus(Dialog, String, 0);
