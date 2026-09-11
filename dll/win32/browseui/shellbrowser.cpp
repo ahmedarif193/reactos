@@ -3959,7 +3959,7 @@ LRESULT CShellBrowser::OnDisconnectNetworkDrive(WORD wNotifyCode, WORD wID, HWND
 
 LRESULT CShellBrowser::OnAboutReactOS(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled)
 {
-    ShellAbout(m_hWnd, _T("ReactOS"), NULL, NULL);
+    ShellAbout(m_hWnd, _T("ReactOS Unofficial Build"), NULL, NULL);
     return 0;
 }
 
