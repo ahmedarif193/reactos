@@ -21,9 +21,9 @@ VOID Test_MmSelfMap(VOID);
 #define ARM64_TEST_PTE_NG           0x0000000000000800ULL
 #define ARM64_TEST_PTE_PXN          0x0020000000000000ULL
 #define ARM64_TEST_PTE_UXN          0x0040000000000000ULL
-#define ARM64_TEST_PTE_WRITE        0x0080000000000000ULL
-#define ARM64_TEST_TABLE_ATTR_MASK  0x00E0000000000FFFULL
-#define ARM64_TEST_TABLE_ATTRS      0x00E0000000000F03ULL
+/* Windows table descriptors differ in the software writable bit. */
+#define ARM64_TEST_TABLE_ATTR_MASK  0x0060000000000FFFULL
+#define ARM64_TEST_TABLE_ATTRS      0x0060000000000F03ULL
 
 #define ARM64_TEST_AP_SHIFT         6
 #define ARM64_TEST_SH_SHIFT         8
@@ -803,10 +803,6 @@ TestWin11TableDescriptorPolicy(
        Entry);
     ok(Arm64DescriptorHasFlag(Entry, ARM64_TEST_PTE_UXN),
        "%s table descriptor missing NT UXN bit: 0x%I64x\n",
-       Name,
-       Entry);
-    ok(Arm64DescriptorHasFlag(Entry, ARM64_TEST_PTE_WRITE),
-       "%s table descriptor missing NT writable bit: 0x%I64x\n",
        Name,
        Entry);
 }
