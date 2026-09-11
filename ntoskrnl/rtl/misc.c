@@ -61,7 +61,7 @@ VOID
 NTAPI
 RtlSetActiveConsoleId(_In_ ULONG ActiveConsoleId)
 {
-    InterlockedExchange((PLONG)&SharedUserData->ActiveConsoleId, (LONG)ActiveConsoleId);
+    InterlockedExchange((PLONG)&MmWriteableSharedUserData->ActiveConsoleId, (LONG)ActiveConsoleId);
 }
 
 ULONGLONG
@@ -75,7 +75,7 @@ VOID
 NTAPI
 RtlSetConsoleSessionForegroundProcessId(_In_ ULONGLONG ProcessId)
 {
-    InterlockedExchange64((PLONG64)&SharedUserData->ConsoleSessionForegroundProcessId, (LONG64)ProcessId);
+    InterlockedExchange64((PLONG64)&MmWriteableSharedUserData->ConsoleSessionForegroundProcessId, (LONG64)ProcessId);
 }
 
 ULONG
