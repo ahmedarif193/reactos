@@ -160,7 +160,7 @@ DxgkPresentCoreMapCoordinate(
     if (ScaledOffset > (ULONGLONG)MAXLONGLONG)
         return STATUS_INVALID_PARAMETER;
     Result = (LONGLONG)DestinationOrigin + (LONGLONG)ScaledOffset;
-    if (Result < MINLONG || Result > MAXLONG)
+    if (Result < (LONG)MINLONG || Result > MAXLONG)
         return STATUS_INVALID_PARAMETER;
 
     *DestinationCoordinate = (LONG)Result;
