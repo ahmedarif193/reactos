@@ -125,7 +125,7 @@ HRESULT STDMETHODCALLTYPE Hotplug_Init(_In_ CSysTray * pSysTray)
 {
     TRACE("Hotplug_Init\n");
 
-    g_hIconHotplug = LoadIcon(g_hInstance, MAKEINTRESOURCE(IDI_HOTPLUG_OK));
+    g_hIconHotplug = StoLoadTrayIcon(g_hInstance, IDI_HOTPLUG_OK);
     g_strHotplugTooltip.LoadStringW(IDS_HOTPLUG_REMOVE_1);
 
     EnumHotpluggedDevices(g_devList);

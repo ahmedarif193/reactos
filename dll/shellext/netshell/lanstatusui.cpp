@@ -488,10 +488,11 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
     {
         if (pProperties->dwCharacter & NCCF_SHOW_ICON)
         {
-            nid.hIcon = (HICON)CopyImage(hIcon, IMAGE_ICON,
-                                         GetSystemMetrics(SM_CXSMICON),
-                                         GetSystemMetrics(SM_CYSMICON),
-                                         LR_COPYFROMRESOURCE);
+            nid.hIcon = (HICON)LoadImageW(netshell_hInstance,
+                                          MAKEINTRESOURCEW(pContext->Status),
+                                          IMAGE_ICON,
+                                          ShellTrayIconSize(),
+                                          ShellTrayIconSize(), 0);
 
             if (nid.hIcon)
                 nid.uFlags |= NIF_ICON;
@@ -1470,8 +1471,8 @@ CLanStatus::EnumerateTrayConnections()
                                              NetShellGetConnectivity(&pProps->guidId),
                                              NS_WIFI_NOINFO)),
                                          IMAGE_ICON,
-                                         GetSystemMetrics(SM_CXSMICON),
-                                         GetSystemMetrics(SM_CYSMICON), 0);
+                                         ShellTrayIconSize(),
+                                         ShellTrayIconSize(), 0);
 
             if (nid.hIcon)
                 nid.uFlags |= NIF_ICON;

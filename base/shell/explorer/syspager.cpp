@@ -187,6 +187,104 @@ public:
 };
 
 
+static HICON
+TrayCentreIcon(_In_ HIMAGELIST himl, _In_ HICON hIcon)
+{
+    INT cxSlot, cySlot, cxIcon, cyIcon;
+    ICONINFO Info;
+    BITMAP bm;
+    BITMAPINFO bi;
+    HBITMAP hbmColor, hbmMask;
+    HDC hdcScreen, hdc;
+    HGDIOBJ hOld;
+    HICON hCentred;
+    PVOID pvBits;
+
+    if (!hIcon || !ImageList_GetIconSize(himl, &cxSlot, &cySlot))
+        return NULL;
+
+    if (!GetIconInfo(hIcon, &Info))
+        return NULL;
+
+    ZeroMemory(&bm, sizeof(bm));
+    GetObjectW(Info.hbmColor ? Info.hbmColor : Info.hbmMask, sizeof(bm), &bm);
+    cxIcon = bm.bmWidth;
+    cyIcon = Info.hbmColor ? bm.bmHeight : bm.bmHeight / 2;
+    if (Info.hbmColor)
+        DeleteObject(Info.hbmColor);
+    if (Info.hbmMask)
+        DeleteObject(Info.hbmMask);
+
+    if (cxIcon <= 0 || cyIcon <= 0 || cxIcon >= cxSlot || cyIcon >= cySlot)
+        return NULL;
+
+    ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = cxSlot;
+    bi.bmiHeader.biHeight = -cySlot;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    hdcScreen = GetDC(NULL);
+    hbmColor = CreateDIBSection(hdcScreen, &bi, DIB_RGB_COLORS, &pvBits, NULL, 0);
+    if (hdcScreen)
+        ReleaseDC(NULL, hdcScreen);
+    if (!hbmColor)
+        return NULL;
+
+    hdc = CreateCompatibleDC(NULL);
+    if (!hdc)
+    {
+        DeleteObject(hbmColor);
+        return NULL;
+    }
+
+    hOld = SelectObject(hdc, hbmColor);
+    DrawIconEx(hdc, (cxSlot - cxIcon) / 2, (cySlot - cyIcon) / 2, hIcon,
+               cxIcon, cyIcon, 0, NULL, DI_NORMAL);
+    SelectObject(hdc, hOld);
+    DeleteDC(hdc);
+
+    hbmMask = CreateBitmap(cxSlot, cySlot, 1, 1, NULL);
+    if (!hbmMask)
+    {
+        DeleteObject(hbmColor);
+        return NULL;
+    }
+
+    ZeroMemory(&Info, sizeof(Info));
+    Info.fIcon = TRUE;
+    Info.hbmColor = hbmColor;
+    Info.hbmMask = hbmMask;
+    hCentred = CreateIconIndirect(&Info);
+    DeleteObject(hbmColor);
+    DeleteObject(hbmMask);
+    return hCentred;
+}
+
+static INT
+TrayImageListAddIcon(_In_ HIMAGELIST himl, _In_ HICON hIcon)
+{
+    HICON hCentred = TrayCentreIcon(himl, hIcon);
+    INT iImage = ImageList_AddIcon(himl, hCentred ? hCentred : hIcon);
+
+    if (hCentred)
+        DestroyIcon(hCentred);
+    return iImage;
+}
+
+static INT
+TrayImageListReplaceIcon(_In_ HIMAGELIST himl, _In_ INT iImage, _In_ HICON hIcon)
+{
+    HICON hCentred = TrayCentreIcon(himl, hIcon);
+    INT iResult = ImageList_ReplaceIcon(himl, iImage, hCentred ? hCentred : hIcon);
+
+    if (hCentred)
+        DestroyIcon(hCentred);
+    return iResult;
+}
+
 static const WCHAR szSysPagerWndClass[] = L"SysPager";
 
 class CSysPagerWnd :
@@ -810,7 +908,7 @@ BOOL CNotifyToolbar::AddButton(_In_ CONST NOTIFYICONDATA *iconData)
         }
         else
         {
-            tbBtn.iBitmap = ImageList_AddIcon(m_ImageList, notifyItem->hIcon);
+            tbBtn.iBitmap = TrayImageListAddIcon(m_ImageList, notifyItem->hIcon);
         }
     }
 
@@ -840,7 +938,7 @@ BOOL CNotifyToolbar::AddButton(_In_ CONST NOTIFYICONDATA *iconData)
     /* TODO: support VERSION_4 (NIF_GUID, NIF_REALTIME, NIF_SHOWTIP) */
 
     CToolbar::AddButton(&tbBtn);
-    SetButtonSize(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+    SetButtonSize(ShellTrayIconSize(), ShellTrayIconSize());
 
     if (iconData->uFlags & NIF_INFO)
     {
@@ -948,7 +1046,7 @@ BOOL CNotifyToolbar::UpdateButton(_In_ CONST NOTIFYICONDATA *iconData)
         {
             notifyItem->hIcon = iconData->hIcon;
             tbbi.dwMask |= TBIF_IMAGE;
-            tbbi.iImage = ImageList_ReplaceIcon(m_ImageList, oldIconIndex, notifyItem->hIcon);
+            tbbi.iImage = TrayImageListReplaceIcon(m_ImageList, oldIconIndex, notifyItem->hIcon);
         }
     }
 
@@ -1039,10 +1137,10 @@ VOID CNotifyToolbar::ResizeImagelist()
     if (!ImageList_GetIconSize(m_ImageList, &cx, &cy))
         return;
 
-    if (cx == GetSystemMetrics(SM_CXSMICON) && cy == GetSystemMetrics(SM_CYSMICON))
+    if (cx == ShellTrayIconSize() && cy == ShellTrayIconSize())
         return;
 
-    iml = ImageList_Create(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), ILC_COLOR32 | ILC_MASK, 0, 1000);
+    iml = ImageList_Create(ShellTrayIconSize(), ShellTrayIconSize(), ILC_COLOR32 | ILC_MASK, 0, 1000);
     if (!iml)
         return;
 
@@ -1057,12 +1155,12 @@ VOID CNotifyToolbar::ResizeImagelist()
         BOOL hasSharedIcon = data->dwState & NIS_SHAREDICON;
         INT iIcon = hasSharedIcon ? FindExistingSharedIcon(data->hIcon) : -1;
         if (iIcon < 0)
-            iIcon = ImageList_AddIcon(iml, data->hIcon);
+            iIcon = TrayImageListAddIcon(iml, data->hIcon);
         TBBUTTONINFO tbbi = { sizeof(tbbi), TBIF_BYINDEX | TBIF_IMAGE, 0, iIcon};
         SetButtonInfo(i, &tbbi);
     }
 
-    SetButtonSize(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+    SetButtonSize(ShellTrayIconSize(), ShellTrayIconSize());
 }
 
 LRESULT CNotifyToolbar::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -1296,12 +1394,12 @@ void CNotifyToolbar::Initialize(HWND hWndParent, CBalloonQueue * queue)
 
     SetWindowTheme(m_hWnd, L"TrayNotify", NULL);
 
-    m_ImageList = ImageList_Create(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), ILC_COLOR32 | ILC_MASK, 0, 1000);
+    m_ImageList = ImageList_Create(ShellTrayIconSize(), ShellTrayIconSize(), ILC_COLOR32 | ILC_MASK, 0, 1000);
     SetImageList(m_ImageList);
 
     RefreshToolbarMetrics(TRUE);
 
-    SetButtonSize(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+    SetButtonSize(ShellTrayIconSize(), ShellTrayIconSize());
 }
 
 void CNotifyToolbar::RefreshToolbarMetrics(BOOL bForceRefresh = FALSE)
@@ -1316,8 +1414,8 @@ void CNotifyToolbar::RefreshToolbarMetrics(BOOL bForceRefresh = FALSE)
         tbm.cyPad = ShellScaleForDpi(1);
         if (!g_TaskbarSettings.UseCompactTrayIcons())
         {
-            tbm.cxPad = GetSystemMetrics(SM_CXSMICON) / 2;
-            tbm.cyPad = GetSystemMetrics(SM_CYSMICON) / 2;
+            tbm.cxPad = ShellTrayIconSize() / 2;
+            tbm.cyPad = ShellTrayIconSize() / 2;
         }
         tbm.cxBarPad = ShellScaleForDpi(1);
         tbm.cyBarPad = ShellScaleForDpi(1);
@@ -1454,19 +1552,19 @@ void CSysPagerWnd::GetSize(IN BOOL IsHorizontal, IN PSIZE size)
 
     /* Make the reference dimension an exact multiple of the icon size */
     if (IsHorizontal)
-        size->cy -= size->cy % GetSystemMetrics(SM_CYSMICON);
+        size->cy -= size->cy % ShellTrayIconSize();
     else
-        size->cx -= size->cx % GetSystemMetrics(SM_CXSMICON);
+        size->cx -= size->cx % ShellTrayIconSize();
 
 #else
     INT rows = 0;
     INT columns = 0;
-    INT cyButton = GetSystemMetrics(SM_CYSMICON) + ShellScaleForDpi(2);
-    INT cxButton = GetSystemMetrics(SM_CXSMICON) + ShellScaleForDpi(2);
+    INT cyButton = ShellTrayIconSize() + ShellScaleForDpi(2);
+    INT cxButton = ShellTrayIconSize() + ShellScaleForDpi(2);
     if (!g_TaskbarSettings.UseCompactTrayIcons())
     {
-        cyButton = MulDiv(GetSystemMetrics(SM_CYSMICON), 3, 2);
-        cxButton = MulDiv(GetSystemMetrics(SM_CXSMICON), 3, 2);
+        cyButton = MulDiv(ShellTrayIconSize(), 3, 2);
+        cxButton = MulDiv(ShellTrayIconSize(), 3, 2);
     }
     int VisibleButtonCount = Toolbar.GetVisibleButtonCount();
 

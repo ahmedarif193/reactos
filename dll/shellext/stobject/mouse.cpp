@@ -112,7 +112,7 @@ MouseKeys_Update(_In_ CSysTray *pSysTray)
         g_MkState = state;
         if (g_MkState)
         {
-            g_MkStateIcon = LoadIcon(g_hInstance, MAKEINTRESOURCE(g_MkState));
+            g_MkStateIcon = StoLoadTrayIcon(g_hInstance, g_MkState);
         }
     }
 
