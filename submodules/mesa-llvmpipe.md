@@ -49,6 +49,10 @@ Mesa then builds with Meson using that target LLVM installation. Host LLVM
 libraries must not be substituted for Windows libraries. A matching existing
 static Windows LLVM installation can be supplied with `MESA_LLVM_ROOT` and
 its `MESA_LLVM_LICENSE_FILE`.
+Alternatively, `MESA_LLVM_SOURCE_ROOT` can reuse an already extracted LLVM
+22.1.8 source tree across architectures, retaining separate target build and
+install directories. Do not extract or update that shared source while a
+consumer is building it.
 
 Compiler caches are disabled for the external builds. Incremental outputs
 live only under the selected build tree's `submodules/mesa-llvmpipe/`; source
