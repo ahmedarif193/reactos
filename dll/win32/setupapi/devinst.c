@@ -1441,6 +1441,59 @@ HKEY WINAPI SetupDiCreateDevRegKeyA(
     return key;
 }
 
+/***********************************************************************
+ *              SetupDiRemoveDevice (SETUPAPI.@)
+ */
+BOOL WINAPI
+SetupDiRemoveDevice(HDEVINFO DeviceInfoSet, PSP_DEVINFO_DATA DeviceInfoData)
+{
+    struct DeviceInfoSet *Set = (struct DeviceInfoSet *)DeviceInfoSet;
+    struct DeviceInfo *Device;
+    CONFIGRET cr;
+    PNP_VETO_TYPE VetoType;
+    WCHAR VetoName[MAX_PATH];
+
+    if (!Set || DeviceInfoSet == INVALID_HANDLE_VALUE || Set->magic != SETUP_DEVICE_INFO_SET_MAGIC)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    if (!DeviceInfoData || DeviceInfoData->cbSize != sizeof(*DeviceInfoData) || !DeviceInfoData->Reserved)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    Device = (struct DeviceInfo *)DeviceInfoData->Reserved;
+    if (Device->set != Set || !Device->dnDevInst)
+    {
+        SetLastError(ERROR_NO_SUCH_DEVINST);
+        return FALSE;
+    }
+    if (!pSetupIsUserAdmin())
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+
+    cr = CM_Query_And_Remove_SubTree_ExW(Device->dnDevInst, &VetoType, VetoName,
+                                       ARRAYSIZE(VetoName), CM_REMOVE_UI_NOT_OK, Set->hMachine);
+    if (cr != CR_SUCCESS && cr != CR_NO_SUCH_DEVNODE)
+    {
+        SetLastError(GetErrorCodeFromCrCode(cr));
+        return FALSE;
+    }
+    cr = CM_Uninstall_DevNode_Ex(Device->dnDevInst, 0, Set->hMachine);
+    if (cr != CR_SUCCESS)
+    {
+        SetLastError(GetErrorCodeFromCrCode(cr));
+        return FALSE;
+    }
+    Device->dnDevInst = 0;
+    DeviceInfoData->DevInst = 0;
+    SetLastError(ERROR_SUCCESS);
+    return TRUE;
+}
+
 static HKEY
 OpenHardwareProfileKey(
     IN HKEY HKLM,

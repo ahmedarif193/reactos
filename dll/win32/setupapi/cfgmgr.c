@@ -3693,6 +3693,7 @@ CM_Get_DevNode_Status_Ex(
     HSTRING_TABLE StringTable = NULL;
     LPWSTR lpDevInst;
     CONFIGRET ret;
+    ULONG Status, Problem;
 
     TRACE("CM_Get_DevNode_Status_Ex(%p %p %lx %lx %p)\n",
           pulStatus, pulProblemNumber, dnDevInst, ulFlags, hMachine);
@@ -3730,8 +3731,8 @@ CM_Get_DevNode_Status_Ex(
     {
         ret = PNP_GetDeviceStatus(BindingHandle,
                                   lpDevInst,
-                                  pulStatus,
-                                  pulProblemNumber,
+                                  &Status,
+                                  &Problem,
                                   ulFlags);
     }
     RpcExcept(EXCEPTION_EXECUTE_HANDLER)
@@ -3740,6 +3741,11 @@ CM_Get_DevNode_Status_Ex(
     }
     RpcEndExcept;
 
+    if (ret == CR_SUCCESS)
+    {
+        *pulStatus = Status;
+        *pulProblemNumber = Problem;
+    }
     return ret;
 }
 
@@ -6965,7 +6971,7 @@ CM_Query_And_Remove_SubTree_ExW(
     if (ulFlags & ~CM_REMOVE_BITS)
         return CR_INVALID_FLAG;
 
-    if (pszVetoName == NULL && ulNameLength == 0)
+    if (pszVetoName == NULL && ulNameLength != 0)
         return CR_INVALID_POINTER;
 
     if (hMachine != NULL)
@@ -6987,6 +6993,13 @@ CM_Query_And_Remove_SubTree_ExW(
     lpDevInst = pSetupStringTableStringFromId(StringTable, dnAncestor);
     if (lpDevInst == NULL)
         return CR_INVALID_DEVNODE;
+
+    /* The RPC enum parameter is in/out, while the public API treats it as
+     * output. Do not marshal an uninitialized caller value as a veto type. */
+    if (pVetoType)
+        *pVetoType = PNP_VetoTypeUnknown;
+    if (pszVetoName && ulNameLength)
+        pszVetoName[0] = UNICODE_NULL;
 
     RpcTryExcept
     {
