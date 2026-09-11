@@ -45,6 +45,13 @@ extern "C" {
     (((ULONG_PTR)(Size) + MM_ALLOCATION_GRANULARITY - 1)    \
     & ~(MM_ALLOCATION_GRANULARITY - 1))
 
+/* Native 64-bit stacks must tolerate probes more than one page apart. */
+#ifdef _WIN64
+#define MM_USER_STACK_GUARD_PAGES 3
+#else
+#define MM_USER_STACK_GUARD_PAGES 1
+#endif
+
 //
 // PFN Identity Uses
 //

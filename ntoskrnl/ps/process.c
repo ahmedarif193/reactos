@@ -1682,7 +1682,7 @@ PspAllocateUserStack(IN HANDLE ProcessHandle,
                      IN ULONG_PTR ZeroBits,
                      IN SIZE_T StackReserve,
                      IN SIZE_T StackCommit,
-                     IN BOOLEAN UseGuardPage,
+                     IN SIZE_T GuardSize,
                      OUT PINITIAL_TEB InitialTeb)
 {
     PVOID StackAllocation = NULL;
@@ -1690,7 +1690,6 @@ PspAllocateUserStack(IN HANDLE ProcessHandle,
     PVOID GuardBase;
     SIZE_T ReserveSize;
     SIZE_T CommitSize;
-    SIZE_T GuardSize = PAGE_SIZE;
     SIZE_T FreeSize = 0;
     ULONG_PTR StackTop;
     ULONG OldProtect;
@@ -1699,7 +1698,7 @@ PspAllocateUserStack(IN HANDLE ProcessHandle,
 
     if (!StackReserve) StackReserve = 0x100000;
     if (!StackCommit) StackCommit = PAGE_SIZE;
-    if (StackCommit > StackReserve || (UseGuardPage && StackCommit == StackReserve)) StackReserve = ROUND_UP(StackCommit, 1024 * 1024);
+    if (StackCommit > StackReserve || (GuardSize && StackCommit == StackReserve)) StackReserve = ROUND_UP(StackCommit, 1024 * 1024);
 
     StackCommit = ROUND_UP(StackCommit, PAGE_SIZE);
     StackReserve = ROUND_UP(StackReserve, MM_VIRTMEM_GRANULARITY);
@@ -1708,8 +1707,8 @@ PspAllocateUserStack(IN HANDLE ProcessHandle,
     if (!NT_SUCCESS(Status)) return Status;
 
     StackTop = (ULONG_PTR)StackAllocation + StackReserve;
-    HasGuardPage = UseGuardPage && StackReserve >= StackCommit + PAGE_SIZE;
-    CommitSize = StackCommit + (HasGuardPage ? PAGE_SIZE : 0);
+    HasGuardPage = GuardSize && StackReserve >= StackCommit + GuardSize;
+    CommitSize = StackCommit + (HasGuardPage ? GuardSize : 0);
     CommitBase = (PVOID)(StackTop - CommitSize);
     Status = ZwAllocateVirtualMemory(ProcessHandle, &CommitBase, 0, &CommitSize, MEM_COMMIT, PAGE_READWRITE);
     if (!NT_SUCCESS(Status))
@@ -1732,7 +1731,7 @@ PspAllocateUserStack(IN HANDLE ProcessHandle,
     RtlZeroMemory(InitialTeb, sizeof(*InitialTeb));
     InitialTeb->AllocatedStackBase = StackAllocation;
     InitialTeb->StackBase = (PVOID)StackTop;
-    InitialTeb->StackLimit = (PVOID)((ULONG_PTR)CommitBase + (HasGuardPage ? PAGE_SIZE : 0));
+    InitialTeb->StackLimit = (PVOID)((ULONG_PTR)CommitBase + (HasGuardPage ? GuardSize : 0));
     return STATUS_SUCCESS;
 }
 
@@ -1903,7 +1902,7 @@ PspPrepareWow64Thread(IN HANDLE ProcessHandle,
     ULONG_PTR CpuAddress;
     NTSTATUS Status;
 
-    Status = PspAllocateUserStack(ProcessHandle, MM_SYSTEM_RANGE_START_WOW64 - 1, 0x40000, 0x40000, FALSE, InitialTeb);
+    Status = PspAllocateUserStack(ProcessHandle, MM_SYSTEM_RANGE_START_WOW64 - 1, 0x40000, 0x40000, 0, InitialTeb);
     if (!NT_SUCCESS(Status)) return Status;
 
     RtlZeroMemory(&CpuInit, sizeof(CpuInit));
@@ -2595,9 +2594,9 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         WOW64_CPU_INIT CpuInit;
         ULONG_PTR CpuAddress;
 
-        Status = PspAllocateUserStack(hProcess, MM_SYSTEM_RANGE_START_WOW64 - 1, ImageInformation.MaximumStackSize, ImageInformation.CommittedStackSize, TRUE, &Wow64InitialTeb);
+        Status = PspAllocateUserStack(hProcess, MM_SYSTEM_RANGE_START_WOW64 - 1, ImageInformation.MaximumStackSize, ImageInformation.CommittedStackSize, PAGE_SIZE, &Wow64InitialTeb);
         if (!NT_SUCCESS(Status)) goto Cleanup;
-        Status = PspAllocateUserStack(hProcess, MM_SYSTEM_RANGE_START_WOW64 - 1, 0x40000, 0x40000, FALSE, &InitialTeb);
+        Status = PspAllocateUserStack(hProcess, MM_SYSTEM_RANGE_START_WOW64 - 1, 0x40000, 0x40000, 0, &InitialTeb);
         if (!NT_SUCCESS(Status)) goto Cleanup;
 
         RtlZeroMemory(&CpuInit, sizeof(CpuInit));
@@ -2621,7 +2620,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     else
 #endif
     {
-        Status = PspAllocateUserStack(hProcess, 0, ImageInformation.MaximumStackSize, ImageInformation.CommittedStackSize, TRUE, &InitialTeb);
+        Status = PspAllocateUserStack(hProcess, 0, ImageInformation.MaximumStackSize, ImageInformation.CommittedStackSize, MM_USER_STACK_GUARD_PAGES * PAGE_SIZE, &InitialTeb);
         if (!NT_SUCCESS(Status)) goto Cleanup;
     }
 
