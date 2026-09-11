@@ -375,6 +375,25 @@ TestRemapSharedCoherency(VOID)
  */
 static
 VOID
+TestUnfaultedSystemView(
+    _In_ PVOID SectionObject)
+{
+    PVOID Base = NULL;
+    SIZE_T ViewSize = PAGE_SIZE;
+    NTSTATUS Status;
+
+    Status = MmMapViewInSystemSpace(SectionObject, &Base, &ViewSize);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        /* Do not touch the view: its PTE must remain a prototype pointer. */
+        Status = MmUnmapViewInSystemSpace(Base);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+    }
+}
+
+static
+VOID
 TestMapViewInSystemSpace(VOID)
 {
     NTSTATUS Status;
@@ -397,6 +416,9 @@ TestMapViewInSystemSpace(VOID)
     if (!skip(NT_SUCCESS(Status) && SectionObject != NULL,
               "No section object\n"))
     {
+        /* A committed section can be unmapped before any page is faulted. */
+        TestUnfaultedSystemView(SectionObject);
+
         _SEH2_TRY
         {
             Status = MmMapViewInSystemSpace(SectionObject, &MappedBase, &ViewSize);
@@ -420,6 +442,13 @@ TestMapViewInSystemSpace(VOID)
                 RtlFillMemory(MappedBase, PAGE_SIZE, 0x7E);
                 ok(*(volatile UCHAR *)MappedBase == 0x7E,
                    "System-space view not writable\n");
+            KmtEndSeh(STATUS_SUCCESS);
+
+            /* Removing an unfaulted alias must preserve the resident page. */
+            TestUnfaultedSystemView(SectionObject);
+            KmtStartSeh()
+                ok(*(volatile UCHAR *)MappedBase == 0x7E,
+                   "Unmapping the alias changed the resident page\n");
             KmtEndSeh(STATUS_SUCCESS);
 
             Status = MmUnmapViewInSystemSpace(MappedBase);
