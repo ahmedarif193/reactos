@@ -771,6 +771,7 @@ static VOID
 TestProcessLifetimeOwnership(VOID)
 {
     DXGK_PROCESS_LIFETIME_CORE Core;
+    DXGK_PROCESS_LIFETIME_ACQUIRE AcquireResult;
     DXGK_PROCESS_LIFETIME_RELEASE ReleaseResult;
     PVOID CallbackOwner = (PVOID)(ULONG_PTR)0x1111;
     PVOID OtherCaller = (PVOID)(ULONG_PTR)0x2222;
@@ -779,16 +780,16 @@ TestProcessLifetimeOwnership(VOID)
     DxgkProcessLifetimeInitialize(&Core, CallbackOwner);
     ok_eq_long(Core.ReferenceCount, 1L);
     ok_eq_long(Core.State, DxgkProcessLifetimeCreating);
-    ok_eq_long(DxgkProcessLifetimeAcquire(&Core, CallbackOwner),
-               DxgkProcessLifetimeRejectReentrant);
+    AcquireResult = DxgkProcessLifetimeAcquire(&Core, CallbackOwner);
+    ok_eq_long(AcquireResult, DxgkProcessLifetimeRejectReentrant);
     ok_eq_long(Core.ReferenceCount, 1L);
     DxgkProcessLifetimeCompleteCreate(&Core,
                                       CallbackOwner,
                                       STATUS_SUCCESS);
     ReleaseResult = DxgkProcessLifetimeRelease(&Core, CallbackOwner);
     ok_eq_long(ReleaseResult, DxgkProcessLifetimeBeginDestroy);
-    ok_eq_long(DxgkProcessLifetimeAcquire(&Core, CallbackOwner),
-               DxgkProcessLifetimeRejectReentrant);
+    AcquireResult = DxgkProcessLifetimeAcquire(&Core, CallbackOwner);
+    ok_eq_long(AcquireResult, DxgkProcessLifetimeRejectReentrant);
     ok_eq_long(Core.ReferenceCount, 0L);
     ok_bool_true(DxgkProcessLifetimeCompleteDestroy(&Core, CallbackOwner),
                  "open-without-device destroys on adapter close");
@@ -801,8 +802,8 @@ TestProcessLifetimeOwnership(VOID)
     DxgkProcessLifetimeCompleteCreate(&Core,
                                       CallbackOwner,
                                       STATUS_SUCCESS);
-    ok_eq_long(DxgkProcessLifetimeAcquire(&Core, OtherCaller),
-               DxgkProcessLifetimeAcquireReady);
+    AcquireResult = DxgkProcessLifetimeAcquire(&Core, OtherCaller);
+    ok_eq_long(AcquireResult, DxgkProcessLifetimeAcquireReady);
     ReleaseResult = DxgkProcessLifetimeRelease(&Core, OtherCaller);
     ok_eq_long(ReleaseResult, DxgkProcessLifetimeReleaseNone);
     ok_eq_long(Core.State, DxgkProcessLifetimeReady);
@@ -813,8 +814,8 @@ TestProcessLifetimeOwnership(VOID)
 
     /* Failed creation wakes pinned openers and frees only after the last pin. */
     DxgkProcessLifetimeInitialize(&Core, CallbackOwner);
-    ok_eq_long(DxgkProcessLifetimeAcquire(&Core, OtherCaller),
-               DxgkProcessLifetimeWaitForCreate);
+    AcquireResult = DxgkProcessLifetimeAcquire(&Core, OtherCaller);
+    ok_eq_long(AcquireResult, DxgkProcessLifetimeWaitForCreate);
     DxgkProcessLifetimeCompleteCreate(&Core,
                                       CallbackOwner,
                                       STATUS_DEVICE_NOT_READY);
