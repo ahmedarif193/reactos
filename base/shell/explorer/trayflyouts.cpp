@@ -5769,6 +5769,7 @@ public:
     BOOL m_bScanPending;
     BOOL m_bLaunching;
     int m_nWlanScroll;
+    int m_iWlanFirst;
     BOOL m_bWlanLoading;
     ULONGLONG m_SpinT0;
     RECT m_rcWlanArea;
@@ -5795,7 +5796,7 @@ public:
                         m_hwndEdit(NULL), m_hbrEdit(NULL),
                         m_iHot(TFY_NETHIT_NONE), m_iSel(-1), m_iHotBtn(0),
                         m_bAutoConnect(TRUE), m_bPassMode(FALSE), m_bScanning(FALSE),
-                        m_bScanPending(FALSE), m_bLaunching(FALSE), m_nWlanScroll(0),
+                        m_bScanPending(FALSE), m_bLaunching(FALSE), m_nWlanScroll(0), m_iWlanFirst(0),
                         m_bWlanLoading(FALSE), m_SpinT0(0),
                         m_bConnecting(FALSE), m_bTracking(FALSE), m_nIfaces(0),
                         m_bWifiOn(TRUE), m_bAirplane(FALSE)
@@ -5976,18 +5977,46 @@ public:
         WCHAR szKeep[128];
         StringCchCopyW(szKeep, _countof(szKeep), m_szSelName);
         BOOL bRestore = TRUE;
+        DWORD nWlanUp = 0, nWireUp = 0;
         m_Rows.SetCount(0);
         AcquireSRWLockShared(&g_NetCacheLock);
-        if (g_NetCache.nAdapters)
+        for (DWORD k = 0; k < g_NetCache.nWlan; k++)
+            nWlanUp += !!g_NetCache.Wlan[k].bConnected;
+        for (DWORD k = 0; k < g_NetCache.nAdapters; k++)
+            nWireUp += !!g_NetCache.Adapters[k].bConnected;
+        if (nWlanUp || nWireUp)
         {
             AddSection(L"Currently connected to:");
-            for (DWORD k = 0; k < g_NetCache.nAdapters; k++)
-                m_Rows.Add(g_NetCache.Adapters[k]);
+            for (DWORD k = 0; k < g_NetCache.nWlan; k++)
+            {
+                if (g_NetCache.Wlan[k].bConnected)
+                    m_Rows.Add(g_NetCache.Wlan[k]);
+            }
+            for (DWORD k = 0; !nWlanUp && k < g_NetCache.nAdapters; k++)
+            {
+                if (g_NetCache.Adapters[k].bConnected)
+                    m_Rows.Add(g_NetCache.Adapters[k]);
+            }
         }
-        AddSection(L"Wireless Network Connection");
+        else if (g_NetCache.bValid)
+        {
+            TFYNETROW row;
+            ZeroMemory(&row, sizeof(row));
+            StringCchCopyW(row.szName, _countof(row.szName), L"No connection");
+            m_Rows.Add(row);
+        }
+        m_iWlanFirst = (int)m_Rows.GetCount();
+        if (g_NetCache.nWlan > nWlanUp)
+        {
+            AddSection(L"Wireless Network Connection");
+            m_iWlanFirst = (int)m_Rows.GetCount();
+            for (DWORD k = 0; k < g_NetCache.nWlan; k++)
+            {
+                if (!g_NetCache.Wlan[k].bConnected)
+                    m_Rows.Add(g_NetCache.Wlan[k]);
+            }
+        }
         m_nIfaces = g_NetCache.nWlanIfaces;
-        for (DWORD k = 0; k < g_NetCache.nWlan; k++)
-            m_Rows.Add(g_NetCache.Wlan[k]);
         ReleaseSRWLockShared(&g_NetCacheLock);
         m_bAirplane = LoadAirplane(&bRestore);
         m_bWifiOn = QueryRadio();
@@ -6079,7 +6108,7 @@ public:
             SetRectEmpty(&m_rcWifi);
         }
         int nWlanTotal = 0;
-        for (SIZE_T k = 0; k < m_Rows.GetCount(); k++)
+        for (SIZE_T k = (SIZE_T)m_iWlanFirst; k < m_Rows.GetCount(); k++)
         {
             if (m_Rows[k].nType == 2)
                 nWlanTotal++;
@@ -6096,7 +6125,7 @@ public:
             TFYNETROW &row = m_Rows[i];
             int nRowH = (row.nType == 3) ? Sc(28) : (row.nType == 2) ? Sc(40) : Sc(46);
             BOOL bExpanded = (row.nType == 2 && (int)i == m_iSel);
-            if (row.nType == 2)
+            if (row.nType == 2 && (int)i >= m_iWlanFirst)
             {
                 int nThis = nWlanIdx++;
                 if (nThis < m_nWlanScroll || nThis >= m_nWlanScroll + TFY_NET_VISROWS)
@@ -6138,13 +6167,13 @@ public:
                 nRowH = yb - y;
             }
             SetRect(&row.rc, Sc(8), y, m_size.cx - Sc(8), y + nRowH);
-            if (row.nType == 2 && nWlanStart < 0)
+            if (row.nType == 2 && (int)i >= m_iWlanFirst && nWlanStart < 0)
                 nWlanStart = y;
             y += nRowH;
         }
         if (nWlanStart < 0)
             nWlanStart = y;
-        if (nWlanTotal < TFY_NET_VISROWS)
+        if ((nWlanTotal || m_bWlanLoading) && nWlanTotal < TFY_NET_VISROWS)
             y += (TFY_NET_VISROWS - nWlanTotal) * Sc(40);
         SetRect(&m_rcWlanArea, Sc(8), nWlanStart, m_size.cx - Sc(8), y);
         y += Sc(8);
@@ -6211,8 +6240,6 @@ public:
             m_SpinT0 = GetTickCount64();
             SetTimer(TFY_TIMER_SPIN, 33, NULL);
         }
-        else if (m_nIfaces == 0)
-            StringCchCopyW(m_szBanner, _countof(m_szBanner), L"No wireless adapter");
         Layout();
         Reposition();
         BeginFlyoutOpen(m_hWnd, m_ptFinal.x, m_ptFinal.y,
@@ -6463,13 +6490,8 @@ public:
             m_iSel = i;
             if (i >= 0 && m_Rows[i].nType == 2)
             {
-                int nWlanIndex = 0;
-                for (int k = 0; k < i; k++)
-                {
-                    if (m_Rows[k].nType == 2)
-                        nWlanIndex++;
-                }
-                if (nWlanIndex < m_nWlanScroll)
+                int nWlanIndex = i - m_iWlanFirst;
+                if (nWlanIndex >= 0 && nWlanIndex < m_nWlanScroll)
                     m_nWlanScroll = nWlanIndex;
                 else if (nWlanIndex >= m_nWlanScroll + TFY_NET_VISROWS)
                     m_nWlanScroll = nWlanIndex - TFY_NET_VISROWS + 1;
@@ -6665,7 +6687,7 @@ public:
             SetTextColor(hdcMem, m_Pal.PanelText);
             if (row.nType == 2)
             {
-                RECT rcSsid = { rcRow.left + Sc(40), rcRow.top, rcRow.right - Sc(86), rcRow.top + nHeadH };
+                RECT rcSsid = { rcRow.left + Sc(40), rcRow.top, rcRow.right - ((row.szStatus[0] && row.bSecure) ? Sc(108) : Sc(86)), rcRow.top + nHeadH };
                 if (bExpanded)
                 {
                     rcSsid.bottom = rcRow.top + nHeadH / 2 + Sc(3);
@@ -6684,7 +6706,7 @@ public:
                 }
                 if (row.szStatus[0])
                 {
-                    RECT rcTag = { rcRow.right - Sc(84), rcRow.top, rcRow.right - Sc(8), rcRow.top + nHeadH };
+                    RECT rcTag = { rcRow.right - (row.bSecure ? Sc(106) : Sc(84)), rcRow.top, rcRow.right - (row.bSecure ? Sc(30) : Sc(8)), rcRow.top + nHeadH };
                     SelectObject(hdcMem, m_hFontSmall);
                     SetTextColor(hdcMem, row.bConnected ? m_Pal.HotBorder : m_Pal.DimText);
                     DrawTextW(hdcMem, row.szStatus, -1, &rcTag,
@@ -6718,6 +6740,8 @@ public:
             }
             else
             {
+                if (!row.szStatus[0])
+                    SetRect(&rcText, rcText.left, rcRow.top, rcText.right, rcRow.top + nHeadH);
                 DrawTextW(hdcMem, row.szName, -1, &rcText,
                           DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
                 RECT rcStatus = { rcText.left, cyMid + Sc(2), rcText.right, rcRow.bottom - Sc(2) };
@@ -6846,15 +6870,11 @@ public:
     {
         KillTimer(TFY_TIMER_SPIN);
         m_bWlanLoading = FALSE;
-        if (!wcscmp(m_szBanner, L"No wireless adapter"))
-            m_szBanner[0] = 0;
         if (!wParam && !m_bScanPending)
             EndScan();
         if (wParam)
             m_bScanPending = FALSE;
         Rebuild();
-        if (m_nIfaces == 0)
-            StringCchCopyW(m_szBanner, _countof(m_szBanner), L"No wireless adapter");
         if (m_bConnecting)
         {
             for (SIZE_T i = 0; i < m_Rows.GetCount(); i++)
