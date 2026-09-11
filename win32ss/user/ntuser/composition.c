@@ -1341,6 +1341,9 @@ IntCompositionDamageWindow(_In_opt_ PWND Wnd)
         (e = IntCompositionFind(IntCompositionTopLevel(Wnd))) != NULL)
     {
         e->Damaged = TRUE;
+        /* Explicit window damage must survive a simultaneous partial backing
+         * publication, whose pixel bounds alone do not cover metadata changes. */
+        IntCompositionAccumulatePositionDamage((PRECTL)&e->Wnd->rcWindow);
         IntCompositionMarkDamage(FALSE);
     }
     else
@@ -2363,7 +2366,20 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         count++;
 
         if (wasDamaged)
-            RECTL_bUnionRect(&rcDmg, &rcDmg, (RECTL *)&w->rcWindow);
+        {
+            RECTL Bounds = w->rcWindow;
+
+            /* BACK->FRONT already records the exact pixels published. A small
+             * GDI update must not invalidate its entire top-level window.
+             * Position/metadata damage is accumulated independently above;
+             * native DX publications still cover the complete client layer. */
+            if (BackingChanged && !NativeDxPending)
+            {
+                Bounds = e->Redirect.BaseDirtyRect;
+                RECTL_vOffsetRect(&Bounds, w->rcWindow.left, w->rcWindow.top);
+            }
+            RECTL_bUnionRect(&rcDmg, &rcDmg, &Bounds);
+        }
     }
 
     IntCompositionUnlockDevice(ppdev);
