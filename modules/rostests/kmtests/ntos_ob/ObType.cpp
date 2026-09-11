@@ -512,8 +512,6 @@ ObtCreateObjectTypes(VOID)
         WCHAR DirectoryName[sizeof "\\ObjectTypes\\" - 1];
         WCHAR TypeName[15];
     } Name;
-    OBJECT_ATTRIBUTES ObjectAttributes;
-    HANDLE ObjectTypeHandle;
     UNICODE_STRING ObjectPath;
     RtlCopyMemory(&Name.DirectoryName, L"\\ObjectTypes\\", sizeof Name.DirectoryName);
 
@@ -548,19 +546,20 @@ ObtCreateObjectTypes(VOID)
             /* as we cannot delete the object types, get a pointer if they
              * already exist */
             RtlInitUnicodeString(&ObjectPath, Name.DirectoryName);
-            InitializeObjectAttributes(&ObjectAttributes, &ObjectPath, OBJ_KERNEL_HANDLE, NULL, NULL);
-            Status = ObOpenObjectByName(&ObjectAttributes, NULL, KernelMode, NULL, 0, NULL, &ObjectTypeHandle);
+            PVOID ExistingType = NULL;
+            Status = ObReferenceObjectByName(&ObjectPath, OBJ_CASE_INSENSITIVE, NULL, 0,
+                                            ObGetObjectType(*PsProcessType), KernelMode,
+                                            NULL, &ExistingType);
             ok_eq_hex(Status, STATUS_SUCCESS);
-            ok(ObjectTypeHandle != NULL, "ObjectTypeHandle = NULL\n");
-            if (!skip(Status == STATUS_SUCCESS && ObjectTypeHandle, "No handle\n"))
+            ok(ExistingType != NULL, "ExistingType = NULL\n");
+            if (NT_SUCCESS(Status) && ExistingType)
             {
-                Status = ObReferenceObjectByHandle(ObjectTypeHandle, 0, NULL, KernelMode, (PVOID*)&ObTypes[i], NULL);
-                ok_eq_hex(Status, STATUS_SUCCESS);
-                if (!skip(Status == STATUS_SUCCESS && ObTypes[i], "blah\n"))
-                {
-                    TObCallbackSetter<NtDdiVersion>::Set(ObTypes[i]->TypeInfo);
-                }
-                Status = ZwClose(ObjectTypeHandle);
+                if (ObTypes[i])
+                    ok_eq_pointer(ExistingType, ObTypes[i]);
+                ObTypes[i] = static_cast<OBJECT_TYPE*>(ExistingType);
+                TObCallbackSetter<NtDdiVersion>::Set(ObTypes[i]->TypeInfo);
+                /* The type stays in the permanent object-type namespace. */
+                ObDereferenceObject(ExistingType);
             }
         }
 
@@ -684,6 +683,25 @@ ObtCreateObjects(VOID)
 
 static
 VOID
+ObtCheckDirectoryPresence(BOOLEAN Present)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\ObtDirectory");
+    OBJECT_ATTRIBUTES Attributes;
+    HANDLE Handle = NULL;
+    NTSTATUS Status;
+
+    InitializeObjectAttributes(&Attributes, &Name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = ZwOpenDirectoryObject(&Handle, DIRECTORY_QUERY, &Attributes);
+    ok_eq_hex(Status, Present ? STATUS_SUCCESS : STATUS_OBJECT_NAME_NOT_FOUND);
+    if (NT_SUCCESS(Status))
+    {
+        Status = ZwClose(Handle);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+    }
+}
+
+static
+VOID
 ObtClose(
     BOOLEAN Clean,
     BOOLEAN AlternativeMethod)
@@ -721,7 +739,7 @@ ObtClose(
     // Close what we have opened and free what we allocated
     for (i = 0; i < NUM_OBTYPES2; ++i)
     {
-        if (!skip(ObBody[i] != NULL, "Nothing to dereference\n"))
+        if (ObBody[i] != NULL)
         {
             if (ObHandle1[i]) CheckObject(ObHandle1[i], 3LU, 1LU);
             Ret = ObReferenceObject(ObBody[i]);
@@ -733,7 +751,7 @@ ObtClose(
             if (ObHandle1[i]) CheckObject(ObHandle1[i], 3LU, 1LU);
             ObBody[i] = NULL;
         }
-        if (!skip(ObHandle1[i] != NULL, "Nothing to close\n"))
+        if (ObHandle1[i] != NULL)
         {
             Status = ZwClose(ObHandle1[i]);
             ok_eq_hex(Status, STATUS_SUCCESS);
@@ -741,14 +759,18 @@ ObtClose(
         }
     }
 
-    if (skip(Clean, "Not cleaning up, as requested. Use ObTypeClean to clean up\n"))
+    if (!Clean)
+    {
+        ObtCheckDirectoryPresence(TRUE);
+        trace("Directory retained for inspection; ObTypeClean removes it.\n");
         return;
+    }
 
     // Now we have to get rid of a directory object
     // Since it is permanent, we have to firstly make it temporary
     // and only then kill
     // (this procedure is described in DDK)
-    if (!skip(DirectoryHandle != NULL, "No directory handle\n"))
+    if (DirectoryHandle != NULL)
     {
         CheckObject(DirectoryHandle, 3LU, 1LU);
 
@@ -761,6 +783,7 @@ ObtClose(
         if (NT_SUCCESS(Status))
             DirectoryHandle = NULL;
     }
+    ObtCheckDirectoryPresence(FALSE);
 
     /* we don't delete the object types we created. It makes Windows unstable.
      * TODO: perhaps make it work in ROS anyway */

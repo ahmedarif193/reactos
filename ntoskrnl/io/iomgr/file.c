@@ -2471,7 +2471,7 @@ IopQueryAttributesFile(IN POBJECT_ATTRIBUTES ObjectAttributes,
      * by the Parse Check member.
      */
     Status = ObOpenObjectByName(ObjectAttributes,
-                                NULL,
+                                IoFileObjectType,
                                 AccessMode,
                                 NULL,
                                 FILE_READ_ATTRIBUTES,
@@ -2939,7 +2939,7 @@ IopCreateFile(OUT PHANDLE FileHandle,
      * by the Parse Check member.
      */
     Status = ObOpenObjectByName(ObjectAttributes,
-                                NULL,
+                                IoFileObjectType,
                                 AccessMode,
                                 NULL,
                                 DesiredAccess,
@@ -2955,10 +2955,7 @@ IopCreateFile(OUT PHANDLE FileHandle,
         /* Check if Ob thinks well went well */
         if (NT_SUCCESS(Status))
         {
-            /*
-             * Tell it otherwise. Because we didn't use an ObjectType,
-             * it incorrectly returned us a handle to God knows what.
-             */
+            /* Reject handles that bypassed the I/O parse routine. */
             ZwClose(LocalHandle);
             Status = STATUS_OBJECT_TYPE_MISMATCH;
         }
@@ -3389,7 +3386,7 @@ IoFastQueryNetworkAttributes(IN POBJECT_ATTRIBUTES ObjectAttributes,
      * by the Parse Check member.
      */
     Status = ObOpenObjectByName(ObjectAttributes,
-                                NULL,
+                                IoFileObjectType,
                                 KernelMode,
                                 NULL,
                                 DesiredAccess,
@@ -4547,7 +4544,7 @@ NtDeleteFile(IN POBJECT_ATTRIBUTES ObjectAttributes)
      * by the Parse Check member.
      */
     Status = ObOpenObjectByName(ObjectAttributes,
-                                NULL,
+                                IoFileObjectType,
                                 AccessMode,
                                 NULL,
                                 DELETE,

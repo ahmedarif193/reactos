@@ -3213,7 +3213,7 @@ NtQueryInformationByName(IN POBJECT_ATTRIBUTES ObjectAttributes,
      * Parse Check member.
      */
     Status = ObOpenObjectByName(ObjectAttributes,
-                                NULL,
+                                IoFileObjectType,
                                 PreviousMode,
                                 NULL,
                                 FILE_READ_ATTRIBUTES,
@@ -3226,10 +3226,7 @@ NtQueryInformationByName(IN POBJECT_ATTRIBUTES ObjectAttributes,
         /* Check if Ob thinks well went well */
         if (NT_SUCCESS(Status))
         {
-            /*
-             * Tell it otherwise. Because we didn't use an ObjectType,
-             * it incorrectly returned us a handle to God knows what.
-             */
+            /* Reject handles that bypassed the I/O parse routine. */
             ZwClose(Handle);
             Status = STATUS_OBJECT_TYPE_MISMATCH;
         }

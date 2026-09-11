@@ -180,18 +180,35 @@ START_TEST(ObReference)
     };
     HANDLE ObjectTypeHandle = NULL;
     BOOLEAN ObDirectoryObjectTypeReferenced = FALSE;
+    POBJECT_TYPE TypeObjectType = ObGetObjectType(*PsProcessType);
 
     /* ObReferenceObjectByName needs the object type... so get it... */
     RtlInitUnicodeString(&Name, L"\\ObjectTypes\\Directory");
     InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_KERNEL_HANDLE, NULL, NULL);
-    Status = ObOpenObjectByName(&ObjectAttributes, NULL, KernelMode, NULL, 0, NULL, &ObjectTypeHandle);
-    /* Win11 rejects ObOpenObjectByName with a NULL ObjectType / zero DesiredAccess
-     * (returns STATUS_INVALID_PARAMETER); ReactOS accepts it. Tolerate the Win11
-     * rejection here so the suite passes on both; the dependent block below is
-     * already guarded by "Status == STATUS_SUCCESS && ObjectTypeHandle". */
-    ok(Status == STATUS_SUCCESS || Status == STATUS_INVALID_PARAMETER,
-       "ObOpenObjectByName(\\ObjectTypes\\Directory) = 0x%lx\n", Status);
-    ok(Status != STATUS_SUCCESS || ObjectTypeHandle != NULL, "ObjectTypeHandle = NULL despite success\n");
+    if (GetNTVersion() >= _WIN32_WINNT_WIN10)
+    {
+        ULONG AccessIndex, ParameterIndex;
+        const ACCESS_MASK AccessMasks[] = { 0, OBJECT_TYPE_CREATE };
+
+        for (AccessIndex = 0; AccessIndex < RTL_NUMBER_OF(AccessMasks); ++AccessIndex)
+        {
+            for (ParameterIndex = 0; ParameterIndex < 3; ++ParameterIndex)
+            {
+                HANDLE InvalidHandle = (HANDLE)(ULONG_PTR)-1;
+                Status = ObOpenObjectByName(ParameterIndex == 0 ? &ObjectAttributes : NULL,
+                                            ParameterIndex == 2 ? TypeObjectType : NULL,
+                                            KernelMode, NULL, AccessMasks[AccessIndex], NULL, &InvalidHandle);
+                ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+                ok_eq_pointer(InvalidHandle, NULL);
+                if (NT_SUCCESS(Status) && InvalidHandle)
+                    ZwClose(InvalidHandle);
+            }
+        }
+    }
+
+    Status = ObOpenObjectByName(&ObjectAttributes, TypeObjectType, KernelMode, NULL, 0, NULL, &ObjectTypeHandle);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(ObjectTypeHandle != NULL, "ObjectTypeHandle = NULL\n");
     if (Status == STATUS_SUCCESS && ObjectTypeHandle)
     {
         Status = ObReferenceObjectByHandle(ObjectTypeHandle, 0, NULL, KernelMode, (PVOID)&ObDirectoryObjectType, NULL);
