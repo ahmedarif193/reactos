@@ -973,7 +973,7 @@ MiArm64SelfMapEntryMatchesRoot(
 }
 
 PFN_NUMBER
-MiArm64AllocatePageTablePage(VOID)
+MiArm64TryAllocatePageTablePage(VOID)
 {
     PFN_NUMBER Pfn;
     KIRQL OldIrql;
@@ -1001,18 +1001,26 @@ MiArm64AllocatePageTablePage(VOID)
         {
             MiReleasePfnLock(OldIrql);
         }
-        if (Pfn == 0)
-        {
-            KeBugCheckEx(INSTALL_MORE_MEMORY,
-                         MmNumberOfPhysicalPages,
-                         MmLowestPhysicalPage,
-                         MmHighestPhysicalPage,
-                         2);
-        }
         return Pfn;
     }
 
     return MxGetNextPage(1);
+}
+
+PFN_NUMBER
+MiArm64AllocatePageTablePage(VOID)
+{
+    PFN_NUMBER Pfn = MiArm64TryAllocatePageTablePage();
+
+    if (Pfn == 0)
+    {
+        KeBugCheckEx(INSTALL_MORE_MEMORY,
+                     MmNumberOfPhysicalPages,
+                     MmLowestPhysicalPage,
+                     MmHighestPhysicalPage,
+                     2);
+    }
+    return Pfn;
 }
 
 BOOLEAN

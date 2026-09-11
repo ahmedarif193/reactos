@@ -2436,6 +2436,9 @@ MiEnsurePagedPoolPdeBacked(
 PFN_NUMBER
 MiArm64AllocatePageTablePage(VOID);
 
+PFN_NUMBER
+MiArm64TryAllocatePageTablePage(VOID);
+
 BOOLEAN
 MiArm64IsPfnDatabaseReady(VOID);
 #endif

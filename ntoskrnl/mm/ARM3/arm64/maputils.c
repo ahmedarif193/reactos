@@ -179,7 +179,7 @@ MiArm64EnsureSystemTableEntry(
             MI_SET_PROCESS2(PsGetCurrentProcess()->ImageFileName);
         }
 
-        PageFrameIndex = MiArm64AllocatePageTablePage();
+        PageFrameIndex = MiArm64TryAllocatePageTablePage();
         if (PageFrameIndex == 0)
         {
             *TablePage = 0;
