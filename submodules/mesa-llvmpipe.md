@@ -10,10 +10,10 @@ The original upstream is https://gitlab.freedesktop.org/mesa/mesa.git.
 Mesa's licenses and authorship are unchanged. This integration note's GPL
 notice does not relicense Mesa or LLVM.
 
-The GitHub repository's `main` mirrors upstream development; the ReactOS
-gitlink deliberately pins a release instead of following that moving branch.
-The separate `eotics-com/mesa:reactos-v3d-d3dkmt` changes and later local RPi3
-patches have not been merged into this new repository.
+The GitHub repository's `main` mirrors upstream development. ReactOS pins
+an explicit revision independently of the fork's default branch. The fork's
+`ros-dev` branch contains the RPi3 D3DKMT port and local RPi3 fixes; a build
+uses the local submodule checkout.
 
 ## Enable and build
 
@@ -67,19 +67,38 @@ never patched or updated by CMake, and Meson fallback downloads are disabled.
   `reactos/3rdParty`.
 - No Mesa replacement `opengl32.dll`, D3D12 backend or Vulkan driver is built
   by this target. Existing ReactOS OpenGL and RPi hardware-driver paths remain.
+- Enabled image builds register `mesadrv.dll` as the `MSOGL` software ICD.
+  ReactOS tries this only when neither WDDM nor XPDM publishes an ICD; missing
+  or unusable registration retains the built-in software fallback.
 
 Building/packaging the DLL does **not** prove that ReactOS discovers the ICD
-or that an application renders correctly. Normal software-ICD registration
-and loader integration, native/ReactOS rendering tests, and Ladybird's
-end-to-end behavior are separate work. No browser arguments or environment
-workarounds are installed by this integration.
+or that an application renders correctly. Native/ReactOS rendering tests and
+Ladybird's end-to-end behavior remain separate work. No browser arguments or
+environment workarounds are installed by this integration.
 
 ## Validation status
 
 AMD64 and ARM64 CMake configuration and menuconfig option checks passed.
-The ARM64 LLVM dependency compiled and installed, but the first Mesa
-configuration with Meson 1.10.0 failed during LLVM discovery: its generated
-CMake lookup reported `find_package called with invalid argument "unknown
-version"`. The full `mesadrv.dll` build and image packaging are therefore not
-yet verified. The option remains disabled by default; this is build
-integration in progress, not a validated runtime driver.
+Both architectures' LLVM dependencies, `mesadrv.dll` and license bundles built
+successfully from `ros-dev` commit `94fe6bf842ad179af1a49d7a3ac391e1e382077a`.
+These results apply to that recorded revision; later submodule changes need
+separate validation.
+Meson 1.12.0 resolved the LLVM 22 detection failure seen with Meson 1.10.0.
+The same WGL probe completed 22 checks without failures with these drivers on
+native Windows 11 ARM64 (10.0.26100.1742) and ReactOS AMD64 with the software-ICD
+loader change. Both reported Mesa 26.2.2 / LLVM 22.1.8 / OpenGL 4.6, rendered
+the expected green pixel, and completed buffer swap.
+
+The generated AMD64 registry includes the MSOGL entries. Full main-tree boot
+image packaging remains unverified. The ReactOS runtime test used a separately
+packaged test image and a diagnostic DLL alias, not the final `mesadrv.dll`
+installation path. ARM64 ReactOS runtime has not been tested.
+
+An additional ReactOS `wglMakeCurrent` correction rebinds an already-current
+context when its destination DC changes. A paired 103-check presentation and
+rebinding probe passes on native Windows and the corrected AMD64 test image;
+the uncorrected image fails ten checks. In the recorded browser run,
+Ladybird's original Qt graphics binaries visibly rendered
+`https://example.com` without renderer arguments. This does not establish
+full browser or video compatibility. The option remains disabled by default
+pending broader validation.
