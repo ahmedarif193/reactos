@@ -155,7 +155,13 @@ CheckPattern(
 START_TEST(RtlMemory)
 {
     NTSTATUS Status;
-    UCHAR Buffer[513];
+    DECLSPEC_ALIGN(4) UCHAR Buffer[513];
+    UCHAR CopySource[107];
+#ifdef _M_ARM64
+    const SIZE_T UnalignedMatchSize = 0;
+#else
+    const SIZE_T UnalignedMatchSize = sizeof(ULONG);
+#endif
     const SIZE_T Size = 512;
     const SIZE_T HalfSize = Size / 2;
     SIZE_T RetSize;
@@ -250,16 +256,14 @@ START_TEST(RtlMemory)
 
     /* RtlCopyMemoryNonTemporal */
     MakePattern(Buffer, 2, 64, 0x12, 0x34, 2, 192, 0x56, 0x78, 0);
-    RtlCopyMemoryNonTemporal(Buffer + 13, Buffer + 62, 95);
+    RtlCopyMemory(CopySource, Buffer + 62, 95);
+    RtlCopyMemoryNonTemporal(Buffer + 13, CopySource, 95);
     ok_bool_true(CheckPattern(Buffer, 2, 6, 0x12, 0x34, 1, 1, 0x12, 2, 33, 0x12, 0x34, 2, 14, 0x56, 0x78, 1, 1, 0x56, 2, 10, 0x12, 0x34, 2, 192, 0x56, 0x78, 1, 1, 0, 0), "CheckPattern");
 
-#ifdef _M_IX86
     MakePattern(Buffer, 2, 32, 0x12, 0x34, 2, 32, 0x56, 0x78, 2, 192, 0x9A, 0xAB, 0);
-    RtlCopyMemoryNonTemporal(Buffer + 78, Buffer + 43, 107);
+    RtlCopyMemory(CopySource, Buffer + 43, sizeof(CopySource));
+    RtlCopyMemoryNonTemporal(Buffer + 78, CopySource, sizeof(CopySource));
     ok_bool_true(CheckPattern(Buffer, 2, 32, 0x12, 0x34, 2, 7, 0x56, 0x78, 1, 1, 0x34, 2, 10, 0x12, 0x34, 2, 32, 0x56, 0x78, 2, 11, 0x9A, 0xAB, 1, 1, 0xAB, 2, 163, 0x9A, 0xAB, 1, 1, 0, 0), "CheckPattern");
-#else
-    skip(FALSE, "FIXME: This part of the test is broken on x64.\n");
-#endif
 
     KeLowerIrql(Irql);
     Status = STATUS_SUCCESS;
@@ -331,24 +335,20 @@ START_TEST(RtlMemory)
     ok_eq_hex(Status, STATUS_SUCCESS);
     KeRaiseIrql(HIGH_LEVEL, &Irql);
 
-    /* RtlCompareMemoryUlong.
-     * NOTE: Win11 ARM64 returns 0 (instead of the full 4) for several of these
-     * full-match cases when invoked at HIGH_LEVEL IRQL. ReactOS's 4 is the
-     * correct value, so the assertion is kept strict here; the Win11 quirk is a
-     * known divergence on the reference kernel, not something ReactOS emulates. */
+    /* ARM64 rejects a source or length that is not ULONG-aligned. */
     MakeBuffer(Buffer, 8, 0x55, Size - 8, 0, 0);
     RetSize = RtlCompareMemoryUlong(Buffer, sizeof(ULONG), 0x55555555LU);
     ok_eq_size(RetSize, 4);
     RetSize = RtlCompareMemoryUlong(Buffer + 1, sizeof(ULONG), 0x55555555LU);
-    ok_eq_size(RetSize, 4);
+    ok_eq_size(RetSize, UnalignedMatchSize);
     RetSize = RtlCompareMemoryUlong(Buffer + 2, sizeof(ULONG), 0x55555555LU);
-    ok_eq_size(RetSize, 4);
+    ok_eq_size(RetSize, UnalignedMatchSize);
     RetSize = RtlCompareMemoryUlong(Buffer + 3, sizeof(ULONG), 0x55555555LU);
-    ok_eq_size(RetSize, 4);
+    ok_eq_size(RetSize, UnalignedMatchSize);
     RetSize = RtlCompareMemoryUlong(Buffer + 5, sizeof(ULONG), 0x55555555LU);
     ok_eq_size(RetSize, 0);
     RetSize = RtlCompareMemoryUlong(Buffer + 5, sizeof(ULONG), 0x00555555LU);
-    ok_eq_size(RetSize, 4);
+    ok_eq_size(RetSize, UnalignedMatchSize);
     RetSize = RtlCompareMemoryUlong(Buffer, 1, 0x55555555LU);
     ok_eq_size(RetSize, 0);
     RetSize = RtlCompareMemoryUlong(Buffer, 2, 0x55555555LU);
@@ -356,7 +356,7 @@ START_TEST(RtlMemory)
     RetSize = RtlCompareMemoryUlong(Buffer, 3, 0x55555555LU);
     ok_eq_size(RetSize, 0);
     RetSize = RtlCompareMemoryUlong(Buffer, 5, 0x55555555LU);
-    ok_eq_size(RetSize, 4);
+    ok_eq_size(RetSize, UnalignedMatchSize);
 
     KeLowerIrql(Irql);
     Status = STATUS_SUCCESS;
@@ -460,8 +460,6 @@ START_TEST(RtlMemory)
     ok_eq_hex(Status, STATUS_SUCCESS);
     KeRaiseIrql(HIGH_LEVEL, &Irql);
 
-    /* TODO: fix NDK. This should work! */
-#if !defined _M_AMD64 || defined KMT_KERNEL_MODE
     /* RtlFillMemoryUlong */
     MakeBuffer(Buffer, Size, 0, 0);
     RtlFillMemoryUlong(Buffer, HalfSize, 0x01234567LU);
@@ -481,7 +479,6 @@ START_TEST(RtlMemory)
     } _SEH2_END;
     ok_eq_hex(Status, STATUS_SUCCESS);
     KeRaiseIrql(HIGH_LEVEL, &Irql);
-#endif
 
     /* RtlFillMemoryUlonglong */
     /* TODO: this function doesn't exist in 2k3/x86? wdm.h error? */
