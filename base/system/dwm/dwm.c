@@ -3560,11 +3560,8 @@ DwmComposeLoop(HANDLE hStopEvent)
             if (pr > g_W) pr = g_W;
             if (pb > g_H) pb = g_H;
             wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
-            if (DwmGpuComposeIsActive())
-            {
-                for (i = 0; i < hdr->Count; ++i)
-                    DwmSettingsApplyWindow(&Settings, &wins[i]);
-            }
+            for (i = 0; i < hdr->Count; ++i)
+                DwmSettingsApplyWindow(&Settings, &wins[i]);
 
             cl = pl; ct = pt; cr = pr; cb = pb;
             for (i = 0; i < hdr->Count; i++)
