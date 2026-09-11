@@ -66,6 +66,11 @@ RtlCompareMemoryUlong(IN PVOID Source,
     ULONG_PTR len = Length / sizeof(ULONG);
     ULONG_PTR i;
 
+#ifdef _M_ARM64
+    if (((ULONG_PTR)Source | Length) & (sizeof(ULONG) - 1))
+        return 0;
+#endif
+
     for (i = 0; i < len; i++)
     {
         if (*ptr != Value)
