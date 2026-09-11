@@ -754,18 +754,26 @@ custom_end:
             dwInput = OPENGL_GETINFO;
             ret = ExtEscape(hdc, QUERYESCSUPPORT, sizeof(DWORD), (LPCSTR)&dwInput, 0, NULL);
 
-            /* Driver doesn't support opengl */
-            if(ret <= 0)
-                return NULL;
-
-            /* Query for the ICD DLL name and version */
-            dwInput = OPENGL_GETINFO_DRVNAME;
-            ret = ExtEscape(hdc, OPENGL_GETINFO, sizeof(DWORD), (LPCSTR)&dwInput, sizeof(DrvInfo), (LPSTR)&DrvInfo);
-
-            if(ret <= 0)
+            if (ret > 0)
             {
-                ERR("Driver claims to support OPENGL_GETINFO escape code, but doesn't. ret: %X\n", ret);
-                return NULL;
+                /* Query for the ICD DLL name and version */
+                dwInput = OPENGL_GETINFO_DRVNAME;
+                ret = ExtEscape(hdc, OPENGL_GETINFO, sizeof(DWORD), (LPCSTR)&dwInput, sizeof(DrvInfo), (LPSTR)&DrvInfo);
+                if (ret <= 0)
+                {
+                    ERR("Driver claims to support OPENGL_GETINFO escape code, but doesn't. ret: %X\n", ret);
+                    return NULL;
+                }
+            }
+            else
+            {
+                /* Windows also supports a registered software ICD when the
+                 * display provides none. Use the normal registry validation
+                 * and loading path; an absent or unusable MSOGL registration
+                 * still falls back to the built-in software implementation. */
+                DrvInfo.Version = 2;
+                DrvInfo.DriverVersion = 1;
+                wcscpy(DrvInfo.DriverName, L"MSOGL");
             }
         }
 
