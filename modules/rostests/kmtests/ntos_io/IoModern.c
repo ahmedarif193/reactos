@@ -6,6 +6,7 @@
  */
 
 #include <kmt_test.h>
+#include "../ntos_po/PoFxState_pnp.h"
 
 typedef struct _TEST_IO_WORK_CONTEXT
 {
@@ -193,8 +194,31 @@ TestDeviceNumaNode(VOID)
     trace("IoGetDeviceNumaNode returned 0x%08lx, node %u\n",
           Status,
           NodeNumber);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_eq_ulong(NodeNumber, MAXUSHORT);
+}
+
+START_TEST(IoDeviceNumaNode)
+{
+    PDEVICE_OBJECT Fdo, Pdo;
+    USHORT NodeNumber;
+    NTSTATUS Status;
+
+    Fdo = KmtPoFxAcquireDevice(&Pdo);
+    ok(Fdo != NULL, "no started test PDO; install kmtest_pofx.inf\n");
+    if (Fdo == NULL)
+        return;
+
+    NodeNumber = MAXUSHORT;
+    Status = IoGetDeviceNumaNode(Fdo, &NodeNumber);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_eq_ulong(NodeNumber, MAXUSHORT);
+
+    Status = IoGetDeviceNumaNode(Pdo, &NodeNumber);
+    trace("IoGetDeviceNumaNode(PDO) returned 0x%08lx, node %u\n", Status, NodeNumber);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    ok_eq_ulong(NodeNumber, 0);
+    ok(NodeNumber <= KeQueryHighestNodeNumber(), "invalid NUMA node %u\n", NodeNumber);
+    KmtPoFxReleaseDevice(Fdo);
 }
 
 START_TEST(IoModern)

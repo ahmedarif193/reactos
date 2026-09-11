@@ -1978,6 +1978,9 @@ IoGetDeviceNumaNode(
     if ((PhysicalDeviceObject == NULL) || (NodeNumber == NULL))
         return STATUS_INVALID_PARAMETER;
 
+    if (IopGetDeviceNode(PhysicalDeviceObject) == NULL)
+        return STATUS_INVALID_PARAMETER;
+
     /* ReactOS currently models a single NUMA node. */
     *NodeNumber = 0;
     return STATUS_SUCCESS;
