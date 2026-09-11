@@ -1280,7 +1280,8 @@ PiControlSyncDeviceAction(
 
     ASSERT(ControlClass == PlugPlayControlEnumerateDevice ||
            ControlClass == PlugPlayControlStartDevice ||
-           ControlClass == PlugPlayControlResetDevice);
+           ControlClass == PlugPlayControlResetDevice ||
+           ControlClass == PlugPlayControlDeregisterDevice);
 
     Status = IopCaptureUnicodeString(&DeviceInstance, &DeviceData->DeviceInstance);
     if (!NT_SUCCESS(Status))
@@ -1311,6 +1312,9 @@ PiControlSyncDeviceAction(
         case PlugPlayControlResetDevice:
             Action = PiActionResetDevice;
             break;
+        case PlugPlayControlDeregisterDevice:
+            Action = PiActionRemoveDevice;
+            break;
         default:
             UNREACHABLE;
             break;
@@ -1331,6 +1335,30 @@ PiControlQueryRemoveDevice(
     PDEVICE_OBJECT DeviceObject;
     NTSTATUS Status;
     UNICODE_STRING DeviceInstance;
+    PWSTR VetoName;
+    ULONG NameLength, Flags;
+    PI_QUERY_REMOVE_DATA RemoveData;
+
+    /* Capture and probe all outputs before initiating removal. */
+    _SEH2_TRY
+    {
+        Flags = ControlData->Flags;
+        VetoName = ControlData->VetoName;
+        NameLength = ControlData->NameLength;
+        if (Flags != 0 || NameLength > MAXULONG / sizeof(WCHAR) || (!VetoName && NameLength))
+            _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+        if (VetoName && NameLength)
+        {
+            ProbeForWrite(VetoName, (SIZE_T)NameLength * sizeof(WCHAR), sizeof(WCHAR));
+            VetoName[0] = UNICODE_NULL;
+        }
+        ControlData->VetoType = PNP_VetoTypeUnknown;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
 
     Status = IopCaptureUnicodeString(&DeviceInstance, &ControlData->DeviceInstance);
     if (!NT_SUCCESS(Status))
@@ -1348,8 +1376,26 @@ PiControlQueryRemoveDevice(
         return STATUS_NO_SUCH_DEVICE;
     }
 
-    UNIMPLEMENTED;
-    Status = STATUS_NOT_IMPLEMENTED;
+    Status = PiQueryRemoveDevice(DeviceObject, &RemoveData);
+
+    /* The worker returns owned kernel storage. Copy it only in the caller's
+     * context, after cancellation has finished and the device is usable. */
+    _SEH2_TRY
+    {
+        ControlData->VetoType = RemoveData.VetoType;
+        if (VetoName && NameLength && RemoveData.VetoName.Buffer)
+        {
+            ULONG Length = min(NameLength - 1, RemoveData.VetoName.Length / sizeof(WCHAR));
+            RtlCopyMemory(VetoName, RemoveData.VetoName.Buffer, Length * sizeof(WCHAR));
+            VetoName[Length] = UNICODE_NULL;
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    RtlFreeUnicodeString(&RemoveData.VetoName);
 
     ObDereferenceObject(DeviceObject);
 
@@ -1697,7 +1743,6 @@ NtPlugPlayControl(IN PLUGPLAY_CONTROL_CLASS PlugPlayControlClass,
                                              PlugPlayControlClass);
 
 //        case PlugPlayControlRegisterNewDevice:
-//        case PlugPlayControlDeregisterDevice:
 
         case PlugPlayControlInitializeDevice:
             if (!Buffer || BufferLength < sizeof(PLUGPLAY_CONTROL_DEVICE_CONTROL_DATA))
@@ -1706,6 +1751,7 @@ NtPlugPlayControl(IN PLUGPLAY_CONTROL_CLASS PlugPlayControlClass,
 
         case PlugPlayControlStartDevice:
         case PlugPlayControlResetDevice:
+        case PlugPlayControlDeregisterDevice:
             if (!Buffer || BufferLength < sizeof(PLUGPLAY_CONTROL_DEVICE_CONTROL_DATA))
                 return STATUS_INVALID_PARAMETER;
             return PiControlSyncDeviceAction((PPLUGPLAY_CONTROL_DEVICE_CONTROL_DATA)Buffer,

@@ -116,6 +116,7 @@ PnpRootRegisterDevice(
 
     Device = ExAllocatePoolWithTag(PagedPool, sizeof(PNPROOT_DEVICE), TAG_PNP_ROOT);
     if (!Device) return STATUS_NO_MEMORY;
+    RtlZeroMemory(Device, sizeof(*Device));
 
     DeviceNode = IopGetDeviceNode(DeviceObject);
     if (!RtlCreateUnicodeString(&InstancePathCopy, DeviceNode->InstancePath.Buffer))
@@ -1324,6 +1325,11 @@ PnpRootPdoPnpControl(
 
         case IRP_MN_FILTER_RESOURCE_REQUIREMENTS: /* 0x0d */
             DPRINT("IRP_MJ_PNP / IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
+            break;
+
+        case IRP_MN_QUERY_REMOVE_DEVICE:
+        case IRP_MN_CANCEL_REMOVE_DEVICE:
+            Status = STATUS_SUCCESS;
             break;
 
         case IRP_MN_REMOVE_DEVICE:
