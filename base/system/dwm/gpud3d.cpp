@@ -67,15 +67,25 @@ struct Texture
 struct Surface
 {
     Texture Image;
-    ID3D11Texture2D *Source;
-    ULONG SurfaceId, Share, Generation, LastFrame;
+    ULONG SurfaceId, Share, Generation, WindowGeneration, LastFrame;
     ULONGLONG UpdateId;
     BOOL Client;
 
     void Reset()
     {
         Image.Reset();
-        Release(Source);
+    }
+};
+
+struct ClientSource
+{
+    ID3D11Texture2D *Resource;
+    ULONG SurfaceId, WindowGeneration, Share, LastFrame;
+
+    void Reset()
+    {
+        Release(Resource);
+        ZeroMemory(this, sizeof(*this));
     }
 };
 
@@ -125,6 +135,7 @@ struct Compositor
     ID3D11Query *Completion;
     Texture Canvas, Backdrop;
     Surface Surfaces[DWM_MAX_WINDOWS * 2];
+    ClientSource ClientSources[DWM_MAX_WINDOWS * 2];
     BlurTarget Blurs[4];
     DWM_GPU_SCENE_CACHE Scene;
     BOOL LowerUnchanged[DWM_MAX_WINDOWS];
@@ -537,6 +548,105 @@ Texture *UploadGdi(const DWM_WIN *Window, const BYTE *Pixels)
     return &Slot->Image;
 }
 
+ClientSource *ImportClientSource(const DWM_WIN *Window)
+{
+    if (Window->Generation == 0)
+        return NULL;
+    ClientSource *Found = NULL, *Available = NULL, *Oldest = NULL, *OwnerOldest = NULL;
+    ULONG OwnerCount = 0;
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.ClientSources); ++Index)
+    {
+        ClientSource *Source = &State.ClientSources[Index];
+        if (Source->Resource == NULL)
+        {
+            if (Available == NULL)
+                Available = Source;
+        }
+        else
+        {
+            if (Source->SurfaceId == Window->SurfaceId && Source->WindowGeneration == Window->Generation)
+            {
+                ++OwnerCount;
+                if (Source->Share == Window->DxGlobalShare)
+                {
+                    Found = Source;
+                    break;
+                }
+                if (Source->LastFrame != State.Frame &&
+                    (OwnerOldest == NULL || State.Frame - Source->LastFrame > State.Frame - OwnerOldest->LastFrame))
+                    OwnerOldest = Source;
+            }
+            if (Source->LastFrame != State.Frame &&
+                (Oldest == NULL || State.Frame - Source->LastFrame > State.Frame - Oldest->LastFrame))
+                Oldest = Source;
+        }
+    }
+    /* DXGI has at most 16 swapchain buffers. Also bound same-size replacement
+     * history when ResizeBuffers leaves the window's GDI generation intact. */
+    ClientSource *Destination = Found ? Found : OwnerCount >= 16 ? OwnerOldest : Available ? Available : Oldest;
+    if (Destination == NULL)
+        return NULL;
+
+    ID3D11Texture2D *Resource = Found ? Found->Resource : NULL;
+    if (Resource == NULL && !Result(State.Device->OpenSharedResource((HANDLE)(ULONG_PTR)Window->DxGlobalShare,
+        IID_ID3D11Texture2D, (void **)&Resource), "OpenSharedResource client"))
+        return NULL;
+    D3D11_TEXTURE2D_DESC Desc;
+    Resource->GetDesc(&Desc);
+    if (Desc.Width != Window->DxWidth || Desc.Height != Window->DxHeight ||
+        Desc.MipLevels != 1 || Desc.ArraySize != 1 || Desc.SampleDesc.Count != 1 ||
+        !(Desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) || Desc.Format != (DXGI_FORMAT)Window->DxFormat)
+    {
+        if (Found == NULL)
+            Release(Resource);
+        return NULL;
+    }
+    if (Found == NULL)
+    {
+        /* Holding an opened resource retains its shared handle and backing
+         * allocation. DxGeneration identifies a publication registration and
+         * changes when a swapchain selects another buffer; it is checked by
+         * Import before copying, rather than reopening this same allocation.
+         * Never evict an import read by the current frame before its EVENT. */
+        Destination->Reset();
+        Destination->Resource = Resource;
+        Destination->SurfaceId = Window->SurfaceId;
+        Destination->WindowGeneration = Window->Generation;
+        Destination->Share = Window->DxGlobalShare;
+    }
+    Destination->LastFrame = State.Frame;
+    return Destination;
+}
+
+void PruneClientSources(const DWM_WIN *Windows, ULONG Count)
+{
+    if (State.WorkPending)
+        return;
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.ClientSources); ++Index)
+    {
+        ClientSource *Source = &State.ClientSources[Index];
+        if (Source->Resource == NULL)
+            continue;
+        D3D11_TEXTURE2D_DESC Desc;
+        Source->Resource->GetDesc(&Desc);
+        BOOL Present = FALSE;
+        for (ULONG WindowIndex = 0; WindowIndex < Count; ++WindowIndex)
+        {
+            const DWM_WIN *Window = &Windows[WindowIndex];
+            if (Window->SurfaceId == Source->SurfaceId && Window->Generation == Source->WindowGeneration &&
+                Window->DxGlobalShare != 0 && Window->DxGeneration != 0 && Window->DxUpdateId != 0 &&
+                Desc.Width == Window->DxWidth && Desc.Height == Window->DxHeight &&
+                Desc.Format == (DXGI_FORMAT)Window->DxFormat)
+            {
+                Present = TRUE;
+                break;
+            }
+        }
+        if (!Present)
+            Source->Reset();
+    }
+}
+
 Texture *Import(const DWM_WIN *Window, BOOL Client)
 {
     ULONG Share = Client ? Window->DxGlobalShare : Window->BaseGlobalShare;
@@ -555,30 +665,11 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
     {
         if (Window->DxUpdateId == 0)
             return NULL;
-        if (Slot->Source == NULL || Slot->Share != Share || Slot->Generation != Generation)
-        {
-            ID3D11Texture2D *Source = NULL;
-            if (!Result(State.Device->OpenSharedResource((HANDLE)(ULONG_PTR)Share,
-                IID_ID3D11Texture2D, (void **)&Source), "OpenSharedResource client"))
-                return NULL;
-            D3D11_TEXTURE2D_DESC Desc;
-            Source->GetDesc(&Desc);
-            if (Desc.Width != Width || Desc.Height != Height || Desc.MipLevels != 1 || Desc.ArraySize != 1 ||
-                Desc.SampleDesc.Count != 1 || !(Desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) ||
-                Desc.Format != (DXGI_FORMAT)Format)
-            {
-                Release(Source);
-                return NULL;
-            }
-            Release(Slot->Source);
-            Slot->Source = Source;
-            Slot->Share = Share;
-            Slot->Generation = Generation;
-            Slot->SurfaceId = Window->SurfaceId;
-            Slot->Client = TRUE;
-            Slot->UpdateId = 0;
-        }
-        if (Slot->UpdateId != Window->DxUpdateId)
+        ClientSource *Source = ImportClientSource(Window);
+        if (Source == NULL)
+            return NULL;
+        if (Slot->Share != Share || Slot->Generation != Generation ||
+            Slot->WindowGeneration != Window->Generation || Slot->UpdateId != Window->DxUpdateId)
         {
             if (!EnsureTexture(Slot->Image, Width, Height, FALSE, (DXGI_FORMAT)Format))
                 return NULL;
@@ -586,10 +677,15 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
              * again. Retain a GPU-owned snapshot so unrelated desktop damage
              * keeps drawing the last published pixels until its next update. */
             UnbindTextures();
-            State.Context->CopyResource(Slot->Image.Resource, Slot->Source);
+            State.Context->CopyResource(Slot->Image.Resource, Source->Resource);
             State.WorkPending = TRUE;
             if (!Result(State.Device->GetDeviceRemovedReason(), "Client texture snapshot"))
                 return NULL;
+            Slot->Share = Share;
+            Slot->Generation = Generation;
+            Slot->WindowGeneration = Window->Generation;
+            Slot->SurfaceId = Window->SurfaceId;
+            Slot->Client = TRUE;
             Slot->UpdateId = Window->DxUpdateId;
         }
         Slot->LastFrame = State.Frame;
@@ -850,6 +946,8 @@ DwmD3dShutdown(void)
     }
     for (ULONG Index = 0; Index < ARRAYSIZE(State.Surfaces); ++Index)
         State.Surfaces[Index].Reset();
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.ClientSources); ++Index)
+        State.ClientSources[Index].Reset();
     for (ULONG Index = 0; Index < ARRAYSIZE(State.Blurs); ++Index)
         State.Blurs[Index].Reset();
     State.Backdrop.Reset();
@@ -888,6 +986,7 @@ DwmD3dScene(const DWM_WIN *Windows, ULONG Count, const RECTL *BlurRects,
     }
     DWM_GPU_SCENE_SPACE Space = {OriginX, OriginY, State.Width, State.Height, BlurRadius, *ShadowMargins};
     DwmGpuCacheScene(&State.Scene, Windows, Count, BlurRects, BlurRectCount, &Space, RefreshBackdrop, State.LowerUnchanged);
+    PruneClientSources(Windows, Count);
 }
 
 void
