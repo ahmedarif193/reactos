@@ -69,7 +69,6 @@ typedef struct _FIND_FILE_DATA
 {
     HANDLE Handle;
     FINDEX_INFO_LEVELS InfoLevel;
-    FINDEX_SEARCH_OPS SearchOp;
 
     /*
      * For handling STATUS_BUFFER_OVERFLOW errors emitted by
@@ -463,11 +462,10 @@ FindNextFileW(IN HANDLE hFindFile,
                 FindFileData->NextDirInfo.DirInfo = NULL;
             }
 
-            if ((FindFileData->SearchOp != FindExSearchLimitToDirectories) ||
-                (DirInfo.FullDirInfo->FileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-            {
-                FoundFile = DirInfo;
-            }
+            /* FindExSearchLimitToDirectories is a filesystem advisory hint,
+             * not a Win32 post-filter. Native Windows returns files on both
+             * FAT32 and NTFS; callers must inspect the returned attributes. */
+            FoundFile = DirInfo;
         } while ( FoundFile.DirInfo == NULL && (FindFileData->NextDirInfo.DirInfo || FindFileData->HasMoreData) );
 
         if (FoundFile.DirInfo != NULL)
@@ -924,7 +922,6 @@ FindFirstFileExW(IN LPCWSTR lpFileName,
 
         FindFileData->Handle = hDirectory;
         FindFileData->InfoLevel = fInfoLevelId;
-        FindFileData->SearchOp = fSearchOp;
         FindFileData->HasMoreData = FALSE;
         FindFileData->NextDirInfo.DirInfo = NULL;
 
