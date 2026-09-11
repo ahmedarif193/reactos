@@ -96,7 +96,7 @@ static inline void udelay(LONG usec) {
 #define DBG_PNP   2
 #define DBG_IOCTL 4
 
-#define SklHdAudBusDebugLevel 100
+#define SklHdAudBusDebugLevel DEBUG_LEVEL_INFO
 #define SklHdAudBusDebugCategories (DBG_INIT | DBG_PNP | DBG_IOCTL)
 
 #define SklHdAudBusPrint(dbglevel, dbgcategory, fmt, ...) {          \
