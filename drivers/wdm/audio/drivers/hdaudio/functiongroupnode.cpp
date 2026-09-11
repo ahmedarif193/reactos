@@ -596,6 +596,14 @@ CFunctionGroupNode::GetAmplifierDetails(
     ULONG Response = 0;
     NTSTATUS Status;
 
+    Verb = (m_CodecAddress << 28) | (NodeId << 20) | (AC_VERB_PARAMETERS << 8) | AC_PAR_AUDIO_WIDGET_CAP;
+    Status = m_Adapter->TransferVerb(Verb, &Response);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!(Response & (Input ? AC_WCAP_IN_AMP : AC_WCAP_OUT_AMP)))
+        return STATUS_NOT_SUPPORTED;
+    Response = 0;
+
     Verb = (m_CodecAddress << 28) | (NodeId << 20) | (AC_VERB_PARAMETERS << 8);
     if (Input)
     {
@@ -654,7 +662,7 @@ CFunctionGroupNode::GetAmplifierGainMute(
     NTSTATUS Status;
 
     Verb = (m_CodecAddress << 28) | (NodeId << 20) | (AC_VERB_GET_AMP_GAIN_MUTE << 8) |
-    Input | Right | AC_AMP_GET_INDEX;
+    (Input ? AC_AMP_GET_INPUT : AC_AMP_GET_OUTPUT) | (Right ? AC_AMP_GET_RIGHT : AC_AMP_GET_LEFT);
     Status = m_Adapter->TransferVerb(Verb, &Response);
     if (!NT_SUCCESS(Status))
     {
@@ -680,7 +688,8 @@ CFunctionGroupNode::SetAmplifierGainMute(
     NTSTATUS Status;
 
     Verb = (m_CodecAddress << 28) | (NodeId << 20) | (AC_VERB_SET_AMP_GAIN_MUTE << 8) |
-    !Input | Input | !Right | Right | Mute | Gain;
+    (Input ? AC_AMP_SET_INPUT : AC_AMP_SET_OUTPUT) | (Right ? AC_AMP_SET_RIGHT : AC_AMP_SET_LEFT) |
+    (Mute ? AC_AMP_MUTE : 0) | (Gain & AC_AMP_GAIN);
     Status = m_Adapter->TransferVerb(Verb, &Response);
     if (!NT_SUCCESS(Status))
     {
