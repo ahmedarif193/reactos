@@ -137,8 +137,6 @@ PsSetCreateProcessNotifyRoutineEx(IN PCREATE_PROCESS_NOTIFY_ROUTINE_EX NotifyRou
 {
     PAGED_CODE();
 
-    if (!NotifyRoutine) return STATUS_INVALID_PARAMETER;
-
     return PspSetCreateProcessNotifyRoutine((PVOID)NotifyRoutine, TRUE, Remove);
 }
 
@@ -160,7 +158,7 @@ PsSetCreateProcessNotifyRoutineEx2(
 {
     PAGED_CODE();
 
-    if ((NotifyType != PsCreateProcessNotifySubsystems) || !NotifyInformation)
+    if (NotifyType != PsCreateProcessNotifySubsystems)
         return STATUS_INVALID_PARAMETER;
 
     return PsSetCreateProcessNotifyRoutineEx(
