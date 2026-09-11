@@ -53,7 +53,16 @@ TestCreateProcessNotifyEx2(VOID)
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
 
     Status = PsSetCreateProcessNotifyRoutineEx2(PsCreateProcessNotifySubsystems, NULL, FALSE);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    ok_eq_hex(Status, STATUS_ACCESS_DENIED);
+
+    Status = PsSetCreateProcessNotifyRoutineEx2(PsCreateProcessNotifySubsystems, NULL, TRUE);
+    ok_eq_hex(Status, STATUS_PROCEDURE_NOT_FOUND);
+
+    Status = PsSetCreateProcessNotifyRoutineEx(NULL, FALSE);
+    ok_eq_hex(Status, STATUS_ACCESS_DENIED);
+
+    Status = PsSetCreateProcessNotifyRoutineEx(NULL, TRUE);
+    ok_eq_hex(Status, STATUS_PROCEDURE_NOT_FOUND);
 
     Status = PsSetCreateProcessNotifyRoutineEx2(PsCreateProcessNotifySubsystems, ProcessNotifyEx, TRUE);
     ok_eq_hex(Status, STATUS_PROCEDURE_NOT_FOUND);
