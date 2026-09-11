@@ -439,7 +439,6 @@ START_TEST(MmMapLockedPagesSpecifyCache)
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     trace("MaximumUserModeAddress: %p\n", (PVOID)BasicInfo.MaximumUserModeAddress);
-    trace("MDL limit fixture: PEB=%p TEB=%p\n", NtCurrentTeb()->ProcessEnvironmentBlock, NtCurrentTeb());
     HighestAddress = ALIGN_DOWN_BY(BasicInfo.MaximumUserModeAddress, PAGE_SIZE);
 
     /* Explicit driver mappings can use the final pages below the user limit. */
@@ -467,20 +466,37 @@ START_TEST(MmMapLockedPagesSpecifyCache)
         C_ASSERT(15 * PAGE_SIZE <= MAXUSHORT);
         for (Index = 0; Index < ARRAYSIZE(Cases); ++Index)
         {
+            MEMORY_BASIC_INFORMATION BeforeInfo, AfterInfo;
+            NTSTATUS ExpectedStatus = Cases[Index].Status;
+            BOOLEAN Occupied = FALSE;
             PVOID Requested = (PVOID)(HighestAddress -
                 (LONG_PTR)Cases[Index].PagesBelowHighest * PAGE_SIZE + Cases[Index].Offset);
 
-            TestFreeUserLimit(Requested, BasicInfo.MaximumUserModeAddress);
+            /* The last ordinary VAD page can already contain the PEB or TEB. */
+            if (NT_SUCCESS(ExpectedStatus))
+            {
+                Status = NtQueryVirtualMemory(NtCurrentProcess(), Requested,
+                                             MemoryBasicInformation, &BeforeInfo,
+                                             sizeof(BeforeInfo), NULL);
+                ok_eq_hex(Status, STATUS_SUCCESS);
+                if (!NT_SUCCESS(Status))
+                    break;
+                Occupied = BeforeInfo.State != MEM_FREE;
+                if (Occupied)
+                    ExpectedStatus = STATUS_CONFLICTING_ADDRESSES;
+            }
+            if (!Occupied)
+                TestFreeUserLimit(Requested, BasicInfo.MaximumUserModeAddress);
             BufferLength = Cases[Index].Pages * PAGE_SIZE;
             FILL_QUERY_BUFFER(QueryBuffer, BufferLength, FALSE);
             QueryBuffer.Buffer = Requested;
-            QueryBuffer.Status = Cases[Index].Status;
+            QueryBuffer.Status = ExpectedStatus;
             Length = sizeof(QUERY_BUFFER);
             Error = KmtSendBufferToDriver(IOCTL_QUERY_BUFFER, &QueryBuffer, sizeof(QueryBuffer), &Length);
             ok_eq_ulong(Error, ERROR_SUCCESS);
             if (Error != ERROR_SUCCESS)
                 break;
-            ok_eq_hex(QueryBuffer.Status, Cases[Index].Status);
+            ok_eq_hex(QueryBuffer.Status, ExpectedStatus);
             ok_eq_int(QueryBuffer.Length, BufferLength);
             if (NT_SUCCESS(QueryBuffer.Status))
             {
@@ -499,7 +515,25 @@ START_TEST(MmMapLockedPagesSpecifyCache)
             Length = 0;
             Error = KmtSendBufferToDriver(IOCTL_CLEAN, NULL, 0, &Length);
             ok_eq_ulong(Error, ERROR_SUCCESS);
-            TestFreeUserLimit(Requested, BasicInfo.MaximumUserModeAddress);
+            if (Occupied)
+            {
+                Status = NtQueryVirtualMemory(NtCurrentProcess(), Requested,
+                                             MemoryBasicInformation, &AfterInfo,
+                                             sizeof(AfterInfo), NULL);
+                ok_eq_hex(Status, STATUS_SUCCESS);
+                if (NT_SUCCESS(Status))
+                {
+                    ok_eq_pointer(AfterInfo.BaseAddress, BeforeInfo.BaseAddress);
+                    ok_eq_pointer(AfterInfo.AllocationBase, BeforeInfo.AllocationBase);
+                    ok_eq_hex(AfterInfo.AllocationProtect, BeforeInfo.AllocationProtect);
+                    ok_eq_size(AfterInfo.RegionSize, BeforeInfo.RegionSize);
+                    ok_eq_hex(AfterInfo.State, BeforeInfo.State);
+                    ok_eq_hex(AfterInfo.Protect, BeforeInfo.Protect);
+                    ok_eq_hex(AfterInfo.Type, BeforeInfo.Type);
+                }
+            }
+            else
+                TestFreeUserLimit(Requested, BasicInfo.MaximumUserModeAddress);
         }
     }
 
