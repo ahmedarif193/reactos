@@ -381,4 +381,7 @@
 #if (NTDDI_VERSION >= NTDDI_VISTA)
     SVC_(GetNextThread, 6)
 #endif
+    SVC_(CreateWaitCompletionPacket, 3)
+    SVC_(AssociateWaitCompletionPacket, 8)
+    SVC_(CancelWaitCompletionPacket, 2)
 #endif // SYSFUNCS_NT5_ONLY

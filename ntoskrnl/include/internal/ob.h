@@ -11,6 +11,8 @@
 //
 #define _OB_DEBUG_                                      0x00
 
+PVOID ObpGetObjectWaitObject(POBJECT_TYPE ObjectType, PVOID Object);
+
 //
 // These define the Debug Masks Supported
 //

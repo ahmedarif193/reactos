@@ -747,6 +747,9 @@ BOOLEAN
 NTAPI
 KeDisableThreadApcQueueing(IN PKTHREAD Thread);
 
+/* WaitDpc blocks belong to completion associations, not to KTHREADs. */
+VOID FASTCALL IopSignalWaitCompletionPacket(PKWAIT_BLOCK WaitBlock);
+
 VOID
 FASTCALL
 KiWaitTest(
