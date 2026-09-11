@@ -255,6 +255,95 @@ PortMiniportTimerDpc(
 
 static
 VOID
+PortCompleteRequest(
+    _In_opt_ PFDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ PVOID Srb,
+    _In_ PIRP Irp)
+{
+    PSTORAGE_REQUEST_BLOCK ExtendedSrb;
+    PSRBEX_DATA_SCSI_CDB16 ScsiData;
+    PSTOR_SRB_CONTEXT SrbContext;
+    PSCSI_REQUEST_BLOCK LegacySrb;
+
+    LegacySrb = Srb;
+    if (PortIsExtendedSrb(Srb))
+    {
+        ExtendedSrb = (PSTORAGE_REQUEST_BLOCK)Srb;
+        SrbContext = PortGetSrbContext(Irp);
+        if (SrbContext == NULL || SrbContext->LegacySrb == NULL)
+            return;
+
+        LegacySrb = SrbContext->LegacySrb;
+        LegacySrb->SrbStatus = ExtendedSrb->SrbStatus;
+        LegacySrb->DataTransferLength = ExtendedSrb->DataTransferLength;
+        if (ExtendedSrb->SrbFunction == SRB_FUNCTION_EXECUTE_SCSI && ExtendedSrb->NumSrbExData != 0 && ExtendedSrb->SrbExDataOffset[0] >= sizeof(*ExtendedSrb) && ExtendedSrb->SrbExDataOffset[0] + sizeof(*ScsiData) <= ExtendedSrb->SrbLength)
+        {
+            ScsiData = (PSRBEX_DATA_SCSI_CDB16)((PUCHAR)ExtendedSrb + ExtendedSrb->SrbExDataOffset[0]);
+            if (ScsiData->Type == SrbExDataTypeScsiCdb16)
+            {
+                LegacySrb->ScsiStatus = ScsiData->ScsiStatus;
+                LegacySrb->SenseInfoBufferLength = ScsiData->SenseInfoBufferLength;
+            }
+        }
+    }
+
+    if (Irp->Tail.Overlay.DriverContext[3] == PORT_DUMP_IRP_MARKER)
+    {
+        PPORT_DUMP_CONTEXT DumpContext = Irp->Tail.Overlay.DriverContext[2];
+
+        DumpContext->Status = PortSrbStatusToNtStatus(LegacySrb->SrbStatus);
+        KeMemoryBarrier();
+        InterlockedExchange(&DumpContext->Completed, 1);
+        return;
+    }
+
+    if ((DeviceExtension != NULL) && DeviceExtension->DumpMode)
+    {
+        return;
+    }
+
+    /*
+     * The miniport is done with this request. Translate the SRB
+     * status, release the per-request state the port driver
+     * allocated in PortPdoScsi and complete the IRP.
+     */
+    Irp->IoStatus.Status = PortSrbStatusToNtStatus(LegacySrb->SrbStatus);
+    Irp->IoStatus.Information = NT_SUCCESS(Irp->IoStatus.Status) ? LegacySrb->DataTransferLength : 0;
+
+    LegacySrb->SrbExtension = NULL;
+
+    PortFreeSrbContext(Irp);
+
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+}
+
+static
+VOID
+NTAPI
+PortRequestCompletionDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PFDO_DEVICE_EXTENSION DeviceExtension = DeferredContext;
+    PLIST_ENTRY Entry;
+    PIRP Irp;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    while ((Entry = ExInterlockedRemoveHeadList(&DeviceExtension->CompletionListHead,
+                                                &DeviceExtension->CompletionLock)) != NULL)
+    {
+        Irp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+        PortCompleteRequest(DeviceExtension, Irp->Tail.Overlay.DriverContext[1], Irp);
+    }
+}
+
+static
+VOID
 NTAPI
 PortMiniportTimerRequestDpc(
     _In_ PKDPC Dpc,
@@ -391,6 +480,11 @@ PortAddDevice(
                     DeviceExtension);
     KeInitializeSpinLock(&DeviceExtension->MiniportTimerLock);
     KeInitializeSpinLock(&DeviceExtension->MiniportExLock);
+    KeInitializeSpinLock(&DeviceExtension->CompletionLock);
+    InitializeListHead(&DeviceExtension->CompletionListHead);
+    KeInitializeDpc(&DeviceExtension->CompletionDpc,
+                    PortRequestCompletionDpc,
+                    DeviceExtension);
 
     KeInitializeSpinLock(&DeviceExtension->PdoListLock);
     InitializeListHead(&DeviceExtension->PdoListHead);
@@ -2574,9 +2668,6 @@ StorPortNotification(
     {
         case RequestComplete:
         {
-            PSTORAGE_REQUEST_BLOCK ExtendedSrb;
-            PSRBEX_DATA_SCSI_CDB16 ScsiData;
-            PSTOR_SRB_CONTEXT SrbContext;
             PIRP Irp;
 
             DPRINT("RequestComplete\n");
@@ -2586,55 +2677,18 @@ StorPortNotification(
             Irp = Srb != NULL ? PortGetOriginalRequestFromSrb(Srb) : NULL;
             if (Irp != NULL)
             {
-                if (PortIsExtendedSrb(Srb))
+                if ((DeviceExtension != NULL) && !DeviceExtension->DumpMode && KeGetCurrentIrql() > DISPATCH_LEVEL)
                 {
-                    ExtendedSrb = (PSTORAGE_REQUEST_BLOCK)Srb;
-                    SrbContext = PortGetSrbContext(Irp);
-                    if (SrbContext == NULL || SrbContext->LegacySrb == NULL)
-                        break;
-
-                    Srb = SrbContext->LegacySrb;
-                    Srb->SrbStatus = ExtendedSrb->SrbStatus;
-                    Srb->DataTransferLength = ExtendedSrb->DataTransferLength;
-                    if (ExtendedSrb->SrbFunction == SRB_FUNCTION_EXECUTE_SCSI && ExtendedSrb->NumSrbExData != 0 && ExtendedSrb->SrbExDataOffset[0] >= sizeof(*ExtendedSrb) && ExtendedSrb->SrbExDataOffset[0] + sizeof(*ScsiData) <= ExtendedSrb->SrbLength)
-                    {
-                        ScsiData = (PSRBEX_DATA_SCSI_CDB16)((PUCHAR)ExtendedSrb + ExtendedSrb->SrbExDataOffset[0]);
-                        if (ScsiData->Type == SrbExDataTypeScsiCdb16)
-                        {
-                            Srb->ScsiStatus = ScsiData->ScsiStatus;
-                            Srb->SenseInfoBufferLength = ScsiData->SenseInfoBufferLength;
-                        }
-                    }
+                    Irp->Tail.Overlay.DriverContext[1] = Srb;
+                    ExInterlockedInsertTailList(&DeviceExtension->CompletionListHead,
+                                                &Irp->Tail.Overlay.ListEntry,
+                                                &DeviceExtension->CompletionLock);
+                    KeInsertQueueDpc(&DeviceExtension->CompletionDpc, NULL, NULL);
                 }
-
-                if (Irp->Tail.Overlay.DriverContext[3] == PORT_DUMP_IRP_MARKER)
+                else
                 {
-                    PPORT_DUMP_CONTEXT DumpContext = Irp->Tail.Overlay.DriverContext[2];
-
-                    DumpContext->Status = PortSrbStatusToNtStatus(Srb->SrbStatus);
-                    KeMemoryBarrier();
-                    InterlockedExchange(&DumpContext->Completed, 1);
-                    break;
+                    PortCompleteRequest(DeviceExtension, Srb, Irp);
                 }
-
-                if ((DeviceExtension != NULL) && DeviceExtension->DumpMode)
-                {
-                    break;
-                }
-
-                /*
-                 * The miniport is done with this request. Translate the SRB
-                 * status, release the per-request state the port driver
-                 * allocated in PortPdoScsi and complete the IRP.
-                 */
-                Irp->IoStatus.Status = PortSrbStatusToNtStatus(Srb->SrbStatus);
-                Irp->IoStatus.Information = NT_SUCCESS(Irp->IoStatus.Status) ? Srb->DataTransferLength : 0;
-
-                Srb->SrbExtension = NULL;
-
-                PortFreeSrbContext(Irp);
-
-                IoCompleteRequest(Irp, IO_NO_INCREMENT);
             }
             break;
         }
