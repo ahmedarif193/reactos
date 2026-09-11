@@ -124,6 +124,16 @@ NewDevSetFailedInstall(
                                CM_PROB_FAILED_INSTALL,
                                CM_SET_DEVNODE_PROBLEM_OVERRIDE);
     }
+    else
+    {
+        ULONG ulStatus, ulProblem;
+
+        if (CM_Get_DevNode_Status(&ulStatus, &ulProblem, DevInfoData->DevInst, 0) == CR_SUCCESS &&
+            (ulStatus & DN_HAS_PROBLEM) && ulProblem == CM_PROB_FAILED_INSTALL)
+        {
+            CM_Set_DevNode_Problem(DevInfoData->DevInst, 0, CM_SET_DEVNODE_PROBLEM_OVERRIDE);
+        }
+    }
 
     return TRUE;
 }
