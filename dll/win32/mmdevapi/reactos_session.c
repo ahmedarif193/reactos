@@ -12,6 +12,7 @@
 #define COBJMACROS
 #include "windef.h"
 #include "winbase.h"
+#include "winreg.h"
 #include "objbase.h"
 #include "audioclient.h"
 #include "audiopolicy.h"
@@ -317,6 +318,68 @@ static void finish_record_update(struct shared_audio_session *session)
         InterlockedExchange(&session->generation, 2);
 }
 
+static const WCHAR session_volume_key[] = L"Software\\ReactOS\\Audio\\SessionVolumes";
+
+struct persisted_session_volume
+{
+    float master_volume;
+    DWORD mute;
+};
+
+static void get_persisted_volume_name(const struct shared_audio_session *session,
+                                      WCHAR name[2 * MAX_PATH + 48])
+{
+    WCHAR guid[40];
+
+    if (!StringFromGUID2(&session->session_guid, guid, ARRAY_SIZE(guid)))
+        guid[0] = 0;
+    lstrcpyW(name, session->endpoint_id);
+    lstrcatW(name, L"|");
+    lstrcatW(name, guid);
+    lstrcatW(name, L"|");
+    lstrcatW(name, session->process_path);
+}
+
+static void load_persisted_volume(struct shared_audio_session *session)
+{
+    struct persisted_session_volume value;
+    WCHAR name[2 * MAX_PATH + 48];
+    DWORD type, size = sizeof(value);
+    HKEY key;
+
+    if (!session->process_path[0] ||
+        RegOpenKeyExW(HKEY_CURRENT_USER, session_volume_key, 0, KEY_QUERY_VALUE, &key))
+        return;
+
+    get_persisted_volume_name(session, name);
+    if (!RegQueryValueExW(key, name, NULL, &type, (BYTE *)&value, &size) &&
+        type == REG_BINARY && size == sizeof(value) &&
+        value.master_volume >= 0.0f && value.master_volume <= 1.0f)
+    {
+        session->master_volume = value.master_volume;
+        session->mute = !!value.mute;
+    }
+    RegCloseKey(key);
+}
+
+static void save_persisted_volume(const struct shared_audio_session *session)
+{
+    struct persisted_session_volume value;
+    WCHAR name[2 * MAX_PATH + 48];
+    HKEY key;
+
+    if (!session->process_path[0] ||
+        RegCreateKeyExW(HKEY_CURRENT_USER, session_volume_key, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &key, NULL))
+        return;
+
+    get_persisted_volume_name(session, name);
+    value.master_volume = session->master_volume;
+    value.mute = session->mute;
+    RegSetValueExW(key, name, 0, REG_BINARY, (const BYTE *)&value, sizeof(value));
+    RegCloseKey(key);
+}
+
 static void copy_record_snapshot(const struct shared_audio_session *session,
                                  struct reactos_audio_session_snapshot *snapshot)
 {
@@ -508,6 +571,7 @@ HRESULT reactos_audio_session_register(
             module_path[0] = 0;
         lstrcpynW(session->process_path, module_path,
                  ARRAY_SIZE(session->process_path));
+        load_persisted_volume(session);
         session->generation = 2;
         MemoryBarrier();
         InterlockedExchange(&session->occupied, TRUE);
@@ -644,7 +708,7 @@ HRESULT reactos_audio_session_read(
 HRESULT reactos_audio_session_set_master(
     const struct reactos_audio_session_id *id, float level)
 {
-    struct shared_audio_session *session;
+    struct shared_audio_session *session, saved;
     HRESULT hr;
 
     if (FAILED(hr = ensure_registry()))
@@ -659,14 +723,16 @@ HRESULT reactos_audio_session_set_master(
     begin_record_update(session);
     session->master_volume = level;
     finish_record_update(session);
+    saved = *session;
     unlock_registry();
+    save_persisted_volume(&saved);
     return S_OK;
 }
 
 HRESULT reactos_audio_session_set_mute(
     const struct reactos_audio_session_id *id, BOOL mute)
 {
-    struct shared_audio_session *session;
+    struct shared_audio_session *session, saved;
     HRESULT hr;
 
     if (FAILED(hr = ensure_registry()))
@@ -681,7 +747,9 @@ HRESULT reactos_audio_session_set_mute(
     begin_record_update(session);
     session->mute = !!mute;
     finish_record_update(session);
+    saved = *session;
     unlock_registry();
+    save_persisted_volume(&saved);
     return S_OK;
 }
 
