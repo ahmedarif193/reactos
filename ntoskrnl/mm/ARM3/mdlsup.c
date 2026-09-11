@@ -2203,7 +2203,9 @@ MmPrefetchPages(IN ULONG NumberOfLists,
     NTSTATUS Status;
     volatile UCHAR Sink = 0;
 
-    if ((NumberOfLists == 0) || (ReadLists == NULL))
+    if (NumberOfLists == 0)
+        return STATUS_SUCCESS;
+    if (ReadLists == NULL)
         return STATUS_INVALID_PARAMETER;
 
     MaximumSize.QuadPart = 0;
@@ -2598,7 +2600,6 @@ MmAllocateMdlForIoSpace(
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
     *NewMdl = NULL;
-    if (NumberOfEntries == 0) return STATUS_INVALID_PARAMETER_2;
 
     /*
      * Every range has to start on a page boundary, span whole pages, and
@@ -2640,7 +2641,7 @@ MmAllocateMdlForIoSpace(
      * Device memory is always present, so the pages count as locked, and the
      * MDL is not backed by any virtual address until the caller maps it.
      */
-    Mdl->MdlFlags |= (MDL_PAGES_LOCKED | MDL_IO_SPACE);
+    Mdl->MdlFlags |= MDL_PAGES_LOCKED;
     Mdl->StartVa = NULL;
     Mdl->ByteOffset = 0;
     Mdl->ByteCount = (ULONG)TotalBytes;

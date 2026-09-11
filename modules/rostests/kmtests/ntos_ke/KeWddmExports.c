@@ -66,11 +66,31 @@ VOID
 TestMmAllocateMdlForIoSpace(VOID)
 {
     MM_PHYSICAL_ADDRESS_LIST List[2];
+    PPHYSICAL_MEMORY_RANGE Ranges, Range;
+    ULONGLONG IoAddress = 0;
+    PVOID Ram;
     PMDL Mdl;
     NTSTATUS Status;
 
+    Ranges = MmGetPhysicalMemoryRanges();
+    ok(Ranges != NULL, "Could not query physical memory ranges\n");
+    if (Ranges == NULL)
+        return;
+    for (Range = Ranges; Range->NumberOfBytes.QuadPart != 0; ++Range)
+    {
+        ULONGLONG End = Range->BaseAddress.QuadPart + Range->NumberOfBytes.QuadPart;
+
+        if (End > IoAddress)
+            IoAddress = End;
+    }
+    ExFreePool(Ranges);
+    ok(IoAddress != 0 && IoAddress <= MAXLONGLONG - 4 * PAGE_SIZE,
+       "Invalid end of physical memory: %I64x\n", IoAddress);
+    if (IoAddress == 0 || IoAddress > MAXLONGLONG - 4 * PAGE_SIZE)
+        return;
+
     /* A range that is not page aligned is rejected */
-    List[0].PhysicalAddress.QuadPart = 0xF0000000 + 1;
+    List[0].PhysicalAddress.QuadPart = IoAddress + 1;
     List[0].NumberOfBytes = PAGE_SIZE;
     Mdl = NULL;
     Status = MmAllocateMdlForIoSpace(List, 1, &Mdl);
@@ -78,33 +98,50 @@ TestMmAllocateMdlForIoSpace(VOID)
     ok_eq_pointer(Mdl, NULL);
 
     /* A size that is not a whole number of pages is rejected */
-    List[0].PhysicalAddress.QuadPart = 0xF0000000;
+    List[0].PhysicalAddress.QuadPart = IoAddress;
     List[0].NumberOfBytes = PAGE_SIZE - 1;
     Mdl = NULL;
     Status = MmAllocateMdlForIoSpace(List, 1, &Mdl);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER_1);
     ok_eq_pointer(Mdl, NULL);
 
-    /* A zero-length list is rejected */
+    /* An empty list still returns an owned, zero-length MDL. */
     Mdl = NULL;
     Status = MmAllocateMdlForIoSpace(List, 0, &Mdl);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER_2);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(Mdl != NULL, "No MDL returned for an empty list\n");
+    if (Mdl != NULL)
+    {
+        ok_eq_ulong(MmGetMdlByteCount(Mdl), 0);
+        ok_eq_pointer(MmGetMdlVirtualAddress(Mdl), NULL);
+        ok((Mdl->MdlFlags & MDL_PAGES_LOCKED) != 0, "MDL_PAGES_LOCKED is not set\n");
+        ok((Mdl->MdlFlags & MDL_IO_SPACE) == 0, "MDL_IO_SPACE is set\n");
+        IoFreeMdl(Mdl);
+    }
 
-    /* RAM is not I/O space, so page zero must be refused */
-    List[0].PhysicalAddress.QuadPart = 0;
-    List[0].NumberOfBytes = PAGE_SIZE;
-    Mdl = NULL;
-    Status = MmAllocateMdlForIoSpace(List, 1, &Mdl);
-    ok_eq_hex(Status, STATUS_INVALID_PARAMETER_1);
-    ok_eq_pointer(Mdl, NULL);
+    /* Use an owned RAM page: page zero may be firmware-reserved or absent. */
+    Ram = ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE, 'oImK');
+    ok(Ram != NULL, "Could not allocate the RAM control page\n");
+    if (Ram != NULL)
+    {
+        List[0].PhysicalAddress = MmGetPhysicalAddress(Ram);
+        List[0].NumberOfBytes = PAGE_SIZE;
+        Mdl = NULL;
+        Status = MmAllocateMdlForIoSpace(List, 1, &Mdl);
+        ok_eq_hex(Status, STATUS_INVALID_PARAMETER_1);
+        ok_eq_pointer(Mdl, NULL);
+        if (Mdl != NULL)
+            IoFreeMdl(Mdl);
+        ExFreePoolWithTag(Ram, 'oImK');
+    }
 
     /*
      * Two discontiguous device ranges high above installed memory.  The MDL
      * has to describe both, in order, without being mapped anywhere.
      */
-    List[0].PhysicalAddress.QuadPart = 0xFED00000;
+    List[0].PhysicalAddress.QuadPart = IoAddress;
     List[0].NumberOfBytes = 2 * PAGE_SIZE;
-    List[1].PhysicalAddress.QuadPart = 0xFEE00000;
+    List[1].PhysicalAddress.QuadPart = IoAddress + 3 * PAGE_SIZE;
     List[1].NumberOfBytes = PAGE_SIZE;
     Mdl = NULL;
     Status = MmAllocateMdlForIoSpace(List, 2, &Mdl);
@@ -116,11 +153,11 @@ TestMmAllocateMdlForIoSpace(VOID)
         ok_eq_ulong(MmGetMdlByteCount(Mdl), 3 * PAGE_SIZE);
         ok_eq_ulong(MmGetMdlByteOffset(Mdl), 0UL);
         ok_eq_pointer(MmGetMdlVirtualAddress(Mdl), NULL);
-        ok((Mdl->MdlFlags & MDL_IO_SPACE) != 0, "MDL_IO_SPACE is not set\n");
+        ok((Mdl->MdlFlags & MDL_IO_SPACE) == 0, "MDL_IO_SPACE is set\n");
         ok((Mdl->MdlFlags & MDL_PAGES_LOCKED) != 0, "MDL_PAGES_LOCKED is not set\n");
-        ok_eq_ulongptr((ULONG_PTR)Pages[0], (ULONG_PTR)(0xFED00000 >> PAGE_SHIFT));
-        ok_eq_ulongptr((ULONG_PTR)Pages[1], (ULONG_PTR)((0xFED00000 >> PAGE_SHIFT) + 1));
-        ok_eq_ulongptr((ULONG_PTR)Pages[2], (ULONG_PTR)(0xFEE00000 >> PAGE_SHIFT));
+        ok_eq_ulongptr((ULONG_PTR)Pages[0], (ULONG_PTR)(IoAddress >> PAGE_SHIFT));
+        ok_eq_ulongptr((ULONG_PTR)Pages[1], (ULONG_PTR)((IoAddress >> PAGE_SHIFT) + 1));
+        ok_eq_ulongptr((ULONG_PTR)Pages[2], (ULONG_PTR)((IoAddress >> PAGE_SHIFT) + 3));
         IoFreeMdl(Mdl);
     }
 }
