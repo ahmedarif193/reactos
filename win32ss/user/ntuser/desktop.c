@@ -435,12 +435,12 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* String for Safe Mode */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Unofficial Build (%S%s) %wZ (Target: Windows 11 24H2 build %u%s)\n",
+                                     L"ReactOS Unofficial Build (%S%s) (Target: Windows 11 24H2 %u%s) %wZ\n",
                                      Flavor,
                                      ReleaseSuffix,
-                                     &BuildLabString,
                                      (VerInfo.dwBuildNumber & 0xFFFF),
-                                     VersionBuffer);
+                                     VersionBuffer,
+                                     &BuildLabString);
     }
     else
     {
@@ -448,13 +448,13 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
                                      L"ReactOS Unofficial Build (%S%s)\n"
-                                     L"Build %wZ\n"
-                                     L"Target: Windows 11 24H2 build %u%s\n",
+                                     L"Target: Windows 11 24H2 %u%s\n"
+                                     L"Build %wZ\n",
                                      Flavor,
                                      ReleaseSuffix,
-                                     &BuildLabString,
                                      (VerInfo.dwBuildNumber & 0xFFFF),
-                                     VersionBuffer);
+                                     VersionBuffer,
+                                     &BuildLabString);
     }
 
     if (!NT_SUCCESS(Status))
