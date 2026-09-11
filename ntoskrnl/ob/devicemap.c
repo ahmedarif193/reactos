@@ -645,7 +645,7 @@ ObQueryDeviceMapInformation(
     /* Copy back data */
     _SEH2_TRY
     {
-        RtlCopyMemory(DeviceMapInfo, &MapInfo, sizeof(PROCESS_DEVICEMAP_INFORMATION));
+        RtlCopyMemory(&DeviceMapInfo->Query, &MapInfo.Query, sizeof(MapInfo.Query));
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
