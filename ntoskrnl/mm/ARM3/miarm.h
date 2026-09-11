@@ -810,28 +810,28 @@ FORCEINLINE
 BOOLEAN
 MiIsUserPxe(PVOID Address)
 {
-    return ((ULONG_PTR)Address >> 7) == 0x1FFFFEDF6FB7DA0ULL;
+    return Address >= (PVOID)MiAddressToPxe(NULL) && Address <= (PVOID)MiAddressToPxe(MI_HIGHEST_USER_ADDRESS);
 }
 
 FORCEINLINE
 BOOLEAN
 MiIsUserPpe(PVOID Address)
 {
-    return ((ULONG_PTR)Address >> 16) == 0xFFFFF6FB7DA0ULL;
+    return Address >= (PVOID)MiAddressToPpe(NULL) && Address <= (PVOID)MiAddressToPpe(MI_HIGHEST_USER_ADDRESS);
 }
 
 FORCEINLINE
 BOOLEAN
 MiIsUserPde(PVOID Address)
 {
-    return ((ULONG_PTR)Address >> 25) == 0x7FFFFB7DA0ULL;
+    return Address >= (PVOID)MiAddressToPde(NULL) && Address <= (PVOID)MiAddressToPde(MI_HIGHEST_USER_ADDRESS);
 }
 
 FORCEINLINE
 BOOLEAN
 MiIsUserPte(PVOID Address)
 {
-    return ((ULONG_PTR)Address >> 34) == 0x3FFFFDA0ULL;
+    return Address >= (PVOID)MiAddressToPte(NULL) && Address <= (PVOID)MiAddressToPte(MI_HIGHEST_USER_ADDRESS);
 }
 #else
 FORCEINLINE

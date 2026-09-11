@@ -40,7 +40,13 @@ extern "C" {
 //
 // User space range limit
 //
+#if defined(NTDDI_VERSION) && (NTDDI_VERSION >= NTDDI_WINBLUE)
+/* Windows 8.1+ exposes the lower canonical half (128 TiB), less the
+ * inaccessible top allocation-granularity region, to native 64-bit code. */
+#define MI_HIGHEST_USER_ADDRESS         (PVOID)0x00007FFFFFFEFFFFULL
+#else
 #define MI_HIGHEST_USER_ADDRESS         (PVOID)0x000007FFFFFEFFFFULL
+#endif
 
 //
 // Address of the shared user page
