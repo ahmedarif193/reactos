@@ -328,6 +328,63 @@ BootStatusDrawText(
 }
 
 static VOID
+BootStatusPaint(
+    _In_ PBOOT_STATUS_CONTEXT Context,
+    _In_ HDC Dc,
+    _In_ const RECT *PaintRect)
+{
+    HDC BufferDc;
+    HDC PaintDc = Dc;
+    HBITMAP Bitmap = NULL, OldBitmap = NULL;
+    INT Width = PaintRect->right - PaintRect->left;
+    INT Height = PaintRect->bottom - PaintRect->top;
+
+    if (Width <= 0 || Height <= 0)
+        return;
+
+    /* The background, text shadow, glyphs and busy cursor form one frame.
+     * Buffer only the invalid area, so animation ticks need a small bitmap. */
+    BufferDc = CreateCompatibleDC(Dc);
+    if (BufferDc)
+    {
+        Bitmap = CreateCompatibleBitmap(Dc, Width, Height);
+        if (Bitmap)
+            OldBitmap = SelectObject(BufferDc, Bitmap);
+        if (OldBitmap)
+        {
+            SetViewportOrgEx(BufferDc, -PaintRect->left, -PaintRect->top, NULL);
+            PaintDc = BufferDc;
+        }
+    }
+
+    if (Context->BackgroundDc)
+    {
+        BitBlt(PaintDc, PaintRect->left, PaintRect->top, Width, Height, Context->BackgroundDc, PaintRect->left, PaintRect->top, SRCCOPY);
+    }
+    else
+    {
+        HBRUSH Background = CreateSolidBrush(RGB(12, 18, 28));
+        if (Background)
+        {
+            FillRect(PaintDc, PaintRect, Background);
+            DeleteObject(Background);
+        }
+    }
+
+    BootStatusDrawBusyCursor(PaintDc, Context);
+    BootStatusDrawText(PaintDc, Context);
+    if (OldBitmap)
+    {
+        BitBlt(Dc, PaintRect->left, PaintRect->top, Width, Height, BufferDc, PaintRect->left, PaintRect->top, SRCCOPY);
+        SelectObject(BufferDc, OldBitmap);
+    }
+    if (Bitmap)
+        DeleteObject(Bitmap);
+    if (BufferDc)
+        DeleteDC(BufferDc);
+}
+
+static VOID
 BootStatusApplyUpdate(
     _In_ HWND Window,
     _Inout_ PBOOT_STATUS_CONTEXT Context,
@@ -490,30 +547,7 @@ BootStatusWindowProc(
                 PAINTSTRUCT Paint;
                 HDC Dc = BeginPaint(Window, &Paint);
 
-                if (Context->BackgroundDc)
-                {
-                    BitBlt(Dc,
-                           Paint.rcPaint.left,
-                           Paint.rcPaint.top,
-                           Paint.rcPaint.right - Paint.rcPaint.left,
-                           Paint.rcPaint.bottom - Paint.rcPaint.top,
-                           Context->BackgroundDc,
-                           Paint.rcPaint.left,
-                           Paint.rcPaint.top,
-                           SRCCOPY);
-                }
-                else
-                {
-                    HBRUSH Background = CreateSolidBrush(RGB(12, 18, 28));
-                    if (Background)
-                    {
-                        FillRect(Dc, &Paint.rcPaint, Background);
-                        DeleteObject(Background);
-                    }
-                }
-
-                BootStatusDrawBusyCursor(Dc, Context);
-                BootStatusDrawText(Dc, Context);
+                BootStatusPaint(Context, Dc, &Paint.rcPaint);
                 EndPaint(Window, &Paint);
 
                 if (!Context->FirstPaintComplete)
