@@ -74,17 +74,33 @@ if(MESA_LLVM_ROOT)
     endif()
 else()
     set(MESA_LLVM_PREFIX "${MESA_WORK_DIR}/llvm-install")
-    set(MESA_LLVM_LICENSE_FILE "${MESA_WORK_DIR}/llvm-source/llvm/LICENSE.TXT")
+    set(MESA_LLVM_SOURCE_ROOT "" CACHE PATH "Optional existing LLVM 22.1.8 source tree to reuse across architectures")
+    if(MESA_LLVM_SOURCE_ROOT)
+        get_filename_component(_mesa_llvm_source "${MESA_LLVM_SOURCE_ROOT}" ABSOLUTE)
+        if(NOT EXISTS "${_mesa_llvm_source}/llvm/CMakeLists.txt" OR NOT EXISTS "${_mesa_llvm_source}/cmake/Modules/LLVMVersion.cmake")
+            message(FATAL_ERROR "MESA_LLVM_SOURCE_ROOT must point to an extracted LLVM 22.1.8 source tree.")
+        endif()
+        file(READ "${_mesa_llvm_source}/cmake/Modules/LLVMVersion.cmake" _mesa_llvm_version)
+        if(NOT _mesa_llvm_version MATCHES "set\\(LLVM_VERSION_MAJOR 22\\)" OR NOT _mesa_llvm_version MATCHES "set\\(LLVM_VERSION_MINOR 1\\)" OR NOT _mesa_llvm_version MATCHES "set\\(LLVM_VERSION_PATCH 8\\)")
+            message(FATAL_ERROR "MESA_LLVM_SOURCE_ROOT must contain LLVM 22.1.8, matching the pinned dependency.")
+        endif()
+        set(_mesa_llvm_download DOWNLOAD_COMMAND "")
+    else()
+        set(_mesa_llvm_source "${MESA_WORK_DIR}/llvm-source")
+        set(_mesa_llvm_download
+            URL https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/llvm-project-22.1.8.src.tar.xz
+            URL_HASH SHA256=922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888
+            TIMEOUT 900
+            INACTIVITY_TIMEOUT 120
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    endif()
+    set(MESA_LLVM_LICENSE_FILE "${_mesa_llvm_source}/llvm/LICENSE.TXT")
     # LLVM bootstraps its host TableGen executables when cross-compiling; do
     # not run target Windows llvm-config/TableGen on the build host.
     ExternalProject_Add(mesa-llvm
         PREFIX "${MESA_WORK_DIR}/llvm-prefix"
-        URL https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/llvm-project-22.1.8.src.tar.xz
-        URL_HASH SHA256=922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888
-        TIMEOUT 900
-        INACTIVITY_TIMEOUT 120
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        SOURCE_DIR "${MESA_WORK_DIR}/llvm-source"
+        ${_mesa_llvm_download}
+        SOURCE_DIR "${_mesa_llvm_source}"
         SOURCE_SUBDIR llvm
         BINARY_DIR "${MESA_WORK_DIR}/llvm-build"
         CMAKE_GENERATOR Ninja
