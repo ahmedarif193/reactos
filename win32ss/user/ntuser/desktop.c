@@ -335,7 +335,7 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
     WCHAR BuildLabBuffer[256];
     WCHAR VersionBuffer[256];
     PWCHAR EndBuffer;
-    PWCHAR Hash, Scan;
+    PWCHAR Hash, Revision, Compiler, Scan;
     PCSTR Flavor;
     PCWSTR ReleaseSuffix;
 
@@ -376,6 +376,7 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
     BuildLabString.Buffer[BuildLabString.Length / sizeof(WCHAR)] = UNICODE_NULL;
     CSDVersionString.Buffer[CSDVersionString.Length / sizeof(WCHAR)] = UNICODE_NULL;
 
+    /* Hide the git commit count and hash, preserving the tag and toolchain. */
     Hash = NULL;
     Scan = BuildLabString.Buffer;
     while ((Scan = wcsstr(Scan, L"-g")) != NULL)
@@ -385,8 +386,21 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
     }
     if (Hash)
     {
-        *Hash = UNICODE_NULL;
-        BuildLabString.Length = (USHORT)((Hash - BuildLabString.Buffer) * sizeof(WCHAR));
+        Revision = Hash;
+        while (Revision > BuildLabString.Buffer &&
+               Revision[-1] >= L'0' && Revision[-1] <= L'9')
+        {
+            --Revision;
+        }
+        Compiler = Hash + 2 + wcsspn(Hash + 2, L"0123456789abcdefABCDEF");
+        if (Revision > BuildLabString.Buffer && Revision < Hash &&
+            Revision[-1] == L'-' && Compiler > Hash + 2 &&
+            (*Compiler == L'.' || *Compiler == UNICODE_NULL))
+        {
+            --Revision;
+            RtlMoveMemory(Revision, Compiler, (wcslen(Compiler) + 1) * sizeof(WCHAR));
+            BuildLabString.Length = (USHORT)(wcslen(BuildLabString.Buffer) * sizeof(WCHAR));
+        }
     }
 
     Flavor = strchr(KERNEL_VERSION_STR, '-');
@@ -421,11 +435,10 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* String for Safe Mode */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Experimental build %wZ %S%s %S (Target: Windows 11 24H2 build %u%s)\n",
-                                     &BuildLabString,
+                                     L"ReactOS Unofficial Build (%S%s) %wZ (Target: Windows 11 24H2 build %u%s)\n",
                                      Flavor,
                                      ReleaseSuffix,
-                                     REACTOS_COMPILER_NAME,
+                                     &BuildLabString,
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      VersionBuffer);
     }
@@ -434,13 +447,12 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* Multi-string for Normal Mode */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Experimental build\n"
-                                     L"Build %wZ (%S%s, %S)\n"
+                                     L"ReactOS Unofficial Build (%S%s)\n"
+                                     L"Build %wZ\n"
                                      L"Target: Windows 11 24H2 build %u%s\n",
-                                     &BuildLabString,
                                      Flavor,
                                      ReleaseSuffix,
-                                     REACTOS_COMPILER_NAME,
+                                     &BuildLabString,
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      VersionBuffer);
     }
@@ -450,11 +462,10 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* Fall-back string */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Experimental build %wZ %S%s %S\n",
-                                     &BuildLabString,
+                                     L"ReactOS Unofficial Build (%S%s) %wZ\n",
                                      Flavor,
                                      ReleaseSuffix,
-                                     REACTOS_COMPILER_NAME);
+                                     &BuildLabString);
         if (!NT_SUCCESS(Status))
         {
             /* General failure, NULL-terminate the string */
