@@ -1573,6 +1573,7 @@ RunTaskmgrTimerComparison(VOID)
 #include "blur_cache_probe.h"
 #include "damage_probe.h"
 #include "gpu_stats_probe.h"
+#include "taskmgr_motion_probe.h"
 
 static INT
 RunDesktopPerf(HWND Owner, ULONG SampleCount)
@@ -1810,6 +1811,10 @@ main(int argc, char **argv)
         return RunBlurCacheProbe(&WorkArea);
     if (argc > 1 && !strcmp(argv[1], "--damageprobe"))
         return RunDamageProbe(&WorkArea);
+    if (argc > 1 && !strcmp(argv[1], "--taskmgrflicker"))
+        return RunTaskmgrMotionProbe(&WorkArea, FALSE);
+    if (argc > 1 && !strcmp(argv[1], "--taskmgrpacing"))
+        return RunTaskmgrMotionProbe(&WorkArea, TRUE);
     if (argc > 1 && !strcmp(argv[1], "--glprimaryprobe"))
         return RunGlPrimaryProbe(&WorkArea, FALSE);
     if (argc > 1 && !strcmp(argv[1], "--glmixedprobe"))
