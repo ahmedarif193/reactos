@@ -724,6 +724,7 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
     struct wgl_context* old_ctx = get_context(IntGetCurrentRC());
     const GLCLTPROCTABLE* apiTable;
     LONG thread_id = (LONG)GetCurrentThreadId();
+    LONG owner_thread;
 
     if(ctx)
     {
@@ -745,17 +746,19 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
             return FALSE;
         }
 
-        /* Set the thread ID */
-        if(InterlockedCompareExchange(&ctx->thread_id, thread_id, 0) != 0)
+        /* Claim an unbound context, or rebind our current context to this DC. */
+        owner_thread = InterlockedCompareExchange(&ctx->thread_id, thread_id, 0);
+        if(owner_thread != 0 && owner_thread != thread_id)
         {
-            /* Already current for a thread. Maybe it's us ? */
             release_dc_data(dc_data);
-            if(ctx->thread_id != thread_id)
-                SetLastError(ERROR_BUSY);
-            return (ctx->thread_id == thread_id);
+            SetLastError(ERROR_BUSY);
+            return FALSE;
         }
 
-        if(old_ctx)
+        /* Keep ownership while rebinding the same context. Another thread
+         * must not acquire it between releasing the old DC and binding the
+         * new one. DrvSetContext / sw_SetContext updates the drawable. */
+        if(old_ctx && old_ctx != ctx)
         {
             /* Unset it */
             if(old_ctx->icd_data)

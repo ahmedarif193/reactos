@@ -534,6 +534,10 @@ static void test_makecurrent(HDC winhdc)
 {
     BOOL ret;
     HGLRC hglrc;
+    HWND window;
+    HDC other_hdc;
+    PIXELFORMATDESCRIPTOR pfd = {0};
+    int format;
 
     hglrc = wglCreateContext(winhdc);
     ok( hglrc != 0, "wglCreateContext failed\n" );
@@ -546,6 +550,28 @@ static void test_makecurrent(HDC winhdc)
     /* set the same context again */
     ret = wglMakeCurrent( winhdc, hglrc );
     ok( ret, "wglMakeCurrent failed\n" );
+
+    /* An already-current context must be rebound when its drawable changes. */
+    window = CreateWindowA("static", "wglMakeCurrent alternate drawable", WS_POPUP, 0, 0, 32, 32, NULL, NULL, GetModuleHandleA(NULL), NULL);
+    ok( window != NULL, "CreateWindow failed, error %lu\n", GetLastError() );
+    if (window)
+    {
+        other_hdc = GetDC(window);
+        format = GetPixelFormat(winhdc);
+        ret = DescribePixelFormat(winhdc, format, sizeof(pfd), &pfd);
+        ok( ret, "DescribePixelFormat failed, error %lu\n", GetLastError() );
+        ret = SetPixelFormat(other_hdc, format, &pfd);
+        ok( ret, "SetPixelFormat failed, error %lu\n", GetLastError() );
+        ret = wglMakeCurrent(other_hdc, hglrc);
+        ok( ret, "wglMakeCurrent failed, error %lu\n", GetLastError() );
+        ok( wglGetCurrentDC() == other_hdc, "Current DC %p, expected %p\n", wglGetCurrentDC(), other_hdc );
+        ok( wglGetCurrentContext() == hglrc, "Current context changed\n" );
+        ret = wglMakeCurrent(winhdc, hglrc);
+        ok( ret, "wglMakeCurrent failed, error %lu\n", GetLastError() );
+        ok( wglGetCurrentDC() == winhdc, "Current DC %p, expected %p\n", wglGetCurrentDC(), winhdc );
+        ReleaseDC(window, other_hdc);
+        DestroyWindow(window);
+    }
 
     /* check wglMakeCurrent(x, y) after another call to wglMakeCurrent(x, y) */
     ret = wglMakeCurrent( winhdc, NULL );
