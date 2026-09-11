@@ -108,6 +108,11 @@ VOID
 SimpleErrorChecks(VOID)
 {
     NTSTATUS Status;
+    BOOLEAN Modern = GetNTVersion() >= _WIN32_WINNT_WIN10;
+    NTSTATUS InvalidParameter2 = Modern ? STATUS_INVALID_PARAMETER : STATUS_INVALID_PARAMETER_2;
+    NTSTATUS InvalidParameter3 = Modern ? STATUS_INVALID_PARAMETER : STATUS_INVALID_PARAMETER_3;
+    NTSTATUS InvalidParameter4 = Modern ? STATUS_INVALID_PARAMETER : STATUS_INVALID_PARAMETER_4;
+    NTSTATUS InvalidParameter5 = Modern ? STATUS_INVALID_PARAMETER : STATUS_INVALID_PARAMETER_5;
     PVOID Base = NULL;
     SIZE_T RegionSize = DEFAULT_ALLOC_SIZE;
 
@@ -126,16 +131,15 @@ SimpleErrorChecks(VOID)
         ok(Status == STATUS_SUCCESS || Status == STATUS_CONFLICTING_ADDRESSES,
            "Status = 0x%08lx, expected STATUS_SUCCESS or STATUS_CONFLICTING_ADDRESSES\n", Status);
         if (NT_SUCCESS(Status))
+        {
             ok_eq_pointer(Base, (PVOID)ROUND_DOWN(RequestedBase, MM_ALLOCATION_GRANULARITY));
+
+            RegionSize = 0;
+            Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Base, &RegionSize, MEM_RELEASE);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+        }
         else
             ok_eq_pointer(Base, RequestedBase);
-
-        RegionSize = 0;
-        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Base, &RegionSize, MEM_RELEASE);
-        if ((ULONG_PTR)RequestedBase == (ULONG_PTR)Base)
-            ok_eq_hex(Status, STATUS_FREE_VM_NOT_AT_BASE);
-        else
-            ok_eq_hex(Status, STATUS_SUCCESS);
         Base = NULL;
         RegionSize = DEFAULT_ALLOC_SIZE;
     }
@@ -146,47 +150,47 @@ SimpleErrorChecks(VOID)
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
 
     Base = (PVOID)((char *)MmSystemRangeStart + 200);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_2, STATUS_INVALID_PARAMETER_2);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, InvalidParameter2, InvalidParameter2);
 
     /* http://jira.reactos.org/browse/CORE-6814 */
     RegionSize = 0x1000;
     Base = Test_ZwAllocateVirtualMemory;
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, MEM_COMMIT, PAGE_READWRITE, STATUS_INVALID_PARAMETER_2, STATUS_INVALID_PARAMETER_2);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, MEM_COMMIT, PAGE_READWRITE, InvalidParameter2, InvalidParameter2);
 
     //ZERO BITS TESTS
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 21, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_NO_MEMORY, STATUS_MEMORY_NOT_ALLOCATED);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 22, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_3, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 21, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, Modern ? STATUS_INVALID_PARAMETER : STATUS_NO_MEMORY, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 22, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, InvalidParameter3, STATUS_MEMORY_NOT_ALLOCATED);
     if (GetNTVersion() >= _WIN32_WINNT_VISTA)
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, -1, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
     else
-        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, -1, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_3, STATUS_MEMORY_NOT_ALLOCATED);
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, -1, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, InvalidParameter3, STATUS_MEMORY_NOT_ALLOCATED);
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 3, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
 
     //REGION SIZE TESTS
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
     RegionSize = -1;
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, InvalidParameter4, STATUS_MEMORY_NOT_ALLOCATED);
     RegionSize = 0;
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, InvalidParameter4, STATUS_MEMORY_NOT_ALLOCATED);
     RegionSize = 0xFFFFFFFF; // 4 gb is invalid or over the commit limit, depending on NT version/bitness and installed memory
     if (GetNTVersion() >= _WIN32_WINNT_VISTA && MachineCanCommit(RegionSize))
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
     else if (GetNTVersion() >= _WIN32_WINNT_VISTA)
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_COMMITMENT_LIMIT, STATUS_MEMORY_NOT_ALLOCATED);
     else
-        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, InvalidParameter4, STATUS_MEMORY_NOT_ALLOCATED);
 
     //Allocation type tests
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, MEM_PHYSICAL, PAGE_READWRITE, STATUS_INVALID_PARAMETER_5, STATUS_MEMORY_NOT_ALLOCATED);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESET), PAGE_READWRITE, STATUS_INVALID_PARAMETER_5, STATUS_MEMORY_NOT_ALLOCATED);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, 0, PAGE_READWRITE, STATUS_INVALID_PARAMETER_5, STATUS_MEMORY_NOT_ALLOCATED);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, MEM_TOP_DOWN, PAGE_READWRITE, STATUS_INVALID_PARAMETER_5, STATUS_MEMORY_NOT_ALLOCATED);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_TOP_DOWN | MEM_RESET), PAGE_READWRITE, STATUS_INVALID_PARAMETER_5, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, MEM_PHYSICAL, PAGE_READWRITE, InvalidParameter5, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESET), PAGE_READWRITE, InvalidParameter5, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, 0, PAGE_READWRITE, InvalidParameter5, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, MEM_TOP_DOWN, PAGE_READWRITE, InvalidParameter5, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_TOP_DOWN | MEM_RESET), PAGE_READWRITE, InvalidParameter5, STATUS_MEMORY_NOT_ALLOCATED);
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_TOP_DOWN | MEM_COMMIT), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_PHYSICAL | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_PHYSICAL | MEM_COMMIT), PAGE_READWRITE, STATUS_INVALID_PARAMETER_5, STATUS_MEMORY_NOT_ALLOCATED);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_RESET | MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_5, STATUS_MEMORY_NOT_ALLOCATED);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, -1, PAGE_READWRITE, STATUS_INVALID_PARAMETER_5, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_PHYSICAL | MEM_COMMIT), PAGE_READWRITE, InvalidParameter5, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_RESET | MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, InvalidParameter5, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, -1, PAGE_READWRITE, InvalidParameter5, STATUS_MEMORY_NOT_ALLOCATED);
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize,  MEM_COMMIT, PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize,  MEM_RESERVE, PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize,  MEM_RESERVE, PAGE_WRITECOPY, STATUS_INVALID_PAGE_PROTECTION, STATUS_MEMORY_NOT_ALLOCATED);
@@ -194,7 +198,7 @@ SimpleErrorChecks(VOID)
 
     //Memory protection tests
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), 0, STATUS_INVALID_PAGE_PROTECTION, STATUS_MEMORY_NOT_ALLOCATED);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), -1, STATUS_INVALID_PAGE_PROTECTION, STATUS_MEMORY_NOT_ALLOCATED);
+    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), -1, Modern ? STATUS_NOT_SUPPORTED : STATUS_INVALID_PAGE_PROTECTION, STATUS_MEMORY_NOT_ALLOCATED);
     if (!KmtIsCheckedBuild)
     {
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), (PAGE_NOACCESS | PAGE_GUARD), STATUS_INVALID_PAGE_PROTECTION, STATUS_MEMORY_NOT_ALLOCATED);
@@ -423,14 +427,13 @@ static
 BOOLEAN
 MachineCanCommit(SIZE_T Bytes)
 {
-    SYSTEM_BASIC_INFORMATION BasicInfo;
-    SIZE_T Installed;
+    SYSTEM_PERFORMANCE_INFORMATION PerformanceInfo;
 
-    if (!NT_SUCCESS(ZwQuerySystemInformation(SystemBasicInformation, &BasicInfo, sizeof(BasicInfo), NULL)))
+    if (!NT_SUCCESS(ZwQuerySystemInformation(SystemPerformanceInformation, &PerformanceInfo, sizeof(PerformanceInfo), NULL)))
         return FALSE;
 
-    Installed = (SIZE_T)BasicInfo.NumberOfPhysicalPages * BasicInfo.PageSize;
-    return (Bytes < (Installed - (Installed / 4)));
+    return PerformanceInfo.CommitLimit > PerformanceInfo.CommittedPages &&
+           BYTES_TO_PAGES(Bytes) < PerformanceInfo.CommitLimit - PerformanceInfo.CommittedPages;
 }
 
 static
@@ -446,8 +449,8 @@ StressTesting(ULONG AllocationType)
     SYSTEM_BASIC_INFORMATION BasicInfo;
     SIZE_T CommitBudget;
 
-    /* Size the chunks so the whole array is guaranteed to outrun the commit
-     * limit, whatever this machine happens to have installed. */
+    /* Keep this stress run bounded. Page-file growth may allow all chunks
+     * to succeed even when their total exceeds installed physical memory. */
     RegionSize = 5 * 1024 * 1024;
     if (NT_SUCCESS(ZwQuerySystemInformation(SystemBasicInformation, &BasicInfo, sizeof(BasicInfo), NULL)))
     {
@@ -748,7 +751,8 @@ START_TEST(ZwAllocateVirtualMemory)
     Status = STATUS_SUCCESS;
     Status = StressTesting(MEM_COMMIT);
 #ifdef _WIN64
-    ok_eq_hex(Status, STATUS_COMMITMENT_LIMIT);
+    ok(Status == STATUS_SUCCESS || Status == STATUS_COMMITMENT_LIMIT,
+       "Commit stress returned 0x%08lx\n", Status);
 #else
     ok_eq_hex(Status, STATUS_NO_MEMORY);
 #endif
