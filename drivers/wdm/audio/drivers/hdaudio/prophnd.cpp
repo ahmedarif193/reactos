@@ -205,6 +205,126 @@ HdaGetRequestChannel(IN PPCPROPERTY_REQUEST PropertyRequest)
     return -1;
 }
 
+static
+UCHAR
+HdaGainFromLevel(
+    IN LONG Level,
+    IN PAMPLIFIER_CAPABILITIES Caps)
+{
+    LONG Step = ((LONG)Caps->Steps + 1) * 0x4000;
+    LONG Gain = (Level >= 0 ? Level + Step / 2 : Level - Step / 2) / Step + (LONG)Caps->Offset;
+
+    if (Gain < 0)
+        Gain = 0;
+    if (Gain > (LONG)Caps->NumSteps)
+        Gain = Caps->NumSteps;
+    return (UCHAR)Gain;
+}
+
+static
+NTSTATUS
+HdaOpenSettingsKey(
+    IN CMiniportTopology *Miniport,
+    OUT PREGISTRYKEY *SettingsKey)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"Settings");
+    PPORTTOPOLOGY Port = Miniport->GetPort();
+    PREGISTRYKEY DriverKey;
+    NTSTATUS Status;
+
+    if (!Port)
+        return STATUS_DEVICE_NOT_READY;
+
+    Status = Port->NewRegistryKey(&DriverKey, NULL, DriverRegistryKey, KEY_ALL_ACCESS, NULL, 0, NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = DriverKey->NewSubKey(SettingsKey, NULL, KEY_ALL_ACCESS, &Name, REG_OPTION_NON_VOLATILE, NULL);
+    DriverKey->Release();
+    return Status;
+}
+
+static
+VOID
+HdaSaveSetting(
+    IN CMiniportTopology *Miniport,
+    IN PCWSTR ValueName,
+    IN ULONG Value)
+{
+    UNICODE_STRING Name;
+    PREGISTRYKEY Key;
+
+    if (!NT_SUCCESS(HdaOpenSettingsKey(Miniport, &Key)))
+        return;
+
+    RtlInitUnicodeString(&Name, ValueName);
+    Key->SetValueKey(&Name, REG_DWORD, &Value, sizeof(Value));
+    Key->Release();
+}
+
+static
+BOOLEAN
+HdaQuerySetting(
+    IN PREGISTRYKEY Key,
+    IN PCWSTR ValueName,
+    OUT PULONG Value)
+{
+    ULONG Buffer[(sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 2 * sizeof(ULONG) - 1) / sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
+    UNICODE_STRING Name;
+    ULONG Length;
+
+    RtlInitUnicodeString(&Name, ValueName);
+    if (!NT_SUCCESS(Key->QueryValueKey(&Name, KeyValuePartialInformation, Info, sizeof(Buffer), &Length)) ||
+        Info->Type != REG_DWORD || Info->DataLength != sizeof(ULONG))
+    {
+        return FALSE;
+    }
+
+    *Value = *(PULONG)Info->Data;
+    return TRUE;
+}
+
+VOID
+HDAUDIO_RestoreMasterSettings(
+    IN CMiniportTopology *Miniport)
+{
+    CFunctionGroupNode *Node = Miniport->GetNode();
+    AMPLIFIER_CAPABILITIES Caps;
+    PREGISTRYKEY Key;
+    PULONG Nids = NULL;
+    ULONG Count = 0, Index, Right, Level = 0, Mute = 0;
+    BOOLEAN HaveLevel, HaveMute;
+
+    if (!Node || !NT_SUCCESS(HdaOpenSettingsKey(Miniport, &Key)))
+        return;
+
+    HaveLevel = HdaQuerySetting(Key, L"MasterLevel", &Level);
+    HaveMute = HdaQuerySetting(Key, L"MasterMute", &Mute);
+    Key->Release();
+
+    if ((!HaveLevel && !HaveMute) || !NT_SUCCESS(HdaGetMasterAmps(Node, &Nids, &Count, &Caps)))
+        return;
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        for (Right = 0; Right < 2; Right++)
+        {
+            UCHAR CurrentMute, Gain;
+
+            if (!NT_SUCCESS(Node->GetAmplifierGainMute(Nids[Index], 0, Right, &CurrentMute, &Gain)))
+                continue;
+            if (HaveLevel && Caps.NumSteps)
+                Gain = HdaGainFromLevel((LONG)Level, &Caps);
+            if (HaveMute && Caps.MuteCapable)
+                CurrentMute = Mute ? 1 : 0;
+            Node->SetAmplifierGainMute(Nids[Index], 0, Right, CurrentMute, Gain);
+        }
+    }
+
+    ExFreePoolWithTag(Nids, TAG_HDAUDIO);
+}
+
 NTSTATUS
 NTAPI
 PropertyHandler_Volume(IN PPCPROPERTY_REQUEST PropertyRequest)
@@ -308,13 +428,7 @@ PropertyHandler_Volume(IN PPCPROPERTY_REQUEST PropertyRequest)
     }
     else if (PropertyRequest->Verb & KSPROPERTY_TYPE_SET)
     {
-        LONG Level = *(PLONG)PropertyRequest->Value;
-        LONG Gain = (Level >= 0 ? Level + Step / 2 : Level - Step / 2) / Step + (LONG)Caps.Offset;
-
-        if (Gain < 0)
-            Gain = 0;
-        if (Gain > (LONG)Caps.NumSteps)
-            Gain = Caps.NumSteps;
+        UCHAR Gain = HdaGainFromLevel(*(PLONG)PropertyRequest->Value, &Caps);
 
         Status = STATUS_SUCCESS;
         for (Index = 0; Index < Count; Index++)
@@ -325,9 +439,11 @@ PropertyHandler_Volume(IN PPCPROPERTY_REQUEST PropertyRequest)
 
                 if (!NT_SUCCESS(Node->GetAmplifierGainMute(Nids[Index], 0, Right, &Mute, &Current)))
                     Mute = 0;
-                Status = Node->SetAmplifierGainMute(Nids[Index], 0, Right, Mute, (UCHAR)Gain);
+                Status = Node->SetAmplifierGainMute(Nids[Index], 0, Right, Mute, Gain);
             }
         }
+        if (NT_SUCCESS(Status))
+            HdaSaveSetting(Miniport, L"MasterLevel", (ULONG)(((LONG)Gain - (LONG)Caps.Offset) * Step));
     }
     else
     {
@@ -419,6 +535,8 @@ PropertyHandler_Mute(IN PPCPROPERTY_REQUEST PropertyRequest)
                 Status = Node->SetAmplifierGainMute(Nids[Index], 0, Right, Mute, Gain);
             }
         }
+        if (NT_SUCCESS(Status))
+            HdaSaveSetting(Miniport, L"MasterMute", Mute);
     }
     else
     {

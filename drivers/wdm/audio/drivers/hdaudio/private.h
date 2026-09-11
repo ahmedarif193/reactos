@@ -456,6 +456,12 @@ class CMiniportTopology : public CUnknownImpl<IMiniportTopology>
         return m_Node;
     }
 
+    PPORTTOPOLOGY
+    GetPort()
+    {
+        return m_Port;
+    }
+
   private:
     PPORTTOPOLOGY m_Port;
     ULONG m_AssociatedPinCount;
@@ -578,6 +584,10 @@ HDAUDIO_NewMiniportTopology(
     IN CFunctionGroupNode * Node,
     IN CAdapterCommon * Adapter,
     IN PPCFILTER_DESCRIPTOR FilterDescription);
+
+VOID
+HDAUDIO_RestoreMasterSettings(
+    IN CMiniportTopology *Miniport);
 
 NTSTATUS
 HDAUDIO_NewMiniportWaveRT(
