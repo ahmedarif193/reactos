@@ -143,21 +143,26 @@ MiMapLockedPagesInUserSpace(
             Status = STATUS_NO_MEMORY;
             goto Error;
         }
-        EndingVa = StartingVa + NumberOfPages * PAGE_SIZE - 1;
+        EndingVa = StartingVa + ((ULONG_PTR)NumberOfPages << PAGE_SHIFT) - 1;
         BaseAddress = (PVOID)StartingVa;
     }
     else
     {
         /* Caller specified a base address */
         StartingVa = (ULONG_PTR)BaseAddress;
-        EndingVa = StartingVa + NumberOfPages * PAGE_SIZE - 1;
+        EndingVa = StartingVa + ((ULONG_PTR)NumberOfPages << PAGE_SHIFT) - 1;
 
         /* Make sure it's valid */
-        if (BYTE_OFFSET(StartingVa) != 0 ||
-            EndingVa <= StartingVa ||
-            EndingVa > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS)
+        if (BYTE_OFFSET(StartingVa) != 0)
         {
             Status = STATUS_INVALID_ADDRESS;
+            goto Error;
+        }
+        /* Explicit MDL mappings can use the final user-address pages too. */
+        if (EndingVa <= StartingVa ||
+            EndingVa > (ULONG_PTR)MM_HIGHEST_USER_ADDRESS)
+        {
+            Status = STATUS_CONFLICTING_ADDRESSES;
             goto Error;
         }
 
@@ -405,12 +410,12 @@ Error:
 
 VOID
 NTAPI
-MiUnmapLockedPagesInUserSpace(
-    _In_ PVOID BaseAddress)
+MiUnmapLockedPagesVad(
+    _In_ PMMVAD Vad)
 {
     PEPROCESS Process = PsGetCurrentProcess();
     PETHREAD Thread = PsGetCurrentThread();
-    PMMVAD Vad;
+    PVOID BaseAddress;
     PMMPTE PointerPte;
 #if defined(_M_ARM64)
     MI_ARM64_USER_PTE_WALK Arm64Walk;
@@ -427,19 +432,9 @@ MiUnmapLockedPagesInUserSpace(
     ULONG FlushPages;
 #endif
 
-    DPRINT("MiUnmapLockedPagesInUserSpace(%p)\n", BaseAddress);
-
-    /* Find the VAD */
-    MmLockAddressSpace(&Process->Vm);
-    Vad = MiLocateAddress(BaseAddress);
-    if (!Vad ||
-        Vad->u.VadFlags.VadType != VadDevicePhysicalMemory)
-    {
-        DPRINT1("MiUnmapLockedPagesInUserSpace invalid for %p\n", BaseAddress);
-        MmUnlockAddressSpace(&Process->Vm);
-        return;
-    }
-
+    /* The caller holds the address-space lock throughout view removal. */
+    ASSERT(Vad->u.VadFlags.VadType == VadDevicePhysicalMemory ||
+           (Vad->u.VadFlags.VadType == VadRotatePhysical && Vad->ControlArea != NULL));
     MiLockProcessWorkingSetUnsafe(Process, Thread);
 
     /* The view owns its PTEs, but neither the MDL nor its physical pages.
@@ -539,8 +534,24 @@ NextPage:
     }
 #endif
     MiUnlockProcessWorkingSetUnsafe(Process, Thread);
-    MmUnlockAddressSpace(&Process->Vm);
     ExFreePoolWithTag(Vad, 'ldaV');
+}
+
+VOID
+NTAPI
+MiUnmapLockedPagesInUserSpace(
+    _In_ PVOID BaseAddress)
+{
+    PEPROCESS Process = PsGetCurrentProcess();
+    PMMVAD Vad;
+
+    MmLockAddressSpace(&Process->Vm);
+    Vad = MiLocateAddress(BaseAddress);
+    if (Vad != NULL && Vad->u.VadFlags.VadType == VadDevicePhysicalMemory)
+        MiUnmapLockedPagesVad(Vad);
+    else
+        DPRINT1("MiUnmapLockedPagesInUserSpace invalid for %p\n", BaseAddress);
+    MmUnlockAddressSpace(&Process->Vm);
 }
 
 /* PUBLIC FUNCTIONS ***********************************************************/

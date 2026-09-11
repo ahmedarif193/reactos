@@ -2339,9 +2339,8 @@ MiQueryMemoryBasicInformation(IN HANDLE ProcessHandle,
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     SIZE_T ResultLength;
 
-    /* Check for illegal addresses in user-space, or the shared memory area */
-    if ((BaseAddress > MM_HIGHEST_VAD_ADDRESS) ||
-        (PAGE_ALIGN(BaseAddress) == (PVOID)MM_SHARED_USER_DATA_VA))
+    /* The shared data page is not described by an ordinary VAD. */
+    if (PAGE_ALIGN(BaseAddress) == (PVOID)MM_SHARED_USER_DATA_VA)
     {
         Address = PAGE_ALIGN(BaseAddress);
 
@@ -2350,21 +2349,10 @@ MiQueryMemoryBasicInformation(IN HANDLE ProcessHandle,
         MemoryInfo.AllocationProtect = PAGE_READONLY;
         MemoryInfo.Type = MEM_PRIVATE;
 
-        /* Special case for shared data */
-        if (Address == (PVOID)MM_SHARED_USER_DATA_VA)
-        {
-            MemoryInfo.AllocationBase = (PVOID)MM_SHARED_USER_DATA_VA;
-            MemoryInfo.State = MEM_COMMIT;
-            MemoryInfo.Protect = PAGE_READONLY;
-            MemoryInfo.RegionSize = PAGE_SIZE;
-        }
-        else
-        {
-            MemoryInfo.AllocationBase = (PCHAR)MM_HIGHEST_VAD_ADDRESS + 1;
-            MemoryInfo.State = MEM_RESERVE;
-            MemoryInfo.Protect = PAGE_NOACCESS;
-            MemoryInfo.RegionSize = (ULONG_PTR)MM_HIGHEST_USER_ADDRESS + 1 - (ULONG_PTR)Address;
-        }
+        MemoryInfo.AllocationBase = (PVOID)MM_SHARED_USER_DATA_VA;
+        MemoryInfo.State = MEM_COMMIT;
+        MemoryInfo.Protect = PAGE_READONLY;
+        MemoryInfo.RegionSize = PAGE_SIZE;
 
         /* Return the data, NtQueryInformation already probed it*/
         if (PreviousMode != KernelMode)
@@ -2495,14 +2483,14 @@ MiQueryMemoryBasicInformation(IN HANDLE ProcessHandle,
                 else
                 {
                     /* Maximum possible region size with that base address */
-                    MemoryInfo.RegionSize = (PCHAR)MM_HIGHEST_VAD_ADDRESS + 1 - (PCHAR)Address;
+                    MemoryInfo.RegionSize = (PCHAR)MM_HIGHEST_USER_ADDRESS + 1 - (PCHAR)Address;
                 }
             }
         }
         else
         {
             /* Maximum possible region size with that base address */
-            MemoryInfo.RegionSize = (PCHAR)MM_HIGHEST_VAD_ADDRESS + 1 - (PCHAR)Address;
+            MemoryInfo.RegionSize = (PCHAR)MM_HIGHEST_USER_ADDRESS + 1 - (PCHAR)Address;
         }
 
         /* Unlock the address space of the process */
@@ -7383,12 +7371,6 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
 
         if (Vad->u.VadFlags.VadType == VadRotatePhysical)
         {
-            if (Vad->ControlArea != NULL)
-            {
-                DPRINT1("Attempt to free a mapped rotate VAD\n");
-                Status = STATUS_UNABLE_TO_DELETE_SECTION;
-                goto FailPath;
-            }
             if ((PRegionSize != 0) &&
                 (((StartingAddress >> PAGE_SHIFT) != Vad->StartingVpn) ||
                  ((EndingAddress >> PAGE_SHIFT) != Vad->EndingVpn)))
@@ -7396,6 +7378,23 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
                 DPRINT1("Partial release of a rotate VAD\n");
                 Status = STATUS_FREE_VM_NOT_AT_BASE;
                 goto FailPath;
+            }
+            if (Vad->ControlArea != NULL)
+            {
+                if (((ULONG_PTR)PBaseAddress >> PAGE_SHIFT) != Vad->StartingVpn)
+                {
+                    Status = STATUS_FREE_VM_NOT_AT_BASE;
+                    goto FailPath;
+                }
+
+                /* This view borrows the driver's pages and MDL. Remove only
+                   its mapping, using the same accounting as MDL unmapping. */
+                StartingAddress = Vad->StartingVpn << PAGE_SHIFT;
+                PRegionSize = (Vad->EndingVpn - Vad->StartingVpn + 1) << PAGE_SHIFT;
+                MiUnmapLockedPagesVad(Vad);
+                MmUnlockAddressSpace(AddressSpace);
+                Status = STATUS_SUCCESS;
+                goto ReleaseComplete;
             }
         }
 
@@ -7628,6 +7627,7 @@ FinalPath:
         //
         MmUnlockAddressSpace(AddressSpace);
         if (Vad) ExFreePool(Vad);
+ReleaseComplete:
         if (Attached) KeUnstackDetachProcess(&ApcState);
         if (ProcessHandle != NtCurrentProcess()) ObDereferenceObject(Process);
 

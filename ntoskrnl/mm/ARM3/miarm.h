@@ -2794,6 +2794,19 @@ MiMakeProtectionMask(
 
 VOID
 NTAPI
+MiUnmapLockedPagesVad(
+    _In_ PMMVAD Vad);
+
+BOOLEAN
+NTAPI
+MiIsEntireRangeCommitted(
+    IN ULONG_PTR StartingAddress,
+    IN ULONG_PTR EndingAddress,
+    IN PMMVAD Vad,
+    IN PEPROCESS Process);
+
+VOID
+NTAPI
 MiUnmapLockedPagesInUserSpace(
     _In_ PVOID BaseAddress);
 

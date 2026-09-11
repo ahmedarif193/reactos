@@ -1963,7 +1963,7 @@
 @ stdcall -arch=arm64 ZwQueryQuotaInformationFile()
 @ stdcall -arch=arm64 ZwQuerySystemEnvironmentValueEx()
 @ stdcall -arch=arm64 ZwQueryTimerResolution()
-@ stdcall -arch=arm64 ZwQueryVirtualMemory()
+@ stdcall ZwQueryVirtualMemory(ptr ptr long ptr long ptr)
 @ stdcall -arch=arm64 ZwReleaseSemaphore()
 @ stdcall -arch=i386,x86_64,arm64 ZwRemoveIoCompletion(ptr ptr ptr ptr ptr)
 @ stdcall -arch=arm64 ZwRenameKey()
