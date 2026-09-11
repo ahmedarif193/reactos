@@ -1,0 +1,293 @@
+/*
+ * Copyright © 2008 Ben Smith
+ * Copyright © 2010-2012 Linaro Limited
+ *
+ * This file is part of the glmark2 OpenGL (ES) 2.0 benchmark.
+ *
+ * glmark2 is free software: you can redistribute it and/or modify it under the
+ * terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version.
+ *
+ * glmark2 is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+ * details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * glmark2.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * Authors:
+ *  Ben Smith (original glmark benchmark)
+ *  Alexandros Frantzis (glmark2)
+ *  Jesse Barker (glmark2)
+ */
+#include "gl-headers.h"
+#include "scene.h"
+#include "benchmark.h"
+#include "options.h"
+#include "log.h"
+#include "util.h"
+#include "main-loop.h"
+#include "benchmark-collection.h"
+#include "scene-collection.h"
+#include "results-file.h"
+
+#include "canvas-generic.h"
+
+#if GLMARK2_USE_X11
+#include "native-state-x11.h"
+#elif GLMARK2_USE_DRM
+#include "native-state-drm.h"
+#elif GLMARK2_USE_GBM
+#include "native-state-gbm.h"
+#elif GLMARK2_USE_WAYLAND
+#include "native-state-wayland.h"
+#elif GLMARK2_USE_DISPMANX
+#include "native-state-dispmanx.h"
+#elif GLMARK2_USE_WIN32
+#include "native-state-win32.h"
+#elif GLMARK2_USE_NULL
+#include "native-state-null.h"
+#endif
+
+#if GLMARK2_USE_EGL
+#include "gl-state-egl.h"
+#elif GLMARK2_USE_GLX
+#include "gl-state-glx.h"
+#elif GLMARK2_USE_WGL
+#include "gl-state-wgl.h"
+#endif
+
+using std::vector;
+using std::map;
+using std::string;
+
+static void
+list_scenes()
+{
+    const map<string, Scene *> &scenes = Benchmark::scenes();
+
+    for (map<string, Scene *>::const_iterator scene_iter = scenes.begin();
+         scene_iter != scenes.end();
+         scene_iter++)
+    {
+        Scene *scene = scene_iter->second;
+        if (scene->name().empty())
+            continue;
+        Log::info("[Scene] %s\n", scene->name().c_str());
+
+        const map<string, Scene::Option> &options = scene->options();
+
+        for (map<string, Scene::Option>::const_iterator opt_iter = options.begin();
+             opt_iter != options.end();
+             opt_iter++)
+        {
+            const Scene::Option &opt = opt_iter->second;
+            Log::info("  [Option] %s\n"
+                      "    Description  : %s\n"
+                      "    Default Value: %s\n",
+                      opt.name.c_str(),
+                      opt.description.c_str(),
+                      opt.default_value.c_str());
+
+            /* Display list of acceptable values (if defined) */
+            if (!opt.acceptable_values.empty()) {
+                Log::info("    Acceptable Values: ");
+                for (vector<string>::const_iterator val_iter = opt.acceptable_values.begin();
+                     val_iter != opt.acceptable_values.end();
+                     val_iter++)
+                {
+                    std::string format_value(Log::continuation_prefix + "%s");
+                    if (val_iter + 1 != opt.acceptable_values.end())
+                        format_value += ",";
+                    else
+                        format_value += "\n";
+                    Log::info(format_value.c_str(), val_iter->c_str());
+                }
+            }
+        }
+    }
+}
+
+void
+do_benchmark(Canvas &canvas)
+{
+    BenchmarkCollection benchmark_collection;
+    MainLoop *loop;
+
+    benchmark_collection.populate_from_options();
+    
+    if (benchmark_collection.needs_decoration())
+        loop = new MainLoopDecoration(canvas, benchmark_collection.benchmarks());
+    else
+        loop = new MainLoop(canvas, benchmark_collection.benchmarks());
+
+    while (loop->step());
+
+    Log::info("=======================================================\n");
+    Log::info("                                  glmark2 Score: %u \n", loop->score());
+    Log::info("=======================================================\n");
+
+    delete loop;
+}
+
+void
+do_validation(Canvas &canvas)
+{
+    BenchmarkCollection benchmark_collection;
+
+    benchmark_collection.populate_from_options();
+
+    MainLoopValidation loop(canvas, benchmark_collection.benchmarks());
+
+    while (loop.step());
+}
+
+std::string get_full_command_line(int argc, char *argv[])
+{
+    std::stringstream ss;
+
+    for (int i = 0; i < argc; i++)
+    {
+        if (i > 0) ss << " ";
+        ss << argv[i];
+    }
+
+    return ss.str();
+}
+
+int
+main(int argc, char *argv[])
+{
+#if GLMARK2_USE_X11
+    NativeStateX11 native_state;
+#elif GLMARK2_USE_DRM
+    NativeStateDRM native_state;
+#elif GLMARK2_USE_GBM
+    NativeStateGBM native_state;
+#elif GLMARK2_USE_WAYLAND
+    NativeStateWayland native_state;
+#elif GLMARK2_USE_DISPMANX
+    NativeStateDispmanx native_state;
+#elif GLMARK2_USE_WIN32
+    NativeStateWin32 native_state;
+#elif GLMARK2_USE_NULL
+    NativeStateNull native_state;
+#endif
+
+#ifdef __REACTOS__
+    {
+        char module_path[MAX_PATH];
+        DWORD length = GetModuleFileNameA(NULL, module_path, MAX_PATH);
+        if (length != 0 && length < MAX_PATH) {
+            std::string data_dir(module_path, length);
+            std::string::size_type slash = data_dir.find_last_of("\\/");
+            if (slash != std::string::npos) {
+                data_dir.resize(slash + 1);
+                data_dir += "glmark2";
+                DWORD attributes = GetFileAttributesA(data_dir.c_str());
+                if (attributes != INVALID_FILE_ATTRIBUTES &&
+                    (attributes & FILE_ATTRIBUTE_DIRECTORY))
+                    Options::data_path = data_dir;
+            }
+        }
+    }
+#endif
+
+    if (!Options::parse_args(argc, argv))
+        return 1;
+
+    /* Initialize Log class */
+    Log::init(std::filesystem::path(argv[0]).stem().string(), Options::show_debug);
+
+    if (!ResultsFile::init(Options::results_file)) {
+        Log::error("%s: Could not initialize results file\n", __FUNCTION__);
+        return 1;
+    }
+
+    if (Options::show_help) {
+        Options::print_help();
+        return 0;
+    }
+
+    if (Options::show_version) {
+        printf("%s\n", GLMARK_VERSION);
+        return 0;
+    }
+
+    /* Force 800x600 output for validation */
+    if (Options::validate &&
+        Options::size != std::pair<int,int>(800, 600))
+    {
+        Log::info("Ignoring custom size %dx%d for validation. Using 800x600.\n",
+                  Options::size.first, Options::size.second);
+        Options::size = std::pair<int,int>(800, 600);
+    }
+
+#if GLMARK2_USE_NULL
+    if (!Options::offscreen)
+    {
+        Log::error("null native system requires --off-screen option\n");
+        return 1;
+    }
+#endif
+
+    // Create the canvas
+#if GLMARK2_USE_EGL
+    GLStateEGL gl_state;
+#elif GLMARK2_USE_GLX
+    GLStateGLX gl_state;
+#elif GLMARK2_USE_WGL
+    GLStateWGL gl_state;
+#elif GLMARK2_USE_FBO
+    GLStateFBO gl_state;
+#endif
+
+    CanvasGeneric canvas(native_state, gl_state, Options::size.first, Options::size.second);
+
+    canvas.offscreen(Options::offscreen);
+
+    canvas.visual_config(Options::visual_config);
+
+    // Register the scenes, so they can be looked up by name
+    SceneCollection scenes(canvas);
+    scenes.register_scenes();
+
+    if (Options::list_scenes) {
+        list_scenes();
+        return 0;
+    }
+
+    if (!canvas.init()) {
+        Log::error("%s: Could not initialize canvas\n", __FUNCTION__);
+        return 1;
+    }
+
+    ResultsFile &results_file = ResultsFile::get();
+
+    results_file.begin();
+    results_file.begin_info();
+    results_file.add_field("cmdline", get_full_command_line(argc, argv));
+    results_file.add_field("executable", GLMARK2_EXECUTABLE);
+    results_file.add_field("version", GLMARK_VERSION);
+
+    Log::info("=======================================================\n");
+    Log::info("    glmark2 %s\n", GLMARK_VERSION);
+    Log::info("=======================================================\n");
+    canvas.print_info();
+    Log::info("=======================================================\n");
+
+    results_file.end_info();
+
+    canvas.visible(true);
+
+    if (Options::validate)
+        do_validation(canvas);
+    else
+        do_benchmark(canvas);
+
+    results_file.end();
+
+    return 0;
+}

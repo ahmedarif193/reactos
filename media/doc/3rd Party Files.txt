@@ -6,6 +6,13 @@ SPDX identifier of a license was used where possible.
 Please update this file when you port/sync an external project.
 
 
+Title: glmark2
+Path: base/applications/cmdutils/glmark2
+Used Version: 2023.01 (22c527cb0556f3a1ac4445aaa52cc532760928d5)
+License: GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later.html), SGI notice for src/scene-ideas (COPYING.SGI)
+URL: https://github.com/glmark2/glmark2
+Modifications: dropped android, doc, fastlane, meson and the bundled libjpeg-turbo; executable-relative data path and 5 second default scene duration under __REACTOS__
+
 Title: rdesktop
 Path: base/applications/mstsc
 Path: modules/rosapps/applications/net/tsclient
