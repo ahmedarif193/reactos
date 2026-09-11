@@ -107,9 +107,34 @@ void wined3d_swapchain_cleanup(struct wined3d_swapchain *swapchain)
     }
 }
 
+static void wined3d_swapchain_gl_cleanup_contexts(void *object)
+{
+    struct wined3d_swapchain *swapchain = object;
+    struct wined3d_device *device = swapchain->device;
+    struct wined3d_swapchain *fallback = NULL;
+    unsigned int i;
+
+    if (device->swapchain_count && device->swapchains[0] != swapchain)
+        fallback = device->swapchains[0];
+
+    for (i = 0; i < device->context_count; ++i)
+    {
+        if (device->contexts[i]->swapchain == swapchain)
+            device->contexts[i]->swapchain = fallback;
+    }
+}
+
 void wined3d_swapchain_gl_cleanup(struct wined3d_swapchain_gl *swapchain_gl)
 {
+    struct wined3d_cs *cs = swapchain_gl->s.device->cs;
+
     wined3d_swapchain_cleanup(&swapchain_gl->s);
+
+    /* Draw-buffer destruction queues GL resource cleanup. Keep the swapchain
+     * alive until that work completes, then redirect contexts to the primary
+     * drawable before freeing their cached swapchain pointer. */
+    wined3d_cs_destroy_object(cs, wined3d_swapchain_gl_cleanup_contexts, &swapchain_gl->s);
+    wined3d_cs_finish(cs, WINED3D_CS_QUEUE_DEFAULT);
 }
 
 static void wined3d_swapchain_vk_destroy_vulkan_swapchain(struct wined3d_swapchain_vk *swapchain_vk)
