@@ -3709,7 +3709,8 @@ LRESULT CDefView::OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL 
         ListExMask |= LVS_EX_UNDERLINEHOT | LVS_EX_UNDERLINECOLD;
         ListExBits |= SHELL_GetIconUnderlineFlags();
     }
-    m_ListView.SetExtendedListViewStyle(ListExBits, ListExMask);
+    if (((UINT)m_ListView.SendMessage(LVM_GETEXTENDEDLISTVIEWSTYLE, 0, 0) & ListExMask) != ListExBits)
+        m_ListView.SetExtendedListViewStyle(ListExBits, ListExMask);
     m_ListView.SendMessage(uMsg, wParam, lParam);
     return S_OK;
 }

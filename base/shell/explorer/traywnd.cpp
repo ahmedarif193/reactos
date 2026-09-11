@@ -1766,10 +1766,7 @@ ChangePos:
         if (m_PreviousMonitor != m_Monitor)
         {
             GetScreenRect(m_PreviousMonitor, &rcWorkArea);
-            SystemParametersInfoW(SPI_SETWORKAREA,
-                                  1,
-                                  &rcWorkArea,
-                                  SPIF_SENDCHANGE);
+            SetMonitorWorkArea(m_PreviousMonitor, &rcWorkArea);
         }
 
         rcTray = m_TrayRects[m_Position];
@@ -1802,11 +1799,20 @@ ChangePos:
          * Resize the current monitor work area. Win32k will also send
          * a WM_SIZE message to automatically resize the desktop.
          */
+        SetMonitorWorkArea(m_Monitor, &rcWorkArea);
+#endif
+    }
+
+    VOID SetMonitorWorkArea(HMONITOR hMonitor, LPCRECT prcWorkArea)
+    {
+        MONITORINFO mi = { sizeof(mi) };
+        if (hMonitor && GetMonitorInfoW(hMonitor, &mi) && EqualRect(&mi.rcWork, prcWorkArea))
+            return;
+
         SystemParametersInfoW(SPI_SETWORKAREA,
                               1,
-                              &rcWorkArea,
+                              (PVOID)prcWorkArea,
                               SPIF_SENDCHANGE);
-#endif
     }
 
     VOID CheckTrayWndPosition()
@@ -2703,10 +2709,6 @@ ChangePos:
             AlignControls(NULL);
             CheckTrayWndPosition();
         }
-
-        // Note: We rely on CDesktopBrowser to get this message and call SHSettingsChanged
-        if (m_DesktopWnd)
-            ::SendMessageW(m_DesktopWnd, uMsg, wParam, lParam);
 
         if (m_StartMenuPopup && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0)
         {
