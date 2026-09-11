@@ -24,7 +24,7 @@ RunGpuStatsProbe(VOID)
     D3DKMT_DRIVERVERSION Version = 0;
     ULONGLONG Previous[32] = {0};
     LARGE_INTEGER SampleTime[32] = {{0}};
-    ULONG Nodes = 0, Node, Sample, Failures = 0;
+    ULONG Nodes = 0, Segments = 0, Node, Segment, Sample, Failures = 0;
     LONG Status;
 
     if (!Open || !Close || !Query || !Info)
@@ -51,7 +51,10 @@ RunGpuStatsProbe(VOID)
     Stats.AdapterLuid = Adapter.AdapterLuid;
     Status = Query(&Stats);
     if (Status >= 0)
+    {
         Nodes = Stats.QueryResult.AdapterInformation.NodeCount;
+        Segments = Stats.QueryResult.AdapterInformation.NbSegments;
+    }
     TestPrint("GPU_STATS_BEGIN status=0x%08lx nodes=%lu\n", Status, Nodes);
     if (Status < 0 || Nodes == 0 || Nodes > ARRAYSIZE(Previous))
     {
@@ -105,8 +108,24 @@ RunGpuStatsProbe(VOID)
             }
             TestPrint("GPU_STATS_SAMPLE sample=%lu node=%lu status=0x%08lx running_100ns=%llu elapsed_us=%llu busy_us=%llu usage_milli_pct=%llu\n", Sample, Node, Status, Running, Elapsed, Busy, Elapsed ? Busy * 100000 / Elapsed : 0);
         }
+        if (Sample == 0 || Sample == 10)
+        {
+            for (Segment = 0; Segment < Segments; ++Segment)
+            {
+                ZeroMemory(&Stats, sizeof(Stats));
+                Stats.Type = D3DKMT_QUERYSTATISTICS_SEGMENT;
+                Stats.AdapterLuid = Adapter.AdapterLuid;
+                Stats.QuerySegment.SegmentId = Segment;
+                Status = Query(&Stats);
+                if (Status < 0) ++Failures;
+                TestPrint("GPU_STATS_MEMORY sample=%lu segment=%lu status=0x%08lx limit=%llu committed=%llu resident=%llu allocations=%lu\n", Sample, Segment, Status, Stats.QueryResult.SegmentInformation.CommitLimit, Stats.QueryResult.SegmentInformation.BytesCommitted, Stats.QueryResult.SegmentInformation.BytesResident, Stats.QueryResult.SegmentInformation.Memory.AllocsResident);
+            }
+        }
     }
 
+    ZeroMemory(&Stats, sizeof(Stats));
+    Stats.Type = D3DKMT_QUERYSTATISTICS_NODE;
+    Stats.AdapterLuid = Adapter.AdapterLuid;
     Stats.QueryNode.NodeId = Nodes;
     Status = Query(&Stats);
     TestPrint("GPU_STATS_INVALID_NODE status=0x%08lx\n", Status);
