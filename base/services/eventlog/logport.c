@@ -133,6 +133,9 @@ NTSTATUS ProcessPortMessage(VOID)
             break;
         }
 
+        if (Status != STATUS_SUCCESS)
+            continue;
+
         DPRINT("Received message\n");
 
         if (Message->Header.u2.s2.Type == LPC_PORT_CLOSED)
