@@ -193,6 +193,13 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                              Buffer,
                                              &Length,
                                              &ByteOffset);
+
+        /* The library updates duplicated $FILE_NAME information through a
+         * separate parent record. Invalidate parsed directory snapshots
+         * before releasing MetadataResource or a later open can reuse the
+         * pre-write sizes from CachedLookupParent. */
+        if (NT_SUCCESS(Status) && Length != 0 && RequestedType == TypeData && !RequestedStream)
+            InterlockedIncrement(&VolCB->DirGeneration);
     }
 
     if (LockMdl)
