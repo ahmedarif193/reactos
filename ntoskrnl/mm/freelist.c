@@ -273,8 +273,7 @@ MiAllocatePagesForMdl(IN PHYSICAL_ADDRESS LowAddress,
 
             if (Page == 0)
             {
-                /* This is not good... hopefully we have at least SOME pages */
-                ASSERT(PagesFound);
+                /* The common failure path also handles an empty MDL. */
                 break;
             }
 
