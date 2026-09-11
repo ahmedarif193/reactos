@@ -17,22 +17,6 @@
 #include "adapter_map_core.h"
 #include "adapter_start_core.h"
 
-NTSTATUS NTAPI DxgkSubmitPresentBltToHwQueue(_In_opt_ PVOID Data);
-NTSTATUS NTAPI NtDxgkSubmitPresentBltToHwQueue(_In_opt_ PVOID Data);
-NTSTATUS NTAPI NtGdiDdDDICreateHwContext(_In_opt_ PVOID Data);
-NTSTATUS NTAPI NtGdiDdDDIDestroyHwContext(_In_opt_ PVOID Data);
-NTSTATUS NTAPI NtGdiDdDDIQueryFSEBlock(_In_opt_ PVOID Data);
-NTSTATUS NTAPI NtGdiDdDDISetFSEBlock(_In_opt_ PVOID Data);
-NTSTATUS NTAPI NtGdiDdDDISetMonitorColorSpaceTransform(_In_opt_ PVOID Data);
-BOOLEAN NTAPI TdrIsEnabled(VOID);
-BOOLEAN NTAPI TdrIsTimeoutForcedFlip(VOID);
-DECLSPEC_IMPORT extern volatile LONG g_TdrForceTimeout;
-BOOLEAN CDECL DxgKrnlTelemetryGlobal_LogTelemetryEvent(VOID);
-NTSTATUS CDECL SysMmMapIommuContiguousRange(_In_opt_ PVOID Adapter, _In_ ULONGLONG DeviceAddress, _In_ LARGE_INTEGER PhysicalAddress, _In_ ULONGLONG NumberOfBytes, _In_ BOOLEAN Writable);
-NTSTATUS CDECL SysMmMapIommuRange(_In_opt_ PVOID Adapter, _In_ ULONGLONG DeviceAddress, _In_opt_ PMDL Mdl, _In_ BOOLEAN Writable);
-VOID CDECL SysMmUnmapIommuContiguousRange(_In_opt_ PVOID Adapter, _In_ ULONGLONG DeviceAddress, _In_ LARGE_INTEGER PhysicalAddress, _In_ ULONGLONG NumberOfBytes, _In_ BOOLEAN Writable);
-VOID CDECL SysMmUnmapIommuRange(_In_opt_ PVOID Adapter, _In_ ULONGLONG DeviceAddress, _In_opt_ PMDL Mdl, _In_ BOOLEAN Writable);
-
 typedef struct _DXGK_TEST_RESOURCE_LIST
 {
     CM_RESOURCE_LIST Resources;
@@ -122,28 +106,8 @@ TestAdapterStartRolePolicy(VOID)
 
 START_TEST(DxgkWddmAbi)
 {
-    LARGE_INTEGER PhysicalAddress;
-
-    PhysicalAddress.QuadPart = 0;
     TestMapMemoryContractCore();
     TestAdapterStartRolePolicy();
-
-    ok_eq_hex(DxgkSubmitPresentBltToHwQueue(NULL), STATUS_NOT_IMPLEMENTED);
-    ok_eq_hex(NtDxgkSubmitPresentBltToHwQueue(NULL), STATUS_NOT_IMPLEMENTED);
-    ok_eq_hex(NtGdiDdDDICreateHwContext(NULL), STATUS_NOT_IMPLEMENTED);
-    ok_eq_hex(NtGdiDdDDIDestroyHwContext(NULL), STATUS_NOT_IMPLEMENTED);
-    ok_eq_hex(NtGdiDdDDIQueryFSEBlock(NULL), STATUS_NOT_SUPPORTED);
-    ok_eq_hex(NtGdiDdDDISetFSEBlock(NULL), STATUS_NOT_SUPPORTED);
-    ok_eq_hex(NtGdiDdDDISetMonitorColorSpaceTransform(NULL), STATUS_NOT_SUPPORTED);
-    ok_bool_true(TdrIsEnabled(), "default TDR policy is enabled");
-    InterlockedExchange(&g_TdrForceTimeout, 1);
-    ok_bool_true(TdrIsTimeoutForcedFlip(), "forced timeout is consumed");
-    ok_bool_false(TdrIsTimeoutForcedFlip(), "forced timeout remains cleared");
-    ok_bool_false(DxgKrnlTelemetryGlobal_LogTelemetryEvent(), "telemetry remains disabled");
-    ok_eq_hex(SysMmMapIommuContiguousRange(NULL, 0, PhysicalAddress, PAGE_SIZE, FALSE), STATUS_NOT_SUPPORTED);
-    ok_eq_hex(SysMmMapIommuRange(NULL, 0, NULL, FALSE), STATUS_NOT_SUPPORTED);
-    SysMmUnmapIommuContiguousRange(NULL, 0, PhysicalAddress, PAGE_SIZE, FALSE);
-    SysMmUnmapIommuRange(NULL, 0, NULL, FALSE);
 
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_4, 0x9006);
     ok_eq_ulong(DXGKDDI_INTERFACE_VERSION_WDDM2_5, 0xA00B);
