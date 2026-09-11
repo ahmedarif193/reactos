@@ -221,6 +221,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ob/ObTypes.cpp
     ntos_ob/ObWait.c
     ntos_po/PoFxState.c
+    ntos_po/PoFxState_pnp.c
     ntos_po/PoPowerSettings.c
     ntos_ps/PsNotify.c
     ntos_ps/PsNotifyKM.c
@@ -449,6 +450,7 @@ list(APPEND KMTEST_SOURCE
     ntos_mm/NtCreateSection_user.c
     ntos_mm/NtUserPhysicalPages.c
     ntos_po/PoIrp_user.c
+    ntos_po/PoFxState_user.c
     tcpip/TcpIp_user.c
     ${COMMON_SOURCE}
 
@@ -459,10 +461,12 @@ set_module_type(kmtest win32cui)
 target_link_libraries(kmtest ${PSEH_LIB})
 # kmtest/filter.c resolves fltlib.dll at runtime so kmtest still starts on
 # NT 5.x systems without Filter Manager.
-add_importlibs(kmtest advapi32 ws2_32 msvcrt kernel32 ntdll)
+add_importlibs(kmtest advapi32 ws2_32 setupapi newdev msvcrt kernel32 ntdll)
 target_compile_definitions(kmtest PRIVATE KMT_USER_MODE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 #add_pch(kmtest include/kmt_test.h)
 add_rostests_file(TARGET kmtest)
+configure_file(ntos_po/kmtest_pofx.inf kmtest_pofx.inf COPYONLY)
+add_rostests_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/kmtest_pofx.inf")
 
 #
 # Group targets

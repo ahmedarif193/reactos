@@ -278,6 +278,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/events.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/poshtdwn.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/povolume.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/po/pofx.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/power.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/thermal.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/ttm.c
