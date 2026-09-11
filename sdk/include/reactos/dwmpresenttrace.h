@@ -8,7 +8,7 @@
 #ifndef ROS_DWM_PRESENT_TRACE_H
 #define ROS_DWM_PRESENT_TRACE_H
 
-#define DPT_VERSION 1
+#define DPT_VERSION 2
 #define DPT_START 1
 #define DPT_STOP 2
 #define DPT_QUERY 3 /* Only frozen snapshots; never races live counters. */
@@ -28,6 +28,8 @@ enum DPT_METRIC
     DPT_KERNEL_ADMIT, DPT_KERNEL_TRACK, DPT_KMD_RENDER, DPT_KMD_SUBMIT,
     DPT_KERNEL_PRESENT, DPT_QUEUE, DPT_RETIRE, DPT_SIGNAL,
     DPT_BLUR_HIT, DPT_BLUR_FILTER, DPT_BO_CREATE, DPT_CPU_UPLOAD,
+    DPT_WGL_FLUSH, DPT_WGL_PACE, DPT_WGL_CALLBACK, DPT_SHARED_COMPOSE,
+    DPT_BO_WAIT,
     DPT_METRIC_COUNT
 };
 
@@ -40,6 +42,7 @@ typedef struct _DPT_REQUEST
 typedef struct _DPT_COUNTER
 {
     ULONGLONG Entered, Completed, Failed, Ticks, MaxTicks, Bytes;
+    ULONGLONG MinTicks; /* UINT64_MAX for counters without timed samples. */
 } DPT_COUNTER;
 
 typedef struct _DPT_DOMAIN

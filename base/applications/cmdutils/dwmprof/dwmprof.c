@@ -3,6 +3,7 @@
  * Standalone userspace consumer of the shared profiling SDK.
  */
 #include <reactos/dwmprof.h>
+#include <reactos/dwmpresenttracenames.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -26,16 +27,6 @@ static void Print(const char *Format, ...)
 
 static int Dump(const DPT_SNAPSHOT *Snapshot)
 {
-    static const char *Names[DPT_METRIC_COUNT] = {
-        "dirty_frame_fetch_to_ack", "metadata_fetch", "scene_prepare", "gpu_begin",
-        "window", "texture_layer", "blur", "shadow", "swap", "surface_ack",
-        "mesa_present", "primary_query", "scanout_blit_issue", "flush",
-        "device_lock_wait", "primary_fence_wait", "primary_cache_invalidate",
-        "kmt_present", "kmt_submit", "winsys_ioctl", "sampler_shadow_update",
-        "kernel_command_admit", "kernel_track", "miniport_render", "miniport_submit",
-        "kernel_present", "admit_to_dispatch", "dispatch_to_retire", "fence_publish",
-        "blur_cache_hit", "blur_filter", "bo_create", "cpu_texture_upload"
-    };
     ULONG Domain, Metric;
     int Result = Snapshot->Available == 7 ? 0 : 2;
     Print("DWM_CAPTURE_BEGIN version=%lu session=%lu available=%lx "
@@ -59,10 +50,10 @@ static int Dump(const DPT_SNAPSHOT *Snapshot)
             if (!Counter->Entered)
                 continue;
             Print("DWM_CAPTURE_COUNTER domain=%lu stage=%s entered=%I64u completed=%I64u "
-                  "unfinished=%I64u failed=%I64u ticks=%I64u max_ticks=%I64u bytes=%I64u\n",
-                  Domain, Names[Metric], Counter->Entered, Counter->Completed,
+                  "unfinished=%I64u failed=%I64u ticks=%I64u min_ticks=%I64u max_ticks=%I64u bytes=%I64u\n",
+                  Domain, DptMetricName(Metric), Counter->Entered, Counter->Completed,
                   Counter->Entered - Counter->Completed, Counter->Failed,
-                  Counter->Ticks, Counter->MaxTicks, Counter->Bytes);
+                  Counter->Ticks, Counter->MinTicks, Counter->MaxTicks, Counter->Bytes);
             if (Counter->Completed > Counter->Entered || Counter->Failed > Counter->Completed)
                 Result = 1;
         }

@@ -10,6 +10,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <reactos/dwmprof.h>
 
 #define WGLGEARS_RUN_MILLISECONDS 16000
 #define WGLGEARS_CLOSE_MILLISECONDS 5000
@@ -29,6 +30,7 @@ typedef struct _WGLGEARS_OUTPUT_SCAN
     BOOL VsyncControlSeen;
     INT VsyncInterval;
     ULONG SampleCount;
+    ULONG CaptureSession;
     double MinimumFps;
     double MaximumFps;
     double TotalFps;
@@ -63,6 +65,7 @@ ScanChildOutputLine(
     if (Scan->LineOverflow)
         return;
     Scan->Line[Scan->LineLength] = '\0';
+    sscanf(Scan->Line, "GEARS_PROFILE_ARMED session=%lu", &Scan->CaptureSession);
     if (sscanf(Scan->Line,
                "WGLGEARS_VSYNC control=available interval=%d",
                &Interval) == 1)
@@ -161,8 +164,24 @@ CloseProcessWindow(
     return TRUE;
 }
 
+static HRESULT
+StopPresentationCapture(ULONG Session)
+{
+    HMODULE Library = LoadLibraryW(L"dwmprof.dll");
+    HRESULT (WINAPI *Stop)(ULONG, DPT_SNAPSHOT *, ULONG);
+    DPT_SNAPSHOT Snapshot;
+    HRESULT Status;
+
+    if (Library == NULL)
+        return HRESULT_FROM_WIN32(GetLastError());
+    Stop = (void *)GetProcAddress(Library, "DwmProfileStopCapture");
+    Status = Stop ? Stop(Session, &Snapshot, sizeof(Snapshot)) : E_NOINTERFACE;
+    FreeLibrary(Library);
+    return Status;
+}
+
 int
-main(VOID)
+main(int argc, char **argv)
 {
     CHAR ApplicationPath[MAX_PATH];
     CHAR CommandLine[(MAX_PATH * 2) + 16];
@@ -180,6 +199,13 @@ main(VOID)
     DWORD WaitStatus;
     UINT Length;
     BOOL Forced = FALSE;
+    BOOL Profile = argc == 2 && strcmp(argv[1], "--profile") == 0;
+
+    if (argc > 1 && !Profile)
+    {
+        RunnerPrint("Usage: wglgears_runner [--profile]\n");
+        return 1;
+    }
 
     ZeroMemory(&OutputScan, sizeof(OutputScan));
 
@@ -198,8 +224,8 @@ main(VOID)
                   SystemDirectory) < 0 ||
         _snprintf(CommandLine,
                   sizeof(CommandLine),
-                  "\"%s\" -info",
-                  ApplicationPath) < 0)
+                  "\"%s\" -info%s",
+                  ApplicationPath, Profile ? " --profile" : "") < 0)
     {
         RunnerPrint("RPI5_WGLGEARS_ERROR path_too_long\n");
         return 1;
@@ -286,7 +312,7 @@ main(VOID)
             if (WaitStatus == WAIT_OBJECT_0)
                 break;
         } while (GetTickCount() - CloseTick <
-                 WGLGEARS_CLOSE_MILLISECONDS);
+                 (Profile ? 15000 : WGLGEARS_CLOSE_MILLISECONDS));
     }
 
     if (WaitStatus != WAIT_OBJECT_0)
@@ -301,6 +327,17 @@ main(VOID)
         ScanChildOutputLine(&OutputScan);
     if (!GetExitCodeProcess(ProcessInformation.hProcess, &ExitCode))
         ExitCode = GetLastError();
+    if (Profile && OutputScan.CaptureSession != 0)
+    {
+        /* STOP is idempotent for this session. Also stop a capture whose
+         * child crashed or was killed before it could produce its report. */
+        HRESULT Status = StopPresentationCapture(OutputScan.CaptureSession);
+
+        RunnerPrint("GEARS_PROFILE_CLEANUP session=%lu status=%08lx\n",
+                    OutputScan.CaptureSession, Status);
+        if (FAILED(Status) && ExitCode == EXIT_SUCCESS)
+            ExitCode = (DWORD)Status;
+    }
     RunnerPrint("RPI5_WGLGEARS_RESULT samples=%lu min_fps=%.3f "
                 "average_fps=%.3f max_fps=%.3f "
                 "vsync_control=%lu interval=%d\n",
