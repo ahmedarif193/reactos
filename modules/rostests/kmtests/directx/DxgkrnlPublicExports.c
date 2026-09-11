@@ -33,6 +33,21 @@ static const RXGK_TEST_EXPORT RxgkPublicExports[] =
     RXGK_NTGDI_EXPORTS_1(RXGK_TEST_EXPORT_ENTRY)
     RXGK_NTGDI_EXPORTS_2(RXGK_TEST_EXPORT_ENTRY)
     RXGK_NTGDI_EXPORTS_5(RXGK_TEST_EXPORT_ENTRY)
+    /*
+     * These scheduler exports require private adapter or policy state. Check
+     * their name/ordinal contract without passing NULL internal objects or
+     * changing timeout controls used by the running display driver.
+     */
+    { 2, "DxgKrnlTelemetryGlobal_LogTelemetryEvent" },
+    { 11, "SysMmMapIommuContiguousRange" },
+    { 12, "SysMmMapIommuRange" },
+    { 13, "SysMmUnmapIommuContiguousRange" },
+    { 14, "SysMmUnmapIommuRange" },
+    { 23, "TdrIsEnabled" },
+    { 25, "TdrIsTimeoutForcedFlip" },
+    { 37, "g_TdrForceTimeout" },
+    { 48, "DxgkSubmitPresentBltToHwQueue" },
+    { 83, "NtDxgkSubmitPresentBltToHwQueue" },
 };
 
 #undef RXGK_TEST_EXPORT_ENTRY
