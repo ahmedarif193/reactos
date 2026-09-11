@@ -741,8 +741,6 @@ TaskbarPin_SaveOrder(const CAtlArray<TASKBAR_PIN_ORDER> &Order)
         return HRESULT_FROM_WIN32(error);
     error = RegSetValueExW(hKey, TASKBAR_PIN_ORDER_VALUE, 0, REG_MULTI_SZ,
                            (const BYTE *)Buffer.GetData(), (DWORD)(cch * sizeof(WCHAR)));
-    if (error == ERROR_SUCCESS)
-        RegFlushKey(hKey);
     RegCloseKey(hKey);
     return error == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(error);
 }

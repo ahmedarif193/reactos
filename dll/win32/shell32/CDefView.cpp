@@ -129,6 +129,70 @@ ClientToListView(HWND hwndLV, POINT *ppt)
     ppt->y += Origin.y;
 }
 
+static HBITMAP
+CreateDragIconBitmap(HIMAGELIST himl, INT iIcon, SIZE *pSize)
+{
+    INT cx, cy;
+    if (!ImageList_GetIconSize(himl, &cx, &cy) || cx <= 0 || cy <= 0)
+        return NULL;
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = cx;
+    bmi.bmiHeader.biHeight = -cy;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    DWORD *pBlack = NULL, *pWhite = NULL, *pImage = NULL;
+    HDC hdc = CreateCompatibleDC(NULL);
+    if (!hdc)
+        return NULL;
+    HBITMAP hbmBlack = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (void **)&pBlack, NULL, 0);
+    HBITMAP hbmWhite = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (void **)&pWhite, NULL, 0);
+    HBITMAP hbmImage = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (void **)&pImage, NULL, 0);
+    if (hbmBlack && hbmWhite && hbmImage && pBlack && pWhite && pImage)
+    {
+        HGDIOBJ hbmOld = SelectObject(hdc, hbmBlack);
+        PatBlt(hdc, 0, 0, cx, cy, BLACKNESS);
+        ImageList_Draw(himl, iIcon, hdc, 0, 0, ILD_NORMAL);
+        SelectObject(hdc, hbmWhite);
+        PatBlt(hdc, 0, 0, cx, cy, WHITENESS);
+        ImageList_Draw(himl, iIcon, hdc, 0, 0, ILD_NORMAL);
+        SelectObject(hdc, hbmOld);
+        GdiFlush();
+
+        for (INT i = 0; i < cx * cy; ++i)
+        {
+            DWORD Black = pBlack[i], White = pWhite[i], Pixel = 0;
+            INT Alpha = 0;
+            for (INT Shift = 0; Shift < 24; Shift += 8)
+                Alpha += 255 - (INT)((White >> Shift) & 0xFF) + (INT)((Black >> Shift) & 0xFF);
+            Alpha = min(max(Alpha / 3, 0), 255);
+            if (Alpha)
+            {
+                for (INT Shift = 0; Shift < 24; Shift += 8)
+                    Pixel |= (DWORD)min((INT)((Black >> Shift) & 0xFF) * 255 / Alpha, 255) << Shift;
+                Pixel |= (DWORD)Alpha << 24;
+            }
+            pImage[i] = Pixel;
+        }
+        pSize->cx = cx;
+        pSize->cy = cy;
+    }
+    else if (hbmImage)
+    {
+        DeleteObject(hbmImage);
+        hbmImage = NULL;
+    }
+    if (hbmBlack)
+        DeleteObject(hbmBlack);
+    if (hbmWhite)
+        DeleteObject(hbmWhite);
+    DeleteDC(hdc);
+    return hbmImage;
+}
+
 // Helper struct to automatically cleanup the IContextMenu
 // We want to explicitly reset the Site, so there are no circular references
 struct MenuCleanup
@@ -269,6 +333,7 @@ private:
     CComPtr<IDataObject>      m_pSourceDataObject;
     CComPtr<IDropTarget>      m_pCurDropTarget;     // The sub-item, which is currently dragged over
     CComPtr<IDataObject>      m_pCurDataObject;     // The dragged data-object
+    CComPtr<IDropTargetHelper> m_pDropTargetHelper;
     LONG                      m_iDragOverItem;      // Dragged over item's index, if m_pCurDropTarget != NULL
     UINT                      m_cScrollDelay;       // Send a WM_*SCROLL msg every 250 ms during drag-scroll
     POINT                     m_ptLastMousePos;     // Mouse position at last DragOver call
@@ -3389,10 +3454,26 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
                     Shell_GetImageLists(&big_icons, &small_icons);
                     PCUITEMID_CHILD pidl = _PidlByItem(params->iItem);
                     int iIcon = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidl, 0);
-                    POINT ptItem;
-                    m_ListView.GetItemPosition(params->iItem, &ptItem);
+                    SHDRAGIMAGE shdi = {};
+                    RECT rcIcon;
 
-                    ImageList_BeginDrag(big_icons, iIcon, params->ptAction.x - ptItem.x, params->ptAction.y - ptItem.y);
+                    shdi.hbmpDragImage = CreateDragIconBitmap(big_icons, iIcon, &shdi.sizeDragImage);
+                    shdi.crColorKey = CLR_NONE;
+                    if (shdi.hbmpDragImage)
+                    {
+                        CComPtr<IDragSourceHelper> pDragSourceHelper;
+
+                        if (ListView_GetItemRect(m_ListView, params->iItem, &rcIcon, LVIR_ICON))
+                        {
+                            shdi.ptOffset.x = params->ptAction.x - (rcIcon.left + rcIcon.right - shdi.sizeDragImage.cx) / 2;
+                            shdi.ptOffset.y = params->ptAction.y - (rcIcon.top + rcIcon.bottom - shdi.sizeDragImage.cy) / 2;
+                        }
+                        if (FAILED(ShellObjectCreator<CDropTargetHelper>(IID_PPV_ARG(IDragSourceHelper, &pDragSourceHelper))) ||
+                            FAILED(pDragSourceHelper->InitializeFromBitmap(&shdi, pda)))
+                        {
+                            DeleteObject(shdi.hbmpDragImage);
+                        }
+                    }
                     DoDragDrop(pda, this, dwEffect, &dwEffect2);
                     m_pSourceDataObject.Release();
                 }
@@ -5014,9 +5095,11 @@ HRESULT WINAPI CDefView::DragEnter(IDataObject *pDataObject, DWORD grfKeyState, 
     HRESULT hr = drag_notify_subitem(grfKeyState, pt, pdwEffect);
     if (SUCCEEDED(hr))
     {
-        POINT ptClient = {pt.x, pt.y};
-        ScreenToClient(&ptClient);
-        ImageList_DragEnter(m_hWnd, ptClient.x, ptClient.y);
+        POINT ptScreen = {pt.x, pt.y};
+        if (!m_pDropTargetHelper)
+            ShellObjectCreator<CDropTargetHelper>(IID_PPV_ARG(IDropTargetHelper, &m_pDropTargetHelper));
+        if (m_pDropTargetHelper)
+            m_pDropTargetHelper->DragEnter(m_hWnd, pDataObject, &ptScreen, *pdwEffect);
     }
 
     return hr;
@@ -5024,15 +5107,17 @@ HRESULT WINAPI CDefView::DragEnter(IDataObject *pDataObject, DWORD grfKeyState, 
 
 HRESULT WINAPI CDefView::DragOver(DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
 {
-    POINT ptClient = {pt.x, pt.y};
-    ScreenToClient(&ptClient);
-    ImageList_DragMove(ptClient.x, ptClient.y);
-    return drag_notify_subitem(grfKeyState, pt, pdwEffect);
+    POINT ptScreen = {pt.x, pt.y};
+    HRESULT hr = drag_notify_subitem(grfKeyState, pt, pdwEffect);
+    if (m_pDropTargetHelper)
+        m_pDropTargetHelper->DragOver(&ptScreen, *pdwEffect);
+    return hr;
 }
 
 HRESULT WINAPI CDefView::DragLeave()
 {
-    ImageList_DragLeave(m_hWnd);
+    if (m_pDropTargetHelper)
+        m_pDropTargetHelper->DragLeave();
 
     if (m_pCurDropTarget)
     {
@@ -5236,8 +5321,11 @@ void CDefView::_MoveSelectionOnAutoArrange(POINT pt)
 
 HRESULT WINAPI CDefView::Drop(IDataObject* pDataObject, DWORD grfKeyState, POINTL pt, DWORD *pdwEffect)
 {
-    ImageList_DragLeave(m_hWnd);
-    ImageList_EndDrag();
+    if (m_pDropTargetHelper)
+    {
+        POINT ptScreen = {pt.x, pt.y};
+        m_pDropTargetHelper->Drop(pDataObject, &ptScreen, *pdwEffect);
+    }
 
     if ((IsDropOnSource(NULL) == S_OK) &&
         (*pdwEffect & DROPEFFECT_MOVE) &&
