@@ -5,10 +5,9 @@
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif.ing@outlook.com>
  */
 
-#include <windows.h>
+#include "precomp.h"
 #include <wchar.h>
-#include <winternl.h>
-#include <wine/test.h>
+#include <winreg.h>
 
 #define CHECK(expression) ok((expression), "%s failed, error %lu\n", #expression, GetLastError())
 
