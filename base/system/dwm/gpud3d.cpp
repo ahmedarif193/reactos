@@ -5,9 +5,12 @@
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif193@gmail.com>
  */
 
+#include <ntstatus.h>
+#define WIN32_NO_STATUS
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include <d3dkmthk.h>
 #include <d3dcompiler.h>
 #include <math.h>
 #include <stdio.h>
@@ -356,6 +359,26 @@ BOOL CreateShaders()
     return Result(State.Device->CreateQuery(&Query, &State.Completion), "CreateQuery");
 }
 
+BOOL HasNativeDriver(const LUID &Luid)
+{
+    D3DKMT_OPENADAPTERFROMLUID Open = {};
+    Open.AdapterLuid = Luid;
+    if (D3DKMTOpenAdapterFromLuid(&Open) < 0)
+        return FALSE;
+    D3DKMT_UMDFILENAMEINFO Name = {};
+    Name.Version = KMTUMDVERSION_DX11;
+    D3DKMT_QUERYADAPTERINFO Query = {};
+    Query.hAdapter = Open.hAdapter;
+    Query.Type = KMTQAITYPE_UMDRIVERNAME;
+    Query.pPrivateDriverData = &Name;
+    Query.PrivateDriverDataSize = sizeof(Name);
+    NTSTATUS Status = D3DKMTQueryAdapterInfo(&Query);
+    D3DKMT_CLOSEADAPTER Close = {};
+    Close.hAdapter = Open.hAdapter;
+    D3DKMTCloseAdapter(&Close);
+    return Status >= 0 && Name.UmdFileName[0] != 0;
+}
+
 BOOL CreateDevice(IDXGIAdapter1 **Selected)
 {
     typedef HRESULT (WINAPI *CreateFactoryProc)(REFIID, void **);
@@ -382,7 +405,7 @@ BOOL CreateDevice(IDXGIAdapter1 **Selected)
         Status = Adapter->GetDesc1(&Desc);
         BOOL OwnsOutput = FALSE;
         if (SUCCEEDED(Status) && Desc.VendorId != 0 && Desc.VendorId != 0x1414 &&
-            !(Desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE))
+            !(Desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) && HasNativeDriver(Desc.AdapterLuid))
         {
             for (ULONG OutputIndex = 0; ; ++OutputIndex)
             {
