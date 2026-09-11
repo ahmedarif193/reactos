@@ -1223,7 +1223,7 @@ DwmGpuComposeRepairBackBuffer(RECT *Draw)
 }
 
 static BOOL
-DwmGpuComposeBeginMeasured(ULONG BackdropColor, const BYTE *BackdropPixels,
+DwmGpuComposeBeginMeasured(const BYTE *BackdropPixels,
                     BOOL RefreshBackdrop, const RECT *Damage)
 {
     DWM_WIN Backdrop;
@@ -1271,11 +1271,8 @@ DwmGpuComposeBeginMeasured(ULONG BackdropColor, const BYTE *BackdropPixels,
     glEnable(GL_SCISSOR_TEST);
     glScissor(Draw.left, g_composeHeight - Draw.bottom,
               Draw.right - Draw.left, Draw.bottom - Draw.top);
-    glClearColor((GLfloat)(GetRValue(BackdropColor) / 255.0),
-                 (GLfloat)(GetGValue(BackdropColor) / 255.0),
-                 (GLfloat)(GetBValue(BackdropColor) / 255.0),
-                 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    /* The opaque wallpaper covers every pixel inside this scissor. Clearing
+     * it first is redundant and can expand tiled rendering beyond damage. */
     /* Kernel surface slots cannot use this reserved wallpaper identity. */
     RtlZeroMemory(&Backdrop, sizeof(Backdrop));
     Backdrop.SurfaceId = (ULONG)-1;
@@ -1300,7 +1297,7 @@ DwmGpuComposeBegin(ULONG BackdropColor, const BYTE *BackdropPixels,
         return Result;
     }
     DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BEGIN);
-    BOOL Result = DwmGpuComposeBeginMeasured(BackdropColor, BackdropPixels, RefreshBackdrop, Damage);
+    BOOL Result = DwmGpuComposeBeginMeasured(BackdropPixels, RefreshBackdrop, Damage);
     ULONGLONG Bytes = Result ?
         (ULONGLONG)(g_composeDamage.Draw.right - g_composeDamage.Draw.left) *
         (g_composeDamage.Draw.bottom - g_composeDamage.Draw.top) * sizeof(ULONG) : 0;
