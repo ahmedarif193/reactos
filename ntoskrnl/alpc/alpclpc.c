@@ -866,7 +866,7 @@ NtListenPort(
     for (;;)
     {
         Status = NtReplyWaitReceivePortEx(PortHandle, NULL, NULL, ConnectMessage, NULL);
-        if (!NT_SUCCESS(Status)) return Status;
+        if (Status != STATUS_SUCCESS) return Status;
         if ((ConnectMessage->u2.s2.Type & ~LPC_KERNELMODE_MESSAGE) == LPC_CONNECTION_REQUEST)
         {
             return STATUS_SUCCESS;
