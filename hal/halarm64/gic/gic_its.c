@@ -286,6 +286,33 @@ HalpGicItsAllocateLpi(
     return HAL_ARM64_LPI_BASE + Index;
 }
 
+static BOOLEAN
+HalpGicItsReserveLpi(
+    _In_ ULONG Lpi)
+{
+    KIRQL OldIrql;
+    ULONG Index;
+    BOOLEAN Available;
+
+    if (Lpi < HAL_ARM64_LPI_BASE)
+        return FALSE;
+
+    Index = Lpi - HAL_ARM64_LPI_BASE;
+    if (Index >= HalpGicLpiAllocator.TotalLpis)
+        return FALSE;
+
+    KeAcquireSpinLock(&HalpGicLpiAllocator.Lock, &OldIrql);
+    Available = RtlAreBitsClear(&HalpGicLpiAllocator.Bitmap, Index, 1);
+    if (Available)
+    {
+        RtlSetBits(&HalpGicLpiAllocator.Bitmap, Index, 1);
+        HalpGicLpiAllocator.AllocatedLpis++;
+    }
+    KeReleaseSpinLock(&HalpGicLpiAllocator.Lock, OldIrql);
+
+    return Available;
+}
+
 /*
  * HalpGicItsFreeLpi - Free previously allocated LPIs
  */
@@ -1928,6 +1955,7 @@ HalpGicItsAllocateMsi(
     _In_ ULONG DeviceId,
     _In_ ULONG EventId,
     _In_ ULONG TargetCpu,
+    _In_ ULONG RequestedLpi,
     _Out_ PULONG Lpi,
     _Out_ PPHYSICAL_ADDRESS MsiAddress,
     _Out_ PULONG MsiData)
@@ -1964,6 +1992,9 @@ HalpGicItsAllocateMsi(
     /* Check if already allocated */
     if (Device->EventToLpi && Device->EventToLpi[EventId] != 0)
     {
+        if (RequestedLpi != 0 && Device->EventToLpi[EventId] != RequestedLpi)
+            return STATUS_CONFLICTING_ADDRESSES;
+
         /* Already allocated, return existing mapping */
         *Lpi = Device->EventToLpi[EventId];
         MsiAddress->QuadPart = ItsNode->PhysicalBase.QuadPart + GITS_TRANSLATER;
@@ -1975,8 +2006,17 @@ HalpGicItsAllocateMsi(
     if (!HalpGicItsEnsureCollectionOnNode(ItsNode, TargetCpu))
         return STATUS_UNSUCCESSFUL;
 
-    /* Allocate LPI */
-    AllocatedLpi = HalpGicItsAllocateLpi(1);
+    /* A resource-assigned vector must reach the ISR connected to that INTID. */
+    if (RequestedLpi != 0)
+    {
+        if (!HalpGicItsReserveLpi(RequestedLpi))
+            return STATUS_CONFLICTING_ADDRESSES;
+        AllocatedLpi = RequestedLpi;
+    }
+    else
+    {
+        AllocatedLpi = HalpGicItsAllocateLpi(1);
+    }
     if (AllocatedLpi == 0)
         return STATUS_INSUFFICIENT_RESOURCES;
 
