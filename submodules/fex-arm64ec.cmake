@@ -81,6 +81,24 @@ set(FEX_ARM64EC_CXX_INCLUDE_DIR "${FEX_ARM64EC_INCLUDE_DIR}/c++/v1")
 set(FEX_ARM64EC_LIBRARY_DIR
     "${REACTOS_CLANG_LLVM_MINGW_ROOT}/aarch64-w64-mingw32/lib")
 
+function(fex_discard_stale_build _name _binary_dir)
+    set(_cache "${_binary_dir}/CMakeCache.txt")
+    if(NOT EXISTS "${_cache}")
+        return()
+    endif()
+    file(STRINGS "${_cache}" _home REGEX "^CMAKE_HOME_DIRECTORY:INTERNAL=")
+    string(REPLACE "CMAKE_HOME_DIRECTORY:INTERNAL=" "" _home "${_home}")
+    if(_home STREQUAL FEX_SOURCE_DIR)
+        return()
+    endif()
+    message(STATUS "FEX: discarding ${_binary_dir} configured from ${_home}")
+    file(REMOVE_RECURSE "${_binary_dir}" "${CMAKE_CURRENT_BINARY_DIR}/${_name}-prefix")
+endfunction()
+
+fex_discard_stale_build(fex-arm64ec-build "${FEX_BINARY_DIR}")
+fex_discard_stale_build(fex-wow64-build "${FEX_WOW64_BINARY_DIR}")
+file(REMOVE_RECURSE "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-src")
+
 ExternalProject_Add(fex-arm64ec-build
     SOURCE_DIR "${FEX_SOURCE_DIR}"
     BINARY_DIR "${FEX_BINARY_DIR}"
@@ -156,7 +174,6 @@ ExternalProject_Add(fex-arm64ec-build
 # The i386 emulator, from the same source configured for aarch64 rather than
 # arm64ec. Serialize the two emulator builds to bound their combined load.
 ExternalProject_Add(fex-wow64-build
-    DEPENDS fex-arm64ec-build
     SOURCE_DIR "${FEX_SOURCE_DIR}"
     BINARY_DIR "${FEX_WOW64_BINARY_DIR}"
     DOWNLOAD_COMMAND ""
@@ -208,6 +225,7 @@ ExternalProject_Add(fex-wow64-build
     BUILD_BYPRODUCTS "${FEX_WOW64_DLL_DEST}" "${FEX_WOW64_DLL_SYMBOLS}"
     USES_TERMINAL_BUILD OFF
 )
+ExternalProject_Add_StepDependencies(fex-wow64-build build fex-arm64ec-build)
 
 # Deploy uncompressed so ntdll can load the emulator during process startup.
 add_cd_file(
