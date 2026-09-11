@@ -259,66 +259,6 @@ sync_arm64_submodules() {
 	fi
 }
 
-prepare_arm64_fex_source() {
-	[ "$ARCH" = "arm64" ] || return 0
-
-	fex_arm64ec_enabled || return 0
-
-	# The ReactOS changes to FEX live in the fork's main-ros branch (see .gitmodules); the submodule is used as-is.
-	FEX_UPSTREAM_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
-	FEX_PREPARED_DIR="$REACTOS_SOURCE_DIR/$REACTOS_OUTPUT_PATH/submodules/fex-arm64ec-src"
-
-	if [ ! -f "$FEX_UPSTREAM_DIR/CMakeLists.txt" ]; then
-		optional_fex_warning "FEX submodule source is missing at $FEX_UPSTREAM_DIR"
-		return 0
-	fi
-	if [ ! -f "$FEX_UPSTREAM_DIR/External/fmt/CMakeLists.txt" ]; then
-		optional_fex_warning "FEX submodule dependencies are incomplete"
-		return 0
-	fi
-	if ! command -v cksum >/dev/null 2>&1; then
-		optional_fex_warning "cksum is unavailable"
-		return 0
-	fi
-	if ! command -v git >/dev/null 2>&1 || ! git -C "$FEX_UPSTREAM_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-		optional_fex_warning "the FEX source revision cannot be identified"
-		return 0
-	fi
-	if ! FEX_SOURCE_DIFF=$(git -C "$FEX_UPSTREAM_DIR" diff --binary --ignore-submodules=dirty HEAD --); then
-		optional_fex_warning "the FEX source changes cannot be identified"
-		return 0
-	fi
-
-	if ! FEX_SOURCE_REV=$(git -C "$FEX_UPSTREAM_DIR" rev-parse HEAD); then
-		optional_fex_warning "the FEX source revision cannot be identified"
-		return 0
-	fi
-	if ! FEX_SUBMODULE_STATE=$(git -C "$FEX_UPSTREAM_DIR" submodule status --recursive); then
-		optional_fex_warning "the FEX submodule revisions cannot be identified"
-		return 0
-	fi
-	FEX_MISSING_SUBMODULES=$(printf '%s\n' "$FEX_SUBMODULE_STATE" | sed -n '/^-/p')
-	if [ -n "$FEX_MISSING_SUBMODULES" ]; then
-		optional_fex_warning "FEX submodule dependencies are incomplete"
-		return 0
-	fi
-	# Local tracked changes are part of the prepared source, just like the
-	# checked-out revision. Refresh the copy when either changes.
-	FEX_SOURCE_ID=$(printf '%s\n%s\n%s\n' "$FEX_SOURCE_REV" "$FEX_SUBMODULE_STATE" "$FEX_SOURCE_DIFF" | cksum | awk '{print $1 "-" $2}')
-	FEX_PREPARED_STAMP="$FEX_PREPARED_DIR/.reactos-source-id"
-	if [ -f "$FEX_PREPARED_DIR/CMakeLists.txt" ] && [ "$(sed -n '1p' "$FEX_PREPARED_STAMP" 2>/dev/null)" = "$FEX_SOURCE_ID" ]; then
-		echo "Prepared FEX ARM64EC source is current; reusing it."
-		return 0
-	fi
-
-	echo "Preparing FEX ARM64EC source..."
-	rm -rf "$FEX_PREPARED_DIR"
-	mkdir -p "$(dirname "$FEX_PREPARED_DIR")"
-	cp -a "$FEX_UPSTREAM_DIR" "$FEX_PREPARED_DIR" || fail "failed to prepare FEX source"
-	rm -rf "$FEX_PREPARED_DIR/.git"
-	printf '%s\n' "$FEX_SOURCE_ID" > "$FEX_PREPARED_STAMP"
-}
-
 lower_build_type() {
 	case "$1" in
 		Release|release)
@@ -663,7 +603,6 @@ echo
 sync_glmark2_submodule
 sync_kdb_submodules
 sync_arm64_submodules
-prepare_arm64_fex_source
 
 cd "$BUILD_DIR" || exit 1
 

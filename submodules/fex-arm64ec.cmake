@@ -10,17 +10,13 @@ if(NOT ARCH STREQUAL "arm64")
     message(FATAL_ERROR "FEX ARM64EC module is only supported on ARM64 builds")
 endif()
 
-set(FEX_UPSTREAM_DIR "${REACTOS_SOURCE_DIR}/submodules/fex-arm64ec")
-set(FEX_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-src")
-set(FEX_SOURCE_STATE "${FEX_SOURCE_DIR}/.reactos-source-id")
+set(FEX_SOURCE_DIR "${REACTOS_SOURCE_DIR}/submodules/fex-arm64ec")
 set(FEX_ARM64EC_UNAVAILABLE_REASON)
 
 if(NOT EXISTS "${FEX_SOURCE_DIR}/CMakeLists.txt")
-    set(FEX_ARM64EC_UNAVAILABLE_REASON "prepared source is missing at ${FEX_SOURCE_DIR}")
+    set(FEX_ARM64EC_UNAVAILABLE_REASON "submodule source is missing at ${FEX_SOURCE_DIR}")
 elseif(NOT EXISTS "${FEX_SOURCE_DIR}/External/fmt/CMakeLists.txt")
-    set(FEX_ARM64EC_UNAVAILABLE_REASON "prepared source dependencies are incomplete")
-elseif(NOT EXISTS "${FEX_SOURCE_STATE}")
-    set(FEX_ARM64EC_UNAVAILABLE_REASON "prepared source state is missing at ${FEX_SOURCE_STATE}")
+    set(FEX_ARM64EC_UNAVAILABLE_REASON "submodule source dependencies are incomplete")
 elseif(NOT EXISTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/arm64ec-w64-mingw32-clang" OR
        NOT EXISTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/arm64ec-w64-mingw32-clang++")
     set(FEX_ARM64EC_UNAVAILABLE_REASON "the ARM64EC Clang toolchain is unavailable")
@@ -45,7 +41,7 @@ endif()
 
 if(FEX_ARM64EC_UNAVAILABLE_REASON)
     message(FATAL_ERROR "FEX ARM64EC is enabled but unavailable: ${FEX_ARM64EC_UNAVAILABLE_REASON}. "
-        "Run configure.sh to prepare FEX, "
+        "Run configure.sh to initialize the FEX submodule, "
         "or use -DENABLE_FEX_ARM64EC=OFF to disable it explicitly.")
 endif()
 
@@ -91,6 +87,9 @@ ExternalProject_Add(fex-arm64ec-build
     DOWNLOAD_COMMAND ""
     UPDATE_COMMAND ""
     PATCH_COMMAND ""
+    # Let FEX's build graph check the tracked source on every invocation.
+    # An ExternalProject build stamp cannot track edits inside the submodule.
+    BUILD_ALWAYS TRUE
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=${FEX_ARM64EC_BUILD_TYPE}
         # FEX's ARM64EC Module.cpp needs CONTEXT with AMD64 fields (Rax etc).
@@ -155,8 +154,7 @@ ExternalProject_Add(fex-arm64ec-build
 )
 
 # The i386 emulator, from the same source configured for aarch64 rather than
-# arm64ec.  DEPENDS on the ARM64EC build because both drive the one shared
-# source directory, whose prepared state configure.sh writes in place.
+# arm64ec. Serialize the two emulator builds to bound their combined load.
 ExternalProject_Add(fex-wow64-build
     DEPENDS fex-arm64ec-build
     SOURCE_DIR "${FEX_SOURCE_DIR}"
@@ -164,6 +162,7 @@ ExternalProject_Add(fex-wow64-build
     DOWNLOAD_COMMAND ""
     UPDATE_COMMAND ""
     PATCH_COMMAND ""
+    BUILD_ALWAYS TRUE
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=${FEX_ARM64EC_BUILD_TYPE}
         -DCMAKE_C_COMPILER=${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/aarch64-w64-mingw32-clang
@@ -209,16 +208,6 @@ ExternalProject_Add(fex-wow64-build
     BUILD_BYPRODUCTS "${FEX_WOW64_DLL_DEST}" "${FEX_WOW64_DLL_SYMBOLS}"
     USES_TERMINAL_BUILD OFF
 )
-
-# configure.sh writes this state file from the FEX revision and recursive FEX
-# submodule revisions.  Updating it invalidates the external
-# configure and build stamps without rebuilding FEX on every image invocation.
-ExternalProject_Add_Step(fex-arm64ec-build source-state
-    COMMAND ${CMAKE_COMMAND} -E true
-    DEPENDEES patch
-    DEPENDERS configure
-    DEPENDS "${FEX_SOURCE_STATE}"
-    COMMENT "Checking prepared FEX ARM64EC source state")
 
 # Deploy uncompressed so ntdll can load the emulator during process startup.
 add_cd_file(
@@ -297,7 +286,6 @@ else()
     unset(FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY CACHE)
 endif()
 
-message(STATUS "FEX ARM64EC: submodule   = ${FEX_UPSTREAM_DIR}")
 message(STATUS "FEX ARM64EC: source dir  = ${FEX_SOURCE_DIR}")
 message(STATUS "FEX ARM64EC: output DLL   = ${FEX_DLL_DEST}")
 message(STATUS "FEX ARM64EC: deploy path  = reactos/system32/arm64ecfex.dll")
