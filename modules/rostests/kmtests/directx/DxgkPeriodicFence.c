@@ -16,34 +16,35 @@ TestCreatePublication(VOID)
 {
     DXGK_PERIODIC_NOTIFICATION_CORE Notification;
     PVOID KmdHandle = (PVOID)(ULONG_PTR)0x1234;
+    NTSTATUS Status;
 
     DxgkPeriodicNotificationCoreInitialize(&Notification);
     ok_eq_long(Notification.State, DxgkPeriodicNotificationNone);
-    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
-                  &Notification, 2, 0),
-              STATUS_INVALID_PARAMETER);
-    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
-                  &Notification, 2, 41),
-              STATUS_SUCCESS);
+    Status = DxgkPeriodicNotificationCoreBeginCreate(
+        &Notification, 2, 0);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+    Status = DxgkPeriodicNotificationCoreBeginCreate(
+        &Notification, 2, 41);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_long(Notification.State, DxgkPeriodicNotificationCreating);
 
     /* A reserved ID is not yet visible to interrupt 14. */
     ok_bool_false(DxgkPeriodicNotificationCoreMatches(
                       &Notification, 2, 41),
                   "creating notification was published");
-    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
-                  &Notification, 2, 42),
-              STATUS_INVALID_DEVICE_STATE);
-    ok_eq_hex(DxgkPeriodicNotificationCoreCompleteCreate(
-                  &Notification, NULL),
-              STATUS_INVALID_PARAMETER);
+    Status = DxgkPeriodicNotificationCoreBeginCreate(
+        &Notification, 2, 42);
+    ok_eq_hex(Status, STATUS_INVALID_DEVICE_STATE);
+    Status = DxgkPeriodicNotificationCoreCompleteCreate(
+        &Notification, NULL);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
     ok_bool_false(DxgkPeriodicNotificationCoreMatches(
                       &Notification, 2, 41),
                   "NULL KMD handle was published");
 
-    ok_eq_hex(DxgkPeriodicNotificationCoreCompleteCreate(
-                  &Notification, KmdHandle),
-              STATUS_SUCCESS);
+    Status = DxgkPeriodicNotificationCoreCompleteCreate(
+        &Notification, KmdHandle);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_long(Notification.State, DxgkPeriodicNotificationActive);
     ok_bool_true(DxgkPeriodicNotificationCoreMatches(
                      &Notification, 2, 41),
@@ -62,11 +63,12 @@ TestRollbackAndExactDestroy(VOID)
     DXGK_PERIODIC_NOTIFICATION_CORE Notification;
     PVOID DestroyHandle;
     PVOID KmdHandle = (PVOID)(ULONG_PTR)0x5678;
+    NTSTATUS Status;
 
     DxgkPeriodicNotificationCoreInitialize(&Notification);
-    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
-                  &Notification, 7, 99),
-              STATUS_SUCCESS);
+    Status = DxgkPeriodicNotificationCoreBeginCreate(
+        &Notification, 7, 99);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     ok_bool_true(DxgkPeriodicNotificationCoreCancelCreate(
                      &Notification),
                  "create rollback lost");
@@ -74,16 +76,16 @@ TestRollbackAndExactDestroy(VOID)
     ok_bool_false(DxgkPeriodicNotificationCoreCancelCreate(
                       &Notification),
                   "create rolled back twice");
-    ok_eq_hex(DxgkPeriodicNotificationCoreCompleteCreate(
-                  &Notification, KmdHandle),
-              STATUS_INVALID_DEVICE_STATE);
+    Status = DxgkPeriodicNotificationCoreCompleteCreate(
+        &Notification, KmdHandle);
+    ok_eq_hex(Status, STATUS_INVALID_DEVICE_STATE);
 
-    ok_eq_hex(DxgkPeriodicNotificationCoreBeginCreate(
-                  &Notification, 7, 100),
-              STATUS_SUCCESS);
-    ok_eq_hex(DxgkPeriodicNotificationCoreCompleteCreate(
-                  &Notification, KmdHandle),
-              STATUS_SUCCESS);
+    Status = DxgkPeriodicNotificationCoreBeginCreate(
+        &Notification, 7, 100);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = DxgkPeriodicNotificationCoreCompleteCreate(
+        &Notification, KmdHandle);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 
     DestroyHandle = NULL;
     ok_bool_true(DxgkPeriodicNotificationCoreClaimDestroy(
@@ -110,31 +112,32 @@ TestInterruptHandoff(VOID)
     DXGK_PERIODIC_INTERRUPT_CORE Core;
     DXGK_PERIODIC_INTERRUPT_CORE_ENTRY Entry;
     BOOLEAN QueueDpc;
+    NTSTATUS Status;
 
     DxgkPeriodicInterruptCoreInitialize(&Core);
     QueueDpc = TRUE;
-    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                  &Core, 2, 41, 1, &QueueDpc),
-              STATUS_DEVICE_NOT_READY);
+    Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+        &Core, 2, 41, 1, &QueueDpc);
+    ok_eq_hex(Status, STATUS_DEVICE_NOT_READY);
     ok_bool_false(QueueDpc, "disabled handoff queued a DPC");
 
     DxgkPeriodicInterruptCoreEnableLocked(&Core);
     QueueDpc = FALSE;
-    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                  &Core, 2, 41, 1, &QueueDpc),
-              STATUS_SUCCESS);
+    Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+        &Core, 2, 41, 1, &QueueDpc);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     ok_bool_true(QueueDpc, "first pulse did not queue the drain");
 
     QueueDpc = TRUE;
-    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                  &Core, 2, 41, 2, &QueueDpc),
-              STATUS_SUCCESS);
+    Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+        &Core, 2, 41, 2, &QueueDpc);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     ok_bool_false(QueueDpc, "coalesced pulse queued a duplicate drain");
 
     QueueDpc = TRUE;
-    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                  &Core, 7, 99, 4, &QueueDpc),
-              STATUS_SUCCESS);
+    Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+        &Core, 7, 99, 4, &QueueDpc);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     ok_bool_false(QueueDpc, "second ID queued a duplicate drain");
 
     ok_bool_true(DxgkPeriodicInterruptCoreDequeueLocked(
@@ -159,9 +162,9 @@ TestInterruptHandoff(VOID)
      * observe the inactive drain and request a fresh DPC.
      */
     QueueDpc = FALSE;
-    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                  &Core, 2, 41, 1, &QueueDpc),
-              STATUS_SUCCESS);
+    Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+        &Core, 2, 41, 1, &QueueDpc);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     ok_bool_true(QueueDpc, "post-empty pulse could be stranded");
 }
 
@@ -172,6 +175,7 @@ TestInterruptOverflowIsSticky(VOID)
     DXGK_PERIODIC_INTERRUPT_CORE_ENTRY Entry;
     BOOLEAN QueueDpc;
     ULONG Index;
+    NTSTATUS Status;
 
     DxgkPeriodicInterruptCoreInitialize(&Core);
     DxgkPeriodicInterruptCoreEnableLocked(&Core);
@@ -180,14 +184,14 @@ TestInterruptOverflowIsSticky(VOID)
          ++Index)
     {
         QueueDpc = FALSE;
-        ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                      &Core, Index, Index + 1, 1, &QueueDpc),
-                  STATUS_SUCCESS);
+        Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+            &Core, Index, Index + 1, 1, &QueueDpc);
+        ok_eq_hex(Status, STATUS_SUCCESS);
     }
     QueueDpc = FALSE;
-    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                  &Core, 100, 1000, 1, &QueueDpc),
-              STATUS_BUFFER_OVERFLOW);
+    Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+        &Core, 100, 1000, 1, &QueueDpc);
+    ok_eq_hex(Status, STATUS_BUFFER_OVERFLOW);
     ok_eq_long(Core.State, DxgkPeriodicInterruptOverflowed);
     ok_eq_ulonglong(Core.OverflowCount, 1);
     ok_bool_false(DxgkPeriodicInterruptCoreDequeueLocked(
@@ -195,21 +199,21 @@ TestInterruptOverflowIsSticky(VOID)
                   "overflow published an incomplete subset");
 
     QueueDpc = FALSE;
-    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                  &Core, 2, 41, 1, &QueueDpc),
-              STATUS_BUFFER_OVERFLOW);
+    Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+        &Core, 2, 41, 1, &QueueDpc);
+    ok_eq_hex(Status, STATUS_BUFFER_OVERFLOW);
     DxgkPeriodicInterruptCoreDisableLocked(&Core);
     ok_eq_long(Core.State, DxgkPeriodicInterruptDisabled);
 
     DxgkPeriodicInterruptCoreEnableLocked(&Core);
     QueueDpc = FALSE;
-    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                  &Core, 2, 41, (ULONGLONG)-1, &QueueDpc),
-              STATUS_SUCCESS);
+    Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+        &Core, 2, 41, (ULONGLONG)-1, &QueueDpc);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     QueueDpc = FALSE;
-    ok_eq_hex(DxgkPeriodicInterruptCoreEnqueueLocked(
-                  &Core, 2, 41, 1, &QueueDpc),
-              STATUS_INTEGER_OVERFLOW);
+    Status = DxgkPeriodicInterruptCoreEnqueueLocked(
+        &Core, 2, 41, 1, &QueueDpc);
+    ok_eq_hex(Status, STATUS_INTEGER_OVERFLOW);
     ok_eq_long(Core.State, DxgkPeriodicInterruptOverflowed);
     ok_eq_ulonglong(Core.OverflowCount, 1);
 }

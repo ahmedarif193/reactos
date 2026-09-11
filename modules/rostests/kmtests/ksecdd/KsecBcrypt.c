@@ -111,10 +111,14 @@ TestSha256(VOID)
 
 Cleanup:
     if (Hash != NULL)
-        ok_eq_hex(BCryptDestroyHash(Hash), STATUS_SUCCESS);
+    {
+        Status = BCryptDestroyHash(Hash);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+    }
     if (Object != NULL)
         ExFreePoolWithTag(Object, TEST_TAG);
-    ok_eq_hex(BCryptCloseAlgorithmProvider(Algorithm, 0), STATUS_SUCCESS);
+    Status = BCryptCloseAlgorithmProvider(Algorithm, 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 }
 
 static VOID
@@ -137,14 +141,16 @@ TestHmacSha256(VOID)
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
     {
-        ok_eq_hex(BCryptHashData(Hash, (PUCHAR)Input, sizeof(Input) - 1, 0),
-                  STATUS_SUCCESS);
-        ok_eq_hex(BCryptFinishHash(Hash, Output, sizeof(Output), 0),
-                  STATUS_SUCCESS);
+        Status = BCryptHashData(Hash, (PUCHAR)Input, sizeof(Input) - 1, 0);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Status = BCryptFinishHash(Hash, Output, sizeof(Output), 0);
+        ok_eq_hex(Status, STATUS_SUCCESS);
         CheckBytes("HMAC-SHA-256", Output, HmacSha256QuickFox, sizeof(Output));
-        ok_eq_hex(BCryptDestroyHash(Hash), STATUS_SUCCESS);
+        Status = BCryptDestroyHash(Hash);
+        ok_eq_hex(Status, STATUS_SUCCESS);
     }
-    ok_eq_hex(BCryptCloseAlgorithmProvider(Algorithm, 0), STATUS_SUCCESS);
+    Status = BCryptCloseAlgorithmProvider(Algorithm, 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 }
 
 static VOID
@@ -169,13 +175,16 @@ TestAesCmac(VOID)
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
     {
-        ok_eq_hex(BCryptHashData(Hash, NULL, 0, 0), STATUS_SUCCESS);
-        ok_eq_hex(BCryptFinishHash(Hash, Output, sizeof(Output), 0),
-                  STATUS_SUCCESS);
+        Status = BCryptHashData(Hash, NULL, 0, 0);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Status = BCryptFinishHash(Hash, Output, sizeof(Output), 0);
+        ok_eq_hex(Status, STATUS_SUCCESS);
         CheckBytes("AES-CMAC", Output, AesCmacEmpty, sizeof(Output));
-        ok_eq_hex(BCryptDestroyHash(Hash), STATUS_SUCCESS);
+        Status = BCryptDestroyHash(Hash);
+        ok_eq_hex(Status, STATUS_SUCCESS);
     }
-    ok_eq_hex(BCryptCloseAlgorithmProvider(Algorithm, 0), STATUS_SUCCESS);
+    Status = BCryptCloseAlgorithmProvider(Algorithm, 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 }
 
 static VOID
@@ -227,9 +236,11 @@ TestAesCbcDecrypt(VOID)
         ok_eq_hex(Status, STATUS_SUCCESS);
         ok_eq_ulong(ResultSize, sizeof(Output));
         CheckBytes("AES-CBC decrypt", Output, PlainText, sizeof(Output));
-        ok_eq_hex(BCryptDestroyKey(Key), STATUS_SUCCESS);
+        Status = BCryptDestroyKey(Key);
+        ok_eq_hex(Status, STATUS_SUCCESS);
     }
-    ok_eq_hex(BCryptCloseAlgorithmProvider(Algorithm, 0), STATUS_SUCCESS);
+    Status = BCryptCloseAlgorithmProvider(Algorithm, 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 }
 
 static VOID
@@ -302,10 +313,12 @@ TestKdf(
                    Output,
                    Sp800 ? Sp800108HmacSha256 : Pbkdf2Sha256OneIteration,
                    sizeof(Output));
-    ok_eq_hex(BCryptDestroyKey(Key), STATUS_SUCCESS);
+    Status = BCryptDestroyKey(Key);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 
 Cleanup:
-    ok_eq_hex(BCryptCloseAlgorithmProvider(Algorithm, 0), STATUS_SUCCESS);
+    Status = BCryptCloseAlgorithmProvider(Algorithm, 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 }
 
 static VOID
@@ -313,11 +326,12 @@ TestRandom(VOID)
 {
     UCHAR First[32] = {0}, Second[32] = {0};
     UCHAR Zero[32] = {0};
+    NTSTATUS Status;
 
-    ok_eq_hex(BCryptGenRandom(NULL, First, sizeof(First),
-                              BCRYPT_USE_SYSTEM_PREFERRED_RNG), STATUS_SUCCESS);
-    ok_eq_hex(BCryptGenRandom(NULL, Second, sizeof(Second),
-                              BCRYPT_USE_SYSTEM_PREFERRED_RNG), STATUS_SUCCESS);
+    Status = BCryptGenRandom(NULL, First, sizeof(First), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = BCryptGenRandom(NULL, Second, sizeof(Second), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     ok(RtlCompareMemory(First, Zero, sizeof(First)) != sizeof(First),
        "RNG returned all zeroes\n");
     ok(RtlCompareMemory(First, Second, sizeof(First)) != sizeof(First),
