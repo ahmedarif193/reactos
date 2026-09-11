@@ -3596,6 +3596,114 @@ TfySetDefaultRenderDevice(LPCWSTR pszId)
     return bRet;
 }
 
+static INIT_ONCE g_TfyMasterInit = INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION g_TfyMasterLock;
+static HANDLE g_hTfyMasterEvent;
+static WCHAR g_szTfyMasterDevice[256];
+static int g_nTfyMasterPercent = -1;
+static int g_nTfyMasterMute = -1;
+static volatile BOOL g_bTfyMasterBusy;
+
+static DWORD WINAPI
+TfyMasterVolumeThread(LPVOID lpParameter)
+{
+    CComPtr<IMMDeviceEnumerator> pEnum;
+    CComPtr<IAudioEndpointVolume> pVolume;
+    WCHAR szDevice[256] = L"";
+
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    for (;;)
+    {
+        WCHAR szWant[256];
+        int nPercent, nMute;
+
+        WaitForSingleObject(g_hTfyMasterEvent, INFINITE);
+        EnterCriticalSection(&g_TfyMasterLock);
+        nPercent = g_nTfyMasterPercent;
+        nMute = g_nTfyMasterMute;
+        g_nTfyMasterPercent = -1;
+        g_nTfyMasterMute = -1;
+        StringCchCopyW(szWant, _countof(szWant), g_szTfyMasterDevice);
+        LeaveCriticalSection(&g_TfyMasterLock);
+
+        if (nPercent >= 0 || nMute >= 0)
+        {
+            if (pVolume && wcscmp(szWant, szDevice))
+                pVolume.Release();
+            if (!pVolume)
+            {
+                CComPtr<IMMDevice> pDevice;
+
+                szDevice[0] = UNICODE_NULL;
+                if ((pEnum || SUCCEEDED(CoCreateInstance(CLSID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER,
+                                                         IID_PPV_ARG(IMMDeviceEnumerator, &pEnum)))) &&
+                    SUCCEEDED(pEnum->GetDevice(szWant, &pDevice)) &&
+                    SUCCEEDED(pDevice->Activate(IID_IAudioEndpointVolume, CLSCTX_INPROC_SERVER, NULL,
+                                                (void **)&pVolume)))
+                {
+                    StringCchCopyW(szDevice, _countof(szDevice), szWant);
+                }
+            }
+            if (pVolume && nPercent >= 0 &&
+                FAILED(pVolume->SetMasterVolumeLevelScalar((float)nPercent / 100.0f, NULL)))
+            {
+                pVolume.Release();
+            }
+            if (pVolume && nMute >= 0)
+                pVolume->SetMute(nMute, NULL);
+        }
+
+        EnterCriticalSection(&g_TfyMasterLock);
+        if (g_nTfyMasterPercent < 0 && g_nTfyMasterMute < 0)
+            g_bTfyMasterBusy = FALSE;
+        LeaveCriticalSection(&g_TfyMasterLock);
+    }
+}
+
+static BOOL CALLBACK
+TfyMasterVolumeInit(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *Context)
+{
+    HANDLE hThread;
+
+    InitializeCriticalSection(&g_TfyMasterLock);
+    g_hTfyMasterEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (!g_hTfyMasterEvent)
+        return FALSE;
+    hThread = CreateThread(NULL, 0, TfyMasterVolumeThread, NULL, 0, NULL);
+    if (!hThread)
+    {
+        CloseHandle(g_hTfyMasterEvent);
+        g_hTfyMasterEvent = NULL;
+        return FALSE;
+    }
+    CloseHandle(hThread);
+    return TRUE;
+}
+
+static BOOL
+TfyRequestMaster(IMMDevice *pDevice, int nPercent, int nMute)
+{
+    LPWSTR pszId = NULL;
+
+    if (!pDevice || !InitOnceExecuteOnce(&g_TfyMasterInit, TfyMasterVolumeInit, NULL, NULL) ||
+        FAILED(pDevice->GetId(&pszId)) || !pszId)
+    {
+        return FALSE;
+    }
+
+    EnterCriticalSection(&g_TfyMasterLock);
+    StringCchCopyW(g_szTfyMasterDevice, _countof(g_szTfyMasterDevice), pszId);
+    if (nPercent >= 0)
+        g_nTfyMasterPercent = nPercent;
+    if (nMute >= 0)
+        g_nTfyMasterMute = nMute;
+    g_bTfyMasterBusy = TRUE;
+    LeaveCriticalSection(&g_TfyMasterLock);
+    CoTaskMemFree(pszId);
+    SetEvent(g_hTfyMasterEvent);
+    return TRUE;
+}
+
 VOID TrayMixer_Open(const RECT *prcAnchor);
 
 class CTrayVolumeWnd :
@@ -3885,12 +3993,16 @@ public:
         m_nMaster = nPercent;
         if (m_bComVolume && m_pEndpointVolume)
         {
-            m_pEndpointVolume->SetMasterVolumeLevelScalar((float)nPercent / 100.0f, NULL);
-            if (m_bMasterMute && nPercent > 0)
+            BOOL bUnmute = (m_bMasterMute && nPercent > 0);
+
+            if (!TfyRequestMaster(m_pDevice, nPercent, bUnmute ? FALSE : -1))
             {
-                m_bMasterMute = FALSE;
-                m_pEndpointVolume->SetMute(FALSE, NULL);
+                m_pEndpointVolume->SetMasterVolumeLevelScalar((float)nPercent / 100.0f, NULL);
+                if (bUnmute)
+                    m_pEndpointVolume->SetMute(FALSE, NULL);
             }
+            if (bUnmute)
+                m_bMasterMute = FALSE;
         }
         else
         {
@@ -3904,6 +4016,7 @@ public:
         InterlockedExchange(&g_TfyAudioPercent, m_nMaster);
         InterlockedExchange(&g_TfyAudioMute, m_bMasterMute);
         InvalidateRect(NULL, FALSE);
+        UpdateWindow();
     }
 
     VOID ApplySession(int iRow, int nPercent)
@@ -3922,6 +4035,7 @@ public:
             }
         }
         InvalidateRect(NULL, FALSE);
+        UpdateWindow();
     }
 
     VOID DrawSpeakerGlyph(HDC hdc, const RECT *prc, BOOL bMute, BOOL bHot)
@@ -4195,7 +4309,10 @@ public:
                 EnsureAudioLoaded();
                 m_bMasterMute = !m_bMasterMute;
                 if (m_bComVolume && m_pEndpointVolume)
-                    m_pEndpointVolume->SetMute(m_bMasterMute, NULL);
+                {
+                    if (!TfyRequestMaster(m_pDevice, -1, m_bMasterMute))
+                        m_pEndpointVolume->SetMute(m_bMasterMute, NULL);
+                }
                 else
                     m_Fallback.SetMute(m_bMasterMute);
                 InterlockedExchange(&g_TfyAudioMute, m_bMasterMute);
@@ -4889,7 +5006,7 @@ public:
         if (iCol == -1)
         {
             m_nMaster = nPercent;
-            if (m_pEndpointVolume)
+            if (m_pEndpointVolume && !TfyRequestMaster(m_pDevice, nPercent, -1))
                 m_pEndpointVolume->SetMasterVolumeLevelScalar(nPercent / 100.0f, NULL);
         }
         else if (iCol >= 0 && iCol < (int)m_Cols.GetCount())
@@ -4902,6 +5019,7 @@ public:
         if (iCol == -1)
             InterlockedExchange(&g_TfyAudioPercent, m_nMaster);
         InvalidateRect(NULL, FALSE);
+        UpdateWindow();
     }
 
     int PercentFromY(const RECT *prcSlider, int y) const
@@ -4962,7 +5080,7 @@ public:
         {
             EnsureAudioLoaded();
             m_bMasterMute = !m_bMasterMute;
-            if (m_pEndpointVolume)
+            if (m_pEndpointVolume && !TfyRequestMaster(m_pDevice, -1, m_bMasterMute))
                 m_pEndpointVolume->SetMute(m_bMasterMute, NULL);
             InterlockedExchange(&g_TfyAudioMute, m_bMasterMute);
             InvalidateRect(NULL, FALSE);
@@ -5129,7 +5247,7 @@ public:
         BOOL bRebuild = FALSE;
         m_nTick++;
 
-        if (m_pEndpointVolume && m_iDragCol != -1)
+        if (m_pEndpointVolume && m_iDragCol != -1 && !g_bTfyMasterBusy)
         {
             float fLevel = 0.0f;
             BOOL bMute = FALSE;
