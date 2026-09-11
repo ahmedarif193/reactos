@@ -656,6 +656,8 @@ PipeWorkerThread(
 
     while (TRUE)
     {
+        /* Publish readiness before the first request and completion thereafter. */
+        KeSetEvent(&Context->WorkCompleteEvent, IO_NO_INCREMENT, TRUE);
         Status = KeWaitForMultipleObjects(RTL_NUMBER_OF(WaitEvents),
                                           WaitEvents,
                                           WaitAny,
@@ -669,8 +671,6 @@ PipeWorkerThread(
         ASSERT(Status == STATUS_WAIT_1);
 
         Context->Work(Context);
-
-        KeSetEvent(&Context->WorkCompleteEvent, IO_NO_INCREMENT, TRUE);
     }
 }
 
@@ -680,7 +680,7 @@ StartWorkerThread(
 {
     KeInitializeEvent(&Context->ThreadDoneEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Context->StartWorkEvent, SynchronizationEvent, FALSE);
-    KeInitializeEvent(&Context->WorkCompleteEvent, NotificationEvent, TRUE);
+    KeInitializeEvent(&Context->WorkCompleteEvent, NotificationEvent, FALSE);
 
     Context->Thread = KmtStartThread(PipeWorkerThread, Context);
 }
