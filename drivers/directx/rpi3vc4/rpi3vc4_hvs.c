@@ -248,7 +248,7 @@ Rpi3Vc4QueryPlatform(
     Config->ScanoutSize = VisibleLength;
     Config->HighestFrameBufferAddress.QuadPart =
         RPI3VC4_HIGHEST_SCANOUT_ADDRESS;
-    Config->MinimumAllocationSlabSize = SOFTGPU_MAX_ALLOCATION_SLAB_SIZE;
+    Config->MinimumAllocationSlabSize = RPI3VC4_ALLOCATION_SLAB_SIZE;
     return STATUS_SUCCESS;
 }
 
