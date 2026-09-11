@@ -63,6 +63,14 @@ HRESULT WINAPI
 D3DUmdRtGetResourceHandles(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
                           D3DKMT_HANDLE *KernelResource, D3DKMT_HANDLE *GlobalShare);
 
+/* Returns the sole allocation from a successful one-allocation CreateResource.
+ * A live resource with imported, extended, or invalidated membership returns
+ * E_NOTIMPL; an absent or changing resource returns E_INVALIDARG. The caller
+ * must serialize resource lifetime and identity rotation with this query. */
+HRESULT WINAPI
+D3DUmdRtGetSingleResourceAllocation(HANDLE hRuntimeDevice, HANDLE hRuntimeResource,
+                                   D3DKMT_HANDLE *Allocation);
+
 /* Transfers an opened kernel resource to this runtime only on success. The
  * runtime handle must not already be registered. */
 HRESULT WINAPI

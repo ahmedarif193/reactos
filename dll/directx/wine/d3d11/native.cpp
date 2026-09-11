@@ -148,6 +148,7 @@ public:
     HRESULT (WINAPI *destroy_callbacks)(HANDLE) = NULL;
     HRESULT (WINAPI *register_resource)(HANDLE, HANDLE, D3DKMT_CREATEALLOCATIONFLAGS, const void *, UINT) = NULL;
     HRESULT (WINAPI *get_resource_handles)(HANDLE, HANDLE, D3DKMT_HANDLE *, D3DKMT_HANDLE *) = NULL;
+    HRESULT (WINAPI *get_single_allocation)(HANDLE, HANDLE, D3DKMT_HANDLE *) = NULL;
     HRESULT (WINAPI *adopt_resource)(HANDLE, HANDLE, D3DKMT_HANDLE, D3DKMT_HANDLE) = NULL;
     HRESULT (WINAPI *release_resource)(HANDLE, HANDLE) = NULL;
     HRESULT (WINAPI *rotate_resources)(HANDLE, const HANDLE *, UINT) = NULL;
@@ -829,6 +830,7 @@ HRESULT NativeDevice::Initialize(IDXGIAdapter *selected_adapter, UINT creation_f
     destroy_callbacks = reinterpret_cast<HRESULT (WINAPI *)(HANDLE)>(GetProcAddress(runtime, "D3DUmdRtDestroyDeviceCallbacks"));
     register_resource = reinterpret_cast<decltype(register_resource)>(GetProcAddress(runtime, "D3DUmdRtRegisterResource"));
     get_resource_handles = reinterpret_cast<decltype(get_resource_handles)>(GetProcAddress(runtime, "D3DUmdRtGetResourceHandles"));
+    get_single_allocation = reinterpret_cast<decltype(get_single_allocation)>(GetProcAddress(runtime, "D3DUmdRtGetSingleResourceAllocation"));
     adopt_resource = reinterpret_cast<decltype(adopt_resource)>(GetProcAddress(runtime, "D3DUmdRtAdoptResource"));
     release_resource = reinterpret_cast<decltype(release_resource)>(GetProcAddress(runtime, "D3DUmdRtReleaseResource"));
     rotate_resources = reinterpret_cast<decltype(rotate_resources)>(GetProcAddress(runtime, "D3DUmdRtRotateResourceIdentities"));
@@ -2441,7 +2443,9 @@ struct NativePresentContext
     UINT interval;
     UINT flags;
     const DXGI_PRESENT_PARAMETERS *parameters;
+    D3DKMT_HANDLE source_allocation;
     bool submitted;
+    bool composed;
     HRESULT result;
 };
 
@@ -2453,6 +2457,22 @@ static HRESULT APIENTRY NativePresent(HANDLE runtime_device, DXGIDDICB_PRESENT *
     NativeDevice *device = swapchain->device;
     if (runtime_device != device->runtime_device || !callback->hSrcAllocation
             || callback->BroadcastContextCount > D3DDDI_MAX_BROADCAST_CONTEXT) return E_INVALIDARG;
+    if (!swapchain->primary)
+    {
+        /* This runtime publishes a shared client texture to DWM after the UMD
+         * returns and the producing GPU EVENT completes. A destination-free
+         * KMT Blt would be a second, unresolved presentation of that frame.
+         * Only the exact owned source can use this composition transport. */
+        if (!context->source_allocation || callback->hSrcAllocation != context->source_allocation ||
+            callback->hDstAllocation || callback->BroadcastContextCount || context->composed)
+            context->result = E_INVALIDARG;
+        else
+        {
+            context->composed = true;
+            context->result = S_OK;
+        }
+        return context->result;
+    }
     D3DKMT_PRESENT present = {};
     present.hContext = callback->hContext ? static_cast<D3DKMT_HANDLE>(reinterpret_cast<ULONG_PTR>(callback->hContext)) : device->km_device;
     present.hWindow = swapchain->window;
@@ -2657,7 +2677,15 @@ HRESULT STDMETHODCALLTYPE NativeSwapChain::Present1(UINT interval, UINT flags, c
         }
     }
     NativeTexture2D *source = transport ? transport : buffers[sequence ? 0 : desc.BufferCount - 1];
-    NativePresentContext context = {this, interval, flags, parameters, false, E_FAIL};
+    D3DKMT_HANDLE source_allocation = 0;
+    if (!primary)
+    {
+        if (!device->get_single_allocation) return DXGI_ERROR_UNSUPPORTED;
+        HRESULT hr = device->get_single_allocation(device->runtime_device, source, &source_allocation);
+        if (FAILED(hr)) return hr;
+        if (!source_allocation) return DXGI_ERROR_INVALID_CALL;
+    }
+    NativePresentContext context = {this, interval, flags, parameters, source_allocation, false, false, E_FAIL};
     DXGI_DDI_ARG_PRESENT args = {};
     args.hDevice = reinterpret_cast<DXGI_DDI_HDEVICE>(device->driver_device.pDrvPrivate);
     args.hSurfaceToPresent = reinterpret_cast<DXGI_DDI_HRESOURCE>(source->handle.pDrvPrivate);
@@ -2672,7 +2700,7 @@ HRESULT STDMETHODCALLTYPE NativeSwapChain::Present1(UINT interval, UINT flags, c
     /* Drivers may return S_OK after a nonfatal callback result. A suspended
      * output did not present a frame and must not advance buffer identities. */
     if (context.result != S_OK) return context.result;
-    if (!context.submitted) return E_FAIL;
+    if (primary ? !context.submitted : !context.composed) return E_FAIL;
     if (!primary && sequence)
     {
         hr = Publish(source, flags, parameters);
