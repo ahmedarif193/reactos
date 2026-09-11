@@ -261,6 +261,8 @@ BOOLEAN AhciAllocateResourceForAdapter(__in PAHCI_ADAPTER_EXTENSION AdapterExten
             PortExtension->NcqErrorCommandTable = (PAHCI_COMMAND_TABLE)(nonCachedExtension + ncqErrorCommandTableOffset);
             /* Until IDENTIFY confirms NCQ support, serialize commands. */
             PortExtension->MaxPortQueueDepth = 1;
+            PortExtension->SrbQueue.Capacity = MAXIMUM_QUEUE_BUFFER_SIZE;
+            PortExtension->CompletionQueue.Capacity = MAXIMUM_COMPLETION_QUEUE_SIZE;
             nonCachedExtension += nonCachedExtensionSize;
         }
     }
@@ -3961,14 +3963,15 @@ FORCEINLINE BOOLEAN IsPortValid(__in PAHCI_ADAPTER_EXTENSION AdapterExtension, _
  */
 FORCEINLINE BOOLEAN AddQueue(__inout PAHCI_QUEUE Queue, __in PVOID Srb)
 {
-    NT_ASSERT(Queue->Head < MAXIMUM_QUEUE_BUFFER_SIZE);
-    NT_ASSERT(Queue->Tail < MAXIMUM_QUEUE_BUFFER_SIZE);
+    NT_ASSERT(Queue->Capacity != 0 && Queue->Capacity <= MAXIMUM_COMPLETION_QUEUE_SIZE);
+    NT_ASSERT(Queue->Head < Queue->Capacity);
+    NT_ASSERT(Queue->Tail < Queue->Capacity);
 
-    if (Queue->Tail == ((Queue->Head + 1) % MAXIMUM_QUEUE_BUFFER_SIZE))
+    if (Queue->Tail == ((Queue->Head + 1) % Queue->Capacity))
         return FALSE;
 
     Queue->Buffer[Queue->Head++] = Srb;
-    Queue->Head %= MAXIMUM_QUEUE_BUFFER_SIZE;
+    Queue->Head %= Queue->Capacity;
 
     return TRUE;
 }// -- AddQueue();
@@ -3989,14 +3992,15 @@ FORCEINLINE PVOID RemoveQueue(__inout PAHCI_QUEUE Queue)
 {
     PVOID Srb;
 
-    NT_ASSERT(Queue->Head < MAXIMUM_QUEUE_BUFFER_SIZE);
-    NT_ASSERT(Queue->Tail < MAXIMUM_QUEUE_BUFFER_SIZE);
+    NT_ASSERT(Queue->Capacity != 0 && Queue->Capacity <= MAXIMUM_COMPLETION_QUEUE_SIZE);
+    NT_ASSERT(Queue->Head < Queue->Capacity);
+    NT_ASSERT(Queue->Tail < Queue->Capacity);
 
     if (Queue->Head == Queue->Tail)
         return NULL;
 
     Srb = Queue->Buffer[Queue->Tail++];
-    Queue->Tail %= MAXIMUM_QUEUE_BUFFER_SIZE;
+    Queue->Tail %= Queue->Capacity;
 
     return Srb;
 }// -- RemoveQueue();
@@ -4006,8 +4010,8 @@ FORCEINLINE PVOID RemoveQueue(__inout PAHCI_QUEUE Queue)
  */
 FORCEINLINE PVOID PeekQueue(__in PAHCI_QUEUE Queue)
 {
-    NT_ASSERT(Queue->Head < MAXIMUM_QUEUE_BUFFER_SIZE);
-    NT_ASSERT(Queue->Tail < MAXIMUM_QUEUE_BUFFER_SIZE);
+    NT_ASSERT(Queue->Head < Queue->Capacity);
+    NT_ASSERT(Queue->Tail < Queue->Capacity);
 
     if (Queue->Head == Queue->Tail)
     {

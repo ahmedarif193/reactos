@@ -28,6 +28,7 @@
  * field), so the slot array must be able to hold all of them. */
 #define MAXIMUM_AHCI_PORT_NCS               32
 #define MAXIMUM_QUEUE_BUFFER_SIZE           255
+#define MAXIMUM_COMPLETION_QUEUE_SIZE       (2 * MAXIMUM_QUEUE_BUFFER_SIZE)
 #define MAXIMUM_TRANSFER_LENGTH             (128*1024) // 128 KB
 
 #define DEVICE_ATA_BLOCK_SIZE               512
@@ -252,9 +253,10 @@ typedef struct _AHCI_SET_DEVICE_BITS_FIS
 
 typedef struct _AHCI_QUEUE
 {
-    PVOID Buffer[MAXIMUM_QUEUE_BUFFER_SIZE];  // because Storahci hold Srb queue of 255 size
+    PVOID Buffer[MAXIMUM_COMPLETION_QUEUE_SIZE];
     ULONG Head;
     ULONG Tail;
+    ULONG Capacity;
 } AHCI_QUEUE, *PAHCI_QUEUE;
 
 //////////////////////////////////////////////////////////////
