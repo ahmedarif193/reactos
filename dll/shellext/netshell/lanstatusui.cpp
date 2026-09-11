@@ -62,10 +62,20 @@ NetShellGetConnectivity(const GUID *pAdapterId)
     return Result;
 }
 
+#define NS_WIFI_NOINFO  (-2)
+#define NS_WIFI_NOASSOC (-1)
+
 static DWORD
-NetShellRankConnection(NLM_CONNECTIVITY Conn, DWORD dwType, int nQuality)
+NetShellRankConnection(DWORD dwOperStatus, NLM_CONNECTIVITY Conn, DWORD dwType, int nQuality)
 {
-    DWORD Scope, Iface, Signal;
+    DWORD Link, Scope, Iface, Signal;
+
+    if ((dwOperStatus != MIB_IF_OPER_STATUS_CONNECTED &&
+         dwOperStatus != MIB_IF_OPER_STATUS_OPERATIONAL) ||
+        (dwType == IF_TYPE_IEEE80211 && nQuality == NS_WIFI_NOASSOC))
+        Link = 0;
+    else
+        Link = 1;
 
     if (Conn & (NLM_CONNECTIVITY_IPV4_INTERNET | NLM_CONNECTIVITY_IPV6_INTERNET))
         Scope = 3;
@@ -89,7 +99,7 @@ NetShellRankConnection(NLM_CONNECTIVITY Conn, DWORD dwType, int nQuality)
     else
         Signal = 0;
 
-    return Iface * 1000000 + Scope * 1000 + Signal;
+    return Link * 10000000 + Iface * 1000000 + Scope * 1000 + Signal;
 }
 
 static VOID
@@ -156,9 +166,6 @@ static PFN_NS_WLANCLOSEHANDLE g_pfnWlanClose;
 static PFN_NS_WLANENUMINTERFACES g_pfnWlanEnum;
 static PFN_NS_WLANQUERYINTERFACE g_pfnWlanQuery;
 static PFN_NS_WLANFREEMEMORY g_pfnWlanFree;
-
-#define NS_WIFI_NOINFO  (-2)
-#define NS_WIFI_NOASSOC (-1)
 
 static int
 NetShellWifiQuality(const GUID *pConnGuid)
@@ -498,7 +505,7 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
                 nid.uFlags |= NIF_ICON;
 
             NetShellSetTrayRank(pContext->uID, nid.hWnd,
-                                NetShellRankConnection(Conn, IfEntry.dwType, nQuality));
+                                NetShellRankConnection(IfEntry.dwOperStatus, Conn, IfEntry.dwType, nQuality));
 
             if (pProperties->pszwName)
             {
