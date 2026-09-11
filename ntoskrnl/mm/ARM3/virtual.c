@@ -7227,7 +7227,7 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
         if (PreviousMode != KernelMode)
         {
             ProbeForWritePointer(UBaseAddress);
-            ProbeForWriteUlong(URegionSize);
+            ProbeForWriteSize_t(URegionSize);
         }
 
         //
