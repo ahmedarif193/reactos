@@ -731,11 +731,12 @@ Rpi3Vc4StopV3d(
 
 static VOID
 Rpi3Vc4ArmPollTimer(
-    _Inout_ PRPI3VC4_CONTEXT Context)
+    _Inout_ PRPI3VC4_CONTEXT Context,
+    _In_ ULONG Milliseconds)
 {
     LARGE_INTEGER DueTime;
 
-    DueTime.QuadPart = -10000LL; /* one millisecond */
+    DueTime.QuadPart = -(LONGLONG)Milliseconds * 10000;
     KeSetTimer(&Context->V3dPollTimer, DueTime, &Context->V3dPollDpc);
 }
 
@@ -927,14 +928,31 @@ static VOID
 Rpi3Vc4StartPipelinesLocked(
     _Inout_ PRPI3VC4_CONTEXT Context)
 {
+    PRPI3VC4_V3D_SUBMIT Head;
+    BOOLEAN RetryStart;
+
     if (Context->V3dRecovering)
         return;
 
     Rpi3Vc4StartRenderLocked(Context, Context->V3dSubmitHead);
     Rpi3Vc4StartBinLocked(Context);
     Rpi3Vc4StartRenderLocked(Context, Context->V3dSubmitHead);
-    if (Context->V3dSubmitHead != Context->V3dSubmitTail)
-        Rpi3Vc4ArmPollTimer(Context);
+    if (Context->V3dSubmitHead == Context->V3dSubmitTail)
+    {
+        KeCancelTimer(&Context->V3dPollTimer);
+        return;
+    }
+
+    Head = &Context->V3dSubmitRing[
+        Context->V3dSubmitHead % RPI3VC4_V3D_SUBMIT_RING_SIZE];
+    RetryStart = (!Context->V3dBinActive &&
+                  Context->V3dBinNext != Context->V3dSubmitTail) ||
+                 (!Context->V3dRenderActive && Head->BinComplete);
+
+    /* Active pipelines signal completion through interrupts. Poll them only
+     * for the progress watchdog. Keep the short retry when CTRUN prevented
+     * a start, or when an ordered no-op still needs retirement. */
+    Rpi3Vc4ArmPollTimer(Context, RetryStart ? 1 : 100);
 }
 
 typedef struct _RPI3VC4_RETIREMENT_NOTIFICATION
@@ -1299,7 +1317,7 @@ Rpi3Vc4ProcessDpcLocked(
         STATUS_NOT_SUPPORTED;
     if (!NT_SUCCESS(CaptureStatus) || !Captured)
     {
-        Rpi3Vc4ArmPollTimer(Context);
+        Rpi3Vc4ArmPollTimer(Context, 1);
         KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
         return;
     }
@@ -1442,7 +1460,7 @@ Rpi3Vc4ProcessDpcLocked(
                         Index % RPI3VC4_V3D_SUBMIT_RING_SIZE].Fence,
                     STATUS_DEVICE_HARDWARE_ERROR))
             {
-                Rpi3Vc4ArmPollTimer(Context);
+                Rpi3Vc4ArmPollTimer(Context, 1);
                 KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
                 return;
             }
@@ -1472,7 +1490,7 @@ Rpi3Vc4ProcessDpcLocked(
 
             if (!Rpi3Vc4NotifyRetirement(Device, Submit->Fence, STATUS_SUCCESS))
             {
-                Rpi3Vc4ArmPollTimer(Context);
+                Rpi3Vc4ArmPollTimer(Context, 1);
                 KeReleaseSpinLock(&Context->V3dQueueLock, OldIrql);
                 return;
             }
