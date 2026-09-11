@@ -1679,6 +1679,10 @@ NtfsFsdSetInformation(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             (ULONGLONG)RequestedSize.QuadPart);
     if (NT_SUCCESS(Status))
     {
+        /* Size changes also rewrite the parent index's duplicated metadata. */
+        if (FileCB->RequestedType == TypeData && !FileCB->RequestedStream)
+            InterlockedIncrement(&VolCB->DirGeneration);
+
         NtfsRefreshFileSizes(FileCB,
                              FileObject);
         NtfsPurgeStreamCache(FileCB, FileObject, NULL, 0);
