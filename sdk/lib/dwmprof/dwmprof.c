@@ -59,7 +59,7 @@ HRESULT WINAPI DwmPresentationTraceControl(const DPT_REQUEST *Request,
         (!Request->Session && Request->Operation != DPT_QUERY) || Request->Operation < DPT_START || Request->Operation > DPT_QUERY ||
         !Output || Bytes < sizeof(*Output))
         return E_INVALIDARG;
-    Client.Server = FindWindowExW(HWND_MESSAGE, NULL, L"ReactOS.Dwm.Notification", NULL);
+    Client.Server = FindWindowExW(NULL, NULL, L"ReactOS.Dwm.Notification", NULL);
     if (!Client.Server)
         return HRESULT_FROM_WIN32(ERROR_NOT_READY);
     Class.lpfnWndProc = DwmTraceReply;
