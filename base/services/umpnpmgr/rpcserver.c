@@ -143,6 +143,9 @@ NtStatusToCrError(NTSTATUS Status)
         case STATUS_OBJECT_NAME_NOT_FOUND:
             return CR_NO_SUCH_VALUE;
 
+        case STATUS_PLUGPLAY_QUERY_VETOED:
+            return CR_REMOVE_VETOED;
+
         default:
             return CR_FAILURE;
     }
@@ -3745,8 +3748,82 @@ PNP_UninstallDevInst(
     LPWSTR pDeviceID,
     DWORD ulFlags)
 {
-    UNIMPLEMENTED;
-    return CR_CALL_NOT_IMPLEMENTED;
+    PLUGPLAY_CONTROL_DEVICE_CONTROL_DATA ControlData;
+    HKEY DeviceKey, ProfilesKey, ProfileKey;
+    WCHAR DriverKey[MAX_PATH] = L"", ProfileName[MAX_PATH], KeyPath[MAX_PATH + MAX_DEVICE_ID_LEN];
+    DWORD Size, Type, Index;
+    LONG Error;
+    NTSTATUS Status;
+
+    if (ulFlags != 0)
+        return CR_INVALID_FLAG;
+    if (!IsValidDeviceInstanceID(pDeviceID) || IsRootDeviceInstanceID(pDeviceID))
+        return CR_INVALID_DEVINST;
+
+    Error = RegOpenKeyExW(hEnumKey, pDeviceID, 0, KEY_READ, &DeviceKey);
+    if (Error != ERROR_SUCCESS)
+        return Error == ERROR_FILE_NOT_FOUND ? CR_NO_SUCH_DEVNODE : CR_REGISTRY_ERROR;
+    Size = sizeof(DriverKey);
+    Error = RegQueryValueExW(DeviceKey, L"Driver", NULL, &Type, (PBYTE)DriverKey, &Size);
+    RegCloseKey(DeviceKey);
+    if (Error != ERROR_SUCCESS && Error != ERROR_FILE_NOT_FOUND)
+        return CR_REGISTRY_ERROR;
+    if (Error == ERROR_SUCCESS)
+    {
+        PWSTR Separator;
+        DriverKey[ARRAYSIZE(DriverKey) - 1] = UNICODE_NULL;
+        Separator = wcschr(DriverKey, L'\\');
+        if (Type != REG_SZ || !Separator || Separator == DriverKey ||
+            !Separator[1] || wcschr(Separator + 1, L'\\'))
+            return CR_REGISTRY_ERROR;
+    }
+
+    /* Do not erase the registry while the driver can still use the device. */
+    RtlInitUnicodeString(&ControlData.DeviceInstance, pDeviceID);
+    Status = NtPlugPlayControl(PlugPlayControlDeregisterDevice, &ControlData, sizeof(ControlData));
+    if (!NT_SUCCESS(Status) && Status != STATUS_NO_SUCH_DEVICE)
+        return NtStatusToCrError(Status);
+
+    Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, REGSTR_PATH_HWPROFILES, 0, KEY_READ | KEY_WRITE, &ProfilesKey);
+    if (Error == ERROR_SUCCESS)
+    {
+        for (Index = 0; ; ++Index)
+        {
+            Size = ARRAYSIZE(ProfileName);
+            Error = RegEnumKeyExW(ProfilesKey, Index, ProfileName, &Size, NULL, NULL, NULL, NULL);
+            if (Error == ERROR_NO_MORE_ITEMS)
+                break;
+            if (Error != ERROR_SUCCESS)
+                break;
+            Error = RegOpenKeyExW(ProfilesKey, ProfileName, 0, KEY_READ | KEY_WRITE, &ProfileKey);
+            if (Error != ERROR_SUCCESS)
+                break;
+            swprintf(KeyPath, ARRAYSIZE(KeyPath), L"System\\CurrentControlSet\\Enum\\%ls", pDeviceID);
+            Error = SHDeleteKeyW(ProfileKey, KeyPath);
+            if ((Error == ERROR_SUCCESS || Error == ERROR_FILE_NOT_FOUND || Error == ERROR_PATH_NOT_FOUND) && DriverKey[0])
+            {
+                swprintf(KeyPath, ARRAYSIZE(KeyPath), L"System\\CurrentControlSet\\Control\\Class\\%ls", DriverKey);
+                Error = SHDeleteKeyW(ProfileKey, KeyPath);
+            }
+            RegCloseKey(ProfileKey);
+            if (Error != ERROR_SUCCESS && Error != ERROR_FILE_NOT_FOUND && Error != ERROR_PATH_NOT_FOUND)
+                break;
+        }
+        RegCloseKey(ProfilesKey);
+        if (Error != ERROR_NO_MORE_ITEMS)
+            return CR_REGISTRY_ERROR;
+    }
+    else if (Error != ERROR_FILE_NOT_FOUND && Error != ERROR_PATH_NOT_FOUND)
+        return CR_REGISTRY_ERROR;
+
+    if (DriverKey[0])
+    {
+        Error = SHDeleteKeyW(hClassKey, DriverKey);
+        if (Error != ERROR_SUCCESS && Error != ERROR_FILE_NOT_FOUND && Error != ERROR_PATH_NOT_FOUND)
+            return CR_REGISTRY_ERROR;
+    }
+    Error = SHDeleteKeyW(hEnumKey, pDeviceID);
+    return Error == ERROR_SUCCESS ? CR_SUCCESS : CR_REGISTRY_ERROR;
 }
 
 
@@ -3964,6 +4041,8 @@ PNP_QueryRemove(
     Status = NtPlugPlayControl(PlugPlayControlQueryAndRemoveDevice,
                                &PlugPlayData,
                                sizeof(PlugPlayData));
+    if (pVetoType != NULL)
+        *pVetoType = PlugPlayData.VetoType;
     if (!NT_SUCCESS(Status))
         ret = NtStatusToCrError(Status);
 
