@@ -498,9 +498,12 @@ static VOID
 DxgkpDereferenceDevice(
     _In_ PDXGKRNL_DEVICE Device)
 {
+    PDXGKRNL_ADAPTER Adapter = Device->Adapter;
+
+    /* Signaling the last reference lets teardown free Device immediately. */
     if (InterlockedDecrement(&Device->ReferenceCount) == 0)
         KeSetEvent(&Device->ReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
-    DxgkDereferenceAdapter(Device->Adapter);
+    DxgkDereferenceAdapter(Adapter);
 }
 
 BOOLEAN
@@ -631,19 +634,25 @@ DxgkpWaitForDeviceReferences(
     _In_ PDXGKRNL_DEVICE Device)
 {
     LARGE_INTEGER Timeout;
+    NTSTATUS Status;
 
     if (InterlockedCompareExchange(&Device->TeardownReferencesDrained, 1, 0) == 0 && InterlockedDecrement(&Device->ReferenceCount) == 0)
-        return TRUE;
-    if (InterlockedCompareExchange(&Device->ReferenceCount, 0, 0) == 0)
-        return TRUE;
-    Timeout.QuadPart = -10 * 1000;
-    while (InterlockedCompareExchange(&Device->ReferenceCount, 0, 0) != 0)
     {
+        /* A failed miniport teardown may retry this wait later. */
+        KeSetEvent(&Device->ReferencesDrainedEvent, IO_NO_INCREMENT, FALSE);
+        return TRUE;
+    }
+    Timeout.QuadPart = -10 * 1000;
+    for (;;)
+    {
+        /* A zero count alone does not prove the last releaser has finished
+         * accessing ReferencesDrainedEvent. Synchronize with its signal. */
+        Status = KeWaitForSingleObject(&Device->ReferencesDrainedEvent, Executive, KernelMode, FALSE, &Timeout);
+        if (Status == STATUS_SUCCESS)
+            return TRUE;
         if (InterlockedCompareExchange(&Device->MiniportDestroyPending, 0, 0) != 0)
             return FALSE;
-        KeWaitForSingleObject(&Device->ReferencesDrainedEvent, Executive, KernelMode, FALSE, &Timeout);
     }
-    return TRUE;
 }
 
 static VOID
