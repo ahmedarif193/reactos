@@ -78,6 +78,8 @@ KMT_TESTFUNC Test_ExPoolExtra;
 KMT_TESTFUNC Test_ExPushLock;
 KMT_TESTFUNC Test_ExResourceExtra;
 KMT_TESTFUNC Test_ExTimerExtra;
+KMT_TESTFUNC Test_ExTimerInvalidAttributes;
+KMT_TESTFUNC Test_ExTimerCombinedAttributes;
 KMT_TESTFUNC Test_ExTimeZone;
 KMT_TESTFUNC Test_ExLicenseDif;
 KMT_TESTFUNC Test_IoLargeMemoryResource;
@@ -363,6 +365,8 @@ const KMT_TEST TestList[] =
     { "ExPushLock",                         Test_ExPushLock },
     { "ExResourceExtra",                    Test_ExResourceExtra },
     { "ExTimerExtra",                       Test_ExTimerExtra },
+    { "-ExTimerInvalidAttributes",           Test_ExTimerInvalidAttributes },
+    { "-ExTimerCombinedAttributes",          Test_ExTimerCombinedAttributes },
     { "ExTimeZone",                         Test_ExTimeZone },
     { "ExLicenseDif",                       Test_ExLicenseDif },
     { "ExResource",                         Test_ExResource },

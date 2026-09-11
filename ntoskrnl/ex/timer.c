@@ -839,19 +839,13 @@ ExAllocateTimer(IN PEXT_CALLBACK Callback OPTIONAL,
     PEX_TIMER Timer;
     TIMER_TYPE TimerType;
 
-    /* Reject unknown attribute bits */
+    /* Invalid attributes are a driver contract violation, not an allocation
+     * failure. Windows reports TIMER_OR_DPC_INVALID with the supplied bits. */
     if (Attributes & ~(EX_TIMER_HIGH_RESOLUTION |
                        EX_TIMER_NO_WAKE |
                        EX_TIMER_NOTIFICATION))
     {
-        return NULL;
-    }
-
-    /* High-resolution and no-wake are mutually exclusive */
-    if ((Attributes & EX_TIMER_HIGH_RESOLUTION) &&
-        (Attributes & EX_TIMER_NO_WAKE))
-    {
-        return NULL;
+        KeBugCheckEx(TIMER_OR_DPC_INVALID, 9, 0, Attributes, 0);
     }
 
     /* Timer runs its DPC, so it must live in non-paged pool */
@@ -927,11 +921,12 @@ ExDeleteTimer(IN PEX_TIMER Timer,
               IN BOOLEAN Wait,
               IN PEXT_DELETE_PARAMETERS Parameters OPTIONAL)
 {
-    UNREFERENCED_PARAMETER(Cancel);
+    BOOLEAN Cancelled;
+
     UNREFERENCED_PARAMETER(Wait);
 
     /* Always cancel before freeing so a pending expiry can't fire afterwards */
-    KeCancelTimer(&Timer->KeTimer);
+    Cancelled = KeCancelTimer(&Timer->KeTimer);
 
     /* Drain any in-flight DPC so the callback can't touch freed memory; a
      * callback-less timer never had a DPC, so it skips the system-wide flush */
@@ -948,7 +943,7 @@ ExDeleteTimer(IN PEX_TIMER Timer,
     }
 
     ExFreePoolWithTag(Timer, TAG_EX_TIMER);
-    return TRUE;
+    return Cancel && Cancelled;
 }
 
 #endif /* NTDDI_VERSION >= NTDDI_WINBLUE */

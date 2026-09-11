@@ -1381,6 +1381,14 @@ The faulty driver currently on the kernel stack must be replaced
 with a working version.
 .
 
+MessageId=0xC7
+Severity=Success
+Facility=System
+SymbolicName=TIMER_OR_DPC_INVALID
+Language=English
+A driver supplied an invalid timer or DPC.
+.
+
 MessageId=0xC8
 Severity=Success
 Facility=System
