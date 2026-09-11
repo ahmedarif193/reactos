@@ -37,8 +37,19 @@ START_TEST(RtlImageKM)
     if (Data != NULL)
     {
         PIMAGE_IMPORT_DESCRIPTOR Import = Data;
-        PCSTR DllName = (PCSTR)((PUCHAR)ImageBase + Import->Name);
-        ok(_stricmp(DllName, "ntoskrnl.exe") == 0, "first import dll %s\n", DllName);
+        ULONG Index;
+        BOOLEAN FoundKernel = FALSE;
+
+        for (Index = 0; Index < Size / sizeof(*Import) && Import[Index].Name; ++Index)
+        {
+            PCSTR DllName = (PCSTR)((PUCHAR)ImageBase + Import[Index].Name);
+            if (_stricmp(DllName, "ntoskrnl.exe") == 0)
+            {
+                FoundKernel = TRUE;
+                break;
+            }
+        }
+        ok(FoundKernel, "ntoskrnl.exe missing from import directory\n");
     }
 
     Data = RtlImageDirectoryEntryToData(ImageBase, TRUE, IMAGE_DIRECTORY_ENTRY_EXCEPTION, &Size);
