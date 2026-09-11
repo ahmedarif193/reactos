@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Ahmed ARIF
+[binaries]
+c = '@MESA_CC_INI@'
+cpp = '@MESA_CXX_INI@'
+ar = '@MESA_AR_INI@'
+strip = '@MESA_STRIP_INI@'
+windres = '@MESA_WINDRES_INI@'
+cmake = '@CMAKE_COMMAND_INI@'
+
+[host_machine]
+system = 'windows'
+cpu_family = '@MESA_CPU@'
+cpu = '@MESA_CPU@'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = true
+
+[built-in options]
+cmake_prefix_path = ['@MESA_LLVM_PREFIX_INI@']
+cpp_link_args = ['-static-libstdc++', '-static-libgcc']
