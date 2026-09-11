@@ -16,7 +16,6 @@
 
 /* FUNCTIONS *****************************************************************/
 
-static
 PVOID
 ObpGetObjectWaitObject(
     _In_ POBJECT_TYPE ObjectType,

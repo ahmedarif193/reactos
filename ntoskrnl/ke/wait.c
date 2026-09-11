@@ -36,6 +36,12 @@ KiWaitTest(IN PVOID ObjectPointer,
         WaitThread = WaitBlock->Thread;
         WaitEntry = WaitEntry->Flink;
 
+        if (WaitBlock->WaitType == WaitDpc)
+        {
+            IopSignalWaitCompletionPacket(WaitBlock);
+            continue;
+        }
+
         /* Dequeue waits consume an entry in KiInsertQueue and must not be
          * completed as ordinary dispatcher-object waits. */
         if (IsQueue && (WaitBlock->WaitType == WaitDequeue))

@@ -150,6 +150,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/error.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/file.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iocomp.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/waitcomp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/ioevent.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iofunc.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/iommu.c

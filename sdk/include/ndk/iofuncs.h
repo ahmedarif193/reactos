@@ -31,6 +31,13 @@ struct _FILE_IO_COMPLETION_INFORMATION;
 extern "C" {
 #endif
 
+NTSYSCALLAPI NTSTATUS NTAPI NtCreateWaitCompletionPacket(_Out_ PHANDLE WaitCompletionPacketHandle, _In_ ACCESS_MASK DesiredAccess, _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes);
+NTSYSCALLAPI NTSTATUS NTAPI NtAssociateWaitCompletionPacket(_In_ HANDLE WaitCompletionPacketHandle, _In_ HANDLE IoCompletionHandle, _In_ HANDLE TargetObjectHandle, _In_opt_ PVOID KeyContext, _In_opt_ PVOID ApcContext, _In_ NTSTATUS IoStatus, _In_ ULONG_PTR IoStatusInformation, _Out_opt_ PBOOLEAN AlreadySignaled);
+NTSYSCALLAPI NTSTATUS NTAPI NtCancelWaitCompletionPacket(_In_ HANDLE WaitCompletionPacketHandle, _In_ BOOLEAN RemoveSignaledPacket);
+NTSYSAPI NTSTATUS NTAPI ZwCreateWaitCompletionPacket(_Out_ PHANDLE WaitCompletionPacketHandle, _In_ ACCESS_MASK DesiredAccess, _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes);
+NTSYSAPI NTSTATUS NTAPI ZwAssociateWaitCompletionPacket(_In_ HANDLE WaitCompletionPacketHandle, _In_ HANDLE IoCompletionHandle, _In_ HANDLE TargetObjectHandle, _In_opt_ PVOID KeyContext, _In_opt_ PVOID ApcContext, _In_ NTSTATUS IoStatus, _In_ ULONG_PTR IoStatusInformation, _Out_opt_ PBOOLEAN AlreadySignaled);
+NTSYSAPI NTSTATUS NTAPI ZwCancelWaitCompletionPacket(_In_ HANDLE WaitCompletionPacketHandle, _In_ BOOLEAN RemoveSignaledPacket);
+
 //
 // I/O Functions
 //

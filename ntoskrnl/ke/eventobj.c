@@ -246,7 +246,7 @@ KeSetEventBoostPriority(IN PKEVENT Event,
                                       KWAIT_BLOCK,
                                       WaitListEntry);
 
-        if (WaitBlock->WaitType == WaitAll)
+        if (WaitBlock->WaitType == WaitAll || WaitBlock->WaitType == WaitDpc)
         {
             Event->Header.SignalState = 1;
             KiWaitTest(Event, EVENT_INCREMENT);

@@ -1689,6 +1689,13 @@ KxUnwaitThread(IN DISPATCHER_HEADER *Object,
         /* Get the current wait block */
         WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
 
+        if (WaitBlock->WaitType == WaitDpc)
+        {
+            IopSignalWaitCompletionPacket(WaitBlock);
+            WaitEntry = WaitList->Flink;
+            continue;
+        }
+
         /* Get the waiting thread */
         WaitThread = WaitBlock->Thread;
 
@@ -1732,6 +1739,12 @@ KxUnwaitThreadForEvent(IN PKEVENT Event,
     {
         /* Get the current wait block */
         WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
+
+        if (WaitBlock->WaitType == WaitDpc)
+        {
+            IopSignalWaitCompletionPacket(WaitBlock);
+            break;
+        }
 
         /* Get the waiting thread */
         WaitThread = WaitBlock->Thread;
