@@ -3037,13 +3037,26 @@ PsIsWin32KFilterAuditEnabledForProcess(_In_ PEPROCESS Process)
 CHAR
 NTAPI
 PsAdjustWin32kPriorityFloor(
-    _Inout_ PEPROCESS Process,
-    _In_ CHAR PriorityFloor)
+    _Inout_ PETHREAD Thread,
+    _In_ LONG PriorityFloor)
 {
-    CHAR Previous = Process->Win32kPriorityFloor;
+    KIRQL OldIrql;
+    CHAR Previous;
 
-    if ((UCHAR)PriorityFloor <= 16)
-        Process->Win32kPriorityFloor = PriorityFloor;
+    ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireThreadLock(&Thread->Tcb);
+    Previous = Thread->Win32kPriorityFloor;
+    if ((ULONG)PriorityFloor <= 16 && PriorityFloor != Previous)
+    {
+        KPRIORITY Priority = KiGetUnflooredPriority(&Thread->Tcb);
+
+        KiUpdatePriorityFloor(&Thread->Tcb, Previous, PriorityFloor);
+        Thread->Win32kPriorityFloor = (CHAR)PriorityFloor;
+        KiSetPriorityThread(&Thread->Tcb, Priority);
+    }
+    KiReleaseThreadLock(&Thread->Tcb);
+    KiExitDispatcher(OldIrql);
     return Previous;
 }
 

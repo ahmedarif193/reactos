@@ -771,14 +771,14 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
                    (Thread->PriorityDecrement <= Thread->Priority));
 
             /* Calculate the new priority decrement based on the boost */
-            Thread->PriorityDecrement += ((SCHAR)OldPriority - Thread->Priority);
+            Thread->PriorityDecrement += ((SCHAR)OldPriority - KiGetUnflooredPriority(Thread));
 
             /* Again verify that this decrement is valid */
             ASSERT((Thread->PriorityDecrement >= 0) &&
                    (Thread->PriorityDecrement <= OldPriority));
 
             /* Set the new priority */
-            Thread->Priority = (SCHAR)OldPriority;
+            Thread->Priority = (SCHAR)KiApplyPriorityFloor(Thread, OldPriority);
         }
 
         /* We need 4 quanta, make sure we have them, then decrease by one */
@@ -821,7 +821,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
                     {
                         /* We are, reset the quantum and get a new priority */
                         KiSetThreadQuantum(Thread, Thread->QuantumReset);
-                        Thread->Priority = KiComputeNewPriority(Thread, 1);
+                        Thread->Priority = (SCHAR)KiApplyPriorityFloor(Thread, KiComputeNewPriority(Thread, 1));
                     }
                 }
             }
@@ -868,7 +868,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
                            (Thread->PriorityDecrement <= OldPriority));
 
                     /* Set this new priority */
-                    Thread->Priority = (SCHAR)OldPriority;
+                    Thread->Priority = (SCHAR)KiApplyPriorityFloor(Thread, OldPriority);
                 }
             }
         }
@@ -1233,7 +1233,7 @@ KiAdjustQuantumThread(IN PKTHREAD Thread)
             KiSetThreadQuantum(Thread, Thread->QuantumReset);
 
             /* Calculate new Priority */
-            Thread->Priority = KiComputeNewPriority(Thread, 1);
+            Thread->Priority = (SCHAR)KiApplyPriorityFloor(Thread, KiComputeNewPriority(Thread, 1));
 
             /* Check if there's no next thread scheduled */
             if (!Prcb->NextThread)
@@ -1272,6 +1272,8 @@ KiSetPriorityThread(IN PKTHREAD Thread,
     KPRIORITY OldPriority;
     PKTHREAD NewThread;
     ASSERT((Priority >= 0) && (Priority <= HIGH_PRIORITY));
+
+    Priority = KiApplyPriorityFloor(Thread, Priority);
 
     /* Check if priority changed */
     if (Thread->Priority != Priority)
@@ -1626,7 +1628,7 @@ NtYieldExecution(VOID)
         {
             /* Reset quantum and recalculate priority */
             KiSetThreadQuantum(Thread, Thread->QuantumReset);
-            Thread->Priority = KiComputeNewPriority(Thread, 1);
+            Thread->Priority = (SCHAR)KiApplyPriorityFloor(Thread, KiComputeNewPriority(Thread, 1));
 
             /* Release the thread lock */
             KiReleaseThreadLock(Thread);

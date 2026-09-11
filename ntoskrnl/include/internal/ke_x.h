@@ -1923,8 +1923,80 @@ Quickie:
 }
 
 //
-// This routine computes the new priority for a thread. It is only valid for
-// threads with priorities in the dynamic priority range.
+// Priority floors use the NT10 64-bit KTHREAD accounting fields. Keep the
+// dynamic priority separate so a floor does not become a permanent boost.
+// The caller holds ThreadLock throughout a floor or priority change.
+//
+FORCEINLINE
+KPRIORITY
+KiGetUnflooredPriority(IN PKTHREAD Thread)
+{
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN10)
+    if (Thread->PriorityFloorSummary)
+    {
+        if (Thread->BasePriority >= LOW_REALTIME_PRIORITY)
+            return Thread->BasePriority;
+        return min(Thread->BasePriority + Thread->DecayBoost,
+                   LOW_REALTIME_PRIORITY - 1);
+    }
+#endif
+    return Thread->Priority;
+}
+
+FORCEINLINE
+VOID
+KiUpdatePriorityFloor(IN PKTHREAD Thread,
+                     IN KPRIORITY OldFloor,
+                     IN KPRIORITY NewFloor)
+{
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN10)
+    if (OldFloor == NewFloor)
+        return;
+    if (NewFloor)
+    {
+        ASSERT(NewFloor <= HIGH_PRIORITY);
+        ASSERT(Thread->PriorityFloorCounts[NewFloor] != MAXUCHAR);
+        ++Thread->PriorityFloorCounts[NewFloor];
+        Thread->PriorityFloorSummary |= PRIORITY_MASK(NewFloor);
+    }
+    if (OldFloor)
+    {
+        ASSERT(OldFloor <= HIGH_PRIORITY);
+        ASSERT(Thread->PriorityFloorCounts[OldFloor] != 0);
+        if (--Thread->PriorityFloorCounts[OldFloor] == 0)
+            Thread->PriorityFloorSummary &= ~PRIORITY_MASK(OldFloor);
+    }
+#else
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(OldFloor);
+    UNREFERENCED_PARAMETER(NewFloor);
+#endif
+}
+
+FORCEINLINE
+KPRIORITY
+KiApplyPriorityFloor(IN PKTHREAD Thread,
+                     IN KPRIORITY Priority)
+{
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN10)
+    ULONG Floor;
+
+    Thread->DecayBoost = (Priority < LOW_REALTIME_PRIORITY) ?
+                        (CHAR)max(Priority - Thread->BasePriority, 0) : 0;
+    if (Thread->PriorityFloorSummary)
+    {
+        BitScanReverse(&Floor, Thread->PriorityFloorSummary);
+        Priority = max(Priority, (KPRIORITY)Floor);
+    }
+#else
+    UNREFERENCED_PARAMETER(Thread);
+#endif
+    return Priority;
+}
+
+//
+// Return the decayed priority before applying any active floor. Callers that
+// publish it must use KiApplyPriorityFloor or KiSetPriorityThread.
 //
 FORCEINLINE
 SCHAR
@@ -1933,14 +2005,14 @@ KiComputeNewPriority(IN PKTHREAD Thread,
 {
     SCHAR Priority;
 
+    Priority = (SCHAR)KiGetUnflooredPriority(Thread);
+
     /* Priority sanity checks */
     ASSERT((Thread->PriorityDecrement >= 0) &&
-           (Thread->PriorityDecrement <= Thread->Priority));
-    ASSERT((Thread->Priority < LOW_REALTIME_PRIORITY) ?
+           (Thread->PriorityDecrement <= Priority));
+    ASSERT((Priority < LOW_REALTIME_PRIORITY) ?
             TRUE : (Thread->PriorityDecrement == 0));
 
-    /* Get the current priority */
-    Priority = Thread->Priority;
     if (Priority < LOW_REALTIME_PRIORITY)
     {
         /* Decrease priority by the priority decrement */

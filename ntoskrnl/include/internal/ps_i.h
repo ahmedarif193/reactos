@@ -605,11 +605,9 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     ),
 
     /* ThreadPriorityBoost */
-    IQS
+    IQS_SAME
     (
         ULONG,
-        ULONG,
-        ULONG_PTR,
         ULONG,
         ICIF_QUERY | ICIF_SET
     ),

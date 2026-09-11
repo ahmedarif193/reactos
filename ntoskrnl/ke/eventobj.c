@@ -285,7 +285,7 @@ KeSetEventBoostPriority(IN PKEVENT Event,
             KiSetPriorityThread(Thread, Priority);
             WaitBlock->BlockState = WaitBlockInactive;
             KiUnlinkThread(WaitThread, STATUS_SUCCESS);
-            WaitThread->AdjustIncrement = Priority;
+            WaitThread->AdjustIncrement = Thread->Priority;
             WaitThread->AdjustReason = AdjustBoost;
             KiReadyThread(WaitThread);
             KiReleaseThreadLock(SecondThread);

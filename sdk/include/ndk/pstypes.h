@@ -1735,6 +1735,9 @@ typedef struct _ETHREAD
 #if defined(_M_ARM64)
     volatile LONG ExecutableWriteAllowed;
 #endif
+#if defined(__REACTOS__)
+    CHAR Win32kPriorityFloor;
+#endif
 } ETHREAD;
 
 #if defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WIN10)
@@ -1951,7 +1954,6 @@ typedef struct _EPROCESS
 #endif
     PVOID DxgProcess;
     ULONGLONG SequenceNumber;
-    CHAR Win32kPriorityFloor;
     UCHAR ProcessFaultCounts;
     USHORT ProcessStateSpare;
     volatile ULONG ProcessFaultFlags;

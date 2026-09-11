@@ -90,18 +90,23 @@ NTAPI
 KeSetDisableBoostThread(IN OUT PKTHREAD Thread,
                         IN BOOLEAN Disable)
 {
+#if defined(_M_ARM64) || (defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN10))
+    const LONG DisableBoostBit = 3;
+#else
+    const LONG DisableBoostBit = 1;
+#endif
     ASSERT_THREAD(Thread);
 
     /* Check if we're enabling or disabling */
     if (Disable)
     {
         /* Set the bit */
-        return InterlockedBitTestAndSet(&Thread->ThreadFlags, 1);
+        return InterlockedBitTestAndSet(&Thread->ThreadFlags, DisableBoostBit);
     }
     else
     {
         /* Remove the bit */
-        return InterlockedBitTestAndReset(&Thread->ThreadFlags, 1);
+        return InterlockedBitTestAndReset(&Thread->ThreadFlags, DisableBoostBit);
     }
 }
 
@@ -585,6 +590,12 @@ KeStartThread(IN OUT PKTHREAD Thread)
     /* Setup volatile data */
     Thread->Priority = Process->BasePriority;
     Thread->BasePriority = Process->BasePriority;
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN10)
+    RtlZeroMemory(Thread->PriorityFloorCounts, sizeof(Thread->PriorityFloorCounts));
+    Thread->PriorityFloorSummary = 0;
+    Thread->DecayBoost = 0;
+    Thread->RealtimePriorityFloor = HIGH_PRIORITY + 1;
+#endif
     KiThreadAffinityMask(Thread) = Process->Affinity;
     KiThreadUserAffinityMask(Thread) = Process->Affinity;
 
@@ -1413,8 +1424,8 @@ KeSetBasePriorityThread(IN PKTHREAD Thread,
     {
         /* Reset the quantum and do the actual priority modification */
         KiSetThreadQuantum(Thread, Thread->QuantumReset);
-        KiSetPriorityThread(Thread, Priority);
     }
+    KiSetPriorityThread(Thread, Priority);
 
     /* Release thread lock */
     KiReleaseThreadLock(Thread);
@@ -1489,8 +1500,8 @@ KeSetActualBasePriorityThread(
     {
         /* Reset the quantum and do the actual priority modification */
         KiSetThreadQuantum(Thread, Thread->QuantumReset);
-        KiSetPriorityThread(Thread, NewPriority);
     }
+    KiSetPriorityThread(Thread, NewPriority);
 
     /* Release thread lock */
     KiReleaseThreadLock(Thread);
@@ -1549,18 +1560,28 @@ KeSetPriorityThread(IN PKTHREAD Thread,
     OldPriority = Thread->Priority;
     Thread->PriorityDecrement = 0;
 
-    /* Make sure that an actual change is being done */
-    if (Priority != Thread->Priority)
-    {
-        /* Reset the quantum */
+    if (Priority != OldPriority)
         KiSetThreadQuantum(Thread, Thread->QuantumReset);
+    if ((Thread->BasePriority != 0) && !(Priority)) Priority = 1;
 
-        /* Check if priority is being set too low and normalize if so */
-        if ((Thread->BasePriority != 0) && !(Priority)) Priority = 1;
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN10)
+    {
+        KPRIORITY OldFloor = Thread->RealtimePriorityFloor;
+        KPRIORITY NewFloor;
 
-        /* Set the new Priority */
-        KiSetPriorityThread(Thread, Priority);
+        Priority = max(Priority, Thread->BasePriority);
+        NewFloor = (Priority >= LOW_REALTIME_PRIORITY) ? Priority : HIGH_PRIORITY + 1;
+        KiUpdatePriorityFloor(Thread,
+                             OldFloor <= HIGH_PRIORITY ? OldFloor : 0,
+                             NewFloor <= HIGH_PRIORITY ? NewFloor : 0);
+        Thread->RealtimePriorityFloor = NewFloor;
+        if (NewFloor <= HIGH_PRIORITY)
+            Priority = Thread->BasePriority;
     }
+#endif
+
+    /* Record changes to the underlying priority even when a floor holds it. */
+    KiSetPriorityThread(Thread, Priority);
 
     /* Release thread lock */
     KiReleaseThreadLock(Thread);
