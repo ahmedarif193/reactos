@@ -522,6 +522,8 @@ SystemProcessTestWorker(PVOID StartContext)
     while (NT_SUCCESS(Status) && Index < RTL_NUMBER_OF(Context->Bases))
     {
         Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &Context->RegionSize, Context->AllocationType, Context->Protect);
+        if (!NT_SUCCESS(Status))
+            break;
 
         Context->Bases[Index] = Base;
         if ((Index % 10) == 0)
