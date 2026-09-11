@@ -2192,7 +2192,7 @@ HalGetMsiMessageAddressEx(
     /* DeviceId is the PCI RequesterId (BDF) for ITS translation. */
     DeviceId = (ULONG)RequesterId;
 
-    Status = HalpGicItsAllocateMsi(DeviceId, EventId, Cpu, &Lpi, &MsiAddress, &MsiData);
+    Status = HalpGicItsAllocateMsi(DeviceId, EventId, Cpu, (ULONG)Vector, &Lpi, &MsiAddress, &MsiData);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: HalpGicItsAllocateMsi failed (0x%lx)\n", Status);
@@ -7686,6 +7686,7 @@ HalpGicItsAllocateMsi(
     _In_ ULONG DeviceId,
     _In_ ULONG EventId,
     _In_ ULONG TargetCpu,
+    _In_ ULONG RequestedLpi,
     _Out_ PULONG Lpi,
     _Out_ PPHYSICAL_ADDRESS MsiAddress,
     _Out_ PULONG MsiData);
@@ -7767,7 +7768,7 @@ HalpAllocateMsiInterrupt(
                (PciSlot.u.bits.FunctionNumber & 0x07);
 
     /* Allocate MSI via ITS */
-    Status = HalpGicItsAllocateMsi(DeviceId, EventId, TargetCpu,
+    Status = HalpGicItsAllocateMsi(DeviceId, EventId, TargetCpu, 0,
                                     &Lpi, MsiAddress, MsiData);
     if (NT_SUCCESS(Status))
     {
