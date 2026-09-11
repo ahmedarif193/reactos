@@ -64,6 +64,7 @@ typedef struct _DEVICE_ACTION_REQUEST
     PKEVENT CompletionEvent;
     NTSTATUS *CompletionStatus;
     DEVICE_ACTION Action;
+    PPI_QUERY_REMOVE_DATA RemoveData;
 } DEVICE_ACTION_REQUEST, *PDEVICE_ACTION_REQUEST;
 
 typedef enum _ADD_DEV_DRIVER_TYPE
@@ -2311,6 +2312,205 @@ IopRemoveDevice(PDEVICE_NODE DeviceNode)
     return Status;
 }
 
+typedef struct _PIP_REMOVE_ENTRY
+{
+    LIST_ENTRY Link;
+    PDEVICE_OBJECT DeviceObject;
+    BOOLEAN Queried;
+} PIP_REMOVE_ENTRY, *PPIP_REMOVE_ENTRY;
+
+static
+BOOLEAN
+PipRemovalListContains(PLIST_ENTRY List, PDEVICE_OBJECT DeviceObject)
+{
+    PLIST_ENTRY Link;
+
+    for (Link = List->Flink; Link != List; Link = Link->Flink)
+    {
+        if (CONTAINING_RECORD(Link, PIP_REMOVE_ENTRY, Link)->DeviceObject == DeviceObject)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static
+NTSTATUS
+PipAddRemovalDevice(PLIST_ENTRY List, PDEVICE_OBJECT DeviceObject)
+{
+    PPIP_REMOVE_ENTRY Entry;
+    PDEVICE_NODE Node = IopGetDeviceNode(DeviceObject);
+
+    if (PipRemovalListContains(List, DeviceObject))
+        return STATUS_SUCCESS;
+    if (!Node || Node == IopRootDeviceNode)
+        return STATUS_INVALID_DEVICE_REQUEST;
+    if (Node->State == DeviceNodeRemoved || Node->State == DeviceNodeDeleted)
+        return STATUS_NO_SUCH_DEVICE;
+
+    Entry = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Entry), TAG_IO);
+    if (!Entry)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    ObReferenceObject(DeviceObject);
+    Entry->DeviceObject = DeviceObject;
+    Entry->Queried = FALSE;
+    InsertTailList(List, &Entry->Link);
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PipSetRemovalVeto(
+    _In_opt_ PPI_QUERY_REMOVE_DATA RemoveData,
+    _In_ PDEVICE_NODE DeviceNode,
+    _In_ PNP_VETO_TYPE VetoType)
+{
+    NTSTATUS Status;
+
+    if (RemoveData)
+    {
+        RemoveData->VetoType = VetoType;
+        Status = RtlDuplicateUnicodeString(RTL_DUPLICATE_UNICODE_STRING_NULL_TERMINATE,
+                                           &DeviceNode->InstancePath, &RemoveData->VetoName);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    return STATUS_PLUGPLAY_QUERY_VETOED;
+}
+
+static
+NTSTATUS
+PipQueryAndRemoveDevice(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Out_opt_ PPI_QUERY_REMOVE_DATA RemoveData)
+{
+    LIST_ENTRY Devices, Ordered;
+    PLIST_ENTRY Link;
+    PPIP_REMOVE_ENTRY Entry;
+    PDEVICE_NODE Node, Child;
+    PDEVICE_RELATIONS Relations;
+    IO_STACK_LOCATION Stack = {0};
+    IO_STATUS_BLOCK IoStatusBlock;
+    NTSTATUS Status;
+    KIRQL OldIrql;
+    ULONG i;
+
+    /* The device-action worker serializes this with enumeration and start.
+     * Keep every PDO referenced until the entire operation has completed. */
+    InitializeListHead(&Devices);
+    Status = PipAddRemovalDevice(&Devices, DeviceObject);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    for (Link = Devices.Flink; Link != &Devices; Link = Link->Flink)
+    {
+        Entry = CONTAINING_RECORD(Link, PIP_REMOVE_ENTRY, Link);
+        Node = IopGetDeviceNode(Entry->DeviceObject);
+        KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
+        for (Child = Node->Child; Child; Child = Child->Sibling)
+        {
+            Status = PipAddRemovalDevice(&Devices, Child->PhysicalDeviceObject);
+            if (!NT_SUCCESS(Status))
+                break;
+        }
+        KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+
+        Stack.Parameters.QueryDeviceRelations.Type = RemovalRelations;
+        Status = IopInitiatePnpIrp(Entry->DeviceObject, &IoStatusBlock,
+                                  IRP_MN_QUERY_DEVICE_RELATIONS, &Stack);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Status != STATUS_NOT_SUPPORTED && Status != STATUS_NOT_IMPLEMENTED)
+                goto Cleanup;
+            Status = STATUS_SUCCESS;
+            continue;
+        }
+        Relations = (PDEVICE_RELATIONS)IoStatusBlock.Information;
+        if (!Relations)
+            continue;
+        for (i = 0; i < Relations->Count; ++i)
+        {
+            if (NT_SUCCESS(Status))
+                Status = PipAddRemovalDevice(&Devices, Relations->Objects[i]);
+            ObDereferenceObject(Relations->Objects[i]);
+        }
+        ExFreePool(Relations);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+
+    /* A removal relation can add an ancestor after its children were found.
+     * Order by tree depth so children are always removed before their parent. */
+    InitializeListHead(&Ordered);
+    while (!IsListEmpty(&Devices))
+    {
+        Entry = CONTAINING_RECORD(RemoveHeadList(&Devices), PIP_REMOVE_ENTRY, Link);
+        Node = IopGetDeviceNode(Entry->DeviceObject);
+        for (Link = Ordered.Flink; Link != &Ordered; Link = Link->Flink)
+        {
+            DeviceObject = CONTAINING_RECORD(Link, PIP_REMOVE_ENTRY, Link)->DeviceObject;
+            if (IopGetDeviceNode(DeviceObject)->Level > Node->Level)
+                break;
+        }
+        InsertTailList(Link, &Entry->Link);
+    }
+    while (!IsListEmpty(&Ordered))
+    {
+        Link = RemoveHeadList(&Ordered);
+        InsertTailList(&Devices, Link);
+    }
+
+    /* Complete every query before sending any remove IRP. A veto must leave
+     * the whole subtree usable, including devices that already accepted. */
+    for (Link = Devices.Blink; Link != &Devices; Link = Link->Blink)
+    {
+        Entry = CONTAINING_RECORD(Link, PIP_REMOVE_ENTRY, Link);
+        Node = IopGetDeviceNode(Entry->DeviceObject);
+        if (Node->UserFlags & DNUF_NOT_DISABLEABLE)
+        {
+            Status = PipSetRemovalVeto(RemoveData, Node, PNP_VetoNonDisableable);
+            goto Cancel;
+        }
+        Entry->Queried = TRUE;
+        Status = IopQueryRemoveDevice(Entry->DeviceObject);
+        if (!NT_SUCCESS(Status))
+        {
+            Status = PipSetRemovalVeto(RemoveData, Node, PNP_VetoDevice);
+            goto Cancel;
+        }
+    }
+
+    for (Link = Devices.Blink; Link != &Devices; Link = Link->Blink)
+    {
+        Entry = CONTAINING_RECORD(Link, PIP_REMOVE_ENTRY, Link);
+        Node = IopGetDeviceNode(Entry->DeviceObject);
+        PiSetDevNodeState(Node, DeviceNodeAwaitingQueuedRemoval);
+        if (Node->Parent && PipRemovalListContains(&Devices, Node->Parent->PhysicalDeviceObject))
+            PiUnlinkDevNode(Node);
+        IopSendRemoveDevice(Entry->DeviceObject);
+    }
+    Status = STATUS_SUCCESS;
+    goto Cleanup;
+
+Cancel:
+    for (Link = Devices.Flink; Link != &Devices; Link = Link->Flink)
+    {
+        Entry = CONTAINING_RECORD(Link, PIP_REMOVE_ENTRY, Link);
+        if (Entry->Queried)
+            IopCancelRemoveDevice(Entry->DeviceObject);
+    }
+
+Cleanup:
+    while (!IsListEmpty(&Devices))
+    {
+        Entry = CONTAINING_RECORD(RemoveHeadList(&Devices), PIP_REMOVE_ENTRY, Link);
+        ObDereferenceObject(Entry->DeviceObject);
+        ExFreePoolWithTag(Entry, TAG_IO);
+    }
+    return Status;
+}
+
 static
 NTSTATUS
 PiEnumerateDevice(
@@ -2758,6 +2958,10 @@ ActionToStr(
             return "PiActionStartDevice";
         case PiActionQueryState:
             return "PiActionQueryState";
+        case PiActionRemoveDevice:
+            return "PiActionRemoveDevice";
+        case PiActionQueryRemoveDevice:
+            return "PiActionQueryRemoveDevice";
         default:
             return "(request unknown)";
     }
@@ -2853,6 +3057,17 @@ PipDeviceActionWorker(
                 status = STATUS_SUCCESS;
                 break;
 
+            case PiActionQueryRemoveDevice:
+                /* An unstarted devnode remains registered until uninstall. */
+                if (deviceNode->State == DeviceNodeInitialized)
+                    break;
+                status = PipQueryAndRemoveDevice(Request->DeviceObject, Request->RemoveData);
+                break;
+
+            case PiActionRemoveDevice:
+                status = PipQueryAndRemoveDevice(Request->DeviceObject, NULL);
+                break;
+
             default:
                 DPRINT1("Unimplemented device action %u\n", Request->Action);
                 status = STATUS_NOT_IMPLEMENTED;
@@ -2888,12 +3103,14 @@ PipDeviceActionWorker(
  * @param[out] CompletionStatus  Status returned be the action will be written here
  */
 
+static
 VOID
-PiQueueDeviceAction(
+PipQueueDeviceAction(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ DEVICE_ACTION Action,
     _In_opt_ PKEVENT CompletionEvent,
-    _Out_opt_ NTSTATUS *CompletionStatus)
+    _Out_opt_ NTSTATUS *CompletionStatus,
+    _Out_opt_ PPI_QUERY_REMOVE_DATA RemoveData)
 {
     PDEVICE_ACTION_REQUEST Request;
     KIRQL OldIrql;
@@ -2909,6 +3126,7 @@ PiQueueDeviceAction(
     Request->Action = Action;
     Request->CompletionEvent = CompletionEvent;
     Request->CompletionStatus = CompletionStatus;
+    Request->RemoveData = RemoveData;
 
     KeAcquireSpinLock(&IopDeviceActionLock, &OldIrql);
     InsertTailList(&IopDeviceActionRequestList, &Request->RequestListEntry);
@@ -2938,6 +3156,16 @@ PiQueueDeviceAction(
     ExQueueWorkItem(&IopDeviceActionWorkItem, DelayedWorkQueue);
 }
 
+VOID
+PiQueueDeviceAction(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ DEVICE_ACTION Action,
+    _In_opt_ PKEVENT CompletionEvent,
+    _Out_opt_ NTSTATUS *CompletionStatus)
+{
+    PipQueueDeviceAction(DeviceObject, Action, CompletionEvent, CompletionStatus, NULL);
+}
+
 /**
  * @brief      Perfom a device operation synchronously via PiQueueDeviceAction
  *
@@ -2960,4 +3188,19 @@ PiPerformSyncDeviceAction(
     KeWaitForSingleObject(&opFinished, Executive, KernelMode, FALSE, NULL);
 
     return status;
+}
+
+NTSTATUS
+PiQueryRemoveDevice(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Out_ PPI_QUERY_REMOVE_DATA RemoveData)
+{
+    KEVENT Event;
+    NTSTATUS Status;
+
+    RtlZeroMemory(RemoveData, sizeof(*RemoveData));
+    KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
+    PipQueueDeviceAction(DeviceObject, PiActionQueryRemoveDevice, &Event, &Status, RemoveData);
+    KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+    return Status;
 }

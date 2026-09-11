@@ -550,6 +550,8 @@ typedef enum _DEVICE_ACTION
     PiActionAddBootDevices,
     PiActionStartDevice,
     PiActionQueryState,
+    PiActionRemoveDevice,
+    PiActionQueryRemoveDevice,
 } DEVICE_ACTION;
 
 //
@@ -1520,6 +1522,17 @@ NTSTATUS
 PiPerformSyncDeviceAction(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ DEVICE_ACTION Action);
+
+typedef struct _PI_QUERY_REMOVE_DATA
+{
+    PNP_VETO_TYPE VetoType;
+    UNICODE_STRING VetoName;
+} PI_QUERY_REMOVE_DATA, *PPI_QUERY_REMOVE_DATA;
+
+NTSTATUS
+PiQueryRemoveDevice(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Out_ PPI_QUERY_REMOVE_DATA RemoveData);
 
 //
 // PnP notifications
