@@ -115,12 +115,14 @@ static VOID DxgkTrackedWorkTestCancellation(VOID)
     ok_bool_true(DxgkTrackedWorkCoreCommit(&Context.Core, FALSE, &RetiredNow), "work commits before cancellation");
     ok_bool_true(DxgkTrackedWorkCoreCancel(&Context.Core), "cancel wins against committed work");
     ok_eq_long(Context.InFlight, 0);
-    ok_eq_ulong(Context.EventCount, 3);
+    ok_eq_ulong(Context.EventCount, 4);
     DxgkTrackedWorkTestExpectEvent(&Context, 0, DxgkTrackedWorkTestEventIncrement);
     DxgkTrackedWorkTestExpectEvent(&Context, 1, DxgkTrackedWorkTestEventDecrement);
-    DxgkTrackedWorkTestExpectEvent(&Context, 2, DxgkTrackedWorkTestEventComplete);
+    /* Release acknowledged fence waiters before dropping the device work. */
+    DxgkTrackedWorkTestExpectEvent(&Context, 2, DxgkTrackedWorkTestEventPublish);
+    DxgkTrackedWorkTestExpectEvent(&Context, 3, DxgkTrackedWorkTestEventComplete);
     ok_bool_false(DxgkTrackedWorkCoreRetire(&Context.Core), "retire loses after committed cancellation");
-    ok_eq_ulong(Context.EventCount, 3);
+    ok_eq_ulong(Context.EventCount, 4);
 }
 
 static VOID DxgkTrackedWorkTestPrecompleted(VOID)
