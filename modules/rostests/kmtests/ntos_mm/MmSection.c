@@ -300,8 +300,16 @@ TestCreateSection(
         else if (GetNTVersion() >= _WIN32_WINNT_WIN8)
             --PointerCount2;
         CheckObject(FileHandle2, PointerCount2, 1L);
-        CheckSection(SectionObject, 0);
-        TestMapView(SectionObject, TRUE, TRUE);
+        if (GetNTVersion() < _WIN32_WINNT_WIN8)
+        {
+            CheckSection(SectionObject, 0);
+            TestMapView(SectionObject, TRUE, TRUE);
+        }
+        else
+        {
+            /* A rejected FileObject argument must not create a section. */
+            ok_eq_pointer(SectionObject, KmtInvalidPointer);
+        }
 
         if (SectionObject && SectionObject != KmtInvalidPointer)
             ObDereferenceObject(SectionObject);
@@ -325,8 +333,16 @@ TestCreateSection(
         if (GetNTVersion() >= _WIN32_WINNT_WIN8)
             PointerCount2--;
         CheckObject(FileHandle2, PointerCount2, 1L);
-        CheckSection(SectionObject, 0);
-        TestMapView(SectionObject, TRUE, TRUE);
+        if (GetNTVersion() < _WIN32_WINNT_WIN8)
+        {
+            CheckSection(SectionObject, 0);
+            TestMapView(SectionObject, TRUE, TRUE);
+        }
+        else
+        {
+            /* A rejected FileObject argument must not create a section. */
+            ok_eq_pointer(SectionObject, KmtInvalidPointer);
+        }
 
         if (SectionObject && SectionObject != KmtInvalidPointer)
             ObDereferenceObject(SectionObject);
@@ -369,8 +385,16 @@ TestCreateSection(
         else if (GetNTVersion() >= _WIN32_WINNT_WIN8)
             --PointerCount1;
         CheckObject(FileHandle1, PointerCount1, 1L);
-        CheckSection(SectionObject, 0);
-        TestMapView(SectionObject, TRUE, FALSE);
+        if (GetNTVersion() < _WIN32_WINNT_WIN8)
+        {
+            CheckSection(SectionObject, 0);
+            TestMapView(SectionObject, TRUE, FALSE);
+        }
+        else
+        {
+            /* A rejected FileObject argument must not create a section. */
+            ok_eq_pointer(SectionObject, KmtInvalidPointer);
+        }
 
         if (SectionObject && SectionObject != KmtInvalidPointer)
             ObDereferenceObject(SectionObject);
@@ -394,8 +418,16 @@ TestCreateSection(
         if (GetNTVersion() >= _WIN32_WINNT_WIN8)
             --PointerCount1;
         CheckObject(FileHandle1, PointerCount1, 1L);
-        CheckSection(SectionObject, 0);
-        TestMapView(SectionObject, TRUE, FALSE);
+        if (GetNTVersion() < _WIN32_WINNT_WIN8)
+        {
+            CheckSection(SectionObject, 0);
+            TestMapView(SectionObject, TRUE, FALSE);
+        }
+        else
+        {
+            /* A rejected FileObject argument must not create a section. */
+            ok_eq_pointer(SectionObject, KmtInvalidPointer);
+        }
 
         if (SectionObject && SectionObject != KmtInvalidPointer)
             ObDereferenceObject(SectionObject);
@@ -424,8 +456,16 @@ TestCreateSection(
         }
         CheckObject(FileHandle1, PointerCount1, 1L);
         CheckObject(FileHandle2, PointerCount2, 1L);
-        CheckSection(SectionObject, 0);
-        TestMapView(SectionObject, TRUE, TRUE);
+        if (GetNTVersion() < _WIN32_WINNT_WIN8)
+        {
+            CheckSection(SectionObject, 0);
+            TestMapView(SectionObject, TRUE, TRUE);
+        }
+        else
+        {
+            /* A rejected FileObject argument must not create a section. */
+            ok_eq_pointer(SectionObject, KmtInvalidPointer);
+        }
 
         if (SectionObject && SectionObject != KmtInvalidPointer)
             ObDereferenceObject(SectionObject);
@@ -453,8 +493,16 @@ TestCreateSection(
         }
         CheckObject(FileHandle1, PointerCount1, 1L);
         CheckObject(FileHandle2, PointerCount2, 1L);
-        CheckSection(SectionObject, 0);
-        TestMapView(SectionObject, TRUE, FALSE);
+        if (GetNTVersion() < _WIN32_WINNT_WIN8)
+        {
+            CheckSection(SectionObject, 0);
+            TestMapView(SectionObject, TRUE, FALSE);
+        }
+        else
+        {
+            /* A rejected FileObject argument must not create a section. */
+            ok_eq_pointer(SectionObject, KmtInvalidPointer);
+        }
 
         if (SectionObject && SectionObject != KmtInvalidPointer)
             ObDereferenceObject(SectionObject);
