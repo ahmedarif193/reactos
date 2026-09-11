@@ -572,6 +572,12 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
             // Lock the PFN database and loop pages
             //
             OldIrql = MiAcquirePfnLock();
+            if (MmAvailablePages < PageTableCount)
+            {
+                MiReleasePfnLock(OldIrql);
+                KeReleaseGuardedMutex(&MmPagedPoolMutex);
+                return NULL;
+            }
             do
             {
                 //
@@ -698,6 +704,16 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
         StartPte = PointerPte + SizeInPages;
 #if defined(_M_ARM64)
         OldIrql = MiAcquirePfnLock();
+        if (MmAvailablePages < SizeInPages)
+        {
+            /* Release the reserved VA before reporting a backing-page failure. */
+            MiReleasePfnLock(OldIrql);
+            KeAcquireGuardedMutex(&MmPagedPoolMutex);
+            RtlClearBits(MmPagedPoolInfo.PagedPoolAllocationMap, i, SizeInPages);
+            RtlClearBit(MmPagedPoolInfo.EndOfPagedPoolBitmap, EndAllocation);
+            KeReleaseGuardedMutex(&MmPagedPoolMutex);
+            return NULL;
+        }
 #endif
         do
         {
