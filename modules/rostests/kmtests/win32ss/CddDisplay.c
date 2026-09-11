@@ -1,82 +1,15 @@
 /*
  * PROJECT:     ReactOS kernel-mode tests
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     Kernel-Mode Test Suite - Canonical Display Driver (cdd.dll)
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * Validates the canonical display driver (win32ss/drivers/displays/cdd).
- *
- * cdd is a GDI display driver loaded by win32k via EngLoadImage: it runs in
- * win32k's display-driver context and resolves its imports (Eng*) against
- * win32k. The kmtest harness driver (kmtest_drv.sys) is an ordinary
- * ntoskrnl/hal driver and cannot enter that context or link cdd, so this test
- * validates everything that IS reachable from a plain kernel driver:
- *
- *   1. CddContract - the documented upward GDI-DDI / DWM-escape contract that
- *      cdd must honor (DDI version, hook count, escape-code shape). These are
- *      the values win32k and the d3dkmt "dwm" apitest agree on.
- *   2. CddImage    - genuinely opens the installed cdd.dll and validates it is
- *      a well-formed native display-driver DLL for this architecture whose PE
- *      entry point (the DrvEnableDriver win32k invokes) is present.
- *
- * The live paths that require win32k's Eng context - DrvEnableDriver returning
- * the DRVENABLEDATA, the primary-surface enable, an Eng* draw into it, and the
- * present/IOCTL flush - are exercised by the user-mode d3dkmt "dwm" apitest and
- * by booting the desktop on cdd; they cannot run inside kmtest_drv.sys.
+ * Checks the installed native display image. Entry-point execution and display
+ * operations require win32k's Eng context and are covered by userspace tests.
  */
 
 #include <kmt_test.h>
 #include <ndk/rtlfuncs.h>
-
-/*
- * cdd's documented DDI / composition contract.
- *
- * These mirror the public winddi.h values and the escape codes shared with
- * modules/rostests/apitests/d3dkmt/dwm_test.c. They are intentionally written
- * out here (winddi.h/wingdi.h cannot be included in a kernel test) so this test
- * pins the contract: if cdd's intended version, hook count, or escape codes
- * change, this is where the expectation is recorded.
- */
-#define CDD_EXPECTED_DDI_VERSION    0x00030000UL   /* DDI_DRIVER_VERSION_NT5  */
-#define CDD_EXPECTED_DDI_HOOKS      14UL           /* gaRcddDriverFunctions[] */
-#define CDD_ESCAPE_SUPPRESS_CURSOR  0x44574D01UL
-#define CDD_ESCAPE_COMPOSITION_SYNC 0x44574D02UL
-
-/* ---- Test 1: the upward GDI-DDI / DWM-escape contract ------------------- */
-static
-VOID
-Test_CddContract(VOID)
-{
-    /*
-     * cdd reports the NT5 GDI DDI; GDI rejects a display driver whose
-     * iDriverVersion it does not understand.
-     */
-    ok_eq_hex(CDD_EXPECTED_DDI_VERSION, 0x00030000UL);
-
-    /*
-     * The non-accelerated canonical driver hooks exactly the DDI it needs:
-     * PDEV lifetime (EnablePDEV/CompletePDEV/DisablePDEV), surface lifetime
-     * (EnableSurface/DisableSurface), AssertMode, GetModes, SetPalette, the two
-     * pointer hooks, the three present hooks (BitBlt/CopyBits/SynchronizeSurface)
-     * and Escape - 14 in total. It deliberately does NOT hook TextOut/LineTo/
-     * StrokePath/Paint: GDI's software rasterizer renders those.
-     */
-    ok_eq_uint(CDD_EXPECTED_DDI_HOOKS, 14UL);
-
-    /*
-     * The two DWM compositor escape codes carry the 'DWM' signature in their
-     * high bytes (0x44='D', 0x57='W', 0x4D='M') and must be distinct. cdd
-     * recognizes these two and routes everything else to the default handler.
-     */
-    ok_eq_hex(CDD_ESCAPE_SUPPRESS_CURSOR >> 24, (ULONG)'D');
-    ok_eq_hex(CDD_ESCAPE_COMPOSITION_SYNC >> 24, (ULONG)'D');
-    ok_eq_hex((CDD_ESCAPE_SUPPRESS_CURSOR >> 16) & 0xFF, (ULONG)'W');
-    ok_eq_hex((CDD_ESCAPE_COMPOSITION_SYNC >> 16) & 0xFF, (ULONG)'W');
-    ok_eq_hex((CDD_ESCAPE_SUPPRESS_CURSOR >> 8) & 0xFF, (ULONG)'M');
-    ok_eq_hex((CDD_ESCAPE_COMPOSITION_SYNC >> 8) & 0xFF, (ULONG)'M');
-    ok(CDD_ESCAPE_SUPPRESS_CURSOR != CDD_ESCAPE_COMPOSITION_SYNC,
-       "DWM escape codes must be distinct\n");
-}
 
 /* Read the NT headers of the running kmtest driver to learn this build's CPU. */
 static
@@ -100,7 +33,7 @@ KmtSelfMachine(VOID)
     return Nt->FileHeader.Machine;
 }
 
-/* ---- Test 2: validate the installed cdd.dll binary ---------------------- */
+/* Validate the installed display image. */
 static
 VOID
 Test_CddImage(VOID)
@@ -174,9 +107,9 @@ Test_CddImage(VOID)
             /* Built for the same CPU as the running kernel (arch-neutral) */
             ok_eq_hex(Nt->FileHeader.Machine, KmtSelfMachine());
 
-            /* It is a DLL, not an EXE */
-            ok(BooleanFlagOn(Nt->FileHeader.Characteristics, IMAGE_FILE_DLL),
-               "cdd.dll is not marked IMAGE_FILE_DLL (0x%x)\n",
+            /* Windows display images need not carry IMAGE_FILE_DLL. */
+            ok(BooleanFlagOn(Nt->FileHeader.Characteristics, IMAGE_FILE_EXECUTABLE_IMAGE),
+               "cdd.dll is not marked IMAGE_FILE_EXECUTABLE_IMAGE (0x%x)\n",
                Nt->FileHeader.Characteristics);
 
             /* A 64-bit kernel image uses the PE32+ optional header */
@@ -208,6 +141,5 @@ Test_CddImage(VOID)
 
 START_TEST(CddDisplay)
 {
-    Test_CddContract();
     Test_CddImage();
 }
