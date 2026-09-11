@@ -43,6 +43,11 @@ find_program(MESA_AR NAMES llvm-ar HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE 
 find_program(MESA_RANLIB NAMES llvm-ranlib HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
 find_program(MESA_STRIP NAMES llvm-strip HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
 find_program(MESA_MESON NAMES meson REQUIRED)
+execute_process(COMMAND "${MESA_MESON}" --version OUTPUT_VARIABLE _mesa_meson_version OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _mesa_meson_status)
+# Older Meson releases omit LLVM 22 from their CMake dependency search.
+if(NOT _mesa_meson_status EQUAL 0 OR _mesa_meson_version VERSION_LESS 1.12.0)
+    message(FATAL_ERROR "Modern Mesa with LLVM 22 requires Meson 1.12.0 or newer; set MESA_MESON to a suitable executable (found ${_mesa_meson_version}).")
+endif()
 find_program(MESA_NINJA NAMES ninja REQUIRED)
 find_program(MESA_PYTHON NAMES python3 python REQUIRED)
 execute_process(COMMAND "${MESA_PYTHON}" -c "import mako, packaging, yaml" RESULT_VARIABLE _mesa_python_status ERROR_VARIABLE _mesa_python_error)

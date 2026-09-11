@@ -38,8 +38,10 @@ cmake --build output-Clang-arm64-debug --target mesa-llvmpipe
 The same option on an AMD64 tree builds AMD64, not the host architecture.
 `MESA_BUILD_JOBS` defaults to 4 to limit memory pressure. The first build needs
 network access and several GB of free space. Required host tools are CMake 3.24+,
-Ninja, Meson, Python with Mako, packaging and PyYAML, and llvm-mingw. Disabled
-builds do not probe these Mesa dependencies or download LLVM.
+Ninja, Meson 1.12.0+, Python with Mako, packaging and PyYAML, and llvm-mingw.
+Disabled builds do not probe these Mesa dependencies or download LLVM.
+`MESA_MESON` can select a specific Meson installation without changing the
+host's system Meson.
 
 CMake builds static Windows LLVM **22.1.8** from its official, SHA-256-pinned
 source archive, including the native TableGen tools needed for cross builds.
