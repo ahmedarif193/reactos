@@ -9,9 +9,9 @@
 /* INCLUDES ******************************************************************/
 
 #include <win32k.h>
+#include <reactos/buildno.h>
 DBG_DEFAULT_CHANNEL(UserDesktop);
 
-#include <reactos/buildno.h>
 
 static NTSTATUS
 UserInitializeDesktop(PDESKTOP pdesk, PUNICODE_STRING DesktopName, PWINSTATION_OBJECT pwinsta);
@@ -305,8 +305,7 @@ InitDesktopImpl(VOID)
 static NTSTATUS
 GetSystemVersionString(OUT PWSTR pwszzVersion,
                        IN SIZE_T cchDest,
-                       IN BOOLEAN InSafeMode,
-                       IN BOOLEAN AppendNtSystemRoot)
+                       IN BOOLEAN InSafeMode)
 {
     NTSTATUS Status;
 
@@ -336,6 +335,9 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
     WCHAR BuildLabBuffer[256];
     WCHAR VersionBuffer[256];
     PWCHAR EndBuffer;
+    PWCHAR Hash, Scan;
+    PCSTR Flavor;
+    PCWSTR ReleaseSuffix;
 
     VerInfo.dwOSVersionInfoSize = sizeof(VerInfo);
 
@@ -374,6 +376,23 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
     BuildLabString.Buffer[BuildLabString.Length / sizeof(WCHAR)] = UNICODE_NULL;
     CSDVersionString.Buffer[CSDVersionString.Length / sizeof(WCHAR)] = UNICODE_NULL;
 
+    Hash = NULL;
+    Scan = BuildLabString.Buffer;
+    while ((Scan = wcsstr(Scan, L"-g")) != NULL)
+    {
+        Hash = Scan;
+        Scan += 2;
+    }
+    if (Hash)
+    {
+        *Hash = UNICODE_NULL;
+        BuildLabString.Length = (USHORT)((Hash - BuildLabString.Buffer) * sizeof(WCHAR));
+    }
+
+    Flavor = strchr(KERNEL_VERSION_STR, '-');
+    Flavor = Flavor ? Flavor + 1 : KERNEL_VERSION_STR;
+    ReleaseSuffix = strchr(Flavor, '-') ? L"" : L"-release";
+
     EndBuffer = VersionBuffer;
     if ( /* VerInfo.wServicePackMajor != 0 && */ CSDVersionString.Length)
     {
@@ -402,68 +421,28 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* String for Safe Mode */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Version %S %wZ (Target: Windows 11 24H2 build %u%s)\n",
-                                     KERNEL_VERSION_STR,
+                                     L"ReactOS Experimental build %wZ %S%s %S (Target: Windows 11 24H2 build %u%s)\n",
                                      &BuildLabString,
+                                     Flavor,
+                                     ReleaseSuffix,
+                                     REACTOS_COMPILER_NAME,
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      VersionBuffer);
-
-        if (AppendNtSystemRoot && NT_SUCCESS(Status))
-        {
-            Status = RtlStringCbPrintfW(VersionBuffer,
-                                        sizeof(VersionBuffer),
-                                        L" - %s\n",
-                                        SharedUserData->NtSystemRoot);
-            if (NT_SUCCESS(Status))
-            {
-                /* Replace the last newline by a NULL, before concatenating */
-                EndBuffer = wcsrchr(pwszzVersion, L'\n');
-                if (EndBuffer) *EndBuffer = UNICODE_NULL;
-
-                /* The concatenated string has a terminating newline */
-                Status = RtlStringCchCatW(pwszzVersion,
-                                          cchDest,
-                                          VersionBuffer);
-                if (!NT_SUCCESS(Status))
-                {
-                    /* Concatenation failed, put back the newline */
-                    if (EndBuffer) *EndBuffer = L'\n';
-                }
-            }
-
-            /* Override any failures as the NtSystemRoot string is optional */
-            Status = STATUS_SUCCESS;
-        }
     }
     else
     {
         /* Multi-string for Normal Mode */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Version %S\n"
-                                     L"Build %wZ\n"
+                                     L"ReactOS Experimental build\n"
+                                     L"Build %wZ (%S%s, %S)\n"
                                      L"Target: Windows 11 24H2 build %u%s\n",
-                                     KERNEL_VERSION_STR,
                                      &BuildLabString,
+                                     Flavor,
+                                     ReleaseSuffix,
+                                     REACTOS_COMPILER_NAME,
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      VersionBuffer);
-
-        if (AppendNtSystemRoot && NT_SUCCESS(Status))
-        {
-            Status = RtlStringCbPrintfW(VersionBuffer,
-                                        sizeof(VersionBuffer),
-                                        L"%s\n",
-                                        SharedUserData->NtSystemRoot);
-            if (NT_SUCCESS(Status))
-            {
-                Status = RtlStringCchCatW(pwszzVersion,
-                                          cchDest,
-                                          VersionBuffer);
-            }
-
-            /* Override any failures as the NtSystemRoot string is optional */
-            Status = STATUS_SUCCESS;
-        }
     }
 
     if (!NT_SUCCESS(Status))
@@ -471,9 +450,11 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* Fall-back string */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"ReactOS Version %S %wZ\n",
-                                     KERNEL_VERSION_STR,
-                                     &BuildLabString);
+                                     L"ReactOS Experimental build %wZ %S%s %S\n",
+                                     &BuildLabString,
+                                     Flavor,
+                                     ReleaseSuffix,
+                                     REACTOS_COMPILER_NAME);
         if (!NT_SUCCESS(Status))
         {
             /* General failure, NULL-terminate the string */
@@ -2127,8 +2108,7 @@ IntPaintDesktopContent(HDC hDC)
         static WCHAR wszzVersion[1024] = L"\0";
 
         /* Only used in normal mode */
-        // We expect at most 4 strings (3 for version, 1 for optional NtSystemRoot)
-        static POLYTEXTW VerStrs[4] = {{0},{0},{0},{0}};
+        static POLYTEXTW VerStrs[3] = {{0},{0},{0}};
         INT i = 0;
         SIZE_T len;
 
@@ -2199,8 +2179,7 @@ IntPaintDesktopContent(HDC hDC)
         {
             Status = GetSystemVersionString(wszzVersion,
                                             ARRAYSIZE(wszzVersion),
-                                            InSafeMode,
-                                            g_AlwaysDisplayVersion);
+                                            InSafeMode);
             if (!InSafeMode && NT_SUCCESS(Status) && *wszzVersion)
             {
                 PWCHAR pstr = wszzVersion;
