@@ -6089,7 +6089,7 @@ MiGetHighestAddressFromZeroBits(
         /* Count-form values retain the original 32-bit address constraint. */
         ZeroBits += 32;
         if (ZeroBits > MI_MAX_ZERO_BITS)
-            return STATUS_INVALID_PARAMETER_3;
+            return STATUS_INVALID_PARAMETER;
 
         *HighestAddress = MAXULONG_PTR >> ZeroBits;
         return STATUS_SUCCESS;
@@ -6099,12 +6099,12 @@ MiGetHighestAddressFromZeroBits(
         ZeroBits |= ZeroBits >> Shift;
 
     if (ZeroBits < (MAXULONG_PTR >> MI_MAX_ZERO_BITS))
-        return STATUS_INVALID_PARAMETER_3;
+        return STATUS_INVALID_PARAMETER;
 
     *HighestAddress = ZeroBits;
 #else
     if (ZeroBits > MI_MAX_ZERO_BITS)
-        return STATUS_INVALID_PARAMETER_3;
+        return STATUS_INVALID_PARAMETER;
 
     *HighestAddress = MAXULONG_PTR >> ZeroBits;
 #endif
@@ -6257,21 +6257,21 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
                     MEM_TOP_DOWN | MEM_WRITE_WATCH | MEM_LARGE_PAGES)))
     {
         DPRINT1("Invalid Allocation Type\n");
-        return STATUS_INVALID_PARAMETER_5;
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* Check for at least one of these Allocation Types to be set */
     if (!(AllocationType & (MEM_COMMIT | MEM_RESERVE | MEM_RESET)))
     {
         DPRINT1("No memory allocation base type\n");
-        return STATUS_INVALID_PARAMETER_5;
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* MEM_RESET is an exclusive flag, make sure that is valid too */
     if ((AllocationType & MEM_RESET) && (AllocationType != MEM_RESET))
     {
         DPRINT1("Invalid use of MEM_RESET\n");
-        return STATUS_INVALID_PARAMETER_5;
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* Check if large pages are being used */
@@ -6281,14 +6281,14 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
         if (!(AllocationType & MEM_COMMIT))
         {
             DPRINT1("Must supply MEM_COMMIT with MEM_LARGE_PAGES\n");
-            return STATUS_INVALID_PARAMETER_5;
+            return STATUS_INVALID_PARAMETER;
         }
 
         /* These flags are not allowed with large page allocations */
         if (AllocationType & (MEM_PHYSICAL | MEM_RESET | MEM_WRITE_WATCH))
         {
             DPRINT1("Using illegal flags with MEM_LARGE_PAGES\n");
-            return STATUS_INVALID_PARAMETER_5;
+            return STATUS_INVALID_PARAMETER;
         }
     }
 
@@ -6296,7 +6296,7 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
     if ((AllocationType & MEM_WRITE_WATCH) && !(AllocationType & MEM_RESERVE))
     {
         DPRINT1("MEM_WRITE_WATCH used without MEM_RESERVE\n");
-        return STATUS_INVALID_PARAMETER_5;
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* Check for valid MEM_PHYSICAL usage */
@@ -6306,14 +6306,14 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
         if (!(AllocationType & MEM_RESERVE))
         {
             DPRINT1("MEM_PHYSICAL used without MEM_RESERVE\n");
-            return STATUS_INVALID_PARAMETER_5;
+            return STATUS_INVALID_PARAMETER;
         }
 
         /* Only these flags are allowed with MEM_PHYSIAL */
         if (AllocationType & ~(MEM_RESERVE | MEM_TOP_DOWN | MEM_PHYSICAL))
         {
             DPRINT1("Using illegal flags with MEM_PHYSICAL\n");
-            return STATUS_INVALID_PARAMETER_5;
+            return STATUS_INVALID_PARAMETER;
         }
 
         /* Then make sure PAGE_READWRITE is used */
@@ -6332,13 +6332,22 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
             ((AllocationType & ~(MEM_COMMIT | MEM_RESERVE | MEM_TOP_DOWN | MEM_ROTATE)) != 0))
         {
             DPRINT1("MEM_ROTATE must reserve the complete range\n");
-            return STATUS_INVALID_PARAMETER_5;
+            return STATUS_INVALID_PARAMETER;
         }
         if (Protect & (PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY | PAGE_NOACCESS | PAGE_GUARD))
         {
             DPRINT1("MEM_ROTATE used with an invalid protection\n");
             return STATUS_INVALID_PARAMETER_6;
         }
+    }
+
+    /* Graphics protection flags use a separate allocation path on NT10. */
+    if (Protect & (PAGE_GRAPHICS_NOACCESS | PAGE_GRAPHICS_READONLY |
+                   PAGE_GRAPHICS_READWRITE | PAGE_GRAPHICS_EXECUTE |
+                   PAGE_GRAPHICS_EXECUTE_READ | PAGE_GRAPHICS_EXECUTE_READWRITE |
+                   PAGE_GRAPHICS_COHERENT | PAGE_GRAPHICS_NOCACHE))
+    {
+        return STATUS_NOT_SUPPORTED;
     }
 
     /* Calculate the protection mask and make sure it's valid */
@@ -6380,25 +6389,29 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
         AllocationType |= MEM_TOP_DOWN;
     }
 
+    /* A caller-supplied address ceiling must permit a user allocation. */
+    if (HighestAddress < max(LowestAddress, (ULONG_PTR)MM_LOWEST_USER_ADDRESS))
+        return STATUS_INVALID_PARAMETER;
+
     /* Make sure the allocation isn't past the VAD area */
     if (PBaseAddress > MM_HIGHEST_VAD_ADDRESS)
     {
         DPRINT1("Virtual allocation base above User Space\n");
-        return STATUS_INVALID_PARAMETER_2;
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* Make sure the allocation wouldn't overflow past the VAD area */
     if ((((ULONG_PTR)MM_HIGHEST_VAD_ADDRESS + 1) - (ULONG_PTR)PBaseAddress) < PRegionSize)
     {
         DPRINT1("Region size would overflow into kernel-memory\n");
-        return STATUS_INVALID_PARAMETER_4;
+        return STATUS_INVALID_PARAMETER;
     }
 
 #ifndef _WIN64
     if (PRegionSize >= MAXULONG)
     {
         DPRINT1("Region size is too large\n");
-        return STATUS_INVALID_PARAMETER_4;
+        return STATUS_INVALID_PARAMETER;
     }
 #endif
 
@@ -6406,7 +6419,7 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
     if (!PRegionSize)
     {
         DPRINT1("Region size is invalid (zero)\n");
-        return STATUS_INVALID_PARAMETER_4;
+        return STATUS_INVALID_PARAMETER;
     }
 
     //
@@ -6504,7 +6517,7 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
             ((AllocationType & ~(MEM_RESERVE | MEM_PHYSICAL | MEM_TOP_DOWN)) != 0))
         {
             DPRINT1("MEM_PHYSICAL must be a plain MEM_RESERVE\n");
-            Status = STATUS_INVALID_PARAMETER_5;
+            Status = STATUS_INVALID_PARAMETER;
             goto FailPathNoLock;
         }
         if (Protect != PAGE_READWRITE)
@@ -7232,19 +7245,19 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
     //
     // Make sure the allocation isn't past the user area
     //
-    if (PBaseAddress >= MM_HIGHEST_USER_ADDRESS)
+    if (PBaseAddress > MM_HIGHEST_USER_ADDRESS)
     {
         DPRINT1("Virtual free base above User Space\n");
-        return STATUS_INVALID_PARAMETER_2;
+        return STATUS_INVALID_PARAMETER;
     }
 
     //
     // Make sure the allocation wouldn't overflow past the user area
     //
-    if (((ULONG_PTR)MM_HIGHEST_USER_ADDRESS - (ULONG_PTR)PBaseAddress) < PRegionSize)
+    if ((((ULONG_PTR)MM_HIGHEST_USER_ADDRESS + 1) - (ULONG_PTR)PBaseAddress) < PRegionSize)
     {
         DPRINT1("Region size would overflow into kernel-memory\n");
-        return STATUS_INVALID_PARAMETER_3;
+        return STATUS_INVALID_PARAMETER;
     }
 
     //
