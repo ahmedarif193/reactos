@@ -16,6 +16,9 @@ add_library(dwmcore MODULE
 target_include_directories(dwmcore PRIVATE
     ${REACTOS_SOURCE_DIR}/base/system/dwm)
 
+set_source_files_properties(../../../base/system/dwm/gpud3d.cpp PROPERTIES
+    COMPILE_DEFINITIONS DXGKDDI_INTERFACE_VERSION=0x11007)
+
 set_module_type(dwmcore win32dll UNICODE)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     target_link_options(dwmcore PRIVATE
