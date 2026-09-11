@@ -1189,6 +1189,40 @@ DwmGpuComposeIsActive(void)
 }
 
 static BOOL
+DwmGpuComposeRepairBackBuffer(RECT *Draw)
+{
+    const RECT *Current = &g_composeDamage.Current;
+    const RECT *Previous = &g_composeDamage.Previous;
+    GLint ReadBuffer;
+
+    if (g_composeBlitFramebuffer == NULL ||
+        g_composeDamage.SwapMethod != WGL_SWAP_EXCHANGE_ARB ||
+        g_composeDamage.ValidFrames < 2 ||
+        (ULONGLONG)(Draw->right - Draw->left) * (Draw->bottom - Draw->top) <=
+        (ULONGLONG)(Current->right - Current->left) * (Current->bottom - Current->top) +
+        (ULONGLONG)(Previous->right - Previous->left) * (Previous->bottom - Previous->top))
+        return TRUE;
+
+    /* The front buffer already contains the preceding frame's changes.
+     * Copy them into the two-frames-old back buffer instead of recomposing
+     * the unchanged gap between distant updates, such as a taskbar icon
+     * and an OpenGL window. Both buffers remain complete after the swap. */
+    glDisable(GL_SCISSOR_TEST);
+    glGetIntegerv(GL_READ_BUFFER, &ReadBuffer);
+    glReadBuffer(GL_FRONT);
+    g_composeBlitFramebuffer(Previous->left, g_composeHeight - Previous->bottom,
+                             Previous->right, g_composeHeight - Previous->top,
+                             Previous->left, g_composeHeight - Previous->bottom,
+                             Previous->right, g_composeHeight - Previous->top,
+                             GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glReadBuffer(ReadBuffer);
+    if (glGetError() != GL_NO_ERROR)
+        return FALSE;
+    *Draw = *Current;
+    return TRUE;
+}
+
+static BOOL
 DwmGpuComposeBeginMeasured(ULONG BackdropColor, const BYTE *BackdropPixels,
                     BOOL RefreshBackdrop, const RECT *Damage)
 {
@@ -1225,6 +1259,8 @@ DwmGpuComposeBeginMeasured(ULONG BackdropColor, const BYTE *BackdropPixels,
     }
     Draw = DwmGpuDamageBegin(&g_composeDamage, g_composeWidth, g_composeHeight,
                              RefreshBackdrop ? NULL : Damage);
+    if (!DwmGpuComposeRepairBackBuffer(&Draw))
+        return FALSE;
     /* Exchange buffers also contain the previous frame's damage. Its union
      * can intersect another capture, so close the actual repair region too. */
     DwmGpuDamageExpandBlur(&Draw, g_composeWidth, g_composeHeight,
@@ -1555,15 +1591,20 @@ static BOOL
 DwmGpuComposeEndMeasured(void)
 {
     BOOL Result;
+    const RECT *PresentDamage = g_composeDamage.ValidFrames >= 2 ?
+                                  &g_composeDamage.Current : &g_composeDamage.Draw;
 
     if (!g_composeActive)
         return FALSE;
     glDisable(GL_SCISSOR_TEST);
+    /* Repairing the exchanged back buffer also redraws the previous frame's
+     * damage. Those pixels already match scanout; publish only this frame's
+     * changes once both buffers are initialized. Failed swaps reset history. */
     if (g_addSwapHint != NULL)
-        g_addSwapHint(g_composeDamage.Draw.left,
-                      g_composeHeight - g_composeDamage.Draw.bottom,
-                      g_composeDamage.Draw.right - g_composeDamage.Draw.left,
-                      g_composeDamage.Draw.bottom - g_composeDamage.Draw.top);
+        g_addSwapHint(PresentDamage->left,
+                      g_composeHeight - PresentDamage->bottom,
+                      PresentDamage->right - PresentDamage->left,
+                      PresentDamage->bottom - PresentDamage->top);
     Result = SwapBuffers(g_composeDc);
     DwmGpuDamageEnd(&g_composeDamage, Result);
     g_composeScene.Valid = Result;
