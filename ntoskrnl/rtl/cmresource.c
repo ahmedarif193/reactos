@@ -51,18 +51,26 @@ RtlCmEncodeMemIoResource(
     USHORT Flags = 0;
     ULONG Shift = 0;
 
-    if (Type != CmResourceTypePort &&
-        Type != CmResourceTypeMemory &&
-        Type != CmResourceTypeMemoryLarge)
+    if ((Type != CmResourceTypePort &&
+         Type != CmResourceTypeMemory &&
+         Type != CmResourceTypeMemoryLarge) ||
+        (Type == CmResourceTypePort && Length > MAXULONG))
     {
         return STATUS_INVALID_PARAMETER;
     }
 
+    Descriptor->u.Memory.Start.QuadPart = Start;
+    if (Type == CmResourceTypePort)
+    {
+        Descriptor->Type = CmResourceTypePort;
+        Descriptor->u.Port.Length = (ULONG)Length;
+        return STATUS_SUCCESS;
+    }
+
+    /* These fields change even when the memory length cannot be encoded. */
+    Descriptor->Flags &= ~CM_RESOURCE_MEMORY_LARGE;
     if (Length > MAXULONG)
     {
-        if (Type == CmResourceTypePort)
-            return STATUS_UNSUCCESSFUL;
-
         if (Length <= CM_RESOURCE_MEMORY_LARGE_40_MAXLEN && !(Length & 0xff))
         {
             Shift = 8;
@@ -84,10 +92,8 @@ RtlCmEncodeMemIoResource(
         }
     }
 
-    Descriptor->Type = Type == CmResourceTypePort ? Type :
-                       (Shift ? CmResourceTypeMemoryLarge : CmResourceTypeMemory);
-    Descriptor->Flags = (Descriptor->Flags & ~CM_RESOURCE_MEMORY_LARGE) | Flags;
-    Descriptor->u.Memory.Start.QuadPart = Start;
+    Descriptor->Type = Shift ? CmResourceTypeMemoryLarge : CmResourceTypeMemory;
+    Descriptor->Flags |= Flags;
     Descriptor->u.Memory.Length = (ULONG)(Length >> Shift);
     return STATUS_SUCCESS;
 }
