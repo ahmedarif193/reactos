@@ -129,6 +129,48 @@ DwmGpuSceneWindowBounds(const DWM_WIN *Window, const DWM_GPU_SCENE_SPACE *Space,
 }
 
 static void
+DwmGpuSceneOcclusion(const DWM_WIN *Windows, ULONG Count,
+                      const DWM_GPU_SCENE_SPACE *Space, RECT *Occlusion)
+{
+    RECT Cover = {0};
+
+    /* One opaque rectangle per layer bounds the amount of clipping work.
+     * A backdrop capture between that layer and its cover needs the lower
+     * pixels even where the cover will eventually hide them. */
+    while (Count != 0)
+    {
+        const DWM_WIN *Window = &Windows[--Count];
+        DWM_GPU_WINDOW_GEOMETRY Geometry;
+        RECT Capture, Bounds;
+        BOOL Captures = DwmGpuSceneWindowBounds(Window, Space, TRUE, &Capture);
+        LONG Inset;
+
+        Occlusion[Count + 1] = Cover;
+        if (Captures && DwmGpuDamageIntersects(&Cover, &Capture))
+            SetRectEmpty(&Cover);
+        if (Captures || Window->AnimFlags != 0 ||
+            (Window->LayerFlags & DWM_LWA_COLORKEY) ||
+            (Window->BlurFlags & DWM_BLUR_ENABLE) ||
+            ((Window->LayerFlags & DWM_LWA_ALPHA) && Window->Alpha < 255) ||
+            !DwmGpuWindowGeometry(Window, Space->OriginX, Space->OriginY, &Geometry))
+            continue;
+
+        /* Keep rounded edges and their antialiasing outside the cover. */
+        Inset = Window->CornerRadius != 0 ?
+            min(Window->CornerRadius, (ULONG)min(Geometry.Width / 2, Geometry.Height / 2)) + 1 : 0;
+        if (!DwmGpuDamageBounds(&Bounds, Space->Width, Space->Height,
+                Geometry.Left + Inset, Geometry.Top + Inset,
+                Geometry.Left + Geometry.Width - Inset,
+                Geometry.Top + Geometry.Height - Inset))
+            continue;
+        if ((ULONGLONG)(Bounds.right - Bounds.left) * (Bounds.bottom - Bounds.top) >
+            (ULONGLONG)(Cover.right - Cover.left) * (Cover.bottom - Cover.top))
+            Cover = Bounds;
+    }
+    Occlusion[0] = Cover; /* Wallpaper precedes every window. */
+}
+
+static void
 DwmGpuSceneIncludeWindow(RECT *Damage, const DWM_WIN *Window,
                          const DWM_GPU_SCENE_SPACE *Space)
 {
