@@ -64,6 +64,7 @@ CMiniportTopology::Init(
 {
     m_Port = Port;
     m_Port->AddRef();
+    HDAUDIO_RestoreMasterSettings(this);
     return STATUS_SUCCESS;
 }
 
