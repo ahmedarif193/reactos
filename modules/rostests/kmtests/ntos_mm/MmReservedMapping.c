@@ -75,16 +75,36 @@ ValidateMapping(
     _In_ PPFN_NUMBER Pfns)
 {
     BOOLEAN Valid = TRUE;
-#if defined(_M_IX86) || defined(_M_AMD64)
+    BOOLEAN PageValid;
     PUCHAR CurrentAddress;
-    ULONGLONG PteValue, ExpectedValue;
+    PFN_NUMBER Pfn;
     ULONG i;
-
-#ifdef _M_AMD64
-    if (skip(GetNTVersion() < _WIN32_WINNT_WIN10, 
-             "Win10 1607+ breaks these next tests.\n"))
-        return Valid;
+#if defined(_M_IX86) || defined(_M_AMD64)
+    ULONGLONG PteValue, ExpectedValue;
 #endif
+
+    /* Validate the mapping without relying on a fixed self-map address or
+     * the operating system's private encoding of unused PTEs. */
+    for (i = 0; i < TotalPtes; i++)
+    {
+        CurrentAddress = (PUCHAR)BaseAddress + i * PAGE_SIZE;
+        PageValid = MmIsAddressValid(CurrentAddress);
+        Valid &= ok(PageValid == (i < ValidPtes),
+                    "[%lu] Address %p is %s, expected %s\n", i, CurrentAddress,
+                    PageValid ? "mapped" : "unmapped",
+                    i < ValidPtes ? "mapped" : "unmapped");
+        if (PageValid && i < ValidPtes)
+        {
+            Pfn = MmGetPhysicalAddress(CurrentAddress).QuadPart >> PAGE_SHIFT;
+            Valid &= ok(Pfn == Pfns[i],
+                        "[%lu] Address %p has PFN %Ix, expected %Ix\n",
+                        i, CurrentAddress, Pfn, Pfns[i]);
+        }
+    }
+
+#if defined(_M_IX86) || defined(_M_AMD64)
+    if (GetNTVersion() >= _WIN32_WINNT_WIN10)
+        return Valid;
 
     for (i = 0; i < ValidPtes; i++)
     {
