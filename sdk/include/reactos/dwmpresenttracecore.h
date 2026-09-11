@@ -26,8 +26,10 @@ typedef struct _DPT_SCOPE
 
 #if defined(__GNUC__) || defined(__clang__)
 #define DPT_READ(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
+#define DPT_READ64(p) __atomic_load_n((p), __ATOMIC_RELAXED)
 #else
 #define DPT_READ(p) InterlockedCompareExchange((p), 0, 0)
+#define DPT_READ64(p) InterlockedCompareExchange64((volatile LONG64 *)(p), 0, 0)
 #endif
 
 static __inline ULONGLONG DptNow(void)
@@ -64,7 +66,7 @@ static __inline void DptEnd(DPT_BANK *Bank, DPT_SCOPE Scope,
 {
     DPT_COUNTER *Counter;
     ULONGLONG Ticks;
-    LONG64 Maximum;
+    LONG64 Maximum, Minimum;
     if (!Scope.Epoch || DPT_READ(&Bank->Epoch) != Scope.Epoch)
         return;
     Ticks = DptNow() - Scope.Start;
@@ -78,7 +80,16 @@ static __inline void DptEnd(DPT_BANK *Bank, DPT_SCOPE Scope,
         InterlockedExchangeAdd64((volatile LONG64 *)&Counter->Ticks, Ticks);
         if (Bytes)
             InterlockedExchangeAdd64((volatile LONG64 *)&Counter->Bytes, Bytes);
-        Maximum = InterlockedCompareExchange64((volatile LONG64 *)&Counter->MaxTicks, 0, 0);
+        Minimum = DPT_READ64(&Counter->MinTicks);
+        while ((ULONGLONG)Minimum > Ticks)
+        {
+            LONG64 Previous = InterlockedCompareExchange64(
+                (volatile LONG64 *)&Counter->MinTicks, Ticks, Minimum);
+            if (Previous == Minimum)
+                break;
+            Minimum = Previous;
+        }
+        Maximum = DPT_READ64(&Counter->MaxTicks);
         while ((ULONGLONG)Maximum < Ticks)
         {
             LONG64 Previous = InterlockedCompareExchange64(
@@ -127,9 +138,12 @@ static __inline LONG DptControl(DPT_BANK *Bank, const DPT_REQUEST *Request,
             Result = (LONG)0x800700aa;
         else
         {
+            ULONG Metric;
             /* Stopped epochs admit no counter writes. Do not reset Writers:
              * a thread may still be rejecting an old begin/end token. */
             memset(&Bank->Data, 0, sizeof(Bank->Data));
+            for (Metric = 0; Metric < DPT_METRIC_COUNT; ++Metric)
+                Bank->Data.Counter[Metric].MinTicks = ~(ULONGLONG)0;
 #ifdef DPT_KERNEL
             KeQueryPerformanceCounter(&Frequency);
 #else

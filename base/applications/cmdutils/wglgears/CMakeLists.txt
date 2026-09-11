@@ -1,7 +1,7 @@
 # Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-add_executable(glgears wglgears.c glad_compat.c)
+add_executable(glgears wglgears.c glad_compat.c profile.c)
 target_include_directories(glgears PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(glgears PRIVATE _USE_MATH_DEFINES)
 set_module_type(glgears win32cui)
