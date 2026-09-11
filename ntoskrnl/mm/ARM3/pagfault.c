@@ -226,8 +226,10 @@ MiCheckForUserStackOverflow(IN PVOID Address,
 #ifdef _WIN64
     PTEB32 Wow64Teb = NULL;
 #endif
-    PVOID StackBase, DeallocationStack, NextStackAddress;
-    SIZE_T GuaranteedSize, GuardSize = PAGE_SIZE;
+    PVOID StackBase, StackLimit, DeallocationStack, NextStackAddress;
+    PVOID CommitBase;
+    SIZE_T CommitSize, GuaranteedSize, GuardSize = MM_USER_STACK_GUARD_PAGES * PAGE_SIZE;
+    ULONG OldProtect;
     NTSTATUS Status;
 
     /* Do we own the address space lock? */
@@ -249,6 +251,7 @@ MiCheckForUserStackOverflow(IN PVOID Address,
 
     /* Read the current settings */
     StackBase = Teb->NtTib.StackBase;
+    StackLimit = Teb->NtTib.StackLimit;
     DeallocationStack = Teb->DeallocationStack;
     GuaranteedSize = Teb->GuaranteedStackBytes;
 #ifdef _WIN64
@@ -258,8 +261,10 @@ MiCheckForUserStackOverflow(IN PVOID Address,
         if ((Address < ULongToPtr(Wow64Teb->NtTib.StackBase)) && (Address >= ULongToPtr(Wow64Teb->DeallocationStack)))
         {
             StackBase = ULongToPtr(Wow64Teb->NtTib.StackBase);
+            StackLimit = ULongToPtr(Wow64Teb->NtTib.StackLimit);
             DeallocationStack = ULongToPtr(Wow64Teb->DeallocationStack);
             GuaranteedSize = Wow64Teb->GuaranteedStackBytes;
+            GuardSize = PAGE_SIZE;
         }
         else
         {
@@ -287,7 +292,7 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(Address) - GuardSize);
 
     /* Is there enough reserved stack below the next guard for the guarantee? */
-    if (((ULONG_PTR)NextStackAddress - GuaranteedSize) <= (ULONG_PTR)DeallocationStack)
+    if (((ULONG_PTR)PAGE_ALIGN(Address) - (ULONG_PTR)DeallocationStack) <= GuardSize + GuaranteedSize)
     {
         /* We don't -- Trying to make this guard page valid now */
         DPRINT1("Close to our death...\n");
@@ -312,15 +317,16 @@ MiCheckForUserStackOverflow(IN PVOID Address,
 #endif
 
         /* Calculate the next memory address */
-        NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(DeallocationStack) + GuardSize);
+        NextStackAddress = (PVOID)((ULONG_PTR)PAGE_ALIGN(DeallocationStack) + PAGE_SIZE);
+
+        /* Make the complete remaining stack usable by the exception handler,
+         * including any pages of a multi-page guard that were not touched. */
+        CommitSize = GuaranteedSize;
+        if ((StackLimit > NextStackAddress) && (StackLimit <= StackBase))
+            CommitSize = max(CommitSize, (ULONG_PTR)StackLimit - (ULONG_PTR)NextStackAddress);
 
         /* Allocate the memory */
-        Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
-                                         &NextStackAddress,
-                                         0,
-                                         &GuaranteedSize,
-                                         MEM_COMMIT,
-                                         PAGE_READWRITE);
+        Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &NextStackAddress, 0, &CommitSize, MEM_COMMIT, PAGE_READWRITE);
         if (NT_SUCCESS(Status))
         {
             /* Success! */
@@ -341,14 +347,7 @@ MiCheckForUserStackOverflow(IN PVOID Address,
     /* Don't handle this flag yet */
     ASSERT((PsGetCurrentProcess()->Peb->NtGlobalFlag & FLG_DISABLE_STACK_EXTENSION) == 0);
 
-    /* Update the stack limit */
-#ifdef _WIN64
-    if (Wow64Teb) Wow64Teb->NtTib.StackLimit = PtrToUlong((PVOID)((ULONG_PTR)NextStackAddress + GuardSize));
-    else
-#endif
-    Teb->NtTib.StackLimit = (PVOID)((ULONG_PTR)NextStackAddress + GuardSize);
-
-    /* Now move the guard page to the next page */
+    /* Move the entire guard region below the faulting page. */
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
                                      &NextStackAddress,
                                      0,
@@ -357,6 +356,24 @@ MiCheckForUserStackOverflow(IN PVOID Address,
                                      PAGE_READWRITE | PAGE_GUARD);
     if ((NT_SUCCESS(Status) || (Status == STATUS_ALREADY_COMMITTED)))
     {
+        /* The fault handler cleared PAGE_GUARD on the page it touched. A
+         * wider probe may skip other guard pages above it: make those usable
+         * too, so the committed stack remains contiguous up to StackBase. */
+        CommitBase = (PVOID)((ULONG_PTR)PAGE_ALIGN(Address) + PAGE_SIZE);
+        if ((GuardSize > PAGE_SIZE) && (CommitBase < StackLimit))
+        {
+            CommitSize = min((ULONG_PTR)StackLimit - (ULONG_PTR)CommitBase, GuardSize - PAGE_SIZE);
+            Status = ZwProtectVirtualMemory(NtCurrentProcess(), &CommitBase, &CommitSize, PAGE_READWRITE, &OldProtect);
+            if (!NT_SUCCESS(Status)) return STATUS_STACK_OVERFLOW;
+        }
+
+        /* Publish the new limit only after the guard region was installed. */
+#ifdef _WIN64
+        if (Wow64Teb) Wow64Teb->NtTib.StackLimit = PtrToUlong(PAGE_ALIGN(Address));
+        else
+#endif
+        Teb->NtTib.StackLimit = PAGE_ALIGN(Address);
+
         /* We did it! */
         DPRINT("Guard page handled successfully for %p\n", Address);
         return STATUS_PAGE_FAULT_GUARD_PAGE;
