@@ -190,6 +190,8 @@ option(ENABLE_ALPC
 
 option(ROSSYM_COMPRESSION "Whether to compress the embedded .rossym symbol section." OFF)
 
+option(ENABLE_MESA_LLVMPIPE "Build and package the optional modern Mesa LLVMpipe OpenGL ICD." OFF)
+
 # The boot application launcher is bring-up scaffolding: it registers an HKCU
 # Run entry that opens a console at logon to run benchmarks and to scan for an
 # attached app disk.  A shipped image must come up to a clean desktop, so this
