@@ -682,7 +682,7 @@ TestModernKernelExports(VOID)
     ok_eq_ulong(*RtlSubAuthoritySid((PSID)SidBuffer, 2), 84);
     Status = RtlInitializeSidEx((PSID)SidBuffer, &Authority, SID_MAX_SUB_AUTHORITIES + 1);
     trace("RtlInitializeSidEx excessive-count status 0x%08lx\n", Status);
-    ok_eq_hex(Status, STATUS_INVALID_SID);
+    ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
 
     Member = FALSE;
     Status = RtlCheckTokenMembership(NULL, SeExports->SeWorldSid, &Member);
