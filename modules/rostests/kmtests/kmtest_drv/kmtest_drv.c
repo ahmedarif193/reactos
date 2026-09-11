@@ -19,6 +19,7 @@
 #include <kmt_public.h>
 #define KMT_DEFINE_TEST_FUNCTIONS
 #include <kmt_test.h>
+#include "../ntos_po/PoFxState_pnp.h"
 
 /* Usermode callback definitions */
 typedef struct _KMT_USER_WORK_ENTRY
@@ -124,6 +125,7 @@ DriverEntry(
     KeInitializeEvent(&WorkList.NewWorkEvent, NotificationEvent, FALSE);
     InitializeListHead(&WorkList.ListHead);
     WorkList.CancelWait = FALSE;
+    KmtPoFxInitializePnp(DriverObject, MainDeviceObject);
 
 cleanup:
     if (MainDeviceObject && !NT_SUCCESS(Status))

@@ -1,24 +1,23 @@
+/*
+ * PROJECT:         ReactOS Kernel
+ * LICENSE:         GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:         Power framework registration and component transitions
+ * COPYRIGHT:       Copyright 2026 Ahmed Arif <arif193@gmail.com>
+ */
 
-#include <ntdef.h>
-#include <ntifs.h>
+#include <ntoskrnl.h>
 #include <debug.h>
 
 typedef struct _ROS_PO_FX_COMPONENT_STATE
 {
-    volatile LONG ActiveReferences;
+    LONG ActiveReferences;
     ULONGLONG Latency;
     ULONGLONG Residency;
     ULONG CurrentIdleState;
-    volatile LONG IdleConditionPending;
-    volatile LONG IdleStatePending;
-    /*
-     * A pending F-state transition is either an activation (the component is
-     * being returned to F0 because a driver took the first active reference)
-     * or an idle transition.  Its completion path differs, so the direction
-     * has to be remembered across the driver's PoFxCompleteIdleState.
-     */
-    volatile LONG ActiveTransitionPending;
-    volatile LONG Active;
+    ULONG RequestedIdleState;
+    BOOLEAN IdleConditionPending;
+    BOOLEAN IdleStatePending;
+    BOOLEAN Active;
 } ROS_PO_FX_COMPONENT_STATE, *PROS_PO_FX_COMPONENT_STATE;
 
 typedef struct _ROS_PO_FX_RELATION
@@ -45,9 +44,15 @@ typedef struct _ROS_PO_FX_HANDLE
     LIST_ENTRY RelationList;
     ULONGLONG IdleTimeout;
     ULONG ComponentCount;
-    volatile LONG Started;
-    volatile LONG DevicePoweredOn;
-    volatile LONG DevicePowerNotRequiredPending;
+    KSPIN_LOCK StateLock;
+    EX_RUNDOWN_REF Rundown;
+    KEVENT UnregisterReady;
+    BOOLEAN Started;
+    BOOLEAN Unregistering;
+    BOOLEAN Dispatching;
+    BOOLEAN DevicePoweredOn;
+    BOOLEAN DevicePowerRequiredPending;
+    BOOLEAN DevicePowerNotRequiredPending;
     ROS_PO_FX_COMPONENT_STATE ComponentState[ANYSIZE_ARRAY];
 } ROS_PO_FX_HANDLE, *PROS_PO_FX_HANDLE;
 
@@ -83,106 +88,193 @@ PopFxSelectIdleState(
     return 0;
 }
 
+typedef enum _ROS_PO_FX_ACTION
+{
+    PopFxNoAction,
+    PopFxIdleCondition,
+    PopFxIdleState,
+    PopFxActiveCondition,
+    PopFxPowerRequired,
+    PopFxPowerNotRequired
+} ROS_PO_FX_ACTION;
+
 static
-BOOLEAN
-PopFxAllComponentsIdle(
-    _In_ PROS_PO_FX_HANDLE FxHandle)
+PROS_PO_FX_HANDLE
+PopFxReferenceHandle(
+    _In_ POHANDLE Handle)
+{
+    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+
+    if (FxHandle == NULL || FxHandle->Signature != ROS_PO_FX_SIGNATURE ||
+        !ExAcquireRundownProtection(&FxHandle->Rundown))
+    {
+        return NULL;
+    }
+    return FxHandle;
+}
+
+/* StateLock protects the requested condition and all outstanding callbacks.
+ * A new transition cannot replace one that the driver has not completed. */
+static
+ROS_PO_FX_ACTION
+PopFxNextAction(
+    _In_ PROS_PO_FX_HANDLE FxHandle,
+    _Out_ PULONG Component,
+    _Out_ PULONG IdleState)
 {
     ULONG Index;
+    BOOLEAN AllIdle = TRUE;
+    BOOLEAN AllActive = TRUE;
 
-    for (Index = 0; Index != FxHandle->ComponentCount; Index++)
+    for (Index = 0; Index < FxHandle->ComponentCount; Index++)
     {
-        if ((FxHandle->ComponentState[Index].ActiveReferences != 0) || (FxHandle->ComponentState[Index].Active != 0))
-            return FALSE;
+        PROS_PO_FX_COMPONENT_STATE State = &FxHandle->ComponentState[Index];
+        BOOLEAN WantActive = State->ActiveReferences != 0 || FxHandle->Unregistering;
+
+        *Component = Index;
+        if (State->IdleConditionPending || State->IdleStatePending)
+        {
+            AllIdle = AllActive = FALSE;
+            continue;
+        }
+
+        if (WantActive)
+        {
+            AllIdle = FALSE;
+            if (FxHandle->DevicePowerNotRequiredPending || FxHandle->DevicePowerRequiredPending)
+            {
+                AllActive = FALSE;
+                continue;
+            }
+            if (!FxHandle->DevicePoweredOn)
+            {
+                FxHandle->DevicePowerRequiredPending = TRUE;
+                return PopFxPowerRequired;
+            }
+            if (State->CurrentIdleState != 0)
+            {
+                State->IdleStatePending = TRUE;
+                State->RequestedIdleState = *IdleState = 0;
+                return PopFxIdleState;
+            }
+            if (!State->Active)
+            {
+                State->Active = TRUE;
+                return PopFxActiveCondition;
+            }
+        }
+        else if (FxHandle->Started)
+        {
+            AllActive = FALSE;
+            if (State->Active)
+            {
+                State->IdleConditionPending = TRUE;
+                return PopFxIdleCondition;
+            }
+            *IdleState = PopFxSelectIdleState(FxHandle, Index);
+            if (State->CurrentIdleState != *IdleState)
+            {
+                AllIdle = FALSE;
+                if (FxHandle->DevicePowerNotRequiredPending || FxHandle->DevicePowerRequiredPending)
+                    continue;
+                if (!FxHandle->DevicePoweredOn)
+                {
+                    FxHandle->DevicePowerRequiredPending = TRUE;
+                    return PopFxPowerRequired;
+                }
+                State->IdleStatePending = TRUE;
+                State->RequestedIdleState = *IdleState;
+                return PopFxIdleState;
+            }
+        }
+        else
+        {
+            AllIdle = FALSE;
+        }
     }
 
-    return TRUE;
+    if (FxHandle->Started && AllIdle && FxHandle->DevicePoweredOn &&
+        !FxHandle->DevicePowerNotRequiredPending && !FxHandle->DevicePowerRequiredPending)
+    {
+        FxHandle->DevicePowerNotRequiredPending = TRUE;
+        return PopFxPowerNotRequired;
+    }
+
+    if (FxHandle->Unregistering && AllActive && FxHandle->DevicePoweredOn &&
+        !FxHandle->DevicePowerRequiredPending && !FxHandle->DevicePowerNotRequiredPending)
+    {
+        KeSetEvent(&FxHandle->UnregisterReady, IO_NO_INCREMENT, FALSE);
+    }
+    return PopFxNoAction;
 }
 
+/* The caller holds rundown protection. Callbacks run outside StateLock and
+ * may complete inline. One dispatcher drains these completions without
+ * recursively issuing a second callback on the same component. */
 static
 VOID
-PopFxRequestDevicePowerNotRequired(
+PopFxDispatchTransitions(
     _In_ PROS_PO_FX_HANDLE FxHandle)
 {
-    if (!FxHandle->Started || !FxHandle->DevicePoweredOn || !PopFxAllComponentsIdle(FxHandle))
-        return;
+    ROS_PO_FX_ACTION Action;
+    ULONG Component = 0, IdleState = 0;
+    KIRQL OldIrql;
+    PPO_FX_DEVICE_V3 Device = FxHandle->Device;
 
-    if (InterlockedCompareExchange(&FxHandle->DevicePowerNotRequiredPending, TRUE, FALSE) != FALSE)
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (FxHandle->Dispatching)
+    {
+        KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
         return;
-
-    if (FxHandle->Device->DevicePowerNotRequiredCallback != NULL)
-        FxHandle->Device->DevicePowerNotRequiredCallback(FxHandle->Device->DeviceContext);
-    else
-        PoFxCompleteDevicePowerNotRequired((POHANDLE)FxHandle);
+    }
+    FxHandle->Dispatching = TRUE;
+    for (;;)
+    {
+        Action = PopFxNextAction(FxHandle, &Component, &IdleState);
+        if (Action == PopFxNoAction)
+        {
+            FxHandle->Dispatching = FALSE;
+            KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+            return;
+        }
+        KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+        switch (Action)
+        {
+            case PopFxIdleCondition:
+                if (Device->ComponentIdleConditionCallback != NULL)
+                    Device->ComponentIdleConditionCallback(Device->DeviceContext, Component);
+                else
+                    PoFxCompleteIdleCondition((POHANDLE)FxHandle, Component);
+                break;
+            case PopFxIdleState:
+                if (Device->ComponentIdleStateCallback != NULL)
+                    Device->ComponentIdleStateCallback(Device->DeviceContext, Component, IdleState);
+                else
+                    PoFxCompleteIdleState((POHANDLE)FxHandle, Component);
+                break;
+            case PopFxActiveCondition:
+                if (Device->ComponentActiveConditionCallback != NULL)
+                    Device->ComponentActiveConditionCallback(Device->DeviceContext, Component);
+                break;
+            case PopFxPowerRequired:
+                if (Device->DevicePowerRequiredCallback != NULL)
+                    Device->DevicePowerRequiredCallback(Device->DeviceContext);
+                else
+                    PoFxReportDevicePoweredOn((POHANDLE)FxHandle);
+                break;
+            case PopFxPowerNotRequired:
+                if (Device->DevicePowerNotRequiredCallback != NULL)
+                    Device->DevicePowerNotRequiredCallback(Device->DeviceContext);
+                else
+                    PoFxCompleteDevicePowerNotRequired((POHANDLE)FxHandle);
+                break;
+            default:
+                ASSERT(FALSE);
+                break;
+        }
+        KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    }
 }
-
-static
-VOID
-PopFxRequestIdleState(
-    _In_ PROS_PO_FX_HANDLE FxHandle,
-    _In_ ULONG Component)
-{
-    PROS_PO_FX_COMPONENT_STATE State = &FxHandle->ComponentState[Component];
-
-    if ((State->ActiveReferences != 0) || (InterlockedCompareExchange(&State->IdleStatePending, TRUE, FALSE) != FALSE))
-        return;
-
-    State->CurrentIdleState = PopFxSelectIdleState(FxHandle, Component);
-    if (FxHandle->Device->ComponentIdleStateCallback != NULL)
-        FxHandle->Device->ComponentIdleStateCallback(FxHandle->Device->DeviceContext, Component, State->CurrentIdleState);
-    else
-        PoFxCompleteIdleState((POHANDLE)FxHandle, Component);
-}
-
-/*
- * A component that has just taken its first active reference must be returned
- * to F0 before its active condition is signalled.  PoFx owns that transition:
- * it asks the driver for idle state 0 and only reports the active condition
- * once the driver completes it.  Without this step a component registered
- * with more than one F-state stays in whatever idle state it last entered and
- * is never powered back up.
- */
-static
-VOID
-PopFxRequestActiveState(
-    _In_ PROS_PO_FX_HANDLE FxHandle,
-    _In_ ULONG Component)
-{
-    PROS_PO_FX_COMPONENT_STATE State = &FxHandle->ComponentState[Component];
-
-    /*
-     * Claim the activation direction first.  If an idle transition is still
-     * outstanding, its completion observes this flag and reports the active
-     * condition instead of parking the component.
-     */
-    InterlockedExchange(&State->ActiveTransitionPending, TRUE);
-    if (InterlockedCompareExchange(&State->IdleStatePending, TRUE, FALSE) != FALSE)
-        return;
-
-    State->CurrentIdleState = 0;
-    if (FxHandle->Device->ComponentIdleStateCallback != NULL)
-        FxHandle->Device->ComponentIdleStateCallback(FxHandle->Device->DeviceContext, Component, 0);
-    else
-        PoFxCompleteIdleState((POHANDLE)FxHandle, Component);
-}
-
-static
-VOID
-PopFxRequestIdleCondition(
-    _In_ PROS_PO_FX_HANDLE FxHandle,
-    _In_ ULONG Component)
-{
-    PROS_PO_FX_COMPONENT_STATE State = &FxHandle->ComponentState[Component];
-
-    if ((State->ActiveReferences != 0) || (InterlockedCompareExchange(&State->IdleConditionPending, TRUE, FALSE) != FALSE))
-        return;
-
-    if (FxHandle->Device->ComponentIdleConditionCallback != NULL)
-        FxHandle->Device->ComponentIdleConditionCallback(FxHandle->Device->DeviceContext, Component);
-    else
-        PoFxCompleteIdleCondition((POHANDLE)FxHandle, Component);
-}
-
 
 /*
  * Version-independent view of a caller's registration table.
@@ -304,7 +396,6 @@ PopFxCaptureComponent(
         *Component = ((PPO_FX_DEVICE_V3)Device)->Components[Index];
 }
 
-NTKRNLVISTAAPI
 NTSTATUS
 NTAPI
 PoFxRegisterDevice(
@@ -323,7 +414,11 @@ PoFxRegisterDevice(
     PUCHAR Cursor;
     ULONG Component;
 
-    if ((Pdo == NULL) || (Device == NULL) || (Handle == NULL))
+    if (Handle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *Handle = NULL;
+    if ((Pdo == NULL) || (Device == NULL))
         return STATUS_INVALID_PARAMETER;
 
     Status = PopFxCaptureDevice(Device, &Source);
@@ -431,6 +526,9 @@ PoFxRegisterDevice(
     NewHandle->Device = DeviceCopy;
     NewHandle->ComponentCount = Source.ComponentCount;
     NewHandle->DevicePoweredOn = TRUE;
+    KeInitializeSpinLock(&NewHandle->StateLock);
+    ExInitializeRundownProtection(&NewHandle->Rundown);
+    KeInitializeEvent(&NewHandle->UnregisterReady, NotificationEvent, FALSE);
     KeInitializeSpinLock(&NewHandle->RelationLock);
     InitializeListHead(&NewHandle->RelationList);
     ObReferenceObject(Pdo);
@@ -438,19 +536,29 @@ PoFxRegisterDevice(
     return STATUS_SUCCESS;
 }
 
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxUnregisterDevice(
     _In_ POHANDLE Handle)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
     PROS_PO_FX_RELATION Relation;
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE))
+    if (FxHandle != NULL)
     {
+        ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+        KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+        FxHandle->Unregistering = TRUE;
+        KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+        PopFxDispatchTransitions(FxHandle);
+        ExReleaseRundownProtection(&FxHandle->Rundown);
+
+        /* Complete outstanding driver handshakes and restore D0/F0 before
+         * preventing callbacks from taking new references to the handle. */
+        KeWaitForSingleObject(&FxHandle->UnregisterReady, Executive, KernelMode, FALSE, NULL);
+        ExWaitForRundownProtectionRelease(&FxHandle->Rundown);
         FxHandle->Signature = 0;
         for (;;)
         {
@@ -472,23 +580,23 @@ PoFxUnregisterDevice(
     }
 }
 
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxStartDevicePowerManagement(
     _In_ POHANDLE Handle)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
-    ULONG Component;
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
 
-    if ((FxHandle == NULL) || (FxHandle->Signature != ROS_PO_FX_SIGNATURE) || (InterlockedCompareExchange(&FxHandle->Started, TRUE, FALSE) != FALSE))
+    if (FxHandle == NULL)
         return;
-
-    for (Component = 0; Component != FxHandle->ComponentCount; Component++)
-        PopFxRequestIdleCondition(FxHandle, Component);
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    FxHandle->Started = TRUE;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxActivateComponent(
@@ -496,39 +604,20 @@ PoFxActivateComponent(
     _In_ ULONG Component,
     _In_ ULONG Flags)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
-    LONG References;
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
     UNREFERENCED_PARAMETER(Flags);
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE) &&
-        (Component < FxHandle->ComponentCount))
-    {
-        References = InterlockedIncrement(&FxHandle->ComponentState[Component].ActiveReferences);
-        if (References == 1)
-        {
-            InterlockedExchange(&FxHandle->ComponentState[Component].IdleConditionPending, FALSE);
-            InterlockedExchange(&FxHandle->DevicePowerNotRequiredPending, FALSE);
-            if (!FxHandle->DevicePoweredOn && (FxHandle->Device->DevicePowerRequiredCallback != NULL))
-                FxHandle->Device->DevicePowerRequiredCallback(FxHandle->Device->DeviceContext);
-            InterlockedExchange(&FxHandle->DevicePoweredOn, TRUE);
-            PopFxRequestActiveState(FxHandle, Component);
-        }
-    }
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (Component < FxHandle->ComponentCount && !FxHandle->Unregistering)
+        ++FxHandle->ComponentState[Component].ActiveReferences;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
-VOID
-NTAPI
-PoFxCompleteDevicePowerNotRequired(
-    _In_ POHANDLE Handle)
-{
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
-
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE) && (InterlockedExchange(&FxHandle->DevicePowerNotRequiredPending, FALSE) != FALSE))
-        InterlockedExchange(&FxHandle->DevicePoweredOn, FALSE);
-}
-
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxIdleComponent(
@@ -536,95 +625,127 @@ PoFxIdleComponent(
     _In_ ULONG Component,
     _In_ ULONG Flags)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
-    LONG References;
-    LONG NewReferences;
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
     UNREFERENCED_PARAMETER(Flags);
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE) &&
-        (Component < FxHandle->ComponentCount))
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (Component < FxHandle->ComponentCount && !FxHandle->Unregistering &&
+        FxHandle->ComponentState[Component].ActiveReferences != 0)
     {
-        do
-        {
-            References = FxHandle->ComponentState[Component].ActiveReferences;
-            if (References == 0)
-                return;
-            NewReferences = References - 1;
-        } while (InterlockedCompareExchange(&FxHandle->ComponentState[Component].ActiveReferences, NewReferences, References) != References);
-
-        if ((NewReferences == 0) && FxHandle->Started)
-            PopFxRequestIdleCondition(FxHandle, Component);
+        --FxHandle->ComponentState[Component].ActiveReferences;
     }
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxCompleteIdleCondition(
     _In_ POHANDLE Handle,
     _In_ ULONG Component)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE) && (Component < FxHandle->ComponentCount) && (InterlockedExchange(&FxHandle->ComponentState[Component].IdleConditionPending, FALSE) != FALSE))
-        PopFxRequestIdleState(FxHandle, Component);
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (Component < FxHandle->ComponentCount && FxHandle->ComponentState[Component].IdleConditionPending)
+    {
+        FxHandle->ComponentState[Component].IdleConditionPending = FALSE;
+        FxHandle->ComponentState[Component].Active = FALSE;
+    }
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxCompleteIdleState(
     _In_ POHANDLE Handle,
     _In_ ULONG Component)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE) && (Component < FxHandle->ComponentCount) && (InterlockedExchange(&FxHandle->ComponentState[Component].IdleStatePending, FALSE) != FALSE))
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (Component < FxHandle->ComponentCount && FxHandle->ComponentState[Component].IdleStatePending)
     {
-        if (InterlockedExchange(&FxHandle->ComponentState[Component].ActiveTransitionPending, FALSE) != FALSE)
-        {
-            /* The component is back at F0; report the active condition. */
-            if ((InterlockedExchange(&FxHandle->ComponentState[Component].Active, TRUE) == FALSE) &&
-                (FxHandle->Device->ComponentActiveConditionCallback != NULL))
-            {
-                FxHandle->Device->ComponentActiveConditionCallback(FxHandle->Device->DeviceContext, Component);
-            }
-            return;
-        }
-        InterlockedExchange(&FxHandle->ComponentState[Component].Active, FALSE);
-        PopFxRequestDevicePowerNotRequired(FxHandle);
+        FxHandle->ComponentState[Component].IdleStatePending = FALSE;
+        FxHandle->ComponentState[Component].CurrentIdleState = FxHandle->ComponentState[Component].RequestedIdleState;
     }
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
+VOID
+NTAPI
+PoFxCompleteDevicePowerNotRequired(
+    _In_ POHANDLE Handle)
+{
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
+
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (FxHandle->DevicePowerNotRequiredPending)
+    {
+        FxHandle->DevicePowerNotRequiredPending = FALSE;
+        FxHandle->DevicePoweredOn = FALSE;
+    }
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+}
+
 VOID
 NTAPI
 PoFxSetDeviceIdleTimeout(
     _In_ POHANDLE Handle,
     _In_ ULONGLONG IdleTimeout)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE))
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (!FxHandle->Unregistering)
         FxHandle->IdleTimeout = IdleTimeout;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxReportDevicePoweredOn(
     _In_ POHANDLE Handle)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE))
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (FxHandle->DevicePowerRequiredPending)
     {
-        InterlockedExchange(&FxHandle->DevicePowerNotRequiredPending, FALSE);
-        InterlockedExchange(&FxHandle->DevicePoweredOn, TRUE);
+        FxHandle->DevicePowerRequiredPending = FALSE;
+        FxHandle->DevicePoweredOn = TRUE;
     }
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxSetComponentLatency(
@@ -632,13 +753,18 @@ PoFxSetComponentLatency(
     _In_ ULONG Component,
     _In_ ULONGLONG Latency)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE) && (Component < FxHandle->ComponentCount))
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (Component < FxHandle->ComponentCount && !FxHandle->Unregistering)
         FxHandle->ComponentState[Component].Latency = Latency;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxSetComponentResidency(
@@ -646,13 +772,18 @@ PoFxSetComponentResidency(
     _In_ ULONG Component,
     _In_ ULONGLONG Residency)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE) && (Component < FxHandle->ComponentCount))
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (Component < FxHandle->ComponentCount && !FxHandle->Unregistering)
         FxHandle->ComponentState[Component].Residency = Residency;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
 NTSTATUS
 NTAPI
 PoFxPowerControl(
@@ -665,6 +796,11 @@ PoFxPowerControl(
     _Out_opt_ PSIZE_T BytesReturned)
 {
     PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+    UNREFERENCED_PARAMETER(InBuffer);
+    UNREFERENCED_PARAMETER(InBufferSize);
+    UNREFERENCED_PARAMETER(OutBuffer);
+    UNREFERENCED_PARAMETER(OutBufferSize);
+    UNREFERENCED_PARAMETER(BytesReturned);
 
     if ((FxHandle == NULL) || (FxHandle->Signature != ROS_PO_FX_SIGNATURE) ||
         (PowerControlCode == NULL))
@@ -672,25 +808,27 @@ PoFxPowerControl(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (FxHandle->Device->PowerControlCallback == NULL)
-        return STATUS_NOT_SUPPORTED;
-
-    return FxHandle->Device->PowerControlCallback(FxHandle->Device->DeviceContext, PowerControlCode, InBuffer, InBufferSize, OutBuffer, OutBufferSize, BytesReturned);
+    /* Outbound requests belong to the platform PEP. No PEP is registered;
+       PowerControlCallback handles requests in the opposite direction. */
+    return STATUS_NOT_SUPPORTED;
 }
 
-NTKRNLVISTAAPI
 VOID
 NTAPI
 PoFxCompleteDirectedPowerDown(
     _In_ POHANDLE Handle)
 {
-    PROS_PO_FX_HANDLE FxHandle = ROS_PO_FX_HANDLE(Handle);
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
 
-    if ((FxHandle != NULL) && (FxHandle->Signature == ROS_PO_FX_SIGNATURE))
-        InterlockedExchange(&FxHandle->DevicePoweredOn, FALSE);
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    FxHandle->DevicePoweredOn = FALSE;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
 }
 
-NTKRNLVISTAAPI
 NTSTATUS
 NTAPI
 PoFxAddComponentRelation(
@@ -736,7 +874,6 @@ PoFxAddComponentRelation(
     return STATUS_SUCCESS;
 }
 
-NTKRNLVISTAAPI
 NTSTATUS
 NTAPI
 PoFxRemoveComponentRelation(

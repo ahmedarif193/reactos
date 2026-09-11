@@ -26,6 +26,9 @@ KMT_TESTFUNC Test_NtCreateSection;
 KMT_TESTFUNC Test_NtSystemDebugControl;
 KMT_TESTFUNC Test_NtUserPhysicalPages;
 KMT_TESTFUNC Test_PoIrp;
+KMT_TESTFUNC Test_PoFxState;
+KMT_TESTFUNC Test_IoDeviceNumaNode;
+KMT_TESTFUNC Test_ExWddmPoFx;
 KMT_TESTFUNC Test_RtlAvlTree;
 KMT_TESTFUNC Test_RtlCaptureContext;
 KMT_TESTFUNC Test_RtlException;
@@ -63,6 +66,9 @@ const KMT_TEST TestList[] =
     { "NtCreateSection",              Test_NtCreateSection },
     { "NtSystemDebugControl",         Test_NtSystemDebugControl },
     { "NtUserPhysicalPages",          Test_NtUserPhysicalPages },
+    { "ExWddmPoFx",                    Test_ExWddmPoFx },
+    { "PoFxState",                     Test_PoFxState },
+    { "IoDeviceNumaNode",              Test_IoDeviceNumaNode },
     { "PoIrp",                        Test_PoIrp },
     { "RtlAvlTree",                   Test_RtlAvlTree },
     { "RtlException",                 Test_RtlException },
