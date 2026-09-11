@@ -850,6 +850,30 @@ static DWM_GPU_TEXTURE g_composeTextures[DWM_GPU_TEXTURE_SLOTS];
 static PFNWGLBINDSHAREDTEXTUREROS g_bindSharedTexture;
 static PFNWGLUPDATESHAREDTEXTUREROS g_updateSharedTexture;
 
+static void DwmGpuComposePruneBlurTargets(const DWM_WIN *Windows, ULONG Count);
+
+static void
+DwmGpuComposePruneTextures(void)
+{
+    ULONG Index;
+
+    /* Damage can omit an unchanged live window. Retire from the complete
+     * scene snapshot, not from the windows drawn in the previous frame. */
+    for (Index = 0; Index < DWM_GPU_TEXTURE_SLOTS; ++Index)
+    {
+        DWM_GPU_TEXTURE *Slot = &g_composeTextures[Index];
+
+        if (Slot->Texture != 0 &&
+            !DwmGpuSceneHasSurface(g_composeScene.Windows, g_composeScene.Count,
+                                  Slot->SurfaceId, Slot->Client))
+        {
+            glDeleteTextures(1, &Slot->Texture);
+            RtlZeroMemory(Slot, sizeof(*Slot));
+        }
+    }
+    DwmGpuComposePruneBlurTargets(g_composeScene.Windows, g_composeScene.Count);
+}
+
 void
 DwmGpuComposeScene(const DWM_WIN *Windows, ULONG Count,
                     const RECTL *BlurRects, ULONG BlurRectCount,
@@ -1176,6 +1200,7 @@ DwmGpuComposeBeginMeasured(ULONG BackdropColor, const BYTE *BackdropPixels,
     if (!wglMakeCurrent(g_composeDc, g_composeContext))
         return FALSE;
 
+    DwmGpuComposePruneTextures();
     ++g_composeFrame;
     g_composeBlurOwnerValid = FALSE;
     if (Damage != NULL && !RefreshBackdrop)
@@ -1920,6 +1945,28 @@ DwmGpuComposeDeleteBlurTarget(DWM_GPU_BLUR_TARGET *Target)
     RtlZeroMemory(Target, sizeof(*Target));
 }
 
+static void
+DwmGpuComposePruneBlurTargets(const DWM_WIN *Windows, ULONG Count)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < DWM_GPU_BLUR_TARGET_COUNT; ++Index)
+    {
+        DWM_GPU_BLUR_TARGET *Target = &g_composeBlurTargets[Index];
+
+        if (Target->Texture != 0 &&
+            !DwmGpuSceneHasSurface(Windows, Count, Target->Owner.SurfaceId, FALSE))
+        {
+            if (g_composeBlurTarget == Target)
+            {
+                g_composeBlurTarget = NULL;
+                g_composeBlurTex = g_composeBlurPass = g_composeBlurCapture = 0;
+            }
+            DwmGpuComposeDeleteBlurTarget(Target);
+        }
+    }
+}
+
 /* GL names belong to their context. Never reuse them after a fallback and
  * subsequent compositor initialization. Called with that context current. */
 static void
@@ -2176,6 +2223,9 @@ DwmGpuComposeFilterRectMeasured(const RECT *Rect, ULONG Radius, BOOL Restore, co
         goto Done;
     }
     Target->ResultValid = FALSE;
+    /* Scratch from animated or client-layer captures still belongs to this
+     * window, even when its pixels cannot be reused on the next frame. */
+    Target->Owner = g_composeBlurOwner;
     if (Radius != 0)
     {
         DptCount(&g_DwmPresentTrace, DPT_BLUR_FILTER, (ULONGLONG)Width * Height * 4);
@@ -2264,7 +2314,6 @@ DwmGpuComposeFilterRectMeasured(const RECT *Rect, ULONG Radius, BOOL Restore, co
 CacheResult:
     if (Result && Cacheable)
     {
-        Target->Owner = g_composeBlurOwner;
         Target->Rect = *Rect;
         Target->Output = RequiredOutput;
         Target->Excluded = RequiredExcluded;

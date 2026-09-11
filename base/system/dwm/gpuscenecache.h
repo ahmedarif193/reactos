@@ -22,6 +22,24 @@ typedef struct _DWM_GPU_SCENE_CACHE
     BOOL Valid;
 } DWM_GPU_SCENE_CACHE;
 
+static BOOL
+DwmGpuSceneHasSurface(const DWM_WIN *Windows, ULONG Count,
+                      ULONG SurfaceId, BOOL Client)
+{
+    ULONG Index;
+
+    /* The wallpaper is synthesized by Begin, outside the window snapshot. */
+    if (SurfaceId == (ULONG)-1 && !Client)
+        return TRUE;
+    for (Index = 0; Index < Count; ++Index)
+    {
+        if (Windows[Index].SurfaceId == SurfaceId &&
+            (!Client || Windows[Index].DxGlobalShare != 0))
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static DWM_WIN
 DwmGpuCacheBlurOwner(const DWM_WIN *Window)
 {

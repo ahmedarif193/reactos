@@ -768,6 +768,7 @@ BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
     }
     BlurTarget *Target = Oldest;
     Target->Valid = FALSE;
+    Target->Owner = State.BlurOwner;
     LONG Width = Bounds.right - Bounds.left, Height = Bounds.bottom - Bounds.top;
     ULONG Scale = Radius >= 12 ? 2 : 1;
     LONG FilterWidth = (Width + Scale - 1) / Scale, FilterHeight = (Height + Scale - 1) / Scale;
@@ -789,7 +790,6 @@ BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
     Data.Filter[1] = 1.0f / FilterHeight;
     if (!Draw(Target->Result, Filter, Clip, Data, Target->Horizontal.View))
         return NULL;
-    Target->Owner = State.BlurOwner;
     Target->Bounds = Bounds;
     Target->Radius = Radius;
     Target->Call = Call;
@@ -987,6 +987,25 @@ DwmD3dScene(const DWM_WIN *Windows, ULONG Count, const RECTL *BlurRects,
     DWM_GPU_SCENE_SPACE Space = {OriginX, OriginY, State.Width, State.Height, BlurRadius, *ShadowMargins};
     DwmGpuCacheScene(&State.Scene, Windows, Count, BlurRects, BlurRectCount, &Space, RefreshBackdrop, State.LowerUnchanged);
     PruneClientSources(Windows, Count);
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.Surfaces); ++Index)
+    {
+        Surface *Slot = &State.Surfaces[Index];
+        if (Slot->Image.Resource != NULL &&
+            !DwmGpuSceneHasSurface(Windows, Count, Slot->SurfaceId, Slot->Client))
+        {
+            Slot->Reset();
+            ZeroMemory(Slot, sizeof(*Slot));
+        }
+    }
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.Blurs); ++Index)
+    {
+        BlurTarget *Target = &State.Blurs[Index];
+        if (!DwmGpuSceneHasSurface(Windows, Count, Target->Owner.SurfaceId, FALSE))
+        {
+            Target->Reset();
+            ZeroMemory(Target, sizeof(*Target));
+        }
+    }
 }
 
 void
