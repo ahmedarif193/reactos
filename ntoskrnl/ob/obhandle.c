@@ -2732,6 +2732,11 @@ ObOpenObjectByName(IN POBJECT_ATTRIBUTES ObjectAttributes,
         return STATUS_INVALID_PARAMETER;
     }
 
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    if (!ObjectType)
+        return STATUS_INVALID_PARAMETER;
+#endif
+
     /* Allocate the temporary buffer */
     TempBuffer = ExAllocatePoolWithTag(NonPagedPool,
                                        sizeof(OB_TEMP_BUFFER),

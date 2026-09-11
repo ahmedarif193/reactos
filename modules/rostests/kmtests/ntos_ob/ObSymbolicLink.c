@@ -168,6 +168,43 @@ TestQueryLink(
     }
 }
 
+static
+VOID
+TestOpenTarget(
+    POBJECT_ATTRIBUTES ObjectAttributes)
+{
+    NTSTATUS Status;
+    HANDLE FileHandle = NULL;
+    IO_STATUS_BLOCK IoStatus;
+    PFILE_OBJECT FileObject = NULL;
+
+    Status = ZwOpenFile(&FileHandle,
+                        FILE_READ_ATTRIBUTES,
+                        ObjectAttributes,
+                        &IoStatus,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_DIRECTORY_FILE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(FileHandle != NULL, "No handle for the symbolic-link target\n");
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Status = ObReferenceObjectByHandle(FileHandle,
+                                       0,
+                                       *IoFileObjectType,
+                                       KernelMode,
+                                       (PVOID *)&FileObject,
+                                       NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_pointer(ObGetObjectType(FileObject), *IoFileObjectType);
+        ObDereferenceObject(FileObject);
+    }
+    Status = ZwClose(FileHandle);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+}
+
 START_TEST(ObSymbolicLink)
 {
     NTSTATUS Status;
@@ -216,6 +253,9 @@ START_TEST(ObSymbolicLink)
         TestQueryLink(LinkHandle2, &LinkTarget);
         ObCloseHandle(LinkHandle2, KernelMode);
     }
+
+    /* A file open must follow the link, including at the end of the name. */
+    TestOpenTarget(&ObjectAttributes);
 
     /* Close it */
     ObCloseHandle(LinkHandle, KernelMode);
@@ -276,6 +316,9 @@ START_TEST(ObSymbolicLink)
         TestQueryLink(LinkHandle2, &LinkTarget);
         ObCloseHandle(LinkHandle2, KernelMode);
     }
+
+    /* A file open must follow the link, including at the end of the name. */
+    TestOpenTarget(&ObjectAttributes);
 
     /* Close it */
     ObCloseHandle(LinkHandle, KernelMode);

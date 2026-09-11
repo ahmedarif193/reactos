@@ -455,8 +455,8 @@ ObpParseSymbolicLink(IN PVOID ParsedObject,
     /* Check if we're out of name to parse */
     if (!RemainingName->Length)
     {
-        /* Check if we got an object type */
-        if (ObjectType)
+        /* Only a symbolic-link open stops at the link itself. */
+        if (ObjectType == ObpSymbolicLinkObjectType)
         {
             /* Reference the object only */
             Status = ObReferenceObjectByPointer(ParsedObject,
