@@ -174,13 +174,15 @@ static void Test_NtFreeVirtualMemory(void)
 static void Test_NtFreeVirtualMemory_Parameters(void)
 {
     NTSTATUS Status;
+    PVOID BaseAddress = NULL;
+    SIZE_T RegionSize = 0;
     ULONG FreeType;
     int i;
 
     // 4th parameter: "ULONG FreeType".
 
     // A type is mandatory.
-    Status = NtFreeVirtualMemory(NULL, NULL, NULL, 0ul);
+    Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, 0ul);
     ok(Status == STATUS_INVALID_PARAMETER_4, "NtFreeVirtualMemory returned status : 0x%08lx\n", Status);
 
     // All but MEM_DECOMMIT and MEM_RELEASE are unsupported.
@@ -191,27 +193,93 @@ static void Test_NtFreeVirtualMemory_Parameters(void)
         if (FreeType == MEM_DECOMMIT || FreeType == MEM_RELEASE)
             continue;
 
-        Status = NtFreeVirtualMemory(NULL, NULL, NULL, FreeType);
+        Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, FreeType);
         ok(Status == STATUS_INVALID_PARAMETER_4, "NtFreeVirtualMemory returned status : 0x%08lx\n", Status);
     }
     // All bits at once.
     // Not testing all other values.
-    Status = NtFreeVirtualMemory(NULL, NULL, NULL, ~(MEM_DECOMMIT | MEM_RELEASE));
+    Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, ~(MEM_DECOMMIT | MEM_RELEASE));
     ok(Status == STATUS_INVALID_PARAMETER_4, "NtFreeVirtualMemory returned status : 0x%08lx\n", Status);
-    Status = NtFreeVirtualMemory(NULL, NULL, NULL, ~MEM_DECOMMIT);
+    Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, ~MEM_DECOMMIT);
     ok(Status == STATUS_INVALID_PARAMETER_4, "NtFreeVirtualMemory returned status : 0x%08lx\n", Status);
-    Status = NtFreeVirtualMemory(NULL, NULL, NULL, ~MEM_RELEASE);
+    Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, ~MEM_RELEASE);
     ok(Status == STATUS_INVALID_PARAMETER_4, "NtFreeVirtualMemory returned status : 0x%08lx\n", Status);
-    Status = NtFreeVirtualMemory(NULL, NULL, NULL, ~0ul);
+    Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, ~0ul);
     ok(Status == STATUS_INVALID_PARAMETER_4, "NtFreeVirtualMemory returned status : 0x%08lx\n", Status);
 
     // MEM_DECOMMIT and MEM_RELEASE are exclusive.
-    Status = NtFreeVirtualMemory(NULL, NULL, NULL, MEM_DECOMMIT | MEM_RELEASE);
+    Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, MEM_DECOMMIT | MEM_RELEASE);
     ok(Status == STATUS_INVALID_PARAMETER_4, "NtFreeVirtualMemory returned status : 0x%08lx\n", Status);
+}
+
+static void Test_NtFreeVirtualMemory_RegionSizeProbe(void)
+{
+    static const ULONG Protections[] = { PAGE_READONLY, PAGE_NOACCESS, PAGE_READWRITE };
+    PUCHAR Parameters;
+    PVOID Buffer, BaseAddress;
+    PSIZE_T RegionSize;
+    SIZE_T Zero = 0, Length;
+    MEMORY_BASIC_INFORMATION Info;
+    NTSTATUS Status;
+    ULONG OldProtect, Index;
+    BOOL Success;
+
+    if (sizeof(SIZE_T) == sizeof(ULONG))
+        return;
+
+    Parameters = VirtualAlloc(NULL, 2 * PAGE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    ok(Parameters != NULL, "Failed to allocate parameters\n");
+    if (!Parameters)
+        return;
+
+    /* Only the upper half of the size lies in the second page. A failed
+     * output probe must leave the target allocation intact. */
+    RegionSize = (PSIZE_T)(Parameters + PAGE_SIZE - sizeof(ULONG));
+    for (Index = 0; Index < RTL_NUMBER_OF(Protections); Index++)
+    {
+        Buffer = VirtualAlloc(NULL, PAGE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        ok(Buffer != NULL, "Failed to allocate target\n");
+        if (!Buffer)
+            break;
+        BaseAddress = Buffer;
+        RtlCopyMemory(RegionSize, &Zero, sizeof(Zero));
+        Success = VirtualProtect(Parameters + PAGE_SIZE, PAGE_SIZE, Protections[Index], &OldProtect);
+        ok(Success, "Failed to protect parameters: %lu\n", GetLastError());
+        if (!Success)
+        {
+            VirtualFree(Buffer, 0, MEM_RELEASE);
+            break;
+        }
+
+        Status = NtFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, RegionSize, MEM_RELEASE);
+        ok_hex(Status, Protections[Index] == PAGE_READWRITE ? STATUS_SUCCESS : STATUS_ACCESS_VIOLATION);
+        ok_ptr(BaseAddress, Buffer);
+
+        Status = NtQueryVirtualMemory(NtCurrentProcess(), Buffer, MemoryBasicInformation, &Info, sizeof(Info), &Length);
+        ok_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+        {
+            ok_hex(Info.State, Protections[Index] == PAGE_READWRITE ? MEM_FREE : MEM_COMMIT);
+            if (Info.State == MEM_COMMIT)
+            {
+                ok_ptr(Info.AllocationBase, Buffer);
+                ok_hex(Info.Protect, PAGE_READWRITE);
+                Success = VirtualFree(Buffer, 0, MEM_RELEASE);
+                ok(Success, "Failed to free target: %lu\n", GetLastError());
+            }
+        }
+        Success = VirtualProtect(Parameters + PAGE_SIZE, PAGE_SIZE, PAGE_READWRITE, &OldProtect);
+        ok(Success, "Failed to restore parameters: %lu\n", GetLastError());
+        if (!Success)
+            break;
+    }
+    Success = VirtualFree(Parameters, 0, MEM_RELEASE);
+    ok(Success, "Failed to free parameters: %lu\n", GetLastError());
 }
 
 START_TEST(NtFreeVirtualMemory)
 {
     Test_NtFreeVirtualMemory();
     Test_NtFreeVirtualMemory_Parameters();
+    Test_NtFreeVirtualMemory_RegionSizeProbe();
 }
