@@ -439,6 +439,7 @@ START_TEST(MmMapLockedPagesSpecifyCache)
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     trace("MaximumUserModeAddress: %p\n", (PVOID)BasicInfo.MaximumUserModeAddress);
+    trace("MDL limit fixture: PEB=%p TEB=%p\n", NtCurrentTeb()->ProcessEnvironmentBlock, NtCurrentTeb());
     HighestAddress = ALIGN_DOWN_BY(BasicInfo.MaximumUserModeAddress, PAGE_SIZE);
 
     /* Explicit driver mappings can use the final pages below the user limit. */
