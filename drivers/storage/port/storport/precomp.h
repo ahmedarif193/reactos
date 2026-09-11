@@ -170,6 +170,10 @@ typedef struct _FDO_DEVICE_EXTENSION
     /* Shared backing lock for StorPortAcquireSpinLockEx miniport locks */
     KSPIN_LOCK MiniportExLock;
 
+    KSPIN_LOCK CompletionLock;
+    LIST_ENTRY CompletionListHead;
+    KDPC CompletionDpc;
+
     KSPIN_LOCK PdoListLock;
     LIST_ENTRY PdoListHead;
     ULONG PdoCount;
