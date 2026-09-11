@@ -2101,7 +2101,7 @@ MiRemoveMappedPtes(IN PVOID BaseAddress,
                    IN PCONTROL_AREA ControlArea,
                    IN PMMSUPPORT Ws)
 {
-    PMMPTE PointerPte, ProtoPte;//, FirstPte;
+    PMMPTE PointerPte;//, FirstPte;
     PMMPDE PointerPde, SystemMapPde;
     PMMPFN Pfn1, Pfn2;
     MMPTE PteContents;
@@ -2168,15 +2168,9 @@ MiRemoveMappedPtes(IN PVOID BaseAddress,
             /* Windows ASSERT */
             ASSERT((PteContents.u.Long == 0) || (PteContents.u.Soft.Prototype == 1));
 
-            /* Check if this is a prototype pointer PTE */
-            if (PteContents.u.Soft.Prototype == 1)
-            {
-                /* Get the prototype PTE */
-                ProtoPte = MiProtoPteToPte(&PteContents);
-
-                /* We don't support anything else atm */
-                ASSERT(ProtoPte->u.Long == 0);
-            }
+            /* An unfaulted view owns no PFN share. The section's prototype
+               may be committed or resident through another view; removing
+               this mapping must leave that prototype untouched. */
         }
 
         /* Invalid PTEs have no cached valid translation to shoot down. */
