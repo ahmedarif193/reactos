@@ -250,14 +250,73 @@ TestMmBuildMdlForNonPagedPool(VOID)
     ExFreePoolWithTag(Page, 'Test');
 }
 
-/*
- * MmAllocatePagesForMdlEx records the requested caching type on the pages,
- * and a user-mode mapping of those pages takes the page's attribute over the
- * request.  The only view of that from an API test is behaviour: an
- * uncacheable (write-combined) mapping reads far slower than a cached one on
- * real hardware.  Under an emulator both views are ordinary memory, so the
- * timing is reported and only the mapping contract itself is asserted.
- */
+#if defined(_M_AMD64) || defined(_M_ARM64)
+static
+VOID
+CheckUserMappingCacheAttribute(
+    _In_ PVOID Address,
+    _In_ MEMORY_CACHING_TYPE CacheType)
+{
+    ULONG Attribute, Expected;
+#ifdef _M_AMD64
+    const ULONGLONG AddressMask = 0x000FFFFFFFFFF000ULL;
+    MM_COPY_ADDRESS Source;
+    ULONGLONG Entry = __readcr3();
+    SIZE_T BytesCopied;
+    NTSTATUS Status;
+    ULONG Shift, PatBit, PatIndex;
+
+    /* Walk the current process's hardware tables; Windows can randomize the
+     * self-map address. MmCopyMemory reads table pages without an I/O mapping. */
+    Shift = (__readcr4() & (1UL << 12)) ? 48 : 39;
+    for (;; Shift -= 9)
+    {
+        Source.PhysicalAddress.QuadPart = (Entry & AddressMask) +
+            (((ULONG_PTR)Address >> Shift) & 0x1ff) * sizeof(Entry);
+        Status = MmCopyMemory(&Entry, Source, sizeof(Entry), MM_COPY_MEMORY_PHYSICAL, &BytesCopied);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_size(BytesCopied, sizeof(Entry));
+        if (!NT_SUCCESS(Status) || BytesCopied != sizeof(Entry))
+            return;
+        if (!ok(Entry & 1, "Missing table entry for %p at shift %lu: %I64x\n",
+                Address, Shift, Entry))
+            return;
+        if (Shift == PAGE_SHIFT || ((Shift == 30 || Shift == 21) && (Entry & 0x80)))
+            break;
+    }
+    PatBit = Shift == PAGE_SHIFT ? 7 : 12;
+    PatIndex = ((Entry >> 3) & 3) | (((Entry >> PatBit) & 1) << 2);
+    Attribute = (__readmsr(0x277) >> (PatIndex * 8)) & 0xff;
+    Expected = CacheType == MmWriteCombined ? 1 : 6; /* WC or WB in IA32_PAT */
+#else
+    ULONGLONG Par, SavedPar, SavedDaif;
+
+    /* AT reports the translated memory attribute even when the emulator
+     * does not model cache timing. Keep PAR private to this short probe. */
+    __asm__ __volatile__(
+        "mrs %1, daif\n\t"
+        "msr daifset, #3\n\t"
+        "mrs %2, par_el1\n\t"
+        "at s1e0r, %3\n\t"
+        "isb\n\t"
+        "mrs %0, par_el1\n\t"
+        "msr par_el1, %2\n\t"
+        "msr daif, %1"
+        : "=&r"(Par), "=&r"(SavedDaif), "=&r"(SavedPar)
+        : "r"(Address)
+        : "memory");
+    if (!ok(!(Par & 1), "Translation failed for %p: PAR=%I64x\n", Address, Par))
+        return;
+    Attribute = Par >> 56;
+    Expected = CacheType == MmWriteCombined ? 0x44 : 0xff; /* Normal NC or WB */
+#endif
+    ok(Attribute == Expected, "Address %p has cache attribute 0x%lx, expected 0x%lx\n",
+       Address, Attribute, Expected);
+}
+#endif
+
+/* MmAllocatePagesForMdlEx fixes the cache attribute at allocation. A later
+ * user mapping must retain it even when the caller requests another type. */
 static
 VOID
 TestMmAllocatePagesForMdlCacheAttribute(VOID)
@@ -270,12 +329,14 @@ TestMmAllocatePagesForMdlCacheAttribute(VOID)
     volatile ULONG *WcUser = NULL;
     volatile ULONG *CachedUser = NULL;
     ULONG Index;
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
     ULONG Pass;
     ULONG Sum;
     LARGE_INTEGER Start, WcTicks, CachedTicks;
+    const ULONG Passes = 16;
+#endif
     const ULONG Size = 64 * 1024;
     const ULONG Count = Size / sizeof(ULONG);
-    const ULONG Passes = 16;
 
     LowAddress.QuadPart = 0;
     HighAddress.QuadPart = -1;
@@ -320,6 +381,13 @@ TestMmAllocatePagesForMdlCacheAttribute(VOID)
         }
         ok(Index == Count, "Pattern mismatch at %lu\n", Index);
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
+        for (Index = 0; Index < Size; Index += PAGE_SIZE)
+        {
+            CheckUserMappingCacheAttribute((PUCHAR)WcUser + Index, MmWriteCombined);
+            CheckUserMappingCacheAttribute((PUCHAR)CachedUser + Index, MmCached);
+        }
+#else
         Sum = 0;
         Start = KeQueryPerformanceCounter(NULL);
         for (Pass = 0; Pass < Passes; Pass++)
@@ -337,6 +405,7 @@ TestMmAllocatePagesForMdlCacheAttribute(VOID)
             ok(TRUE, "Write-combined pages read uncached through a cached mapping request\n");
         else
             skip(FALSE, "Cache attribute timing inconclusive (emulated or no PAT)\n");
+#endif
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
