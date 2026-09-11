@@ -46,6 +46,7 @@ typedef struct AEVImpl {
     struct reactos_endpoint_volume_state endpoint;
     CRITICAL_SECTION callback_lock;
     struct list callbacks;
+    struct list instance;
 #else
     float master_vol;
     BOOL mute;
@@ -53,6 +54,9 @@ typedef struct AEVImpl {
 } AEVImpl;
 
 #ifdef __REACTOS__
+
+static SRWLOCK endpoint_volume_instances_lock = SRWLOCK_INIT;
+static struct list endpoint_volume_instances = LIST_INIT(endpoint_volume_instances);
 
 #define ENDPOINT_VOLUME_MIN_DB (-96.0f)
 #define ENDPOINT_VOLUME_MAX_DB 0.0f
@@ -106,6 +110,7 @@ static float endpoint_volume_scalar_from_db(float level)
 static void endpoint_volume_notify(AEVImpl *This, const GUID *ctx)
 {
     struct endpoint_volume_callback *entry;
+    AEVImpl *other;
     IAudioEndpointVolumeCallback **callbacks = NULL;
     AUDIO_VOLUME_NOTIFICATION_DATA *notification = NULL;
     float *levels = NULL;
@@ -137,23 +142,40 @@ static void endpoint_volume_notify(AEVImpl *This, const GUID *ctx)
     memcpy(notification->afChannelVolumes, levels,
            This->endpoint.channel_count * sizeof(*levels));
 
-    EnterCriticalSection(&This->callback_lock);
-    callback_count = list_count(&This->callbacks);
-    if (callback_count)
+    AcquireSRWLockShared(&endpoint_volume_instances_lock);
+    callback_count = 0;
+    LIST_FOR_EACH_ENTRY(other, &endpoint_volume_instances, AEVImpl, instance)
     {
+        if (other->endpoint.mixer_index != This->endpoint.mixer_index ||
+            other->endpoint.volume_control_id != This->endpoint.volume_control_id)
+            continue;
+        EnterCriticalSection(&other->callback_lock);
+        callback_count += list_count(&other->callbacks);
+        LeaveCriticalSection(&other->callback_lock);
+    }
+    if (callback_count)
         callbacks = malloc(callback_count * sizeof(*callbacks));
-        if (callbacks)
+    if (callbacks)
+    {
+        LIST_FOR_EACH_ENTRY(other, &endpoint_volume_instances, AEVImpl, instance)
         {
-            LIST_FOR_EACH_ENTRY(entry, &This->callbacks,
+            if (other->endpoint.mixer_index != This->endpoint.mixer_index ||
+                other->endpoint.volume_control_id != This->endpoint.volume_control_id)
+                continue;
+            EnterCriticalSection(&other->callback_lock);
+            LIST_FOR_EACH_ENTRY(entry, &other->callbacks,
                                 struct endpoint_volume_callback, entry)
             {
+                if (i == callback_count)
+                    break;
                 callbacks[i] = entry->callback;
                 IAudioEndpointVolumeCallback_AddRef(callbacks[i]);
                 ++i;
             }
+            LeaveCriticalSection(&other->callback_lock);
         }
     }
-    LeaveCriticalSection(&This->callback_lock);
+    ReleaseSRWLockShared(&endpoint_volume_instances_lock);
 
     while (i)
     {
@@ -203,6 +225,10 @@ static void AudioEndpointVolume_Destroy(AEVImpl *This)
 {
 #ifdef __REACTOS__
     struct endpoint_volume_callback *entry, *next;
+
+    AcquireSRWLockExclusive(&endpoint_volume_instances_lock);
+    list_remove(&This->instance);
+    ReleaseSRWLockExclusive(&endpoint_volume_instances_lock);
 
     LIST_FOR_EACH_ENTRY_SAFE(entry, next, &This->callbacks,
                              struct endpoint_volume_callback, entry)
@@ -755,6 +781,9 @@ HRESULT AudioEndpointVolume_Create(MMDevice *parent, IAudioEndpointVolumeEx **pp
     }
     InitializeCriticalSection(&This->callback_lock);
     list_init(&This->callbacks);
+    AcquireSRWLockExclusive(&endpoint_volume_instances_lock);
+    list_add_tail(&endpoint_volume_instances, &This->instance);
+    ReleaseSRWLockExclusive(&endpoint_volume_instances_lock);
 #endif
 
     *ppv = &This->IAudioEndpointVolumeEx_iface;
