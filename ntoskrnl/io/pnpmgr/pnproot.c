@@ -1282,6 +1282,7 @@ PnpRootPdoPnpControl(
   IN PDEVICE_OBJECT DeviceObject,
   IN PIRP Irp)
 {
+    PPNPROOT_DEVICE DeviceInfo;
     PPNPROOT_PDO_DEVICE_EXTENSION DeviceExtension;
     PPNPROOT_FDO_DEVICE_EXTENSION FdoDeviceExtension;
     PIO_STACK_LOCATION IrpSp;
@@ -1291,6 +1292,14 @@ PnpRootPdoPnpControl(
     FdoDeviceExtension = &PnpRootDOExtension;
     Status = Irp->IoStatus.Status;
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
+
+    /* References can keep a deleted PDO alive long enough to receive more IRPs. */
+    if (!DeviceExtension->DeviceInfo && IrpSp->MinorFunction != IRP_MN_REMOVE_DEVICE)
+    {
+        Irp->IoStatus.Status = STATUS_NO_SUCH_DEVICE;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_NO_SUCH_DEVICE;
+    }
 
     switch (IrpSp->MinorFunction)
     {
@@ -1333,27 +1342,35 @@ PnpRootPdoPnpControl(
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            /* Remove the device from the device list and decrement the device count*/
+            /* Retire the device info once, even if the PDO receives another remove. */
             KeAcquireGuardedMutex(&FdoDeviceExtension->DeviceListLock);
-            RemoveEntryList(&DeviceExtension->DeviceInfo->ListEntry);
+            DeviceInfo = DeviceExtension->DeviceInfo;
+            if (!DeviceInfo)
+            {
+                KeReleaseGuardedMutex(&FdoDeviceExtension->DeviceListLock);
+                Status = STATUS_SUCCESS;
+                break;
+            }
+            DeviceExtension->DeviceInfo = NULL;
+            RemoveEntryList(&DeviceInfo->ListEntry);
             FdoDeviceExtension->DeviceListCount--;
             KeReleaseGuardedMutex(&FdoDeviceExtension->DeviceListLock);
 
             /* Free some strings we created */
-            RtlFreeUnicodeString(&DeviceExtension->DeviceInfo->DeviceDescription);
-            RtlFreeUnicodeString(&DeviceExtension->DeviceInfo->DeviceID);
-            RtlFreeUnicodeString(&DeviceExtension->DeviceInfo->InstanceID);
+            RtlFreeUnicodeString(&DeviceInfo->DeviceDescription);
+            RtlFreeUnicodeString(&DeviceInfo->DeviceID);
+            RtlFreeUnicodeString(&DeviceInfo->InstanceID);
 
             /* Free the resource requirements list */
-            if (DeviceExtension->DeviceInfo->ResourceRequirementsList != NULL)
-            ExFreePool(DeviceExtension->DeviceInfo->ResourceRequirementsList);
+            if (DeviceInfo->ResourceRequirementsList != NULL)
+            ExFreePool(DeviceInfo->ResourceRequirementsList);
 
             /* Free the boot resources list */
-            if (DeviceExtension->DeviceInfo->ResourceList != NULL)
-            ExFreePool(DeviceExtension->DeviceInfo->ResourceList);
+            if (DeviceInfo->ResourceList != NULL)
+            ExFreePool(DeviceInfo->ResourceList);
 
             /* Free the device info */
-            ExFreePool(DeviceExtension->DeviceInfo);
+            ExFreePool(DeviceInfo);
 
             /* Finally, delete the device object */
             IoDeleteDevice(DeviceObject);
