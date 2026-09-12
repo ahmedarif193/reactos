@@ -488,9 +488,10 @@ ExfWaitForRundownProtectionReleaseCacheAware(IN PEX_RUNDOWN_REF_CACHE_AWARE RunR
                           SynchronizationEvent,
                           FALSE);
 
-        /* Do we have to wait? If so, go ahead! */
+        /* Releases may already have subtracted from the shared count. Wait
+         * unless they consumed every reference collected from the CPUs. */
         if (InterlockedExchangeAddSizeT(&WaitBlock.Count,
-                                        (LONG_PTR)TotalCount >> EX_RUNDOWN_COUNT_SHIFT) ==
+                                        (LONG_PTR)TotalCount >> EX_RUNDOWN_COUNT_SHIFT) !=
                                        -(LONG_PTR)(TotalCount >> EX_RUNDOWN_COUNT_SHIFT))
         {
             KeWaitForSingleObject(&WaitBlock.WakeEvent, Executive, KernelMode, FALSE, NULL);

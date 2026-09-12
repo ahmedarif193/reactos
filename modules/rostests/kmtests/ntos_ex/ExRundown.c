@@ -107,8 +107,101 @@ TestRundownBlocking(VOID)
     ObDereferenceObject(Thread);
 }
 
+typedef struct
+{
+    PEX_RUNDOWN_REF_CACHE_AWARE Ref;
+    KEVENT Started;
+    KEVENT Finished;
+} CACHE_RUNDOWN_CONTEXT;
+
+static
+VOID
+NTAPI
+CacheRundownWaiterThread(
+    _In_ PVOID Parameter)
+{
+    CACHE_RUNDOWN_CONTEXT *Context = Parameter;
+
+    KeSetEvent(&Context->Started, IO_NO_INCREMENT, FALSE);
+    ExWaitForRundownProtectionReleaseCacheAware(Context->Ref);
+    KeSetEvent(&Context->Finished, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static
+VOID
+TestCacheRundownBlocking(VOID)
+{
+    CACHE_RUNDOWN_CONTEXT Context;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE ThreadHandle;
+    LARGE_INTEGER Timeout;
+    NTSTATUS Status;
+    BOOLEAN Acquired;
+    ULONG Remaining;
+
+    Context.Ref = ExAllocateCacheAwareRundownProtection(NonPagedPool, 'RdMK');
+    if (skip(Context.Ref != NULL, "Cannot allocate cache-aware rundown protection\n"))
+        return;
+
+    KeInitializeEvent(&Context.Started, NotificationEvent, FALSE);
+    KeInitializeEvent(&Context.Finished, NotificationEvent, FALSE);
+    Acquired = ExAcquireRundownProtectionCacheAwareEx(Context.Ref, 2);
+    ok_bool_true(Acquired, "cache-aware holder acquire");
+    if (!Acquired)
+        goto Free;
+
+    InitializeObjectAttributes(&ObjectAttributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, &ObjectAttributes, NULL, NULL, CacheRundownWaiterThread, &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        ExReleaseRundownProtectionCacheAwareEx(Context.Ref, 2);
+        goto Free;
+    }
+
+    KeWaitForSingleObject(&Context.Started, Executive, KernelMode, FALSE, NULL);
+    for (Remaining = 2; Remaining != 0; --Remaining)
+    {
+        Timeout.QuadPart = -200LL * 10000;
+        Status = KeWaitForSingleObject(&Context.Finished, Executive, KernelMode, FALSE, &Timeout);
+        ok_eq_hex(Status, STATUS_TIMEOUT);
+        if (Status != STATUS_TIMEOUT)
+        {
+            /* A broken wait may have returned with a stack wait block still
+             * referenced. Do not release through that stale pointer. */
+            goto Join;
+        }
+        ExReleaseRundownProtectionCacheAware(Context.Ref);
+    }
+
+    Timeout.QuadPart = -10LL * 1000 * 10000;
+    Status = KeWaitForSingleObject(&Context.Finished, Executive, KernelMode, FALSE, &Timeout);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+Join:
+    ZwWaitForSingleObject(ThreadHandle, FALSE, NULL);
+    ZwClose(ThreadHandle);
+    if (Remaining == 0)
+    {
+        Acquired = ExAcquireRundownProtectionCacheAware(Context.Ref);
+        ok_bool_false(Acquired, "cache-aware acquire after rundown");
+        if (Acquired)
+            ExReleaseRundownProtectionCacheAware(Context.Ref);
+        ExReInitializeRundownProtectionCacheAware(Context.Ref);
+        Acquired = ExAcquireRundownProtectionCacheAware(Context.Ref);
+        ok_bool_true(Acquired, "cache-aware acquire after reinit");
+        if (Acquired)
+            ExReleaseRundownProtectionCacheAware(Context.Ref);
+        ExWaitForRundownProtectionReleaseCacheAware(Context.Ref);
+    }
+Free:
+    ExFreeCacheAwareRundownProtection(Context.Ref);
+}
+
 START_TEST(ExRundown)
 {
     TestRundownBasic();
     TestRundownBlocking();
+    TestCacheRundownBlocking();
 }
