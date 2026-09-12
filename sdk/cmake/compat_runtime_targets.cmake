@@ -95,6 +95,7 @@ set(COMPAT_RUNTIME_MODULES
     normaliz
     nsi
     ntdll_vista
+    ntmarta
     ntobjshex
     odbccp32
     ole32
@@ -105,10 +106,12 @@ set(COMPAT_RUNTIME_MODULES
     profapi
     propsys
     psapi
+    rasadhlp
     riched20
     rpcrt4
     rsaenh
     samlib
+    schannel
     sechost
     secur32
     sensapi
@@ -133,7 +136,10 @@ set(COMPAT_RUNTIME_MODULES
     usp10
     uxtheme
     version
+    wbemdisp
+    wbemprox
     win32u
+    winusb
     windowscodecs
     winhttp
     wininet
