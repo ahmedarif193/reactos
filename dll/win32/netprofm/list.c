@@ -2308,13 +2308,28 @@ static void update_networks( struct list_manager *mgr, BOOL notify )
     dispatch_events( mgr, &events );
 }
 
+static BOOL list_manager_acquire_callback( struct list_manager *mgr )
+{
+    LONG refs = InterlockedCompareExchange( &mgr->refs, 0, 0 ), previous;
+
+    /* Cancellation waits for callbacks after the last external reference is
+     * released. Do not revive a manager whose destruction has already begun. */
+    while (refs)
+    {
+        previous = InterlockedCompareExchange( &mgr->refs, refs + 1, refs );
+        if (previous == refs) return TRUE;
+        refs = previous;
+    }
+    return FALSE;
+}
+
 static void WINAPI interface_change_callback( PVOID context, PMIB_IPINTERFACE_ROW row,
                                               MIB_NOTIFICATION_TYPE type )
 {
     struct list_manager *mgr = context;
 
     TRACE( "%p, %p, %u\n", context, row, type );
-    INetworkListManager_AddRef( &mgr->INetworkListManager_iface );
+    if (!list_manager_acquire_callback( mgr )) return;
     update_networks( mgr, TRUE );
     INetworkListManager_Release( &mgr->INetworkListManager_iface );
 }
@@ -2325,7 +2340,7 @@ static void WINAPI address_change_callback( PVOID context, PMIB_UNICASTIPADDRESS
     struct list_manager *mgr = context;
 
     TRACE( "%p, %p, %u\n", context, row, type );
-    INetworkListManager_AddRef( &mgr->INetworkListManager_iface );
+    if (!list_manager_acquire_callback( mgr )) return;
     update_networks( mgr, TRUE );
     INetworkListManager_Release( &mgr->INetworkListManager_iface );
 }
@@ -2336,7 +2351,7 @@ static void WINAPI route_change_callback( PVOID context, PMIB_IPFORWARD_ROW2 row
     struct list_manager *mgr = context;
 
     TRACE( "%p, %p, %u\n", context, row, type );
-    INetworkListManager_AddRef( &mgr->INetworkListManager_iface );
+    if (!list_manager_acquire_callback( mgr )) return;
     update_networks( mgr, TRUE );
     INetworkListManager_Release( &mgr->INetworkListManager_iface );
 }
