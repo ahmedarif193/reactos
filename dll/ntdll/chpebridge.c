@@ -1967,6 +1967,138 @@ ChpeNtQueryInformationFile(HANDLE FileHandle, PIO_STATUS_BLOCK IoStatusBlock, PV
 }
 
 NTSTATUS NTAPI
+ChpeNtQueryVolumeInformationFile(HANDLE FileHandle, PIO_STATUS_BLOCK IoStatusBlock, PVOID FsInformation, ULONG Length, FS_INFORMATION_CLASS FsInformationClass)
+{
+    return NtQueryVolumeInformationFile(FileHandle, IoStatusBlock, FsInformation, Length, FsInformationClass);
+}
+
+NTSTATUS NTAPI
+ChpeNtQueryKey(HANDLE KeyHandle, KEY_INFORMATION_CLASS KeyInformationClass, PVOID KeyInformation, ULONG Length, PULONG ResultLength)
+{
+    return NtQueryKey(KeyHandle, KeyInformationClass, KeyInformation, Length, ResultLength);
+}
+
+NTSTATUS NTAPI
+ChpeNtQueryInformationThread(HANDLE ThreadHandle, THREADINFOCLASS ThreadInformationClass, PVOID ThreadInformation, ULONG ThreadInformationLength, PULONG ReturnLength)
+{
+    return NtQueryInformationThread(ThreadHandle, ThreadInformationClass, ThreadInformation, ThreadInformationLength, ReturnLength);
+}
+
+NTSTATUS NTAPI
+ChpeRtlFormatCurrentUserKeyPath(PUNICODE_STRING KeyPath)
+{
+    return RtlFormatCurrentUserKeyPath(KeyPath);
+}
+
+VOID NTAPI
+ChpeRtlFreeUnicodeString(PUNICODE_STRING UnicodeString)
+{
+    RtlFreeUnicodeString(UnicodeString);
+}
+
+NTSTATUS NTAPI
+ChpeNtCreateKey(PHANDLE KeyHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes, ULONG TitleIndex, PUNICODE_STRING Class, ULONG CreateOptions, PULONG Disposition)
+{
+    return NtCreateKey(KeyHandle, DesiredAccess, ObjectAttributes, TitleIndex, Class, CreateOptions, Disposition);
+}
+
+NTSTATUS NTAPI
+ChpeNtOpenKey(PHANDLE KeyHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes)
+{
+    return NtOpenKey(KeyHandle, DesiredAccess, ObjectAttributes);
+}
+
+NTSTATUS NTAPI
+ChpeNtOpenKeyEx(PHANDLE KeyHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes, ULONG OpenOptions)
+{
+    return NtOpenKeyEx(KeyHandle, DesiredAccess, ObjectAttributes, OpenOptions);
+}
+
+NTSTATUS NTAPI
+ChpeNtQueryValueKey(HANDLE KeyHandle, PUNICODE_STRING ValueName, KEY_VALUE_INFORMATION_CLASS KeyValueInformationClass, PVOID KeyValueInformation, ULONG Length, PULONG ResultLength)
+{
+    return NtQueryValueKey(KeyHandle, ValueName, KeyValueInformationClass, KeyValueInformation, Length, ResultLength);
+}
+
+NTSTATUS NTAPI
+ChpeNtSetValueKey(HANDLE KeyHandle, PUNICODE_STRING ValueName, ULONG TitleIndex, ULONG Type, PVOID Data, ULONG DataSize)
+{
+    return NtSetValueKey(KeyHandle, ValueName, TitleIndex, Type, Data, DataSize);
+}
+
+NTSTATUS NTAPI
+ChpeNtDeleteKey(HANDLE KeyHandle)
+{
+    return NtDeleteKey(KeyHandle);
+}
+
+NTSTATUS NTAPI
+ChpeNtDeleteValueKey(HANDLE KeyHandle, PUNICODE_STRING ValueName)
+{
+    return NtDeleteValueKey(KeyHandle, ValueName);
+}
+
+NTSTATUS NTAPI
+ChpeNtEnumerateKey(HANDLE KeyHandle, ULONG Index, KEY_INFORMATION_CLASS KeyInformationClass, PVOID KeyInformation, ULONG Length, PULONG ResultLength)
+{
+    return NtEnumerateKey(KeyHandle, Index, KeyInformationClass, KeyInformation, Length, ResultLength);
+}
+
+NTSTATUS NTAPI
+ChpeNtEnumerateValueKey(HANDLE KeyHandle, ULONG Index, KEY_VALUE_INFORMATION_CLASS KeyValueInformationClass, PVOID KeyValueInformation, ULONG Length, PULONG ResultLength)
+{
+    return NtEnumerateValueKey(KeyHandle, Index, KeyValueInformationClass, KeyValueInformation, Length, ResultLength);
+}
+
+NTSTATUS NTAPI
+ChpeNtFlushKey(HANDLE KeyHandle)
+{
+    return NtFlushKey(KeyHandle);
+}
+
+NTSTATUS NTAPI
+ChpeNtCreateWaitCompletionPacket(PHANDLE WaitCompletionPacketHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes)
+{
+    return NtCreateWaitCompletionPacket(WaitCompletionPacketHandle, DesiredAccess, ObjectAttributes);
+}
+
+NTSTATUS NTAPI
+ChpeNtAssociateWaitCompletionPacket(HANDLE WaitCompletionPacketHandle, HANDLE IoCompletionHandle, HANDLE TargetObjectHandle, PVOID KeyContext, PVOID ApcContext, NTSTATUS IoStatus, ULONG_PTR IoStatusInformation, PBOOLEAN AlreadySignaled)
+{
+    return NtAssociateWaitCompletionPacket(WaitCompletionPacketHandle, IoCompletionHandle, TargetObjectHandle, KeyContext, ApcContext, IoStatus, IoStatusInformation, AlreadySignaled);
+}
+
+NTSTATUS NTAPI
+ChpeNtCancelWaitCompletionPacket(HANDLE WaitCompletionPacketHandle, BOOLEAN RemoveSignaledPacket)
+{
+    return NtCancelWaitCompletionPacket(WaitCompletionPacketHandle, RemoveSignaledPacket);
+}
+
+NTSTATUS NTAPI
+ChpeLdrFindEntryForAddress(PVOID Address, PLDR_DATA_TABLE_ENTRY *Module)
+{
+    return LdrFindEntryForAddress(Address, Module);
+}
+
+PPEB NTAPI
+ChpeRtlGetCurrentPeb(VOID)
+{
+    return RtlGetCurrentPeb();
+}
+
+ULONG NTAPI
+ChpeRtlGetProcessHeaps(ULONG HeapCount, PVOID *HeapArray)
+{
+    return RtlGetProcessHeaps(HeapCount, HeapArray);
+}
+
+NTSTATUS NTAPI
+ChpeRtlQueryEnvironmentVariable(PWSTR Environment, PCWSTR Name, SIZE_T NameLength, PWSTR Value, SIZE_T ValueLength, PSIZE_T ReturnLength)
+{
+    return RtlQueryEnvironmentVariable(Environment, Name, NameLength, Value, ValueLength, ReturnLength);
+}
+
+NTSTATUS NTAPI
 ChpeNtQueryObject(HANDLE Handle, OBJECT_INFORMATION_CLASS ObjectInformationClass, PVOID ObjectInformation, ULONG ObjectInformationLength, PULONG ReturnLength)
 {
     return NtQueryObject(Handle, ObjectInformationClass, ObjectInformation, ObjectInformationLength, ReturnLength);

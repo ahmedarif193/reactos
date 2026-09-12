@@ -13,6 +13,7 @@
 @ stdcall -version=0x600+ EtwEventWriteTransfer(int64 ptr ptr ptr long ptr) ChpeEtwEventWriteTransfer
 @ cdecl __C_specific_handler(ptr long ptr ptr) ChpeCSpecificHandler
 @ stdcall ChpeDispatchExceptionNative(ptr ptr)
+@ stdcall LdrFindEntryForAddress(ptr ptr) ChpeLdrFindEntryForAddress
 @ stdcall LdrGetDllHandle(wstr ptr ptr ptr) ChpeLdrGetDllHandle
 @ stdcall LdrGetDllHandleEx(long wstr ptr ptr ptr) ChpeLdrGetDllHandleEx
 @ stdcall LdrGetProcedureAddress(ptr ptr long ptr) ChpeLdrGetProcedureAddress
@@ -41,6 +42,24 @@
 @ stdcall NtProtectVirtualMemory(long ptr ptr long ptr) ChpeNtProtectVirtualMemory
 @ stdcall NtQueryDirectoryFile(long long ptr ptr ptr ptr long long long ptr long) ChpeNtQueryDirectoryFile
 @ stdcall NtQueryInformationFile(long ptr ptr long long) ChpeNtQueryInformationFile
+@ stdcall NtQueryKey(long long ptr long ptr) ChpeNtQueryKey
+@ stdcall NtCreateKey(ptr long ptr long ptr long ptr) ChpeNtCreateKey
+@ stdcall NtQueryInformationThread(long long ptr long ptr) ChpeNtQueryInformationThread
+@ stdcall RtlFormatCurrentUserKeyPath(ptr) ChpeRtlFormatCurrentUserKeyPath
+@ stdcall RtlFreeUnicodeString(ptr) ChpeRtlFreeUnicodeString
+@ stdcall NtOpenKey(ptr long ptr) ChpeNtOpenKey
+@ stdcall NtOpenKeyEx(ptr long ptr long) ChpeNtOpenKeyEx
+@ stdcall NtQueryValueKey(long ptr long ptr long ptr) ChpeNtQueryValueKey
+@ stdcall NtSetValueKey(long ptr long long ptr long) ChpeNtSetValueKey
+@ stdcall NtDeleteKey(long) ChpeNtDeleteKey
+@ stdcall NtDeleteValueKey(long ptr) ChpeNtDeleteValueKey
+@ stdcall NtEnumerateKey(long long long ptr long ptr) ChpeNtEnumerateKey
+@ stdcall NtEnumerateValueKey(long long long ptr long ptr) ChpeNtEnumerateValueKey
+@ stdcall NtFlushKey(long) ChpeNtFlushKey
+@ stdcall NtCreateWaitCompletionPacket(ptr long ptr) ChpeNtCreateWaitCompletionPacket
+@ stdcall NtAssociateWaitCompletionPacket(long long long ptr ptr long long ptr) ChpeNtAssociateWaitCompletionPacket
+@ stdcall NtCancelWaitCompletionPacket(long long) ChpeNtCancelWaitCompletionPacket
+@ stdcall NtQueryVolumeInformationFile(long ptr ptr long long) ChpeNtQueryVolumeInformationFile
 @ stdcall NtQueryObject(long long long long long) ChpeNtQueryObject
 @ stdcall NtQuerySystemInformation(long ptr long ptr) ChpeNtQuerySystemInformation
 @ stdcall NtQueryVirtualMemory(long ptr long ptr long ptr) ChpeNtQueryVirtualMemory
@@ -59,6 +78,9 @@
 @ stdcall RtlAddVectoredContinueHandler(long ptr) ChpeRtlAddVectoredContinueHandler
 @ stdcall RtlAddVectoredExceptionHandler(long ptr) ChpeRtlAddVectoredExceptionHandler
 @ stdcall RtlAllocateHeap(ptr long ptr) ChpeRtlAllocateHeap
+@ stdcall RtlGetCurrentPeb() ChpeRtlGetCurrentPeb
+@ stdcall RtlGetProcessHeaps(long ptr) ChpeRtlGetProcessHeaps
+@ stdcall RtlQueryEnvironmentVariable(ptr ptr long ptr long ptr) ChpeRtlQueryEnvironmentVariable
 @ stdcall RtlAcquirePrivilege(ptr long long ptr) ChpeRtlAcquirePrivilege
 @ stdcall RtlAcquireSRWLockExclusive(ptr) ChpeRtlAcquireSRWLockExclusive
 @ stdcall RtlAcquireSRWLockShared(ptr) ChpeRtlAcquireSRWLockShared
