@@ -18,7 +18,7 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Video","Service",0x00000000,"rpi
 ; DX9 slot in KMTQAITYPE_UMDRIVERNAME; newer runtimes require their own DDI.
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverName",0x00010000,"rpi5vc4um.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverNameWow",0x00010000,"rpi5vc4um.dll"
-HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLDriverName",0x00000000,"rpi5vc4ogl.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLDriverName",0x00000000,"@RPI5VC4_OPENGL_ICD@"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLVersion",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLFlags",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
@@ -31,7 +31,7 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","VgaCompatible",0x00010
 ; The OpenGL ICD.  opengl32 asks the display driver for the ICD name through
 ; the OPENGL_GETINFO escape (answered by cdd's DrvEscape bridge over
 ; IOCTL_VIDEO_DXGK_GPU_ESCAPE) and then loads the DLL this key names.
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Dll",0x00000000,"rpi5vc4ogl.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Dll",0x00000000,"@RPI5VC4_OPENGL_ICD@"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Version",0x00010001,0x00000001
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","DriverVersion",0x00010001,0x00000001
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\Rpi5Vc4","Flags",0x00010001,0x00000000

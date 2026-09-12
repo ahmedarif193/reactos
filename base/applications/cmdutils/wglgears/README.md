@@ -36,7 +36,7 @@ For an incremental build, include the SDK runtime target `dwmprof` as well as
 the command-line target `dwmprof_tool`:
 
 ```
-ninja glgears wglgears_runner dwmprof dwmprof_tool dwmcore cdd dxgkrnl rpi3vc4_mesa_icd_stage
+ninja glgears wglgears_runner dwmprof dwmprof_tool dwmcore cdd dxgkrnl mesa_gallium
 ```
 
 Normal runs do not start a capture or allocate its frame buffer. Inactive
