@@ -289,6 +289,7 @@ typedef struct _XHCI_ENDPOINT {
     LIST_ENTRY ActiveTransferList;
     volatile LONG PendingWorkCount;
     volatile LONG ResetInProgress;
+    volatile LONG ResetDataToggle;
     /*
      * SwEnumRefCount: Miniport-owned reference count for SW-enum work items.
      * Incremented when queuing async work, decremented on completion.

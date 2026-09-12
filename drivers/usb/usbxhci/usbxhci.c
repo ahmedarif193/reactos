@@ -762,7 +762,8 @@ static PXHCI_DEVICE_SLOT XHCI_FindSlotByTopology(PXHCI_EXTENSION Extension, PUSB
 static MPSTATUS XHCI_ConfigureSlotEndpoint(PXHCI_EXTENSION Extension,
                                            PXHCI_DEVICE_SLOT Slot,
                                            PXHCI_ENDPOINT Endpoint,
-                                           UCHAR EndpointId);
+                                           UCHAR EndpointId,
+                                           BOOLEAN ResetTransferState);
 static MPSTATUS XHCI_StopEndpoint(PXHCI_EXTENSION Extension,
                                   PXHCI_DEVICE_SLOT Slot,
                                   UCHAR EndpointId);
@@ -3159,7 +3160,8 @@ XHCI_ConfigureSlotEndpoint(
     _In_ PXHCI_EXTENSION Extension,
     _Inout_ PXHCI_DEVICE_SLOT Slot,
     _Inout_ PXHCI_ENDPOINT Endpoint,
-    _In_ UCHAR EndpointId)
+    _In_ UCHAR EndpointId,
+    _In_ BOOLEAN ResetTransferState)
 {
     PVOID InputCtxBase;
     PVOID DeviceCtxBase;
@@ -3210,7 +3212,7 @@ XHCI_ConfigureSlotEndpoint(
      * because they may be running unrelated interrupt/ISO transfers.
      */
     CtrlCtx->AddContextFlags = (1u << 0) | (1u << EndpointId);
-    CtrlCtx->DropContextFlags = 0;
+    CtrlCtx->DropContextFlags = ResetTransferState ? (1u << EndpointId) : 0;
 
     ActiveSlotCtx = XHCI_GetDeviceSlotContextVa(Extension, DeviceCtxBase);
     SlotCtx = XHCI_GetInputSlotContextVa(Extension, InputCtxBase);
@@ -3389,7 +3391,7 @@ XHCI_ConfigureSlotEndpoint(
 
     XHCI_LOG_IRQL("ConfigureSlotEndpoint before XHCI_SendCommand");
 
-    if (Slot->Configured &&
+    if (!ResetTransferState && Slot->Configured &&
              EndpointId < RTL_NUMBER_OF(Slot->EndpointTable) &&
              Slot->EndpointTable[EndpointId] != NULL)
     {
@@ -3592,6 +3594,7 @@ XHCI_PerformEndpointResetSequence(
     ULONG EpState = XHCI_EPCTX_STATE_DISABLED;
     PVOID DevCtx;
     BOOLEAN CanSetDequeue = FALSE;
+    BOOLEAN TransferStateReset = FALSE;
 
     if (!Extension || !Endpoint || !Endpoint->Slot)
         return;
@@ -3611,15 +3614,7 @@ XHCI_PerformEndpointResetSequence(
         return;
     }
 
-    /*
-     * Do NOT clear ActiveTransfer here.  SetEndpointDataToggle already
-     * reset the software ring (zeroing TRBs so the xHC won't process
-     * stale data).  Clearing ActiveTransfer at this point would lose
-     * any transfer that USBPORT submitted between the reset request
-     * and this reset execution, causing "has no active transfer" stalls.
-     * The post-reset clear at the end of this function handles truly
-     * stale transfers.
-     */
+    /* Keep the ring and active transfers intact until the endpoint stops. */
 
     /* Read current endpoint state to determine correct command sequence.
      * Per xHCI spec:
@@ -3642,7 +3637,10 @@ XHCI_PerformEndpointResetSequence(
         /* Halted endpoint: Use Reset Endpoint command to transition to Stopped */
         ResetStatus = XHCI_ResetEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
         if (ResetStatus == MP_STATUS_SUCCESS)
+        {
             CanSetDequeue = TRUE;
+            TransferStateReset = TRUE;
+        }
     }
     else if (EpState == XHCI_EPCTX_STATE_RUNNING)
     {
@@ -3684,7 +3682,9 @@ XHCI_PerformEndpointResetSequence(
             }
         }
     }
-    /* For Stopped/Error/Disabled, no state transition command needed */
+    /* A failed Stop/Reset must not let us overwrite a hardware-owned ring. */
+    if (!CanSetDequeue)
+        return;
 
     XHCI_ResetEndpointRing(Endpoint);
     if (Endpoint->UsesStaticRing && Endpoint->Slot)
@@ -3696,10 +3696,16 @@ XHCI_PerformEndpointResetSequence(
 
     if (Endpoint->StreamsEnabled && Endpoint->Slot)
     {
-        (VOID)XHCI_ConfigureSlotEndpoint(Extension,
-                                         Endpoint->Slot,
-                                         Endpoint,
-                                         Endpoint->EndpointId);
+        MPSTATUS ConfigureStatus;
+
+        ConfigureStatus = XHCI_ConfigureSlotEndpoint(Extension,
+                                                     Endpoint->Slot,
+                                                     Endpoint,
+                                                     Endpoint->EndpointId,
+                                                     Endpoint->ResetDataToggle != 0);
+        if (ConfigureStatus != MP_STATUS_SUCCESS)
+            return;
+        TransferStateReset = Endpoint->ResetDataToggle != 0;
         CanSetDequeue = FALSE;
     }
 
@@ -3729,9 +3735,29 @@ XHCI_PerformEndpointResetSequence(
                         Endpoint->SlotId,
                         Endpoint->EndpointId,
                         DeqStatus);
+                return;
             }
         }
     }
+
+    if (Endpoint->ResetDataToggle && !TransferStateReset && Endpoint->EndpointId > 1)
+    {
+        /* xHCI 1.2 section 4.6.8: Stop Endpoint and Set TR Dequeue preserve
+         * the USB data toggle/sequence number. A non-halted pipe reset needs
+         * Configure Endpoint with both Drop and Add set after it stops. */
+        if (XHCI_ConfigureSlotEndpoint(Extension,
+                                      Endpoint->Slot,
+                                      Endpoint,
+                                      Endpoint->EndpointId,
+                                      TRUE) != MP_STATUS_SUCCESS)
+        {
+            return;
+        }
+        TransferStateReset = TRUE;
+    }
+
+    if (TransferStateReset)
+        InterlockedExchange(&Endpoint->ResetDataToggle, 0);
 
     XHCI_StartEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
 
@@ -12464,7 +12490,8 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
     Status = XHCI_ConfigureSlotEndpoint(Extension,
                                         Slot,
                                         XhciEndpoint,
-                                        EndpointId);
+                                        EndpointId,
+                                        FALSE);
 
     DPRINT("usbxhci: OpenEndpoint ConfigureSlotEndpoint returned status=%d slot=%u ep=%u\n",
            Status, Slot->SlotId, EndpointId);
@@ -13584,7 +13611,8 @@ XHCI_ReopenEndpoint(PVOID MiniPortExtension,
         return XHCI_ConfigureSlotEndpoint(Extension,
                                           Endpoint->Slot,
                                           Endpoint,
-                                          Endpoint->EndpointId);
+                                          Endpoint->EndpointId,
+                                          FALSE);
     }
 
     if (EndpointProperties->TransferType != USBPORT_TRANSFER_TYPE_BULK)
@@ -13614,7 +13642,8 @@ XHCI_ReopenEndpoint(PVOID MiniPortExtension,
         return XHCI_ConfigureSlotEndpoint(Extension,
                                           Endpoint->Slot,
                                           Endpoint,
-                                          Endpoint->EndpointId);
+                                          Endpoint->EndpointId,
+                                          FALSE);
     }
 
     if (Endpoint->StreamsEnabled)
@@ -13627,7 +13656,8 @@ XHCI_ReopenEndpoint(PVOID MiniPortExtension,
     return XHCI_ConfigureSlotEndpoint(Extension,
                                       Endpoint->Slot,
                                       Endpoint,
-                                      Endpoint->EndpointId);
+                                      Endpoint->EndpointId,
+                                      FALSE);
 }
 
 static MPSTATUS
@@ -14365,41 +14395,16 @@ XHCI_SetEndpointDataToggle(PVOID MiniPortExtension,
                            PVOID EndpointHandle,
                            ULONG Toggle)
 {
-    PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
     PXHCI_ENDPOINT Endpoint = (PXHCI_ENDPOINT)EndpointHandle;
 
-    if (!Extension || !Endpoint || !Endpoint->Slot)
-        return;
+    UNREFERENCED_PARAMETER(MiniPortExtension);
 
-    /*
-     * xHCI manages DATA toggles in hardware. USBPORT calls this after
-     * clear-stall/reset paths to put the hardware back in sync with the
-     * software ring head. When Toggle == 0, rewind the software ring so
-     * new traffic starts from a clean boundary and then reprogram TR Dequeue.
-     */
-    if (Toggle == 0)
-    {
-        XHCI_ResetEndpointRing(Endpoint);
-
-        if (Endpoint->UsesStaticRing && Endpoint->Slot)
-        {
-            Endpoint->Slot->Ep0RingEnqueueIndex = Endpoint->TransferRing.EnqueueIndex;
-            Endpoint->Slot->Ep0RingDequeueIndex = Endpoint->TransferRing.DequeueIndex;
-            Endpoint->Slot->Ep0RingCycleState = Endpoint->TransferRing.CycleState;
-        }
-    }
-
-    /*
-     * Do NOT issue SET_TR_DEQUEUE here.  USBPORT calls SetEndpointDataToggle
-     * as part of the clear-stall sequence BEFORE calling SetEndpointStatus.
-     * At this point the endpoint is typically Halted (the device stalled),
-     * which is NOT a valid state for SET_TR_DEQUEUE (requires Stopped).
-     * Issuing it here causes CONTEXT_STATE_ERROR (code 19) from the xHC.
-     *
-     * The subsequent SetEndpointStatus call performs the full reset sequence:
-     *   RESET_ENDPOINT (Halted->Stopped) -> SET_TR_DEQUEUE -> doorbell
-     * which correctly handles the endpoint state transitions.
-     */
+    /* USBPORT calls SetEndpointStatus next to stop/reset the endpoint and
+     * apply this transfer-state reset with its new dequeue pointer.
+     * Clearing the ring here while its consumer cycle is zero exposes zeroed
+     * TRBs to a running controller and can cause a Host Controller Error. */
+    if (Endpoint && Endpoint->EndpointId > 1 && Toggle == 0)
+        InterlockedExchange(&Endpoint->ResetDataToggle, 1);
 }
 
 static ULONG NTAPI
