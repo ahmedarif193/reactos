@@ -902,6 +902,103 @@ Cleanup:
     }
 }
 
+static
+VOID
+TestReadAfterSmallWrites(VOID)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\SystemRoot\\kmtest-read-after-write.tmp");
+    OBJECT_ATTRIBUTES Attributes;
+    IO_STATUS_BLOCK IoStatus;
+    LARGE_INTEGER Offset;
+    HANDLE Writer = NULL, Reader = NULL;
+    NTSTATUS Status;
+    PUCHAR Expected = NULL, Actual = NULL;
+    ULONG Mode, Index, Position;
+    const ULONG Length = 8192;
+    const ULONG Chunk = 1024;
+
+    /* Allocations larger than a page also satisfy unbuffered I/O alignment. */
+    Expected = ExAllocatePoolWithTag(NonPagedPool, Length, 'tFmK');
+    Actual = ExAllocatePoolWithTag(NonPagedPool, Length, 'tFmK');
+    if (skip(Expected && Actual, "No buffers for read-after-write test\n"))
+        goto Cleanup;
+
+    InitializeObjectAttributes(&Attributes, &Name,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL, NULL);
+    Status = ZwCreateFile(&Writer,
+                          FILE_READ_DATA | FILE_WRITE_DATA | DELETE | SYNCHRONIZE,
+                          &Attributes, &IoStatus, NULL, FILE_ATTRIBUTE_NORMAL,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          FILE_CREATE,
+                          FILE_NON_DIRECTORY_FILE | FILE_DELETE_ON_CLOSE | FILE_SYNCHRONOUS_IO_NONALERT,
+                          NULL, 0);
+    if (skip(NT_SUCCESS(Status), "Cannot create scratch file: %lx\n", Status))
+        goto Cleanup;
+
+    /* Establish different durable contents before doing small buffered writes. */
+    RtlFillMemory(Expected, Length, 0x55);
+    Offset.QuadPart = 0;
+    Status = ZwWriteFile(Writer, NULL, NULL, NULL, &IoStatus, Expected, Length, &Offset, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    ok_eq_size(IoStatus.Information, Length);
+    Status = ZwFlushBuffersFile(Writer, &IoStatus);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    for (Mode = 0; Mode < 2; Mode++)
+    {
+        for (Index = 0; Index < Length; Index++)
+            Expected[Index] = (UCHAR)(Index * 17 + Mode + 1);
+        for (Position = 0; Position < Length; Position += Chunk)
+        {
+            Offset.QuadPart = Position;
+            Status = ZwWriteFile(Writer, NULL, NULL, NULL, &IoStatus,
+                                 Expected + Position, Chunk, &Offset, NULL);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+            ok_eq_size(IoStatus.Information, Chunk);
+        }
+
+        /* Neither explicit flush nor closing Writer may be needed for another
+         * handle to observe completed writes, including unbuffered reads. */
+        Status = ZwOpenFile(&Reader, FILE_READ_DATA | SYNCHRONIZE,
+                            &Attributes, &IoStatus,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT |
+                            (Mode ? FILE_NO_INTERMEDIATE_BUFFERING : 0));
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        Offset.QuadPart = 0;
+        RtlZeroMemory(Actual, Length);
+        Status = ZwReadFile(Reader, NULL, NULL, NULL, &IoStatus, Actual, Length, &Offset, NULL);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+        {
+            ok_eq_size(IoStatus.Information, Length);
+            ok(RtlCompareMemory(Expected, Actual, Length) == Length,
+               "%s read returned stale data after small writes\n", Mode ? "Unbuffered" : "Cached");
+        }
+        ZwClose(Reader);
+        Reader = NULL;
+    }
+
+Cleanup:
+    if (Reader)
+        ZwClose(Reader);
+    if (Writer)
+        ZwClose(Writer);
+    if (Actual)
+        ExFreePoolWithTag(Actual, 'tFmK');
+    if (Expected)
+        ExFreePoolWithTag(Expected, 'tFmK');
+}
+
 START_TEST(IoFilesystem)
 {
     if (skip(!IsWinPE(), "IoFilesystem path matrix requires an installed OS, not WinPE\n"))
@@ -915,4 +1012,5 @@ START_TEST(IoFilesystem)
     TestRelativeNames();
     TestQueryAttributesMissing();
     TestSharedCacheMap();
+    TestReadAfterSmallWrites();
 }

@@ -254,6 +254,12 @@ NtfsTryDirectRead(
     DiskOffset += InClusterOffset;
 
     *Handled = TRUE;
+    /* Small file writes may still be in the library's block cache. Paging
+     * and unbuffered reads bypass it, so commit only the overlapping blocks
+     * before sending this IRP directly to the storage device. */
+    Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, DiskOffset, Length);
+    if (!NT_SUCCESS(Status))
+        return Status;
     return NtfsSubmitDirectRead(VolCB, Irp, DiskOffset, Length);
 }
 
