@@ -25,6 +25,8 @@
 #define IDI_MAILSMALL       256
 #define IDI_STARTMENU2      257
 #define IDI_STARTORB        258
+#define IDI_STARTORB_HOVER  259
+#define IDI_STARTORB_PRESSED 260
 #define IDI_FLU_WIFI1       300
 #define IDI_FLU_WIFI2       301
 #define IDI_FLU_WIFI3       302

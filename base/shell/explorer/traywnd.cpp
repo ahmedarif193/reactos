@@ -267,39 +267,13 @@ public:
         if (IsThemeActive())
         {
             const INT cxIcon = ShellScaleForDpi(36);
-            HBITMAP hBitmap = CreateStartOrbBitmap(cxIcon);
-            m_ImageList = ImageList_Create(cxIcon, cxIcon, ILC_COLOR32 | ILC_MASK, 1, 1);
-            INT iImage = -1;
-            if (hBitmap)
-            {
-                if (m_ImageList)
-                    iImage = ImageList_Add(m_ImageList, hBitmap, NULL);
-                DeleteObject(hBitmap);
-            }
-
-            /* Keep the resource icon as a fallback if the PNG decoder is unavailable. */
-            if (m_ImageList && iImage < 0)
-            {
-                HICON hIcon = (HICON)LoadImageW(hExplorerInstance,
-                                            MAKEINTRESOURCEW(IDI_STARTORB),
-                                            IMAGE_ICON, cxIcon, cxIcon, 0);
-                if (hIcon)
-                {
-                    iImage = ImageList_AddIcon(m_ImageList, hIcon);
-                    DestroyIcon(hIcon);
-                }
-            }
-            if (iImage >= 0)
+            m_ImageList = CreateStartOrbImageList(cxIcon);
+            if (m_ImageList)
             {
                 const INT Margin = ShellScaleForDpi(1);
                 BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_CENTER};
                 SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
                 m_bOrbIcon = TRUE;
-            }
-            else if (m_ImageList)
-            {
-                ImageList_Destroy(m_ImageList);
-                m_ImageList = NULL;
             }
         }
         else
@@ -434,12 +408,22 @@ public:
                 LRESULT state = SendMessageW(BM_GETSTATE, 0, 0);
                 COLORREF cr = m_crMaterial;
                 int cx = 0, cy = 0;
+                int iImage = PBS_NORMAL - 1;
 
                 GetClientRect(&rc);
-                if (state & BST_PUSHED)
-                    cr = ShellLiftColor(cr, 14);
-                else if (state & BST_HOT)
-                    cr = ShellLiftColor(cr, 24);
+                if (IsWindowEnabled())
+                {
+                    if (state & BST_PUSHED)
+                    {
+                        cr = ShellLiftColor(cr, 14);
+                        iImage = PBS_PRESSED - 1;
+                    }
+                    else if (state & BST_HOT)
+                    {
+                        cr = ShellLiftColor(cr, 24);
+                        iImage = PBS_HOT - 1;
+                    }
+                }
                 HBRUSH hbr = CreateSolidBrush(cr);
                 if (hbr)
                 {
@@ -447,7 +431,9 @@ public:
                     DeleteObject(hbr);
                 }
                 ImageList_GetIconSize(m_ImageList, &cx, &cy);
-                ImageList_Draw(m_ImageList, 0, hdc,
+                if (ImageList_GetImageCount(m_ImageList) == 1)
+                    iImage = 0;
+                ImageList_Draw(m_ImageList, iImage, hdc,
                                (rc.right - cx) / 2, (rc.bottom - cy) / 2,
                                ILD_TRANSPARENT);
                 {

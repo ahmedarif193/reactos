@@ -1,19 +1,19 @@
 /*
  * PROJECT:     ReactOS Explorer
  * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
- * PURPOSE:     Rasterize the Start orb at the taskbar's actual DPI
+ * PURPOSE:     Create the Start button's state images at the taskbar's actual DPI
  */
 
 #include "precomp.h"
 #include <wincodec.h>
 
-HBITMAP CreateStartOrbBitmap(INT Size)
+static HBITMAP CreateStartOrbBitmap(INT Size, UINT ResourceId)
 {
     /* Bound the destination DIB allocation. */
     if (Size <= 0 || Size > 4096)
         return NULL;
 
-    HRSRC hResource = FindResourceW(hExplorerInstance, MAKEINTRESOURCEW(IDI_STARTORB), RT_RCDATA);
+    HRSRC hResource = FindResourceW(hExplorerInstance, MAKEINTRESOURCEW(ResourceId), RT_RCDATA);
     if (!hResource)
         return NULL;
     HGLOBAL hData = LoadResource(hExplorerInstance, hResource);
@@ -76,4 +76,60 @@ HBITMAP CreateStartOrbBitmap(INT Size)
         }
     }
     return Bitmap;
+}
+
+HIMAGELIST CreateStartOrbImageList(INT Size)
+{
+    if (Size <= 0 || Size > 4096)
+        return NULL;
+
+    /* BUTTON_IMAGELIST uses the PBS_* state order, including disabled/focused. */
+    static const UINT Resources[] =
+    {
+        IDI_STARTORB,
+        IDI_STARTORB_HOVER,
+        IDI_STARTORB_PRESSED,
+        IDI_STARTORB,
+        IDI_STARTORB
+    };
+    HIMAGELIST ImageList = ImageList_Create(Size, Size, ILC_COLOR32 | ILC_MASK,
+                                          _countof(Resources), 1);
+    if (!ImageList)
+        return NULL;
+
+    UINT State;
+    for (State = 0; State < _countof(Resources); ++State)
+    {
+        HBITMAP Bitmap = CreateStartOrbBitmap(Size, Resources[State]);
+        if (!Bitmap)
+            break;
+        INT Index = ImageList_Add(ImageList, Bitmap, NULL);
+        DeleteObject(Bitmap);
+        if (Index != (INT)State)
+            break;
+    }
+
+    if (State == _countof(Resources))
+        return ImageList;
+
+    /* A single image is valid for every button state; a partial list is not. */
+    if (State > 0 && ImageList_SetImageCount(ImageList, 1))
+        return ImageList;
+
+    /* Keep the resource icon as a fallback if the PNG decoder is unavailable. */
+    if (State == 0)
+    {
+        HICON Icon = (HICON)LoadImageW(hExplorerInstance, MAKEINTRESOURCEW(IDI_STARTORB),
+                                     IMAGE_ICON, Size, Size, 0);
+        if (Icon)
+        {
+            INT Index = ImageList_AddIcon(ImageList, Icon);
+            DestroyIcon(Icon);
+            if (Index >= 0)
+                return ImageList;
+        }
+    }
+
+    ImageList_Destroy(ImageList);
+    return NULL;
 }
