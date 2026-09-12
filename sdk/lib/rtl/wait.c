@@ -78,7 +78,7 @@ Wait_thread_proc(LPVOID Arg)
                 TimerOrWaitFired = TRUE;
             }
             Wait->CallbackInProgress = TRUE;
-            Wait->Callback( Wait->Context, TimerOrWaitFired );
+            RtlpCallWaitOrTimerCallback( Wait->Callback, Wait->Context, TimerOrWaitFired );
             Wait->CallbackInProgress = FALSE;
 
             if (Wait->Flags & WT_EXECUTEONLYONCE)

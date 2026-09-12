@@ -113,6 +113,13 @@ NTAPI
 RtlpSetThreadpoolCallbackDispatcher(
     _In_opt_ PRTLP_THREADPOOL_CALLBACK_DISPATCHER Dispatcher);
 
+VOID
+NTAPI
+RtlpCallWaitOrTimerCallback(
+    _In_ WAITORTIMERCALLBACKFUNC Callback,
+    _In_opt_ PVOID Context,
+    _In_ BOOLEAN TimerOrWaitFired);
+
 KPROCESSOR_MODE
 NTAPI
 RtlpGetMode(VOID);
