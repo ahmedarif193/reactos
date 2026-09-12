@@ -54,6 +54,15 @@ elseif(ARCH STREQUAL "arm64")
 81 = winsxs\arm64_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef
 84 = system32\spool\prtprocs\arm64
 ]=])
+    if(ENABLE_WOW64)
+        string(APPEND REACTOS_DFF_ARCH_DIRECTORIES [=[
+56 = winsxs\x86_microsoft.windows.common-controls_6595b64144ccf1df_5.82.2600.2982_none_deadbeef
+57 = winsxs\x86_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef
+58 = winsxs\x86_microsoft.windows.gdiplus_6595b64144ccf1df_1.1.7601.23038_none_deadbeef
+61 = winsxs\x86_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef
+82 = SysWOW64
+]=])
+    endif()
     if(ENABLE_FEX_ARM64EC)
         string(APPEND REACTOS_DFF_ARCH_DIRECTORIES [=[
 85 = system32\arm64ec
