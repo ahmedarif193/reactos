@@ -1144,6 +1144,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Caps->MaxAllocationListSlotId = 255;
             Caps->ApertureSegmentCommitLimit =
                 RPI5VC4_APERTURE_COMMIT_LIMIT;
+            Caps->SchedulingCaps.MultiEngineAware = TRUE;
             Caps->GpuEngineTopology.NbAsymetricProcessingNodes =
                 RPI5VC4_GPU_NODE_COUNT;
             Caps->WDDMVersion = DXGKDDI_WDDMv2_ENUM;
@@ -2329,6 +2330,7 @@ Rpi5Vc4DdiSubmitCommand(
     BOOLEAN MappingFound;
     BOOLEAN Stopping;
     RPI5VC4_DMA_MAPPING DmaMapping;
+    PRPI5VC4_CONTEXT Context;
     PRPI5VC4_WDDM_DEVICE KmdDevice;
     PRPI5VC4_PROCESS Process;
     PVOID DmaBuffer;
@@ -2337,7 +2339,11 @@ Rpi5Vc4DdiSubmitCommand(
     if (DeviceExtension == NULL || SubmitCommand == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    KmdDevice = (PRPI5VC4_WDDM_DEVICE)SubmitCommand->hDevice;
+    Context = (PRPI5VC4_CONTEXT)SubmitCommand->hContext;
+    if (Context == NULL || Context->Magic != RPI5VC4_CONTEXT_MAGIC)
+        return STATUS_INVALID_PARAMETER;
+
+    KmdDevice = Context->Device;
     if (KmdDevice == NULL ||
         KmdDevice->Magic != RPI5VC4_DEVICE_MAGIC ||
         KmdDevice->Adapter != DeviceExtension ||
