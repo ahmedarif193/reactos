@@ -950,7 +950,9 @@ Rpi5Vc4BuildEdid(
     UCHAR Checksum = 0;
     ULONG i;
 
-    if (DeviceExtension->PixelValveValid)
+    if (DeviceExtension->PixelValveValid &&
+        (DeviceExtension->PixelValveHorzB & 0xFFFF) != 0 &&
+        (DeviceExtension->PixelValveVertB & 0xFFFF) == VActive)
     {
         /* PV registers: HORZA = HBP:HSYNC, HORZB = HFP:HACTIVE,
          * VERTA = VBP:VSYNC, VERTB = VFP:VACTIVE (16-bit halves). */
@@ -958,18 +960,18 @@ Rpi5Vc4BuildEdid(
         ULONG HorzB = DeviceExtension->PixelValveHorzB;
         ULONG VertA = DeviceExtension->PixelValveVertA;
         ULONG VertB = DeviceExtension->PixelValveVertB;
+        ULONG HCounterActive = HorzB & 0xFFFF;
 
-        HSyncWidth = HorzA & 0xFFFF;
-        HSyncOff = (HorzB >> 16) & 0xFFFF;           /* front porch */
-        HBlank = HSyncWidth + HSyncOff + ((HorzA >> 16) & 0xFFFF);
+        /* Firmware can count multiple pixels per horizontal clock. Keep the
+         * GOP raster and convert the captured intervals into pixel units. */
+        HSyncWidth = (ULONG)((ULONGLONG)(HorzA & 0xFFFF) * HActive / HCounterActive);
+        HSyncOff = (ULONG)((ULONGLONG)(HorzB >> 16) * HActive / HCounterActive);
+        HBlank = (ULONG)((ULONGLONG)((HorzA & 0xFFFF) +
+                                     (HorzB >> 16) + (HorzA >> 16)) *
+                         HActive / HCounterActive);
         VSyncWidth = VertA & 0xFFFF;
         VSyncOff = (VertB >> 16) & 0xFFFF;
         VBlank = VSyncWidth + VSyncOff + ((VertA >> 16) & 0xFFFF);
-
-        if ((HorzB & 0xFFFF) != 0)
-            HActive = HorzB & 0xFFFF;
-        if ((VertB & 0xFFFF) != 0)
-            VActive = VertB & 0xFFFF;
     }
 
     PixelClock10kHz = (ULONG)(((ULONGLONG)(HActive + HBlank) *
