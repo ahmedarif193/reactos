@@ -1251,6 +1251,19 @@ SkipCheck:
         return STATUS_INVALID_IMAGE_FORMAT;
     }
 
+#ifdef _WIN64
+    if (NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+#else
+    if (NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+#endif
+    {
+        DPRINT1("LDR: %wZ has machine %04x magic %04x, wrong bitness for this process\n",
+                &BaseDllName, NtHeaders->FileHeader.Machine, NtHeaders->OptionalHeader.Magic);
+        NtUnmapViewOfSection(NtCurrentProcess(), ViewBase);
+        NtClose(SectionHandle);
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+
     // FIXME: .NET support is missing
 
     /* Allocate an entry */
