@@ -36,13 +36,16 @@
     ROS_SYSCALL_ENTRY( NtAlpcQueryInformationMessage ) \
     ROS_SYSCALL_ENTRY( NtAlpcRevokeSecurityContext ) \
     ROS_SYSCALL_ENTRY( NtAlpcSetInformation ) \
+    ROS_SYSCALL_ENTRY( NtAssociateWaitCompletionPacket ) \
     ROS_SYSCALL_ENTRY( NtCancelDeviceWakeupRequest ) \
+    ROS_SYSCALL_ENTRY( NtCancelWaitCompletionPacket ) \
     ROS_SYSCALL_ENTRY( NtCompactKeys ) \
     ROS_SYSCALL_ENTRY( NtCompressKey ) \
     ROS_SYSCALL_ENTRY( NtCreateEventPair ) \
     ROS_SYSCALL_ENTRY( NtCreateJobSet ) \
     ROS_SYSCALL_ENTRY( NtCreateProcess ) \
     ROS_SYSCALL_ENTRY( NtCreateProfile ) \
+    ROS_SYSCALL_ENTRY( NtCreateWaitCompletionPacket ) \
     ROS_SYSCALL_ENTRY( NtCreateWaitablePort ) \
     ROS_SYSCALL_ENTRY( NtCreateWnfStateName ) \
     ROS_SYSCALL_ENTRY( NtDeleteBootEntry ) \

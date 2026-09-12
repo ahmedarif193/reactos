@@ -303,11 +303,14 @@ NTSYSAPI NTSTATUS WINAPI NtAddBootEntry( void *, ULONG );
 NTSYSAPI NTSTATUS WINAPI NtAddDriverEntry( void *, ULONG );
 NTSYSAPI NTSTATUS WINAPI NtAllocateUserPhysicalPages( HANDLE, ULONG_PTR *, ULONG_PTR * );
 NTSYSAPI NTSTATUS WINAPI NtApphelpCacheControl( ULONG, APPHELP_CACHE_SERVICE_LOOKUP * );
+NTSYSAPI NTSTATUS WINAPI NtAssociateWaitCompletionPacket( HANDLE, HANDLE, HANDLE, void *, void *, NTSTATUS, ULONG_PTR, BOOLEAN * );
 NTSYSAPI NTSTATUS WINAPI NtCancelDeviceWakeupRequest( HANDLE );
+NTSYSAPI NTSTATUS WINAPI NtCancelWaitCompletionPacket( HANDLE, BOOLEAN );
 NTSYSAPI NTSTATUS WINAPI NtCompactKeys( ULONG, HANDLE * );
 NTSYSAPI NTSTATUS WINAPI NtCompressKey( HANDLE );
 NTSYSAPI NTSTATUS WINAPI NtCreateJobSet( ULONG, JOB_SET_ARRAY64 *, ULONG );
 NTSYSAPI NTSTATUS WINAPI NtCreateProcessEx( HANDLE *, ACCESS_MASK, OBJECT_ATTRIBUTES *, HANDLE, ULONG, HANDLE, HANDLE, HANDLE, BOOLEAN );
+NTSYSAPI NTSTATUS WINAPI NtCreateWaitCompletionPacket( HANDLE *, ACCESS_MASK, OBJECT_ATTRIBUTES * );
 NTSYSAPI NTSTATUS WINAPI NtCreateWaitablePort( HANDLE *, OBJECT_ATTRIBUTES *, ULONG, ULONG, ULONG );
 NTSYSAPI NTSTATUS WINAPI NtCreateWnfStateName( WNF_STATE_NAME *, ULONG, ULONG, BOOLEAN, const WNF_TYPE_ID *, ULONG, SECURITY_DESCRIPTOR * );
 NTSYSAPI NTSTATUS WINAPI NtDeleteBootEntry( ULONG );
@@ -612,6 +615,25 @@ NTSTATUS WINAPI wow64_NtApphelpCacheControl( UINT *args )
 
 
 /**********************************************************************
+ *           wow64_NtAssociateWaitCompletionPacket
+ */
+NTSTATUS WINAPI wow64_NtAssociateWaitCompletionPacket( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    HANDLE completion_handle = get_handle( &args );
+    HANDLE target_handle = get_handle( &args );
+    void *key_context = get_ptr( &args );
+    void *apc_context = get_ptr( &args );
+    NTSTATUS io_status = get_ulong( &args );
+    ULONG_PTR io_information = get_ulong( &args );
+    BOOLEAN *already_signaled = get_ptr( &args );
+
+    return NtAssociateWaitCompletionPacket( handle, completion_handle, target_handle, key_context,
+                                            apc_context, io_status, io_information, already_signaled );
+}
+
+
+/**********************************************************************
  *           wow64_NtCancelDeviceWakeupRequest
  */
 NTSTATUS WINAPI wow64_NtCancelDeviceWakeupRequest( UINT *args )
@@ -619,6 +641,18 @@ NTSTATUS WINAPI wow64_NtCancelDeviceWakeupRequest( UINT *args )
     HANDLE device = get_handle( &args );
 
     return NtCancelDeviceWakeupRequest( device );
+}
+
+
+/**********************************************************************
+ *           wow64_NtCancelWaitCompletionPacket
+ */
+NTSTATUS WINAPI wow64_NtCancelWaitCompletionPacket( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+    BOOLEAN remove_signaled_packet = get_ulong( &args );
+
+    return NtCancelWaitCompletionPacket( handle, remove_signaled_packet );
 }
 
 
@@ -761,6 +795,25 @@ NTSTATUS WINAPI wow64_NtCreateProfile( UINT *args )
 
     status = NtCreateProfile( &handle, process, base, size, bucket, buffer, buffer_size,
                               source, affinity );
+    put_handle( handle_ptr, handle );
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtCreateWaitCompletionPacket
+ */
+NTSTATUS WINAPI wow64_NtCreateWaitCompletionPacket( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ACCESS_MASK access = get_ulong( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+
+    struct object_attr64 attr;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    status = NtCreateWaitCompletionPacket( &handle, access, objattr_32to64( &attr, attr32 ));
     put_handle( handle_ptr, handle );
     return status;
 }
