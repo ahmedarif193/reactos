@@ -27,6 +27,12 @@ NtfsDiskFlushKm(VOID);
 NTSTATUS
 NtfsDiskFlushVolumeKm(_In_ PDEVICE_OBJECT DeviceObject);
 
+/* Make writes held in the block cache visible to direct storage reads. */
+NTSTATUS
+NtfsDiskFlushRangeKm(_In_ PDEVICE_OBJECT DeviceObject,
+                    _In_ ULONGLONG Offset,
+                    _In_ ULONG Length);
+
 /* Declared here rather than in the public header because
  * FILE_BOTH_DIR_INFORMATION is a kernel-mode type.
  */

@@ -1111,3 +1111,14 @@ NtfsDiskFlushVolumeKm(_In_ PDEVICE_OBJECT DeviceObject)
         return STATUS_INVALID_PARAMETER;
     return NtfsCacheFlushAll(DeviceObject);
 }
+
+extern "C"
+NTSTATUS
+NtfsDiskFlushRangeKm(_In_ PDEVICE_OBJECT DeviceObject,
+                    _In_ ULONGLONG Offset,
+                    _In_ ULONG Length)
+{
+    if (!DeviceObject || Offset > ~(ULONGLONG)0 - Length)
+        return STATUS_INVALID_PARAMETER;
+    return NtfsCacheFlushRange(DeviceObject, Offset, Length);
+}
