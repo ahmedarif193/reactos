@@ -437,6 +437,8 @@ USBPORT_ResetPipe(IN PDEVICE_OBJECT FdoDevice,
     else
     {
         Status = USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_ERROR_BUSY);
+        KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
+        return Status;
     }
 
     Endpoint->Flags |= ENDPOINT_FLAG_QUEUENE_EMPTY;
