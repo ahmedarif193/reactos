@@ -540,18 +540,19 @@ USBPORT_SyncResetPipeAndClearStall(IN PDEVICE_OBJECT FdoDevice,
     if (Endpoint->EndpointProperties.TransferType != USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
     {
         Urb->UrbHeader.UsbdFlags |= USBD_FLAG_NOT_ISO_TRANSFER;
-        Status = USBPORT_ClearStall(FdoDevice, Irp, Urb);
-    }
-    else
-    {
-        Status = USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_SUCCESS);
     }
 
+    /* Reset the host endpoint before clearing the device's halt. An xHCI
+     * endpoint must be ready when the device resumes USB3 flow control.
+     * A busy pipe must also be rejected before changing device state. */
+    Status = USBPORT_ResetPipe(FdoDevice, Irp, Urb);
     if (NT_SUCCESS(Status))
     {
-        Status = USBPORT_ResetPipe(FdoDevice, Irp, Urb);
-
-        if (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
+        if (Endpoint->EndpointProperties.TransferType != USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
+        {
+            Status = USBPORT_ClearStall(FdoDevice, Irp, Urb);
+        }
+        else
         {
             while (TRUE)
             {
