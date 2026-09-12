@@ -875,8 +875,9 @@ MMixerInitialize(
     {
         MixerData = (LPMIXER_DATA)CONTAINING_RECORD(Entry, MIXER_DATA, Entry);
 
-        /* now handle alternative mixer types */
-        MMixerHandleAlternativeMixers(MixerContext, MixerList, MixerData, MixerData->Topology);
+        /* Filter setup can fail before creating a topology. */
+        if (MixerData->Topology)
+            MMixerHandleAlternativeMixers(MixerContext, MixerList, MixerData, MixerData->Topology);
         Entry = Entry->Flink;
     }
 
