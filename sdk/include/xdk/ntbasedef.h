@@ -119,6 +119,8 @@
 
 #if defined(_AMD64_) || defined(_X86_)
  #define PROBE_ALIGNMENT(_s) TYPE_ALIGNMENT($ULONG)
+#elif defined(_RISCV64_)
+ #define PROBE_ALIGNMENT(_s) max(TYPE_ALIGNMENT(_s), TYPE_ALIGNMENT($ULONG))
 #elif defined(_IA64_) || defined(_ARM_) || defined(_ARM64_)
  #define PROBE_ALIGNMENT(_s) max((TYPE_ALIGNMENT(_s), TYPE_ALIGNMENT($ULONG))
 #elif !defined(RC_INVOKED)
@@ -367,7 +369,11 @@ $if(_NTDEF_)
 /* Unsigned Types */
 typedef unsigned char UCHAR, *PUCHAR;
 typedef unsigned short USHORT, *PUSHORT;
+#if defined(__ROS_LONG64__)
+typedef unsigned int ULONG, *PULONG;
+#else
 typedef unsigned long ULONG, *PULONG;
+#endif
 
 typedef double DOUBLE;
 $endif(_NTDEF_)
@@ -379,7 +385,11 @@ typedef LONG *PLONG;
 /* Flag types */
 typedef unsigned char FCHAR;
 typedef unsigned short FSHORT;
+#if defined(__ROS_LONG64__)
+typedef unsigned int FLONG;
+#else
 typedef unsigned long FLONG;
+#endif
 
 /* Handle LP64 and LLP64 differences in numeric constants with an 'l' suffix. */
 #ifndef __MSABI_LONG

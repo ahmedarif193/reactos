@@ -41,7 +41,9 @@
     ROUND_DOWN(((ULONG)n) + (align) - 1, (align))
 
 /* Public headers */
-#ifdef __REACTOS__
+#if defined(_M_RISCV64)
+#include <arch/riscv64/boot.h>
+#elif defined(__REACTOS__)
 #include <ntddk.h>
 #include <ntifs.h>
 #include <ioaccess.h>
@@ -64,6 +66,7 @@
 #endif
 
 /* Internal headers */
+#if !defined(_M_RISCV64)
 // #include <arcemul.h>
 #include <arcname.h>
 #include <arcsupp.h>
@@ -137,6 +140,7 @@
 #endif
 
 #include <conversion.h>
+#endif
 
 VOID __cdecl BootMain(IN PCCH CmdLine);
 

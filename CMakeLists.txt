@@ -12,6 +12,11 @@ endif()
 
 project(REACTOS)
 
+if(ARCH STREQUAL "riscv64")
+    add_subdirectory(boot/freeldr/freeldr/arch/riscv64)
+    return()
+endif()
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_INCLUDE_DIRECTORIES_PROJECT_BEFORE ON)
 set(CMAKE_SHARED_LIBRARY_PREFIX "")

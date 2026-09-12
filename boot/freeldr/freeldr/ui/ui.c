@@ -136,7 +136,7 @@ BOOLEAN UiInitialize(BOOLEAN ShowUi)
 
     if (UiDisplayMode == VideoGraphicsMode)
     {
-#ifdef UEFIBOOT
+#if defined(UEFIBOOT) && !defined(FREELDR_UEFI_TEXT_ONLY)
         /* UEFI graphics uses the framebuffer UI backend. */
         UiVtbl = FbGuiVtbl;
 #else

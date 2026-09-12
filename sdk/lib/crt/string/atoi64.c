@@ -8,13 +8,14 @@
  *              25/11/05: Added license header
  */
 
-#include <precomp.h>
+#include <stdlib.h>
+#include <ctype.h>
 
 /*
  * @implemented
  */
 __int64
-CDECL
+__cdecl
 _atoi64(const char *nptr)
 {
   char *s = (char *)nptr;

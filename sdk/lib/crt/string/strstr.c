@@ -8,12 +8,12 @@
  *              25/11/05: Added license header
  */
 
-#include <precomp.h>
+#include <string.h>
 /*
  * @implemented
  */
 char *
-CDECL
+__cdecl
 strstr(const char *s, const char *find)
 {
   char c, sc;

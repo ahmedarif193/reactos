@@ -75,7 +75,11 @@ typedef enum _EXCEPTION_DISPOSITION
 #endif
 
 #if !defined(_exception_code)
+#ifdef __ROS_LONG64__
+  unsigned int __cdecl _exception_code(void);
+#else
   unsigned long __cdecl _exception_code(void);
+#endif
   void *__cdecl _exception_info(void);
   int __cdecl _abnormal_termination(void);
 #endif

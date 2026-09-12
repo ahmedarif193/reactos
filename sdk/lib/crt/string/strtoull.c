@@ -1,7 +1,10 @@
-#include <precomp.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <limits.h>
+#include <errno.h>
 
 unsigned long long
-CDECL
+__cdecl
 strtoull(const char *nptr, char **endptr, int base)
 {
   const char *s = nptr;

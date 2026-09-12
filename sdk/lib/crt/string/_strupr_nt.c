@@ -5,7 +5,9 @@
  * COPYRIGHT:   Copyright 2025 Timo Kreuzer <timo.kreuzer@reactos.org>
  */
 
-#include "precomp.h"
+#include <string.h>
+#include <stdlib.h>
+#include <internal/safecrt.h>
 
 char*
 __cdecl
