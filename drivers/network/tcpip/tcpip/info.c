@@ -415,7 +415,7 @@ TDI_STATUS InfoTdiSetInformationEx
                     PADDRESS_FILE AddressFile = GetContext(ID->toi_entity);
                     if (AddressFile == NULL)
                         return TDI_INVALID_PARAMETER;
-                    return SetConnectionInfo(ID, AddressFile->Connection, Buffer, BufferSize);
+                    return SetConnectionInfo(ID, AddressFile, Buffer, BufferSize);
                 }
                 case INFO_TYPE_PROVIDER:
                 {
