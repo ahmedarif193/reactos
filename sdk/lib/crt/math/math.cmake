@@ -17,6 +17,9 @@ list(APPEND LIBCNTPR_MATH_SOURCE
     math/abs.c
     math/div.c
     math/exp2f.c
+    math/fdim.c
+    math/fmax.c
+    math/fmin.c
     math/labs.c
     math/nextafter.c
     math/nextafterf.c
