@@ -1533,6 +1533,21 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
         return STATUS_DEVICE_NOT_CONNECTED;
     }
 
+    /* The hub has reset the port. Reset an existing controller slot before
+     * opening EP0 and reading the descriptor at the default address. */
+    if (Packet->ResetDevice && HubDeviceHandle->IsRootHub)
+    {
+        MPSTATUS MpStatus = Packet->ResetDevice(FdoExtension->MiniPortExt, Port);
+        if (MpStatus != MP_STATUS_SUCCESS)
+        {
+            KeReleaseSemaphore(&FdoExtension->DeviceSemaphore,
+                               LOW_REALTIME_PRIORITY,
+                               1,
+                               FALSE);
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+    }
+
     port = Port;
 
     if (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB2 &&

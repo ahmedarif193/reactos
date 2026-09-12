@@ -15396,40 +15396,14 @@ XHCI_RH_ClearFeaturePortResetChange(
     _In_ USHORT Port)
 {
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
-    PXHCI_DEVICE_SLOT Slot;
 
     DPRINT("XHCI_RH_ClearFeaturePortResetChange: Port=%u\n", Port);
     XHCI_RH_AckPortChange(Extension, Port,
                           XHCI_PORTSC_PRC | XHCI_PORTSC_WRC);
 
-    /*
-     * Handle spontaneous device resets.
-     *
-     * When a USB device spontaneously resets (e.g., firmware crash, power
-     * glitch), the hub driver detects PRC (Port Reset Change) and calls
-     * ClearFeaturePortResetChange to acknowledge it. At this point, the
-     * xHCI slot is still in Configured state, but the physical USB device
-     * has reverted to Default state (address 0).
-     *
-     * We MUST call XHCI_ResetDeviceOnPort to issue the xHCI RESET_DEVICE
-     * command, which puts the slot back into Default state to match the
-     * physical device. Without this, the slot stays in Configured/Addressed
-     * state while the device is at address 0, causing TRANSACTION_ERROR on
-     * the next I/O attempt.
-     *
-     * We ONLY do this when the slot is in Configured state, which indicates
-     * the device was previously fully set up (i.e., this is a spontaneous
-     * reset, not initial enumeration). Normal enumeration/reset recovery is
-     * synchronized by USBPORT after the hub reset wait completes, before
-     * SET_ADDRESS is sent.
-     */
-    Slot = XHCI_FindSlotByPort(Extension, Port);
-    if (Slot && Slot->Configured)
-    {
-        DPRINT1("XHCI_RH_ClearFeaturePortResetChange: Port %u slot %u is Configured, issuing RESET_DEVICE for spontaneous reset\n",
-                Port, Slot->SlotId);
-        XHCI_ResetDeviceOnPort(Extension, Port);
-    }
+    /* Acknowledgements can arrive after USBPORT has restored the device and
+     * resumed transfers. Resetting the slot here would destroy that state;
+     * USBPORT owns the reset sequence before reading the device descriptor. */
 
     return MP_STATUS_SUCCESS;
 }
