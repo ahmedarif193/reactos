@@ -145,9 +145,12 @@ Rpi5Vc4AllocateVram(
     High.QuadPart = 0xFFFFFFFFFFULL;
     Boundary.QuadPart = 0;
 
-    for (Size = RPI5VC4_VRAM_SIZE_PREFERRED;
+    /* The private execution reserve must not consume the preferred local
+     * segment budget: four 1080p surfaces already need almost 32 MB. */
+    for (Size = RPI5VC4_VRAM_SIZE_PREFERRED + RPI5VC4_V3D_EXEC_RESERVE_SIZE;
          Size >= RPI5VC4_VRAM_SIZE_MIN;
-         Size /= 2)
+         Size = (Size > RPI5VC4_VRAM_SIZE_PREFERRED) ?
+                    RPI5VC4_VRAM_SIZE_PREFERRED : Size / 2)
     {
         DeviceExtension->VramVa = MmAllocateContiguousMemorySpecifyCache(
             Size, Low, High, Boundary, MmWriteCombined);
