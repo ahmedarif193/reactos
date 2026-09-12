@@ -1779,7 +1779,7 @@ XHCI_TryWarmResetPort(
 
     if (!(PortValue & XHCI_PORTSC_CCS) ||
         (PortValue & XHCI_PORTSC_PED) ||
-        (PortValue & XHCI_PORTSC_WPR))
+        (PortValue & (XHCI_PORTSC_PR | XHCI_PORTSC_WPR)))
     {
         return;
     }
@@ -15285,13 +15285,8 @@ XHCI_RH_SetFeaturePortReset(
             (PortValue & XHCI_PORTSC_PED) ? 1 : 0,
             (PortValue & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT);
 
-    /* SuperSpeed ports use Warm Port Reset (WPR) */
-    if (XHCI_PortIsSuperSpeed(Extension, Port))
-    {
-        Status = XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_WPR, 0, 0);
-        return Status;
-    }
-
+    /* PORT_RESET requests a hot reset on SuperSpeed ports too. Warm reset
+     * is the separate BH_PORT_RESET operation used for link recovery. */
     Status = XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PR, 0, 0);
     return Status;
 }
