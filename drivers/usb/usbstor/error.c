@@ -117,6 +117,22 @@ USBSTOR_ResetDeviceWorkItemRoutine(
 
     FDODeviceExtension = FdoDevice->DeviceExtension;
 
+    /* A device may acknowledge a BOT reset without recovering an aborted
+     * data phase. Reset the port while the request queue is frozen; the hub
+     * restores the configuration and retains our pipe handles. Limit this
+     * to devices owned entirely by USBSTOR so other interfaces keep running. */
+    if (FDODeviceExtension->ConfigurationDescriptor &&
+        FDODeviceExtension->ConfigurationDescriptor->bNumInterfaces == 1)
+    {
+        Status = USBSTOR_SyncInternalRequest(FDODeviceExtension->LowerDeviceObject,
+                                            IOCTL_INTERNAL_USB_RESET_PORT,
+                                            NULL);
+        /* A failed port reset may leave the device unaddressed. Preserve
+         * the failure so the queue retries full recovery on the next request;
+         * a class request cannot use the old address or configuration. */
+        goto Exit;
+    }
+
     for (ix = 0; ix < 3; ++ix)
     {
         // first perform a mass storage reset step 1 in 5.3.4 USB Mass Storage Bulk Only Specification
@@ -137,6 +153,7 @@ USBSTOR_ResetDeviceWorkItemRoutine(
         }
     }
 
+Exit:
     USBSTOR_QueueEndReset(FdoDevice, Status);
 }
 
