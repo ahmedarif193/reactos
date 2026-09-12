@@ -1399,7 +1399,7 @@ VOID DispTdiQueryInformationExComplete(
             _SEH2_TRY {
                 RtlCopyMemory(
                     (PUCHAR)QueryContext->UserInputBuffer +
-                        FIELD_OFFSET(TCP_REQUEST_QUERY_INFORMATION_EX, Context),
+                        QueryContext->UserContextOffset,
                     &QueryContext->QueryInfo.Context,
                     CONTEXT_SIZE);
             } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
@@ -1453,6 +1453,37 @@ VOID DispTdiQueryInformationExComplete(
 }
 
 
+static NTSTATUS DispTdiCopyQueryRequest(
+    PTI_QUERY_CONTEXT QueryContext,
+    PVOID InputBuffer,
+    ULONG RequestLength,
+    ULONG ContextOffset)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    _SEH2_TRY {
+        RtlCopyMemory(QueryContext->KernelInputBuffer, InputBuffer, RequestLength);
+    } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        Status = _SEH2_GetExceptionCode();
+    } _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlCopyMemory(&QueryContext->QueryInfo.ID,
+                  QueryContext->KernelInputBuffer,
+                  sizeof(TDIObjectID));
+    RtlCopyMemory(QueryContext->QueryInfo.Context,
+                  (PUCHAR)QueryContext->KernelInputBuffer + ContextOffset,
+                  CONTEXT_SIZE);
+    RtlCopyMemory(QueryContext->KernelInputBuffer,
+                  &QueryContext->QueryInfo,
+                  sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
+    QueryContext->UserContextOffset = ContextOffset;
+
+    return Status;
+}
+
 NTSTATUS DispTdiQueryInformationEx(
     PIRP Irp,
     PIO_STACK_LOCATION IrpSp)
@@ -1473,6 +1504,8 @@ NTSTATUS DispTdiQueryInformationEx(
     UINT Size;
     UINT InputBufferLength;
     UINT OutputBufferLength;
+    ULONG RequestLength;
+    ULONG ContextOffset;
     BOOLEAN InputMdlLocked  = FALSE;
     BOOLEAN OutputMdlLocked = FALSE;
     PMDL InputMdl           = NULL;
@@ -1501,8 +1534,18 @@ NTSTATUS DispTdiQueryInformationEx(
     InputBufferLength  = IrpSp->Parameters.DeviceIoControl.InputBufferLength;
     OutputBufferLength = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
 
+    RequestLength = sizeof(TCP_REQUEST_QUERY_INFORMATION_EX);
+    ContextOffset = FIELD_OFFSET(TCP_REQUEST_QUERY_INFORMATION_EX, Context);
+#ifdef _WIN64
+    if (IoIs32bitProcess(Irp))
+    {
+        RequestLength = sizeof(TCP_REQUEST_QUERY_INFORMATION_EX32);
+        ContextOffset = FIELD_OFFSET(TCP_REQUEST_QUERY_INFORMATION_EX32, Context);
+    }
+#endif
+
     /* Validate parameters */
-    if ((InputBufferLength == sizeof(TCP_REQUEST_QUERY_INFORMATION_EX)) &&
+    if ((InputBufferLength == RequestLength) &&
         (OutputBufferLength != 0)) {
 
         InputBuffer = (PTCP_REQUEST_QUERY_INFORMATION_EX)
@@ -1529,18 +1572,9 @@ NTSTATUS DispTdiQueryInformationEx(
                 goto fetch_cleanup;
             }
 
-            _SEH2_TRY {
-                RtlCopyMemory(QueryContext->KernelInputBuffer,
-                              InputBuffer,
-                              sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
-                RtlCopyMemory(&QueryContext->QueryInfo,
-                              QueryContext->KernelInputBuffer,
-                              sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
-                Status = STATUS_SUCCESS;
-            } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-                Status = _SEH2_GetExceptionCode();
+            Status = DispTdiCopyQueryRequest(QueryContext, InputBuffer, RequestLength, ContextOffset);
+            if (!NT_SUCCESS(Status))
                 goto fetch_cleanup;
-            } _SEH2_END;
 
             /* Build MDLs that wrap the KERNEL-pool buffers. These are
              * always valid in any process context, so the legacy
@@ -1606,8 +1640,7 @@ NTSTATUS DispTdiQueryInformationEx(
             ExFreePoolWithTag(QueryContext, QUERY_CONTEXT_TAG);
         } else
             Status = STATUS_INSUFFICIENT_RESOURCES;
-    } else if( InputBufferLength ==
-	       sizeof(TCP_REQUEST_QUERY_INFORMATION_EX) ) {
+    } else if( InputBufferLength == RequestLength ) {
 	/* Handle the case where the user is probing the buffer for length */
         InputBuffer = (PTCP_REQUEST_QUERY_INFORMATION_EX)
             IrpSp->Parameters.DeviceIoControl.Type3InputBuffer;
@@ -1632,17 +1665,7 @@ NTSTATUS DispTdiQueryInformationEx(
 	    return STATUS_INSUFFICIENT_RESOURCES;
 	}
 
-	_SEH2_TRY {
-	    RtlCopyMemory(QueryContext->KernelInputBuffer,
-	                  InputBuffer,
-	                  sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
-	    RtlCopyMemory(&QueryContext->QueryInfo,
-	                  QueryContext->KernelInputBuffer,
-	                  sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
-	    Status = STATUS_SUCCESS;
-	} _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-	    Status = _SEH2_GetExceptionCode();
-	} _SEH2_END;
+	Status = DispTdiCopyQueryRequest(QueryContext, InputBuffer, RequestLength, ContextOffset);
 
 	if (NT_SUCCESS(Status))
 	{
@@ -1666,9 +1689,6 @@ NTSTATUS DispTdiQueryInformationEx(
 	    ExFreePoolWithTag(QueryContext, QUERY_CONTEXT_TAG);
 	    return Status;
 	}
-
-	RtlCopyMemory(&QueryContext->QueryInfo,
-		      InputBuffer, sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
 
 	QueryContext->Irp       = Irp;
 	QueryContext->InputMdl  = InputMdl;

@@ -2083,8 +2083,21 @@ NTAPI
 IoIs32bitProcess(
     IN PIRP Irp OPTIONAL)
 {
-    UNIMPLEMENTED;
-    return FALSE;
+    PEPROCESS Process = NULL;
+
+    if (Irp != NULL)
+    {
+        if (Irp->RequestorMode == KernelMode)
+            return FALSE;
+
+        if (Irp->Tail.Overlay.Thread != NULL)
+            Process = IoThreadToProcess(Irp->Tail.Overlay.Thread);
+    }
+
+    if (Process == NULL)
+        Process = PsGetCurrentProcess();
+
+    return PsGetProcessMachine(Process) == IMAGE_FILE_MACHINE_I386;
 }
 #endif
 

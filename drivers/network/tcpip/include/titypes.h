@@ -320,6 +320,7 @@ typedef struct _TI_QUERY_CONTEXT {
     ULONG UserOutputLength;      /* original user-mode output length */
     PVOID KernelInputBuffer;     /* kernel-pool copy of input */
     PVOID KernelOutputBuffer;    /* kernel-pool buffer for output */
+    ULONG UserContextOffset;
 } TI_QUERY_CONTEXT, *PTI_QUERY_CONTEXT;
 
 /* EOF */
