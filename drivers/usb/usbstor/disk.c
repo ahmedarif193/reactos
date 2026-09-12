@@ -284,7 +284,7 @@ USBSTOR_HandleInternalDeviceControl(
             // add the request
             if (!USBSTOR_QueueAddIrp(PDODeviceExtension->LowerDeviceObject, Irp))
             {
-                IoStartPacket(PDODeviceExtension->LowerDeviceObject, Irp, &Request->QueueSortKey, USBSTOR_CancelIo);
+                IoStartPacket(PDODeviceExtension->LowerDeviceObject, Irp, &Request->QueueSortKey, NULL);
             }
 
             return STATUS_PENDING;

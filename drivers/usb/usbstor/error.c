@@ -76,9 +76,28 @@ USBSTOR_ResetPipeWorkItemRoutine(
 {
     PFDO_DEVICE_EXTENSION FDODeviceExtension = (PFDO_DEVICE_EXTENSION)Ctx;
     PIRP_CONTEXT Context = &FDODeviceExtension->CurrentIrpContext;
+    NTSTATUS Status;
 
     // clear stall on the corresponding pipe
-    (VOID)USBSTOR_ResetPipeWithHandle(FDODeviceExtension->LowerDeviceObject, Context->Urb.UrbBulkOrInterruptTransfer.PipeHandle);
+    Status = USBSTOR_ResetPipeWithHandle(FDODeviceExtension->LowerDeviceObject, Context->Urb.UrbBulkOrInterruptTransfer.PipeHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        PIRP Irp = Context->Irp;
+        PIO_STACK_LOCATION IoStack = IoGetCurrentIrpStackLocation(Irp);
+        PSCSI_REQUEST_BLOCK Request = FDODeviceExtension->ActiveSrb;
+
+        /* Do not issue a CSW while the pipe is still halted or its host and
+         * device protocol state differ. Restore the original SRB if this
+         * was auto-sense, then restart through full BOT reset recovery. */
+        IoStack->Parameters.Scsi.Srb = Request;
+        Request->SrbStatus = SRB_STATUS_BUS_RESET;
+        Irp->IoStatus.Status = STATUS_IO_DEVICE_ERROR;
+        Irp->IoStatus.Information = 0;
+        USBSTOR_QueueTerminateRequest(FdoDevice, Irp, TRUE);
+        USBSTOR_QueueResetDevice(FDODeviceExtension);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return;
+    }
 
     // now resend the csw as the stall got cleared
     USBSTOR_SendCSWRequest(FDODeviceExtension, Context->Irp);
@@ -93,7 +112,6 @@ USBSTOR_ResetDeviceWorkItemRoutine(
     PFDO_DEVICE_EXTENSION FDODeviceExtension;
     UINT32 ix;
     NTSTATUS Status;
-    KIRQL OldIrql;
 
     DPRINT("USBSTOR_ResetDeviceWorkItemRoutine\n");
 
@@ -119,11 +137,7 @@ USBSTOR_ResetDeviceWorkItemRoutine(
         }
     }
 
-    KeAcquireSpinLock(&FDODeviceExtension->CommonLock, &OldIrql);
-    FDODeviceExtension->Flags &= ~USBSTOR_FDO_FLAGS_DEVICE_RESETTING;
-    KeReleaseSpinLock(&FDODeviceExtension->CommonLock, OldIrql);
-
-    USBSTOR_QueueNextRequest(FdoDevice);
+    USBSTOR_QueueEndReset(FdoDevice, Status);
 }
 
 VOID
@@ -144,13 +158,9 @@ NTAPI
 USBSTOR_QueueResetDevice(
     IN PFDO_DEVICE_EXTENSION FDODeviceExtension)
 {
-    KIRQL OldIrql;
-
     DPRINT("USBSTOR_QueueResetDevice\n");
 
-    KeAcquireSpinLock(&FDODeviceExtension->CommonLock, &OldIrql);
-    FDODeviceExtension->Flags |= USBSTOR_FDO_FLAGS_DEVICE_RESETTING;
-    KeReleaseSpinLock(&FDODeviceExtension->CommonLock, OldIrql);
+    /* QueueTerminateRequest freezes submissions before releasing ActiveSrb. */
 
     IoQueueWorkItem(FDODeviceExtension->ResetDeviceWorkItem,
                     USBSTOR_ResetDeviceWorkItemRoutine,
