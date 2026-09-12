@@ -1679,6 +1679,8 @@ LdrpInsertMemoryTableEntry(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
     /* Insert into other lists */
     InsertTailList(&PebData->InLoadOrderModuleList, &LdrEntry->InLoadOrderLinks);
     InsertTailList(&PebData->InMemoryOrderModuleList, &LdrEntry->InMemoryOrderLinks);
+
+    LdrpGuardInvalidateModuleCache();
 }
 
 VOID
@@ -1687,6 +1689,8 @@ LdrpFinalizeAndDeallocateDataTableEntry(IN PLDR_DATA_TABLE_ENTRY Entry)
 {
     /* Sanity check */
     ASSERT(Entry != NULL);
+
+    LdrpGuardInvalidateModuleCache();
 
     /* Release the activation context if it exists and wasn't already released */
     if ((Entry->EntryPointActivationContext) &&
