@@ -2869,8 +2869,18 @@ Enum:
                     !WorkItem->IsRequestErrors &&
                     HubExtension->Port == Port)
                 {
-                    PortStatus = HubExtension->PortStatus;
-                    Status = STATUS_SUCCESS;
+                    /* A reset may finish while this worker waits for the
+                     * hub semaphore. Preserve the notification's change bits,
+                     * but use current status to decide whether to remove it. */
+                    Status = USBH_SyncGetPortStatus(HubExtension,
+                                                    Port,
+                                                    &PortStatus,
+                                                    sizeof(PortStatus));
+                    if (NT_SUCCESS(Status))
+                    {
+                        PortStatus.PortChange.AsUshort16 |=
+                            HubExtension->PortStatus.PortChange.AsUshort16;
+                    }
                     UseCachedStatus = TRUE;
                 }
                 else
