@@ -4,7 +4,7 @@
 # Gears presentation profiling
 
 Run `wglgears_runner --profile` for one bounded capture. It runs the usual
-gears workload, closes its window after 16 seconds, and prints the report.
+gears workload, closes its window after three complete five-second samples, and prints the report.
 `glgears --profile` captures until the window is closed manually.
 The runner stops its desktop capture after the child exits, including a crash
 or forced termination, and reports any cleanup failure.
