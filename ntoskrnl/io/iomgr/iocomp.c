@@ -565,6 +565,7 @@ NtRemoveIoCompletion(IN HANDLE IoCompletionHandle,
                 /* Save values */
                 Key = Packet->KeyContext;
                 Apc = Packet->ApcContext;
+                IoStatus.Pointer = NULL;
                 IoStatus.Status = Packet->IoStatus;
                 IoStatus.Information = Packet->IoStatusInformation;
 
@@ -736,6 +737,7 @@ NtRemoveIoCompletionEx(IN HANDLE IoCompletionHandle,
             {
                 Information.KeyContext = Packet->KeyContext;
                 Information.ApcContext = Packet->ApcContext;
+                Information.IoStatusBlock.Pointer = NULL;
                 Information.IoStatusBlock.Status = Packet->IoStatus;
                 Information.IoStatusBlock.Information = Packet->IoStatusInformation;
                 IopFreeMiniPacket(Packet);
