@@ -112,43 +112,51 @@ WSPSocket(int AddressFamily,
     if (AddressFamily == AF_UNSPEC)
         AddressFamily = AF_INET;
 
-    if (SocketType == 0)
+    if (AddressFamily == AF_UNIX)
     {
-        switch (Protocol)
-        {
-        case IPPROTO_TCP:
+        if (SocketType == 0)
             SocketType = SOCK_STREAM;
-            break;
-        case IPPROTO_UDP:
-            SocketType = SOCK_DGRAM;
-            break;
-        case IPPROTO_RAW:
-            SocketType = SOCK_RAW;
-            break;
-        default:
-            TRACE("Unknown Protocol (%d). We will try SOCK_STREAM.\n", Protocol);
-            SocketType = SOCK_STREAM;
-            break;
-        }
     }
-
-    if (Protocol == 0)
+    else
     {
-        switch (SocketType)
+        if (SocketType == 0)
         {
-        case SOCK_STREAM:
-            Protocol = IPPROTO_TCP;
-            break;
-        case SOCK_DGRAM:
-            Protocol = IPPROTO_UDP;
-            break;
-        case SOCK_RAW:
-            Protocol = IPPROTO_RAW;
-            break;
-        default:
-            TRACE("Unknown SocketType (%d). We will try IPPROTO_TCP.\n", SocketType);
-            Protocol = IPPROTO_TCP;
-            break;
+            switch (Protocol)
+            {
+            case IPPROTO_TCP:
+                SocketType = SOCK_STREAM;
+                break;
+            case IPPROTO_UDP:
+                SocketType = SOCK_DGRAM;
+                break;
+            case IPPROTO_RAW:
+                SocketType = SOCK_RAW;
+                break;
+            default:
+                TRACE("Unknown Protocol (%d). We will try SOCK_STREAM.\n", Protocol);
+                SocketType = SOCK_STREAM;
+                break;
+            }
+        }
+
+        if (Protocol == 0)
+        {
+            switch (SocketType)
+            {
+            case SOCK_STREAM:
+                Protocol = IPPROTO_TCP;
+                break;
+            case SOCK_DGRAM:
+                Protocol = IPPROTO_UDP;
+                break;
+            case SOCK_RAW:
+                Protocol = IPPROTO_RAW;
+                break;
+            default:
+                TRACE("Unknown SocketType (%d). We will try IPPROTO_TCP.\n", SocketType);
+                Protocol = IPPROTO_TCP;
+                break;
+            }
         }
     }
 
@@ -210,6 +218,7 @@ WSPSocket(int AddressFamily,
         Socket->SharedData->CreateFlags = dwFlags;
         Socket->SharedData->ServiceFlags1 = lpProtocolInfo->dwServiceFlags1;
         Socket->SharedData->ProviderFlags = lpProtocolInfo->dwProviderFlags;
+        Socket->SharedData->CatalogEntryId = lpProtocolInfo->dwCatalogEntryId;
         Socket->SharedData->UseSAN = FALSE;
         Socket->SharedData->NonBlocking = FALSE; /* Sockets start blocking */
         Socket->SharedData->RecvTimeout = INFINITE;
@@ -229,8 +238,8 @@ WSPSocket(int AddressFamily,
     Socket->HelperContext = HelperDLLContext;
     Socket->HelperData = HelperData;
     Socket->HelperEvents = HelperEvents;
-    Socket->LocalAddress = &Socket->SharedData->WSLocalAddress;
-    Socket->RemoteAddress = &Socket->SharedData->WSRemoteAddress;
+    Socket->LocalAddress = (PSOCKADDR)&Socket->SharedData->WSLocalAddress;
+    Socket->RemoteAddress = (PSOCKADDR)&Socket->SharedData->WSRemoteAddress;
     Socket->SanData = NULL;
     RtlCopyMemory(&Socket->ProtocolInfo, lpProtocolInfo, sizeof(Socket->ProtocolInfo));
     if (SharedData)
@@ -698,6 +707,21 @@ WSPCloseSocket(IN SOCKET Handle,
     if (References)
         goto ok;
 
+    /* An inherited or duplicated endpoint stays alive for its other holders */
+    {
+        OBJECT_BASIC_INFORMATION ObjectInfo;
+        ULONG ReturnLength = 0;
+
+        Status = NtQueryObject((HANDLE)Handle,
+                               ObjectBasicInformation,
+                               &ObjectInfo,
+                               sizeof(ObjectInfo),
+                               &ReturnLength);
+
+        if (NT_SUCCESS(Status) && ObjectInfo.HandleCount > 1)
+            goto ok;
+    }
+
     /* Set the state to close */
     OldState = Socket->SharedData->State;
     Socket->SharedData->State = SocketClosed;
@@ -882,7 +906,7 @@ WSPBind(SOCKET Handle,
        if (lpErrno) *lpErrno = WSAEINVAL;
        return SOCKET_ERROR;
     }
-    if (!SocketAddress || SocketAddressLength < Socket->SharedData->SizeOfLocalAddress)
+    if (!SocketAddress || SocketAddressLength < Socket->HelperData->MinWSAddressLength)
     {
         if (lpErrno) *lpErrno = WSAEINVAL;
         return SOCKET_ERROR;
@@ -1476,7 +1500,7 @@ WSPAccept(
     ULONG                       CallBack;
     SOCKET                      AcceptSocket;
     PSOCKET_INFORMATION         AcceptSocketInfo;
-    UCHAR                       ReceiveBuffer[0x1A];
+    UCHAR                       ReceiveBuffer[sizeof(AFD_RECEIVED_ACCEPT_DATA) + 128];
     HANDLE                      SockEvent;
 
     /* Get the Socket Structure associate to this Socket*/
@@ -1545,7 +1569,7 @@ WSPAccept(
                                    NULL,
                                    0,
                                    ListenReceiveData,
-                                   0xA + sizeof(*ListenReceiveData));
+                                   sizeof(ReceiveBuffer));
 
     /* Wait for return */
     if (Status == STATUS_PENDING)
@@ -1648,7 +1672,7 @@ WSPAccept(
         CalleeID.buf = (PVOID)Socket->LocalAddress;
         CalleeID.len = Socket->SharedData->SizeOfLocalAddress;
 
-        RemoteAddress = HeapAlloc(GlobalHeap, 0, sizeof(*RemoteAddress));
+        RemoteAddress = HeapAlloc(GlobalHeap, 0, Socket->SharedData->SizeOfRemoteAddress);
         if (!RemoteAddress)
         {
             MsafdReturnWithErrno(STATUS_INSUFFICIENT_RESOURCES, lpErrno, 0, NULL);
@@ -1658,11 +1682,11 @@ WSPAccept(
         /* Set up Address in SOCKADDR Format */
         RtlCopyMemory (RemoteAddress,
                        &ListenReceiveData->Address.Address[0].AddressType,
-                       sizeof(*RemoteAddress));
+                       Socket->SharedData->SizeOfRemoteAddress);
 
         /* Build Caller ID */
         CallerID.buf = (PVOID)RemoteAddress;
-        CallerID.len = sizeof(*RemoteAddress);
+        CallerID.len = Socket->SharedData->SizeOfRemoteAddress;
 
         /* Build Caller Data */
         CallerData.buf = PendingData;
@@ -1818,11 +1842,16 @@ WSPAccept(
     /* Return Address in SOCKADDR FORMAT */
     if( SocketAddress )
     {
+        INT CopyLength = Socket->SharedData->SizeOfRemoteAddress;
+
+        if (SocketAddressLength && *SocketAddressLength < CopyLength)
+            CopyLength = *SocketAddressLength;
+
         RtlCopyMemory (SocketAddress,
                        &ListenReceiveData->Address.Address[0].AddressType,
-                       sizeof(*RemoteAddress));
+                       CopyLength);
         if( SocketAddressLength )
-            *SocketAddressLength = sizeof(*RemoteAddress);
+            *SocketAddressLength = CopyLength;
     }
 
     NtClose( SockEvent );
@@ -1944,7 +1973,7 @@ WSPConnect(SOCKET Handle,
     HANDLE                     SockEvent;
     int                        SocketDataLength;
     PMSAFD_CONNECT_CONTEXT     ConnectContext = NULL;
-    UCHAR                      Buffer[128];
+    UCHAR                      Buffer[256];
     BOOLEAN                    CompletionHandled = FALSE;
 
     TRACE("WSPConnect(%x)\n", Handle);
@@ -2021,7 +2050,7 @@ WSPConnect(SOCKET Handle,
 
     int connectionInfoSize = FIELD_OFFSET(AFD_CONNECT_INFO, RemoteAddress.Address[0].Address[SocketDataLength]);
 
-    if (connectionInfoSize > 128)
+    if (connectionInfoSize > (int)sizeof(Buffer))
     {
         *lpErrno = WSAEFAULT;
         return SOCKET_ERROR;
@@ -2806,7 +2835,7 @@ WSPIoctl(IN  SOCKET Handle,
         case SIO_ADDRESS_LIST_QUERY:
             if (IS_INTRESOURCE(lpvOutBuffer) || cbOutBuffer == 0)
             {
-                cbRet = sizeof(SOCKET_ADDRESS_LIST) + sizeof(Socket->SharedData->WSLocalAddress);
+                cbRet = sizeof(SOCKET_ADDRESS_LIST) + Socket->SharedData->SizeOfLocalAddress;
                 Errno = WSAEFAULT;
                 break;
             }
@@ -2816,18 +2845,18 @@ WSPIoctl(IN  SOCKET Handle,
                 break;
             }
 
-            cbRet = sizeof(SOCKET_ADDRESS_LIST) + sizeof(Socket->SharedData->WSLocalAddress);
+            cbRet = sizeof(SOCKET_ADDRESS_LIST) + Socket->SharedData->SizeOfLocalAddress;
 
             ((SOCKET_ADDRESS_LIST*)lpvOutBuffer)->iAddressCount = 1;
 
-            if (cbOutBuffer < (sizeof(SOCKET_ADDRESS_LIST) + sizeof(Socket->SharedData->WSLocalAddress)))
+            if (cbOutBuffer < (sizeof(SOCKET_ADDRESS_LIST) + Socket->SharedData->SizeOfLocalAddress))
             {
                 Errno = WSAEFAULT;
                 break;
             }
 
-            ((SOCKET_ADDRESS_LIST*)lpvOutBuffer)->Address[0].iSockaddrLength = sizeof(Socket->SharedData->WSLocalAddress);
-            ((SOCKET_ADDRESS_LIST*)lpvOutBuffer)->Address[0].lpSockaddr = &Socket->SharedData->WSLocalAddress;
+            ((SOCKET_ADDRESS_LIST*)lpvOutBuffer)->Address[0].iSockaddrLength = Socket->SharedData->SizeOfLocalAddress;
+            ((SOCKET_ADDRESS_LIST*)lpvOutBuffer)->Address[0].lpSockaddr = (PSOCKADDR)&Socket->SharedData->WSLocalAddress;
 
             Errno = NO_ERROR;
             Ret = NO_ERROR;
@@ -3907,6 +3936,193 @@ SetSocketInformation(PSOCKET_INFORMATION Socket,
     return MsafdReturnWithErrno(Status, NULL, 0, NULL);
 }
 
+static PSOCKET_INFORMATION
+SockAdoptInheritedSocket(SOCKET Handle)
+{
+    IO_STATUS_BLOCK IOSB;
+    HANDLE SockEvent;
+    NTSTATUS Status;
+    ULONG ContextSize = 0;
+    PSOCKET_CONTEXT ContextData = NULL;
+    PSOCKET_INFORMATION Socket = NULL;
+    PSOCKET_INFORMATION Existing;
+    PHELPER_DATA HelperData = NULL;
+    PVOID HelperContext = NULL;
+    DWORD HelperEvents = 0;
+    UNICODE_STRING TransportName;
+    INT AddressFamily, SocketType, Protocol;
+
+    RtlZeroMemory(&TransportName, sizeof(TransportName));
+
+    Status = NtCreateEvent(&SockEvent,
+                           EVENT_ALL_ACCESS,
+                           NULL,
+                           SynchronizationEvent,
+                           FALSE);
+    if (!NT_SUCCESS(Status))
+        return NULL;
+
+    Status = NtDeviceIoControlFile((HANDLE)Handle,
+                                   SockEvent,
+                                   NULL,
+                                   NULL,
+                                   &IOSB,
+                                   IOCTL_AFD_GET_CONTEXT_SIZE,
+                                   NULL,
+                                   0,
+                                   &ContextSize,
+                                   sizeof(ContextSize));
+    if (Status == STATUS_PENDING)
+    {
+        MsafdWaitForAlert(SockEvent);
+        Status = IOSB.Status;
+    }
+
+    if (!NT_SUCCESS(Status) || ContextSize < sizeof(SOCKET_CONTEXT))
+        goto fail;
+
+    ContextData = HeapAlloc(GlobalHeap, HEAP_ZERO_MEMORY, ContextSize);
+    if (!ContextData)
+        goto fail;
+
+    Status = NtDeviceIoControlFile((HANDLE)Handle,
+                                   SockEvent,
+                                   NULL,
+                                   NULL,
+                                   &IOSB,
+                                   IOCTL_AFD_GET_CONTEXT,
+                                   NULL,
+                                   0,
+                                   ContextData,
+                                   ContextSize);
+    if (Status == STATUS_PENDING)
+    {
+        MsafdWaitForAlert(SockEvent);
+        Status = IOSB.Status;
+    }
+
+    if (!NT_SUCCESS(Status))
+        goto fail;
+
+    AddressFamily = ContextData->SharedData.AddressFamily;
+    SocketType = ContextData->SharedData.SocketType;
+    Protocol = ContextData->SharedData.Protocol;
+
+    if (AddressFamily == 0 || SocketType == 0)
+        goto fail;
+
+    if (ContextData->SharedData.SizeOfLocalAddress <= 0 ||
+        ContextData->SharedData.SizeOfLocalAddress > (INT)sizeof(ContextData->LocalAddress))
+    {
+        goto fail;
+    }
+
+    if (SockGetTdiName(&AddressFamily,
+                       &SocketType,
+                       &Protocol,
+                       0,
+                       ContextData->SharedData.CreateFlags,
+                       &TransportName,
+                       &HelperContext,
+                       &HelperData,
+                       &HelperEvents) != NO_ERROR)
+    {
+        goto fail;
+    }
+
+    Socket = HeapAlloc(GlobalHeap, HEAP_ZERO_MEMORY, sizeof(*Socket));
+    if (!Socket)
+        goto fail;
+
+    Socket->SharedData = HeapAlloc(GlobalHeap, 0, sizeof(*Socket->SharedData));
+    if (!Socket->SharedData)
+        goto fail;
+
+    *Socket->SharedData = ContextData->SharedData;
+    Socket->SharedData->RefCount = 1;
+    Socket->SharedDataHandle = INVALID_HANDLE_VALUE;
+    Socket->Handle = Handle;
+    Socket->HelperContext = HelperContext;
+    Socket->HelperData = HelperData;
+    Socket->HelperEvents = HelperEvents;
+    Socket->LocalAddress = (PSOCKADDR)&Socket->SharedData->WSLocalAddress;
+    Socket->RemoteAddress = (PSOCKADDR)&Socket->SharedData->WSRemoteAddress;
+    Socket->SanData = NULL;
+    Socket->TrySAN = FALSE;
+    Socket->ProtocolInfo.dwCatalogEntryId = ContextData->SharedData.CatalogEntryId;
+    Socket->ProtocolInfo.dwServiceFlags1 = ContextData->SharedData.ServiceFlags1;
+    Socket->ProtocolInfo.dwProviderFlags = ContextData->SharedData.ProviderFlags;
+    Socket->ProtocolInfo.iVersion = 2;
+    Socket->ProtocolInfo.iAddressFamily = AddressFamily;
+    Socket->ProtocolInfo.iSocketType = SocketType;
+    Socket->ProtocolInfo.iProtocol = Protocol;
+    Socket->ProtocolInfo.iMaxSockAddr = HelperData->MaxWSAddressLength;
+    Socket->ProtocolInfo.iMinSockAddr = HelperData->MinWSAddressLength;
+
+    if (ContextData->SharedData.CatalogEntryId == 0)
+    {
+        ERR("Inherited socket %p has no catalog entry id\n", (PVOID)Handle);
+        goto fail;
+    }
+
+    RtlCopyMemory(Socket->LocalAddress,
+                  &ContextData->LocalAddress,
+                  ContextData->SharedData.SizeOfLocalAddress);
+    RtlCopyMemory(Socket->RemoteAddress,
+                  &ContextData->RemoteAddress,
+                  min(ContextData->SharedData.SizeOfRemoteAddress,
+                      (INT)sizeof(ContextData->RemoteAddress)));
+
+    EnterCriticalSection(&SocketListLock);
+
+    Existing = SocketListHead;
+    while (Existing)
+    {
+        if (Existing->Handle == Handle)
+            break;
+        Existing = Existing->NextSocket;
+    }
+
+    if (Existing)
+    {
+        LeaveCriticalSection(&SocketListLock);
+        HeapFree(GlobalHeap, 0, Socket->SharedData);
+        HeapFree(GlobalHeap, 0, Socket);
+        Socket = Existing;
+    }
+    else
+    {
+        Socket->NextSocket = SocketListHead;
+        SocketListHead = Socket;
+        LeaveCriticalSection(&SocketListLock);
+    }
+
+    if (TransportName.Buffer)
+        HeapFree(GetProcessHeap(), 0, TransportName.Buffer);
+
+    HeapFree(GlobalHeap, 0, ContextData);
+    NtClose(SockEvent);
+
+    return Socket;
+
+fail:
+    if (TransportName.Buffer)
+        HeapFree(GetProcessHeap(), 0, TransportName.Buffer);
+
+    if (Socket && Socket->SharedData)
+        HeapFree(GlobalHeap, 0, Socket->SharedData);
+
+    if (Socket)
+        HeapFree(GlobalHeap, 0, Socket);
+
+    if (ContextData)
+        HeapFree(GlobalHeap, 0, ContextData);
+
+    NtClose(SockEvent);
+
+    return NULL;
+}
+
 PSOCKET_INFORMATION
 GetSocketStructure(SOCKET Handle)
 {
@@ -3928,7 +4144,7 @@ GetSocketStructure(SOCKET Handle)
 
     LeaveCriticalSection(&SocketListLock);
 
-    return NULL;
+    return SockAdoptInheritedSocket(Handle);
 }
 
 int CreateContext(PSOCKET_INFORMATION Socket)
@@ -3952,10 +4168,10 @@ int CreateContext(PSOCKET_INFORMATION Socket)
     ContextData.SizeOfHelperData = 0;
     RtlCopyMemory (&ContextData.LocalAddress,
                    Socket->LocalAddress,
-                   Socket->SharedData->SizeOfLocalAddress);
+                   min(Socket->SharedData->SizeOfLocalAddress, sizeof(ContextData.LocalAddress)));
     RtlCopyMemory (&ContextData.RemoteAddress,
                    Socket->RemoteAddress,
-                   Socket->SharedData->SizeOfRemoteAddress);
+                   min(Socket->SharedData->SizeOfRemoteAddress, sizeof(ContextData.RemoteAddress)));
 
     /* Send IOCTL */
     Status = NtDeviceIoControlFile((HANDLE)Socket->Handle,
