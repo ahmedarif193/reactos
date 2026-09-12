@@ -809,6 +809,8 @@ EarlyQuit:
     MmPagingFile[MmNumberOfPagingFiles] = PagingFile;
     MmNumberOfPagingFiles++;
     MiFreeSwapPages = MiFreeSwapPages + PagingFile->FreeSpace;
+    InterlockedExchangeAddSizeT(&MmTotalCommitLimit, PagingFile->FreeSpace);
+    InterlockedExchangeAddSizeT(&MmTotalCommitLimitMaximum, PagingFile->MaximumSize);
     KeReleaseGuardedMutex(&MmPageFileCreationLock);
 
     MmSwapSpaceMessage = FALSE;
