@@ -12512,15 +12512,11 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
 {
     PXHCI_EXTENSION Extension = MiniPortExtension;
     PXHCI_ENDPOINT XhciEndpoint = Endpoint;
-    PXHCI_DEVICE_SLOT Slot;
-    MPSTATUS Status;
     KIRQL CurrentIrql;
     UNREFERENCED_PARAMETER(IsDoNotCallMiniport);
 
     if (!Extension || !XhciEndpoint)
         return;
-
-    Slot = XhciEndpoint->Slot;
 
 #if DBG
     if (XhciEndpoint->SlotId == 1 && (XhciEndpoint->EndpointId == 3 || XhciEndpoint->EndpointId == 4))
@@ -12598,45 +12594,8 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
     if (XhciEndpoint->StreamsEnabled)
         XHCI_FreeStreamResources(XhciEndpoint);
 
-    /*
-     * Do not disable a slot from the port-status-change event handler. That
-     * handler runs at DISPATCH_LEVEL, where command waits are limited to a 5 ms
-     * busy-poll and require reentrant servicing of the event ring. It also runs
-     * before USBPORT has aborted and closed the device's pipes.
-     *
-     * USBPORT closes the default pipe last during device removal. Disable the
-     * slot here, at PASSIVE_LEVEL, after all other endpoint teardown is done.
-     */
-    if (XhciEndpoint->DefaultControl &&
-        Slot &&
-        Slot->InUse &&
-        InterlockedCompareExchange(&Slot->DetachPending, 0, 0) != 0 &&
-        !Slot->DisablePending)
-    {
-        Slot->DisablePending = TRUE;
-        DPRINT1("usbxhci: closing default endpoint, disabling slot %u\n",
-                Slot->SlotId);
-
-        Status = XHCI_SendCommand(Extension,
-                                  XHCI_TRB_TYPE_DISABLE_SLOT,
-                                  0,
-                                  0,
-                                  XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
-                                  XHCI_COMMAND_TIMEOUT_MS,
-                                  FALSE,
-                                  NULL,
-                                  NULL);
-        if (Status != MP_STATUS_SUCCESS)
-        {
-            DPRINT1("usbxhci: disable slot %u on default endpoint close failed status=%lu\n",
-                    Slot->SlotId,
-                    Status);
-
-            if (!Extension->FatalError)
-                Slot->DisablePending = FALSE;
-        }
-    }
-
+    /* USBPORT_ReopenPipe also closes EP0 while updating its packet size.
+     * Slot retirement belongs to the explicit RemoveUsbDevice callback. */
     XhciEndpoint->Slot = NULL;
     {
         KIRQL OldIrql;
