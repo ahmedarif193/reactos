@@ -203,12 +203,13 @@ static ULONG
 Dwc2EndpointDataCapacity(
     _In_ ULONG TransferType)
 {
-    return TransferType == USBPORT_TRANSFER_TYPE_BULK ? DWC2_BULK_TRANSFER_SIZE : DWC2_SMALL_TRANSFER_SIZE;
+    return TransferType == USBPORT_TRANSFER_TYPE_BULK ? DWC2_BULK_BUFFER_SIZE : DWC2_SMALL_TRANSFER_SIZE;
 }
 
 static ULONG
 Dwc2CopySgToBuffer(
     _In_ PUSBPORT_SCATTER_GATHER_LIST SgList,
+    _In_ ULONG TransferOffset,
     _Out_writes_bytes_(BufferLength) PVOID Buffer,
     _In_ ULONG BufferLength)
 {
@@ -229,13 +230,22 @@ Dwc2CopySgToBuffer(
         ULONG Offset = SgList->SgElement[Index].SgOffset;
         ULONG Length = SgList->SgElement[Index].SgTransferLength;
 
-        if (Offset >= BufferLength)
+        if (TransferOffset > Offset)
+        {
+            ULONG Skip = TransferOffset - Offset;
+            if (Skip >= Length)
+                continue;
+            Length -= Skip;
+            Offset = TransferOffset;
+        }
+
+        if (Offset - TransferOffset >= BufferLength)
             break;
 
-        if (Length > BufferLength - Offset)
-            Length = BufferLength - Offset;
+        if (Length > BufferLength - (Offset - TransferOffset))
+            Length = BufferLength - (Offset - TransferOffset);
 
-        RtlCopyMemory((PUCHAR)Buffer + Offset, Base + Offset, Length);
+        RtlCopyMemory((PUCHAR)Buffer + (Offset - TransferOffset), Base + Offset, Length);
         Copied += Length;
     }
 
@@ -245,6 +255,7 @@ Dwc2CopySgToBuffer(
 static ULONG
 Dwc2CopyBufferToSg(
     _In_ PUSBPORT_SCATTER_GATHER_LIST SgList,
+    _In_ ULONG TransferOffset,
     _In_reads_bytes_(BufferLength) const VOID *Buffer,
     _In_ ULONG BufferLength)
 {
@@ -265,17 +276,48 @@ Dwc2CopyBufferToSg(
         ULONG Offset = SgList->SgElement[Index].SgOffset;
         ULONG Length = SgList->SgElement[Index].SgTransferLength;
 
-        if (Offset >= BufferLength)
+        if (TransferOffset > Offset)
+        {
+            ULONG Skip = TransferOffset - Offset;
+            if (Skip >= Length)
+                continue;
+            Length -= Skip;
+            Offset = TransferOffset;
+        }
+
+        if (Offset - TransferOffset >= BufferLength)
             break;
 
-        if (Length > BufferLength - Offset)
-            Length = BufferLength - Offset;
+        if (Length > BufferLength - (Offset - TransferOffset))
+            Length = BufferLength - (Offset - TransferOffset);
 
-        RtlCopyMemory(Base + Offset, (const PUCHAR)Buffer + Offset, Length);
+        RtlCopyMemory(Base + Offset, (const PUCHAR)Buffer + (Offset - TransferOffset), Length);
         Copied += Length;
     }
 
     return Copied;
+}
+
+static BOOLEAN
+Dwc2AdvanceDataTransfer(
+    _In_ PDWC2_TRANSFER Transfer,
+    _In_ ULONG ActualLength)
+{
+    PDWC2_ENDPOINT Endpoint = Transfer->Endpoint;
+
+    if (ActualLength > Transfer->Parameters->TransferBufferLength - Transfer->BytesTransferred)
+        return FALSE;
+
+    /* Save received bulk data before the next channel enable reuses the buffer. */
+    if (Transfer->DirectionIn && ActualLength && Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_BULK)
+    {
+        KeMemoryBarrier();
+        if (Dwc2CopyBufferToSg(Transfer->SgList, Transfer->BytesTransferred, (PUCHAR)Endpoint->BufferVA + DWC2_SETUP_BUFFER_SIZE, ActualLength) != ActualLength)
+            return FALSE;
+    }
+
+    Transfer->BytesTransferred += ActualLength;
+    return TRUE;
 }
 
 static ULONG
@@ -1004,12 +1046,26 @@ Dwc2ProgramStage(
         MaximumStageLength = PacketSize * 0x3FF;
         if (MaximumStageLength > DWC2_HCTSIZ_XFERSIZE_MASK)
             MaximumStageLength = DWC2_HCTSIZ_XFERSIZE_MASK;
+        if (Properties->TransferType == USBPORT_TRANSFER_TYPE_BULK && MaximumStageLength > DWC2_BULK_BUFFER_SIZE)
+            MaximumStageLength = (DWC2_BULK_BUFFER_SIZE / PacketSize) * PacketSize;
 
         TransferSize = Remaining;
         if (TransferSize > MaximumStageLength)
             TransferSize = MaximumStageLength;
 
-        DmaAddress = Endpoint->BufferPA + DWC2_SETUP_BUFFER_SIZE + Transfer->BytesTransferred;
+        DmaAddress = Endpoint->BufferPA + DWC2_SETUP_BUFFER_SIZE;
+        if (Properties->TransferType == USBPORT_TRANSFER_TYPE_BULK)
+        {
+            if (!DirectionIn && Dwc2CopySgToBuffer(Transfer->SgList, Transfer->BytesTransferred, (PUCHAR)Endpoint->BufferVA + DWC2_SETUP_BUFFER_SIZE, TransferSize) != TransferSize)
+            {
+                DPRINT1("[DWC2] OUT bounce copy failed offset=%lu length=%lu\n", Transfer->BytesTransferred, TransferSize);
+                return FALSE;
+            }
+        }
+        else
+        {
+            DmaAddress += Transfer->BytesTransferred;
+        }
         PacketCount = TransferSize ? (TransferSize + PacketSize - 1) / PacketSize : 1;
         Pid = Transfer->DataToggle ? DWC2_HCTSIZ_PID_DATA1 : DWC2_HCTSIZ_PID_DATA0;
     }
@@ -1336,7 +1392,11 @@ Dwc2ProcessChannel(
                     ActualLength = DmaProgress;
                 TransferredPackets = ActualLength / Endpoint->Properties.MaxPacketSize;
                 ActualLength = TransferredPackets * Endpoint->Properties.MaxPacketSize;
-                Transfer->BytesTransferred += ActualLength;
+                if (!Dwc2AdvanceDataTransfer(Transfer, ActualLength))
+                {
+                    Dwc2FinishTransfer(Extension, Transfer, USBD_STATUS_DATA_BUFFER_ERROR);
+                    return;
+                }
                 if (TransferredPackets & 1)
                     Transfer->DataToggle ^= 1;
             }
@@ -1457,7 +1517,11 @@ Dwc2ProcessChannel(
 
     if (Transfer->Stage == Dwc2StageData)
     {
-        Transfer->BytesTransferred += ActualLength;
+        if (!Dwc2AdvanceDataTransfer(Transfer, ActualLength))
+        {
+            Dwc2FinishTransfer(Extension, Transfer, USBD_STATUS_DATA_BUFFER_ERROR);
+            return;
+        }
         if (TransferredPackets & 1)
             Transfer->DataToggle ^= 1;
 
@@ -1646,8 +1710,9 @@ Dwc2QueryEndpointRequirements(
 
     if (Properties->TransferType != USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
     {
-        Requirements->MaxTransferSize = Dwc2EndpointDataCapacity(Properties->TransferType);
-        Requirements->HeaderBufferSize = DWC2_SETUP_BUFFER_SIZE + Requirements->MaxTransferSize;
+        /* Keep large requests in the miniport, but bounce only one chunk at a time. */
+        Requirements->MaxTransferSize = Properties->TransferType == USBPORT_TRANSFER_TYPE_BULK ? DWC2_BULK_TRANSFER_SIZE : DWC2_SMALL_TRANSFER_SIZE;
+        Requirements->HeaderBufferSize = DWC2_SETUP_BUFFER_SIZE + Dwc2EndpointDataCapacity(Properties->TransferType);
     }
 }
 
@@ -1962,6 +2027,7 @@ Dwc2SubmitTransfer(
     PDWC2_ENDPOINT Endpoint = MiniportEndpoint;
     PDWC2_TRANSFER Transfer = MiniportTransfer;
     ULONG Copied;
+    ULONG MaximumTransferLength;
     KIRQL OldIrql;
 
     if (Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
@@ -1970,16 +2036,17 @@ Dwc2SubmitTransfer(
         return MP_STATUS_NOT_SUPPORTED;
     }
 
+    MaximumTransferLength = Endpoint->Properties.TransferType == USBPORT_TRANSFER_TYPE_BULK ? DWC2_BULK_TRANSFER_SIZE : Endpoint->BufferLength - DWC2_SETUP_BUFFER_SIZE;
     KeAcquireSpinLock(&Extension->Lock, &OldIrql);
     if (!Extension->Started ||
         Endpoint->Transfer ||
-        Parameters->TransferBufferLength > Endpoint->BufferLength - DWC2_SETUP_BUFFER_SIZE)
+        Parameters->TransferBufferLength > MaximumTransferLength)
     {
         DPRINT1("[DWC2] submit rejected started=%u active=%p length=%lu maximum=%lu ep=%p state=%lu\n",
                 Extension->Started,
                 Endpoint->Transfer,
                 Parameters->TransferBufferLength,
-                Endpoint->BufferLength - DWC2_SETUP_BUFFER_SIZE,
+                MaximumTransferLength,
                 Endpoint,
                 Endpoint->State);
         KeReleaseSpinLock(&Extension->Lock, OldIrql);
@@ -2000,9 +2067,9 @@ Dwc2SubmitTransfer(
     Endpoint->SubmitCount++;
     Endpoint->IdleDiagnosticLogged = FALSE;
 
-    if (!Transfer->DirectionIn && Parameters->TransferBufferLength)
+    if (!Transfer->DirectionIn && Parameters->TransferBufferLength && Endpoint->Properties.TransferType != USBPORT_TRANSFER_TYPE_BULK)
     {
-        Copied = Dwc2CopySgToBuffer(SgList, (PUCHAR)Endpoint->BufferVA + DWC2_SETUP_BUFFER_SIZE, Parameters->TransferBufferLength);
+        Copied = Dwc2CopySgToBuffer(SgList, 0, (PUCHAR)Endpoint->BufferVA + DWC2_SETUP_BUFFER_SIZE, Parameters->TransferBufferLength);
         if (Copied != Parameters->TransferBufferLength)
         {
             Endpoint->Transfer = NULL;
@@ -2106,10 +2173,10 @@ Dwc2PollEndpoint(
         return;
     }
 
-    if (Transfer->DirectionIn && Transfer->BytesTransferred && Transfer->UsbdStatus == USBD_STATUS_SUCCESS)
+    if (Transfer->DirectionIn && Transfer->BytesTransferred && Transfer->UsbdStatus == USBD_STATUS_SUCCESS && Endpoint->Properties.TransferType != USBPORT_TRANSFER_TYPE_BULK)
     {
         KeMemoryBarrier();
-        Copied = Dwc2CopyBufferToSg(Transfer->SgList, (PUCHAR)Endpoint->BufferVA + DWC2_SETUP_BUFFER_SIZE, Transfer->BytesTransferred);
+        Copied = Dwc2CopyBufferToSg(Transfer->SgList, 0, (PUCHAR)Endpoint->BufferVA + DWC2_SETUP_BUFFER_SIZE, Transfer->BytesTransferred);
         if (Copied != Transfer->BytesTransferred)
         {
             DPRINT1("[DWC2] IN bounce copy failed endpoint=%p transfer=%p copied=%lu expected=%lu sg=%p elements=%lu mapped=%p\n",

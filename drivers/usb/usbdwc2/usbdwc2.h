@@ -20,6 +20,7 @@
 #define DWC2_INVALID_CHANNEL                   0xFF
 #define DWC2_SETUP_BUFFER_SIZE                 64
 #define DWC2_BULK_TRANSFER_SIZE                0x40000
+#define DWC2_BULK_BUFFER_SIZE                  0x1000
 #define DWC2_SMALL_TRANSFER_SIZE               0x1000
 #define DWC2_HANG_DIAGNOSTIC_INTERVAL          2500000ULL
 #define DWC2_WEDGE_RECOVERY_INTERVAL           20000000ULL
