@@ -1,5 +1,6 @@
 
 add_subdirectory(afd)
+add_subdirectory(afunix)
 add_subdirectory(dd)
 add_subdirectory(ndis)
 add_subdirectory(ndisuio)
