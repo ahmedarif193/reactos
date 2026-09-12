@@ -13,6 +13,8 @@ set(COMPAT_RUNTIME_MODULES
     advpack
     apphelp
     appxalluserstore
+    authz
+    avicap32
     avrt
     bcp47langs
     bcrypt
@@ -30,6 +32,18 @@ set(COMPAT_RUNTIME_MODULES
     cryptui
     d3dwine
     dbghelp
+    d3d10
+    d3d10_1
+    d3d10core
+    d3d11
+    d3d12
+    d3d8
+    d3d9
+    d2d1
+    d3dcompiler_39
+    d3dcompiler_43
+    d3dcompiler_47
+    dxdiagn
     dcomp
     ddraw
     devmgr
@@ -42,6 +56,7 @@ set(COMPAT_RUNTIME_MODULES
     dwrite
     dxgi
     fmifs
+    fontsub
     gdi32
     gdi32_vista
     gdiplus
@@ -80,6 +95,7 @@ set(COMPAT_RUNTIME_MODULES
     normaliz
     nsi
     ntdll_vista
+    ntobjshex
     odbccp32
     ole32
     oleacc
@@ -131,12 +147,15 @@ set(COMPAT_RUNTIME_MODULES
     ws2_32
     ws2help
     wshtcpip
+    wshunix
+    wtsapi32
     wsock32
     xinput1_1
     xinput1_2
     xinput1_3
     xinput1_4
-    xinput9_1_0)
+    xinput9_1_0
+    xmllite)
 
 # These targets share an output basename with a regular module. Package them
 # only under these aliases so they cannot overwrite the regular DLL.
