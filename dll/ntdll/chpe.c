@@ -107,6 +107,8 @@ typedef struct _IMAGE_CHPE_RANGE_ENTRY
 #define CHPE_PEB_EC_CODE_BITMAP_OFFSET 0x368
 #define CHPE_EC_CODE_BITMAP_SIZE (1ULL << 32)
 #define CHPE_EC_CODE_BITMAP_INITIAL_COMMIT_SIZE 0x100000
+#define CHPE_EC_CODE_BITMAP_PAGE_COUNT (CHPE_EC_CODE_BITMAP_SIZE / PAGE_SIZE)
+#define CHPE_EC_CODE_BITMAP_PAGE_TRACKING_SIZE (CHPE_EC_CODE_BITMAP_PAGE_COUNT / 8)
 #define CHPE_CROSS_PROCESS_WORK_LIST_SIZE 0x4000
 
 /* Exported entry/dispatch trampolines (DATA exports, resolved at load time) */
@@ -149,6 +151,7 @@ VOID NTAPI RtlCallVectoredContinueHandlers(PEXCEPTION_RECORD ExceptionRecord, PC
 static BOOLEAN ChpeEmulatorLoaded = FALSE;
 static BOOLEAN ChpeProcessInitialized = FALSE;
 static PVOID volatile ChpeEcCodeBitmap;
+static PULONGLONG volatile ChpeEcCodeBitmapCommitted;
 static CHPEV2_PROCESS_INFO64 ChpeProcessInfoStorage;
 static PCHPEV2_PROCESS_INFO64 ChpeProcessInfo;
 static PVOID ChpePreviousFlsBitmap;
@@ -315,6 +318,41 @@ ChpepEcCodeBitmapOffset(ULONG_PTR Address)
 }
 
 static
+BOOLEAN
+ChpepIsExecutableProtection(ULONG Protect)
+{
+    return (Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+}
+
+static
+NTSTATUS
+ChpepCreateEcCodeBitmapTracking(VOID)
+{
+    PVOID Tracking = NULL;
+    SIZE_T RegionSize = CHPE_EC_CODE_BITMAP_PAGE_TRACKING_SIZE;
+    NTSTATUS Status;
+    ULONG_PTR InitialPages;
+
+    if (ChpeEcCodeBitmapCommitted)
+        return STATUS_SUCCESS;
+
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Tracking, 0, &RegionSize, MEM_RESERVE | MEM_COMMIT | MEM_TOP_DOWN, PAGE_READWRITE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    InitialPages = CHPE_EC_CODE_BITMAP_INITIAL_COMMIT_SIZE / PAGE_SIZE;
+    RtlFillMemory(Tracking, InitialPages / 8, 0xFF);
+
+    if (InterlockedCompareExchangePointer((PVOID volatile *)&ChpeEcCodeBitmapCommitted, Tracking, NULL) != NULL)
+    {
+        RegionSize = 0;
+        ZwFreeVirtualMemory(NtCurrentProcess(), &Tracking, &RegionSize, MEM_RELEASE);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
 NTSTATUS
 ChpepEnsureProcessData(VOID)
 {
@@ -329,7 +367,7 @@ ChpepEnsureProcessData(VOID)
     if (ExistingBitmap)
     {
         InterlockedCompareExchangePointer(&ChpeEcCodeBitmap, ExistingBitmap, NULL);
-        return STATUS_SUCCESS;
+        return ChpepCreateEcCodeBitmapTracking();
     }
 
     /* Keep the low address range available for fixed system mappings used by
@@ -363,7 +401,31 @@ ChpepEnsureProcessData(VOID)
     }
 
     InterlockedCompareExchangePointer(&ChpeEcCodeBitmap, EcCodeBitmap, NULL);
-    return STATUS_SUCCESS;
+    return ChpepCreateEcCodeBitmapTracking();
+}
+
+static
+BOOLEAN
+ChpepIsEcCodeBitmapPageCommitted(ULONG_PTR BitmapPage)
+{
+    PULONGLONG Tracking = ChpeEcCodeBitmapCommitted;
+
+    if (!Tracking || BitmapPage >= CHPE_EC_CODE_BITMAP_PAGE_COUNT)
+        return FALSE;
+
+    return (Tracking[BitmapPage / 64] & (1ULL << (BitmapPage & 63))) != 0;
+}
+
+static
+VOID
+ChpepSetEcCodeBitmapPagesCommitted(ULONG_PTR FirstBitmapPage,
+                                   ULONG_PTR LastBitmapPage)
+{
+    PULONGLONG Tracking = ChpeEcCodeBitmapCommitted;
+    ULONG_PTR BitmapPage;
+
+    for (BitmapPage = FirstBitmapPage; BitmapPage <= LastBitmapPage; ++BitmapPage)
+        InterlockedOr64((PLONG64)&Tracking[BitmapPage / 64], 1LL << (BitmapPage & 63));
 }
 
 static
@@ -372,7 +434,7 @@ ChpepCommitEcCodeBitmapRange(ULONG_PTR Address,
                              SIZE_T Length)
 {
     PBYTE BitmapBase;
-    ULONG_PTR StartOffset, EndOffset, CommitStart, CommitEnd;
+    ULONG_PTR StartOffset, EndOffset, CommitStart, CommitEnd, FirstPage, LastPage;
     PVOID CommitBase;
     SIZE_T CommitSize;
     NTSTATUS Status;
@@ -400,12 +462,39 @@ ChpepCommitEcCodeBitmapRange(ULONG_PTR Address,
     if (CommitEnd < CommitStart)
         return FALSE;
 
-    CommitBase = BitmapBase + CommitStart;
-    CommitSize = CommitEnd - CommitStart;
-    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &CommitBase, 0, &CommitSize, MEM_COMMIT, PAGE_READWRITE);
-    if (!NT_SUCCESS(Status) && Status != STATUS_ALREADY_COMMITTED)
-        DPRINT1("CHPE: EC bitmap range commit failed, Status = 0x%08lx, Bitmap = %p, Address = %p, Length = %Iu, Offset = 0x%Ix, Commit = %p, Size = %Iu\n", Status, BitmapBase, (PVOID)Address, Length, CommitStart, CommitBase, CommitSize);
-    return NT_SUCCESS(Status) || Status == STATUS_ALREADY_COMMITTED;
+    if (!ChpeEcCodeBitmapCommitted && !NT_SUCCESS(ChpepCreateEcCodeBitmapTracking()))
+        return FALSE;
+
+    FirstPage = CommitStart >> PAGE_SHIFT;
+    LastPage = (CommitEnd >> PAGE_SHIFT) - 1;
+    while (FirstPage <= LastPage)
+    {
+        ULONG_PTR RunEnd;
+
+        if (ChpepIsEcCodeBitmapPageCommitted(FirstPage))
+        {
+            FirstPage++;
+            continue;
+        }
+
+        RunEnd = FirstPage;
+        while (RunEnd < LastPage && !ChpepIsEcCodeBitmapPageCommitted(RunEnd + 1))
+            RunEnd++;
+
+        CommitBase = BitmapBase + (FirstPage << PAGE_SHIFT);
+        CommitSize = (RunEnd - FirstPage + 1) << PAGE_SHIFT;
+        Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &CommitBase, 0, &CommitSize, MEM_COMMIT, PAGE_READWRITE);
+        if (!NT_SUCCESS(Status) && Status != STATUS_ALREADY_COMMITTED)
+        {
+            DPRINT1("CHPE: EC bitmap range commit failed, Status = 0x%08lx, Bitmap = %p, Address = %p, Length = %Iu, Commit = %p, Size = %Iu\n", Status, BitmapBase, (PVOID)Address, Length, CommitBase, CommitSize);
+            return FALSE;
+        }
+
+        ChpepSetEcCodeBitmapPagesCommitted(FirstPage, RunEnd);
+        FirstPage = RunEnd + 1;
+    }
+
+    return TRUE;
 }
 
 static
@@ -592,7 +681,8 @@ ChpepSetEcCodeRange(
     ULONG_PTR BaseAddress,
     SIZE_T Offset,
     SIZE_T Length,
-    BOOLEAN Mark)
+    BOOLEAN Mark,
+    BOOLEAN CommitBitmap)
 {
     ULONG_PTR Address, EndAddress, Page, EndPage;
 
@@ -607,16 +697,31 @@ ChpepSetEcCodeRange(
         return FALSE;
 
     EndAddress = Address + Length - 1;
-    if (!ChpepCommitEcCodeBitmapRange(Address, Length))
+    if (CommitBitmap && !ChpepCommitEcCodeBitmapRange(Address, Length))
         return FALSE;
 
     Page = Address >> PAGE_SHIFT;
     EndPage = EndAddress >> PAGE_SHIFT;
 
-    for (; Page <= EndPage; ++Page)
+    while (Page <= EndPage)
     {
-        if (!ChpepSetEcCodePage(Page, Mark))
-            return FALSE;
+        ULONG_PTR BitmapPage = Page >> (PAGE_SHIFT + 3);
+        ULONG_PTR NextBitmapPageStart = (BitmapPage + 1) << (PAGE_SHIFT + 3);
+        ULONG_PTR RunEnd = min(EndPage, NextBitmapPageStart - 1);
+
+        if (!ChpepIsEcCodeBitmapPageCommitted(BitmapPage))
+        {
+            if (CommitBitmap)
+                return FALSE;
+            Page = NextBitmapPageStart;
+            continue;
+        }
+
+        for (; Page <= RunEnd; ++Page)
+        {
+            if (!ChpepSetEcCodePage(Page, Mark))
+                return FALSE;
+        }
     }
 
     return TRUE;
@@ -628,7 +733,7 @@ ChpepMarkEcCodeRange(ULONG_PTR BaseAddress,
                      SIZE_T Offset,
                      SIZE_T Length)
 {
-    return ChpepSetEcCodeRange(BaseAddress, Offset, Length, TRUE);
+    return ChpepSetEcCodeRange(BaseAddress, Offset, Length, TRUE, TRUE);
 }
 
 static
@@ -637,7 +742,16 @@ ChpepClearEcCodeRange(ULONG_PTR BaseAddress,
                       SIZE_T Offset,
                       SIZE_T Length)
 {
-    return ChpepSetEcCodeRange(BaseAddress, Offset, Length, FALSE);
+    return ChpepSetEcCodeRange(BaseAddress, Offset, Length, FALSE, TRUE);
+}
+
+static
+BOOLEAN
+ChpepClearEcCodeRangeIfCommitted(ULONG_PTR BaseAddress,
+                                 SIZE_T Offset,
+                                 SIZE_T Length)
+{
+    return ChpepSetEcCodeRange(BaseAddress, Offset, Length, FALSE, FALSE);
 }
 
 BOOLEAN
@@ -668,7 +782,7 @@ RtlIsEcCode(ULONG_PTR CodeAddress)
     if (((Index + 1) * sizeof(ULONGLONG)) > CHPE_EC_CODE_BITMAP_SIZE)
         return FALSE;
 
-    if (!ChpepCommitEcCodeBitmapRange(CodeAddress, 1))
+    if (!ChpepIsEcCodeBitmapPageCommitted(Page >> (PAGE_SHIFT + 3)))
         return FALSE;
 
     Bitmap = (PULONGLONG)BitmapBase;
@@ -702,7 +816,7 @@ ChpepSetImageExecuteSections(PVOID ImageBase,
         if (Length > SizeOfImage - StartRva)
             Length = SizeOfImage - StartRva;
 
-        if (!ChpepSetEcCodeRange((ULONG_PTR)ImageBase, StartRva, Length, Mark))
+        if (!ChpepSetEcCodeRange((ULONG_PTR)ImageBase, StartRva, Length, Mark, TRUE))
             return FALSE;
     }
 
@@ -981,7 +1095,7 @@ ChpeRegisterArm64EcImage(PVOID ImageBase)
         if (StartRva >= SizeOfImage || Length > SizeOfImage - StartRva)
             return FALSE;
 
-        if (!ChpepSetEcCodeRange((ULONG_PTR)ImageBase, StartRva, Length, (Range[Index].StartOffset & 1) != 0))
+        if (!ChpepSetEcCodeRange((ULONG_PTR)ImageBase, StartRva, Length, (Range[Index].StartOffset & 1) != 0, TRUE))
             return FALSE;
     }
 
@@ -1279,6 +1393,7 @@ ChpepGetNativeProcedureAddress(PVOID Base,
         if (RtlIsEcCode((ULONG_PTR)*Procedure))
             return STATUS_SUCCESS;
 
+        DPRINT1("CHPE: %Z rva %Ix is neither redirected nor EC code\n", Name, ExportRva);
         return STATUS_INVALID_IMAGE_FORMAT;
     }
 
@@ -1510,6 +1625,7 @@ ChpeInitializeThread(VOID)
     Status = ChpepEnsureCurrentCpuArea();
     if (!NT_SUCCESS(Status))
         return Status;
+
 
     Status = pChpeThreadInit();
     if (!NT_SUCCESS(Status))
@@ -2158,9 +2274,20 @@ NTAPI
 ChpeNotifyMemoryAlloc(PVOID Address, SIZE_T Size, ULONG Type,
                       ULONG Prot, BOOLEAN After, NTSTATUS Status)
 {
-    if (After && NT_SUCCESS(Status) && Address && Size &&
-        (Type & MEM_RESERVE) && ChpeEcCodeBitmap)
-        ChpepClearEcCodeRange((ULONG_PTR)Address, 0, Size);
+    if (After && NT_SUCCESS(Status) && Address && Size && ChpeEcCodeBitmap)
+    {
+        if (Type & MEM_RESERVE)
+        {
+            if (ChpepIsExecutableProtection(Prot))
+                ChpepClearEcCodeRange((ULONG_PTR)Address, 0, Size);
+            else
+                ChpepClearEcCodeRangeIfCommitted((ULONG_PTR)Address, 0, Size);
+        }
+        else if ((Type & MEM_COMMIT) && ChpepIsExecutableProtection(Prot))
+        {
+            ChpepCommitEcCodeBitmapRange((ULONG_PTR)Address, Size);
+        }
+    }
 
     if (!ChpeProcessInitialized || !pChpeNotifyMemoryAlloc)
         return;
@@ -2190,6 +2317,10 @@ NTAPI
 ChpeNotifyMemoryProtect(PVOID Address, SIZE_T Size, ULONG NewProt,
                         BOOLEAN After, NTSTATUS Status)
 {
+    if (After && NT_SUCCESS(Status) && Address && Size && ChpeEcCodeBitmap &&
+        ChpepIsExecutableProtection(NewProt))
+        ChpepCommitEcCodeBitmapRange((ULONG_PTR)Address, Size);
+
     if (!ChpeProcessInitialized || !pChpeNotifyMemoryProtect)
         return;
 
@@ -2205,7 +2336,12 @@ ChpeNotifyMapViewOfSection(PVOID Unk1, PVOID Address, PVOID Unk2,
                            SIZE_T Size, ULONG AllocType, ULONG Prot)
 {
     if (Address && Size && ChpeEcCodeBitmap)
-        ChpepClearEcCodeRange((ULONG_PTR)Address, 0, Size);
+    {
+        if (ChpepIsExecutableProtection(Prot))
+            ChpepClearEcCodeRange((ULONG_PTR)Address, 0, Size);
+        else
+            ChpepClearEcCodeRangeIfCommitted((ULONG_PTR)Address, 0, Size);
+    }
 
     if (!ChpeProcessInitialized || !pChpeNotifyMapViewOfSection)
         return STATUS_SUCCESS;
