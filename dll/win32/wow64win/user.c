@@ -2458,6 +2458,40 @@ NTSTATUS WINAPI wow64_NtUserGetClassInfoEx( UINT *args )
     return ret;
 }
 
+#ifdef __REACTOS__
+NTSTATUS WINAPI wow64_NtUserGetClassInfo( UINT *args )
+{
+    HINSTANCE instance = get_ptr( &args );
+    UNICODE_STRING32 *name32 = get_ptr( &args );
+    WNDCLASSEXW32 *wc32 = get_ptr( &args );
+    ULONG *menu_name32 = get_ptr( &args );
+    BOOL ansi = get_ulong( &args );
+
+    UNICODE_STRING name;
+    WNDCLASSEXW wc;
+    WCHAR *menu_name = NULL;
+    BOOL ret;
+
+    wc.cbSize = sizeof(wc);
+    ret = NtUserGetClassInfo( instance, unicode_str_32to64( &name, name32 ), &wc, &menu_name, ansi );
+    if (!ret) return 0;
+
+    wc32->style = wc.style;
+    wc32->lpfnWndProc = PtrToUlong( wc.lpfnWndProc );
+    wc32->cbClsExtra = wc.cbClsExtra;
+    wc32->cbWndExtra = wc.cbWndExtra;
+    wc32->hInstance = PtrToUlong( wc.hInstance );
+    wc32->hIcon = HandleToUlong( wc.hIcon );
+    wc32->hCursor = HandleToUlong( wc.hCursor );
+    wc32->hbrBackground = HandleToUlong( wc.hbrBackground );
+    wc32->lpszMenuName = PtrToUlong( wc.lpszMenuName );
+    wc32->lpszClassName = PtrToUlong( wc.lpszClassName );
+    wc32->hIconSm = HandleToUlong( wc.hIconSm );
+    if (menu_name32) *menu_name32 = PtrToUlong( menu_name );
+    return ret;
+}
+#endif
+
 NTSTATUS WINAPI wow64_NtUserGetClassName( UINT *args )
 {
     HWND hwnd = get_handle( &args );
