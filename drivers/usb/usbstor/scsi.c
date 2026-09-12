@@ -266,7 +266,7 @@ USBSTOR_CSWCompletionRoutine(
     Irp->IoStatus.Information = Request->DataTransferLength;
 
     // terminate current request
-    USBSTOR_QueueTerminateRequest(PDODeviceExtension->LowerDeviceObject, Irp);
+    USBSTOR_QueueTerminateRequest(PDODeviceExtension->LowerDeviceObject, Irp, FALSE);
     USBSTOR_QueueNextRequest(PDODeviceExtension->LowerDeviceObject);
 
     return STATUS_CONTINUE_COMPLETION;
@@ -279,7 +279,7 @@ ResetRecovery:
     Irp->IoStatus.Status = STATUS_IO_DEVICE_ERROR;
     Request->SrbStatus = SRB_STATUS_BUS_RESET;
 
-    USBSTOR_QueueTerminateRequest(PDODeviceExtension->LowerDeviceObject, Irp);
+    USBSTOR_QueueTerminateRequest(PDODeviceExtension->LowerDeviceObject, Irp, TRUE);
     USBSTOR_QueueResetDevice(FDODeviceExtension);
 
     return STATUS_CONTINUE_COMPLETION;
@@ -368,7 +368,7 @@ USBSTOR_DataCompletionRoutine(
         Irp->IoStatus.Status = STATUS_IO_DEVICE_ERROR;
         Request->SrbStatus = SRB_STATUS_BUS_RESET;
 
-        USBSTOR_QueueTerminateRequest(PDODeviceExtension->LowerDeviceObject, Irp);
+        USBSTOR_QueueTerminateRequest(PDODeviceExtension->LowerDeviceObject, Irp, TRUE);
         USBSTOR_QueueResetDevice(FDODeviceExtension);
 
         return STATUS_CONTINUE_COMPLETION;
@@ -522,7 +522,7 @@ ResetRecovery:
     Irp->IoStatus.Status = STATUS_IO_DEVICE_ERROR;
     Request->SrbStatus = SRB_STATUS_BUS_RESET;
 
-    USBSTOR_QueueTerminateRequest(PDODeviceExtension->LowerDeviceObject, Irp);
+    USBSTOR_QueueTerminateRequest(PDODeviceExtension->LowerDeviceObject, Irp, TRUE);
     USBSTOR_QueueResetDevice(FDODeviceExtension);
 
     return STATUS_CONTINUE_COMPLETION;
