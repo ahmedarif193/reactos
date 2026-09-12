@@ -289,6 +289,10 @@ VOID
 NTAPI
 LdrpFinalizeAndDeallocateDataTableEntry(IN PLDR_DATA_TABLE_ENTRY Entry);
 
+VOID
+NTAPI
+LdrpGuardInvalidateModuleCache(VOID);
+
 #if (_WIN32_WINNT >= _WIN32_WINNT_VISTA) || (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA)
 
 VOID
