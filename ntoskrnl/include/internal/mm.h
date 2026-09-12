@@ -41,6 +41,7 @@ extern PVOID KernelVerifier;
 extern MM_DRIVER_VERIFIER_DATA MmVerifierData;
 
 extern SIZE_T MmTotalCommitLimit;
+extern SIZE_T MmTotalCommitLimitMaximum;
 extern SIZE_T MmTotalCommittedPages;
 extern SIZE_T MmSharedCommit;
 extern SIZE_T MmDriverCommit;
