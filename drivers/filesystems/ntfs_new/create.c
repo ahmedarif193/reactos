@@ -1369,6 +1369,11 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     FileCB->LastAccessStampPending = NtfsShouldStampLastAccess(FileCB);
     FileCB->CreateOptions = IrpSp->Parameters.Create.Options;
     FileCB->DesiredAccess = IrpSp->Parameters.Create.SecurityContext->DesiredAccess;
+    if (IrpSp->Parameters.Create.SecurityContext->AccessState)
+    {
+        FileCB->DesiredAccess |=
+            IrpSp->Parameters.Create.SecurityContext->AccessState->PreviouslyGrantedAccess;
+    }
     FileCB->AutomaticTimestampMask =
         NtfsFileRecordGetAutomaticTimestampMask(
             CurrentFile);
