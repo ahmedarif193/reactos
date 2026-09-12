@@ -912,14 +912,24 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
         if (NT_SUCCESS(Status) &&
             USBH_PortStatusIsResetComplete(&PortStatus))
         {
-            Status = STATUS_SUCCESS;
-            break;
+            /* Check the port again after reset recovery. A SuperSpeed link
+             * can briefly disconnect while it returns to the enabled state. */
+            USBH_Wait(10);
+            Status = USBH_SyncGetPortStatus(HubExtension,
+                                            Port,
+                                            &PortStatus,
+                                            sizeof(USB_PORT_STATUS_AND_CHANGE));
+            if (NT_SUCCESS(Status) &&
+                USBH_PortStatusIsResetComplete(&PortStatus))
+            {
+                Status = STATUS_SUCCESS;
+                break;
+            }
         }
 
         ResetElapsed = (ULONG)((KeQueryInterruptTime() - ResetStartTime) / 10000);
 
         if (!NT_SUCCESS(Status) ||
-            !USBH_PortStatusIsConnected(&PortStatus) ||
             ResetElapsed >= USBHUB_RESET_PORT_TIMEOUT_MS)
         {
             DPRINT_ENUM("USBH_SyncResetPort: Port %u reset failed after %lu ms, Status=%lX, PortStatus=0x%04X, PortChange=0x%04X\n",
@@ -948,19 +958,6 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
      */
     InterlockedExchangePointer((PVOID)&HubExtension->pResetPortEvent, NULL);
 
-    Status = USBH_SyncGetPortStatus(HubExtension,
-                                    Port,
-                                    &PortStatus,
-                                    sizeof(USB_PORT_STATUS_AND_CHANGE));
-
-    if (NT_SUCCESS(Status) && !USBH_PortStatusIsResetComplete(&PortStatus))
-    {
-        DPRINT1("USBH_SyncResetPort: Port %u did not enable after reset, PortStatus=0x%04X\n",
-                Port, PortStatus.PortStatus.AsUshort16);
-        Status = STATUS_DEVICE_DATA_ERROR;
-    }
-
-    USBH_Wait(10);
     HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_RESET_PORT_LOCK;
 
 Exit:
