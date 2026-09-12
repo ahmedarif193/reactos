@@ -11333,10 +11333,10 @@ XHCI_SubmitControlTransfer(
      * Stage TRBs that need to be chained together when spanning multiple TRBs.
      */
     /*
-     * Deferred cycle bit pattern: write the Setup TRB Control WITHOUT the
+     * Deferred cycle bit pattern: write the Setup TRB with the opposite
      * cycle bit initially. This prevents the xHCI hardware from fetching
      * the Setup TRB (and racing ahead through the Link TRB) before the
-     * Data and Status TRBs are programmed. The cycle bit is set later,
+     * Data and Status TRBs are programmed. The cycle bit is published later,
      * just before ringing the doorbell, after all TRBs are ready.
      * This follows the same pattern as Linux's giveback_first_trb().
      */
@@ -11345,7 +11345,7 @@ XHCI_SubmitControlTransfer(
         ULONG SetupCycleBit = Endpoint->TransferRing.CycleState & XHCI_TRB_CYCLE;
 
         Control = (XHCI_TRB_TYPE_SETUP_STAGE << XHCI_TRB_TYPE_SHIFT) |
-                  XHCI_TRB_IDT;
+                  XHCI_TRB_IDT | (SetupCycleBit ^ XHCI_TRB_CYCLE);
 
         if (!HasDataStage)
             Control |= XHCI_TRB_TRT_NO_DATA;
@@ -11354,7 +11354,7 @@ XHCI_SubmitControlTransfer(
         else
             Control |= XHCI_TRB_TRT_OUT;
 
-        /* Write Control without cycle bit - hardware will NOT fetch this TRB yet */
+        /* Keep this TRB unowned for either producer cycle state. */
         Trb->Control = Control;
         ProgrammedRing = TRUE;
 
@@ -11604,7 +11604,7 @@ XHCI_SubmitControlTransfer(
 
         /*
          * Commit the deferred cycle bit on the Setup TRB. All other TRBs
-         * (Data Stage, Link, Status) are already fully written. Setting
+         * (Data Stage, Link, Status) are already fully written. Publishing
          * the cycle bit here makes the entire control transfer visible to
          * the hardware atomically, preventing a race where the xHCI
          * controller fetches the Setup TRB and races through the Link TRB
@@ -11616,7 +11616,8 @@ XHCI_SubmitControlTransfer(
         if (SetupTrbDeferred)
         {
             KeMemoryBarrier();
-            SetupTrbDeferred->Control |= SetupCycleBitDeferred;
+            SetupTrbDeferred->Control =
+                (SetupTrbDeferred->Control & ~XHCI_TRB_CYCLE) | SetupCycleBitDeferred;
         }
 
         if (!(TransferParameters->TransferFlags & USBPORT_TRANSFER_FLAG_DUMP))
