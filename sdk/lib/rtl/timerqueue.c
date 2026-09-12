@@ -144,7 +144,7 @@ static void timer_cleanup_callback(struct queue_timer *t)
 static VOID WINAPI timer_callback_wrapper(LPVOID p)
 {
     struct queue_timer *t = p;
-    t->callback(t->param, TRUE);
+    RtlpCallWaitOrTimerCallback(t->callback, t->param, TRUE);
     timer_cleanup_callback(t);
 }
 

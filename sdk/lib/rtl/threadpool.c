@@ -98,6 +98,24 @@ RtlpSetThreadpoolCallbackDispatcher(PRTLP_THREADPOOL_CALLBACK_DISPATCHER dispatc
     InterlockedExchangePointer((PVOID volatile *)&threadpool_callback_dispatcher, (PVOID)dispatcher);
 }
 
+VOID
+NTAPI
+RtlpCallWaitOrTimerCallback(WAITORTIMERCALLBACKFUNC Callback, PVOID Context, BOOLEAN TimerOrWaitFired)
+{
+#if defined(_M_ARM64)
+    PRTLP_THREADPOOL_CALLBACK_DISPATCHER dispatcher;
+
+    dispatcher = (PRTLP_THREADPOOL_CALLBACK_DISPATCHER)InterlockedCompareExchangePointer((PVOID volatile *)&threadpool_callback_dispatcher, NULL, NULL);
+    if (dispatcher && !RtlIsEcCode((ULONG_PTR)Callback))
+    {
+        dispatcher((PVOID)Callback, (ULONG_PTR)Context, TimerOrWaitFired, 0, 0);
+        return;
+    }
+#endif
+
+    Callback(Context, TimerOrWaitFired);
+}
+
 static void
 threadpool_call_callback(enum threadpool_callback_type type, void *callback, ULONG_PTR argument0, ULONG_PTR argument1, ULONG_PTR argument2, ULONG_PTR argument3)
 {
