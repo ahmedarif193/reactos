@@ -626,6 +626,7 @@ static WCHAR* append_hex(WCHAR* dst, const BYTE* id, const BYTE* end)
     return dst;
 }
 
+#ifndef __REACTOS__
 static BOOL image_locate_build_id_target_in_dir(struct image_file_map *fmap_link, const BYTE* id, unsigned idlen, const WCHAR *from)
 {
     size_t from_len = wcslen(from);
@@ -650,6 +651,7 @@ static BOOL image_locate_build_id_target_in_dir(struct image_file_map *fmap_link
     }
     return found;
 }
+#endif
 
 /******************************************************************
  *		image_locate_build_id_target
@@ -666,10 +668,12 @@ static struct image_file_map* image_locate_build_id_target(const BYTE* id, unsig
 
     if (!(fmap_link = HeapAlloc(GetProcessHeap(), 0, sizeof(*fmap_link))))
         return NULL;
+#ifndef __REACTOS__
     if (image_locate_build_id_target_in_dir(fmap_link, id, idlen, L"/usr/lib/debug/.build-id/"))
         return fmap_link;
     if (image_locate_build_id_target_in_dir(fmap_link, id, idlen, L"/usr/lib/.build-id/"))
         return fmap_link;
+#endif
 
     sz = GetEnvironmentVariableW(L"WINEHOMEDIR", NULL, 0);
     if (sz)
