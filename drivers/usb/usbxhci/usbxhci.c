@@ -4749,7 +4749,6 @@ XHCI_SwEnumWorker(
                 /* Update address maps with the new USB address */
                 if (ActiveEndpoint)
                     ActiveEndpoint->EndpointProperties.DeviceAddress = Work->NewAddress;
-                Slot->UsbDeviceAddress = Work->NewAddress;
                 XHCI_UpdateDeviceAddressMap(Extension, Slot, Work->NewAddress);
 
                 DPRINT("usbxhci: deferred slot %u SET_ADDRESS to addr=%u complete\n",
@@ -4765,7 +4764,6 @@ XHCI_SwEnumWorker(
                    Slot->SlotId, Slot->UsbDeviceAddress, Work->NewAddress);
             if (ActiveEndpoint)
                 ActiveEndpoint->EndpointProperties.DeviceAddress = Work->NewAddress;
-            Slot->UsbDeviceAddress = Work->NewAddress;
             XHCI_UpdateDeviceAddressMap(Extension, Slot, Work->NewAddress);
             Transfer->BytesTransferred = 0;
             Transfer->UsbdStatus = USBD_STATUS_SUCCESS;
@@ -11120,7 +11118,6 @@ XHCI_SubmitControlTransfer(
             {
                 /* Already addressed - just update address maps immediately */
                 Endpoint->EndpointProperties.DeviceAddress = Transfer->NewAddress;
-                Endpoint->Slot->UsbDeviceAddress = Transfer->NewAddress;
                 XHCI_UpdateDeviceAddressMap(Extension, Endpoint->Slot, Transfer->NewAddress);
 
                 XHCI_DBG(XHCI_TRACE_TRANSFERS,
