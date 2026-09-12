@@ -1,7 +1,7 @@
 # ARM64 Hardware Boot Media Configuration
 #
 # This file defines ARM64 platform boot file paths for build-time embedding.
-# The ARM64 rpi3 and rpi5 target profiles enable Raspberry Pi support.
+# The ARM64 profile_raspberry target profile enables Raspberry Pi support.
 
 # Save the directory where this file is located (media/boot) at include time
 set(_ARM64_BOOT_MEDIA_DIR "${CMAKE_CURRENT_LIST_DIR}")
@@ -11,15 +11,10 @@ set(ARM64_BOOT_GRAFT_POINTS "")
 set(ARM64_BOOT_FILE_DEPS "")
 
 if(ARCH STREQUAL "arm64")
-    # Raspberry Pi boot-media support is shared by all Pi profiles. Board-only
-    # driver selection remains under RPI3_SUPPORT or RPI5_SUPPORT.
+    # Both board driver sets can share an image; PnP selects the hardware.
     option(RPI_SUPPORT "Include Raspberry Pi boot files in ARM64 images" OFF)
-    option(RPI3_SUPPORT "Enable the Raspberry Pi 3 ARM64 driver profile" OFF)
-    option(RPI5_SUPPORT "Enable the Raspberry Pi 5 ARM64 driver profile" OFF)
-
-    if(RPI3_SUPPORT AND RPI5_SUPPORT)
-        message(FATAL_ERROR "ARM64: RPI3_SUPPORT and RPI5_SUPPORT are mutually exclusive")
-    endif()
+    option(RPI3_SUPPORT "Include Raspberry Pi 3 ARM64 drivers" OFF)
+    option(RPI5_SUPPORT "Include Raspberry Pi 5 ARM64 drivers" OFF)
     if((RPI3_SUPPORT OR RPI5_SUPPORT) AND NOT RPI_SUPPORT)
         message(FATAL_ERROR "ARM64: a Raspberry Pi board profile requires RPI_SUPPORT")
     endif()

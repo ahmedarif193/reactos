@@ -96,7 +96,7 @@ config FREELDR_HTTP_BOOT
     prompt "Enable HTTP boot"
     type bool
     default n
-    depends PROFILE_AMD64=lattepandamu || PROFILE_ARM64=rpi5
+    depends PROFILE_AMD64=lattepandamu || PROFILE_ARM64=profile_raspberry
     help
       Build the FreeLdr UEFI HTTP boot path: FreeLdr downloads the
       live image over HTTP and boots it as a ramdisk. Packages the
@@ -167,7 +167,7 @@ config ENABLE_RP1GEM_BENCHMARK
     prompt "Run RP1 GEM single-stream benchmark at boot"
     type bool
     default n
-    depends PROFILE_ARM64=rpi5 && FREELDR_HTTP_BOOT
+    depends PROFILE_ARM64=profile_raspberry && FREELDR_HTTP_BOOT
     help
       Run one 30-second TCP stream in each direction against the HTTP-boot
       host before reporting boot-test completion.
@@ -186,7 +186,7 @@ config ENABLE_RPI5_WIFI_BOOT_RUN
     prompt "Run RPi5 Wi-Fi diagnostics at boot"
     type bool
     default n
-    depends PROFILE_ARM64=rpi5
+    depends PROFILE_ARM64=profile_raspberry
     help
       Scan through the native WLAN stack. An optional boot_test_network.cfg can
       name a WIFI_SSID and WIFI_KEY_FILE for connection and throughput testing

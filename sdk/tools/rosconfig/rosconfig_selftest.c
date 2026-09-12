@@ -230,7 +230,7 @@ int rosconfig_self_test(void)
         "    prompt \"Enable HTTP boot\"\n"
         "    type bool\n"
         "    default n\n"
-        "    depends PROFILE_AMD64=lattepandamu || PROFILE_ARM64=rpi5\n"
+        "    depends PROFILE_AMD64=lattepandamu || PROFILE_ARM64=profile_raspberry\n"
         "endmenu\n";
     static const char included_definition[] =
         "config PROFILE_AMD64\n"
@@ -253,14 +253,14 @@ int rosconfig_self_test(void)
         "    type choice\n"
         "    var ROSCONFIG_PROFILE\n"
         "    value generic \"Generic ARM64\"\n"
-        "    value rpi3 \"Raspberry Pi 3\"\n"
-        "    value rpi5 \"Raspberry Pi 5\"\n"
+        "    value profile_raspberry \"Raspberry Pi 3/5\"\n"
         "    default generic\n"
         "    depends ARCH=arm64\n";
     static const char cache[] =
         "ENABLE=y\n"
         "LEVEL=expert\n"
         "LABEL=from cache\n"
+        "PROFILE_ARM64=rpi5\n"
         "UNKNOWN_KEEP=y\n"
         "legacy line\n";
     char definition_path[FILENAME_MAX];
@@ -368,10 +368,10 @@ int rosconfig_self_test(void)
     expect(&test, !opt_visible(http_boot), "leaving the LattePanda Mu profile hides HTTP boot");
     expect(&test, http_boot->ndeps == 2 && http_boot->deps[0].or_with_next && !http_boot->deps[1].or_with_next,
            "alternative dependency terms are parsed as one group");
-    set_value(profile_arm64, "rpi5");
+    set_value(profile_arm64, "profile_raspberry");
     expect(&test, opt_visible(http_boot), "the second alternative also exposes HTTP boot");
     set_value(profile_arm64, "rpi3");
-    expect(&test, !opt_visible(http_boot), "the Raspberry Pi 3 profile keeps unverified HTTP boot hidden");
+    expect(&test, opt_visible(http_boot), "the old Raspberry Pi 3 selection migrates to the combined profile");
     set_value(profile_arm64, "generic");
     expect(&test, !opt_visible(http_boot), "HTTP boot is hidden when no alternative holds");
     expect(&test, label->ndeps == 1 && label->deps[0].negate, "negated option dependency is parsed");
@@ -387,7 +387,7 @@ int rosconfig_self_test(void)
     expect(&test, !opt_visible(enable) && !opt_visible(level) && !opt_visible(label), "parent menu dependency is inherited");
     expect(&test, !opt_visible(profile_amd64) && opt_visible(profile_arm64), "only the selected architecture's sourced profile is visible");
     expect(&test, opt_visible(enable_rostests), "rostests remain architecture-independent in Debug mode");
-    set_value(profile_arm64, "rpi5");
+    set_value(profile_arm64, "profile_raspberry");
     set_value(arch, "i386");
     expect(&test, !opt_visible(profile_amd64) && opt_visible(profile_i386) && !opt_visible(profile_arm64), "the i386 profile is isolated from other architectures");
     set_value(arch, "amd64");
@@ -417,6 +417,10 @@ int rosconfig_self_test(void)
     expect_string(&test, enable->value, "y", "cache loads a boolean");
     expect_string(&test, level->value, "expert", "cache loads a choice");
     expect_string(&test, label->value, "from cache", "cache loads a string containing spaces");
+    expect_string(&test, profile_arm64->value, "profile_raspberry", "cache migrates the old Raspberry Pi 5 selection");
+    expect(&test, profile_arm64->nvalues == 2, "ARM64 exposes generic and one combined Raspberry Pi profile");
+    set_config_value("PROFILE_ARM64=rpi3");
+    expect_string(&test, profile_arm64->value, "profile_raspberry", "command-line settings migrate the old Raspberry Pi 3 selection");
     set_config_value("ARCH=arm64");
     expect_string(&test, arch->value, "arm64", "validated settings update cache values");
     set_config_value("ARCH=amd64");
@@ -436,7 +440,7 @@ int rosconfig_self_test(void)
     expect(&test, file_contains(generated_path, "set(LABEL \"quoted \\\"path\\\\tail\" CACHE STRING \"Display label\")"), "string values are escaped for CMake");
     expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"generic\" CACHE STRING \"Target profile\")"), "the selected architecture's generic profile is emitted");
     expect(&test, file_contains(generated_path, "set(ENABLE_ROSTESTS TRUE CACHE BOOL \"ReactOS test suite and RosAutoTest\")"), "the RosAutoTest module is emitted independently of the profile");
-    expect(&test, !file_contains(generated_path, "rpi3") && !file_contains(generated_path, "rpi5"), "a hidden architecture profile is not emitted");
+    expect(&test, !file_contains(generated_path, "profile_raspberry"), "a hidden architecture profile is not emitted");
 
     set_value(profile_amd64, "lattepandamu");
     set_value(http_boot, "y");
@@ -455,18 +459,18 @@ int rosconfig_self_test(void)
     set_value(arch, "arm64");
     set_value(profile_arm64, "rpi3");
     expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates for the Raspberry Pi 3 profile");
-    expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"rpi3\" CACHE STRING \"Target profile\")"), "the ARM64 Raspberry Pi 3 profile is emitted");
-    expect(&test, !file_contains(generated_path, "set(FREELDR_HTTP_BOOT "), "the hidden Raspberry Pi 3 HTTP boot option is not emitted");
-    set_value(profile_arm64, "rpi5");
+    expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"profile_raspberry\" CACHE STRING \"Target profile\")"), "the ARM64 combined Raspberry Pi profile is emitted");
+    expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT "), "the combined Raspberry Pi profile exposes the HTTP boot option");
+    set_value(profile_arm64, "profile_raspberry");
     set_value(http_boot, "n");
     expect(&test, !opt_visible(enable), "changed target hides an incompatible menu");
-    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates with Raspberry Pi 5 HTTP boot disabled");
-    expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"rpi5\" CACHE STRING \"Target profile\")"), "the ARM64 Raspberry Pi 5 profile is emitted");
-    expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT FALSE CACHE BOOL \"Enable HTTP boot\")"), "the Raspberry Pi 5 HTTP boot option can be disabled");
-    expect(&test, file_contains(generated_path, "set(ENABLE_ROSTESTS TRUE CACHE BOOL \"ReactOS test suite and RosAutoTest\")"), "the RosAutoTest module composes with the Raspberry Pi 5 profile");
+    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates with Raspberry Pi 3/5 HTTP boot disabled");
+    expect(&test, file_contains(generated_path, "set(ROSCONFIG_PROFILE \"profile_raspberry\" CACHE STRING \"Target profile\")"), "the ARM64 Raspberry Pi 3/5 profile is emitted");
+    expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT FALSE CACHE BOOL \"Enable HTTP boot\")"), "the Raspberry Pi 3/5 HTTP boot option can be disabled");
+    expect(&test, file_contains(generated_path, "set(ENABLE_ROSTESTS TRUE CACHE BOOL \"ReactOS test suite and RosAutoTest\")"), "the RosAutoTest module composes with the Raspberry Pi 3/5 profile");
     set_value(http_boot, "y");
-    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates with Raspberry Pi 5 HTTP boot enabled");
-    expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT TRUE CACHE BOOL \"Enable HTTP boot\")"), "the Raspberry Pi 5 HTTP boot option can be enabled");
+    expect(&test, generate_cmake(generated_path) == 0, "CMake fragment regenerates with Raspberry Pi 3/5 HTTP boot enabled");
+    expect(&test, file_contains(generated_path, "set(FREELDR_HTTP_BOOT TRUE CACHE BOOL \"Enable HTTP boot\")"), "the Raspberry Pi 3/5 HTTP boot option can be enabled");
     add_override("ARCH=amd64");
     expect(&test, opt_visible(enable), "transient overrides participate in dependency evaluation");
     expect_string(&test, config_value("ARCH"), "amd64", "transient override has value precedence");
