@@ -210,6 +210,7 @@ W32KAPI ULONG_PTR WINAPI NtUserGetCPD(HWND hwnd, UINT flags, ULONG_PTR proc);
 W32KAPI HBRUSH WINAPI NtUserGetControlBrush(HWND hwnd, HDC hdc, UINT ctlMsg);
 W32KAPI HBRUSH WINAPI NtUserGetControlColor(HWND hwndParent, HWND hwnd, HDC hdc, UINT ctlMsg);
 W32KAPI BOOL WINAPI NtUserDefSetText(HWND hwnd, ROS_LARGE_STRING64 *text);
+W32KAPI BOOL WINAPI NtUserGetClassInfo(HINSTANCE instance, UNICODE_STRING *name, WNDCLASSEXW *wc, WCHAR **menu_name, BOOL ansi);
 
 static inline PVOID
 ros_large_str_32to64(ROS_LARGE_STRING64 *str, const ROS_LARGE_STRING32 *str32)
