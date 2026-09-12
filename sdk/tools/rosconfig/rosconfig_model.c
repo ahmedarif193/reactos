@@ -77,9 +77,19 @@ static void add_option_entry(int index)
     entry->index = index;
 }
 
+static const char *canonical_value(const Option *o, const char *value)
+{
+    /* Migrate saved selections from the separate Raspberry Pi profiles. */
+    if (strcmp(o->key, "PROFILE_ARM64") == 0 &&
+        (strcmp(value, "rpi3") == 0 || strcmp(value, "rpi5") == 0))
+        return "profile_raspberry";
+    return value;
+}
+
 int choice_index(const Option *o, const char *value)
 {
     int i;
+    value = canonical_value(o, value);
     for (i = 0; i < o->nvalues; i++)
         if (strcmp(o->values[i].value, value) == 0)
             return i;
@@ -95,7 +105,7 @@ static int bool_value_ok(const Option *o, const char *v)
 void set_value(Option *o, const char *v)
 {
     free(o->value);
-    o->value = xstrdup(v);
+    o->value = xstrdup(canonical_value(o, v));
 }
 
 void set_config_value(const char *kv)
@@ -484,8 +494,8 @@ void cache_load(const char *path)
                 fprintf(stderr, "rosconfig: warning: unknown value '%s' for %s;" " using default '%s'\n", val, o->key, o->def);
                 free(val);
             } else {
-                free(o->value);
-                o->value = val;
+                set_value(o, val);
+                free(val);
             }
         }
     }

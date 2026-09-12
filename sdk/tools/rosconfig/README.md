@@ -126,7 +126,7 @@ profiles/
   apply.cmake
   amd64/{profiles.def,generic.cmake,lattepandamu.cmake}
   i386/{profiles.def,generic.cmake}
-  arm64/{profiles.def,generic.cmake,rpi3.cmake,rpi5.cmake}
+  arm64/{profiles.def,generic.cmake,profile_raspberry.cmake}
 ```
 
 Each `<variant>.cmake` declares `ROSCONFIG_PROFILE_PACKAGES`, a list of CMake
@@ -137,15 +137,17 @@ incompatible profile fails during configuration instead of producing a
 partially populated image.
 
 Every supported architecture has a `generic` default profile. ARM64 provides
-`rpi3`, which enables the native SD/SDIO, DWC2, SMSC95xx Ethernet, and
-CYW43xx Wi-Fi path together with the pinned `rpi3winsync` Windows 10 BSP
-snapshot, and `rpi5`, which enables the RP1 Ethernet, CYW43455 Wi-Fi, and
-Raspberry Pi 5 VC4 display drivers. AMD64 additionally provides
-`lattepandamu`. The Pi 5 and LattePanda Mu profiles expose the HTTP boot
+`profile_raspberry`, displayed as **Raspberry Pi 3/5**, which enables both
+boards' driver sets in one image: SD/SDIO, DWC2, SMSC95xx and RP1 Ethernet,
+CYW43xx Wi-Fi, display, OpenGL and audio, plus the pinned `rpi3winsync`
+Windows 10 BSP snapshot. Existing `rpi3` and `rpi5` selections migrate to this
+combined profile in both menuconfig and CMake. Hardware IDs retain each
+device's driver binding. AMD64 additionally provides `lattepandamu`.
+The Raspberry Pi and LattePanda Mu profiles expose the HTTP boot
 option. Enabling it from the `Boot options` menu builds the FreeLdr HTTP path,
 makes it the zero-timeout default boot entry, and packages the board's external
-UEFI network stack. Generic builds exclude these board-only payloads and
-targets.
+UEFI network stack. Generic builds keep the Pi-specific drivers and hardware
+bindings disabled.
 
 Profile-owned config values are enforced when the profile is applied, so an
 existing tree can switch profiles without retaining stale values from the old

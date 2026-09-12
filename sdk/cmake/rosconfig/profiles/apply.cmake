@@ -11,6 +11,10 @@ if(NOT DEFINED ROSCONFIG_PROFILE OR ROSCONFIG_PROFILE STREQUAL "")
     endif()
 endif()
 
+if(_rosconfig_profile_arch STREQUAL "arm64" AND ROSCONFIG_PROFILE MATCHES "^rpi[35]$")
+    set(ROSCONFIG_PROFILE "profile_raspberry" CACHE STRING "Target profile" FORCE)
+endif()
+
 if(DEFINED ROSCONFIG_PROFILE AND NOT ROSCONFIG_PROFILE STREQUAL "")
     if(_rosconfig_profile_arch STREQUAL "")
         message(FATAL_ERROR "ROSCONFIG_PROFILE requires ARCH to be selected")
