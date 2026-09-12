@@ -189,9 +189,58 @@ void Tests_Insert_And_Delete()
     ExFreePool(element);
 }
 
+static
+VOID
+TestInsertByKey(VOID)
+{
+    KDEVICE_QUEUE Queue;
+    KDEVICE_QUEUE_ENTRY Active, First, Last;
+    KIRQL OldIrql;
+    BOOLEAN Result;
+    PKDEVICE_QUEUE_ENTRY Entry;
+
+    KeInitializeDeviceQueue(&Queue);
+    RtlZeroMemory(&Active, sizeof(Active));
+    RtlZeroMemory(&First, sizeof(First));
+    RtlZeroMemory(&Last, sizeof(Last));
+
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    /* The initial packet makes the queue busy without entering the list. */
+    Active.Inserted = TRUE;
+    Result = KeInsertByKeyDeviceQueue(&Queue, &Active, 10);
+    ok_eq_bool(Result, FALSE);
+    ok_eq_bool(Active.Inserted, FALSE);
+    ok_eq_bool(Queue.Busy, TRUE);
+    ok_eq_bool(IsListEmpty(&Queue.DeviceListHead), TRUE);
+
+    Result = KeInsertByKeyDeviceQueue(&Queue, &Last, 30);
+    ok_eq_bool(Result, TRUE);
+    ok_eq_bool(Last.Inserted, TRUE);
+    Result = KeInsertByKeyDeviceQueue(&Queue, &First, 20);
+    ok_eq_bool(Result, TRUE);
+    ok_eq_bool(First.Inserted, TRUE);
+    ok_eq_pointer(Queue.DeviceListHead.Flink, &First.DeviceListEntry);
+    ok_eq_pointer(Queue.DeviceListHead.Blink, &Last.DeviceListEntry);
+
+    /* Cancellation must be able to remove a packet inserted by sort key. */
+    Result = KeRemoveEntryDeviceQueue(&Queue, &First);
+    ok_eq_bool(Result, TRUE);
+    ok_eq_bool(First.Inserted, FALSE);
+    Result = KeRemoveEntryDeviceQueue(&Queue, &First);
+    ok_eq_bool(Result, FALSE);
+    Entry = KeRemoveDeviceQueue(&Queue);
+    ok_eq_pointer(Entry, &Last);
+    ok_eq_bool(Last.Inserted, FALSE);
+    Entry = KeRemoveDeviceQueue(&Queue);
+    ok_eq_pointer(Entry, NULL);
+    ok_eq_bool(Queue.Busy, FALSE);
+    KeLowerIrql(OldIrql);
+}
+
 START_TEST(KeDeviceQueue)
 {
     Test_Initialize();
     Tests_Insert_And_Delete();
+    TestInsertByKey();
 }
 

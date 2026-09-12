@@ -138,6 +138,8 @@ KeInsertByKeyDeviceQueue(IN PKDEVICE_QUEUE DeviceQueue,
         Inserted = TRUE;
     }
 
+    DeviceQueueEntry->Inserted = Inserted;
+
     /* Release the lock */
     KiReleaseDeviceQueueLock(&DeviceLock);
 
