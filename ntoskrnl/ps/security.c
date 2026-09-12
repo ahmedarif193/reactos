@@ -144,22 +144,31 @@ PspWriteTebImpersonationInfo(IN PETHREAD Thread,
         {
             /* Check if the thread is impersonating */
             IsImpersonating = (BOOLEAN)Thread->ActiveImpersonationInfo;
-            if (IsImpersonating)
+            _SEH2_TRY
             {
-                /* Set TEB data */
+                if (IsImpersonating)
+                {
+                    /* Set TEB data */
 #if (NTDDI_VERSION < NTDDI_WIN10)
-                Teb->ImpersonationLocale = -1;
+                    Teb->ImpersonationLocale = -1;
 #endif
-                Teb->IsImpersonating = 1;
+                    Teb->IsImpersonating = 1;
+                }
+                else
+                {
+                    /* Set TEB data */
+#if (NTDDI_VERSION < NTDDI_WIN10)
+                    Teb->ImpersonationLocale = 0;
+#endif
+                    Teb->IsImpersonating = 0;
+                }
             }
-            else
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
-                /* Set TEB data */
-#if (NTDDI_VERSION < NTDDI_WIN10)
-                Teb->ImpersonationLocale = 0;
-#endif
-                Teb->IsImpersonating = 0;
+                DPRINT1("PS: could not write the impersonation info of thread %p (teb %p)\n",
+                        Thread, Teb);
             }
+            _SEH2_END;
         }
 
         /* Check if we're in a different thread */
