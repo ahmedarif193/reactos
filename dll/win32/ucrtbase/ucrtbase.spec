@@ -2360,8 +2360,8 @@
 @ cdecl fabs(double)
 @ cdecl -stub -arch=arm,arm64 fabsf(float)
 @ cdecl fclose(ptr)
-@ cdecl -stub fdim(double double)
-@ cdecl -stub fdimf(float float)
+@ cdecl fdim(double double)
+@ cdecl fdimf(float float)
 @ cdecl fdiml(double double) fdim
 @ cdecl feclearexcept(long)
 @ cdecl fegetenv(ptr)
@@ -2385,11 +2385,11 @@
 @ cdecl fma(double double double)
 @ cdecl fmaf(float float float)
 @ cdecl fmal(double double double) fma
-@ cdecl -stub fmax(double double)
-@ cdecl -stub fmaxf(float float)
+@ cdecl fmax(double double)
+@ cdecl fmaxf(float float)
 @ cdecl fmaxl(double double) fmax
-@ cdecl -stub fmin(double double)
-@ cdecl -stub fminf(float float)
+@ cdecl fmin(double double)
+@ cdecl fminf(float float)
 @ cdecl fminl(double double) fmin
 @ cdecl fmod(double double)
 @ cdecl -arch=!i386 fmodf(float float)

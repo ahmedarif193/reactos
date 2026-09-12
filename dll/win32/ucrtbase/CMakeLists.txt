@@ -26,6 +26,9 @@ add_library(ucrtbase SHARED
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/cbrtf.c
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/copysign.c
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/copysignf.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/fdim.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/fmax.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/fmin.c
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/erf.c
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/erff.c
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math/expm1.c
