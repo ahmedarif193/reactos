@@ -3750,53 +3750,12 @@ MmDoesFileHaveUserWritableReferences(IN PSECTION_OBJECT_POINTERS SectionPointer)
     PMM_SECTION_SEGMENT Segment;
     ULONG WritableReferences;
 
-    /*
-     * Disambiguate SectionPointer->DataSectionObject as in
-     * MmDisableModifiedWriteOfSection: MiGrabDataSection only ever returns a
-     * RosMm MM_SECTION_SEGMENT tagged MM_DATAFILE_SEGMENT (never an ARM3
-     * CONTROL_AREA), so the struct is never misread.
-     */
     Segment = MiGrabDataSection(SectionPointer);
     if (Segment == NULL)
-    {
-        /* No data section at all -> no references. */
         return 0;
-    }
 
-    MmLockSectionSegment(Segment);
+    WritableReferences = (ULONG)Segment->WritableUserReferences;
 
-    /*
-     * SectionCount is the number of section objects on this data segment. When
-     * the file is cached, the cache manager owns exactly one of them (its
-     * internal SEC_CACHE section from CcpAllocateSection); that one is not a user
-     * reference. SharedCacheMap != NULL means the cache holds it, so subtract it -
-     * identical bookkeeping to MmCanFileBeTruncated.
-     */
-    WritableReferences = Segment->SectionCount;
-    if ((SectionPointer->SharedCacheMap != NULL) && (WritableReferences > 0))
-    {
-        WritableReferences--;
-    }
-
-    /*
-     * Only a shared read/write data segment can dirty the file. Read-only and
-     * copy-on-write segments never write through, so report none - this mirrors
-     * the ARM3 WritableUserReferences rule (counted only for
-     * PAGE_READWRITE | PAGE_EXECUTE_READWRITE; see MiMapViewOfDataSection).
-     *
-     * NOTE: RosMm tracks protection per segment, not per reference, so a
-     * read-only user reference to a writable segment is still counted. This is
-     * the conservative direction and is the closest RosMm can get to the Win11
-     * per-view WritableUserReferences counter - flagged for verification.
-     */
-    if (!(Segment->Protection & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
-    {
-        WritableReferences = 0;
-    }
-
-    MmUnlockSectionSegment(Segment);
-
-    /* Release the reference MiGrabDataSection took. */
     MmDereferenceSegment(Segment);
 
     return WritableReferences;

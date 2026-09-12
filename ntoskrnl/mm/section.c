@@ -3826,8 +3826,14 @@ MmMapViewOfSegment(
     PMEMORY_AREA MArea;
     NTSTATUS Status;
     ULONG Granularity;
+    BOOLEAN WritesThroughToFile;
 
     ASSERT(ViewSize != 0);
+
+    WritesThroughToFile = !AsImage &&
+                          !Segment->WriteCopy &&
+                          (MmGetAddressSpaceOwner(AddressSpace) != NULL) &&
+                          ((Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) != 0);
 
     if (Segment->WriteCopy)
     {
@@ -3879,6 +3885,11 @@ MmMapViewOfSegment(
 
     MArea->SectionData.Segment = Segment;
     MArea->SectionData.ViewOffset = ViewOffset;
+    MArea->SectionData.WritableUserReference = WritesThroughToFile;
+    if (WritesThroughToFile)
+    {
+        InterlockedIncrement(&Segment->WritableUserReferences);
+    }
     if (AsImage)
     {
         MArea->VadNode.u.VadFlags.VadType = VadImageMap;
@@ -4004,6 +4015,12 @@ MmUnmapViewOfSegment(PMMSUPPORT AddressSpace,
         return Status;
     }
 #endif
+
+    if (MemoryArea->SectionData.WritableUserReference)
+    {
+        MemoryArea->SectionData.WritableUserReference = FALSE;
+        InterlockedDecrement(&Segment->WritableUserReferences);
+    }
 
     MemoryArea->DeleteInProgress = TRUE;
 
