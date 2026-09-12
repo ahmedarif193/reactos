@@ -6340,7 +6340,7 @@ ErrorExit:
 
     if (NewDeviceHandle)
     {
-        Status = USBD_RemoveDeviceEx(HubExtension, NewDeviceHandle, 0);
+        USBD_RemoveDeviceEx(HubExtension, NewDeviceHandle, 0);
     }
 
 Exit:
