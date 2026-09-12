@@ -215,3 +215,129 @@ WSAEventSelect(IN SOCKET s,
     SetLastError(ErrorCode);
     return SOCKET_ERROR;
 }
+
+INT
+WSAAPI
+WSAPoll(IN OUT LPWSAPOLLFD fdArray,
+        IN ULONG fds,
+        IN INT timeout)
+{
+    struct timeval TimeValue;
+    struct timeval *TimeOut;
+    LPFD_SET ReadSet = NULL;
+    LPFD_SET WriteSet = NULL;
+    LPFD_SET ExceptSet = NULL;
+    SIZE_T SetSize;
+    ULONG Index;
+    ULONG Valid = 0;
+    INT Status;
+    INT Result = 0;
+    INT ErrorCode;
+
+    ErrorCode = WsQuickProlog();
+    if (ErrorCode != ERROR_SUCCESS)
+    {
+        SetLastError(ErrorCode);
+        return SOCKET_ERROR;
+    }
+
+    if (fdArray == NULL || fds == 0)
+    {
+        SetLastError(WSAEINVAL);
+        return SOCKET_ERROR;
+    }
+
+    SetSize = FIELD_OFFSET(FD_SET, fd_array) + (SIZE_T)fds * sizeof(SOCKET);
+    ReadSet = HeapAlloc(WsSockHeap, HEAP_ZERO_MEMORY, SetSize);
+    WriteSet = HeapAlloc(WsSockHeap, HEAP_ZERO_MEMORY, SetSize);
+    ExceptSet = HeapAlloc(WsSockHeap, HEAP_ZERO_MEMORY, SetSize);
+
+    if (ReadSet == NULL || WriteSet == NULL || ExceptSet == NULL)
+    {
+        if (ReadSet) HeapFree(WsSockHeap, 0, ReadSet);
+        if (WriteSet) HeapFree(WsSockHeap, 0, WriteSet);
+        if (ExceptSet) HeapFree(WsSockHeap, 0, ExceptSet);
+        SetLastError(WSAENOBUFS);
+        return SOCKET_ERROR;
+    }
+
+    for (Index = 0; Index < fds; Index++)
+    {
+        fdArray[Index].revents = 0;
+
+        if (fdArray[Index].fd == INVALID_SOCKET)
+            continue;
+
+        Valid++;
+
+        if (fdArray[Index].events & (POLLRDNORM | POLLRDBAND))
+            ReadSet->fd_array[ReadSet->fd_count++] = fdArray[Index].fd;
+
+        if (fdArray[Index].events & POLLWRNORM)
+            WriteSet->fd_array[WriteSet->fd_count++] = fdArray[Index].fd;
+
+        ExceptSet->fd_array[ExceptSet->fd_count++] = fdArray[Index].fd;
+    }
+
+    if (Valid == 0)
+    {
+        HeapFree(WsSockHeap, 0, ReadSet);
+        HeapFree(WsSockHeap, 0, WriteSet);
+        HeapFree(WsSockHeap, 0, ExceptSet);
+        SetLastError(WSAEINVAL);
+        return SOCKET_ERROR;
+    }
+
+    if (timeout < 0)
+    {
+        TimeOut = NULL;
+    }
+    else
+    {
+        TimeValue.tv_sec = timeout / 1000;
+        TimeValue.tv_usec = (timeout % 1000) * 1000;
+        TimeOut = &TimeValue;
+    }
+
+    Status = select(0,
+                    ReadSet->fd_count ? ReadSet : NULL,
+                    WriteSet->fd_count ? WriteSet : NULL,
+                    ExceptSet->fd_count ? ExceptSet : NULL,
+                    TimeOut);
+
+    if (Status == SOCKET_ERROR)
+    {
+        HeapFree(WsSockHeap, 0, ReadSet);
+        HeapFree(WsSockHeap, 0, WriteSet);
+        HeapFree(WsSockHeap, 0, ExceptSet);
+        return SOCKET_ERROR;
+    }
+
+    for (Index = 0; Index < fds; Index++)
+    {
+        SHORT Events = 0;
+
+        if (fdArray[Index].fd == INVALID_SOCKET)
+            continue;
+
+        if (ReadSet->fd_count && __WSAFDIsSet(fdArray[Index].fd, ReadSet))
+            Events |= (fdArray[Index].events & (POLLRDNORM | POLLRDBAND));
+
+        if (WriteSet->fd_count && __WSAFDIsSet(fdArray[Index].fd, WriteSet))
+            Events |= (fdArray[Index].events & POLLWRNORM);
+
+        if (ExceptSet->fd_count && __WSAFDIsSet(fdArray[Index].fd, ExceptSet))
+            Events |= POLLERR;
+
+        fdArray[Index].revents = Events;
+
+        if (Events != 0)
+            Result++;
+    }
+
+    HeapFree(WsSockHeap, 0, ReadSet);
+    HeapFree(WsSockHeap, 0, WriteSet);
+    HeapFree(WsSockHeap, 0, ExceptSet);
+
+    return Result;
+}

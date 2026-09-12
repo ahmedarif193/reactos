@@ -105,7 +105,7 @@
 @ stdcall WSANSPIoctl(ptr long ptr long ptr long ptr ptr)
 @ stdcall WSANtohl(long long ptr)
 @ stdcall WSANtohs(long long ptr)
-@ stdcall -stub -version=0x600+ WSAPoll(ptr long long)
+@ stdcall -version=0x600+ WSAPoll(ptr long long)
 @ stdcall -stub -version=0x600+ WSAProviderCompleteAsyncCall(ptr long)
 @ stdcall WSAProviderConfigChange(ptr ptr ptr)
 @ stdcall WSARecv(long ptr long ptr ptr ptr ptr)
