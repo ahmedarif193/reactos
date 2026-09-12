@@ -13548,6 +13548,12 @@ XHCI_EnableInterrupts(PVOID MiniPortExtension)
     if (!Extension || !Extension->OperationalRegisters)
         return;
 
+    /* Publish before unmasking. An ISR on another CPU can disable the
+     * hardware as soon as INTE is set; do not overwrite its FALSE afterward
+     * or the next DPC will skip rearming the interrupt source. */
+    Extension->InterruptsEnabled = TRUE;
+    KeMemoryBarrier();
+
     if (Extension->RuntimeRegisters)
     {
         Interrupter = &Extension->RuntimeRegisters->Interrupter[0];
@@ -13568,7 +13574,6 @@ XHCI_EnableInterrupts(PVOID MiniPortExtension)
     Command |= XHCI_USBCMD_INTE;
     XHCI_WRITE_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd, Command);
     CommandAfter = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
-    Extension->InterruptsEnabled = TRUE;
 
     DPRINT("usbxhci: EnableInterrupts USBCMD before=%08lx after=%08lx (INTE=%u)\n",
             Command & ~XHCI_USBCMD_INTE, CommandAfter, (CommandAfter & XHCI_USBCMD_INTE) ? 1 : 0);
