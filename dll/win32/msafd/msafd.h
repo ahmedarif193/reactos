@@ -68,8 +68,8 @@ typedef struct _SOCKET_CONTEXT {
 	SOCK_SHARED_INFO SharedData;
 	ULONG SizeOfHelperData;
 	ULONG Padding;
-	SOCKADDR LocalAddress;
-	SOCKADDR RemoteAddress;
+	SOCKADDR_STORAGE LocalAddress;
+	SOCKADDR_STORAGE RemoteAddress;
 	/* Plus Helper Data */
 } SOCKET_CONTEXT, *PSOCKET_CONTEXT;
 

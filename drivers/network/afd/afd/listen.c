@@ -52,7 +52,21 @@ static NTSTATUS SatisfyAccept( PAFD_DEVICE_EXTENSION DeviceExt,
 static NTSTATUS SatisfyPreAccept( PIRP Irp, PAFD_TDI_OBJECT_QELT Qelt ) {
     PAFD_RECEIVED_ACCEPT_DATA ListenReceive =
         (PAFD_RECEIVED_ACCEPT_DATA)Irp->AssociatedIrp.SystemBuffer;
+    PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation( Irp );
     PTA_IP_ADDRESS IPAddr;
+    ULONG Required;
+
+    Required = FIELD_OFFSET(AFD_RECEIVED_ACCEPT_DATA, Address) +
+               TaLengthOfTransportAddress( Qelt->ConnInfo->RemoteAddress );
+
+    if( IrpSp->Parameters.DeviceIoControl.OutputBufferLength < Required ) {
+        if( Irp->MdlAddress ) UnlockRequest( Irp, IrpSp );
+        Irp->IoStatus.Information = 0;
+        Irp->IoStatus.Status = STATUS_BUFFER_TOO_SMALL;
+        (void)IoSetCancelRoutine(Irp, NULL);
+        IoCompleteRequest( Irp, IO_NETWORK_INCREMENT );
+        return STATUS_BUFFER_TOO_SMALL;
+    }
 
     ListenReceive->SequenceNumber = Qelt->Seq;
 

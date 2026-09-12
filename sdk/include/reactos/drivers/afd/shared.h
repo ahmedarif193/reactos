@@ -407,8 +407,9 @@ typedef struct _SOCK_SHARED_INFO {
     UINT						wMsg;
     LONG						AsyncEvents;
     LONG						AsyncDisabledEvents;
-    SOCKADDR					WSLocalAddress;
-    SOCKADDR					WSRemoteAddress;
+    DWORD						CatalogEntryId;
+    SOCKADDR_STORAGE				WSLocalAddress;
+    SOCKADDR_STORAGE				WSRemoteAddress;
 } SOCK_SHARED_INFO, *PSOCK_SHARED_INFO;
 
 typedef struct _FILE_REQUEST_BIND {
