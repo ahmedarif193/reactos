@@ -2629,7 +2629,20 @@ Rpi5Vc4EncodeNativePte(
 
     if (Pte->Valid)
     {
-        Physical = Pte->PageAddress;
+        /* DXGK_PTE carries address bits 63:12, relative to its segment. */
+        if (Pte->PageAddress > (MAXULONGLONG >> PAGE_SHIFT))
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        Physical = Pte->PageAddress << PAGE_SHIFT;
+        if (Pte->Segment == RPI5VC4_LOCAL_SEGMENT_ID)
+        {
+            if (Physical >= DeviceExtension->VramSize)
+                return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+            Physical += (ULONGLONG)DeviceExtension->VramPhysical.QuadPart;
+        }
+        else if (Pte->Segment != 0)
+        {
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        }
     }
     else if (Pte->Zero)
     {
@@ -2838,8 +2851,10 @@ Rpi5Vc4DdiBuildPagingBuffer(
             BOOLEAN Flushed = TRUE;
 
             if (Process == NULL ||
-                BuildPagingBuffer->FlushTlb.StartVirtualAddress >=
-                    BuildPagingBuffer->FlushTlb.EndVirtualAddress ||
+                ((BuildPagingBuffer->FlushTlb.StartVirtualAddress != 0 ||
+                  BuildPagingBuffer->FlushTlb.EndVirtualAddress != 0) &&
+                 BuildPagingBuffer->FlushTlb.StartVirtualAddress >=
+                     BuildPagingBuffer->FlushTlb.EndVirtualAddress) ||
                 BuildPagingBuffer->FlushTlb.EndVirtualAddress >
                     (1ULL << RPI5VC4_GPUVA_BITS))
             {
