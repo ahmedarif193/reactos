@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
 
 if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" OR MSVC)
-    message(FATAL_ERROR "The Mesa VC4 source build requires llvm-mingw Clang; use RPI3VC4_MESA_FROM_SOURCE=OFF for the packaged ICD.")
+    message(FATAL_ERROR "The Mesa Gallium source build requires llvm-mingw Clang; use MESA_GALLIUM_FROM_SOURCE=OFF for the packaged ICDs.")
 endif()
 
 set(MESA_SOURCE_DIR "${REACTOS_SOURCE_DIR}/submodules/mesa")
@@ -33,7 +33,9 @@ endif()
 set(MESA_WORK_DIR "${CMAKE_CURRENT_BINARY_DIR}/mesa-source")
 set(MESA_BINARY_DIR "${MESA_WORK_DIR}/build")
 set(MESA_SUPPORT_DIR "${MESA_WORK_DIR}/reactos-release")
-set(MESA_DLL "${MESA_BINARY_DIR}/src/gallium/targets/wgl/rpi3vc4ogl.dll")
+set(MESA_DLL "${MESA_BINARY_DIR}/src/gallium/targets/wgl/mesa_gallium.dll")
+set(MESA_GALLIUM_ICD_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/mesa-icd")
+set(MESA_GALLIUM_ICD_STAGE "${MESA_GALLIUM_ICD_STAGE_DIR}/mesa_gallium.dll")
 set(MESA_LLVM_PREFIX "")
 file(MAKE_DIRECTORY "${MESA_WORK_DIR}")
 foreach(_mesa_path MESA_CC MESA_CXX MESA_WINDRES MESA_AR MESA_STRIP MESA_PYTHON MESA_LLVM_PREFIX CMAKE_COMMAND)
@@ -44,10 +46,10 @@ configure_file("${REACTOS_SOURCE_DIR}/submodules/mesa-cross.ini.in" "${MESA_WORK
 configure_file("${REACTOS_SOURCE_DIR}/submodules/mesa-native.ini.in" "${MESA_WORK_DIR}/native.ini" @ONLY)
 
 include(ExternalProject)
-# Mesa statically links the KMT transport and zlib. Build those targets with
+# Mesa statically links both KMT transports and zlib. Build those targets with
 # the normal ReactOS toolchain in an isolated Release configuration even
 # when the destination OS is Debug. No other OS binaries are built here.
-ExternalProject_Add(rpi3vc4_mesa_support
+ExternalProject_Add(mesa_gallium_support
     PREFIX "${MESA_WORK_DIR}/support-prefix"
     SOURCE_DIR "${REACTOS_SOURCE_DIR}"
     BINARY_DIR "${MESA_SUPPORT_DIR}"
@@ -70,16 +72,17 @@ ExternalProject_Add(rpi3vc4_mesa_support
         -DENABLE_ROSTESTS=OFF
         -DRPI3_SUPPORT=OFF
         -DRPI5_SUPPORT=OFF
-    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --parallel ${MESA_BUILD_JOBS} --target rpi3vc4kmt zlib
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --parallel ${MESA_BUILD_JOBS} --target rpi3vc4kmt vc4kmt zlib
     BUILD_ALWAYS TRUE
     INSTALL_COMMAND ""
     BUILD_BYPRODUCTS
         "${MESA_SUPPORT_DIR}/sdk/lib/rpi3vc4kmt/librpi3vc4kmt.a"
+        "${MESA_SUPPORT_DIR}/sdk/lib/vc4kmt/libvc4kmt.a"
         "${MESA_SUPPORT_DIR}/sdk/lib/3rdparty/zlib/libzlib.a"
     USES_TERMINAL_BUILD TRUE)
 
-ExternalProject_Add(rpi3vc4_mesa_build
-    DEPENDS rpi3vc4_mesa_support
+ExternalProject_Add(mesa_gallium_build
+    DEPENDS mesa_gallium_support
     PREFIX "${MESA_WORK_DIR}/prefix"
     SOURCE_DIR "${MESA_SOURCE_DIR}"
     BINARY_DIR "${MESA_BINARY_DIR}"
@@ -96,8 +99,8 @@ ExternalProject_Add(rpi3vc4_mesa_build
         -Dc_args=-D__REACTOS__
         -Dcpp_args=-D__REACTOS__
         -Dplatforms=windows
-        -Dgallium-drivers=vc4
-        -Dgallium-wgl-dll-name=rpi3vc4ogl
+        -Dgallium-drivers=vc4,v3d,softpipe
+        -Dgallium-wgl-dll-name=mesa_gallium
         -Dreactos-source-dir=${REACTOS_SOURCE_DIR}
         -Dreactos-build-dir=${MESA_SUPPORT_DIR}
         -Dllvm=disabled
@@ -117,17 +120,19 @@ ExternalProject_Add(rpi3vc4_mesa_build
         -Dvalgrind=disabled
         -Dbuild-tests=false
     BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
-        ${MESA_NINJA} -C <BINARY_DIR> -j ${MESA_BUILD_JOBS} src/gallium/targets/wgl/rpi3vc4ogl.dll
+        ${MESA_NINJA} -C <BINARY_DIR> -j ${MESA_BUILD_JOBS} src/gallium/targets/wgl/mesa_gallium.dll
     BUILD_ALWAYS TRUE
     INSTALL_COMMAND ""
     BUILD_BYPRODUCTS "${MESA_DLL}"
     USES_TERMINAL_BUILD TRUE)
 
 add_custom_command(
-    OUTPUT "${RPI3VC4_MESA_ICD_STAGE}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${RPI3VC4_MESA_ICD_STAGE_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MESA_DLL}" "${RPI3VC4_MESA_ICD_STAGE}"
-    COMMAND ${MESA_STRIP} --strip-debug "${RPI3VC4_MESA_ICD_STAGE}"
-    DEPENDS rpi3vc4_mesa_build "${MESA_DLL}"
+    OUTPUT "${MESA_GALLIUM_ICD_STAGE}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${MESA_GALLIUM_ICD_STAGE_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MESA_DLL}" "${MESA_GALLIUM_ICD_STAGE}"
+    COMMAND ${MESA_STRIP} --strip-debug "${MESA_GALLIUM_ICD_STAGE}"
+    DEPENDS mesa_gallium_build "${MESA_DLL}"
     VERBATIM)
-message(STATUS "RPi3 VC4 OpenGL ICD: Release build from ${MESA_SOURCE_DIR}")
+add_custom_target(mesa_gallium DEPENDS "${MESA_GALLIUM_ICD_STAGE}")
+add_cd_file(FILE "${MESA_GALLIUM_ICD_STAGE}" TARGET mesa_gallium DESTINATION reactos/system32 FOR all)
+message(STATUS "Mesa Gallium OpenGL ICD (vc4/v3d/softpipe): Release build from ${MESA_SOURCE_DIR}")

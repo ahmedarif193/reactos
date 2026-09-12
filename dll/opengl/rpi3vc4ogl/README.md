@@ -3,38 +3,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
 SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
 -->
 
-# Raspberry Pi 3 VC4 OpenGL ICD
+# Raspberry Pi 3 packaged VC4 rollback
 
-The default RPi3 build compiles Mesa's `vc4` Windows WGL ICD from
-`submodules/mesa`, using the ReactOS Mesa fork's `ros-dev` branch. The
-superproject pins the source revision; builds do not follow a moving remote
-branch. `rpi3vc4ogl.dll` provides hardware OpenGL for VideoCore IV.
-
-Mesa and its statically linked ReactOS KMT/zlib dependencies always use
-Release settings, including when the destination ReactOS image is Debug.
-The normal `rpi3vc4_mesa_icd_stage` target builds and stages the DLL, and
-image targets consume that staged result. The KMT/zlib Release build lives
-under this target's build directory and uses the same ReactOS source tree;
-it does not require a sibling Mesa checkout or a pre-existing Release build.
-
-Initialize the pinned submodule before configuring:
-
-    git submodule update --init --depth 1 -- submodules/mesa
-
-The source build requires llvm-mingw, Meson, Ninja, and Python with Mako,
-packaging and PyYAML. If Meson is outside `PATH`, pass
-`-DMESA_MESON=/path/to/meson` to CMake. `MESA_BUILD_JOBS` limits parallel
-build jobs and defaults to four.
-
-The DWM integration also supplies shared-texture imports, tracked content
-updates, GPU window publication, partial-primary presentation and on-demand
-profiling. A source switch must retain these interfaces; a basic VC4 WGL
-port alone does not provide the current desktop composition path.
+The source build now lives in [../mesa_gallium](../mesa_gallium/README.md).
+It packages one `mesa_gallium.dll` containing VC4, V3D and softpipe.
+This directory retains the previous VC4 archive and external-ICD override.
 
 ## Selecting the packaged rollback
 
 `rpi3vc4ogl.dll.tar.xz` is retained unchanged as the previous packaged ICD.
-Select it with `-DRPI3VC4_MESA_FROM_SOURCE=OFF`. An explicit
+Select it with `-DMESA_GALLIUM_FROM_SOURCE=OFF`. An explicit
 `RPI3VC4_MESA_VC4_ICD` path takes precedence over both source and archive
 selection. The archive details and historical measurements below describe
 that rollback binary, not the newly built Mesa DLL.

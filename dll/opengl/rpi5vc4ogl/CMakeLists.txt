@@ -41,7 +41,7 @@ if(RPI5VC4_MESA_V3D_ICD)
     endif()
 
     message(STATUS
-        "RPi5 V3D OpenGL ICD: ${RPI5VC4_MESA_V3D_ICD} (custom ICD retained as rpi5vc4ogl_legacy.dll)")
+        "RPi5 V3D OpenGL ICD: ${RPI5VC4_MESA_V3D_ICD} (override)")
 
     # reactos.cab records the basename of FILE entries and ignores
     # NAME_ON_CD.  Stage both ICDs under their installed basenames so CAB
@@ -61,7 +61,14 @@ if(RPI5VC4_MESA_V3D_ICD)
         VERBATIM)
     add_custom_target(rpi5vc4_mesa_icd_stage
         DEPENDS "${RPI5VC4_MESA_ICD_STAGE}")
+    add_cd_file(
+        FILE "${RPI5VC4_MESA_ICD_STAGE}"
+        TARGET rpi5vc4_mesa_icd_stage
+        DESTINATION reactos/system32
+        FOR all)
+endif()
 
+if(RPI5VC4_MESA_V3D_ICD OR TARGET mesa_gallium)
     set(RPI5VC4_LEGACY_ICD_STAGE_DIR
         "${CMAKE_CURRENT_BINARY_DIR}/legacy-icd")
     set(RPI5VC4_LEGACY_ICD_STAGE
@@ -78,11 +85,6 @@ if(RPI5VC4_MESA_V3D_ICD)
     add_custom_target(rpi5vc4_legacy_icd_stage
         DEPENDS "${RPI5VC4_LEGACY_ICD_STAGE}")
 
-    add_cd_file(
-        FILE "${RPI5VC4_MESA_ICD_STAGE}"
-        TARGET rpi5vc4_mesa_icd_stage
-        DESTINATION reactos/system32
-        FOR all)
     add_cd_file(
         FILE "${RPI5VC4_LEGACY_ICD_STAGE}"
         TARGET rpi5vc4_legacy_icd_stage

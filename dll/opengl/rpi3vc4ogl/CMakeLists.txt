@@ -2,12 +2,14 @@
 # LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
 # COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
 
-# Build the VC4 WGL ICD from the pinned ReactOS Mesa submodule. Keep the
-# packaged ICD available for explicit rollback and external comparisons.
-option(RPI3VC4_MESA_FROM_SOURCE "Build the RPi3 VC4 ICD from the Mesa submodule in Release mode" ON)
-
 set(RPI3VC4_MESA_VC4_ICD "$ENV{REACTOS_MESA_VC4_ICD}" CACHE FILEPATH
     "Override: external Mesa VC4 WGL ICD to deploy instead of building Mesa")
+
+if(TARGET mesa_gallium AND NOT RPI3VC4_MESA_VC4_ICD)
+    # Retain the previous build target for board runners and old profiles.
+    add_custom_target(rpi3vc4_mesa_icd_stage DEPENDS mesa_gallium)
+    return()
+endif()
 
 # reactos.cab stores the source basename and ignores NAME_ON_CD, so the file
 # handed to add_cd_file must already be named rpi3vc4ogl.dll.
@@ -31,8 +33,6 @@ if(RPI3VC4_MESA_VC4_ICD)
         COMMAND ${CMAKE_STRIP} --strip-debug "${RPI3VC4_MESA_ICD_STAGE}"
         DEPENDS "${RPI3VC4_MESA_VC4_ICD}"
         VERBATIM)
-elseif(RPI3VC4_MESA_FROM_SOURCE)
-    include(mesa-source.cmake)
 else()
     set(RPI3VC4_MESA_ICD_ARCHIVE
         "${CMAKE_CURRENT_SOURCE_DIR}/rpi3vc4ogl.dll.tar.xz")
