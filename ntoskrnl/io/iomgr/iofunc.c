@@ -4102,6 +4102,30 @@ NtSetInformationFile(IN HANDLE FileHandle,
         Irp->IoStatus.Status = Status;
         Irp->IoStatus.Information = 0;
     }
+    else if (FileInformationClass == FileIoCompletionNotificationInformation)
+    {
+        PFILE_IO_COMPLETION_NOTIFICATION_INFORMATION NotificationInfo = Irp->AssociatedIrp.SystemBuffer;
+
+        if (NotificationInfo->Flags & ~(FILE_SKIP_COMPLETION_PORT_ON_SUCCESS |
+                                        FILE_SKIP_SET_EVENT_ON_HANDLE |
+                                        FILE_SKIP_SET_USER_EVENT_ON_FAST_IO))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+        }
+        else
+        {
+            if (NotificationInfo->Flags & FILE_SKIP_COMPLETION_PORT_ON_SUCCESS)
+                FileObject->Flags |= FO_SKIP_COMPLETION_PORT;
+            if (NotificationInfo->Flags & FILE_SKIP_SET_EVENT_ON_HANDLE)
+                FileObject->Flags |= FO_SKIP_SET_EVENT;
+            if (NotificationInfo->Flags & FILE_SKIP_SET_USER_EVENT_ON_FAST_IO)
+                FileObject->Flags |= FO_SKIP_SET_FAST_IO;
+            Status = STATUS_SUCCESS;
+        }
+
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+    }
     else if (FileInformationClass == FileRenameInformation ||
              FileInformationClass == FileLinkInformation ||
              FileInformationClass == FileMoveClusterInformation)

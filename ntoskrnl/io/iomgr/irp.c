@@ -402,7 +402,8 @@ IopCompleteRequest(IN PKAPC Apc,
         {
             /* Set the status and signal the file object */
             FileObject->FinalStatus = Irp->IoStatus.Status;
-            KeSetEvent(&FileObject->Event, 0, FALSE);
+            if (!((FileObject->Flags & FO_SKIP_SET_EVENT) && NT_SUCCESS(Irp->IoStatus.Status)))
+                KeSetEvent(&FileObject->Event, 0, FALSE);
 
             /*
             * This could also be a create operation, in which case we want
@@ -461,7 +462,10 @@ IopCompleteRequest(IN PKAPC Apc,
             KeInsertQueueApc(&Irp->Tail.Apc, Irp->UserIosb, NULL, 2);
         }
         else if ((Port) &&
-                 (Irp->Overlay.AsynchronousParameters.UserApcContext))
+                 (Irp->Overlay.AsynchronousParameters.UserApcContext) &&
+                 !((FileObject->Flags & FO_SKIP_COMPLETION_PORT) &&
+                   !Irp->PendingReturned &&
+                   NT_SUCCESS(Irp->IoStatus.Status)))
         {
             /* We have an I/O Completion setup... create the special Overlay */
             Irp->Tail.CompletionKey = Key;
