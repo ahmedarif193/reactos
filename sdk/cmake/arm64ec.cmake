@@ -142,7 +142,14 @@ add_dependencies(fex_arm64ec_configure asm)
 find_program(FEX_LLVM_READOBJ llvm-readobj HINTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin" REQUIRED)
 
 list(LENGTH ARM64EC_RUNTIME_BUILD_MODULES _arm64ec_target_count)
+if(CMAKE_GENERATOR STREQUAL "Ninja")
+    set(_arm64ec_heal COMMAND ${CMAKE_MAKE_PROGRAM} -C "${ARM64EC_BINARY_DIR}" -t recompact)
+else()
+    set(_arm64ec_heal)
+endif()
+
 add_custom_target(fex_arm64ec_runtime ALL
+    ${_arm64ec_heal}
     COMMAND ${CMAKE_COMMAND} --build "${ARM64EC_BINARY_DIR}" --target ${ARM64EC_RUNTIME_BUILD_MODULES}
     COMMAND ${CMAKE_COMMAND} -DLLVM_READOBJ:FILEPATH=${FEX_LLVM_READOBJ} -P "${REACTOS_SOURCE_DIR}/sdk/cmake/arm64ec-validate.cmake" -- ${ARM64EC_RUNTIME_VALIDATION_FILES}
     BYPRODUCTS ${ARM64EC_RUNTIME_VALIDATION_FILES}
