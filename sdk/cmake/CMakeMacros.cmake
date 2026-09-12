@@ -1010,6 +1010,13 @@ endfunction()
 
 function(create_registry_hives)
 
+    # Register the launcher only when the source script has been populated.
+    # Even an empty batch file would otherwise open a console at logon.
+    set(_app_launcher "${CMAKE_SOURCE_DIR}/boot/bootdata/app_launcher.cmd")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_app_launcher}")
+    file(READ "${_app_launcher}" _app_launcher_contents)
+    string(STRIP "${_app_launcher_contents}" _app_launcher_contents)
+
     # Shortcut to the registry.inf file
     set(_registry_inf "${CMAKE_BINARY_DIR}/boot/bootdata/registry.inf")
 
@@ -1056,7 +1063,7 @@ function(create_registry_hives)
         ${_registry_inf}
         ${CMAKE_SOURCE_DIR}/boot/bootdata/livecd.inf
         ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf)
-    if(ENABLE_BOOT_APP_LAUNCHER)
+    if(NOT "${_app_launcher_contents}" STREQUAL "")
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/app_launcher.inf)
     endif()
@@ -1111,7 +1118,7 @@ function(create_registry_hives)
         ${_registry_inf}
         ${CMAKE_SOURCE_DIR}/boot/bootdata/preinstall.inf
         ${CMAKE_SOURCE_DIR}/boot/bootdata/caroots.inf)
-    if(ENABLE_BOOT_APP_LAUNCHER)
+    if(NOT "${_app_launcher_contents}" STREQUAL "")
         list(APPEND _preinstall_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/app_launcher.inf)
     endif()

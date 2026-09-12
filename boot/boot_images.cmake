@@ -45,26 +45,6 @@ function(freeldr_ini_add_http_boot SOURCE OUTPUT URL STATIC_IP DEFAULT_OS)
     file(WRITE "${OUTPUT}" "${_contents}")
 endfunction()
 
-#
-# Add one kernel command-line option to every selectable entry. This keeps
-# manual boot-menu selections consistent with the configured image behavior.
-# DEFAULT_OS can select a debug entry for an otherwise unattended image.
-#
-function(freeldr_ini_add_boot_option SOURCE OUTPUT OPTION DEFAULT_OS)
-    string(FIND "${SOURCE}" "${CMAKE_BINARY_DIR}/" _binary_source_prefix)
-    if(NOT _binary_source_prefix EQUAL 0)
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SOURCE}")
-    endif()
-    file(READ "${SOURCE}" _contents)
-
-    if(DEFAULT_OS)
-        string(REGEX REPLACE "DefaultOS=[^\r\n]*" "DefaultOS=${DEFAULT_OS}" _contents "${_contents}")
-    endif()
-
-    string(REGEX REPLACE "\nOptions=([^\r\n]*)" "\nOptions=\\1 ${OPTION}" _contents "${_contents}")
-    file(WRITE "${OUTPUT}" "${_contents}")
-endfunction()
-
 set(FREELDR_BOOTCD_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/bootcd.ini")
 set(FREELDR_PREINSTALL_INI "${REACTOS_SOURCE_DIR}/boot/bootdata/preinstall.ini")
 if(FREELDR_HTTP_BOOT)
@@ -93,46 +73,6 @@ if(FREELDR_HTTP_BOOT)
                               "${FREELDR_HTTP_BOOT_URL}"
                               "${FREELDR_HTTP_BOOT_IP}"
                               "HttpBoot")
-endif()
-
-set(_boot_test_options "")
-if(ENABLE_ROSAUTOTEST_BOOT_RUN)
-    string(APPEND _boot_test_options " /ROSAUTOTEST")
-endif()
-if(ENABLE_CPUBENCH_BOOT_RUN)
-    string(APPEND _boot_test_options " /CPUBENCH")
-endif()
-if(ENABLE_RP1GEM_BENCHMARK)
-    string(APPEND _boot_test_options " /ETHBENCH")
-endif()
-if(ENABLE_KMTEST_BOOT_RUN)
-    string(APPEND _boot_test_options " /KMTEST")
-endif()
-if(ENABLE_RPI5_WIFI_BOOT_RUN)
-    string(APPEND _boot_test_options " /RPI5WIFITEST")
-endif()
-string(STRIP "${_boot_test_options}" _boot_test_options)
-
-if(ENABLE_BOOT_TEST_RUN)
-    set(_freeldr_bootcd_source "${FREELDR_BOOTCD_INI}")
-    set(_freeldr_preinstall_source "${FREELDR_PREINSTALL_INI}")
-    set(FREELDR_BOOTCD_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/bootcd_boot_tests.ini")
-    set(FREELDR_PREINSTALL_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/preinstall_boot_tests.ini")
-
-    freeldr_ini_add_boot_option("${_freeldr_bootcd_source}"
-                                "${FREELDR_BOOTCD_INI}"
-                                "${_boot_test_options}"
-                                "")
-
-    if(FREELDR_HTTP_BOOT)
-        set(_freeldr_preinstall_default "")
-    else()
-        set(_freeldr_preinstall_default "ReactOS_Debug")
-    endif()
-    freeldr_ini_add_boot_option("${_freeldr_preinstall_source}"
-                                "${FREELDR_PREINSTALL_INI}"
-                                "${_boot_test_options}"
-                                "${_freeldr_preinstall_default}")
 endif()
 
 # On x86 hal.dll is the UP PIC HAL, unlike the SMP HAL named hal.dll on
