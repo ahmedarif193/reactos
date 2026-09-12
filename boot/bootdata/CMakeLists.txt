@@ -156,7 +156,7 @@ cmdenvvar(envvar_archdir     "PROCESSOR_ARCHITECTURE:x86=I386" TRUE)
 add_livecd_shortcut("Install ReactOS"
     "shell:system\\cmd.exe"
     CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\reactos.exe\""
-    ICON "${envvar_systemroot}\\system32\\msiexec.exe"
+    ICON "${envvar_systemdrive}\\icon.ico"
     MINIMIZE
     FOR livecd
     DESTINATION "${dir_allusers_desktop}")
@@ -266,3 +266,5 @@ add_livecd_shortcut("Spider Solitaire"
 add_livecd_shortcut("WineMine"
     "shell:system\\winmine.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
+
+add_registry_inf("${REACTOS_SOURCE_DIR}/submodules/mesa-llvmpipe.inf")
