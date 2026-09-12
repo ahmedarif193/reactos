@@ -12,7 +12,8 @@
 #include <string.h>
 #include <reactos/dwmprof.h>
 
-#define WGLGEARS_RUN_MILLISECONDS 16000
+#define WGLGEARS_SAMPLE_COUNT 3
+#define WGLGEARS_TIMEOUT_MILLISECONDS 30000
 #define WGLGEARS_CLOSE_MILLISECONDS 5000
 #define WGLGEARS_OUTPUT_LINE_LENGTH 256
 
@@ -261,8 +262,9 @@ main(int argc, char **argv)
 
     RunnerPrint("RPI5_WGLGEARS_BEGIN source=mesa-demos "
                 "commit=10418e7636cdd9595dda18c3d78a562d7248f734 "
-                "duration_ms=%lu\n",
-                (ULONG)WGLGEARS_RUN_MILLISECONDS);
+                "samples=%lu timeout_ms=%lu\n",
+                (ULONG)WGLGEARS_SAMPLE_COUNT,
+                (ULONG)WGLGEARS_TIMEOUT_MILLISECONDS);
     if (!CreateProcessA(ApplicationPath,
                         CommandLine,
                         NULL,
@@ -294,7 +296,8 @@ main(int argc, char **argv)
         DrainChildOutput(ReadPipe, &OutputScan);
         if (WaitStatus == WAIT_OBJECT_0)
             break;
-    } while (GetTickCount() - StartTick < WGLGEARS_RUN_MILLISECONDS);
+    } while (OutputScan.SampleCount < WGLGEARS_SAMPLE_COUNT &&
+             GetTickCount() - StartTick < WGLGEARS_TIMEOUT_MILLISECONDS);
 
     if (WaitStatus != WAIT_OBJECT_0)
     {
@@ -357,5 +360,5 @@ main(int argc, char **argv)
     CloseHandle(ProcessInformation.hProcess);
     return ExitCode == EXIT_SUCCESS && !Forced &&
            OutputScan.VsyncControlSeen && OutputScan.VsyncInterval == 0 &&
-           OutputScan.SampleCount >= 3 ? 0 : 1;
+           OutputScan.SampleCount >= WGLGEARS_SAMPLE_COUNT ? 0 : 1;
 }
