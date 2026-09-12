@@ -410,7 +410,15 @@ NTSTATUS DispTdiAssociateAddress(
   /* Add connection endpoint to the address file */
   ReferenceObject(Connection);
   if (AddrFile->Connection == NULL)
+  {
       AddrFile->Connection = Connection;
+
+      if (AddrFile->PendingKeepAliveSet)
+          TCPSetKeepAlive(Connection, AddrFile->PendingKeepAlive);
+
+      if (AddrFile->PendingNoDelaySet)
+          TCPSetNoDelay(Connection, AddrFile->PendingNoDelay);
+  }
   else
   {
       LastConnection = AddrFile->Connection;

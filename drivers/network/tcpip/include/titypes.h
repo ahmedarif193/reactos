@@ -130,6 +130,10 @@ typedef struct _ADDRESS_FILE {
     LIST_ENTRY TransmitQueue;             /* List of outstanding transmit requests */
     struct _CONNECTION_ENDPOINT *Connection;
     /* Associated connection or NULL if no associated connection exist */
+    BOOLEAN PendingKeepAliveSet;
+    BOOLEAN PendingKeepAlive;
+    BOOLEAN PendingNoDelaySet;
+    BOOLEAN PendingNoDelay;
     struct _CONNECTION_ENDPOINT *Listener;
     /* Associated listener (see transport/tcp/accept.c) */
     IP_ADDRESS AddrCache;                 /* One entry address cache (destination

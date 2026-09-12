@@ -154,7 +154,7 @@ TDI_STATUS GetAddressFileInfo(TDIObjectID *ID,
                               PUINT BufferSize);
 
 TDI_STATUS SetConnectionInfo(TDIObjectID *ID,
-                             PCONNECTION_ENDPOINT Connection,
+                             PADDRESS_FILE AddressFile,
                              PVOID Buffer,
                              UINT BufferSize);
 

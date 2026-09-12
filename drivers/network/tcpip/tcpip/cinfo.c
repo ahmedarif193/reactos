@@ -16,11 +16,14 @@ typedef struct tcp_keepalive {
 } TCP_KEEPALIVE;
 
 TDI_STATUS SetConnectionInfo(TDIObjectID *ID,
-                             PCONNECTION_ENDPOINT Connection,
+                             PADDRESS_FILE AddressFile,
                              PVOID Buffer,
                              UINT BufferSize)
 {
     NTSTATUS Status;
+    PCONNECTION_ENDPOINT Connection = AddressFile->Connection;
+    BOOLEAN Deferred = (Connection == NULL) || (Connection->SocketContext == NULL);
+
     ASSERT(ID->toi_type == INFO_TYPE_CONNECTION);
     switch (ID->toi_id)
     {
@@ -30,6 +33,12 @@ TDI_STATUS SetConnectionInfo(TDIObjectID *ID,
             if (BufferSize < sizeof(BOOLEAN))
                 return TDI_INVALID_PARAMETER;
             Set = *(BOOLEAN*)Buffer;
+            if (Deferred)
+            {
+                AddressFile->PendingNoDelay = Set;
+                AddressFile->PendingNoDelaySet = TRUE;
+                return TDI_SUCCESS;
+            }
             return TCPSetNoDelay(Connection, Set);
         }
         case TCP_SOCKET_KEEPALIVE:
@@ -38,6 +47,12 @@ TDI_STATUS SetConnectionInfo(TDIObjectID *ID,
             if (BufferSize < sizeof(DWORD))
                 return TDI_INVALID_PARAMETER;
             Set = *(DWORD*)Buffer;
+            if (Deferred)
+            {
+                AddressFile->PendingKeepAlive = (Set != 0);
+                AddressFile->PendingKeepAliveSet = TRUE;
+                return TDI_SUCCESS;
+            }
             return TCPSetKeepAlive(Connection, Set);
         }
         case TCP_SOCKET_KEEPALIVEVALS:
@@ -46,6 +61,12 @@ TDI_STATUS SetConnectionInfo(TDIObjectID *ID,
             if (BufferSize < sizeof(TCP_KEEPALIVE))
                 return TDI_INVALID_PARAMETER;
             Set = *(TCP_KEEPALIVE*)Buffer;
+            if (Deferred)
+            {
+                AddressFile->PendingKeepAlive = (Set.onoff != 0);
+                AddressFile->PendingKeepAliveSet = TRUE;
+                return TDI_SUCCESS;
+            }
             Status = TCPSetKeepAlive(Connection, Set.onoff);
             if (!NT_SUCCESS(Status))
                 return Status;
