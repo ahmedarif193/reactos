@@ -272,7 +272,18 @@ static MSIBINARY *create_temp_binary(MSIPACKAGE *package, LPCWSTR source)
             ERR("Failed to get stream\n");
             break;
         }
-        WriteFile( file, buffer, sz, &write, NULL );
+        if (!WriteFile( file, buffer, sz, &write, NULL ))
+        {
+            ERR("Failed to write custom action %s: error %lu\n", debugstr_w(tmpfile), GetLastError());
+            r = ERROR_FUNCTION_FAILED;
+            break;
+        }
+        if (write != sz)
+        {
+            ERR("Short write extracting custom action %s: %lu of %lu bytes\n", debugstr_w(tmpfile), write, sz);
+            r = ERROR_FUNCTION_FAILED;
+            break;
+        }
     } while (sz == sizeof buffer);
 
     CloseHandle( file );
