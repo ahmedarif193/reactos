@@ -472,10 +472,7 @@ AfdConnectedSocketReadData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     AFD_DbgPrint(MID_TRACE,("Recv flags %x\n", RecvReq->AfdFlags));
 
-    RecvReq->BufferArray = LockBuffers( RecvReq->BufferArray,
-                                       RecvReq->BufferCount,
-                                       NULL, NULL,
-                                       TRUE, FALSE, LockMode );
+    RecvReq->BufferArray = LockBuffers(RecvReq->BufferArray, RecvReq->BufferCount, NULL, NULL, TRUE, FALSE, LockMode, AfdIs32bitIoctl(Irp));
 
     if( !RecvReq->BufferArray ) {
         return UnlockAndMaybeComplete( FCB, STATUS_ACCESS_VIOLATION,
@@ -766,11 +763,7 @@ AfdPacketSocketReadData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     AFD_DbgPrint(MID_TRACE,("Recv flags %x\n", RecvReq->AfdFlags));
 
-    RecvReq->BufferArray = LockBuffers( RecvReq->BufferArray,
-                                        RecvReq->BufferCount,
-                                        RecvReq->Address,
-                                        RecvReq->AddressLength,
-                                        TRUE, TRUE, LockMode );
+    RecvReq->BufferArray = LockBuffers(RecvReq->BufferArray, RecvReq->BufferCount, RecvReq->Address, RecvReq->AddressLength, TRUE, TRUE, LockMode, AfdIs32bitIoctl(Irp));
 
     if( !RecvReq->BufferArray ) { /* access violation in userspace */
         return UnlockAndMaybeComplete(FCB, STATUS_ACCESS_VIOLATION, Irp, 0);
