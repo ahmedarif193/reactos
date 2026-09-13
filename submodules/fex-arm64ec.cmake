@@ -57,6 +57,7 @@ include(ExternalProject)
 # unoptimised emulator, so pick Release here unless asked otherwise.
 set(FEX_ARM64EC_BUILD_TYPE "Release" CACHE STRING
     "CMAKE_BUILD_TYPE used for the FEX emulators themselves")
+option(ENABLE_FEX_UNIT_TESTS "Build FEX's native ARM64 instruction-test runner and assembly corpora" OFF)
 
 # FEX picks exactly one Windows front-end per configure:
 #   Source/Windows/CMakeLists.txt
@@ -70,6 +71,10 @@ set(FEX_WOW64_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-wow64-build")
 set(FEX_WOW64_DLL_SOURCE "${FEX_WOW64_BINARY_DIR}/Bin/libwow64fex.dll")
 set(FEX_WOW64_DLL_DEST   "${CMAKE_CURRENT_BINARY_DIR}/wow64fex.dll")
 set(FEX_WOW64_DLL_SYMBOLS "${REACTOS_BINARY_DIR}/symbols/wow64fex.dll")
+set(FEX_WOW64_BUILD_TARGETS wow64fex)
+if(ENABLE_FEX_UNIT_TESTS)
+    list(APPEND FEX_WOW64_BUILD_TARGETS TestHarnessRunner asm_files 32bit_asm_files)
+endif()
 
 set(FEX_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/fex-arm64ec-build")
 set(FEX_DLL_SOURCE "${FEX_BINARY_DIR}/Bin/libarm64ecfex.dll")
@@ -202,7 +207,7 @@ ExternalProject_Add(fex-wow64-build
         -DREACTOS=ON
         -DCMAKE_SYSTEM_NAME=Windows
         -DCMAKE_SYSTEM_PROCESSOR=aarch64
-        -DBUILD_TESTING=OFF
+        -DBUILD_TESTING=${ENABLE_FEX_UNIT_TESTS}
         -DBUILD_FEX_LINUX_TESTS=OFF
         -DBUILD_THUNKS=OFF
         -DBUILD_FEXCONFIG=OFF
@@ -218,7 +223,7 @@ ExternalProject_Add(fex-wow64-build
         -DOVERRIDE_VERSION=ReactOS
         -DOVERRIDE_HASH=0000000000000000000000000000000000000000
         -DPython_EXECUTABLE=${FEX_PYTHON_EXECUTABLE}
-    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target wow64fex
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target ${FEX_WOW64_BUILD_TARGETS}
     INSTALL_COMMAND ${CMAKE_COMMAND} -E make_directory "${REACTOS_BINARY_DIR}/symbols"
     COMMAND ${FEX_LLVM_STRIP} --only-keep-debug "${FEX_WOW64_DLL_SOURCE}" -o "${FEX_WOW64_DLL_SYMBOLS}"
     COMMAND ${FEX_LLVM_STRIP} --strip-debug "${FEX_WOW64_DLL_SOURCE}" -o "${FEX_WOW64_DLL_DEST}"
