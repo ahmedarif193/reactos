@@ -285,6 +285,10 @@ NtContinue(
         KeTestAlertThread(Thread->PreviousMode);
     }
 
+#ifdef _M_ARM64
+    KiChpeContinueToEmulation(TrapFrame, ExceptionFrame);
+#endif
+
     /* Exit to new context */
     KiExceptionExit(TrapFrame, ExceptionFrame);
 }

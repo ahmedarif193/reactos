@@ -56,6 +56,59 @@ KiUserStackPageIsCommitted(
     return (MemoryInfo.State == MEM_COMMIT);
 }
 
+VOID
+NTAPI
+KiChpeContinueToEmulation(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ PKEXCEPTION_FRAME ExceptionFrame)
+{
+    PEPROCESS Process = PsGetCurrentProcess();
+    PPEB Peb = Process->Peb;
+    ULONG_PTR Pc = (ULONG_PTR)TrapFrame->Pc;
+    ULONG_PTR UserSp;
+    BOOLEAN Emulated = FALSE;
+    CONTEXT Context;
+
+    if ((KeUserEmulationDispatcher == NULL) || (Peb == NULL)) return;
+    if ((Pc == 0) || (Pc >= (ULONG_PTR)MmUserProbeAddress)) return;
+    if (TrapFrame->Sp >= (ULONG_PTR)MmUserProbeAddress) return;
+
+    _SEH2_TRY
+    {
+        Emulated = (Peb->EcCodeBitMap != NULL);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Emulated = FALSE;
+    }
+    _SEH2_END;
+
+    if (!Emulated) return;
+    if (MiIsEcCodeAddress(Process, (PVOID)Pc)) return;
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    Context.ContextFlags = CONTEXT_FULL;
+    KeTrapFrameToContext(TrapFrame, ExceptionFrame, &Context);
+
+    UserSp = ((ULONG_PTR)TrapFrame->Sp - sizeof(CONTEXT)) & ~(ULONG_PTR)0xF;
+
+    _SEH2_TRY
+    {
+        ProbeForWrite((PVOID)UserSp, sizeof(CONTEXT), 16);
+        RtlCopyMemory((PVOID)UserSp, &Context, sizeof(Context));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return);
+    }
+    _SEH2_END;
+
+    TrapFrame->Sp = UserSp;
+    TrapFrame->X[0] = UserSp;
+    TrapFrame->Pc = (ULONG64)KeUserEmulationDispatcher;
+    TrapFrame->Lr = (ULONG64)KeUserEmulationDispatcher;
+}
+
 static
 BOOLEAN
 KiDispatchExceptionToUser(

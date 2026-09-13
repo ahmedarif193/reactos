@@ -1282,6 +1282,13 @@ MmSetPageProtect(
 );
 
 #ifdef _M_ARM64
+BOOLEAN
+MiIsEcCodeAddress(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address);
+#endif
+
+#ifdef _M_ARM64
 VOID
 NTAPI
 MmSetPageProtectForWriteFault(

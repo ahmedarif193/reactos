@@ -1818,6 +1818,17 @@ ChpepContinueToGuestIfNeeded(PCONTEXT ContextRecord)
     ChpeContinueToGuest(ContextRecord);
 }
 
+DECLSPEC_NORETURN
+VOID
+NTAPI
+ChpeEmulationDispatch(PCONTEXT ArmContext)
+{
+    ARM64EC_NT_CONTEXT EcContext;
+
+    ChpepContextArm64ToX64(&EcContext, (const ARM64_NT_CONTEXT *)ArmContext);
+    ChpeContinueToGuest(&EcContext);
+}
+
 NTSTATUS NTAPI
 ChpeNtContinue(PCONTEXT ContextRecord, BOOLEAN Alertable)
 {

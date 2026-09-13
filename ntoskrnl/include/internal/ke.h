@@ -98,6 +98,7 @@ extern PVOID KeUserCallbackDispatcher;
 extern PVOID KeUserExceptionDispatcher;
 #if defined(_M_ARM64)
 extern PVOID KeUserExceptionDispatcherWorker;
+extern PVOID KeUserEmulationDispatcher;
 #endif
 extern PVOID KeRaiseUserExceptionDispatcher;
 #if (NTDDI_VERSION < NTDDI_WIN8)
@@ -206,6 +207,7 @@ extern PVOID KeUserCallbackDispatcher;
 extern PVOID KeUserExceptionDispatcher;
 #if defined(_M_ARM64)
 extern PVOID KeUserExceptionDispatcherWorker;
+extern PVOID KeUserEmulationDispatcher;
 #endif
 extern PVOID KeRaiseUserExceptionDispatcher;
 extern ULONG KeTimeIncrement;
@@ -653,6 +655,15 @@ KiSuspendNop(
     IN PVOID *SystemArgument1,
     IN PVOID *SystemArgument2
 );
+
+#ifdef _M_ARM64
+VOID
+NTAPI
+KiChpeContinueToEmulation(
+    IN PKTRAP_FRAME TrapFrame,
+    IN PKEXCEPTION_FRAME ExceptionFrame
+);
+#endif
 
 VOID
 NTAPI

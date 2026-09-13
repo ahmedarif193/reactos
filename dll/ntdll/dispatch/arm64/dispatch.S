@@ -5,6 +5,7 @@
 
     .extern LdrpInit
     .extern KiUserExceptionDispatcherWorker
+    .extern KiUserEmulationDispatcherWorker
     .extern NtContinue
     .extern RtlExitUserThread
     .extern RtlRaiseStatus
@@ -23,6 +24,16 @@ KiUserExceptionDispatcher:
     mov     x1, sp
     add     x0, sp, #0x3B0
     bl      KiUserExceptionDispatcherWorker
+    brk     #1
+    .seh_endproc
+
+    .global KiUserEmulationDispatcher
+    .seh_proc KiUserEmulationDispatcher
+KiUserEmulationDispatcher:
+    .seh_context
+    .seh_endprologue
+    mov     x0, sp
+    bl      KiUserEmulationDispatcherWorker
     brk     #1
     .seh_endproc
 
