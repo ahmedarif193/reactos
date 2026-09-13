@@ -45,6 +45,7 @@
 #define RTL_SRWLOCK_MASK    (RTL_SRWLOCK_OWNED | RTL_SRWLOCK_CONTENDED | \
                              RTL_SRWLOCK_SHARED | RTL_SRWLOCK_CONTENTION_LOCK)
 #define RTL_SRWLOCK_BITS    4
+#define RTL_SRWLOCK_WAKE_WAITING 2
 
 typedef struct _RTLP_SRWLOCK_SHARED_WAKE
 {
@@ -78,6 +79,15 @@ typedef struct _RTLP_SRWLOCK_WAITBLOCK
 
     BOOLEAN Exclusive;
 } volatile RTLP_SRWLOCK_WAITBLOCK, *PRTLP_SRWLOCK_WAITBLOCK;
+
+
+static VOID
+NTAPI
+RtlpWakeSRWLock(IN OUT volatile LONG *Wake)
+{
+    if (InterlockedExchange(Wake, TRUE) == RTL_SRWLOCK_WAKE_WAITING)
+        NtReleaseKeyedEvent(NULL, (PVOID)Wake, FALSE, NULL);
+}
 
 
 static VOID
@@ -127,8 +137,7 @@ RtlpReleaseWaitBlockLockExclusive(IN OUT PRTL_SRWLOCK SRWLock,
 
     if (FirstWaitBlock->Exclusive)
     {
-        (void)InterlockedOr(&FirstWaitBlock->Wake,
-                            TRUE);
+        RtlpWakeSRWLock(&FirstWaitBlock->Wake);
     }
     else
     {
@@ -141,8 +150,7 @@ RtlpReleaseWaitBlockLockExclusive(IN OUT PRTL_SRWLOCK SRWLock,
         {
             NextWake = WakeChain->Next;
 
-            (void)InterlockedOr((PLONG)&WakeChain->Wake,
-                                TRUE);
+            RtlpWakeSRWLock(&WakeChain->Wake);
 
             WakeChain = NextWake;
         } while (WakeChain != NULL);
@@ -180,8 +188,7 @@ RtlpReleaseWaitBlockLockLastShared(IN OUT PRTL_SRWLOCK SRWLock,
 
     (void)InterlockedExchangePointer(&SRWLock->Ptr, (PVOID)NewValue);
 
-    (void)InterlockedOr(&FirstWaitBlock->Wake,
-                        TRUE);
+    RtlpWakeSRWLock(&FirstWaitBlock->Wake);
 }
 
 
@@ -200,6 +207,8 @@ static VOID
 NTAPI
 RtlpSrwSpin(IN OUT PULONG SpinCount)
 {
+    LARGE_INTEGER Timeout;
+
     if (++(*SpinCount) < RTLP_SRWLOCK_SPIN_COUNT)
     {
         YieldProcessor();
@@ -207,7 +216,29 @@ RtlpSrwSpin(IN OUT PULONG SpinCount)
     else
     {
         *SpinCount = 0;
-        (VOID)NtYieldExecution();
+        Timeout.QuadPart = -10000;
+        NtDelayExecution(FALSE, &Timeout);
+    }
+}
+
+static VOID
+NTAPI
+RtlpWaitOnSRWLock(IN OUT volatile LONG *Wake)
+{
+    ULONG SpinCount = 0;
+
+    while (ReadAcquire(Wake) == 0)
+    {
+        if (++SpinCount < RTLP_SRWLOCK_SPIN_COUNT)
+        {
+            YieldProcessor();
+        }
+        else
+        {
+            if (InterlockedCompareExchange(Wake, RTL_SRWLOCK_WAKE_WAITING, 0) == 0)
+                NtWaitForKeyedEvent(NULL, (PVOID)Wake, FALSE, NULL);
+            return;
+        }
     }
 }
 
@@ -250,8 +281,6 @@ NTAPI
 RtlpAcquireSRWLockExclusiveWait(IN OUT PRTL_SRWLOCK SRWLock,
                                 IN PRTLP_SRWLOCK_WAITBLOCK WaitBlock)
 {
-    ULONG SpinCount = 0;
-
     UNREFERENCED_PARAMETER(SRWLock);
 
     /*
@@ -261,10 +290,7 @@ RtlpAcquireSRWLockExclusiveWait(IN OUT PRTL_SRWLOCK SRWLock,
      * published the new lock word.  Leaving early because the lock word
      * looks uncontended would let the releaser write into a dead frame.
      */
-    while (WaitBlock->Wake == 0)
-    {
-        RtlpSrwSpin(&SpinCount);
-    }
+    RtlpWaitOnSRWLock(&WaitBlock->Wake);
 }
 
 
@@ -274,8 +300,6 @@ RtlpAcquireSRWLockSharedWait(IN OUT PRTL_SRWLOCK SRWLock,
                              IN OUT PRTLP_SRWLOCK_WAITBLOCK FirstWait  OPTIONAL,
                              IN OUT PRTLP_SRWLOCK_SHARED_WAKE WakeChain)
 {
-    ULONG SpinCount = 0;
-
     UNREFERENCED_PARAMETER(SRWLock);
     UNREFERENCED_PARAMETER(FirstWait);
 
@@ -287,10 +311,7 @@ RtlpAcquireSRWLockSharedWait(IN OUT PRTL_SRWLOCK SRWLock,
      * lock word became uncontended would leave a dead stack entry in the
      * chain for the releaser to read.
      */
-    while (WakeChain->Wake == 0)
-    {
-        RtlpSrwSpin(&SpinCount);
-    }
+    RtlpWaitOnSRWLock(&WakeChain->Wake);
 }
 
 
