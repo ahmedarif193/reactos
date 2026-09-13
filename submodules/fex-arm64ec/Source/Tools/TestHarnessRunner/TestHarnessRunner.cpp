@@ -147,7 +147,8 @@ static void LongJumpHandler() {
 
 LONG WINAPI VectoredExceptionHandler(struct _EXCEPTION_POINTERS* ExceptionInfo) {
   if (ExceptionInfo->ExceptionRecord->ExceptionCode == STATUS_ACCESS_VIOLATION &&
-      OvercommitTracker->HandleAccessViolation(ExceptionInfo->ExceptionRecord->ExceptionInformation[1])) {
+      OvercommitTracker->HandleAccessViolation(ExceptionInfo->ExceptionRecord->ExceptionInformation[1],
+                                               ExceptionInfo->ExceptionRecord->ExceptionInformation[0])) {
     return EXCEPTION_CONTINUE_EXECUTION;
   }
   auto Thread = Handler->GetBackingTLSThread();
