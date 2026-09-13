@@ -1435,7 +1435,9 @@ NtQueryInformationProcess(
                 }
                 _SEH2_END;
 
-                if (Information.Policy != PSP_STRICT_HANDLE_CHECK_POLICY && Information.Policy != PSP_SIGNATURE_POLICY)
+                if (Information.Policy != PSP_DYNAMIC_CODE_POLICY &&
+                    Information.Policy != PSP_STRICT_HANDLE_CHECK_POLICY &&
+                    Information.Policy != PSP_SIGNATURE_POLICY)
                 {
                     Status = STATUS_NOT_SUPPORTED;
                     break;
@@ -1448,7 +1450,11 @@ NtQueryInformationProcess(
             }
             if (!NT_SUCCESS(Status)) break;
 
-            if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_SIGNATURE_POLICY)
+            if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_DYNAMIC_CODE_POLICY)
+            {
+                Flags = ReadAcquire(&Process->DynamicCodeMitigationPolicy);
+            }
+            else if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_SIGNATURE_POLICY)
             {
                 Flags = ReadAcquire(&Process->SignatureMitigationPolicy);
             }
@@ -2587,6 +2593,30 @@ NtSetInformationProcess(
                         break;
                     }
                 } while (InterlockedCompareExchange(&Process->SignatureMitigationPolicy, NewPolicy, OldPolicy) != OldPolicy);
+                break;
+            }
+            if (Information.Policy == PSP_DYNAMIC_CODE_POLICY)
+            {
+                LONG OldPolicy;
+
+                if (Flags & ~0xf)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+
+                do
+                {
+                    OldPolicy = ReadAcquire(&Process->DynamicCodeMitigationPolicy);
+                    if ((OldPolicy & 1) && !(Flags & 1) &&
+                        ((Process == PsGetCurrentProcess()) || !(OldPolicy & 4)))
+                    {
+                        Status = STATUS_ACCESS_DENIED;
+                        break;
+                    }
+                } while (InterlockedCompareExchange(&Process->DynamicCodeMitigationPolicy,
+                                                    Flags,
+                                                    OldPolicy) != OldPolicy);
                 break;
             }
             if (Information.Policy != PSP_STRICT_HANDLE_CHECK_POLICY)
@@ -3839,6 +3869,60 @@ NtSetInformationThread(
             Status = STATUS_NOT_SUPPORTED;
 #endif
             break;
+
+        case ThreadDynamicCodePolicyInfo:
+        {
+            ULONG DynamicCodePolicy;
+
+            _SEH2_TRY
+            {
+                DynamicCodePolicy = *(PULONG)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if (DynamicCodePolicy & ~1)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_SET_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            if (Thread != PsGetCurrentThread())
+            {
+                Status = STATUS_NOT_SUPPORTED;
+            }
+            else
+            {
+                Process = THREAD_TO_PROCESS(Thread);
+                if (DynamicCodePolicy &&
+                    ((ReadAcquire(&Process->DynamicCodeMitigationPolicy) & 3) != 3))
+                {
+                    Status = STATUS_ACCESS_DENIED;
+                }
+                else
+                {
+                    InterlockedExchange(&Thread->DynamicCodeOptOut,
+                                        DynamicCodePolicy != 0);
+                    Status = STATUS_SUCCESS;
+                }
+            }
+
+            ObDereferenceObject(Thread);
+            break;
+        }
 
         case ThreadPowerThrottlingState:
         {

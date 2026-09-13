@@ -15,6 +15,22 @@
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
 
+static BOOLEAN
+MiDynamicCodeBlocked(
+    _In_ PEPROCESS Process)
+{
+    LONG Policy = ReadAcquire(&Process->DynamicCodeMitigationPolicy);
+    PETHREAD Thread;
+
+    if (!(Policy & 1))
+        return FALSE;
+
+    Thread = PsGetCurrentThread();
+    return !(THREAD_TO_PROCESS(Thread) == Process &&
+             (Policy & 2) &&
+             ReadAcquire(&Thread->DynamicCodeOptOut));
+}
+
 /* GLOBALS ********************************************************************/
 
 ACCESS_MASK MmMakeSectionAccess[8] =
@@ -3904,6 +3920,14 @@ NtCreateSection(OUT PHANDLE SectionHandle,
         return STATUS_INVALID_PAGE_PROTECTION;
     }
 
+    if ((PreviousMode != KernelMode) &&
+        !(AllocationAttributes & SEC_IMAGE) &&
+        (SectionPageProtection & PAGE_IS_EXECUTABLE) &&
+        MiDynamicCodeBlocked(PsGetCurrentProcess()))
+    {
+        return STATUS_DYNAMIC_CODE_BLOCKED;
+    }
+
     /* Use a maximum size of zero, if none was specified */
     SafeMaximumSize.QuadPart = 0;
 
@@ -4198,6 +4222,16 @@ NtMapViewOfSection(
     {
         ObDereferenceObject(Process);
         return Status;
+    }
+
+    if ((PreviousMode != KernelMode) &&
+        (Win32Protect & PAGE_IS_EXECUTABLE) &&
+        !Section->u.Flags.Image &&
+        MiDynamicCodeBlocked(Process))
+    {
+        ObDereferenceObject(Section);
+        ObDereferenceObject(Process);
+        return STATUS_DYNAMIC_CODE_BLOCKED;
     }
 
     if (Section->u.Flags.PhysicalMemory)

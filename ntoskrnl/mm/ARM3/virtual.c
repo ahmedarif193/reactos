@@ -22,6 +22,22 @@
 
 static SIZE_T MiTotalCommitCharge;
 
+static BOOLEAN
+MiDynamicCodeBlocked(
+    _In_ PEPROCESS Process)
+{
+    LONG Policy = ReadAcquire(&Process->DynamicCodeMitigationPolicy);
+    PETHREAD Thread;
+
+    if (!(Policy & 1))
+        return FALSE;
+
+    Thread = PsGetCurrentThread();
+    return !(THREAD_TO_PROCESS(Thread) == Process &&
+             (Policy & 2) &&
+             ReadAcquire(&Thread->DynamicCodeOptOut));
+}
+
 #if defined(_M_ARM64)
 #define MI_EC_CODE_BITMAP_SIZE (1ULL << 32)
 
@@ -162,7 +178,8 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                        IN OUT PVOID *BaseAddress,
                        IN OUT PSIZE_T NumberOfBytesToProtect,
                        IN ULONG NewAccessProtection,
-                       OUT PULONG OldAccessProtection  OPTIONAL);
+                       OUT PULONG OldAccessProtection OPTIONAL,
+                       IN BOOLEAN EnforceDynamicCodePolicy);
 
 VOID
 NTAPI
@@ -2819,7 +2836,8 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                        IN OUT PVOID *BaseAddress,
                        IN OUT PSIZE_T NumberOfBytesToProtect,
                        IN ULONG NewAccessProtection,
-                       OUT PULONG OldAccessProtection OPTIONAL)
+                       OUT PULONG OldAccessProtection OPTIONAL,
+                       IN BOOLEAN EnforceDynamicCodePolicy)
 {
     PMMVAD Vad;
     PMMSUPPORT AddressSpace;
@@ -2903,6 +2921,15 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
         (((ULONG_PTR)EndingAddress >> PAGE_SHIFT) > Vad->EndingVpn))
     {
         Status = STATUS_CONFLICTING_ADDRESSES;
+        goto FailPath;
+    }
+
+    if (EnforceDynamicCodePolicy &&
+        (NewAccessProtection & PAGE_IS_EXECUTABLE) &&
+        (Vad->u.VadFlags.VadType != VadImageMap) &&
+        MiDynamicCodeBlocked(Process))
+    {
+        Status = STATUS_DYNAMIC_CODE_BLOCKED;
         goto FailPath;
     }
 
@@ -4445,7 +4472,8 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
                                     &BaseAddress,
                                     &NumberOfBytesToProtect,
                                     NewAccessProtection,
-                                    &OldAccessProtection);
+                                    &OldAccessProtection,
+                                    PreviousMode != KernelMode);
 
     //
     // Detach if needed
@@ -6451,6 +6479,14 @@ MiAllocateVirtualMemory(IN HANDLE ProcessHandle,
         }
     }
 
+    if ((PreviousMode != KernelMode) &&
+        (Protect & PAGE_IS_EXECUTABLE) &&
+        MiDynamicCodeBlocked(Process))
+    {
+        Status = STATUS_DYNAMIC_CODE_BLOCKED;
+        goto FailPathNoLock;
+    }
+
 #if defined(_M_ARM64)
     if (EcCode)
     {
@@ -7093,7 +7129,8 @@ FailPath:
                                &ProtectBaseAddress,
                                &ProtectSize,
                                Protect,
-                               &OldProtection);
+                               &OldProtection,
+                               FALSE);
     }
 
 FailPathNoLock:

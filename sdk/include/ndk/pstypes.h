@@ -1737,6 +1737,7 @@ typedef struct _ETHREAD
 #endif
 #if defined(__REACTOS__)
     CHAR Win32kPriorityFloor;
+    volatile LONG DynamicCodeOptOut;
 #endif
 } ETHREAD;
 
@@ -1961,6 +1962,7 @@ typedef struct _EPROCESS
     PVOID ProcessWindowStateContext;
     PROCESS_ENERGY_VALUES EnergyValues;
     volatile LONG SignatureMitigationPolicy;
+    volatile LONG DynamicCodeMitigationPolicy;
 #endif
 } EPROCESS;
 
