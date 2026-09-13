@@ -115,7 +115,9 @@ GetProcessMitigationPolicy(
         return TRUE;
     }
 
-    if (MitigationPolicy == ProcessStrictHandleCheckPolicy || MitigationPolicy == ProcessSignaturePolicy)
+    if (MitigationPolicy == ProcessDynamicCodePolicy ||
+        MitigationPolicy == ProcessStrictHandleCheckPolicy ||
+        MitigationPolicy == ProcessSignaturePolicy)
     {
         K32_PROCESS_MITIGATION_INFORMATION Information = {MitigationPolicy, 0};
         NTSTATUS Status;
@@ -172,7 +174,9 @@ SetProcessMitigationPolicy(
         return FALSE;
     }
 
-    if (MitigationPolicy == ProcessStrictHandleCheckPolicy || MitigationPolicy == ProcessSignaturePolicy)
+    if (MitigationPolicy == ProcessDynamicCodePolicy ||
+        MitigationPolicy == ProcessStrictHandleCheckPolicy ||
+        MitigationPolicy == ProcessSignaturePolicy)
     {
         K32_PROCESS_MITIGATION_INFORMATION Information = {MitigationPolicy, 0};
         NTSTATUS Status;
