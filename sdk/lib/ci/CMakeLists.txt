@@ -8,6 +8,7 @@ set(CI_MBEDTLS_SOURCE
 list(TRANSFORM CI_MBEDTLS_SOURCE PREPEND "${REACTOS_SOURCE_DIR}/dll/3rdparty/mbedtls/")
 
 add_library(ci STATIC authenticode.c ${CI_MBEDTLS_SOURCE})
+add_dependencies(ci psdk)
 target_include_directories(ci PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs)
 target_compile_definitions(ci PRIVATE MBEDTLS_CONFIG_FILE="ci_config.h")
 
