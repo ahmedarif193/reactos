@@ -346,7 +346,8 @@ UefiDevicePathMatchesParentDisk(
     while (!IsDevicePathEnd(PartNode))
     {
         if (PartNode->Type == MEDIA_DEVICE_PATH &&
-            PartNode->SubType == MEDIA_HARDDRIVE_DP)
+            (PartNode->SubType == MEDIA_HARDDRIVE_DP ||
+             PartNode->SubType == MEDIA_CDROM_DP))
         {
             return IsDevicePathEnd(DiskNode);
         }
@@ -1315,6 +1316,34 @@ UefiSetBootpath(VOID)
 
     FrldrBootDrive = (FIRST_BIOS_DISK + ArcDriveIndex);
 
+    /* An El Torito device-path node describes the firmware boot image, not
+     * necessarily an optical drive. A hybrid ISO on a USB disk must retain
+     * its disk ARC identity after firmware Block I/O is replaced by USBSTOR.
+     * Select the partition containing the ISO at the same byte offset. */
+    if (RootBlockIo->Media &&
+        RootBlockIo->Media->BlockSize == 512 &&
+        !RootBlockIo->Media->LogicalPartition &&
+        UefiDetectIsoVolume(RootBlockIo))
+    {
+        PARTITION_INFORMATION PartitionEntry;
+        ULONG PartitionNumber;
+
+        for (PartitionNumber = FIRST_PARTITION;
+             DiskGetPartitionEntry(FrldrBootDrive, RootBlockIo->Media->BlockSize, PartitionNumber, &PartitionEntry);
+             ++PartitionNumber)
+        {
+            if (PartitionEntry.StartingOffset.QuadPart != 0 ||
+                PartitionEntry.PartitionLength.QuadPart < 17 * 2048)
+            {
+                continue;
+            }
+
+            FrldrBootPartition = PartitionNumber;
+            RtlStringCbPrintfA(FrLdrBootPath, sizeof(FrLdrBootPath), "multi(0)disk(0)rdisk(%u)partition(%lu)", ArcDriveIndex, PartitionNumber);
+            return TRUE;
+        }
+    }
+
     if (UefiIsCdRomHandle(PublicBootHandle) ||
         UefiIsCdRomHandle(InternalUefiDisk[ArcDriveIndex].Handle))
     {
@@ -1431,9 +1460,7 @@ UefiInitializeBootDevices(VOID)
         return FALSE;
     }
 
-    if (FrldrBootPartition == 0xFF ||
-        UefiIsCdRomHandle(InternalUefiDisk[ArcDriveIndex].Handle) ||
-        (BlockIo->Media->RemovableMedia == TRUE && BlockIo->Media->BlockSize == 2048))
+    if (FrldrBootPartition == 0xFF)
     {
         ARC_STATUS Status;
 
