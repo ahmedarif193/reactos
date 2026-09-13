@@ -283,6 +283,9 @@ AfdGetPeerName( PDEVICE_OBJECT DeviceObject, PIRP Irp,
                 PIO_STACK_LOCATION IrpSp );
 
 /* listen.c */
+NTSTATUS AfdSuperAccept( PDEVICE_OBJECT DeviceObject, PIRP Irp,
+                         PIO_STACK_LOCATION IrpSp );
+VOID AfdSuperAcceptRelease( PIRP Irp );
 NTSTATUS AfdWaitForListen( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 			   PIO_STACK_LOCATION IrpSp );
 

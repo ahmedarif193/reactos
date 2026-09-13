@@ -1019,6 +1019,9 @@ AfdDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         case IOCTL_AFD_WAIT_FOR_LISTEN:
             return AfdWaitForListen( DeviceObject, Irp, IrpSp );
 
+        case IOCTL_AFD_SUPER_ACCEPT:
+            return AfdSuperAccept( DeviceObject, Irp, IrpSp );
+
         case IOCTL_AFD_ACCEPT:
             return AfdAccept( DeviceObject, Irp, IrpSp );
 
@@ -1195,6 +1198,10 @@ CleanupPendingIrp(PAFD_FCB FCB, PIRP Irp, PIO_STACK_LOCATION IrpSp, PAFD_ACTIVE_
             PollReq = Irp->AssociatedIrp.SystemBuffer;
             SignalSocket(Poll, NULL, PollReq, STATUS_CANCELLED, TRUE);
         }
+        else if (IrpSp->Parameters.DeviceIoControl.IoControlCode == IOCTL_AFD_SUPER_ACCEPT)
+        {
+            AfdSuperAcceptRelease(Irp);
+        }
     }
 }
 
@@ -1269,6 +1276,7 @@ AfdCancelHandler(PDEVICE_OBJECT DeviceObject,
             break;
 
         case IOCTL_AFD_WAIT_FOR_LISTEN:
+        case IOCTL_AFD_SUPER_ACCEPT:
             Function = FUNCTION_PREACCEPT;
             break;
 

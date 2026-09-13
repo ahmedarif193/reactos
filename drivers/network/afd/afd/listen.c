@@ -100,6 +100,93 @@ static NTSTATUS SatisfyPreAccept( PIRP Irp, PAFD_TDI_OBJECT_QELT Qelt ) {
     return STATUS_SUCCESS;
 }
 
+VOID AfdSuperAcceptRelease( PIRP Irp ) {
+    PFILE_OBJECT AcceptFileObject = Irp->Tail.Overlay.DriverContext[2];
+    PAFD_SUPER_ACCEPT_INFO Info = Irp->Tail.Overlay.DriverContext[3];
+
+    if( AcceptFileObject ) {
+        ObDereferenceObject( AcceptFileObject );
+        Irp->Tail.Overlay.DriverContext[2] = NULL;
+    }
+    if( Info ) {
+        ExFreePoolWithTag( Info, TAG_AFD_ACCEPT_QUEUE );
+        Irp->Tail.Overlay.DriverContext[3] = NULL;
+    }
+}
+
+static BOOLEAN IsSuperAcceptIrp( PIRP Irp ) {
+    PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation( Irp );
+    return IrpSp->MajorFunction == IRP_MJ_DEVICE_CONTROL &&
+           IrpSp->Parameters.DeviceIoControl.IoControlCode == IOCTL_AFD_SUPER_ACCEPT;
+}
+
+static NTSTATUS SuperAcceptWriteAddress( PCHAR Buffer, ULONG Length,
+                                         PTRANSPORT_ADDRESS Address ) {
+    ULONG AddressLength = Address->Address[0].AddressLength + sizeof(USHORT);
+
+    if( Length < sizeof(INT) + AddressLength )
+        return STATUS_BUFFER_TOO_SMALL;
+
+    *(PINT)Buffer = AddressLength;
+    RtlCopyMemory( Buffer + sizeof(INT), &Address->Address[0].AddressType, AddressLength );
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS SatisfySuperAccept( PAFD_FCB FCB, PIRP Irp,
+                                    PAFD_TDI_OBJECT_QELT Qelt ) {
+    PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation( Irp );
+    PFILE_OBJECT AcceptFileObject = Irp->Tail.Overlay.DriverContext[2];
+    PAFD_SUPER_ACCEPT_INFO Info = Irp->Tail.Overlay.DriverContext[3];
+    PCHAR Buffer = Irp->Tail.Overlay.DriverContext[0];
+    PAFD_FCB AcceptFCB = AcceptFileObject->FsContext;
+    NTSTATUS Status;
+
+    RemoveEntryList( &Qelt->ListEntry );
+
+    if( !SocketAcquireStateLock( AcceptFCB ) ) {
+        Status = STATUS_FILE_CLOSED;
+    } else {
+        AcceptFCB->Connection = Qelt->Object;
+        if( AcceptFCB->RemoteAddress )
+            ExFreePoolWithTag( AcceptFCB->RemoteAddress, TAG_AFD_TRANSPORT_ADDRESS );
+        AcceptFCB->RemoteAddress = TaCopyTransportAddress( Qelt->ConnInfo->RemoteAddress );
+        if( !AcceptFCB->RemoteAddress )
+            Status = STATUS_NO_MEMORY;
+        else
+            Status = MakeSocketIntoConnection( AcceptFCB );
+        if( NT_SUCCESS(Status) )
+            Status = TdiBuildConnectionInfo( &AcceptFCB->ConnectCallInfo, AcceptFCB->RemoteAddress );
+        if( NT_SUCCESS(Status) )
+            Status = TdiBuildConnectionInfo( &AcceptFCB->ConnectReturnInfo, AcceptFCB->RemoteAddress );
+        if( NT_SUCCESS(Status) ) {
+            AcceptFCB->SharedData.State = SOCKET_STATE_CONNECTED;
+            AcceptFCB->PollState |= AFD_EVENT_SEND;
+            AcceptFCB->PollStatus[FD_WRITE_BIT] = STATUS_SUCCESS;
+            PollReeval( AcceptFCB->DeviceExt, AcceptFileObject );
+        }
+        SocketStateUnlock( AcceptFCB );
+    }
+
+    if( NT_SUCCESS(Status) )
+        Status = SuperAcceptWriteAddress( Buffer + Info->ReceiveDataLength,
+                                          Info->LocalAddressLength,
+                                          FCB->LocalAddress );
+    if( NT_SUCCESS(Status) )
+        Status = SuperAcceptWriteAddress( Buffer + Info->ReceiveDataLength + Info->LocalAddressLength,
+                                          Info->RemoteAddressLength,
+                                          Qelt->ConnInfo->RemoteAddress );
+
+    ExFreePoolWithTag( Qelt, TAG_AFD_ACCEPT_QUEUE );
+    AfdSuperAcceptRelease( Irp );
+
+    Irp->IoStatus.Information = 0;
+    Irp->IoStatus.Status = Status;
+    if( Irp->MdlAddress ) UnlockRequest( Irp, IrpSp );
+    (void)IoSetCancelRoutine(Irp, NULL);
+    IoCompleteRequest( Irp, IO_NETWORK_INCREMENT );
+    return Status;
+}
+
 static IO_COMPLETION_ROUTINE ListenComplete;
 static NTSTATUS NTAPI ListenComplete( PDEVICE_OBJECT DeviceObject,
                                       PIRP Irp,
@@ -125,6 +212,7 @@ static NTSTATUS NTAPI ListenComplete( PDEVICE_OBJECT DeviceObject,
            NextIrp = CONTAINING_RECORD(NextIrpEntry, IRP, Tail.Overlay.ListEntry);
            NextIrp->IoStatus.Status = STATUS_FILE_CLOSED;
            NextIrp->IoStatus.Information = 0;
+           if( IsSuperAcceptIrp( NextIrp ) ) AfdSuperAcceptRelease( NextIrp );
            if( NextIrp->MdlAddress ) UnlockRequest( NextIrp, IoGetCurrentIrpStackLocation( NextIrp ) );
            (void)IoSetCancelRoutine(NextIrp, NULL);
            IoCompleteRequest( NextIrp, IO_NETWORK_INCREMENT );
@@ -194,11 +282,12 @@ static NTSTATUS NTAPI ListenComplete( PDEVICE_OBJECT DeviceObject,
         PLIST_ENTRY PendingIrp  =
             RemoveHeadList( &FCB->PendingIrpList[FUNCTION_PREACCEPT] );
         PLIST_ENTRY PendingConn = FCB->PendingConnections.Flink;
-        SatisfyPreAccept
-            ( CONTAINING_RECORD( PendingIrp, IRP,
-                                 Tail.Overlay.ListEntry ),
-              CONTAINING_RECORD( PendingConn, AFD_TDI_OBJECT_QELT,
-                                 ListEntry ) );
+        PIRP AcceptIrp = CONTAINING_RECORD( PendingIrp, IRP, Tail.Overlay.ListEntry );
+        PAFD_TDI_OBJECT_QELT AcceptQelt = CONTAINING_RECORD( PendingConn, AFD_TDI_OBJECT_QELT, ListEntry );
+        if( IsSuperAcceptIrp( AcceptIrp ) )
+            SatisfySuperAccept( FCB, AcceptIrp, AcceptQelt );
+        else
+            SatisfyPreAccept( AcceptIrp, AcceptQelt );
     }
 
     /* Launch new accept socket */
@@ -349,6 +438,103 @@ NTSTATUS AfdWaitForListen( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
         return LeaveIrpUntilLater( FCB, Irp, FUNCTION_PREACCEPT );
     }
+}
+
+NTSTATUS AfdSuperAccept( PDEVICE_OBJECT DeviceObject, PIRP Irp,
+                         PIO_STACK_LOCATION IrpSp ) {
+    PFILE_OBJECT FileObject = IrpSp->FileObject;
+    PAFD_FCB FCB = FileObject->FsContext;
+    PAFD_SUPER_ACCEPT_INFO Info;
+    PFILE_OBJECT AcceptFileObject = NULL;
+    NTSTATUS Status;
+
+    if( IrpSp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(AFD_SUPER_ACCEPT_INFO) ||
+        !Irp->UserBuffer ) {
+        Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest( Irp, IO_NO_INCREMENT );
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Info = ExAllocatePoolWithTag( NonPagedPool, sizeof(*Info), TAG_AFD_ACCEPT_QUEUE );
+    if( !Info ) {
+        Irp->IoStatus.Status = STATUS_NO_MEMORY;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest( Irp, IO_NO_INCREMENT );
+        return STATUS_NO_MEMORY;
+    }
+
+    Status = STATUS_SUCCESS;
+    _SEH2_TRY {
+        if( Irp->RequestorMode != KernelMode )
+            ProbeForRead( Irp->UserBuffer, sizeof(AFD_SUPER_ACCEPT_INFO), sizeof(ULONG) );
+        RtlCopyMemory( Info, Irp->UserBuffer, sizeof(*Info) );
+    } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        Status = _SEH2_GetExceptionCode();
+    } _SEH2_END;
+
+    if( NT_SUCCESS(Status) &&
+        IrpSp->Parameters.DeviceIoControl.InputBufferLength <
+        Info->ReceiveDataLength + Info->LocalAddressLength + Info->RemoteAddressLength ) {
+        Status = STATUS_INVALID_PARAMETER;
+    }
+
+    if( NT_SUCCESS(Status) ) {
+        Status = ObReferenceObjectByHandle( Info->AcceptHandle,
+                                            FILE_READ_DATA | FILE_WRITE_DATA,
+                                            *IoFileObjectType,
+                                            Irp->RequestorMode,
+                                            (PVOID *)&AcceptFileObject,
+                                            NULL );
+    }
+
+    if( NT_SUCCESS(Status) &&
+        ( AcceptFileObject->DeviceObject != DeviceObject ||
+          AcceptFileObject == FileObject ||
+          !AcceptFileObject->FsContext ) ) {
+        Status = STATUS_INVALID_PARAMETER;
+    }
+
+    if( NT_SUCCESS(Status) && !LockRequest( Irp, IrpSp, TRUE, NULL ) )
+        Status = STATUS_ACCESS_VIOLATION;
+
+    if( !NT_SUCCESS(Status) ) {
+        if( AcceptFileObject ) ObDereferenceObject( AcceptFileObject );
+        ExFreePoolWithTag( Info, TAG_AFD_ACCEPT_QUEUE );
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest( Irp, IO_NO_INCREMENT );
+        return Status;
+    }
+
+    Irp->Tail.Overlay.DriverContext[2] = AcceptFileObject;
+    Irp->Tail.Overlay.DriverContext[3] = Info;
+
+    if( !SocketAcquireStateLock( FCB ) ) {
+        AfdSuperAcceptRelease( Irp );
+        return LostSocket( Irp );
+    }
+
+    if( FCB->SharedData.State != SOCKET_STATE_LISTENING ) {
+        AfdSuperAcceptRelease( Irp );
+        return UnlockAndMaybeComplete( FCB, STATUS_INVALID_PARAMETER, Irp, 0 );
+    }
+
+    if( !IsListEmpty( &FCB->PendingConnections ) ) {
+        Status = SatisfySuperAccept
+            ( FCB, Irp,
+              CONTAINING_RECORD( FCB->PendingConnections.Flink, AFD_TDI_OBJECT_QELT, ListEntry ) );
+        if( !IsListEmpty( &FCB->PendingConnections ) ) {
+            FCB->PollState |= AFD_EVENT_ACCEPT;
+            FCB->PollStatus[FD_ACCEPT_BIT] = STATUS_SUCCESS;
+            PollReeval( FCB->DeviceExt, FCB->FileObject );
+        } else
+            FCB->PollState &= ~AFD_EVENT_ACCEPT;
+        SocketStateUnlock( FCB );
+        return Status;
+    }
+
+    return LeaveIrpUntilLater( FCB, Irp, FUNCTION_PREACCEPT );
 }
 
 NTSTATUS AfdAccept( PDEVICE_OBJECT DeviceObject, PIRP Irp,
