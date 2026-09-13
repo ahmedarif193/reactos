@@ -213,11 +213,11 @@ cmake_dependent_option(ARM64EC_RUNTIME
 
 if(DEFINED RPI3VC4_MESA_FROM_SOURCE AND NOT DEFINED MESA_GALLIUM_FROM_SOURCE)
     set(MESA_GALLIUM_FROM_SOURCE "${RPI3VC4_MESA_FROM_SOURCE}" CACHE BOOL
-        "Build the shared Mesa VC4, V3D and softpipe OpenGL ICD from source")
+        "Build the Mesa Gallium OpenGL ICD from source")
 endif()
 cmake_dependent_option(MESA_GALLIUM_FROM_SOURCE
-                       "Build the shared Mesa VC4, V3D and softpipe OpenGL ICD from source" ON
-                       "ARCH STREQUAL arm64 AND NOT ARM64EC_RUNTIME" OFF)
+                       "Build the Mesa Gallium OpenGL ICD from source" ON
+                       "ARCH STREQUAL i386 OR ARCH STREQUAL amd64 OR ARCH STREQUAL arm64;CMAKE_C_COMPILER_ID STREQUAL Clang;NOT MSVC;NOT ARM64EC_RUNTIME" OFF)
 unset(ENABLE_MESA_SOFTPIPE CACHE)
 
 set(_wow64_default OFF)

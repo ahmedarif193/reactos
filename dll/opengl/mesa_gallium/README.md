@@ -5,24 +5,28 @@ SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
 
 # Mesa Gallium OpenGL ICD
 
-`mesa_gallium.dll` is the common Windows WGL ICD for three renderers:
+`mesa_gallium.dll` is the common Windows WGL ICD. Its renderers depend on
+the target architecture:
 
-| Renderer | Backend |
-| --- | --- |
-| `vc4` | Raspberry Pi 3 GPU |
-| `v3d` | Raspberry Pi 5 GPU |
-| `softpipe` | CPU rendering, independent of Raspberry Pi hardware |
+| Renderer | Backend | Architectures |
+| --- | --- | --- |
+| `vc4` | Raspberry Pi 3 GPU | ARM64 |
+| `v3d` | Raspberry Pi 5 GPU | ARM64 |
+| `softpipe` | CPU rendering | i386, AMD64, ARM64 |
 
-Native ARM64 builds enable `MESA_GALLIUM_FROM_SOURCE` by default and build
-all three from the pinned `submodules/mesa` revision, including generic,
-Raspberry Pi 3 and Raspberry Pi 5 configurations. Both Pi display drivers
-register `mesa_gallium.dll`; the same DLL is registered as the `MSOGL`
+Native i386, AMD64 and ARM64 builds using llvm-mingw Clang enable
+`MESA_GALLIUM_FROM_SOURCE` by default. i386 and AMD64 build softpipe;
+ARM64 builds all three from the pinned `submodules/mesa` revision, including
+generic, Raspberry Pi 3 and Raspberry Pi 5 configurations. Both Pi display
+drivers register `mesa_gallium.dll`; the same DLL is registered as the `MSOGL`
 fallback on displays without a hardware ICD. The image packages one shared
 binary. Hardware is preferred by default;
 `GALLIUM_DRIVER=softpipe` forces software rendering without an LLVM dependency.
 
-The `mesa_gallium` target builds and stages the DLL. Mesa and its static
-KMT/zlib dependencies use Release settings even when ReactOS is Debug.
+The `mesa_gallium` target builds and stages the DLL. Mesa uses Release
+settings even when ReactOS is Debug. ARM64 additionally builds its static
+KMT/zlib dependencies in a nested Release configuration. i386 and AMD64
+do not need those dependencies or the nested support build.
 VC4 and V3D retain separate KMT transports because their kernel interfaces
 differ. Softpipe uses the software presentation path.
 
