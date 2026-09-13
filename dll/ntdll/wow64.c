@@ -26,6 +26,16 @@ typedef struct _RTL_THREAD_DESCRIPTOR_INFORMATION
 
 NTSTATUS WINAPI RtlWow64GetCurrentCpuArea(USHORT *machine, void **context, void **context_ex);
 
+#if defined(_M_IX86) && !defined(WOW64_I386_RUNTIME)
+/* The WoW64 build supplies a user-mode service stub instead. */
+NTSTATUS
+WINAPI
+NtWow64GetNativeSystemInformation(SYSTEM_INFORMATION_CLASS class, void *info, ULONG size, ULONG *ret_size)
+{
+    return NtQuerySystemInformation(class, info, size, ret_size);
+}
+#endif
+
 static USHORT
 RtlpNativeMachine(VOID)
 {

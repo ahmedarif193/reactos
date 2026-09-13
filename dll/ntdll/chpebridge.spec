@@ -63,6 +63,7 @@
 @ stdcall NtQueryVolumeInformationFile(long ptr ptr long long) ChpeNtQueryVolumeInformationFile
 @ stdcall NtQueryObject(long long long long long) ChpeNtQueryObject
 @ stdcall NtQuerySystemInformation(long ptr long ptr) ChpeNtQuerySystemInformation
+@ stdcall RtlGetNativeSystemInformation(long ptr long ptr) ChpeRtlGetNativeSystemInformation
 @ stdcall NtQueryVirtualMemory(long ptr long ptr long ptr) ChpeNtQueryVirtualMemory
 @ stdcall NtRaiseException(ptr ptr long) ChpeNtRaiseException
 @ stdcall NtReadFile(long long ptr ptr ptr ptr long ptr ptr) ChpeNtReadFile
