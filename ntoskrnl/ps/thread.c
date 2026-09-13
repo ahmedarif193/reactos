@@ -180,7 +180,8 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
                 IN PINITIAL_TEB Wow64InitialTeb OPTIONAL,
                 IN BOOLEAN CreateSuspended,
                 IN PKSTART_ROUTINE StartRoutine OPTIONAL,
-                IN PVOID StartContext OPTIONAL)
+                IN PVOID StartContext OPTIONAL,
+                IN PVOID Win32StartAddress OPTIONAL)
 {
     HANDLE hThread;
     PEPROCESS Process = NULL;
@@ -332,7 +333,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
         _SEH2_TRY
         {
             Thread->StartAddress = (PVOID)KeGetContextPc(ThreadContext);
-            Thread->Win32StartAddress = (PVOID)KeGetContextReturnRegister(ThreadContext);
+            Thread->Win32StartAddress = Win32StartAddress ? Win32StartAddress : (PVOID)KeGetContextReturnRegister(ThreadContext);
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -652,7 +653,7 @@ PsCreateSystemThread(OUT PHANDLE ThreadHandle,
     }
 
     /* Call the shared function */
-    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, Handle, TargetProcess, ClientId, NULL, NULL, NULL, FALSE, StartRoutine, StartContext);
+    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, Handle, TargetProcess, ClientId, NULL, NULL, NULL, FALSE, StartRoutine, StartContext, NULL);
 }
 
 /*
@@ -1072,13 +1073,13 @@ NtCreateThread(OUT PHANDLE ThreadHandle,
             Status = PspPrepareWow64Thread(ProcessHandle, &Wow64Context, &SafeContext, &Wow64InitialTeb, &SafeInitialTeb);
             if (!NT_SUCCESS(Status)) return Status;
 
-            return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, &SafeContext, &SafeInitialTeb, &Wow64InitialTeb, CreateSuspended, NULL, NULL);
+            return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, &SafeContext, &SafeInitialTeb, &Wow64InitialTeb, CreateSuspended, NULL, NULL, UlongToPtr(Wow64Context.Eax));
         }
     }
 #endif
 
     /* Call the shared function */
-    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, ThreadContext, &SafeInitialTeb, NULL, CreateSuspended, NULL, NULL);
+    return PspCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle, NULL, ClientId, ThreadContext, &SafeInitialTeb, NULL, CreateSuspended, NULL, NULL, NULL);
 }
 
 /*

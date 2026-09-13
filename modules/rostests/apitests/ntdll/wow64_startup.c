@@ -14,6 +14,17 @@ static VOID TestNativePointerFields(VOID)
 {
     TEB64 *NativeTeb = UlongToPtr(NtCurrentTeb()->GdiBatchCount);
     PEB64 *NativePeb;
+    PVOID ImageBase = NtCurrentPeb()->ImageBaseAddress;
+    PIMAGE_NT_HEADERS Headers = RtlImageNtHeader(ImageBase);
+    PVOID StartAddress = NULL;
+    NTSTATUS Status;
+
+    Status = NtQueryInformationThread(NtCurrentThread(), ThreadQuerySetWin32StartAddress,
+                                     &StartAddress, sizeof(StartAddress), NULL);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status) && Headers)
+        ok_ptr(StartAddress, (PUCHAR)ImageBase + Headers->OptionalHeader.AddressOfEntryPoint);
+
     ok(NativeTeb != NULL, "Missing native TEB backlink\n");
     if (!NativeTeb) return;
     ok(NativeTeb->NtTib.ExceptionList == PtrToUlong(NtCurrentTeb()), "Native TIB backlink is %I64x\n", NativeTeb->NtTib.ExceptionList);

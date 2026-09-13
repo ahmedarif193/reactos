@@ -2687,7 +2687,8 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
 #ifdef _WIN64
     Wow64InitialTebPointer = Wow64Peb ? &Wow64InitialTeb : NULL;
 #endif
-    Status = PspCreateThread(&hThread, ThreadDesiredAccess, ThreadObjectAttributes, hProcess, NULL, &ClientId, &ThreadContext, &InitialTeb, Wow64InitialTebPointer, (ThreadFlags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) ? TRUE : FALSE, NULL, NULL);
+    /* The native bootstrap registers do not carry the x86 Win32 entry point. */
+    Status = PspCreateThread(&hThread, ThreadDesiredAccess, ThreadObjectAttributes, hProcess, NULL, &ClientId, &ThreadContext, &InitialTeb, Wow64InitialTebPointer, (ThreadFlags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) ? TRUE : FALSE, NULL, NULL, Wow64InitialTebPointer ? ImageInformation.TransferAddress : NULL);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtCreateUserProcess: PspCreateThread failed, Status=0x%lx\n", Status);
