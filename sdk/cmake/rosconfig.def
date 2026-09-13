@@ -562,7 +562,7 @@ config ENABLE_FEX_ARM64EC
     help
       Whether to build the optional FEX ARM64EC emulator for
       running AMD64 binaries on ARM64. This is enabled by default;
-      configure.sh syncs and prepares the (large) FEX submodule.
+      its pinned source and build dependencies are included in the checkout.
       Missing FEX prerequisites stop configuration while it is enabled.
 
 config ENABLE_WOW64
