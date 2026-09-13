@@ -81,8 +81,7 @@ typedef enum _VIDSCH_SCHEDULER_STATE
  * engine's run queue.  Allocated from NonPagedPool with TAG_VIDSCH.
  * ====================================================================== */
 
-/* Inline (deep-copied) list capacities; submissions with larger lists are
- * rejected with STATUS_NOT_SUPPORTED and take the caller's fallback path. */
+/* Stack scratch capacities used by submit callers, not admission limits. */
 #define VIDSCH_INLINE_ALLOCATIONS   32
 #define VIDSCH_INLINE_PATCHES       64
 #define VIDSCH_MAX_PENDING_PACKETS  512
@@ -140,13 +139,6 @@ typedef struct _VIDSCH_DMA_PACKET
     ULONG                       UmdPrivateDataSize;
     ULONG                       DriverPrivateDataSubmissionEndOffset;
 
-    /* Allocation list and patch location list pointers. */
-    PVOID                       AllocationList;
-    ULONG                       AllocationListSize;
-
-    PVOID                       PatchLocationList;
-    ULONG                       PatchLocationListSize;
-
     /*
      * Node accounting: the performance counter reading taken when this
      * packet was handed to the miniport, or zero when no charge is open.
@@ -169,16 +161,6 @@ typedef struct _VIDSCH_DMA_PACKET
     /* TRUE if this packet represents a present/flip operation. */
     BOOLEAN                     IsPresent;
 
-    /*
-     * Deep-copied allocation list (stack lifetime at the submit site; the
-     * packet may be kicked later from the completion DPC).  Tracked
-     * (fence-at-kick) submissions store KERNEL-side DXGK_ALLOCATIONLIST
-     * entries: SegmentId + PhysicalAddress must survive to the kick-time
-     * DxgkDdiPatch. Public D3DDDI_ALLOCATIONLIST entries never own the
-     * miniport-private allocation handle.
-     */
-    DXGK_ALLOCATIONLIST         InlineAllocationList[VIDSCH_INLINE_ALLOCATIONS];
-    ULONG                       InlineAllocationCount;
     ULONG                       VidPnSourceId;
     D3DDDI_FLIPINTERVAL_TYPE     FlipInterval;
     ULONG                       SubmitFlags;
@@ -217,8 +199,6 @@ typedef struct _VIDSCH_DMA_PACKET
     ULONG64                     SignalFenceValue;
     DPT_SCOPE                   PresentationQueueTrace;
     DPT_SCOPE                   PresentationRetireTrace;
-    D3DDDI_PATCHLOCATIONLIST    InlinePatchList[VIDSCH_INLINE_PATCHES];
-    ULONG                       InlinePatchCount;
     WORK_QUEUE_ITEM             CleanupWorkItem;
     WORK_QUEUE_ITEM             DestroyWorkItem;
 
