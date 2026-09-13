@@ -31,3 +31,54 @@ __ASM_GLOBAL_FUNC(ChpeChkStk,
                   "popq %rax\n\t"
                   "popq %rcx\n\t"
                   "ret")
+
+/*
+ * Capture guest state before any ARM64EC thunk can clobber RAX, R10 or flags.
+ * This is the user-mode path of sdk/lib/rtl/amd64/except_asm.S, using the AMD64
+ * CONTEXT offsets. Native bridge-internal captures still use the EC helper.
+ */
+__ASM_GLOBAL_FUNC(ChpeRtlCaptureContextX64,
+                  "pushfq\n\t"
+                  __ASM_SEH(".seh_stackalloc 8\n\t")
+                  __ASM_SEH(".seh_endprologue\n\t")
+                  "movq %rax,0x78(%rcx)\n\t"
+                  "movl $0x10000f,0x30(%rcx)\n\t"
+                  "movq %rcx,0x80(%rcx)\n\t"
+                  "movq %rdx,0x88(%rcx)\n\t"
+                  "movq %rbx,0x90(%rcx)\n\t"
+                  "movq %rbp,0xa0(%rcx)\n\t"
+                  "movq %rsi,0xa8(%rcx)\n\t"
+                  "movq %rdi,0xb0(%rcx)\n\t"
+                  "movq %r8,0xb8(%rcx)\n\t"
+                  "movq %r9,0xc0(%rcx)\n\t"
+                  "movq %r10,0xc8(%rcx)\n\t"
+                  "movq %r11,0xd0(%rcx)\n\t"
+                  "movq %r12,0xd8(%rcx)\n\t"
+                  "movq %r13,0xe0(%rcx)\n\t"
+                  "movq %r14,0xe8(%rcx)\n\t"
+                  "movq %r15,0xf0(%rcx)\n\t"
+                  "movq 8(%rsp),%rax\n\t"
+                  "movq %rax,0xf8(%rcx)\n\t"
+                  "leaq 16(%rsp),%rax\n\t"
+                  "movq %rax,0x98(%rcx)\n\t"
+                  "movw %cs,0x38(%rcx)\n\t"
+                  "movw %ds,0x3a(%rcx)\n\t"
+                  "movw %es,0x3c(%rcx)\n\t"
+                  "movw %fs,0x3e(%rcx)\n\t"
+                  "movw %gs,0x40(%rcx)\n\t"
+                  "movw %ss,0x42(%rcx)\n\t"
+                  "movl (%rsp),%eax\n\t"
+                  "movl %eax,0x44(%rcx)\n\t"
+                  "stmxcsr 0x34(%rcx)\n\t"
+                  "fxsave 0x100(%rcx)\n\t"
+                  "movb $0,0x105(%rcx)\n\t"
+                  "movw $0,0x106(%rcx)\n\t"
+                  "movq $0,0x108(%rcx)\n\t"
+                  "movq $0,0x110(%rcx)\n\t"
+                  "movl $0x2ffff,0x11c(%rcx)\n\t"
+                  ".irp offset,0x12a,0x13a,0x14a,0x15a,0x16a,0x17a,0x18a,0x19a\n\t"
+                  "movw $0,\\offset(%rcx)\n\t"
+                  "movl $0,\\offset+2(%rcx)\n\t"
+                  ".endr\n\t"
+                  "addq $8,%rsp\n\t"
+                  "ret")

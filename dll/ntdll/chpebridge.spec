@@ -84,7 +84,7 @@
 @ stdcall RtlAcquirePrivilege(ptr long long ptr) ChpeRtlAcquirePrivilege
 @ stdcall RtlAcquireSRWLockExclusive(ptr) ChpeRtlAcquireSRWLockExclusive
 @ stdcall RtlAcquireSRWLockShared(ptr) ChpeRtlAcquireSRWLockShared
-@ stdcall RtlCaptureContext(ptr) ChpeRtlCaptureContext
+@ stdcall RtlCaptureContext(ptr) ChpeRtlCaptureContextX64
 @ stdcall RtlCaptureStackBackTrace(long long ptr ptr) ChpeRtlCaptureStackBackTrace
 @ stdcall RtlCompareMemory(ptr ptr long) ChpeRtlCompareMemory
 @ stdcall RtlCompareUnicodeString(ptr ptr long) ChpeRtlCompareUnicodeString
