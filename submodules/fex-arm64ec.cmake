@@ -1,6 +1,6 @@
 # FEX ARM64EC emulation module for x64 binary support on ARM64 ReactOS.
 #
-# This builds FEX's arm64ecfex.dll from the FEX submodule using FEX's own
+# This builds FEX's arm64ecfex.dll from the vendored FEX source using FEX's own
 # CMake build system as an external project, then deploys the resulting DLL.
 #
 # Enabled by default on ARM64. Configure with -DENABLE_FEX_ARM64EC=OFF to
@@ -14,9 +14,13 @@ set(FEX_SOURCE_DIR "${REACTOS_SOURCE_DIR}/submodules/fex-arm64ec")
 set(FEX_ARM64EC_UNAVAILABLE_REASON)
 
 if(NOT EXISTS "${FEX_SOURCE_DIR}/CMakeLists.txt")
-    set(FEX_ARM64EC_UNAVAILABLE_REASON "submodule source is missing at ${FEX_SOURCE_DIR}")
-elseif(NOT EXISTS "${FEX_SOURCE_DIR}/External/fmt/CMakeLists.txt")
-    set(FEX_ARM64EC_UNAVAILABLE_REASON "submodule source dependencies are incomplete")
+    set(FEX_ARM64EC_UNAVAILABLE_REASON "vendored source is missing at ${FEX_SOURCE_DIR}")
+elseif(NOT EXISTS "${FEX_SOURCE_DIR}/External/fmt/CMakeLists.txt" OR
+       NOT EXISTS "${FEX_SOURCE_DIR}/External/range-v3/CMakeLists.txt" OR
+       NOT EXISTS "${FEX_SOURCE_DIR}/External/rpmalloc/CMakeLists.txt" OR
+       NOT EXISTS "${FEX_SOURCE_DIR}/External/unordered_dense/CMakeLists.txt" OR
+       NOT EXISTS "${FEX_SOURCE_DIR}/External/xxhash/cmake_unofficial/CMakeLists.txt")
+    set(FEX_ARM64EC_UNAVAILABLE_REASON "vendored source dependencies are incomplete")
 elseif(NOT EXISTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/arm64ec-w64-mingw32-clang" OR
        NOT EXISTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin/arm64ec-w64-mingw32-clang++")
     set(FEX_ARM64EC_UNAVAILABLE_REASON "the ARM64EC Clang toolchain is unavailable")
@@ -41,7 +45,7 @@ endif()
 
 if(FEX_ARM64EC_UNAVAILABLE_REASON)
     message(FATAL_ERROR "FEX ARM64EC is enabled but unavailable: ${FEX_ARM64EC_UNAVAILABLE_REASON}. "
-        "Run configure.sh to initialize the FEX submodule, "
+        "Restore the source snapshot recorded in submodules/fex-arm64ec/REACTOS_IMPORT.md, "
         "or use -DENABLE_FEX_ARM64EC=OFF to disable it explicitly.")
 endif()
 
@@ -111,7 +115,7 @@ ExternalProject_Add(fex-arm64ec-build
     UPDATE_COMMAND ""
     PATCH_COMMAND ""
     # Let FEX's build graph check the tracked source on every invocation.
-    # An ExternalProject build stamp cannot track edits inside the submodule.
+    # An ExternalProject build stamp cannot track edits inside the source tree.
     BUILD_ALWAYS TRUE
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=${FEX_ARM64EC_BUILD_TYPE}

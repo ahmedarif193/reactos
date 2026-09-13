@@ -1,0 +1,16 @@
+.DS_Store
+.vscode
+.idea
+.vs
+__pycache__
+
+/build*
+/msvc/**/*.user
+/msvc/**/obj/
+/msvc/**/bin/
+/doc
+/cmake-build-debug
+/amalgamated-dist
+
+.cache
+compile_commands.json

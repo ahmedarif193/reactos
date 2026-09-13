@@ -163,9 +163,8 @@ sync_glmark2_submodule() {
 	[ -f "$GLMARK2_DIR/src/zlib/adler32.c" ] || fail "glmark2 submodule is incomplete after synchronization"
 }
 
-# KDBG on x86 uses the Zydis and Zycore revisions nested in FEX. Fetch only
-# that dependency chain here; recursively fetching FEX would also download its
-# large test-binary submodules.
+# KDBG on x86 uses the Zydis and Zycore revisions vendored with FEX. Verify
+# those sources before CMake consumes them.
 kdb_zydis_enabled() {
 	KDB_CMAKEOPTS_UPPER=$(printf '%s' "$ROS_CMAKEOPTS" | tr '[:lower:]' '[:upper:]')
 	case "$ARCH" in
@@ -197,66 +196,32 @@ kdb_zydis_enabled() {
 	[ "$BUILD_TYPE" = "Debug" ] || [ "$(rosconfig_cache_get DBG)" = "y" ]
 }
 
-sync_kdb_submodules() {
+verify_kdb_sources() {
 	kdb_zydis_enabled || return 0
 
 	KDB_FEX_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
 	KDB_ZYDIS_DIR="$KDB_FEX_DIR/External/zydis"
 	KDB_ZYCORE_DIR="$KDB_ZYDIS_DIR/dependencies/zycore"
-	if [ -f "$KDB_ZYDIS_DIR/src/MetaInfo.c" ] && [ -f "$KDB_ZYCORE_DIR/src/API/Memory.c" ]; then
-		return 0
-	fi
-
-	command -v git >/dev/null 2>&1 || fail "git is required to initialize the KDBG disassembler submodules"
-	git -C "$REACTOS_SOURCE_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "KDBG requires Zydis and Zycore; configure from a recursive Git checkout"
-
-	echo "Syncing KDBG Zydis submodules..."
-	git -C "$REACTOS_SOURCE_DIR" submodule sync -- submodules/fex-arm64ec || fail "failed to sync FEX submodule metadata"
-	git -C "$REACTOS_SOURCE_DIR" submodule update --init --depth 1 -- submodules/fex-arm64ec || fail "failed to initialize the FEX submodule"
-	git -C "$KDB_FEX_DIR" submodule sync -- External/zydis || fail "failed to sync Zydis submodule metadata"
-	git -C "$KDB_FEX_DIR" submodule update --init --depth 1 -- External/zydis || fail "failed to initialize the Zydis submodule"
-	git -C "$KDB_ZYDIS_DIR" submodule sync -- dependencies/zycore || fail "failed to sync Zycore submodule metadata"
-	git -C "$KDB_ZYDIS_DIR" submodule update --init --depth 1 -- dependencies/zycore || fail "failed to initialize the Zycore submodule"
-	[ -f "$KDB_ZYDIS_DIR/src/MetaInfo.c" ] && [ -f "$KDB_ZYCORE_DIR/src/API/Memory.c" ] || fail "KDBG Zydis submodules are incomplete after synchronization"
+	[ -f "$KDB_ZYDIS_DIR/src/MetaInfo.c" ] && [ -f "$KDB_ZYCORE_DIR/src/API/Memory.c" ] ||
+		fail "KDBG requires the vendored Zydis and Zycore sources in submodules/fex-arm64ec"
 }
 
-sync_arm64_submodules() {
+verify_arm64_sources() {
 	[ "$ARCH" = "arm64" ] || return 0
 
-	# The FEX submodule includes large recursive test-binary dependencies. Do
-	# not fetch it when FEX ARM64EC has been explicitly disabled.
 	if ! fex_arm64ec_enabled; then
-		echo "FEX ARM64EC disabled by configuration; skipping FEX submodule sync."
+		echo "FEX ARM64EC disabled by configuration; skipping vendored source check."
 		return 0
 	fi
 
-	if [ ! -d "$REACTOS_SOURCE_DIR/.git" ]; then
-		echo "Skipping ARM64 submodule sync outside a Git checkout."
-		return 0
-	fi
-
-	if ! command -v git >/dev/null 2>&1; then
-		optional_fex_warning "git is unavailable"
-		return 0
-	fi
 	FEX_CHECKOUT_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
-	if [ -f "$FEX_CHECKOUT_DIR/CMakeLists.txt" ] && git -C "$FEX_CHECKOUT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-		FEX_MISSING_SUBMODULES=$(git -C "$FEX_CHECKOUT_DIR" submodule status --recursive 2>/dev/null | sed -n '/^-/p')
-		if [ -z "$FEX_MISSING_SUBMODULES" ]; then
-			echo "FEX ARM64EC submodules already initialized; skipping sync."
-			return 0
-		fi
-	fi
-
-	echo "Syncing FEX ARM64EC submodule..."
-	if ! git -C "$REACTOS_SOURCE_DIR" submodule sync -- submodules/fex-arm64ec; then
-		optional_fex_warning "failed to sync the FEX submodule metadata"
-		return 0
-	fi
-	if ! git -C "$REACTOS_SOURCE_DIR" submodule update --init --recursive -- submodules/fex-arm64ec; then
-		optional_fex_warning "failed to initialize the FEX submodule"
-		return 0
-	fi
+	[ -f "$FEX_CHECKOUT_DIR/CMakeLists.txt" ] &&
+		[ -f "$FEX_CHECKOUT_DIR/External/fmt/CMakeLists.txt" ] &&
+		[ -f "$FEX_CHECKOUT_DIR/External/range-v3/CMakeLists.txt" ] &&
+		[ -f "$FEX_CHECKOUT_DIR/External/rpmalloc/CMakeLists.txt" ] &&
+		[ -f "$FEX_CHECKOUT_DIR/External/unordered_dense/CMakeLists.txt" ] &&
+		[ -f "$FEX_CHECKOUT_DIR/External/xxhash/cmake_unofficial/CMakeLists.txt" ] ||
+		optional_fex_warning "vendored FEX source dependencies are incomplete"
 }
 
 lower_build_type() {
@@ -601,8 +566,8 @@ fi
 echo
 
 sync_glmark2_submodule
-sync_kdb_submodules
-sync_arm64_submodules
+verify_kdb_sources
+verify_arm64_sources
 
 cd "$BUILD_DIR" || exit 1
 

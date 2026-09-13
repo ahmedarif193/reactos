@@ -213,7 +213,7 @@ Visibility follows the build path that actually consumes each setting:
 | Stack protector | GCC only, matching `config.cmake`. |
 | Runtime checks and static analysis | MSVC only; runtime checks are additionally limited to Debug. |
 | ReactOS test suite | Debug builds only. |
-| FEX ARM64EC submodule | ARM64 builds only. |
+| FEX ARM64EC runtime | ARM64 builds only. |
 | WoW64 subsystem | AMD64 builds only. |
 | WDDM compatibility level | WDDM display-model builds only. |
 
