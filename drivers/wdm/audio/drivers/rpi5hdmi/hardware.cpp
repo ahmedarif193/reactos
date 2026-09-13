@@ -1053,54 +1053,74 @@ CRpi5HdmiAdapter::ProcessInterrupts()
 
     while ((InterruptCount = InterlockedExchange(&m_PendingInterrupts, 0)) != 0)
     {
-        while (InterruptCount-- > 0 && InterlockedCompareExchange(&m_Running, 1, 1))
+        ULONGLONG Offset;
+        ULONG HalfIndex, PreviousHalf;
+
+        if (!InterlockedCompareExchange(&m_Running, 1, 1) || !GetDmaBufferOffset(&Offset))
+            continue;
+
+        /* The interrupt bit is not a count of completed DMA blocks. A late
+         * ISR/DPC can observe several completions as one notification. Use
+         * the live DMA cursor so that one missed interrupt cannot permanently
+         * shift conversion onto the period the controller is reading. */
+        HalfIndex = static_cast<ULONG>(Offset / m_PeriodBytes);
+        PreviousHalf = m_HalfIndex;
+        if (HalfIndex == PreviousHalf)
+            continue;
+        m_HalfIndex = HalfIndex;
+
+        if (HalfIndex / 2 != PreviousHalf / 2)
         {
-            ULONG Period = m_HalfIndex / 2;
+            KIRQL OldIrql;
 
-            if ((m_HalfIndex & 1) == 0)
-            {
-                if (m_PendingConversionPeriod >= 0)
-                {
-                    ConvertPeriod(static_cast<ULONG>(m_PendingConversionPeriod));
-                    m_PendingConversionPeriod = -1;
-                }
-            }
-            else
-            {
-                KIRQL OldIrql;
-                m_PendingConversionPeriod = static_cast<LONG>(Period);
-                KeAcquireSpinLock(&m_EventLock, &OldIrql);
-                if (m_NotificationEvent)
-                    KeSetEvent(m_NotificationEvent, IO_NO_INCREMENT, FALSE);
-                KeReleaseSpinLock(&m_EventLock, OldIrql);
-            }
-
-            m_HalfIndex = (m_HalfIndex + 1) % (m_NotificationCount * 2);
+            m_PendingConversionPeriod = (HalfIndex / 2 + m_NotificationCount - 1) % m_NotificationCount;
+            KeAcquireSpinLock(&m_EventLock, &OldIrql);
+            if (m_NotificationEvent)
+                KeSetEvent(m_NotificationEvent, IO_NO_INCREMENT, FALSE);
+            KeReleaseSpinLock(&m_EventLock, OldIrql);
+        }
+        else if ((HalfIndex & 1) != 0 && m_PendingConversionPeriod >= 0 &&
+                 static_cast<ULONG>(m_PendingConversionPeriod) != HalfIndex / 2)
+        {
+            /* Do not convert on the same delayed DPC that first releases a
+             * period: its client has not had a chance to refill it yet. */
+            ConvertPeriod(static_cast<ULONG>(m_PendingConversionPeriod));
+            m_PendingConversionPeriod = -1;
         }
     }
+}
+
+BOOLEAN
+CRpi5HdmiAdapter::GetDmaBufferOffset(PULONGLONG Offset)
+{
+    ULONGLONG SourceAddress;
+
+    if (!m_ShadowBufferSize)
+        return FALSE;
+    SourceAddress = ReadRegister(m_DmaRegisters, DMA40_SOURCE_ADDRESS);
+    SourceAddress |= static_cast<ULONGLONG>(ReadRegister(m_DmaRegisters, DMA40_SOURCE_INFORMATION) & 0xffu) << 32;
+    if (SourceAddress < static_cast<ULONGLONG>(m_ShadowPhysicalAddress.QuadPart) ||
+        SourceAddress > static_cast<ULONGLONG>(m_ShadowPhysicalAddress.QuadPart) + m_ShadowBufferSize)
+        return FALSE;
+    /* The post-incremented source can name the end before the next control
+     * block reloads the first address of the cyclic buffer. */
+    *Offset = (SourceAddress - m_ShadowPhysicalAddress.QuadPart) % m_ShadowBufferSize;
+    return TRUE;
 }
 
 NTSTATUS
 CRpi5HdmiAdapter::GetPosition(PKSAUDIO_POSITION Position)
 {
     ULONGLONG Offset;
-    ULONGLONG SourceAddress;
 
     if (!Position)
         return STATUS_INVALID_PARAMETER;
     if (!m_AudioBufferMdl || !m_AudioBufferSize)
         return STATUS_INVALID_DEVICE_STATE;
 
-    SourceAddress = ReadRegister(m_DmaRegisters, DMA40_SOURCE_ADDRESS);
-    SourceAddress |= static_cast<ULONGLONG>(
-                         ReadRegister(m_DmaRegisters,
-                                      DMA40_SOURCE_INFORMATION) & 0xffu)
-                     << 32;
-    if (SourceAddress >= static_cast<ULONGLONG>(m_ShadowPhysicalAddress.QuadPart) &&
-        SourceAddress < static_cast<ULONGLONG>(m_ShadowPhysicalAddress.QuadPart) +
-                            m_ShadowBufferSize)
+    if (GetDmaBufferOffset(&Offset))
     {
-        Offset = (SourceAddress - m_ShadowPhysicalAddress.QuadPart) / 2;
+        Offset /= 2;
     }
     else
     {

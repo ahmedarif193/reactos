@@ -117,6 +117,7 @@ class CRpi5HdmiAdapter : public CUnknownImpl<IUnknown>
     VOID BuildControlBlocks();
     VOID ConvertPeriod(ULONG Period);
     VOID ProcessInterrupts();
+    BOOLEAN GetDmaBufferOffset(PULONGLONG Offset);
 
     PDEVICE_OBJECT m_DeviceObject;
     PVOID m_CoreRegisters;
