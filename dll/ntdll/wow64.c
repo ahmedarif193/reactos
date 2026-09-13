@@ -263,7 +263,13 @@ RtlWow64GetThreadSelectorEntry(HANDLE handle,
         goto done;
 
     if (selector & 0x04)
+#if defined(__REACTOS__) && defined(_M_ARM64)
+        /* ARM64 has no native LDT, and the software WoW64 CPU does not
+         * install one. Do not forward to an unavailable kernel info class. */
+        return STATUS_NO_LDT;
+#else
         return NtQueryInformationThread(handle, ThreadDescriptorTableEntry, info, size, NULL);
+#endif
 
     entry.HighWord.Bits.Dpl = 3;
     entry.HighWord.Bits.Pres = 1;
