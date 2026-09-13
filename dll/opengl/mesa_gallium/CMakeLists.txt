@@ -114,7 +114,6 @@ if(ARCH STREQUAL "arm64")
 endif()
 
 ExternalProject_Add(mesa_gallium_build
-    DEPENDS ${_mesa_support_dependency}
     PREFIX "${MESA_WORK_DIR}/prefix"
     SOURCE_DIR "${MESA_SOURCE_DIR}"
     BINARY_DIR "${MESA_BINARY_DIR}"
@@ -155,6 +154,13 @@ ExternalProject_Add(mesa_gallium_build
     INSTALL_COMMAND ""
     BUILD_BYPRODUCTS "${MESA_DLL}"
     USES_TERMINAL_BUILD TRUE)
+
+if(_mesa_support_dependency)
+    # Build the support libraries before Meson checks for them, without depending
+    # on the ExternalProject completion stamp that changes on every build.
+    # Meson's Ninja build tracks changes to the libraries themselves.
+    ExternalProject_Add_StepDependencies(mesa_gallium_build configure ${_mesa_support_dependency})
+endif()
 
 add_custom_command(
     OUTPUT "${MESA_GALLIUM_ICD_STAGE}"
