@@ -3682,8 +3682,9 @@ DwmComposeLoop(HANDLE hStopEvent)
                     }
                     DwmStatCounter(&statComposeEnd);
 
-                    gpuResult = gpuFrame ? DwmGpuComposeEnd() : DWM_GPU_FAILED;
-                    if (gpuResult != DWM_GPU_FAILED)
+                    gpuResult = gpuFrame ? DwmGpuComposeEnd() : DwmGpuComposeAbort();
+                    if (gpuResult == DWM_GPU_COMPLETE ||
+                        gpuResult == DWM_GPU_DEFERRED)
                     {
                         DwmStatCounter(&statPresentEnd);
                         /* A deferred present has still completed the GPU
@@ -3720,6 +3721,14 @@ DwmComposeLoop(HANDLE hStopEvent)
                         continue;
                     }
                     DptEnd(&g_DwmPresentTrace, FrameTrace, FALSE, 0);
+                    if (gpuResult == DWM_GPU_RETRY)
+                    {
+                        /* A GDI FRONT can be replaced after GETFRAME but
+                         * before its OpenResource. Preserve the last complete
+                         * scanout and pull current metadata before retrying. */
+                        forceFull = TRUE;
+                        continue;
+                    }
                     if (gpuResult == DWM_GPU_DEFERRED)
                     {
                         gpuDeferred = TRUE;
