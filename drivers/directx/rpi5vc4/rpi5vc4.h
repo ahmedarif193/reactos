@@ -60,7 +60,7 @@
 #define RPI5VC4_VRAM_SIZE_MIN       (16 * 1024 * 1024)
 #define RPI5VC4_V3D_EXEC_RESERVE_SIZE (32 * 1024 * 1024)
 
-/* In-order submission tracking ("the GPU pipeline"). */
+/* Admission limit for legacy escape submissions, not WDDM DMA buffers. */
 #define RPI5VC4_MAX_PENDING         64
 
 /* V3D exposes a 32-bit GPU VA space through one flat native page table.
@@ -76,6 +76,8 @@
 
 typedef struct _RPI5VC4_PENDING_SUBMIT
 {
+    struct _RPI5VC4_PENDING_SUBMIT *Next;
+    BOOLEAN AllocatedFromPool;
     ULONG Fence;
     ULONG NodeOrdinal;
     ULONG ReportNode;
@@ -265,6 +267,9 @@ typedef struct _RPI5VC4_DMA_PRIVATE_DATA
     PHYSICAL_ADDRESS PhysicalAddress;
     PVOID            VirtualAddress;
     ULONG            Size;
+    /* Private-data ranges are byte addressed. Leave room to align the queue
+     * entry within the range, even when its submission offset is unaligned. */
+    UCHAR PendingSubmit[sizeof(RPI5VC4_PENDING_SUBMIT) + TYPE_ALIGNMENT(RPI5VC4_PENDING_SUBMIT) - 1];
 } RPI5VC4_DMA_PRIVATE_DATA, *PRPI5VC4_DMA_PRIVATE_DATA;
 
 struct _RPI5VC4_DEVICE_EXTENSION
@@ -389,8 +394,8 @@ struct _RPI5VC4_DEVICE_EXTENSION
     /* One in-order queue per GPU node; the engines run in parallel. */
     struct
     {
-        RPI5VC4_PENDING_SUBMIT Pending[RPI5VC4_MAX_PENDING];
-        ULONG Head;                   /* index of oldest pending submit    */
+        PRPI5VC4_PENDING_SUBMIT Head;
+        PRPI5VC4_PENDING_SUBMIT Tail;
         ULONG Count;
     } NodeQueue[RPI5VC4_GPU_NODE_COUNT];
     ULONG LastCompletedFence;
