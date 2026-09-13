@@ -21,8 +21,11 @@
 
 /* GLOBALS ********************************************************************/
 
+#define CSR_CLIENT_THREAD_REGISTERED ((PVOID)(ULONG_PTR)1)
+
 extern HANDLE CsrApiPort;
 extern HANDLE CsrPortHeap;
+extern BOOLEAN InsideCsrProcess;
 
 #endif /* _CSRLIB_H_ */
 

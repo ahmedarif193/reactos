@@ -426,6 +426,15 @@ CsrClientCallServer(
         ULONG PointerCount;
         PULONG_PTR OffsetPointer;
 
+        /* Native-created threads can enter Win32 without BaseThreadStartup.
+         * Register their death notification before the server tracks them. */
+        Status = CsrNewThread();
+        if (!NT_SUCCESS(Status))
+        {
+            ApiMessage->Status = Status;
+            return Status;
+        }
+
         /* Check if we got a Capture Buffer */
         if (CaptureBuffer)
         {
