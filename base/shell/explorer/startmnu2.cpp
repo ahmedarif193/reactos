@@ -406,7 +406,7 @@ SM2GetTargetPath(SM2ITEM *pItem)
     }
 
     WCHAR szTarget[MAX_PATH] = L"";
-    if (FAILED(pLink->GetPath(szTarget, _countof(szTarget), NULL, SLGP_UNCPRIORITY)) ||
+    if (FAILED(pLink->GetPath(szTarget, _countof(szTarget), NULL, 0)) ||
         !szTarget[0])
     {
         return FALSE;
