@@ -1,4 +1,5 @@
 #include <asm.h>
+#include <ksarm64.h>
 
     .text
     .align 4
@@ -21,8 +22,9 @@
 KiUserExceptionDispatcher:
     .seh_context
     .seh_endprologue
+    /* The emulator can re-enter using only the synthetic stack frame. */
     mov     x1, sp
-    add     x0, sp, #0x3B0
+    add     x0, sp, #CONTEXT_FRAME_LENGTH
     bl      KiUserExceptionDispatcherWorker
     brk     #1
     .seh_endproc
