@@ -31,6 +31,38 @@ extern ULONG CsrMaxApiRequestThreads;
 
 /* FUNCTIONS ******************************************************************/
 
+static NTSTATUS
+CsrpRegisterClientThread(PCLIENT_ID ClientId)
+{
+    NTSTATUS Status;
+    PCSR_PROCESS Process;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE ThreadHandle;
+
+    /* The LPC header supplies the sender's kernel-authenticated identity.
+     * Only threads of an already connected, live CSR process may join it. */
+    Status = CsrLockProcessByClientId(ClientId->UniqueProcess, &Process);
+    if (!NT_SUCCESS(Status)) return STATUS_ILLEGAL_FUNCTION;
+
+    if (!Process->ClientPort ||
+        (Process->Flags & (CsrProcessTerminating | CsrProcessTerminated | CsrProcessLastThreadTerminated)))
+    {
+        CsrUnlockProcess(Process);
+        return STATUS_PROCESS_IS_TERMINATING;
+    }
+
+    InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, NULL);
+    Status = NtOpenThread(&ThreadHandle, THREAD_ALL_ACCESS, &ObjectAttributes, ClientId);
+    if (NT_SUCCESS(Status))
+    {
+        Status = CsrCreateThread(Process, ThreadHandle, ClientId, FALSE);
+        if (!NT_SUCCESS(Status)) NtClose(ThreadHandle);
+    }
+
+    CsrUnlockProcess(Process);
+    return Status;
+}
+
 #ifdef _WIN64
 
 static VOID
@@ -520,6 +552,15 @@ CsrApiRequestThread(IN PVOID Parameter)
         CsrThread = CsrLocateThreadByClientId(&CsrProcess,
                                               &ReceiveMsg.Header.ClientId);
 
+        /* NtCreateThread/RtlCreateUserThread callers do not send the Win32
+         * create notification. Capture the actual sender on its first API. */
+        if (!CsrThread && MessageType == LPC_REQUEST)
+        {
+            Status = CsrpRegisterClientThread(&ReceiveMsg.Header.ClientId);
+            if (NT_SUCCESS(Status))
+                CsrThread = CsrLocateThreadByClientId(&CsrProcess, &ReceiveMsg.Header.ClientId);
+        }
+
         /* Did we find a thread? */
         if (!CsrThread)
         {
@@ -590,7 +631,7 @@ CsrApiRequestThread(IN PVOID Parameter)
                 /* This is an API Message coming from a non-CSR Thread */
                 ReplyMsg = &ReceiveMsg;
                 ReplyPort = CsrApiPort;
-                ReplyMsg->Status = STATUS_ILLEGAL_FUNCTION;
+                ReplyMsg->Status = Status;
             }
             else if (MessageType == LPC_DATAGRAM)
             {
