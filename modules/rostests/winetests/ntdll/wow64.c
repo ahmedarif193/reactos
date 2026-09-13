@@ -217,15 +217,30 @@ static BOOL create_process_machine( char *cmdline, DWORD flags, USHORT machine, 
     STARTUPINFOEXA si = {{ sizeof(si) }};
     SIZE_T size = 1024;
     BOOL ret;
+    DWORD error;
 
     si.lpAttributeList = list = malloc( size );
-    InitializeProcThreadAttributeList( list, 1, 0, &size );
-    UpdateProcThreadAttribute( list, 0, PROC_THREAD_ATTRIBUTE_MACHINE_TYPE,
-                               &machine, sizeof(machine), NULL, NULL );
-    ret = CreateProcessA( NULL, cmdline, NULL, NULL, FALSE,
-                          EXTENDED_STARTUPINFO_PRESENT | flags, NULL, NULL, &si.StartupInfo, pi );
-    DeleteProcThreadAttributeList( list );
+    if (!list)
+    {
+        SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+        return FALSE;
+    }
+    /* Do not silently relaunch in the current architecture if machine selection
+     * is unsupported. In test_arm64ec that would recursively restart this test. */
+    ret = InitializeProcThreadAttributeList( list, 1, 0, &size );
+    if (ret)
+    {
+        ret = UpdateProcThreadAttribute( list, 0, PROC_THREAD_ATTRIBUTE_MACHINE_TYPE,
+                                         &machine, sizeof(machine), NULL, NULL );
+        if (ret)
+            ret = CreateProcessA( NULL, cmdline, NULL, NULL, FALSE,
+                                  EXTENDED_STARTUPINFO_PRESENT | flags, NULL, NULL, &si.StartupInfo, pi );
+        error = GetLastError();
+        DeleteProcThreadAttributeList( list );
+    }
+    else error = GetLastError();
     free( list );
+    if (!ret) SetLastError( error );
     return ret;
 }
 
