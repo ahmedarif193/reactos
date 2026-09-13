@@ -2536,7 +2536,7 @@
 @ cdecl rand()
 @ cdecl rand_s(ptr)
 @ cdecl realloc(ptr long)
-@ cdecl -stub remainder(double double)
+@ cdecl remainder(double double)
 @ cdecl -stub remainderf(float float)
 @ cdecl remainderl(double double) remainder
 @ cdecl remove(str)
