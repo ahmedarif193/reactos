@@ -514,6 +514,15 @@ ChpepFreeProcessData(VOID)
         ZwFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, MEM_RELEASE);
         ChpeEcCodeBitmap = NULL;
     }
+
+    if (ChpeEcCodeBitmapCommitted)
+    {
+        PVOID BaseAddress = ChpeEcCodeBitmapCommitted;
+        SIZE_T RegionSize = 0;
+
+        ChpeEcCodeBitmapCommitted = NULL;
+        ZwFreeVirtualMemory(NtCurrentProcess(), &BaseAddress, &RegionSize, MEM_RELEASE);
+    }
 }
 
 /*
