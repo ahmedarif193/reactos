@@ -60,7 +60,7 @@ TaskbarPin_ResolveTarget(PCWSTR pszSource, CStringW &Target)
         return FALSE;
 
     WCHAR szTarget[MAX_PATH] = L"";
-    hr = Link->GetPath(szTarget, _countof(szTarget), NULL, SLGP_UNCPRIORITY);
+    hr = Link->GetPath(szTarget, _countof(szTarget), NULL, 0);
     return SUCCEEDED(hr) && szTarget[0] &&
            NormalizeTaskbarPinPath(szTarget, Target);
 }
