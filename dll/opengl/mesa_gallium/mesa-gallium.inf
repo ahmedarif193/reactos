@@ -1,0 +1,7 @@
+; Shared Mesa fallback for displays without a hardware OpenGL ICD.
+
+[AddReg]
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL","DLL",0x00000000,"mesa_gallium.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL","Version",0x00010001,2
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL","DriverVersion",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL","Flags",0x00010001,1

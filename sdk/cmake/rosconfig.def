@@ -465,6 +465,18 @@ config ENABLE_MESA_LLVMPIPE
       This packages an additional ICD; it does not replace opengl32.dll or
       the Raspberry Pi hardware drivers. Runtime driver discovery is separate.
 
+config MESA_GALLIUM_FROM_SOURCE
+    prompt "Shared Mesa VC4, V3D and softpipe OpenGL driver"
+    type bool
+    default y
+    depends TOOLCHAIN=clang
+    depends ARCH=arm64
+    help
+      Build and package mesa_gallium.dll for native ARM64 by default.
+      The shared driver includes VC4 for Raspberry Pi 3, V3D for Raspberry
+      Pi 5, and softpipe for CPU rendering on other ARM64 systems.
+      All three renderers share one DLL and require no LLVM dependency.
+
 config REACTOS_GRAPHICS_DRIVER_MODEL
     prompt "Display driver model"
     type choice

@@ -211,6 +211,15 @@ cmake_dependent_option(ARM64EC_RUNTIME
                        "Whether this ARM64 build provides the ARM64EC user runtime for FEX." OFF
                        "ARCH STREQUAL arm64" OFF)
 
+if(DEFINED RPI3VC4_MESA_FROM_SOURCE AND NOT DEFINED MESA_GALLIUM_FROM_SOURCE)
+    set(MESA_GALLIUM_FROM_SOURCE "${RPI3VC4_MESA_FROM_SOURCE}" CACHE BOOL
+        "Build the shared Mesa VC4, V3D and softpipe OpenGL ICD from source")
+endif()
+cmake_dependent_option(MESA_GALLIUM_FROM_SOURCE
+                       "Build the shared Mesa VC4, V3D and softpipe OpenGL ICD from source" ON
+                       "ARCH STREQUAL arm64 AND NOT ARM64EC_RUNTIME" OFF)
+unset(ENABLE_MESA_SOFTPIPE CACHE)
+
 set(_wow64_default OFF)
 if(ARCH STREQUAL "arm64" AND NOT ARM64EC_RUNTIME)
     set(_wow64_default ON)
