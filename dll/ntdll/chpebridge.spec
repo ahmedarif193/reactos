@@ -45,6 +45,7 @@
 @ stdcall NtQueryKey(long long ptr long ptr) ChpeNtQueryKey
 @ stdcall NtCreateKey(ptr long ptr long ptr long ptr) ChpeNtCreateKey
 @ stdcall NtQueryInformationThread(long long ptr long ptr) ChpeNtQueryInformationThread
+@ stdcall NtQueryInformationProcess(ptr long ptr long ptr) ChpeNtQueryInformationProcess
 @ stdcall RtlFormatCurrentUserKeyPath(ptr) ChpeRtlFormatCurrentUserKeyPath
 @ stdcall RtlFreeUnicodeString(ptr) ChpeRtlFreeUnicodeString
 @ stdcall NtOpenKey(ptr long ptr) ChpeNtOpenKey
@@ -65,7 +66,11 @@
 @ stdcall NtQueryVirtualMemory(long ptr long ptr long ptr) ChpeNtQueryVirtualMemory
 @ stdcall NtRaiseException(ptr ptr long) ChpeNtRaiseException
 @ stdcall NtReadFile(long long ptr ptr ptr ptr long ptr ptr) ChpeNtReadFile
+@ stdcall NtReadVirtualMemory(long ptr ptr long ptr) ChpeNtReadVirtualMemory
 @ stdcall NtSetContextThread(long ptr) ChpeNtSetContextThread
+@ stdcall NtSuspendProcess(ptr) ChpeNtSuspendProcess
+@ stdcall NtSuspendThread(ptr ptr) ChpeNtSuspendThread
+@ stdcall NtResumeThread(ptr ptr) ChpeNtResumeThread
 @ stdcall NtTerminateProcess(long long) ChpeNtTerminateProcess
 @ stdcall NtTerminateThread(long long) ChpeNtTerminateThread
 @ stdcall NtUnmapViewOfSection(long ptr) ChpeNtUnmapViewOfSection

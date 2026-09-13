@@ -1998,6 +1998,36 @@ ChpeNtQueryInformationThread(HANDLE ThreadHandle, THREADINFOCLASS ThreadInformat
 }
 
 NTSTATUS NTAPI
+ChpeNtQueryInformationProcess(HANDLE ProcessHandle, PROCESSINFOCLASS ProcessInformationClass, PVOID ProcessInformation, ULONG ProcessInformationLength, PULONG ReturnLength)
+{
+    return NtQueryInformationProcess(ProcessHandle, ProcessInformationClass, ProcessInformation, ProcessInformationLength, ReturnLength);
+}
+
+NTSTATUS NTAPI
+ChpeNtReadVirtualMemory(HANDLE ProcessHandle, PVOID BaseAddress, PVOID Buffer, SIZE_T Size, PSIZE_T NumberOfBytesRead)
+{
+    return NtReadVirtualMemory(ProcessHandle, BaseAddress, Buffer, Size, NumberOfBytesRead);
+}
+
+NTSTATUS NTAPI
+ChpeNtSuspendProcess(HANDLE ProcessHandle)
+{
+    return NtSuspendProcess(ProcessHandle);
+}
+
+NTSTATUS NTAPI
+ChpeNtSuspendThread(HANDLE ThreadHandle, PULONG PreviousSuspendCount)
+{
+    return NtSuspendThread(ThreadHandle, PreviousSuspendCount);
+}
+
+NTSTATUS NTAPI
+ChpeNtResumeThread(HANDLE ThreadHandle, PULONG PreviousSuspendCount)
+{
+    return NtResumeThread(ThreadHandle, PreviousSuspendCount);
+}
+
+NTSTATUS NTAPI
 ChpeRtlFormatCurrentUserKeyPath(PUNICODE_STRING KeyPath)
 {
     return RtlFormatCurrentUserKeyPath(KeyPath);
