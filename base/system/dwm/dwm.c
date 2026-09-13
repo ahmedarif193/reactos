@@ -3604,6 +3604,11 @@ DwmComposeLoop(HANDLE hStopEvent)
                 {
                     RECT fullBackdrop = {0, 0, g_W, g_H};
 
+                    /* A refreshed wallpaper also changes glass outside the
+                     * original window damage, such as the bottom of a tall
+                     * taskbar. Present the whole refreshed scene. */
+                    pl = cl = 0; pt = ct = 0;
+                    pr = cr = g_W; pb = cb = g_H;
                     g_backdropCacheValid = FALSE;
                     if (!PaintDesktop(g_hdcBackdrop) &&
                         !FillRect(g_hdcBackdrop, &fullBackdrop,
