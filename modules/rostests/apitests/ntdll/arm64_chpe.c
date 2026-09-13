@@ -12,6 +12,7 @@ typedef BOOL (WINAPI *PFN_RtlQueryPerformanceCounter)(PLARGE_INTEGER);
 typedef BOOL (WINAPI *PFN_RtlQueryPerformanceFrequency)(PLARGE_INTEGER);
 typedef NTSTATUS (WINAPI *PFN_RtlWaitOnAddress)(const VOID *, const VOID *, SIZE_T, const LARGE_INTEGER *);
 typedef VOID (WINAPI *PFN_RtlWakeAddress)(const VOID *);
+typedef NTSTATUS (NTAPI *PFN_ThreadSuspendCount)(HANDLE, PULONG);
 
 static HMODULE Ntdll;
 
@@ -271,6 +272,48 @@ Arm64ChpeTestRtlPerformanceSmoke(VOID)
     ok(Frequency.QuadPart > 0, "Expected a positive performance frequency\n");
 }
 
+static DWORD WINAPI Arm64ChpeThreadExit(PVOID Parameter)
+{
+    return (ULONG_PTR)Parameter;
+}
+
+static VOID Arm64ChpeTestThreadSuspendResume(VOID)
+{
+    PFN_ThreadSuspendCount Suspend = LookupProc("NtSuspendThread");
+    PFN_ThreadSuspendCount Resume = LookupProc("NtResumeThread");
+    HANDLE Thread;
+    ULONG Previous;
+    DWORD Result, ExitCode;
+    NTSTATUS Status;
+
+    if (!Suspend || !Resume) return;
+    Thread = CreateThread(NULL, 0, Arm64ChpeThreadExit, ULongToPtr(0x1234), CREATE_SUSPENDED, NULL);
+    ok(Thread != NULL, "Cannot create suspended worker: %lu\n", GetLastError());
+    if (!Thread) return;
+    Previous = 0xdeadbeef;
+    Status = Suspend(Thread, &Previous);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_hex(Previous, 1);
+    Previous = 0xdeadbeef;
+    Status = Resume(Thread, &Previous);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_hex(Previous, 2);
+    Previous = 0xdeadbeef;
+    Status = Resume(Thread, &Previous);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_hex(Previous, 1);
+    Result = WaitForSingleObject(Thread, 5000);
+    ok_hex(Result, WAIT_OBJECT_0);
+    if (Result == WAIT_OBJECT_0)
+    {
+        ExitCode = STILL_ACTIVE;
+        ok(GetExitCodeThread(Thread, &ExitCode), "Cannot query worker exit code\n");
+        ok_hex(ExitCode, 0x1234);
+    }
+    else TerminateThread(Thread, 1);
+    CloseHandle(Thread);
+}
+
 START_TEST(arm64_chpe)
 {
     Ntdll = GetModuleHandleW(L"ntdll.dll");
@@ -285,4 +328,5 @@ START_TEST(arm64_chpe)
     Arm64ChpeTestNtOpenKeyExSmoke();
     Arm64ChpeTestWaitOnAddressSmoke();
     Arm64ChpeTestRtlPerformanceSmoke();
+    Arm64ChpeTestThreadSuspendResume();
 }
