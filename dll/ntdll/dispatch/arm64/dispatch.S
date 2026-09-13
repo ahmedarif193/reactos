@@ -20,6 +20,8 @@
 KiUserExceptionDispatcher:
     .seh_context
     .seh_endprologue
+    mov     x1, sp
+    add     x0, sp, #0x3B0
     bl      KiUserExceptionDispatcherWorker
     brk     #1
     .seh_endproc
