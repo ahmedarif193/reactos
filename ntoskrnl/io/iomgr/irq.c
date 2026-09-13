@@ -212,23 +212,17 @@ IopConnectInterruptExFullySpecific(
  *  IopMsiDispatchEntry wrapper so that ISR calls carry the right
  *  MessageID back to the driver's PKMESSAGE_SERVICE_ROUTINE.
  *
- *  On QEMU / virtual hardware that doesn't expose MSI resources, this
- *  function returns STATUS_NOT_FOUND and the caller is expected to fall
- *  back to the line-based path (which the NDIS bridge already does).
+ *  Without message resources, FallBackServiceRoutine connects the device's
+ *  line interrupt and returns CONNECT_LINE_BASED with a plain KINTERRUPT.
  * ============================================================================ */
 
 /* Per-vector dispatch stub — stored once per connected message vector.
  * Wraps the PKMESSAGE_SERVICE_ROUTINE into a PKSERVICE_ROUTINE by
  * remembering which MessageID this vector maps to. IoConnectInterrupt
- * only speaks PKSERVICE_ROUTINE, so this intermediate shim is required.
- *
- * IsFallback == TRUE means LineRoutine is a plain PKSERVICE_ROUTINE
- * (from the fallback path) and we call it WITHOUT the MessageId arg. */
+ * only speaks PKSERVICE_ROUTINE, so this intermediate shim is required. */
 typedef struct _IOP_MSI_DISPATCH_ENTRY
 {
-    BOOLEAN                     IsFallback;
     PKMESSAGE_SERVICE_ROUTINE   MessageRoutine;
-    PKSERVICE_ROUTINE           LineRoutine;
     PVOID                       ServiceContext;
     ULONG                       MessageId;
 } IOP_MSI_DISPATCH_ENTRY, *PIOP_MSI_DISPATCH_ENTRY;
@@ -242,17 +236,14 @@ IopMsiDispatchWrapper(
     if (entry == NULL)
         return FALSE;
 
-    if (entry->IsFallback)
-    {
-        if (entry->LineRoutine == NULL)
-            return FALSE;
-        return entry->LineRoutine(Interrupt, entry->ServiceContext);
-    }
-
     if (entry->MessageRoutine == NULL)
         return FALSE;
     return entry->MessageRoutine(Interrupt, entry->ServiceContext, entry->MessageId);
 }
+
+NTSTATUS
+IopConnectInterruptExLineBased(
+    _Inout_ PIO_CONNECT_INTERRUPT_PARAMETERS Parameters);
 
 NTSTATUS
 IopConnectInterruptExMessageBased(
@@ -265,11 +256,14 @@ IopConnectInterruptExMessageBased(
     PIO_INTERRUPT_MESSAGE_INFO Table;
     ULONG MessageCount = 0;
     ULONG i, MessageIdx;
+    KIRQL SynchronizeIrql = p->SynchronizeIrql;
     NTSTATUS Status;
 
     PAGED_CODE();
 
-    if (p->PhysicalDeviceObject == NULL || p->MessageServiceRoutine == NULL)
+    if (p->PhysicalDeviceObject == NULL ||
+        p->MessageServiceRoutine == NULL ||
+        p->ConnectionContext.InterruptMessageTable == NULL)
         return STATUS_INVALID_PARAMETER;
 
     /* Look up the device node so we can get the translated resource list. */
@@ -298,6 +292,10 @@ IopConnectInterruptExMessageBased(
             (d->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
         {
             MessageCount++;
+            if (p->SynchronizeIrql && p->SynchronizeIrql < d->u.Interrupt.Level)
+                return STATUS_INVALID_PARAMETER;
+            if (SynchronizeIrql < d->u.Interrupt.Level)
+                SynchronizeIrql = (KIRQL)d->u.Interrupt.Level;
         }
     }
 
@@ -318,7 +316,7 @@ IopConnectInterruptExMessageBased(
         return STATUS_INSUFFICIENT_RESOURCES;
 
     Table->MessageCount = MessageCount;
-    Table->UnifiedIrql  = PASSIVE_LEVEL;
+    Table->UnifiedIrql = SynchronizeIrql;
 
     /* Walk the descriptors again and connect each message vector. */
     MessageIdx = 0;
@@ -344,9 +342,7 @@ IopConnectInterruptExMessageBased(
             goto FailureCleanup;
         }
 
-        DispEntry->IsFallback     = FALSE;
         DispEntry->MessageRoutine = p->MessageServiceRoutine;
-        DispEntry->LineRoutine    = NULL;
         DispEntry->ServiceContext = p->ServiceContext;
         DispEntry->MessageId      = MessageIdx;
 
@@ -357,7 +353,7 @@ IopConnectInterruptExMessageBased(
             p->SpinLock,
             d->u.Interrupt.Vector,
             (KIRQL)d->u.Interrupt.Level,
-            p->SynchronizeIrql ? p->SynchronizeIrql : (KIRQL)d->u.Interrupt.Level,
+            SynchronizeIrql,
             (d->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ? Latched : LevelSensitive,
             FALSE,              /* MSI/MSI-X vectors are not shared */
             d->u.Interrupt.Affinity,
@@ -439,107 +435,27 @@ FailureCleanup:
     return Status;
 
 FallBackToLine:
-    /* No PDO resources or no MSI entries — fall back to a single line-based
-     * connection. The caller provided a FallBackServiceRoutine for this
-     * case; we use it as a plain PKSERVICE_ROUTINE via the dispatch
-     * shim with MessageId = 0.
-     *
-     * To keep the caller's interface consistent (it always passes
-     * &MessageTable as the ConnectionContext), we allocate a real
-     * IO_INTERRUPT_MESSAGE_INFO with one entry containing the line-based
-     * KINTERRUPT. The bridge can then use Table->MessageCount==1 the
-     * same way it handles real MSI. */
     if (p->FallBackServiceRoutine == NULL)
         return STATUS_NOT_FOUND;
     {
-        PIOP_MSI_DISPATCH_ENTRY DispEntry;
-        PKINTERRUPT LineInt = NULL;
-        PIO_INTERRUPT_MESSAGE_INFO FallbackTable;
+        IO_CONNECT_INTERRUPT_PARAMETERS LineParameters;
 
-        /* Pull the first line-based CmResourceTypeInterrupt from the PDO
-         * if available, so we can get vector/irql/affinity for the
-         * fallback connect. */
-        ULONG Vector = 0;
-        KIRQL Irql = PASSIVE_LEVEL;
-        KAFFINITY Affinity = 1;
-        KINTERRUPT_MODE Mode = LevelSensitive;
+        /* The output union carries a KINTERRUPT, not an MSI table. Drivers
+         * use Version to select both their interrupt mode and disconnect API. */
+        RtlZeroMemory(&LineParameters, sizeof(LineParameters));
+        LineParameters.Version = CONNECT_LINE_BASED;
+        LineParameters.LineBased.PhysicalDeviceObject = p->PhysicalDeviceObject;
+        LineParameters.LineBased.InterruptObject = p->ConnectionContext.InterruptObject;
+        LineParameters.LineBased.ServiceRoutine = p->FallBackServiceRoutine;
+        LineParameters.LineBased.ServiceContext = p->ServiceContext;
+        LineParameters.LineBased.SpinLock = p->SpinLock;
+        LineParameters.LineBased.SynchronizeIrql = p->SynchronizeIrql;
+        LineParameters.LineBased.FloatingSave = p->FloatingSave;
 
-        if (DeviceNode != NULL &&
-            DeviceNode->ResourceListTranslated != NULL &&
-            DeviceNode->ResourceListTranslated->Count > 0)
-        {
-            PCM_PARTIAL_RESOURCE_LIST prl =
-                &DeviceNode->ResourceListTranslated->List[0].PartialResourceList;
-            ULONG k;
-            for (k = 0; k < prl->Count; k++)
-            {
-                PCM_PARTIAL_RESOURCE_DESCRIPTOR dd = &prl->PartialDescriptors[k];
-                if (dd->Type == CmResourceTypeInterrupt &&
-                    !(dd->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
-                {
-                    Vector   = dd->u.Interrupt.Vector;
-                    Irql     = (KIRQL)dd->u.Interrupt.Level;
-                    Affinity = dd->u.Interrupt.Affinity;
-                    Mode     = (dd->Flags & CM_RESOURCE_INTERRUPT_LATCHED)
-                                   ? Latched : LevelSensitive;
-                    break;
-                }
-            }
-        }
-
-        if (Vector == 0)
-            return STATUS_NOT_FOUND;
-
-        DispEntry = ExAllocatePoolZero(NonPagedPool,
-                                       sizeof(IOP_MSI_DISPATCH_ENTRY),
-                                       'EsMI');
-        if (DispEntry == NULL)
-            return STATUS_INSUFFICIENT_RESOURCES;
-
-        DispEntry->IsFallback     = TRUE;
-        DispEntry->MessageRoutine = NULL;
-        DispEntry->LineRoutine    = p->FallBackServiceRoutine;
-        DispEntry->ServiceContext = p->ServiceContext;
-        DispEntry->MessageId      = 0;
-
-        Status = IoConnectInterrupt(&LineInt,
-                                    IopMsiDispatchWrapper,
-                                    DispEntry,
-                                    p->SpinLock,
-                                    Vector, Irql, Irql, Mode,
-                                    TRUE, Affinity, p->FloatingSave);
-        if (!NT_SUCCESS(Status))
-        {
-            ExFreePoolWithTag(DispEntry, 'EsMI');
-            return Status;
-        }
-
-        /* Allocate a 1-entry IO_INTERRUPT_MESSAGE_INFO so the caller's
-         * MessageInfoTable interface stays consistent. */
-        FallbackTable = (PIO_INTERRUPT_MESSAGE_INFO)ExAllocatePoolZero(
-            NonPagedPool, sizeof(IO_INTERRUPT_MESSAGE_INFO), 'IsMI');
-        if (FallbackTable == NULL)
-        {
-            IoDisconnectInterrupt(LineInt);
-            ExFreePoolWithTag(DispEntry, 'EsMI');
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        FallbackTable->MessageCount = 1;
-        FallbackTable->UnifiedIrql  = Irql;
-        FallbackTable->MessageInfo[0].InterruptObject = LineInt;
-        FallbackTable->MessageInfo[0].MessageData     = 0;
-        FallbackTable->MessageInfo[0].Vector          = Vector;
-        FallbackTable->MessageInfo[0].Irql            = Irql;
-        FallbackTable->MessageInfo[0].Mode            = Mode;
-        FallbackTable->MessageInfo[0].Polarity        = InterruptActiveHigh;
-        FallbackTable->MessageInfo[0].TargetProcessorSet = Affinity;
-
-        if (p->ConnectionContext.InterruptMessageTable != NULL)
-            *p->ConnectionContext.InterruptMessageTable = FallbackTable;
-        DPRINT("IoConnectInterruptEx: MSI fallback to line-based vector=%lu irql=%u\n",
-               Vector, Irql);
-        return STATUS_SUCCESS;
+        Status = IopConnectInterruptExLineBased(&LineParameters);
+        if (NT_SUCCESS(Status))
+            Parameters->Version = CONNECT_LINE_BASED;
+        return Status;
     }
 }
 

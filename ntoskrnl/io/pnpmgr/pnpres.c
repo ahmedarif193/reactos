@@ -13,11 +13,7 @@
 #include <debug.h>
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
-NTHALAPI
-NTSTATUS
-NTAPI
-HalpGetMessageRoutingInfo(
-    _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo);
+#include <reactos/hal/msi.h>
 #endif
 
 /* Strict MSI/legacy vector-range separation on Intel APIC HAL.
@@ -537,105 +533,47 @@ IopFindInterruptResource(
            IoDesc->Flags,
            IoDesc->u.Interrupt.MinimumVector, IoDesc->u.Interrupt.MaximumVector);
 
-#if defined(_M_AMD64)
-    /* MSI/MSI-X satisfaction path. Allocate a real message vector
-     * via the HAL allocator and synthesize a
-     * CM_RESOURCE_INTERRUPT_MESSAGE descriptor. The PCI driver's
-     * start path will program the MSI capability registers from
-     * the resulting descriptor. */
-    {
-        if (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
-        {
-            HAL_MESSAGE_ROUTING_INFO RoutingInfo;
-            NTSTATUS RoutingStatus;
-            ULONG MessageCount = 1;
-
-            if (IoDesc->u.Interrupt.MinimumVector == IoDesc->u.Interrupt.MaximumVector &&
-                IoDesc->u.Interrupt.MaximumVector >= 1)
-            {
-                MessageCount = IoDesc->u.Interrupt.MaximumVector;
-            }
-
-            RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
-            RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
-            RoutingInfo.Flags = HAL_MSI_ROUTING_ALLOCATE_VECTOR;
-            RoutingInfo.DesiredIrql = CLOCK_LEVEL - 1;
-            RoutingInfo.MessageCount = MessageCount;
-
-            RoutingStatus = HalpGetMessageRoutingInfo(&RoutingInfo);
-            if (NT_SUCCESS(RoutingStatus))
-            {
-                CmDesc->Flags = IoDesc->Flags;
-                CmDesc->ShareDisposition = IoDesc->ShareDisposition;
-                CmDesc->u.Interrupt.Vector   = RoutingInfo.Vector;
-                CmDesc->u.Interrupt.Level    = RoutingInfo.Irql;
-                CmDesc->u.Interrupt.Affinity = RoutingInfo.TargetProcessors;
-                if (MessageCountOut)
-                    *MessageCountOut = MessageCount;
-                DPRINT1("MSI: allocated vector 0x%02x at irql %u\n",
-                        RoutingInfo.Vector, RoutingInfo.Irql);
-                return TRUE;
-            }
-
-            DPRINT1("MSI: HalGetMessageRoutingInfo failed 0x%lx, falling back to legacy alternative\n",
-                    RoutingStatus);
-            return FALSE;
-        }
-    }
-#endif /* defined(_M_AMD64) */
-
-#if defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     if (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
     {
         HAL_MESSAGE_ROUTING_INFO RoutingInfo;
         NTSTATUS RoutingStatus;
         ULONG MessageCount;
-        ULONG AllocCount;
 
-        /*
-         * Message-interrupt requirements encode the requested message count
-         * as MinimumVector == MaximumVector == N (see the PCI PDO's
-         * PdoQueryResourceRequirements).  Grant the whole group: the HAL
-         * allocator hands out a naturally-aligned contiguous power-of-two
-         * block of GICv2m SPIs / ITS LPIs, and the caller emits one
-         * CM_RESOURCE_INTERRUPT_MESSAGE descriptor per message so
-         * IoConnectInterruptEx builds a real per-message ISR for each.
-         */
-        MessageCount = 1;
-        if (IoDesc->u.Interrupt.MinimumVector == IoDesc->u.Interrupt.MaximumVector &&
-            IoDesc->u.Interrupt.MaximumVector >= 1 &&
-            IoDesc->u.Interrupt.MaximumVector <= 512)
+        /* A token/token pair requests one MSI-X message. For MSI, the
+         * distance from MinimumVector to the token encodes the block size. */
+        if (IoDesc->u.Interrupt.MaximumVector == CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN &&
+            IoDesc->u.Interrupt.MinimumVector <= CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN &&
+            IoDesc->u.Interrupt.MinimumVector > CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN - 32)
         {
+            MessageCount = CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN - IoDesc->u.Interrupt.MinimumVector + 1;
+        }
+        else if (IoDesc->u.Interrupt.MinimumVector == IoDesc->u.Interrupt.MaximumVector)
+        {
+            /* Accept the count encoding used by older ReactOS bus drivers. */
             MessageCount = IoDesc->u.Interrupt.MaximumVector;
         }
+        else
+        {
+            return FALSE;
+        }
 
-        AllocCount = 1;
-        while (AllocCount < MessageCount)
-            AllocCount <<= 1;
+        if (MessageCount == 0 || MessageCount > 32 || (MessageCount & (MessageCount - 1)) != 0)
+            return FALSE;
 
         RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
         RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
         RoutingInfo.Flags = HAL_MSI_ROUTING_ALLOCATE_VECTOR;
-        RoutingInfo.MessageCount = AllocCount;
+#if defined(_M_AMD64)
+        RoutingInfo.DesiredIrql = CLOCK_LEVEL - 1;
+#endif
+        RoutingInfo.MessageCount = MessageCount;
 
         RoutingStatus = HalpGetMessageRoutingInfo(&RoutingInfo);
-        if (!NT_SUCCESS(RoutingStatus) && AllocCount > 1)
-        {
-            /* Pool exhausted/fragmented: one shared vector still delivers
-             * (ISR-side demux) — prefer that over failing the device. */
-            DPRINT1("MSI: ARM64 %lu-message block failed 0x%lx — retrying single\n",
-                    AllocCount, RoutingStatus);
-            MessageCount = 1;
-            RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
-            RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
-            RoutingInfo.Flags = HAL_MSI_ROUTING_ALLOCATE_VECTOR;
-            RoutingInfo.MessageCount = 1;
-            RoutingStatus = HalpGetMessageRoutingInfo(&RoutingInfo);
-        }
         if (!NT_SUCCESS(RoutingStatus))
         {
-            DPRINT1("MSI: ARM64 HalpGetMessageRoutingInfo failed 0x%lx\n",
-                    RoutingStatus);
+            DPRINT1("MSI: could not allocate %lu message(s), status 0x%lx\n",
+                    MessageCount, RoutingStatus);
             return FALSE;
         }
 
@@ -646,14 +584,11 @@ IopFindInterruptResource(
         CmDesc->u.Interrupt.Affinity = RoutingInfo.TargetProcessors;
         if (MessageCountOut)
             *MessageCountOut = MessageCount;
-        DPRINT1("MSI: allocated ARM64 message block base 0x%lx count %lu at irql %u affinity 0x%Ix\n",
-                RoutingInfo.Vector,
-                MessageCount,
-                RoutingInfo.Irql,
-                RoutingInfo.TargetProcessors);
+        DPRINT1("MSI: allocated vector 0x%lx count %lu at irql %u\n",
+                RoutingInfo.Vector, MessageCount, RoutingInfo.Irql);
         return TRUE;
     }
-#endif /* defined(_M_ARM64) */
+#endif
 
     {
         ULONG LegacyMin = IoDesc->u.Interrupt.MinimumVector;
@@ -713,12 +648,54 @@ IopFindInterruptResource(
     return FALSE;
 }
 
+static
+VOID
+IopReleaseMessageVector(ULONG Vector)
+{
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    HAL_MESSAGE_ROUTING_INFO RoutingInfo;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
+    RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
+    RoutingInfo.Flags = HAL_MSI_ROUTING_RELEASE_VECTOR;
+    RoutingInfo.MessageCount = 1;
+    RoutingInfo.Vector = Vector;
+    Status = HalpGetMessageRoutingInfo(&RoutingInfo);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("MSI: failed to release reserved vector 0x%lx, status 0x%lx\n", Vector, Status);
+#else
+    UNREFERENCED_PARAMETER(Vector);
+#endif
+}
+
+static
+VOID
+IopReleaseNewMessageVectors(PCM_RESOURCE_LIST ResourceList, ULONG OldCount)
+{
+    PCM_PARTIAL_RESOURCE_LIST Partial;
+    ULONG i;
+
+    if (!ResourceList)
+        return;
+
+    Partial = &ResourceList->List[0].PartialResourceList;
+    for (i = OldCount; i < Partial->Count; i++)
+    {
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc = &Partial->PartialDescriptors[i];
+
+        if (Desc->Type == CmResourceTypeInterrupt && (Desc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+            IopReleaseMessageVector(Desc->u.Interrupt.Vector);
+    }
+}
+
 NTSTATUS NTAPI
 IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST RequirementsList, OUT PCM_RESOURCE_LIST *ResourceList, _In_opt_ PDEVICE_NODE DeviceNode)
 {
     ULONG i, OldCount;
     BOOLEAN AlternateRequired = FALSE;
     PIO_RESOURCE_LIST ResList;
+    NTSTATUS Status = STATUS_CONFLICTING_ADDRESSES;
 
     /* Save the initial resource count when we got here so we can restore if an alternate fails */
     if (*ResourceList != NULL)
@@ -730,6 +707,10 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
     for (i = 0; i < RequirementsList->AlternativeLists; i++, ResList = IopGetNextResourceList(ResList))
     {
         ULONG ii;
+        ULONG NextMessageIndex = 0;
+
+        AlternateRequired = FALSE;
+        IopReleaseNewMessageVectors(*ResourceList, OldCount);
 
         /* We need to get back to where we were before processing the last alternative list */
         if (OldCount == 0 && *ResourceList != NULL)
@@ -748,7 +729,7 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
             /* Allocate the new smaller list */
             NewList = ExAllocatePool(PagedPool, PnpDetermineResourceListSize(*ResourceList));
             if (!NewList)
-                return STATUS_NO_MEMORY;
+                goto NoMemory;
 
             /* Copy the old stuff back */
             RtlCopyMemory(NewList, *ResourceList, PnpDetermineResourceListSize(*ResourceList));
@@ -802,17 +783,17 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                 switch (IoDesc->Type)
                 {
                     case CmResourceTypeInterrupt:
-                        /* A CM_RESOURCE_INTERRUPT_MESSAGE (MSI/MSI-X)
-                         * requirement uses MinimumVector and
-                         * MaximumVector to express the message count,
-                         * not a global vector range. The actual
-                         * allocated vector lives in a distinct pool
-                         * from line IRQs. Match by the MESSAGE flag
-                         * rather than the value range. */
+                        /* Each MSI-X requirement consumes a distinct boot
+                         * message. Never reuse a vector just allocated for
+                         * another requirement in this alternative. */
                         if ((IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
-                            (CmDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                            (CmDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
+                            iii < OldCount && iii >= NextMessageIndex &&
+                            IoDesc->u.Interrupt.MinimumVector == CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN &&
+                            IoDesc->u.Interrupt.MaximumVector == CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN)
                         {
                             Matched = TRUE;
+                            NextMessageIndex = iii + 1;
                         }
                         else if (!(IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
                                  !(CmDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
@@ -932,6 +913,7 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                 ULONG Message;
 
                 /* Setup the new CM descriptor */
+                RtlZeroMemory(&NewDesc, sizeof(NewDesc));
                 NewDesc.Type = IoDesc->Type;
                 NewDesc.Flags = IoDesc->Flags;
                 NewDesc.ShareDisposition = IoDesc->ShareDisposition;
@@ -1058,7 +1040,7 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                         /* We need a new list */
                         NewList = ExAllocatePool(PagedPool, sizeof(CM_RESOURCE_LIST));
                         if (!NewList)
-                            return STATUS_NO_MEMORY;
+                            goto AppendFailed;
 
                         /* Set it up */
                         NewList->Count = 1;
@@ -1076,7 +1058,7 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                         /* Allocate the new larger list */
                         NewList = ExAllocatePool(PagedPool, PnpDetermineResourceListSize(*ResourceList) + sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR));
                         if (!NewList)
-                            return STATUS_NO_MEMORY;
+                            goto AppendFailed;
 
                         /* Copy the old stuff back */
                         RtlCopyMemory(NewList, *ResourceList, PnpDetermineResourceListSize(*ResourceList));
@@ -1097,11 +1079,24 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
                     /* Store the new list */
                     *ResourceList = NewList;
                 }
+                continue;
+
+AppendFailed:
+                /* The current block was reserved before extending the list.
+                 * Release the messages that have not yet been appended too. */
+                if (NewDesc.Type == CmResourceTypeInterrupt && (NewDesc.Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                {
+                    for (; Message < MessageCount; Message++, NewDesc.u.Interrupt.Vector++)
+                        IopReleaseMessageVector(NewDesc.u.Interrupt.Vector);
+                }
+                goto NoMemory;
             }
+
+            AlternateRequired = FALSE;
         }
 
-        /* Check if we need an alternate with no resources left */
-        if (AlternateRequired)
+        /* A required descriptor failure also rejects this whole list. */
+        if (ii != ResList->Count || AlternateRequired)
         {
             DPRINT1("Unable to satisfy preferred resource or alternates in list %lu\n", i);
 
@@ -1115,7 +1110,13 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
 
     /* We ran out of alternates */
     DPRINT1("Out of alternate lists!\n");
+    goto Failure;
 
+NoMemory:
+    Status = STATUS_NO_MEMORY;
+
+Failure:
+    IopReleaseNewMessageVectors(*ResourceList, OldCount);
     /* Free the list */
     if (*ResourceList)
     {
@@ -1124,7 +1125,7 @@ IopFixupResourceListWithRequirements(IN PIO_RESOURCE_REQUIREMENTS_LIST Requireme
     }
 
     /* Fail */
-    return STATUS_CONFLICTING_ADDRESSES;
+    return Status;
 }
 
 static
@@ -2069,7 +2070,7 @@ IopAssignDeviceResources(
    if (!NT_SUCCESS(Status))
    {
        DPRINT1("Failed to fixup a resource list from supplied resources for %wZ\n", &DeviceNode->InstancePath);
-       DeviceNode->Problem = CM_PROB_NORMAL_CONFLICT;
+       PiSetDevNodeProblem(DeviceNode, CM_PROB_NORMAL_CONFLICT);
        goto ByeBye;
    }
 
@@ -2077,7 +2078,7 @@ Finish:
    Status = IopTranslateDeviceResources(DeviceNode);
    if (!NT_SUCCESS(Status))
    {
-       DeviceNode->Problem = CM_PROB_TRANSLATION_FAILED;
+       PiSetDevNodeProblem(DeviceNode, CM_PROB_TRANSLATION_FAILED);
        DPRINT1("Failed to translate resources for %wZ\n", &DeviceNode->InstancePath);
        goto ByeBye;
    }

@@ -1939,7 +1939,15 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
             USBPORT_InterruptService;
 
         Status = UsbPortIoConnectInterruptEx(&ConnectParameters);
-        if (NT_SUCCESS(Status) && FdoExtension->InterruptMessageInfo)
+        if (NT_SUCCESS(Status) && ConnectParameters.Version == CONNECT_LINE_BASED)
+        {
+            FdoExtension->InterruptObject = (PKINTERRUPT)FdoExtension->InterruptMessageInfo;
+            FdoExtension->InterruptMessageInfo = NULL;
+            FdoExtension->MessageInterruptsEnabled = FALSE;
+            FdoExtension->MessageInterruptCount = 0;
+            FdoExtension->Flags |= USBPORT_FLAG_INT_CONNECTED;
+        }
+        else if (NT_SUCCESS(Status) && FdoExtension->InterruptMessageInfo)
         {
             NTSTATUS MsixStatus;
 
@@ -2599,30 +2607,87 @@ static
 VOID
 USBPORT_LimitMessageInterrupts(IN PIO_RESOURCE_REQUIREMENTS_LIST Requirements)
 {
-    PIO_RESOURCE_LIST List;
-    ULONG Limit, i, j;
+    PIO_RESOURCE_LIST SourceList, DestinationList;
+    ULONG Limit, i;
 
     if (!Requirements)
         return;
 
     Limit = KeQueryActiveProcessorCount(NULL) + 1;
-    List = &Requirements->List[0];
+    SourceList = &Requirements->List[0];
+    DestinationList = &Requirements->List[0];
     for (i = 0; i < Requirements->AlternativeLists; i++)
     {
-        for (j = 0; j < List->Count; j++)
+        PIO_RESOURCE_LIST NextSourceList;
+        PIO_RESOURCE_DESCRIPTOR Source, Destination;
+        ULONG SourceCount, Remaining, j;
+
+        SourceCount = SourceList->Count;
+        NextSourceList = (PIO_RESOURCE_LIST)&SourceList->Descriptors[SourceCount];
+        DestinationList->Version = SourceList->Version;
+        DestinationList->Revision = SourceList->Revision;
+        DestinationList->Count = 0;
+        Source = &SourceList->Descriptors[0];
+        Destination = &DestinationList->Descriptors[0];
+        Remaining = Limit;
+
+        for (j = 0; j < SourceCount; j++, Source++)
         {
-            PIO_RESOURCE_DESCRIPTOR Descriptor = &List->Descriptors[j];
-            if (Descriptor->Type == CmResourceTypeInterrupt &&
-                (Descriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+            ULONG Granted = 0;
+
+            if (Source->Type == CmResourceTypeInterrupt &&
+                (Source->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
             {
-                if (Descriptor->u.Interrupt.MaximumVector > Limit)
-                    Descriptor->u.Interrupt.MaximumVector = Limit;
-                if (Descriptor->u.Interrupt.MinimumVector > Limit)
-                    Descriptor->u.Interrupt.MinimumVector = Limit;
+                if (Source->u.Interrupt.MaximumVector == CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN &&
+                    Source->u.Interrupt.MinimumVector <= CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN)
+                {
+                    Granted = CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN - Source->u.Interrupt.MinimumVector + 1;
+                }
+                else if (Source->u.Interrupt.MinimumVector == Source->u.Interrupt.MaximumVector)
+                {
+                    /* Compatibility with the count encoding emitted by older
+                     * ReactOS bus drivers. */
+                    Granted = Source->u.Interrupt.MaximumVector;
+                }
+
+                if (Granted != 0)
+                {
+                    ULONG Allowed = Granted;
+
+                    if (Allowed > Remaining)
+                        Allowed = Remaining;
+                    while (Allowed != 0 && (Allowed & (Allowed - 1)) != 0)
+                        Allowed &= Allowed - 1;
+                    if (Allowed == 0)
+                        continue;
+
+                    *Destination = *Source;
+                    if (Source->u.Interrupt.MaximumVector == CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN)
+                    {
+                        Destination->u.Interrupt.MinimumVector = CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN - Allowed + 1;
+                        Destination->u.Interrupt.MaximumVector = CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN;
+                    }
+                    else
+                    {
+                        Destination->u.Interrupt.MinimumVector = Allowed;
+                        Destination->u.Interrupt.MaximumVector = Allowed;
+                    }
+                    Remaining -= Allowed;
+                    Destination++;
+                    DestinationList->Count++;
+                    continue;
+                }
             }
+
+            *Destination++ = *Source;
+            DestinationList->Count++;
         }
-        List = (PIO_RESOURCE_LIST)&List->Descriptors[List->Count];
+
+        SourceList = NextSourceList;
+        DestinationList = (PIO_RESOURCE_LIST)&DestinationList->Descriptors[DestinationList->Count];
     }
+
+    Requirements->ListSize = (ULONG)((PUCHAR)DestinationList - (PUCHAR)Requirements);
 }
 
 NTSTATUS

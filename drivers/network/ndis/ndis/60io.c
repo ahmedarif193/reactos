@@ -903,7 +903,8 @@ NdisMRegisterInterruptEx(
 
         if (NT_SUCCESS(Status))
         {
-            if (Ext->MsiTable != NULL && Ext->MsiTable->MessageCount > 0)
+            if (p.Version == CONNECT_MESSAGE_BASED &&
+                Ext->MsiTable != NULL && Ext->MsiTable->MessageCount > 0)
             {
                 /* True MSI/MSI-X was connected — keep the table, mark
                  * the InterruptObject as the first vector's PKINTERRUPT
