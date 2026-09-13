@@ -196,13 +196,21 @@ static int winefmt_default_dbg_vlog( enum __wine_debug_class cls, struct __wine_
     return ret;
 }
 
+static unsigned char rtl_dbg_get_channel_flags(const struct __wine_debug_channel *channel)
+{
 #if DBG
-#define __wine_dbg_get_channel_flags(channel) \
-    ((channel) ? (channel)->flags : 0)
+    unsigned char flags = channel ? channel->flags : 0;
+
+    /* RTL cannot use libwine's environment/heap-based channel initialization.
+     * An uninitialized channel is not a request to enable every TRACE. Keep
+     * warnings and errors, and honor explicitly initialized channel flags. */
+    if (flags & (1 << __WINE_DBCL_INIT)) flags &= ~(1 << __WINE_DBCL_TRACE);
+    return flags;
 #else
-#define __wine_dbg_get_channel_flags(channel) \
-    ((void)(channel), 0)
+    (void)channel;
+    return 0;
 #endif
+}
 
 int ros_dbg_log( enum __wine_debug_class cls, struct __wine_debug_channel *channel,
                   const char *file, const char *func, const int line, const char *format, ... )
@@ -210,7 +218,7 @@ int ros_dbg_log( enum __wine_debug_class cls, struct __wine_debug_channel *chann
     int ret;
     va_list valist;
 
-    if (!(__wine_dbg_get_channel_flags(channel) & (1 << cls))) return -1;
+    if (!(rtl_dbg_get_channel_flags(channel) & (1 << cls))) return -1;
 
     va_start(valist, format);
     ret = winefmt_default_dbg_vlog(cls, channel, file, func, line, format, valist);

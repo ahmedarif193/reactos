@@ -101,7 +101,7 @@ InsertAudioDevice(
     {
         /* copy device name */
         RtlAppendUnicodeStringToString(&DeviceEntry->DeviceName, DeviceName);
-        DPRINT1("SYSAUDIO: opened audio interface %wZ\n", DeviceName);
+        DPRINT("SYSAUDIO: opened audio interface %wZ\n", DeviceName);
     }
     else
     {
@@ -111,13 +111,14 @@ InsertAudioDevice(
 
         /* open device */
         Status = OpenDevice(&DeviceEntry->DeviceName, &DeviceEntry->Handle, &DeviceEntry->FileObject);
-        DPRINT1("SYSAUDIO: prefixed open %wZ status %x\n",
+        DPRINT("SYSAUDIO: prefixed open %wZ status %x\n",
                 &DeviceEntry->DeviceName,
                 Status);
     }
 
     if (!NT_SUCCESS(Status))
     {
+        DPRINT1("SYSAUDIO: failed to open audio interface %wZ: %x\n", DeviceName, Status);
         goto cleanup;
     }
 
@@ -159,9 +160,10 @@ DeviceInterfaceChangeCallback(
     if (IsEqualGUIDAligned(&Event->Event,
                            &GUID_DEVICE_INTERFACE_ARRIVAL))
     {
-        DPRINT1("SYSAUDIO: interface arrival %wZ\n", Event->SymbolicLinkName);
+        DPRINT("SYSAUDIO: interface arrival %wZ\n", Event->SymbolicLinkName);
         Status = InsertAudioDevice(DeviceObject, Event->SymbolicLinkName);
-        DPRINT1("SYSAUDIO: insert status %x\n", Status);
+        if (!NT_SUCCESS(Status))
+            DPRINT1("SYSAUDIO: failed to insert audio interface %wZ: %x\n", Event->SymbolicLinkName, Status);
         return Status;
     }
     else
