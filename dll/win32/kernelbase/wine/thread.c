@@ -632,6 +632,8 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetThreadInformation( HANDLE thread, THREAD_INFORM
     {
         case ThreadMemoryPriority:
             return set_ntstatus( NtSetInformationThread( thread, ThreadPagePriority, info, size ));
+        case ThreadDynamicCodePolicy:
+            return set_ntstatus( NtSetInformationThread( thread, ThreadDynamicCodePolicyInfo, info, size ));
         case ThreadPowerThrottling:
             return set_ntstatus( NtSetInformationThread( thread, ThreadPowerThrottlingState, info, size ));
         default:
