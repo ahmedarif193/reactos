@@ -1208,7 +1208,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
 
             Caps->MaxAllocationListSlotId = 255;
             Caps->ApertureSegmentCommitLimit =
-                RPI5VC4_APERTURE_COMMIT_LIMIT;
+                (SIZE_T)RPI5VC4_APERTURE_SIZE;
             Caps->SchedulingCaps.MultiEngineAware = TRUE;
             Caps->GpuEngineTopology.NbAsymetricProcessingNodes =
                 RPI5VC4_GPU_NODE_COUNT;
@@ -1251,13 +1251,14 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc->Size = DeviceExtension->VramSize;
             Desc->CommitLimit = DeviceExtension->VramSize;
             Desc->Flags.CpuVisible = 1;
+            Desc->Flags.PopulatedFromSystemMemory = 1;
             Desc->Flags.LocalBudgetGroup = 1;
 
             Desc = &SegOut->pSegmentDescriptor[1];
             RtlZeroMemory(Desc, sizeof(*Desc));
             Desc->Size = (SIZE_T)RPI5VC4_APERTURE_SIZE;
             Desc->CommitLimit =
-                (SIZE_T)RPI5VC4_APERTURE_COMMIT_LIMIT;
+                (SIZE_T)RPI5VC4_APERTURE_SIZE;
             Desc->Flags.Aperture = 1;
             Desc->Flags.CpuVisible = 1;
             Desc->Flags.ApplicationTarget = 1;
@@ -1294,6 +1295,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc = (PDXGK_SEGMENTDESCRIPTOR4)SegOut->pSegmentDescriptor;
             RtlZeroMemory(Desc, sizeof(*Desc));
             Desc->Flags.CpuVisible = 1;
+            Desc->Flags.PopulatedFromSystemMemory = 1;
             Desc->Flags.LocalBudgetGroup = 1;
             Desc->BaseAddress = DeviceExtension->VramPhysical;
             Desc->CpuTranslatedAddress = DeviceExtension->VramPhysical;
@@ -1310,7 +1312,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc->Flags.NonLocalBudgetGroup = 1;
             Desc->Size = (SIZE_T)RPI5VC4_APERTURE_SIZE;
             Desc->CommitLimit =
-                (SIZE_T)RPI5VC4_APERTURE_COMMIT_LIMIT;
+                (SIZE_T)RPI5VC4_APERTURE_SIZE;
             return STATUS_SUCCESS;
         }
 
@@ -1340,6 +1342,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc = &SegOut->pSegmentDescriptor[0];
             RtlZeroMemory(Desc, sizeof(*Desc));
             Desc->Flags.CpuVisible = 1;
+            Desc->Flags.PopulatedFromSystemMemory = 1;
             Desc->Flags.LocalBudgetGroup = 1;
             Desc->BaseAddress = DeviceExtension->VramPhysical;
             Desc->CpuTranslatedAddress = DeviceExtension->VramPhysical;
@@ -1354,7 +1357,7 @@ Rpi5Vc4DdiQueryAdapterInfo(
             Desc->Flags.NonLocalBudgetGroup = 1;
             Desc->Size = (SIZE_T)RPI5VC4_APERTURE_SIZE;
             Desc->CommitLimit =
-                (SIZE_T)RPI5VC4_APERTURE_COMMIT_LIMIT;
+                (SIZE_T)RPI5VC4_APERTURE_SIZE;
             return STATUS_SUCCESS;
         }
 
@@ -1789,6 +1792,7 @@ Rpi5Vc4DdiCreateAllocation(
         PRPI5VC4_ALLOCATION Allocation;
         CONST RPI5VC4_STANDARD_ALLOCATION_DATA *PrivateData;
         BOOLEAN StandardAllocation;
+        BOOLEAN LocalAllocation;
         ULONG SegmentId;
         SIZE_T Size = (Info->Size != 0) ? Info->Size : PAGE_SIZE;
 
@@ -1803,8 +1807,11 @@ Rpi5Vc4DdiCreateAllocation(
              PrivateData->Type == DXGK_STDALLOCATION_SHADOWSURFACE ||
              PrivateData->Type == DXGK_STDALLOCATION_STAGINGSURFACE ||
              PrivateData->Type == DXGK_STDALLOCATION_GDISURFACE);
-        SegmentId = StandardAllocation ? RPI5VC4_LOCAL_SEGMENT_ID :
-                                         RPI5VC4_APERTURE_SEGMENT_ID;
+        LocalAllocation =
+            StandardAllocation &&
+            PrivateData->Type == DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE;
+        SegmentId = LocalAllocation ? RPI5VC4_LOCAL_SEGMENT_ID :
+                                      RPI5VC4_APERTURE_SEGMENT_ID;
 
         if (Size > MAXULONG_PTR - (PAGE_SIZE - 1))
         {
@@ -1817,9 +1824,9 @@ Rpi5Vc4DdiCreateAllocation(
             return STATUS_INTEGER_OVERFLOW;
         }
         Size = (Size + PAGE_SIZE - 1) & ~(SIZE_T)(PAGE_SIZE - 1);
-        if ((StandardAllocation && Size > DeviceExtension->VramSize) ||
-            (!StandardAllocation &&
-             (ULONGLONG)Size > RPI5VC4_APERTURE_COMMIT_LIMIT))
+        if ((LocalAllocation && Size > DeviceExtension->VramSize) ||
+            (!LocalAllocation &&
+             (ULONGLONG)Size > RPI5VC4_APERTURE_SIZE))
         {
             while (i > 0)
             {
@@ -1859,7 +1866,8 @@ Rpi5Vc4DdiCreateAllocation(
         Info->PreferredSegment.Value = 0;
         Info->PreferredSegment.SegmentId0 = SegmentId;
         Info->Flags.CpuVisible = 1;
-        Info->Flags.AccessedPhysically = StandardAllocation;
+        Info->Flags.Cached = StandardAllocation && !LocalAllocation;
+        Info->Flags.AccessedPhysically = LocalAllocation;
         Info->hAllocation = (HANDLE)Allocation;
     }
 
@@ -2165,6 +2173,11 @@ Rpi5Vc4DdiPresent(
         Device->Adapter->BitsPerPixel == 32 &&
         Present->Flags.Blt &&
         Present->pPatchLocationListOut != NULL &&
+        Present->pAllocationList != NULL &&
+        Present->pAllocationList[DXGK_PRESENT_SOURCE_INDEX].SegmentId ==
+            RPI5VC4_LOCAL_SEGMENT_ID &&
+        Present->pAllocationList[DXGK_PRESENT_DESTINATION_INDEX].SegmentId ==
+            RPI5VC4_LOCAL_SEGMENT_ID &&
         Present->PatchLocationListOutSize >= 2 &&
         Present->DmaSize >= 2 * sizeof(RPI5VC4_DMA_PACKET) &&
         (Present->SrcRect.right - Present->SrcRect.left) ==

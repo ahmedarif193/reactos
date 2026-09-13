@@ -54,10 +54,10 @@
 #define RPI5VC4_APERTURE_SEGMENT_ID 2
 #define RPI5VC4_SEGMENT_COUNT       2
 #define RPI5VC4_SEGMENT_ID          RPI5VC4_LOCAL_SEGMENT_ID
+/* Hardware GPU-VA ceiling. VidMm applies its system-memory budget below it. */
 #define RPI5VC4_APERTURE_SIZE       (4ULL * 1024ULL * 1024ULL * 1024ULL)
-#define RPI5VC4_APERTURE_COMMIT_LIMIT (2ULL * 1024ULL * 1024ULL * 1024ULL)
-#define RPI5VC4_VRAM_SIZE_PREFERRED (64 * 1024 * 1024)
-#define RPI5VC4_VRAM_SIZE_MIN       (16 * 1024 * 1024)
+#define RPI5VC4_LOCAL_SLAB_SIZE_PREFERRED (64 * 1024 * 1024)
+#define RPI5VC4_LOCAL_SLAB_SIZE_MIN       (16 * 1024 * 1024)
 #define RPI5VC4_V3D_EXEC_RESERVE_SIZE (32 * 1024 * 1024)
 
 /* Admission limit for legacy escape submissions, not WDDM DMA buffers. */
