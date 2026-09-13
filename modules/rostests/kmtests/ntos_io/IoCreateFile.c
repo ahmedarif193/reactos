@@ -831,11 +831,12 @@ TestSymlinks(VOID)
     ExFreePool(SysDir.Buffer);
     ExFreePool(Reparse);
 
-    ZwSetInformationFile(ReparseHandle,
-                         &IoStatusBlock,
-                         &ToDelete,
-                         sizeof(ToDelete),
-                         FileDispositionInformation);
+    Status = ZwSetInformationFile(ReparseHandle,
+                                  &IoStatusBlock,
+                                  &ToDelete,
+                                  sizeof(ToDelete),
+                                  FileDispositionInformation);
+    ok_eq_hex(Status, STATUS_SUCCESS);
     ZwClose(ReparseHandle);
 }
 
