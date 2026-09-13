@@ -759,6 +759,7 @@ CsrDestroyProcess(IN PCLIENT_ID Cid,
 
     /* Set the terminated flag */
     CsrProcess->Flags |= CsrProcessTerminating;
+    CsrLockedReferenceProcess(CsrProcess);
 
     /* Get the List Pointers */
     NextEntry = CsrProcess->ThreadList.Flink;
@@ -800,9 +801,11 @@ CsrDestroyProcess(IN PCLIENT_ID Cid,
 
         /* Dereference the thread */
         CsrLockedDereferenceThread(CsrThread);
+        NextEntry = CsrProcess->ThreadList.Flink;
     }
 
     /* Release the Process Lock and return success */
+    CsrLockedDereferenceProcess(CsrProcess);
     CsrReleaseProcessLock();
     return STATUS_SUCCESS;
 }
