@@ -286,6 +286,7 @@ NtContinue(
     }
 
 #ifdef _M_ARM64
+    KiChpeSuspendCheckpoint(Thread);
     KiChpeContinueToEmulation(TrapFrame, ExceptionFrame);
 #endif
 

@@ -659,10 +659,31 @@ KiSuspendNop(
 #ifdef _M_ARM64
 VOID
 NTAPI
+KiChpeSuspendCheckpoint(
+    IN PKTHREAD Thread
+);
+
+VOID
+NTAPI
 KiChpeContinueToEmulation(
     IN PKTRAP_FRAME TrapFrame,
     IN PKEXCEPTION_FRAME ExceptionFrame
 );
+
+FORCEINLINE
+BOOLEAN
+KiChpeClearDeferredSuspend(
+    IN PKTHREAD Thread)
+{
+    if (Thread->ChpeSuspendDeferred)
+    {
+        Thread->ChpeSuspendDeferred = FALSE;
+        return FALSE;
+    }
+    return TRUE;
+}
+#else
+#define KiChpeClearDeferredSuspend(Thread) TRUE
 #endif
 
 VOID
