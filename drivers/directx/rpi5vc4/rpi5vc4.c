@@ -132,7 +132,8 @@ Rpi5Vc4InitCursor(
 /*
  * Allocate the local VRAM slab (segment 1): a contiguous write-combined
  * buffer above the 1 GB mark (in the HVS's and V3D's 40-bit DMA view)
- * holding every WDDM allocation, including flip targets.
+ * reserved for scanout allocations.  Other allocations use the system-memory
+ * aperture reported by QueryAdapterInfo.
  */
 static BOOLEAN
 Rpi5Vc4AllocateVram(
@@ -146,11 +147,11 @@ Rpi5Vc4AllocateVram(
     Boundary.QuadPart = 0;
 
     /* The private execution reserve must not consume the preferred local
-     * segment budget: four 1080p surfaces already need almost 32 MB. */
-    for (Size = RPI5VC4_VRAM_SIZE_PREFERRED + RPI5VC4_V3D_EXEC_RESERVE_SIZE;
-         Size >= RPI5VC4_VRAM_SIZE_MIN;
-         Size = (Size > RPI5VC4_VRAM_SIZE_PREFERRED) ?
-                    RPI5VC4_VRAM_SIZE_PREFERRED : Size / 2)
+     * scanout budget: four 1080p surfaces already need almost 32 MB. */
+    for (Size = RPI5VC4_LOCAL_SLAB_SIZE_PREFERRED + RPI5VC4_V3D_EXEC_RESERVE_SIZE;
+         Size >= RPI5VC4_LOCAL_SLAB_SIZE_MIN;
+         Size = (Size > RPI5VC4_LOCAL_SLAB_SIZE_PREFERRED) ?
+                    RPI5VC4_LOCAL_SLAB_SIZE_PREFERRED : Size / 2)
     {
         DeviceExtension->VramVa = MmAllocateContiguousMemorySpecifyCache(
             Size, Low, High, Boundary, MmWriteCombined);
@@ -165,7 +166,7 @@ Rpi5Vc4AllocateVram(
     }
 
     DeviceExtension->VramAllocationSize = Size;
-    if (Size >= RPI5VC4_VRAM_SIZE_MIN + RPI5VC4_V3D_EXEC_RESERVE_SIZE)
+    if (Size >= RPI5VC4_LOCAL_SLAB_SIZE_MIN + RPI5VC4_V3D_EXEC_RESERVE_SIZE)
         DeviceExtension->VramSize = Size - RPI5VC4_V3D_EXEC_RESERVE_SIZE;
     else
         DeviceExtension->VramSize = Size;
@@ -208,7 +209,7 @@ Rpi5Vc4AllocateVram(
     __dsb(_ARM64_BARRIER_SY);
 #endif
 
-    DPRINT("RPI5VC4: VRAM slab %lu MB at phys 0x%I64x\n",
+    DPRINT("RPI5VC4: local scanout slab %lu MB at phys 0x%I64x\n",
            Size / (1024 * 1024), DeviceExtension->VramPhysical.QuadPart);
     return TRUE;
 }
@@ -295,7 +296,7 @@ DriverEntry(
     InitData.DxgkDdiUnload                = Rpi5Vc4DdiUnload;
     InitData.DxgkDdiQueryAdapterInfo      = Rpi5Vc4DdiQueryAdapterInfo;
 
-    /* Memory management — the VRAM slab segment */
+    /* Memory management — local scanout and system-memory aperture segments */
     InitData.DxgkDdiCreateAllocation      = Rpi5Vc4DdiCreateAllocation;
     InitData.DxgkDdiDestroyAllocation     = Rpi5Vc4DdiDestroyAllocation;
     InitData.DxgkDdiOpenAllocation        = Rpi5Vc4DdiOpenAllocation;
