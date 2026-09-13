@@ -65,9 +65,49 @@ WSPAcceptEx(
     OUT LPDWORD lpdwBytesReceived,
     IN OUT LPOVERLAPPED lpOverlapped)
 {
-    UNIMPLEMENTED;
+    PSOCKET_INFORMATION Socket;
+    AFD_SUPER_ACCEPT_INFO AcceptInfo;
+    PIO_STATUS_BLOCK IOSB;
+    NTSTATUS Status;
 
-    return FALSE;
+    Socket = GetSocketStructure(sListenSocket);
+    if (!Socket)
+    {
+        SetLastError(WSAENOTSOCK);
+        return FALSE;
+    }
+
+    if (!lpOverlapped || !lpOutputBuffer || !GetSocketStructure(sAcceptSocket))
+    {
+        SetLastError(WSAEINVAL);
+        return FALSE;
+    }
+
+    AcceptInfo.AcceptHandle = (HANDLE)sAcceptSocket;
+    AcceptInfo.ReceiveDataLength = dwReceiveDataLength;
+    AcceptInfo.LocalAddressLength = dwLocalAddressLength;
+    AcceptInfo.RemoteAddressLength = dwRemoteAddressLength;
+
+    IOSB = (PIO_STATUS_BLOCK)lpOverlapped;
+    IOSB->Status = STATUS_PENDING;
+
+    Status = NtDeviceIoControlFile((HANDLE)sListenSocket,
+                                   lpOverlapped->hEvent,
+                                   NULL,
+                                   lpOverlapped->hEvent ? NULL : lpOverlapped,
+                                   IOSB,
+                                   IOCTL_AFD_SUPER_ACCEPT,
+                                   lpOutputBuffer,
+                                   dwReceiveDataLength + dwLocalAddressLength + dwRemoteAddressLength,
+                                   &AcceptInfo,
+                                   sizeof(AcceptInfo));
+
+    if (Status == STATUS_SUCCESS && lpdwBytesReceived)
+        *lpdwBytesReceived = (DWORD)IOSB->Information;
+
+    SetLastError(TranslateNtStatusError(Status));
+
+    return Status == STATUS_SUCCESS;
 }
 
 BOOL
@@ -95,7 +135,14 @@ WSPGetAcceptExSockaddrs(
     OUT struct sockaddr **RemoteSockaddr,
     OUT LPINT RemoteSockaddrLength)
 {
-    UNIMPLEMENTED;
+    PCHAR Buffer = (PCHAR)lpOutputBuffer + dwReceiveDataLength;
+
+    *LocalSockaddrLength = *(PINT)Buffer;
+    *LocalSockaddr = (struct sockaddr *)(Buffer + sizeof(INT));
+
+    Buffer += dwLocalAddressLength;
+    *RemoteSockaddrLength = *(PINT)Buffer;
+    *RemoteSockaddr = (struct sockaddr *)(Buffer + sizeof(INT));
 }
 
 /* EOF */
