@@ -431,9 +431,7 @@ static uintptr_t KiUserExceptionDispatcher;
 
 struct alignas(16) KiUserExceptionDispatcherStackLayout {
   ARM64_NT_CONTEXT Context;
-#ifndef __REACTOS__
-  uint64_t Pad[4]; // Only present on newer Windows versions, likely for SVE.
-#endif
+  uint64_t Pad[4]; // ContextEx on ReactOS; reserved space on newer Windows.
   EXCEPTION_RECORD Rec;
   uint64_t Align;
   uint64_t Redzone[2];
