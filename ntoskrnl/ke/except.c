@@ -266,6 +266,9 @@ NtContinue(
     /* Get trap frame and link previous one*/
     Thread = KeGetCurrentThread();
     TrapFrame = Thread->TrapFrame;
+#ifdef _M_ARM64
+    LocalExceptionFrame = *((PKEXCEPTION_FRAME)TrapFrame - 1);
+#endif
     Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
 
     /* Continue from this point on */
