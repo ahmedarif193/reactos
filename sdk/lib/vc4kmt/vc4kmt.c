@@ -1291,6 +1291,50 @@ vc4kmt_primary_allocation(
     return Device != NULL ? Device->hPrimaryAllocation : 0;
 }
 
+NTSTATUS
+vc4kmt_primary_present(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ HWND Window,
+    _In_ const VC4KMT_FENCE *Fence)
+{
+    D3DKMT_PRESENT Present;
+    NTSTATUS Status;
+
+    if (Device == NULL || Window == NULL || Fence == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Device->Fake)
+        return STATUS_NOT_SUPPORTED;
+    if (Device->hContext[RPI5VC4_NODE_TFU] == 0 ||
+        Device->hPrimaryAllocation == 0 || Device->PrimaryGpuVa == 0 ||
+        Device->PrimaryWidth == 0 || Device->PrimaryHeight == 0 ||
+        Device->PrimaryWidth > MAXLONG || Device->PrimaryHeight > MAXLONG)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    /* An MMIO flip need not pass through the TFU submission queue. Finish
+     * the copy before asking dxgkrnl to display the shared primary. The
+     * window identifies the compositor's registered scanout ownership. */
+    Status = vc4kmt_wait(Device, Fence, INFINITE);
+    if (Status != STATUS_SUCCESS)
+        return Status;
+
+    RtlZeroMemory(&Present, sizeof(Present));
+    Present.hContext = Device->hContext[RPI5VC4_NODE_TFU];
+    Present.hWindow = Window;
+    Present.hSource = Device->hPrimaryAllocation;
+    Present.VidPnSourceId = 0;
+    Present.SrcRect.right = Device->PrimaryWidth;
+    Present.SrcRect.bottom = Device->PrimaryHeight;
+    Present.DstRect = Present.SrcRect;
+    Present.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
+    Present.Flags.Flip = 1;
+    Present.Flags.SrcRectValid = 1;
+    Present.Flags.DstRectValid = 1;
+    Present.Flags.RestrictVidPnSource = 1;
+    return D3DKMTPresent(&Present);
+}
+
 VOID
 vc4kmt_primary_invalidate(
     _In_opt_ VC4KMT_DEVICE *Device)
