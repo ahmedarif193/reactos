@@ -281,7 +281,8 @@ PspCreateThread(
     IN PINITIAL_TEB Wow64InitialTeb OPTIONAL,
     IN BOOLEAN CreateSuspended,
     IN PKSTART_ROUTINE StartRoutine OPTIONAL,
-    IN PVOID StartContext OPTIONAL
+    IN PVOID StartContext OPTIONAL,
+    IN PVOID Win32StartAddress OPTIONAL
 );
 
 //
