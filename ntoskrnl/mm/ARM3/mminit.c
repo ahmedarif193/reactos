@@ -2569,7 +2569,29 @@ MmArmInitSystem(IN ULONG Phase,
         // whatever follows are separate from the PDEs that boot loader might've
         // already created (and later, we can blow all that away if we want to).
         //
-#if (NTDDI_VERSION >= NTDDI_WIN8)
+#if defined(_M_IX86)
+        {
+            PMMPTE PointerPde;
+
+            /*
+             * Firmware and loader-only descriptors need not have KSEG0
+             * mappings. Their physical end cannot describe the boot image
+             * span: on a 2 GB machine it can wrap KSEG0_BASE + that span to
+             * zero. Preserve the page tables actually inherited from the
+             * loader, stopping before the recursive page-table mapping.
+             */
+            MmBootImageSize = 0;
+            for (PointerPde = MiAddressToPde(KSEG0_BASE);
+                 PointerPde < MiAddressToPde(PTE_BASE);
+                 PointerPde++)
+            {
+                if (PointerPde->u.Hard.Valid)
+                {
+                    MmBootImageSize = ((ULONG_PTR)MiPdeToAddress(PointerPde + 1) - KSEG0_BASE) >> PAGE_SHIFT;
+                }
+            }
+        }
+#elif (NTDDI_VERSION >= NTDDI_WIN8)
         {
             PLIST_ENTRY NextMd;
             PMEMORY_ALLOCATION_DESCRIPTOR MdBlock;
