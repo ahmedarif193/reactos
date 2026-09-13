@@ -862,11 +862,15 @@ QSI_DEF(SystemProcessorInformation)
 {
     PSYSTEM_PROCESSOR_INFORMATION Spi
         = (PSYSTEM_PROCESSOR_INFORMATION) Buffer;
+    ULONG LegacySize = FIELD_OFFSET(SYSTEM_PROCESSOR_INFORMATION, ProcessorFeatureBits) + sizeof(ULONG);
+    ULONG FeatureBits = (ULONG)KeFeatureBits;
 
-    *ReqSize = sizeof(SYSTEM_PROCESSOR_INFORMATION);
+    /* Older clients still pass the 12-byte structure, even on NT10. Do not
+     * reject it or overwrite the caller's buffer with the extended field. */
+    *ReqSize = Size == LegacySize ? LegacySize : sizeof(SYSTEM_PROCESSOR_INFORMATION);
 
     /* Check user buffer's size */
-    if (Size < sizeof(SYSTEM_PROCESSOR_INFORMATION))
+    if (Size < *ReqSize)
     {
         return STATUS_INFO_LENGTH_MISMATCH;
     }
@@ -884,7 +888,10 @@ QSI_DEF(SystemProcessorInformation)
        bits. For the full value, use SYSTEM_PROCESSOR_FEATURES_INFORMATION.
        See https://www.geoffchappell.com/studies/windows/km/ntoskrnl/api/ex/sysinfo/processor.htm
      */
-    Spi->ProcessorFeatureBits = (ULONG)KeFeatureBits;
+    if (Size == LegacySize)
+        RtlCopyMemory(&Spi->ProcessorFeatureBits, &FeatureBits, sizeof(FeatureBits));
+    else
+        Spi->ProcessorFeatureBits = FeatureBits;
 
     DPRINT("Arch %u Level %u Rev 0x%x\n", Spi->ProcessorArchitecture,
         Spi->ProcessorLevel, Spi->ProcessorRevision);
