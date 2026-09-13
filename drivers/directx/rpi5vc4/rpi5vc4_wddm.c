@@ -918,8 +918,6 @@ Rpi5Vc4DmaPipelineInit(
                   sizeof(DeviceExtension->LastCompletedFencePerNode));
     RtlZeroMemory((PVOID)DeviceExtension->LastReportedFencePerNode,
                   sizeof(DeviceExtension->LastReportedFencePerNode));
-    RtlZeroMemory(DeviceExtension->DmaMappings, sizeof(DeviceExtension->DmaMappings));
-    DeviceExtension->DmaMappingNext = 0;
     DeviceExtension->DmaPipelineInitialized = TRUE;
     DeviceExtension->StopAccepting = FALSE;
 }
@@ -964,8 +962,6 @@ Rpi5Vc4DmaPipelineDrain(
      * advance a fence or emit DMA_COMPLETED. */
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
     RtlZeroMemory(DeviceExtension->NodeQueue, sizeof(DeviceExtension->NodeQueue));
-    RtlZeroMemory(DeviceExtension->DmaMappings, sizeof(DeviceExtension->DmaMappings));
-    DeviceExtension->DmaMappingNext = 0;
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
     DeviceExtension->DmaPipelineInitialized = FALSE;
 }
@@ -1682,7 +1678,7 @@ Rpi5Vc4DdiCreateContext(
 
     CreateContext->ContextInfo.DmaBufferSize = 64 * 1024;
     CreateContext->ContextInfo.DmaBufferSegmentSet = 0; /* system memory */
-    CreateContext->ContextInfo.DmaBufferPrivateDataSize = 0;
+    CreateContext->ContextInfo.DmaBufferPrivateDataSize = sizeof(RPI5VC4_DMA_PRIVATE_DATA);
     CreateContext->ContextInfo.AllocationListSize = 256;
     CreateContext->ContextInfo.PatchLocationListSize = 256;
 
@@ -2159,15 +2155,14 @@ Rpi5Vc4DdiPresent(
 }
 
 static NTSTATUS
-Rpi5Vc4RememberDmaMapping(
+Rpi5Vc4SetDmaPrivateData(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ CONST DXGKARG_PATCH *Patch)
 {
     KIRQL OldIrql;
-    ULONG FreeIndex = MAXULONG;
-    ULONG i;
+    RPI5VC4_DMA_PRIVATE_DATA Data;
 
-    if (Patch->pDmaBuffer == NULL || Patch->DmaBufferSize == 0)
+    if (Patch->pDmaBufferPrivateData == NULL || Patch->DmaBufferPrivateDataSubmissionStartOffset > Patch->DmaBufferPrivateDataSubmissionEndOffset || Patch->DmaBufferPrivateDataSubmissionEndOffset > Patch->DmaBufferPrivateDataSize || Patch->DmaBufferPrivateDataSubmissionEndOffset - Patch->DmaBufferPrivateDataSubmissionStartOffset < sizeof(Data))
         return STATUS_INVALID_PARAMETER;
 
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
@@ -2176,60 +2171,32 @@ Rpi5Vc4RememberDmaMapping(
         KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
         return STATUS_DELETE_PENDING;
     }
-    for (i = 0; i < RPI5VC4_DMA_MAPPING_COUNT; ++i)
-    {
-        ULONG Index = (DeviceExtension->DmaMappingNext + i) % RPI5VC4_DMA_MAPPING_COUNT;
-        PRPI5VC4_DMA_MAPPING Mapping = &DeviceExtension->DmaMappings[Index];
-
-        if (FreeIndex == MAXULONG && Mapping->VirtualAddress == NULL)
-            FreeIndex = Index;
-    }
-    if (FreeIndex == MAXULONG)
-    {
-        KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
-        return STATUS_DEVICE_BUSY;
-    }
-    DeviceExtension->DmaMappings[FreeIndex].SegmentId = Patch->DmaBufferSegmentId;
-    DeviceExtension->DmaMappings[FreeIndex].PhysicalAddress = Patch->DmaBufferPhysicalAddress;
-    DeviceExtension->DmaMappings[FreeIndex].VirtualAddress = Patch->pDmaBuffer;
-    DeviceExtension->DmaMappings[FreeIndex].Size = Patch->DmaBufferSize;
-    if (++DeviceExtension->DmaMappingSequence == 0)
-        ++DeviceExtension->DmaMappingSequence;
-    DeviceExtension->DmaMappings[FreeIndex].Sequence =
-        DeviceExtension->DmaMappingSequence;
-    DeviceExtension->DmaMappingNext = (FreeIndex + 1) % RPI5VC4_DMA_MAPPING_COUNT;
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+
+    /* Patch can be repeated or abandoned without SubmitCommand. Keep the CPU
+     * mapping with the DMA buffer, not in an adapter-wide pending table. */
+    RtlZeroMemory(&Data, sizeof(Data));
+    Data.SegmentId = Patch->DmaBufferSegmentId;
+    Data.PhysicalAddress = Patch->DmaBufferPhysicalAddress;
+    Data.VirtualAddress = Patch->pDmaBuffer;
+    Data.Size = Patch->DmaBufferSize;
+    RtlCopyMemory((PUCHAR)Patch->pDmaBufferPrivateData + Patch->DmaBufferPrivateDataSubmissionStartOffset, &Data, sizeof(Data));
     return STATUS_SUCCESS;
 }
 
-static BOOLEAN
-Rpi5Vc4TakeDmaMappingLocked(
-    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _In_ UINT SegmentId,
-    _In_ PHYSICAL_ADDRESS PhysicalAddress,
-    _Out_ PRPI5VC4_DMA_MAPPING OutMapping)
+static PVOID
+Rpi5Vc4GetDmaBuffer(
+    _In_ CONST DXGKARG_SUBMITCOMMAND *SubmitCommand)
 {
-    PRPI5VC4_DMA_MAPPING Oldest = NULL;
-    ULONG i;
+    RPI5VC4_DMA_PRIVATE_DATA Data;
 
-    for (i = 0; i < RPI5VC4_DMA_MAPPING_COUNT; ++i)
-    {
-        PRPI5VC4_DMA_MAPPING Mapping = &DeviceExtension->DmaMappings[i];
+    if (SubmitCommand->pDmaBufferPrivateData == NULL || SubmitCommand->DmaBufferPrivateDataSubmissionStartOffset > SubmitCommand->DmaBufferPrivateDataSubmissionEndOffset || SubmitCommand->DmaBufferPrivateDataSubmissionEndOffset > SubmitCommand->DmaBufferPrivateDataSize || SubmitCommand->DmaBufferPrivateDataSubmissionEndOffset - SubmitCommand->DmaBufferPrivateDataSubmissionStartOffset < sizeof(Data))
+        return NULL;
 
-        if (Mapping->SegmentId == SegmentId &&
-            Mapping->PhysicalAddress.QuadPart == PhysicalAddress.QuadPart &&
-            Mapping->VirtualAddress != NULL &&
-            (Oldest == NULL || Mapping->Sequence < Oldest->Sequence))
-        {
-            Oldest = Mapping;
-        }
-    }
-    if (Oldest == NULL)
-        return FALSE;
-
-    *OutMapping = *Oldest;
-    RtlZeroMemory(Oldest, sizeof(*Oldest));
-    return TRUE;
+    RtlCopyMemory(&Data, (PUCHAR)SubmitCommand->pDmaBufferPrivateData + SubmitCommand->DmaBufferPrivateDataSubmissionStartOffset, sizeof(Data));
+    if (Data.SegmentId != SubmitCommand->DmaBufferSegmentId || Data.PhysicalAddress.QuadPart != SubmitCommand->DmaBufferPhysicalAddress.QuadPart || Data.Size != SubmitCommand->DmaBufferSize)
+        return NULL;
+    return Data.VirtualAddress;
 }
 
 NTSTATUS
@@ -2240,7 +2207,6 @@ Rpi5Vc4DdiPatch(
 {
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
     ULONGLONG SlabPhys;
-    NTSTATUS Status;
     UINT i;
 
     if (DeviceExtension == NULL || Patch == NULL)
@@ -2259,7 +2225,7 @@ Rpi5Vc4DdiPatch(
      * simply come with no patch locations.
      */
     if (Patch->PatchLocationListSize == 0)
-        return Rpi5Vc4RememberDmaMapping(DeviceExtension, Patch);
+        return Rpi5Vc4SetDmaPrivateData(DeviceExtension, Patch);
 
     SlabPhys = (ULONGLONG)DeviceExtension->VramPhysical.QuadPart;
 
@@ -2304,8 +2270,7 @@ Rpi5Vc4DdiPatch(
         *(ULONG UNALIGNED *)((PUCHAR)Patch->pDmaBuffer + Loc->PatchOffset) = GpuVa;
     }
 
-    Status = Rpi5Vc4RememberDmaMapping(DeviceExtension, Patch);
-    return Status;
+    return Rpi5Vc4SetDmaPrivateData(DeviceExtension, Patch);
 }
 
 /* ========================================================================
@@ -2327,9 +2292,7 @@ Rpi5Vc4DdiSubmitCommand(
     BOOLEAN Completed;
     BOOLEAN NeedPoll;
     BOOLEAN PipelineAborted;
-    BOOLEAN MappingFound;
     BOOLEAN Stopping;
-    RPI5VC4_DMA_MAPPING DmaMapping;
     PRPI5VC4_CONTEXT Context;
     PRPI5VC4_WDDM_DEVICE KmdDevice;
     PRPI5VC4_PROCESS Process;
@@ -2355,12 +2318,9 @@ Rpi5Vc4DdiSubmitCommand(
     }
     Process = KmdDevice->Process;
 
-    RtlZeroMemory(&DmaMapping, sizeof(DmaMapping));
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
-    MappingFound = Rpi5Vc4TakeDmaMappingLocked(DeviceExtension, SubmitCommand->DmaBufferSegmentId, SubmitCommand->DmaBufferPhysicalAddress, &DmaMapping);
     Stopping = DeviceExtension->StopAccepting;
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
-    DmaBuffer = MappingFound ? DmaMapping.VirtualAddress : NULL;
 
     if (Stopping)
         return STATUS_DELETE_PENDING;
@@ -2371,7 +2331,7 @@ Rpi5Vc4DdiSubmitCommand(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if ((MappingFound && DmaMapping.Size != SubmitCommand->DmaBufferSize) || SubmitCommand->DmaBufferSubmissionStartOffset > SubmitCommand->DmaBufferSubmissionEndOffset || SubmitCommand->DmaBufferSubmissionEndOffset > SubmitCommand->DmaBufferSize)
+    if (SubmitCommand->DmaBufferSubmissionStartOffset > SubmitCommand->DmaBufferSubmissionEndOffset || SubmitCommand->DmaBufferSubmissionEndOffset > SubmitCommand->DmaBufferSize)
         return STATUS_INVALID_PARAMETER;
 
     /*
@@ -2383,6 +2343,7 @@ Rpi5Vc4DdiSubmitCommand(
      */
     if (!SubmitCommand->Flags.NullRendering)
     {
+        DmaBuffer = Rpi5Vc4GetDmaBuffer(SubmitCommand);
         if (DmaBuffer == NULL || SubmitCommand->DmaBufferSubmissionStartOffset == SubmitCommand->DmaBufferSubmissionEndOffset)
             return STATUS_INVALID_PARAMETER;
         if (!Rpi5Vc4ParseDmaStream((PUCHAR)DmaBuffer + SubmitCommand->DmaBufferSubmissionStartOffset, SubmitCommand->DmaBufferSubmissionEndOffset - SubmitCommand->DmaBufferSubmissionStartOffset, &Job, &HasJob, &HasPresent))
@@ -2915,8 +2876,6 @@ Rpi5Vc4DdiResetFromTimeout(
 
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
     RtlZeroMemory(DeviceExtension->NodeQueue, sizeof(DeviceExtension->NodeQueue));
-    RtlZeroMemory(DeviceExtension->DmaMappings, sizeof(DeviceExtension->DmaMappings));
-    DeviceExtension->DmaMappingNext = 0;
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
     return ResetSucceeded ? STATUS_SUCCESS : STATUS_DEVICE_HARDWARE_ERROR;
 }
