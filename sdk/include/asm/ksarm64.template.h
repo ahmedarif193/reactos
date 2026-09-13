@@ -54,6 +54,9 @@ OFFSET(CxWcr, CONTEXT, Wcr),
 OFFSET(CxWvr, CONTEXT, Wvr),
 SIZE(CONTEXT_FRAME_LENGTH, CONTEXT),
 
+HEADER("KUSER_EXCEPTION_STACK offsets"),
+OFFSET(UesExceptionRecord, KUSER_EXCEPTION_STACK, ExceptionRecord),
+
 HEADER("KSTART_FRAME offsets"),
 OFFSET(SfStartRoutine, KSTART_FRAME, StartRoutine),
 OFFSET(SfStartContext, KSTART_FRAME, StartContext),
