@@ -1843,10 +1843,11 @@ ChpepGetImportBaseName(PUNICODE_STRING ImportName,
 
 static
 BOOLEAN
-ChpepAppDirectoryOverridesImport(PCUNICODE_STRING BaseName)
+ChpepAppDirectoryOverridesImport(PCUNICODE_STRING BaseName,
+                                 PCUNICODE_STRING ImportName)
 {
     PRTL_USER_PROCESS_PARAMETERS Params;
-    UNICODE_STRING AppDir, SystemDir, Candidate, NtSystemRoot;
+    UNICODE_STRING AppDir, SystemDir, ImportDir, Candidate, NtSystemRoot;
     WCHAR SystemBuffer[MAX_PATH];
     WCHAR CandidateBuffer[MAX_PATH];
     USHORT Index;
@@ -1884,6 +1885,14 @@ ChpepAppDirectoryOverridesImport(PCUNICODE_STRING BaseName)
     if (RtlEqualUnicodeString(&AppDir, &SystemDir, TRUE))
         return FALSE;
 
+    /* A bundled DLL only overrides a searched import. An explicit System32
+     * load still needs the corresponding ARM64EC system image. */
+    ImportDir = *ImportName;
+    ImportDir.Length -= BaseName->Length;
+    ImportDir.MaximumLength = ImportDir.Length;
+    if (RtlEqualUnicodeString(&ImportDir, &SystemDir, TRUE))
+        return FALSE;
+
     RtlInitEmptyUnicodeString(&Candidate, CandidateBuffer, sizeof(CandidateBuffer));
     if (!NT_SUCCESS(RtlAppendUnicodeStringToString(&Candidate, &AppDir)) ||
         !NT_SUCCESS(RtlAppendUnicodeStringToString(&Candidate, (PUNICODE_STRING)BaseName)))
@@ -1908,7 +1917,7 @@ ChpeShouldRedirectImport(PVOID ImportBase,
     if (RtlEqualUnicodeString(&BaseName, &ChpeNtdllImportName, TRUE) && !ChpepIsPureAmd64Image(ImportBase))
         return FALSE;
 
-    if (ChpepAppDirectoryOverridesImport(&BaseName))
+    if (ChpepAppDirectoryOverridesImport(&BaseName, ImportName))
         return FALSE;
 
     return TRUE;
@@ -1930,7 +1939,7 @@ ChpeShouldRedirectDynamicLoad(PUNICODE_STRING DllName)
     if (RtlEqualUnicodeString(&BaseName, &ChpeNtdllImportName, TRUE))
         return FALSE;
 
-    if (ChpepAppDirectoryOverridesImport(&BaseName))
+    if (ChpepAppDirectoryOverridesImport(&BaseName, DllName))
         return FALSE;
 
     return TRUE;
