@@ -20,6 +20,7 @@ typedef struct _PSP_MITIGATION_POLICY_INFORMATION
 } PSP_MITIGATION_POLICY_INFORMATION;
 
 #define PSP_STRICT_HANDLE_CHECK_POLICY 3
+#define PSP_DYNAMIC_CODE_POLICY 2
 #define PSP_SIGNATURE_POLICY 8
 
 //
@@ -762,7 +763,7 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     ),
 
     /* ThreadDynamicCodePolicyInfo */
-    IQS_NONE,
+    IQS_SAME(ULONG, ULONG, ICIF_SET),
     /* ThreadExplicitCaseSensitivity */
     IQS_NONE,
     /* ThreadWorkOnBehalfTicket */

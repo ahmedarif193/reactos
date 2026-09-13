@@ -857,7 +857,8 @@ CcPreparePinWrite(IN PFILE_OBJECT FileObject,
                                &BaseAddress,
                                &NumberOfBytes,
                                PAGE_READWRITE,
-                               &OldProtect);
+                               &OldProtect,
+                               FALSE);
 #endif
 
         CcpUnlock();
@@ -943,7 +944,8 @@ CcpUnpinData(IN PNOCC_BCB RealBcb, BOOLEAN ReleaseBit)
                                &BaseAddress,
                                &NumberOfBytes,
                                PAGE_READONLY,
-                               &OldProtect);
+                               &OldProtect,
+                               FALSE);
 #endif
     }
 
