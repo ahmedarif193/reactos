@@ -845,6 +845,8 @@ static LONG  g_composeWidth;
 static LONG  g_composeHeight;
 static ULONG g_composeFrame;
 static DWM_GPU_DAMAGE g_composeDamage;
+static ULONG g_composeRetryShare;
+static BOOL g_composeRetryable;
 static RECT g_composeOcclusion[DWM_MAX_WINDOWS + 1];
 static void (APIENTRY *g_addSwapHint)(GLint, GLint, GLsizei, GLsizei);
 static DWM_GPU_TEXTURE g_composeTextures[DWM_GPU_TEXTURE_SLOTS];
@@ -1195,6 +1197,8 @@ DwmGlComposeInitialize(LONG Width, LONG Height)
     DwmPresentTraceSetIcd((PFNWGLCONTROLPRESENTATIONTRACEROS)
         DwmGpuGetProc("wglControlPresentationTraceROS"));
     wglMakeCurrent(NULL, NULL);
+    g_composeRetryShare = 0;
+    g_composeRetryable = FALSE;
     g_composeActive = TRUE;
     {
         char Message[160];
@@ -1269,6 +1273,7 @@ DwmGpuComposeBeginMeasured(const BYTE *BackdropPixels,
     if (!wglMakeCurrent(g_composeDc, g_composeContext))
         return FALSE;
 
+    g_composeRetryable = FALSE;
     DwmGpuComposePruneTextures();
     ++g_composeFrame;
     g_composeBlurOwnerValid = FALSE;
@@ -1410,12 +1415,20 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
                                       Window->BaseFormat))
             {
                 char Message[192];
+                DWORD Error = GetLastError();
+
                 _snprintf(Message, sizeof(Message),
                           "DWMGPU: import failed id=%lu client=%u share=%lx size=%lux%lu pitch=%lu error=%lu\n",
                           Window->SurfaceId, Client, Window->BaseGlobalShare,
                           Window->BaseWidth, Window->BaseHeight,
-                          Window->BasePitch, GetLastError());
+                          Window->BasePitch, Error);
                 OutputDebugStringA(Message);
+                if (!Client && Error == ERROR_INVALID_HANDLE &&
+                    g_composeRetryShare != Window->BaseGlobalShare)
+                {
+                    g_composeRetryShare = Window->BaseGlobalShare;
+                    g_composeRetryable = TRUE;
+                }
                 glDeleteTextures(1, &Slot->Texture);
                 RtlZeroMemory(Slot, sizeof(*Slot));
                 return FALSE;
@@ -1658,8 +1671,24 @@ DwmGpuComposeEnd(void)
     DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_SWAP);
     DWM_GPU_RESULT Result = DwmD3dIsActive() ? DwmD3dEnd() :
         (DwmGpuComposeEndMeasured() ? DWM_GPU_COMPLETE : DWM_GPU_FAILED);
+    if (Result == DWM_GPU_COMPLETE)
+        g_composeRetryShare = 0;
     DptEnd(&g_DwmPresentTrace, Trace, Result == DWM_GPU_COMPLETE, 0);
     return Result;
+}
+
+DWM_GPU_RESULT
+DwmGpuComposeAbort(void)
+{
+    if (DwmD3dIsActive() || !g_composeActive || !g_composeRetryable)
+        return DWM_GPU_FAILED;
+
+    glDisable(GL_SCISSOR_TEST);
+    DwmGpuDamageEnd(&g_composeDamage, FALSE);
+    g_composeScene.Valid = FALSE;
+    DwmGpuComposeUnpinBlurResults();
+    g_composeRetryable = FALSE;
+    return DWM_GPU_RETRY;
 }
 
 DWM_GPU_RESULT
@@ -1721,6 +1750,8 @@ DwmGpuComposeShutdown(void)
         g_composeWindow = NULL;
     }
     g_composeActive = FALSE;
+    g_composeRetryShare = 0;
+    g_composeRetryable = FALSE;
     g_composeBlitFramebuffer = NULL;
     RtlZeroMemory(&g_composeDamage, sizeof(g_composeDamage));
     g_addSwapHint = NULL;

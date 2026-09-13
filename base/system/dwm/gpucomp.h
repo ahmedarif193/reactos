@@ -56,7 +56,8 @@ typedef enum _DWM_GPU_RESULT
 {
     DWM_GPU_FAILED,
     DWM_GPU_COMPLETE,
-    DWM_GPU_DEFERRED
+    DWM_GPU_DEFERRED,
+    DWM_GPU_RETRY
 } DWM_GPU_RESULT;
 
 BOOL DwmGpuComposeInitialize(LONG Width, LONG Height);
@@ -100,6 +101,10 @@ BOOL DwmGpuComposeShadow(const RECT *Bounds, LONGLONG X, LONGLONG Y,
  * temporarily unavailable and GPU reads have completed, so client copies
  * may be acknowledged without counting the frame as presented. */
 DWM_GPU_RESULT DwmGpuComposeEnd(void);
+
+/* Discards an unpresented frame. A stale GDI FRONT import may be retried
+ * because a window can disappear between GETFRAME and OpenResource. */
+DWM_GPU_RESULT DwmGpuComposeAbort(void);
 
 /* Tests a deferred output without rendering, presenting or rotating buffers. */
 DWM_GPU_RESULT DwmGpuComposeCheckOutput(void);
