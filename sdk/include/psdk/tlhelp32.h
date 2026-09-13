@@ -50,7 +50,7 @@ typedef struct tagPROCESSENTRY32W {
 	DWORD dwSize;
 	DWORD cntUsage;
 	DWORD th32ProcessID;
-	DWORD th32DefaultHeapID;
+	ULONG_PTR th32DefaultHeapID;
 	DWORD th32ModuleID;
 	DWORD cntThreads;
 	DWORD th32ParentProcessID;
@@ -62,7 +62,7 @@ typedef struct tagPROCESSENTRY32 {
 	DWORD dwSize;
 	DWORD cntUsage;
 	DWORD th32ProcessID;
-	DWORD th32DefaultHeapID;
+	ULONG_PTR th32DefaultHeapID;
 	DWORD th32ModuleID;
 	DWORD cntThreads;
 	DWORD th32ParentProcessID;
