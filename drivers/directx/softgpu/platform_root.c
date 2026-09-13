@@ -5,6 +5,9 @@
  */
 
 #include "softgpu.h"
+#include "softgpu_2d_core.h"
+
+#define SOFTGPU_ROOT_WORKING_SURFACE_COUNT 12UL
 
 #if defined(_M_IX86) || defined(_M_AMD64)
 #define SOFTGPU_VGA_INPUT_STATUS_1       ((PUCHAR)(ULONG_PTR)0x3da)
@@ -51,6 +54,9 @@ SoftGpuPlatformQueryStart(
     _In_ PDXGK_INTERFACE DxgkInterface,
     _Out_ PSOFTGPU_PLATFORM_CONFIG Config)
 {
+    SIZE_T WorkingSetSize;
+    NTSTATUS Status;
+
     UNREFERENCED_PARAMETER(Device);
 
     if (DxgkInterface == NULL || Config == NULL)
@@ -95,8 +101,6 @@ SoftGpuPlatformQueryStart(
     {
         DXGK_DISPLAY_INFORMATION PostDisplayInfo;
         ULONGLONG PostVisibleLength;
-        NTSTATUS Status;
-
         /*
          * This root adapter is a Basic Display fallback. Use the firmware
          * framebuffer when dxgkrnl transfers one. A successful zero-width
@@ -128,6 +132,24 @@ SoftGpuPlatformQueryStart(
         }
     }
 #endif
+
+    /*
+     * The common four-surface minimum covers scanout work, while the root
+     * adapter also keeps compositor buffers and redirected windows resident.
+     * Scale that desktop working set with the current mode.  The global cap
+     * remains authoritative for large modes and avoids an excessive
+     * contiguous allocation on either 32-bit or 64-bit systems.
+     */
+    Status = SoftGpu2dComputeAllocationSlabSize(
+                 Config->Width,
+                 Config->Height,
+                 SOFTGPU_ROOT_WORKING_SURFACE_COUNT,
+                 MAXULONG_PTR,
+                 &WorkingSetSize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Config->MinimumAllocationSlabSize =
+        min(WorkingSetSize, SOFTGPU_MAX_ALLOCATION_SLAB_SIZE);
 
     return STATUS_SUCCESS;
 }
