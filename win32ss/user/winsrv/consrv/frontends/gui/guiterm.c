@@ -238,20 +238,13 @@ GuiConsoleInputThread(PVOID Param)
             case PM_DESTROY_CONSOLE:
             {
                 PGUI_CONSOLE_DATA GuiData = (PGUI_CONSOLE_DATA)msg.lParam;
-                MSG TempMsg;
 
                 /* Exit the full screen mode if it was already set */
                 // LeaveFullScreen(GuiData);
 
-                /*
-                 * Window creation is done using a PostMessage(), so it's possible
-                 * that the window that we want to destroy doesn't exist yet.
-                 * So first empty the message queue.
-                 */
-                while (PeekMessageW(&TempMsg, NULL, 0, 0, PM_REMOVE))
-                {
-                    DispatchMessageW(&TempMsg);
-                }
+                /* Leave queued notifications for the outer message loop.
+                 * DispatchMessage cannot dispatch our private thread messages;
+                 * draining them here loses other consoles' create/destroy events. */
 
                 if (GuiData->hWindow == NULL) continue;
 
