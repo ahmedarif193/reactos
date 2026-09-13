@@ -267,4 +267,8 @@ add_livecd_shortcut("WineMine"
     "shell:system\\winmine.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
 
-add_registry_inf("${REACTOS_SOURCE_DIR}/submodules/mesa-llvmpipe.inf")
+if(ENABLE_MESA_LLVMPIPE)
+    add_registry_inf("${REACTOS_SOURCE_DIR}/submodules/mesa-llvmpipe.inf")
+elseif(MESA_GALLIUM_FROM_SOURCE)
+    add_registry_inf("${REACTOS_SOURCE_DIR}/dll/opengl/mesa_gallium/mesa-gallium.inf")
+endif()

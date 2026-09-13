@@ -209,7 +209,6 @@ add_custom_command(
     VERBATIM)
 
 add_custom_target(mesa-llvmpipe DEPENDS "${MESA_DLL}" "${MESA_LICENSES}")
-add_registry_inf("${CMAKE_CURRENT_LIST_DIR}/mesa-llvmpipe.inf")
 add_cd_file(FILE "${MESA_DLL}" TARGET mesa-llvmpipe DESTINATION reactos/system32 FOR all)
 add_cd_file(FILE "${MESA_LICENSES}" TARGET mesa-llvmpipe DESTINATION reactos/3rdParty FOR all)
 message(STATUS "Modern Mesa: LLVMpipe ${MESA_CPU}, source ${MESA_SOURCE_DIR}, Windows LLVM ${MESA_LLVM_PREFIX}")

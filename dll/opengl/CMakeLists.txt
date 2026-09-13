@@ -2,16 +2,8 @@
 add_subdirectory(glu32)
 add_subdirectory(mesa)
 add_subdirectory(opengl32)
-if((ARCH STREQUAL "arm64") AND
-   (RPI3_SUPPORT OR RPI5_SUPPORT OR (ARM64EC_RUNTIME AND MESA_GALLIUM_FROM_SOURCE)))
-    if(DEFINED RPI3VC4_MESA_FROM_SOURCE AND NOT DEFINED MESA_GALLIUM_FROM_SOURCE)
-        set(MESA_GALLIUM_FROM_SOURCE "${RPI3VC4_MESA_FROM_SOURCE}" CACHE BOOL
-            "Build the shared Mesa Gallium ICD from source in Release mode")
-    endif()
-    option(MESA_GALLIUM_FROM_SOURCE "Build the shared Mesa Gallium ICD from source in Release mode" ON)
-    if(MESA_GALLIUM_FROM_SOURCE)
-        add_subdirectory(mesa_gallium)
-    endif()
+if(MESA_GALLIUM_FROM_SOURCE)
+    add_subdirectory(mesa_gallium)
 endif()
 if((ARCH STREQUAL "arm64") AND RPI3_SUPPORT)
     add_subdirectory(rpi3vc4ogl)
