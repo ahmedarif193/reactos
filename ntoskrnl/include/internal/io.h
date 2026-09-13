@@ -130,6 +130,44 @@ typedef struct _FILE_OBJECT_EXTENSION
      (!(FileObject) ? FALSE :                           \
        (FileObject)->Flags & FO_SYNCHRONOUS_IO))
 
+/* Called in the requestor's process, including I/O completion APCs. */
+FORCEINLINE
+BOOLEAN
+IopIs32BitFileIo(PFILE_OBJECT FileObject, KPROCESSOR_MODE RequestorMode)
+{
+#ifdef _WIN64
+    return RequestorMode != KernelMode &&
+           FileObject != NULL &&
+           !(FileObject->Flags & FO_SYNCHRONOUS_IO) &&
+           PsGetCurrentProcessWow64Process() != NULL;
+#else
+    UNREFERENCED_PARAMETER(FileObject);
+    UNREFERENCED_PARAMETER(RequestorMode);
+    return FALSE;
+#endif
+}
+
+/* The caller must protect writes to user memory with SEH. */
+FORCEINLINE
+VOID
+IopWriteIoStatusBlock(PIO_STATUS_BLOCK Destination,
+                      const IO_STATUS_BLOCK *Source,
+                      BOOLEAN Is32Bit)
+{
+#ifdef _WIN64
+    if (Is32Bit)
+    {
+        PIO_STATUS_BLOCK32 IoStatusBlock32 = (PIO_STATUS_BLOCK32)Destination;
+        IoStatusBlock32->Status = Source->Status;
+        IoStatusBlock32->Information = (ULONG)Source->Information;
+        return;
+    }
+#else
+    UNREFERENCED_PARAMETER(Is32Bit);
+#endif
+    *Destination = *Source;
+}
+
 //
 // Returns the internal Device Object Extension
 //
