@@ -33,6 +33,7 @@ KiArm64TtbrToPa(
 #define SCTLR_EL1_I     (1ULL << 12)
 #define SCTLR_EL1_DZE   (1ULL << 14)
 #define SCTLR_EL1_nTWE  (1ULL << 18)
+#define SCTLR_EL1_UCI   (1ULL << 26)
 #define SCTLR_EL1_BT0   (1ULL << 35)
 #define SCTLR_EL1_BT1   (1ULL << 36)
 #define KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE 2
@@ -166,7 +167,7 @@ KiArm64ApplySctlrPolicy(VOID)
     /* Permit the architectural EL0 instructions used by optimized runtimes. */
     NewSctlr = (Sctlr & ~(SCTLR_EL1_A | SCTLR_EL1_BT0 | SCTLR_EL1_BT1)) |
                SCTLR_EL1_SA | SCTLR_EL1_SA0 | SCTLR_EL1_I | SCTLR_EL1_DZE |
-               SCTLR_EL1_nTWE;
+               SCTLR_EL1_nTWE | SCTLR_EL1_UCI;
     if (NewSctlr != Sctlr)
     {
         __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
