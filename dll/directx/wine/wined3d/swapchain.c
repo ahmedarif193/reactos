@@ -480,6 +480,8 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
     D3DKMT_DESTROYDCFROMMEMORY destroy_desc;
     D3DKMT_CREATEDCFROMMEMORY create_desc;
     const struct wined3d_format *format;
+    RECT source_rect = *src_rect;
+    RECT draw_rect = *dst_rect;
     unsigned int row_pitch, slice_pitch;
     NTSTATUS status;
     HBITMAP bitmap;
@@ -492,6 +494,35 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
 
     if (!once++)
         FIXME("Using GDI present.\n");
+
+#ifdef __REACTOS__
+    if (swapchain->composition)
+    {
+        OffsetRect(&draw_rect, swapchain->composition_offset.x,
+                swapchain->composition_offset.y);
+        if (swapchain->composition_has_clip)
+        {
+            RECT unclipped_rect = draw_rect;
+            LONG source_width = source_rect.right - source_rect.left;
+            LONG source_height = source_rect.bottom - source_rect.top;
+            LONG draw_width = draw_rect.right - draw_rect.left;
+            LONG draw_height = draw_rect.bottom - draw_rect.top;
+
+            if (!IntersectRect(&draw_rect, &draw_rect, &swapchain->composition_clip))
+                return;
+            if (draw_width)
+            {
+                source_rect.left += MulDiv(draw_rect.left - unclipped_rect.left, source_width, draw_width);
+                source_rect.right -= MulDiv(unclipped_rect.right - draw_rect.right, source_width, draw_width);
+            }
+            if (draw_height)
+            {
+                source_rect.top += MulDiv(draw_rect.top - unclipped_rect.top, source_height, draw_height);
+                source_rect.bottom -= MulDiv(unclipped_rect.bottom - draw_rect.bottom, source_height, draw_height);
+            }
+        }
+    }
+#endif
 
     format = back_buffer->resource.format;
     if (!format->ddi_format)
@@ -524,10 +555,26 @@ static void swapchain_blit_gdi(struct wined3d_swapchain *swapchain,
 
     TRACE("Created source DC %p, bitmap %p for backbuffer %p.\n", src_dc, bitmap, back_buffer);
 
-    if (!StretchBlt(swapchain->dc, dst_rect->left, dst_rect->top, dst_rect->right - dst_rect->left,
-            dst_rect->bottom - dst_rect->top, src_dc, src_rect->left, src_rect->top,
-            src_rect->right - src_rect->left, src_rect->bottom - src_rect->top, SRCCOPY))
-        ERR("Failed to blit.\n");
+#ifdef __REACTOS__
+    if (swapchain->composition && swapchain->premultiplied_alpha)
+    {
+        BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+
+        if (!GdiAlphaBlend(swapchain->dc, draw_rect.left, draw_rect.top,
+                draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top,
+                src_dc, source_rect.left, source_rect.top,
+                source_rect.right - source_rect.left, source_rect.bottom - source_rect.top, blend))
+            ERR("Failed to alpha blend.\n");
+    }
+    else
+#endif
+    {
+        if (!StretchBlt(swapchain->dc, draw_rect.left, draw_rect.top,
+                draw_rect.right - draw_rect.left, draw_rect.bottom - draw_rect.top,
+                src_dc, source_rect.left, source_rect.top,
+                source_rect.right - source_rect.left, source_rect.bottom - source_rect.top, SRCCOPY))
+            ERR("Failed to blit.\n");
+    }
 
     destroy_desc.hDc = src_dc;
     destroy_desc.hBitmap = bitmap;
@@ -683,7 +730,11 @@ static void swapchain_gl_present(struct wined3d_swapchain *swapchain,
     TRACE("Presenting DC %p.\n", context_gl->dc);
 
     pixel_format = &wined3d_adapter_gl(swapchain->device->adapter)->pixel_formats[context_gl->pixel_format - 1];
-    if (context_gl->dc == wined3d_device_gl(swapchain->device)->backup_dc
+    if (
+#ifdef __REACTOS__
+            swapchain->composition ||
+#endif
+            context_gl->dc == wined3d_device_gl(swapchain->device)->backup_dc
             || (pixel_format->swap_method != WGL_SWAP_COPY_ARB
             && swapchain_present_is_partial_copy(swapchain, dst_rect)))
     {
