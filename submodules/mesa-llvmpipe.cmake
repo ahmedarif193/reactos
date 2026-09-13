@@ -17,7 +17,7 @@ endif()
 
 set(MESA_SOURCE_DIR "${REACTOS_SOURCE_DIR}/submodules/mesa")
 if(NOT EXISTS "${MESA_SOURCE_DIR}/meson.build")
-    message(FATAL_ERROR "Initialize Mesa first: git submodule update --init --depth 1 -- submodules/mesa")
+    message(FATAL_ERROR "The vendored Mesa source is missing at ${MESA_SOURCE_DIR}")
 endif()
 
 set(MESA_BUILD_JOBS "4" CACHE STRING "Maximum parallel jobs in the Mesa and LLVM builds")

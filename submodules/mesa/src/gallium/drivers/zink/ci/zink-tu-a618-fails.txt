@@ -1,0 +1,17 @@
+# piglit xfb tests
+spec@ext_transform_feedback@tessellation quad_strip wireframe,Fail
+spec@ext_transform_feedback@tessellation quads wireframe,Fail
+
+dEQP-GLES3.functional.shaders.matrix.inverse.dynamic.lowp_mat4_float_vertex,Fail
+dEQP-GLES3.functional.shaders.matrix.inverse.dynamic.mediump_mat4_float_vertex,Fail
+
+# Autotune regression
+dEQP-GLES3.functional.multisample.fbo_4_samples.stencil,Fail
+dEQP-GLES3.functional.multisample.fbo_max_samples.stencil,Fail
+
+# EGL
+# Usual Zink failures
+wayland-dEQP-EGL.functional.resize.surface_size.grow,Fail
+wayland-dEQP-EGL.functional.resize.surface_size.shrink,Fail
+wayland-dEQP-EGL.functional.resize.surface_size.stretch_height,Fail
+wayland-dEQP-EGL.functional.resize.surface_size.stretch_width,Fail

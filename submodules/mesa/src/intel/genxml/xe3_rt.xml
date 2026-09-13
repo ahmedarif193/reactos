@@ -1,0 +1,41 @@
+<?xml version='1.0' encoding='utf-8'?>
+<genxml name="RT" gen="30">
+  <import name="xe2_rt.xml" />
+  <struct name="BINDLESS_SHADER_RECORD" length="2">
+    <field name="Offset To Local Arguments" dword="0" bits="2:0" type="uint" />
+    <field name="Bindless Shader Dispatch Mode" dword="0" bits="4:4" type="uint">
+      <value name="RT_SIMD16" value="0" />
+    </field>
+    <field name="Kernel Start Pointer" dword="0" bits="31:6" type="offset" />
+    <field name="Registers Per Thread" dword="1" bits="31:28" type="uint" />
+  </struct>
+  <struct name="CALL_STACK_HANDLER" length="2">
+    <field name="Offset To Local Arguments" dword="0" bits="2:0" type="uint" />
+    <field name="Bindless Shader Dispatch Mode" dword="0" bits="4:4" type="uint">
+      <value name="RT_SIMD16" value="0" />
+    </field>
+    <field name="Kernel Start Pointer" dword="0" bits="31:6" type="offset" />
+    <field name="Registers Per Thread" dword="1" bits="30:27" type="uint" />
+  </struct>
+  <struct name="RT_DISPATCH_GLOBALS" length="21">
+    <field name="Mem Base Address" dword="0" bits="63:0" type="address" />
+    <field name="Call Stack Handler" dword="2" bits="63:0" type="CALL_STACK_HANDLER" />
+    <field name="Async RT Stack Size" dword="4" bits="31:0" type="uint" />
+    <field name="Num DSS RT Stacks" dword="5" bits="15:0" type="uint" />
+    <field name="Max BVH Levels" dword="6" bits="2:0" type="uint" />
+    <field name="Hit Group Stride" dword="6" bits="15:3" type="uint" />
+    <field name="Miss Group Stride" dword="6" bits="28:16" type="uint" />
+    <field name="Flags" dword="7" bits="0:0" type="uint">
+      <value name="RT_DEPTH_TEST_LESS_EQUAL" value="1" />
+    </field>
+    <field name="Hit Group Table" dword="8" bits="63:0" type="address" />
+    <field name="Miss Group Table" dword="10" bits="63:0" type="address" />
+    <field name="SW Stack Size" dword="12" bits="31:0" type="uint" />
+    <field name="Launch Width" dword="13" bits="31:0" type="uint" />
+    <field name="Launch Height" dword="14" bits="31:0" type="uint" />
+    <field name="Launch Depth" dword="15" bits="31:0" type="uint" />
+    <field name="Callable Group Table" dword="16" bits="63:0" type="address" />
+    <field name="Callable Group Stride" dword="18" bits="12:0" type="uint" />
+    <field name="Resume Shader Table" dword="19" bits="63:0" type="address" />
+  </struct>
+</genxml>

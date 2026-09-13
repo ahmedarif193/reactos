@@ -1,0 +1,354 @@
+
+AlignAfterOpenBracket: Align
+AlignConsecutiveMacros: Consecutive
+
+AllowAllArgumentsOnNextLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+
+AlwaysBreakAfterReturnType: TopLevelDefinitions
+
+BraceWrapping:
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterFunction: true
+  AfterStruct: false
+  BeforeElse: false
+  SplitEmptyFunction: true
+
+BinPackArguments: true
+BinPackParameters: true
+
+BreakBeforeBraces: Custom
+
+ColumnLimit: 0
+PenaltyBreakBeforeFirstCallParameter: 1
+PenaltyExcessCharacter: 100
+
+ContinuationIndentWidth: 3
+IndentWidth: 3
+UseTab: Never
+
+Cpp11BracedListStyle: true
+
+SpaceAfterCStyleCast: false
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: false
+SpacesInContainerLiterals: false
+
+PointerAlignment: Right
+
+IncludeBlocks: Preserve
+IncludeCategories:
+  - Regex:           '<[[:alnum:].]+>'
+    Priority:        1
+  - Regex:           '.*\/.*'
+    Priority:        2
+  - Regex:           '.*'
+    Priority:        3
+
+ForEachMacros:
+# There is no way to extend ForEachMacros
+# The issue tracker https://github.com/llvm/llvm-project/issues/84359
+# util
+  - u_foreach_bit
+  - u_foreach_bit64
+
+  - u_vector_foreach
+
+  - BITSET_FOREACH_SET
+  - BITSET_FOREACH_RANGE
+
+  - hash_table_foreach
+  - hash_table_foreach_remove
+  - hash_table_u64_foreach
+
+  - rb_tree_foreach
+  - rb_tree_foreach_rev
+  - rb_tree_foreach_rev_safe
+  - rb_tree_foreach_safe
+  - uinterval_tree_foreach
+
+  - set_foreach
+  - set_foreach_remove
+
+  - util_dynarray_foreach
+  - util_dynarray_foreach_reverse
+
+  - util_idalloc_foreach
+
+  - LIST_FOR_EACH_ENTRY
+  - LIST_FOR_EACH_ENTRY_FROM
+  - LIST_FOR_EACH_ENTRY_FROM_REV
+  - LIST_FOR_EACH_ENTRY_SAFE
+  - LIST_FOR_EACH_ENTRY_SAFE_REV
+  - list_for_each_entry
+  - list_for_each_entry_from
+  - list_for_each_entry_from_rev
+  - list_for_each_entry_from_safe
+  - list_for_each_entry_rev
+  - list_for_each_entry_rev_safe
+  - list_for_each_entry_safe
+  - list_pair_for_each_entry
+
+  - foreach_in_list
+  - foreach_in_list_reverse
+  - foreach_in_list_reverse_safe
+  - foreach_in_list_safe
+  - foreach_in_list_use_after
+  - foreach_list_typed
+  - foreach_list_typed_from
+  - foreach_list_typed_reverse
+  - foreach_list_typed_reverse_safe
+  - foreach_list_typed_safe
+  - foreach_two_lists
+
+  - U_SPARSE_BITSET_FOREACH_SET
+
+# nir
+  - nir_foreach_function_temp_variable
+  - nir_foreach_function_temp_variable_safe
+  - nir_foreach_image_variable
+  - nir_foreach_image_variable_safe
+  - nir_foreach_shader_in_variable
+  - nir_foreach_shader_in_variable_safe
+  - nir_foreach_shader_out_variable
+  - nir_foreach_shader_out_variable_safe
+  - nir_foreach_uniform_variable
+  - nir_foreach_uniform_variable_safe
+  - nir_foreach_variable
+  - nir_foreach_variable_in_list
+  - nir_foreach_variable_in_list_safe
+  - nir_foreach_variable_in_shader
+  - nir_foreach_variable_in_shader_safe
+  - nir_foreach_variable_safe
+  - nir_foreach_variable_with_modes
+  - nir_foreach_variable_with_modes_safe
+
+  - nir_foreach_reg_decl
+  - nir_foreach_reg_decl_safe
+  - nir_foreach_reg_load
+  - nir_foreach_reg_load_safe
+  - nir_foreach_reg_store
+  - nir_foreach_reg_store_safe
+
+  - nir_foreach_if_use
+  - nir_foreach_if_use_safe
+  - nir_foreach_use
+  - nir_foreach_use_including_if
+  - nir_foreach_use_including_if_safe
+  - nir_foreach_use_safe
+
+  - nir_foreach_phi_src
+  - nir_foreach_phi_src_safe
+
+  - nir_foreach_parallel_copy_entry
+
+  - nir_foreach_instr
+  - nir_foreach_instr_in_worklist
+  - nir_foreach_instr_reverse
+  - nir_foreach_instr_reverse_safe
+  - nir_foreach_instr_safe
+
+  - nir_foreach_phi
+  - nir_foreach_phi_safe
+
+  - nir_foreach_function
+  - nir_foreach_function_safe
+  - nir_foreach_function_with_impl
+
+  - nir_foreach_function_impl
+
+  - nir_foreach_entrypoint
+  - nir_foreach_entrypoint_safe
+
+  - nir_foreach_block_unstructured
+  - nir_foreach_block_unstructured_safe
+
+  - nir_foreach_block
+  - nir_foreach_block_in_cf_node
+  - nir_foreach_block_in_cf_node_reverse
+  - nir_foreach_block_reverse
+  - nir_foreach_block_reverse_safe
+  - nir_foreach_block_safe
+
+  - nir_foreach_pred
+
+  - nir_precomp_foreach_arg
+  - nir_precomp_foreach_variant_param
+
+  - foreach_pair
+
+# egl
+  - egl_relax
+
+# wayland
+  - wl_list_for_each
+  - wl_list_for_each_safe
+  - wl_list_for_each_reverse
+  - wl_list_for_each_reverse_safe
+  - wl_array_for_each
+
+# vulkan
+  - vk_foreach_queue
+  - vk_foreach_queue_safe
+
+  - vk_foreach_struct
+  - vk_foreach_struct_const
+
+  - vk_foreach_multi_draw
+  - vk_foreach_multi_draw_indexed
+
+# asahi
+  - foreach_active
+  - foreach_submitted
+  - hk_foreach_view
+  - hk_foreach_variant
+  - AGX_BATCH_FOREACH_BO_HANDLE
+  - agx_pack
+  - agx_push
+  - agx_usc_pack
+  - agx_ppp_push
+  - agx_ppp_push_merged
+  - agx_foreach_block
+  - agx_foreach_block_safe
+  - agx_foreach_block_from
+  - agx_foreach_block_from_rev
+  - agx_foreach_block_rev
+  - agx_foreach_dest
+  - agx_foreach_dest_rev
+  - agx_foreach_instr_global
+  - agx_foreach_instr_global_rev
+  - agx_foreach_instr_global_safe
+  - agx_foreach_instr_global_safe_rev
+  - agx_foreach_instr_in_block
+  - agx_foreach_instr_in_block_from
+  - agx_foreach_instr_in_block_from_rev
+  - agx_foreach_instr_in_block_rev
+  - agx_foreach_instr_in_block_safe
+  - agx_foreach_instr_in_block_safe_rev
+  - agx_foreach_non_phi_in_block_rev
+  - agx_foreach_phi_in_block
+  - agx_foreach_phi_in_block_safe
+  - agx_foreach_predecessor
+  - agx_foreach_src
+  - agx_foreach_src_rev
+  - agx_foreach_ssa_dest
+  - agx_foreach_ssa_dest_rev
+  - agx_foreach_ssa_src
+  - agx_foreach_ssa_src_rev
+  - agx_foreach_reg_src
+  - agx_foreach_reg_dest
+  - agx_foreach_successor
+  - foreach_next_use
+
+# poly
+  - poly_foreach_xfb
+
+# radv
+  - PHASE
+  - radv_foreach_stage
+
+# freedreno
+  - ir2_foreach_instr
+  - ir2_foreach_live_reg
+  - ir2_foreach_avail
+  - ir2_foreach_src
+  - foreach_batch
+  - perf_time
+  - perf_time_ctx
+  - foreach_sched_node
+  - foreach_src
+  - foreach_src_n
+  - foreach_src_if
+  - foreach_src_with_alias_n
+  - foreach_src_in_alias_group_n
+  - foreach_src_in_alias_group
+  - foreach_dst
+  - foreach_dst_n
+  - foreach_dst_if
+  - ra_foreach_dst
+  - ra_foreach_src
+  - ra_foreach_src_rev
+  - foreach_ssa_use
+  - foreach_ssa_srcp_n
+  - foreach_ssa_srcp
+  - foreach_ssa_src_n
+  - foreach_ssa_src
+  - foreach_input_n
+  - foreach_input
+  - foreach_instr
+  - foreach_instr_rev
+  - foreach_instr_safe
+  - foreach_instr_from
+  - foreach_instr_from_safe
+  - foreach_block
+  - foreach_block_safe
+  - foreach_block_rev
+  - foreach_array
+  - foreach_array_safe
+  - foreach_interval
+  - foreach_interval_safe
+  - foreach_interval_rev
+  - foreach_interval_rev_safe
+  - foreach_line_in_section
+  - foreach_submit
+  - foreach_submit_safe
+  - foreach_instr_rpt
+  - foreach_instr_rpt_excl
+  - foreach_instr_rpt_excl_safe
+  - foreach_bo
+  - foreach_bo_safe
+
+# intel
+  - jay_foreach_ssa_file
+  - jay_foreach_function
+  - jay_foreach_block
+  - jay_foreach_block_safe
+  - jay_foreach_block_rev
+  - jay_foreach_block_from
+  - jay_foreach_block_from_rev
+  - jay_foreach_dst
+  - jay_foreach_dst_index
+  - jay_foreach_inst_in_block
+  - jay_foreach_inst_in_block_rev
+  - jay_foreach_inst_in_block_safe
+  - jay_foreach_inst_in_block_safe_rev
+  - jay_foreach_inst_in_block_from
+  - jay_foreach_inst_in_block_from_rev
+  - jay_foreach_inst_in_shader
+  - jay_foreach_inst_in_shader_rev
+  - jay_foreach_inst_in_shader_safe
+  - jay_foreach_inst_in_shader_safe_rev
+  - jay_foreach_inst_in_func
+  - jay_foreach_inst_in_func_rev
+  - jay_foreach_inst_in_func_safe
+  - jay_foreach_inst_in_func_safe_rev
+  - jay_foreach_successor
+  - jay_foreach_predecessor
+  - jay_foreach_comp
+  - jay_foreach_comp_rev
+  - jay_foreach_src
+  - jay_foreach_src_rev
+  - jay_foreach_ssa_src
+  - jay_foreach_ssa_src_rev
+  - jay_foreach_ssa_src_comp
+  - jay_foreach_index
+  - jay_foreach_index_rev
+  - jay_foreach_src_index
+  - jay_foreach_src_index_rev
+  - jay_foreach_phi_src_in_block
+  - jay_foreach_phi_dst_in_block
+  - jay_foreach_preload
+  - jay_foreach_killed
+  - jay_foreach_ra_src
+  - jay_foreach_ra_file
+  - jay_foreach_pipe
+  - jay_foreach_sbid_dep_type
+
+# Disable clang formatting by default. Drivers that use clang-format
+# inherit from this .clang-format file and re-enable formatting:
+#
+# DisableFormat: false
+#
+DisableFormat: true

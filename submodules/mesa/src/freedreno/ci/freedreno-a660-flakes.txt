@@ -1,0 +1,62 @@
+KHR-GL46.buffer_storage.map_persistent_dispatch
+KHR-GL46.buffer_storage.map_persistent_flush
+KHR-GL46.shader_subroutine.control_flow_and_returned_subroutine_values_used_as_subroutine_input
+
+# a618 and a660 seem to have some general instability in tesselation and GS.
+# Some tess tests also use the GS (tesselation.invariance), but others
+# don't (spirv_assembly).  They don't appear to be correlated to any GPU
+# faults or resets in the logs.
+dEQP-VK.binding_model.shader_access.*geometry.*
+dEQP-VK.binding_model.shader_access.*tess_ctrl.*
+dEQP-VK.binding_model.shader_access.*tess_eval.*
+dEQP-VK.clipping.user_defined.clip_cull_distance.*geom.*
+dEQP-VK.clipping.user_defined.clip_cull_distance.*tess.*
+dEQP-VK.clipping.user_defined.clip_distance.*geom.*
+dEQP-VK.clipping.user_defined.clip_distance.*tess.*
+dEQP-VK.draw.dynamic_rendering.*multi_draw.*geom.*
+dEQP-VK.draw.dynamic_rendering.*multi_draw.*tess.*
+dEQP-VK.draw.dynamic_rendering.primary_cmd_buff.instanced.dynamic_state_draw_vk_primitive_topology_triangle_strip_attrib_divisor_2
+dEQP-VK.draw.dynamic_rendering.primary_cmd_buff.shader_layer.tessellation_shader_4
+dEQP-VK.dynamic_rendering.primary_cmd_buff.random.seed46_geometry
+dEQP-VK.dynamic_rendering.primary_cmd_buff.random.seed88_geometry
+dEQP-VK..*.suballocation.multisample_resolve.layers_[36].*
+dEQP-VK.fragment_operations.scissor.multi_viewport.*
+dEQP-VK.glsl.builtin.function.integer.bitfieldinsert.uvec3_mediump_geometry
+dEQP-VK.glsl.builtin.function.integer.bitfieldreverse.uint_mediump_geometry
+dEQP-VK.glsl.builtin.function.integer.umulextended.uvec4_highp_tess_eval
+dEQP-VK.pipeline.*.interface_matching.vector_length.*tesc.*
+dEQP-VK.pipeline.pipeline_library.extended_dynamic_state.after_pipelines.rasterization_stream_none_to_one
+dEQP-VK.pipeline.pipeline_library.extended_dynamic_state.before_draw.2_scissors_switch
+dEQP-VK.spirv_assembly.instruction.graphics.*geom.*
+dEQP-VK.spirv_assembly.instruction.graphics.*tess.*
+dEQP-VK.spirv_assembly.type.*geom.*
+dEQP-VK.spirv_assembly.type.*tess.*
+dEQP-VK.synchronization.*_geometry.*
+dEQP-VK.synchronization.*_tess_ctrl.*
+dEQP-VK.synchronization.*_tess_control.*
+dEQP-VK.synchronization.*_tess_eval.*
+dEQP-VK.tessellation.invariance.*
+
+# Updated by ci-collate
+dEQP-VK.reconvergence.workgroup_uniform_control_flow_ballot.compute.nesting4.7.38
+dEQP-VK.query_pool.statistics_query.host_query_reset.geometry_shader_primitives.secondary.64bits_cmdcopyquerypoolresults_triangle_list_clear_depth
+
+KHR-GL46.shader_image_load_store.basic-allTargets-loadStoreVS
+dEQP-GLES31.functional.image_load_store.3d.load_store.rgba8_snorm_single_layer
+dEQP-GLES31.functional.image_load_store.3d.load_store.r32f_single_layer
+
+# glcts update
+KHR-GL46.texture_view.view_classes
+
+# Appeared after decreasing the fraction
+
+# Random flakes, unkown when they started appearing
+dEQP-VK.subgroups.shuffle.graphics.subgroupshufflexor_int64_t_constant
+dEQP-VK.subgroups.shuffle.framebuffer.subgroupshuffle_bool_tess_control
+
+# New flake with GL CTS 4.6.6.0
+KHR-GL46.gpu_shader_fp64.builtin.smoothstep_dvec4
+
+# Nightly run expectations update
+dEQP-VK.synchronization.internally_synchronized_objects.pipeline_cache_graphics
+

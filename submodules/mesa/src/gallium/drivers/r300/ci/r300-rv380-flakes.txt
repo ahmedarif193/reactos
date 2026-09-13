@@ -1,0 +1,17 @@
+dEQP-GLES2.functional.fragment_ops.interaction.basic_shader.94
+dEQP-GLES2.functional.texture.specification.basic_copyteximage2d.cube_rgb
+dEQP-GLES2.functional.texture.specification.basic_texsubimage2d.rgba16f_cube
+
+shaders@glsl-max-varyings >max_varying_components
+shaders@glsl-max-varyings
+
+spec@!opengl 1.2@tex3d-maxsize
+
+glx@glx-buffer-age
+glx@glx-multithread-clearbuffer
+
+glx@glx-visuals-stencil
+
+# uprev Piglit in Mesa
+glx@glx-visuals-depth
+

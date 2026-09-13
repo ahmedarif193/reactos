@@ -1,0 +1,19 @@
+waw,coupled,coupled_mma,decoupled,branch,coupled_bindless,decoupled_bindless,hfma2_mma,to_ur,tex,tma,rpcmov_64,udp,uldc,umov,elect,r2ur,voteu
+coupled,none,none,none,none,none,none,none,1 & sb,none,none,none,none,none,none,none,none,none
+coupled_mma,none,none,none,none,none,none,none,1 & sb,none,none,none,none,none,none,none,none,none
+decoupled,none,none,none,none,none,none,none,1 & sb,none,none,none,none,none,none,none,none,none
+branch,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+coupled_bindless,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+decoupled_bindless,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+hfma2_mma,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+to_ur,none,none,none,none,none,none,none,1 & sb,none,none,none,4+7,4,4,4,4+10,4
+tex,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+tma,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+rpcmov_64,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+udp,none,none,none,none,none,none,none,1 & sb,none,none,none,1,1,1,1,4+5,1
+uldc,none,none,none,none,none,none,none,1 & sb,none,none,none,7,1,1,1,10+1,1
+umov,none,none,none,none,none,none,none,1 & sb,none,none,none,7,1,1,1,10+1,1
+elect,none,none,none,none,none,none,none,1 & sb,none,none,none,7,1,1,1,10+1,1
+r2ur,none,none,none,none,none,none,none,1 & sb,none,none,none,7,1,1,1,1,1
+voteu,none,none,none,none,none,none,none,1 & sb,none,none,none,7,1,1,1,10+1,1
+

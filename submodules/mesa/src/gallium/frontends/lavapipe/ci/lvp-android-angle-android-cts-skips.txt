@@ -1,0 +1,25 @@
+### CtsGraphicsTestCases
+
+# Failures
+x86_64 CtsGraphicsTestCases android.graphics.cts.VulkanFeaturesTest#testAndroidBaselineProfile2021Support
+x86_64 CtsGraphicsTestCases android.graphics.drawable.cts.AnimatedVectorDrawableParameterizedTest
+
+# New failures with Android 16
+x86_64 CtsGraphicsTestCases android.graphics.fonts.SystemFontsTest#testFontsFallbackUnreadable[0]
+x86_64 CtsGraphicsTestCases android.graphics.fonts.SystemFontsTest#testAvailableFonts_ReadOnlyFile[0]
+
+# New flakes with Android 16
+x86_64 CtsGraphicsTestCases android.graphics.cts.DynamicColorsTest
+
+### CtsSkQPTestCases
+
+# Failures
+x86_64 CtsSkQPTestCases org.skia.skqp.SkQPRunner#UnitTest_BulkTextureRectTest
+x86_64 CtsSkQPTestCases org.skia.skqp.SkQPRunner#UnitTest_ES2BlendWithNoTexture
+
+# New failures with VK_EXT_blend_operation_advanced
+x86_64 CtsSkQPTestCases org.skia.skqp.SkQPRunner#UnitTest_BlendRequiringDstReadWithLargeCoordinates
+x86_64 CtsSkQPTestCases org.skia.skqp.SkQPRunner#UnitTest_SkRuntimeBlender_GPU
+
+# Flaky, can hit null pointer dereference possibly due to race condition of lavapipe queue thread and the app calling thread
+x86_64 CtsSkQPTestCases org.skia.skqp.SkQPRunner#UnitTest_SurfaceResolveTest

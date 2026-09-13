@@ -1,0 +1,80 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2025 Imagination Technologies Ltd.
+
+SPDX-License-Identifier: MIT
+-->
+
+<csbgen name="VOLCANIC" prefix="PBESTATE">
+
+  <enum name="PACKMODE">
+    <value name="U8U8U8U8"            value="0x0"/>
+    <value name="S8S8S8S8"            value="0x1"/>
+    <value name="A1R5G5B5"            value="0x2"/>
+    <value name="R5G5B5A1"            value="0x3"/>
+    <value name="A4R4G4B4"            value="0x4"/>
+    <value name="A8R3G3B2"            value="0x5"/>
+    <value name="U16U16U16U16"        value="0x6"/>
+    <value name="S16S16S16S16"        value="0x7"/>
+    <value name="F16F16F16F16"        value="0x8"/>
+    <value name="U32U32U32U32"        value="0x9"/>
+    <value name="S32S32S32S32"        value="0xa"/>
+    <value name="F32F32F32F32"        value="0xb"/>
+    <value name="A2R10B10G10"         value="0xc"/>
+    <value name="R10B10G10A2"         value="0xd"/>
+    <value name="A2F10F10F10"         value="0xe"/>
+    <value name="F10F10F10A2"         value="0xf"/>
+    <value name="U8U8U8"              value="0x10"/>
+    <value name="S8S8S8"              value="0x11"/>
+    <value name="R5G6B5"              value="0x12"/>
+    <value name="R5SG5SB6"            value="0x13"/>
+    <value name="B6G5SR5S"            value="0x14"/>
+    <value name="U16U16U16"           value="0x15"/>
+    <value name="S16S16S16"           value="0x16"/>
+    <value name="F16F16F16"           value="0x17"/>
+    <value name="U32U32U32"           value="0x18"/>
+    <value name="S32S32S32"           value="0x19"/>
+    <value name="F11F11F10"           value="0x1a"/>
+    <value name="F10F11F11"           value="0x1b"/>
+    <value name="F32F32F32"           value="0x1d"/>
+    <value name="U8U8"                value="0x1e"/>
+    <value name="S8S8"                value="0x1f"/>
+    <value name="U16U16"              value="0x20"/>
+    <value name="S16S16"              value="0x21"/>
+    <value name="F16F16"              value="0x22"/>
+    <value name="U32U32"              value="0x23"/>
+    <value name="S32S32"              value="0x24"/>
+    <value name="F32F32"              value="0x25"/>
+    <value name="U24ST8"              value="0x26"/>
+    <value name="ST8U24"              value="0x27"/>
+    <value name="U8"                  value="0x28"/>
+    <value name="S8"                  value="0x29"/>
+    <value name="U16"                 value="0x2a"/>
+    <value name="S16"                 value="0x2b"/>
+    <value name="F16"                 value="0x2c"/>
+    <value name="U32"                 value="0x2d"/>
+    <value name="S32"                 value="0x2e"/>
+    <value name="F32"                 value="0x2f"/>
+    <value name="ARGBV16_XR10"        value="0x30"/>
+    <value name="A2_XRBIAS_U10U10U10" value="0x31"/>
+    <value name="U10U10U10_XRBIAS_A2" value="0x32"/>
+  </enum>
+
+  <enum name="SOURCE_FORMAT">
+    <value name="F16_PER_CHANNEL"      value="0"/>
+    <value name="8_OR_RAW_PER_CHANNEL" value="1"/>
+  </enum>
+
+  <enum name="SOURCE_POS">
+    <value name="START_BIT0"  value="0"/>
+    <value name="START_BIT32" value="1"/>
+    <value name="START_BIT64" value="2"/>
+    <value name="START_BIT96" value="3"/>
+  </enum>
+
+  <struct name="STATE_WORD0" length="1">
+    <field name="address_low" start="0" end="31" shift="2" type="address"/>
+  </struct>
+
+</csbgen>

@@ -1,0 +1,8 @@
+
+BasedOnStyle: InheritParentConfig
+DisableFormat: false
+
+AlignConsecutiveBitFields: Consecutive
+ColumnLimit: 80
+BreakStringLiterals: false
+SpaceBeforeParens: ControlStatementsExceptControlMacros

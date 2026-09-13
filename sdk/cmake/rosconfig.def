@@ -457,7 +457,7 @@ config ENABLE_MESA_LLVMPIPE
     depends TOOLCHAIN=clang
     depends ARCH=amd64 || ARCH=arm64
     help
-      Build the pinned Mesa submodule as mesadrv.dll for the selected target.
+      Build the vendored Mesa source as mesadrv.dll for the selected target.
       LLVMpipe renders on the CPU. LLVM's Windows static libraries and native
       code-generation tools are built automatically when needed. The first
       enabled build downloads pinned LLVM sources and needs several GB of

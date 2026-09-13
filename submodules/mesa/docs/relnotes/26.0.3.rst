@@ -1,0 +1,113 @@
+Mesa 26.0.3 Release Notes / 2026-03-18
+======================================
+
+Mesa 26.0.3 is a bug fix release which fixes bugs found since the 26.0.2 release.
+
+Mesa 26.0.3 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 26.0.3 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+    SHA256: ddb7443d328e89aa45b4b6b80f077bf937f099daeca8ba48cabe32aab769e134  mesa-26.0.3.tar.xz
+    SHA512: 82a33d0fa0c2855a63f599e38753126a2195025a13e45f38e14fda7aa008cb05925bb74088e4a1e199c9237d9388f4d4408a2c95c1d7fe79d8e6e6f27c84187b  mesa-26.0.3.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- Portal hard locks the machine on rv350.
+- Turnip crash with lazy depth textures: GPUMEM_BIND_RANGES failed (Not a typewriter)
+- [regression] Left 4 Dead 2 crashing when joining or starting survival with "Official Dedicated" servers
+- lavapipe: crash in caselist
+- zink: mesh shaders broken
+
+
+Changes
+-------
+
+Connor Abbott (2):
+
+- vtn: Fix vtn_mediump_downconvert_value() for transposed matrices
+- vtn: Fix vtn_mediump_upconvert_value() with transposed matrices
+
+Danylo Piliaiev (1):
+
+- tu/kgsl: Better detection of sparse support
+
+David Rosca (2):
+
+- radv/video: Fix AV1 encode min tile size
+- radv/video: Fix coding pic_parameter_set_id in H264 slice header
+
+Eric Engestrom (3):
+
+- docs: add sha sum for 26.0.2
+- .pick_status.json: Update to 70a487adfb42e3f9ed3b182a37133aed991fcf63
+- .pick_status.json: Mark f2f792996dffd97092f18961b44d71b568cd8551 as denominated
+
+Faith Ekstrand (1):
+
+- pan/compiler: Handle store_per_view_output in collect_varyings()
+
+Ian Douglas Scott (1):
+
+- wsi/wayland: Use \`wl_fixes` to destroy \`wl_registry`
+
+Mary Guillemard (1):
+
+- nvk/mme: Add missing nullcheck in nvk_mme_test_state_state
+
+Mike Blumenkrantz (13):
+
+- zink: reapply zsbuf state after unordered blits
+- zink: allow renderpass termination for clears with ZINK_DEBUG=rp and GENERAL layouts
+- zink: run opt_combine_stores when optimizing
+- nir: fix nir_is_io_compact for mesh shaders
+- mesa/st: fix unlower_io_to_vars to work with mesh shaders
+- zink: work around drivers with broken mesh shader properties
+- llvmpipe: save mesh shader when calling u_blitter
+- lavapipe: fix mesh property exports
+- mesa/st: make st_texture_get_current_sampler_view static
+- mesa/st/sampler_view: use a local variable for buffer sv format
+- mesa/st/sampler_view: use a local variable for texture sv format
+- mesa/st/sampler_view: eliminate st_sampler_view::srgb_skip_decode
+- mesa/st/samplerview: explicitly block releasing in-use samplerviews
+
+Natalie Vock (2):
+
+- radv/rt: Bump ray query stack base limit for GFX12
+- radv/rt: Fix shared ray query stack on top of application LDS
+
+Pavel Ondračka (1):
+
+- r300: pad short vertex shaders to avoid R3xx hangs
+
+Rob Clark (2):
+
+- freedreno/fdl: Use 4k alignment for tiled
+- freedreno/drm: Fix bo_flush race
+
+Ryan Zhang (1):
+
+- panvk/csf: use DEFERRED_FLUSH for fragment job cache flush
+
+Yiwei Zhang (1):
+
+- venus: force prime blit on Nvidia GPU

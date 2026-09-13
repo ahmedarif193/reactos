@@ -1,0 +1,9 @@
+# These fail randomly
+glx@glx_arb_sync_control@timing.*
+glx@glx-multithread-texture
+
+# Random: ../src/util/hash_table.c:311: hash_table_search: Assertion `!key_pointer_is_reserved(ht, key)' failed.
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-refcount-multithread
+
+# NGG culling reduces the number of primitives seen by the clipper
+KHR-GL46.pipeline_statistics_query_tests_ARB.functional_primitives_vertices_submitted_and_clipping_input_output_primitives

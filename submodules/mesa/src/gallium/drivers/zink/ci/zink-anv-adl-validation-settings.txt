@@ -1,0 +1,70 @@
+# Please include a comment with the log message and a testcase triggering each
+# VUID at the bottom of the file.
+khronos_validation.message_id_filter = VUID-VkPhysicalDeviceProperties2-pNext-pNext,VUID-VkDeviceCreateInfo-pNext-pNext,VUID-RuntimeSpirv-Location-06272,VUID-vkCmdDrawMultiIndexedEXT-format-07753,VUID-RuntimeSpirv-OpEntryPoint-08743,VUID-vkCmdDrawMultiIndexedEXT-None-10909,VUID-vkDestroyDevice-device-05137,VUID-vkCmdDrawMultiEXT-None-08879,VUID-vkCmdDrawMultiIndexedEXT-None-08879,VUID-vkCmdBindVertexBuffers2-pStrides-06209,VUID-VkDeviceAddress-size-11364,VUID-VkStridedDeviceAddressRangeKHR-address-11365
+khronos_validation.report_flags = error
+khronos_validation.debug_action = VK_DBG_LAYER_ACTION_LOG_MSG,VK_DBG_LAYER_ACTION_BREAK
+VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT
+khronos_validation.printf_buffer_size = 40960
+khronos_validation.printf_to_stdout = true
+khronos_validation.log_filename = stdout
+
+# VUID-VkPhysicalDeviceProperties2-pNext-pNext
+# VUID-VkDeviceCreateInfo-pNext-pNext
+# never error due to unrecognized extensions
+
+
+# KHR-GL46.geometry_shader.limits.max_output_components
+#
+# [ VUID-RuntimeSpirv-Location-06272 ] Object 0: handle = 0x3a6cbb0000000025,
+# type = VK_OBJECT_TYPE_SHADER_MODULE; | MessageID = 0xa3614f8b | Invalid Pipeline
+# CreateInfo State: Fragment shader exceeds
+# VkPhysicalDeviceLimits::maxFragmentInputComponents of 116 components by 4
+# components The Vulkan spec states: The sum of Location and the number of
+# locations the variable it decorates consumes must be less than or equal to the
+# value for the matching {ExecutionModel} defined in Shader Input and Output
+# Locations
+# (https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#VUID-RuntimeSpirv-Location-06272)
+
+
+# KHR-GL46.sample_variables.mask.rgba8i.samples_8.mask_3
+#
+# [ VUID-vkCmdDrawMultiIndexedEXT-format-07753 ] Object 0: handle =
+# 0x535b660000000043, type = VK_OBJECT_TYPE_DESCRIPTOR_SET; | MessageID =
+# 0xd35852d3 | vkCmdDrawMultiIndexedEXT: Descriptor set VkDescriptorSet
+# 0x535b660000000043[] in binding #128 index 0 requires SINT component type, but
+# bound descriptor format is VK_FORMAT_R8G8B8A8_UNORM (VkImageView
+# 0x9638f80000000036[]). The Vulkan spec states: If a VkImageView is accessed as a
+# result of this command, then the image view's format must match the numeric
+# format from the Sampled Type operand of the OpTypeImage as described in the
+# SPIR-V Sampled Type column of the Interpretation of Numeric Format table
+# (https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#VUID-vkCmdDrawMultiIndexedEXT-format-07753)
+#
+# https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/4488
+
+
+# KHR-Single-GL46.enhanced_layouts.varying_locations
+#
+# VUID-RuntimeSpirv-OpEntryPoint-08743(ERROR / SPEC): msgNum: -1986897773 -
+# Validation Error: [ VUID-RuntimeSpirv-OpEntryPoint-08743 ]
+# vkCreateGraphicsPipelines(): pCreateInfos[0] VK_SHADER_STAGE_FRAGMENT_BIT declared input at
+# Location 1 Comonent 2 but it is not an Output declared in VK_SHADER_STAGE_VERTEX_BIT
+# The Vulkan spec states: Any user-defined variables shared between the OpEntryPoint of two shader stages,
+# and declared with Input as its {StorageClass} for the subsequent shader stage,
+# must have all Location slots and Component words declared in the preceding shader stage's
+# OpEntryPoint with Output as the {StorageClass}
+# (https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#VUID-RuntimeSpirv-OpEntryPoint-08743)
+#
+# VVL bug https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/5735
+
+# dEQP-GLES3.functional.vertex_array_objects.diff_stride
+#
+# Validation Error: [ VUID-vkCmdBindVertexBuffers2-pStrides-06209 ] | MessageID = 0x9e5db3a3
+# vkCmdDrawMultiEXT(): (attribute binding 0, attribute location 0) The pStrides value (2) parameter in the last call to vkCmdDrawMultiEXT is not 0 and is less than the extent of the binding for the attribute (4).
+# The Vulkan spec states: If pStrides is not NULL each element of pStrides must be either 0 or greater than or equal to the maximum extent of all vertex input attributes fetched from the corresponding binding, where the extent is calculated as the VkVertexInputAttributeDescription::offset plus VkVertexInputAttributeDescription::format size (https://docs.vulkan.org/spec/latest/chapters/fxvertex.html#VUID-vkCmdBindVertexBuffers2-pStrides-06209)
+# Objects: 3
+#     [0] VkCommandBuffer 0x563b09acbb90[zink cmdbuf]
+#     [1] VkShaderEXT 0x26eb00000026eb
+#     [2] VkShaderEXT 0x26ec00000026ec
+
+# VUID-VkDeviceAddress-size-11364,VUID-VkStridedDeviceAddressRangeKHR-address-11365
+# needs vk extension

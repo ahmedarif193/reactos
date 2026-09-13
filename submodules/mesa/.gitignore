@@ -1,0 +1,9 @@
+.cache
+.vscode*
+*.kdev4
+*.pyc
+*.pyo
+*.out
+/build
+.venv/
+*.mda.tar

@@ -1,0 +1,32 @@
+# Copyright 2024 Android Open Source Project
+# SPDX-License-Identifier: MIT
+
+inc_connection_manager = include_directories('.')
+
+files_libconnection_manager = files(
+    'GfxStreamConnection.cpp',
+    'GfxStreamConnectionManager.cpp',
+    'VirtioGpuPipeStream.cpp',
+)
+
+if with_platform_android
+  files_libconnection_manager += files('QemuPipeStream.cpp')
+else
+  files_libconnection_manager += files('QemuPipeStreamStub.cpp')
+endif
+
+libconnection_manager = static_library(
+    'connection_manager',
+    files_libconnection_manager,
+    cpp_args: gfxstream_guest_args,
+    include_directories: [
+        inc_connection_manager,
+        inc_guest_iostream,
+        inc_goldfish_address_space,
+        inc_platform_virtgpu,
+        inc_src,
+        inc_aemu,
+    ],
+    link_with: [lib_goldfish_address_space, libplatform_virtgpu],
+    dependencies: [dep_libdrm, dep_android_aemu_qemupipe, idep_mesautil],
+)

@@ -1,0 +1,62 @@
+# Basic test set
+[[deqp]]
+deqp = "/deqp-vk/external/vulkancts/modules/vulkan/deqp-vk"
+caselists = ["/deqp-vk/mustpass/vk-main.txt"]
+renderer_check = "Turnip Adreno .* 618"
+fraction = 1
+tests_per_group = 10000
+[deqp.env]
+# Enable additional tests that test fp32 denorm preserve.
+tu_enable_softfloat32 = "true"
+
+# force-gmem testing
+# Autotuner forces sysmem on most CTS tests
+[[deqp]]
+deqp = "/deqp-vk/external/vulkancts/modules/vulkan/deqp-vk"
+caselists = ["/deqp-vk/mustpass/vk-main.txt"]
+prefix = "gmem-"
+fraction = 15
+tests_per_group = 5000
+[deqp.env]
+TU_DEBUG = "gmem,forcebin"
+
+[[deqp]]
+deqp = "/deqp-vk/external/vulkancts/modules/vulkan/deqp-vk"
+caselists = ["/deqp-vk/mustpass/vk-main.txt"]
+include = ["dEQP-VK.graphicsfuzz.*", "dEQP-VK.subgroups.ballot*"]
+prefix = "spill-"
+tests_per_group = 2000
+[deqp.env]
+IR3_SHADER_DEBUG = "spillall"
+
+# non-binning gmem-forced testing.  Takes about 2-5 seconds.
+[[deqp]]
+deqp = "/deqp-vk/external/vulkancts/modules/vulkan/deqp-vk"
+caselists = ["/deqp-vk/mustpass/vk-main.txt"]
+prefix = "nobin-"
+include = ["dEQP-VK.transform_feedback.*"]
+tests_per_group = 5000
+[deqp.env]
+TU_DEBUG = "gmem,nobin"
+
+# force-sysmem testing
+[[deqp]]
+deqp = "/deqp-vk/external/vulkancts/modules/vulkan/deqp-vk"
+caselists = ["/deqp-vk/mustpass/vk-main.txt"]
+include = ["dEQP-VK.renderpass.*"]
+prefix = "bypass-"
+fraction = 15
+tests_per_group = 5000
+[deqp.env]
+TU_DEBUG = "sysmem"
+
+# force multi queue emulation
+[[deqp]]
+deqp = "/deqp-vk/external/vulkancts/modules/vulkan/deqp-vk"
+caselists = ["/deqp-vk/mustpass/vk-main.txt"]
+include = ["dEQP-VK.synchronization2.op.multi_queue.*", "dEQP-VK.synchronization2.signal_order.*"]
+prefix = "multiq-"
+fraction = 20
+tests_per_group = 10000
+[deqp.env]
+tu_emulate_second_queue = "true"

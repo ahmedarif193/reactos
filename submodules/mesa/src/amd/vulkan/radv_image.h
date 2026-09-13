@@ -1,0 +1,462 @@
+/*
+ * Copyright © 2016 Red Hat.
+ * Copyright © 2016 Bas Nieuwenhuizen
+ *
+ * based in part on anv driver which is:
+ * Copyright © 2015 Intel Corporation
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#ifndef RADV_IMAGE_H
+#define RADV_IMAGE_H
+
+#include "ac_descriptors.h"
+#include "ac_surface.h"
+
+#include "radv_device.h"
+#include "radv_physical_device.h"
+#include "radv_radeon_winsys.h"
+
+#include "vk_format.h"
+#include "vk_image.h"
+
+#define RADV_IMAGE_USAGE_WRITE_BITS                                                                                   \
+   (VK_IMAGE_USAGE_2_TRANSFER_DST_BIT_KHR | VK_IMAGE_USAGE_2_COLOR_ATTACHMENT_BIT_KHR |                               \
+    VK_IMAGE_USAGE_2_DEPTH_STENCIL_ATTACHMENT_BIT_KHR | VK_IMAGE_USAGE_2_STORAGE_BIT_KHR)
+
+struct radv_image_plane {
+   VkFormat format;
+   struct radeon_surf surface;
+   uint32_t first_mip_pipe_misaligned; /* GFX10-GFX11.5 */
+};
+
+struct radv_image_binding {
+   /* Set when bound */
+   struct radeon_winsys_bo *bo;
+   void *host_ptr;
+   uint64_t addr;
+   uint64_t range;
+};
+
+struct radv_image {
+   struct vk_image vk;
+
+   VkDeviceSize size;
+   uint32_t alignment;
+
+   unsigned queue_family_mask;
+   bool exclusive;
+   bool dcc_sign_reinterpret;
+   bool support_comp_to_single;
+
+   struct radv_image_binding bindings[3];
+   bool tc_compatible_cmask;
+
+   uint64_t clear_value_offset;
+   uint64_t fce_pred_offset;
+   uint64_t dcc_pred_offset;
+
+   /*
+    * Metadata for the TC-compat zrange workaround. If the 32-bit value
+    * stored at this offset is UINT_MAX, the driver will emit
+    * DB_Z_INFO.ZRANGE_PRECISION=0, otherwise it will skip the
+    * SET_CONTEXT_REG packet.
+    */
+   uint64_t tc_compat_zrange_offset;
+
+   /* Metadata for the HiZ workaround on GFX12 with both depth and stencil planes. It's used to
+    * track whether HiZ metadata are in-sync with main image data, per-level.
+    */
+   uint64_t hiz_metadata_offset;
+
+   /* For VK_ANDROID_native_buffer, the WSI image owns the memory, */
+   VkDeviceMemory owned_memory;
+
+   unsigned plane_count;
+   bool disjoint;
+   struct radv_image_plane planes[0];
+};
+
+VK_DEFINE_NONDISP_HANDLE_CASTS(radv_image, vk.base, VkImage, VK_OBJECT_TYPE_IMAGE)
+
+static inline bool
+radv_image_extent_compare(const struct radv_image *image, const VkExtent3D *extent)
+{
+   if (extent->width != image->vk.extent.width || extent->height != image->vk.extent.height ||
+       extent->depth != image->vk.extent.depth)
+      return false;
+   return true;
+}
+
+/**
+ * Return whether the image has CMASK metadata for color surfaces.
+ */
+static inline bool
+radv_image_has_cmask(const struct radv_image *image)
+{
+   return image->planes[0].surface.cmask_offset;
+}
+
+/**
+ * Return whether the image has FMASK metadata for color surfaces.
+ */
+static inline bool
+radv_image_has_fmask(const struct radv_image *image)
+{
+   return image->planes[0].surface.fmask_offset;
+}
+
+/**
+ * Return whether the image has DCC metadata for color surfaces.
+ */
+static inline bool
+radv_image_has_dcc(const struct radv_image *image)
+{
+   return !(image->planes[0].surface.flags & RADEON_SURF_Z_OR_SBUFFER) && image->planes[0].surface.meta_offset;
+}
+
+/**
+ * Return whether the image is TC-compatible CMASK.
+ */
+static inline bool
+radv_image_is_tc_compat_cmask(const struct radv_image *image)
+{
+   return radv_image_has_fmask(image) && image->tc_compatible_cmask;
+}
+
+/**
+ * Return whether DCC metadata is enabled for a level.
+ */
+static inline bool
+radv_dcc_enabled(const struct radv_image *image, unsigned level)
+{
+   return radv_image_has_dcc(image) && level < image->planes[0].surface.num_meta_levels;
+}
+
+/**
+ * Return whether the image can compress DCC on image stores (GFX10+).
+ *
+ * Note that this can have mixed performance implications, see
+ * https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/6796#note_643299
+ *
+ * This function assumes the image uses DCC compression.
+ */
+static inline bool
+radv_image_compress_dcc_on_image_stores(const struct radv_device *device, const struct radv_image *image)
+{
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   return ac_surface_supports_dcc_image_stores(pdev->info.gfx_level, &image->planes[0].surface);
+}
+
+/**
+ * Return whether the image has CB metadata.
+ */
+static inline bool
+radv_image_has_CB_metadata(const struct radv_image *image)
+{
+   return radv_image_has_cmask(image) || radv_image_has_fmask(image) || radv_image_has_dcc(image);
+}
+
+/**
+ * Return whether the image has HTILE metadata for depth surfaces.
+ */
+static inline bool
+radv_image_has_htile(const struct radv_image *image)
+{
+   return image->planes[0].surface.flags & RADEON_SURF_Z_OR_SBUFFER && image->planes[0].surface.meta_size;
+}
+
+/**
+ * Return whether the image has VRS HTILE metadata for depth surfaces
+ */
+static inline bool
+radv_image_has_vrs_htile(const struct radv_device *device, const struct radv_image *image)
+{
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+   const enum amd_gfx_level gfx_level = pdev->info.gfx_level;
+
+   /* Any depth buffer can potentially use VRS on GFX10.3. */
+   return gfx_level == GFX10_3 && device->vk.enabled_features.attachmentFragmentShadingRate &&
+          radv_image_has_htile(image) && (image->vk.usage & VK_IMAGE_USAGE_2_DEPTH_STENCIL_ATTACHMENT_BIT_KHR);
+}
+
+/**
+ * Return whether HTILE metadata is enabled for a level.
+ */
+static inline bool
+radv_htile_enabled(const struct radv_image *image, unsigned level)
+{
+   return radv_image_has_htile(image) && level < image->planes[0].surface.num_meta_levels;
+}
+
+/**
+ * Return whether the image is TC-compatible HTILE.
+ */
+static inline bool
+radv_image_is_tc_compat_htile(const struct radv_image *image)
+{
+   return radv_image_has_htile(image) && (image->planes[0].surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE);
+}
+
+/**
+ * Return whether the image is TC-compatible HTILE for a level.
+ */
+static inline bool
+radv_tc_compat_htile_enabled(const struct radv_image *image, unsigned level)
+{
+   return radv_htile_enabled(image, level) && (image->planes[0].surface.flags & RADEON_SURF_TC_COMPATIBLE_HTILE);
+}
+
+/**
+ * Return whether the entire HTILE buffer can be used for depth in order to
+ * improve HiZ Z-Range precision.
+ */
+static inline bool
+radv_image_tile_stencil_disabled(const struct radv_device *device, const struct radv_image *image)
+{
+   if (vk_format_has_stencil(image->vk.format))
+      return false;
+
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   /* Need to use the base and delta Z encoding for the workaround. */
+   if (pdev->info.has_htile_tc_z_clear_bug_without_stencil && radv_image_is_tc_compat_htile(image))
+      return false;
+
+   return !radv_image_has_vrs_htile(device, image);
+}
+
+/**
+ * Return whether the image requires setting ZRANGE_PRECISION based on the last depth clear value to work around the
+ * hardware bug that may cause the HTILE depth clear value used by the TC to be changed.
+ */
+static inline bool
+radv_image_has_tc_compat_zrange_metadata(const struct radv_device *device, const struct radv_image *image)
+{
+   if (!radv_image_is_tc_compat_htile(image))
+      return false;
+
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   return radv_image_tile_stencil_disabled(device, image) ? pdev->info.has_htile_tc_z_clear_bug_without_stencil
+                                                          : pdev->info.has_htile_tc_z_clear_bug_with_stencil;
+}
+
+/**
+ * Return whether the image can decompress HTILE on image stores (ie. write the uncompressed DWORD
+ * to HTILE) when the descriptor sets COMPRESSION_EN=1.
+ */
+static inline bool
+radv_image_decompress_htile_on_image_stores(const struct radv_device *device, const struct radv_image *image)
+{
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   if (!radv_image_has_htile(image))
+      return false;
+
+   /* This is supported on GFX10-10.3 but according to PAL there are issues. */
+   if (pdev->info.gfx_level < GFX11)
+      return false;
+
+   /* Only single-sampled images are supported. */
+   if (image->vk.samples > 1)
+      return false;
+
+   /* Only depth or stencil (not both) images are supported. */
+   if (image->vk.aspects == (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
+      return false;
+
+   return true;
+}
+
+/**
+ * Return whether the image has HiZ for depth surfaces (GFX12).
+ */
+static inline bool
+radv_image_has_hiz(const struct radv_image *image)
+{
+   return image->planes[0].surface.flags & RADEON_SURF_Z_OR_SBUFFER && image->planes[0].surface.u.gfx9.zs.hiz.offset;
+}
+
+/**
+ * Return whether the image has HiZ metadata to implement a workaround (GFX12).
+ */
+static inline bool
+radv_image_has_hiz_metadata(const struct radv_image *image)
+{
+   return radv_image_has_hiz(image) && image->hiz_metadata_offset;
+}
+
+static inline bool
+radv_image_has_clear_value(const struct radv_image *image)
+{
+   return image->clear_value_offset != 0;
+}
+
+static inline uint64_t
+radv_image_get_fast_clear_va(const struct radv_image *image, uint32_t base_level)
+{
+   assert(radv_image_has_clear_value(image));
+
+   uint64_t va = image->bindings[0].addr;
+   va += image->clear_value_offset + base_level * 8;
+   return va;
+}
+
+static inline uint64_t
+radv_image_get_fce_pred_va(const struct radv_image *image, uint32_t base_level)
+{
+   assert(image->fce_pred_offset != 0);
+
+   uint64_t va = image->bindings[0].addr;
+   va += image->fce_pred_offset + base_level * 8;
+   return va;
+}
+
+static inline uint64_t
+radv_image_get_dcc_pred_va(const struct radv_image *image, uint32_t base_level)
+{
+   assert(image->dcc_pred_offset != 0);
+
+   uint64_t va = image->bindings[0].addr;
+   va += image->dcc_pred_offset + base_level * 8;
+   return va;
+}
+
+static inline uint64_t
+radv_get_tc_compat_zrange_va(const struct radv_image *image, uint32_t base_level)
+{
+   assert(image->tc_compat_zrange_offset != 0);
+
+   uint64_t va = image->bindings[0].addr;
+   va += image->tc_compat_zrange_offset + base_level * 4;
+   return va;
+}
+
+static inline uint64_t
+radv_get_ds_clear_value_va(const struct radv_image *image, uint32_t base_level)
+{
+   assert(radv_image_has_clear_value(image));
+
+   uint64_t va = image->bindings[0].addr;
+   va += image->clear_value_offset + base_level * 8;
+   return va;
+}
+
+static inline uint64_t
+radv_get_hiz_metadata_va(const struct radv_image *image, uint32_t base_level)
+{
+   assert(image->hiz_metadata_offset != 0);
+
+   uint64_t va = image->bindings[0].addr;
+   va += image->hiz_metadata_offset + base_level * 4;
+   return va;
+}
+
+static inline uint32_t
+radv_get_htile_initial_value(const struct radv_device *device, const struct radv_image *image)
+{
+   if (radv_image_tile_stencil_disabled(device, image)) {
+      return HTILE_Z_UNCOMPRESSED;
+   } else {
+      if (radv_image_has_vrs_htile(device, image)) {
+         return HTILE_ZS_VRS_UNCOMPRESSED;
+      } else {
+         return HTILE_ZS_UNCOMPRESSED;
+      }
+   }
+}
+
+static inline uint32_t
+radv_gfx12_get_hiz_initial_value(void)
+{
+   const uint16_t zmin = 0;
+   const uint16_t zmax = 0xffff;
+
+   /* The first component is the minimum value accross the s-tile, and the second component is the
+    * maximum value.
+    */
+   return zmin | (zmax << 16);
+}
+
+static inline bool
+radv_image_get_iterate256(const struct radv_device *device, struct radv_image *image)
+{
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
+   /* ITERATE_256 is required for depth or stencil MSAA images that are TC-compatible HTILE. */
+   return pdev->info.gfx_level >= GFX10 && radv_image_is_tc_compat_htile(image) && image->vk.samples > 1;
+}
+
+bool radv_are_formats_dcc_compatible(const struct radv_physical_device *pdev, const void *pNext, VkFormat format,
+                                     VkImageCreateFlags2KHR flags, bool *sign_reinterpret);
+
+bool radv_image_use_dcc_predication(const struct radv_device *device, const struct radv_image *image);
+
+void radv_compose_swizzle(const struct util_format_description *desc, const VkComponentMapping *mapping,
+                          enum pipe_swizzle swizzle[4]);
+
+void radv_image_bo_set_metadata(struct radv_device *device, struct radv_image *image, struct radeon_winsys_bo *bo);
+
+void radv_image_override_offset_stride(struct radv_device *device, struct radv_image *image, uint64_t offset,
+                                       uint32_t stride);
+
+bool radv_image_can_fast_clear(const struct radv_device *device, const struct radv_image *image);
+
+struct ac_surf_info radv_get_ac_surf_info(struct radv_device *device, const struct radv_image *image);
+
+struct radv_image_create_info {
+   const VkImageCreateInfo *vk_info;
+   bool scanout;
+   bool no_metadata_planes;
+   bool prime_blit_src;
+   const struct radeon_bo_metadata *bo_metadata;
+};
+
+VkResult radv_image_create_layout(struct radv_device *device, struct radv_image_create_info create_info,
+                                  const struct VkImageDrmFormatModifierExplicitCreateInfoEXT *mod_info,
+                                  const struct VkVideoProfileListInfoKHR *profile_list, struct radv_image *image);
+
+VkResult radv_image_create(VkDevice _device, const struct radv_image_create_info *info,
+                           const VkAllocationCallbacks *alloc, VkImage *pImage, bool is_internal);
+
+unsigned radv_plane_from_aspect(VkImageAspectFlags mask);
+
+VkFormat radv_get_aspect_format(struct radv_image *image, VkImageAspectFlags mask);
+
+/* Whether the image has a htile  that is known consistent with the contents of
+ * the image and is allowed to be in compressed form.
+ *
+ * If this is false reads that don't use the htile should be able to return
+ * correct results.
+ */
+bool radv_layout_is_htile_compressed(const struct radv_device *device, const struct radv_image *image, unsigned level,
+                                     VkImageLayout layout, unsigned queue_mask);
+
+bool radv_layout_can_fast_clear(const struct radv_device *device, const struct radv_image *image, unsigned level,
+                                VkImageLayout layout, unsigned queue_mask);
+
+bool radv_layout_dcc_compressed(const struct radv_device *device, const struct radv_image *image, unsigned level,
+                                VkImageLayout layout, unsigned queue_mask);
+
+enum radv_fmask_compression {
+   RADV_FMASK_COMPRESSION_NONE,
+   RADV_FMASK_COMPRESSION_PARTIAL,
+   RADV_FMASK_COMPRESSION_FULL,
+};
+
+enum radv_fmask_compression radv_layout_fmask_compression(const struct radv_device *device,
+                                                          const struct radv_image *image, VkImageLayout layout,
+                                                          unsigned queue_mask);
+
+unsigned radv_image_queue_family_mask(const struct radv_image *image, enum radv_queue_family family,
+                                      enum radv_queue_family queue_family);
+
+bool radv_image_is_renderable(const struct radv_image *image);
+
+bool radv_image_is_l2_coherent(const struct radv_device *device, const struct radv_image *image,
+                               const VkImageSubresourceRange *range);
+
+#endif /* RADV_IMAGE_H */

@@ -1,0 +1,101 @@
+# Copyright © 2022 Konstantin Seurer
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# source file, output name, defines
+bvh_shaders = [
+  [
+    'lbvh_generate_ir.comp',
+    'lbvh_generate_ir',
+  ],
+  [
+    'lbvh_main.comp',
+    'lbvh_main',
+  ],
+  [
+    'leaf.comp',
+    'leaf',
+  ],
+  [
+    'morton.comp',
+    'morton',
+  ],
+  [
+    'ploc_internal.comp',
+    'ploc_internal',
+  ],
+  [
+    'hploc_internal.comp',
+    'hploc_internal',
+  ],
+]
+
+spirv_include_dir = dir_source_root + '/src/compiler/spirv'
+vk_bvh_include_dir = dir_source_root + '/src/vulkan/runtime/bvh'
+
+vk_bvh_includes = files(
+  'leaf.h',
+  'vk_bvh_defines.h',
+  'vk_bvh_helpers.h',
+  'vk_debug.h',
+  spirv_include_dir + '/spirv_internal_exts.h',
+)
+
+vk_glsl_shader_extensions = [
+  'GL_GOOGLE_include_directive',
+  'GL_EXT_shader_explicit_arithmetic_types_int8',
+  'GL_EXT_shader_explicit_arithmetic_types_int16',
+  'GL_EXT_shader_explicit_arithmetic_types_int32',
+  'GL_EXT_shader_explicit_arithmetic_types_int64',
+  'GL_EXT_shader_explicit_arithmetic_types_float16',
+  'GL_EXT_scalar_block_layout',
+  'GL_EXT_buffer_reference',
+  'GL_EXT_buffer_reference2',
+  'GL_KHR_memory_scope_semantics',
+  'GL_KHR_shader_subgroup_arithmetic',
+  'GL_KHR_shader_subgroup_basic',
+  'GL_KHR_shader_subgroup_shuffle',
+  'GL_KHR_shader_subgroup_ballot',
+  'GL_KHR_shader_subgroup_clustered',
+  'GL_KHR_shader_subgroup_vote',
+  'GL_EXT_shader_atomic_int64',
+  'GL_EXT_spirv_intrinsics',
+]
+
+vk_glsl_shader_preamble = []
+foreach ext : vk_glsl_shader_extensions
+  vk_glsl_shader_preamble += ['-P#extension ' + ext + ' : require']
+endforeach
+
+bvh_spv = []
+foreach s : bvh_shaders
+  command = [
+    prog_glslang, '-V', '-I' + vk_bvh_include_dir, '-I' + spirv_include_dir, '--target-env', 'spirv1.5', '-x', '-o', '@OUTPUT@', '@INPUT@'
+  ] + (with_mesa_debug ? ['-g'] : [])
+  command += glslang_quiet
+  command += vk_glsl_shader_preamble
+
+  bvh_spv += custom_target(
+    s[1] + '.spv.h',
+    input : s[0],
+    output : s[1] + '.spv.h',
+    command : command,
+    depend_files: vk_bvh_includes
+  )
+endforeach

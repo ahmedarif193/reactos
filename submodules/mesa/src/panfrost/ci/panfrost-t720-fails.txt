@@ -1,0 +1,12 @@
+dEQP-GLES2.functional.fbo.completeness.renderable.texture.color0.rgb_half_float_oes,Fail
+dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_bgra_depth_component16,Fail
+dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgb5_a1_depth_component16,Fail
+dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgba4_depth_component16,Fail
+dEQP-GLES2.functional.fbo.render.shared_colorbuffer.tex2d_bgra_depth_component16,Fail
+dEQP-GLES2.functional.fbo.render.shared_colorbuffer.tex2d_rgb_depth_component16,Fail
+dEQP-GLES2.functional.texture.vertex.cube.filtering.nearest_mipmap_linear_linear_clamp,Fail
+dEQP-GLES2.functional.texture.vertex.cube.filtering.nearest_mipmap_linear_linear_mirror,Fail
+dEQP-GLES2.functional.texture.vertex.cube.filtering.nearest_mipmap_linear_linear_repeat,Fail
+dEQP-GLES2.functional.texture.vertex.cube.filtering.nearest_mipmap_nearest_linear_clamp,Fail
+dEQP-GLES2.functional.texture.vertex.cube.filtering.nearest_mipmap_nearest_linear_mirror,Fail
+dEQP-GLES2.functional.texture.vertex.cube.filtering.nearest_mipmap_nearest_linear_repeat,Fail

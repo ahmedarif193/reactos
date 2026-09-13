@@ -1,0 +1,38 @@
+dEQP-GLES31.functional.texture.border_clamp.unused_channels.luminance_alpha
+dEQP-GLES3.functional.fragment_ops.blend.fbo_srgb.equation_src_func_dst_func.subtract_constant_color_constant_alpha
+dEQP-GLES3.functional.occlusion_query.depth_write
+dEQP-GLES3.functional.occlusion_query.depth_write_depth_clear
+dEQP-GLES3.functional.occlusion_query.scissor_depth_write_stencil_clear
+dEQP-GLES3.functional.shaders.precision.uint.highp_mul_vertex
+dEQP-GLES3.functional.texture.wrap.astc_5x5.clamp_clamp_linear_not_divisible
+glx@glx-multithread-texture
+KHR-GL46.direct_state_access.framebuffers_texture_layer_attachment
+KHR-GL46.framebuffer_blit.multisampled_to_singlesampled_blit_color_config_test
+KHR-GL46.packed_pixels.pbo_rectangle.rgba16f_format_rgba
+KHR-GL46.packed_pixels.varied_rectangle.rgb16_snorm_format_red
+KHR-GL46.packed_pixels.varied_rectangle.rgb8ui_format_red_integer
+spec@arb_clear_buffer_object@arb_clear_buffer_object-formats
+spec@arb_depth_texture@fbo-depth-gl_depth_component16-tex1d
+spec@arb_fragment_shader_interlock@arb_fragment_shader_interlock-image-load-store
+spec@arb_framebuffer_object@fbo-drawbuffers-none gldrawpixels
+spec@arb_shader_storage_buffer_object@execution@ssbo-atomiccompswap-int
+spec@arb_texture_multisample@arb_texture_multisample-dsa-texelfetch
+spec@arb_texture_multisample@arb_texture_multisample-dsa-texelfetch@Texture type: GL_RGB9_E5
+spec@arb_texture_multisample@texelfetch fs sampler2dms 4 1x71-501x71
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yuyv
+spec@ext_texture_array@fbo-depth-array depth-layered-clear
+spec@ext_texture_array@fbo-depth-array stencil-draw
+spec@ext_texture_array@fbo-depth-array stencil-layered-clear
+spec@glsl-1.30@execution@texelfetch fs sampler1d 1-513
+spec@glsl-1.30@execution@texelfetch fs sampler1darray 1x281-501x281
+spec@glsl-1.50@execution@geometry@point-size-out
+spec@glsl-1.50@execution@redeclare-pervertex-out-subset-gs
+spec@!opengl 1.0@rasterpos
+spec@!opengl 1.1@copypixels-sync
+spec@!opengl 1.1@depthstencil-default_fb-blit samples=4
+spec@!opengl 1.1@depthstencil-default_fb-copypixels samples=6
+spec@!opengl 1.1@draw-pixels
+spec@!opengl 1.1@draw-sync
+spec@!opengl 1.1@gl-1.3-alpha_to_coverage_nop
+spec@!opengl 1.1@texsubimage
+spec@!opengl 1.1@texsubimage-unpack

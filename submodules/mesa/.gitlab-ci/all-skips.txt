@@ -1,0 +1,51 @@
+# Note: skips lists for CI are just a list of lines that, when
+# non-zero-length and not starting with '#', will regex match to
+# delete lines from the test list.  Be careful.
+
+# This test checks the driver's reported conformance version against the
+# version of the CTS we're running. This check fails every few months
+# and everyone has to go and bump the number in every driver.
+# Running this check only makes sense while preparing a conformance
+# submission, so skip it in the regular CI.
+dEQP-VK.api.driver_properties.conformance_version
+
+# Exclude this test which might fail when a new extension is implemented.
+dEQP-VK.info.device_extensions
+
+# Times out on all supported drivers
+# https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/6728
+dEQP-VK.synchronization2.internally_synchronized_queues.direct_wsi_wsi
+
+# These are tremendously slow (pushing toward a minute), and aren't
+# reliable to be run in parallel with other tests due to CPU-side timing.
+dEQP-GLES[0-9]*.functional.flush_finish.*
+
+# piglit: WGL is Windows-only
+wgl@.*
+
+# These are sensitive to CPU timing, and would need to be run in isolation
+# on the system rather than in parallel with other tests.
+glx@glx_arb_sync_control@timing.*
+
+# This test is not built with waffle, while we do build tests with waffle
+spec@!opengl 1.1@windowoverlap
+
+# These tests are flaking too much recently on almost all drivers, so better skip them until the cause is identified
+spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex
+spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex@'vs_input2[1][0]' on GL_PROGRAM_INPUT
+
+# gbm does not support reading the front buffer after a swapbuffers, and
+# that's intentional. Don't bother running these tests when PIGLIT_PLATFORM=gbm.
+# Note that this doesn't include tests like fbo-sys-blit, which draw/read front
+# but don't swap.
+#
+# piglit should probably be fixed to throw skip on this platform
+spec@!opengl 1.0@gl-1.0-swapbuffers-behavior
+spec@!opengl 1.1@read-front
+
+# Skip test everywhere
+# Because even with a 256x256 map, it is over 1 GiB of texture memory
+# allocated
+# Also, individually, it was disabled in most of the tests as it is
+# either too slow or results in an OOM
+spec@!opengl 1.1@streaming-texture-leak

@@ -1,0 +1,57 @@
+# full OpenGL ES test set
+[[deqp]]
+deqp = "/deqp-gles/external/openglcts/modules/glcts"
+caselists = [
+    "/deqp-gles/mustpass/gles2-main.txt",
+    "/deqp-gles/mustpass/gles3-main.txt",
+    "/deqp-gles/mustpass/gles31-main.txt",
+    "/deqp-gles/mustpass/gles2-khr-main.txt",
+    "/deqp-gles/mustpass/gles3-khr-main.txt",
+    "/deqp-gles/mustpass/gles31-khr-main.txt",
+]
+deqp_args = [
+    "--deqp-surface-width=256", "--deqp-surface-height=256",
+    "--deqp-surface-type=pbuffer", "--deqp-visibility=hidden",
+    "--deqp-gl-config-name=rgba8888d24s8ms0",
+]
+renderer_check = "Apple M[12]"
+tests_per_group = 1000
+version_check = "GL ES 3.2.*git"
+
+# Note that KHR-GL* test sets include all tests from the previous
+# version, so we only need to run one test list (unlike dEQP-GLES,
+# where the test sets are separate).
+[[deqp]]
+deqp = "/deqp-gl/external/openglcts/modules/glcts"
+caselists = [
+    "/deqp-gl/mustpass/gl46-main.txt",
+]
+deqp_args = [
+    "--deqp-surface-width=256", "--deqp-surface-height=256",
+    "--deqp-surface-type=pbuffer", "--deqp-visibility=hidden",
+    "--deqp-gl-config-name=rgba8888d24s8ms0",
+]
+renderer_check = "Apple M[12]"
+tests_per_group = 1000
+
+# wayland
+[[deqp]]
+deqp = "/deqp-gles/modules/egl/deqp-egl-wayland"
+caselists = ["/deqp-gles/mustpass/egl-main.txt"]
+deqp_args = [
+    "--deqp-surface-width=256", "--deqp-surface-height=256",
+    "--deqp-surface-type=pbuffer", "--deqp-visibility=hidden",
+    "--deqp-gl-config-name=rgba8888d24s8ms0",
+]
+prefix = "wayland-"
+
+# x11
+[[deqp]]
+deqp = "/deqp-gles/modules/egl/deqp-egl-x11"
+caselists = ["/deqp-gles/mustpass/egl-main.txt"]
+deqp_args = [
+    "--deqp-surface-width=256", "--deqp-surface-height=256",
+    "--deqp-surface-type=pbuffer", "--deqp-visibility=hidden",
+    "--deqp-gl-config-name=rgba8888d24s8ms0",
+]
+prefix = "x11-"

@@ -1,0 +1,8 @@
+[[fluster]]
+bin = "/fluster/fluster.py"
+decoders = [
+  # "GStreamer-AV1-Vulkan", # uncomment when this is fixed: https://github.com/fluendo/fluster/issues/309
+  "GStreamer-VP9-Vulkan",
+  "GStreamer-H.264-Vulkan",
+  "GStreamer-H.265-Vulkan",
+]

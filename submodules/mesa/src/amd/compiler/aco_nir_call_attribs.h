@@ -1,0 +1,140 @@
+/*
+ * Copyright © 2024 Valve Corporation
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#ifndef ACO_NIR_CALL_ATTRIBS_H
+#define ACO_NIR_CALL_ATTRIBS_H
+
+enum aco_nir_call_abi {
+   ACO_NIR_CALL_ABI_RT_RECURSIVE,
+   ACO_NIR_CALL_ABI_TRAVERSAL,
+   ACO_NIR_CALL_ABI_AHIT_ISEC,
+};
+
+enum aco_nir_function_attribs {
+   ACO_NIR_FUNCTION_ATTRIB_ABI_MASK = 0x7F,
+   /* Different lanes can have different values for the function pointer to call */
+   ACO_NIR_FUNCTION_ATTRIB_DIVERGENT_CALL = 0x1 << 7,
+   /* Function will never return */
+   ACO_NIR_FUNCTION_ATTRIB_NORETURN = 0x2 << 7,
+};
+
+enum aco_nir_parameter_attribs {
+   /* This parameter's value may not be preserved across a callee. Unlike return parameters, the
+    * parameter's value is undefined on return. Callers must back up values of discardable
+    * parameters separately.
+    * Mostly used for tail calls, where parameters to the tail callee have different values than
+    * for the caller. In that case, on function return, the parameters will have been overwritten
+    * with the tail callee parameter values.
+    */
+   ACO_NIR_PARAM_ATTRIB_DISCARDABLE = 0x1,
+};
+
+enum aco_nir_call_system_args {
+   ACO_NIR_CALL_SYSTEM_ARG_DIVERGENT_PC,
+   ACO_NIR_CALL_SYSTEM_ARG_UNIFORM_PC,
+   ACO_NIR_CALL_SYSTEM_ARG_COUNT,
+};
+
+enum aco_nir_rt_function_arg {
+   RT_ARG_LAUNCH_ID = 0,
+   RT_ARG_LAUNCH_SIZE,
+   RT_ARG_DESCRIPTORS,
+   RT_ARG_DYNAMIC_DESCRIPTORS,
+   RT_ARG_HEAP_RESOURCE = RT_ARG_DESCRIPTORS,
+   RT_ARG_HEAP_SAMPLER = RT_ARG_DYNAMIC_DESCRIPTORS,
+   RT_ARG_PUSH_CONSTANTS,
+   RT_ARG_SBT_DESCRIPTORS,
+   RT_ARG_COUNT,
+};
+
+enum aco_nir_raygen_function_arg {
+   RAYGEN_ARG_TRAVERSAL_ADDR = RT_ARG_COUNT,
+   RAYGEN_ARG_SHADER_RECORD_PTR,
+   RAYGEN_ARG_COUNT,
+};
+
+enum aco_nir_traversal_function_arg {
+   TRAVERSAL_ARG_TRAVERSAL_ADDR = RT_ARG_COUNT,
+   TRAVERSAL_ARG_SHADER_RECORD_PTR,
+   TRAVERSAL_ARG_ACCEL_STRUCT,
+   TRAVERSAL_ARG_CULL_MASK_AND_FLAGS,
+   TRAVERSAL_ARG_SBT_OFFSET,
+   TRAVERSAL_ARG_SBT_STRIDE,
+   TRAVERSAL_ARG_MISS_INDEX,
+   TRAVERSAL_ARG_RAY_ORIGIN,
+   TRAVERSAL_ARG_RAY_TMIN,
+   TRAVERSAL_ARG_RAY_DIRECTION,
+   TRAVERSAL_ARG_RAY_TMAX,
+   TRAVERSAL_ARG_PRIMITIVE_ADDR,
+   TRAVERSAL_ARG_PRIMITIVE_ID,
+   TRAVERSAL_ARG_INSTANCE_ADDR,
+   TRAVERSAL_ARG_GEOMETRY_ID_AND_FLAGS,
+   TRAVERSAL_ARG_HIT_KIND,
+   TRAVERSAL_ARG_PAYLOAD_BASE,
+};
+
+enum aco_nir_ahit_isec_function_arg {
+   AHIT_ISEC_ARG_SHADER_RECORD_PTR = RT_ARG_COUNT,
+   AHIT_ISEC_ARG_CULL_MASK_AND_FLAGS,
+   AHIT_ISEC_ARG_SBT_INDEX,
+   AHIT_ISEC_ARG_RAY_ORIGIN,
+   AHIT_ISEC_ARG_RAY_TMIN,
+   AHIT_ISEC_ARG_RAY_DIRECTION,
+   AHIT_ISEC_ARG_CANDIDATE_RAY_TMAX,
+   AHIT_ISEC_ARG_PRIMITIVE_ADDR,
+   AHIT_ISEC_ARG_PRIMITIVE_ID,
+   AHIT_ISEC_ARG_INSTANCE_ADDR,
+   AHIT_ISEC_ARG_GEOMETRY_ID_AND_FLAGS,
+   AHIT_ISEC_ARG_OPAQUE,
+   AHIT_ISEC_ARG_HIT_KIND,
+   AHIT_ISEC_ARG_ACCEPT,
+   AHIT_ISEC_ARG_TERMINATE,
+   AHIT_ISEC_ARG_COMMITTED_RAY_TMAX,
+   AHIT_ISEC_ARG_HIT_ATTRIB_PAYLOAD_BASE,
+};
+
+enum aco_nir_chit_miss_function_arg {
+   CHIT_MISS_ARG_TRAVERSAL_ADDR = RT_ARG_COUNT,
+   CHIT_MISS_ARG_SHADER_RECORD_PTR,
+   CHIT_MISS_ARG_ACCEL_STRUCT,
+   CHIT_MISS_ARG_CULL_MASK_AND_FLAGS,
+   CHIT_MISS_ARG_SBT_OFFSET,
+   CHIT_MISS_ARG_SBT_STRIDE,
+   CHIT_MISS_ARG_MISS_INDEX,
+   CHIT_MISS_ARG_RAY_ORIGIN,
+   CHIT_MISS_ARG_RAY_TMIN,
+   CHIT_MISS_ARG_RAY_DIRECTION,
+   CHIT_MISS_ARG_RAY_TMAX,
+   CHIT_MISS_ARG_PRIMITIVE_ADDR,
+   CHIT_MISS_ARG_PRIMITIVE_ID,
+   CHIT_MISS_ARG_INSTANCE_ADDR,
+   CHIT_MISS_ARG_GEOMETRY_ID_AND_FLAGS,
+   CHIT_MISS_ARG_HIT_KIND,
+   CHIT_MISS_ARG_PAYLOAD_BASE,
+};
+
+/* aco_nir_cps_function_arg extends aco_nir_raygen_function_arg */
+enum aco_nir_cps_function_arg {
+   CPS_ARG_PAYLOAD_SCRATCH_OFFSET = RAYGEN_ARG_COUNT,
+   CPS_ARG_STACK_PTR,
+   CPS_ARG_ACCEL_STRUCT,
+   CPS_ARG_CULL_MASK_AND_FLAGS,
+   CPS_ARG_SBT_OFFSET,
+   CPS_ARG_SBT_STRIDE,
+   CPS_ARG_MISS_INDEX,
+   CPS_ARG_RAY_ORIGIN,
+   CPS_ARG_RAY_TMIN,
+   CPS_ARG_RAY_DIRECTION,
+   CPS_ARG_RAY_TMAX,
+   CPS_ARG_PRIMITIVE_ID,
+   CPS_ARG_INSTANCE_ADDR,
+   CPS_ARG_GEOMETRY_ID_AND_FLAGS,
+   CPS_ARG_HIT_KIND,
+   CPS_ARG_PRIMITIVE_ADDR,
+   CPS_ARG_COUNT,
+};
+
+#endif /* ACO_NIR_CALL_ATTRIBS_H */

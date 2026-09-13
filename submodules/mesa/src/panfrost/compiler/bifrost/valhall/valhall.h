@@ -1,0 +1,216 @@
+/*
+ * Copyright (C) 2021 Collabora Ltd.
+ * SPDX-License-Identifier: MIT
+ */
+
+#ifndef __VALHALL_H
+#define __VALHALL_H
+
+#include <stdint.h>
+#include "util/macros.h"
+#include "bi_opcodes.h"
+#include "valhall_enums.h"
+#include "shader_enums.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define VA_NUM_GENERAL_SLOTS 3
+
+extern const uint32_t valhall_immediates[32];
+
+enum va_size {
+   VA_SIZE_8 = 0,
+   VA_SIZE_16 = 1,
+   VA_SIZE_32 = 2,
+   VA_SIZE_64 = 3,
+};
+
+enum va_unit {
+   /** Fused floating-point multiply-add */
+   VA_UNIT_FMA = 0,
+
+   /** Type conversion and basic arithmetic */
+   VA_UNIT_CVT = 1,
+
+   /** Special function unit */
+   VA_UNIT_SFU = 2,
+
+   /** Varying */
+   VA_UNIT_V = 3,
+
+   /** General load/store */
+   VA_UNIT_LS = 4,
+
+   /** Texture */
+   VA_UNIT_T = 5,
+
+   /** Fused varying and texture */
+   VA_UNIT_VT = 6,
+
+   /** Produces a message for a unit not otherwise specified */
+   VA_UNIT_NONE = 7
+};
+
+struct va_src_info {
+   bool absneg       : 1;
+   bool swizzle      : 1;
+   bool notted       : 1;
+   bool lane         : 1;
+   bool lanes        : 1;
+   bool halfswizzle  : 1;
+   bool widen        : 1;
+   bool combine      : 1;
+   enum va_size size : 2;
+} __attribute__((packed));
+
+struct va_opcode_info {
+   uint64_t exact;
+   struct va_src_info srcs[4];
+   uint8_t type_size         : 8;
+   enum va_unit unit         : 3;
+   unsigned nr_srcs          : 3;
+   unsigned nr_staging_srcs  : 2;
+   unsigned nr_staging_dests : 2;
+   bool has_dest             : 1;
+   bool is_signed            : 1;
+   bool clamp                : 1;
+   bool saturate             : 1;
+   bool rhadd                : 1;
+   bool round_mode           : 1;
+   bool condition            : 1;
+   bool result_type          : 1;
+   bool vecsize              : 1;
+   bool register_format      : 1;
+   bool slot                 : 1;
+   bool sr_count             : 1;
+   bool sr_write_count       : 1;
+   unsigned sr_control       : 2;
+};
+
+extern const struct va_opcode_info valhall_opcodes[BI_NUM_OPCODES];
+
+/* Bifrost specifies the source of bitwise operations as (A, B, shift), but
+ * Valhall specifies (A, shift, B). We follow Bifrost conventions in the
+ * compiler, so normalize.
+ *
+ * Bifrost specifies BLEND as staging + (coverage, blend descriptor), but
+ * Valhall specifies staging + (blend descriptor, coverage). Given we put
+ * staging sources first, this works out to the same swap as bitwise ops.
+ */
+
+static inline bool
+va_swap_12(enum bi_opcode op)
+{
+   switch (op) {
+   case BI_OPCODE_BLEND:
+   case BI_OPCODE_LSHIFT_AND_I32:
+   case BI_OPCODE_LSHIFT_AND_V2I16:
+   case BI_OPCODE_LSHIFT_AND_V4I8:
+   case BI_OPCODE_LSHIFT_OR_I32:
+   case BI_OPCODE_LSHIFT_OR_V2I16:
+   case BI_OPCODE_LSHIFT_OR_V4I8:
+   case BI_OPCODE_LSHIFT_XOR_I32:
+   case BI_OPCODE_LSHIFT_XOR_V2I16:
+   case BI_OPCODE_LSHIFT_XOR_V4I8:
+   case BI_OPCODE_RSHIFT_AND_I32:
+   case BI_OPCODE_RSHIFT_AND_V2I16:
+   case BI_OPCODE_RSHIFT_AND_V4I8:
+   case BI_OPCODE_RSHIFT_OR_I32:
+   case BI_OPCODE_RSHIFT_OR_V2I16:
+   case BI_OPCODE_RSHIFT_OR_V4I8:
+   case BI_OPCODE_RSHIFT_XOR_I32:
+   case BI_OPCODE_RSHIFT_XOR_V2I16:
+   case BI_OPCODE_RSHIFT_XOR_V4I8:
+      return true;
+   default:
+      return false;
+   }
+}
+
+static inline struct va_src_info
+va_src_info(enum bi_opcode op, unsigned src)
+{
+   unsigned idx = (va_swap_12(op) && (src == 1 || src == 2)) ? (3 - src) : src;
+   return valhall_opcodes[op].srcs[idx];
+}
+
+static inline bool
+va_flow_is_wait_or_none(enum va_flow flow)
+{
+   return (flow <= VA_FLOW_WAIT);
+}
+
+static inline bool
+va_is_valid_const_table(unsigned table)
+{
+   return (table >= 0 && table <= 11) || (table >= 60 && table <= 63);
+}
+
+static inline uint32_t
+va_res_fold_table_idx(uint32_t table)
+{
+   switch (table) {
+   case 0 ... 11:
+      return table;
+   case 60 ... 63:
+      return table + 12 - 60;
+   default:
+      assert(!"Can't pack table");
+      return 0;
+   }
+}
+
+static inline bool
+va_op_dest_modifier_does_convert(enum bi_opcode op)
+{
+   switch (op) {
+   case BI_OPCODE_FADD_F32:
+   case BI_OPCODE_FADD_LSCALE_F32:
+   case BI_OPCODE_FABSNEG_F32:
+   case BI_OPCODE_FMA_F32:
+      return true;
+   default:
+      return false;
+   }
+}
+
+enum va_shader_output {
+   /* Output position data */
+   VA_SHADER_OUTPUT_POSITION,
+
+   /* Output position FIFO attributes */
+   VA_SHADER_OUTPUT_ATTRIB,
+
+   /* Output varying */
+   VA_SHADER_OUTPUT_VARY,
+
+   /* Number of variants, keep last */
+   VA_SHADER_OUTPUT_COUNT
+};
+
+#define VA_SHADER_OUTPUT_POSITION_BIT BITFIELD_BIT(VA_SHADER_OUTPUT_POSITION)
+#define VA_SHADER_OUTPUT_ATTRIB_BIT BITFIELD_BIT(VA_SHADER_OUTPUT_ATTRIB)
+#define VA_SHADER_OUTPUT_VARY_BIT BITFIELD_BIT(VA_SHADER_OUTPUT_VARY)
+
+static inline enum va_shader_output
+va_shader_output_from_loc(gl_varying_slot location)
+{
+   switch (location) {
+   case VARYING_SLOT_POS:
+      return VA_SHADER_OUTPUT_POSITION;
+   case VARYING_SLOT_PSIZ:
+   case VARYING_SLOT_LAYER:
+   case VARYING_SLOT_PRIMITIVE_ID:
+      return VA_SHADER_OUTPUT_ATTRIB;
+   default:
+      return VA_SHADER_OUTPUT_VARY;
+   }
+}
+
+#ifdef __cplusplus
+} /* extern C */
+#endif
+
+#endif

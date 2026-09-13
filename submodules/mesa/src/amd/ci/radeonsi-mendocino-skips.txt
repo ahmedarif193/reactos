@@ -1,0 +1,12 @@
+# Times out
+dEQP-GLES31.functional.geometry_shading.basic.output_256
+KHR-GLES31.core.tessellation_shader.vertex.vertex_ordering
+KHR-GL46.tessellation_shader.vertex.vertex_ordering
+KHR-Single-GL46.arrays_of_arrays_gl.AtomicUsage
+
+# The mesh shader tests trigger GPU resets on amdgpu, making the system
+# unstable, so they have to be be skipped for now.
+KHR-Single-GL46.meshShader.*
+
+# These tests can time out, even when run single-threaded
+KHR-Single-GL46.subgroups.arithmetic.framebuffer.*

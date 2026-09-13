@@ -1,0 +1,13 @@
+dEQP-GLES2.functional.fbo.render.shared_colorbuffer.rbo_rgba4_depth_component16
+
+# First seen early 2025, persisting across both X11 and Wayland, with all the
+# multithreading tests. Example: https://gitlab.freedesktop.org/mesa/mesa/-/jobs/84352269
+# Fails with SEGV.
+.*dEQP-EGL.functional.sharing.gles2.multithread..*
+
+# the array tests take us down with a fault:
+# panfrost ff9a0000.gpu: js fault, js=0, status=INSTR_INVALID_PC
+# ... and the random tests presumably include some array in with them
+# flake the lot until it's been root-caused; first seen around 2025-05-07
+dEQP-GLES3.functional.fragment_out.array..*
+dEQP-GLES3.functional.fragment_out.random..*

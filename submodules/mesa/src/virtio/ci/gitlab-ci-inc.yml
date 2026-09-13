@@ -1,0 +1,125 @@
+.enforce-hw-jobs-venus-rules:
+  rules:
+    - if: '$INPUT_HW_JOBS !~ /"(all|venus|virtio.ko)"/i'
+      when: never
+
+.enforce-hw-jobs-lavapipe-venus-rules:
+  rules:
+    - if: '$INPUT_HW_JOBS !~ /"(all|lavapipe|venus|virtio.ko)"/i'
+      when: never
+
+.venus-rules:
+  rules:
+    - !reference [.enforce-hw-jobs-venus-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.vulkan-rules, rules]
+    - changes: &venus_file_list
+        - src/virtio/**/*
+      when: on_success
+
+.venus-manual-rules:
+  rules:
+    - !reference [.enforce-hw-jobs-venus-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.vulkan-manual-rules, rules]
+    - changes: *venus_file_list
+      when: manual
+
+.venus-collabora-rules:
+  rules:
+    - !reference [.enforce-hw-jobs-venus-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-rules, rules]
+    - !reference [.vulkan-rules, rules]
+    - changes: *venus_file_list
+      when: on_success
+
+.venus-collabora-manual-rules:
+  rules:
+    - !reference [.enforce-hw-jobs-venus-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-manual-rules, rules]
+    - !reference [.vulkan-manual-rules, rules]
+    - changes: *venus_file_list
+      when: manual
+
+.venus-lavapipe-rules:
+  stage: layered-backends
+  rules:
+    - !reference [.enforce-hw-jobs-lavapipe-rules, rules]
+    - !reference [.venus-rules, rules]
+    - !reference [.lavapipe-rules, rules]
+
+.venus-lavapipe-manual-rules:
+  stage: layered-backends-nightly
+  extends: .no-auto-retry
+  rules:
+    - !reference [.enforce-hw-jobs-lavapipe-rules, rules]
+    - !reference [.venus-manual-rules, rules]
+    - !reference [.lavapipe-manual-rules, rules]
+
+.venus-anv-rules:
+  stage: layered-backends
+  rules:
+    - !reference [.enforce-hw-jobs-venus-rules, rules]
+    - !reference [.enforce-hw-jobs-anv-rules, rules]
+    - !reference [.venus-collabora-rules, rules]
+    - !reference [.anv-rules, rules]
+
+.venus-anv-manual-rules:
+  stage: layered-backends-nightly
+  extends: .no-auto-retry
+  rules:
+    - !reference [.enforce-hw-jobs-venus-rules, rules]
+    - !reference [.enforce-hw-jobs-anv-rules, rules]
+    - !reference [.venus-collabora-manual-rules, rules]
+    - !reference [.anv-manual-rules, rules]
+
+.venus-tu-rules:
+  stage: layered-backends
+  rules:
+    - !reference [.enforce-hw-jobs-venus-rules, rules]
+    - !reference [.enforce-hw-jobs-turnip-rules, rules]
+    - !reference [.venus-collabora-rules, rules]
+    - !reference [.collabora-turnip-rules, rules]
+
+.venus-tu-manual-rules:
+  stage: layered-backends-nightly
+  extends: .no-auto-retry
+  rules:
+    - !reference [.enforce-hw-jobs-venus-rules, rules]
+    - !reference [.enforce-hw-jobs-turnip-rules, rules]
+    - !reference [.venus-collabora-manual-rules, rules]
+    - !reference [.collabora-turnip-manual-rules, rules]
+
+
+.venus-lavapipe-test:
+  extends:
+    - .test-vk
+    - .test-crosvm
+    - .venus-lavapipe-rules
+  timeout: 15m
+  variables:
+    VK_DRIVER: virtio
+    CROSVM_GALLIUM_DRIVER: "llvmpipe"
+    CROSVM_VK_DRIVER: "lvp"
+    CROSVM_GPU_ARGS: "vulkan=true,gles=false,backend=virglrenderer,egl=true,surfaceless=true,fixed-blob-mapping=false"
+  tags:
+    - $FDO_RUNNER_JOB_PRIORITY_TAG_X86_64_KVM
+
+.android-angle-venus-anv-test:
+  extends:
+    - .lava-x86_64-test-android
+    - .anv-test
+    - .test-angle
+  variables:
+    CUTTLEFISH_GPU_MODE: venus_guest_angle
+    VK_DRIVER: intel
+
+.android-angle-venus-tu-test:
+  extends:
+    - .lava-arm64-test-android
+    - .test-angle
+  variables:
+    CUTTLEFISH_GPU_MODE: venus_guest_angle
+    VK_DRIVER: freedreno

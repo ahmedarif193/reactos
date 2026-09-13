@@ -1,0 +1,54 @@
+/*
+ * Copyright © 2022 Bas Nieuwenhuizen
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "bvh_defines.h"
+#define VK_USED_BUILD_FLAGS (RADV_BUILD_FLAG_BVH8)
+#include "bvh_helpers.h"
+
+layout(push_constant) uniform CONSTS {
+   copy_args args;
+};
+
+void
+main(void)
+{
+   uint32_t global_id = gl_GlobalInvocationID.x;
+   uint32_t lanes = gl_NumWorkGroups.x * 64;
+   uint32_t increment = lanes * 16;
+
+   uint64_t copy_src_addr = args.src_addr;
+   uint64_t copy_dst_addr = args.dst_addr;
+
+   if (args.mode == RADV_COPY_MODE_DESERIALIZE) {
+      copy_src_addr += SIZEOF(radv_accel_struct_serialization_header) +
+                       DEREF(REF(radv_accel_struct_serialization_header)(args.src_addr)).instance_count * SIZEOF(uint64_t);
+
+   }
+
+   REF(radv_accel_struct_header) header = REF(radv_accel_struct_header)(copy_src_addr);
+   uint64_t size = DEREF(header).compacted_size;
+
+   if (args.mode == RADV_COPY_MODE_SERIALIZE) {
+      uint64_t instance_count = DEREF(header).instance_count;
+
+      copy_dst_addr += SIZEOF(radv_accel_struct_serialization_header) + instance_count * SIZEOF(uint64_t);
+
+      if (global_id == 0) {
+         REF(radv_accel_struct_serialization_header) ser_header =
+            REF(radv_accel_struct_serialization_header)(args.dst_addr);
+         DEREF(ser_header).serialization_size = DEREF(header).serialization_size;
+         DEREF(ser_header).compacted_size = size;
+         DEREF(ser_header).instance_count = instance_count;
+      }
+   }
+
+   for (uint64_t offset = global_id * 16; offset < size; offset += increment)
+      DEREF(REF(uvec4)(copy_dst_addr + offset)) = DEREF(REF(uvec4)(copy_src_addr + offset));
+}

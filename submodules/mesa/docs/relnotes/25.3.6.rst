@@ -1,0 +1,207 @@
+Mesa 25.3.6 Release Notes / 2026-02-19
+======================================
+
+Mesa 25.3.6 is a bug fix release which fixes bugs found since the 25.3.5 release.
+
+Mesa 25.3.6 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 25.3.6 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+   SHA256: 59217efeac3b64e7ced958324b9db7494f1e0741aeb22d780276514cc1b8f206  mesa-25.3.6.tar.xz
+   SHA512: 73620003e1e67c6b5ad076afb19e0b250214cfb6ed830166fb70058173ec3b19a2a8f5b5a78d8cce7a70745f5e4fa439913d15d8b38ca0002455b238f5865d38  mesa-25.3.6.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- [radeonsi] Regression: GL_FEEDBACK returns 0.0 for X-coordinates (Legacy GL)
+- venus crashes in vn_CreateDevice() with latest mesa/main [bisected]
+- Question: Does building Lavapipe on Windows require building "microsoft-experimental" as well?
+- [ANV][DG2][Regression]: Flickering water "boxes" in Civilization VII
+- mesa: deleting a buffer bound only to an index also undoes the associated general target binding
+- [ANV][PTL] R.E.P.O. GPU Hang
+
+
+Changes
+-------
+
+Aitor Camacho (1):
+
+- wsi/metal: Expose additional color spaces if instance extension enabled
+
+Alyssa Rosenzweig (1):
+
+- brw: drop buggy SLM optimization
+
+Caio Oliveira (1):
+
+- brw: Fix cooperative matrix constant sources other than src0
+
+Calder Young (1):
+
+- anv: Avoid dumping BVH before command buffer is submitted
+
+Christian Gmeiner (1):
+
+- pan/compiler: Fix progress reporting in pan_nir_lower_store_component
+
+Daniel Schürmann (1):
+
+- nir/clone: Fix cloning indirect call instructions
+
+Dave Airlie (1):
+
+- gallivm: handle u16 correct on const loads.
+
+Dylan Baker (9):
+
+- docs: Add 25.3.5 SHA sums
+- .pick_status.json: Update to efb5ab1e4ba12886a94bd321bbd1010e7c10e5b4
+- .pick_status.json: Update to a1a5dd7e2f2bb594420195b40d99a7b84e6ba6a5
+- .pick_status.json: Update to c7603a11deb55c2f9640725dbcdbf51ee6335bea
+- .pick_status.json: Update to 5d4f977573ac92ebbd756ff9108b0f24799dd1ff
+- .pick_status.json: Update to fc3951cfde692b682ae0a79502cd7ba3b77a68d7
+- .pick_status.json: Mark 7dd7731ac710b0c7213f6bb466b33f62eca80604 as denominated
+- .pick_status.json: Mark 1be4ffdff926597c82a6482b482e4f1d8e74f038 as denominated
+- .pick_status.json: Update to b05271f16c78010d32564ee307aad78dc7d58151
+
+Eric Engestrom (2):
+
+- bin/gen_release_notes: fix support for python 3.14
+- pick-ui: add \`Backport-to: \*` as a synonym to \`Cc: mesa-stable`
+
+Eric R. Smith (1):
+
+- mesa: do not unbind general point when different indexed points are deleted
+
+Faith Ekstrand (3):
+
+- pan/bi: Run lower_alu_width after opt_algebraic_late
+- pan/bi: Don't attempt to fuse AND(ICMP, ICMP) if the AND is swizzled
+- util: Move STACK_ARRAY into util
+
+Georg Lehmann (1):
+
+- aco/lower_branches: consider jump target of conditional branches based on vcc
+
+Iago Toral Quiroga (1):
+
+- nir/opt_vectorize_load_store: allow sizes unaligned with high offset for loads
+
+Ian Romanick (2):
+
+- spirv: Use STACK_ARRAY instead of NIR_VLA
+- nir: Use STACK_ARRAY instead of NIR_VLA
+
+Jesse Natalie (1):
+
+- meson: Include DirectX-Headers dependency for all VK Windows builds
+
+Jianxun Zhang (1):
+
+- anv: Limit modifier disabling workaround to specific GTK versions
+
+Juston Li (1):
+
+- anv: set missing protected bit for protected depth/stencil surfaces
+
+Karol Herbst (2):
+
+- vtn/opencl: flush denorms for cbrt()
+- rusticl/mesa: only use resource_from_user_memory if the cap is advertised
+
+Khem Raj (1):
+
+- glx: fix const qualifier warnings found with C23 glibc support
+
+Konstantin Seurer (2):
+
+- radv: Fix setting the viewport for depth stencil FS resolves
+- vulkan/cmd_queue: Fixup stride for multi draws
+
+Lars-Ivar Hesselberg Simonsen (1):
+
+- pan/genxml/v13: Fix HSR Prepass typo
+
+Lionel Landwerlin (4):
+
+- anv: flush render caches on first pipeline select
+- anv: fix nested command buffer relocations
+- anv: add missing constant cache invalidation for descriptor buffers
+- isl: fix 32bit math with 4GB buffer size
+
+Matt Turner (4):
+
+- brw/cse: fix \`operands_match` corrupting non-IMM register data
+- brw/cse: use copies in \`operands_match` instead of in-place modification
+- elk/cse: fix \`operands_match` corrupting non-IMM register data
+- elk/cse: use copies in \`operands_match` instead of in-place modification
+
+Mel Henning (1):
+
+- zink: Emit float controls for preserve_denorms too
+
+Pavel Ondračka (1):
+
+- mesa: implement FRAMEBUFFER_RENDERABLE internalformat query
+
+Reilly Brogan (1):
+
+- amd,compiler: fix const errors found with C23 glibc support
+
+Ryan Zhang (1):
+
+- panvk: guard against NULL pointers to avoid crash
+
+Samuel Pitoiset (3):
+
+- radv/meta: fix the key for DCC decompress on compute
+- radv: fix late decompressions for fbfetch with more corner cases
+- radv/meta: fix CmdCopyBufferToImage2() on compute queue with compressed HTILE
+
+Tapani Pälli (3):
+
+- intel/genxml: add CHICKEN_RASTER_2 with required bit for Xe3
+- anv: set DisableAnyMCTRresponsefix to zero on init
+- iris: set DisableAnyMCTRresponsefix to zero on init
+
+Timothy Arceri (2):
+
+- mesa: add _mesa_lookup_state_param_idx() helper
+- st/glsl_to_nir: make sure the variant has the correct locations set
+
+Vinson Lee (2):
+
+- compiler/clc: Fix const correctness in libclc_add_generic_variants
+- freedreno/decode: Fix const correctness in get_tex_count
+
+Wei Hao (1):
+
+- radeonsi: fix threaded shader compilation finishing after context is destroyed
+
+Yiwei Zhang (2):
+
+- venus: remove obsolete asserts for ANB image creation
+- venus: workaround a gcc-15 dead store elimination (DSE) bug
+
+Zan Dobersek (1):
+
+- tu/kgsl: wait-only submit handling should not ignore sparse bind commands

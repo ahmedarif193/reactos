@@ -1,0 +1,89 @@
+# initial flakes
+KHR-GL46.sparse_texture2_tests.SparseTexture2Lookup
+KHR-Single-GL46.enhanced_layouts.xfb_global_buffer
+glx@glx-buffer-age vblank_mode=0
+glx@glx-destroycontext-1
+glx@glx-destroycontext-3
+glx@glx-make-glxdrawable-current
+glx@glx-multithread-makecurrent-4
+glx@glx-multithread-shader-compile
+glx@glx-multithread-texture
+glx@glx-pixmap-crosscheck
+glx@glx-pixmap-life
+glx@glx-query-drawable-glx_fbconfig_id-glxwindow
+glx@glx-query-drawable-glx_height
+glx@glx-query-drawable-glxpbuffer-glx_height
+glx@glx-query-drawable-glxwindow-glx_width
+glx@glx-swap-exchange
+glx@glx-window-life
+glx@glx_arb_create_context@color-index render type with 3.0
+glx@glx_arb_create_context@default minor version
+glx@glx_arb_create_context@empty attribute list
+glx@glx_arb_create_context@invalid flag
+glx@glx_arb_create_context_es2_profile@indirect rendering es2 profile
+glx@glx_ext_import_context@free context
+glx@glx_ext_import_context@get current display
+glx@glx_ext_import_context@import context- multi process
+glx@glx_ext_no_config_context@no fbconfig
+spec@!opengl 2.0@occlusion-query-discard
+spec@arb_gpu_shader_fp64@execution@arb_gpu_shader_fp64-vs-getuniformdv
+spec@arb_shader_image_load_store@coherency
+spec@arb_shader_image_load_store@coherency@Geometry-Fragment shader/'coherent' qualifier coherency test/256x256
+spec@arb_shader_image_load_store@coherency@Geometry-Fragment shader/'volatile' qualifier coherency test/256x256
+spec@arb_shader_image_load_store@coherency@Tessellation evaluation-Geometry shader/'coherent' qualifier coherency test/256x256
+spec@arb_shader_image_load_store@coherency@Tessellation evaluation-Geometry shader/'volatile' qualifier coherency test/256x256
+spec@arb_shader_image_load_store@coherency@Vertex-Tessellation control shader/'coherent' qualifier coherency test/256x256
+spec@arb_shader_image_load_store@coherency@Vertex-Tessellation control shader/'volatile' qualifier coherency test/256x256
+spec@arb_timer_query@query gl_timestamp
+spec@ext_timer_query@time-elapsed
+
+glx@glx-visuals-stencil -pixmap
+glx@glx-multithread-clearbuffer
+
+spec@arb_gpu_shader_fp64@execution@built-in-functions@fs-op-div-dmat4-dmat4
+spec@arb_gpu_shader_fp64@execution@built-in-functions@fs-op-div-double-dmat4
+spec@glsl-4.00@execution@built-in-functions@vs-inverse-dmat4
+spec@glsl-4.00@execution@built-in-functions@fs-op-div-dmat4-double
+spec@arb_tessellation_shader@execution@variable-indexing@tcs-patch-vec4-index-wr
+
+# Fails in the pre-merge job and passes in the nightly
+KHR-GL46.shader_viewport_layer_array.ShaderViewportIndexTestCase
+
+# glcts: ../src/intel/compiler/brw_opt_combine_constants.cpp:1238: void deallocate_slots(const intel_device_info*, register_allocation*, unsigned int, unsigned int, unsigned int, unsigned int):
+# Assertion `!"No such register found."' failed.
+KHR-GL46.gpu_shader_fp64.builtin.inverse_dmat4
+
+# Discovered after decreasing the fraction
+spec@arb_timer_query@timestamp-get
+
+# These can fail after a GuC engine reset request failure
+https://gitlab.freedesktop.org/mesa/mesa/-/jobs/71634375#L3564
+glx@glx-fbconfig-bad
+glx@glx-query-drawable-glxpixmap-glx_width
+glx@glx_arb_create_context@invalid opengl version
+glx@glx_arb_create_context_profile@invalid profile
+glx@glx-tfp
+spec@arb_shader_storage_buffer_object@max-ssbo-size@vsexceed
+
+# New flakes with Linux 6.16
+KHR-Single-GL46.arrays_of_arrays_gl.InteractionFunctionCalls1_var_type_index_13
+
+x11-dEQP-EGL.functional.sharing.gles2.multithread.simple.programs.link
+
+spec@amd_pinned_memory@offset=0
+spec@amd_pinned_memory@map-buffer offset=0
+
+KHR-GL46.direct_state_access.renderbuffers_storage_multisample
+KHR-Single-GL46.arrays_of_arrays_gl.SubroutineArgumentAliasing1_var_type_index_12
+
+# shader objects #13839
+spec@arb_fragment_program@fog-modes
+
+glx@glx_arb_create_context@null attribute list
+
+# New flakes with GL CTS 4.6.7.0
+KHR-GL46.transform_feedback2.transform_feedback2_states
+
+dEQP-GLES3.functional.occlusion_query.conservative_depth_clear_stencil_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.conservative_depth_clear_stencil_clear
+dEQP-GLES3.functional.occlusion_query.conservative_depth_write

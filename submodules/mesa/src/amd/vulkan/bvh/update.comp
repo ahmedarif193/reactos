@@ -1,0 +1,125 @@
+/*
+ * Copyright © 2023 Valve Corporation
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "bvh_defines.h"
+#define VK_USED_BUILD_FLAGS RADV_UPDATE_BUILD_FLAGS
+#include "bvh_helpers.h"
+#include "update.h"
+
+layout(push_constant) uniform CONSTS {
+    update_args args;
+};
+
+uint32_t fetch_parent_node(VOID_REF bvh, uint32_t node)
+{
+    uint64_t addr = bvh - node / 8 * 4 - 4;
+    return DEREF(REF(uint32_t)(addr));
+}
+
+void main() {
+    uint32_t bvh_offset = DEREF(args.src).bvh_offset;
+
+    VOID_REF src_bvh = OFFSET(args.src, bvh_offset);
+    VOID_REF dst_bvh = OFFSET(args.dst, bvh_offset);
+
+    uint32_t leaf_node_size;
+    if (args.geom_data.geometry_type == VK_GEOMETRY_TYPE_TRIANGLES_KHR)
+        leaf_node_size = SIZEOF(radv_bvh_triangle_node);
+    else if (args.geom_data.geometry_type == VK_GEOMETRY_TYPE_AABBS_KHR)
+        leaf_node_size = SIZEOF(radv_bvh_aabb_node);
+    else
+        leaf_node_size = SIZEOF(radv_bvh_instance_node);
+
+    uint32_t leaf_node_id = args.geom_data.first_id + gl_GlobalInvocationID.x;
+    uint32_t first_leaf_offset = id_to_offset(RADV_BVH_ROOT_NODE) + SIZEOF(radv_bvh_box32_node);
+
+    uint32_t dst_offset = leaf_node_id * leaf_node_size + first_leaf_offset;
+    VOID_REF dst_ptr = OFFSET(dst_bvh, dst_offset);
+    uint32_t src_offset = gl_GlobalInvocationID.x * args.geom_data.stride;
+
+    vk_aabb bounds = vk_aabb(vec3(0.0f), vec3(0.0f));
+    uint32_t node_type;
+    if (args.geom_data.geometry_type == VK_GEOMETRY_TYPE_TRIANGLES_KHR) {
+        radv_build_triangle(bounds, dst_ptr, args.geom_data, gl_GlobalInvocationID.x, false);
+        node_type = radv_bvh_node_triangle;
+    } else {
+        VOID_REF src_ptr = OFFSET(args.geom_data.data, src_offset);
+        radv_build_aabb(bounds, src_ptr, dst_ptr, args.geom_data.geometry_id, gl_GlobalInvocationID.x, false);
+        node_type = radv_bvh_node_aabb;
+    }
+
+    uint32_t node_id = pack_node_id(dst_offset, node_type);
+    uint32_t parent_id = fetch_parent_node(src_bvh, node_id);
+    uint32_t internal_nodes_offset = first_leaf_offset + args.leaf_node_count * leaf_node_size;
+    while (parent_id != RADV_BVH_INVALID_NODE) {
+        uint32_t offset = id_to_offset(parent_id);
+
+        uint32_t parent_index = (offset - internal_nodes_offset) / SIZEOF(radv_bvh_box32_node) + 1;
+        if (parent_id == RADV_BVH_ROOT_NODE)
+            parent_index = 0;
+
+        REF(radv_bvh_box32_node) src_node = REF(radv_bvh_box32_node)OFFSET(src_bvh, offset);
+        REF(radv_bvh_box32_node) dst_node = REF(radv_bvh_box32_node)OFFSET(dst_bvh, offset);
+        uint32_t children[4];
+        for (uint32_t i = 0; i < 4; ++i)
+            children[i] = DEREF(src_node).children[i];
+
+        uint32_t child_index = 0;
+        if (node_id == children[1])
+            child_index = 1;
+        if (node_id == children[2])
+            child_index = 2;
+        if (node_id == children[3])
+            child_index = 3;
+
+        DEREF(dst_node).coords[child_index] = bounds;
+
+        /* Make accesses to internal nodes in dst_bvh available and visible */
+        memoryBarrier(gl_ScopeDevice,
+                      gl_StorageSemanticsBuffer,
+                      gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable | gl_SemanticsMakeVisible);
+
+        uint32_t valid_child_count = 0;
+        for (uint32_t i = 0; i < 4; ++valid_child_count, ++i)
+            if (children[i] == RADV_BVH_INVALID_NODE)
+                break;
+
+        /* Check if all children have been processed. As this is an atomic the last path coming from
+         * a child will pass here, while earlier paths break.
+         */
+        uint32_t ready_child_count = atomicAdd(
+            DEREF(INDEX(uint32_t, args.internal_ready_count, parent_index)), 1, gl_ScopeDevice,
+            gl_StorageSemanticsBuffer,
+            gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable | gl_SemanticsMakeVisible);
+
+        if (ready_child_count != valid_child_count - 1)
+            break;
+
+        if (!RADV_TEST_BUILD_FLAG_UPDATE_IN_PLACE) {
+            for (uint32_t i = 0; i < 4; ++i)
+                DEREF(dst_node).children[i] = children[i];
+            if (VK_TEST_BUILD_FLAG_PROPAGATE_CULL_FLAGS)
+                DEREF(dst_node).flags = DEREF(src_node).flags;
+        }
+
+        bounds = vk_aabb(vec3(INFINITY), vec3(-INFINITY));
+        for (uint32_t i = 0; i < valid_child_count; ++i) {
+            vk_aabb child_bounds = DEREF(dst_node).coords[i];
+            bounds.min = min(bounds.min, child_bounds.min);
+            bounds.max = max(bounds.max, child_bounds.max);
+        }
+
+        if (parent_id == RADV_BVH_ROOT_NODE)
+            DEREF(args.dst).aabb = bounds;
+
+        node_id = parent_id;
+        parent_id = fetch_parent_node(src_bvh, node_id);
+    }
+}

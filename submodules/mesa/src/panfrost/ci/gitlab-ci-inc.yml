@@ -1,0 +1,345 @@
+.enforce-hw-jobs-panfrost-panfrost-rules:
+  rules:
+    - if: '$INPUT_HW_JOBS !~ /"(all|panfrost|panfrost.ko)"/i'
+      when: never
+
+.enforce-hw-jobs-panfrost-panthor-rules:
+  rules:
+    - if: '$INPUT_HW_JOBS !~ /"(all|panfrost|panthor.ko)"/i'
+      when: never
+
+.enforce-hw-jobs-panvk-panfrost-rules:
+  rules:
+    - if: '$INPUT_HW_JOBS !~ /"(all|panvk|panfrost.ko)"/i'
+      when: never
+
+.enforce-hw-jobs-panvk-panthor-rules:
+  rules:
+    - if: '$INPUT_HW_JOBS !~ /"(all|panvk|panthor.ko)"/i'
+      when: never
+
+.panfrost-midgard-rules:
+  stage: arm
+  rules:
+    - !reference [.enforce-hw-jobs-panfrost-panfrost-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-rules, rules]
+    - !reference [.gl-rules, rules]
+    - changes: &panfrost_gallium_file_list
+        - src/gallium/drivers/panfrost/**/*
+        - src/gallium/winsys/panfrost/**/*
+      when: on_success
+    - changes: &panfrost_common_file_list
+        - src/panfrost/ci/gitlab-ci.yml
+        - src/panfrost/ci/gitlab-ci-inc.yml
+        - src/panfrost/ci/deqp-$DEQP_SUITE.toml
+        - src/panfrost/ci/$GPU_VERSION-fails.txt
+        - src/panfrost/ci/$GPU_VERSION-flakes.txt
+        - src/panfrost/ci/$GPU_VERSION-skips.txt
+        - src/panfrost/ci/$GPU_VERSION-single-thread.txt
+        - src/panfrost/ci/$GPU_VERSION-gles2-extensions.txt
+        - src/panfrost/ci/$DRIVER_NAME-flakes.txt
+        - src/panfrost/ci/$DRIVER_NAME-skips.txt
+        - src/panfrost/ci/REPLAY_CONFIG
+        - src/panfrost/clc/*
+        - src/panfrost/compiler/*
+        - src/panfrost/genxml/*
+        - src/panfrost/lib/*
+        - src/panfrost/lib/kmod/*
+        - src/panfrost/libpan/*
+        - src/panfrost/model/*
+        - src/panfrost/shared/*
+      when: on_success
+    - changes:
+        - src/panfrost/compiler/midgard/**/*
+      when: on_success
+
+.panfrost-midgard-manual-rules:
+  stage: arm-nightly
+  extends: .no-auto-retry
+  rules:
+    - !reference [.enforce-hw-jobs-panfrost-panfrost-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-manual-rules, rules]
+    - !reference [.gl-manual-rules, rules]
+    - changes: *panfrost_gallium_file_list
+      when: manual
+    - changes: *panfrost_common_file_list
+      when: manual
+    - changes:
+        - src/panfrost/compiler/midgard/**/*
+      when: manual
+
+.panfrost-panfrost-gl-rules:
+  stage: arm
+  rules:
+    - !reference [.enforce-hw-jobs-panfrost-panfrost-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-rules, rules]
+    - !reference [.gl-rules, rules]
+    - changes:
+        *panfrost_common_file_list
+      when: on_success
+    - changes:
+        *panfrost_gallium_file_list
+      when: on_success
+    - changes: &panfrost_bifrost_file_list
+        - src/panfrost/compiler/bifrost/**/*
+      when: on_success
+
+.panfrost-panfrost-gl-manual-rules:
+  stage: arm-nightly
+  extends: .no-auto-retry
+  rules:
+    - !reference [.enforce-hw-jobs-panfrost-panfrost-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-manual-rules, rules]
+    - !reference [.gl-manual-rules, rules]
+    - changes:
+        *panfrost_common_file_list
+      when: manual
+    - changes:
+        *panfrost_gallium_file_list
+      when: manual
+    - changes:
+        *panfrost_bifrost_file_list
+      when: manual
+
+.panfrost-vk-rules-common:
+  stage: arm
+  rules:
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-rules, rules]
+    - !reference [.vulkan-rules, rules]
+    - changes:
+        *panfrost_common_file_list
+      when: on_success
+    - changes: &panfrost_vulkan_file_list
+        - src/panfrost/vulkan/**/*
+      when: on_success
+    - changes:
+        *panfrost_bifrost_file_list
+      when: on_success
+
+.panfrost-vk-panfrost-rules:
+  extends: .panfrost-vk-rules-common
+  rules:
+    - !reference [.enforce-hw-jobs-panvk-panfrost-rules, rules]
+    - !reference [.panfrost-vk-rules-common, rules]
+
+.panfrost-vk-panthor-rules:
+  extends: .panfrost-vk-rules-common
+  rules:
+    - !reference [.enforce-hw-jobs-panvk-panthor-rules, rules]
+    - !reference [.panfrost-vk-rules-common, rules]
+
+.panfrost-vk-manual-rules-common:
+  stage: arm-nightly
+  extends: .no-auto-retry
+  rules:
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-manual-rules, rules]
+    - !reference [.vulkan-manual-rules, rules]
+    - changes:
+        *panfrost_common_file_list
+      when: manual
+    - changes:
+        *panfrost_vulkan_file_list
+      when: manual
+    - changes:
+        *panfrost_bifrost_file_list
+      when: manual
+
+.panfrost-vk-manual-panfrost-rules:
+  extends: .panfrost-vk-manual-rules-common
+  rules:
+    - !reference [.enforce-hw-jobs-panvk-panfrost-rules, rules]
+    - !reference [.panfrost-vk-manual-rules-common, rules]
+
+.panfrost-vk-manual-panthor-rules:
+  extends: .panfrost-vk-manual-rules-common
+  rules:
+    - !reference [.enforce-hw-jobs-panvk-panthor-rules, rules]
+    - !reference [.panfrost-vk-manual-rules-common, rules]
+
+.panfrost-panthor-gl-rules:
+  stage: arm
+  rules:
+    - !reference [.enforce-hw-jobs-panfrost-panthor-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-rules, rules]
+    - !reference [.gl-rules, rules]
+    - changes:
+        *panfrost_common_file_list
+      when: on_success
+    - changes:
+        *panfrost_gallium_file_list
+      when: on_success
+    - changes:
+        *panfrost_bifrost_file_list
+      when: on_success
+
+.panfrost-panthor-gl-manual-rules:
+  stage: arm-nightly
+  extends: .no-auto-retry
+  rules:
+    - !reference [.enforce-hw-jobs-panfrost-panthor-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.collabora-farm-manual-rules, rules]
+    - !reference [.gl-manual-rules, rules]
+    - changes:
+        *panfrost_common_file_list
+      when: manual
+    - changes:
+        *panfrost_gallium_file_list
+      when: manual
+    - changes:
+        *panfrost_bifrost_file_list
+      when: manual
+
+.panfrost-test:
+  variables:
+    FLAKES_CHANNEL: "#panfrost-ci"
+    PAN_MESA_DEBUG: sync
+    HWCI_FREQ_MAX: "true"
+
+.panfrost-traces:
+  extends:
+    - .traces-test
+  variables:
+    PAN_MESA_DEBUG: "deqp,sync"
+    MESA_GLES_VERSION_OVERRIDE: "3.1"
+    MESA_GL_VERSION_OVERRIDE: "3.3"
+    MESA_GLSL_VERSION_OVERRIDE: 330
+    REPLAY_CONFIG: traces-panfrost.toml
+    HWCI_START_WESTON: 1
+
+# https://lava.collabora.dev/scheduler/device_type/meson-g12b-a311d-khadas-vim3
+.lava-meson-g12b-a311d-khadas-vim3:arm64:
+  variables:
+    DEVICE_TYPE: meson-g12b-a311d-khadas-vim3
+    DTB: $DEVICE_TYPE
+    FARM: collabora
+    GPU_VERSION: panfrost-g52
+#   FDO_CI_CONCURRENT: ?
+    RUNNER_TAG: mesa-ci-x86-64-lava-meson-g12b-a311d-khadas-vim3
+    VK_DRIVER: panfrost
+
+# Status: https://lava.collabora.dev/scheduler/device_type/mt8183-kukui-jacuzzi-juniper-sku16
+.lava-mt8183-kukui-jacuzzi-juniper-sku16:arm64:
+  variables:
+    DEVICE_TYPE: mt8183-kukui-jacuzzi-juniper-sku16
+    DTB: $DEVICE_TYPE
+    BOOT_METHOD: depthcharge
+    KERNEL_IMAGE_TYPE: ""
+    FARM: collabora
+    GPU_VERSION: panfrost-g72
+#   FDO_CI_CONCURRENT: ?
+    RUNNER_TAG: mesa-ci-x86-64-lava-mt8183-kukui-jacuzzi-juniper-sku16
+
+# Status: https://lava.collabora.dev/scheduler/device_type/mt8186-corsola-steelix-sku131072
+.lava-mt8186-corsola-steelix-sku131072:arm64:
+  variables:
+    BOOT_METHOD: depthcharge
+    DEVICE_TYPE: mt8186-corsola-steelix-sku131072
+    DTB: $DEVICE_TYPE
+    FDO_CI_CONCURRENT: 8
+    FARM: collabora
+    GPU_VERSION: panfrost-g52
+    KERNEL_IMAGE_TYPE: ""
+    RUNNER_TAG: mesa-ci-x86-64-lava-mt8186-corsola-steelix-sku131072
+    VK_DRIVER: panfrost
+
+# Status: https://lava.collabora.dev/scheduler/device_type/mt8192-asurada-spherion-r0
+.lava-mt8192-asurada-spherion-r0:arm64:
+  variables:
+    BOOT_METHOD: depthcharge
+    DEVICE_TYPE: mt8192-asurada-spherion-r0
+    DTB: $DEVICE_TYPE
+#   FDO_CI_CONCURRENT: ?
+    FARM: collabora
+    GPU_VERSION: panfrost-g57
+    KERNEL_IMAGE_TYPE: ""
+    RUNNER_TAG: mesa-ci-x86-64-lava-mt8192-asurada-spherion-r0
+    # Force fixed 6.6 kernel, we're not reliably getting a GPU on 6.13
+    KERNEL_TAG: "v6.6.21-mesa-1978"
+
+# Status: https://lava.collabora.dev/scheduler/device_type/mt8195-cherry-tomato-r2
+.lava-mt8195-cherry-tomato-r2:arm64:
+  variables:
+    BOOT_METHOD: depthcharge
+    DEVICE_TYPE: mt8195-cherry-tomato-r2
+    DTB: $DEVICE_TYPE
+    FDO_CI_CONCURRENT: 8
+    FARM: collabora
+    GPU_VERSION: panfrost-g57
+    KERNEL_IMAGE_TYPE: ""
+    RUNNER_TAG: mesa-ci-x86-64-lava-mt8195-cherry-tomato-r2
+
+.lava-rk3288-veyron-jaq:arm32:
+  variables:
+    BOOT_METHOD: depthcharge
+    DEVICE_TYPE: rk3288-veyron-jaq
+    DEQP_SUITE: panfrost-t760
+    DTB: rk3288-veyron-jaq
+    FDO_CI_CONCURRENT: 6
+    FARM: collabora
+    GPU_VERSION: panfrost-t760
+    KERNEL_IMAGE_TYPE: ""
+    RUNNER_TAG: mesa-ci-x86-64-lava-rk3288-veyron-jaq
+
+# Status: https://lava.collabora.dev/scheduler/device_type/rk3399-rock-pi-4b
+.lava-rk3399-rock-pi-4b:arm64:
+  variables:
+    DEVICE_TYPE: rk3399-rock-pi-4b
+    DTB: $DEVICE_TYPE
+    FARM: collabora
+    GPU_VERSION: panfrost-t860
+#   FDO_CI_CONCURRENT: ?
+    BOOT_METHOD: u-boot
+    KERNEL_IMAGE_TYPE: "image"
+    RUNNER_TAG: mesa-ci-x86-64-lava-rk3399-rock-pi-4b
+
+# Status: https://lava.collabora.dev/scheduler/device_type/rk3588-rock-5b
+.lava-rk3588-rock-5b:arm64:
+  variables:
+    DEVICE_TYPE: rk3588-rock-5b
+    DTB: $DEVICE_TYPE
+    FARM: collabora
+    GPU_VERSION: panfrost-g610
+    FDO_CI_CONCURRENT: 6
+    HWCI_KERNEL_MODULES: panthor
+    BOOT_METHOD: u-boot
+    KERNEL_IMAGE_TYPE: "image"
+    RUNNER_TAG: mesa-ci-x86-64-lava-rk3588-rock-5b
+    VK_DRIVER: panfrost
+    LAVA_FIRMWARE: arm
+
+# Status: https://lava.collabora.dev/scheduler/device_type/mt8196-rauru-navi-sku0
+.lava-mt8196-rauru-navi-sku0:arm64:
+  variables:
+    DEVICE_TYPE: mt8196-rauru-navi-sku0
+    DTB: $DEVICE_TYPE
+    FARM: collabora
+    GPU_VERSION: panfrost-g925
+    FDO_CI_CONCURRENT: 9
+    HWCI_KERNEL_MODULES: panthor
+    BOOT_METHOD: depthcharge
+    KERNEL_IMAGE_TYPE: ""
+    RUNNER_TAG: mesa-ci-x86-64-lava-mt8196-rauru-navi-sku0
+    VK_DRIVER: panfrost
+    LAVA_FIRMWARE: arm
+    # Mainline kernel support for MT8196 is still incomplete
+    KERNEL_TAG: "v6.18-pan-mesa-952e"
+
+# Status: https://lava.collabora.dev/scheduler/device_type/sun50i-h6-pine-h64
+.lava-sun50i-h6-pine-h64:arm64:
+  variables:
+    DEVICE_TYPE: sun50i-h6-pine-h64
+    DTB: sun50i-h6-pine-h64
+    FARM: collabora
+    GPU_VERSION: panfrost-t720
+    DEQP_SUITE: panfrost-t720
+    FDO_CI_CONCURRENT: 6
+    HWCI_FREQ_MAX: "true"
+    RUNNER_TAG: mesa-ci-x86-64-lava-sun50i-h6-pine-h64

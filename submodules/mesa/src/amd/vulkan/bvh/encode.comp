@@ -1,0 +1,297 @@
+/*
+ * Copyright © 2022 Friedrich Vock
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#version 460
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "bvh_defines.h"
+#define VK_USED_BUILD_FLAGS RADV_ENCODE_BUILD_FLAGS
+#include "bvh_helpers.h"
+#include "encode.h"
+
+layout(push_constant) uniform CONSTS {
+   encode_args args;
+};
+
+void set_parent(uint32_t child, uint32_t parent)
+{
+   uint64_t addr = args.output_bvh - child / 8 * 4 - 4;
+   DEREF(REF(uint32_t)(addr)) = parent;
+}
+
+radv_aabb16
+radv_aabb_f32_to_f16(vk_aabb aabb)
+{
+   radv_aabb16 aabb16;
+   aabb16.min_x = radv_f32_to_f16_neg_inf(aabb.min.x);
+   aabb16.min_y = radv_f32_to_f16_neg_inf(aabb.min.y);
+   aabb16.min_z = radv_f32_to_f16_neg_inf(aabb.min.z);
+   aabb16.max_x = radv_f32_to_f16_pos_inf(aabb.max.x);
+   aabb16.max_y = radv_f32_to_f16_pos_inf(aabb.max.y);
+   aabb16.max_z = radv_f32_to_f16_pos_inf(aabb.max.z);
+   return aabb16;
+}
+
+vk_aabb
+radv_aabb_f16_to_f32(radv_aabb16 aabb16)
+{
+   vk_aabb aabb;
+   aabb.min.x = float(aabb16.min_x);
+   aabb.min.y = float(aabb16.min_y);
+   aabb.min.z = float(aabb16.min_z);
+   aabb.max.x = float(aabb16.max_x);
+   aabb.max.y = float(aabb16.max_y);
+   aabb.max.z = float(aabb16.max_z);
+   return aabb;
+}
+
+void
+main()
+{
+   /* Encode leaf nodes. */
+   uint32_t dst_leaf_offset =
+      id_to_offset(RADV_BVH_ROOT_NODE) + SIZEOF(radv_bvh_box32_node);
+
+   uint32_t ir_leaf_node_size;
+   uint32_t output_leaf_node_size;
+   if (gl_GlobalInvocationID.x < args.leaf_node_count) {
+      switch (args.geometry_type) {
+      case VK_GEOMETRY_TYPE_TRIANGLES_KHR: {
+         ir_leaf_node_size = SIZEOF(vk_ir_triangle_node);
+         output_leaf_node_size = SIZEOF(radv_bvh_triangle_node);
+
+         vk_ir_triangle_node src_node =
+            DEREF(REF(vk_ir_triangle_node)(OFFSET(args.intermediate_bvh, gl_GlobalInvocationID.x * ir_leaf_node_size)));
+         VOID_REF dst_node = OFFSET(args.output_bvh, dst_leaf_offset + gl_GlobalInvocationID.x * output_leaf_node_size);
+
+         radv_encode_triangle_gfx10_3(dst_node, src_node);
+
+         break;
+      }
+      case VK_GEOMETRY_TYPE_AABBS_KHR: {
+         ir_leaf_node_size = SIZEOF(vk_ir_aabb_node);
+         output_leaf_node_size = SIZEOF(radv_bvh_aabb_node);
+
+         vk_ir_aabb_node src_node =
+            DEREF(REF(vk_ir_aabb_node)(OFFSET(args.intermediate_bvh, gl_GlobalInvocationID.x * ir_leaf_node_size)));
+         VOID_REF dst_node = OFFSET(args.output_bvh, dst_leaf_offset + gl_GlobalInvocationID.x * output_leaf_node_size);
+
+         radv_encode_aabb_gfx10_3(dst_node, src_node);
+
+         break;
+      }
+      default:
+         /* instances */
+         ir_leaf_node_size = SIZEOF(vk_ir_instance_node);
+         output_leaf_node_size = SIZEOF(radv_bvh_instance_node);
+         /* Instance nodes have to be emitted inside the loop since encoding them
+          * loads an address from the IR node which is uninitialized for inactive nodes.
+          */
+         break;
+      }
+   }
+
+   if (gl_GlobalInvocationID.x >= DEREF(args.header).ir_internal_node_count)
+      return;
+
+   /* Encode internal nodes. Revert the order so we start at the root */
+   uint32_t global_id = DEREF(args.header).ir_internal_node_count - 1 - gl_GlobalInvocationID.x;
+
+   uint32_t intermediate_leaf_nodes_size = args.leaf_node_count * ir_leaf_node_size;
+   uint32_t dst_internal_offset = dst_leaf_offset + args.leaf_node_count * output_leaf_node_size;
+
+   REF(vk_ir_box_node) intermediate_internal_nodes =
+      REF(vk_ir_box_node)OFFSET(args.intermediate_bvh, intermediate_leaf_nodes_size);
+   REF(vk_ir_box_node) src_node = INDEX(vk_ir_box_node, intermediate_internal_nodes, global_id);
+   vk_ir_box_node src = DEREF(src_node);
+
+   bool is_root_node = global_id == DEREF(args.header).ir_internal_node_count - 1;
+
+   for (;;) {
+      /* Make changes to the current node's BVH offset value visible. */
+      memoryBarrier(gl_ScopeDevice, gl_StorageSemanticsBuffer,
+                    gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable | gl_SemanticsMakeVisible);
+
+      uint32_t node_id = is_root_node ? RADV_BVH_ROOT_NODE : DEREF(src_node).bvh_offset;
+      if (node_id == VK_UNKNOWN_BVH_OFFSET)
+         continue;
+
+      if (node_id == VK_NULL_BVH_OFFSET)
+         break;
+
+      uint32_t flags = 0;
+
+      uint32_t found_child_count = 0;
+      uint32_t children[4] = {RADV_BVH_INVALID_NODE, RADV_BVH_INVALID_NODE,
+                              RADV_BVH_INVALID_NODE, RADV_BVH_INVALID_NODE};
+
+      for (uint32_t i = 0; i < 2; ++i)
+         if (src.children[i] != RADV_BVH_INVALID_NODE)
+            children[found_child_count++] = src.children[i];
+
+      while (found_child_count < 4) {
+         int32_t collapsed_child_index = -1;
+         float largest_surface_area = -INFINITY;
+
+         for (int32_t i = 0; i < found_child_count; ++i) {
+            if (ir_id_to_type(children[i]) != vk_ir_node_internal)
+               continue;
+
+            vk_aabb bounds =
+               DEREF(REF(vk_ir_node)OFFSET(args.intermediate_bvh,
+                                             ir_id_to_offset(children[i]))).aabb;
+
+            float surface_area = aabb_surface_area(bounds);
+            if (surface_area > largest_surface_area || collapsed_child_index == -1) {
+               largest_surface_area = surface_area;
+               collapsed_child_index = i;
+            }
+         }
+
+         if (collapsed_child_index != -1) {
+            REF(vk_ir_box_node) child_node =
+               REF(vk_ir_box_node)OFFSET(args.intermediate_bvh,
+                                        ir_id_to_offset(children[collapsed_child_index]));
+            uint32_t grandchildren[2] = DEREF(child_node).children;
+            uint32_t valid_grandchild_count = 0;
+
+            if (grandchildren[1] != RADV_BVH_INVALID_NODE)
+               ++valid_grandchild_count;
+
+            if (grandchildren[0] != RADV_BVH_INVALID_NODE)
+               ++valid_grandchild_count;
+            else
+               grandchildren[0] = grandchildren[1];
+
+            if (valid_grandchild_count > 1)
+               children[found_child_count++] = grandchildren[1];
+
+            if (valid_grandchild_count > 0)
+               children[collapsed_child_index] = grandchildren[0];
+            else {
+               found_child_count--;
+               children[collapsed_child_index] = children[found_child_count];
+            }
+
+            DEREF(child_node).bvh_offset = VK_NULL_BVH_OFFSET;
+         } else
+            break;
+      }
+
+      REF(radv_bvh_box16_node) dst_node_f16 = REF(radv_bvh_box16_node)(OFFSET(args.output_bvh, id_to_offset(node_id)));
+      REF(radv_bvh_box32_node) dst_node_f32 = REF(radv_bvh_box32_node)(OFFSET(args.output_bvh, id_to_offset(node_id)));
+      bool is_box16 = RADV_TEST_BUILD_FLAG_USE_BOX16 && id_to_type(node_id) == radv_bvh_node_box16;
+
+      for (uint32_t i = 0; i < found_child_count; ++i) {
+         uint32_t type = ir_id_to_type(children[i]);
+         uint32_t offset = ir_id_to_offset(children[i]);
+         uint32_t child_node_id;
+
+         vk_aabb child_aabb = DEREF(REF(vk_ir_node)OFFSET(args.intermediate_bvh, offset)).aabb;
+
+         if (type == vk_ir_node_internal) {
+            radv_aabb16 child_aabb16 = radv_aabb_f32_to_f16(child_aabb);
+            float surface_area_f16 = aabb_surface_area(radv_aabb_f16_to_f32(child_aabb16));
+            float surface_area_f32 = aabb_surface_area(child_aabb);
+            bool child_use_f16 = RADV_TEST_BUILD_FLAG_USE_BOX16 && surface_area_f16 < surface_area_f32 * 1.5;
+
+            uint32_t dst_offset = atomicAdd(DEREF(args.header).dst_node_offset,
+                                            child_use_f16 ? SIZEOF(radv_bvh_box16_node) : SIZEOF(radv_bvh_box32_node));
+            child_node_id = pack_node_id(dst_offset, child_use_f16 ? radv_bvh_node_box16 : radv_bvh_node_box32);
+
+            REF(vk_ir_box_node) child_node = REF(vk_ir_box_node) OFFSET(args.intermediate_bvh, offset);
+            DEREF(child_node).bvh_offset = child_node_id;
+            flags |= (DEREF(child_node).flags & 0x3) << i * 8;
+         } else {
+            uint32_t child_index = offset / ir_leaf_node_size;
+            uint32_t dst_offset = dst_leaf_offset + child_index * output_leaf_node_size;
+
+            if (type == vk_ir_node_instance) {
+               vk_ir_instance_node src_node =
+                  DEREF(REF(vk_ir_instance_node)(OFFSET(args.intermediate_bvh, offset)));
+               radv_encode_instance_gfx10_3(OFFSET(args.output_bvh, dst_offset), src_node);
+               flags |= (src_node.root_flags & 0x3) << i * 8;
+            } else {
+               uint32_t child_flags = fetch_child_flags(args.intermediate_bvh, children[i]);
+               flags |= (child_flags & 0x3) << i * 8;
+            }
+
+            child_node_id = pack_node_id(dst_offset, ir_type_to_bvh_type(type));
+         }
+
+         if (is_box16) {
+            DEREF(dst_node_f16).coords[i] = radv_aabb_f32_to_f16(child_aabb);
+         } else {
+            /* On gfx11, infinities in AABB coords can cause garbage child nodes to be
+             * returned by box intersection tests with non-default box sorting modes.
+             * Subtract 1 from the integer representation of inf/-inf to turn it into
+             * the maximum/minimum representable floating-point value as a workaround.
+             */
+            if (RADV_TEST_BUILD_FLAG_NO_INFS) {
+               for (uint32_t i = 0; i < 3; ++i) {
+                  if (isinf(child_aabb.min[i]))
+                     child_aabb.min[i] = uintBitsToFloat(floatBitsToUint(child_aabb.min[i]) - 1);
+                  if (isinf(child_aabb.max[i]))
+                     child_aabb.max[i] = uintBitsToFloat(floatBitsToUint(child_aabb.max[i]) - 1);
+               }
+            }
+
+            DEREF(dst_node_f32).coords[i] = child_aabb;
+         }
+
+         children[i] = child_node_id;
+         set_parent(child_node_id, node_id);
+      }
+
+      if (is_box16) {
+         radv_aabb16 null_aabb;
+         null_aabb.min_x = NAN_F16;
+         null_aabb.min_y = NAN_F16;
+         null_aabb.min_z = NAN_F16;
+         null_aabb.max_x = NAN_F16;
+         null_aabb.max_y = NAN_F16;
+         null_aabb.max_z = NAN_F16;
+         for (uint i = found_child_count; i < 4; ++i)
+            DEREF(dst_node_f16).coords[i] = null_aabb;
+      } else {
+         for (uint i = found_child_count; i < 4; ++i) {
+            for (uint comp = 0; comp < 3; ++comp) {
+               DEREF(dst_node_f32).coords[i].min[comp] = NAN;
+               DEREF(dst_node_f32).coords[i].max[comp] = NAN;
+            }
+         }
+      }
+
+      /* Make changes to the children's BVH offset value available to the other invocations. */
+      memoryBarrier(gl_ScopeDevice, gl_StorageSemanticsBuffer,
+                    gl_SemanticsAcquireRelease | gl_SemanticsMakeAvailable | gl_SemanticsMakeVisible);
+
+      if (is_box16) {
+         DEREF(dst_node_f16).children = children;
+      } else {
+         DEREF(dst_node_f32).children = children;
+
+         if (VK_TEST_BUILD_FLAG_PROPAGATE_CULL_FLAGS)
+            DEREF(dst_node_f32).flags = flags;
+      }
+
+      break;
+   }
+
+   if (is_root_node) {
+      vk_aabb aabb = src.base.aabb;
+      if (DEREF(args.header).active_leaf_count == 0)
+         aabb = vk_aabb(vec3(NAN), vec3(NAN));
+
+      REF(radv_accel_struct_header) header = REF(radv_accel_struct_header)(args.output_bvh - args.output_bvh_offset);
+      DEREF(header).bvh_offset = args.output_bvh_offset;
+      DEREF(header).root_flags = src.flags;
+      DEREF(header).aabb = aabb;
+
+      set_parent(RADV_BVH_ROOT_NODE, RADV_BVH_INVALID_NODE);
+   }
+}

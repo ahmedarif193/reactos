@@ -1,0 +1,277 @@
+/*
+ * Copyright © 2017 Intel Corporation
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "nir_spirv.h"
+
+#include "vtn_private.h"
+#include "spirv_info.h"
+
+static bool
+vtn_validate_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
+                                  const uint32_t *w, unsigned count)
+{
+   switch (opcode) {
+   case SpvOpString:
+   case SpvOpSource:
+   case SpvOpSourceExtension:
+   case SpvOpSourceContinued:
+   case SpvOpModuleProcessed:
+      /* We need this since vtn_foreach_instruction automatically handles
+       * OpLine / OpNoLine and relies on the SpvOpString from preamble being
+       * handled.
+       */
+      vtn_handle_debug_text(b, opcode, w, count);
+      break;
+
+   case SpvOpExtension:
+   case SpvOpCapability:
+   case SpvOpExtInstImport:
+   case SpvOpMemoryModel:
+   case SpvOpName:
+   case SpvOpMemberName:
+   case SpvOpExecutionMode:
+   case SpvOpDecorationGroup:
+   case SpvOpMemberDecorate:
+   case SpvOpGroupDecorate:
+   case SpvOpGroupMemberDecorate:
+      break;
+
+   case SpvOpEntryPoint:
+      vtn_handle_entry_point(b, w, count);
+      break;
+
+   case SpvOpDecorate:
+      vtn_handle_decoration(b, opcode, w, count);
+      break;
+
+   default:
+      return false; /* End of preamble */
+   }
+
+   return true;
+}
+
+static void
+spec_constant_decoration_cb(struct vtn_builder *b, struct vtn_value *v,
+                            int member, const struct vtn_decoration *dec,
+                            void *data)
+{
+   vtn_assert(member == -1);
+   if (dec->decoration != SpvDecorationSpecId)
+      return;
+
+   if (!b->specialization)
+      return;
+
+   for (unsigned i = 0; i < b->specialization->num_entries; i++) {
+      struct nir_spirv_specialization_entry *entry =
+         &b->specialization->entries[i];
+
+      if (entry->id == dec->operands[0]) {
+         entry->defined_on_module = true;
+         return;
+      }
+   }
+}
+
+static void
+vtn_validate_handle_constant(struct vtn_builder *b, SpvOp opcode,
+                             const uint32_t *w, unsigned count)
+{
+   struct vtn_value *val = vtn_push_value(b, w[2], vtn_value_type_constant);
+
+   switch (opcode) {
+   case SpvOpConstant:
+   case SpvOpConstantNull:
+   case SpvOpSpecConstantComposite:
+   case SpvOpConstantComposite:
+      /* Nothing to do here for gl_spirv needs */
+      break;
+
+   case SpvOpConstantTrue:
+   case SpvOpConstantFalse:
+   case SpvOpSpecConstantTrue:
+   case SpvOpSpecConstantFalse:
+   case SpvOpSpecConstant:
+   case SpvOpSpecConstantOp:
+      vtn_foreach_decoration(b, val, spec_constant_decoration_cb, NULL);
+      break;
+
+   case SpvOpConstantSampler:
+      vtn_fail("OpConstantSampler requires Kernel Capability");
+      break;
+
+   default:
+      vtn_fail("Unhandled opcode");
+   }
+}
+
+static bool
+vtn_validate_handle_constant_instruction(struct vtn_builder *b, SpvOp opcode,
+                                         const uint32_t *w, unsigned count)
+{
+   switch (opcode) {
+   case SpvOpSource:
+   case SpvOpSourceContinued:
+   case SpvOpSourceExtension:
+   case SpvOpExtension:
+   case SpvOpCapability:
+   case SpvOpExtInstImport:
+   case SpvOpMemoryModel:
+   case SpvOpEntryPoint:
+   case SpvOpExecutionMode:
+   case SpvOpString:
+   case SpvOpName:
+   case SpvOpMemberName:
+   case SpvOpDecorationGroup:
+   case SpvOpDecorate:
+   case SpvOpMemberDecorate:
+   case SpvOpGroupDecorate:
+   case SpvOpGroupMemberDecorate:
+      vtn_fail("Invalid opcode types and variables section");
+      break;
+
+   case SpvOpTypeVoid:
+   case SpvOpTypeBool:
+   case SpvOpTypeInt:
+   case SpvOpTypeFloat:
+   case SpvOpTypeVector:
+   case SpvOpTypeMatrix:
+   case SpvOpTypeImage:
+   case SpvOpTypeSampler:
+   case SpvOpTypeSampledImage:
+   case SpvOpTypeArray:
+   case SpvOpTypeRuntimeArray:
+   case SpvOpTypeStruct:
+   case SpvOpTypeOpaque:
+   case SpvOpTypePointer:
+   case SpvOpTypeFunction:
+   case SpvOpTypeEvent:
+   case SpvOpTypeDeviceEvent:
+   case SpvOpTypeReserveId:
+   case SpvOpTypeQueue:
+   case SpvOpTypePipe:
+      /* We don't need to handle types */
+      break;
+
+   case SpvOpConstantTrue:
+   case SpvOpConstantFalse:
+   case SpvOpConstant:
+   case SpvOpConstantComposite:
+   case SpvOpConstantSampler:
+   case SpvOpConstantNull:
+   case SpvOpSpecConstantTrue:
+   case SpvOpSpecConstantFalse:
+   case SpvOpSpecConstant:
+   case SpvOpSpecConstantComposite:
+   case SpvOpSpecConstantOp:
+      vtn_validate_handle_constant(b, opcode, w, count);
+      break;
+
+   case SpvOpUndef:
+   case SpvOpVariable:
+      /* We don't need to handle them */
+      break;
+
+   default:
+      return false; /* End of preamble */
+   }
+
+   return true;
+}
+
+/*
+ * Since OpenGL 4.6 you can use SPIR-V modules directly on OpenGL. One of the
+ * new methods, glSpecializeShader include some possible errors when trying to
+ * use it.
+ *
+ * From OpenGL 4.6, Section 7.2.1, "Shader Specialization":
+ *
+ * "void SpecializeShaderARB(uint shader,
+ *                           const char* pEntryPoint,
+ *                           uint numSpecializationConstants,
+ *                           const uint* pConstantIndex,
+ *                           const uint* pConstantValue);
+ * <skip>
+ *
+ * INVALID_VALUE is generated if <pEntryPoint> does not name a valid
+ * entry point for <shader>.
+ *
+ * An INVALID_VALUE error is generated if any element of pConstantIndex refers
+ * to a specialization constant that does not exist in the shader module
+ * contained in shader."
+ *
+ * We could do those checks on spirv_to_nir, but we are only interested on the
+ * full translation later, during linking. This method is a simplified version
+ * of spirv_to_nir, looking for only the checks needed by SpecializeShader.
+ *
+ * This method returns NULL if no entry point was found, and fill the
+ * nir_spirv_specialization field "defined_on_module" accordingly. Caller
+ * would need to trigger the specific errors.
+ *
+ */
+enum spirv_verify_result
+spirv_verify_gl_specialization_constants(
+   const uint32_t *words, size_t word_count,
+   struct nir_spirv_specialization *spec,
+   mesa_shader_stage stage, const char *entry_point_name)
+{
+   /* vtn_warn/vtn_log uses debug.func. Setting a null to prevent crash. Not
+    * need to print the warnings now, would be done later, on the real
+    * spirv_to_nir
+    */
+   const struct spirv_capabilities spirv_caps = { false, };
+   const struct spirv_to_nir_options options = {
+      .capabilities = &spirv_caps,
+      .debug.func = NULL,
+   };
+   const uint32_t *word_end = words + word_count;
+
+   struct vtn_builder *b = vtn_create_builder(words, word_count,
+                                              stage, entry_point_name,
+                                              &options);
+
+   if (b == NULL)
+      return false;
+
+   /* See also _vtn_fail() */
+   if (vtn_setjmp(b->fail_jump)) {
+      ralloc_free(b);
+      return SPIRV_VERIFY_PARSER_ERROR;
+   }
+
+   /* Skip the SPIR-V header, handled at vtn_create_builder */
+   words+= 5;
+
+   /* Search entry point from preamble */
+   words = vtn_foreach_instruction(b, words, word_end,
+                                   vtn_validate_preamble_instruction);
+
+   if (b->entry_point == NULL) {
+      ralloc_free(b);
+      return SPIRV_VERIFY_ENTRY_POINT_NOT_FOUND;
+   }
+
+   b->specialization = spec;
+
+   /* Handle constant instructions (we don't need to handle
+    * variables or types for gl_spirv)
+    */
+   words = vtn_foreach_instruction(b, words, word_end,
+                                   vtn_validate_handle_constant_instruction);
+
+   ralloc_free(b);
+
+   if (spec) {
+      for (unsigned i = 0; i < spec->num_entries; i++) {
+         const struct nir_spirv_specialization_entry *entry = &spec->entries[i];
+         if (!entry->defined_on_module)
+            return SPIRV_VERIFY_UNKNOWN_SPEC_INDEX;
+      }
+   }
+
+   return SPIRV_VERIFY_OK;
+}
+

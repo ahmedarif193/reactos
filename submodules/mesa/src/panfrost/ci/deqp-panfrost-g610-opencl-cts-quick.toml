@@ -1,0 +1,4 @@
+[[cl_cts]]
+cl_folder = "/opencl-cts"
+profile = "opencl_conformance_tests_quick.csv"
+timeout = 180.0

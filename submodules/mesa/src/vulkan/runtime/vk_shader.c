@@ -1,0 +1,756 @@
+/*
+ * Copyright © 2024 Collabora, Ltd.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
+
+#include "vk_shader.h"
+
+#include "vk_alloc.h"
+#include "vk_command_buffer.h"
+#include "vk_common_entrypoints.h"
+#include "vk_descriptor_set_layout.h"
+#include "vk_device.h"
+#include "vk_nir.h"
+#include "vk_nir_lower_descriptor_heaps.h"
+#include "vk_physical_device.h"
+#include "vk_physical_device_features.h"
+#include "vk_pipeline.h"
+
+#include "util/mesa-blake3.h"
+
+#include "nir.h"
+
+static void
+vk_shader_init(struct vk_shader *shader,
+               struct vk_device *device,
+               const struct vk_shader_ops *ops,
+               mesa_shader_stage stage)
+{
+   vk_object_base_init(device, &shader->base, VK_OBJECT_TYPE_SHADER_EXT);
+   shader->ops = ops;
+   shader->stage = stage;
+}
+
+void *
+vk_shader_zalloc(struct vk_device *device,
+                 const struct vk_shader_ops *ops,
+                 mesa_shader_stage stage,
+                 const VkAllocationCallbacks *alloc,
+                 size_t size)
+{
+   /* For internal allocations, we need to allocate from the device scope
+    * because they might be put in pipeline caches.  Importantly, it is
+    * impossible for the client to get at this pointer and we apply this
+    * heuristic before we account for allocation fallbacks so this will only
+    * ever happen for internal shader objectx.
+    */
+   const VkSystemAllocationScope alloc_scope =
+      alloc == &device->alloc ? VK_SYSTEM_ALLOCATION_SCOPE_DEVICE
+                              : VK_SYSTEM_ALLOCATION_SCOPE_OBJECT;
+
+   struct vk_shader *shader = vk_zalloc2(&device->alloc, alloc, size, 8,
+                                         alloc_scope);
+   if (shader == NULL)
+      return NULL;
+
+   vk_shader_init(shader, device, ops, stage);
+
+   return shader;
+}
+
+void *
+vk_shader_multizalloc(struct vk_device *device,
+                      struct vk_multialloc *ma,
+                      const struct vk_shader_ops *ops,
+                      mesa_shader_stage stage,
+                      const VkAllocationCallbacks *alloc)
+{
+   struct vk_shader *shader =
+      vk_multialloc_zalloc2(ma, &device->alloc, alloc,
+                            VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+   if (!shader)
+      return NULL;
+
+   vk_shader_init(shader, device, ops, stage);
+
+   return shader;
+}
+
+void
+vk_shader_free(struct vk_device *device,
+               const VkAllocationCallbacks *alloc,
+               struct vk_shader *shader)
+{
+   vk_object_base_finish(&shader->base);
+   vk_free2(&device->alloc, alloc, shader);
+}
+
+DEBUG_GET_ONCE_BOOL_OPTION(vk_validate_shader_binaries,
+                           "MESA_VK_VALIDATE_SHADER_BINARIES",
+                           false);
+bool
+vk_validate_shader_binaries(void)
+{
+   return debug_get_option_vk_validate_shader_binaries();
+}
+
+int
+vk_shader_cmp_graphics_stages(mesa_shader_stage a, mesa_shader_stage b)
+{
+   static const int stage_order[MESA_SHADER_MESH + 1] = {
+      [MESA_SHADER_VERTEX] = 1,
+      [MESA_SHADER_TESS_CTRL] = 2,
+      [MESA_SHADER_TESS_EVAL] = 3,
+      [MESA_SHADER_GEOMETRY] = 4,
+      [MESA_SHADER_TASK] = 5,
+      [MESA_SHADER_MESH] = 6,
+      [MESA_SHADER_FRAGMENT] = 7,
+   };
+
+   assert(a < ARRAY_SIZE(stage_order) && stage_order[a] > 0);
+   assert(b < ARRAY_SIZE(stage_order) && stage_order[b] > 0);
+
+   return stage_order[a] - stage_order[b];
+}
+
+int
+vk_shader_cmp_rt_stages(mesa_shader_stage a, mesa_shader_stage b)
+{
+   static const int stage_order[MESA_SHADER_CALLABLE + 1] = {
+      [MESA_SHADER_RAYGEN] = 1,
+      [MESA_SHADER_ANY_HIT] = 2,
+      [MESA_SHADER_CLOSEST_HIT] = 3,
+      [MESA_SHADER_MISS] = 4,
+      [MESA_SHADER_INTERSECTION] = 5,
+      [MESA_SHADER_CALLABLE] = 6,
+   };
+
+   assert(a < ARRAY_SIZE(stage_order) && stage_order[a] > 0);
+   assert(b < ARRAY_SIZE(stage_order) && stage_order[b] > 0);
+
+   return stage_order[a] - stage_order[b];
+}
+
+/** Tries to re-create the shader by round-tripping through serialization
+ *
+ * If the [de]serialize fails, the original shader is left intact but it will
+ * assert fail in debug builds.  If re-creation succeeds, the original shader
+ * is replaced with the new one, ensuring that the driver only ever executes
+ * shaders that come from binaries.
+ */
+static void
+vk_shader_recreate(struct vk_device *device,
+                   const VkAllocationCallbacks* pAllocator,
+                   struct vk_shader **shader_inout)
+{
+   const struct vk_device_shader_ops *ops = device->shader_ops;
+   const uint32_t binary_version =
+      device->physical->properties.shaderBinaryVersion;
+
+   struct blob writer;
+   blob_init(&writer);
+
+   struct vk_shader *old_shader = *shader_inout;
+   bool success = old_shader->ops->serialize(device, old_shader, &writer);
+   if (!success) {
+      assert(!"Failed to serialize shader");
+      blob_finish(&writer);
+      return;
+   }
+
+   struct blob_reader reader;
+   blob_reader_init(&reader, writer.data, writer.size);
+
+   struct vk_shader *new_shader;
+   VkResult result = ops->deserialize(device, &reader, binary_version,
+                                      pAllocator, &new_shader);
+   if (result != VK_SUCCESS) {
+      assert(!"Failed to deserialize shader");
+      blob_finish(&writer);
+      return;
+   }
+
+   /* Serialize again and assert that they're the same */
+#ifndef NDEBUG
+   {
+      struct blob writer2;
+      blob_init(&writer2);
+      success = new_shader->ops->serialize(device, new_shader, &writer2);
+      assert(success && "Failed to serialize shader");
+      assert(writer.size == writer2.size);
+      assert(memcmp(writer.data, writer2.data, writer.size) == 0);
+      blob_finish(&writer2);
+   }
+#endif
+
+   blob_finish(&writer);
+   vk_shader_destroy(device, old_shader, pAllocator);
+   *shader_inout = new_shader;
+}
+
+VkResult
+vk_compile_shaders(struct vk_device *device,
+                   uint32_t shader_count,
+                   struct vk_shader_compile_info *infos,
+                   const struct vk_graphics_pipeline_state *state,
+                   const struct vk_features *enabled_features,
+                   const VkAllocationCallbacks* pAllocator,
+                   struct vk_shader **shaders_out)
+{
+   const struct vk_device_shader_ops *ops = device->shader_ops;
+   VkResult result;
+
+   result = ops->compile(device, shader_count, infos, state,
+                         enabled_features, pAllocator, shaders_out);
+   if (result != VK_SUCCESS)
+      return result;
+
+   if (vk_validate_shader_binaries()) {
+      for (uint32_t i = 0; i < shader_count; i++)
+         vk_shader_recreate(device, pAllocator, &shaders_out[i]);
+   }
+
+   return VK_SUCCESS;
+}
+
+struct stage_idx {
+   mesa_shader_stage stage;
+   uint32_t idx;
+};
+
+static int
+cmp_stage_idx(const void *_a, const void *_b)
+{
+   const struct stage_idx *a = _a, *b = _b;
+   return vk_shader_cmp_graphics_stages(a->stage, b->stage);
+}
+
+static nir_shader *
+vk_shader_to_nir(struct vk_device *device,
+                 const VkShaderCreateInfoEXT *info,
+                 const struct vk_pipeline_robustness_state *rs,
+                 struct vk_sampler_state_array *embedded_samplers_out)
+{
+   const struct vk_device_shader_ops *ops = device->shader_ops;
+   const struct vk_properties *properties = &device->physical->properties;
+
+   const mesa_shader_stage stage = vk_to_mesa_shader_stage(info->stage);
+   const nir_shader_compiler_options *nir_options =
+      ops->get_nir_options(device->physical, stage, rs);
+   struct spirv_to_nir_options spirv_options =
+      ops->get_spirv_options(device->physical, stage, rs);
+
+   nir_shader *nir = vk_spirv_to_nir(device,
+                                     info->pCode, info->codeSize,
+                                     stage, info->pName,
+                                     info->pSpecializationInfo,
+                                     &spirv_options, nir_options,
+                                     false /* internal */, NULL);
+   if (nir == NULL)
+      return NULL;
+
+   vk_set_subgroup_size(
+      nir, properties->subgroupSize, properties->minSubgroupSize,
+      properties->maxSubgroupSize, vk_spirv_version(info->pCode, info->codeSize),
+      info->pNext,
+      info->flags & VK_SHADER_CREATE_ALLOW_VARYING_SUBGROUP_SIZE_BIT_EXT,
+      info->flags & VK_SHADER_CREATE_REQUIRE_FULL_SUBGROUPS_BIT_EXT);
+
+   if (ops->preprocess_nir != NULL)
+      ops->preprocess_nir(device->physical, nir, rs);
+
+   const VkShaderDescriptorSetAndBindingMappingInfoEXT *desc_map =
+      vk_find_struct_const(info->pNext,
+                           SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT);
+
+   bool heaps_progress = false;
+   NIR_PASS(heaps_progress, nir, vk_nir_lower_descriptor_heaps,
+            desc_map, NULL, embedded_samplers_out);
+   if (heaps_progress) {
+      NIR_PASS(_, nir, nir_remove_dead_variables,
+               nir_var_uniform | nir_var_image, NULL);
+      NIR_PASS(_, nir, nir_opt_dce);
+   }
+
+   return nir;
+}
+
+struct set_layouts {
+   struct vk_descriptor_set_layout *set_layouts[MESA_VK_MAX_DESCRIPTOR_SETS];
+};
+
+static void
+vk_shader_compile_info_init(struct vk_shader_compile_info *info,
+                            struct set_layouts *set_layouts,
+                            const VkShaderCreateInfoEXT *vk_info,
+                            const struct vk_pipeline_robustness_state *rs,
+                            const struct vk_sampler_state_array *es,
+                            nir_shader *nir)
+{
+   for (uint32_t sl = 0; sl < vk_info->setLayoutCount; sl++) {
+      set_layouts->set_layouts[sl] =
+         vk_descriptor_set_layout_from_handle(vk_info->pSetLayouts[sl]);
+   }
+
+   *info = (struct vk_shader_compile_info) {
+      .stage = nir->info.stage,
+      .flags = vk_info->flags,
+      .next_stage_mask = vk_info->nextStage,
+      .nir = nir,
+      .robustness = rs,
+      .set_layout_count = vk_info->setLayoutCount,
+      .set_layouts = set_layouts->set_layouts,
+      .embedded_sampler_count = es->sampler_count,
+      .embedded_samplers = es->samplers,
+      .push_constant_range_count = vk_info->pushConstantRangeCount,
+      .push_constant_ranges = vk_info->pPushConstantRanges,
+   };
+}
+
+PRAGMA_DIAGNOSTIC_PUSH
+PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
+struct vk_shader_bin_header {
+   char mesavkshaderbin[16];
+   VkDriverId driver_id;
+   uint8_t uuid[VK_UUID_SIZE];
+   uint32_t version;
+   uint64_t size;
+   uint8_t blake3[BLAKE3_KEY_LEN];
+};
+PRAGMA_DIAGNOSTIC_POP
+static_assert(sizeof(struct vk_shader_bin_header) == 80,
+              "This struct has no holes");
+
+static void
+vk_shader_bin_header_init(struct vk_shader_bin_header *header,
+                          struct vk_physical_device *device)
+{
+   *header = (struct vk_shader_bin_header) {
+      .mesavkshaderbin = "MesaVkShaderBin",
+      .driver_id = device->properties.driverID,
+   };
+
+   memcpy(header->uuid, device->properties.shaderBinaryUUID, VK_UUID_SIZE);
+   header->version = device->properties.shaderBinaryVersion;
+}
+
+static VkResult
+vk_shader_serialize(struct vk_device *device,
+                    struct vk_shader *shader,
+                    struct blob *blob)
+{
+   struct vk_shader_bin_header header;
+   vk_shader_bin_header_init(&header, device->physical);
+
+   ASSERTED intptr_t header_offset = blob_reserve_bytes(blob, sizeof(header));
+   assert(header_offset == 0);
+
+   bool success = shader->ops->serialize(device, shader, blob);
+   if (!success || blob->out_of_memory)
+      return VK_INCOMPLETE;
+
+   /* Finalize and write the header */
+   header.size = blob->size;
+   if (blob->data != NULL) {
+      assert(sizeof(header) <= blob->size);
+
+      blake3_hasher blake3_ctx;
+      _mesa_blake3_init(&blake3_ctx);
+
+      /* Hash the header with a zero BLAKE3 */
+      _mesa_blake3_update(&blake3_ctx, &header, sizeof(header));
+
+      /* Hash the serialized data */
+      _mesa_blake3_update(&blake3_ctx, blob->data + sizeof(header),
+                        blob->size - sizeof(header));
+
+      _mesa_blake3_final(&blake3_ctx, header.blake3);
+
+      blob_overwrite_bytes(blob, header_offset, &header, sizeof(header));
+   }
+
+   return VK_SUCCESS;
+}
+
+static VkResult
+vk_shader_deserialize(struct vk_device *device,
+                      size_t data_size, const void *data,
+                      const VkAllocationCallbacks* pAllocator,
+                      struct vk_shader **shader_out)
+{
+   const struct vk_device_shader_ops *ops = device->shader_ops;
+
+   struct blob_reader blob;
+   blob_reader_init(&blob, data, data_size);
+
+   struct vk_shader_bin_header header, ref_header;
+   blob_copy_bytes(&blob, &header, sizeof(header));
+   if (blob.overrun)
+      return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+
+   vk_shader_bin_header_init(&ref_header, device->physical);
+
+   if (memcmp(header.mesavkshaderbin, ref_header.mesavkshaderbin,
+              sizeof(header.mesavkshaderbin)))
+      return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+
+   if (header.driver_id != ref_header.driver_id)
+      return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+
+   if (memcmp(header.uuid, ref_header.uuid, sizeof(header.uuid)))
+      return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+
+   /* From the Vulkan 1.3.276 spec:
+    *
+    *    "Guaranteed compatibility of shader binaries is expressed through a
+    *    combination of the shaderBinaryUUID and shaderBinaryVersion members
+    *    of the VkPhysicalDeviceShaderObjectPropertiesEXT structure queried
+    *    from a physical device. Binary shaders retrieved from a physical
+    *    device with a certain shaderBinaryUUID are guaranteed to be
+    *    compatible with all other physical devices reporting the same
+    *    shaderBinaryUUID and the same or higher shaderBinaryVersion."
+    *
+    * We handle the version check here on behalf of the driver and then pass
+    * the version into the driver's deserialize callback.
+    *
+    * If a driver doesn't want to mess with versions, they can always make the
+    * UUID a hash and always report version 0 and that will make this check
+    * effectively a no-op.
+    */
+   if (header.version > ref_header.version)
+      return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+
+   /* Reject shader binaries that are the wrong size. */
+   if (header.size != data_size)
+      return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+
+   assert(blob.current == (uint8_t *)data + sizeof(header));
+   blob.end = (uint8_t *)data + data_size;
+
+   blake3_hasher blake3_ctx;
+   _mesa_blake3_init(&blake3_ctx);
+
+   /* Hash the header with a zero BLAKE3 */
+   struct vk_shader_bin_header blake3_header = header;
+   memset(blake3_header.blake3, 0, sizeof(blake3_header.blake3));
+   _mesa_blake3_update(&blake3_ctx, &blake3_header, sizeof(blake3_header));
+
+   /* Hash the serialized data */
+   _mesa_blake3_update(&blake3_ctx, (uint8_t *)data + sizeof(header),
+                     data_size - sizeof(header));
+
+   _mesa_blake3_final(&blake3_ctx, ref_header.blake3);
+   if (memcmp(header.blake3, ref_header.blake3, sizeof(header.blake3)))
+      return vk_error(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT);
+
+   /* We've now verified that the header matches and that the data has the
+    * right BLAKE3 hash so it's safe to call into the driver.
+    */
+   return ops->deserialize(device, &blob, header.version,
+                           pAllocator, shader_out);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_common_GetShaderBinaryDataEXT(VkDevice _device,
+                                 VkShaderEXT _shader,
+                                 size_t *pDataSize,
+                                 void *pData)
+{
+   VK_FROM_HANDLE(vk_device, device, _device);
+   VK_FROM_HANDLE(vk_shader, shader, _shader);
+   VkResult result;
+
+   /* From the Vulkan 1.3.275 spec:
+    *
+    *    "If pData is NULL, then the size of the binary shader code of the
+    *    shader object, in bytes, is returned in pDataSize. Otherwise,
+    *    pDataSize must point to a variable set by the user to the size of the
+    *    buffer, in bytes, pointed to by pData, and on return the variable is
+    *    overwritten with the amount of data actually written to pData. If
+    *    pDataSize is less than the size of the binary shader code, nothing is
+    *    written to pData, and VK_INCOMPLETE will be returned instead of
+    *    VK_SUCCESS."
+    *
+    * This is annoying.  Unlike basically every other Vulkan data return
+    * method, we're not allowed to overwrite the client-provided memory region
+    * on VK_INCOMPLETE.  This means we either need to query the blob size
+    * up-front by serializing twice or we need to serialize into temporary
+    * memory and memcpy into the client-provided region.  We choose the first
+    * approach.
+    *
+    * In the common case, this means that vk_shader_ops::serialize will get
+    * called 3 times: Once for the client to get the size, once for us to
+    * validate the client's size, and once to actually write the data.  It's a
+    * bit heavy-weight but this shouldn't be in a hot path and this is better
+    * for memory efficiency.  Also, the vk_shader_ops::serialize should be
+    * pretty fast on a null blob.
+    */
+   struct blob blob;
+   blob_init_fixed(&blob, NULL, SIZE_MAX);
+   result = vk_shader_serialize(device, shader, &blob);
+   assert(result == VK_SUCCESS);
+
+   if (result != VK_SUCCESS) {
+      *pDataSize = 0;
+      return result;
+   } else if (pData == NULL) {
+      *pDataSize = blob.size;
+      return VK_SUCCESS;
+   } else if (blob.size > *pDataSize) {
+      /* No data written */
+      *pDataSize = 0;
+      return VK_INCOMPLETE;
+   }
+
+   blob_init_fixed(&blob, pData, *pDataSize);
+   result = vk_shader_serialize(device, shader, &blob);
+   assert(result == VK_SUCCESS);
+
+   *pDataSize = blob.size;
+
+   return result;
+}
+
+/* The only place where we have "real" linking is graphics shaders and there
+ * is a limit as to how many of them can be linked together at one time.
+ */
+#define VK_MAX_LINKED_SHADER_STAGES MESA_VK_MAX_GRAPHICS_PIPELINE_STAGES
+
+const struct vk_pipeline_robustness_state vk_robustness_disabled = {
+   .storage_buffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT,
+   .uniform_buffers = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT,
+   .vertex_inputs = VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_DISABLED_EXT,
+   .images = VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_DISABLED_EXT,
+   /* From the Vulkan 1.3.292 spec:
+    *
+    *    "This extension [VK_EXT_robustness2] also adds support for “null
+    *    descriptors”, where VK_NULL_HANDLE can be used instead of a valid
+    *    handle. Accesses to null descriptors have well-defined behavior,
+    *    and do not rely on robustness."
+    *
+    * For now, default these to true.
+    */
+   .null_uniform_buffer_descriptor = true,
+   .null_storage_buffer_descriptor = true,
+};
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_common_CreateShadersEXT(VkDevice _device,
+                           uint32_t createInfoCount,
+                           const VkShaderCreateInfoEXT *pCreateInfos,
+                           const VkAllocationCallbacks *pAllocator,
+                           VkShaderEXT *pShaders)
+{
+   VK_FROM_HANDLE(vk_device, device, _device);
+   VkResult first_fail_or_success = VK_SUCCESS;
+
+   /* From the Vulkan 1.3.274 spec:
+    *
+    *    "When this function returns, whether or not it succeeds, it is
+    *    guaranteed that every element of pShaders will have been overwritten
+    *    by either VK_NULL_HANDLE or a valid VkShaderEXT handle."
+    *
+    * Zeroing up-front makes the error path easier.
+    */
+   memset(pShaders, 0, createInfoCount * sizeof(*pShaders));
+
+   bool has_linked_spirv = false;
+   for (uint32_t i = 0; i < createInfoCount; i++) {
+      if (pCreateInfos[i].codeType == VK_SHADER_CODE_TYPE_SPIRV_EXT &&
+          (pCreateInfos[i].flags & VK_SHADER_CREATE_LINK_STAGE_BIT_EXT))
+         has_linked_spirv = true;
+   }
+
+   uint32_t linked_count = 0;
+   struct stage_idx linked[VK_MAX_LINKED_SHADER_STAGES];
+
+   for (uint32_t i = 0; i < createInfoCount; i++) {
+      const VkShaderCreateInfoEXT *vk_info = &pCreateInfos[i];
+      VkResult result = VK_SUCCESS;
+
+      switch (vk_info->codeType) {
+      case VK_SHADER_CODE_TYPE_BINARY_EXT: {
+         /* This isn't required by Vulkan but we're allowed to fail binary
+          * import for basically any reason.  This seems like a pretty good
+          * reason.
+          */
+         if (has_linked_spirv &&
+             (vk_info->flags & VK_SHADER_CREATE_LINK_STAGE_BIT_EXT)) {
+            result = vk_errorf(device, VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT,
+                               "Cannot mix linked binary and SPIR-V");
+            break;
+         }
+
+         struct vk_shader *shader;
+         result = vk_shader_deserialize(device, vk_info->codeSize,
+                                        vk_info->pCode, pAllocator,
+                                        &shader);
+         if (result != VK_SUCCESS)
+            break;
+
+         pShaders[i] = vk_shader_to_handle(shader);
+         break;
+      }
+
+      case VK_SHADER_CODE_TYPE_SPIRV_EXT: {
+         if (vk_info->flags & VK_SHADER_CREATE_LINK_STAGE_BIT_EXT) {
+            /* Stash it and compile later */
+            assert(linked_count < ARRAY_SIZE(linked));
+            linked[linked_count++] = (struct stage_idx) {
+               .stage = vk_to_mesa_shader_stage(vk_info->stage),
+               .idx = i,
+            };
+         } else {
+            struct vk_sampler_state_array embedded_samplers = {0};
+            nir_shader *nir = vk_shader_to_nir(device, vk_info,
+                                               &vk_robustness_disabled,
+                                               &embedded_samplers);
+            if (nir == NULL) {
+               result = vk_errorf(device, VK_ERROR_UNKNOWN,
+                                  "Failed to compile shader to NIR");
+               break;
+            }
+
+            struct vk_shader_compile_info info;
+            struct set_layouts set_layouts;
+            vk_shader_compile_info_init(&info, &set_layouts,
+                                        vk_info, &vk_robustness_disabled,
+                                        &embedded_samplers, nir);
+
+            struct vk_shader *shader;
+            result = vk_compile_shaders(device, 1, &info,
+                                        NULL /* state */, NULL /* features */,
+                                        pAllocator, &shader);
+
+            vk_sampler_state_array_finish(&embedded_samplers);
+
+            if (result != VK_SUCCESS)
+               break;
+
+            pShaders[i] = vk_shader_to_handle(shader);
+         }
+         break;
+      }
+
+      default:
+         UNREACHABLE("Unknown shader code type");
+      }
+
+      if (first_fail_or_success == VK_SUCCESS)
+         first_fail_or_success = result;
+   }
+
+   if (linked_count > 0) {
+      struct set_layouts set_layouts[VK_MAX_LINKED_SHADER_STAGES];
+      struct vk_shader_compile_info infos[VK_MAX_LINKED_SHADER_STAGES];
+      struct vk_sampler_state_array embedded_samplers[VK_MAX_LINKED_SHADER_STAGES];
+      VkResult result = VK_SUCCESS;
+
+      /* Sort so we guarantee the driver always gets them in-order */
+      qsort(linked, linked_count, sizeof(*linked), cmp_stage_idx);
+
+      /* Memset for easy error handling */
+      memset(infos, 0, sizeof(infos));
+      memset(embedded_samplers, 0, sizeof(embedded_samplers));
+
+      for (uint32_t l = 0; l < linked_count; l++) {
+         const VkShaderCreateInfoEXT *vk_info = &pCreateInfos[linked[l].idx];
+
+         nir_shader *nir = vk_shader_to_nir(device, vk_info,
+                                            &vk_robustness_disabled,
+                                            &embedded_samplers[l]);
+         if (nir == NULL) {
+            result = vk_errorf(device, VK_ERROR_UNKNOWN,
+                               "Failed to compile shader to NIR");
+            break;
+         }
+
+         vk_shader_compile_info_init(&infos[l], &set_layouts[l],
+                                     vk_info, &vk_robustness_disabled,
+                                     &embedded_samplers[l], nir);
+      }
+
+      if (result == VK_SUCCESS) {
+         struct vk_shader *shaders[VK_MAX_LINKED_SHADER_STAGES];
+
+         result = vk_compile_shaders(device, linked_count, infos,
+                                     NULL /* state */, NULL /* features */,
+                                     pAllocator, shaders);
+         if (result == VK_SUCCESS) {
+            for (uint32_t l = 0; l < linked_count; l++)
+               pShaders[linked[l].idx] = vk_shader_to_handle(shaders[l]);
+         }
+      } else {
+         for (uint32_t l = 0; l < linked_count; l++) {
+            ralloc_free(infos[l].nir);
+         }
+      }
+
+      for (uint32_t l = 0; l < linked_count; l++)
+         vk_sampler_state_array_finish(&embedded_samplers[l]);
+
+      if (first_fail_or_success == VK_SUCCESS)
+         first_fail_or_success = result;
+   }
+
+   return first_fail_or_success;
+}
+
+VKAPI_ATTR void VKAPI_CALL
+vk_common_DestroyShaderEXT(VkDevice _device,
+                           VkShaderEXT _shader,
+                           const VkAllocationCallbacks *pAllocator)
+{
+   VK_FROM_HANDLE(vk_device, device, _device);
+   VK_FROM_HANDLE(vk_shader, shader, _shader);
+
+   if (shader == NULL)
+      return;
+
+   vk_shader_destroy(device, shader, pAllocator);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+vk_common_CmdBindShadersEXT(VkCommandBuffer commandBuffer,
+                            uint32_t stageCount,
+                            const VkShaderStageFlagBits *pStages,
+                            const VkShaderEXT *pShaders)
+{
+   VK_FROM_HANDLE(vk_command_buffer, cmd_buffer, commandBuffer);
+   struct vk_device *device = cmd_buffer->base.device;
+   const struct vk_device_shader_ops *ops = device->shader_ops;
+
+   STACK_ARRAY(mesa_shader_stage, stages, stageCount);
+   STACK_ARRAY(struct vk_shader *, shaders, stageCount);
+
+   VkShaderStageFlags vk_stages = 0;
+   for (uint32_t i = 0; i < stageCount; i++) {
+      vk_stages |= pStages[i];
+      stages[i] = vk_to_mesa_shader_stage(pStages[i]);
+      shaders[i] = pShaders != NULL ? vk_shader_from_handle(pShaders[i]) : NULL;
+   }
+
+   vk_cmd_unbind_pipelines_for_stages(cmd_buffer, vk_stages);
+   if (vk_stages & ~VK_SHADER_STAGE_COMPUTE_BIT)
+      vk_cmd_set_rp_attachments(cmd_buffer, ~0);
+
+   ops->cmd_bind_shaders(cmd_buffer, stageCount, stages, shaders);
+}

@@ -1,0 +1,23 @@
+Add.Op/.*
+AddQuant.Op/.*
+Conv2D.Op/.*
+DepthwiseConv2D.Op/.*
+FullyConnected.Op/.*
+
+# Don't support unfused Pad operations yet
+Models.Op/yolox_000
+Models.Op/yolox_003
+Models.Op/yolox_012
+Models.Op/yolox_027
+Models.Op/yolox_042
+Models.Op/yolox_077
+Models.Op/yolox_086
+
+# GatherNd operations that are unsupported.
+# If they fail is because of a bug in the teflon test runner.
+Models.Op/movenetlightning_112
+Models.Op/movenetlightning_141
+Models.Op/movenetlightning_152
+Models.Op/movenetthunder_112
+Models.Op/movenetthunder_141
+Models.Op/movenetthunder_152

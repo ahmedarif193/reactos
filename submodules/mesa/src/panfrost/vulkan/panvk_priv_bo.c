@@ -1,0 +1,177 @@
+/*
+ * Copyright © 2021 Collabora Ltd.
+ * SPDX-License-Identifier: MIT
+ */
+
+#include <assert.h>
+
+#include "vk_alloc.h"
+#include "vk_log.h"
+
+#include "panvk_device.h"
+#include "panvk_priv_bo.h"
+
+#include "kmod/pan_kmod.h"
+#include "pan_props.h"
+
+#include "genxml/decode.h"
+
+VkResult
+panvk_priv_bo_create(struct panvk_device *dev, uint64_t size, uint32_t flags,
+                     VkSystemAllocationScope scope, struct panvk_priv_bo **out)
+{
+   VkResult result;
+   int ret;
+   struct panvk_priv_bo *priv_bo =
+      vk_zalloc(&dev->vk.alloc, sizeof(*priv_bo), 8, scope);
+
+   if (!priv_bo)
+      return panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   struct pan_kmod_bo *bo =
+      pan_kmod_bo_alloc(dev->kmod.dev, dev->kmod.vm, size, flags);
+   if (!bo) {
+      result = panvk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      goto err_free_priv_bo;
+   }
+
+   priv_bo->bo = bo;
+   priv_bo->dev = dev;
+
+   if (!(flags & PAN_KMOD_BO_FLAG_NO_MMAP)) {
+      priv_bo->addr.host =
+         pan_kmod_bo_mmap(bo, PROT_READ | PROT_WRITE, MAP_SHARED, NULL);
+      if (priv_bo->addr.host == MAP_FAILED) {
+         result = panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+         goto err_put_bo;
+      }
+   }
+
+   struct pan_kmod_vm_op op = {
+      .type = PAN_KMOD_VM_OP_TYPE_MAP,
+      .va = {
+         .start = PAN_KMOD_VM_MAP_AUTO_VA,
+         .size = pan_kmod_bo_size(bo),
+      },
+      .map = {
+         .bo = priv_bo->bo,
+         .bo_offset = 0,
+      },
+   };
+
+   if (!(dev->kmod.vm->flags & PAN_KMOD_VM_FLAG_AUTO_VA)) {
+      op.va.start =
+         panvk_as_alloc(dev, dev->as.priv_heap, op.va.size,
+                        pan_choose_gpu_va_alignment(dev->kmod.vm, op.va.size));
+      if (!op.va.start) {
+         result = panvk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+         goto err_munmap_bo;
+      }
+   }
+
+   ret = pan_kmod_vm_bind(dev->kmod.vm, PAN_KMOD_VM_OP_MODE_IMMEDIATE, &op, 1);
+   if (ret) {
+      result = panvk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+      goto err_return_va;
+   }
+
+   priv_bo->addr.dev = op.va.start;
+
+   panvk_address_binding_report(dev, NULL, priv_bo->addr.dev,
+                                pan_kmod_bo_size(priv_bo->bo),
+                                VK_DEVICE_ADDRESS_BINDING_TYPE_BIND_EXT);
+
+   if (dev->debug.decode_ctx) {
+      pandecode_inject_mmap(dev->debug.decode_ctx, priv_bo->addr.dev,
+                            priv_bo->addr.host, pan_kmod_bo_size(priv_bo->bo),
+                            NULL);
+   }
+
+   p_atomic_set(&priv_bo->refcnt, 1);
+
+   *out = priv_bo;
+   return VK_SUCCESS;
+
+err_return_va:
+   if (!(dev->kmod.vm->flags & PAN_KMOD_VM_FLAG_AUTO_VA)) {
+      panvk_as_free(dev, dev->as.priv_heap, op.va.start, op.va.size);
+   }
+
+err_munmap_bo:
+   if (priv_bo->addr.host) {
+      ret = os_munmap(priv_bo->addr.host, pan_kmod_bo_size(bo));
+      assert(!ret);
+   }
+
+err_put_bo:
+   pan_kmod_bo_put(bo);
+
+err_free_priv_bo:
+   vk_free(&dev->vk.alloc, priv_bo);
+   return result;
+}
+
+void
+panvk_priv_bo_flush(struct panvk_priv_bo *priv_bo, size_t offset, size_t size)
+{
+   assert(priv_bo->addr.host != NULL);
+   pan_kmod_queue_bo_map_sync(priv_bo->bo, offset, priv_bo->addr.host + offset,
+                              size, PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH);
+}
+
+void
+panvk_priv_bo_invalidate(struct panvk_priv_bo *priv_bo, size_t offset,
+                         size_t size)
+{
+   assert(priv_bo->addr.host != NULL);
+   pan_kmod_queue_bo_map_sync(priv_bo->bo, offset, priv_bo->addr.host + offset,
+                              size,
+                              PAN_KMOD_BO_SYNC_CPU_CACHE_FLUSH_AND_INVALIDATE);
+}
+
+static void
+panvk_priv_bo_destroy(struct panvk_priv_bo *priv_bo)
+{
+   struct panvk_device *dev = priv_bo->dev;
+
+   panvk_address_binding_report(dev, NULL, priv_bo->addr.dev,
+                                pan_kmod_bo_size(priv_bo->bo),
+                                VK_DEVICE_ADDRESS_BINDING_TYPE_UNBIND_EXT);
+
+   if (dev->debug.decode_ctx) {
+      pandecode_inject_free(dev->debug.decode_ctx, priv_bo->addr.dev,
+                            pan_kmod_bo_size(priv_bo->bo));
+   }
+
+   struct pan_kmod_vm_op op = {
+      .type = PAN_KMOD_VM_OP_TYPE_UNMAP,
+      .va = {
+         .start = priv_bo->addr.dev,
+         .size = pan_kmod_bo_size(priv_bo->bo),
+      },
+   };
+   ASSERTED int ret =
+      pan_kmod_vm_bind(dev->kmod.vm, PAN_KMOD_VM_OP_MODE_IMMEDIATE, &op, 1);
+   assert(!ret);
+
+   if (!(dev->kmod.vm->flags & PAN_KMOD_VM_FLAG_AUTO_VA)) {
+      panvk_as_free(dev, dev->as.priv_heap, op.va.start, op.va.size);
+   }
+
+   if (priv_bo->addr.host) {
+      ret = os_munmap(priv_bo->addr.host, pan_kmod_bo_size(priv_bo->bo));
+      assert(!ret);
+   }
+
+   pan_kmod_bo_put(priv_bo->bo);
+   vk_free(&dev->vk.alloc, priv_bo);
+}
+
+void
+panvk_priv_bo_unref(struct panvk_priv_bo *priv_bo)
+{
+   if (!priv_bo || p_atomic_dec_return(&priv_bo->refcnt))
+      return;
+
+   panvk_priv_bo_destroy(priv_bo);
+}

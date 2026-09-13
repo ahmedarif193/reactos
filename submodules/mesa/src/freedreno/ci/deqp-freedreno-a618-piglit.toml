@@ -1,0 +1,14 @@
+[[piglit]]
+piglit_folder = "/piglit"
+profile = "gpu"
+process_isolation = true
+fraction = 6
+  [piglit.env]
+  PIGLIT_NO_WINDOW = "1"
+
+[[piglit]]
+piglit_folder = "/piglit"
+profile = "cl"
+process_isolation = true
+  [piglit.env]
+  RUSTICL_ENABLE = "msm"

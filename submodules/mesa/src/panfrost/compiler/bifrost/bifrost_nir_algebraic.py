@@ -1,0 +1,233 @@
+# Copyright (C) 2021 Collabora, Ltd.
+# Copyright (C) 2016 Intel Corporation
+# SPDX-License-Identifier: MIT
+
+import argparse
+import itertools
+import sys
+import math
+
+a = 'a'
+b = 'b'
+c = 'c'
+d = 'd'
+
+# In general, bcsel is cheaper than bitwise arithmetic on Mali. On
+# Bifrost, we can implement bcsel as either CSEL or MUX to schedule to either
+# execution unit. On Valhall, bitwise arithmetic may be on the SFU whereas MUX
+# is on the higher throughput CVT unit. We get a zero argument for free relative
+# to the bitwise op, which would be LSHIFT_* internally taking a zero anyway.
+#
+# As such, it's beneficial to reexpress bitwise arithmetic of booleans as bcsel.
+opt_bool_bitwise = [
+    (('iand', 'a@1', 'b@1'), ('bcsel', a, b, False)),
+    (('ior', 'a@1', 'b@1'), ('bcsel', a, a, b)),
+    (('iand', 'a@1', ('inot', 'b@1')), ('bcsel', b, 0, a)),
+    (('ior', 'a@1', ('inot', 'b@1')), ('bcsel', b, a, True)),
+]
+
+algebraic_late = [
+    # Canonical form. The scheduler will convert back if it makes sense.
+    (('fmul', a, 2.0), ('fadd', a, a)),
+
+    # Fuse Mali-specific clamps
+    (('fmin', ('fmax', a, -1.0), 1.0), ('fsat_signed', a)),
+    (('fmax', ('fmin', a, 1.0), -1.0), ('fsat_signed', a)),
+    (('fmax', a, 0.0), ('fclamp_pos', a)),
+
+    (('bcsel_pan', 'b@32', ('iadd', 'a@32', 1), a), ('iadd', a, ('b2i32', b))),
+
+    # We don't have an 8-bit CSEL, so this is the best we can do.
+    # Note that we use 8-bit booleans internally to preserve vectorization.
+    (('imin@8', a, b), ('bcsel_pan', ('ilt_pan', a, b), a, b)),
+    (('imax@8', a, b), ('bcsel_pan', ('ilt_pan', a, b), b, a)),
+    (('umin@8', a, b), ('bcsel_pan', ('ult_pan', a, b), a, b)),
+    (('umax@8', a, b), ('bcsel_pan', ('ult_pan', a, b), b, a)),
+
+    # Floats are at minimum 16-bit, which means when converting to an 8-bit
+    # integer, the vectorization changes. So there's no one-shot hardware
+    # instruction for f2i8. Instead, lower to two NIR instructions that map
+    # directly to the hardware.
+    (('f2i8', a), ('i2i8', ('f2i16', a))),
+    (('f2u8', a), ('u2u8', ('f2u16', a))),
+
+    # XXX: Duplicate of nir_lower_pack
+    (('unpack_64_2x32', a), ('vec2', ('unpack_64_2x32_split_x', a),
+                                     ('unpack_64_2x32_split_y', a))),
+
+    # On v11+, all non integer variant to convert to F32 are gone except for S32_TO_F32.
+    (('i2f32', 'a@8'), ('i2f32', ('i2i32', a)), 'gpu_arch >= 11'),
+    (('i2f32', 'a@16'), ('i2f32', ('i2i32', a)), 'gpu_arch >= 11'),
+    (('u2f32', 'a@8'), ('u2f32', ('u2u32', a)), 'gpu_arch >= 11'),
+    (('u2f32', 'a@16'), ('u2f32', ('u2u32', a)), 'gpu_arch >= 11'),
+
+    # On v11+, all non integer variant to convert to F16 are gone except for S32_TO_F32.
+    (('i2f16', 'a'), ('f2f16', ('i2f32', ('i2i32', a))), 'gpu_arch >= 11'),
+    (('u2f16', 'a'), ('f2f16', ('u2f32', ('u2u32', a))), 'gpu_arch >= 11'),
+
+    # We don't have S32_TO_F16 on any arch
+    (('i2f16', 'a@32'), ('f2f16', ('i2f32', a))),
+    (('u2f16', 'a@32'), ('f2f16', ('u2f32', a))),
+
+    # On v11+, V2F16_TO_V2S16 / V2F16_TO_V2U16 are gone
+    (('f2i16', 'a@16'), ('f2i16', ('f2f32', a)), 'gpu_arch >= 11'),
+    (('f2u16', 'a@16'), ('f2u16', ('f2f32', a)), 'gpu_arch >= 11'),
+
+    # On v11+, V2F32_TO_V2S16 is gone
+    (('pack_half_2x16_split', a, b), ('pack_32_2x16_split', ('f2f16', a), ('f2f16', b)), 'gpu_arch >= 11'),
+
+    # On v11+, F16_TO_S32/F16_TO_U32 is gone but we still have F32_TO_S32/F32_TO_U32
+    (('f2i32', 'a@16'), ('f2i32', ('f2f32', a)), 'gpu_arch >= 11'),
+    (('f2u32', 'a@16'), ('f2u32', ('f2f32', a)), 'gpu_arch >= 11'),
+
+    # TODO: these could be handled in the backend for lighter register pressure
+    (('f2u16', a), ('u2u16', ('f2u32', a)), 'is_kraid'),
+    (('f2i16', a), ('i2i16', ('f2i32', a)), 'is_kraid'),
+
+    # Copy-prop will clean these up
+    (('pack_uvec2_to_uint', a), ('pack_32_2x16', ('u2u16', a))),
+    (('pack_uvec4_to_uint', a), ('pack_32_4x8', ('u2u8', a))),
+
+    # On v11+, because FROUND.v2f16 is gone we end up with precision issues.
+    # We lower ffract here instead to ensure lower_bit_size has been performed.
+    (('ffract', a), ('fadd', a, ('fneg', ('ffloor', a))), 'gpu_arch >= 11'),
+]
+
+# nir_lower_bool_to_bitsize can generate needless conversions.
+for bits in [8, 16, 32]:
+    algebraic_late += [
+        ((f'i2i{bits}', f'a@{bits}'), a)
+    ]
+
+# On v11+, ICMP_OR.v4u8 was removed
+for cond in ['ilt', 'ige', 'ieq', 'ine', 'ult', 'uge']:
+    convert_8bit = 'u2u8'
+    convert_16bit = 'u2u16'
+
+    if cond[0] == 'i':
+        convert_8bit = 'i2i8'
+        convert_16bit = 'i2i16'
+
+    algebraic_late += [
+        ((f'{cond}_pan@8', a, b), (convert_8bit, (f'{cond}_pan', (convert_16bit, a), (convert_16bit, b))), 'gpu_arch >= 11'),
+    ]
+
+# Handling all combinations of boolean and float sizes for b2f is nontrivial.
+# bcsel has the same problem in more generality; lower b2f to bcsel in NIR to
+# reuse the efficient implementations of bcsel. This includes special handling
+# to allow vectorization in places the hardware does not directly.
+#
+# Because this lowering must happen late, NIR won't squash inot in
+# automatically. Do so explicitly. (The more specific pattern must be first.)
+for fsz in [16, 32]:
+    a_fsz = (f'i2i{fsz}', a)
+
+    algebraic_late += [
+        ((f'b2f{fsz}', ('inot', f'a@{fsz}')), ('bcsel_pan', a, 0.0, 1.0)),
+        ((f'b2f{fsz}', ('inot', a)), ('bcsel_pan', a_fsz, 0.0, 1.0)),
+        ((f'b2f{fsz}', f'a@{fsz}'), ('bcsel_pan', a, 1.0, 0.0)),
+        ((f'b2f{fsz}', a), ('bcsel_pan', a_fsz, 1.0, 0.0)),
+    ]
+
+for isz in [8, 16, 32]:
+    a_isz = (f'i2i{isz}', a)
+
+    algebraic_late += [
+        ((f'b2i{isz}', ('inot', f'a@{isz}')), ('bcsel_pan', a, 0, 1), 'is_kraid'),
+        ((f'b2i{isz}', ('inot', a)), ('bcsel_pan', a_isz, 0, 1), 'is_kraid'),
+        ((f'b2i{isz}', f'a@{isz}'), ('bcsel_pan', a, 1, 0), 'is_kraid'),
+        ((f'b2i{isz}', a), ('bcsel_pan', a_isz, 1, 0), 'is_kraid'),
+    ]
+
+LOPS = ['and', 'or', 'xor']
+SHIFTS = [
+    ('ishl', 'lshift'),
+    ('ushr', 'rshift'),
+    ('ishr', 'arshift'),
+]
+
+for (ns, ps), lop in itertools.product(SHIFTS, LOPS):
+    nl = f'i{lop}'
+    psl = f'{ps}_{lop}_pan'
+    algebraic_late += [
+        # Logic ops distribute across shifts so:
+        #
+        #   shift(a LOP b, c) LOP d = (shift(a, c) LOP shift(b, c)) LOP d
+        #
+        # and logic ops are associative so
+        #
+        #                           = shift(a, c) LOP (shift(b, c) LOP d)
+        #
+        ((nl, (f'{ns}(is_used_once)', (nl, a, '#b'), '#c'), '#d'),
+         (psl, a, ('u2u8', c), (nl, (ns, b, c), d)), 'is_kraid'),
+        ((nl, (f'{ns}(is_used_once)', a, b), c),
+         (psl, a, ('u2u8', b), c), 'is_kraid'),
+        ((ns, (nl, a, '#b'), '#c'),
+         (psl, a, ('u2u8', c), (ns, b, c)), 'is_kraid'),
+    ]
+
+# If we have any regular shifts or logic ops left, lower them
+algebraic_late += [
+    (('iand', a, b), ('lshift_and_pan', a, 0, b), 'is_kraid'),
+    (('ior', a, b), ('lshift_or_pan', a, 0, b), 'is_kraid'),
+    (('ixor', a, b), ('lshift_xor_pan', a, 0, b), 'is_kraid'),
+    (('inot', a), ('lshift_xor_pan', a, 0, -1), 'is_kraid'),
+    (('ishl', a, b), ('lshift_or_pan', a, ('u2u8', b), 0), 'is_kraid'),
+    (('ushr', a, b), ('rshift_or_pan', a, ('u2u8', b), 0), 'is_kraid'),
+    (('ishr', a, b), ('arshift_or_pan', a, ('u2u8', b), 0), 'is_kraid'),
+    (('urol', a, b), ('lrot_or_pan', a, ('u2u8', b), 0), 'is_kraid'),
+    (('uror', a, b), ('rrot_or_pan', a, ('u2u8', b), 0), 'is_kraid'),
+]
+
+# Kraid doesn't have [iu]mul_high but it does have [iu]mul_2x32_64
+algebraic_late += [
+    (('imul_high', 'a@32', 'b@32'),
+     ('unpack_64_2x32_split_y', ('imul_2x32_64', a, b)), 'is_kraid'),
+    (('umul_high', 'a@32', 'b@32'),
+     ('unpack_64_2x32_split_y', ('umul_2x32_64', a, b)), 'is_kraid'),
+]
+
+# Bifrost LDEXP.v2f16 takes i16 exponent, while nir_op_ldexp takes i32. Lower
+# to nir_op_ldexp16_pan.
+#
+# From the GLSL 4.60 spec (section 8.3):
+#     "If exp is greater than +128 (single-precision) or +1024
+#     (double-precision), the value returned is undefined. If exp is less
+#     than -126 (single- precision) or -1022 (double-precision), the value
+#     returned may be flushed to zero."
+#
+# So we can't just truncate the exponent. Overflow is undefined behavior for
+# GLSL, but OpenCL expects us to return signed infinity, and we need to return
+# signed zero on underflow. Clamp to a range that's sufficient to overflow or
+# underflow all f16 values, avoiding implementation-defined behaviour for huge
+# exponents in LDEXP.v2f16.
+algebraic_late += [
+    (('ldexp', 'a@16', b),
+     ('ldexp16_pan', a, ('i2i16', ('imin', ('imax', b, -127), 127))))
+]
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-p', '--import-path', required=True)
+    args = parser.parse_args()
+    sys.path.insert(0, args.import_path)
+    run()
+
+
+def run():
+    import nir_algebraic  # pylint: disable=import-error
+
+    print('#include "bifrost_nir.h"')
+
+    print(nir_algebraic.AlgebraicPass("bifrost_nir_opt_boolean_bitwise",
+                                      opt_bool_bitwise).render())
+    print(nir_algebraic.AlgebraicPass("bifrost_nir_lower_algebraic_late",
+                                      algebraic_late,
+                                      [
+                                          ("unsigned ", "gpu_arch"),
+                                          ("bool ",     "is_kraid"),
+                                      ]).render())
+
+if __name__ == '__main__':
+    main()

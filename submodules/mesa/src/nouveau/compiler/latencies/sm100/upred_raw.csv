@@ -1,0 +1,8 @@
+raw,coupled,udp,voteu,u_guard,bra_jmp,uldc_mma,usetmaxreg
+coupled,none,6,1,none,none,none,1 & sb
+udp,none,4,1,none,none,none,1 & sb
+voteu,none,none,none,none,none,none,none
+u_guard,none,11,5,none,none,none,1 & sb
+bra_jmp,none,9,2,none,none,none,1 & sb
+uldc_mma,none,11,5,none,none,none,1 & sb
+usetmaxreg,none,none,none,none,none,none,none

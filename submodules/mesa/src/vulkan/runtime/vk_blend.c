@@ -1,0 +1,232 @@
+/*
+ * Copyright 2023 Valve Corporation
+ * Copyright 2021 Collabora Ltd.
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "vk_blend.h"
+#include "util/macros.h"
+#include "vulkan/vulkan_core.h"
+
+enum pipe_logicop
+vk_logic_op_to_pipe(VkLogicOp in)
+{
+   switch (in) {
+   case VK_LOGIC_OP_CLEAR:
+      return PIPE_LOGICOP_CLEAR;
+   case VK_LOGIC_OP_AND:
+      return PIPE_LOGICOP_AND;
+   case VK_LOGIC_OP_AND_REVERSE:
+      return PIPE_LOGICOP_AND_REVERSE;
+   case VK_LOGIC_OP_COPY:
+      return PIPE_LOGICOP_COPY;
+   case VK_LOGIC_OP_AND_INVERTED:
+      return PIPE_LOGICOP_AND_INVERTED;
+   case VK_LOGIC_OP_NO_OP:
+      return PIPE_LOGICOP_NOOP;
+   case VK_LOGIC_OP_XOR:
+      return PIPE_LOGICOP_XOR;
+   case VK_LOGIC_OP_OR:
+      return PIPE_LOGICOP_OR;
+   case VK_LOGIC_OP_NOR:
+      return PIPE_LOGICOP_NOR;
+   case VK_LOGIC_OP_EQUIVALENT:
+      return PIPE_LOGICOP_EQUIV;
+   case VK_LOGIC_OP_INVERT:
+      return PIPE_LOGICOP_INVERT;
+   case VK_LOGIC_OP_OR_REVERSE:
+      return PIPE_LOGICOP_OR_REVERSE;
+   case VK_LOGIC_OP_COPY_INVERTED:
+      return PIPE_LOGICOP_COPY_INVERTED;
+   case VK_LOGIC_OP_OR_INVERTED:
+      return PIPE_LOGICOP_OR_INVERTED;
+   case VK_LOGIC_OP_NAND:
+      return PIPE_LOGICOP_NAND;
+   case VK_LOGIC_OP_SET:
+      return PIPE_LOGICOP_SET;
+   default:
+      UNREACHABLE("Invalid logicop");
+   }
+}
+
+enum pipe_blend_func
+vk_blend_op_to_pipe(VkBlendOp in)
+{
+   switch (in) {
+   case VK_BLEND_OP_ADD:
+      return PIPE_BLEND_ADD;
+   case VK_BLEND_OP_SUBTRACT:
+      return PIPE_BLEND_SUBTRACT;
+   case VK_BLEND_OP_REVERSE_SUBTRACT:
+      return PIPE_BLEND_REVERSE_SUBTRACT;
+   case VK_BLEND_OP_MIN:
+      return PIPE_BLEND_MIN;
+   case VK_BLEND_OP_MAX:
+      return PIPE_BLEND_MAX;
+   default:
+      UNREACHABLE("Invalid blend op");
+   }
+}
+
+enum pipe_blendfactor
+vk_blend_factor_to_pipe(VkBlendFactor vk_factor)
+{
+   switch (vk_factor) {
+   case VK_BLEND_FACTOR_ZERO:
+      return PIPE_BLENDFACTOR_ZERO;
+   case VK_BLEND_FACTOR_ONE:
+      return PIPE_BLENDFACTOR_ONE;
+   case VK_BLEND_FACTOR_SRC_COLOR:
+      return PIPE_BLENDFACTOR_SRC_COLOR;
+   case VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR:
+      return PIPE_BLENDFACTOR_INV_SRC_COLOR;
+   case VK_BLEND_FACTOR_DST_COLOR:
+      return PIPE_BLENDFACTOR_DST_COLOR;
+   case VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR:
+      return PIPE_BLENDFACTOR_INV_DST_COLOR;
+   case VK_BLEND_FACTOR_SRC_ALPHA:
+      return PIPE_BLENDFACTOR_SRC_ALPHA;
+   case VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA:
+      return PIPE_BLENDFACTOR_INV_SRC_ALPHA;
+   case VK_BLEND_FACTOR_DST_ALPHA:
+      return PIPE_BLENDFACTOR_DST_ALPHA;
+   case VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA:
+      return PIPE_BLENDFACTOR_INV_DST_ALPHA;
+   case VK_BLEND_FACTOR_CONSTANT_COLOR:
+      return PIPE_BLENDFACTOR_CONST_COLOR;
+   case VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR:
+      return PIPE_BLENDFACTOR_INV_CONST_COLOR;
+   case VK_BLEND_FACTOR_CONSTANT_ALPHA:
+      return PIPE_BLENDFACTOR_CONST_ALPHA;
+   case VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA:
+      return PIPE_BLENDFACTOR_INV_CONST_ALPHA;
+   case VK_BLEND_FACTOR_SRC1_COLOR:
+      return PIPE_BLENDFACTOR_SRC1_COLOR;
+   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR:
+      return PIPE_BLENDFACTOR_INV_SRC1_COLOR;
+   case VK_BLEND_FACTOR_SRC1_ALPHA:
+      return PIPE_BLENDFACTOR_SRC1_ALPHA;
+   case VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA:
+      return PIPE_BLENDFACTOR_INV_SRC1_ALPHA;
+   case VK_BLEND_FACTOR_SRC_ALPHA_SATURATE:
+      return PIPE_BLENDFACTOR_SRC_ALPHA_SATURATE;
+   default:
+      UNREACHABLE("Invalid blend factor");
+   }
+}
+
+enum pipe_advanced_blend_mode
+vk_advanced_blend_op_to_pipe(VkBlendOp in)
+{
+   switch (in) {
+   case VK_BLEND_OP_ZERO_EXT:
+      return PIPE_ADVANCED_BLEND_NONE;
+   case VK_BLEND_OP_MULTIPLY_EXT:
+      return PIPE_ADVANCED_BLEND_MULTIPLY;
+   case VK_BLEND_OP_SCREEN_EXT:
+      return PIPE_ADVANCED_BLEND_SCREEN;
+   case VK_BLEND_OP_OVERLAY_EXT:
+      return PIPE_ADVANCED_BLEND_OVERLAY;
+   case VK_BLEND_OP_DARKEN_EXT:
+      return PIPE_ADVANCED_BLEND_DARKEN;
+   case VK_BLEND_OP_LIGHTEN_EXT:
+      return PIPE_ADVANCED_BLEND_LIGHTEN;
+   case VK_BLEND_OP_COLORDODGE_EXT:
+      return PIPE_ADVANCED_BLEND_COLORDODGE;
+   case VK_BLEND_OP_COLORBURN_EXT:
+      return PIPE_ADVANCED_BLEND_COLORBURN;
+   case VK_BLEND_OP_HARDLIGHT_EXT:
+      return PIPE_ADVANCED_BLEND_HARDLIGHT;
+   case VK_BLEND_OP_SOFTLIGHT_EXT:
+      return PIPE_ADVANCED_BLEND_SOFTLIGHT;
+   case VK_BLEND_OP_DIFFERENCE_EXT:
+      return PIPE_ADVANCED_BLEND_DIFFERENCE;
+   case VK_BLEND_OP_EXCLUSION_EXT:
+      return PIPE_ADVANCED_BLEND_EXCLUSION;
+   case VK_BLEND_OP_HSL_HUE_EXT:
+      return PIPE_ADVANCED_BLEND_HSL_HUE;
+   case VK_BLEND_OP_HSL_SATURATION_EXT:
+      return PIPE_ADVANCED_BLEND_HSL_SATURATION;
+   case VK_BLEND_OP_HSL_COLOR_EXT:
+      return PIPE_ADVANCED_BLEND_HSL_COLOR;
+   case VK_BLEND_OP_HSL_LUMINOSITY_EXT:
+      return PIPE_ADVANCED_BLEND_HSL_LUMINOSITY;
+   case VK_BLEND_OP_SRC_EXT:
+      return PIPE_ADVANCED_BLEND_SRC;
+   case VK_BLEND_OP_DST_EXT:
+      return PIPE_ADVANCED_BLEND_DST;
+   case VK_BLEND_OP_SRC_OVER_EXT:
+      return PIPE_ADVANCED_BLEND_SRC_OVER;
+   case VK_BLEND_OP_DST_OVER_EXT:
+      return PIPE_ADVANCED_BLEND_DST_OVER;
+   case VK_BLEND_OP_SRC_IN_EXT:
+      return PIPE_ADVANCED_BLEND_SRC_IN;
+   case VK_BLEND_OP_DST_IN_EXT:
+      return PIPE_ADVANCED_BLEND_DST_IN;
+   case VK_BLEND_OP_SRC_OUT_EXT:
+      return PIPE_ADVANCED_BLEND_SRC_OUT;
+   case VK_BLEND_OP_DST_OUT_EXT:
+      return PIPE_ADVANCED_BLEND_DST_OUT;
+   case VK_BLEND_OP_SRC_ATOP_EXT:
+      return PIPE_ADVANCED_BLEND_SRC_ATOP;
+   case VK_BLEND_OP_DST_ATOP_EXT:
+      return PIPE_ADVANCED_BLEND_DST_ATOP;
+   case VK_BLEND_OP_XOR_EXT:
+      return PIPE_ADVANCED_BLEND_XOR;
+   case VK_BLEND_OP_INVERT_EXT:
+      return PIPE_ADVANCED_BLEND_INVERT;
+   case VK_BLEND_OP_INVERT_RGB_EXT:
+      return PIPE_ADVANCED_BLEND_INVERT_RGB;
+   case VK_BLEND_OP_LINEARDODGE_EXT:
+      return PIPE_ADVANCED_BLEND_LINEARDODGE;
+   case VK_BLEND_OP_LINEARBURN_EXT:
+      return PIPE_ADVANCED_BLEND_LINEARBURN;
+   case VK_BLEND_OP_VIVIDLIGHT_EXT:
+      return PIPE_ADVANCED_BLEND_VIVIDLIGHT;
+   case VK_BLEND_OP_LINEARLIGHT_EXT:
+      return PIPE_ADVANCED_BLEND_LINEARLIGHT;
+   case VK_BLEND_OP_PINLIGHT_EXT:
+      return PIPE_ADVANCED_BLEND_PINLIGHT;
+   case VK_BLEND_OP_HARDMIX_EXT:
+      return PIPE_ADVANCED_BLEND_HARDMIX;
+   case VK_BLEND_OP_PLUS_EXT:
+      return PIPE_ADVANCED_BLEND_PLUS;
+   case VK_BLEND_OP_PLUS_CLAMPED_EXT:
+      return PIPE_ADVANCED_BLEND_PLUS_CLAMPED;
+   case VK_BLEND_OP_PLUS_CLAMPED_ALPHA_EXT:
+      return PIPE_ADVANCED_BLEND_PLUS_CLAMPED_ALPHA;
+   case VK_BLEND_OP_PLUS_DARKER_EXT:
+      return PIPE_ADVANCED_BLEND_PLUS_DARKER;
+   case VK_BLEND_OP_MINUS_EXT:
+      return PIPE_ADVANCED_BLEND_MINUS;
+   case VK_BLEND_OP_MINUS_CLAMPED_EXT:
+      return PIPE_ADVANCED_BLEND_MINUS_CLAMPED;
+   case VK_BLEND_OP_CONTRAST_EXT:
+      return PIPE_ADVANCED_BLEND_CONTRAST;
+   case VK_BLEND_OP_INVERT_OVG_EXT:
+      return PIPE_ADVANCED_BLEND_INVERT_OVG;
+   case VK_BLEND_OP_RED_EXT:
+      return PIPE_ADVANCED_BLEND_RED;
+   case VK_BLEND_OP_GREEN_EXT:
+      return PIPE_ADVANCED_BLEND_GREEN;
+   case VK_BLEND_OP_BLUE_EXT:
+      return PIPE_ADVANCED_BLEND_BLUE;
+   default:
+      UNREACHABLE("Invalid advanced blend op");
+   }
+}
+
+enum pipe_blend_overlap_mode
+vk_blend_overlap_to_pipe(VkBlendOverlapEXT in)
+{
+   switch (in) {
+   case VK_BLEND_OVERLAP_UNCORRELATED_EXT:
+      return PIPE_BLEND_OVERLAP_UNCORRELATED;
+   case VK_BLEND_OVERLAP_DISJOINT_EXT:
+      return PIPE_BLEND_OVERLAP_DISJOINT;
+   case VK_BLEND_OVERLAP_CONJOINT_EXT:
+      return PIPE_BLEND_OVERLAP_CONJOINT;
+   default:
+      UNREACHABLE("Invalid blend overlap");
+   }
+}

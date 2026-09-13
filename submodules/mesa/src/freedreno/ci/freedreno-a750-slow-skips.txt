@@ -1,0 +1,8 @@
+# Note: skips lists for CI are just a list of lines that, when
+# non-zero-length and not starting with '#', will regex match to
+# delete lines from the test list.  Be careful.
+
+# Slow tests that aren't very useful coverage, but pass otherwise.  94% CPU
+# used in ir3 create_variant, but no single pass there dominating its time.
+# Just use the scalar/vec2 cases, which are fast enough for CI.
+dEQP-VK.subgroups.clustered.*.subgroupclustered(min|max|mul|and|or|xor|add)_[iu]64vec[34].*

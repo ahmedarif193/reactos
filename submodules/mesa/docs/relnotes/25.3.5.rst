@@ -1,0 +1,235 @@
+Mesa 25.3.5 Release Notes / 2026-02-06
+======================================
+
+Mesa 25.3.5 is a bug fix release which fixes bugs found since the 25.3.4 release.
+
+Mesa 25.3.5 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 25.3.5 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+   SHA256: be472413475082df945e0f9be34f5af008baa03eb357e067ce5a611a2d44c44b  mesa-25.3.5.tar.xz
+   SHA512: 3db3d3c98bf476a5827705b82733d9964ec511b30882ec7e9edaddc65a5dea5e6bfb33bdcd4f97752d7a3ae9e306e8703982686cbd869567b4194decdb2f5a89  mesa-25.3.5.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- Transcoding mpeg2video with ffmpeg h264_vulkan on Intel cause Conversion failed!
+- static linking regression since !37495 - spirv-tools shared library required at runtime if exists at build time
+- tu: GPU faults during LRZ clears on unallocated transient attachments in gmem mode
+- Shader inputs/outputs for vertex/pixel shaders that have the integer (int) type are broken on RDNA 3 and 4 graphics cards
+- ACO: assertion in insert_exec_mask()
+- [radv] Regression causes glitches in Strange Brigade (Vulkan renderer)
+- radv, regression : Crysis 2 Remastered raytracing blocky reflections
+
+
+Changes
+-------
+
+Benjamin Cheng (1):
+
+- radv/video: Use a more reliable way of computing tile sizes
+
+Danylo Piliaiev (1):
+
+- tu: Fix typo in min bounds calculation of FDM scissors
+
+David Rosca (1):
+
+- radv/video: Fix maxActiveReferencePictures for H265 decode
+
+Dylan Baker (20):
+
+- docs: Add SHA sums for 25.3.4
+- .pick_status.json: Update to 88ae2365b26cca549cfce5cfd5cec0b92af6c50c
+- bin/pick: When the main widget is replaced, trigger a redraw
+- .pick_status.json: Mark 0da350f8797b637ff7f073b4134cdbe75841b58a as backported
+- .pick_status.json: Mark 2a35d624b22d12b2b71b3723666fc5a79d0229d8 as backported
+- .pick_status.json: Update to 4512d815590ffd4d4cc12a2edf6f0aa964b783cd
+- .pick_status.json: Update to 50a3699552e3ba3efbf7fca301a92f5fa470fc3f
+- .pick_status.json: Update to 237e2d7b32c84523df48a8539cbc72cc49bcacfa
+- .pick_status.json: Update to 29e7a1fff9a1db14494fa64b6f38695b2a02a2d8
+- .pick_status.json: Update to 693a3e1c50efa35f53be3cdfee92513b71fd78d3
+- .pick_status.json: Update to e8fc50ef4678c8483e1231f8578391389c704c5f
+- .pick_status.json: Mark 9d027fc870fd6e0959f1cc99557c648c12c6b8bf as denominated
+- .pick_status.json: Mark a3ec5ece8b89694554a23bd0653edea35561481d as denominated
+- .pick_status.json: Mark 15328a5ef35593795f2b9939ed279a39272b8704 as denominated
+- .pick_status.json: Mark 62254ab0be3ba29dbf6d5b60367ba2910532f405 as denominated
+- .pick_status.json: Mark ad23e02a2809c33693c358336dbc9459cbab831f as denominated
+- .pick_status.json: Mark 0d7705c2062af89bee09d0407f6941e6c54eb2d1 as denominated
+- .pick_status.json: Mark 3275be503c39d3f572cce8ed52fe648751041084 as denominated
+- .pick_status.json: Update to 248b8184078c6df2c00c987e499348532b52a6e5
+- CI: update zink on tu-a750 expectations
+
+Ella Stanforth (1):
+
+- pvr/csbgen: fix packing multiple addresses
+
+Emma Anholt (2):
+
+- lima/ci: Remove erroneous skips.
+- ci/tu: Clear stale xfails from the nightlies.
+
+Eric Engestrom (2):
+
+- pick-ui: update for python 3.14 support
+- Revert "meson: static link spirv-tools for darwin"
+
+Faith Ekstrand (2):
+
+- nvk: Enable ZPASS_PIXEL_COUNT in draw_state_init()
+- nir: panfrost tile loads are always divergent
+
+Georg Lehmann (4):
+
+- aco: fix demote in header of single iteration loop
+- aco: add a helper function for non supported DPP opcodes
+- aco: disable DPP for rev integer subs and shifts
+- nir/opt_algebraic: use correct syntax to create exact fsat
+
+Hyunjun Ko (3):
+
+- anv/video: fix a typo in Vulkan AV1 decoding.
+- anv/video: Compute AV1 tile positions internally
+- anv/video: disable encoder on untested platforms
+
+Iván Briano (1):
+
+- brw: fix local_invocation_index with quad derivaties on mesh/task shaders
+
+Juan A. Suarez Romero (1):
+
+- broadcom/cle: bump up gen version for v3d
+
+Karol Herbst (5):
+
+- clc: reorder headers to fix compilation errors due to UNUSED
+- clc: support some atomic and generic address space features
+- clc: enable generic address space and seq_cst and device scope atomic features
+- nir: fix nir_fixup_is_exported for LLVM-22
+- clc: fix compile compatability with LLVM-22
+
+Kitlith (1):
+
+- panvk: Free drm device in can_present_on_device
+
+Konstantin Seurer (3):
+
+- vulkan: Handle inactive primitives with LBVH builds
+- vulkan: Limit the number of LBVH invocations
+- radv/rra: Fix nullptr dereference
+
+Lionel Landwerlin (1):
+
+- vulkan/wsi/direct: remove VkDisplay created from GetDrmDisplayEXT on ReleaseDisplayEXT
+
+Loïc Molinari (1):
+
+- panfrost: Fix clean_pixel_write_enable forced check for AFBC
+
+Lucas Stach (1):
+
+- etnaviv: idle the pipe before flushing texture caches
+
+Mel Henning (3):
+
+- nvk: Ignore meta ops in occlusion queries
+- nvk: Initialize SET_ALPHA_TO_COVERAGE_OVERRIDE
+- nvk: Report additional host_image_copy layouts
+
+Mike Blumenkrantz (2):
+
+- ntv: emit ViewIndex with flat for fragment stage
+- ntv: emit demote extension/capability when emitting demote
+
+Nanley Chery (11):
+
+- intel/isl: Fix miptail selection for compressed textures
+- blorp: Fix Tile64 clear redescription assertion
+- intel/isl: Fix QPitch of arrayed MCS
+- iris: Set missing flags on clear color changes
+- iris: Use the CLEAR state on Xe2+ for MCS
+- anv: Update predicated resolve documentation
+- anv: Fix the fast clear type for FCV writes
+- anv: Don't return the Xe2+ fast-clear type early
+- anv: Fix clear state of WSI blit sources during presentation
+- anv: Treat non-WSI PRESENT_SRC as TRANSFER_SRC
+- anv: Don't set the display flag on WSI blit sources
+
+Nick Hamilton (1):
+
+- pco: Fix for atomic operations on an image buffer
+
+Olivia Lee (1):
+
+- hk: fix hk_passthrough_gs_key size computation
+
+Patrick Lerda (5):
+
+- r600: fix cayman msaa shading behavior
+- r600: make vertex r10g10b10a2_sscaled conformant on palm and beyond
+- r600: fix rv770 clamp to max_texel_buffer_elements
+- r600: update cubearray imagesize calculation
+- r600: improve vs_as_ls switch reliability
+
+Rhys Perry (1):
+
+- radv: fix when incomplete rt pipeline libraries are loaded from cache
+
+Rob Clark (1):
+
+- freedreno: Force single wavesize if double threadsize is unsupported
+
+Sagar Ghuge (1):
+
+- anv/rt: Drop atomic operations on opacity flags
+
+Samuel Pitoiset (7):
+
+- radv: fix applying radv_ssbo_non_uniform=true for Crysis 2/3 remastered
+- radv: add a workaround for a synchronization bug in Strange Brigade Vulkan
+- radv: zero-initialize image view objects
+- radv/meta: fix layered depth stencil resolves with compute
+- radv: fix tracking of pipelines used in secondaries
+- radv: disable unordered submits when SQTT queue events are enabled
+- radv: emit pending flushes after late decompressions with fbfetch
+
+Silvio Vilerino (1):
+
+- d3d12: Add missing using Microsoft::WRL:ComPtr in d3d12_context_common
+
+Tomeu Vizoso (1):
+
+- dril: don't build a rocket_dri.so
+
+Valentine Burley (2):
+
+- tu: Handle VkDrmFormatModifierPropertiesList2EXT
+- tu: Fix memory leak of patchpoints_ctx in dynamic rendering
+
+Zan Dobersek (2):
+
+- tu: allocate transient attachments used for LRZ
+- tu: handle DS_DEPTH_BOUNDS_TEST_BOUNDS state under TU_DYNAMIC_STATE_RB_DEPTH_CNTL
+
+jaap aarts (1):
+
+- radv/sqtt: Prevent concurrent submit when sqtt is enabled
