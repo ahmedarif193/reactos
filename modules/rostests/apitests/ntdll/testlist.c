@@ -79,6 +79,7 @@ extern void func_NtQuerySystemInformation(void);
 extern void func_NtQueryValueKey(void);
 extern void func_NtQueryVolumeInformationFile(void);
 extern void func_NtReadFile(void);
+extern void func_NtReadFileAsync(void);
 extern void func_NtSaveKey(void);
 extern void func_NtSetDefaultLocale(void);
 extern void func_NtSetInformationFile(void);
@@ -233,6 +234,7 @@ const struct test winetest_testlist[] =
     { "NtQueryValueKey",                func_NtQueryValueKey },
     { "NtQueryVolumeInformationFile",   func_NtQueryVolumeInformationFile },
     { "NtReadFile",                     func_NtReadFile },
+    { "NtReadFileAsync",                func_NtReadFileAsync },
     { "NtSaveKey",                      func_NtSaveKey},
     { "NtSetDefaultLocale",             func_NtSetDefaultLocale },
     { "NtSetInformationFile",           func_NtSetInformationFile },

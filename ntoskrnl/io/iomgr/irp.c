@@ -348,7 +348,13 @@ IopCompleteRequest(IN PKAPC Apc,
             _SEH2_TRY
             {
                 /*  Save the IOSB Information */
-                *Irp->UserIosb = Irp->IoStatus;
+                IopWriteIoStatusBlock(Irp->UserIosb,
+                                      &Irp->IoStatus,
+                                      !(Irp->Flags & (IRP_SYNCHRONOUS_API |
+                                                      IRP_CREATE_OPERATION |
+                                                      IRP_PAGING_IO |
+                                                      IRP_CLOSE_OPERATION)) &&
+                                      IopIs32BitFileIo(FileObject, Irp->RequestorMode));
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {

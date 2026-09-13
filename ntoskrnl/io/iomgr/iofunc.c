@@ -58,6 +58,39 @@ volatile LONG IoPageReadNonPagefileIrpAllocationFailure = 0;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+static
+NTSTATUS
+IopCaptureAsyncIoStatusBlock(IN PFILE_OBJECT FileObject,
+                             IN KPROCESSOR_MODE PreviousMode,
+                             IN OUT PIO_STATUS_BLOCK *IoStatusBlock)
+{
+#ifdef _WIN64
+    if (IopIs32BitFileIo(FileObject, PreviousMode))
+    {
+        _SEH2_TRY
+        {
+            /* WoW64 passes the persistent 32-bit destination in Pointer.
+             * The enclosing 64-bit status block is only a syscall temporary. */
+            PIO_STATUS_BLOCK32 IoStatusBlock32 = (*IoStatusBlock)->Pointer;
+            ProbeForWrite(IoStatusBlock32,
+                          sizeof(*IoStatusBlock32),
+                          TYPE_ALIGNMENT(IO_STATUS_BLOCK32));
+            *IoStatusBlock = (PIO_STATUS_BLOCK)IoStatusBlock32;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+#else
+    UNREFERENCED_PARAMETER(FileObject);
+    UNREFERENCED_PARAMETER(PreviousMode);
+    UNREFERENCED_PARAMETER(IoStatusBlock);
+#endif
+    return STATUS_SUCCESS;
+}
+
 VOID
 NTAPI
 IopCleanupAfterException(IN PFILE_OBJECT FileObject,
@@ -323,6 +356,13 @@ IopDeviceFsIoControl(IN HANDLE DeviceHandle,
                                        &HandleInformation);
     if (!NT_SUCCESS(Status)) return Status;
 
+    Status = IopCaptureAsyncIoStatusBlock(FileObject, PreviousMode, &IoStatusBlock);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(FileObject);
+        return Status;
+    }
+
     /* Can't use an I/O completion port and an APC at the same time */
     if ((FileObject->CompletionContext) && (UserApcRoutine))
     {
@@ -454,7 +494,9 @@ IopDeviceFsIoControl(IN HANDLE DeviceHandle,
                 /* Write the IOSB back */
                 _SEH2_TRY
                 {
-                    *IoStatusBlock = KernelIosb;
+                    IopWriteIoStatusBlock(IoStatusBlock,
+                                          &KernelIosb,
+                                          IopIs32BitFileIo(FileObject, PreviousMode));
 
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -1791,6 +1833,13 @@ IopNotifyChangeDirectoryFile(IN HANDLE FileHandle,
                                        NULL);
     if (!NT_SUCCESS(Status)) return Status;
 
+    Status = IopCaptureAsyncIoStatusBlock(FileObject, PreviousMode, &IoStatusBlock);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(FileObject);
+        return Status;
+    }
+
     /* Can't use an I/O completion port and an APC at the same time */
     if ((FileObject->CompletionContext) && (ApcRoutine))
     {
@@ -2027,6 +2076,13 @@ NtLockFile(IN HANDLE FileHandle,
         CapturedLength = *Length;
     }
 
+    Status = IopCaptureAsyncIoStatusBlock(FileObject, PreviousMode, &IoStatusBlock);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(FileObject);
+        return Status;
+    }
+
     /* Check if we have an event handle */
     if (EventHandle)
     {
@@ -2063,7 +2119,9 @@ NtLockFile(IN HANDLE FileHandle,
             /* Write the IOSB back */
             _SEH2_TRY
             {
-                *IoStatusBlock = KernelIosb;
+                IopWriteIoStatusBlock(IoStatusBlock,
+                                      &KernelIosb,
+                                      IopIs32BitFileIo(FileObject, PreviousMode));
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -2286,6 +2344,14 @@ IopQueryDirectoryFile(IN HANDLE FileHandle,
     if (!NT_SUCCESS(Status))
     {
         /* Fail */
+        if (AuxBuffer) ExFreePoolWithTag(AuxBuffer, TAG_IOBUF);
+        return Status;
+    }
+
+    Status = IopCaptureAsyncIoStatusBlock(FileObject, PreviousMode, &IoStatusBlock);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(FileObject);
         if (AuxBuffer) ExFreePoolWithTag(AuxBuffer, TAG_IOBUF);
         return Status;
     }
@@ -3427,6 +3493,13 @@ NtReadFile(IN HANDLE FileHandle,
         /* Kernel mode: capture directly */
         if (ByteOffset) CapturedByteOffset = *ByteOffset;
         if (Key) CapturedKey = *Key;
+    }
+
+    Status = IopCaptureAsyncIoStatusBlock(FileObject, PreviousMode, &IoStatusBlock);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(FileObject);
+        return Status;
     }
 
     /* Check for invalid offset */
@@ -4638,6 +4711,13 @@ NtWriteFile(IN HANDLE FileHandle,
         /* Kernel mode: capture directly */
         if (ByteOffset) CapturedByteOffset = *ByteOffset;
         if (Key) CapturedKey = *Key;
+    }
+
+    Status = IopCaptureAsyncIoStatusBlock(FileObject, PreviousMode, &IoStatusBlock);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(FileObject);
+        return Status;
     }
 
     /* Check for invalid offset */

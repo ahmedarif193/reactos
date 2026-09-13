@@ -44,6 +44,112 @@ SizeOfMdl(VOID)
     return Is64BitSystem() ? 48 : 28;
 }
 
+START_TEST(NtReadFileAsync)
+{
+    static const CHAR Data[] = "0123456789abcdef";
+    NTSTATUS (NTAPI *CancelIoFileEx)(HANDLE, PIO_STATUS_BLOCK, PIO_STATUS_BLOCK);
+    WCHAR PipeName[80];
+    CHAR Buffer[sizeof(Data) - 1];
+    struct
+    {
+        IO_STATUS_BLOCK IoStatus;
+        ULONG Guard[2];
+    } Result;
+    IO_STATUS_BLOCK CancelStatus;
+    HANDLE Server, Client = INVALID_HANDLE_VALUE, Event = NULL;
+    NTSTATUS Status, CancelResult;
+    DWORD Bytes = 0, Wait;
+    BOOL Success;
+
+    _snwprintf(PipeName, _countof(PipeName),
+               L"\\\\.\\pipe\\apitest-iosb-%lu", GetCurrentProcessId());
+    Server = CreateNamedPipeW(PipeName,
+                              PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                              PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                              1, 4096, 4096, 1000, NULL);
+    ok(Server != INVALID_HANDLE_VALUE, "CreateNamedPipe failed: %lu\n", GetLastError());
+    if (Server == INVALID_HANDLE_VALUE) return;
+
+    Client = CreateFileW(PipeName, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    ok(Client != INVALID_HANDLE_VALUE, "CreateFile failed: %lu\n", GetLastError());
+    if (Client == INVALID_HANDLE_VALUE) goto Cleanup;
+
+    Event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    ok(Event != NULL, "CreateEvent failed: %lu\n", GetLastError());
+    if (!Event) goto Cleanup;
+
+    /* The write occurs after NtReadFile returns, so the thunk's temporary
+     * native IOSB cannot serve as the destination of a pending WoW64 read. */
+    memset(&Result, 0x55, sizeof(Result));
+    memset(Buffer, 0xcc, sizeof(Buffer));
+    Status = NtReadFile(Server, Event, NULL, NULL, &Result.IoStatus,
+                        Buffer, sizeof(Buffer), NULL, NULL);
+    ok_hex(Status, STATUS_PENDING);
+    ok_hex(Result.IoStatus.Status, 0x55555555);
+    ok_eq_ulongptr(Result.IoStatus.Information, ~(ULONG_PTR)0 / 3);
+
+    Success = WriteFile(Client, Data, sizeof(Buffer), &Bytes, NULL);
+    ok(Success, "WriteFile failed: %lu\n", GetLastError());
+    ok_eq_ulong(Bytes, sizeof(Buffer));
+    Wait = WaitForSingleObject(Event, 5000);
+    ok_eq_ulong(Wait, WAIT_OBJECT_0);
+    if (Wait != WAIT_OBJECT_0) goto Cleanup;
+    ok_hex(Result.IoStatus.Status, STATUS_SUCCESS);
+    ok_eq_ulongptr(Result.IoStatus.Information, sizeof(Buffer));
+    ok(!memcmp(Buffer, Data, sizeof(Buffer)), "Pending read returned wrong data\n");
+    ok_hex(Result.Guard[0], 0x55555555);
+    ok_hex(Result.Guard[1], 0x55555555);
+
+    /* An asynchronous handle uses the same IOSB layout when data is already
+     * queued and the read completes before returning from the system call. */
+    Success = WriteFile(Client, Data, sizeof(Buffer), &Bytes, NULL);
+    ok(Success, "WriteFile failed: %lu\n", GetLastError());
+    ResetEvent(Event);
+    memset(&Result, 0x55, sizeof(Result));
+    memset(Buffer, 0xcc, sizeof(Buffer));
+    Status = NtReadFile(Server, Event, NULL, NULL, &Result.IoStatus,
+                        Buffer, sizeof(Buffer), NULL, NULL);
+    ok_hex(Status, STATUS_SUCCESS);
+    Wait = WaitForSingleObject(Event, 5000);
+    ok_eq_ulong(Wait, WAIT_OBJECT_0);
+    if (Wait != WAIT_OBJECT_0) goto Cleanup;
+    ok_hex(Result.IoStatus.Status, STATUS_SUCCESS);
+    ok_eq_ulongptr(Result.IoStatus.Information, sizeof(Buffer));
+    ok(!memcmp(Buffer, Data, sizeof(Buffer)), "Immediate read returned wrong data\n");
+    ok_hex(Result.Guard[0], 0x55555555);
+    ok_hex(Result.Guard[1], 0x55555555);
+
+    CancelIoFileEx = (void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtCancelIoFileEx");
+    if (!CancelIoFileEx)
+    {
+        skip("NtCancelIoFileEx is unavailable\n");
+        goto Cleanup;
+    }
+
+    /* Cancellation must find the request by the original caller's IOSB. */
+    ResetEvent(Event);
+    memset(&Result, 0x55, sizeof(Result));
+    Status = NtReadFile(Server, Event, NULL, NULL, &Result.IoStatus,
+                        Buffer, sizeof(Buffer), NULL, NULL);
+    ok_hex(Status, STATUS_PENDING);
+    CancelResult = CancelIoFileEx(Server, &Result.IoStatus, &CancelStatus);
+    ok_hex(CancelResult, STATUS_SUCCESS);
+    if (!NT_SUCCESS(CancelResult))
+        WriteFile(Client, Data, sizeof(Buffer), &Bytes, NULL);
+    Wait = WaitForSingleObject(Event, 5000);
+    ok_eq_ulong(Wait, WAIT_OBJECT_0);
+    if (Wait != WAIT_OBJECT_0) goto Cleanup;
+    ok_hex(Result.IoStatus.Status, STATUS_CANCELLED);
+    ok_eq_ulongptr(Result.IoStatus.Information, 0);
+    ok_hex(Result.Guard[0], 0x55555555);
+    ok_hex(Result.Guard[1], 0x55555555);
+
+Cleanup:
+    CloseHandle(Server);
+    if (Client != INVALID_HANDLE_VALUE) CloseHandle(Client);
+    if (Event) CloseHandle(Event);
+}
+
 START_TEST(NtReadFile)
 {
     NTSTATUS Status;
