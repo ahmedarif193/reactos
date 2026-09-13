@@ -3,10 +3,16 @@ set(N64EMU_DIR "" CACHE PATH "Emulator directory deployed to reactos/n64emu in e
 set(N64EMU_EXE "" CACHE STRING "Emulator executable inside N64EMU_DIR started at logon")
 set(N64EMU_ARGS "" CACHE STRING "Extra arguments placed before the ROM path")
 set(N64EMU_ROM "" CACHE FILEPATH "N64 ROM deployed to reactos/n64emu/roms and passed to the emulator")
+option(N64EMU_SYSTEM_OPENGL "Use the system OpenGL driver instead of the bundled software renderer" OFF)
 
 if(N64EMU_DIR AND IS_DIRECTORY "${N64EMU_DIR}")
     file(GLOB_RECURSE _n64emu_files RELATIVE "${N64EMU_DIR}" "${N64EMU_DIR}/*")
     list(FILTER _n64emu_files EXCLUDE REGEX "^Config/(Cheats|Enhancements)/")
+    if(N64EMU_SYSTEM_OPENGL)
+        # GDI also loads OpenGL by basename. Do not mix its bundled provider
+        # with SDL's explicitly selected system provider in the same process.
+        list(FILTER _n64emu_files EXCLUDE REGEX "^opengl32[.]dll$")
+    endif()
     foreach(_file ${_n64emu_files})
         get_filename_component(_subdir "${_file}" DIRECTORY)
         get_filename_component(_name "${_file}" NAME)
