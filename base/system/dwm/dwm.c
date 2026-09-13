@@ -3493,6 +3493,9 @@ DwmComposeLoop(HANDLE hStopEvent)
             continue;
         }
 
+        wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
+        DwmDxSweepSurfaces(wins, hdr->Count);
+
         if ((LONG)hdr->ScreenW != primW || (LONG)hdr->ScreenH != primH)
         {
             LONG newPrimW = (LONG)hdr->ScreenW;
@@ -3559,7 +3562,6 @@ DwmComposeLoop(HANDLE hStopEvent)
             if (pt < 0) pt = 0;
             if (pr > g_W) pr = g_W;
             if (pb > g_H) pb = g_H;
-            wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
             for (i = 0; i < hdr->Count; ++i)
                 DwmSettingsApplyWindow(&Settings, &wins[i]);
 
@@ -3713,10 +3715,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                         DptEnd(&g_DwmPresentTrace, FrameTrace, TRUE, 0);
                         ++g_frameSeq;
                         if ((g_frameSeq & 255) == 0)
-                        {
                             DwmSweepViews();
-                            DwmDxSweepSurfaces(g_frameSeq);
-                        }
                         forceFull = FALSE;
                         continue;
                     }
@@ -3932,10 +3931,7 @@ DwmComposeLoop(HANDLE hStopEvent)
 
         g_frameSeq++;
         if ((g_frameSeq & 255) == 0)
-        {
             DwmSweepViews();
-            DwmDxSweepSurfaces(g_frameSeq);
-        }
     }
 
     DwmSetTimerPrecision(FALSE);

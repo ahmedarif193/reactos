@@ -176,7 +176,7 @@ DwmDxGetDevice(const LUID *Luid, ULONG *DeviceIndex)
     return STATUS_SUCCESS;
 }
 
-static VOID
+static BOOL
 DwmDxDropView(DWM_DX_VIEW *View)
 {
     if (View->hResource != 0 &&
@@ -184,15 +184,28 @@ DwmDxDropView(DWM_DX_VIEW *View)
         g_Devices[View->DeviceIndex].hDevice != 0)
     {
         D3DKMT_DESTROYALLOCATION Destroy;
+        NTSTATUS Status;
 
         RtlZeroMemory(&Destroy, sizeof(Destroy));
         Destroy.hDevice = g_Devices[View->DeviceIndex].hDevice;
         Destroy.hResource = View->hResource;
-        (void)D3DKMTDestroyAllocation(&Destroy);
+        Status = D3DKMTDestroyAllocation(&Destroy);
+        if (!NT_SUCCESS(Status) &&
+            Status != STATUS_INVALID_PARAMETER &&
+            Status != STATUS_INVALID_HANDLE &&
+            Status != STATUS_DEVICE_REMOVED &&
+            Status != STATUS_GRAPHICS_ALLOCATION_CLOSED &&
+            Status != STATUS_GRAPHICS_INVALID_ALLOCATION_HANDLE)
+        {
+            OutputDebugStringA(
+                "DWM: cached shared surface close failed; retrying\n");
+            return FALSE;
+        }
     }
     if (View->Snapshot != NULL)
         HeapFree(GetProcessHeap(), 0, View->Snapshot);
     RtlZeroMemory(View, sizeof(*View));
+    return TRUE;
 }
 
 static BOOL
@@ -389,8 +402,8 @@ DwmDxGetSnapshot(const DWM_DX_SOURCE *Source)
                (FreeView != NULL ? FreeView : Oldest);
         if (View == NULL)
             return NULL;
-        if (View->GlobalShare != 0)
-            DwmDxDropView(View);
+        if (View->GlobalShare != 0 && !DwmDxDropView(View))
+            return NULL;
         if (!DwmDxOpenView(Source, View))
             return NULL;
     }
@@ -536,18 +549,47 @@ DwmDxAcknowledgeSurface(const DWM_WIN *Window)
 }
 
 void
-DwmDxSweepSurfaces(ULONG FrameSequence)
+DwmDxSweepSurfaces(const DWM_WIN *Windows, ULONG Count)
 {
-    ULONG Index;
+    ULONG Index, WindowIndex;
 
-    g_CurrentFrame = FrameSequence;
+    if ((Count != 0 && Windows == NULL) || Count > DWM_MAX_WINDOWS)
+        return;
+
+    ++g_CurrentFrame;
     for (Index = 0; Index < DWM_DX_MAX_VIEWS; ++Index)
     {
-        if (g_Views[Index].GlobalShare != 0 &&
-            FrameSequence - g_Views[Index].LastSeenFrame > 256)
+        DWM_DX_VIEW *View = &g_Views[Index];
+        BOOL Present = FALSE;
+
+        if (View->GlobalShare == 0)
+            continue;
+
+        for (WindowIndex = 0; WindowIndex < Count; ++WindowIndex)
         {
-            DwmDxDropView(&g_Views[Index]);
+            const DWM_WIN *Window = &Windows[WindowIndex];
+
+            if (Window->SurfaceId != View->SurfaceId)
+                continue;
+
+            if (View->Redirection)
+            {
+                Present =
+                    Window->BaseGlobalShare == View->GlobalShare &&
+                    Window->BaseGeneration == View->Generation;
+            }
+            else
+            {
+                Present =
+                    Window->DxGlobalShare == View->GlobalShare &&
+                    Window->DxGeneration == View->Generation;
+            }
+            if (Present)
+                break;
         }
+
+        if (!Present)
+            DwmDxDropView(View);
     }
 }
 
