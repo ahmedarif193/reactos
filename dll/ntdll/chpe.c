@@ -99,6 +99,7 @@ typedef struct _CHPE_DISPATCH_TABLE
     PVOID RetToEntryThunk;
     PVOID ExitToX64;
     PVOID BeginSimulation;
+    PVOID BeginSimulationFromContext;
 } CHPE_DISPATCH_TABLE, *PCHPE_DISPATCH_TABLE;
 
 typedef DECLSPEC_NORETURN VOID (NTAPI *PCHPE_BEGIN_SIMULATION)(VOID);
@@ -1455,6 +1456,7 @@ ChpepLoadEmulator(VOID)
     ANSI_STRING RetToEntryName = RTL_CONSTANT_STRING("RetToEntryThunk");
     ANSI_STRING ExitToX64Name = RTL_CONSTANT_STRING("ExitToX64");
     ANSI_STRING BeginSimName = RTL_CONSTANT_STRING("BeginSimulation");
+    ANSI_STRING BeginFullSimName = RTL_CONSTANT_STRING("BeginSimulationFromContext");
     NTSTATUS Status;
     UNICODE_STRING DllName;
     UNICODE_STRING BridgeDllName = RTL_CONSTANT_STRING(L"ntdll_chpe.dll");
@@ -1520,6 +1522,9 @@ ChpepLoadEmulator(VOID)
     if (!NT_SUCCESS(Status)) goto Failure;
     Status = LdrGetProcedureAddress(Base, &BeginSimName, 0, (PVOID*)&ChpeDispatchTable.BeginSimulation);
     if (!NT_SUCCESS(Status)) goto Failure;
+
+    /* Optional extension: older emulators only accept ARM64-converted flags. */
+    LdrGetProcedureAddress(Base, &BeginFullSimName, 0, &ChpeDispatchTable.BeginSimulationFromContext);
 
 #undef CHPE_GET_PROC
 
@@ -2207,9 +2212,10 @@ ChpeCanContinueToGuest(VOID);
 DECLSPEC_NORETURN
 VOID
 NTAPI
-ChpeContinueToGuest(PVOID Amd64Context)
+ChpeContinueToGuestEx(PVOID Amd64Context, BOOLEAN FullContext)
 {
     PCHPE_V2_CPU_AREA_INFO CpuArea = ChpepGetCurrentCpuArea();
+    PVOID BeginSimulation;
 
     if (!ChpeCanContinueToGuest())
         RtlRaiseStatus(STATUS_NOT_SUPPORTED);
@@ -2217,8 +2223,18 @@ ChpeContinueToGuest(PVOID Amd64Context)
     RtlCopyMemory(CpuArea->ContextAmd64, Amd64Context, CHPE_CONTEXT_AMD64_LENGTH);
     CpuArea->InSimulation = TRUE;
 
-    ((PCHPE_BEGIN_SIMULATION)ChpeDispatchTable.BeginSimulation)();
+    BeginSimulation = FullContext && ChpeDispatchTable.BeginSimulationFromContext ?
+                      ChpeDispatchTable.BeginSimulationFromContext : ChpeDispatchTable.BeginSimulation;
+    ((PCHPE_BEGIN_SIMULATION)BeginSimulation)();
     RtlRaiseStatus(STATUS_ILLEGAL_INSTRUCTION);
+}
+
+DECLSPEC_NORETURN
+VOID
+NTAPI
+ChpeContinueToGuest(PVOID Amd64Context)
+{
+    ChpeContinueToGuestEx(Amd64Context, TRUE);
 }
 
 DECLSPEC_NORETURN

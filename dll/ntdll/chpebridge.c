@@ -90,6 +90,7 @@ DECLSPEC_NORETURN VOID NTAPI ChpeRtlRaiseStatus(NTSTATUS Status);
 ULONG CDECL ChpeDbgPrint(PCCH Format, ...);
 BOOLEAN NTAPI ChpeCanContinueToGuest(VOID);
 DECLSPEC_NORETURN VOID NTAPI ChpeContinueToGuest(PVOID Amd64Context);
+DECLSPEC_NORETURN VOID NTAPI ChpeContinueToGuestEx(PVOID Amd64Context, BOOLEAN FullContext);
 BOOLEAN NTAPI RtlIsEcCode(ULONG_PTR Address);
 
 typedef struct _CHPE_AMD64_SCOPE_TABLE
@@ -669,8 +670,8 @@ ChpeDispatchExceptionNative(PEXCEPTION_RECORD ExceptionRecord, PARM64_NT_CONTEXT
         return Status;
     }
 
-    if (!RtlIsEcCode(EcContext.Pc))
-        return ChpeNtContinue(&EcContext.AMD64_Context, FALSE);
+    if (!RtlIsEcCode(EcContext.Pc) && ChpeCanContinueToGuest())
+        ChpeContinueToGuestEx(&EcContext.AMD64_Context, FALSE);
 
     ChpepMergeContextX64ToArm64(NativeContext, &EcContext);
     return STATUS_SUCCESS;
@@ -1826,7 +1827,8 @@ ChpeEmulationDispatch(PCONTEXT ArmContext)
     ARM64EC_NT_CONTEXT EcContext;
 
     ChpepContextArm64ToX64(&EcContext, (const ARM64_NT_CONTEXT *)ArmContext);
-    ChpeContinueToGuest(&EcContext);
+    /* The kernel converted an ARM64 context, so only its NZCV and SS bits are real. */
+    ChpeContinueToGuestEx(&EcContext, FALSE);
 }
 
 NTSTATUS NTAPI
