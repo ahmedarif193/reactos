@@ -10,6 +10,135 @@
 
 #include "afd.h"
 
+#ifdef _WIN64
+typedef struct _AFD_WSABUF32
+{
+    ULONG len;
+    ULONG buf;
+} AFD_WSABUF32, *PAFD_WSABUF32;
+
+typedef struct _AFD_RECV_INFO32
+{
+    ULONG BufferArray;
+    ULONG BufferCount;
+    ULONG AfdFlags;
+    ULONG TdiFlags;
+} AFD_RECV_INFO32, *PAFD_RECV_INFO32;
+
+typedef struct _AFD_RECV_INFO_UDP32
+{
+    AFD_RECV_INFO32 Receive;
+    ULONG Address;
+    ULONG AddressLength;
+} AFD_RECV_INFO_UDP32, *PAFD_RECV_INFO_UDP32;
+
+typedef struct _AFD_SEND_INFO_UDP32
+{
+    ULONG BufferArray;
+    ULONG BufferCount;
+    ULONG AfdFlags;
+    struct
+    {
+        ULONG Handle;
+        ULONG RequestNotifyObject;
+        ULONG RequestContext;
+        LONG TdiStatus;
+        ULONG SendDatagramInformation;
+    } TdiRequest;
+    struct
+    {
+        LONG UserDataLength;
+        ULONG UserData;
+        LONG OptionsLength;
+        ULONG Options;
+        LONG RemoteAddressLength;
+        ULONG RemoteAddress;
+    } TdiConnection;
+} AFD_SEND_INFO_UDP32, *PAFD_SEND_INFO_UDP32;
+
+C_ASSERT(sizeof(AFD_WSABUF32) == 8);
+C_ASSERT(sizeof(AFD_RECV_INFO32) == 16);
+C_ASSERT(sizeof(AFD_RECV_INFO_UDP32) == 24);
+C_ASSERT(sizeof(AFD_SEND_INFO_UDP32) == 56);
+#endif
+
+static ULONG
+AfdTransferRequestSize(ULONG Code, BOOLEAN Is32Bit)
+{
+#ifndef _WIN64
+    UNREFERENCED_PARAMETER(Is32Bit);
+#endif
+    switch (Code)
+    {
+        case IOCTL_AFD_SEND:
+        case IOCTL_AFD_RECV:
+#ifdef _WIN64
+            if (Is32Bit) return sizeof(AFD_RECV_INFO32);
+#endif
+            return sizeof(AFD_RECV_INFO);
+        case IOCTL_AFD_RECV_DATAGRAM:
+#ifdef _WIN64
+            if (Is32Bit) return sizeof(AFD_RECV_INFO_UDP32);
+#endif
+            return sizeof(AFD_RECV_INFO_UDP);
+        case IOCTL_AFD_SEND_DATAGRAM:
+#ifdef _WIN64
+            if (Is32Bit) return sizeof(AFD_SEND_INFO_UDP32);
+#endif
+            return sizeof(AFD_SEND_INFO_UDP);
+        default:
+            return 0;
+    }
+}
+
+#ifdef _WIN64
+static VOID
+AfdCaptureTransferRequest32(ULONG Code, PVOID Destination, const VOID *Source)
+{
+    union
+    {
+        AFD_RECV_INFO_UDP32 Receive;
+        AFD_SEND_INFO_UDP32 Send;
+    } Captured;
+
+    RtlCopyMemory(&Captured, Source, AfdTransferRequestSize(Code, TRUE));
+    if (Code == IOCTL_AFD_SEND_DATAGRAM)
+    {
+        const AFD_SEND_INFO_UDP32 *Source32 = &Captured.Send;
+        PAFD_SEND_INFO_UDP Request = Destination;
+
+        RtlZeroMemory(Request, sizeof(*Request));
+        Request->BufferArray = ULongToPtr(Source32->BufferArray);
+        Request->BufferCount = Source32->BufferCount;
+        Request->AfdFlags = Source32->AfdFlags;
+        /* AFD consumes the embedded connection information, not TdiRequest. */
+        Request->TdiConnection.UserDataLength = Source32->TdiConnection.UserDataLength;
+        Request->TdiConnection.UserData = ULongToPtr(Source32->TdiConnection.UserData);
+        Request->TdiConnection.OptionsLength = Source32->TdiConnection.OptionsLength;
+        Request->TdiConnection.Options = ULongToPtr(Source32->TdiConnection.Options);
+        Request->TdiConnection.RemoteAddressLength = Source32->TdiConnection.RemoteAddressLength;
+        Request->TdiConnection.RemoteAddress = ULongToPtr(Source32->TdiConnection.RemoteAddress);
+    }
+    else
+    {
+        const AFD_RECV_INFO32 *Source32 = &Captured.Receive.Receive;
+        PAFD_RECV_INFO Request = Destination;
+
+        Request->BufferArray = ULongToPtr(Source32->BufferArray);
+        Request->BufferCount = Source32->BufferCount;
+        Request->AfdFlags = Source32->AfdFlags;
+        Request->TdiFlags = Source32->TdiFlags;
+        if (Code == IOCTL_AFD_RECV_DATAGRAM)
+        {
+            const AFD_RECV_INFO_UDP32 *Datagram32 = &Captured.Receive;
+            PAFD_RECV_INFO_UDP Datagram = Destination;
+            Datagram->Address = ULongToPtr(Datagram32->Address);
+            Datagram->AddressLength = ULongToPtr(Datagram32->AddressLength);
+        }
+    }
+}
+#endif
+
 PVOID GetLockedData(PIRP Irp, PIO_STACK_LOCATION IrpSp)
 {
     ASSERT(Irp->MdlAddress);
@@ -43,6 +172,8 @@ PVOID LockRequest( PIRP Irp,
                    BOOLEAN Output,
                    KPROCESSOR_MODE *LockMode) {
     BOOLEAN LockFailed = FALSE;
+    BOOLEAN Is32Bit = AfdIs32bitIoctl(Irp);
+    ULONG RequestSize, NativeSize, Length;
 
     ASSERT(!Irp->MdlAddress);
 
@@ -50,9 +181,11 @@ PVOID LockRequest( PIRP Irp,
     {
         case IRP_MJ_DEVICE_CONTROL:
         case IRP_MJ_INTERNAL_DEVICE_CONTROL:
-            ASSERT(IrpSp->Parameters.DeviceIoControl.Type3InputBuffer);
-            ASSERT(IrpSp->Parameters.DeviceIoControl.InputBufferLength);
-
+            Length = IrpSp->Parameters.DeviceIoControl.InputBufferLength;
+            RequestSize = AfdTransferRequestSize(IrpSp->Parameters.DeviceIoControl.IoControlCode, Is32Bit);
+            NativeSize = AfdTransferRequestSize(IrpSp->Parameters.DeviceIoControl.IoControlCode, FALSE);
+            if (!IrpSp->Parameters.DeviceIoControl.Type3InputBuffer || !Length || Length < RequestSize)
+                return NULL;
 
             Irp->MdlAddress =
             IoAllocateMdl( IrpSp->Parameters.DeviceIoControl.Type3InputBuffer,
@@ -86,9 +219,7 @@ PVOID LockRequest( PIRP Irp,
                 }
 
                 /* The allocated address goes in index 0 */
-                Irp->Tail.Overlay.DriverContext[0] = ExAllocatePoolWithTag(NonPagedPool,
-                                                                           MmGetMdlByteCount(Irp->MdlAddress),
-                                                                           TAG_AFD_DATA_BUFFER);
+                Irp->Tail.Overlay.DriverContext[0] = ExAllocatePoolWithTag(NonPagedPool, max(Length, NativeSize), TAG_AFD_DATA_BUFFER);
 
                 if (!Irp->Tail.Overlay.DriverContext[0])
                 {
@@ -102,6 +233,14 @@ PVOID LockRequest( PIRP Irp,
                 RtlCopyMemory(Irp->Tail.Overlay.DriverContext[0],
                               Irp->Tail.Overlay.DriverContext[1],
                               MmGetMdlByteCount(Irp->MdlAddress));
+
+#ifdef _WIN64
+                if (Is32Bit && RequestSize)
+                {
+                    ASSERT(!Output);
+                    AfdCaptureTransferRequest32(IrpSp->Parameters.DeviceIoControl.IoControlCode, Irp->Tail.Overlay.DriverContext[0], Irp->Tail.Overlay.DriverContext[1]);
+                }
+#endif
 
                 /* If we don't want a copy back, we zero the mapped address pointer */
                 if (!Output)
@@ -222,15 +361,23 @@ VOID UnlockRequest( PIRP Irp, PIO_STACK_LOCATION IrpSp )
 PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
                          PVOID AddressBuf, PINT AddressLen,
                          BOOLEAN Write, BOOLEAN LockAddress,
-                         KPROCESSOR_MODE LockMode) {
+                         KPROCESSOR_MODE LockMode, BOOLEAN Is32Bit) {
     UINT i;
     /* Copy the buffer array so we don't lose it */
     UINT Lock = LockAddress ? 2 : 0;
-    UINT Size = (sizeof(AFD_WSABUF) + sizeof(AFD_MAPBUF)) * (Count + Lock);
-    PAFD_WSABUF NewBuf = ExAllocatePoolWithTag(PagedPool, Size, TAG_AFD_WSA_BUFFER);
+    SIZE_T Size;
+    PAFD_WSABUF NewBuf;
     BOOLEAN LockFailed = FALSE;
     PAFD_MAPBUF MapBuf;
 
+#ifndef _WIN64
+    UNREFERENCED_PARAMETER(Is32Bit);
+#endif
+    if (!Count || Count > MAXULONG / (sizeof(AFD_WSABUF) + sizeof(AFD_MAPBUF)) - Lock)
+        return NULL;
+
+    Size = (sizeof(AFD_WSABUF) + sizeof(AFD_MAPBUF)) * (Count + Lock);
+    NewBuf = ExAllocatePoolWithTag(PagedPool, Size, TAG_AFD_WSA_BUFFER);
     AFD_DbgPrint(MID_TRACE,("Called(%p)\n", NewBuf));
 
     if( NewBuf ) {
@@ -239,7 +386,24 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
         MapBuf = (PAFD_MAPBUF)(NewBuf + Count + Lock);
 
         _SEH2_TRY {
-            RtlCopyMemory( NewBuf, Buf, sizeof(AFD_WSABUF) * Count );
+#ifdef _WIN64
+            if (Is32Bit)
+            {
+                PAFD_WSABUF32 Buffers32 = (PAFD_WSABUF32)Buf;
+                ProbeForRead(Buffers32, sizeof(*Buffers32) * Count, TYPE_ALIGNMENT(AFD_WSABUF32));
+                for (i = 0; i < Count; ++i)
+                {
+                    NewBuf[i].len = Buffers32[i].len;
+                    NewBuf[i].buf = ULongToPtr(Buffers32[i].buf);
+                }
+            }
+            else
+#endif
+            {
+                if (LockMode != KernelMode)
+                    ProbeForRead(Buf, sizeof(*Buf) * Count, TYPE_ALIGNMENT(AFD_WSABUF));
+                RtlCopyMemory(NewBuf, Buf, sizeof(*Buf) * Count);
+            }
             if( LockAddress ) {
                 if (AddressBuf && AddressLen) {
                     NewBuf[Count].buf = AddressBuf;

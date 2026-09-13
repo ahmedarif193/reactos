@@ -54,6 +54,19 @@
 #define TAG_AFD_TDI_CONNECTION_INFORMATION 'cTfA'
 #define TAG_AFD_WSA_BUFFER                 'bWfA'
 
+static __inline BOOLEAN
+AfdIs32bitIoctl(PIRP Irp)
+{
+#ifdef _WIN64
+    PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    return (IrpSp->MajorFunction == IRP_MJ_DEVICE_CONTROL ||
+            IrpSp->MajorFunction == IRP_MJ_INTERNAL_DEVICE_CONTROL) && IoIs32bitProcess(Irp);
+#else
+    UNREFERENCED_PARAMETER(Irp);
+    return FALSE;
+#endif
+}
+
 typedef struct IPADDR_ENTRY {
 	ULONG  Addr;
 	ULONG  Index;
@@ -298,9 +311,9 @@ NTSTATUS AfdAccept( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 /* lock.c */
 
 PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
-			 PVOID AddressBuf, PINT AddressLen,
-			 BOOLEAN Write, BOOLEAN LockAddress,
-             KPROCESSOR_MODE LockMode );
+                        PVOID AddressBuf, PINT AddressLen,
+                        BOOLEAN Write, BOOLEAN LockAddress,
+                        KPROCESSOR_MODE LockMode, BOOLEAN Is32Bit );
 VOID UnlockBuffers( PAFD_WSABUF Buf, UINT Count, BOOL Address );
 BOOLEAN SocketAcquireStateLock( PAFD_FCB FCB );
 NTSTATUS NTAPI UnlockAndMaybeComplete

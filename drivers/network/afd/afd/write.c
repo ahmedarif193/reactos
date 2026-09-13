@@ -430,10 +430,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
             return UnlockAndMaybeComplete( FCB, STATUS_NO_MEMORY, Irp, 0 );
 
         /* Must lock buffers before handing off user data */
-        SendReq->BufferArray = LockBuffers( SendReq->BufferArray,
-                                            SendReq->BufferCount,
-                                            NULL, NULL,
-                                            FALSE, FALSE, LockMode );
+        SendReq->BufferArray = LockBuffers(SendReq->BufferArray, SendReq->BufferCount, NULL, NULL, FALSE, FALSE, LockMode, AfdIs32bitIoctl(Irp));
 
         if( !SendReq->BufferArray ) {
             return UnlockAndMaybeComplete( FCB, STATUS_ACCESS_VIOLATION,
@@ -512,10 +509,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         return UnlockAndMaybeComplete
             ( FCB, STATUS_NO_MEMORY, Irp, 0 );
 
-    SendReq->BufferArray = LockBuffers( SendReq->BufferArray,
-                                        SendReq->BufferCount,
-                                        NULL, NULL,
-                                        FALSE, FALSE, LockMode );
+    SendReq->BufferArray = LockBuffers(SendReq->BufferArray, SendReq->BufferCount, NULL, NULL, FALSE, FALSE, LockMode, AfdIs32bitIoctl(Irp));
 
     if( !SendReq->BufferArray ) {
         return UnlockAndMaybeComplete( FCB, STATUS_ACCESS_VIOLATION,
@@ -725,10 +719,7 @@ AfdPacketSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
             ( FCB, STATUS_NO_MEMORY, Irp, 0 );
     }
 
-    SendReq->BufferArray = LockBuffers( SendReq->BufferArray,
-                                        SendReq->BufferCount,
-                                        NULL, NULL,
-                                        FALSE, FALSE, LockMode );
+    SendReq->BufferArray = LockBuffers(SendReq->BufferArray, SendReq->BufferCount, NULL, NULL, FALSE, FALSE, LockMode, AfdIs32bitIoctl(Irp));
 
     if( !SendReq->BufferArray )
         return UnlockAndMaybeComplete( FCB, STATUS_ACCESS_VIOLATION,
