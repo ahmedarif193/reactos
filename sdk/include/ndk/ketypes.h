@@ -3390,7 +3390,7 @@ typedef struct _KTHREAD
     ULONG64 NpxState;
 #endif
 #endif
-#if defined(__REACTOS__) && defined(_M_IX86)
+#if defined(__REACTOS__) && defined(_M_IX86) && (NTDDI_VERSION >= NTDDI_WIN10)
     /* ReactOS-private state absent from the public NT10 x86 layout. */
     KSPIN_LOCK ApcQueueLock;
     PKAPC_STATE ApcStatePointer[2];
