@@ -2466,6 +2466,7 @@ VidSchpKickEngine(
 {
     PDXGKRNL_ADAPTER Adapter = Engine != NULL ? Engine->Adapter : NULL;
     PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched = VidSchpScheduler(Adapter);
+    BOOLEAN DispatchedAny = FALSE;
 
     if (Adapter == NULL)
         return FALSE;
@@ -2489,18 +2490,18 @@ VidSchpKickEngine(
         if (Sched == NULL || Engine->Scheduler == NULL ||
             (VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerRunning &&
              VidSchpReadSchedulerState(Engine->Scheduler) != VidSchSchedulerSuspending))
-            return FALSE;
+            return DispatchedAny;
 
         RtlZeroMemory(&Claim, sizeof(Claim));
         Claim.Size = DXGMMS2_SCHEDULER_CLAIM_V1_SIZE;
         Claim.Version = DXGMMS2_SCHEDULER_VERSION_1;
         if (!NT_SUCCESS(Sched->ClaimNextPacket(Sched->SchedulerHandle, Engine->SchedulerOrdinal, &Claim)))
-            return FALSE;
+            return DispatchedAny;
         Packet = VidSchpPacketFromCookie(Claim.PacketCookie);
         if (Packet == NULL)
         {
             (VOID)Sched->CompleteDispatch(Sched->SchedulerHandle, Engine->SchedulerOrdinal, Claim.ClaimToken, STATUS_INVALID_PARAMETER);
-            return FALSE;
+            return DispatchedAny;
         }
         ClaimToken = Claim.ClaimToken;
         Packet->SchedulerClaimToken = ClaimToken;
@@ -2536,12 +2537,12 @@ VidSchpKickEngine(
             (VOID)Sched->CompleteDispatch(Sched->SchedulerHandle, Engine->SchedulerOrdinal, ClaimToken, STATUS_SUCCESS);
             DxgkContextOrderScheduleReferenced((PDXGKRNL_CONTEXT)Packet->Context);
             VidSchDereferenceContextOrderPacket(Packet);
-            return FALSE;
+            return DispatchedAny;
         }
         if (Packet->ContextOrderOperation == NULL && AuthorizedPacket != NULL)
         {
             (VOID)Sched->CompleteDispatch(Sched->SchedulerHandle, Engine->SchedulerOrdinal, ClaimToken, STATUS_SUCCESS);
-            return FALSE;
+            return DispatchedAny;
         }
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
         if (Packet->Device != NULL &&
@@ -2566,7 +2567,7 @@ VidSchpKickEngine(
                     Engine->SchedulerOrdinal,
                     ClaimToken,
                     STATUS_SUCCESS);
-                return FALSE;
+                return DispatchedAny;
             }
 
             Packet->SchedulerClaimToken = 0;
@@ -2725,7 +2726,16 @@ VidSchpKickEngine(
             continue;
         }
         if (KmdCallAcquired)
-            return TRUE;
+        {
+            /* Completion can run while the provider claim is still open.
+             * Its kick then finds the engine Submitting and cannot wake the
+             * next context. Once the claim is committed, reconsider the next
+             * FIFO entry here even if retirement already consumed this one.
+             * Continue iteratively for contextless packets; ordered work is
+             * handed back to its own worker by the authorization check. */
+            DispatchedAny = TRUE;
+            AuthorizedPacket = NULL;
+        }
         if (AuthorizedPacket != NULL)
             return TRUE;
     }
