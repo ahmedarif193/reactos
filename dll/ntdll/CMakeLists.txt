@@ -102,6 +102,9 @@ add_library(ntdll MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/ntdll.def)
 
 set_module_type(ntdll win32dll ENTRYPOINT 0)
+if(WOW64_I386_RUNTIME)
+    target_compile_definitions(ntdll PRIVATE WOW64_I386_RUNTIME)
+endif()
 #############################################
 ## HACK FOR MSVC COMPILATION WITH win32dll ##
 set_subsystem(ntdll console)

@@ -12,6 +12,8 @@ typedef BOOL (WINAPI *PFN_RtlQueryPerformanceCounter)(PLARGE_INTEGER);
 typedef BOOL (WINAPI *PFN_RtlQueryPerformanceFrequency)(PLARGE_INTEGER);
 typedef NTSTATUS (WINAPI *PFN_RtlWaitOnAddress)(const VOID *, const VOID *, SIZE_T, const LARGE_INTEGER *);
 typedef VOID (WINAPI *PFN_RtlWakeAddress)(const VOID *);
+typedef NTSTATUS (NTAPI *PFN_RtlGetNativeSystemInformation)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+typedef BOOL (WINAPI *PFN_IsWow64Process2)(HANDLE, PUSHORT, PUSHORT);
 typedef NTSTATUS (NTAPI *PFN_ThreadSuspendCount)(HANDLE, PULONG);
 
 static HMODULE Ntdll;
@@ -250,6 +252,66 @@ Arm64ChpeTestWaitOnAddressSmoke(VOID)
 
 static
 VOID
+Arm64ChpeTestNativeProcessorInformation(VOID)
+{
+    PFN_RtlGetNativeSystemInformation QueryNative = LookupProc("RtlGetNativeSystemInformation");
+    PFN_IsWow64Process2 QueryMachines;
+    SYSTEM_PROCESSOR_INFORMATION Info;
+    ULONG LegacyInfo[4];
+    USHORT ProcessMachine, NativeMachine, ExpectedArchitecture;
+    ULONG Length;
+    NTSTATUS Status;
+
+    QueryMachines = (PFN_IsWow64Process2)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2");
+    if (!QueryNative || !QueryMachines)
+    {
+        skip("Native processor/machine queries are unavailable\n");
+        return;
+    }
+    if (!QueryMachines(GetCurrentProcess(), &ProcessMachine, &NativeMachine))
+    {
+        ok(FALSE, "IsWow64Process2 failed: %lu\n", GetLastError());
+        return;
+    }
+    switch (NativeMachine)
+    {
+        case IMAGE_FILE_MACHINE_I386: ExpectedArchitecture = PROCESSOR_ARCHITECTURE_INTEL; break;
+        case IMAGE_FILE_MACHINE_AMD64: ExpectedArchitecture = PROCESSOR_ARCHITECTURE_AMD64; break;
+        case IMAGE_FILE_MACHINE_ARMNT: ExpectedArchitecture = PROCESSOR_ARCHITECTURE_ARM; break;
+        case IMAGE_FILE_MACHINE_ARM64: ExpectedArchitecture = PROCESSOR_ARCHITECTURE_ARM64; break;
+        default:
+            ok(FALSE, "Unexpected native machine %x\n", NativeMachine);
+            return;
+    }
+
+    memset(&Info, 0xcc, sizeof(Info));
+    Length = 0xdeadbeef;
+    Status = QueryNative(SystemProcessorInformation, &Info, sizeof(Info), &Length);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok(Length == sizeof(Info), "Unexpected native processor info length %lu\n", Length);
+    if (NT_SUCCESS(Status))
+        ok(Info.ProcessorArchitecture == ExpectedArchitecture, "Native architecture %u, expected %u for machine %x\n", Info.ProcessorArchitecture, ExpectedArchitecture, NativeMachine);
+
+    memset(&Info, 0xcc, sizeof(Info));
+    Status = QueryNative(SystemProcessorInformation, &Info, sizeof(Info), NULL);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ok(Info.ProcessorArchitecture == ExpectedArchitecture, "Native architecture without ReturnLength: %u, expected %u\n", Info.ProcessorArchitecture, ExpectedArchitecture);
+
+    Status = QueryNative(SystemProcessorInformation, &Info, sizeof(Info) - 1, &Length);
+    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+
+    memset(LegacyInfo, 0xcc, sizeof(LegacyInfo));
+    Length = 0xdeadbeef;
+    Status = QueryNative(SystemProcessorInformation, LegacyInfo, 12, &Length);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_hex(Length, 12);
+    if (NT_SUCCESS(Status)) ok_hex((USHORT)LegacyInfo[0], ExpectedArchitecture);
+    ok_hex(LegacyInfo[3], 0xcccccccc);
+}
+
+static
+VOID
 Arm64ChpeTestRtlPerformanceSmoke(VOID)
 {
     PFN_RtlQueryPerformanceCounter pRtlQueryPerformanceCounter;
@@ -327,6 +389,7 @@ START_TEST(arm64_chpe)
     Arm64ChpeTestEmulationAddressLimit();
     Arm64ChpeTestNtOpenKeyExSmoke();
     Arm64ChpeTestWaitOnAddressSmoke();
+    Arm64ChpeTestNativeProcessorInformation();
     Arm64ChpeTestRtlPerformanceSmoke();
     Arm64ChpeTestThreadSuspendResume();
 }

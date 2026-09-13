@@ -6,6 +6,68 @@ typedef NTSTATUS (NTAPI *GET_LOCALE_MAPPING)(PVOID *, PLCID, PLARGE_INTEGER);
 static DWORD WorkerTlsIndex;
 static HANDLE WorkerStartEvent;
 
+static VOID TestNativeProcessorInformation(VOID)
+{
+    static const char *Names[] = {"RtlGetNativeSystemInformation", "NtWow64GetNativeSystemInformation"};
+    typedef NTSTATUS (NTAPI *QUERY_NATIVE)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+    typedef BOOL (WINAPI *QUERY_MACHINES)(HANDLE, USHORT *, USHORT *);
+    QUERY_MACHINES QueryMachines;
+    SYSTEM_PROCESSOR_INFORMATION Info;
+    ULONG LegacyInfo[4];
+    USHORT ProcessMachine, NativeMachine, ExpectedArchitecture;
+    ULONG Index, Length;
+    NTSTATUS Status;
+
+    QueryMachines = (QUERY_MACHINES)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2");
+    if (!QueryMachines)
+    {
+        skip("IsWow64Process2 is unavailable\n");
+        return;
+    }
+    if (!QueryMachines(GetCurrentProcess(), &ProcessMachine, &NativeMachine))
+    {
+        ok(FALSE, "IsWow64Process2 failed: %lu\n", GetLastError());
+        return;
+    }
+    ok_hex(ProcessMachine, IMAGE_FILE_MACHINE_I386);
+    switch (NativeMachine)
+    {
+        case IMAGE_FILE_MACHINE_AMD64: ExpectedArchitecture = PROCESSOR_ARCHITECTURE_AMD64; break;
+        case IMAGE_FILE_MACHINE_ARM64: ExpectedArchitecture = PROCESSOR_ARCHITECTURE_ARM64; break;
+        default:
+            ok(FALSE, "Unexpected native WoW64 machine %x\n", NativeMachine);
+            return;
+    }
+    Status = NtQuerySystemInformation(SystemProcessorInformation, &Info, sizeof(Info), NULL);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status)) ok_hex(Info.ProcessorArchitecture, PROCESSOR_ARCHITECTURE_INTEL);
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Names); ++Index)
+    {
+        QUERY_NATIVE Query = (QUERY_NATIVE)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), Names[Index]);
+        ok(Query != NULL, "Missing %s\n", Names[Index]);
+        if (!Query) continue;
+        memset(&Info, 0xcc, sizeof(Info));
+        Length = 0xdeadbeef;
+        Status = Query(SystemProcessorInformation, &Info, sizeof(Info), &Length);
+        ok_hex(Status, STATUS_SUCCESS);
+        ok(Length == sizeof(Info), "%s returned length %lu\n", Names[Index], Length);
+        if (NT_SUCCESS(Status)) ok_hex(Info.ProcessorArchitecture, ExpectedArchitecture);
+        Status = Query(SystemProcessorInformation, &Info, sizeof(Info), NULL);
+        ok_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status)) ok_hex(Info.ProcessorArchitecture, ExpectedArchitecture);
+        Status = Query(SystemProcessorInformation, &Info, sizeof(Info) - 1, &Length);
+        ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+        memset(LegacyInfo, 0xcc, sizeof(LegacyInfo));
+        Length = 0xdeadbeef;
+        Status = Query(SystemProcessorInformation, LegacyInfo, 12, &Length);
+        ok_hex(Status, STATUS_SUCCESS);
+        ok_hex(Length, 12);
+        if (NT_SUCCESS(Status)) ok_hex((USHORT)LegacyInfo[0], ExpectedArchitecture);
+        ok_hex(LegacyInfo[3], 0xcccccccc);
+    }
+}
+
 static __declspec(noinline) ULONG ProbeStack(ULONG Seed)
 {
     volatile UCHAR Buffer[32768];
@@ -247,6 +309,7 @@ START_TEST(wow64_startup)
     }
     WaitForNativeInspection();
     TestSectionUnmap();
+    TestNativeProcessorInformation();
 
     GetLocaleMapping = (GET_LOCALE_MAPPING)GetProcAddress(Ntdll, "RtlGetLocaleFileMappingAddress");
     ok(GetLocaleMapping != NULL, "Missing locale mapping API\n");

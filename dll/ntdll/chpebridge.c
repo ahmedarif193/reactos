@@ -2154,6 +2154,14 @@ ChpeNtQuerySystemInformation(SYSTEM_INFORMATION_CLASS SystemInformationClass, PV
 }
 
 NTSTATUS NTAPI
+ChpeRtlGetNativeSystemInformation(SYSTEM_INFORMATION_CLASS SystemInformationClass, PVOID SystemInformation, ULONG SystemInformationLength, PULONG ReturnLength)
+{
+    /* The Nt entry applies the emulated CPU view in CHPE processes. The raw
+     * Zw entry preserves the host architecture required by the native query. */
+    return ZwQuerySystemInformation(SystemInformationClass, SystemInformation, SystemInformationLength, ReturnLength);
+}
+
+NTSTATUS NTAPI
 ChpeNtReadFile(HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock, PVOID Buffer, ULONG Length, PLARGE_INTEGER ByteOffset, PULONG Key)
 {
     return NtReadFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer, Length, ByteOffset, Key);

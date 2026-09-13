@@ -638,6 +638,7 @@
 @ stdcall NtWaitHighEventPair(ptr)
 @ stdcall NtWaitLowEventPair(ptr)
 @ stdcall -stub -version=0x600+ NtWorkerFactoryWorkerReady(long)
+@ stdcall -arch=i386 NtWow64GetNativeSystemInformation(long ptr long ptr)
 @ stdcall NtWriteFile(long long ptr ptr ptr ptr long ptr ptr)
 @ stdcall NtWriteFileGather(long long ptr ptr ptr ptr long ptr ptr)
 @ stdcall NtWriteRequestData(ptr ptr long ptr long ptr)
@@ -981,7 +982,9 @@
 ; Yes, Microsoft really misspelled this one!
 @ stdcall RtlGetLengthWithoutTrailingPathSeperators(long ptr ptr) RtlGetLengthWithoutTrailingPathSeparators
 @ stdcall RtlGetLongestNtPathLength()
-@ stdcall RtlGetNativeSystemInformation(long long long long) NtQuerySystemInformation
+@ stdcall -arch=i386 RtlGetNativeSystemInformation(long ptr long ptr) NtWow64GetNativeSystemInformation
+@ stdcall -arch=x86_64,arm RtlGetNativeSystemInformation(long long long long) NtQuerySystemInformation
+@ stdcall -arch=arm64 RtlGetNativeSystemInformation(long ptr long ptr) ZwQuerySystemInformation
 @ stdcall RtlGetNtGlobalFlags()
 @ stdcall RtlGetNtProductType(ptr)
 @ stdcall RtlGetNtVersionNumbers(ptr ptr ptr)
