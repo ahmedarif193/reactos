@@ -234,9 +234,159 @@ TestTryAcquireEncoding(VOID)
     ok(Lock.Ptr == NULL, "Lock not idle after mixed shared release: %p\n", Lock.Ptr);
 }
 
+typedef struct _SRW_PRIORITY_CONTEXT
+{
+    RTL_SRWLOCK Lock;
+    HANDLE Held;
+    HANDLE Release;
+    HANDLE Entering;
+    LONG Entered;
+    BOOL SharedOwner;
+    BOOL SharedWaiter;
+} SRW_PRIORITY_CONTEXT, *PSRW_PRIORITY_CONTEXT;
+
+static
+DWORD
+WINAPI
+PriorityOwner(
+    _In_ LPVOID Parameter)
+{
+    PSRW_PRIORITY_CONTEXT Context = Parameter;
+
+    if (Context->SharedOwner)
+        RtlAcquireSRWLockShared(&Context->Lock);
+    else
+        RtlAcquireSRWLockExclusive(&Context->Lock);
+    SetEvent(Context->Held);
+    WaitForSingleObject(Context->Release, INFINITE);
+    if (Context->SharedOwner)
+        RtlReleaseSRWLockShared(&Context->Lock);
+    else
+        RtlReleaseSRWLockExclusive(&Context->Lock);
+    return 0;
+}
+
+static
+DWORD
+WINAPI
+PriorityWaiter(
+    _In_ LPVOID Parameter)
+{
+    PSRW_PRIORITY_CONTEXT Context = Parameter;
+
+    if (InterlockedIncrement(&Context->Entered) == 2)
+        SetEvent(Context->Entering);
+    if (Context->SharedWaiter)
+        RtlAcquireSRWLockShared(&Context->Lock);
+    else
+        RtlAcquireSRWLockExclusive(&Context->Lock);
+    if (Context->SharedWaiter)
+        RtlReleaseSRWLockShared(&Context->Lock);
+    else
+        RtlReleaseSRWLockExclusive(&Context->Lock);
+    return 0;
+}
+
+static
+VOID
+TestPriorityProgress(VOID)
+{
+    DWORD_PTR ProcessMask, SystemMask, Cpu;
+    ULONG Mode;
+    BOOL Success;
+    INT OldPriority;
+
+    Success = GetProcessAffinityMask(GetCurrentProcess(), &ProcessMask, &SystemMask);
+    ok(Success, "GetProcessAffinityMask failed with %lu\n", GetLastError());
+    if (!Success)
+        return;
+    Cpu = ProcessMask & (0 - ProcessMask);
+    OldPriority = GetThreadPriority(GetCurrentThread());
+    Success = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    ok(Success, "Setting supervisor priority failed with %lu\n", GetLastError());
+    if (!Success)
+        return;
+
+    for (Mode = 0; Mode < 3; ++Mode)
+    {
+        SRW_PRIORITY_CONTEXT Context = {0};
+        HANDLE Threads[3] = {NULL, NULL, NULL};
+        DWORD WaitStatus = WAIT_FAILED;
+        ULONG Index;
+
+        Context.SharedOwner = Mode == 1;
+        Context.SharedWaiter = Mode == 2;
+        Context.Held = CreateEventW(NULL, TRUE, FALSE, NULL);
+        Context.Release = CreateEventW(NULL, TRUE, FALSE, NULL);
+        Context.Entering = CreateEventW(NULL, TRUE, FALSE, NULL);
+        Threads[0] = CreateThread(NULL, 0, PriorityOwner, &Context, CREATE_SUSPENDED, NULL);
+        Threads[1] = CreateThread(NULL, 0, PriorityWaiter, &Context, CREATE_SUSPENDED, NULL);
+        Threads[2] = CreateThread(NULL, 0, PriorityWaiter, &Context, CREATE_SUSPENDED, NULL);
+        Success = Context.Held && Context.Release && Context.Entering && Threads[0] && Threads[1] && Threads[2];
+        ok(Success, "Priority test setup failed with %lu\n", GetLastError());
+        if (!Success)
+            goto Cleanup;
+
+        Success = SetThreadAffinityMask(Threads[0], Cpu) != 0 && SetThreadAffinityMask(Threads[1], Cpu) != 0 && SetThreadAffinityMask(Threads[2], Cpu) != 0;
+        ok(Success, "SetThreadAffinityMask failed with %lu\n", GetLastError());
+        if (!Success)
+            goto Cleanup;
+        Success = SetThreadPriority(Threads[0], THREAD_PRIORITY_LOWEST) && SetThreadPriority(Threads[1], THREAD_PRIORITY_HIGHEST) && SetThreadPriority(Threads[2], THREAD_PRIORITY_HIGHEST);
+        ok(Success, "SetThreadPriority failed with %lu\n", GetLastError());
+        if (!Success)
+            goto Cleanup;
+        Success = SetThreadPriorityBoost(Threads[0], TRUE) && SetThreadPriorityBoost(Threads[1], TRUE) && SetThreadPriorityBoost(Threads[2], TRUE);
+        ok(Success, "SetThreadPriorityBoost failed with %lu\n", GetLastError());
+        if (!Success)
+            goto Cleanup;
+
+        ResumeThread(Threads[0]);
+        WaitStatus = WaitForSingleObject(Context.Held, JOIN_TIMEOUT_MS);
+        ok(WaitStatus == WAIT_OBJECT_0, "Owner did not acquire the lock: %lu\n", WaitStatus);
+        if (WaitStatus != WAIT_OBJECT_0)
+            goto Cleanup;
+        ResumeThread(Threads[1]);
+        ResumeThread(Threads[2]);
+        WaitStatus = WaitForSingleObject(Context.Entering, JOIN_TIMEOUT_MS);
+        ok(WaitStatus == WAIT_OBJECT_0, "Waiter did not start: %lu\n", WaitStatus);
+        if (WaitStatus != WAIT_OBJECT_0)
+            goto Cleanup;
+
+        Sleep(100);
+        SetEvent(Context.Release);
+        WaitStatus = WaitForMultipleObjects(3, Threads, TRUE, 2000);
+        ok(WaitStatus == WAIT_OBJECT_0, "Higher-priority waiter starved the %s owner (%s waiter, wait=%lu)\n", Context.SharedOwner ? "shared" : "exclusive", Context.SharedWaiter ? "shared" : "exclusive", WaitStatus);
+        if (WaitStatus != WAIT_OBJECT_0)
+        {
+            SetThreadPriority(Threads[0], THREAD_PRIORITY_TIME_CRITICAL);
+            WaitStatus = WaitForMultipleObjects(3, Threads, TRUE, JOIN_TIMEOUT_MS);
+            ok(WaitStatus == WAIT_OBJECT_0, "Priority test threads failed to finish after recovery: %lu\n", WaitStatus);
+        }
+
+Cleanup:
+        for (Index = 0; Index < 3; ++Index)
+        {
+            if (Threads[Index])
+            {
+                if (WaitForSingleObject(Threads[Index], 0) != WAIT_OBJECT_0)
+                    TerminateThread(Threads[Index], 0);
+                CloseHandle(Threads[Index]);
+            }
+        }
+        if (Context.Held)
+            CloseHandle(Context.Held);
+        if (Context.Release)
+            CloseHandle(Context.Release);
+        if (Context.Entering)
+            CloseHandle(Context.Entering);
+    }
+    SetThreadPriority(GetCurrentThread(), OldPriority);
+}
+
 START_TEST(RtlSRWLock)
 {
     TestTryAcquireEncoding();
     TestQueuedSharedChain();
     TestStress();
+    TestPriorityProgress();
 }
