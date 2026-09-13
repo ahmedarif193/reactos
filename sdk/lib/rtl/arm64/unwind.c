@@ -138,7 +138,9 @@ RtlpArm64GetImageFunctionTable(
 
     *TableSize = 0;
 
-    if (!RtlIsEcCode(ControlPc))
+    /* The EC bitmap also marks the native ARM64 NTDLL as callable by FEX.
+     * Such images keep their ARM64 records in the ordinary exception directory. */
+    if (NtHeaders->FileHeader.Machine == IMAGE_FILE_MACHINE_ARM64 || !RtlIsEcCode(ControlPc))
         return RtlImageDirectoryEntryToData(ImageBase, TRUE, IMAGE_DIRECTORY_ENTRY_EXCEPTION, TableSize);
 
     LoadConfig = RtlImageDirectoryEntryToData(ImageBase, TRUE, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &LoadConfigSize);
