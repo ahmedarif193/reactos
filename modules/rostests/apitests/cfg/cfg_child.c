@@ -24,6 +24,9 @@ typedef struct _CFG_CALL_TARGET_INFO_LOCAL
 
 typedef BOOL (WINAPI *PFN_SET_PROCESS_VALID_CALL_TARGETS)(HANDLE, PVOID, SIZE_T, ULONG, CFG_CALL_TARGET_INFO_LOCAL *);
 typedef DWORD (WINAPI *PFN_CFG_TARGET)(VOID);
+typedef BYTE CFG_VECTOR __attribute__((vector_size(16)));
+typedef VOID (*PFN_CFG_FLOAT_TARGET)(double *, double, double, double, double, double, double, double, double);
+typedef VOID (*PFN_CFG_VECTOR_TARGET)(CFG_VECTOR *, CFG_VECTOR, CFG_VECTOR, CFG_VECTOR, CFG_VECTOR, CFG_VECTOR, CFG_VECTOR, CFG_VECTOR, CFG_VECTOR);
 
 static volatile PFN_CFG_TARGET CfgCallTarget;
 
@@ -53,6 +56,93 @@ CallIndirect(PFN_CFG_TARGET Target)
 {
     CfgCallTarget = Target;
     return CfgCallTarget();
+}
+
+__declspec(noinline)
+static VOID
+CfgFloatTarget(double *Result, double A, double B, double C, double D, double E, double F, double G, double H)
+{
+    Result[0] = A;
+    Result[1] = B;
+    Result[2] = C;
+    Result[3] = D;
+    Result[4] = E;
+    Result[5] = F;
+    Result[6] = G;
+    Result[7] = H;
+}
+
+__declspec(noinline)
+static VOID
+CfgVectorTarget(CFG_VECTOR *Result, CFG_VECTOR A, CFG_VECTOR B, CFG_VECTOR C, CFG_VECTOR D, CFG_VECTOR E, CFG_VECTOR F, CFG_VECTOR G, CFG_VECTOR H)
+{
+    Result[0] = A;
+    Result[1] = B;
+    Result[2] = C;
+    Result[3] = D;
+    Result[4] = E;
+    Result[5] = F;
+    Result[6] = G;
+    Result[7] = H;
+}
+
+__declspec(noinline)
+VOID
+CallFloatIndirect(PFN_CFG_FLOAT_TARGET Target, double *Result, double A, double B, double C, double D, double E, double F, double G, double H)
+{
+    Target(Result, A, B, C, D, E, F, G, H);
+}
+
+__declspec(noinline)
+VOID
+CallVectorIndirect(PFN_CFG_VECTOR_TARGET Target, CFG_VECTOR *Result, CFG_VECTOR A, CFG_VECTOR B, CFG_VECTOR C, CFG_VECTOR D, CFG_VECTOR E, CFG_VECTOR F, CFG_VECTOR G, CFG_VECTOR H)
+{
+    Target(Result, A, B, C, D, E, F, G, H);
+}
+
+static DWORD
+TestFloatingArguments(BOOL Vectors)
+{
+    static PFN_CFG_FLOAT_TARGET volatile FloatTarget = CfgFloatTarget;
+    static PFN_CFG_VECTOR_TARGET volatile VectorTarget = CfgVectorTarget;
+    static const double Expected[] = {1.25, -2.5, 3.75, -4.125, 5.5, -6.75, 7.875, -8.25};
+    CFG_VECTOR Input[8], Output[8];
+    double Result[8];
+    ULONG Round, Index, Failures = 0;
+
+    for (Index = 0; Index < sizeof(Input); ++Index)
+        ((BYTE *)Input)[Index] = (BYTE)(Index + 1);
+    for (Round = 0; Round < 2; ++Round)
+    {
+        if (Vectors)
+        {
+            ZeroMemory(Output, sizeof(Output));
+            CallVectorIndirect(VectorTarget, Output, Input[0], Input[1], Input[2], Input[3], Input[4], Input[5], Input[6], Input[7]);
+            for (Index = 0; Index < ARRAYSIZE(Input); ++Index)
+            {
+                if (memcmp(&Input[Index], &Output[Index], sizeof(Input[Index])) != 0)
+                {
+                    printf("CFGCHILD|vector-arguments|round=%lu|register=%lu|mismatch\n", Round, Index);
+                    ++Failures;
+                }
+            }
+        }
+        else
+        {
+            ZeroMemory(Result, sizeof(Result));
+            CallFloatIndirect(FloatTarget, Result, Expected[0], Expected[1], Expected[2], Expected[3], Expected[4], Expected[5], Expected[6], Expected[7]);
+            for (Index = 0; Index < ARRAYSIZE(Expected); ++Index)
+            {
+                if (memcmp(&Expected[Index], &Result[Index], sizeof(Expected[Index])) != 0)
+                {
+                    printf("CFGCHILD|floating-arguments|round=%lu|register=%lu|mismatch\n", Round, Index);
+                    ++Failures;
+                }
+            }
+        }
+    }
+    printf("CFGCHILD|%s-arguments|failures=%lu\n", Vectors ? "vector" : "floating", Failures);
+    return Failures ? 0x4f : 0;
 }
 
 static BOOL
@@ -135,6 +225,12 @@ main(int argc, char **argv)
 
     if (!strcmp(argv[1], "valid-local"))
         return CallIndirect(CfgLocalTarget) == 0x47f ? 0 : 0x41;
+
+    if (!strcmp(argv[1], "valid-floating-arguments"))
+        return TestFloatingArguments(FALSE);
+
+    if (!strcmp(argv[1], "valid-vector-arguments"))
+        return TestFloatingArguments(TRUE);
 
     if (!strcmp(argv[1], "valid-guarded"))
     {

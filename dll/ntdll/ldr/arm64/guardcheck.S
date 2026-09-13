@@ -15,8 +15,8 @@
     .global LdrpGuardCheckIcall
     .seh_proc LdrpGuardCheckIcall
 LdrpGuardCheckIcall:
-    stp     x29, x30, [sp, #-160]!
-    .seh_save_fplr_x 160
+    stp     x29, x30, [sp, #-288]!
+    .seh_save_fplr_x 288
     mov     x29, sp
     .seh_set_fp
     .seh_endprologue
@@ -29,6 +29,10 @@ LdrpGuardCheckIcall:
     stp     x12, x13, [sp, #112]
     stp     x14, x15, [sp, #128]
     stp     x16, x17, [sp, #144]
+    stp     q0, q1, [sp, #160]
+    stp     q2, q3, [sp, #192]
+    stp     q4, q5, [sp, #224]
+    stp     q6, q7, [sp, #256]
 
     /* Let the processor report a naturally misaligned branch target. */
     tst     x15, #3
@@ -41,6 +45,10 @@ LdrpGuardCheckIcall:
     brk     #0xf003
 
 1:
+    ldp     q0, q1, [sp, #160]
+    ldp     q2, q3, [sp, #192]
+    ldp     q4, q5, [sp, #224]
+    ldp     q6, q7, [sp, #256]
     ldp     x0, x1, [sp, #16]
     ldp     x2, x3, [sp, #32]
     ldp     x4, x5, [sp, #48]
@@ -51,8 +59,8 @@ LdrpGuardCheckIcall:
     ldp     x14, x15, [sp, #128]
     ldp     x16, x17, [sp, #144]
     .seh_startepilogue
-    ldp     x29, x30, [sp], #160
-    .seh_save_fplr_x 160
+    ldp     x29, x30, [sp], #288
+    .seh_save_fplr_x 288
     .seh_endepilogue
     ret
     .seh_endproc
