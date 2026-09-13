@@ -123,6 +123,28 @@ Rpi5Vc4SelectAddressSpaceLocked(
     return TRUE;
 }
 
+static PRPI5VC4_PROCESS
+Rpi5Vc4OldestQueuedProcessLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    PRPI5VC4_PENDING_SUBMIT Oldest = NULL;
+    ULONG Node;
+
+    for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; ++Node)
+    {
+        PRPI5VC4_PENDING_SUBMIT Head;
+
+        if (DeviceExtension->NodeQueue[Node].Count == 0)
+            continue;
+        Head = &DeviceExtension->NodeQueue[Node].Pending[DeviceExtension->NodeQueue[Node].Head];
+        if (!Head->IsV3dJob && !Head->IsTfuJob && !Head->IsCsdJob)
+            continue;
+        if (Oldest == NULL || (LONGLONG)(Head->SubmissionSequence - Oldest->SubmissionSequence) < 0)
+            Oldest = Head;
+    }
+    return Oldest != NULL ? Oldest->Process : NULL;
+}
+
 /*
  * Advance the pipeline.  Called with DmaLock held at DISPATCH_LEVEL.
  * Returns TRUE when at least one fence completed (caller queues FenceDpc).
@@ -183,6 +205,15 @@ Rpi5Vc4ProcessPendingLocked(
 
         if (Head->IsTfuJob || Head->IsCsdJob || Head->IsV3dJob)
         {
+            /* All engines share one page table. Drain the current process
+             * before starting younger work when another process is waiting;
+             * otherwise a busy 3D queue can starve the compositor's TFU. */
+            if (!Head->BinSubmitted && !Head->RenderSubmitted &&
+                Rpi5Vc4OldestQueuedProcessLocked(DeviceExtension) != Head->Process)
+            {
+                *NeedPoll = TRUE;
+                goto NextNode;
+            }
             if (DeviceExtension->V3dActiveProcess != Head->Process &&
                 Rpi5Vc4GpuJobActiveLocked(DeviceExtension))
             {
@@ -2406,6 +2437,7 @@ Rpi5Vc4DdiSubmitCommand(
             RPI5VC4_MAX_PENDING];
         RtlZeroMemory(Entry, sizeof(*Entry));
         Entry->Fence = SubmitCommand->SubmissionFenceId;
+        Entry->SubmissionSequence = ++DeviceExtension->SubmissionSequence;
         Entry->NodeOrdinal = QueueIndex;
         Entry->ReportNode = SubmitCommand->NodeOrdinal;
         Entry->Process = Process;
@@ -3030,6 +3062,7 @@ Rpi5Vc4QueueEscapeJob(
         RPI5VC4_MAX_PENDING];
     RtlZeroMemory(Entry, sizeof(*Entry));
     Entry->Fence = 0;
+    Entry->SubmissionSequence = ++DeviceExtension->SubmissionSequence;
     Entry->NodeOrdinal = QueueIndex;
     if (Packet->Op == RPI5VC4_DMA_OP_TFU_JOB)
     {
