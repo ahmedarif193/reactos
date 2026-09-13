@@ -493,6 +493,8 @@ IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r, _In_ BOOL PreserveDx)
 {
     if (!PreserveDx)
         IntCompositionFreeDxSurface(r);
+    /* Bitmap deletion defers unmapping until the last surface reference is
+     * released. A DC may still select the old backing during a resize. */
     if (r->psurf != NULL)
     {
         SURFACE_ShareUnlockSurface(r->psurf);
@@ -504,11 +506,7 @@ IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r, _In_ BOOL PreserveDx)
         EngDeleteSurface((HSURF)r->hbmp);
         r->hbmp = NULL;
     }
-    if (r->BackView != NULL)
-    {
-        MmUnmapViewInSystemSpace(r->BackView);
-        r->BackView = NULL;
-    }
+    r->BackView = NULL;
     if (r->BackSection != NULL)
     {
         ObDereferenceObject(r->BackSection);
@@ -524,14 +522,9 @@ IntCompositionFreeSurface(_Inout_ PWND_REDIRECT r, _In_ BOOL PreserveDx)
         EngDeleteSurface((HSURF)r->hbmpFront);
         r->hbmpFront = NULL;
     }
-    /* The FRONT wraps a section view: surface first, then view, then section.
-     * dwm's own mapped view (its handle references the section) stays valid
-     * until it notices the Generation change and remaps. */
-    if (r->FrontView != NULL)
-    {
-        MmUnmapViewInSystemSpace(r->FrontView);
-        r->FrontView = NULL;
-    }
+    /* DWM's independent view remains valid until it notices the Generation
+     * change and remaps. The bitmap owns the kernel view. */
+    r->FrontView = NULL;
     if (r->FrontSection != NULL)
     {
         ObDereferenceObject(r->FrontSection);
@@ -684,6 +677,10 @@ IntCompositionCreateSharedBuffer(_In_ LONG cx, _In_ LONG cy,
         return NULL;
     }
 
+    /* Transfer the view to SURFACE_vCleanup only after creation succeeds.
+     * DC references must keep the pixels mapped after EngDeleteSurface. */
+    psurf->SurfObj.fjBitmap |= BMF_KMSECTION;
+
     *phbmp = hbmp;
     *ppSection = pSection;
     *ppView = pView;
@@ -758,8 +755,6 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
     {
         SURFACE_ShareUnlockSurface(psurfNew);
         EngDeleteSurface((HSURF)hbmpNew);
-        if (pBackViewNew != NULL)
-            MmUnmapViewInSystemSpace(pBackViewNew);
         if (pBackSectionNew != NULL)
             ObDereferenceObject(pBackSectionNew);
         r->AllocFailTime = (LONGLONG)KeQueryInterruptTime();

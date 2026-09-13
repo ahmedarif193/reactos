@@ -46,14 +46,15 @@ typedef struct _WND_REDIRECT
     /* Full WDDM adapters provide CDD-owned shared allocations. Display-only
      * and legacy paths retain section-backed buffers. Section-backed GL
      * frames may exchange views; driver-owned surfaces retain fixed backing
-     * and publish through a completed BACK-to-FRONT copy. */
-    PVOID     BackSection;
-    PVOID     BackView;
+     * and publish through a completed BACK-to-FRONT copy. Each section-backed
+     * surface owns its kernel view until the final surface reference drops. */
+    PVOID     BackSection; /* referenced section object                      */
+    PVOID     BackView;    /* non-owning alias of the BACK surface's pvBits   */
     SIZE_T    BackViewSize;
     ULONG     BackGeneration;
     ULONG     BackGlobalShare;
     PVOID     FrontSection; /* referenced section object                      */
-    PVOID     FrontView;    /* kernel view the FRONT surface wraps            */
+    PVOID     FrontView;    /* non-owning alias of the FRONT surface's pvBits  */
     SIZE_T    FrontViewSize;
     ULONG     Generation;   /* stable token for the current FRONT section     */
     ULONG     FrontGlobalShare;
