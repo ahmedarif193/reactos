@@ -62,7 +62,6 @@
 
 /* In-order submission tracking ("the GPU pipeline"). */
 #define RPI5VC4_MAX_PENDING         64
-#define RPI5VC4_DMA_MAPPING_COUNT   256
 
 /* V3D exposes a 32-bit GPU VA space through one flat native page table.
  * dxgkrnl keeps its portable DXGK_PTE representation as a two-level 10+10
@@ -259,14 +258,13 @@ typedef struct _RPI5VC4_OPENALLOCATION
     D3DKMT_HANDLE hVidMmAllocation;
 } RPI5VC4_OPENALLOCATION, *PRPI5VC4_OPENALLOCATION;
 
-typedef struct _RPI5VC4_DMA_MAPPING
+typedef struct _RPI5VC4_DMA_PRIVATE_DATA
 {
     UINT             SegmentId;
     PHYSICAL_ADDRESS PhysicalAddress;
     PVOID            VirtualAddress;
     ULONG            Size;
-    ULONGLONG        Sequence;
-} RPI5VC4_DMA_MAPPING, *PRPI5VC4_DMA_MAPPING;
+} RPI5VC4_DMA_PRIVATE_DATA, *PRPI5VC4_DMA_PRIVATE_DATA;
 
 struct _RPI5VC4_DEVICE_EXTENSION
 {
@@ -385,9 +383,6 @@ struct _RPI5VC4_DEVICE_EXTENSION
 
     /* ---- In-order submission/fence pipeline ---------------------------- */
     KSPIN_LOCK DmaLock;
-    RPI5VC4_DMA_MAPPING DmaMappings[RPI5VC4_DMA_MAPPING_COUNT];
-    ULONG DmaMappingNext;
-    ULONGLONG DmaMappingSequence;
     LONG V3dKickPrints;
     /* One in-order queue per GPU node; the engines run in parallel. */
     struct
