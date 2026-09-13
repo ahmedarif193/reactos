@@ -15,6 +15,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#include <reactos/hal/msi.h>
 #if defined(_M_ARM64)
 #include <reactos/hal/acpi_pci.h>
 #endif
@@ -302,6 +303,32 @@ HalGetMessageRoutingInfo(
         RoutingInfo->Version != HAL_MESSAGE_ROUTING_INFO_VERSION)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (RoutingInfo->Flags & HAL_MSI_ROUTING_RELEASE_VECTOR)
+    {
+#if defined(_M_ARM64)
+        KIRQL OldIrql;
+        ULONG Offset;
+
+        if (RoutingInfo->Flags != HAL_MSI_ROUTING_RELEASE_VECTOR || RoutingInfo->MessageCount != 1)
+            return STATUS_INVALID_PARAMETER;
+
+        HalpArm64EnsureMsiRoutingLock();
+        KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
+        Offset = RoutingInfo->Vector - HalpArm64MsiRoutingBase;
+        if (HalpArm64MsiRoutingBuffer == NULL || Offset >= HalpArm64MsiRoutingCount ||
+            !RtlAreBitsSet(&HalpArm64MsiRoutingBitmap, Offset, 1))
+        {
+            KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+            return STATUS_INVALID_PARAMETER;
+        }
+        RtlClearBits(&HalpArm64MsiRoutingBitmap, Offset, 1);
+        KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+        return STATUS_SUCCESS;
+#else
+        return STATUS_NOT_SUPPORTED;
+#endif
     }
 
     if (RoutingInfo->Flags & HAL_MSI_ROUTING_ALLOCATE_VECTOR)

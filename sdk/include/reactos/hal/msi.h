@@ -48,6 +48,9 @@ typedef struct _HAL_MESSAGE_ROUTING_INFO {
 #define HAL_MSI_ROUTING_ALLOCATE_VECTOR  0x00000001
 #endif
 
+/* Release one reserved vector before it has been connected or programmed. */
+#define HAL_MSI_ROUTING_RELEASE_VECTOR   0x00000002
+
 NTHALAPI
 NTSTATUS
 NTAPI

@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#include <reactos/hal/msi.h>
 #include "apicp.h"
 #include "msip.h"
 #include <smp.h>
@@ -136,6 +137,16 @@ HalpGetMessageRoutingInfo(
         RoutingInfo->Version != HAL_MESSAGE_ROUTING_INFO_VERSION)
     {
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (RoutingInfo->Flags & HAL_MSI_ROUTING_RELEASE_VECTOR)
+    {
+        if (RoutingInfo->Flags != HAL_MSI_ROUTING_RELEASE_VECTOR ||
+            RoutingInfo->MessageCount != 1 || RoutingInfo->Vector > MAXUCHAR)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        return HalpFreeMsiVector((UCHAR)RoutingInfo->Vector) ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
     }
 
     if (RoutingInfo->Flags & HAL_MSI_ROUTING_ALLOCATE_VECTOR)

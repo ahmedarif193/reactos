@@ -2480,6 +2480,8 @@ PdoQueryResourceRequirements(
     PUCHAR ListPtr;
     ULONG OptionIndex;
     ULONG CurrentCount;
+    ULONG InterruptCount;
+    ULONG MessageIndex;
     typedef enum _PCI_INTERRUPT_REQUIREMENT {
         PciRequirementNone = 0,
         PciRequirementLegacy,
@@ -2829,8 +2831,9 @@ PdoQueryResourceRequirements(
     AllocationSize = FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List[0]);
     for (OptionIndex = 0; OptionIndex < OptionCount; OptionIndex++)
     {
-        CurrentCount = BaseDescriptorCount +
-                       ((Options[OptionIndex] == PciRequirementNone) ? 0 : 1);
+        InterruptCount = (Options[OptionIndex] == PciRequirementMsix) ? MsixMessageCount :
+                         (Options[OptionIndex] == PciRequirementNone) ? 0 : 1;
+        CurrentCount = BaseDescriptorCount + InterruptCount;
         AllocationSize += FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) +
                           CurrentCount * sizeof(IO_RESOURCE_DESCRIPTOR);
     }
@@ -2861,9 +2864,10 @@ PdoQueryResourceRequirements(
     {
         PIO_RESOURCE_LIST IoList = (PIO_RESOURCE_LIST)ListPtr;
         PIO_RESOURCE_DESCRIPTOR Dest;
-        BOOLEAN IncludeInterrupt = (Options[OptionIndex] != PciRequirementNone);
 
-        CurrentCount = BaseDescriptorCount + (IncludeInterrupt ? 1 : 0);
+        InterruptCount = (Options[OptionIndex] == PciRequirementMsix) ? MsixMessageCount :
+                         (Options[OptionIndex] == PciRequirementNone) ? 0 : 1;
+        CurrentCount = BaseDescriptorCount + InterruptCount;
         IoList->Version = 1;
         IoList->Revision = 1;
         IoList->Count = CurrentCount;
@@ -2877,7 +2881,7 @@ PdoQueryResourceRequirements(
             Dest += BaseDescriptorCount;
         }
 
-        if (IncludeInterrupt)
+        for (MessageIndex = 0; MessageIndex < InterruptCount; MessageIndex++, Dest++)
         {
             Dest->Option = 0;
             Dest->Type = CmResourceTypeInterrupt;
@@ -2891,20 +2895,15 @@ PdoQueryResourceRequirements(
             }
             else
             {
-                ULONG MsgCount = (Options[OptionIndex] == PciRequirementMsix) ?
-                                 MsixMessageCount : MsiMessageCount;
-                if (MsgCount == 0)
-                    MsgCount = 1;
+                ULONG MsgCount = (Options[OptionIndex] == PciRequirementMsix) ? 1 : MsiMessageCount;
                 Dest->ShareDisposition = CmResourceShareDeviceExclusive;
                 Dest->Flags = CM_RESOURCE_INTERRUPT_LATCHED |
                               CM_RESOURCE_INTERRUPT_MESSAGE |
                               (PolicyFromRegistry ? CM_RESOURCE_INTERRUPT_POLICY_INCLUDED : 0);
-                /* Request the full message count as the minimum too: the arbiter
-                 * otherwise grants only the minimum (1), but multi-queue devices
-                 * (e.g. virtio-gpu: config + control + cursor) need one MSI-X
-                 * vector per queue or their queue completions never raise an MSI. */
-                Dest->u.Interrupt.MinimumVector = MsgCount;
-                Dest->u.Interrupt.MaximumVector = MsgCount;
+                /* MSI uses one descriptor for an aligned vector block. MSI-X
+                 * uses one descriptor per independently allocated message. */
+                Dest->u.Interrupt.MinimumVector = CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN - MsgCount + 1;
+                Dest->u.Interrupt.MaximumVector = CM_RESOURCE_INTERRUPT_MESSAGE_TOKEN;
             }
 
             Dest->u.Interrupt.AffinityPolicy = IrqPolicyMachineDefault;
