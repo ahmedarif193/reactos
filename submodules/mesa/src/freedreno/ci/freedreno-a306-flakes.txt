@@ -1,0 +1,59 @@
+# Note: flakes lists for CI are just a list of lines that, when
+# non-zero-length and not starting with '#', will regex match to
+# delete lines from the test list.  Be careful.
+dEQP-GLES3.functional.shaders.texture_functions.texture.*gradoffset.*
+dEQP-GLES3.functional.texture.units.4_units.only_3d.*
+dEQP-GLES3.functional.vertex_arrays.single_attribute.*
+
+# These started UnexpectedPass'ing in an unrelated MR, let's call
+# them flakes for now
+dEQP-GLES3.functional.occlusion_query.*
+
+glx@glx-swap-event_interval
+glx@glx-swap-event_async
+glx@glx_arb_sync_control@swapbuffersmsc-divisor-zero
+glx@glx_arb_sync_control@waitformsc
+glx@glx_ext_no_config_context@no fbconfig
+
+spec@arb_map_buffer_alignment@arb_map_buffer_alignment-map-invalidate-range
+spec@arb_vertex_buffer_object@vbo-subdata-many drawelements
+spec@egl_chromium_sync_control@conformance
+spec@egl_chromium_sync_control@conformance@eglGetSyncValuesCHROMIUM_msc_and_sbc_test
+
+dEQP-GLES3.functional.occlusion_query.all_occluders
+dEQP-GLES3.functional.occlusion_query.conservative_depth_clear_stencil_write
+dEQP-GLES3.functional.occlusion_query.conservative_depth_clear_stencil_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.conservative_depth_write
+dEQP-GLES3.functional.occlusion_query.conservative_depth_write_depth_clear
+dEQP-GLES3.functional.occlusion_query.conservative_depth_write_depth_clear_stencil_write
+dEQP-GLES3.functional.occlusion_query.conservative_depth_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.conservative_depth_write_stencil_write
+dEQP-GLES3.functional.occlusion_query.conservative_depth_write_stencil_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.conservative_scissor_depth_clear_stencil_write
+dEQP-GLES3.functional.occlusion_query.conservative_scissor_depth_write
+dEQP-GLES3.functional.occlusion_query.conservative_scissor_depth_write_depth_clear
+dEQP-GLES3.functional.occlusion_query.conservative_scissor_depth_write_depth_clear_stencil_clear
+dEQP-GLES3.functional.occlusion_query.conservative_scissor_depth_write_stencil_write
+dEQP-GLES3.functional.occlusion_query.conservative_scissor_depth_write_stencil_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.conservative_stencil_write
+dEQP-GLES3.functional.occlusion_query.conservative_stencil_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.depth_clear
+dEQP-GLES3.functional.occlusion_query.depth_write_depth_clear_stencil_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.depth_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.depth_write_stencil_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.scissor
+dEQP-GLES3.functional.occlusion_query.scissor_depth_clear_stencil_clear
+dEQP-GLES3.functional.occlusion_query.scissor_depth_clear_stencil_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.scissor_depth_write_depth_clear_stencil_clear
+dEQP-GLES3.functional.occlusion_query.scissor_depth_write_stencil_write_stencil_clear
+dEQP-GLES3.functional.occlusion_query.scissor_stencil_write
+dEQP-GLES3.functional.occlusion_query.stencil_clear
+dEQP-GLES3.functional.occlusion_query.stencil_write
+dEQP-GLES3.functional.occlusion_query.stencil_write_stencil_clear
+dEQP-GLES3.functional.vertex_arrays.single_attribute.normalize.int2_10_10_10.components4_quads256
+
+# uprev Piglit in Mesa
+spec@!opengl 2.0@tex3d-npot
+spec@arb_vertex_buffer_object@vbo-subdata-many drawarrays
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_nv21
+

@@ -1,0 +1,538 @@
+/*
+ * Copyright © 2020-2021 Collabora, Ltd.
+ * Author: Antonio Caggiano <antonio.caggiano@collabora.com>
+ * Author: Corentin Noël <corentin.noel@collabora.com>
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "intel_pps_driver.h"
+
+#include <dirent.h>
+#include <fcntl.h>
+#include <math.h>
+#include <poll.h>
+#include <strings.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#include "common/intel_gem.h"
+#include "dev/intel_device_info.h"
+#include "perf/intel_perf.h"
+#include "perf/intel_perf_query.h"
+
+#include <pps/pps.h>
+#include <pps/pps_algorithm.h>
+
+#include "intel_pps_perf.h"
+#include "intel_pps_priv.h"
+#include "util/log.h"
+
+namespace pps
+{
+
+/* Shorthand bits matching pps::Perfettogrp values in pps_counter.h.       */
+#define UNCL  BITFIELD_BIT(UNCLASSIFIED)
+#define SYS   BITFIELD_BIT(SYSTEM)
+#define VTX   BITFIELD_BIT(VERTICES)
+#define FRG   BITFIELD_BIT(FRAGMENTS)
+#define PRM   BITFIELD_BIT(PRIMITIVES)
+#define MEM   BITFIELD_BIT(MEMORY)
+#define CMP   BITFIELD_BIT(COMPUTE)
+#define RT    BITFIELD_BIT(RAYTRACING)
+
+/* Category(mdapi_group string) classification table: mdapi_group string
+ * for perf counter observed in oa-*.xml mapped to a bitmask of
+ * pps::Perfettogrp values.
+ * To extend, add a new row for unknown strings.
+ */
+static const std::unordered_map<std::string_view, uint32_t>
+categoryToPerfettogrpMask = {
+   /* 3D Pipe ---------------------------------------------------------- */
+   { "3D Pipe/Clipper",                       PRM       },
+   { "3D Pipe/Domain Shader",                 VTX       },
+   { "3D Pipe/Fragment Shader",               FRG       },
+   { "3D Pipe/Geometry Shader",               VTX | PRM },
+   { "3D Pipe/Hull Shader",                   VTX       },
+   { "3D Pipe/Input Assembler",               VTX       },
+   { "3D Pipe/Output Merger",                 FRG | MEM },
+   { "3D Pipe/Rasterizer",                    PRM       },
+   { "3D Pipe/Rasterizer/Barycentric Calc",   PRM | FRG },
+   { "3D Pipe/Rasterizer/Early Depth Test",   PRM | FRG },
+   { "3D Pipe/Rasterizer/Hi-Depth Test",      PRM | FRG },
+   { "3D Pipe/Rasterizer/Strip-Fans",         PRM       },
+   { "3D Pipe/Stream Output",                 PRM       },
+   { "3D Pipe/Vertex Shader",                 VTX       },
+
+   /* Misc fixed function --------------------------------------------- */
+   { "AMFS",                                  FRG       },
+   { "Color Pipe",                            FRG | MEM },
+   { "ColorPipe",                             FRG | MEM },
+   { "Depth Pipe",                            FRG | MEM },
+   { "DepthPipe",                             FRG | MEM },
+   { "Copy Engine",                           MEM       },
+   { "Geometry",                              PRM | VTX },
+   { "Rasterizer",                            PRM       },
+   { "Front End",                             SYS       },
+   { "FrontEnd",                              SYS       },
+   { "Media",                                 SYS       },
+   { "VME Pipe",                              SYS       },
+   { "URB",                                   MEM       },
+
+   /* GPU ------------------------------------------------------------ */
+   { "GPU",                                   SYS       },
+   { "GPU/3D Pipe",                           SYS       },
+   { "GPU/3D Pipe/Strip-Fans",                PRM       },
+   { "GPU/Data Port",                         MEM       },
+   { "GPU/Rasterizer",                        PRM       },
+   { "GPU/Rasterizer/Early Depth Test",       PRM | FRG },
+   { "GPU/Sampler",                           MEM       },
+   { "GPU/Stencil Cache",                     FRG | MEM },
+   { "GPU/Thread Dispatcher",                 CMP       },
+
+   /* GTI (GT Interface, memory subsystem boundary) ------------------- */
+   { "GTI",                                   MEM       },
+   { "GTI/3D Pipe",                           SYS       },
+   { "GTI/3D Pipe/Command Streamer",          SYS       },
+   { "GTI/3D Pipe/Resource Streamer",         SYS       },
+   { "GTI/3D Pipe/Stream Output",             PRM | MEM },
+   { "GTI/3D Pipe/Vertex Fetch",              VTX | MEM },
+   { "GTI/Color Cache",                       FRG | MEM },
+   { "GTI/Depth Cache",                       FRG | MEM },
+   { "GTI/L3",                                MEM       },
+
+   /* EU Array --------------------------------------------------------- */
+   { "EU Array",                              CMP             },
+   { "EU Array/Barrier",                      CMP             },
+   { "EU Array/Pipes",                        CMP             },
+   { "EU Array/Pipes/Instructions",           CMP             },
+   { "EU Array/Compute Shader",               CMP             },
+   { "EU Array/Control Shader",               VTX | CMP       },
+   { "EU Array/Domain Shader",                VTX | CMP       },
+   { "EU Array/Evaluation Shader",            VTX | CMP       },
+   { "EU Array/Hull Shader",                  VTX | CMP       },
+   { "EU Array/Vertex Shader",                VTX | CMP       },
+   { "EU Array/Geometry Shader",              VTX | PRM | CMP },
+   { "EU Array/Fragment Shader",              FRG | CMP       },
+   { "EU Array/Pixel Shader",                 FRG | CMP       },
+
+   /* Memory hierarchy ------------------------------------------------ */
+   { "Dataport",                              MEM       },
+   { "Device Cache",                          MEM       },
+   { "L1 Cache",                              MEM       },
+   { "L1Cache",                               MEM       },
+   { "L3",                                    MEM       },
+   { "L3/Data Port",                          MEM       },
+   { "L3/Data Port/Atomics",                  MEM       },
+   { "L3/Data Port/SLM",                      MEM | CMP },
+   { "L3/IC",                                 MEM       },
+   { "L3/Sampler",                            MEM       },
+   { "L3/TAG",                                MEM       },
+   { "L3Cache",                               MEM       },
+   { "LLC",                                   MEM       },
+   { "Memory",                                MEM       },
+   { "Sampler",                               MEM       },
+   { "Sampler/Sampler Cache",                 MEM       },
+   { "Sampler/Sampler Input",                 MEM       },
+
+   /* Compute / dispatch --------------------------------------------- */
+   { "Thread Dispatcher",                     CMP       },
+   { "ThreadDispatcher",                      CMP       },
+   { "Vector Engine",                         CMP       },
+   { "VectorEngine",                          CMP       },
+
+   /* Ray tracing ---------------------------------------------------- */
+   { "Ray Tracing",                           RT        },
+   { "RayTracing",                            RT        },
+
+   /* Diagnostic ----------------------------------------------------- */
+   { "Test",                                  UNCL      },
+};
+
+#undef UNCL
+#undef SYS
+#undef VTX
+#undef FRG
+#undef PRM
+#undef MEM
+#undef CMP
+#undef RT
+
+// The HW sampling period is programmed using period_exponent following this
+// formula:
+//    sample_period = timestamp_period * 2^(period_exponent + 1)
+// So our minimum sampling period is twice the timestamp period
+
+uint64_t IntelDriver::get_min_sampling_period_ns()
+{
+   return (2.f * perf->devinfo.timestamp_frequency) / 1000000000ull;
+}
+
+IntelDriver::IntelDriver()
+{
+}
+
+IntelDriver::~IntelDriver()
+{
+}
+
+void IntelDriver::enable_counter(uint32_t counter_id)
+{
+   auto &counter = counters[counter_id];
+
+   enabled_counters.emplace_back(counter);
+}
+
+void IntelDriver::enable_all_counters()
+{
+   // We should only have one group
+   assert(groups.size() == 1);
+   for (uint32_t counter_id : groups[0].counters) {
+      auto &counter = counters[counter_id];
+      enabled_counters.emplace_back(counter);
+   }
+}
+
+bool IntelDriver::init_perfcnt()
+{
+   /* Note: clock_id's below 128 are reserved.. for custom clock sources,
+    * using the hash of a namespaced string is the recommended approach.
+    * See: https://perfetto.dev/docs/concepts/clock-sync
+    */
+   this->clock_id = intel_pps_clock_id(drm_device.gpu_num);
+
+   if (perf)
+      return true;
+
+   perf = std::make_unique<IntelPerf>(drm_device.fd);
+
+   if (perf->cfg->features_supported & INTEL_PERF_FEATURE_OA_BLOCKED_BY_POLICY) {
+      PPS_LOG_ERROR("OA metrics access blocked by system policy "
+                    "(gpu=%d, driver=%s): "
+                    "Check kernel paranoid settings or run as root.",
+                    drm_device.gpu_num,
+                    drm_device.name.c_str());
+      return false;
+   }
+
+   if (perf->cfg->n_queries == 0) {
+      PPS_LOG_ERROR("No OA queries available for this device "
+                    "(gpu=%d, driver=%s)",
+                    drm_device.gpu_num,
+                    drm_device.name.c_str());
+      return false;
+   }
+
+   const char *metric_set_name = os_get_option("INTEL_PERFETTO_METRIC_SET");
+
+   struct intel_perf_query_info *default_query = nullptr;
+   selected_query = nullptr;
+   for (auto &query : perf->get_queries()) {
+      if (!strcmp(query->symbol_name, "RenderBasic"))
+         default_query = query;
+      if (metric_set_name && !strcmp(query->symbol_name, metric_set_name))
+         selected_query = query;
+   }
+
+   assert(default_query);
+
+   if (!selected_query) {
+      if (metric_set_name) {
+         PPS_LOG_ERROR("Available metric sets:");
+         for (auto &query : perf->get_queries())
+            PPS_LOG_ERROR("   %s", query->symbol_name);
+         PPS_LOG_FATAL("Metric set '%s' not available.", metric_set_name);
+      }
+      selected_query = default_query;
+   }
+
+   PPS_LOG("Using metric set '%s': %s",
+           selected_query->symbol_name, selected_query->name);
+
+   // Create Perfetto counter block
+   CounterGroup block = {};
+   block.id = groups.size();
+   block.name = selected_query->symbol_name;
+
+   for (int i = 0; i < selected_query->n_counters; ++i) {
+      intel_perf_query_counter &counter = selected_query->counters[i];
+
+      // Create counter
+      Counter counter_desc = {};
+      counter_desc.id = counters.size();
+      counter_desc.name = counter.symbol_name;
+      counter_desc.description = counter.desc;
+      counter_desc.group = block.id;
+      counter_desc.group_mask = classify_perfetto_counter_grp(counter.category);
+      counter_desc.getter = [counter, this](
+         const Counter &c, const Driver &dri) -> Counter::Value {
+         switch (counter.data_type) {
+         case INTEL_PERF_COUNTER_DATA_TYPE_UINT64:
+         case INTEL_PERF_COUNTER_DATA_TYPE_UINT32:
+         case INTEL_PERF_COUNTER_DATA_TYPE_BOOL32:
+            return (int64_t)counter.oa_counter_read_uint64(perf->cfg,
+                                                           selected_query,
+                                                           &perf->result);
+            break;
+         case INTEL_PERF_COUNTER_DATA_TYPE_DOUBLE:
+         case INTEL_PERF_COUNTER_DATA_TYPE_FLOAT:
+            return counter.oa_counter_read_float(perf->cfg,
+                                                 selected_query,
+                                                 &perf->result);
+            break;
+         }
+
+         return {};
+      };
+
+      // Add counter id to the group
+      block.counters.emplace_back(counter_desc.id);
+
+      // Store counter
+      counters.emplace_back(std::move(counter_desc));
+   }
+
+   // Store group
+   groups.emplace_back(std::move(block));
+
+   assert(counters.size() && "Failed to query counters");
+
+   // Clear accumulations
+   intel_perf_query_result_clear(&perf->result);
+
+   return true;
+}
+
+void IntelDriver::enable_perfcnt(uint64_t sampling_period_ns)
+{
+   this->sampling_period_ns = sampling_period_ns;
+
+   intel_gem_read_render_timestamp(drm_device.fd, perf->devinfo.kmd_type,
+                                   &gpu_timestamp_udw);
+   gpu_timestamp_udw &= ~perf->cfg->oa_timestamp_mask;
+   if (!perf->open(sampling_period_ns, selected_query)) {
+      PPS_LOG_FATAL("Failed to open intel perf");
+   }
+}
+
+void IntelDriver::disable_perfcnt()
+{
+   gpu_timestamp_udw = 0;
+   perf = nullptr;
+   groups.clear();
+   counters.clear();
+   enabled_counters.clear();
+}
+
+/// @brief Some perf record durations can be really short
+/// @return True if the duration is at least close to the sampling period
+static bool close_enough(uint64_t duration, uint64_t sampling_period)
+{
+   /* If the duration isn't greater than 67% of the request, we will use
+    * the next hw sampling period, which will be double the current duration.
+    * That value will fall somewhere between 100%-133%, guaranteeing a duration
+    * that falls closer to the requested sampling period overall, while scaling
+    * to accomodate relatively larger requested sample periods.
+    */
+   return duration > sampling_period * 0.67;
+}
+
+/// @brief Transforms the raw data received in from the driver into records
+std::vector<PerfRecord> IntelDriver::parse_perf_records(const std::vector<uint8_t> &data,
+   const size_t byte_count)
+{
+   std::vector<PerfRecord> records;
+   records.reserve(128);
+
+   PerfRecord record;
+   record.data.reserve(512);
+
+   const uint8_t *iter = data.data();
+   const uint8_t *end = iter + byte_count;
+
+   uint64_t prev_gpu_timestamp = last_gpu_timestamp;
+
+   while (iter < end) {
+      // Iterate a record at a time
+      auto header = reinterpret_cast<const intel_perf_record_header *>(iter);
+
+      if (header->type == INTEL_PERF_RECORD_TYPE_SAMPLE) {
+         // Report is next to the header
+         const uint32_t *report = reinterpret_cast<const uint32_t *>(header + 1);
+         uint64_t gpu_timestamp_ldw =
+            intel_perf_report_timestamp(selected_query, &perf->devinfo, report);
+
+         /* Our HW only provides us with the lower 32 bits of the 36bits
+          * timestamp counter value. If we haven't captured the top bits yet,
+          * do it now. If we see a roll over the lower 32bits capture it
+          * again.
+          */
+         if (gpu_timestamp_udw == 0 ||
+             (gpu_timestamp_udw | gpu_timestamp_ldw) < last_gpu_timestamp) {
+            intel_gem_read_render_timestamp(drm_device.fd,
+                                            perf->devinfo.kmd_type,
+                                            &gpu_timestamp_udw);
+            gpu_timestamp_udw &= ~perf->cfg->oa_timestamp_mask;
+         }
+
+         uint64_t gpu_timestamp = gpu_timestamp_udw | gpu_timestamp_ldw;
+
+         auto duration = intel_device_info_timebase_scale(&perf->devinfo,
+                                                          gpu_timestamp - prev_gpu_timestamp);
+
+         // Skip perf-records that are too short by checking
+         // the distance between last report and this one
+         if (close_enough(duration, sampling_period_ns)) {
+            prev_gpu_timestamp = gpu_timestamp;
+
+            // Add the new record to the list
+            record.timestamp = gpu_timestamp;
+            record.data.resize(header->size); // Possibly 264?
+            memcpy(record.data.data(), iter, header->size);
+            records.emplace_back(record);
+         }
+      }
+
+      // Go to the next record
+      iter += header->size;
+   }
+
+   return records;
+}
+
+/// @brief Read all the available data from the metric set currently in use
+void IntelDriver::read_data_from_metric_set()
+{
+   assert(metric_buffer.size() >= 1024 && "Metric buffer should have space for reading");
+
+   do {
+      ssize_t bytes_read = perf->read_oa_stream(metric_buffer.data() + total_bytes_read,
+                                                metric_buffer.size() - total_bytes_read);
+      if (bytes_read <= 0)
+         break;
+
+      total_bytes_read += std::max(ssize_t(0), bytes_read);
+
+      // Increase size of the buffer for the next read
+      if (metric_buffer.size() / 2 < total_bytes_read) {
+         metric_buffer.resize(metric_buffer.size() * 2);
+      }
+   } while (true);
+
+   assert(total_bytes_read < metric_buffer.size() && "Buffer not big enough");
+}
+
+bool IntelDriver::dump_perfcnt()
+{
+   if (!perf->oa_stream_ready()) {
+      return false;
+   }
+
+   read_data_from_metric_set();
+
+   auto new_records = parse_perf_records(metric_buffer, total_bytes_read);
+   if (new_records.empty()) {
+      // No new records from the GPU yet
+      return false;
+   } else {
+      // Records are parsed correctly, so we can reset the
+      // number of bytes read so far from the metric set
+      total_bytes_read = 0;
+   }
+
+   APPEND(records, new_records);
+
+   if (records.size() < 2) {
+      // Not enough records to accumulate
+      return false;
+   }
+
+   return true;
+}
+
+uint64_t IntelDriver::gpu_next()
+{
+   if (records.size() < 2) {
+      // Not enough records to accumulate
+      return 0;
+   }
+
+   // Get first and second
+   auto record_a = reinterpret_cast<const intel_perf_record_header *>(records[0].data.data());
+   auto record_b = reinterpret_cast<const intel_perf_record_header *>(records[1].data.data());
+
+   intel_perf_query_result_accumulate_fields(&perf->result,
+                                             selected_query,
+                                             record_a + 1,
+                                             record_b + 1,
+                                             false /* no_oa_accumulate */);
+
+   // Get last timestamp
+   auto gpu_timestamp = records[1].timestamp;
+
+   // Consume first record
+   records.erase(std::begin(records), std::begin(records) + 1);
+
+   return intel_device_info_timebase_scale(&perf->devinfo, gpu_timestamp);
+}
+
+uint64_t IntelDriver::next()
+{
+   // Reset accumulation
+   intel_perf_query_result_clear(&perf->result);
+   return gpu_next();
+}
+
+uint32_t IntelDriver::gpu_clock_id() const
+{
+   return this->clock_id;
+}
+
+uint64_t IntelDriver::gpu_timestamp() const
+{
+   uint64_t timestamp;
+   intel_gem_read_render_timestamp(drm_device.fd, perf->devinfo.kmd_type,
+                                   &timestamp);
+   return intel_device_info_timebase_scale(&perf->devinfo, timestamp);
+}
+
+bool IntelDriver::cpu_gpu_timestamp(uint64_t &cpu_timestamp,
+                                    uint64_t &gpu_timestamp) const
+{
+   if (!intel_gem_read_correlate_cpu_gpu_timestamp(drm_device.fd,
+                                                   perf->devinfo.kmd_type,
+                                                   INTEL_ENGINE_CLASS_RENDER, 0,
+                                                   CLOCK_BOOTTIME,
+                                                   &cpu_timestamp,
+                                                   &gpu_timestamp,
+                                                   NULL))
+      return false;
+
+   gpu_timestamp =
+      intel_device_info_timebase_scale(&perf->devinfo, gpu_timestamp);
+   return true;
+}
+
+uint32_t IntelDriver::classify_perfetto_counter_grp(const char *category)
+{
+   uint32_t grp_mask = BITFIELD_BIT(UNCLASSIFIED);
+   if (!category)
+      return grp_mask;
+
+   std::string_view key(category);
+
+   auto it = categoryToPerfettogrpMask.find(key);
+   if (it != categoryToPerfettogrpMask.end()) {
+      return it->second;
+   }
+
+   static std::unordered_map<std::string_view, bool> warn_new_category_once;
+   if (warn_new_category_once.emplace(key, true).second) {
+         mesa_logw("Unknown category '%s' for counter, classifying as UNCLASSIFIED", category);
+         PPS_LOG_IMPORTANT("Unknown category '%s' for counter, classifying as UNCLASSIFIED", category);
+   }
+
+   return grp_mask;
+}
+
+} // namespace pps

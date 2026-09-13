@@ -1,0 +1,3 @@
+attrs==25.4.0
+packaging==26.0
+urwid==3.0.3

@@ -1,0 +1,295 @@
+Mesa 25.3.4 Release Notes / 2026-01-23
+======================================
+
+Mesa 25.3.4 is a bug fix release which fixes bugs found since the 25.3.3 release.
+
+Mesa 25.3.4 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 25.3.4 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+   SHA256: 3a0fc6ec070b45ae25dc2ccb5e52fae1d89141f7c39c4a91fe4eaa80dfff9deb  mesa-25.3.4.tar.xz
+   SHA512: 3043bebebebc90ba443bbc96d71fbae41c76504d54ff6a44a48ad7c3a132db09e3ad1ae607c49f1d58b724a8b6e4263b68ee5722f8b98328481eb2e82164ac3a  mesa-25.3.4.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- [radv] Regression causes Resident Evil 4 crashes with instruction QA checks in vkd3d-proton
+- RX Vega 64 driver hang when processing a large amount of vertex shaders (OpenGOAL: Jak And Daxter 1)
+- radv: Kingdom Come Deliverance 1 RDNA4 RGP capture has missing cache counters for dispatch
+- Radv nir lowering seg-faults if given ray query proceed before initialize
+- Regression in Vulkan driver for Intel iGPU.
+- anv/intel-brw: enable SIMD32 shaders with ray queries
+- GTT memory leak when running OpenGL games/software on an AMD RX 6600 XT
+- [wsi_common_headless] \`VkSurfacePresentModeCompatibilityKHR` is not populated when using \`VK_EXT_headless_surface`
+- [radv] - WITCH ON THE HOLY NIGHT (2052410) - Flickering squares on some UI elements with gfx1150/1151
+- va no longer correctly converts YUV to RGB
+- [RX 9060 XT / gfx1200] VCN page fault & ring timeout during VAAPI HEVC encode with scale_vaapi
+- UB in NIR when using reallocated range_minimum_query_table
+- [RADV]: cooperative matrix regression
+- Clarify gallium-rusticl-enable-drivers build option
+
+
+Changes
+-------
+
+Alyssa Rosenzweig (1):
+
+- agx: fix SSA repair with phis with constants
+
+Alyssa Ross (1):
+
+- rocket: fix building for musl
+
+Anna Maniscalco (1):
+
+- zink: fix use_reusable_pool condition
+
+Benjamin Cheng (2):
+
+- radeonsi/vcn: Factor out rec_alignment
+- radeonsi/vcn: Allocate DPBs aligned to rec_alignment
+
+Caio Oliveira (1):
+
+- brw: Fix and properly use increment_a64_address()
+
+Calder Young (1):
+
+- anv/rt: Disable compaction for updatable acceleration structures
+
+Caterina Shablia (1):
+
+- panvk: remove AFBC header zeroing
+
+Daniel Schürmann (3):
+
+- aco/lower_to_hw: Fix SGPR Operand RegClasses of subdword copies
+- aco/lower_to_hw: Don't use 2 SGPR operands before GFX10 in a single VOP3 instruction in do_pack_2x16()
+- aco/lower_to_hw: Fix SGPR Operand RegClasses for pack_2x16
+
+Danylo Piliaiev (2):
+
+- tu: Restore PC_TESS_BASE after BIN preemption save/restore
+- tu: Fix misleading lrz_disabled_at_draw values for RP
+
+Dave Airlie (4):
+
+- device-select: add a layer setting to disable device selection logic
+- zink: use device select layer settings to disable device selection
+- radv/coopmat: fix deref stride
+- gallivm: swap 1d array coords before casting.
+
+David Rosca (2):
+
+- frontends/va: Also treat PRI/TRC_RESERVED0 as unspecified
+- frontends/va: Fix RGB/YUV conversion in Get/PutImage
+
+Dylan Baker (20):
+
+- docs: Add 25.3.3 checksums
+- .pick_status.json: Update to 65c2dc5a634b6ee31979546ec5eb5212d6ffe721
+- .pick_status.json: Update to f8634fe5e664fce6248c181647efbd92fa3d405a
+- .pick_status.json: Update to d160b7726ace88a63a3c589dab4b105b3d1fa534
+- .pick_status.json: Update to fdfe3acdf040470e5e10a4b198869aaa8efb54e5
+- .pick_status.json: Update to 1c118b931961ecac2cd2a971bf2d79bb68102266
+- .pick_status.json: Update to cf3f55631210137f8d9c276b44b97dd75827016a
+- .pick_status.json: Updates notes for 47366527ce20b54d1b1a4811bcb6481e09a38402
+- .pick_status.json: Updates notes for 2a35d624b22d12b2b71b3723666fc5a79d0229d8
+- .pick_status.json: Updates notes for 76e7a1cde4afc48e8428cc1fbd87c31529f3877d
+- .pick_status.json: Updates notes for d563415100f265a8257233309ff378a2855cd07c
+- .pick_status.json: Mark 68690eaf4a21c2f8702b9c0348d90a08b3618a36 as denominated
+- .pick_status.json: Update to 71f54341429535d406dcdf58961d03ed23d137ee
+- .pick_status.json: Mark d563415100f265a8257233309ff378a2855cd07c as denominated
+- .pick_status.json: Update to e58b32a8c1f6540883bcc0d8347611bd6985758e
+- .pick_status.json: Mark 2bd282a9680f6a53bff70f54e60b1c10aefce97a as denominated
+- .pick_status.json: Update to 1b1e38ffd518933ea065cf485ad0a7871433b3fc
+- .pick_status.json: Mark 47366527ce20b54d1b1a4811bcb6481e09a38402 as backported
+- .pick_status.json: Mark 76e7a1cde4afc48e8428cc1fbd87c31529f3877d as backported
+- .pick_status.json: Mark feed5fbc7187f0fa3d2499e527026b6f98b6c7ce as backported
+
+Emma Anholt (1):
+
+- nir: Fix constant evaluation of non-32-bit bitfield_extract.
+
+Eric Engestrom (2):
+
+- rusticl: fix 'enable-drivers' meson option
+- vk/runtime,zink: only integrate renderdoc on supported platforms
+
+Erik Faye-Lund (1):
+
+- pvr: add missing forward-declaration
+
+Faith Ekstrand (3):
+
+- pan/bi: Use bi_emit_collect_to() for load_const
+- panvk/csf: Stop calling blend_emit_descs() with no FS
+- pan/bi: Mark whole flat variables
+
+Frank Binns (1):
+
+- pvr: check image usage features against image features
+
+Georg Lehmann (2):
+
+- util: add IEEE 754-2019 min/max number
+- nir/opcodes: fix fsat signed zero correctness
+
+Gurchetan Singh (1):
+
+- meson: avoid calling nm.full_path() when tool is not found
+
+Ian Romanick (3):
+
+- nir/algebraic: Add missing f on F-strings
+- mesa: Fix segfaults in _mesa_delete_program and _mesa_reference_program_
+- nir/algebraic: Detect missing f on F-strings
+
+Icenowy Zheng (4):
+
+- vulkan/wsi/headless: do not destroy images that are never created
+- mesa: workaround GL_INVALID_OPERATION in GLES 2.0 draws
+- mesa: fix GL_INVALID_OPERATION with GLES1/2 + Kopper
+- mesa: fix GL_INVALID_OPERATION when releasing buffer in GLES1/2 ctx
+
+Konstantin Seurer (1):
+
+- radv: Fix crash if proceed comes before initialize
+
+Lakshman Chandu Kondreddy (1):
+
+- dri: Add R32F,RG32F,RGBA32F format mappings for DRIImage
+
+Lars-Ivar Hesselberg Simonsen (1):
+
+- panfrost/bi: Fix potential out-of-bounds writes
+
+Lionel Landwerlin (9):
+
+- anv: missing device_memory_report shader free
+- brw/nir/rt: ensure we can load 2 RT_DISPATCH_GLOBALS
+- nir: add missing divergence handling for ray_query_global_intel
+- anv/brw: prep work for SIMD32 ray queries
+- brw: enable ray query spilling in SIMD32
+- brw: handle lowering of a couple of opcodes
+- brw: enable topology opcodes in SIMD32
+- brw: enable SIMD32 compute shaders with ray queries
+- brw: fix derivatives on non 32bit floats
+
+Lucas Stach (1):
+
+- etnaviv: check all necessary dirty bits when marking constbufs during draw
+
+Marek Olšák (5):
+
+- radeonsi: fix color interpolation when finalize_nir is called twice
+- ac/lower_ngg_mesh: fix a segfault accessing out_variables out of bounds
+- radeonsi: fix slightly incorrect assertions in si_shader_ps
+- radeonsi: fix incorrect PS shader key with sample shading
+- nir/clip_cull_distance_utils: fix assertion failures with GL_EXT_mesh_shader
+
+Mary Guillemard (1):
+
+- hk: Hash the multiview mask for both vertex and fragment stages
+
+Mel Henning (1):
+
+- util/rmq: Fix uninitialized read in preprocess
+
+Mike Blumenkrantz (4):
+
+- zink: correctly use GENERAL layout for dynamic texture clears
+- zink: delete all the no-op checks when rewriting clears
+- zink: create new transient image if the sample count doesn't match
+- zink: explicitly null pipe_resource::next when creating transients
+
+Pierre-Eric Pelloux-Prayer (2):
+
+- Revert "glthread: mark internal bufferobjs for the ctx they belong to"
+- mesa: add assert to validate the no atomic path
+
+Qiang Yu (2):
+
+- radeonsi: fix primitive restart gpu hang for pre gfx10
+- radv: fix primitive restart gpu hang for pre gfx10
+
+Rhys Perry (2):
+
+- ac/nir: don't vectorize 16-bit shared loads to 8-bit
+- aco: use size_t for monotonic_buffer_resource
+
+Rob Clark (1):
+
+- tu: Fix TU_DRAW_STATE_VB size
+
+Sagar Ghuge (1):
+
+- anv/rt: Don't always set disableOpacityCull bit
+
+Samuel Pitoiset (7):
+
+- ac/spm: fix GRBM broadcasting for global blocks
+- ac/cmdbuf: disable ENABLE_PING_PONG_BIN_ORDER on GFX11.5
+- ac/sdma: fix stencil only copies on GFX9
+- radv: fix capturing performance counters with SPM
+- radv/sqtt: delay VMID reservation at capture time
+- radv/meta: use 2D array for color resolves with compute
+- ac/nir: fix computing cube derivatives when the major axis is negative
+
+Tapani Pälli (1):
+
+- crocus: make sure we have at least 1x1 surface to create null surf
+
+Timur Kristóf (1):
+
+- nir/opt_vectorize_io: Fix allow_holes option
+
+Utku Iseri (1):
+
+- zink: handle split DS blits with zink_blit calls
+
+Valentine Burley (1):
+
+- Revert "ci/android: add sudo to EPHEMERAL deps for debian/x86_64_test-android.sh"
+
+Vinson Lee (1):
+
+- util/blob: Fix const correctness warning in blob_read_string
+
+Yiwei Zhang (6):
+
+- zink: tighten up export paths that require true dmabuf support
+- venus: respect VK_SUBOPTIMAL_KHR returned from wsi image acquire
+- venus: workaround to consider ALIAS for image mem req cache
+- venus: fix aliased image memory requirement caching
+- vulkan/wsi: avoid host stage when blit to foreign queue
+- vulkan/wsi: fix present wait support and present id creation condition
+
+anonymix007 (1):
+
+- tgsi/nir: Store output variables before each TGSI_OPCODE_RET
+
+llyyr (3):
+
+- vulkan/wsi/headless: populate VkSurfacePresentModeCompatibilityKHR
+- vulkan/wsi/headless: add stub for VkSurfacePresentScalingCapabilitiesKHR
+- vulkan/wsi/headless: implement vkReleaseSwapchainImagesKHR for headless

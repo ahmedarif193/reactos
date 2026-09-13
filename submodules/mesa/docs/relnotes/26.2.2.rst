@@ -1,0 +1,249 @@
+Mesa 26.2.2 Release Notes / 2026-09-02
+======================================
+
+Mesa 26.2.2 is a bug fix release which fixes bugs found since the 26.2.1 release.
+
+Mesa 26.2.2 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 26.2.2 implements the OpenCL 3.1 API, but the version reported by
+the CL_DEVICE_VERSION, CL_DEVICE_NUMERIC_VERSION and CL_DEVICE_OPENCL_C_ALL_VERSIONS
+clGetDeviceInfo queries depends on the particular driver being used.
+
+Mesa 26.2.2 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+    TBD.
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- 26.2.x build fails with armhf
+- Confidential issue #15052
+- GL stencil reference query does not update immediately
+- Mesa 26.2.1: radeonsi no longer loads for GCN1 / Pitcairn when using radeon driver.
+- Textures got swapped/glitched on Wuthering Waves game.
+- [Navi10][RadeonSI/RADV] NGG culling causes nondeterministic GPU hangs; nonggc fixes both OpenGL and Vulkan
+- [radv][bisected][regression] Broken rendering in Persona 3 Reload menu on RDNA2 in gamescope
+- radv ignores count of 0 in vkCmdDrawIndirect
+
+
+Changes
+-------
+
+Allen Ballway (1):
+
+- anv: Fix ASTC emulation sync in CopyMemoryToImage
+
+Ashley Smith (1):
+
+- pan/bifrost: Fix shader clock selection
+
+Benjamin Cheng (1):
+
+- mesa/main: Add extra_new_buffers for STENCIL_REF
+
+Christian Gmeiner (2):
+
+- etnaviv: Program the i2i destination type in src1
+- etnaviv: nir: Call nir_opt_combine_stores(..)
+
+Dave Airlie (1):
+
+- nir: move load_ssbo_address to taking variable size src0
+
+David Rosca (6):
+
+- va: Compare file descriptions to deduplicate objects when exporting surface
+- va: Parse all HEVC slice NAL unit types
+- va: Parse HEVC encode slice_temporal_mvp_enabled_flag
+- va: Fix parsing HEVC decode slice_temporal_mvp_enabled_flag
+- va: Fix parsing HEVC VPS timing info
+- radeonsi/mm: Fix VCN encode allowed_max_bitstream_size
+
+Dmitry Baryshkov (3):
+
+- turnip: scale the transform feedback counter offset on a6xx
+- freedreno/a6xx: subtract the transform feedback buffer offset in CP_DRAW_AUTO
+- nv30: fix abs source modifier on fragment program sources 1 and 2
+
+Dominique Belhachemi (1):
+
+- pco: fix compile failure for arrayLength() on non-power-of-two strides
+
+Emma Anholt (6):
+
+- freedreno/ir3: Actually pass cs_lock_unlock_quirk into the compiler.
+- tu: Fix VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT.
+- tu: Fix stitching together set layouts from graphics pipeline libraries.
+- tu: Add missing reservation of the extra safe-const VPC state for GSes.
+- tu: Fix the block texel view check for force_disable_linear_fallback.
+- tu: Publish proper aspect masks for D32S8 VkSparseImageMemoryRequirements2.
+
+Eric Engestrom (4):
+
+- docs: add sha sum for 26.2.1
+- .pick_status.json: Update to 7d6bb09d5b59ec5af1a58971f34390a62943bfe0
+- [26.2 only] pco: plumb \`pco_data` through to \`pco_nir_opt()`
+- ci-tron: bypass caching proxy for docker images
+
+Erik Faye-Lund (1):
+
+- docs: fix javascript-warning on search-page
+
+Frank Binns (1):
+
+- pvr: check command buffer is in recording state in vkCmd{Begin,End}Rendering
+
+Georg Lehmann (1):
+
+- radv: fix lower_array_layer_round_even condition
+
+Icenowy Zheng (2):
+
+- pco: fix ra emit_copies sidecases
+- pvr: set ycbcr sampler state words when any sampler word is present
+
+Jesse Natalie (3):
+
+- d3d12: Stop using D3D12_IGNORE_SDK_LAYERS
+- dzn: Rearrange includes and stop using D3D12_IGNORE_SDK_LAYERS
+- vk/wsi/win32: Stop using D3D12_IGNORE_SDK_LAYERS
+
+Jiming Liu (1):
+
+- ac/virtio: Fix VIRTIO_SHARED flag masking
+
+Job Noorman (1):
+
+- freedreno/computerator: attach perfcntr BO to CS
+
+Jordan Justen (2):
+
+- intel/dev: Drop 0xd744 PCI ID
+- intel/dev: Enable NVL-S/U PCI IDs (without FORCE_PROBE)
+
+Jose Maria Casanova Crespo (4):
+
+- v3d: flush jobs that queue too many draw calls
+- broadcom/qpu: decode fully the input unpack from mul FMOV
+- broadcom/qpu: decode the fround-group input unpack from raddr_b on V3D 7.1
+- broadcom/compiler: fill the old value when spilling a partial write
+
+Lionel Landwerlin (2):
+
+- anv: don't forget to hash render pass color attachments
+- intel: fixup mcs sampler handle lowering
+
+Lorenzo Rossi (3):
+
+- panfrost: Always emit vertex attribute descriptors for arch < v9
+- panvk/jm: Always emit vertex attribute descriptors
+- panvk/jm: Fix unbound attribute reads
+
+Marc Alcala Prieto (1):
+
+- panfrost/model: Fix G720 and G725 sfu rates
+
+Marek Olšák (3):
+
+- mesa: clamp level count to the allocated level count in mipmap generation
+- radv: skip indirect draws with (max)drawCount == 0
+- radv: fix RADV_FORCE_VRS (Persona 3 Reload)
+
+Mike Blumenkrantz (2):
+
+- lavapipe: reset compute shader info in emit_compute_state()
+- lavapipe: zero compute state for every mesh draw
+
+Nanley Chery (1):
+
+- intel/isl: Support MSAA in subimage range helper
+
+Olivia Lee (1):
+
+- panvk/csf: fix layered FB barrier in secondary cmdbufs
+
+Pierre-Eric Pelloux-Prayer (1):
+
+- loader: consider radeon in amd_predicate
+
+Rhys Perry (3):
+
+- nir: add deref_buffer_address
+- ac/nir: implement load_ssbo_address
+- radv: use load_deref_buffer_address
+
+Rob Clark (1):
+
+- tu: Fix gen8 TEX_LINE_OFFSET
+
+Rob Herring (Arm) (1):
+
+- ethosu: Fix flattened fully connected inputs
+
+Rohan Garg (1):
+
+- pvr: use a load op for the resolve stencil load op
+
+Samuel Pitoiset (2):
+
+- radv: fix copying VRS rates with a non-zero base layer correctly
+- amd: only enable the addrlib SIMD path when supported
+
+Simon Perretta (9):
+
+- nir: generalize the src type of interleave to tuint
+- pco: drop i2i16 conversion for nir_interleave srcs
+- pco: flush the cache for images accessed via atomics and non-atomics
+- pco: skip propagating access for derefs without vars
+- pco: pass shader data to preprocessing function
+- pco: consider robustness in load/store vectorization
+- pco: amend atomic address calculation for 2d images
+- pco: ensure nir_global_atomic_pco ops are tracked
+- pco: use the source from src instead of io when building mappings
+
+Timur Kristóf (6):
+
+- radv: Invalidate L2 cache on ACE after waiting for SDMA
+- radv: Create separate BO for gang semaphore to avoid coherency and perf issues
+- aco/optimizer: Keep MUBUF SOFFSET on GFX6-7
+- aco/isel: Use SOFFSET when selecting buffer loads with index VGPR
+- radv/nir: Don't fold constant offset into index VGPR for VS inputs anymore
+- ac/nir/ngg: Use ds_or_b32 for storing culling flags on Navi 10
+
+Valentine Burley (7):
+
+- lvp/ci: Update expectations after gitlab-runner update
+- tu: Fix requiredSubgroupSizeStages enablement
+- freedreno, tu: Limit XFB streams on GPUs lacking multi-stream query support
+- tu: Create patchpoints_ctx before emitting subpass begin in renderpass
+- tu: Ignore FDM offsets for subsampled images when shared viewport is active
+- tu: Do not bake static viewport/scissor when FDM is enabled
+- tu: Fix GMEM clears with an FDM offset on the blit-event clear path
+
+Wei Zhao (1):
+
+- wsi/display: allocate the EDID display name only once
+
+Yiwei Zhang (2):
+
+- panvk/android: avoid pNext injection of caller ANB info
+- venus: ensure queue submission pNext chain ends properly

@@ -1,0 +1,184 @@
+/*
+ * Copyright 2024 Valve Corporation
+ * Copyright 2024 Alyssa Rosenzweig
+ * Copyright 2022-2023 Collabora Ltd. and Red Hat Inc.
+ * SPDX-License-Identifier: MIT
+ */
+#include "hk_instance.h"
+
+#include "hk_entrypoints.h"
+#include "hk_physical_device.h"
+
+#include "vulkan/wsi/wsi_common.h"
+
+#include "util/build_id.h"
+#include "hk_drirc.h"
+#include "util/mesa-blake3.h"
+#include "util/os_misc.h"
+
+VKAPI_ATTR VkResult VKAPI_CALL
+hk_EnumerateInstanceVersion(uint32_t *pApiVersion)
+{
+   uint32_t version_override = vk_get_version_override();
+   *pApiVersion = version_override ? version_override
+                                   : VK_MAKE_VERSION(1, 4, VK_HEADER_VERSION);
+
+   return VK_SUCCESS;
+}
+
+static const struct vk_instance_extension_table instance_extensions = {
+#ifdef HK_USE_WSI_PLATFORM
+   .KHR_get_surface_capabilities2 = true,
+   .KHR_surface = true,
+   .KHR_surface_maintenance1 = true,
+   .KHR_surface_protected_capabilities = true,
+   .EXT_surface_maintenance1 = true,
+   .EXT_swapchain_colorspace = true,
+#endif
+#ifdef VK_USE_PLATFORM_WAYLAND_KHR
+   .KHR_wayland_surface = true,
+#endif
+#ifdef VK_USE_PLATFORM_XCB_KHR
+   .KHR_xcb_surface = true,
+#endif
+#ifdef VK_USE_PLATFORM_XLIB_KHR
+   .KHR_xlib_surface = true,
+#endif
+#ifdef VK_USE_PLATFORM_XLIB_XRANDR_EXT
+   .EXT_acquire_xlib_display = true,
+#endif
+#ifdef VK_USE_PLATFORM_DISPLAY_KHR
+   .KHR_display = true,
+   .KHR_get_display_properties2 = true,
+   .EXT_direct_mode_display = true,
+   .EXT_display_surface_counter = true,
+   .EXT_acquire_drm_display = true,
+#endif
+#ifndef VK_USE_PLATFORM_WIN32_KHR
+   .EXT_headless_surface = true,
+#endif
+   .KHR_device_group_creation = true,
+   .KHR_external_fence_capabilities = true,
+   .KHR_external_memory_capabilities = true,
+   .KHR_external_semaphore_capabilities = true,
+   .KHR_get_physical_device_properties2 = true,
+   .EXT_debug_report = true,
+   .EXT_debug_utils = true,
+};
+
+VKAPI_ATTR VkResult VKAPI_CALL
+hk_EnumerateInstanceExtensionProperties(const char *pLayerName,
+                                        uint32_t *pPropertyCount,
+                                        VkExtensionProperties *pProperties)
+{
+   if (pLayerName)
+      return vk_error(NULL, VK_ERROR_LAYER_NOT_PRESENT);
+
+   return vk_enumerate_instance_extension_properties(
+      &instance_extensions, pPropertyCount, pProperties);
+}
+
+static void
+hk_init_dri_options(struct hk_instance *instance)
+{
+   hk_parse_dri_options(&instance->drirc,
+                        &(driConfigFileParseParams) {
+                           .driverName = "hk",
+                           .applicationName = instance->vk.app_info.app_name,
+                           .applicationVersion = instance->vk.app_info.app_version,
+                           .engineName = instance->vk.app_info.engine_name,
+                           .engineVersion = instance->vk.app_info.engine_version,
+                        });
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+hk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+                  const VkAllocationCallbacks *pAllocator,
+                  VkInstance *pInstance)
+{
+   struct hk_instance *instance;
+   VkResult result;
+
+   if (pAllocator == NULL)
+      pAllocator = vk_default_allocator();
+
+   instance = vk_alloc(pAllocator, sizeof(*instance), 8,
+                       VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+   if (!instance)
+      return vk_error(NULL, VK_ERROR_OUT_OF_HOST_MEMORY);
+
+   struct vk_instance_dispatch_table dispatch_table;
+   vk_instance_dispatch_table_from_entrypoints(&dispatch_table,
+                                               &hk_instance_entrypoints, true);
+   vk_instance_dispatch_table_from_entrypoints(
+      &dispatch_table, &wsi_instance_entrypoints, false);
+
+   result = vk_instance_init(&instance->vk, &instance_extensions,
+                             &dispatch_table, pCreateInfo, pAllocator);
+   if (result != VK_SUCCESS)
+      goto fail_alloc;
+
+   hk_init_dri_options(instance);
+
+   instance->vk.physical_devices.try_create_for_drm =
+      hk_create_drm_physical_device;
+   instance->vk.physical_devices.destroy = hk_physical_device_destroy;
+
+   const struct build_id_note *note =
+      build_id_find_nhdr_for_addr(hk_CreateInstance);
+   if (!note) {
+      result = vk_errorf(NULL, VK_ERROR_INITIALIZATION_FAILED,
+                         "Failed to find build-id");
+      goto fail_init;
+   }
+
+   unsigned build_id_len = build_id_length(note);
+   if (build_id_len < BUILD_ID_EXPECTED_HASH_LENGTH) {
+      result = vk_errorf(NULL, VK_ERROR_INITIALIZATION_FAILED,
+                         "build-id too short.  It needs to be a SHA");
+      goto fail_init;
+   }
+
+   static_assert(sizeof(instance->driver_build_sha) == BLAKE3_KEY_LEN);
+   copy_build_id_to_sha1(instance->driver_build_sha, note);
+
+   *pInstance = hk_instance_to_handle(instance);
+   return VK_SUCCESS;
+
+fail_init:
+   vk_instance_finish(&instance->vk);
+fail_alloc:
+   vk_free(pAllocator, instance);
+
+   return result;
+}
+
+VKAPI_ATTR void VKAPI_CALL
+hk_DestroyInstance(VkInstance _instance,
+                   const VkAllocationCallbacks *pAllocator)
+{
+   VK_FROM_HANDLE(hk_instance, instance, _instance);
+
+   if (!instance)
+      return;
+
+   driDestroyOptionCache(&instance->drirc.options);
+   driDestroyOptionInfo(&instance->drirc.available_options);
+
+   vk_instance_finish(&instance->vk);
+   vk_free(&instance->vk.alloc, instance);
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+hk_GetInstanceProcAddr(VkInstance _instance, const char *pName)
+{
+   VK_FROM_HANDLE(hk_instance, instance, _instance);
+   return vk_instance_get_proc_addr(&instance->vk, &hk_instance_entrypoints,
+                                    pName);
+}
+
+PUBLIC VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName)
+{
+   return hk_GetInstanceProcAddr(instance, pName);
+}

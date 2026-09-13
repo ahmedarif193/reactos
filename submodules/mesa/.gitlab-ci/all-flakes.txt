@@ -1,0 +1,5 @@
+# wsi_common_display.c doesn't properly hand off the oldSwapchain to the new one,
+# and you can end up trying to atomic commit before the last present has flipped,
+# and the kernel throws an error.
+dEQP-VK.wsi.direct.present_timing.basic.retired_swapchain
+dEQP-VK.wsi.direct_drm.present_timing.basic.retired_swapchain

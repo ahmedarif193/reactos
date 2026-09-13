@@ -1,0 +1,6 @@
+# These are variants of
+# dEQP-VK.memory.mapping.suballocation.full.variable.implicit_unmap* that
+# are very slow (often 30s on DUTs) due to allocating, mapping, filling,
+# and reading back 32GB of memory, while not providing interesting pre-merge
+# coverage for us.
+dEQP-VK.memory.mapping.dedicated_alloc.*.implicit_unmap.*

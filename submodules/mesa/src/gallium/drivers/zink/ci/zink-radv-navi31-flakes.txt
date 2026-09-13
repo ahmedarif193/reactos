@@ -1,0 +1,61 @@
+dEQP-GLES31.functional.copy_image.mixed.viewclass_128_bits_mixed.rgba_astc_10x10_khr_rgba32f.texture2d_array_to_texture2d
+dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.r32f_rgba8i.cubemap_to_renderbuffer
+dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.r32ui_rg16i.renderbuffer_to_texture2d
+dEQP-GLES31.functional.copy_image.non_compressed.viewclass_64_bits.rg32f_rg32f.texture3d_to_cubemap
+dEQP-GLES31.functional.tessellation.invariance.primitive_set.triangles_equal_spacing_ccw_point_mode
+dEQP-GLES31.functional.tessellation.invariance.primitive_set.triangles_equal_spacing_cw_point_mode
+dEQP-GLES31.functional.tessellation.invariance.primitive_set.triangles_fractional_even_spacing_ccw_point_mode
+dEQP-GLES31.functional.tessellation.invariance.primitive_set.triangles_fractional_even_spacing_cw_point_mode
+dEQP-GLES31.functional.tessellation.invariance.primitive_set.triangles_fractional_odd_spacing_ccw_point_mode
+dEQP-GLES31.functional.tessellation.invariance.primitive_set.triangles_fractional_odd_spacing_cw_point_mode
+dEQP-GLES3.functional.fragment_ops.blend.fbo_srgb.equation_src_func_dst_func.reverse_subtract_one_one_minus_dst_alpha
+dEQP-GLES3.functional.fragment_ops.blend.fbo_srgb.equation_src_func_dst_func.reverse_subtract_src_alpha_one_minus_src_color
+dEQP-GLES3.functional.fragment_out.array.fixed.rgb565_highp_vec4
+dEQP-GLES3.functional.occlusion_query.conservative_depth_clear_stencil_write
+dEQP-GLES3.functional.occlusion_query.conservative_scissor_depth_write
+dEQP-GLES3.functional.occlusion_query.depth_write_stencil_write
+dEQP-GLES3.functional.texture.specification.texstorage2d.format.rg8i_2d
+dEQP-GLES3.functional.texture.specification.texstorage3d.format.rgb32f_3d
+dEQP-GLES3.functional.transform_feedback.random_full_array_capture.separate.triangles.5
+glx@glx-multithread-texture
+KHR-GL46.direct_state_access.framebuffers_texture_layer_attachment
+KHR-GL46.packed_pixels.varied_rectangle.compressed_red_format_rgb
+KHR-GL46.packed_pixels.varied_rectangle.compressed_red_rgtc1_format_red
+KHR-GL46.packed_pixels.varied_rectangle.compressed_signed_rg_rgtc2_format_rg
+KHR-GL46.packed_pixels.varied_rectangle.compressed_srgb_alpha_format_bgr
+KHR-GL46.packed_pixels.varied_rectangle.r16f_format_bgra
+KHR-GL46.packed_pixels.varied_rectangle.r8ui_format_rgba_integer
+KHR-GL46.sparse_buffer_tests.BufferStorageTest_case_g
+spec@arb_blend_func_extended@arb_blend_func_extended-fbo-extended-blend_gles3
+spec@arb_direct_state_access@gettextureimage-formats init-by-rendering
+spec@arb_fragment_shader_interlock@arb_fragment_shader_interlock-image-load-store
+spec@arb_pixel_buffer_object@texsubimage-unpack pbo
+spec@arb_point_parameters@arb_point_parameters-point-attenuation
+spec@arb_point_parameters@arb_point_parameters-point-attenuation@Antialiased combinations
+spec@arb_texture_multisample@arb_texture_multisample-dsa-texelfetch
+spec@arb_texture_multisample@arb_texture_multisample-dsa-texelfetch@Texture type: GL_RGB9_E5
+spec@egl_mesa_configless_context@basic
+spec@ext_framebuffer_object@getteximage-formats init-by-clear-and-render
+spec@ext_framebuffer_object@getteximage-formats init-by-rendering
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yuyv
+spec@ext_texture_array@fbo-depth-array depth-draw
+spec@ext_texture_array@fbo-depth-array depth-layered-clear
+spec@ext_texture_array@fbo-depth-array fs-writes-stencil
+spec@ext_texture_array@fbo-depth-array stencil-clear
+spec@glsl-1.30@execution@texelfetch fs sampler1darray 1x71-501x71
+spec@glsl-1.30@execution@texelfetch fs sampler2darray 1x129x9-98x129x9
+spec@glsl-1.30@execution@texelfetch fs sampler2darray 98x1x9-98x129x9
+spec@glsl-1.50@execution@geometry@point-size-out
+spec@glsl-1.50@execution@redeclare-pervertex-out-subset-gs
+spec@glsl-es-3.00@execution@built-in-functions@vs-unpackhalf2x16
+spec@!opengl 1.0@rasterpos
+spec@!opengl 1.1@depthstencil-default_fb-blit samples=4
+spec@!opengl 1.1@depthstencil-default_fb-copypixels samples=6
+spec@!opengl 1.1@draw-pixels
+spec@!opengl 1.1@draw-sync
+spec@!opengl 1.1@getteximage-formats
+spec@!opengl 2.0@tex3d-npot
+
+asan-KHR-GL46.packed_pixels.pbo_rectangle.*
+asan-KHR-GL46.packed_pixels.rectangle.*
+asan-KHR-GL46.packed_pixels.varied_rectangle.*

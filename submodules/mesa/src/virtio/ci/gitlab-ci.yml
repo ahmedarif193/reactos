@@ -1,0 +1,98 @@
+include:
+  - local: 'src/virtio/ci/gitlab-ci-inc.yml'
+
+venus-lavapipe:
+  extends:
+    - .deqp-test
+    - .venus-lavapipe-test
+  variables:
+    DEQP_FRACTION: 60
+    DEQP_SUITE: venus
+    GPU_VERSION: venus
+    LP_NUM_THREADS: 2
+    CROSVM_MEMORY: 12288
+    CROSVM_CPU: $FDO_CI_CONCURRENT
+    FLAKES_CHANNEL: "#virgl-ci"
+  script: |
+    export LD_LIBRARY_PATH="$CI_PROJECT_DIR/install/lib"
+    export LIBGL_DRIVERS_PATH="$CI_PROJECT_DIR/install/lib/dri"
+    ./install/crosvm-runner.sh ./install/deqp-runner.sh
+
+venus-lavapipe-full:
+  extends:
+    - venus-lavapipe
+    - .venus-lavapipe-manual-rules
+  timeout: 3h
+  variables:
+    DEQP_FRACTION: 6  # 1 would take 12h so this is as close as we can get
+
+.android-venus-lavapipe:
+  extends:
+    - .test-android
+    - .venus-lavapipe-manual-rules
+  variables:
+    CUTTLEFISH_GPU_MODE: venus
+    GPU_VERSION: venus
+    DEQP_SUITE: android-venus
+    # TODO: define DEQP_FRACTION?
+
+.android-venus-angle-lavapipe:
+  extends:
+    - .test-android
+    - .venus-lavapipe-manual-rules
+    - .test-angle
+  variables:
+    CUTTLEFISH_GPU_MODE: venus_guest_angle
+    GPU_VERSION: venus
+    DEQP_SUITE: android-venus-angle
+    # TODO: define DEQP_FRACTION?
+
+android-angle-venus-anv-adl-cts:
+  extends:
+    - .android-angle-venus-anv-test
+    - .lava-acer-cbv514-1h-34uz-brya:x86_64
+    - .test-android-cts
+    - .venus-anv-manual-rules
+  variables:
+    GPU_VERSION: android-angle-venus-anv
+    HWCI_KERNEL_MODULES: "xe,vhost_vsock"
+    DEVICE_HANGING_TIMEOUT_SEC: 5400  # Android CTS might not print anything for minutes
+    # Xe regression in 6.18+
+    # https://gitlab.freedesktop.org/drm/xe/kernel/-/issues/7584
+    KERNEL_TAG: "v6.17-mesa-ddf6"
+  timeout: 2h
+
+android-angle-venus-anv-tgl:
+  extends:
+    - .android-angle-venus-anv-test
+    - .lava-acer-cp514-2h-1130g7-volteer:x86_64
+    - .venus-anv-manual-rules
+  variables:
+    DEQP_SUITE: android-angle-venus-anv
+    GPU_VERSION: android-angle-venus-anv
+    HWCI_KERNEL_MODULES: "i915,vhost_vsock"
+  timeout: 1h 30m
+
+android-angle-venus-anv-adl:
+  extends:
+    - .android-angle-venus-anv-test
+    - .lava-acer-cbv514-1h-34uz-brya:x86_64
+    - .venus-anv-rules
+  variables:
+    DEQP_SUITE: android-angle-venus-anv
+    GPU_VERSION: android-angle-venus-anv
+    HWCI_KERNEL_MODULES: "xe,vhost_vsock"
+    # Xe regression in 6.18+
+    # https://gitlab.freedesktop.org/drm/xe/kernel/-/issues/7584
+    KERNEL_TAG: "v6.17-mesa-ddf6"
+  parallel: 4
+
+android-angle-venus-tu-a618:
+  extends:
+    - .android-angle-venus-tu-test
+    - .lava-sc7180-trogdor-kingoftown:arm64
+    - .venus-tu-manual-rules
+  variables:
+    DEQP_SUITE: android-angle-venus-tu
+    GPU_VERSION: android-angle-venus-tu
+    FDO_CI_CONCURRENT: 6  # We get OOMkills if we go too wide since VKCTS 1.4.4.0

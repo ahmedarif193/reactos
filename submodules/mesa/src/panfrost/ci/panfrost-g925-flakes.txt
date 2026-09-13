@@ -1,0 +1,90 @@
+dEQP-VK.api.command_buffers.record_many_draws_primary_2
+dEQP-VK.api.command_buffers.record_many_draws_secondary_1
+dEQP-VK.api.command_buffers.record_many_draws_secondary_2
+dEQP-VK.draw.dynamic_rendering.primary_cmd_buff.instanced.dynamic_state_draw_indirect_vk_primitive_topology_triangle_fan_attrib_divisor_1_multiview
+dEQP-VK.image.non_uniform_offset_sample.texel_fetch_offset.single_mip_frag
+dEQP-VK.memory.pipeline_barrier.host_write_uniform_buffer.1048576
+dEQP-VK.memory.pipeline_barrier.host_write_uniform_texel_buffer.1048576
+dEQP-VK.memory.pipeline_barrier.transfer_dst_uniform_buffer.1048576
+dEQP-VK.renderpasses.renderpass2.depth_stencil_resolve.image_2d_17_1.samples_16.s8_uint.depth_zero_stencil_zero_unused_resolve_testing_stencil_samplemask
+dEQP-VK.renderpasses.renderpass2.depth_stencil_resolve.image_2d_17_1.samples_4.d32_sfloat_s8_uint.depth_average_stencil_max_unused_resolve_testing_depth
+dEQP-VK.sparse_resources.buffer.ssbo.sparse_residency.buffer_size_2_24
+dEQP-VK.sparse_resources.buffer.ssbo.sparse_residency.non_resident_buffer_copy_src_alloc_none_16777216
+dEQP-VK.sparse_resources.buffer.ssbo.sparse_residency.non_resident_buffer_copy_src_alloc_partial_16777216
+dEQP-VK.subgroups.arithmetic.graphics.subgroupor_i16vec2
+dEQP-VK.subgroups.arithmetic.graphics.subgroupxor_uvec3
+dEQP-VK.subgroups.shuffle.graphics.subgroupshuffle_u16vec3
+dEQP-VK.subgroups.shuffle.graphics.subgroupshuffledown_uint64_t_constant
+dEQP-VK.texture.explicit_lod.2d.sizes.128x128_nearest_nearest_mipmap_nearest_clamp
+
+# deqp-vk: ../src/panfrost/vulkan/panvk_image.c:346: panvk_image_get_mod_from_list: Assertion `!"Invalid modifier"' failed.
+dEQP-VK.wsi.wayland.swapchain.create.image_extent
+dEQP-VK.wsi.wayland.swapchain.simulate_oom.image_extent
+
+angle-dEQP-GLES3.functional.multisample.fbo_4_samples.proportionality_sample_coverage
+angle-dEQP-GLES3.functional.multisample.fbo_max_samples.constancy_alpha_to_coverage
+angle-KHR-GLES31.core.compute_shader.sso-case2
+angle-KHR-GLES31.core.shader_image_load_store.basic-allTargets-loadStoreVS
+angle-multisample-dEQP-GLES31.functional.draw_indirect.compute_interop.large.drawelements_combined_grid_500x500_drawcount_2500
+angle-multisample-dEQP-GLES31.functional.draw_indirect.compute_interop.large.drawelements_combined_grid_1000x1000_drawcount_1
+angle-multisample-dEQP-GLES31.functional.draw_indirect.compute_interop.large.drawelements_separate_grid_500x500_drawcount_1
+angle-multisample-dEQP-GLES31.functional.draw_indirect.compute_interop.large.drawelements_separate_grid_500x500_drawcount_8
+angle-multisample-dEQP-GLES31.functional.draw_indirect.compute_interop.large.drawelements_separate_grid_500x500_drawcount_2500
+angle-multisample-dEQP-GLES31.functional.draw_indirect.compute_interop.large.drawelements_separate_grid_1200x1200_drawcount_1
+angle-multisample-dEQP-GLES31.functional.draw_indirect.compute_interop.large.drawelements_separate_grid_1200x1200_drawcount_8
+angle-multisample-dEQP-GLES31.functional.draw_indirect.compute_interop.large.drawelements_separate_grid_1500x1500_drawcount_1
+
+# Appears just beforehand:
+# 19:50:56.843: [   92.880197] panthor 48000000.gpu: [drm] *ERROR* CSG 7 update request timedout
+# 19:50:56.843: [   92.988186] panthor 48000000.gpu: [drm] *ERROR* CSG 7 update request timedout
+# 19:50:56.843: [   92.995306] panthor 48000000.gpu: [drm] *ERROR* CSG suspend failed, escalating to termination
+dEQP-VK.sparse_resources.buffer.ssbo.sparse_residency.non_resident_buffer_copy_src_alloc_partial_16777216
+
+dEQP-VK.draw.dynamic_rendering.complete_secondary_cmd_buff.instanced.dynamic_state_draw_indexed_indirect_vk_primitive_topology_point_list_attrib_divisor_20_multiview_maintenance_5
+dEQP-VK.draw.renderpass.indirect_draw.sequential_data_from_compute.indirect_draw_instanced.first_instance.triangle_list
+dEQP-VK.draw.renderpass.instanced.draw_indexed_vk_primitive_topology_triangle_fan_attrib_divisor_2_multiview_maintenance_5
+dEQP-VK.graphicsfuzz.cov-global-loop-counter-accumulate-integer-condition-large-array-elements
+dEQP-VK.graphicsfuzz.cov-variable-copy-in-function-tex-sample
+dEQP-VK.image.swapchain_mutable.wayland.2d.b8g8r8a8_unorm_r8g8b8a8_srgb_copy_copy_format_list
+dEQP-VK.memory.pipeline_barrier.host_write_vertex_buffer.1048576_vertex_buffer_stride_2
+dEQP-VK.pipeline.fast_linked_library.stencil.format.d24_unorm_s8_uint.states.fail_decw.pass_zero.dfail_wrap.comp_greater.any
+dEQP-VK.subgroups.arithmetic.graphics.subgroupexclusiveadd_u64vec2
+dEQP-VK.subgroups.arithmetic.graphics.subgroupinclusivemax_uint8_t
+dEQP-VK.subgroups.arithmetic.graphics.subgroupmin_int16_t
+dEQP-VK.subgroups.ballot_broadcast.graphics.subgroupbroadcastfirst_u8vec2
+dEQP-VK.subgroups.shuffle.graphics.subgroupclusteredrotate_u16vec3_constant
+dEQP-VK.subgroups.shuffle.graphics.subgroupshuffledown_float_constant
+dEQP-VK.subgroups.shuffle.graphics.subgroupshufflexor_i8vec2_dynamically_uniform
+dEQP-VK.subgroups.shuffle.graphics.subgroupshufflexor_ivec2
+dEQP-VK.synchronization.op.single_queue.fence.write_blit_image_read_image_compute.image_128x128_r8g8b8a8_unorm
+dEQP-VK.synchronization.signal_order.timeline_semaphore.write_copy_image_read_image_compute.image_128x128_r16_uint
+dEQP-VK.texture.explicit_lod.2d.sizes.128x128_linear_linear_mipmap_linear_clamp
+dEQP-VK.texture.filtering.cube.formats.a1r5g5b5_unorm.linear.seamless
+dEQP-VK.wsi.wayland.maintenance1.scaling.resize_window.immediate.aspect_stretch.max_min.swapchain_smaller_taller_aspect
+dEQP-VK.wsi.wayland.present_id_wait.wait.single_no_timeout
+dEQP-VK.wsi.wayland.swapchain.create.clipped
+dEQP-VK.wsi.wayland.swapchain.render.basic
+dEQP-VK.wsi.xcb.maintenance1.deferred_alloc.immediate.bind_image
+dEQP-VK.wsi.xcb.maintenance1.present_modes.heterogenous.immediate_mailbox_immediate
+dEQP-VK.wsi.xcb.maintenance1.scaling.continuous.one_to_one.max_min.swapchain_smaller_wider_aspect
+dEQP-VK.wsi.xcb.maintenance1.scaling.demand.aspect_stretch.max_max.swapchain_smaller_wider_aspect
+dEQP-VK.wsi.xcb.maintenance1.scaling.fifo.aspect_stretch.max_center.swapchain_bigger_same_aspect
+dEQP-VK.wsi.xcb.swapchain.create.clipped
+dEQP-VK.wsi.xcb.swapchain.create.image_array_layers
+dEQP-VK.wsi.xlib.maintenance1.scaling.demand.one_to_one.center_center.swapchain_taller
+dEQP-VK.wsi.xlib.maintenance1.scaling.resize_window.mailbox.aspect_stretch.center_max.swapchain_smaller_taller_aspect
+dEQP-VK.wsi.xlib.surface.query_capabilities2
+
+# Since the weston intermittently crashes on 925, these xfails from VKCTS
+# 1.4.4.2 -> 1.4.5.3 uprev will sometimes flake into being Skips.
+dEQP-VK.wsi.xcb.present_timing.query.parallel.parallel
+dEQP-VK.wsi.xlib.present_timing.basic.timing_queue
+
+# Various subgroups tests are intermittently failing. Just ignore them for now.
+dEQP-VK.subgroups.*
+
+# See this entry in the VKCTS 1.4.5.3 -> 1.4.6.1 uprev fails list.
+dEQP-VK.synchronization2.internally_synchronized_queues.*
+
+# See Mesa bug #15880 ("panfrost: incomplete glCopyPixels() with feedback loop")
+spec@!opengl 1.4@copy-pixels

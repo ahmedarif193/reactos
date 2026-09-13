@@ -1,0 +1,14 @@
+war,disp_alu,disp_dual_alu,coupled,dualalu,r2p,r2ur,fma,fp16,hfma2_mma,redirected_fp64,decoupled,guard
+disp_alu,1,1,1,1,1,none,1,1,1,1,1,1
+disp_dual_alu,1,1,1,1,1,none,1,1,1,1,1,1
+coupled,1,1,1,1,1,none,1,1,1,1,1,1
+dualalu,1,1,1,1,1,none,1,1,1,1,1,1
+r2p,1,1,1,1,1,none,1,1,1,1,1,1
+r2ur,1,1,1,1,1,none,1,1,1,1,1,1
+fma,1,1,1,1,1,none,1,1,1,1,1,1
+fp16,1,1,1,1,1,none,1,1,1,1,1,1
+hfma2_mma,1,1,1,1,1,none,1,1,1,1,1,1
+redirected_fp64,1,1,1,1,1,none,1,1,1,1,1,1
+decoupled,1,1,1,1,1,none,1,1,1,1,1,1
+guard,none,none,none,none,none,none,none,none,none,none,none,none
+

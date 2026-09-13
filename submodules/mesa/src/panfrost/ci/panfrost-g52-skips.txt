@@ -1,0 +1,74 @@
+# Note: skips lists for CI are just a list of lines that, when
+# non-zero-length and not starting with '#', will regex match to
+# delete lines from the test list.  Be careful.
+
+# Huge render, which eventually times out
+dEQP-GLES31.functional.fbo.no_attachments.maximums.all
+
+# These Piglits cause crashes, at least when run with PAN_MESA_DEBUG=sync. For
+# many, the crashes are due to faults. Although Piglits are nominally
+# process-isolated, faults can leak across processes to subpar recovery, meaning
+# these crashes are liable to cause robust passing tests to flakes.
+# So, skip any tests known to crash to make sure the coverage is solid.
+spec@arb_texture_rectangle@tex-miplevel-selection gl2:texture() 2drect
+spec@arb_texture_rectangle@tex-miplevel-selection gl2:texture() 2drectshadow
+spec@arb_texture_rectangle@tex-miplevel-selection gl2:textureproj 2drect
+spec@arb_texture_rectangle@tex-miplevel-selection gl2:textureproj 2drect_projvec4
+spec@arb_texture_rectangle@tex-miplevel-selection gl2:textureproj 2drectshadow
+spec@ext_transform_feedback@immediate-reuse-index-buffer
+spec@ext_transform_feedback@immediate-reuse-uniform-buffer
+spec@glsl-1.30@execution@tex-miplevel-selection texture() 2drect
+spec@glsl-1.30@execution@tex-miplevel-selection texture() 2drectshadow
+spec@glsl-1.30@execution@tex-miplevel-selection texturegrad 2drect
+spec@glsl-1.30@execution@tex-miplevel-selection texturegrad 2drectshadow
+spec@glsl-1.30@execution@tex-miplevel-selection texturegradoffset 2drect
+spec@glsl-1.30@execution@tex-miplevel-selection texturegradoffset 2drectshadow
+spec@glsl-1.30@execution@tex-miplevel-selection textureoffset 2drect
+spec@glsl-1.30@execution@tex-miplevel-selection textureoffset 2drectshadow
+spec@glsl-1.30@execution@tex-miplevel-selection textureproj 2drect
+spec@glsl-1.30@execution@tex-miplevel-selection textureproj 2drect_projvec4
+spec@glsl-1.30@execution@tex-miplevel-selection textureproj 2drectshadow
+spec@glsl-1.30@execution@tex-miplevel-selection textureprojgrad 2drect
+spec@glsl-1.30@execution@tex-miplevel-selection textureprojgrad 2drect_projvec4
+spec@glsl-1.30@execution@tex-miplevel-selection textureprojgrad 2drectshadow
+spec@glsl-1.30@execution@tex-miplevel-selection textureprojgradoffset 2drect
+spec@glsl-1.30@execution@tex-miplevel-selection textureprojgradoffset 2drect_projvec4
+spec@glsl-1.30@execution@tex-miplevel-selection textureprojgradoffset 2drectshadow
+spec@glsl-1.30@execution@tex-miplevel-selection textureprojoffset 2drect
+spec@glsl-1.30@execution@tex-miplevel-selection textureprojoffset 2drect_projvec4
+spec@glsl-1.30@execution@tex-miplevel-selection textureprojoffset 2drectshadow
+
+glx@glx_arb_sync_control@swapbuffersmsc-return
+
+# New with VK_KHR_zero_initialize_workgroup_memory
+# Generate a INSTR_BARRIER_FAULT
+# Possible issue with barrier lowering with mem_modes=shared?
+dEQP-VK.compute.pipeline.zero_initialize_workgroup_memory.max_workgroup_memory.1
+dEQP-VK.compute.pipeline.zero_initialize_workgroup_memory.max_workgroup_memory.128
+dEQP-VK.compute.pipeline.zero_initialize_workgroup_memory.max_workgroup_memory.16
+dEQP-VK.compute.pipeline.zero_initialize_workgroup_memory.max_workgroup_memory.2
+dEQP-VK.compute.pipeline.zero_initialize_workgroup_memory.max_workgroup_memory.4
+dEQP-VK.compute.pipeline.zero_initialize_workgroup_memory.max_workgroup_memory.64
+dEQP-VK.compute.pipeline.zero_initialize_workgroup_memory.types.f32mat3x3
+dEQP-VK.compute.pipeline.zero_initialize_workgroup_memory.types.f32mat4x4
+
+# tests are broken with Vulkan 1.0: https://gerrit.khronos.org/c/vk-gl-cts/+/19823
+dEQP-VK.wsi.direct_drm.*
+
+# more tests broken on Vulkan 1.0: https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/6409
+dEQP-VK.wsi.*.maintenance1.*.bind_image*
+
+# Almost all crashes
+dEQP-VK.wsi.*present_timing.*
+
+# https://gitlab.freedesktop.org/mesa/mesa/-/issues/15116
+dEQP-VK.wsi.xlib.maintenance1.present_modes.*
+dEQP-VK.wsi.xlib.maintenance1.deferred_alloc.fifo.*
+dEQP-VK.wsi.xlib.maintenance1.present_fence.fifo.*
+
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/42040
+# Started failing with: "ResourceError (Failed to open display: '' at tcuLnxX11.cpp:83)"
+dEQP-VK.wsi.xlib.incremental_present.scale_none.mailbox.horizontal_mirror.post_multiplied.incremental_present
+
+# Intermittent timeouts
+dEQP-VK.wsi.wayland.swapchain.render.10swapchains.*

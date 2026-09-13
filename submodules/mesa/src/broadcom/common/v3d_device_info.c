@@ -1,0 +1,122 @@
+/*
+ * Copyright © 2016 Broadcom
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the next
+ * paragraph) shall be included in all copies or substantial portions of the
+ * Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
+
+#include <assert.h>
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "common/v3d_device_info.h"
+#include "common/v3d_limits.h"
+#include "drm-uapi/v3d_drm.h"
+#include "util/log.h"
+#include "util/os_misc.h"
+
+bool
+v3d_get_device_info(int fd, struct v3d_device_info* devinfo, v3d_ioctl_fun drm_ioctl) {
+    struct drm_v3d_get_param ident0 = {
+            .param = DRM_V3D_PARAM_V3D_CORE0_IDENT0,
+    };
+    struct drm_v3d_get_param ident1 = {
+            .param = DRM_V3D_PARAM_V3D_CORE0_IDENT1,
+    };
+    struct drm_v3d_get_param hub_ident3 = {
+            .param = DRM_V3D_PARAM_V3D_HUB_IDENT3,
+    };
+    struct drm_v3d_get_param max_perfcnt = {
+            .param = DRM_V3D_PARAM_MAX_PERF_COUNTERS,
+    };
+    struct drm_v3d_get_param reset_counter = {
+            .param = DRM_V3D_PARAM_GLOBAL_RESET_COUNTER,
+    };
+    int ret;
+
+    ret = drm_ioctl(fd, DRM_IOCTL_V3D_GET_PARAM, &ident0);
+    if (ret != 0) {
+            mesa_loge("Couldn't get V3D core IDENT0: %s", strerror(errno));
+            return false;
+    }
+    ret = drm_ioctl(fd, DRM_IOCTL_V3D_GET_PARAM, &ident1);
+    if (ret != 0) {
+            mesa_loge("Couldn't get V3D core IDENT1: %s", strerror(errno));
+            return false;
+    }
+
+    uint32_t major = (ident0.value >> 24) & 0xff;
+    uint32_t minor = (ident1.value >> 0) & 0xf;
+
+    devinfo->ver = major * 10 + minor;
+
+    devinfo->vpm_size = (ident1.value >> 28 & 0xf) * 8192;
+
+    int nslc = (ident1.value >> 4) & 0xf;
+    int qups = (ident1.value >> 8) & 0xf;
+    devinfo->qpu_count = nslc * qups;
+
+    devinfo->has_accumulators = devinfo->ver < 71;
+
+    uint64_t os_page_size;
+    os_get_page_size(&os_page_size);
+    assert(os_page_size <= UINT32_MAX);
+    devinfo->page_size = (uint32_t)os_page_size;
+    devinfo->max_render_targets = V3D_MAX_RENDER_TARGETS(devinfo->ver);
+    devinfo->max_framebuffer_size = V3D_MAX_FRAMEBUFFER_SIZE(devinfo->ver);
+
+    switch (devinfo->ver) {
+    case 42:
+            devinfo->clipper_xy_granularity = 256.0f;
+            devinfo->cle_readahead = 256u;
+            break;
+    case 71:
+            devinfo->clipper_xy_granularity = 64.0f;
+            devinfo->cle_readahead = 1024u;
+            break;
+    default:
+            mesa_loge("V3D %d.%d not supported by this version of Mesa",
+                      devinfo->ver / 10, devinfo->ver % 10);
+            return false;
+    }
+
+    ret = drm_ioctl(fd, DRM_IOCTL_V3D_GET_PARAM, &hub_ident3);
+    if (ret != 0) {
+            mesa_loge("Couldn't get V3D core HUB IDENT3: %s", strerror(errno));
+            return false;
+    }
+
+   devinfo->rev = (hub_ident3.value >> 8) & 0xff;
+   devinfo->compat_rev = (hub_ident3.value >> 16) & 0xff;
+
+    ret = drm_ioctl(fd, DRM_IOCTL_V3D_GET_PARAM, &max_perfcnt);
+    if (ret != 0)
+            devinfo->max_perfcnt = 0;
+    else
+            devinfo->max_perfcnt = max_perfcnt.value;
+
+    ret = drm_ioctl(fd, DRM_IOCTL_V3D_GET_PARAM, &reset_counter);
+    if (ret != 0)
+            devinfo->has_reset_counter = false;
+    else
+            devinfo->has_reset_counter = true;
+
+   return true;
+}

@@ -1,0 +1,4 @@
+# Vendored code
+src/amd/vulkan/radix_sort/*
+src/gallium/drivers/ethosu/mlw_codec/**/*
+src/gallium/drivers/ethosu/ethosu_encode_support.h

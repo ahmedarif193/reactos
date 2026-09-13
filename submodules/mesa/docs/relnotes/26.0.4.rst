@@ -1,0 +1,273 @@
+Mesa 26.0.4 Release Notes / 2026-04-01
+======================================
+
+Mesa 26.0.4 is a bug fix release which fixes bugs found since the 26.0.3 release.
+
+Mesa 26.0.4 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 26.0.4 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+    SHA256: 6d91541e086f29bb003602d2c81070f2be4c0693a90b181ca91e46fa3953fe78  mesa-26.0.4.tar.xz
+    SHA512: ddb59df633116a7ccd9d2d3a2e2009945909e3f774956efcbc032a2f963641cce50d0f319bebdc041df17700aa827aa2ccbc61c9e40b4020de9ff027eab27e23  mesa-26.0.4.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- Accumulation of black squares with OpenGL applications at high resolutions (hiz-related)
+- RADV: Invalid hitAttributeEXT value when using function-call RT pipelines
+- Segmentation fault in gm200_validate_sample_locations with Firefox on GTX 1070 Ti (nouveau)
+- Vulkan CTS regression bisected to 5d2c17a5fdce ("vtn: skip make-available/visible for shared")
+- [anv] Intel ARC B390 | Horizon Forbidden West | DX12 | Flashing effects
+- [radeonsi] Missing ground texture in Lethis Path of the Progress
+- amdgpu reset/crash when simulating stereo camera
+- building mesa_clc on ubutu-26.04 with gcc-16 fails link
+- util: Build regression with MSYS2 MinGW-W64 x64 clang 21 on 26.0.0-rc3
+- wsi: \`assert(chain->dxgi);` may failed under venus for win32
+
+
+Changes
+-------
+
+Adam Simpkins (1):
+
+- iris: fix a crash in disable_rb_aux_buffer
+
+Alyssa Milburn (1):
+
+- nv50,nvc0: Avoid uninitialized cbuf reads in blits
+
+Alyssa Rosenzweig (1):
+
+- nir: add nir_get_io_data_src
+
+Dave Airlie (1):
+
+- st/mesh: handle mesh shader point size
+
+David Rosca (2):
+
+- frontends/va: Fix leaking H264/5 PPS/SPS objects when decoder wasn't created
+- frontends/va: Fix leaks when create_video_codec fails
+
+Eric Engestrom (9):
+
+- docs: add sha sum for 26.0.3
+- .pick_status.json: Update to 48c086cb4203d1a8e7458e0d0a85cfffc5b4bfe5
+- .pick_status.json: Mark 26b19e355fefcd6a8325924e6a391dd67a675c34 as denominated
+- .pick_status.json: Mark 32a818d11d3d60ebbc23a62127e988d17e742b79 as denominated
+- .pick_status.json: Mark d38916d673e6d2359e96fed45ebd83ca026dfcb5 as denominated
+- .pick_status.json: Mark 384d12816459996fbac5722e9fdb29527662cafb as denominated
+- ci: changing .gitlab-ci.yml itself also means the container jobs must exist
+- .pick_status.json: Mark 538c3ee6c7a419d5c55bef2294ca10166f8d9af4 as denominated
+- [26.0 only] venus/ci: mark a test as fixed
+
+Eric Guo (1):
+
+- panfrost: Fix NULL pointer dereference in panfrost_emit_images
+
+Eric R. Smith (2):
+
+- panfrost: fix texel buffer calculations
+- panfrost: fix typos in architecture detection
+
+Erik Faye-Lund (5):
+
+- pan/genxml: remove non-existent YUV Enable for AFRC
+- pan/lib: do not try to use stencil-aspect of color attachment
+- pan/lib: set srgb-flag for afrc render-targets
+- pan/lib: divide extent by tile-extend, not itself
+- panvk: remove unused flag
+
+Faith Ekstrand (4):
+
+- nak: Report progress from nak_nir_rematerialize_load_const()
+- nir: Consider if uses in nir_def_all_uses_*
+- pan/bi: v2x16 conversions don't replicate
+- pan/buffer: Add the offset to the size for buffer textures
+
+Georg Lehmann (2):
+
+- gallivm: don't optimize fadd(a, 0.0) with signed zero preserve
+- nir/lower_non_uniform_access: fix fusing loops for same index but different array variable
+
+Hyunjun Ko (1):
+
+- anv: Add dummy workload for AV1 decode on affected platforms (Wa_1508208842)
+
+Ian Romanick (2):
+
+- brw/algebraic: Allow mixed types in saturate constant folding
+- brw: Handle scalars and swizzles correctly in is_const_zero
+
+Icenowy Zheng (8):
+
+- vulkan/wsi/headless: properly use CPU images for CPU devices
+- pco: fix encoding of fred's s0abs bit
+- pvr: Align width for PBE write when creating linear image
+- pvr: fix "obb" typo in oob_buffer_size when building vertex pds data
+- pvr: save vertex attribute size for DMA checking
+- pvr: move PVR_BUFFER_MEMORY_PADDING_SIZE definition to pvr_buffer.h
+- pvr: consider the size of DMA request when setting msize of DDMADT
+- pvr: fix dirty tracking for stencil ops
+
+Iván Briano (2):
+
+- anv: fix anv_is_dual_src_blend_equation
+- brw: do not omit RT writes if dual_src_blend is on
+
+Job Noorman (1):
+
+- ir3/legalize: don't drop sync flags on removed predt/predf
+
+Jose Maria Casanova Crespo (1):
+
+- broadcom/common: fix V3D 7.1 TFU ICFG IFORMAT values
+
+Juan A. Suarez Romero (1):
+
+- vc4: fix unwanted buffer release on uploader
+
+Lionel Landwerlin (3):
+
+- anv: add an analysis pass to detect compute shaders clearing data
+- anv: add drirc option to workaround missing application barriers on typed/untyped data
+- brw: fence SLM writes between workgroups
+
+Liviu Prodea (2):
+
+- clc: Fix static link with clang>=22
+- util: Fix use of undeclared identifier 'NULL' in src/util/os_misc.h when compiling with clang
+
+Luigi Santivetti (2):
+
+- pvr: expose partial usc mrt init routine
+- pvr: keep compiler resources in sync with attachments
+
+Marek Olšák (3):
+
+- radeonsi: recompute IO bases after optimizations
+- radeonsi: fix blits via util_blitter_draw_rectangle
+- radeonsi: disable streamout queries for u_blitter
+
+Mario Kleiner (1):
+
+- dri: Fix "cosmetic" undefined behaviour warning for RGB[A]16_UNORM formats.
+
+Mary Guillemard (5):
+
+- nvk: Move viewport and scissor emit to their own function
+- nvk: Broacast viewport0 and scissor0 in case of FSR on Turing
+- nir/dead_cf: Add missing load_ssbo_ir3 handling
+- nir/dead_cf: Add missing load_global_bounded handling
+- nak: Do not allow load_helper_invocation reordering
+
+Mike Blumenkrantz (3):
+
+- ntv: always emit const coord components for fbfetch loads
+- mesa/renderbuffer: always add PIPE_BIND_SAMPLER_VIEW to rendering textures
+- llvmpipe: fix color fbfetch
+
+Natalie Vock (1):
+
+- vulkan: Bump MAX_ENCODE_PASSES
+
+Nick Hamilton (1):
+
+- pvr: Fix for multiple attachments being assigned to the same tile buffer.
+
+Pavel Ondračka (5):
+
+- r300: fix bias presubtract algebraic transformation
+- r300: don't apply odd macroblock rounding to 3D textures
+- r300: disable zmask clears for large surfaces
+- r300: add shared HyperZ pipe-count helper
+- r300: split large HiZ clears into multiple packets
+
+Pierre-Eric Pelloux-Prayer (3):
+
+- radeonsi: move spi_shader_*_format to si_shader_variant_info
+- radeonsi: account for outputs_written when updating spi_shader_col_format
+- gallium/u_blitter: add a new fs_color_clear variant
+
+Radu Costas (1):
+
+- pco: Amend errant nir_move_option
+
+Rhys Perry (3):
+
+- aco/tests: fix assembler tests with LLVM 22
+- aco/tests: fix assembler/isel tests with LLVM 23
+- radv: fix memory leak in radv_rt_nir_to_asm
+
+Robert Mader (1):
+
+- llvmpipe: Stop aligning height to raster block size for unbacked handles
+
+Ryan Zhang (1):
+
+- panvk: trivial fix to remove repeated assignment
+
+Samuel Pitoiset (2):
+
+- radv/amdgpu: free the VA range in case the BO allocation failed
+- radv: emit BOP events after every draw to workaround a VRS bug on GFX12
+
+Simon Perretta (1):
+
+- pco: use vm/icm for tile buffer store coverage mask
+
+Timothy Arceri (2):
+
+- mesa: add force_explicit_uniform_loc_zero workaround
+- util/driconf: add workarounds for Lethis - Path Of Progress
+
+Valentine Burley (7):
+
+- tu/drm/virtio: Add missing lock to virtio_bo_init_dmabuf
+- tu/drm/virtio: Move set_iova into success path of virtio_bo_init_dmabuf
+- tu/drm/virtio: Avoid freeing zombified tu_sparse_vma
+- tu/drm/virtio: Do not free iova from heap for lazy BOs
+- tu/drm/virtio: Fix GEM handle leak in tu_bo_init error path
+- tu/drm/virtio: Fix GEM handle leak on failed dmabuf res_id lookup
+- ci: Drop duplicate Intel shader-db run
+
+Yiwei Zhang (3):
+
+- venus: fix to relax the KHR_external_memory_fd requirement
+- vulkan/wsi/win32: add wsi_win32_find_idle_image helper
+- vulkan/wsi/win32: respect acquire timeout for sw wsi
+
+emre (1):
+
+- nvk: fix barrier cache invalidation
+
+juntak0916 (1):
+
+- nvk: fix BindImageMemory2 per-bind status result
+
+kingstom.chen (1):
+
+- radv/rt: only run move_rt_instructions() for CPS shaders
+
+utzcoz (1):
+
+- gfxstream: Fix vkSetDebugUtilsObjectNameEXT crash for unwrapped objects

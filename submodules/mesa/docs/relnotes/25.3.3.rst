@@ -1,0 +1,146 @@
+Mesa 25.3.3 Release Notes / 2026-01-01
+======================================
+
+Mesa 25.3.3 is a bug fix release which fixes bugs found since the 25.3.2 release.
+
+Mesa 25.3.3 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 25.3.3 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+   SHA256: 05328b3891c000e6a110a3e7321d8bfbb21631d132bf86bd3d4a8f45c535ef6b  mesa-25.3.3.tar.xz
+   SHA512: 232b39f5035f8a65c8f815c8b524e3570f229673a85cd3591fbab9136c80b4ab922dc959f51a9d0a11e91cc66f8cf7f30cd9b846bb9e1607e3a6c820d5c8045a  mesa-25.3.3.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- iris: OpenGL: GL_ARB_texture_cube_map: Broken reflections in Unreal Tournament 2004
+- Ghost of Tsushima page fault
+- Ethos gallium driver does not build on 32bit
+- v3d: Build fails when ENABLE_SHADER_CACHE is disabled due to unconditional disk_cache access
+- es1-ABI-check and es2-ABI-check test fails
+- [ANV][Slab][Low-ram] GPU fragmentation in low-memory device when turning on slab.
+- GL_AMD_framebuffer_multisample_advanced freezes the whole system
+- panvk: fau compute bug
+
+
+Changes
+-------
+
+Ahmed Hesham (1):
+
+- panfrost: fix get_image_width for 1D buffer images
+
+Alyssa Rosenzweig (1):
+
+- asahi: fix garbage with query reads
+
+André (1):
+
+- nouveau: fix memory leak by freeing drm version before returning
+
+Boris Brezillon (1):
+
+- panvk: Fix set_compute_sysval()
+
+Calder Young (2):
+
+- anv: Fix valgrind errors on batch buffers allocated from bo_pool
+- anv: Fix load factor for batch buffer allocation
+
+Dylan Baker (7):
+
+- docs: Add checksums for 25.3.2
+- .pick_status.json: Update to c00ebca5c4b474249ba65fcfd50ecdf84a656b7c
+- .pick_status.json: Update to 645fff5daed8121ffe54741020f402fe6cfa8818
+- .pick_status.json: Update to 821baac5c326896253d69a1446178e224feea4e6
+- .pick_status.json: Update to ea4dedde8fe7757a593501eb6fcbaf0a78d1b36b
+- .pick_status.json: Mark 044e7f601754c079734fb9157da33e30ddae2e4c as backported
+- .pick_status.json: Update to 369a3b22b494aecc2ad241b9d66f2d877fcafc18
+
+Emma Anholt (1):
+
+- freedreno/a3xx-a5xx: restore cbuf0 direct upload.
+
+Georg Lehmann (1):
+
+- ac/nir/cull: do not reuse variables if subgroup ops are used
+
+Ian Romanick (1):
+
+- brw/cmod: Don't propagate between instructions in different groups
+
+Juan A. Suarez Romero (1):
+
+- v3d: don't build disk cache access on shader disablement
+
+Linus Karl (2):
+
+- rocket: fix build on non LP64 architectures
+- ethos: fix build on non LP64 architectures
+
+Lucas Fryzek (2):
+
+- drisw: Modify drisw_swap_buffers_with_damage to swap entire buffer
+- Revert "drisw: Copy entire buffer ignoring damage regions"
+
+Lucas Stach (1):
+
+- etnaviv: blt: fix tile count calculation for in-place resolve
+
+Marek Olšák (1):
+
+- mesa: allow pipeline statistics in glCreateQueries
+
+Mel Henning (1):
+
+- nvk: Set maxStorageBufferRange = maxBufferSize
+
+Pierre-Eric Pelloux-Prayer (1):
+
+- ac/descriptors: account for num_storage_samples for gfx10
+
+Samuel Pitoiset (2):
+
+- radv: add the SQTT relocated shaders BO to the cmdbuf list
+- radv/nir: fix front_face opts for points/lines and unknown prim
+
+Sviatoslav Peleshko (2):
+
+- nir/normalize_cubemap_coords: Handle the projector before the normalization
+- mesa/main/ff_frag: Don't generate the projector for cubemap sampling
+
+Tapani Pälli (1):
+
+- anv/drirc: disable Xe2 CCS drm modifiers for GTK engine
+
+Vinson Lee (2):
+
+- bin/symbols-check: Fix undefined symbol detection on macOS
+- util/u_printf: Fix const correctness in util_printf_next_spec_pos
+
+Yuxuan Shui (1):
+
+- wsi/display: Set atomic client cap in Acquire{Drm,Xlib}DisplayEXT as well.
+
+hwandy (1):
+
+- anv: fix a memory leak in slab allocator.

@@ -1,0 +1,66 @@
+/*
+ * Copyright © 2024 Igalia S.L.
+ * SPDX-License-Identifier: MIT
+ */
+
+WHITESPACE = _{ " " | "\t" }
+COMMENT = _{ ";" ~ (!NEWLINE ~ ANY)* ~ NEWLINE? }
+
+Dst_full = { ".hp" }
+Sat = { ".sat" }
+Skphp = { ".skpHp" }
+Pmode = { ".pack" }
+Denorm = { ".denorm" }
+Local = { ".local" }
+Unk = { ".unk" }
+
+Amount = { ASCII_DIGIT* }
+Left_shift = { ".ls" ~ Amount }
+
+SrcVoid = { "void" }
+DestVoid = { "void" }
+Negate = { "-" }
+Absolute = { "|" }
+
+Immediate_inf_float = @{ "inf" ~ ":f20" }
+Immediate_neg_inf_float = @{ "-inf" ~ ":f20" }
+Immediate_inf_half_float = @{ "inf" ~ ":f16" }
+Immediate_neg_inf_half_float = @{ "-inf" ~ ":f16" }
+Immediate_nan_float = @{ "nan" ~ ":f20" }
+Immediate_neg_nan_float = @{ "-nan" ~ ":f20" }
+Immediate_nan_half_float = @{ "nan" ~ ":f16" }
+Immediate_neg_nan_half_float = @{ "-nan" ~ ":f16" }
+Sci_suffix = _{ ("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+ }
+Immediate_float = @{ Negate? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ Sci_suffix? ~ ":f20" }
+Immediate_half_float = @{ Negate? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ Sci_suffix? ~ ":f16" }
+Immediate_uint = @{ ASCII_DIGIT+ ~ ":u20" }
+Immediate_int = @{ Negate? ~ ASCII_DIGIT+ ~ ":s20"  }
+Immediate = _{
+              Immediate_inf_float |
+              Immediate_neg_inf_float |
+              Immediate_inf_half_float |
+              Immediate_neg_inf_half_float |
+              Immediate_nan_float |
+              Immediate_neg_nan_float |
+              Immediate_nan_half_float |
+              Immediate_neg_nan_half_float |
+              Immediate_float |
+              Immediate_half_float |
+              Immediate_uint |
+              Immediate_int
+            }
+
+Register = @{ ASCII_DIGIT+ }
+DstRegister = ${ "t" ~ Register ~ RegAddressingMode? ~ Wrmask? }
+DstMemAddr = ${ "mem" ~ Wrmask? }
+SrcSwizzle = ${ "." ~ Swiz ~ Swiz ~ Swiz ~ Swiz }
+SrcRegister = ${
+    ( Negate? ~ Absolute ~ RegGroup ~ Register ~ RegAddressingMode? ~ SrcSwizzle? ~ Absolute |
+      Negate? ~ RegGroup ~ Register ~ RegAddressingMode? ~ SrcSwizzle? |
+      Immediate )
+    }
+
+Dest = _{ DstRegister }
+Src = _{ SrcRegister }
+TexSrc = ${ "tex" ~ Register ~ SrcSwizzle }
+Target = { ASCII_DIGIT* }

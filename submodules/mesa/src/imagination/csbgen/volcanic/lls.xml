@@ -1,0 +1,20 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2025 Imagination Technologies Ltd.
+
+SPDX-License-Identifier: MIT
+-->
+
+<csbgen name="VOLCANIC" prefix="LLS">
+
+  <define name="CDM_CONTEXT_RESUME_BUFFER_SIZE" value="72"/>
+  <define name="CDM_CONTEXT_RESUME_BUFFER_ALIGNMENT" value="32"/>
+
+  <define name="TA_STATE_BUFFER_SIZE" value="468"/>
+  <define name="TA_STATE_BUFFER_ALIGNMENT" value="32"/>
+
+  <define name="USC_SHARED_REGS_BUFFER_SIZE" value="16384"/>
+  <define name="USC_SHARED_REGS_BUFFER_ALIGNMENT" value="32"/>
+
+</csbgen>

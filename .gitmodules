@@ -2,8 +2,3 @@
 	path = submodules/fex-arm64ec
 	url = https://github.com/eotics-com/FEX.git
 	branch = main-ros
-[submodule "mesa"]
-	path = submodules/mesa
-	url = https://github.com/eotics-com/reactos-mesa.git
-	branch = ros-dev
-	shallow = true

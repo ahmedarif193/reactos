@@ -1,0 +1,83 @@
+glx@glx_arb_sync_control@waitformsc
+glx@glx_arb_sync_control@swapbuffersmsc-divisor-zero
+glx@glx-multithread-texture
+glx@glx-multithread-shader-compile
+spec@arb_texture_gather@texturegather@fs-r-none-float-cube
+spec@arb_texture_gather@texturegather@fs-r-none-float-cubearray
+spec@arb_texture_gather@texturegatheroffset@vs-rgba-zero-unorm-2darray
+spec@ext_framebuffer_object@fbo-flushing-2
+spec@!opengl 1.1@teximage-colors
+spec@!opengl 1.1@teximage-colors gl_luminance8_alpha8
+spec@!opengl 1.1@teximage-colors gl_rgb8_snorm
+spec@!opengl 2.0@vertex-program-two-side back back2
+spec@oes_egl_image_external_essl3@oes_egl_image_external_essl3
+spec@oes_egl_image_external_essl3@oes_egl_image_external_essl3@oes_egl_image_external_essl3_imageLoad
+spec@oes_egl_image_external_essl3@oes_egl_image_external_essl3@oes_egl_image_external_essl3_imageStore
+spec@egl_nok_texture_from_pixmap@basic
+spec@!opengl 1.1@depthstencil-default_fb-blit
+spec@glsl-1.30@execution@texturesize@vs-texturesize-isamplercube
+namespace pollution@renderbuffer with glgetteximage-compressed
+
+afbcp-glx@glx-multithread-texture
+
+afbcp-spec@arb_texture_gather@texturegather@fs-r-none-float-cube
+afbcp-spec@arb_texture_gather@texturegather@fs-r-none-float-cubearray
+afbcp-spec@arb_texture_gather@texturegather@fs-r-none-unorm-2darray
+afbcp-spec@arb_texture_gather@texturegather@fs-rg-none-int-cubearray
+afbcp-spec@arb_texture_gather@texturegather@fs-rgb-blue-int-2d
+afbcp-spec@arb_texture_gather@texturegather@fs-rgb-green-unorm-2d
+afbcp-spec@arb_texture_gather@texturegather@vs-rg-green-float-cubearray
+afbcp-spec@arb_texture_gather@texturegatheroffset@fs-rgba-green-float-2d
+afbcp-spec@arb_texture_gather@texturegatheroffset@vs-rgba-zero-unorm-2darray
+
+afbcp-spec@egl_nok_texture_from_pixmap@basic
+afbcp-spec@glsl-1.30@execution@texturesize@vs-texturesize-isamplercube
+
+# first seen 2023-05-13
+spec@egl 1.4@largest possible eglcreatepbuffersurface and then glclear
+afbcp-spec@egl 1.4@largest possible eglcreatepbuffersurface and then glclear
+
+# uprev Piglit in Mesa
+glx@glx-multithread-clearbuffer
+afbcp-glx@glx-multithread-clearbuffer
+afbcp-spec@arb_texture_multisample@texelfetch@6-vs-isampler2dmsarray
+glx@glx-visuals-depth
+
+# Cause a "gpu sched timeout" (fixed by sched increase to 10s)
+dEQP-VK.memory.pipeline_barrier.host_write_vertex_buffer.1048576_vertex_buffer_stride_2
+dEQP-VK.memory.pipeline_barrier.host_write_uniform_buffer.1048576
+dEQP-VK.memory.pipeline_barrier.host_write_uniform_texel_buffer.1048576
+dEQP-VK.memory.pipeline_barrier.host_write_index_buffer.1048576
+
+# Sometime timeout
+dEQP-VK.memory.pipeline_barrier.host_write_storage_buffer.1048576
+
+# The simulate_oom WSI tests are broken in CI
+dEQP-VK.wsi.*.swapchain.simulate_oom.*
+
+# These intermittently crash on mt8186, but they passed on meson-g12b-a311d-khadas-vim3
+dEQP-VK.texture.explicit_lod.2d.sizes.128x128_*
+
+# New flakes in 1.4.3.3
+dEQP-VK.dynamic_rendering.graphics_pipeline_library.suballocation.attachment.8.615
+dEQP-VK.renderpass.dedicated_allocation.attachment.8.753
+dEQP-VK.renderpass2.dedicated_allocation.attachment.8.603
+dEQP-VK.renderpasses.dynamic_rendering.complete_secondary_cmd_buff.suballocation.attachment.8.615
+dEQP-VK.renderpasses.renderpass1.dedicated_allocation.attachment.8.644
+dEQP-VK.renderpasses.renderpass1.suballocation.attachment.8.615
+dEQP-VK.renderpasses.renderpass1.suballocation.multisample_resolve.r16g16b16a16_sint.samples_8_baseLayer1
+dEQP-VK.renderpasses.renderpass2.suballocation.attachment.8.753
+
+# New flakes with VKCTS 1.4.4.0
+dEQP-VK.binding_model.descriptor_buffer.sparse_residency_buffer.push_descriptor.graphics_geom_sets1_push_set0_single_buffer_commands_2
+dEQP-VK.glsl.conversions.matrix_to_matrix.mat2x4_to_mat3x2_vertex
+dEQP-VK.glsl.operator.binary_operator.div.mediump_float_vec3_vertex
+
+# Nightly run expectations update
+glx@glx-visuals-stencil
+
+# New timeout flakes since wsi maintenance1 support
+dEQP-VK.wsi.xcb.maintenance1.release_images.mailbox.no_scaling.basic
+
+# Job timeout
+dEQP-VK.graphicsfuzz.spv-composites

@@ -1,0 +1,12 @@
+# New failures with VK CTS 1.4.4.0
+dEQP-VK.video.decode.vp9.basic_10_not_matching_order_layered_dpb_video_layout,Fail
+dEQP-VK.video.decode.vp9.basic_10_not_matching_order_separated_dpb_video_layout,Fail
+dEQP-VK.video.decode.vp9.inter_intra_only_layered_dpb_video_layout,Fail
+dEQP-VK.video.decode.vp9.inter_intra_only_separated_dpb_video_layout,Fail
+
+# VKCTS 1.4.5.3 -> 1.4.6.1 uprev
+# deqp-vk: ../src/intel/vulkan/anv_cmd_buffer.c:147: anv_create_cmd_buffer: Assertion `pool->queue_family_index < device->physical->queue.family_count' failed.
+dEQP-VK.api.fill_and_update_buffer.dedicated_alloc.fill_buffer_vk_whole_size_device_address,Crash
+
+# VKCTS 1.4.5.3 -> 1.4.6.1 uprev
+dEQP-VK.binding_model.descriptor_heap.basic.fragment.input_attachment,Fail

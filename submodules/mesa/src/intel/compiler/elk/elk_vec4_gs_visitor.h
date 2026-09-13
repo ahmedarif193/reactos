@@ -1,0 +1,54 @@
+/*
+ * Copyright © 2013 Intel Corporation
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
+ * \file elk_vec4_gs_visitor.h
+ *
+ * Geometry-shader-specific code derived from the vec4_visitor class.
+ */
+
+#pragma once
+
+#include "elk_vec4.h"
+
+#define MAX_GS_INPUT_VERTICES 6
+
+#ifdef __cplusplus
+namespace elk {
+
+class vec4_gs_visitor : public vec4_visitor
+{
+public:
+   vec4_gs_visitor(const struct elk_compiler *compiler,
+                   const struct elk_compile_params *params,
+                   struct elk_gs_compile *c,
+                   struct elk_gs_prog_data *prog_data,
+                   const nir_shader *shader,
+                   bool no_spills,
+                   bool debug_enabled);
+
+protected:
+   virtual void setup_payload();
+   virtual void emit_prolog();
+   virtual void emit_thread_end();
+   virtual void emit_urb_write_header(int mrf);
+   virtual vec4_instruction *emit_urb_write_opcode(bool complete);
+   virtual void gs_emit_vertex(int stream_id);
+   virtual void gs_end_primitive();
+   virtual void nir_emit_intrinsic(nir_intrinsic_instr *instr);
+
+protected:
+   int setup_varying_inputs(int payload_reg, int attributes_per_reg);
+   void emit_control_data_bits();
+   void set_stream_control_data_bits(unsigned stream_id);
+
+   src_reg vertex_count;
+   src_reg control_data_bits;
+   const struct elk_gs_compile * const c;
+   struct elk_gs_prog_data * const gs_prog_data;
+};
+
+} /* namespace elk */
+#endif /* __cplusplus */

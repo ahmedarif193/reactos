@@ -1,0 +1,28 @@
+# Please include a comment with the log message and a testcase triggering each
+# VUID at the bottom of the file.
+#khronos_validation.message_id_filter = VUID-RuntimeSpirv-Location-06272,VUID-StandaloneSpirv-OpEntryPoint-08721,VUID-vkCmdDrawMultiEXT-dynamicPrimitiveTopologyUnrestricted-07500,VUID-vkCmdDrawMultiEXT-None-08879,VUID-vkCmdDrawMultiIndexedEXT-dynamicPrimitiveTopologyUnrestricted-07500,VUID-vkCmdDrawMultiIndexedEXT-None-08879,VUID-vkDestroyDevice-device-05137,VUID-vkQueueSubmit-pCommandBuffers-00065,VUID-VkShaderCreateInfoEXT-pCode-08737
+khronos_validation.message_id_filter = VUID-VkPhysicalDeviceProperties2-pNext-pNext,VUID-VkDeviceCreateInfo-pNext-pNext,VUID-RuntimeSpirv-Location-06272,VUID-RuntimeSpirv-OpEntryPoint-08743,VUID-StandaloneSpirv-OpEntryPoint-08721,VUID-vkCmdDrawMultiEXT-dynamicRenderingUnusedAttachments-08911,VUID-vkCmdDrawMultiIndexedEXT-None-08879,VUID-vkDestroyDevice-device-05137,VUID-vkQueueSubmit-pCommandBuffers-00065,VUID-VkShaderCreateInfoEXT-pCode-08737,VUID-vkCmdDrawMultiEXT-None-08879,VUID-vkCmdDrawMultiIndexedEXT-None-10909,VUID-vkCmdBindVertexBuffers2-pStrides-06209,VUID-VkDeviceAddress-size-11364,VUID-VkStridedDeviceAddressRangeKHR-address-11365
+khronos_validation.report_flags = error
+khronos_validation.debug_action = VK_DBG_LAYER_ACTION_LOG_MSG,VK_DBG_LAYER_ACTION_BREAK
+VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT
+khronos_validation.printf_buffer_size = 40960
+khronos_validation.printf_to_stdout = true
+khronos_validation.log_filename = stdout
+
+# VUID-VkPhysicalDeviceProperties2-pNext-pNext
+# VUID-VkDeviceCreateInfo-pNext-pNext
+# never error due to unrecognized extensions
+
+
+# dEQP-GLES3.functional.vertex_array_objects.all_attributes
+#
+# Validation Error: [ VUID-vkCmdBindVertexBuffers2-pStrides-06209 ] | MessageID = 0x9e5db3a3
+# vkCmdDrawMultiEXT(): (attribute binding 9, attribute location 10) The pStrides value (2) parameter in the last call to vkCmdDrawMultiEXT is not 0 and is less than the extent of the binding for the attribute (6).
+# The Vulkan spec states: If pStrides is not NULL each element of pStrides must be either 0 or greater than or equal to the maximum extent of all vertex input attributes fetched from the corresponding binding, where the extent is calculated as the VkVertexInputAttributeDescription::offset plus VkVertexInputAttributeDescription::format size (https://docs.vulkan.org/spec/latest/chapters/fxvertex.html#VUID-vkCmdBindVertexBuffers2-pStrides-06209)
+# Objects: 3
+#     [0] VkCommandBuffer 0x7f1a580541d0[zink cmdbuf]
+#     [1] VkShaderEXT 0x6b000000006b
+#     [2] VkShaderEXT 0x6c000000006c
+
+# VUID-VkDeviceAddress-size-11364,VUID-VkStridedDeviceAddressRangeKHR-address-11365
+# needs vk extension

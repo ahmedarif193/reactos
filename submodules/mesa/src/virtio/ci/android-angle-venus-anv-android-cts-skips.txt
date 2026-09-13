@@ -1,0 +1,27 @@
+# First test run details: https://gallo.pages.freedesktop.org/-/mesa/-/jobs/78930621/artifacts/results/test_result.html
+
+## First run result==fail
+
+x86_64 CtsGraphicsTestCases android.graphics.cts.VulkanFeaturesTest#testVulkanHardwareFeatures
+
+### Must support the core Vulkan 1.1
+x86_64 CtsGraphicsTestCases android.graphics.cts.VulkanFeaturesTest#testVulkanApplicationBinaryInterfaceRequirements
+
+### no support for ABP 2021
+x86_64 CtsGraphicsTestCases android.graphics.cts.VulkanFeaturesTest#testAndroidBaselineProfile2021Support
+
+# Appears to cause crashes with Android 16
+x86_64 CtsGraphicsTestCases android.graphics.cts.SetFrameRateTest#testFixedSource_NonSeamless_arr
+
+# Failed due to non-gfx issues
+x86_64 CtsGraphicsTestCases android.graphics.fonts.SystemFontsTest#testFontsFallbackUnreadable[0]
+x86_64 CtsGraphicsTestCases android.graphics.fonts.SystemFontsTest#testAvailableFonts_ReadOnlyFile[0]
+
+# Instrumentation ran for longer than the configured timeout.
+x86_64 CtsNativeHardwareTestCases android.hardware.nativehardware.cts.AHardwareBufferNativeTests#AHardwareBufferTest_AllocateLockUnlockDeallocateStressTest
+
+# Invalid test, spec violation: https://gitlab.khronos.org/vulkan/vulkan/-/issues/4713
+x86_64 CtsSkQPTestCases org.skia.skqp.SkQPRunner#UnitTest_VkBackendSurfaceMutableStateTest
+
+# Can trigger a full system crash (DeadSystemException), making the device unresponsive and causing instrumentation to abort
+x86_64 CtsGraphicsTestCases android.graphics.cts.AnimatorLeakTest#testPauseResume

@@ -1,0 +1,103 @@
+dEQP-VK.api.buffer_memory_requirements.create_sparse_binding_sparse_residency.ext_mem_flags_excluded.method1.size_req_storage_usage_bits
+dEQP-VK.api.image_clearing.core.clear_color_image.2d.optimal.single_layer.r16g16_unorm_1x33_multiple_subresourcerange
+dEQP-VK.binding_model.shader_access.primary_cmd_buf.bind.with_push.storage_image.vertex.multiple_contiguous_descriptors.2d_array
+dEQP-VK.binding_model.shader_access.primary_cmd_buf.bind.with_push_template.combined_image_sampler_mutable.vertex_fragment.multiple_arbitrary_descriptors.2d_base_slice
+dEQP-VK.binding_model.shader_access.secondary_cmd_buf.bind.sampler_mutable.vertex.multiple_descriptor_sets.multiple_discontiguous_descriptors.1d_base_slice
+dEQP-VK.fragment_shading_rate.renderpass2.fast_linked_library.sampleshadingenable.dynamic.attachment.shaderrate.keep.keep.1x1.samples1.gs
+dEQP-VK.glsl.builtin.precision_fp16_storage32b.distance.compute.vec4
+dEQP-VK.glsl.texture_gather.offset.min_required_offset.2d.rgba8i.size_pot.mirrored_repeat_clamp_to_edge
+dEQP-VK.image.host_image_copy.identical_memory_layout.linear.d32_sfloat
+dEQP-VK.image.host_image_copy.optimal.image_to_image_memcpy.depth_attachment_stencil_read_only_optimal.depth_attachment_stencil_read_only_optimal.32x32x1_1.0.r16_unorm
+dEQP-VK.memory.allocation.basic.size_8KiB.forward.count_4000
+dEQP-VK.pipeline.fast_linked_library.stencil.format.d32_sfloat_s8_uint.states.fail_decw.pass_inv.dfail_decc.comp_always
+dEQP-VK.pipeline.monolithic.sampler.view_type.1d_array.format.r16g16b16a16_sfloat.mag_reduce.comp_one_r_r_r.max
+dEQP-VK.pipeline.monolithic.stencil.format.d32_sfloat_s8_uint.states.fail_decc.pass_decc.dfail_repl.comp_always.any
+dEQP-VK.pipeline.monolithic.stencil.format.s8_uint.states.fail_keep.pass_decw.dfail_zero.comp_always.any
+dEQP-VK.pipeline.pipeline_library.blend.dual_source.format.r8g8b8a8_snorm.output_variable.states.color_ca_1ms1a_sub_alpha_1msa_1mdc_sub-color_1mda_sas_add_alpha_o_ca_add-color_sa_1mdc_sub_alpha_o_1mca_rsub-color_s1c_1msa_rsub_alpha_1msa_1mca_add
+dEQP-VK.pipeline.pipeline_library.color_write_enable.no_channels.two_draws_static.disable_second
+dEQP-VK.pipeline.pipeline_library.stencil.format.d24_unorm_s8_uint.states.fail_decw.pass_incc.dfail_wrap.comp_not_equal
+dEQP-VK.pipeline.pipeline_library.stencil.nocolor.format.d24_unorm_s8_uint.states.fail_wrap.pass_decw.dfail_inv.comp_greater_or_equal
+dEQP-VK.query_pool.statistics_query.reset_after_copy.input_assembly_primitives.secondary_inherited.64bits_cmdcopyquerypoolresults_triangle_strip_with_adjacency
+dEQP-VK.query_pool.statistics_query.reset_before_copy.geometry_shader_invocations.primary.64bits_cmdcopyquerypoolresults_point_list_clear_color
+dEQP-VK.spirv_assembly.instruction.compute.opinboundsaccesschain.uint.array_2
+dEQP-VK.synchronization.cross_instance.suballocated.write_ssbo_tess_control_read_ubo_compute.buffer_16384_binary_semaphore_fd
+dEQP-VK.synchronization.internally_synchronized_objects.pipeline_cache_compute
+dEQP-VK.synchronization.op.single_queue.fence.write_image_fragment_read_blit_image.image_128x128_r16g16b16a16_uint
+dEQP-VK.synchronization2.cross_instance.dedicated.write_image_tess_control_read_blit_image.image_128x128_r16_uint_binary_semaphore_fd
+dEQP-VK.synchronization2.op.single_queue.timeline_semaphore.write_image_fragment_read_image_compute.image_128_r32_uint
+dEQP-VK.texture.shadow.cube_array.nearest_mipmap_nearest.not_equal_d32_sfloat
+dEQP-VK.transform_feedback.primitives_generated_query.copy.host_reset.32bit.geom.xfb.rast.line_strip_with_adjacency.pgq_0_xfb_1.two_draws.xfbq_first.after
+dEQP-VK.transform_feedback.primitives_generated_query.copy.host_reset.pgq_32bit_xfb_64bit.geom.xfb.rast.line_list.pgq_0_xfb_default.two_draws.xfbq_first.after_2_queries
+dEQP-VK.transform_feedback.primitives_generated_query.get.queue_reset.32bit.geom.xfb.rast.triangle_strip.pgq_0_xfb_0.single_draw.xfbq_first.after_2_queries
+dynamic-dEQP-VK.renderpass2.suballocation.attachment_sparse_filling.input_attachment_1
+
+KHR-GL46.es_31_compatibility.shader_storage_buffer_object.advanced-usage-sync-cs
+KHR-GL46.shader_bitfield_operation.bitCount.uvec3_0
+KHR-GL46.shader_bitfield_operation.findMSB.ivec4_1
+KHR-GL46.shader_bitfield_operation.unpackUnorm4x8.3
+KHR-GL46.shader_draw_parameters_tests.MultiDrawArraysIndirectCountParameters
+KHR-GL46.shader_draw_parameters_tests.MultiDrawElementIndirectCountParameters
+KHR-GL46.shader_draw_parameters_tests.ShaderMultiDrawElementsIndirectParameters
+KHR-GL46.shader_group_vote.all_invocations
+KHR-GL46.shader_group_vote.all_invocations_equal
+KHR-GL46.shader_group_vote.invocations_with_variables
+KHR-GL46.shader_image_load_store.basic-allTargets-loadStoreTES
+KHR-GL46.shader_image_load_store.multiple-uniforms
+KHR-GL46.shader_image_size.advanced-nonMS-tes-float
+KHR-GL46.shader_image_size.advanced-nonMS-tes-int
+KHR-GL46.shader_image_size.advanced-nonMS-tes-uint
+KHR-GL46.shader_image_size.basic-nonMS-tes-float
+KHR-GL46.shader_image_size.basic-nonMS-tes-uint
+KHR-GL46.shader_storage_buffer_object.advanced-usage-sync-cs
+KHR-GL46.shader_storage_buffer_object.advanced-write-tessellation
+KHR-GL46.tessellation_shader.single.max_patch_vertices
+KHR-GL46.tessellation_shader.tessellation_control_to_tessellation_evaluation.gl_PatchVerticesIn
+KHR-GL46.texture_cube_map_array.color_depth_attachments
+KHR-GL46.transform_feedback.draw_xfb_feedbackk_test
+KHR-GLES31.core.shader_bitfield_operation.bitfieldInsert.ivec3_0
+KHR-GLES31.core.shader_storage_buffer_object.advanced-usage-sync-cs
+KHR-GLES31.core.texture_cube_map_array.color_depth_attachments
+custom@buffer flags
+custom@buffer flags@in-0x0-out-0x20
+custom@buffer flags@in-0x0-out-0x30
+custom@buffer flags@in-0x0-out-0x8
+custom@buffer flags@in-0x10-out-0x0
+custom@buffer flags@in-0x10-out-0x10
+custom@buffer flags@in-0x10-out-0x20
+custom@buffer flags@in-0x10-out-0x30
+custom@buffer flags@in-0x10-out-0x8
+custom@buffer flags@in-0x20-out-0x0
+custom@buffer flags@in-0x20-out-0x10
+custom@buffer flags@in-0x20-out-0x20
+custom@buffer flags@in-0x20-out-0x8
+custom@buffer flags@in-0x30-out-0x0
+custom@buffer flags@in-0x30-out-0x10
+custom@buffer flags@in-0x30-out-0x20
+custom@buffer flags@in-0x30-out-0x8
+custom@buffer flags@in-0x8-out-0x0
+custom@buffer flags@in-0x8-out-0x10
+custom@buffer flags@in-0x8-out-0x20
+custom@buffer flags@in-0x8-out-0x30
+custom@buffer flags@in-0x8-out-0x8
+dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.rgba8_rgba8ui.renderbuffer_to_renderbuffer
+dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.srgb8_alpha8_rgba8ui.renderbuffer_to_renderbuffer
+dEQP-GLES31.functional.image_load_store.2d_array.store.rgba8_single_layer
+dEQP-GLES31.functional.image_load_store.buffer.format_reinterpret.r32f_rgba8i
+dEQP-GLES31.functional.ssbo.layout.random.nested_structs.8
+dEQP-GLES31.functional.ssbo.layout.random.vector_types.15
+dEQP-GLES31.functional.ssbo.layout.single_basic_type.packed.mediump_ivec2
+dEQP-GLES31.functional.ssbo.layout.single_basic_type.std140.column_major_highp_mat2x3
+dEQP-GLES31.functional.ssbo.layout.single_basic_type.std140.row_major_mediump_mat4x2
+dEQP-GLES31.functional.ssbo.layout.single_basic_type.std430.highp_uvec2
+dEQP-GLES31.functional.ssbo.layout.single_basic_type.std430.mediump_mat3
+
+# test_object_interface:1615:pipeline state: Test failed: Test object has 1 references left.
+vkd3d-test_object_interface
+# "test_pipeline_library:369: Test failed: Refcount 2 != 1."
+vkd3d-test_pipeline_library
+# Aborted with malloc corruption
+vkd3d-test_read_subresource_rt
+
+vkd3d-test_fence_signal_availability_plain
+vkd3d-test_planar_video_formats
+vkd3d-test_render_pass_suspend_resume_opts_enabled

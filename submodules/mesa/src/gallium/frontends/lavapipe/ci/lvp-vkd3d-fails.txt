@@ -1,0 +1,21 @@
+# The tests assumes a dubgroup size >= 16
+test_shader_waveop_maximal_convergence,Fail
+
+# The test uses multiplanar formats for render targets which is unsupported
+test_planar_video_formats,Fail
+
+# The test expect lod=0.5 to load level 1 with nearest sampling
+test_sample_instructions,Fail
+
+test_sampler_rounding,Fail
+
+test_null_descriptor_resinfo_dxbc,Fail
+test_null_descriptor_resinfo_dxil,Fail
+
+test_undefined_structured_raw_alias_dxbc,Fail
+test_undefined_structured_raw_alias_dxil,Fail
+test_undefined_structured_raw_read_typed_dxbc,Fail
+test_undefined_structured_raw_read_typed_dxil,Fail
+
+test_copy_subresource_depth_stencil_batch,Fail
+test_uav_clear_exhaustive_descriptors,Crash

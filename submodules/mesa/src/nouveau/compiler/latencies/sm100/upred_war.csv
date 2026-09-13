@@ -1,0 +1,9 @@
+war,coupled,udp,voteu,u_guard,bra_jmp,uldc_mma,usetmaxreg
+coupled,none,none,none,none,none,none,none
+udp,1,1,none,1,1,1,none
+voteu,2,2,none,1,1,1,none
+u_guard,none,none,none,none,none,none,none
+bra_jmp,none,none,none,none,none,none,none
+uldc_mma,none,none,none,none,none,none,none
+usetmaxreg,1,1,none,1,1,1,none
+

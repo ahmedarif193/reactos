@@ -1,0 +1,62 @@
+glx@glx-multi-window-single-context,Fail
+
+spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex,Fail
+spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex@'vs_input2[1][0]' on GL_PROGRAM_INPUT,Fail
+
+spec@arb_tessellation_shader@arb_tessellation_shader-tes-gs-max-output -small -scan 1 50,Crash
+
+spec@!opengl 1.0@rasterpos@glsl_vs_gs_linked,Fail
+spec@!opengl 1.0@rasterpos@glsl_vs_tes_linked,Fail
+
+# Delta over NAVI10
+spec@!opengl 1.1@depthstencil-default_fb-blit samples=4,Fail
+spec@!opengl 1.1@depthstencil-default_fb-copypixels samples=6,Fail
+
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-export,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-ownership_transfer,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-refcount,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_argb8888,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_ayuv,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_nv12,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_nv21,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_p010,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_p012,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_p016,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_uyvy,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_vyuy,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_xrgb8888,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_xyuv,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y210,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y212,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y216,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y410,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y412,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_y416,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yuv420,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yvu420,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yvyu,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-transcode-nv12-as-r8-gr88,Fail
+
+# These seem to only fail with ASAN enabled.
+asan-KHR-GL46.packed_pixels.pbo_rectangle.compressed_red_rgtc1_format_rgb,Fail
+asan-KHR-GL46.packed_pixels.pbo_rectangle.compressed_signed_red_rgtc1_format_bgra,Fail
+asan-KHR-GL46.packed_pixels.pbo_rectangle.compressed_signed_rg_rgtc2_format_bgr,Fail
+asan-KHR-GL46.packed_pixels.pbo_rectangle.compressed_signed_rg_rgtc2_format_rgb,Fail
+asan-KHR-GL46.packed_pixels.pbo_rectangle.compressed_signed_rg_rgtc2_format_rgba,Fail
+asan-KHR-GL46.packed_pixels.rectangle.compressed_rg_format_bgr,Fail
+asan-KHR-GL46.packed_pixels.rectangle.compressed_signed_red_rgtc1_format_red,Fail
+asan-KHR-GL46.packed_pixels.rectangle.compressed_signed_red_rgtc1_format_rgba,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_red_rgtc1_format_bgr,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_red_rgtc1_format_rg,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_rg_format_bgr,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_rg_format_bgra,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_rg_format_red,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_rg_format_rgb,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_rg_format_rgba,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_rg_rgtc2_format_bgra,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_rg_rgtc2_format_red,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_signed_red_rgtc1_format_bgr,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_signed_red_rgtc1_format_bgra,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_signed_red_rgtc1_format_rgb,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_signed_rg_rgtc2_format_bgr,Fail
+asan-KHR-GL46.packed_pixels.varied_rectangle.compressed_signed_rg_rgtc2_format_bgra,Fail

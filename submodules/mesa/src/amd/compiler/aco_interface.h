@@ -1,0 +1,78 @@
+/*
+ * Copyright © 2018 Google
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#ifndef ACO_INTERFACE_H
+#define ACO_INTERFACE_H
+
+#include "aco_shader_info.h"
+
+#include "nir_defines.h"
+#include "util/shader_stats.h"
+
+#include "ac_shader_debug_info.h"
+#include "amd_family.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct nir_parameter;
+typedef struct nir_parameter nir_parameter;
+struct ac_shader_config;
+struct aco_shader_info;
+struct aco_vs_prolog_info;
+struct aco_ps_epilog_info;
+struct radeon_info;
+
+typedef void(aco_callback)(void** priv_ptr, const struct ac_shader_config* config,
+                           const char* llvm_ir_str, unsigned llvm_ir_size, const char* disasm_str,
+                           unsigned disasm_size, struct amd_stats* stats, uint32_t exec_size,
+                           const uint32_t* code, uint32_t code_dw, const struct aco_symbol* symbols,
+                           unsigned num_symbols, const struct ac_shader_debug_info* debug_info,
+                           unsigned debug_info_count);
+
+typedef void(aco_shader_part_callback)(void** priv_ptr, uint32_t num_sgprs, uint32_t num_vgprs,
+                                       uint32_t exec_size, const uint32_t* code, uint32_t code_size,
+                                       const char* disasm_str, uint32_t disasm_size);
+
+void aco_compile_shader(const struct aco_compiler_options* options,
+                        const struct aco_shader_info* info, unsigned shader_count,
+                        struct nir_shader* const* shaders, const struct ac_shader_args* args,
+                        aco_callback* build_binary, void** binary);
+
+void aco_compile_vs_prolog(const struct aco_compiler_options* options,
+                           const struct aco_shader_info* info,
+                           const struct aco_vs_prolog_info* prolog_info,
+                           const struct ac_shader_args* args,
+                           aco_shader_part_callback* build_prolog, void** binary);
+
+void aco_compile_ps_epilog(const struct aco_compiler_options* options,
+                           const struct aco_shader_info* info,
+                           const struct aco_ps_epilog_info* epilog_info,
+                           const struct ac_shader_args* args,
+                           aco_shader_part_callback* build_epilog, void** binary);
+
+void aco_compile_ps_prolog(const struct aco_compiler_options* options,
+                           const struct aco_shader_info* info,
+                           const struct aco_ps_prolog_info* pinfo,
+                           const struct ac_shader_args* args,
+                           aco_shader_part_callback* build_prolog, void** binary);
+
+void aco_compile_trap_handler(const struct aco_compiler_options* options,
+                              const struct aco_shader_info* info, const struct ac_shader_args* args,
+                              aco_callback* build_binary, void** binary);
+
+uint64_t aco_get_codegen_flags();
+
+bool aco_is_gpu_supported(const struct radeon_info* info);
+
+void aco_print_asm(const struct radeon_info *info, unsigned wave_size,
+                   uint32_t *binary, unsigned num_dw);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

@@ -1,0 +1,8 @@
+## This test mostly times out
+ahb-dEQP-VK.api.external.memory.android_hardware_buffer.dedicated.device_only.import_multiple_times
+ahb-dEQP-VK.api.external.memory.android_hardware_buffer.dedicated.host_visible.import_multiple_times
+ahb-dEQP-VK.api.external.memory.android_hardware_buffer.suballocated.device_only.import_multiple_times
+ahb-dEQP-VK.api.external.memory.android_hardware_buffer.suballocated.host_visible.import_multiple_times
+
+# Mainly for testing platform features. Skip as take too long. Flaky on both ANV and Turnip.
+awsi-dEQP-VK.wsi.android.incremental_present.*

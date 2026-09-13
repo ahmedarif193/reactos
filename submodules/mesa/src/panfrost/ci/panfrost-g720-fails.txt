@@ -1,0 +1,9 @@
+# Warning!
+# --------
+# G720 results aren't regularly updated, this is just kept around as a "best
+# effort" reference of what we expect the results to be.
+
+# uprev Piglit in Mesa
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-refcount-multithread,Crash
+
+dEQP-VK.glsl.loops.special.do_while_dynamic_iterations.dowhile_trap_vertex,Crash

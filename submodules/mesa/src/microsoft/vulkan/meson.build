@@ -1,0 +1,135 @@
+# Copyright © Microsoft Corporation
+# SPDX-License-Identifier: MIT
+
+dzn_entrypoints = custom_target(
+  'dzn_entrypoints',
+  input : [vk_entrypoints_gen, vk_api_xml],
+  output : ['dzn_entrypoints.h', 'dzn_entrypoints.c'],
+  command : [
+    prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--proto', '--weak',
+    '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@', '--prefix', 'dzn',
+    '--beta', with_vulkan_beta.to_string()
+  ],
+  depend_files : vk_entrypoints_gen_depend_files,
+)
+
+dzn_drirc = custom_target(
+  'dzn_drirc',
+  input  : [files('dzn_drirc_gen.py'), drirc_gen, '00-dzn-defaults.conf'],
+  output : ['dzn_drirc.c', 'dzn_drirc.h'],
+  command : [
+    prog_python, '@INPUT0@',
+    '--import-path', join_paths(dir_source_root, 'src/util'),
+    '--drirc-src', '@OUTPUT0@',
+    '--drirc-hdr', '@OUTPUT1@',
+    '--validate', '@INPUT2@',
+  ],
+)
+
+libdzn_files = files(
+  'dzn_cmd_buffer.c',
+  'dzn_descriptor_set.c',
+  'dzn_device.c',
+  'dzn_dxcore.cpp',
+  'dzn_image.c',
+  'dzn_meta.c',
+  'dzn_nir.c',
+  'dzn_pipeline.c',
+  'dzn_query.c',
+  'dzn_sync.c',
+  'dzn_util.c',
+  'dzn_wsi.c',
+)
+
+dzn_deps = [
+  idep_libdxil_compiler,
+  idep_libspirv_to_dxil,
+  idep_nir,
+  idep_nir_headers,
+  idep_vulkan_util,
+  idep_vulkan_runtime,
+  idep_vulkan_wsi,
+  idep_mesautil,
+  dep_dxheaders,
+]
+
+dzn_flags = [ ]
+dzn_cpp_flags = [ ]
+
+if with_platform_windows
+  libdzn_files += files('dzn_dxgi.c')
+endif
+
+if cc.get_argument_syntax() != 'msvc'
+  dzn_flags_to_try = [
+    '-Werror=unused-variable',
+    '-Werror=unused-but-set-variable',
+    '-Werror=unused-value',
+    '-Werror=format',
+    '-Werror=switch',
+  ]
+  dzn_flags += cc.get_supported_arguments(dzn_flags_to_try)
+  dzn_cpp_flags = cpp.get_supported_arguments(['-Wno-error=unused-value'])
+endif
+
+libvulkan_dzn = shared_library(
+  'vulkan_dzn',
+  [libdzn_files, dzn_entrypoints, dzn_drirc, sha1_h],
+  vs_module_defs : vulkan_api_def,
+  include_directories : [inc_include, inc_src, inc_util],
+  dependencies : [dzn_deps, idep_vulkan_wsi, idep_xmlconfig],
+  c_args : dzn_flags,
+  cpp_args : dzn_cpp_flags,
+  gnu_symbol_visibility : 'hidden',
+  link_args : [ld_args_bsymbolic, ld_args_gc_sections],
+  name_prefix : host_machine.system() == 'windows' ? '' : [],
+  install : true,
+)
+
+icd_file_name = libname_prefix + 'vulkan_dzn.' + libname_suffix
+
+
+icd_command = [
+   prog_python, '@INPUT0@',
+   '--api-version', '1.1', '--xml', '@INPUT1@',
+   '--sizeof-pointer', sizeof_pointer,
+   '--icd-lib-path', vulkan_icd_lib_path,
+   '--icd-filename', icd_file_name,
+   '--out', '@OUTPUT@',
+]
+
+icd_dev_command = [
+   prog_python, '@INPUT0@',
+   '--api-version', '1.1', '--xml', '@INPUT1@',
+   '--sizeof-pointer', sizeof_pointer,
+   '--icd-lib-path', meson.current_build_dir(),
+   '--icd-filename', icd_file_name,
+   '--out', '@OUTPUT@',
+]
+
+if with_platform_windows
+  icd_command += '--use-backslash'
+  icd_dev_command += '--use-backslash'
+endif
+
+dzn_icd = custom_target(
+  'dzn_icd',
+  input : [vk_icd_gen, vk_api_xml],
+  output : 'dzn_icd.' + vulkan_manifest_suffix,
+  command : icd_command,
+  build_by_default : true,
+  install_dir : with_vulkan_icd_dir,
+  install_tag : 'runtime',
+  install : true,
+)
+
+_dev_icdname = 'dzn_devenv_icd.@0@.json'.format(host_machine.cpu())
+_dev_icd = custom_target(
+  'dzn_devenv_icd',
+  input : [vk_icd_gen, vk_api_xml],
+  output : _dev_icdname,
+  command : icd_dev_command,
+  build_by_default : true,
+)
+
+devenv.append('VK_DRIVER_FILES', _dev_icd.full_path())

@@ -1,0 +1,371 @@
+/*
+ * Copyright 2026 Intel Corporation
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "compiler/gen/gen_enums.h"
+#include "util/bitset.h"
+#include "util/lut.h"
+#include "jay_builder.h"
+#include "jay_ir.h"
+#include "jay_opcodes.h"
+#include "jay_private.h"
+
+static enum jay_type
+canonicalize_for_bit_compare(enum jay_type type)
+{
+   enum jay_type base = jay_base_type(type);
+   return (base == JAY_TYPE_S) ? jay_type_rebase(type, JAY_TYPE_U) : type;
+}
+
+static bool
+propagate_cmod(jay_function *func, jay_inst *I, jay_inst **defs)
+{
+   enum jay_type cmp_type = I->type;
+   gen_condition cmod = I->conditional_mod;
+   jay_inst *def = NULL;
+
+   /* TODO: Generalize cmod propagation */
+   if (jay_type_size_bits(cmp_type) != 32)
+      return false;
+
+   /* Pattern match `cmp ssa, 0` or `cmp 0, ssa`. */
+   jay_foreach_ssa_src(I, s) {
+      if (jay_is_zero(I->src[1 - s])) {
+         def = defs[jay_base_index(I->src[s])];
+
+         /* Canonicalize the cmod to have the zero second */
+         cmod = s == 1 ? gen_condition_swap_sources(cmod) : cmod;
+         break;
+      }
+   }
+
+   /* Check if we can fold into the def */
+   if (!def || !jay_is_null(def->cond_flag) || !jay_opcode_infos[def->op].cmod)
+      return false;
+
+   /* bfn bspec says "only zero(ze), greater-than(gt), and less-than(lt)
+    * conditional modifiers are valid."
+    */
+   if (def->op == JAY_OPCODE_BFN && !(cmod == GEN_CONDITION_EQ ||
+                                      cmod == GEN_CONDITION_GT ||
+                                      cmod == GEN_CONDITION_LT)) {
+      return false;
+   }
+
+   /* "Neither Saturate nor conditional modifier allowed with DW integer
+    * multiply."
+    *
+    * Could be refined.
+    */
+   if (def->op == JAY_OPCODE_MUL && !jay_type_is_any_float(def->type))
+      return false;
+
+   enum jay_type instr_type = def->type;
+
+   if (cmod == GEN_CONDITION_NE || cmod == GEN_CONDITION_EQ) {
+      cmp_type = canonicalize_for_bit_compare(cmp_type);
+      instr_type = canonicalize_for_bit_compare(instr_type);
+   }
+
+   if (instr_type != cmp_type)
+      return false;
+
+   jay_builder b = jay_init_builder(func, jay_before_inst(I));
+   jay_set_conditional_mod(&b, def, I->cond_flag, cmod);
+   def->zero_inactive = I->zero_inactive;
+   return true;
+}
+
+static jay_def
+jay_compose_src(jay_def to, jay_def from)
+{
+   if (to.abs) {
+      from.negate = false;
+      from.abs = true;
+   }
+
+   from.negate ^= to.negate;
+   return from;
+}
+
+static void
+propagate_modifier(jay_inst *I, unsigned s, jay_inst *mod)
+{
+   /* Check if we can propagate abs/neg here in general */
+   if (!jay_has_src_mods(I, s) ||
+       mod->saturate ||
+       jay_src_type(I, s) != mod->type)
+      return;
+
+   jay_replace_src(&I->src[s], mod->src[0]);
+   I->src[s] = jay_compose_src(I->src[s], mod->src[0]);
+}
+
+static void
+propagate_not(jay_inst *I, unsigned s, jay_inst *mod)
+{
+   /* Handle inot specially for predicates, and logic operations per bspec text:
+    *
+    *    When used with logic instructions (and, not, or, xor), [the
+    *    negate] field indicates whether the source bits are
+    *    inverted... regardless of the source type.
+    */
+   if ((s == I->num_srcs - I->predication) ||
+       I->op == JAY_OPCODE_AND ||
+       I->op == JAY_OPCODE_OR ||
+       I->op == JAY_OPCODE_XOR) {
+      jay_replace_src(&I->src[s], mod->src[0]);
+      I->src[s].negate ^= true;
+   } else if (I->op == JAY_OPCODE_BFN) {
+      jay_replace_src(&I->src[s], mod->src[0]);
+      jay_set_bfn_ctrl(I, util_lut3_invert_source(jay_bfn_ctrl(I), s));
+   }
+}
+
+/**
+ * Fuse demote(cmp(x, y) != 0) to demote(x CMP y).
+ */
+static void
+fuse_demote(jay_inst *demote, jay_inst **defs)
+{
+   if (!(jay_is_ssa(demote->src[0]) &&
+         jay_is_zero(demote->src[1]) &&
+         demote->type == JAY_TYPE_U1 &&
+         demote->conditional_mod == GEN_CONDITION_NE)) {
+      return;
+   }
+
+   jay_inst *cmp = defs[jay_index(demote->src[0])];
+   if (cmp->op != JAY_OPCODE_CMP || cmp->predication) {
+      return;
+   }
+
+   demote->conditional_mod = cmp->conditional_mod;
+   demote->src[0] = cmp->src[0];
+   demote->src[1] = cmp->src[1];
+   demote->type = cmp->type;
+}
+
+static void
+propagate_forwards(jay_function *f)
+{
+   jay_inst **defs = calloc(f->ssa_alloc, sizeof(defs[0]));
+
+   jay_foreach_inst_in_func_safe(f, block, I) {
+      jay_builder b = jay_init_builder(f, jay_before_inst(I));
+
+      jay_foreach_dst_index(I, _, d) {
+         defs[d] = I;
+      }
+
+      /* Copy propagate individual components into vectors */
+      jay_foreach_src_index(I, s, c, idx) {
+         jay_inst *def = defs[idx];
+         assert(def != NULL && "SSA");
+
+         if (def->op == JAY_OPCODE_MOV &&
+             !def->predication &&
+             jay_num_values(def->dst) == 1 &&
+             jay_num_values(def->src[0]) == 1 &&
+             I->src[s].file == def->src[0].file) {
+
+            jay_insert_channel(&b, &I->src[s], c, def->src[0]);
+         } else if (def->op == JAY_OPCODE_UNDEF && c > 0) {
+            jay_insert_channel_index(&b, &I->src[s], c, 0);
+         }
+      }
+
+      /* Don't propagate into phis yet - TODO: File awareness */
+      if (I->op == JAY_OPCODE_PHI_SRC || I->op == JAY_OPCODE_SEND)
+         continue;
+
+      /* We fuse demote forwards & upfront to avoid fighting cmod prop */
+      if (I->op == JAY_OPCODE_DEMOTE) {
+         fuse_demote(I, defs);
+      }
+
+      jay_foreach_ssa_src(I, s) {
+         /* Copy propagate whole vectors */
+         jay_def src = I->src[s];
+         if (src.collect)
+            continue;
+
+         jay_inst *def = defs[jay_base_index(src)];
+         assert(def != NULL && "SSA");
+
+         if (!jay_defs_equivalent(def->dst, src) || def->predication)
+            continue;
+
+         if (def->op == JAY_OPCODE_MOV) {
+            /* Default values must have the same file as their dest, do not
+             * propagate invalid there.
+             *
+             * Only source 0 can read ARF.
+             *
+             * ISA restrictions forbid 8-bit immediates, don't even try.
+             */
+            if ((I->src[s].file == def->src[0].file) ||
+                ((!jay_inst_has_default(I) ||
+                  &I->src[s] != jay_inst_get_default(I)) &&
+                 !(I->src[s].file == UFLAG && !jay_is_imm(def->src[0])) &&
+                 !(I->src[s].file == FLAG) &&
+                 !(def->src[0].file == J_ARF && s != 0) &&
+                 !(jay_is_imm(def->src[0]) && I->src[s].negate) &&
+                 !(jay_is_imm(def->src[0]) &&
+                   jay_type_size_bits(jay_src_type(I, s)) == 8))) {
+
+               jay_replace_src(&I->src[s], def->src[0]);
+            }
+         } else if (def->op == JAY_OPCODE_MODIFIER && !jay_uses_flag(def)) {
+            propagate_modifier(I, s, def);
+         } else if (def->op == JAY_OPCODE_NOT && !jay_uses_implicit_flag(def)) {
+            propagate_not(I, s, def);
+         } else if (def->op == JAY_OPCODE_UNDEF &&
+                    I->op == JAY_OPCODE_MOV &&
+                    !jay_uses_implicit_flag(I)) {
+
+            I->op = JAY_OPCODE_UNDEF;
+            jay_shrink_sources(I, 0);
+         }
+      }
+
+      if (I->op == JAY_OPCODE_CMP && propagate_cmod(f, I, defs)) {
+         jay_remove_instruction(I);
+      }
+   }
+
+   free(defs);
+}
+
+static bool
+propagate_fsat(jay_inst *I, jay_inst *fsat)
+{
+   if (!jay_opcode_infos[I->op].sat ||
+       !jay_type_is_any_float(I->type) ||
+       fsat->op != JAY_OPCODE_MODIFIER ||
+       fsat->predication ||
+       fsat->src[0].negate ||
+       fsat->src[0].abs ||
+       (fsat->conditional_mod && !jay_opcode_infos[I->op].cmod) ||
+       I->conditional_mod ||
+       I->type != fsat->type ||
+       !jay_type_is_any_float(fsat->type))
+      return false;
+
+   /* saturate(saturate(x)) = saturate(x) */
+   I->saturate |= fsat->saturate;
+   I->dst = fsat->dst;
+   I->cond_flag = fsat->cond_flag;
+   I->conditional_mod = fsat->conditional_mod;
+   return true;
+}
+
+/*
+ * Fuse flag AND/OR by converting to predication with tied sources.  While easy
+ * in SSA, this relies on RA coalescing everything for profitability.
+ *
+ *    f0 = cmp a, b            f0 = cmp a, b
+ *    f1 = cmp c, d    ---->
+ *    f2 = and f0, f1          f2 = (f0|f0) cmp c, d
+ */
+static bool
+fuse_flag_op(jay_function *f, jay_inst *I, jay_inst *use, BITSET_WORD *defined)
+{
+   if (I->op != JAY_OPCODE_CMP ||
+       !(use->op == JAY_OPCODE_AND || use->op == JAY_OPCODE_OR) ||
+       (use->src[0].negate || use->src[1].negate)) {
+      return false;
+   }
+
+   unsigned i = jay_defs_equivalent(use->src[0], I->cond_flag) ? 0 : 1;
+   jay_def other = use->src[1 - i];
+
+   assert(jay_is_null(I->dst) && !I->predication);
+   assert(jay_defs_equivalent(use->src[i], I->cond_flag));
+
+   /* We must ensure `other` dominates I. Because defs dominate uses in SSA, it
+    * suffices to check that `other` is defined before I. Counterintuitively,
+    * that means we ensure that `other` has NOT yet been defined when processing
+    * I - because we propagate backwards.
+    */
+   if (BITSET_TEST(defined, jay_index(other))) {
+      return false;
+   }
+
+   /* Convert to predication using the identities:
+    *
+    *    a & b = a ? b : 0 = a ? b : a
+    *    a | b = a ? 1 : b = a ? a : b
+    */
+   I->cond_flag = use->dst;
+   I->uniform = jay_is_uniform(use->dst);
+   jay_def pred = use->op == JAY_OPCODE_OR ? jay_negate(other) : other;
+   jay_builder b = jay_init_builder(f, jay_before_inst(I));
+   jay_add_predicate_else(&b, I, pred, other);
+   return true;
+}
+
+static void
+propagate_backwards(jay_function *f)
+{
+   jay_inst **uses = calloc(f->ssa_alloc, sizeof(uses[0]));
+   BITSET_WORD *multiple = BITSET_CALLOC(f->ssa_alloc);
+   BITSET_WORD *defined = BITSET_CALLOC(f->ssa_alloc);
+
+   jay_foreach_inst_in_func_safe_rev(f, block, I) {
+      jay_foreach_dst_index(I, _, index) {
+         BITSET_SET(defined, index);
+      }
+
+      /* Record uses */
+      jay_foreach_src_index(I, s, c, ssa_index) {
+         if (uses[ssa_index])
+            BITSET_SET(multiple, ssa_index);
+         else
+            uses[ssa_index] = I;
+      }
+
+      bool flag = jay_is_null(I->dst);
+      jay_def dst = flag ? I->cond_flag : I->dst;
+
+      /* TODO: f64 sat propagation */
+      if (jay_num_values(dst) != 1)
+         continue;
+
+      assert(jay_is_ssa(dst));
+      jay_inst *use = uses[jay_base_index(dst)];
+      if (!use || BITSET_TEST(multiple, jay_base_index(dst)))
+         continue;
+
+      if ((!jay_is_null(use->dst) && fuse_flag_op(f, I, use, defined)) ||
+          (!flag && propagate_fsat(I, use))) {
+
+         jay_remove_instruction(use);
+         continue;
+      }
+
+      /* Fold UGPR->{GPR, FLAG} and UFLAG->FLAG copies coming out of NIR. */
+      if (use->type ==
+             (flag ? JAY_TYPE_U1 : canonicalize_for_bit_compare(I->type)) &&
+          I->op != JAY_OPCODE_PHI_DST &&
+          jay_is_null(I->cond_flag) &&
+          !I->predication &&
+          use->op == JAY_OPCODE_MOV &&
+          use->dst.file != J_ADDRESS &&
+          (!jay_is_flag(use->dst) || jay_num_isa_srcs(I) < 3)) {
+
+         *(flag ? &I->cond_flag : &I->dst) = use->dst;
+         I->uniform = use->uniform;
+         jay_remove_instruction(use);
+         continue;
+      }
+   }
+
+   free(defined);
+   free(multiple);
+   free(uses);
+}
+
+JAY_DEFINE_FUNCTION_PASS(jay_opt_propagate_forwards, propagate_forwards)
+JAY_DEFINE_FUNCTION_PASS(jay_opt_propagate_backwards, propagate_backwards)

@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='utf-8'?>
+<genxml name="SKL" gen="9">
+  <struct name="STRUCT_TWO_LEVELS" length="8">
+    <group count="4" dword="0" size="64">
+      <group count="8" dword="0" size="8">
+        <field name="byte" dword="0" bits="7:0" type="uint" />
+      </group>
+    </group>
+  </struct>
+  <struct name="TEST_DWORD_FIELDS" length="4">
+    <field name="value_dw0" dword="0" bits="15:0" type="uint" />
+    <field name="value_dw1" dword="1" bits="31:0" type="uint" />
+    <field name="value_dw2" dword="2" bits="23:8" type="uint" />
+    <field name="single_bit" dword="3" bits="5:5" type="bool" />
+  </struct>
+  <struct name="TEST_OFFSET_BITS" length="6">
+    <field name="header" dword="0" bits="31:0" type="uint" />
+    <group count="3" dword="1" offset_bits="16" size="16">
+      <field name="data" dword="0" bits="15:0" type="uint" />
+    </group>
+  </struct>
+  <struct name="TEST_STRUCT" length="2">
+    <field name="number1" dword="0" bits="15:0" type="uint" />
+    <field name="number2" dword="0" bits="31:16" type="uint" />
+    <group count="4" dword="1" size="8">
+      <field name="byte" dword="0" bits="7:0" type="uint" />
+    </group>
+  </struct>
+</genxml>

@@ -1,0 +1,12 @@
+dEQP-VK.wsi.display.create_display_mode,Fail
+dEQP-VK.wsi.display.create_display_plane_surface,Fail
+dEQP-VK.wsi.display.get_display_mode_properties,Fail
+dEQP-VK.wsi.display.get_display_mode_properties2,Fail
+dEQP-VK.wsi.display.get_display_plane_capabilities,Fail
+dEQP-VK.wsi.display.get_display_plane_capabilities2,Fail
+dEQP-VK.wsi.display.get_display_plane_properties,Fail
+dEQP-VK.wsi.display.get_display_plane_properties2,Fail
+dEQP-VK.wsi.display.get_display_plane_supported_displays,Fail
+dEQP-VK.wsi.display.get_display_properties,Fail
+dEQP-VK.wsi.display.get_display_properties2,Fail
+dEQP-VK.wsi.display.surface_counters,Fail

@@ -1,0 +1,263 @@
+/*
+ * Copyright © 2016 Red Hat.
+ * Copyright © 2016 Bas Nieuwenhuizen
+ * SPDX-License-Identifier: MIT
+ *
+ * based in part on anv driver which is:
+ * Copyright © 2015 Intel Corporation
+ */
+
+#ifndef TU_SHADER_H
+#define TU_SHADER_H
+
+#include "tu_common.h"
+
+#include "tu_cs.h"
+#include "tu_descriptor_set.h"
+#include "tu_suballoc.h"
+
+struct tu_inline_ubo
+{
+   /* Push the data at BINDLESS_BASE[base] + offset */
+   unsigned base;
+   unsigned offset;
+
+   /* If true, push the base address instead */
+   bool push_address;
+
+   /* Push it to this location in the const file, in vec4s */
+   unsigned const_offset_vec4;
+
+   /* How much to push */
+   unsigned size_vec4;
+};
+
+/* The meaning of the range depends on "type". If it's
+ * IR3_PUSH_CONSTS_PER_STAGE, then it's the range used by this shader. If
+ * it's IR3_PUSH_CONSTS_SHARED then it's the overall range as provided by
+ * the pipeline layout and must match between shaders where it's non-zero.
+ */
+struct tu_push_constant_range
+{
+   uint32_t lo_dwords;
+   uint32_t dwords;
+   enum ir3_push_consts_type type;
+};
+
+struct tu_const_state
+{
+   struct tu_push_constant_range push_consts;
+   uint32_t dynamic_offset_loc;
+   unsigned num_inline_ubos;
+   struct tu_inline_ubo ubos[MAX_INLINE_UBOS];
+   uint32_t num_bindless_base_addresses;
+   uint32_t bindless_base_const_offset_vec4;
+
+   struct ir3_driver_ubo fdm_ubo;
+   struct ir3_driver_ubo dynamic_offsets_ubo;
+   struct ir3_driver_ubo inline_uniforms_ubo;
+   struct ir3_driver_ubo bindless_base_addrs_ubo;
+};
+
+struct tu_shader
+{
+   struct vk_pipeline_cache_object base;
+
+   const struct ir3_shader_variant *variant;
+   const struct ir3_shader_variant *safe_const_variant;
+
+   struct tu_suballoc_bo bo;
+   struct tu_cs cs;
+   struct tu_bo *pvtmem_bo;
+
+   struct tu_draw_state state;
+   struct tu_draw_state safe_const_state;
+   struct tu_draw_state binning_state;
+   struct tu_draw_state safe_const_binning_state;
+
+   struct tu_const_state const_state;
+   uint32_t view_mask;
+   uint8_t active_desc_sets;
+
+   /* The dynamic buffer descriptor size for descriptor sets that we know
+    * about. This is used when linking to piece together the sizes and from
+    * there calculate the offsets. It's -1 if we don't know because the
+    * descriptor set layout is NULL.
+    */
+   int dynamic_descriptor_sizes[MAX_SETS];
+
+   /* For all shader types other than FS, store whether the viewport was
+    * rewritten to equal the layer.
+    */
+   bool per_layer_viewport;
+
+   union {
+      struct {
+         unsigned patch_type;
+         enum a6xx_tess_output tess_output_upper_left, tess_output_lower_left;
+         enum a6xx_tess_spacing tess_spacing;
+      } tes;
+
+      struct {
+         /* Set if the FS should be run at sample rate instead of pixel rate (by
+          * sample-rate variable usage, or
+          * VkPipelineMultisampleStateCreateInfo->sampleShadingEnable.
+          */
+         bool sample_shading;
+         bool has_fdm;
+
+         uint16_t dynamic_input_attachments_used;
+
+         struct {
+            uint32_t status;
+            bool force_late_z;
+         } lrz;
+
+         /* If per_layer_viewport is true, the maximum number of layers written to.
+          */
+         uint8_t max_fdm_layers;
+      } fs;
+   };
+};
+
+struct tu_shader_key {
+   unsigned multiview_mask;
+   uint16_t read_only_input_attachments;
+   uint8_t max_fdm_layers;
+   bool force_sample_interp; /* Set when VkPipelineMultisampleStateCreateInfo->sampleShadingEnable */
+   bool fragment_density_map;
+   bool fdm_per_layer;
+   bool dynamic_renderpass;
+   uint8_t unscaled_input_fragcoord;
+   bool robust_storage_access2;
+   bool robust_uniform_access2;
+   bool lower_view_index_to_device_index;
+   bool custom_resolve;
+   bool emulate_alpha_to_coverage;
+   enum ir3_wavesize_option api_wavesize, real_wavesize;
+
+   /* Shader version to force recompilation when TU_BUILD_ID_OVERRIDE is used. */
+   uint8_t version;
+};
+
+/* Information needed for tu_shader creation that is gathered during NIR
+ * lowering.
+ */
+struct tu_shader_info {
+   bool per_layer_viewport;
+};
+
+extern const struct vk_pipeline_cache_object_ops tu_shader_ops;
+
+void
+tu_destroy_softfloat(struct tu_device *device);
+
+bool
+tu_nir_lower_multiview(nir_shader *nir, uint32_t mask, struct tu_device *dev,
+                       bool last_stage);
+
+bool
+tu_nir_lower_ray_queries(nir_shader *nir);
+
+bool
+tu_nir_lower_demote_samples(nir_shader *nir);
+
+nir_shader *
+tu_spirv_to_nir(struct tu_device *dev,
+                void *mem_ctx,
+                VkPipelineCreateFlags2KHR pipeline_flags,
+                const VkPipelineShaderStageCreateInfo *stage_info,
+                const struct tu_shader_key *key,
+                mesa_shader_stage stage);
+
+template <chip CHIP>
+void
+tu6_emit_xs(struct tu_crb &crb,
+            struct tu_device *device,
+            mesa_shader_stage stage,
+            const struct ir3_shader_variant *xs,
+            const struct tu_pvtmem_config *pvtmem,
+            uint64_t binary_iova);
+
+void
+tu6_emit_xs_constants(struct tu_cs *cs,
+                      mesa_shader_stage stage,
+                      const struct ir3_shader_variant *xs,
+                      uint64_t binary_iova);
+
+template <chip CHIP>
+void
+tu6_emit_vs(struct tu_cs *cs, const struct ir3_shader_variant *vs,
+            uint32_t view_mask);
+
+template <chip CHIP>
+void
+tu6_emit_hs(struct tu_cs *cs, const struct ir3_shader_variant *hs);
+
+template <chip CHIP>
+void
+tu6_emit_ds(struct tu_cs *cs, const struct ir3_shader_variant *hs);
+
+template <chip CHIP>
+void
+tu6_emit_gs(struct tu_cs *cs, const struct ir3_shader_variant *hs);
+
+template <chip CHIP>
+void
+tu6_emit_fs(struct tu_cs *cs, const struct ir3_shader_variant *fs);
+
+void
+tu_lower_nir(struct tu_device *dev,
+             nir_shader *nir,
+             const struct tu_shader_key *key,
+             const struct ir3_shader_key *ir3_key,
+             struct tu_shader_info *info);
+
+VkResult
+tu_shader_create(struct tu_device *dev,
+                 struct tu_shader **shader_out,
+                 nir_shader *nir,
+                 const struct tu_shader_key *key,
+                 const struct tu_shader_info *shader_info,
+                 const struct ir3_shader_key *ir3_key,
+                 const void *key_data,
+                 size_t key_size,
+                 struct tu_pipeline_layout *layout,
+                 bool executable_info);
+
+void
+tu_shader_key_subgroup_size(struct tu_shader_key *key,
+                            bool allow_varying_subgroup_size,
+                            bool require_full_subgroups,
+                            const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroup_info,
+                            struct tu_device *dev);
+
+void
+tu_shader_key_robustness(struct tu_shader_key *key,
+                         const struct vk_pipeline_robustness_state *rs);
+
+VkResult
+tu_compile_shaders(struct tu_device *device,
+                   VkPipelineCreateFlags2KHR pipeline_flags,
+                   const VkPipelineShaderStageCreateInfo **stage_infos,
+                   nir_shader **nir,
+                   const struct tu_shader_key *keys,
+                   struct tu_pipeline_layout *layout,
+                   const unsigned char *pipeline_blake3,
+                   struct tu_shader **shaders,
+                   char **nir_initial_disasm,
+                   void *nir_initial_disasm_mem_ctx,
+                   nir_shader **nir_out,
+                   VkPipelineCreationFeedback *stage_feedbacks);
+
+VkResult
+tu_init_empty_shaders(struct tu_device *device);
+
+void
+tu_destroy_empty_shaders(struct tu_device *device);
+
+void
+tu_shader_destroy(struct tu_device *dev,
+                  struct tu_shader *shader);
+
+#endif /* TU_SHADER_H */

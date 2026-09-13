@@ -1,0 +1,2 @@
+dEQP-VK.pipeline.monolithic.image.suballocation.sampling_type.separate.view_type.1d_array.format.r8g8b8a8_srgb.count_8.size.512x1_array_of_6
+dEQP-VK.pipeline.shader_object_unlinked_spirv.stencil.format.d32_sfloat_s8_uint_separate_layouts.states.fail_wrap.pass_repl.dfail_incc.comp_not_equal.any

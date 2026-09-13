@@ -1,0 +1,13 @@
+raw,disp_alu,disp_dual_alu,coupled,dualalu,r2p,r2ur,fma,fp16,hfma2_mma,redirected_fp64,decoupled,guard
+disp_alu,13,13,13,13,13,13,13,13,14,14,1 & sb,none
+disp_dual_alu,13,13,13,13,13,13,13,13,14,14,1 & sb,none
+coupled,4,4,4,4,5,8,5,5,6,6,1 & sb,none
+dualalu,4,4,4,4,5,8,5,5,6,6,1 & sb,none
+r2p,4,4,4,4,5,8,5,5,6,6,1 & sb,none
+r2ur,none,none,none,none,none,none,none,none,none,none,none,none
+fma,5,5,5,5,5,13,4,5,6,6,1 & sb,none
+fp16,13,13,13,13,13,13,13,5,14,14,1 & sb,none
+hfma2_mma,13,13,13,13,13,13,13,13,6,6,1 & sb,none
+redirected_fp64,13,13,13,13,13,13,13,13,6,6,1 & sb,none
+decoupled,13,13,13,13,13,13,13,13,14,14,1 & sb,none
+guard,13,13,13,13,13,13,13,13,14,14,1 & sb,none

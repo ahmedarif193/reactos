@@ -1,0 +1,6 @@
+# It was Timeout'ing when run in with concurency set to 2, let's call it a
+# flake for now
+dEQP-GLES2.functional.texture.mipmap.cube.basic.linear_linear
+
+# likely in 6ea4fe98..c69f7904
+dEQP-GLES2.functional.color_clear.single_rgba

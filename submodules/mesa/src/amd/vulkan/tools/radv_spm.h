@@ -1,0 +1,25 @@
+/*
+ * Copyright © 2016 Red Hat.
+ * Copyright © 2016 Bas Nieuwenhuizen
+ *
+ * based in part on anv driver which is:
+ * Copyright © 2015 Intel Corporation
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+#ifndef RADV_SPM_H
+#define RADV_SPM_H
+
+#include "radv_device.h"
+#include "radv_queue.h"
+
+void radv_emit_spm_setup(struct radv_device *device, struct radv_cmd_stream *cs);
+
+bool radv_spm_init(struct radv_device *device);
+
+void radv_spm_finish(struct radv_device *device);
+
+bool radv_get_spm_trace(struct radv_queue *queue, struct ac_spm_trace *spm_trace);
+
+#endif /* RADV_SPM_H */

@@ -1,0 +1,11 @@
+# Note: skips lists for CI are just a list of lines that, when
+# non-zero-length and not starting with '#', will regex match to
+# delete lines from the test list.  Be careful.
+
+# May time out
+glx@glx_arb_sync_control@swapbuffersmsc-return
+
+# uprev Piglit in Mesa
+# sometimes times out
+spec@egl_ext_surface_compression@create
+

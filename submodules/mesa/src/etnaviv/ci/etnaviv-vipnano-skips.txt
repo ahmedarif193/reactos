@@ -1,0 +1,42 @@
+Add.Op/.*
+AddQuant.Op/.*
+Conv2D.Op/.*
+DepthwiseConv2D.Op/.*
+FullyConnected.Op/.*
+
+# GatherNd operations that are unsupported.
+# If they fail is because of a bug in the teflon test runner.
+Models.Op/movenetlightning_112
+Models.Op/movenetlightning_141
+Models.Op/movenetlightning_152
+Models.Op/movenetthunder_112
+Models.Op/movenetthunder_141
+Models.Op/movenetthunder_152
+
+# No idea why this one is failing, needs investigation.
+# It takes a long time, so better skip for now.
+Models.Op/mobiledet_ssdlite_mobiledet_coco_qat_postprocess
+
+# These tests below are additions that Rocket only supports when they can be fused to a convolution.
+Models.Op/mobiledet_008
+Models.Op/mobiledet_011
+Models.Op/mobiledet_014
+Models.Op/mobiledet_019
+Models.Op/mobiledet_022
+Models.Op/mobiledet_025
+Models.Op/mobiledet_032
+Models.Op/mobiledet_035
+Models.Op/mobiledet_038
+Models.Op/mobiledet_045
+Models.Op/mobiledet_049
+Models.Op/mobiledet_053
+Models.Op/mobiledet_060
+Models.Op/mobiledet_064
+Models.Op/mobiledet_068
+Models.Op/yolox_011
+Models.Op/yolox_020
+Models.Op/yolox_023
+Models.Op/yolox_026
+Models.Op/yolox_035
+Models.Op/yolox_038
+Models.Op/yolox_041

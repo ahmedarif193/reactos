@@ -1,0 +1,125 @@
+/*
+ * Copyright © 2022 Intel Corporation
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
+ * Limit input per vertex input accesses. This is useful for the tesselation stages.
+ * On Gfx12.5+ out of bound accesses generate hangs.
+ *
+ * This pass operates on derefs, it must be called before shader inputs are
+ * lowered.
+ */
+
+#include "intel_nir.h"
+#include "intel_shader_enums.h"
+#include "compiler/nir/nir_builder.h"
+#include "compiler/nir/nir_deref.h"
+
+static bool
+clamp_per_vertex_loads_instr(nir_builder *b, nir_intrinsic_instr *intrin,
+                             void *cb_data)
+{
+   if (intrin->intrinsic != nir_intrinsic_load_deref)
+      return false;
+
+   nir_deref_instr *deref = nir_def_as_deref(intrin->src[0].ssa);
+   nir_variable *var = nir_deref_instr_get_variable(deref);
+   if (var == NULL || (var->data.mode & nir_var_shader_in) == 0)
+      return false;
+
+   nir_deref_path path;
+   nir_deref_path_init(&path, deref, cb_data);
+
+   bool progress = false;
+   for (unsigned i = 0; path.path[i]; i++) {
+      if (path.path[i]->deref_type != nir_deref_type_array)
+         continue;
+
+      b->cursor = nir_before_instr(&path.path[i]->instr);
+
+      nir_src_rewrite(&path.path[i]->arr.index,
+                      nir_umin(b, path.path[i]->arr.index.ssa, nir_iadd_imm(b, nir_load_patch_vertices_in(b), -1)));
+
+      progress = true;
+      break;
+   }
+
+   nir_deref_path_finish(&path);
+
+   return progress;
+}
+
+bool
+intel_nir_clamp_per_vertex_loads(nir_shader *shader)
+{
+   void *mem_ctx = ralloc_context(NULL);
+
+   bool ret = nir_shader_intrinsics_pass(shader, clamp_per_vertex_loads_instr,
+                                           nir_metadata_control_flow,
+                                           mem_ctx);
+
+   ralloc_free(mem_ctx);
+
+   return ret;
+}
+
+struct lower_patch_vertices_state {
+   unsigned input_vertices;
+};
+
+static bool
+lower_patch_vertices_in_instr(nir_builder *b, nir_intrinsic_instr *intrin,
+                              void *cb_data)
+{
+   if (intrin->intrinsic != nir_intrinsic_load_patch_vertices_in)
+      return false;
+
+   struct lower_patch_vertices_state *state = cb_data;
+
+   b->cursor = nir_before_instr(&intrin->instr);
+
+   nir_def *val =
+      state->input_vertices ?
+      nir_imm_int(b, state->input_vertices) :
+      nir_iadd_imm(b, intel_nir_tess_field(b, INPUT_VERTICES), 1);
+
+   nir_def_replace(&intrin->def, val);
+
+   return true;
+}
+
+bool
+intel_nir_lower_patch_vertices_in(nir_shader *shader,
+                                  unsigned input_vertices)
+{
+   assert(shader->info.stage == MESA_SHADER_TESS_CTRL);
+   struct lower_patch_vertices_state state = {
+      .input_vertices = input_vertices,
+   };
+   return nir_shader_intrinsics_pass(shader, lower_patch_vertices_in_instr,
+                                     nir_metadata_none, &state);
+}
+
+static bool
+lower_patch_vertices_tes_instr(nir_builder *b, nir_intrinsic_instr *intrin,
+                               void *cb_data)
+{
+   if (intrin->intrinsic != nir_intrinsic_load_patch_vertices_in)
+      return false;
+
+   b->cursor = nir_before_instr(&intrin->instr);
+
+   nir_def *field = intel_nir_tess_field(b, OUTPUT_VERTICES);
+
+   nir_def_replace(&intrin->def, nir_iadd_imm(b, field, 1));
+   return true;
+}
+
+bool
+intel_nir_lower_patch_vertices_tes(nir_shader *shader)
+{
+   assert(shader->info.stage == MESA_SHADER_TESS_EVAL);
+   return nir_shader_intrinsics_pass(shader, lower_patch_vertices_tes_instr,
+                                     nir_metadata_none, NULL);
+}

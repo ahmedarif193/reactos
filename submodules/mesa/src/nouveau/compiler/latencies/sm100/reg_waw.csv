@@ -1,0 +1,22 @@
+waw,alu,dualalu,disp_64,fma,fma_alu,imad_wide_read_ab,imad_wide_read_cl,imad_wide_read_ch,imad_wide_write_dl,imad_wide_write_dh,fp16,fp16_alu,fp16_f32,hfma2_mma,redirected_fp64,imma,hmma,dmma,branch,decoupled,decoupled_agu
+alu,1,1,1+1,1,1,none,none,none,1,1,1,1,1,3+3,3+3,14+2,14+2,1 & sb,1 & sb,1 & sb,1 & sb
+dualalu,1,1,1+1,1,1,none,none,none,1,1,1,1,1,3+3,3+3,14+2,14+2,1 & sb,1 & sb,1 & sb,1 & sb
+disp_64,1,1,1,1,1,none,none,none,1,1,1,1,1,3+1,3+1,14+1,14+1,1 & sb,1 & sb,1 & sb,1 & sb
+fma,1,1,1+1,1,1,none,none,none,1,1+1,1,1,1,3+3,3+3,14+3,14+3,1 & sb,1 & sb,1 & sb,1 & sb
+fma_alu,1,1,1+1,1,1,none,none,none,1,1+1,1,1,1,3+3,3+3,14+3,14+3,1 & sb,1 & sb,1 & sb,1 & sb
+imad_wide_read_ab,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+imad_wide_read_cl,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+imad_wide_read_ch,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none,none
+imad_wide_write_dl,1+2,1+2,1+3,1+1,1+1,none,none,none,1,1+1,1+2,1+2,1+2,5+3,5+3,14+3,14+3,1 & sb,1 & sb,1 & sb,1 & sb
+imad_wide_write_dh,1,1,1+1,1,1,none,none,none,1,1,1,1,1,5+1,5+1,14+3,14+3,1 & sb,1 & sb,1 & sb,1 & sb
+fp16,1,1,1+1,1,1,none,none,none,1,1,1,1,1,3+3,3+3,14+2,14+2,1 & sb,1 & sb,1 & sb,1 & sb
+fp16_alu,1,1,1+1,1,1,none,none,none,1,1,1,1,1,3+3,3+3,14+2,14+2,1 & sb,1 & sb,1 & sb,1 & sb
+fp16_f32,1,1,1,1,1,none,none,none,1,1,1,1,1,3+2,3+2,14+2,14+2,1 & sb,1 & sb,1 & sb,1 & sb
+hfma2_mma,1,1,1,1,1,none,none,none,1,1,1,1,1,1,3,14,14,1 & sb,1 & sb,1 & sb,1 & sb
+redirected_fp64,1,1,1,1,1,none,none,none,1,1,1,1,1,2,1,13,13,1 & sb,1 & sb,1 & sb,1 & sb
+imma,2,2,2,2,2,none,none,none,2,2,2,2,2,2,2,1,1,1 & sb,1 & sb,1 & sb,1 & sb
+hmma,2,2,2,2,2,none,none,none,2,2,2,2,2,2,2,1,1,1 & sb,1 & sb,1 & sb,1 & sb
+dmma,2+4,2+4,2+4,2+4,2+4,none,none,none,2+4,2+4,2+4,2+4,2+4,2+8,2+8,10+9,10+9,1 & sb,1 & sb,1 & sb,1 & sb
+branch,1+5,1+5,1+5,1+5,1+5,none,none,none,1+5,1+5,1+5,1+5,1+5,1+9,1+9,13+6,13+6,1 & sb,1 & sb,1 & sb,1 & sb
+decoupled,1+5,1+5,1+5,1+5,1+5,none,none,none,1+5,1+5,1+5,1+5,1+5,1+9,1+9,13+6,13+6,1 & sb,1 & sb,1 & sb,1 & sb
+decoupled_agu,1+5,1+5,1+5,1+5,1+5,none,none,none,1+5,1+5,1+5,1+5,1+5,1+9,1+9,13+6,13+6,1 & sb,1 & sb,1 & sb,1 & sb

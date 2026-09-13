@@ -1,0 +1,247 @@
+Mesa 26.0.1 Release Notes / 2026-02-25
+======================================
+
+Mesa 26.0.1 is a bug fix release which fixes bugs found since the 26.0.0 release.
+
+Mesa 26.0.1 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 26.0.1 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+    SHA256: bb5104f9f9a46c9b5175c24e601e0ef1ab44ce2d0fdbe81548b59adc8b385dcc  mesa-26.0.1.tar.xz
+    SHA512: d47072257035acfa8a5594c0cda831b4e5178169dea8a06c6657268a441e32271f8798486e837cea23f35ce3f0b4b9520a4ea4ed26b0e1267b02da4c649bc9f9  mesa-26.0.1.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- Missing Haswell case after a097a3d214eda7fb7b9ff63176754b7260e09e03 leads to bogus assert in intel_perf_mdapi.c
+- Question: Does building Lavapipe on Windows require building "microsoft-experimental" as well?
+- [ANV]: Regression in dxvk Greedfall
+- [ANV][BMG] Building Mesa with Clang causes Missing Skin Textures in UE games - Tekken 8
+- [ANV][DG2][Regression]: Flickering water "boxes" in Civilization VII
+- [RADV] Killer7 has a blue tint with RDNA3/4
+- [bisected] Xe3 regression with piglit tess/barrier-patch.shader_test after cmod prop change
+- [radeonsi] Regression: GL_FEEDBACK returns 0.0 for X-coordinates (Legacy GL)
+- anv, bisected: Genshin Impact wrong shadows, flickering grass
+- turnip: llama.cpp: Running test-backend-ops results in segmentation fault
+- venus crashes in vn_CreateDevice() with latest mesa/main [bisected]
+
+
+Changes
+-------
+
+Aitor Camacho (7):
+
+- wsi/metal: Expose additional color spaces if instance extension enabled
+- kk: Fill pipelineUUID
+- kk: Fix shader uint32_t value serialization
+- kk: Correctly release pipeline handles at shader destroy
+- kk: Fix compute pipeline cache
+- kk: Move gfx pipeline data to the info struct within kk_shader
+- kk: Fix graphics pipeline serialization
+
+Alyssa Rosenzweig (1):
+
+- brw: drop buggy SLM optimization
+
+Anna Maniscalco (1):
+
+- freedreno/common: set has_astc_hdr true for a7xx targets
+
+Benjamin Otte (1):
+
+- lavapipe: Fix features for nonsubsampled ycbcr formats
+
+Daniel Schürmann (1):
+
+- nir/clone: Fix cloning indirect call instructions
+
+Danylo Piliaiev (1):
+
+- ir3: Align TCS per-patch output to 64 bytes to prevent stale reads
+
+Emma Anholt (1):
+
+- ir3/ra: Fix DOUBLE_ONLY limit pressure computation.
+
+Eric Engestrom (5):
+
+- docs: add sha sum for 26.0.0
+- .pick_status.json: Update to 03d2cc2b2ae5341409ee1fab74e98134a6df0511
+- bin/gen_release_notes: fix support for python 3.14
+- pick-ui: add \`Backport-to: \*` as a synonym to \`Cc: mesa-stable`
+- .pick_status.json: Mark 7dd7731ac710b0c7213f6bb466b33f62eca80604 as denominated
+
+Faith Ekstrand (6):
+
+- pan/clear: Stop packing undefined bits in colors
+- nir/gather_info: Add support for panfrost tile load/store intrinsics
+- panvk: Create both Z/S descriptors, even for separate Z/S
+- panvk/preload: Stop assuming 32 registers
+- panvk/jm: Refactor BeginRendering()
+- panvk: Also load output attachments with LOAD_OP_NONE+STORE_OP_NONE
+
+Frank Binns (2):
+
+- pvr/ci: move some timing out tests from fails to skips
+- pvr: Fix alloc callbacks usage when freeing frame buffers
+
+Ian Romanick (8):
+
+- spirv: Use STACK_ARRAY instead of NIR_VLA
+- nir: Use STACK_ARRAY instead of NIR_VLA
+- brw: Call nir_opt_algebraic_late in brw_nir_create_raygen_trampoline
+- brw: Call nir_opt_algebraic_late later in brw_postprocess_nir_opts
+- elk: Call nir_opt_algebraic_late in elk_postprocess_nir
+- brw/cmod: Don't propagate from CMP to ADD if there is a write between
+- elk/cmod: Don't propagate from CMP to possible Inf + (-Inf)
+- elk/cmod: Don't propagate from CMP to ADD if there is a write between
+
+Janne Grunau (3):
+
+- asahi: Use GPU for buffer copies in resource_copy_region()
+- asahi: Implement clear_buffer using libagx_fill*
+- hk: Use aligned vector fill in hk_CmdFillBuffer if possible
+
+Jarred Davies (2):
+
+- pvr: Fix allocating the required scratch buffer space for tile buffers
+- pvr: Add missing support for tile buffers to SPM EOT programs
+
+Jesse Natalie (1):
+
+- meson: Include DirectX-Headers dependency for all VK Windows builds
+
+Jianxun Zhang (1):
+
+- anv: Limit modifier disabling workaround to specific GTK versions
+
+José Roberto de Souza (1):
+
+- intel/perf: Add HSW verx10 to intel_perf_query_result_write_mdapi()
+
+Juston Li (1):
+
+- anv: set missing protected bit for protected depth/stencil surfaces
+
+Konstantin Seurer (2):
+
+- radv: Fix setting the viewport for depth stencil FS resolves
+- vulkan/cmd_queue: Fixup stride for multi draws
+
+Lars-Ivar Hesselberg Simonsen (2):
+
+- panvk: Fix dcd_flags1 dirty bit
+- pan/genxml/v13: Fix HSR Prepass typo
+
+Leon Perianu (1):
+
+- pvr: fix format table properties duplicate
+
+Lionel Landwerlin (8):
+
+- anv: flush render caches on first pipeline select
+- anv: fix nested command buffer relocations
+- anv: add missing constant cache invalidation for descriptor buffers
+- isl: fix 32bit math with 4GB buffer size
+- anv: apply the same ccs disabling for Xe3 than Xe2
+- anv: disable ccs modifier reporting when ccs modifiers are disabled
+- anv: dirty descriptors after blorp operations
+- anv: remove snprintf for aux op transition
+
+Mary Guillemard (1):
+
+- hk: Fix crash in hk_handle_passthrough_gs
+
+Matt Turner (4):
+
+- brw/cse: fix \`operands_match` corrupting non-IMM register data
+- brw/cse: use copies in \`operands_match` instead of in-place modification
+- elk/cse: fix \`operands_match` corrupting non-IMM register data
+- elk/cse: use copies in \`operands_match` instead of in-place modification
+
+Mike Blumenkrantz (2):
+
+- zink: fix broken compiler assert
+- zink: only do pre-sync transfer barrier after a renderpass
+
+Natalie Vock (3):
+
+- radv/rt: Only use ds_bvh_stack_rtn if the stack base is possible to encode
+- radv: Initialize nir_lower_io_to_scalar progress variable
+- radv/nir: Correctly handle workgroup sizes not aligned to 32
+
+Nick Hamilton (5):
+
+- pvr: Fix incorrect subpass merging optimisation
+- pvr: Rename pvr_render_input_attachment
+- pvr: Add missing support for preserve attachments
+- pvr: Update CI fails list after render pass fixes
+- pvr: Add support for fragment pass through shader
+
+Olivia Lee (1):
+
+- hk: fix passthrough GS key invalidation
+
+Pavel Ondračka (2):
+
+- r300: align macro-tiled stride-addressed textures in X
+- mesa: implement FRAMEBUFFER_RENDERABLE internalformat query
+
+Rhys Perry (3):
+
+- aco: fix gfx6-8 store_scratch() with function calls
+- aco: reset all vgpr_used_by_vmem\_ in resolve_all_gfx11
+- aco: resolve hazards before calls
+
+Robert Mader (1):
+
+- lavapipe: enable dmabuf import for planar drm formats
+
+Ryan Zhang (1):
+
+- panvk: guard against NULL pointers to avoid crash
+
+Samuel Pitoiset (5):
+
+- ac,radv,radeonsi: use correct swizzle/pitch for depth-only images with SDMA
+- radv: fix potential corruption after FMASK decompression on GFX6-8
+- radv/meta: fix depth/stencil resolves with different regions
+- ac/nir: fix writemask for dual source blending on GFX11+
+- radv: fix potential GPU hangs with secondaries on transfer queue
+
+Tapani Pälli (1):
+
+- util: bring back fix to avoid strict aliasing bugs in xxhash
+
+Timothy Arceri (2):
+
+- mesa: add _mesa_lookup_state_param_idx() helper
+- st/glsl_to_nir: make sure the variant has the correct locations set
+
+Wei Hao (1):
+
+- radeonsi: fix threaded shader compilation finishing after context is destroyed
+
+Yiwei Zhang (2):
+
+- venus: workaround a gcc-15 dead store elimination (DSE) bug
+- venus: sync protocol for strict aliasing compliance

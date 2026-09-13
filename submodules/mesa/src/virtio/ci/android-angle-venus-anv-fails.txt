@@ -1,0 +1,5 @@
+# ANV host failure
+dEQP-VK.sparse_resources.buffer.ssbo.read_write.sparse_residency_non_resident_strict,Fail
+
+# VKCTS 1.4.5.3 -> 1.4.6.1 uprev, ANV host failure
+dEQP-VK.api.copy_and_blit.core.use_after_copy.d32_sfloat_s8_uint.general.32x32x1_regions,Fail

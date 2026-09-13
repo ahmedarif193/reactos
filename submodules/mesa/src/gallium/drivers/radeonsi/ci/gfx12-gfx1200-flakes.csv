@@ -1,0 +1,22 @@
+# These fail randomly
+glx@glx_arb_sync_control@timing.*
+glx@glx-multithread-texture
+
+# These started crashing for me
+glx@glx-visuals-depth -pixmap
+glx@glx-visuals-stencil -pixmap
+
+# These either consistently pass or consistently fail depending on the X server version, DDX, etc.
+glx@glx_ext_import_context@*
+
+# Random: ../src/util/hash_table.c:311: hash_table_search: Assertion `!key_pointer_is_reserved(ht, key)' failed.
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-refcount-multithread
+
+# Random: ACO ERROR: Unimplemented intrinsic instr: con 64    %1 = @load_deref (%0) (access=writeonly)
+spec@arb_bindless_texture@compiler@images@arith-bound-image.frag
+
+spec@ext_external_objects@vk-ping-pong-multi-sem
+
+# Random
+KHR-Single-GL46.meshShader.propertyTests.task_payload_and_shared_memory_size
+KHR-Single-GL46.meshShader.propertyTests.task_shared_memory_size

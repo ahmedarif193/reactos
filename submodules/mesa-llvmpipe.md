@@ -3,25 +3,20 @@
 
 # Modern Mesa in the ReactOS build
 
-The `mesa` submodule uses https://github.com/eotics-com/reactos-mesa.git.
-Its initial pin is upstream Mesa **26.2.2**, commit
-`3281a69a8bfd9f997e91c15ed0e6290cae12dd32`, released 2026-09-02.
+The vendored `submodules/mesa` source comes from
+https://github.com/eotics-com/reactos-mesa.git at commit
+`44504d1036b6f2355445404f63c4248bc01249d6`. Its upstream base is Mesa
+**26.2.2**, commit `3281a69a8bfd9f997e91c15ed0e6290cae12dd32`, released
+2026-09-02.
 The original upstream is https://gitlab.freedesktop.org/mesa/mesa.git.
 Mesa's licenses and authorship are unchanged. This integration note's GPL
 notice does not relicense Mesa or LLVM.
 
-The GitHub repository's `main` mirrors upstream development. ReactOS pins
-an explicit revision independently of the fork's default branch. The fork's
-`ros-dev` branch contains the RPi3 D3DKMT port and local RPi3 fixes; a build
-uses the local submodule checkout.
+The GitHub repository's `main` mirrors upstream development. The imported
+`ros-dev` snapshot contains the ReactOS WGL, RPi3 D3DKMT and ARM64EC port
+changes. A normal ReactOS checkout contains all source needed for the build.
 
 ## Enable and build
-
-Initialize only Mesa (do not recursively initialize unrelated submodules):
-
-```sh
-git submodule update --init --depth 1 -- submodules/mesa
-```
 
 In menuconfig, choose **System components and compatibility -> Graphics
 stack -> Modern Mesa LLVMpipe software OpenGL driver**. It defaults off.
@@ -56,7 +51,7 @@ consumer is building it.
 
 Compiler caches are disabled for the external builds. Incremental outputs
 live only under the selected build tree's `submodules/mesa-llvmpipe/`; source
-is not copied into another Mesa session directory. The source submodule is
+is not copied into another Mesa session directory. The vendored source is
 never patched or updated by CMake, and Meson fallback downloads are disabled.
 
 ## Outputs and boundaries
@@ -81,7 +76,7 @@ environment workarounds are installed by this integration.
 AMD64 and ARM64 CMake configuration and menuconfig option checks passed.
 Both architectures' LLVM dependencies, `mesadrv.dll` and license bundles built
 successfully from `ros-dev` commit `94fe6bf842ad179af1a49d7a3ac391e1e382077a`.
-These results apply to that recorded revision; later submodule changes need
+These results apply to that recorded revision; later source changes need
 separate validation.
 Meson 1.12.0 resolved the LLVM 22 detection failure seen with Meson 1.10.0.
 The same WGL probe completed 22 checks without failures with these drivers on

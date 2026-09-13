@@ -1,0 +1,260 @@
+<?xml version="1.0" ?>
+
+<!--
+Copyright © 2025 Imagination Technologies Ltd.
+
+SPDX-License-Identifier: MIT
+-->
+
+<csbgen name="VOLCANIC" prefix="TEXSTATE">
+
+  <enum name="ADDRMODE">
+    <value name="REPEAT"               value="0"/>
+    <value name="FLIP"                 value="1"/>
+    <value name="CLAMP_TO_EDGE"        value="2"/>
+    <value name="FLIP_ONCE_THEN_CLAMP" value="3"/>
+    <value name="CLAMP_TO_BORDER"      value="4"/>
+    <value name="OGL_CLAMP"            value="5"/>
+  </enum>
+
+  <enum name="ANISOCTL">
+    <value name="DISABLED" value="0"/>
+    <value name="X2"       value="1"/>
+    <value name="X4"       value="2"/>
+    <value name="X8"       value="3"/>
+    <value name="X16"      value="4"/>
+  </enum>
+
+  <enum name="CLAMP">
+    <value name="INTEGER_BITS"    value="4"/>
+    <value name="FRACTIONAL_BITS" value="8"/>
+  </enum>
+
+  <enum name="CMP_MODE">
+    <value name="NEVER"        value="0"/>
+    <value name="LESS"         value="1"/>
+    <value name="EQUAL"        value="2"/>
+    <value name="LESSEQUAL"    value="3"/>
+    <value name="GREATER"      value="4"/>
+    <value name="NOTEQUAL"     value="5"/>
+    <value name="GREATEREQUAL" value="6"/>
+    <value name="ALWAYS"       value="7"/>
+  </enum>
+
+  <enum name="DADJUST">
+    <value name="MIN_UINT"        value="0"/>
+    <value name="ZERO_UINT"       value="4095"/>
+    <value name="MAX_UINT"        value="8191"/>
+    <value name="INTEGER_BITS"    value="5"/>
+    <value name="FRACTIONAL_BITS" value="8"/>
+  </enum>
+
+  <enum name="FILTER">
+    <value name="POINT"   value="0"/>
+    <value name="LINEAR"  value="1"/>
+    <value name="BICUBIC" value="2"/>
+  </enum>
+
+  <enum name="FORMAT">
+    <value name="U8"                        value="0"/>
+    <value name="S8"                        value="1"/>
+    <value name="A4R4G4B4"                  value="2"/>
+    <value name="A8R3G3B2"                  value="3"/>
+    <value name="A1R5G5B5"                  value="4"/>
+    <value name="R5G6B5"                    value="5"/>
+    <value name="R5sG5sB6"                  value="6"/>
+    <value name="U8U8"                      value="7"/>
+    <value name="S8S8"                      value="8"/>
+    <value name="U16"                       value="9"/>
+    <value name="S16"                       value="10"/>
+    <value name="F16"                       value="11"/>
+    <value name="U8U8U8U8"                  value="12"/>
+    <value name="S8S8S8S8"                  value="13"/>
+    <value name="A2R10B10G10"               value="14"/>
+    <value name="U16U16"                    value="15"/>
+    <value name="S16S16"                    value="16"/>
+    <value name="F16F16"                    value="17"/>
+    <value name="F32"                       value="18"/>
+    <!-- 19 -->
+    <value name="X8U8S8S8"                  value="20"/>
+    <value name="X8U24"                     value="21"/>
+    <value name="ST8U24"                    value="22"/>
+    <value name="U8X24"                     value="23"/>
+    <value name="U32"                       value="24"/>
+    <value name="S32"                       value="25"/>
+    <value name="SE9995"                    value="26"/>
+    <value name="F11F11F10"                 value="27"/>
+    <value name="F16F16F16F16"              value="28"/>
+    <value name="U16U16U16U16"              value="29"/>
+    <value name="S16S16S16S16"              value="30"/>
+    <value name="F16F16F16"                 value="31"/>
+    <value name="U16U16U16"                 value="32"/>
+    <value name="S16S16S16"                 value="33"/>
+    <value name="F32F32"                    value="34"/>
+    <value name="U32U32"                    value="35"/>
+    <value name="S32S32"                    value="36"/>
+    <value name="X24U8F32"                  value="37"/>
+    <value name="X24X8F32"                  value="38"/>
+    <value name="X24G8X32"                  value="39"/>
+    <value name="YUV420_2PLANE"             value="40"/>
+    <value name="YVU420_2PLANE"             value="41"/>
+    <value name="YUV420_3PLANE"             value="42"/>
+    <value name="YVU420_3PLANE"             value="43"/>
+    <value name="U8U8U8"                    value="44"/>
+    <value name="S8S8S8"                    value="45"/>
+    <value name="A2F10F10F10"               value="46"/>
+    <value name="F32F32F32F32"              value="47"/>
+    <value name="U32U32U32U32"              value="48"/>
+    <value name="S32S32S32S32"              value="49"/>
+    <value name="F32F32F32"                 value="50"/>
+    <value name="U32U32U32"                 value="51"/>
+    <value name="S32S32S32"                 value="52"/>
+    <value name="R5G5B5A1"                  value="53"/>
+    <value name="B6G5sR5s"                  value="54"/>
+    <value name="R10B10G10A2"               value="55"/>
+    <value name="X8S8S8U8"                  value="56"/>
+    <value name="U24ST8"                    value="57"/>
+    <value name="F10F11F11"                 value="58"/>
+    <value name="VYUY"                      value="59"/>
+    <value name="UYVY"                      value="60"/>
+    <value name="YVYU"                      value="61"/>
+    <value name="YUYV"                      value="62"/>
+    <value name="F10F10F10A2"               value="63"/>
+    <value name="YUV420_2PLANE_MACRO_BLOCK" value="64"/>
+    <value name="YVU420_2PLANE_MACRO_BLOCK" value="65"/>
+    <value name="YVU8_422_2PLANE_PACK8"     value="66"/>
+    <value name="YVU8_444_2PLANE_PACK8"     value="67"/>
+    <value name="YVU10_444_1PLANE_PACK10"   value="68"/>
+    <value name="YVU10_422_2PLANE_PACK16"   value="69"/>
+    <value name="YVU10_420_2PLANE_PACK16"   value="70"/>
+    <value name="YVU10_444_2PLANE_PACK16"   value="71"/>
+    <value name="YUV8_422_2PLANE_PACK8"     value="72"/>
+    <value name="YUV8_444_3PLANE_PACK8"     value="73"/>
+    <value name="YUV10_444_3PLANE_PACK16"   value="74"/>
+    <value name="YVU10_420_2PLANE_PACK10"   value="75"/>
+    <value name="YUV10_420_2PLANE_PACK10"   value="76"/>
+    <value name="YVU10_422_2PLANE_PACK10"   value="77"/>
+    <value name="YUV10_422_2PLANE_PACK10"   value="78"/>
+    <value name="YUV10_444_3PLANE_PACK10"   value="79"/>
+    <value name="R8G8_B8G8"                 value="80"/>
+    <value name="G8R8_G8B8"                 value="81"/>
+    <value name="YVYU_IMPLIED_CSC"          value="82"/>
+    <value name="VYUY_IMPLIED_CSC"          value="83"/>
+    <!-- 84..85 -->
+    <value name="YUV10_420_2PLANE_PACK10_T" value="86"/>
+    <value name="YVU10_420_2PLANE_PACK10_T" value="87"/>
+    <value name="YUV8_420_2PLANE_PACK8_P"   value="88"/>
+    <value name="YVU8_420_2PLANE_PACK8_P"   value="89"/>
+    <value name="YUV8_420_2PLANE_PACK8_F"   value="90"/>
+    <value name="YVU8_420_2PLANE_PACK8_F"   value="91"/>
+    <!-- 92..93 -->
+    <value name="ASTC_4x4"                  value="94"/>
+    <value name="ASTC_5x4"                  value="95"/>
+    <value name="ASTC_5x5"                  value="96"/>
+    <value name="ASTC_6x5"                  value="97"/>
+    <value name="ASTC_6x6"                  value="98"/>
+    <value name="ASTC_8x5"                  value="99"/>
+    <value name="ASTC_8x6"                  value="100"/>
+    <value name="ASTC_8x8"                  value="101"/>
+    <value name="ASTC_10x5"                 value="102"/>
+    <value name="ASTC_10x6"                 value="103"/>
+    <value name="ASTC_10x8"                 value="104"/>
+    <value name="ASTC_10x10"                value="105"/>
+    <value name="ASTC_12x10"                value="106"/>
+    <value name="ASTC_12x12"                value="107"/>
+    <value name="UBC1"                      value="108"/>
+    <value name="UBC2"                      value="109"/>
+    <value name="UBC3"                      value="110"/>
+    <value name="UBC4"                      value="111"/>
+    <value name="SBC4"                      value="112"/>
+    <value name="UBC5"                      value="113"/>
+    <value name="SBC5"                      value="114"/>
+    <value name="UBC6"                      value="115"/>
+    <value name="SBC6"                      value="116"/>
+    <value name="UBC7"                      value="117"/>
+    <value name="ETC2_RGB"                  value="118"/>
+    <value name="ETC2A_RGBA"                value="119"/>
+    <value name="ETC2_PUNCHTHROUGHA"        value="120"/>
+    <value name="EAC_R11_UNSIGNED"          value="121"/>
+    <value name="EAC_R11_SIGNED"            value="122"/>
+    <value name="EAC_RG11_UNSIGNED"         value="123"/>
+    <value name="EAC_RG11_SIGNED"           value="124"/>
+    <!-- 125..138 -->
+  </enum>
+
+  <enum name="SWIZ">
+    <value name="SRCCHAN_0" value="0"/>
+    <value name="SRCCHAN_1" value="1"/>
+    <value name="SRCCHAN_2" value="2"/>
+    <value name="SRCCHAN_3" value="3"/>
+    <value name="SRC_ONE"   value="4"/>
+    <value name="SRC_ZERO"  value="5"/>
+  </enum>
+
+  <enum name="TEXTYPE">
+    <value name="1D"            value="0"/>
+    <value name="2D"            value="1"/>
+    <value name="3D"            value="2"/>
+    <value name="CUBE"          value="3"/>
+    <value name="STRIDE"        value="4"/>
+    <value name="BUFFER_LOOKUP" value="5"/>
+  </enum>
+
+  <enum name="TWOCOMP_GAMMA">
+    <value name="OFF" value="0"/>
+    <value name="R"   value="1"/>
+    <value name="RG"  value="3"/>
+  </enum>
+
+  <struct name="IMAGE_WORD0" length="2">
+    <field name="height" start="49" end="62" type="uint"/>
+    <field name="width" start="35" end="48" type="uint"/>
+    <field name="texformat" start="15" end="22" type="FORMAT"/>
+    <field name="minlod" start="23" end="34" type="uint"/>
+    <field name="swiz0" start="12" end="14" type="SWIZ"/>
+    <field name="swiz1" start="9" end="11" type="SWIZ"/>
+    <field name="swiz2" start="6" end="8" type="SWIZ"/>
+    <field name="swiz3" start="3" end="5" type="SWIZ"/>
+    <field name="textype" start="0" end="2" type="TEXTYPE"/>
+  </struct>
+
+  <struct name="IMAGE_WORD1" length="2">
+    <field name="alpha_msb" start="62" end="62" type="bool"/>
+    <field name="mipmaps_present" start="61" end="61" type="bool"/>
+    <field name="depth" start="48" end="58" type="uint"/>
+    <field name="border" start="46" end="46" type="bool"/>
+    <field name="texaddr" start="0" end="45" shift="2" type="address"/>
+  </struct>
+
+  <struct name="IMAGE_WORD2" length="2">
+    <field name="num_mip_levels" start="10" end="13" type="uint"/>
+    <field name="twocomp_gamma" start="4" end="5" type="TWOCOMP_GAMMA"/>
+    <field name="baselevel" start="0" end="3" type="uint"/>
+  </struct>
+
+  <struct name="STRIDE_IMAGE_WORD1" length="2">
+    <field name="alpha_msb" start="62" end="62" type="bool"/>
+    <field name="mipmaps_present" start="61" end="61" type="bool"/>
+    <field name="stride" start="46" end="60" type="uint"/>
+    <field name="texaddr" start="0" end="45" shift="2" type="address"/>
+  </struct>
+
+  <struct name="SAMPLER_WORD0" length="2">
+    <field name="cemedge_dontfilter" start="63" end="63" type="bool"/>
+    <field name="cmp_mode" start="57" end="59" type="CMP_MODE"/>
+    <field name="non_normalized_coords" start="56" end="56" type="bool"/>
+    <field name="lumakey_alphamult" start="55" end="55" type="bool"/>
+    <field name="lumakey" start="54" end="54" type="bool"/>
+    <field name="addrmode_w" start="51" end="53" type="ADDRMODE"/>
+    <field name="addrmode_v" start="48" end="50" type="ADDRMODE"/>
+    <field name="addrmode_u" start="45" end="47" type="ADDRMODE"/>
+    <field name="mipfilter" start="44" end="44" type="bool"/>
+    <field name="minfilter" start="42" end="43" type="FILTER"/>
+    <field name="magfilter" start="40" end="41" type="FILTER"/>
+    <field name="anisoctl" start="37" end="39" type="ANISOCTL"/>
+    <field name="maxlod" start="25" end="36" type="CLAMP"/>
+    <field name="minlod" start="13" end="24" type="CLAMP"/>
+    <field name="dadjust" start="0" end="12" type="DADJUST"/>
+  </struct>
+
+</csbgen>

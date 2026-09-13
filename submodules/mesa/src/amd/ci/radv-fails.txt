@@ -1,0 +1,2 @@
+# VKCTS bug: https://gitlab.khronos.org/Tracker/vk-gl-cts/-/issues/6446
+dEQP-VK.binding_model.descriptor_heap.basic.fragment.input_attachment,Fail

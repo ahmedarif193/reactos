@@ -1,0 +1,93 @@
+.enforce-hw-jobs-imagination-rules:
+  rules:
+    - if: '$INPUT_HW_JOBS !~ /"(all|imagination|powervr.ko)"/i'
+      when: never
+
+.imagination-rules:
+  stage: imagination
+  rules:
+    - !reference [.enforce-hw-jobs-imagination-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.imagination-farm-rules, rules]
+    - !reference [.vulkan-rules, rules]
+    - changes: &imagination_file_list
+        - src/imagination/*
+        - src/imagination/ci/gitlab-ci.yml
+        - src/imagination/ci/gitlab-ci-inc.yml
+        - src/imagination/ci/deqp-$DEQP_SUITE.toml
+        - src/imagination/ci/$GPU_VERSION-fails.txt
+        - src/imagination/ci/$GPU_VERSION-flakes.txt
+        - src/imagination/ci/$GPU_VERSION-skips.txt
+        - src/imagination/common/**/*
+        - src/imagination/csbgen/**/*
+        - src/imagination/include/**/*
+        - src/imagination/pco/**/*
+        - src/imagination/vulkan/**/*
+      when: on_success
+
+.imagination-manual-rules:
+  stage: imagination-nightly
+  extends: .no-auto-retry
+  rules:
+    - !reference [.enforce-hw-jobs-imagination-rules, rules]
+    - !reference [.test, rules]
+    - !reference [.imagination-farm-manual-rules, rules]
+    - !reference [.vulkan-manual-rules, rules]
+    - changes:
+        *imagination_file_list
+      when: manual
+
+.imagination-ci-tron:
+  extends:
+    - .ci-tron-b2c-diskless-v1
+  variables:
+    RUNNER_FARM_LOCATION: imagination
+    PVR_IGNORE_FINISHME_WARNINGS: 1
+    CI_TRON_TIMEOUT__FIRST_CONSOLE_ACTIVITY__MINUTES: 0.5
+    CI_TRON_TIMEOUT__FIRST_CONSOLE_ACTIVITY__RETRIES: 3
+    CI_TRON_DUT_SETUP_TAGS: $GPU_VENDOR_TAG,$GPU_MODEL_TAG
+    B2C_VERSION: v0.9.18
+    CI_TRON_INITRAMFS__FIRMWARE__URL: 'https://${S3_BASE_PATH}/${FIRMWARE_REPO}/powervr-${FIRMWARE_TAG}.tar'
+    CI_TRON_INITRAMFS__FIRMWARE__FORMAT__0__ARCHIVE__EXTENSION: 'cpio'
+    CI_TRON_INITRAMFS__FIRMWARE__FORMAT__0__ARCHIVE__KEEP__0__PATH: './lib/firmware/powervr/.*'
+    CI_TRON_INITRAMFS__GPU__FORMAT__0__ARCHIVE__EXTENSION: 'cpio'
+    CI_TRON_INITRAMFS__GPU__FORMAT__0__ARCHIVE__KEEP__0__PATH: '\./(lib/modules/.*)'
+    CI_TRON_INITRAMFS__GPU__FORMAT__0__ARCHIVE__KEEP__0__REWRITE: '\1'
+    CI_TRON_KERNEL_CMDLINE__LOAD_MODULES: 'modules_load=powervr'
+  tags:
+    - farm:$RUNNER_FARM_LOCATION
+    - ci-tron:priority:$CI_TRON_JOB_PRIORITY
+    - $GPU_VENDOR_TAG
+    - $GPU_MODEL_TAG
+
+.imagination-ci-tron-arm64:
+  extends:
+    - .imagination-ci-tron
+  variables:
+    CI_TRON_KERNEL__URL: '$KERNEL_IMAGE_BASE/arm64/Image.gz'
+    CI_TRON__B2C_DISKLESS_IMAGESTORE_PLATFORM: linux/arm64/v8
+    CI_TRON_INITRAMFS__GPU__URL: '$KERNEL_IMAGE_BASE/arm64/modules.tar'
+
+# 12 devices
+.imagination-ti-am62-sk:arm64:
+  extends:
+    - .imagination-ci-tron-arm64
+  parallel: 12
+  variables:
+    CI_TRON_DTB__0__URL: '$KERNEL_IMAGE_BASE/arm64/k3-am625-sk.dtb'
+    GPU_VENDOR_TAG: dt_gpu:vendor:ti
+    GPU_MODEL_TAG: dt_gpu:model:am62-gpu
+    GPU_VERSION: axe-1-16m
+    FDO_CI_CONCURRENT: 3
+
+# 12 devices
+.imagination-ti-am68-sk:arm64:
+  extends:
+    - .imagination-ci-tron-arm64
+  parallel: 12
+  variables:
+    CI_TRON_DTB__0__URL: '$KERNEL_IMAGE_BASE/arm64/k3-am68-sk-base-board.dtb'
+    GPU_VENDOR_TAG: dt_gpu:vendor:ti
+    GPU_MODEL_TAG: dt_gpu:model:j721s2-gpu
+    GPU_VERSION: bxs-4-64
+    FDO_CI_CONCURRENT: 3

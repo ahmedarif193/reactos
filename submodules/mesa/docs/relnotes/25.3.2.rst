@@ -1,0 +1,240 @@
+Mesa 25.3.2 Release Notes / 2025-12-17
+======================================
+
+Mesa 25.3.2 is a bug fix release which fixes bugs found since the 25.3.1 release.
+
+Mesa 25.3.2 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 25.3.2 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+   SHA256: e69dab0d0ea03e3e8cb141b032f58ea9fcf3b9c1f61b31f6592cb4bbd8d0185d  mesa-25.3.2.tar.xz
+   SHA512: 499cb0aa254b5a706fb6c2414c23b9d5d03d9397475f7ad16744b982303a2a2bf643ef7adc64870645ee4355b5f95695becd6caff7d7f7caf698e6269589aa13  mesa-25.3.2.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- [bisected][iris] - Celeste - Lighting artifacts during gameplay
+- [bsw][regression][bisected][hasvk] various crashing tests
+- radv: incorrect vectorization of 8-bit/16-bit causes random GPU hangs with DXVK
+- LLVM crashes when loading specific Minecraft Shaderpacks
+- Firefox crashes in some Gallium drivers since mesa 25.3.0
+- radv: Is radv_wsi_get_prime_blit_queue bugged?
+- radv: don't include constant data in RGP captures
+- [anv] mpv video playback blacks out when resized larger than video resolution
+- corrupted video when using pRefList0ModOperations on radv h264
+- [radv] [feature request] Add an env var to not expose resizable bar to app
+- Steam Deck/9060 XT Consistently hang with game demo "Cursemark"
+
+
+Changes
+-------
+
+Aitor Camacho (2):
+
+- wsi/metal: Fix command buffer release at destroy
+- wsi/metal: Fix blit_imate_to_image's pool selection for cmd buffer alloc
+
+Anna Maniscalco (1):
+
+- radv: recalculate legacy_gs_info on bind
+
+Ashley Smith (1):
+
+- panfrost,panvk: Enable shader_realtime_clock on panthor 1.6
+
+Benjamin Cheng (2):
+
+- radv/video: Fix force_integer_mv=1 on intra frame
+- radv/video: Always end ref pic modification list
+
+Boris Brezillon (5):
+
+- panvk: Fix a memory leak in the descriptor set logic
+- pan/bi: Fix leak in bi_iterator_schedule()
+- panvk: Don't leak shader binaries when loaded from the cache
+- panvk: Free the decode context in the create_device() error path
+- pan/cs: Don't leak builder resources
+
+Caio Oliveira (1):
+
+- nir/gcm: Consider dead code elimination done by GCM as progress
+
+Calder Young (3):
+
+- anv: Fix scratch pool buffer allocation sizes
+- anv: Fix misplaced assertion in anv_scratch_pool_alloc
+- anv: Fix typo when checking if async rt scratch size changed
+
+Connor Abbott (4):
+
+- tu: Fix GRAS_BIN_FOVEAT* programming with more than 1 layer
+- tu: Fix FragCoord offset when HW viewport offset is enabled
+- tu: Fill render pass state when resuming
+- ir3: Fix condition for using uniform predicates
+
+Dave Airlie (1):
+
+- nak/cmat: free the type mapping hash table.
+
+Dylan Baker (16):
+
+- docs: Add checksums for 25.3.1
+- .pick_status.json: Update to b75cd07265b6d34cefde80399e7ff0cd7652dbca
+- .pick_status.json: Mark 829bd406c04566962268138195ecb2c4d78da5cf as backported
+- .pick_status.json: Update to b13003133d4440bfd33fc320c051b474458c8e02
+- .pick_status.json: Update to 0104b3df414bddeab37ae6cf116c532410134bc0
+- .pick_status.json: Update to f912db3f8dc0c0cb8cb2358e6ec79dd03b7a875d
+- .pick_status.json: Update to 72b43c0595d41c233d039c32f63120e0c3c27f59
+- .pick_status.json: Update to 095c2acf0180a1cbe7d60b6ffbfcd14e35724e22
+- anv/video: Read the right source for memcpy
+- anv/video: Cast intentional read past end of struct member to void*
+- .pick_status.json: Update to b5cf3b1628bdf473ea40a6756a4098eb56151bbc
+- .pick_status.json: Update to 518705a4fe794683a4c672f803e011490d24c12c
+- .pick_status.json: Update to 9c16bbd0237575e5dd9bd4e5f25d6da990ac4925
+- .pick_status.json: Update to dfdaee5ca74fbf1945326b454079575826df5a89
+- .pick_status.json: Mark 6dff50c8bc7430bf04c0dc5d8dc648f6ed73e4f3 as backported
+- .pick_status.json: Mark bbc8ce27048440befc0519ac03eeefa933f6ef0d as backported
+
+Eric R. Smith (1):
+
+- panfrost: do not allow skipping of fragment shader when alpha-to-coverage
+
+Erik Faye-Lund (2):
+
+- docs/panfrost: remove some stray newlines
+- panfrost: do not over-estimate memory needed for dummy-rt
+
+Faith Ekstrand (2):
+
+- pan/bi: Fix LD_VAR_BUF indirect offset calculations
+- pan/bi: Handle small vectors in bi_src_index()
+
+Georg Lehmann (3):
+
+- nir/opt_uniform_subgroup: don't try to optimize non trivial clustered reduce
+- nir/opt_uniform_subgroup: fix swizzle_amd without fetch_inactive
+- nir/divergence_analysis: fix swizzle_amd without fetch inactive
+
+Gurchetan Singh (1):
+
+- gfxstream: fix logspam in TLS helper function
+
+Hans-Kristian Arntzen (1):
+
+- egl/x11: Fix memory leak when querying translated coord.
+
+Hyunjun Ko (1):
+
+- anv/video: fix VP9 chroma subsampling format detection
+
+Janne Grunau (1):
+
+- util/driconf/asahi: Override GL renderer for web browsers
+
+Karmjit Mahil (1):
+
+- gallium: Fix gnu-empty-initalizer error
+
+Karol Herbst (1):
+
+- nir: add ACCESS to shared_uniform_block_intel
+
+Kenneth Graunke (1):
+
+- nir: Fix mod analysis of ishl to shift the recursive result
+
+Konstantin Seurer (1):
+
+- nir: Ignore ray query ranges that don't start with rq_initialize
+
+LingMan (3):
+
+- rust: build \`equivalent` dependency with the correct edition
+- rust: build \`paste` dependency with the correct edition
+- rust: build \`ucd-trie` dependency with the correct edition
+
+Lionel Landwerlin (8):
+
+- anv: fix internal representations of shaders
+- anv: add missing device_memory_report for shaders
+- anv: fixup error path for shader allocation
+- anv: disable crast on SKL
+- vulkan/runtime: add an internal flag for independent sets
+- anv: reintroduce non independent sets dynamic descriptor optimization
+- anv: move load_num_workgroups tracking to driver
+- anv: fix dynamic buffers & independent sets
+
+Mary Guillemard (1):
+
+- nvk: Use rendering state attachment count when setting SET_CT_SELECT
+
+Nanley Chery (3):
+
+- anv: Don't allow STORAGE + CCS for Y_TILED mod
+- intel/isl: Only assert surface addresses on gfx9+
+- iris: Fix pipe control around fast-clears
+
+Natalie Vock (1):
+
+- radv: Move VMID reservation to vkCreateDevice
+
+Patrick Lerda (1):
+
+- r600: improve cayman scissor 1x1 workaround
+
+Qiang Yu (1):
+
+- ac/llvm: workaround legacy fma intrinsic crash on gfx12
+
+Rhys Perry (2):
+
+- ac/nir: fix calculation of aligned_new_size
+- ac/nir: fix check for increasing size of non-descriptor loads
+
+Rob Clark (3):
+
+- freedreno/decode: Add extra indent levels
+- gallium: Make upload_cb0 return a releasebuf
+- asahi: Set prefer_real_buffer_in_constbuf0
+
+Samuel Pitoiset (4):
+
+- radv: add radv_hide_rebar_on_dgpu and enable for Red Dead Redemption 2
+- radv: reduce maxTexelBufferElements to 1<<29
+- radv: only include executable size when capturing shaders with RGP
+- radv: fix race condition when getting the blit queue
+
+Timothy Arceri (1):
+
+- util/driconf: add Cursemark workaround
+
+Utku Iseri (1):
+
+- panfrost: add earlyzs FPK condition for v6-
+
+Valentine Burley (1):
+
+- panfrost/ci: Fix GitLab rules after YAML split
+
+Yiwei Zhang (1):
+
+- pan: fix pan_blend_reads_dest to consider special min/max funcs

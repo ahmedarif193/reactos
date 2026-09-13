@@ -1,0 +1,239 @@
+Mesa 26.0.2 Release Notes / 2026-03-12
+======================================
+
+Mesa 26.0.2 is a bug fix release which fixes bugs found since the 26.0.1 release.
+
+Mesa 26.0.2 implements the OpenGL 4.6 API, but the version reported by
+glGetString(GL_VERSION) or glGetIntegerv(GL_MAJOR_VERSION) /
+glGetIntegerv(GL_MINOR_VERSION) depends on the particular driver being used.
+Some drivers don't support all the features required in OpenGL 4.6. OpenGL
+4.6 is **only** available if requested at context creation.
+Compatibility contexts may report a lower version depending on each driver.
+
+Mesa 26.0.2 implements the Vulkan 1.4 API, but the version reported by
+the apiVersion property of the VkPhysicalDeviceProperties struct
+depends on the particular driver being used.
+
+SHA checksums
+-------------
+
+::
+
+    SHA256: 973f535221be211c6363842b4cce9ef8e9b3e1d5ea86c5450ca86060163c7346  mesa-26.0.2.tar.xz
+    SHA512: 0a7b9fc9b09e40345cc22d246dc1656900d74754c093882f6a39623af17fddc5f4a0c7938207c784ccf7306c5ed497be6a02c36f95c6548e01a2faa085e04c35  mesa-26.0.2.tar.xz
+
+
+New features
+------------
+
+- None
+
+
+Bug fixes
+---------
+
+- 26.0.1 fails to build: \`create_context.c: error: 'struct glx_screen' has no member named 'frontend_screen'`
+- A770: Counter-Strike 2 visual glitches (regression)
+- Bisected regression: Assertion texObj->pt == view->texture failed.
+- Kodi regression with panthor >= 1.7 after updating to Linux 7.0-rc1
+- MDK2 HD (opengl) has most elements rendered as black
+- Mesa 25.3 amdgpu memory issue
+- OpenGL 4.1 VRAM Memory Leak with setting uniform variables
+- Panfrost Bifrost compiler assertion failure: wrong vectorization in bi_alu_src_index (Mesa 26.0.0)
+- RADV: RDNA4 visual corruption in DX11 (DXVK) – Mafia III character model glitches, AMDVLK renders correctly (9070XT)
+- [radeonsi] Regression: GL_FEEDBACK returns 0.0 for X-coordinates (Legacy GL)
+- glsl: spec\@glsl-es-1.00\@linker\@glsl-mismatched-uniform-precision-unused broken
+- ir3: ir3_get_predicate() vs &ctx->build
+- r300 , regression , bisected : Glitches with Sauerbraten
+- r300: HiZ related dEQP failures
+
+
+Changes
+-------
+
+Anna Maniscalco (1):
+
+- zink: don't care about generated gs output primitive
+
+Benjamin Cheng (1):
+
+- radeonsi/vcn: Use full pitch for pre-encode input
+
+Boris Brezillon (1):
+
+- pan/kmod: Allow mmap() on foreign buffers
+
+Caio Oliveira (4):
+
+- spirv: Refactor ALU opcode translation to take bit sizes
+- spirv: Pull constant source fixup to the existing loop
+- spirv: Fix spec constant to handle Select for non-native floats
+- nir: Fix constant folding for iadd_sat
+
+Christoph Pillmayer (2):
+
+- pan/bi: Fix coupling spill placement
+- pan/bi: Move FAUs to memory for memory phis
+
+Connor Abbott (4):
+
+- tu: Use HW offset 0 in 3d loads/clears with FDM
+- ir3: Fix constlen trimming when more than one stage is trimmed
+- tu: Set polygon mode when blitting
+- tu: Fix setting will_be_resolved with MSRTSS
+
+Danylo Piliaiev (2):
+
+- tu: Store gmem attachments after custom resolve in dyn RP
+- tu: Don't read .patch_input_gmem of unused attachment
+
+David Rosca (1):
+
+- vl: Also disable MPEG2 Main profile when mpeg12 decode is disabled
+
+Eric Engestrom (3):
+
+- docs: add sha sum for 26.0.1
+- fixup! docs: add release notes for 26.0.1
+- .pick_status.json: Update to 73dba1e15173ff6109925de9615f9d9f5cccc2be
+
+Eric R. Smith (1):
+
+- pco: fix a typo in the check for optimization looping
+
+Erik Faye-Lund (1):
+
+- gallium/dri: set LIBVA_DRIVERS_PATH in devenv
+
+Faith Ekstrand (3):
+
+- etnaviv: Call lower_bool_to_int32 not to_bitsize
+- nir/lower_bool_to_bitsize: Make all bN_csel sources match
+- pan/bi: Be more careful about bit sizes in b2f lowering
+
+Georg Lehmann (3):
+
+- ci: disable debian-ppc64el and debian-s390x
+- aco/insert_fp_mode: don't skip setting round for fract
+- nir/opt_algebraic: fix frsq clamp pattern
+
+Ian Romanick (5):
+
+- brw: Don't mark_invalid in update_for_reads for non-VGRF destination
+- brw: Use brw_reg_is_arf in update_for_reads
+- brw: Also check for ADDRESS file in update_for_reads
+- brw/algebraic: Don't optimize SEL.L.SAT or SEL.G.SAT
+- elk/algebraic: Don't optimize SEL.L.SAT or SEL.G.SAT
+
+Icenowy Zheng (1):
+
+- pvr: only specially handle gfx subcmd for BeginQuery
+
+Iván Briano (1):
+
+- anv: don't try to fast clear D/S with multiview
+
+Jesse Natalie (1):
+
+- d3d12: Fix importing external resources
+
+Job Noorman (2):
+
+- ir3: update context builder after ir3_get_predicate
+- ir3: don't predicate vote_all/vote_any
+
+Jose Maria Casanova Crespo (3):
+
+- v3d: flush write jobs before BO replacement in DISCARD_WHOLE path
+- vc4: flush write jobs before BO replacement in DISCARD_WHOLE path
+- v3d: reject fast TLB blit when RT formats don't match
+
+Karol Herbst (2):
+
+- nir: fix nir_alu_type_range_contains_type_range for fp16 to int
+- nir: fix nir_round_int_to_float for fp16
+
+Lionel Landwerlin (2):
+
+- anv: add missing handling for attachment locations in secondaries
+- anv: dirty all push constant stages in simple shader
+
+Lucas Fryzek (5):
+
+- drisw: Properly mark shmid as -1 when alloc fails
+- x11: Add helper util to check for xshm support
+- egl/dri: Check that xshm can be attached
+- glx: Check that xshm can be attached
+- vulkan/wsi: Check that xshm can be attached
+
+Luigi Santivetti (1):
+
+- zink: fix format conversion logic for the alpha emulation case
+
+Marek Olšák (1):
+
+- ac: set the correct number of Z planes for ALLOW_EXPCLEAR
+
+Mary Guillemard (1):
+
+- vulkan: Do not override the shader_flags in case of no task shader
+
+Mel Henning (1):
+
+- driconf: force_vk_vendor on No Man's Sky + NVK
+
+Mike Blumenkrantz (4):
+
+- zink: add TRANSFER_WRITE -> HOST_READ sync to end of batch
+- st/bitmap: only release YUV samplerviews
+- radv: fix multiview fast clears
+- egl/device: fix the fix for explicit sw rejection in non-sw EGL_PLATFORM=device
+
+Patrick Lerda (1):
+
+- r600: fix cs atomic operations when the shader is called multiple times
+
+Pavel Ondračka (3):
+
+- r300: copy target when merging alpha output instruction
+- r300: disable HiZ for PIPE_FUNC_ALWAYS
+- r300: disable clip-discard watermark for triangles
+
+Pierre-Eric Pelloux-Prayer (2):
+
+- frontends/va: fix undefined ref error
+- mesa: don't wraparound st_context::work_counter
+
+Rhys Perry (2):
+
+- aco: perform dce for blocks skipped for process_block()
+- nir/range_analysis: set deleted key
+
+Sagar Ghuge (1):
+
+- anv: Fix Wa_14021821874, Wa_14018813551, Wa_14026600921
+
+Samuel Pitoiset (4):
+
+- radv: fix copying images with different swizzle modes on SDMA7
+- radv: fix a GPU hang with PS epilogs and secondary command buffers
+- radv: fix local invocation index for mesh/task and quad derivatives on GFX12
+- radv: fix missing L2 cache invalidation with streamout on GFX12
+
+Tapani Pälli (2):
+
+- intel/dev: update mesa_defs.json from workaround database
+- anv: add handling for Wa_14026600921
+
+Timothy Arceri (5):
+
+- glsl: relax precision matching on unused uniforms ES
+- glsl: add workaround for MDK2 HD
+- mesa/st: use same path for setting state ref locations
+- st/glsl_to_nir: update state var locations earlier
+- glx: guard glx_screen frontend_screen member
+
+Yiwei Zhang (2):
+
+- pan: fix to not clear out of bitset range
+- lvp: avoid advertising dmabuf support for kms_swrast

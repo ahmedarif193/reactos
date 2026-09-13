@@ -1,0 +1,170 @@
+/*
+ * Copyright © 2024 Collabora Ltd.
+ * SPDX-License-Identifier: MIT
+ */
+
+#include "bifrost/bifrost_compile.h"
+#include "pan_desc.h"
+#include "pan_encoder.h"
+#include "panvk_cmd_alloc.h"
+#include "panvk_cmd_buffer.h"
+#include "panvk_cmd_precomp.h"
+#include "panvk_instr.h"
+#include "panvk_macros.h"
+#include "panvk_mempool.h"
+#include "panvk_precomp_cache.h"
+#include "panvk_queue.h"
+
+void
+panvk_per_arch(dispatch_precomp)(struct panvk_precomp_ctx *ctx,
+                                 struct panlib_precomp_grid grid,
+                                 enum panlib_barrier barrier,
+                                 enum libpan_shaders_program idx, void *data,
+                                 size_t data_size)
+{
+   ASSERTED enum panlib_barrier supported_barriers =
+      PANLIB_BARRIER_CSF_SYNC | PANLIB_BARRIER_CSF_WAIT;
+   assert(!(barrier & ~supported_barriers) && "Unsupported barrier flags");
+   assert(!(barrier & PANLIB_BARRIER_CSF_SYNC &&
+            barrier & PANLIB_BARRIER_CSF_WAIT) &&
+          "Cannot use both CSF_SYNC and CSF_WAIT barriers simultaneously");
+
+
+   struct panvk_cmd_buffer *cmdbuf = ctx->cmdbuf;
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+   struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
+   const struct panvk_shader_variant *shader =
+      panvk_per_arch(precomp_cache_get)(dev->precomp_cache, idx);
+   assert(shader);
+
+   struct pan_ptr push_uniforms = panvk_cmd_alloc_dev_mem(
+      cmdbuf, desc, BIFROST_PRECOMPILED_KERNEL_SYSVALS_SIZE + data_size, 16);
+
+   assert(push_uniforms.gpu);
+
+   struct bifrost_precompiled_kernel_sysvals sysvals;
+   sysvals.num_workgroups.x = grid.count[0];
+   sysvals.num_workgroups.y = grid.count[1];
+   sysvals.num_workgroups.z = grid.count[2];
+   sysvals.printf_buffer_address = dev->printf.bo->addr.dev;
+
+   bifrost_precompiled_kernel_prepare_push_uniforms(push_uniforms.cpu, data,
+                                                    data_size, &sysvals);
+
+   struct pan_compute_dim dim = {.x = grid.count[0],
+                                 .y = grid.count[1],
+                                 .z = grid.count[2]};
+
+   uint64_t tsd = panvk_per_arch(cmd_dispatch_prepare_tls)(
+      cmdbuf, shader, &dim, grid.csf.dynamic_count);
+   assert(tsd);
+
+   struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+   const struct cs_tracing_ctx *tracing_ctx =
+      &cmdbuf->state.cs[PANVK_SUBQUEUE_COMPUTE].tracing;
+
+   /* Copy the global TLS pointer to the per-job TSD. */
+   if (shader->info.tls_size) {
+      cs_move64_to(b, cs_scratch_reg64(b, 0), cmdbuf->state.tls.desc.gpu);
+      cs_load64_to(b, cs_scratch_reg64(b, 2), cs_scratch_reg64(b, 0), 8);
+      cs_move64_to(b, cs_scratch_reg64(b, 0), tsd);
+      cs_store64(b, cs_scratch_reg64(b, 2), cs_scratch_reg64(b, 0), 8);
+      cs_flush_stores(b);
+   }
+
+   cs_update_compute_ctx(b) {
+      /* No resource table */
+      cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_SRT), 0);
+
+      uint64_t fau_count =
+         DIV_ROUND_UP(BIFROST_PRECOMPILED_KERNEL_SYSVALS_SIZE + data_size, 8);
+      uint64_t fau_ptr = push_uniforms.gpu | (fau_count << 56);
+      cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_FAU), fau_ptr);
+
+      cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_SPD),
+                   panvk_priv_mem_dev_addr(shader->spd));
+
+      cs_move64_to(b, cs_reg64(b, PANVK_PRECOMP_TSD), tsd);
+
+      /* Global attribute offset */
+      cs_move32_to(b, cs_sr_reg32(b, COMPUTE, GLOBAL_ATTRIBUTE_OFFSET), 0);
+
+      struct mali_compute_size_workgroup_packed wg_size;
+      pan_pack(&wg_size, COMPUTE_SIZE_WORKGROUP, cfg) {
+         cfg.workgroup_size_x = shader->cs.local_size.x;
+         cfg.workgroup_size_y = shader->cs.local_size.y;
+         cfg.workgroup_size_z = shader->cs.local_size.z;
+         cfg.allow_merging_workgroups =
+            shader->info.cs.allow_merging_workgroups;
+      }
+      cs_move32_to(b, cs_sr_reg32(b, COMPUTE, WG_SIZE), wg_size.opaque[0]);
+
+      /* Job offset */
+      cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_OFFSET_X), 0);
+      cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_OFFSET_Y), 0);
+      cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_OFFSET_Z), 0);
+
+      /* Job size */
+      if (!grid.csf.dynamic_count) {
+         cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X), grid.count[0]);
+         cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Y), grid.count[1]);
+         cs_move32_to(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z), grid.count[2]);
+      } else {
+         /* If job size is dynamic, JOB_SIZE_* were already filled by the
+          * caller. We need to patch num_workgroups sysvals with the dynamic
+          * values. */
+         bool patch_x = shader_uses_sysval(shader, compute, num_work_groups.x);
+         bool patch_y = shader_uses_sysval(shader, compute, num_work_groups.y);
+         bool patch_z = shader_uses_sysval(shader, compute, num_work_groups.z);
+         bool patch_faus = patch_x || patch_y || patch_z;
+
+         struct cs_index fau_addr = cs_scratch_reg64(b, 0);
+         if (patch_faus)
+            cs_move64_to(b, fau_addr, push_uniforms.gpu);
+
+         if (patch_x)
+            cs_store32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_X), fau_addr,
+                       shader_remapped_sysval_offset(
+                          shader, sysval_offset(compute, num_work_groups.x)));
+         if (patch_y)
+            cs_store32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Y), fau_addr,
+                       shader_remapped_sysval_offset(
+                          shader, sysval_offset(compute, num_work_groups.y)));
+         if (patch_z)
+            cs_store32(b, cs_sr_reg32(b, COMPUTE, JOB_SIZE_Z), fau_addr,
+                       shader_remapped_sysval_offset(
+                          shader, sysval_offset(compute, num_work_groups.z)));
+
+         if (patch_faus)
+            cs_flush_stores(b);
+      }
+   }
+
+   cs_next_iter_sb(cmdbuf, PANVK_SUBQUEUE_COMPUTE,
+                   cs_scratch_reg_tuple(b, 0, 2));
+
+   unsigned task_axis = MALI_TASK_AXIS_X;
+   unsigned task_increment = 0;
+   if (grid.csf.dynamic_count) {
+      /* Use run_compute with a set task axis instead of run_compute_indirect as
+       * run_compute_indirect has been found to cause intermittent hangs. This
+       * is safe, as the task increment will be clamped by the job size along
+       * the specified axis.
+       * The chosen task axis is potentially suboptimal, as choosing good
+       * increment/axis parameters requires knowledge of job dimensions, but
+       * this is somewhat offset by run_compute being a native instruction. */
+      task_increment = pan_calc_workgroups_per_task(
+         &shader->cs.local_size, &phys_dev->kmod.dev->props);
+   } else {
+      panvk_per_arch(calculate_task_axis_and_increment)(
+         shader, phys_dev, &dim, &task_axis, &task_increment);
+   }
+   cs_trace_run_compute(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
+                        task_increment, task_axis, PANVK_PRECOMP_RES_SEL);
+
+   if (barrier & PANLIB_BARRIER_CSF_SYNC)
+      panvk_per_arch(cmd_signal_barrier)(cmdbuf, PANVK_CSF_BARRIER_SYNC);
+   else if (barrier & PANLIB_BARRIER_CSF_WAIT)
+      panvk_per_arch(cmd_signal_barrier)(cmdbuf, PANVK_CSF_BARRIER_WAIT);
+}

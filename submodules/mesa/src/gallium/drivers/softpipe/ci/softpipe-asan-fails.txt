@@ -1,0 +1,9 @@
+dEQP-GLES31.functional.geometry_shading.emit.line_strip_emit_1_end_2,Crash
+dEQP-GLES31.functional.geometry_shading.emit.line_strip_emit_2_end_2,Crash
+dEQP-GLES31.functional.geometry_shading.emit.triangle_strip_emit_1_end_2,Crash
+dEQP-GLES31.functional.geometry_shading.emit.triangle_strip_emit_2_end_2,Crash
+dEQP-GLES31.functional.geometry_shading.emit.triangle_strip_emit_3_end_2,Crash
+dEQP-GLES31.functional.texture.filtering.cube_array.combinations.nearest_linear_mirror_repeat,Fail
+dEQP-GLES31.functional.texture.filtering.cube_array.combinations.nearest_mipmap_nearest_linear_clamp_repeat,Fail
+dEQP-GLES31.functional.texture.filtering.cube_array.formats.rgb10_a2_nearest_mipmap_nearest,Fail
+dEQP-GLES31.functional.texture.filtering.cube_array.sizes.63x63x18_nearest_mipmap_nearest,Fail
