@@ -9,6 +9,9 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#ifdef _M_ARM64
+#include <reactos/chpe.h>
+#endif
 #define NDEBUG
 #include <debug.h>
 
@@ -170,11 +173,14 @@ KeAlertResumeThread(IN PKTHREAD Thread)
         Thread->SuspendCount--;
         if (!(Thread->SuspendCount) && !(Thread->FreezeCount))
         {
-            /* Signal and satisfy */
-            KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
-            Thread->SuspendSemaphore.Header.SignalState++;
-            KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
-            KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+            if (KiChpeClearDeferredSuspend(Thread))
+            {
+                /* Signal and satisfy */
+                KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
+                Thread->SuspendSemaphore.Header.SignalState++;
+                KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+                KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+            }
         }
     }
 
@@ -360,15 +366,18 @@ KeForceResumeThread(IN PKTHREAD Thread)
         Thread->SuspendCount = 0;
         Thread->FreezeCount = 0;
 
-        /* Lock the suspend semaphore */
-        KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
+        if (KiChpeClearDeferredSuspend(Thread))
+        {
+            /* Lock the suspend semaphore */
+            KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
 
-        /* Signal and satisfy */
-        Thread->SuspendSemaphore.Header.SignalState++;
-        KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+            /* Signal and satisfy */
+            Thread->SuspendSemaphore.Header.SignalState++;
+            KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
 
-        /* Release the suspend semaphore */
-        KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+            /* Release the suspend semaphore */
+            KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+        }
     }
 
     /* Release Lock and return the Old State */
@@ -483,15 +492,18 @@ KeResumeThread(IN PKTHREAD Thread)
         /* Check if the thrad is still suspended or not */
         if ((!Thread->SuspendCount) && (!Thread->FreezeCount))
         {
-            /* Acquire the suspend semaphore lock */
-            KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
+            if (KiChpeClearDeferredSuspend(Thread))
+            {
+                /* Acquire the suspend semaphore lock */
+                KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
 
-            /* Signal the Suspend Semaphore */
-            Thread->SuspendSemaphore.Header.SignalState++;
-            KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+                /* Signal the Suspend Semaphore */
+                Thread->SuspendSemaphore.Header.SignalState++;
+                KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
 
-            /* Release the suspend semaphore lock */
-            KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+                /* Release the suspend semaphore lock */
+                KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
+            }
         }
     }
 
@@ -662,14 +674,92 @@ KiSuspendNop(IN PKAPC Apc,
     UNREFERENCED_PARAMETER(SystemArgument2);
 }
 
+#ifdef _M_ARM64
+static
+BOOLEAN
+KiChpeRingSuspendDoorbell(IN PKTHREAD Thread)
+{
+    PCHPE_V2_CPU_AREA_INFO CpuArea;
+    CHPE_V2_CPU_AREA_INFO CapturedCpuArea;
+    BOOLEAN Rung = FALSE;
+
+    if (Thread->Teb == NULL) return FALSE;
+
+    _SEH2_TRY
+    {
+        CpuArea = *(PCHPE_V2_CPU_AREA_INFO volatile *)((PUCHAR)Thread->Teb + CHPE_TEB_CPU_AREA_OFFSET);
+        ProbeForRead(CpuArea, sizeof(CapturedCpuArea), TYPE_ALIGNMENT(CHPE_V2_CPU_AREA_INFO));
+        CapturedCpuArea = *CpuArea;
+        if ((CapturedCpuArea.SuspendDoorbell != NULL) &&
+            (CapturedCpuArea.InSimulation || CapturedCpuArea.InSyscallCallback || CapturedCpuArea.CriticalLockHeld))
+        {
+            ProbeForWrite(CapturedCpuArea.SuspendDoorbell, sizeof(*CapturedCpuArea.SuspendDoorbell), TYPE_ALIGNMENT(ULONG));
+            *CapturedCpuArea.SuspendDoorbell = 1;
+            Rung = TRUE;
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Rung = FALSE;
+    }
+    _SEH2_END;
+
+    return Rung;
+}
+
+VOID
+NTAPI
+KiChpeSuspendCheckpoint(IN PKTHREAD Thread)
+{
+    KLOCK_QUEUE_HANDLE ApcLock;
+    BOOLEAN Wait;
+
+    if (!Thread->ChpeSuspendDeferred) return;
+    if (KiChpeRingSuspendDoorbell(Thread)) return;
+
+    KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
+    Thread->ChpeSuspendDeferred = FALSE;
+    Wait = (Thread->SuspendCount != 0) || (Thread->FreezeCount != 0);
+    KiReleaseApcLockFromSynchLevel(&ApcLock);
+    KiExitDispatcher(ApcLock.OldIrql);
+
+    if (Wait)
+    {
+        KeWaitForSingleObject(&Thread->SuspendSemaphore,
+                              Suspended,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+    }
+}
+#endif
+
 VOID
 NTAPI
 KiSuspendThread(IN PVOID NormalContext,
                 IN PVOID SystemArgument1,
                 IN PVOID SystemArgument2)
 {
+    PKTHREAD Thread = KeGetCurrentThread();
+
+#ifdef _M_ARM64
+    if (((Thread->SuspendCount != 0) || (Thread->FreezeCount != 0)) &&
+        KiChpeRingSuspendDoorbell(Thread))
+    {
+        KLOCK_QUEUE_HANDLE ApcLock;
+        BOOLEAN Deferred;
+
+        KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
+        Deferred = (Thread->SuspendCount != 0) || (Thread->FreezeCount != 0);
+        Thread->ChpeSuspendDeferred = Deferred;
+        KiReleaseApcLockFromSynchLevel(&ApcLock);
+        KiExitDispatcher(ApcLock.OldIrql);
+        if (Deferred) return;
+    }
+#endif
+
     /* Non-alertable kernel-mode suspended wait */
-    KeWaitForSingleObject(&KeGetCurrentThread()->SuspendSemaphore,
+    KeWaitForSingleObject(&Thread->SuspendSemaphore,
                           Suspended,
                           KernelMode,
                           FALSE,

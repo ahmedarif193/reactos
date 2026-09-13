@@ -12,6 +12,7 @@
  */
 
 #include <ntdll.h>
+#include <reactos/chpe.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -36,25 +37,6 @@ typedef VOID     (NTAPI *PCHPE_NOTIFY_MEMORY_DIRTY)(void *, SIZE_T);
 typedef VOID     (NTAPI *PCHPE_NOTIFY_READ_FILE)(HANDLE, void *, SIZE_T, BOOLEAN, NTSTATUS);
 typedef BOOLEAN  (WINAPI *PCHPE_IS_PROCESSOR_FEATURE_PRESENT)(UINT);
 typedef VOID     (NTAPI *PCHPE_UPDATE_PROCESSOR_INFO)(PVOID);
-
-typedef struct _CHPE_V2_CPU_AREA_INFO
-{
-    BOOLEAN InSimulation;
-    BOOLEAN InSyscallCallback;
-    BOOLEAN CriticalLockHeld;
-    BOOLEAN AvoidUpcallToKernel32;
-    UCHAR Reserved0[4];
-    ULONG64 EmulatorStackBase;
-    ULONG64 EmulatorStackLimit;
-    PVOID ContextAmd64;
-    PULONG SuspendDoorbell;
-    ULONG64 LoadingModuleModflag;
-    PVOID EmulatorData[4];
-    ULONG64 EmulatorDataInline;
-} CHPE_V2_CPU_AREA_INFO, *PCHPE_V2_CPU_AREA_INFO;
-
-C_ASSERT(FIELD_OFFSET(CHPE_V2_CPU_AREA_INFO, CriticalLockHeld) == 0x2);
-C_ASSERT(FIELD_OFFSET(CHPE_V2_CPU_AREA_INFO, SuspendDoorbell) == 0x20);
 
 typedef struct _IMAGE_ARM64EC_METADATA
 {
@@ -101,7 +83,6 @@ typedef struct _IMAGE_CHPE_RANGE_ENTRY
     ULONG Length;
 } IMAGE_CHPE_RANGE_ENTRY, *PIMAGE_CHPE_RANGE_ENTRY;
 
-#define CHPE_TEB_CPU_AREA_OFFSET 0x1788
 #define CHPE_CONTEXT_AMD64_SIZE  0x1000
 #define CHPE_CONTEXT_AMD64_LENGTH 0x4d0
 #define CHPE_PEB_EC_CODE_BITMAP_OFFSET 0x368

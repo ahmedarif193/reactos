@@ -1860,7 +1860,7 @@ typedef struct _KTHREAD
         CHAR SameThreadTransientFlags;
     };
     volatile UCHAR SwapBusy;                             // 0x076 Win11 name: Spare0 [ReactOS]
-    UCHAR Spare0a;                                       // 0x077
+    UCHAR ChpeSuspendDeferred;                           // 0x077 [ReactOS]
     ULONG SystemCallNumber;                              // 0x078
     ULONG ReadyTime;                                     // 0x07C
     PVOID FirstArgument;                                 // 0x080
