@@ -118,7 +118,7 @@ struct TLS {
 };
 
 struct FrontendThreadData {
-  bool InLockedRWXRead {};
+  fextl::vector<bool> PendingRWXReads;
 };
 
 class WowSyscallHandler;
@@ -1075,22 +1075,20 @@ void BTCpuNotifyUnmapViewOfSection(void* Address, BOOL After, ULONG Status) {
 }
 
 void BTCpuNotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After, NTSTATUS Status) {
-  auto& InLockedRWXRead = GetFrontendThreadData(GetTLS().ThreadState())->InLockedRWXRead;
+  auto& Pending = GetFrontendThreadData(GetTLS().ThreadState())->PendingRWXReads;
   if (!After) {
-    ThreadCreationMutex.lock();
-    CTX->GetCodeInvalidationMutex().lock();
-    if (InvalidationTracker->BeginUntrackedWriteLocked(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size))) {
-      InLockedRWXRead = true;
-    } else {
-      CTX->GetCodeInvalidationMutex().unlock();
-      ThreadCreationMutex.unlock();
+    std::scoped_lock Lock(ThreadCreationMutex);
+    std::scoped_lock CodeLock(CTX->GetCodeInvalidationMutex());
+    Pending.push_back(InvalidationTracker->BeginUntrackedWriteLocked(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size)));
+  } else if (!Pending.empty()) {
+    const bool Tracked = Pending.back();
+    Pending.pop_back();
+    if (!Tracked) {
+      return;
     }
-  } else {
-    if (InLockedRWXRead) {
-      InLockedRWXRead = false;
-      CTX->GetCodeInvalidationMutex().unlock();
-      ThreadCreationMutex.unlock();
-    }
+    std::scoped_lock Lock(ThreadCreationMutex);
+    std::scoped_lock CodeLock(CTX->GetCodeInvalidationMutex());
+    InvalidationTracker->EndUntrackedWriteLocked(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size));
   }
 }
 

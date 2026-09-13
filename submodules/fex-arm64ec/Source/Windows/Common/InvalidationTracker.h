@@ -3,6 +3,7 @@
 
 #include <FEXCore/Utils/IntervalList.h>
 #include <FEXCore/HLE/SyscallHandler.h>
+#include <FEXCore/fextl/vector.h>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -39,14 +40,14 @@ public:
   void ReprotectRWXIntervals(uint64_t Address, uint64_t Size);
   bool HandleRWXAccessViolation(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC, uint64_t FaultAddress);
 
-  // Unprotects any RWX intervals in the input interval and invalidates code
-  // NOTE: CodeInvalidationMutex must be locked when calling this, and if true is returned, kept locked until the write ends.
+  // Unprotects RWX intervals and invalidates code before an untracked write.
+  // Both calls require CodeInvalidationMutex; it must not be held across the I/O.
+  // A true return must be paired with EndUntrackedWriteLocked for the same range.
   bool BeginUntrackedWriteLocked(uint64_t Address, uint64_t Size);
+  void EndUntrackedWriteLocked(uint64_t Address, uint64_t Size);
 #ifdef __REACTOS__
   // Only for a managed-write exception while native code populates a JIT buffer.
   bool HandleJitCodeWrite(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPC, uint64_t FaultAddress);
-  // Re-arms kernel executable-write tracking after an untracked write. Only meaningful for managed executable writes.
-  void EndUntrackedWriteLocked(uint64_t Address, uint64_t Size);
 #endif
 
   FEXCore::HLE::ExecutableRangeInfo QueryExecutableRange(uint64_t Address);
@@ -75,6 +76,8 @@ private:
 
   FEXCore::IntervalList<uint64_t> XIntervals;
   FEXCore::IntervalList<uint64_t> RWXIntervals;
+  // Keep individual entries so overlapping reads cannot remove each other's protection exclusion.
+  fextl::vector<FEXCore::IntervalList<uint64_t>::Interval> PendingWrites;
   std::shared_mutex IntervalsLock;
   FEXCore::Context::Context& CTX;
   const std::unordered_map<DWORD, FEXCore::Core::InternalThreadState*>& Threads;
