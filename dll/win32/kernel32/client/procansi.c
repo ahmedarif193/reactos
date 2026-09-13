@@ -73,6 +73,7 @@ CreateProcessInternalA(HANDLE hToken,
     UNICODE_STRING CurrentDirectory;
     BOOL bRetVal;
     STARTUPINFOW StartupInfo;
+    STARTUPINFOEXW StartupInfoEx;
 
     DPRINT("dwCreationFlags %x, lpEnvironment %p, lpCurrentDirectory %p, "
             "lpStartupInfo %p, lpProcessInformation %p\n",
@@ -126,6 +127,15 @@ CreateProcessInternalA(HANDLE hToken,
                                            &StartupInfo.lpTitle);
     }
 
+    /* Preserve the attribute list when converting extended ANSI startup info. */
+    StartupInfoEx.StartupInfo = StartupInfo;
+    StartupInfoEx.lpAttributeList = NULL;
+    if ((dwCreationFlags & EXTENDED_STARTUPINFO_PRESENT) &&
+        lpStartupInfo->cb >= sizeof(STARTUPINFOEXA))
+    {
+        StartupInfoEx.lpAttributeList = ((LPSTARTUPINFOEXA)lpStartupInfo)->lpAttributeList;
+    }
+
     /* Call the Unicode function */
     bRetVal = CreateProcessInternalW(hToken,
                                      ApplicationName.Buffer,
@@ -136,7 +146,7 @@ CreateProcessInternalA(HANDLE hToken,
                                      dwCreationFlags,
                                      lpEnvironment,
                                      CurrentDirectory.Buffer,
-                                     &StartupInfo,
+                                     &StartupInfoEx.StartupInfo,
                                      lpProcessInformation,
                                      hNewToken);
 
