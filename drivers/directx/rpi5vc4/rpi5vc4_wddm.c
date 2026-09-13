@@ -60,6 +60,51 @@ Rpi5V3dSmsPowerUpBounded(
     _Out_ PULONG TeeUs,
     _Out_ PULONG ReeUs);
 
+static VOID
+Rpi5Vc4AppendSubmitLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG Node,
+    _In_ PRPI5VC4_PENDING_SUBMIT Entry)
+{
+    Entry->Next = NULL;
+    if (DeviceExtension->NodeQueue[Node].Tail != NULL)
+        DeviceExtension->NodeQueue[Node].Tail->Next = Entry;
+    else
+        DeviceExtension->NodeQueue[Node].Head = Entry;
+    DeviceExtension->NodeQueue[Node].Tail = Entry;
+    DeviceExtension->NodeQueue[Node].Count++;
+}
+
+static VOID
+Rpi5Vc4RemoveSubmitLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG Node)
+{
+    PRPI5VC4_PENDING_SUBMIT Entry = DeviceExtension->NodeQueue[Node].Head;
+
+    DeviceExtension->NodeQueue[Node].Head = Entry->Next;
+    if (DeviceExtension->NodeQueue[Node].Head == NULL)
+        DeviceExtension->NodeQueue[Node].Tail = NULL;
+    DeviceExtension->NodeQueue[Node].Count--;
+    /* WDDM owns its private data until completion or reset. Detach the entry
+     * before notifying dxgkrnl, and free only driver-owned escape/null work. */
+    if (Entry->AllocatedFromPool)
+        ExFreePoolWithTag(Entry, RPI5VC4_POOL_TAG);
+}
+
+static VOID
+Rpi5Vc4ClearPendingLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    ULONG Node;
+
+    for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; ++Node)
+    {
+        while (DeviceExtension->NodeQueue[Node].Head != NULL)
+            Rpi5Vc4RemoveSubmitLocked(DeviceExtension, Node);
+    }
+}
+
 static BOOLEAN
 Rpi5Vc4GpuJobActiveLocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
@@ -68,18 +113,12 @@ Rpi5Vc4GpuJobActiveLocked(
 
     for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; ++Node)
     {
-        ULONG Offset;
+        PRPI5VC4_PENDING_SUBMIT Entry;
 
-        for (Offset = 0;
-             Offset < DeviceExtension->NodeQueue[Node].Count;
-             ++Offset)
+        for (Entry = DeviceExtension->NodeQueue[Node].Head;
+             Entry != NULL;
+             Entry = Entry->Next)
         {
-            ULONG Index =
-                (DeviceExtension->NodeQueue[Node].Head + Offset) %
-                RPI5VC4_MAX_PENDING;
-            PRPI5VC4_PENDING_SUBMIT Entry =
-                &DeviceExtension->NodeQueue[Node].Pending[Index];
-
             if (Entry->BinSubmitted || Entry->RenderSubmitted)
                 return TRUE;
         }
@@ -136,7 +175,7 @@ Rpi5Vc4OldestQueuedProcessLocked(
 
         if (DeviceExtension->NodeQueue[Node].Count == 0)
             continue;
-        Head = &DeviceExtension->NodeQueue[Node].Pending[DeviceExtension->NodeQueue[Node].Head];
+        Head = DeviceExtension->NodeQueue[Node].Head;
         if (!Head->IsV3dJob && !Head->IsTfuJob && !Head->IsCsdJob)
             continue;
         if (Oldest == NULL || (LONGLONG)(Head->SubmissionSequence - Oldest->SubmissionSequence) < 0)
@@ -198,7 +237,7 @@ Rpi5Vc4ProcessPendingLocked(
 
     while (Queue(Node)->Count != 0)
     {
-        Head = &Queue(Node)->Pending[Queue(Node)->Head];
+        Head = Queue(Node)->Head;
 
         if ((Head->IsTfuJob || Head->IsCsdJob || Head->IsV3dJob) && !DeviceExtension->V3dReady)
             goto AbortPipeline;
@@ -508,8 +547,7 @@ CompleteHead:
                 DeviceExtension->LastCompletedFencePerNode[Lane] = Head->Fence;
             Completed = TRUE;
         }
-        Queue(Node)->Head = (Queue(Node)->Head + 1) % RPI5VC4_MAX_PENDING;
-        Queue(Node)->Count--;
+        Rpi5Vc4RemoveSubmitLocked(DeviceExtension, Node);
     }
 
         goto NextNode;
@@ -518,7 +556,7 @@ AbortPipeline:
         *PipelineAborted = TRUE;
         *NeedPoll = FALSE;
         DeviceExtension->StopAccepting = TRUE;
-        RtlZeroMemory(DeviceExtension->NodeQueue, sizeof(DeviceExtension->NodeQueue));
+        Rpi5Vc4ClearPendingLocked(DeviceExtension);
         goto Finished;
 
 NextNode:;
@@ -992,7 +1030,7 @@ Rpi5Vc4DmaPipelineDrain(
     /* Stop/remove aborts queued work; only observed hardware completion may
      * advance a fence or emit DMA_COMPLETED. */
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
-    RtlZeroMemory(DeviceExtension->NodeQueue, sizeof(DeviceExtension->NodeQueue));
+    Rpi5Vc4ClearPendingLocked(DeviceExtension);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
     DeviceExtension->DmaPipelineInitialized = FALSE;
 }
@@ -1461,18 +1499,13 @@ Rpi5Vc4DdiDestroyProcess(
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
     for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; ++Node)
     {
-        ULONG Offset;
+        PRPI5VC4_PENDING_SUBMIT Entry;
 
-        for (Offset = 0;
-             Offset < DeviceExtension->NodeQueue[Node].Count;
-             ++Offset)
+        for (Entry = DeviceExtension->NodeQueue[Node].Head;
+             Entry != NULL;
+             Entry = Entry->Next)
         {
-            ULONG Index =
-                (DeviceExtension->NodeQueue[Node].Head + Offset) %
-                RPI5VC4_MAX_PENDING;
-
-            if (DeviceExtension->NodeQueue[Node].Pending[Index].Process ==
-                Process)
+            if (Entry->Process == Process)
             {
                 KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
                 return STATUS_DEVICE_BUSY;
@@ -2415,6 +2448,23 @@ Rpi5Vc4DdiSubmitCommand(
             return STATUS_INVALID_PARAMETER;
     }
 
+    if (SubmitCommand->Flags.NullRendering)
+    {
+        /* Null submissions need no DMA buffer or private data. */
+        Entry = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Entry), RPI5VC4_POOL_TAG);
+        if (Entry == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    else
+    {
+        /* GetDmaBuffer validated this private range. Its storage remains
+         * owned by dxgkrnl until the submitted fence retires or reset aborts
+         * the buffer, so queue capacity follows admitted DMA buffers. */
+        Entry = ALIGN_UP_POINTER_BY((PUCHAR)SubmitCommand->pDmaBufferPrivateData + SubmitCommand->DmaBufferPrivateDataSubmissionStartOffset + FIELD_OFFSET(RPI5VC4_DMA_PRIVATE_DATA, PendingSubmit), TYPE_ALIGNMENT(RPI5VC4_PENDING_SUBMIT));
+    }
+    RtlZeroMemory(Entry, sizeof(*Entry));
+    Entry->AllocatedFromPool = SubmitCommand->Flags.NullRendering;
+
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
 
     /*
@@ -2424,18 +2474,14 @@ Rpi5Vc4DdiSubmitCommand(
     {
         ULONG QueueIndex = SubmitCommand->NodeOrdinal;
 
-        if (DeviceExtension->NodeQueue[QueueIndex].Count >= RPI5VC4_MAX_PENDING ||
-            DeviceExtension->StopAccepting)
+        if (DeviceExtension->StopAccepting)
         {
             KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
-            return STATUS_DEVICE_BUSY;
+            if (Entry->AllocatedFromPool)
+                ExFreePoolWithTag(Entry, RPI5VC4_POOL_TAG);
+            return STATUS_DELETE_PENDING;
         }
 
-        Entry = &DeviceExtension->NodeQueue[QueueIndex].Pending[
-            (DeviceExtension->NodeQueue[QueueIndex].Head +
-             DeviceExtension->NodeQueue[QueueIndex].Count) %
-            RPI5VC4_MAX_PENDING];
-        RtlZeroMemory(Entry, sizeof(*Entry));
         Entry->Fence = SubmitCommand->SubmissionFenceId;
         Entry->SubmissionSequence = ++DeviceExtension->SubmissionSequence;
         Entry->NodeOrdinal = QueueIndex;
@@ -2468,7 +2514,7 @@ Rpi5Vc4DdiSubmitCommand(
                 Entry->V3dFlags = Job.V3dJob.Flags;
             }
         }
-        DeviceExtension->NodeQueue[QueueIndex].Count++;
+        Rpi5Vc4AppendSubmitLocked(DeviceExtension, QueueIndex, Entry);
     }
 
     Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
@@ -2907,7 +2953,7 @@ Rpi5Vc4DdiResetFromTimeout(
     ResetSucceeded = !DeviceExtension->V3dReady || Rpi5V3dResetCore(DeviceExtension);
 
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
-    RtlZeroMemory(DeviceExtension->NodeQueue, sizeof(DeviceExtension->NodeQueue));
+    Rpi5Vc4ClearPendingLocked(DeviceExtension);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
     return ResetSucceeded ? STATUS_SUCCESS : STATUS_DEVICE_HARDWARE_ERROR;
 }
@@ -3047,20 +3093,22 @@ Rpi5Vc4QueueEscapeJob(
     else
         QueueIndex = RPI5VC4_NODE_3D;
 
+    Entry = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Entry), RPI5VC4_POOL_TAG);
+    if (Entry == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
 
     if (DeviceExtension->NodeQueue[QueueIndex].Count >= RPI5VC4_MAX_PENDING ||
         DeviceExtension->StopAccepting)
     {
         KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+        ExFreePoolWithTag(Entry, RPI5VC4_POOL_TAG);
         return STATUS_DEVICE_BUSY;
     }
 
-    Entry = &DeviceExtension->NodeQueue[QueueIndex].Pending[
-        (DeviceExtension->NodeQueue[QueueIndex].Head +
-         DeviceExtension->NodeQueue[QueueIndex].Count) %
-        RPI5VC4_MAX_PENDING];
     RtlZeroMemory(Entry, sizeof(*Entry));
+    Entry->AllocatedFromPool = TRUE;
     Entry->Fence = 0;
     Entry->SubmissionSequence = ++DeviceExtension->SubmissionSequence;
     Entry->NodeOrdinal = QueueIndex;
@@ -3088,7 +3136,7 @@ Rpi5Vc4QueueEscapeJob(
         Entry->Qts = Packet->V3dJob.Qts;
         Entry->V3dFlags = Packet->V3dJob.Flags;
     }
-    DeviceExtension->NodeQueue[QueueIndex].Count++;
+    Rpi5Vc4AppendSubmitLocked(DeviceExtension, QueueIndex, Entry);
 
     Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
