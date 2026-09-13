@@ -147,6 +147,9 @@ set(_wow64_i386_cmake_args
     -DCMAKE_TOOLCHAIN_FILE:FILEPATH=${_wow64_toolchain}
     -DDBG:BOOL=${DBG}
     -DHOST_TOOLS_DIR:PATH=${REACTOS_BINARY_DIR}/host-tools/bin
+    # This partial tree builds only the listed WoW64 runtime modules; it does
+    # not build or package a separate i386 Mesa ICD.
+    -DMESA_GALLIUM_FROM_SOURCE:BOOL=OFF
     -DOPTIMIZE:STRING=${OPTIMIZE}
     -DPCH:BOOL=${PCH}
     -DREACTOS_CLANG_LLVM_MINGW_ROOT:PATH=${REACTOS_CLANG_LLVM_MINGW_ROOT}
