@@ -24,7 +24,7 @@ KiUserExceptionDispatcher:
     .seh_endprologue
     /* The emulator can re-enter using only the synthetic stack frame. */
     mov     x1, sp
-    add     x0, sp, #CONTEXT_FRAME_LENGTH
+    add     x0, sp, #UesExceptionRecord
     bl      KiUserExceptionDispatcherWorker
     brk     #1
     .seh_endproc
