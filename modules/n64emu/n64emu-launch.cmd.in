@@ -16,8 +16,14 @@ set EMUDIR=%SystemRoot%\@N64EMU_EXE_DIR@
 set EMU=%SystemRoot%\n64emu\@N64EMU_EXE_PATH@
 set ROM=%SystemRoot%\n64emu\roms\@N64EMU_ROM_NAME@
 "%S%\dbgprint.exe" N64EMU_BEGIN
-if not exist "%EMU%" "%S%\dbgprint.exe" N64EMU_MISSING_EXE %EMU%
-if not exist "%ROM%" "%S%\dbgprint.exe" N64EMU_MISSING_ROM %ROM%
+if not exist "%EMU%" (
+    "%S%\dbgprint.exe" N64EMU_MISSING_EXE %EMU%
+    exit /b 2
+)
+if not exist "%ROM%" (
+    "%S%\dbgprint.exe" N64EMU_MISSING_ROM %ROM%
+    exit /b 2
+)
 cd /d "%EMUDIR%"
 "%S%\dbgprint.exe" N64EMU_CWD %CD%
 "%S%\dbgprint.exe" --process "%EMU% @N64EMU_ARGS@ %ROM% 2>&1"
