@@ -7,6 +7,7 @@
 #include <FEXCore/Config/Config.h>
 #include <FEXCore/Debug/InternalThreadState.h>
 #include "InvalidationTracker.h"
+#include <algorithm>
 #include <windef.h>
 #include <winternl.h>
 
@@ -346,7 +347,34 @@ bool InvalidationTracker::HandleRWXAccessViolation(FEXCore::Core::InternalThread
 }
 
 bool InvalidationTracker::BeginUntrackedWriteLocked(uint64_t Address, uint64_t Size) {
-  return ProtectRWXIntervalsInternal(Address, Size, true);
+  if (!Size || !ProtectRWXIntervalsInternal(Address, Size, true)) {
+    return false;
+  }
+
+  std::unique_lock Lock(IntervalsLock);
+  PendingWrites.push_back({Address, Address + Size});
+  return true;
+}
+
+void InvalidationTracker::EndUntrackedWriteLocked(uint64_t Address, uint64_t Size) {
+  // Compilation was allowed while I/O was blocked. Discard any translations
+  // made from the old bytes before the caller can observe read completion.
+  InvalidateIntervalInternalLocked(Address, Size);
+  {
+    std::unique_lock Lock(IntervalsLock);
+    const auto End = Address + Size;
+    const auto It = std::find_if(PendingWrites.begin(), PendingWrites.end(), [Address, End](const auto& Range) {
+      return Range.Offset == Address && Range.End == End;
+    });
+    if (It != PendingWrites.end()) {
+      PendingWrites.erase(It);
+    }
+  }
+#ifdef __REACTOS__
+  if (ManagedExecutableWrites) {
+    ProtectRWXIntervalsInternal(Address, Size, false);
+  }
+#endif
 }
 #ifdef __REACTOS__
 
@@ -376,12 +404,6 @@ bool InvalidationTracker::HandleJitCodeWrite(FEXCore::Core::InternalThreadState*
     return false;
   }
   return AllowExecutablePageWrite(FaultAddress);
-}
-
-void InvalidationTracker::EndUntrackedWriteLocked(uint64_t Address, uint64_t Size) {
-  if (ManagedExecutableWrites) {
-    ProtectRWXIntervalsInternal(Address, Size, false);
-  }
 }
 
 NTSTATUS InvalidationTracker::ResetExecutableWriteTracking(uint64_t Address, uint64_t Size) {
@@ -508,9 +530,31 @@ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t
   }
 
   bool HitRWXInterval = false;
-  do {
+  while (Address < End) {
     const auto Query = RWXIntervals.Query(Address);
+    if (!Query.Size) {
+      break;
+    }
+    auto RangeEnd = std::min(End, Address + Query.Size);
     if (Query.Enclosed) {
+      if (!ForWriteLocked) {
+        bool Pending = false;
+        for (const auto& Write : PendingWrites) {
+          const auto WriteStart = Write.Offset & FEXCore::Utils::FEX_PAGE_MASK;
+          const auto WriteEnd = (Write.End + FEXCore::Utils::FEX_PAGE_SIZE - 1) & FEXCore::Utils::FEX_PAGE_MASK;
+          if (Address >= WriteStart && Address < WriteEnd) {
+            Address = std::min(End, WriteEnd);
+            Pending = true;
+            break;
+          }
+          if (WriteStart > Address) {
+            RangeEnd = std::min(RangeEnd, WriteStart);
+          }
+        }
+        if (Pending) {
+          continue;
+        }
+      }
       if (!HitRWXInterval) {
         if (ForWriteLocked) {
           // If we are protecting as writable, then the entire range must be invalidated before any protections are
@@ -522,7 +566,7 @@ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t
         HitRWXInterval = true;
       }
       void* TmpAddress = reinterpret_cast<void*>(Address);
-      SIZE_T TmpSize = static_cast<SIZE_T>(std::min(End, Address + Query.Size) - Address);
+      SIZE_T TmpSize = static_cast<SIZE_T>(RangeEnd - Address);
 #ifdef __REACTOS__
       // Managed executable writes: trapping is done by re-arming kernel dirty-state tracking instead of removing write
       // access, and the kernel restores write access itself once the fault handler has performed the write.
@@ -542,13 +586,10 @@ bool InvalidationTracker::ProtectRWXIntervalsInternal(uint64_t Address, uint64_t
       ULONG TmpProt;
       NtProtectVirtualMemory(NtCurrentProcess(), &TmpAddress, &TmpSize, ForWriteLocked ? GetUntrapProt(Address) : GetTrapProt(Address), &TmpProt);
 #endif
-    } else if (!Query.Size) {
-      // No more regions past `Address` in the interval list
-      break;
     }
 
-    Address += Query.Size;
-  } while (Address < End);
+    Address = RangeEnd;
+  }
 
   return HitRWXInterval;
 }

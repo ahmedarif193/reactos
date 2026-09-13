@@ -153,7 +153,7 @@ struct ThreadCPUArea {
 };
 
 struct FrontendThreadData {
-  bool InLockedRWXRead {};
+  fextl::vector<bool> PendingRWXReads;
 #ifdef __REACTOS__
   uint64_t EmulatorStack {};
 #endif
@@ -1102,25 +1102,20 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
     return;
   }
 
-  auto& InLockedRWXRead = GetFrontendThreadData(ThreadState)->InLockedRWXRead;
+  auto& Pending = GetFrontendThreadData(ThreadState)->PendingRWXReads;
   if (!After) {
-    ThreadCreationMutex.lock();
-    CTX->GetCodeInvalidationMutex().lock();
-    if (InvalidationTracker->BeginUntrackedWriteLocked(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size))) {
-      InLockedRWXRead = true;
-    } else {
-      CTX->GetCodeInvalidationMutex().unlock();
-      ThreadCreationMutex.unlock();
+    std::scoped_lock Lock(ThreadCreationMutex);
+    std::scoped_lock CodeLock(CTX->GetCodeInvalidationMutex());
+    Pending.push_back(InvalidationTracker->BeginUntrackedWriteLocked(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size)));
+  } else if (!Pending.empty()) {
+    const bool Tracked = Pending.back();
+    Pending.pop_back();
+    if (!Tracked) {
+      return;
     }
-  } else {
-    if (InLockedRWXRead) {
-      InLockedRWXRead = false;
-#ifdef __REACTOS__
-      InvalidationTracker->EndUntrackedWriteLocked(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size));
-#endif
-      CTX->GetCodeInvalidationMutex().unlock();
-      ThreadCreationMutex.unlock();
-    }
+    std::scoped_lock Lock(ThreadCreationMutex);
+    std::scoped_lock CodeLock(CTX->GetCodeInvalidationMutex());
+    InvalidationTracker->EndUntrackedWriteLocked(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size));
   }
 }
 
