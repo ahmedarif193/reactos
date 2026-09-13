@@ -4384,13 +4384,12 @@ VOID SockAsyncSelectCompletionRoutine(PVOID Context, PIO_STATUS_BLOCK IoStatusBl
                 if (0 != (Socket->SharedData->AsyncEvents & FD_READ) &&
                     0 == (Socket->SharedData->AsyncDisabledEvents & FD_READ))
                 {
+                    InterlockedOr(&Socket->SharedData->AsyncDisabledEvents, FD_READ);
                     /* Make the Notification */
                     (Upcalls.lpWPUPostMessage)(Socket->SharedData->hWnd,
                                                Socket->SharedData->wMsg,
                                                Socket->Handle,
                                                WSAMAKESELECTREPLY(FD_READ, 0));
-                    /* Disable this event until the next read(); */
-                    Socket->SharedData->AsyncDisabledEvents |= FD_READ;
                 }
             break;
 
@@ -4398,13 +4397,12 @@ VOID SockAsyncSelectCompletionRoutine(PVOID Context, PIO_STATUS_BLOCK IoStatusBl
             if (0 != (Socket->SharedData->AsyncEvents & FD_OOB) &&
                 0 == (Socket->SharedData->AsyncDisabledEvents & FD_OOB))
             {
+                InterlockedOr(&Socket->SharedData->AsyncDisabledEvents, FD_OOB);
                 /* Make the Notification */
                 (Upcalls.lpWPUPostMessage)(Socket->SharedData->hWnd,
                                            Socket->SharedData->wMsg,
                                            Socket->Handle,
                                            WSAMAKESELECTREPLY(FD_OOB, 0));
-                /* Disable this event until the next read(); */
-                Socket->SharedData->AsyncDisabledEvents |= FD_OOB;
             }
             break;
 
@@ -4412,13 +4410,12 @@ VOID SockAsyncSelectCompletionRoutine(PVOID Context, PIO_STATUS_BLOCK IoStatusBl
                 if (0 != (Socket->SharedData->AsyncEvents & FD_WRITE) &&
                     0 == (Socket->SharedData->AsyncDisabledEvents & FD_WRITE))
                 {
+                    InterlockedOr(&Socket->SharedData->AsyncDisabledEvents, FD_WRITE);
                     /* Make the Notification */
                     (Upcalls.lpWPUPostMessage)(Socket->SharedData->hWnd,
                                                Socket->SharedData->wMsg,
                                                Socket->Handle,
                                                WSAMAKESELECTREPLY(FD_WRITE, 0));
-                    /* Disable this event until the next write(); */
-                    Socket->SharedData->AsyncDisabledEvents |= FD_WRITE;
                 }
                 break;
 
@@ -4428,13 +4425,12 @@ VOID SockAsyncSelectCompletionRoutine(PVOID Context, PIO_STATUS_BLOCK IoStatusBl
                 if (0 != (Socket->SharedData->AsyncEvents & FD_CONNECT) &&
                     0 == (Socket->SharedData->AsyncDisabledEvents & FD_CONNECT))
                 {
+                    InterlockedOr(&Socket->SharedData->AsyncDisabledEvents, FD_CONNECT);
                     /* Make the Notification */
                     (Upcalls.lpWPUPostMessage)(Socket->SharedData->hWnd,
                         Socket->SharedData->wMsg,
                         Socket->Handle,
                         WSAMAKESELECTREPLY(FD_CONNECT, 0));
-                    /* Disable this event forever; */
-                    Socket->SharedData->AsyncDisabledEvents |= FD_CONNECT;
                 }
                 break;
 
@@ -4442,13 +4438,12 @@ VOID SockAsyncSelectCompletionRoutine(PVOID Context, PIO_STATUS_BLOCK IoStatusBl
                 if (0 != (Socket->SharedData->AsyncEvents & FD_ACCEPT) &&
                     0 == (Socket->SharedData->AsyncDisabledEvents & FD_ACCEPT))
                 {
+                    InterlockedOr(&Socket->SharedData->AsyncDisabledEvents, FD_ACCEPT);
                     /* Make the Notification */
                     (Upcalls.lpWPUPostMessage)(Socket->SharedData->hWnd,
                                                Socket->SharedData->wMsg,
                                                Socket->Handle,
                                                WSAMAKESELECTREPLY(FD_ACCEPT, 0));
-                    /* Disable this event until the next accept(); */
-                    Socket->SharedData->AsyncDisabledEvents |= FD_ACCEPT;
                 }
                 break;
 
@@ -4458,13 +4453,12 @@ VOID SockAsyncSelectCompletionRoutine(PVOID Context, PIO_STATUS_BLOCK IoStatusBl
                 if (0 != (Socket->SharedData->AsyncEvents & FD_CLOSE) &&
                     0 == (Socket->SharedData->AsyncDisabledEvents & FD_CLOSE))
                 {
+                    InterlockedOr(&Socket->SharedData->AsyncDisabledEvents, FD_CLOSE);
                     /* Make the Notification */
                     (Upcalls.lpWPUPostMessage)(Socket->SharedData->hWnd,
                                                Socket->SharedData->wMsg,
                                                Socket->Handle,
                                                WSAMAKESELECTREPLY(FD_CLOSE, 0));
-                    /* Disable this event forever; */
-                    Socket->SharedData->AsyncDisabledEvents |= FD_CLOSE;
                 }
                  break;
             /* FIXME: Support QOS */
@@ -4605,13 +4599,10 @@ SockReenableAsyncSelectEvent (IN PSOCKET_INFORMATION Socket,
     PASYNC_DATA AsyncData;
 
     /* Make sure the event is actually disabled */
-    if (!(Socket->SharedData->AsyncDisabledEvents & Event))
+    if (!(InterlockedAnd(&Socket->SharedData->AsyncDisabledEvents, ~Event) & Event))
     {
         return;
     }
-
-    /* Re-enable it */
-    Socket->SharedData->AsyncDisabledEvents &= ~Event;
 
     /* Return if no more events are being polled */
     if ((Socket->SharedData->AsyncEvents & (~Socket->SharedData->AsyncDisabledEvents)) == 0 )
