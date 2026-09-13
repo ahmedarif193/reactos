@@ -63,6 +63,7 @@ list(APPEND SOURCE
     ScrollBarWndExtra.c
     ScrollDC.c
     ScrollWindowEx.c
+    UnhookWinEvent.c
     SendMessageTimeout.c
     SetActiveWindow.c
     SetCursorPos.c
