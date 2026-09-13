@@ -141,7 +141,9 @@ static PCHPE_NOTIFY_READ_FILE          pChpeNotifyReadFile;
 static PCHPE_IS_PROCESSOR_FEATURE_PRESENT pChpeIsProcessorFeaturePresent;
 static PCHPE_UPDATE_PROCESSOR_INFO     pChpeUpdateProcessorInfo;
 typedef NTSTATUS (NTAPI *PCHPE_DISPATCH_EXCEPTION_NATIVE)(PEXCEPTION_RECORD ExceptionRecord, PARM64_NT_CONTEXT NativeContext);
+typedef DECLSPEC_NORETURN VOID (NTAPI *PCHPE_EMULATION_DISPATCH)(PCONTEXT);
 static PCHPE_DISPATCH_EXCEPTION_NATIVE pChpeDispatchExceptionNative;
+static PCHPE_EMULATION_DISPATCH pChpeEmulationDispatch;
 static CHPE_DISPATCH_TABLE             ChpeDispatchTable;
 
 BOOLEAN NTAPI RtlCallVectoredExceptionHandlers(PEXCEPTION_RECORD ExceptionRecord, PCONTEXT ContextRecord);
@@ -1439,6 +1441,7 @@ ChpepResetEmulatorState(BOOLEAN UnloadModule)
     pChpeIsProcessorFeaturePresent = NULL;
     pChpeUpdateProcessorInfo = NULL;
     pChpeDispatchExceptionNative = NULL;
+    pChpeEmulationDispatch = NULL;
     RtlZeroMemory(ChpeProcessorFeatures, sizeof(ChpeProcessorFeatures));
 
     if (UnloadModule && Module)
@@ -1466,6 +1469,7 @@ ChpepLoadEmulator(VOID)
     ANSI_STRING IsFeatureName = RTL_CONSTANT_STRING("BTCpu64IsProcessorFeaturePresent");
     ANSI_STRING UpdateProcInfoName = RTL_CONSTANT_STRING("UpdateProcessorInformation");
     ANSI_STRING DispatchExceptionName = RTL_CONSTANT_STRING("ChpeDispatchExceptionNative");
+    ANSI_STRING EmulationDispatchName = RTL_CONSTANT_STRING("ChpeEmulationDispatch");
     ANSI_STRING DispatchJumpName = RTL_CONSTANT_STRING("DispatchJump");
     ANSI_STRING RetToEntryName = RTL_CONSTANT_STRING("RetToEntryThunk");
     ANSI_STRING ExitToX64Name = RTL_CONSTANT_STRING("ExitToX64");
@@ -1494,6 +1498,10 @@ ChpepLoadEmulator(VOID)
         goto Failure;
 
     Status = ChpepGetNativeProcedureAddress(BridgeBase, &DispatchExceptionName, (PVOID *)&pChpeDispatchExceptionNative);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+
+    Status = ChpepGetNativeProcedureAddress(BridgeBase, &EmulationDispatchName, (PVOID *)&pChpeEmulationDispatch);
     if (!NT_SUCCESS(Status))
         goto Failure;
 
@@ -2221,6 +2229,17 @@ ChpeContinueToGuest(PVOID Amd64Context)
 
     ((PCHPE_BEGIN_SIMULATION)ChpeDispatchTable.BeginSimulation)();
     RtlRaiseStatus(STATUS_ILLEGAL_INSTRUCTION);
+}
+
+DECLSPEC_NORETURN
+VOID
+NTAPI
+KiUserEmulationDispatcherWorker(PCONTEXT Context)
+{
+    if (!ChpeEmulatorLoaded || !pChpeEmulationDispatch)
+        RtlRaiseStatus(STATUS_NOT_SUPPORTED);
+
+    pChpeEmulationDispatch(Context);
 }
 
 BOOLEAN

@@ -143,6 +143,7 @@
 @ stdcall KiUserCallbackDispatcher(ptr ptr long) ; CHECKME
 @ stdcall KiUserExceptionDispatcher(ptr ptr)
 @ stdcall -arch=arm64 KiUserExceptionDispatcherWorker(ptr ptr)
+@ stdcall -arch=arm64 KiUserEmulationDispatcher(ptr)
 @ stdcall -version=0x502 LdrAccessOutOfProcessResource(ptr ptr ptr ptr ptr)
 @ stdcall LdrAccessResource(ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ LdrAddLoadAsDataTable(ptr wstr long ptr)

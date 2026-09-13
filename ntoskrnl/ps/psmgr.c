@@ -158,6 +158,10 @@ PspLookupKernelUserEntryPoints(VOID)
     Status = PspLookupSystemDllEntryPoint("KiUserExceptionDispatcherWorker",
                                           &KeUserExceptionDispatcherWorker);
     if (!NT_SUCCESS(Status)) return Status;
+
+    Status = PspLookupSystemDllEntryPoint("KiUserEmulationDispatcher",
+                                          &KeUserEmulationDispatcher);
+    if (!NT_SUCCESS(Status)) return Status;
 #endif
 
     /* Get user-mode callback dispatcher */

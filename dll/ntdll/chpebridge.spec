@@ -197,3 +197,4 @@
 @ cdecl __chkstk() ChpeChkStk
 @ cdecl _local_unwind(ptr ptr) ChpeLocalUnwind
 @ cdecl memcpy(ptr ptr long) ChpeMemcpy
+@ stdcall ChpeEmulationDispatch(ptr)
