@@ -353,7 +353,7 @@ static std::optional<uint64_t> TryMapImage(FEX::Windows::InvalidationTracker& In
 static LONG ExceptionHandler(_EXCEPTION_POINTERS* ExceptionInfo) {
   if (ExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
     const auto FaultAddress = static_cast<uint64_t>(ExceptionInfo->ExceptionRecord->ExceptionInformation[1]);
-    if (OvercommitTracker->HandleAccessViolation(FaultAddress)) {
+    if (OvercommitTracker->HandleAccessViolation(FaultAddress, ExceptionInfo->ExceptionRecord->ExceptionInformation[0])) {
       return EXCEPTION_CONTINUE_EXECUTION;
     }
 
