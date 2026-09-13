@@ -205,3 +205,115 @@ START_TEST(WSARecv)
     Test_WSARecv();
 }
 
+START_TEST(WSABufferArray)
+{
+    WSADATA Data;
+    SOCKET Receiver = INVALID_SOCKET, Sender = INVALID_SOCKET;
+    struct sockaddr_in ReceiveAddress, SendAddress, FromAddress;
+    WSABUF ReceiveBuffers[2], SendBuffer;
+    WSAOVERLAPPED Overlapped;
+    struct
+    {
+        BYTE Before;
+        CHAR First[3];
+        BYTE Between;
+        CHAR Second[3];
+        BYTE After;
+    } Storage;
+    DWORD Received, Sent, Flags, Wait;
+    INT Result, AddressLength, FromLength, Pass;
+    BOOL Completed;
+
+    Result = WSAStartup(MAKEWORD(2, 2), &Data);
+    ok(Result == 0, "WSAStartup returned %d\n", Result);
+    if (Result) return;
+
+    ZeroMemory(&Overlapped, sizeof(Overlapped));
+    Overlapped.hEvent = WSACreateEvent();
+    ok(Overlapped.hEvent != WSA_INVALID_EVENT, "WSACreateEvent failed: %d\n", WSAGetLastError());
+    if (Overlapped.hEvent == WSA_INVALID_EVENT) goto Cleanup;
+
+    Receiver = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    Sender = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    ok(Receiver != INVALID_SOCKET && Sender != INVALID_SOCKET, "socket failed: %d\n", WSAGetLastError());
+    if (Receiver == INVALID_SOCKET || Sender == INVALID_SOCKET) goto Cleanup;
+
+    ZeroMemory(&ReceiveAddress, sizeof(ReceiveAddress));
+    ReceiveAddress.sin_family = AF_INET;
+    ReceiveAddress.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    SendAddress = ReceiveAddress;
+    Result = bind(Receiver, (const struct sockaddr *)&ReceiveAddress, sizeof(ReceiveAddress));
+    ok(Result == 0, "receiver bind failed: %d\n", WSAGetLastError());
+    if (Result) goto Cleanup;
+    Result = bind(Sender, (const struct sockaddr *)&SendAddress, sizeof(SendAddress));
+    ok(Result == 0, "sender bind failed: %d\n", WSAGetLastError());
+    if (Result) goto Cleanup;
+    AddressLength = sizeof(ReceiveAddress);
+    Result = getsockname(Receiver, (struct sockaddr *)&ReceiveAddress, &AddressLength);
+    ok(Result == 0, "receiver getsockname failed: %d\n", WSAGetLastError());
+    if (Result) goto Cleanup;
+    AddressLength = sizeof(SendAddress);
+    Result = getsockname(Sender, (struct sockaddr *)&SendAddress, &AddressLength);
+    ok(Result == 0, "sender getsockname failed: %d\n", WSAGetLastError());
+    if (Result) goto Cleanup;
+
+    ReceiveBuffers[0].buf = Storage.First;
+    ReceiveBuffers[0].len = sizeof(Storage.First);
+    ReceiveBuffers[1].buf = Storage.Second;
+    ReceiveBuffers[1].len = sizeof(Storage.Second);
+    SendBuffer.buf = "abcdef";
+    SendBuffer.len = 6;
+
+    /* Exercise both datagram-specific requests and connected send/receive. */
+    for (Pass = 0; Pass < 2; ++Pass)
+    {
+        if (Pass)
+        {
+            Result = connect(Sender, (const struct sockaddr *)&ReceiveAddress, sizeof(ReceiveAddress));
+            ok(Result == 0, "sender connect failed: %d\n", WSAGetLastError());
+            if (Result) goto Cleanup;
+            Result = connect(Receiver, (const struct sockaddr *)&SendAddress, sizeof(SendAddress));
+            ok(Result == 0, "receiver connect failed: %d\n", WSAGetLastError());
+            if (Result) goto Cleanup;
+        }
+
+        memset(&Storage, 0x55, sizeof(Storage));
+        ZeroMemory(&FromAddress, sizeof(FromAddress));
+        FromLength = sizeof(FromAddress);
+        WSAResetEvent(Overlapped.hEvent);
+        Overlapped.Internal = Overlapped.InternalHigh = 0;
+        Received = Sent = Flags = 0;
+        if (Pass)
+            Result = WSARecv(Receiver, ReceiveBuffers, 2, &Received, &Flags, &Overlapped, NULL);
+        else
+            Result = WSARecvFrom(Receiver, ReceiveBuffers, 2, &Received, &Flags, (struct sockaddr *)&FromAddress, &FromLength, &Overlapped, NULL);
+        ok(Result == SOCKET_ERROR && WSAGetLastError() == WSA_IO_PENDING, "pass %d: empty receive returned %d, error %d\n", Pass, Result, WSAGetLastError());
+        if (Result != SOCKET_ERROR || WSAGetLastError() != WSA_IO_PENDING) goto Cleanup;
+
+        if (Pass)
+            Result = WSASend(Sender, &SendBuffer, 1, &Sent, 0, NULL, NULL);
+        else
+            Result = WSASendTo(Sender, &SendBuffer, 1, &Sent, 0, (const struct sockaddr *)&ReceiveAddress, sizeof(ReceiveAddress), NULL, NULL);
+        ok(Result == 0 && Sent == 6, "pass %d: send returned %d, bytes %lu, error %d\n", Pass, Result, Sent, WSAGetLastError());
+        if (Result) goto Cleanup;
+
+        Wait = WaitForSingleObject(Overlapped.hEvent, 5000);
+        ok(Wait == WAIT_OBJECT_0, "pass %d: receive wait returned %lu\n", Pass, Wait);
+        if (Wait != WAIT_OBJECT_0) goto Cleanup;
+        Completed = WSAGetOverlappedResult(Receiver, &Overlapped, &Received, FALSE, &Flags);
+        ok(Completed && Received == 6, "pass %d: completion %d, bytes %lu, error %d\n", Pass, Completed, Received, WSAGetLastError());
+        ok(!memcmp(Storage.First, "abc", 3) && !memcmp(Storage.Second, "def", 3), "pass %d: scatter buffers contain incorrect data\n", Pass);
+        ok(Storage.Before == 0x55 && Storage.Between == 0x55 && Storage.After == 0x55, "pass %d: buffer guards changed\n", Pass);
+        if (!Pass)
+        {
+            ok(FromLength == sizeof(FromAddress), "source address length %d\n", FromLength);
+            ok(FromAddress.sin_family == AF_INET && FromAddress.sin_port == SendAddress.sin_port && FromAddress.sin_addr.s_addr == SendAddress.sin_addr.s_addr, "incorrect datagram source address\n");
+        }
+    }
+
+Cleanup:
+    if (Receiver != INVALID_SOCKET) closesocket(Receiver);
+    if (Sender != INVALID_SOCKET) closesocket(Sender);
+    if (Overlapped.hEvent != WSA_INVALID_EVENT) WSACloseEvent(Overlapped.hEvent);
+    WSACleanup();
+}

@@ -343,7 +343,7 @@ SatisfyPacketRecvRequest( PAFD_FCB FCB, PIRP Irp,
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation( Irp );
     PAFD_RECV_INFO RecvReq =
     GetLockedData(Irp, IrpSp);
-    UINT BytesToCopy = 0, BytesAvailable = DatagramRecv->Len, AddrLen = 0;
+    UINT i, BytesToCopy, BytesAvailable = DatagramRecv->Len, AddrLen;
     PAFD_MAPBUF Map;
     BOOLEAN ExtraBuffers = CheckUnlockExtraBuffers(FCB, IrpSp);
 
@@ -351,64 +351,33 @@ SatisfyPacketRecvRequest( PAFD_FCB FCB, PIRP Irp,
                         RecvReq->BufferCount +
                         (ExtraBuffers ? EXTRA_LOCK_BUFFERS : 0));
 
-    BytesToCopy = MIN( RecvReq->BufferArray[0].len, BytesAvailable );
+    /* The address and its length follow all of the caller's data buffers. */
+    i = RecvReq->BufferCount;
+    if (ExtraBuffers && Map[i].Mdl && Map[i + 1].Mdl)
+    {
+        AddrLen = MIN(DatagramRecv->Address->Address->AddressLength + sizeof(USHORT),
+                      RecvReq->BufferArray[i].len);
+        Map[i].BufferAddress = MmMapLockedPages(Map[i].Mdl, KernelMode);
+        RtlCopyMemory(Map[i].BufferAddress, &DatagramRecv->Address->Address->AddressType, AddrLen);
+        MmUnmapLockedPages(Map[i].BufferAddress, Map[i].Mdl);
 
-    AFD_DbgPrint(MID_TRACE,("BytesToCopy: %u len %u\n", BytesToCopy,
-                            RecvReq->BufferArray[0].len));
+        Map[i + 1].BufferAddress = MmMapLockedPages(Map[i + 1].Mdl, KernelMode);
+        *(PINT)Map[i + 1].BufferAddress = AddrLen;
+        MmUnmapLockedPages(Map[i + 1].BufferAddress, Map[i + 1].Mdl);
+    }
 
-    if( Map[0].Mdl ) {
-        /* Copy the address */
-        if( ExtraBuffers && Map[1].Mdl && Map[2].Mdl ) {
-            AFD_DbgPrint(MID_TRACE,("Checking TAAddressCount\n"));
+    *TotalBytesCopied = 0;
+    for (i = 0; i < RecvReq->BufferCount && BytesAvailable; ++i)
+    {
+        if (!Map[i].Mdl) continue;
 
-            if( DatagramRecv->Address->TAAddressCount != 1 ) {
-                AFD_DbgPrint
-                (MIN_TRACE,
-                 ("Wierd address count %d\n",
-                  DatagramRecv->Address->TAAddressCount));
-            }
+        BytesToCopy = MIN(RecvReq->BufferArray[i].len, BytesAvailable);
+        Map[i].BufferAddress = MmMapLockedPages(Map[i].Mdl, KernelMode);
+        RtlCopyMemory(Map[i].BufferAddress, DatagramRecv->Buffer + *TotalBytesCopied, BytesToCopy);
+        MmUnmapLockedPages(Map[i].BufferAddress, Map[i].Mdl);
 
-            AFD_DbgPrint(MID_TRACE,("Computing addr len\n"));
-
-            AddrLen = MIN(DatagramRecv->Address->Address->AddressLength +
-                          sizeof(USHORT),
-                          RecvReq->BufferArray[1].len);
-
-            AFD_DbgPrint(MID_TRACE,("Copying %u bytes of address\n", AddrLen));
-
-            Map[1].BufferAddress = MmMapLockedPages( Map[1].Mdl, KernelMode );
-
-            AFD_DbgPrint(MID_TRACE,("Done mapping, copying address\n"));
-
-            RtlCopyMemory( Map[1].BufferAddress,
-                          &DatagramRecv->Address->Address->AddressType,
-                          AddrLen );
-
-            MmUnmapLockedPages( Map[1].BufferAddress, Map[1].Mdl );
-
-            AFD_DbgPrint(MID_TRACE,("Copying address len\n"));
-
-            Map[2].BufferAddress = MmMapLockedPages( Map[2].Mdl, KernelMode );
-            *((PINT)Map[2].BufferAddress) = AddrLen;
-            MmUnmapLockedPages( Map[2].BufferAddress, Map[2].Mdl );
-        }
-
-        AFD_DbgPrint(MID_TRACE,("Mapping data buffer pages\n"));
-
-        Map[0].BufferAddress = MmMapLockedPages( Map[0].Mdl, KernelMode );
-
-        AFD_DbgPrint(MID_TRACE,("Buffer %d: %p:%u\n",
-                                0,
-                                Map[0].BufferAddress,
-                                BytesToCopy));
-
-        RtlCopyMemory( Map[0].BufferAddress,
-                      DatagramRecv->Buffer,
-                      BytesToCopy );
-
-        MmUnmapLockedPages( Map[0].BufferAddress, Map[0].Mdl );
-
-        *TotalBytesCopied = BytesToCopy;
+        *TotalBytesCopied += BytesToCopy;
+        BytesAvailable -= BytesToCopy;
     }
 
     if (*TotalBytesCopied == DatagramRecv->Len)
