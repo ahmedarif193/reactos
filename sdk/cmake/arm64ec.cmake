@@ -64,6 +64,15 @@ foreach(_target IN LISTS ARM64EC_RUNTIME_AUXILIARY_MODULES)
     list(APPEND ARM64EC_RUNTIME_VALIDATION_FILES "${_file}")
 endforeach()
 
+# The source-built ICD is an external-project output, not a MODULE target.
+# Package its EC counterpart with the EC OpenGL loader, never the native ICD.
+if(TARGET mesa_gallium)
+    set(_arm64ec_mesa_file "${ARM64EC_BINARY_DIR}/dll/opengl/mesa_gallium/mesa-icd/mesa_gallium.dll")
+    list(APPEND ARM64EC_RUNTIME_BUILD_MODULES mesa_gallium)
+    list(APPEND ARM64EC_RUNTIME_FILES "${_arm64ec_mesa_file}")
+    list(APPEND ARM64EC_RUNTIME_VALIDATION_FILES "${_arm64ec_mesa_file}")
+endif()
+
 set(ARM64EC_ALIAS_FILES)
 set(ARM64EC_ALIAS_SOURCES)
 foreach(_alias IN LISTS ARM64EC_RUNTIME_ALIASES)
@@ -114,6 +123,17 @@ set(_arm64ec_cmake_args
     -DARM64EC_RUNTIME:BOOL=ON
     -DARM64EC_NATIVE_BINARY_DIR:PATH=${REACTOS_BINARY_DIR}
     ${_fex_common_cmake_args})
+
+if(TARGET mesa_gallium)
+    list(APPEND _arm64ec_cmake_args
+        -DMESA_GALLIUM_FROM_SOURCE:BOOL=ON
+        -DMESA_BUILD_JOBS:STRING=${MESA_BUILD_JOBS}
+        -DMESA_LLVM_MINGW_ROOT:PATH=${MESA_LLVM_MINGW_ROOT}
+        -DMESA_MESON:FILEPATH=${MESA_MESON}
+        -DMESA_PYTHON:FILEPATH=${MESA_PYTHON})
+else()
+    list(APPEND _arm64ec_cmake_args -DMESA_GALLIUM_FROM_SOURCE:BOOL=OFF)
+endif()
 
 function(_fex_add_nested_configure _name _binary_dir _arguments)
     string(JOIN "\n" _configure_signature ${${_arguments}})

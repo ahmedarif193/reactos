@@ -16,6 +16,9 @@ endif()
 set(MESA_LLVM_MINGW_ROOT "${REACTOS_CLANG_LLVM_MINGW_ROOT}" CACHE PATH "llvm-mingw toolchain used by modern Mesa")
 set(MESA_CPU aarch64)
 set(MESA_TRIPLE "${MESA_CPU}-w64-mingw32")
+if(ARM64EC_RUNTIME)
+    set(MESA_TRIPLE "arm64ec-w64-mingw32")
+endif()
 find_program(MESA_CC NAMES ${MESA_TRIPLE}-clang HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
 find_program(MESA_CXX NAMES ${MESA_TRIPLE}-clang++ HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
 find_program(MESA_WINDRES NAMES ${MESA_TRIPLE}-windres HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
@@ -46,6 +49,11 @@ configure_file("${REACTOS_SOURCE_DIR}/submodules/mesa-cross.ini.in" "${MESA_WORK
 configure_file("${REACTOS_SOURCE_DIR}/submodules/mesa-native.ini.in" "${MESA_WORK_DIR}/native.ini" @ONLY)
 
 include(ExternalProject)
+set(_mesa_abi_args -DARM64EC_RUNTIME:BOOL=${ARM64EC_RUNTIME})
+if(ARM64EC_RUNTIME)
+    list(APPEND _mesa_abi_args
+        -DARM64EC_NATIVE_BINARY_DIR:PATH=${ARM64EC_NATIVE_BINARY_DIR})
+endif()
 # Mesa statically links both KMT transports and zlib. Build those targets with
 # the normal ReactOS toolchain in an isolated Release configuration even
 # when the destination OS is Debug. No other OS binaries are built here.
@@ -59,6 +67,7 @@ ExternalProject_Add(mesa_gallium_support
     CMAKE_ARGS
         -DCMAKE_TOOLCHAIN_FILE=${REACTOS_SOURCE_DIR}/toolchain-clang.cmake
         -DARCH=arm64
+        ${_mesa_abi_args}
         -DREACTOS_CLANG_LLVM_MINGW_ROOT=${MESA_LLVM_MINGW_ROOT}
         -DREACTOS_GRAPHICS_DRIVER_MODEL=WDDM
         -DREACTOS_WDDM_LEVEL=${REACTOS_WDDM_LEVEL}
@@ -69,6 +78,7 @@ ExternalProject_Add(mesa_gallium_support
         -DWITH_DEBUG_SYMBOLS=OFF
         -DENABLE_FEX_ARM64EC=OFF
         -DENABLE_MESA_LLVMPIPE=OFF
+        -DMESA_GALLIUM_FROM_SOURCE=OFF
         -DENABLE_ROSTESTS=OFF
         -DRPI3_SUPPORT=OFF
         -DRPI5_SUPPORT=OFF
