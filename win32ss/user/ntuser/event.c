@@ -10,7 +10,7 @@ DBG_DEFAULT_CHANNEL(UserEvent);
 
 typedef struct _EVENTPACK
 {
-  PEVENTHOOK pEH;
+  HWINEVENTHOOK hHook;
   LONG idObject;
   LONG idChild;
   LONG idThread;
@@ -107,7 +107,7 @@ IntCallLowLevelEvent( PEVENTHOOK pEH,
    pEP = ExAllocatePoolWithTag(NonPagedPool, sizeof(EVENTPACK), TAG_HOOK);
    if (!pEP) return 0;
 
-   pEP->pEH = pEH;
+   pEP->hHook = UserHMGetHandle(pEH);
    pEP->idObject = idObject;
    pEP->idChild = idChild;
    pEP->idThread = idThread;
@@ -153,23 +153,19 @@ co_EVENT_CallEvents( DWORD event,
                      LONG_PTR idChild)
 {
    PEVENTHOOK pEH;
-   LRESULT Result;
-   PEVENTPACK pEP = (PEVENTPACK)idChild;
+   LRESULT Result = 0;
+   EVENTPACK Event = *(PEVENTPACK)idChild;
+   USER_REFERENCE_ENTRY Ref;
 
-   pEH = pEP->pEH;
+   ExFreePoolWithTag((PVOID)idChild, TAG_HOOK);
+   pEH = UserGetObjectNoErr(gHandleTable, Event.hHook, TYPE_WINEVENTHOOK);
    TRACE("Dispatch Event 0x%lx, idObject %uI hwnd %p\n", event, idObject, hwnd);
-   Result = co_IntCallEventProc( UserHMGetHandle(pEH),
-                                 event,
-                                 hwnd,
-                                 pEP->idObject,
-                                 pEP->idChild,
-                                 pEP->idThread,
-                                 EngGetTickCount32(),
-                                 pEH->Proc,
-                                 pEH->ihmod,
-                                 pEH->offPfn);
-
-   ExFreePoolWithTag(pEP, TAG_HOOK);
+   if (pEH && !UserObjectInDestroy(Event.hHook))
+   {
+      UserRefObjectCo(pEH, &Ref);
+      Result = co_IntCallEventProc(Event.hHook, event, hwnd, Event.idObject, Event.idChild, Event.idThread, EngGetTickCount32(), pEH->Proc, pEH->ihmod, pEH->offPfn);
+      UserDerefObjectCo(pEH);
+   }
    return Result;
 }
 
