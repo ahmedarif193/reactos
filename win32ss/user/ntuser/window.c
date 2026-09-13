@@ -1213,13 +1213,6 @@ co_IntSetParent(PWND Wnd, PWND WndNewParent)
     */
    WasVisible = co_WinPosShowWindow(Wnd, SW_HIDE);
 
-   /* Window must belong to current process */
-   if (Wnd->head.pti->ppi != PsGetCurrentProcessWin32Process())
-   {
-      ERR("IntSetParent Window must belong to current process!\n");
-      return NULL;
-   }
-
    WndOldParent = Wnd->spwndParent;
 
    if ( WndOldParent &&
