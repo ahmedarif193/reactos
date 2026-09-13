@@ -103,6 +103,7 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     ULONG TfuRegs[12];
     ULONG CsdCfg[8];
     ULONGLONG QueuedTime100ns;
+    ULONGLONG SubmissionSequence;
     struct _RPI5VC4_PROCESS *Process;
 } RPI5VC4_PENDING_SUBMIT, *PRPI5VC4_PENDING_SUBMIT;
 
@@ -383,6 +384,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
 
     /* ---- In-order submission/fence pipeline ---------------------------- */
     KSPIN_LOCK DmaLock;
+    ULONGLONG SubmissionSequence;
     LONG V3dKickPrints;
     /* One in-order queue per GPU node; the engines run in parallel. */
     struct
