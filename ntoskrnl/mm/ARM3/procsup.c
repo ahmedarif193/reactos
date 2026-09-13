@@ -133,7 +133,22 @@ MiCreatePebOrTeb(IN PEPROCESS Process,
                  IN ULONG Size,
                  OUT PULONG_PTR BaseAddress)
 {
-    return MiCreatePebOrTebEx(Process, Size, (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS, Size == sizeof(PEB), BaseAddress);
+    ULONG_PTR HighestAddress = (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS;
+#ifdef _WIN64
+    SECTION_IMAGE_INFORMATION ImageInformation;
+    NTSTATUS Status;
+
+    /* The native PEB must be reachable through the native TEB from x86.
+     * Wow64Process is initialized later, so use the validated image section. */
+    if (Size == sizeof(PEB) && Process->SectionObject)
+    {
+        Status = MmGetSectionImageInformation(Process->SectionObject, &ImageInformation);
+        if (!NT_SUCCESS(Status)) return Status;
+        if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386)
+            HighestAddress = MM_HIGHEST_USER_ADDRESS_WOW64;
+    }
+#endif
+    return MiCreatePebOrTebEx(Process, Size, HighestAddress, Size == sizeof(PEB), BaseAddress);
 }
 
 VOID
@@ -852,6 +867,10 @@ MmCreatePeb32(IN PEPROCESS Process,
         Peb->AnsiCodePageData = PtrToUlong((PCHAR)TableBase + ExpAnsiCodePageDataOffset);
         Peb->OemCodePageData = PtrToUlong((PCHAR)TableBase + ExpOemCodePageDataOffset);
         Peb->UnicodeCaseTableData = PtrToUlong((PCHAR)TableBase + ExpUnicodeCaseTableDataOffset);
+        /* Native and x86 code must observe the same x86-addressable NLS view. */
+        Process->Peb->AnsiCodePageData = UlongToPtr(Peb->AnsiCodePageData);
+        Process->Peb->OemCodePageData = UlongToPtr(Peb->OemCodePageData);
+        Process->Peb->UnicodeCaseTableData = UlongToPtr(Peb->UnicodeCaseTableData);
         Peb->OSMajorVersion = NtMajorVersion;
         Peb->OSMinorVersion = NtMinorVersion;
         Peb->OSBuildNumber = (USHORT)(NtBuildNumber & 0xffff);
@@ -1002,6 +1021,7 @@ MmCreateTeb(IN PEPROCESS Process,
         if (Process->Wow64Process)
         {
             Teb32 = (TEB32 *)((PUCHAR)Teb + Teb32Offset);
+            Teb->NtTib.ExceptionList = (PVOID)Teb32;
             Teb->WowTebOffset = Teb32Offset;
             Teb->TlsSlots[WOW64_TLS_CPURESERVED] = InitialTeb->StackBase;
 

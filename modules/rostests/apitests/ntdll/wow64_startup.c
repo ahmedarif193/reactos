@@ -2,9 +2,29 @@
 #include <reactos/wow64shared.h>
 
 #ifdef _M_IX86
+#define EXPLICIT_64BIT
+#include <ndk/peb_teb.h>
+#undef EXPLICIT_64BIT
+
 typedef NTSTATUS (NTAPI *GET_LOCALE_MAPPING)(PVOID *, PLCID, PLARGE_INTEGER);
 static DWORD WorkerTlsIndex;
 static HANDLE WorkerStartEvent;
+
+static VOID TestNativePointerFields(VOID)
+{
+    TEB64 *NativeTeb = UlongToPtr(NtCurrentTeb()->GdiBatchCount);
+    PEB64 *NativePeb;
+    ok(NativeTeb != NULL, "Missing native TEB backlink\n");
+    if (!NativeTeb) return;
+    ok(NativeTeb->NtTib.ExceptionList == PtrToUlong(NtCurrentTeb()), "Native TIB backlink is %I64x\n", NativeTeb->NtTib.ExceptionList);
+    ok(NativeTeb->ProcessEnvironmentBlock && NativeTeb->ProcessEnvironmentBlock <= MAXULONG,
+       "Native PEB is not x86-addressable: %I64x\n", NativeTeb->ProcessEnvironmentBlock);
+    if (!NativeTeb->ProcessEnvironmentBlock || NativeTeb->ProcessEnvironmentBlock > MAXULONG) return;
+    NativePeb = UlongToPtr((ULONG)NativeTeb->ProcessEnvironmentBlock);
+    ok(NativePeb->AnsiCodePageData == PtrToUlong(NtCurrentPeb()->AnsiCodePageData), "Different native/x86 ANSI table\n");
+    ok(NativePeb->OemCodePageData == PtrToUlong(NtCurrentPeb()->OemCodePageData), "Different native/x86 OEM table\n");
+    ok(NativePeb->UnicodeCaseTableData == PtrToUlong(NtCurrentPeb()->UnicodeCaseTableData), "Different native/x86 case table\n");
+}
 
 static VOID TestNativeProcessorInformation(VOID)
 {
@@ -263,6 +283,7 @@ static VOID TestNativeTlsBitmap(VOID)
         ok_hex(Status, STATUS_SUCCESS);
         if (NT_SUCCESS(Status))
         {
+            ok((ULONG_PTR)Info.PebBaseAddress <= MAXULONG, "Native WoW64 PEB is not x86-addressable: %p\n", Info.PebBaseAddress);
             Status = NtReadVirtualMemory(Process.hProcess, (PUCHAR)Info.PebBaseAddress + FIELD_OFFSET(PEB, TlsBitmapBits),
                                          &Bitmap, sizeof(Bitmap), &BytesRead);
             ok_hex(Status, STATUS_SUCCESS);
@@ -308,6 +329,7 @@ START_TEST(wow64_startup)
         return;
     }
     WaitForNativeInspection();
+    TestNativePointerFields();
     TestSectionUnmap();
     TestNativeProcessorInformation();
 
