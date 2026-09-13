@@ -420,7 +420,6 @@ public:
                     }
                     else if (state & BST_HOT)
                     {
-                        cr = ShellLiftColor(cr, 24);
                         iImage = PBS_HOT - 1;
                     }
                 }
