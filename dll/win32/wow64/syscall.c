@@ -1709,10 +1709,47 @@ void WINAPI Wow64PrepareForException( EXCEPTION_RECORD *rec, CONTEXT *context )
 /**********************************************************************
  *           Wow64PassExceptionToGuest  (wow64.@)
  */
+#ifdef __REACTOS__
+static BOOL handle_guest_debug_print( const EXCEPTION_RECORD *rec )
+{
+    static const BYTE debug_service[] = { 0xcd, 0x2d, 0xcc };
+    I386_CONTEXT ctx = { CONTEXT_I386_FULL };
+    BYTE instruction[sizeof(debug_service)];
+    char buffer[512];
+    ULONG length;
+    NTSTATUS status;
+
+    if (current_machine != IMAGE_FILE_MACHINE_I386 || !(wow64info->CpuFlags & WOW64_CPUFLAGS_SOFTWARE) ||
+        rec->ExceptionCode != EXCEPTION_BREAKPOINT || rec->NumberParameters != 1 ||
+        rec->ExceptionInformation[0] != 1 /* BREAKPOINT_PRINT */)
+        return FALSE;
+    if (pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx ) || ctx.Eax != 1 || ctx.Eip < 3)
+        return FALSE;
+    if (NtReadVirtualMemory( GetCurrentProcess(), ULongToPtr(ctx.Eip - 3), instruction, sizeof(instruction), NULL ) ||
+        memcmp( instruction, debug_service, sizeof(instruction) ))
+        return FALSE;
+
+    /* The software CPU has advanced past INT 2D / INT 3. Forward only the
+     * recognized print service to native KD; ordinary breakpoints still reach
+     * the guest debugger/handlers. Probe the guest buffer without faulting in
+     * the native exception handler, and preserve the component/level filter. */
+    length = min( (USHORT)ctx.Edx, sizeof(buffer) );
+    status = length ? NtReadVirtualMemory( GetCurrentProcess(), ULongToPtr(ctx.Ecx), buffer, length, NULL ) : STATUS_SUCCESS;
+    if (!status)
+        status = DbgPrintEx( ctx.Ebx, ctx.Edi, "%.*s", (int)length, buffer );
+    ctx.Eax = status;
+    ctx.ContextFlags = CONTEXT_I386_INTEGER;
+    return !pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+}
+#endif
+
 void WINAPI Wow64PassExceptionToGuest( EXCEPTION_POINTERS *ptrs )
 {
     EXCEPTION_RECORD32 rec32;
 
+#ifdef __REACTOS__
+    if (handle_guest_debug_print( ptrs->ExceptionRecord )) return;
+#endif
     exception_record_64to32( &rec32, ptrs->ExceptionRecord );
     call_user_exception_dispatcher( &rec32, NULL, ptrs->ContextRecord );
 }

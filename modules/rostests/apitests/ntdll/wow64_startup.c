@@ -37,6 +37,36 @@ static VOID TestNativePointerFields(VOID)
     ok(NativePeb->UnicodeCaseTableData == PtrToUlong(NtCurrentPeb()->UnicodeCaseTableData), "Different native/x86 case table\n");
 }
 
+static VOID TestDebugPrint(VOID)
+{
+    volatile NTSTATUS Exception = STATUS_SUCCESS;
+    ULONG Status = STATUS_UNSUCCESSFUL;
+
+    _SEH2_TRY
+    {
+        Status = DbgPrint("FEXTEST_DEBUG_PRINT x86 bridge %lu\n", 1ul);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Exception = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    ok_hex(Exception, STATUS_SUCCESS);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    Exception = STATUS_SUCCESS;
+    _SEH2_TRY
+    {
+        __debugbreak();
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Exception = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    ok_hex(Exception, STATUS_BREAKPOINT);
+}
+
 static VOID TestNativeProcessorInformation(VOID)
 {
     static const char *Names[] = {"RtlGetNativeSystemInformation", "NtWow64GetNativeSystemInformation"};
@@ -343,6 +373,7 @@ START_TEST(wow64_startup)
     TestNativePointerFields();
     TestSectionUnmap();
     TestNativeProcessorInformation();
+    TestDebugPrint();
 
     GetLocaleMapping = (GET_LOCALE_MAPPING)GetProcAddress(Ntdll, "RtlGetLocaleFileMappingAddress");
     ok(GetLocaleMapping != NULL, "Missing locale mapping API\n");
