@@ -4340,7 +4340,6 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
     _In_ ULONG64 SignalFenceValue)
 {
     DXGKARG_RENDER RenderArgs;
-    DXGKARG_SUBMITCOMMAND SubmitArgs;
     DXGK_ALLOCATIONLIST InlineAllocationList[VIDSCH_INLINE_ALLOCATIONS];
     PDXGKVMM_ALLOCATION InlineOpenBindingReferenceList[VIDSCH_INLINE_ALLOCATIONS];
     PDXGKVMM_ALLOCATION InlineAllocationReferenceList[VIDSCH_INLINE_ALLOCATIONS];
@@ -4350,12 +4349,10 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
     PDXGKVMM_ALLOCATION *AllocationReferenceList = NULL;
     BOOLEAN *AllocationCpuDirtyList = NULL;
     PDXGKRNL_DMA_BUFFER DmaBuffer = NULL;
-    PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = NULL;
     DXGKRNL_TRACK_DMA_ARGS TrackArgs;
     PVOID DmaBufferPrivateData = NULL;
     ULONG DmaBufferPrivateDataSize = 0;
     ULONG DmaBufferSegmentSet = 0;
-    ULONG SubmissionFenceId;
     ULONG VidSchFence = 0;
     UINT DmaBytesUsed = 0;
     D3DDDI_PATCHLOCATIONLIST EscapePatchList[VIDSCH_INLINE_PATCHES];
@@ -4585,147 +4582,9 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
     TrackArgs.AllocationCpuDirty = AllocationCpuDirtyList;
     Status = VidSchSubmitCommandTracked(Adapter, NodeOrdinal, 0, DmaBuffer, DmaBufferPrivateData, DmaBufferPrivateDataSize, AllocationList, ResourceHandleCount, EscapePatchList, EscapePatchCount, Adapter->SchedulingCaps.MultiEngineAware ? NULL : Device->hMiniportDevice, Adapter->SchedulingCaps.MultiEngineAware ? Context->hMiniportContext : NULL, 0, &TrackArgs, 0, 0, &VidSchFence);
     if (NT_SUCCESS(Status))
-    {
         DmaBuffer = NULL;
-        goto Cleanup;
-    }
-    if (!(Status == STATUS_DEVICE_NOT_READY && Adapter->VidSchContext == NULL) && !(Status == STATUS_NOT_SUPPORTED && (ResourceHandleCount > VIDSCH_INLINE_ALLOCATIONS || EscapePatchCount > VIDSCH_INLINE_PATCHES)))
-        goto Cleanup;
-
-    SubmissionFenceId = DxgkAllocateSubmissionFenceId(Adapter);
-    if (SubmissionFenceId == 0)
-    {
-        Status = STATUS_INTEGER_OVERFLOW;
-        goto Cleanup;
-    }
-
-    TrackArgs.SubmissionFenceId = SubmissionFenceId;
-    TrackArgs.NodeOrdinal = NodeOrdinal;
-    TrackArgs.DmaBuffer = DmaBuffer;
-    Status = DxgkPrepareTrackedDmaBuffer(Adapter, &TrackArgs, &Reservation);
-    if (!NT_SUCCESS(Status))
-        goto Cleanup;
-
-    /* Documented WDDM order: Render -> Patch -> SubmitCommand. */
-    if (DXGK_CB_FULL(Adapter, DxgkDdiPatch) != NULL)
-    {
-        DXGKARG_PATCH PatchArgs;
-        NTSTATUS PatchStatus;
-
-        RtlZeroMemory(&PatchArgs, sizeof(PatchArgs));
-        if (Adapter->SchedulingCaps.MultiEngineAware)
-            PatchArgs.hContext = Context->hMiniportContext;
-        else
-            PatchArgs.hDevice = Device->hMiniportDevice;
-        PatchArgs.DmaBufferSegmentId = DmaBuffer->SegmentId;
-        PatchArgs.DmaBufferPhysicalAddress = DmaBuffer->SegmentAddress;
-        PatchArgs.pDmaBuffer = DmaBuffer->VirtualAddress;
-        PatchArgs.DmaBufferSize = DmaBuffer->Capacity;
-        PatchArgs.DmaBufferSubmissionStartOffset = DmaBuffer->SubmissionStartOffset;
-        PatchArgs.DmaBufferSubmissionEndOffset = DmaBuffer->SubmissionEndOffset;
-        PatchArgs.pDmaBufferPrivateData = DmaBufferPrivateData;
-        PatchArgs.DmaBufferPrivateDataSize = DmaBufferPrivateDataSize;
-        PatchArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-        PatchArgs.DmaBufferPrivateDataSubmissionEndOffset = DmaBufferPrivateDataSize;
-        PatchArgs.pAllocationList = AllocationList;
-        PatchArgs.AllocationListSize = ResourceHandleCount;
-        PatchArgs.pPatchLocationList = EscapePatchList;
-        PatchArgs.PatchLocationListSize = EscapePatchCount;
-        PatchArgs.PatchLocationListSubmissionStart = 0;
-        PatchArgs.PatchLocationListSubmissionLength = EscapePatchCount;
-        PatchArgs.SubmissionFenceId = SubmissionFenceId;
-        PatchArgs.Flags.Value = 0;
-        PatchArgs.EngineOrdinal = 0;
-
-        if (!DxgkAcquireKmdCall(Adapter))
-        {
-            Status = STATUS_DELETE_PENDING;
-            goto Cleanup;
-        }
-        _SEH2_TRY
-        {
-            PatchStatus = DXGK_CB_FULL(Adapter, DxgkDdiPatch)(Adapter->MiniportDeviceContext, &PatchArgs);
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            PatchStatus = _SEH2_GetExceptionCode();
-        }
-        _SEH2_END;
-        DxgkReleaseKmdCall(Adapter);
-
-        if (!NT_SUCCESS(PatchStatus))
-        {
-            Status = PatchStatus;
-            goto Cleanup;
-        }
-    }
-
-    Status = DxgkFlushDmaBufferForSubmission(DmaBuffer);
-    if (!NT_SUCCESS(Status))
-        goto Cleanup;
-
-    RtlZeroMemory(&SubmitArgs, sizeof(SubmitArgs));
-    if (Adapter->SchedulingCaps.MultiEngineAware)
-        SubmitArgs.hContext = Context->hMiniportContext;
-    else
-        SubmitArgs.hDevice = Device->hMiniportDevice;
-    SubmitArgs.DmaBufferSegmentId = DmaBuffer->SegmentId;
-    SubmitArgs.DmaBufferPhysicalAddress = DmaBuffer->SegmentAddress;
-    SubmitArgs.DmaBufferSize = DmaBuffer->Capacity;
-    SubmitArgs.pDmaBufferPrivateData = DmaBufferPrivateData;
-    SubmitArgs.DmaBufferPrivateDataSize = DmaBufferPrivateDataSize;
-    SubmitArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
-    SubmitArgs.DmaBufferPrivateDataSubmissionEndOffset = DmaBufferPrivateDataSize;
-    SubmitArgs.DmaBufferSubmissionStartOffset = DmaBuffer->SubmissionStartOffset;
-    SubmitArgs.DmaBufferSubmissionEndOffset = DmaBuffer->SubmissionEndOffset;
-    SubmitArgs.SubmissionFenceId = SubmissionFenceId;
-    SubmitArgs.VidPnSourceId = 0;
-    SubmitArgs.FlipInterval = D3DDDI_FLIPINTERVAL_IMMEDIATE;
-    SubmitArgs.NodeOrdinal = NodeOrdinal;
-    SubmitArgs.EngineOrdinal = 0;
-    SubmitArgs.Flags.Value = 0;
-
-    if (!DxgkAcquireKmdCall(Adapter))
-    {
-        Status = STATUS_DELETE_PENDING;
-        goto Cleanup;
-    }
-    if (!DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, SubmissionFenceId, &Reservation->FenceIdentityEpoch))
-    {
-        DxgkReleaseKmdCall(Adapter);
-        Status = STATUS_DEVICE_BUSY;
-        goto Cleanup;
-    }
-    Reservation->FenceIdentityOwned = TRUE;
-    Status = DxgkActivateTrackedDmaBuffer(Reservation);
-    if (!NT_SUCCESS(Status))
-    {
-        DxgkReleaseKmdCall(Adapter);
-        goto Cleanup;
-    }
-    DxgkPublishSubmittedFence(Adapter, NodeOrdinal, SubmissionFenceId);
-    {
-        DPT_SCOPE DdiTrace = DptBegin(&g_DxgPresentTrace, DPT_KMD_SUBMIT);
-        Status = DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommand)(Adapter->MiniportDeviceContext, &SubmitArgs);
-        DptEnd(&g_DxgPresentTrace, DdiTrace, NT_SUCCESS(Status), 0);
-    }
-    DxgkReleaseKmdCall(Adapter);
-
-    if (!NT_SUCCESS(Status))
-        KeBugCheckEx(0x119, 0x2, (ULONG_PTR)Status, (ULONG_PTR)&SubmitArgs, (ULONG_PTR)Adapter);
-
-    {
-        PDXGKRNL_SUBMIT_DMA_BUFFER CommittedReservation = Reservation;
-
-        Reservation = NULL;
-        DmaBuffer = NULL;
-        DxgkCommitTrackedDmaBuffer(Adapter, CommittedReservation);
-    }
-    Status = STATUS_SUCCESS;
 
 Cleanup:
-    if (Reservation != NULL)
-        DxgkCancelTrackedDmaBuffer(Reservation);
     if (KmdTransaction)
         DxgkEndKmdTransaction(Adapter);
     if (AllocationList != NULL && AllocationList != InlineAllocationList)

@@ -3002,8 +3002,6 @@ VidSchpPrepareSubmit(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ ULONG NodeOrdinal,
     _In_ ULONG EngineOrdinal,
-    _In_ ULONG AllocationListCount,
-    _In_ ULONG PatchLocationListCount,
     _In_ BOOLEAN Tracked,
     _Outptr_ PVIDSCH_ENGINE *OutEngine,
     _Outptr_ PVIDSCH_DMA_PACKET *OutPacket)
@@ -3027,11 +3025,6 @@ VidSchpPrepareSubmit(
             EngineOrdinal,
             Ctx->EngineCount))
         return STATUS_INVALID_PARAMETER;
-
-    /* Larger lists would need a pool copy; nothing submits them yet. */
-    if (AllocationListCount > RTL_NUMBER_OF(((PVIDSCH_DMA_PACKET)0)->InlineAllocationList) ||
-        PatchLocationListCount > RTL_NUMBER_OF(((PVIDSCH_DMA_PACKET)0)->InlinePatchList))
-        return STATUS_NOT_SUPPORTED;
 
     Engine = &Ctx->Engines[NodeOrdinal];
 
@@ -3112,7 +3105,7 @@ VidSchSubmitCommand(
     if (!VidSchpAcquireCall(Adapter))
         return STATUS_DELETE_PENDING;
 
-    Status = VidSchpPrepareSubmit(Adapter, NodeOrdinal, EngineOrdinal, 0, 0, FALSE, &Engine, &Packet);
+    Status = VidSchpPrepareSubmit(Adapter, NodeOrdinal, EngineOrdinal, FALSE, &Engine, &Packet);
     if (!NT_SUCCESS(Status))
     {
         VidSchpReleaseCall(Adapter);
@@ -3215,7 +3208,7 @@ VidSchSubmitCommandVirtual(
         return STATUS_INVALID_PARAMETER;
     }
     EngineOrdinal = VidSchpFirstEngineOrdinal(Context->EngineAffinity);
-    Status = VidSchpPrepareSubmit(Adapter, Context->NodeOrdinal, EngineOrdinal, 0, 0, FALSE, &Engine, &Packet);
+    Status = VidSchpPrepareSubmit(Adapter, Context->NodeOrdinal, EngineOrdinal, FALSE, &Engine, &Packet);
     if (!NT_SUCCESS(Status))
     {
         VidSchpReleaseCall(Adapter);
@@ -3459,7 +3452,7 @@ VidSchSubmitCommandTrackedMeasured(
     if (!VidSchpAcquireCall(Adapter))
         return STATUS_DELETE_PENDING;
 
-    Status = VidSchpPrepareSubmit(Adapter, NodeOrdinal, EngineOrdinal, AllocationListCount, PatchLocationListCount, TRUE, &Engine, &Packet);
+    Status = VidSchpPrepareSubmit(Adapter, NodeOrdinal, EngineOrdinal, TRUE, &Engine, &Packet);
     if (!NT_SUCCESS(Status))
     {
         VidSchpReleaseCall(Adapter);
@@ -3510,19 +3503,6 @@ VidSchSubmitCommandTrackedMeasured(
         RtlCopyMemory(Packet->OwnedDriverPrivateData, DriverPrivateData, DriverPrivateDataSize);
         Packet->DriverPrivateData = Packet->OwnedDriverPrivateData;
         Packet->DriverPrivateDataSize = DriverPrivateDataSize;
-    }
-
-    if (AllocationList != NULL && AllocationListCount != 0)
-    {
-        RtlCopyMemory(Packet->InlineAllocationList, AllocationList, AllocationListCount * sizeof(DXGK_ALLOCATIONLIST));
-        Packet->InlineAllocationCount = AllocationListCount;
-        Packet->AllocationList = Packet->InlineAllocationList;
-        Packet->AllocationListSize = AllocationListCount;
-    }
-    if (PatchLocationList != NULL && PatchLocationListCount != 0)
-    {
-        RtlCopyMemory(Packet->InlinePatchList, PatchLocationList, PatchLocationListCount * sizeof(D3DDDI_PATCHLOCATIONLIST));
-        Packet->InlinePatchCount = PatchLocationListCount;
     }
 
     LocalTrackArgs = *TrackArgs;
@@ -3599,12 +3579,15 @@ VidSchSubmitCommandTrackedMeasured(
         PatchArgs.DmaBufferPrivateDataSize = Packet->DriverPrivateDataSize;
         PatchArgs.DmaBufferPrivateDataSubmissionStartOffset = 0;
         PatchArgs.DmaBufferPrivateDataSubmissionEndOffset = Packet->DriverPrivateDataSize;
-        PatchArgs.pAllocationList = Packet->InlineAllocationList;
-        PatchArgs.AllocationListSize = Packet->InlineAllocationCount;
-        PatchArgs.pPatchLocationList = Packet->InlinePatchList;
-        PatchArgs.PatchLocationListSize = Packet->InlinePatchCount;
+        /* Patch completes before this call returns. The caller's captured
+         * lists remain valid here; only DMA/private data and residency pins
+         * must survive asynchronous scheduler dispatch and retirement. */
+        PatchArgs.pAllocationList = AllocationList;
+        PatchArgs.AllocationListSize = AllocationListCount;
+        PatchArgs.pPatchLocationList = PatchLocationList;
+        PatchArgs.PatchLocationListSize = PatchLocationListCount;
         PatchArgs.PatchLocationListSubmissionStart = 0;
-        PatchArgs.PatchLocationListSubmissionLength = Packet->InlinePatchCount;
+        PatchArgs.PatchLocationListSubmissionLength = PatchLocationListCount;
         PatchArgs.SubmissionFenceId = Packet->SubmissionFenceId;
         PatchArgs.Flags.Value = SubmitFlags & 0x0fu;
         PatchArgs.EngineOrdinal = EngineOrdinal;
