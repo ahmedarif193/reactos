@@ -1189,6 +1189,10 @@ DwmGlComposeInitialize(LONG Width, LONG Height)
     }
     glViewport(0, 0, Width, Height);
     glDisable(GL_DEPTH_TEST);
+    /* Desktop redirection surfaces contain exact 8-bit GDI colors. The GL
+     * default dither state can change an opaque source channel by one code
+     * value at some scanout pixels, even when no scaling or blend is needed. */
+    glDisable(GL_DITHER);
     glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
