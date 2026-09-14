@@ -2377,8 +2377,6 @@ USBPORT_DmaEndpointWorker(IN PUSBPORT_ENDPOINT Endpoint)
         if ((Endpoint->Flags & (ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING)) &&
             EndpointState == USBPORT_ENDPOINT_ACTIVE)
         {
-            DPRINT1("USBPORT_DmaEndpointWorker: suppressing ACTIVE transition (NUKE/ABORTING), staying in state %lu\n",
-                    PrevState);
             /* Stay in current state; signal worker so ClosePipe's REMOVE
              * transition can proceed without waiting for SOF. */
             IsPaused = TRUE;
