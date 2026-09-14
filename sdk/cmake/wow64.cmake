@@ -10,6 +10,15 @@ include("${REACTOS_SOURCE_DIR}/sdk/cmake/wow64_targets.cmake")
 set(WOW64_I386_BINARY_DIR "${REACTOS_BINARY_DIR}/_wow64_i386")
 set(WOW64_I386_TARGETS ${WOW64_I386_MODULES} ${WOW64_I386_AUXILIARY_MODULES} ${WOW64_I386_EXECUTABLES})
 
+# The 32-bit OpenGL loader resolves its ICD from SysWOW64.  Build the matching
+# i386 Mesa target whenever the native image includes Mesa; the native and
+# ARM64EC ICDs cannot be loaded into an i386 process.
+set(WOW64_I386_MESA_FILE)
+if(TARGET mesa_gallium)
+    set(WOW64_I386_MESA_FILE "${WOW64_I386_BINARY_DIR}/dll/opengl/mesa_gallium/mesa-icd/mesa_gallium.dll")
+    list(APPEND WOW64_I386_TARGETS mesa_gallium)
+endif()
+
 # Walk a target's link closure to find the DLL modules it imports. ReactOS
 # links DLL imports through "lib<module>" import libraries, so those names
 # are mapped back to the module targets that provide them.
@@ -114,6 +123,9 @@ foreach(_target IN LISTS WOW64_I386_MODULES WOW64_I386_EXECUTABLES)
     _wow64_get_target_file("${_target}" _file)
     list(APPEND WOW64_I386_FILES "${_file}")
 endforeach()
+if(WOW64_I386_MESA_FILE)
+    list(APPEND WOW64_I386_FILES "${WOW64_I386_MESA_FILE}")
+endif()
 
 set(WOW64_I386_VALIDATION_FILES ${WOW64_I386_FILES})
 foreach(_target IN LISTS WOW64_I386_AUXILIARY_MODULES)
@@ -147,9 +159,6 @@ set(_wow64_i386_cmake_args
     -DCMAKE_TOOLCHAIN_FILE:FILEPATH=${_wow64_toolchain}
     -DDBG:BOOL=${DBG}
     -DHOST_TOOLS_DIR:PATH=${REACTOS_BINARY_DIR}/host-tools/bin
-    # This partial tree builds only the listed WoW64 runtime modules; it does
-    # not build or package a separate i386 Mesa ICD.
-    -DMESA_GALLIUM_FROM_SOURCE:BOOL=OFF
     -DOPTIMIZE:STRING=${OPTIMIZE}
     -DPCH:BOOL=${PCH}
     -DREACTOS_CLANG_LLVM_MINGW_ROOT:PATH=${REACTOS_CLANG_LLVM_MINGW_ROOT}
@@ -160,6 +169,17 @@ set(_wow64_i386_cmake_args
     -DUSE_DUMMY_PSEH:BOOL=${USE_DUMMY_PSEH}
     -DWITH_DEBUG_SYMBOLS:BOOL=${WITH_DEBUG_SYMBOLS}
     -DENABLE_ROSTESTS:BOOL=${ENABLE_ROSTESTS})
+
+if(WOW64_I386_MESA_FILE)
+    list(APPEND _wow64_i386_cmake_args
+        -DMESA_GALLIUM_FROM_SOURCE:BOOL=ON
+        -DMESA_BUILD_JOBS:STRING=${MESA_BUILD_JOBS}
+        -DMESA_LLVM_MINGW_ROOT:PATH=${MESA_LLVM_MINGW_ROOT}
+        -DMESA_MESON:FILEPATH=${MESA_MESON}
+        -DMESA_PYTHON:FILEPATH=${MESA_PYTHON})
+else()
+    list(APPEND _wow64_i386_cmake_args -DMESA_GALLIUM_FROM_SOURCE:BOOL=OFF)
+endif()
 
 # Reconfigure the i386 rules only when their configuration inputs change. Once
 # generated, the nested Ninja graph tracks normal CMake/source dependencies.
