@@ -846,6 +846,12 @@ ChpeLdrGetDllHandleEx(ULONG Flags, PWSTR DllPath, PULONG DllCharacteristics, PUN
 }
 
 NTSTATUS NTAPI
+ChpeLdrAccessResource(PVOID BaseAddress, PIMAGE_RESOURCE_DATA_ENTRY ResourceDataEntry, PVOID *Resource, PULONG Size)
+{
+    return LdrAccessResource(BaseAddress, ResourceDataEntry, Resource, Size);
+}
+
+NTSTATUS NTAPI
 ChpeLdrAddRefDll(ULONG Flags, PVOID BaseAddress)
 {
     return LdrAddRefDll(Flags, BaseAddress);
@@ -855,6 +861,18 @@ NTSTATUS NTAPI
 ChpeLdrEnumResources(PVOID BaseAddress, PLDR_RESOURCE_INFO ResourceInfo, ULONG Level, ULONG *ResourceCount, LDR_ENUM_RESOURCE_INFO *Resources)
 {
     return LdrEnumResources(BaseAddress, ResourceInfo, Level, ResourceCount, Resources);
+}
+
+NTSTATUS NTAPI
+ChpeLdrFindResourceDirectory_U(PVOID BaseAddress, PLDR_RESOURCE_INFO ResourceInfo, ULONG Level, PIMAGE_RESOURCE_DIRECTORY *ResourceDirectory)
+{
+    return LdrFindResourceDirectory_U(BaseAddress, ResourceInfo, Level, ResourceDirectory);
+}
+
+NTSTATUS NTAPI
+ChpeLdrFindResource_U(PVOID BaseAddress, PLDR_RESOURCE_INFO ResourceInfo, ULONG Level, PIMAGE_RESOURCE_DATA_ENTRY *ResourceDataEntry)
+{
+    return LdrFindResource_U(BaseAddress, ResourceInfo, Level, ResourceDataEntry);
 }
 
 NTSTATUS NTAPI
