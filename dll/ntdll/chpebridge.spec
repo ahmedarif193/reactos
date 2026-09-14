@@ -23,8 +23,10 @@
 @ stdcall LdrGetDllHandle(wstr ptr ptr ptr) ChpeLdrGetDllHandle
 @ stdcall LdrGetDllHandleEx(long wstr ptr ptr ptr) ChpeLdrGetDllHandleEx
 @ stdcall LdrGetProcedureAddress(ptr ptr long ptr) ChpeLdrGetProcedureAddress
+@ stdcall LdrLoadDll(wstr long ptr ptr) ChpeLdrLoadDll
 @ stdcall -version=0x602+ LdrResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long) ChpeLdrResolveDelayLoadedAPI
 @ stdcall -version=0x602+ LdrResolveDelayLoadsFromDll(ptr str long) ChpeLdrResolveDelayLoadsFromDll
+@ stdcall LdrUnloadDll(ptr) ChpeLdrUnloadDll
 @ stdcall NtAdjustPrivilegesToken(long long ptr long ptr ptr) ChpeNtAdjustPrivilegesToken
 @ stdcall NtAllocateVirtualMemory(long ptr ptr ptr long long) ChpeNtAllocateVirtualMemory
 @ stdcall NtAllocateVirtualMemoryEx(long ptr ptr long long ptr long) ChpeNtAllocateVirtualMemoryEx

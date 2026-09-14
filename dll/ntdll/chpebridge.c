@@ -846,6 +846,18 @@ ChpeLdrGetDllHandleEx(ULONG Flags, PWSTR DllPath, PULONG DllCharacteristics, PUN
 }
 
 NTSTATUS NTAPI
+ChpeLdrLoadDll(PWSTR SearchPath, PULONG DllCharacteristics, PUNICODE_STRING DllName, PVOID *BaseAddress)
+{
+    return LdrLoadDll(SearchPath, DllCharacteristics, DllName, BaseAddress);
+}
+
+NTSTATUS NTAPI
+ChpeLdrUnloadDll(PVOID BaseAddress)
+{
+    return LdrUnloadDll(BaseAddress);
+}
+
+NTSTATUS NTAPI
 ChpeLdrAccessResource(PVOID BaseAddress, PIMAGE_RESOURCE_DATA_ENTRY ResourceDataEntry, PVOID *Resource, PULONG Size)
 {
     return LdrAccessResource(BaseAddress, ResourceDataEntry, Resource, Size);
