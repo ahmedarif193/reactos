@@ -559,6 +559,7 @@ MiFindEmptyAddressRangeInTree(IN SIZE_T Length,
     AlignmentVpn = Alignment >> PAGE_SHIFT;
     LowVpn = ALIGN_UP_BY((ULONG_PTR)MM_LOWEST_USER_ADDRESS >> PAGE_SHIFT, AlignmentVpn);
 #ifdef _M_ARM64
+    if (PsGetCurrentProcess()->Wow64Process == NULL)
     {
         ULONG_PTR MinimumAutoVpn;
 
