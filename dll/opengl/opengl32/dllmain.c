@@ -17,6 +17,7 @@ DllMain(HINSTANCE hInstance, DWORD Reason, LPVOID Reserved)
             InitializeListHead(&ContextListHead);
             /* no break */
         case DLL_THREAD_ATTACH:
+            IntSetCurrentDispatchTable(IntGetNoContextDispatchTable());
             break;
 
         case DLL_THREAD_DETACH:

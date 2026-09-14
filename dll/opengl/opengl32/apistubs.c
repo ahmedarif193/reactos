@@ -7,6 +7,41 @@
 
 #include "opengl32.h"
 
+#define USE_GL_FUNC(name, proto_args, call_args, offset, stack) \
+static void GLAPIENTRY no_context_##name proto_args             \
+{                                                               \
+}
+
+#define USE_GL_FUNC_RET(name, ret_type, proto_args, call_args, offset, stack) \
+static ret_type GLAPIENTRY no_context_##name proto_args                       \
+{                                                                             \
+    if ((offset) == 261)                                                       \
+        return (ret_type)(ULONG_PTR)GL_INVALID_OPERATION;                      \
+    return (ret_type)0;                                                        \
+}
+
+#include "glfuncs.h"
+
+#undef USE_GL_FUNC_RET
+#undef USE_GL_FUNC
+
+static const GLCLTPROCTABLE no_context_api_table =
+{
+    OPENGL_VERSION_110_ENTRIES,
+    {
+#define USE_GL_FUNC(name, proto_args, call_args, offset, stack) no_context_##name,
+#define USE_GL_FUNC_RET(name, ret_type, proto_args, call_args, offset, stack) no_context_##name,
+#include "glfuncs.h"
+#undef USE_GL_FUNC_RET
+#undef USE_GL_FUNC
+    }
+};
+
+const GLDISPATCHTABLE*
+IntGetNoContextDispatchTable(void)
+{
+    return &no_context_api_table.glDispatchTable;
+}
 
 
 #ifndef __i386__

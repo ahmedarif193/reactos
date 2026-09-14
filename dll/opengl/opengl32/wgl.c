@@ -814,7 +814,7 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
                 ERR("DrvSetContext failed!\n");
                 /* revert */
                 InterlockedExchange(&ctx->thread_id, 0);
-                IntSetCurrentDispatchTable(NULL);
+                IntSetCurrentDispatchTable(IntGetNoContextDispatchTable());
                 SetLastError(ERROR_INVALID_PARAMETER);
                 return FALSE;
             }
@@ -846,7 +846,7 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
         InterlockedExchange(&old_ctx->thread_id, 0);
         /* Unset it */
         IntMakeCurrent(NULL, NULL, NULL);
-        IntSetCurrentDispatchTable(NULL);
+        IntSetCurrentDispatchTable(IntGetNoContextDispatchTable());
         /* Test conformance (extreme cases) */
         return hglrc == NULL;
     }
