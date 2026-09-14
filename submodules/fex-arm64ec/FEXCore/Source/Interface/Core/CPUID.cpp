@@ -448,8 +448,13 @@ FEXCore::CPUID::FunctionResults CPUIDEmu::Function_0h(uint32_t Leaf) const {
 FEXCore::CPUID::FunctionResults CPUIDEmu::Function_01h(uint32_t Leaf) const {
   FEXCore::CPUID::FunctionResults Res {};
 
-  // Hypervisor bit is normally set but some applications have issues with it.
+  // ReactOS hosts FEX as a user-mode emulator and provides no hypervisor ABI to
+  // x86 guests. Advertising one makes guests execute unsupported VMX calls.
+#ifdef __REACTOS__
+  constexpr uint32_t Hypervisor = 0;
+#else
   uint32_t Hypervisor = HideHypervisorBit() ? 0 : 1;
+#endif
 
   Res.eax = FAMILY_IDENTIFIER;
 
