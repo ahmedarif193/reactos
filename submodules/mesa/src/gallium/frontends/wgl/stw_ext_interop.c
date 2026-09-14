@@ -45,16 +45,15 @@ wglBindSharedTextureROS(UINT version, UINT share, UINT width, UINT height,
    if (!ctx || version != DWM_WGL_SHARED_TEXTURE_VERSION || !share ||
        !width || !height || width > 4096 || height > 4096 ||
        format != DWM_WGL_SHARED_BGRA8 || pitch < width * 4 ||
-       pitch != ((width * 4 + 15) & ~15u)) {
+       pitch % 4 != 0) {
       SetLastError(ERROR_INVALID_PARAMETER);
       return FALSE;
    }
    struct pipe_screen *screen = ctx->st->pipe->screen;
-   /* VC4 cannot sample raster storage directly. Matching this stride allows
-    * its tile-buffer load/store path to tile the shared image on the GPU;
-    * reject other pitches instead of entering a CPU layout conversion. */
-   if (strcmp(screen->get_name(screen), "VC4 V3D 2.1") != 0 ||
-       !screen->resource_from_handle) {
+   /* The selected driver must support shared images and explicit updates. */
+   if (!stw_dev->stw_winsys->can_compose ||
+       !stw_dev->stw_winsys->can_compose() ||
+       !screen->resource_from_handle || !screen->resource_changed) {
       SetLastError(ERROR_NOT_SUPPORTED);
       return FALSE;
    }
@@ -93,8 +92,7 @@ wglUpdateSharedTextureROS(UINT version)
    struct gl_texture_object *tex =
        _mesa_get_current_tex_object(ctx->st->ctx, GL_TEXTURE_2D);
    struct pipe_screen *screen = ctx->st->pipe->screen;
-   if (!tex || !tex->pt || !screen->resource_changed ||
-       strcmp(screen->get_name(screen), "VC4 V3D 2.1") != 0) {
+   if (!tex || !tex->pt || !screen->resource_changed) {
       SetLastError(ERROR_NOT_SUPPORTED);
       return FALSE;
    }

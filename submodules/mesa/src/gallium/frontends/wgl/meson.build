@@ -4,7 +4,7 @@
 inc_wgl = include_directories('.')
 ros_interop_includes = []
 ros_interop_args = []
-if reactos_source_dir != '' and with_gallium_vc4
+if reactos_source_dir != '' and (with_gallium_vc4 or with_gallium_v3d)
   ros_interop_includes += include_directories(reactos_source_dir / 'sdk/include/reactos')
   ros_interop_args += '-DHAVE_ROS_SHARED_TEXTURE'
 endif

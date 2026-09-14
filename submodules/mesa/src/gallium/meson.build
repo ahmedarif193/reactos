@@ -136,7 +136,12 @@ else
   driver_kmsro = declare_dependency()
 endif
 if with_gallium_v3d
-  subdir('winsys/v3d/drm')
+  v3d_winsys_deps = []
+  if with_platform_windows
+    subdir('winsys/v3d/d3dkmt')
+  else
+    subdir('winsys/v3d/drm')
+  endif
   subdir('drivers/v3d')
 else
   driver_v3d = declare_dependency()

@@ -1789,7 +1789,7 @@ endif
 # IMPORTANT: We can't upgrade Zlib beyond 1.2.5 because it would break Viewperf.
 reactos_source_dir = get_option('reactos-source-dir')
 reactos_build_dir = get_option('reactos-build-dir')
-if (with_platform_windows and with_gallium_vc4 and not get_option('zlib').disabled() and
+if (with_platform_windows and (with_gallium_vc4 or with_gallium_v3d) and not get_option('zlib').disabled() and
     reactos_source_dir != '' and reactos_build_dir != '')
   dep_reactos_zlib = cc.find_library(
     'zlib',

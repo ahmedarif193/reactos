@@ -50,7 +50,8 @@ v3dX(start_binning)(struct v3d_context *v3d, struct v3d_job *job)
          * if necessary.
          */
 
-        v3d_cl_ensure_space_with_branch(&job->bcl, 256 /* XXX */);
+        if (!v3d_cl_ensure_space_with_branch(&job->bcl, 256 /* XXX */))
+                return;
 
         job->submit.bcl_start = job->bcl.bo->offset;
         v3d_job_add_bo(job, job->bcl.bo);
@@ -754,6 +755,9 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                                     cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD),
                                     32);
 
+        if (shader_rec_offset == UINT32_MAX)
+                goto cleanup_uniforms;
+
         /* XXX perf: We should move most of the SHADER_STATE_RECORD setup to
          * compile time, so that we mostly just have to OR the VS and FS
          * records together at draw time.
@@ -884,6 +888,7 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                 }
         }
 
+cleanup_uniforms:
         v3d_bo_unreference(&cs_uniforms.bo);
         v3d_bo_unreference(&vs_uniforms.bo);
         if (gs_uniforms.bo)
@@ -1222,7 +1227,8 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
         /* Get space to emit our draw call into the BCL, using a branch to
          * jump to a new BO if necessary.
          */
-        v3d_cl_ensure_space_with_branch(&job->bcl, 256 /* XXX */);
+        if (!v3d_cl_ensure_space_with_branch(&job->bcl, 256 /* XXX */))
+                return;
 
         if (v3d->prim_mode != info->mode) {
                 v3d->prim_mode = info->mode;
@@ -1230,6 +1236,8 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
         }
 
         v3d_start_draw(v3d);
+        if (job->out_of_memory)
+                return;
         v3d_update_compiled_shaders(v3d, info->mode);
         if (!v3d_check_compiled_shaders(v3d))
                 return;
@@ -1265,6 +1273,9 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                           v3d->prog.fs->uniform_dirty_bits)) {
                 v3d_emit_gl_shader_state(v3d, info);
         }
+
+        if (job->out_of_memory)
+                return;
 
         v3d->dirty = 0;
 
@@ -1559,6 +1570,11 @@ v3d_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
         struct v3d_cl_reloc uniforms = v3d_write_uniforms(v3d, job,
                                                           v3d->prog.compute,
                                                           MESA_SHADER_COMPUTE);
+        if (!uniforms.bo) {
+                v3d_bo_unreference(&v3d->compute_shared_memory);
+                v3d_job_free(v3d, job);
+                return;
+        }
         v3d_job_add_bo(job, uniforms.bo);
         submit.cfg[6] = uniforms.bo->offset + uniforms.offset;
 

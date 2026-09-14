@@ -70,7 +70,7 @@ libv3d = static_library(
   gnu_symbol_visibility : 'hidden',
   dependencies : [
     dep_v3d_hw, dep_libdrm, dep_valgrind,
-    idep_nir_headers, idep_mesautil,
+    idep_nir_headers, idep_mesautil, v3d_winsys_deps,
   ],
   link_with: [per_version_libs],
 )
@@ -78,5 +78,5 @@ libv3d = static_library(
 driver_v3d = declare_dependency(
   compile_args : '-DGALLIUM_V3D',
   link_with : [libv3d, libv3dwinsys, libbroadcom_cle, libbroadcom_v3d],
-  dependencies : [idep_nir, idep_broadcom_perfcntrs],
+  dependencies : [idep_nir, idep_broadcom_perfcntrs, v3d_winsys_deps],
 )

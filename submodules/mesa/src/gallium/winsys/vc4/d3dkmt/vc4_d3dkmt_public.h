@@ -18,9 +18,16 @@ struct pipe_screen;
 struct pipe_screen_config;
 struct pipe_context;
 struct pipe_blit_info;
+struct pipe_resource;
+struct pipe_box;
 
 bool vc4_render_blit_for_present(struct pipe_context *context,
                                 const struct pipe_blit_info *info);
+bool vc4_d3dkmt_present(struct pipe_screen *screen,
+                        struct pipe_context *context,
+                        struct pipe_resource *resource,
+                        unsigned level, unsigned layer, void *hdc,
+                        unsigned nboxes, struct pipe_box *subbox);
 
 struct pipe_screen *
 vc4_d3dkmt_screen_create(const struct pipe_screen_config *config);

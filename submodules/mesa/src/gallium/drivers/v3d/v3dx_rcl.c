@@ -348,7 +348,8 @@ v3d_rcl_emit_generic_per_tile_list(struct v3d_job *job, int layer)
          * have pointers into it.
          */
         struct v3d_cl *cl = &job->indirect;
-        v3d_cl_ensure_space(cl, 200, 1);
+        if (v3d_cl_ensure_space(cl, 200, 1) == UINT32_MAX)
+                return;
         struct v3d_cl_reloc tile_list_start = cl_get_address(cl);
 
         /* V3D 4.x/7.x only requires a single tile coordinates, and
@@ -658,6 +659,8 @@ emit_render_layer(struct v3d_job *job, uint32_t layer)
         cl_emit(&job->rcl, FLUSH_VCD_CACHE, flush);
 
         v3d_rcl_emit_generic_per_tile_list(job, layer);
+        if (job->out_of_memory)
+                return;
 
         /* If rasterization has been disabled for all the draws/clears of the
          * job we can avoid the submission of the Supertile Coordinates.
@@ -708,7 +711,8 @@ v3dX(emit_rcl)(struct v3d_job *job)
                 cl_supertile_coordinates_size = MAX2(job->num_layers, 1) *
                         256 * cl_packet_length(SUPERTILE_COORDINATES);
         }
-        v3d_cl_ensure_space_with_branch(&job->rcl, 200 + cl_supertile_coordinates_size);
+        if (!v3d_cl_ensure_space_with_branch(&job->rcl, 200 + cl_supertile_coordinates_size))
+                return;
         job->submit.rcl_start = job->rcl.bo->offset;
         v3d_job_add_bo(job, job->rcl.bo);
 
@@ -938,8 +942,11 @@ v3dX(emit_rcl)(struct v3d_job *job)
          * of the loop.
          */
         assert(job->num_layers > 0 || (job->load == 0 && job->store == 0));
-        for (int layer = 0; layer < MAX2(1, job->num_layers); layer++)
+        for (int layer = 0; layer < MAX2(1, job->num_layers); layer++) {
                 emit_render_layer(job, layer);
+                if (job->out_of_memory)
+                        return;
+        }
 
         cl_emit(&job->rcl, END_OF_RENDERING, end);
 }

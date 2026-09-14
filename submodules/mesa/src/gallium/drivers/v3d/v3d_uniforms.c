@@ -233,7 +233,8 @@ v3d_write_uniforms(struct v3d_context *v3d, struct v3d_job *job,
          * the last uniform it will read beyond the end of the page and trigger
          * the MMU exception.
          */
-        v3d_cl_ensure_space(&job->indirect, (uinfo->count + 1) * 4, 4);
+        if (v3d_cl_ensure_space(&job->indirect, (uinfo->count + 1) * 4, 4) == UINT32_MAX)
+                return cl_address(NULL, 0);
 
         struct v3d_cl_reloc uniform_stream = cl_get_address(&job->indirect);
         v3d_bo_reference(uniform_stream.bo);
