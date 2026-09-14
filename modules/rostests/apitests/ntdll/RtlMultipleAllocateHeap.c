@@ -33,11 +33,11 @@ static FN_RtlMultipleFreeHeap g_free = NULL;
     SetLastError(-1); \
     _SEH2_TRY { \
         ret = g_alloc((HeapHandle), (Flags), (Size), (Count), (Array)); \
-        err = GetLastError(); \
     } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { \
         threw = _SEH2_GetExceptionCode(); \
     } \
     _SEH2_END; \
+    err = GetLastError(); \
     ok((err) == (err_expected), "err excepted %d, but %d", (err_expected), (err)); \
     ok((threw) == (threw_excepted), "threw excepted %d, but %d\n", (threw_excepted), (threw));
 
@@ -154,13 +154,21 @@ MultiHeapAllocTest()
     ok(Array[1] != NULL, "Array[1] is expected as non-NULL\n");
     ok(Array[2] != NULL, "Array[2] is expected as non-NULL\n");
 
-    // Array is non-NULL and too large to allocate
+    /* Force partial failure within a fixed heap instead of exhausting the
+     * process address space, which may accommodate all three blocks on 64-bit. */
+    HeapHandle = RtlCreateHeap(0, NULL, 0x10000, 0, NULL, NULL);
+    ok(HeapHandle != NULL, "Failed to create fixed-size heap\n");
+    if (!HeapHandle)
+        return;
+
     set_array(Array, NULL, NULL, NULL);
-    TEST_ALLOC_NO_RET(ERROR_NOT_ENOUGH_MEMORY, 0, HeapHandle, 0, 0x5FFFFFFF, 3, Array);
-    ok(ret != 3, "excepted not allocated");
+    TEST_ALLOC_NO_RET(ERROR_NOT_ENOUGH_MEMORY, 0, HeapHandle, 0, 0x6000, 3, Array);
+    ok(ret > 0 && ret < 3, "Expected partial allocation, got %d blocks\n", ret);
+    ok(g_free(HeapHandle, 0, 3, Array) == 3, "Failed to free partially allocated batch\n");
     set_array(Array, NULL, NULL, NULL);
-    TEST_ALLOC_NO_RET(ERROR_NOT_ENOUGH_MEMORY, 0xC0000017, HeapHandle, HEAP_GENERATE_EXCEPTIONS, 0x5FFFFFFF, 3, Array);
-    ok(ret != 3, "excepted not allocated");
+    TEST_ALLOC_NO_RET(ERROR_NOT_ENOUGH_MEMORY, 0xC0000017, HeapHandle, HEAP_GENERATE_EXCEPTIONS, 0x6000, 3, Array);
+    ok(Array[0] != NULL && Array[2] == NULL, "Expected partial allocation before the exception\n");
+    ok(RtlDestroyHeap(HeapHandle) == NULL, "Failed to destroy fixed-size heap\n");
 }
 
 static void
