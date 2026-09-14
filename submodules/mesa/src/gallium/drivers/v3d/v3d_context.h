@@ -37,7 +37,11 @@
 #include "util/slab.h"
 #include "util/u_dynarray.h"
 #include "util/u_framebuffer.h"
+#ifdef _WIN32
+#include "broadcom/common/v3d_d3dkmt.h"
+#else
 #include "xf86drm.h"
+#endif
 #include "drm-uapi/v3d_drm.h"
 #include "v3d_screen.h"
 #include "broadcom/common/v3d_limits.h"
@@ -504,6 +508,9 @@ struct v3d_job {
          * DRM_IOCTL_V3D_SUBMIT_CL.
          */
         bool needs_flush;
+
+        /* Failed command storage must never reach the GPU. */
+        bool out_of_memory;
 
         /* Set if any shader has dirtied cachelines in the TMU that need to be
          * flushed before job end.

@@ -143,11 +143,14 @@ struct stw_winsys
    BOOL (*presentation_trace)(const void *request, void *output, ULONG bytes);
    struct _DPT_BANK *presentation_trace_bank;
 
-   /* Optional internal callback; public PRESENTBUFFERS layouts are unchanged. */
-   void (*present_region)(struct pipe_screen *screen,
+   /* Optional status-returning present; NULL damage requests the full buffer. */
+   bool (*present_region)(struct pipe_screen *screen,
                           struct pipe_context *context,
                           struct pipe_resource *res, HDC hdc,
                           const RECT *damage);
+
+   /* A combined ICD may select a screen without shared-surface support. */
+   bool (*can_compose)(void);
 };
 
 bool

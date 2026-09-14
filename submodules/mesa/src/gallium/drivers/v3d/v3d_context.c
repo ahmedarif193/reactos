@@ -21,8 +21,12 @@
  * IN THE SOFTWARE.
  */
 
+#ifdef _WIN32
+#include "broadcom/common/v3d_d3dkmt.h"
+#else
 #include <xf86drm.h>
 #include <err.h>
+#endif
 
 #include "pipe/p_defines.h"
 #include "util/hash_table.h"
@@ -62,12 +66,19 @@ v3d_pipe_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence,
 
         if (fence) {
                 int fd = -1;
+#ifdef _WIN32
+                uint32_t syncobj;
+                if (!v3d_d3dkmt_syncobj_clone(v3d->fd, v3d->out_sync,
+                                              &syncobj))
+                        fd = (int)syncobj;
+#else
                 /* Snapshot the last V3D rendering's out fence.  We'd rather
                  * have another syncobj instead of a sync file, but this is all
                  * we get. (HandleToFD/FDToHandle just gives you another syncobj
                  * ID for the same syncobj).
                  */
                 drmSyncobjExportSyncFile(v3d->fd, v3d->out_sync, &fd);
+#endif
                 if (fd == -1) {
                         mesa_loge("Export failed");
                         *fence = NULL;

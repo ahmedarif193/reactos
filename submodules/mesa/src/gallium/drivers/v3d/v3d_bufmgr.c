@@ -22,13 +22,17 @@
  */
 
 #include <errno.h>
-#include <err.h>
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+#else
+#include "broadcom/common/v3d_d3dkmt.h"
+#endif
 
 #include "util/perf/cpu_trace.h"
+#include "util/os_time.h"
 #include "util/u_hash_table.h"
 #include "util/u_memory.h"
 #include "util/ralloc.h"
@@ -69,9 +73,8 @@ v3d_bo_dump_stats(struct v3d_screen *screen)
                 mesa_logd("  oldest cache time: %ld", (long)first->free_time);
                 mesa_logd("  newest cache time: %ld", (long)last->free_time);
 
-                struct timespec time;
-                clock_gettime(CLOCK_MONOTONIC, &time);
-                mesa_logd("  now:               %jd", (intmax_t)time.tv_sec);
+                mesa_logd("  now:               %jd",
+                          (intmax_t)(os_time_get_nano() / ONE_SECOND_IN_NS));
         }
 }
 
@@ -183,10 +186,9 @@ v3d_bo_last_unreference(struct v3d_bo *bo)
 {
         struct v3d_screen *screen = bo->screen;
 
-        struct timespec time;
-        clock_gettime(CLOCK_MONOTONIC, &time);
+        time_t time = os_time_get_nano() / ONE_SECOND_IN_NS;
         mtx_lock(&screen->bo_cache.lock);
-        v3d_bo_last_unreference_locked_timed(bo, time.tv_sec);
+        v3d_bo_last_unreference_locked_timed(bo, time);
         mtx_unlock(&screen->bo_cache.lock);
 }
 
@@ -203,7 +205,9 @@ v3d_bo_free(struct v3d_bo *bo)
                 } else
 #endif
                 {
+#ifndef _WIN32
                         munmap(bo->map, bo->size);
+#endif
                         VG(VALGRIND_FREELIKE_BLOCK(bo->map, 0));
                 }
         }
@@ -395,6 +399,12 @@ v3d_bo_open_name(struct v3d_screen *screen, uint32_t name)
 struct v3d_bo *
 v3d_bo_open_dmabuf(struct v3d_screen *screen, int fd)
 {
+#ifdef _WIN32
+        (void)screen;
+        (void)fd;
+        errno = EOPNOTSUPP;
+        return NULL;
+#else
         uint32_t handle;
 
         mtx_lock(&screen->bo_handles_mutex);
@@ -416,6 +426,7 @@ v3d_bo_open_dmabuf(struct v3d_screen *screen, int fd)
         }
 
         return v3d_bo_open_handle(screen, handle, size);
+#endif
 }
 
 int
@@ -515,9 +526,14 @@ v3d_bo_map_unsynchronized(struct v3d_bo *bo)
                 abort();
         }
 
+#ifdef _WIN32
+        bo->map = v3d_d3dkmt_bo_map(bo->screen->fd, bo->handle);
+        if (!bo->map) {
+#else
         bo->map = mmap(NULL, bo->size, PROT_READ | PROT_WRITE, MAP_SHARED,
                        bo->screen->fd, offset);
         if (bo->map == MAP_FAILED) {
+#endif
                 mesa_loge("mmap of bo %d (offset 0x%016llx, size %d) failed",
                           bo->handle, (long long)offset, bo->size);
                 abort();
@@ -530,6 +546,14 @@ v3d_bo_map_unsynchronized(struct v3d_bo *bo)
 void *
 v3d_bo_map(struct v3d_bo *bo)
 {
+#ifdef _WIN32
+        int cpu_dirty = v3d_d3dkmt_bo_cpu_dirty(bo->screen->fd, bo->handle);
+
+        if (cpu_dirty < 0) {
+                fprintf(stderr, "BO CPU ownership query failed\n");
+                abort();
+        }
+#endif
         void *map = v3d_bo_map_unsynchronized(bo);
 
         bool ok = v3d_bo_wait(bo, OS_TIMEOUT_INFINITE, "bo map");
@@ -539,6 +563,45 @@ v3d_bo_map(struct v3d_bo *bo)
         }
         VG(VALGRIND_MAKE_MEM_DEFINED(map, bo->size));
 
+#ifdef _WIN32
+        if (!cpu_dirty &&
+            v3d_d3dkmt_bo_invalidate(bo->screen->fd, bo->handle) != 0) {
+                fprintf(stderr, "BO cache invalidation failed\n");
+                abort();
+        }
+#endif
+
+        return map;
+}
+
+static void
+v3d_bo_mark_cpu_dirty(struct v3d_bo *bo)
+{
+#ifdef _WIN32
+        if (v3d_d3dkmt_bo_mark_cpu_dirty(bo->screen->fd, bo->handle) != 0) {
+                fprintf(stderr, "BO CPU ownership update failed\n");
+                abort();
+        }
+#else
+        (void)bo;
+#endif
+}
+
+void *
+v3d_bo_map_write(struct v3d_bo *bo)
+{
+        void *map = v3d_bo_map(bo);
+
+        v3d_bo_mark_cpu_dirty(bo);
+        return map;
+}
+
+void *
+v3d_bo_map_unsynchronized_write(struct v3d_bo *bo)
+{
+        void *map = v3d_bo_map_unsynchronized(bo);
+
+        v3d_bo_mark_cpu_dirty(bo);
         return map;
 }
 

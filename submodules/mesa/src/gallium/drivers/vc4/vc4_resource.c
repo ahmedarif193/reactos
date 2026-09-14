@@ -789,6 +789,14 @@ vc4_resource_from_handle(struct pipe_screen *pscreen,
                                slice->stride);
                 goto fail;
         } else if (!rsc->tiled) {
+#ifdef __REACTOS__
+                /* Explicit WGL publications must use the GPU tile-buffer
+                 * path, whose raster pitch is aligned to four pixels. */
+                if ((usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH) &&
+                    (tmpl->bind & PIPE_BIND_SAMPLER_VIEW) &&
+                    whandle->stride != align(prsc->width0 * rsc->cpp, 16))
+                        goto fail;
+#endif
                 /* Imported geometry must fit the actual shared allocation,
                  * including its last row. Never trust a WGL caller's pitch
                  * or dimensions to describe the KMT backing. */

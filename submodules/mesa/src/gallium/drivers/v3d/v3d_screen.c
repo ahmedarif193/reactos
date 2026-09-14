@@ -22,6 +22,10 @@
  * IN THE SOFTWARE.
  */
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "common/v3d_device_info.h"
 #include "common/v3d_limits.h"
 #include "util/os_misc.h"
@@ -39,7 +43,12 @@
 #include "util/ralloc.h"
 #include "util/xmlconfig.h"
 
+#ifdef _WIN32
+#include "broadcom/common/v3d_d3dkmt.h"
+#include "gallium/winsys/v3d/d3dkmt/v3d_d3dkmt_public.h"
+#else
 #include <xf86drm.h>
+#endif
 #include "v3d_screen.h"
 #include "v3d_context.h"
 #include "v3d_resource.h"
@@ -79,6 +88,8 @@ v3d_screen_destroy(struct pipe_screen *pscreen)
 
         _mesa_hash_table_destroy(screen->bo_handles, NULL);
         v3d_bufmgr_destroy(pscreen);
+        mtx_destroy(&screen->bo_handles_mutex);
+        mtx_destroy(&screen->bo_cache.lock);
         slab_destroy_parent(&screen->transfer_pool);
         if (screen->ro)
                 screen->ro->destroy(screen->ro);
@@ -96,9 +107,177 @@ v3d_screen_destroy(struct pipe_screen *pscreen)
 
         u_transfer_helper_destroy(pscreen->transfer_helper);
 
+#ifdef _WIN32
+        v3d_d3dkmt_close(screen->fd);
+#else
         close(screen->fd);
+#endif
         ralloc_free(pscreen);
 }
+
+#ifdef _WIN32
+static bool
+v3d_get_direct_present_origin(HDC hdc, unsigned width, unsigned height,
+                              unsigned *destination_x,
+                              unsigned *destination_y,
+                              unsigned *screen_width,
+                              unsigned *screen_height)
+{
+        HWND window = WindowFromDC(hdc);
+        RECT client_rect = { 0 };
+        RECT clip_rect = { 0 };
+        POINT origin = { 0 };
+        int clip_type;
+        int display_width;
+        int display_height;
+        DWORD object_type = GetObjectType(hdc);
+        BOOL visible = window && IsWindowVisible(window);
+        BOOL iconic = window && IsIconic(window);
+        BOOL client_valid = window && GetClientRect(window, &client_rect);
+        BOOL origin_valid = GetDCOrgEx(hdc, &origin);
+        int map_mode = GetMapMode(hdc);
+
+        clip_type = GetClipBox(hdc, &clip_rect);
+        display_width = GetDeviceCaps(hdc, HORZRES);
+        display_height = GetDeviceCaps(hdc, VERTRES);
+        if (object_type != OBJ_DC || !window || !visible || iconic ||
+            map_mode != MM_TEXT || !client_valid || !origin_valid ||
+            clip_type != SIMPLEREGION || display_width <= 0 ||
+            display_height <= 0 || client_rect.left != 0 ||
+            client_rect.top != 0 || client_rect.right != (LONG)width ||
+            client_rect.bottom != (LONG)height ||
+            clip_rect.left != client_rect.left ||
+            clip_rect.top != client_rect.top ||
+            clip_rect.right != client_rect.right ||
+            clip_rect.bottom != client_rect.bottom ||
+            origin.x < 0 || origin.y < 0 ||
+            (uint64_t)(unsigned)origin.x + width > (unsigned)display_width ||
+            (uint64_t)(unsigned)origin.y + height > (unsigned)display_height) {
+                return false;
+        }
+
+        *destination_x = origin.x;
+        *destination_y = origin.y;
+        *screen_width = display_width;
+        *screen_height = display_height;
+        return true;
+}
+
+bool
+v3d_d3dkmt_present_frontbuffer(struct pipe_screen *pscreen,
+                             struct pipe_context *ctx,
+                             struct pipe_resource *resource,
+                             unsigned level, unsigned layer,
+                             void *winsys_drawable_handle)
+{
+        struct v3d_resource *rsc = v3d_resource(resource);
+        BITMAPV5HEADER bitmap = { 0 };
+        unsigned width = u_minify(resource->width0, level);
+        unsigned height = u_minify(resource->height0, level);
+        unsigned destination_x;
+        unsigned destination_y;
+        unsigned screen_width;
+        unsigned screen_height;
+        const uint8_t *pixels;
+
+        if (!winsys_drawable_handle || level >= V3D_MAX_MIP_LEVELS ||
+            layer >= resource->array_size || rsc->cpp != 4 ||
+            resource->nr_samples > 1)
+                return false;
+
+        switch (resource->format) {
+        case PIPE_FORMAT_B8G8R8X8_UNORM:
+        case PIPE_FORMAT_B8G8R8A8_UNORM:
+                bitmap.bV5Compression = BI_RGB;
+
+                if (ctx &&
+                    v3d_get_direct_present_origin(winsys_drawable_handle,
+                                                  width, height,
+                                                  &destination_x,
+                                                  &destination_y,
+                                                  &screen_width,
+                                                  &screen_height) &&
+                    !v3d_d3dkmt_present_linear(
+                            v3d_screen(pscreen)->fd,
+                            (uintptr_t)WindowFromDC(winsys_drawable_handle),
+                            rsc->bo->handle,
+                            v3d_context(ctx)->out_sync,
+                            v3d_layer_offset(resource, level, layer),
+                            rsc->slices[level].stride,
+                            rsc->slices[level].padded_height,
+                            rsc->slices[level].tiling,
+                            rsc->slices[level].size,
+                            destination_x, destination_y,
+                            width, height, screen_width, screen_height))
+                        return true;
+                break;
+        case PIPE_FORMAT_R8G8B8X8_UNORM:
+        case PIPE_FORMAT_R8G8B8A8_UNORM:
+                bitmap.bV5Compression = BI_BITFIELDS;
+                bitmap.bV5RedMask = 0x000000ff;
+                bitmap.bV5GreenMask = 0x0000ff00;
+                bitmap.bV5BlueMask = 0x00ff0000;
+                break;
+        case PIPE_FORMAT_R10G10B10A2_UNORM:
+                bitmap.bV5Compression = BI_BITFIELDS;
+                bitmap.bV5RedMask = 0x000003ff;
+                bitmap.bV5GreenMask = 0x000ffc00;
+                bitmap.bV5BlueMask = 0x3ff00000;
+                break;
+        default:
+                return false;
+        }
+
+        /* A tiled allocation is not a DIB. The compositor must also retain
+         * the error instead of claiming a GDI copy presented its frame. */
+        if (rsc->tiled ||
+            GetPropW(WindowFromDC(winsys_drawable_handle), L"ReactOS.Dwm.GpuOutput"))
+                return false;
+
+        pixels = v3d_bo_map(rsc->bo);
+        if (!pixels)
+                return false;
+        pixels += v3d_layer_offset(resource, level, layer);
+        bitmap.bV5Size = sizeof(bitmap);
+        bitmap.bV5Width = rsc->slices[level].stride / rsc->cpp;
+        bitmap.bV5Height = -(LONG)height;
+        bitmap.bV5Planes = 1;
+        bitmap.bV5BitCount = 32;
+        bitmap.bV5SizeImage = rsc->slices[level].stride * height;
+
+        /* WGL presents this resource without scaling.  Keep the operation on
+         * the direct DIB path so GDI only copies and clips the completed
+         * image; StretchDIBits needlessly routes every swap through the
+         * stretch engine even when source and destination dimensions match.
+         * The fallback retains compatibility with display drivers that do
+         * not implement SetDIBitsToDevice for this format. */
+        if (!SetDIBitsToDevice(winsys_drawable_handle,
+                               0, 0, width, height,
+                               0, 0, 0, height,
+                               pixels, (const BITMAPINFO *)&bitmap,
+                               DIB_RGB_COLORS)) {
+                int result = StretchDIBits(winsys_drawable_handle,
+                              0, 0, width, height,
+                              0, 0, width, height,
+                              pixels, (const BITMAPINFO *)&bitmap,
+                              DIB_RGB_COLORS, SRCCOPY);
+                return result != 0 && result != GDI_ERROR;
+        }
+        return true;
+}
+
+static void
+v3d_screen_flush_frontbuffer(struct pipe_screen *pscreen,
+                             struct pipe_context *ctx,
+                             struct pipe_resource *resource,
+                             unsigned level, unsigned layer,
+                             void *winsys_drawable_handle,
+                             unsigned nboxes, struct pipe_box *subbox)
+{
+        v3d_d3dkmt_present_frontbuffer(pscreen, ctx, resource, level, layer,
+                                       winsys_drawable_handle);
+}
+#endif
 
 static bool
 v3d_has_feature(struct v3d_screen *screen, enum drm_v3d_param feature)
@@ -231,6 +410,14 @@ v3d_init_screen_caps(struct v3d_screen *screen)
         struct pipe_caps *caps = (struct pipe_caps *)&screen->base.caps;
 
         u_init_pipe_screen_caps(&screen->base, 1);
+
+#ifdef _WIN32
+        /* ReactOS maps V3D allocations through a cached, non-coherent CPU
+         * aperture.  A persistent coherent mapping would let uploaders write
+         * again after submission without another ownership transition.
+         */
+        caps->buffer_map_persistent_coherent = false;
+#endif
 
         /* Supported features (boolean caps). */
         caps->vertex_color_unclamped = true;
@@ -786,11 +973,15 @@ v3d_screen_create(int fd, const struct pipe_screen_config *config,
         pscreen->context_create = v3d_context_create;
         pscreen->is_format_supported = v3d_screen_is_format_supported;
         pscreen->get_canonical_format = v3d_screen_get_compatible_tlb_format;
+#ifdef _WIN32
+        pscreen->flush_frontbuffer = v3d_screen_flush_frontbuffer;
+#endif
 
         screen->fd = fd;
         screen->ro = ro;
 
         list_inithead(&screen->bo_cache.time_list);
+        (void)mtx_init(&screen->bo_cache.lock, mtx_plain);
         (void)mtx_init(&screen->bo_handles_mutex, mtx_plain);
         screen->bo_handles = util_hash_table_create_ptr_keys();
 
@@ -805,21 +996,23 @@ v3d_screen_create(int fd, const struct pipe_screen_config *config,
         if (!screen->perfcnt)
                 goto fail;
 
-        driParseConfigFiles(config->options, config->options_info,
-                            &(driConfigFileParseParams) { .driverName = "v3d" });
+        screen->heap_memory_percent = 1.0f;
+        if (config) {
+                driParseConfigFiles(config->options, config->options_info,
+                                    &(driConfigFileParseParams) { .driverName = "v3d" });
 
-        /* We have to driCheckOption for the simulator mode to not assertion
-         * fail on not having our XML config.
-         */
-        const char *nonmsaa_name = "v3d_nonmsaa_texture_size_limit";
-        screen->nonmsaa_texture_size_limit =
-                driCheckOption(config->options, nonmsaa_name, DRI_BOOL) &&
-                driQueryOptionb(config->options, nonmsaa_name);
-
-        screen->heap_memory_percent =
-                driQueryOptionf(config->options, "heap_memory_percent");
-        if (screen->heap_memory_percent == OS_GPU_HEAP_SIZE_HEURISTIC)
-                screen->heap_memory_percent = 1.0f;
+                /* We have to driCheckOption for the simulator mode to not
+                 * assertion fail on not having our XML config.
+                 */
+                const char *nonmsaa_name = "v3d_nonmsaa_texture_size_limit";
+                screen->nonmsaa_texture_size_limit =
+                        driCheckOption(config->options, nonmsaa_name, DRI_BOOL) &&
+                        driQueryOptionb(config->options, nonmsaa_name);
+                screen->heap_memory_percent =
+                        driQueryOptionf(config->options, "heap_memory_percent");
+                if (screen->heap_memory_percent == OS_GPU_HEAP_SIZE_HEURISTIC)
+                        screen->heap_memory_percent = 1.0f;
+        }
 
         slab_create_parent(&screen->transfer_pool, sizeof(struct v3d_transfer), 16);
 
@@ -880,7 +1073,13 @@ v3d_screen_create(int fd, const struct pipe_screen_config *config,
         return pscreen;
 
 fail:
+        mtx_destroy(&screen->bo_handles_mutex);
+        mtx_destroy(&screen->bo_cache.lock);
+#ifdef _WIN32
+        v3d_d3dkmt_close(fd);
+#else
         close(fd);
+#endif
         ralloc_free(pscreen);
         return NULL;
 }

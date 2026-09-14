@@ -76,6 +76,10 @@ struct v3d_resource {
          * rendering.
          */
         uint64_t writes;
+#ifdef __REACTOS__
+        /* The WGL consumer notifies each completed external publication. */
+        bool external_updates_tracked;
+#endif
 
         /**
          * Bitmask of PIPE_CLEAR_COLOR0, PIPE_CLEAR_DEPTH, PIPE_CLEAR_STENCIL

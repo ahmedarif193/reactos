@@ -105,6 +105,12 @@ v3d_bo_map(struct v3d_bo *bo);
 void *
 v3d_bo_map_unsynchronized(struct v3d_bo *bo);
 
+void *
+v3d_bo_map_write(struct v3d_bo *bo);
+
+void *
+v3d_bo_map_unsynchronized_write(struct v3d_bo *bo);
+
 bool
 v3d_bo_wait(struct v3d_bo *bo, uint64_t timeout_ns, const char *reason);
 

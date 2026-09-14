@@ -93,7 +93,7 @@ v3d_begin_query_pipe(struct v3d_context *v3d, struct v3d_query *query)
         case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
                 v3d_bo_unreference(&pquery->bo);
                 pquery->bo = v3d_bo_alloc(v3d->screen, 4096, "query");
-                uint32_t *map = v3d_bo_map(pquery->bo);
+                uint32_t *map = v3d_bo_map_write(pquery->bo);
                 *map = 0;
 
                 v3d->current_oq = pquery->bo;
@@ -293,7 +293,7 @@ v3d_create_query_pipe(struct v3d_context *v3d, unsigned query_type, unsigned ind
         case PIPE_QUERY_TIMESTAMP:
         case PIPE_QUERY_TIME_ELAPSED:
                 pquery->bo = v3d_bo_alloc(v3d->screen, 4096, "query");
-                uint32_t *map = v3d_bo_map(pquery->bo);
+                uint32_t *map = v3d_bo_map_write(pquery->bo);
                 *map = 0;
 
                 drmSyncobjCreate(v3d->fd, 0, &pquery->sync[0]);

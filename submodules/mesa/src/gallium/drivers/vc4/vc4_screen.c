@@ -346,8 +346,8 @@ vc4_screen_present_gpu(struct vc4_screen *screen,
     return Result;
 }
 
-static void
-vc4_screen_flush_frontbuffer(struct pipe_screen *pscreen,
+bool
+vc4_d3dkmt_present(struct pipe_screen *pscreen,
                              struct pipe_context *ctx,
                              struct pipe_resource *resource,
                              unsigned level, unsigned layer,
@@ -366,17 +366,16 @@ vc4_screen_flush_frontbuffer(struct pipe_screen *pscreen,
 
         if (!winsys_drawable_handle || level >= VC4_MAX_MIP_LEVELS ||
             layer >= resource->array_size || rsc->cpp != 4)
-                return;
+                return false;
 
         window = WindowFromDC(hdc);
         if (vc4_screen_is_gpu_output(window)) {
-                vc4_screen_present_gpu(screen, ctx, resource, level,
-                                        layer, hdc, nboxes == 1 ? subbox : NULL);
-                return;
+                return vc4_screen_present_gpu(screen, ctx, resource, level,
+                                                layer, hdc, nboxes == 1 ? subbox : NULL);
         }
 
         if (rsc->tiled)
-                return;
+                return false;
 
         switch (resource->format) {
         case PIPE_FORMAT_B8G8R8X8_UNORM:
@@ -391,12 +390,12 @@ vc4_screen_flush_frontbuffer(struct pipe_screen *pscreen,
                 bitmap.bV5BlueMask = 0x00ff0000;
                 break;
         default:
-                return;
+                return false;
         }
 
         map = vc4_bo_map(rsc->bo);
         if (!map)
-                return;
+                return false;
         pixels = map + rsc->slices[level].offset +
                  layer * rsc->cube_map_stride;
 
@@ -412,12 +411,26 @@ vc4_screen_flush_frontbuffer(struct pipe_screen *pscreen,
                                0, 0, 0, height,
                               pixels, (const BITMAPINFO *)&bitmap,
                               DIB_RGB_COLORS)) {
-                StretchDIBits(winsys_drawable_handle,
+                int result = StretchDIBits(winsys_drawable_handle,
                               0, 0, width, height,
                               0, 0, width, height,
                               pixels, (const BITMAPINFO *)&bitmap,
                               DIB_RGB_COLORS, SRCCOPY);
+                return result != 0 && result != GDI_ERROR;
         }
+        return true;
+}
+
+static void
+vc4_screen_flush_frontbuffer(struct pipe_screen *pscreen,
+                             struct pipe_context *ctx,
+                             struct pipe_resource *resource,
+                             unsigned level, unsigned layer,
+                             void *winsys_drawable_handle,
+                             unsigned nboxes, struct pipe_box *subbox)
+{
+        vc4_d3dkmt_present(pscreen, ctx, resource, level, layer,
+                           winsys_drawable_handle, nboxes, subbox);
 }
 #endif
 

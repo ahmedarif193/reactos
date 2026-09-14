@@ -68,9 +68,11 @@ int
 v3d_d3dkmt_syncobj_clone(int fd, uint32_t source, uint32_t *destination);
 
 int
-v3d_d3dkmt_present_linear(int fd, uint32_t source_handle,
+v3d_d3dkmt_present_linear(int fd, uintptr_t window, uint32_t source_handle,
                           uint32_t out_sync, uint32_t source_offset,
                           uint32_t source_stride,
+                          uint32_t source_padded_height,
+                          uint32_t source_tiling, uint32_t source_size,
                           uint32_t destination_x, uint32_t destination_y,
                           uint32_t width, uint32_t height,
                           uint32_t screen_width, uint32_t screen_height);

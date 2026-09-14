@@ -225,7 +225,8 @@ stw_st_framebuffer_validate_locked(struct st_context *st,
           * tiling here so framebuffer captures can sample it directly rather
           * than allocate and convert a full-screen raster sampler shadow for
           * each glass region. The imported scanout allocation stays linear. */
-         if (stwfb->fb->hWnd &&
+         if (stw_dev->stw_winsys->can_compose &&
+             stw_dev->stw_winsys->can_compose() && stwfb->fb->hWnd &&
              GetPropW(stwfb->fb->hWnd, L"ReactOS.Dwm.GpuOutput"))
             bind &= ~PIPE_BIND_DISPLAY_TARGET;
 #endif

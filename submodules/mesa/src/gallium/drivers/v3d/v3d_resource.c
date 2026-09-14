@@ -38,8 +38,23 @@
 #include "v3d_screen.h"
 #include "v3d_context.h"
 #include "v3d_resource.h"
+#ifdef __REACTOS__
+#include "broadcom/common/v3d_d3dkmt.h"
+#endif
 /* The packets used here the same across V3D versions. */
 #include "broadcom/cle/v3d_packet_v42_pack.h"
+
+#ifdef _WIN32
+#define V3D_WINSYS_HANDLE_FROM_U32(value) ((HANDLE)(uintptr_t)(value))
+#define V3D_WINSYS_HANDLE_FROM_FD(value)  ((HANDLE)(intptr_t)(value))
+#define V3D_WINSYS_HANDLE_TO_U32(value)   ((uint32_t)(uintptr_t)(value))
+#define V3D_WINSYS_HANDLE_TO_FD(value)    ((int)(intptr_t)(value))
+#else
+#define V3D_WINSYS_HANDLE_FROM_U32(value) (value)
+#define V3D_WINSYS_HANDLE_FROM_FD(value)  (value)
+#define V3D_WINSYS_HANDLE_TO_U32(value)   (value)
+#define V3D_WINSYS_HANDLE_TO_FD(value)    (value)
+#endif
 
 static void
 v3d_debug_resource_layout(struct v3d_resource *rsc, const char *caller)
@@ -307,10 +322,16 @@ v3d_resource_transfer_map(struct pipe_context *pctx,
          * need to do syncing stuff here yet.
          */
 
-        if (usage & PIPE_MAP_UNSYNCHRONIZED)
+        if (usage & PIPE_MAP_WRITE) {
+                if (usage & PIPE_MAP_UNSYNCHRONIZED)
+                        buf = v3d_bo_map_unsynchronized_write(rsc->bo);
+                else
+                        buf = v3d_bo_map_write(rsc->bo);
+        } else if (usage & PIPE_MAP_UNSYNCHRONIZED) {
                 buf = v3d_bo_map_unsynchronized(rsc->bo);
-        else
+        } else {
                 buf = v3d_bo_map(rsc->bo);
+        }
         if (!buf) {
                 mesa_loge("Failed to map bo");
                 goto fail;
@@ -396,9 +417,9 @@ v3d_texture_subdata(struct pipe_context *pctx,
 
         void *buf;
         if (usage & PIPE_MAP_UNSYNCHRONIZED)
-                buf = v3d_bo_map_unsynchronized(rsc->bo);
+                buf = v3d_bo_map_unsynchronized_write(rsc->bo);
         else
-                buf = v3d_bo_map(rsc->bo);
+                buf = v3d_bo_map_write(rsc->bo);
 
         for (int i = 0; i < box->depth; i++) {
                 v3d_store_tiled_image(buf +
@@ -417,11 +438,13 @@ static void
 v3d_resource_destroy(struct pipe_screen *pscreen,
                      struct pipe_resource *prsc)
 {
-        struct v3d_screen *screen = v3d_screen(pscreen);
         struct v3d_resource *rsc = v3d_resource(prsc);
 
+#ifndef _WIN32
+        struct v3d_screen *screen = v3d_screen(pscreen);
         if (rsc->scanout)
                 renderonly_scanout_destroy(rsc->scanout, screen->ro);
+#endif
 
         v3d_bo_unreference(&rsc->bo);
         free(rsc);
@@ -449,7 +472,6 @@ v3d_resource_get_handle(struct pipe_screen *pscreen,
                         struct winsys_handle *whandle,
                         unsigned usage)
 {
-        struct v3d_screen *screen = v3d_screen(pscreen);
         struct v3d_resource *rsc = v3d_resource(prsc);
         struct v3d_bo *bo = rsc->bo;
 
@@ -464,9 +486,16 @@ v3d_resource_get_handle(struct pipe_screen *pscreen,
         bo->private = false;
 
         switch (whandle->type) {
-        case WINSYS_HANDLE_TYPE_SHARED:
-                return v3d_bo_flink(bo, &whandle->handle);
+        case WINSYS_HANDLE_TYPE_SHARED: {
+                uint32_t handle;
+                if (!v3d_bo_flink(bo, &handle))
+                        return false;
+                whandle->handle = V3D_WINSYS_HANDLE_FROM_U32(handle);
+                return true;
+        }
         case WINSYS_HANDLE_TYPE_KMS:
+#ifndef _WIN32
+                struct v3d_screen *screen = v3d_screen(pscreen);
                 if (screen->ro) {
                         if (renderonly_get_handle(rsc->scanout, whandle)) {
                                 whandle->stride = rsc->slices[0].stride;
@@ -474,11 +503,14 @@ v3d_resource_get_handle(struct pipe_screen *pscreen,
                         }
                         return false;
                 }
-                whandle->handle = bo->handle;
+#endif
+                whandle->handle = V3D_WINSYS_HANDLE_FROM_U32(bo->handle);
                 return true;
-        case WINSYS_HANDLE_TYPE_FD:
-                whandle->handle = v3d_bo_get_dmabuf(bo);
-                return whandle->handle != -1;
+        case WINSYS_HANDLE_TYPE_FD: {
+                int fd = v3d_bo_get_dmabuf(bo);
+                whandle->handle = V3D_WINSYS_HANDLE_FROM_FD(fd);
+                return fd != -1;
+        }
         }
 
         return false;
@@ -865,6 +897,7 @@ v3d_resource_create_with_modifiers(struct pipe_screen *pscreen,
 
         v3d_setup_slices(screen, rsc, 0, tmpl->bind & PIPE_BIND_SHARED);
 
+#ifndef _WIN32
         if (screen->ro && (tmpl->bind & PIPE_BIND_SCANOUT)) {
                 assert(!rsc->tiled);
                 struct winsys_handle handle;
@@ -889,7 +922,8 @@ v3d_resource_create_with_modifiers(struct pipe_screen *pscreen,
                         goto fail;
                 }
                 assert(handle.type == WINSYS_HANDLE_TYPE_FD);
-                rsc->bo = v3d_bo_open_dmabuf(screen, handle.handle);
+                rsc->bo = v3d_bo_open_dmabuf(
+                        screen, V3D_WINSYS_HANDLE_TO_FD(handle.handle));
                 close(handle.handle);
 
                 if (!rsc->bo)
@@ -898,10 +932,11 @@ v3d_resource_create_with_modifiers(struct pipe_screen *pscreen,
                 v3d_debug_resource_layout(rsc, "renderonly");
 
                 return prsc;
-        } else {
-                if (!v3d_resource_bo_alloc(rsc))
-                        goto fail;
         }
+#endif
+
+        if (!v3d_resource_bo_alloc(rsc))
+                goto fail;
 
         return prsc;
 fail:
@@ -961,10 +996,12 @@ v3d_resource_from_handle(struct pipe_screen *pscreen,
 
         switch (whandle->type) {
         case WINSYS_HANDLE_TYPE_SHARED:
-                rsc->bo = v3d_bo_open_name(screen, whandle->handle);
+                rsc->bo = v3d_bo_open_name(
+                        screen, V3D_WINSYS_HANDLE_TO_U32(whandle->handle));
                 break;
         case WINSYS_HANDLE_TYPE_FD:
-                rsc->bo = v3d_bo_open_dmabuf(screen, whandle->handle);
+                rsc->bo = v3d_bo_open_dmabuf(
+                        screen, V3D_WINSYS_HANDLE_TO_FD(whandle->handle));
                 break;
         default:
                 mesa_loge("Attempt to import unsupported handle type %d",
@@ -999,6 +1036,7 @@ v3d_resource_from_handle(struct pipe_screen *pscreen,
                  }
         }
 
+#ifndef _WIN32
         if (screen->ro) {
                 /* Make sure that renderonly has a handle to our buffer in the
                  * display's fd, so that a later renderonly_get_handle()
@@ -1009,6 +1047,7 @@ v3d_resource_from_handle(struct pipe_screen *pscreen,
                                                                   screen->ro,
                                                                   NULL);
         }
+#endif
 
         if (rsc->tiled && whandle->stride != slice->stride) {
                 static bool warned = false;
@@ -1047,7 +1086,12 @@ v3d_update_shadow_texture(struct pipe_context *pctx,
 
         assert(view->texture != pview->texture);
 
-        if (shadow->writes == orig->writes && orig->bo->private)
+        if (shadow->writes == orig->writes &&
+            (orig->bo->private
+#ifdef __REACTOS__
+             || orig->external_updates_tracked
+#endif
+            ))
                 return;
 
         perf_debug("Updating %dx%d@%d shadow for linear texture\n",
@@ -1181,6 +1225,24 @@ static const struct u_transfer_vtbl transfer_vtbl = {
         .get_stencil              = v3d_resource_get_stencil,
 };
 
+#ifdef __REACTOS__
+static void
+v3d_resource_changed(struct pipe_screen *pscreen, struct pipe_resource *prsc)
+{
+        struct v3d_resource *rsc = v3d_resource(prsc);
+        /* GDI can write an imported redirection BO through a different CPU
+         * mapping. Its next GPU submission must clean those writes as well
+         * as invalidate this context's tiled sampling copy. A GPU-only
+         * publication has no dirty CPU lines, so the clean is harmless. */
+        if (rsc->bo &&
+            v3d_d3dkmt_bo_mark_cpu_dirty(v3d_screen(pscreen)->fd,
+                                         rsc->bo->handle) != 0)
+                mesa_loge("Failed to mark externally updated V3D BO CPU dirty");
+        rsc->external_updates_tracked = true;
+        rsc->writes++;
+}
+#endif
+
 void
 v3d_resource_screen_init(struct pipe_screen *pscreen)
 {
@@ -1190,6 +1252,9 @@ v3d_resource_screen_init(struct pipe_screen *pscreen)
         pscreen->resource_from_handle = v3d_resource_from_handle;
         pscreen->resource_get_handle = v3d_resource_get_handle;
         pscreen->resource_get_param = v3d_resource_get_param;
+#ifdef __REACTOS__
+        pscreen->resource_changed = v3d_resource_changed;
+#endif
         pscreen->resource_destroy = u_transfer_helper_resource_destroy;
         pscreen->transfer_helper = u_transfer_helper_create(&transfer_vtbl,
                                                             U_TRANSFER_HELPER_SEPARATE_Z32S8 |

@@ -33,10 +33,11 @@
 
 void v3dX(bcl_epilogue)(struct v3d_context *v3d, struct v3d_job *job)
 {
-                v3d_cl_ensure_space_with_branch(&job->bcl,
+                if (!v3d_cl_ensure_space_with_branch(&job->bcl,
                                                 cl_packet_length(PRIMITIVE_COUNTS_FEEDBACK) +
                                                 cl_packet_length(TRANSFORM_FEEDBACK_SPECS) +
-                                                cl_packet_length(FLUSH));
+                                                cl_packet_length(FLUSH)))
+                        return;
 
                 if (job->tf_enabled || job->needs_primitives_generated) {
                         /* Write primitive counts to memory. */

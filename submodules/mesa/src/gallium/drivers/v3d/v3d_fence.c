@@ -33,8 +33,13 @@
  * the same BOs), so we can just use the seqno of the last rendering we'd
  * fired off as our fence marker.
  */
+#ifndef _WIN32
 #include <fcntl.h>
 #include <libsync.h>
+#else
+#include "broadcom/common/v3d_d3dkmt.h"
+#include "gallium/winsys/v3d/d3dkmt/v3d_d3dkmt_public.h"
+#endif
 
 #include "util/perf/cpu_trace.h"
 #include "util/u_inlines.h"
@@ -45,6 +50,9 @@
 
 struct v3d_fence {
         struct pipe_reference reference;
+#ifdef _WIN32
+        int device_fd;
+#endif
         int fd;
 };
 
@@ -59,7 +67,11 @@ v3d_fence_reference(struct pipe_screen *pscreen,
 
         if (pipe_reference(old ? &old->reference : NULL,
                            f ? &f->reference : NULL)) {
+#ifdef _WIN32
+                drmSyncobjDestroy(old->device_fd, (uint32_t)old->fd);
+#else
                 close(old->fd);
+#endif
                 free(old);
         }
         *p = f;
@@ -82,6 +94,9 @@ v3d_fence_wait(struct v3d_screen *screen,
                uint64_t timeout_ns)
 {
         int ret;
+#ifdef _WIN32
+        uint32_t syncobj = (uint32_t)fence->fd;
+#else
         unsigned syncobj;
 
         MESA_TRACE_FUNC();
@@ -97,6 +112,7 @@ v3d_fence_wait(struct v3d_screen *screen,
                 mesa_loge("Failed to import fence to syncobj: %d", ret);
                 return false;
         }
+#endif
 
         uint64_t abs_timeout = os_time_get_absolute_timeout(timeout_ns);
         if (abs_timeout == OS_TIMEOUT_INFINITE)
@@ -104,7 +120,9 @@ v3d_fence_wait(struct v3d_screen *screen,
 
         ret = drmSyncobjWait(screen->fd, &syncobj, 1, abs_timeout, 0, NULL);
 
+#ifndef _WIN32
         drmSyncobjDestroy(screen->fd, syncobj);
+#endif
 
         return ret >= 0;
 }
@@ -121,6 +139,22 @@ v3d_fence_finish(struct pipe_screen *pscreen,
         return v3d_fence_wait(screen, fence, timeout_ns);
 }
 
+#ifdef _WIN32
+bool
+v3d_d3dkmt_fence_signal_event(struct pipe_screen *pscreen,
+                              struct pipe_fence_handle *pf,
+                              void *event)
+{
+        struct v3d_fence *fence = (struct v3d_fence *)pf;
+
+        if (!pscreen || !fence || !event)
+                return false;
+        return v3d_d3dkmt_syncobj_signal_event(fence->device_fd,
+                                               (uint32_t)fence->fd,
+                                               event) == 0;
+}
+#endif
+
 struct v3d_fence *
 v3d_fence_create(struct v3d_context *v3d, int fd)
 {
@@ -128,12 +162,16 @@ v3d_fence_create(struct v3d_context *v3d, int fd)
         if (!f)
                 return NULL;
 
+#ifdef _WIN32
+        f->device_fd = v3d->fd;
+#endif
         f->fd = fd;
         pipe_reference_init(&f->reference, 1);
 
         return f;
 }
 
+#ifndef _WIN32
 static void
 v3d_fence_create_fd(struct pipe_context *pctx, struct pipe_fence_handle **pf,
                     int fd, enum pipe_fd_type type)
@@ -168,12 +206,15 @@ v3d_fence_get_fd(struct pipe_screen *screen, struct pipe_fence_handle *pfence)
 
         return fcntl(fence->fd, F_DUPFD_CLOEXEC, 3);
 }
+#endif
 
 int
 v3d_fence_context_init(struct v3d_context *v3d)
 {
+#ifndef _WIN32
         v3d->base.create_fence_fd = v3d_fence_create_fd;
         v3d->base.fence_server_sync = v3d_fence_server_sync;
+#endif
         v3d->in_fence_fd = -1;
 
         /* Since we initialize the in_fence_fd to -1 (no wait necessary),
@@ -187,10 +228,12 @@ void
 v3d_fence_context_finish(struct v3d_context *v3d)
 {
         drmSyncobjDestroy(v3d->fd, v3d->in_syncobj);
+#ifndef _WIN32
         if (v3d->in_fence_fd >= 0) {
                 close(v3d->in_fence_fd);
                 v3d->in_fence_fd = -1;
         }
+#endif
 }
 
 void
@@ -198,5 +241,7 @@ v3d_fence_screen_init(struct v3d_screen *screen)
 {
         screen->base.fence_reference = v3d_fence_reference;
         screen->base.fence_finish = v3d_fence_finish;
+#ifndef _WIN32
         screen->base.fence_get_fd = v3d_fence_get_fd;
+#endif
 }
