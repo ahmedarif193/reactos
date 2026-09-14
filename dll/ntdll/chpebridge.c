@@ -845,6 +845,18 @@ ChpeLdrGetDllHandleEx(ULONG Flags, PWSTR DllPath, PULONG DllCharacteristics, PUN
 }
 
 NTSTATUS NTAPI
+ChpeLdrAddRefDll(ULONG Flags, PVOID BaseAddress)
+{
+    return LdrAddRefDll(Flags, BaseAddress);
+}
+
+NTSTATUS NTAPI
+ChpeLdrEnumResources(PVOID BaseAddress, PLDR_RESOURCE_INFO ResourceInfo, ULONG Level, ULONG *ResourceCount, LDR_ENUM_RESOURCE_INFO *Resources)
+{
+    return LdrEnumResources(BaseAddress, ResourceInfo, Level, ResourceCount, Resources);
+}
+
+NTSTATUS NTAPI
 ChpeLdrGetProcedureAddress(PVOID BaseAddress, PANSI_STRING Name, ULONG Ordinal, PVOID *ProcedureAddress)
 {
     PVOID NativeBase = NULL;
