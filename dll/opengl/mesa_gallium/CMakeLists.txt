@@ -18,7 +18,7 @@ if(ARCH STREQUAL "arm64")
     if(ARM64EC_RUNTIME)
         set(MESA_TRIPLE arm64ec-w64-mingw32)
     endif()
-    set(MESA_GALLIUM_DRIVERS vc4,softpipe)
+    set(MESA_GALLIUM_DRIVERS vc4,v3d,softpipe)
 elseif(ARCH STREQUAL "amd64")
     set(MESA_CPU x86_64)
     set(MESA_TRIPLE x86_64-w64-mingw32)
@@ -45,7 +45,13 @@ endif()
 include("${REACTOS_SOURCE_DIR}/sdk/cmake/nested-build.cmake")
 
 set(MESA_WORK_DIR "${CMAKE_CURRENT_BINARY_DIR}/mesa-source")
-set(MESA_BINARY_DIR "${MESA_WORK_DIR}/cmake-build")
+if(ARCH STREQUAL "arm64")
+    # The native CMake profile does not yet include the V3D driver or its
+    # D3DKMT winsys. The Pi 5 must use the complete source profile.
+    set(MESA_BINARY_DIR "${MESA_WORK_DIR}/build")
+else()
+    set(MESA_BINARY_DIR "${MESA_WORK_DIR}/cmake-build")
+endif()
 set(MESA_SUPPORT_DIR "${MESA_WORK_DIR}/reactos-release")
 set(MESA_DLL "${MESA_BINARY_DIR}/src/gallium/targets/wgl/mesa_gallium.dll")
 set(MESA_GALLIUM_ICD_STAGE_DIR "${CMAKE_CURRENT_BINARY_DIR}/mesa-icd")
@@ -110,32 +116,90 @@ if(ARCH STREQUAL "arm64")
         -DMESA_REACTOS_BUILD_DIR:PATH=${MESA_SUPPORT_DIR})
 endif()
 
-set(_mesa_arch ${ARCH})
-if(ARM64EC_RUNTIME)
-    set(_mesa_arch arm64ec)
+if(ARCH STREQUAL "arm64")
+    find_program(MESA_MESON NAMES meson REQUIRED)
+    set(MESA_MESON_JOBS "8" CACHE STRING "Parallel jobs in the ARM64 Mesa V3D build")
+    if(NOT MESA_MESON_JOBS MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "MESA_MESON_JOBS must be a positive integer")
+    endif()
+    set(MESA_LLVM_PREFIX "")
+    file(MAKE_DIRECTORY "${MESA_WORK_DIR}")
+    foreach(_mesa_path MESA_CC MESA_CXX MESA_WINDRES MESA_AR MESA_STRIP MESA_PYTHON MESA_LLVM_PREFIX CMAKE_COMMAND)
+        file(TO_CMAKE_PATH "${${_mesa_path}}" ${_mesa_path}_INI)
+        string(REPLACE "'" "\\'" ${_mesa_path}_INI "${${_mesa_path}_INI}")
+    endforeach()
+    configure_file("${REACTOS_SOURCE_DIR}/submodules/mesa-cross.ini.in" "${MESA_WORK_DIR}/cross.ini" @ONLY)
+    configure_file("${REACTOS_SOURCE_DIR}/submodules/mesa-native.ini.in" "${MESA_WORK_DIR}/native.ini" @ONLY)
+
+    ExternalProject_Add(mesa_gallium_build
+        PREFIX "${MESA_WORK_DIR}/meson-prefix"
+        SOURCE_DIR "${MESA_SOURCE_DIR}"
+        BINARY_DIR "${MESA_BINARY_DIR}"
+        DOWNLOAD_COMMAND ""
+        UPDATE_COMMAND ""
+        PATCH_COMMAND ""
+        CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
+            ${MESA_MESON} setup --reconfigure <BINARY_DIR> <SOURCE_DIR>
+            --cross-file "${MESA_WORK_DIR}/cross.ini"
+            --native-file "${MESA_WORK_DIR}/native.ini"
+            --wrap-mode=nofallback
+            --buildtype=release
+            -Db_ndebug=false
+            -Dc_args=-D__REACTOS__
+            -Dcpp_args=-D__REACTOS__
+            -Dplatforms=windows
+            -Dgallium-drivers=${MESA_GALLIUM_DRIVERS}
+            -Dgallium-wgl-dll-name=mesa_gallium
+            -Dreactos-source-dir=${REACTOS_SOURCE_DIR}
+            -Dreactos-build-dir=${MESA_SUPPORT_DIR}
+            -Dllvm=disabled
+            -Dvulkan-drivers=
+            -Dglx=disabled
+            -Degl=disabled
+            -Dgbm=disabled
+            -Dgles1=disabled
+            -Dgles2=disabled
+            -Dglvnd=disabled
+            -Dgallium-va=disabled
+            -Dvideo-codecs=
+            -Dxmlconfig=disabled
+            -Dzlib=enabled
+            -Dzstd=disabled
+            -Dlibunwind=disabled
+            -Dvalgrind=disabled
+            -Dbuild-tests=false
+        BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
+            ${MESA_NINJA} -C <BINARY_DIR> -j ${MESA_MESON_JOBS}
+            src/gallium/targets/wgl/mesa_gallium.dll
+        BUILD_ALWAYS TRUE
+        INSTALL_COMMAND ""
+        BUILD_BYPRODUCTS "${MESA_DLL}"
+        USES_TERMINAL_BUILD FALSE)
+else()
+    set(_mesa_arch ${ARCH})
+    include("${REACTOS_SOURCE_DIR}/submodules/mesa-cmake.cmake")
+    ExternalProject_Add(mesa_gallium_build
+        PREFIX "${MESA_WORK_DIR}/cmake-prefix"
+        SOURCE_DIR "${MESA_SOURCE_DIR}"
+        BINARY_DIR "${MESA_BINARY_DIR}"
+        DOWNLOAD_COMMAND ""
+        UPDATE_COMMAND ""
+        PATCH_COMMAND ""
+        CMAKE_GENERATOR Ninja
+        CMAKE_ARGS
+            ${MESA_CMAKE_ARGS}
+            -DMESA_ARCH:STRING=${_mesa_arch}
+            -DMESA_WGL_DLL_NAME:STRING=mesa_gallium
+            -DMESA_LLVMPIPE:BOOL=OFF
+            -DMESA_ASSERTIONS:BOOL=ON
+            ${_mesa_platform_options}
+        BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
+            ${REACTOS_NESTED_BUILD} <BINARY_DIR> --target mesa_gallium
+        BUILD_ALWAYS TRUE
+        INSTALL_COMMAND ""
+        BUILD_BYPRODUCTS "${MESA_DLL}"
+        USES_TERMINAL_BUILD FALSE)
 endif()
-include("${REACTOS_SOURCE_DIR}/submodules/mesa-cmake.cmake")
-ExternalProject_Add(mesa_gallium_build
-    PREFIX "${MESA_WORK_DIR}/cmake-prefix"
-    SOURCE_DIR "${MESA_SOURCE_DIR}"
-    BINARY_DIR "${MESA_BINARY_DIR}"
-    DOWNLOAD_COMMAND ""
-    UPDATE_COMMAND ""
-    PATCH_COMMAND ""
-    CMAKE_GENERATOR Ninja
-    CMAKE_ARGS
-        ${MESA_CMAKE_ARGS}
-        -DMESA_ARCH:STRING=${_mesa_arch}
-        -DMESA_WGL_DLL_NAME:STRING=mesa_gallium
-        -DMESA_LLVMPIPE:BOOL=OFF
-        -DMESA_ASSERTIONS:BOOL=ON
-        ${_mesa_platform_options}
-    BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
-        ${REACTOS_NESTED_BUILD} <BINARY_DIR> --target mesa_gallium
-    BUILD_ALWAYS TRUE
-    INSTALL_COMMAND ""
-    BUILD_BYPRODUCTS "${MESA_DLL}"
-    USES_TERMINAL_BUILD FALSE)
 
 if(_mesa_support_dependency)
     # Build the support libraries before CMake checks for them, without depending
