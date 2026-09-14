@@ -1825,6 +1825,7 @@ vc4kmt_wait_gpu(
     D3DKMT_HANDLE Handle;
     UINT64 Value;
     UINT NodeOrdinal = (UINT)Engine;
+    NTSTATUS Status;
 
     if (Device == NULL || Fence == NULL ||
         NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT)
@@ -1850,7 +1851,12 @@ vc4kmt_wait_gpu(
     Wait.ObjectCount = 1;
     Wait.ObjectHandleArray = &Handle;
     Wait.MonitoredFenceValueArray = &Value;
-    return D3DKMTWaitForSynchronizationObjectFromGpu(&Wait);
+    Status = D3DKMTWaitForSynchronizationObjectFromGpu(&Wait);
+    /* A saturated context cannot admit another GPU wait. Complete the same
+     * dependency on the CPU before the caller submits dependent work. */
+    if (Status == STATUS_DEVICE_BUSY)
+        return vc4kmt_wait(Device, Fence, INFINITE);
+    return Status;
 }
 
 VOID
