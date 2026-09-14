@@ -47,7 +47,7 @@ START_TEST(RtlAllocateHeap)
     {
         Buffers[i] = RtlAllocateHeap(hHeap, 0, (i % 16 ) + 1);
         ASSERT(Buffers[i] != NULL);
-        if (!((ULONG_PTR)Buffers[i] & 0xF))
+        if ((ULONG_PTR)Buffers[i] & 0xF)
         {
             Aligned = FALSE;
         }
