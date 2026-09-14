@@ -228,6 +228,14 @@ cmake_dependent_option(ENABLE_WOW64 "Whether to build the 32-bit WoW64 subsystem
                        "ARCH STREQUAL amd64 OR ARCH STREQUAL arm64" OFF)
 unset(_wow64_default)
 
+set(_validate_compat_default OFF)
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(_validate_compat_default ON)
+endif()
+option(VALIDATE_COMPAT_BINARIES
+       "Validate ARM64EC and WoW64 binaries after their nested builds." ${_validate_compat_default})
+unset(_validate_compat_default)
+
 cmake_dependent_option(ENABLE_ROSV
                        "Whether to build the ROSV VMX hypervisor driver and its user-mode tools." OFF
                        "ARCH STREQUAL amd64" OFF)

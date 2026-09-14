@@ -575,4 +575,15 @@ config ENABLE_WOW64
       ntdll and kernel paths needed to run 32-bit applications on amd64
       or ARM64. "auto" enables it by default on ARM64.
 
+config VALIDATE_COMPAT_BINARIES
+    prompt "Validate ARM64EC and WoW64 build outputs"
+    type bool
+    default auto
+    depends ENABLE_FEX_ARM64EC=y || ENABLE_WOW64=y
+    help
+      Check PE architecture, ARM64EC metadata and ABI-sensitive imports
+      after the nested compatibility builds. Disable to skip these checks;
+      the compatibility DLLs are still built and packaged. "auto" enables
+      validation for Release builds and disables it for Debug builds.
+
 endmenu

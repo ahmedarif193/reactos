@@ -210,13 +210,20 @@ else()
     set(_wow64_i386_heal)
 endif()
 
+set(_wow64_i386_validate)
+if(VALIDATE_COMPAT_BINARIES)
+    set(_wow64_i386_validate COMMAND ${CMAKE_COMMAND}
+        -P "${REACTOS_SOURCE_DIR}/sdk/cmake/wow64-validate.cmake" -- ${WOW64_I386_VALIDATION_FILES})
+endif()
+
+include("${REACTOS_SOURCE_DIR}/sdk/cmake/nested-build.cmake")
+
 add_custom_target(wow64_i386 ALL
     ${_wow64_i386_heal}
-    COMMAND ${CMAKE_COMMAND} --build "${WOW64_I386_BINARY_DIR}" --target ${WOW64_I386_TARGETS}
-    COMMAND ${CMAKE_COMMAND} -P "${REACTOS_SOURCE_DIR}/sdk/cmake/wow64-validate.cmake" -- ${WOW64_I386_VALIDATION_FILES}
+    COMMAND ${REACTOS_NESTED_BUILD} "${WOW64_I386_BINARY_DIR}" --target ${WOW64_I386_TARGETS}
+    ${_wow64_i386_validate}
     BYPRODUCTS ${WOW64_I386_VALIDATION_FILES}
     COMMENT "Building ${_wow64_i386_target_count} i386 WoW64 targets"
-    USES_TERMINAL
     VERBATIM)
 add_dependencies(wow64_i386 wow64_i386_configure)
 

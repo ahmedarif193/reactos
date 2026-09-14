@@ -6,7 +6,7 @@
 # Build the ARM64EC user-mode half used by FEX from the same source revision.
 # This follows the WoW64 nested-build model: the primary build remains ARM64,
 # an explicit manifest selects the secondary ABI targets, and the generated PE
-# files are validated before they are added to the ISO.
+# files can be validated before they are added to the ISO.
 
 include("${REACTOS_SOURCE_DIR}/sdk/cmake/arm64ec_targets.cmake")
 
@@ -159,7 +159,13 @@ _fex_add_nested_configure(fex_arm64ec "${ARM64EC_BINARY_DIR}" _arm64ec_cmake_arg
 # after the primary build has generated that header.
 add_dependencies(fex_arm64ec_configure asm)
 
-find_program(FEX_LLVM_READOBJ llvm-readobj HINTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin" REQUIRED)
+set(_arm64ec_validate)
+if(VALIDATE_COMPAT_BINARIES)
+    find_program(FEX_LLVM_READOBJ llvm-readobj HINTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/bin" REQUIRED)
+    set(_arm64ec_validate COMMAND ${CMAKE_COMMAND}
+        -DLLVM_READOBJ:FILEPATH=${FEX_LLVM_READOBJ}
+        -P "${REACTOS_SOURCE_DIR}/sdk/cmake/arm64ec-validate.cmake" -- ${ARM64EC_RUNTIME_VALIDATION_FILES})
+endif()
 
 list(LENGTH ARM64EC_RUNTIME_BUILD_MODULES _arm64ec_target_count)
 if(CMAKE_GENERATOR STREQUAL "Ninja")
@@ -168,13 +174,14 @@ else()
     set(_arm64ec_heal)
 endif()
 
+include("${REACTOS_SOURCE_DIR}/sdk/cmake/nested-build.cmake")
+
 add_custom_target(fex_arm64ec_runtime ALL
     ${_arm64ec_heal}
-    COMMAND ${CMAKE_COMMAND} --build "${ARM64EC_BINARY_DIR}" --target ${ARM64EC_RUNTIME_BUILD_MODULES}
-    COMMAND ${CMAKE_COMMAND} -DLLVM_READOBJ:FILEPATH=${FEX_LLVM_READOBJ} -P "${REACTOS_SOURCE_DIR}/sdk/cmake/arm64ec-validate.cmake" -- ${ARM64EC_RUNTIME_VALIDATION_FILES}
+    COMMAND ${REACTOS_NESTED_BUILD} "${ARM64EC_BINARY_DIR}" --target ${ARM64EC_RUNTIME_BUILD_MODULES}
+    ${_arm64ec_validate}
     BYPRODUCTS ${ARM64EC_RUNTIME_VALIDATION_FILES}
     COMMENT "Building ${_arm64ec_target_count} ARM64EC FEX runtime DLLs"
-    USES_TERMINAL
     VERBATIM)
 add_dependencies(fex_arm64ec_runtime fex_arm64ec_configure)
 
