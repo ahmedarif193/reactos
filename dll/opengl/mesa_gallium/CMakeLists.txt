@@ -127,7 +127,7 @@ ExternalProject_Add(mesa_gallium_build
         --native-file "${MESA_WORK_DIR}/native.ini"
         --wrap-mode=nofallback
         --buildtype=release
-        -Db_ndebug=true
+        -Db_ndebug=false
         -Dc_args=-D__REACTOS__
         -Dcpp_args=-D__REACTOS__
         -Dplatforms=windows
