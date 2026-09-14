@@ -344,6 +344,11 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             if (!NT_SUCCESS(DeleteStatus))
                 DPRINT1("NtfsFsdCleanup: delete failed 0x%08lx\n", DeleteStatus);
         }
+
+        /* The cache holds a file-object reference, so waiting for CLOSE to
+         * release the private map prevents normal cached files from closing. */
+        if (IrpSp->FileObject->PrivateCacheMap)
+            CcUninitializeCacheMap(IrpSp->FileObject, NULL, NULL);
     }
 
     // TODO: How do we determine when the volume needs to get cleaned up?
