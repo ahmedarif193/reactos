@@ -862,12 +862,12 @@ void CDefView::ArrangeComputerView()
         return;
 
     const UINT dpi = ComputerViewDpi();
-    const INT margin = MulDiv(16, dpi, 96);
-    const INT headerHeight = MulDiv(28, dpi, 96);
-    const INT headerGap = MulDiv(10, dpi, 96);
-    const INT minTileWidth = MulDiv(220, dpi, 96);
-    const INT tileHeight = MulDiv(76, dpi, 96);
-    const INT groupGap = MulDiv(16, dpi, 96);
+    const INT margin = MulDiv(14, dpi, 96);
+    const INT headerHeight = MulDiv(25, dpi, 96);
+    const INT headerGap = MulDiv(9, dpi, 96);
+    const INT minTileWidth = MulDiv(198, dpi, 96);
+    const INT tileHeight = MulDiv(68, dpi, 96);
+    const INT groupGap = MulDiv(8, dpi, 96);
     RECT client;
     ::GetClientRect(m_ListView, &client);
 
