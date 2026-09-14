@@ -8,6 +8,23 @@
 #include <wine/asm.h>
 
 /*
+ * The x64 export has the same split shape as the Windows ARM64X ntdll: keep
+ * the optional WoW64 hook in x64 code, then enter the native exception worker.
+ */
+__ASM_GLOBAL_POINTER("ChpeLdrpWow64PrepareForExceptionX64", "0")
+
+__ASM_GLOBAL_FUNC(ChpeKiUserExceptionDispatcher,
+                  __ASM_SEH(".seh_endprologue\n\t")
+                  "cld\n\t"
+                  "movq ChpeLdrpWow64PrepareForExceptionX64(%rip),%rax\n\t"
+                  "testq %rax,%rax\n\t"
+                  "jz 1f\n\t"
+                  "subq $0x28,%rsp\n\t"
+                  "call *%rax\n\t"
+                  "addq $0x28,%rsp\n"
+                  "1:\tjmp ChpeKiUserExceptionDispatcherNative")
+
+/*
  * AMD64 callers pass the stack allocation size in RAX. This helper must stay
  * as genuine x64 code: a generated ARM64EC entry thunk uses RAX as scratch
  * before entering native code and would destroy the size before it is probed.

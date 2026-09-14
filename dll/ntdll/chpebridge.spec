@@ -13,6 +13,7 @@
 @ stdcall -version=0x600+ EtwEventWriteTransfer(int64 ptr ptr ptr long ptr) ChpeEtwEventWriteTransfer
 @ cdecl __C_specific_handler(ptr long ptr ptr) ChpeCSpecificHandler
 @ stdcall ChpeDispatchExceptionNative(ptr ptr)
+@ stdcall KiUserExceptionDispatcher(ptr ptr) ChpeKiUserExceptionDispatcher
 @ stdcall LdrAddRefDll(long ptr) ChpeLdrAddRefDll
 @ stdcall LdrEnumResources(ptr ptr long ptr ptr) ChpeLdrEnumResources
 @ stdcall LdrFindEntryForAddress(ptr ptr) ChpeLdrFindEntryForAddress
