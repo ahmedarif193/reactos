@@ -1,0 +1,1766 @@
+# SPDX-License-Identifier: MIT
+# Native CMake generator rules; no Meson runtime dependency.
+set(MESA_GLAPI_DEPENDENCIES
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/AMD_depth_clamp_separate.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/AMD_draw_buffers_blend.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/AMD_gpu_shader_int64.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/AMD_performance_monitor.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_ES2_compatibility.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_ES3_compatibility.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_base_instance.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_bindless_texture.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_blend_func_extended.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_clear_buffer_object.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_clear_texture.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_clip_control.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_color_buffer_float.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_compressed_texture_pixel_storage.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_compute_shader.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_compute_variable_group_size.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_copy_buffer.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_copy_image.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_debug_output.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_depth_buffer_float.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_depth_clamp.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_direct_state_access.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_draw_buffers.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_draw_buffers_blend.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_draw_elements_base_vertex.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_draw_indirect.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_draw_instanced.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_framebuffer_no_attachments.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_framebuffer_object.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_get_program_binary.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_get_texture_sub_image.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_gl_spirv.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_gpu_shader5.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_gpu_shader_fp64.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_gpu_shader_int64.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_indirect_parameters.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_instanced_arrays.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_internalformat_query.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_internalformat_query2.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_invalidate_subdata.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_map_buffer_range.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_multi_bind.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_pipeline_statistics_query.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_program_interface_query.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_robustness.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_sample_shading.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_sampler_objects.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_seamless_cube_map.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_separate_shader_objects.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_shader_atomic_counters.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_shader_image_load_store.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_shader_storage_buffer_object.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_shader_subroutine.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_shading_language_include.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_sparse_buffer.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_sparse_texture.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_spirv_extensions.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_sync.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_tessellation_shader.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_barrier.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_buffer_object.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_buffer_range.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_compression_rgtc.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_cube_map_array.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_float.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_gather.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_multisample.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_rg.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_rgb10_a2ui.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_storage.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_storage_multisample.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_texture_view.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_uniform_buffer_object.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_vertex_array_object.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_vertex_attrib_64bit.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_vertex_attrib_binding.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_vertex_type_2_10_10_10_rev.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/ARB_viewport_array.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_EGL_image_storage.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_direct_state_access.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_draw_buffers2.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_external_objects.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_external_objects_fd.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_external_objects_win32.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_framebuffer_object.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_gpu_shader4.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_mesh_shader.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_multisampled_render_to_texture.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_packed_depth_stencil.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_provoking_vertex.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_separate_shader_objects.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_shader_image_load_store.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_shader_pixel_local_storage.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_texture_array.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_texture_integer.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_texture_storage.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_texture_storage_compression.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_transform_feedback.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_vertex_attrib_64bit.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/EXT_window_rectangles.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/GL3x.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/GL4x.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/GREMEDY_string_marker.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/INTEL_performance_query.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/KHR_context_flush_control.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/KHR_debug.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/KHR_robustness.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/KHR_robustness_es.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/KHR_shader_subgroup.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/KHR_texture_compression_astc.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/MESA_tile_raster_order.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/NV_alpha_to_coverage_dither_control.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/NV_conditional_render.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/NV_copy_image.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/NV_half_float.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/NV_primitive_restart.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/NV_texture_barrier.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/NV_timeline_semaphore.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/NV_viewport_swizzle.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/OES_EGL_image.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/OES_fixed_point.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/OES_single_precision.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/OES_texture_compression_astc.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/OVR_multiview.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/OVR_multiview_multisampled_render_to_texture.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_beginend_init_h.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_exec_decl_h.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_exec_init.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_hw_select_init_h.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_save_h.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_save_init_h.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_trace_c.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/apiexec.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/es_EXT.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_API.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_XML.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_proto_common.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_proto_send.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_proto_size.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_XML.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_glX_API.xml"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_enums.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_gentable.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_table.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/license.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_XML.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_h.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/static_data.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/typeexpr.py"
+    "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/unmarshal_table_c.py"
+)
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/util/driconf_static.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/util/driconf_static.py"
+            "${PROJECT_SOURCE_DIR}/src/util/00-mesa-defaults.conf"
+            "${PROJECT_SOURCE_DIR}/src/gallium/drivers/v3d/00-v3d-defaults.conf"
+            "${PROJECT_BINARY_DIR}/src/util/driconf_static.h"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/util/driconf_static.py"
+            "${PROJECT_SOURCE_DIR}/src/util/00-mesa-defaults.conf"
+            "${PROJECT_SOURCE_DIR}/src/gallium/drivers/v3d/00-v3d-defaults.conf"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/util/format_srgb.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/util/format_srgb.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/format_srgb.py"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/format_srgb.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/util/shader_stats.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/util/shader_stats.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/process_shader_stats.py"
+        "${PROJECT_SOURCE_DIR}/src/util/shader_stats.rnc"
+        "${PROJECT_SOURCE_DIR}/src/util/shader_stats.xml"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/process_shader_stats.py"
+        "${PROJECT_SOURCE_DIR}/src/util/shader_stats.rnc"
+        "${PROJECT_SOURCE_DIR}/src/util/shader_stats.xml"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/util/format/u_format_gen.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/util/format/u_format_gen.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_table.py"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format.yaml"
+        "--enums"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_table.py"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format.yaml"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_pack.py"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_parse.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/util/format/u_format_pack.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/util/format/u_format_pack.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_table.py"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format.yaml"
+        "--header"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_table.py"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format.yaml"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_pack.py"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_parse.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/util/format/u_format_table.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/util/format/u_format_table.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_table.py"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format.yaml"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_table.py"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format.yaml"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_pack.py"
+        "${PROJECT_SOURCE_DIR}/src/util/format/u_format_parse.py"
+        "${Python3_EXECUTABLE}"
+)
+# This vendored snapshot has no Mesa .git directory to poll on every build.
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/git_sha1.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/bin/git_sha1_gen.py"
+        "--output"
+        "${PROJECT_BINARY_DIR}/src/git_sha1.h"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/bin/git_sha1_gen.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/builtin_types.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/builtin_types_h.py"
+        "${PROJECT_BINARY_DIR}/src/compiler/builtin_types.h"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/builtin_types_h.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/builtin_types.py"
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_BINARY_DIR}/src/util/format/u_format_gen.h"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/builtin_types.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/builtin_types_c.py"
+        "${PROJECT_BINARY_DIR}/src/compiler/builtin_types.c"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/builtin_types_c.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/builtin_types.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/ir_expression_operation.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/compiler/ir_expression_operation.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/ir_expression_operation.py"
+        "enum"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/ir_expression_operation.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_builder_opcodes.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_builder_opcodes.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_builder_opcodes_h.py"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_builder_opcodes_h.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_constant_expressions.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_constant_expressions.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_constant_expressions.py"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_constant_expressions.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_opcodes.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_opcodes.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes_h.py"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes_h.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_opcodes.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_opcodes.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes_c.py"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes_c.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_opt_algebraic.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opt_algebraic.py"
+        "--out"
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_opt_algebraic.c"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opt_algebraic.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_algebraic.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_intrinsics.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics_h.py"
+        "--out"
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_intrinsics.h"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics_h.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_intrinsics_indices.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics_indices_h.py"
+        "--out"
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_intrinsics_indices.h"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics_indices_h.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_intrinsics.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics_c.py"
+        "--out"
+        "${PROJECT_BINARY_DIR}/src/compiler/nir/nir_intrinsics.c"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics_c.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_intrinsics.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/spirv/vtn_gather_types.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/vtn_gather_types_c.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/spirv.core.grammar.json"
+        "${PROJECT_BINARY_DIR}/src/compiler/spirv/vtn_gather_types.c"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/vtn_gather_types_c.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/spirv.core.grammar.json"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/spirv/spirv_info.h"
+        "${PROJECT_BINARY_DIR}/src/compiler/spirv/spirv_info.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/spirv_info_gen.py"
+        "--json"
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/spirv.core.grammar.json"
+        "--out-h"
+        "${PROJECT_BINARY_DIR}/src/compiler/spirv/spirv_info.h"
+        "--out-c"
+        "${PROJECT_BINARY_DIR}/src/compiler/spirv/spirv_info.c"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/spirv_info_gen.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/spirv.core.grammar.json"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/spirv/vtn_generator_ids.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/vtn_generator_ids_h.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/spir-v.xml"
+        "${PROJECT_BINARY_DIR}/src/compiler/spirv/vtn_generator_ids.h"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/vtn_generator_ids_h.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/spirv/spir-v.xml"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glcpp/glcpp-parse.c"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glcpp/glcpp-parse.h"
+    COMMAND
+        "${BISON_EXECUTABLE}"
+        "-o"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glcpp/glcpp-parse.c"
+        "-p"
+        "glcpp_parser_"
+        "--defines=${PROJECT_BINARY_DIR}/src/compiler/glsl/glcpp/glcpp-parse.h"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/glcpp/glcpp-parse.y"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/glcpp/glcpp-parse.y"
+        "${BISON_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glcpp/glcpp-lex.c"
+    COMMAND
+        "${FLEX_EXECUTABLE}"
+        "-o"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glcpp/glcpp-lex.c"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/glcpp/glcpp-lex.l"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/glcpp/glcpp-lex.l"
+        "${FLEX_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glsl_parser.cpp"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glsl_parser.h"
+    COMMAND
+        "${BISON_EXECUTABLE}"
+        "-o"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glsl_parser.cpp"
+        "-p"
+        "_mesa_glsl_"
+        "--defines=${PROJECT_BINARY_DIR}/src/compiler/glsl/glsl_parser.h"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/glsl_parser.yy"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/glsl_parser.yy"
+        "${BISON_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glsl_lexer.cpp"
+    COMMAND
+        "${FLEX_EXECUTABLE}"
+        "-o"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/glsl_lexer.cpp"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/glsl_lexer.ll"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/glsl_lexer.ll"
+        "${FLEX_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/ir_expression_operation_constant.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/compiler/glsl/ir_expression_operation_constant.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/ir_expression_operation.py"
+        "constant"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/ir_expression_operation.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/ir_expression_operation_strings.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/compiler/glsl/ir_expression_operation_strings.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/ir_expression_operation.py"
+        "strings"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/ir_expression_operation.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/float64_glsl.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/float64.glsl"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/float64_glsl.h"
+        "-n"
+        "float64_source"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/float64.glsl"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/cross_platform_settings_piece_all.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/CrossPlatformSettings_piece_all.glsl"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/cross_platform_settings_piece_all.h"
+        "-n"
+        "cross_platform_settings_piece_all_header"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/CrossPlatformSettings_piece_all.glsl"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/bc1_glsl.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/bc1.glsl"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/bc1_glsl.h"
+        "-n"
+        "bc1_source"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/bc1.glsl"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/bc4_glsl.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/bc4.glsl"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/bc4_glsl.h"
+        "-n"
+        "bc4_source"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/bc4.glsl"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/etc2_rgba_stitch_glsl.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/etc2_rgba_stitch.glsl"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/etc2_rgba_stitch_glsl.h"
+        "-n"
+        "etc2_rgba_stitch_source"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/etc2_rgba_stitch.glsl"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/astc_glsl.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/astc_decoder.glsl"
+        "${PROJECT_BINARY_DIR}/src/compiler/glsl/astc_glsl.h"
+        "-n"
+        "astc_source"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/util/xxd.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/glsl/astc_decoder.glsl"
+        "${Python3_EXECUTABLE}"
+)
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_packet_v21_pack.h"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_packet_v21_pack.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/gen_pack_header.py"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/vc4_packet.xml"
+            "21"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/gen_pack_header.py"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/vc4_packet.xml"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_packet_v42_pack.h"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_packet_v42_pack.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/gen_pack_header.py"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/v3d_packet.xml"
+            "42"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/gen_pack_header.py"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/v3d_packet.xml"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_packet_v71_pack.h"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_packet_v71_pack.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/gen_pack_header.py"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/v3d_packet.xml"
+            "71"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/gen_pack_header.py"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/v3d_packet.xml"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_xml.h"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_xml.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/../../util/gen_zipped_xml_file.py"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/vc4_packet.xml"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/v3d_packet.xml"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/util/gen_zipped_xml_file.py"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/vc4_packet.xml"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/cle/v3d_packet.xml"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/broadcom/compiler/v3d_nir_lower_algebraic.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/broadcom/compiler/v3d_nir_lower_algebraic.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/broadcom/compiler/v3d_nir_lower_algebraic.py"
+            "-p"
+            "${PROJECT_SOURCE_DIR}/src/compiler/nir/"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/broadcom/compiler/v3d_nir_lower_algebraic.py"
+            "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_algebraic.py"
+            "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/glapi_mapi_tmp.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/glapi_mapi_tmp.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/../../mapi_abi.py"
+        "--printer"
+        "glapi"
+        "--gl_symbols"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/../../../../glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/mapi_abi.py"
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/glapi_gentable.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/glapi_gentable.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_gentable.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/enums.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/enums.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_enums.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/../registry/gl.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_exec_init.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_exec_init.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_exec_init.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_exec_decl.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_exec_decl.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_exec_decl_h.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_save_init.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_save_init.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_save_init_h.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_save.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_save.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_save_h.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_beginend_init.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_beginend_init.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_beginend_init_h.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_hw_select_init.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_hw_select_init.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_hw_select_init_h.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/dispatch.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/dispatch.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_table.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+        "-m"
+        "dispatch"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated.h"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_h.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/unmarshal_table.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/unmarshal_table.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/unmarshal_table_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_trace.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/api_trace.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/api_trace_c.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated0.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated0.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "0"
+            "8"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated1.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated1.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "1"
+            "8"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated2.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated2.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "2"
+            "8"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated3.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated3.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "3"
+            "8"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated4.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated4.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "4"
+            "8"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated5.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated5.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "5"
+            "8"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated6.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated6.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "6"
+            "8"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated7.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated7.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "7"
+            "8"
+            "8"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_proto_send.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.xml"
+        "-m"
+        "proto"
+        "-s"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/../../../../glx/libgl-symbols.txt"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_proto_send.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.xml"
+        "-m"
+        "init_h"
+        "-s"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/../../../../glx/libgl-symbols.txt"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect_init.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect_init.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_proto_send.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.xml"
+        "-m"
+        "init_c"
+        "-s"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/../../../../glx/libgl-symbols.txt"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect_size.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect_size.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_proto_size.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.xml"
+        "--only-set"
+        "-m"
+        "size_h"
+        "--header-tag"
+        "_INDIRECT_SIZE_H_"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect_size.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/indirect_size.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/glX_proto_size.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.xml"
+        "--only-set"
+        "-m"
+        "size_c"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/glapi/shared-glapi/shared_glapi_mapi_tmp.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/shared-glapi/shared_glapi_mapi_tmp.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/shared-glapi/../mapi_abi.py"
+        "--printer"
+        "shared-glapi"
+        "--gl_symbols"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/shared-glapi/../../../glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/shared-glapi/../glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/mapi_abi.py"
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/program/lex.yy.c"
+    COMMAND
+        "${FLEX_EXECUTABLE}"
+        "-o"
+        "${PROJECT_BINARY_DIR}/src/mesa/program/lex.yy.c"
+        "${PROJECT_SOURCE_DIR}/src/mesa/program/program_lexer.l"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/mesa/program/program_lexer.l"
+        "${FLEX_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/program/program_parse.tab.c"
+        "${PROJECT_BINARY_DIR}/src/mesa/program/program_parse.tab.h"
+    COMMAND
+        "${BISON_EXECUTABLE}"
+        "-o"
+        "${PROJECT_BINARY_DIR}/src/mesa/program/program_parse.tab.c"
+        "--defines=${PROJECT_BINARY_DIR}/src/mesa/program/program_parse.tab.h"
+        "${PROJECT_SOURCE_DIR}/src/mesa/program/program_parse.y"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/mesa/program/program_parse.y"
+        "${BISON_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/format_fallback.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/format_fallback.py"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/formats.csv"
+        "${PROJECT_BINARY_DIR}/src/mesa/format_fallback.c"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/format_fallback.py"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/formats.csv"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/format_parser.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/get_hash.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/get_hash.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/get_hash_generator.py"
+        "-f"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+    DEPENDS
+        ${MESA_GLAPI_DEPENDENCIES}
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/get_hash_generator.py"
+        "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+        "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/get_hash_params.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/mesa/format_info.h"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/format_info.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/format_info.py"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/formats.csv"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/format_info.py"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/formats.csv"
+        "${PROJECT_SOURCE_DIR}/src/mesa/main/format_parser.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/draw_nir_lower_opcodes.c"
+    CAPTURE "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/draw_nir_lower_opcodes.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/draw/draw_nir_lower_opcodes.py"
+        "-p"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/draw/draw_nir_lower_opcodes.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_algebraic.py"
+        "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/tr_util.c"
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/tr_util.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/driver_trace/enums2names.py"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/../include/pipe/p_defines.h"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/../include/pipe/p_video_enums.h"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/../../util/blend.h"
+        "-C"
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/tr_util.c"
+        "-H"
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/tr_util.h"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/gallium/include/pipe/p_defines.h"
+        "${PROJECT_SOURCE_DIR}/src/gallium/include/pipe/p_video_enums.h"
+        "${PROJECT_SOURCE_DIR}/src/util/blend.h"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/driver_trace/enums2names.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_tracepoints.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/util/u_tracepoints.py"
+        "-p"
+        "${PROJECT_SOURCE_DIR}/src/util/perf/"
+        "-C"
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_tracepoints.c"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/util/u_tracepoints.py"
+        "${PROJECT_SOURCE_DIR}/src/util/perf/u_trace.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_tracepoints.h"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/util/u_tracepoints.py"
+        "-p"
+        "${PROJECT_SOURCE_DIR}/src/util/perf/"
+        "-H"
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_tracepoints.h"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/util/u_tracepoints.py"
+        "${PROJECT_SOURCE_DIR}/src/util/perf/u_trace.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_indices_gen.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/indices/u_indices_gen.py"
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_indices_gen.c"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/indices/u_indices_gen.py"
+        "${Python3_EXECUTABLE}"
+)
+mesa_generate(
+    OUTPUT
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_unfilled_gen.c"
+    COMMAND
+        "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/indices/u_unfilled_gen.py"
+        "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_unfilled_gen.c"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/indices/u_unfilled_gen.py"
+        "${Python3_EXECUTABLE}"
+)
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/wgl/gallium_wgl.def"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "--in_file"
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/wgl/gallium_wgl.def.in"
+            "--out_file"
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/wgl/gallium_wgl.def"
+            "--compiler_abi"
+            "gcc"
+            "--compiler_id"
+            "clang"
+            "--cpu_family"
+            "aarch64"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/wgl/gallium_wgl.def.in"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/libgl-gdi/opengl32.def"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "--in_file"
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/libgl-gdi/opengl32.def.in"
+            "--out_file"
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/libgl-gdi/opengl32.def"
+            "--compiler_abi"
+            "gcc"
+            "--compiler_id"
+            "clang"
+            "--cpu_family"
+            "aarch64"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/libgl-gdi/opengl32.def.in"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/util/driconf_static.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/util/driconf_static.py"
+            "${PROJECT_SOURCE_DIR}/src/util/00-mesa-defaults.conf"
+            "${PROJECT_BINARY_DIR}/src/util/driconf_static.h"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/util/driconf_static.py"
+            "${PROJECT_SOURCE_DIR}/src/util/00-mesa-defaults.conf"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated.h"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated.h"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_h.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/unmarshal_table.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/unmarshal_table.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/unmarshal_table_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated0.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated0.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "0"
+            "8"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated1.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated1.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "1"
+            "8"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated2.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated2.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "2"
+            "8"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated3.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated3.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "3"
+            "8"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated4.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated4.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "4"
+            "8"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated5.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated5.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "5"
+            "8"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated6.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated6.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "6"
+            "8"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated7.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/mesa/glapi/glapi/gen/marshal_generated7.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/marshal_generated_c.py"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_and_es_API.xml"
+            "7"
+            "8"
+            "4"
+        DEPENDS
+            ${MESA_GLAPI_DEPENDENCIES}
+            "${PROJECT_SOURCE_DIR}/src/glx/libgl-symbols.txt"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/gl_API.dtd"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/registry/gl.xml"
+            "${PROJECT_SOURCE_DIR}/src/mesa/glapi/new/genCommon.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/wgl/gallium_wgl.def"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "--in_file"
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/wgl/gallium_wgl.def.in"
+            "--out_file"
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/wgl/gallium_wgl.def"
+            "--compiler_abi"
+            "gcc"
+            "--compiler_id"
+            "clang"
+            "--cpu_family"
+            "x86"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/wgl/gallium_wgl.def.in"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "i386")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/libgl-gdi/opengl32.def"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "--in_file"
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/libgl-gdi/opengl32.def.in"
+            "--out_file"
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/libgl-gdi/opengl32.def"
+            "--compiler_abi"
+            "gcc"
+            "--compiler_id"
+            "clang"
+            "--cpu_family"
+            "x86"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/libgl-gdi/opengl32.def.in"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/wgl/gallium_wgl.def"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "--in_file"
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/wgl/gallium_wgl.def.in"
+            "--out_file"
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/wgl/gallium_wgl.def"
+            "--compiler_abi"
+            "gcc"
+            "--compiler_id"
+            "clang"
+            "--cpu_family"
+            "x86_64"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/wgl/gallium_wgl.def.in"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/libgl-gdi/opengl32.def"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "--in_file"
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/libgl-gdi/opengl32.def.in"
+            "--out_file"
+            "${PROJECT_BINARY_DIR}/src/gallium/targets/libgl-gdi/opengl32.def"
+            "--compiler_abi"
+            "gcc"
+            "--compiler_id"
+            "clang"
+            "--cpu_family"
+            "x86_64"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/gallium/targets/libgl-gdi/opengl32.def.in"
+            "${PROJECT_SOURCE_DIR}/bin/gen_vs_module_defs.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    mesa_generate(
+        OUTPUT
+            "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/lp_bld_nir_no_integer_algebraic.c"
+        CAPTURE "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/lp_bld_nir_no_integer_algebraic.c"
+        COMMAND
+            "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/gallivm/lp_bld_nir_no_integer_algebraic.py"
+            "-p"
+            "${PROJECT_SOURCE_DIR}/src/compiler/nir/"
+        DEPENDS
+            "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/gallivm/lp_bld_nir_no_integer_algebraic.py"
+            "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_algebraic.py"
+            "${PROJECT_SOURCE_DIR}/src/compiler/nir/nir_opcodes.py"
+            "${Python3_EXECUTABLE}"
+    )
+endif()

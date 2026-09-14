@@ -31,16 +31,18 @@ cmake --build output-Clang-arm64-debug --target mesa-llvmpipe
 ```
 
 The same option on an AMD64 tree builds AMD64, not the host architecture.
-`MESA_BUILD_JOBS` defaults to 4 to limit memory pressure. The first build needs
+Mesa and LLVM inherit the invoking build's `-jN` / `--parallel N` at runtime;
+`CMAKE_BUILD_PARALLEL_LEVEL` is also supported. There is no separate fixed Mesa
+job limit. The first build needs
 network access and several GB of free space. Required host tools are CMake 3.24+,
-Ninja, Meson 1.12.0+, Python with Mako, packaging and PyYAML, and llvm-mingw.
+Ninja, Bison 2.7+, Flex, Python with Mako, packaging and PyYAML, and llvm-mingw.
 Disabled builds do not probe these Mesa dependencies or download LLVM.
-`MESA_MESON` can select a specific Meson installation without changing the
-host's system Meson.
+`MESA_BISON`, `MESA_FLEX`, and `MESA_PYTHON` select host generator tools.
+The Mesa build no longer requires Meson.
 
 CMake builds static Windows LLVM **22.1.8** from its official, SHA-256-pinned
 source archive, including the native TableGen tools needed for cross builds.
-Mesa then builds with Meson using that target LLVM installation. Host LLVM
+Mesa then builds with native CMake using that target LLVM installation. Host LLVM
 libraries must not be substituted for Windows libraries. A matching existing
 static Windows LLVM installation can be supplied with `MESA_LLVM_ROOT` and
 its `MESA_LLVM_LICENSE_FILE`.
@@ -52,7 +54,9 @@ consumer is building it.
 Compiler caches are disabled for the external builds. Incremental outputs
 live only under the selected build tree's `submodules/mesa-llvmpipe/`; source
 is not copied into another Mesa session directory. The vendored source is
-never patched or updated by CMake, and Meson fallback downloads are disabled.
+never patched or updated by CMake. Mesa does not download dependencies.
+New Mesa outputs live in `cmake-build`, alongside any previous Meson `build`
+directory, so an existing cache migrates without mixing build systems.
 
 ## Outputs and boundaries
 
@@ -71,7 +75,11 @@ or that an application renders correctly. Native/ReactOS rendering tests and
 Ladybird's end-to-end behavior remain separate work. No browser arguments or
 environment workarounds are installed by this integration.
 
-## Validation status
+## Historical runtime validation
+
+The results below predate the native CMake conversion and do not establish
+runtime equivalence for the new build. See `mesa/cmake/README.md` for its
+build validation.
 
 AMD64 and ARM64 CMake configuration and menuconfig option checks passed.
 Both architectures' LLVM dependencies, `mesadrv.dll` and license bundles built

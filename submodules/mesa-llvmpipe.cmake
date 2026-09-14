@@ -16,14 +16,12 @@ if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang" OR MSVC)
 endif()
 
 set(MESA_SOURCE_DIR "${REACTOS_SOURCE_DIR}/submodules/mesa")
-if(NOT EXISTS "${MESA_SOURCE_DIR}/meson.build")
+if(NOT EXISTS "${MESA_SOURCE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR "The vendored Mesa source is missing at ${MESA_SOURCE_DIR}")
 endif()
 
-set(MESA_BUILD_JOBS "4" CACHE STRING "Maximum parallel jobs in the Mesa and LLVM builds")
-if(NOT MESA_BUILD_JOBS MATCHES "^[1-9][0-9]*$")
-    message(FATAL_ERROR "MESA_BUILD_JOBS must be a positive integer.")
-endif()
+# Parallelism is inherited at build time; discard the old fixed job limit.
+unset(MESA_BUILD_JOBS CACHE)
 set(MESA_LLVM_ROOT "" CACHE PATH "Optional prebuilt Windows static LLVM installation for the selected architecture")
 set(MESA_LLVM_MINGW_ROOT "${REACTOS_CLANG_LLVM_MINGW_ROOT}" CACHE PATH "llvm-mingw toolchain used by modern Mesa")
 
@@ -42,21 +40,16 @@ find_program(MESA_WINDRES NAMES ${MESA_TRIPLE}-windres HINTS "${MESA_LLVM_MINGW_
 find_program(MESA_AR NAMES llvm-ar HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
 find_program(MESA_RANLIB NAMES llvm-ranlib HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
 find_program(MESA_STRIP NAMES llvm-strip HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
-find_program(MESA_MESON NAMES meson REQUIRED)
-execute_process(COMMAND "${MESA_MESON}" --version OUTPUT_VARIABLE _mesa_meson_version OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _mesa_meson_status)
-# Older Meson releases omit LLVM 22 from their CMake dependency search.
-if(NOT _mesa_meson_status EQUAL 0 OR _mesa_meson_version VERSION_LESS 1.12.0)
-    message(FATAL_ERROR "Modern Mesa with LLVM 22 requires Meson 1.12.0 or newer; set MESA_MESON to a suitable executable (found ${_mesa_meson_version}).")
-endif()
 find_program(MESA_NINJA NAMES ninja REQUIRED)
 find_program(MESA_PYTHON NAMES python3 python REQUIRED)
 execute_process(COMMAND "${MESA_PYTHON}" -c "import mako, packaging, yaml" RESULT_VARIABLE _mesa_python_status ERROR_VARIABLE _mesa_python_error)
 if(NOT _mesa_python_status EQUAL 0)
     message(FATAL_ERROR "Mesa needs Python mako, packaging and PyYAML modules for ${MESA_PYTHON}: ${_mesa_python_error}")
 endif()
+include("${REACTOS_SOURCE_DIR}/sdk/cmake/nested-build.cmake")
 
 set(MESA_WORK_DIR "${CMAKE_CURRENT_BINARY_DIR}/mesa-llvmpipe")
-set(MESA_BINARY_DIR "${MESA_WORK_DIR}/build")
+set(MESA_BINARY_DIR "${MESA_WORK_DIR}/cmake-build")
 set(MESA_DLL "${MESA_WORK_DIR}/mesadrv.dll")
 set(MESA_LICENSES "${MESA_WORK_DIR}/mesa-licenses.zip")
 file(MAKE_DIRECTORY "${MESA_WORK_DIR}")
@@ -140,55 +133,32 @@ else()
             -DLLVM_BUILD_LLVM_DYLIB=OFF
             -DLLVM_LINK_LLVM_DYLIB=OFF
             -DBUILD_SHARED_LIBS=OFF
-        BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1 CMAKE_BUILD_PARALLEL_LEVEL=${MESA_BUILD_JOBS} ${CMAKE_COMMAND} --build <BINARY_DIR> --parallel ${MESA_BUILD_JOBS}
+        BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1 ${REACTOS_NESTED_BUILD} <BINARY_DIR>
         INSTALL_COMMAND ${CMAKE_COMMAND} --install <BINARY_DIR>
         USES_TERMINAL_BUILD TRUE)
     set(_mesa_llvm_dependency mesa-llvm)
 endif()
 
-# Meson machine files use forward slashes on every host and quoted strings.
-foreach(_mesa_path MESA_CC MESA_CXX MESA_WINDRES MESA_AR MESA_STRIP MESA_PYTHON MESA_LLVM_PREFIX CMAKE_COMMAND)
-    file(TO_CMAKE_PATH "${${_mesa_path}}" ${_mesa_path}_INI)
-    string(REPLACE "'" "\\'" ${_mesa_path}_INI "${${_mesa_path}_INI}")
-endforeach()
-configure_file("${CMAKE_CURRENT_LIST_DIR}/mesa-cross.ini.in" "${MESA_WORK_DIR}/cross.ini" @ONLY)
-configure_file("${CMAKE_CURRENT_LIST_DIR}/mesa-native.ini.in" "${MESA_WORK_DIR}/native.ini" @ONLY)
+include("${CMAKE_CURRENT_LIST_DIR}/mesa-cmake.cmake")
 
 ExternalProject_Add(mesa-llvmpipe-build
     DEPENDS ${_mesa_llvm_dependency}
-    PREFIX "${MESA_WORK_DIR}/prefix"
+    PREFIX "${MESA_WORK_DIR}/cmake-prefix"
     SOURCE_DIR "${MESA_SOURCE_DIR}"
     BINARY_DIR "${MESA_BINARY_DIR}"
     DOWNLOAD_COMMAND ""
     UPDATE_COMMAND ""
     PATCH_COMMAND ""
-    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1 ${MESA_MESON} setup --reconfigure <BINARY_DIR> <SOURCE_DIR>
-        --cross-file "${MESA_WORK_DIR}/cross.ini"
-        --native-file "${MESA_WORK_DIR}/native.ini"
-        --wrap-mode=nofallback
-        --buildtype=release
-        -Db_ndebug=true
-        -Dplatforms=windows
-        -Dgallium-drivers=llvmpipe
-        -Dgallium-wgl-dll-name=mesadrv
-        -Dllvm=enabled
-        -Dshared-llvm=disabled
-        -Dvulkan-drivers=
-        -Dglx=disabled
-        -Degl=disabled
-        -Dgbm=disabled
-        -Dgles1=disabled
-        -Dgles2=disabled
-        -Dglvnd=disabled
-        -Dgallium-va=disabled
-        -Dvideo-codecs=
-        -Dxmlconfig=disabled
-        -Dzlib=disabled
-        -Dzstd=disabled
-        -Dlibunwind=disabled
-        -Dvalgrind=disabled
-        -Dbuild-tests=false
-    BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1 ${MESA_NINJA} -C <BINARY_DIR> -j ${MESA_BUILD_JOBS} src/gallium/targets/wgl/mesadrv.dll
+    CMAKE_GENERATOR Ninja
+    CMAKE_ARGS
+        ${MESA_CMAKE_ARGS}
+        -DMESA_ARCH:STRING=${ARCH}
+        -DMESA_WGL_DLL_NAME:STRING=mesadrv
+        -DMESA_LLVMPIPE:BOOL=ON
+        -DMESA_ASSERTIONS:BOOL=OFF
+        -DMESA_LLVM_ROOT:PATH=${MESA_LLVM_PREFIX}
+    BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
+        ${REACTOS_NESTED_BUILD} <BINARY_DIR> --target mesa_gallium
     BUILD_ALWAYS TRUE
     INSTALL_COMMAND ""
     BUILD_BYPRODUCTS "${MESA_BINARY_DIR}/src/gallium/targets/wgl/mesadrv.dll"

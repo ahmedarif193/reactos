@@ -474,8 +474,8 @@ config MESA_GALLIUM_FROM_SOURCE
     help
       Build and package mesa_gallium.dll by default with llvm-mingw Clang.
       AMD64 and i386 use softpipe for CPU rendering. Native ARM64 also
-      includes VC4 for Raspberry Pi 3 and V3D for Raspberry Pi 5 in the
-      same DLL. No LLVM runtime dependency is required.
+      includes VC4 for Raspberry Pi 3 in the same DLL. No LLVM runtime
+      dependency is required.
 
 config REACTOS_GRAPHICS_DRIVER_MODEL
     prompt "Display driver model"
