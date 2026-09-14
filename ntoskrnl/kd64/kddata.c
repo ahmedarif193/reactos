@@ -92,6 +92,8 @@ PKDEBUG_ROUTINE KiDebugRoutine = KdpStub;
 //
 // Debugger Configuration Settings
 //
+PUCHAR KdComPortInUse;
+PUCHAR KdHvComPortInUse;
 BOOLEAN KdBreakAfterSymbolLoad;
 BOOLEAN KdPitchDebugger;
 BOOLEAN KdDebuggerNotPresent;
