@@ -92,6 +92,8 @@ END_COM_MAP()
 
 CToolsBand::CToolsBand()
     : fDockSite(NULL)
+    , m_himlNormal(NULL)
+    , m_himlHot(NULL)
 {
 }
 
@@ -196,6 +198,60 @@ static const int moveToImageIndex = 44;
 static const int copyToImageIndex = 45;
 static const int folderOptionsImageIndex = 46;
 
+static HIMAGELIST LoadToolbarImages(UINT bitmapId)
+{
+    HINSTANCE instance = _AtlBaseModule.GetResourceInstance();
+    HBITMAP bitmap = (HBITMAP)LoadImageW(instance, MAKEINTRESOURCEW(bitmapId),
+                                       IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
+    if (!bitmap)
+        return NULL;
+
+    BITMAP info;
+    if (!GetObjectW(bitmap, sizeof(info), &info) || info.bmHeight <= 0)
+    {
+        DeleteObject(bitmap);
+        return NULL;
+    }
+
+    const int size = info.bmHeight;
+    HIMAGELIST images = ImageList_Create(size, size, ILC_COLOR32 | ILC_MASK,
+                                        info.bmWidth / size, 0);
+    int first = images ? ImageList_AddMasked(images, bitmap, RGB(255, 0, 255)) : -1;
+    DeleteObject(bitmap);
+    if (first == -1)
+    {
+        if (images)
+            ImageList_Destroy(images);
+        return NULL;
+    }
+
+    // Match each supplied image to its toolbar action, in left-to-right order.
+    static const struct { int index; UINT resource; } replacements[] =
+    {
+        {backImageIndex, IDI_TOOLBAR_IMAGE_1},
+        {forwardImageIndex, IDI_TOOLBAR_IMAGE_2},
+        {upImageIndex, IDI_TOOLBAR_IMAGE_3},
+        {searchImageIndex, IDI_TOOLBAR_IMAGE_4},
+        {foldersImageIndex, IDI_TOOLBAR_IMAGE_5},
+        {moveToImageIndex, IDI_TOOLBAR_IMAGE_6},
+        {copyToImageIndex, IDI_TOOLBAR_IMAGE_7},
+        {deleteImageIndex, IDI_TOOLBAR_IMAGE_8},
+        {undoImageIndex, IDI_TOOLBAR_IMAGE_9},
+        {viewsImageIndex, IDI_TOOLBAR_IMAGE_10},
+    };
+    for (UINT i = 0; i < _countof(replacements); ++i)
+    {
+        HICON icon = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(replacements[i].resource),
+                                     IMAGE_ICON, size, size, 0);
+        if (icon)
+        {
+            ImageList_ReplaceIcon(images, replacements[i].index, icon);
+            DestroyIcon(icon);
+        }
+    }
+    return images;
+}
+
 enum StandardToolbarButtons {
     BtnIdx_Back = 0,
     BtnIdx_Forward,
@@ -289,13 +345,13 @@ HRESULT STDMETHODCALLTYPE CToolsBand::SetSite(IUnknown* pUnkSite){
     SendMessage(TB_SETMAXTEXTROWS, 1, 0);
     SendMessage(TB_SETEXTENDEDSTYLE, 0, TBSTYLE_EX_HIDECLIPPEDBUTTONS | TBSTYLE_EX_MIXEDBUTTONS | TBSTYLE_EX_DRAWDDARROWS);
 
-    m_himlNormal = ImageList_LoadImageW(_AtlBaseModule.GetResourceInstance(),
-                                        MAKEINTRESOURCEW(IDB_SHELL_EXPLORER_LG),
-                                        0, 0, RGB(255, 0, 255), IMAGE_BITMAP, LR_DEFAULTSIZE | LR_CREATEDIBSECTION);
-
-    m_himlHot = ImageList_LoadImageW(_AtlBaseModule.GetResourceInstance(),
-                                     MAKEINTRESOURCEW(IDB_SHELL_EXPLORER_LG_HOT),
-                                     0, 0, RGB(255, 0, 255), IMAGE_BITMAP, LR_DEFAULTSIZE | LR_CREATEDIBSECTION);
+    m_himlNormal = LoadToolbarImages(IDB_SHELL_EXPLORER_LG);
+    m_himlHot = LoadToolbarImages(IDB_SHELL_EXPLORER_LG_HOT);
+    if (!m_himlNormal || !m_himlHot)
+    {
+        CloseDW(0);
+        return E_OUTOFMEMORY;
+    }
 
     SendMessage(TB_SETIMAGELIST, 0, (LPARAM) m_himlNormal);
     SendMessage(TB_SETHOTIMAGELIST, 0, (LPARAM) m_himlHot);
@@ -341,6 +397,9 @@ HRESULT STDMETHODCALLTYPE CToolsBand::CloseDW(DWORD dwReserved)
 
     if (m_himlHot)
         ImageList_Destroy(m_himlHot);
+
+    m_himlNormal = NULL;
+    m_himlHot = NULL;
 
     return S_OK;
 }
@@ -420,4 +479,3 @@ HRESULT CToolsBand_CreateInstance(REFIID riid, void **ppv)
 {
     return ShellObjectCreator<CToolsBand>(riid, ppv);
 }
-

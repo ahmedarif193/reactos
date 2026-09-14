@@ -24,6 +24,7 @@ toolbar, and address band for an explorer window
 */
 
 #include "precomp.h"
+#include <vsstyle.h>
 
 #if 1
 
@@ -1910,6 +1911,93 @@ LRESULT CInternetToolbar::OnCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOO
 
     return FAILED_UNEXPECTEDLY(hResult) ? 0 : theResult;
 }
+LRESULT CInternetToolbar::OnToolbarCustomDraw(UINT idControl, NMHDR *pNMHDR, BOOL &bHandled)
+{
+    if (pNMHDR->hwndFrom != fToolbarWindow)
+    {
+        bHandled = FALSE;
+        return CDRF_DODEFAULT;
+    }
+
+    NMTBCUSTOMDRAW *draw = reinterpret_cast<NMTBCUSTOMDRAW *>(pNMHDR);
+    if (draw->nmcd.dwDrawStage == CDDS_PREPAINT)
+        return CDRF_NOTIFYITEMDRAW;
+    if (draw->nmcd.dwDrawStage != CDDS_ITEMPREPAINT || draw->nmcd.dwItemSpec != gViewsCommandID)
+        return CDRF_DODEFAULT;
+
+    // The final Views dropdown uses the supplied downward triangle (image 11).
+    // Draw this whole-dropdown button so the control does not add its own arrow.
+    const int dropWidth = 11;
+    WCHAR text[128] = {};
+    TBBUTTONINFOW button = {sizeof(button)};
+    button.dwMask = TBIF_IMAGE | TBIF_STYLE | TBIF_TEXT;
+    button.pszText = text;
+    button.cchText = _countof(text);
+    if (::SendMessageW(fToolbarWindow, TB_GETBUTTONINFOW, gViewsCommandID, (LPARAM)&button) < 0)
+        return CDRF_DODEFAULT;
+
+    const UINT state = draw->nmcd.uItemState;
+    const BOOL disabled = (state & (CDIS_DISABLED | CDIS_INDETERMINATE)) != 0;
+    const BOOL pressed = !disabled && (state & (CDIS_SELECTED | CDIS_CHECKED));
+    const BOOL hot = !disabled && (state & CDIS_HOT);
+    HIMAGELIST images = (HIMAGELIST)::SendMessageW(fToolbarWindow,
+        hot ? TB_GETHOTIMAGELIST : TB_GETIMAGELIST, 0, 0);
+    if (!images)
+        images = (HIMAGELIST)::SendMessageW(fToolbarWindow, TB_GETIMAGELIST, 0, 0);
+    int cx, cy;
+    if (!ImageList_GetIconSize(images, &cx, &cy))
+        return CDRF_DODEFAULT;
+
+    HICON dropdown = (HICON)LoadImageW(_AtlBaseModule.GetResourceInstance(),
+        MAKEINTRESOURCEW(IDI_TOOLBAR_IMAGE_11), IMAGE_ICON, dropWidth, dropWidth, 0);
+    if (!dropdown)
+        return CDRF_DODEFAULT;
+
+    HDC dc = draw->nmcd.hdc;
+    RECT rect = draw->nmcd.rc;
+    const int saved = SaveDC(dc);
+    if (!saved)
+    {
+        DestroyIcon(dropdown);
+        return CDRF_DODEFAULT;
+    }
+    IntersectClipRect(dc, rect.left, rect.top, rect.right, rect.bottom);
+    HTHEME theme = GetWindowTheme(fToolbarWindow);
+    if (theme)
+    {
+        const int themeState = disabled ? TS_DISABLED :
+            (state & CDIS_SELECTED) ? TS_PRESSED :
+            (state & CDIS_CHECKED) ? (hot ? TS_HOTCHECKED : TS_CHECKED) :
+            hot ? TS_HOT : TS_NORMAL;
+        DrawThemeBackground(theme, dc, TP_BUTTON, themeState, &rect, NULL);
+    }
+    else if (pressed || hot)
+    {
+        DrawEdge(dc, &rect, pressed ? BDR_SUNKENOUTER : BDR_RAISEDINNER, BF_RECT);
+    }
+
+    const BOOL showText = (button.fsStyle & BTNS_SHOWTEXT) && text[0];
+    const int offset = !theme && pressed ? 1 : 0;
+    const int x = rect.left + (showText ? 4 : (rect.right - rect.left - dropWidth - cx) / 2);
+    const int y = rect.top + (rect.bottom - rect.top - cy) / 2;
+    ImageList_Draw(images, button.iImage, dc, x + offset, y + offset,
+                   ILD_TRANSPARENT | (disabled ? ILD_BLEND50 : 0));
+    if (showText)
+    {
+        RECT label = {x + cx + 2 + offset, rect.top + offset,
+                      rect.right - dropWidth, rect.bottom + offset};
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, GetSysColor(disabled ? COLOR_GRAYTEXT : COLOR_BTNTEXT));
+        DrawTextW(dc, text, -1, &label, DT_SINGLELINE | DT_VCENTER);
+    }
+    DrawIconEx(dc, rect.right - dropWidth + offset,
+               rect.top + (rect.bottom - rect.top - dropWidth) / 2 + offset,
+               dropdown, dropWidth, dropWidth, 0, NULL, DI_NORMAL);
+    RestoreDC(dc, saved);
+    DestroyIcon(dropdown);
+    return CDRF_SKIPDEFAULT;
+}
+
 LRESULT CInternetToolbar::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
     NMHDR   *notifyHeader;

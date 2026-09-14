@@ -1,0 +1,200 @@
+[
+  {
+    "image": 1,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_24 PM (1).png",
+    "original_sha256": "747deac79f865d3584a7bad2f7fc70d798ee4b13783a924ebce0c553dab25d70",
+    "png_sha256": "a6609b5f0d5f5ab59551b5c5b304079b4e105e8b98c207bad04ae930673878c4",
+    "icon": "01-back.ico",
+    "toolbar_position": "Back",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 2,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_24 PM (2).png",
+    "original_sha256": "306a2ea7fa7c8013e133f1aa3eb547576b69149bf722abe9fd4b158440db3f9d",
+    "png_sha256": "d37c75bcb3efc01251876113afb5892450223b346e15645a890101337b5e55ee",
+    "icon": "02-forward.ico",
+    "toolbar_position": "Forward",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 3,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_24 PM (3).png",
+    "original_sha256": "581babc46ee81af4112ecd418c5d1e1f455c298ea093b9781e77bac996a1f760",
+    "png_sha256": "469c6a4a46264f66a1996c93dcb71290a63d1592060045dab4367f3138fae0e2",
+    "icon": "03-up.ico",
+    "toolbar_position": "Up",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 4,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_25 PM (4).png",
+    "original_sha256": "bd5c4c96f8723f0add1e7bb010111e0664448b3fdfc6d0bee836f34f8640ca8d",
+    "png_sha256": "5df4d1722b4119ca4c6661909d6057cab695701a8ce268425ce35516082c8754",
+    "icon": "04-search.ico",
+    "toolbar_position": "Search",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 5,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_25 PM (5).png",
+    "original_sha256": "4a81edad09bff1661eae0322e9a674f5a75b1d1cdaef605d0d9512d335ad98e8",
+    "png_sha256": "f3dfce1258844dc4aeb4cc6db18115758427405edf8f861d50090a35c7b5f2f7",
+    "icon": "05-folders.ico",
+    "toolbar_position": "Folders",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 6,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_25 PM (6).png",
+    "original_sha256": "de161a4f07049c7588acbfb0bf4f9efca07a807c0eabd805277025e0337d8a87",
+    "png_sha256": "12001090d25adde3853246830a33d0964ea59fb49baab7e2c98ea27a6fb7f1d8",
+    "icon": "06-move.ico",
+    "toolbar_position": "Move To",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 7,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_25 PM (7).png",
+    "original_sha256": "2e852523df28383bf1f572d7a79218c3632c154def8d1d2820a286f15a96eb44",
+    "png_sha256": "68f885548dbd271db1feae90e0ccc534142a2defbad57037f970bb515df2e135",
+    "icon": "07-copy.ico",
+    "toolbar_position": "Copy To",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 8,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_26 PM (8).png",
+    "original_sha256": "c5d3d280ebce78e58c8977fb16e501c2ed22b336a3384ef9745c7f05bcd42745",
+    "png_sha256": "2ee45b9314b5bd947f29c44c8ddaffa75889df05fbc05dd0c27b247a1ad8a5dd",
+    "icon": "08-delete.ico",
+    "toolbar_position": "Delete",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 9,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_26 PM (9).png",
+    "original_sha256": "3f5df99e99b50df1c53a8db73a19b59b17513b6603faa94332de08de3c6bd8d5",
+    "png_sha256": "e6d9898cd2c42c6f952adcc0146d22d097b6717ba3e981411d312e5456dee752",
+    "icon": "09-undo.ico",
+    "toolbar_position": "Undo",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 10,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_26 PM (10).png",
+    "original_sha256": "bbcd47f6feddf633436e7c27676d2a5dda31d030d807a19a92805bb349e01363",
+    "png_sha256": "e5f409d22bdd0b40399fb6d76c55d9e5c36d0219c4fe1272a7718ae2f0534756",
+    "icon": "10-views.ico",
+    "toolbar_position": "Views",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  },
+  {
+    "image": 11,
+    "original": "ChatGPT Image Sep 13, 2026, 11_05_26 PM (11).png",
+    "original_sha256": "6d2c077f275cd79404511a19493e567810c9ee748320f8b89fecc786cb12f380",
+    "png_sha256": "f7e39161a1c1b433b5fd2ffbd8ada7c231105e1cdaa70530a3c02f6750f7d9a4",
+    "icon": "11-dropdown.ico",
+    "toolbar_position": "Views dropdown",
+    "sizes": [
+      11,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64
+    ]
+  }
+]

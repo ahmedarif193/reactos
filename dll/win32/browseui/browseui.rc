@@ -134,6 +134,19 @@ IDR_USERASSIST REGISTRY "res/userassist.rgs"
     #include "lang/zh-TW.rc"
 #endif
 
+/* Supplied toolbar artwork, numbered in left-to-right placement order. */
+IDI_TOOLBAR_IMAGE_1  ICON "res/toolbar/01-back.ico"
+IDI_TOOLBAR_IMAGE_2  ICON "res/toolbar/02-forward.ico"
+IDI_TOOLBAR_IMAGE_3  ICON "res/toolbar/03-up.ico"
+IDI_TOOLBAR_IMAGE_4  ICON "res/toolbar/04-search.ico"
+IDI_TOOLBAR_IMAGE_5  ICON "res/toolbar/05-folders.ico"
+IDI_TOOLBAR_IMAGE_6  ICON "res/toolbar/06-move.ico"
+IDI_TOOLBAR_IMAGE_7  ICON "res/toolbar/07-copy.ico"
+IDI_TOOLBAR_IMAGE_8  ICON "res/toolbar/08-delete.ico"
+IDI_TOOLBAR_IMAGE_9  ICON "res/toolbar/09-undo.ico"
+IDI_TOOLBAR_IMAGE_10 ICON "res/toolbar/10-views.ico"
+IDI_TOOLBAR_IMAGE_11 ICON "res/toolbar/11-dropdown.ico"
+
 /* Include band button bitmaps */
 IDB_BANDBUTTONS BITMAP "res/barbtn.bmp"
 IDB_SHELL_EXPLORER_LG        BITMAP "res/214.bmp"

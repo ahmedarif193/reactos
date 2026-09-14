@@ -66,6 +66,19 @@ set_property(SOURCE browseui.rc APPEND PROPERTY OBJECT_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/res/operationsprogress.rc"
     "${CMAKE_CURRENT_SOURCE_DIR}/operationsprogress.h")
 
+add_rc_deps(browseui.rc
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/01-back.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/02-forward.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/03-up.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/04-search.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/05-folders.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/06-move.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/07-copy.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/08-delete.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/09-undo.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/10-views.ico
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/toolbar/11-dropdown.ico)
+
 set_module_type(browseui win32dll UNICODE)
 add_idl_reg_scripts(browseui registry browseui_classes.idl)
 target_link_libraries(browseui shellbars shellfind uuid wine wine_dll_register cpprt atl_classes)
