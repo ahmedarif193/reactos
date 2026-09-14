@@ -64,6 +64,12 @@ stw_pixelformat_get_count( HDC hdc );
 uint
 stw_pixelformat_get_extended_count( HDC hdc );
 
+uint
+stw_pixelformat_get_wgl_count( HDC hdc );
+
+int
+stw_pixelformat_translate_wgl( HDC hdc, int iPixelFormat );
+
 const struct stw_pixelformat_info *
 stw_pixelformat_get_info( int iPixelFormat );
 

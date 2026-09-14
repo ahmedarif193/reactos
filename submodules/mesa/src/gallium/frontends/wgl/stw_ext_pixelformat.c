@@ -49,19 +49,177 @@
 
 
 static bool
+stw_query_generic_attrib(const PIXELFORMATDESCRIPTOR *pfd, int iLayerPlane,
+                         int attrib, int *pvalue)
+{
+   switch (attrib) {
+   case WGL_DRAW_TO_WINDOW_ARB:
+      *pvalue = !!(pfd->dwFlags & PFD_DRAW_TO_WINDOW);
+      return true;
+   case WGL_DRAW_TO_BITMAP_ARB:
+      *pvalue = !!(pfd->dwFlags & PFD_DRAW_TO_BITMAP);
+      return true;
+   case WGL_NEED_PALETTE_ARB:
+      *pvalue = !!(pfd->dwFlags & PFD_NEED_PALETTE);
+      return true;
+   case WGL_NEED_SYSTEM_PALETTE_ARB:
+      *pvalue = !!(pfd->dwFlags & PFD_NEED_SYSTEM_PALETTE);
+      return true;
+   case WGL_SWAP_METHOD_ARB:
+      if (pfd->dwFlags & PFD_SWAP_COPY)
+         *pvalue = WGL_SWAP_COPY_ARB;
+      else if (pfd->dwFlags & PFD_SWAP_EXCHANGE)
+         *pvalue = WGL_SWAP_EXCHANGE_EXT;
+      else
+         *pvalue = WGL_SWAP_UNDEFINED_ARB;
+      return true;
+   case WGL_SWAP_LAYER_BUFFERS_ARB:
+      *pvalue = !!(pfd->dwFlags & PFD_SWAP_LAYER_BUFFERS);
+      return true;
+   case WGL_NUMBER_OVERLAYS_ARB:
+   case WGL_NUMBER_UNDERLAYS_ARB:
+   case WGL_BIND_TO_TEXTURE_RGB_ARB:
+   case WGL_BIND_TO_TEXTURE_RGBA_ARB:
+      *pvalue = 0;
+      return true;
+   }
+
+   if (iLayerPlane != 0)
+      return false;
+
+   switch (attrib) {
+   case WGL_ACCELERATION_ARB:
+      if (!(pfd->dwFlags & PFD_GENERIC_FORMAT))
+         *pvalue = WGL_FULL_ACCELERATION_ARB;
+      else if (pfd->dwFlags & PFD_GENERIC_ACCELERATED)
+         *pvalue = WGL_GENERIC_ACCELERATION_ARB;
+      else
+         *pvalue = WGL_NO_ACCELERATION_ARB;
+      break;
+   case WGL_TRANSPARENT_ARB:
+   case WGL_TRANSPARENT_RED_VALUE_ARB:
+   case WGL_TRANSPARENT_GREEN_VALUE_ARB:
+   case WGL_TRANSPARENT_BLUE_VALUE_ARB:
+   case WGL_TRANSPARENT_ALPHA_VALUE_ARB:
+   case WGL_TRANSPARENT_INDEX_VALUE_ARB:
+      *pvalue = 0;
+      break;
+   case WGL_SHARE_DEPTH_ARB:
+   case WGL_SHARE_STENCIL_ARB:
+   case WGL_SHARE_ACCUM_ARB:
+      *pvalue = 1;
+      break;
+   case WGL_SUPPORT_GDI_ARB:
+      *pvalue = !!(pfd->dwFlags & PFD_SUPPORT_GDI);
+      break;
+   case WGL_SUPPORT_OPENGL_ARB:
+      *pvalue = !!(pfd->dwFlags & PFD_SUPPORT_OPENGL);
+      break;
+   case WGL_DOUBLE_BUFFER_ARB:
+      *pvalue = !!(pfd->dwFlags & PFD_DOUBLEBUFFER);
+      break;
+   case WGL_STEREO_ARB:
+      *pvalue = !!(pfd->dwFlags & PFD_STEREO);
+      break;
+   case WGL_PIXEL_TYPE_ARB:
+      if (pfd->iPixelType == PFD_TYPE_RGBA)
+         *pvalue = WGL_TYPE_RGBA_ARB;
+      else if (pfd->iPixelType == PFD_TYPE_COLORINDEX)
+         *pvalue = WGL_TYPE_COLORINDEX_ARB;
+      else
+         return false;
+      break;
+   case WGL_COLOR_BITS_ARB:
+      *pvalue = pfd->cColorBits;
+      break;
+   case WGL_RED_BITS_ARB:
+      *pvalue = pfd->cRedBits;
+      break;
+   case WGL_RED_SHIFT_ARB:
+      *pvalue = pfd->cRedShift;
+      break;
+   case WGL_GREEN_BITS_ARB:
+      *pvalue = pfd->cGreenBits;
+      break;
+   case WGL_GREEN_SHIFT_ARB:
+      *pvalue = pfd->cGreenShift;
+      break;
+   case WGL_BLUE_BITS_ARB:
+      *pvalue = pfd->cBlueBits;
+      break;
+   case WGL_BLUE_SHIFT_ARB:
+      *pvalue = pfd->cBlueShift;
+      break;
+   case WGL_ALPHA_BITS_ARB:
+      *pvalue = pfd->cAlphaBits;
+      break;
+   case WGL_ALPHA_SHIFT_ARB:
+      *pvalue = pfd->cAlphaShift;
+      break;
+   case WGL_ACCUM_BITS_ARB:
+      *pvalue = pfd->cAccumBits;
+      break;
+   case WGL_ACCUM_RED_BITS_ARB:
+      *pvalue = pfd->cAccumRedBits;
+      break;
+   case WGL_ACCUM_GREEN_BITS_ARB:
+      *pvalue = pfd->cAccumGreenBits;
+      break;
+   case WGL_ACCUM_BLUE_BITS_ARB:
+      *pvalue = pfd->cAccumBlueBits;
+      break;
+   case WGL_ACCUM_ALPHA_BITS_ARB:
+      *pvalue = pfd->cAccumAlphaBits;
+      break;
+   case WGL_DEPTH_BITS_ARB:
+      *pvalue = pfd->cDepthBits;
+      break;
+   case WGL_STENCIL_BITS_ARB:
+      *pvalue = pfd->cStencilBits;
+      break;
+   case WGL_AUX_BUFFERS_ARB:
+      *pvalue = pfd->cAuxBuffers;
+      break;
+   case WGL_SAMPLE_BUFFERS_ARB:
+   case WGL_SAMPLES_ARB:
+   case WGL_MAX_PBUFFER_WIDTH_ARB:
+   case WGL_MAX_PBUFFER_HEIGHT_ARB:
+   case WGL_MAX_PBUFFER_PIXELS_ARB:
+   case WGL_DRAW_TO_PBUFFER_ARB:
+      *pvalue = 0;
+      break;
+   default:
+      return false;
+   }
+
+   return true;
+}
+
+
+static bool
 stw_query_attrib(HDC hdc, int iPixelFormat, int iLayerPlane, int attrib, int *pvalue)
 {
    uint count;
+   int driverPixelFormat;
    const struct stw_pixelformat_info *pfi;
 
-   count = stw_pixelformat_get_extended_count(hdc);
+   count = stw_pixelformat_get_wgl_count(hdc);
 
    if (attrib == WGL_NUMBER_PIXEL_FORMATS_ARB) {
       *pvalue = (int) count;
       return true;
    }
 
-   pfi = stw_pixelformat_get_info(iPixelFormat);
+   driverPixelFormat = stw_pixelformat_translate_wgl(hdc, iPixelFormat);
+   if (driverPixelFormat == 0) {
+      PIXELFORMATDESCRIPTOR pfd;
+
+      if (!DescribePixelFormat(hdc, iPixelFormat, sizeof(pfd), &pfd))
+         return false;
+      return stw_query_generic_attrib(&pfd, iLayerPlane, attrib, pvalue);
+   }
+
+   pfi = stw_pixelformat_get_info(driverPixelFormat);
    if (!pfi) {
       return false;
    }
@@ -404,7 +562,7 @@ wglChoosePixelFormatARB(HDC hdc, const int *piAttribIList,
     * points for a mismatch when the match does not have to be exact.
     * Set a score to 0 if there is a mismatch for an exact match criteria.
     */
-   count = stw_pixelformat_get_extended_count(hdc);
+   count = stw_pixelformat_get_wgl_count(hdc);
    scores = (struct stw_pixelformat_score *)
       MALLOC(count * sizeof(struct stw_pixelformat_score));
    if (scores == NULL)
