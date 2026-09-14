@@ -502,9 +502,27 @@ CcRosFlushDirtyPages (
 
         KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
 
+        /* Serialize write-behind with explicit flushes of the same file. */
+        if (Wait)
+        {
+            KeAcquireGuardedMutex(&SharedCacheMap->FlushCacheLock);
+        }
+        else if (!KeTryToAcquireGuardedMutex(&SharedCacheMap->FlushCacheLock))
+        {
+            CcRosVacbDecRefCount(current);
+            OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
+            SharedCacheMap->Flags &= ~SHARED_CACHE_MAP_IN_LAZYWRITE;
+
+            if (--SharedCacheMap->OpenCount == 0)
+                CcRosDeleteFileCache(SharedCacheMap->FileObject, SharedCacheMap, &OldIrql);
+
+            break;
+        }
+
         Locked = SharedCacheMap->Callbacks->AcquireForLazyWrite(SharedCacheMap->LazyWriteContext, Wait);
         if (!Locked)
         {
+            KeReleaseGuardedMutex(&SharedCacheMap->FlushCacheLock);
             DPRINT("Not locked\n");
             ASSERT(!Wait);
             CcRosVacbDecRefCount(current);
@@ -521,6 +539,7 @@ CcRosFlushDirtyPages (
         Status = CcRosFlushVacb(current, &Iosb);
 
         SharedCacheMap->Callbacks->ReleaseFromLazyWrite(SharedCacheMap->LazyWriteContext);
+        KeReleaseGuardedMutex(&SharedCacheMap->FlushCacheLock);
 
         /* We release the VACB before acquiring the lock again, because
          * CcRosVacbDecRefCount might free the VACB, as CcRosFlushVacb dropped a
@@ -537,7 +556,11 @@ CcRosFlushDirtyPages (
         if (!NT_SUCCESS(Status) && (Status != STATUS_END_OF_FILE) &&
             (Status != STATUS_MEDIA_WRITE_PROTECTED))
         {
-            DPRINT1("CC: Failed to flush VACB.\n");
+            DPRINT1("CC: Failed to flush VACB (Status 0x%08lx).\n", Status);
+
+            /* Avoid retrying the same failed VACB indefinitely. */
+            if (!Wait)
+                break;
         }
         else
         {
