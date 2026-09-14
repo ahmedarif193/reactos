@@ -33,6 +33,7 @@ public:
     PARTIAL_DECODE_INST,
     BAD_RELOCATION,
     UNIMPLEMENTED_INST,
+    INSTRUCTION_TOO_LONG,
   };
 
   // New Frontend decoding

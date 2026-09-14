@@ -1118,6 +1118,7 @@ public:
   // End of AVX 256-bit implementation
 
   void InvalidOp(OpcodeArgs);
+  void InstructionTooLongOp(OpcodeArgs);
   void NoExecOp(OpcodeArgs);
 
   void SetPackedRFLAG(bool Lower8, Ref Src);

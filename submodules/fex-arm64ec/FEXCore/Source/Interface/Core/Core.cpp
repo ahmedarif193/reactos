@@ -709,6 +709,8 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
               Thread->OpDispatcher->InvalidOp(DecodedInfo);
             } else if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::UNIMPLEMENTED_INST) {
               Thread->OpDispatcher->UnimplementedOp(DecodedInfo);
+            } else if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::INSTRUCTION_TOO_LONG) {
+              Thread->OpDispatcher->InstructionTooLongOp(DecodedInfo);
             } else {
               Thread->OpDispatcher->NoExecOp(DecodedInfo);
             }

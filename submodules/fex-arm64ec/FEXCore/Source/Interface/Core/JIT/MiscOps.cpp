@@ -68,6 +68,7 @@ DEF_OP(Break) {
     .TrapNo = Op->Reason.TrapNumber,
     .si_code = Op->Reason.si_code,
     .err_code = Op->Reason.ErrorRegister,
+    .InstructionTooLong = Op->Reason.InstructionTooLong,
   };
 
   uint64_t Constant {};

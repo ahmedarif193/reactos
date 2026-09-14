@@ -40,6 +40,19 @@ static inline EXCEPTION_RECORD HandleGuestException(FEXCore::Core::CpuStateFrame
   case FEXCore::Core::FAULT_SIGSEGV:
     switch (Fault.TrapNo) {
     case FEXCore::X86State::X86_TRAPNO_GP:
+      if (Fault.InstructionTooLong) {
+        // Windows x64 reports an AV here. Keep the existing x86 illegal-
+        // instruction result rather than treating this as a privileged opcode.
+        if constexpr (sizeof(TReg) == sizeof(uint64_t)) {
+          Dst.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+          Dst.NumberParameters = 2;
+          Dst.ExceptionInformation[0] = EXCEPTION_READ_FAULT;
+          Dst.ExceptionInformation[1] = ~ULONG_PTR {};
+        } else {
+          Dst.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
+        }
+        return Dst;
+      }
       if ((Fault.err_code & 0b111) == 0b010) {
         switch (Fault.err_code >> 3) {
         case 0x29:
