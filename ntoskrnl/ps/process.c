@@ -384,6 +384,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     SECURITY_SUBJECT_CONTEXT SubjectContext;
     BOOLEAN NeedsPeb = FALSE;
     INITIAL_PEB InitialPeb;
+    SECTION_IMAGE_INFORMATION ImageInformation;
 
     PAGED_CODE();
 
@@ -442,6 +443,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 
     /* Clean up the Object */
     RtlZeroMemory(Process, sizeof(EPROCESS));
+    Process->Machine = Parent ? PsGetProcessMachine(Parent) : IMAGE_FILE_MACHINE_NATIVE;
     Process->SequenceNumber =
         (ULONGLONG)InterlockedIncrement64(&PspProcessSequenceNumber);
 
@@ -522,6 +524,15 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 
     /* Save the pointer to the section object */
     Process->SectionObject = SectionObject;
+    if (SectionObject && NT_SUCCESS(MmGetSectionImageInformation(SectionObject, &ImageInformation)))
+    {
+#if defined(_M_ARM64)
+        Process->Machine = ImageInformation.Machine == IMAGE_FILE_MACHINE_ARM64EC ?
+                           IMAGE_FILE_MACHINE_ARM64 : ImageInformation.Machine;
+#else
+        Process->Machine = ImageInformation.Machine;
+#endif
+    }
 
     /* Check for the debug port */
     if (DebugPort)
@@ -1360,17 +1371,7 @@ USHORT
 NTAPI
 PsGetProcessMachine(_In_ PEPROCESS Process)
 {
-    if (Process->Wow64Process != NULL)
-        return Process->Wow64Process->Machine;
-#if defined(_M_ARM64)
-    return IMAGE_FILE_MACHINE_ARM64;
-#elif defined(_M_AMD64)
-    return IMAGE_FILE_MACHINE_AMD64;
-#elif defined(_M_IX86)
-    return IMAGE_FILE_MACHINE_I386;
-#else
-    return IMAGE_FILE_MACHINE_UNKNOWN;
-#endif
+    return Process->Machine;
 }
 
 USHORT

@@ -58,6 +58,10 @@ RtlWow64GetCurrentMachine(VOID)
 {
     USHORT machine = RtlpNativeMachine();
 
+#if defined(_M_ARM64)
+    if (ChpeIsChpeProcess())
+        return IMAGE_FILE_MACHINE_AMD64;
+#endif
 #ifdef _WIN64
     if (NtCurrentTeb()->WowTebOffset)
         RtlWow64GetCurrentCpuArea(&machine, NULL, NULL);

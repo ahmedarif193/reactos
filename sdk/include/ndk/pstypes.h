@@ -1956,7 +1956,7 @@ typedef struct _EPROCESS
     PVOID DxgProcess;
     ULONGLONG SequenceNumber;
     UCHAR ProcessFaultCounts;
-    USHORT ProcessStateSpare;
+    USHORT Machine;
     volatile ULONG ProcessFaultFlags;
     ULONG ProcessWindowState;
     PVOID ProcessWindowStateContext;
