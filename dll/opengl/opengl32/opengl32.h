@@ -88,6 +88,8 @@ IntGetCurrentDispatchTable(void)
     return (GLDISPATCHTABLE*)NtCurrentTeb()->glTable;
 }
 
+const GLDISPATCHTABLE* IntGetNoContextDispatchTable(void);
+
 FORCEINLINE
 void
 IntSetCurrentDispatchTable(const GLDISPATCHTABLE* table)
