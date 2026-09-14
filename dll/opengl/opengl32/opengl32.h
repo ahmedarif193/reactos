@@ -76,6 +76,7 @@ struct wgl_dc_data
 
 /* Existing DC data lookup for the ICD callback path. */
 struct wgl_dc_data* IntGetDcData(HDC hdc);
+struct wgl_context* get_context(HGLRC hglrc);
 
 /* Clean up functions */
 void IntDeleteAllContexts(void);
