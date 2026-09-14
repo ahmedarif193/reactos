@@ -11,6 +11,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wgl);
 
+/* WGL_ARB_make_current_read */
+#ifndef ERROR_INCOMPATIBLE_DEVICE_CONTEXTS_ARB
+#define ERROR_INCOMPATIBLE_DEVICE_CONTEXTS_ARB 0x2054
+#endif
+
 extern BOOL APIENTRY GdiSetPixelFormat(HDC hdc, INT ipfd);
 extern PGDI_TABLE_ENTRY WINAPI GdiQueryTable(VOID);
 
@@ -734,6 +739,132 @@ INT WINAPI wglGetPixelFormat(HDC hdc)
     return ret;
 }
 
+/* Release a context current to this thread through the implementation that
+ * bound it, and give up this thread's ownership of it. */
+static
+VOID
+IntReleaseContext(struct wgl_context* ctx)
+{
+    if(ctx->icd_data)
+        ctx->icd_data->DrvReleaseContext(ctx->dhglrc);
+    else
+        sw_ReleaseContext(ctx->dhglrc);
+    InterlockedExchange(&ctx->thread_id, 0);
+}
+
+static
+PFN_WGL_MAKE_CONTEXT_CURRENT_ARB
+IntGetMakeContextCurrentARB(struct ICD_Data* icd_data)
+{
+    PFN_WGL_MAKE_CONTEXT_CURRENT_ARB entry = icd_data->MakeContextCurrentARB;
+
+    if(!entry)
+    {
+        entry = (PFN_WGL_MAKE_CONTEXT_CURRENT_ARB)icd_data->DrvGetProcAddress("wglMakeContextCurrentARB");
+        if(entry)
+            InterlockedCompareExchangePointer((PVOID*)&icd_data->MakeContextCurrentARB, (PVOID)entry, NULL);
+    }
+    return entry;
+}
+
+/* WGL_ARB_make_current_read binds the drawables in the ICD, but the thread's
+ * current context, its DC, its GL dispatch and the context's thread ownership
+ * are opengl32 state exactly as for wglMakeCurrent. Validate before touching
+ * that state, hand ownership over, and let the ICD bind once. */
+static
+BOOL
+WINAPI
+IntMakeContextCurrentARB(HDC hDrawDC, HDC hReadDC, HGLRC hglrc)
+{
+    struct wgl_context* ctx;
+    struct wgl_context* old_ctx = get_context(IntGetCurrentRC());
+    struct wgl_dc_data* draw_data;
+    struct wgl_dc_data* read_data;
+    const GLCLTPROCTABLE* table;
+    PFN_WGL_MAKE_CONTEXT_CURRENT_ARB make_current;
+    LONG thread_id = (LONG)GetCurrentThreadId();
+    LONG owner_thread;
+
+    if(!hglrc)
+    {
+        if(old_ctx)
+        {
+            IntReleaseContext(old_ctx);
+            IntMakeCurrent(NULL, NULL, NULL);
+            IntSetCurrentDispatchTable(IntGetNoContextDispatchTable());
+        }
+        return TRUE;
+    }
+
+    ctx = get_context(hglrc);
+    if(!ctx)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+
+    /* A DC released with its window is no longer a drawable. */
+    draw_data = get_dc_data(hDrawDC);
+    read_data = (!hReadDC || hReadDC == hDrawDC) ? draw_data : get_dc_data(hReadDC);
+    if(!draw_data || !read_data)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+
+    /* The software implementation does not expose this extension. */
+    make_current = ctx->icd_data ? IntGetMakeContextCurrentARB(ctx->icd_data) : NULL;
+    if(!make_current)
+    {
+        SetLastError(ERROR_INVALID_FUNCTION);
+        return FALSE;
+    }
+
+    /* Only DrvSetContext returns the ICD's dispatch table, so an ICD that has
+     * never been bound by wglMakeCurrent in this process cannot be bound here. */
+    table = ctx->icd_data->ProcTable;
+    if(!table)
+    {
+        WARN("ICD %S has no dispatch table yet.\n", ctx->icd_data->DriverName);
+        SetLastError(ERROR_INVALID_OPERATION);
+        return FALSE;
+    }
+
+    if((draw_data->icd_data != ctx->icd_data) || (draw_data->pixelformat != ctx->pixelformat))
+    {
+        SetLastError(ERROR_INVALID_PIXEL_FORMAT);
+        return FALSE;
+    }
+    if(read_data->icd_data != ctx->icd_data)
+    {
+        SetLastError(ERROR_INCOMPATIBLE_DEVICE_CONTEXTS_ARB);
+        return FALSE;
+    }
+
+    owner_thread = InterlockedCompareExchange(&ctx->thread_id, thread_id, 0);
+    if(owner_thread != 0 && owner_thread != thread_id)
+    {
+        SetLastError(ERROR_BUSY);
+        return FALSE;
+    }
+
+    if(old_ctx && old_ctx != ctx)
+        IntReleaseContext(old_ctx);
+
+    if(!make_current(hDrawDC, hReadDC, hglrc))
+    {
+        /* As for wglMakeCurrent, a failed bind leaves nothing current. */
+        InterlockedExchange(&ctx->thread_id, 0);
+        IntMakeCurrent(NULL, NULL, NULL);
+        IntSetCurrentDispatchTable(IntGetNoContextDispatchTable());
+        return FALSE;
+    }
+
+    IntSetCurrentDispatchTable(&table->glDispatchTable);
+    IntMakeCurrent(hglrc, hDrawDC, draw_data);
+    return TRUE;
+}
+
 PROC WINAPI wglGetProcAddress(LPCSTR name)
 {
     struct wgl_context* context = get_context(IntGetCurrentRC());
@@ -746,7 +877,11 @@ PROC WINAPI wglGetProcAddress(LPCSTR name)
 
     /* Forward */
     if(context->icd_data)
+    {
+        if(!strcmp(name, "wglMakeContextCurrentARB"))
+            return IntGetMakeContextCurrentARB(context->icd_data) ? (PROC)IntMakeContextCurrentARB : NULL;
         return context->icd_data->DrvGetProcAddress(name);
+    }
     return sw_GetProcAddress(name);
 }
 
@@ -796,14 +931,7 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
          * must not acquire it between releasing the old DC and binding the
          * new one. DrvSetContext / sw_SetContext updates the drawable. */
         if(old_ctx && old_ctx != ctx)
-        {
-            /* Unset it */
-            if(old_ctx->icd_data)
-                old_ctx->icd_data->DrvReleaseContext(old_ctx->dhglrc);
-            else
-                sw_ReleaseContext(old_ctx->dhglrc);
-            InterlockedExchange(&old_ctx->thread_id, 0);
-        }
+            IntReleaseContext(old_ctx);
 
         /* Call the ICD or SW implementation */
         if(ctx->icd_data)
@@ -819,6 +947,8 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
                 return FALSE;
             }
             set_api_table(apiTable);
+            if(ctx->icd_data->ProcTable != apiTable)
+                InterlockedExchangePointer((PVOID*)&ctx->icd_data->ProcTable, (PVOID)apiTable);
             /* Make it current */
             IntMakeCurrent(hglrc, hdc, dc_data);
         }
@@ -839,11 +969,7 @@ BOOL WINAPI wglMakeCurrent(HDC hdc, HGLRC hglrc)
     }
     else if(old_ctx)
     {
-        if(old_ctx->icd_data)
-            old_ctx->icd_data->DrvReleaseContext(old_ctx->dhglrc);
-        else
-            sw_ReleaseContext(old_ctx->dhglrc);
-        InterlockedExchange(&old_ctx->thread_id, 0);
+        IntReleaseContext(old_ctx);
         /* Unset it */
         IntMakeCurrent(NULL, NULL, NULL);
         IntSetCurrentDispatchTable(IntGetNoContextDispatchTable());

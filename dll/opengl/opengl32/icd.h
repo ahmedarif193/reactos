@@ -392,6 +392,8 @@ typedef struct _WGL_PRESENTBUFFERS2
     HANDLE CompletionEvent;
 } WGL_PRESENTBUFFERS2, *PWGL_PRESENTBUFFERS2;
 
+typedef BOOL (WINAPI *PFN_WGL_MAKE_CONTEXT_CURRENT_ARB)(HDC hDrawDC, HDC hReadDC, HGLRC hglrc);
+
 struct ICD_Data
 {
     /* The Name returned with OPENGL_GETINFO escape code */
@@ -418,6 +420,12 @@ struct ICD_Data
     BOOL      (WINAPI *DrvSwapLayerBuffers)( HDC, UINT );
     BOOL      (WINAPI *DrvPresentBuffers)( HDC, PWGL_PRESENTBUFFERS );
     BOOL      (WINAPI *DrvPresentBuffers2)( HDC, PWGL_PRESENTBUFFERS2 );
+
+    /* The client procedure table is only ever handed out by DrvSetContext,
+     * but a WGL extension can also bind a context of this ICD. */
+    const GLCLTPROCTABLE* ProcTable;
+    /* WGL_ARB_make_current_read binding entry, from DrvGetProcAddress. */
+    PFN_WGL_MAKE_CONTEXT_CURRENT_ARB MakeContextCurrentARB;
 
     /* Make this a linked list */
     struct ICD_Data* next;
