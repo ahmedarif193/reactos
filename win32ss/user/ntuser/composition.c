@@ -76,6 +76,24 @@ static RECTL           g_CompositionPositionDamage;
 static BOOL            g_CompositionPositionDamageValid = FALSE;
 static DWM_WIN         g_DwmFrameWindows[DWM_MAX_WINDOWS];
 static RECTL           g_DwmFrameBlurRects[DWM_MAX_BLUR_RECTS];
+/* GETFRAME hands DWM shared FRONT handles that it imports after returning to
+ * user mode. Keep those surfaces alive until DWM finishes this frame and
+ * asks for the next one; a resize or destroy may otherwise close a handle
+ * between the metadata copy and OpenResource. */
+static PSURFACE        g_DwmFrameSurfaceRefs[DWM_MAX_WINDOWS];
+static ULONG           g_DwmFrameSurfaceRefCount;
+
+static VOID
+IntCompositionReleaseFrameSurfaces(VOID)
+{
+    while (g_DwmFrameSurfaceRefCount != 0)
+    {
+        PSURFACE Surface = g_DwmFrameSurfaceRefs[--g_DwmFrameSurfaceRefCount];
+
+        g_DwmFrameSurfaceRefs[g_DwmFrameSurfaceRefCount] = NULL;
+        SURFACE_ShareUnlockSurface(Surface);
+    }
+}
 
 /* dwm.exe is the ONLY compositor (Windows model — win32k tracks redirection
  * and damage, never composes). Attach enables redirection; detach or a
@@ -1968,6 +1986,10 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
     if (Input.BufBytes < DWM_FRAME_BYTES)
         return STATUS_BUFFER_TOO_SMALL;
 
+    /* The previous frame's imports and GPU reads have completed before DWM
+     * pulls another frame. Release the FRONT handles kept alive for it. */
+    IntCompositionReleaseFrameSurfaces();
+
     /* Each new pull follows completion of the compositor's preceding GPU
      * reads. A removed window absent from this frame can now release an old
      * publication even when its old-tuple acknowledgement raced destruction. */
@@ -2364,6 +2386,12 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                 }
             }
         }
+        if (e->Redirect.FrontGlobalShare != 0)
+        {
+            SURFACE_ShareLockByPointer(e->Redirect.psurfFront);
+            g_DwmFrameSurfaceRefs[g_DwmFrameSurfaceRefCount++] =
+                e->Redirect.psurfFront;
+        }
         count++;
 
         if (wasDamaged)
@@ -2513,6 +2541,7 @@ IntCompositionDwmTeardown(VOID)
     PKEVENT WakeEvent;
 
     g_DwmAttached = FALSE;
+    IntCompositionReleaseFrameSurfaces();
     (VOID)IntCompositionReleaseGpuOutput(TRUE);
     /* Damage raised from the GDI finish path holds this same PDEV lock while
      * reading/signaling g_DwmWakeEvent. Clear it before dropping the object
