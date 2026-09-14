@@ -61,7 +61,7 @@ static PVOID APIENTRY wglGetCurrentValue()
 
 static DHGLRC APIENTRY wglGetDHGLRC(struct wgl_context* context)
 {
-    return context->dhglrc;
+    return context ? context->dhglrc : 0;
 }
 
 typedef HRESULT (WINAPI *PFN_DWM_DX_GET_WINDOW_SHARED_SURFACE)(
