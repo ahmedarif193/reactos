@@ -58,9 +58,9 @@ include(ExternalProject)
 # ten-byte stub, against 9ns to run it once translated -- which is paid on
 # first execution and is what makes an emulated program crawl while it loads
 # and run normally afterwards.  Debugging ReactOS does not require an
-# unoptimised emulator, so pick Release here unless asked otherwise.
+# unoptimised emulator, so keep both front-ends in Release.
 set(FEX_ARM64EC_BUILD_TYPE "Release" CACHE STRING
-    "CMAKE_BUILD_TYPE used for the FEX emulators themselves")
+    "CMAKE_BUILD_TYPE used for the FEX emulators themselves" FORCE)
 option(ENABLE_FEX_UNIT_TESTS "Build FEX's native ARM64 instruction-test runner and assembly corpora" OFF)
 
 # FEX picks exactly one Windows front-end per configure:
@@ -159,6 +159,7 @@ ExternalProject_Add(fex-arm64ec-build
         -DBUILD_FEX_LINUX_TESTS=OFF
         -DBUILD_THUNKS=OFF
         -DBUILD_FEXCONFIG=OFF
+        -DENABLE_ASSERTIONS=ON
         -DENABLE_JEMALLOC_GLIBC_ALLOC=OFF
         -DENABLE_GDB_SYMBOLS=OFF
         -DENABLE_VIXL_DISASSEMBLER=OFF
@@ -215,6 +216,7 @@ ExternalProject_Add(fex-wow64-build
         -DBUILD_FEX_LINUX_TESTS=OFF
         -DBUILD_THUNKS=OFF
         -DBUILD_FEXCONFIG=OFF
+        -DENABLE_ASSERTIONS=ON
         -DENABLE_JEMALLOC_GLIBC_ALLOC=OFF
         -DENABLE_GDB_SYMBOLS=OFF
         -DENABLE_VIXL_DISASSEMBLER=OFF
