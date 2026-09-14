@@ -34,6 +34,8 @@
 #include <GL/wglext.h>
 #include "util/u_debug.h"
 #include "stw_device.h"
+#include "stw_context.h"
+#include "stw_framebuffer.h"
 
 
 /**
@@ -44,12 +46,23 @@
 WINGDIAPI BOOL APIENTRY
 wglSwapIntervalEXT(int interval)
 {
+   struct stw_context *ctx = stw_current_context();
+
    if (interval < 0) {
       SetLastError(ERROR_INVALID_DATA);
       return false;
    }
-   if (stw_dev && !os_get_option("WGL_SWAP_INTERVAL")) {
-      stw_dev->swap_interval = interval;
+   if (!ctx || !ctx->current_framebuffer) {
+      SetLastError(ERROR_DC_NOT_FOUND);
+      return false;
+   }
+   if (!os_get_option("WGL_SWAP_INTERVAL")) {
+      /* WGL_EXT_swap_control stores the interval on the drawable, not in
+       * the device default used by other windows. */
+      struct stw_framebuffer *fb = ctx->current_framebuffer;
+      stw_framebuffer_lock(fb);
+      fb->swap_interval = interval;
+      stw_framebuffer_unlock(fb);
    }
    return true;
 }
@@ -58,5 +71,13 @@ wglSwapIntervalEXT(int interval)
 WINGDIAPI int APIENTRY
 wglGetSwapIntervalEXT(void)
 {
-   return stw_dev ? stw_dev->swap_interval : 0;
+   struct stw_context *ctx = stw_current_context();
+   if (!ctx || !ctx->current_framebuffer)
+      return 0;
+
+   struct stw_framebuffer *fb = ctx->current_framebuffer;
+   stw_framebuffer_lock(fb);
+   int interval = fb->swap_interval == -1 ? stw_dev->swap_interval : fb->swap_interval;
+   stw_framebuffer_unlock(fb);
+   return interval;
 }
