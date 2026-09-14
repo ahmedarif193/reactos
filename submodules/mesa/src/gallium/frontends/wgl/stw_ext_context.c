@@ -222,6 +222,11 @@ wglCreateContextAttribsARB(HDC hDC, HGLRC hShareContext, const int *attribList)
       }
 
       struct stw_context *share_stw = stw_lookup_context(share_dhglrc);
+      if (hShareContext && !share_stw) {
+         pfnwglDeleteContext(context);
+         SetLastError(ERROR_INVALID_OPERATION);
+         return NULL;
+      }
 
       const struct stw_pixelformat_info *pfi = stw_pixelformat_get_info_from_hdc(hDC);
       if (!pfi)
