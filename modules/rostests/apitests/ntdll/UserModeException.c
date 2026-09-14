@@ -20,6 +20,9 @@ typedef enum _CPU_VENDOR
 
 CPU_VENDOR g_CpuVendor;
 ULONG g_CpuFeatures;
+#ifdef _M_AMD64
+static BOOL g_IsArm64Host;
+#endif
 
 #define CPU_FEATURE_VMX 0x01
 #define CPU_FEATURE_HV 0x02
@@ -40,6 +43,7 @@ typedef void (*PFUNC)(void);
 #define FL_PRIV 0x100
 #define FL_ACC 0x200
 #define FL_INVLS 0x400
+#define FL_NONCANONICAL 0x800
 
 typedef struct _TEST_ENTRY
 {
@@ -99,6 +103,10 @@ DetermineCpuFeatures(void)
 {
     INT CpuInfo[4];
     ULONG Features = 0;
+#ifdef _M_AMD64
+    BOOL (WINAPI *QueryMachines)(HANDLE, PUSHORT, PUSHORT);
+    USHORT ProcessMachine, NativeMachine;
+#endif
 
     g_CpuVendor = DetermineCpuVendor();
 
@@ -108,6 +116,10 @@ DetermineCpuFeatures(void)
     trace("CPUID 1: 0x%x, 0x%x, 0x%x, 0x%x\n", CpuInfo[0], CpuInfo[1], CpuInfo[2], CpuInfo[3]);
 
     g_CpuFeatures = Features;
+#ifdef _M_AMD64
+    QueryMachines = (void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2");
+    g_IsArm64Host = QueryMachines && QueryMachines(GetCurrentProcess(), &ProcessMachine, &NativeMachine) && NativeMachine == IMAGE_FILE_MACHINE_ARM64;
+#endif
 }
 
 TEST_ENTRY TestEntries[] =
@@ -193,7 +205,7 @@ TEST_ENTRY TestEntries[] =
     { __LINE__, { 0x3E, 0x66, 0x67, 0xF0, 0xF3, 0xF4, 0xC3 }, 0, FL_ANY | FL_INVLS | FL_PRIV }, // DS: DATA ADDR LOCK REPZ HLT
 #ifdef _M_AMD64
     /* Check non-canonical address access (causes a #GP) */
-    { __LINE__, { 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0xC3 }, 0, FL_ANY | FL_ACC }, //  MOV AL, [0x1000000000000000]
+    { __LINE__, { 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0xC3 }, 0, FL_ANY | FL_ACC | FL_NONCANONICAL }, //  MOV AL, [0x1000000000000000]
 #endif
 
 };
@@ -229,6 +241,14 @@ void Test_SingleInstruction(
     if (Flags & FL_INVLS)
     {
         ExpectedStatus = STATUS_INVALID_LOCK_SEQUENCE;
+    }
+    else
+#elif defined(_M_AMD64)
+    /* Windows 11 ARM64 reports invalid LOCK prefixes as illegal instructions,
+     * including LOCK HLT, rather than classifying the privileged opcode. */
+    if (g_IsArm64Host && (Flags & FL_INVLS))
+    {
+        ExpectedStatus = STATUS_ILLEGAL_INSTRUCTION;
     }
     else
 #endif
@@ -273,9 +293,15 @@ void Test_SingleInstruction(
 
     if (Status == STATUS_ACCESS_VIOLATION)
     {
+        ULONG_PTR ExpectedAccessAddress = (ULONG_PTR)-1;
+#ifdef _M_AMD64
+        /* Emulation reports the accessed address, not a native x64 #GP sentinel. */
+        if (g_IsArm64Host && (Flags & FL_NONCANONICAL))
+            ExpectedAccessAddress = 0x1000000000000000ULL;
+#endif
         ok_dec_(__FILE__, TestEntry->Line, ExceptionRecord.NumberParameters, 2);
         ok_size_t_(__FILE__, TestEntry->Line, ExceptionRecord.ExceptionInformation[0], 0);
-        ok_size_t_(__FILE__, TestEntry->Line, ExceptionRecord.ExceptionInformation[1], (LONG_PTR)-1);
+        ok_size_t_(__FILE__, TestEntry->Line, ExceptionRecord.ExceptionInformation[1], ExpectedAccessAddress);
     }
     else
     {
