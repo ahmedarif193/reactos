@@ -422,7 +422,8 @@ struct CpuStateFrame {
     uint8_t TrapNo;
     uint8_t si_code;
     uint16_t err_code;
-    uint16_t _pad : 16;
+    bool InstructionTooLong {};
+    uint8_t _pad;
   } SynchronousFaultData;
 
   InternalThreadState* Thread;

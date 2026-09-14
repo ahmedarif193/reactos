@@ -859,7 +859,7 @@ Decoder::DecodedBlockStatus Decoder::DecodeInstructionImpl(uint64_t PC) {
 
   for (;;) {
     if (InstructionSize >= MAX_INST_SIZE) {
-      return DecodedBlockStatus::INVALID_INST;
+      return DecodedBlockStatus::INSTRUCTION_TOO_LONG;
     }
     uint8_t Op = ReadByte();
     switch (Op) {
@@ -1534,6 +1534,7 @@ void Decoder::DecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState* Thre
                             BlockIt->BlockStatus == DecodedBlockStatus::NOEXEC_INST        ? "NoExec" :
                             BlockIt->BlockStatus == DecodedBlockStatus::BAD_RELOCATION     ? "BadRelocation" :
                             BlockIt->BlockStatus == DecodedBlockStatus::UNIMPLEMENTED_INST ? "Unimplemented" :
+                            BlockIt->BlockStatus == DecodedBlockStatus::INSTRUCTION_TOO_LONG ? "TooLong" :
                                                                                              "PartialDecode",
                             OpAddress);
         }

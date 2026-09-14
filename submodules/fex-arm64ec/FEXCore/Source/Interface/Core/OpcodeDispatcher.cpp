@@ -4762,7 +4762,7 @@ void OpDispatchBuilder::LSLOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::INTOp(OpcodeArgs) {
-  IR::BreakDefinition Reason;
+  IR::BreakDefinition Reason {};
   bool SetRIPToNext = false;
 
   switch (Op->OP) {
@@ -5159,6 +5159,16 @@ void OpDispatchBuilder::NoExecOp(OpcodeArgs) {
                 .Signal = Core::FAULT_SIGSEGV,
                 .TrapNumber = X86State::X86_TRAPNO_PF,
                 .si_code = 2, // SEGV_ACCERR
+              });
+}
+
+void OpDispatchBuilder::InstructionTooLongOp(OpcodeArgs) {
+  BreakOp(Op, FEXCore::IR::BreakDefinition {
+                .ErrorRegister = 0,
+                .Signal = Core::FAULT_SIGSEGV,
+                .TrapNumber = X86State::X86_TRAPNO_GP,
+                .si_code = 0x80,
+                .InstructionTooLong = true,
               });
 }
 
