@@ -965,6 +965,7 @@ NTAPI
 DbgkpMarkProcessPeb(IN PEPROCESS Process)
 {
     KAPC_STATE ApcState;
+    BOOLEAN BeingDebugged;
     PAGED_CODE();
     DBGKTRACE(DBGK_PROCESS_DEBUG, "Process: %p\n", Process);
 
@@ -980,8 +981,13 @@ DbgkpMarkProcessPeb(IN PEPROCESS Process)
         /* Acquire the debug port mutex */
         ExAcquireFastMutex(&DbgkpProcessDebugPortMutex);
 
-        /* Set the IsBeingDebugged member of the PEB */
-        Process->Peb->BeingDebugged = (Process->DebugPort) ? TRUE: FALSE;
+        /* Set the IsBeingDebugged member of each PEB */
+        BeingDebugged = (Process->DebugPort != NULL);
+        Process->Peb->BeingDebugged = BeingDebugged;
+#ifdef _WIN64
+        if (Process->Wow64Process && Process->Wow64Process->Peb)
+            ((PEB32 *)Process->Wow64Process->Peb)->BeingDebugged = BeingDebugged;
+#endif
 
         /* Release lock */
         ExReleaseFastMutex(&DbgkpProcessDebugPortMutex);
