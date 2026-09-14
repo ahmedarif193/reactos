@@ -2384,6 +2384,22 @@ ChpepDispatchRaisedException(PEXCEPTION_RECORD ExceptionRecord, PCONTEXT Context
     return ChpeNtRaiseException(ExceptionRecord, ContextRecord, FALSE);
 }
 
+/* Continue the genuine x64 dispatcher entry in native ARM64EC code.  The
+ * Windows ARM64X dispatcher places its exception record at sp + 0x880. */
+DECLSPEC_NORETURN VOID NTAPI __attribute__((naked))
+ChpeKiUserExceptionDispatcherNative(VOID)
+{
+    __asm__ volatile(
+        ".seh_proc \"#ChpeKiUserExceptionDispatcherNative\"\n"
+        ".seh_endprologue\n"
+        "add x0, sp, #0x880\n"
+        "mov x1, sp\n"
+        "bl \"#ChpepDispatchRaisedException\"\n"
+        "bl \"#ChpeRtlRaiseStatus\"\n"
+        "brk #1\n"
+        ".seh_endproc\n");
+}
+
 /*
  * ARM64EC must capture and dispatch the x64-shaped context before entering the
  * native ARM64 system-call ABI.  This frame layout follows Wine's public
