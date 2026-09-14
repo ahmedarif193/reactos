@@ -15,6 +15,8 @@
 #include <winuser.h>
 #include <wingdi.h>
 #include <winddi.h>
+#include <ntgdityp.h>
+#include <ntgdihdl.h>
 #include <GL/gl.h>
 
 #ifndef OPENGL32_USE_TLS

@@ -12,6 +12,20 @@
 WINE_DEFAULT_DEBUG_CHANNEL(wgl);
 
 extern BOOL APIENTRY GdiSetPixelFormat(HDC hdc, INT ipfd);
+extern PGDI_TABLE_ENTRY WINAPI GdiQueryTable(VOID);
+
+static BOOL
+is_process_owned_dc(HDC hdc)
+{
+    PGDI_TABLE_ENTRY table = GdiQueryTable();
+    DWORD owner;
+
+    if (!table)
+        return FALSE;
+
+    owner = table[GDI_HANDLE_GET_INDEX(hdc)].ProcessId & ~1;
+    return owner == HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess);
+}
 
 static CRITICAL_SECTION dc_data_cs = {NULL, -1, 0, 0, 0, 0};
 static struct wgl_dc_data* dc_data_list = NULL;
@@ -38,10 +52,19 @@ get_dc_data_ex(HDC hdc, INT format, UINT size, PIXELFORMATDESCRIPTOR *descr)
     if(objType == OBJ_DC)
     {
         hwnd = WindowFromDC(hdc);
-        if(!hwnd)
-            return NULL;
-        id.hwnd = hwnd;
-        flags = WGL_DC_OBJ_DC;
+        if(hwnd)
+        {
+            id.hwnd = hwnd;
+            flags = WGL_DC_OBJ_DC;
+        }
+        else
+        {
+            /* A screen DC has no window but remains owned while checked out.
+             * A released cached window DC is public and must not be reused. */
+            if (!is_process_owned_dc(hdc))
+                return NULL;
+            id.hdc = hdc;
+        }
     }
     else if(objType == OBJ_MEMDC)
     {
@@ -56,7 +79,7 @@ get_dc_data_ex(HDC hdc, INT format, UINT size, PIXELFORMATDESCRIPTOR *descr)
     data = dc_data_list;
     while(data)
     {
-        if(data->owner.u == id.u)
+        if((data->owner.u == id.u) && (data->flags == flags))
         {
             LeaveCriticalSection(&dc_data_cs);
             return data;
@@ -130,6 +153,7 @@ struct wgl_dc_data* IntGetDcData(HDC hdc)
 {
     HWND hwnd;
     struct wgl_dc_data *data;
+    ULONG flags = 0;
     union
     {
         HWND hwnd;
@@ -140,9 +164,17 @@ struct wgl_dc_data* IntGetDcData(HDC hdc)
     if (GetObjectType(hdc) == OBJ_DC)
     {
         hwnd = WindowFromDC(hdc);
-        if (hwnd == NULL)
-            return NULL;
-        id.hwnd = hwnd;
+        if (hwnd != NULL)
+        {
+            id.hwnd = hwnd;
+            flags = WGL_DC_OBJ_DC;
+        }
+        else
+        {
+            if (!is_process_owned_dc(hdc))
+                return NULL;
+            id.hdc = hdc;
+        }
     }
     else if (GetObjectType(hdc) == OBJ_MEMDC)
     {
@@ -156,7 +188,7 @@ struct wgl_dc_data* IntGetDcData(HDC hdc)
     EnterCriticalSection(&dc_data_cs);
     for (data = dc_data_list; data != NULL; data = data->next)
     {
-        if (data->owner.u == id.u)
+        if ((data->owner.u == id.u) && (data->flags == flags))
             break;
     }
     LeaveCriticalSection(&dc_data_cs);
@@ -267,7 +299,8 @@ INT WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR* ppfd)
     {
         if (!wglDescribePixelFormat( hdc, i, sizeof(format), &format )) continue;
 
-        if (ppfd->iPixelType != format.iPixelType)
+        if ((ppfd->iPixelType == PFD_TYPE_COLORINDEX) !=
+            (format.iPixelType == PFD_TYPE_COLORINDEX))
         {
             TRACE( "pixel type mismatch for iPixelFormat=%d\n", i );
             continue;
@@ -329,7 +362,6 @@ INT WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR* ppfd)
 
             if (bestDBuffer != -1 && (format.dwFlags & PFD_DOUBLEBUFFER) != bestDBuffer) continue;
         }
-
         /* Stereo, see the comments above. */
         if (!(ppfd->dwFlags & PFD_STEREO_DONTCARE))
         {
@@ -339,6 +371,11 @@ INT WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR* ppfd)
 
             if (bestStereo != -1 && (format.dwFlags & PFD_STEREO) != bestStereo) continue;
         }
+
+        /* Establish a baseline only after all mandatory capabilities and
+         * preferred boolean flags have been considered. */
+        if (!best_format)
+            goto found;
 
         /* Below we will do a number of checks to select the 'best' pixelformat.
          * We assume the precedence cColorBits > cAlphaBits > cDepthBits > cStencilBits -> cAuxBuffers.
@@ -688,7 +725,7 @@ INT WINAPI wglGetPixelFormat(HDC hdc)
 
     if(!dc_data)
     {
-        SetLastError(ERROR_INVALID_HANDLE);
+        SetLastError(ERROR_INVALID_PIXEL_FORMAT);
         return 0;
     }
 
