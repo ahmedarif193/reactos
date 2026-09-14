@@ -17,7 +17,8 @@ constexpr DispatchTableEntry OpDispatch_TwoByteOpTable[] = {
   {0x30, 1, &OpDispatchBuilder::PermissionRestrictedOp},
   {0x31, 1, &OpDispatchBuilder::RDTSCOp},
   {0x32, 2, &OpDispatchBuilder::PermissionRestrictedOp},
-  {0x34, 3, &OpDispatchBuilder::UnimplementedOp},
+  {0x34, 1, &OpDispatchBuilder::UnimplementedOp},
+  {0x35, 1, &OpDispatchBuilder::SYSEXITOp},
 
   {0x40, 16, &OpDispatchBuilder::CMOVOp},
   {0x6E, 1, &OpDispatchBuilder::Bind<&OpDispatchBuilder::MOVBetweenGPR_FPR, OpDispatchBuilder::VectorOpType::MMX>},

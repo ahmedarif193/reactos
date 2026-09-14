@@ -889,6 +889,7 @@ public:
   void BreakOp(OpcodeArgs, FEXCore::IR::BreakDefinition BreakDefinition);
   void UnimplementedOp(OpcodeArgs);
   void PermissionRestrictedOp(OpcodeArgs);
+  void SYSEXITOp(OpcodeArgs);
 
   ///< Helper for PSHUD and VPERMILPS(imm) since they are the same instruction
   Ref Single128Bit4ByteVectorShuffle(Ref Src, uint8_t Shuffle);
