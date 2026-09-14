@@ -1823,7 +1823,7 @@ PspCreateWow64ProcessParameters(IN HANDLE ProcessHandle,
     RtlZeroMemory(Parameters32, TotalSize);
     Parameters32->MaximumLength = (ULONG)RegionSize;
     Parameters32->Length = (ULONG)TotalSize;
-    Parameters32->Flags = Captured.Flags & ~RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
+    Parameters32->Flags = Captured.Flags | RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
     Parameters32->DebugFlags = Captured.DebugFlags;
     Parameters32->ConsoleHandle = HandleToUlong(Captured.ConsoleHandle);
     Parameters32->ConsoleFlags = Captured.ConsoleFlags;
@@ -1865,8 +1865,21 @@ PspCreateWow64ProcessParameters(IN HANDLE ProcessHandle,
         }
         _SEH2_END;
     }
-    if (NT_SUCCESS(Status)) Status = ZwWriteVirtualMemory(ProcessHandle, Target, Parameters32, TotalSize, NULL);
     Target32 = PtrToUlong(Target);
+    if (NT_SUCCESS(Status))
+    {
+#define REBASE_WOW64_FIELD(Field) do { if (Parameters32->Field.Buffer) Parameters32->Field.Buffer += Target32; } while (0)
+        REBASE_WOW64_FIELD(CurrentDirectory.DosPath);
+        REBASE_WOW64_FIELD(DllPath);
+        REBASE_WOW64_FIELD(ImagePathName);
+        REBASE_WOW64_FIELD(CommandLine);
+        REBASE_WOW64_FIELD(WindowTitle);
+        REBASE_WOW64_FIELD(DesktopInfo);
+        REBASE_WOW64_FIELD(ShellInfo);
+        REBASE_WOW64_FIELD(RuntimeData);
+#undef REBASE_WOW64_FIELD
+    }
+    if (NT_SUCCESS(Status)) Status = ZwWriteVirtualMemory(ProcessHandle, Target, Parameters32, TotalSize, NULL);
     if (NT_SUCCESS(Status)) Status = ZwWriteVirtualMemory(ProcessHandle, &Peb32->ProcessParameters, &Target32, sizeof(Target32), NULL);
     ExFreePoolWithTag(Parameters32, TAG_USTR);
 
@@ -2481,16 +2494,6 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
                                          PAGE_READWRITE);
         if (NT_SUCCESS(Status))
         {
-            /*
-             * The caller (RtlCreateUserProcess) passes normalized parameters
-             * where string Buffer pointers are absolute addresses in the parent
-             * process. We need to denormalize them (convert to offsets relative
-             * to the parameters base) before writing to the child, because the
-             * child's LDR will call RtlNormalizeProcessParams to convert them
-             * to absolute addresses in the child's address space.
-             *
-             * We temporarily denormalize in place, write, then restore.
-             */
             WasNormalized = (ProcessParameters->Flags & RTL_USER_PROCESS_PARAMETERS_NORMALIZED) != 0;
 
             /*
@@ -2499,54 +2502,45 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
              */
             ProcessParameters->Environment = EnvironmentBase;
 
-            if (WasNormalized)
-            {
-                /* Denormalize: convert absolute parent pointers to relative offsets */
-                #define DENORM_FIELD(field) \
-                    if (ProcessParameters->field) \
-                        ProcessParameters->field = (PVOID)((ULONG_PTR)ProcessParameters->field - (ULONG_PTR)ProcessParameters)
+            /* Store absolute pointers that are valid before the initial thread runs. */
+#define REBASE_FIELD(Field) do { \
+    if (ProcessParameters->Field) \
+        ProcessParameters->Field = (PVOID)((ULONG_PTR)BaseAddress + (ULONG_PTR)ProcessParameters->Field - \
+                                           (WasNormalized ? (ULONG_PTR)ProcessParameters : 0)); \
+} while (0)
+            REBASE_FIELD(CurrentDirectory.DosPath.Buffer);
+            REBASE_FIELD(DllPath.Buffer);
+            REBASE_FIELD(ImagePathName.Buffer);
+            REBASE_FIELD(CommandLine.Buffer);
+            REBASE_FIELD(WindowTitle.Buffer);
+            REBASE_FIELD(DesktopInfo.Buffer);
+            REBASE_FIELD(ShellInfo.Buffer);
+            REBASE_FIELD(RuntimeData.Buffer);
+#undef REBASE_FIELD
+            ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
 
-                DENORM_FIELD(CurrentDirectory.DosPath.Buffer);
-                DENORM_FIELD(DllPath.Buffer);
-                DENORM_FIELD(ImagePathName.Buffer);
-                DENORM_FIELD(CommandLine.Buffer);
-                DENORM_FIELD(WindowTitle.Buffer);
-                DENORM_FIELD(DesktopInfo.Buffer);
-                DENORM_FIELD(ShellInfo.Buffer);
-                DENORM_FIELD(RuntimeData.Buffer);
+            Status = ZwWriteVirtualMemory(hProcess,
+                                          BaseAddress,
+                                          ProcessParameters,
+                                          ProcessParameters->Length,
+                                          NULL);
 
-                #undef DENORM_FIELD
-
-                ProcessParameters->Flags &= ~RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
-            }
-
-            /* Write the denormalized parameters to the child */
-            ZwWriteVirtualMemory(hProcess,
-                                 BaseAddress,
-                                 ProcessParameters,
-                                 ProcessParameters->Length,
-                                 NULL);
-
-            /* Restore the parent's parameters to their original state */
-            if (WasNormalized)
-            {
-                #define RENORM_FIELD(field) \
-                    if (ProcessParameters->field) \
-                        ProcessParameters->field = (PVOID)((ULONG_PTR)ProcessParameters->field + (ULONG_PTR)ProcessParameters)
-
-                RENORM_FIELD(CurrentDirectory.DosPath.Buffer);
-                RENORM_FIELD(DllPath.Buffer);
-                RENORM_FIELD(ImagePathName.Buffer);
-                RENORM_FIELD(CommandLine.Buffer);
-                RENORM_FIELD(WindowTitle.Buffer);
-                RENORM_FIELD(DesktopInfo.Buffer);
-                RENORM_FIELD(ShellInfo.Buffer);
-                RENORM_FIELD(RuntimeData.Buffer);
-
-                #undef RENORM_FIELD
-
-                ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
-            }
+            /* Restore the caller's parameter block. */
+#define RESTORE_FIELD(Field) do { \
+    if (ProcessParameters->Field) \
+        ProcessParameters->Field = (PVOID)((ULONG_PTR)ProcessParameters->Field - (ULONG_PTR)BaseAddress + \
+                                           (WasNormalized ? (ULONG_PTR)ProcessParameters : 0)); \
+} while (0)
+            RESTORE_FIELD(CurrentDirectory.DosPath.Buffer);
+            RESTORE_FIELD(DllPath.Buffer);
+            RESTORE_FIELD(ImagePathName.Buffer);
+            RESTORE_FIELD(CommandLine.Buffer);
+            RESTORE_FIELD(WindowTitle.Buffer);
+            RESTORE_FIELD(DesktopInfo.Buffer);
+            RESTORE_FIELD(ShellInfo.Buffer);
+            RESTORE_FIELD(RuntimeData.Buffer);
+#undef RESTORE_FIELD
+            if (!WasNormalized) ProcessParameters->Flags &= ~RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
 
             /* Restore the parent's original environment pointer */
             ProcessParameters->Environment = SavedEnvironment;
