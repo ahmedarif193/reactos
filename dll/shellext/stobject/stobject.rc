@@ -9,7 +9,7 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 IDI_BATTERY ICON "resources/1.ico"
 IDI_EXTRACT ICON "resources/2.ico"
 IDI_VOLUME  ICON "resources/fluent/speaker_2.ico"
-IDI_VOLMUTE ICON "resources/fluent/speaker_mute.ico"
+IDI_VOLMUTE ICON "resources/fluent/speaker_off.ico"
 IDI_VOLUME0 ICON "resources/fluent/speaker_0.ico"
 IDI_VOLUME1 ICON "resources/fluent/speaker_1.ico"
 
