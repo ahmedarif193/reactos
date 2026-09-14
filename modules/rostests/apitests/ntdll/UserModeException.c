@@ -289,6 +289,47 @@ void Test_SingleInstruction(
 
 static
 void
+Test_RaisedAccessViolations(void)
+{
+    static const ULONG_PTR AccessTypes[] = {EXCEPTION_READ_FAULT, EXCEPTION_EXECUTE_FAULT};
+    PVOID RwxMemory;
+    ULONG i;
+
+    RwxMemory = VirtualAlloc(NULL, PAGE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    ok(RwxMemory != NULL, "Failed to allocate RWX memory!\n");
+    if (RwxMemory == NULL) return;
+
+    /* A raised read or execute fault must reach SEH even on writable code. */
+    for (i = 0; i < ARRAYSIZE(AccessTypes); i++)
+    {
+        ULONG_PTR Arguments[] = {AccessTypes[i], (ULONG_PTR)RwxMemory};
+        _SEH2_VOLATILE EXCEPTION_RECORD ExceptionRecord = {0};
+        PEXCEPTION_POINTERS ExcPtrs;
+        NTSTATUS Status = STATUS_SUCCESS;
+
+        _SEH2_TRY
+        {
+            RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, ARRAYSIZE(Arguments), Arguments);
+        }
+        _SEH2_EXCEPT(ExcPtrs = _SEH2_GetExceptionInformation(),
+                     ExceptionRecord = *ExcPtrs->ExceptionRecord,
+                     EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        ok_hex(Status, EXCEPTION_ACCESS_VIOLATION);
+        ok_dec(ExceptionRecord.NumberParameters, ARRAYSIZE(Arguments));
+        ok_size_t(ExceptionRecord.ExceptionInformation[0], AccessTypes[i]);
+        ok_size_t(ExceptionRecord.ExceptionInformation[1], (ULONG_PTR)RwxMemory);
+    }
+
+    VirtualFree(RwxMemory, 0, MEM_RELEASE);
+}
+
+static
+void
 Test_InstructionFaults(void)
 {
     PVOID RwxMemory;
@@ -318,5 +359,6 @@ START_TEST(UserModeException)
 {
     DetermineCpuFeatures();
 
+    Test_RaisedAccessViolations();
     Test_InstructionFaults();
 }
