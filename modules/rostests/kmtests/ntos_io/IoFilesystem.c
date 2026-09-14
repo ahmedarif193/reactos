@@ -999,6 +999,54 @@ Cleanup:
         ExFreePoolWithTag(Expected, 'tFmK');
 }
 
+static
+VOID
+TestCachedReadCleanup(VOID)
+{
+    UNICODE_STRING FileName = RTL_CONSTANT_STRING(L"\\SystemRoot\\system32\\ntoskrnl.exe");
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatus;
+    LARGE_INTEGER Offset = {{0, 0}};
+    HANDLE FileHandle;
+    PFILE_OBJECT FileObject;
+    NTSTATUS Status;
+    UCHAR Buffer[64];
+
+    InitializeObjectAttributes(&ObjectAttributes, &FileName,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               NULL, NULL);
+    Status = ZwOpenFile(&FileHandle, FILE_READ_DATA | SYNCHRONIZE,
+                        &ObjectAttributes, &IoStatus,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Status = ObReferenceObjectByHandle(FileHandle, 0, *IoFileObjectType,
+                                       KernelMode, (PVOID *)&FileObject, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        ZwClose(FileHandle);
+        return;
+    }
+
+    Status = ZwReadFile(FileHandle, NULL, NULL, NULL, &IoStatus,
+                        Buffer, sizeof(Buffer), &Offset, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ok_eq_ulong(IoStatus.Information, sizeof(Buffer));
+    trace("Cached read private map before cleanup: %p\n", FileObject->PrivateCacheMap);
+
+    /* Keep the object alive to inspect cleanup independently of final close. */
+    Status = ZwClose(FileHandle);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(FileObject->Flags & FO_CLEANUP_COMPLETE, "Cleanup did not complete\n");
+    ok_eq_pointer(FileObject->PrivateCacheMap, NULL);
+    ObDereferenceObject(FileObject);
+}
+
 START_TEST(IoFilesystem)
 {
     if (skip(!IsWinPE(), "IoFilesystem path matrix requires an installed OS, not WinPE\n"))
@@ -1013,4 +1061,5 @@ START_TEST(IoFilesystem)
     TestQueryAttributesMissing();
     TestSharedCacheMap();
     TestReadAfterSmallWrites();
+    TestCachedReadCleanup();
 }
