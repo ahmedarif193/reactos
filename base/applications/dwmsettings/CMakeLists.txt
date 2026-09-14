@@ -4,7 +4,7 @@
 add_rc_deps(dwmsettings.rc
     ${CMAKE_CURRENT_SOURCE_DIR}/resource.h
     ${CMAKE_CURRENT_SOURCE_DIR}/lang/en-US.rc
-    ${CMAKE_CURRENT_SOURCE_DIR}/../control11/res/cat_appearance.ico)
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/dwm-settings.ico)
 add_executable(dwmsettings
     dwmsettings.c
     ../../system/dwm/settings.c
