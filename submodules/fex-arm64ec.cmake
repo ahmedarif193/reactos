@@ -159,6 +159,8 @@ ExternalProject_Add(fex-arm64ec-build
         -DBUILD_FEX_LINUX_TESTS=OFF
         -DBUILD_THUNKS=OFF
         -DBUILD_FEXCONFIG=OFF
+        # Only the emulator DLL is staged; skip unused JSON install-data scans.
+        -DINSTALL_CONFIG_FILES:BOOL=OFF
         -DENABLE_ASSERTIONS=ON
         -DENABLE_JEMALLOC_GLIBC_ALLOC=OFF
         -DENABLE_GDB_SYMBOLS=OFF
@@ -181,8 +183,8 @@ ExternalProject_Add(fex-arm64ec-build
     USES_TERMINAL_BUILD OFF
 )
 
-# The i386 emulator, from the same source configured for aarch64 rather than
-# arm64ec. Serialize the two emulator builds to bound their combined load.
+# The i386 emulator uses a separate build directory and output from ARM64EC,
+# so the two nested builds can run concurrently.
 ExternalProject_Add(fex-wow64-build
     SOURCE_DIR "${FEX_SOURCE_DIR}"
     BINARY_DIR "${FEX_WOW64_BINARY_DIR}"
@@ -216,6 +218,7 @@ ExternalProject_Add(fex-wow64-build
         -DBUILD_FEX_LINUX_TESTS=OFF
         -DBUILD_THUNKS=OFF
         -DBUILD_FEXCONFIG=OFF
+        -DINSTALL_CONFIG_FILES:BOOL=OFF
         -DENABLE_ASSERTIONS=ON
         -DENABLE_JEMALLOC_GLIBC_ALLOC=OFF
         -DENABLE_GDB_SYMBOLS=OFF
@@ -236,8 +239,6 @@ ExternalProject_Add(fex-wow64-build
     BUILD_BYPRODUCTS "${FEX_WOW64_DLL_DEST}" "${FEX_WOW64_DLL_SYMBOLS}"
     USES_TERMINAL_BUILD OFF
 )
-ExternalProject_Add_StepDependencies(fex-wow64-build build fex-arm64ec-build)
-
 # Deploy uncompressed so ntdll can load the emulator during process startup.
 add_cd_file(
     TARGET fex-arm64ec-build

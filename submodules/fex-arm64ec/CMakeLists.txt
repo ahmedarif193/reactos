@@ -7,6 +7,7 @@ check_include_files("gdb/jit-reader.h" HAVE_GDB_JIT_READER_H)
 option(BUILD_FEX_LINUX_TESTS "Build FEXLinuxTests (requires x86 compiler)" FALSE)
 option(BUILD_THUNKS "Build thunks" FALSE)
 option(BUILD_FEXCONFIG "Build FEXConfig" TRUE)
+option(INSTALL_CONFIG_FILES "Generate and install application configuration and ThunksDB files" TRUE)
 option(ENABLE_CLANG_THUNKS "Build thunks with clang" TRUE)
 option(ENABLE_IWYU "Enable the Include What You Use sanitizer" FALSE)
 option(ENABLE_LTO "Enable LTO with compilation" TRUE)
@@ -616,19 +617,21 @@ endif()
 
 add_subdirectory(Source/)
 
-if (NOT BUILD_STEAM_SUPPORT)
-  add_subdirectory(Data/AppConfig/)
+if (INSTALL_CONFIG_FILES)
+  if (NOT BUILD_STEAM_SUPPORT)
+    add_subdirectory(Data/AppConfig/)
+  endif()
+
+  # Install the ThunksDB file
+  file(GLOB CONFIG_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Data/*.json)
+
+  # Any application configuration json file gets installed
+  foreach(CONFIG_SRC ${CONFIG_SOURCES})
+    install(FILES ${CONFIG_SRC}
+      DESTINATION ${DATA_DIRECTORY}/
+      COMPONENT Runtime)
+  endforeach()
 endif()
-
-# Install the ThunksDB file
-file(GLOB CONFIG_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Data/*.json)
-
-# Any application configuration json file gets installed
-foreach(CONFIG_SRC ${CONFIG_SOURCES})
-  install(FILES ${CONFIG_SRC}
-    DESTINATION ${DATA_DIRECTORY}/
-    COMPONENT Runtime)
-endforeach()
 
 if (BUILD_TESTING)
   add_subdirectory(unittests/)
