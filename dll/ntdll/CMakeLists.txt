@@ -132,6 +132,7 @@ add_library(ntdll_chpe MODULE EXCLUDE_FROM_ALL
     chpebridge.c
     ${NTDLL_CHPE_X64_SOURCE}
     ${CMAKE_CURRENT_BINARY_DIR}/ntdll_chpe.def)
+target_include_directories(ntdll_chpe PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/cryptlib)
 if(ARM64EC_RUNTIME)
     target_sources(ntdll_chpe PRIVATE
         chpedynfntbl.c

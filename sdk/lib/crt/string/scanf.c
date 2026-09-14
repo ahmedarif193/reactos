@@ -80,6 +80,14 @@ static int wchar2digit(wchar_t c, int base) {
 #undef SECURE
 #include "scanf.h"
 
+#ifdef _LIBCNT_
+/* Fixed-argument entry for the ARM64EC NTDLL bridge's variadic sscanf. */
+int CDECL ChpeVsscanf(const char *str, const char *format, __ms_va_list args)
+{
+    return vsscanf_l(str, format, NULL, args);
+}
+#endif
+
 /* vswscanf_l */
 #define WIDE_SCANF 1
 #undef CONSOLE

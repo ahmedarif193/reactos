@@ -2086,3 +2086,5 @@
 @ stdcall -arch=arm __rt_udiv()
 @ stdcall -arch=arm __rt_udiv64()
 @ stdcall -arch=arm __rt_srsh()
+@ cdecl -arch=arm64 ChpeVsscanf(str str ptr)
+@ stdcall -arch=arm64 ChpeVDbgPrintReturnControlC(str ptr)

@@ -120,6 +120,12 @@ RtlpCallWaitOrTimerCallback(
     _In_opt_ PVOID Context,
     _In_ BOOLEAN TimerOrWaitFired);
 
+VOID
+NTAPI
+RtlpCallWorkItemCallback(
+    _In_ WORKERCALLBACKFUNC Callback,
+    _In_opt_ PVOID Context);
+
 KPROCESSOR_MODE
 NTAPI
 RtlpGetMode(VOID);

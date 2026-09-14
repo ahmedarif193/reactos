@@ -1355,7 +1355,17 @@ ChpepCallThreadpoolCallback(PVOID Callback,
                             ULONG_PTR Argument2,
                             ULONG_PTR Argument3)
 {
+    PVOID ImageBase = NULL;
     NTSTATUS Status;
+
+    if (RtlIsEcCode((ULONG_PTR)Callback) ||
+        (RtlPcToFileHeader(Callback, &ImageBase) &&
+         ChpepGetImageMachine(ImageBase) == IMAGE_FILE_MACHINE_ARM64))
+    {
+        ((VOID (NTAPI *)(ULONG_PTR, ULONG_PTR, ULONG_PTR, ULONG_PTR))Callback)(
+            Argument0, Argument1, Argument2, Argument3);
+        return;
+    }
 
     Status = ChpeInitializeThread();
     if (!NT_SUCCESS(Status))
@@ -1365,6 +1375,43 @@ ChpepCallThreadpoolCallback(PVOID Callback,
     }
 
     ChpepCallX64Routine(Callback, Argument0, Argument1, Argument2, Argument3);
+}
+
+VOID
+NTAPI
+ChpeInvokeUserApcRoutine(PVOID NormalContext, PVOID SystemArgument1,
+                         PVOID SystemArgument2, PCONTEXT SavedContext,
+                         PKNORMAL_ROUTINE NormalRoutine)
+{
+    PVOID ImageBase = NULL;
+    NTSTATUS Status;
+
+    /* The first APC enters LdrInitializeThunk before the loader lock and the
+     * emulator exist. It is a native ARM64 bootstrap call. */
+    if (!ChpeIsChpeProcess() || !ChpeIsEmulatorReady() ||
+        RtlIsEcCode((ULONG_PTR)NormalRoutine) ||
+        (RtlPcToFileHeader((PVOID)NormalRoutine, &ImageBase) &&
+         ChpepGetImageMachine(ImageBase) == IMAGE_FILE_MACHINE_ARM64))
+    {
+        /* LdrInitializeThunk consumes the saved CONTEXT in x3; ordinary
+         * three-argument APC routines simply ignore the fourth argument. */
+        ((VOID (NTAPI *)(PVOID, PVOID, PVOID, PCONTEXT))NormalRoutine)(
+            NormalContext, SystemArgument1, SystemArgument2, SavedContext);
+        return;
+    }
+
+    Status = ChpeInitializeThread();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[CHPE] ntdll: cannot dispatch x64 APC %p, ThreadInit failed with Status = 0x%08lx\n",
+                NormalRoutine, Status);
+        RtlRaiseStatus(Status);
+        return;
+    }
+
+    ChpepCallX64Routine((PVOID)NormalRoutine, (ULONG_PTR)NormalContext,
+                         (ULONG_PTR)SystemArgument1, (ULONG_PTR)SystemArgument2,
+                         (ULONG_PTR)SavedContext);
 }
 
 static
