@@ -3894,10 +3894,15 @@ NtQuerySystemInformationEx(
                 PEPROCESS Process = NULL;
                 HANDLE ProcessHandle;
                 USHORT ProcessMachine = 0;
-#ifdef _WIN64
+#if defined(_M_ARM64)
+                const ULONG MachineCount = SystemInformationClass == SystemSupportedProcessorArchitectures2 ? 4 : 3;
+#elif defined(_WIN64)
                 const ULONG MachineCount = 3;
 #else
                 const ULONG MachineCount = 2;
+#endif
+#ifdef _WIN64
+                ULONG MachineIndex = 1;
 #endif
 
                 if (InputBufferLength < sizeof(HANDLE)) _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
@@ -3918,7 +3923,7 @@ NtQuerySystemInformationEx(
 #ifdef _WIN64
                     if (ExAcquireRundownProtection(&Process->RundownProtect))
                     {
-                        ProcessMachine = Process->Wow64Process ? Process->Wow64Process->Machine : IMAGE_FILE_MACHINE_NATIVE;
+                        ProcessMachine = PsGetProcessMachine(Process);
                         ExReleaseRundownProtection(&Process->RundownProtect);
                     }
 #else
@@ -3933,11 +3938,25 @@ NtQuerySystemInformationEx(
                 Machines[0].UserMode = TRUE;
                 Machines[0].Native = TRUE;
                 Machines[0].Process = ProcessMachine == IMAGE_FILE_MACHINE_NATIVE;
+#if defined(_M_ARM64)
+                if (SystemInformationClass == SystemSupportedProcessorArchitectures &&
+                    ProcessMachine == IMAGE_FILE_MACHINE_AMD64)
+                {
+                    Machines[0].Process = TRUE;
+                }
+                else if (SystemInformationClass == SystemSupportedProcessorArchitectures2)
+                {
+                    Machines[MachineIndex].Machine = IMAGE_FILE_MACHINE_AMD64;
+                    Machines[MachineIndex].UserMode = TRUE;
+                    Machines[MachineIndex].Process = ProcessMachine == IMAGE_FILE_MACHINE_AMD64;
+                    ++MachineIndex;
+                }
+#endif
 #ifdef _WIN64
-                Machines[1].Machine = IMAGE_FILE_MACHINE_I386;
-                Machines[1].UserMode = TRUE;
-                Machines[1].Process = ProcessMachine == IMAGE_FILE_MACHINE_I386;
-                Machines[1].WoW64Container = TRUE;
+                Machines[MachineIndex].Machine = IMAGE_FILE_MACHINE_I386;
+                Machines[MachineIndex].UserMode = TRUE;
+                Machines[MachineIndex].Process = ProcessMachine == IMAGE_FILE_MACHINE_I386;
+                Machines[MachineIndex].WoW64Container = TRUE;
 #endif
                 Status = STATUS_SUCCESS;
                 break;
