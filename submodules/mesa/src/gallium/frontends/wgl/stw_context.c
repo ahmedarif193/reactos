@@ -108,10 +108,12 @@ DrvShareLists(DHGLRC dhglrc1, DHGLRC dhglrc2)
    ctx1 = stw_lookup_context_locked( dhglrc1 );
    ctx2 = stw_lookup_context_locked( dhglrc2 );
 
-   if (ctx1 && ctx2) {
+   if (ctx1 && ctx2 && !ctx2->shared) {
       ret = _mesa_share_state(ctx2->st->ctx, ctx1->st->ctx);
-      ctx1->shared = true;
-      ctx2->shared = true;
+      if (ret) {
+         ctx1->shared = true;
+         ctx2->shared = true;
+      }
    }
 
    stw_unlock_contexts(stw_dev);
