@@ -427,6 +427,8 @@ ThemeInitDrawContext(PDRAW_CONTEXT pcontext,
                      HWND hWnd,
                      HRGN hRgn)
 {
+    RECT ClientRect;
+
     pcontext->wi.cbSize = sizeof(pcontext->wi);
     GetWindowInfo(hWnd, &pcontext->wi);
     pcontext->hWnd = hWnd;
@@ -457,6 +459,9 @@ ThemeInitDrawContext(PDRAW_CONTEXT pcontext,
     }
 
     pcontext->hDC = GetDCEx(hWnd, hRgn, DCX_WINDOW | DCX_INTERSECTRGN | DCX_USESTYLE | DCX_KEEPCLIPRGN);
+    ClientRect = pcontext->wi.rcClient;
+    OffsetRect(&ClientRect, -pcontext->wi.rcWindow.left, -pcontext->wi.rcWindow.top);
+    ExcludeClipRect(pcontext->hDC, ClientRect.left, ClientRect.top, ClientRect.right, ClientRect.bottom);
 }
 
 void
