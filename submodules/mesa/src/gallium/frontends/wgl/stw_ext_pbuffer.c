@@ -168,7 +168,8 @@ wglCreatePbufferARB(HDC hCurrentDC,
    int textureFormat = WGL_NO_TEXTURE_ARB;
    int textureTarget = WGL_NO_TEXTURE_ARB;
    BOOL textureMipmap = false;
-   const struct stw_pixelformat_info *pfi = stw_pixelformat_get_info(iPixelFormat);
+   int driverPixelFormat = stw_pixelformat_translate_wgl(hCurrentDC, iPixelFormat);
+   const struct stw_pixelformat_info *pfi = stw_pixelformat_get_info(driverPixelFormat);
 
    if (!pfi) {
       SetLastError(ERROR_INVALID_PIXEL_FORMAT);

@@ -113,9 +113,7 @@ stw_pf_flag[] = {
    0,
    PFD_DOUBLEBUFFER | PFD_SWAP_EXCHANGE,
    PFD_SUPPORT_GDI,
-   PFD_DOUBLEBUFFER | PFD_SWAP_EXCHANGE | PFD_SUPPORT_GDI,
    PFD_DOUBLEBUFFER | PFD_SWAP_COPY,
-   PFD_DOUBLEBUFFER | PFD_SWAP_COPY | PFD_SUPPORT_GDI,
 };
 
 
@@ -350,6 +348,57 @@ stw_pixelformat_get_extended_count(HDC hdc)
 
    return util_dynarray_num_elements(&stw_dev->pixelformats,
                                      struct stw_pixelformat_info);
+}
+
+
+static uint
+stw_pixelformat_get_generic_count(HDC hdc)
+{
+   uint driver_count;
+   int onscreen_count;
+
+   if (!stw_dev->callbacks.pfnGetDhglrc)
+      return 0;
+
+   driver_count = stw_pixelformat_get_count(hdc);
+   onscreen_count = DescribePixelFormat(hdc, 0, 0, NULL);
+   if (onscreen_count <= 0 || (uint) onscreen_count <= driver_count)
+      return 0;
+
+   return (uint) onscreen_count - driver_count;
+}
+
+
+uint
+stw_pixelformat_get_wgl_count(HDC hdc)
+{
+   return stw_pixelformat_get_extended_count(hdc) +
+          stw_pixelformat_get_generic_count(hdc);
+}
+
+
+int
+stw_pixelformat_translate_wgl(HDC hdc, int iPixelFormat)
+{
+   uint driver_count;
+   uint generic_count;
+   uint extended_count;
+
+   if (iPixelFormat <= 0)
+      return -1;
+
+   driver_count = stw_pixelformat_get_count(hdc);
+   generic_count = stw_pixelformat_get_generic_count(hdc);
+   extended_count = stw_pixelformat_get_extended_count(hdc);
+
+   if ((uint) iPixelFormat <= driver_count)
+      return iPixelFormat;
+   if ((uint) iPixelFormat <= driver_count + generic_count)
+      return 0;
+   if ((uint) iPixelFormat > extended_count + generic_count)
+      return -1;
+
+   return iPixelFormat - generic_count;
 }
 
 
