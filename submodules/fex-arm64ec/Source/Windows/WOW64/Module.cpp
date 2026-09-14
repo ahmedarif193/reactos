@@ -932,7 +932,7 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
     }
   }
 
-  if (Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION || ManagedExecutableWrite) {
+  if ((Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && Exception->ExceptionInformation[0] == EXCEPTION_WRITE_FAULT) || ManagedExecutableWrite) {
     if (Thread) {
       std::scoped_lock Lock(ThreadCreationMutex);
       FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
