@@ -243,23 +243,29 @@ RtlWow64GetThreadSelectorEntry(HANDLE handle,
                                ULONG size,
                                ULONG *retlen)
 {
-    ULONG selector;
+    ULONG selector, code_selector, data_selector, teb_selector;
+#if !defined(__REACTOS__) || !defined(_M_ARM64)
     WOW64_CONTEXT context = { WOW64_CONTEXT_CONTROL | WOW64_CONTEXT_SEGMENTS };
+#endif
     LDT_ENTRY entry = { 0 };
 
     if (size != sizeof(*info))
         return STATUS_INFO_LENGTH_MISMATCH;
 
+#if defined(__REACTOS__) && defined(_M_ARM64)
+    /* ARM64 uses fixed software descriptors for the WoW64 address space. */
+    selector = info->Selector & ~3u;
+    code_selector = 0x18;
+    data_selector = 0x20;
+    teb_selector = 0x38;
+    if (!selector)
+        goto done;
+#else
     if (RtlWow64GetThreadContext(handle, &context))
     {
         context.SegCs = 0x23;
-#if defined(__REACTOS__) && defined(_M_ARM64)
-        context.SegFs = 0x53;
-        context.SegSs = 0x2b;
-#else
         __asm__("movw %%fs,%0" : "=m" (context.SegFs));
         __asm__("movw %%ss,%0" : "=m" (context.SegSs));
-#endif
     }
 
     selector = info->Selector | 3;
@@ -267,32 +273,31 @@ RtlWow64GetThreadSelectorEntry(HANDLE handle,
         goto done;
 
     if (selector & 0x04)
-#if defined(__REACTOS__) && defined(_M_ARM64)
-        /* ARM64 has no native LDT, and the software WoW64 CPU does not
-         * install one. Do not forward to an unavailable kernel info class. */
-        return STATUS_NO_LDT;
-#else
         return NtQueryInformationThread(handle, ThreadDescriptorTableEntry, info, size, NULL);
+
+    code_selector = context.SegCs;
+    data_selector = context.SegSs;
+    teb_selector = context.SegFs;
 #endif
 
     entry.HighWord.Bits.Dpl = 3;
     entry.HighWord.Bits.Pres = 1;
     entry.HighWord.Bits.Default_Big = 1;
-    if (selector == context.SegCs)
+    if (selector == code_selector)
     {
         entry.LimitLow = 0xffff;
         entry.HighWord.Bits.LimitHi = 0xf;
         entry.HighWord.Bits.Type = 0x1b;
         entry.HighWord.Bits.Granularity = 1;
     }
-    else if (selector == context.SegSs)
+    else if (selector == data_selector)
     {
         entry.LimitLow = 0xffff;
         entry.HighWord.Bits.LimitHi = 0xf;
         entry.HighWord.Bits.Type = 0x13;
         entry.HighWord.Bits.Granularity = 1;
     }
-    else if (selector == context.SegFs)
+    else if (selector == teb_selector)
     {
         THREAD_BASIC_INFORMATION basic;
 
