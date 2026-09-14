@@ -83,6 +83,7 @@ list(APPEND SOURCE
     NtImpersonateAnonymousToken.c
     NtLoadUnloadKey.c
     NtMapViewOfSection.c
+    NtMapViewOfSection_ImageZeroBits.c
     NtMutant.c
     NtOpenKey.c
     NtOpenProcessToken.c
