@@ -2969,9 +2969,6 @@ USBPORT_RestoreDevice(IN PDEVICE_OBJECT FdoDevice,
 
                         MiniportOpenEndpoint(FdoDevice, Endpoint);
 
-                        Endpoint->Flags &= ~(ENDPOINT_FLAG_NUKE |
-                                             ENDPOINT_FLAG_ABORTING);
-
                         KeAcquireSpinLock(&Endpoint->EndpointSpinLock,
                                           &Endpoint->EndpointOldIrql);
 
@@ -2989,6 +2986,8 @@ USBPORT_RestoreDevice(IN PDEVICE_OBJECT FdoDevice,
                         KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
                                           Endpoint->EndpointOldIrql);
                     }
+
+                    InterlockedAnd((volatile LONG *)&Endpoint->Flags, ~(LONG)(ENDPOINT_FLAG_NUKE | ENDPOINT_FLAG_ABORTING));
                 }
             }
         }

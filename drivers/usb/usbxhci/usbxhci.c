@@ -13555,6 +13555,8 @@ XHCI_ReopenEndpoint(PVOID MiniPortExtension,
     if (!Endpoint->Slot)
         return MP_STATUS_ERROR;
 
+    Endpoint->EndpointProperties = *EndpointProperties;
+
     MaxStreamId = (USHORT)(EndpointProperties->Reserved6 & 0xFFFF);
     if (MaxStreamId == 0)
     {
