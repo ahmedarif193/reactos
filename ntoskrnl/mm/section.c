@@ -4518,6 +4518,7 @@ MmMapViewOfSection(
         ULONG i;
         ULONG NrSegments;
         ULONG_PTR ImageBase;
+        ULONG_PTR HighestAddress;
         SIZE_T ImageSize;
         PMM_IMAGE_SECTION_OBJECT ImageSectionObject;
         PMM_SECTION_SEGMENT SectionSegments;
@@ -4545,12 +4546,20 @@ MmMapViewOfSection(
 
         ImageSectionObject->ImageInformation.ImageFileSize = (ULONG)ImageSize;
 
+        /* NtMapViewOfSection has converted ZeroBits masks to a bit count. */
+        HighestAddress = min((ULONG_PTR)MM_HIGHEST_VAD_ADDRESS, MAXULONG_PTR >> ZeroBits);
+        if (ImageSize > HighestAddress)
+        {
+            Status = STATUS_CONFLICTING_ADDRESSES;
+            goto Exit;
+        }
+
         /* Check for an illegal base address */
-        if (((ImageBase + ImageSize) > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS) ||
+        if (((ImageBase + ImageSize) > HighestAddress) ||
                 ((ImageBase + ImageSize) < ImageSize))
         {
             ASSERT(*BaseAddress == NULL);
-            ImageBase = ALIGN_DOWN_BY((ULONG_PTR)MM_HIGHEST_VAD_ADDRESS - ImageSize,
+            ImageBase = ALIGN_DOWN_BY(HighestAddress - ImageSize,
                                       MM_VIRTMEM_GRANULARITY);
             NotAtBase = TRUE;
         }
@@ -4571,7 +4580,22 @@ MmMapViewOfSection(
                 goto Exit;
             }
             /* Otherwise find a gap to map the image. */
-            ImageBase = (ULONG_PTR)MmFindGap(AddressSpace, PAGE_ROUND_UP(ImageSize), MM_VIRTMEM_GRANULARITY, FALSE);
+            if (ZeroBits)
+            {
+                PMMADDRESS_NODE Parent;
+
+                if (MiFindEmptyAddressRangeDownTree(PAGE_ROUND_UP(ImageSize),
+                                                    HighestAddress,
+                                                    MM_VIRTMEM_GRANULARITY,
+                                                    &Process->VadRoot,
+                                                    &ImageBase,
+                                                    &Parent) == TableFoundNode)
+                    ImageBase = 0;
+            }
+            else
+            {
+                ImageBase = (ULONG_PTR)MmFindGap(AddressSpace, PAGE_ROUND_UP(ImageSize), MM_VIRTMEM_GRANULARITY, FALSE);
+            }
             if (ImageBase == 0)
             {
                 Status = STATUS_CONFLICTING_ADDRESSES;
