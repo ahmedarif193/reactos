@@ -203,12 +203,10 @@ void Test_SingleInstruction(
     PTEST_ENTRY TestEntry)
 {
     PEXCEPTION_POINTERS ExcPtrs;
-    EXCEPTION_RECORD ExceptionRecord;
+    _SEH2_VOLATILE EXCEPTION_RECORD ExceptionRecord = {0};
     NTSTATUS ExpectedStatus, Status = STATUS_SUCCESS;
     PFUNC Func = (PFUNC)RwxMemory;
     ULONG Flags;
-
-    RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
 
     RtlCopyMemory(RwxMemory,
                   TestEntry->InstructionBytes,
