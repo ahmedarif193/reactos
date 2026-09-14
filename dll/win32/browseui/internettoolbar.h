@@ -200,6 +200,7 @@ public:
     LRESULT OnFolders(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled);
     LRESULT OnForwardToCommandTarget(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled);
     LRESULT OnMenuDropDown(UINT idControl, NMHDR *pNMHDR, BOOL &bHandled);
+    LRESULT OnToolbarCustomDraw(UINT idControl, NMHDR *pNMHDR, BOOL &bHandled);
     LRESULT OnQueryInsert(UINT idControl, NMHDR *pNMHDR, BOOL &bHandled);
     LRESULT OnQueryDelete(UINT idControl, NMHDR *pNMHDR, BOOL &bHandled);
     LRESULT OnNavigateCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
@@ -223,6 +224,7 @@ public:
         COMMAND_ID_HANDLER(gFoldersCommandID, OnFolders)
         COMMAND_RANGE_HANDLER(0x7000, 0x7fff, OnForwardToCommandTarget)
         NOTIFY_HANDLER(0, TBN_DROPDOWN, OnMenuDropDown)
+        NOTIFY_HANDLER(0, NM_CUSTOMDRAW, OnToolbarCustomDraw)
         NOTIFY_HANDLER(0, TBN_QUERYINSERT, OnQueryInsert)
         NOTIFY_HANDLER(0, TBN_QUERYDELETE, OnQueryDelete)
         MESSAGE_HANDLER(WM_COMMAND, OnCommand)
