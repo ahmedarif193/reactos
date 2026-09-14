@@ -84,6 +84,16 @@
 #define IDI_FLU_BATTWARN     361
 #define IDI_FLU_NETADAPTER   362
 #define IDI_FLU_ADD          363
+#define IDI_FOLDER_DOCUMENTS 370
+#define IDI_FOLDER_DOWNLOADS 371
+#define IDI_FOLDER_MUSIC     372
+#define IDI_FOLDER_PICTURES  373
+#define IDI_FOLDER_VIDEOS    374
+#define IDI_FOLDER_DESKTOP   375
+#define IDI_FOLDER_GENERIC   376
+#define IDI_DRIVE_FIXED      377
+#define IDI_MY_PC            378
+#define IDI_NETWORK_PLACES   379
 
 /*******************************************************************************\
 |*                               Bitmap Resources                              *|

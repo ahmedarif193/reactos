@@ -6448,7 +6448,8 @@ static const CSIDL_DATA CSIDL_Data[] =
         CSIDL_Type_User,
 #endif
         NULL,
-        L"Downloads"
+        L"Downloads",
+        -IDI_SHELL_DOWNLOADS
     },
     { /* 0x48 */
         &FOLDERID_Games,
@@ -6544,7 +6545,8 @@ static const CSIDL_DATA CSIDL_Data[] =
         &FOLDERID_PublicDownloads,
         CSIDL_Type_AllUsers,
         NULL,
-        L"Downloads"
+        L"Downloads",
+        -IDI_SHELL_DOWNLOADS
     },
     { /* 0x58 */
         &FOLDERID_PublicGameTasks,

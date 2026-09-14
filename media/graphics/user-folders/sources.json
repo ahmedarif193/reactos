@@ -1,0 +1,58 @@
+[
+  {
+    "folder": "generic",
+    "source": "Colored-Folder-Icons/png/1024/folder-generic.png",
+    "source_sha256": "99552ca9af2bc1ca397c7a11b7065fbc66550a1a09a2d6a6ca80d76e90c85dbb",
+    "png": "../system-folders/folder.png",
+    "png_sha256": "99552ca9af2bc1ca397c7a11b7065fbc66550a1a09a2d6a6ca80d76e90c85dbb",
+    "icons": ["4.ico", "5.ico"]
+  },
+  {
+    "folder": "home",
+    "source": "Colored-Folder-Icons/png/1024/folder-home.png",
+    "source_sha256": "054ad0a48f04773c9e19bf8e591fcd13293c481fb3fad09da68d37cc5feb5239",
+    "png": "home.png",
+    "png_sha256": "054ad0a48f04773c9e19bf8e591fcd13293c481fb3fad09da68d37cc5feb5239",
+    "icon": "35.ico"
+  },
+  {
+    "folder": "documents",
+    "source": "Colored-Folder-Icons/png/1024/folder-documents.png",
+    "source_sha256": "17020f48126798d5d549aaa8761477c7bc2afbc2c54bdafc7cc4c8d211a895e3",
+    "png": "documents.png",
+    "png_sha256": "17020f48126798d5d549aaa8761477c7bc2afbc2c54bdafc7cc4c8d211a895e3",
+    "icon": "235.ico"
+  },
+  {
+    "folder": "downloads",
+    "source": "Colored-Folder-Icons/png/1024/folder-downloads.png",
+    "source_sha256": "48b7f6bc48c63294f7c63c709153ee8d50c7c410c743894f7244e0a742ceeac6",
+    "png": "downloads.png",
+    "png_sha256": "48b7f6bc48c63294f7c63c709153ee8d50c7c410c743894f7244e0a742ceeac6",
+    "icon": "downloads.ico"
+  },
+  {
+    "folder": "music",
+    "source": "Colored-Folder-Icons/png/1024/folder-music.png",
+    "source_sha256": "da445d457951a9218c0e0adaff51f420f23d20ad3390b96a33769df91a7ea691",
+    "png": "music.png",
+    "png_sha256": "da445d457951a9218c0e0adaff51f420f23d20ad3390b96a33769df91a7ea691",
+    "icon": "237.ico"
+  },
+  {
+    "folder": "pictures",
+    "source": "Colored-Folder-Icons/png/1024/folder-pictures.png",
+    "source_sha256": "a58b8d0a92fccfb1e51e71435f8685c6b4a8a661deac9151b4c2dc726b1b7418",
+    "png": "pictures.png",
+    "png_sha256": "a58b8d0a92fccfb1e51e71435f8685c6b4a8a661deac9151b4c2dc726b1b7418",
+    "icon": "236.ico"
+  },
+  {
+    "folder": "videos",
+    "source": "Colored-Folder-Icons/png/1024/folder-videos.png",
+    "source_sha256": "63fb2730519cb258689a00af8e9f001374430b049ad8da73094d629ec81fa467",
+    "png": "videos.png",
+    "png_sha256": "63fb2730519cb258689a00af8e9f001374430b049ad8da73094d629ec81fa467",
+    "icon": "238.ico"
+  }
+]

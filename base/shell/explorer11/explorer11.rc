@@ -1,3 +1,14 @@
 #include "../explorer/explorer.rc"
 
 1 ICON "../explorer/res/ico/258.ico"
+
+IDI_FOLDER_DOCUMENTS ICON "../../../dll/win32/shell32/res/icons/235.ico"
+IDI_FOLDER_DOWNLOADS ICON "../../../dll/win32/shell32/res/icons/downloads.ico"
+IDI_FOLDER_MUSIC     ICON "../../../dll/win32/shell32/res/icons/237.ico"
+IDI_FOLDER_PICTURES  ICON "../../../dll/win32/shell32/res/icons/236.ico"
+IDI_FOLDER_VIDEOS    ICON "../../../dll/win32/shell32/res/icons/238.ico"
+IDI_FOLDER_DESKTOP   ICON "../../../dll/win32/shell32/res/icons/35.ico"
+IDI_FOLDER_GENERIC   ICON "../../../dll/win32/shell32/res/icons/4.ico"
+IDI_DRIVE_FIXED      ICON "../../../dll/win32/shell32/res/icons/9.ico"
+IDI_MY_PC            ICON "../../../dll/win32/shell32/res/icons/16.ico"
+IDI_NETWORK_PLACES   ICON "../../../dll/win32/shell32/res/icons/18.ico"

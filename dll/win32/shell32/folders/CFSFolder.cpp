@@ -223,6 +223,43 @@ getShellClassInfo(LPCWSTR Entry, LPWSTR pszValue, DWORD cchValueLen, LPCWSTR Ini
 }
 
 static HRESULT
+getKnownFolderIconLocation(LPCWSTR path, LPWSTR iconFile, UINT cchMax, int *iconIndex)
+{
+    static const struct
+    {
+        const KNOWNFOLDERID *id;
+        int icon;
+    } folders[] =
+    {
+        { &FOLDERID_Desktop,   IDI_SHELL_DESKTOP },
+        { &FOLDERID_Documents, IDI_SHELL_MY_DOCUMENTS },
+        { &FOLDERID_Downloads, IDI_SHELL_DOWNLOADS },
+        { &FOLDERID_Music,     IDI_SHELL_MY_MUSIC },
+        { &FOLDERID_Pictures,  IDI_SHELL_MY_PICTURES },
+        { &FOLDERID_Videos,    IDI_SHELL_MY_MOVIES },
+    };
+
+    for (UINT i = 0; i < _countof(folders); ++i)
+    {
+        CComHeapPtr<WCHAR> folderPath;
+        if (FAILED(SHGetKnownFolderPath(*folders[i].id, KF_FLAG_DONT_VERIFY, NULL, &folderPath)))
+            continue;
+
+        PathRemoveBackslashW(folderPath);
+        if (lstrcmpiW(path, folderPath) != 0)
+            continue;
+
+        HRESULT hr = StringCchCopyW(iconFile, cchMax, swShell32Name);
+        if (FAILED(hr))
+            return hr;
+        *iconIndex = -folders[i].icon;
+        return S_OK;
+    }
+
+    return S_FALSE;
+}
+
+static HRESULT
 getIconLocationForFolder(IShellFolder * psf, PCITEMID_CHILD pidl, UINT uFlags,
                          LPWSTR szIconFile, UINT cchMax, int *piIndex, UINT *pwFlags)
 {
@@ -242,7 +279,7 @@ getIconLocationForFolder(IShellFolder * psf, PCITEMID_CHILD pidl, UINT uFlags,
     // read-only or system folder?
     dwFileAttrs = _ILGetFileAttributes(ILFindLastID(pidl), NULL, 0);
     if ((dwFileAttrs & (FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY)) == 0)
-        goto Quit;
+        goto KnownFolder;
 
     // build the full path of ini file
     StringCchCopyW(wszIniFullPath, _countof(wszIniFullPath), wszPath);
@@ -294,6 +331,13 @@ getIconLocationForFolder(IShellFolder * psf, PCITEMID_CHILD pidl, UINT uFlags,
         GetFullPathNameW(wszPath, cchMax, szIconFile, NULL);
         return S_OK;
     }
+
+KnownFolder:
+    // Existing profiles may lack desktop.ini. Keep explicit custom icons above.
+    // Use the same resource for the normal and expanded tree states.
+    PathRemoveBackslashW(wszPath);
+    if (getKnownFolderIconLocation(wszPath, szIconFile, cchMax, piIndex) == S_OK)
+        return S_OK;
 
 Quit:
     return getDefaultIconLocation(szIconFile, cchMax, piIndex, uFlags);

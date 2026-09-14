@@ -43,7 +43,17 @@ file(GLOB explorer11_rc_deps ${CMAKE_CURRENT_SOURCE_DIR}/../explorer/res/*.* ${C
 add_rc_deps(explorer11.rc ${explorer11_rc_deps}
     ${REACTOS_SOURCE_DIR}/media/graphics/start-button/default.png
     ${REACTOS_SOURCE_DIR}/media/graphics/start-button/hover.png
-    ${REACTOS_SOURCE_DIR}/media/graphics/start-button/pressed.png)
+    ${REACTOS_SOURCE_DIR}/media/graphics/start-button/pressed.png
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/4.ico
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/35.ico
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/9.ico
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/16.ico
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/18.ico
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/235.ico
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/236.ico
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/237.ico
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/238.ico
+    ${REACTOS_SOURCE_DIR}/dll/win32/shell32/res/icons/downloads.ico)
 add_executable(explorer11 ${SOURCE} ${SHELL_SOURCE} explorer11.rc)
 target_compile_definitions(explorer11 PRIVATE EXPLORER11_BUILD)
 target_include_directories(explorer11 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../explorer)
