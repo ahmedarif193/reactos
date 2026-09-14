@@ -932,7 +932,6 @@ MmCreateTeb(IN PEPROCESS Process,
 #ifdef _WIN64
     if (Process->Wow64Process)
     {
-        if (!Wow64InitialTeb) return STATUS_INVALID_PARAMETER;
         TebSize = Teb32Offset + ROUND_TO_PAGES(sizeof(TEB32));
         HighestAddress = MM_HIGHEST_USER_ADDRESS_WOW64;
     }
@@ -1026,8 +1025,13 @@ MmCreateTeb(IN PEPROCESS Process,
             Teb->TlsSlots[WOW64_TLS_CPURESERVED] = InitialTeb->StackBase;
 
             Teb32->NtTib.ExceptionList = MAXULONG;
-            Teb32->NtTib.StackBase = PtrToUlong(Wow64InitialTeb->StackBase);
-            Teb32->NtTib.StackLimit = PtrToUlong(Wow64InitialTeb->StackLimit);
+            /* Native helper threads in a WoW64 process have no emulated stack. */
+            if (Wow64InitialTeb)
+            {
+                Teb32->NtTib.StackBase = PtrToUlong(Wow64InitialTeb->StackBase);
+                Teb32->NtTib.StackLimit = PtrToUlong(Wow64InitialTeb->StackLimit);
+                Teb32->DeallocationStack = PtrToUlong(Wow64InitialTeb->AllocatedStackBase);
+            }
             Teb32->NtTib.Self = PtrToUlong(Teb32);
             Teb32->NtTib.Version = 30 << 8;
             Teb32->ClientId.UniqueProcess = HandleToUlong(ClientId->UniqueProcess);
@@ -1035,7 +1039,6 @@ MmCreateTeb(IN PEPROCESS Process,
             Teb32->RealClientId = Teb32->ClientId;
             Teb32->ProcessEnvironmentBlock = PtrToUlong(Process->Wow64Process->Peb);
             Teb32->CurrentLocale = PsDefaultThreadLocaleId;
-            Teb32->DeallocationStack = PtrToUlong(Wow64InitialTeb->AllocatedStackBase);
             Teb32->StaticUnicodeString.MaximumLength = sizeof(Teb32->StaticUnicodeBuffer);
             Teb32->StaticUnicodeString.Buffer = PtrToUlong(Teb32->StaticUnicodeBuffer);
             Teb32->GdiBatchCount = PtrToUlong(Teb);
