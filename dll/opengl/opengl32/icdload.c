@@ -436,11 +436,12 @@ wglPresentBuffers(HDC hdc, WGL_PRESENTBUFFERS_CB *CallbackData)
         return FALSE;
     }
 
-    /* An empty client has no shared allocation. Still call the ICD so it
-     * can finish the present and update its framebuffer after a resize. */
+    /* An empty client has no shared allocation, and the compositor never
+     * redirects an invisible window (including message-only windows). Still
+     * call the ICD so it can finish the present and update its framebuffer. */
     if (!GetClientRect(Window, &ClientRect))
         return FALSE;
-    if (IsIconic(Window) || IsRectEmpty(&ClientRect))
+    if (IsIconic(Window) || IsRectEmpty(&ClientRect) || !IsWindowVisible(Window))
         return wglPresentBuffersDirect(hdc, IcdData, CallbackData);
 
     /* DWM's registered output swapchain is already the completed desktop.
