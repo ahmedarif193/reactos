@@ -292,7 +292,9 @@ wgl_shared_surface_open(struct pipe_screen *screen,
    struct winsys_handle whandle = { 0 };
    unsigned width, height;
 
-   if (!screen || !screen->resource_from_handle || !shared_handle ||
+   /* This import path uses VC4/D3DKMT handles. The software GDI winsys
+    * cannot import them; let stw_present_buffers use its normal blit path. */
+   if (!use_vc4 || !screen || !screen->resource_from_handle || !shared_handle ||
        !source || !rect || rect->right <= rect->left ||
        rect->bottom <= rect->top)
       return NULL;
