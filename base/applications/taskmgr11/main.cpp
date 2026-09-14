@@ -148,7 +148,7 @@ void Settings_Load(void)
     st.theme = TM_TRANSPARENT;
     st.startPage = PG_PROCESSES;
     st.speed = SPD_NORMAL;
-    st.navExpanded = TRUE;
+    st.navExpanded = FALSE;
 
     HKEY hk;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, SETTINGS_KEY, 0, KEY_QUERY_VALUE, &hk)
@@ -160,7 +160,7 @@ void Settings_Load(void)
         st.onTop = RegReadDw(hk, L"AlwaysOnTop", 0);
         st.minOnUse = RegReadDw(hk, L"MinimizeOnUse", 0);
         st.hideWhenMin = RegReadDw(hk, L"HideWhenMinimized", 0);
-        st.navExpanded = RegReadDw(hk, L"NavExpanded", 1);
+        st.navExpanded = RegReadDw(hk, L"NavExpanded", 0);
         st.noEffPrompt = RegReadDw(hk, L"NoEfficiencyPrompt", 0);
         st.fullAcctName = RegReadDw(hk, L"FullAccountName", 0);
         st.perfResource = RegReadDw(hk, L"PerfResource", 0);
@@ -1013,7 +1013,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
     TL_Register();
     Search_Register();
 
-    int w = S(1000), h = S(660);
+    int w = S(904), h = S(592);
     int x = (GetSystemMetrics(SM_CXSCREEN) - w) / 2;
     int y = (GetSystemMetrics(SM_CYSCREEN) - h) / 2;
 
