@@ -178,11 +178,12 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 16)
     target_compile_options(glmark2 PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wno-template-body>")
 endif()
-# The target-local startup bridge exposes LLVM's .ctors to the normal UCRT
-# startup path, keeping every FILE operation and the process startup in UCRT.
+# The target-local startup bridge exposes LLVM's .ctors to the UCRT startup.
+# Resolve STLport's legacy _vsnprintf from msvcrt before trying ntdll; the
+# ARM64EC ntdll bridge does not export it to AMD64 processes.
 target_link_libraries(glmark2 cppstl cpprt getopt glmark2-png glmark2-zlib)
 set_module_type(glmark2 win32cui)
-add_importlibs(glmark2 libjpeg opengl32 gdi32 user32 ucrtbase kernel32 ntdll)
+add_importlibs(glmark2 libjpeg opengl32 gdi32 user32 ucrtbase kernel32 msvcrt ntdll)
 add_cd_file(TARGET glmark2 DESTINATION reactos/system32 FOR all)
 
 add_executable(glmark2_runner glmark2-runner.c)
