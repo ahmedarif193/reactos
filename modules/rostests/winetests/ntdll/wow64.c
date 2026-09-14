@@ -113,6 +113,27 @@ static BOOL is_machine_32bit( USHORT machine )
 }
 #endif // !defined(__REACTOS__) || (DLL_EXPORT_VERSION >= 0x600)
 
+static BOOL get_windows_path(char path[MAX_PATH], const char *suffix)
+{
+    SIZE_T root_len, suffix_len;
+
+#ifdef __REACTOS__
+    /* ReactOS: the configured Windows directory is not necessarily on C:. */
+    root_len = GetWindowsDirectoryA(path, MAX_PATH);
+    if (!root_len || root_len >= MAX_PATH)
+        return FALSE;
+#else
+    strcpy(path, "c:\\windows");
+    root_len = strlen(path);
+#endif
+    suffix_len = strlen(suffix);
+    if (root_len + suffix_len + 1 > MAX_PATH)
+        return FALSE;
+
+    memcpy(path + root_len, suffix, suffix_len + 1);
+    return TRUE;
+}
+
 static void init(void)
 {
     HMODULE ntdll = GetModuleHandleA( "ntdll.dll" );
@@ -1407,6 +1428,7 @@ static void test_image_mappings(void)
     SIZE_T size;
     LARGE_INTEGER offset;
     void *ptr;
+    char path[MAX_PATH];
 
     if (!pNtMapViewOfSectionEx)
     {
@@ -1415,7 +1437,12 @@ static void test_image_mappings(void)
     }
 
     offset.QuadPart = 0;
-    file = CreateFileA( "c:\\windows\\system32\\version.dll", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
+    if (!get_windows_path(path, "\\system32\\version.dll"))
+    {
+        skip( "Failed to resolve version.dll path\n" );
+        return;
+    }
+    file = CreateFileA( path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
     ok( file != INVALID_HANDLE_VALUE, "Failed to open version.dll\n" );
     mapping = CreateFileMappingA( file, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL );
     ok( mapping != 0, "CreateFileMapping failed\n" );
@@ -1499,7 +1526,8 @@ static void test_image_mappings(void)
 
     if (is_wow64)
     {
-        file = CreateFileA( "c:\\windows\\sysnative\\version.dll", GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, 0 );
+        get_windows_path(path, "\\sysnative\\version.dll");
+        file = CreateFileA( path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, 0 );
         ok( file != INVALID_HANDLE_VALUE, "Failed to open version.dll\n" );
 
         mapping = CreateFileMappingA( file, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL );
@@ -1523,7 +1551,8 @@ static void test_image_mappings(void)
     }
     else if (native_machine == IMAGE_FILE_MACHINE_AMD64 || native_machine == IMAGE_FILE_MACHINE_ARM64)
     {
-        file = CreateFileA( "c:\\windows\\syswow64\\version.dll", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
+        get_windows_path(path, "\\syswow64\\version.dll");
+        file = CreateFileA( path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, 0 );
         ok( file != INVALID_HANDLE_VALUE, "Failed to open version.dll\n" );
 
         mapping = CreateFileMappingA( file, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL );

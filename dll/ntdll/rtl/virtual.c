@@ -15,13 +15,16 @@ NTSTATUS
 RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
                                  ULONG ExtendedParameterCount,
                                  PULONG_PTR ZeroBits,
-                                 PBOOLEAN EcCode)
+                                 PBOOLEAN EcCode,
+                                 PUSHORT ImageMachine)
 {
     ULONG Index, Present = 0;
 
     if (ZeroBits)
         *ZeroBits = 0;
     *EcCode = FALSE;
+    if (ImageMachine)
+        *ImageMachine = IMAGE_FILE_MACHINE_UNKNOWN;
     if (ExtendedParameterCount && !ExtendedParameters)
         return STATUS_INVALID_PARAMETER;
     if (ExtendedParameterCount > MemExtendedParameterMax)
@@ -65,7 +68,11 @@ RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
                     break;
 
                 case MemExtendedParameterNumaNode:
+                    break;
+
                 case MemExtendedParameterImageMachine:
+                    if (ImageMachine)
+                        *ImageMachine = (USHORT)ExtendedParameters[Index].ULong;
                     break;
 
                 default:
@@ -78,6 +85,53 @@ RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
         _SEH2_YIELD(return _SEH2_GetExceptionCode());
     }
     _SEH2_END;
+
+    return STATUS_SUCCESS;
+}
+
+static
+BOOLEAN
+RtlpIs64BitMachine(USHORT Machine)
+{
+    return Machine == IMAGE_FILE_MACHINE_AMD64 ||
+           Machine == IMAGE_FILE_MACHINE_ARM64EC ||
+           Machine == IMAGE_FILE_MACHINE_ARM64 ||
+           Machine == IMAGE_FILE_MACHINE_IA64;
+}
+
+static
+NTSTATUS
+RtlpQueryProcessArchitecture(HANDLE ProcessHandle,
+                             USHORT RequestedMachine,
+                             PUSHORT ProcessMachine,
+                             PBOOLEAN RequestedMachineSupported)
+{
+    SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION Machines[8];
+    NTSTATUS Status;
+    ULONG Index;
+
+    *ProcessMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+    *RequestedMachineSupported = FALSE;
+
+    Status = NtQuerySystemInformationEx(SystemSupportedProcessorArchitectures2,
+                                        &ProcessHandle,
+                                        sizeof(ProcessHandle),
+                                        Machines,
+                                        sizeof(Machines),
+                                        NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Machines) && Machines[Index].Machine; ++Index)
+    {
+        if (Machines[Index].Process)
+            *ProcessMachine = Machines[Index].Machine;
+        if (Machines[Index].UserMode && Machines[Index].Machine == RequestedMachine)
+            *RequestedMachineSupported = TRUE;
+    }
+
+    if (*ProcessMachine == IMAGE_FILE_MACHINE_UNKNOWN)
+        return STATUS_NOT_SUPPORTED;
 
     return STATUS_SUCCESS;
 }
@@ -114,14 +168,69 @@ NtMapViewOfSectionEx(HANDLE SectionHandle,
                      ULONG ExtendedParameterCount)
 {
     ULONG_PTR ZeroBits;
+    SECTION_IMAGE_INFORMATION ImageInformation;
+    USHORT ImageMachine, ProcessMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+    BOOLEAN ImageMachineSupported = FALSE;
     BOOLEAN EcCode;
     NTSTATUS Status;
 
-    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, &ZeroBits, &EcCode);
+    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters,
+                                              ExtendedParameterCount,
+                                              &ZeroBits,
+                                              &EcCode,
+                                              &ImageMachine);
     if (!NT_SUCCESS(Status))
         return Status;
     UNREFERENCED_PARAMETER(EcCode);
-    return NtMapViewOfSection(SectionHandle, ProcessHandle, BaseAddress, ZeroBits, 0, SectionOffset, ViewSize, ViewUnmap, AllocationType, Protect);
+
+    if (ImageMachine != IMAGE_FILE_MACHINE_UNKNOWN)
+    {
+        Status = RtlpQueryProcessArchitecture(ProcessHandle,
+                                              ImageMachine,
+                                              &ProcessMachine,
+                                              &ImageMachineSupported);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        if (!ImageMachineSupported)
+            return STATUS_NOT_SUPPORTED;
+
+        Status = NtQuerySection(SectionHandle,
+                                SectionImageInformation,
+                                &ImageInformation,
+                                sizeof(ImageInformation),
+                                NULL);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        /* ReactOS currently packages ARM64 and ARM64EC images separately, so
+         * it cannot select a second architecture from one ARM64X section yet.
+         * It can still enforce the observable 32/64-bit view boundary here. */
+        if (RtlpIs64BitMachine(ImageMachine) !=
+            RtlpIs64BitMachine(ImageInformation.Machine))
+        {
+            return STATUS_NOT_SUPPORTED;
+        }
+    }
+
+    Status = NtMapViewOfSection(SectionHandle,
+                                ProcessHandle,
+                                BaseAddress,
+                                ZeroBits,
+                                0,
+                                SectionOffset,
+                                ViewSize,
+                                ViewUnmap,
+                                AllocationType,
+                                Protect);
+    if (NT_SUCCESS(Status) &&
+        ImageMachine != IMAGE_FILE_MACHINE_UNKNOWN &&
+        ImageMachine != ProcessMachine)
+    {
+        return STATUS_IMAGE_MACHINE_TYPE_MISMATCH;
+    }
+
+    return Status;
 }
 
 #if defined(_M_AMD64)
