@@ -99,3 +99,34 @@ __ASM_GLOBAL_FUNC(ChpeRtlCaptureContextX64,
                   ".endr\n\t"
                   "addq $8,%rsp\n\t"
                   "ret")
+
+/* setjmp must capture the guest's registers before the ARM64EC entry thunk. */
+__ASM_GLOBAL_FUNC(ChpeSetJmpX64,
+                  __ASM_SEH(".seh_endprologue\n\t")
+                  "leaq 8(%rsp),%rax\n\t"
+                  "movq (%rsp),%r8\n\t"
+                  "movq %rdx,0x00(%rcx)\n\t"
+                  "movq %rbx,0x08(%rcx)\n\t"
+                  "movq %rax,0x10(%rcx)\n\t"
+                  "movq %rbp,0x18(%rcx)\n\t"
+                  "movq %rsi,0x20(%rcx)\n\t"
+                  "movq %rdi,0x28(%rcx)\n\t"
+                  "movq %r12,0x30(%rcx)\n\t"
+                  "movq %r13,0x38(%rcx)\n\t"
+                  "movq %r14,0x40(%rcx)\n\t"
+                  "movq %r15,0x48(%rcx)\n\t"
+                  "movq %r8,0x50(%rcx)\n\t"
+                  "stmxcsr 0x58(%rcx)\n\t"
+                  "fnstcw 0x5c(%rcx)\n\t"
+                  "movdqu %xmm6,0x60(%rcx)\n\t"
+                  "movdqu %xmm7,0x70(%rcx)\n\t"
+                  "movdqu %xmm8,0x80(%rcx)\n\t"
+                  "movdqu %xmm9,0x90(%rcx)\n\t"
+                  "movdqu %xmm10,0xa0(%rcx)\n\t"
+                  "movdqu %xmm11,0xb0(%rcx)\n\t"
+                  "movdqu %xmm12,0xc0(%rcx)\n\t"
+                  "movdqu %xmm13,0xd0(%rcx)\n\t"
+                  "movdqu %xmm14,0xe0(%rcx)\n\t"
+                  "movdqu %xmm15,0xf0(%rcx)\n\t"
+                  "xorl %eax,%eax\n\t"
+                  "ret")

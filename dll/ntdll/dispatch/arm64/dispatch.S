@@ -11,6 +11,7 @@
     .extern RtlExitUserThread
     .extern RtlRaiseStatus
     .extern ChpeRtlUserThreadStart
+    .extern ChpeInvokeUserApcRoutine
 
     /*
      * The kernel enters with sp pointing at a KUSER_EXCEPTION_STACK whose
@@ -68,9 +69,9 @@ KiUserApcDispatcher:
      * the first field, so the incoming sp is also the NtContinue context.
      */
     mov     x19, sp
-    mov     x16, x3
+    mov     x4, x3
     mov     x3, x19
-    blr     x16
+    bl      ChpeInvokeUserApcRoutine
 
     mov     x0, x19
     mov     w1, #1

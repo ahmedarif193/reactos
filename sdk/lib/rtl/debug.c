@@ -269,6 +269,21 @@ DbgPrintReturnControlC(PCCH Format,
     return Status;
 }
 
+#if defined(_M_ARM64) && !defined(_M_ARM64EC)
+ULONG
+NTAPI
+ChpeVDbgPrintReturnControlC(PCCH Format,
+                            va_list Arguments)
+{
+    return vDbgPrintExWithPrefixInternal("",
+                                         (ULONG)-1,
+                                         DPFLTR_ERROR_LEVEL,
+                                         Format,
+                                         Arguments,
+                                         FALSE);
+}
+#endif
+
 /*
  * @implemented
  */

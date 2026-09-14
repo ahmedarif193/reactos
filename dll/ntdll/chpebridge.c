@@ -12,9 +12,27 @@
  */
 
 #include <ntdll.h>
+#include <ndk/lpcfuncs.h>
+#include <ndk/sefuncs.h>
+#include <ndk/dbgkfuncs.h>
+#include <ndk/pofuncs.h>
+#include <reactos/subsys/csr/csr.h>
 #include <delayloadhandler.h>
 #include <evntprov.h>
+#include <math.h>
+#include <stdlib.h>
 #include <setjmp.h>
+#include <md4.h>
+#include <md5.h>
+#include <sha1.h>
+
+INT CDECL ChpeVsscanf(PCSTR Buffer, PCSTR Format, va_list Arguments);
+ULONG NTAPI ChpeVDbgPrintReturnControlC(PCCH Format, va_list Arguments);
+NTSTATUS NTAPI NtOpenKeyEx(PHANDLE KeyHandle, ACCESS_MASK DesiredAccess,
+                            POBJECT_ATTRIBUTES ObjectAttributes, ULONG OpenOptions);
+NTSTATUS NTAPI RtlQueryEnvironmentVariable(PWSTR Environment, PCWSTR Name,
+                                             SIZE_T NameLength, PWSTR Value,
+                                             SIZE_T ValueLength, PSIZE_T ReturnLength);
 
 ULONG WINAPI EtwEventRegister(LPCGUID ProviderId, PENABLECALLBACK EnableCallback, PVOID CallbackContext, PREGHANDLE RegHandle);
 ULONG WINAPI EtwEventUnregister(REGHANDLE RegHandle);
@@ -680,6 +698,21 @@ ChpeDispatchExceptionNative(PEXCEPTION_RECORD ExceptionRecord, PARM64_NT_CONTEXT
 
 /* Fixed-argument native entry point used to carry an ARM64EC va_list. */
 ULONG NTAPI vDbgPrintEx(ULONG ComponentId, ULONG Level, PCCH Format, va_list Arguments);
+ULONG NTAPI vDbgPrintExWithPrefix(PCCH Prefix, ULONG ComponentId, ULONG Level, PCCH Format, va_list Arguments);
+NTSTATUS NTAPI RtlDecompressFragment(USHORT CompressionFormat, PUCHAR UncompressedFragment, ULONG UncompressedFragmentSize, PUCHAR CompressedBuffer, ULONG CompressedBufferSize, ULONG FragmentOffset, PULONG FinalUncompressedSize, PVOID WorkSpace);
+VOID NTAPI RtlGenerate8dot3Name(PCUNICODE_STRING Name, BOOLEAN AllowExtendedCharacters, PGENERATE_NAME_CONTEXT Context, PUNICODE_STRING Name8dot3);
+NTSTATUS NTAPI RtlGetLengthWithoutLastFullDosOrNtPathElement(ULONG Flags, PCUNICODE_STRING Path, PULONG LengthOut);
+PRTL_UNLOAD_EVENT_TRACE NTAPI RtlGetUnloadEventTrace(VOID);
+typedef NTSTATUS (NTAPI *PCHPE_LENGTH_FUNCTION)(ULONG, PUNICODE_STRING, PULONG);
+NTSTATUS NTAPI RtlpApplyLengthFunction(ULONG Flags, ULONG Type, PVOID StringBuffer, PCHPE_LENGTH_FUNCTION LengthFunction);
+NTSTATUS NTAPI LdrGetDllFullName(HMODULE Module, PUNICODE_STRING FullDllName);
+PVOID NTAPI RtlLocateExtendedFeature(PVOID ContextEx, ULONG FeatureId, PULONG Length);
+PVOID NTAPI RtlLocateExtendedFeature2(PVOID ContextEx, ULONG FeatureId, XSTATE_CONFIGURATION *Configuration, PULONG Length);
+BOOL NTAPI RtlQueryPerformanceCounter(PLARGE_INTEGER Counter);
+BOOL NTAPI RtlQueryPerformanceFrequency(PLARGE_INTEGER Frequency);
+VOID NTAPI RtlQuerySystemTime(PLARGE_INTEGER SystemTime);
+VOID NTAPI RtlSystemTimeToTimeFields(const LARGE_INTEGER *SystemTime, PTIME_FIELDS TimeFields);
+PVOID NTAPI RtlFindExportedRoutineByName(PVOID Module, PCSTR Name);
 
 VOID NTAPI
 ChpeDbgBreakPoint(VOID)
@@ -858,6 +891,12 @@ ChpeLdrUnloadDll(PVOID BaseAddress)
 }
 
 NTSTATUS NTAPI
+ChpeLdrQueryProcessModuleInformation(PRTL_PROCESS_MODULES ModuleInformation, ULONG Size, PULONG ReturnedSize)
+{
+    return LdrQueryProcessModuleInformation(ModuleInformation, Size, ReturnedSize);
+}
+
+NTSTATUS NTAPI
 ChpeLdrAccessResource(PVOID BaseAddress, PIMAGE_RESOURCE_DATA_ENTRY ResourceDataEntry, PVOID *Resource, PULONG Size)
 {
     return LdrAccessResource(BaseAddress, ResourceDataEntry, Resource, Size);
@@ -893,21 +932,31 @@ ChpeLdrGetProcedureAddress(PVOID BaseAddress, PANSI_STRING Name, ULONG Ordinal, 
     PVOID NativeBase = NULL;
     PVOID BridgeBase = NULL;
     PVOID NativeProcedure;
+    PIMAGE_NT_HEADERS NativeHeaders;
     NTSTATUS Status;
 
     LdrGetDllHandle(NULL, NULL, (PUNICODE_STRING)&ChpeNativeNtdllName, &NativeBase);
     LdrGetDllHandle(NULL, NULL, (PUNICODE_STRING)&ChpeBridgeNtdllName, &BridgeBase);
     if (BaseAddress == NativeBase || BaseAddress == BridgeBase)
     {
-        if (BridgeBase != NULL)
+        if (BridgeBase == NULL)
+            return STATUS_DLL_NOT_FOUND;
+
+        /* Resolve through the native table first so forwarded aliases map to
+         * their named bridge entry and never return native ARM64 code. */
+        if (Name == NULL && NativeBase != NULL)
         {
-            Status = LdrGetProcedureAddress(BridgeBase, Name, Ordinal, ProcedureAddress);
-            if (NT_SUCCESS(Status))
+            Status = LdrGetProcedureAddress(NativeBase, NULL, Ordinal, &NativeProcedure);
+            if (!NT_SUCCESS(Status))
                 return Status;
+            Status = ChpepRedirectNativeNtdllProcedure(NativeBase, BridgeBase,
+                                                       NativeProcedure, ProcedureAddress);
+            if (!NT_SUCCESS(Status))
+                *ProcedureAddress = NULL;
+            return Status;
         }
 
-        if (NativeBase != NULL)
-            BaseAddress = NativeBase;
+        return LdrGetProcedureAddress(BridgeBase, Name, 0, ProcedureAddress);
     }
 
     Status = LdrGetProcedureAddress(BaseAddress, Name, Ordinal, ProcedureAddress);
@@ -915,11 +964,32 @@ ChpeLdrGetProcedureAddress(PVOID BaseAddress, PANSI_STRING Name, ULONG Ordinal, 
         return Status;
 
     NativeProcedure = *ProcedureAddress;
-    if (NT_SUCCESS(ChpepRedirectNativeNtdllProcedure(NativeBase, BridgeBase, NativeProcedure, ProcedureAddress)))
-        return STATUS_SUCCESS;
+    NativeHeaders = RtlImageNtHeader(NativeBase);
+    if (NativeHeaders == NULL ||
+        (ULONG_PTR)NativeProcedure - (ULONG_PTR)NativeBase >=
+        NativeHeaders->OptionalHeader.SizeOfImage)
+        return Status;
 
-    *ProcedureAddress = NativeProcedure;
+    Status = ChpepRedirectNativeNtdllProcedure(NativeBase, BridgeBase,
+                                               NativeProcedure, ProcedureAddress);
+    if (!NT_SUCCESS(Status))
+        *ProcedureAddress = NULL;
     return Status;
+}
+
+PVOID NTAPI
+ChpeRtlFindExportedRoutineByName(PVOID Module, PCSTR Name)
+{
+    ANSI_STRING AnsiName;
+    PVOID Procedure = NULL;
+
+    if (Name == NULL)
+        return NULL;
+
+    RtlInitAnsiString(&AnsiName, Name);
+    if (!NT_SUCCESS(ChpeLdrGetProcedureAddress(Module, &AnsiName, 0, &Procedure)))
+        return NULL;
+    return Procedure;
 }
 
 PVOID NTAPI
@@ -2856,3 +2926,357 @@ ChpeRtlUTF8ToUnicodeN(PWSTR UnicodeStringDestination, ULONG UnicodeStringMaxByte
 {
     return RtlUTF8ToUnicodeN(UnicodeStringDestination, UnicodeStringMaxByteCount, UnicodeStringActualByteCount, UTF8StringSource, UTF8StringByteCount);
 }
+
+NTSTATUS NTAPI
+ChpeNtCreateThread(PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess, POBJECT_ATTRIBUTES ObjectAttributes,
+                   HANDLE ProcessHandle, PCLIENT_ID ClientId, PCONTEXT ThreadContext,
+                   PINITIAL_TEB UserStack, BOOLEAN CreateSuspended)
+{
+    ARM64_NT_CONTEXT ArmContext;
+
+    /* ARM64EC kernel32 builds a native ARM64 context for CreateThread,
+     * while an emulated x64 caller supplies the hybrid AMD64 layout. */
+    if (ThreadContext != NULL &&
+        !((((PARM64_NT_CONTEXT)ThreadContext)->ContextFlags & CONTEXT_ARM64) == CONTEXT_ARM64 &&
+          (((PARM64EC_NT_CONTEXT)ThreadContext)->ContextFlags & CONTEXT_AMD64) != CONTEXT_AMD64))
+    {
+        ChpepContextX64ToArm64(&ArmContext, (PARM64EC_NT_CONTEXT)ThreadContext);
+        ThreadContext = (PCONTEXT)&ArmContext;
+    }
+
+    return NtCreateThread(ThreadHandle, DesiredAccess, ObjectAttributes, ProcessHandle,
+                          ClientId, ThreadContext, UserStack, CreateSuspended);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeNtCreateThread), __typeof__(&NtCreateThread)), "NtCreateThread bridge signature mismatch");
+
+NTSTATUS NTAPI
+ChpeNtFsControlFile(HANDLE FileHandle, HANDLE Event, PIO_APC_ROUTINE ApcRoutine, PVOID ApcContext,
+                    PIO_STATUS_BLOCK IoStatusBlock, ULONG FsControlCode, PVOID InputBuffer,
+                    ULONG InputBufferLength, PVOID OutputBuffer, ULONG OutputBufferLength)
+{
+    return NtFsControlFile(FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock,
+                           FsControlCode, InputBuffer, InputBufferLength, OutputBuffer, OutputBufferLength);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeNtFsControlFile), __typeof__(&NtFsControlFile)), "NtFsControlFile bridge signature mismatch");
+
+NTSTATUS NTAPI
+ChpeNtSetTimer(HANDLE TimerHandle, PLARGE_INTEGER DueTime, PTIMER_APC_ROUTINE TimerApcRoutine,
+                PVOID TimerContext, BOOLEAN WakeTimer, LONG Period, PBOOLEAN PreviousState)
+{
+    return NtSetTimer(TimerHandle, DueTime, TimerApcRoutine, TimerContext, WakeTimer, Period, PreviousState);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeNtSetTimer), __typeof__(&NtSetTimer)), "NtSetTimer bridge signature mismatch");
+
+NTSTATUS NTAPI
+ChpeRtlCreateUserThread(HANDLE ProcessHandle, PSECURITY_DESCRIPTOR SecurityDescriptor,
+                        BOOLEAN CreateSuspended, ULONG StackZeroBits, SIZE_T StackReserve,
+                        SIZE_T StackCommit, PTHREAD_START_ROUTINE StartAddress, PVOID Parameter,
+                        PHANDLE ThreadHandle, PCLIENT_ID ClientId)
+{
+    return RtlCreateUserThread(ProcessHandle, SecurityDescriptor, CreateSuspended, StackZeroBits,
+                               StackReserve, StackCommit, StartAddress, Parameter, ThreadHandle, ClientId);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeRtlCreateUserThread), __typeof__(&RtlCreateUserThread)), "RtlCreateUserThread bridge signature mismatch");
+
+NTSTATUS NTAPI
+ChpeRtlQueueWorkItem(WORKERCALLBACKFUNC Function, PVOID Context, ULONG Flags)
+{
+    return RtlQueueWorkItem(Function, Context, Flags);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeRtlQueueWorkItem), __typeof__(&RtlQueueWorkItem)), "RtlQueueWorkItem bridge signature mismatch");
+
+NTSTATUS NTAPI
+ChpeRtlRegisterWait(PHANDLE WaitHandle, HANDLE Object, WAITORTIMERCALLBACKFUNC Callback,
+                    PVOID Context, ULONG Milliseconds, ULONG Flags)
+{
+    return RtlRegisterWait(WaitHandle, Object, Callback, Context, Milliseconds, Flags);
+}
+_Static_assert(__builtin_types_compatible_p(__typeof__(&ChpeRtlRegisterWait), __typeof__(&RtlRegisterWait)), "RtlRegisterWait bridge signature mismatch");
+
+NTSTATUS NTAPI
+ChpeRtlDecompressFragment(USHORT CompressionFormat, PUCHAR UncompressedFragment,
+                          ULONG UncompressedFragmentSize, PUCHAR CompressedBuffer,
+                          ULONG CompressedBufferSize, ULONG FragmentOffset,
+                          PULONG FinalUncompressedSize, PVOID WorkSpace)
+{
+    return RtlDecompressFragment(CompressionFormat, UncompressedFragment, UncompressedFragmentSize,
+                                 CompressedBuffer, CompressedBufferSize, FragmentOffset,
+                                 FinalUncompressedSize, WorkSpace);
+}
+
+VOID NTAPI
+ChpeRtlGenerate8dot3Name(PCUNICODE_STRING Name, BOOLEAN AllowExtendedCharacters,
+                         PGENERATE_NAME_CONTEXT Context, PUNICODE_STRING Name8dot3)
+{
+    RtlGenerate8dot3Name(Name, AllowExtendedCharacters, Context, Name8dot3);
+}
+
+NTSTATUS NTAPI
+ChpeRtlGetLengthWithoutLastFullDosOrNtPathElement(ULONG Flags, PCUNICODE_STRING Path, PULONG LengthOut)
+{
+    return RtlGetLengthWithoutLastFullDosOrNtPathElement(Flags, Path, LengthOut);
+}
+
+PRTL_UNLOAD_EVENT_TRACE NTAPI
+ChpeRtlGetUnloadEventTrace(VOID)
+{
+    return RtlGetUnloadEventTrace();
+}
+
+/* This internal function calls the supplied length routine synchronously. The
+ * callback must be invoked by ARM64EC so its x64 entry checker is honored. */
+NTSTATUS NTAPI
+ChpeRtlpApplyLengthFunction(ULONG Flags, ULONG Type, PVOID StringBuffer,
+                            PCHPE_LENGTH_FUNCTION LengthFunction)
+{
+    PUNICODE_STRING String;
+    ULONG Length = 0;
+    NTSTATUS Status;
+
+    if (Flags || StringBuffer == NULL || LengthFunction == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (Type == sizeof(UNICODE_STRING))
+        String = (PUNICODE_STRING)StringBuffer;
+    else if (Type == sizeof(RTL_UNICODE_STRING_BUFFER))
+        String = &((PRTL_UNICODE_STRING_BUFFER)StringBuffer)->String;
+    else
+        return STATUS_INVALID_PARAMETER;
+
+    Status = LengthFunction(0, String, &Length);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Length > UNICODE_STRING_MAX_CHARS)
+        return STATUS_NAME_TOO_LONG;
+
+    String->Length = (USHORT)(Length * sizeof(WCHAR));
+    if (Type == sizeof(RTL_UNICODE_STRING_BUFFER))
+        String->Buffer[Length] = UNICODE_NULL;
+    return STATUS_SUCCESS;
+}
+
+ULONG NTAPI
+ChpevDbgPrintEx(ULONG ComponentId, ULONG Level, PCCH Format, va_list Arguments)
+{
+    return vDbgPrintEx(ComponentId, Level, Format, Arguments);
+}
+
+ULONG NTAPI
+ChpevDbgPrintExWithPrefix(PCCH Prefix, ULONG ComponentId, ULONG Level,
+                            PCCH Format, va_list Arguments)
+{
+    return vDbgPrintExWithPrefix(Prefix, ComponentId, Level, Format, Arguments);
+}
+
+NTSTATUS NTAPI
+ChpeLdrGetDllFullName(HMODULE Module, PUNICODE_STRING FullDllName)
+{
+    return LdrGetDllFullName(Module, FullDllName);
+}
+
+BOOLEAN NTAPI
+ChpeRtlIsEcCode(ULONG_PTR CodeAddress)
+{
+    return RtlIsEcCode(CodeAddress);
+}
+
+PVOID NTAPI
+ChpeRtlLocateExtendedFeature(PVOID ContextEx, ULONG FeatureId, PULONG Length)
+{
+    return RtlLocateExtendedFeature(ContextEx, FeatureId, Length);
+}
+
+PVOID NTAPI
+ChpeRtlLocateExtendedFeature2(PVOID ContextEx, ULONG FeatureId,
+                              XSTATE_CONFIGURATION *Configuration, PULONG Length)
+{
+    return RtlLocateExtendedFeature2(ContextEx, FeatureId, Configuration, Length);
+}
+
+BOOL NTAPI
+ChpeRtlQueryPerformanceCounter(PLARGE_INTEGER Counter)
+{
+    return RtlQueryPerformanceCounter(Counter);
+}
+
+BOOL NTAPI
+ChpeRtlQueryPerformanceFrequency(PLARGE_INTEGER Frequency)
+{
+    return RtlQueryPerformanceFrequency(Frequency);
+}
+
+VOID NTAPI
+ChpeRtlQuerySystemTime(PLARGE_INTEGER SystemTime)
+{
+    RtlQuerySystemTime(SystemTime);
+}
+
+VOID NTAPI
+ChpeRtlSystemTimeToTimeFields(const LARGE_INTEGER *SystemTime, PTIME_FIELDS TimeFields)
+{
+    RtlSystemTimeToTimeFields(SystemTime, TimeFields);
+}
+
+VOID NTAPI DbgUserBreakPoint(VOID);
+VOID NTAPI RtlUserThreadStart(PVOID StartAddress, PVOID Parameter);
+
+VOID NTAPI
+ChpeDbgUserBreakPoint(VOID)
+{
+    DbgUserBreakPoint();
+}
+
+VOID NTAPI
+ChpeRtlUserThreadStart(PVOID StartAddress, PVOID Parameter)
+{
+    RtlUserThreadStart(StartAddress, Parameter);
+}
+
+ULONG CDECL
+ChpeDbgPrintReturnControlC(PCCH Format, ...)
+{
+    va_list Arguments;
+    ULONG Status;
+
+    va_start(Arguments, Format);
+    Status = ChpeVDbgPrintReturnControlC(Format, Arguments);
+    va_end(Arguments);
+    return Status;
+}
+
+ULONG CDECL
+ChpeEtwTraceMessage(ULONGLONG SessionHandle, ULONG MessageFlags,
+                    LPCGUID MessageGuid, USHORT MessageNumber, ...)
+{
+    /* Match the native implementation, which currently returns success. */
+    return ERROR_SUCCESS;
+}
+
+INT CDECL
+ChpeSscanf(PCSTR Buffer, PCSTR Format, ...)
+{
+    va_list Arguments;
+    INT Result;
+
+    va_start(Arguments, Format);
+    Result = ChpeVsscanf(Buffer, Format, Arguments);
+    va_end(Arguments);
+    return Result;
+}
+
+INT CDECL
+ChpeAutoVsscanf(PCSTR Buffer, PCSTR Format, va_list Arguments)
+{
+    return ChpeVsscanf(Buffer, Format, Arguments);
+}
+
+ULONG NTAPI
+ChpeAutoVDbgPrintReturnControlC(PCCH Format, va_list Arguments)
+{
+    return ChpeVDbgPrintReturnControlC(Format, Arguments);
+}
+
+typedef int (CDECL *PCHPE_COMPARE)(const void *, const void *);
+
+PVOID CDECL
+ChpeLfind(const void *Key, const void *Base, const unsigned int *Count,
+          unsigned int Width, PCHPE_COMPARE Compare)
+{
+    const BYTE *Element = Base;
+    unsigned int Index;
+
+    for (Index = 0; Index < *Count; ++Index, Element += Width)
+        if (Compare(Key, Element) == 0)
+            return (PVOID)Element;
+    return NULL;
+}
+
+PVOID CDECL
+ChpeBsearch(const void *Key, const void *Base, SIZE_T Count, SIZE_T Width,
+            PCHPE_COMPARE Compare)
+{
+    const BYTE *Bytes = Base;
+    SIZE_T First = 0;
+
+    while (First < Count)
+    {
+        SIZE_T Middle = First + (Count - First) / 2;
+        const BYTE *Element = Bytes + Middle * Width;
+        int Order = Compare(Key, Element);
+
+        if (!Order)
+            return (PVOID)Element;
+        if (Order < 0)
+            Count = Middle;
+        else
+            First = Middle + 1;
+    }
+    return NULL;
+}
+
+static VOID
+ChpeQsortSwap(BYTE *Left, BYTE *Right, SIZE_T Width)
+{
+    SIZE_T Index;
+    for (Index = 0; Index < Width; ++Index)
+    {
+        BYTE Byte = Left[Index];
+        Left[Index] = Right[Index];
+        Right[Index] = Byte;
+    }
+}
+
+static VOID
+ChpeQsortSift(BYTE *Base, SIZE_T Root, SIZE_T End, SIZE_T Width,
+              PCHPE_COMPARE Compare)
+{
+    while (Root < End && Root <= (End - 1) / 2)
+    {
+        SIZE_T Child = Root * 2 + 1;
+        if (Child < End && Compare(Base + Child * Width,
+                                   Base + (Child + 1) * Width) < 0)
+            ++Child;
+        if (Compare(Base + Root * Width, Base + Child * Width) >= 0)
+            return;
+        ChpeQsortSwap(Base + Root * Width, Base + Child * Width, Width);
+        Root = Child;
+    }
+}
+
+VOID CDECL
+ChpeQsort(PVOID Base, SIZE_T Count, SIZE_T Width, PCHPE_COMPARE Compare)
+{
+    BYTE *Bytes = Base;
+    SIZE_T Index;
+
+    if (Count < 2 || !Width)
+        return;
+    for (Index = Count / 2; Index > 0; --Index)
+        ChpeQsortSift(Bytes, Index - 1, Count - 1, Width, Compare);
+    for (Index = Count - 1; Index > 0; --Index)
+    {
+        ChpeQsortSwap(Bytes, Bytes + Index * Width, Width);
+        ChpeQsortSift(Bytes, 0, Index - 1, Width, Compare);
+    }
+}
+
+/* The native addresses are synthetic kernel/unwind entry points, not calls. */
+VOID NTAPI
+ChpeUnsupportedKernelEntry(VOID)
+{
+    RtlRaiseStatus(STATUS_NOT_SUPPORTED);
+}
+
+VOID NTAPI
+ChpeUnsupportedApcEntry(PVOID a0, PVOID a1, PVOID a2, PVOID a3)
+{
+    RtlRaiseStatus(STATUS_NOT_SUPPORTED);
+}
+
+VOID NTAPI
+ChpeUnsupportedEmulationEntry(PVOID Context)
+{
+    RtlRaiseStatus(STATUS_NOT_SUPPORTED);
+}
+
+#include "chpebridge_generated.inc"

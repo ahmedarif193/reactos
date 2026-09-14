@@ -223,7 +223,7 @@ RtlpExecuteWorkItem(IN OUT PVOID NormalContext,
         DPRINT("RtlpExecuteWorkItem: Function: 0x%p Context: 0x%p ImpersonationToken: 0x%p\n", WorkItem.Function, WorkItem.Context, WorkItem.TokenHandle);
 
         /* Execute the function */
-        WorkItem.Function(WorkItem.Context);
+        RtlpCallWorkItemCallback(WorkItem.Function, WorkItem.Context);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -340,7 +340,7 @@ RtlpExecuteIoWorkItem(IN OUT PVOID NormalContext,
         DPRINT("RtlpExecuteIoWorkItem: Function: 0x%p Context: 0x%p ImpersonationToken: 0x%p\n", WorkItem.Function, WorkItem.Context, WorkItem.TokenHandle);
 
         /* Execute the function */
-        WorkItem.Function(WorkItem.Context);
+        RtlpCallWorkItemCallback(WorkItem.Function, WorkItem.Context);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
