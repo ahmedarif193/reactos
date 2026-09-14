@@ -266,6 +266,12 @@ if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND CMAKE_C_COMPILER_ID STRE
             set_property(SOURCE ${_win32k_src} APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
         endif()
     endforeach()
+    if(ARCH STREQUAL "arm64")
+        # Clang undercounts the NOPs emitted for asynchronous EH when choosing
+        # compressed jump tables. NtUserCallNextHookEx exceeds the byte range.
+        set_property(SOURCE user/ntuser/hook.c APPEND PROPERTY COMPILE_OPTIONS
+            -mllvm -aarch64-enable-compress-jump-tables=false)
+    endif()
 endif()
 target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr wddm_bridge)
 
