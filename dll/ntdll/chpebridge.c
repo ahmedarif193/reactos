@@ -67,6 +67,7 @@ VOID WINAPI TpWaitForTimer(TP_TIMER *Timer, BOOL CancelPending);
 VOID WINAPI TpWaitForWait(TP_WAIT *Wait, BOOL CancelPending);
 VOID WINAPI TpWaitForWork(TP_WORK *Work, BOOL CancelPending);
 NTSTATUS WINAPI RtlWow64GetCurrentCpuArea(USHORT *Machine, void **Context, void **CpuArea);
+NTSTATUS WINAPI RtlWow64GetThreadSelectorEntry(HANDLE ThreadHandle, PVOID ThreadInformation, ULONG ThreadInformationLength, PULONG ReturnLength);
 PRUNTIME_FUNCTION NTAPI ChpepAmd64LookupFunctionTable(DWORD64 ControlPc, PDWORD64 ImageBase, PULONG Length);
 PRUNTIME_FUNCTION NTAPI ChpepAmd64LookupFunctionEntry(DWORD64 ControlPc, PDWORD64 ImageBase, PUNWIND_HISTORY_TABLE HistoryTable);
 PEXCEPTION_ROUTINE NTAPI ChpepAmd64VirtualUnwind(ULONG HandlerType, ULONG64 ImageBase, ULONG64 ControlPc, PRUNTIME_FUNCTION FunctionEntry, PCONTEXT ContextRecord, PVOID *HandlerData, PULONG64 EstablisherFrame, PKNONVOLATILE_CONTEXT_POINTERS ContextPointers);
@@ -2171,6 +2172,51 @@ ChpeRtlGetNativeSystemInformation(SYSTEM_INFORMATION_CLASS SystemInformationClas
     /* The Nt entry applies the emulated CPU view in CHPE processes. The raw
      * Zw entry preserves the host architecture required by the native query. */
     return ZwQuerySystemInformation(SystemInformationClass, SystemInformation, SystemInformationLength, ReturnLength);
+}
+
+typedef struct _CHPE_THREAD_DESCRIPTOR_INFORMATION
+{
+    ULONG Selector;
+    LDT_ENTRY Entry;
+} CHPE_THREAD_DESCRIPTOR_INFORMATION, *PCHPE_THREAD_DESCRIPTOR_INFORMATION;
+
+NTSTATUS NTAPI
+ChpeRtlWow64GetThreadSelectorEntry(HANDLE ThreadHandle,
+                                   PCHPE_THREAD_DESCRIPTOR_INFORMATION ThreadInformation,
+                                   ULONG ThreadInformationLength,
+                                   PULONG ReturnLength)
+{
+    CHPE_THREAD_DESCRIPTOR_INFORMATION NativeInformation;
+    NTSTATUS Status;
+
+    if (ThreadInformationLength != sizeof(*ThreadInformation))
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    NativeInformation = *ThreadInformation;
+    switch (NativeInformation.Selector & ~3u)
+    {
+        case 0:
+            break;
+        case 0x20:
+            NativeInformation.Selector = 0x18;
+            break;
+        case 0x28:
+            NativeInformation.Selector = 0x20;
+            break;
+        case 0x50:
+            NativeInformation.Selector = 0x38;
+            break;
+        default:
+            return STATUS_UNSUCCESSFUL;
+    }
+
+    Status = RtlWow64GetThreadSelectorEntry(ThreadHandle,
+                                            &NativeInformation,
+                                            sizeof(NativeInformation),
+                                            ReturnLength);
+    if (NT_SUCCESS(Status))
+        ThreadInformation->Entry = NativeInformation.Entry;
+    return Status;
 }
 
 NTSTATUS NTAPI

@@ -207,3 +207,4 @@
 @ cdecl _local_unwind(ptr ptr) ChpeLocalUnwind
 @ cdecl memcpy(ptr ptr long) ChpeMemcpy
 @ stdcall ChpeEmulationDispatch(ptr)
+@ stdcall RtlWow64GetThreadSelectorEntry(ptr ptr long ptr) ChpeRtlWow64GetThreadSelectorEntry
