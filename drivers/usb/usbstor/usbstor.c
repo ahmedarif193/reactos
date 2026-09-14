@@ -69,7 +69,7 @@ USBSTOR_AddDevice(
 
     KeInitializeSpinLock(&DeviceExtension->CommonLock);
 
-    IoInitializeTimer(DeviceObject, USBSTOR_TimerRoutine, (PVOID)DeviceExtension);
+    USBSTOR_InitializeRequestTimer(DeviceExtension);
 
     // did attaching fail
     if (!DeviceExtension->LowerDeviceObject)

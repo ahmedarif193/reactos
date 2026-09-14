@@ -145,14 +145,20 @@ typedef struct
     ULONG IrpPendingCount;                                                               // count of irp pending
     PSCSI_REQUEST_BLOCK ActiveSrb;                                                       // stores the current active SRB
     KEVENT NoPendingRequests;                                                            // set if no pending or in progress requests
-    PSCSI_REQUEST_BLOCK LastTimerActiveSrb;                                              // last timer tick active srb
-    ULONG SrbErrorHandlingActive;                                                        // error handling of srb is activated
-    ULONG TimerWorkQueueEnabled;                                                         // timer work queue enabled
     ULONG InstanceCount;                                                                 // pdo instance count
     KSPIN_LOCK CommonLock;
     PIO_WORKITEM ResetDeviceWorkItem;
     ULONG Flags;
     IRP_CONTEXT CurrentIrpContext;
+    KSPIN_LOCK RequestTimerLock;
+    KTIMER RequestTimer;
+    KDPC RequestTimerDpc;
+    PIRP RequestTimerIrp;
+    PIRP DeferredCompletionIrp;
+    ULONG RequestTimeoutValue;
+    BOOLEAN RequestTimerDpcRunning;
+    BOOLEAN RequestTimedOut;
+    BOOLEAN DeferredCompletionReset;
 }FDO_DEVICE_EXTENSION, *PFDO_DEVICE_EXTENSION;
 
 typedef struct
@@ -181,14 +187,6 @@ typedef struct _USBSTOR_DUMP_CONTEXT
     ULONG BytesPerSector;
     ULONG Tag;
 } USBSTOR_DUMP_CONTEXT, *PUSBSTOR_DUMP_CONTEXT;
-
-typedef struct _ERRORHANDLER_WORKITEM_DATA
-{
-    PDEVICE_OBJECT DeviceObject;
-    PIRP_CONTEXT Context;
-    WORK_QUEUE_ITEM WorkQueueItem;
-    PIRP Irp;
-} ERRORHANDLER_WORKITEM_DATA, *PERRORHANDLER_WORKITEM_DATA;
 
 // we need this to be compatible with ReactOS' classpnp (which is compiled with NTDDI_WIN8)
 typedef struct _STORAGE_ADAPTER_DESCRIPTOR_WIN8 {
@@ -374,10 +372,25 @@ USBSTOR_ResetPipeWithHandle(
     IN USBD_PIPE_HANDLE PipeHandle);
 
 VOID
-NTAPI
-USBSTOR_TimerRoutine(
-    PDEVICE_OBJECT DeviceObject,
-     PVOID Context);
+USBSTOR_InitializeRequestTimer(
+    IN PFDO_DEVICE_EXTENSION FDODeviceExtension);
+
+VOID
+USBSTOR_StartRequestTimer(
+    IN PFDO_DEVICE_EXTENSION FDODeviceExtension,
+    IN PIRP Irp,
+    IN ULONG TimeOutValue);
+
+BOOLEAN
+USBSTOR_IsRequestTimedOut(
+    IN PFDO_DEVICE_EXTENSION FDODeviceExtension,
+    IN PIRP Irp);
+
+BOOLEAN
+USBSTOR_FinishRequest(
+    IN PFDO_DEVICE_EXTENSION FDODeviceExtension,
+    IN PIRP Irp,
+    IN BOOLEAN ResetDevice);
 
 VOID
 NTAPI

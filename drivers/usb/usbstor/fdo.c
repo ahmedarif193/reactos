@@ -110,6 +110,12 @@ USBSTOR_FdoHandleRemoveDevice(
     if (DeviceExtension->IrpPendingCount != 0 || DeviceExtension->ActiveSrb != NULL)
         USBSTOR_QueueWaitForPendingRequests(DeviceObject);
 
+    KeCancelTimer(&DeviceExtension->RequestTimer);
+    KeRemoveQueueDpc(&DeviceExtension->RequestTimerDpc);
+    ASSERT(DeviceExtension->RequestTimerIrp == NULL);
+    ASSERT(DeviceExtension->DeferredCompletionIrp == NULL);
+    ASSERT(DeviceExtension->RequestTimerDpcRunning == FALSE);
+
     for (Index = 0; Index < USB_MAXCHILDREN; Index++)
     {
         if (DeviceExtension->ChildPDO[Index] != NULL)
@@ -272,8 +278,6 @@ USBSTOR_FdoHandleStartDevice(
     }
 #endif
 
-    //IoStartTimer(DeviceObject);
-
     DPRINT("USBSTOR_FdoHandleStartDevice FDO is initialized\n");
     return STATUS_SUCCESS;
 }
@@ -310,7 +314,6 @@ USBSTOR_FdoHandlePnp(
         case IRP_MN_STOP_DEVICE:
         {
             DPRINT1("USBSTOR_FdoHandlePnp: IRP_MN_STOP_DEVICE unimplemented\n");
-            IoStopTimer(DeviceObject);
             Irp->IoStatus.Status = STATUS_SUCCESS;
 
             // forward irp to next device object
