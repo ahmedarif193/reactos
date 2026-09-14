@@ -54,6 +54,7 @@ list(APPEND SOURCE
     DllLoadNotification.c
     arm64_chpe.c
     wow64_startup.c
+    wow64_native_process.c
     LdrEnumResources.c
     LdrFindResource_U.c
     LdrLoadDll.c

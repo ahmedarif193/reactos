@@ -136,7 +136,7 @@ typedef struct _WOW64_BASE_CREATE_PROCESS32
     ULONG SxsProcessParameterFlags;
     ULONG SxsFileHandle;
     ULONG SxsRest[21];
-    ULONG PebAddressNative;
+    ULONGLONG PebAddressNative;
     ULONG PebAddressWow64;
     USHORT ProcessorArchitecture;
 } WOW64_BASE_CREATE_PROCESS32;
@@ -176,7 +176,7 @@ typedef struct _WOW64_BASE_CREATE_THREAD64
     ULONGLONG UniqueThread;
 } WOW64_BASE_CREATE_THREAD64;
 
-C_ASSERT(sizeof(WOW64_BASE_CREATE_PROCESS32) == 140);
+C_ASSERT(sizeof(WOW64_BASE_CREATE_PROCESS32) == 144);
 C_ASSERT(sizeof(WOW64_BASE_CREATE_PROCESS64) == 232);
 
 static NTSTATUS csr_api_message_32to64( CSR_API_MESSAGE64 *out, const CSR_API_MESSAGE32 *in, ULONG *data_size32 )

@@ -94,7 +94,8 @@ typedef struct _BASE_CREATE_PROCESS
     ULONG VdmTask;
     HANDLE hVDM;
     BASE_SXS_CREATEPROCESS_MSG Sxs;
-    PVOID PebAddressNative;
+    /* Native addresses must survive a 32-bit CSR client. */
+    ULONGLONG PebAddressNative;
     ULONG PebAddressWow64;
     USHORT ProcessorArchitecture;
 } BASE_CREATE_PROCESS, *PBASE_CREATE_PROCESS;
