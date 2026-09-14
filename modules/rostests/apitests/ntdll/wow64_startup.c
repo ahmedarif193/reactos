@@ -10,6 +10,82 @@ typedef NTSTATUS (NTAPI *GET_LOCALE_MAPPING)(PVOID *, PLCID, PLARGE_INTEGER);
 static DWORD WorkerTlsIndex;
 static HANDLE WorkerStartEvent;
 
+static WORD ReadSystemImageMachine(VOID)
+{
+    CHAR Path[MAX_PATH];
+    IMAGE_DOS_HEADER DosHeader;
+    WORD Header[3];
+    DWORD Length, Read;
+    HANDLE File;
+    WORD Machine = 0;
+
+    Length = GetWindowsDirectoryA(Path, ARRAYSIZE(Path));
+    if (!Length || Length + sizeof("\\system32\\regsvr32.exe") > sizeof(Path)) return 0;
+    strcpy(Path + Length, "\\system32\\regsvr32.exe");
+    File = CreateFileA(Path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       NULL, OPEN_EXISTING, 0, NULL);
+    if (File == INVALID_HANDLE_VALUE) return 0;
+    if (ReadFile(File, &DosHeader, sizeof(DosHeader), &Read, NULL) && Read == sizeof(DosHeader) &&
+        DosHeader.e_magic == IMAGE_DOS_SIGNATURE)
+    {
+        SetFilePointer(File, DosHeader.e_lfanew, NULL, FILE_BEGIN);
+        if (ReadFile(File, Header, sizeof(Header), &Read, NULL) && Read == sizeof(Header))
+            Machine = Header[2];
+    }
+    CloseHandle(File);
+    return Machine;
+}
+
+static VOID TestFsRedirection(VOID)
+{
+    typedef NTSTATUS (WINAPI *REDIRECT_EX)(PVOID, PVOID *);
+    typedef NTSTATUS (WINAPI *REDIRECT)(BOOLEAN);
+    REDIRECT_EX RedirectEx;
+    REDIRECT Redirect;
+    TEB64 *NativeTeb = UlongToPtr(NtCurrentTeb()->GdiBatchCount);
+    PVOID Original, Previous;
+    NTSTATUS Status;
+    WORD Machine;
+
+    RedirectEx = (REDIRECT_EX)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlWow64EnableFsRedirectionEx");
+    Redirect = (REDIRECT)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlWow64EnableFsRedirection");
+    ok(RedirectEx && Redirect && NativeTeb, "Missing WoW64 redirection support\n");
+    if (!RedirectEx || !Redirect || !NativeTeb) return;
+
+    Status = RedirectEx(NULL, &Original);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+    ok_hex(ReadSystemImageMachine(), IMAGE_FILE_MACHINE_I386);
+    Status = RedirectEx((PVOID)1, &Previous);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_ptr(Previous, NULL);
+    Machine = ReadSystemImageMachine();
+    ok(Machine && Machine != IMAGE_FILE_MACHINE_I386, "Disabled redirection opened machine %x\n", Machine);
+    Status = RedirectEx((PVOID)123, &Previous);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_ptr(Previous, (PVOID)1);
+    Status = RedirectEx((PVOID)0xdeadbeef, &Previous);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_ptr(Previous, (PVOID)123);
+    ok(NativeTeb->TlsSlots[WOW64_TLS_FILESYSREDIR] == 0xdeadbeef,
+       "Native redirector state is %I64x\n", NativeTeb->TlsSlots[WOW64_TLS_FILESYSREDIR]);
+    Status = RedirectEx((PVOID)1, NULL);
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
+    Status = RedirectEx(NULL, &Previous);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_ptr(Previous, (PVOID)0xdeadbeef);
+    Status = Redirect(FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+    Status = RedirectEx(NULL, &Previous);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_ptr(Previous, (PVOID)1);
+    Status = Redirect(TRUE);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_hex(ReadSystemImageMachine(), IMAGE_FILE_MACHINE_I386);
+    Status = RedirectEx(Original, &Previous);
+    ok_hex(Status, STATUS_SUCCESS);
+}
+
 static DWORD WINAPI SelectorWorker(PVOID Parameter)
 {
     return 0;
@@ -455,6 +531,7 @@ START_TEST(wow64_startup)
     ok_hex(CachedLocale, Locale);
     TestDeadFlagMemoryProbe();
     TestThreadSelectors();
+    TestFsRedirection();
     TestThreadedStackGrowth();
     TestSelfModifyingCode();
 #elif defined(_WIN64)

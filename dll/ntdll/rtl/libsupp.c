@@ -12,6 +12,13 @@
 #include <ntdll.h>
 #include <apisets.h>
 
+#ifdef WOW64_I386_RUNTIME
+#include <reactos/wow64shared.h>
+#define EXPLICIT_64BIT
+#include <ndk/peb_teb.h>
+#undef EXPLICIT_64BIT
+#endif
+
 #define NDEBUG
 #include <debug.h>
 
@@ -1221,8 +1228,9 @@ NTSTATUS
 NTAPI
 RtlWow64EnableFsRedirection(IN BOOLEAN Wow64FsEnableRedirection)
 {
-    /* This is what Windows returns on x86 */
-    return STATUS_NOT_IMPLEMENTED;
+    PVOID OldValue;
+
+    return RtlWow64EnableFsRedirectionEx((PVOID)(ULONG_PTR)!Wow64FsEnableRedirection, &OldValue);
 }
 
 /*
@@ -1234,8 +1242,27 @@ NTAPI
 RtlWow64EnableFsRedirectionEx(IN PVOID Wow64FsEnableRedirection,
                               OUT PVOID *OldFsRedirectionLevel)
 {
-    /* This is what Windows returns on x86 */
+#ifdef WOW64_I386_RUNTIME
+    TEB64 *NativeTeb = UlongToPtr(NtCurrentTeb()->GdiBatchCount);
+
+    if (!NativeTeb) return STATUS_NOT_IMPLEMENTED;
+
+    _SEH2_TRY
+    {
+        /* Save the old value before changing the native redirector's state. */
+        *OldFsRedirectionLevel = (PVOID)(ULONG_PTR)NativeTeb->TlsSlots[WOW64_TLS_FILESYSREDIR];
+        NativeTeb->TlsSlots[WOW64_TLS_FILESYSREDIR] = (ULONG_PTR)Wow64FsEnableRedirection;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+    return STATUS_SUCCESS;
+#else
+    /* Native processes do not have a WoW64 filesystem redirector. */
     return STATUS_NOT_IMPLEMENTED;
+#endif
 }
 
 /*
