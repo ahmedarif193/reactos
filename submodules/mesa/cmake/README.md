@@ -2,8 +2,10 @@
 
 This build compiles the vendored Mesa 26.2.2 Windows WGL configurations directly
 with CMake. Configuration, compilation, generator execution and incremental
-rebuilds do not invoke Meson or read Meson's build metadata. The upstream Meson
-files remain for other platforms and drivers.
+rebuilds do not invoke Meson or read Meson's build metadata. ReactOS uses this
+profile for i386 and AMD64. ARM64 and ARM64EC use the Meson source profile
+until the native CMake profile includes the Windows V3D driver and D3DKMT
+winsys needed by Raspberry Pi 5.
 
 | Architecture | Default ICD | Optional ICD |
 | --- | --- | --- |
@@ -12,10 +14,11 @@ files remain for other platforms and drivers.
 | ARM64 | softpipe + VC4 | LLVMpipe with static Windows LLVM 22 |
 | ARM64EC | softpipe + VC4 | — |
 
-The imported Meson options also selected V3D on ARM64, but the WGL target did
-not link or expose it. Its driver/winsys sources require Linux headers. This
-port includes the Broadcom compiler and generators used by VC4, and does not
-claim to provide the unported Windows V3D renderer.
+The native CMake ARM64 WGL target does not link or expose V3D. The ReactOS Meson
+profile includes the Windows V3D driver and D3DKMT winsys, and is required for
+hardware OpenGL and DWM composition on Raspberry Pi 5. This native CMake port
+includes the Broadcom compiler and generators used by VC4; its V3D port remains
+unfinished.
 
 ## ReactOS build
 
@@ -32,16 +35,18 @@ ReactOS build. Standalone CMake uses the standard `BISON_EXECUTABLE`,
 `FLEX_EXECUTABLE`, and `Python3_EXECUTABLE` variables. macOS's system Bison is
 older than required; the ReactOS integration also searches Homebrew's Bison.
 
-Mesa's new external build directory is `mesa-source/cmake-build` for the common
-ICD and `mesa-llvmpipe/cmake-build` for LLVMpipe. Old Meson output directories
-are unused and need not be removed to migrate an existing ReactOS build tree.
+The native CMake external build directory is `mesa-source/cmake-build` for the
+common i386/AMD64 ICD and `mesa-llvmpipe/cmake-build` for LLVMpipe. The ARM64
+Meson ICD uses `mesa-source/build`.
 
 ## Parallel builds
 
-The ReactOS integration forwards the invoking `ninja -jN` or
+The native CMake ReactOS integration forwards the invoking `ninja -jN` or
 `cmake --build --parallel N` at build time to Mesa, its support libraries,
 optional LLVM, and the ARM64EC/WoW64 runtime subbuilds. Changing the count does
 not require reconfiguration. The previous `MESA_BUILD_JOBS` cache is removed.
+The ARM64 Meson ICD currently uses `MESA_MESON_JOBS` (default 8) for its nested
+Ninja build.
 `CMAKE_BUILD_PARALLEL_LEVEL` supplies the count when no explicit ancestor
 build option is found; otherwise the native generator chooses its default.
 Ninja's unlimited `-j0` is preserved.
@@ -112,7 +117,9 @@ with the desired environment value.
 - Built AMD64 LLVMpipe against static Windows LLVM 22.1.8.
 - Compared each of those five DLLs with its previous Meson output: all 52
   export names and ordinals match, and their imported DLL sets are unchanged.
-- Built and staged the native ARM64 ICD through the main ReactOS target.
+- Built and staged the native ARM64 ICD through the main ReactOS target. Pi 5
+  testing subsequently showed that this ICD selects softpipe because V3D is
+  absent; the ReactOS ARM64 integration now stages the Meson V3D ICD.
 - Built the optional ARM64 `opengl32` loader and checked standalone installation.
 - Checked incremental rebuilds, regeneration after deleting a generated source,
   generation with spaces in both source/build paths, and capture-helper failure
@@ -121,8 +128,8 @@ with the desired environment value.
 
 A full ARM64 LLVMpipe link was not validated because no ARM64 static LLVM
 installation was available. Rendering on Windows/ReactOS and a complete OS
-image build were not tested during this conversion. Matching exports and
-imports establish build/ABI checks, not runtime rendering equivalence.
+image build were not tested during the initial conversion. Matching exports
+and imports established build/ABI checks, not runtime rendering equivalence.
 
 The parallel launcher has regression tests runnable with
 `python3 sdk/cmake/tests/test_build_with_parallel.py` from the ReactOS source
