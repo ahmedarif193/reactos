@@ -882,7 +882,7 @@ RtlpDeCommitFreeBlock(PHEAP Heap,
     DecommitBase = ROUND_UP(FreeEntry, PAGE_SIZE);
     PrecedingSize = (PHEAP_ENTRY)DecommitBase - (PHEAP_ENTRY)FreeEntry;
 
-    if (PrecedingSize == 0)
+    if (PrecedingSize == 0 && FreeEntry->PreviousSize != 0)
     {
         /* We need some space in order to insert our guard entry */
         DecommitBase += PAGE_SIZE;
@@ -925,7 +925,7 @@ RtlpDeCommitFreeBlock(PHEAP Heap,
     if (!UcrDescriptor)
     {
         DPRINT1("HEAP: Failed to create UCR descriptor\n");
-        RtlpInsertFreeBlock(Heap, FreeEntry, PrecedingSize);
+        RtlpInsertFreeBlock(Heap, FreeEntry, Size);
         return;
     }
 
@@ -948,6 +948,11 @@ RtlpDeCommitFreeBlock(PHEAP Heap,
     /* Insert uncommitted pages */
     RtlpInsertUnCommittedPages(Segment, DecommitBase, DecommitSize);
     Segment->NumberOfUnCommittedPages += (ULONG)(DecommitSize / PAGE_SIZE);
+
+    /* A page-aligned block with no previous entry extends an existing UCR.
+     * Keep that range's guard; FreeEntry itself has now been decommitted. */
+    if (PrecedingSize == 0)
+        goto UpdateNextEntry;
 
     /* Insert our guard entry before this */
     GuardEntry = (PHEAP_ENTRY)DecommitBase - 1;
@@ -983,6 +988,7 @@ RtlpDeCommitFreeBlock(PHEAP Heap,
             break;
     }
 
+UpdateNextEntry:
     /* Now the next one */
     if (NextEntry)
     {

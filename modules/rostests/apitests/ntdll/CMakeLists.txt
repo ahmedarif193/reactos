@@ -144,6 +144,7 @@ list(APPEND SOURCE
     RtlGetProductInfo.c
     RtlGetUnloadEventTrace.c
     RtlHandle.c
+    RtlHeapFreeCoalesce.c
     RtlImageDirectoryEntryToData.c
     RtlImageRvaToVa.c
     RtlIsNameLegalDOS8Dot3.c
