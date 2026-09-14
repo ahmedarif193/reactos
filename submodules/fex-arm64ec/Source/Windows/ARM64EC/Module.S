@@ -206,7 +206,7 @@ DIRECT_SYSCALL_WRAPPER("#NtProtectVirtualMemoryNative", WineNtProtectVirtualMemo
   b.lo end
 #endif
   adrp x17, NtDllRedirectionLUTSize
-  ldr x17, [x17, #:lo12:NtDllRedirectionLUTSize]
+  ldr w17, [x17, #:lo12:NtDllRedirectionLUTSize]
   cmp x16, x17
 #ifdef __REACTOS__
   b.hs default_check
