@@ -693,11 +693,45 @@ E11FluentResForIcon(int nIcon)
         case EI_SEARCH:        return IDI_FLU_SEARCH;
         case EI_PIN:           return IDI_FLU_PIN;
         case EI_FILE:          return IDI_FLU_DOCUMENT;
-        case EI_PC:            return IDI_FLU_DESKTOP;
-        case EI_DRIVE:         return IDI_FLU_HARDDRIVE;
-        case EI_NETWORK:       return IDI_FLU_GLOBE;
         default:               return 0;
     }
+}
+
+static BOOL
+E11DrawItemResource(HDC hdc, const RECT *prc, int nIcon)
+{
+    UINT nResId;
+    switch (nIcon)
+    {
+        case EI_DRIVE:            nResId = IDI_DRIVE_FIXED; break;
+        case EI_PC:               nResId = IDI_MY_PC; break;
+        case EI_NETWORK:          nResId = IDI_NETWORK_PLACES; break;
+        case EI_FOLDER:           nResId = IDI_FOLDER_GENERIC; break;
+        case EI_FOLDER_DESKTOP:   nResId = IDI_FOLDER_DESKTOP; break;
+        case EI_FOLDER_DOCS:      nResId = IDI_FOLDER_DOCUMENTS; break;
+        case EI_FOLDER_DOWNLOADS: nResId = IDI_FOLDER_DOWNLOADS; break;
+        case EI_FOLDER_MUSIC:     nResId = IDI_FOLDER_MUSIC; break;
+        case EI_FOLDER_PICTURES:  nResId = IDI_FOLDER_PICTURES; break;
+        case EI_FOLDER_VIDEOS:    nResId = IDI_FOLDER_VIDEOS; break;
+        default: return FALSE;
+    }
+
+    const int cx = prc->right - prc->left;
+    const int cy = prc->bottom - prc->top;
+    const int size = min(cx, cy);
+    if (size <= 0)
+        return TRUE;
+
+    HICON hIcon = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(nResId),
+                                  IMAGE_ICON, size, size, 0);
+    if (!hIcon)
+        return FALSE;
+
+    BOOL result = DrawIconEx(hdc, prc->left + (cx - size) / 2,
+                            prc->top + (cy - size) / 2, hIcon,
+                            size, size, 0, NULL, DI_NORMAL);
+    DestroyIcon(hIcon);
+    return result;
 }
 
 VOID
@@ -709,6 +743,9 @@ E11DrawIconDim(HDC hdc, const RECT *prc, int nIcon, const E11_PALETTE *pPal, BOO
     int w, h;
 
     if (nIcon == EI_NONE)
+        return;
+
+    if (E11DrawItemResource(hdc, prc, nIcon))
         return;
 
     {
@@ -768,6 +805,12 @@ E11DrawIcon(HDC hdc, const RECT *prc, int nIcon, const E11_PALETTE *pPal)
 HICON
 E11CreateAppIcon(int cxIcon)
 {
+    HICON resourceIcon = (HICON)LoadImageW(GetModuleHandleW(NULL),
+                                         MAKEINTRESOURCEW(IDI_FOLDER_GENERIC),
+                                         IMAGE_ICON, cxIcon, cxIcon, 0);
+    if (resourceIcon)
+        return resourceIcon;
+
     HDC hdcScreen = GetDC(NULL);
     HDC hdcColor = CreateCompatibleDC(hdcScreen);
     HDC hdcMask = CreateCompatibleDC(hdcScreen);
