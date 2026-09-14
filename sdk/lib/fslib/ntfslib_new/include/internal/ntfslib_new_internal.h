@@ -144,10 +144,10 @@ extern BOOLEAN NtfsDefaultReadOnlyMode;
 #endif
 
 #ifdef __cplusplus
-void* __cdecl operator new(size_t Size, POOL_TYPE PoolType);
-void* __cdecl operator new(size_t Size, POOL_TYPE PoolType, ULONG Tag);
-void* __cdecl operator new[](size_t Size, POOL_TYPE PoolType);
-void* __cdecl operator new[](size_t Size, POOL_TYPE PoolType, ULONG Tag);
+void* __cdecl operator new(size_t Size, POOL_TYPE PoolType) noexcept;
+void* __cdecl operator new(size_t Size, POOL_TYPE PoolType, ULONG Tag) noexcept;
+void* __cdecl operator new[](size_t Size, POOL_TYPE PoolType) noexcept;
+void* __cdecl operator new[](size_t Size, POOL_TYPE PoolType, ULONG Tag) noexcept;
 #endif
 
 // =========================

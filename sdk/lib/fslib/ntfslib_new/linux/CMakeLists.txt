@@ -114,6 +114,12 @@ if(NTFSLIB_BUILD_FUSE)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(ntfslib_pool_new_test tests/pool_new.cpp)
+    target_include_directories(ntfslib_pool_new_test PRIVATE
+        "${NTFSLIB_ROOT}/include/internal")
+    target_link_libraries(ntfslib_pool_new_test PRIVATE ntfslib_linux)
+    add_test(NAME ntfslib_linux_pool_new COMMAND ntfslib_pool_new_test)
+
     add_executable(ntfslib_format_image
         tests/format_image.cpp
     )

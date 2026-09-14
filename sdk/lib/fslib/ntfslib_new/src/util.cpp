@@ -22,7 +22,7 @@ void* __cdecl operator new[](size_t Size)
 #define NTFSLIB_DELETE_NOEXCEPT
 #endif
 
-void* __cdecl operator new(size_t Size, POOL_TYPE PoolType)
+void* __cdecl operator new(size_t Size, POOL_TYPE PoolType) noexcept
 {
 
     Size = (Size != 0) ? Size : 1;
@@ -36,7 +36,7 @@ void* __cdecl operator new(size_t Size, POOL_TYPE PoolType)
     return pObject;
 }
 
-void* __cdecl operator new[](size_t Size, POOL_TYPE PoolType)
+void* __cdecl operator new[](size_t Size, POOL_TYPE PoolType) noexcept
 {
 
     Size = (Size != 0) ? Size : 1;
@@ -51,7 +51,7 @@ void* __cdecl operator new[](size_t Size, POOL_TYPE PoolType)
     return pObject;
 }
 
-void* __cdecl operator new(size_t Size, POOL_TYPE PoolType, ULONG Tag)
+void* __cdecl operator new(size_t Size, POOL_TYPE PoolType, ULONG Tag) noexcept
 {
 
     Size = (Size != 0) ? Size : 1;
@@ -65,7 +65,7 @@ void* __cdecl operator new(size_t Size, POOL_TYPE PoolType, ULONG Tag)
     return pObject;
 }
 
-void* __cdecl operator new[](size_t Size, POOL_TYPE PoolType, ULONG Tag)
+void* __cdecl operator new[](size_t Size, POOL_TYPE PoolType, ULONG Tag) noexcept
 {
 
     Size = (Size != 0) ? Size : 1;
