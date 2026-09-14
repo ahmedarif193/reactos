@@ -28,6 +28,7 @@ extern void func_wcstombs(void);
 extern void func_DllLoadNotification(void);
 extern void func_arm64_chpe(void);
 extern void func_wow64_startup(void);
+extern void func_wow64_native_process(void);
 extern void func_LdrEnumResources(void);
 extern void func_LdrFindResource_U(void);
 extern void func_LdrLoadDll(void);
@@ -251,6 +252,7 @@ const struct test winetest_testlist[] =
     { "RtlCriticalSection",             func_RtlCriticalSection },
     { "RtlDebugInformation",            func_RtlDebugInformation },
     { "wow64_startup",                  func_wow64_startup },
+    { "wow64_native_process",           func_wow64_native_process },
     { "RtlDeleteAce",                   func_RtlDeleteAce },
     { "RtlDetermineDosPathNameType",    func_RtlDetermineDosPathNameType },
     { "RtlDosApplyFileIsolationRedirection_Ustr", func_RtlDosApplyFileIsolationRedirection_Ustr },

@@ -2324,7 +2324,7 @@ BasepCaptureExtendedAttributes(
 
 #if defined(_WIN64) || defined(WOW64_I386_RUNTIME)
 static BOOL
-BasepCreateWow64Process(IN HANDLE UserToken,
+BasepCreateUserProcess(IN HANDLE UserToken,
                         IN HANDLE SaferToken,
                         IN HANDLE JobHandle,
                         IN PUNICODE_STRING NtImageName,
@@ -2502,7 +2502,8 @@ BasepCreateWow64Process(IN HANDLE UserToken,
         goto Failure;
     }
 
-    if (CreateInfo.State != PsCreateSuccess || ImageInformation.Machine != IMAGE_FILE_MACHINE_I386 || !CreateInfo.SuccessState.PebAddressWow64)
+    if (CreateInfo.State != PsCreateSuccess || !CreateInfo.SuccessState.PebAddressNative ||
+        (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386 && !CreateInfo.SuccessState.PebAddressWow64))
     {
         Status = STATUS_INVALID_IMAGE_FORMAT;
         goto Failure;
@@ -2537,9 +2538,10 @@ BasepCreateWow64Process(IN HANDLE UserToken,
     CreateProcessMessage->ThreadHandle = ThreadHandle;
     CreateProcessMessage->ClientId = ClientId;
     CreateProcessMessage->CreationFlags = CreationFlags & ~(CREATE_NO_WINDOW | DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS);
-    CreateProcessMessage->PebAddressNative = (PVOID)(ULONG_PTR)CreateInfo.SuccessState.PebAddressNative;
+    CreateProcessMessage->PebAddressNative = CreateInfo.SuccessState.PebAddressNative;
     CreateProcessMessage->PebAddressWow64 = CreateInfo.SuccessState.PebAddressWow64;
-    CreateProcessMessage->ProcessorArchitecture = PROCESSOR_ARCHITECTURE_INTEL;
+    CreateProcessMessage->ProcessorArchitecture = ImageInformation.Machine == IMAGE_FILE_MACHINE_I386 ?
+                                                  PROCESSOR_ARCHITECTURE_INTEL : SharedUserData->NativeProcessorArchitecture;
     if (ImageInformation.SubSystemType == IMAGE_SUBSYSTEM_WINDOWS_GUI) AddToHandle(CreateProcessMessage->ProcessHandle, 2);
     NtHeaders = RtlImageNtHeader(GetModuleHandle(NULL));
     if (NtHeaders && NtHeaders->OptionalHeader.Subsystem == IMAGE_SUBSYSTEM_WINDOWS_GUI) AddToHandle(CreateProcessMessage->ProcessHandle, 1);
@@ -4159,9 +4161,13 @@ StartScan:
     }
 
 #if defined(_WIN64) || defined(WOW64_I386_RUNTIME)
-    if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386)
+    if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386
+#ifdef WOW64_I386_RUNTIME
+        || NtCurrentTeb()->WOW32Reserved
+#endif
+       )
     {
-        Result = BasepCreateWow64Process(hUserToken, TokenHandle, JobHandle, &PathName, lpApplicationName, lpCommandLine, lpEnvironment, lpCurrentDirectory, &StartupInfo, dwCreationFlags | NoWindow, bInheritHandles, lpProcessAttributes, lpThreadAttributes, ParameterFlags, Flags, ParentProcess, InheritHandleList, InheritHandleCount, &PriorityClass, lpProcessInformation);
+        Result = BasepCreateUserProcess(hUserToken, TokenHandle, JobHandle, &PathName, lpApplicationName, lpCommandLine, lpEnvironment, lpCurrentDirectory, &StartupInfo, dwCreationFlags | NoWindow, bInheritHandles, lpProcessAttributes, lpThreadAttributes, ParameterFlags, Flags, ParentProcess, InheritHandleList, InheritHandleCount, &PriorityClass, lpProcessInformation);
         goto Quickie;
     }
 #endif
@@ -4608,7 +4614,7 @@ StartScan:
     CreateProcessMsg->ClientId = ClientId;
 
     /* Write the remote PEB address and clear it locally, we no longer use it */
-    CreateProcessMsg->PebAddressNative = RemotePeb;
+    CreateProcessMsg->PebAddressNative = (ULONG_PTR)RemotePeb;
 #ifdef _WIN64
     DPRINT("TODO: WOW64 is not supported yet\n");
     CreateProcessMsg->PebAddressWow64 = 0;
