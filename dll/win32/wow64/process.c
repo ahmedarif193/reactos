@@ -48,11 +48,12 @@ static BOOL is_process_wow64( HANDLE handle )
 
 static BOOL is_process_id_wow64( const CLIENT_ID *id )
 {
+    OBJECT_ATTRIBUTES attr = { sizeof(attr) };
     HANDLE handle;
     BOOL ret = FALSE;
 
     if (id->UniqueProcess == ULongToHandle(GetCurrentProcessId())) return TRUE;
-    if (!NtOpenProcess( &handle, PROCESS_QUERY_LIMITED_INFORMATION, NULL, id ))
+    if (!NtOpenProcess( &handle, PROCESS_QUERY_LIMITED_INFORMATION, &attr, id ))
     {
         ret = is_process_wow64( handle );
         NtClose( handle );
