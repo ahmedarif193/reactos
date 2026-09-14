@@ -865,13 +865,16 @@ void CDefView::ArrangeComputerView()
     const INT margin = MulDiv(16, dpi, 96);
     const INT headerHeight = MulDiv(28, dpi, 96);
     const INT headerGap = MulDiv(10, dpi, 96);
-    const INT tileWidth = MulDiv(270, dpi, 96);
+    const INT minTileWidth = MulDiv(220, dpi, 96);
     const INT tileHeight = MulDiv(76, dpi, 96);
     const INT groupGap = MulDiv(16, dpi, 96);
     RECT client;
     ::GetClientRect(m_ListView, &client);
 
-    const INT columns = max(1, (client.right - (margin * 2)) / tileWidth);
+    /* Fit compact tiles, then share the remaining width between columns. */
+    const INT availableWidth = max(0, client.right - (margin * 2));
+    const INT columns = max(1, availableWidth / minTileWidth);
+    const INT tileWidth = max(minTileWidth, availableWidth / columns);
     INT listIconWidth = GetSystemMetrics(SM_CXICON);
     INT listIconHeight;
     HIMAGELIST imageList = ListView_GetImageList(m_ListView, LVSIL_NORMAL);
@@ -894,6 +897,12 @@ void CDefView::ArrangeComputerView()
     m_ListView.ModifyStyle(LVS_AUTOARRANGE, 0);
     m_ListView.SetRedraw(FALSE);
     ListView_SetIconSpacing(m_ListView, tileWidth, tileHeight);
+
+    /* SetItemPosition takes client coordinates, while the group layout is in
+     * unscrolled view coordinates. Redraw is disabled so the scroll position
+     * stays fixed until all items have been moved and the range is updated. */
+    const INT scrollX = ::GetScrollPos(m_ListView, SB_HORZ);
+    const INT scrollY = ::GetScrollPos(m_ListView, SB_VERT);
     SetRectEmpty(&m_ComputerFoldersHeader);
     SetRectEmpty(&m_ComputerDrivesHeader);
     SetRectEmpty(&m_ComputerLocationsHeader);
@@ -909,6 +918,8 @@ void CDefView::ArrangeComputerView()
             if (!IsComputerFolderItem(_PidlByItem(i)))
                 continue;
             POINT point = { margin + ((slot % columns) * tileWidth) + itemPositionOffset, y + ((slot / columns) * tileHeight) + 2 };
+            point.x -= scrollX;
+            point.y -= scrollY;
             m_ListView.SetItemPosition(i, &point);
             ++slot;
         }
@@ -925,6 +936,8 @@ void CDefView::ArrangeComputerView()
             if (!IsComputerDriveItem(_PidlByItem(i)))
                 continue;
             POINT point = { margin + ((slot % columns) * tileWidth) + itemPositionOffset, y + ((slot / columns) * tileHeight) + 2 };
+            point.x -= scrollX;
+            point.y -= scrollY;
             m_ListView.SetItemPosition(i, &point);
             ++slot;
         }
@@ -942,6 +955,8 @@ void CDefView::ArrangeComputerView()
             if (IsComputerFolderItem(pidl) || IsComputerDriveItem(pidl))
                 continue;
             POINT point = { margin + ((slot % columns) * tileWidth) + itemPositionOffset, y + ((slot / columns) * tileHeight) + 2 };
+            point.x -= scrollX;
+            point.y -= scrollY;
             m_ListView.SetItemPosition(i, &point);
             ++slot;
         }
@@ -955,9 +970,9 @@ INT CDefView::ComputerItemFromPoint(POINT point)
     if (!IsComputerTileView())
         return -1;
 
-    const UINT dpi = ComputerViewDpi();
-    const INT tileWidth = MulDiv(270, dpi, 96);
-    const INT tileHeight = MulDiv(76, dpi, 96);
+    const DWORD spacing = ListView_GetItemSpacing(m_ListView, FALSE);
+    const INT tileWidth = LOWORD(spacing);
+    const INT tileHeight = HIWORD(spacing);
     INT iconWidth = GetSystemMetrics(SM_CXICON);
     INT iconHeight;
     HIMAGELIST imageList = ListView_GetImageList(m_ListView, LVSIL_NORMAL);
@@ -1108,6 +1123,16 @@ void CDefView::DrawComputerItem(NMLVCUSTOMDRAW *pDraw)
             const BOOL darkView = GetRValue(viewColor) + GetGValue(viewColor) + GetBValue(viewColor) < (128 * 3);
             HBRUSH borderBrush = CreateSolidBrush(darkView ? RGB(145, 145, 145) : RGB(112, 112, 112));
             HBRUSH remainingBrush = CreateSolidBrush(darkView ? RGB(68, 68, 68) : RGB(226, 226, 226));
+            const INT cornerDiameter = max(4, MulDiv(6, dpi, 96));
+            const INT savedDC = SaveDC(pDraw->nmcd.hdc);
+            HRGN barRegion = savedDC ? CreateRoundRectRgn(barRect.left, barRect.top,
+                                                        barRect.right + 1, barRect.bottom + 1,
+                                                        cornerDiameter, cornerDiameter) : NULL;
+            if (barRegion && ExtSelectClipRgn(pDraw->nmcd.hdc, barRegion, RGN_AND) == ERROR)
+            {
+                DeleteObject(barRegion);
+                barRegion = NULL;
+            }
             FrameRect(pDraw->nmcd.hdc, &barRect, borderBrush);
             InflateRect(&barRect, -1, -1);
             FillRect(pDraw->nmcd.hdc, &barRect, remainingBrush);
@@ -1123,6 +1148,14 @@ void CDefView::DrawComputerItem(NMLVCUSTOMDRAW *pDraw)
                 RECT boundaryRect = { usedRect.right, barRect.top, usedRect.right + 1, barRect.bottom };
                 FillRect(pDraw->nmcd.hdc, &boundaryRect, borderBrush);
             }
+            if (barRegion)
+            {
+                /* Paint the curved outline over the clipped capacity fill. */
+                FrameRgn(pDraw->nmcd.hdc, barRegion, borderBrush, 1, 1);
+                DeleteObject(barRegion);
+            }
+            if (savedDC)
+                RestoreDC(pDraw->nmcd.hdc, savedDC);
             DeleteObject(usedBrush);
             DeleteObject(remainingBrush);
             DeleteObject(borderBrush);
