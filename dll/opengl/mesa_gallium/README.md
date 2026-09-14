@@ -11,12 +11,11 @@ the target architecture:
 | Renderer | Backend | Architectures |
 | --- | --- | --- |
 | `vc4` | Raspberry Pi 3 GPU | ARM64 |
-| `v3d` | Raspberry Pi 5 GPU | ARM64 |
 | `softpipe` | CPU rendering | i386, AMD64, ARM64 |
 
 Native i386, AMD64 and ARM64 builds using llvm-mingw Clang enable
 `MESA_GALLIUM_FROM_SOURCE` by default. i386 and AMD64 build softpipe;
-ARM64 builds all three from the vendored `submodules/mesa` snapshot, including
+ARM64 adds VC4 from the vendored `submodules/mesa` snapshot, including
 generic, Raspberry Pi 3 and Raspberry Pi 5 configurations. Both Pi display
 drivers register `mesa_gallium.dll`; the same DLL is registered as the `MSOGL`
 fallback on displays without a hardware ICD. The image packages one shared
@@ -27,12 +26,28 @@ The `mesa_gallium` target builds and stages the DLL. Mesa uses Release
 settings even when ReactOS is Debug. ARM64 additionally builds its static
 KMT/zlib dependencies in a nested Release configuration. i386 and AMD64
 do not need those dependencies or the nested support build.
-VC4 and V3D retain separate KMT transports because their kernel interfaces
-differ. Softpipe uses the software presentation path.
+Native ARM64 and ARM64EC support builds reuse the main build's host tools;
+the parent builds those tools before starting the support configuration.
+The support build retains the separate Pi KMT transports. Softpipe uses the
+software presentation path.
 
-The source build requires llvm-mingw, Meson, Ninja, and Python with Mako,
-packaging and PyYAML. `MESA_BUILD_JOBS` limits parallel jobs and defaults to
-four. Set `MESA_MESON` if Meson is outside `PATH`.
+The source build uses native CMake and requires CMake 3.24+, llvm-mingw,
+Ninja, Bison 2.7+, Flex, and Python with Mako, packaging and PyYAML.
+Nested builds inherit the invoking `ninja -jN` or `cmake --build --parallel N`
+at build time, including ARM64EC and WoW64. `CMAKE_BUILD_PARALLEL_LEVEL` is also
+supported. The old fixed `MESA_BUILD_JOBS` cache setting is removed.
+`MESA_BISON`, `MESA_FLEX`, and `MESA_PYTHON` select the host generator tools.
+Meson is no longer required. Existing Meson build directories can coexist
+with the new `mesa-source/cmake-build` directory; packaging uses the CMake DLL.
+See [Mesa's CMake notes](../../../submodules/mesa/cmake/README.md) for standalone
+build commands and supported profiles.
+
+The imported Meson configuration selected V3D, but its WGL target did not
+link or expose the V3D renderer. The V3D driver and DRM winsys still require
+Linux headers and are not part of the working Windows WGL dependency graph.
+The native CMake build preserves that behavior; it does not establish Pi 5
+hardware rendering. The Broadcom compiler and packet generators needed by
+VC4 remain included.
 
 `MESA_GALLIUM_FROM_SOURCE=OFF` disables the shared ICD and selects the
 previous packaged Pi 3 ICD and custom Pi 5 ICD when those boards are enabled.
