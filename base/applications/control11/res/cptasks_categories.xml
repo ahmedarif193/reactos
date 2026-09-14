@@ -10,7 +10,6 @@
   <sh:task idref="{D3D71B01-F746-499E-A426-FF63FAC98C19}"/>
  </category>
  <category id="3">
-  <sh:task idref="{BD256B65-94BE-4194-84BF-41D50D0EF26E}"/>
   <sh:task idref="{7A3E8C50-2B11-4B4E-9E6F-3F4B7C9A1D02}"/>
  </category>
  <category id="5">

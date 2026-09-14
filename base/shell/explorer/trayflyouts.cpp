@@ -6908,7 +6908,7 @@ public:
         rcLinkText.left += Sc(22);
         SelectObject(hdcMem, m_hFontSmall);
         SetTextColor(hdcMem, m_iHot == TFY_NETHIT_LINK ? m_Pal.HotBorder : m_Pal.DimText);
-        DrawTextW(hdcMem, L"Open Network and Sharing Center", -1, &rcLinkText,
+        DrawTextW(hdcMem, L"Open Network Connections", -1, &rcLinkText,
                   DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         SelectObject(hdcMem, hFontOld);
         BitBlt(hdc, 0, 0, rc.right, rc.bottom, hdcMem, 0, 0, SRCCOPY);

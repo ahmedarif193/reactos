@@ -52,11 +52,10 @@
   <sh:task id="{37F225EF-1409-434C-5B67-D2E3F4051615}"><sh:name>Change cursor blink rate</sh:name><sh:keywords>keyboard;cursor;blink;repeat;delay;</sh:keywords><sh2:controlpanel name="Microsoft.Keyboard"/></sh:task>
   <sh:task id="{4803360F-251A-445D-6C78-E3F405162716}"><sh:name>Check keyboard status</sh:name><sh:keywords>keyboard;hardware;status;</sh:keywords><sh2:controlpanel name="Microsoft.Keyboard" page="1"/></sh:task>
  </application>
- <application id="{8E908FC9-BECC-40F6-915B-F4CA0E70D03D}">
-  <sh:task id="{BD256B65-94BE-4194-84BF-41D50D0EF26E}"><sh:name>View network status and tasks</sh:name><sh:keywords>network;internet;connection;status;lan;wifi;</sh:keywords><sh2:controlpanel name="Microsoft.NetworkAndSharingCenter"/></sh:task>
+ <application id="{7007ACC7-3202-11D1-AAD2-00805FC1270E}">
   <sh:task id="{7A3E8C50-2B11-4B4E-9E6F-3F4B7C9A1D02}"><sh:name>View network connections</sh:name><sh:keywords>adapter;adapters;connections;ethernet;ncpa;</sh:keywords><sh:command>%SystemRoot%\system32\control.exe netconnections</sh:command></sh:task>
   <sh:task id="{5914471A-362B-456E-7D89-F40516273817}"><sh:name>Change adapter settings</sh:name><sh:keywords>adapter;ip address;dns;tcp/ip;</sh:keywords><sh:command>%SystemRoot%\system32\control.exe netconnections</sh:command></sh:task>
-  <category id="3"><sh:task idref="{BD256B65-94BE-4194-84BF-41D50D0EF26E}"/><sh:task idref="{7A3E8C50-2B11-4B4E-9E6F-3F4B7C9A1D02}"/></category>
+  <category id="3"><sh:task idref="{7A3E8C50-2B11-4B4E-9E6F-3F4B7C9A1D02}"/></category>
  </application>
  <application id="{A3DD4F92-658A-410F-84FD-6FBBBEF2FFFE}">
   <sh:task id="{6A25582B-473C-467F-8E9A-051627384918}"><sh:name>Change your homepage</sh:name><sh:keywords>homepage;home page;browser;internet explorer;</sh:keywords><sh2:controlpanel name="Microsoft.InternetOptions"/></sh:task>
