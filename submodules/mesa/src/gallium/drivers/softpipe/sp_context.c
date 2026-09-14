@@ -240,7 +240,7 @@ softpipe_create_context(struct pipe_screen *screen,
 
    /* Allocate texture caches */
    for (sh = 0; sh < ARRAY_SIZE(softpipe->tex_cache); sh++) {
-      for (i = 0; i < ARRAY_SIZE(softpipe->tex_cache[0]); i++) {
+      for (i = 0; i < screen->shader_caps[sh].max_sampler_views; i++) {
          softpipe->tex_cache[sh][i] = sp_create_tex_tile_cache(&softpipe->pipe);
          if (!softpipe->tex_cache[sh][i])
             goto fail;
