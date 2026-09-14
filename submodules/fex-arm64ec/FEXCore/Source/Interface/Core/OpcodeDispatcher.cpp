@@ -5135,6 +5135,15 @@ void OpDispatchBuilder::PermissionRestrictedOp(OpcodeArgs) {
               });
 }
 
+void OpDispatchBuilder::SYSEXITOp(OpcodeArgs) {
+  if (CTX->HostFeatures.HostType == FEXCore::HostFeatures::HostTypeEnum::Wow64 ||
+      CTX->HostFeatures.HostType == FEXCore::HostFeatures::HostTypeEnum::Arm64ec) {
+    PermissionRestrictedOp(Op);
+  } else {
+    UnimplementedOp(Op);
+  }
+}
+
 void OpDispatchBuilder::InvalidOp(OpcodeArgs) {
   BreakOp(Op, FEXCore::IR::BreakDefinition {
                 .ErrorRegister = 0,
