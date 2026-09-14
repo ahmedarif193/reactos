@@ -915,6 +915,8 @@ custom_end:
         ERR("Unable to allocate ICD data!\n");
         goto end;
     }
+    data->ProcTable = NULL;
+    data->MakeContextCurrentARB = NULL;
 
     /* Load the library */
     data->hModule = LoadLibraryW(DllName);
