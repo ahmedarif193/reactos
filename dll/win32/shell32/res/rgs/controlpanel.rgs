@@ -39,7 +39,6 @@ HKLM
 								'{0DF44EAA-FF21-4412-828E-260A8728E7F1}' = s 'Taskbar and Start Menu'
 								'{BB06C0E4-D293-4f75-8A90-CB05B6477EEE}' = s 'System'
 								'{025A5937-A6BE-4686-A844-36FE4BEC8B6D}' = s 'Power Options'
-								'{8E908FC9-BECC-40f6-915B-F4CA0E70D03D}' = s 'Network and Sharing Center'
 								'{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}' = s 'Personalization'
 								'{C555438B-3C23-4769-A71F-B6D3D9B6053A}' = s 'Display'
 								'{E2E7934B-DCE5-43C4-9576-7FE4F75E7480}' = s 'Date and Time'
@@ -180,34 +179,6 @@ HKCR
 {
 	NoRemove CLSID
 	{
-		ForceRemove {8E908FC9-BECC-40f6-915B-F4CA0E70D03D} = s 'Network and Sharing Center'
-		{
-			val 'System.ApplicationName' = s 'Microsoft.NetworkAndSharingCenter'
-			val 'System.ControlPanel.Category' = s '3'
-			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '3'
-			val 'System.Software.TasksFileUrl' = s 'Internal'
-			val InfoTip = s 'Check the status of your network, change network settings, and set preferences for sharing files and printers.'
-			val LocalizedString = s 'Network and Sharing Center'
-			DefaultIcon = e '%%SystemRoot%%\system32\control11.exe,-131'
-			Shell
-			{
-				Open
-				{
-					Command = e '%%SystemRoot%%\system32\control11.exe /name Microsoft.NetworkAndSharingCenter'
-				}
-			}
-			ShellFolder
-			{
-				val Attributes = d '0'
-			}
-		}
-	}
-}
-
-HKCR
-{
-	NoRemove CLSID
-	{
 		ForceRemove {ED834ED6-4B5A-4bfe-8F11-A626DCB6A921} = s 'Personalization'
 		{
 			val 'System.ApplicationName' = s 'Microsoft.Personalization'
@@ -216,7 +187,7 @@ HKCR
 			val 'System.Software.TasksFileUrl' = s 'Internal'
 			val InfoTip = s 'Change the visuals and sounds on your computer.'
 			val LocalizedString = s 'Personalization'
-			DefaultIcon = e '%%SystemRoot%%\system32\desk.cpl,-40'
+			DefaultIcon = e '%%SystemRoot%%\system32\desk.cpl,-100'
 			Shell
 			{
 				Open

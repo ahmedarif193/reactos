@@ -15,6 +15,7 @@ int g_cTasks;
 IShellFolder2 *g_pControlsFolder;
 
 static const PROPERTYKEY PKEY_ControlPanel_Category = { { 0x305CA226, 0xD286, 0x468E, { 0xB8, 0x48, 0x2B, 0x2E, 0x8E, 0x69, 0x7B, 0x74 } }, 2 };
+static const GUID CLSID_NetworkAndSharingCenter = { 0x8E908FC9, 0xBECC, 0x40F6, { 0x91, 0x5B, 0xF4, 0xCA, 0x0E, 0x70, 0xD0, 0x3D } };
 
 CPCATEGORY g_Categories[9] =
 {
@@ -64,7 +65,6 @@ static const CPBUILTIN s_Builtin[] =
     { L"Microsoft.Keyboard",                  L"Keyboard",                        L"{725BE8F7-668E-4C7B-8F90-46BDB0936430}", L"2",    HUB_NONE, L"Customize your keyboard settings, such as the cursor blink rate and the character repeat rate." },
     { L"Microsoft.LocationAndOtherSensors",   L"Location and Other Sensors",      L"{E9950154-C418-419E-A90A-20C5287AE24B}", L"2",    HUB_NONE, L"Enable location and other sensors." },
     { L"Microsoft.Mouse",                     L"Mouse",                           L"{6C8EEC18-8D75-41B2-A177-8831D59D2D50}", L"2",    HUB_NONE, L"Customize your mouse settings, such as the button configuration, double-click speed, mouse pointers, and motion speed." },
-    { L"Microsoft.NetworkAndSharingCenter",   L"Network and Sharing Center",      L"{8E908FC9-BECC-40F6-915B-F4CA0E70D03D}", L"3",    HUB_NETWORK, L"Check the status of your network, change network settings, and set preferences for sharing files and printers." },
     { L"Microsoft.NotificationAreaIcons",     L"Notification Area Icons",         L"{05D7B0F4-2121-4EFF-BF6B-ED3F69B894D9}", L"1",    HUB_NONE, L"Customize which icons and notifications appear on the taskbar." },
     { L"Microsoft.ParentalControls",          L"Parental Controls",               L"{96AE8D84-A250-4520-95A5-A47A7E3C548B}", L"9",    HUB_NONE, L"Set up parental controls for any user." },
     { L"Microsoft.PenAndTouch",               L"Pen and Touch",                   L"{F82DF8F7-8B9F-442E-A48C-818EA735FF9B}", L"2",    HUB_NONE, L"Adjust settings for pen and touch input." },
@@ -356,6 +356,15 @@ static void AddShellItems(void)
             pItem->bHasGuid = SUCCEEDED(CLSIDFromString(szParse + 2, &pItem->guid));
 
         ReadDetailString(g_pControlsFolder, pidl, &PKEY_ApplicationName, pItem->szCanonical, _countof(pItem->szCanonical));
+
+        /* Do not revive the retired Control11-only Network and Sharing Center
+           from a registry entry left behind by an older installation. */
+        if (!lstrcmpiW(pItem->szCanonical, L"Microsoft.NetworkAndSharingCenter") ||
+            (pItem->bHasGuid && IsEqualGUID(pItem->guid, CLSID_NetworkAndSharingCenter)))
+        {
+            ILFree(pidl);
+            continue;
+        }
 
         WCHAR szCats[64] = L"";
         ReadDetailString(g_pControlsFolder, pidl, &PKEY_ControlPanel_Category, szCats, _countof(szCats));
