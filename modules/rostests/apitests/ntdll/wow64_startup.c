@@ -10,6 +10,69 @@ typedef NTSTATUS (NTAPI *GET_LOCALE_MAPPING)(PVOID *, PLCID, PLARGE_INTEGER);
 static DWORD WorkerTlsIndex;
 static HANDLE WorkerStartEvent;
 
+static DWORD WINAPI SelectorWorker(PVOID Parameter)
+{
+    return 0;
+}
+
+static VOID TestThreadSelectors(VOID)
+{
+    typedef BOOL (WINAPI *QUERY_MACHINES)(HANDLE, PUSHORT, PUSHORT);
+    QUERY_MACHINES QueryMachines;
+    USHORT ProcessMachine, NativeMachine;
+    CONTEXT Context = {0};
+    HANDLE Thread;
+    BOOL Success;
+    ULONG Index, Selectors[3];
+
+    /* GetNativeSystemInfo can report the emulated architecture on Windows ARM64. */
+    QueryMachines = (QUERY_MACHINES)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2");
+    if (!QueryMachines)
+    {
+        skip("IsWow64Process2 unavailable\n");
+        return;
+    }
+    Success = QueryMachines(GetCurrentProcess(), &ProcessMachine, &NativeMachine);
+    ok(Success, "Machine query failed: %lu\n", GetLastError());
+    if (!Success) return;
+    if (NativeMachine != IMAGE_FILE_MACHINE_ARM64)
+    {
+        skip("ARM64-specific WoW64 selector layout\n");
+        return;
+    }
+
+    Thread = CreateThread(NULL, 0, SelectorWorker, NULL, CREATE_SUSPENDED, NULL);
+    ok(Thread != NULL, "Suspended thread creation failed: %lu\n", GetLastError());
+    if (!Thread) return;
+
+    Context.ContextFlags = CONTEXT_CONTROL | CONTEXT_SEGMENTS;
+    Success = GetThreadContext(Thread, &Context);
+    ok(Success, "Context query failed: %lu\n", GetLastError());
+    if (Success)
+    {
+        ok_hex(Context.SegCs, 0x1b);
+        ok_hex(Context.SegSs, 0x23);
+        ok_hex(Context.SegFs, 0x3b);
+        ok_hex(Context.SegDs, 0x23);
+        ok_hex(Context.SegEs, 0x23);
+        ok_hex(Context.SegGs, 0x23);
+        Selectors[0] = Context.SegCs;
+        Selectors[1] = Context.SegSs;
+        Selectors[2] = Context.SegFs;
+        for (Index = 0; Index < RTL_NUMBER_OF(Selectors); ++Index)
+        {
+            LDT_ENTRY Entry;
+            Success = GetThreadSelectorEntry(Thread, Selectors[Index], &Entry);
+            ok(Success, "Selector %lx query failed: %lu\n", Selectors[Index], GetLastError());
+            if (Success) ok_hex(Entry.HighWord.Bits.Type, Index ? 0x13 : 0x1b);
+        }
+    }
+
+    ok(ResumeThread(Thread) == 1, "Cannot resume selector worker: %lu\n", GetLastError());
+    ok_hex(WaitForSingleObject(Thread, 10000), WAIT_OBJECT_0);
+    CloseHandle(Thread);
+}
+
 static VOID TestNativePointerFields(VOID)
 {
     TEB64 *NativeTeb = UlongToPtr(NtCurrentTeb()->GdiBatchCount);
@@ -391,6 +454,7 @@ START_TEST(wow64_startup)
     ok_ptr(CachedMapping, Mapping);
     ok_hex(CachedLocale, Locale);
     TestDeadFlagMemoryProbe();
+    TestThreadSelectors();
     TestThreadedStackGrowth();
     TestSelfModifyingCode();
 #elif defined(_WIN64)

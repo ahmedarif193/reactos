@@ -27,12 +27,12 @@ extern "C" {
 
 //
 // Selector values seeded into a WoW64 guest context. ARM64 has no GDT; the
-// x86 emulator reads these back as plain guest register state.
+// Windows ARM64 uses the x86 selector layout for these software descriptors.
 //
 #define RPL_MASK                0x0003
-#define KGDT64_R3_CMCODE        0x0020
-#define KGDT64_R3_DATA          0x0028
-#define KGDT64_R3_CMTEB         0x0050
+#define KGDT64_R3_CMCODE        0x0018
+#define KGDT64_R3_DATA          0x0020
+#define KGDT64_R3_CMTEB         0x0038
 
 #define EFLAGS_INTERRUPT_MASK   0x200L
 
