@@ -230,7 +230,7 @@ add_rostests_file(TARGET ntdll_apitest SUBDIR testdata)
 # Keep the emulation regressions runnable independently of unrelated NTDLL
 # imports in the umbrella executable. Use the same test sources and assertions.
 add_executable(emulation_apitest EXCLUDE_FROM_ALL
-    arm64_chpe.c wow64_startup.c emulation_testlist.c)
+    arm64_chpe.c wow64_startup.c LdrFindResource_U.c emulation.rc emulation_testlist.c)
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     add_asm_files(emulation_apitest_asm ${ARCH}/NtContinue.S)
     target_sources(emulation_apitest PRIVATE NtContinue.c UserModeException.c ${emulation_apitest_asm})

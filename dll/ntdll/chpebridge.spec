@@ -14,9 +14,12 @@
 @ cdecl __C_specific_handler(ptr long ptr ptr) ChpeCSpecificHandler
 @ stdcall ChpeDispatchExceptionNative(ptr ptr)
 @ stdcall KiUserExceptionDispatcher(ptr ptr) ChpeKiUserExceptionDispatcher
+@ stdcall LdrAccessResource(ptr ptr ptr ptr) ChpeLdrAccessResource
 @ stdcall LdrAddRefDll(long ptr) ChpeLdrAddRefDll
 @ stdcall LdrEnumResources(ptr ptr long ptr ptr) ChpeLdrEnumResources
 @ stdcall LdrFindEntryForAddress(ptr ptr) ChpeLdrFindEntryForAddress
+@ stdcall LdrFindResourceDirectory_U(ptr ptr long ptr) ChpeLdrFindResourceDirectory_U
+@ stdcall LdrFindResource_U(ptr ptr long ptr) ChpeLdrFindResource_U
 @ stdcall LdrGetDllHandle(wstr ptr ptr ptr) ChpeLdrGetDllHandle
 @ stdcall LdrGetDllHandleEx(long wstr ptr ptr ptr) ChpeLdrGetDllHandleEx
 @ stdcall LdrGetProcedureAddress(ptr ptr long ptr) ChpeLdrGetProcedureAddress
