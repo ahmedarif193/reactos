@@ -2421,10 +2421,10 @@ MiBuildNonPagedPool(VOID)
         /* Start with the default (1MB) and add 400 KB for each MB above 4 */
         MmMaximumNonPagedPoolInBytes = MmDefaultMaximumNonPagedPool;
 
-        if (PoolSizingPages > 1024)
+        if (MmNumberOfPhysicalPages > 1024)
         {
             /* 256 pages (4 KiB each) represent one MiB of physical memory */
-            AdditionalMb = (SIZE_T)((PoolSizingPages - 1024) / 256);
+            AdditionalMb = (SIZE_T)((MmNumberOfPhysicalPages - 1024) / 256);
             MmMaximumNonPagedPoolInBytes += AdditionalMb *
                                              (SIZE_T)MmMaxAdditionNonPagedPoolPerMb;
         }
