@@ -156,7 +156,7 @@ ChpepNtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
     BOOLEAN IsCurrent;
     BOOLEAN EcCode;
 
-    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, NULL, &EcCode);
+    Status = RtlpGetExtendedParameterZeroBits(ExtendedParameters, ExtendedParameterCount, NULL, &EcCode, NULL);
     if (!NT_SUCCESS(Status))
         return Status;
 

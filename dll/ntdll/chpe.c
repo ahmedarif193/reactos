@@ -2369,6 +2369,8 @@ NTAPI
 ChpeNotifyMapViewOfSection(PVOID Unk1, PVOID Address, PVOID Unk2,
                            SIZE_T Size, ULONG AllocType, ULONG Prot)
 {
+    PIMAGE_NT_HEADERS NtHeader;
+
     if (Address && Size && ChpeEcCodeBitmap)
     {
         if (ChpepIsExecutableProtection(Prot))
@@ -2382,8 +2384,17 @@ ChpeNotifyMapViewOfSection(PVOID Unk1, PVOID Address, PVOID Unk2,
 
     /* FEX treats this callback as an image-map notification. NtMapViewOfSection
      * also maps data sections, so do not pass non-image views to FEX. */
-    if (!ChpepGetImageNtHeader(Address))
+    NtHeader = ChpepGetImageNtHeader(Address);
+    if (!NtHeader)
         return STATUS_SUCCESS;
+
+    /* A plain ARM64 image has no x64 ranges for the emulator.  It can still be
+     * mapped for inspection, but it must not be registered as ARM64EC code. */
+    if (NtHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_ARM64 &&
+        Address != NtDllBase && Address != (PVOID)&__ImageBase)
+    {
+        return STATUS_SUCCESS;
+    }
 
     if (!ChpeRegisterImageCodeRanges(Address))
         return STATUS_INVALID_IMAGE_FORMAT;
