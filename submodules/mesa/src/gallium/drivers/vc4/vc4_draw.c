@@ -483,7 +483,8 @@ vc4_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                         u_split_draw(info, max_verts, &this_count, &step);
 
                         cl_emit(&job->bcl, VERTEX_ARRAY_PRIMITIVES, array) {
-                                array.primitive_mode = info->mode;
+                                array.primitive_mode =
+                                        (enum V3D21_Primitive)info->mode;
                                 array.length = this_count;
                                 array.index_of_first_vertex = start;
                         }
