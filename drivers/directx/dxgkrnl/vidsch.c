@@ -3711,6 +3711,7 @@ VidSchSubmitCommandTrackedMeasured(
             DxgkContextOrderAbortPacket(Packet, Status);
         if (OrderedContext != NULL)
             ExReleaseRundownProtection(&OrderedContext->StreamAdmissionRundown);
+        Packet->DmaBuffer = NULL;
         VidSchpDereferencePacket(Packet);
         VidSchpReleaseCall(Adapter);
         return Status;
