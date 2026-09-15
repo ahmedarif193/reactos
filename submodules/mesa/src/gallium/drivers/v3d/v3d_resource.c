@@ -1235,9 +1235,9 @@ v3d_resource_changed(struct pipe_screen *pscreen, struct pipe_resource *prsc)
          * as invalidate this context's tiled sampling copy. A GPU-only
          * publication has no dirty CPU lines, so the clean is harmless. */
         if (rsc->bo &&
-            v3d_d3dkmt_bo_mark_cpu_dirty(v3d_screen(pscreen)->fd,
-                                         rsc->bo->handle) != 0)
-                mesa_loge("Failed to mark externally updated V3D BO CPU dirty");
+            v3d_d3dkmt_bo_mark_external_dirty(v3d_screen(pscreen)->fd,
+                                              rsc->bo->handle) != 0)
+                mesa_loge("Failed to mark externally updated V3D BO dirty");
         rsc->external_updates_tracked = true;
         rsc->writes++;
 }

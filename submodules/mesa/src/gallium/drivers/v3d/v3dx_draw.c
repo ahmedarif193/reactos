@@ -1578,6 +1578,31 @@ v3d_launch_grid(struct pipe_context *pctx, const struct pipe_grid_info *info)
         v3d_job_add_bo(job, uniforms.bo);
         submit.cfg[6] = uniforms.bo->offset + uniforms.offset;
 
+#ifdef _WIN32
+        BITSET_FOREACH_SET(i, v3d->ssbo[MESA_SHADER_COMPUTE].enabled_mask,
+                           PIPE_MAX_SHADER_BUFFERS) {
+                struct v3d_resource *rsc = v3d_resource(
+                        v3d->ssbo[MESA_SHADER_COMPUTE].sb[i].buffer);
+                v3d_job_add_write_bo(job, rsc->bo);
+        }
+
+        BITSET_FOREACH_SET(i,
+                           v3d->shaderimg[MESA_SHADER_COMPUTE].enabled_mask,
+                           PIPE_MAX_SHADER_IMAGES) {
+                struct v3d_resource *rsc = v3d_resource(
+                        v3d->shaderimg[MESA_SHADER_COMPUTE].si[i].base.resource);
+                v3d_job_add_write_bo(job, rsc->bo);
+        }
+
+        util_dynarray_foreach(&v3d->global_buffers, struct pipe_resource *, res) {
+                if (*res)
+                        v3d_job_add_write_bo(job, v3d_resource(*res)->bo);
+        }
+
+        v3d_job_add_write_bo(job, v3d->compute_shared_memory);
+        v3d_job_prepare_submit(job);
+#endif
+
         /* Pull some job state that was stored in a SUBMIT_CL struct out to
          * our SUBMIT_CSD struct
          */

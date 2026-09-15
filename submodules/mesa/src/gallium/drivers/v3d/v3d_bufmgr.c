@@ -507,8 +507,8 @@ v3d_bo_wait(struct v3d_bo *bo, uint64_t timeout_ns, const char *reason)
         return true;
 }
 
-void *
-v3d_bo_map_unsynchronized(struct v3d_bo *bo)
+static void *
+v3d_bo_map_raw(struct v3d_bo *bo)
 {
         uint64_t offset;
         int ret;
@@ -543,66 +543,55 @@ v3d_bo_map_unsynchronized(struct v3d_bo *bo)
         return bo->map;
 }
 
-void *
-v3d_bo_map(struct v3d_bo *bo)
+static void *
+v3d_bo_map_access(struct v3d_bo *bo, bool synchronized, bool write)
 {
-#ifdef _WIN32
-        int cpu_dirty = v3d_d3dkmt_bo_cpu_dirty(bo->screen->fd, bo->handle);
+        void *map = v3d_bo_map_raw(bo);
 
-        if (cpu_dirty < 0) {
-                fprintf(stderr, "BO CPU ownership query failed\n");
-                abort();
-        }
-#endif
-        void *map = v3d_bo_map_unsynchronized(bo);
-
-        bool ok = v3d_bo_wait(bo, OS_TIMEOUT_INFINITE, "bo map");
-        if (!ok) {
-                mesa_loge("BO wait for map failed");
-                abort();
+        if (synchronized) {
+                bool ok = v3d_bo_wait(bo, OS_TIMEOUT_INFINITE, "bo map");
+                if (!ok) {
+                        mesa_loge("BO wait for map failed");
+                        abort();
+                }
         }
         VG(VALGRIND_MAKE_MEM_DEFINED(map, bo->size));
 
 #ifdef _WIN32
-        if (!cpu_dirty &&
-            v3d_d3dkmt_bo_invalidate(bo->screen->fd, bo->handle) != 0) {
-                fprintf(stderr, "BO cache invalidation failed\n");
+        if (v3d_d3dkmt_bo_prepare_cpu_access(bo->screen->fd, bo->handle,
+                                             write) != 0) {
+                fprintf(stderr, "BO CPU access preparation failed\n");
                 abort();
         }
+#else
+        (void)write;
 #endif
 
         return map;
 }
 
-static void
-v3d_bo_mark_cpu_dirty(struct v3d_bo *bo)
+void *
+v3d_bo_map_unsynchronized(struct v3d_bo *bo)
 {
-#ifdef _WIN32
-        if (v3d_d3dkmt_bo_mark_cpu_dirty(bo->screen->fd, bo->handle) != 0) {
-                fprintf(stderr, "BO CPU ownership update failed\n");
-                abort();
-        }
-#else
-        (void)bo;
-#endif
+        return v3d_bo_map_access(bo, false, false);
+}
+
+void *
+v3d_bo_map(struct v3d_bo *bo)
+{
+        return v3d_bo_map_access(bo, true, false);
 }
 
 void *
 v3d_bo_map_write(struct v3d_bo *bo)
 {
-        void *map = v3d_bo_map(bo);
-
-        v3d_bo_mark_cpu_dirty(bo);
-        return map;
+        return v3d_bo_map_access(bo, true, true);
 }
 
 void *
 v3d_bo_map_unsynchronized_write(struct v3d_bo *bo)
 {
-        void *map = v3d_bo_map_unsynchronized(bo);
-
-        v3d_bo_mark_cpu_dirty(bo);
-        return map;
+        return v3d_bo_map_access(bo, false, true);
 }
 
 void

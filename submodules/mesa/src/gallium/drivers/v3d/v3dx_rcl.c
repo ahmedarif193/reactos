@@ -123,6 +123,10 @@ store_general(struct v3d_job *job,
         if (separate_stencil)
                 rsc = rsc->separate_stencil;
 
+#ifdef _WIN32
+        v3d_job_add_write_bo(job, rsc->bo);
+#endif
+
         if (stores_pending)
                 *stores_pending &= ~pipe_bit;
 

@@ -142,10 +142,52 @@ v3d_job_add_bo(struct v3d_job *job, struct v3d_bo *bo)
         bo_handles[job->submit.bo_handle_count++] = bo->handle;
 }
 
+#ifdef _WIN32
+void
+v3d_job_add_write_bo(struct v3d_job *job, struct v3d_bo *bo)
+{
+        if (!bo)
+                return;
+
+        v3d_job_add_bo(job, bo);
+        if (!job->write_bos)
+                job->write_bos = _mesa_pointer_set_create(job);
+        _mesa_set_add(job->write_bos, bo);
+}
+
+void
+v3d_job_prepare_submit(struct v3d_job *job)
+{
+        uint32_t *handles = (void *)(uintptr_t)job->submit.bo_handles;
+
+        if (!job->write_bos)
+                return;
+
+        set_foreach(job->write_bos, entry) {
+                const struct v3d_bo *bo = entry->key;
+                bool found = false;
+
+                for (uint32_t i = 0; i < job->submit.bo_handle_count; i++) {
+                        if ((handles[i] & V3D_D3DKMT_SUBMIT_HANDLE_MASK) !=
+                            bo->handle)
+                                continue;
+                        handles[i] |= V3D_D3DKMT_SUBMIT_HANDLE_WRITE;
+                        found = true;
+                        break;
+                }
+                assert(found);
+        }
+}
+#endif
+
 void
 v3d_job_add_write_resource(struct v3d_job *job, struct pipe_resource *prsc)
 {
         struct v3d_context *v3d = job->v3d;
+
+#ifdef _WIN32
+        v3d_job_add_write_bo(job, v3d_resource(prsc)->bo);
+#endif
 
         if (!job->write_prscs) {
                 job->write_prscs = _mesa_set_create(job,
@@ -737,6 +779,9 @@ v3d_job_submit(struct v3d_context *v3d, struct v3d_job *job)
 
         if (!V3D_DBG(NORAST)) {
                 int ret;
+#ifdef _WIN32
+                v3d_job_prepare_submit(job);
+#endif
                 ret = v3d_ioctl(v3d->fd, DRM_IOCTL_V3D_SUBMIT_CL, &job->submit);
                 if (ret) {
                         mesa_loge_once("Draw call returned %s.  Expect corruption.",
