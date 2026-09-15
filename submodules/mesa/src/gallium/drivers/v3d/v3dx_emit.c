@@ -357,7 +357,8 @@ v3dX(emit_state)(struct pipe_context *pctx)
                                 config.depth_test_function =
                                         v3d->zsa->base.depth_func;
                         } else {
-                                config.depth_test_function = PIPE_FUNC_ALWAYS;
+                                config.depth_test_function =
+                                        V3D_COMPARE_FUNC_ALWAYS;
                         }
 
                         config.stencil_enable =
