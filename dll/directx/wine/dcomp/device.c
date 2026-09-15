@@ -224,7 +224,14 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_SetOffsetY(IDCompositionVisual *if
 static HRESULT STDMETHODCALLTYPE dcomp_visual_SetTransformObject(IDCompositionVisual *iface,
         IDCompositionTransform *transform)
 {
-    return E_NOTIMPL;
+    struct dcomp_visual *visual = impl_from_IDCompositionVisual(iface);
+
+    if (transform)
+        return E_NOTIMPL;
+
+    visual->transform_x = 0.0f;
+    visual->transform_y = 0.0f;
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE dcomp_visual_SetTransform(IDCompositionVisual *iface,
@@ -282,7 +289,13 @@ static HRESULT STDMETHODCALLTYPE dcomp_visual_SetBorderMode(IDCompositionVisual 
 static HRESULT STDMETHODCALLTYPE dcomp_visual_SetClipObject(IDCompositionVisual *iface,
         IDCompositionClip *clip)
 {
-    return E_NOTIMPL;
+    struct dcomp_visual *visual = impl_from_IDCompositionVisual(iface);
+
+    if (clip)
+        return E_NOTIMPL;
+
+    visual->has_clip = FALSE;
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE dcomp_visual_SetClip(IDCompositionVisual *iface, const void *rect)

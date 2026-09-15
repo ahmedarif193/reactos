@@ -146,6 +146,7 @@ static void wined3d_query_init(struct wined3d_query *query, struct wined3d_devic
     query->data_size = data_size;
     query->query_ops = query_ops;
     query->poll_in_cs = !!device->cs->thread;
+    query->event = NULL;
     list_init(&query->poll_list_entry);
 }
 
@@ -449,6 +450,17 @@ ULONG CDECL wined3d_query_decref(struct wined3d_query *query)
     return refcount;
 }
 
+void wined3d_query_signal_event(struct wined3d_query *query)
+{
+    HANDLE event = query->event;
+
+    query->event = NULL;
+    if (!SetEvent(event))
+        WARN("Failed to signal event %p, error %lu.\n", event, GetLastError());
+    CloseHandle(event);
+    wined3d_query_decref(query);
+}
+
 HRESULT CDECL wined3d_query_get_data(struct wined3d_query *query,
         void *data, UINT data_size, uint32_t flags)
 {
@@ -500,6 +512,71 @@ HRESULT CDECL wined3d_query_issue(struct wined3d_query *query, uint32_t flags)
     TRACE("query %p, flags %#x.\n", query, flags);
 
     wined3d_device_context_issue_query(&query->device->cs->c, query, flags);
+
+    return WINED3D_OK;
+}
+
+static void STDMETHODCALLTYPE wined3d_set_event_query_destroyed(void *parent)
+{
+    UNREFERENCED_PARAMETER(parent);
+}
+
+static const struct wined3d_parent_ops wined3d_set_event_query_parent_ops =
+{
+    wined3d_set_event_query_destroyed,
+};
+
+HRESULT CDECL wined3d_device_enqueue_set_event(struct wined3d_device *device, HANDLE event)
+{
+    struct wined3d_query *query;
+    HANDLE event_copy;
+    HRESULT hr;
+
+    TRACE("device %p, event %p.\n", device, event);
+
+    if (!event || !DuplicateHandle(GetCurrentProcess(),
+                                   event,
+                                   GetCurrentProcess(),
+                                   &event_copy,
+                                   EVENT_MODIFY_STATE,
+                                   FALSE,
+                                   0))
+        return E_INVALIDARG;
+
+    if (FAILED(hr = wined3d_query_create(device,
+                                         WINED3D_QUERY_TYPE_EVENT,
+                                         NULL,
+                                         &wined3d_set_event_query_parent_ops,
+                                         &query)))
+    {
+        CloseHandle(event_copy);
+        return hr;
+    }
+
+    query->event = event_copy;
+    if (device->cs->thread)
+        query->poll_in_cs = true;
+    wined3d_query_issue(query, WINED3DISSUE_END);
+    device->cs->c.ops->flush(&device->cs->c);
+
+    if (!query->poll_in_cs)
+    {
+        while ((hr = wined3d_query_get_data(query,
+                                            NULL,
+                                            0,
+                                            WINED3DGETDATA_FLUSH)) == S_FALSE)
+            Sleep(0);
+
+        if (FAILED(hr))
+        {
+            query->event = NULL;
+            CloseHandle(event_copy);
+            wined3d_query_decref(query);
+            return hr;
+        }
+
+        wined3d_query_signal_event(query);
+    }
 
     return WINED3D_OK;
 }

@@ -2459,6 +2459,7 @@ HRESULT __cdecl wined3d_device_create(struct wined3d *wined3d, struct wined3d_ad
         struct wined3d_device_parent *device_parent, struct wined3d_device **device);
 ULONG __cdecl wined3d_device_decref(struct wined3d_device *device);
 HRESULT __cdecl wined3d_device_end_scene(struct wined3d_device *device);
+HRESULT __cdecl wined3d_device_enqueue_set_event(struct wined3d_device *device, HANDLE event);
 void __cdecl wined3d_device_evict_managed_resources(struct wined3d_device *device);
 UINT __cdecl wined3d_device_get_available_texture_mem(const struct wined3d_device *device);
 HRESULT __cdecl wined3d_device_get_clip_status(const struct wined3d_device *device,
