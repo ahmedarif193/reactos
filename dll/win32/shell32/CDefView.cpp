@@ -1241,16 +1241,6 @@ void CDefView::DrawComputerItem(NMLVCUSTOMDRAW *pDraw)
             const BOOL darkView = GetRValue(viewColor) + GetGValue(viewColor) + GetBValue(viewColor) < (128 * 3);
             HBRUSH borderBrush = CreateSolidBrush(darkView ? RGB(145, 145, 145) : RGB(112, 112, 112));
             HBRUSH remainingBrush = CreateSolidBrush(darkView ? RGB(68, 68, 68) : RGB(226, 226, 226));
-            const INT cornerDiameter = max(4, MulDiv(6, dpi, 96));
-            const INT savedDC = SaveDC(pDraw->nmcd.hdc);
-            HRGN barRegion = savedDC ? CreateRoundRectRgn(barRect.left, barRect.top,
-                                                        barRect.right + 1, barRect.bottom + 1,
-                                                        cornerDiameter, cornerDiameter) : NULL;
-            if (barRegion && ExtSelectClipRgn(pDraw->nmcd.hdc, barRegion, RGN_AND) == ERROR)
-            {
-                DeleteObject(barRegion);
-                barRegion = NULL;
-            }
             FrameRect(pDraw->nmcd.hdc, &barRect, borderBrush);
             InflateRect(&barRect, -1, -1);
             FillRect(pDraw->nmcd.hdc, &barRect, remainingBrush);
@@ -1266,14 +1256,6 @@ void CDefView::DrawComputerItem(NMLVCUSTOMDRAW *pDraw)
                 RECT boundaryRect = { usedRect.right, barRect.top, usedRect.right + 1, barRect.bottom };
                 FillRect(pDraw->nmcd.hdc, &boundaryRect, borderBrush);
             }
-            if (barRegion)
-            {
-                /* Paint the curved outline over the clipped capacity fill. */
-                FrameRgn(pDraw->nmcd.hdc, barRegion, borderBrush, 1, 1);
-                DeleteObject(barRegion);
-            }
-            if (savedDC)
-                RestoreDC(pDraw->nmcd.hdc, savedDC);
             DeleteObject(usedBrush);
             DeleteObject(remainingBrush);
             DeleteObject(borderBrush);
