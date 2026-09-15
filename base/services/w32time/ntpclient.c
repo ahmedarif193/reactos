@@ -58,8 +58,11 @@ InitConnection(PINFO pInfo,
 
 
 static VOID
-DestroyConnection(VOID)
+DestroyConnection(PINFO pInfo)
 {
+    if (pInfo->Sock != INVALID_SOCKET)
+        closesocket(pInfo->Sock);
+
     WSACleanup();
 }
 
@@ -143,7 +146,7 @@ GetServerTime(LPWSTR lpAddress)
     ULONG ulTime = 0;
 
     pInfo = (PINFO)HeapAlloc(GetProcessHeap(),
-                             0,
+                             HEAP_ZERO_MEMORY,
                              sizeof(INFO));
     lpAddr = (LPSTR)HeapAlloc(GetProcessHeap(),
                               0,
@@ -151,6 +154,8 @@ GetServerTime(LPWSTR lpAddress)
 
     if (pInfo && lpAddr)
     {
+        pInfo->Sock = INVALID_SOCKET;
+
         if (WideCharToMultiByte(CP_ACP,
                                 0,
                                 lpAddress,
@@ -168,7 +173,7 @@ GetServerTime(LPWSTR lpAddress)
                 }
             }
 
-            DestroyConnection();
+            DestroyConnection(pInfo);
         }
     }
 

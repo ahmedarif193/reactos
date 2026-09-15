@@ -239,6 +239,7 @@ W32TmServiceMain(DWORD argc, LPWSTR *argv)
 {
     LONG error;
     DWORD dwInterval;
+    DWORD dwWaitInterval;
     HKEY hKey;
     WCHAR szData[8];
     DWORD cbData;
@@ -284,6 +285,8 @@ W32TmServiceMain(DWORD argc, LPWSTR *argv)
     /* The service's worker loop */
     for (;;)
     {
+        dwWaitInterval = dwInterval;
+
         /* The default is NoSync */
         bNoSync = TRUE;
 
@@ -307,6 +310,7 @@ W32TmServiceMain(DWORD argc, LPWSTR *argv)
             if (error != ERROR_SUCCESS)
             {
                 DPRINT("W32Time Service failed to set clock: 0x%08lX\n", error);
+                dwWaitInterval = min(dwInterval, W32TIME_RETRY_INTERVAL);
 #if 0
                 /*
                  * In general, we do not want to stop this service for a single
@@ -319,9 +323,13 @@ W32TmServiceMain(DWORD argc, LPWSTR *argv)
                 return;
 #endif
             }
+            else
+            {
+                DPRINT("W32Time Service synchronized the clock.\n");
+            }
         }
 
-        if (WaitForSingleObject(hStopEvent, dwInterval * 1000) == WAIT_OBJECT_0)
+        if (WaitForSingleObject(hStopEvent, dwWaitInterval * 1000) == WAIT_OBJECT_0)
         {
             CloseHandle(hStopEvent);
             hStopEvent = NULL;
