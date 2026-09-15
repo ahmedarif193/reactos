@@ -16,7 +16,7 @@
 static const COLORREF SysColors[] =
 {
     RGB(212, 208, 200), /* COLOR_SCROLLBAR  */
-    RGB(58, 110, 165),  /* COLOR_BACKGROUND  */
+    RGB(16, 16, 16),    /* COLOR_BACKGROUND  */
     RGB(10, 36, 106),   /* COLOR_ACTIVECAPTION  */
     RGB(128, 128, 128), /* COLOR_INACTIVECAPTION  */
     RGB(212, 208, 200), /* COLOR_MENU  */
