@@ -11,7 +11,7 @@ RGBA PNGs. The generic folder comes from the replacement set in
 | System Registry | ChatGPT Image Sep 13, 2026, 11_28_38 PM (4).png | ntobjshex.dll, -7 |
 | Generic folder | Colored-Folder-Icons/png/1024/folder-generic.png | shell32.dll, -4 and -5; explorer11.exe, 376 |
 | Fixed drive | codex-clipboard-ASjWpd.png | shell32.dll, -9; explorer11.exe, 377 |
-| My PC | Modern-Desktop-Icons/png/512/my-pc.png | shell32.dll, -16; explorer11.exe, 378 |
+| My PC | Modern-Desktop-Icons 2/png/512/my-pc.png | shell32.dll, -16; explorer11.exe, 378 |
 
 The My PC source is maintained with the other desktop shortcut artwork in
 `media/graphics/desktop-icons`.
