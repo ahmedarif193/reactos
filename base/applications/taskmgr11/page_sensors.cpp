@@ -9,7 +9,6 @@
 
 #define PGSENSOR_CLASS L"TM11PageSensors"
 #define ELECTRICAL_CARD_MAX 12
-#define POWER_CARD_MAX 12
 
 enum
 {
@@ -29,7 +28,6 @@ struct SensorsPage : Page, ITreeListOwner
     Vec<TLRow> rows;
     Vec<TelemetryRow*> list;
     Vec<TelemetryRow*> electricalCards;
-    Vec<TelemetryRow*> powerCards;
 
     SensorsPage() : tl(NULL), sortCol(SNC_NAME), sortDesc(FALSE) {}
 
@@ -93,11 +91,6 @@ struct SensorsPage : Page, ITreeListOwner
         return (LONGLONG)(hash ? hash : 1);
     }
 
-    static BOOL IsBatteryCardField(ULONG fieldId)
-    {
-        return fieldId == BATTERY_FIELD_STATE || fieldId == BATTERY_FIELD_CHARGE_PERCENT || fieldId == BATTERY_FIELD_REMAINING_CAPACITY || fieldId == BATTERY_FIELD_HEALTH || fieldId == BATTERY_FIELD_VOLTAGE || fieldId == BATTERY_FIELD_POWER || fieldId == BATTERY_FIELD_CURRENT || fieldId == BATTERY_FIELD_ESTIMATED_TIME;
-    }
-
     int CardColumns(int count, int width)
     {
         int columns;
@@ -121,7 +114,7 @@ struct SensorsPage : Page, ITreeListOwner
 
     int SummaryPanelHeight(int width)
     {
-        return CardSectionHeight(powerCards.n, width) + CardSectionHeight(electricalCards.n, width);
+        return CardSectionHeight(electricalCards.n, width);
     }
 
     void Layout()
@@ -190,12 +183,10 @@ struct SensorsPage : Page, ITreeListOwner
     void PaintSummaryPanel(HDC dc, const RECT& paintRect)
     {
         RECT client;
-        int top = 0;
 
         FillRect32(dc, paintRect, g_t.listBg);
         GetClientRect(hwnd, &client);
-        top = PaintCardSection(dc, powerCards, L"Power & battery", top, client.right - client.left);
-        PaintCardSection(dc, electricalCards, L"Electrical telemetry", top, client.right - client.left);
+        PaintCardSection(dc, electricalCards, L"Electrical telemetry", 0, client.right - client.left);
     }
 
     void Rebuild()
@@ -204,16 +195,9 @@ struct SensorsPage : Page, ITreeListOwner
         rows.Clear();
         list.Clear();
         electricalCards.Clear();
-        powerCards.Clear();
-        BOOL haveBattery = FALSE;
 
         for (int i = 0; i < telemetry.n; i++)
-            if (telemetry[i].sourceKind == TEL_SOURCE_BATTERY)
-                haveBattery = TRUE;
-        for (int i = 0; i < telemetry.n; i++)
         {
-            if (telemetry[i].sourceKind == TEL_SOURCE_BATTERY && IsBatteryCardField(telemetry[i].fieldId) && powerCards.n < POWER_CARD_MAX) powerCards.Push(&telemetry[i]);
-            else if (!haveBattery && telemetry[i].sourceKind == TEL_SOURCE_SYSTEM_POWER && powerCards.n < POWER_CARD_MAX) powerCards.Push(&telemetry[i]);
             if (telemetry[i].sourceKind != TEL_SOURCE_BATTERY && (telemetry[i].kind == TEL_VOLTAGE || telemetry[i].kind == TEL_CURRENT || telemetry[i].kind == TEL_POWER || telemetry[i].kind == TEL_ELECTRICAL_CUSTOM) && electricalCards.n < ELECTRICAL_CARD_MAX) electricalCards.Push(&telemetry[i]);
             if (MatchesSearch(telemetry[i]))
                 list.Push(&telemetry[i]);
