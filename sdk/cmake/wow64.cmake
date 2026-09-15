@@ -135,6 +135,7 @@ endforeach()
 
 set(WOW64_I386_ALIAS_FILES)
 set(WOW64_I386_ALIAS_SOURCES)
+set(WOW64_I386_ARCH_COMMAND_FILES)
 foreach(_alias IN LISTS WOW64_I386_ALIASES)
     if(NOT _alias MATCHES "^([^=]+)=(.+)$")
         message(FATAL_ERROR "Invalid WoW64 alias '${_alias}'; expected target=filename")
@@ -147,6 +148,10 @@ foreach(_alias IN LISTS WOW64_I386_ALIASES)
     _wow64_get_target_file("${_alias_target}" _alias_source)
     list(APPEND WOW64_I386_ALIAS_SOURCES "${_alias_source}")
     list(APPEND WOW64_I386_ALIAS_FILES "${REACTOS_BINARY_DIR}/CMakeFiles/wow64-i386-aliases/${_alias_name}")
+    if(_alias_target IN_LIST WOW64_I386_ARCH_COMMAND_TARGETS)
+        list(APPEND WOW64_I386_ARCH_COMMAND_FILES
+            "${REACTOS_BINARY_DIR}/CMakeFiles/wow64-i386-aliases/${_alias_name}")
+    endif()
 endforeach()
 
 get_filename_component(_wow64_toolchain "${CMAKE_TOOLCHAIN_FILE}" ABSOLUTE BASE_DIR "${REACTOS_SOURCE_DIR}")
@@ -259,6 +264,9 @@ if(WOW64_I386_ALIAS_FILES)
     endforeach()
     add_custom_target(wow64_i386_aliases DEPENDS ${WOW64_I386_ALIAS_FILES})
     add_cd_file(TARGET wow64_i386_aliases FILE ${WOW64_I386_ALIAS_FILES} DESTINATION reactos/SysWOW64 FOR all)
+    # Native cmd.exe searches System32, not SysWOW64.  The qualified names
+    # make it safe to expose these genuine i386 images on the native PATH.
+    add_cd_file(TARGET wow64_i386_aliases FILE ${WOW64_I386_ARCH_COMMAND_FILES} DESTINATION reactos/system32 FOR all)
 endif()
 
 message(STATUS "WoW64: double-building ${_wow64_i386_target_count} i386 targets into SysWOW64")

@@ -426,6 +426,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
 
     if(ARCH STREQUAL "arm64" AND ENABLE_FEX_ARM64EC AND FEX_ARM64EC_AVAILABLE AND NOT ARM64EC_RUNTIME)
         include(sdk/cmake/arm64ec.cmake)
+        include(sdk/cmake/fex_amd64.cmake)
     endif()
 
     # PreLoad.cmake runs apply.cmake only as an initial-cache script, so the
