@@ -51,6 +51,26 @@ typedef struct _RUNNER_OUTPUT_SCAN
     ULONG SeenMask;
 } RUNNER_OUTPUT_SCAN, *PRUNNER_OUTPUT_SCAN;
 
+static PCSTR
+GetBenchmarkExecutableName(VOID)
+{
+    CHAR ModulePath[MAX_PATH];
+    PCSTR BaseName;
+    DWORD Length;
+
+    Length = GetModuleFileNameA(NULL, ModulePath, ARRAYSIZE(ModulePath));
+    if (Length == 0 || Length >= ARRAYSIZE(ModulePath))
+        return "glmark2.exe";
+
+    BaseName = strrchr(ModulePath, '\\');
+    BaseName = BaseName ? BaseName + 1 : ModulePath;
+    if (_strnicmp(BaseName, "i386_", sizeof("i386_") - 1) == 0)
+        return "i386_glmark2.exe";
+    if (_strnicmp(BaseName, "amd64_", sizeof("amd64_") - 1) == 0)
+        return "amd64_glmark2.exe";
+    return "glmark2.exe";
+}
+
 static VOID
 RunnerPrint(
     _In_z_ _Printf_format_string_ PCSTR Format,
@@ -308,8 +328,9 @@ main(int argc, char **argv)
 
     if (_snprintf(ApplicationPath,
                   sizeof(ApplicationPath),
-                  "%s\\glmark2.exe",
-                  SystemDirectory) < 0 ||
+                  "%s\\%s",
+                  SystemDirectory,
+                  GetBenchmarkExecutableName()) < 0 ||
         _snprintf(DataPath,
                   sizeof(DataPath),
                   "%s\\glmark2",

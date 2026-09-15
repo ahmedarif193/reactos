@@ -37,6 +37,26 @@ typedef struct _WGLGEARS_OUTPUT_SCAN
     double TotalFps;
 } WGLGEARS_OUTPUT_SCAN, *PWGLGEARS_OUTPUT_SCAN;
 
+static PCSTR
+GetGearsExecutableName(VOID)
+{
+    CHAR ModulePath[MAX_PATH];
+    PCSTR BaseName;
+    DWORD Length;
+
+    Length = GetModuleFileNameA(NULL, ModulePath, ARRAYSIZE(ModulePath));
+    if (Length == 0 || Length >= ARRAYSIZE(ModulePath))
+        return "glgears.exe";
+
+    BaseName = strrchr(ModulePath, '\\');
+    BaseName = BaseName ? BaseName + 1 : ModulePath;
+    if (_strnicmp(BaseName, "i386_", sizeof("i386_") - 1) == 0)
+        return "i386_glgears.exe";
+    if (_strnicmp(BaseName, "amd64_", sizeof("amd64_") - 1) == 0)
+        return "amd64_glgears.exe";
+    return "glgears.exe";
+}
+
 static VOID
 RunnerPrint(
     _In_z_ _Printf_format_string_ PCSTR Format,
@@ -221,8 +241,9 @@ main(int argc, char **argv)
 
     if (_snprintf(ApplicationPath,
                   sizeof(ApplicationPath),
-                  "%s\\glgears.exe",
-                  SystemDirectory) < 0 ||
+                  "%s\\%s",
+                  SystemDirectory,
+                  GetGearsExecutableName()) < 0 ||
         _snprintf(CommandLine,
                   sizeof(CommandLine),
                   "\"%s\" -info%s",
