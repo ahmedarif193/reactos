@@ -134,12 +134,9 @@ private:
 /*  Theme                                                              */
 /* ------------------------------------------------------------------ */
 
-enum ThemeMode { TM_SYSTEM = 0, TM_LIGHT = 1, TM_DARK = 2, TM_TRANSPARENT = 3 };
-
 struct Theme
 {
     BOOL     dark;
-    BOOL     transparent;
 
     COLORREF winBg;         /* window / mica base                     */
     COLORREF captionText;
@@ -184,7 +181,6 @@ extern Theme g_t;
 
 void Theme_Apply(BOOL dark, int dpi);
 void Theme_Free(void);
-BOOL Theme_SystemPrefersDark(void);
 
 /* graph indices */
 #define GR_CPU  0
@@ -215,7 +211,6 @@ enum UpdateSpeed { SPD_HIGH = 0, SPD_NORMAL = 1, SPD_LOW = 2, SPD_PAUSED = 3 };
 
 struct Settings
 {
-    DWORD theme;         /* ThemeMode              */
     DWORD startPage;     /* PageId                 */
     DWORD speed;         /* UpdateSpeed            */
     BOOL  onTop;
@@ -909,7 +904,6 @@ int BtnMeasure(const UiBtn& btn);    /* preferred width */
 
 /* toggle switch / radio painters for settings page */
 void DrawToggle(HDC dc, const RECT& r, BOOL on, BOOL hot, BOOL enabled);
-void DrawRadio(HDC dc, const RECT& r, BOOL on, BOOL hot);
 
 /* search box (child window hosting an EDIT) */
 #define SB_CLASS L"TM11Search"

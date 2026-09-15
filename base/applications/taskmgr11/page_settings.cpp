@@ -9,7 +9,7 @@
 
 #define PGO_CLASS L"TM11PageSettings"
 
-enum RowKind { RW_HEADER, RW_DROPDOWN, RW_TOGGLE, RW_RADIO };
+enum RowKind { RW_HEADER, RW_DROPDOWN, RW_TOGGLE };
 
 struct SetRow
 {
@@ -26,7 +26,6 @@ enum
     SID_HDR_SPEED, SID_SPEED,
     SID_HDR_WINDOW, SID_ONTOP, SID_MINONUSE, SID_HIDEMIN,
     SID_HDR_OTHER, SID_FULLACCT,
-    SID_HDR_THEME, SID_TH_SYSTEM, SID_TH_LIGHT, SID_TH_DARK, SID_TH_TRANSPARENT,
 };
 
 static SetRow s_rows[] =
@@ -41,11 +40,6 @@ static SetRow s_rows[] =
     { RW_TOGGLE,   L"Hide when minimized", SID_HIDEMIN },
     { RW_HEADER,   L"Other options", SID_HDR_OTHER },
     { RW_TOGGLE,   L"Show full account name", SID_FULLACCT },
-    { RW_HEADER,   L"App theme", SID_HDR_THEME },
-    { RW_RADIO,    L"Use system setting", SID_TH_SYSTEM },
-    { RW_RADIO,    L"Light", SID_TH_LIGHT },
-    { RW_RADIO,    L"Dark", SID_TH_DARK },
-    { RW_RADIO,    L"Transparent", SID_TH_TRANSPARENT },
 };
 
 static const WCHAR* s_speedNames[] = { L"High", L"Normal", L"Low", L"Paused" };
@@ -68,10 +62,6 @@ struct SettingsPage : Page
         case SID_MINONUSE: return g_app.st.minOnUse;
         case SID_HIDEMIN:  return g_app.st.hideWhenMin;
         case SID_FULLACCT: return g_app.st.fullAcctName;
-        case SID_TH_SYSTEM: return g_app.st.theme == TM_SYSTEM;
-        case SID_TH_LIGHT:  return g_app.st.theme == TM_LIGHT;
-        case SID_TH_DARK:   return g_app.st.theme == TM_DARK;
-        case SID_TH_TRANSPARENT: return g_app.st.theme == TM_TRANSPARENT;
         }
         return FALSE;
     }
@@ -119,11 +109,6 @@ struct SettingsPage : Page
                 row.rCtl.left = row.r.right - S(58);
                 row.rCtl.right = row.r.right - S(14);
             }
-            else if (row.kind == RW_RADIO)
-            {
-                row.rCtl.left = row.r.left + S(14);
-                row.rCtl.right = row.r.left + S(38);
-            }
             y += h;
         }
         contentH = y + scrollY + S(20) - rc.top;
@@ -154,11 +139,6 @@ struct SettingsPage : Page
                           (hotRow == i) ? g_t.inputBorder : g_t.cardBorder, S(6));
 
             RECT lr = { row.r.left + S(16), row.r.top, row.rCtl.left - S(10), row.r.bottom };
-            if (row.kind == RW_RADIO)
-            {
-                lr.left = row.r.left + S(46);
-                lr.right = row.r.right - S(14);
-            }
             DrawTextClip(dc, row.label, lr, g_t.fBody, g_t.textMain,
                          DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
 
@@ -195,10 +175,6 @@ struct SettingsPage : Page
                             row.r.bottom };
                 DrawTextClip(dc, on ? L"On" : L"Off", sr, g_t.fBody, g_t.textSec,
                              DT_RIGHT | DT_SINGLELINE | DT_VCENTER);
-            }
-            else if (row.kind == RW_RADIO)
-            {
-                DrawRadio(dc, row.rCtl, RowValue(row), hotRow == i);
             }
         }
     }
@@ -276,19 +252,6 @@ struct SettingsPage : Page
             }
             ApplyChanged();
             break;
-        case RW_RADIO:
-        {
-            DWORD want = (row.id == SID_TH_LIGHT) ? TM_LIGHT :
-                         (row.id == SID_TH_DARK) ? TM_DARK :
-                         (row.id == SID_TH_TRANSPARENT) ? TM_TRANSPARENT : TM_SYSTEM;
-            if (g_app.st.theme != want)
-            {
-                g_app.st.theme = want;
-                Settings_Save();
-                App_ApplyTheme();
-            }
-            break;
-        }
         }
         InvalidateRect(hwnd, NULL, FALSE);
     }

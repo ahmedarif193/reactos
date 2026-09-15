@@ -4,20 +4,24 @@
 
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
-IDD_SETTINGS DIALOGEX 0, 0, 282, 218
+IDD_SETTINGS DIALOGEX 0, 0, 282, 284
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "DWM Settings"
 FONT 9, "MS Shell Dlg"
 BEGIN
     LTEXT "Customize desktop window effects. Each change is saved immediately.", -1, 12, 12, 258, 26
-    GROUPBOX "GPU window effects", -1, 12, 42, 258, 110
+    GROUPBOX "GPU window effects", IDC_EFFECTS_GROUP, 12, 42, 258, 110
     AUTOCHECKBOX "&Window animations", IDC_ANIMATIONS, 24, 58, 230, 12
     AUTOCHECKBOX "Window &shadows", IDC_SHADOWS, 24, 76, 230, 12
-    AUTOCHECKBOX "&Rounded window corners", IDC_CORNERS, 24, 94, 230, 12
-    AUTOCHECKBOX "&Blur behind windows", IDC_BLUR, 24, 112, 230, 12
-    AUTOCHECKBOX "&Translucent window backgrounds", IDC_ACRYLIC, 24, 130, 230, 12
-    LTEXT "", IDC_STATUS, 12, 162, 258, 28
-    DEFPUSHBUTTON "Close", IDCANCEL, 210, 194, 60, 14
+    AUTOCHECKBOX "Enable &glass look", IDC_ACRYLIC, 24, 94, 230, 12
+    AUTOCHECKBOX "Blur window &titles", IDC_BLUR, 36, 112, 218, 12
+    AUTOCHECKBOX "Blur window co&ntent", IDC_CONTENT_BLUR, 36, 130, 218, 12
+    GROUPBOX "Color scheme", IDC_SCHEME_GROUP, 12, 158, 258, 60
+    AUTORADIOBUTTON "&Light", IDC_SCHEME_LIGHT, 24, 176, 100, 12, WS_GROUP
+    AUTORADIOBUTTON "&Dark", IDC_SCHEME_DARK, 140, 176, 100, 12
+    LTEXT "Select the Windows 8 visual style first to use the glass look and color scheme.", IDC_THEME_NOTE, 24, 194, 238, 18
+    LTEXT "", IDC_STATUS, 12, 228, 258, 28
+    DEFPUSHBUTTON "Close", IDCANCEL, 210, 262, 60, 14
 END
 
 STRINGTABLE

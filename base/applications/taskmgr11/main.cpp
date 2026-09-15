@@ -7,6 +7,7 @@
 
 #include "app.h"
 #include <reactos/dwmframe.h>
+#include <reactos/dwmsettings.h>
 
 #define FRAME_CLASS L"TaskManager11Frame"
 #define TRAY_ID 1
@@ -145,7 +146,6 @@ void Settings_Load(void)
 {
     Settings& st = g_app.st;
     ZeroMemory(&st, sizeof(st));
-    st.theme = TM_TRANSPARENT;
     st.startPage = PG_PROCESSES;
     st.speed = SPD_NORMAL;
     st.navExpanded = FALSE;
@@ -154,7 +154,6 @@ void Settings_Load(void)
     if (RegOpenKeyExW(HKEY_CURRENT_USER, SETTINGS_KEY, 0, KEY_QUERY_VALUE, &hk)
         == ERROR_SUCCESS)
     {
-        st.theme = RegReadDw(hk, L"Theme", st.theme);
         st.startPage = RegReadDw(hk, L"StartPage", st.startPage);
         st.speed = RegReadDw(hk, L"UpdateSpeed", st.speed);
         st.onTop = RegReadDw(hk, L"AlwaysOnTop", 0);
@@ -172,7 +171,6 @@ void Settings_Load(void)
             st.wp.length = 0;
         RegCloseKey(hk);
     }
-    if (st.theme > TM_TRANSPARENT) st.theme = TM_TRANSPARENT;
     if (st.startPage >= PG_SETTINGS) st.startPage = PG_PROCESSES;
     if (st.speed > SPD_PAUSED) st.speed = SPD_NORMAL;
 }
@@ -186,7 +184,6 @@ void Settings_Save(void)
         return;
 #define WR(name, val) { DWORD v = (DWORD)(val); \
     RegSetValueExW(hk, name, 0, REG_DWORD, (LPBYTE)&v, sizeof(v)); }
-    WR(L"Theme", st.theme);
     WR(L"StartPage", st.startPage);
     WR(L"UpdateSpeed", st.speed);
     WR(L"AlwaysOnTop", st.onTop);
@@ -457,8 +454,14 @@ void Frame_UpdateCommandStates(void)
 
 static void ApplyBackdropRegion(HWND hwnd)
 {
-    SetPropW(hwnd, DWM_PROP_BACKDROP_REGION,
-             (HANDLE)(ULONG_PTR)(g_t.transparent ? DWM_BACKDROP_REGION_WINDOW : DWM_BACKDROP_REGION_NONCLIENT));
+    COLORREF fill;
+    INT opacity;
+
+    if (DwmSettingsLoadSchemeMaterial(g_t.dark ? DWM_COLOR_SCHEME_DARK : DWM_COLOR_SCHEME_LIGHT,
+                                      &fill, &opacity))
+        DwmSettingsSetContentBackdrop(hwnd, fill, opacity);
+    else
+        DwmSettingsClearContentBackdrop(hwnd);
 }
 
 static void LayoutChildren(HWND hwnd)
@@ -589,16 +592,8 @@ void App_UpdateNow(void)
 
 void App_ApplyTheme(void)
 {
-    BOOL dark;
-    switch (g_app.st.theme)
-    {
-    case TM_LIGHT: dark = FALSE; break;
-    case TM_DARK:  dark = TRUE; break;
-    case TM_TRANSPARENT: dark = TRUE; break;
-    default:       dark = Theme_SystemPrefersDark(); break;
-    }
+    BOOL dark = DwmSettingsReadColorScheme() == DWM_COLOR_SCHEME_DARK;
     Theme_Apply(dark, g_app.dpi);
-    g_t.transparent = (g_app.st.theme == TM_TRANSPARENT);
 
     if (s_search)
         SendMessageW(s_search, WM_APP_THEMECHG, 0, 0);
@@ -627,7 +622,8 @@ static void PaintFrame(HWND hwnd, HDC dc, const RECT& rcPaint)
 {
     RECT rc;
     GetClientRect(hwnd, &rc);
-    ULONG_PTR key = g_t.transparent ? (ULONG_PTR)GetPropW(hwnd, DWM_PROP_BACKDROP_COLOR) : 0;
+    ULONG_PTR key = GetPropW(hwnd, DWM_PROP_CONTENT_BACKDROP) ?
+                    (ULONG_PTR)GetPropW(hwnd, DWM_PROP_BACKDROP_COLOR) : 0;
     FillRect32(dc, rcPaint, key ? (COLORREF)(key - 1) : g_t.winBg);
 
     /* ---- nav rail ---- */
@@ -920,8 +916,7 @@ static LRESULT CALLBACK FrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_SETTINGCHANGE:
-        if (g_app.st.theme == TM_SYSTEM)
-            App_ApplyTheme();
+        App_ApplyTheme();
         return 0;
 
     case WM_CLOSE:

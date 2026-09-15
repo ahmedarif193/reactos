@@ -13,18 +13,38 @@ Every checkbox saves on `BN_CLICKED`. The panel uses native Win32 controls.
 | --- | --- | --- |
 | Window animations | `SPI_SETANIMATION`, `HKCU\Control Panel\Desktop\WindowMetrics\MinAnimate`, `REG_SZ` `0` / `1` | win32k starts or cancels animation geometry; DWM renders the transformed GPU textures |
 | Window shadows | `HKCU\Software\ReactOS\DWM\EnableShadows`, `REG_DWORD` `0` / `1` | Enables the existing GPU window shadow |
-| Rounded window corners | Same key, `EnableRoundedCorners`, `REG_DWORD` | Enables the existing GPU corner mask |
-| Blur behind windows | Same key, `EnableBlur`, `REG_DWORD` | Controls application blur and glass backdrop filtering, including Taskmgr11 and Explorer; disabling it keeps sharp, tinted transparency |
-| Translucent window backgrounds | Same key, `EnableAcrylic`, `REG_DWORD` | Enables the existing transient backdrop material; its filtering follows `EnableBlur` |
+| Enable glass look | Same key, `EnableAcrylic`, `REG_DWORD` | Enables the transient glass materials of the Windows 8 visual style; when off, every material and blur is opaque/classic |
+| Blur window titles | Same key, `EnableBlur`, `REG_DWORD` | Available with the glass look; blurs title bars and other non-client glass, the taskbar, menus, flyouts, and application blur-behind; off keeps them sharp, tinted glass |
+| Blur window content | Same key, `EnableContentBlur`, `REG_DWORD` | Available with the glass look, independent of title blur; when off, participating application content is opaque (classic) while its frame keeps the glass look |
+| Color scheme | Same key, `ColorScheme`, `REG_DWORD` `0` Light / `1` Dark | Selects the Light or Dark palette of participating applications; absent or invalid values select Dark |
 
-The four ReactOS preferences default to enabled when absent. They control GPU
+The four ReactOS effect preferences default to enabled when absent. They control GPU
 composition; they do not enable software effects. Window alpha and color-key
-semantics remain application-owned. Blur and translucent backgrounds have
-independent switches: disabling blur preserves the material's tint and opacity
-while sampling the sharp backdrop entirely on the GPU; disabling translucent
-backgrounds makes the material opaque. Both changes apply to open windows.
-Mica and Mica Alt are not exposed because
-their wallpaper material is not implemented by the active GPU renderer.
+semantics remain application-owned. All changes apply to open windows. Mica and
+Mica Alt are not exposed because their wallpaper material is not implemented by
+the active GPU renderer. There is no rounded-corner switch; corner radii remain
+per-window.
+
+The glass look, blur, and color scheme require a visual style that provides
+composited `ContentLight::Liquid` and `ContentDark::Liquid` materials. The
+Windows 8 visual style defines them with the Windows 11 palette bases (Light
+243, 243, 243; Dark 32, 32, 32). With another visual style the panel disables
+these controls and asks to select the Windows 8 visual style first.
+
+Explorer cabinet views, Task Manager 11, and this panel opt into this common
+policy; Task Manager 11 has no separate theme choice. They paint their background
+with the selected scheme material and mark it as application content. DWM keeps
+that content blurred glass only while the glass look and content blur are
+enabled; otherwise it limits the material to the non-client frame, so content is
+opaque. This is an interim glass look, not the Windows DWM material pipeline.
+Explorer's desktop, high-contrast, common-dialog, and custom-bitmap views do not
+opt in.
+
+The console also opts into content glass, but intentionally derives its material
+key from the active console background palette instead of `ColorScheme`. This
+keeps command-line foreground/background color contracts intact. Start, menu,
+taskbar, and flyout materials are not marked as application content and are
+therefore unaffected by the content-only switch.
 
 The Windows-compatible animation API now loads and saves `MinAnimate` in
 win32k. Disabling it also cancels an animation already in progress. New and
@@ -34,7 +54,10 @@ After a successful save the panel sends `WM_SETTINGCHANGE` directly to the
 message-only `ReactOS.Dwm.Settings` window on the compositor thread. No registry
 handle is held during this call. That thread reloads and validates the values,
 marks the entire scene dirty, and replies with the active settings and GPU
-availability. The next frame rebuilds cached backdrops. The reply confirms
+availability. A color scheme change is also broadcast synchronously as
+`WM_SETTINGCHANGE` with `lParam` `Software\ReactOS\DWM`, so participating
+applications repaint with the new material; win32k refuses posted
+`WM_SETTINGCHANGE` messages. The next frame rebuilds cached backdrops. The reply confirms
 reload, not completion of GPU presentation. If DWM is absent, unresponsive, or
 using a renderer without GPU composition, the panel reports that live effects
 were not confirmed and that DWM may need to be restarted. The scalar reply is
@@ -48,7 +71,7 @@ The native API boundaries were checked against Microsoft documentation:
   this panel does not treat it as a global DWM shadow policy.
 - [Rounded corners](https://learn.microsoft.com/en-us/windows/apps/desktop/modernize/ui/apply-rounded-corners)
   and [DWM window attributes](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute)
-  define per-window preferences. The global shadow, corner, blur, and material
+  define per-window preferences. The global shadow, blur, and material
   switches above are explicitly ReactOS preferences.
 - [DWM policies](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-admx-dwm)
   documents `DisallowAnimations` as a policy that requires logoff on Windows.

@@ -8,16 +8,17 @@
 #pragma once
 
 #include <windows.h>
+#include <reactos/dwmsettings.h>
 
-#define DWM_SETTINGS_KEY L"Software\\ReactOS\\DWM"
+#define DWM_SETTINGS_KEY REACTOS_DWM_SETTINGS_KEY
 #define DWM_SETTINGS_CLASS L"ReactOS.Dwm.Settings"
 #define DWM_SETTINGS_QUERY (WM_USER + 1)
 
 #define DWM_EFFECT_ANIMATIONS 0x01u
 #define DWM_EFFECT_SHADOWS    0x02u
-#define DWM_EFFECT_CORNERS    0x04u
-#define DWM_EFFECT_BLUR       0x08u
-#define DWM_EFFECT_ACRYLIC    0x10u
+#define DWM_EFFECT_BLUR       0x04u
+#define DWM_EFFECT_ACRYLIC    0x08u
+#define DWM_EFFECT_CONTENT_BLUR 0x10u
 #define DWM_EFFECT_ALL        0x1fu
 
 /* Scalar replies from our message-only window, not a Windows DWM ABI.
@@ -37,5 +38,6 @@ struct _DWM_WIN;
 
 LONG DwmSettingsRead(DWORD *Effects);
 LONG DwmSettingsWrite(DWORD Effect, BOOL Enabled);
+LONG DwmSettingsWriteColorScheme(DWORD Scheme);
 HWND DwmSettingsCreateWindow(HINSTANCE Instance, DWM_SETTINGS *Settings);
 void DwmSettingsApplyWindow(const DWM_SETTINGS *Settings, struct _DWM_WIN *Window);
