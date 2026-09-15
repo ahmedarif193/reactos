@@ -246,6 +246,13 @@ vc4kmt_wait_gpu(
     _In_ VC4KMT_ENGINE Engine,
     _In_ const VC4KMT_FENCE *Fence);
 
+NTSTATUS
+vc4kmt_wait_gpu_many(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ VC4KMT_ENGINE Engine,
+    _In_reads_opt_(FenceCount) const VC4KMT_FENCE *Fences,
+    _In_ UINT FenceCount);
+
 VOID
 vc4kmt_fence_destroy(
     _In_ VC4KMT_DEVICE *Device,

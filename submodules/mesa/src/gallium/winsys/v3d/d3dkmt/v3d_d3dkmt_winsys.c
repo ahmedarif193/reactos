@@ -168,8 +168,9 @@ vc4kmt_status vc4kmt_wait(VC4KMT_DEVICE *device,
 vc4kmt_status vc4kmt_wait_async(VC4KMT_DEVICE *device,
                                 const VC4KMT_FENCE *fence,
                                 void *completion_event);
-vc4kmt_status vc4kmt_wait_gpu(VC4KMT_DEVICE *device, uint32_t engine,
-                              const VC4KMT_FENCE *fence);
+vc4kmt_status vc4kmt_wait_gpu_many(VC4KMT_DEVICE *device, uint32_t engine,
+                                   const VC4KMT_FENCE *fences,
+                                   uint32_t fence_count);
 void vc4kmt_fence_destroy(VC4KMT_DEVICE *device, VC4KMT_FENCE *fence);
 
 _Static_assert(offsetof(VC4KMT_BO, cpu_va) == 8,
@@ -193,6 +194,7 @@ _Static_assert(sizeof(VC4KMT_CL_SUBMIT) == 7 * sizeof(uint32_t),
 #define VC4KMT_ENGINE_3D                 0u
 #define VC4KMT_ENGINE_TFU                1u
 #define VC4KMT_ENGINE_CSD                2u
+#define VC4KMT_ENGINE_COUNT              3u
 #define VC4KMT_STATUS_IO_TIMEOUT         ((vc4kmt_status)0xc00000b5u)
 
 #define DWM_DX_SURFACE_INFO_MAGIC         0x53585744u
@@ -235,7 +237,6 @@ struct v3d_d3dkmt_fence_ref {
    VC4KMT_FENCE kmt;
    uint32_t references;
    uint32_t engine;
-   uint64_t visit_generation;
    bool signaled;
 };
 
@@ -251,7 +252,6 @@ struct v3d_d3dkmt_device {
    uint32_t submit_resource_capacity;
    uint32_t *submit_resource_hash;
    uint32_t submit_resource_hash_capacity;
-   uint64_t fence_visit_generation;
 };
 
 static once_flag registry_once = ONCE_FLAG_INIT;
@@ -524,7 +524,6 @@ v3d_d3dkmt_fence_create(const VC4KMT_FENCE *fence, uint32_t engine)
    reference->kmt = *fence;
    reference->references = 1;
    reference->engine = engine;
-   reference->visit_generation = 0;
    reference->signaled = false;
    return reference;
 }
@@ -595,37 +594,55 @@ v3d_d3dkmt_wait_syncobj_locked(struct v3d_d3dkmt_device *device,
 }
 
 static int
-v3d_d3dkmt_wait_syncobj_gpu_locked(struct v3d_d3dkmt_device *device,
-                                   uint32_t handle, uint32_t engine)
+v3d_d3dkmt_add_gpu_dependency(struct v3d_d3dkmt_fence_ref *fence,
+                              uint32_t engine,
+                              VC4KMT_FENCE dependencies[VC4KMT_ENGINE_COUNT],
+                              bool used[VC4KMT_ENGINE_COUNT])
 {
-   struct v3d_d3dkmt_syncobj *syncobj =
-      v3d_d3dkmt_syncobj_lookup_locked(device, handle);
-
-   if (!syncobj) {
+   if (!fence || fence->signaled || fence->engine == engine)
+      return 0;
+   if (fence->engine >= VC4KMT_ENGINE_COUNT) {
       errno = EINVAL;
       return -EINVAL;
    }
-   if (syncobj->signaled)
-      return 0;
-   if (!syncobj->fence) {
-      errno = ETIME;
-      return -ETIME;
-   }
-   if (syncobj->fence->engine == engine)
-      return 0;
-   if (vc4kmt_wait_gpu(device->kmt, engine, &syncobj->fence->kmt) < 0) {
-      errno = EIO;
-      return -EIO;
-   }
+   if (!used[fence->engine] ||
+       dependencies[fence->engine].value < fence->kmt.value)
+      dependencies[fence->engine] = fence->kmt;
+   used[fence->engine] = true;
    return 0;
 }
 
 static int
-v3d_d3dkmt_wait_resource_fences_gpu_locked(
-   struct v3d_d3dkmt_device *device, const uint32_t *bo_handles,
-   uint32_t bo_handle_count, uint32_t engine)
+v3d_d3dkmt_wait_submit_dependencies_locked(
+   struct v3d_d3dkmt_device *device, uint32_t engine,
+   const uint32_t *sync_handles, uint32_t sync_handle_count,
+   const uint32_t *bo_handles, uint32_t bo_handle_count)
 {
-   uint64_t visit_generation = ++device->fence_visit_generation;
+   VC4KMT_FENCE dependencies[VC4KMT_ENGINE_COUNT];
+   VC4KMT_FENCE pending[VC4KMT_ENGINE_COUNT];
+   bool used[VC4KMT_ENGINE_COUNT] = { false };
+   uint32_t pending_count = 0;
+
+   for (uint32_t i = 0; i < sync_handle_count; i++) {
+      struct v3d_d3dkmt_syncobj *syncobj;
+
+      if (!sync_handles[i])
+         continue;
+      syncobj = v3d_d3dkmt_syncobj_lookup_locked(device, sync_handles[i]);
+      if (!syncobj) {
+         errno = EINVAL;
+         return -EINVAL;
+      }
+      if (syncobj->signaled)
+         continue;
+      if (!syncobj->fence) {
+         errno = ETIME;
+         return -ETIME;
+      }
+      if (v3d_d3dkmt_add_gpu_dependency(syncobj->fence, engine,
+                                        dependencies, used))
+         return -1;
+   }
 
    for (uint32_t i = 0; i < bo_handle_count; i++) {
       struct v3d_d3dkmt_bo *bo =
@@ -633,18 +650,24 @@ v3d_d3dkmt_wait_resource_fences_gpu_locked(
             device, v3d_d3dkmt_submit_handle(bo_handles[i]));
       struct v3d_d3dkmt_fence_ref *fence;
 
-      if (!bo || !(fence = bo->last_fence) || fence->signaled ||
-          fence->engine == engine)
+      if (!bo || !(fence = bo->last_fence))
          continue;
-      if (fence->visit_generation == visit_generation)
-         continue;
-      fence->visit_generation = visit_generation;
-      if (vc4kmt_wait_gpu(device->kmt, engine, &fence->kmt) < 0) {
-         errno = EIO;
-         return -EIO;
-      }
+      if (v3d_d3dkmt_add_gpu_dependency(fence, engine, dependencies, used))
+         return -1;
    }
 
+   for (uint32_t source_engine = 0;
+        source_engine < VC4KMT_ENGINE_COUNT; source_engine++) {
+      if (used[source_engine])
+         pending[pending_count++] = dependencies[source_engine];
+   }
+   if (!pending_count)
+      return 0;
+
+   if (vc4kmt_wait_gpu_many(device->kmt, engine, pending, pending_count) < 0) {
+      errno = EIO;
+      return -EIO;
+   }
    return 0;
 }
 
@@ -981,8 +1004,8 @@ v3d_d3dkmt_present_linear(int fd, uintptr_t window, uint32_t source_handle,
       goto done;
    }
 
-   if (v3d_d3dkmt_wait_resource_fences_gpu_locked(
-          device, &source_handle, 1, VC4KMT_ENGINE_TFU))
+   if (v3d_d3dkmt_wait_submit_dependencies_locked(
+          device, VC4KMT_ENGINE_TFU, NULL, 0, &source_handle, 1))
       goto done;
 
    if (vc4kmt_primary_gpuva(device->kmt, screen_width, screen_height,
@@ -1324,17 +1347,12 @@ v3d_d3dkmt_submit_cl_locked(struct v3d_d3dkmt_device *device,
    if (!v3d_d3dkmt_submit_out_sync_valid_locked(device, submit->out_sync))
       return -1;
 
-   if (submit->in_sync_bcl &&
-       v3d_d3dkmt_wait_syncobj_gpu_locked(device, submit->in_sync_bcl,
-                                          VC4KMT_ENGINE_3D))
-      return -1;
-   if (submit->in_sync_rcl &&
-       submit->in_sync_rcl != submit->in_sync_bcl &&
-       v3d_d3dkmt_wait_syncobj_gpu_locked(device, submit->in_sync_rcl,
-                                          VC4KMT_ENGINE_3D))
-      return -1;
-   if (v3d_d3dkmt_wait_resource_fences_gpu_locked(
-          device, bo_handles, submit->bo_handle_count, VC4KMT_ENGINE_3D))
+   const uint32_t sync_handles[] = {
+      submit->in_sync_bcl, submit->in_sync_rcl,
+   };
+   if (v3d_d3dkmt_wait_submit_dependencies_locked(
+          device, VC4KMT_ENGINE_3D, sync_handles, ARRAY_SIZE(sync_handles),
+          bo_handles, submit->bo_handle_count))
       return -1;
 
    if (v3d_d3dkmt_resolve_submit_resources_locked(
@@ -1387,12 +1405,9 @@ v3d_d3dkmt_submit_tfu_locked(struct v3d_d3dkmt_device *device,
    }
    if (!v3d_d3dkmt_submit_out_sync_valid_locked(device, submit->out_sync))
       return -1;
-   if (submit->in_sync &&
-       v3d_d3dkmt_wait_syncobj_gpu_locked(device, submit->in_sync,
-                                          VC4KMT_ENGINE_TFU))
-      return -1;
-   if (v3d_d3dkmt_wait_resource_fences_gpu_locked(
-          device, handles, ARRAY_SIZE(handles), VC4KMT_ENGINE_TFU))
+   if (v3d_d3dkmt_wait_submit_dependencies_locked(
+          device, VC4KMT_ENGINE_TFU, &submit->in_sync, 1,
+          handles, ARRAY_SIZE(handles)))
       return -1;
    if (v3d_d3dkmt_resolve_submit_resources_locked(
           device, handles, ARRAY_SIZE(handles),
@@ -1433,12 +1448,9 @@ v3d_d3dkmt_submit_csd_locked(struct v3d_d3dkmt_device *device,
    if (!v3d_d3dkmt_submit_out_sync_valid_locked(device, submit->out_sync))
       return -1;
    memcpy(kmt_submit.cfg, submit->cfg, sizeof(submit->cfg));
-   if (submit->in_sync &&
-       v3d_d3dkmt_wait_syncobj_gpu_locked(device, submit->in_sync,
-                                          VC4KMT_ENGINE_CSD))
-      return -1;
-   if (v3d_d3dkmt_wait_resource_fences_gpu_locked(
-          device, bo_handles, submit->bo_handle_count, VC4KMT_ENGINE_CSD))
+   if (v3d_d3dkmt_wait_submit_dependencies_locked(
+          device, VC4KMT_ENGINE_CSD, &submit->in_sync, 1,
+          bo_handles, submit->bo_handle_count))
       return -1;
    if (v3d_d3dkmt_resolve_submit_resources_locked(
           device, bo_handles, submit->bo_handle_count,
