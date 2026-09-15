@@ -48,7 +48,9 @@ static FILE* __cdecl common_fsopen(
         return nullptr;
     }
 
-    FILE* return_value = nullptr;
+    // PSEH finally blocks require volatile storage for values modified in the
+    // guarded block and subsequently inspected by the termination handler.
+    FILE* volatile return_value = nullptr;
     __try
     {
         return_value = stdio_traits::open_file(file_name, mode, share_flag, stream.public_stream());

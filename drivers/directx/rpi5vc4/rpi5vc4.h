@@ -404,6 +404,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
     ULONG LastCompletedFence;
     ULONG LastCompletedFencePerNode[RPI5VC4_GPU_NODE_COUNT];
     ULONG LastReportedFencePerNode[RPI5VC4_GPU_NODE_COUNT];
+    BOOLEAN FenceDpcActive;           /* guarded by DmaLock                */
     KDPC FenceDpc;                    /* notifies dxgkrnl of completions   */
     KTIMER V3dPollTimer;              /* drives V3D job completion polling */
     KDPC V3dPollDpc;

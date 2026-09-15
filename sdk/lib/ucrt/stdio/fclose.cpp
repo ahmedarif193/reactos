@@ -65,15 +65,18 @@ static int __cdecl _fclose_internal(FILE* const public_stream, __crt_cached_ptd_
     }
 
     int return_value = 0;
+    // Keep the stream pointer in memory across the PSEH guarded block so the
+    // termination handler does not reconstruct it from clobbered register state.
+    FILE* volatile stream_to_unlock = stream.public_stream();
 
-    _lock_file(stream.public_stream());
+    _lock_file(stream_to_unlock);
     __try
     {
         return_value = _fclose_nolock_internal(stream.public_stream(), ptd);
     }
     __finally
     {
-        _unlock_file(stream.public_stream());
+        _unlock_file(stream_to_unlock);
     }
     __endtry
 
