@@ -11,16 +11,18 @@ the target architecture:
 | Renderer | Backend | Architectures |
 | --- | --- | --- |
 | `vc4` | Raspberry Pi 3 GPU | ARM64 |
-| `softpipe` | CPU rendering | i386, AMD64, ARM64 |
+| `v3d` | Raspberry Pi 4/5 GPU | ARM64 |
+| `llvmpipe` | LLVM-accelerated CPU rendering | AMD64 and ARM64 when `ENABLE_MESA_LLVMPIPE=ON` |
+| `softpipe` | CPU rendering without LLVM | i386; AMD64 and ARM64 when `ENABLE_MESA_LLVMPIPE=OFF` |
 
 Native i386, AMD64 and ARM64 builds using llvm-mingw Clang enable
-`MESA_GALLIUM_FROM_SOURCE` by default. i386 and AMD64 build softpipe;
-ARM64 adds VC4 from the vendored `submodules/mesa` snapshot, including
-generic, Raspberry Pi 3 and Raspberry Pi 5 configurations. Both Pi display
-drivers register `mesa_gallium.dll`; the same DLL is registered as the `MSOGL`
-fallback on displays without a hardware ICD. The image packages one shared
-binary. Hardware is preferred by default;
-`GALLIUM_DRIVER=softpipe` forces software rendering without an LLVM dependency.
+`MESA_GALLIUM_FROM_SOURCE` by default. On ARM64, the normal profile contains
+V3D, VC4, and Softpipe. Enabling `ENABLE_MESA_LLVMPIPE` replaces Softpipe with
+LLVMpipe in that same DLL, producing exactly V3D, VC4, and LLVMpipe. The Pi
+display drivers and the software `MSOGL` fallback all register
+`mesa_gallium.dll`; the image packages one shared binary, not a second
+`mesadrv.dll`. Hardware is tried in V3D-then-VC4 order before the CPU fallback.
+`GALLIUM_DRIVER=llvmpipe` forces LLVMpipe in the optional profile.
 
 The `mesa_gallium` target builds and stages the DLL. Mesa uses Release
 settings even when ReactOS is Debug. ARM64 additionally builds its static
@@ -28,33 +30,33 @@ KMT/zlib dependencies in a nested Release configuration. i386 and AMD64
 do not need those dependencies or the nested support build.
 Native ARM64 and ARM64EC support builds reuse the main build's host tools;
 the parent builds those tools before starting the support configuration.
-The support build retains the separate Pi KMT transports. Softpipe uses the
-software presentation path.
+The support build retains the separate Pi KMT transports. Softpipe and
+LLVMpipe use the software presentation path.
 
-The source build uses native CMake and requires CMake 3.24+, llvm-mingw,
-Ninja, Bison 2.7+, Flex, and Python with Mako, packaging and PyYAML.
+The i386 and AMD64 source builds use native CMake. ARM64 uses Mesa's Meson
+profile so the Windows V3D and D3DKMT path is included; LLVMpipe requires
+Meson 1.12.0 or newer. Host requirements are CMake 3.24+, llvm-mingw, Meson
+for ARM64, Ninja, Bison 2.7+, Flex, and Python with Mako, packaging and PyYAML.
 Nested builds inherit the invoking `ninja -jN` or `cmake --build --parallel N`
 at build time, including ARM64EC and WoW64. `CMAKE_BUILD_PARALLEL_LEVEL` is also
 supported. The old fixed `MESA_BUILD_JOBS` cache setting is removed.
 `MESA_BISON`, `MESA_FLEX`, and `MESA_PYTHON` select the host generator tools.
-Meson is no longer required. Existing Meson build directories can coexist
-with the new `mesa-source/cmake-build` directory; packaging uses the CMake DLL.
+The ARM64 Meson build uses `MESA_MESON_JOBS` (default 8). The native CMake
+output and ARM64 Meson output use separate build directories.
 See [Mesa's CMake notes](../../../submodules/mesa/cmake/README.md) for standalone
 build commands and supported profiles.
 
-The imported Meson configuration selected V3D, but its WGL target did not
-link or expose the V3D renderer. The V3D driver and DRM winsys still require
-Linux headers and are not part of the working Windows WGL dependency graph.
-The native CMake build preserves that behavior; it does not establish Pi 5
-hardware rendering. The Broadcom compiler and packet generators needed by
-VC4 remain included.
+The ARM64 Meson WGL target links both Broadcom drivers and their ReactOS D3DKMT
+winsys code. This establishes the combined build, but does not by itself prove
+VC4 or V3D rendering on Raspberry Pi hardware.
 
 `MESA_GALLIUM_FROM_SOURCE=OFF` disables the shared ICD and selects the
 previous packaged Pi 3 ICD and custom Pi 5 ICD when those boards are enabled.
 The FEX runtime builds a separate ARM64EC copy of the shared ICD. The nested
 KMT support build disables the shared ICD to prevent recursive builds.
-There is no separate softpipe build option. Explicitly enabling
-`ENABLE_MESA_LLVMPIPE` selects that additional ICD as the software fallback.
+There is no separate Softpipe build option. Explicitly enabling
+`ENABLE_MESA_LLVMPIPE` selects LLVMpipe inside the same ICD and also packages
+the separate Lavapipe Vulkan ICD and Khronos loader.
 Existing `RPI3VC4_MESA_FROM_SOURCE` caches seed the renamed
 option on migration. Explicit `RPI3VC4_MESA_VC4_ICD` and
 `RPI5VC4_MESA_V3D_ICD` paths override the shared ICD for the respective board

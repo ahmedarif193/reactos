@@ -190,7 +190,7 @@ option(ENABLE_ALPC
 
 option(ROSSYM_COMPRESSION "Whether to compress the embedded .rossym symbol section." OFF)
 
-option(ENABLE_MESA_LLVMPIPE "Build and package the optional modern Mesa LLVMpipe OpenGL ICD." OFF)
+option(ENABLE_MESA_LLVMPIPE "Add LLVMpipe to mesa_gallium.dll and package the Lavapipe Vulkan ICD and Khronos loader." OFF)
 
 option(ENABLE_EXPERIMENTAL_EARLY_SPLASH
        "Whether Winlogon displays the experimental early PNG background until the user desktop is ready."

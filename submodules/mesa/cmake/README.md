@@ -7,12 +7,12 @@ profile for i386 and AMD64. ARM64 and ARM64EC use the Meson source profile
 until the native CMake profile includes the Windows V3D driver and D3DKMT
 winsys needed by Raspberry Pi 5.
 
-| Architecture | Default ICD | Optional ICD |
+| Architecture | Option disabled | `ENABLE_MESA_LLVMPIPE=ON` |
 | --- | --- | --- |
-| i386 | softpipe | — |
-| AMD64 | softpipe | LLVMpipe with static Windows LLVM 22 |
-| ARM64 | softpipe + VC4 | LLVMpipe with static Windows LLVM 22 |
-| ARM64EC | softpipe + VC4 | — |
+| i386 | Softpipe | unsupported |
+| AMD64 | Softpipe | LLVMpipe in the same ICD |
+| ARM64 | V3D + VC4 + Softpipe | V3D + VC4 + LLVMpipe in the same ICD |
+| ARM64EC | V3D + VC4 + Softpipe | unsupported |
 
 The native CMake ARM64 WGL target does not link or expose V3D. The ReactOS Meson
 profile includes the Windows V3D driver and D3DKMT winsys, and is required for
@@ -36,8 +36,9 @@ ReactOS build. Standalone CMake uses the standard `BISON_EXECUTABLE`,
 older than required; the ReactOS integration also searches Homebrew's Bison.
 
 The native CMake external build directory is `mesa-source/cmake-build` for the
-common i386/AMD64 ICD and `mesa-llvmpipe/cmake-build` for LLVMpipe. The ARM64
-Meson ICD uses `mesa-source/build`.
+i386/AMD64 ICD, including AMD64 LLVMpipe. The ARM64 Meson ICD uses
+`mesa-source/build`. Optional LLVM, Lavapipe, and Vulkan-loader dependencies
+use the separate `mesa-llvmpipe` work directory.
 
 ## Parallel builds
 
@@ -82,9 +83,9 @@ ARM64/ARM64EC additionally require `MESA_REACTOS_SOURCE_DIR` and
 `MESA_REACTOS_BUILD_DIR`, with matching Release `rpi3vc4kmt`, `vc4kmt` and `zlib`
 archives built by ReactOS. The parent build handles these dependencies.
 
-For LLVMpipe, set `MESA_LLVMPIPE=ON`, `MESA_LLVM_ROOT` to the matching Windows
-static LLVM 22 installation, `MESA_WGL_DLL_NAME=mesadrv`, and
-`MESA_ASSERTIONS=OFF`. LLVMpipe does not require KMT/zlib. The native ARM64 and
+For a standalone LLVMpipe build, set `MESA_LLVMPIPE=ON`, `MESA_LLVM_ROOT` to
+the matching Windows static LLVM 22 installation, and choose
+`MESA_WGL_DLL_NAME`. LLVMpipe does not require KMT/zlib. The native ARM64 and
 AMD64 LLVM backends are selected from LLVM's CMake package. The default common
 ICD keeps assertions enabled, including when optimized.
 
