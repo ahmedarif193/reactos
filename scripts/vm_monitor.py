@@ -10,11 +10,12 @@ Override the location with ROS_VM_MONITOR.
 """
 
 import os
+import pwd
 import sys
 
 TARGET = os.environ.get(
     "ROS_VM_MONITOR",
-    os.path.expanduser("~/reactos-scripts/vm_monitor.py"),
+    os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "reactos-scripts", "vm_monitor.py"),
 )
 
 if not os.path.isfile(TARGET):
