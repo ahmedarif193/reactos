@@ -33,20 +33,18 @@ the parent builds those tools before starting the support configuration.
 The support build retains the separate Pi KMT transports. Softpipe and
 LLVMpipe use the software presentation path.
 
-The i386 and AMD64 source builds use native CMake. ARM64 uses Mesa's Meson
-profile so the Windows V3D and D3DKMT path is included; LLVMpipe requires
-Meson 1.12.0 or newer. Host requirements are CMake 3.24+, llvm-mingw, Meson
-for ARM64, Ninja, Bison 2.7+, Flex, and Python with Mako, packaging and PyYAML.
+The i386, AMD64, ARM64, and ARM64EC source builds use the same native CMake
+project. Host requirements are CMake 3.24+, llvm-mingw, Ninja, Bison 2.7+,
+Flex, and Python with Mako, packaging and PyYAML.
 Nested builds inherit the invoking `ninja -jN` or `cmake --build --parallel N`
 at build time, including ARM64EC and WoW64. `CMAKE_BUILD_PARALLEL_LEVEL` is also
 supported. The old fixed `MESA_BUILD_JOBS` cache setting is removed.
 `MESA_BISON`, `MESA_FLEX`, and `MESA_PYTHON` select the host generator tools.
-The ARM64 Meson build uses `MESA_MESON_JOBS` (default 8). The native CMake
-output and ARM64 Meson output use separate build directories.
+WGL and Lavapipe share one Mesa CMake configuration and generated-source graph.
 See [Mesa's CMake notes](../../../submodules/mesa/cmake/README.md) for standalone
 build commands and supported profiles.
 
-The ARM64 Meson WGL target links both Broadcom drivers and their ReactOS D3DKMT
+The ARM64 CMake WGL target links both Broadcom drivers and their ReactOS D3DKMT
 winsys code. This establishes the combined build, but does not by itself prove
 VC4 or V3D rendering on Raspberry Pi hardware.
 

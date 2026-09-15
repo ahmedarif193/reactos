@@ -1576,7 +1576,7 @@ target_sources(gallium PRIVATE
     "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_indices_gen.c"
     "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/u_unfilled_gen.c"
 )
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     target_sources(gallium PRIVATE
         "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/gallivm/lp_bld_arit.c"
         "${PROJECT_SOURCE_DIR}/src/gallium/auxiliary/gallivm/lp_bld_arit_overflow.c"
@@ -1654,7 +1654,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
 endif()
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     target_include_directories(gallium PRIVATE
         "${MESA_LLVM_ROOT}/include"
     )
@@ -1668,12 +1668,12 @@ target_compile_options(gallium PRIVATE
     "$<$<COMPILE_LANGUAGE:C>:-Werror=gnu-empty-initializer>"
     "$<$<COMPILE_LANGUAGE:C>:-Wgnu-pointer-arith>"
 )
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     target_compile_options(gallium PRIVATE
         "$<$<COMPILE_LANGUAGE:C>:-pthread>"
     )
 endif()
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     target_compile_options(gallium PRIVATE
         "$<$<COMPILE_LANGUAGE:CXX>:-DXXH_FORCE_ALIGN_CHECK=0>"
         "$<$<COMPILE_LANGUAGE:CXX>:-DXXH_FORCE_MEMORY_ACCESS=0>"
@@ -1751,10 +1751,10 @@ target_compile_options(wsgdi PRIVATE
 )
 
 # softpipe
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "i386" OR MESA_PROFILE STREQUAL "amd64")
+if(NOT MESA_LLVMPIPE)
     add_library(softpipe STATIC EXCLUDE_FROM_ALL)
     mesa_target_defaults(softpipe)
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "i386" OR MESA_PROFILE STREQUAL "amd64")
+    if(NOT MESA_LLVMPIPE)
         target_sources(softpipe PRIVATE
             "${PROJECT_SOURCE_DIR}/src/gallium/drivers/softpipe/sp_buffer.c"
             "${PROJECT_SOURCE_DIR}/src/gallium/drivers/softpipe/sp_clear.c"
@@ -1790,7 +1790,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROF
             "${PROJECT_SOURCE_DIR}/src/gallium/drivers/softpipe/sp_tile_cache.c"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "i386" OR MESA_PROFILE STREQUAL "amd64")
+    if(NOT MESA_LLVMPIPE)
         target_include_directories(softpipe PRIVATE
             "${PROJECT_BINARY_DIR}/src/gallium/drivers/softpipe"
             "${PROJECT_SOURCE_DIR}/src/gallium/drivers/softpipe"
@@ -2042,7 +2042,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos"
     )
 endif()
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     target_include_directories(mesa_gallium PRIVATE
         "${MESA_LLVM_ROOT}/include"
     )
@@ -2052,7 +2052,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
         "$<$<COMPILE_LANGUAGE:C>:-DGALLIUM_VC4>"
     )
 endif()
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "i386" OR MESA_PROFILE STREQUAL "amd64")
+if(NOT MESA_LLVMPIPE)
     target_compile_options(mesa_gallium PRIVATE
         "$<$<COMPILE_LANGUAGE:C>:-DGALLIUM_SOFTPIPE>"
     )
@@ -2061,7 +2061,7 @@ target_compile_options(mesa_gallium PRIVATE
     "$<$<COMPILE_LANGUAGE:C>:-DXXH_FORCE_ALIGN_CHECK=0>"
     "$<$<COMPILE_LANGUAGE:C>:-DXXH_FORCE_MEMORY_ACCESS=0>"
 )
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     target_compile_options(mesa_gallium PRIVATE
         "$<$<COMPILE_LANGUAGE:C>:-pthread>"
         "$<$<COMPILE_LANGUAGE:C>:-DGALLIUM_LLVMPIPE>"
@@ -2072,6 +2072,7 @@ target_sources(mesa_gallium PRIVATE
 )
 target_link_libraries(mesa_gallium PRIVATE
     "-Wl,-O1"
+    "-Wl,--gc-sections"
     "-Wl,--whole-archive"
     "wgl"
     "-Wl,--no-whole-archive"
@@ -2104,7 +2105,7 @@ target_link_libraries(mesa_gallium PRIVATE
     "-static-libgcc"
     "-static-libstdc++"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROFILE STREQUAL "i386" OR MESA_PROFILE STREQUAL "amd64")
+if(NOT MESA_LLVMPIPE)
     target_link_libraries(mesa_gallium PRIVATE
         "softpipe"
     )
@@ -2147,14 +2148,14 @@ if(MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_P
         "-Wl,--subsystem,console"
     )
 endif()
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     target_link_libraries(mesa_gallium PRIVATE
         "llvmpipe"
         ${MESA_LLVM_LIBRARIES}
         "-pthread"
     )
 endif()
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64" OR MESA_PROFILE STREQUAL "llvm-arm64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     target_link_libraries(mesa_gallium PRIVATE
         "-lntdll"
         "-lpsapi"
@@ -2333,10 +2334,10 @@ if(MESA_PROFILE STREQUAL "i386" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE
 endif()
 
 # llvmpipe
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     add_library(llvmpipe STATIC EXCLUDE_FROM_ALL)
     mesa_target_defaults(llvmpipe)
-    if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    if(MESA_LLVMPIPE)
         target_sources(llvmpipe PRIVATE
             "${PROJECT_SOURCE_DIR}/src/gallium/drivers/llvmpipe/lp_bld_alpha.c"
             "${PROJECT_SOURCE_DIR}/src/gallium/drivers/llvmpipe/lp_bld_blend_aos.c"
@@ -2398,7 +2399,7 @@ if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
             "${PROJECT_SOURCE_DIR}/src/gallium/drivers/llvmpipe/lp_texture_handle.c"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    if(MESA_LLVMPIPE)
         target_include_directories(llvmpipe PRIVATE
             "${PROJECT_BINARY_DIR}/src/gallium/drivers/llvmpipe"
             "${PROJECT_SOURCE_DIR}/src/gallium/drivers/llvmpipe"
@@ -2418,7 +2419,7 @@ if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
             "${MESA_LLVM_ROOT}/include"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+    if(MESA_LLVMPIPE)
         target_compile_options(llvmpipe PRIVATE
             "$<$<COMPILE_LANGUAGE:C>:-fvisibility=hidden>"
             "$<$<COMPILE_LANGUAGE:C>:-DXXH_FORCE_ALIGN_CHECK=0>"

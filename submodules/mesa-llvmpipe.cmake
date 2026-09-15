@@ -45,12 +45,7 @@ find_program(MESA_RANLIB NAMES llvm-ranlib HINTS "${MESA_LLVM_MINGW_ROOT}/bin" N
 find_program(MESA_STRIP NAMES llvm-strip HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
 find_program(MESA_NINJA NAMES ninja REQUIRED)
 find_program(MESA_PYTHON NAMES python3 python REQUIRED)
-find_program(MESA_MESON NAMES meson REQUIRED)
 find_program(MESA_PATCH NAMES patch REQUIRED)
-execute_process(COMMAND "${MESA_MESON}" --version OUTPUT_VARIABLE _mesa_meson_version OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(_mesa_meson_version VERSION_LESS 1.12.0)
-    message(FATAL_ERROR "Mesa Lavapipe with LLVM 22 requires Meson 1.12.0 or newer (found ${_mesa_meson_version}).")
-endif()
 execute_process(COMMAND "${MESA_PYTHON}" -c "import mako, packaging, yaml" RESULT_VARIABLE _mesa_python_status ERROR_VARIABLE _mesa_python_error)
 if(NOT _mesa_python_status EQUAL 0)
     message(FATAL_ERROR "Mesa needs Python mako, packaging and PyYAML modules for ${MESA_PYTHON}: ${_mesa_python_error}")
@@ -58,7 +53,9 @@ endif()
 include("${REACTOS_SOURCE_DIR}/sdk/cmake/nested-build.cmake")
 
 set(MESA_WORK_DIR "${CMAKE_CURRENT_BINARY_DIR}/mesa-llvmpipe")
-set(MESA_LAVAPIPE_BINARY_DIR "${MESA_WORK_DIR}/lavapipe-build")
+set(MESA_CMAKE_BINARY_DIR "${REACTOS_BINARY_DIR}/dll/opengl/mesa_gallium/mesa-source/cmake-build")
+set(MESA_LAVAPIPE_BUILD_DLL "${MESA_CMAKE_BINARY_DIR}/src/gallium/targets/lavapipe/vulkan_lvp.dll")
+set(MESA_LAVAPIPE_BUILD_MANIFEST "${MESA_CMAKE_BINARY_DIR}/src/gallium/targets/lavapipe/lvp_icd.json")
 set(MESA_LAVAPIPE_DLL "${MESA_WORK_DIR}/vulkan_lvp.dll")
 set(MESA_LAVAPIPE_MANIFEST "${MESA_WORK_DIR}/lvp_icd.json")
 set(VULKAN_HEADERS_SOURCE_DIR "${MESA_WORK_DIR}/vulkan-headers-source")
@@ -158,19 +155,6 @@ else()
     set(_mesa_llvm_dependency mesa-llvm)
 endif()
 
-if(_mesa_llvm_dependency)
-    # The WGL ExternalProject is declared earlier under dll/opengl. Add the
-    # dependency here, once the shared target LLVM producer exists.
-    add_dependencies(mesa_gallium_build ${_mesa_llvm_dependency})
-endif()
-
-foreach(_mesa_path MESA_CC MESA_CXX MESA_WINDRES MESA_AR MESA_STRIP MESA_PYTHON MESA_LLVM_PREFIX DIRECTX_HEADERS_PREFIX CMAKE_COMMAND)
-    file(TO_CMAKE_PATH "${${_mesa_path}}" ${_mesa_path}_INI)
-    string(REPLACE "'" "\\'" ${_mesa_path}_INI "${${_mesa_path}_INI}")
-endforeach()
-configure_file("${CMAKE_CURRENT_LIST_DIR}/mesa-lavapipe-cross.ini.in" "${MESA_WORK_DIR}/lavapipe-cross.ini" @ONLY)
-configure_file("${CMAKE_CURRENT_LIST_DIR}/mesa-native.ini.in" "${MESA_WORK_DIR}/lavapipe-native.ini" @ONLY)
-
 # Keep the loader and headers on the same release as Mesa's Vulkan API files.
 ExternalProject_Add(vulkan-headers-build
     PREFIX "${MESA_WORK_DIR}/vulkan-headers-prefix"
@@ -249,63 +233,13 @@ ExternalProject_Add(vulkan-loader-build
     BUILD_BYPRODUCTS "${VULKAN_LOADER_BINARY_DIR}/loader/vulkan-1.dll"
     USES_TERMINAL_BUILD TRUE)
 
-ExternalProject_Add(mesa-lavapipe-build
-    DEPENDS ${_mesa_llvm_dependency} directx-headers-build
-    PREFIX "${MESA_WORK_DIR}/lavapipe-prefix"
-    SOURCE_DIR "${MESA_SOURCE_DIR}"
-    BINARY_DIR "${MESA_LAVAPIPE_BINARY_DIR}"
-    DOWNLOAD_COMMAND ""
-    UPDATE_COMMAND ""
-    PATCH_COMMAND ""
-    CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
-        ${MESA_MESON} setup --clearcache --reconfigure <BINARY_DIR> <SOURCE_DIR>
-        --cross-file "${MESA_WORK_DIR}/lavapipe-cross.ini"
-        --native-file "${MESA_WORK_DIR}/lavapipe-native.ini"
-        --wrap-mode=nofallback
-        --buildtype=release
-        -Db_ndebug=true
-        -Dc_args=-D__REACTOS__
-        "-Dcpp_args=-D__REACTOS__ -I${DIRECTX_HEADERS_PREFIX}/include"
-        -Dplatforms=windows
-        -Dcmake_prefix_path=${MESA_LLVM_PREFIX},${DIRECTX_HEADERS_PREFIX}
-        -Dgallium-drivers=
-        -Dvulkan-drivers=swrast
-        -Dvulkan-manifest-per-architecture=false
-        -Dllvm=enabled
-        -Dshared-llvm=disabled
-        -Dopengl=false
-        -Dglx=disabled
-        -Degl=disabled
-        -Dgbm=disabled
-        -Dgles1=disabled
-        -Dgles2=disabled
-        -Dglvnd=disabled
-        -Dgallium-va=disabled
-        -Dvideo-codecs=
-        -Dxmlconfig=disabled
-        -Dzlib=disabled
-        -Dzstd=disabled
-        -Dlibunwind=disabled
-        -Dvalgrind=disabled
-        -Dbuild-tests=false
-    BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
-        ${MESA_NINJA} -C <BINARY_DIR>
-        src/gallium/targets/lavapipe/vulkan_lvp.dll
-        src/gallium/targets/lavapipe/lvp_icd.json
-    BUILD_ALWAYS TRUE
-    INSTALL_COMMAND ""
-    BUILD_BYPRODUCTS
-        "${MESA_LAVAPIPE_BINARY_DIR}/src/gallium/targets/lavapipe/vulkan_lvp.dll"
-        "${MESA_LAVAPIPE_BINARY_DIR}/src/gallium/targets/lavapipe/lvp_icd.json"
-    USES_TERMINAL_BUILD TRUE)
-
 # Declare the packaged files at the step that actually creates them. This
 # also regenerates any file if it was removed after a successful build.
 add_custom_command(
     OUTPUT "${MESA_LAVAPIPE_DLL}" "${MESA_LAVAPIPE_MANIFEST}" "${VULKAN_LOADER_DLL}" "${MESA_LICENSES}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MESA_LAVAPIPE_BINARY_DIR}/src/gallium/targets/lavapipe/vulkan_lvp.dll" "${MESA_LAVAPIPE_DLL}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MESA_LAVAPIPE_BUILD_DLL}" "${MESA_LAVAPIPE_DLL}"
     COMMAND ${MESA_STRIP} --strip-debug "${MESA_LAVAPIPE_DLL}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MESA_LAVAPIPE_BINARY_DIR}/src/gallium/targets/lavapipe/lvp_icd.json" "${MESA_LAVAPIPE_MANIFEST}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MESA_LAVAPIPE_BUILD_MANIFEST}" "${MESA_LAVAPIPE_MANIFEST}"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${VULKAN_LOADER_BINARY_DIR}/loader/vulkan-1.dll" "${VULKAN_LOADER_DLL}"
     COMMAND ${MESA_STRIP} --strip-debug "${VULKAN_LOADER_DLL}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${MESA_WORK_DIR}/license-bundle"
@@ -318,9 +252,9 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${VULKAN_LOADER_SOURCE_DIR}/LICENSES" "${MESA_WORK_DIR}/license-bundle/vulkan-loader"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DIRECTX_HEADERS_SOURCE_DIR}/LICENSE" "${MESA_WORK_DIR}/license-bundle/DirectX-Headers-LICENSE.txt"
     COMMAND ${CMAKE_COMMAND} -E chdir "${MESA_WORK_DIR}/license-bundle" ${CMAKE_COMMAND} -E tar cf "${MESA_LICENSES}" --format=zip Mesa-LICENSE.rst mesa LLVM-LICENSE.TXT Vulkan-Headers-LICENSE.md vulkan-headers Vulkan-Loader-LICENSE.txt vulkan-loader DirectX-Headers-LICENSE.txt
-    DEPENDS mesa-lavapipe-build vulkan-loader-build
-        "${MESA_LAVAPIPE_BINARY_DIR}/src/gallium/targets/lavapipe/vulkan_lvp.dll"
-        "${MESA_LAVAPIPE_BINARY_DIR}/src/gallium/targets/lavapipe/lvp_icd.json"
+    DEPENDS mesa_gallium_build vulkan-loader-build
+        "${MESA_LAVAPIPE_BUILD_DLL}"
+        "${MESA_LAVAPIPE_BUILD_MANIFEST}"
         "${VULKAN_LOADER_BINARY_DIR}/loader/vulkan-1.dll"
     VERBATIM)
 
