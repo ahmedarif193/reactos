@@ -1828,41 +1828,91 @@ vc4kmt_wait_gpu(
     _In_ VC4KMT_ENGINE Engine,
     _In_ const VC4KMT_FENCE *Fence)
 {
+    if (Fence == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    return vc4kmt_wait_gpu_many(Device, Engine, Fence, 1);
+}
+
+NTSTATUS
+vc4kmt_wait_gpu_many(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ VC4KMT_ENGINE Engine,
+    _In_reads_opt_(FenceCount) const VC4KMT_FENCE *Fences,
+    _In_ UINT FenceCount)
+{
     D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU Wait;
-    D3DKMT_HANDLE Handle;
-    UINT64 Value;
+    const VC4KMT_FENCE *Pending[D3DDDI_MAX_OBJECT_WAITED_ON];
+    D3DKMT_HANDLE Handles[D3DDDI_MAX_OBJECT_WAITED_ON];
+    UINT64 Values[D3DDDI_MAX_OBJECT_WAITED_ON];
     UINT NodeOrdinal = (UINT)Engine;
+    UINT PendingCount = 0;
+    UINT FenceIndex;
     NTSTATUS Status;
 
-    if (Device == NULL || Fence == NULL ||
-        NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT)
+    if (Device == NULL || NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT ||
+        (FenceCount != 0 && Fences == NULL))
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    if ((Fence->CpuValue != NULL && *Fence->CpuValue >= Fence->Value) ||
-        (Fence->hSyncObject == 0 && Fence->CpuValue == NULL))
-    {
+    if (FenceCount == 0 || Device->Fake)
         return STATUS_SUCCESS;
-    }
-
-    if (Device->Fake)
-        return STATUS_SUCCESS;
-    if (Device->hContext[NodeOrdinal] == 0 || Fence->hSyncObject == 0)
+    if (Device->hContext[NodeOrdinal] == 0)
         return STATUS_INVALID_DEVICE_STATE;
 
-    Handle = Fence->hSyncObject;
-    Value = Fence->Value;
+    for (FenceIndex = 0; FenceIndex < FenceCount; ++FenceIndex)
+    {
+        const VC4KMT_FENCE *Fence = &Fences[FenceIndex];
+        UINT PendingIndex;
+
+        if ((Fence->CpuValue != NULL && *Fence->CpuValue >= Fence->Value) ||
+            (Fence->hSyncObject == 0 && Fence->CpuValue == NULL))
+        {
+            continue;
+        }
+        if (Fence->hSyncObject == 0)
+            return STATUS_INVALID_DEVICE_STATE;
+
+        for (PendingIndex = 0; PendingIndex < PendingCount; ++PendingIndex)
+        {
+            if (Handles[PendingIndex] == Fence->hSyncObject)
+                break;
+        }
+        if (PendingIndex != PendingCount)
+        {
+            if (Fence->Value > Values[PendingIndex])
+            {
+                Pending[PendingIndex] = Fence;
+                Values[PendingIndex] = Fence->Value;
+            }
+            continue;
+        }
+        if (PendingCount == D3DDDI_MAX_OBJECT_WAITED_ON)
+            return STATUS_INVALID_PARAMETER;
+        Pending[PendingCount] = Fence;
+        Handles[PendingCount] = Fence->hSyncObject;
+        Values[PendingCount] = Fence->Value;
+        PendingCount++;
+    }
+    if (PendingCount == 0)
+        return STATUS_SUCCESS;
+
     RtlZeroMemory(&Wait, sizeof(Wait));
     Wait.hContext = Device->hContext[NodeOrdinal];
-    Wait.ObjectCount = 1;
-    Wait.ObjectHandleArray = &Handle;
-    Wait.MonitoredFenceValueArray = &Value;
+    Wait.ObjectCount = PendingCount;
+    Wait.ObjectHandleArray = Handles;
+    Wait.MonitoredFenceValueArray = Values;
     Status = D3DKMTWaitForSynchronizationObjectFromGpu(&Wait);
-    /* A saturated context cannot admit another GPU wait. Complete the same
-     * dependency on the CPU before the caller submits dependent work. */
     if (Status == STATUS_DEVICE_BUSY)
-        return vc4kmt_wait(Device, Fence, INFINITE);
+    {
+        for (FenceIndex = 0; FenceIndex < PendingCount; ++FenceIndex)
+        {
+            Status = vc4kmt_wait(Device, Pending[FenceIndex], INFINITE);
+            if (!NT_SUCCESS(Status))
+                break;
+        }
+    }
     return Status;
 }
 
