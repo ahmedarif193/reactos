@@ -128,8 +128,7 @@ vc4kmt_status vc4kmt_primary_gpuva(VC4KMT_DEVICE *device,
                                    uint32_t width, uint32_t height,
                                    uint32_t pitch, uint32_t *gpu_va);
 uint32_t vc4kmt_primary_allocation(const VC4KMT_DEVICE *device);
-vc4kmt_status vc4kmt_primary_present(VC4KMT_DEVICE *device, void *window,
-                                      const VC4KMT_FENCE *fence);
+vc4kmt_status vc4kmt_primary_present(VC4KMT_DEVICE *device, void *window);
 void vc4kmt_primary_invalidate(VC4KMT_DEVICE *device);
 vc4kmt_status vc4kmt_bo_destroy(VC4KMT_DEVICE *device, VC4KMT_BO *bo);
 vc4kmt_status vc4kmt_submit_cl(VC4KMT_DEVICE *device,
@@ -986,7 +985,7 @@ v3d_d3dkmt_present_linear(int fd, uintptr_t window, uint32_t source_handle,
                                                    VC4KMT_ENGINE_TFU, &fence);
    if (!result) {
       vc4kmt_status present_status =
-         vc4kmt_primary_present(device->kmt, (void *)window, &fence);
+         vc4kmt_primary_present(device->kmt, (void *)window);
       if (present_status != 0) {
          errno = EIO;
          result = -1;

@@ -158,8 +158,7 @@ vc4kmt_primary_allocation(
 NTSTATUS
 vc4kmt_primary_present(
     _In_ VC4KMT_DEVICE *Device,
-    _In_ HWND Window,
-    _In_ const VC4KMT_FENCE *Fence);
+    _In_ HWND Window);
 
 VOID
 vc4kmt_primary_invalidate(

@@ -82,6 +82,8 @@ static VOID NTAPI DxgkpVSyncWorker(_In_ PVOID Context);
 static NTSTATUS DxgkpExecuteFullPresent(_In_ PDXGKRNL_ADAPTER Adapter, _In_ PDXGKRNL_PRESENT_ENTRY Entry);
 static NTSTATUS DxgkpSelectPresentNode(_In_ PDXGKRNL_ADAPTER Adapter, _In_ DXGKRNL_PRESENT_TYPE PresentType, _Out_ PULONG OutNode);
 static NTSTATUS DxgkpSelectCddPresentEngine(_In_ PDXGKRNL_ADAPTER Adapter, _Out_ PULONG OutNode, _Out_ PUINT OutEngineAffinity);
+static NTSTATUS NTAPI DxgkpExecuteOrderedMmioFlip(_Inout_ PVOID CallbackContext);
+static VOID NTAPI DxgkpReleaseOrderedMmioFlip(_Inout_ PVOID CallbackContext, _In_ NTSTATUS CompletionStatus);
 
 static NTSTATUS
 DxgkpDestroyCddPresentBinding(
@@ -3591,6 +3593,51 @@ Cleanup:
     return Status;
 }
 
+static NTSTATUS NTAPI
+DxgkpExecuteOrderedMmioFlip(
+    _Inout_ PVOID CallbackContext)
+{
+    PDXGKRNL_PRESENT_ENTRY Entry = CallbackContext;
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_PRESENT_QUEUE Queue;
+    NTSTATUS Status;
+
+    if (Entry == NULL || Entry->Device == NULL)
+        return STATUS_INVALID_PARAMETER;
+    Adapter = Entry->Device->Adapter;
+    if (Adapter == NULL || !DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DELETE_PENDING;
+    if (Adapter->PresentQueues == NULL ||
+        Entry->VidPnSourceId >= Adapter->PresentQueueCount)
+    {
+        Status = STATUS_DEVICE_REMOVED;
+    }
+    else
+    {
+        Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)
+                    [Entry->VidPnSourceId];
+        Status = DxgkpExecuteMmioFlip(Adapter, Queue, Entry);
+    }
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
+}
+
+static VOID NTAPI
+DxgkpReleaseOrderedMmioFlip(
+    _Inout_ PVOID CallbackContext,
+    _In_ NTSTATUS CompletionStatus)
+{
+    PDXGKRNL_PRESENT_ENTRY Entry = CallbackContext;
+
+    if (Entry == NULL)
+        return;
+    if (CompletionStatus == STATUS_PENDING)
+        CompletionStatus = STATUS_CANCELLED;
+    DxgkDeviceWorkCompleteWithStatus(Entry->DeviceWork, CompletionStatus);
+    DxgkpReleasePresentEntry(Entry);
+    ExFreePoolWithTag(Entry, TAG_DXGK_PRESENT);
+}
+
 /* ========================================================================
  * DxgkpQueuePresent
  *
@@ -3729,16 +3776,55 @@ DxgkpQueuePresent(
 
     if (DxgkpIsMmioFlip(Adapter, Entry))
     {
+        PDXGKRNL_PRESENT_ENTRY OrderedEntry = NULL;
+
         Status = DxgkDeviceWorkActivate(DeviceWork);
         if (NT_SUCCESS(Status))
         {
-            Entry->DeviceWork = DeviceWork;
-            DeviceWork = NULL;
             Entry->PresentId = InterlockedIncrement64(&Queue->NextPresentId);
             *OutPresentId = Entry->PresentId;
-            Status = DxgkpExecuteMmioFlip(Adapter, Queue, Entry);
-            DxgkDeviceWorkCompleteWithStatus(Entry->DeviceWork, Status);
+            if (Entry->Context != NULL &&
+                Entry->Context->Mms2ContextStream != NULL)
+            {
+                OrderedEntry = ExAllocatePoolWithTag(
+                                   NonPagedPool,
+                                   sizeof(*OrderedEntry),
+                                   TAG_DXGK_PRESENT);
+                if (OrderedEntry == NULL)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                }
+                else
+                {
+                    *OrderedEntry = *Entry;
+                    OrderedEntry->DeviceWork = DeviceWork;
+                    Status = DxgkContextOrderAdmitCompletion(
+                                 Entry->Context,
+                                 OrderedEntry,
+                                 DxgkpExecuteOrderedMmioFlip,
+                                 DxgkpReleaseOrderedMmioFlip);
+                    if (NT_SUCCESS(Status))
+                    {
+                        DeviceWork = NULL;
+                        RtlZeroMemory(Entry, sizeof(*Entry));
+                    }
+                    else
+                    {
+                        OrderedEntry->DeviceWork = NULL;
+                        ExFreePoolWithTag(OrderedEntry, TAG_DXGK_PRESENT);
+                    }
+                }
+            }
+            else
+            {
+                Entry->DeviceWork = DeviceWork;
+                DeviceWork = NULL;
+                Status = DxgkpExecuteMmioFlip(Adapter, Queue, Entry);
+                DxgkDeviceWorkCompleteWithStatus(Entry->DeviceWork, Status);
+            }
         }
+        if (DeviceWork != NULL && !NT_SUCCESS(Status))
+            DxgkDeviceWorkCompleteWithStatus(DeviceWork, Status);
         DxgkDeviceWorkDestroy(DeviceWork);
         DxgkpReleasePresentEntry(Entry);
         DxgkpReleasePresentQueues(Adapter);
