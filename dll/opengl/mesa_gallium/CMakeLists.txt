@@ -34,7 +34,7 @@ elseif(ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "i386")
     set(MESA_CPU x86)
     set(MESA_TRIPLE i686-w64-mingw32)
-    set(MESA_GALLIUM_DRIVERS softpipe)
+    set(MESA_GALLIUM_DRIVERS v3d,softpipe)
 else()
     message(FATAL_ERROR "Mesa Gallium requires a native i386, amd64 or arm64 target.")
 endif()
@@ -74,16 +74,29 @@ set(MESA_GALLIUM_ICD_STAGE "${MESA_GALLIUM_ICD_STAGE_DIR}/mesa_gallium.dll")
 include(ExternalProject)
 set(_mesa_support_dependency)
 set(_mesa_platform_options)
-if(ARCH STREQUAL "arm64")
+if(ARCH STREQUAL "arm64" OR ARCH STREQUAL "i386")
     if(HOST_TOOLS_DIR)
         set(_mesa_host_tools_dir "${HOST_TOOLS_DIR}")
     else()
         set(_mesa_host_tools_dir "${REACTOS_BINARY_DIR}/host-tools/bin")
     endif()
-    set(_mesa_abi_args -DARM64EC_RUNTIME:BOOL=${ARM64EC_RUNTIME})
-    if(ARM64EC_RUNTIME)
-        list(APPEND _mesa_abi_args
-            -DARM64EC_NATIVE_BINARY_DIR:PATH=${ARM64EC_NATIVE_BINARY_DIR})
+    set(_mesa_abi_args)
+    if(ARCH STREQUAL "arm64")
+        list(APPEND _mesa_abi_args -DARM64EC_RUNTIME:BOOL=${ARM64EC_RUNTIME})
+        if(ARM64EC_RUNTIME)
+            list(APPEND _mesa_abi_args
+                -DARM64EC_NATIVE_BINARY_DIR:PATH=${ARM64EC_NATIVE_BINARY_DIR})
+        endif()
+        set(_mesa_support_targets rpi3vc4kmt vc4kmt zlib)
+        set(_mesa_support_byproducts
+            "${MESA_SUPPORT_DIR}/sdk/lib/rpi3vc4kmt/librpi3vc4kmt.a"
+            "${MESA_SUPPORT_DIR}/sdk/lib/vc4kmt/libvc4kmt.a"
+            "${MESA_SUPPORT_DIR}/sdk/lib/3rdparty/zlib/libzlib.a")
+    else()
+        set(_mesa_support_targets vc4kmt zlib)
+        set(_mesa_support_byproducts
+            "${MESA_SUPPORT_DIR}/sdk/lib/vc4kmt/libvc4kmt.a"
+            "${MESA_SUPPORT_DIR}/sdk/lib/3rdparty/zlib/libzlib.a")
     endif()
     # Build the graphics support libraries with the normal ReactOS toolchain
     # in an isolated Release configuration even
@@ -98,7 +111,7 @@ if(ARCH STREQUAL "arm64")
         CMAKE_ARGS
             -DCMAKE_TOOLCHAIN_FILE=${REACTOS_SOURCE_DIR}/toolchain-clang.cmake
             -DHOST_TOOLS_DIR:PATH=${_mesa_host_tools_dir}
-            -DARCH=arm64
+            -DARCH=${ARCH}
             ${_mesa_abi_args}
             -DREACTOS_CLANG_LLVM_MINGW_ROOT=${MESA_LLVM_MINGW_ROOT}
             -DREACTOS_GRAPHICS_DRIVER_MODEL=WDDM
@@ -114,13 +127,10 @@ if(ARCH STREQUAL "arm64")
             -DENABLE_ROSTESTS=OFF
             -DRPI3_SUPPORT=OFF
             -DRPI5_SUPPORT=OFF
-        BUILD_COMMAND ${REACTOS_NESTED_BUILD} <BINARY_DIR> --target rpi3vc4kmt vc4kmt zlib
+        BUILD_COMMAND ${REACTOS_NESTED_BUILD} <BINARY_DIR> --target ${_mesa_support_targets}
         BUILD_ALWAYS TRUE
         INSTALL_COMMAND ""
-        BUILD_BYPRODUCTS
-            "${MESA_SUPPORT_DIR}/sdk/lib/rpi3vc4kmt/librpi3vc4kmt.a"
-            "${MESA_SUPPORT_DIR}/sdk/lib/vc4kmt/libvc4kmt.a"
-            "${MESA_SUPPORT_DIR}/sdk/lib/3rdparty/zlib/libzlib.a"
+        BUILD_BYPRODUCTS ${_mesa_support_byproducts}
         USES_TERMINAL_BUILD TRUE)
     # The support build imports these tools, including in nested ARM64EC builds.
     # Ensure they exist and are current before configuring or building support.

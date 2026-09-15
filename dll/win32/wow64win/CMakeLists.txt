@@ -3,11 +3,12 @@ spec2def(wow64win.dll wow64win.spec ADD_IMPORTLIB)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     ${REACTOS_SOURCE_DIR}/win32ss/w32ksvc32.h
     ${REACTOS_SOURCE_DIR}/win32ss/win32u/win32u.spec
+    ${CMAKE_CURRENT_SOURCE_DIR}/d3dkmt.c
     ${CMAKE_CURRENT_SOURCE_DIR}/gdi.c
     ${CMAKE_CURRENT_SOURCE_DIR}/user.c)
 
 set(_wow64win_wrappers)
-foreach(_source gdi.c user.c)
+foreach(_source d3dkmt.c gdi.c user.c)
     file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/${_source} _lines REGEX "^NTSTATUS WINAPI wow64_Nt(User|Gdi)")
     foreach(_line ${_lines})
         string(REGEX MATCH "wow64_(Nt(User|Gdi)[A-Za-z0-9_]+)" _match "${_line}")
@@ -136,6 +137,7 @@ string(APPEND _wow64win_header "\n    WOW64WIN_STUBS_AFTER\n")
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/win32syscalls.h "${_wow64win_header}")
 
 add_library(wow64win MODULE
+    d3dkmt.c
     gdi.c
     syscall.c
     user.c

@@ -728,6 +728,7 @@ main(int argc, char *argv[])
    query_vsync();
 
    if (printInfo) {
+      printf("GL_PROCESS_BITS = %u\n", (unsigned) (sizeof(void *) * 8));
       printf("GL_RENDERER   = %s\n", (char *) glGetString(GL_RENDERER));
       printf("GL_VERSION    = %s\n", (char *) glGetString(GL_VERSION));
       printf("GL_VENDOR     = %s\n", (char *) glGetString(GL_VENDOR));

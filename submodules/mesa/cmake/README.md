@@ -8,14 +8,16 @@ ARM64EC.
 
 | Architecture | Option disabled | `ENABLE_MESA_LLVMPIPE=ON` |
 | --- | --- | --- |
-| i386 | Softpipe | unsupported |
+| i386 | V3D + Softpipe | unsupported |
 | AMD64 | Softpipe | LLVMpipe in the same ICD |
 | ARM64 | V3D + VC4 + Softpipe | V3D + VC4 + LLVMpipe in the same ICD |
 | ARM64EC | V3D + VC4 + Softpipe | unsupported |
 
 The native ARM64 WGL target links V3D and VC4, both ReactOS D3DKMT winsyses,
-the Broadcom compiler and versioned V3D support libraries. LLVMpipe replaces
-Softpipe when enabled but does not remove either Raspberry Pi hardware driver.
+the Broadcom compiler and versioned V3D support libraries. The i386 target
+links V3D and its ReactOS D3DKMT winsys for WoW64 applications, without the
+legacy VC4 driver. LLVMpipe replaces Softpipe when enabled but does not remove
+either ARM64 Raspberry Pi hardware driver.
 
 ## ReactOS build
 
@@ -77,7 +79,8 @@ Set `MESA_ARCH` to `arm64`, `arm64ec`, `amd64`, or `i386` when it cannot be
 inferred from `CMAKE_SYSTEM_PROCESSOR`. Select the matching compiler triple.
 ARM64/ARM64EC additionally require `MESA_REACTOS_SOURCE_DIR` and
 `MESA_REACTOS_BUILD_DIR`, with matching Release `rpi3vc4kmt`, `vc4kmt` and `zlib`
-archives built by ReactOS. The parent build handles these dependencies.
+archives built by ReactOS. The i386 V3D target requires matching Release
+`vc4kmt` and `zlib` archives. The parent build handles these dependencies.
 
 For a standalone LLVMpipe build, set `MESA_LLVMPIPE=ON`, `MESA_LLVM_ROOT` to
 the matching Windows static LLVM 22 installation, and choose

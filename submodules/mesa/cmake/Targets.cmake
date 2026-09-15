@@ -207,7 +207,7 @@ target_include_directories(mesa_util PRIVATE
     "${PROJECT_BINARY_DIR}/src/util/format"
     "${PROJECT_SOURCE_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(mesa_util PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -244,7 +244,7 @@ target_include_directories(xmlconfig PRIVATE
     "${PROJECT_SOURCE_DIR}/src"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(xmlconfig PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -560,7 +560,7 @@ target_include_directories(nir PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(nir PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -619,7 +619,7 @@ target_include_directories(vtn PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(vtn PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -668,7 +668,7 @@ target_include_directories(glcpp PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(glcpp PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -780,7 +780,7 @@ target_include_directories(glsl PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(glsl PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -806,15 +806,15 @@ target_compile_options(glsl PRIVATE
 )
 
 # broadcom_cle
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     add_library(broadcom_cle STATIC EXCLUDE_FROM_ALL)
     mesa_target_defaults(broadcom_cle)
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_sources(broadcom_cle PRIVATE
             "${PROJECT_SOURCE_DIR}/src/broadcom/cle/v3d_decoder.c"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_include_directories(broadcom_cle PRIVATE
             "${PROJECT_BINARY_DIR}/src/broadcom/cle"
             "${PROJECT_SOURCE_DIR}/src/broadcom/cle"
@@ -827,7 +827,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_compile_options(broadcom_cle PRIVATE
             "$<$<COMPILE_LANGUAGE:C>:-fvisibility=hidden>"
             "$<$<COMPILE_LANGUAGE:C>:-Wno-override-init>"
@@ -837,10 +837,10 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
 endif()
 
 # broadcom_compiler
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     add_library(broadcom_compiler STATIC EXCLUDE_FROM_ALL)
     mesa_target_defaults(broadcom_compiler)
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_sources(broadcom_compiler PRIVATE
             "${PROJECT_SOURCE_DIR}/src/broadcom/compiler/nir_to_vir.c"
             "${PROJECT_SOURCE_DIR}/src/broadcom/compiler/vir.c"
@@ -872,7 +872,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${PROJECT_BINARY_DIR}/src/broadcom/compiler/v3d_nir_lower_algebraic.c"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_include_directories(broadcom_compiler PRIVATE
             "${PROJECT_BINARY_DIR}/src/broadcom/compiler"
             "${PROJECT_SOURCE_DIR}/src/broadcom/compiler"
@@ -896,7 +896,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${PROJECT_BINARY_DIR}/src/util/format"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_compile_options(broadcom_compiler PRIVATE
             "$<$<COMPILE_LANGUAGE:C>:-fvisibility=hidden>"
             "$<$<COMPILE_LANGUAGE:C>:-DXXH_FORCE_ALIGN_CHECK=0>"
@@ -908,17 +908,17 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
 endif()
 
 # broadcom_qpu
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     add_library(broadcom_qpu STATIC EXCLUDE_FROM_ALL)
     mesa_target_defaults(broadcom_qpu)
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_sources(broadcom_qpu PRIVATE
             "${PROJECT_SOURCE_DIR}/src/broadcom/qpu/qpu_disasm.c"
             "${PROJECT_SOURCE_DIR}/src/broadcom/qpu/qpu_instr.c"
             "${PROJECT_SOURCE_DIR}/src/broadcom/qpu/qpu_pack.c"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_include_directories(broadcom_qpu PRIVATE
             "${PROJECT_BINARY_DIR}/src/broadcom/qpu"
             "${PROJECT_SOURCE_DIR}/src/broadcom/qpu"
@@ -932,7 +932,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${PROJECT_SOURCE_DIR}/src/broadcom/cle"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_compile_options(broadcom_qpu PRIVATE
             "$<$<COMPILE_LANGUAGE:C>:-fvisibility=hidden>"
             "$<$<COMPILE_LANGUAGE:C>:-Wno-override-init>"
@@ -942,15 +942,15 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
 endif()
 
 # broadcom-v42
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     add_library(broadcom-v42 STATIC EXCLUDE_FROM_ALL)
     mesa_target_defaults(broadcom-v42)
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_sources(broadcom-v42 PRIVATE
             "${PROJECT_SOURCE_DIR}/src/broadcom/clif/v3dx_dump.c"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_include_directories(broadcom-v42 PRIVATE
             "${PROJECT_BINARY_DIR}/src/broadcom"
             "${PROJECT_SOURCE_DIR}/src/broadcom"
@@ -962,7 +962,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${PROJECT_SOURCE_DIR}/src/broadcom/cle"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_compile_options(broadcom-v42 PRIVATE
             "$<$<COMPILE_LANGUAGE:C>:-fvisibility=hidden>"
             "$<$<COMPILE_LANGUAGE:C>:-Wno-override-init>"
@@ -973,15 +973,15 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
 endif()
 
 # broadcom-v71
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     add_library(broadcom-v71 STATIC EXCLUDE_FROM_ALL)
     mesa_target_defaults(broadcom-v71)
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_sources(broadcom-v71 PRIVATE
             "${PROJECT_SOURCE_DIR}/src/broadcom/clif/v3dx_dump.c"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_include_directories(broadcom-v71 PRIVATE
             "${PROJECT_BINARY_DIR}/src/broadcom"
             "${PROJECT_SOURCE_DIR}/src/broadcom"
@@ -993,7 +993,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${PROJECT_SOURCE_DIR}/src/broadcom/cle"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_compile_options(broadcom-v71 PRIVATE
             "$<$<COMPILE_LANGUAGE:C>:-fvisibility=hidden>"
             "$<$<COMPILE_LANGUAGE:C>:-Wno-override-init>"
@@ -1004,15 +1004,15 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
 endif()
 
 # v3d_neon
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     add_library(v3d_neon STATIC EXCLUDE_FROM_ALL)
     mesa_target_defaults(v3d_neon)
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_sources(v3d_neon PRIVATE
             "${PROJECT_SOURCE_DIR}/src/broadcom/common/v3d_tiling.c"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_include_directories(v3d_neon PRIVATE
             "${PROJECT_BINARY_DIR}/src/broadcom"
             "${PROJECT_SOURCE_DIR}/src/broadcom"
@@ -1031,7 +1031,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${PROJECT_BINARY_DIR}/src/util/format"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_compile_options(v3d_neon PRIVATE
             "$<$<COMPILE_LANGUAGE:C>:-fvisibility=hidden>"
             "$<$<COMPILE_LANGUAGE:C>:-DXXH_FORCE_ALIGN_CHECK=0>"
@@ -1042,10 +1042,10 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
 endif()
 
 # broadcom_v3d
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     add_library(broadcom_v3d STATIC EXCLUDE_FROM_ALL)
     mesa_target_defaults(broadcom_v3d)
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_sources(broadcom_v3d PRIVATE
             "${PROJECT_SOURCE_DIR}/src/broadcom/common/v3d_debug.c"
             "${PROJECT_SOURCE_DIR}/src/broadcom/common/v3d_device_info.c"
@@ -1054,7 +1054,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${PROJECT_SOURCE_DIR}/src/broadcom/common/v3d_util.c"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_include_directories(broadcom_v3d PRIVATE
             "${PROJECT_BINARY_DIR}/src/broadcom"
             "${PROJECT_SOURCE_DIR}/src/broadcom"
@@ -1069,7 +1069,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${PROJECT_BINARY_DIR}/src/util/format"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_compile_options(broadcom_v3d PRIVATE
             "$<$<COMPILE_LANGUAGE:C>:-fvisibility=hidden>"
             "$<$<COMPILE_LANGUAGE:C>:-DXXH_FORCE_ALIGN_CHECK=0>"
@@ -1078,7 +1078,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "$<$<COMPILE_LANGUAGE:C>:-Wno-initializer-overrides>"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_sources(broadcom_v3d PRIVATE
             "$<TARGET_OBJECTS:broadcom_compiler>"
             "$<TARGET_OBJECTS:broadcom_qpu>"
@@ -1108,7 +1108,7 @@ target_include_directories(glapi_bridge PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(glapi_bridge PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -1141,7 +1141,7 @@ target_include_directories(glapi PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(glapi PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -1404,7 +1404,7 @@ target_include_directories(mesa PRIVATE
     "${PROJECT_BINARY_DIR}/src/util/format"
     "${PROJECT_BINARY_DIR}/src/compiler/spirv"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(mesa PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -1649,7 +1649,7 @@ target_include_directories(gallium PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(gallium PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -1702,7 +1702,7 @@ target_include_directories(galliumvl_stub PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(galliumvl_stub PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -1740,7 +1740,7 @@ target_include_directories(wsgdi PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(wsgdi PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -1809,7 +1809,7 @@ if(NOT MESA_LLVMPIPE)
             "${PROJECT_BINARY_DIR}/src/util/format"
         )
     endif()
-    if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    if(MESA_V3D)
         target_include_directories(softpipe PRIVATE
             "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
         )
@@ -1988,7 +1988,7 @@ target_include_directories(wgl PRIVATE
     "${PROJECT_SOURCE_DIR}/src/mesa"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(wgl PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos"
     )
@@ -1997,7 +1997,7 @@ target_compile_options(wgl PRIVATE
     "$<$<COMPILE_LANGUAGE:C>:-DNO_REGEX>"
     "$<$<COMPILE_LANGUAGE:C>:-D_GDI32_>"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_compile_options(wgl PRIVATE
         "$<$<COMPILE_LANGUAGE:C>:-DHAVE_ROS_SHARED_TEXTURE>"
     )
@@ -2036,7 +2036,7 @@ target_include_directories(mesa_gallium PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(mesa_gallium PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos"
@@ -2110,14 +2110,18 @@ if(NOT MESA_LLVMPIPE)
         "softpipe"
     )
 endif()
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_link_libraries(mesa_gallium PRIVATE
-        "vc4"
-        "vc4winsys"
         "broadcom_cle"
         "broadcom_v3d"
         "v3d_neon"
         "${MESA_REACTOS_BUILD_DIR}/sdk/lib/3rdparty/zlib/libzlib.a"
+    )
+endif()
+if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+    target_link_libraries(mesa_gallium PRIVATE
+        "vc4"
+        "vc4winsys"
         "${MESA_REACTOS_BUILD_DIR}/sdk/lib/rpi3vc4kmt/librpi3vc4kmt.a"
     )
 endif()
@@ -2182,7 +2186,7 @@ target_include_directories(opengl32 PRIVATE
     "${PROJECT_BINARY_DIR}/src/util"
     "${PROJECT_BINARY_DIR}/src/util/format"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_include_directories(opengl32 PRIVATE
         "${MESA_REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib"
     )
@@ -2221,7 +2225,7 @@ target_link_libraries(opengl32 PRIVATE
     "-static-libgcc"
     "-static-libstdc++"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     target_link_libraries(opengl32 PRIVATE
         "${MESA_REACTOS_BUILD_DIR}/sdk/lib/3rdparty/zlib/libzlib.a"
     )

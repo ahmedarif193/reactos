@@ -7,11 +7,13 @@ set(WOW64_I386_AUXILIARY_MODULES ${COMPAT_RUNTIME_AUXILIARY_MODULES})
 set(WOW64_I386_ALIASES ${COMPAT_RUNTIME_ALIASES})
 
 set(WOW64_I386_EXECUTABLES
+    glgears
     glmark2
     glmark2_runner
     msiexec
     notepad
     regsvr32
+    wglgears_runner
     winver)
 
 if(ENABLE_ROSTESTS)
