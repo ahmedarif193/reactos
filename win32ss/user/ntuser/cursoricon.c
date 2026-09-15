@@ -614,12 +614,15 @@ FreeCurIconObject(
         PACON AniCurIcon = (PACON)CurIcon;
         UINT i;
 
-        for (i = 0; i < AniCurIcon->cpcur; i++)
+        if (AniCurIcon->aspcur != NULL)
         {
-            UserDereferenceObject(AniCurIcon->aspcur[i]);
-            NT_VERIFY(IntDestroyCurIconObject(AniCurIcon->aspcur[i]) == TRUE);
+            for (i = 0; i < AniCurIcon->cpcur; i++)
+            {
+                UserDereferenceObject(AniCurIcon->aspcur[i]);
+                NT_VERIFY(IntDestroyCurIconObject(AniCurIcon->aspcur[i]) == TRUE);
+            }
+            ExFreePoolWithTag(AniCurIcon->aspcur, USERTAG_CURSOR);
         }
-        ExFreePoolWithTag(AniCurIcon->aspcur, USERTAG_CURSOR);
     }
 
     if (CurIcon->CURSORF_flags & CURSORF_LRSHARED)
