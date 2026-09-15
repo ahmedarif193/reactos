@@ -811,7 +811,7 @@ stw_framebuffer_present_locked(HDC hdc,
       PRESENTBUFFERSCB data;
 
       memset(&data, 0, sizeof data);
-      data.nVersion = 2;
+      data.nVersion = 3;
       data.syncType = PRESCB_SYNCTYPE_NONE;
       data.luidAdapter = stw_dev->AdapterLuid;
       /* The callback rectangle is window-relative. opengl32 converts it

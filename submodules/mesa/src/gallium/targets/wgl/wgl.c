@@ -407,10 +407,8 @@ wgl_compose(struct pipe_screen *screen,
    u_box_2d(0, 0, width, height, &box);
 #ifdef GALLIUM_VC4
    if (use_vc4) {
-      struct pipe_blit_info blit = {0};
+      struct pipe_blit_info blit = { 0 };
 
-      /* Copy through the VC4 tile/render path. The completion fence below
-       * still protects publication and reuse of the shared window surface. */
       blit.src.resource = source;
       blit.src.format = source->format;
       blit.src.box = box;
@@ -423,8 +421,25 @@ wgl_compose(struct pipe_screen *screen,
          return false;
    } else
 #endif
+#ifdef GALLIUM_V3D
+   if (use_v3d) {
+      struct pipe_blit_info blit = { 0 };
+
+      blit.src.resource = source;
+      blit.src.format = source->format;
+      blit.src.box = box;
+      blit.dst.resource = dest->resource;
+      blit.dst.format = dest->resource->format;
+      blit.dst.box = box;
+      blit.mask = PIPE_MASK_RGBA;
+      blit.filter = PIPE_TEX_FILTER_NEAREST;
+      context->blit(context, &blit);
+   } else
+#endif
+   {
       context->resource_copy_region(context, dest->resource, 0, 0, 0, 0,
                                     source, 0, &box);
+   }
    context->flush(context, &fence, PIPE_FLUSH_END_OF_FRAME);
    if (!fence)
       return false;
