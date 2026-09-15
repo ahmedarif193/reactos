@@ -808,10 +808,17 @@ D3DKMTQueryAdapterInfo(
 
     /* An adapter without an ICD answers KMTQAITYPE_UMOPENGLINFO with
      * STATUS_OBJECT_NAME_NOT_FOUND by contract; every OpenGL client asks
-     * every adapter, so that answer is not worth a line. */
+     * every adapter, so that answer is not worth a line.  Clock, thermal and
+     * GPU-version telemetry is optional too; system monitors poll those
+     * classes and a lower-version miniport legitimately refuses them. */
     if (!NT_SUCCESS(Status) &&
         !(Captured.Type == KMTQAITYPE_UMOPENGLINFO &&
-          Status == STATUS_OBJECT_NAME_NOT_FOUND))
+          Status == STATUS_OBJECT_NAME_NOT_FOUND) &&
+        !(Status == STATUS_INVALID_PARAMETER &&
+          (Captured.Type == KMTQAITYPE_NODEPERFDATA ||
+           Captured.Type == KMTQAITYPE_ADAPTERPERFDATA ||
+           Captured.Type == KMTQAITYPE_ADAPTERPERFDATA_CAPS ||
+           Captured.Type == KMTQUITYPE_GPUVERSION)))
     {
         DPRINT1("D3DKMTQueryAdapterInfo failed: handle=0x%X type=%u size=%u status=0x%08lX\n",
                 Captured.hAdapter,
