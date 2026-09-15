@@ -57,10 +57,6 @@
 
 
 #define V3D_INT_JOB_DONE                   (V3D_INT_FRDONE | V3D_INT_FLDONE)
-/* VCDI reports that the VCD is idle; unlike the other defined bits, it is not an error. */
-#define V3D_ERR_VCDI                       (1u << 12)
-#define V3D_ERR_FATAL_MASK                 (0xFFFFu & ~V3D_ERR_VCDI)
-
 
 #define RPI5VC4_V3D_PAGE_SHIFT             12
 #define RPI5VC4_V3D_PAGE_SIZE              (1u << RPI5VC4_V3D_PAGE_SHIFT)

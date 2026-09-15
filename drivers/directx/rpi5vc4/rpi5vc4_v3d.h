@@ -130,6 +130,8 @@
 #define V3D_CLE_CT00RA0                 0x0118
 #define V3D_CLE_CT01RA0                 0x011c
 #define V3D_ERR_STAT                    0x0F20
+#define V3D_ERR_VCDI                    (1u << 12)
+#define V3D_ERR_FATAL_MASK              (0xFFFFu & ~V3D_ERR_VCDI)
 #define V3D_CLE_CT1CFG                  0x0144
 #define V3D_CLE_CT1TILECT               0x0148
 #define V3D_CLE_CT1TSKIP                0x014c

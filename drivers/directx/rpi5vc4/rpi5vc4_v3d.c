@@ -33,6 +33,18 @@ Rpi5V3dWrite(
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Base + Offset), Value);
 }
 
+static VOID
+Rpi5V3dReportErrorStatus(
+    _In_ PVOID Core,
+    _In_ PCSTR Stage)
+{
+    ULONG ErrorStatus;
+
+    ErrorStatus = Rpi5V3dRead(Core, V3D_ERR_STAT) & V3D_ERR_FATAL_MASK;
+    if (ErrorStatus != 0)
+        DPRINT1("RPI5VC4: %s ERR_STAT=%08lx\n", Stage, ErrorStatus);
+}
+
 /* Poll (reg & Mask) == Want with a 100 ms ceiling; PASSIVE_LEVEL only. */
 static BOOLEAN
 Rpi5V3dWait(
@@ -469,9 +481,7 @@ Rpi5V3dResetCore(
     if (!Rpi5V3dMmuSetup(DeviceExtension))
         return FALSE;
 
-    Rpi5V3dWrite(Core, V3D_ERR_STAT, 0xFFFFFFFFu);
-    DPRINT1("RPI5VC4: reset ERR_STAT after clear=%08lx\n",
-            Rpi5V3dRead(Core, V3D_ERR_STAT));
+    Rpi5V3dReportErrorStatus(Core, "reset");
 
     return TRUE;
 }
@@ -579,9 +589,7 @@ Rpi5V3dInitialize(
      * 10-15 ms clock granularity. */
     ExSetTimerResolution(10000, TRUE);
 
-    Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_ERR_STAT, 0xFFFFFFFFu);
-    DPRINT1("RPI5VC4: init ERR_STAT after clear=%08lx\n",
-            Rpi5V3dRead(DeviceExtension->V3dCoreBase, V3D_ERR_STAT));
+    Rpi5V3dReportErrorStatus(DeviceExtension->V3dCoreBase, "init");
 
     DeviceExtension->V3dReady = TRUE;
     DPRINT1("RPI5VC4: V3D %lu.%lu online — hub 0x%08lx/0x%08lx core 0x%08lx, "
