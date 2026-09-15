@@ -186,6 +186,7 @@ if(ARCH STREQUAL "i386")
         i386/NtContinue.S
     )
 elseif(ARCH STREQUAL "amd64")
+    list(APPEND SOURCE SyscallStub.c)
     add_asm_files(ntdll_apitest_asm
         ../crt/amd64/setjmp_helper.s
         amd64/NtContinue.S

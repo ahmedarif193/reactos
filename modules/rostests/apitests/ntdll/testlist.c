@@ -47,6 +47,9 @@ extern void func_NtCompareTokens(void);
 #if defined(_M_IX86) || defined(_M_AMD64)
 extern void func_NtContinue(void);
 #endif
+#ifdef _M_AMD64
+extern void func_SyscallStub(void);
+#endif
 extern void func_NtCreateFile(void);
 extern void func_NtCreateKey(void);
 extern void func_NtCreateProfile(void);
@@ -202,6 +205,9 @@ const struct test winetest_testlist[] =
     { "NtCompareTokens",                func_NtCompareTokens },
 #if defined(_M_IX86) || defined(_M_AMD64)
     { "NtContinue",                     func_NtContinue },
+#endif
+#ifdef _M_AMD64
+    { "SyscallStub",                    func_SyscallStub },
 #endif
     { "NtCreateFile",                   func_NtCreateFile },
     { "NtCreateKey",                    func_NtCreateKey },

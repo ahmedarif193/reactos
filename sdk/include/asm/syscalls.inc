@@ -304,8 +304,8 @@ ENDM
 #elif defined(_M_AMD64)
 MACRO(STUBCODE_U, Name, SyscallId, ArgCount)
     .ENDPROLOG
+    .byte HEX(4c), HEX(8b), HEX(d1)
     mov eax, SyscallId
-    mov r10, rcx
     syscall
     ret
     ALIGN 32

@@ -531,6 +531,19 @@ static VOID Test_SpareCode(VOID)
     _SEH2_END;
 }
 
+static VOID Test_TerminalStack(VOID)
+{
+    CONTEXT Ctx;
+    TEST_UNWIND_INFO *Info;
+
+    Info = ResetUnwindInfo(1, 1, 1);
+    SetCode(Info, 0, 1, UWOP_PUSH_NONVOL, REG_RBP);
+
+    InitContext(&Ctx, sizeof(ULONG64));
+    DoUnwind(&Ctx, 1, NULL);
+    ok_eq_hex64(Ctx.Rsp, sizeof(ULONG64));
+}
+
 START_TEST(RtlVirtualUnwind)
 {
     RtlpInitialize();
@@ -550,4 +563,5 @@ START_TEST(RtlVirtualUnwind)
     Test_SaveXmm128Far();
     Test_Epilog();
     Test_SpareCode();
+    Test_TerminalStack();
 }
