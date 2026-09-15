@@ -541,6 +541,337 @@ FileNameContainsSpecialCharacters(LPTSTR pszFileName)
     return FALSE;
 }
 
+static BOOL
+IsExecutableCompletion(
+    IN LPCTSTR FileName,
+    IN LPCTSTR PathExt)
+{
+    LPCTSTR Extension = _tcsrchr(FileName, _T('.'));
+    LPCTSTR Start;
+    LPCTSTR End;
+    SIZE_T ExtensionLength;
+
+    if (!Extension)
+        return FALSE;
+    ExtensionLength = _tcslen(Extension);
+
+    Start = PathExt;
+    while (*Start)
+    {
+        while (*Start == _T(';') || _istspace(*Start))
+            Start++;
+        End = _tcschr(Start, _T(';'));
+        if (!End)
+            End = Start + _tcslen(Start);
+        while (End > Start && _istspace(End[-1]))
+            End--;
+
+        if ((SIZE_T)(End - Start) == ExtensionLength &&
+            !_tcsnicmp(Start, Extension, ExtensionLength))
+        {
+            return TRUE;
+        }
+        Start = *End ? End + 1 : End;
+    }
+    return FALSE;
+}
+
+static BOOL
+AddCommandCompletion(
+    IN OUT FileName **FileList,
+    IN OUT INT *FileListSize,
+    IN LPCTSTR Name)
+{
+    FileName *NewList;
+    INT Index;
+
+    for (Index = 0; Index < *FileListSize; Index++)
+    {
+        if (!_tcsicmp((*FileList)[Index].Name, Name))
+            return TRUE;
+    }
+
+    NewList = cmd_realloc(*FileList,
+                          (*FileListSize + 1) * sizeof(**FileList));
+    if (!NewList)
+        return FALSE;
+
+    *FileList = NewList;
+    _tcsncpy(NewList[*FileListSize].Name, Name, MAX_PATH - 1);
+    NewList[*FileListSize].Name[MAX_PATH - 1] = _T('\0');
+    (*FileListSize)++;
+    return TRUE;
+}
+
+static BOOL
+AddCommandFilesFromDirectory(
+    IN LPCTSTR Directory,
+    IN LPCTSTR Prefix,
+    IN LPCTSTR PathExt,
+    IN OUT FileName **FileList,
+    IN OUT INT *FileListSize)
+{
+    TCHAR SearchPath[MAX_PATH];
+    WIN32_FIND_DATA File;
+    HANDLE Find;
+    SIZE_T DirectoryLength = Directory ? _tcslen(Directory) : 0;
+    SIZE_T PrefixLength = _tcslen(Prefix);
+    BOOL Result = TRUE;
+
+    if (DirectoryLength)
+    {
+        BOOL NeedsSeparator = Directory[DirectoryLength - 1] != _T('\\') &&
+                              Directory[DirectoryLength - 1] != _T('/');
+        if (DirectoryLength + NeedsSeparator + PrefixLength + 2 > ARRAYSIZE(SearchPath))
+            return TRUE;
+        _tcscpy(SearchPath, Directory);
+        if (NeedsSeparator)
+            _tcscat(SearchPath, _T("\\"));
+        _tcscat(SearchPath, Prefix);
+    }
+    else
+    {
+        if (PrefixLength + 2 > ARRAYSIZE(SearchPath))
+            return TRUE;
+        _tcscpy(SearchPath, Prefix);
+    }
+    _tcscat(SearchPath, _T("*"));
+
+    Find = FindFirstFile(SearchPath, &File);
+    if (Find == INVALID_HANDLE_VALUE)
+        return TRUE;
+
+    do
+    {
+        if (!(File.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+            IsExecutableCompletion(File.cFileName, PathExt) &&
+            !AddCommandCompletion(FileList, FileListSize, File.cFileName))
+        {
+            Result = FALSE;
+            break;
+        }
+    } while (FindNextFile(Find, &File));
+
+    FindClose(Find);
+    return Result;
+}
+
+static BOOL
+GetStartedCommandPrefix(
+    IN LPCTSTR Line,
+    IN UINT Cursor,
+    OUT LPTSTR Prefix,
+    OUT UINT *PrefixStart)
+{
+    UINT Index = 0;
+    SIZE_T Length = _tcslen(Line);
+
+    /* Command-name completion is intentionally limited to a started first
+     * token at the end of the line.  Paths and later arguments retain the
+     * existing filename completion behavior. */
+    if (Cursor != Length)
+        return FALSE;
+    while (Index < Cursor && _istspace(Line[Index]))
+        Index++;
+    if (Index < Cursor && Line[Index] == _T('@'))
+        Index++;
+    if (Index == Cursor || Cursor - Index >= MAX_PATH)
+        return FALSE;
+
+    *PrefixStart = Index;
+    for (; Index < Cursor; Index++)
+    {
+        if (_istspace(Line[Index]) ||
+            _tcschr(_T("\\/\":&|<>()*?"), Line[Index]))
+        {
+            return FALSE;
+        }
+    }
+
+    _tcsncpy(Prefix, &Line[*PrefixStart], Cursor - *PrefixStart);
+    Prefix[Cursor - *PrefixStart] = _T('\0');
+    return TRUE;
+}
+
+BOOL
+CompleteCommand(
+    LPTSTR strIN,
+    BOOL bNext,
+    LPTSTR strOut,
+    UINT Cursor)
+{
+    static const TCHAR DefaultPathExt[] = _T(".COM;.EXE;.BAT;.CMD");
+    static TCHAR LastReturned[MAX_PATH];
+    static TCHAR SearchPrefix[MAX_PATH];
+    static UINT SearchPrefixStart;
+    static INT Sel;
+    FileName *FileList = NULL;
+    INT FileListSize = 0;
+    LPTSTR PathExt = NULL;
+    LPTSTR Path = NULL;
+    LPTSTR Directory;
+    LPTSTR End;
+    DWORD Length;
+    UINT PrefixStart;
+    UINT Index;
+    BOOL Repeating;
+    BOOL NeededQuote;
+    SIZE_T ResultLength;
+
+    strOut[0] = _T('\0');
+    Repeating = (Cursor == _tcslen(strIN)) &&
+                LastReturned[0] &&
+                !_tcscmp(strIN, LastReturned);
+    if (Repeating)
+    {
+        _tcscpy(strOut, strIN);
+        PrefixStart = SearchPrefixStart;
+    }
+    else
+    {
+        if (!GetStartedCommandPrefix(strIN, Cursor,
+                                     SearchPrefix, &PrefixStart))
+        {
+            LastReturned[0] = _T('\0');
+            return FALSE;
+        }
+        SearchPrefixStart = PrefixStart;
+    }
+
+    Length = GetEnvironmentVariable(_T("PATHEXT"), NULL, 0);
+    if (Length)
+    {
+        PathExt = cmd_alloc(Length * sizeof(*PathExt));
+        if (PathExt)
+            GetEnvironmentVariable(_T("PATHEXT"), PathExt, Length);
+    }
+    else
+    {
+        PathExt = cmd_alloc(sizeof(DefaultPathExt));
+        if (PathExt)
+            _tcscpy(PathExt, DefaultPathExt);
+    }
+    if (!PathExt)
+        goto OutOfMemory;
+
+    for (Index = 0; cmds[Index].name; Index++)
+    {
+        if (!_tcsnicmp(cmds[Index].name,
+                       SearchPrefix,
+                       _tcslen(SearchPrefix)) &&
+            !AddCommandCompletion(&FileList,
+                                  &FileListSize,
+                                  cmds[Index].name))
+        {
+            goto OutOfMemory;
+        }
+    }
+
+    if (!AddCommandFilesFromDirectory(NULL,
+                                      SearchPrefix,
+                                      PathExt,
+                                      &FileList,
+                                      &FileListSize))
+    {
+        goto OutOfMemory;
+    }
+
+    Length = GetEnvironmentVariable(_T("PATH"), NULL, 0);
+    if (Length)
+    {
+        Path = cmd_alloc(Length * sizeof(*Path));
+        if (!Path)
+            goto OutOfMemory;
+        GetEnvironmentVariable(_T("PATH"), Path, Length);
+
+        Directory = Path;
+        while (Directory)
+        {
+            End = _tcschr(Directory, _T(';'));
+            if (End)
+                *End = _T('\0');
+            while (_istspace(*Directory))
+                Directory++;
+            Length = _tcslen(Directory);
+            while (Length && _istspace(Directory[Length - 1]))
+                Directory[--Length] = _T('\0');
+            if (Length >= 2 && Directory[0] == _T('"') &&
+                Directory[Length - 1] == _T('"'))
+            {
+                Directory[Length - 1] = _T('\0');
+                Directory++;
+            }
+            if (*Directory &&
+                !AddCommandFilesFromDirectory(Directory,
+                                              SearchPrefix,
+                                              PathExt,
+                                              &FileList,
+                                              &FileListSize))
+            {
+                goto OutOfMemory;
+            }
+            Directory = End ? End + 1 : NULL;
+        }
+    }
+
+    if (!FileListSize)
+    {
+        LastReturned[0] = _T('\0');
+        cmd_free(Path);
+        cmd_free(PathExt);
+        return FALSE;
+    }
+
+    qsort(FileList, FileListSize, sizeof(*FileList), compare);
+    if (Repeating)
+    {
+        Sel %= FileListSize;
+        if (bNext)
+            Sel = (Sel + 1) % FileListSize;
+        else
+            Sel = Sel ? Sel - 1 : FileListSize - 1;
+    }
+    else
+    {
+        Sel = 0;
+    }
+
+    NeededQuote = FileNameContainsSpecialCharacters(FileList[Sel].Name);
+    ResultLength = PrefixStart + _tcslen(FileList[Sel].Name) +
+                   (NeededQuote ? 2 : 0);
+    if (ResultLength >= MAX_PATH)
+    {
+        LastReturned[0] = _T('\0');
+        cmd_free(FileList);
+        cmd_free(Path);
+        cmd_free(PathExt);
+        return FALSE;
+    }
+
+    _tcsncpy(strOut, strIN, PrefixStart);
+    strOut[PrefixStart] = _T('\0');
+    if (NeededQuote)
+        _tcscat(strOut, _T("\""));
+    _tcscat(strOut, FileList[Sel].Name);
+    if (NeededQuote)
+        _tcscat(strOut, _T("\""));
+    _tcscpy(LastReturned, strOut);
+
+    cmd_free(FileList);
+    cmd_free(Path);
+    cmd_free(PathExt);
+    return TRUE;
+
+OutOfMemory:
+    LastReturned[0] = _T('\0');
+    cmd_free(FileList);
+    cmd_free(Path);
+    cmd_free(PathExt);
+    SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    ConOutFormatMessage(GetLastError());
+    return FALSE;
+}
+
 
 VOID CompleteFilename (LPTSTR strIN, BOOL bNext, LPTSTR strOut, UINT cusor)
 {

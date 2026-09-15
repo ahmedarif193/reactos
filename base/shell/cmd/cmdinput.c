@@ -422,7 +422,16 @@ BOOL ReadCommand(LPTSTR str, INT maxlen)
                 /* str is the whole things that is on the current line
                    that is and and out.  arg 2 is weather it goes back
                     one file or forward one file */
-                CompleteFilename(str, !(ir.Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED), szPath, current);
+                if (!CompleteCommand(str,
+                                     !(ir.Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED),
+                                     szPath,
+                                     current))
+                {
+                    CompleteFilename(str,
+                                     !(ir.Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED),
+                                     szPath,
+                                     current);
+                }
                 /* Attempt to clear the line */
                 ClearCommandLine (str, maxlen, orgx, orgy);
                 curx = orgx;
