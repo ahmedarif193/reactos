@@ -384,6 +384,47 @@ static void test_NtIntAtom(void)
     }
 }
 
+static void test_high_pointer_atom_name(void)
+{
+#ifdef _WIN64
+    static const WCHAR name[] = {'h','i','g','h','-','p','o','i','n','t','e','r','-','a','t','o','m',0};
+    RTL_ATOM_TABLE table = NULL;
+    RTL_ATOM atom = 0, lookup = 0;
+    void *allocation = NULL;
+    WCHAR *high_name = NULL;
+    ULONG_PTR high;
+    NTSTATUS res;
+
+    /* An integer atom has no bits above bit 15. Exercise a valid string at
+     * an address whose bits 16-31 are zero but whose upper 32 bits are not. */
+    for (high = 1; high < 0x1000 && allocation == NULL; ++high)
+        allocation = VirtualAlloc((void *)(high << 32), 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (allocation == NULL)
+    {
+        win_skip("Could not reserve a high atom-name address\n");
+        return;
+    }
+    high_name = (WCHAR *)((BYTE *)allocation + 0xc000);
+    lstrcpyW(high_name, name);
+
+    res = pRtlCreateAtomTable(37, &table);
+    ok(!res, "RtlCreateAtomTable failed, status %#lx\n", res);
+    if (!res)
+    {
+        res = pRtlAddAtomToAtomTable(table, high_name, &atom);
+        ok(!res, "High-pointer atom name was rejected, status %#lx\n", res);
+        if (!res)
+        {
+            res = pRtlLookupAtomInAtomTable(table, name, &lookup);
+            ok(!res, "High-pointer atom was not inserted, status %#lx\n", res);
+            ok(atom == lookup, "Added atom %#x, looked up %#x\n", atom, lookup);
+        }
+        pRtlDestroyAtomTable(table);
+    }
+    VirtualFree(allocation, 0, MEM_RELEASE);
+#endif
+}
+
 /* Tests to see how the pincount and refcount actually works */
 static void test_NtRefPinAtom(void)
 {
@@ -488,6 +529,7 @@ START_TEST(atom)
 
         test_NtAtom();
         test_NtIntAtom();
+        test_high_pointer_atom_name();
         test_NtRefPinAtom();
         test_Global();
     }

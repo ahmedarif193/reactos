@@ -95,7 +95,8 @@ RtlpCheckIntegerAtom(
     DPRINT("RtlpCheckIntegerAtom(AtomName '%S' AtomValue %p)\n",
            AtomName, AtomValue);
 
-    if (!((ULONG_PTR)AtomName & 0xFFFF0000))
+    /* Integer atoms have no set bits above the low 16 on every ABI. */
+    if (((ULONG_PTR)AtomName & ~(ULONG_PTR)0xFFFF) == 0)
     {
         LoValue = (USHORT)((ULONG_PTR)AtomName & 0xFFFF);
 
