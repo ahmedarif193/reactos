@@ -1067,6 +1067,10 @@ IntWindowFromDC(HDC hDc)
       {
          if (Dce->DCXFlags & DCX_INDESTROY)
             Ret = NULL;
+         else if (!Dce->hwndCurrent &&
+                  (Dce->DCXFlags & (DCX_CACHE | DCX_WINDOW | DCX_DCEBUSY)) ==
+                  (DCX_CACHE | DCX_WINDOW | DCX_DCEBUSY))
+            Ret = IntGetDesktopWindow();
          else
             Ret = Dce->hwndCurrent;
          break;

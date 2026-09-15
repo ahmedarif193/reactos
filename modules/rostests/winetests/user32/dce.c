@@ -127,6 +127,7 @@ static void test_dc_attributes(void)
     ok( WindowFromDC( old_hdc ) != hwnd_cache, "wrong window\n" );
 
     hdc = GetDC(0);
+    ok( WindowFromDC( hdc ) == GetDesktopWindow(), "wrong window\n" );
     caps = GetDeviceCaps( hdc, HORZRES );
     ok( caps != 0, "got %d\n", caps );
     caps = GetDeviceCaps( hdc, VERTRES );
@@ -134,6 +135,7 @@ static void test_dc_attributes(void)
     caps = GetDeviceCaps( hdc, NUMCOLORS );
     ok( caps != 0, "got %d\n", caps );
     ReleaseDC( 0, hdc );
+    ok( WindowFromDC( hdc ) != GetDesktopWindow(), "wrong window\n" );
     caps = GetDeviceCaps( hdc, HORZRES );
     ok( caps == 0, "got %d\n", caps );
     caps = GetDeviceCaps( hdc, VERTRES );
