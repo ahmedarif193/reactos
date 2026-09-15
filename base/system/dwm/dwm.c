@@ -15,6 +15,7 @@
 
 #include "dxsurface.h"
 #include "gpucomp.h"
+#include "material.h"
 #include "presenttrace.h"
 #include "settings.h"
 
@@ -348,8 +349,6 @@ static BOOL g_noiseReady;
 #define DWM_BLUR_RADIUS_96          10
 #define DWM_BLUR_RADIUS_MAX         48
 #define DWM_BLUR_PASSES             3
-#define DWM_MATERIAL_SATURATION     20
-#define DWM_MATERIAL_NOISE          4
 
 static BOOL
 DwmEnsureBlurBuffers(LONG Width, LONG Height)
@@ -733,9 +732,9 @@ DwmBlurUpsample(const ULONG *Half, LONG HalfWidth, LONG HalfHeight,
 }
 
 static LONG
-DwmBlurRadius(void)
+DwmScaledBlurRadius(LONG Radius96)
 {
-    LONG Radius = MulDiv(DWM_BLUR_RADIUS_96,
+    LONG Radius = MulDiv(Radius96,
                          g_shadowDpi > 0 ? g_shadowDpi : 96, 96);
 
     if (Radius < 1)
@@ -743,6 +742,18 @@ DwmBlurRadius(void)
     if (Radius > DWM_BLUR_RADIUS_MAX)
         Radius = DWM_BLUR_RADIUS_MAX;
     return Radius;
+}
+
+static LONG
+DwmBlurRadius(void)
+{
+    return DwmScaledBlurRadius(DWM_BLUR_RADIUS_96);
+}
+
+static LONG
+DwmMaterialBlurRadius(void)
+{
+    return DwmScaledBlurRadius(DWM_MATERIAL_BLUR_RADIUS_96);
 }
 
 static BOOL
@@ -943,14 +954,14 @@ DwmBlurRecordSample(BOOL Gpu, BOOL Large, const RECT *Region, LONGLONG Ticks)
 static void
 DwmApplyBlur(const ULONG *Input, ULONG *Composition, LONG Width, LONG Height,
              LONG ClipLeft, LONG ClipTop, LONG ClipRight, LONG ClipBottom,
-             const DWM_WIN *Window, const RECTL *Rectangles)
+             const DWM_WIN *Window, const RECTL *Rectangles, LONG Radius)
 {
     RECTL Entire = {0, 0, Window->cx, Window->cy};
     RECTL Union = {0, 0, 0, 0}, Clipped;
     RECTL Regions[4];
     const RECTL *Rectangle;
     ULONG Index, Count, Alpha = 255;
-    LONG Radius, HalfRadius, HalfWidth, HalfHeight, WindowX, WindowY;
+    LONG HalfRadius, HalfWidth, HalfHeight, WindowX, WindowY;
     LONG hL, hT, hR, hB, Reach;
     const ULONG *Result = NULL;
     BOOL HaveUnion = FALSE;
@@ -980,7 +991,6 @@ DwmApplyBlur(const ULONG *Input, ULONG *Composition, LONG Width, LONG Height,
         return;
     DwmEnsureNoise();
 
-    Radius = DwmBlurRadius();
     HalfRadius = (Radius + 1) / 2;
     if (HalfRadius < 1)
         HalfRadius = 1;
@@ -1278,7 +1288,6 @@ DwmWindowBlursBackdrop(const DWM_WIN *Window)
 }
 
 #define DWM_CORNER_MAX_RECTS 129
-#define DWM_REFLECT_STRENGTH 34u
 
 static BYTE *g_reflectLut;
 static LONG g_reflectLen;
@@ -1287,10 +1296,12 @@ static double
 DwmReflectBump(double t, double Center, double HalfWidth, double Peak)
 {
     double d = (t - Center) / HalfWidth;
+    double q;
 
     if (d <= -1.0 || d >= 1.0)
         return 0.0;
-    return Peak * 0.5 * (1.0 + cos(3.14159265358979 * d));
+    q = 1.0 - (d < 0.0 ? -d : d);
+    return Peak * q * q * (3.0 - 2.0 * q);
 }
 
 static BOOL
@@ -1335,7 +1346,6 @@ DwmReflection(LONG ScreenX, LONG ScreenY)
     return g_reflectLut[u];
 }
 #define DWM_MATERIAL_FRINGE 96u
-#define DWM_MATERIAL_EDGE_LIGHT 26u
 
 static ULONG
 DwmChannelDistance(ULONG a, ULONG b)
@@ -1740,7 +1750,7 @@ DwmApplyBackdropBlurCached(ULONG *Composition, LONG Width, LONG Height,
     RECTL Current, CurrentSource, Overlap, OverlapSource, Missing[4];
     DWM_WIN CacheWindow;
     ULONGLONG Pixels, CurrentArea, OverlapArea;
-    LONG Radius = DwmBlurRadius();
+    LONG Radius = DwmMaterialBlurRadius();
     ULONG Index;
     BOOL Reuse = FALSE;
     BOOL SceneEqual = FALSE;
@@ -1758,7 +1768,7 @@ DwmApplyBackdropBlurCached(ULONG *Composition, LONG Width, LONG Height,
     {
         DwmApplyBlur(Composition, Composition, Width, Height,
                      ClipLeft, ClipTop, ClipRight, ClipBottom,
-                     Window, Rectangles);
+                     Window, Rectangles, Radius);
         return NULL;
     }
 
@@ -1814,7 +1824,8 @@ DwmApplyBackdropBlurCached(ULONG *Composition, LONG Width, LONG Height,
     {
         DwmApplyBlur(g_backdropCacheInput, g_backdropCacheOutput,
                      Width, Height, Current.left, Current.top,
-                     Current.right, Current.bottom, &CacheWindow, NULL);
+                     Current.right, Current.bottom, &CacheWindow, NULL,
+                     Radius);
         if (g_frameStats) ++g_statBackdropCacheMisses;
     }
     else
@@ -1836,7 +1847,7 @@ DwmApplyBackdropBlurCached(ULONG *Composition, LONG Width, LONG Height,
                          Width, Height,
                          Missing[Index].left, Missing[Index].top,
                          Missing[Index].right, Missing[Index].bottom,
-                         &CacheWindow, NULL);
+                         &CacheWindow, NULL, Radius);
         }
         if (g_frameStats) ++g_statBackdropCachePartials;
     }
@@ -2170,7 +2181,8 @@ DwmBlendConstantGlass(ULONG * __restrict Dest,
     for (Index = 0; Index < Count; ++Index)
     {
         ULONG Under = Base[Index];
-        LONG Glow = DWM_REFLECT_STRENGTH * Reflection[Index] * Weight / (255u * 255u);
+        LONG Glow = DWM_MATERIAL_REFLECT_STRENGTH * Reflection[Index] *
+                    Weight / (255u * 255u);
         LONG R = Red + DwmDivideChannel255(
             ((LONG)((Under >> 16) & 255) - KeyRed) * Shift) + Glow;
         LONG G = Green + DwmDivideChannel255(
@@ -2208,7 +2220,7 @@ DwmBlendGlassSpan(ULONG * __restrict Dest, const ULONG * __restrict Base,
                  (DWM_MATERIAL_FRINGE - Near) * 255u /
                  (DWM_MATERIAL_FRINGE - DWM_MATERIAL_TINT_BAND) : 0;
         Shift = (255u - Opacity) * Weight / 255u;
-        Glow = DWM_REFLECT_STRENGTH * Reflection[Index] * Weight /
+        Glow = DWM_MATERIAL_REFLECT_STRENGTH * Reflection[Index] * Weight /
                (255u * 255u);
         Red = ((Color >> 16) & 255) + DwmDivideChannel255(
             ((LONG)((Under >> 16) & 255) -
@@ -2555,7 +2567,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                        (LONG)(materialKey & 0xFFu)) * (LONG)Shift / 255;
                 if (w->BackdropType == DWM_BACKDROP_TRANSIENT)
                 {
-                    LONG glow = (LONG)(DWM_REFLECT_STRENGTH *
+                    LONG glow = (LONG)(DWM_MATERIAL_REFLECT_STRENGTH *
                                        DwmReflection(x0 + x, dy) *
                                        materialWeight / (255u * 255u));
 
@@ -3831,7 +3843,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                     DwmApplyBlur((const ULONG *)g_compBits,
                                  (ULONG *)g_compBits, g_W, g_H,
                                  pl, pt, pr, pb, &wins[i],
-                                 windowBlurRects);
+                                 windowBlurRects, DwmBlurRadius());
                     DwmStatCounter(&stgB);
                     if (g_frameStats)
                         g_statBlurTicks += (ULONGLONG)(stgB.QuadPart - stgA.QuadPart);

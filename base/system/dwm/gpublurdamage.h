@@ -5,7 +5,7 @@
 /* Reconstruct a blur's complete lower scene before sampling a damaged buffer. */
 #pragma once
 
-#define DWM_GPU_MATERIAL_BLUR_RADIUS 24
+#include "material.h"
 
 static ULONG
 DwmGpuMaterialBlurRadius(const DWM_WIN *Window)
