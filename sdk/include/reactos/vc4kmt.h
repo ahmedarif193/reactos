@@ -42,6 +42,7 @@ typedef struct _VC4KMT_FENCE
 
 #define VC4KMT_RESOURCE_CPU_DIRTY 0x00000001u
 #define VC4KMT_CL_FLAG_FLUSH_CACHE 0x00000001u
+#define VC4KMT_BO_CREATE_CPU_CACHED 0x00000001u
 
 typedef struct _VC4KMT_RESOURCE
 {
@@ -101,6 +102,13 @@ NTSTATUS
 vc4kmt_bo_create(
     _In_ VC4KMT_DEVICE *Device,
     _In_ UINT Size,
+    _Out_ VC4KMT_BO *Bo);
+
+NTSTATUS
+vc4kmt_bo_create_ex(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Size,
+    _In_ ULONG Flags,
     _Out_ VC4KMT_BO *Bo);
 
 NTSTATUS

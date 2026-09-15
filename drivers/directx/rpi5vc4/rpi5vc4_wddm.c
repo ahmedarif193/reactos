@@ -1791,7 +1791,9 @@ Rpi5Vc4DdiCreateAllocation(
         DXGK_ALLOCATIONINFO *Info = &CreateAllocation->pAllocationInfo[i];
         PRPI5VC4_ALLOCATION Allocation;
         CONST RPI5VC4_STANDARD_ALLOCATION_DATA *PrivateData;
+        CONST RPI5VC4_ALLOCATION_DATA *AllocationData;
         BOOLEAN StandardAllocation;
+        BOOLEAN CachedAllocation;
         BOOLEAN LocalAllocation;
         ULONG SegmentId;
         SIZE_T Size = (Info->Size != 0) ? Info->Size : PAGE_SIZE;
@@ -1807,6 +1809,26 @@ Rpi5Vc4DdiCreateAllocation(
              PrivateData->Type == DXGK_STDALLOCATION_SHADOWSURFACE ||
              PrivateData->Type == DXGK_STDALLOCATION_STAGINGSURFACE ||
              PrivateData->Type == DXGK_STDALLOCATION_GDISURFACE);
+        AllocationData = (CONST RPI5VC4_ALLOCATION_DATA *)
+            Info->pPrivateDriverData;
+        if (Info->PrivateDriverDataSize == sizeof(*AllocationData) &&
+            AllocationData != NULL &&
+            (AllocationData->Flags & ~RPI5VC4_ALLOCATION_VALID_FLAGS) != 0)
+        {
+            while (i > 0)
+            {
+                --i;
+                ExFreePoolWithTag(
+                    (PVOID)CreateAllocation->pAllocationInfo[i].hAllocation,
+                    RPI5VC4_POOL_TAG);
+                CreateAllocation->pAllocationInfo[i].hAllocation = NULL;
+            }
+            return STATUS_INVALID_PARAMETER;
+        }
+        CachedAllocation =
+            Info->PrivateDriverDataSize == sizeof(*AllocationData) &&
+            AllocationData != NULL &&
+            (AllocationData->Flags & RPI5VC4_ALLOCATION_CPU_CACHED) != 0;
         LocalAllocation =
             StandardAllocation &&
             PrivateData->Type == DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE;
@@ -1866,7 +1888,8 @@ Rpi5Vc4DdiCreateAllocation(
         Info->PreferredSegment.Value = 0;
         Info->PreferredSegment.SegmentId0 = SegmentId;
         Info->Flags.CpuVisible = 1;
-        Info->Flags.Cached = StandardAllocation && !LocalAllocation;
+        Info->Flags.Cached =
+            !LocalAllocation && (StandardAllocation || CachedAllocation);
         Info->Flags.AccessedPhysically = LocalAllocation;
         Info->hAllocation = (HANDLE)Allocation;
     }

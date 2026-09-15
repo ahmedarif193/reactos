@@ -86,7 +86,8 @@ v3d_bo_remove_from_cache(struct v3d_bo_cache *cache, struct v3d_bo *bo)
 }
 
 static struct v3d_bo *
-v3d_bo_from_cache(struct v3d_screen *screen, uint32_t size, const char *name)
+v3d_bo_from_cache(struct v3d_screen *screen, uint32_t size, const char *name,
+                  bool cpu_cached)
 {
         struct v3d_bo_cache *cache = &screen->bo_cache;
         uint32_t page_index = size / 4096 - 1;
@@ -96,10 +97,15 @@ v3d_bo_from_cache(struct v3d_screen *screen, uint32_t size, const char *name)
 
         struct v3d_bo *bo = NULL;
         mtx_lock(&cache->lock);
-        if (!list_is_empty(&cache->size_list[page_index])) {
-                bo = list_first_entry(&cache->size_list[page_index],
-                                      struct v3d_bo, size_list);
+        list_for_each_entry(struct v3d_bo, entry,
+                            &cache->size_list[page_index], size_list) {
+                if (entry->cpu_cached == cpu_cached) {
+                        bo = entry;
+                        break;
+                }
+        }
 
+        if (bo) {
                 /* Check that the BO has gone idle.  If not, then we want to
                  * allocate something new instead, since we assume that the
                  * user will proceed to CPU map it and fill it with stuff.
@@ -118,8 +124,9 @@ v3d_bo_from_cache(struct v3d_screen *screen, uint32_t size, const char *name)
         return bo;
 }
 
-struct v3d_bo *
-v3d_bo_alloc(struct v3d_screen *screen, uint32_t size, const char *name)
+static struct v3d_bo *
+v3d_bo_alloc_with_policy(struct v3d_screen *screen, uint32_t size,
+                         const char *name, bool cpu_cached)
 {
         struct v3d_bo *bo;
         int ret;
@@ -130,7 +137,7 @@ v3d_bo_alloc(struct v3d_screen *screen, uint32_t size, const char *name)
 
         size = align(size, 4096);
 
-        bo = v3d_bo_from_cache(screen, size, name);
+        bo = v3d_bo_from_cache(screen, size, name, cpu_cached);
         if (bo) {
                 if (dump_stats) {
                         mesa_logd("Allocated %s %dkb from cache:", name, size / 1024);
@@ -148,9 +155,13 @@ v3d_bo_alloc(struct v3d_screen *screen, uint32_t size, const char *name)
         bo->size = size;
         bo->name = name;
         bo->private = true;
+        bo->cpu_cached = cpu_cached;
 
         struct drm_v3d_create_bo create = {
-                .size = size
+                .size = size,
+#ifdef _WIN32
+                .flags = cpu_cached ? V3D_D3DKMT_CREATE_BO_CPU_CACHED : 0,
+#endif
         };
 
  retry:
@@ -180,6 +191,21 @@ v3d_bo_alloc(struct v3d_screen *screen, uint32_t size, const char *name)
 
         return bo;
 }
+
+struct v3d_bo *
+v3d_bo_alloc(struct v3d_screen *screen, uint32_t size, const char *name)
+{
+        return v3d_bo_alloc_with_policy(screen, size, name, false);
+}
+
+#ifdef _WIN32
+struct v3d_bo *
+v3d_bo_alloc_cpu_cached(struct v3d_screen *screen, uint32_t size,
+                        const char *name)
+{
+        return v3d_bo_alloc_with_policy(screen, size, name, true);
+}
+#endif
 
 void
 v3d_bo_last_unreference(struct v3d_bo *bo)
