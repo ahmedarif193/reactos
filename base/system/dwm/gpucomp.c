@@ -1008,7 +1008,7 @@ static struct { GLint Owner, Size, Sigma, Opacity, ScreenHeight, Offset, WindowA
 typedef struct _DWM_GPU_MATERIAL_PROGRAM
 {
     GLuint Program;
-    GLint Window, Backdrop, Glass, Whole, PixelAlpha, UseKey;
+    GLint Window, Backdrop, Glass, Whole, PixelAlpha, Premultiplied, UseKey;
     GLint Opacity, Alpha, Radius, Saturation, Reflection;
     GLint Size, ScreenSize, ClientMin, ClientMax;
     GLint CaptureOrigin, CaptureSize, Brush, Colorization, Key;
@@ -1360,6 +1360,7 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     RECT Bounds, Cover;
     const RECT *OpaqueClient = NULL;
     const RECT *SceneCover;
+    BOOL Premultiplied, PerPixelAlpha, Result;
 
     if (!g_composeActive || Window == NULL ||
         Window->cx <= 0 || Window->cy <= 0 ||
@@ -1369,6 +1370,8 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     {
         return FALSE;
     }
+    Premultiplied = (Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA) != 0;
+    PerPixelAlpha = Premultiplied || (Window->BlurFlags & DWM_BLUR_ENABLE) != 0;
 
     /* Client publications must still be sampled before their acknowledgement
      * permits the producer to overwrite the imported storage. */
@@ -1510,26 +1513,32 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     Slot->LastFrame = g_composeFrame;
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
-    /* GDI BGRX backing stores have an undefined high byte. Only windows
-     * explicitly using per-pixel alpha may take opacity from the texture. */
-    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
-    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
-    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_TEXTURE);
-    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_PRIMARY_COLOR);
-    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA,
-               (Window->BlurFlags & DWM_BLUR_ENABLE) ? GL_MODULATE : GL_REPLACE);
-    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA,
-               (Window->BlurFlags & DWM_BLUR_ENABLE) ? GL_TEXTURE : GL_PRIMARY_COLOR);
-    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA, GL_PRIMARY_COLOR);
-
     if (Window->LayerFlags & DWM_LWA_ALPHA)
         Alpha = (GLfloat)(Window->Alpha / 255.0);
     if (Alpha <= 0.0f)
         return TRUE;
 
+    /* GDI BGRX backing stores have an undefined high byte. Only windows
+     * explicitly using per-pixel alpha may take opacity from the texture. */
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_TEXTURE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, Premultiplied ? GL_CONSTANT : GL_PRIMARY_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, PerPixelAlpha ? GL_MODULATE : GL_REPLACE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, PerPixelAlpha ? GL_TEXTURE : GL_PRIMARY_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA, GL_PRIMARY_COLOR);
+    if (Premultiplied)
+    {
+        const GLfloat TextureColor[4] = {Alpha, Alpha, Alpha, Alpha};
+
+        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, TextureColor);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    }
+
     if (!Client && Window->DxGlobalShare != 0 && Window->DxUpdateId != 0 &&
         Window->AnimFlags == 0 && Alpha >= 1.0f &&
         !(Window->LayerFlags & DWM_LWA_COLORKEY) &&
+        !Premultiplied &&
         !(Window->BlurFlags & DWM_BLUR_ENABLE) &&
         (Window->BackdropType != DWM_BACKDROP_TRANSIENT ||
          Window->BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT) &&
@@ -1541,15 +1550,38 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
 
     if (Window->BackdropType == DWM_BACKDROP_TRANSIENT ||
         Window->CornerRadius != 0 || (Window->LayerFlags & DWM_LWA_COLORKEY))
-        return DwmGpuComposeMaterial(Window, Slot->Texture, Geometry.Left, Geometry.Top, Geometry.Width, Geometry.Height, Alpha, OpaqueClient, SceneCover);
+    {
+        Result = DwmGpuComposeMaterial(Window,
+                                       Slot->Texture,
+                                       Geometry.Left,
+                                       Geometry.Top,
+                                       Geometry.Width,
+                                       Geometry.Height,
+                                       Alpha,
+                                       OpaqueClient,
+                                       SceneCover);
+        if (Premultiplied)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        return Result;
+    }
     /* BGRX rectangles with full global opacity overwrite their destination.
      * Avoid destination blending for the desktop and opaque window content;
      * glass/rounded/color-key materials returned through the shader above. */
-    if (Alpha >= 1.0f && !(Window->BlurFlags & DWM_BLUR_ENABLE))
+    if (Alpha >= 1.0f && !Premultiplied && !(Window->BlurFlags & DWM_BLUR_ENABLE))
         glDisable(GL_BLEND);
-    DwmGpuComposeUncoveredQuad(Geometry.Left, Geometry.Top, Geometry.Left + Geometry.Width, Geometry.Top + Geometry.Height, Alpha, &g_composeDamage.Draw, OpaqueClient, SceneCover);
+    DwmGpuComposeUncoveredQuad(Geometry.Left,
+                               Geometry.Top,
+                               Geometry.Left + Geometry.Width,
+                               Geometry.Top + Geometry.Height,
+                               Alpha,
+                               &g_composeDamage.Draw,
+                               OpaqueClient,
+                               SceneCover);
     glEnable(GL_BLEND);
-    return glGetError() == GL_NO_ERROR;
+    Result = glGetError() == GL_NO_ERROR;
+    if (Premultiplied)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    return Result;
 }
 
 static BOOL
@@ -2650,6 +2682,7 @@ DwmGpuComposeBuildMaterial(DWM_GPU_MATERIAL_PROGRAM *Shader, BOOL Interior)
         MAT_CACHE(Glass);
         MAT_CACHE(Whole);
         MAT_CACHE(PixelAlpha);
+        MAT_CACHE(Premultiplied);
         MAT_CACHE(UseKey);
         MAT_CACHE(Opacity);
         MAT_CACHE(Alpha);
@@ -2765,7 +2798,8 @@ DwmGpuComposeMaterial(const DWM_WIN *Window, GLuint Texture,
             pglUniform1i(Shader->Backdrop, 1);
             pglUniform1i(Shader->Glass, Glass);
             pglUniform1i(Shader->Whole, Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW);
-            pglUniform1i(Shader->PixelAlpha, !!(Window->BlurFlags & DWM_BLUR_ENABLE));
+            pglUniform1i(Shader->PixelAlpha, !!((Window->BlurFlags & DWM_BLUR_ENABLE) || (Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA)));
+            pglUniform1i(Shader->Premultiplied, !!(Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA));
             pglUniform1i(Shader->UseKey, !!(Window->LayerFlags & DWM_LWA_COLORKEY));
             pglUniform1f(Shader->Opacity, min(Window->BackdropOpacity, 255) / 255.0f);
             pglUniform1f(Shader->Alpha, Alpha);
@@ -2793,7 +2827,7 @@ DwmGpuComposeMaterial(const DWM_WIN *Window, GLuint Texture,
         }
         /* The glass shader already combines its backdrop into RGB. A fully
          * opaque interior therefore needs no destination blending. */
-        if (Interior && Alpha >= 1.0f && !(Window->BlurFlags & DWM_BLUR_ENABLE))
+        if (Interior && Alpha >= 1.0f && !(Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA) && !(Window->BlurFlags & DWM_BLUR_ENABLE))
             glDisable(GL_BLEND);
         else
             glEnable(GL_BLEND);

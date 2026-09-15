@@ -133,7 +133,7 @@ struct Compositor
     ID3D11PixelShader *PixelShaders[ShaderCount];
     ID3D11Buffer *ConstantBuffer;
     ID3D11SamplerState *Sampler;
-    ID3D11BlendState *Blend;
+    ID3D11BlendState *Blend, *PremultipliedBlend;
     ID3D11RasterizerState *Rasterizer;
     ID3D11Query *Completion;
     Texture Canvas, Backdrop;
@@ -202,9 +202,14 @@ BOOL EnsureTexture(Texture &Image, LONG Width, LONG Height, BOOL RenderTarget,
            CreateTexture(Image, Width, Height, RenderTarget, NULL, 0, Format);
 }
 
-BOOL Draw(Texture &Target, Shader Program, const RECT &Clip, Constants &Data,
-           ID3D11ShaderResourceView *Source = NULL, ID3D11ShaderResourceView *Backdrop = NULL,
-           BOOL Blend = FALSE)
+BOOL Draw(Texture &Target,
+          Shader Program,
+          const RECT &Clip,
+          Constants &Data,
+          ID3D11ShaderResourceView *Source = NULL,
+          ID3D11ShaderResourceView *Backdrop = NULL,
+          BOOL Blend = FALSE,
+          BOOL Premultiplied = FALSE)
 {
     if (Clip.left >= Clip.right || Clip.top >= Clip.bottom)
         return TRUE;
@@ -216,7 +221,7 @@ BOOL Draw(Texture &Target, Shader Program, const RECT &Clip, Constants &Data,
     State.Context->RSSetScissorRects(1, &Clip);
     State.Context->RSSetState(State.Rasterizer);
     State.Context->OMSetRenderTargets(1, &Target.Target, NULL);
-    State.Context->OMSetBlendState(Blend ? State.Blend : NULL, NULL, ~0u);
+    State.Context->OMSetBlendState(Premultiplied ? State.PremultipliedBlend : Blend ? State.Blend : NULL, NULL, ~0u);
     State.Context->IASetInputLayout(NULL);
     State.Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
     State.Context->VSSetShader(State.VertexShader, NULL, 0);
@@ -347,6 +352,9 @@ BOOL CreateShaders()
     Blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
     Blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     if (!Result(State.Device->CreateBlendState(&Blend, &State.Blend), "CreateBlendState"))
+        return FALSE;
+    Blend.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+    if (!Result(State.Device->CreateBlendState(&Blend, &State.PremultipliedBlend), "CreateBlendState(premultiplied)"))
         return FALSE;
     D3D11_RASTERIZER_DESC Rasterizer = {};
     Rasterizer.FillMode = D3D11_FILL_SOLID;
@@ -883,13 +891,22 @@ BOOL DrawLayer(const DWM_WIN *Window, const BYTE *Pixels, BOOL Client, LONG Orig
     SetColor(Data.ColorKey, Window->ColorKey);
     Data.Flags[0] = (FLOAT)Glass;
     Data.Flags[1] = Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW;
-    Data.Flags[2] = !!(Window->BlurFlags & DWM_BLUR_ENABLE);
+    BOOL Premultiplied = !!(Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA);
+    Data.Flags[2] = !!((Window->BlurFlags & DWM_BLUR_ENABLE) || Premultiplied);
     Data.Flags[3] = !!(Window->LayerFlags & DWM_LWA_COLORKEY);
     Data.Extra[0] = min(Window->BackdropOpacity, 255u) / 255.0f;
     Data.Extra[1] = (100.0f + DWM_MATERIAL_SATURATION) / 100.0f;
     Data.Extra[2] = DWM_MATERIAL_REFLECT_STRENGTH / 255.0f;
-    BOOL Blend = Alpha < 1.0f || Data.SourceSize[3] != 0 || Data.Flags[2] != 0;
-    return Draw(State.Canvas, Shader::Window, ClipDraw(Bounds), Data, Image->View, Blur ? Blur->Result.View : NULL, Blend);
+    Data.Extra[3] = (FLOAT)Premultiplied;
+    BOOL Blend = Alpha < 1.0f || Data.SourceSize[3] != 0 || Data.Flags[2] != 0 || Premultiplied;
+    return Draw(State.Canvas,
+                Shader::Window,
+                ClipDraw(Bounds),
+                Data,
+                Image->View,
+                Blur ? Blur->Result.View : NULL,
+                Blend,
+                Premultiplied);
 }
 } // namespace
 
@@ -979,6 +996,7 @@ DwmD3dShutdown(void)
     State.Canvas.Reset();
     Release(State.Completion);
     Release(State.Rasterizer);
+    Release(State.PremultipliedBlend);
     Release(State.Blend);
     Release(State.Sampler);
     Release(State.ConstantBuffer);

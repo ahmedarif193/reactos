@@ -197,6 +197,7 @@ DwmGpuSceneOcclusion(const DWM_WIN *Windows, ULONG Count,
             SetRectEmpty(&Cover);
         if (Captures || Window->AnimFlags != 0 ||
             (Window->LayerFlags & DWM_LWA_COLORKEY) ||
+            (Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA) ||
             (Window->BlurFlags & DWM_BLUR_ENABLE) ||
             ((Window->LayerFlags & DWM_LWA_ALPHA) && Window->Alpha < 255) ||
             !DwmGpuWindowGeometry(Window, Space->OriginX, Space->OriginY, &Geometry))

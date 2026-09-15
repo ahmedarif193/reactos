@@ -1216,6 +1216,8 @@ DwmWindowIsOpaque(const DWM_WIN *Window)
         return FALSE;
     if ((Window->LayerFlags & DWM_LWA_ALPHA) && Window->Alpha < 255)
         return FALSE;
+    if (Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA)
+        return FALSE;
     if (Window->BlurFlags & DWM_BLUR_ENABLE)
         return FALSE;
     if (Window->BackdropType >= DWM_BACKDROP_MAIN &&
@@ -2250,7 +2252,8 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
     BOOL useKey = (w->LayerFlags & DWM_LWA_COLORKEY) != 0;
     BOOL useCorner = w->CornerRadius != 0;
     BOOL useAlpha = (w->LayerFlags & DWM_LWA_ALPHA) != 0 && w->Alpha < 255;
-    BOOL usePixelAlpha = (w->BlurFlags & DWM_BLUR_ENABLE) != 0;
+    BOOL usePremultiplied = (w->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA) != 0;
+    BOOL usePixelAlpha = usePremultiplied || (w->BlurFlags & DWM_BLUR_ENABLE) != 0;
     BOOL useBackdrop = w->BackdropType >= DWM_BACKDROP_MAIN &&
                        w->BackdropType <= DWM_BACKDROP_TABBED &&
                        w->BackdropRegion != 0;
@@ -2470,7 +2473,7 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                     continue;
                 }
             }
-            ULONG s = srcrow[x], d, pixelAlpha = 255, cornerAlpha = 255;
+            ULONG s = srcrow[x], d, pixelAlpha = 255, sourceScale = 255, cornerAlpha = 255;
             LONG sourceX = srcx0 + x;
             BOOL materialPixel = FALSE;
             ULONG materialWeight = 0, materialKey = 0, edge = 0;
@@ -2593,9 +2596,15 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
                 s = (sr << 16) | (sg << 8) | sb;
             }
             if (useAlpha)
+            {
                 pixelAlpha = pixelAlpha * a / 255u;
+                sourceScale = sourceScale * a / 255u;
+            }
             if (useCorner)
+            {
                 pixelAlpha = pixelAlpha * cornerAlpha / 255u;
+                sourceScale = sourceScale * cornerAlpha / 255u;
+            }
             if (pixelAlpha == 0)
                 continue;
             if (pixelAlpha == 255)
@@ -2605,12 +2614,13 @@ DwmBlitWindow(ULONG *comp, LONG scrW,
             }
             {
                 ULONG inverse = 255u - pixelAlpha;
+                ULONG sourceWeight = usePremultiplied ? sourceScale : pixelAlpha;
                 dstrow[x] =
-                    ((((s >> 16) & 0xFFu) * pixelAlpha +
+                    ((((s >> 16) & 0xFFu) * sourceWeight +
                       ((d >> 16) & 0xFFu) * inverse) / 255u << 16) |
-                    ((((s >> 8) & 0xFFu) * pixelAlpha +
+                    ((((s >> 8) & 0xFFu) * sourceWeight +
                       ((d >> 8) & 0xFFu) * inverse) / 255u << 8) |
-                    (((s & 0xFFu) * pixelAlpha +
+                    (((s & 0xFFu) * sourceWeight +
                       (d & 0xFFu) * inverse) / 255u);
             }
         }
@@ -2656,6 +2666,7 @@ DwmFindOpaqueCover(const DWM_WIN *Windows, ULONG Count, ULONG Index,
         if (Cover->cx <= 0 || Cover->cy <= 0 ||
             (Cover->LayerFlags & DWM_LWA_COLORKEY) ||
             ((Cover->LayerFlags & DWM_LWA_ALPHA) && Cover->Alpha < 255) ||
+            (Cover->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA) ||
             (Cover->BlurFlags & DWM_BLUR_ENABLE))
             continue;
         if (Backdrop)
@@ -2757,6 +2768,8 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
     LONG *sx0Tab, *sx1Tab, *stepXTab;
     ULONG matKey = 0xFFFFFFFFu, matKey2 = 0xFFFFFFFFu, matOpacity = 255;
     BOOL matWholeWindow = FALSE;
+    BOOL premultiplied = material != NULL &&
+                         (material->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA) != 0;
     LONG matCx0 = 0, matCy0 = 0, matCx1 = 0, matCy1 = 0;
 
     if (material != NULL &&
@@ -2829,7 +2842,7 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
         {
             LONG sx0 = sx0Tab[x], sx1 = sx1Tab[x], stepX = stepXTab[x];
             LONG sy, sx;
-            ULONG taps = 0, rb = 0, g = 0, s, d, inverse, recip;
+            ULONG taps = 0, rb = 0, g = 0, sourceAlpha = 0, s, d, inverse, recip;
 
             for (sy = sy0; sy < sy1; sy += stepY)
             {
@@ -2842,6 +2855,7 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
 
                     rb += c & 0xFF00FFu;
                     g += c & 0xFF00u;
+                    sourceAlpha += c >> 24;
                     taps++;
                 }
             }
@@ -2852,6 +2866,25 @@ DwmBlitScaled(ULONG *comp, LONG scrW,
             s = ((((rb >> 16) & 0xFFFFu) * recip >> 16) << 16) |
                 ((((g >> 8) & 0xFFFFu) * recip >> 16) << 8) |
                 ((rb & 0xFFFFu) * recip >> 16);
+            if (premultiplied)
+            {
+                ULONG pixelAlpha = (sourceAlpha * recip >> 16) * alpha / 255u;
+
+                if (pixelAlpha == 0)
+                    continue;
+                if (pixelAlpha == 255 && alpha == 255)
+                {
+                    dstrow[x] = s;
+                    continue;
+                }
+                d = dstrow[x];
+                inverse = 255u - pixelAlpha;
+                dstrow[x] =
+                    ((((s >> 16) & 0xFFu) * alpha + ((d >> 16) & 0xFFu) * inverse) / 255u << 16) |
+                    ((((s >> 8) & 0xFFu) * alpha + ((d >> 8) & 0xFFu) * inverse) / 255u << 8) |
+                    (((s & 0xFFu) * alpha + (d & 0xFFu) * inverse) / 255u);
+                continue;
+            }
             if (matKey != 0xFFFFFFFFu &&
                 ((s & 0x00FFFFFFu) == matKey ||
                  (s & 0x00FFFFFFu) == matKey2) &&
