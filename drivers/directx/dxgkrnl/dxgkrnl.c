@@ -95,6 +95,36 @@ DxgkEndKmdTransaction(
     KeReleaseMutex(&Adapter->KmdTransactionMutex, FALSE);
 }
 
+NTSTATUS
+DxgkYieldKmdTransactionForContextRoom(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGKRNL_CONTEXT Context,
+    _In_ ULONGLONG Deadline,
+    _Inout_ PBOOLEAN TransactionHeld)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Adapter == NULL || Context == NULL || TransactionHeld == NULL ||
+        !*TransactionHeld ||
+        Context->Device == NULL || Context->Device->Adapter != Adapter ||
+        Adapter->KmdTransactionOwnerThread != PsGetCurrentThread() ||
+        InterlockedCompareExchange(&Adapter->KmdTransactionDepth, 0, 0) != 1)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    DxgkEndKmdTransaction(Adapter);
+    *TransactionHeld = FALSE;
+    Status = DxgkContextOrderWaitForRoom(Context, Deadline);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!DxgkBeginKmdTransaction(Adapter))
+        return STATUS_DELETE_PENDING;
+    *TransactionHeld = TRUE;
+    return STATUS_SUCCESS;
+}
+
 BOOLEAN
 DxgkAcquireInterruptCallback(
     _In_ PDXGKRNL_ADAPTER Adapter)

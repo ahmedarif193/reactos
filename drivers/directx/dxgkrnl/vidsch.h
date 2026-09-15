@@ -85,6 +85,7 @@ typedef enum _VIDSCH_SCHEDULER_STATE
 #define VIDSCH_INLINE_ALLOCATIONS   32
 #define VIDSCH_INLINE_PATCHES       64
 #define VIDSCH_MAX_PENDING_PACKETS  512
+#define VIDSCH_CONTEXT_BACKPRESSURE_MS 100
 
 /* VIDSCH_DMA_PACKET.SubmitFlags uses the DXGK_SUBMITCOMMANDFLAGS layout. */
 #define VIDSCH_SUBMITFLAG_PAGING        0x00000001u
@@ -722,6 +723,7 @@ VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet);
 BOOLEAN VidSchIsContextOrderPacketResubmittable(_In_ PVIDSCH_DMA_PACKET Packet);
 BOOLEAN VidSchDispatchContextOrderPacketResubmission(_Inout_ PVIDSCH_DMA_PACKET Packet);
 NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ PVIDSCH_DMA_PACKET Packet);
+NTSTATUS DxgkContextOrderWaitForRoom(_Inout_ PDXGKRNL_CONTEXT Context, _In_ ULONGLONG Deadline);
 VOID DxgkContextOrderKickContext(_Inout_ PDXGKRNL_CONTEXT Context);
 VOID DxgkContextOrderScheduleReferenced(_Inout_ PDXGKRNL_CONTEXT Context);
 VOID DxgkContextOrderCommitPacket(_Inout_ PVIDSCH_DMA_PACKET Packet, _In_ NTSTATUS SubmissionStatus);

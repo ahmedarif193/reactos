@@ -13,8 +13,6 @@
 #define DXGK_CONTEXT_ORDER_OPERATION_SIGNATURE 'rOCX'
 #define DXGK_CONTEXT_ORDER_OPERATION_TAG       'oOCX'
 #define DXGK_CONTEXT_ORDER_DRAIN_BATCH          16
-#define DXGK_CONTEXT_ORDER_ADMISSION_TIMEOUT_MS 100
-
 #define DXGK_CONTEXT_ORDER_TYPE_WORK            1
 #define DXGK_CONTEXT_ORDER_TYPE_WAIT            2
 #define DXGK_CONTEXT_ORDER_TYPE_SIGNAL          3
@@ -940,6 +938,86 @@ VOID DxgkContextOrderScheduleReferenced(_Inout_ PDXGKRNL_CONTEXT Context)
     DxgkDereferenceContext(Context);
 }
 
+NTSTATUS
+DxgkContextOrderWaitForRoom(
+    _Inout_ PDXGKRNL_CONTEXT Context,
+    _In_ ULONGLONG Deadline)
+{
+    DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Interface;
+    DXGMMS2_CONTEXT_STREAM_SNAPSHOT_V1 Snapshot;
+    LARGE_INTEGER Timeout;
+    ULONGLONG Now;
+    NTSTATUS Status;
+    BOOLEAN AdmissionLocked = FALSE;
+    BOOLEAN RundownHeld = FALSE;
+
+    PAGED_CODE();
+    if (Context == NULL || Deadline == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (!ExAcquireRundownProtection(&Context->StreamAdmissionRundown))
+        return STATUS_DELETE_PENDING;
+    RundownHeld = TRUE;
+    (VOID)KeWaitForSingleObject(&Context->StreamAdmissionMutex,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+    AdmissionLocked = TRUE;
+    if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0)
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    Status = DxgkpContextOrderCaptureInterface(Context, TRUE, &Interface);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = DxgkpContextOrderDrainRetirements(Context, &Interface);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    RtlZeroMemory(&Snapshot, sizeof(Snapshot));
+    Snapshot.Size = DXGMMS2_CONTEXT_STREAM_SNAPSHOT_V1_SIZE;
+    Snapshot.Version = DXGMMS2_CONTEXT_STREAM_VERSION_1;
+    Status = Interface.QueryContextStream(Interface.AdapterHandle,
+                                          Context->Mms2ContextStream,
+                                          &Snapshot);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    if (Snapshot.QueuedEntryCount + Snapshot.RetiredEntryCount <
+        Snapshot.QueueDepth)
+    {
+        Status = STATUS_SUCCESS;
+        goto Cleanup;
+    }
+
+    Now = KeQueryInterruptTime();
+    if (Now >= Deadline)
+    {
+        Status = STATUS_DEVICE_BUSY;
+        goto Cleanup;
+    }
+    KeClearEvent(&Context->StreamRoomEvent);
+    DxgkContextOrderScheduleReferenced(Context);
+    KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
+    AdmissionLocked = FALSE;
+
+    Timeout.QuadPart = -(LONGLONG)(Deadline - Now);
+    Status = KeWaitForSingleObject(&Context->StreamRoomEvent,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   &Timeout);
+    if (Status == STATUS_TIMEOUT)
+        Status = STATUS_DEVICE_BUSY;
+
+Cleanup:
+    if (AdmissionLocked)
+        KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
+    if (RundownHeld)
+        ExReleaseRundownProtection(&Context->StreamAdmissionRundown);
+    return Status;
+}
+
 NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ PVIDSCH_DMA_PACKET Packet)
 {
     DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Interface;
@@ -983,7 +1061,8 @@ RetryAdmission:
         if (Deadline == 0)
         {
             Deadline = KeQueryInterruptTime() +
-                       (ULONGLONG)DXGK_CONTEXT_ORDER_ADMISSION_TIMEOUT_MS * 10000ULL;
+                       (ULONGLONG)VIDSCH_CONTEXT_BACKPRESSURE_MS *
+                           10000ULL;
         }
 
         Status = DxgkpContextOrderDrainRetirements(Context, &Interface);
@@ -996,12 +1075,25 @@ RetryAdmission:
                                      &Sequence);
         if (Status != STATUS_DEVICE_BUSY)
             goto AdmissionComplete;
+        if (Context->Device != NULL &&
+            Context->Device->Adapter != NULL &&
+            Context->Device->Adapter->KmdTransactionOwnerThread ==
+                PsGetCurrentThread())
+        {
+            Status = STATUS_RETRY;
+            goto Failure;
+        }
         if (KeQueryInterruptTime() >= Deadline)
             goto Failure;
 
         KeClearEvent(&Context->StreamRoomEvent);
         KeMemoryBarrier();
-        if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0)
+        if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0 ||
+            Context->Device == NULL ||
+            Context->Device->Adapter == NULL ||
+            InterlockedCompareExchange(&Context->Device->Adapter->VidSchStopping,
+                                       0,
+                                       0) != 0)
         {
             Status = STATUS_DELETE_PENDING;
             goto Failure;
@@ -1013,7 +1105,8 @@ RetryAdmission:
             LARGE_INTEGER Timeout;
             ULONGLONG Now = KeQueryInterruptTime();
 
-            Timeout.QuadPart = -(LONGLONG)(Deadline > Now ? Deadline - Now : 1);
+            Timeout.QuadPart =
+                -(LONGLONG)(Deadline > Now ? Deadline - Now : 1);
             Status = KeWaitForSingleObject(&Context->StreamRoomEvent,
                                            Executive,
                                            KernelMode,
@@ -1025,7 +1118,12 @@ RetryAdmission:
                                     KernelMode,
                                     FALSE,
                                     NULL);
-        if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0)
+        if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0 ||
+            Context->Device == NULL ||
+            Context->Device->Adapter == NULL ||
+            InterlockedCompareExchange(&Context->Device->Adapter->VidSchStopping,
+                                       0,
+                                       0) != 0)
         {
             Status = STATUS_DELETE_PENDING;
             goto Failure;
