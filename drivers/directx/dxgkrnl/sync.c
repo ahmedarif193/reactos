@@ -2822,6 +2822,13 @@ DxgkCleanupDeviceSynchronizationObjects(
 
     if (Cleaned != 0)
     {
-        DXGKRNL_WARN("DxgkCleanupDeviceSynchronizationObjects: cleaned %lu leaked sync objects\n", Cleaned);
+        if (PsGetProcessExitStatus(Device->OwnerProcess) == STATUS_PENDING)
+        {
+            DXGKRNL_WARN("DxgkCleanupDeviceSynchronizationObjects: cleaned %lu leaked sync objects\n", Cleaned);
+        }
+        else
+        {
+            DXGKRNL_TRACE("DxgkCleanupDeviceSynchronizationObjects: released %lu sync objects during process teardown\n", Cleaned);
+        }
     }
 }

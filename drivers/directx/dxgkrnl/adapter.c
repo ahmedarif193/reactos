@@ -324,7 +324,10 @@ DxgkpStopPostDisplayOwner(
     RtlZeroMemory(ReleasedPostDisplayInformation,
                   sizeof(*ReleasedPostDisplayInformation));
     *ReleasedByDriver = FALSE;
-    DXGKRNL_WARN("DxgkpStopPostDisplayOwner: stopping %s adapter %p — a new miniport is acquiring the boot display\n", (Owner->MiniportContext != NULL && Owner->MiniportContext->IsBasicDisplayFallback) ? "basic-display fallback" : "display", Owner);
+    DXGKRNL_TRACE("DxgkpStopPostDisplayOwner: stopping %s adapter %p while a new miniport acquires the boot display\n",
+                  (Owner->MiniportContext != NULL && Owner->MiniportContext->IsBasicDisplayFallback) ?
+                      "basic-display fallback" : "display",
+                  Owner);
     Status = DxgkpAdapterStopInternal(Owner,
                                       TRUE,
                                       Dxgmms2StopReasonPnpStop,
