@@ -16,6 +16,7 @@
 #include <intrin.h>
 #include <windowsx.h>
 #include <shellapi.h>
+#include <reactos/dwmsettings.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -637,10 +638,32 @@ InitFonts(
 
 
 static BOOL
+ApplyConsoleContentBackdrop(PGUI_CONSOLE_DATA GuiData)
+{
+    PCONSOLE_SCREEN_BUFFER ActiveBuffer = GuiData->ActiveBuffer;
+    COLORREF Background;
+    ULONG BackgroundIndex;
+
+    if (!IsWindow(GuiData->hWindow) || !ActiveBuffer ||
+        GetType(ActiveBuffer) != TEXTMODE_BUFFER)
+    {
+        DwmSettingsClearContentBackdrop(GuiData->hWindow);
+        return FALSE;
+    }
+
+    BackgroundIndex =
+        (((PTEXTMODE_SCREEN_BUFFER)ActiveBuffer)->ScreenDefaultAttrib >> 4) & 0x0f;
+    Background = GuiData->Console->Colors[BackgroundIndex];
+
+    return DwmSettingsSetContentBackdrop(GuiData->hWindow, Background, 128);
+}
+
+static BOOL
 OnNcCreate(HWND hWnd, LPCREATESTRUCTW Create)
 {
     PGUI_CONSOLE_DATA GuiData = (PGUI_CONSOLE_DATA)Create->lpCreateParams;
     PCONSRV_CONSOLE Console;
+    BOOL Result;
 
     if (GuiData == NULL)
     {
@@ -716,7 +739,11 @@ OnNcCreate(HWND hWnd, LPCREATESTRUCTW Create)
     /* We accept dropped files */
     DragAcceptFiles(GuiData->hWindow, TRUE);
 
-    return (BOOL)DefWindowProcW(GuiData->hWindow, WM_NCCREATE, 0, (LPARAM)Create);
+    Result = (BOOL)DefWindowProcW(GuiData->hWindow, WM_NCCREATE, 0,
+                                  (LPARAM)Create);
+    if (Result)
+        ApplyConsoleContentBackdrop(GuiData);
+    return Result;
 }
 
 static VOID
@@ -2417,9 +2444,16 @@ ConWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
             DPRINT("WM_PALETTECHANGED ok\n");
             OnPaletteChanged(GuiData);
+            ApplyConsoleContentBackdrop(GuiData);
             DPRINT("WM_PALETTECHANGED quit\n");
             break;
         }
+
+        case WM_SETTINGCHANGE:
+        case PM_UPDATE_CONTENT_BACKDROP:
+            ApplyConsoleContentBackdrop(GuiData);
+            InvalidateRect(hWnd, NULL, TRUE);
+            break;
 
         case WM_KEYDOWN:
         case WM_KEYUP:
@@ -2712,6 +2746,7 @@ ConWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         case WM_SETCONSOLEINFO:
         {
             GuiApplyUserSettings(GuiData, (HANDLE)wParam);
+            ApplyConsoleContentBackdrop(GuiData);
             break;
         }
 

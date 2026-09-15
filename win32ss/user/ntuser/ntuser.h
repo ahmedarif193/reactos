@@ -48,6 +48,7 @@ extern ATOM AtomDwmBackdropOpacity;
 extern ATOM AtomDwmBackdropColor;
 extern ATOM AtomDwmBackdropColorization;
 extern ATOM AtomDwmBackdropRegion;
+extern ATOM AtomDwmContentBackdrop;
 extern ATOM AtomDwmBackdropNcExtend;
 extern ATOM AtomDwmBackdropNcExtendLeft;
 extern ATOM AtomDwmCornerRadius;

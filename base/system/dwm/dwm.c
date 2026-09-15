@@ -1273,7 +1273,8 @@ DwmWindowBlursBackdrop(const DWM_WIN *Window)
     if (Window->BlurFlags & DWM_BLUR_ENABLE)
         return TRUE;
     return Window->BackdropType == DWM_BACKDROP_TRANSIENT &&
-           Window->BackdropRegion != 0;
+           Window->BackdropRegion != 0 &&
+           !(Window->BlurFlags & DWM_BLUR_DISABLE_FILTER);
 }
 
 #define DWM_CORNER_MAX_RECTS 129
@@ -1862,7 +1863,8 @@ DwmApplyBackdropBlur(ULONG *Composition, LONG Width, LONG Height,
     RECTL Rectangles[4];
     LONG NcBottom;
 
-    if (Window->BackdropType != DWM_BACKDROP_TRANSIENT)
+    if (Window->BackdropType != DWM_BACKDROP_TRANSIENT ||
+        (Window->BlurFlags & DWM_BLUR_DISABLE_FILTER))
         return NULL;
 
     BlurWindow = *Window;
@@ -2635,7 +2637,9 @@ DwmFindOpaqueCover(const DWM_WIN *Windows, ULONG Count, ULONG Index,
             return FALSE;
         if (Cover->BlurFlags & DWM_BLUR_ENABLE)
             Reach += FilterReach;
-        if (Cover->BackdropType == DWM_BACKDROP_TRANSIENT && Cover->BackdropRegion != 0)
+        if (Cover->BackdropType == DWM_BACKDROP_TRANSIENT &&
+            Cover->BackdropRegion != 0 &&
+            !(Cover->BlurFlags & DWM_BLUR_DISABLE_FILTER))
             Reach += FilterReach;
         if (Cover->cx <= 0 || Cover->cy <= 0 ||
             (Cover->LayerFlags & DWM_LWA_COLORKEY) ||

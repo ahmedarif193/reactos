@@ -22,21 +22,6 @@ COLORREF Blend(COLORREF a, COLORREF b, int pctB)
                (GetBValue(a) * pa + GetBValue(b) * pctB) / 100);
 }
 
-BOOL Theme_SystemPrefersDark(void)
-{
-    /* Win10+ personalization key; absent on stock ReactOS -> light */
-    HKEY hk;
-    DWORD v = 1, cb = sizeof(v);
-    if (RegOpenKeyExW(HKEY_CURRENT_USER,
-                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                      0, KEY_QUERY_VALUE, &hk) == ERROR_SUCCESS)
-    {
-        RegQueryValueExW(hk, L"AppsUseLightTheme", NULL, NULL, (LPBYTE)&v, &cb);
-        RegCloseKey(hk);
-    }
-    return v == 0;
-}
-
 static HFONT MakeFont(int size, int weight, const WCHAR* face)
 {
     LOGFONTW lf;

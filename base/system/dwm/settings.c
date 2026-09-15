@@ -15,10 +15,26 @@ static const struct
 } DwmPreferences[] =
 {
     {DWM_EFFECT_SHADOWS, L"EnableShadows"},
-    {DWM_EFFECT_CORNERS, L"EnableRoundedCorners"},
     {DWM_EFFECT_BLUR, L"EnableBlur"},
-    {DWM_EFFECT_ACRYLIC, L"EnableAcrylic"}
+    {DWM_EFFECT_ACRYLIC, L"EnableAcrylic"},
+    {DWM_EFFECT_CONTENT_BLUR, L"EnableContentBlur"}
 };
+
+static LONG
+DwmSettingsWriteValue(const WCHAR *Name, DWORD Value)
+{
+    HKEY Key;
+    LONG Error;
+
+    Error = RegCreateKeyExW(HKEY_CURRENT_USER, DWM_SETTINGS_KEY, 0, NULL, 0,
+                            KEY_SET_VALUE, NULL, &Key, NULL);
+    if (Error != ERROR_SUCCESS)
+        return Error;
+    Error = RegSetValueExW(Key, Name, 0, REG_DWORD,
+                           (const BYTE *)&Value, sizeof(Value));
+    RegCloseKey(Key);
+    return Error;
+}
 
 LONG
 DwmSettingsRead(DWORD *Effects)
@@ -63,9 +79,7 @@ DwmSettingsRead(DWORD *Effects)
 LONG
 DwmSettingsWrite(DWORD Effect, BOOL Enabled)
 {
-    HKEY Key;
     LONG Error;
-    DWORD Value = !!Enabled;
     UINT Index;
 
     if (Effect == DWM_EFFECT_ANIMATIONS)
@@ -87,12 +101,15 @@ DwmSettingsWrite(DWORD Effect, BOOL Enabled)
     if (Index == ARRAYSIZE(DwmPreferences))
         return ERROR_INVALID_PARAMETER;
 
-    Error = RegCreateKeyExW(HKEY_CURRENT_USER, DWM_SETTINGS_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &Key, NULL);
-    if (Error != ERROR_SUCCESS)
-        return Error;
-    Error = RegSetValueExW(Key, DwmPreferences[Index].Name, 0, REG_DWORD, (const BYTE *)&Value, sizeof(Value));
-    RegCloseKey(Key);
-    return Error;
+    return DwmSettingsWriteValue(DwmPreferences[Index].Name, !!Enabled);
+}
+
+LONG
+DwmSettingsWriteColorScheme(DWORD Scheme)
+{
+    if (Scheme > DWM_COLOR_SCHEME_DARK)
+        return ERROR_INVALID_PARAMETER;
+    return DwmSettingsWriteValue(REACTOS_DWM_COLOR_SCHEME, Scheme);
 }
 
 static LRESULT CALLBACK
@@ -142,12 +159,21 @@ DwmSettingsCreateWindow(HINSTANCE Instance, DWM_SETTINGS *Settings)
 void
 DwmSettingsApplyWindow(const DWM_SETTINGS *Settings, DWM_WIN *Window)
 {
+    DWORD Blur = DWM_EFFECT_BLUR;
+
     if (!(Settings->Effects & DWM_EFFECT_SHADOWS))
         Window->LayerFlags &= ~DWM_WINDOW_NC_SHADOW;
-    if (!(Settings->Effects & DWM_EFFECT_CORNERS))
-        Window->CornerRadius = 0;
+    if (Window->ContentBackdrop &&
+        Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW)
+    {
+        if (Settings->Effects & DWM_EFFECT_CONTENT_BLUR)
+            Blur = DWM_EFFECT_CONTENT_BLUR;
+        else
+            Window->BackdropRegion = DWM_BACKDROP_REGION_NONCLIENT;
+    }
     Window->BlurFlags &= ~DWM_BLUR_DISABLE_FILTER;
-    if (!(Settings->Effects & DWM_EFFECT_BLUR))
+    if (!(Settings->Effects & Blur) ||
+        !(Settings->Effects & DWM_EFFECT_ACRYLIC))
     {
         /* DWM_BLUR_ENABLE also marks textures with meaningful pixel alpha.
          * Suppress filtering regions without changing that blending rule. */

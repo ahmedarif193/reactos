@@ -801,6 +801,7 @@ GuiSetActiveScreenBuffer(IN OUT PFRONTEND This)
     /* Realize the (logical) palette */
     RealizePalette(GuiData->hMemDC);
 
+    PostMessageW(GuiData->hWindow, PM_UPDATE_CONTENT_BACKDROP, 0, 0);
     GuiResizeTerminal(This);
     // ConioDrawConsole(Console);
 }

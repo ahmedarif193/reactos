@@ -38,8 +38,12 @@ TODO:
 #include <atlwin.h>
 #include <ui/rosctrls.h>
 #include <vssym32.h>
+#include <reactos/dwmsettings.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
+
+static const WCHAR ExplorerContentBackdropOwner[] =
+    L"ReactOS.Shell.ExplorerContentBackdropOwner";
 
 // It would be easier to allocate these from 1 and up but the original code used the entire
 // FCIDM_SHVIEWFIRST..FCIDM_SHVIEWLAST range when dealing with IContextMenu and to avoid
@@ -350,6 +354,10 @@ private:
     bool                      m_HasCutItems;
     bool                      m_IsComputerFolder;
     bool                      m_ComputerNeedsFinalArrange;
+    bool                      m_ExplorerMaterialActive;
+    COLORREF                  m_ExplorerMaterialBack;
+    INT                       m_ExplorerMaterialOpacity;
+    HWND                      m_ExplorerBackdropWindow;
     RECT                      m_ComputerFoldersHeader;
     RECT                      m_ComputerDrivesHeader;
     RECT                      m_ComputerLocationsHeader;
@@ -376,7 +384,11 @@ private:
     void CancelFillList();
     bool IsComputerTileView() const;
     UINT ComputerViewDpi() const;
+    bool LoadExplorerContentMaterial();
+    void ClearExplorerContentBackdrop(bool RestoreNonClient);
+    void RefreshExplorerContentAppearance();
     COLORREF ComputerViewBackgroundColor() const;
+    COLORREF ExplorerContentTextColor() const;
     HICON GetComputerItemIcon(PCUITEMID_CHILD pidl, INT size, INT &drawWidth, INT &drawHeight);
     void ArrangeComputerView();
     INT ComputerItemFromPoint(POINT point);
@@ -714,6 +726,10 @@ CDefView::CDefView() :
     m_HasCutItems(false),
     m_IsComputerFolder(false),
     m_ComputerNeedsFinalArrange(false),
+    m_ExplorerMaterialActive(false),
+    m_ExplorerMaterialBack(0),
+    m_ExplorerMaterialOpacity(255),
+    m_ExplorerBackdropWindow(NULL),
     m_Destroyed(FALSE),
     m_FillListIsRefresh(FALSE),
     m_FillListGeneration(0)
@@ -792,9 +808,99 @@ UINT CDefView::ComputerViewDpi() const
     return dpi ? dpi : 96;
 }
 
+static bool IsExplorerCabinetWindow(HWND Window)
+{
+    WCHAR ClassName[32];
+
+    return GetClassNameW(Window, ClassName, _countof(ClassName)) &&
+           (!lstrcmpW(ClassName, L"CabinetWClass") ||
+            !lstrcmpW(ClassName, L"ExploreWClass"));
+}
+
+static bool IsHighContrastEnabled()
+{
+    HIGHCONTRASTW HighContrast = { sizeof(HighContrast) };
+
+    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(HighContrast),
+                                 &HighContrast, 0) &&
+           (HighContrast.dwFlags & HCF_HIGHCONTRASTON);
+}
+
+bool CDefView::LoadExplorerContentMaterial()
+{
+    return DwmSettingsLoadSchemeMaterial(DwmSettingsReadColorScheme(),
+                                         &m_ExplorerMaterialBack,
+                                         &m_ExplorerMaterialOpacity);
+}
+
+void CDefView::ClearExplorerContentBackdrop(bool RestoreNonClient)
+{
+    HWND Window = m_ExplorerBackdropWindow;
+
+    m_ExplorerBackdropWindow = NULL;
+    m_ExplorerMaterialActive = false;
+    if (!::IsWindow(Window) || GetPropW(Window, ExplorerContentBackdropOwner) != m_hWnd)
+        return;
+
+    RemovePropW(Window, ExplorerContentBackdropOwner);
+    DwmSettingsClearContentBackdrop(Window);
+    if (RestoreNonClient)
+        SendMessageW(Window, WM_THEMECHANGED, 0, 0);
+    ::RedrawWindow(Window, NULL, NULL,
+                   RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+}
+
+void CDefView::RefreshExplorerContentAppearance()
+{
+    HWND Root = GetAncestor(m_hWnd, GA_ROOT);
+    bool WasActive = m_ExplorerMaterialActive;
+    bool Eligible;
+
+    Eligible = !(m_FolderSettings.fFlags & (FWF_DESKTOP | FWF_TRANSPARENT)) &&
+               m_viewinfo_data.hbmBack == NULL && !IsHighContrastEnabled() &&
+               ::IsWindow(Root) && IsExplorerCabinetWindow(Root) &&
+               LoadExplorerContentMaterial();
+
+    if (!Eligible)
+    {
+        ClearExplorerContentBackdrop(true);
+    }
+    else
+    {
+        if (m_ExplorerBackdropWindow && m_ExplorerBackdropWindow != Root)
+            ClearExplorerContentBackdrop(true);
+        m_ExplorerBackdropWindow = Root;
+        m_ExplorerMaterialActive = true;
+
+        if (!SetPropW(Root, ExplorerContentBackdropOwner, m_hWnd) ||
+            !DwmSettingsSetContentBackdrop(Root, m_ExplorerMaterialBack,
+                                           m_ExplorerMaterialOpacity))
+        {
+            ClearExplorerContentBackdrop(true);
+        }
+    }
+
+    if (!WasActive && !m_ExplorerMaterialActive)
+    {
+        if (m_ListView.IsWindow())
+            UpdateListColors();
+        return;
+    }
+
+    if (m_ListView.IsWindow())
+    {
+        UpdateListColors();
+        m_ListView.InvalidateRect(NULL, TRUE);
+    }
+    if (::IsWindow(Root))
+        ::RedrawWindow(Root, NULL, NULL, RDW_INVALIDATE | RDW_FRAME);
+}
+
 COLORREF CDefView::ComputerViewBackgroundColor() const
 {
     COLORREF color = GetViewColor(m_viewinfo_data.clrTextBack, COLOR_WINDOW);
+    if (m_ExplorerMaterialActive)
+        return m_ExplorerMaterialBack;
     if (!IsComputerTileView())
         return color;
 
@@ -817,6 +923,17 @@ COLORREF CDefView::ComputerViewBackgroundColor() const
     }
 
     return color;
+}
+
+COLORREF CDefView::ExplorerContentTextColor() const
+{
+    if (!m_ExplorerMaterialActive)
+        return GetViewColor(m_viewinfo_data.clrText, COLOR_WINDOWTEXT);
+
+    const INT Brightness = GetRValue(m_ExplorerMaterialBack) * 299 +
+                           GetGValue(m_ExplorerMaterialBack) * 587 +
+                           GetBValue(m_ExplorerMaterialBack) * 114;
+    return Brightness < 128000 ? RGB(255, 255, 255) : RGB(0, 0, 0);
 }
 
 HICON CDefView::GetComputerItemIcon(PCUITEMID_CHILD pidl, INT size, INT &drawWidth, INT &drawHeight)
@@ -1013,7 +1130,7 @@ void CDefView::DrawComputerHeader(HDC hdc, const RECT &rect, UINT id, UINT count
     }
     HGDIOBJ oldFont = headingFont ? SelectObject(hdc, headingFont) : NULL;
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, GetViewColor(m_viewinfo_data.clrText, COLOR_WINDOWTEXT));
+    SetTextColor(hdc, ExplorerContentTextColor());
 
     RECT textRect = rect;
     DrawTextW(hdc, text, -1, &textRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_CALCRECT);
@@ -1101,7 +1218,8 @@ void CDefView::DrawComputerItem(NMLVCUSTOMDRAW *pDraw)
     RECT textRect = itemRect;
     textRect.left += iconSize + textGap;
     SetBkMode(pDraw->nmcd.hdc, TRANSPARENT);
-    SetTextColor(pDraw->nmcd.hdc, isHighContrast && selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : GetViewColor(m_viewinfo_data.clrText, COLOR_WINDOWTEXT));
+    SetTextColor(pDraw->nmcd.hdc, isHighContrast && selected ?
+                 GetSysColor(COLOR_HIGHLIGHTTEXT) : ExplorerContentTextColor());
 
     RECT nameRect = textRect;
     if (!IsComputerDriveItem(pidl))
@@ -1498,7 +1616,7 @@ void CDefView::UpdateListColors()
     else
     {
         m_ListView.SetTextBkColor(ComputerViewBackgroundColor());
-        m_ListView.SetTextColor(GetViewColor(m_viewinfo_data.clrText, COLOR_WINDOWTEXT));
+        m_ListView.SetTextColor(ExplorerContentTextColor());
 
         // Background is painted by the parent via WM_PRINTCLIENT
         m_ListView.SetExtendedListViewStyle(LVS_EX_TRANSPARENTBKGND, LVS_EX_TRANSPARENTBKGND);
@@ -2102,7 +2220,7 @@ void CDefView::FinishFillList()
     m_viewinfo_data.cbSize = sizeof(m_viewinfo_data);
     _DoFolderViewCB(SFVM_GET_CUSTOMVIEWINFO, 0, (LPARAM)&m_viewinfo_data);
 
-    UpdateListColors();
+    RefreshExplorerContentAppearance();
     if (!(m_FolderSettings.fFlags & FWF_DESKTOP))
         m_ListView.InvalidateRect(NULL, TRUE);
 
@@ -2261,6 +2379,7 @@ LRESULT CDefView::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHand
     if (!m_Destroyed)
     {
         m_Destroyed = TRUE;
+        ClearExplorerContentBackdrop(true);
         CancelFillList();
         RevokeDragDrop(m_hWnd);
         SHChangeNotifyDeregister(m_hNotify);
@@ -2345,7 +2464,7 @@ LRESULT CDefView::OnPrintClient(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &b
 LRESULT CDefView::OnSysColorChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
     /* Update desktop labels color */
-    UpdateListColors();
+    RefreshExplorerContentAppearance();
 
     /* Forward WM_SYSCOLORCHANGE to common controls */
     return m_ListView.SendMessageW(uMsg, 0, 0);
@@ -2396,6 +2515,8 @@ LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
                 FillList(FALSE);
         }
     }
+
+    RefreshExplorerContentAppearance();
 
     if (m_FolderSettings.fFlags & FWF_DESKTOP)
     {
@@ -3731,8 +3852,9 @@ LRESULT CDefView::OnMenuMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &b
 LRESULT CDefView::OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
     /* Wallpaper setting affects drop shadows effect */
-    if (wParam == SPI_SETDESKWALLPAPER || wParam == 0)
-        UpdateListColors();
+    if (wParam == SPI_SETDESKWALLPAPER ||
+        wParam == SPI_SETHIGHCONTRAST || wParam == 0)
+        RefreshExplorerContentAppearance();
 
     UINT ListExMask = LVS_EX_TRACKSELECT | LVS_EX_ONECLICKACTIVATE;
     UINT ListExBits = GetItemActivateFlags();

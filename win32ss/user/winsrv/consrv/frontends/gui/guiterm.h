@@ -14,6 +14,8 @@
 #include "guisettings.h"
 #include "conwnd.h"
 
+#define PM_UPDATE_CONTENT_BACKDROP (WM_APP + 6)
+
 
 /* HELPER FUNCTIONS ***********************************************************/
 

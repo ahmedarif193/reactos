@@ -33,6 +33,7 @@ ATOM AtomDwmBackdropOpacity;
 ATOM AtomDwmBackdropColor;
 ATOM AtomDwmBackdropColorization;
 ATOM AtomDwmBackdropRegion;
+ATOM AtomDwmContentBackdrop;
 ATOM AtomDwmBackdropNcExtend;
 ATOM AtomDwmBackdropNcExtendLeft;
 ATOM AtomDwmCornerRadius;
@@ -155,6 +156,7 @@ InitUserAtoms(VOID)
     AtomDwmBackdropColorization = IntAddUserPropertyAtom(
         DWM_PROP_BACKDROP_COLORIZATION);
     AtomDwmBackdropRegion = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_REGION);
+    AtomDwmContentBackdrop = IntAddUserPropertyAtom(DWM_PROP_CONTENT_BACKDROP);
     AtomDwmBackdropNcExtend = IntAddUserPropertyAtom(
         DWM_PROP_BACKDROP_NC_EXTEND);
     AtomDwmBackdropNcExtendLeft = IntAddUserPropertyAtom(

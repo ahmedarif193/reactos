@@ -2222,6 +2222,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         g_DwmFrameWindows[count].BackdropColor = 0;
         g_DwmFrameWindows[count].BackdropColorization = 0;
         g_DwmFrameWindows[count].BackdropRegion = 0;
+        g_DwmFrameWindows[count].ContentBackdrop = 0;
         g_DwmFrameWindows[count].BackdropNcExtend = 0;
         g_DwmFrameWindows[count].BackdropNcExtendLeft = 0;
         g_DwmFrameWindows[count].CornerRadius = 0;
@@ -2335,6 +2336,11 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
                     Value == DWM_BACKDROP_REGION_WINDOW)
                 {
                     g_DwmFrameWindows[count].BackdropRegion = (ULONG)Value;
+                }
+                if (AtomDwmContentBackdrop != 0)
+                {
+                    g_DwmFrameWindows[count].ContentBackdrop =
+                        UserGetProp(w, AtomDwmContentBackdrop, FALSE) != NULL;
                 }
                 if (AtomDwmBackdropNcExtend != 0)
                 {

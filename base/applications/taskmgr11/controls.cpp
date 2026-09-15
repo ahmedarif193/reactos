@@ -241,29 +241,6 @@ void DrawToggle(HDC dc, const RECT& r, BOOL on, BOOL hot, BOOL enabled)
     FillRoundRect(dc, kr, knob, CLR_NONE, kd / 2);
 }
 
-void DrawRadio(HDC dc, const RECT& r, BOOL on, BOOL hot)
-{
-    int d = S(20);
-    RECT rr = { r.left, r.top + ((r.bottom - r.top) - d) / 2, 0, 0 };
-    rr.right = rr.left + d;
-    rr.bottom = rr.top + d;
-
-    if (on)
-    {
-        FillRoundRect(dc, rr, hot ? g_t.accentHover : g_t.accent, CLR_NONE, d / 2);
-        int kd = S(8);
-        RECT kr = { rr.left + (d - kd) / 2, rr.top + (d - kd) / 2, 0, 0 };
-        kr.right = kr.left + kd;
-        kr.bottom = kr.top + kd;
-        FillRoundRect(dc, kr, g_t.dark ? RGB(0, 0, 0) : RGB(0xFF, 0xFF, 0xFF),
-                      CLR_NONE, kd / 2);
-    }
-    else
-    {
-        FillRoundRect(dc, rr, g_t.inputBg, hot ? g_t.textMain : g_t.textSec, d / 2);
-    }
-}
-
 /* ------------------------------------------------------------------ */
 /*  Search box                                                         */
 /* ------------------------------------------------------------------ */
