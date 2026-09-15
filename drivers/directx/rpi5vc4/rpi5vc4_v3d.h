@@ -196,8 +196,11 @@
 /* Full 4 GB GPU VA space: 1M PTEs x 4 bytes. */
 #define RPI5VC4_V3D_PT_SIZE             (4 * 1024 * 1024)
 
-/* Binner overflow pool, mapped right after the slab in GPU VA space. */
+/* Binner overflow storage, mapped right after the slab in GPU VA space. */
 #define RPI5VC4_V3D_OVERFLOW_SIZE       (8 * 1024 * 1024)
+#define RPI5VC4_V3D_OVERFLOW_CHUNK_SIZE (256 * 1024)
+#define RPI5VC4_V3D_OVERFLOW_CHUNK_COUNT \
+    (RPI5VC4_V3D_OVERFLOW_SIZE / RPI5VC4_V3D_OVERFLOW_CHUNK_SIZE)
 
 BOOLEAN
 Rpi5V3dInitialize(
@@ -236,6 +239,12 @@ Rpi5V3dSubmitRender(
     _Out_ PUCHAR CompletionBefore);
 
 BOOLEAN
+Rpi5V3dProvideOverflow(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG GpuVa,
+    _In_ ULONG Size);
+
+BOOLEAN
 Rpi5V3dBinDone(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ UCHAR CompletionBefore);
@@ -249,13 +258,14 @@ BOOLEAN
 Rpi5V3dCleanCaches(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
 
-/* Consume the pipeline-drained completion latches and service OOM. */
+/* Consume the pipeline-drained completion and OOM latches. */
 VOID
 Rpi5V3dConsumeCompletions(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _Out_ PBOOLEAN BinComplete,
     _Out_ PBOOLEAN RenderComplete,
-    _Out_ PBOOLEAN CsdComplete);
+    _Out_ PBOOLEAN CsdComplete,
+    _Out_ PBOOLEAN OutOfMemory);
 
 /*
  * V3D core interrupt: GIC SPI 250 per the RPi5 DTB (v3d node

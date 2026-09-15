@@ -89,9 +89,11 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
     BOOLEAN IsCsdJob;
     BOOLEAN BinSubmitted;             /* BCL queued to CLE thread 0        */
     BOOLEAN BinDone;                  /* FLDONE consumed for this job      */
+    BOOLEAN BinUsedOverflow;          /* tile lists needed overflow storage */
     BOOLEAN RenderSubmitted;          /* RCL/TFU/CSD kicked                */
     BOOLEAN BinCompletionSeen;        /* FLDONE observed for current BCL    */
     BOOLEAN RenderCompletionSeen;     /* FRDONE observed for current RCL    */
+    ULONG OverflowChunkMask;          /* chunks retained through RCL done   */
     ULONG V3dFlags;
     ULONG BclStart;
     ULONG BclEnd;
@@ -126,6 +128,7 @@ typedef struct _RPI5VC4_PENDING_SUBMIT
 #define RPI5VC4_DMA_OP_TFU_JOB      3
 #define RPI5VC4_DMA_OP_CSD_JOB      4
 #define RPI5VC4_DMA_V3D_FLUSH_CACHE 0x00000001u
+#define RPI5VC4_DMA_V3D_BCL_INDEPENDENT 0x00000002u
 
 typedef struct _RPI5VC4_DMA_PACKET
 {
@@ -149,9 +152,9 @@ typedef struct _RPI5VC4_DMA_PACKET
             ULONG RclEnd;
             ULONG BclAllocIndexPlusOne;
             ULONG RclAllocIndexPlusOne;
-            /* Per-job tile allocation (absolute GPU VAs).  Qms==0 means
-             * "use the device-global binner overflow pool" (legacy smoke
-             * path); a real v3dv job supplies all three. */
+            /* Per-job tile allocation (absolute GPU VAs). Qms==0 asks the
+             * miniport for a reserved tile-allocation chunk; a real v3dv
+             * job supplies all three. */
             ULONG Qma;               /* tile allocation memory address    */
             ULONG Qms;               /* tile allocation memory size       */
             ULONG Qts;               /* tile state data array address     */
@@ -427,9 +430,10 @@ struct _RPI5VC4_DEVICE_EXTENSION
     PRPI5VC4_PROCESS V3dActiveProcess;
     PVOID V3dScratchPage;
     PHYSICAL_ADDRESS V3dScratchPagePhys;
-    PVOID V3dOverflowVa;              /* binner overflow memory pool       */
+    PVOID V3dOverflowVa;              /* preallocated binner overflow chunks */
     PHYSICAL_ADDRESS V3dOverflowPhys;
     ULONG V3dOverflowGpuVa;
+    ULONG V3dOverflowChunkMap;        /* chunks retained by active jobs    */
 
     /* ---- VideoCore firmware property mailbox ---------------------------- */
     PVOID MboxBase;

@@ -37,6 +37,7 @@
 #define RPI5VC4_CAP_CPU_WAIT_SIGNAL       (1u << 8)
 #define RPI5VC4_CAP_WIN32_PRESENT         (1u << 9)
 #define RPI5VC4_CAP_LINEAR_SCANOUT        (1u << 10)
+#define RPI5VC4_CAP_BIN_RENDER_OVERLAP    (1u << 11)
 
 /* GPU nodes shared by the VC4 KMD and its user-mode submission library. */
 #define RPI5VC4_NODE_3D                    0u
