@@ -3441,6 +3441,8 @@ static void poll_queries(struct wined3d_cs *cs)
         list_remove(&query->poll_list_entry);
         list_init(&query->poll_list_entry);
         InterlockedIncrement(&query->counter_retrieved);
+        if (query->event)
+            wined3d_query_signal_event(query);
     }
 }
 

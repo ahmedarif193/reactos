@@ -68,6 +68,7 @@
 @ cdecl wined3d_device_create(ptr ptr long ptr long long ptr long ptr ptr)
 @ cdecl wined3d_device_decref(ptr)
 @ cdecl wined3d_device_end_scene(ptr)
+@ cdecl wined3d_device_enqueue_set_event(ptr ptr)
 @ cdecl wined3d_device_evict_managed_resources(ptr)
 @ cdecl wined3d_device_get_available_texture_mem(ptr)
 @ cdecl wined3d_device_get_clip_status(ptr ptr)

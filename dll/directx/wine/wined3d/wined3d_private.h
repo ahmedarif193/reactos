@@ -1832,6 +1832,7 @@ struct wined3d_query
 
     LONG counter_main, counter_retrieved;
     struct list poll_list_entry;
+    HANDLE event;
 
     /* FIXME: This is GL-specific. */
     unsigned int buffer_object;
@@ -3747,6 +3748,7 @@ void wined3d_cs_emit_set_render_state(struct wined3d_cs *cs,
 void wined3d_cs_emit_unload_resource(struct wined3d_cs *cs, struct wined3d_resource *resource);
 void wined3d_cs_init_object(struct wined3d_cs *cs,
         void (*callback)(void *object), void *object);
+void wined3d_query_signal_event(struct wined3d_query *query);
 void wined3d_cs_map_bo_address(struct wined3d_cs *cs,
         struct wined3d_bo_address *addr, size_t size, unsigned int flags);
 void wined3d_device_context_set_depth_bounds(struct wined3d_device_context *context,

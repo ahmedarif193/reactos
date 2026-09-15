@@ -318,9 +318,16 @@ static HRESULT STDMETHODCALLTYPE dxgi_device_ReclaimResources(IWineDXGIDevice *i
 
 static HRESULT STDMETHODCALLTYPE dxgi_device_EnqueueSetEvent(IWineDXGIDevice *iface, HANDLE event)
 {
-    FIXME("iface %p, event %p stub!\n", iface, event);
+    struct dxgi_device *device = impl_from_IWineDXGIDevice(iface);
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("iface %p, event %p.\n", iface, event);
+
+    wined3d_mutex_lock();
+    hr = wined3d_device_enqueue_set_event(device->wined3d_device, event);
+    wined3d_mutex_unlock();
+
+    return hr;
 }
 
 static void STDMETHODCALLTYPE dxgi_device_Trim(IWineDXGIDevice *iface)
