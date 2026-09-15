@@ -759,7 +759,40 @@ Finished:
     return Completed;
 }
 
-/* DPC: report the last completed fence to dxgkrnl (ISR+DPC contract). */
+/*
+ * Queue the single completion-drain owner.  LastCompletedFencePerNode is the
+ * pending state, so the same DmaLock that protects it also closes the classic
+ * lost-wakeup window between a DPC's final empty check and a producer trying
+ * to queue that already-running DPC.
+ */
+static VOID
+Rpi5Vc4QueueFenceDpc(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    KIRQL OldIrql;
+    ULONG Node;
+
+    KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+    if (!DeviceExtension->StopAccepting &&
+        DeviceExtension->DmaPipelineInitialized &&
+        !DeviceExtension->FenceDpcActive)
+    {
+        for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; Node++)
+        {
+            if (DeviceExtension->LastCompletedFencePerNode[Node] !=
+                DeviceExtension->LastReportedFencePerNode[Node])
+            {
+                DeviceExtension->FenceDpcActive = TRUE;
+                (VOID)KeInsertQueueDpc(&DeviceExtension->FenceDpc,
+                                       NULL, NULL);
+                break;
+            }
+        }
+    }
+    KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+}
+
+/* DPC: drain completed per-node fences to dxgkrnl (ISR+DPC contract). */
 static VOID
 NTAPI
 Rpi5Vc4FenceDpcRoutine(
@@ -771,73 +804,87 @@ Rpi5Vc4FenceDpcRoutine(
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = DeferredContext;
     DXGKARGCB_NOTIFY_INTERRUPT_DATA NotifyData;
     KIRQL OldIrql;
-    ULONG CompletedFence;
+    BOOLEAN NotifyDpc = FALSE;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    if (DeviceExtension == NULL || DeviceExtension->StopAccepting)
+    if (DeviceExtension == NULL)
         return;
 
+    for (;;)
     {
-        ULONG NodeFence[RPI5VC4_GPU_NODE_COUNT];
-        ULONG Node, Pass;
+        ULONG Best = RPI5VC4_GPU_NODE_COUNT;
+        ULONG Fence = 0;
+        ULONG Node;
 
         KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
-        CompletedFence = DeviceExtension->LastCompletedFence;
+        if (DeviceExtension->StopAccepting ||
+            !DeviceExtension->DmaPipelineInitialized)
+        {
+            DeviceExtension->FenceDpcActive = FALSE;
+            KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+            return;
+        }
+
         for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; Node++)
-            NodeFence[Node] = DeviceExtension->LastCompletedFencePerNode[Node];
+        {
+            ULONG NodeFence =
+                DeviceExtension->LastCompletedFencePerNode[Node];
+
+            if (NodeFence ==
+                DeviceExtension->LastReportedFencePerNode[Node])
+            {
+                continue;
+            }
+            if (Best == RPI5VC4_GPU_NODE_COUNT ||
+                (LONG)(NodeFence - Fence) < 0)
+            {
+                Best = Node;
+                Fence = NodeFence;
+            }
+        }
+
+        if (Best == RPI5VC4_GPU_NODE_COUNT)
+        {
+            if (!NotifyDpc)
+            {
+                /* The empty transition and producer admission are serialized
+                 * by DmaLock: a later completion must queue a fresh DPC. */
+                DeviceExtension->FenceDpcActive = FALSE;
+                KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+                return;
+            }
+
+            KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+            if (DeviceExtension->DxgkInterface.DxgkCbNotifyDpc != NULL)
+            {
+                DeviceExtension->DxgkInterface.DxgkCbNotifyDpc(
+                    DeviceExtension->DxgkInterface.DeviceHandle);
+            }
+            NotifyDpc = FALSE;
+            continue;
+        }
+
+        /* Claim this watermark while holding DmaLock.  Producers may advance
+         * it again while the callback runs; the next drain iteration sees it. */
+        DeviceExtension->LastReportedFencePerNode[Best] = Fence;
         KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
-        /*
-         * One DMA_COMPLETED per node whose fence advanced.  The shared
-         * ring completes in global fence order, so reporting nodes in
-         * ascending fence order keeps the adapter-wide completed fence
-         * monotonic for dxgkrnl's DMA-buffer tracker.
-         */
-        for (Pass = 0; Pass < RPI5VC4_GPU_NODE_COUNT; Pass++)
+        RtlZeroMemory(&NotifyData, sizeof(NotifyData));
+        NotifyData.InterruptType = DXGK_INTERRUPT_TYPE_DMA_COMPLETED;
+        NotifyData.DmaCompleted.SubmissionFenceId = Fence;
+        NotifyData.DmaCompleted.NodeOrdinal = Best;
+        NotifyData.DmaCompleted.EngineOrdinal = 0;
+
+        if (DeviceExtension->DxgkInterface.DxgkCbNotifyInterrupt != NULL)
         {
-            ULONG Best = RPI5VC4_GPU_NODE_COUNT;
-
-            for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; Node++)
-            {
-                if (NodeFence[Node] ==
-                    DeviceExtension->LastReportedFencePerNode[Node])
-                {
-                    continue;
-                }
-                if (Best == RPI5VC4_GPU_NODE_COUNT ||
-                    (LONG)(NodeFence[Node] - NodeFence[Best]) < 0)
-                {
-                    Best = Node;
-                }
-            }
-
-            if (Best == RPI5VC4_GPU_NODE_COUNT)
-                break;
-
-            RtlZeroMemory(&NotifyData, sizeof(NotifyData));
-            NotifyData.InterruptType = DXGK_INTERRUPT_TYPE_DMA_COMPLETED;
-            NotifyData.DmaCompleted.SubmissionFenceId = NodeFence[Best];
-            NotifyData.DmaCompleted.NodeOrdinal = Best;
-            NotifyData.DmaCompleted.EngineOrdinal = 0;
-
-            if (DeviceExtension->DxgkInterface.DxgkCbNotifyInterrupt != NULL)
-            {
-                DeviceExtension->DxgkInterface.DxgkCbNotifyInterrupt(
-                    DeviceExtension->DxgkInterface.DeviceHandle,
-                    &NotifyData);
-            }
-
-            DeviceExtension->LastReportedFencePerNode[Best] = NodeFence[Best];
+            DeviceExtension->DxgkInterface.DxgkCbNotifyInterrupt(
+                DeviceExtension->DxgkInterface.DeviceHandle,
+                &NotifyData);
         }
-    }
-
-    if (DeviceExtension->DxgkInterface.DxgkCbNotifyDpc != NULL)
-    {
-        DeviceExtension->DxgkInterface.DxgkCbNotifyDpc(
-            DeviceExtension->DxgkInterface.DeviceHandle);
+        NotifyDpc = TRUE;
     }
 }
 
@@ -909,7 +956,7 @@ Rpi5Vc4V3dPollDpcRoutine(
     }
 
     if (Completed)
-        KeInsertQueueDpc(&DeviceExtension->FenceDpc, NULL, NULL);
+        Rpi5Vc4QueueFenceDpc(DeviceExtension);
     if (NeedPoll && !DeviceExtension->StopAccepting)
         Rpi5Vc4ArmV3dPollTimer(DeviceExtension);
 }
@@ -1179,6 +1226,7 @@ Rpi5Vc4DmaPipelineInit(
                   sizeof(DeviceExtension->LastCompletedFencePerNode));
     RtlZeroMemory((PVOID)DeviceExtension->LastReportedFencePerNode,
                   sizeof(DeviceExtension->LastReportedFencePerNode));
+    DeviceExtension->FenceDpcActive = FALSE;
     DeviceExtension->DmaPipelineInitialized = TRUE;
     DeviceExtension->StopAccepting = FALSE;
 }
@@ -1222,6 +1270,7 @@ Rpi5Vc4DmaPipelineDrain(
     /* Stop/remove aborts queued work; only observed hardware completion may
      * advance a fence or emit DMA_COMPLETED. */
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+    DeviceExtension->FenceDpcActive = FALSE;
     Rpi5Vc4ClearPendingLocked(DeviceExtension);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
     DeviceExtension->DmaPipelineInitialized = FALSE;
@@ -2751,7 +2800,7 @@ Rpi5Vc4DdiSubmitCommand(
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
     if (Completed)
-        KeInsertQueueDpc(&DeviceExtension->FenceDpc, NULL, NULL);
+        Rpi5Vc4QueueFenceDpc(DeviceExtension);
     if (NeedPoll)
         Rpi5Vc4ArmV3dPollTimer(DeviceExtension);
     if (PipelineAborted)
@@ -3183,6 +3232,10 @@ Rpi5Vc4DdiResetFromTimeout(
     ResetSucceeded = !DeviceExtension->V3dReady || Rpi5V3dResetCore(DeviceExtension);
 
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+    DeviceExtension->FenceDpcActive = FALSE;
+    RtlCopyMemory((PVOID)DeviceExtension->LastReportedFencePerNode,
+                  (PVOID)DeviceExtension->LastCompletedFencePerNode,
+                  sizeof(DeviceExtension->LastReportedFencePerNode));
     Rpi5Vc4ClearPendingLocked(DeviceExtension);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
     return ResetSucceeded ? STATUS_SUCCESS : STATUS_DEVICE_HARDWARE_ERROR;
@@ -3375,7 +3428,7 @@ Rpi5Vc4QueueEscapeJob(
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
     if (Completed)
-        KeInsertQueueDpc(&DeviceExtension->FenceDpc, NULL, NULL);
+        Rpi5Vc4QueueFenceDpc(DeviceExtension);
     if (NeedPoll)
         Rpi5Vc4ArmV3dPollTimer(DeviceExtension);
     if (PipelineAborted)

@@ -202,4 +202,11 @@ foreach(GLMARK2_DATA_FILE IN LISTS GLMARK2_DATA_FILES)
         DESTINATION "reactos/system32/glmark2/${GLMARK2_DATA_DIRECTORY}"
         NO_CAB
         FOR all)
+    if(ENABLE_WOW64)
+        add_cd_file(
+            FILE "${GLMARK2_SOURCE_DIR}/data/${GLMARK2_DATA_FILE}"
+            DESTINATION "reactos/SysWOW64/glmark2/${GLMARK2_DATA_DIRECTORY}"
+            NO_CAB
+            FOR all)
+    endif()
 endforeach()
