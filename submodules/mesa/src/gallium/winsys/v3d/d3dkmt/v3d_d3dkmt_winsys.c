@@ -859,6 +859,52 @@ v3d_d3dkmt_bo_prepare_cpu_access(int fd, uint32_t handle, int write)
 }
 
 int
+v3d_d3dkmt_bo_copy_cpu_contents(int fd, uint32_t source_handle,
+                                 uint32_t destination_handle, uint32_t size)
+{
+   struct v3d_d3dkmt_device *device = v3d_d3dkmt_device_lookup(fd);
+   struct v3d_d3dkmt_bo *source;
+   struct v3d_d3dkmt_bo *destination;
+   void *source_map = NULL;
+   void *destination_map = NULL;
+   int result = -1;
+
+   if (!device)
+      return -1;
+
+   mtx_lock(&device->lock);
+   source = v3d_d3dkmt_bo_lookup_locked(device, source_handle);
+   destination = v3d_d3dkmt_bo_lookup_locked(device, destination_handle);
+   if (!source || !destination || size > source->kmt.size ||
+       size > destination->kmt.size)
+      goto done;
+
+   if (source->cpu_cache_stale) {
+      result = 0;
+      goto done;
+   }
+
+   if (destination->cpu_cache_stale &&
+       vc4kmt_bo_invalidate(device->kmt, &destination->kmt,
+                            0, destination->kmt.size) < 0)
+      goto done;
+
+   destination->cpu_cache_stale = false;
+   if (vc4kmt_bo_map(device->kmt, &source->kmt, &source_map) < 0 ||
+       vc4kmt_bo_map(device->kmt, &destination->kmt,
+                     &destination_map) < 0)
+      goto done;
+
+   memcpy(destination_map, source_map, size);
+   destination->cpu_dirty = true;
+   result = 1;
+
+done:
+   mtx_unlock(&device->lock);
+   return result;
+}
+
+int
 v3d_d3dkmt_bo_mark_external_dirty(int fd, uint32_t handle)
 {
    struct v3d_d3dkmt_device *device = v3d_d3dkmt_device_lookup(fd);

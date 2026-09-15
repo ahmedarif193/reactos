@@ -108,12 +108,11 @@ v3d_debug_resource_layout(struct v3d_resource *rsc, const char *caller)
         }
 }
 
-static bool
-v3d_resource_bo_alloc(struct v3d_resource *rsc)
+static struct v3d_bo *
+v3d_resource_bo_create(struct v3d_resource *rsc)
 {
         struct pipe_resource *prsc = &rsc->base;
         struct pipe_screen *pscreen = prsc->screen;
-        struct v3d_bo *bo;
 
         /* Buffers may be read using ldunifa, which prefetches the next 4
          * bytes after a read. If the buffer's size is exactly a multiple of a
@@ -125,17 +124,23 @@ v3d_resource_bo_alloc(struct v3d_resource *rsc)
          */
         uint32_t padding =
                 rsc->base.target == PIPE_BUFFER ? 4 : V3D_TFU_READAHEAD_SIZE;
-        bo = v3d_bo_alloc(v3d_screen(pscreen), rsc->size + padding,
-                          "resource");
-        if (bo) {
-                v3d_bo_unreference(&rsc->bo);
-                rsc->bo = bo;
-                rsc->serial_id++;
-                v3d_debug_resource_layout(rsc, "alloc");
-                return true;
-        } else {
+        return v3d_bo_alloc(v3d_screen(pscreen), rsc->size + padding,
+                            "resource");
+}
+
+static bool
+v3d_resource_bo_alloc(struct v3d_resource *rsc)
+{
+        struct v3d_bo *bo = v3d_resource_bo_create(rsc);
+
+        if (!bo)
                 return false;
-        }
+
+        v3d_bo_unreference(&rsc->bo);
+        rsc->bo = bo;
+        rsc->serial_id++;
+        v3d_debug_resource_layout(rsc, "alloc");
+        return true;
 }
 
 static void
@@ -203,6 +208,77 @@ rebind_sampler_views(struct v3d_context *v3d,
 }
 
 static void
+v3d_rebind_resource(struct v3d_context *v3d, struct v3d_resource *rsc)
+{
+        struct pipe_resource *prsc = &rsc->base;
+
+        if (prsc->bind & PIPE_BIND_VERTEX_BUFFER)
+                v3d->dirty |= V3D_DIRTY_VTXBUF;
+        if (prsc->bind & PIPE_BIND_CONSTANT_BUFFER)
+                v3d->dirty |= V3D_DIRTY_CONSTBUF;
+        if (prsc->bind & PIPE_BIND_SAMPLER_VIEW)
+                rebind_sampler_views(v3d, rsc);
+}
+
+#ifdef __REACTOS__
+static bool
+v3d_preserve_and_rename_busy_buffer(struct v3d_context *v3d,
+                                    struct v3d_resource *rsc,
+                                    unsigned usage)
+{
+        struct pipe_resource *prsc = &rsc->base;
+        const unsigned excluded_usage =
+                PIPE_MAP_READ | PIPE_MAP_DONTBLOCK |
+                PIPE_MAP_UNSYNCHRONIZED | PIPE_MAP_DISCARD_RANGE |
+                PIPE_MAP_DISCARD_WHOLE_RESOURCE | PIPE_MAP_PERSISTENT |
+                PIPE_MAP_COHERENT | PIPE_MAP_THREAD_SAFE;
+        struct v3d_bo *old_bo = rsc->bo;
+        bool pending_reader = false;
+
+        if (prsc->target != PIPE_BUFFER || !(usage & PIPE_MAP_WRITE) ||
+            (usage & excluded_usage) ||
+            (prsc->flags & (PIPE_RESOURCE_FLAG_MAP_PERSISTENT |
+                            PIPE_RESOURCE_FLAG_MAP_COHERENT)) ||
+            !old_bo->private ||
+            _mesa_hash_table_search(v3d->write_jobs, prsc))
+                return false;
+
+        hash_table_foreach(v3d->jobs, entry) {
+                struct v3d_job *job = entry->data;
+
+                if (!_mesa_set_search(job->bos, old_bo))
+                        continue;
+                if (job->write_bos && _mesa_set_search(job->write_bos, old_bo))
+                        return false;
+                pending_reader = true;
+        }
+
+        if (!pending_reader && v3d_bo_wait(old_bo, 0, NULL))
+                return false;
+
+        struct v3d_bo *new_bo = v3d_resource_bo_create(rsc);
+        if (!new_bo)
+                return false;
+
+        int copied = v3d_d3dkmt_bo_copy_cpu_contents(v3d->fd,
+                                                      old_bo->handle,
+                                                      new_bo->handle,
+                                                      rsc->size);
+        if (copied != 1) {
+                v3d_bo_unreference(&new_bo);
+                return false;
+        }
+
+        rsc->bo = new_bo;
+        rsc->serial_id++;
+        v3d_debug_resource_layout(rsc, "rename");
+        v3d_rebind_resource(v3d, rsc);
+        v3d_bo_unreference(&old_bo);
+        return true;
+}
+#endif
+
+static void
 v3d_map_usage_prep(struct pipe_context *pctx,
                    struct pipe_resource *prsc,
                    unsigned usage)
@@ -223,23 +299,7 @@ v3d_map_usage_prep(struct pipe_context *pctx,
                                                 V3D_FLUSH_ALWAYS,
                                                 false);
                 if (v3d_resource_bo_alloc(rsc)) {
-                        /* If it might be bound as one of our vertex buffers
-                         * or UBOs, make sure we re-emit vertex buffer state
-                         * or uniforms.
-                         */
-                        if (prsc->bind & PIPE_BIND_VERTEX_BUFFER)
-                                v3d->dirty |= V3D_DIRTY_VTXBUF;
-                        if (prsc->bind & PIPE_BIND_CONSTANT_BUFFER)
-                                v3d->dirty |= V3D_DIRTY_CONSTBUF;
-                        /* Since we are changing the texture BO we need to
-                         * update any bound samplers to point to the new
-                         * BO. Notice we can have samplers that are not
-                         * currently bound to the state that won't be
-                         * updated. These will be fixed when they are bound in
-                         * v3d_set_sampler_views.
-                         */
-                        if (prsc->bind & PIPE_BIND_SAMPLER_VIEW)
-                                rebind_sampler_views(v3d, rsc);
+                        v3d_rebind_resource(v3d, rsc);
                 } else {
                         /* If we failed to reallocate, flush users so that we
                          * don't violate any syncing requirements.
@@ -302,6 +362,11 @@ v3d_resource_transfer_map(struct pipe_context *pctx,
             rsc->bo->private) {
                 usage |= PIPE_MAP_DISCARD_WHOLE_RESOURCE;
         }
+
+#ifdef __REACTOS__
+        if (v3d_preserve_and_rename_busy_buffer(v3d, rsc, usage))
+                usage |= PIPE_MAP_UNSYNCHRONIZED;
+#endif
 
         v3d_map_usage_prep(pctx, prsc, usage);
 
