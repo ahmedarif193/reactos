@@ -3133,6 +3133,7 @@ DWORD WINAPI SetThreadIdealProcessor(_In_ HANDLE, _In_ DWORD);
 #if (_WIN32_WINNT >= 0x0601)
 BOOL WINAPI GetThreadIdealProcessorEx(_In_ HANDLE, _Out_ PPROCESSOR_NUMBER);
 BOOL WINAPI SetThreadIdealProcessorEx(_In_ HANDLE, _In_ PPROCESSOR_NUMBER, _Out_opt_ PPROCESSOR_NUMBER);
+BOOL WINAPI GetNumaNodeProcessorMaskEx(_In_ USHORT, _Out_ PGROUP_AFFINITY);
 BOOL WINAPI GetNumaProcessorNodeEx(_In_ PPROCESSOR_NUMBER, _Out_ PUSHORT);
 #endif
 BOOL WINAPI SetThreadPriority(HANDLE,int);

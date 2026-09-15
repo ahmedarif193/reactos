@@ -27,6 +27,7 @@ extern void func_GetEnvironmentVariable(void);
 extern void func_GetFinalPathNameByHandle(void);
 extern void func_GetLocaleInfo(void);
 extern void func_GetModuleFileName(void);
+extern void func_GetNumaNodeProcessorMaskEx(void);
 extern void func_GetOsSafeBootMode(void);
 extern void func_GetPackageFamilyName(void);
 extern void func_GetSystemWow64Directory(void);
@@ -95,6 +96,7 @@ const struct test winetest_testlist[] =
     { "GetFinalPathNameByHandle",    func_GetFinalPathNameByHandle },
     { "GetLocaleInfo",               func_GetLocaleInfo },
     { "GetModuleFileName",           func_GetModuleFileName },
+    { "GetNumaNodeProcessorMaskEx",  func_GetNumaNodeProcessorMaskEx },
     { "GetOsSafeBootMode",           func_GetOsSafeBootMode },
     { "GetPackageFamilyName",        func_GetPackageFamilyName },
     { "GetSystemWow64Directory",     func_GetSystemWow64Directory },

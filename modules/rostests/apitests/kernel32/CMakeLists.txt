@@ -28,6 +28,7 @@ list(APPEND SOURCE
     GetFinalPathNameByHandle.c
     GetLocaleInfo.c
     GetModuleFileName.c
+    GetNumaNodeProcessorMaskEx.c
     GetOsSafeBootMode.c
     GetPackageFamilyName.c
     GetSystemWow64Directory.c
