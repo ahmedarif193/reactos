@@ -630,7 +630,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${Python3_EXECUTABLE}"
     )
 endif()
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     mesa_generate(
         OUTPUT
             "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_packet_v42_pack.h"
@@ -646,7 +646,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${Python3_EXECUTABLE}"
     )
 endif()
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     mesa_generate(
         OUTPUT
             "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_packet_v71_pack.h"
@@ -662,7 +662,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${Python3_EXECUTABLE}"
     )
 endif()
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     mesa_generate(
         OUTPUT
             "${PROJECT_BINARY_DIR}/src/broadcom/cle/v3d_xml.h"
@@ -679,7 +679,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
             "${Python3_EXECUTABLE}"
     )
 endif()
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if(MESA_V3D)
     mesa_generate(
         OUTPUT
             "${PROJECT_BINARY_DIR}/src/broadcom/compiler/v3d_nir_lower_algebraic.c"
