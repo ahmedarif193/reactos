@@ -220,7 +220,8 @@ struct dwm_dx_shared_surface_info {
 
 struct v3d_d3dkmt_bo {
    VC4KMT_BO kmt;
-   struct v3d_d3dkmt_fence_ref *last_fence;
+   struct v3d_d3dkmt_fence_ref *last_writer;
+   struct v3d_d3dkmt_fence_ref *last_readers[VC4KMT_ENGINE_COUNT];
    uint32_t shared_resource;
    bool allocated;
    bool cpu_dirty;
@@ -571,6 +572,32 @@ v3d_d3dkmt_wait_fence_ref_locked(
 }
 
 static int
+v3d_d3dkmt_wait_bo_idle_locked(struct v3d_d3dkmt_device *device,
+                               struct v3d_d3dkmt_bo *bo,
+                               uint32_t timeout_ms)
+{
+   int result;
+
+   if (bo->last_writer) {
+      result = v3d_d3dkmt_wait_fence_ref_locked(
+         device, bo->last_writer, timeout_ms);
+      if (result)
+         return result;
+      v3d_d3dkmt_fence_release_locked(device, &bo->last_writer);
+   }
+   for (uint32_t engine = 0; engine < VC4KMT_ENGINE_COUNT; engine++) {
+      if (!bo->last_readers[engine])
+         continue;
+      result = v3d_d3dkmt_wait_fence_ref_locked(
+         device, bo->last_readers[engine], timeout_ms);
+      if (result)
+         return result;
+      v3d_d3dkmt_fence_release_locked(device, &bo->last_readers[engine]);
+   }
+   return 0;
+}
+
+static int
 v3d_d3dkmt_wait_syncobj_locked(struct v3d_d3dkmt_device *device,
                                uint32_t handle, uint32_t timeout_ms)
 {
@@ -648,12 +675,21 @@ v3d_d3dkmt_wait_submit_dependencies_locked(
       struct v3d_d3dkmt_bo *bo =
          v3d_d3dkmt_bo_lookup_locked(
             device, v3d_d3dkmt_submit_handle(bo_handles[i]));
-      struct v3d_d3dkmt_fence_ref *fence;
 
-      if (!bo || !(fence = bo->last_fence))
+      if (!bo)
          continue;
-      if (v3d_d3dkmt_add_gpu_dependency(fence, engine, dependencies, used))
+      if (v3d_d3dkmt_add_gpu_dependency(bo->last_writer, engine,
+                                        dependencies, used))
          return -1;
+      if (!(bo_handles[i] & V3D_D3DKMT_SUBMIT_HANDLE_WRITE))
+         continue;
+      for (uint32_t reader_engine = 0;
+           reader_engine < VC4KMT_ENGINE_COUNT; reader_engine++) {
+         if (v3d_d3dkmt_add_gpu_dependency(
+                bo->last_readers[reader_engine], engine,
+                dependencies, used))
+            return -1;
+      }
    }
 
    for (uint32_t source_engine = 0;
@@ -713,8 +749,20 @@ v3d_d3dkmt_store_submit_fence_locked(struct v3d_d3dkmt_device *device,
             device, v3d_d3dkmt_submit_handle(bo_handles[i]));
       if (!bo)
          continue;
-      v3d_d3dkmt_fence_release_locked(device, &bo->last_fence);
-      bo->last_fence = v3d_d3dkmt_fence_reference(reference);
+      if (bo_handles[i] & V3D_D3DKMT_SUBMIT_HANDLE_WRITE) {
+         v3d_d3dkmt_fence_release_locked(device, &bo->last_writer);
+         for (uint32_t reader_engine = 0;
+              reader_engine < VC4KMT_ENGINE_COUNT; reader_engine++) {
+            v3d_d3dkmt_fence_release_locked(
+               device, &bo->last_readers[reader_engine]);
+         }
+         bo->last_writer = v3d_d3dkmt_fence_reference(reference);
+      } else {
+         v3d_d3dkmt_fence_release_locked(
+            device, &bo->last_readers[engine]);
+         bo->last_readers[engine] =
+            v3d_d3dkmt_fence_reference(reference);
+      }
    }
 
    v3d_d3dkmt_fence_release_locked(device, &reference);
@@ -812,12 +860,8 @@ v3d_d3dkmt_close(int fd)
    for (uint32_t i = 1; i < device->bo_capacity; i++) {
       if (!device->bos[i].allocated)
          continue;
-      if (device->bos[i].last_fence) {
-         (void)v3d_d3dkmt_wait_fence_ref_locked(
-            device, device->bos[i].last_fence, V3D_D3DKMT_INFINITE_MS);
-         v3d_d3dkmt_fence_release_locked(device,
-                                         &device->bos[i].last_fence);
-      }
+      (void)v3d_d3dkmt_wait_bo_idle_locked(
+         device, &device->bos[i], V3D_D3DKMT_INFINITE_MS);
       (void)vc4kmt_bo_destroy(device->kmt, &device->bos[i].kmt);
    }
    for (uint32_t i = 1; i < device->syncobj_capacity; i++) {
@@ -1550,20 +1594,13 @@ drmIoctl(int fd, unsigned long request, void *arg)
          errno = EINVAL;
          break;
       }
-      if (!bo->last_fence) {
-         result = 0;
-         break;
-      }
-      result = v3d_d3dkmt_wait_fence_ref_locked(
-         device, bo->last_fence,
+      result = v3d_d3dkmt_wait_bo_idle_locked(
+         device, bo,
          wait->timeout_ns == UINT64_MAX ? V3D_D3DKMT_INFINITE_MS :
          (uint32_t)MIN2(DIV_ROUND_UP(wait->timeout_ns, 1000000ull),
                         (uint64_t)UINT32_MAX - 1));
-      if (result) {
+      if (result)
          result = -1;
-      } else {
-         v3d_d3dkmt_fence_release_locked(device, &bo->last_fence);
-      }
       break;
    }
    case DRM_IOCTL_GEM_CLOSE: {
@@ -1576,10 +1613,8 @@ drmIoctl(int fd, unsigned long request, void *arg)
          errno = EINVAL;
          break;
       }
-      if (bo->last_fence)
-         wait_result = v3d_d3dkmt_wait_fence_ref_locked(
-            device, bo->last_fence, V3D_D3DKMT_INFINITE_MS);
-      v3d_d3dkmt_fence_release_locked(device, &bo->last_fence);
+      wait_result = v3d_d3dkmt_wait_bo_idle_locked(
+         device, bo, V3D_D3DKMT_INFINITE_MS);
       vc4kmt_status status = bo->shared_resource ?
          vc4kmt_bo_close_shared(device->kmt, &bo->kmt,
                                 bo->shared_resource) :
