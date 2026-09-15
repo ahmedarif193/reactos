@@ -9,7 +9,7 @@ static const char *const DwmGpuMaterialSource =
     "uniform vec2 uSize, uScreenSize, uCaptureOrigin, uCaptureSize, uClientMin, uClientMax;\n"
     "uniform vec3 uBrush, uColorization, uKey;\n"
     "uniform float uOpacity, uAlpha, uRadius, uSaturation, uReflection;\n"
-    "uniform int uGlass, uWhole, uPixelAlpha, uUseKey;\n"
+    "uniform int uGlass, uWhole, uPixelAlpha, uPremultiplied, uUseKey;\n"
     "varying vec2 vTexCoord;\n"
     "float distanceRGB(vec3 a, vec3 b) {\n"
     "    vec3 d = abs(a-b); return max(d.r,max(d.g,d.b));\n"
@@ -50,5 +50,6 @@ static const char *const DwmGpuMaterialSource =
     "        s.rgb = clamp(s.rgb+(base-key)*(1.0-uOpacity)*weight+\n"
     "            vec3(uReflection*shine*weight),0.0,1.0);\n"
     "    }\n"
-    "    gl_FragColor = vec4(s.rgb,uAlpha*coverage*(uPixelAlpha != 0 ? s.a : 1.0));\n"
+    "    float outputAlpha = uAlpha*coverage*(uPixelAlpha != 0 ? s.a : 1.0);\n"
+    "    gl_FragColor = vec4(uPremultiplied != 0 ? s.rgb*uAlpha*coverage : s.rgb,outputAlpha);\n"
     "}\n";

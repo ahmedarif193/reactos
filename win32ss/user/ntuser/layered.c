@@ -15,9 +15,32 @@ typedef struct _LRD_PROP
    COLORREF Key;
    BYTE     Alpha;
    BYTE     is_Layered;
-   BYTE     NoUsed[2];
+   BYTE     PixelAlpha;
+   BYTE     UpdateLayered;
    DWORD    Flags;
 } LRD_PROP, *PLRD_PROP;
+
+static PLRD_PROP
+IntGetLayeredProp(PWND pWnd, BOOL Create)
+{
+   PLRD_PROP pLrdProp = UserGetProp(pWnd, AtomLayer, TRUE);
+
+   if (pLrdProp || !Create)
+      return pLrdProp;
+   pLrdProp = ExAllocatePoolWithTag(PagedPool, sizeof(LRD_PROP), USERTAG_REDIRECT);
+   if (!pLrdProp)
+      return NULL;
+   RtlZeroMemory(pLrdProp, sizeof(*pLrdProp));
+   if (!UserSetProp(pWnd,
+                    AtomLayer,
+                    (HANDLE)pLrdProp,
+                    TRUE))
+   {
+      ExFreePoolWithTag(pLrdProp, USERTAG_REDIRECT);
+      return NULL;
+   }
+   return pLrdProp;
+}
 
 BOOL FASTCALL
 GetLayeredStatus(PWND pWnd)
@@ -33,10 +56,16 @@ GetLayeredStatus(PWND pWnd)
 BOOL FASTCALL
 SetLayeredStatus(PWND pWnd, BYTE set)
 {
-   PLRD_PROP pLrdProp = UserGetProp(pWnd, AtomLayer, TRUE);
+   PLRD_PROP pLrdProp = IntGetLayeredProp(pWnd, FALSE);
    if (pLrdProp)
    {
       pLrdProp->is_Layered = set;
+      if (!set)
+      {
+         pLrdProp->PixelAlpha = FALSE;
+         pLrdProp->UpdateLayered = FALSE;
+         pLrdProp->Flags = 0;
+      }
       return TRUE;
    }
    return FALSE;
@@ -50,12 +79,14 @@ IntCompositionGetLayered(PWND pWnd, BYTE *pAlpha, COLORREF *pKey, DWORD *pFlags)
    PLRD_PROP p;
    if (!(pWnd->ExStyle & WS_EX_LAYERED))
       return FALSE;
-   p = UserGetProp(pWnd, AtomLayer, TRUE);
-   if (!p || !p->is_Layered)
+   p = IntGetLayeredProp(pWnd, FALSE);
+   if (!p || (!p->is_Layered && !p->UpdateLayered))
       return FALSE;
    *pAlpha = p->Alpha;
    *pKey = p->Key;
    *pFlags = p->Flags;
+   if (p->PixelAlpha)
+      *pFlags |= DWM_WINDOW_PREMULTIPLIED_ALPHA;
    return TRUE;
 }
 
@@ -69,6 +100,8 @@ IntSetLayeredWindowAttributes(PWND pWnd,
    INT was_Layered;
    COLORREF oldKey;
    BYTE oldAlpha;
+   BYTE oldPixelAlpha;
+   BYTE oldUpdateLayered;
    DWORD oldFlags;
 
    if (!(pWnd->ExStyle & WS_EX_LAYERED) )
@@ -77,18 +110,11 @@ IntSetLayeredWindowAttributes(PWND pWnd,
       return FALSE;
    }
 
-   pLrdProp = UserGetProp(pWnd, AtomLayer, TRUE);
-
+   pLrdProp = IntGetLayeredProp(pWnd, TRUE);
    if (!pLrdProp)
    {
-      pLrdProp = ExAllocatePoolWithTag(PagedPool, sizeof(LRD_PROP), USERTAG_REDIRECT);
-      if (pLrdProp == NULL)
-      {
-         ERR("failed to allocate LRD_PROP\n");
-         return FALSE;
-      }
-      RtlZeroMemory(pLrdProp, sizeof(LRD_PROP));
-      UserSetProp(pWnd, AtomLayer, (HANDLE)pLrdProp, TRUE);
+      ERR("failed to allocate LRD_PROP\n");
+      return FALSE;
    }
 
    if (pLrdProp)
@@ -96,6 +122,8 @@ IntSetLayeredWindowAttributes(PWND pWnd,
       was_Layered = pLrdProp->is_Layered;
       oldKey = pLrdProp->Key;
       oldAlpha = pLrdProp->Alpha;
+      oldPixelAlpha = pLrdProp->PixelAlpha;
+      oldUpdateLayered = pLrdProp->UpdateLayered;
       oldFlags = pLrdProp->Flags;
 
       pLrdProp->Key = crKey;
@@ -110,19 +138,45 @@ IntSetLayeredWindowAttributes(PWND pWnd,
       }
 
       pLrdProp->Flags = dwFlags;
-
+      pLrdProp->PixelAlpha = FALSE;
+      pLrdProp->UpdateLayered = FALSE;
       pLrdProp->is_Layered = 1;
   
       if (!was_Layered)
          co_UserRedrawWindow(pWnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME );
 
       if (!was_Layered || oldKey != pLrdProp->Key ||
-          oldAlpha != pLrdProp->Alpha || oldFlags != pLrdProp->Flags)
+          oldAlpha != pLrdProp->Alpha || oldPixelAlpha != pLrdProp->PixelAlpha ||
+          oldUpdateLayered != pLrdProp->UpdateLayered || oldFlags != pLrdProp->Flags)
       {
          IntCompositionDamageWindowMetadata(pWnd);
       }
    }
    // FIXME: Now set some bits to the Window DC!!!!
+   return TRUE;
+}
+
+static BOOL
+IntSetUpdateLayeredAttributes(PWND pWnd, const UPDATELAYEREDWINDOWINFO *info)
+{
+   PLRD_PROP pLrdProp = IntGetLayeredProp(pWnd, TRUE);
+   DWORD Flags = info->dwFlags & (ULW_COLORKEY | ULW_ALPHA);
+   BYTE Alpha = (Flags & ULW_ALPHA) ? info->pblend->SourceConstantAlpha : 255;
+   BYTE PixelAlpha = (Flags & ULW_ALPHA) && (info->pblend->AlphaFormat & AC_SRC_ALPHA);
+   BOOL Changed;
+
+   if (!pLrdProp)
+      return FALSE;
+   Changed = !pLrdProp->UpdateLayered || pLrdProp->Key != info->crKey ||
+             pLrdProp->Alpha != Alpha || pLrdProp->PixelAlpha != PixelAlpha ||
+             pLrdProp->Flags != Flags;
+   pLrdProp->Key = info->crKey;
+   pLrdProp->Alpha = Alpha;
+   pLrdProp->PixelAlpha = PixelAlpha;
+   pLrdProp->UpdateLayered = TRUE;
+   pLrdProp->Flags = Flags;
+   if (Changed)
+      IntCompositionDamageWindowMetadata(pWnd);
    return TRUE;
 }
 
@@ -185,7 +239,8 @@ IntUpdateLayeredWindowI( PWND pWnd,
       COLORREF color_key = (info->dwFlags & ULW_COLORKEY) ? info->crKey : CLR_INVALID;
       HBITMAP hOldBitmap, hbmSrc;
       DIBSECTION dibs;
-      BOOL bDirect;
+      BOOL bComposited, bDirect;
+      LONG SrcX, SrcY;
 
       Rect = Window;
 
@@ -196,7 +251,9 @@ IntUpdateLayeredWindowI( PWND pWnd,
       if (!info->hdcDst) hdc = UserGetDCEx(pWnd, NULL, DCX_USESTYLE);
       else hdc = info->hdcDst;
 
-      bDirect = (color_key == CLR_INVALID) && (info->prcDirty == NULL);
+      bComposited = IntCompositionIsEnabled();
+      bDirect = bComposited ||
+                ((color_key == CLR_INVALID) && (info->prcDirty == NULL));
       hbmSrc = NULL;
       hdcBuffer = NULL;
       hOldBitmap = NULL;
@@ -204,38 +261,46 @@ IntUpdateLayeredWindowI( PWND pWnd,
 
       if (!bDirect)
       {
-      hbmSrc = NtGdiCreateCompatibleBitmap(info->hdcSrc, Rect.right - Rect.left, Rect.bottom - Rect.top);
+         hbmSrc = NtGdiCreateCompatibleBitmap(info->hdcSrc, Rect.right - Rect.left, Rect.bottom - Rect.top);
 
-      GreGetObject(hbmSrc, sizeof(DIBSECTION), &dibs);
+         GreGetObject(hbmSrc, sizeof(DIBSECTION), &dibs);
 
-      TRACE("Source Bitmap bc %d\n",dibs.dsBmih.biBitCount);
+         TRACE("Source Bitmap bc %d\n",dibs.dsBmih.biBitCount);
 
-      hdcBuffer = NtGdiCreateCompatibleDC(hdc);
+         hdcBuffer = NtGdiCreateCompatibleDC(hdc);
 
-      hOldBitmap = (HBITMAP)NtGdiSelectBitmap(hdcBuffer, hbmSrc);
-      hdcBlend = hdcBuffer;
+         hOldBitmap = (HBITMAP)NtGdiSelectBitmap(hdcBuffer, hbmSrc);
+         hdcBlend = hdcBuffer;
 
-      NtGdiStretchBlt( hdcBuffer,
-                       Rect.left,
-                       Rect.top,
-                       Rect.right - Rect.left,
-                       Rect.bottom - Rect.top,
-                       info->hdcSrc,
-                       Rect.left + (info->pptSrc ? info->pptSrc->x : 0),
-                       Rect.top  + (info->pptSrc ? info->pptSrc->y : 0),
-                       Rect.right - Rect.left,
-                       Rect.bottom - Rect.top,
-                       SRCCOPY,
-                       color_key );
+         NtGdiStretchBlt(hdcBuffer,
+                         Rect.left,
+                         Rect.top,
+                         Rect.right - Rect.left,
+                         Rect.bottom - Rect.top,
+                         info->hdcSrc,
+                         Rect.left + (info->pptSrc ? info->pptSrc->x : 0),
+                         Rect.top  + (info->pptSrc ? info->pptSrc->y : 0),
+                         Rect.right - Rect.left,
+                         Rect.bottom - Rect.top,
+                         SRCCOPY,
+                         color_key);
+      }
 
-      // Need to test this, Dirty before or after StretchBlt?
       if (info->prcDirty)
       {
          ERR("prcDirty\n");
          RECTL_bIntersectRect( &Rect, &Rect, info->prcDirty );
-         NtGdiPatBlt( hdc, Rect.left, Rect.top, Rect.right - Rect.left, Rect.bottom - Rect.top, BLACKNESS );
+         if (!bComposited)
+            NtGdiPatBlt(hdc,
+                        Rect.left,
+                        Rect.top,
+                        Rect.right - Rect.left,
+                        Rect.bottom - Rect.top,
+                        BLACKNESS);
       }
-      }
+
+      SrcX = Rect.left + ((bDirect && info->pptSrc) ? info->pptSrc->x : 0);
+      SrcY = Rect.top + ((bDirect && info->pptSrc) ? info->pptSrc->y : 0);
 
       if (info->dwFlags & ULW_ALPHA)
       {
@@ -243,23 +308,46 @@ IntUpdateLayeredWindowI( PWND pWnd,
          TRACE("ULW_ALPHA bop %d Alpha %d aF %d\n", blend.BlendOp, blend.SourceConstantAlpha, blend.AlphaFormat);
       }
 
-      ret = NtGdiAlphaBlend( hdc,
-                             Rect.left,
-                             Rect.top,
-                             Rect.right - Rect.left,
-                             Rect.bottom - Rect.top,
-                             hdcBlend,
-                             Rect.left + (info->pptSrc ? info->pptSrc->x : 0),
-                             Rect.top  + (info->pptSrc ? info->pptSrc->y : 0),
-                             Rect.right - Rect.left,
-                             Rect.bottom - Rect.top,
-                             blend,
-                             0);
+      if (bComposited)
+      {
+         ret = NtGdiStretchBlt(hdc,
+                               Rect.left,
+                               Rect.top,
+                               Rect.right - Rect.left,
+                               Rect.bottom - Rect.top,
+                               hdcBlend,
+                               SrcX,
+                               SrcY,
+                               Rect.right - Rect.left,
+                               Rect.bottom - Rect.top,
+                               SRCCOPY,
+                               0);
+      }
+      else
+      {
+         ret = NtGdiAlphaBlend(hdc,
+                               Rect.left,
+                               Rect.top,
+                               Rect.right - Rect.left,
+                               Rect.bottom - Rect.top,
+                               hdcBlend,
+                               SrcX,
+                               SrcY,
+                               Rect.right - Rect.left,
+                               Rect.bottom - Rect.top,
+                               blend,
+                               0);
+      }
 
       if (hdcBuffer) NtGdiSelectBitmap(hdcBuffer, hOldBitmap);
       if (hbmSrc) GreDeleteObject(hbmSrc);
       if (hdcBuffer) IntGdiDeleteDC(hdcBuffer, FALSE);
       if (!info->hdcDst) UserReleaseDC(pWnd, hdc, FALSE);
+      if (ret && !IntSetUpdateLayeredAttributes(pWnd, info))
+      {
+         EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+         ret = FALSE;
+      }
    }
    else
       ret = TRUE;
