@@ -13,6 +13,7 @@
 #define DXGK_CONTEXT_ORDER_OPERATION_SIGNATURE 'rOCX'
 #define DXGK_CONTEXT_ORDER_OPERATION_TAG       'oOCX'
 #define DXGK_CONTEXT_ORDER_DRAIN_BATCH          16
+#define DXGK_CONTEXT_ORDER_ADMISSION_TIMEOUT_MS 100
 
 #define DXGK_CONTEXT_ORDER_TYPE_WORK            1
 #define DXGK_CONTEXT_ORDER_TYPE_WAIT            2
@@ -143,6 +144,7 @@ static NTSTATUS DxgkpContextOrderDrainRetirements(_Inout_ PDXGKRNL_CONTEXT Conte
 {
     DXGMMS2_CONTEXT_RETIREMENT_V1 Records[DXGK_CONTEXT_ORDER_DRAIN_BATCH];
     ULONG RetiredCount;
+    ULONG TotalRetired = 0;
     ULONG Index;
     NTSTATUS Status;
 
@@ -155,9 +157,12 @@ static NTSTATUS DxgkpContextOrderDrainRetirements(_Inout_ PDXGKRNL_CONTEXT Conte
             return Status;
         if (RetiredCount > RTL_NUMBER_OF(Records))
             return STATUS_DATA_ERROR;
+        TotalRetired += RetiredCount;
         for (Index = 0; Index < RetiredCount; ++Index)
             DxgkContextOrderRetire(Context, &Records[Index]);
     } while (Status == STATUS_MORE_ENTRIES);
+    if (TotalRetired != 0)
+        KeSetEvent(&Context->StreamRoomEvent, IO_NO_INCREMENT, FALSE);
     return STATUS_SUCCESS;
 }
 
@@ -940,6 +945,7 @@ NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ P
     DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Interface;
     DXGMMS2_ADMIT_CONTEXT_WORK_V1 Info;
     PDXGK_CONTEXT_ORDER_OPERATION Operation;
+    ULONGLONG Deadline = 0;
     ULONGLONG Sequence = 0;
     NTSTATUS Status;
 
@@ -969,7 +975,75 @@ NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ P
     Info.Size = DXGMMS2_ADMIT_CONTEXT_WORK_V1_SIZE;
     Info.Version = DXGMMS2_CONTEXT_STREAM_VERSION_1;
     Info.ClientTag = (ULONGLONG)(ULONG_PTR)Operation;
+
+RetryAdmission:
     Status = Interface.AdmitWork(Interface.AdapterHandle, Context->Mms2ContextStream, &Info, &Sequence);
+    if (Status == STATUS_DEVICE_BUSY)
+    {
+        if (Deadline == 0)
+        {
+            Deadline = KeQueryInterruptTime() +
+                       (ULONGLONG)DXGK_CONTEXT_ORDER_ADMISSION_TIMEOUT_MS * 10000ULL;
+        }
+
+        Status = DxgkpContextOrderDrainRetirements(Context, &Interface);
+        if (!NT_SUCCESS(Status))
+            goto Failure;
+
+        Status = Interface.AdmitWork(Interface.AdapterHandle,
+                                     Context->Mms2ContextStream,
+                                     &Info,
+                                     &Sequence);
+        if (Status != STATUS_DEVICE_BUSY)
+            goto AdmissionComplete;
+        if (KeQueryInterruptTime() >= Deadline)
+            goto Failure;
+
+        KeClearEvent(&Context->StreamRoomEvent);
+        KeMemoryBarrier();
+        if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0)
+        {
+            Status = STATUS_DELETE_PENDING;
+            goto Failure;
+        }
+
+        DxgkContextOrderScheduleReferenced(Context);
+        KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
+        {
+            LARGE_INTEGER Timeout;
+            ULONGLONG Now = KeQueryInterruptTime();
+
+            Timeout.QuadPart = -(LONGLONG)(Deadline > Now ? Deadline - Now : 1);
+            Status = KeWaitForSingleObject(&Context->StreamRoomEvent,
+                                           Executive,
+                                           KernelMode,
+                                           FALSE,
+                                           &Timeout);
+        }
+        (VOID)KeWaitForSingleObject(&Context->StreamAdmissionMutex,
+                                    Executive,
+                                    KernelMode,
+                                    FALSE,
+                                    NULL);
+        if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0)
+        {
+            Status = STATUS_DELETE_PENDING;
+            goto Failure;
+        }
+        if (Status == STATUS_TIMEOUT)
+        {
+            Status = STATUS_DEVICE_BUSY;
+            goto Failure;
+        }
+        if (!NT_SUCCESS(Status))
+            goto Failure;
+        Status = DxgkpContextOrderCaptureInterface(Context, TRUE, &Interface);
+        if (!NT_SUCCESS(Status))
+            goto Failure;
+        goto RetryAdmission;
+    }
+
+AdmissionComplete:
     if (!NT_SUCCESS(Status))
         goto Failure;
     DxgkpContextOrderPublishMarker(Operation, 0, Context, Sequence);
