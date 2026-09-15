@@ -2296,6 +2296,13 @@ VOID
 DxgkEndKmdTransaction(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+NTSTATUS
+DxgkYieldKmdTransactionForContextRoom(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGKRNL_CONTEXT Context,
+    _In_ ULONGLONG Deadline,
+    _Inout_ PBOOLEAN TransactionHeld);
+
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3200)
 NTSTATUS
 DxgkQueryFeatureState(

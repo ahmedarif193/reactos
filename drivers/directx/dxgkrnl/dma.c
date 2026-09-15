@@ -216,6 +216,7 @@ DxgkRender(
     UINT ReferencedCount = 0;
     UINT PatchOutCount = 0;
     UINT DmaBytesUsed = 0;
+    ULONGLONG BackpressureDeadline = 0;
     UINT Index;
     ULONG VidSchFence = 0;
     NTSTATUS Status;
@@ -499,6 +500,7 @@ DxgkRender(
     TrackArgs.OpenBindingReferences = OpenBindings;
     TrackArgs.OpenBindingReferenceCount = ReferencedCount;
 
+RetryTrackedSubmit:
     Status = VidSchSubmitCommandTracked(Adapter,
                                         Context->NodeOrdinal,
                                         0,
@@ -516,6 +518,29 @@ DxgkRender(
                                         0,
                                         0,
                                         &VidSchFence);
+    if (Status == STATUS_RETRY)
+    {
+        if (BackpressureDeadline == 0)
+        {
+            BackpressureDeadline =
+                KeQueryInterruptTime() +
+                (ULONGLONG)VIDSCH_CONTEXT_BACKPRESSURE_MS * 10000ULL;
+        }
+        Status = DxgkYieldKmdTransactionForContextRoom(Adapter,
+                                                       Context,
+                                                       BackpressureDeadline,
+                                                       &KmdTransaction);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        if (InterlockedCompareExchange(&Device->ExecutionState, 0, 0) !=
+                D3DKMT_DEVICEEXECUTION_ACTIVE ||
+            InterlockedCompareExchange(&Context->Destroying, 0, 0) != 0)
+        {
+            Status = STATUS_DEVICE_REMOVED;
+            goto Cleanup;
+        }
+        goto RetryTrackedSubmit;
+    }
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 

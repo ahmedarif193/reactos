@@ -1302,9 +1302,6 @@ DxgkpInvokeInterfaceDereference(
     return Status;
 }
 
-/* How long a submission absorbs a full context stream before giving up. */
-#define DXGKP_SUBMIT_BACKPRESSURE_MS 100
-
 static NTSTATUS
 DxgkpQueryKmdFeatureSupport(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -4359,6 +4356,7 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
     UINT EscapePatchCount = 0;
     UINT OpenBindingReferenceCount = 0;
     UINT AllocationReferenceCount = 0;
+    ULONGLONG BackpressureDeadline = 0;
     ULONG NodeOrdinal;
     UINT i;
     NTSTATUS Status;
@@ -4580,7 +4578,31 @@ DxgkpSubmitVirtGpuCommandEscapeMeasured(
     TrackArgs.AllocationReferences = AllocationReferenceList;
     TrackArgs.AllocationReferenceCount = AllocationReferenceCount;
     TrackArgs.AllocationCpuDirty = AllocationCpuDirtyList;
+
+RetryTrackedSubmit:
     Status = VidSchSubmitCommandTracked(Adapter, NodeOrdinal, 0, DmaBuffer, DmaBufferPrivateData, DmaBufferPrivateDataSize, AllocationList, ResourceHandleCount, EscapePatchList, EscapePatchCount, Adapter->SchedulingCaps.MultiEngineAware ? NULL : Device->hMiniportDevice, Adapter->SchedulingCaps.MultiEngineAware ? Context->hMiniportContext : NULL, 0, &TrackArgs, 0, 0, &VidSchFence);
+    if (Status == STATUS_RETRY && Context != NULL)
+    {
+        if (BackpressureDeadline == 0)
+        {
+            BackpressureDeadline =
+                KeQueryInterruptTime() +
+                (ULONGLONG)VIDSCH_CONTEXT_BACKPRESSURE_MS * 10000ULL;
+        }
+        Status = DxgkYieldKmdTransactionForContextRoom(Adapter,
+                                                       Context,
+                                                       BackpressureDeadline,
+                                                       &KmdTransaction);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        if (!DxgkpDeviceExecutionActive(Device) ||
+            InterlockedCompareExchange(&Context->Destroying, 0, 0) != 0)
+        {
+            Status = STATUS_DEVICE_REMOVED;
+            goto Cleanup;
+        }
+        goto RetryTrackedSubmit;
+    }
     if (NT_SUCCESS(Status))
         DmaBuffer = NULL;
 
@@ -8996,6 +9018,7 @@ DxgkSubmitCommand(
     ULONG FlagsValue;
     ULONG FenceId;
     NTSTATUS Status;
+    BOOLEAN KmdTransaction = FALSE;
 
     if (SubmitCommand == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -9060,6 +9083,7 @@ DxgkSubmitCommand(
         DxgkDereferenceContext(Context);
         return STATUS_DELETE_PENDING;
     }
+    KmdTransaction = TRUE;
     if (!DxgkpDeviceExecutionActive(Device))
     {
         DxgkEndKmdTransaction(Adapter);
@@ -9077,11 +9101,28 @@ DxgkSubmitCommand(
          * scheduler slot and packet, so each pass starts clean.
          */
         ULONGLONG Deadline = KeQueryInterruptTime() +
-                             (ULONGLONG)DXGKP_SUBMIT_BACKPRESSURE_MS * 10000ULL;
+                             (ULONGLONG)VIDSCH_CONTEXT_BACKPRESSURE_MS * 10000ULL;
 
         for (;;)
         {
             Status = VidSchSubmitCommandVirtual(Adapter, Context, SubmitCommand->Commands, SubmitCommand->CommandLength, SubmitCommand->pPrivateDriverData, SubmitCommand->PrivateDriverDataSize, SubmitCommand->Flags.NullRendering != 0, &FenceId);
+            if (Status == STATUS_RETRY)
+            {
+                Status = DxgkYieldKmdTransactionForContextRoom(
+                             Adapter,
+                             Context,
+                             Deadline,
+                             &KmdTransaction);
+                if (!NT_SUCCESS(Status))
+                    break;
+                if (!DxgkpDeviceExecutionActive(Device) ||
+                    InterlockedCompareExchange(&Context->Destroying, 0, 0) != 0)
+                {
+                    Status = STATUS_DEVICE_REMOVED;
+                    break;
+                }
+                continue;
+            }
             if (Status != STATUS_DEVICE_BUSY || KeQueryInterruptTime() >= Deadline)
                 break;
             /*
@@ -9100,7 +9141,8 @@ DxgkSubmitCommand(
             DxgkContextOrderKickContext(Context);
         }
     }
-    DxgkEndKmdTransaction(Adapter);
+    if (KmdTransaction)
+        DxgkEndKmdTransaction(Adapter);
     if (!NT_SUCCESS(Status))
         DxgkDereferenceContext(Context);
     return Status;

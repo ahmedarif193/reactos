@@ -2444,6 +2444,7 @@ DxgkpExecuteFullPresentMeasured(
     UINT DmaBytesUsed = 0;
     BOOLEAN PresentBindingsTracked = FALSE;
     BOOLEAN RefreshSharedPrimaryOnRetire = FALSE;
+    ULONGLONG BackpressureDeadline = 0;
     ULONG PresentNode;
     ULONG PresentEngine;
     LONG PresentPriority;
@@ -3053,7 +3054,32 @@ DxgkpExecuteFullPresentMeasured(
         TrackArgs.AllocationReferenceCount = SubmissionAllocationCount;
         TrackArgs.AllocationCpuDirty = SubmissionAllocationCpuDirty;
 
+RetryTrackedSubmit:
         Status = VidSchSubmitCommandTracked(Adapter, PresentNode, PresentEngine, DmaBuffer, DmaBufferPrivateData, DmaBufferPrivateDataSize, PresentAllocationList, DXGK_PRESENT_MAX_INDEX + 1, PatchLocationList, PatchEntries, Adapter->SchedulingCaps.MultiEngineAware ? NULL : MiniportDeviceHandle, Adapter->SchedulingCaps.MultiEngineAware ? MiniportContextHandle : NULL, PresentPriority, &TrackArgs, SubmitFlags.Value, Entry->VidPnSourceId, &VidSchFence);
+        if (Status == STATUS_RETRY && Context != NULL)
+        {
+            if (BackpressureDeadline == 0)
+            {
+                BackpressureDeadline =
+                    KeQueryInterruptTime() +
+                    (ULONGLONG)VIDSCH_CONTEXT_BACKPRESSURE_MS * 10000ULL;
+            }
+            Status = DxgkYieldKmdTransactionForContextRoom(
+                         Adapter,
+                         Context,
+                         BackpressureDeadline,
+                         &KmdTransaction);
+            if (!NT_SUCCESS(Status))
+                goto PresentSubmissionDone;
+            if (InterlockedCompareExchange(&Device->ExecutionState, 0, 0) !=
+                    D3DKMT_DEVICEEXECUTION_ACTIVE ||
+                InterlockedCompareExchange(&Context->Destroying, 0, 0) != 0)
+            {
+                Status = STATUS_DEVICE_REMOVED;
+                goto PresentSubmissionDone;
+            }
+            goto RetryTrackedSubmit;
+        }
         if (NT_SUCCESS(Status))
         {
             SubmissionFenceId = VidSchFence;
