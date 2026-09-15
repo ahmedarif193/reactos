@@ -720,13 +720,11 @@ v3d_job_submit(struct v3d_context *v3d, struct v3d_job *job)
                 close(v3d->in_fence_fd);
                 v3d->in_fence_fd = -1;
         } else {
-#endif
                 /* While the RCL will implicitly depend on the last RCL to have
                  * finished, we also need to block on any previous TFU job we
                  * may have dispatched.
                  */
                 job->submit.in_sync_rcl = v3d->out_sync;
-#ifndef _WIN32
         }
 #endif
 
