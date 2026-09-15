@@ -718,6 +718,10 @@ v3dX(emit_state)(struct pipe_context *pctx)
         }
 
         if (v3d->dirty & V3D_DIRTY_OQ) {
+#ifdef _WIN32
+                if (v3d->active_queries && v3d->current_oq)
+                        v3d_job_add_write_bo(job, v3d->current_oq);
+#endif
                 cl_emit(&job->bcl, OCCLUSION_QUERY_COUNTER, counter) {
                         if (v3d->active_queries && v3d->current_oq) {
                                 counter.address = cl_address(v3d->current_oq, 0);

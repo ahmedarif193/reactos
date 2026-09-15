@@ -44,6 +44,9 @@ void v3dX(bcl_epilogue)(struct v3d_context *v3d, struct v3d_job *job)
                         assert(v3d->prim_counts);
                         struct v3d_resource *rsc =
                                 v3d_resource(v3d->prim_counts);
+#ifdef _WIN32
+                        v3d_job_add_write_bo(job, rsc->bo);
+#endif
                         cl_emit(&job->bcl, PRIMITIVE_COUNTS_FEEDBACK, counter) {
                                 counter.address =
                                         cl_address(rsc->bo,

@@ -201,6 +201,9 @@ v3dX(tfu)(struct pipe_context *pctx,
         tfu.v71.ioc |= (last_level - base_level) << V3D71_TFU_IOC_NUMMM_SHIFT;
 #endif /* V3D_VERSION >= 71*/
 
+#ifdef _WIN32
+        tfu.bo_handles[0] |= V3D_D3DKMT_SUBMIT_HANDLE_WRITE;
+#endif
         int ret = v3d_ioctl(screen->fd, DRM_IOCTL_V3D_SUBMIT_TFU, &tfu);
         if (ret != 0) {
                 mesa_loge("Failed to submit TFU job: %d", ret);
@@ -215,4 +218,3 @@ v3dX(tfu)(struct pipe_context *pctx,
 
         return true;
 }
-

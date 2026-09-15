@@ -17,6 +17,9 @@
 extern "C" {
 #endif
 
+#define V3D_D3DKMT_SUBMIT_HANDLE_WRITE (UINT32_C(1) << 31)
+#define V3D_D3DKMT_SUBMIT_HANDLE_MASK  (~V3D_D3DKMT_SUBMIT_HANDLE_WRITE)
+
 int
 drmIoctl(int fd, unsigned long request, void *arg);
 
@@ -56,13 +59,10 @@ void *
 v3d_d3dkmt_bo_map(int fd, uint32_t handle);
 
 int
-v3d_d3dkmt_bo_mark_cpu_dirty(int fd, uint32_t handle);
+v3d_d3dkmt_bo_prepare_cpu_access(int fd, uint32_t handle, int write);
 
 int
-v3d_d3dkmt_bo_cpu_dirty(int fd, uint32_t handle);
-
-int
-v3d_d3dkmt_bo_invalidate(int fd, uint32_t handle);
+v3d_d3dkmt_bo_mark_external_dirty(int fd, uint32_t handle);
 
 int
 v3d_d3dkmt_syncobj_clone(int fd, uint32_t source, uint32_t *destination);

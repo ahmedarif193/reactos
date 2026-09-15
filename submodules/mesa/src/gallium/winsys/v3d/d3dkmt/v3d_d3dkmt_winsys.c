@@ -219,6 +219,7 @@ struct v3d_d3dkmt_bo {
    uint32_t shared_resource;
    bool allocated;
    bool cpu_dirty;
+   bool cpu_cache_stale;
 };
 
 struct v3d_d3dkmt_syncobj {
@@ -346,6 +347,12 @@ v3d_d3dkmt_bo_lookup_locked(struct v3d_d3dkmt_device *device,
    return &device->bos[handle];
 }
 
+static uint32_t
+v3d_d3dkmt_submit_handle(uint32_t handle)
+{
+   return handle & V3D_D3DKMT_SUBMIT_HANDLE_MASK;
+}
+
 static int
 v3d_d3dkmt_resolve_submit_resources_locked(
    struct v3d_d3dkmt_device *device, const uint32_t *bo_handles,
@@ -397,12 +404,13 @@ v3d_d3dkmt_resolve_submit_resources_locked(
 
    for (uint32_t i = 0; i < bo_handle_count; i++) {
       struct v3d_d3dkmt_bo *bo;
+      uint32_t handle = v3d_d3dkmt_submit_handle(bo_handles[i]);
       uint32_t hash_slot;
       uint32_t resource_index;
 
-      if (!bo_handles[i])
+      if (!handle)
          continue;
-      bo = v3d_d3dkmt_bo_lookup_locked(device, bo_handles[i]);
+      bo = v3d_d3dkmt_bo_lookup_locked(device, handle);
       if (!bo || !bo->kmt.allocation) {
          errno = EINVAL;
          return -1;
@@ -442,10 +450,14 @@ v3d_d3dkmt_finish_submit_resources_locked(
 {
    for (uint32_t i = 0; i < bo_handle_count; i++) {
       struct v3d_d3dkmt_bo *bo =
-         v3d_d3dkmt_bo_lookup_locked(device, bo_handles[i]);
+         v3d_d3dkmt_bo_lookup_locked(
+            device, v3d_d3dkmt_submit_handle(bo_handles[i]));
 
-      if (bo)
+      if (bo) {
          bo->cpu_dirty = false;
+         if (bo_handles[i] & V3D_D3DKMT_SUBMIT_HANDLE_WRITE)
+            bo->cpu_cache_stale = true;
+      }
    }
 }
 
@@ -614,7 +626,8 @@ v3d_d3dkmt_wait_resource_fences_gpu_locked(
 
    for (uint32_t i = 0; i < bo_handle_count; i++) {
       struct v3d_d3dkmt_bo *bo =
-         v3d_d3dkmt_bo_lookup_locked(device, bo_handles[i]);
+         v3d_d3dkmt_bo_lookup_locked(
+            device, v3d_d3dkmt_submit_handle(bo_handles[i]));
       struct v3d_d3dkmt_fence_ref *fence;
 
       if (!bo || !(fence = bo->last_fence) || fence->signaled ||
@@ -670,7 +683,8 @@ v3d_d3dkmt_store_submit_fence_locked(struct v3d_d3dkmt_device *device,
 
    for (uint32_t i = 0; i < bo_handle_count; i++) {
       struct v3d_d3dkmt_bo *bo =
-         v3d_d3dkmt_bo_lookup_locked(device, bo_handles[i]);
+         v3d_d3dkmt_bo_lookup_locked(
+            device, v3d_d3dkmt_submit_handle(bo_handles[i]));
       if (!bo)
          continue;
       v3d_d3dkmt_fence_release_locked(device, &bo->last_fence);
@@ -818,7 +832,34 @@ v3d_d3dkmt_bo_map(int fd, uint32_t handle)
 }
 
 int
-v3d_d3dkmt_bo_mark_cpu_dirty(int fd, uint32_t handle)
+v3d_d3dkmt_bo_prepare_cpu_access(int fd, uint32_t handle, int write)
+{
+   struct v3d_d3dkmt_device *device = v3d_d3dkmt_device_lookup(fd);
+   struct v3d_d3dkmt_bo *bo;
+   vc4kmt_status status = -1;
+
+   if (!device)
+      return -1;
+
+   mtx_lock(&device->lock);
+   bo = v3d_d3dkmt_bo_lookup_locked(device, handle);
+   if (bo) {
+      status = 0;
+      if (bo->cpu_cache_stale) {
+         status = vc4kmt_bo_invalidate(device->kmt, &bo->kmt,
+                                       0, bo->kmt.size);
+         if (status >= 0)
+            bo->cpu_cache_stale = false;
+      }
+      if (status >= 0 && write)
+         bo->cpu_dirty = true;
+   }
+   mtx_unlock(&device->lock);
+   return status;
+}
+
+int
+v3d_d3dkmt_bo_mark_external_dirty(int fd, uint32_t handle)
 {
    struct v3d_d3dkmt_device *device = v3d_d3dkmt_device_lookup(fd);
    struct v3d_d3dkmt_bo *bo;
@@ -831,48 +872,11 @@ v3d_d3dkmt_bo_mark_cpu_dirty(int fd, uint32_t handle)
    bo = v3d_d3dkmt_bo_lookup_locked(device, handle);
    if (bo) {
       bo->cpu_dirty = true;
+      bo->cpu_cache_stale = true;
       result = 0;
    }
    mtx_unlock(&device->lock);
    return result;
-}
-
-int
-v3d_d3dkmt_bo_cpu_dirty(int fd, uint32_t handle)
-{
-   struct v3d_d3dkmt_device *device = v3d_d3dkmt_device_lookup(fd);
-   struct v3d_d3dkmt_bo *bo;
-   int result = -1;
-
-   if (!device)
-      return -1;
-
-   mtx_lock(&device->lock);
-   bo = v3d_d3dkmt_bo_lookup_locked(device, handle);
-   if (bo)
-      result = bo->cpu_dirty ? 1 : 0;
-   mtx_unlock(&device->lock);
-   return result;
-}
-
-int
-v3d_d3dkmt_bo_invalidate(int fd, uint32_t handle)
-{
-   struct v3d_d3dkmt_device *device = v3d_d3dkmt_device_lookup(fd);
-   struct v3d_d3dkmt_bo *bo;
-   vc4kmt_status status = -1;
-
-   if (!device)
-      return -1;
-
-   mtx_lock(&device->lock);
-   bo = v3d_d3dkmt_bo_lookup_locked(device, handle);
-   if (bo) {
-      status = vc4kmt_bo_invalidate(device->kmt, &bo->kmt,
-                                    0, bo->kmt.size);
-   }
-   mtx_unlock(&device->lock);
-   return status;
 }
 
 int
