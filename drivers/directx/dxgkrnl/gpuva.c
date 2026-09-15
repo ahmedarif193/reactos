@@ -70,7 +70,7 @@ GpuVaPteAddress(
 /* A fixed per-process node cap bounds user-controlled NonPagedPool growth.
  * Validation is serialized by GpuVaLock; clone/replacement amplification is
  * separately bounded to at most three capped lists plus two split nodes. */
-#define GPUVA_MAX_PROCESS_RANGES    1024UL
+#define GPUVA_MAX_PROCESS_RANGES    16384UL
 #define GPUVA_MAX_TRANSIENT_RANGES  (GPUVA_MAX_PROCESS_RANGES * 3UL + 2UL)
 
 /* Residency references, paging packets, and allocation destruction now share
