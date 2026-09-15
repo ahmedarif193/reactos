@@ -235,9 +235,23 @@ vc4kmt_wait(
     _In_ DWORD TimeoutMs);
 
 NTSTATUS
+vc4kmt_wait_many(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_reads_opt_(FenceCount) const VC4KMT_FENCE *Fences,
+    _In_ UINT FenceCount,
+    _In_ DWORD TimeoutMs);
+
+NTSTATUS
 vc4kmt_wait_async(
     _In_ VC4KMT_DEVICE *Device,
     _In_ const VC4KMT_FENCE *Fence,
+    _In_ HANDLE CompletionEvent);
+
+NTSTATUS
+vc4kmt_wait_async_many(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_reads_opt_(FenceCount) const VC4KMT_FENCE *Fences,
+    _In_ UINT FenceCount,
     _In_ HANDLE CompletionEvent);
 
 NTSTATUS

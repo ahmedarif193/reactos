@@ -1725,67 +1725,135 @@ vc4kmt_wait(
     _In_ const VC4KMT_FENCE *Fence,
     _In_ DWORD TimeoutMs)
 {
-    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
-    D3DKMT_HANDLE Handles[1];
-    UINT64 Values[1];
-    DWORD Start;
-
-    if (Device == NULL || Fence == NULL)
+    if (Fence == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    /* Degenerate fence (no sync object, no value page): already complete. */
-    if (Fence->hSyncObject == 0 && Fence->CpuValue == NULL)
-        return STATUS_SUCCESS;
+    return vc4kmt_wait_many(Device, Fence, 1, TimeoutMs);
+}
 
-    if (Fence->CpuValue != NULL && *Fence->CpuValue >= Fence->Value)
-        return STATUS_SUCCESS;
+static NTSTATUS
+Vc4KmtCollectPendingFences(
+    _In_reads_(FenceCount) const VC4KMT_FENCE *Fences,
+    _In_ UINT FenceCount,
+    _Out_writes_(D3DDDI_MAX_OBJECT_WAITED_ON) const VC4KMT_FENCE **Pending,
+    _Out_writes_(D3DDDI_MAX_OBJECT_WAITED_ON) D3DKMT_HANDLE *Handles,
+    _Out_writes_(D3DDDI_MAX_OBJECT_WAITED_ON) UINT64 *Values,
+    _Out_ UINT *PendingCountOut)
+{
+    UINT PendingCount = 0;
+    UINT FenceIndex;
 
-    /* A zero-time monitored-fence wait is a poll.  The shared fence page was
-     * already sampled above, so avoid GetTickCount and the timed wait loop.
-     * A concurrent signal after that sample belongs to the next poll, which
-     * is the same boundary exposed by a zero-duration kernel wait. */
-    if (Fence->CpuValue != NULL && TimeoutMs == 0)
-        return STATUS_IO_TIMEOUT;
-
-    if (Fence->CpuValue != NULL && TimeoutMs != INFINITE)
+    for (FenceIndex = 0; FenceIndex < FenceCount; ++FenceIndex)
     {
+        const VC4KMT_FENCE *Fence = &Fences[FenceIndex];
+        UINT PendingIndex;
+
+        if ((Fence->CpuValue != NULL && *Fence->CpuValue >= Fence->Value) ||
+            (Fence->hSyncObject == 0 && Fence->CpuValue == NULL))
+        {
+            continue;
+        }
+
+        if (Fence->hSyncObject != 0)
+        {
+            for (PendingIndex = 0; PendingIndex < PendingCount; ++PendingIndex)
+            {
+                if (Handles[PendingIndex] == Fence->hSyncObject)
+                    break;
+            }
+            if (PendingIndex != PendingCount)
+            {
+                if (Fence->Value > Values[PendingIndex])
+                {
+                    Pending[PendingIndex] = Fence;
+                    Values[PendingIndex] = Fence->Value;
+                }
+                continue;
+            }
+        }
+
+        if (PendingCount == D3DDDI_MAX_OBJECT_WAITED_ON)
+            return STATUS_INVALID_PARAMETER;
+        Pending[PendingCount] = Fence;
+        Handles[PendingCount] = Fence->hSyncObject;
+        Values[PendingCount] = Fence->Value;
+        PendingCount++;
+    }
+
+    *PendingCountOut = PendingCount;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+vc4kmt_wait_many(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_reads_opt_(FenceCount) const VC4KMT_FENCE *Fences,
+    _In_ UINT FenceCount,
+    _In_ DWORD TimeoutMs)
+{
+    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
+    const VC4KMT_FENCE *Pending[D3DDDI_MAX_OBJECT_WAITED_ON];
+    D3DKMT_HANDLE Handles[D3DDDI_MAX_OBJECT_WAITED_ON];
+    UINT64 Values[D3DDDI_MAX_OBJECT_WAITED_ON];
+    UINT PendingCount;
+    UINT FenceIndex;
+    DWORD Start;
+    BOOL PollCpu;
+    NTSTATUS Status;
+
+    if (Device == NULL || (FenceCount != 0 && Fences == NULL))
+        return STATUS_INVALID_PARAMETER;
+    if (FenceCount == 0 || Device->Fake)
+        return STATUS_SUCCESS;
+
+    Status = Vc4KmtCollectPendingFences(Fences, FenceCount, Pending,
+                                        Handles, Values, &PendingCount);
+    if (!NT_SUCCESS(Status) || PendingCount == 0)
+        return Status;
+
+    PollCpu = TimeoutMs != INFINITE;
+    for (FenceIndex = 0; FenceIndex < PendingCount; ++FenceIndex)
+    {
+        if (Handles[FenceIndex] == 0)
+            PollCpu = TRUE;
+    }
+
+    if (PollCpu)
+    {
+        for (FenceIndex = 0; FenceIndex < PendingCount; ++FenceIndex)
+        {
+            if (Pending[FenceIndex]->CpuValue == NULL)
+                return STATUS_NOT_SUPPORTED;
+        }
+
         Start = GetTickCount();
         for (;;)
         {
-            if (*Fence->CpuValue >= Fence->Value)
+            for (FenceIndex = 0; FenceIndex < PendingCount; ++FenceIndex)
+            {
+                if (*Pending[FenceIndex]->CpuValue <
+                    Pending[FenceIndex]->Value)
+                {
+                    break;
+                }
+            }
+            if (FenceIndex == PendingCount)
                 return STATUS_SUCCESS;
-            if (GetTickCount() - Start >= TimeoutMs)
+            if (TimeoutMs != INFINITE && GetTickCount() - Start >= TimeoutMs)
                 return STATUS_IO_TIMEOUT;
             Sleep(1);
         }
     }
 
-    if (Fence->hSyncObject != 0)
-    {
-        Handles[0] = Fence->hSyncObject;
-        Values[0] = Fence->Value;
-        RtlZeroMemory(&Wait, sizeof(Wait));
-        Wait.hDevice = Device->hDevice;
-        Wait.ObjectCount = 1;
-        Wait.ObjectHandleArray = Handles;
-        Wait.FenceValueArray = Values;
-        if (TimeoutMs == INFINITE)
-            return D3DKMTWaitForSynchronizationObjectFromCpu(&Wait);
-        return STATUS_NOT_SUPPORTED;
-    }
+    if (Device->hDevice == 0)
+        return STATUS_INVALID_DEVICE_STATE;
 
-    Start = GetTickCount();
-
-    for (;;)
-    {
-        if (*Fence->CpuValue >= Fence->Value)
-            return STATUS_SUCCESS;
-
-        if (TimeoutMs != INFINITE && GetTickCount() - Start >= TimeoutMs)
-            return STATUS_IO_TIMEOUT;
-
-        Sleep(1);
-    }
+    RtlZeroMemory(&Wait, sizeof(Wait));
+    Wait.hDevice = Device->hDevice;
+    Wait.ObjectCount = PendingCount;
+    Wait.ObjectHandleArray = Handles;
+    Wait.FenceValueArray = Values;
+    return D3DKMTWaitForSynchronizationObjectFromCpu(&Wait);
 }
 
 NTSTATUS
@@ -1794,30 +1862,56 @@ vc4kmt_wait_async(
     _In_ const VC4KMT_FENCE *Fence,
     _In_ HANDLE CompletionEvent)
 {
-    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
-    D3DKMT_HANDLE Handle;
-    UINT64 Value;
-
-    if (Device == NULL || Fence == NULL || CompletionEvent == NULL)
+    if (Fence == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if (Device->Fake ||
-        (Fence->CpuValue != NULL && *Fence->CpuValue >= Fence->Value) ||
-        (Fence->hSyncObject == 0 && Fence->CpuValue == NULL))
+    return vc4kmt_wait_async_many(Device, Fence, 1, CompletionEvent);
+}
+
+NTSTATUS
+vc4kmt_wait_async_many(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_reads_opt_(FenceCount) const VC4KMT_FENCE *Fences,
+    _In_ UINT FenceCount,
+    _In_ HANDLE CompletionEvent)
+{
+    D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
+    const VC4KMT_FENCE *Pending[D3DDDI_MAX_OBJECT_WAITED_ON];
+    D3DKMT_HANDLE Handles[D3DDDI_MAX_OBJECT_WAITED_ON];
+    UINT64 Values[D3DDDI_MAX_OBJECT_WAITED_ON];
+    UINT PendingCount;
+    UINT FenceIndex;
+    NTSTATUS Status;
+
+    if (Device == NULL || CompletionEvent == NULL ||
+        (FenceCount != 0 && Fences == NULL))
     {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (FenceCount == 0 || Device->Fake)
         return SetEvent(CompletionEvent) ? STATUS_SUCCESS :
                                           STATUS_UNSUCCESSFUL;
-    }
-    if (Device->hDevice == 0 || Fence->hSyncObject == 0)
-        return STATUS_INVALID_DEVICE_STATE;
 
-    Handle = Fence->hSyncObject;
-    Value = Fence->Value;
+    Status = Vc4KmtCollectPendingFences(Fences, FenceCount, Pending,
+                                        Handles, Values, &PendingCount);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (PendingCount == 0)
+        return SetEvent(CompletionEvent) ? STATUS_SUCCESS :
+                                          STATUS_UNSUCCESSFUL;
+    if (Device->hDevice == 0)
+        return STATUS_INVALID_DEVICE_STATE;
+    for (FenceIndex = 0; FenceIndex < PendingCount; ++FenceIndex)
+    {
+        if (Handles[FenceIndex] == 0)
+            return STATUS_INVALID_DEVICE_STATE;
+    }
+
     RtlZeroMemory(&Wait, sizeof(Wait));
     Wait.hDevice = Device->hDevice;
-    Wait.ObjectCount = 1;
-    Wait.ObjectHandleArray = &Handle;
-    Wait.FenceValueArray = &Value;
+    Wait.ObjectCount = PendingCount;
+    Wait.ObjectHandleArray = Handles;
+    Wait.FenceValueArray = Values;
     Wait.hAsyncEvent = CompletionEvent;
     return D3DKMTWaitForSynchronizationObjectFromCpu(&Wait);
 }

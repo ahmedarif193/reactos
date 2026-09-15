@@ -100,7 +100,9 @@ v3dX(tfu)(struct pipe_context *pctx,
                         dst->bo->handle,
                         src != dst ? src->bo->handle : 0
                 },
+#ifndef _WIN32
                 .in_sync = v3d->out_sync,
+#endif
                 .out_sync = v3d->out_sync,
         };
         uint32_t src_offset = (src->bo->offset +

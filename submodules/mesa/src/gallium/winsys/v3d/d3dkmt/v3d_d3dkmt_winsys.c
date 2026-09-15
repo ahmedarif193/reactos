@@ -165,9 +165,16 @@ vc4kmt_status vc4kmt_submit_csd_resources(VC4KMT_DEVICE *device,
                                           VC4KMT_FENCE *fence);
 vc4kmt_status vc4kmt_wait(VC4KMT_DEVICE *device,
                           const VC4KMT_FENCE *fence, uint32_t timeout_ms);
+vc4kmt_status vc4kmt_wait_many(VC4KMT_DEVICE *device,
+                               const VC4KMT_FENCE *fences,
+                               uint32_t fence_count, uint32_t timeout_ms);
 vc4kmt_status vc4kmt_wait_async(VC4KMT_DEVICE *device,
                                 const VC4KMT_FENCE *fence,
                                 void *completion_event);
+vc4kmt_status vc4kmt_wait_async_many(VC4KMT_DEVICE *device,
+                                     const VC4KMT_FENCE *fences,
+                                     uint32_t fence_count,
+                                     void *completion_event);
 vc4kmt_status vc4kmt_wait_gpu_many(VC4KMT_DEVICE *device, uint32_t engine,
                                    const VC4KMT_FENCE *fences,
                                    uint32_t fence_count);
@@ -229,7 +236,7 @@ struct v3d_d3dkmt_bo {
 };
 
 struct v3d_d3dkmt_syncobj {
-   struct v3d_d3dkmt_fence_ref *fence;
+   struct v3d_d3dkmt_fence_ref *fences[VC4KMT_ENGINE_COUNT];
    bool allocated;
    bool signaled;
 };
@@ -603,21 +610,45 @@ v3d_d3dkmt_wait_syncobj_locked(struct v3d_d3dkmt_device *device,
 {
    struct v3d_d3dkmt_syncobj *syncobj =
       v3d_d3dkmt_syncobj_lookup_locked(device, handle);
+   VC4KMT_FENCE fences[VC4KMT_ENGINE_COUNT];
+   bool has_fence = false;
+   uint32_t fence_count = 0;
+   vc4kmt_status status;
 
    if (!syncobj) {
       errno = EINVAL;
       return -EINVAL;
    }
-   if (syncobj->signaled || !syncobj->fence)
-      return syncobj->signaled ? 0 : -ETIME;
+   if (syncobj->signaled)
+      return 0;
 
-   int result = v3d_d3dkmt_wait_fence_ref_locked(device, syncobj->fence,
-                                                  timeout_ms);
-   if (!result) {
-      v3d_d3dkmt_fence_release_locked(device, &syncobj->fence);
-      syncobj->signaled = true;
+   for (uint32_t engine = 0; engine < VC4KMT_ENGINE_COUNT; engine++) {
+      struct v3d_d3dkmt_fence_ref *fence = syncobj->fences[engine];
+
+      if (!fence)
+         continue;
+      has_fence = true;
+      if (!fence->signaled)
+         fences[fence_count++] = fence->kmt;
    }
-   return result;
+   if (!has_fence)
+      return -ETIME;
+
+   if (fence_count) {
+      status = vc4kmt_wait_many(device->kmt, fences, fence_count, timeout_ms);
+      if (status < 0) {
+         errno = status == VC4KMT_STATUS_IO_TIMEOUT ? ETIME : EIO;
+         return errno == ETIME ? -ETIME : -EIO;
+      }
+   }
+
+   for (uint32_t engine = 0; engine < VC4KMT_ENGINE_COUNT; engine++) {
+      if (syncobj->fences[engine])
+         syncobj->fences[engine]->signaled = true;
+      v3d_d3dkmt_fence_release_locked(device, &syncobj->fences[engine]);
+   }
+   syncobj->signaled = true;
+   return 0;
 }
 
 static int
@@ -652,6 +683,7 @@ v3d_d3dkmt_wait_submit_dependencies_locked(
 
    for (uint32_t i = 0; i < sync_handle_count; i++) {
       struct v3d_d3dkmt_syncobj *syncobj;
+      bool has_fence = false;
 
       if (!sync_handles[i])
          continue;
@@ -662,13 +694,22 @@ v3d_d3dkmt_wait_submit_dependencies_locked(
       }
       if (syncobj->signaled)
          continue;
-      if (!syncobj->fence) {
+      for (uint32_t source_engine = 0;
+           source_engine < VC4KMT_ENGINE_COUNT; source_engine++) {
+         struct v3d_d3dkmt_fence_ref *fence =
+            syncobj->fences[source_engine];
+
+         if (!fence)
+            continue;
+         has_fence = true;
+         if (v3d_d3dkmt_add_gpu_dependency(fence, engine,
+                                           dependencies, used))
+            return -1;
+      }
+      if (!has_fence) {
          errno = ETIME;
          return -ETIME;
       }
-      if (v3d_d3dkmt_add_gpu_dependency(syncobj->fence, engine,
-                                        dependencies, used))
-         return -1;
    }
 
    for (uint32_t i = 0; i < bo_handle_count; i++) {
@@ -738,8 +779,8 @@ v3d_d3dkmt_store_submit_fence_locked(struct v3d_d3dkmt_device *device,
    }
 
    if (out_sync) {
-      v3d_d3dkmt_fence_release_locked(device, &syncobj->fence);
-      syncobj->fence = v3d_d3dkmt_fence_reference(reference);
+      v3d_d3dkmt_fence_release_locked(device, &syncobj->fences[engine]);
+      syncobj->fences[engine] = v3d_d3dkmt_fence_reference(reference);
       syncobj->signaled = false;
    }
 
@@ -865,12 +906,10 @@ v3d_d3dkmt_close(int fd)
       (void)vc4kmt_bo_destroy(device->kmt, &device->bos[i].kmt);
    }
    for (uint32_t i = 1; i < device->syncobj_capacity; i++) {
-      if (!device->syncobjs[i].allocated || !device->syncobjs[i].fence)
+      if (!device->syncobjs[i].allocated)
          continue;
-      (void)v3d_d3dkmt_wait_fence_ref_locked(
-         device, device->syncobjs[i].fence, V3D_D3DKMT_INFINITE_MS);
-      v3d_d3dkmt_fence_release_locked(device,
-                                      &device->syncobjs[i].fence);
+      (void)v3d_d3dkmt_wait_syncobj_locked(
+         device, i, V3D_D3DKMT_INFINITE_MS);
    }
    mtx_unlock(&device->lock);
 
@@ -1164,7 +1203,8 @@ drmSyncobjDestroy(int fd, uint32_t handle)
       errno = EINVAL;
       return -EINVAL;
    }
-   v3d_d3dkmt_fence_release_locked(device, &syncobj->fence);
+   for (uint32_t engine = 0; engine < VC4KMT_ENGINE_COUNT; engine++)
+      v3d_d3dkmt_fence_release_locked(device, &syncobj->fences[engine]);
    memset(syncobj, 0, sizeof(*syncobj));
    mtx_unlock(&device->lock);
    return 0;
@@ -1210,6 +1250,9 @@ v3d_d3dkmt_syncobj_signal_event(int fd, uint32_t handle, void *event)
 {
    struct v3d_d3dkmt_device *device = v3d_d3dkmt_device_lookup(fd);
    struct v3d_d3dkmt_syncobj *syncobj;
+   VC4KMT_FENCE fences[VC4KMT_ENGINE_COUNT];
+   bool has_fence = false;
+   uint32_t fence_count = 0;
    int result = 0;
 
    if (!device || !event) {
@@ -1224,11 +1267,20 @@ v3d_d3dkmt_syncobj_signal_event(int fd, uint32_t handle, void *event)
    } else if (syncobj->signaled) {
       if (!SetEvent((HANDLE)event))
          result = -EIO;
-   } else if (!syncobj->fence) {
-      result = -ETIME;
    } else {
-      if (vc4kmt_wait_async(device->kmt, &syncobj->fence->kmt,
-                            event) < 0)
+      for (uint32_t engine = 0; engine < VC4KMT_ENGINE_COUNT; engine++) {
+         struct v3d_d3dkmt_fence_ref *fence = syncobj->fences[engine];
+
+         if (!fence)
+            continue;
+         has_fence = true;
+         if (!fence->signaled)
+            fences[fence_count++] = fence->kmt;
+      }
+      if (!has_fence)
+         result = -ETIME;
+      else if (vc4kmt_wait_async_many(device->kmt, fences, fence_count,
+                                      event) < 0)
          result = -EIO;
    }
    mtx_unlock(&device->lock);
@@ -1263,9 +1315,11 @@ v3d_d3dkmt_syncobj_clone(int fd, uint32_t source, uint32_t *destination)
    source_syncobj = v3d_d3dkmt_syncobj_lookup_locked(device, source);
    assert(source_syncobj);
    device->syncobjs[handle] = *source_syncobj;
-   if (source_syncobj->fence)
-      device->syncobjs[handle].fence =
-         v3d_d3dkmt_fence_reference(source_syncobj->fence);
+   for (uint32_t engine = 0; engine < VC4KMT_ENGINE_COUNT; engine++) {
+      if (source_syncobj->fences[engine])
+         device->syncobjs[handle].fences[engine] =
+            v3d_d3dkmt_fence_reference(source_syncobj->fences[engine]);
+   }
    device->syncobjs[handle].allocated = true;
    *destination = handle;
    mtx_unlock(&device->lock);
