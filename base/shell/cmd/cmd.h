@@ -227,6 +227,7 @@ VOID CompleteFilename (LPTSTR, UINT);
 INT  ShowCompletionMatches (LPTSTR, INT);
 #endif
 #ifdef FEATURE_4NT_FILENAME_COMPLETION
+BOOL CompleteCommand (LPTSTR, BOOL, LPTSTR, UINT);
 VOID CompleteFilename (LPTSTR, BOOL, LPTSTR, UINT);
 #endif
 
