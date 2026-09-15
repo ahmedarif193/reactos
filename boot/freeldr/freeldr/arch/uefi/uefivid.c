@@ -54,6 +54,7 @@ typedef struct _UEFI_BGRT_LOGO
 } UEFI_BGRT_LOGO, *PUEFI_BGRT_LOGO;
 
 static UEFI_BGRT_LOGO UefiBgrtLogo = {0};
+static BOOLEAN UefiBgrtLogoShown = FALSE;
 
 typedef enum _UEFI_GOP_SCROLL_RESULT
 {
@@ -677,8 +678,14 @@ UefiDrawBgrtLogo(VOID)
     LONG SourceDeltaX, SourceDeltaY;
     ULONG Row, Col;
 
-    if (!UefiBgrtLogo.Valid || !UiProgressBar.Show)
+    if (!UefiBgrtLogo.Valid)
         return;
+
+    if (!UiProgressBar.Show)
+    {
+        UefiBgrtLogoShown = FALSE;
+        return;
+    }
 
     if ((UefiBgrtLogo.DrawWidth == 0) || (UefiBgrtLogo.DrawHeight == 0))
         return;
@@ -689,6 +696,15 @@ UefiDrawBgrtLogo(VOID)
     BytesPerPixel = FrameBufferData->BitsPerPixel / 8;
     if (UefiRenderAddress == 0)
         return;
+
+    if (!UefiBgrtLogoShown)
+    {
+        FbConsMarkDirtyRect(UefiBgrtLogo.PositionX,
+                            UefiBgrtLogo.PositionY,
+                            UefiBgrtLogo.DrawWidth,
+                            UefiBgrtLogo.DrawHeight);
+        UefiBgrtLogoShown = TRUE;
+    }
 
     /*
      * The text renderer already tracks the pixels changed by this update.
