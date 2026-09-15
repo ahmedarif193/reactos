@@ -1009,7 +1009,8 @@ typedef struct _DWM_GPU_MATERIAL_PROGRAM
 {
     GLuint Program;
     GLint Window, Backdrop, Glass, Whole, PixelAlpha, UseKey;
-    GLint Opacity, Alpha, Radius, Size, ClientMin, ClientMax;
+    GLint Opacity, Alpha, Radius, Saturation, Reflection;
+    GLint Size, ScreenSize, ClientMin, ClientMax;
     GLint CaptureOrigin, CaptureSize, Brush, Colorization, Key;
 } DWM_GPU_MATERIAL_PROGRAM;
 static DWM_GPU_MATERIAL_PROGRAM g_materialPrograms[2];
@@ -2653,7 +2654,10 @@ DwmGpuComposeBuildMaterial(DWM_GPU_MATERIAL_PROGRAM *Shader, BOOL Interior)
         MAT_CACHE(Opacity);
         MAT_CACHE(Alpha);
         MAT_CACHE(Radius);
+        MAT_CACHE(Saturation);
+        MAT_CACHE(Reflection);
         MAT_CACHE(Size);
+        MAT_CACHE(ScreenSize);
         MAT_CACHE(ClientMin);
         MAT_CACHE(ClientMax);
         MAT_CACHE(CaptureOrigin);
@@ -2767,7 +2771,10 @@ DwmGpuComposeMaterial(const DWM_WIN *Window, GLuint Texture,
             pglUniform1f(Shader->Alpha, Alpha);
             pglUniform1f(Shader->Radius, min(Window->CornerRadius,
                           (ULONG)min(Window->cx / 2, Window->cy / 2)));
+            pglUniform1f(Shader->Saturation, (100.0f + DWM_MATERIAL_SATURATION) / 100.0f);
+            pglUniform1f(Shader->Reflection, DWM_MATERIAL_REFLECT_STRENGTH / 255.0f);
             pglUniform2f(Shader->Size, Window->cx, Window->cy);
+            pglUniform2f(Shader->ScreenSize, g_composeWidth, g_composeHeight);
             pglUniform2f(Shader->ClientMin,
                           min(Window->ClientX + (LONG)Window->BackdropNcExtendLeft,
                               Window->ClientX + Window->ClientWidth),
