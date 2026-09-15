@@ -661,6 +661,7 @@ NTSTATUS DxgkContextOrderAdmitWait(_Inout_ PDXGKRNL_CONTEXT Context, _In_ DXGK_C
     PDXGK_CONTEXT_ORDER_OPERATION Operation;
     DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Interface;
     DXGMMS2_ADMIT_CONTEXT_WAIT_V1 Info;
+    ULONGLONG Deadline = 0;
     ULONGLONG Sequence = 0;
     NTSTATUS Status;
 
@@ -704,7 +705,49 @@ NTSTATUS DxgkContextOrderAdmitWait(_Inout_ PDXGKRNL_CONTEXT Context, _In_ DXGK_C
     Info.ObjectId = (ULONGLONG)(ULONG_PTR)Operation;
     Info.FenceValue = FenceValue;
     Info.ClientTag = (ULONGLONG)(ULONG_PTR)Operation;
+
+RetryAdmission:
     Status = Interface.AdmitWait(Interface.AdapterHandle, Context->Mms2ContextStream, &Info, &Sequence);
+    if (Status == STATUS_DEVICE_BUSY)
+    {
+        if (Deadline == 0)
+        {
+            Deadline = KeQueryInterruptTime() +
+                       (ULONGLONG)VIDSCH_CONTEXT_BACKPRESSURE_MS * 10000ULL;
+        }
+        if (Context->Device != NULL &&
+            Context->Device->Adapter != NULL &&
+            Context->Device->Adapter->KmdTransactionOwnerThread ==
+                PsGetCurrentThread())
+        {
+            Status = STATUS_RETRY;
+            goto Failure;
+        }
+
+        KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
+        Status = DxgkContextOrderWaitForRoom(Context, Deadline);
+        (VOID)KeWaitForSingleObject(&Context->StreamAdmissionMutex,
+                                    Executive,
+                                    KernelMode,
+                                    FALSE,
+                                    NULL);
+        if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0)
+        {
+            Status = STATUS_DELETE_PENDING;
+            goto Failure;
+        }
+        if (!NT_SUCCESS(Status))
+            goto Failure;
+        Status = DxgkpContextOrderCaptureInterface(Context, TRUE, &Interface);
+        if (!NT_SUCCESS(Status))
+            goto Failure;
+        if (Interface.AdmitWait == NULL || Interface.ResolveWait == NULL)
+        {
+            Status = STATUS_REVISION_MISMATCH;
+            goto Failure;
+        }
+        goto RetryAdmission;
+    }
     if (!NT_SUCCESS(Status))
         goto Failure;
     DxgkpContextOrderPublishMarker(Operation, 0, Context, Sequence);
