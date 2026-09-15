@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Native CMake generator rules; no Meson runtime dependency.
+# Native CMake generator rules with no secondary build-tool dependency.
 set(MESA_GLAPI_DEPENDENCIES
     "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/AMD_depth_clamp_separate.xml"
     "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/AMD_draw_buffers_blend.xml"
@@ -155,7 +155,7 @@ set(MESA_GLAPI_DEPENDENCIES
     "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/typeexpr.py"
     "${PROJECT_SOURCE_DIR}/src/mesa/glapi/glapi/gen/unmarshal_table_c.py"
 )
-if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec")
+if((MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec") AND NOT MESA_LAVAPIPE)
     mesa_generate(
         OUTPUT
             "${PROJECT_BINARY_DIR}/src/util/driconf_static.h"
@@ -1434,7 +1434,7 @@ if(MESA_PROFILE STREQUAL "arm64" OR MESA_PROFILE STREQUAL "arm64ec" OR MESA_PROF
             "${Python3_EXECUTABLE}"
     )
 endif()
-if(MESA_PROFILE STREQUAL "i386" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if((MESA_PROFILE STREQUAL "i386" OR MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64") AND NOT MESA_LAVAPIPE)
     mesa_generate(
         OUTPUT
             "${PROJECT_BINARY_DIR}/src/util/driconf_static.h"
@@ -1747,7 +1747,7 @@ if(MESA_PROFILE STREQUAL "amd64" OR MESA_PROFILE STREQUAL "llvm-amd64")
             "${Python3_EXECUTABLE}"
     )
 endif()
-if(MESA_PROFILE STREQUAL "llvm-amd64" OR MESA_PROFILE STREQUAL "llvm-arm64")
+if(MESA_LLVMPIPE)
     mesa_generate(
         OUTPUT
             "${PROJECT_BINARY_DIR}/src/gallium/auxiliary/lp_bld_nir_no_integer_algebraic.c"

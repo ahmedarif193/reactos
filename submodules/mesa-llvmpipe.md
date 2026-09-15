@@ -37,18 +37,18 @@ Mesa and LLVM inherit the invoking build's `-jN` / `--parallel N` at runtime;
 `CMAKE_BUILD_PARALLEL_LEVEL` is also supported. There is no separate fixed Mesa
 job limit. The first build needs
 network access and several GB of free space. Required host tools are CMake 3.24+,
-Meson, Ninja, Bison 2.7+, Flex, Python with Mako, packaging and PyYAML, and llvm-mingw.
+Ninja, Bison 2.7+, Flex, Python with Mako, packaging and PyYAML, and llvm-mingw.
 Disabled builds do not probe these optional dependencies or download LLVM.
 `MESA_BISON`, `MESA_FLEX`, and `MESA_PYTHON` select host generator tools.
-The AMD64 OpenGL sub-build uses CMake. Native ARM64 OpenGL and Lavapipe use
-Meson; the ARM64 WGL build requires Meson 1.12.0 or newer when LLVM is enabled.
+AMD64 and native ARM64 OpenGL and Lavapipe use one CMake Mesa sub-build. The
+ReactOS build does not invoke Mesa's alternative build-system files.
 
 CMake builds static Windows LLVM **22.1.8** from its official, SHA-256-pinned
 source archive, including the native TableGen tools needed for cross builds.
 The Vulkan loader and header archives are likewise pinned to Khronos release
 **1.4.354**, matching Mesa's Vulkan headers. Microsoft DirectX-Headers
 **1.619.1** supplies the build-only Windows WSI declarations.
-Both Mesa builds use that target LLVM installation. Host LLVM libraries must
+Both Mesa DLLs use that target LLVM installation. Host LLVM libraries must
 not be substituted for Windows libraries. A matching existing static Windows
 LLVM installation can be supplied with `MESA_LLVM_ROOT` and its
 `MESA_LLVM_LICENSE_FILE`.
@@ -57,12 +57,12 @@ Alternatively, `MESA_LLVM_SOURCE_ROOT` can reuse an already extracted LLVM
 install directories. Do not extract or update that shared source while a
 consumer is building it.
 
-Compiler caches are disabled for the external builds. LLVM, Lavapipe, the
-Vulkan loader, and their dependencies live under the selected build tree's
-`submodules/mesa-llvmpipe/`. The shared WGL ICD remains in the normal
-`dll/opengl/mesa_gallium/mesa-source/` build. The vendored Mesa source is not
-copied, patched, or updated by CMake, and Mesa's dependency fallbacks are
-disabled.
+Compiler caches are disabled for the external builds. LLVM, the Vulkan loader,
+and their downloaded dependencies live under the selected build tree's
+`submodules/mesa-llvmpipe/`. WGL and Lavapipe are compiled together under
+`dll/opengl/mesa_gallium/mesa-source/cmake-build`, sharing generated sources and
+common static libraries. The vendored Mesa source is not copied, patched, or
+updated by CMake, and dependency fallbacks are disabled.
 
 ## Outputs and boundaries
 
@@ -115,7 +115,6 @@ Both architectures' LLVM dependencies, the former `mesadrv.dll`, and license bun
 successfully from `ros-dev` commit `94fe6bf842ad179af1a49d7a3ac391e1e382077a`.
 These results apply to that recorded revision; later source changes need
 separate validation.
-Meson 1.12.0 resolved the LLVM 22 detection failure seen with Meson 1.10.0.
 The same WGL probe completed 22 checks without failures with these drivers on
 native Windows 11 ARM64 (10.0.26100.1742) and ReactOS AMD64 with the software-ICD
 loader change. Both reported Mesa 26.2.2 / LLVM 22.1.8 / OpenGL 4.6, rendered

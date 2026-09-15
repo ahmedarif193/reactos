@@ -1,11 +1,10 @@
 # Native CMake build for ReactOS
 
-This build compiles the vendored Mesa 26.2.2 Windows WGL configurations directly
-with CMake. Configuration, compilation, generator execution and incremental
-rebuilds do not invoke Meson or read Meson's build metadata. ReactOS uses this
-profile for i386 and AMD64. ARM64 and ARM64EC use the Meson source profile
-until the native CMake profile includes the Windows V3D driver and D3DKMT
-winsys needed by Raspberry Pi 5.
+This build compiles the vendored Mesa 26.2.2 Windows WGL and Lavapipe
+configurations directly with CMake. Configuration, compilation, generator
+execution and incremental rebuilds do not invoke or read another build
+system's metadata. ReactOS uses this project for i386, AMD64, ARM64 and
+ARM64EC.
 
 | Architecture | Option disabled | `ENABLE_MESA_LLVMPIPE=ON` |
 | --- | --- | --- |
@@ -14,11 +13,9 @@ winsys needed by Raspberry Pi 5.
 | ARM64 | V3D + VC4 + Softpipe | V3D + VC4 + LLVMpipe in the same ICD |
 | ARM64EC | V3D + VC4 + Softpipe | unsupported |
 
-The native CMake ARM64 WGL target does not link or expose V3D. The ReactOS Meson
-profile includes the Windows V3D driver and D3DKMT winsys, and is required for
-hardware OpenGL and DWM composition on Raspberry Pi 5. This native CMake port
-includes the Broadcom compiler and generators used by VC4; its V3D port remains
-unfinished.
+The native ARM64 WGL target links V3D and VC4, both ReactOS D3DKMT winsyses,
+the Broadcom compiler and versioned V3D support libraries. LLVMpipe replaces
+Softpipe when enabled but does not remove either Raspberry Pi hardware driver.
 
 ## ReactOS build
 
@@ -35,19 +32,18 @@ ReactOS build. Standalone CMake uses the standard `BISON_EXECUTABLE`,
 `FLEX_EXECUTABLE`, and `Python3_EXECUTABLE` variables. macOS's system Bison is
 older than required; the ReactOS integration also searches Homebrew's Bison.
 
-The native CMake external build directory is `mesa-source/cmake-build` for the
-i386/AMD64 ICD, including AMD64 LLVMpipe. The ARM64 Meson ICD uses
-`mesa-source/build`. Optional LLVM, Lavapipe, and Vulkan-loader dependencies
-use the separate `mesa-llvmpipe` work directory.
+The native CMake external build directory is `mesa-source/cmake-build` for all
+architectures. WGL and Lavapipe share that build directory. Optional LLVM,
+Vulkan-loader, Vulkan-Headers and DirectX-Headers dependencies use the separate
+`mesa-llvmpipe` work directory.
 
 ## Parallel builds
 
 The native CMake ReactOS integration forwards the invoking `ninja -jN` or
 `cmake --build --parallel N` at build time to Mesa, its support libraries,
 optional LLVM, and the ARM64EC/WoW64 runtime subbuilds. Changing the count does
-not require reconfiguration. The previous `MESA_BUILD_JOBS` cache is removed.
-The ARM64 Meson ICD currently uses `MESA_MESON_JOBS` (default 8) for its nested
-Ninja build.
+not require reconfiguration. The previous fixed build-job cache settings are
+removed.
 `CMAKE_BUILD_PARALLEL_LEVEL` supplies the count when no explicit ancestor
 build option is found; otherwise the native generator chooses its default.
 Ninja's unlimited `-j0` is preserved.
@@ -85,9 +81,12 @@ archives built by ReactOS. The parent build handles these dependencies.
 
 For a standalone LLVMpipe build, set `MESA_LLVMPIPE=ON`, `MESA_LLVM_ROOT` to
 the matching Windows static LLVM 22 installation, and choose
-`MESA_WGL_DLL_NAME`. LLVMpipe does not require KMT/zlib. The native ARM64 and
-AMD64 LLVM backends are selected from LLVM's CMake package. The default common
-ICD keeps assertions enabled, including when optimized.
+`MESA_WGL_DLL_NAME`. Add `MESA_LAVAPIPE=ON` and
+`MESA_DIRECTX_HEADERS_ROOT=/path/to/DirectX-Headers/install` to build
+`vulkan_lvp.dll` and `lvp_icd.json` from the same configuration. The native
+ARM64 and AMD64 LLVM backends are selected from LLVM's CMake package. ReactOS
+Release builds disable assertions; non-Release parent builds retain them while
+still compiling optimized Mesa binaries.
 
 ## Maintaining the port
 
@@ -95,8 +94,8 @@ ICD keeps assertions enabled, including when optimized.
 archive composition and DLL link dependencies. `CompileOptions.cmake` captures
 the Windows/llvm-mingw feature configuration. `Generators.cmake` declares the
 Python, Bison and Flex commands and their input dependencies. These are native,
-editable CMake files: update them together with their corresponding upstream
-Meson declarations when importing Mesa changes.
+editable CMake files: update their source and generator lists when importing
+Mesa changes.
 
 The lists were translated from fresh configurations of this source snapshot
 for all six profiles, then restricted to the WGL DLL and loader dependency
@@ -112,25 +111,27 @@ when its generator inputs change. To change `MESA_GIT_SHA1_OVERRIDE` in an
 existing build, delete that header from the Mesa build directory and rebuild
 with the desired environment value.
 
-## Conversion validation (2026-09-14)
+## Conversion validation (2026-09-14 through 2026-09-15)
 
 - Built the common ICD for ARM64, ARM64EC, i386 and AMD64 with llvm-mingw.
 - Built AMD64 LLVMpipe against static Windows LLVM 22.1.8.
-- Compared each of those five DLLs with its previous Meson output: all 52
+- Compared each of those five DLLs with its previous build output: all 52
   export names and ordinals match, and their imported DLL sets are unchanged.
-- Built and staged the native ARM64 ICD through the main ReactOS target. Pi 5
-  testing subsequently showed that this ICD selects softpipe because V3D is
-  absent; the ReactOS ARM64 integration now stages the Meson V3D ICD.
+- The original ARM64 CMake conversion did not yet contain V3D. On 2026-09-15,
+  the V3D driver, D3DKMT winsys and performance-counter libraries were added;
+  an ARM64 V3D + VC4 + LLVMpipe WGL DLL linked successfully.
+- Built AMD64 and ARM64 Lavapipe DLLs from the same CMake configurations as
+  their WGL DLLs. This is build evidence, not runtime or hardware proof.
 - Built the optional ARM64 `opengl32` loader and checked standalone installation.
 - Checked incremental rebuilds, regeneration after deleting a generated source,
   generation with spaces in both source/build paths, and capture-helper failure
   cleanup. Generated-code differences were paths, Bison include guards and an
   old i386 Git version marker, rather than shader/parser content changes.
 
-A full ARM64 LLVMpipe link was not validated because no ARM64 static LLVM
-installation was available. Rendering on Windows/ReactOS and a complete OS
-image build were not tested during the initial conversion. Matching exports
-and imports established build/ABI checks, not runtime rendering equivalence.
+Rendering on Windows/ReactOS and a complete OS image build were not repeated
+for the 2026-09-15 CMake-only transition. Matching exports and imports plus the
+AMD64/ARM64 links establish build and ABI checks, not runtime equivalence or
+Raspberry Pi hardware rendering.
 
 The parallel launcher has regression tests runnable with
 `python3 sdk/cmake/tests/test_build_with_parallel.py` from the ReactOS source

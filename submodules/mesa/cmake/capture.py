@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Capture a generator's stdout without shell quoting or a Meson dependency."""
+"""Capture a generator's stdout without shell quoting or an extra build tool."""
 import os
 from pathlib import Path
 import subprocess

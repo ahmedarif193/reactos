@@ -122,21 +122,12 @@ bytes). That ABI was introduced by commit `0b59cb64953`.
 **Changing `sdk/include/reactos/rpi3vc4kmt.h` or
 `sdk/lib/rpi3vc4kmt/rpi3vc4kmt.c` requires rebuilding this binary.**
 
-## Historical external rebuild / overriding
+## Source rebuild / overriding
 
-The previous external Mesa build used `reactos-aarch64.cross` and this configuration:
-
-    /tmp/mesa-meson-env/bin/meson setup build-reactos-arm64 \
-        --cross-file reactos-aarch64.cross --buildtype release -Db_ndebug=true \
-        -Dplatforms=windows -Dgallium-drivers=vc4 -Dvulkan-drivers= \
-        -Dllvm=disabled -Dglx=disabled -Degl=disabled -Dgbm=disabled \
-        -Dgles1=disabled -Dgles2=disabled -Dxmlconfig=disabled \
-        -Dzstd=disabled -Dlibunwind=disabled -Dvalgrind=disabled \
-        -Dgallium-wgl-dll-name=rpi3vc4ogl \
-        -Dreactos-source-dir=/home/ahmed/WorkDir/TTE/reactos_win32k_work \
-        -Dreactos-build-dir=/home/ahmed/WorkDir/TTE/reactos_win32k_work/output-Clang-arm64-release
-
-Build `rpi3vc4kmt` and `zlib` in the ReactOS Release build first (`ninja -C output-Clang-arm64-release rpi3vc4kmt zlib`), then run `ninja` in the Mesa build directory. Keep these static dependencies in Release mode even when the destination ReactOS image is Debug. To test the result without replacing the archive:
+The current ARM64 source build is the shared native CMake Mesa project described
+in `dll/opengl/mesa_gallium/README.md`. It builds VC4 and V3D together and creates
+its matching Release KMT/zlib support tree automatically, even for a Debug
+ReactOS image. To test a separately built result without replacing the archive:
 
     cmake -DRPI3VC4_MESA_VC4_ICD=/path/to/libgallium_wgl.dll .
 
