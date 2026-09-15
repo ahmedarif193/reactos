@@ -1044,6 +1044,7 @@ DxgkpInitializeContextStreamState(_Inout_ PDXGKRNL_CONTEXT Context)
     Context->StreamWaitOperationCount = 0;
     Context->StreamStopping = 0;
     KeInitializeEvent(&Context->StreamDrainedEvent, NotificationEvent, TRUE);
+    KeInitializeEvent(&Context->StreamRoomEvent, NotificationEvent, FALSE);
 }
 
 static NTSTATUS
@@ -1136,6 +1137,7 @@ DxgkpBeginContextStreamTeardown(_Inout_ PDXGKRNL_CONTEXT Context)
 
     PAGED_CODE();
     InterlockedExchange(&Context->StreamStopping, 1);
+    KeSetEvent(&Context->StreamRoomEvent, IO_NO_INCREMENT, FALSE);
     /*
      * StreamStopping alone does not close the admission window: a submission
      * that already passed the check is still building its operation.  Wait for

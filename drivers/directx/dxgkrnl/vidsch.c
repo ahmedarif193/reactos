@@ -3423,6 +3423,7 @@ VidSchSubmitCommandTrackedMeasured(
     PVIDSCH_ENGINE Engine;
     PVIDSCH_DMA_PACKET Packet;
     PDXGKRNL_CONTEXT KickContext;
+    PDXGKRNL_CONTEXT OrderedContext = NULL;
     PDXGKRNL_SUBMIT_DMA_BUFFER Reservation = NULL;
     PDXGKRNL_DEVICE PacketDevice;
     DXGKRNL_TRACK_DMA_ARGS LocalTrackArgs;
@@ -3674,9 +3675,20 @@ VidSchSubmitCommandTrackedMeasured(
     }
     if (Packet->Context != NULL)
     {
-        Status = DxgkContextOrderAdmitPacket((PDXGKRNL_CONTEXT)Packet->Context, Packet);
+        OrderedContext = (PDXGKRNL_CONTEXT)Packet->Context;
+        if (!ExAcquireRundownProtection(&OrderedContext->StreamAdmissionRundown))
+        {
+            Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
+            ExReleaseFastMutex(&Ctx->LifecycleMutex);
+            DxgkCancelTrackedDmaBuffer(Reservation);
+            VidSchpDereferencePacket(Packet);
+            VidSchpReleaseCall(Adapter);
+            return STATUS_DELETE_PENDING;
+        }
+        Status = DxgkContextOrderAdmitPacket(OrderedContext, Packet);
         if (!NT_SUCCESS(Status))
         {
+            ExReleaseRundownProtection(&OrderedContext->StreamAdmissionRundown);
             Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
             ExReleaseFastMutex(&Ctx->LifecycleMutex);
             DxgkCancelTrackedDmaBuffer(Reservation);
@@ -3697,6 +3709,8 @@ VidSchSubmitCommandTrackedMeasured(
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
         if (Packet->ContextOrderOperation != NULL)
             DxgkContextOrderAbortPacket(Packet, Status);
+        if (OrderedContext != NULL)
+            ExReleaseRundownProtection(&OrderedContext->StreamAdmissionRundown);
         VidSchpDereferencePacket(Packet);
         VidSchpReleaseCall(Adapter);
         return Status;
@@ -3708,6 +3722,8 @@ VidSchSubmitCommandTrackedMeasured(
             KickContext = (PDXGKRNL_CONTEXT)Packet->Context;
     }
     ExReleaseFastMutex(&Ctx->LifecycleMutex);
+    if (OrderedContext != NULL)
+        ExReleaseRundownProtection(&OrderedContext->StreamAdmissionRundown);
 
     if (KickContext != NULL)
     {

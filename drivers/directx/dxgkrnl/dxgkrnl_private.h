@@ -1464,6 +1464,7 @@ struct _DXGKRNL_CONTEXT
     volatile LONG               StreamWaitOperationCount;
     volatile LONG               StreamStopping;
     KEVENT                      StreamDrainedEvent;
+    KEVENT                      StreamRoomEvent;
 
     /*
      * The list owns one reference. Virtual scheduler packets acquire an
