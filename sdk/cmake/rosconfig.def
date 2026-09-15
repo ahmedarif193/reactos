@@ -451,19 +451,19 @@ config ENABLE_ALPC
 menu "Graphics stack"
 
 config ENABLE_MESA_LLVMPIPE
-    prompt "Modern Mesa LLVMpipe software OpenGL driver"
+    prompt "Modern Mesa LLVMpipe OpenGL and Lavapipe Vulkan"
     type bool
     default n
     depends TOOLCHAIN=clang
     depends ARCH=amd64 || ARCH=arm64
     help
-      Build the vendored Mesa source as mesadrv.dll for the selected target.
-      LLVMpipe renders on the CPU. LLVM's Windows static libraries and native
+      Add LLVMpipe to the shared mesa_gallium.dll OpenGL ICD and package the
+      Lavapipe Vulkan ICD with the Khronos Vulkan loader. On ARM64 the shared
+      OpenGL ICD retains the V3D and VC4 Raspberry Pi hardware drivers and uses
+      LLVMpipe as its CPU fallback. LLVM's Windows static libraries and native
       code-generation tools are built automatically when needed. The first
-      enabled build downloads pinned LLVM sources and needs several GB of
-      free space. Disabled builds neither download nor build this dependency.
-      This packages an additional ICD; it does not replace opengl32.dll or
-      the Raspberry Pi hardware drivers. Runtime driver discovery is separate.
+      enabled build downloads pinned sources and needs several GB of free
+      space. This does not replace opengl32.dll. Runtime validation is separate.
 
 config MESA_GALLIUM_FROM_SOURCE
     prompt "Mesa Gallium OpenGL driver"
@@ -473,9 +473,10 @@ config MESA_GALLIUM_FROM_SOURCE
     depends ARCH=i386 || ARCH=amd64 || ARCH=arm64
     help
       Build and package mesa_gallium.dll by default with llvm-mingw Clang.
-      AMD64 and i386 use softpipe for CPU rendering. Native ARM64 also
-      includes VC4 for Raspberry Pi 3 in the same DLL. No LLVM runtime
-      dependency is required.
+      AMD64 and i386 use softpipe for CPU rendering. Native ARM64 includes
+      V3D and VC4 for Raspberry Pi hardware in the same DLL, followed by
+      softpipe. No LLVM runtime dependency is required unless the optional
+      LLVMpipe/Lavapipe configuration is enabled.
 
 config REACTOS_GRAPHICS_DRIVER_MODEL
     prompt "Display driver model"

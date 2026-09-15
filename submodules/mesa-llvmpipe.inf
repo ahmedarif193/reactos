@@ -1,9 +1,11 @@
 ; SPDX-License-Identifier: GPL-3.0-or-later
 ; SPDX-FileCopyrightText: 2026 Ahmed ARIF
-; Optional software OpenGL ICD. Hardware ICD discovery retains priority.
+; Optional software OpenGL and Vulkan ICDs. Hardware ICD discovery retains priority.
 
 [AddReg]
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL","DLL",0x00000000,"mesadrv.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL","DLL",0x00000000,"mesa_gallium.dll"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL","Version",0x00010001,2
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL","DriverVersion",0x00010001,1
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\MSOGL","Flags",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","VK_ADD_DRIVER_FILES",0x00020000,"%SystemRoot%\System32\lvp_icd.json"
+HKLM,"SOFTWARE\Khronos\Vulkan\Drivers","%SystemRoot%\System32\lvp_icd.json",0x00010001,0

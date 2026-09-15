@@ -18,11 +18,19 @@ if(ARCH STREQUAL "arm64")
     if(ARM64EC_RUNTIME)
         set(MESA_TRIPLE arm64ec-w64-mingw32)
     endif()
-    set(MESA_GALLIUM_DRIVERS vc4,v3d,softpipe)
+    if(ENABLE_MESA_LLVMPIPE)
+        set(MESA_GALLIUM_DRIVERS vc4,v3d,llvmpipe)
+    else()
+        set(MESA_GALLIUM_DRIVERS vc4,v3d,softpipe)
+    endif()
 elseif(ARCH STREQUAL "amd64")
     set(MESA_CPU x86_64)
     set(MESA_TRIPLE x86_64-w64-mingw32)
-    set(MESA_GALLIUM_DRIVERS softpipe)
+    if(ENABLE_MESA_LLVMPIPE)
+        set(MESA_GALLIUM_DRIVERS llvmpipe)
+    else()
+        set(MESA_GALLIUM_DRIVERS softpipe)
+    endif()
 elseif(ARCH STREQUAL "i386")
     set(MESA_CPU x86)
     set(MESA_TRIPLE i686-w64-mingw32)
@@ -37,6 +45,16 @@ find_program(MESA_AR NAMES llvm-ar HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE 
 find_program(MESA_STRIP NAMES llvm-strip HINTS "${MESA_LLVM_MINGW_ROOT}/bin" NO_CACHE REQUIRED)
 find_program(MESA_NINJA NAMES ninja REQUIRED)
 find_program(MESA_PYTHON NAMES python3 python REQUIRED)
+set(MESA_LLVM_ROOT "" CACHE PATH "Optional prebuilt Windows static LLVM installation for the selected architecture")
+if(ENABLE_MESA_LLVMPIPE)
+    if(MESA_LLVM_ROOT)
+        get_filename_component(MESA_LLVM_PREFIX "${MESA_LLVM_ROOT}" ABSOLUTE)
+    else()
+        set(MESA_LLVM_PREFIX "${REACTOS_BINARY_DIR}/submodules/mesa-llvmpipe/llvm-install")
+    endif()
+else()
+    set(MESA_LLVM_PREFIX "")
+endif()
 execute_process(COMMAND "${MESA_PYTHON}" -c "import mako, packaging, yaml"
     RESULT_VARIABLE _mesa_python_status ERROR_VARIABLE _mesa_python_error)
 if(NOT _mesa_python_status EQUAL 0)
@@ -118,11 +136,23 @@ endif()
 
 if(ARCH STREQUAL "arm64")
     find_program(MESA_MESON NAMES meson REQUIRED)
+    if(ENABLE_MESA_LLVMPIPE)
+        execute_process(COMMAND "${MESA_MESON}" --version
+            OUTPUT_VARIABLE _mesa_meson_version OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(_mesa_meson_version VERSION_LESS 1.12.0)
+            message(FATAL_ERROR "Mesa LLVMpipe with LLVM 22 requires Meson 1.12.0 or newer (found ${_mesa_meson_version}).")
+        endif()
+        set(_mesa_llvm_options
+            -Dllvm=enabled
+            -Dshared-llvm=disabled
+            -Dcmake_prefix_path=${MESA_LLVM_PREFIX})
+    else()
+        set(_mesa_llvm_options -Dllvm=disabled)
+    endif()
     set(MESA_MESON_JOBS "8" CACHE STRING "Parallel jobs in the ARM64 Mesa V3D build")
     if(NOT MESA_MESON_JOBS MATCHES "^[1-9][0-9]*$")
         message(FATAL_ERROR "MESA_MESON_JOBS must be a positive integer")
     endif()
-    set(MESA_LLVM_PREFIX "")
     file(MAKE_DIRECTORY "${MESA_WORK_DIR}")
     foreach(_mesa_path MESA_CC MESA_CXX MESA_WINDRES MESA_AR MESA_STRIP MESA_PYTHON MESA_LLVM_PREFIX CMAKE_COMMAND)
         file(TO_CMAKE_PATH "${${_mesa_path}}" ${_mesa_path}_INI)
@@ -139,7 +169,7 @@ if(ARCH STREQUAL "arm64")
         UPDATE_COMMAND ""
         PATCH_COMMAND ""
         CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
-            ${MESA_MESON} setup --reconfigure <BINARY_DIR> <SOURCE_DIR>
+            ${MESA_MESON} setup --clearcache --reconfigure <BINARY_DIR> <SOURCE_DIR>
             --cross-file "${MESA_WORK_DIR}/cross.ini"
             --native-file "${MESA_WORK_DIR}/native.ini"
             --wrap-mode=nofallback
@@ -152,7 +182,7 @@ if(ARCH STREQUAL "arm64")
             -Dgallium-wgl-dll-name=mesa_gallium
             -Dreactos-source-dir=${REACTOS_SOURCE_DIR}
             -Dreactos-build-dir=${MESA_SUPPORT_DIR}
-            -Dllvm=disabled
+            ${_mesa_llvm_options}
             -Dvulkan-drivers=
             -Dglx=disabled
             -Degl=disabled
@@ -190,8 +220,9 @@ else()
             ${MESA_CMAKE_ARGS}
             -DMESA_ARCH:STRING=${_mesa_arch}
             -DMESA_WGL_DLL_NAME:STRING=mesa_gallium
-            -DMESA_LLVMPIPE:BOOL=OFF
+            -DMESA_LLVMPIPE:BOOL=${ENABLE_MESA_LLVMPIPE}
             -DMESA_ASSERTIONS:BOOL=ON
+            -DMESA_LLVM_ROOT:PATH=${MESA_LLVM_PREFIX}
             ${_mesa_platform_options}
         BUILD_COMMAND ${CMAKE_COMMAND} -E env CCACHE_DISABLE=1 SCCACHE_DISABLE=1
             ${REACTOS_NESTED_BUILD} <BINARY_DIR> --target mesa_gallium

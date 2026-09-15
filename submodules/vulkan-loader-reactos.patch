@@ -1,0 +1,23 @@
+diff --git a/loader/loader_windows.c b/loader/loader_windows.c
+index e4d617a..e9cbdb4 100644
+--- a/loader/loader_windows.c
++++ b/loader/loader_windows.c
+@@ -452,5 +452,18 @@ VkResult windows_get_registry_files(const struct loader_instance *inst, char *lo
+                  name_size = sizeof(name), value_size = sizeof(value)) {
+                 if (value_size == sizeof(value) && value == 0) {
++#ifdef __REACTOS__
++                    // ReactOS images can use different SystemRoot drive letters.
++                    // Permit a machine-installed ICD to retain a portable path
++                    // while keeping the standard DWORD-zero registry contract.
++                    if (strchr(name, '%') != NULL) {
++                        char expanded_name[sizeof(name)];
++                        DWORD expanded_size = ExpandEnvironmentStringsA(name, expanded_name, sizeof(expanded_name));
++                        if (expanded_size > 0 && expanded_size <= sizeof(expanded_name)) {
++                            memcpy(name, expanded_name, expanded_size);
++                            name_size = expanded_size - 1;
++                        }
++                    }
++#endif
+                     if (NULL == *reg_data) {
+                         *reg_data = loader_instance_heap_alloc(inst, *reg_data_size, VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+                         if (NULL == *reg_data) {
