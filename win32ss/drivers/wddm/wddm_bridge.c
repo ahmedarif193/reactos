@@ -38,6 +38,8 @@
 
 #define IOCTL_D3DKMT_QUERYSTATISTICS \
     CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x172, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_QUERYADAPTERINFO \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x104, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 C_ASSERT(DXGKRNL_INTERFACE_EXCHANGE_IN_LEGACY_SIZE == (2 * sizeof(ULONG)));
 C_ASSERT(FIELD_OFFSET(DXGKRNL_INTERFACE_EXCHANGE_IN, ConfiguredWddmLevel) ==
@@ -718,6 +720,12 @@ WddmBridgeIsExpectedControlStatus(
     if (Status == STATUS_DEVICE_BUSY || Status == STATUS_NOT_SUPPORTED)
         return TRUE;
     if (IoControlCode == IOCTL_D3DKMT_QUERYSTATISTICS &&
+        Status == STATUS_INVALID_PARAMETER)
+        return TRUE;
+    /* QueryAdapterInfo validates its query-specific contract and emits the
+     * useful type/size diagnostic itself.  Do not print the same refusal a
+     * second time at the transport layer. */
+    if (IoControlCode == IOCTL_D3DKMT_QUERYADAPTERINFO &&
         Status == STATUS_INVALID_PARAMETER)
         return TRUE;
     if (IoControlCode == IOCTL_D3DKMT_PUBLIC_OPERATION && (Status == STATUS_INVALID_HANDLE || Status == STATUS_INVALID_PARAMETER || Status == STATUS_GRAPHICS_VAIL_STATE_CHANGED))

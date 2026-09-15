@@ -1128,8 +1128,14 @@ HRESULT WINAPI CoInitializeSecurity(PSECURITY_DESCRIPTOR sd, LONG cAuthSvc,
         SOLE_AUTHENTICATION_SERVICE *asAuthSvc, void *reserved1, DWORD authn_level,
         DWORD imp_level, void *reserved2, DWORD capabilities, void *reserved3)
 {
-    FIXME("%p, %ld, %p, %p, %ld, %ld, %p, %ld, %p stub\n", sd, cAuthSvc, asAuthSvc, reserved1, authn_level,
-            imp_level, reserved2, capabilities, reserved3);
+    static LONG warned;
+
+    if (!InterlockedCompareExchange(&warned, 1, 0))
+        FIXME("%p, %ld, %p, %p, %ld, %ld, %p, %ld, %p stub\n", sd, cAuthSvc, asAuthSvc, reserved1, authn_level,
+              imp_level, reserved2, capabilities, reserved3);
+    else
+        TRACE("%p, %ld, %p, %p, %ld, %ld, %p, %ld, %p stub\n", sd, cAuthSvc, asAuthSvc, reserved1, authn_level,
+              imp_level, reserved2, capabilities, reserved3);
 
     return S_OK;
 }

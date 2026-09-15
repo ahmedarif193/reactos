@@ -66,14 +66,14 @@ static HRESULT WINAPI client_security_QueryInterface(
 static ULONG WINAPI client_security_AddRef(
     IClientSecurity *iface )
 {
-    FIXME("%p\n", iface);
+    TRACE("%p\n", iface);
     return 2;
 }
 
 static ULONG WINAPI client_security_Release(
     IClientSecurity *iface )
 {
-    FIXME("%p\n", iface);
+    TRACE("%p\n", iface);
     return 1;
 }
 
@@ -88,7 +88,12 @@ static HRESULT WINAPI client_security_QueryBlanket(
     void **pAuthInfo,
     DWORD *pCapabilities )
 {
-    FIXME("semi-stub.\n");
+    static LONG warned;
+
+    if (!InterlockedCompareExchange( &warned, 1, 0 ))
+        FIXME("semi-stub.\n");
+    else
+        TRACE("semi-stub.\n");
 
     if (pAuthnSvc)
         *pAuthnSvc = RPC_C_AUTHN_NONE;
@@ -119,11 +124,16 @@ static HRESULT WINAPI client_security_SetBlanket(
     void *pAuthInfo,
     DWORD Capabilities )
 {
+    static LONG warned;
     const OLECHAR *princname = (pServerPrincName == COLE_DEFAULT_PRINCIPAL) ?
                                L"<COLE_DEFAULT_PRINCIPAL>" : pServerPrincName;
 
-    FIXME( "%p, %p, %lu, %lu, %s, %lu, %lu, %p, %#lx\n", iface, pProxy, AuthnSvc, AuthzSvc,
-           debugstr_w(princname), AuthnLevel, ImpLevel, pAuthInfo, Capabilities );
+    if (!InterlockedCompareExchange( &warned, 1, 0 ))
+        FIXME( "%p, %p, %lu, %lu, %s, %lu, %lu, %p, %#lx\n", iface, pProxy, AuthnSvc, AuthzSvc,
+               debugstr_w(princname), AuthnLevel, ImpLevel, pAuthInfo, Capabilities );
+    else
+        TRACE( "%p, %p, %lu, %lu, %s, %lu, %lu, %p, %#lx\n", iface, pProxy, AuthnSvc, AuthzSvc,
+               debugstr_w(princname), AuthnLevel, ImpLevel, pAuthInfo, Capabilities );
     return WBEM_NO_ERROR;
 }
 
@@ -532,12 +542,15 @@ static HRESULT WINAPI wbem_services_GetObject(
     IWbemClassObject **ppObject,
     IWbemCallResult **ppCallResult )
 {
+    static LONG warned_flags;
     struct wbem_services *services = impl_from_IWbemServices( iface );
 
     TRACE( "%p, %s, %#lx, %p, %p, %p\n", iface, debugstr_w(strObjectPath), lFlags,
            pCtx, ppObject, ppCallResult );
 
-    if (lFlags) FIXME( "unsupported flags %#lx\n", lFlags );
+    if (lFlags && !InterlockedCompareExchange( &warned_flags, 1, 0 ))
+        FIXME( "unsupported flags %#lx\n", lFlags );
+    else if (lFlags) TRACE( "repeated unsupported flags %#lx\n", lFlags );
 
     if (!strObjectPath || !strObjectPath[0])
         return create_class_object( services->ns, NULL, NULL, 0, NULL, ppObject );
@@ -673,13 +686,16 @@ static HRESULT WINAPI wbem_services_CreateInstanceEnum(
     IWbemContext *pCtx,
     IEnumWbemClassObject **ppEnum )
 {
+    static LONG warned_flags;
     struct wbem_services *services = impl_from_IWbemServices( iface );
     struct path *path;
     HRESULT hr;
 
     TRACE( "%p, %s, %#lx, %p, %p\n", iface, debugstr_w(strClass), lFlags, pCtx, ppEnum );
 
-    if (lFlags) FIXME( "unsupported flags %#lx\n", lFlags );
+    if (lFlags && !InterlockedCompareExchange( &warned_flags, 1, 0 ))
+        FIXME( "unsupported flags %#lx\n", lFlags );
+    else if (lFlags) TRACE( "repeated unsupported flags %#lx\n", lFlags );
 
     hr = parse_path( strClass, &path );
     if (hr != S_OK) return hr;
