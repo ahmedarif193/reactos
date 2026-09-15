@@ -38,6 +38,103 @@ static DWORD GetExtendedTcpTableWithAlloc(PVOID *TcpTable, BOOL Order, DWORD Fam
     return ret;
 }
 
+static void TestEstablishedPorts(void)
+{
+    SOCKET Listener = INVALID_SOCKET;
+    SOCKET Client = INVALID_SOCKET;
+    SOCKET Accepted = INVALID_SOCKET;
+    SOCKADDR_IN Address;
+    SOCKADDR_IN LocalAddress;
+    SOCKADDR_IN RemoteAddress;
+    PMIB_TCPTABLE_OWNER_PID TcpTable = NULL;
+    DWORD Error;
+    DWORD Index;
+    INT AddressLength;
+    BOOL Found = FALSE;
+
+    Listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ok(Listener != INVALID_SOCKET, "socket failed: %d\n", WSAGetLastError());
+    if (Listener == INVALID_SOCKET)
+        goto Cleanup;
+
+    ZeroMemory(&Address, sizeof(Address));
+    Address.sin_family = AF_INET;
+    Address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    Address.sin_port = 0;
+    if (bind(Listener, (SOCKADDR *)&Address, sizeof(Address)) == SOCKET_ERROR)
+    {
+        skip("bind failed: %d\n", WSAGetLastError());
+        goto Cleanup;
+    }
+    if (listen(Listener, 1) == SOCKET_ERROR)
+    {
+        skip("listen failed: %d\n", WSAGetLastError());
+        goto Cleanup;
+    }
+
+    AddressLength = sizeof(Address);
+    if (getsockname(Listener, (SOCKADDR *)&Address, &AddressLength) == SOCKET_ERROR)
+    {
+        skip("getsockname failed: %d\n", WSAGetLastError());
+        goto Cleanup;
+    }
+
+    Client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ok(Client != INVALID_SOCKET, "socket failed: %d\n", WSAGetLastError());
+    if (Client == INVALID_SOCKET)
+        goto Cleanup;
+
+    if (connect(Client, (SOCKADDR *)&Address, sizeof(Address)) == SOCKET_ERROR)
+    {
+        skip("connect failed: %d\n", WSAGetLastError());
+        goto Cleanup;
+    }
+    Accepted = accept(Listener, NULL, NULL);
+    ok(Accepted != INVALID_SOCKET, "accept failed: %d\n", WSAGetLastError());
+    if (Accepted == INVALID_SOCKET)
+        goto Cleanup;
+
+    AddressLength = sizeof(LocalAddress);
+    ok(getsockname(Client, (SOCKADDR *)&LocalAddress, &AddressLength) != SOCKET_ERROR,
+       "getsockname failed: %d\n", WSAGetLastError());
+    AddressLength = sizeof(RemoteAddress);
+    ok(getpeername(Client, (SOCKADDR *)&RemoteAddress, &AddressLength) != SOCKET_ERROR,
+       "getpeername failed: %d\n", WSAGetLastError());
+
+    Error = GetExtendedTcpTableWithAlloc((PVOID *)&TcpTable, FALSE, AF_INET,
+                                         TCP_TABLE_OWNER_PID_CONNECTIONS);
+    ok(Error == ERROR_SUCCESS, "GetExtendedTcpTable failed: %lu\n", Error);
+    if (Error != ERROR_SUCCESS)
+        goto Cleanup;
+
+    for (Index = 0; Index < TcpTable->dwNumEntries; Index++)
+    {
+        MIB_TCPROW_OWNER_PID *Row = &TcpTable->table[Index];
+
+        if (Row->dwState == MIB_TCP_STATE_ESTAB &&
+            Row->dwLocalAddr == LocalAddress.sin_addr.s_addr &&
+            Row->dwLocalPort == LocalAddress.sin_port &&
+            Row->dwRemoteAddr == RemoteAddress.sin_addr.s_addr &&
+            Row->dwRemotePort == RemoteAddress.sin_port &&
+            Row->dwOwningPid == GetCurrentProcessId())
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+    ok(Found, "established connection ports were not reported in network byte order\n");
+
+Cleanup:
+    if (TcpTable != NULL)
+        HeapFree(GetProcessHeap(), 0, TcpTable);
+    if (Accepted != INVALID_SOCKET)
+        closesocket(Accepted);
+    if (Client != INVALID_SOCKET)
+        closesocket(Client);
+    if (Listener != INVALID_SOCKET)
+        closesocket(Listener);
+}
+
 START_TEST(GetExtendedTcpTable)
 {
     WSADATA wsaData;
@@ -57,6 +154,8 @@ START_TEST(GetExtendedTcpTable)
         skip("Failed to init WS2\n");
         return;
     }
+
+    TestEstablishedPorts();
 
     GetSystemTimeAsFileTime(&Creation);
     CreationTime.LowPart = Creation.dwLowDateTime;

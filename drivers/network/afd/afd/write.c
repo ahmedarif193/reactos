@@ -117,8 +117,9 @@ static NTSTATUS NTAPI SendComplete
     PIO_STACK_LOCATION NextIrpSp;
     PAFD_SEND_INFO SendReq = NULL;
     PAFD_MAPBUF Map;
-    SIZE_T TotalBytesCopied = 0, CompletionOffset, SpaceAvail, i;
-    UINT SendLength, BytesCopied;
+    SIZE_T BytesAlreadyCopied, CompletionOffset, RequestLength;
+    SIZE_T TotalBytesCopied = 0, SpaceAvail, i;
+    UINT BufferOffset, SendLength, BytesCopied;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
@@ -198,11 +199,23 @@ static NTSTATUS NTAPI SendComplete
             continue;
         }
 
-        RemoveEntryList(NextIrpEntry);
         NextIrpSp = IoGetCurrentIrpStackLocation( NextIrp );
         SendReq = GetLockedData(NextIrp, NextIrpSp);
 
         ASSERT(NextIrp->IoStatus.Information != 0);
+
+        RequestLength = 0;
+        for (i = 0; i < SendReq->BufferCount; i++)
+            RequestLength += SendReq->BufferArray[i].len;
+
+        ASSERT(NextIrp->IoStatus.Information <= RequestLength);
+        if (NextIrp->IoStatus.Information < RequestLength)
+        {
+            NextIrp->Tail.Overlay.DriverContext[3] = NULL;
+            break;
+        }
+
+        RemoveEntryList(NextIrpEntry);
 
         NextIrp->IoStatus.Status = Irp->IoStatus.Status;
 
@@ -234,17 +247,21 @@ static NTSTATUS NTAPI SendComplete
         TotalBytesCopied = 0;
 
         /* Count the total transfer size */
-        SendLength = 0;
+        RequestLength = 0;
         for (i = 0; i < SendReq->BufferCount; i++)
         {
-            SendLength += SendReq->BufferArray[i].len;
+            RequestLength += SendReq->BufferArray[i].len;
         }
 
+        BytesAlreadyCopied = NextIrp->IoStatus.Information;
+        ASSERT(BytesAlreadyCopied <= RequestLength);
+        RequestLength -= BytesAlreadyCopied;
+
         /* Make sure we've got the space */
-        if (SendLength > SpaceAvail)
+        if (RequestLength > SpaceAvail)
         {
            /* Blocking sockets have to wait here */
-           if (SendLength <= FCB->Send.Size && !((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
+           if (RequestLength <= FCB->Send.Size && !((SendReq->AfdFlags & AFD_IMMEDIATE) || (FCB->NonBlocking)))
            {
                FCB->PollState &= ~AFD_EVENT_SEND;
 
@@ -264,7 +281,15 @@ static NTSTATUS NTAPI SendComplete
         if (NextIrp != NULL)
         {
             for (i = 0; SpaceAvail > 0 && i < SendReq->BufferCount; i++) {
-                BytesCopied = MIN(SendReq->BufferArray[i].len, SpaceAvail);
+                if (BytesAlreadyCopied >= SendReq->BufferArray[i].len)
+                {
+                    BytesAlreadyCopied -= SendReq->BufferArray[i].len;
+                    continue;
+                }
+
+                BufferOffset = (UINT)BytesAlreadyCopied;
+                BytesAlreadyCopied = 0;
+                BytesCopied = MIN(SendReq->BufferArray[i].len - BufferOffset, SpaceAvail);
                 if (!BytesCopied)
                     continue;
 
@@ -272,7 +297,7 @@ static NTSTATUS NTAPI SendComplete
                    MmMapLockedPages( Map[i].Mdl, KernelMode );
 
                 RtlCopyMemory( FCB->Send.Window + FCB->Send.BytesUsed,
-                               Map[i].BufferAddress,
+                               (PUCHAR)Map[i].BufferAddress + BufferOffset,
                                BytesCopied );
 
                 MmUnmapLockedPages( Map[i].BufferAddress, Map[i].Mdl );
@@ -282,7 +307,7 @@ static NTSTATUS NTAPI SendComplete
                 FCB->Send.BytesUsed += BytesCopied;
             }
 
-            NextIrp->IoStatus.Information = TotalBytesCopied;
+            NextIrp->IoStatus.Information += TotalBytesCopied;
             NextIrp->Tail.Overlay.DriverContext[3] = (PVOID)(ULONG_PTR)FCB->Send.BytesUsed;
         }
     }
@@ -540,6 +565,7 @@ AfdConnectedSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     }
 
     Irp->Tail.Overlay.DriverContext[3] = NULL;
+    Irp->IoStatus.Information = 0;
     Immediate = !(SendReq->AfdFlags & AFD_OVERLAPPED) && ((SendReq->AfdFlags & AFD_IMMEDIATE) || FCB->NonBlocking);
 
     if (!SendLength)

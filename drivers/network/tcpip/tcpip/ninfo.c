@@ -209,8 +209,6 @@ TDI_STATUS InfoTdiQueryGetIPSnmpInfo( TDIEntityID ID,
     return Status;
 }
 
-#define ntohs(n) ((((n) & 0xff) << 8) | (((n) & 0xff00) >> 8))
-
 TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
 				    PNDIS_BUFFER Buffer,
 				    PUINT BufferSize,
@@ -263,7 +261,7 @@ TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
             ASSERT(EndPoint.TAAddressCount >= 1);
             ASSERT(EndPoint.Address[0].AddressLength == TDI_ADDRESS_LENGTH_IP);
             TcpRow.dwLocalAddr = EndPoint.Address[0].Address[0].in_addr;
-            TcpRow.dwLocalPort = ntohs(EndPoint.Address[0].Address[0].sin_port);
+            TcpRow.dwLocalPort = EndPoint.Address[0].Address[0].sin_port;
 
             Status = TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)&EndPoint, TRUE);
             if (NT_SUCCESS(Status))
@@ -271,7 +269,7 @@ TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
                 ASSERT(EndPoint.TAAddressCount >= 1);
                 ASSERT(EndPoint.Address[0].AddressLength == TDI_ADDRESS_LENGTH_IP);
                 TcpRow.dwRemoteAddr = EndPoint.Address[0].Address[0].in_addr;
-                TcpRow.dwRemotePort = ntohs(EndPoint.Address[0].Address[0].sin_port);
+                TcpRow.dwRemotePort = EndPoint.Address[0].Address[0].sin_port;
 
                 Status = TCPGetSocketStatus(AddrFile->Connection, &TcpRow.dwState);
                 ASSERT(NT_SUCCESS(Status));
