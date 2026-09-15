@@ -299,22 +299,6 @@ Rpi5Vc4ProcessPendingLocked(
                     Head->QueuedTime100ns = Now;
                     if (Head->IsCsdJob)
                         CsdComplete = FALSE;
-
-                    /* A 300x300 TFU conversion should retire in ~50us yet
-                     * measures ~15ms.  Spin up to 2ms and log CS to split
-                     * slow-execution from lost-done-latch. */
-                    if (Head->IsTfuJob)
-                    {
-                        ULONG Spin;
-
-                        for (Spin = 0; Spin < 400; Spin++)
-                        {
-                            if (Rpi5V3dTfuDone(DeviceExtension,
-                                              Head->TfuKickCvtct))
-                                goto CompleteHead;
-                            KeStallExecutionProcessor(5);
-                        }
-                    }
                 }
                 else
                 {
