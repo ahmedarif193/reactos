@@ -499,6 +499,7 @@ Rpi5V3dInitialize(
     ULONG Version;
 
     DeviceExtension->V3dReady = FALSE;
+    DeviceExtension->V3dOverflowChunkMap = 0;
 
     if (DeviceExtension->VramVa == NULL || DeviceExtension->VramSize == 0)
         return FALSE;
@@ -650,6 +651,8 @@ Rpi5V3dTeardown(
                                            MmWriteCombined);
         DeviceExtension->V3dOverflowVa = NULL;
     }
+    DeviceExtension->V3dOverflowGpuVa = 0;
+    DeviceExtension->V3dOverflowChunkMap = 0;
 
     if (DeviceExtension->V3dCoreBase != NULL)
     {
@@ -875,8 +878,6 @@ Rpi5V3dInvalidateCaches(
      * with no CL active); doing them here raced the concurrent binner
      * and parked the queued render (enqueue latched, never armed).
      */
-    Rpi5V3dWrite(Core, V3D_CTL_L2TFLSTA, 0);
-    Rpi5V3dWrite(Core, V3D_CTL_L2TFLEND, ~0u);
     Rpi5V3dWrite(Core, V3D_CTL_L2TCACTL,
                  V3D_L2TCACTL_L2TFLS | V3D_L2TCACTL_FLM_FLUSH);
 
@@ -978,7 +979,7 @@ Rpi5V3dSubmitBin(
 {
     PVOID Core = DeviceExtension->V3dCoreBase;
 
-    if (!DeviceExtension->V3dReady || BclEnd == BclStart ||
+    if (!DeviceExtension->V3dReady || BclEnd == BclStart || Qms == 0 ||
         CompletionBefore == NULL)
         return FALSE;
 
@@ -992,17 +993,8 @@ Rpi5V3dSubmitBin(
 
     Rpi5V3dInvalidateCaches(DeviceExtension);
 
-    /* Per-job tile allocation, else the device-global overflow pool. */
-    if (Qms != 0)
-    {
-        Rpi5V3dWrite(Core, V3D_CLE_CT0QMA, Qma);
-        Rpi5V3dWrite(Core, V3D_CLE_CT0QMS, Qms);
-    }
-    else
-    {
-        Rpi5V3dWrite(Core, V3D_CLE_CT0QMA, DeviceExtension->V3dOverflowGpuVa);
-        Rpi5V3dWrite(Core, V3D_CLE_CT0QMS, RPI5VC4_V3D_OVERFLOW_SIZE);
-    }
+    Rpi5V3dWrite(Core, V3D_CLE_CT0QMA, Qma);
+    Rpi5V3dWrite(Core, V3D_CLE_CT0QMS, Qms);
 
     /* Binning control list on thread 0: base first, end kicks it.
      * Linux writel embeds a dsb(st) before every doorbell. */
@@ -1011,6 +1003,25 @@ Rpi5V3dSubmitBin(
     Rpi5V3dWrite(Core, V3D_CLE_CT0QBA, BclStart);
     Rpi5V3dWrite(Core, V3D_CLE_CT0QEA, BclEnd);
 
+    return TRUE;
+}
+
+BOOLEAN
+Rpi5V3dProvideOverflow(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG GpuVa,
+    _In_ ULONG Size)
+{
+    PVOID Core = DeviceExtension->V3dCoreBase;
+
+    if (!DeviceExtension->V3dReady || Core == NULL ||
+        GpuVa == 0 || Size == 0)
+    {
+        return FALSE;
+    }
+
+    Rpi5V3dWrite(Core, V3D_PTB_BPOA, GpuVa);
+    Rpi5V3dWrite(Core, V3D_PTB_BPOS, Size);
     return TRUE;
 }
 
@@ -1141,13 +1152,15 @@ Rpi5V3dConsumeCompletions(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _Out_ PBOOLEAN BinComplete,
     _Out_ PBOOLEAN RenderComplete,
-    _Out_ PBOOLEAN CsdComplete)
+    _Out_ PBOOLEAN CsdComplete,
+    _Out_ PBOOLEAN OutOfMemory)
 {
     ULONG Status;
 
     *BinComplete = FALSE;
     *RenderComplete = FALSE;
     *CsdComplete = FALSE;
+    *OutOfMemory = FALSE;
 
     if (!DeviceExtension->V3dReady)
         return;
@@ -1164,16 +1177,6 @@ Rpi5V3dConsumeCompletions(
     *BinComplete = (Status & V3D_INT_FLDONE) != 0;
     *RenderComplete = (Status & V3D_INT_FRDONE) != 0;
     *CsdComplete = (Status & V3D_V7_INT_CSDDONE) != 0;
-
-    if (Status & V3D_INT_OUTOMEM)
-    {
-        /* Binner ran out of tile-list memory: hand it the overflow region
-         * and let it continue (Linux v3d_irq.c OOM path).  Without this
-         * any bin that outgrows its QMA allocation parks forever. */
-        Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_PTB_BPOA,
-                     (ULONG)DeviceExtension->V3dOverflowGpuVa);
-        Rpi5V3dWrite(DeviceExtension->V3dCoreBase, V3D_PTB_BPOS,
-                     RPI5VC4_V3D_OVERFLOW_SIZE);
-    }
+    *OutOfMemory = (Status & V3D_INT_OUTOMEM) != 0;
 
 }

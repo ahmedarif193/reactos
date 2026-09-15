@@ -1176,7 +1176,6 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
         struct v3d_job *job = v3d_get_job_for_fbo(v3d);
 
-#ifndef _WIN32
         /* If vertex texturing depends on the output of rendering, we need to
          * ensure that that rendering is complete before we run a coordinate
          * shader that depends on it.
@@ -1194,15 +1193,12 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 }
                 job->submit.in_sync_bcl = v3d->out_sync;
         }
-#endif
 
         /* We also need to ensure that compute is complete when render depends
          * on resources written by it.
          */
         if (v3d->sync_on_last_compute_job) {
-#ifndef _WIN32
                 job->submit.in_sync_bcl = v3d->out_sync;
-#endif
                 v3d->sync_on_last_compute_job = false;
         }
 

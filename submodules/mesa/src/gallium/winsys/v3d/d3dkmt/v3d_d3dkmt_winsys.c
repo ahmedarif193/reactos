@@ -195,8 +195,10 @@ _Static_assert(sizeof(VC4KMT_CL_SUBMIT) == 7 * sizeof(uint32_t),
 #define VC4KMT_CAP_TFU_SUBMIT            (1u << 1)
 #define VC4KMT_CAP_CSD_SUBMIT            (1u << 2)
 #define VC4KMT_CAP_CACHE_FLUSH           (1u << 3)
+#define VC4KMT_CAP_BIN_RENDER_OVERLAP    (1u << 11)
 #define VC4KMT_RESOURCE_CPU_DIRTY        (1u << 0)
 #define VC4KMT_CL_FLAG_FLUSH_CACHE       (1u << 0)
+#define VC4KMT_CL_FLAG_BCL_INDEPENDENT   (1u << 1)
 #define VC4KMT_BO_CREATE_CPU_CACHED      (1u << 0)
 #define VC4KMT_ENGINE_3D                 0u
 #define VC4KMT_ENGINE_TFU                1u
@@ -480,6 +482,22 @@ v3d_d3dkmt_syncobj_lookup_locked(struct v3d_d3dkmt_device *device,
        !device->syncobjs[handle].allocated)
       return NULL;
    return &device->syncobjs[handle];
+}
+
+static bool
+v3d_d3dkmt_syncobj_has_pending_engine_locked(
+   struct v3d_d3dkmt_device *device, uint32_t handle, uint32_t engine)
+{
+   struct v3d_d3dkmt_syncobj *syncobj;
+   struct v3d_d3dkmt_fence_ref *fence;
+
+   if (!handle)
+      return false;
+   syncobj = v3d_d3dkmt_syncobj_lookup_locked(device, handle);
+   if (!syncobj || syncobj->signaled)
+      return false;
+   fence = syncobj->fences[engine];
+   return fence && !fence->signaled;
 }
 
 static uint32_t
@@ -1460,6 +1478,13 @@ v3d_d3dkmt_submit_cl_locked(struct v3d_d3dkmt_device *device,
    uint32_t kmt_flags =
       (submit->flags & DRM_V3D_SUBMIT_CL_FLUSH_CACHE) ?
       VC4KMT_CL_FLAG_FLUSH_CACHE : 0;
+
+   if (submit->bcl_start != submit->bcl_end &&
+       (device->info->caps & VC4KMT_CAP_BIN_RENDER_OVERLAP) &&
+       !v3d_d3dkmt_syncobj_has_pending_engine_locked(
+          device, submit->in_sync_bcl, VC4KMT_ENGINE_3D)) {
+      kmt_flags |= VC4KMT_CL_FLAG_BCL_INDEPENDENT;
+   }
    vc4kmt_status submit_status =
       vc4kmt_submit_cl_resources_ex(device->kmt, &kmt_submit, kmt_flags,
                                     resources, resource_count, &fence);

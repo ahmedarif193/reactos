@@ -26,6 +26,7 @@
 #define VC4KMT_DMA_OP_TFU_JOB         3
 #define VC4KMT_DMA_OP_CSD_JOB         4
 #define VC4KMT_DMA_V3D_FLUSH_CACHE    0x00000001u
+#define VC4KMT_DMA_V3D_BCL_INDEPENDENT 0x00000002u
 #define VC4KMT_RESOURCE_LIST_MAGIC_V2 0x3252474cUL
 #define VC4KMT_MAX_SUBMIT_RESOURCES   4096u
 #define VC4KMT_MAX_PRIMARY_PRIVATE_DATA (1024u * 1024u)
@@ -324,7 +325,8 @@ Vc4KmtOpenFake(VC4KMT_DEVICE *Device)
                         RPI5VC4_CAP_CL_SUBMIT |
                         RPI5VC4_CAP_TFU_SUBMIT |
                         RPI5VC4_CAP_CSD_SUBMIT |
-                        RPI5VC4_CAP_CACHE_FLUSH;
+                        RPI5VC4_CAP_CACHE_FLUSH |
+                        RPI5VC4_CAP_BIN_RENDER_OVERLAP;
     Device->Info.NodeCount = 3;
     Device->Info.MaxPendingSubmits = 64;
     Device->Info.AllocationAlignment = 4096;
@@ -1546,8 +1548,14 @@ vc4kmt_submit_cl_resources_ex(
     VC4KMT_DMA_PACKET Packet;
 
     if (Device == NULL || Submit == NULL || FenceOut == NULL ||
-        (Flags & ~VC4KMT_CL_FLAG_FLUSH_CACHE) != 0)
+        (Flags & ~(VC4KMT_CL_FLAG_FLUSH_CACHE |
+                   VC4KMT_CL_FLAG_BCL_INDEPENDENT)) != 0)
         return STATUS_INVALID_PARAMETER;
+    if ((Flags & VC4KMT_CL_FLAG_BCL_INDEPENDENT) != 0 &&
+        (Device->Info.Caps & RPI5VC4_CAP_BIN_RENDER_OVERLAP) == 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
 
     RtlZeroMemory(FenceOut, sizeof(*FenceOut));
 
@@ -1567,6 +1575,8 @@ vc4kmt_submit_cl_resources_ex(
     Packet.V3dJob.Qts = Submit->Qts;
     if (Flags & VC4KMT_CL_FLAG_FLUSH_CACHE)
         Packet.V3dJob.Flags |= VC4KMT_DMA_V3D_FLUSH_CACHE;
+    if (Flags & VC4KMT_CL_FLAG_BCL_INDEPENDENT)
+        Packet.V3dJob.Flags |= VC4KMT_DMA_V3D_BCL_INDEPENDENT;
 
     return Vc4KmtSubmitPacket(Device, &Packet, Resources,
                               ResourceCount, FenceOut);

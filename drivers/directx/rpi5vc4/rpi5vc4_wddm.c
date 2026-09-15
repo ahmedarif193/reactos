@@ -18,6 +18,44 @@
 #define NDEBUG
 #include <reactos/debug.h>
 
+C_ASSERT(RPI5VC4_V3D_OVERFLOW_CHUNK_COUNT <= sizeof(ULONG) * 8);
+C_ASSERT((RPI5VC4_V3D_OVERFLOW_SIZE %
+          RPI5VC4_V3D_OVERFLOW_CHUNK_SIZE) == 0);
+
+static BOOLEAN
+Rpi5Vc4AllocateOverflowChunkLocked(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PRPI5VC4_PENDING_SUBMIT Entry,
+    _Out_ PULONG GpuVa)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < RPI5VC4_V3D_OVERFLOW_CHUNK_COUNT; Index++)
+    {
+        ULONG Bit = 1u << Index;
+
+        if ((DeviceExtension->V3dOverflowChunkMap & Bit) != 0)
+            continue;
+
+        DeviceExtension->V3dOverflowChunkMap |= Bit;
+        Entry->OverflowChunkMask |= Bit;
+        *GpuVa = DeviceExtension->V3dOverflowGpuVa +
+                 Index * RPI5VC4_V3D_OVERFLOW_CHUNK_SIZE;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static VOID
+Rpi5Vc4ReleaseOverflowChunksLocked(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PRPI5VC4_PENDING_SUBMIT Entry)
+{
+    DeviceExtension->V3dOverflowChunkMap &= ~Entry->OverflowChunkMask;
+    Entry->OverflowChunkMask = 0;
+}
+
 /* ========================================================================
  * In-order submission pipeline
  *
@@ -82,6 +120,7 @@ Rpi5Vc4RemoveSubmitLocked(
 {
     PRPI5VC4_PENDING_SUBMIT Entry = DeviceExtension->NodeQueue[Node].Head;
 
+    Rpi5Vc4ReleaseOverflowChunksLocked(DeviceExtension, Entry);
     DeviceExtension->NodeQueue[Node].Head = Entry->Next;
     if (DeviceExtension->NodeQueue[Node].Head == NULL)
         DeviceExtension->NodeQueue[Node].Tail = NULL;
@@ -184,6 +223,139 @@ Rpi5Vc4OldestQueuedProcessLocked(
     return Oldest != NULL ? Oldest->Process : NULL;
 }
 
+static BOOLEAN
+Rpi5Vc4KickBinLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PRPI5VC4_PENDING_SUBMIT Entry,
+    _In_ ULONGLONG Now)
+{
+    ULONG Qma = Entry->Qma;
+    ULONG Qms = Entry->Qms;
+
+    if (Qms == 0)
+    {
+        if (!Rpi5Vc4AllocateOverflowChunkLocked(DeviceExtension, Entry,
+                                                &Qma))
+        {
+            return FALSE;
+        }
+        Qms = RPI5VC4_V3D_OVERFLOW_CHUNK_SIZE;
+        Entry->BinUsedOverflow = TRUE;
+    }
+
+    if (!Rpi5V3dSubmitBin(DeviceExtension,
+                          Entry->BclStart, Entry->BclEnd,
+                          Qma, Qms, Entry->Qts,
+                          &Entry->BinCompletionBefore))
+    {
+        Rpi5Vc4ReleaseOverflowChunksLocked(DeviceExtension, Entry);
+        return FALSE;
+    }
+
+    Entry->BinSubmitted = TRUE;
+    Entry->BinCompletionSeen = FALSE;
+    Entry->TimedoutCtCa = 0;
+    Entry->TimedoutCtRa = 0;
+    Entry->QueuedTime100ns = Now;
+    return TRUE;
+}
+
+static VOID
+Rpi5Vc4UpdateBinCompletionLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PRPI5VC4_PENDING_SUBMIT Entry,
+    _Inout_ PBOOLEAN BinComplete)
+{
+    if (*BinComplete)
+    {
+        Entry->BinCompletionSeen = TRUE;
+        *BinComplete = FALSE;
+    }
+    if (Entry->BinCompletionSeen &&
+        Rpi5V3dBinDone(DeviceExtension, Entry->BinCompletionBefore))
+    {
+        Entry->BinDone = TRUE;
+    }
+}
+
+static PRPI5VC4_PENDING_SUBMIT
+Rpi5Vc4OverlapCandidate(
+    _In_ PRPI5VC4_PENDING_SUBMIT Head)
+{
+    PRPI5VC4_PENDING_SUBMIT Next = Head->Next;
+
+    if (!Head->RenderSubmitted ||
+        (Head->V3dFlags & RPI5VC4_DMA_V3D_FLUSH_CACHE) != 0 ||
+        Next == NULL || !Next->IsV3dJob ||
+        Next->Process != Head->Process ||
+        Next->BclStart == Next->BclEnd ||
+        (Next->V3dFlags & RPI5VC4_DMA_V3D_BCL_INDEPENDENT) == 0)
+    {
+        return NULL;
+    }
+
+    return Next;
+}
+
+static PRPI5VC4_PENDING_SUBMIT
+Rpi5Vc4ActiveBinnerLocked(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    PRPI5VC4_PENDING_SUBMIT Head =
+        DeviceExtension->NodeQueue[RPI5VC4_NODE_3D].Head;
+
+    if (Head == NULL || !Head->IsV3dJob)
+        return NULL;
+    if (Head->BinSubmitted && !Head->BinDone)
+        return Head;
+    if (Head->RenderSubmitted && Head->Next != NULL &&
+        Head->Next->IsV3dJob && Head->Next->BinSubmitted &&
+        !Head->Next->BinDone)
+    {
+        return Head->Next;
+    }
+
+    return NULL;
+}
+
+static BOOLEAN
+Rpi5Vc4ServiceBinOomLocked(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONGLONG Now,
+    _Out_opt_ PRPI5VC4_PENDING_SUBMIT *ServicedEntry)
+{
+    PRPI5VC4_PENDING_SUBMIT Binner =
+        Rpi5Vc4ActiveBinnerLocked(DeviceExtension);
+    ULONG GpuVa;
+
+    if (ServicedEntry != NULL)
+        *ServicedEntry = NULL;
+    if (Binner == NULL)
+        return TRUE;
+
+    if (!Rpi5Vc4AllocateOverflowChunkLocked(DeviceExtension, Binner,
+                                             &GpuVa))
+    {
+        DPRINT1("RPI5VC4: V3D binner overflow storage exhausted for fence=%lu\n",
+                Binner->Fence);
+        return FALSE;
+    }
+
+    Binner->BinUsedOverflow = TRUE;
+    if (!Rpi5V3dProvideOverflow(DeviceExtension, GpuVa,
+                                RPI5VC4_V3D_OVERFLOW_CHUNK_SIZE))
+    {
+        DPRINT1("RPI5VC4: failed to provide binner overflow storage for fence=%lu\n",
+                Binner->Fence);
+        return FALSE;
+    }
+
+    Binner->QueuedTime100ns = Now;
+    if (ServicedEntry != NULL)
+        *ServicedEntry = Binner;
+    return TRUE;
+}
+
 /*
  * Advance the pipeline.  Called with DmaLock held at DISPATCH_LEVEL.
  * Returns TRUE when at least one fence completed (caller queues FenceDpc).
@@ -203,6 +375,7 @@ Rpi5Vc4ProcessPendingLocked(
     BOOLEAN BinComplete = FALSE;
     BOOLEAN RenderComplete = FALSE;
     BOOLEAN CsdComplete = FALSE;
+    BOOLEAN OutOfMemory = FALSE;
     ULONGLONG Now = KeQueryInterruptTime();
     ULONG Node;
 
@@ -228,9 +401,15 @@ Rpi5Vc4ProcessPendingLocked(
         Rpi5V3dConsumeCompletions(DeviceExtension,
                                   &BinComplete,
                                   &RenderComplete,
-                                  &CsdComplete);
+                                  &CsdComplete,
+                                  &OutOfMemory);
+        if (OutOfMemory &&
+            !Rpi5Vc4ServiceBinOomLocked(DeviceExtension, Now, NULL))
+        {
+            *PipelineAborted = TRUE;
+            return FALSE;
+        }
     }
-
     for (Node = 0; Node < RPI5VC4_GPU_NODE_COUNT; Node++)
     {
     PRPI5VC4_PENDING_SUBMIT Head;
@@ -307,7 +486,8 @@ Rpi5Vc4ProcessPendingLocked(
                         *NeedPoll = TRUE;
                         goto NextNode;
                     }
-                    DPRINT1("RPI5VC4: %s submit failed for fence=%lu — aborting\n", Head->IsTfuJob ? "TFU" : "CSD", Head->Fence);
+                    DPRINT1("RPI5VC4: %s submit failed for fence=%lu — aborting\n",
+                            Head->IsTfuJob ? "TFU" : "CSD", Head->Fence);
                     if (Head->IsTfuJob)
                         Rpi5V3dResetCore(DeviceExtension);
                     goto AbortPipeline;
@@ -331,7 +511,8 @@ Rpi5Vc4ProcessPendingLocked(
                 goto NextNode;
             }
 
-            DPRINT1("RPI5VC4: %s job fence=%lu timed out — aborting and resetting\n", Head->IsTfuJob ? "TFU" : "CSD", Head->Fence);
+            DPRINT1("RPI5VC4: %s job fence=%lu timed out — aborting and resetting\n",
+                    Head->IsTfuJob ? "TFU" : "CSD", Head->Fence);
             Rpi5V3dResetCore(DeviceExtension);
             goto AbortPipeline;
         }
@@ -345,19 +526,8 @@ Rpi5Vc4ProcessPendingLocked(
             /* Phase 1: kick binning. */
             if (HasBin && !Head->BinSubmitted)
             {
-                if (Rpi5V3dSubmitBin(DeviceExtension,
-                                     Head->BclStart, Head->BclEnd,
-                                     Head->Qma, Head->Qms, Head->Qts,
-                                     &Head->BinCompletionBefore))
-                {
-                    Head->BinSubmitted = TRUE;
-                    Head->BinCompletionSeen = FALSE;
-                    BinComplete = FALSE;
-                    Head->TimedoutCtCa = 0;
-                    Head->TimedoutCtRa = 0;
-                    Head->QueuedTime100ns = Now;
-                }
-                else
+                BinComplete = FALSE;
+                if (!Rpi5Vc4KickBinLocked(DeviceExtension, Head, Now))
                 {
                     DPRINT1("RPI5VC4: V3D bin submit failed for fence=%lu — aborting\n", Head->Fence);
                     goto AbortPipeline;
@@ -368,17 +538,8 @@ Rpi5Vc4ProcessPendingLocked(
              * ready for CT1. BFC only counts the FLUSH command and can move
              * before the final QMA writes become visible. */
             if (HasBin && Head->BinSubmitted && !Head->BinDone)
-            {
-                if (BinComplete)
-                {
-                    Head->BinCompletionSeen = TRUE;
-                    BinComplete = FALSE;
-                }
-                if (Head->BinCompletionSeen &&
-                    Rpi5V3dBinDone(DeviceExtension,
-                                   Head->BinCompletionBefore))
-                    Head->BinDone = TRUE;
-            }
+                Rpi5Vc4UpdateBinCompletionLocked(DeviceExtension, Head,
+                                                  &BinComplete);
 
             BinPhaseOver = !HasBin || Head->BinDone;
 
@@ -404,6 +565,28 @@ Rpi5Vc4ProcessPendingLocked(
                 }
             }
 
+            if (Head->RenderSubmitted)
+            {
+                PRPI5VC4_PENDING_SUBMIT Next =
+                    Rpi5Vc4OverlapCandidate(Head);
+
+                if (Next != NULL && Next->BinSubmitted && !Next->BinDone)
+                {
+                    Rpi5Vc4UpdateBinCompletionLocked(DeviceExtension, Next,
+                                                      &BinComplete);
+                }
+                if (Next != NULL && !Next->BinSubmitted)
+                {
+                    BinComplete = FALSE;
+                    if (!Rpi5Vc4KickBinLocked(DeviceExtension, Next, Now))
+                    {
+                        DPRINT1("RPI5VC4: overlapped V3D bin submit failed for fence=%lu — aborting\n",
+                                Next->Fence);
+                        goto AbortPipeline;
+                    }
+                }
+            }
+
             /* FRDONE is the render pipeline-drained boundary. Keeping this
              * job current until its latch is consumed also makes a late IRQ
              * unambiguous; no newer render can be submitted in between. */
@@ -415,7 +598,9 @@ Rpi5Vc4ProcessPendingLocked(
             if (Head->RenderSubmitted && Head->RenderCompletionSeen &&
                 Rpi5V3dRenderDone(DeviceExtension,
                                   Head->RenderCompletionBefore))
+            {
                 goto CompleteHead;
+            }
 
             /* Still in flight: enforce the per-phase timeout. */
             if (Now - Head->QueuedTime100ns < RPI5VC4_V3D_JOB_TIMEOUT_100NS)
@@ -462,36 +647,65 @@ Rpi5Vc4ProcessPendingLocked(
                     BOOLEAN LateBinComplete;
                     BOOLEAN LateRenderComplete;
                     BOOLEAN LateCsdComplete;
+                    BOOLEAN LateOutOfMemory;
+                    PRPI5VC4_PENDING_SUBMIT OomBinner = NULL;
 
                     Rpi5V3dConsumeCompletions(DeviceExtension,
                                               &LateBinComplete,
                                               &LateRenderComplete,
-                                              &LateCsdComplete);
+                                              &LateCsdComplete,
+                                              &LateOutOfMemory);
+                    if (LateOutOfMemory &&
+                        !Rpi5Vc4ServiceBinOomLocked(DeviceExtension, Now,
+                                                    &OomBinner))
+                    {
+                        goto AbortPipeline;
+                    }
                     CsdComplete |= LateCsdComplete;
                     if (LateRenderComplete)
+                    {
                         Head->RenderCompletionSeen = TRUE;
+                    }
                     if (Head->RenderSubmitted &&
                         Head->RenderCompletionSeen &&
                         Rpi5V3dRenderDone(
                             DeviceExtension,
                             Head->RenderCompletionBefore))
-                        goto CompleteHead;
-                    if (LateBinComplete)
-                        Head->BinCompletionSeen = TRUE;
-                    if (!Head->RenderSubmitted &&
-                        Head->BinCompletionSeen &&
-                        Rpi5V3dBinDone(DeviceExtension,
-                                      Head->BinCompletionBefore))
                     {
-                        Head->BinDone = TRUE;
+                        goto CompleteHead;
+                    }
+                    if (LateBinComplete)
+                    {
+                        PRPI5VC4_PENDING_SUBMIT Binner = NULL;
+
+                        if (Head->BinSubmitted && !Head->BinDone)
+                            Binner = Head;
+                        else if (Head->RenderSubmitted)
+                            Binner = Rpi5Vc4OverlapCandidate(Head);
+                        if (Binner != NULL && Binner->BinSubmitted &&
+                            !Binner->BinDone)
+                        {
+                            Rpi5Vc4UpdateBinCompletionLocked(
+                                DeviceExtension, Binner, &LateBinComplete);
+                        }
+                    }
+                    if (!Head->RenderSubmitted && Head->BinDone)
+                    {
                         Head->QueuedTime100ns = Now;
+                        *NeedPoll = TRUE;
+                        goto NextNode;
+                    }
+                    if (OomBinner == Head)
+                    {
                         *NeedPoll = TRUE;
                         goto NextNode;
                     }
                 }
 
-                DPRINT1("RPI5VC4: V3D job fence=%lu timed out — aborting (TDR)\n", Head->Fence);
-                DPRINT1("RPI5VC4: TDR resetting V3D core: %s\n", Rpi5V3dResetCore(DeviceExtension) ? "ok" : "FAILED");
+                DPRINT1("RPI5VC4: V3D job fence=%lu timed out — aborting (TDR)\n",
+                        Head->Fence);
+                DPRINT1("RPI5VC4: TDR resetting V3D core: %s\n",
+                        Rpi5V3dResetCore(DeviceExtension) ? "ok" : "FAILED");
                 /* The reset invalidates every engine queue. Drop all pending
                  * entries without completing their fences and leave admission
                  * closed until dxgkrnl runs Reset/RestartFromTimeout. */
@@ -659,7 +873,9 @@ Rpi5Vc4V3dPollDpcRoutine(
         return;
 
     KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
-    Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
+    Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension,
+                                             &NeedPoll,
+                                             &PipelineAborted);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
     /* A TFU conversion may advance CVTCT just before its level interrupt
@@ -1064,7 +1280,8 @@ Rpi5Vc4ParseDmaStream(
         {
             if (Packet->Op == RPI5VC4_DMA_OP_V3D_JOB &&
                 (Packet->V3dJob.Flags &
-                 ~RPI5VC4_DMA_V3D_FLUSH_CACHE) != 0)
+                 ~(RPI5VC4_DMA_V3D_FLUSH_CACHE |
+                   RPI5VC4_DMA_V3D_BCL_INDEPENDENT)) != 0)
             {
                 return FALSE;
             }
@@ -2537,7 +2754,8 @@ Rpi5Vc4DdiSubmitCommand(
         Rpi5Vc4AppendSubmitLocked(DeviceExtension, QueueIndex, Entry);
     }
 
-    Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
+    Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension,
+                                             &NeedPoll, &PipelineAborted);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
     if (Completed)
@@ -3098,7 +3316,9 @@ Rpi5Vc4QueueEscapeJob(
         return STATUS_DEVICE_NOT_READY;
 
     if (Packet->Op == RPI5VC4_DMA_OP_V3D_JOB &&
-        (Packet->V3dJob.Flags & ~RPI5VC4_DMA_V3D_FLUSH_CACHE) != 0)
+        (Packet->V3dJob.Flags &
+         ~(RPI5VC4_DMA_V3D_FLUSH_CACHE |
+           RPI5VC4_DMA_V3D_BCL_INDEPENDENT)) != 0)
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -3158,7 +3378,8 @@ Rpi5Vc4QueueEscapeJob(
     }
     Rpi5Vc4AppendSubmitLocked(DeviceExtension, QueueIndex, Entry);
 
-    Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension, &NeedPoll, &PipelineAborted);
+    Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension,
+                                             &NeedPoll, &PipelineAborted);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
     if (Completed)
@@ -3545,14 +3766,21 @@ Rpi5Vc4DdiEscape(
                 return STATUS_SUCCESS;
             }
 
-            Caps = RPI5VC4_CAP_GPUVA_MAP | RPI5VC4_CAP_ALLOCATION_RELOCATION | RPI5VC4_CAP_MONITORED_FENCE | RPI5VC4_CAP_SUBMIT_SIGNAL | RPI5VC4_CAP_CPU_WAIT_SIGNAL | RPI5VC4_CAP_WIN32_PRESENT | RPI5VC4_CAP_LINEAR_SCANOUT;
+            Caps = RPI5VC4_CAP_GPUVA_MAP |
+                   RPI5VC4_CAP_ALLOCATION_RELOCATION |
+                   RPI5VC4_CAP_MONITORED_FENCE |
+                   RPI5VC4_CAP_SUBMIT_SIGNAL |
+                   RPI5VC4_CAP_CPU_WAIT_SIGNAL |
+                   RPI5VC4_CAP_WIN32_PRESENT |
+                   RPI5VC4_CAP_LINEAR_SCANOUT;
 
             if (DeviceExtension->V3dReady)
             {
                 Caps |= RPI5VC4_CAP_CL_SUBMIT |
                         RPI5VC4_CAP_TFU_SUBMIT |
                         RPI5VC4_CAP_CSD_SUBMIT |
-                        RPI5VC4_CAP_CACHE_FLUSH;
+                        RPI5VC4_CAP_CACHE_FLUSH |
+                        RPI5VC4_CAP_BIN_RENDER_OVERLAP;
             }
 
             Info->AbiVersion = RPI5VC4_ESCAPE_INFO_ABI_VERSION;
