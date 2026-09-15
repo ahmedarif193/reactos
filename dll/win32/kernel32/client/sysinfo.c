@@ -330,6 +330,33 @@ GetNumaNodeProcessorMask(IN UCHAR Node,
     return TRUE;
 }
 
+BOOL
+WINAPI
+GetNumaNodeProcessorMaskEx(IN USHORT Node,
+                           OUT PGROUP_AFFINITY ProcessorMask)
+{
+    NTSTATUS Status;
+    SYSTEM_NUMA_INFORMATION NumaInformation;
+
+    Status = NtQuerySystemInformation(SystemNumaProcessorMap, &NumaInformation, sizeof(NumaInformation), NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    if (Node > NumaInformation.HighestNodeNumber)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    RtlZeroMemory(ProcessorMask, sizeof(*ProcessorMask));
+    ProcessorMask->Mask = (KAFFINITY)NumaInformation.ActiveProcessorsAffinityMask[Node];
+    ProcessorMask->Group = 0;
+    return TRUE;
+}
+
 /*
  * @implemented
  */
