@@ -3,6 +3,9 @@
 
 spec2def(dwmcore.dll dwmcore.spec ADD_IMPORTLIB)
 
+remove_definitions(-DDXGKDDI_INTERFACE_VERSION=0x1052)
+add_definitions(-DDXGKDDI_INTERFACE_VERSION=0x11007)
+
 add_library(dwmcore MODULE
     dwmcore.c
     ../../../base/system/dwm/presenttrace.c
@@ -15,9 +18,6 @@ add_library(dwmcore MODULE
 
 target_include_directories(dwmcore PRIVATE
     ${REACTOS_SOURCE_DIR}/base/system/dwm)
-
-set_source_files_properties(../../../base/system/dwm/gpud3d.cpp PROPERTIES
-    COMPILE_DEFINITIONS DXGKDDI_INTERFACE_VERSION=0x11007)
 
 set_module_type(dwmcore win32dll UNICODE)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
