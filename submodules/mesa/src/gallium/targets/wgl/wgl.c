@@ -163,11 +163,11 @@ wgl_screen_create(HDC hDC)
 
    const char *const drivers[] = {
       debug_get_option("GALLIUM_DRIVER", ""),
-#ifdef GALLIUM_VC4
-      sw_only ? "" : "vc4",
-#endif
 #ifdef GALLIUM_V3D
       sw_only ? "" : "v3d",
+#endif
+#ifdef GALLIUM_VC4
+      sw_only ? "" : "vc4",
 #endif
 #ifdef GALLIUM_D3D12
       sw_only ? "" : "d3d12",
