@@ -17,6 +17,7 @@
 #define DXGK_CONTEXT_ORDER_TYPE_WORK            1
 #define DXGK_CONTEXT_ORDER_TYPE_WAIT            2
 #define DXGK_CONTEXT_ORDER_TYPE_SIGNAL          3
+#define DXGK_CONTEXT_ORDER_TYPE_COMPLETION      4
 
 typedef struct _DXGK_CONTEXT_ORDER_OPERATION DXGK_CONTEXT_ORDER_OPERATION, *PDXGK_CONTEXT_ORDER_OPERATION;
 
@@ -41,6 +42,8 @@ struct _DXGK_CONTEXT_ORDER_OPERATION
     PVOID Payload;
     PDXGK_CONTEXT_ORDER_RETIRE_CALLBACK RetireCallback;
     PDXGK_CONTEXT_ORDER_RELEASE_CALLBACK ReleaseCallback;
+    PDXGK_CONTEXT_ORDER_COMPLETION_ROUTINE CompletionRoutine;
+    PDXGK_CONTEXT_ORDER_COMPLETION_RELEASE_ROUTINE CompletionReleaseRoutine;
     DXGK_CONTEXT_ORDER_MARKER Markers[ANYSIZE_ARRAY];
 };
 
@@ -189,6 +192,20 @@ static VOID DxgkpContextOrderReleaseSync(_Inout_ PDXGK_CONTEXT_ORDER_OPERATION O
     ExFreePoolWithTag(Capture, DXGK_CONTEXT_ORDER_OPERATION_TAG);
 }
 
+static VOID
+DxgkpContextOrderReleaseCompletion(
+    _Inout_ PDXGK_CONTEXT_ORDER_OPERATION Operation)
+{
+    PVOID CallbackContext = Operation->Payload;
+
+    Operation->Payload = NULL;
+    if (CallbackContext != NULL && Operation->CompletionReleaseRoutine != NULL)
+    {
+        Operation->CompletionReleaseRoutine(CallbackContext,
+                                             Operation->TerminalStatus);
+    }
+}
+
 VOID DxgkContextOrderWakeDevice(_Inout_ PDXGKRNL_DEVICE Device)
 {
     PLIST_ENTRY Entry;
@@ -322,7 +339,10 @@ ContinueWorker:
         if (!DxgkpContextOrderFindNextMarker(Context, Snapshot.LastSubmittedSequence + 1, &Marker))
             break;
         Operation = Marker->Operation;
-        if (Operation->Type != DXGK_CONTEXT_ORDER_TYPE_WORK && Operation->Type != DXGK_CONTEXT_ORDER_TYPE_WAIT && Operation->Type != DXGK_CONTEXT_ORDER_TYPE_SIGNAL)
+        if (Operation->Type != DXGK_CONTEXT_ORDER_TYPE_WORK &&
+            Operation->Type != DXGK_CONTEXT_ORDER_TYPE_WAIT &&
+            Operation->Type != DXGK_CONTEXT_ORDER_TYPE_SIGNAL &&
+            Operation->Type != DXGK_CONTEXT_ORDER_TYPE_COMPLETION)
             break;
         Packet = NULL;
         if (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WORK)
@@ -372,6 +392,35 @@ ContinueWorker:
             }
             VidSchDispatchClaimedContextOrderPacket(Packet);
             break;
+        }
+        if (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_COMPLETION)
+        {
+            if (Action.Type != Dxgmms2ContextActionSignal ||
+                Operation->Payload == NULL ||
+                Operation->CompletionRoutine == NULL)
+            {
+                (VOID)Interface.CommitAction(Interface.AdapterHandle,
+                                             Context->Mms2ContextStream,
+                                             Action.Sequence,
+                                             Action.ClaimToken,
+                                             STATUS_CANCELLED);
+                continue;
+            }
+            ActionStatus = Operation->CompletionRoutine(Operation->Payload);
+            if (ActionStatus == STATUS_PENDING)
+                ActionStatus = STATUS_INTERNAL_ERROR;
+            Status = Interface.CommitAction(Interface.AdapterHandle,
+                                            Context->Mms2ContextStream,
+                                            Action.Sequence,
+                                            Action.ClaimToken,
+                                            ActionStatus);
+            if (Status == STATUS_INVALID_HANDLE ||
+                Status == STATUS_INVALID_PARAMETER ||
+                Status == STATUS_OBJECT_TYPE_MISMATCH)
+            {
+                break;
+            }
+            continue;
         }
         Capture = Operation->Payload;
         if (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WAIT)
@@ -762,6 +811,89 @@ Failure:
     while (LockedCount != 0)
         KeReleaseMutex(&SortedContexts[--LockedCount]->StreamAdmissionMutex, FALSE);
     ASSERT(ReferencedCount <= ContextCount);
+    DxgkpContextOrderFreeUnpublishedOperation(Operation);
+    return Status;
+}
+
+NTSTATUS
+DxgkContextOrderAdmitCompletion(
+    _Inout_ PDXGKRNL_CONTEXT Context,
+    _Inout_ PVOID CallbackContext,
+    _In_ PDXGK_CONTEXT_ORDER_COMPLETION_ROUTINE CompletionRoutine,
+    _In_ PDXGK_CONTEXT_ORDER_COMPLETION_RELEASE_ROUTINE ReleaseRoutine)
+{
+    DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Interface;
+    DXGMMS2_CONTEXT_STREAM_HANDLE StreamHandle;
+    DXGMMS2_ADMIT_CONTEXT_SIGNAL_V1 Info;
+    PDXGK_CONTEXT_ORDER_OPERATION Operation;
+    ULONGLONG Sequence = 0;
+    ULONGLONG TransactionId = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Context == NULL || Context->Device == NULL || CallbackContext == NULL ||
+        CompletionRoutine == NULL || ReleaseRoutine == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Operation = DxgkpContextOrderAllocateOperation(
+                    DXGK_CONTEXT_ORDER_TYPE_COMPLETION,
+                    1,
+                    CallbackContext,
+                    NULL,
+                    DxgkpContextOrderReleaseCompletion);
+    if (Operation == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Operation->CompletionRoutine = CompletionRoutine;
+    Operation->CompletionReleaseRoutine = ReleaseRoutine;
+
+    (VOID)KeWaitForSingleObject(&Context->StreamAdmissionMutex,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+    if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0 ||
+        !DxgkReferenceContext(Context))
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Failure;
+    }
+    Operation->Markers[0].Context = Context;
+    Status = DxgkpContextOrderCaptureInterface(Context, TRUE, &Interface);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+    if (Interface.AdmitSignal == NULL)
+    {
+        Status = STATUS_REVISION_MISMATCH;
+        goto Failure;
+    }
+
+    StreamHandle = Context->Mms2ContextStream;
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.Size = DXGMMS2_ADMIT_CONTEXT_SIGNAL_V1_SIZE;
+    Info.Version = DXGMMS2_CONTEXT_STREAM_VERSION_1;
+    Info.ContextCount = 1;
+    Info.ContextHandles = &StreamHandle;
+    Info.Sequences = &Sequence;
+    Info.ObjectId = (ULONGLONG)(ULONG_PTR)Operation;
+    Info.ClientTag = (ULONGLONG)(ULONG_PTR)Operation;
+    /* An ordinary signal becomes claimable only after prior work retires. */
+    Status = Interface.AdmitSignal(Interface.AdapterHandle,
+                                   &Info,
+                                   &TransactionId);
+    if (!NT_SUCCESS(Status))
+        goto Failure;
+    ASSERT(TransactionId != 0 && Sequence != 0);
+    DxgkpContextOrderPublishMarker(Operation, 0, Context, Sequence);
+    KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
+    DxgkContextOrderScheduleReferenced(Context);
+    return STATUS_SUCCESS;
+
+Failure:
+    KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
+    Operation->Payload = NULL;
+    Operation->CompletionReleaseRoutine = NULL;
     DxgkpContextOrderFreeUnpublishedOperation(Operation);
     return Status;
 }

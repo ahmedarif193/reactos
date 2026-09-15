@@ -2787,6 +2787,22 @@ DxgkContextOrderAdmitSignal(
     _In_reads_opt_(ObjectCount) CONST UINT64 *PayloadValueArray,
     _In_ KPROCESSOR_MODE AccessMode);
 
+typedef NTSTATUS
+(NTAPI *PDXGK_CONTEXT_ORDER_COMPLETION_ROUTINE)(
+    _Inout_ PVOID CallbackContext);
+
+typedef VOID
+(NTAPI *PDXGK_CONTEXT_ORDER_COMPLETION_RELEASE_ROUTINE)(
+    _Inout_ PVOID CallbackContext,
+    _In_ NTSTATUS CompletionStatus);
+
+NTSTATUS
+DxgkContextOrderAdmitCompletion(
+    _Inout_ PDXGKRNL_CONTEXT Context,
+    _Inout_ PVOID CallbackContext,
+    _In_ PDXGK_CONTEXT_ORDER_COMPLETION_ROUTINE CompletionRoutine,
+    _In_ PDXGK_CONTEXT_ORDER_COMPLETION_RELEASE_ROUTINE ReleaseRoutine);
+
 VOID
 DxgkContextOrderWakeDevice(
     _Inout_ PDXGKRNL_DEVICE Device);

@@ -1294,13 +1294,11 @@ vc4kmt_primary_allocation(
 NTSTATUS
 vc4kmt_primary_present(
     _In_ VC4KMT_DEVICE *Device,
-    _In_ HWND Window,
-    _In_ const VC4KMT_FENCE *Fence)
+    _In_ HWND Window)
 {
     D3DKMT_PRESENT Present;
-    NTSTATUS Status;
 
-    if (Device == NULL || Window == NULL || Fence == NULL)
+    if (Device == NULL || Window == NULL)
         return STATUS_INVALID_PARAMETER;
     if (Device->Fake)
         return STATUS_NOT_SUPPORTED;
@@ -1311,13 +1309,6 @@ vc4kmt_primary_present(
     {
         return STATUS_INVALID_DEVICE_STATE;
     }
-
-    /* An MMIO flip need not pass through the TFU submission queue. Finish
-     * the copy before asking dxgkrnl to display the shared primary. The
-     * window identifies the compositor's registered scanout ownership. */
-    Status = vc4kmt_wait(Device, Fence, INFINITE);
-    if (Status != STATUS_SUCCESS)
-        return Status;
 
     RtlZeroMemory(&Present, sizeof(Present));
     Present.hContext = Device->hContext[RPI5VC4_NODE_TFU];
