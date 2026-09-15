@@ -55,6 +55,7 @@ list(APPEND SOURCE
     ProcessPreferredUILanguages.c
     PrivMoveFileIdentityW.c
     QueueUserAPC.c
+    QueryProcessCycleTime.c
     ReadFile.c
     ResizePseudoConsole.c
     SetComputerNameExW.c

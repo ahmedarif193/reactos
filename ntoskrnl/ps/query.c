@@ -1617,7 +1617,9 @@ NtQueryInformationProcess(
                 break;
             }
 
-            Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_QUERY_INFORMATION, PsProcessType, PreviousMode, (PVOID*)&Process, NULL);
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle,
+                                                        PreviousMode,
+                                                        &Process);
             if (!NT_SUCCESS(Status))
                 break;
 

@@ -507,7 +507,7 @@ RtlVirtualUnwind(
 
     /* A no-handler stack walk may feed us the terminal frame produced by the
        previous unwind. Do not let it dereference the null stack pointer. */
-    if ((HandlerType == UNW_FLAG_NHANDLER) && (Context->Rsp == 0))
+    if ((HandlerType == UNW_FLAG_NHANDLER) && (Context->Rsp < 0x10000))
     {
         return NULL;
     }
@@ -536,7 +536,7 @@ RepeatChainedInfo:
     while (i < UnwindInfo->CountOfCodes)
     {
         /* A frame-register unwind can also produce a terminal stack pointer. */
-        if ((HandlerType == UNW_FLAG_NHANDLER) && (Context->Rsp == 0))
+        if ((HandlerType == UNW_FLAG_NHANDLER) && (Context->Rsp < 0x10000))
         {
             return NULL;
         }

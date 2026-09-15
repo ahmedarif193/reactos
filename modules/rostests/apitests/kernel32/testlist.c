@@ -54,6 +54,7 @@ extern void func_PixeloramaCompat(void);
 extern void func_ProcessPreferredUILanguages(void);
 extern void func_PrivMoveFileIdentityW(void);
 extern void func_QueueUserAPC(void);
+extern void func_QueryProcessCycleTime(void);
 extern void func_ResizePseudoConsole(void);
 extern void func_SetComputerNameExW(void);
 extern void func_SetConsoleWindowInfo(void);
@@ -121,6 +122,7 @@ const struct test winetest_testlist[] =
     { "ProcessPreferredUILanguages", func_ProcessPreferredUILanguages },
     { "PrivMoveFileIdentityW",       func_PrivMoveFileIdentityW },
     { "QueueUserAPC",                func_QueueUserAPC },
+    { "QueryProcessCycleTime",       func_QueryProcessCycleTime },
     { "ResizePseudoConsole",         func_ResizePseudoConsole },
     { "SetComputerNameExW",          func_SetComputerNameExW },
     { "SetConsoleWindowInfo",        func_SetConsoleWindowInfo },
