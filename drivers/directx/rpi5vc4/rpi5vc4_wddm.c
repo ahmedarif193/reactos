@@ -486,10 +486,8 @@ Rpi5Vc4ProcessPendingLocked(
                         *NeedPoll = TRUE;
                         goto NextNode;
                     }
-                    DPRINT1("RPI5VC4: %s submit failed for fence=%lu — aborting\n",
+                    DPRINT1("RPI5VC4: %s submit failed for fence=%lu — deferring reset to dxgkrnl\n",
                             Head->IsTfuJob ? "TFU" : "CSD", Head->Fence);
-                    if (Head->IsTfuJob)
-                        Rpi5V3dResetCore(DeviceExtension);
                     goto AbortPipeline;
                 }
             }
@@ -511,9 +509,8 @@ Rpi5Vc4ProcessPendingLocked(
                 goto NextNode;
             }
 
-            DPRINT1("RPI5VC4: %s job fence=%lu timed out — aborting and resetting\n",
+            DPRINT1("RPI5VC4: %s job fence=%lu timed out — deferring reset to dxgkrnl\n",
                     Head->IsTfuJob ? "TFU" : "CSD", Head->Fence);
-            Rpi5V3dResetCore(DeviceExtension);
             goto AbortPipeline;
         }
 
@@ -641,8 +638,8 @@ Rpi5Vc4ProcessPendingLocked(
                     goto NextNode;
                 }
 
-                /* Re-read the W1C completion latches immediately before a
-                 * destructive reset in case completion raced this check. */
+                /* Re-read the W1C completion latches immediately before
+                 * reporting a timeout in case completion raced this check. */
                 {
                     BOOLEAN LateBinComplete;
                     BOOLEAN LateRenderComplete;
@@ -704,11 +701,7 @@ Rpi5Vc4ProcessPendingLocked(
 
                 DPRINT1("RPI5VC4: V3D job fence=%lu timed out — aborting (TDR)\n",
                         Head->Fence);
-                DPRINT1("RPI5VC4: TDR resetting V3D core: %s\n",
-                        Rpi5V3dResetCore(DeviceExtension) ? "ok" : "FAILED");
-                /* The reset invalidates every engine queue. Drop all pending
-                 * entries without completing their fences and leave admission
-                 * closed until dxgkrnl runs Reset/RestartFromTimeout. */
+                DPRINT1("RPI5VC4: V3D reset deferred to dxgkrnl TDR worker\n");
             }
             goto AbortPipeline;
         }
@@ -722,7 +715,6 @@ CompleteHead:
             {
                 DPRINT1("RPI5VC4: V3D cache clean timed out for fence=%lu\n",
                         Head->Fence);
-                Rpi5V3dResetCore(DeviceExtension);
                 goto AbortPipeline;
             }
         }
