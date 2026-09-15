@@ -124,6 +124,12 @@ v3d_resource_bo_create(struct v3d_resource *rsc)
          */
         uint32_t padding =
                 rsc->base.target == PIPE_BUFFER ? 4 : V3D_TFU_READAHEAD_SIZE;
+#ifdef _WIN32
+        if (prsc->target == PIPE_BUFFER)
+                return v3d_bo_alloc_cpu_cached(v3d_screen(pscreen),
+                                               rsc->size + padding,
+                                               "resource");
+#endif
         return v3d_bo_alloc(v3d_screen(pscreen), rsc->size + padding,
                             "resource");
 }

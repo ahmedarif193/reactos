@@ -105,6 +105,8 @@ void vc4kmt_close(VC4KMT_DEVICE *device);
 const VC4KMT_INFO *vc4kmt_info(const VC4KMT_DEVICE *device);
 vc4kmt_status vc4kmt_bo_create(VC4KMT_DEVICE *device, uint32_t size,
                                VC4KMT_BO *bo);
+vc4kmt_status vc4kmt_bo_create_ex(VC4KMT_DEVICE *device, uint32_t size,
+                                  uint32_t flags, VC4KMT_BO *bo);
 vc4kmt_status vc4kmt_bo_map(VC4KMT_DEVICE *device, VC4KMT_BO *bo,
                             void **cpu_va);
 vc4kmt_status vc4kmt_bo_invalidate(VC4KMT_DEVICE *device,
@@ -187,6 +189,7 @@ _Static_assert(sizeof(VC4KMT_CL_SUBMIT) == 7 * sizeof(uint32_t),
 #define VC4KMT_CAP_CACHE_FLUSH           (1u << 3)
 #define VC4KMT_RESOURCE_CPU_DIRTY        (1u << 0)
 #define VC4KMT_CL_FLAG_FLUSH_CACHE       (1u << 0)
+#define VC4KMT_BO_CREATE_CPU_CACHED      (1u << 0)
 #define VC4KMT_ENGINE_3D                 0u
 #define VC4KMT_ENGINE_TFU                1u
 #define VC4KMT_ENGINE_CSD                2u
@@ -1475,16 +1478,25 @@ drmIoctl(int fd, unsigned long request, void *arg)
       break;
    case DRM_IOCTL_V3D_CREATE_BO: {
       struct drm_v3d_create_bo *create = arg;
-      uint32_t handle = v3d_d3dkmt_alloc_bo_handle(device);
+      uint32_t handle;
+      uint32_t flags;
       struct v3d_d3dkmt_bo *bo;
 
+      if (create->flags & ~V3D_D3DKMT_CREATE_BO_CPU_CACHED) {
+         errno = EINVAL;
+         break;
+      }
+      handle = v3d_d3dkmt_alloc_bo_handle(device);
       if (!handle) {
          errno = ENOMEM;
          break;
       }
+      flags = (create->flags & V3D_D3DKMT_CREATE_BO_CPU_CACHED) ?
+              VC4KMT_BO_CREATE_CPU_CACHED : 0;
       bo = &device->bos[handle];
       memset(bo, 0, sizeof(*bo));
-      if (vc4kmt_bo_create(device->kmt, create->size, &bo->kmt) < 0) {
+      if (vc4kmt_bo_create_ex(device->kmt, create->size, flags,
+                              &bo->kmt) < 0) {
          errno = ENOMEM;
          break;
       }

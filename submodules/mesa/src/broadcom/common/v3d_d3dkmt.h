@@ -19,6 +19,7 @@ extern "C" {
 
 #define V3D_D3DKMT_SUBMIT_HANDLE_WRITE (UINT32_C(1) << 31)
 #define V3D_D3DKMT_SUBMIT_HANDLE_MASK  (~V3D_D3DKMT_SUBMIT_HANDLE_WRITE)
+#define V3D_D3DKMT_CREATE_BO_CPU_CACHED (UINT32_C(1) << 0)
 
 int
 drmIoctl(int fd, unsigned long request, void *arg);

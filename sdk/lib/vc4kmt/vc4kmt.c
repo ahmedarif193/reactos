@@ -714,14 +714,26 @@ vc4kmt_bo_create(
     _In_ UINT Size,
     _Out_ VC4KMT_BO *Bo)
 {
+    return vc4kmt_bo_create_ex(Device, Size, 0, Bo);
+}
+
+NTSTATUS
+vc4kmt_bo_create_ex(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Size,
+    _In_ ULONG Flags,
+    _Out_ VC4KMT_BO *Bo)
+{
     D3DKMT_CREATEALLOCATION CreateData;
     D3DDDI_ALLOCATIONINFO AllocationInfo;
     D3DDDI_MAPGPUVIRTUALADDRESS MapGpuVa;
+    RPI5VC4_ALLOCATION_DATA PrivateData;
     NTSTATUS Status;
     UINT SizeInPages;
     UINT64 MappedSize;
 
-    if (Device == NULL || Bo == NULL || Size == 0)
+    if (Device == NULL || Bo == NULL || Size == 0 ||
+        (Flags & ~VC4KMT_BO_CREATE_CPU_CACHED) != 0)
         return STATUS_INVALID_PARAMETER;
 
     RtlZeroMemory(Bo, sizeof(*Bo));
@@ -742,8 +754,12 @@ vc4kmt_bo_create(
 
     RtlZeroMemory(&CreateData, sizeof(CreateData));
     RtlZeroMemory(&AllocationInfo, sizeof(AllocationInfo));
-    AllocationInfo.PrivateDriverDataSize = sizeof(Size);
-    AllocationInfo.pPrivateDriverData = &Size;
+    PrivateData.Size = Size;
+    PrivateData.Flags =
+        (Flags & VC4KMT_BO_CREATE_CPU_CACHED) ?
+        RPI5VC4_ALLOCATION_CPU_CACHED : 0;
+    AllocationInfo.PrivateDriverDataSize = sizeof(PrivateData);
+    AllocationInfo.pPrivateDriverData = &PrivateData;
     CreateData.hDevice = Device->hDevice;
     CreateData.NumAllocations = 1;
     CreateData.pAllocationInfo = &AllocationInfo;
