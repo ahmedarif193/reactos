@@ -86,8 +86,8 @@ load_general(struct v3d_cl *cl, struct pipe_surface *psurf, int buffer,
                 load.buffer_to_load = buffer;
                 load.address = cl_address(rsc->bo, layer_offset);
 
-                load.memory_format = v3d_surface_get_tiling(psurf,
-                                                            separate_stencil);
+                load.memory_format = (enum V3DX(Memory_Format))
+                        v3d_surface_get_tiling(psurf, separate_stencil);
                 if (separate_stencil)
                         load.input_image_format = V3D_OUTPUT_IMAGE_FORMAT_S8;
                 else
@@ -152,8 +152,8 @@ store_general(struct v3d_job *job,
                                         psurf->format);
 
                 store.r_b_swap = v3d_format_needs_tlb_rb_swap(psurf->format);
-                store.memory_format = v3d_surface_get_tiling(psurf,
-                                                             separate_stencil);
+                store.memory_format = (enum V3DX(Memory_Format))
+                        v3d_surface_get_tiling(psurf, separate_stencil);
                 store.height_in_ub_or_stride =
                         v3d_surface_get_height_in_ub_or_stride(psurf,
                                                                separate_stencil);
