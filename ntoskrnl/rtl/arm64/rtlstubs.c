@@ -805,6 +805,10 @@ RtlUnwindEx(
                 }
                 else if (Disposition == ExceptionCollidedUnwind)
                 {
+                    /* Resume from the active dispatcher's frame state, not
+                     * from registers captured by the nested unwind. */
+                    FrameContext = *DispatcherContext.ContextRecord;
+                    *ContextRecord = FrameContext;
                     RtlpArm64RestoreCollidedFrame(&DispatcherContext, &UnwindContext, NonVolatileRegisters.Buffer, sizeof(NonVolatileRegisters.Buffer), &EstablisherFrame);
                     DispatcherContext.ContextRecord = ContextRecord;
                     ExceptionRecord->ExceptionFlags |= EXCEPTION_COLLIDED_UNWIND;
