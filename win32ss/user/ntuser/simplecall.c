@@ -957,6 +957,19 @@ NtUserCallHwnd(
         case HWND_ROUTINE_ROS_ISWINDOW:
             return IntIsWindow(hWnd);
 
+        case HWND_ROUTINE_ROS_ISWINDOWVISIBLE:
+        {
+            PWND Window;
+            BOOL Visible = FALSE;
+
+            UserEnterShared();
+            Window = UserGetWindowObject(hWnd);
+            if (Window)
+                Visible = IntIsWindowVisible(Window);
+            UserLeave();
+            return Visible;
+        }
+
         case HWND_ROUTINE_ROS_GETWINDOWSTATE:
         {
             PWND Window;
