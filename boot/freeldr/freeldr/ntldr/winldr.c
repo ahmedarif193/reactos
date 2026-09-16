@@ -410,6 +410,19 @@ WinLdrInitializePhase1(
             Extension->GopFramebuffer.Dpi = WinLdrGetSystemDpi();
             FrameBufferData->Dpi = Extension->GopFramebuffer.Dpi;
 
+            Extension->GopFramebufferTransform.Size =
+                sizeof(Extension->GopFramebufferTransform);
+            Extension->GopFramebufferTransform.Version =
+                LOADER_PARAMETER_FRAMEBUFFER_TRANSFORM_VERSION;
+            Extension->GopFramebufferTransform.Flags =
+                FrameBufferData->TransformFlags;
+            Extension->GopFramebufferTransform.Rotation =
+                FrameBufferData->Rotation;
+            Extension->GopFramebufferTransform.LogicalWidth =
+                FrameBufferData->LogicalWidth;
+            Extension->GopFramebufferTransform.LogicalHeight =
+                FrameBufferData->LogicalHeight;
+
             TRACE("Passing UEFI framebuffer to kernel:\n");
             TRACE("  BaseAddress: 0x%llx\n", Extension->GopFramebuffer.FrameBufferBase.QuadPart);
             TRACE("  Size: 0x%x\n", Extension->GopFramebuffer.FrameBufferSize);

@@ -620,6 +620,10 @@ VidFbInitializeVideo(
         FrameBufferData.PixelsPerScanLine = framebufInfo.PixelsPerScanLine;
         FrameBufferData.BitsPerPixel = framebufInfo.BitsPerPixel;
         FrameBufferData.Dpi = LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT;
+        FrameBufferData.TransformFlags = 0;
+        FrameBufferData.Rotation = LoaderFramebufferRotationIdentity;
+        FrameBufferData.LogicalWidth = framebufInfo.ScreenWidth;
+        FrameBufferData.LogicalHeight = framebufInfo.ScreenHeight;
 
         RtlCopyMemory(&FrameBufferData.PixelMasks,
                       &framebufInfo.PixelMasks, sizeof(framebufInfo.PixelMasks));

@@ -30,6 +30,8 @@ static ULONG_PTR FrameBufferStart = 0;
 static ULONG_PTR PhysicalFrameBufferStart = 0;
 static ULONG FrameBufferSize;
 static ULONG ScreenWidth, ScreenHeight, BytesPerScanLine;
+static ULONG FrameBufferWidth, FrameBufferHeight;
+static ULONG FrameBufferRotation;
 static UCHAR BytesPerPixel;
 static PUCHAR BackBuffer = NULL;
 static SIZE_T BackBufferSize;
@@ -68,7 +70,35 @@ LogicalToPhysicalY(_In_ ULONG Y)
 static __inline PULONG
 FramePixel(_In_ ULONG X, _In_ ULONG Y)
 {
-    return (PULONG)(FrameBufferStart + (ULONG_PTR)Y * BytesPerScanLine + (ULONG_PTR)X * BytesPerPixel);
+    ULONG PhysicalX, PhysicalY;
+
+    switch (FrameBufferRotation)
+    {
+        case LoaderFramebufferRotation90:
+            PhysicalX = FrameBufferWidth - 1 - Y;
+            PhysicalY = X;
+            break;
+
+        case LoaderFramebufferRotation180:
+            PhysicalX = FrameBufferWidth - 1 - X;
+            PhysicalY = FrameBufferHeight - 1 - Y;
+            break;
+
+        case LoaderFramebufferRotation270:
+            PhysicalX = Y;
+            PhysicalY = FrameBufferHeight - 1 - X;
+            break;
+
+        case LoaderFramebufferRotationIdentity:
+        default:
+            PhysicalX = X;
+            PhysicalY = Y;
+            break;
+    }
+
+    return (PULONG)(FrameBufferStart +
+                    (ULONG_PTR)PhysicalY * BytesPerScanLine +
+                    (ULONG_PTR)PhysicalX * BytesPerPixel);
 }
 
 static VOID
@@ -91,27 +121,53 @@ FlushBackBufferRect(
     NativeLeft = LogicalToPhysicalX(Left);
     NativeRight = LogicalToPhysicalX(Left + Width);
 
-    for (y = Top; y < Top + Height; ++y)
+    if (FrameBufferRotation == LoaderFramebufferRotationIdentity)
     {
-        PUCHAR Back = BB_PIXEL(Left, y);
-        ULONG NativeTop = LogicalToPhysicalY(y);
-        ULONG NativeBottom = LogicalToPhysicalY(y + 1);
-        ULONG NativeY;
-
-        for (NativeY = NativeTop; NativeY < NativeBottom; ++NativeY)
+        for (y = Top; y < Top + Height; ++y)
         {
-            PULONG Pixel = FramePixel(NativeLeft, NativeY);
-            ULONG NativeX = NativeLeft;
+            PUCHAR Back = BB_PIXEL(Left, y);
+            ULONG NativeTop = LogicalToPhysicalY(y);
+            ULONG NativeBottom = LogicalToPhysicalY(y + 1);
+            ULONG NativeY;
 
-            for (x = 0; x < Width; ++x)
+            for (NativeY = NativeTop; NativeY < NativeBottom; ++NativeY)
             {
-                ULONG NextNativeX = (x + 1 == Width) ? NativeRight : LogicalToPhysicalX(Left + x + 1);
+                PULONG Pixel = FramePixel(NativeLeft, NativeY);
+                ULONG NativeX = NativeLeft;
 
-                while (NativeX < NextNativeX)
+                for (x = 0; x < Width; ++x)
                 {
-                    *Pixel++ = CachedPalette[Back[x]];
-                    ++NativeX;
+                    ULONG NextNativeX = (x + 1 == Width) ? NativeRight : LogicalToPhysicalX(Left + x + 1);
+
+                    while (NativeX < NextNativeX)
+                    {
+                        *Pixel++ = CachedPalette[Back[x]];
+                        ++NativeX;
+                    }
                 }
+            }
+        }
+        return;
+    }
+
+    for (y = 0; y < Height; ++y)
+    {
+        PUCHAR Back = BB_PIXEL(Left, Top + y);
+        ULONG NativeTop = LogicalToPhysicalY(Top + y);
+        ULONG NativeBottom = LogicalToPhysicalY(Top + y + 1);
+
+        for (x = 0; x < Width; ++x)
+        {
+            ULONG NativeX;
+            ULONG NativeY;
+            ULONG Pixel = CachedPalette[Back[x]];
+            ULONG PixelLeft = LogicalToPhysicalX(Left + x);
+            ULONG PixelRight = LogicalToPhysicalX(Left + x + 1);
+
+            for (NativeY = NativeTop; NativeY < NativeBottom; ++NativeY)
+            {
+                for (NativeX = PixelLeft; NativeX < PixelRight; ++NativeX)
+                    *FramePixel(NativeX, NativeY) = Pixel;
             }
         }
     }
@@ -250,7 +306,7 @@ VidInitialize(
     INTERFACE_TYPE Interface;
     ULONG BusNumber;
     ULONG Dpi, ReadableDpi, MaximumDpi;
-    ULONG LogicalWidth, LogicalHeight;
+    ULONG LogicalWidth, LogicalHeight, ScrollWidth;
     SIZE_T BackBufferHeight;
     NTSTATUS Status;
 
@@ -277,8 +333,33 @@ VidInitialize(
 
     /* Retrieve the framebuffer address, its visible screen dimensions, and its attributes */
     FrameBuffer.QuadPart = VramAddress.QuadPart + VideoConfigData.FrameBufferOffset;
-    ScreenWidth  = VideoConfigData.ScreenWidth;
-    ScreenHeight = VideoConfigData.ScreenHeight;
+    FrameBufferWidth = VideoConfigData.ScreenWidth;
+    FrameBufferHeight = VideoConfigData.ScreenHeight;
+    FrameBufferRotation = VideoConfigData.Rotation;
+
+    if (((FrameBufferRotation == LoaderFramebufferRotation90) ||
+         (FrameBufferRotation == LoaderFramebufferRotation270)) &&
+        (VideoConfigData.LogicalWidth == FrameBufferHeight) &&
+        (VideoConfigData.LogicalHeight == FrameBufferWidth))
+    {
+        ScreenWidth = VideoConfigData.LogicalWidth;
+        ScreenHeight = VideoConfigData.LogicalHeight;
+    }
+    else if (((FrameBufferRotation == LoaderFramebufferRotationIdentity) ||
+              (FrameBufferRotation == LoaderFramebufferRotation180)) &&
+             (VideoConfigData.LogicalWidth == FrameBufferWidth) &&
+             (VideoConfigData.LogicalHeight == FrameBufferHeight))
+    {
+        ScreenWidth = VideoConfigData.LogicalWidth;
+        ScreenHeight = VideoConfigData.LogicalHeight;
+    }
+    else
+    {
+        FrameBufferRotation = LoaderFramebufferRotationIdentity;
+        ScreenWidth = FrameBufferWidth;
+        ScreenHeight = FrameBufferHeight;
+    }
+
     if (ScreenWidth < SCREEN_WIDTH || ScreenHeight < SCREEN_HEIGHT)
     {
         DPRINT1("Unsupported screen resolution!\n");
@@ -294,22 +375,22 @@ VidInitialize(
         return FALSE;
     }
 
-    ASSERT(ScreenWidth <= VideoConfigData.PixelsPerScanLine);
-    if ((VideoConfigData.PixelsPerScanLine < ScreenWidth) || (VideoConfigData.PixelsPerScanLine > MAXULONG / BytesPerPixel))
+    ASSERT(FrameBufferWidth <= VideoConfigData.PixelsPerScanLine);
+    if ((VideoConfigData.PixelsPerScanLine < FrameBufferWidth) || (VideoConfigData.PixelsPerScanLine > MAXULONG / BytesPerPixel))
     {
         DPRINT1("Invalid PixelsPerScanLine = %lu\n", VideoConfigData.PixelsPerScanLine);
         return FALSE;
     }
 
     BytesPerScanLine = VideoConfigData.PixelsPerScanLine * BytesPerPixel;
-    if ((BytesPerScanLine < 1) || (ScreenHeight > MAXULONG / BytesPerScanLine))
+    if ((BytesPerScanLine < 1) || (FrameBufferHeight > MAXULONG / BytesPerScanLine))
     {
         DPRINT1("Invalid framebuffer stride or height\n");
         return FALSE;
     }
 
     /* Compute the visible framebuffer size */
-    FrameBufferSize = ScreenHeight * BytesPerScanLine;
+    FrameBufferSize = FrameBufferHeight * BytesPerScanLine;
 
     /* Verify that the framebuffer actually fits inside the video RAM */
     if ((VideoConfigData.FrameBufferOffset > VramSize) || (FrameBufferSize > VramSize - VideoConfigData.FrameBufferOffset))
@@ -368,8 +449,15 @@ VidInitialize(
         VidpCharacterHeight = BOOTVID_FALLBACK_CELL_HEIGHT;
     }
 
-    /* A full-width scroll region must end on a character boundary. */
-    LogicalWidth -= LogicalWidth % VidpCharacterWidth;
+    /*
+     * Text scrolling must end on a character boundary, but that is a
+     * property of the console region rather than of the display mode.
+     * Keep the loader-provided logical width intact so drawing, coordinate
+     * conversion, and the framebuffer handoff continue to describe the
+     * complete display.  Only leave the fractional cell at the right edge
+     * outside the scrolling rectangle.
+     */
+    ScrollWidth = LogicalWidth - (LogicalWidth % VidpCharacterWidth);
 
     VidpDisplayWidth = LogicalWidth;
     VidpDisplayHeight = LogicalHeight;
@@ -378,12 +466,10 @@ VidInitialize(
     VidpDisplayDpi = Dpi;
     VidpScrollRegion.Left = 0;
     VidpScrollRegion.Top = 0;
-    VidpScrollRegion.Right = LogicalWidth - 1;
+    VidpScrollRegion.Right = ScrollWidth - 1;
     VidpScrollRegion.Bottom = LogicalHeight - 1;
     VidpCurrentX = 0;
     VidpCurrentY = 0;
-
-    DPRINT1("Display: native %lux%lu, logical %lux%lu at %lu DPI\n", ScreenWidth, ScreenHeight, VidpDisplayWidth, VidpDisplayHeight, VidpDisplayDpi);
 
     /* Translate the framebuffer from bus-relative to physical address */
     PHYSICAL_ADDRESS TranslatedAddress;
@@ -433,8 +519,8 @@ VidInitialize(
     RtlZeroMemory(&VidpFrameBufferInfo, sizeof(VidpFrameBufferInfo));
     VidpFrameBufferInfo.FrameBufferBase = TranslatedAddress;
     VidpFrameBufferInfo.FrameBufferSize = FrameBufferSize;
-    VidpFrameBufferInfo.HorizontalResolution = ScreenWidth;
-    VidpFrameBufferInfo.VerticalResolution = ScreenHeight;
+    VidpFrameBufferInfo.HorizontalResolution = FrameBufferWidth;
+    VidpFrameBufferInfo.VerticalResolution = FrameBufferHeight;
     VidpFrameBufferInfo.PixelsPerScanLine = VideoConfigData.PixelsPerScanLine;
     VidpFrameBufferInfo.PixelFormat = VideoConfigData.BitsPerPixel;
     VidpFrameBufferInfo.RedMask = VideoConfigData.PixelMasks.RedMask;
@@ -562,7 +648,7 @@ VidBufferToScreenBltNative(
     _In_ ULONG Height,
     _In_ ULONG Delta)
 {
-    ULONG y;
+    ULONG x, y;
 
     if (!FrameBufferStart || BytesPerPixel != sizeof(ULONG))
         return FALSE;
@@ -582,12 +668,26 @@ VidBufferToScreenBltNative(
     if (Height > ScreenHeight - Top)
         Height = ScreenHeight - Top;
 
+    if (FrameBufferRotation == LoaderFramebufferRotationIdentity)
+    {
+        for (y = 0; y < Height; ++y)
+        {
+            PUCHAR Src = Buffer + y * Delta;
+            PUCHAR Dst = (PUCHAR)FrameBufferStart +
+                         (ULONG_PTR)(Top + y) * BytesPerScanLine +
+                         (ULONG_PTR)Left * BytesPerPixel;
+
+            RtlCopyMemory(Dst, Src, Width * sizeof(ULONG));
+        }
+        return TRUE;
+    }
+
     for (y = 0; y < Height; ++y)
     {
-        PUCHAR Src = Buffer + y * Delta;
-        PUCHAR Dst = (PUCHAR)FrameBufferStart + (ULONG_PTR)(Top + y) * BytesPerScanLine + (ULONG_PTR)Left * BytesPerPixel;
+        PULONG Src = (PULONG)(Buffer + y * Delta);
 
-        RtlCopyMemory(Dst, Src, Width * sizeof(ULONG));
+        for (x = 0; x < Width; ++x)
+            *FramePixel(Left + x, Top + y) = Src[x];
     }
 
     return TRUE;
@@ -767,6 +867,12 @@ VidSolidColorFill(
         PUCHAR Back = BB_PIXEL(Left, y);
 
         RtlFillMemory(Back, Width, Color);
+    }
+
+    if (FrameBufferRotation != LoaderFramebufferRotationIdentity)
+    {
+        FlushBackBufferRect(Left, Top, Width, Bottom - Top + 1);
+        return;
     }
 
     NativeLeft = LogicalToPhysicalX(Left);

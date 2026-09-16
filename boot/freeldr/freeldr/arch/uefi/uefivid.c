@@ -19,6 +19,8 @@ extern EFI_HANDLE GlobalImageHandle;
 EFI_GUID EfiGraphicsOutputProtocol = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 EFI_GUID EfiEdidActiveProtocol = EFI_EDID_ACTIVE_PROTOCOL_GUID;
 EFI_GUID AppleGraphInfoProtocol = APPLE_GRAPH_INFO_PROTOCOL_GUID;
+static EFI_GUID EfiGraphicsOutputTransformProtocol =
+    {0xac775d0f, 0x1199, 0x42e2, {0x92, 0x00, 0x71, 0xdc, 0x78, 0xaa, 0x65, 0xbb}};
 
 ULONG_PTR VramAddress;
 ULONG VramSize;
@@ -34,6 +36,23 @@ static BOOLEAN UefiBltOnlyErrorLogged = FALSE;
 static EFI_GRAPHICS_OUTPUT_PROTOCOL* UefiGop = NULL;
 static ULONG_PTR UefiRenderAddress = 0;
 static UINT32 UefiRenderPixelsPerScanLine = 0;
+static CM_FRAMEBUF_DEVICE_DATA UefiHandoffFrameBufferData;
+static UCHAR UefiActiveEdid[128];
+static BOOLEAN UefiActiveEdidValid = FALSE;
+
+#define EFI_GRAPHICS_OUTPUT_TRANSFORM_VERSION          1
+#define EFI_GRAPHICS_OUTPUT_TRANSFORM_FIXED_SCANOUT     0x00000001
+
+typedef struct _EFI_GRAPHICS_OUTPUT_TRANSFORM_PROTOCOL
+{
+    UINT32 Size;
+    UINT32 Version;
+    UINT32 Flags;
+    UINT32 Rotation;
+    UINT32 LogicalWidth;
+    UINT32 LogicalHeight;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL* LinearGop;
+} EFI_GRAPHICS_OUTPUT_TRANSFORM_PROTOCOL;
 
 typedef struct _UEFI_BGRT_LOGO
 {
@@ -132,6 +151,11 @@ static EFI_PIXEL_BITMASK EfiPixelMasks[] =
     {0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000},   // PixelBlueGreenRedReserved8BitPerColor
     {0,          0,          0,          0}             // PixelBitMask, PixelBltOnly, ...
 };
+
+static
+EFI_STATUS
+UefiInitializeBltOnlyHandoff(
+    _In_ EFI_GRAPHICS_OUTPUT_PROTOCOL* ConsoleGop);
 
 #endif /* UEFI */
 
@@ -345,6 +369,9 @@ UefiInitializeBltOnlyGop(
           Width,
           Height,
           BufferSize);
+
+    (void)UefiInitializeBltOnlyHandoff(Gop);
+
     UefiBltOnlyFlush();
     return EFI_SUCCESS;
 }
@@ -795,42 +822,86 @@ UefiDrawBgrtLogo(VOID)
 
 static
 BOOLEAN
+UefiLoadEdidForGop(
+    _In_ EFI_GRAPHICS_OUTPUT_PROTOCOL* Gop)
+{
+    static const UCHAR EdidHeader[8] =
+        {0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00};
+    EFI_EDID_ACTIVE_PROTOCOL* EdidActive = NULL;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL* HandleGop;
+    EFI_HANDLE* Handles = NULL;
+    EFI_STATUS Status;
+    UINTN HandleCount = 0;
+    UINTN HandleIndex;
+    UINTN ByteIndex;
+    UCHAR Checksum = 0;
+
+    UefiActiveEdidValid = FALSE;
+    Status = GlobalSystemTable->BootServices->LocateHandleBuffer(
+                 ByProtocol,
+                 &EfiGraphicsOutputProtocol,
+                 NULL,
+                 &HandleCount,
+                 &Handles);
+    if ((Status != EFI_SUCCESS) || (Handles == NULL))
+        return FALSE;
+
+    Status = EFI_NOT_FOUND;
+    for (HandleIndex = 0; HandleIndex < HandleCount; ++HandleIndex)
+    {
+        HandleGop = NULL;
+        if (GlobalSystemTable->BootServices->HandleProtocol(
+                Handles[HandleIndex],
+                &EfiGraphicsOutputProtocol,
+                (VOID**)&HandleGop) != EFI_SUCCESS ||
+            HandleGop != Gop)
+        {
+            continue;
+        }
+
+        Status = GlobalSystemTable->BootServices->HandleProtocol(
+                     Handles[HandleIndex],
+                     &EfiEdidActiveProtocol,
+                     (VOID**)&EdidActive);
+        break;
+    }
+    GlobalSystemTable->BootServices->FreePool(Handles);
+
+    if ((Status != EFI_SUCCESS) || (EdidActive == NULL) ||
+        (EdidActive->SizeOfEdid < EDID_BLOCK_SIZE) ||
+        (EdidActive->Edid == NULL) ||
+        (RtlCompareMemory(EdidActive->Edid,
+                          EdidHeader,
+                          sizeof(EdidHeader)) != sizeof(EdidHeader)))
+    {
+        return FALSE;
+    }
+
+    for (ByteIndex = 0; ByteIndex < EDID_BLOCK_SIZE; ++ByteIndex)
+        Checksum += EdidActive->Edid[ByteIndex];
+    if (Checksum != 0)
+        return FALSE;
+
+    RtlCopyMemory(UefiActiveEdid,
+                  EdidActive->Edid,
+                  sizeof(UefiActiveEdid));
+    UefiActiveEdidValid = TRUE;
+    return TRUE;
+}
+
+static
+BOOLEAN
 UefiGetEdidPreferredResolution(
     _Out_ UINT32* Width,
     _Out_ UINT32* Height)
 {
-    static const UCHAR EdidHeader[8] =
-        {0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00};
-    EFI_STATUS Status;
-    EFI_EDID_ACTIVE_PROTOCOL* EdidActive;
     const UCHAR* Edid;
     const UCHAR* Timing;
-    UCHAR Checksum;
-    UINTN Index;
 
-    Status = GlobalSystemTable->BootServices->LocateProtocol(
-                 &EfiEdidActiveProtocol,
-                 NULL,
-                 (VOID**)&EdidActive);
-    if ((Status != EFI_SUCCESS) || (EdidActive == NULL) ||
-        (EdidActive->SizeOfEdid < EDID_BLOCK_SIZE) ||
-        (EdidActive->Edid == NULL))
-    {
+    if (!UefiActiveEdidValid)
         return FALSE;
-    }
 
-    Edid = EdidActive->Edid;
-    if (RtlCompareMemory(Edid, EdidHeader, sizeof(EdidHeader)) !=
-        sizeof(EdidHeader))
-    {
-        return FALSE;
-    }
-
-    Checksum = 0;
-    for (Index = 0; Index < EDID_BLOCK_SIZE; ++Index)
-        Checksum += Edid[Index];
-    if (Checksum != 0)
-        return FALSE;
+    Edid = UefiActiveEdid;
 
     if (!(Edid[EDID_FEATURE_SUPPORT_OFFSET] & EDID_PREFERRED_TIMING))
         return FALSE;
@@ -873,6 +944,180 @@ UefiIsUsableLinearGopMode(
                            Info->PixelInformation.BlueMask,
                            Info->PixelInformation.ReservedMask);
     return (BitsPerPixel == 32);
+}
+
+static
+BOOLEAN
+UefiGetGopPixelLayout(
+    _In_ EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info,
+    _Out_ EFI_PIXEL_BITMASK** PixelMasks,
+    _Out_ PULONG BitsPerPixel)
+{
+    switch (Info->PixelFormat)
+    {
+        case PixelRedGreenBlueReserved8BitPerColor:
+        case PixelBlueGreenRedReserved8BitPerColor:
+            *PixelMasks = &EfiPixelMasks[Info->PixelFormat];
+            *BitsPerPixel = RTL_BITS_OF(EFI_GRAPHICS_OUTPUT_BLT_PIXEL);
+            return TRUE;
+
+        case PixelBitMask:
+            *PixelMasks = &Info->PixelInformation;
+            *BitsPerPixel =
+                PixelBitmasksToBpp(Info->PixelInformation.RedMask,
+                                   Info->PixelInformation.GreenMask,
+                                   Info->PixelInformation.BlueMask,
+                                   Info->PixelInformation.ReservedMask);
+            return (*BitsPerPixel != 0);
+
+        default:
+            *PixelMasks = NULL;
+            *BitsPerPixel = 0;
+            return FALSE;
+    }
+}
+
+/*
+ * PixelBltOnly is a perfectly valid console protocol, but it cannot be handed
+ * to an operating system as linear memory.  A firmware may publish the
+ * versioned transform protocol on that same handle to name the companion
+ * linear GOP and describe the logical-to-physical transform.  This keeps GOP
+ * selection generic and avoids guessing from panel resolutions.
+ */
+static
+EFI_STATUS
+UefiInitializeBltOnlyHandoff(
+    _In_ EFI_GRAPHICS_OUTPUT_PROTOCOL* ConsoleGop)
+{
+    EFI_GRAPHICS_OUTPUT_TRANSFORM_PROTOCOL* Transform = NULL;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL* HandleGop;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL* LinearGop;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* LinearInfo;
+    EFI_PIXEL_BITMASK* PixelMasks;
+    EFI_HANDLE* Handles = NULL;
+    EFI_STATUS Status;
+    UINTN HandleCount = 0;
+    UINTN Index;
+    ULONG BitsPerPixel;
+    ULONGLONG MinimumSize;
+    BOOLEAN DimensionsMatch;
+
+    Status = GlobalSystemTable->BootServices->LocateHandleBuffer(
+                 ByProtocol,
+                 &EfiGraphicsOutputTransformProtocol,
+                 NULL,
+                 &HandleCount,
+                 &Handles);
+    if ((Status != EFI_SUCCESS) || (Handles == NULL))
+        return Status;
+
+    Status = EFI_NOT_FOUND;
+    for (Index = 0; Index < HandleCount; ++Index)
+    {
+        HandleGop = NULL;
+        if (GlobalSystemTable->BootServices->HandleProtocol(
+                Handles[Index],
+                &EfiGraphicsOutputProtocol,
+                (VOID**)&HandleGop) != EFI_SUCCESS ||
+            HandleGop != ConsoleGop)
+        {
+            continue;
+        }
+
+        Status = GlobalSystemTable->BootServices->HandleProtocol(
+                     Handles[Index],
+                     &EfiGraphicsOutputTransformProtocol,
+                     (VOID**)&Transform);
+        break;
+    }
+    GlobalSystemTable->BootServices->FreePool(Handles);
+
+    if ((Status != EFI_SUCCESS) || (Transform == NULL))
+        return (Status == EFI_SUCCESS) ? EFI_NOT_FOUND : Status;
+
+    if ((Transform->Version != EFI_GRAPHICS_OUTPUT_TRANSFORM_VERSION) ||
+        (Transform->Size < sizeof(*Transform)) ||
+        (Transform->Rotation > LoaderFramebufferRotation270) ||
+        (Transform->LogicalWidth == 0) ||
+        (Transform->LogicalHeight == 0) ||
+        (Transform->LinearGop == NULL))
+    {
+        return EFI_INCOMPATIBLE_VERSION;
+    }
+
+    if ((ConsoleGop->Mode == NULL) || (ConsoleGop->Mode->Info == NULL) ||
+        (ConsoleGop->Mode->Info->HorizontalResolution != Transform->LogicalWidth) ||
+        (ConsoleGop->Mode->Info->VerticalResolution != Transform->LogicalHeight))
+    {
+        return EFI_UNSUPPORTED;
+    }
+
+    LinearGop = Transform->LinearGop;
+    if ((LinearGop->Mode == NULL) || (LinearGop->Mode->Info == NULL) ||
+        (LinearGop->Mode->FrameBufferBase == 0) ||
+        (LinearGop->Mode->FrameBufferSize == 0))
+    {
+        return EFI_UNSUPPORTED;
+    }
+
+    LinearInfo = LinearGop->Mode->Info;
+    if (!UefiIsUsableLinearGopMode(LinearInfo) ||
+        !UefiGetGopPixelLayout(LinearInfo, &PixelMasks, &BitsPerPixel))
+    {
+        return EFI_UNSUPPORTED;
+    }
+
+    if ((Transform->Rotation == LoaderFramebufferRotation90) ||
+        (Transform->Rotation == LoaderFramebufferRotation270))
+    {
+        DimensionsMatch =
+            (Transform->LogicalWidth == LinearInfo->VerticalResolution) &&
+            (Transform->LogicalHeight == LinearInfo->HorizontalResolution);
+    }
+    else
+    {
+        DimensionsMatch =
+            (Transform->LogicalWidth == LinearInfo->HorizontalResolution) &&
+            (Transform->LogicalHeight == LinearInfo->VerticalResolution);
+    }
+    if (!DimensionsMatch)
+        return EFI_UNSUPPORTED;
+
+    MinimumSize = (ULONGLONG)LinearInfo->VerticalResolution *
+                  LinearInfo->PixelsPerScanLine * ((BitsPerPixel + 7) / 8);
+    if ((MinimumSize > LinearGop->Mode->FrameBufferSize) ||
+        (LinearGop->Mode->FrameBufferSize > MAXULONG) ||
+        ((EFI_PHYSICAL_ADDRESS)(ULONG_PTR)LinearGop->Mode->FrameBufferBase !=
+            LinearGop->Mode->FrameBufferBase))
+    {
+        return EFI_BAD_BUFFER_SIZE;
+    }
+
+    RtlZeroMemory(&UefiHandoffFrameBufferData,
+                  sizeof(UefiHandoffFrameBufferData));
+    UefiHandoffFrameBufferData.Version = 1;
+    UefiHandoffFrameBufferData.Revision = 5;
+    UefiHandoffFrameBufferData.FrameBufferOffset = 0;
+    UefiHandoffFrameBufferData.ScreenWidth = LinearInfo->HorizontalResolution;
+    UefiHandoffFrameBufferData.ScreenHeight = LinearInfo->VerticalResolution;
+    UefiHandoffFrameBufferData.PixelsPerScanLine = LinearInfo->PixelsPerScanLine;
+    UefiHandoffFrameBufferData.BitsPerPixel = BitsPerPixel;
+    UefiHandoffFrameBufferData.PixelMasks.RedMask = PixelMasks->RedMask;
+    UefiHandoffFrameBufferData.PixelMasks.GreenMask = PixelMasks->GreenMask;
+    UefiHandoffFrameBufferData.PixelMasks.BlueMask = PixelMasks->BlueMask;
+    UefiHandoffFrameBufferData.PixelMasks.ReservedMask = PixelMasks->ReservedMask;
+    UefiHandoffFrameBufferData.Dpi = LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT;
+    UefiHandoffFrameBufferData.TransformFlags =
+        (Transform->Flags & EFI_GRAPHICS_OUTPUT_TRANSFORM_FIXED_SCANOUT) ?
+            LOADER_PARAMETER_FRAMEBUFFER_FLAG_FIXED_SCANOUT : 0;
+    UefiHandoffFrameBufferData.Rotation = Transform->Rotation;
+    UefiHandoffFrameBufferData.LogicalWidth = Transform->LogicalWidth;
+    UefiHandoffFrameBufferData.LogicalHeight = Transform->LogicalHeight;
+
+    VramAddress = (ULONG_PTR)LinearGop->Mode->FrameBufferBase;
+    VramSize = (ULONG)LinearGop->Mode->FrameBufferSize;
+    FrameBufferData = &UefiHandoffFrameBufferData;
+    return EFI_SUCCESS;
 }
 
 static
@@ -961,6 +1206,8 @@ UefiInitializeGop(VOID)
         return EFI_UNSUPPORTED;
     }
 
+    UefiLoadEdidForGop(gop);
+
     if (UefiGetEdidPreferredResolution(&PreferredWidth, &PreferredHeight))
     {
         TRACE("EDID preferred resolution is %ux%u\n",
@@ -1004,45 +1251,16 @@ UefiInitializeGop(VOID)
 
     /* Physical format of the pixel */
     PixelFormat = gop->Mode->Info->PixelFormat;
-    switch (PixelFormat)
+    if (PixelFormat == PixelBltOnly)
     {
-        case PixelRedGreenBlueReserved8BitPerColor:
-        case PixelBlueGreenRedReserved8BitPerColor:
-        {
-            pPixelBitmask = &EfiPixelMasks[PixelFormat];
-            BitsPerPixel = RTL_BITS_OF(EFI_GRAPHICS_OUTPUT_BLT_PIXEL);
-            break;
-        }
-
-        case PixelBitMask:
-        {
-            /*
-             * When the GOP pixel format is given by PixelBitMask, the pixel
-             * element size _may be_ different from 4 bytes.
-             * See UEFI Spec Rev.2.10 Section 12.9 "Graphics Output Protocol":
-             * example code "GetPixelElementSize()" function.
-             */
-            pPixelBitmask = &gop->Mode->Info->PixelInformation;
-            BitsPerPixel =
-                PixelBitmasksToBpp(pPixelBitmask->RedMask,
-                                   pPixelBitmask->GreenMask,
-                                   pPixelBitmask->BlueMask,
-                                   pPixelBitmask->ReservedMask);
-            break;
-        }
-
-        case PixelBltOnly:
-        {
-            return UefiInitializeBltOnlyGop(gop);
-        }
-
-        default:
-        {
-            ERR("Unsupported UEFI GOP format %lu\n", PixelFormat);
-            pPixelBitmask = NULL;
-            BitsPerPixel = 0;
-            break;
-        }
+        return UefiInitializeBltOnlyGop(gop);
+    }
+    if (!UefiGetGopPixelLayout(gop->Mode->Info,
+                               &pPixelBitmask,
+                               &BitsPerPixel))
+    {
+        ERR("Unsupported UEFI GOP format %lu\n", PixelFormat);
+        return EFI_UNSUPPORTED;
     }
 
     VramAddress = (ULONG_PTR)gop->Mode->FrameBufferBase;
@@ -1150,6 +1368,17 @@ UefiInitializeVideo(VOID)
     /* We didn't find GOP or Apple Graphics Info, probably a UGA-only system */
     ERR("Cannot find framebuffer!\n");
     return Status;
+}
+
+BOOLEAN
+UefiVideoGetEdid(
+    _Out_writes_bytes_(EDID_BLOCK_SIZE) PUCHAR Edid)
+{
+    if ((Edid == NULL) || !UefiActiveEdidValid)
+        return FALSE;
+
+    RtlCopyMemory(Edid, UefiActiveEdid, sizeof(UefiActiveEdid));
+    return TRUE;
 }
 
 VOID

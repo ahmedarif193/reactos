@@ -1,6 +1,8 @@
 #ifndef _ARC_
 #define _ARC_
 
+#include <reactos/loader_framebuffer.h>
+
 typedef ULONG ARC_STATUS;
 
 /* Avoid conflicts with errno.h */
@@ -236,25 +238,6 @@ typedef struct _FILEINFORMATION
     UCHAR Attributes;
     CHAR FileName[32];
 } FILEINFORMATION;
-
-typedef struct _LOADER_PARAMETER_FRAMEBUFFER
-{
-    LARGE_INTEGER FrameBufferBase;
-    ULONG FrameBufferSize;
-    ULONG HorizontalResolution;
-    ULONG VerticalResolution;
-    ULONG PixelsPerScanLine;
-    ULONG PixelFormat;
-    ULONG RedMask;
-    ULONG GreenMask;
-    ULONG BlueMask;
-    ULONG Reserved;
-    ULONG Dpi;
-} LOADER_PARAMETER_FRAMEBUFFER, *PLOADER_PARAMETER_FRAMEBUFFER;
-
-#define LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT 96
-#define LOADER_PARAMETER_FRAMEBUFFER_DPI_MIN     96
-#define LOADER_PARAMETER_FRAMEBUFFER_DPI_MAX     480
 
 typedef struct _LOADER_PARAMETER_BGRT
 {
@@ -739,6 +722,7 @@ typedef struct _LOADER_PARAMETER_EXTENSION
      * Windows-compatible offsets for WINBLUE+ and WIN10+ fields above. */
     LOADER_PARAMETER_FRAMEBUFFER GopFramebuffer;
     LOADER_PARAMETER_BGRT BgrtInfo;
+    LOADER_PARAMETER_FRAMEBUFFER_TRANSFORM GopFramebufferTransform;
 #endif
 } LOADER_PARAMETER_EXTENSION, *PLOADER_PARAMETER_EXTENSION;
 
