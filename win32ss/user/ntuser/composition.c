@@ -2067,15 +2067,15 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         BOOL BackingChanged = FALSE;
         BOOL BackingDeferred = FALSE;
         BOOL PaintDeferred = FALSE;
-        BOOL NativeDxPublished;
-        BOOL NativeDxPending;
+        BOOL DxPublished;
+        BOOL DxPending;
 
         if (e == NULL || e->Redirect.cx <= 0 || e->Redirect.cy <= 0)
             continue;
-        NativeDxPublished = e->Redirect.DxInfo.Version == DWM_DX_SURFACE_INFO_VERSION_GPU &&
-                            e->Redirect.DxGlobalShare != 0 && e->Redirect.DxPublishedUpdateId != 0;
-        NativeDxPending = NativeDxPublished &&
-                          e->Redirect.DxPublishedUpdateId > e->Redirect.DxConsumedUpdateId;
+        DxPublished = e->Redirect.DxGlobalShare != 0 &&
+                      e->Redirect.DxPublishedUpdateId != 0;
+        DxPending = DxPublished &&
+                    e->Redirect.DxPublishedUpdateId > e->Redirect.DxConsumedUpdateId;
 
         /* Sync a window's BACK->FRONT only when it is not mid-paint. The
          * device lock is acquired on the first actual copy and then held for
@@ -2173,12 +2173,13 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             }
         }
 
-        /* A native client present cannot wait for its owner to dispatch a
+        /* A GPU client present cannot wait for its owner to dispatch a
          * pending GDI paint: that thread may be inside Present waiting for
          * our consumed event. Keep the last complete GDI FRONT, or expose
          * BaseUpdateId 0 until one exists, and publish the completed GPU layer
-         * independently. Never copy an unfinished GDI BACK for this case. */
-        if ((!e->Redirect.FrontValid && !NativeDxPublished) || e->Redirect.psurfFront == NULL ||
+         * independently. This applies to both linear OpenGL publications and
+         * opaque native textures. Never copy an unfinished GDI BACK here. */
+        if ((!e->Redirect.FrontValid && !DxPublished) || e->Redirect.psurfFront == NULL ||
             (e->Redirect.FrontSection == NULL &&
              e->Redirect.FrontGlobalShare == 0))
         {
@@ -2196,7 +2197,7 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         /* A GDI write can arrive after this entry's dirty hint was read on
          * the previous pull. Its pending bounds survive independently of the
          * metadata damage flag; publishing them must always wake a redraw. */
-        wasDamaged |= BackingChanged || NativeDxPending;
+        wasDamaged |= BackingChanged || DxPending;
         if (wasDamaged)
             ReadyDamage = TRUE;
         if (PaintDeferred)
@@ -2401,8 +2402,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             /* BACK->FRONT already records the exact pixels published. A small
              * GDI update must not invalidate its entire top-level window.
              * Position/metadata damage is accumulated independently above;
-             * native DX publications still cover the complete client layer. */
-            if (BackingChanged && !NativeDxPending)
+             * DX publications still cover the complete client layer. */
+            if (BackingChanged && !DxPending)
             {
                 Bounds = e->Redirect.BaseDirtyRect;
                 RECTL_vOffsetRect(&Bounds, w->rcWindow.left, w->rcWindow.top);
