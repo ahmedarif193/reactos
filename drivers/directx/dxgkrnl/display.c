@@ -290,6 +290,94 @@ DxgkpGetTargetModeDimensions(
     }
 }
 
+static BOOLEAN
+DxgkpVidPnPathScalingIsPinned(
+    _In_ CONST D3DKMDT_VIDPN_PRESENT_PATH *Path)
+{
+    switch (Path->ContentTransformation.Scaling)
+    {
+        case D3DKMDT_VPPS_IDENTITY:
+        case D3DKMDT_VPPS_CENTERED:
+        case D3DKMDT_VPPS_STRETCHED:
+        case D3DKMDT_VPPS_ASPECTRATIOCENTEREDMAX:
+        case D3DKMDT_VPPS_CUSTOM:
+            return TRUE;
+
+        default:
+            return FALSE;
+    }
+}
+
+static BOOLEAN
+DxgkpVidPnPathRotationIsPinned(
+    _In_ CONST D3DKMDT_VIDPN_PRESENT_PATH *Path)
+{
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3_PATH_INDEPENDENT_ROTATION)
+    return Path->ContentTransformation.Rotation >= D3DKMDT_VPPR_IDENTITY &&
+           Path->ContentTransformation.Rotation <= D3DKMDT_VPPR_ROTATE270_OFFSET270;
+#else
+    switch (Path->ContentTransformation.Rotation)
+    {
+        case D3DKMDT_VPPR_IDENTITY:
+        case D3DKMDT_VPPR_ROTATE90:
+        case D3DKMDT_VPPR_ROTATE180:
+        case D3DKMDT_VPPR_ROTATE270:
+            return TRUE;
+
+        default:
+            return FALSE;
+    }
+#endif
+}
+
+/* Convert the capabilities reported by cofunctional enumeration into the
+ * concrete transformations required by a functional VidPN. */
+static NTSTATUS
+DxgkpPinSupportedPathTransformations(
+    _Inout_ PDXGKP_VIDPN VidPn)
+{
+    SIZE_T Index;
+
+    for (Index = 0; Index < VidPn->NumPaths; ++Index)
+    {
+        D3DKMDT_VIDPN_PRESENT_PATH *Path = &VidPn->Paths[Index];
+
+        if (!DxgkpVidPnPathScalingIsPinned(Path))
+        {
+            if (Path->ContentTransformation.ScalingSupport.Identity)
+                Path->ContentTransformation.Scaling = D3DKMDT_VPPS_IDENTITY;
+            else if (Path->ContentTransformation.ScalingSupport.Centered)
+                Path->ContentTransformation.Scaling = D3DKMDT_VPPS_CENTERED;
+            else if (Path->ContentTransformation.ScalingSupport.Stretched)
+                Path->ContentTransformation.Scaling = D3DKMDT_VPPS_STRETCHED;
+            else if (Path->ContentTransformation.ScalingSupport.AspectRatioCenteredMax)
+                Path->ContentTransformation.Scaling =
+                    D3DKMDT_VPPS_ASPECTRATIOCENTEREDMAX;
+            else if (Path->ContentTransformation.ScalingSupport.Custom)
+                Path->ContentTransformation.Scaling = D3DKMDT_VPPS_CUSTOM;
+            else
+                return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+        }
+
+        if (!DxgkpVidPnPathRotationIsPinned(Path))
+        {
+            if (Path->ContentTransformation.RotationSupport.Identity)
+                Path->ContentTransformation.Rotation = D3DKMDT_VPPR_IDENTITY;
+            else if (Path->ContentTransformation.RotationSupport.Rotate90)
+                Path->ContentTransformation.Rotation = D3DKMDT_VPPR_ROTATE90;
+            else if (Path->ContentTransformation.RotationSupport.Rotate180)
+                Path->ContentTransformation.Rotation = D3DKMDT_VPPR_ROTATE180;
+            else if (Path->ContentTransformation.RotationSupport.Rotate270)
+                Path->ContentTransformation.Rotation = D3DKMDT_VPPR_ROTATE270;
+            else
+                return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+        }
+
+    }
+
+    return STATUS_SUCCESS;
+}
+
 static VOID
 DxgkpSnapshotCommittedDisplayState(
     _In_opt_ PDXGKRNL_ADAPTER Adapter,
@@ -551,6 +639,7 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
         {
             PDXGKP_VIDPN_TARGET_MODESET TgtSet = VidPn->TargetModeSets[ActiveTargetIndex];
             BOOLEAN SourcePinned;
+            BOOLEAN TransformationsPinned;
 
             /*
              * Naming the source pivot is a promise that a source mode is
@@ -561,10 +650,15 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
              * able to scan out at all -- which is how a 720x480 Raspberry Pi 3
              * ended up being offered an 800x600 source and refusing the VidPN.
              */
-            SourcePinned = DxgkVidPnEnsurePinnedSourceMode(VidPn,
-                                                           ActiveSourceId,
-                                                           Adapter->PostDisplayWidth,
-                                                           Adapter->PostDisplayHeight);
+            TransformationsPinned =
+                DxgkpVidPnPathScalingIsPinned(&VidPn->Paths[0]) &&
+                DxgkpVidPnPathRotationIsPinned(&VidPn->Paths[0]);
+            SourcePinned =
+                TransformationsPinned &&
+                DxgkVidPnEnsurePinnedSourceMode(VidPn,
+                                                ActiveSourceId,
+                                                Adapter->PostDisplayWidth,
+                                                Adapter->PostDisplayHeight);
 
             DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: clearing %Iu synthetic target "
                           "modes so the miniport enumerates its own\n", TgtSet->NumModes);
@@ -588,11 +682,14 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
                  * both sets.  The target set is still cleared above, so the
                  * driver answers with its own timings either way.
                  */
-                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: no source mode to pin "
-                             "(POST size %ux%u); asking for cofunctional modality "
-                             "without a pivot\n",
-                             Adapter->PostDisplayWidth,
-                             Adapter->PostDisplayHeight);
+                if (TransformationsPinned)
+                {
+                    DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: no source mode to pin "
+                                 "(POST size %ux%u); asking for cofunctional modality "
+                                 "without a pivot\n",
+                                 Adapter->PostDisplayWidth,
+                                 Adapter->PostDisplayHeight);
+                }
             }
         }
 
@@ -624,6 +721,18 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
                 DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: EnumCofuncModality failed 0x%08lX\n", Status);
                 goto Cleanup;
             }
+        }
+    }
+
+    if (!TopologyEmpty && FullMiniportNegotiatesModes)
+    {
+        Status = DxgkpPinSupportedPathTransformations(VidPn);
+        if (!NT_SUCCESS(Status))
+        {
+            DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: no supported path "
+                         "transformation could be pinned (0x%08lX)\n",
+                         Status);
+            goto Cleanup;
         }
     }
 
@@ -757,6 +866,20 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
         /* A source used as the cofunctional pivot must keep its pinned mode. */
         DesiredWidth = TargetWidth;
         DesiredHeight = TargetHeight;
+        {
+            D3DKMDT_VIDPN_PRESENT_PATH_ROTATION Rotation =
+                VidPn->Paths[0].ContentTransformation.Rotation;
+
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM1_3_PATH_INDEPENDENT_ROTATION)
+            Rotation = D3DKMDT_VPPR_GET_CONTENT_ROTATION(Rotation);
+#endif
+            if (Rotation == D3DKMDT_VPPR_ROTATE90 ||
+                Rotation == D3DKMDT_VPPR_ROTATE270)
+            {
+                DesiredWidth = TargetHeight;
+                DesiredHeight = TargetWidth;
+            }
+        }
         if (FullMiniportNegotiatesModes &&
             VidPn->SourceModeSets[ActiveSourceId] != NULL)
         {
@@ -1004,12 +1127,13 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
                              "using first (%ux%u)\n", SourceWidth, SourceHeight);
             }
 
-            if (TargetWidth != 0 && TargetHeight != 0 &&
-                (TargetWidth != SourceWidth || TargetHeight != SourceHeight))
+            if (DesiredWidth != 0 && DesiredHeight != 0 &&
+                (DesiredWidth != SourceWidth || DesiredHeight != SourceHeight))
             {
-                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: target mode %ux%u differs from "
-                             "source mode %ux%u; using source mode for commit\n",
-                             TargetWidth, TargetHeight, SourceWidth, SourceHeight);
+                DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: path requires source mode "
+                             "%ux%u but selected %ux%u; using selected source mode "
+                             "for commit\n",
+                             DesiredWidth, DesiredHeight, SourceWidth, SourceHeight);
             }
         }
 
