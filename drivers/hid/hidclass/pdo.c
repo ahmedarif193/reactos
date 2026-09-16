@@ -102,6 +102,7 @@ HidClassPDO_HandleQueryDeviceId(
     LPWSTR Buffer;
     LPWSTR NewBuffer, Ptr;
     ULONG Length;
+    PHIDCLASS_PDO_DEVICE_EXTENSION PDODeviceExtension = DeviceObject->DeviceExtension;
 
     //
     // copy current stack location
@@ -153,6 +154,14 @@ HidClassPDO_HandleQueryDeviceId(
         // append result
         //
         wcscat(NewBuffer, Ptr + 1);
+    }
+
+    Ptr = wcsstr(NewBuffer, L"&IG_");
+    if (Ptr && PDODeviceExtension->CollectionNumber != PDODeviceExtension->Common.DeviceDescription.CollectionDesc[0].CollectionNumber)
+    {
+        Ptr[1] = L'X';
+        Ptr[2] = L'I';
+        PDODeviceExtension->IsXInput = TRUE;
     }
 
     //
@@ -589,6 +598,14 @@ HidClassPDO_PnP(
             IoStack->Parameters.DeviceCapabilities.Capabilities->SilentInstall = TRUE;
             IoStack->Parameters.DeviceCapabilities.Capabilities->SurpriseRemovalOK = TRUE;
 
+            /*
+             * HIDCLASS serves collection I/O itself. Collections installed
+             * with input.inf's HID_Raw_Inst have no function-driver service;
+             * PnP must still start their PDOs to publish the HID interfaces.
+             * Do not inherit the transport's requirement for a driver here.
+             */
+            IoStack->Parameters.DeviceCapabilities.Capabilities->RawDeviceOK = TRUE;
+
             Status = STATUS_SUCCESS;
             break;
         }
@@ -677,7 +694,7 @@ HidClassPDO_PnP(
             // now register the device interface
             //
             Status = IoRegisterDeviceInterface(DeviceObject,
-                                               &GUID_DEVINTERFACE_HID,
+                                               PDODeviceExtension->IsXInput ? &GUID_DEVINTERFACE_WINEXINPUT : &GUID_DEVINTERFACE_HID,
                                                NULL,
                                                &PDODeviceExtension->DeviceInterface);
             DPRINT("[HIDCLASS] IoRegisterDeviceInterfaceState Status %x\n", Status);
@@ -690,10 +707,6 @@ HidClassPDO_PnP(
                 DPRINT("[HIDCLASS] IoSetDeviceInterFaceState %x\n", Status);
             }
 
-            //
-            // done
-            //
-            Status = STATUS_SUCCESS;
             break;
         }
         case IRP_MN_REMOVE_DEVICE:

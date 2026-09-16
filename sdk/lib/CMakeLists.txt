@@ -40,6 +40,7 @@ add_subdirectory(epsapi)
 add_subdirectory(evtlib)
 add_subdirectory(fast486)
 add_subdirectory(fslib)
+add_subdirectory(gip)
 
 if(STACK_PROTECTOR)
     add_subdirectory(gcc_ssp)

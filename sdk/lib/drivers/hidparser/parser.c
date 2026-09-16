@@ -479,7 +479,7 @@ HidParser_SignRange(
             Minimum |= Mask;
             if (Maximum & Mask)
                 Maximum |= Mask;
-            return;
+            break;
         }
 
         Mask >>= 8;

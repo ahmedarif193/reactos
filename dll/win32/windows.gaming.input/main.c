@@ -77,27 +77,18 @@ static LRESULT CALLBACK devnotify_wndproc( HWND hwnd, UINT msg, WPARAM wparam, L
     return DefWindowProcW( hwnd, msg, wparam, lparam );
 }
 
-static void initialize_providers( void )
+static void initialize_provider_class( const GUID *guid )
 {
     char buffer[offsetof( SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath[MAX_PATH] )];
     SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail = (void *)buffer;
     SP_DEVICE_INTERFACE_DATA iface = {sizeof(iface)};
-    GUID guid = GUID_DEVINTERFACE_WINEXINPUT;
     HDEVINFO set;
     DWORD i = 0;
 
-    set = SetupDiGetClassDevsW( NULL, NULL, NULL, DIGCF_ALLCLASSES | DIGCF_DEVICEINTERFACE | DIGCF_PRESENT );
+    set = SetupDiGetClassDevsW( guid, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT );
+    if (set == INVALID_HANDLE_VALUE) return;
 
-    while (SetupDiEnumDeviceInterfaces( set, NULL, &guid, i++, &iface ))
-    {
-        detail->cbSize = sizeof(*detail);
-        if (!SetupDiGetDeviceInterfaceDetailW( set, &iface, detail, sizeof(buffer), NULL, NULL )) continue;
-        provider_create( detail->DevicePath );
-    }
-
-    HidD_GetHidGuid( &guid );
-
-    while (SetupDiEnumDeviceInterfaces( set, NULL, &guid, i++, &iface ))
+    while (SetupDiEnumDeviceInterfaces( set, NULL, guid, i++, &iface ))
     {
         detail->cbSize = sizeof(*detail);
         if (!SetupDiGetDeviceInterfaceDetailW( set, &iface, detail, sizeof(buffer), NULL, NULL )) continue;
@@ -105,6 +96,18 @@ static void initialize_providers( void )
     }
 
     SetupDiDestroyDeviceInfoList( set );
+}
+
+static void initialize_providers( void )
+{
+    GUID guid = GUID_DEVINTERFACE_WINEXINPUT;
+
+    /* Interface member indices are scoped to a device-information set and
+     * interface class. Enumerate XInput and ordinary HID through independent
+     * sets so one class cannot exhaust or skip the other. */
+    initialize_provider_class( &guid );
+    HidD_GetHidGuid( &guid );
+    initialize_provider_class( &guid );
 }
 
 static DWORD WINAPI monitor_thread_proc( void *param )

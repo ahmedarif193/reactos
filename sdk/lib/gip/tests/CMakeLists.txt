@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Standalone native tests; no ReactOS boot or controller hardware required.
+cmake_minimum_required(VERSION 3.16)
+project(gip_tests C)
+enable_testing()
+add_executable(gip_tests protocol.c ../gip.c)
+target_include_directories(gip_tests PRIVATE ../../../include/reactos/libs/gip)
+set_target_properties(gip_tests PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED YES)
+if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(gip_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+endif()
+option(GIP_SANITIZE "Run protocol tests with address and undefined-behavior sanitizers" OFF)
+if(GIP_SANITIZE AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(gip_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(gip_tests PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME gip_protocol COMMAND gip_tests)
+set_tests_properties(gip_protocol PROPERTIES TIMEOUT 30)
