@@ -17,10 +17,31 @@ Abstract:
 //
 #define PUT_GUIDS_HERE
 
+#ifdef __REACTOS__
+#include <ntddk.h>
+#endif
 #include <rpiwav.h>
 
 #include "simple.h"
 #include "minipairs.h"
+
+#ifdef __REACTOS__
+#define RPIWAV_ACPI_SIGNATURE(a, b, c, d) \
+    ((ULONG)(a) | ((ULONG)(b) << 8) | ((ULONG)(c) << 16) | ((ULONG)(d) << 24))
+
+#define RPIWAV_ACPI_FADT RPIWAV_ACPI_SIGNATURE('F', 'A', 'C', 'P')
+
+static BOOLEAN
+RpiWavIsRpi3Platform()
+{
+    if (HalGetCachedAcpiTable == NULL)
+    {
+        return FALSE;
+    }
+
+    return HalGetCachedAcpiTable(RPIWAV_ACPI_FADT, "BC2836", "RPI3") != NULL;
+}
+#endif
 
 
 typedef void (*fnPcDriverUnload) (PDRIVER_OBJECT);
@@ -138,6 +159,17 @@ Return Value:
     WDF_DRIVER_CONFIG           config;
 
     DPF(D_TERSE, ("[DriverEntry]"));
+
+#ifdef __REACTOS__
+    /* The combined Raspberry Pi image also contains the Pi 3 root devnode.
+     * Do not expose its PWM endpoint on systems such as the Pi 5, where the
+     * backing hardware is absent and every stream open would fail. */
+    if (!RpiWavIsRpi3Platform())
+    {
+        DPF(D_TERSE, ("[DriverEntry] not a Raspberry Pi 3; declining device"));
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+#endif
 
     WDF_DRIVER_CONFIG_INIT(&config, WDF_NO_EVENT_CALLBACK);
     //
