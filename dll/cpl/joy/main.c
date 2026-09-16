@@ -232,8 +232,14 @@ static void refresh_joystick_list( HWND hwnd )
         if (FAILED(IDirectInputDevice8_GetDeviceInfo( entry->device, &info ))) continue;
         if (FAILED(IDirectInputDevice8_GetProperty( entry->device, DIPROP_GUIDANDPATH, &prop.diph ))) continue;
 
-        if (wcsstr( prop.wszPath, L"&ig_" )) SendDlgItemMessageW( hwnd, IDC_XI_ENABLED_LIST, LB_ADDSTRING, 0, (LPARAM)info.tszInstanceName );
-        else SendDlgItemMessageW( hwnd, IDC_DI_ENABLED_LIST, LB_ADDSTRING, 0, (LPARAM)info.tszInstanceName );
+        /* Every entry here was enumerated by DirectInput. An IG/XI path also
+         * identifies an XInput-capable device, so expose that additional
+         * capability without removing it from the DirectInput list. */
+        SendDlgItemMessageW( hwnd, IDC_DI_ENABLED_LIST, LB_ADDSTRING, 0,
+                             (LPARAM)info.tszInstanceName );
+        if (wcsstr( prop.wszPath, L"&ig_" ) || wcsstr( prop.wszPath, L"&xi_" ))
+            SendDlgItemMessageW( hwnd, IDC_XI_ENABLED_LIST, LB_ADDSTRING, 0,
+                                 (LPARAM)info.tszInstanceName );
     }
 
     /* Search for disabled joysticks */

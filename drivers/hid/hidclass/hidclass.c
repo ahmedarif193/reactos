@@ -254,7 +254,12 @@ HidClass_CancelPendingReads(
          Entry != &Context->ReadPendingIrpListHead && Index < Count;
          Entry = Entry->Flink)
     {
-        Irps[Index++] = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+        PHIDCLASS_IRP_CONTEXT ReadContext;
+
+        ReadContext = CONTAINING_RECORD(Entry,
+                                        HIDCLASS_IRP_CONTEXT,
+                                        PendingListEntry);
+        Irps[Index++] = ReadContext->ReadIrp;
     }
 
     KeReleaseSpinLock(&Context->Lock, OldLevel);
@@ -594,7 +599,7 @@ HidClass_ReadCompleteIrp(
     //
     // remove from pending list
     //
-    RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+    RemoveEntryList(&IrpContext->PendingListEntry);
 
     //
     // is list empty
@@ -744,6 +749,7 @@ HidClass_BuildIrp(
     // init irp context
     //
     RtlZeroMemory(IrpContext, sizeof(HIDCLASS_IRP_CONTEXT));
+    IrpContext->ReadIrp = Irp;
     IrpContext->OriginalIrp = RequestIrp;
     IrpContext->FileOp = Context;
 
@@ -933,7 +939,8 @@ HidClass_Read(
     //
     // insert irp into pending list
     //
-    InsertTailList(&Context->ReadPendingIrpListHead, &NewIrp->Tail.Overlay.ListEntry);
+    InsertTailList(&Context->ReadPendingIrpListHead,
+                   &NewIrpContext->PendingListEntry);
 
     //
     // set completion routine
@@ -949,7 +956,7 @@ HidClass_Read(
     if (Irp->Cancel)
     {
         IoReleaseCancelSpinLock(CancelIrql);
-        RemoveEntryList(&NewIrp->Tail.Overlay.ListEntry);
+        RemoveEntryList(&NewIrpContext->PendingListEntry);
         KeReleaseSpinLock(&Context->Lock, OldLevel);
 
         HidClass_FreeReadIrp(NewIrp, NewIrpContext);

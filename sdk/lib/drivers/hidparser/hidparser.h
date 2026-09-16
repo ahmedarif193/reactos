@@ -27,6 +27,10 @@ ULONG
 HidParser_GetCollectionContextSize(
     IN PVOID Context);
 
+BOOLEAN
+HidParser_IsCollectionContext(
+    IN PVOID Context);
+
 HIDAPI
 NTSTATUS
 NTAPI

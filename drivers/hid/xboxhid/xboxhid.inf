@@ -1,0 +1,69 @@
+; XBOXHID.INF
+;
+; PROJECT:     ReactOS HID Stack
+; SPDX-License-Identifier: MIT
+; PURPOSE:     Xbox 360 (XUSB) and Xbox One / Series (GIP) USB gamepads installation
+; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif193@gmail.com>
+
+[Version]
+Signature  = "$Windows NT$"
+LayoutFile = layout.inf
+Class      = HIDClass
+ClassGUID  = {745A17A0-74D3-11D0-B6FE-00A0C90F57DA}
+Provider   = %ReactOS%
+DriverVer  = 09/16/2026,1.00
+
+[DestinationDirs]
+DefaultDestDir = 12
+XboxHID_CopyFilesDLL.NT = 11
+
+[Manufacturer]
+%MicrosoftMfg% = MicrosoftMfg
+
+[MicrosoftMfg]
+%Xbox360.DeviceDesc%       = XboxHID_Inst,USB\VID_045E&PID_028E
+%Xbox360.DeviceDesc%       = XboxHID_Inst,USB\VID_045E&PID_028F
+%XboxOne.DeviceDesc%       = XboxHID_Inst,USB\VID_045E&PID_02D1
+%XboxOne.DeviceDesc%       = XboxHID_Inst,USB\VID_045E&PID_02DD
+%XboxElite.DeviceDesc%     = XboxHID_Inst,USB\VID_045E&PID_02E3
+%XboxWireless.DeviceDesc%  = XboxHID_Inst,USB\VID_045E&PID_02EA
+%Xbox360W.DeviceDesc%      = XboxHID_Inst,USB\VID_045E&PID_0719
+%XboxElite2.DeviceDesc%    = XboxHID_Inst,USB\VID_045E&PID_0B00
+%XboxAdaptive.DeviceDesc%  = XboxHID_Inst,USB\VID_045E&PID_0B0A
+%XboxWireless.DeviceDesc%  = XboxHID_Inst,USB\VID_045E&PID_0B12
+%XUSB.DeviceDesc% = XboxHID_Inst,USB\Class_FF&SubClass_5D&Prot_01
+%GIP.DeviceDesc%  = XboxHID_Inst,USB\Class_FF&SubClass_47&Prot_D0
+
+[XboxHID_Inst.NT]
+CopyFiles = XboxHID_CopyFiles.NT, XboxHID_CopyFilesDLL.NT
+
+[XboxHID_CopyFiles.NT]
+xboxhid.sys
+hidclass.sys
+hidparse.sys
+
+[XboxHID_CopyFilesDLL.NT]
+hid.dll
+
+[XboxHID_Inst.NT.Services]
+AddService = xboxhid, 0x00000002, XboxHID_Service_Inst
+
+[XboxHID_Service_Inst]
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\xboxhid.sys
+LoadOrderGroup = Extended Base
+
+[Strings]
+ReactOS          = "ReactOS Project"
+MicrosoftMfg     = "Microsoft"
+XUSB.DeviceDesc  = "Xbox 360 Controller"
+GIP.DeviceDesc   = "Xbox Controller"
+Xbox360.DeviceDesc      = "Xbox 360 Controller"
+Xbox360W.DeviceDesc     = "Xbox 360 Wireless Controller"
+XboxOne.DeviceDesc      = "Xbox One Controller"
+XboxElite.DeviceDesc    = "Xbox Elite Wireless Controller"
+XboxElite2.DeviceDesc   = "Xbox Elite Wireless Controller Series 2"
+XboxAdaptive.DeviceDesc = "Xbox Adaptive Controller"
+XboxWireless.DeviceDesc = "Xbox Wireless Controller"

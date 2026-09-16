@@ -150,13 +150,32 @@ static UCHAR OverflowReportCountDescriptor[] = {
 };
 C_ASSERT(sizeof(OverflowReportCountDescriptor) == 16);
 
+static UCHAR SignedAxisDescriptor[] = {
+    0x05, 0x01,       /* Usage Page (Generic Desktop), */
+    0x09, 0x05,       /* Usage (Game Pad), */
+    0xa1, 0x01,       /* Collection (Application), */
+    0x85, 0x02,       /*   Report ID (2), */
+    0x09, 0x30,       /*   Usage (X), */
+    0x16, 0x00, 0x80, /*   Logical Minimum (-32768), */
+    0x26, 0xff, 0x7f, /*   Logical Maximum (32767), */
+    0x36, 0x00, 0x80, /*   Physical Minimum (-32768), */
+    0x46, 0xff, 0x7f, /*   Physical Maximum (32767), */
+    0x75, 0x10,       /*   Report Size (16), */
+    0x95, 0x01,       /*   Report Count (1), */
+    0x81, 0x02,       /*   Input (Data, Variable, Absolute), */
+    0xc0              /* End Collection */
+};
+C_ASSERT(sizeof(SignedAxisDescriptor) == 29);
+
 static
 VOID
 TestGetCollectionDescription(VOID)
 {
     NTSTATUS Status;
     HIDP_DEVICE_DESC DeviceDescription;
+    HIDP_VALUE_CAPS ValueCaps;
     HIDP_CAPS Caps;
+    USHORT Count;
 
     /* Empty report descriptor */
     RtlFillMemory(&DeviceDescription, sizeof(DeviceDescription), 0x55);
@@ -170,6 +189,34 @@ TestGetCollectionDescription(VOID)
     ok_eq_pointer(DeviceDescription.ReportIDs, NULL);
     ok_eq_ulong(DeviceDescription.ReportIDsLength, 0);
     if (NT_SUCCESS(Status)) HidP_FreeCollectionDescription(&DeviceDescription);
+
+    /* Signed bounds must be extended to LONG before being exposed in value caps. */
+    Status = HidP_GetCollectionDescription(SignedAxisDescriptor,
+                                           sizeof(SignedAxisDescriptor),
+                                           NonPagedPool,
+                                           &DeviceDescription);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(DeviceDescription.CollectionDescLength, 1);
+    if (!skip(NT_SUCCESS(Status) && DeviceDescription.CollectionDescLength >= 1,
+              "Signed-axis descriptor parsing failure\n"))
+    {
+        Count = 1;
+        RtlZeroMemory(&ValueCaps, sizeof(ValueCaps));
+        Status = HidP_GetValueCaps(HidP_Input,
+                                   &ValueCaps,
+                                   &Count,
+                                   DeviceDescription.CollectionDesc[0].PreparsedData);
+        ok_eq_hex(Status, HIDP_STATUS_SUCCESS);
+        ok_eq_uint(Count, 1);
+        if (Status == HIDP_STATUS_SUCCESS && Count == 1)
+        {
+            ok_eq_long(ValueCaps.LogicalMin, -32768);
+            ok_eq_long(ValueCaps.LogicalMax, 32767);
+            ok_eq_long(ValueCaps.PhysicalMin, -32768);
+            ok_eq_long(ValueCaps.PhysicalMax, 32767);
+        }
+        HidP_FreeCollectionDescription(&DeviceDescription);
+    }
 
     /* Sample keyboard report descriptor from the HID spec */
     Status = HidP_GetCollectionDescription(ExampleKeyboardDescriptor,

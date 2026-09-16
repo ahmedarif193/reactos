@@ -424,7 +424,7 @@ HidP_GetParserContext(
     }
     else
     {
-        return PreparsedData;
+        return HidParser_IsCollectionContext(PreparsedData) ? PreparsedData : NULL;
     }
 
     if (ReactOSData->Magic != HIDP_REACTOS_PREPARSED_DATA_MAGIC ||
@@ -433,7 +433,8 @@ HidP_GetParserContext(
         return NULL;
     }
 
-    return (PUCHAR)PreparsedData + ReactOSData->NativeOffset;
+    PreparsedData = (PHIDP_PREPARSED_DATA)((PUCHAR)PreparsedData + ReactOSData->NativeOffset);
+    return HidParser_IsCollectionContext(PreparsedData) ? PreparsedData : NULL;
 }
 
 VOID
@@ -703,14 +704,6 @@ HidP_GetUsageValue(
     if (!PreparsedData)
         return HIDP_STATUS_INVALID_PREPARSED_DATA;
 
-    //
-    // sanity check
-    //
-    ASSERT(ReportType == HidP_Input || ReportType == HidP_Output || ReportType == HidP_Feature);
-
-    //
-    // get scaled usage value
-    //
     return HidParser_GetUsageValue(PreparsedData, ReportType, UsagePage, LinkCollection, Usage, UsageValue, Report, ReportLength);
 }
 
@@ -958,9 +951,20 @@ HidP_SetUsageValue(
     IN OUT PCHAR  Report,
     IN ULONG  ReportLength)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    PVOID ParserContext;
+
+    ParserContext = HidP_GetParserContext(PreparsedData);
+    if (!ParserContext)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    return HidParser_SetUsageValue(ParserContext,
+                                   ReportType,
+                                   UsagePage,
+                                   LinkCollection,
+                                   Usage,
+                                   UsageValue,
+                                   Report,
+                                   ReportLength);
 }
 
 HIDAPI
@@ -1019,9 +1023,17 @@ HidP_InitializeReportForID(
     IN OUT PCHAR  Report,
     IN ULONG  ReportLength)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    PVOID ParserContext;
+
+    ParserContext = HidP_GetParserContext(PreparsedData);
+    if (!ParserContext)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    return HidParser_InitializeReportForID(ParserContext,
+                                           ReportType,
+                                           ReportID,
+                                           Report,
+                                           ReportLength);
 }
 
 #undef HidP_GetValueCaps

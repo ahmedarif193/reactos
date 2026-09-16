@@ -11,6 +11,8 @@
 
 #define HIDCLASS_TAG 'CdiH'
 
+DEFINE_GUID(GUID_DEVINTERFACE_WINEXINPUT, 0x6c53d5fd, 0x6480, 0x440f, 0xb6, 0x18, 0x47, 0x67, 0x50, 0xc5, 0xe1, 0xa6);
+
 typedef struct
 {
     PDRIVER_OBJECT DriverObject;
@@ -103,6 +105,8 @@ typedef struct
     //
     UNICODE_STRING DeviceInterface;
 
+    BOOLEAN IsXInput;
+
     //
     // FDO device object
     //
@@ -151,6 +155,19 @@ typedef struct __HIDCLASS_FILEOP_CONTEXT__
 
 typedef struct
 {
+    //
+    // class-created request sent to the HID minidriver
+    //
+    PIRP ReadIrp;
+
+    //
+    // private link for the class driver's pending-read queue.  The IRP's
+    // Tail.Overlay.ListEntry belongs to the driver currently holding the IRP
+    // and may therefore be used by the minidriver while the request is down
+    // the stack.
+    //
+    LIST_ENTRY PendingListEntry;
+
     //
     // original request
     //

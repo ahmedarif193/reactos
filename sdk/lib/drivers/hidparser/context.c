@@ -15,12 +15,15 @@
 
 typedef struct
 {
+    ULONG Magic;
     ULONG Size;
     union
     {
         UCHAR RawData[1];
     };
 }HID_COLLECTION_CONTEXT, *PHID_COLLECTION_CONTEXT;
+
+#define HID_COLLECTION_CONTEXT_MAGIC 'CtxH'
 
 static
 BOOLEAN
@@ -31,7 +34,9 @@ HidParser_IsRawRangeValid(
 {
     ULONG RawDataSize;
 
-    if (!CollectionContext || CollectionContext->Size < sizeof(HID_COLLECTION_CONTEXT))
+    if (!CollectionContext ||
+        CollectionContext->Magic != HID_COLLECTION_CONTEXT_MAGIC ||
+        CollectionContext->Size < sizeof(HID_COLLECTION_CONTEXT))
         return FALSE;
 
     RawDataSize = CollectionContext->Size - sizeof(HID_COLLECTION_CONTEXT);
@@ -297,6 +302,7 @@ HidParser_BuildCollectionContext(
         return HIDP_STATUS_INTERNAL_ERROR;
 
     CollectionContext = (PHID_COLLECTION_CONTEXT)Context;
+    CollectionContext->Magic = HID_COLLECTION_CONTEXT_MAGIC;
     CollectionContext->Size = ContextSize;
 
     //
@@ -327,7 +333,9 @@ HidParser_GetCollectionContextSize(
 {
     PHID_COLLECTION_CONTEXT CollectionContext = Context;
 
-    if (!CollectionContext || CollectionContext->Size < sizeof(HID_COLLECTION_CONTEXT))
+    if (!CollectionContext ||
+        CollectionContext->Magic != HID_COLLECTION_CONTEXT_MAGIC ||
+        CollectionContext->Size < sizeof(HID_COLLECTION_CONTEXT))
         return 0;
 
     return CollectionContext->Size;
@@ -396,11 +404,12 @@ HidParser_GetReportInCollection(
     IN UCHAR ReportType)
 {
     PHID_COLLECTION_CONTEXT CollectionContext = (PHID_COLLECTION_CONTEXT)Context;
+    PHID_COLLECTION Collection;
 
-    //
-    // done
-    //
-    return HidParser_SearchReportInCollection(CollectionContext, (PHID_COLLECTION)&CollectionContext->RawData, ReportType);
+    if (!HidParser_GetCollectionAtOffset(CollectionContext, 0, &Collection))
+        return NULL;
+
+    return HidParser_SearchReportInCollection(CollectionContext, Collection, ReportType);
 }
 
 ULONG
@@ -631,11 +640,19 @@ HidParser_GetCollectionFromContext(
     IN PVOID Context)
 {
     PHID_COLLECTION_CONTEXT CollectionContext = (PHID_COLLECTION_CONTEXT)Context;
+    PHID_COLLECTION Collection;
 
-    //
-    // return root collection
-    //
-    return (PHID_COLLECTION)CollectionContext->RawData;
+    if (!HidParser_GetCollectionAtOffset(CollectionContext, 0, &Collection))
+        return NULL;
+
+    return Collection;
+}
+
+BOOLEAN
+HidParser_IsCollectionContext(
+    IN PVOID Context)
+{
+    return HidParser_GetCollectionFromContext(Context) != NULL;
 }
 
 static
