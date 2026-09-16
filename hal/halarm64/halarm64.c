@@ -6473,6 +6473,20 @@ HalQueryDisplayParameters(
 }
 
 #define HAL_ARM64_RTC_EARLIEST_SECONDS 1767225600UL
+#define HAL_ARM64_PL031_PHYSICAL_ADDRESS 0x09010000ULL
+
+static
+BOOLEAN
+HalpArm64HasQemuPl031(VOID)
+{
+    /*
+     * 0x09010000 is the PL031 address on QEMU's "virt" machine, but it is
+     * ordinary RAM on systems such as Raspberry Pi.  Only touch it after a
+     * positive match for the QEMU FADT; probing this address on an arbitrary
+     * ARM64 platform can turn RAM contents into a bogus wall clock.
+     */
+    return HaliGetCachedAcpiTable(FADT_SIGNATURE, "BOCHS", "BXPC") != NULL;
+}
 
 BOOLEAN
 NTAPI
@@ -6480,24 +6494,28 @@ HalQueryRealTimeClock(
     _Inout_ PTIME_FIELDS TimeFields)
 {
     /*
-     * TODO: The PL031 RTC base is hardcoded to the QEMU 'virt' machine address.
-     * ARM64 ACPI has no standard table describing the PL031 (the FADT carries no
-     * RTC IO ports for ARM), so there is currently no ACPI source to derive this
-     * from. When an ACPI/_HID (ARMH0011) device enumeration path becomes
-     * available, resolve the base from there instead of this literal. This is
-     * not a boot-critical path (RTC read only); the per-call MmMapIoSpace is
-     * retained intentionally.
+     * ARM64 ACPI has no standard table describing the PL031 (the FADT carries
+     * no RTC I/O ports for ARM), so QEMU's fixed address is used only after its
+     * FADT identifies the platform. Resolve the base from an ARMH0011 device
+     * once the HAL has an ACPI device-enumeration path.
      */
-    PHYSICAL_ADDRESS Pl031Phys = { .QuadPart = 0x9010000ULL };
+    PHYSICAL_ADDRESS Pl031Phys = { .QuadPart = HAL_ARM64_PL031_PHYSICAL_ADDRESS };
     PVOID Pl031Va;
     ULONG Seconds;
     LARGE_INTEGER SystemTime;
 
-    Pl031Va = MmMapIoSpace(Pl031Phys, PAGE_SIZE, MmNonCached);
-    if (Pl031Va)
+    if (HalpArm64HasQemuPl031())
     {
-        Seconds = READ_REGISTER_ULONG((PULONG)Pl031Va);
-        MmUnmapIoSpace(Pl031Va, PAGE_SIZE);
+        Pl031Va = MmMapIoSpace(Pl031Phys, PAGE_SIZE, MmNonCached);
+        if (Pl031Va)
+        {
+            Seconds = READ_REGISTER_ULONG((PULONG)Pl031Va);
+            MmUnmapIoSpace(Pl031Va, PAGE_SIZE);
+        }
+        else
+        {
+            Seconds = 0;
+        }
     }
     else
     {
@@ -6505,9 +6523,8 @@ HalQueryRealTimeClock(
     }
 
     /*
-     * A board without a PL031 at this address reads back zero or all ones.
-     * Report the baseline below rather than 1970, which the rest of the system
-     * would otherwise take as the real date.
+     * A board without the QEMU PL031, a failed mapping, or an uninitialized
+     * device reports the baseline below rather than 1970.
      */
     if ((Seconds < HAL_ARM64_RTC_EARLIEST_SECONDS) || (Seconds == MAXULONG))
         Seconds = HAL_ARM64_RTC_EARLIEST_SECONDS;
