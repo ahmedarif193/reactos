@@ -1417,25 +1417,18 @@ AcpiEvalMethodForPciDeviceIoctl(
     return Status;
 }
 
+static
 NTSTATUS
-NTAPI
-AcpiEvalMethodForPciChildIoctl(
-    _In_ PFDO_DEVICE_DATA FdoData,
-    _Inout_ PIRP Irp)
+EvalValidateDisplayChildInput(
+    _Inout_ PIRP Irp,
+    _Out_ PIO_STACK_LOCATION *IoStack,
+    _Out_ PACPI_PCI_CHILD_EVAL_INPUT_BUFFER *InputBuffer)
 {
-    PIO_STACK_LOCATION IoStack;
     PACPI_PCI_CHILD_EVAL_INPUT_BUFFER PciInputBuffer;
-    PACPI_EVAL_INPUT_BUFFER EvalInputBuffer;
-    IO_STACK_LOCATION SyntheticIoStack;
-    ACPI_HANDLE AdapterHandle;
-    ACPI_HANDLE ChildHandle;
     ULONG InputBufferSize;
-    NTSTATUS Status;
 
-    UNREFERENCED_PARAMETER(FdoData);
-
-    IoStack = IoGetCurrentIrpStackLocation(Irp);
-    InputBufferSize = IoStack->Parameters.DeviceIoControl.InputBufferLength;
+    *IoStack = IoGetCurrentIrpStackLocation(Irp);
+    InputBufferSize = (*IoStack)->Parameters.DeviceIoControl.InputBufferLength;
     if (InputBufferSize < ACPI_PCI_CHILD_EVAL_INPUT_BUFFER_MIN_SIZE ||
         Irp->AssociatedIrp.SystemBuffer == NULL)
     {
@@ -1456,16 +1449,29 @@ AcpiEvalMethodForPciChildIoctl(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (!AcpiFindPciDeviceInNamespace(PciInputBuffer->Segment,
-                                      PciInputBuffer->Bus,
-                                      PciInputBuffer->Device,
-                                      PciInputBuffer->Function,
-                                      &AdapterHandle))
-    {
-        return STATUS_NOT_FOUND;
-    }
+    *InputBuffer = PciInputBuffer;
+    return STATUS_SUCCESS;
+}
 
-    Status = EvalFindDisplayChildByAcpiUid(AdapterHandle, PciInputBuffer->ChildAcpiUid, &ChildHandle);
+static
+NTSTATUS
+EvalMethodForDisplayChildOnAdapter(
+    _In_ ACPI_HANDLE AdapterHandle,
+    _In_ PIO_STACK_LOCATION IoStack,
+    _In_ PACPI_PCI_CHILD_EVAL_INPUT_BUFFER PciInputBuffer,
+    _Inout_ PIRP Irp)
+{
+    PACPI_EVAL_INPUT_BUFFER EvalInputBuffer;
+    IO_STACK_LOCATION SyntheticIoStack;
+    ACPI_HANDLE ChildHandle;
+    NTSTATUS Status;
+
+    if (AdapterHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = EvalFindDisplayChildByAcpiUid(AdapterHandle,
+                                           PciInputBuffer->ChildAcpiUid,
+                                           &ChildHandle);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1477,7 +1483,69 @@ AcpiEvalMethodForPciChildIoctl(
     SyntheticIoStack.Parameters.DeviceIoControl.OutputBufferLength =
         IoStack->Parameters.DeviceIoControl.OutputBufferLength;
 
-    return EvalMethodOnHandleInternal(ChildHandle, EvalInputBuffer, &SyntheticIoStack, Irp);
+    return EvalMethodOnHandleInternal(ChildHandle,
+                                      EvalInputBuffer,
+                                      &SyntheticIoStack,
+                                      Irp);
+}
+
+NTSTATUS
+NTAPI
+AcpiEvalMethodForPciChildIoctl(
+    _In_ PFDO_DEVICE_DATA FdoData,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PACPI_PCI_CHILD_EVAL_INPUT_BUFFER PciInputBuffer;
+    ACPI_HANDLE AdapterHandle;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(FdoData);
+
+    Status = EvalValidateDisplayChildInput(Irp,
+                                           &IoStack,
+                                           &PciInputBuffer);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (!AcpiFindPciDeviceInNamespace(PciInputBuffer->Segment,
+                                      PciInputBuffer->Bus,
+                                      PciInputBuffer->Device,
+                                      PciInputBuffer->Function,
+                                      &AdapterHandle))
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    return EvalMethodForDisplayChildOnAdapter(AdapterHandle,
+                                               IoStack,
+                                               PciInputBuffer,
+                                               Irp);
+}
+
+NTSTATUS
+NTAPI
+AcpiEvalMethodForDisplayChildIoctl(
+    _In_ PPDO_DEVICE_DATA PdoData,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PACPI_PCI_CHILD_EVAL_INPUT_BUFFER InputBuffer;
+    NTSTATUS Status;
+
+    if (PdoData == NULL || PdoData->AcpiHandle == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = EvalValidateDisplayChildInput(Irp,
+                                           &IoStack,
+                                           &InputBuffer);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return EvalMethodForDisplayChildOnAdapter(PdoData->AcpiHandle,
+                                               IoStack,
+                                               InputBuffer,
+                                               Irp);
 }
 
 NTSTATUS
