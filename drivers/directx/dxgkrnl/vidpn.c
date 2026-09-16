@@ -2482,15 +2482,51 @@ DxgkpBuildHotPlugCandidate(
  */
 static NTSTATUS
 DxgkpSeedDefaultHotPlugPath(
+    _In_ PDXGKRNL_ADAPTER Adapter,
     _Inout_ PDXGKP_VIDPN VidPn,
     _In_ PDXGKP_HOTPLUG_MONITOR_SNAPSHOT Snapshot)
 {
+    ULONG TargetIndex;
+
     if (!Snapshot->Connected || VidPn->NumPaths != 0)
         return STATUS_SUCCESS;
-    if (DxgkVidPnTargetIndexFromId(VidPn, Snapshot->TargetId) == MAXULONG ||
-        VidPn->NumSources == 0)
+    TargetIndex = DxgkVidPnTargetIndexFromId(VidPn, Snapshot->TargetId);
+    if (TargetIndex == MAXULONG || VidPn->NumSources == 0)
         return STATUS_NOT_SUPPORTED;
+
     DxgkpPopulateDefaultPath(&VidPn->Paths[0], 0, Snapshot->TargetId);
+
+    if (Adapter->MiniportContext != NULL &&
+        !Adapter->MiniportContext->IsDisplayOnlyDriver &&
+        !Adapter->MiniportContext->IsBasicDisplayFallback &&
+        DXGK_CB(Adapter, DxgkDdiEnumVidPnCofuncModality) != NULL)
+    {
+        /*
+         * This is an OS-created starting topology, not a functional VidPN
+         * yet.  Leave its transformations unpinned so a full miniport can
+         * publish the scaling and rotation combinations it actually
+         * supports.  Pinning identity here made portrait-native panels
+         * impossible to enumerate: their miniport could report Rotate90
+         * support, but dxgkrnl would still hand identity to IsSupportedVidPn.
+         *
+         * The EDID modes added while constructing this candidate are monitor
+         * constraints, not an OS desktop-mode decision.  Unpin the source and
+         * target too, allowing a landscape source mode and portrait target
+         * timing to be joined by the rotation selected after enumeration.
+         */
+        VidPn->Paths[0].ContentTransformation.Scaling = D3DKMDT_VPPS_UNPINNED;
+        RtlZeroMemory(&VidPn->Paths[0].ContentTransformation.ScalingSupport,
+                      sizeof(VidPn->Paths[0].ContentTransformation.ScalingSupport));
+        VidPn->Paths[0].ContentTransformation.Rotation = D3DKMDT_VPPR_UNPINNED;
+        RtlZeroMemory(&VidPn->Paths[0].ContentTransformation.RotationSupport,
+                      sizeof(VidPn->Paths[0].ContentTransformation.RotationSupport));
+
+        if (VidPn->SourceModeSets[0] != NULL)
+            VidPn->SourceModeSets[0]->PinnedModeId = (UINT)-1;
+        if (VidPn->TargetModeSets[TargetIndex] != NULL)
+            VidPn->TargetModeSets[TargetIndex]->PinnedModeId = (UINT)-1;
+    }
+
     VidPn->NumPaths = 1;
     return STATUS_SUCCESS;
 }
@@ -2855,7 +2891,7 @@ DxgkpVidPnRebuildForHotPlugGeneration(
         goto Cleanup;
     /* Only now, once the driver has had the empty topology it is entitled to
      * and declined to fill it, does dxgkrnl wire the output itself. */
-    Status = DxgkpSeedDefaultHotPlugPath(CandidateObject, &Snapshot);
+    Status = DxgkpSeedDefaultHotPlugPath(Adapter, CandidateObject, &Snapshot);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     KeAcquireSpinLock(&Adapter->ChildListLock, &ChildOldIrql);
