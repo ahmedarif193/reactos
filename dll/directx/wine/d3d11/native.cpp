@@ -164,6 +164,8 @@ public:
     NativePrivateData private_data;
     NativeContext *context = NULL;
     D3D_FEATURE_LEVEL feature_level = D3D_FEATURE_LEVEL_11_0;
+    UINT threading_caps = 0;
+    UINT shader_caps = 0;
     UINT flags = 0;
     UINT exception_mode = 0;
     HRESULT operation_error = S_OK;
@@ -232,7 +234,7 @@ public:
     HRESULT STDMETHODCALLTYPE CheckMultisampleQualityLevels(DXGI_FORMAT Format, UINT SampleCount, UINT *pNumQualityLevels) override;
     void STDMETHODCALLTYPE CheckCounterInfo(D3D11_COUNTER_INFO *pCounterInfo) override { Unimplemented("CheckCounterInfo"); }
     HRESULT STDMETHODCALLTYPE CheckCounter(const D3D11_COUNTER_DESC *pDesc, D3D11_COUNTER_TYPE *pType, UINT *pActiveCounters, LPSTR szName, UINT *pNameLength, LPSTR szUnits, UINT *pUnitsLength, LPSTR szDescription, UINT *pDescriptionLength) override { Unimplemented("CheckCounter"); return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE CheckFeatureSupport(D3D11_FEATURE Feature, void *pFeatureSupportData, UINT FeatureSupportDataSize) override { Unimplemented("CheckFeatureSupport"); return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CheckFeatureSupport(D3D11_FEATURE Feature, void *pFeatureSupportData, UINT FeatureSupportDataSize) override;
     HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT *pDataSize, void *pData) override;
     HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT DataSize, const void *pData) override;
     HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown *pData) override;
@@ -341,7 +343,7 @@ public:
     void STDMETHODCALLTYPE ClearUnorderedAccessViewUint(ID3D11UnorderedAccessView *pUnorderedAccessView, const UINT Values[4]) override { Unimplemented("ClearUnorderedAccessViewUint"); }
     void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(ID3D11UnorderedAccessView *pUnorderedAccessView, const FLOAT Values[4]) override { Unimplemented("ClearUnorderedAccessViewFloat"); }
     void STDMETHODCALLTYPE ClearDepthStencilView(ID3D11DepthStencilView *pDepthStencilView, UINT ClearFlags, FLOAT Depth, UINT8 Stencil) override;
-    void STDMETHODCALLTYPE GenerateMips(ID3D11ShaderResourceView *pShaderResourceView) override { Unimplemented("GenerateMips"); }
+    void STDMETHODCALLTYPE GenerateMips(ID3D11ShaderResourceView *pShaderResourceView) override;
     void STDMETHODCALLTYPE SetResourceMinLOD(ID3D11Resource *pResource, FLOAT MinLOD) override { Unimplemented("SetResourceMinLOD"); }
     FLOAT STDMETHODCALLTYPE GetResourceMinLOD(ID3D11Resource *pResource) override { Unimplemented("GetResourceMinLOD"); return 0; }
     void STDMETHODCALLTYPE ResolveSubresource(ID3D11Resource *pDstResource, UINT DstSubresource, ID3D11Resource *pSrcResource, UINT SrcSubresource, DXGI_FORMAT Format) override { Unimplemented("ResolveSubresource"); }
@@ -801,6 +803,21 @@ HRESULT NativeDevice::Initialize(IDXGIAdapter *selected_adapter, UINT creation_f
     caps.pData = &pipeline;
     caps.DataSize = sizeof(pipeline);
     if (FAILED(hr = adapter_functions.pfnGetCaps(driver_adapter, &caps))) return hr;
+
+    D3D11DDI_THREADING_CAPS threading = {};
+    caps.Type = D3D11DDICAPS_THREADING;
+    caps.pData = &threading;
+    caps.DataSize = sizeof(threading);
+    if (SUCCEEDED(adapter_functions.pfnGetCaps(driver_adapter, &caps)))
+        threading_caps = threading.Caps;
+
+    D3D11DDI_SHADER_CAPS shader = {};
+    caps.Type = D3D11DDICAPS_SHADER;
+    caps.pData = &shader;
+    caps.DataSize = sizeof(shader);
+    if (SUCCEEDED(adapter_functions.pfnGetCaps(driver_adapter, &caps)))
+        shader_caps = shader.Caps;
+
     UINT pipeline_level = ~0u;
     for (UINT i = 0; i < count; ++i)
     {
@@ -1087,27 +1104,37 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateBuffer(const D3D11_BUFFER_DESC *de
     if ((desc->Usage == D3D11_USAGE_DEFAULT || desc->Usage == D3D11_USAGE_IMMUTABLE) && desc->CPUAccessFlags) return E_INVALIDARG;
     if (desc->Usage == D3D11_USAGE_DYNAMIC && desc->CPUAccessFlags != D3D11_CPU_ACCESS_WRITE) return E_INVALIDARG;
     if (desc->Usage == D3D11_USAGE_STAGING && (desc->BindFlags || desc->MiscFlags)) return E_INVALIDARG;
-    if ((desc->MiscFlags & D3D11_RESOURCE_MISC_BUFFER_STRUCTURED)
-            && (!desc->StructureByteStride || desc->ByteWidth % desc->StructureByteStride)) return E_INVALIDARG;
+    D3D11_BUFFER_DESC normalized = *desc;
+    if (normalized.MiscFlags & D3D11_RESOURCE_MISC_BUFFER_STRUCTURED)
+    {
+        if (!normalized.StructureByteStride || normalized.StructureByteStride % 4
+                || normalized.ByteWidth % normalized.StructureByteStride) return E_INVALIDARG;
+    }
+    else
+    {
+        /* StructureByteStride is ignored for ordinary buffers.  The native
+         * runtime must not expose or forward the application's unused value. */
+        normalized.StructureByteStride = 0;
+    }
     if (!out) return S_FALSE;
     NativeLock guard(this);
     NativeBuffer *buffer = new NativeBuffer(this);
     if (!buffer) return E_OUTOFMEMORY;
-    buffer->desc = *desc;
-    D3D10DDI_MIPINFO mip = {desc->ByteWidth, 1, 1, desc->ByteWidth, 1, 1};
+    buffer->desc = normalized;
+    D3D10DDI_MIPINFO mip = {normalized.ByteWidth, 1, 1, normalized.ByteWidth, 1, 1};
     D3D11DDIARG_CREATERESOURCE args = {};
     args.pMipInfoList = &mip;
     args.pInitialDataUP = reinterpret_cast<const D3D10_DDIARG_SUBRESOURCE_UP *>(initial);
     args.ResourceDimension = D3D10DDIRESOURCE_BUFFER;
-    args.Usage = desc->Usage;
-    args.BindFlags = desc->BindFlags & ~D3D11_BIND_UNORDERED_ACCESS;
-    if (desc->BindFlags & D3D11_BIND_UNORDERED_ACCESS) args.BindFlags |= 0x100;
-    args.MapFlags = desc->CPUAccessFlags >> 16;
-    args.MiscFlags = desc->MiscFlags;
+    args.Usage = normalized.Usage;
+    args.BindFlags = normalized.BindFlags & ~D3D11_BIND_UNORDERED_ACCESS;
+    if (normalized.BindFlags & D3D11_BIND_UNORDERED_ACCESS) args.BindFlags |= 0x100;
+    args.MapFlags = normalized.CPUAccessFlags >> 16;
+    args.MiscFlags = normalized.MiscFlags;
     args.Format = DXGI_FORMAT_UNKNOWN;
     args.SampleDesc.Count = 1;
     args.MipLevels = args.ArraySize = 1;
-    args.ByteStride = desc->StructureByteStride;
+    args.ByteStride = normalized.StructureByteStride;
     SIZE_T size = functions.pfnCalcPrivateResourceSize(driver_device, &args);
     buffer->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
     if (!buffer->handle.pDrvPrivate) { buffer->Release(); return E_OUTOFMEMORY; }
@@ -1468,6 +1495,122 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CheckMultisampleQualityLevels(DXGI_FORMA
     return operation_error;
 }
 
+static bool NativeFeatureData(void *data, UINT size, SIZE_T expected)
+{
+    return data && size == expected;
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::CheckFeatureSupport(D3D11_FEATURE feature, void *data, UINT size)
+{
+    switch (feature)
+    {
+        case D3D11_FEATURE_THREADING:
+        {
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_THREADING))) return E_INVALIDARG;
+            D3D11_FEATURE_DATA_THREADING *caps = static_cast<D3D11_FEATURE_DATA_THREADING *>(data);
+            caps->DriverConcurrentCreates = !!(threading_caps & D3D11DDICAPS_FREETHREADED);
+            caps->DriverCommandLists = !!(threading_caps
+                    & (D3D11DDICAPS_COMMANDLISTS | D3D11DDICAPS_COMMANDLISTS_BUILD_2));
+            return S_OK;
+        }
+        case D3D11_FEATURE_DOUBLES:
+        {
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_DOUBLES))) return E_INVALIDARG;
+            static_cast<D3D11_FEATURE_DATA_DOUBLES *>(data)->DoublePrecisionFloatShaderOps =
+                    !!(shader_caps & D3D11DDICAPS_SHADER_DOUBLES);
+            return S_OK;
+        }
+        case D3D11_FEATURE_FORMAT_SUPPORT:
+        {
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_FORMAT_SUPPORT))) return E_INVALIDARG;
+            D3D11_FEATURE_DATA_FORMAT_SUPPORT *caps = static_cast<D3D11_FEATURE_DATA_FORMAT_SUPPORT *>(data);
+            return CheckFormatSupport(caps->InFormat, &caps->OutFormatSupport);
+        }
+        case D3D11_FEATURE_FORMAT_SUPPORT2:
+        {
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_FORMAT_SUPPORT2))) return E_INVALIDARG;
+            static_cast<D3D11_FEATURE_DATA_FORMAT_SUPPORT2 *>(data)->OutFormatSupport2 = 0;
+            return S_OK;
+        }
+        case D3D11_FEATURE_D3D10_X_HARDWARE_OPTIONS:
+        {
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS))) return E_INVALIDARG;
+            D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS *caps =
+                    static_cast<D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS *>(data);
+            caps->ComputeShaders_Plus_RawAndStructuredBuffers_Via_Shader_4_x = !!(shader_caps
+                    & D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X);
+            return S_OK;
+        }
+        case D3D11_FEATURE_D3D11_OPTIONS:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D11_OPTIONS))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_ARCHITECTURE_INFO:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_ARCHITECTURE_INFO))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_D3D9_OPTIONS:
+        {
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D9_OPTIONS))) return E_INVALIDARG;
+            static_cast<D3D11_FEATURE_DATA_D3D9_OPTIONS *>(data)->FullNonPow2TextureSupport = TRUE;
+            return S_OK;
+        }
+        case D3D11_FEATURE_SHADER_MIN_PRECISION_SUPPORT:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_SHADER_MIN_PRECISION_SUPPORT))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_D3D9_SHADOW_SUPPORT:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D9_SHADOW_SUPPORT))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_D3D11_OPTIONS1:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D11_OPTIONS1))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_D3D9_SIMPLE_INSTANCING_SUPPORT:
+        {
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D9_SIMPLE_INSTANCING_SUPPORT))) return E_INVALIDARG;
+            static_cast<D3D11_FEATURE_DATA_D3D9_SIMPLE_INSTANCING_SUPPORT *>(data)->SimpleInstancingSupported = TRUE;
+            return S_OK;
+        }
+        case D3D11_FEATURE_MARKER_SUPPORT:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_MARKER_SUPPORT))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_D3D9_OPTIONS1:
+        {
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D9_OPTIONS1))) return E_INVALIDARG;
+            D3D11_FEATURE_DATA_D3D9_OPTIONS1 *caps = static_cast<D3D11_FEATURE_DATA_D3D9_OPTIONS1 *>(data);
+            ZeroMemory(caps, sizeof(*caps));
+            caps->FullNonPow2TextureSupported = TRUE;
+            caps->SimpleInstancingSupported = TRUE;
+            return S_OK;
+        }
+        case D3D11_FEATURE_D3D11_OPTIONS2:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D11_OPTIONS2))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_D3D11_OPTIONS3:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D11_OPTIONS3))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_GPU_VIRTUAL_ADDRESS_SUPPORT))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_SHADER_CACHE:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_SHADER_CACHE))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        case D3D11_FEATURE_D3D11_OPTIONS5:
+            if (!NativeFeatureData(data, size, sizeof(D3D11_FEATURE_DATA_D3D11_OPTIONS5))) return E_INVALIDARG;
+            ZeroMemory(data, size);
+            return S_OK;
+        default:
+            return E_NOTIMPL;
+    }
+}
+
 HRESULT STDMETHODCALLTYPE NativeContext::Map(ID3D11Resource *resource, UINT subresource,
         D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE *mapped)
 {
@@ -1532,6 +1675,19 @@ void STDMETHODCALLTYPE NativeContext::ClearRenderTargetView(ID3D11RenderTargetVi
     FLOAT value[4];
     memcpy(value, color, sizeof(value));
     device->functions.pfnClearRenderTargetView(device->driver_device, view->handle, value);
+}
+
+void STDMETHODCALLTYPE NativeContext::GenerateMips(ID3D11ShaderResourceView *resource_view)
+{
+    if (!resource_view || !device->functions.pfnGenMips) return;
+    NativeShaderResourceView *view = static_cast<NativeShaderResourceView *>(resource_view);
+    if (view->device != device || !view->created || !view->texture
+            || view->texture->desc.MipLevels <= 1
+            || !(view->texture->desc.MiscFlags & D3D11_RESOURCE_MISC_GENERATE_MIPS)
+            || !(view->texture->desc.BindFlags & D3D11_BIND_RENDER_TARGET)) return;
+    NativeLock guard(device);
+    device->BeginCall();
+    device->functions.pfnGenMips(device->driver_device, view->handle);
 }
 
 void STDMETHODCALLTYPE NativeContext::CopyResource(ID3D11Resource *dst, ID3D11Resource *src)
@@ -1631,11 +1787,69 @@ HRESULT STDMETHODCALLTYPE NativeDevice::Method(const Desc *input, Api **out) \
 }
 NATIVE_CREATE_STATE(CreateSamplerState, ID3D11SamplerState, NativeSampler, D3D11_SAMPLER_DESC,
         D3D10_DDI_SAMPLER_DESC, D3D10DDI_HRTSAMPLER, pfnCalcPrivateSamplerSize, pfnCreateSampler, pfnDestroySampler)
-NATIVE_CREATE_STATE(CreateBlendState, ID3D11BlendState, NativeBlend, D3D11_BLEND_DESC,
-        D3D10_1_DDI_BLEND_DESC, D3D10DDI_HRTBLENDSTATE, pfnCalcPrivateBlendStateSize, pfnCreateBlendState, pfnDestroyBlendState)
 NATIVE_CREATE_STATE(CreateRasterizerState, ID3D11RasterizerState, NativeRasterizer, D3D11_RASTERIZER_DESC,
         D3D10_DDI_RASTERIZER_DESC, D3D10DDI_HRTRASTERIZERSTATE, pfnCalcPrivateRasterizerStateSize, pfnCreateRasterizerState, pfnDestroyRasterizerState)
 #undef NATIVE_CREATE_STATE
+
+HRESULT STDMETHODCALLTYPE NativeDevice::CreateBlendState(const D3D11_BLEND_DESC *input, ID3D11BlendState **out)
+{
+    if (out) *out = NULL;
+    if (!input) return E_INVALIDARG;
+    if (!functions.pfnCalcPrivateBlendStateSize || !functions.pfnCreateBlendState
+            || !functions.pfnDestroyBlendState) return E_NOTIMPL;
+
+    /* The API ignores render targets 1..7 unless independent blending is
+     * enabled, and ignores blend factors and operations for disabled targets.
+     * Canonicalize those don't-care fields before crossing the DDI boundary;
+     * UMDs receive valid enum values in every slot and GetDesc() exposes the
+     * same normalized state as the system D3D11 runtime. */
+    D3D11_BLEND_DESC desc = {};
+    desc.AlphaToCoverageEnable = !!input->AlphaToCoverageEnable;
+    desc.IndependentBlendEnable = !!input->IndependentBlendEnable;
+    for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+    {
+        const D3D11_RENDER_TARGET_BLEND_DESC &source =
+                input->RenderTarget[input->IndependentBlendEnable ? i : 0];
+        D3D11_RENDER_TARGET_BLEND_DESC &target = desc.RenderTarget[i];
+        target.BlendEnable = !!source.BlendEnable;
+        target.RenderTargetWriteMask = source.RenderTargetWriteMask;
+        if (target.BlendEnable)
+        {
+            target.SrcBlend = source.SrcBlend;
+            target.DestBlend = source.DestBlend;
+            target.BlendOp = source.BlendOp;
+            target.SrcBlendAlpha = source.SrcBlendAlpha;
+            target.DestBlendAlpha = source.DestBlendAlpha;
+            target.BlendOpAlpha = source.BlendOpAlpha;
+        }
+        else
+        {
+            target.SrcBlend = target.SrcBlendAlpha = D3D11_BLEND_ONE;
+            target.DestBlend = target.DestBlendAlpha = D3D11_BLEND_ZERO;
+            target.BlendOp = target.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        }
+    }
+
+    if (!out) return S_FALSE;
+    static_assert(sizeof(D3D11_BLEND_DESC) == sizeof(D3D10_1_DDI_BLEND_DESC), "Blend descriptor ABI");
+    const D3D10_1_DDI_BLEND_DESC *ddi_desc = reinterpret_cast<const D3D10_1_DDI_BLEND_DESC *>(&desc);
+    NativeLock guard(this);
+    NativeBlend *state = new NativeBlend(this);
+    if (!state) return E_OUTOFMEMORY;
+    state->desc = desc;
+    state->destroy = functions.pfnDestroyBlendState;
+    SIZE_T size = functions.pfnCalcPrivateBlendStateSize(driver_device, ddi_desc);
+    state->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
+    if (!state->handle.pDrvPrivate) { state->Release(); return E_OUTOFMEMORY; }
+    D3D10DDI_HRTBLENDSTATE runtime_state = {state};
+    BeginCall();
+    functions.pfnCreateBlendState(driver_device, ddi_desc, state->handle, runtime_state);
+    HRESULT hr = operation_error;
+    if (FAILED(hr)) { state->Release(); return hr; }
+    state->created = true;
+    *out = state;
+    return S_OK;
+}
 
 static UINT ReadDword(const BYTE *data)
 {
