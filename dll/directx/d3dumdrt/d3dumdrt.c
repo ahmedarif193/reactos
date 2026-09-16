@@ -465,6 +465,8 @@ static HRESULT D3DUmdRtStatusToHresult(NTSTATUS Status)
         case STATUS_NOT_IMPLEMENTED:
         case STATUS_NOT_SUPPORTED:
             return E_NOTIMPL;
+        case STATUS_DEVICE_BUSY:
+            return DXGI_DDI_ERR_WASSTILLDRAWING;
         case STATUS_DEVICE_REMOVED:
             /* The DDI's own device-removed code.  A driver treats this as
              * terminal for the device and recreates rather than retrying, so it
