@@ -37,11 +37,12 @@
 
 #include "Debug.h"
 
+#include "compiler/glsl_types.h"
 #include "util/u_memory.h"
 
 
 EXTERN_C struct pipe_screen *
-d3d10_create_screen(void);
+d3d10_create_screen(void *adapter, void *device, const void *callbacks);
 
 
 static HRESULT APIENTRY CloseAdapter(D3D10DDI_HADAPTER hAdapter);
@@ -78,12 +79,12 @@ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
       return E_OUTOFMEMORY;
    }
 
-   pAdaptor->screen = d3d10_create_screen();
-   if (!pAdaptor->screen) {
-      free(pAdaptor);
-      --numAdapters;
-      return E_OUTOFMEMORY;
-   }
+   /* ShaderTGSI uses NIR's GLSL type cache directly.  State trackers that
+    * consume that cache must hold their own reference instead of relying on
+    * the selected Gallium driver to initialize it as a side effect. */
+   glsl_type_singleton_init_or_ref();
+
+   pAdaptor->hAdapter = pOpenData->hRTAdapter.handle;
 
    pOpenData->hAdapter.pDrvPrivate = pAdaptor;
 
@@ -209,7 +210,23 @@ GetCaps(D3D10DDI_HADAPTER hAdapter,
         const D3D10_2DDIARG_GETCAPS *pData)
 {
    LOG_ENTRYPOINT();
-   memset(pData->pData, 0, pData->DataSize);
+
+   if (!pData || (pData->DataSize && !pData->pData))
+      return E_INVALIDARG;
+
+   if (pData->DataSize)
+      memset(pData->pData, 0, pData->DataSize);
+
+   if (pData->Type == D3D11DDICAPS_3DPIPELINESUPPORT) {
+      if (pData->DataSize < sizeof(D3D11DDI_3DPIPELINESUPPORT_CAPS))
+         return E_INVALIDARG;
+
+      D3D11DDI_3DPIPELINESUPPORT_CAPS *caps =
+         static_cast<D3D11DDI_3DPIPELINESUPPORT_CAPS *>(pData->pData);
+      caps->Caps = D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(
+         D3D11DDI_3DPIPELINELEVEL_10_0);
+   }
+
    return S_OK;
 }
 
@@ -259,8 +276,7 @@ CloseAdapter(D3D10DDI_HADAPTER hAdapter)  // IN
    LOG_ENTRYPOINT();
 
    Adapter *pAdapter = CastAdapter(hAdapter);
-   struct pipe_screen *screen = pAdapter->screen;
-   screen->destroy(screen);
+   glsl_type_singleton_decref();
    free(pAdapter);
 
    --numAdapters;

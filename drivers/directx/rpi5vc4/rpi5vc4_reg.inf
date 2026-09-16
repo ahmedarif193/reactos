@@ -14,10 +14,11 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","ImagePath",0x00020000,"system3
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Start",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Video","Service",0x00000000,"rpi5vc4"
-; The user-mode half implements the D3D9 OpenAdapter ABI. Publish only its
-; DX9 slot in KMTQAITYPE_UMDRIVERNAME; newer runtimes require their own DDI.
-HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverName",0x00010000,"rpi5vc4um.dll"
-HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverNameWow",0x00010000,"rpi5vc4um.dll"
+; Standard WDDM UMD multi-string order: Direct3D 9, Direct3D 10, Direct3D 11.
+; D3DKMT selects the entry requested by KMTUMDVERSION; no runtime component
+; contains a vendor-specific path or filename fallback.
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverName",0x00010000,"rpi5vc4um.dll","rpi5vc4d3d.dll","rpi5vc4d3d.dll"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","UserModeDriverNameWow",0x00010000,"rpi5vc4um.dll","rpi5vc4d3d.dll","rpi5vc4d3d.dll"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLDriverName",0x00000000,"@RPI5VC4_OPENGL_ICD@"
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLVersion",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","OpenGLFlags",0x00010001,0x00000000

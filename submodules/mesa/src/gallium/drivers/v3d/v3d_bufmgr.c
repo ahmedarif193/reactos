@@ -128,8 +128,14 @@ static struct v3d_bo *
 v3d_bo_alloc_with_policy(struct v3d_screen *screen, uint32_t size,
                          const char *name, bool cpu_cached)
 {
-        struct v3d_bo *bo;
-        int ret;
+   struct v3d_bo *bo;
+   int ret;
+#ifdef _WIN32
+   bool runtime_resource =
+      v3d_d3dkmt_runtime_resource_pending(screen->fd);
+#else
+   bool runtime_resource = false;
+#endif
 
         /* The CLIF dumping requires that there is no whitespace in the name.
          */
@@ -137,7 +143,8 @@ v3d_bo_alloc_with_policy(struct v3d_screen *screen, uint32_t size,
 
         size = align(size, 4096);
 
-        bo = v3d_bo_from_cache(screen, size, name, cpu_cached);
+   bo = runtime_resource ? NULL :
+      v3d_bo_from_cache(screen, size, name, cpu_cached);
         if (bo) {
                 if (dump_stats) {
                         mesa_logd("Allocated %s %dkb from cache:", name, size / 1024);
@@ -154,7 +161,9 @@ v3d_bo_alloc_with_policy(struct v3d_screen *screen, uint32_t size,
         bo->screen = screen;
         bo->size = size;
         bo->name = name;
-        bo->private = true;
+   /* A BO owned by a D3D runtime resource must retain that WDDM allocation
+    * identity until the runtime asks the UMD to destroy the resource. */
+   bo->private = !runtime_resource;
         bo->cpu_cached = cpu_cached;
 
         struct drm_v3d_create_bo create = {

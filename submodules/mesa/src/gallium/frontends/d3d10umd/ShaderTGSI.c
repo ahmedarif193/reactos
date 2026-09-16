@@ -995,14 +995,16 @@ translate_src_operand(struct Shader_xlate *sx,
       assert(operand->base.index_dim == 2);
 
       assert(operand->base.index[0].index_rep == D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
-      assert(operand->base.index[0].imm < PIPE_MAX_CONSTANT_BUFFERS);
+      const unsigned pipe_index =
+         Shader_pipe_constant_buffer_index(operand->base.index[0].imm);
+      assert(pipe_index < PIPE_MAX_CONSTANT_BUFFERS);
 
       switch (operand->base.index[1].index_rep) {
       case D3D10_SB_OPERAND_INDEX_IMMEDIATE32:
          assert(operand->base.index[1].imm < SHADER_MAX_CONSTS);
 
          reg = ureg_src_register(TGSI_FILE_CONSTANT, operand->base.index[1].imm);
-         reg = ureg_src_dimension(reg, operand->base.index[0].imm);
+         reg = ureg_src_dimension(reg, pipe_index);
          break;
       case D3D10_SB_OPERAND_INDEX_RELATIVE:
       case D3D10_SB_OPERAND_INDEX_IMMEDIATE32_PLUS_RELATIVE:
@@ -1010,7 +1012,7 @@ translate_src_operand(struct Shader_xlate *sx,
          reg = ureg_src_indirect(
             reg,
             translate_relative_operand(sx, &operand->base.index[1].rel));
-         reg = ureg_src_dimension(reg, operand->base.index[0].imm);
+         reg = ureg_src_dimension(reg, pipe_index);
          break;
       default:
          /* XXX: Other index representations.
@@ -1241,7 +1243,8 @@ expand_unary_to_scalarf(struct ureg_program *ureg, unary_ureg_func func,
 
 const struct tgsi_token *
 Shader_tgsi_translate(const unsigned *code,
-                      unsigned *output_mapping)
+                      unsigned *output_mapping,
+                      bool use_legacy_texture_opcodes)
 {
    struct Shader_xlate sx;
    struct Shader_parser parser;
@@ -1252,6 +1255,8 @@ Shader_tgsi_translate(const unsigned *code,
    bool shader_dumped = false;
    bool inside_sub = false;
    uint i, j;
+
+   use_legacy_texture_opcodes |= (st_debug & ST_DEBUG_OLD_TEX_OPS) != 0;
 
    memset(&sx, 0, sizeof sx);
 
@@ -1395,7 +1400,7 @@ Shader_tgsi_translate(const unsigned *code,
           * this opcode regardless, so we just ignore sample index operand
           * for now */
       case D3D10_SB_OPCODE_LD:
-         if (st_debug & ST_DEBUG_OLD_TEX_OPS) {
+         if (use_legacy_texture_opcodes) {
             unsigned resource = opcode.src[1].base.index[0].imm;
             assert(opcode.src[1].base.index_dim == 1);
             assert(opcode.src[1].base.index[0].imm < SHADER_MAX_RESOURCES);
@@ -1436,7 +1441,7 @@ Shader_tgsi_translate(const unsigned *code,
          break;
 
       case D3D10_SB_OPCODE_RESINFO:
-         if (st_debug & ST_DEBUG_OLD_TEX_OPS) {
+         if (use_legacy_texture_opcodes) {
             unsigned resource = opcode.src[1].base.index[0].imm;
             assert(opcode.src[1].base.index_dim == 1);
             assert(opcode.src[1].base.index[0].imm < SHADER_MAX_RESOURCES);
@@ -1517,7 +1522,7 @@ Shader_tgsi_translate(const unsigned *code,
          break;
 
       case D3D10_SB_OPCODE_SAMPLE:
-         if (st_debug & ST_DEBUG_OLD_TEX_OPS) {
+         if (use_legacy_texture_opcodes) {
             assert(opcode.src[1].base.index_dim == 1);
             assert(opcode.src[1].base.index[0].imm < SHADER_MAX_RESOURCES);
 
@@ -1544,7 +1549,7 @@ Shader_tgsi_translate(const unsigned *code,
          break;
 
       case D3D10_SB_OPCODE_SAMPLE_C:
-         if (st_debug & ST_DEBUG_OLD_TEX_OPS) {
+         if (use_legacy_texture_opcodes) {
             struct ureg_dst r0 = ureg_DECL_temporary(ureg);
 
             /* XXX: Support only 2D texture targets for now.
@@ -1594,7 +1599,7 @@ Shader_tgsi_translate(const unsigned *code,
          break;
 
       case D3D10_SB_OPCODE_SAMPLE_C_LZ:
-         if (st_debug & ST_DEBUG_OLD_TEX_OPS) {
+         if (use_legacy_texture_opcodes) {
             struct ureg_dst r0 = ureg_DECL_temporary(ureg);
 
             assert(opcode.src[1].base.index_dim == 1);
@@ -1645,7 +1650,7 @@ Shader_tgsi_translate(const unsigned *code,
          break;
 
       case D3D10_SB_OPCODE_SAMPLE_L:
-         if (st_debug & ST_DEBUG_OLD_TEX_OPS) {
+         if (use_legacy_texture_opcodes) {
             struct ureg_dst r0 = ureg_DECL_temporary(ureg);
 
             assert(opcode.src[1].base.index_dim == 1);
@@ -1684,7 +1689,7 @@ Shader_tgsi_translate(const unsigned *code,
          break;
 
       case D3D10_SB_OPCODE_SAMPLE_D:
-         if (st_debug & ST_DEBUG_OLD_TEX_OPS) {
+         if (use_legacy_texture_opcodes) {
             assert(opcode.src[1].base.index_dim == 1);
             assert(opcode.src[1].base.index[0].imm < SHADER_MAX_RESOURCES);
 
@@ -1713,7 +1718,7 @@ Shader_tgsi_translate(const unsigned *code,
          break;
 
       case D3D10_SB_OPCODE_SAMPLE_B:
-         if (st_debug & ST_DEBUG_OLD_TEX_OPS) {
+         if (use_legacy_texture_opcodes) {
             struct ureg_dst r0 = ureg_DECL_temporary(ureg);
 
             assert(opcode.src[1].base.index_dim == 1);
@@ -1832,7 +1837,7 @@ Shader_tgsi_translate(const unsigned *code,
 
          target = translate_resource_dimension(opcode.specific.dcl_resource_dimension);
          sx.resources[res_index].target = target;
-         if (!(st_debug & ST_DEBUG_OLD_TEX_OPS)) {
+         if (!use_legacy_texture_opcodes) {
             sx.sv[res_index] =
                ureg_DECL_sampler_view(ureg, res_index, target,
                                       trans_dcl_ret_type(opcode.dcl_resource_ret_type[0]),
@@ -1845,8 +1850,10 @@ Shader_tgsi_translate(const unsigned *code,
 
       case D3D10_SB_OPCODE_DCL_CONSTANT_BUFFER: {
          unsigned num_constants = opcode.src[0].base.index[1].imm;
+         const unsigned pipe_index = Shader_pipe_constant_buffer_index(
+            opcode.src[0].base.index[0].imm);
 
-         assert(opcode.src[0].base.index[0].imm < PIPE_MAX_CONSTANT_BUFFERS);
+         assert(pipe_index < PIPE_MAX_CONSTANT_BUFFERS);
 
          if (num_constants == 0) {
             num_constants = SHADER_MAX_CONSTS;
@@ -1857,7 +1864,7 @@ Shader_tgsi_translate(const unsigned *code,
          ureg_DECL_constant2D(ureg,
                               0,
                               num_constants - 1,
-                              opcode.src[0].base.index[0].imm);
+                              pipe_index);
          break;
       }
 

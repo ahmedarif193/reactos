@@ -37,12 +37,12 @@
 
 #define SUPPORT_MSAA 0
 #define SUPPORT_D3D10_1 0
-#define SUPPORT_D3D11 0
+#define SUPPORT_D3D11 1
 
 
 struct Adapter
 {
-   struct pipe_screen *screen;
+   HANDLE hAdapter;
 };
 
 
@@ -66,6 +66,7 @@ struct ElementLayout;
 
 struct Device
 {
+   struct pipe_screen *screen;
    struct pipe_context *pipe;
 
    struct cso_context *cso;
@@ -81,6 +82,10 @@ struct Device
 
    void *empty_fs;
    void *empty_vs;
+
+   void *default_blend_state;
+   void *default_depth_stencil_state;
+   void *default_rasterizer_state;
 
    enum mesa_prim primitive;
 
@@ -158,6 +163,8 @@ struct Resource
    UINT MipLevels;
    UINT NumSubResources;
    bool buffer;
+   D3DKMT_HANDLE allocation;
+   HANDLE runtime_resource;
    struct pipe_resource *resource;
    struct pipe_transfer **transfers;
    struct pipe_stream_output_target *so_target;

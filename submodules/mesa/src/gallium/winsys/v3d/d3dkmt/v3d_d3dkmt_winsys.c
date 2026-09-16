@@ -27,8 +27,11 @@
 #include "util/u_thread.h"
 
 #include "broadcom/common/v3d_d3dkmt.h"
+#include "broadcom/common/v3d_limits.h"
 #include "broadcom/common/v3d_tfu.h"
 #include "broadcom/common/v3d_tiling.h"
+#include "v3d/v3d_bufmgr.h"
+#include "v3d/v3d_resource.h"
 #include "v3d/v3d_screen.h"
 #include "v3d_d3dkmt_public.h"
 
@@ -101,12 +104,19 @@ typedef struct vc4kmt_info {
 } VC4KMT_INFO;
 
 vc4kmt_status vc4kmt_open(VC4KMT_DEVICE **device);
+vc4kmt_status vc4kmt_open_umd(void *adapter, void *device,
+                              const void *callbacks,
+                              VC4KMT_DEVICE **device_out);
 void vc4kmt_close(VC4KMT_DEVICE *device);
 const VC4KMT_INFO *vc4kmt_info(const VC4KMT_DEVICE *device);
 vc4kmt_status vc4kmt_bo_create(VC4KMT_DEVICE *device, uint32_t size,
                                VC4KMT_BO *bo);
 vc4kmt_status vc4kmt_bo_create_ex(VC4KMT_DEVICE *device, uint32_t size,
                                   uint32_t flags, VC4KMT_BO *bo);
+vc4kmt_status vc4kmt_bo_create_resource_ex(VC4KMT_DEVICE *device,
+                                           uint32_t size, uint32_t flags,
+                                           void *runtime_resource,
+                                           VC4KMT_BO *bo);
 vc4kmt_status vc4kmt_bo_map(VC4KMT_DEVICE *device, VC4KMT_BO *bo,
                             void **cpu_va);
 vc4kmt_status vc4kmt_bo_invalidate(VC4KMT_DEVICE *device,
@@ -262,6 +272,7 @@ struct v3d_d3dkmt_device {
    uint32_t submit_resource_capacity;
    uint32_t *submit_resource_hash;
    uint32_t submit_resource_hash_capacity;
+   void *pending_runtime_resource;
 };
 
 static once_flag registry_once = ONCE_FLAG_INIT;
@@ -840,20 +851,17 @@ v3d_d3dkmt_submit_out_sync_valid_locked(struct v3d_d3dkmt_device *device,
    return true;
 }
 
-int
-v3d_d3dkmt_open(void)
+static int
+v3d_d3dkmt_register_device(VC4KMT_DEVICE *kmt)
 {
    struct v3d_d3dkmt_device *device;
-   vc4kmt_status status;
    int fd = -1;
 
    device = calloc(1, sizeof(*device));
    if (!device)
       return -1;
 
-   status = vc4kmt_open(&device->kmt);
-   if (status < 0)
-      goto fail;
+   device->kmt = kmt;
 
    device->info = vc4kmt_info(device->kmt);
    if (!device->info || !device->info->v3d_ready ||
@@ -888,14 +896,40 @@ v3d_d3dkmt_open(void)
 fail_lock:
    mtx_destroy(&device->lock);
 fail:
-   if (device->kmt)
-      vc4kmt_close(device->kmt);
    free(device->syncobjs);
    free(device->submit_resource_hash);
    free(device->submit_resources);
    free(device->bos);
    free(device);
    return -1;
+}
+
+int
+v3d_d3dkmt_open(void)
+{
+   VC4KMT_DEVICE *kmt = NULL;
+   int fd;
+
+   if (vc4kmt_open(&kmt) < 0)
+      return -1;
+   fd = v3d_d3dkmt_register_device(kmt);
+   if (fd < 0)
+      vc4kmt_close(kmt);
+   return fd;
+}
+
+int
+v3d_d3dkmt_open_umd(void *adapter, void *device, const void *callbacks)
+{
+   VC4KMT_DEVICE *kmt = NULL;
+   int fd;
+
+   if (vc4kmt_open_umd(adapter, device, callbacks, &kmt) < 0)
+      return -1;
+   fd = v3d_d3dkmt_register_device(kmt);
+   if (fd < 0)
+      vc4kmt_close(kmt);
+   return fd;
 }
 
 void
@@ -938,6 +972,83 @@ v3d_d3dkmt_close(int fd)
    free(device->submit_resources);
    free(device->bos);
    free(device);
+}
+
+bool
+v3d_d3dkmt_runtime_resource_pending(int fd)
+{
+   struct v3d_d3dkmt_device *device = v3d_d3dkmt_device_lookup(fd);
+   bool pending;
+
+   if (!device)
+      return false;
+   mtx_lock(&device->lock);
+   pending = device->pending_runtime_resource != NULL;
+   mtx_unlock(&device->lock);
+   return pending;
+}
+
+bool
+v3d_d3dkmt_runtime_resource_begin(struct pipe_screen *screen,
+                                  void *runtime_resource)
+{
+   struct v3d_d3dkmt_device *device;
+   bool result = false;
+
+   if (!screen || !runtime_resource)
+      return false;
+   device = v3d_d3dkmt_device_lookup(v3d_screen(screen)->fd);
+   if (!device)
+      return false;
+
+   mtx_lock(&device->lock);
+   if (!device->pending_runtime_resource) {
+      device->pending_runtime_resource = runtime_resource;
+      result = true;
+   }
+   mtx_unlock(&device->lock);
+   return result;
+}
+
+void
+v3d_d3dkmt_runtime_resource_end(struct pipe_screen *screen)
+{
+   struct v3d_d3dkmt_device *device;
+
+   if (!screen)
+      return;
+   device = v3d_d3dkmt_device_lookup(v3d_screen(screen)->fd);
+   if (!device)
+      return;
+
+   mtx_lock(&device->lock);
+   device->pending_runtime_resource = NULL;
+   mtx_unlock(&device->lock);
+}
+
+uint32_t
+v3d_d3dkmt_resource_allocation(struct pipe_screen *screen,
+                               struct pipe_resource *resource)
+{
+   struct v3d_d3dkmt_device *device;
+   struct v3d_d3dkmt_bo *bo;
+   struct v3d_resource *v3d_resource_object;
+   uint32_t allocation = 0;
+
+   if (!screen || !resource)
+      return 0;
+   device = v3d_d3dkmt_device_lookup(v3d_screen(screen)->fd);
+   v3d_resource_object = v3d_resource(resource);
+   if (!device || !v3d_resource_object->bo)
+      return 0;
+
+   mtx_lock(&device->lock);
+   bo = v3d_d3dkmt_bo_lookup_locked(device,
+                                    v3d_resource_object->bo->handle);
+   if (bo)
+      allocation = bo->kmt.allocation;
+   mtx_unlock(&device->lock);
+   return allocation;
 }
 
 void *
@@ -1630,8 +1741,9 @@ drmIoctl(int fd, unsigned long request, void *arg)
               VC4KMT_BO_CREATE_CPU_CACHED : 0;
       bo = &device->bos[handle];
       memset(bo, 0, sizeof(*bo));
-      if (vc4kmt_bo_create_ex(device->kmt, create->size, flags,
-                              &bo->kmt) < 0) {
+      if (vc4kmt_bo_create_resource_ex(device->kmt, create->size, flags,
+                                       device->pending_runtime_resource,
+                                       &bo->kmt) < 0) {
          errno = ENOMEM;
          break;
       }
@@ -1831,6 +1943,19 @@ struct pipe_screen *
 v3d_d3dkmt_screen_create(const struct pipe_screen_config *config)
 {
    int fd = v3d_d3dkmt_open();
+
+   if (fd < 0)
+      return NULL;
+
+   return v3d_screen_create(fd, config, NULL);
+}
+
+struct pipe_screen *
+v3d_d3dkmt_screen_create_umd(const struct pipe_screen_config *config,
+                             void *adapter, void *device,
+                             const void *callbacks)
+{
+   int fd = v3d_d3dkmt_open_umd(adapter, device, callbacks);
 
    if (fd < 0)
       return NULL;

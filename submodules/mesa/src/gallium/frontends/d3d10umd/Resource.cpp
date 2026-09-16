@@ -42,6 +42,12 @@
 #include "util/u_rect.h"
 #include "util/u_surface.h"
 
+EXTERN_C struct pipe_resource *
+d3d10_create_resource(struct pipe_screen *screen,
+                      const struct pipe_resource *templ,
+                      void *runtime_resource,
+                      D3DKMT_HANDLE *allocation);
+
 
 /*
  * ----------------------------------------------------------------------
@@ -275,14 +281,6 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
                                                   pCreateResource->ArraySize );
    pResource->buffer = templat.target == PIPE_BUFFER;
 
-   if (pCreateResource->Format == DXGI_FORMAT_UNKNOWN) {
-      assert(pCreateResource->ResourceDimension == D3D10DDIRESOURCE_BUFFER);
-      templat.format = PIPE_FORMAT_R8_UINT;
-   } else {
-      BOOL bindDepthStencil = !!(pCreateResource->BindFlags & D3D10_DDI_BIND_DEPTH_STENCIL);
-      templat.format = FormatTranslate(pCreateResource->Format, bindDepthStencil);
-   }
-
    templat.width0     = pCreateResource->pMipInfoList[0].TexelWidth;
    templat.height0    = pCreateResource->pMipInfoList[0].TexelHeight;
    templat.depth0     = pCreateResource->pMipInfoList[0].TexelDepth;
@@ -293,22 +291,32 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
    templat.bind       = translate_resource_flags(pCreateResource->BindFlags);
    templat.usage      = translate_resource_usage(pCreateResource->Usage);
 
-   if (templat.target != PIPE_BUFFER) {
-      if (!screen->is_format_supported(screen,
-                                       templat.format,
-                                       templat.target,
-                                       templat.nr_samples,
-                                       templat.nr_storage_samples,
-                                       templat.bind)) {
-         debug_printf("%s: unsupported format %s\n",
-                     __func__, util_format_name(templat.format));
-         SetError(hDevice, E_OUTOFMEMORY);
+   if (pCreateResource->Format == DXGI_FORMAT_UNKNOWN) {
+      assert(templat.target == PIPE_BUFFER);
+      templat.format = PIPE_FORMAT_R8_UINT;
+   } else if (templat.target == PIPE_BUFFER) {
+      templat.format = FormatTranslate(pCreateResource->Format, false);
+   } else {
+      const BOOL bindDepthStencil =
+         !!(pCreateResource->BindFlags & D3D10_DDI_BIND_DEPTH_STENCIL);
+      templat.format = FormatTranslateSupported(screen,
+                                                pCreateResource->Format,
+                                                bindDepthStencil,
+                                                templat.target,
+                                                templat.nr_samples,
+                                                templat.bind);
+      if (templat.format == PIPE_FORMAT_NONE) {
+         SetError(hDevice, DXGI_DDI_ERR_UNSUPPORTED);
          return;
       }
    }
 
-   pResource->resource = screen->resource_create(screen, &templat);
-   if (!pResource) {
+   pResource->runtime_resource = (HANDLE)hRTResource.handle;
+   pResource->resource = d3d10_create_resource(screen,
+                                               &templat,
+                                               pResource->runtime_resource,
+                                               &pResource->allocation);
+   if (!pResource->resource) {
       DebugPrintf("%s: failed to create resource\n", __func__);
       SetError(hDevice, E_OUTOFMEMORY);
       return;
@@ -317,6 +325,11 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
    pResource->NumSubResources = pCreateResource->MipLevels * pCreateResource->ArraySize;
    pResource->transfers = (struct pipe_transfer **)calloc(pResource->NumSubResources,
                                                           sizeof *pResource->transfers);
+   if (!pResource->transfers) {
+      pipe_resource_reference(&pResource->resource, NULL);
+      SetError(hDevice, E_OUTOFMEMORY);
+      return;
+   }
 
    if (pCreateResource->pInitialDataUP) {
       if (pResource->buffer) {
@@ -937,4 +950,3 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
       }
    }
 }
-

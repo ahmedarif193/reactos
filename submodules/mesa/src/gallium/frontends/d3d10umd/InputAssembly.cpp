@@ -121,8 +121,6 @@ IaSetVertexBuffers(D3D10DDI_HDEVICE hDevice,                                    
                    __in_ecount (NumBuffers) const UINT *pStrides,                // IN
                    __in_ecount (NumBuffers) const UINT *pOffsets)                // IN
 {
-   static const float dummy[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-
    LOG_ENTRYPOINT();
 
    Device *pDevice = CastDevice(hDevice);
@@ -155,23 +153,12 @@ IaSetVertexBuffers(D3D10DDI_HDEVICE hDevice,                                    
       else {
          pDevice->vertex_strides[StartBuffer + i] = 0;
          vb->buffer_offset = 0;
-         if (!vb->is_user_buffer) {
+         if (vb->is_user_buffer) {
+            vb->buffer.user = NULL;
+            vb->is_user_buffer = false;
+         } else {
             pipe_resource_reference(&vb->buffer.resource, NULL);
-            vb->is_user_buffer = true;
          }
-         vb->buffer.user = dummy;
-      }
-   }
-
-   for (i = 0; i < PIPE_MAX_ATTRIBS; ++i) {
-      struct pipe_vertex_buffer *vb = &pDevice->vertex_buffers[i];
-
-      /* XXX this is odd... */
-      if (!vb->is_user_buffer && !vb->buffer.resource) {
-         pDevice->vertex_strides[i] = 0;
-         vb->buffer_offset = 0;
-         vb->is_user_buffer = true;
-         vb->buffer.user = dummy;
       }
    }
 
