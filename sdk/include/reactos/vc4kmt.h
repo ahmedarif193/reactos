@@ -91,6 +91,20 @@ NTSTATUS
 vc4kmt_open(
     _Outptr_ VC4KMT_DEVICE **DeviceOut);
 
+/*
+ * Open the transport as part of an existing WDDM user-mode device.  The
+ * adapter is the kernel adapter handle supplied to OpenAdapter, Device is the
+ * opaque runtime device handle supplied to CreateDevice, and Callbacks points
+ * at that device's D3DDDI_DEVICECALLBACKS table.  Keeping the callback table
+ * opaque here avoids making OpenGL-only users of vc4kmt depend on d3dumddi.h.
+ */
+NTSTATUS
+vc4kmt_open_umd(
+    _In_ HANDLE Adapter,
+    _In_ HANDLE Device,
+    _In_ const VOID *Callbacks,
+    _Outptr_ VC4KMT_DEVICE **DeviceOut);
+
 VOID
 vc4kmt_close(
     _In_opt_ VC4KMT_DEVICE *Device);
@@ -110,6 +124,14 @@ vc4kmt_bo_create_ex(
     _In_ VC4KMT_DEVICE *Device,
     _In_ UINT Size,
     _In_ ULONG Flags,
+    _Out_ VC4KMT_BO *Bo);
+
+NTSTATUS
+vc4kmt_bo_create_resource_ex(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Size,
+    _In_ ULONG Flags,
+    _In_opt_ HANDLE RuntimeResource,
     _Out_ VC4KMT_BO *Bo);
 
 NTSTATUS
