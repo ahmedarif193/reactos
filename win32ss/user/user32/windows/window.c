@@ -1721,6 +1721,9 @@ IsWindowUnicode(HWND hWnd)
 BOOL WINAPI
 IsWindowVisible(HWND hWnd)
 {
+#ifdef WOW64_I386_RUNTIME
+    return !!NtUserCallHwnd(hWnd, HWND_ROUTINE_ROS_ISWINDOWVISIBLE);
+#else
     BOOL Ret = FALSE;
     PWND Wnd = ValidateHwnd(hWnd);
 
@@ -1753,6 +1756,7 @@ IsWindowVisible(HWND hWnd)
     }
 
     return Ret;
+#endif
 }
 
 
