@@ -458,6 +458,44 @@ ExpSetTimeZoneInformation(PRTL_TIME_ZONE_INFORMATION TimeZoneInformation)
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+ExpUpdateTimeZoneState(
+    _In_ PLARGE_INTEGER SystemTime)
+{
+    RTL_TIME_ZONE_INFORMATION TimeZoneInformation;
+    LARGE_INTEGER LocalTime, NewTimeZoneBias;
+    ULONG TimeZoneId;
+    NTSTATUS Status;
+
+    /*
+     * ExpGetTimeZoneId compares local transition times.  Start with the
+     * default bias; it will add the applicable standard or daylight bias.
+     */
+    Status = RtlQueryTimeZoneInformation(&TimeZoneInformation);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RtlQueryTimeZoneInformation failed (Status 0x%08lx)\n", Status);
+        return Status;
+    }
+
+    LocalTime = *SystemTime;
+    LocalTime.QuadPart -= (LONGLONG)TimeZoneInformation.Bias * TICKSPERMINUTE;
+
+    if (!ExpGetTimeZoneId(&LocalTime, &TimeZoneId, &NewTimeZoneBias))
+    {
+        DPRINT1("ExpGetTimeZoneId failed\n");
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    ExpTimeZoneId = TimeZoneId;
+    ExpTimeZoneBias = NewTimeZoneBias;
+    KiWriteSystemTime(&MmWriteableSharedUserData->TimeZoneBias, ExpTimeZoneBias);
+    MmWriteableSharedUserData->TimeZoneId = ExpTimeZoneId;
+
+    return STATUS_SUCCESS;
+}
+
 /*
  * FUNCTION: Sets the system time.
  * PARAMETERS:
@@ -478,8 +516,6 @@ NtSetSystemTime(IN PLARGE_INTEGER SystemTime,
     TIME_FIELDS TimeFields;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status = STATUS_SUCCESS;
-    RTL_TIME_ZONE_INFORMATION TimeZoneInformation = { 0 };
-    ULONG TimeZoneIdSave;
 
     PAGED_CODE();
 
@@ -547,26 +583,8 @@ NtSetSystemTime(IN PLARGE_INTEGER SystemTime,
         _SEH2_END;
     }
 
-    /* Read time zone information from the registry and set the clock */
-    Status = RtlQueryTimeZoneInformation(&TimeZoneInformation);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("RtlQueryTimeZoneInformation failed (Status 0x%08lx)\n", Status);
-    }
-
-    /* Test if we went from Daylight to Standard Time or vice versa */
-    TimeZoneIdSave = ExpTimeZoneId;
-    ExpSetTimeZoneInformation(&TimeZoneInformation);
-
-    if (ExpTimeZoneId != TimeZoneIdSave)
-    {
-        /* Going from DT to ST or vice versa we need to repeat this */
-        DPRINT("Daylight Time and Standard Time are switching\n");
-
-        /* Set the system time and notify the system */
-        KeSetSystemTime(&NewSystemTime, &OldSystemTime, FALSE, NULL);
-        PoNotifySystemTimeSet();
-    }
+    /* Refresh the time-zone state without reading the RTC back over the new time. */
+    Status = ExpUpdateTimeZoneState(&NewSystemTime);
 
     /* Return status */
     return Status;
