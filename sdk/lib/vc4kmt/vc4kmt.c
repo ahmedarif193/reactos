@@ -15,6 +15,7 @@
 #include <winbase.h>
 #include <wingdi.h>
 #include <d3dkmthk.h>
+#include <d3dumddi.h>
 #include <reactos/vc4kmt.h>
 
 #ifndef NT_SUCCESS
@@ -112,6 +113,7 @@ typedef struct _VC4KMT_BO_RECORD
 {
     struct _VC4KMT_BO_RECORD *Next;
     D3DKMT_HANDLE hAllocation;
+    HANDLE RuntimeResource;
     BOOL Mapped;
 } VC4KMT_BO_RECORD;
 
@@ -165,14 +167,40 @@ struct _VC4KMT_DEVICE
     UINT PrimaryHeight;
     UINT PrimaryPitch;
     BOOL Fake;
+    BOOL RuntimeCallbacks;
+    HANDLE RuntimeDevice;
+    D3DDDI_DEVICECALLBACKS Callbacks;
     ULONG FakeNextGpuVa;
     VC4KMT_BO_RECORD *BoList;
 };
 
 static NTSTATUS
+Vc4KmtCallbackStatus(
+    _In_ HRESULT Result)
+{
+    if (SUCCEEDED(Result))
+        return STATUS_SUCCESS;
+
+    switch (Result)
+    {
+        case E_OUTOFMEMORY:
+            return STATUS_NO_MEMORY;
+        case E_INVALIDARG:
+            return STATUS_INVALID_PARAMETER;
+        case E_NOTIMPL:
+            return STATUS_NOT_SUPPORTED;
+        case DXGI_DDI_ERR_WASSTILLDRAWING:
+            return STATUS_DEVICE_BUSY;
+        default:
+            return STATUS_UNSUCCESSFUL;
+    }
+}
+
+static NTSTATUS
 Vc4KmtTrackBo(
     _Inout_ VC4KMT_DEVICE *Device,
-    _In_ D3DKMT_HANDLE hAllocation)
+    _In_ D3DKMT_HANDLE hAllocation,
+    _In_opt_ HANDLE RuntimeResource)
 {
     VC4KMT_BO_RECORD *Record;
 
@@ -181,6 +209,7 @@ Vc4KmtTrackBo(
         return STATUS_NO_MEMORY;
 
     Record->hAllocation = hAllocation;
+    Record->RuntimeResource = RuntimeResource;
     Record->Next = Device->BoList;
     Device->BoList = Record;
     return STATUS_SUCCESS;
@@ -204,7 +233,7 @@ Vc4KmtMarkBoMapped(
     return FALSE;
 }
 
-static VOID
+static HANDLE
 Vc4KmtUntrackBo(
     _Inout_ VC4KMT_DEVICE *Device,
     _In_ D3DKMT_HANDLE hAllocation)
@@ -217,12 +246,15 @@ Vc4KmtUntrackBo(
 
         if (Record->hAllocation == hAllocation)
         {
+            HANDLE RuntimeResource = Record->RuntimeResource;
+
             *Link = Record->Next;
             HeapFree(GetProcessHeap(), 0, Record);
-            return;
+            return RuntimeResource;
         }
         Link = &Record->Next;
     }
+    return NULL;
 }
 
 static VOID
@@ -377,19 +409,34 @@ Vc4KmtQueryInfo(
 {
     RPI5VC4_ESCAPE_INFO Info;
     D3DKMT_ESCAPE Escape;
+    D3DDDICB_ESCAPE CallbackEscape;
     NTSTATUS Status;
 
     RtlZeroMemory(&Info, sizeof(Info));
     Info.Magic = RPI5VC4_ESCAPE_MAGIC;
     Info.Op = RPI5VC4_ESCAPE_OP_QUERY_INFO;
 
-    RtlZeroMemory(&Escape, sizeof(Escape));
-    Escape.hAdapter = Device->hAdapter;
-    Escape.hDevice = Device->hDevice;
-    Escape.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
-    Escape.pPrivateDriverData = &Info;
-    Escape.PrivateDriverDataSize = sizeof(Info);
-    Status = D3DKMTEscape(&Escape);
+    if (Device->RuntimeCallbacks)
+    {
+        RtlZeroMemory(&CallbackEscape, sizeof(CallbackEscape));
+        CallbackEscape.hDevice = Device->RuntimeDevice;
+        CallbackEscape.pPrivateDriverData = &Info;
+        CallbackEscape.PrivateDriverDataSize = sizeof(Info);
+        Status = Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnEscapeCb(
+                (HANDLE)(ULONG_PTR)Device->hAdapter,
+                &CallbackEscape));
+    }
+    else
+    {
+        RtlZeroMemory(&Escape, sizeof(Escape));
+        Escape.hAdapter = Device->hAdapter;
+        Escape.hDevice = Device->hDevice;
+        Escape.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
+        Escape.pPrivateDriverData = &Info;
+        Escape.PrivateDriverDataSize = sizeof(Info);
+        Status = D3DKMTEscape(&Escape);
+    }
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -406,9 +453,20 @@ Vc4KmtFreeGpuVaRange(
     _In_ D3DGPU_SIZE_T Size)
 {
     D3DKMT_FREEGPUVIRTUALADDRESS FreeGpuVa;
+    D3DDDICB_FREEGPUVIRTUALADDRESS CallbackFree;
 
     if (BaseAddress == 0 || Size == 0 || Device->Fake)
         return STATUS_SUCCESS;
+
+    if (Device->RuntimeCallbacks)
+    {
+        RtlZeroMemory(&CallbackFree, sizeof(CallbackFree));
+        CallbackFree.BaseAddress = BaseAddress;
+        CallbackFree.Size = Size;
+        return Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnFreeGpuVirtualAddressCb(
+                Device->RuntimeDevice, &CallbackFree));
+    }
 
     RtlZeroMemory(&FreeGpuVa, sizeof(FreeGpuVa));
     FreeGpuVa.hAdapter = Device->hAdapter;
@@ -634,6 +692,124 @@ fail:
     return Status;
 }
 
+NTSTATUS
+vc4kmt_open_umd(
+    _In_ HANDLE Adapter,
+    _In_ HANDLE RuntimeDevice,
+    _In_ const VOID *Callbacks,
+    _Outptr_ VC4KMT_DEVICE **DeviceOut)
+{
+    const D3DDDI_DEVICECALLBACKS *RuntimeCallbacks =
+        (const D3DDDI_DEVICECALLBACKS *)Callbacks;
+    VC4KMT_DEVICE *Device;
+    D3DDDICB_CREATEPAGINGQUEUE CreatePagingQueue;
+    NTSTATUS Status;
+    UINT NodeOrdinal;
+
+    if (Adapter == NULL || RuntimeDevice == NULL || RuntimeCallbacks == NULL ||
+        DeviceOut == NULL ||
+        RuntimeCallbacks->pfnEscapeCb == NULL ||
+        RuntimeCallbacks->pfnCreatePagingQueueCb == NULL ||
+        RuntimeCallbacks->pfnDestroyPagingQueueCb == NULL ||
+        RuntimeCallbacks->pfnCreateContextVirtualCb == NULL ||
+        RuntimeCallbacks->pfnDestroyContextCb == NULL ||
+        RuntimeCallbacks->pfnCreateSynchronizationObject2Cb == NULL ||
+        RuntimeCallbacks->pfnDestroySynchronizationObjectCb == NULL ||
+        RuntimeCallbacks->pfnAllocateCb == NULL ||
+        RuntimeCallbacks->pfnDeallocate2Cb == NULL ||
+        RuntimeCallbacks->pfnMapGpuVirtualAddressCb == NULL ||
+        RuntimeCallbacks->pfnFreeGpuVirtualAddressCb == NULL ||
+        RuntimeCallbacks->pfnLock2Cb == NULL ||
+        RuntimeCallbacks->pfnUnlock2Cb == NULL ||
+        RuntimeCallbacks->pfnInvalidateCacheCb == NULL ||
+        RuntimeCallbacks->pfnWaitForSynchronizationObjectFromCpuCb == NULL ||
+        RuntimeCallbacks->pfnWaitForSynchronizationObjectFromGpuCb == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *DeviceOut = NULL;
+    Device = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Device));
+    if (Device == NULL)
+        return STATUS_NO_MEMORY;
+
+    Device->RuntimeCallbacks = TRUE;
+    Device->RuntimeDevice = RuntimeDevice;
+    Device->hAdapter = (D3DKMT_HANDLE)(ULONG_PTR)Adapter;
+    Device->Callbacks = *RuntimeCallbacks;
+
+    RtlZeroMemory(&CreatePagingQueue, sizeof(CreatePagingQueue));
+    Status = Vc4KmtCallbackStatus(
+        Device->Callbacks.pfnCreatePagingQueueCb(
+            Device->RuntimeDevice, &CreatePagingQueue));
+    if (!NT_SUCCESS(Status))
+        goto fail;
+    Device->hPagingQueue = CreatePagingQueue.hPagingQueue;
+
+    Status = Vc4KmtQueryInfo(Device);
+    if (!NT_SUCCESS(Status))
+        goto fail;
+
+    for (NodeOrdinal = 0;
+         NodeOrdinal < RPI5VC4_GPU_NODE_COUNT;
+         ++NodeOrdinal)
+    {
+        D3DDDICB_CREATECONTEXTVIRTUAL CreateContext;
+        D3DDDICB_CREATESYNCHRONIZATIONOBJECT2 CreateSync;
+        BOOL Required;
+
+        Required = NodeOrdinal == RPI5VC4_NODE_3D ||
+                   (NodeOrdinal == RPI5VC4_NODE_TFU &&
+                    (Device->Info.Caps & RPI5VC4_CAP_TFU_SUBMIT) != 0) ||
+                   (NodeOrdinal == RPI5VC4_NODE_CSD &&
+                    (Device->Info.Caps & RPI5VC4_CAP_CSD_SUBMIT) != 0);
+        if (!Required)
+            continue;
+
+        RtlZeroMemory(&CreateContext, sizeof(CreateContext));
+        CreateContext.NodeOrdinal = NodeOrdinal;
+        CreateContext.EngineAffinity = 1;
+        Status = Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnCreateContextVirtualCb(
+                Device->RuntimeDevice, &CreateContext));
+        if (!NT_SUCCESS(Status) || CreateContext.hContext == NULL)
+        {
+            if (NT_SUCCESS(Status))
+                Status = STATUS_INVALID_DEVICE_STATE;
+            goto fail;
+        }
+        Device->hContext[NodeOrdinal] =
+            (D3DKMT_HANDLE)(ULONG_PTR)CreateContext.hContext;
+
+        RtlZeroMemory(&CreateSync, sizeof(CreateSync));
+        CreateSync.Info.Type = D3DDDI_MONITORED_FENCE;
+        CreateSync.Info.Flags.NoGPUAccess = 1;
+        CreateSync.Info.MonitoredFence.InitialFenceValue = 0;
+        Status = Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnCreateSynchronizationObject2Cb(
+                Device->RuntimeDevice, &CreateSync));
+        if (!NT_SUCCESS(Status) || CreateSync.hSyncObject == 0 ||
+            CreateSync.Info.MonitoredFence.FenceValueCPUVirtualAddress == NULL)
+        {
+            if (NT_SUCCESS(Status))
+                Status = STATUS_INVALID_DEVICE_STATE;
+            goto fail;
+        }
+        Device->hFence[NodeOrdinal] = CreateSync.hSyncObject;
+        Device->FenceCpuValue[NodeOrdinal] =
+            (volatile UINT64 *)
+                CreateSync.Info.MonitoredFence.FenceValueCPUVirtualAddress;
+    }
+
+    RtlZeroMemory(Device->NextFenceValue, sizeof(Device->NextFenceValue));
+    *DeviceOut = Device;
+    return STATUS_SUCCESS;
+
+fail:
+    vc4kmt_close(Device);
+    return Status;
+}
+
 VOID
 vc4kmt_close(
     _In_opt_ VC4KMT_DEVICE *Device)
@@ -643,7 +819,8 @@ vc4kmt_close(
     if (Device == NULL)
         return;
 
-    Vc4KmtClosePrimary(Device);
+    if (!Device->RuntimeCallbacks)
+        Vc4KmtClosePrimary(Device);
 
     for (NodeOrdinal = RPI5VC4_GPU_NODE_COUNT; NodeOrdinal != 0; )
     {
@@ -652,9 +829,22 @@ vc4kmt_close(
         NodeOrdinal--;
         if (Device->hContext[NodeOrdinal] == 0)
             continue;
-        RtlZeroMemory(&DestroyContext, sizeof(DestroyContext));
-        DestroyContext.hContext = Device->hContext[NodeOrdinal];
-        (void)D3DKMTDestroyContext(&DestroyContext);
+        if (Device->RuntimeCallbacks)
+        {
+            D3DDDICB_DESTROYCONTEXT CallbackDestroy;
+
+            RtlZeroMemory(&CallbackDestroy, sizeof(CallbackDestroy));
+            CallbackDestroy.hContext =
+                (HANDLE)(ULONG_PTR)Device->hContext[NodeOrdinal];
+            (void)Device->Callbacks.pfnDestroyContextCb(
+                Device->RuntimeDevice, &CallbackDestroy);
+        }
+        else
+        {
+            RtlZeroMemory(&DestroyContext, sizeof(DestroyContext));
+            DestroyContext.hContext = Device->hContext[NodeOrdinal];
+            (void)D3DKMTDestroyContext(&DestroyContext);
+        }
         Device->hContext[NodeOrdinal] = 0;
     }
 
@@ -665,9 +855,21 @@ vc4kmt_close(
         NodeOrdinal--;
         if (Device->hFence[NodeOrdinal] == 0)
             continue;
-        RtlZeroMemory(&DestroySync, sizeof(DestroySync));
-        DestroySync.hSyncObject = Device->hFence[NodeOrdinal];
-        (void)D3DKMTDestroySynchronizationObject(&DestroySync);
+        if (Device->RuntimeCallbacks)
+        {
+            D3DDDICB_DESTROYSYNCHRONIZATIONOBJECT CallbackDestroy;
+
+            RtlZeroMemory(&CallbackDestroy, sizeof(CallbackDestroy));
+            CallbackDestroy.hSyncObject = Device->hFence[NodeOrdinal];
+            (void)Device->Callbacks.pfnDestroySynchronizationObjectCb(
+                Device->RuntimeDevice, &CallbackDestroy);
+        }
+        else
+        {
+            RtlZeroMemory(&DestroySync, sizeof(DestroySync));
+            DestroySync.hSyncObject = Device->hFence[NodeOrdinal];
+            (void)D3DKMTDestroySynchronizationObject(&DestroySync);
+        }
         Device->hFence[NodeOrdinal] = 0;
         Device->FenceCpuValue[NodeOrdinal] = NULL;
     }
@@ -678,10 +880,18 @@ vc4kmt_close(
 
         RtlZeroMemory(&DestroyPagingQueue, sizeof(DestroyPagingQueue));
         DestroyPagingQueue.hPagingQueue = Device->hPagingQueue;
-        (void)D3DKMTDestroyPagingQueue(&DestroyPagingQueue);
+        if (Device->RuntimeCallbacks)
+        {
+            (void)Device->Callbacks.pfnDestroyPagingQueueCb(
+                Device->RuntimeDevice, &DestroyPagingQueue);
+        }
+        else
+        {
+            (void)D3DKMTDestroyPagingQueue(&DestroyPagingQueue);
+        }
     }
 
-    if (Device->hDevice != 0)
+    if (!Device->RuntimeCallbacks && Device->hDevice != 0)
     {
         D3DKMT_DESTROYDEVICE DestroyDevice;
 
@@ -690,7 +900,7 @@ vc4kmt_close(
         (void)D3DKMTDestroyDevice(&DestroyDevice);
     }
 
-    if (Device->hAdapter != 0)
+    if (!Device->RuntimeCallbacks && Device->hAdapter != 0)
     {
         D3DKMT_CLOSEADAPTER CloseAdapter;
 
@@ -726,8 +936,21 @@ vc4kmt_bo_create_ex(
     _In_ ULONG Flags,
     _Out_ VC4KMT_BO *Bo)
 {
+    return vc4kmt_bo_create_resource_ex(Device, Size, Flags, NULL, Bo);
+}
+
+NTSTATUS
+vc4kmt_bo_create_resource_ex(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Size,
+    _In_ ULONG Flags,
+    _In_opt_ HANDLE RuntimeResource,
+    _Out_ VC4KMT_BO *Bo)
+{
     D3DKMT_CREATEALLOCATION CreateData;
     D3DDDI_ALLOCATIONINFO AllocationInfo;
+    D3DDDICB_ALLOCATE CallbackCreate;
+    D3DDDI_ALLOCATIONINFO2 CallbackAllocationInfo;
     D3DDDI_MAPGPUVIRTUALADDRESS MapGpuVa;
     RPI5VC4_ALLOCATION_DATA PrivateData;
     NTSTATUS Status;
@@ -754,24 +977,47 @@ vc4kmt_bo_create_ex(
         return STATUS_SUCCESS;
     }
 
-    RtlZeroMemory(&CreateData, sizeof(CreateData));
-    RtlZeroMemory(&AllocationInfo, sizeof(AllocationInfo));
     PrivateData.Size = Size;
     PrivateData.Flags =
         (Flags & VC4KMT_BO_CREATE_CPU_CACHED) ?
         RPI5VC4_ALLOCATION_CPU_CACHED : 0;
-    AllocationInfo.PrivateDriverDataSize = sizeof(PrivateData);
-    AllocationInfo.pPrivateDriverData = &PrivateData;
-    CreateData.hDevice = Device->hDevice;
-    CreateData.NumAllocations = 1;
-    CreateData.pAllocationInfo = &AllocationInfo;
 
-    Status = D3DKMTCreateAllocation(&CreateData);
+    if (Device->RuntimeCallbacks)
+    {
+        RtlZeroMemory(&CallbackCreate, sizeof(CallbackCreate));
+        RtlZeroMemory(&CallbackAllocationInfo,
+                      sizeof(CallbackAllocationInfo));
+        CallbackAllocationInfo.PrivateDriverDataSize = sizeof(PrivateData);
+        CallbackAllocationInfo.pPrivateDriverData = &PrivateData;
+        CallbackCreate.hResource = RuntimeResource;
+        CallbackCreate.NumAllocations = 1;
+        CallbackCreate.pAllocationInfo2 = &CallbackAllocationInfo;
+        Status = Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnAllocateCb(
+                Device->RuntimeDevice, &CallbackCreate));
+        Bo->hAllocation = CallbackAllocationInfo.hAllocation;
+    }
+    else
+    {
+        RtlZeroMemory(&CreateData, sizeof(CreateData));
+        RtlZeroMemory(&AllocationInfo, sizeof(AllocationInfo));
+        AllocationInfo.PrivateDriverDataSize = sizeof(PrivateData);
+        AllocationInfo.pPrivateDriverData = &PrivateData;
+        CreateData.hDevice = Device->hDevice;
+        CreateData.NumAllocations = 1;
+        CreateData.pAllocationInfo = &AllocationInfo;
+        Status = D3DKMTCreateAllocation(&CreateData);
+        Bo->hAllocation = AllocationInfo.hAllocation;
+    }
     if (!NT_SUCCESS(Status))
         return Status;
+    if (Bo->hAllocation == 0)
+        return STATUS_INVALID_DEVICE_STATE;
 
-    Bo->hAllocation = AllocationInfo.hAllocation;
     Bo->Size = Size;
+    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, RuntimeResource);
+    if (!NT_SUCCESS(Status))
+        goto fail;
 
     MappedSize = ((UINT64)Size + 4095u) & ~4095ULL;
     SizeInPages = (UINT)(MappedSize / 4096u);
@@ -783,7 +1029,11 @@ vc4kmt_bo_create_ex(
     MapGpuVa.hPagingQueue = Device->hPagingQueue;
     MapGpuVa.Protection.Write = 1;
     MapGpuVa.Protection.Execute = 1;
-    Status = D3DKMTMapGpuVirtualAddress(&MapGpuVa);
+    Status = Device->RuntimeCallbacks ?
+        Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnMapGpuVirtualAddressCb(
+                Device->RuntimeDevice, &MapGpuVa)) :
+        D3DKMTMapGpuVirtualAddress(&MapGpuVa);
     if (!NT_SUCCESS(Status))
         goto fail;
 
@@ -799,9 +1049,6 @@ vc4kmt_bo_create_ex(
     }
 
     Bo->GpuVa = (ULONG)MapGpuVa.VirtualAddress;
-    Status = Vc4KmtTrackBo(Device, Bo->hAllocation);
-    if (!NT_SUCCESS(Status))
-        goto fail;
     return STATUS_SUCCESS;
 
 fail:
@@ -816,6 +1063,7 @@ vc4kmt_bo_map(
     _Outptr_ PVOID *CpuVaOut)
 {
     D3DKMT_LOCK LockData;
+    D3DDDICB_LOCK2 CallbackLock;
     NTSTATUS Status;
 
     if (Device == NULL || Bo == NULL || CpuVaOut == NULL ||
@@ -839,36 +1087,72 @@ vc4kmt_bo_map(
         return STATUS_INVALID_DEVICE_REQUEST;
 
     RtlZeroMemory(&LockData, sizeof(LockData));
-    LockData.hDevice = Device->hDevice;
-    LockData.hAllocation = Bo->hAllocation;
-    Status = D3DKMTLock(&LockData);
+    RtlZeroMemory(&CallbackLock, sizeof(CallbackLock));
+    if (Device->RuntimeCallbacks)
+    {
+        CallbackLock.hAllocation = Bo->hAllocation;
+        Status = Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnLock2Cb(
+                Device->RuntimeDevice, &CallbackLock));
+        LockData.pData = CallbackLock.pData;
+    }
+    else
+    {
+        LockData.hDevice = Device->hDevice;
+        LockData.hAllocation = Bo->hAllocation;
+        Status = D3DKMTLock(&LockData);
+    }
     if (!NT_SUCCESS(Status))
         return Status;
 
     if (LockData.pData == NULL)
     {
-        D3DKMT_UNLOCK UnlockData;
-        D3DKMT_HANDLE hAllocation = Bo->hAllocation;
+        if (Device->RuntimeCallbacks)
+        {
+            D3DDDICB_UNLOCK2 CallbackUnlock;
 
-        RtlZeroMemory(&UnlockData, sizeof(UnlockData));
-        UnlockData.hDevice = Device->hDevice;
-        UnlockData.NumAllocations = 1;
-        UnlockData.phAllocations = &hAllocation;
-        (void)D3DKMTUnlock(&UnlockData);
+            RtlZeroMemory(&CallbackUnlock, sizeof(CallbackUnlock));
+            CallbackUnlock.hAllocation = Bo->hAllocation;
+            (void)Device->Callbacks.pfnUnlock2Cb(
+                Device->RuntimeDevice, &CallbackUnlock);
+        }
+        else
+        {
+            D3DKMT_UNLOCK UnlockData;
+            D3DKMT_HANDLE hAllocation = Bo->hAllocation;
+
+            RtlZeroMemory(&UnlockData, sizeof(UnlockData));
+            UnlockData.hDevice = Device->hDevice;
+            UnlockData.NumAllocations = 1;
+            UnlockData.phAllocations = &hAllocation;
+            (void)D3DKMTUnlock(&UnlockData);
+        }
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
     Bo->CpuVa = LockData.pData;
     if (!Vc4KmtMarkBoMapped(Device, Bo->hAllocation))
     {
-        D3DKMT_UNLOCK UnlockData;
-        D3DKMT_HANDLE hAllocation = Bo->hAllocation;
+        if (Device->RuntimeCallbacks)
+        {
+            D3DDDICB_UNLOCK2 CallbackUnlock;
 
-        RtlZeroMemory(&UnlockData, sizeof(UnlockData));
-        UnlockData.hDevice = Device->hDevice;
-        UnlockData.NumAllocations = 1;
-        UnlockData.phAllocations = &hAllocation;
-        (void)D3DKMTUnlock(&UnlockData);
+            RtlZeroMemory(&CallbackUnlock, sizeof(CallbackUnlock));
+            CallbackUnlock.hAllocation = Bo->hAllocation;
+            (void)Device->Callbacks.pfnUnlock2Cb(
+                Device->RuntimeDevice, &CallbackUnlock);
+        }
+        else
+        {
+            D3DKMT_UNLOCK UnlockData;
+            D3DKMT_HANDLE hAllocation = Bo->hAllocation;
+
+            RtlZeroMemory(&UnlockData, sizeof(UnlockData));
+            UnlockData.hDevice = Device->hDevice;
+            UnlockData.NumAllocations = 1;
+            UnlockData.phAllocations = &hAllocation;
+            (void)D3DKMTUnlock(&UnlockData);
+        }
         Bo->CpuVa = NULL;
         return STATUS_INVALID_DEVICE_STATE;
     }
@@ -884,6 +1168,7 @@ vc4kmt_bo_invalidate(
     _In_ UINT Length)
 {
     D3DKMT_INVALIDATECACHE InvalidateData;
+    D3DDDICB_INVALIDATECACHE CallbackInvalidate;
 
     if (Device == NULL || Bo == NULL || Bo->hAllocation == 0 ||
         Length == 0 || Offset > Bo->Size || Length > Bo->Size - Offset)
@@ -895,6 +1180,17 @@ vc4kmt_bo_invalidate(
     {
         MemoryBarrier();
         return STATUS_SUCCESS;
+    }
+
+    if (Device->RuntimeCallbacks)
+    {
+        RtlZeroMemory(&CallbackInvalidate, sizeof(CallbackInvalidate));
+        CallbackInvalidate.hAllocation = Bo->hAllocation;
+        CallbackInvalidate.Offset = Offset;
+        CallbackInvalidate.Length = Length;
+        return Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnInvalidateCacheCb(
+                Device->RuntimeDevice, &CallbackInvalidate));
     }
 
     RtlZeroMemory(&InvalidateData, sizeof(InvalidateData));
@@ -1050,7 +1346,7 @@ vc4kmt_bo_open_shared(
     }
 
     Bo->GpuVa = (ULONG)MapGpuVa.VirtualAddress;
-    Status = Vc4KmtTrackBo(Device, Bo->hAllocation);
+    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, NULL);
 
 Cleanup:
     if (!NT_SUCCESS(Status) && *hResource != 0)
@@ -1359,6 +1655,7 @@ vc4kmt_bo_destroy(
 {
     NTSTATUS Status = STATUS_SUCCESS;
     NTSTATUS FreeStatus;
+    HANDLE RuntimeResource;
 
     if (Device == NULL || Bo == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -1371,18 +1668,30 @@ vc4kmt_bo_destroy(
         return STATUS_SUCCESS;
     }
 
-    Vc4KmtUntrackBo(Device, Bo->hAllocation);
+    RuntimeResource = Vc4KmtUntrackBo(Device, Bo->hAllocation);
 
     if (Bo->CpuVa != NULL && Bo->hAllocation != 0)
     {
-        D3DKMT_UNLOCK UnlockData;
-        D3DKMT_HANDLE hAllocation = Bo->hAllocation;
+        if (Device->RuntimeCallbacks)
+        {
+            D3DDDICB_UNLOCK2 CallbackUnlock;
 
-        RtlZeroMemory(&UnlockData, sizeof(UnlockData));
-        UnlockData.hDevice = Device->hDevice;
-        UnlockData.NumAllocations = 1;
-        UnlockData.phAllocations = &hAllocation;
-        (void)D3DKMTUnlock(&UnlockData);
+            RtlZeroMemory(&CallbackUnlock, sizeof(CallbackUnlock));
+            CallbackUnlock.hAllocation = Bo->hAllocation;
+            (void)Device->Callbacks.pfnUnlock2Cb(
+                Device->RuntimeDevice, &CallbackUnlock);
+        }
+        else
+        {
+            D3DKMT_UNLOCK UnlockData;
+            D3DKMT_HANDLE hAllocation = Bo->hAllocation;
+
+            RtlZeroMemory(&UnlockData, sizeof(UnlockData));
+            UnlockData.hDevice = Device->hDevice;
+            UnlockData.NumAllocations = 1;
+            UnlockData.phAllocations = &hAllocation;
+            (void)D3DKMTUnlock(&UnlockData);
+        }
         Bo->CpuVa = NULL;
     }
 
@@ -1395,14 +1704,33 @@ vc4kmt_bo_destroy(
 
     if (Bo->hAllocation != 0)
     {
-        D3DKMT_DESTROYALLOCATION DestroyData;
-        D3DKMT_HANDLE hAllocation = Bo->hAllocation;
+        if (Device->RuntimeCallbacks)
+        {
+            D3DDDICB_DEALLOCATE2 CallbackDestroy;
+            D3DKMT_HANDLE hAllocation = Bo->hAllocation;
 
-        RtlZeroMemory(&DestroyData, sizeof(DestroyData));
-        DestroyData.hDevice = Device->hDevice;
-        DestroyData.phAllocationList = &hAllocation;
-        DestroyData.AllocationCount = 1;
-        FreeStatus = D3DKMTDestroyAllocation(&DestroyData);
+            RtlZeroMemory(&CallbackDestroy, sizeof(CallbackDestroy));
+            CallbackDestroy.hResource = RuntimeResource;
+            if (RuntimeResource == NULL)
+            {
+                CallbackDestroy.NumAllocations = 1;
+                CallbackDestroy.HandleList = &hAllocation;
+            }
+            FreeStatus = Vc4KmtCallbackStatus(
+                Device->Callbacks.pfnDeallocate2Cb(
+                    Device->RuntimeDevice, &CallbackDestroy));
+        }
+        else
+        {
+            D3DKMT_DESTROYALLOCATION DestroyData;
+            D3DKMT_HANDLE hAllocation = Bo->hAllocation;
+
+            RtlZeroMemory(&DestroyData, sizeof(DestroyData));
+            DestroyData.hDevice = Device->hDevice;
+            DestroyData.phAllocationList = &hAllocation;
+            DestroyData.AllocationCount = 1;
+            FreeStatus = D3DKMTDestroyAllocation(&DestroyData);
+        }
         if (NT_SUCCESS(Status))
             Status = FreeStatus;
     }
@@ -1422,6 +1750,7 @@ Vc4KmtSubmitPacket(
     UCHAR *SubmitBytes;
     VC4KMT_SUBMIT_SIGNAL_VIEW SubmitView;
     D3DKMT_ESCAPE Escape;
+    D3DDDICB_ESCAPE CallbackEscape;
     NTSTATUS Status;
     UINT FixedBytes;
     UINT SubmitBytesSize;
@@ -1515,12 +1844,24 @@ Vc4KmtSubmitPacket(
     Escape.pPrivateDriverData = SubmitBytes;
     Escape.PrivateDriverDataSize = SubmitView.PrivateBytes;
 
+    RtlZeroMemory(&CallbackEscape, sizeof(CallbackEscape));
+    CallbackEscape.hDevice = Device->RuntimeDevice;
+    CallbackEscape.hContext =
+        (HANDLE)(ULONG_PTR)Device->hContext[NodeOrdinal];
+    CallbackEscape.pPrivateDriverData = SubmitBytes;
+    CallbackEscape.PrivateDriverDataSize = SubmitView.PrivateBytes;
+
     {
         ULONG Tries;
 
         for (Tries = 0; Tries < 4000; Tries++)
         {
-            Status = D3DKMTEscape(&Escape);
+            Status = Device->RuntimeCallbacks ?
+                Vc4KmtCallbackStatus(
+                    Device->Callbacks.pfnEscapeCb(
+                        (HANDLE)(ULONG_PTR)Device->hAdapter,
+                        &CallbackEscape)) :
+                D3DKMTEscape(&Escape);
             if (Status != (NTSTATUS)0x80000011L)
                 break;
             Sleep(1);
@@ -1802,6 +2143,7 @@ vc4kmt_wait_many(
     _In_ DWORD TimeoutMs)
 {
     D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
+    D3DDDICB_WAITFORSYNCHRONIZATIONOBJECTFROMCPU CallbackWait;
     const VC4KMT_FENCE *Pending[D3DDDI_MAX_OBJECT_WAITED_ON];
     D3DKMT_HANDLE Handles[D3DDDI_MAX_OBJECT_WAITED_ON];
     UINT64 Values[D3DDDI_MAX_OBJECT_WAITED_ON];
@@ -1855,8 +2197,19 @@ vc4kmt_wait_many(
         }
     }
 
-    if (Device->hDevice == 0)
+    if (!Device->RuntimeCallbacks && Device->hDevice == 0)
         return STATUS_INVALID_DEVICE_STATE;
+
+    if (Device->RuntimeCallbacks)
+    {
+        RtlZeroMemory(&CallbackWait, sizeof(CallbackWait));
+        CallbackWait.ObjectCount = PendingCount;
+        CallbackWait.ObjectHandleArray = Handles;
+        CallbackWait.FenceValueArray = Values;
+        return Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnWaitForSynchronizationObjectFromCpuCb(
+                Device->RuntimeDevice, &CallbackWait));
+    }
 
     RtlZeroMemory(&Wait, sizeof(Wait));
     Wait.hDevice = Device->hDevice;
@@ -1886,6 +2239,7 @@ vc4kmt_wait_async_many(
     _In_ HANDLE CompletionEvent)
 {
     D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU Wait;
+    D3DDDICB_WAITFORSYNCHRONIZATIONOBJECTFROMCPU CallbackWait;
     const VC4KMT_FENCE *Pending[D3DDDI_MAX_OBJECT_WAITED_ON];
     D3DKMT_HANDLE Handles[D3DDDI_MAX_OBJECT_WAITED_ON];
     UINT64 Values[D3DDDI_MAX_OBJECT_WAITED_ON];
@@ -1909,12 +2263,24 @@ vc4kmt_wait_async_many(
     if (PendingCount == 0)
         return SetEvent(CompletionEvent) ? STATUS_SUCCESS :
                                           STATUS_UNSUCCESSFUL;
-    if (Device->hDevice == 0)
+    if (!Device->RuntimeCallbacks && Device->hDevice == 0)
         return STATUS_INVALID_DEVICE_STATE;
     for (FenceIndex = 0; FenceIndex < PendingCount; ++FenceIndex)
     {
         if (Handles[FenceIndex] == 0)
             return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    if (Device->RuntimeCallbacks)
+    {
+        RtlZeroMemory(&CallbackWait, sizeof(CallbackWait));
+        CallbackWait.ObjectCount = PendingCount;
+        CallbackWait.ObjectHandleArray = Handles;
+        CallbackWait.FenceValueArray = Values;
+        CallbackWait.hAsyncEvent = CompletionEvent;
+        return Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnWaitForSynchronizationObjectFromCpuCb(
+                Device->RuntimeDevice, &CallbackWait));
     }
 
     RtlZeroMemory(&Wait, sizeof(Wait));
@@ -1946,6 +2312,7 @@ vc4kmt_wait_gpu_many(
     _In_ UINT FenceCount)
 {
     D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU Wait;
+    D3DDDICB_WAITFORSYNCHRONIZATIONOBJECTFROMGPU CallbackWait;
     const VC4KMT_FENCE *Pending[D3DDDI_MAX_OBJECT_WAITED_ON];
     D3DKMT_HANDLE Handles[D3DDDI_MAX_OBJECT_WAITED_ON];
     UINT64 Values[D3DDDI_MAX_OBJECT_WAITED_ON];
@@ -2002,12 +2369,27 @@ vc4kmt_wait_gpu_many(
     if (PendingCount == 0)
         return STATUS_SUCCESS;
 
-    RtlZeroMemory(&Wait, sizeof(Wait));
-    Wait.hContext = Device->hContext[NodeOrdinal];
-    Wait.ObjectCount = PendingCount;
-    Wait.ObjectHandleArray = Handles;
-    Wait.MonitoredFenceValueArray = Values;
-    Status = D3DKMTWaitForSynchronizationObjectFromGpu(&Wait);
+    if (Device->RuntimeCallbacks)
+    {
+        RtlZeroMemory(&CallbackWait, sizeof(CallbackWait));
+        CallbackWait.hContext =
+            (HANDLE)(ULONG_PTR)Device->hContext[NodeOrdinal];
+        CallbackWait.ObjectCount = PendingCount;
+        CallbackWait.ObjectHandleArray = Handles;
+        CallbackWait.MonitoredFenceValueArray = Values;
+        Status = Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnWaitForSynchronizationObjectFromGpuCb(
+                Device->RuntimeDevice, &CallbackWait));
+    }
+    else
+    {
+        RtlZeroMemory(&Wait, sizeof(Wait));
+        Wait.hContext = Device->hContext[NodeOrdinal];
+        Wait.ObjectCount = PendingCount;
+        Wait.ObjectHandleArray = Handles;
+        Wait.MonitoredFenceValueArray = Values;
+        Status = D3DKMTWaitForSynchronizationObjectFromGpu(&Wait);
+    }
     if (Status == STATUS_DEVICE_BUSY)
     {
         for (FenceIndex = 0; FenceIndex < PendingCount; ++FenceIndex)
