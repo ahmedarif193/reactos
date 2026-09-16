@@ -13,7 +13,16 @@ typedef struct
     ULONG Length;
     ULONG Function;
     PFILE_OBJECT FileObject;
+    PVOID OriginalSystemBuffer;
+    BOOLEAN IsWow64;
 }WDMAUD_COMPLETION_CONTEXT, *PWDMAUD_COMPLETION_CONTEXT;
+
+/*
+ * Device-control handlers traditionally complete their IRP directly through
+ * SetIrpIoStatus.  The WOW64 thunk needs to translate the native result back
+ * into the 32-bit wire layout first, so it temporarily defers completion.
+ */
+#define WDMAUD_DEFER_IRP_COMPLETION ((PVOID)(ULONG_PTR)1)
 
 
 typedef struct
