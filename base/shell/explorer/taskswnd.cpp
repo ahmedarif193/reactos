@@ -639,6 +639,7 @@ class CTaskSwitchWnd :
     PTASK_ITEM m_ActiveTaskItem;
     BOOL m_bMaterial;
     COLORREF m_crMaterial;
+    INT m_cyTaskRow;
     INT m_HoverIndex;
     BOOL m_HoverPreviewPending;
     COLORREF m_crGlowCache;
@@ -684,6 +685,7 @@ public:
         m_ActiveTaskItem(NULL),
         m_bMaterial(FALSE),
         m_crMaterial(0),
+        m_cyTaskRow(0),
         m_HoverIndex(-1),
         m_HoverPreviewPending(FALSE),
         m_crGlowCache(0),
@@ -1625,7 +1627,7 @@ public:
 
     VOID MoveTaskButtonAnimated(IN INT from, IN INT to)
     {
-        BOOL bAnimate = IsWin7Bar();
+        BOOL bAnimate = IsModernTaskbar();
 
         if (from == to)
             return;
@@ -1772,7 +1774,7 @@ public:
         InvalidateDragPaint();
         SaveTaskbarPinOrder();
         pAnim = GetButtonAnim(Index);
-        if (pAnim && IsWin7Bar() && (pt.x || pt.y))
+        if (pAnim && IsModernTaskbar() && (pt.x || pt.y))
             StartAnim(pAnim, pt.x, pt.y);
         StartButtonAnimation();
     }
@@ -1912,7 +1914,7 @@ public:
             tbBtn.fsState = TBSTATE_ENABLED | TBSTATE_ELLIPSES;
             tbBtn.fsStyle = BTNS_CHECK | BTNS_NOPREFIX | BTNS_SHOWTEXT;
             windowText[0] = 0;
-            if (!IsWin7Bar())
+            if (!IsModernTaskbar())
                 GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText));
             tbBtn.iString = (DWORD_PTR)windowText;
             tbBtn.idCommand = iInsert;
@@ -1934,7 +1936,7 @@ public:
     BOOL ShouldCombine(IN PTASK_GROUP TaskGroup)
     {
         return TaskGroup && (TaskGroup->IsPinned ||
-               (m_IsGroupingEnabled && IsWin7Bar() && TaskGroup->dwTaskCount > 1));
+               (m_IsGroupingEnabled && IsModernTaskbar() && TaskGroup->dwTaskCount > 1));
     }
 
     VOID UpdateTaskGroupLayout()
@@ -1948,14 +1950,30 @@ public:
         }
     }
 
-    BOOL IsWin7Bar()
+    VOID RefreshTaskButtons()
     {
-        return m_Theme != NULL || IsThemeActive();
+        for (PTASK_GROUP Group = m_TaskGroups; Group; Group = Group->Next)
+        {
+            if (Group->IsCollapsed && Group->Index >= 0)
+                UpdateTaskGroupButton(Group);
+        }
+
+        PTASK_ITEM Last = m_TaskItemCount ? m_TaskItems + m_TaskItemCount : m_TaskItems;
+        for (PTASK_ITEM Item = m_TaskItems; Item != Last; ++Item)
+        {
+            if (Item->Index >= 0)
+                UpdateTaskItemButton(Item);
+        }
+    }
+
+    BOOL IsModernTaskbar()
+    {
+        return m_bMaterial;
     }
 
     BOOL UseSmallTaskIcons()
     {
-        return g_TaskbarSettings.bSmallIcons && !IsWin7Bar();
+        return g_TaskbarSettings.bSmallIcons && !IsModernTaskbar();
     }
 
     VOID ApplyTaskRowHeight()
@@ -1963,15 +1981,23 @@ public:
         DWORD dwSize;
         INT cxIcon, cyIcon, cyPad, cyWant;
 
-        if (!IsWin7Bar() || !m_Tray->IsHorizontal() || !m_ImageList)
+        if (!m_ImageList)
             return;
 
         if (!ImageList_GetIconSize(m_ImageList, &cxIcon, &cyIcon))
             return;
 
+        /* TB_SETBITMAPSIZE is also the way back from the synthetic modern
+           row height: it makes the toolbar recalculate its natural metrics. */
+        m_TaskBar.SendMessageW(TB_SETBITMAPSIZE, 0, MAKELPARAM(cxIcon, cyIcon));
+        if (!IsModernTaskbar() || !m_Tray->IsHorizontal())
+            return;
+
         dwSize = (DWORD)m_TaskBar.SendMessageW(TB_GETBUTTONSIZE, 0, 0);
         cyPad = (INT)HIWORD(dwSize) - cyIcon;
-        cyWant = ShellScaleForDpi(48);
+        cyWant = m_cyTaskRow;
+        if (cyWant <= 0)
+            return;
         if (cyPad < 0 || cyWant - cyPad <= cyIcon)
             return;
 
@@ -2040,7 +2066,7 @@ public:
             tbbi.fsState |= TBSTATE_WRAP;
         }
 
-        if (IsWin7Bar())
+        if (IsModernTaskbar())
         {
             windowText[0] = 0;
             tbbi.pszText = windowText;
@@ -2235,7 +2261,7 @@ public:
         tbBtn.fsStyle = BTNS_CHECK | BTNS_NOPREFIX | BTNS_SHOWTEXT;
         tbBtn.dwData = TaskItem->Index;
 
-        if (IsWin7Bar())
+        if (IsModernTaskbar())
         {
             windowText[0] = 0;
             tbBtn.iString = (DWORD_PTR) windowText;
@@ -2891,8 +2917,11 @@ public:
                 TaskGroup = TaskGroup->Next;
             }
             m_TaskBar.SetImageList(m_ImageList);
-            ApplyTaskRowHeight();
         }
+
+        ApplyTaskRowHeight();
+        DWORD ButtonSize = (DWORD)m_TaskBar.SendMessageW(TB_GETBUTTONSIZE, 0, 0);
+        m_ButtonSize.cy = HIWORD(ButtonSize);
 
         if (GetClientRect(&rcClient) && !IsRectEmpty(&rcClient))
         {
@@ -2935,7 +2964,7 @@ public:
                 uiMin = GetSystemMetrics(SM_CXSIZE) + (2 * GetSystemMetrics(SM_CXEDGE));
                 if (Horizontal)
                 {
-                    uiMax = IsWin7Bar() ? (UINT)ShellScaleForDpi(62) : GetSystemMetrics(SM_CXMINIMIZED);
+                    uiMax = IsModernTaskbar() ? (UINT)ShellScaleForDpi(62) : GetSystemMetrics(SM_CXMINIMIZED);
 
                     /* Calculate the ideal width and make sure it's within the allowed range */
                     NewBtnSize = (rcClient.right - (uiBtnsPerLine * cxButtonSpacing)) / uiBtnsPerLine;
@@ -3033,7 +3062,9 @@ public:
 
     LRESULT OnThemeChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
-        TRACE("OmThemeChanged\n");
+        TRACE("OnThemeChanged\n");
+
+        BOOL bWasModernTaskbar = IsModernTaskbar();
 
         if (m_Theme)
             CloseThemeData(m_Theme);
@@ -3042,16 +3073,19 @@ public:
             m_Theme = OpenThemeData(m_hWnd, L"TaskBand");
         else
             m_Theme = NULL;
-        m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial);
-        m_TaskBar.m_bTrackGlow = m_bMaterial && IsWin7Bar();
+        m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial, &m_cyTaskRow);
+        m_TaskBar.m_bTrackGlow = m_bMaterial && IsModernTaskbar();
         m_GlowCacheIcon = -1;
         m_HoverIndex = -1;
         TaskPreview_Hide();
 
-        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsWin7Bar();
+        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsModernTaskbar();
         UpdateTaskGroupLayout();
 
+        m_TaskBar.UpdateTbButtonSpacing(m_Tray->IsHorizontal(), m_Theme != NULL);
         UpdateButtonsSize(FALSE);
+        if (bWasModernTaskbar != IsModernTaskbar())
+            RefreshTaskButtons();
         InvalidateRect(NULL, TRUE);
 
         return TRUE;
@@ -3063,8 +3097,8 @@ public:
             return FALSE;
 
         SetWindowTheme(m_TaskBar.m_hWnd, m_Tray->IsHorizontal() ? L"TaskBand" : L"TaskBandVert", NULL);
-        m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial);
-        m_TaskBar.m_bTrackGlow = m_bMaterial && IsWin7Bar();
+        m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial, &m_cyTaskRow);
+        m_TaskBar.m_bTrackGlow = m_bMaterial && IsModernTaskbar();
 
         m_ImageList = ImageList_Create(GetSystemMetrics(UseSmallTaskIcons() ? SM_CXSMICON : SM_CXICON),
                                        GetSystemMetrics(UseSmallTaskIcons() ? SM_CYSMICON : SM_CYICON),
@@ -3524,7 +3558,7 @@ public:
 
         CancelTaskPreview();
 
-        if (IsWin7Bar() && (GetKeyState(VK_SHIFT) & 0x8000))
+        if (IsModernTaskbar() && (GetKeyState(VK_SHIFT) & 0x8000))
         {
             LaunchNewInstance(GroupOfIndex((INT) wIndex));
             return TRUE;
@@ -3535,7 +3569,7 @@ public:
             TaskGroup = FindTaskGroupByIndex((INT) wIndex);
             if (TaskGroup != NULL && TaskGroup->IsCollapsed)
             {
-                if (IsWin7Bar() && (GetKeyState(VK_CONTROL) & 0x8000))
+                if (IsModernTaskbar() && (GetKeyState(VK_CONTROL) & 0x8000))
                     CycleGroup(TaskGroup);
                 else
                     HandleTaskGroupClick(TaskGroup);
@@ -3794,7 +3828,7 @@ public:
 
         if (TaskItem != NULL)
         {
-            if (IsWin7Bar() && !(GetKeyState(VK_SHIFT) & 0x8000))
+            if (IsModernTaskbar() && !(GetKeyState(VK_SHIFT) & 0x8000))
                 ShowJumpList(TaskItem->Group, TaskItem);
             else
                 HandleTaskItemRightClick(TaskItem);
@@ -4213,7 +4247,7 @@ public:
 
         TaskItem = FindTaskItemByIndex((INT) nmtbcd->nmcd.dwItemSpec);
         TaskGroup = FindTaskGroupByIndex((INT) nmtbcd->nmcd.dwItemSpec);
-        if (IsWin7Bar())
+        if (IsModernTaskbar())
         {
             PTASK_ANIM pAnim = TaskGroup ? &TaskGroup->Anim : TaskItem ? &TaskItem->Anim : NULL;
             POINT pt;
@@ -4233,7 +4267,7 @@ public:
                 /* Make the entire button flashing if necessary */
                 if (nmtbcd->nmcd.uItemState & CDIS_MARKED)
                 {
-                    if (IsWin7Bar() && m_bMaterial)
+                    if (IsModernTaskbar() && m_bMaterial)
                         return DrawWin7TaskButton(nmtbcd, TaskItem);
                     Ret = TBCDRF_NOBACKGROUND;
                     if (!m_Theme)
@@ -4253,13 +4287,13 @@ public:
                     return Ret;
                 }
 
-                if (IsWin7Bar())
+                if (IsModernTaskbar())
                     return DrawWin7TaskButton(nmtbcd, TaskItem);
             }
         }
         else if (TaskGroup != NULL)
         {
-            if (IsWin7Bar())
+            if (IsModernTaskbar())
                 return DrawWin7TaskButtonWorker(nmtbcd, TaskGroup->IconIndex,
                                                 (INT)TaskGroup->dwTaskCount);
         }
@@ -4306,7 +4340,7 @@ public:
         {
             const NMTBHOTITEM *pHot = (const NMTBHOTITEM *)nmh;
 
-            if (IsWin7Bar())
+            if (IsModernTaskbar())
                 OnHotTaskChanged((pHot->dwFlags & HICF_LEAVING) ? -1 : pHot->idNew);
             break;
         }
@@ -4324,12 +4358,12 @@ public:
 
             case CDDS_PREPAINT:
                 Ret = CDRF_NOTIFYITEMDRAW;
-                if (m_bDragging && IsWin7Bar())
+                if (m_bDragging && IsModernTaskbar())
                     Ret |= CDRF_NOTIFYPOSTPAINT;
                 break;
 
             case CDDS_POSTPAINT:
-                if (m_bDragging && IsWin7Bar())
+                if (m_bDragging && IsModernTaskbar())
                     DrawDraggedTaskButton(nmtbcd);
                 Ret = CDRF_DODEFAULT;
                 break;
@@ -4542,6 +4576,7 @@ public:
         SetWindowTheme(m_TaskBar.m_hWnd, m_Tray->IsHorizontal() ? L"TaskBand" : L"TaskBandVert", NULL);
         /* Update the button spacing */
         m_TaskBar.UpdateTbButtonSpacing(m_Tray->IsHorizontal(), m_Theme != NULL);
+        UpdateButtonsSize(FALSE);
         return TRUE;
     }
 
@@ -4554,7 +4589,7 @@ public:
         {
             bSettingsChanged = TRUE;
             g_TaskbarSettings.bGroupButtons = newSettings->bGroupButtons;
-            m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsWin7Bar();
+            m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsModernTaskbar();
         }
 
         if (newSettings->bSmallIcons != g_TaskbarSettings.bSmallIcons)
@@ -4654,7 +4689,7 @@ public:
 
     LRESULT OnTaskButtonMButton(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
-        if (IsWin7Bar())
+        if (IsModernTaskbar())
             LaunchNewInstance(GroupOfIndex((INT)wParam));
         return 0;
     }
@@ -4756,7 +4791,8 @@ public:
     HRESULT Initialize(IN HWND hWndParent, IN OUT ITrayWindow *tray)
     {
         m_Tray = tray;
-        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsWin7Bar();
+        m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial, &m_cyTaskRow);
+        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsModernTaskbar();
         Create(hWndParent, 0, szRunningApps, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_TABSTOP);
         if (!m_hWnd)
             return E_FAIL;
@@ -4765,7 +4801,7 @@ public:
 
     VOID SetDropIndex(IN INT Index)
     {
-        BOOL bAnimate = IsWin7Bar();
+        BOOL bAnimate = IsModernTaskbar();
 
         if (Index == m_DropIndex)
             return;
