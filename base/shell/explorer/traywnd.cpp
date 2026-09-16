@@ -14,7 +14,8 @@
 
 HRESULT TrayWindowCtxMenuCreator(ITrayWindow * TrayWnd, IN HWND hWndOwner, IContextMenu ** ppCtxMenu);
 
-#define WM_APP_TRAYDESTROY  (WM_APP + 0x100)
+#define WM_APP_TRAYDESTROY    (WM_APP + 0x100)
+#define WM_APP_THEME_RELAYOUT (WM_APP + 0x101)
 
 #define TIMER_ID_AUTOHIDE 1
 #define TIMER_ID_MOUSETRACK 2
@@ -186,6 +187,8 @@ class CStartButton
 
     BOOL m_bOrbIcon;
     BOOL m_bMaterial;
+    BOOL m_bModernTaskbar;
+    BOOL m_bInitialized;
     COLORREF m_crMaterial;
 
 public:
@@ -194,6 +197,8 @@ public:
           m_Font(NULL),
           m_bOrbIcon(FALSE),
           m_bMaterial(FALSE),
+          m_bModernTaskbar(FALSE),
+          m_bInitialized(FALSE),
           m_crMaterial(0)
     {
         m_Size.cx = 0;
@@ -214,6 +219,11 @@ public:
         return m_Size;
     }
 
+    BOOL IsModernTaskbar()
+    {
+        return m_bModernTaskbar;
+    }
+
     VOID UpdateSize()
     {
         SIZE Size = { 0, 0 };
@@ -226,7 +236,7 @@ public:
 
         Size.cy = max(Size.cy, GetSystemMetrics(SM_CYCAPTION));
 
-        if (IsThemeActive())
+        if (m_bModernTaskbar)
             Size.cy = max(ShellScaleForDpi(40), 2 * GetSystemMetrics(SM_CYCAPTION));
 
         /* Save the size of the start button */
@@ -249,10 +259,76 @@ public:
         SetFont(m_Font, FALSE);
     }
 
-    VOID RefreshMaterial()
+    VOID ClearImageList()
     {
-        m_bMaterial = m_bOrbIcon &&
-                      ShellGetTaskbarMaterial(&m_crMaterial);
+        BUTTON_IMAGELIST bil = { 0 };
+
+        SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM)&bil);
+        if (m_ImageList)
+        {
+            ImageList_Destroy(m_ImageList);
+            m_ImageList = NULL;
+        }
+        m_bOrbIcon = FALSE;
+    }
+
+    VOID UpdateThemeAppearance()
+    {
+        COLORREF crMaterial = 0;
+        BOOL bModernTaskbar = ShellGetTaskbarMaterial(&crMaterial);
+        BOOL bRebuildImages = (bModernTaskbar != m_bModernTaskbar || !m_ImageList);
+        WCHAR szStartCaption[32];
+
+        m_bModernTaskbar = bModernTaskbar;
+        m_crMaterial = crMaterial;
+
+        if (!LoadStringW(hExplorerInstance, IDS_START, szStartCaption,
+                         _countof(szStartCaption)))
+        {
+            wcscpy(szStartCaption, L"Start");
+        }
+        if (m_bModernTaskbar)
+            szStartCaption[0] = UNICODE_NULL;
+        SetWindowTextW(szStartCaption);
+
+        if (bRebuildImages)
+        {
+            ClearImageList();
+            if (m_bModernTaskbar)
+            {
+                const INT cxIcon = ShellScaleForDpi(36);
+                m_ImageList = CreateStartOrbImageList(cxIcon);
+                if (m_ImageList)
+                {
+                    const INT Margin = ShellScaleForDpi(1);
+                    BUTTON_IMAGELIST bil = {m_ImageList,
+                                            {Margin, Margin, Margin, Margin},
+                                            BUTTON_IMAGELIST_ALIGN_CENTER};
+                    SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM)&bil);
+                    m_bOrbIcon = TRUE;
+                }
+            }
+            else
+            {
+                m_ImageList = ImageList_LoadImageW(hExplorerInstance,
+                                                   MAKEINTRESOURCEW(IDB_START),
+                                                   0, 0, 0,
+                                                   IMAGE_BITMAP,
+                                                   LR_LOADTRANSPARENT | LR_CREATEDIBSECTION);
+                if (m_ImageList)
+                {
+                    const INT Margin = ShellScaleForDpi(1);
+                    BUTTON_IMAGELIST bil = {m_ImageList,
+                                            {Margin, Margin, Margin, Margin},
+                                            BUTTON_IMAGELIST_ALIGN_LEFT};
+                    SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM)&bil);
+                }
+            }
+        }
+
+        m_bMaterial = m_bModernTaskbar && m_bOrbIcon;
+        UpdateSize();
+        InvalidateRect(NULL, TRUE);
     }
 
     VOID Initialize()
@@ -263,33 +339,8 @@ public:
         SubclassWindow(hWnd);
 
         SetWindowTheme(m_hWnd, L"Start", NULL);
-
-        if (IsThemeActive())
-        {
-            const INT cxIcon = ShellScaleForDpi(36);
-            m_ImageList = CreateStartOrbImageList(cxIcon);
-            if (m_ImageList)
-            {
-                const INT Margin = ShellScaleForDpi(1);
-                BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_CENTER};
-                SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
-                m_bOrbIcon = TRUE;
-            }
-        }
-        else
-        {
-            m_ImageList = ImageList_LoadImageW(hExplorerInstance,
-                                               MAKEINTRESOURCEW(IDB_START),
-                                               0, 0, 0,
-                                               IMAGE_BITMAP,
-                                               LR_LOADTRANSPARENT | LR_CREATEDIBSECTION);
-
-            const INT Margin = ShellScaleForDpi(1);
-            BUTTON_IMAGELIST bil = {m_ImageList, {Margin, Margin, Margin, Margin}, BUTTON_IMAGELIST_ALIGN_LEFT};
-            SendMessageW(BCM_SETIMAGELIST, 0, (LPARAM) &bil);
-        }
-        RefreshMaterial();
-        UpdateSize();
+        m_bInitialized = TRUE;
+        UpdateThemeAppearance();
     }
 
     HWND Create(HWND hwndParent)
@@ -302,9 +353,6 @@ public:
         {
             wcscpy(szStartCaption, L"Start");
         }
-
-        if (IsThemeActive())
-            szStartCaption[0] = 0;
 
         DWORD dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON | BS_LEFT | BS_VCENTER;
 
@@ -391,9 +439,11 @@ public:
 
     LRESULT OnThemeChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
-        RefreshMaterial();
-        bHandled = FALSE;
-        return 0;
+        LRESULT Result = DefWindowProc(uMsg, wParam, lParam);
+
+        if (m_bInitialized)
+            UpdateThemeAppearance();
+        return Result;
     }
 
     LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -447,7 +497,7 @@ public:
         }
 
         LRESULT lr = DefWindowProc(uMsg, wParam, lParam);
-        if (IsThemeActive() && !m_bOrbIcon)
+        if (m_bModernTaskbar && !m_bOrbIcon)
         {
             HDC hdc = GetDC();
             if (hdc)
@@ -525,7 +575,7 @@ public:
             /* UI Status */
             DWORD InSizeMove : 1;
             DWORD IsDragging : 1;
-            DWORD NewPosSize : 1;
+            DWORD ThemeLayoutPending : 1;
         };
     };
 
@@ -1822,6 +1872,52 @@ ChangePos:
         RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_INVALIDATE | RDW_ALLCHILDREN);
     }
 
+    INT GetDefaultTrayHeight()
+    {
+        SIZE StartSize = m_StartButton.GetSize();
+
+        if (!m_Theme)
+        {
+            return StartSize.cy + 2 * (GetSystemMetrics(SM_CYEDGE) +
+                                       GetSystemMetrics(SM_CYDLGFRAME));
+        }
+
+        INT Height = StartSize.cy - GetSystemMetrics(SM_CYEDGE);
+        if (!g_TaskbarSettings.bLock)
+            Height += GetSystemMetrics(SM_CYSIZEFRAME);
+        return Height;
+    }
+
+    LRESULT OnThemeRelayout(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        RECT rcScreen;
+
+        if (!ThemeLayoutPending)
+            return 0;
+        ThemeLayoutPending = FALSE;
+
+        if (!m_Rebar || !m_TaskSwitch || !IsPosHorizontal())
+            return 0;
+
+        /* Reset to the same one-row height used by the original startup
+           path. The task band can grow it only when the active theme has
+           explicitly requested the modern row height. */
+        m_TraySize.cy = GetDefaultTrayHeight();
+
+        rcScreen = m_TrayRects[m_Position];
+        GetScreenRect(m_Monitor, &rcScreen);
+        for (DWORD Position = ABE_LEFT; Position <= ABE_BOTTOM; ++Position)
+        {
+            GetTrayRectFromScreenRect(Position, &rcScreen, &m_TraySize,
+                                      &m_TrayRects[Position]);
+        }
+
+        CheckTrayWndPosition();
+        g_TaskbarSettings.sr.Size.cy = m_TraySize.cy;
+        g_TaskbarSettings.Save();
+        return 0;
+    }
+
     VOID RegLoadSettings()
     {
         DWORD Pos;
@@ -1848,14 +1944,12 @@ ChangePos:
             if(!m_Theme)
             {
                 g_TaskbarSettings.sr.Size.cx = StartBtnSize.cx + (2 * (EdgeSize.cx + DlgFrameSize.cx));
-                g_TaskbarSettings.sr.Size.cy = StartBtnSize.cy + (2 * (EdgeSize.cy + DlgFrameSize.cy));
+                g_TaskbarSettings.sr.Size.cy = GetDefaultTrayHeight();
             }
             else
             {
                 g_TaskbarSettings.sr.Size.cx = StartBtnSize.cx - EdgeSize.cx;
-                g_TaskbarSettings.sr.Size.cy = StartBtnSize.cy - EdgeSize.cy;
-                if(!g_TaskbarSettings.bLock)
-                    g_TaskbarSettings.sr.Size.cy += GetSystemMetrics(SM_CYSIZEFRAME);
+                g_TaskbarSettings.sr.Size.cy = GetDefaultTrayHeight();
             }
         }
         /* Determine a minimum tray window rectangle. The "client" height is
@@ -1947,7 +2041,7 @@ ChangePos:
             StartSize.cy = HIWORD(size) + (m_Theme ? GetSystemMetrics(SM_CYEDGE) : 0);
         }
 
-        if (m_Theme && Horizontal)
+        if (m_StartButton.IsModernTaskbar() && Horizontal)
         {
             StartSize.cy = rcClient.bottom;
             StartSize.cx = MulDiv(StartSize.cy, 6, 5);
@@ -2664,6 +2758,21 @@ ChangePos:
         m_Theme = OpenThemeData(m_hWnd, L"TaskBar");
         if (m_StartButton.m_hWnd)
             m_StartButton.SendMessage(WM_THEMECHANGED, 0, 0);
+        /*
+         * Theme changes are broadcast from another process.  A posted tray
+         * relayout can therefore run before that broadcaster reaches our
+         * child windows.  Refresh every child that participates in layout
+         * synchronously so that the rebar sees the new borders, row metrics,
+         * and notification-area margins when it is asked to resize.
+         */
+        if (m_Rebar)
+            ::SendMessageW(m_Rebar, WM_THEMECHANGED, wParam, lParam);
+        if (m_TaskSwitch)
+            ::SendMessageW(m_TaskSwitch, WM_THEMECHANGED, wParam, lParam);
+        if (m_TrayNotify)
+            ::SendMessageW(m_TrayNotify, WM_THEMECHANGED, wParam, lParam);
+        if (!m_Theme)
+            UpdateFonts();
 
         if (m_Theme)
         {
@@ -2678,8 +2787,12 @@ ChangePos:
         SetWindowPos(NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
         RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE);
 
-        /* The child controls reopen their theme data later in the synchronous broadcast. */
-        PostMessage(WM_SIZE, SIZE_RESTORED, 0);
+        /* Reflow after the frame and the task-band metrics have been updated. */
+        ThemeLayoutPending = (m_Rebar && m_TaskSwitch && IsPosHorizontal());
+        if (ThemeLayoutPending)
+            PostMessage(WM_APP_THEME_RELAYOUT, 0, 0);
+        else
+            PostMessage(WM_SIZE, SIZE_RESTORED, 0);
 
         return TRUE;
     }
@@ -3721,6 +3834,7 @@ HandleTrayContextMenu:
         MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
         MESSAGE_HANDLER(WM_NCMOUSEMOVE, OnMouseMove)
         MESSAGE_HANDLER(WM_APP_TRAYDESTROY, OnAppTrayDestroy)
+        MESSAGE_HANDLER(WM_APP_THEME_RELAYOUT, OnThemeRelayout)
         MESSAGE_HANDLER(WM_CLOSE, OnDoExitWindows)
         MESSAGE_HANDLER(WM_HOTKEY, OnHotkey)
         MESSAGE_HANDLER(WM_NCCALCSIZE, OnNcCalcSize)

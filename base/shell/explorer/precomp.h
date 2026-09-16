@@ -82,12 +82,15 @@ ShellScaleForDpi(INT Value)
 #define SHELL_TMT_FILLCOLOR  3802
 
 static inline BOOL
-ShellGetTaskbarMaterial(COLORREF *pcr)
+ShellGetTaskbarMaterial(COLORREF *pcr, INT *pcyTaskRow = NULL)
 {
     HTHEME hTheme;
     COLORREF cr = 0;
     BOOL bComposited = FALSE;
     HRESULT hr;
+
+    if (pcyTaskRow)
+        *pcyTaskRow = 0;
 
     if (!IsThemeActive())
         return FALSE;
@@ -99,6 +102,15 @@ ShellGetTaskbarMaterial(COLORREF *pcr)
         hr = GetThemeColor(hTheme, 0, 0, SHELL_TMT_FILLCOLOR, &cr);
     else
         hr = E_FAIL;
+    if (SUCCEEDED(hr) && pcyTaskRow)
+    {
+        POINT MinSize;
+        if (SUCCEEDED(GetThemePosition(hTheme, 0, 0, TMT_MINSIZE, &MinSize)) &&
+            MinSize.y > 0)
+        {
+            *pcyTaskRow = ShellScaleForDpi(MinSize.y);
+        }
+    }
     CloseThemeData(hTheme);
     if (FAILED(hr))
         return FALSE;
