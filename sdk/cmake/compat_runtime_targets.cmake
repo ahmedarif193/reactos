@@ -71,6 +71,7 @@ set(COMPAT_RUNTIME_MODULES
     kernel32
     kernel32_vista
     kernelbase_ros
+    ksuser
     libjpeg
     libpng
     libtiff
@@ -145,6 +146,7 @@ set(COMPAT_RUNTIME_MODULES
     wininet
     winlangdb
     winmm
+    wdmaud.drv
     winspool
     winsta
     wintrust

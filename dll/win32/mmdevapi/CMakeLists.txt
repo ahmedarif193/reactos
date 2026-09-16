@@ -37,6 +37,9 @@ add_library(mmdevapi MODULE
 
 set_module_type(mmdevapi win32dll)
 target_compile_definitions(mmdevapi PRIVATE _FORCENAMELESSUNION _FORCENAMELESSSTRUCT CONST_VTABLE CP_UNIXCP=CP_ACP)
+if(WOW64_I386_RUNTIME)
+    target_compile_definitions(mmdevapi PRIVATE WOW64_I386_RUNTIME)
+endif()
 target_link_libraries(mmdevapi uuid wine)
 add_importlibs(mmdevapi ole32 oleaut32 user32 advapi32 version setupapi msvcrt kernel32_vista kernel32 ntdll)
 add_delay_importlibs(mmdevapi winmm)

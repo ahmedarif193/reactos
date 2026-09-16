@@ -63,7 +63,9 @@ SetIrpIoStatus(
 {
     Irp->IoStatus.Information = Length;
     Irp->IoStatus.Status = Status;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+    if (Irp->Tail.Overlay.DriverContext[3] != WDMAUD_DEFER_IRP_COMPLETION)
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
     return Status;
 }

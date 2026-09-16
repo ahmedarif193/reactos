@@ -20,7 +20,10 @@ add_library(wdmaud.drv MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/wdmaud.def)
 
 set_module_type(wdmaud.drv win32dll UNICODE)
-set_target_properties(wdmaud.drv PROPERTIES SUFFIX "")
+set_target_properties(wdmaud.drv PROPERTIES OUTPUT_NAME "wdmaud" SUFFIX ".drv")
+if(WOW64_I386_RUNTIME)
+    target_compile_definitions(wdmaud.drv PRIVATE WOW64_I386_RUNTIME)
+endif()
 target_link_libraries(wdmaud.drv mmebuddy libsamplerate mmixer)
 add_importlibs(wdmaud.drv user32 winmm advapi32 msvcrt setupapi ksuser kernel32 ntdll)
 add_pch(wdmaud.drv wdmaud.h SOURCE)

@@ -49,6 +49,39 @@ WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
 #define REACTOS_RT_NOTIFICATION_COUNT 2
 #define REACTOS_RENDER_PACKET_COUNT 16
 
+#if defined(WOW64_I386_RUNTIME)
+/* PortCls is native ARM64, so pointer-sized WaveRT properties use its ABI. */
+typedef struct
+{
+    KSPROPERTY Property;
+    ULONGLONG BaseAddress;
+    ULONG RequestedBufferSize;
+    ULONG NotificationCount;
+} REACTOS_KSRTAUDIO_BUFFER_PROPERTY;
+
+typedef struct
+{
+    ULONGLONG BufferAddress;
+    ULONG ActualBufferSize;
+    BOOL CallMemoryBarrier;
+} REACTOS_KSRTAUDIO_BUFFER;
+
+typedef struct
+{
+    KSPROPERTY Property;
+    ULONGLONG NotificationEvent;
+} REACTOS_KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY;
+
+C_ASSERT(FIELD_OFFSET(REACTOS_KSRTAUDIO_BUFFER_PROPERTY, BaseAddress) == 24);
+C_ASSERT(sizeof(REACTOS_KSRTAUDIO_BUFFER_PROPERTY) == 40);
+C_ASSERT(sizeof(REACTOS_KSRTAUDIO_BUFFER) == 16);
+C_ASSERT(sizeof(REACTOS_KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY) == 32);
+#else
+typedef KSRTAUDIO_BUFFER_PROPERTY_WITH_NOTIFICATION REACTOS_KSRTAUDIO_BUFFER_PROPERTY;
+typedef KSRTAUDIO_BUFFER REACTOS_KSRTAUDIO_BUFFER;
+typedef KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY REACTOS_KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY;
+#endif
+
 struct reactos_render_packet
 {
     WDMAUD_DEVICE_INFO info;
@@ -1040,10 +1073,10 @@ static BOOL duplicate_stream_pin(struct reactos_stream *stream)
 
 static BOOL initialize_wavert(struct reactos_stream *stream)
 {
-    KSRTAUDIO_BUFFER_PROPERTY_WITH_NOTIFICATION property;
-    KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY event_property;
+    REACTOS_KSRTAUDIO_BUFFER_PROPERTY property;
+    REACTOS_KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY event_property;
     KSPROPERTY packet_property;
-    KSRTAUDIO_BUFFER buffer;
+    REACTOS_KSRTAUDIO_BUFFER buffer;
     UINT64 requested_size;
     DWORD returned, error;
     ULONG packet_count;
@@ -1067,9 +1100,7 @@ static BOOL initialize_wavert(struct reactos_stream *stream)
 
     if (!pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY,
                    &property, sizeof(property), &buffer, sizeof(buffer), &returned))
-    {
         return FALSE;
-    }
     if (returned < sizeof(buffer) || !buffer.BufferAddress ||
         !buffer.ActualBufferSize ||
         buffer.ActualBufferSize %
@@ -1078,8 +1109,15 @@ static BOOL initialize_wavert(struct reactos_stream *stream)
         SetLastError(ERROR_INVALID_DATA);
         return FALSE;
     }
+#if defined(WOW64_I386_RUNTIME)
+    if (buffer.BufferAddress > MAXDWORD)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+#endif
 
-    stream->rt_buffer = buffer.BufferAddress;
+    stream->rt_buffer = (BYTE *)(ULONG_PTR)buffer.BufferAddress;
     stream->rt_buffer_frames = buffer.ActualBufferSize / stream->device_frame_size;
     stream->rt_period_frames = stream->rt_buffer_frames / REACTOS_RT_NOTIFICATION_COUNT;
     ZeroMemory(stream->rt_period_queued_frames, sizeof(stream->rt_period_queued_frames));
@@ -1094,12 +1132,14 @@ static BOOL initialize_wavert(struct reactos_stream *stream)
     event_property.Property.Set = rt_audio_property_set;
     event_property.Property.Id = KSPROPERTY_RTAUDIO_REGISTER_NOTIFICATION_EVENT;
     event_property.Property.Flags = KSPROPERTY_TYPE_GET;
+#if defined(WOW64_I386_RUNTIME)
+    event_property.NotificationEvent = (ULONG_PTR)stream->rt_event;
+#else
     event_property.NotificationEvent = stream->rt_event;
+#endif
     if (!pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY,
                    &event_property, sizeof(event_property), NULL, 0, &returned))
-    {
         return FALSE;
-    }
 
     stream->rt_enabled = TRUE;
 
@@ -1130,7 +1170,7 @@ static BOOL initialize_wavert(struct reactos_stream *stream)
 
 static void cleanup_wavert(struct reactos_stream *stream)
 {
-    KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY property;
+    REACTOS_KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY property;
     DWORD returned;
 
     if (stream->rt_enabled && stream->user_pin != INVALID_HANDLE_VALUE)
@@ -1139,7 +1179,11 @@ static void cleanup_wavert(struct reactos_stream *stream)
         property.Property.Set = rt_audio_property_set;
         property.Property.Id = KSPROPERTY_RTAUDIO_UNREGISTER_NOTIFICATION_EVENT;
         property.Property.Flags = KSPROPERTY_TYPE_GET;
+#if defined(WOW64_I386_RUNTIME)
+        property.NotificationEvent = (ULONG_PTR)stream->rt_event;
+#else
         property.NotificationEvent = stream->rt_event;
+#endif
         pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY,
                   &property, sizeof(property), NULL, 0, &returned);
     }

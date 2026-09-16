@@ -104,6 +104,53 @@ WdmAudStartRTStreamingThreads(
     return FALSE;
 }
 
+#if !defined(_WIN64)
+
+/*
+ * WaveRT properties contain pointer-sized fields.  A 32-bit wdmaud.drv
+ * running under WOW64 therefore has to use the 64-bit wire layout expected
+ * by the native PortCls driver and translate the returned user mapping.
+ */
+typedef struct _WDMAUD_KSRTAUDIO_BUFFER_PROPERTY64
+{
+    KSPROPERTY Property;
+    ULONGLONG BaseAddress;
+    ULONG RequestedBufferSize;
+    ULONG NotificationCount;
+} WDMAUD_KSRTAUDIO_BUFFER_PROPERTY64;
+
+typedef struct _WDMAUD_KSRTAUDIO_BUFFER64
+{
+    ULONGLONG BufferAddress;
+    ULONG ActualBufferSize;
+    BOOL CallMemoryBarrier;
+} WDMAUD_KSRTAUDIO_BUFFER64;
+
+typedef struct _WDMAUD_KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY64
+{
+    KSPROPERTY Property;
+    ULONGLONG NotificationEvent;
+} WDMAUD_KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY64;
+
+C_ASSERT(FIELD_OFFSET(WDMAUD_KSRTAUDIO_BUFFER_PROPERTY64, BaseAddress) == 24);
+C_ASSERT(sizeof(WDMAUD_KSRTAUDIO_BUFFER_PROPERTY64) == 40);
+C_ASSERT(sizeof(WDMAUD_KSRTAUDIO_BUFFER64) == 16);
+C_ASSERT(sizeof(WDMAUD_KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY64) == 32);
+
+static BOOL
+WdmAudIsWow64Process(VOID)
+{
+#if defined(WOW64_I386_RUNTIME)
+    return TRUE;
+#else
+    BOOL IsWow64 = FALSE;
+
+    return IsWow64Process(GetCurrentProcess(), &IsWow64) && IsWow64;
+#endif
+}
+
+#endif
+
 PVOID Alloc(ULONG NumBytes);
 MIXER_STATUS Close(HANDLE hDevice);
 VOID Free(PVOID Block);
@@ -135,6 +182,103 @@ MIXER_CONTEXT MixerContext =
 };
 
 GUID CategoryGuid = {STATIC_KSCATEGORY_AUDIO};
+
+#if !defined(_WIN64)
+static const GUID WdmAudRtAudioPropertySet =
+    {0xa855a48c, 0x2f78, 0x4729, {0x90, 0x51, 0x19, 0x68, 0x74, 0x6b, 0x9e, 0xef}};
+#endif
+
+static MIXER_STATUS
+WdmAudInitializeRTStreamingBuffer(
+    _In_ HANDLE PinHandle,
+    _In_ ULONG RequestedBufferSize,
+    _In_ ULONG NotificationCount,
+    _Out_ PUCHAR *RTStreamingBuffer,
+    _Out_ PULONG RTStreamingBufferLength)
+{
+#if !defined(_WIN64)
+    WDMAUD_KSRTAUDIO_BUFFER_PROPERTY64 Property;
+    WDMAUD_KSRTAUDIO_BUFFER64 OutData;
+    MIXER_STATUS Status;
+    ULONG Length;
+
+    if (WdmAudIsWow64Process())
+    {
+        ZeroMemory(&Property, sizeof(Property));
+        Property.Property.Id = KSPROPERTY_RTAUDIO_BUFFER_WITH_NOTIFICATION;
+        Property.Property.Set = WdmAudRtAudioPropertySet;
+        Property.Property.Flags = KSPROPERTY_TYPE_GET;
+        Property.RequestedBufferSize = RequestedBufferSize;
+        Property.NotificationCount = NotificationCount;
+
+        ZeroMemory(&OutData, sizeof(OutData));
+        Status = MixerContext.Control(
+            PinHandle,
+            IOCTL_KS_PROPERTY,
+            &Property,
+            sizeof(Property),
+            &OutData,
+            sizeof(OutData),
+            &Length);
+        if (Status != MM_STATUS_SUCCESS)
+            return Status;
+
+        if (OutData.BufferAddress > MAXULONG)
+            return MM_STATUS_UNSUCCESSFUL;
+
+        *RTStreamingBuffer = (PUCHAR)(ULONG_PTR)(ULONG)OutData.BufferAddress;
+        *RTStreamingBufferLength = OutData.ActualBufferSize;
+        return MM_STATUS_SUCCESS;
+    }
+#endif
+
+    return MMixerInitializeRTStreamingBuffer(&MixerContext,
+                                             PinHandle,
+                                             RequestedBufferSize,
+                                             NotificationCount,
+                                             RTStreamingBuffer,
+                                             RTStreamingBufferLength);
+}
+
+static MIXER_STATUS
+WdmAudSetRTStreamingEvent(
+    _In_ HANDLE PinHandle,
+    _In_ HANDLE StreamingEvent,
+    _In_ BOOLEAN Register)
+{
+#if !defined(_WIN64)
+    WDMAUD_KSRTAUDIO_NOTIFICATION_EVENT_PROPERTY64 Property;
+    ULONG Length;
+
+    if (WdmAudIsWow64Process())
+    {
+        ZeroMemory(&Property, sizeof(Property));
+        Property.Property.Id = Register ?
+            KSPROPERTY_RTAUDIO_REGISTER_NOTIFICATION_EVENT :
+            KSPROPERTY_RTAUDIO_UNREGISTER_NOTIFICATION_EVENT;
+        Property.Property.Set = WdmAudRtAudioPropertySet;
+        Property.Property.Flags = KSPROPERTY_TYPE_GET;
+        Property.NotificationEvent = (ULONG_PTR)StreamingEvent;
+
+        return MixerContext.Control(PinHandle,
+                                    IOCTL_KS_PROPERTY,
+                                    &Property,
+                                    sizeof(Property),
+                                    NULL,
+                                    0,
+                                    &Length);
+    }
+#endif
+
+    if (Register)
+        return MMixerRegisterRTStreamingEvent(&MixerContext,
+                                              PinHandle,
+                                              StreamingEvent);
+
+    return MMixerUnregisterRTStreamingEvent(&MixerContext,
+                                            PinHandle,
+                                            StreamingEvent);
+}
 
 MIXER_STATUS
 QueryKeyValue(
@@ -613,8 +757,7 @@ WdmAudSetWaveDeviceFormatByMMixer(
 
     if (MMixerOpenWave(&MixerContext, DeviceId, bWaveIn, WaveFormat, NULL, NULL, &Instance->Handle) == MM_STATUS_SUCCESS)
     {
-        MIXER_STATUS MixerStatus = MMixerInitializeRTStreamingBuffer(
-            &MixerContext,
+        MIXER_STATUS MixerStatus = WdmAudInitializeRTStreamingBuffer(
             Instance->Handle,
             PAGE_SIZE * 8,
             2,
@@ -647,7 +790,9 @@ WdmAudSetWaveDeviceFormatByMMixer(
                 DPRINT1("Failed to create event with %x", GetLastError());
                 goto FailedRTStreamingSetup;
             }
-            MixerStatus = MMixerRegisterRTStreamingEvent(&MixerContext, Instance->Handle, Instance->hNotifyRTStreamingEvent);
+            MixerStatus = WdmAudSetRTStreamingEvent(Instance->Handle,
+                                                    Instance->hNotifyRTStreamingEvent,
+                                                    TRUE);
             if (MixerStatus != MM_STATUS_SUCCESS)
                 goto FailedRTStreamingSetup;
 
@@ -673,9 +818,7 @@ WdmAudSetWaveDeviceFormatByMMixer(
             Instance->RTStreamingEnabled = TRUE;
         }
         else
-        {
             Instance->LegacyStreaming = TRUE;
-        }
 
         if (DeviceType == WAVE_OUT_DEVICE_TYPE && !Instance->RTStreamingEnabled)
         {
@@ -688,9 +831,9 @@ WdmAudSetWaveDeviceFormatByMMixer(
 FailedRTStreamingSetup:
         if (EventRegistered)
         {
-            MMixerUnregisterRTStreamingEvent(&MixerContext,
-                                             Instance->Handle,
-                                             Instance->hNotifyRTStreamingEvent);
+            WdmAudSetRTStreamingEvent(Instance->Handle,
+                                     Instance->hNotifyRTStreamingEvent,
+                                     FALSE);
         }
         WdmAudCloseRTStreamingEvents(Instance);
         HeapFree(GetProcessHeap(), 0, Instance->RTStreamingShadowBuffer);
@@ -790,9 +933,9 @@ WdmAudCloseSoundDeviceByMMixer(
             SoundDeviceInstance->RTStreamingBufferLength = 0;
             SoundDeviceInstance->RTStreamingNotificationCount = 0;
             SoundDeviceInstance->RTStreamingBufferOffset = 0;
-            MMixerUnregisterRTStreamingEvent(&MixerContext,
-                                             SoundDeviceInstance->Handle,
-                                             SoundDeviceInstance->hNotifyRTStreamingEvent);
+            WdmAudSetRTStreamingEvent(SoundDeviceInstance->Handle,
+                                     SoundDeviceInstance->hNotifyRTStreamingEvent,
+                                     FALSE);
             HeapFree(GetProcessHeap(), 0, SoundDeviceInstance->RTStreamingShadowBuffer);
             SoundDeviceInstance->RTStreamingShadowBuffer = NULL;
             SoundDeviceInstance->RTStreamingShadowBufferLength = 0;
