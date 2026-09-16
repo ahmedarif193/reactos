@@ -148,6 +148,9 @@ typedef struct
     BYTE *Extra[4];
 } ROS_CWPR_STRUCT64;
 
+#define ROS_HOOK_PAYLOAD_OFFSET(type) \
+    ((FIELD_OFFSET(type, Extra) + 15) & ~(ULONG_PTR)15)
+
 typedef struct
 {
     POINT pt;
@@ -368,6 +371,10 @@ C_ASSERT(sizeof(ROS_CWP_STRUCT32) == 1096);
 C_ASSERT(sizeof(ROS_CWP_STRUCT64) == 1160);
 C_ASSERT(sizeof(ROS_CWPR_STRUCT32) == 1100);
 C_ASSERT(sizeof(ROS_CWPR_STRUCT64) == 1168);
+C_ASSERT(ROS_HOOK_PAYLOAD_OFFSET(ROS_CWP_STRUCT32) == 1088);
+C_ASSERT(ROS_HOOK_PAYLOAD_OFFSET(ROS_CWP_STRUCT64) == 1136);
+C_ASSERT(ROS_HOOK_PAYLOAD_OFFSET(ROS_CWPR_STRUCT32) == 1088);
+C_ASSERT(ROS_HOOK_PAYLOAD_OFFSET(ROS_CWPR_STRUCT64) == 1136);
 C_ASSERT(sizeof(ROS_MOUSEHOOKSTRUCT32) == 20);
 C_ASSERT(sizeof(ROS_EVENTPROC_CALLBACK_ARGUMENTS32) == 40);
 C_ASSERT(sizeof(ROS_EVENTPROC_CALLBACK_ARGUMENTS64) == 64);
@@ -622,34 +629,46 @@ static NTSTATUS WINAPI ros_wow64_hook_proc(void *arg, ULONG size)
     {
         const ROS_CWP_STRUCT64 *cwp64 = arg;
         ROS_CWP_STRUCT32 *cwp32 = (ROS_CWP_STRUCT32 *)args32;
+        const ULONG offset64 = ROS_HOOK_PAYLOAD_OFFSET(ROS_CWP_STRUCT64);
+        const ULONG offset32 = ROS_HOOK_PAYLOAD_OFFSET(ROS_CWP_STRUCT32);
         ULONG packed_size = 0;
 
-        if (size < sizeof(*cwp64)) return ros_callback_bad_length();
+        if (size < offset64 || size - offset64 != args64->lParamSize) return ros_callback_bad_length();
         cwp32->cwps.lParam = cwp64->cwps.lParam;
         cwp32->cwps.wParam = cwp64->cwps.wParam;
         cwp32->cwps.message = cwp64->cwps.message;
         cwp32->cwps.hwnd = HandleToUlong(cwp64->cwps.hwnd);
         memset(cwp32->Extra, 0, sizeof(cwp32->Extra));
-        if (args64->lParamSize) packed_size = packed_message_64to32(cwp64->cwps.message, cwp64->cwps.wParam, cwp64->Extra, cwp32->Extra, args64->lParamSize);
+        if (args64->lParamSize)
+            packed_size = packed_message_64to32(cwp64->cwps.message, cwp64->cwps.wParam,
+                                                (const char *)cwp64 + offset64,
+                                                (char *)cwp32 + offset32,
+                                                args64->lParamSize);
         cwp32->hpca.lParamSize = packed_size;
-        size32 = sizeof(*cwp32) + packed_size;
+        size32 = offset32 + packed_size;
     }
     else if (args64->HookId == WH_CALLWNDPROCRET)
     {
         const ROS_CWPR_STRUCT64 *cwpr64 = arg;
         ROS_CWPR_STRUCT32 *cwpr32 = (ROS_CWPR_STRUCT32 *)args32;
+        const ULONG offset64 = ROS_HOOK_PAYLOAD_OFFSET(ROS_CWPR_STRUCT64);
+        const ULONG offset32 = ROS_HOOK_PAYLOAD_OFFSET(ROS_CWPR_STRUCT32);
         ULONG packed_size = 0;
 
-        if (size < sizeof(*cwpr64)) return ros_callback_bad_length();
+        if (size < offset64 || size - offset64 != args64->lParamSize) return ros_callback_bad_length();
         cwpr32->cwprs.lResult = cwpr64->cwprs.lResult;
         cwpr32->cwprs.lParam = cwpr64->cwprs.lParam;
         cwpr32->cwprs.wParam = cwpr64->cwprs.wParam;
         cwpr32->cwprs.message = cwpr64->cwprs.message;
         cwpr32->cwprs.hwnd = HandleToUlong(cwpr64->cwprs.hwnd);
         memset(cwpr32->Extra, 0, sizeof(cwpr32->Extra));
-        if (args64->lParamSize) packed_size = packed_message_64to32(cwpr64->cwprs.message, cwpr64->cwprs.wParam, cwpr64->Extra, cwpr32->Extra, args64->lParamSize);
+        if (args64->lParamSize)
+            packed_size = packed_message_64to32(cwpr64->cwprs.message, cwpr64->cwprs.wParam,
+                                                (const char *)cwpr64 + offset64,
+                                                (char *)cwpr32 + offset32,
+                                                args64->lParamSize);
         cwpr32->hpca.lParamSize = packed_size;
-        size32 = sizeof(*cwpr32) + packed_size;
+        size32 = offset32 + packed_size;
     }
     else if (size > sizeof(*args64))
     {
@@ -661,6 +680,29 @@ static NTSTATUS WINAPI ros_wow64_hook_proc(void *arg, ULONG size)
     status = Wow64KiUserCallbackDispatcher(ROS_USER_CALLBACK_HOOKPROC, args32, size32, &ret_ptr, &ret_len);
     if (status || ret_len < sizeof(*args32)) return NtCallbackReturn(NULL, 0, status ? status : STATUS_INFO_LENGTH_MISMATCH);
     args64->Result = ((ROS_HOOKPROC_CALLBACK_ARGUMENTS32 *)ret_ptr)->Result;
+
+    if (args64->HookId == WH_CALLWNDPROC && args64->lParamSize)
+    {
+        const ROS_CWP_STRUCT64 *cwp64 = arg;
+        const ULONG offset64 = ROS_HOOK_PAYLOAD_OFFSET(ROS_CWP_STRUCT64);
+        const ULONG offset32 = ROS_HOOK_PAYLOAD_OFFSET(ROS_CWP_STRUCT32);
+
+        if (ret_len >= offset32)
+            packed_result_32to64(cwp64->cwps.message, cwp64->cwps.wParam,
+                                 (const char *)ret_ptr + offset32, ret_len - offset32,
+                                 (char *)arg + offset64);
+    }
+    else if (args64->HookId == WH_CALLWNDPROCRET && args64->lParamSize)
+    {
+        const ROS_CWPR_STRUCT64 *cwpr64 = arg;
+        const ULONG offset64 = ROS_HOOK_PAYLOAD_OFFSET(ROS_CWPR_STRUCT64);
+        const ULONG offset32 = ROS_HOOK_PAYLOAD_OFFSET(ROS_CWPR_STRUCT32);
+
+        if (ret_len >= offset32)
+            packed_result_32to64(cwpr64->cwprs.message, cwpr64->cwprs.wParam,
+                                 (const char *)ret_ptr + offset32, ret_len - offset32,
+                                 (char *)arg + offset64);
+    }
 
     if (args64->HookId == WH_CBT && args64->Code == HCBT_CREATEWND && size >= sizeof(*args64) + sizeof(ROS_HOOKPROC_CBT_CREATEWND_EXTRA_ARGUMENTS64) && ret_len >= sizeof(*args32) + sizeof(ROS_HOOKPROC_CBT_CREATEWND_EXTRA_ARGUMENTS32))
     {
