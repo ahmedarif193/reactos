@@ -3816,8 +3816,10 @@ Rpi5Vc4DdiEscape(
                    RPI5VC4_CAP_MONITORED_FENCE |
                    RPI5VC4_CAP_SUBMIT_SIGNAL |
                    RPI5VC4_CAP_CPU_WAIT_SIGNAL |
-                   RPI5VC4_CAP_WIN32_PRESENT |
-                   RPI5VC4_CAP_LINEAR_SCANOUT;
+                   RPI5VC4_CAP_WIN32_PRESENT;
+
+            if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+                Caps |= RPI5VC4_CAP_LINEAR_SCANOUT;
 
             if (DeviceExtension->V3dReady)
             {
