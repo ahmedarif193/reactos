@@ -42,16 +42,13 @@ Rpi5Vc4FillVideoSignalInfo(
     _Inout_ D3DKMDT_VIDEO_SIGNAL_INFO *SignalInfo)
 {
     SignalInfo->VideoStandard = D3DKMDT_VSS_OTHER;
-    SignalInfo->TotalSize.cx = DeviceExtension->ScreenWidth;
-    SignalInfo->TotalSize.cy = DeviceExtension->ScreenHeight;
-    SignalInfo->ActiveSize.cx = DeviceExtension->ScreenWidth;
-    SignalInfo->ActiveSize.cy = DeviceExtension->ScreenHeight;
-    SignalInfo->VSyncFreq.Numerator = 60;
-    SignalInfo->VSyncFreq.Denominator = 1;
-    SignalInfo->HSyncFreq.Numerator = 60 * DeviceExtension->ScreenHeight;
-    SignalInfo->HSyncFreq.Denominator = 1;
-    SignalInfo->PixelRate = (SIZE_T)DeviceExtension->ScreenWidth *
-                            DeviceExtension->ScreenHeight * 60;
+    SignalInfo->TotalSize.cx = DeviceExtension->TargetHTotal;
+    SignalInfo->TotalSize.cy = DeviceExtension->TargetVTotal;
+    SignalInfo->ActiveSize.cx = DeviceExtension->ScanoutWidth;
+    SignalInfo->ActiveSize.cy = DeviceExtension->ScanoutHeight;
+    SignalInfo->VSyncFreq = DeviceExtension->TargetVSyncFreq;
+    SignalInfo->HSyncFreq = DeviceExtension->TargetHSyncFreq;
+    SignalInfo->PixelRate = DeviceExtension->TargetPixelRate;
     SignalInfo->ScanLineOrdering = D3DDDI_VSSLO_PROGRESSIVE;
 }
 
@@ -189,8 +186,11 @@ Rpi5Vc4DdiIsSupportedVidPn(
     CONST DXGK_VIDPN_INTERFACE *VidPnInterface = NULL;
     D3DKMDT_HVIDPNTOPOLOGY hTopology = 0;
     CONST DXGK_VIDPNTOPOLOGY_INTERFACE *TopologyInterface = NULL;
+    CONST D3DKMDT_VIDPN_PRESENT_PATH *Path = NULL;
     SIZE_T NumPaths = 0;
+    BOOLEAN PathSupported;
     NTSTATUS Status;
+    NTSTATUS ReleaseStatus;
 
     if (DeviceExtension == NULL || IsSupportedVidPn == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -227,8 +227,35 @@ Rpi5Vc4DdiIsSupportedVidPn(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    /* Single source scanning to a single target; an empty VidPN is fine. */
-    IsSupportedVidPn->IsVidPnSupported = (NumPaths <= 1);
+    if (NumPaths == 0)
+    {
+        IsSupportedVidPn->IsVidPnSupported = TRUE;
+        return STATUS_SUCCESS;
+    }
+    if (NumPaths != 1)
+        return STATUS_SUCCESS;
+
+    Status = TopologyInterface->pfnAcquireFirstPathInfo(hTopology, &Path);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Path == NULL)
+        return STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+
+    PathSupported =
+        Path->VidPnSourceId == 0 &&
+        Path->VidPnTargetId == 0 &&
+        (Path->ContentTransformation.Scaling == D3DKMDT_VPPS_IDENTITY ||
+         Path->ContentTransformation.Scaling == D3DKMDT_VPPS_UNPINNED ||
+         Path->ContentTransformation.Scaling == D3DKMDT_VPPS_NOTSPECIFIED) &&
+        (Path->ContentTransformation.Rotation == DeviceExtension->PathRotation ||
+         Path->ContentTransformation.Rotation == D3DKMDT_VPPR_UNPINNED ||
+         Path->ContentTransformation.Rotation == D3DKMDT_VPPR_NOTSPECIFIED);
+
+    ReleaseStatus = TopologyInterface->pfnReleasePathInfo(hTopology, Path);
+    if (!NT_SUCCESS(ReleaseStatus))
+        return ReleaseStatus;
+
+    IsSupportedVidPn->IsVidPnSupported = PathSupported;
     return STATUS_SUCCESS;
 }
 
@@ -285,6 +312,11 @@ Rpi5Vc4DdiEnumVidPnCofuncModality(
 
     while (Path != NULL)
     {
+        D3DKMDT_VIDPN_PRESENT_PATH UpdatedPath;
+        BOOLEAN UpdateScaling;
+        BOOLEAN UpdateRotation;
+        BOOLEAN PivotMatchesPath;
+
         /* Source mode set (skip when the source is the enumeration pivot). */
         if (!(EnumCofuncModality->EnumPivotType == D3DKMDT_EPT_VIDPNSOURCE &&
               EnumCofuncModality->EnumPivot.VidPnSourceId == Path->VidPnSourceId))
@@ -312,6 +344,61 @@ Rpi5Vc4DdiEnumVidPnCofuncModality(
             if (!NT_SUCCESS(Status))
             {
                 DPRINT1("RPI5VC4: target mode set update failed 0x%08lx\n", Status);
+                TopologyInterface->pfnReleasePathInfo(hTopology, Path);
+                return Status;
+            }
+        }
+
+        PivotMatchesPath =
+            EnumCofuncModality->EnumPivot.VidPnSourceId == Path->VidPnSourceId &&
+            EnumCofuncModality->EnumPivot.VidPnTargetId == Path->VidPnTargetId;
+        UpdateScaling =
+            Path->ContentTransformation.Scaling != D3DKMDT_VPPS_IDENTITY &&
+            Path->ContentTransformation.Scaling != D3DKMDT_VPPS_CENTERED &&
+            Path->ContentTransformation.Scaling != D3DKMDT_VPPS_STRETCHED &&
+            Path->ContentTransformation.Scaling !=
+                D3DKMDT_VPPS_ASPECTRATIOCENTEREDMAX &&
+            Path->ContentTransformation.Scaling != D3DKMDT_VPPS_CUSTOM &&
+            !(EnumCofuncModality->EnumPivotType == D3DKMDT_EPT_SCALING &&
+              PivotMatchesPath);
+        UpdateRotation =
+            Path->ContentTransformation.Rotation != D3DKMDT_VPPR_IDENTITY &&
+            Path->ContentTransformation.Rotation != D3DKMDT_VPPR_ROTATE90 &&
+            Path->ContentTransformation.Rotation != D3DKMDT_VPPR_ROTATE180 &&
+            Path->ContentTransformation.Rotation != D3DKMDT_VPPR_ROTATE270 &&
+            !(EnumCofuncModality->EnumPivotType == D3DKMDT_EPT_ROTATION &&
+              PivotMatchesPath);
+
+        if (UpdateScaling || UpdateRotation)
+        {
+            UpdatedPath = *Path;
+            if (UpdateScaling)
+            {
+                RtlZeroMemory(
+                    &UpdatedPath.ContentTransformation.ScalingSupport,
+                    sizeof(UpdatedPath.ContentTransformation.ScalingSupport));
+                UpdatedPath.ContentTransformation.ScalingSupport.Identity = 1;
+            }
+            if (UpdateRotation)
+            {
+                RtlZeroMemory(
+                    &UpdatedPath.ContentTransformation.RotationSupport,
+                    sizeof(UpdatedPath.ContentTransformation.RotationSupport));
+                if (DeviceExtension->PathRotation == D3DKMDT_VPPR_ROTATE90)
+                {
+                    UpdatedPath.ContentTransformation.RotationSupport.Rotate90 = 1;
+                }
+                else
+                {
+                    UpdatedPath.ContentTransformation.RotationSupport.Identity = 1;
+                }
+            }
+
+            Status = TopologyInterface->pfnUpdatePathSupportInfo(
+                         hTopology,
+                         &UpdatedPath);
+            if (!NT_SUCCESS(Status))
+            {
                 TopologyInterface->pfnReleasePathInfo(hTopology, Path);
                 return Status;
             }
@@ -347,6 +434,16 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
 
     if (SetVidPnSourceAddress->PrimarySegment != 0 && SetVidPnSourceAddress->PrimarySegment != RPI5VC4_SEGMENT_ID)
         return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+
+    /* RP1 DSI consumes the fixed firmware framebuffer.  Source allocations
+     * are composed into it by PresentDisplayOnly; it is never an HVS flip
+     * target. */
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        DeviceExtension->FrameBufferPhysical =
+            DeviceExtension->FirmwareFrameBufferPhysical;
+        return STATUS_SUCCESS;
+    }
 
     Target = SetVidPnSourceAddress->PrimaryAddress;
 
@@ -420,7 +517,8 @@ Rpi5Vc4DdiSetVidPnSourceVisibility(
 
     if (SetVidPnSourceVisibility->Visible)
     {
-        Rpi5HvsInstallScanout(DeviceExtension);
+        if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+            Rpi5HvsInstallScanout(DeviceExtension);
     }
     else
     {
@@ -430,8 +528,11 @@ Rpi5Vc4DdiSetVidPnSourceVisibility(
         if (ScanoutVa != NULL)
         {
             RtlZeroMemory(ScanoutVa,
-                          (SIZE_T)DeviceExtension->BytesPerScanLine *
-                          DeviceExtension->ScreenHeight);
+                          Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) ?
+                              (SIZE_T)DeviceExtension->ScanoutPitch *
+                                  DeviceExtension->ScanoutHeight :
+                              (SIZE_T)DeviceExtension->BytesPerScanLine *
+                                  DeviceExtension->ScreenHeight);
 #if defined(_M_ARM64)
             __dsb(_ARM64_BARRIER_SY);
 #endif
@@ -507,9 +608,11 @@ Rpi5Vc4DdiCommitVidPn(
     }
 
     /* Re-assert the firmware raster timing and our HVS display list. */
-    if (DeviceExtension->PixelValveValid)
+    if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) &&
+        DeviceExtension->PixelValveValid)
         Rpi5CrtcProgramCurrentTiming(DeviceExtension);
-    Rpi5HvsInstallScanout(DeviceExtension);
+    if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+        Rpi5HvsInstallScanout(DeviceExtension);
 
     DeviceExtension->VidPnCommitted = TRUE;
     return STATUS_SUCCESS;
@@ -574,8 +677,12 @@ Rpi5Vc4DdiCheckMultiPlaneOverlaySupport(
     if (DeviceExtension == NULL || CheckMultiPlaneOverlaySupport == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    CheckMultiPlaneOverlaySupport->Supported = TRUE;
+    CheckMultiPlaneOverlaySupport->Supported =
+        !Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension);
     CheckMultiPlaneOverlaySupport->ReturnInfo.Value = 0;
+
+    if (!CheckMultiPlaneOverlaySupport->Supported)
+        return STATUS_SUCCESS;
 
     if (CheckMultiPlaneOverlaySupport->PlaneCount > RPI5VC4_MPO_MAX_PLANES || (CheckMultiPlaneOverlaySupport->PlaneCount != 0 && CheckMultiPlaneOverlaySupport->pPlanes == NULL))
     {
@@ -608,6 +715,9 @@ Rpi5Vc4DdiSetVidPnSourceAddressWithMultiPlaneOverlay(
 
     if (DeviceExtension == NULL || SetMpo == NULL)
         return STATUS_INVALID_PARAMETER;
+
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+        return STATUS_NOT_SUPPORTED;
 
     if (SetMpo->VidPnSourceId != 0)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
@@ -734,12 +844,10 @@ Rpi5Vc4DdiUpdateActiveVidPnPresentPath(
     if (UpdateActiveVidPnPresentPath->VidPnPresentPathInfo.VidPnTargetId != 0)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
 
-    /*
-     * Only the identity transformation is supported: the HVS plane scans
-     * unrotated and unscaled. Rotation and scaling planes are not yet exposed.
-     */
-    if (UpdateActiveVidPnPresentPath->VidPnPresentPathInfo.ContentTransformation.Rotation
-            > D3DKMDT_VPPR_IDENTITY)
+    if (UpdateActiveVidPnPresentPath->VidPnPresentPathInfo.ContentTransformation.Scaling !=
+            D3DKMDT_VPPS_IDENTITY ||
+        UpdateActiveVidPnPresentPath->VidPnPresentPathInfo.ContentTransformation.Rotation !=
+            DeviceExtension->PathRotation)
     {
         return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
     }

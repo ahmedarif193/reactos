@@ -97,6 +97,59 @@ Rpi5Vc4BlitRectTo(
     }
 }
 
+/* Rotate a logical dirty rectangle clockwise into the portrait-native linear
+ * RP1 DSI framebuffer.  Work in 16x16 tiles: each destination run is
+ * contiguous (important for the write-combined mapping), while the source
+ * cache lines are reused across the tile instead of walking a full column at
+ * source-pitch intervals. */
+static VOID
+Rpi5Vc4BlitRectRotate90ToFirmware(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_reads_bytes_(_Inexpressible_("pitch * height")) const UCHAR *Source,
+    _In_ LONG SourcePitch,
+    _In_ const RECT *Rect)
+{
+    LONG Left = max(Rect->left, 0);
+    LONG Top = max(Rect->top, 0);
+    LONG Right = min(Rect->right, (LONG)DeviceExtension->ScreenWidth);
+    LONG Bottom = min(Rect->bottom, (LONG)DeviceExtension->ScreenHeight);
+    LONG TileX;
+    LONG TileY;
+
+    if (Left >= Right || Top >= Bottom)
+        return;
+
+    for (TileX = Left; TileX < Right; TileX += 16)
+    {
+        LONG TileRight = min(TileX + 16, Right);
+
+        for (TileY = Top; TileY < Bottom; TileY += 16)
+        {
+            LONG TileBottom = min(TileY + 16, Bottom);
+            LONG X;
+
+            for (X = TileX; X < TileRight; ++X)
+            {
+                const UCHAR *SourcePixel =
+                    Source + (SIZE_T)(TileBottom - 1) * SourcePitch +
+                    (SIZE_T)X * sizeof(ULONG);
+                PULONG DestinationPixel = (PULONG)(
+                    (PUCHAR)DeviceExtension->FrameBufferVa +
+                    (SIZE_T)X * DeviceExtension->ScanoutPitch +
+                    (SIZE_T)(DeviceExtension->ScanoutWidth - TileBottom) *
+                        sizeof(ULONG));
+                LONG Y;
+
+                for (Y = TileBottom - 1; Y >= TileY; --Y)
+                {
+                    *DestinationPixel++ = *(UNALIGNED const ULONG *)SourcePixel;
+                    SourcePixel -= SourcePitch;
+                }
+            }
+        }
+    }
+}
+
 static VOID
 Rpi5Vc4BlitRect(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
@@ -104,6 +157,16 @@ Rpi5Vc4BlitRect(
     _In_ LONG SourcePitch,
     _In_ const RECT *Rect)
 {
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) &&
+        DeviceExtension->PathRotation == D3DKMDT_VPPR_ROTATE90)
+    {
+        Rpi5Vc4BlitRectRotate90ToFirmware(DeviceExtension,
+                                          Source,
+                                          SourcePitch,
+                                          Rect);
+        return;
+    }
+
     Rpi5Vc4BlitRectTo(DeviceExtension,
                       Rpi5Vc4CurrentScanoutVa(DeviceExtension),
                       Source, SourcePitch, Rect);
@@ -162,6 +225,7 @@ Rpi5Vc4EnsureFlipRing(
 
     if (DeviceExtension->FlipPresentBroken ||
         DeviceExtension->HvsFlipBroken ||
+        Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) ||
         BufSize == 0)
     {
         return FALSE;
@@ -437,7 +501,8 @@ Rpi5Vc4DdiPresentDisplayOnly(
         /* Race the beam: large updates start at VFP so the top-down copy
          * (2-4x raster speed) stays ahead of the scanout — no visible tear
          * on drags. Small updates skip the wait. */
-        if (ScreenArea != 0 && Area * 4 >= ScreenArea)
+        if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) &&
+            ScreenArea != 0 && Area * 4 >= ScreenArea)
             Rpi5CrtcWaitForVBlank(DeviceExtension);
     }
 
@@ -486,9 +551,15 @@ Rpi5Vc4DdiStopDeviceAndReleasePostDisplayOwnership(
         return STATUS_INVALID_PARAMETER;
 
     RtlZeroMemory(DisplayInfo, sizeof(*DisplayInfo));
-    DisplayInfo->Width = DeviceExtension->ScreenWidth;
-    DisplayInfo->Height = DeviceExtension->ScreenHeight;
-    DisplayInfo->Pitch = DeviceExtension->BytesPerScanLine;
+    DisplayInfo->Width = Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) ?
+                             DeviceExtension->ScanoutWidth :
+                             DeviceExtension->ScreenWidth;
+    DisplayInfo->Height = Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) ?
+                              DeviceExtension->ScanoutHeight :
+                              DeviceExtension->ScreenHeight;
+    DisplayInfo->Pitch = Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) ?
+                             DeviceExtension->ScanoutPitch :
+                             DeviceExtension->BytesPerScanLine;
     DisplayInfo->ColorFormat = DeviceExtension->ColorFormat;
     DisplayInfo->PhysicAddress = DeviceExtension->FrameBufferPhysical;
     DisplayInfo->TargetId = TargetId;
@@ -524,9 +595,12 @@ Rpi5Vc4DdiSystemDisplayEnable(
      * overlay so the panic screen is what the HVS shows.
      */
     DeviceExtension->CursorVisible = FALSE;
-    Rpi5HvsFlipScanout(DeviceExtension,
-                       DeviceExtension->FirmwareFrameBufferPhysical);
-    Rpi5HvsInstallScanout(DeviceExtension);
+    if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        Rpi5HvsFlipScanout(DeviceExtension,
+                           DeviceExtension->FirmwareFrameBufferPhysical);
+        Rpi5HvsInstallScanout(DeviceExtension);
+    }
 
     *Width = DeviceExtension->ScreenWidth;
     *Height = DeviceExtension->ScreenHeight;
@@ -562,6 +636,38 @@ Rpi5Vc4DdiSystemDisplayWrite(
         SourceWidth = DeviceExtension->ScreenWidth - PositionX;
     if (SourceHeight > DeviceExtension->ScreenHeight - PositionY)
         SourceHeight = DeviceExtension->ScreenHeight - PositionY;
+
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) &&
+        DeviceExtension->PathRotation == D3DKMDT_VPPR_ROTATE90)
+    {
+        UINT SourceX;
+        UINT SourceY;
+
+        for (SourceX = 0; SourceX < SourceWidth; ++SourceX)
+        {
+            const UCHAR *SourcePixel =
+                (const UCHAR *)Source +
+                (SIZE_T)(SourceHeight - 1) * SourceStride +
+                (SIZE_T)SourceX * sizeof(ULONG);
+            PULONG DestinationPixel = (PULONG)(
+                (PUCHAR)DeviceExtension->FrameBufferVa +
+                (SIZE_T)(PositionX + SourceX) *
+                    DeviceExtension->ScanoutPitch +
+                (SIZE_T)(DeviceExtension->ScanoutWidth -
+                         PositionY - SourceHeight) * sizeof(ULONG));
+
+            for (SourceY = SourceHeight; SourceY != 0; --SourceY)
+            {
+                *DestinationPixel++ = *(UNALIGNED const ULONG *)SourcePixel;
+                SourcePixel -= SourceStride;
+            }
+        }
+
+#if defined(_M_ARM64)
+        __dsb(_ARM64_BARRIER_SY);
+#endif
+        return;
+    }
 
     Destination = (PUCHAR)Rpi5Vc4CurrentScanoutVa(DeviceExtension) +
                   (SIZE_T)PositionY * DeviceExtension->BytesPerScanLine +

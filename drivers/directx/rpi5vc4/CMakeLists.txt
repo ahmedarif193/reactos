@@ -24,6 +24,7 @@ include_directories(${REACTOS_SOURCE_DIR}/win32ss/drivers/miniport/rpi5vc4)
 
 list(APPEND SOURCE
     rpi5vc4.c
+    rpi5vc4_scanout.c
     rpi5vc4_wddm.c
     rpi5vc4_vidpn.c
     rpi5vc4_present.c

@@ -550,6 +550,7 @@ Rpi5Vc4DdiStartDevice(
                   min(DxgkInterface->Size, sizeof(DXGK_INTERFACE)));
     DeviceExtension->V3dCoreInterruptOwnedByDxgk =
         Rpi5Vc4DxgkOwnsCoreInterrupt(DxgkInterface);
+    Rpi5Vc4DiscoverDisplayOutput(DeviceExtension);
 
     /*
      * Take over the firmware GOP framebuffer.  dxgkrnl reads the loader
@@ -565,6 +566,9 @@ Rpi5Vc4DdiStartDevice(
         DisplayInfo.Pitch == 0 ||
         DisplayInfo.PhysicAddress.QuadPart == 0)
     {
+        if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+
         /*
          * Headless boot: the firmware initialized no display (no HDMI sink
          * at UEFI time), so there is no GOP state to inherit. Own a RAM
@@ -584,6 +588,16 @@ Rpi5Vc4DdiStartDevice(
         DeviceExtension->PixelsPerScanLine = 1024;
         DeviceExtension->BitsPerPixel = 32;
         DeviceExtension->ColorFormat = D3DDDIFMT_X8R8G8B8;
+        DeviceExtension->ScanoutWidth = 1024;
+        DeviceExtension->ScanoutHeight = 768;
+        DeviceExtension->ScanoutPitch = 1024 * 4;
+        DeviceExtension->TargetHTotal = 1024;
+        DeviceExtension->TargetVTotal = 768;
+        DeviceExtension->TargetPixelRate = 1024 * 768 * 60;
+        DeviceExtension->TargetVSyncFreq.Numerator = 60;
+        DeviceExtension->TargetVSyncFreq.Denominator = 1;
+        DeviceExtension->TargetHSyncFreq.Numerator = 60 * 768;
+        DeviceExtension->TargetHSyncFreq.Denominator = 1;
 
         Size = (SIZE_T)DeviceExtension->BytesPerScanLine *
                DeviceExtension->ScreenHeight;
@@ -617,13 +631,13 @@ Rpi5Vc4DdiStartDevice(
     if (FrameBufferSize == 0 || FrameBufferSize > MAXULONG)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
 
+    Status = Rpi5Vc4ConfigureFirmwareScanout(DeviceExtension, &DisplayInfo);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     DeviceExtension->FirmwareFrameBufferPhysical = DisplayInfo.PhysicAddress;
     DeviceExtension->FrameBufferPhysical = DisplayInfo.PhysicAddress;
     DeviceExtension->FrameBufferSize = (ULONG)FrameBufferSize;
-    DeviceExtension->ScreenWidth = DisplayInfo.Width;
-    DeviceExtension->ScreenHeight = DisplayInfo.Height;
-    DeviceExtension->BytesPerScanLine = DisplayInfo.Pitch;
-    DeviceExtension->PixelsPerScanLine = DisplayInfo.Pitch / 4;
     DeviceExtension->BitsPerPixel = 32;
     DeviceExtension->ColorFormat = (DisplayInfo.ColorFormat != D3DDDIFMT_UNKNOWN)
                                        ? DisplayInfo.ColorFormat
@@ -655,7 +669,8 @@ Rpi5Vc4DdiStartDevice(
     }
     }
 
-    Rpi5Vc4InitCursor(DeviceExtension);
+    if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+        Rpi5Vc4InitCursor(DeviceExtension);
 
     /* Local VRAM segment + the in-order submission pipeline. */
     if (!Rpi5Vc4AllocateVram(DeviceExtension))
@@ -670,7 +685,8 @@ Rpi5Vc4DdiStartDevice(
 
     /* Verify the HVS's system IOMMU won't undercut slab scanout
      * (read-only; see rpi5vc4_iommu.h for the pass-through analysis). */
-    if (!DeviceExtension->Headless)
+    if (!DeviceExtension->Headless &&
+        !Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
         Rpi5HvsIommuDumpState();
 
     /*
@@ -720,7 +736,9 @@ Rpi5Vc4DdiStartDevice(
     }
 
     /* Record the live PixelValve raster timing and re-assert it. */
-    if (!DeviceExtension->Headless && Rpi5CrtcReportTiming(DeviceExtension))
+    if (!DeviceExtension->Headless &&
+        !Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) &&
+        Rpi5CrtcReportTiming(DeviceExtension))
         Rpi5CrtcProgramCurrentTiming(DeviceExtension);
 
     /*
@@ -729,7 +747,8 @@ Rpi5Vc4DdiStartDevice(
      * the live head. Without this the HVS treats the top byte as alpha, so
      * GDI-drawn pixels (which leave it 0) are composited to black.
      */
-    Rpi5HvsInstallScanout(DeviceExtension);
+    if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+        Rpi5HvsInstallScanout(DeviceExtension);
 
     DeviceExtension->SourceVisible = TRUE;
     DeviceExtension->Started = TRUE;
@@ -741,7 +760,7 @@ Rpi5Vc4DdiStartDevice(
         Rpi5Vc4ArmHpdTimer(DeviceExtension);
 
     *NumberOfVideoPresentSources = 1;
-    *NumberOfChildren = RPI5VC4_CHILD_COUNT;
+    *NumberOfChildren = DeviceExtension->DisplayChildCount;
 
     DPRINT("RPI5VC4: StartDevice: %lux%lu pitch=%lu fb=0x%I64x\n",
            DeviceExtension->ScreenWidth,
@@ -791,7 +810,9 @@ Rpi5Vc4DdiStopDevice(
 
     /* Restore the firmware framebuffer as the (only) scanout plane. */
     DeviceExtension->CursorVisible = FALSE;
-    if (DeviceExtension->Started && !DeviceExtension->Headless)
+    if (DeviceExtension->Started &&
+        !DeviceExtension->Headless &&
+        !Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
     {
         Rpi5HvsFlipScanout(DeviceExtension,
                            DeviceExtension->FirmwareFrameBufferPhysical);
@@ -864,7 +885,7 @@ Rpi5Vc4DdiRemoveDevice(
 }
 
 /* ========================================================================
- * Child devices — one always-connected HDMI output
+ * Child devices — ACPI integrated panel or the physical HDMI connectors
  * ====================================================================== */
 
 NTSTATUS
@@ -874,14 +895,32 @@ Rpi5Vc4DdiQueryChildRelations(
     _Out_ PDXGK_CHILD_DESCRIPTOR ChildRelations,
     _In_  ULONG ChildRelationsSize)
 {
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
-
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
     ULONG Child;
 
-    if (ChildRelations == NULL ||
-        ChildRelationsSize < RPI5VC4_CHILD_COUNT * sizeof(DXGK_CHILD_DESCRIPTOR))
+    if (DeviceExtension == NULL || ChildRelations == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (ChildRelationsSize <
+        DeviceExtension->DisplayChildCount * sizeof(DXGK_CHILD_DESCRIPTOR))
     {
         return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        RtlZeroMemory(ChildRelations, sizeof(*ChildRelations));
+        ChildRelations[0].ChildDeviceType = TypeVideoOutput;
+        ChildRelations[0].ChildCapabilities.HpdAwareness =
+            HpdAwarenessAlwaysConnected;
+        ChildRelations[0].ChildCapabilities.Type.VideoOutput.InterfaceTechnology =
+            D3DKMDT_VOT_INTERNAL;
+        ChildRelations[0].ChildCapabilities.Type.VideoOutput.MonitorOrientationAwareness =
+            D3DKMDT_MOA_NONE;
+        ChildRelations[0].ChildCapabilities.Type.VideoOutput.SupportsSdtvModes = FALSE;
+        ChildRelations[0].AcpiUid = DeviceExtension->BootDisplayAcpiUid;
+        ChildRelations[0].ChildUid = 0;
+        return STATUS_SUCCESS;
     }
 
     /*
@@ -891,8 +930,9 @@ Rpi5Vc4DdiQueryChildRelations(
      * connector but stays disconnected until real HPD probing exists.
      */
     RtlZeroMemory(ChildRelations,
-                  RPI5VC4_CHILD_COUNT * sizeof(DXGK_CHILD_DESCRIPTOR));
-    for (Child = 0; Child < RPI5VC4_CHILD_COUNT; Child++)
+                  DeviceExtension->DisplayChildCount *
+                      sizeof(DXGK_CHILD_DESCRIPTOR));
+    for (Child = 0; Child < DeviceExtension->DisplayChildCount; Child++)
     {
         ChildRelations[Child].ChildDeviceType = TypeVideoOutput;
         ChildRelations[Child].ChildCapabilities.HpdAwareness =
@@ -917,17 +957,19 @@ Rpi5Vc4DdiQueryChildStatus(
     _Inout_ PDXGK_CHILD_STATUS ChildStatus,
     _In_    BOOLEAN NonDestructiveOnly)
 {
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
     UNREFERENCED_PARAMETER(NonDestructiveOnly);
 
-    if (ChildStatus == NULL)
+    if (DeviceExtension == NULL || ChildStatus == NULL)
         return STATUS_INVALID_PARAMETER;
 
     if (ChildStatus->Type == StatusConnection)
     {
         /* Child 0 is the firmware-lit boot display; the second HDMI
          * port reports disconnected until HPD probing exists. */
-        ChildStatus->HotPlug.Connected = (ChildStatus->ChildUid == 0);
+        ChildStatus->HotPlug.Connected =
+            ChildStatus->ChildUid == 0 &&
+            DeviceExtension->DisplayChildCount != 0;
     }
 
     return STATUS_SUCCESS;
@@ -1034,22 +1076,33 @@ Rpi5Vc4DdiQueryDeviceDescriptor(
     ULONG CopyLength;
 
     if (DeviceExtension == NULL || DeviceDescriptor == NULL ||
-        ChildUid >= RPI5VC4_CHILD_COUNT)
+        ChildUid >= DeviceExtension->DisplayChildCount)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* Only the boot display has a (synthesized) EDID. */
+    /* Only the firmware-selected boot display has a descriptor. */
     if (ChildUid != 0)
         return STATUS_MONITOR_NO_DESCRIPTOR;
 
     if (DeviceDescriptor->DescriptorOffset >= sizeof(Edid))
         return STATUS_MONITOR_NO_MORE_DESCRIPTOR_DATA;
 
-    if (DeviceExtension->ScreenWidth == 0 || DeviceExtension->ScreenHeight == 0)
-        return STATUS_MONITOR_NO_DESCRIPTOR;
-
-    Rpi5Vc4BuildEdid(DeviceExtension, Edid);
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        if (!DeviceExtension->EdidValid)
+            return STATUS_MONITOR_NO_DESCRIPTOR;
+        RtlCopyMemory(Edid, DeviceExtension->Edid, sizeof(Edid));
+    }
+    else
+    {
+        if (DeviceExtension->ScreenWidth == 0 ||
+            DeviceExtension->ScreenHeight == 0)
+        {
+            return STATUS_MONITOR_NO_DESCRIPTOR;
+        }
+        Rpi5Vc4BuildEdid(DeviceExtension, Edid);
+    }
 
     CopyLength = min(DeviceDescriptor->DescriptorLength,
                      sizeof(Edid) - DeviceDescriptor->DescriptorOffset);
@@ -1093,9 +1146,11 @@ Rpi5Vc4DdiSetPowerState(
          * scanout display list (VRAM content survived — the slab is
          * ordinary DRAM).
          */
-        if (DeviceExtension->PixelValveValid)
+        if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) &&
+            DeviceExtension->PixelValveValid)
             Rpi5CrtcProgramCurrentTiming(DeviceExtension);
-        Rpi5HvsInstallScanout(DeviceExtension);
+        if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+            Rpi5HvsInstallScanout(DeviceExtension);
         DeviceExtension->SourceVisible = TRUE;
     }
     else
@@ -1106,9 +1161,12 @@ Rpi5Vc4DdiSetPowerState(
          * is the closest honest "off" state).
          */
         DeviceExtension->CursorVisible = FALSE;
-        Rpi5HvsFlipScanout(DeviceExtension,
-                           DeviceExtension->FirmwareFrameBufferPhysical);
-        Rpi5HvsInstallScanout(DeviceExtension);
+        if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+        {
+            Rpi5HvsFlipScanout(DeviceExtension,
+                               DeviceExtension->FirmwareFrameBufferPhysical);
+            Rpi5HvsInstallScanout(DeviceExtension);
+        }
 
         if (DeviceExtension->FrameBufferVa != NULL)
         {

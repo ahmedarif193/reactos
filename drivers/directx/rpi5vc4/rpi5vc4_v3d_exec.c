@@ -4930,7 +4930,7 @@ Rpi5V3dBuildPageTable(
     DeviceExtension->V3dFrameBufferGpuVa = 0;
     FrameBufferBytes = (ULONGLONG)FrameBufferOffset + DeviceExtension->FrameBufferSize;
     FrameBufferPages = FrameBufferBytes <= MAXULONG ? (ULONG)((FrameBufferBytes + RPI5VC4_V3D_PAGE_SIZE - 1) >> RPI5VC4_V3D_PAGE_SHIFT) : 0;
-    if (DeviceExtension->FrameBufferSize != 0 && FrameBufferPages != 0 && DeviceExtension->BitsPerPixel == 32 && DeviceExtension->BytesPerScanLine >= DeviceExtension->ScreenWidth * sizeof(ULONG) && FrameBufferPfn + FrameBufferPages <= RPI5VC4_V3D_PTE_PFN_LIMIT && FrameBufferFirstPte + FrameBufferPages <= RPI5VC4_V3D_PT_SIZE / sizeof(ULONG))
+    if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) && DeviceExtension->FrameBufferSize != 0 && FrameBufferPages != 0 && DeviceExtension->BitsPerPixel == 32 && DeviceExtension->BytesPerScanLine >= DeviceExtension->ScreenWidth * sizeof(ULONG) && FrameBufferPfn + FrameBufferPages <= RPI5VC4_V3D_PTE_PFN_LIMIT && FrameBufferFirstPte + FrameBufferPages <= RPI5VC4_V3D_PT_SIZE / sizeof(ULONG))
     {
         for (Index = 0; Index < FrameBufferPages; Index++)
             PageTable[FrameBufferFirstPte + Index] = (ULONG)(FrameBufferPfn + Index) | V3D_PTE_WRITEABLE | V3D_PTE_VALID;

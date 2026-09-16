@@ -32,6 +32,7 @@
 #include <windef.h>
 #include <dispmprt.h>
 #include <reactos/rddm/rxgkpresent.h>
+#include <reactos/loader_framebuffer.h>
 #include <reactos/rpi5vc4_umd.h>
 #include <reactos/rpi5vc4_xpdm.h>
 
@@ -39,8 +40,9 @@
 #define DXGKDDI_INTERFACE_VERSION_WDDM2_0 0x5023
 #endif
 
-/* Physical HDMI connectors on the BCM2712 (HDMI0 = boot display). */
-#define RPI5VC4_CHILD_COUNT   2
+/* Maximum number of physical outputs exposed by this adapter.  Firmware may
+ * instead expose one standard ACPI integrated-panel child. */
+#define RPI5VC4_MAX_CHILD_COUNT 2
 
 #define RPI5VC4_CURSOR_WIDTH  64
 #define RPI5VC4_CURSOR_HEIGHT 64
@@ -192,6 +194,12 @@ typedef struct _RPI5VC4_DMA_PACKET
 typedef struct _RPI5VC4_DEVICE_EXTENSION RPI5VC4_DEVICE_EXTENSION,
     *PRPI5VC4_DEVICE_EXTENSION;
 
+typedef enum _RPI5VC4_SCANOUT_BACKEND
+{
+    Rpi5Vc4ScanoutHvs = 0,
+    Rpi5Vc4ScanoutFixedFirmware
+} RPI5VC4_SCANOUT_BACKEND;
+
 /* Cached layout state of one bounded render-graph resource (exec engine). */
 typedef struct _RPI5VC4_V3D_GRAPH_LEVEL_STATE
 {
@@ -300,11 +308,28 @@ struct _RPI5VC4_DEVICE_EXTENSION
     UCHAR Edid[128];
     BOOLEAN EdidValid;
 
-    /* Firmware GOP scanout geometry (from DxgkCbAcquirePostDisplayOwnership). */
+    /* The connector is discovered through the standard ACPI display-output
+     * methods.  HDMI is driven through HVS; an integrated RP1 DSI output
+     * keeps the firmware-programmed scanout and receives rotated presents. */
+    RPI5VC4_SCANOUT_BACKEND ScanoutBackend;
+    ULONG DisplayChildCount;
+    ULONG BootDisplayAcpiUid;
+    D3DKMDT_VIDPN_PRESENT_PATH_ROTATION PathRotation;
+
+    /* Physical firmware scanout geometry.  Screen* and BytesPerScanLine below
+     * describe the logical WDDM source and can differ for a rotated panel. */
     PHYSICAL_ADDRESS FirmwareFrameBufferPhysical;
     PHYSICAL_ADDRESS FrameBufferPhysical;
     PVOID FrameBufferVa;              /* write-combined kernel mapping        */
     ULONG FrameBufferSize;
+    ULONG ScanoutWidth;
+    ULONG ScanoutHeight;
+    ULONG ScanoutPitch;
+    ULONG TargetHTotal;
+    ULONG TargetVTotal;
+    SIZE_T TargetPixelRate;
+    D3DDDI_RATIONAL TargetVSyncFreq;
+    D3DDDI_RATIONAL TargetHSyncFreq;
     ULONG ScreenWidth;
     ULONG ScreenHeight;
     ULONG PixelsPerScanLine;
@@ -509,6 +534,21 @@ struct _RPI5VC4_DEVICE_EXTENSION
     PRPI5VC4_V3D_TERRAIN_VERTEX V3dGraphTerrainVertices;
     RPI5VC4_V3D_GRAPH_RESOURCE_STATE V3dGraphResources[RPI5VC4_V3D_GRAPH_MAX_RESOURCES];
 };
+
+/* rpi5vc4_scanout.c — standard ACPI output discovery and geometry policy */
+
+VOID
+Rpi5Vc4DiscoverDisplayOutput(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension);
+
+NTSTATUS
+Rpi5Vc4ConfigureFirmwareScanout(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ const DXGK_DISPLAY_INFORMATION *DisplayInfo);
+
+BOOLEAN
+Rpi5Vc4IsFixedFirmwareScanout(
+    _In_ const RPI5VC4_DEVICE_EXTENSION *DeviceExtension);
 
 /* rpi5vc4.c — lifecycle / child / adapter-info / pointer DDIs */
 
