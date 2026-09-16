@@ -8,6 +8,7 @@
 #ifndef V3D_D3DKMT_H
 #define V3D_D3DKMT_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "drm-uapi/drm.h"
@@ -53,6 +54,9 @@ drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd);
 int
 v3d_d3dkmt_open(void);
 
+int
+v3d_d3dkmt_open_umd(void *adapter, void *device, const void *callbacks);
+
 void
 v3d_d3dkmt_close(int fd);
 
@@ -68,6 +72,9 @@ v3d_d3dkmt_bo_copy_cpu_contents(int fd, uint32_t source_handle,
 
 int
 v3d_d3dkmt_bo_mark_external_dirty(int fd, uint32_t handle);
+
+bool
+v3d_d3dkmt_runtime_resource_pending(int fd);
 
 int
 v3d_d3dkmt_syncobj_clone(int fd, uint32_t source, uint32_t *destination);

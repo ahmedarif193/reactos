@@ -25,6 +25,7 @@
  *
  *
  **************************************************************************/
+#include <stdint.h>
 
 
 #include "util/u_debug.h"
@@ -37,7 +38,12 @@
 #include <d3dkmthk.h>
 
 extern struct pipe_screen *
-d3d10_create_screen(void);
+d3d10_create_screen(void *adapter, void *device, const void *callbacks);
+
+extern struct pipe_resource *
+d3d10_create_resource(struct pipe_screen *screen,
+                      const struct pipe_resource *templ,
+                      void *runtime_resource, D3DKMT_HANDLE *allocation);
 
 static HDC
 d3d10_gdi_acquire_hdc(void *winsys_drawable_handle) {
@@ -56,12 +62,16 @@ d3d10_gdi_release_hdc(void *winsys_drawable_handle, HDC hDC) {
 }
 
 struct pipe_screen *
-d3d10_create_screen(void)
+d3d10_create_screen(void *adapter, void *device, const void *callbacks)
 {
    const char *default_driver;
    const char *driver;
    struct pipe_screen *screen = NULL;
    struct sw_winsys *winsys;
+
+   (void)adapter;
+   (void)device;
+   (void)callbacks;
 
    winsys = gdi_create_sw_winsys(d3d10_gdi_acquire_hdc, d3d10_gdi_release_hdc);
    if(!winsys)
@@ -96,4 +106,15 @@ no_screen:
    winsys->destroy(winsys);
 no_winsys:
    return NULL;
+}
+
+struct pipe_resource *
+d3d10_create_resource(struct pipe_screen *screen,
+                      const struct pipe_resource *templ,
+                      void *runtime_resource, D3DKMT_HANDLE *allocation)
+{
+   (void)runtime_resource;
+   if (allocation)
+      *allocation = 0;
+   return screen->resource_create(screen, templ);
 }

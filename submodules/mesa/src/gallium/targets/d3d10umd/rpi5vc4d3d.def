@@ -1,0 +1,6 @@
+; SPDX-License-Identifier: GPL-3.0-or-later
+; SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif193@gmail.com>
+
+EXPORTS
+OpenAdapter10
+OpenAdapter10_2

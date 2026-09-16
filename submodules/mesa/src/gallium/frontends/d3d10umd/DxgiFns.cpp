@@ -62,7 +62,24 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
    Resource *pSrcResource = CastResource(pPresentData->hSurfaceToPresent);
 
    device->pipe->flush(device->pipe, NULL, 0);
-   device->pipe->screen->flush_frontbuffer(device->pipe->screen, device->pipe, 
+
+   if (device->pDXGIBaseCallbacks &&
+       device->pDXGIBaseCallbacks->pfnPresentCb &&
+       pSrcResource->allocation) {
+      DXGIDDICB_PRESENT present = {};
+      present.hSrcAllocation = pSrcResource->allocation;
+      present.pDXGIContext = pPresentData->pDXGIContext;
+
+      if (pPresentData->hDstResource) {
+         Resource *pDstResource = CastResource(pPresentData->hDstResource);
+         present.hDstAllocation = pDstResource->allocation;
+      }
+
+      return device->pDXGIBaseCallbacks->pfnPresentCb(device->hDevice,
+                                                       &present);
+   }
+
+   device->pipe->screen->flush_frontbuffer(device->pipe->screen, device->pipe,
       pSrcResource->resource, 0, 0, pPresentData->pDXGIContext, 0, NULL);
 
    return S_OK;

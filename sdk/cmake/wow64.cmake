@@ -14,8 +14,10 @@ set(WOW64_I386_TARGETS ${WOW64_I386_MODULES} ${WOW64_I386_AUXILIARY_MODULES} ${W
 # i386 Mesa target whenever the native image includes Mesa; the native and
 # ARM64EC ICDs cannot be loaded into an i386 process.
 set(WOW64_I386_MESA_FILE)
+set(WOW64_I386_MESA_D3D_FILE)
 if(TARGET mesa_gallium)
     set(WOW64_I386_MESA_FILE "${WOW64_I386_BINARY_DIR}/dll/opengl/mesa_gallium/mesa-icd/mesa_gallium.dll")
+    set(WOW64_I386_MESA_D3D_FILE "${WOW64_I386_BINARY_DIR}/dll/opengl/mesa_gallium/mesa-d3d/rpi5vc4d3d.dll")
     list(APPEND WOW64_I386_TARGETS mesa_gallium)
 endif()
 
@@ -125,6 +127,7 @@ foreach(_target IN LISTS WOW64_I386_MODULES WOW64_I386_EXECUTABLES)
 endforeach()
 if(WOW64_I386_MESA_FILE)
     list(APPEND WOW64_I386_FILES "${WOW64_I386_MESA_FILE}")
+    list(APPEND WOW64_I386_FILES "${WOW64_I386_MESA_D3D_FILE}")
 endif()
 
 set(WOW64_I386_VALIDATION_FILES ${WOW64_I386_FILES})

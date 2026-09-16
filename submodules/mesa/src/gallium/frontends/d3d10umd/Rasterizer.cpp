@@ -280,8 +280,39 @@ SetRasterizerState(D3D10DDI_HDEVICE hDevice,                   // IN
 {
    LOG_ENTRYPOINT();
 
-   struct pipe_context *pipe = CastPipeContext(hDevice);
+   Device *pDevice = CastDevice(hDevice);
+   struct pipe_context *pipe = pDevice->pipe;
    void *state = CastPipeRasterizerState(hRasterizerState);
+
+   /* A NULL D3D state handle selects the documented default state. */
+   if (!hRasterizerState.pDrvPrivate) {
+      if (!pDevice->default_rasterizer_state) {
+         struct pipe_rasterizer_state default_state;
+         memset(&default_state, 0, sizeof default_state);
+
+         default_state.flatshade_first = 1;
+         default_state.cull_face = PIPE_FACE_BACK;
+         default_state.fill_front = PIPE_POLYGON_MODE_FILL;
+         default_state.fill_back = PIPE_POLYGON_MODE_FILL;
+         default_state.half_pixel_center = 1;
+         default_state.clip_halfz = 1;
+         default_state.depth_clip_near = 1;
+         default_state.depth_clip_far = 1;
+         default_state.depth_clamp = 1;
+         default_state.point_quad_rasterization = 1;
+         default_state.point_size = 1.0f;
+         default_state.point_line_tri_clip = 1;
+         default_state.line_width = 1.0f;
+
+         pDevice->default_rasterizer_state =
+            pipe->create_rasterizer_state(pipe, &default_state);
+         if (!pDevice->default_rasterizer_state) {
+            SetError(hDevice, E_OUTOFMEMORY);
+            return;
+         }
+      }
+      state = pDevice->default_rasterizer_state;
+   }
 
    pipe->bind_rasterizer_state(pipe, state);
 }

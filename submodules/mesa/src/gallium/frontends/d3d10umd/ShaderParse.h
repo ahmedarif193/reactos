@@ -39,6 +39,15 @@
 extern "C" {
 #endif
 
+/* TGSI/NIR reserve constant-buffer slot 0 for the default uniform block.
+ * D3D constant buffers are UBOs, so keep their register number while moving
+ * them past that reserved slot. */
+static inline unsigned
+Shader_pipe_constant_buffer_index(unsigned index)
+{
+   return index + 1;
+}
+
 struct Shader_header {
    D3D10_SB_TOKENIZED_PROGRAM_TYPE type;
    unsigned major_version;
@@ -170,7 +179,8 @@ Shader_opcode_free(struct Shader_opcode *opcode);
 
 const struct tgsi_token *
 Shader_tgsi_translate(const unsigned *code,
-                      unsigned *output_mapping);
+                      unsigned *output_mapping,
+                      bool use_legacy_texture_opcodes);
 
 
 #ifdef __cplusplus

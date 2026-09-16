@@ -45,6 +45,17 @@
 #include "util/format/u_format.h"
 
 
+static bool
+UseLegacyTextureOpcodes(const Device *pDevice, mesa_shader_stage stage)
+{
+   /* NIR-only drivers accept TGSI as a compatibility input and translate it
+    * through tgsi_to_nir.  That translator consumes the legacy TEX/TXF/TXL
+    * family, while native TGSI drivers can consume the newer SAMPLE family. */
+   return !(pDevice->pipe->screen->shader_caps[stage].supported_irs &
+            (1u << PIPE_SHADER_IR_TGSI));
+}
+
+
 /*
  * ----------------------------------------------------------------------
  *
@@ -171,9 +182,12 @@ SetConstantBuffers(mesa_shader_stage shader_type,    // IN
       cb.buffer = CastPipeResource(phBuffers[i]);
       cb.buffer_offset = 0;
       cb.buffer_size = cb.buffer ? cb.buffer->width0 : 0;
+      const unsigned pipe_index =
+         Shader_pipe_constant_buffer_index(StartBuffer + i);
+      assert(pipe_index < PIPE_MAX_CONSTANT_BUFFERS);
       pipe->set_constant_buffer(pipe,
                                 shader_type,
-                                StartBuffer + i,
+                                pipe_index,
                                 &cb);
    }
 }
@@ -198,14 +212,24 @@ SetSamplers(mesa_shader_stage shader_type,     // IN
 {
    Device *pDevice = CastDevice(hDevice);
    struct pipe_context *pipe = pDevice->pipe;
+   const unsigned max_samplers = MIN2(
+         pipe->screen->shader_caps[shader_type].max_texture_samplers,
+         PIPE_MAX_SAMPLERS);
 
    void **samplers = pDevice->samplers[shader_type];
    for (UINT i = 0; i < NumSamplers; i++) {
       assert(Offset + i < PIPE_MAX_SAMPLERS);
-      samplers[Offset + i] = CastPipeSamplerState(phSamplers[i]);
+      void *sampler = CastPipeSamplerState(phSamplers[i]);
+      if (Offset + i < max_samplers) {
+         samplers[Offset + i] = sampler;
+      } else if (sampler) {
+         LOG_UNSUPPORTED(true);
+         break;
+      }
    }
 
-   pipe->bind_sampler_states(pipe, shader_type, 0, PIPE_MAX_SAMPLERS, samplers);
+   if (max_samplers)
+      pipe->bind_sampler_states(pipe, shader_type, 0, max_samplers, samplers);
 }
 
 
@@ -228,6 +252,9 @@ SetShaderResources(mesa_shader_stage shader_type,                  // IN
 {
    Device *pDevice = CastDevice(hDevice);
    struct pipe_context *pipe = pDevice->pipe;
+   const unsigned max_views = MIN2(
+         pipe->screen->shader_caps[shader_type].max_sampler_views,
+         PIPE_MAX_SHADER_SAMPLER_VIEWS);
 
    assert(Offset + NumViews <= D3D10_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT);
 
@@ -235,7 +262,7 @@ SetShaderResources(mesa_shader_stage shader_type,                  // IN
    for (UINT i = 0; i < NumViews; i++) {
       struct pipe_sampler_view *sampler_view =
             CastPipeShaderResourceView(phShaderResourceViews[i]);
-      if (Offset + i < PIPE_MAX_SHADER_SAMPLER_VIEWS) {
+      if (Offset + i < max_views) {
          sampler_views[Offset + i] = sampler_view;
       } else {
          if (sampler_view) {
@@ -249,8 +276,9 @@ SetShaderResources(mesa_shader_stage shader_type,                  // IN
     * XXX: Now that the semantics are actually the same in gallium, should
     * probably think about not updating all always... It should just work.
     */
-   pipe->set_sampler_views(pipe, shader_type, 0, PIPE_MAX_SHADER_SAMPLER_VIEWS,
-                           0, sampler_views);
+   if (max_views)
+      pipe->set_sampler_views(pipe, shader_type, 0, max_views, 0,
+                              sampler_views);
 }
 
 
@@ -540,14 +568,17 @@ CreateVertexShader(D3D10DDI_HDEVICE hDevice,                                  //
 {
    LOG_ENTRYPOINT();
 
-   struct pipe_context *pipe = CastPipeContext(hDevice);
+   Device *pDevice = CastDevice(hDevice);
+   struct pipe_context *pipe = pDevice->pipe;
    Shader *pShader = CastShader(hShader);
 
    pShader->type = MESA_SHADER_VERTEX;
    pShader->output_resolved = true;
 
    memset(&pShader->state, 0, sizeof pShader->state);
-   pShader->state.tokens = Shader_tgsi_translate(pCode, pShader->output_mapping);
+   pShader->state.tokens = Shader_tgsi_translate(
+      pCode, pShader->output_mapping,
+      UseLegacyTextureOpcodes(pDevice, MESA_SHADER_VERTEX));
 
    pShader->handle = pipe->create_vs_state(pipe, &pShader->state);
 
@@ -676,14 +707,17 @@ CreateGeometryShader(D3D10DDI_HDEVICE hDevice,                                //
 {
    LOG_ENTRYPOINT();
 
-   struct pipe_context *pipe = CastPipeContext(hDevice);
+   Device *pDevice = CastDevice(hDevice);
+   struct pipe_context *pipe = pDevice->pipe;
    Shader *pShader = CastShader(hShader);
 
    pShader->type = MESA_SHADER_GEOMETRY;
    pShader->output_resolved = true;
 
    memset(&pShader->state, 0, sizeof pShader->state);
-   pShader->state.tokens = Shader_tgsi_translate(pShaderCode, pShader->output_mapping);
+   pShader->state.tokens = Shader_tgsi_translate(
+      pShaderCode, pShader->output_mapping,
+      UseLegacyTextureOpcodes(pDevice, MESA_SHADER_GEOMETRY));
 
    pShader->handle = pipe->create_gs_state(pipe, &pShader->state);
 }
@@ -837,7 +871,8 @@ CreateGeometryShaderWithStreamOutput(
 {
    LOG_ENTRYPOINT();
 
-   struct pipe_context *pipe = CastPipeContext(hDevice);
+   Device *pDevice = CastDevice(hDevice);
+   struct pipe_context *pipe = pDevice->pipe;
    Shader *pShader = CastShader(hShader);
    int total_components[PIPE_MAX_SO_BUFFERS] = {0};
    unsigned num_holes = 0;
@@ -848,7 +883,10 @@ CreateGeometryShaderWithStreamOutput(
    memset(&pShader->state, 0, sizeof pShader->state);
    if (pData->pShaderCode) {
       pShader->state.tokens = Shader_tgsi_translate(pData->pShaderCode,
-                                                    pShader->output_mapping);
+                                                    pShader->output_mapping,
+                                                    UseLegacyTextureOpcodes(
+                                                       pDevice,
+                                                       MESA_SHADER_GEOMETRY));
    }
    pShader->output_resolved = (pShader->state.tokens != NULL);
 
@@ -992,7 +1030,8 @@ CreatePixelShader(D3D10DDI_HDEVICE hDevice,                                // IN
 {
    LOG_ENTRYPOINT();
 
-   struct pipe_context *pipe = CastPipeContext(hDevice);
+   Device *pDevice = CastDevice(hDevice);
+   struct pipe_context *pipe = pDevice->pipe;
    Shader *pShader = CastShader(hShader);
 
    pShader->type = MESA_SHADER_FRAGMENT;
@@ -1000,7 +1039,10 @@ CreatePixelShader(D3D10DDI_HDEVICE hDevice,                                // IN
 
    memset(&pShader->state, 0, sizeof pShader->state);
    pShader->state.tokens = Shader_tgsi_translate(pShaderCode,
-                                                 pShader->output_mapping);
+                                                 pShader->output_mapping,
+                                                 UseLegacyTextureOpcodes(
+                                                    pDevice,
+                                                    MESA_SHADER_FRAGMENT));
 
    pShader->handle = pipe->create_fs_state(pipe, &pShader->state);
 
@@ -1202,7 +1244,14 @@ CreateShaderResourceView(
    struct pipe_sampler_view desc;
    memset(&desc, 0, sizeof desc);
    resource = CastPipeResource(pCreateSRView->hDrvResource);
-   format = FormatTranslate(pCreateSRView->Format, false);
+   format = FormatTranslateSupported(pipe->screen, pCreateSRView->Format,
+                                     false, resource->target,
+                                     resource->nr_samples,
+                                     PIPE_BIND_SAMPLER_VIEW);
+   if (format == PIPE_FORMAT_NONE) {
+      SetError(hDevice, DXGI_DDI_ERR_UNSUPPORTED);
+      return;
+   }
 
    u_sampler_view_default_template(&desc,
                                    resource,
@@ -1282,7 +1331,14 @@ CreateShaderResourceView1(
    struct pipe_sampler_view desc;
    memset(&desc, 0, sizeof desc);
    resource = CastPipeResource(pCreateSRView->hDrvResource);
-   format = FormatTranslate(pCreateSRView->Format, false);
+   format = FormatTranslateSupported(pipe->screen, pCreateSRView->Format,
+                                     false, resource->target,
+                                     resource->nr_samples,
+                                     PIPE_BIND_SAMPLER_VIEW);
+   if (format == PIPE_FORMAT_NONE) {
+      SetError(hDevice, DXGI_DDI_ERR_UNSUPPORTED);
+      return;
+   }
 
    u_sampler_view_default_template(&desc,
                                    resource,

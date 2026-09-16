@@ -38,6 +38,14 @@
 enum pipe_format
 FormatTranslate(DXGI_FORMAT Format, BOOL depth);
 
+enum pipe_format
+FormatTranslateSupported(struct pipe_screen *screen,
+                         DXGI_FORMAT Format,
+                         BOOL depth,
+                         enum pipe_texture_target target,
+                         unsigned sample_count,
+                         unsigned bind);
+
 const char *
 FormatToName(DXGI_FORMAT Format);
 

@@ -288,7 +288,9 @@ CreateDepthStencilView(
 
    memset(&desc, 0, sizeof desc);
    pipe_resource_reference(&desc.texture, resource);
-   desc.format = FormatTranslate(pCreateDepthStencilView->Format, true);
+   /* Resource creation already selected the driver's supported byte order
+    * for packed depth/stencil formats.  A DSV must retain that layout. */
+   desc.format = resource->format;
 
    switch (pCreateDepthStencilView->ResourceDimension) {
    case D3D10DDIRESOURCE_TEXTURE1D:
@@ -707,8 +709,35 @@ SetBlendState(D3D10DDI_HDEVICE hDevice,      // IN
 {
    LOG_ENTRYPOINT();
 
-   struct pipe_context *pipe = CastPipeContext(hDevice);
+   Device *pDevice = CastDevice(hDevice);
+   struct pipe_context *pipe = pDevice->pipe;
    void *state = CastPipeBlendState(hState);
+
+   /* A NULL D3D state handle selects the documented default blend state. */
+   if (!hState.pDrvPrivate) {
+      if (!pDevice->default_blend_state) {
+         struct pipe_blend_state default_state;
+         memset(&default_state, 0, sizeof default_state);
+
+         for (unsigned i = 0; i < PIPE_MAX_COLOR_BUFS; ++i) {
+            default_state.rt[i].rgb_func = PIPE_BLEND_ADD;
+            default_state.rt[i].rgb_src_factor = PIPE_BLENDFACTOR_ONE;
+            default_state.rt[i].rgb_dst_factor = PIPE_BLENDFACTOR_ZERO;
+            default_state.rt[i].alpha_func = PIPE_BLEND_ADD;
+            default_state.rt[i].alpha_src_factor = PIPE_BLENDFACTOR_ONE;
+            default_state.rt[i].alpha_dst_factor = PIPE_BLENDFACTOR_ZERO;
+            default_state.rt[i].colormask = PIPE_MASK_RGBA;
+         }
+
+         pDevice->default_blend_state =
+            pipe->create_blend_state(pipe, &default_state);
+         if (!pDevice->default_blend_state) {
+            SetError(hDevice, E_OUTOFMEMORY);
+            return;
+         }
+      }
+      state = pDevice->default_blend_state;
+   }
 
    pipe->bind_blend_state(pipe, state);
 
@@ -988,9 +1017,29 @@ SetDepthStencilState(D3D10DDI_HDEVICE hDevice,           // IN
 {
    LOG_ENTRYPOINT();
 
-   struct pipe_context *pipe = CastPipeContext(hDevice);
+   Device *pDevice = CastDevice(hDevice);
+   struct pipe_context *pipe = pDevice->pipe;
    void *state = CastPipeDepthStencilState(hState);
    struct pipe_stencil_ref psr;
+
+   /* A NULL D3D state handle enables depth test/write with LESS. */
+   if (!hState.pDrvPrivate) {
+      if (!pDevice->default_depth_stencil_state) {
+         struct pipe_depth_stencil_alpha_state default_state;
+         memset(&default_state, 0, sizeof default_state);
+         default_state.depth_enabled = 1;
+         default_state.depth_writemask = 1;
+         default_state.depth_func = PIPE_FUNC_LESS;
+
+         pDevice->default_depth_stencil_state =
+            pipe->create_depth_stencil_alpha_state(pipe, &default_state);
+         if (!pDevice->default_depth_stencil_state) {
+            SetError(hDevice, E_OUTOFMEMORY);
+            return;
+         }
+      }
+      state = pDevice->default_depth_stencil_state;
+   }
 
    psr.ref_value[0] = StencilRef;
    psr.ref_value[1] = StencilRef;

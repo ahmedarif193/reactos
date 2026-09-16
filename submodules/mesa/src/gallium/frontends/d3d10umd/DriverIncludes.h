@@ -38,6 +38,13 @@
 
 #include <winddk_compat.h>
 
+/*
+ * d3d10umddi.h consumes the shared WDDM handle and allocation declarations.
+ * Include them through their public parent, just as a third-party UMD does;
+ * d3dukmdt.h deliberately rejects direct inclusion.
+ */
+#include <d3dkmthk.h>
+
 #define D3D10DDI_MINOR_HEADER_VERSION 2
 
 /* Unfortunately WinDDK's d3d10umddi.h defines D3D10.x constants as global

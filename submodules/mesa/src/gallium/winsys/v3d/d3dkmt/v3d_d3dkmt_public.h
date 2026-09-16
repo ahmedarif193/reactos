@@ -18,6 +18,22 @@ struct pipe_fence_handle;
 struct pipe_screen *
 v3d_d3dkmt_screen_create(const struct pipe_screen_config *config);
 
+struct pipe_screen *
+v3d_d3dkmt_screen_create_umd(const struct pipe_screen_config *config,
+                             void *adapter, void *device,
+                             const void *callbacks);
+
+bool
+v3d_d3dkmt_runtime_resource_begin(struct pipe_screen *screen,
+                                  void *runtime_resource);
+
+void
+v3d_d3dkmt_runtime_resource_end(struct pipe_screen *screen);
+
+uint32_t
+v3d_d3dkmt_resource_allocation(struct pipe_screen *screen,
+                               struct pipe_resource *resource);
+
 bool
 v3d_d3dkmt_present_frontbuffer(struct pipe_screen *screen,
                                 struct pipe_context *ctx,
