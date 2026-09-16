@@ -422,6 +422,16 @@ ACPIDispatchDeviceControl(
             break;
         }
 
+        case IOCTL_ACPI_EVAL_METHOD_FOR_PCI_CHILD:
+        {
+            ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
+
+            status = AcpiEvalMethodForDisplayChildIoctl(
+                         (PPDO_DEVICE_DATA)commonData,
+                         Irp);
+            break;
+        }
+
         case IOCTL_ACPI_ASYNC_EVAL_METHOD_EX:
         case IOCTL_ACPI_EVAL_METHOD_EX:
         {
