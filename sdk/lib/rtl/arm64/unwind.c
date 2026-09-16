@@ -915,6 +915,11 @@ RtlUnwindEx(
 
                 if (Disposition == ExceptionCollidedUnwind)
                 {
+                    /* The collided dispatcher describes the frame whose
+                     * handler was already running.  Preserve that frame's
+                     * context before stepping past it; the target restore
+                     * must not use registers captured in the nested unwind. */
+                    *ContextRecord = *DispatcherContext.ContextRecord;
                     RtlpArm64RestoreCollidedFrame(&DispatcherContext, &UnwindContext, NonVolatileRegisters.Buffer, sizeof(NonVolatileRegisters.Buffer), &EstablisherFrame);
                     DispatcherContext.ContextRecord = ContextRecord;
                     ExceptionRecord->ExceptionFlags |= EXCEPTION_COLLIDED_UNWIND;
