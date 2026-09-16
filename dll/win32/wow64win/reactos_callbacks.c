@@ -415,23 +415,46 @@ static NTSTATUS ros_callback_dispatch(ULONG id, void *args, ULONG len)
 
 static BOOL ros_wow64_map_window_proc(WNDPROC proc, BOOL ansi, ULONG *proc32)
 {
-    const ROS_PFNCLIENT64 *native_procs;
-    const ROS_PFNCLIENT32 *wow64_procs;
+    const ROS_PFNCLIENT64 *native_procs_a, *native_procs_w;
+    const ROS_PFNCLIENT32 *wow64_procs, *wow64_other_procs;
     ULONG_PTR address = (ULONG_PTR)proc;
     UINT i;
 
+    wow64_procs = ansi ? &ros_client_procs_a : &ros_client_procs_w;
+    wow64_other_procs = ansi ? &ros_client_procs_w : &ros_client_procs_a;
+
+    if (ros_client_procs_initialized)
+    {
+        for (i = 0; i < ROS_PFNCLIENT_COUNT; ++i)
+        {
+            if (wow64_procs->Functions[i] == address)
+            {
+                *proc32 = wow64_procs->Functions[i];
+                return TRUE;
+            }
+            if (wow64_other_procs->Functions[i] == address)
+            {
+                *proc32 = wow64_procs->Functions[i];
+                return TRUE;
+            }
+        }
+    }
+
+    /* Application window procedures already have a valid 32-bit address. */
     if (address <= MAXDWORD)
     {
         *proc32 = (ULONG)address;
         return TRUE;
     }
+
     if (!ros_server_info || !ros_client_procs_initialized) return FALSE;
 
-    native_procs = ansi ? &ros_server_info->apfnClientA : &ros_server_info->apfnClientW;
-    wow64_procs = ansi ? &ros_client_procs_a : &ros_client_procs_w;
+    native_procs_a = &ros_server_info->apfnClientA;
+    native_procs_w = &ros_server_info->apfnClientW;
     for (i = 0; i < ROS_PFNCLIENT_COUNT; ++i)
     {
-        if (native_procs->Functions[i] == address)
+        if (native_procs_a->Functions[i] == address ||
+            native_procs_w->Functions[i] == address)
         {
             *proc32 = wow64_procs->Functions[i];
             return TRUE;
