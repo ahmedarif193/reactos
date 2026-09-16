@@ -14,6 +14,7 @@
 #include <video.h>
 #include <devioctl.h>
 #include <section_attribs.h>
+#include <reactos/loader_framebuffer.h>
 
 #define VBE_EDID_SIZE                        0x80
 
@@ -67,26 +68,9 @@ typedef struct
     ULONG VramSize64K;
 } BOCHS_DEVICE_EXTENSION, *PBOCHS_DEVICE_EXTENSION;
 
-/* Mirror of LOADER_PARAMETER_FRAMEBUFFER (sdk/include/reactos/arc/arc.h);
- * keep layout in sync. */
-typedef struct _BOCHSMP_GOP_INFO
-{
-    PHYSICAL_ADDRESS FrameBufferBase;
-    ULONG            FrameBufferSize;
-    ULONG            HorizontalResolution;
-    ULONG            VerticalResolution;
-    ULONG            PixelsPerScanLine;
-    ULONG            PixelFormat;
-    ULONG            RedMask;
-    ULONG            GreenMask;
-    ULONG            BlueMask;
-    ULONG            Reserved;
-    ULONG            Dpi;
-} BOCHSMP_GOP_INFO, *PBOCHSMP_GOP_INFO;
-
 BOOLEAN
 NTAPI
 InbvGetGopFrameBufferInfo(
-    _Out_ PBOCHSMP_GOP_INFO FrameBufferInfo);
+    _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBufferInfo);
 
 #endif //BOCHS_H

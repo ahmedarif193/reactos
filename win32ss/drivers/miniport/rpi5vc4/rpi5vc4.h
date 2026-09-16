@@ -15,26 +15,12 @@
 #undef __BROKEN__
 #include <video.h>
 #include <devioctl.h>
+#include <reactos/loader_framebuffer.h>
 #include <reactos/rpi5vc4_xpdm.h>
 
 #define RPI5VC4_CURSOR_WIDTH 64
 #define RPI5VC4_CURSOR_HEIGHT 64
 #define RPI5VC4_ACPI_MEMORY_RESOURCE_COUNT 10
-
-typedef struct _LOADER_PARAMETER_FRAMEBUFFER
-{
-    LARGE_INTEGER FrameBufferBase;
-    ULONG FrameBufferSize;
-    ULONG HorizontalResolution;
-    ULONG VerticalResolution;
-    ULONG PixelsPerScanLine;
-    ULONG PixelFormat;
-    ULONG RedMask;
-    ULONG GreenMask;
-    ULONG BlueMask;
-    ULONG Reserved;
-    ULONG Dpi;
-} LOADER_PARAMETER_FRAMEBUFFER, *PLOADER_PARAMETER_FRAMEBUFFER;
 
 typedef struct _RPI5VC4_V3D_GRAPH_LEVEL_STATE
 {

@@ -145,7 +145,7 @@ static VOID
 BochsApplyGopPreferredMode(
     _Inout_ PBOCHS_DEVICE_EXTENSION DeviceExtension)
 {
-    BOCHSMP_GOP_INFO Fb;
+    LOADER_PARAMETER_FRAMEBUFFER Fb;
     BOCHS_SIZE GopSize;
     ULONG i, j;
     ULONG xRes, yRes;

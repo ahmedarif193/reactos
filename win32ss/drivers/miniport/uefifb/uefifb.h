@@ -17,27 +17,7 @@
 #undef __BROKEN__
 #include <video.h>
 #include <devioctl.h>
-
-/*
- * Private copy of the loader framebuffer descriptor. Must be kept in sync
- * with sdk/include/reactos/arc/arc.h:_LOADER_PARAMETER_FRAMEBUFFER - we cannot
- * include arc.h directly from a videoport miniport because it depends on
- * PFN_NUMBER from mmtypes.h which the miniport headers do not pull in.
- */
-typedef struct _LOADER_PARAMETER_FRAMEBUFFER
-{
-    LARGE_INTEGER FrameBufferBase;
-    ULONG FrameBufferSize;
-    ULONG HorizontalResolution;
-    ULONG VerticalResolution;
-    ULONG PixelsPerScanLine;
-    ULONG PixelFormat;
-    ULONG RedMask;
-    ULONG GreenMask;
-    ULONG BlueMask;
-    ULONG Reserved;
-    ULONG Dpi;
-} LOADER_PARAMETER_FRAMEBUFFER, *PLOADER_PARAMETER_FRAMEBUFFER;
+#include <reactos/loader_framebuffer.h>
 
 /* DEVICE EXTENSION ***********************************************************/
 

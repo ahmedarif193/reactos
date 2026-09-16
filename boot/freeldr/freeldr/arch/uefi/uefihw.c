@@ -34,6 +34,152 @@ extern PCM_FRAMEBUF_DEVICE_DATA FrameBufferData;
 BOOLEAN AcpiPresent = FALSE;
 static EFI_EVENT IdleTimerEvent = NULL;
 
+#define EDID_BASE_BLOCK_SIZE          128
+#define EDID_FIRST_DETAILED_TIMING    54
+
+static
+BOOLEAN
+UefiEdidGetMonitorData(
+    _In_reads_bytes_(EDID_BASE_BLOCK_SIZE) const UCHAR* Edid,
+    _Out_ PCM_MONITOR_DEVICE_DATA MonitorData,
+    _Out_ PULONG RefreshRate)
+{
+    const UCHAR* Timing = Edid + EDID_FIRST_DETAILED_TIMING;
+    ULONG PixelClock10KHz;
+    ULONG HorizontalActive, HorizontalBlank;
+    ULONG HorizontalFrontPorch, HorizontalSync, HorizontalBackPorch;
+    ULONG VerticalActive, VerticalBlank;
+    ULONG VerticalFrontPorch, VerticalSync, VerticalBackPorch;
+    ULONG HorizontalSize, VerticalSize;
+    ULONGLONG TotalPixels;
+
+    PixelClock10KHz = Timing[0] | ((ULONG)Timing[1] << 8);
+    if (PixelClock10KHz == 0)
+        return FALSE;
+
+    HorizontalActive = Timing[2] | ((ULONG)(Timing[4] & 0xF0) << 4);
+    HorizontalBlank = Timing[3] | ((ULONG)(Timing[4] & 0x0F) << 8);
+    VerticalActive = Timing[5] | ((ULONG)(Timing[7] & 0xF0) << 4);
+    VerticalBlank = Timing[6] | ((ULONG)(Timing[7] & 0x0F) << 8);
+    HorizontalFrontPorch = Timing[8] |
+        ((ULONG)(Timing[11] & 0xC0) << 2);
+    HorizontalSync = Timing[9] |
+        ((ULONG)(Timing[11] & 0x30) << 4);
+    VerticalFrontPorch = ((Timing[10] >> 4) & 0x0F) |
+        ((ULONG)(Timing[11] & 0x0C) << 2);
+    VerticalSync = (Timing[10] & 0x0F) |
+        ((ULONG)(Timing[11] & 0x03) << 4);
+
+    if ((HorizontalActive == 0) || (VerticalActive == 0) ||
+        (HorizontalBlank < HorizontalFrontPorch + HorizontalSync) ||
+        (VerticalBlank < VerticalFrontPorch + VerticalSync))
+    {
+        return FALSE;
+    }
+
+    HorizontalBackPorch = HorizontalBlank -
+        HorizontalFrontPorch - HorizontalSync;
+    VerticalBackPorch = VerticalBlank - VerticalFrontPorch - VerticalSync;
+    HorizontalSize = Timing[12] | ((ULONG)(Timing[14] & 0xF0) << 4);
+    VerticalSize = Timing[13] | ((ULONG)(Timing[14] & 0x0F) << 8);
+    if (HorizontalSize == 0)
+        HorizontalSize = (ULONG)Edid[21] * 10;
+    if (VerticalSize == 0)
+        VerticalSize = (ULONG)Edid[22] * 10;
+
+    if ((HorizontalActive > MAXUSHORT) || (VerticalActive > MAXUSHORT) ||
+        (HorizontalFrontPorch > MAXUSHORT) ||
+        (HorizontalSync > MAXUSHORT) ||
+        (HorizontalBackPorch > MAXUSHORT) ||
+        (VerticalFrontPorch > MAXUSHORT) ||
+        (VerticalSync > MAXUSHORT) ||
+        (VerticalBackPorch > MAXUSHORT) ||
+        (HorizontalSize > MAXUSHORT) || (VerticalSize > MAXUSHORT))
+    {
+        return FALSE;
+    }
+
+    RtlZeroMemory(MonitorData, sizeof(*MonitorData));
+    MonitorData->Version = 1;
+    MonitorData->Revision = 0;
+    MonitorData->HorizontalScreenSize = (USHORT)HorizontalSize;
+    MonitorData->VerticalScreenSize = (USHORT)VerticalSize;
+    MonitorData->HorizontalResolution = (USHORT)HorizontalActive;
+    MonitorData->VerticalResolution = (USHORT)VerticalActive;
+    MonitorData->HorizontalDisplayTimeLow = (USHORT)HorizontalActive;
+    MonitorData->HorizontalDisplayTime = (USHORT)HorizontalActive;
+    MonitorData->HorizontalDisplayTimeHigh = (USHORT)HorizontalActive;
+    MonitorData->HorizontalBackPorchLow = (USHORT)HorizontalBackPorch;
+    MonitorData->HorizontalBackPorch = (USHORT)HorizontalBackPorch;
+    MonitorData->HorizontalBackPorchHigh = (USHORT)HorizontalBackPorch;
+    MonitorData->HorizontalFrontPorchLow = (USHORT)HorizontalFrontPorch;
+    MonitorData->HorizontalFrontPorch = (USHORT)HorizontalFrontPorch;
+    MonitorData->HorizontalFrontPorchHigh = (USHORT)HorizontalFrontPorch;
+    MonitorData->HorizontalSyncLow = (USHORT)HorizontalSync;
+    MonitorData->HorizontalSync = (USHORT)HorizontalSync;
+    MonitorData->HorizontalSyncHigh = (USHORT)HorizontalSync;
+    MonitorData->VerticalBackPorchLow = (USHORT)VerticalBackPorch;
+    MonitorData->VerticalBackPorch = (USHORT)VerticalBackPorch;
+    MonitorData->VerticalBackPorchHigh = (USHORT)VerticalBackPorch;
+    MonitorData->VerticalFrontPorchLow = (USHORT)VerticalFrontPorch;
+    MonitorData->VerticalFrontPorch = (USHORT)VerticalFrontPorch;
+    MonitorData->VerticalFrontPorchHigh = (USHORT)VerticalFrontPorch;
+    MonitorData->VerticalSyncLow = (USHORT)VerticalSync;
+    MonitorData->VerticalSync = (USHORT)VerticalSync;
+    MonitorData->VerticalSyncHigh = (USHORT)VerticalSync;
+
+    TotalPixels = (ULONGLONG)(HorizontalActive + HorizontalBlank) *
+                  (VerticalActive + VerticalBlank);
+    *RefreshRate = (ULONG)(((ULONGLONG)PixelClock10KHz * 10000 +
+                            TotalPixels / 2) / TotalPixels);
+    return (*RefreshRate != 0);
+}
+
+static
+VOID
+UefiCreateMonitorPeripheral(
+    _In_ PCONFIGURATION_COMPONENT_DATA ControllerKey,
+    _In_ PCM_MONITOR_DEVICE_DATA MonitorData)
+{
+    PCONFIGURATION_COMPONENT_DATA MonitorKey;
+    PCM_PARTIAL_RESOURCE_LIST ResourceList;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
+    PCM_MONITOR_DEVICE_DATA ResourceMonitorData;
+    ULONG Size;
+
+    Size = FIELD_OFFSET(CM_PARTIAL_RESOURCE_LIST, PartialDescriptors[1]) +
+           sizeof(*ResourceMonitorData);
+    ResourceList = FrLdrHeapAlloc(Size, TAG_HW_RESOURCE_LIST);
+    if (ResourceList == NULL)
+    {
+        ERR("Failed to allocate EDID monitor descriptor\n");
+        return;
+    }
+
+    RtlZeroMemory(ResourceList, Size);
+    ResourceList->Version = 1;
+    ResourceList->Revision = 2;
+    ResourceList->Count = 1;
+
+    Descriptor = &ResourceList->PartialDescriptors[0];
+    Descriptor->Type = CmResourceTypeDeviceSpecific;
+    Descriptor->ShareDisposition = CmResourceShareUndetermined;
+    Descriptor->u.DeviceSpecificData.DataSize = sizeof(*ResourceMonitorData);
+    ResourceMonitorData = (PCM_MONITOR_DEVICE_DATA)(Descriptor + 1);
+    *ResourceMonitorData = *MonitorData;
+
+    FldrCreateComponentKey(ControllerKey,
+                           PeripheralClass,
+                           MonitorPeripheral,
+                           Output | ConsoleOut,
+                           0,
+                           0xFFFFFFFF,
+                           "UEFI EDID Monitor",
+                           ResourceList,
+                           Size,
+                           &MonitorKey);
+}
+
 /* FUNCTIONS *****************************************************************/
 
 PVOID
@@ -450,6 +596,10 @@ DetectDisplayController(
     PCM_PARTIAL_RESOURCE_LIST PartialResourceList;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
     PCM_FRAMEBUF_DEVICE_DATA FramebufData;
+    CM_MONITOR_DEVICE_DATA MonitorData;
+    UCHAR Edid[EDID_BASE_BLOCK_SIZE];
+    ULONG RefreshRate = 0;
+    BOOLEAN HasMonitorData;
     ULONG Size;
 
     if (!VramAddress || (VramSize == 0) || !FrameBufferData)
@@ -484,12 +634,17 @@ DetectDisplayController(
     PartialDescriptor->Flags = 0;
     PartialDescriptor->u.DeviceSpecificData.DataSize = sizeof(*FramebufData);
 
+    HasMonitorData = UefiVideoGetEdid(Edid) &&
+                     UefiEdidGetMonitorData(Edid,
+                                            &MonitorData,
+                                            &RefreshRate);
+
     /* Get pointer to framebuffer-specific data */
     FramebufData = (PCM_FRAMEBUF_DEVICE_DATA)(PartialDescriptor + 1);
     RtlCopyMemory(FramebufData, FrameBufferData, sizeof(*FrameBufferData));
     FramebufData->Version  = 1;
-    FramebufData->Revision = 4;
-    FramebufData->VideoClock = 0; // FIXME: Use EDID
+    FramebufData->Revision = 5;
+    FramebufData->VideoClock = HasMonitorData ? RefreshRate : 0;
 
     FldrCreateComponentKey(BusKey,
                            ControllerClass,
@@ -502,8 +657,10 @@ DetectDisplayController(
                            Size,
                            &ControllerKey);
 
-    // NOTE: Don't add a MonitorPeripheral for now.
-    // We should use EDID data for it.
+    if (HasMonitorData)
+    {
+        UefiCreateMonitorPeripheral(ControllerKey, &MonitorData);
+    }
 }
 
 static

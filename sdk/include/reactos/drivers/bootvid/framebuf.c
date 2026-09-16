@@ -466,6 +466,8 @@ FindBootDisplayFromLoaderGop(
 {
     PLOADER_PARAMETER_EXTENSION Extension;
     PLOADER_PARAMETER_FRAMEBUFFER Framebuffer;
+    PLOADER_PARAMETER_FRAMEBUFFER_TRANSFORM Transform;
+    BOOLEAN TransformDimensionsValid;
 
     if (!KeLoaderBlock || !KeLoaderBlock->Extension)
         return FALSE;
@@ -492,7 +494,7 @@ FindBootDisplayFromLoaderGop(
 
     RtlZeroMemory(VideoConfigData, sizeof(*VideoConfigData));
     VideoConfigData->Version = 1;
-    VideoConfigData->Revision = 4;
+    VideoConfigData->Revision = 5;
     VideoConfigData->FrameBufferOffset = 0;
     VideoConfigData->ScreenWidth = Framebuffer->HorizontalResolution;
     VideoConfigData->ScreenHeight = Framebuffer->VerticalResolution;
@@ -503,19 +505,46 @@ FindBootDisplayFromLoaderGop(
     VideoConfigData->PixelMasks.BlueMask = Framebuffer->BlueMask;
     VideoConfigData->PixelMasks.ReservedMask = Framebuffer->Reserved;
     VideoConfigData->Dpi = Framebuffer->Dpi;
+    VideoConfigData->Rotation = LoaderFramebufferRotationIdentity;
+    VideoConfigData->LogicalWidth = Framebuffer->HorizontalResolution;
+    VideoConfigData->LogicalHeight = Framebuffer->VerticalResolution;
+
+    if (Extension->Size >=
+            RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION,
+                                     GopFramebufferTransform))
+    {
+        Transform = &Extension->GopFramebufferTransform;
+        if ((Transform->Rotation == LoaderFramebufferRotation90) ||
+            (Transform->Rotation == LoaderFramebufferRotation270))
+        {
+            TransformDimensionsValid =
+                (Transform->LogicalWidth == Framebuffer->VerticalResolution) &&
+                (Transform->LogicalHeight == Framebuffer->HorizontalResolution);
+        }
+        else
+        {
+            TransformDimensionsValid =
+                (Transform->Rotation <= LoaderFramebufferRotation270) &&
+                (Transform->LogicalWidth == Framebuffer->HorizontalResolution) &&
+                (Transform->LogicalHeight == Framebuffer->VerticalResolution);
+        }
+
+        if ((Transform->Size >= sizeof(*Transform)) &&
+            (Transform->Version ==
+                LOADER_PARAMETER_FRAMEBUFFER_TRANSFORM_VERSION) &&
+            TransformDimensionsValid)
+        {
+            VideoConfigData->TransformFlags = Transform->Flags;
+            VideoConfigData->Rotation = Transform->Rotation;
+            VideoConfigData->LogicalWidth = Transform->LogicalWidth;
+            VideoConfigData->LogicalHeight = Transform->LogicalHeight;
+        }
+    }
 
     if (Interface)
         *Interface = Internal;
     if (BusNumber)
         *BusNumber = 0;
-
-    DPRINT1("Display: loader firmware framebuffer 0x%I64X size=%lu %lux%lu stride=%lu bpp=%lu\n",
-            VideoRamAddress->QuadPart,
-            *VideoRamSize,
-            VideoConfigData->ScreenWidth,
-            VideoConfigData->ScreenHeight,
-            VideoConfigData->PixelsPerScanLine,
-            VideoConfigData->BitsPerPixel);
 
     return TRUE;
 }
@@ -659,6 +688,27 @@ FindBootDisplay(
                                      &LocalInterface,
                                      &LocalBusNumber))
     {
+        PHYSICAL_ADDRESS ArcVideoRamAddress;
+        ULONG ArcVideoRamSize;
+        CM_FRAMEBUF_DEVICE_DATA ArcVideoConfigData;
+
+        /*
+         * The Windows-compatible GOP loader extension carries framebuffer
+         * geometry, but not monitor timing or physical-size information.
+         * Keep using it as the authoritative scanout handoff, and augment it
+         * with the EDID-derived monitor node in the loader ARC tree.
+         */
+        if (NT_SUCCESS(FindBootDisplayFromLoaderARCTree(
+                           &ArcVideoRamAddress,
+                           &ArcVideoRamSize,
+                           &ArcVideoConfigData,
+                           &LocalMonitorConfigData,
+                           NULL,
+                           NULL)))
+        {
+            VideoConfigData->VideoClock = ArcVideoConfigData.VideoClock;
+        }
+
         Status = STATUS_SUCCESS;
     }
     else

@@ -20,6 +20,10 @@ UefiConsGetCh(void);
 EFI_STATUS
 UefiInitializeVideo(VOID);
 
+BOOLEAN
+UefiVideoGetEdid(
+    _Out_writes_bytes_(128) PUCHAR Edid);
+
 VOID
 UefiVideoClearScreen(UCHAR Attr);
 

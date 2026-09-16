@@ -65,11 +65,24 @@ typedef struct _CM_FRAMEBUF_DEVICE_DATA
      */
     ULONG Dpi;
 
+    /* Version 5: logical presentation of a transformed linear scanout. */
+    ULONG TransformFlags;
+    ULONG Rotation;
+    ULONG LogicalWidth;
+    ULONG LogicalHeight;
+
 } CM_FRAMEBUF_DEVICE_DATA, *PCM_FRAMEBUF_DEVICE_DATA;
 
 /* Size of the revision 3 structure, before the Dpi member was added. */
 #define CM_FRAMEBUF_DEVICE_DATA_V3_SIZE \
     FIELD_OFFSET(CM_FRAMEBUF_DEVICE_DATA, Dpi)
+
+/* Size of the revision 4 structure, before transform metadata was added. */
+#define CM_FRAMEBUF_DEVICE_DATA_V4_SIZE \
+    FIELD_OFFSET(CM_FRAMEBUF_DEVICE_DATA, TransformFlags)
+
+#define CM_FRAMEBUF_DEVICE_DATA_V5_SIZE \
+    sizeof(CM_FRAMEBUF_DEVICE_DATA)
 
 #ifdef __cplusplus
 }
