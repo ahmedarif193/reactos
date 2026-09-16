@@ -1220,10 +1220,12 @@ DwmGlComposeInitialize(LONG Width, LONG Height)
 BOOL
 DwmGpuComposeInitialize(LONG Width, LONG Height)
 {
-    /* Preserve the working ICD path on adapters that provide it. A native
-     * Direct3D-only adapter can compose without an OpenGL ICD. */
-    return DwmD3dIsActive() || DwmGlComposeInitialize(Width, Height) ||
-           DwmD3dInitialize(Width, Height);
+    /* Prefer the native display-driver path when the output adapter publishes
+     * one.  Besides matching the Windows compositor contract, this keeps DWM
+     * on the same WDDM device and presentation path as Direct3D applications.
+     * WGL remains the fallback for adapters that only provide an ICD. */
+    return DwmD3dIsActive() || DwmD3dInitialize(Width, Height) ||
+           DwmGlComposeInitialize(Width, Height);
 }
 
 BOOL
