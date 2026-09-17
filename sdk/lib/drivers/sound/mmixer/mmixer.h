@@ -212,6 +212,14 @@ MMixerGetWaveFormat(
     OUT PWAVEFORMATEXTENSIBLE Format);
 
 MIXER_STATUS
+MMixerGetWaveConnectionState(
+    IN PMIXER_CONTEXT MixerContext,
+    IN ULONG DeviceIndex,
+    IN ULONG bWaveIn,
+    OUT PULONG PresenceDetection,
+    OUT PULONG IsConnected);
+
+MIXER_STATUS
 MMixerQueryWaveFormatSupport(
     IN PMIXER_CONTEXT MixerContext,
     IN ULONG DeviceIndex,

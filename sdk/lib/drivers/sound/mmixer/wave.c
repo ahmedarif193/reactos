@@ -17,6 +17,7 @@ const GUID KSDATAFORMAT_SUBTYPE_PCM             = {0x00000001L, 0x0000, 0x0010, 
 const GUID KSDATAFORMAT_TYPE_AUDIO              = {0x73647561L, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
 const GUID KSINTERFACESETID_Standard            = {0x1A8766A0L, 0x62CE, 0x11CF, {0xA5, 0xD6, 0x28, 0xDB, 0x04, 0xC1, 0x00, 0x00}};
 const GUID KSMEDIUMSETID_Standard               = {0x4747B320L, 0x62CE, 0x11CF, {0xA5, 0xD6, 0x28, 0xDB, 0x04, 0xC1, 0x00, 0x00}};
+const GUID KSPROPSETID_Jack                     = {0x4509F757L, 0x2D46, 0x4637, {0x8E, 0x62, 0xCE, 0x7D, 0xB9, 0x44, 0xF5, 0x7B}};
 
 PKSPIN_CONNECT
 MMixerAllocatePinConnect(
@@ -448,6 +449,8 @@ MMixerInitializeWaveInfo(
     /* initialize wave info */
     WaveInfo->DeviceId = MixerData->DeviceId;
     WaveInfo->PinId = Pins[0];
+    WaveInfo->ConnectorDeviceId = MAXULONG;
+    WaveInfo->ConnectorPinId = MAXULONG;
 
     /* sanity check */
     ASSERT(wcslen(DeviceName) < MAXPNAMELEN);
@@ -530,6 +533,203 @@ MMixerInitializeWaveInfo(
         MixerList->WaveOutListCount++;
     }
 
+    return MM_STATUS_SUCCESS;
+}
+
+VOID
+MMixerSetWaveConnector(
+    IN PMIXER_LIST MixerList,
+    IN ULONG WaveDeviceId,
+    IN ULONG WavePinId,
+    IN ULONG bWaveIn,
+    IN ULONG ConnectorDeviceId,
+    IN ULONG ConnectorPinId)
+{
+    PLIST_ENTRY Entry;
+    PLIST_ENTRY ListHead;
+
+    ListHead = bWaveIn ? &MixerList->WaveInList : &MixerList->WaveOutList;
+    Entry = ListHead->Flink;
+    while (Entry != ListHead)
+    {
+        LPWAVE_INFO WaveInfo = CONTAINING_RECORD(Entry, WAVE_INFO, Entry);
+
+        if (WaveInfo->DeviceId == WaveDeviceId &&
+            WaveInfo->PinId == WavePinId)
+        {
+            WaveInfo->ConnectorDeviceId = ConnectorDeviceId;
+            WaveInfo->ConnectorPinId = ConnectorPinId;
+        }
+        Entry = Entry->Flink;
+    }
+}
+
+static MIXER_STATUS
+MMixerGetJackProperty(
+    IN PMIXER_CONTEXT MixerContext,
+    IN HANDLE FilterHandle,
+    IN ULONG PinId,
+    IN ULONG PropertyId,
+    IN ULONG ItemSize,
+    OUT PKSMULTIPLE_ITEM *Result)
+{
+    KSP_PIN Pin;
+    PKSMULTIPLE_ITEM MultipleItem;
+    MIXER_STATUS Status;
+    ULONG BytesReturned = 0;
+    ULONG MaximumCount;
+
+    RtlZeroMemory(&Pin, sizeof(Pin));
+    Pin.Property.Set = KSPROPSETID_Jack;
+    Pin.Property.Id = PropertyId;
+    Pin.Property.Flags = KSPROPERTY_TYPE_GET;
+    Pin.PinId = PinId;
+
+    Status = MixerContext->Control(FilterHandle,
+                                   IOCTL_KS_PROPERTY,
+                                   &Pin,
+                                   sizeof(Pin),
+                                   NULL,
+                                   0,
+                                   &BytesReturned);
+    if (Status != MM_STATUS_MORE_ENTRIES ||
+        BytesReturned < sizeof(KSMULTIPLE_ITEM))
+    {
+        return Status == MM_STATUS_MORE_ENTRIES
+            ? MM_STATUS_UNSUCCESSFUL
+            : Status;
+    }
+
+    MultipleItem = MixerContext->Alloc(BytesReturned);
+    if (!MultipleItem)
+        return MM_STATUS_NO_MEMORY;
+
+    Status = MixerContext->Control(FilterHandle,
+                                   IOCTL_KS_PROPERTY,
+                                   &Pin,
+                                   sizeof(Pin),
+                                   MultipleItem,
+                                   BytesReturned,
+                                   &BytesReturned);
+    if (Status != MM_STATUS_SUCCESS ||
+        BytesReturned < sizeof(KSMULTIPLE_ITEM) ||
+        MultipleItem->Size < sizeof(KSMULTIPLE_ITEM) ||
+        MultipleItem->Size > BytesReturned)
+    {
+        MixerContext->Free(MultipleItem);
+        return Status == MM_STATUS_SUCCESS ? MM_STATUS_UNSUCCESSFUL : Status;
+    }
+
+    MaximumCount = (MultipleItem->Size - sizeof(KSMULTIPLE_ITEM)) / ItemSize;
+    if (MultipleItem->Count > MaximumCount)
+    {
+        MixerContext->Free(MultipleItem);
+        return MM_STATUS_UNSUCCESSFUL;
+    }
+
+    *Result = MultipleItem;
+    return MM_STATUS_SUCCESS;
+}
+
+MIXER_STATUS
+MMixerGetWaveConnectionState(
+    IN PMIXER_CONTEXT MixerContext,
+    IN ULONG DeviceIndex,
+    IN ULONG bWaveIn,
+    OUT PULONG PresenceDetection,
+    OUT PULONG IsConnected)
+{
+    PMIXER_LIST MixerList;
+    LPMIXER_DATA ConnectorData;
+    LPWAVE_INFO WaveInfo;
+    PKSMULTIPLE_ITEM Descriptions;
+    PKSMULTIPLE_ITEM Descriptions2;
+    MIXER_STATUS Status;
+    ULONG Index;
+
+    if (!PresenceDetection || !IsConnected)
+        return MM_STATUS_INVALID_PARAMETER;
+
+    *PresenceDetection = FALSE;
+    *IsConnected = TRUE;
+
+    Status = MMixerVerifyContext(MixerContext);
+    if (Status != MM_STATUS_SUCCESS)
+        return Status;
+
+    MixerList = (PMIXER_LIST)MixerContext->MixerContext;
+    Status = MMixerGetWaveInfoByIndexAndType(MixerList,
+                                             DeviceIndex,
+                                             bWaveIn,
+                                             &WaveInfo);
+    if (Status != MM_STATUS_SUCCESS)
+        return Status;
+
+    if (WaveInfo->ConnectorDeviceId == MAXULONG ||
+        WaveInfo->ConnectorPinId == MAXULONG)
+    {
+        return MM_STATUS_SUCCESS;
+    }
+
+    ConnectorData = MMixerGetDataByDeviceId(MixerList,
+                                             WaveInfo->ConnectorDeviceId);
+    if (!ConnectorData)
+        return MM_STATUS_UNSUCCESSFUL;
+
+    Descriptions2 = NULL;
+    Status = MMixerGetJackProperty(MixerContext,
+                                    ConnectorData->hDevice,
+                                    WaveInfo->ConnectorPinId,
+                                    KSPROPERTY_JACK_DESCRIPTION2,
+                                    sizeof(KSJACK_DESCRIPTION2),
+                                    &Descriptions2);
+    if (Status == MM_STATUS_SUCCESS)
+    {
+        PKSJACK_DESCRIPTION2 Description =
+            (PKSJACK_DESCRIPTION2)(Descriptions2 + 1);
+
+        for (Index = 0; Index < Descriptions2->Count; ++Index)
+        {
+            if (Description[Index].JackCapabilities &
+                JACKDESC2_PRESENCE_DETECT_CAPABILITY)
+            {
+                *PresenceDetection = TRUE;
+                break;
+            }
+        }
+        MixerContext->Free(Descriptions2);
+    }
+
+    Descriptions = NULL;
+    Status = MMixerGetJackProperty(MixerContext,
+                                    ConnectorData->hDevice,
+                                    WaveInfo->ConnectorPinId,
+                                    KSPROPERTY_JACK_DESCRIPTION,
+                                    sizeof(KSJACK_DESCRIPTION),
+                                    &Descriptions);
+    if (Status != MM_STATUS_SUCCESS)
+    {
+        /* No jack property means a fixed endpoint with no presence detection. */
+        return MM_STATUS_SUCCESS;
+    }
+
+    if (Descriptions->Count)
+    {
+        PKSJACK_DESCRIPTION Description =
+            (PKSJACK_DESCRIPTION)(Descriptions + 1);
+
+        for (Index = 0; Index < Descriptions->Count; ++Index)
+        {
+            if (!Description[Index].IsConnected)
+            {
+                *PresenceDetection = TRUE;
+                *IsConnected = FALSE;
+                break;
+            }
+        }
+    }
+
+    MixerContext->Free(Descriptions);
     return MM_STATUS_SUCCESS;
 }
 

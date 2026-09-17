@@ -1357,9 +1357,8 @@ MMixerAddMixerControlsToDestinationLine(
 }
 
 VOID
-MMixerApplyOutputFilterHack(
+MMixerRemoveConnectedBridgePins(
     IN PMIXER_CONTEXT MixerContext,
-    IN LPMIXER_DATA MixerData,
     IN HANDLE hMixer,
     IN OUT PULONG PinsCount,
     IN OUT PULONG Pins)
@@ -1370,7 +1369,9 @@ MMixerApplyOutputFilterHack(
 
     for(Index = 0; Index < *PinsCount; Index++)
     {
-        /* check if it has a physical connection */
+        /* Endpoint-facing bridge pins are the unconnected boundary of a KS
+         * topology.  A pin with a registered physical connection continues
+         * into another filter and is therefore not an endpoint boundary. */
         Status = MMixerGetPhysicalConnection(MixerContext, hMixer, Pins[Index], &Connection);
 
         if (Status == MM_STATUS_SUCCESS)
@@ -1448,12 +1449,8 @@ MMixerHandleTopologyFilter(
             /* return error code */
             return Status;
         }
-        /* HACK:
-        * some topologies do not have strict boundaries
-        * WorkArround: remove all pin ids which have a physical connection
-        * because bridge pins may belong to different render paths
-        */
-        MMixerApplyOutputFilterHack(MixerContext, MixerData, MixerData->hDevice, &PinsCount, Pins);
+        MMixerRemoveConnectedBridgePins(
+            MixerContext, MixerData->hDevice, &PinsCount, Pins);
         DPRINT("MMIXER: local topology pin=%lu after output filter count=%lu first=%lu\n",
                 Pin,
                 PinsCount,
@@ -1560,12 +1557,14 @@ MMixerHandlePhysicalConnection(
     IN LPMIXER_DATA MixerData,
     IN OUT LPMIXER_INFO MixerInfo,
     IN ULONG bInput,
+    IN ULONG WavePinId,
     IN PKSPIN_PHYSICALCONNECTION OutConnection)
 {
     MIXER_STATUS Status;
     ULONG PinsCount, LineTerminator, DestinationLineID;
     PULONG Pins;
     PTOPOLOGY Topology;
+    LPMIXER_DATA WaveMixerData = MixerData;
 
     /* first try to open the connected filter */
     OutConnection->SymbolicLinkName[1] = L'\\';
@@ -1605,18 +1604,6 @@ MMixerHandlePhysicalConnection(
         Topology = MixerData->Topology;
     }
 
-    /* mark pin as consumed */
-    MMixerSetTopologyPinReserved(Topology, OutConnection->Pin);
-
-    /*
-     * A topology miniport may connect its bridge pins directly and expose no
-     * processing nodes. Such a filter contributes no legacy mixer controls,
-     * but the wave endpoint on the other side of the physical connection is
-     * still valid.
-     */
-    if (Topology->TopologyNodesCount == 0)
-        return MM_STATUS_SUCCESS;
-
     if (!bInput)
     {
         /* allocate pin index array which will hold all referenced pins */
@@ -1643,12 +1630,8 @@ MMixerHandlePhysicalConnection(
             /* return error code */
             return Status;
         }
-        /* HACK:
-         * some topologies do not have strict boundaries
-         * WorkArround: remove all pin ids which have a physical connection
-         * because bridge pins may belong to different render paths
-         */
-        MMixerApplyOutputFilterHack(MixerContext, MixerData, MixerData->hDevice, &PinsCount, Pins);
+        MMixerRemoveConnectedBridgePins(
+            MixerContext, MixerData->hDevice, &PinsCount, Pins);
 
         if (PinsCount == 0)
         {
@@ -1661,6 +1644,23 @@ MMixerHandlePhysicalConnection(
         if (PinsCount != 1)
         {
             DPRINT1("MMixerHandlePhysicalConnection Expected 1 pin but got %lu\n", PinsCount);
+        }
+
+        MMixerSetWaveConnector(MixerList,
+                               WaveMixerData->DeviceId,
+                               WavePinId,
+                               bInput,
+                               MixerData->DeviceId,
+                               Pins[0]);
+
+        /* A direct pin-to-pin topology has an endpoint but no legacy mixer
+         * controls to construct beyond its endpoint-facing bridge pin. */
+        if (Topology->TopologyNodesCount == 0)
+        {
+            MMixerSetTopologyPinReserved(Topology, OutConnection->Pin);
+            MMixerSetTopologyPinReserved(Topology, Pins[0]);
+            MixerContext->Free(Pins);
+            return MM_STATUS_SUCCESS;
         }
 
         /* create destination line */
@@ -1695,6 +1695,35 @@ MMixerHandlePhysicalConnection(
     }
     else
     {
+        Status = MMixerAllocateTopologyPinArray(MixerContext, Topology, &Pins);
+        if (Status == MM_STATUS_SUCCESS)
+        {
+            PinsCount = 0;
+            Status = MMixerGetAllUpOrDownstreamPinsFromPinIndex(
+                MixerContext,
+                Topology,
+                OutConnection->Pin,
+                TRUE,
+                &PinsCount,
+                Pins);
+            if (Status == MM_STATUS_SUCCESS && PinsCount)
+            {
+                MMixerSetWaveConnector(MixerList,
+                                       WaveMixerData->DeviceId,
+                                       WavePinId,
+                                       bInput,
+                                       MixerData->DeviceId,
+                                       Pins[0]);
+            }
+            MixerContext->Free(Pins);
+        }
+
+        if (Topology->TopologyNodesCount == 0)
+        {
+            MMixerSetTopologyPinReserved(Topology, OutConnection->Pin);
+            return Status;
+        }
+
         /* calculate destination line id */
         DestinationLineID = (DESTINATION_LINE + MixerInfo->MixCaps.cDestinations-1);
 
@@ -1707,6 +1736,9 @@ MMixerHandlePhysicalConnection(
             Status = MMixerAddMixerSourceLines(MixerContext, MixerInfo, MixerData->hDevice, Topology, DestinationLineID, LineTerminator);
         }
     }
+
+    /* mark the physical bridge pin as consumed after its path is resolved. */
+    MMixerSetTopologyPinReserved(Topology, OutConnection->Pin);
 
     return Status;
 }
@@ -1727,6 +1759,7 @@ MMixerInitializeFilter(
     PKSPIN_PHYSICALCONNECTION OutConnection;
     ULONG * Pins;
     ULONG PinsFound;
+    ULONG WavePinId;
     ULONG NewMixerInfo = FALSE;
 
     DPRINT("MMIXER: initialize filter node=%lu input=%lu mixerInfo=%p\n",
@@ -1823,6 +1856,8 @@ MMixerInitializeFilter(
         return Status;
     }
 
+    WavePinId = Pins[0];
+
     /* mark all found pins as reserved */
     for(Index = 0; Index < PinsFound; Index++)
     {
@@ -1891,7 +1926,14 @@ MMixerInitializeFilter(
         MMixerSetTopologyPinReserved(Topology, Pins[0]);
 
         /* topology on the topoloy filter */
-        Status = MMixerHandlePhysicalConnection(MixerContext, MixerList, MixerData, MixerInfo, bInputMixer, OutConnection);
+        Status = MMixerHandlePhysicalConnection(
+            MixerContext,
+            MixerList,
+            MixerData,
+            MixerInfo,
+            bInputMixer,
+            WavePinId,
+            OutConnection);
         DPRINT("MMIXER: node=%lu input=%lu physical topology status=%x\n",
                 NodeIndex,
                 bInputMixer,
@@ -1903,6 +1945,12 @@ MMixerInitializeFilter(
     else
     {
         /* topology is on the same filter */
+        MMixerSetWaveConnector(MixerList,
+                               MixerData->DeviceId,
+                               WavePinId,
+                               bInputMixer,
+                               MixerData->DeviceId,
+                               Pins[0]);
         Status = MMixerHandleTopologyFilter(MixerContext, MixerList, MixerData, MixerInfo, bInputMixer, Pins[0]);
         DPRINT("MMIXER: node=%lu input=%lu local topology status=%x\n",
                 NodeIndex,
