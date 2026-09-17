@@ -11,6 +11,744 @@
 #define NDEBUG
 #include <debug.h>
 
+#define PC_EVENT_ENTRY_SIGNATURE 'EvCP'
+
+typedef enum
+{
+    PcEventSourceNone,
+    PcEventSourceKs,
+    PcEventSourceMiniport
+} PC_EVENT_SOURCE;
+
+typedef struct
+{
+    ULONG Signature;
+    PC_EVENT_SOURCE Source;
+    PSUBDEVICE_DESCRIPTOR Descriptor;
+    const KSEVENT_ITEM *KsEventItem;
+    const PCEVENT_ITEM *PcEventItem;
+    ULONG PinId;
+    ULONG NodeId;
+    BOOLEAN PinEvent;
+    BOOLEAN NodeEvent;
+} PC_EVENT_ENTRY_CONTEXT, *PPC_EVENT_ENTRY_CONTEXT;
+
+typedef struct
+{
+    const PCEVENT_ITEM *EventItem;
+    ULONG PinId;
+    ULONG NodeId;
+    BOOLEAN PinEvent;
+    BOOLEAN NodeEvent;
+} PC_EVENT_TARGET, *PPC_EVENT_TARGET;
+
+static
+const PCEVENT_ITEM *
+PcFindAutomationEvent(
+    IN const PCAUTOMATION_TABLE *AutomationTable,
+    IN REFGUID Set,
+    IN ULONG EventId)
+{
+    const PCEVENT_ITEM *EventItem;
+    ULONG Index;
+
+    if (!AutomationTable || !AutomationTable->EventCount ||
+        !AutomationTable->Events ||
+        AutomationTable->EventItemSize < sizeof(PCEVENT_ITEM))
+    {
+        return NULL;
+    }
+
+    EventItem = AutomationTable->Events;
+    for (Index = 0; Index < AutomationTable->EventCount; Index++)
+    {
+        if (EventItem->Set &&
+            IsEqualGUIDAligned(*EventItem->Set, Set) &&
+            EventItem->Id == EventId)
+        {
+            return EventItem;
+        }
+
+        EventItem = (const PCEVENT_ITEM *)((ULONG_PTR)EventItem +
+                                           AutomationTable->EventItemSize);
+    }
+
+    return NULL;
+}
+
+static
+NTSTATUS
+PcResolveMiniportEvent(
+    IN PIRP Irp,
+    IN PSUBDEVICE_DESCRIPTOR Descriptor,
+    OUT PPC_EVENT_TARGET Target)
+{
+    PIO_STACK_LOCATION IoStack;
+    KSEVENT Event;
+    KSE_PIN PinEvent;
+    KSE_NODE NodeEvent;
+    const PCAUTOMATION_TABLE *AutomationTable;
+    const PCPIN_DESCRIPTOR *PinDescriptor;
+    const PCNODE_DESCRIPTOR *NodeDescriptor;
+    NTSTATUS Status = STATUS_SUCCESS;
+    BOOLEAN HasPin = FALSE;
+
+    RtlZeroMemory(Target, sizeof(*Target));
+    Target->PinId = MAXULONG;
+    Target->NodeId = MAXULONG;
+
+    if (!Descriptor || !Descriptor->DeviceDescriptor)
+        return STATUS_INVALID_PARAMETER;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    if (IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(KSEVENT))
+        return STATUS_INVALID_BUFFER_SIZE;
+
+    _SEH2_TRY
+    {
+        if (Irp->RequestorMode == UserMode)
+        {
+            ProbeForRead(IoStack->Parameters.DeviceIoControl.Type3InputBuffer,
+                         IoStack->Parameters.DeviceIoControl.InputBufferLength,
+                         sizeof(UCHAR));
+        }
+
+        RtlCopyMemory(&Event,
+                      IoStack->Parameters.DeviceIoControl.Type3InputBuffer,
+                      sizeof(Event));
+
+        if (Event.Flags & KSEVENT_TYPE_TOPOLOGY)
+        {
+            if (IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(KSE_NODE))
+                Status = STATUS_INVALID_BUFFER_SIZE;
+            else
+                RtlCopyMemory(&NodeEvent,
+                              IoStack->Parameters.DeviceIoControl.Type3InputBuffer,
+                              sizeof(NodeEvent));
+        }
+        else if (IoStack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(KSE_PIN))
+        {
+            RtlCopyMemory(&PinEvent,
+                          IoStack->Parameters.DeviceIoControl.Type3InputBuffer,
+                          sizeof(PinEvent));
+            HasPin = TRUE;
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Event.Flags & KSEVENT_TYPE_TOPOLOGY)
+    {
+        if (NodeEvent.NodeId >= Descriptor->DeviceDescriptor->NodeCount ||
+            Descriptor->DeviceDescriptor->NodeSize < sizeof(PCNODE_DESCRIPTOR))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        NodeDescriptor = (const PCNODE_DESCRIPTOR *)(
+            (ULONG_PTR)Descriptor->DeviceDescriptor->Nodes +
+            NodeEvent.NodeId * Descriptor->DeviceDescriptor->NodeSize);
+        Target->EventItem = PcFindAutomationEvent(NodeDescriptor->AutomationTable,
+                                                   Event.Set,
+                                                   Event.Id);
+        Target->NodeEvent = TRUE;
+        Target->NodeId = NodeEvent.NodeId;
+        return Target->EventItem ? STATUS_SUCCESS : STATUS_NOT_FOUND;
+    }
+
+    if (Descriptor->IsPin)
+    {
+        HasPin = TRUE;
+        PinEvent.PinId = Descriptor->PinId;
+    }
+
+    if (HasPin)
+    {
+        if (PinEvent.PinId >= Descriptor->DeviceDescriptor->PinCount ||
+            Descriptor->DeviceDescriptor->PinSize < sizeof(PCPIN_DESCRIPTOR))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        PinDescriptor = (const PCPIN_DESCRIPTOR *)(
+            (ULONG_PTR)Descriptor->DeviceDescriptor->Pins +
+            PinEvent.PinId * Descriptor->DeviceDescriptor->PinSize);
+        Target->EventItem = PcFindAutomationEvent(PinDescriptor->AutomationTable,
+                                                   Event.Set,
+                                                   Event.Id);
+        Target->PinEvent = TRUE;
+        Target->PinId = PinEvent.PinId;
+        if (Target->EventItem)
+            return STATUS_SUCCESS;
+    }
+
+    AutomationTable = Descriptor->DeviceDescriptor->AutomationTable;
+    Target->EventItem = PcFindAutomationEvent(AutomationTable, Event.Set, Event.Id);
+    return Target->EventItem ? STATUS_SUCCESS : STATUS_NOT_FOUND;
+}
+
+static
+const KSEVENT_ITEM *
+PcFindRawEvent(
+    IN PSUBDEVICE_DESCRIPTOR Descriptor,
+    IN REFGUID Set,
+    IN ULONG EventId)
+{
+    ULONG SetIndex, ItemIndex;
+    const KSEVENT_SET *EventSet;
+
+    for (SetIndex = 0; SetIndex < Descriptor->RawEventSetCount; SetIndex++)
+    {
+        EventSet = &Descriptor->RawEventSet[SetIndex];
+        if (!EventSet->Set || !IsEqualGUIDAligned(*EventSet->Set, Set))
+            continue;
+
+        for (ItemIndex = 0; ItemIndex < EventSet->EventsCount; ItemIndex++)
+        {
+            if (EventSet->EventItem[ItemIndex].EventId == EventId)
+                return &EventSet->EventItem[ItemIndex];
+        }
+    }
+
+    return NULL;
+}
+
+static
+PPC_EVENT_ENTRY_CONTEXT
+PcGetEventEntryContext(
+    IN PKSEVENT_ENTRY EventEntry)
+{
+    PPC_EVENT_ENTRY_CONTEXT Context;
+
+    if (!EventEntry || !EventEntry->EventItem ||
+        EventEntry->EventItem->ExtraEntryData < sizeof(*Context))
+    {
+        return NULL;
+    }
+
+    Context = (PPC_EVENT_ENTRY_CONTEXT)(
+        (PUCHAR)(EventEntry + 1) +
+        EventEntry->EventItem->ExtraEntryData - sizeof(*Context));
+    return Context;
+}
+
+static
+VOID
+PcInitializeEventRequest(
+    OUT PPCEVENT_REQUEST EventRequest,
+    IN PSUBDEVICE_DESCRIPTOR Descriptor,
+    IN const PCEVENT_ITEM *EventItem,
+    IN PKSEVENT_ENTRY EventEntry OPTIONAL,
+    IN ULONG Verb,
+    IN ULONG NodeId,
+    IN PIRP Irp OPTIONAL)
+{
+    RtlZeroMemory(EventRequest, sizeof(*EventRequest));
+    EventRequest->MajorTarget = Descriptor->UnknownMiniport;
+    EventRequest->MinorTarget = Descriptor->UnknownStream;
+    EventRequest->Node = NodeId;
+    EventRequest->EventItem = EventItem;
+    EventRequest->EventEntry = EventEntry;
+    EventRequest->Verb = Verb;
+    EventRequest->Irp = Irp;
+}
+
+static
+NTSTATUS
+NTAPI
+PcEventAddHandler(
+    IN PIRP Irp,
+    IN PKSEVENTDATA EventData,
+    IN PKSEVENT_ENTRY EventEntry)
+{
+    PSUBDEVICE_DESCRIPTOR Descriptor;
+    PPC_EVENT_ENTRY_CONTEXT Context;
+    PC_EVENT_TARGET Target;
+    PCEVENT_REQUEST EventRequest;
+    const KSEVENT_ITEM *RawEventItem;
+    ULONG RequestType;
+    NTSTATUS Status;
+
+    Descriptor = PCEVENT_DESCRIPTOR_IRP_STORAGE(Irp);
+    Context = PcGetEventEntryContext(EventEntry);
+    if (!Descriptor || !Context)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Context, sizeof(*Context));
+    Context->Signature = PC_EVENT_ENTRY_SIGNATURE;
+    Context->Descriptor = Descriptor;
+
+    RequestType = (EventEntry->Flags & KSEVENT_ENTRY_ONESHOT) ?
+                      KSEVENT_TYPE_ONESHOT : KSEVENT_TYPE_ENABLE;
+
+    Status = PcResolveMiniportEvent(Irp, Descriptor, &Target);
+    if (NT_SUCCESS(Status))
+    {
+        if (!Target.EventItem->Handler)
+            return STATUS_NOT_SUPPORTED;
+
+        if ((RequestType == KSEVENT_TYPE_ENABLE &&
+             !(Target.EventItem->Flags & PCEVENT_ITEM_FLAG_ENABLE)) ||
+            (RequestType == KSEVENT_TYPE_ONESHOT &&
+             !(Target.EventItem->Flags & PCEVENT_ITEM_FLAG_ONESHOT)))
+        {
+            return STATUS_NOT_SUPPORTED;
+        }
+
+        Context->Source = PcEventSourceMiniport;
+        Context->PcEventItem = Target.EventItem;
+        Context->PinEvent = Target.PinEvent;
+        Context->PinId = Target.PinId;
+        Context->NodeEvent = Target.NodeEvent;
+        Context->NodeId = Target.NodeId;
+
+        PcInitializeEventRequest(&EventRequest,
+                                 Descriptor,
+                                 Target.EventItem,
+                                 EventEntry,
+                                 PCEVENT_VERB_ADD,
+                                 Target.NodeEvent ? Target.NodeId : MAXULONG,
+                                 Irp);
+        _SEH2_TRY
+        {
+            Status = Target.EventItem->Handler(&EventRequest);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        return Status;
+    }
+
+    RawEventItem = PcFindRawEvent(Descriptor,
+                                  *EventEntry->EventSet->Set,
+                                  EventEntry->EventItem->EventId);
+    if (!RawEventItem)
+        return STATUS_NOT_FOUND;
+
+    Context->Source = PcEventSourceKs;
+    Context->KsEventItem = RawEventItem;
+    KSEVENT_ITEM_IRP_STORAGE(Irp) = (PKSEVENT_ITEM)Descriptor;
+
+    if (RawEventItem->AddHandler)
+        return RawEventItem->AddHandler(Irp, EventData, EventEntry);
+
+    if (!Descriptor->EventList || !Descriptor->EventListLock)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    ExInterlockedInsertTailList(Descriptor->EventList,
+                                &EventEntry->ListEntry,
+                                Descriptor->EventListLock);
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+NTAPI
+PcEventRemoveHandler(
+    IN PFILE_OBJECT FileObject,
+    IN PKSEVENT_ENTRY EventEntry)
+{
+    PPC_EVENT_ENTRY_CONTEXT Context;
+    PCEVENT_REQUEST EventRequest;
+
+    Context = PcGetEventEntryContext(EventEntry);
+    if (!Context || Context->Signature != PC_EVENT_ENTRY_SIGNATURE)
+        return;
+
+    if (Context->Source == PcEventSourceMiniport &&
+        Context->PcEventItem && Context->PcEventItem->Handler)
+    {
+        PcInitializeEventRequest(&EventRequest,
+                                 Context->Descriptor,
+                                 Context->PcEventItem,
+                                 EventEntry,
+                                 PCEVENT_VERB_REMOVE,
+                                 Context->NodeEvent ? Context->NodeId : MAXULONG,
+                                 NULL);
+        _SEH2_TRY
+        {
+            (void)Context->PcEventItem->Handler(&EventRequest);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        _SEH2_END;
+    }
+    else if (Context->Source == PcEventSourceKs &&
+             Context->KsEventItem && Context->KsEventItem->RemoveHandler)
+    {
+        Context->KsEventItem->RemoveHandler(FileObject, EventEntry);
+    }
+}
+
+static
+NTSTATUS
+PcWriteEventSupport(
+    IN PIRP Irp,
+    IN ULONG SupportedTypes)
+{
+    PIO_STACK_LOCATION IoStack;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    Irp->IoStatus.Information = sizeof(ULONG);
+    if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(ULONG))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    _SEH2_TRY
+    {
+        if (Irp->RequestorMode == UserMode)
+            ProbeForWrite(Irp->UserBuffer, sizeof(ULONG), sizeof(UCHAR));
+        *(PULONG)Irp->UserBuffer = SupportedTypes;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static
+NTSTATUS
+NTAPI
+PcEventSupportHandler(
+    IN PIRP Irp,
+    IN PKSIDENTIFIER Request,
+    IN OUT PVOID Data)
+{
+    PSUBDEVICE_DESCRIPTOR Descriptor;
+    PC_EVENT_TARGET Target;
+    PCEVENT_REQUEST EventRequest;
+    const KSEVENT_ITEM *RawEventItem;
+    const KSEVENT_SET *WrapperEventSet;
+    const KSEVENT_ITEM *WrapperEventItem;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Data);
+
+    Descriptor = PCEVENT_DESCRIPTOR_IRP_STORAGE(Irp);
+    if (!Descriptor)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = PcResolveMiniportEvent(Irp, Descriptor, &Target);
+    if (NT_SUCCESS(Status))
+    {
+        if (!(Target.EventItem->Flags & PCEVENT_ITEM_FLAG_BASICSUPPORT))
+            return STATUS_NOT_SUPPORTED;
+
+        if (Target.EventItem->Handler)
+        {
+            PcInitializeEventRequest(&EventRequest,
+                                     Descriptor,
+                                     Target.EventItem,
+                                     NULL,
+                                     PCEVENT_VERB_SUPPORT,
+                                     Target.NodeEvent ? Target.NodeId : MAXULONG,
+                                     Irp);
+            _SEH2_TRY
+            {
+                Status = Target.EventItem->Handler(&EventRequest);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+
+        return PcWriteEventSupport(Irp, Target.EventItem->Flags);
+    }
+
+    WrapperEventSet = KSEVENT_SET_IRP_STORAGE(Irp);
+    WrapperEventItem = KSEVENT_ITEM_IRP_STORAGE(Irp);
+    if (!WrapperEventSet || !WrapperEventItem)
+        return STATUS_INVALID_PARAMETER;
+
+    RawEventItem = PcFindRawEvent(Descriptor,
+                                  *WrapperEventSet->Set,
+                                  WrapperEventItem->EventId);
+    if (!RawEventItem)
+        return STATUS_NOT_FOUND;
+
+    if (RawEventItem->SupportHandler)
+    {
+        KSEVENT_ITEM_IRP_STORAGE(Irp) = (PKSEVENT_ITEM)Descriptor;
+        return RawEventItem->SupportHandler(Irp, Request, Data);
+    }
+
+    return PcWriteEventSupport(Irp,
+                               KSEVENT_TYPE_ENABLE | KSEVENT_TYPE_ONESHOT);
+}
+
+static
+NTSTATUS
+PcAddEventIdentifier(
+    IN PSUBDEVICE_DESCRIPTOR Descriptor,
+    IN const GUID *Set,
+    IN ULONG EventId,
+    IN ULONG DataInput,
+    IN ULONG ExtraEntryData)
+{
+    PKSEVENT_SET NewEventSets;
+    PKSEVENT_ITEM NewEventItems;
+    PKSEVENT_ITEM EventItem;
+    ULONG SetIndex, ItemIndex, BaseExtraEntryData;
+    BOOLEAN FoundSet = FALSE;
+
+    if (!Set || DataInput < sizeof(KSEVENTDATA))
+        return STATUS_INVALID_PARAMETER;
+
+    for (SetIndex = 0; SetIndex < Descriptor->EventSetCount; SetIndex++)
+    {
+        if (IsEqualGUIDAligned(*Descriptor->EventSet[SetIndex].Set, *Set))
+        {
+            FoundSet = TRUE;
+            break;
+        }
+    }
+
+    if (!FoundSet)
+    {
+        if (Descriptor->EventSetCount == MAXULONG / sizeof(KSEVENT_SET))
+            return STATUS_INTEGER_OVERFLOW;
+
+        NewEventSets = (PKSEVENT_SET)AllocateItem(
+            NonPagedPool,
+            (Descriptor->EventSetCount + 1) * sizeof(KSEVENT_SET),
+            TAG_PORTCLASS);
+        if (!NewEventSets)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        if (Descriptor->EventSetCount)
+        {
+            RtlCopyMemory(NewEventSets,
+                          Descriptor->EventSet,
+                          Descriptor->EventSetCount * sizeof(KSEVENT_SET));
+            FreeItem(Descriptor->EventSet, TAG_PORTCLASS);
+        }
+
+        SetIndex = Descriptor->EventSetCount++;
+        Descriptor->EventSet = NewEventSets;
+        Descriptor->EventSet[SetIndex].Set = Set;
+    }
+
+    EventItem = (PKSEVENT_ITEM)Descriptor->EventSet[SetIndex].EventItem;
+    for (ItemIndex = 0;
+         ItemIndex < Descriptor->EventSet[SetIndex].EventsCount;
+         ItemIndex++)
+    {
+        if (EventItem[ItemIndex].EventId == EventId)
+            break;
+    }
+
+    if (ItemIndex == Descriptor->EventSet[SetIndex].EventsCount)
+    {
+        if (Descriptor->EventSet[SetIndex].EventsCount ==
+            MAXULONG / sizeof(KSEVENT_ITEM))
+        {
+            return STATUS_INTEGER_OVERFLOW;
+        }
+
+        NewEventItems = (PKSEVENT_ITEM)AllocateItem(
+            NonPagedPool,
+            (Descriptor->EventSet[SetIndex].EventsCount + 1) *
+                sizeof(KSEVENT_ITEM),
+            TAG_PORTCLASS);
+        if (!NewEventItems)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        if (Descriptor->EventSet[SetIndex].EventsCount)
+        {
+            RtlCopyMemory(NewEventItems,
+                          Descriptor->EventSet[SetIndex].EventItem,
+                          Descriptor->EventSet[SetIndex].EventsCount *
+                              sizeof(KSEVENT_ITEM));
+            FreeItem((PVOID)Descriptor->EventSet[SetIndex].EventItem,
+                     TAG_PORTCLASS);
+        }
+
+        ItemIndex = Descriptor->EventSet[SetIndex].EventsCount++;
+        Descriptor->EventSet[SetIndex].EventItem = NewEventItems;
+        EventItem = &NewEventItems[ItemIndex];
+        EventItem->EventId = EventId;
+        EventItem->AddHandler = PcEventAddHandler;
+        EventItem->RemoveHandler = PcEventRemoveHandler;
+        EventItem->SupportHandler = PcEventSupportHandler;
+        EventItem->ExtraEntryData = sizeof(PC_EVENT_ENTRY_CONTEXT);
+    }
+    else
+    {
+        EventItem = &EventItem[ItemIndex];
+    }
+
+    if (DataInput > EventItem->DataInput)
+        EventItem->DataInput = DataInput;
+
+    BaseExtraEntryData = EventItem->ExtraEntryData -
+                         sizeof(PC_EVENT_ENTRY_CONTEXT);
+    if (ExtraEntryData > BaseExtraEntryData)
+    {
+        if (ExtraEntryData > MAXULONG - sizeof(PC_EVENT_ENTRY_CONTEXT))
+            return STATUS_INTEGER_OVERFLOW;
+
+        EventItem->ExtraEntryData = ExtraEntryData +
+                                    sizeof(PC_EVENT_ENTRY_CONTEXT);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PcAddAutomationEvents(
+    IN PSUBDEVICE_DESCRIPTOR Descriptor,
+    IN const PCAUTOMATION_TABLE *AutomationTable)
+{
+    const PCEVENT_ITEM *EventItem;
+    ULONG Index;
+    NTSTATUS Status;
+
+    if (!AutomationTable || !AutomationTable->EventCount)
+        return STATUS_SUCCESS;
+
+    if (!AutomationTable->Events ||
+        AutomationTable->EventItemSize < sizeof(PCEVENT_ITEM))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    EventItem = AutomationTable->Events;
+    for (Index = 0; Index < AutomationTable->EventCount; Index++)
+    {
+        if (!EventItem->Set || !EventItem->Handler)
+            return STATUS_INVALID_PARAMETER;
+
+        Status = PcAddEventIdentifier(Descriptor,
+                                      EventItem->Set,
+                                      EventItem->Id,
+                                      sizeof(KSEVENTDATA),
+                                      0);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        EventItem = (const PCEVENT_ITEM *)((ULONG_PTR)EventItem +
+                                           AutomationTable->EventItemSize);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+PcFreeEventTable(
+    IN PSUBDEVICE_DESCRIPTOR Descriptor)
+{
+    ULONG Index;
+
+    if (!Descriptor->EventSet)
+        return;
+
+    for (Index = 0; Index < Descriptor->EventSetCount; Index++)
+    {
+        if (Descriptor->EventSet[Index].EventItem)
+        {
+            FreeItem((PVOID)Descriptor->EventSet[Index].EventItem,
+                     TAG_PORTCLASS);
+        }
+    }
+
+    FreeItem(Descriptor->EventSet, TAG_PORTCLASS);
+    Descriptor->EventSet = NULL;
+    Descriptor->EventSetCount = 0;
+}
+
+VOID
+NTAPI
+PcGenerateEventList(
+    IN PSUBDEVICE_DESCRIPTOR Descriptor,
+    IN GUID *Set OPTIONAL,
+    IN ULONG EventId,
+    IN BOOL PinEvent,
+    IN ULONG PinId,
+    IN BOOL NodeEvent,
+    IN ULONG NodeId)
+{
+    LIST_ENTRY PendingList;
+    PLIST_ENTRY Entry, Next;
+    PKSEVENT_ENTRY EventEntry;
+    PPC_EVENT_ENTRY_CONTEXT Context;
+    KIRQL OldIrql;
+    BOOLEAN Match;
+
+    if (!Descriptor || !Descriptor->EventList ||
+        !Descriptor->EventListLock || KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        return;
+    }
+
+    InitializeListHead(&PendingList);
+    KeAcquireSpinLock(Descriptor->EventListLock, &OldIrql);
+
+    Entry = Descriptor->EventList->Flink;
+    while (Entry != Descriptor->EventList)
+    {
+        Next = Entry->Flink;
+        EventEntry = CONTAINING_RECORD(Entry, KSEVENT_ENTRY, ListEntry);
+        Context = PcGetEventEntryContext(EventEntry);
+
+        Match = !(EventEntry->Flags & KSEVENT_ENTRY_DELETED) &&
+                Context && Context->Signature == PC_EVENT_ENTRY_SIGNATURE &&
+                EventEntry->EventSet && EventEntry->EventItem &&
+                EventEntry->EventItem->EventId == EventId &&
+                (!Set || IsEqualGUIDAligned(*Set,
+                                             *EventEntry->EventSet->Set)) &&
+                (!PinEvent || (Context->PinEvent &&
+                               Context->PinId == PinId)) &&
+                (!NodeEvent || (Context->NodeEvent &&
+                                Context->NodeId == NodeId));
+
+        if (Match)
+        {
+            if (EventEntry->Flags & KSEVENT_ENTRY_ONESHOT)
+            {
+                EventEntry->Flags |= KSEVENT_ENTRY_DELETED;
+                RemoveEntryList(&EventEntry->ListEntry);
+                InsertTailList(&PendingList, &EventEntry->ListEntry);
+            }
+            else
+            {
+                (void)KsGenerateEvent(EventEntry);
+            }
+        }
+
+        Entry = Next;
+    }
+
+    KeReleaseSpinLock(Descriptor->EventListLock, OldIrql);
+
+    while (!IsListEmpty(&PendingList))
+    {
+        EventEntry = CONTAINING_RECORD(RemoveHeadList(&PendingList),
+                                       KSEVENT_ENTRY,
+                                       ListEntry);
+        (void)KsGenerateEvent(EventEntry);
+    }
+}
+
 NTSTATUS
 NTAPI
 KsoDispatchCreateWithGenericFactory(
@@ -52,11 +790,19 @@ PcHandleEnableEventWithTable(
     IN PIRP Irp,
     IN PSUBDEVICE_DESCRIPTOR Descriptor)
 {
-    // store descriptor
+    if (!Descriptor || !Descriptor->EventSetCount || !Descriptor->EventSet)
+        return STATUS_NOT_SUPPORTED;
+
+    PCEVENT_DESCRIPTOR_IRP_STORAGE(Irp) = Descriptor;
     KSEVENT_ITEM_IRP_STORAGE(Irp) = (PKSEVENT_ITEM)Descriptor;
 
-    // FIXME seh probing
-    return KsEnableEvent(Irp, Descriptor->EventSetCount, Descriptor->EventSet, NULL, KSEVENTS_NONE, NULL);
+    return KsEnableEvent(Irp,
+                         Descriptor->EventSetCount,
+                         Descriptor->EventSet,
+                         Descriptor->EventList,
+                         Descriptor->EventListLock ? KSEVENTS_SPINLOCK :
+                                                     KSEVENTS_NONE,
+                         Descriptor->EventListLock);
 }
 
 NTSTATUS
@@ -65,12 +811,13 @@ PcHandleDisableEventWithTable(
     IN PIRP Irp,
     IN PSUBDEVICE_DESCRIPTOR Descriptor)
 {
-    // store descriptor
-    KSEVENT_ITEM_IRP_STORAGE(Irp) = (PKSEVENT_ITEM)Descriptor;
+    if (!Descriptor || !Descriptor->EventList || !Descriptor->EventListLock)
+        return STATUS_INVALID_DEVICE_STATE;
 
-    // FIXME seh probing
-
-    return KsDisableEvent(Irp, Descriptor->EventList, KSEVENTS_SPINLOCK, (PVOID)Descriptor->EventListLock);
+    return KsDisableEvent(Irp,
+                          Descriptor->EventList,
+                          KSEVENTS_SPINLOCK,
+                          Descriptor->EventListLock);
 }
 
 NTSTATUS
@@ -726,6 +1473,12 @@ PcCreateSubdeviceDescriptor(
     PPCNODE_DESCRIPTOR NodeDescriptor;
     PPCPROPERTY_ITEM PropertyItem;
 
+    if (!OutSubdeviceDescriptor || !FilterDescription ||
+        (EventSetCount && !EventSet))
+        return STATUS_INVALID_PARAMETER;
+
+    *OutSubdeviceDescriptor = NULL;
+
     // allocate subdevice descriptor
     Descriptor = (PSUBDEVICE_DESCRIPTOR)AllocateItem(NonPagedPool, sizeof(SUBDEVICE_DESCRIPTOR), TAG_PORTCLASS);
     if (!Descriptor)
@@ -747,6 +1500,33 @@ PcCreateSubdeviceDescriptor(
         sizeof(GUID) * FilterDescription->CategoryCount);
 
     Descriptor->InterfaceCount = InterfaceCount + FilterDescription->CategoryCount;
+
+    Descriptor->RawEventSetCount = EventSetCount;
+    Descriptor->RawEventSet = EventSet;
+
+    for (Index = 0; Index < EventSetCount; Index++)
+    {
+        if (!EventSet[Index].Set ||
+            (EventSet[Index].EventsCount && !EventSet[Index].EventItem))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto cleanup;
+        }
+
+        for (SubIndex = 0;
+             SubIndex < EventSet[Index].EventsCount;
+             SubIndex++)
+        {
+            Status = PcAddEventIdentifier(
+                Descriptor,
+                EventSet[Index].Set,
+                EventSet[Index].EventItem[SubIndex].EventId,
+                EventSet[Index].EventItem[SubIndex].DataInput,
+                EventSet[Index].EventItem[SubIndex].ExtraEntryData);
+            if (!NT_SUCCESS(Status))
+                goto cleanup;
+        }
+    }
 
     //DumpFilterDescriptor(FilterDescription);
 
@@ -803,6 +1583,11 @@ PcCreateSubdeviceDescriptor(
             // move to next entry
             PropertyItem = (PPCPROPERTY_ITEM)((ULONG_PTR)PropertyItem + FilterDescription->AutomationTable->PropertyItemSize);
         }
+
+        Status = PcAddAutomationEvents(Descriptor,
+                                       FilterDescription->AutomationTable);
+        if (!NT_SUCCESS(Status))
+            goto cleanup;
     }
 
     // check if the filter has pins
@@ -859,6 +1644,11 @@ PcCreateSubdeviceDescriptor(
                     // move to next entry
                     PropertyItem = (PPCPROPERTY_ITEM)((ULONG_PTR)PropertyItem + SrcDescriptor->AutomationTable->PropertyItemSize);
                 }
+
+                Status = PcAddAutomationEvents(Descriptor,
+                                               SrcDescriptor->AutomationTable);
+                if (!NT_SUCCESS(Status))
+                    goto cleanup;
             }
 
             // move to next entry
@@ -941,6 +1731,11 @@ PcCreateSubdeviceDescriptor(
                     // move to next property item
                     PropertyItem = (PPCPROPERTY_ITEM)((ULONG_PTR)PropertyItem + NodeDescriptor->AutomationTable->PropertyItemSize);
                 }
+
+                Status = PcAddAutomationEvents(Descriptor,
+                                               NodeDescriptor->AutomationTable);
+                if (!NT_SUCCESS(Status))
+                    goto cleanup;
             }
 
             // move to next descriptor
@@ -962,6 +1757,8 @@ PcCreateSubdeviceDescriptor(
 cleanup:
     if (Descriptor)
     {
+        PcFreeEventTable(Descriptor);
+
         if (Descriptor->Interfaces)
             FreeItem(Descriptor->Interfaces, TAG_PORTCLASS);
 
