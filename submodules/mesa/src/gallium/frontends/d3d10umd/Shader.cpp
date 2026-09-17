@@ -48,11 +48,12 @@
 static bool
 UseLegacyTextureOpcodes(const Device *pDevice, mesa_shader_stage stage)
 {
-   /* NIR-only drivers accept TGSI as a compatibility input and translate it
-    * through tgsi_to_nir.  That translator consumes the legacy TEX/TXF/TXL
-    * family, while native TGSI drivers can consume the newer SAMPLE family. */
-   return !(pDevice->pipe->screen->shader_caps[stage].supported_irs &
-            (1u << PIPE_SHADER_IR_TGSI));
+   (void)pDevice;
+   (void)stage;
+
+   /* Keep resource views and sampler states independent.  Both native TGSI
+    * drivers and tgsi_to_nir understand the Direct3D-style SAMPLE family. */
+   return false;
 }
 
 
