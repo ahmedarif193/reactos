@@ -21,6 +21,7 @@ struct pipe_screen *d3d10_create_screen(void *adapter, void *device,
 struct pipe_resource *d3d10_create_resource(
    struct pipe_screen *screen, const struct pipe_resource *templ,
    void *runtime_resource, D3DKMT_HANDLE *allocation);
+void *d3d10_get_present_context(struct pipe_screen *screen);
 struct pipe_screen *
 d3d10_create_screen(void *adapter, void *device, const void *callbacks)
 {
@@ -46,4 +47,10 @@ d3d10_create_resource(struct pipe_screen *screen,
       *allocation =
          v3d_d3dkmt_resource_allocation(screen, resource);
    return resource;
+}
+
+void *
+d3d10_get_present_context(struct pipe_screen *screen)
+{
+   return v3d_d3dkmt_present_context(screen);
 }

@@ -52,6 +52,9 @@
 EXTERN_C struct pipe_screen *
 d3d10_create_screen(void *adapter, void *device, const void *callbacks);
 
+EXTERN_C void *
+d3d10_get_present_context(struct pipe_screen *screen);
+
 
 static void APIENTRY DestroyDevice(D3D10DDI_HDEVICE hDevice);
 static void APIENTRY RelocateDeviceFuncs(D3D10DDI_HDEVICE hDevice,
@@ -317,6 +320,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
    if (!screen)
       return E_FAIL;
    pDevice->screen = screen;
+   pDevice->hContext = d3d10_get_present_context(screen);
 
    struct pipe_context *pipe = screen->context_create(screen, NULL, 0);
    if (!pipe) {
