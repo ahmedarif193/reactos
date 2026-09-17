@@ -222,7 +222,7 @@ SetEntriesInAclW(ULONG cCountOfExplicitEntries,
 }
 
 
-static DWORD
+DWORD
 InternalTrusteeAToW(IN PTRUSTEE_A pTrusteeA,
                     OUT PTRUSTEE_W *pTrusteeW)
 {
@@ -232,6 +232,8 @@ InternalTrusteeAToW(IN PTRUSTEE_A pTrusteeA,
     DWORD ErrorCode = ERROR_SUCCESS;
 
     //ASSERT(sizeof(TRUSTEE_W) == sizeof(TRUSTEE_A));
+
+    *pTrusteeW = NULL;
 
     TrusteeForm = GetTrusteeFormA(pTrusteeA);
     switch (TrusteeForm)
@@ -289,10 +291,15 @@ InternalTrusteeAToW(IN PTRUSTEE_A pTrusteeA,
             PWSTR StrBuf;
 
             /* calculate the size needed */
+            if ((oanA->ObjectsPresent & ACE_OBJECT_TYPE_PRESENT) &&
+                oanA->ObjectTypeName != NULL)
+            {
+                BufferSize = strlen(oanA->ObjectTypeName) + 1;
+            }
             if ((oanA->ObjectsPresent & ACE_INHERITED_OBJECT_TYPE_PRESENT) &&
                 oanA->InheritedObjectTypeName != NULL)
             {
-                BufferSize = strlen(oanA->InheritedObjectTypeName) + 1;
+                BufferSize += strlen(oanA->InheritedObjectTypeName) + 1;
             }
             if (oanA->ptstrName != NULL)
             {
@@ -321,6 +328,27 @@ InternalTrusteeAToW(IN PTRUSTEE_A pTrusteeA,
                 /* convert the OBJECTS_AND_NAME_A structure */
                 oan->ObjectsPresent = oanA->ObjectsPresent;
                 oan->ObjectType = oanA->ObjectType;
+
+                if ((oanA->ObjectsPresent & ACE_OBJECT_TYPE_PRESENT) &&
+                    oanA->ObjectTypeName != NULL)
+                {
+                    BufferSize = strlen(oanA->ObjectTypeName) + 1;
+
+                    if (MultiByteToWideChar(CP_ACP,
+                                            0,
+                                            oanA->ObjectTypeName,
+                                            -1,
+                                            StrBuf,
+                                            BufferSize) == 0)
+                    {
+                        goto ConvertErr;
+                    }
+                    oan->ObjectTypeName = StrBuf;
+
+                    StrBuf += BufferSize;
+                }
+                else
+                    oan->ObjectTypeName = NULL;
 
                 if ((oanA->ObjectsPresent & ACE_INHERITED_OBJECT_TYPE_PRESENT) &&
                     oanA->InheritedObjectTypeName != NULL)
@@ -391,7 +419,7 @@ ConvertErr:
 }
 
 
-static __inline VOID
+VOID
 InternalFreeConvertedTrustee(IN PTRUSTEE_W pTrusteeW,
                              IN PTRUSTEE_A pTrusteeA)
 {
@@ -404,7 +432,7 @@ InternalFreeConvertedTrustee(IN PTRUSTEE_W pTrusteeW,
 }
 
 
-static DWORD
+DWORD
 InternalExplicitAccessAToW(IN ULONG cCountOfExplicitEntries,
                            IN PEXPLICIT_ACCESS_A pListOfExplicitEntriesA,
                            OUT PEXPLICIT_ACCESS_W *pListOfExplicitEntriesW)
@@ -419,6 +447,8 @@ InternalExplicitAccessAToW(IN ULONG cCountOfExplicitEntries,
 
     /* NOTE: This code assumes that the size of the TRUSTEE_A and TRUSTEE_W structure matches! */
     //ASSERT(sizeof(TRUSTEE_A) == sizeof(TRUSTEE_W));
+
+    *pListOfExplicitEntriesW = NULL;
 
     if (cCountOfExplicitEntries != 0)
     {
@@ -441,6 +471,12 @@ InternalExplicitAccessAToW(IN ULONG cCountOfExplicitEntries,
                 case TRUSTEE_IS_OBJECTS_AND_NAME:
                 {
                     POBJECTS_AND_NAME_A oan = (POBJECTS_AND_NAME_A)GetTrusteeNameA(&pListOfExplicitEntriesA[i].Trustee);
+
+                    if ((oan->ObjectsPresent & ACE_OBJECT_TYPE_PRESENT) &&
+                        oan->ObjectTypeName != NULL)
+                    {
+                        Size += (strlen(oan->ObjectTypeName) + 1) * sizeof(WCHAR);
+                    }
 
                     if ((oan->ObjectsPresent & ACE_INHERITED_OBJECT_TYPE_PRESENT) &&
                         oan->InheritedObjectTypeName != NULL)
@@ -486,6 +522,11 @@ InternalExplicitAccessAToW(IN ULONG cCountOfExplicitEntries,
                         lpStr = GetTrusteeNameA(&pListOfExplicitEntriesA[i].Trustee);
                         if (lpStr != NULL)
                         {
+                            RtlCopyMemory(&peaw[i].Trustee,
+                                          &pListOfExplicitEntriesA[i].Trustee,
+                                          FIELD_OFFSET(TRUSTEE_A,
+                                                       ptstrName));
+
                             /* convert the trustee name */
                             BufferSize = strlen(lpStr) + 1;
 
@@ -524,6 +565,27 @@ InternalExplicitAccessAToW(IN ULONG cCountOfExplicitEntries,
                         /* convert the OBJECTS_AND_NAME_A structure */
                         oan->ObjectsPresent = oanA->ObjectsPresent;
                         oan->ObjectType = oanA->ObjectType;
+
+                        if ((oanA->ObjectsPresent & ACE_OBJECT_TYPE_PRESENT) &&
+                            oanA->ObjectTypeName != NULL)
+                        {
+                            BufferSize = strlen(oanA->ObjectTypeName) + 1;
+
+                            if (MultiByteToWideChar(CP_ACP,
+                                                    0,
+                                                    oanA->ObjectTypeName,
+                                                    -1,
+                                                    StrBuf,
+                                                    BufferSize) == 0)
+                            {
+                                goto ConvertErr;
+                            }
+                            oan->ObjectTypeName = StrBuf;
+
+                            StrBuf += BufferSize;
+                        }
+                        else
+                            oan->ObjectTypeName = NULL;
 
                         if ((oanA->ObjectsPresent & ACE_INHERITED_OBJECT_TYPE_PRESENT) &&
                             oanA->InheritedObjectTypeName != NULL)
