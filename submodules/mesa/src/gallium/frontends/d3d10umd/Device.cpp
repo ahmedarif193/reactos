@@ -344,6 +344,23 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
    pipe->bind_vs_state(pipe, pDevice->empty_vs);
    pipe->bind_fs_state(pipe, pDevice->empty_fs);
 
+   const FLOAT default_blend_factor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+   const D3D10DDI_HBLENDSTATE default_blend = {};
+   const D3D10DDI_HDEPTHSTENCILSTATE default_depth_stencil = {};
+   const D3D10DDI_HRASTERIZERSTATE default_rasterizer = {};
+
+   SetBlendState(pCreateData->hDrvDevice, default_blend,
+                 default_blend_factor, ~0u);
+   SetDepthStencilState(pCreateData->hDrvDevice, default_depth_stencil, 0);
+   SetRasterizerState(pCreateData->hDrvDevice, default_rasterizer);
+
+   if (!pDevice->default_blend_state ||
+       !pDevice->default_depth_stencil_state ||
+       !pDevice->default_rasterizer_state) {
+      DestroyDevice(pCreateData->hDrvDevice);
+      return E_OUTOFMEMORY;
+   }
+
    pDevice->max_dual_source_render_targets =
          screen->caps.max_dual_source_render_targets;
 
