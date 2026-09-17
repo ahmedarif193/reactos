@@ -4327,6 +4327,19 @@ HalpGetRootInterruptVector(
     }
 
     /*
+     * Secondary interrupt controllers expose synthetic vectors through the
+     * same PnP resource translation path as GIC interrupts.  Their vector
+     * range intentionally occupies the architectural gap below the LPI base,
+     * so classify it before applying the GIC reserved-range rules below.
+     */
+    if (HalpSecondaryIsIntId(IntId))
+    {
+        *OutIrql = HalpSecondaryIrql(IntId);
+        *OutAffinity = 1;
+        return IntId;
+    }
+
+    /*
      * Assign IRQL based on interrupt type and priority.
      *
      * ARM64 IRQL assignment strategy:
