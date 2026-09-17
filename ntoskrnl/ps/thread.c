@@ -574,7 +574,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
 
         /* Remove access if it failed */
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-        if (!Result) Process->ImagePathHash = 0;
+        if (!Result) Thread->SpareUlong0 = 0;
 
         /* Set least some minimum access */
         Thread->SpareUlong0 |= (THREAD_TERMINATE |
@@ -587,7 +587,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
         Thread->SpareUlong0 = THREAD_ALL_ACCESS;
     }
 #else
-        if (!Result) Process->GrantedAccess = 0;
+        if (!Result) Thread->GrantedAccess = 0;
 
         /* Set least some minimum access */
         Thread->GrantedAccess |= (THREAD_TERMINATE |
