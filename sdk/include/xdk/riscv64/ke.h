@@ -77,13 +77,13 @@ FORCEINLINE ULONG KeGetCurrentProcessorIndex(VOID)
         _Out_opt_ PPROCESSOR_NUMBER ProcNumber);
     return KeGetCurrentProcessorNumberEx(NULL);
 }
-NTHALAPI KIRQL NTAPI KeGetCurrentIrql(VOID);
-NTHALAPI KIRQL FASTCALL KfRaiseIrql(KIRQL NewIrql);
-NTHALAPI VOID FASTCALL KfLowerIrql(KIRQL NewIrql);
+NTKERNELAPI KIRQL NTAPI KeGetCurrentIrql(VOID);
+NTKERNELAPI KIRQL FASTCALL KfRaiseIrql(KIRQL NewIrql);
+NTKERNELAPI VOID FASTCALL KfLowerIrql(KIRQL NewIrql);
 #define KeRaiseIrql(NewIrql, OldIrql) (*(OldIrql) = KfRaiseIrql(NewIrql))
 #define KeLowerIrql(NewIrql) KfLowerIrql(NewIrql)
-NTHALAPI KIRQL NTAPI KeRaiseIrqlToDpcLevel(VOID);
-NTHALAPI KIRQL NTAPI KeRaiseIrqlToSynchLevel(VOID);
+NTKERNELAPI KIRQL NTAPI KeRaiseIrqlToDpcLevel(VOID);
+NTKERNELAPI KIRQL NTAPI KeRaiseIrqlToSynchLevel(VOID);
 
 extern NTKERNELAPI volatile KSYSTEM_TIME KeTickCount;
 NTKERNELAPI VOID NTAPI KeQueryTickCount(PLARGE_INTEGER CurrentCount);

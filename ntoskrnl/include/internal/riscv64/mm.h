@@ -39,7 +39,6 @@ typedef MMPTE MMPPE, *PMMPPE;
  * the kernel guard also excludes the prototype-PTE lookup sentinel range. */
 #define MI_DEFAULT_SYSTEM_RANGE_START 0xFFFFFFC000000000ULL
 #define MI_USER_PROBE_ADDRESS         0x0000003FFFFF0000ULL
-#define MI_HIGHEST_USER_ADDRESS       (MI_USER_PROBE_ADDRESS - 1)
 #define MI_HIGHEST_SYSTEM_ADDRESS     0xFFFFFFFFFFFEFFFFULL
 #define MI_RISCV_GIB(Index)           (MI_DEFAULT_SYSTEM_RANGE_START + ((ULONG64)(Index) << PPI_SHIFT))
 
@@ -104,7 +103,9 @@ C_ASSERT(MI_WORKING_SET_LIST + PAGE_SIZE <= HYPER_SPACE + PDE_MAPPED_VA);
 #define MI_MAX_SECONDARY_COLORS 1024
 
 /* Retain the common NT allocation margins within the Sv39 user half. */
+#ifndef MM_LOWEST_USER_ADDRESS
 #define MM_LOWEST_USER_ADDRESS ((PVOID)MM_ALLOCATION_GRANULARITY)
+#endif
 #define MM_HIGHEST_VAD_ADDRESS ((PVOID)((ULONG_PTR)MM_HIGHEST_USER_ADDRESS - (16 * PAGE_SIZE)))
 /* NT's fixed user shared-data view; the writable kernel alias is separate. */
 #define MM_SHARED_USER_DATA_VA 0x7FFE0000UL

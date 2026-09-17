@@ -616,7 +616,7 @@ KeBugCheckUnicodeToAnsi(IN PUNICODE_STRING Unicode,
     return Ansi;
 }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
 static
 BOOLEAN
 KiIsBugCheckCodeAddress(
@@ -722,7 +722,7 @@ KiLookupBugCheckFunctionEntry(
                     continue;
                 }
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_RISCV64)
                 if ((FunctionEntry->BeginAddress >= FunctionEntry->EndAddress) || (FunctionEntry->EndAddress > SizeOfImage))
                     break;
                 if (ControlRva >= FunctionEntry->EndAddress)
@@ -803,6 +803,11 @@ KiUnwindBugCheckFrame(
         if (LookupPc < sizeof(ULONG))
             return FALSE;
         LookupPc -= sizeof(ULONG);
+#elif defined(_M_RISCV64)
+        /* RVUW uses the preceding halfword for return-address lookups. */
+        if (LookupPc < sizeof(USHORT))
+            return FALSE;
+        LookupPc -= sizeof(USHORT);
 #else
         LookupPc--;
 #endif
@@ -811,6 +816,19 @@ KiUnwindBugCheckFrame(
     _SEH2_TRY
     {
         FunctionEntry = KiLookupBugCheckFunctionEntry(LookupPc, &ImageBase);
+#if defined(_M_RISCV64)
+        /* The checked decoder owns RVUW validation and the ra leaf rule.
+         * Its compatibility wrapper fast-fails on malformed metadata. */
+        Unwound = NT_SUCCESS(RtlVirtualUnwind2(UNW_FLAG_NHANDLER,
+                                              ImageBase,
+                                              LookupPc,
+                                              FunctionEntry,
+                                              Context,
+                                              NULL,
+                                              &HandlerData,
+                                              &EstablisherFrame,
+                                              NULL, NULL, NULL, NULL, 0));
+#else
         if (FunctionEntry != NULL)
         {
             RtlVirtualUnwind(UNW_FLAG_NHANDLER, ImageBase, LookupPc, FunctionEntry, Context, &HandlerData, &EstablisherFrame, NULL);
@@ -829,6 +847,7 @@ KiUnwindBugCheckFrame(
             Context->Pc = Context->Lr;
             Unwound = TRUE;
         }
+#endif
 #endif
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -861,11 +880,12 @@ KiCaptureBugCheckBackTrace(
     ULONG_PTR StackLow;
     ULONG_PTR StackHigh;
     ULONG_PTR Frame;
+    ULONG_PTR FrameRecord;
     ULONG_PTR NextFrame;
     ULONG_PTR ReturnAddress;
     ULONG_PTR ProgramCounter;
     ULONG FrameCount = 0;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
     CONTEXT UnwindContext;
     BOOLEAN FirstFrame;
 #endif
@@ -873,15 +893,11 @@ KiCaptureBugCheckBackTrace(
     if (MaximumFrames == 0)
         return 0;
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
     UnwindContext = *Context;
     if (TrapFrame != NULL)
     {
-#ifdef _M_AMD64
-        UnwindContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_AMD64;
-#else
-        UnwindContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
-#endif
+        UnwindContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
         KeTrapFrameToContext(TrapFrame, NULL, &UnwindContext);
     }
     ProgramCounter = KeGetContextPc(&UnwindContext);
@@ -896,14 +912,14 @@ KiCaptureBugCheckBackTrace(
 #endif
     if (ProgramCounter == 0)
         return 0;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
     if (!KiIsBugCheckCodeAddress(ProgramCounter))
         return 0;
 #endif
     Frames[FrameCount++] = ProgramCounter;
     if (FrameCount == MaximumFrames)
         return FrameCount;
-#if !defined(_M_AMD64) && !defined(_M_ARM64)
+#if !defined(_M_AMD64) && !defined(_M_ARM64) && !defined(_M_RISCV64)
     if (Frame == 0)
         return FrameCount;
 #endif
@@ -926,7 +942,7 @@ KiCaptureBugCheckBackTrace(
     if ((StackLow == 0) || (StackHigh <= StackLow))
         return FrameCount;
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
     FirstFrame = TRUE;
     while (FrameCount < MaximumFrames)
     {
@@ -946,16 +962,24 @@ KiCaptureBugCheckBackTrace(
     /* Metadata may be unavailable for leaf or damaged images; retain the bounded frame-pointer fallback. */
     while (FrameCount < MaximumFrames)
     {
-        if ((Frame < StackLow) || (Frame >= StackHigh) || ((StackHigh - Frame) < (2 * sizeof(ULONG_PTR))) || ((Frame & (sizeof(ULONG_PTR) - 1)) != 0))
+#if defined(_M_RISCV64)
+        /* RISC-V fp points past the saved fp/ra pair. */
+        if (Frame < 2 * sizeof(ULONG_PTR))
             break;
-        if (!MmIsAddressValid((PVOID)Frame) || !MmIsAddressValid((PVOID)(Frame + sizeof(ULONG_PTR))))
+        FrameRecord = Frame - 2 * sizeof(ULONG_PTR);
+#else
+        FrameRecord = Frame;
+#endif
+        if ((FrameRecord < StackLow) || (FrameRecord >= StackHigh) || ((StackHigh - FrameRecord) < (2 * sizeof(ULONG_PTR))) || ((FrameRecord & (sizeof(ULONG_PTR) - 1)) != 0))
+            break;
+        if (!MmIsAddressValid((PVOID)FrameRecord) || !MmIsAddressValid((PVOID)(FrameRecord + sizeof(ULONG_PTR))))
             break;
 
-        NextFrame = *(volatile ULONG_PTR *)Frame;
-        ReturnAddress = *(volatile ULONG_PTR *)(Frame + sizeof(ULONG_PTR));
+        NextFrame = *(volatile ULONG_PTR *)FrameRecord;
+        ReturnAddress = *(volatile ULONG_PTR *)(FrameRecord + sizeof(ULONG_PTR));
         if (ReturnAddress == 0)
             break;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
         if (!KiIsBugCheckCodeAddress(ReturnAddress))
             break;
 #endif
@@ -1227,7 +1251,7 @@ KiUseExceptionBugCheckContext(
     if (ProgramCounter == 0)
         return FALSE;
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
     if (!KiIsBugCheckCodeAddress(ProgramCounter))
         return FALSE;
 #else

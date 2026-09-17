@@ -702,6 +702,7 @@
 @ stdcall -arch=i386,arm,arm64,riscv64 KeQueryTickCount(ptr)
 @ stdcall KeQueryTimeIncrement()
 @ cdecl -arch=x86_64,arm64 KeRaiseIrqlToDpcLevel() KxRaiseIrqlToDpcLevel
+@ stdcall -arch=riscv64 KeRaiseIrqlToDpcLevel()
 @ stdcall KeRaiseUserException(long)
 @ stdcall KeReadStateEvent(ptr)
 @ stdcall KeReadStateMutant(ptr)
@@ -1821,7 +1822,7 @@
 @ stdcall -arch=arm64 KxRestoreFloatingPointState(ptr)
 @ stdcall -arch=arm64 KeAcquireSpinLock(ptr ptr)
 @ stdcall -arch=arm64 KeRaiseIrql(long ptr)
-@ stdcall -arch=arm64 KeRaiseIrqlToSynchLevel()
+@ stdcall -arch=arm64,riscv64 KeRaiseIrqlToSynchLevel()
 
 # ==========================================================================
 # Win11 ARM64 export parity (arm64 only). Generated batch; see commit msg.
@@ -2631,7 +2632,7 @@
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity(ptr)
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity2(ptr ptr)
 @ stdcall -arch=arm64 KeQueryAuxiliaryCounterFrequency(ptr)
-@ stdcall -arch=x86_64,arm64 KeQueryDpcWatchdogInformation(ptr)
+@ stdcall -arch=win64 KeQueryDpcWatchdogInformation(ptr)
 @ stdcall -arch=arm64 KeQueryEffectivePriorityThread(ptr)
 @ stdcall KeQueryGroupAffinity(long)
 @ stdcall KeQueryGroupAffinityEx(ptr long)
