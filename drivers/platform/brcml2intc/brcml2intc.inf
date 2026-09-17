@@ -1,0 +1,51 @@
+; PROJECT:     ReactOS Broadcom L2 Interrupt Controller Driver
+; LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+; COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
+
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGuid={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%ReactOS%
+DriverVer=09/17/2026,1.0.0.0
+
+[ControlFlags]
+ExcludeFromSelect=*
+
+[DestinationDirs]
+DefaultDestDir=12
+
+[Manufacturer]
+%ReactOS%=BrcmL2Models,NTARM64
+
+[BrcmL2Models.NTARM64]
+%BrcmL2.DeviceDesc%=BrcmL2_Install,ACPI\BRCM0A01
+
+[BrcmL2_Install.NT]
+CopyFiles=BrcmL2_CopyFiles
+
+[BrcmL2_CopyFiles]
+brcml2intc.sys
+
+[BrcmL2_Install.NT.Services]
+AddService=brcml2intc,0x00000002,BrcmL2_Service
+
+[BrcmL2_Service]
+DisplayName=%BrcmL2.ServiceDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\brcml2intc.sys
+LoadOrderGroup=Extended Base
+
+[SourceDisksNames]
+1=%DiskName%
+
+[SourceDisksFiles]
+brcml2intc.sys=1
+
+[Strings]
+ReactOS="ReactOS Project"
+BrcmL2.DeviceDesc="Broadcom Always-On L2 Interrupt Controller"
+BrcmL2.ServiceDesc="ReactOS Broadcom L2 Interrupt Controller Driver"
+DiskName="ReactOS Installation Media"
