@@ -310,6 +310,7 @@ DriverEntry(
     InitData.DxgkDdiPresent               = Rpi5Vc4DdiPresent;
     InitData.DxgkDdiPatch                 = Rpi5Vc4DdiPatch;
     InitData.DxgkDdiSubmitCommand         = Rpi5Vc4DdiSubmitCommand;
+    InitData.DxgkDdiSubmitCommandVirtual  = Rpi5Vc4DdiSubmitCommandVirtual;
     InitData.DxgkDdiQueryCurrentFence     = Rpi5Vc4DdiQueryCurrentFence;
     InitData.DxgkDdiGetNodeMetadata       = Rpi5Vc4DdiGetNodeMetadata;
     InitData.DxgkDdiResetFromTimeout      = Rpi5Vc4DdiResetFromTimeout;
