@@ -296,6 +296,13 @@ AfdGetSockName( PDEVICE_OBJECT DeviceObject, PIRP Irp,
                                                 : FCB->AddressFile.Object,
                                               TDI_QUERY_ADDRESS_INFO,
                                               Mdl );
+
+                if( !NT_SUCCESS(Status) && FCB->Connection.Object &&
+                    FCB->AddressFile.Object ) {
+                    Status = TdiQueryInformation( FCB->AddressFile.Object,
+                                                  TDI_QUERY_ADDRESS_INFO,
+                                                  Mdl );
+                }
         }
 
         /* Check if MmProbeAndLockPages or TdiQueryInformation failed and
