@@ -774,7 +774,7 @@ Rpi5V3dConnectInterrupt(
     }
 
     Params.FullySpecified.InterruptObject = &DeviceExtension->V3dInterrupt2;
-    Params.FullySpecified.Vector = RPI5_V3D_INTID2;
+    Params.FullySpecified.Vector = RPI5_V3D_HUB_INTID;
     Status = IoConnectInterruptEx(&Params);
     if (NT_SUCCESS(Status))
         DeviceExtension->V3dHubIrqConnected = TRUE;

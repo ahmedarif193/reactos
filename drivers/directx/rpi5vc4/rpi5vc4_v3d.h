@@ -268,15 +268,14 @@ Rpi5V3dConsumeCompletions(
     _Out_ PBOOLEAN OutOfMemory);
 
 /*
- * V3D core interrupt: GIC SPI 250 per the RPi5 DTB (v3d node
- * interrupts = <GIC_SPI 0xfa level-high>), INTID = 32 + 250.
+ * The BCM2712 firmware contract exposes the V3D core first (GIC SPI 249)
+ * and the hub second (GIC SPI 250).  Dxgkrnl owns the first translated
+ * interrupt resource; the miniport connects the hub line itself.
  */
-#define RPI5_V3D_CORE_SPI               250
+#define RPI5_V3D_CORE_SPI               249
 #define RPI5_V3D_CORE_INTID             (32 + RPI5_V3D_CORE_SPI)
-/* bcm2712.dtsi v3d lists TWO lines: <GIC_SPI 250>, <GIC_SPI 249> (core+hub
- * pair, order unproven on silicon) — connect both, INT_STS decides. */
-#define RPI5_V3D_SPI2                   249
-#define RPI5_V3D_INTID2                 (32 + RPI5_V3D_SPI2)
+#define RPI5_V3D_HUB_SPI                250
+#define RPI5_V3D_HUB_INTID              (32 + RPI5_V3D_HUB_SPI)
 
 /* Kick one UMD-encoded TFU conversion job (register image). */
 BOOLEAN
