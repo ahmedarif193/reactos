@@ -73,7 +73,7 @@ typedef struct _HDAC_STREAM {
     HDAC_ISR_CALLBACK isr;
 
     BOOLEAN running;
-    BOOLEAN irqReceived;
+    volatile LONG notificationPending;
 } HDAC_STREAM, *PHDAC_STREAM;
 
 typedef struct _HDAC_RIRB {
