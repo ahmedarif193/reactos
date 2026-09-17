@@ -6248,20 +6248,26 @@ CM_Locate_DevNode_ExW(
 
     if (pDeviceID != NULL && lstrlenW(pDeviceID) != 0)
     {
+        if (lstrlenW(pDeviceID) >= ARRAYSIZE(DeviceIdBuffer))
+            return CR_INVALID_DEVICE_ID;
+
         lstrcpyW(DeviceIdBuffer, pDeviceID);
 
-        RpcTryExcept
+        if (!(ulFlags & CM_LOCATE_DEVNODE_NOVALIDATION))
         {
-            /* Validate the device ID */
-            ret = PNP_ValidateDeviceInstance(BindingHandle,
-                                             DeviceIdBuffer,
-                                             ulFlags);
+            RpcTryExcept
+            {
+                /* Validate the device ID */
+                ret = PNP_ValidateDeviceInstance(BindingHandle,
+                                                 DeviceIdBuffer,
+                                                 ulFlags);
+            }
+            RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+            {
+                ret = RpcStatusToCmStatus(RpcExceptionCode());
+            }
+            RpcEndExcept;
         }
-        RpcExcept(EXCEPTION_EXECUTE_HANDLER)
-        {
-            ret = RpcStatusToCmStatus(RpcExceptionCode());
-        }
-        RpcEndExcept;
     }
     else
     {
