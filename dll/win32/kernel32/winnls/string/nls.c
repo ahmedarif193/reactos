@@ -1022,114 +1022,38 @@ IntWideCharToMultiByteUTF8(UINT CodePage,
                            LPCSTR DefaultChar,
                            LPBOOL UsedDefaultChar)
 {
-    INT TempLength;
-    DWORD Char;
+    NTSTATUS Status;
+    ULONG BytesWritten;
 
-    if (Flags)
+    if (Flags & ~WC_ERR_INVALID_CHARS)
     {
         SetLastError(ERROR_INVALID_FLAGS);
         return 0;
     }
 
-    /* Does caller query for output buffer size? */
-    if (MultiByteCount == 0)
+    Status = RtlUnicodeToUTF8N(MultiByteString,
+                               MultiByteCount,
+                               &BytesWritten,
+                               WideCharString,
+                               WideCharCount * sizeof(WCHAR));
+    if (Status == STATUS_SOME_NOT_MAPPED)
     {
-        for (TempLength = 0; WideCharCount;
-            WideCharCount--, WideCharString++)
+        if (Flags & WC_ERR_INVALID_CHARS)
         {
-            TempLength++;
-            if (*WideCharString >= 0x80)
-            {
-                TempLength++;
-                if (*WideCharString >= 0x800)
-                {
-                    TempLength++;
-                    if (*WideCharString >= 0xd800 && *WideCharString < 0xdc00 &&
-                        WideCharCount >= 1 &&
-                        WideCharString[1] >= 0xdc00 && WideCharString[1] <= 0xe000)
-                    {
-                        WideCharCount--;
-                        WideCharString++;
-                        TempLength++;
-                    }
-                }
-            }
+            SetLastError(ERROR_NO_UNICODE_TRANSLATION);
+            return 0;
         }
-        return TempLength;
+
+        return BytesWritten;
     }
 
-    for (TempLength = MultiByteCount; WideCharCount; WideCharCount--, WideCharString++)
+    if (!NT_SUCCESS(Status))
     {
-        Char = *WideCharString;
-        if (Char < 0x80)
-        {
-            if (!TempLength)
-            {
-                SetLastError(ERROR_INSUFFICIENT_BUFFER);
-                break;
-            }
-            TempLength--;
-            *MultiByteString++ = (CHAR)Char;
-            continue;
-        }
-
-        if (Char < 0x800)  /* 0x80-0x7ff: 2 bytes */
-        {
-            if (TempLength < 2)
-            {
-                SetLastError(ERROR_INSUFFICIENT_BUFFER);
-                break;
-            }
-            MultiByteString[1] = 0x80 | (Char & 0x3f); Char >>= 6;
-            MultiByteString[0] = 0xc0 | Char;
-            MultiByteString += 2;
-            TempLength -= 2;
-            continue;
-        }
-
-        /* surrogate pair 0x10000-0x10ffff: 4 bytes */
-        if (Char >= 0xd800 && Char < 0xdc00 &&
-            WideCharCount >= 1 &&
-            WideCharString[1] >= 0xdc00 && WideCharString[1] < 0xe000)
-        {
-            WideCharCount--;
-            WideCharString++;
-
-            if (TempLength < 4)
-            {
-                SetLastError(ERROR_INSUFFICIENT_BUFFER);
-                break;
-            }
-
-            Char = (Char - 0xd800) << 10;
-            Char |= *WideCharString - 0xdc00;
-            ASSERT(Char <= 0xfffff);
-            Char += 0x10000;
-            ASSERT(Char <= 0x10ffff);
-
-            MultiByteString[3] = 0x80 | (Char & 0x3f); Char >>= 6;
-            MultiByteString[2] = 0x80 | (Char & 0x3f); Char >>= 6;
-            MultiByteString[1] = 0x80 | (Char & 0x3f); Char >>= 6;
-            MultiByteString[0] = 0xf0 | Char;
-            MultiByteString += 4;
-            TempLength -= 4;
-            continue;
-        }
-
-        /* 0x800-0xffff: 3 bytes */
-        if (TempLength < 3)
-        {
-            SetLastError(ERROR_INSUFFICIENT_BUFFER);
-            break;
-        }
-        MultiByteString[2] = 0x80 | (Char & 0x3f); Char >>= 6;
-        MultiByteString[1] = 0x80 | (Char & 0x3f); Char >>= 6;
-        MultiByteString[0] = 0xe0 | Char;
-        MultiByteString += 3;
-        TempLength -= 3;
+        BaseSetLastNTError(Status);
+        return 0;
     }
 
-    return MultiByteCount - TempLength;
+    return BytesWritten;
 }
 
 /**

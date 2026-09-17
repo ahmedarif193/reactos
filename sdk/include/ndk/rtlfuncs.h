@@ -226,6 +226,18 @@ _Must_inspect_result_
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlUnicodeToUTF8N(
+    _Out_writes_bytes_to_(UTF8StringMaxByteCount, *UTF8StringActualByteCount)
+        PCHAR UTF8StringDestination,
+    _In_ ULONG UTF8StringMaxByteCount,
+    _Out_ PULONG UTF8StringActualByteCount,
+    _In_reads_bytes_(UnicodeStringByteCount) PCWCH UnicodeStringSource,
+    _In_ ULONG UnicodeStringByteCount);
+
+_Must_inspect_result_
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlUTF8ToUnicodeN(
     _Out_writes_bytes_to_(UnicodeStringMaxByteCount, *UnicodeStringActualByteCount)
         PWSTR UnicodeStringDestination,
