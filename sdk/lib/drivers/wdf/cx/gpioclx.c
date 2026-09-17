@@ -335,11 +335,24 @@ GpioCxApplyInterruptLine(
         Device->LineMode[LineNumber] = (UCHAR)Mode;
         Device->LinePolarity[LineNumber] = (UCHAR)Polarity;
         Device->LineGsiv[LineNumber] = Gsiv;
+
+        /*
+         * CLIENT_EnableInterrupt runs at PASSIVE_LEVEL and owns the
+         * responsibility for taking the bank interrupt lock while changing
+         * memory-mapped interrupt registers.  Publish the line to the ISR
+         * under that lock, but do not hold it across the client callback.
+         */
         GpioCxAcquireBankLock(Device, Bank->BankId);
-        Status = Device->Packet->CLIENT_EnableInterrupt(Device->Controller->Context, &Params);
-        if (NT_SUCCESS(Status))
-            Bank->EnabledMask |= 1ULL << Params.PinNumber;
+        Bank->EnabledMask |= 1ULL << Params.PinNumber;
         GpioCxReleaseBankLock(Device, Bank->BankId);
+        Status = Device->Packet->CLIENT_EnableInterrupt(Device->Controller->Context, &Params);
+        if (!NT_SUCCESS(Status))
+        {
+            GpioCxAcquireBankLock(Device, Bank->BankId);
+            Bank->EnabledMask &= ~(1ULL << Params.PinNumber);
+            GpioCxReleaseBankLock(Device, Bank->BankId);
+            Device->LineGsiv[LineNumber] = 0;
+        }
     }
     else
     {
@@ -350,11 +363,14 @@ GpioCxApplyInterruptLine(
         RtlZeroMemory(&Params, sizeof(Params));
         Params.BankId = Bank->BankId;
         Params.PinNumber = Line.Pins[0];
-        GpioCxAcquireBankLock(Device, Bank->BankId);
-        Bank->EnabledMask &= ~(1ULL << Params.PinNumber);
-        Device->Packet->CLIENT_DisableInterrupt(Device->Controller->Context, &Params);
-        GpioCxReleaseBankLock(Device, Bank->BankId);
-        Device->LineGsiv[LineNumber] = 0;
+        Status = Device->Packet->CLIENT_DisableInterrupt(Device->Controller->Context, &Params);
+        if (NT_SUCCESS(Status))
+        {
+            GpioCxAcquireBankLock(Device, Bank->BankId);
+            Bank->EnabledMask &= ~(1ULL << Params.PinNumber);
+            GpioCxReleaseBankLock(Device, Bank->BankId);
+            Device->LineGsiv[LineNumber] = 0;
+        }
     }
 }
 
