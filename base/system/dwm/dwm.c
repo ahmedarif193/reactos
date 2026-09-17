@@ -2983,18 +2983,6 @@ DwmStatCounter(LARGE_INTEGER *Counter)
         Counter->QuadPart = 0;
 }
 
-/* Prefer full-frame GPU composition when the adapter supports it. The
- * environment override remains available for diagnosis. The registered output
- * swapchain is promoted to a KMT flip and never read back to the CPU. */
-static BOOL
-DwmGpuComposeEnabled(void)
-{
-    WCHAR Value[8];
-    DWORD Length = GetEnvironmentVariableW(L"DWM_GPU_COMPOSE", Value,
-                                           ARRAYSIZE(Value));
-
-    return !(Length == 1 && Value[0] == L'0');
-}
 static ULONGLONG g_statBlurTicks;
 static ULONGLONG g_statBackdropBlurTicks;
 static ULONGLONG g_statShadowTicks;
@@ -3297,11 +3285,11 @@ DwmCreateSurfaces(HDC hdcScreen, LONG W, LONG H)
     DwmEnsureReflection(W, H);
     if (restoreGpu && !DwmGpuComposeInitialize(W, H))
     {
-        /* Registration has immutable geometry. Recreate the carrier and
-         * its source claim together; a failed recreation leaves a usable
-         * CPU composition, never an old texture with the new bitmap. */
+        /* Registration has immutable geometry. Recreate the Direct3D carrier
+         * and its source claim together; the main loop keeps the last scanout
+         * visible until the complete WDDM chain can be created again. */
         DwmGpuComposeShutdown();
-        DwmLog("DWM: GPU output recreation failed; restoring software composition\n");
+        DwmLog("DWM: Direct3D output recreation deferred\n");
     }
     return TRUE;
 }
@@ -3364,22 +3352,6 @@ DwmComposeLoop(HANDLE hStopEvent)
         g_frameStats = Length == 1 && Value[0] == L'1';
     }
 
-    /* Allow a known-working software renderer while GPU effects are tested. */
-    {
-        WCHAR Value[8];
-        DWORD Length = GetEnvironmentVariableW(L"DWM_GPU_EFFECTS", Value,
-                                               ARRAYSIZE(Value));
-        if (Length == 1 && Value[0] == L'0')
-        {
-            g_blurUseGpu = g_blurLargeUseGpu = 0;
-            OutputDebugStringA("DWM: standalone GPU readback effects disabled\n");
-        }
-        else if (DwmGpuInitialize(hdcScreen))
-            OutputDebugStringA("DWM: GPU effects active\n");
-        else
-            OutputDebugStringA("DWM: GPU effects unavailable, using software\n");
-    }
-
     {
         LARGE_INTEGER Frequency;
         LONG Hz = GetDeviceCaps(hdcScreen, VREFRESH);
@@ -3421,10 +3393,13 @@ DwmComposeLoop(HANDLE hStopEvent)
         return;
     }
 
-    /* Registration of the trusted scanout swapchain is accepted only after
-     * this process has attached as the desktop compositor. */
-    if (DwmGpuComposeEnabled() && DwmGpuComposeInitialize(g_W, g_H))
-        OutputDebugStringA("DWM: GPU composition enabled; GPU copy to scanout\n");
+    /* Registration of the trusted Direct3D swapchain is accepted only after
+     * this process has attached as the desktop compositor. OpenGL is a separate
+     * ICD contract and is never used to conceal a Direct3D/WDDM failure. */
+    if (DwmGpuComposeInitialize(g_W, g_H))
+        OutputDebugStringA("DWM: Direct3D composition enabled; GPU copy to scanout\n");
+    else
+        DwmLog("DWM: waiting for the native Direct3D compositor\n");
 
     if (DwmSettingsRead(&Settings.Effects) != ERROR_SUCCESS)
         DwmLog("DWM: could not read effect preferences\n");
@@ -3459,6 +3434,27 @@ DwmComposeLoop(HANDLE hStopEvent)
         if (WaitForSingleObject(hStopEvent, 0) == WAIT_OBJECT_0)
             break;
 
+        /* Windows 11 desktop composition is a Direct3D/WDDM contract. Keep
+         * the last completed scanout while that contract is unavailable and
+         * recreate the whole device chain; never substitute GDI or WGL. */
+        if (!DwmGpuComposeIsActive())
+        {
+            if (DwmGpuComposeInitialize(g_W, g_H))
+            {
+                DwmLog("DWM: native Direct3D compositor available\n");
+                forceFull = TRUE;
+                g_lastFrameQpc = 0;
+            }
+            else
+            {
+                DwmSetTimerPrecision(FALSE);
+                if (MsgWaitForMultipleObjects(1, &hStopEvent, FALSE,
+                                              1000, QS_ALLINPUT) == WAIT_OBJECT_0)
+                    break;
+                continue;
+            }
+        }
+
         if (gpuDeferred)
         {
             DWORD Elapsed = GetTickCount() - gpuLastOutputCheck;
@@ -3485,7 +3481,11 @@ DwmComposeLoop(HANDLE hStopEvent)
             if (Output == DWM_GPU_FAILED)
             {
                 DwmGpuComposeShutdown();
-                DwmLog("DWM: GPU output recovery failed; restoring software composition\n");
+                if (DwmGpuComposeInitialize(g_W, g_H))
+                    DwmLog("DWM: Direct3D device and swapchain recreated\n");
+                else
+                    DwmLog("DWM: Direct3D output recovery deferred\n");
+                continue;
             }
             else
             {
@@ -3672,13 +3672,9 @@ DwmComposeLoop(HANDLE hStopEvent)
                 g_framePrepareTicks = g_frameStats ?
                     (ULONGLONG)(statFrameStart.QuadPart - statFetchEnd.QuadPart) : 0;
 
-                /*
-                 * Hardware frame.  Every window is drawn from a resident
-                 * texture, so an unchanged one costs a quad and no upload,
-                 * and the finished frame is copied to scanout by the GPU
-                 * without CPU readback. If any step declines, the software
-                 * path below can rebuild the frame.
-                 */
+                /* Hardware frame. Every window is drawn from a resident
+                 * texture and the finished frame reaches scanout through the
+                 * native Direct3D/WDDM presentation path without CPU readback. */
                 if (DwmGpuComposeIsActive())
                 {
                     DPT_SCOPE FrameTrace = DptBegin(&g_DwmPresentTrace, DPT_FRAME);
@@ -3790,12 +3786,21 @@ DwmComposeLoop(HANDLE hStopEvent)
                         DwmLog("DWM: GPU output occluded; retaining composition until it is available\n");
                         continue;
                     }
-                    /* A failed GPU frame leaves no reusable CPU composition.
-                     * Retire the context and rebuild the entire scene. */
+                    /* Direct3D device removal invalidates the whole interface
+                     * chain. Release it, retire publications only after all
+                     * reads have stopped, and recreate every device resource. */
                     DwmGpuComposeShutdown();
-                    OutputDebugStringA("DWM: GPU frame failed; restoring software composition\n");
-                    pl = cl = 0; pt = ct = 0;
-                    pr = cr = g_W; pb = cb = g_H;
+                    for (i = 0; i < hdr->Count; ++i)
+                        DwmDxAcknowledgeSurface(&wins[i]);
+                    if (DwmGpuComposeInitialize(g_W, g_H))
+                    {
+                        DwmLog("DWM: Direct3D device and swapchain recreated after frame failure\n");
+                        forceFull = TRUE;
+                        continue;
+                    }
+                    DwmLog("DWM: Direct3D device recreation deferred\n");
+                    forceFull = TRUE;
+                    continue;
                 }
 
                 {
