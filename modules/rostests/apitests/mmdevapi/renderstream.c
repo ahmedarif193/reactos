@@ -8,11 +8,63 @@
 #include <apitest.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include "reactos_wavert.h"
 
-static void drain_stream(IAudioClient *client, IAudioClock *clock, HANDLE event, UINT32 capacity, DWORD rate)
+static void test_cyclic_notifications(void)
+{
+    static const struct
+    {
+        const char *name;
+        UINT64 play, write;
+        UINT32 playing;
+        BOOL advanced, writable;
+    } samples[] =
+    {
+        { "before first completion", 0, 128, 0, FALSE, TRUE },
+        { "first completion", 1920, 2048, 1, TRUE, TRUE },
+        { "duplicate wake", 1920, 2048, 1, FALSE, TRUE },
+        { "two coalesced completions", 2048, 2176, 1, FALSE, TRUE },
+        { "recovery after coalescing", 0, 128, 0, TRUE, TRUE },
+        { "timeout without progress", 0, 128, 0, FALSE, TRUE },
+        { "prefetch into next half", 1856, 1984, 0, FALSE, FALSE },
+        { "completion after prefetch", 1920, 2048, 1, TRUE, TRUE },
+        { "prefetch around buffer end", 3776, 64, 1, FALSE, FALSE },
+        { "write cursor behind play", 2048, 1984, 1, FALSE, FALSE },
+        { "recovery around buffer end", 64, 192, 0, TRUE, TRUE },
+    };
+    struct reactos_wavert_position position;
+    UINT32 previous = 0;
+    unsigned i;
+    BOOL valid;
+
+    for (i = 0; i < ARRAY_SIZE(samples); ++i)
+    {
+        valid = reactos_wavert_cyclic_position(480, 4, previous,
+                                              samples[i].play, samples[i].write, &position);
+        ok(valid, "%s: invalid cursor sample\n", samples[i].name);
+        if (!valid) continue;
+        ok(position.playing == samples[i].playing, "%s: playing half %u\n",
+           samples[i].name, position.playing);
+        ok(position.advanced == samples[i].advanced, "%s: advanced %d\n",
+           samples[i].name, position.advanced);
+        ok(position.writable == samples[i].writable, "%s: writable %d\n",
+           samples[i].name, position.writable);
+        ok(position.released != position.playing, "%s: selected live DMA half\n",
+           samples[i].name);
+        previous = position.playing;
+    }
+    ok(!reactos_wavert_cyclic_position(0, 4, 0, 0, 0, &position), "accepted empty period\n");
+    ok(!reactos_wavert_cyclic_position(480, 0, 0, 0, 0, &position), "accepted empty frame\n");
+    ok(!reactos_wavert_cyclic_position(480, 4, 2, 0, 0, &position), "accepted invalid previous half\n");
+    ok(!reactos_wavert_cyclic_position(480, 4, 0, 3840, 0, &position), "accepted invalid play cursor\n");
+    ok(!reactos_wavert_cyclic_position(480, 4, 0, 0, 3840, &position), "accepted invalid write cursor\n");
+}
+
+static void drain_stream(IAudioClient *client, IAudioClock *clock, HANDLE event,
+                         UINT32 capacity, DWORD rate, UINT64 initial_position)
 {
     UINT32 padding = capacity;
-    UINT64 position = 0, previous = 0, frequency;
+    UINT64 position = initial_position, previous = initial_position, frequency;
     DWORD deadline = GetTickCount() + 1000, wait;
     HRESULT hr;
     unsigned events = 0;
@@ -32,12 +84,12 @@ static void drain_stream(IAudioClient *client, IAudioClock *clock, HANDLE event,
         ok(hr == S_OK, "rate %lu: clock %#lx\n", rate, hr);
         ok(position >= previous, "rate %lu: clock moved backwards\n", rate);
         previous = position;
-        if (!padding && position) break;
+        if (!padding && position > initial_position) break;
         Sleep(1);
     } while ((LONG)(deadline - GetTickCount()) > 0);
     ok(events != 0, "rate %lu: no render notifications\n", rate);
     ok(padding == 0, "rate %lu: audio did not drain, %u frames remain\n", rate, padding);
-    ok(position != 0, "rate %lu: audio clock did not advance\n", rate);
+    ok(position > initial_position, "rate %lu: audio clock did not advance\n", rate);
 }
 
 static void test_format(IMMDevice *device, DWORD rate, WORD bits)
@@ -49,6 +101,7 @@ static void test_format(IMMDevice *device, DWORD rate, WORD bits)
     HANDLE event = NULL;
     BYTE *data;
     UINT32 capacity, padding;
+    UINT64 initial_position;
     HRESULT hr;
     unsigned i, pass;
     static const UINT32 pieces[] = { 1, 7, 31, 127 };
@@ -81,6 +134,9 @@ static void test_format(IMMDevice *device, DWORD rate, WORD bits)
 
     for (pass = 0; pass < 3; ++pass)
     {
+        hr = IAudioClock_GetPosition(clock, &initial_position, NULL);
+        ok(hr == S_OK, "GetPosition before rendering %#lx\n", hr);
+        if (FAILED(hr)) goto done;
         /* Refill a drained full buffer without Reset to preserve fractional
          * phase. Then test uneven small writes after resetting the stream. */
         for (i = 0; i < (pass == 2 ? ARRAY_SIZE(pieces) : 1); ++i)
@@ -99,7 +155,25 @@ static void test_format(IMMDevice *device, DWORD rate, WORD bits)
         hr = IAudioClient_Start(client);
         ok(hr == S_OK, "rate %lu: Start %#lx\n", rate, hr);
         if (FAILED(hr)) goto done;
-        drain_stream(client, clock, event, capacity, rate);
+        drain_stream(client, clock, event, capacity, rate, initial_position);
+        if (rate == 48000 && pass == 0)
+        {
+            /* Let the DMA ring underrun while the client stays started, then
+             * submit again. Playback, notifications and the clock must recover
+             * without a Stop/Start resetting the notification phase. */
+            Sleep(120);
+            hr = IAudioClock_GetPosition(clock, &initial_position, NULL);
+            ok(hr == S_OK, "GetPosition after underrun %#lx\n", hr);
+            if (FAILED(hr)) goto done;
+            hr = IAudioRenderClient_GetBuffer(render, capacity, &data);
+            ok(hr == S_OK, "GetBuffer after underrun %#lx\n", hr);
+            if (FAILED(hr)) goto done;
+            memset(data, 0, capacity * format.nBlockAlign);
+            hr = IAudioRenderClient_ReleaseBuffer(render, capacity, 0);
+            ok(hr == S_OK, "ReleaseBuffer after underrun %#lx\n", hr);
+            if (FAILED(hr)) goto done;
+            drain_stream(client, clock, event, capacity, rate, initial_position);
+        }
         hr = IAudioClient_Stop(client);
         ok(hr == S_OK, "rate %lu: Stop %#lx\n", rate, hr);
         if (pass != 0)
@@ -125,6 +199,7 @@ START_TEST(renderstream)
     unsigned i;
     static const DWORD rates[] = { 22050, 44100, 48000, 96000 };
 
+    test_cyclic_notifications();
     hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     ok(SUCCEEDED(hr), "CoInitializeEx %#lx\n", hr);
     if (FAILED(hr)) return;

@@ -36,6 +36,7 @@
 
 #include "mmdevapi_private.h"
 #include "reactos_render_engine.h"
+#include "reactos_wavert.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
 
@@ -46,7 +47,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
 #define REACTOS_DEFAULT_PERIOD 100000
 #define REACTOS_MIN_PERIOD 30000
 #define REACTOS_DEFAULT_BUFFER_FRAMES 4096
-#define REACTOS_RT_NOTIFICATION_COUNT 2
 #define REACTOS_RENDER_PACKET_COUNT 16
 
 #if defined(WOW64_I386_RUNTIME)
@@ -1742,35 +1742,51 @@ static BOOL fill_wavert_period(struct reactos_stream *stream, UINT32 period)
     return fill_wavert_period_at(stream, period, 0);
 }
 
-static void refill_cyclic_period(struct reactos_stream *stream)
+static BOOL refill_cyclic_period(struct reactos_stream *stream)
 {
     KSPROPERTY property;
     KSAUDIO_POSITION position;
+    struct reactos_wavert_position progress;
     DWORD returned;
-    UINT32 period, offset, period_bytes;
+    UINT32 completed_frames, offset;
 
-    if (!stream->rt_enabled || stream->rt_packet_mode || !stream->rt_refill_ready)
-        return;
-    period = (stream->rt_period_index + REACTOS_RT_NOTIFICATION_COUNT - 1) % REACTOS_RT_NOTIFICATION_COUNT;
-    offset = stream->rt_period_queued_frames[period];
-    if (offset == stream->rt_period_frames || !stream->render_ring_frames)
-        return;
+    if (!stream->rt_enabled || stream->rt_packet_mode || !stream->started)
+        return FALSE;
 
     ZeroMemory(&property, sizeof(property));
     property.Set = audio_property_set;
     property.Id = KSPROPERTY_AUDIO_POSITION;
     property.Flags = KSPROPERTY_TYPE_GET;
-    if (!pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY, &property, sizeof(property), &position, sizeof(position), &returned) || returned < sizeof(position))
-        return;
+    if (!pin_ioctl(stream->user_pin, IOCTL_KS_PROPERTY, &property, sizeof(property),
+                   &position, sizeof(position), &returned) || returned < sizeof(position) ||
+        !reactos_wavert_cyclic_position(stream->rt_period_frames, stream->device_frame_size,
+                                       stream->rt_period_index, position.PlayOffset,
+                                       position.WriteOffset, &progress))
+        return FALSE;
+
+    if (progress.advanced)
+    {
+        completed_frames = stream->rt_period_queued_frames[progress.released];
+        stream->rt_period_queued_frames[progress.released] = 0;
+        stream->position += stream->rt_period_frames;
+        stream->completed_render_frames += completed_frames;
+        stream->position_qpc_100ns = query_performance_time_100ns();
+        stream->padding -= min(stream->padding, completed_frames);
+        stream->rt_period_index = progress.playing;
+        stream->rt_refill_ready = TRUE;
+    }
 
     /* A completion can precede the producer's next packet. Fill the remaining
-     * space in the released period when that packet arrives, while both the
-     * link cursor and the controller's prefetch cursor are in the other half.
-     * A late or coalesced notification must not let us overwrite live DMA. */
-    period_bytes = stream->rt_period_frames * stream->device_frame_size;
-    if (position.PlayOffset >= (UINT64)period_bytes * REACTOS_RT_NOTIFICATION_COUNT || position.WriteOffset >= (UINT64)period_bytes * REACTOS_RT_NOTIFICATION_COUNT || position.PlayOffset / period_bytes != stream->rt_period_index || position.WriteOffset / period_bytes == period)
-        return;
-    fill_wavert_period_at(stream, period, offset);
+     * space when that packet arrives, but never overwrite the live DMA half
+     * merely because an event arrived late. Whole missed rotations replay old
+     * samples; they do not complete additional queued data. */
+    offset = stream->rt_period_queued_frames[progress.released];
+    if (stream->rt_refill_ready && progress.writable &&
+        (progress.advanced || (offset < stream->rt_period_frames && stream->render_ring_frames)) &&
+        !fill_wavert_period_at(stream, progress.released, offset))
+        stream->render_error = ERROR_NOT_ENOUGH_MEMORY;
+
+    return progress.advanced;
 }
 
 static BOOL prime_wavert_buffer(struct reactos_stream *stream)
@@ -3328,17 +3344,21 @@ static void reactos_capture_timer_loop(struct reactos_stream *stream)
 static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
 {
     HANDLE wait_handles[2];
-    DWORD wait;
+    DWORD wait, wait_ms = INFINITE;
     DWORD packet_error;
     ULONG packet_number;
     BOOL period_ready;
 
     wait_handles[0] = stream->stop_event;
     wait_handles[1] = stream->rt_event;
+    if (!stream->rt_packet_mode)
+        wait_ms = max(1ULL, ((UINT64)stream->rt_period_frames * 1000 +
+                            stream->device_format.Format.nSamplesPerSec - 1) /
+                           stream->device_format.Format.nSamplesPerSec);
     while (!stream->closing)
     {
-        wait = WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
-        if (wait != WAIT_OBJECT_0 + 1)
+        wait = WaitForMultipleObjects(2, wait_handles, FALSE, wait_ms);
+        if (wait != WAIT_OBJECT_0 + 1 && wait != WAIT_TIMEOUT)
             break;
 
         EnterCriticalSection(&stream->lock);
@@ -3346,6 +3366,18 @@ static void reactos_render_rt_timer_loop(struct reactos_stream *stream)
         {
             LeaveCriticalSection(&stream->lock);
             break;
+        }
+
+        if (!stream->rt_packet_mode)
+        {
+            /* Events can be delayed, lost or coalesced. A bounded wait also
+             * recovers a missed wake, but only hardware progress retires data. */
+            BOOL advanced = refill_cyclic_period(stream);
+
+            LeaveCriticalSection(&stream->lock);
+            if (advanced && stream->event)
+                SetEvent(stream->event);
+            continue;
         }
 
         {
