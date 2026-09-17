@@ -61,6 +61,12 @@ typedef struct vc4kmt_resource {
    uint32_t flags;
 } VC4KMT_RESOURCE;
 
+typedef struct vc4kmt_resource_owner_update {
+   uint32_t allocation;
+   void *expected_runtime_resource;
+   void *runtime_resource;
+} VC4KMT_RESOURCE_OWNER_UPDATE;
+
 typedef struct vc4kmt_cl_submit {
    uint32_t bcl_start;
    uint32_t bcl_end;
@@ -117,6 +123,19 @@ vc4kmt_status vc4kmt_bo_create_resource_ex(VC4KMT_DEVICE *device,
                                            uint32_t size, uint32_t flags,
                                            void *runtime_resource,
                                            VC4KMT_BO *bo);
+vc4kmt_status vc4kmt_bo_create_resource_private_ex(
+   VC4KMT_DEVICE *device, uint32_t size, uint32_t flags,
+   void *runtime_resource, const void *resource_private_data,
+   uint32_t resource_private_data_size, VC4KMT_BO *bo);
+vc4kmt_status vc4kmt_bo_adopt_resource(VC4KMT_DEVICE *device,
+                                       uint32_t allocation,
+                                       uint32_t size,
+                                       void *runtime_resource,
+                                       VC4KMT_BO *bo);
+vc4kmt_status vc4kmt_bo_rebind_resource_owners(
+   VC4KMT_DEVICE *device,
+   const VC4KMT_RESOURCE_OWNER_UPDATE *updates,
+   uint32_t update_count);
 vc4kmt_status vc4kmt_bo_map(VC4KMT_DEVICE *device, VC4KMT_BO *bo,
                             void **cpu_va);
 vc4kmt_status vc4kmt_bo_invalidate(VC4KMT_DEVICE *device,
@@ -201,6 +220,10 @@ _Static_assert(offsetof(VC4KMT_FENCE, cpu_value) == 16,
                "vc4kmt fence pointer offset mismatch");
 _Static_assert(sizeof(VC4KMT_CL_SUBMIT) == 7 * sizeof(uint32_t),
                "vc4kmt CL ABI mismatch");
+_Static_assert(offsetof(VC4KMT_RESOURCE_OWNER_UPDATE,
+                        expected_runtime_resource) ==
+               (sizeof(void *) == 8 ? 8 : 4),
+               "vc4kmt resource-owner ABI mismatch");
 
 #define VC4KMT_CAP_CL_SUBMIT             (1u << 0)
 #define VC4KMT_CAP_TFU_SUBMIT            (1u << 1)
@@ -274,6 +297,8 @@ struct v3d_d3dkmt_device {
    uint32_t *submit_resource_hash;
    uint32_t submit_resource_hash_capacity;
    void *pending_runtime_resource;
+   const void *pending_resource_private_data;
+   uint32_t pending_resource_private_data_size;
 };
 
 static once_flag registry_once = ONCE_FLAG_INIT;
@@ -991,12 +1016,15 @@ v3d_d3dkmt_runtime_resource_pending(int fd)
 
 bool
 v3d_d3dkmt_runtime_resource_begin(struct pipe_screen *screen,
-                                  void *runtime_resource)
+                                  void *runtime_resource,
+                                  const void *resource_private_data,
+                                  uint32_t resource_private_data_size)
 {
    struct v3d_d3dkmt_device *device;
    bool result = false;
 
-   if (!screen || !runtime_resource)
+   if (!screen || !runtime_resource ||
+       (resource_private_data_size && !resource_private_data))
       return false;
    device = v3d_d3dkmt_device_lookup(v3d_screen(screen)->fd);
    if (!device)
@@ -1005,6 +1033,9 @@ v3d_d3dkmt_runtime_resource_begin(struct pipe_screen *screen,
    mtx_lock(&device->lock);
    if (!device->pending_runtime_resource) {
       device->pending_runtime_resource = runtime_resource;
+      device->pending_resource_private_data = resource_private_data;
+      device->pending_resource_private_data_size =
+         resource_private_data_size;
       result = true;
    }
    mtx_unlock(&device->lock);
@@ -1024,7 +1055,55 @@ v3d_d3dkmt_runtime_resource_end(struct pipe_screen *screen)
 
    mtx_lock(&device->lock);
    device->pending_runtime_resource = NULL;
+   device->pending_resource_private_data = NULL;
+   device->pending_resource_private_data_size = 0;
    mtx_unlock(&device->lock);
+}
+
+uint32_t
+v3d_d3dkmt_open_runtime_resource(struct pipe_screen *screen,
+                                 void *runtime_resource,
+                                 uint32_t allocation,
+                                 uint32_t size)
+{
+   struct v3d_d3dkmt_device *device;
+   struct v3d_d3dkmt_bo *bo;
+   uint32_t handle;
+
+   if (!screen || !runtime_resource || !allocation || !size)
+      return 0;
+   device = v3d_d3dkmt_device_lookup(v3d_screen(screen)->fd);
+   if (!device)
+      return 0;
+
+   mtx_lock(&device->lock);
+   handle = v3d_d3dkmt_alloc_bo_handle(device);
+   if (!handle) {
+      mtx_unlock(&device->lock);
+      return 0;
+   }
+
+   bo = &device->bos[handle];
+   memset(bo, 0, sizeof(*bo));
+   if (vc4kmt_bo_adopt_resource(device->kmt, allocation, size,
+                                runtime_resource, &bo->kmt) < 0) {
+      memset(bo, 0, sizeof(*bo));
+      handle = 0;
+   } else {
+      bo->allocated = true;
+   }
+   mtx_unlock(&device->lock);
+   return handle;
+}
+
+void
+v3d_d3dkmt_discard_runtime_resource(struct pipe_screen *screen,
+                                    uint32_t handle)
+{
+   struct drm_gem_close close_bo = { .handle = handle };
+
+   if (screen && handle)
+      (void)drmIoctl(v3d_screen(screen)->fd, DRM_IOCTL_GEM_CLOSE, &close_bo);
 }
 
 uint32_t
@@ -1050,6 +1129,55 @@ v3d_d3dkmt_resource_allocation(struct pipe_screen *screen,
       allocation = bo->kmt.allocation;
    mtx_unlock(&device->lock);
    return allocation;
+}
+
+bool
+v3d_d3dkmt_rebind_runtime_resources(
+   struct pipe_screen *screen,
+   struct pipe_resource *const *resources,
+   void *const *runtime_resources,
+   unsigned count)
+{
+   VC4KMT_RESOURCE_OWNER_UPDATE updates[16];
+   struct v3d_d3dkmt_device *device;
+   bool result = false;
+
+   if (!screen || !resources || !runtime_resources ||
+       count < 2 || count > ARRAY_SIZE(updates))
+      return false;
+   device = v3d_d3dkmt_device_lookup(v3d_screen(screen)->fd);
+   if (!device)
+      return false;
+
+   mtx_lock(&device->lock);
+   for (unsigned destination = 0; destination < count; destination++) {
+      unsigned source = destination + 1 == count ? 0 : destination + 1;
+      struct v3d_resource *rsc;
+      struct v3d_d3dkmt_bo *bo;
+
+      if (!resources[source] || !runtime_resources[source] ||
+          !runtime_resources[destination])
+         goto done;
+      rsc = v3d_resource(resources[source]);
+      if (!rsc->bo)
+         goto done;
+      bo = v3d_d3dkmt_bo_lookup_locked(device, rsc->bo->handle);
+      if (!bo || !bo->kmt.allocation)
+         goto done;
+
+      updates[destination].allocation = bo->kmt.allocation;
+      updates[destination].expected_runtime_resource =
+         runtime_resources[source];
+      updates[destination].runtime_resource =
+         runtime_resources[destination];
+   }
+
+   result = vc4kmt_bo_rebind_resource_owners(
+      device->kmt, updates, count) >= 0;
+
+done:
+   mtx_unlock(&device->lock);
+   return result;
 }
 
 void *
@@ -1756,9 +1884,12 @@ drmIoctl(int fd, unsigned long request, void *arg)
               VC4KMT_BO_CREATE_CPU_CACHED : 0;
       bo = &device->bos[handle];
       memset(bo, 0, sizeof(*bo));
-      if (vc4kmt_bo_create_resource_ex(device->kmt, create->size, flags,
-                                       device->pending_runtime_resource,
-                                       &bo->kmt) < 0) {
+      if (vc4kmt_bo_create_resource_private_ex(
+             device->kmt, create->size, flags,
+             device->pending_runtime_resource,
+             device->pending_resource_private_data,
+             device->pending_resource_private_data_size,
+             &bo->kmt) < 0) {
          errno = ENOMEM;
          break;
       }

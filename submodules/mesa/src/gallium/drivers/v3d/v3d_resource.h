@@ -132,5 +132,12 @@ void v3d_update_shadow_texture(struct pipe_context *pctx,
                                struct pipe_sampler_view *view);
 uint32_t v3d_layer_offset(struct pipe_resource *prsc, uint32_t level,
                           uint32_t layer);
+#ifdef _WIN32
+bool v3d_resource_rotate_identities(
+        struct pipe_context *pctx,
+        struct pipe_resource *const *resources,
+        void *const *runtime_resources,
+        unsigned count);
+#endif
 
 #endif /* V3D_RESOURCE_H */

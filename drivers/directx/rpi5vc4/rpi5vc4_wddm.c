@@ -1616,7 +1616,13 @@ Rpi5Vc4DdiGetStandardAllocationDriverData(
 {
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
     RPI5VC4_STANDARD_ALLOCATION_DATA PrivateData;
+    RPI5VC4_RESOURCE_DATA ResourceData;
     UINT SuppliedPrivateSize;
+    UINT SuppliedResourceSize;
+    ULONG Width;
+    ULONG Height;
+    ULONG Pitch;
+    D3DDDIFORMAT Format;
 
     if (DeviceExtension == NULL || GetStandardAllocationDriverData == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -1624,13 +1630,62 @@ Rpi5Vc4DdiGetStandardAllocationDriverData(
     switch (GetStandardAllocationDriverData->StandardAllocationType)
     {
         case DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE:
+            if (GetStandardAllocationDriverData->pCreateSharedPrimarySurfaceData == NULL)
+                return STATUS_INVALID_PARAMETER;
+            Width = GetStandardAllocationDriverData->pCreateSharedPrimarySurfaceData->Width;
+            Height = GetStandardAllocationDriverData->pCreateSharedPrimarySurfaceData->Height;
+            Format = GetStandardAllocationDriverData->pCreateSharedPrimarySurfaceData->Format;
+            Pitch = Width <= MAXULONG / sizeof(ULONG) ? Width * sizeof(ULONG) : 0;
+            break;
+
         case DXGK_STDALLOCATION_SHADOWSURFACE:
+            if (GetStandardAllocationDriverData->pCreateShadowSurfaceData == NULL)
+                return STATUS_INVALID_PARAMETER;
+            Width = GetStandardAllocationDriverData->pCreateShadowSurfaceData->Width;
+            Height = GetStandardAllocationDriverData->pCreateShadowSurfaceData->Height;
+            Format = GetStandardAllocationDriverData->pCreateShadowSurfaceData->Format;
+            Pitch = GetStandardAllocationDriverData->pCreateShadowSurfaceData->Pitch;
+            if (Pitch == 0 && Width <= MAXULONG / sizeof(ULONG))
+                Pitch = Width * sizeof(ULONG);
+            GetStandardAllocationDriverData->pCreateShadowSurfaceData->Pitch = Pitch;
+            break;
+
         case DXGK_STDALLOCATION_STAGINGSURFACE:
+            if (GetStandardAllocationDriverData->pCreateStagingSurfaceData == NULL)
+                return STATUS_INVALID_PARAMETER;
+            Width = GetStandardAllocationDriverData->pCreateStagingSurfaceData->Width;
+            Height = GetStandardAllocationDriverData->pCreateStagingSurfaceData->Height;
+            Format = D3DDDIFMT_X8R8G8B8;
+            Pitch = GetStandardAllocationDriverData->pCreateStagingSurfaceData->Pitch;
+            if (Pitch == 0 && Width <= MAXULONG / sizeof(ULONG))
+                Pitch = Width * sizeof(ULONG);
+            GetStandardAllocationDriverData->pCreateStagingSurfaceData->Pitch = Pitch;
+            break;
+
         case DXGK_STDALLOCATION_GDISURFACE:
+            if (GetStandardAllocationDriverData->pCreateGdiSurfaceData == NULL)
+                return STATUS_INVALID_PARAMETER;
+            Width = GetStandardAllocationDriverData->pCreateGdiSurfaceData->Width;
+            Height = GetStandardAllocationDriverData->pCreateGdiSurfaceData->Height;
+            Format = GetStandardAllocationDriverData->pCreateGdiSurfaceData->Format;
+            Pitch = GetStandardAllocationDriverData->pCreateGdiSurfaceData->Pitch;
+            if (Pitch == 0 && Width <= MAXULONG / sizeof(ULONG))
+                Pitch = Width * sizeof(ULONG);
+            GetStandardAllocationDriverData->pCreateGdiSurfaceData->Pitch = Pitch;
             break;
 
         default:
             return STATUS_NOT_SUPPORTED;
+    }
+
+    if (Width == 0 || Height == 0 ||
+        Width > MAXULONG / sizeof(ULONG) ||
+        Pitch < Width * sizeof(ULONG) ||
+        Height > MAXULONG / Pitch ||
+        (Format != D3DDDIFMT_X8R8G8B8 &&
+         Format != D3DDDIFMT_A8R8G8B8))
+    {
+        return STATUS_INVALID_PARAMETER;
     }
 
     RtlZeroMemory(&PrivateData, sizeof(PrivateData));
@@ -1639,21 +1694,67 @@ Rpi5Vc4DdiGetStandardAllocationDriverData(
     PrivateData.Type =
         GetStandardAllocationDriverData->StandardAllocationType;
 
+    RtlZeroMemory(&ResourceData, sizeof(ResourceData));
+    ResourceData.Magic = RPI5VC4_RESOURCE_DATA_MAGIC;
+    ResourceData.Version = RPI5VC4_RESOURCE_DATA_VERSION;
+    ResourceData.Dimension = RPI5VC4_RESOURCE_DIMENSION_TEXTURE2D;
+    ResourceData.Format = RPI5VC4_RESOURCE_DXGI_FORMAT_B8G8R8A8_UNORM;
+    ResourceData.Usage = RPI5VC4_RESOURCE_USAGE_DEFAULT;
+    ResourceData.BindFlags = RPI5VC4_RESOURCE_BIND_SHADER_RESOURCE |
+                             RPI5VC4_RESOURCE_BIND_RENDER_TARGET;
+    ResourceData.MiscFlags = RPI5VC4_RESOURCE_MISC_SHARED;
+    ResourceData.Width = Width;
+    ResourceData.Height = Height;
+    ResourceData.Depth = 1;
+    ResourceData.ArraySize = 1;
+    ResourceData.MipLevels = 1;
+    ResourceData.SampleCount = 1;
+    ResourceData.AllocationSize = Pitch * Height;
+    ResourceData.Stride = Pitch;
+    ResourceData.Layout = RPI5VC4_RESOURCE_LAYOUT_LINEAR;
+    ResourceData.PrimaryVidPnSourceId =
+        RPI5VC4_RESOURCE_INVALID_VIDPN_SOURCE;
+    if (GetStandardAllocationDriverData->StandardAllocationType ==
+        DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE)
+    {
+        ResourceData.BindFlags |= RPI5VC4_RESOURCE_BIND_PRESENT;
+        ResourceData.Flags = RPI5VC4_RESOURCE_FLAG_PRIMARY;
+        ResourceData.PrimaryVidPnSourceId =
+            GetStandardAllocationDriverData->
+                pCreateSharedPrimarySurfaceData->VidPnSourceId;
+    }
+
     SuppliedPrivateSize =
         GetStandardAllocationDriverData->AllocationPrivateDriverDataSize;
+    SuppliedResourceSize =
+        GetStandardAllocationDriverData->ResourcePrivateDriverDataSize;
     GetStandardAllocationDriverData->AllocationPrivateDriverDataSize =
         sizeof(PrivateData);
-    GetStandardAllocationDriverData->ResourcePrivateDriverDataSize = 0;
+    GetStandardAllocationDriverData->ResourcePrivateDriverDataSize =
+        sizeof(ResourceData);
 
-    if (GetStandardAllocationDriverData->pAllocationPrivateDriverData == NULL)
-        return STATUS_SUCCESS;
-    if (SuppliedPrivateSize < sizeof(PrivateData))
+    if ((GetStandardAllocationDriverData->pAllocationPrivateDriverData != NULL &&
+         SuppliedPrivateSize < sizeof(PrivateData)) ||
+        (GetStandardAllocationDriverData->pResourcePrivateDriverData != NULL &&
+         SuppliedResourceSize < sizeof(ResourceData)))
+    {
         return STATUS_BUFFER_TOO_SMALL;
+    }
 
-    RtlCopyMemory(
-        GetStandardAllocationDriverData->pAllocationPrivateDriverData,
-        &PrivateData,
-        sizeof(PrivateData));
+    if (GetStandardAllocationDriverData->pAllocationPrivateDriverData != NULL)
+    {
+        RtlCopyMemory(
+            GetStandardAllocationDriverData->pAllocationPrivateDriverData,
+            &PrivateData,
+            sizeof(PrivateData));
+    }
+    if (GetStandardAllocationDriverData->pResourcePrivateDriverData != NULL)
+    {
+        RtlCopyMemory(
+            GetStandardAllocationDriverData->pResourcePrivateDriverData,
+            &ResourceData,
+            sizeof(ResourceData));
+    }
     return STATUS_SUCCESS;
 }
 
@@ -2019,6 +2120,8 @@ Rpi5Vc4DdiCreateAllocation(
     _Inout_ PDXGKARG_CREATEALLOCATION CreateAllocation)
 {
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
+    CONST RPI5VC4_RESOURCE_DATA *ResourceData;
+    BOOLEAN PrimaryResource = FALSE;
     ULONG i;
 
     if (DeviceExtension == NULL || CreateAllocation == NULL ||
@@ -2026,6 +2129,39 @@ Rpi5Vc4DdiCreateAllocation(
          CreateAllocation->pAllocationInfo == NULL))
     {
         return STATUS_INVALID_PARAMETER;
+    }
+
+    ResourceData = (CONST RPI5VC4_RESOURCE_DATA *)
+        CreateAllocation->pPrivateDriverData;
+    if (CreateAllocation->PrivateDriverDataSize == sizeof(*ResourceData) &&
+        ResourceData != NULL &&
+        ResourceData->Magic == RPI5VC4_RESOURCE_DATA_MAGIC)
+    {
+        if (ResourceData->Version != RPI5VC4_RESOURCE_DATA_VERSION ||
+            (ResourceData->Flags & ~RPI5VC4_RESOURCE_VALID_FLAGS) != 0 ||
+            (ResourceData->Layout != RPI5VC4_RESOURCE_LAYOUT_LINEAR &&
+             ResourceData->Layout != RPI5VC4_RESOURCE_LAYOUT_V3D_UIF) ||
+            (((ResourceData->Flags & RPI5VC4_RESOURCE_FLAG_PRIMARY) != 0) !=
+             (ResourceData->PrimaryVidPnSourceId !=
+              RPI5VC4_RESOURCE_INVALID_VIDPN_SOURCE)))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        PrimaryResource =
+            (ResourceData->Flags & RPI5VC4_RESOURCE_FLAG_PRIMARY) != 0;
+        if (PrimaryResource &&
+            (ResourceData->PrimaryVidPnSourceId != 0 ||
+             ResourceData->Dimension !=
+                 RPI5VC4_RESOURCE_DIMENSION_TEXTURE2D ||
+             ResourceData->Format !=
+                 RPI5VC4_RESOURCE_DXGI_FORMAT_B8G8R8A8_UNORM ||
+             (ResourceData->BindFlags &
+              RPI5VC4_RESOURCE_BIND_PRESENT) == 0 ||
+             ResourceData->Layout != RPI5VC4_RESOURCE_LAYOUT_LINEAR))
+        {
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        }
     }
 
     for (i = 0; i < CreateAllocation->NumAllocations; i++)
@@ -2072,8 +2208,9 @@ Rpi5Vc4DdiCreateAllocation(
             AllocationData != NULL &&
             (AllocationData->Flags & RPI5VC4_ALLOCATION_CPU_CACHED) != 0;
         LocalAllocation =
-            StandardAllocation &&
-            PrivateData->Type == DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE;
+            (StandardAllocation &&
+             PrivateData->Type == DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE) ||
+            PrimaryResource;
         SegmentId = LocalAllocation ? RPI5VC4_LOCAL_SEGMENT_ID :
                                       RPI5VC4_APERTURE_SEGMENT_ID;
 

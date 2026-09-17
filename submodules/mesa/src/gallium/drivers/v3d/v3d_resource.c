@@ -40,6 +40,7 @@
 #include "v3d_resource.h"
 #ifdef __REACTOS__
 #include "broadcom/common/v3d_d3dkmt.h"
+#include "v3d/d3dkmt/v3d_d3dkmt_public.h"
 #endif
 /* The packets used here the same across V3D versions. */
 #include "broadcom/cle/v3d_packet_v42_pack.h"
@@ -225,6 +226,151 @@ v3d_rebind_resource(struct v3d_context *v3d, struct v3d_resource *rsc)
         if (prsc->bind & PIPE_BIND_SAMPLER_VIEW)
                 rebind_sampler_views(v3d, rsc);
 }
+
+#ifdef _WIN32
+struct v3d_resource_identity {
+        struct v3d_bo *bo;
+        struct renderonly_scanout *scanout;
+        bool compute_written;
+        bool graphics_written;
+        uint64_t writes;
+#ifdef __REACTOS__
+        bool external_updates_tracked;
+#endif
+        uint32_t initialized_buffers;
+        bool invalidated;
+};
+
+static bool
+v3d_resource_identity_compatible(const struct v3d_resource *left,
+                                 const struct v3d_resource *right)
+{
+        const struct pipe_resource *a = &left->base;
+        const struct pipe_resource *b = &right->base;
+
+        return a != b && a->screen == b->screen &&
+               a->target == b->target && a->format == b->format &&
+               a->width0 == b->width0 && a->height0 == b->height0 &&
+               a->depth0 == b->depth0 && a->array_size == b->array_size &&
+               a->last_level == b->last_level &&
+               a->nr_samples == b->nr_samples &&
+               a->nr_storage_samples == b->nr_storage_samples &&
+               a->bind == b->bind && a->usage == b->usage &&
+               a->flags == b->flags && left->bo && right->bo &&
+               left->bo != right->bo &&
+               left->bo->screen == right->bo->screen &&
+               left->bo->size == right->bo->size &&
+               left->size == right->size && left->cpp == right->cpp &&
+               left->tiled == right->tiled &&
+               left->cube_map_stride == right->cube_map_stride &&
+               left->sand_col128_stride == right->sand_col128_stride &&
+               !left->separate_stencil && !right->separate_stencil &&
+               left->internal_format == right->internal_format &&
+               memcmp(left->slices, right->slices,
+                      sizeof(left->slices)) == 0;
+}
+
+static struct v3d_resource_identity
+v3d_resource_get_identity(const struct v3d_resource *rsc)
+{
+        struct v3d_resource_identity identity = {
+                .bo = rsc->bo,
+                .scanout = rsc->scanout,
+                .compute_written = rsc->compute_written,
+                .graphics_written = rsc->graphics_written,
+                .writes = rsc->writes,
+#ifdef __REACTOS__
+                .external_updates_tracked = rsc->external_updates_tracked,
+#endif
+                .initialized_buffers = rsc->initialized_buffers,
+                .invalidated = rsc->invalidated,
+        };
+
+        return identity;
+}
+
+static void
+v3d_resource_set_identity(struct v3d_resource *rsc,
+                          const struct v3d_resource_identity *identity)
+{
+        rsc->bo = identity->bo;
+        rsc->scanout = identity->scanout;
+        rsc->compute_written = identity->compute_written;
+        rsc->graphics_written = identity->graphics_written;
+        rsc->writes = identity->writes;
+#ifdef __REACTOS__
+        rsc->external_updates_tracked = identity->external_updates_tracked;
+#endif
+        rsc->initialized_buffers = identity->initialized_buffers;
+        rsc->invalidated = identity->invalidated;
+        rsc->serial_id++;
+}
+
+bool
+v3d_resource_rotate_identities(struct pipe_context *pctx,
+                               struct pipe_resource *const *resources,
+                               void *const *runtime_resources,
+                               unsigned count)
+{
+        struct v3d_context *v3d;
+        struct v3d_resource *first;
+        struct v3d_resource_identity first_identity;
+
+        if (!pctx || !resources || !runtime_resources ||
+            count < 2 || count > 16)
+                return false;
+        v3d = v3d_context(pctx);
+        first = v3d_resource(resources[0]);
+        if (!first || resources[0]->screen != pctx->screen ||
+            !(resources[0]->bind & PIPE_BIND_DISPLAY_TARGET))
+                return false;
+
+        for (unsigned i = 1; i < count; i++) {
+                struct v3d_resource *rsc;
+
+                if (!resources[i] || !runtime_resources[i] ||
+                    resources[i]->screen != pctx->screen)
+                        return false;
+                rsc = v3d_resource(resources[i]);
+                if (!v3d_resource_identity_compatible(first, rsc))
+                        return false;
+                for (unsigned previous = 0; previous < i; previous++) {
+                        struct v3d_resource *previous_rsc =
+                                v3d_resource(resources[previous]);
+
+                        if (resources[previous] == resources[i] ||
+                            runtime_resources[previous] == runtime_resources[i] ||
+                            previous_rsc->bo == rsc->bo)
+                                return false;
+                }
+        }
+
+        /* Submitted jobs retain references to their BOs, so identity can move
+         * after the current job is submitted.  Rebind each allocation's
+         * runtime owner before changing the resource objects so teardown uses
+         * the post-rotation runtime identity. */
+        v3d_flush(pctx);
+        if (!v3d_d3dkmt_rebind_runtime_resources(
+                    pctx->screen, resources, runtime_resources, count))
+                return false;
+        first_identity = v3d_resource_get_identity(first);
+        for (unsigned i = 0; i + 1 < count; i++) {
+                struct v3d_resource *destination = v3d_resource(resources[i]);
+                struct v3d_resource *source = v3d_resource(resources[i + 1]);
+                struct v3d_resource_identity identity =
+                        v3d_resource_get_identity(source);
+
+                v3d_resource_set_identity(destination, &identity);
+        }
+        v3d_resource_set_identity(v3d_resource(resources[count - 1]),
+                                  &first_identity);
+
+        for (unsigned i = 0; i < count; i++)
+                v3d_rebind_resource(v3d, v3d_resource(resources[i]));
+        v3d->dirty |= V3D_DIRTY_FRAMEBUFFER;
+        return true;
+}
+#endif
 
 #ifdef __REACTOS__
 static bool
@@ -1031,11 +1177,13 @@ v3d_resource_from_handle(struct pipe_screen *pscreen,
 {
         struct v3d_screen *screen = v3d_screen(pscreen);
         struct v3d_resource *rsc = v3d_resource_setup(pscreen, tmpl);
-        struct pipe_resource *prsc = &rsc->base;
-        struct v3d_resource_slice *slice = &rsc->slices[0];
+        struct pipe_resource *prsc;
+        struct v3d_resource_slice *slice;
 
         if (!rsc)
                 return NULL;
+        prsc = &rsc->base;
+        slice = &rsc->slices[0];
 
         switch (whandle->modifier) {
         case DRM_FORMAT_MOD_LINEAR:
@@ -1070,6 +1218,15 @@ v3d_resource_from_handle(struct pipe_screen *pscreen,
                 rsc->bo = v3d_bo_open_name(
                         screen, V3D_WINSYS_HANDLE_TO_U32(whandle->handle));
                 break;
+        case WINSYS_HANDLE_TYPE_KMS:
+                if (!whandle->size || whandle->size > UINT32_MAX) {
+                        mesa_loge("Attempt to import invalid KMS allocation size");
+                        goto fail;
+                }
+                rsc->bo = v3d_bo_open_kms(
+                        screen, V3D_WINSYS_HANDLE_TO_U32(whandle->handle),
+                        (uint32_t)whandle->size);
+                break;
         case WINSYS_HANDLE_TYPE_FD:
                 rsc->bo = v3d_bo_open_dmabuf(
                         screen, V3D_WINSYS_HANDLE_TO_FD(whandle->handle));
@@ -1087,6 +1244,12 @@ v3d_resource_from_handle(struct pipe_screen *pscreen,
 
         v3d_setup_slices(screen, rsc, whandle->stride, true);
         v3d_debug_resource_layout(rsc, "import");
+
+        if (rsc->size > rsc->bo->size) {
+                mesa_loge("Attempt to import undersized allocation (%d > %d)",
+                          rsc->size, rsc->bo->size);
+                goto fail;
+        }
 
         if (whandle->offset != 0) {
                 if (rsc->tiled) {
@@ -1120,7 +1283,8 @@ v3d_resource_from_handle(struct pipe_screen *pscreen,
         }
 #endif
 
-        if (rsc->tiled && whandle->stride != slice->stride) {
+        if (rsc->tiled && whandle->stride &&
+            whandle->stride != slice->stride) {
                 static bool warned = false;
                 if (!warned) {
                         warned = true;

@@ -58,6 +58,60 @@
 #define RPI5VC4_ALLOCATION_CPU_CACHED     (1u << 0)
 #define RPI5VC4_ALLOCATION_VALID_FLAGS    RPI5VC4_ALLOCATION_CPU_CACHED
 
+/*
+ * Resource-private data exchanged through the standard WDDM allocation
+ * callbacks.  Unlike the allocation payload below, this describes the API
+ * resource and survives D3DKMTQueryResourceInfo/D3DKMTOpenResource so that a
+ * matching UMD can reconstruct an imported texture without reopening its
+ * global share handle.
+ *
+ * Dimension, Format, Usage, BindFlags, MapFlags and MiscFlags use the public
+ * D3D10/11 DDI numeric values.  Keeping those values in the private payload
+ * lets the KMD describe standard allocations without depending on Mesa's
+ * internal pipe enums.
+ */
+#define RPI5VC4_RESOURCE_DATA_MAGIC        0x52355244u /* 'DR5R' */
+#define RPI5VC4_RESOURCE_DATA_VERSION      2u
+
+#define RPI5VC4_RESOURCE_DIMENSION_TEXTURE2D       3u
+#define RPI5VC4_RESOURCE_DXGI_FORMAT_B8G8R8A8_UNORM 87u
+#define RPI5VC4_RESOURCE_USAGE_DEFAULT             0u
+#define RPI5VC4_RESOURCE_BIND_SHADER_RESOURCE      0x00000008u
+#define RPI5VC4_RESOURCE_BIND_RENDER_TARGET        0x00000020u
+#define RPI5VC4_RESOURCE_BIND_PRESENT              0x00000080u
+#define RPI5VC4_RESOURCE_MISC_SHARED               0x00000002u
+
+#define RPI5VC4_RESOURCE_LAYOUT_LINEAR       1u
+#define RPI5VC4_RESOURCE_LAYOUT_V3D_UIF      2u
+
+#define RPI5VC4_RESOURCE_FLAG_PRIMARY         (1u << 0)
+#define RPI5VC4_RESOURCE_VALID_FLAGS           RPI5VC4_RESOURCE_FLAG_PRIMARY
+#define RPI5VC4_RESOURCE_INVALID_VIDPN_SOURCE  0xffffffffu
+
+typedef struct _RPI5VC4_RESOURCE_DATA
+{
+    ULONG Magic;
+    ULONG Version;
+    ULONG Dimension;
+    ULONG Format;
+    ULONG Usage;
+    ULONG BindFlags;
+    ULONG MapFlags;
+    ULONG MiscFlags;
+    ULONG Width;
+    ULONG Height;
+    ULONG Depth;
+    ULONG ArraySize;
+    ULONG MipLevels;
+    ULONG SampleCount;
+    ULONG SampleQuality;
+    ULONG AllocationSize;
+    ULONG Stride;
+    ULONG Layout;
+    ULONG Flags;
+    ULONG PrimaryVidPnSourceId;
+} RPI5VC4_RESOURCE_DATA, *PRPI5VC4_RESOURCE_DATA;
+
 typedef struct _RPI5VC4_ALLOCATION_DATA
 {
     ULONG Size;
