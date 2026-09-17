@@ -360,6 +360,11 @@ enum quniform_contents {
         QUNIFORM_DRAW_ID,
 
         /**
+         * Base vertex for indexed draws or first vertex for array draws.
+         */
+        QUNIFORM_FIRST_VERTEX,
+
+        /**
          * Blend constants for software blend.
          */
         QUNIFORM_BLEND_CONSTANT_R,
