@@ -185,6 +185,23 @@ extern NTMARTA NtMartaStatic;
 
 DWORD CheckNtMartaPresent(VOID);
 
+/* ANSI ACL structure conversion helpers shared by the security APIs. */
+DWORD
+InternalTrusteeAToW(
+    _In_ PTRUSTEE_A TrusteeA,
+    _Out_ PTRUSTEE_W *TrusteeW);
+
+VOID
+InternalFreeConvertedTrustee(
+    _In_ PTRUSTEE_W TrusteeW,
+    _In_ PTRUSTEE_A TrusteeA);
+
+DWORD
+InternalExplicitAccessAToW(
+    _In_ ULONG Count,
+    _In_reads_(Count) PEXPLICIT_ACCESS_A AccessEntriesA,
+    _Out_ PEXPLICIT_ACCESS_W *AccessEntriesW);
+
 /* heap allocation helpers */
 static void *heap_alloc( size_t len ) __WINE_ALLOC_SIZE(1);
 static inline void *heap_alloc( size_t len )
