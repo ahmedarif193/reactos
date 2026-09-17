@@ -6070,6 +6070,7 @@ nir_shader *nir_create_passthrough_gs(const nir_shader_compiler_options *options
                                       enum mesa_prim primitive_type,
                                       enum mesa_prim output_primitive_type,
                                       bool emulate_edgeflags,
+                                      bool emulate_cull_distance,
                                       bool force_line_strip_out,
                                       bool passthrough_prim_id);
 

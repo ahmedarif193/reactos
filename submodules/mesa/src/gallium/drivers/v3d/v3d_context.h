@@ -243,6 +243,12 @@ struct v3d_uncompiled_shader {
         uint16_t tf_specs_psiz[16];
         uint32_t num_tf_specs;
 
+        /* V3D has no fixed-function primitive cull-distance unit.  Vertex
+         * shader cull distances are enforced by a cached GPU passthrough GS
+         * specialized for the draw topology.
+         */
+        struct v3d_uncompiled_shader *cull_distance_gs[MESA_PRIM_COUNT];
+
         /* For caching */
         unsigned char blake3[BLAKE3_KEY_LEN];
 };
@@ -861,6 +867,8 @@ void v3d_flush_jobs_reading_resource(struct v3d_context *v3d,
                                      bool is_compute_pipeline);
 void v3d_update_compiled_shaders(struct v3d_context *v3d, uint8_t prim_mode);
 void v3d_update_compiled_cs(struct v3d_context *v3d);
+struct v3d_uncompiled_shader *
+v3d_get_cull_distance_gs(struct v3d_context *v3d, enum mesa_prim mode);
 
 bool v3d_rt_format_is_emulated(enum pipe_format f);
 bool v3d_rt_format_supported(const struct v3d_device_info *devinfo,

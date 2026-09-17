@@ -452,6 +452,37 @@ v3d_shader_state_create(struct pipe_context *pctx,
         return so;
 }
 
+struct v3d_uncompiled_shader *
+v3d_get_cull_distance_gs(struct v3d_context *v3d, enum mesa_prim mode)
+{
+        struct v3d_uncompiled_shader *vs = v3d->prog.bind_vs;
+
+        assert(vs);
+        assert(vs->base.ir.nir->info.stage == MESA_SHADER_VERTEX);
+        assert(vs->base.ir.nir->info.cull_distance_array_size > 0);
+        assert(mode < MESA_PRIM_COUNT);
+
+        if (!vs->cull_distance_gs[mode]) {
+                const nir_shader_compiler_options *options =
+                        v3d->base.screen->nir_options[MESA_SHADER_GEOMETRY];
+                nir_shader *gs = nir_create_passthrough_gs(
+                        options, vs->base.ir.nir, mode, mode,
+                        false /* emulate edge flags */,
+                        true /* emulate cull distance */,
+                        false /* force line strip out */,
+                        true /* preserve primitive ID semantics */);
+                struct pipe_shader_state state = {
+                        .type = PIPE_SHADER_IR_NIR,
+                        .ir.nir = gs,
+                };
+
+                vs->cull_distance_gs[mode] =
+                        v3d_shader_state_create(&v3d->base, &state);
+        }
+
+        return vs->cull_distance_gs[mode];
+}
+
 /* Key ued with the RAM cache */
 struct v3d_cache_key {
         struct v3d_key *key;
@@ -1049,6 +1080,14 @@ v3d_shader_state_delete(struct pipe_context *pctx, void *hwcso)
         struct v3d_uncompiled_shader *so = hwcso;
         nir_shader *s = so->base.ir.nir;
 
+        if (s->info.stage == MESA_SHADER_VERTEX) {
+                for (unsigned i = 0; i < MESA_PRIM_COUNT; ++i) {
+                        if (so->cull_distance_gs[i])
+                                v3d_shader_state_delete(
+                                        pctx, so->cull_distance_gs[i]);
+                }
+        }
+
         hash_table_foreach(v3d->prog.cache[s->info.stage], entry) {
                 const struct v3d_cache_key *cache_key = entry->key;
                 struct v3d_compiled_shader *shader = entry->data;
@@ -1062,6 +1101,10 @@ v3d_shader_state_delete(struct pipe_context *pctx, void *hwcso)
                         v3d->prog.vs = NULL;
                 if (v3d->prog.cs == shader)
                         v3d->prog.cs = NULL;
+                if (v3d->prog.gs == shader)
+                        v3d->prog.gs = NULL;
+                if (v3d->prog.gs_bin == shader)
+                        v3d->prog.gs_bin = NULL;
                 if (v3d->prog.compute == shader)
                         v3d->prog.compute = NULL;
 

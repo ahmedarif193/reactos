@@ -417,9 +417,14 @@ ttn_emit_declaration(struct ttn_compile *c)
                   var->type = glsl_int_type();
                } else if (b->shader->options->compact_arrays &&
                           var->data.location == VARYING_SLOT_CLIP_DIST0) {
+                  const unsigned distance_array_size =
+                     b->shader->info.clip_distance_array_size +
+                     b->shader->info.cull_distance_array_size;
+
                   var->type = glsl_array_type(glsl_float_type(),
-                                              b->shader->info.clip_distance_array_size,
+                                              distance_array_size,
                                               sizeof(float));
+                  var->data.compact = true;
                   c->clipdist = var;
                }
             }
@@ -2424,6 +2429,9 @@ static void
 ttn_add_output_stores(struct ttn_compile *c)
 {
    nir_builder *b = &c->build;
+   const unsigned distance_array_size =
+      b->shader->info.clip_distance_array_size +
+      b->shader->info.cull_distance_array_size;
 
    for (int i = 0; i < c->build.shader->num_outputs; i++) {
       nir_variable *var = c->outputs[i];
@@ -2454,10 +2462,10 @@ ttn_add_output_stores(struct ttn_compile *c)
             store_value = nir_channel(b, store_value, 0);
          }
          if (var->data.location == VARYING_SLOT_CLIP_DIST0)
-            store_mask = BITFIELD_MASK(MIN2(c->build.shader->info.clip_distance_array_size, 4));
+            store_mask = BITFIELD_MASK(MIN2(distance_array_size, 4));
          else if (var->data.location == VARYING_SLOT_CLIP_DIST1) {
-            if (c->build.shader->info.clip_distance_array_size > 4)
-               store_mask = BITFIELD_MASK(c->build.shader->info.clip_distance_array_size - 4);
+            if (distance_array_size > 4)
+               store_mask = BITFIELD_MASK(distance_array_size - 4);
             else
                store_mask = 0;
          }
@@ -2473,8 +2481,8 @@ ttn_add_output_stores(struct ttn_compile *c)
          nir_def *zero = nir_imm_zero(b, 1, 32);
          unsigned offset = var->data.location == VARYING_SLOT_CLIP_DIST1 ? 4 : 0;
          unsigned size = var->data.location == VARYING_SLOT_CLIP_DIST1 ?
-                          b->shader->info.clip_distance_array_size :
-                          MIN2(4, b->shader->info.clip_distance_array_size);
+                          distance_array_size :
+                          MIN2(4, distance_array_size);
          for (unsigned i = offset; i < size; i++) {
             /* deref the array member and store each component */
             nir_deref_instr *component_deref = nir_build_deref_array_imm(b, deref, i);
@@ -2652,6 +2660,9 @@ ttn_compile_init(const void *tgsi_tokens,
       case TGSI_PROPERTY_NUM_CLIPDIST_ENABLED:
          s->info.clip_distance_array_size = value;
          break;
+      case TGSI_PROPERTY_NUM_CULLDIST_ENABLED:
+         s->info.cull_distance_array_size = value;
+         break;
       case TGSI_PROPERTY_LEGACY_MATH_RULES:
          s->info.use_legacy_math_rules = value;
          break;
@@ -2783,8 +2794,20 @@ lower_clipdistance_to_array(nir_shader *nir)
    bool progress = false;
    nir_variable *dist0 = nir_find_variable_with_location(nir, nir_var_shader_out, VARYING_SLOT_CLIP_DIST0);
    nir_variable *dist1 = nir_find_variable_with_location(nir, nir_var_shader_out, VARYING_SLOT_CLIP_DIST1);
+   const unsigned distance_array_size =
+      nir->info.clip_distance_array_size +
+      nir->info.cull_distance_array_size;
+
+   /* ttn_emit_declaration() directly creates the compact representation for
+    * drivers which request it.  Only legacy vec4 declarations need lowering.
+    */
+   if (glsl_type_is_array(dist0->type))
+      return false;
+
    /* resize VARYING_SLOT_CLIP_DIST0 to the full array size */
-   dist0->type = glsl_array_type(glsl_float_type(), nir->info.clip_distance_array_size, sizeof(float));
+   dist0->type = glsl_array_type(glsl_float_type(), distance_array_size,
+                                 sizeof(float));
+   dist0->data.compact = true;
    struct set *deletes = _mesa_set_create(NULL, _mesa_hash_pointer, _mesa_key_pointer_equal);
    nir_foreach_function_impl(impl, nir) {
       bool func_progress = false;
@@ -2808,7 +2831,7 @@ lower_clipdistance_to_array(nir_shader *nir)
             uint32_t wrmask = nir_intrinsic_write_mask(intr);
             unsigned offset = var == dist1 ? 4 : 0;
             /* iterate over the store's writemask for components */
-            for (unsigned i = 0; i < nir->info.clip_distance_array_size; i++) {
+            for (unsigned i = offset; i < distance_array_size; i++) {
                /* deref the array member and store each component */
                nir_deref_instr *component_deref = nir_build_deref_array_imm(&b, clipdist_deref, i);
                nir_def *val = zero;

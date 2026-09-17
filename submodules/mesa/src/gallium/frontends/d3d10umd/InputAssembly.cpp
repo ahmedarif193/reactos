@@ -260,43 +260,70 @@ CreateElementLayout(
    memset(pElementLayout, 0, sizeof *pElementLayout);
 
    unsigned num_elements = pCreateElementLayout->NumElements;
-   unsigned max_elements = 0;
+   if (num_elements > PIPE_MAX_ATTRIBS ||
+       (num_elements && !pCreateElementLayout->pVertexElements))
+      goto invalid;
+
    for (unsigned i = 0; i < num_elements; i++) {
       const D3D10DDIARG_INPUT_ELEMENT_DESC* pVertexElement =
             &pCreateElementLayout->pVertexElements[i];
+
+      if (pVertexElement->InputRegister >= PIPE_MAX_ATTRIBS ||
+          pVertexElement->InputSlot >= PIPE_MAX_ATTRIBS ||
+          (pVertexElement->InputSlotClass != D3D10_DDI_INPUT_PER_VERTEX_DATA &&
+           pVertexElement->InputSlotClass != D3D10_DDI_INPUT_PER_INSTANCE_DATA) ||
+          (pVertexElement->InputSlotClass == D3D10_DDI_INPUT_PER_VERTEX_DATA &&
+           pVertexElement->InstanceDataStepRate != 0) ||
+          (pVertexElement->InputSlotClass == D3D10_DDI_INPUT_PER_INSTANCE_DATA &&
+           pVertexElement->InstanceDataStepRate == 0))
+         goto invalid;
+
+      for (unsigned j = 0; j < i; ++j) {
+         if (pCreateElementLayout->pVertexElements[j].InputRegister ==
+             pVertexElement->InputRegister)
+            goto invalid;
+      }
+   }
+
+   for (unsigned i = 0; i < num_elements; ++i) {
+      const D3D10DDIARG_INPUT_ELEMENT_DESC* pVertexElement =
+            &pCreateElementLayout->pVertexElements[i];
+      unsigned compact_index = 0;
+
+      for (unsigned j = 0; j < num_elements; ++j) {
+         const unsigned input_register =
+            pCreateElementLayout->pVertexElements[j].InputRegister;
+
+         if (input_register < pVertexElement->InputRegister)
+            ++compact_index;
+      }
+
       struct pipe_vertex_element *ve =
-            &pElementLayout->state.velems[pVertexElement->InputRegister];
+            &pElementLayout->state.velems[compact_index];
 
       ve->src_offset          = pVertexElement->AlignedByteOffset;
       ve->vertex_buffer_index = pVertexElement->InputSlot;
       ve->src_format          = FormatTranslate(pVertexElement->Format, false);
+
+      if (ve->src_format == PIPE_FORMAT_NONE)
+         goto invalid;
 
       switch (pVertexElement->InputSlotClass) {
       case D3D10_DDI_INPUT_PER_VERTEX_DATA:
          ve->instance_divisor = 0;
          break;
       case D3D10_DDI_INPUT_PER_INSTANCE_DATA:
-         if (!pVertexElement->InstanceDataStepRate) {
-            LOG_UNSUPPORTED(!pVertexElement->InstanceDataStepRate);
-            ve->instance_divisor = ~0;
-         } else {
-            ve->instance_divisor = pVertexElement->InstanceDataStepRate;
-         }
-         break;
-      default:
-         assert(0);
+         ve->instance_divisor = pVertexElement->InstanceDataStepRate;
          break;
       }
-
-      max_elements = MAX2(max_elements, pVertexElement->InputRegister + 1);
    }
 
-   /* XXX: What do we do when there's a gap? */
-   if (max_elements != num_elements) {
-      DebugPrintf("%s: gap\n", __func__);
-   }
+   pElementLayout->state.count = num_elements;
+   return;
 
-   pElementLayout->state.count = max_elements;
+invalid:
+   memset(pElementLayout, 0, sizeof *pElementLayout);
+   SetError(hDevice, E_INVALIDARG);
 }
 
 
