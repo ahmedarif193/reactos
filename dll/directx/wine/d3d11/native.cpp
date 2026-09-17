@@ -8,7 +8,7 @@
 #include <ntstatus.h>
 #define WIN32_NO_STATUS
 #include <windows.h>
-#include <d3d11.h>
+#include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <d3dkmthk.h>
 #include <d3d10umddi.h>
@@ -132,7 +132,7 @@ struct NativeSharedTextureData
 static const UINT native_shared_texture_signature = 0x54313144;
 static HRESULT APIENTRY NativePresent(HANDLE, DXGIDDICB_PRESENT *);
 
-class NativeDevice final : public ID3D11Device, public IDXGIDevice, public IWineDXGISwapChainFactory, public NativeAllocation
+class NativeDevice final : public ID3D11Device1, public IDXGIDevice, public IWineDXGISwapChainFactory, public NativeAllocation
 {
 public:
     LONG references = 1;
@@ -243,7 +243,18 @@ public:
     HRESULT STDMETHODCALLTYPE GetDeviceRemovedReason() override;
     void STDMETHODCALLTYPE GetImmediateContext(ID3D11DeviceContext **ppImmediateContext) override;
     HRESULT STDMETHODCALLTYPE SetExceptionMode(UINT RaiseFlags) override;
-    UINT STDMETHODCALLTYPE GetExceptionMode() override;};
+    UINT STDMETHODCALLTYPE GetExceptionMode() override;
+    void STDMETHODCALLTYPE GetImmediateContext1(ID3D11DeviceContext1 **ppImmediateContext) override;
+    HRESULT STDMETHODCALLTYPE CreateDeferredContext1(UINT ContextFlags, ID3D11DeviceContext1 **ppDeferredContext) override;
+    HRESULT STDMETHODCALLTYPE CreateBlendState1(const D3D11_BLEND_DESC1 *pBlendStateDesc, ID3D11BlendState1 **ppBlendState) override;
+    HRESULT STDMETHODCALLTYPE CreateRasterizerState1(const D3D11_RASTERIZER_DESC1 *pRasterizerDesc, ID3D11RasterizerState1 **ppRasterizerState) override;
+    HRESULT STDMETHODCALLTYPE CreateDeviceContextState(UINT Flags, const D3D_FEATURE_LEVEL *pFeatureLevels,
+            UINT FeatureLevels, UINT SDKVersion, REFIID EmulatedInterface,
+            D3D_FEATURE_LEVEL *pChosenFeatureLevel, ID3DDeviceContextState **ppContextState) override;
+    HRESULT STDMETHODCALLTYPE OpenSharedResource1(HANDLE hResource, REFIID ReturnedInterface, void **ppResource) override;
+    HRESULT STDMETHODCALLTYPE OpenSharedResourceByName(LPCWSTR lpName, DWORD dwDesiredAccess,
+            REFIID ReturnedInterface, void **ppResource) override;
+};
 
 class NativeLock
 {
@@ -253,7 +264,7 @@ public:
     ~NativeLock() { LeaveCriticalSection(&device->lock); }
 };
 
-class NativeContext final : public ID3D11DeviceContext, public NativeAllocation
+class NativeContext final : public ID3D11DeviceContext1, public NativeAllocation
 {
 public:
     NativeDevice *device;
@@ -403,7 +414,52 @@ public:
     void STDMETHODCALLTYPE Flush() override;
     D3D11_DEVICE_CONTEXT_TYPE STDMETHODCALLTYPE GetType() override;
     UINT STDMETHODCALLTYPE GetContextFlags() override;
-    HRESULT STDMETHODCALLTYPE FinishCommandList(BOOL RestoreDeferredContextState, ID3D11CommandList **ppCommandList) override { if (ppCommandList) *ppCommandList = NULL; Unimplemented("FinishCommandList"); return E_NOTIMPL; }};
+    HRESULT STDMETHODCALLTYPE FinishCommandList(BOOL RestoreDeferredContextState, ID3D11CommandList **ppCommandList) override { if (ppCommandList) *ppCommandList = NULL; Unimplemented("FinishCommandList"); return E_NOTIMPL; }
+    void STDMETHODCALLTYPE CopySubresourceRegion1(ID3D11Resource *pDstResource, UINT DstSubresource,
+            UINT DstX, UINT DstY, UINT DstZ, ID3D11Resource *pSrcResource, UINT SrcSubresource,
+            const D3D11_BOX *pSrcBox, UINT CopyFlags) override;
+    void STDMETHODCALLTYPE UpdateSubresource1(ID3D11Resource *pDstResource, UINT DstSubresource,
+            const D3D11_BOX *pDstBox, const void *pSrcData, UINT SrcRowPitch,
+            UINT SrcDepthPitch, UINT CopyFlags) override;
+    void STDMETHODCALLTYPE DiscardResource(ID3D11Resource *pResource) override;
+    void STDMETHODCALLTYPE DiscardView(ID3D11View *pResourceView) override;
+    void STDMETHODCALLTYPE VSSetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer *const *ppConstantBuffers, const UINT *pFirstConstant,
+            const UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE HSSetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer *const *ppConstantBuffers, const UINT *pFirstConstant,
+            const UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE DSSetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer *const *ppConstantBuffers, const UINT *pFirstConstant,
+            const UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE GSSetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer *const *ppConstantBuffers, const UINT *pFirstConstant,
+            const UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE PSSetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer *const *ppConstantBuffers, const UINT *pFirstConstant,
+            const UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE CSSetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer *const *ppConstantBuffers, const UINT *pFirstConstant,
+            const UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE VSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer **ppConstantBuffers, UINT *pFirstConstant, UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE HSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer **ppConstantBuffers, UINT *pFirstConstant, UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE DSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer **ppConstantBuffers, UINT *pFirstConstant, UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE GSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer **ppConstantBuffers, UINT *pFirstConstant, UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE PSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer **ppConstantBuffers, UINT *pFirstConstant, UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE CSGetConstantBuffers1(UINT StartSlot, UINT NumBuffers,
+            ID3D11Buffer **ppConstantBuffers, UINT *pFirstConstant, UINT *pNumConstants) override;
+    void STDMETHODCALLTYPE SwapDeviceContextState(ID3DDeviceContextState *pState,
+            ID3DDeviceContextState **ppPreviousState) override;
+    void STDMETHODCALLTYPE ClearView(ID3D11View *pView, const FLOAT Color[4],
+            const D3D11_RECT *pRect, UINT NumRects) override;
+    void STDMETHODCALLTYPE DiscardView1(ID3D11View *pResourceView,
+            const D3D11_RECT *pRects, UINT NumRects) override;
+};
 
 template<class Interface, const GUID *iid>
 class NativeChild : public Interface, public NativeAllocation
@@ -619,9 +675,84 @@ public:
 };
 
 using NativeSampler = NativeState<ID3D11SamplerState, &IID_ID3D11SamplerState, D3D11_SAMPLER_DESC, D3D10DDI_HSAMPLER>;
-using NativeBlend = NativeState<ID3D11BlendState, &IID_ID3D11BlendState, D3D11_BLEND_DESC, D3D10DDI_HBLENDSTATE>;
-using NativeRasterizer = NativeState<ID3D11RasterizerState, &IID_ID3D11RasterizerState, D3D11_RASTERIZER_DESC, D3D10DDI_HRASTERIZERSTATE>;
 using NativeDepthStencil = NativeState<ID3D11DepthStencilState, &IID_ID3D11DepthStencilState, D3D11_DEPTH_STENCIL_DESC, D3D10DDI_HDEPTHSTENCILSTATE>;
+
+class NativeBlend : public NativeChild<ID3D11BlendState1, &IID_ID3D11BlendState1>
+{
+public:
+    D3D11_BLEND_DESC1 desc = {};
+    D3D10DDI_HBLENDSTATE handle = {};
+    void (APIENTRY *destroy)(D3D10DDI_HDEVICE, D3D10DDI_HBLENDSTATE) = NULL;
+    bool created = false;
+    explicit NativeBlend(NativeDevice *d) : NativeChild(d) {}
+    ~NativeBlend()
+    {
+        NativeLock guard(device);
+        if (created) destroy(device->driver_device, handle);
+        HeapFree(GetProcessHeap(), 0, handle.pDrvPrivate);
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (IsEqualGUID(iid, IID_ID3D11BlendState))
+        {
+            if (!out) return E_INVALIDARG;
+            *out = static_cast<ID3D11BlendState *>(this);
+            AddRef();
+            return S_OK;
+        }
+        return NativeChild::QueryInterface(iid, out);
+    }
+    void STDMETHODCALLTYPE GetDesc(D3D11_BLEND_DESC *out) override
+    {
+        if (!out) return;
+        out->AlphaToCoverageEnable = desc.AlphaToCoverageEnable;
+        out->IndependentBlendEnable = desc.IndependentBlendEnable;
+        for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+        {
+            out->RenderTarget[i].BlendEnable = desc.RenderTarget[i].BlendEnable;
+            out->RenderTarget[i].SrcBlend = desc.RenderTarget[i].SrcBlend;
+            out->RenderTarget[i].DestBlend = desc.RenderTarget[i].DestBlend;
+            out->RenderTarget[i].BlendOp = desc.RenderTarget[i].BlendOp;
+            out->RenderTarget[i].SrcBlendAlpha = desc.RenderTarget[i].SrcBlendAlpha;
+            out->RenderTarget[i].DestBlendAlpha = desc.RenderTarget[i].DestBlendAlpha;
+            out->RenderTarget[i].BlendOpAlpha = desc.RenderTarget[i].BlendOpAlpha;
+            out->RenderTarget[i].RenderTargetWriteMask = desc.RenderTarget[i].RenderTargetWriteMask;
+        }
+    }
+    void STDMETHODCALLTYPE GetDesc1(D3D11_BLEND_DESC1 *out) override { if (out) *out = desc; }
+};
+
+class NativeRasterizer : public NativeChild<ID3D11RasterizerState1, &IID_ID3D11RasterizerState1>
+{
+public:
+    D3D11_RASTERIZER_DESC1 desc = {};
+    D3D10DDI_HRASTERIZERSTATE handle = {};
+    void (APIENTRY *destroy)(D3D10DDI_HDEVICE, D3D10DDI_HRASTERIZERSTATE) = NULL;
+    bool created = false;
+    explicit NativeRasterizer(NativeDevice *d) : NativeChild(d) {}
+    ~NativeRasterizer()
+    {
+        NativeLock guard(device);
+        if (created) destroy(device->driver_device, handle);
+        HeapFree(GetProcessHeap(), 0, handle.pDrvPrivate);
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (IsEqualGUID(iid, IID_ID3D11RasterizerState))
+        {
+            if (!out) return E_INVALIDARG;
+            *out = static_cast<ID3D11RasterizerState *>(this);
+            AddRef();
+            return S_OK;
+        }
+        return NativeChild::QueryInterface(iid, out);
+    }
+    void STDMETHODCALLTYPE GetDesc(D3D11_RASTERIZER_DESC *out) override
+    {
+        if (out) memcpy(out, &desc, sizeof(*out));
+    }
+    void STDMETHODCALLTYPE GetDesc1(D3D11_RASTERIZER_DESC1 *out) override { if (out) *out = desc; }
+};
 
 template<class Interface, const GUID *iid>
 class NativeShader : public NativeChild<Interface, iid>
@@ -950,6 +1081,8 @@ HRESULT STDMETHODCALLTYPE NativeDevice::QueryInterface(REFIID iid, void **out)
     *out = NULL;
     if (IsEqualGUID(iid, IID_IUnknown) || IsEqualGUID(iid, IID_ID3D11Device))
         *out = static_cast<ID3D11Device *>(this);
+    else if (IsEqualGUID(iid, IID_ID3D11Device1))
+        *out = static_cast<ID3D11Device1 *>(this);
     else if (IsEqualGUID(iid, IID_IDXGIObject) || IsEqualGUID(iid, IID_IDXGIDevice))
         *out = static_cast<IDXGIDevice *>(this);
     else if (IsEqualGUID(iid, IID_IWineDXGISwapChainFactory))
@@ -980,9 +1113,12 @@ HRESULT STDMETHODCALLTYPE NativeContext::QueryInterface(REFIID iid, void **out)
 {
     if (!out) return E_INVALIDARG;
     *out = NULL;
-    if (!IsEqualGUID(iid, IID_IUnknown) && !IsEqualGUID(iid, IID_ID3D11DeviceChild)
-            && !IsEqualGUID(iid, IID_ID3D11DeviceContext)) return E_NOINTERFACE;
-    *out = static_cast<ID3D11DeviceContext *>(this);
+    if (IsEqualGUID(iid, IID_IUnknown) || IsEqualGUID(iid, IID_ID3D11DeviceChild)
+            || IsEqualGUID(iid, IID_ID3D11DeviceContext))
+        *out = static_cast<ID3D11DeviceContext *>(this);
+    else if (IsEqualGUID(iid, IID_ID3D11DeviceContext1))
+        *out = static_cast<ID3D11DeviceContext1 *>(this);
+    else return E_NOINTERFACE;
     AddRef();
     return S_OK;
 }
@@ -1045,6 +1181,65 @@ HRESULT STDMETHODCALLTYPE NativeDevice::GetDeviceRemovedReason()
     return removed_reason;
 }
 void STDMETHODCALLTYPE NativeDevice::GetImmediateContext(ID3D11DeviceContext **out) { if (out) { *out = context; context->AddRef(); } }
+void STDMETHODCALLTYPE NativeDevice::GetImmediateContext1(ID3D11DeviceContext1 **out) { if (out) { *out = context; context->AddRef(); } }
+HRESULT STDMETHODCALLTYPE NativeDevice::CreateDeferredContext1(UINT flags, ID3D11DeviceContext1 **out)
+{
+    if (out) *out = NULL;
+    ID3D11DeviceContext *base = NULL;
+    HRESULT hr = CreateDeferredContext(flags, out ? &base : NULL);
+    if (SUCCEEDED(hr) && out)
+    {
+        hr = base->QueryInterface(IID_ID3D11DeviceContext1, reinterpret_cast<void **>(out));
+        base->Release();
+    }
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::CreateDeviceContextState(UINT flags,
+        const D3D_FEATURE_LEVEL *levels, UINT count, UINT sdk_version, REFIID emulated,
+        D3D_FEATURE_LEVEL *chosen, ID3DDeviceContextState **out)
+{
+    if (chosen) *chosen = static_cast<D3D_FEATURE_LEVEL>(0);
+    if (out) *out = NULL;
+    if (!levels || !count || flags & ~D3D11_1_CREATE_DEVICE_CONTEXT_STATE_SINGLETHREADED
+            || sdk_version != D3D11_SDK_VERSION
+            || (!IsEqualGUID(emulated, IID_ID3D11Device) && !IsEqualGUID(emulated, IID_ID3D11Device1)))
+        return E_INVALIDARG;
+
+    D3D_FEATURE_LEVEL selected = static_cast<D3D_FEATURE_LEVEL>(0);
+    for (UINT i = 0; i < count; ++i)
+    {
+        if (levels[i] != D3D_FEATURE_LEVEL_10_0 && levels[i] != D3D_FEATURE_LEVEL_10_1
+                && levels[i] != D3D_FEATURE_LEVEL_11_0)
+            continue;
+        if (levels[i] <= feature_level)
+        {
+            selected = levels[i];
+            break;
+        }
+    }
+    if (!selected) return E_INVALIDARG;
+    if (chosen) *chosen = selected;
+    if (!out) return S_FALSE;
+
+    /* Context-state objects require a complete second runtime state vector;
+     * do not return a placeholder object or claim that state was isolated. */
+    return E_NOTIMPL;
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::OpenSharedResource1(HANDLE, REFIID, void **out)
+{
+    if (out) *out = NULL;
+    /* This entry point accepts NT shared handles, not the legacy global KMT
+     * handles consumed by OpenSharedResource(). */
+    return E_NOTIMPL;
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::OpenSharedResourceByName(LPCWSTR, DWORD, REFIID, void **out)
+{
+    if (out) *out = NULL;
+    return E_NOTIMPL;
+}
 HRESULT STDMETHODCALLTYPE NativeDevice::SetExceptionMode(UINT mode) { if (mode & ~D3D11_RAISE_FLAG_DRIVER_INTERNAL_ERROR) return E_INVALIDARG; exception_mode = mode; return S_OK; }
 UINT STDMETHODCALLTYPE NativeDevice::GetExceptionMode() { return exception_mode; }
 HRESULT STDMETHODCALLTYPE NativeDevice::SetGPUThreadPriority(INT) { return E_NOTIMPL; }
@@ -1741,6 +1936,169 @@ void STDMETHODCALLTYPE NativeContext::UpdateSubresource(ID3D11Resource *resource
             subresource, reinterpret_cast<const D3D10_DDI_BOX *>(box), data, row_pitch, depth_pitch);
 }
 
+void STDMETHODCALLTYPE NativeContext::CopySubresourceRegion1(ID3D11Resource *dst, UINT dst_subresource,
+        UINT x, UINT y, UINT z, ID3D11Resource *src, UINT src_subresource,
+        const D3D11_BOX *box, UINT flags)
+{
+    if (flags) return;
+    CopySubresourceRegion(dst, dst_subresource, x, y, z, src, src_subresource, box);
+}
+
+void STDMETHODCALLTYPE NativeContext::UpdateSubresource1(ID3D11Resource *resource, UINT subresource,
+        const D3D11_BOX *box, const void *data, UINT row_pitch, UINT depth_pitch, UINT flags)
+{
+    if (flags) return;
+    UpdateSubresource(resource, subresource, box, data, row_pitch, depth_pitch);
+}
+
+void STDMETHODCALLTYPE NativeContext::DiscardResource(ID3D11Resource *)
+{
+    /* Discard is a performance hint.  With DiscardAPIsSeenByDriver false the
+     * Windows 11 runtime consumes the call without forwarding it to the DDI. */
+}
+
+void STDMETHODCALLTYPE NativeContext::DiscardView(ID3D11View *)
+{
+}
+
+static bool NativeWholeConstantBufferRange(const UINT *first, const UINT *count)
+{
+    return !first && !count;
+}
+
+void STDMETHODCALLTYPE NativeContext::VSSetConstantBuffers1(UINT start, UINT count,
+        ID3D11Buffer *const *buffers, const UINT *first, const UINT *constants)
+{
+    if (NativeWholeConstantBufferRange(first, constants)) VSSetConstantBuffers(start, count, buffers);
+}
+
+void STDMETHODCALLTYPE NativeContext::HSSetConstantBuffers1(UINT start, UINT count,
+        ID3D11Buffer *const *buffers, const UINT *first, const UINT *constants)
+{
+    if (NativeWholeConstantBufferRange(first, constants)) HSSetConstantBuffers(start, count, buffers);
+}
+
+void STDMETHODCALLTYPE NativeContext::DSSetConstantBuffers1(UINT start, UINT count,
+        ID3D11Buffer *const *buffers, const UINT *first, const UINT *constants)
+{
+    if (NativeWholeConstantBufferRange(first, constants)) DSSetConstantBuffers(start, count, buffers);
+}
+
+void STDMETHODCALLTYPE NativeContext::GSSetConstantBuffers1(UINT start, UINT count,
+        ID3D11Buffer *const *buffers, const UINT *first, const UINT *constants)
+{
+    if (NativeWholeConstantBufferRange(first, constants)) GSSetConstantBuffers(start, count, buffers);
+}
+
+void STDMETHODCALLTYPE NativeContext::PSSetConstantBuffers1(UINT start, UINT count,
+        ID3D11Buffer *const *buffers, const UINT *first, const UINT *constants)
+{
+    if (NativeWholeConstantBufferRange(first, constants)) PSSetConstantBuffers(start, count, buffers);
+}
+
+void STDMETHODCALLTYPE NativeContext::CSSetConstantBuffers1(UINT start, UINT count,
+        ID3D11Buffer *const *buffers, const UINT *first, const UINT *constants)
+{
+    if (NativeWholeConstantBufferRange(first, constants)) CSSetConstantBuffers(start, count, buffers);
+}
+
+static void NativeGetConstantBuffers1(NativeDevice *device, ID3D11Buffer *const *slots,
+        UINT capacity, UINT start, UINT count, ID3D11Buffer **buffers,
+        UINT *first, UINT *constants)
+{
+    if (start > capacity || count > capacity - start) return;
+    NativeLock guard(device);
+    for (UINT i = 0; i < count; ++i)
+    {
+        ID3D11Buffer *buffer = slots[start + i];
+        if (buffers)
+        {
+            buffers[i] = buffer;
+            if (buffer) buffer->AddRef();
+        }
+        if (first) first[i] = 0;
+        if (constants)
+        {
+            NativeBuffer *native = GetNativeBuffer(buffer, device);
+            constants[i] = native ? min(native->desc.ByteWidth / 16,
+                    static_cast<UINT>(D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT)) : 0;
+        }
+    }
+}
+
+static void NativeGetEmptyConstantBuffers1(UINT count, ID3D11Buffer **buffers,
+        UINT *first, UINT *constants)
+{
+    for (UINT i = 0; i < count; ++i)
+    {
+        if (buffers) buffers[i] = NULL;
+        if (first) first[i] = 0;
+        if (constants) constants[i] = 0;
+    }
+}
+
+void STDMETHODCALLTYPE NativeContext::VSGetConstantBuffers1(UINT start, UINT count,
+        ID3D11Buffer **buffers, UINT *first, UINT *constants)
+{
+    NativeGetConstantBuffers1(device, constant_buffers[0], ARRAYSIZE(constant_buffers[0]),
+            start, count, buffers, first, constants);
+}
+
+void STDMETHODCALLTYPE NativeContext::HSGetConstantBuffers1(UINT, UINT count,
+        ID3D11Buffer **buffers, UINT *first, UINT *constants)
+{
+    NativeGetEmptyConstantBuffers1(count, buffers, first, constants);
+}
+
+void STDMETHODCALLTYPE NativeContext::DSGetConstantBuffers1(UINT, UINT count,
+        ID3D11Buffer **buffers, UINT *first, UINT *constants)
+{
+    NativeGetEmptyConstantBuffers1(count, buffers, first, constants);
+}
+
+void STDMETHODCALLTYPE NativeContext::GSGetConstantBuffers1(UINT start, UINT count,
+        ID3D11Buffer **buffers, UINT *first, UINT *constants)
+{
+    NativeGetConstantBuffers1(device, constant_buffers[2], ARRAYSIZE(constant_buffers[2]),
+            start, count, buffers, first, constants);
+}
+
+void STDMETHODCALLTYPE NativeContext::PSGetConstantBuffers1(UINT start, UINT count,
+        ID3D11Buffer **buffers, UINT *first, UINT *constants)
+{
+    NativeGetConstantBuffers1(device, constant_buffers[1], ARRAYSIZE(constant_buffers[1]),
+            start, count, buffers, first, constants);
+}
+
+void STDMETHODCALLTYPE NativeContext::CSGetConstantBuffers1(UINT, UINT count,
+        ID3D11Buffer **buffers, UINT *first, UINT *constants)
+{
+    NativeGetEmptyConstantBuffers1(count, buffers, first, constants);
+}
+
+void STDMETHODCALLTYPE NativeContext::SwapDeviceContextState(ID3DDeviceContextState *,
+        ID3DDeviceContextState **previous)
+{
+    if (previous) *previous = NULL;
+}
+
+void STDMETHODCALLTYPE NativeContext::ClearView(ID3D11View *view, const FLOAT color[4],
+        const D3D11_RECT *rects, UINT)
+{
+    if (!view || !color || rects) return;
+    ID3D11RenderTargetView *target = NULL;
+    if (SUCCEEDED(view->QueryInterface(IID_ID3D11RenderTargetView,
+            reinterpret_cast<void **>(&target))))
+    {
+        ClearRenderTargetView(target, color);
+        target->Release();
+    }
+}
+
+void STDMETHODCALLTYPE NativeContext::DiscardView1(ID3D11View *, const D3D11_RECT *, UINT)
+{
+}
+
 void STDMETHODCALLTYPE NativeContext::Flush() { NativeLock guard(device); device->functions.pfnFlush(device->driver_device); }
 
 D3D11_DEVICE_CONTEXT_TYPE STDMETHODCALLTYPE NativeContext::GetType() { return D3D11_DEVICE_CONTEXT_IMMEDIATE; }
@@ -1787,11 +2145,38 @@ HRESULT STDMETHODCALLTYPE NativeDevice::Method(const Desc *input, Api **out) \
 }
 NATIVE_CREATE_STATE(CreateSamplerState, ID3D11SamplerState, NativeSampler, D3D11_SAMPLER_DESC,
         D3D10_DDI_SAMPLER_DESC, D3D10DDI_HRTSAMPLER, pfnCalcPrivateSamplerSize, pfnCreateSampler, pfnDestroySampler)
-NATIVE_CREATE_STATE(CreateRasterizerState, ID3D11RasterizerState, NativeRasterizer, D3D11_RASTERIZER_DESC,
-        D3D10_DDI_RASTERIZER_DESC, D3D10DDI_HRTRASTERIZERSTATE, pfnCalcPrivateRasterizerStateSize, pfnCreateRasterizerState, pfnDestroyRasterizerState)
 #undef NATIVE_CREATE_STATE
 
 HRESULT STDMETHODCALLTYPE NativeDevice::CreateBlendState(const D3D11_BLEND_DESC *input, ID3D11BlendState **out)
+{
+    if (out) *out = NULL;
+    if (!input) return E_INVALIDARG;
+
+    D3D11_BLEND_DESC1 desc = {};
+    desc.AlphaToCoverageEnable = input->AlphaToCoverageEnable;
+    desc.IndependentBlendEnable = input->IndependentBlendEnable;
+    for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+    {
+        desc.RenderTarget[i].BlendEnable = input->RenderTarget[i].BlendEnable;
+        desc.RenderTarget[i].LogicOpEnable = FALSE;
+        desc.RenderTarget[i].SrcBlend = input->RenderTarget[i].SrcBlend;
+        desc.RenderTarget[i].DestBlend = input->RenderTarget[i].DestBlend;
+        desc.RenderTarget[i].BlendOp = input->RenderTarget[i].BlendOp;
+        desc.RenderTarget[i].SrcBlendAlpha = input->RenderTarget[i].SrcBlendAlpha;
+        desc.RenderTarget[i].DestBlendAlpha = input->RenderTarget[i].DestBlendAlpha;
+        desc.RenderTarget[i].BlendOpAlpha = input->RenderTarget[i].BlendOpAlpha;
+        desc.RenderTarget[i].LogicOp = D3D11_LOGIC_OP_COPY;
+        desc.RenderTarget[i].RenderTargetWriteMask = input->RenderTarget[i].RenderTargetWriteMask;
+    }
+
+    ID3D11BlendState1 *state = NULL;
+    HRESULT hr = CreateBlendState1(&desc, out ? &state : NULL);
+    if (SUCCEEDED(hr) && out) *out = state;
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::CreateBlendState1(const D3D11_BLEND_DESC1 *input,
+        ID3D11BlendState1 **out)
 {
     if (out) *out = NULL;
     if (!input) return E_INVALIDARG;
@@ -1803,36 +2188,51 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateBlendState(const D3D11_BLEND_DESC 
      * Canonicalize those don't-care fields before crossing the DDI boundary;
      * UMDs receive valid enum values in every slot and GetDesc() exposes the
      * same normalized state as the system D3D11 runtime. */
-    D3D11_BLEND_DESC desc = {};
-    desc.AlphaToCoverageEnable = !!input->AlphaToCoverageEnable;
-    desc.IndependentBlendEnable = !!input->IndependentBlendEnable;
+    D3D11_BLEND_DESC1 desc = {};
+    D3D11_BLEND_DESC driver_desc = {};
+    desc.AlphaToCoverageEnable = driver_desc.AlphaToCoverageEnable = !!input->AlphaToCoverageEnable;
+    desc.IndependentBlendEnable = driver_desc.IndependentBlendEnable = !!input->IndependentBlendEnable;
     for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
     {
-        const D3D11_RENDER_TARGET_BLEND_DESC &source =
+        const D3D11_RENDER_TARGET_BLEND_DESC1 &source =
                 input->RenderTarget[input->IndependentBlendEnable ? i : 0];
-        D3D11_RENDER_TARGET_BLEND_DESC &target = desc.RenderTarget[i];
-        target.BlendEnable = !!source.BlendEnable;
-        target.RenderTargetWriteMask = source.RenderTargetWriteMask;
-        if (target.BlendEnable)
+        D3D11_RENDER_TARGET_BLEND_DESC1 &target = desc.RenderTarget[i];
+        D3D11_RENDER_TARGET_BLEND_DESC &driver_target = driver_desc.RenderTarget[i];
+
+        /* D3D11_FEATURE_DATA_D3D11_OPTIONS reports OutputMergerLogicOp as
+         * false for a D3D11.0 DDI.  The 11.1 runtime interface still exists,
+         * but must not manufacture logic-op support that the UMD did not
+         * advertise. */
+        if (source.LogicOpEnable) return E_INVALIDARG;
+
+        target.BlendEnable = driver_target.BlendEnable = !!source.BlendEnable;
+        target.LogicOpEnable = FALSE;
+        target.LogicOp = D3D11_LOGIC_OP_COPY;
+        target.RenderTargetWriteMask = driver_target.RenderTargetWriteMask = source.RenderTargetWriteMask;
+        if (driver_target.BlendEnable)
         {
-            target.SrcBlend = source.SrcBlend;
-            target.DestBlend = source.DestBlend;
-            target.BlendOp = source.BlendOp;
-            target.SrcBlendAlpha = source.SrcBlendAlpha;
-            target.DestBlendAlpha = source.DestBlendAlpha;
-            target.BlendOpAlpha = source.BlendOpAlpha;
+            target.SrcBlend = driver_target.SrcBlend = source.SrcBlend;
+            target.DestBlend = driver_target.DestBlend = source.DestBlend;
+            target.BlendOp = driver_target.BlendOp = source.BlendOp;
+            target.SrcBlendAlpha = driver_target.SrcBlendAlpha = source.SrcBlendAlpha;
+            target.DestBlendAlpha = driver_target.DestBlendAlpha = source.DestBlendAlpha;
+            target.BlendOpAlpha = driver_target.BlendOpAlpha = source.BlendOpAlpha;
         }
         else
         {
-            target.SrcBlend = target.SrcBlendAlpha = D3D11_BLEND_ONE;
-            target.DestBlend = target.DestBlendAlpha = D3D11_BLEND_ZERO;
-            target.BlendOp = target.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+            target.SrcBlend = driver_target.SrcBlend = D3D11_BLEND_ONE;
+            target.SrcBlendAlpha = driver_target.SrcBlendAlpha = D3D11_BLEND_ONE;
+            target.DestBlend = driver_target.DestBlend = D3D11_BLEND_ZERO;
+            target.DestBlendAlpha = driver_target.DestBlendAlpha = D3D11_BLEND_ZERO;
+            target.BlendOp = driver_target.BlendOp = D3D11_BLEND_OP_ADD;
+            target.BlendOpAlpha = driver_target.BlendOpAlpha = D3D11_BLEND_OP_ADD;
         }
     }
 
     if (!out) return S_FALSE;
     static_assert(sizeof(D3D11_BLEND_DESC) == sizeof(D3D10_1_DDI_BLEND_DESC), "Blend descriptor ABI");
-    const D3D10_1_DDI_BLEND_DESC *ddi_desc = reinterpret_cast<const D3D10_1_DDI_BLEND_DESC *>(&desc);
+    const D3D10_1_DDI_BLEND_DESC *ddi_desc =
+            reinterpret_cast<const D3D10_1_DDI_BLEND_DESC *>(&driver_desc);
     NativeLock guard(this);
     NativeBlend *state = new NativeBlend(this);
     if (!state) return E_OUTOFMEMORY;
@@ -1844,6 +2244,54 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateBlendState(const D3D11_BLEND_DESC 
     D3D10DDI_HRTBLENDSTATE runtime_state = {state};
     BeginCall();
     functions.pfnCreateBlendState(driver_device, ddi_desc, state->handle, runtime_state);
+    HRESULT hr = operation_error;
+    if (FAILED(hr)) { state->Release(); return hr; }
+    state->created = true;
+    *out = state;
+    return S_OK;
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::CreateRasterizerState(const D3D11_RASTERIZER_DESC *input,
+        ID3D11RasterizerState **out)
+{
+    if (out) *out = NULL;
+    if (!input) return E_INVALIDARG;
+    D3D11_RASTERIZER_DESC1 desc = {};
+    memcpy(&desc, input, sizeof(*input));
+    desc.ForcedSampleCount = 0;
+    ID3D11RasterizerState1 *state = NULL;
+    HRESULT hr = CreateRasterizerState1(&desc, out ? &state : NULL);
+    if (SUCCEEDED(hr) && out) *out = state;
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::CreateRasterizerState1(const D3D11_RASTERIZER_DESC1 *input,
+        ID3D11RasterizerState1 **out)
+{
+    if (out) *out = NULL;
+    if (!input) return E_INVALIDARG;
+    if (input->ForcedSampleCount) return E_INVALIDARG;
+    if (!functions.pfnCalcPrivateRasterizerStateSize || !functions.pfnCreateRasterizerState
+            || !functions.pfnDestroyRasterizerState) return E_NOTIMPL;
+    if (!out) return S_FALSE;
+
+    D3D11_RASTERIZER_DESC driver_desc;
+    memcpy(&driver_desc, input, sizeof(driver_desc));
+    static_assert(sizeof(D3D11_RASTERIZER_DESC) == sizeof(D3D10_DDI_RASTERIZER_DESC),
+            "Rasterizer descriptor ABI");
+    const D3D10_DDI_RASTERIZER_DESC *ddi_desc =
+            reinterpret_cast<const D3D10_DDI_RASTERIZER_DESC *>(&driver_desc);
+    NativeLock guard(this);
+    NativeRasterizer *state = new NativeRasterizer(this);
+    if (!state) return E_OUTOFMEMORY;
+    state->desc = *input;
+    state->destroy = functions.pfnDestroyRasterizerState;
+    SIZE_T size = functions.pfnCalcPrivateRasterizerStateSize(driver_device, ddi_desc);
+    state->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
+    if (!state->handle.pDrvPrivate) { state->Release(); return E_OUTOFMEMORY; }
+    D3D10DDI_HRTRASTERIZERSTATE runtime_state = {state};
+    BeginCall();
+    functions.pfnCreateRasterizerState(driver_device, ddi_desc, state->handle, runtime_state);
     HRESULT hr = operation_error;
     if (FAILED(hr)) { state->Release(); return hr; }
     state->created = true;
