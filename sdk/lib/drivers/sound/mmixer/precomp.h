@@ -123,6 +123,8 @@ typedef struct
     LIST_ENTRY Entry;
     ULONG DeviceId;
     ULONG PinId;
+    ULONG ConnectorDeviceId;
+    ULONG ConnectorPinId;
     WAVEFORMATEXTENSIBLE PreferredFormat;
     union
     {
@@ -345,6 +347,15 @@ MMixerInitializeWaveInfo(
     IN ULONG bWaveIn,
     IN ULONG PinCount,
     IN PULONG Pins);
+
+VOID
+MMixerSetWaveConnector(
+    IN PMIXER_LIST MixerList,
+    IN ULONG WaveDeviceId,
+    IN ULONG WavePinId,
+    IN ULONG bWaveIn,
+    IN ULONG ConnectorDeviceId,
+    IN ULONG ConnectorPinId);
 
 MIXER_STATUS
 MMixerAddEvent(

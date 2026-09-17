@@ -210,6 +210,11 @@ WdmAudGetWaveMixerId(
     IN PWDMAUD_DEVICE_INFO DeviceInfo);
 
 NTSTATUS
+WdmAudGetEndpointState(
+    IN PIRP Irp,
+    IN PWDMAUD_DEVICE_INFO DeviceInfo);
+
+NTSTATUS
 WdmAudMidiCapabilities(
     IN PDEVICE_OBJECT DeviceObject,
     IN PWDMAUD_DEVICE_INFO DeviceInfo,

@@ -795,6 +795,47 @@ WdmAudGetWaveMixerId(
 }
 
 NTSTATUS
+WdmAudGetEndpointState(
+    IN PIRP Irp,
+    IN PWDMAUD_DEVICE_INFO DeviceInfo)
+{
+    PIO_STACK_LOCATION IoStack;
+    MIXER_STATUS Status;
+    ULONG PresenceDetection;
+    ULONG IsConnected;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    if (IoStack->Parameters.DeviceIoControl.OutputBufferLength <
+        sizeof(WDMAUD_DEVICE_INFO))
+    {
+        return SetIrpIoStatus(Irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
+
+    if (DeviceInfo->DeviceType != WAVE_IN_DEVICE_TYPE &&
+        DeviceInfo->DeviceType != WAVE_OUT_DEVICE_TYPE)
+    {
+        return SetIrpIoStatus(Irp, STATUS_INVALID_PARAMETER, 0);
+    }
+
+    Status = MMixerGetWaveConnectionState(
+        &MixerContext,
+        DeviceInfo->DeviceIndex,
+        DeviceInfo->DeviceType == WAVE_IN_DEVICE_TYPE,
+        &PresenceDetection,
+        &IsConnected);
+    if (Status == MM_STATUS_INVALID_PARAMETER)
+        return SetIrpIoStatus(Irp, STATUS_INVALID_PARAMETER, 0);
+    if (Status != MM_STATUS_SUCCESS)
+        return SetIrpIoStatus(Irp, STATUS_UNSUCCESSFUL, 0);
+
+    DeviceInfo->u.EndpointState =
+        PresenceDetection && !IsConnected
+            ? WDMAUD_ENDPOINT_STATE_UNPLUGGED
+            : WDMAUD_ENDPOINT_STATE_ACTIVE;
+    return SetIrpIoStatus(Irp, STATUS_SUCCESS, sizeof(WDMAUD_DEVICE_INFO));
+}
+
+NTSTATUS
 WdmAudMidiCapabilities(
     IN PDEVICE_OBJECT DeviceObject,
     IN PWDMAUD_DEVICE_INFO DeviceInfo,

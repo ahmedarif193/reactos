@@ -22,6 +22,11 @@ typedef enum
 
 #include <sndtypes.h>
 
+#define WDMAUD_ENDPOINT_STATE_ACTIVE     0x00000001
+#define WDMAUD_ENDPOINT_STATE_DISABLED   0x00000002
+#define WDMAUD_ENDPOINT_STATE_NOTPRESENT 0x00000004
+#define WDMAUD_ENDPOINT_STATE_UNPLUGGED  0x00000008
+
 typedef struct
 {
     KSSTREAM_HEADER Header;
@@ -63,6 +68,7 @@ typedef struct
         ULONG MixerId;
         ULONG Volume;
         ULONG FrameSize;
+        ULONG EndpointState;
         HANDLE hNotifyEvent;
         HANDLE hUserDevice;
     }u;
@@ -421,5 +427,20 @@ typedef struct
 #define IOCTL_GETWAVEMIXERID \
     CTL_CODE(FILE_DEVICE_SOUND, \
              20, \
+             METHOD_BUFFERED, \
+             FILE_CREATE_TREE_CONNECTION | FILE_ANY_ACCESS)
+
+/// IOCTL_GETENDPOINT_STATE
+///
+/// Description: This IOCTL reports the current MMDevice-compatible state of a
+///              wave endpoint from its KS topology and jack properties.
+///
+/// Arguments:  DeviceType and DeviceIndex must identify a wave endpoint.
+/// Result:     One WDMAUD_ENDPOINT_STATE_* value is returned in
+///             u.EndpointState.
+
+#define IOCTL_GETENDPOINT_STATE \
+    CTL_CODE(FILE_DEVICE_SOUND, \
+             21, \
              METHOD_BUFFERED, \
              FILE_CREATE_TREE_CONNECTION | FILE_ANY_ACCESS)

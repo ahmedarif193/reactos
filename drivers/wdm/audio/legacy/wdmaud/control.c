@@ -696,6 +696,8 @@ WdmAudDeviceControlDispatch(
             return WdmAudGetPreferredWaveFormat(Irp, DeviceInfo);
         case IOCTL_GETWAVEMIXERID:
             return WdmAudGetWaveMixerId(Irp, DeviceInfo);
+        case IOCTL_GETENDPOINT_STATE:
+            return WdmAudGetEndpointState(Irp, DeviceInfo);
         case IOCTL_GETPOS:
             return WdmAudGetPosition(DeviceObject, Irp, DeviceInfo);
         case IOCTL_GETDEVID:
