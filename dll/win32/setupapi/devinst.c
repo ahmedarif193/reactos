@@ -601,7 +601,14 @@ CreateDeviceInfo(
     }
     ZeroMemory(deviceInfo, size);
 
-    cr = CM_Locate_DevNode_ExW(&deviceInfo->dnDevInst, (DEVINSTID_W)InstancePath, CM_LOCATE_DEVNODE_PHANTOM, list->hMachine);
+    /* InstancePath came from the Enum or DeviceClasses registry.  Avoid the
+     * redundant PlugPlay RPC validation so read-only callers, including
+     * browser audio sandboxes, can enumerate device interfaces. */
+    cr = CM_Locate_DevNode_ExW(&deviceInfo->dnDevInst,
+                               (DEVINSTID_W)InstancePath,
+                               CM_LOCATE_DEVNODE_PHANTOM |
+                               CM_LOCATE_DEVNODE_NOVALIDATION,
+                               list->hMachine);
     if (cr != CR_SUCCESS)
     {
         SetLastError(GetErrorCodeFromCrCode(cr));
