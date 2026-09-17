@@ -137,6 +137,9 @@ typedef struct
     PFILE_OBJECT FileObject;
     PKSEVENT_ENTRY EventEntry;
     PIRP Irp;
+    const GUID *EventSet;
+    ULONG EventId;
+    PLIST_ENTRY PendingList;
 }KSEVENT_CTX, *PKSEVENT_CTX;
 
 typedef BOOLEAN (NTAPI *PKSEVENT_SYNCHRONIZED_ROUTINE)(PKSEVENT_CTX Context);
@@ -278,4 +281,3 @@ typedef struct
     ULONG dw1;
     ULONG dw2;
 }KSPCACHE_MEDIUM;
-
