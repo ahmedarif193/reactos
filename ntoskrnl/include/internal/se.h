@@ -950,6 +950,14 @@ SeCreateAccessStateEx(
     _In_ ACCESS_MASK Access,
     _In_ PGENERIC_MAPPING GenericMapping);
 
+NTSTATUS
+NTAPI
+SeConvertStringSecurityDescriptorToSecurityDescriptor(
+    _In_ PCWSTR StringSecurityDescriptor,
+    _In_ ULONG StringSecurityDescriptorRevision,
+    _Outptr_ PSECURITY_DESCRIPTOR *SecurityDescriptor,
+    _Out_opt_ PULONG SecurityDescriptorSize);
+
 //
 // Access check functions
 //
