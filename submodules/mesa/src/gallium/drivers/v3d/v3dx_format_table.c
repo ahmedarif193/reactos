@@ -75,6 +75,7 @@ static const struct v3d_format format_table[] = {
         FORMAT(R10G10B10A2_UINT,  RGB10_A2UI,   RGB10_A2UI,  SWIZ_XYZW, 16, 0),
 
         FORMAT(A4B4G4R4_UNORM,    ABGR4444,     RGBA4,       SWIZ_XYZW, 16, 0),
+        FORMAT(B4G4R4A4_UNORM,    ABGR4444,     RGBA4,       SWIZ_ZYXW, 16, 0),
 
         FORMAT(A1B5G5R5_UNORM,    ABGR1555,     RGB5_A1,     SWIZ_XYZW, 16, 0),
         FORMAT(X1B5G5R5_UNORM,    ABGR1555,     RGB5_A1,     SWIZ_XYZ1, 16, 0),
