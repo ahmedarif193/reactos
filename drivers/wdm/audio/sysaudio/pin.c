@@ -264,6 +264,7 @@ NTAPI
 InstantiatePins(
     IN PKSAUDIO_DEVICE_ENTRY DeviceEntry,
     IN PKSPIN_CONNECT Connect,
+    IN ACCESS_MASK DesiredAccess,
     IN PDISPATCH_CONTEXT DispatchContext,
     IN PSYSAUDIODEVEXT DeviceExtension)
 {
@@ -304,7 +305,7 @@ InstantiatePins(
     InputFormat = (PKSDATAFORMAT_WAVEFORMATEX)(Connect + 1);
 
     /* Let's try to create the audio irp pin */
-    Status = KsCreatePin(DeviceEntry->Handle, Connect, GENERIC_READ | GENERIC_WRITE, &RealPinHandle);
+    Status = KsCreatePin(DeviceEntry->Handle, Connect, DesiredAccess, &RealPinHandle);
 
     if (!NT_SUCCESS(Status))
     {
@@ -437,6 +438,7 @@ DispatchCreateSysAudioPin(
     PKSAUDIO_DEVICE_ENTRY DeviceEntry;
     PKSPIN_CONNECT Connect;
     PDISPATCH_CONTEXT DispatchContext;
+    ACCESS_MASK DesiredAccess, OriginalAccess;
 
     DPRINT("DispatchCreateSysAudioPin entered\n");
 
@@ -498,7 +500,18 @@ DispatchCreateSysAudioPin(
     }
 
     /* now instantiate the pins */
-    Status = InstantiatePins(DeviceEntry, Connect, DispatchContext, (PSYSAUDIODEVEXT)DeviceObject->DeviceExtension);
+    OriginalAccess = IoStack->Parameters.Create.SecurityContext->AccessState->OriginalDesiredAccess;
+    DesiredAccess = 0;
+    if (OriginalAccess & FILE_READ_DATA)
+        DesiredAccess |= GENERIC_READ;
+    if (OriginalAccess & FILE_WRITE_DATA)
+        DesiredAccess |= GENERIC_WRITE;
+
+    Status = InstantiatePins(DeviceEntry,
+                             Connect,
+                             DesiredAccess,
+                             DispatchContext,
+                             (PSYSAUDIODEVEXT)DeviceObject->DeviceExtension);
     if (!NT_SUCCESS(Status))
     {
         /* failed */
