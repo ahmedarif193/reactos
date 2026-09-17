@@ -256,6 +256,12 @@ typedef struct _RPI5VC4_ALLOCATION
 {
     ULONG Magic;
     SIZE_T Size;
+    ULONG ResourceLayout;
+    ULONG ResourceFormat;
+    ULONG Width;
+    ULONG Height;
+    ULONG Pitch;
+    BOOLEAN Primary;
 } RPI5VC4_ALLOCATION, *PRPI5VC4_ALLOCATION;
 
 typedef struct _RPI5VC4_STANDARD_ALLOCATION_DATA
@@ -790,6 +796,13 @@ VOID Rpi5Vc4FreeFlipRing(
 NTSTATUS APIENTRY Rpi5Vc4DdiPresentDisplayOnly(
     _In_ PVOID MiniportDeviceContext,
     _In_ CONST DXGKARG_PRESENT_DISPLAYONLY *PresentDisplayOnly);
+
+NTSTATUS
+Rpi5Vc4PresentFixedFirmwarePrimary(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_reads_bytes_(SourceBytes) const UCHAR *Source,
+    _In_ SIZE_T SourceBytes,
+    _In_ ULONG SourcePitch);
 
 NTSTATUS APIENTRY Rpi5Vc4DdiStopDeviceAndReleasePostDisplayOwnership(
     _In_  PVOID MiniportDeviceContext,

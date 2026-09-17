@@ -173,6 +173,65 @@ Rpi5Vc4BlitRect(
 }
 
 /*
+ * A fixed firmware scanout cannot page-flip to a VidMm allocation.  Once the
+ * scheduler has retired a primary flip, publish that completed linear primary
+ * into the firmware-owned framebuffer.  This is the scanout transport for
+ * the DSI backend; rendering and desktop composition remain on V3D.
+ */
+NTSTATUS
+Rpi5Vc4PresentFixedFirmwarePrimary(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_reads_bytes_(SourceBytes) const UCHAR *Source,
+    _In_ SIZE_T SourceBytes,
+    _In_ ULONG SourcePitch)
+{
+    RECT FullFrame;
+    SIZE_T RequiredBytes;
+
+    if (DeviceExtension == NULL || Source == NULL ||
+        !Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension) ||
+        DeviceExtension->FrameBufferVa == NULL ||
+        DeviceExtension->ScreenWidth == 0 ||
+        DeviceExtension->ScreenHeight == 0 ||
+        DeviceExtension->ScreenWidth > MAXULONG / sizeof(ULONG) ||
+        SourcePitch < DeviceExtension->ScreenWidth * sizeof(ULONG) ||
+        SourcePitch > MAXLONG ||
+        DeviceExtension->ScreenHeight > MAXULONG_PTR / SourcePitch)
+    {
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+
+    RequiredBytes = (SIZE_T)SourcePitch * DeviceExtension->ScreenHeight;
+    if (SourceBytes < RequiredBytes)
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+
+    FullFrame.left = 0;
+    FullFrame.top = 0;
+    FullFrame.right = (LONG)DeviceExtension->ScreenWidth;
+    FullFrame.bottom = (LONG)DeviceExtension->ScreenHeight;
+
+    /* The submission fence retired before this DDI was called.  Order the
+     * CPU's read of the uncached/WC primary after the device writes. */
+#if defined(_M_ARM64)
+    __dsb(_ARM64_BARRIER_SY);
+#endif
+    KeMemoryBarrier();
+
+    DeviceExtension->FrameBufferPhysical =
+        DeviceExtension->FirmwareFrameBufferPhysical;
+    Rpi5Vc4BlitRect(DeviceExtension, Source, (LONG)SourcePitch, &FullFrame);
+
+    /* Publish all writes before the firmware display pipeline fetches the
+     * next scanout frame. */
+#if defined(_M_ARM64)
+    __dsb(_ARM64_BARRIER_SY);
+#endif
+    KeMemoryBarrier();
+
+    return STATUS_SUCCESS;
+}
+
+/*
  * Move rects: the OS keeps pSource current, so a move is satisfied by
  * blitting the destination rectangle from the source surface (the
  * Microsoft basic-display approach).  This avoids screen-to-screen copies

@@ -2122,6 +2122,7 @@ Rpi5Vc4DdiCreateAllocation(
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
     CONST RPI5VC4_RESOURCE_DATA *ResourceData;
     BOOLEAN PrimaryResource = FALSE;
+    BOOLEAN ResourceDataValid = FALSE;
     ULONG i;
 
     if (DeviceExtension == NULL || CreateAllocation == NULL ||
@@ -2148,6 +2149,7 @@ Rpi5Vc4DdiCreateAllocation(
             return STATUS_INVALID_PARAMETER;
         }
 
+        ResourceDataValid = TRUE;
         PrimaryResource =
             (ResourceData->Flags & RPI5VC4_RESOURCE_FLAG_PRIMARY) != 0;
         if (PrimaryResource &&
@@ -2158,7 +2160,17 @@ Rpi5Vc4DdiCreateAllocation(
                  RPI5VC4_RESOURCE_DXGI_FORMAT_B8G8R8A8_UNORM ||
              (ResourceData->BindFlags &
               RPI5VC4_RESOURCE_BIND_PRESENT) == 0 ||
-             ResourceData->Layout != RPI5VC4_RESOURCE_LAYOUT_LINEAR))
+             ResourceData->Layout != RPI5VC4_RESOURCE_LAYOUT_LINEAR ||
+             ResourceData->Width == 0 ||
+             ResourceData->Height == 0 ||
+             ResourceData->Depth != 1 ||
+             ResourceData->ArraySize != 1 ||
+             ResourceData->MipLevels != 1 ||
+             ResourceData->SampleCount != 1 ||
+             ResourceData->Width > MAXULONG / sizeof(ULONG) ||
+             (ResourceData->Stride != 0 &&
+              ResourceData->Stride <
+                  ResourceData->Width * sizeof(ULONG))))
         {
             return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
         }
@@ -2175,6 +2187,8 @@ Rpi5Vc4DdiCreateAllocation(
         BOOLEAN LocalAllocation;
         ULONG SegmentId;
         SIZE_T Size = (Info->Size != 0) ? Info->Size : PAGE_SIZE;
+        ULONGLONG RequiredBytes;
+        ULONG ResourcePitch;
 
         PrivateData = (CONST RPI5VC4_STANDARD_ALLOCATION_DATA *)
             Info->pPrivateDriverData;
@@ -2207,6 +2221,13 @@ Rpi5Vc4DdiCreateAllocation(
             Info->PrivateDriverDataSize == sizeof(*AllocationData) &&
             AllocationData != NULL &&
             (AllocationData->Flags & RPI5VC4_ALLOCATION_CPU_CACHED) != 0;
+        if (Info->Size == 0 &&
+            Info->PrivateDriverDataSize == sizeof(*AllocationData) &&
+            AllocationData != NULL &&
+            AllocationData->Size != 0)
+        {
+            Size = AllocationData->Size;
+        }
         LocalAllocation =
             (StandardAllocation &&
              PrivateData->Type == DXGK_STDALLOCATION_SHAREDPRIMARYSURFACE) ||
@@ -2225,6 +2246,31 @@ Rpi5Vc4DdiCreateAllocation(
             return STATUS_INTEGER_OVERFLOW;
         }
         Size = (Size + PAGE_SIZE - 1) & ~(SIZE_T)(PAGE_SIZE - 1);
+
+        ResourcePitch = 0;
+        RequiredBytes = 0;
+        if (PrimaryResource)
+        {
+            ResourcePitch = ResourceData->Stride != 0 ?
+                                ResourceData->Stride :
+                                ResourceData->Width * sizeof(ULONG);
+            RequiredBytes = (ULONGLONG)ResourcePitch * ResourceData->Height;
+            if (RequiredBytes > Size ||
+                (ResourceData->AllocationSize != 0 &&
+                 ResourceData->AllocationSize < RequiredBytes))
+            {
+                while (i > 0)
+                {
+                    --i;
+                    ExFreePoolWithTag(
+                        (PVOID)CreateAllocation->pAllocationInfo[i].hAllocation,
+                        RPI5VC4_POOL_TAG);
+                    CreateAllocation->pAllocationInfo[i].hAllocation = NULL;
+                }
+                return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+            }
+        }
+
         if ((LocalAllocation && Size > DeviceExtension->VramSize) ||
             (!LocalAllocation &&
              (ULONGLONG)Size > RPI5VC4_APERTURE_SIZE))
@@ -2258,6 +2304,15 @@ Rpi5Vc4DdiCreateAllocation(
         RtlZeroMemory(Allocation, sizeof(*Allocation));
         Allocation->Magic = RPI5VC4_ALLOCATION_MAGIC;
         Allocation->Size = Size;
+        if (ResourceDataValid)
+        {
+            Allocation->ResourceLayout = ResourceData->Layout;
+            Allocation->ResourceFormat = ResourceData->Format;
+            Allocation->Width = ResourceData->Width;
+            Allocation->Height = ResourceData->Height;
+            Allocation->Pitch = ResourcePitch;
+            Allocation->Primary = PrimaryResource;
+        }
 
         Info->Size = Size;
         Info->Alignment = PAGE_SIZE;

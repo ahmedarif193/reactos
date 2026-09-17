@@ -422,9 +422,11 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
     _In_ CONST DXGKARG_SETVIDPNSOURCEADDRESS *SetVidPnSourceAddress)
 {
     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
+    PRPI5VC4_ALLOCATION Allocation;
     PHYSICAL_ADDRESS Target;
     ULONGLONG SlabBase;
     ULONGLONG SlabEnd;
+    ULONGLONG Offset;
 
     if (DeviceExtension == NULL || SetVidPnSourceAddress == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -435,17 +437,72 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
     if (SetVidPnSourceAddress->PrimarySegment != 0 && SetVidPnSourceAddress->PrimarySegment != RPI5VC4_SEGMENT_ID)
         return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
 
-    /* RP1 DSI consumes the fixed firmware framebuffer.  Source allocations
-     * are composed into it by PresentDisplayOnly; it is never an HVS flip
-     * target. */
+    Target = SetVidPnSourceAddress->PrimaryAddress;
+
+    /* RP1 DSI consumes a fixed portrait firmware framebuffer rather than a
+     * page-flippable HVS plane.  A full-WDDM flip reaches this DDI only after
+     * its GPU fence retires, so publish the completed linear primary through
+     * the fixed scanout transport instead of reporting a no-op success. */
     if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
     {
+        if (Target.QuadPart == 0)
+        {
+            DeviceExtension->FrameBufferPhysical =
+                DeviceExtension->FirmwareFrameBufferPhysical;
+            return STATUS_SUCCESS;
+        }
+
+        if (SetVidPnSourceAddress->PrimarySegment !=
+                RPI5VC4_LOCAL_SEGMENT_ID ||
+            SetVidPnSourceAddress->hAllocation == NULL ||
+            DeviceExtension->VramVa == NULL)
+        {
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        }
+
+        Allocation = (PRPI5VC4_ALLOCATION)
+            SetVidPnSourceAddress->hAllocation;
+        if (Allocation->Magic != RPI5VC4_ALLOCATION_MAGIC ||
+            !Allocation->Primary ||
+            Allocation->ResourceLayout != RPI5VC4_RESOURCE_LAYOUT_LINEAR ||
+            Allocation->ResourceFormat !=
+                RPI5VC4_RESOURCE_DXGI_FORMAT_B8G8R8A8_UNORM ||
+            Allocation->Width != DeviceExtension->ScreenWidth ||
+            Allocation->Height != DeviceExtension->ScreenHeight ||
+            Allocation->Pitch <
+                DeviceExtension->ScreenWidth * sizeof(ULONG))
+        {
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        }
+
+        if (DeviceExtension->VramPhysical.QuadPart < 0 ||
+            DeviceExtension->VramSize == 0)
+        {
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        }
+
+        SlabBase = (ULONGLONG)DeviceExtension->VramPhysical.QuadPart;
+        if (SlabBase > MAXULONGLONG - DeviceExtension->VramSize)
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        SlabEnd = SlabBase + DeviceExtension->VramSize;
+        if ((ULONGLONG)Target.QuadPart < SlabBase ||
+            (ULONGLONG)Target.QuadPart >= SlabEnd)
+        {
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        }
+
+        Offset = (ULONGLONG)Target.QuadPart - SlabBase;
+        if (Allocation->Size > DeviceExtension->VramSize - Offset)
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+
         DeviceExtension->FrameBufferPhysical =
             DeviceExtension->FirmwareFrameBufferPhysical;
-        return STATUS_SUCCESS;
+        return Rpi5Vc4PresentFixedFirmwarePrimary(
+                   DeviceExtension,
+                   (const UCHAR *)DeviceExtension->VramVa + Offset,
+                   Allocation->Size,
+                   Allocation->Pitch);
     }
-
-    Target = SetVidPnSourceAddress->PrimaryAddress;
 
     /* A null address parks the scanout back on the firmware framebuffer. */
     if (Target.QuadPart == 0)
@@ -456,7 +513,15 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
      * slab or the firmware framebuffer are reachable scanout targets.
      * The whole visible raster must fit below the target's end.
      */
+    if (DeviceExtension->VramPhysical.QuadPart < 0 ||
+        DeviceExtension->VramSize == 0)
+    {
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+    }
+
     SlabBase = (ULONGLONG)DeviceExtension->VramPhysical.QuadPart;
+    if (SlabBase > MAXULONGLONG - DeviceExtension->VramSize)
+        return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
     SlabEnd = SlabBase + DeviceExtension->VramSize;
 
     if (Target.QuadPart != DeviceExtension->FirmwareFrameBufferPhysical.QuadPart)
@@ -466,7 +531,8 @@ Rpi5Vc4DdiSetVidPnSourceAddress(
 
         if (DeviceExtension->VramVa == NULL ||
             (ULONGLONG)Target.QuadPart < SlabBase ||
-            (ULONGLONG)Target.QuadPart + RasterBytes > SlabEnd)
+            (ULONGLONG)Target.QuadPart >= SlabEnd ||
+            RasterBytes > SlabEnd - (ULONGLONG)Target.QuadPart)
         {
             DPRINT1("RPI5VC4: SetVidPnSourceAddress: 0x%I64x outside the "
                     "VRAM slab\n", Target.QuadPart);
