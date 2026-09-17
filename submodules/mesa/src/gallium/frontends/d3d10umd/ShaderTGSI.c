@@ -181,6 +181,7 @@ static struct dx10_opcode_xlate opcode_xlate[D3D10_SB_NUM_OPCODES] = {
 #define SHADER_MAX_TEMPS 4096
 #define SHADER_MAX_INPUTS 32
 #define SHADER_MAX_OUTPUTS 32
+#define SHADER_MAX_OUTPUT_COMPONENTS (SHADER_MAX_OUTPUTS * 4)
 #define SHADER_MAX_CONSTS 4096
 #define SHADER_MAX_RESOURCES PIPE_MAX_SHADER_SAMPLER_VIEWS
 #define SHADER_MAX_SAMPLERS PIPE_MAX_SAMPLERS
@@ -194,6 +195,13 @@ struct Shader_call {
 struct Shader_label {
    unsigned d3d_label;
    unsigned tgsi_insn_no;
+};
+
+struct Shader_output_move {
+   struct ureg_dst dst;
+   uint d3d_register;
+   uint src_component;
+   uint dst_component;
 };
 
 struct Shader_resource {
@@ -214,6 +222,8 @@ struct Shader_xlate {
    struct ureg_src imms;
    struct ureg_src prim_id;
 
+   unsigned input_mapping[SHADER_MAX_INPUTS];
+
    uint temp_offset;
    uint indexable_temp_offsets[SHADER_MAX_INDEXABLE_TEMPS];
 
@@ -227,14 +237,15 @@ struct Shader_xlate {
 
    struct {
       struct ureg_dst reg[4];
+      bool temporary;
    } outputs[SHADER_MAX_OUTPUTS];
 
-   struct {
-      uint d3d;
-      uint tgsi;
-   } clip_distance_mapping[2], cull_distance_mapping[2];
-   uint num_clip_distances_declared;
-   uint num_cull_distances_declared;
+   struct Shader_output_move output_moves[SHADER_MAX_OUTPUT_COMPONENTS];
+   uint num_output_moves;
+   uint num_clip_distances;
+   uint num_cull_distances;
+   uint next_clip_distance;
+   uint next_cull_distance;
 
    struct Shader_call *calls;
    uint num_calls;
@@ -306,36 +317,6 @@ translate_system_name(D3D10_SB_NAME name)
 
    assert(0);
    return TGSI_SEMANTIC_GENERIC;
-}
-
-static uint
-translate_semantic_index(struct Shader_xlate *sx,
-                         D3D10_SB_NAME name,
-                         const struct Shader_dst_operand *operand)
-{
-   unsigned idx;
-   switch (name) {
-   case D3D10_SB_NAME_CLIP_DISTANCE:
-   case D3D10_SB_NAME_CULL_DISTANCE:
-      if (sx->clip_distance_mapping[0].d3d == operand->base.index[0].imm) {
-         idx = sx->clip_distance_mapping[0].tgsi;
-      } else {
-         assert(sx->clip_distance_mapping[1].d3d == operand->base.index[0].imm);
-         idx = sx->clip_distance_mapping[1].tgsi;
-      }
-      break;
-/*   case D3D10_SB_NAME_CULL_DISTANCE:
-      if (sx->cull_distance_mapping[0].d3d == operand->base.index[0].imm) {
-         idx = sx->cull_distance_mapping[0].tgsi;
-      } else {
-         assert(sx->cull_distance_mapping[1].d3d == operand->base.index[0].imm);
-         idx = sx->cull_distance_mapping[1].tgsi;
-      }
-      break;*/
-   default:
-      idx = 0;
-   }
-   return idx;
 }
 
 static enum tgsi_return_type
@@ -447,6 +428,168 @@ dcl_base_output(struct Shader_xlate *sx,
    }
 }
 
+static unsigned
+output_writemask(const struct Shader_dst_operand *operand)
+{
+   return operand->mask >> D3D10_SB_OPERAND_4_COMPONENT_MASK_SHIFT;
+}
+
+static unsigned
+writemask_component_count(unsigned writemask)
+{
+   unsigned count = 0;
+
+   for (unsigned i = 0; i < 4; ++i)
+      count += !!(writemask & (1u << i));
+
+   return count;
+}
+
+static struct ureg_dst
+get_output_temporary(struct Shader_xlate *sx, unsigned d3d_register)
+{
+   assert(d3d_register < SHADER_MAX_OUTPUTS);
+
+   if (!sx->outputs[d3d_register].temporary) {
+      struct ureg_dst temp = ureg_DECL_temporary(sx->ureg);
+
+      for (unsigned i = 0; i < 4; ++i)
+         sx->outputs[d3d_register].reg[i] = temp;
+      sx->outputs[d3d_register].temporary = true;
+   }
+
+   return sx->outputs[d3d_register].reg[0];
+}
+
+static void
+add_output_move(struct Shader_xlate *sx,
+                struct ureg_dst dst,
+                unsigned d3d_register,
+                unsigned src_component,
+                unsigned dst_component)
+{
+   assert(sx->num_output_moves < SHADER_MAX_OUTPUT_COMPONENTS);
+   assert(src_component < 4 && dst_component < 4);
+
+   get_output_temporary(sx, d3d_register);
+   sx->output_moves[sx->num_output_moves++] = (struct Shader_output_move) {
+      .dst = dst,
+      .d3d_register = d3d_register,
+      .src_component = src_component,
+      .dst_component = dst_component,
+   };
+}
+
+static void
+dcl_temporary_output(struct Shader_xlate *sx,
+                     struct ureg_dst dst,
+                     const struct Shader_dst_operand *operand)
+{
+   const unsigned d3d_register = operand->base.index[0].imm;
+   const unsigned writemask = output_writemask(operand);
+
+   for (unsigned i = 0; i < 4; ++i) {
+      if (writemask & (1u << i))
+         add_output_move(sx, dst, d3d_register, i, i);
+   }
+}
+
+static void
+emit_output_moves(struct Shader_xlate *sx)
+{
+   for (unsigned i = 0; i < sx->num_output_moves; ++i) {
+      const struct Shader_output_move *move = &sx->output_moves[i];
+      struct ureg_src src =
+         ureg_src(get_output_temporary(sx, move->d3d_register));
+
+      ureg_MOV(sx->ureg,
+               ureg_writemask(move->dst, 1u << move->dst_component),
+               ureg_scalar(src, move->src_component));
+   }
+}
+
+static void
+scan_shader_declarations(const unsigned *code,
+                         unsigned *num_clip_distances,
+                         unsigned *num_cull_distances,
+                         unsigned input_mapping[SHADER_MAX_INPUTS])
+{
+   struct Shader_parser parser;
+   struct Shader_opcode opcode;
+   bool vertex_inputs[SHADER_MAX_INPUTS] = { false };
+
+   *num_clip_distances = 0;
+   *num_cull_distances = 0;
+   for (unsigned i = 0; i < SHADER_MAX_INPUTS; ++i)
+      input_mapping[i] = ~0u;
+
+   Shader_parse_init(&parser, code);
+
+   while (Shader_parse_opcode(&parser, &opcode)) {
+      if (opcode.type == D3D10_SB_OPCODE_DCL_OUTPUT_SIV) {
+         const unsigned count =
+            writemask_component_count(output_writemask(&opcode.dst[0]));
+
+         if (opcode.dcl_siv_name == D3D10_SB_NAME_CLIP_DISTANCE)
+            *num_clip_distances += count;
+         else if (opcode.dcl_siv_name == D3D10_SB_NAME_CULL_DISTANCE)
+            *num_cull_distances += count;
+      } else if (opcode.type == D3D10_SB_OPCODE_DCL_INPUT &&
+                 opcode.dst[0].base.index_dim == 1) {
+         const unsigned d3d_register = opcode.dst[0].base.index[0].imm;
+
+         assert(d3d_register < SHADER_MAX_INPUTS);
+         vertex_inputs[d3d_register] = true;
+      }
+      Shader_opcode_free(&opcode);
+   }
+
+   unsigned compact_index = 0;
+   for (unsigned i = 0; i < SHADER_MAX_INPUTS; ++i) {
+      if (vertex_inputs[i])
+         input_mapping[i] = compact_index++;
+   }
+
+   assert(*num_clip_distances <= PIPE_MAX_CLIP_OR_CULL_DISTANCE_COUNT);
+   assert(*num_cull_distances <= PIPE_MAX_CLIP_OR_CULL_DISTANCE_COUNT);
+   assert(*num_clip_distances + *num_cull_distances <=
+          PIPE_MAX_CLIP_OR_CULL_DISTANCE_COUNT);
+}
+
+static void
+dcl_distance_output(struct Shader_xlate *sx,
+                    struct ureg_program *ureg,
+                    const struct Shader_dst_operand *operand,
+                    D3D10_SB_NAME name,
+                    unsigned *output_mapping)
+{
+   const unsigned d3d_register = operand->base.index[0].imm;
+   const unsigned writemask = output_writemask(operand);
+
+   for (unsigned src_component = 0; src_component < 4; ++src_component) {
+      if (!(writemask & (1u << src_component)))
+         continue;
+
+      unsigned distance;
+      if (name == D3D10_SB_NAME_CLIP_DISTANCE) {
+         distance = sx->next_clip_distance++;
+      } else {
+         assert(name == D3D10_SB_NAME_CULL_DISTANCE);
+         distance = sx->num_clip_distances + sx->next_cull_distance++;
+      }
+
+      const unsigned semantic_index = distance / 4;
+      const unsigned dst_component = distance % 4;
+      struct ureg_dst dst =
+         ureg_DECL_output_masked(ureg, TGSI_SEMANTIC_CLIPDIST,
+                                 semantic_index, 1u << dst_component, 0, 1);
+
+      if (output_mapping)
+         output_mapping[dst.Index] = d3d_register;
+      add_output_move(sx, dst, d3d_register, src_component, dst_component);
+   }
+}
+
 static void
 dcl_base_input(struct Shader_xlate *sx,
                struct ureg_program *ureg,
@@ -491,12 +634,15 @@ dcl_vs_input(struct Shader_xlate *sx,
              const struct Shader_dst_operand *dst)
 {
    struct ureg_src reg;
+   const unsigned d3d_register = dst->base.index[0].imm;
+
    assert(dst->base.index_dim == 1);
-   assert(dst->base.index[0].imm < SHADER_MAX_INPUTS);
+   assert(d3d_register < SHADER_MAX_INPUTS);
+   assert(sx->input_mapping[d3d_register] != ~0u);
 
-   reg = ureg_DECL_vs_input(ureg, dst->base.index[0].imm);
+   reg = ureg_DECL_vs_input(ureg, sx->input_mapping[d3d_register]);
 
-   dcl_base_input(sx, ureg, dst, reg, dst->base.index[0].imm,
+   dcl_base_input(sx, ureg, dst, reg, d3d_register,
                   D3D10_SB_NAME_UNDEFINED);
 }
 
@@ -1259,6 +1405,13 @@ Shader_tgsi_translate(const unsigned *code,
    use_legacy_texture_opcodes |= (st_debug & ST_DEBUG_OLD_TEX_OPS) != 0;
 
    memset(&sx, 0, sizeof sx);
+   scan_shader_declarations(code, &sx.num_clip_distances,
+                            &sx.num_cull_distances, sx.input_mapping);
+
+   if (output_mapping) {
+      for (i = 0; i < PIPE_MAX_SHADER_OUTPUTS; ++i)
+         output_mapping[i] = ~0u;
+   }
 
    Shader_parse_init(&parser, code);
 
@@ -1296,6 +1449,15 @@ Shader_tgsi_translate(const unsigned *code,
 
    assert(ureg);
    sx.ureg = ureg;
+
+   if (sx.num_clip_distances) {
+      ureg_property(ureg, TGSI_PROPERTY_NUM_CLIPDIST_ENABLED,
+                    sx.num_clip_distances);
+   }
+   if (sx.num_cull_distances) {
+      ureg_property(ureg, TGSI_PROPERTY_NUM_CULLDIST_ENABLED,
+                    sx.num_cull_distances);
+   }
 
    while (Shader_parse_opcode(&parser, &opcode)) {
       const struct dx10_opcode_xlate *ox;
@@ -2020,16 +2182,12 @@ Shader_tgsi_translate(const unsigned *code,
             assert(opcode.dst[0].base.index_dim == 1);
             assert(opcode.dst[0].base.index[0].imm < SHADER_MAX_OUTPUTS);
 
-            if (output_mapping) {
-               unsigned nr_outputs = ureg_get_nr_outputs(ureg);
-               output_mapping[nr_outputs]
-                  = opcode.dst[0].base.index[0].imm;
-            }
-            dcl_base_output(&sx, ureg,
-                            ureg_DECL_output(ureg,
-                                             TGSI_SEMANTIC_GENERIC,
-                                             opcode.dst[0].base.index[0].imm),
-                            &opcode.dst[0]);
+            struct ureg_dst dst =
+               ureg_DECL_output(ureg, TGSI_SEMANTIC_GENERIC,
+                                opcode.dst[0].base.index[0].imm);
+            if (output_mapping)
+               output_mapping[dst.Index] = opcode.dst[0].base.index[0].imm;
+            dcl_temporary_output(&sx, dst, &opcode.dst[0]);
          }
          break;
 
@@ -2037,70 +2195,35 @@ Shader_tgsi_translate(const unsigned *code,
          assert(opcode.dst[0].base.index_dim == 1);
          assert(opcode.dst[0].base.index[0].imm < SHADER_MAX_OUTPUTS);
 
-         if (output_mapping) {
-            unsigned nr_outputs = ureg_get_nr_outputs(ureg);
-            output_mapping[nr_outputs]
-               = opcode.dst[0].base.index[0].imm;
-         }
          if (opcode.dcl_siv_name == D3D10_SB_NAME_CLIP_DISTANCE ||
              opcode.dcl_siv_name == D3D10_SB_NAME_CULL_DISTANCE) {
-            /*
-             * FIXME: this is quite broken. gallium no longer has separate
-             * clip/cull dists, using (max 2) combined clipdist/culldist regs
-             * instead. Unlike d3d10 though, which is clip and which cull is
-             * simply determined by by number of clip/cull dists (that is,
-             * all clip dists must come first).
-             */
-            unsigned numcliporcull = sx.num_clip_distances_declared +
-                                     sx.num_cull_distances_declared;
-            sx.clip_distance_mapping[numcliporcull].d3d =
-               opcode.dst[0].base.index[0].imm;
-            sx.clip_distance_mapping[numcliporcull].tgsi = numcliporcull;
-            if (opcode.dcl_siv_name == D3D10_SB_NAME_CLIP_DISTANCE) {
-               ++sx.num_clip_distances_declared;
-               /* re-emit should be safe... */
-               ureg_property(ureg, TGSI_PROPERTY_NUM_CLIPDIST_ENABLED,
-                             sx.num_clip_distances_declared);
-            } else {
-               ++sx.num_cull_distances_declared;
-               ureg_property(ureg, TGSI_PROPERTY_NUM_CULLDIST_ENABLED,
-                             sx.num_cull_distances_declared);
-            }
-         } else if (0 && opcode.dcl_siv_name == D3D10_SB_NAME_CULL_DISTANCE) {
-            sx.cull_distance_mapping[sx.num_cull_distances_declared].d3d =
-               opcode.dst[0].base.index[0].imm;
-            sx.cull_distance_mapping[sx.num_cull_distances_declared].tgsi =
-               sx.num_cull_distances_declared;
-            ++sx.num_cull_distances_declared;
-            ureg_property(ureg, TGSI_PROPERTY_NUM_CULLDIST_ENABLED,
-                          sx.num_cull_distances_declared);
+            dcl_distance_output(&sx, ureg, &opcode.dst[0],
+                                (D3D10_SB_NAME)opcode.dcl_siv_name,
+                                output_mapping);
+         } else {
+            struct ureg_dst dst =
+               ureg_DECL_output_masked(
+                  ureg, translate_system_name(opcode.dcl_siv_name), 0,
+                  output_writemask(&opcode.dst[0]), 0, 1);
+            if (output_mapping)
+               output_mapping[dst.Index] = opcode.dst[0].base.index[0].imm;
+            dcl_temporary_output(&sx, dst, &opcode.dst[0]);
          }
-
-         dcl_base_output(&sx, ureg,
-                         ureg_DECL_output_masked(
-                            ureg,
-                            translate_system_name(opcode.dcl_siv_name),
-                            translate_semantic_index(&sx, opcode.dcl_siv_name,
-                                                     &opcode.dst[0]),
-                            opcode.dst[0].mask >> D3D10_SB_OPERAND_4_COMPONENT_MASK_SHIFT,
-                            0, 1),
-                         &opcode.dst[0]);
          break;
 
       case D3D10_SB_OPCODE_DCL_OUTPUT_SGV:
          assert(opcode.dst[0].base.index_dim == 1);
          assert(opcode.dst[0].base.index[0].imm < SHADER_MAX_OUTPUTS);
 
-         if (output_mapping) {
-            unsigned nr_outputs = ureg_get_nr_outputs(ureg);
-            output_mapping[nr_outputs]
-               = opcode.dst[0].base.index[0].imm;
+         {
+            struct ureg_dst dst =
+               ureg_DECL_output(ureg,
+                                translate_system_name(opcode.dcl_siv_name),
+                                0);
+            if (output_mapping)
+               output_mapping[dst.Index] = opcode.dst[0].base.index[0].imm;
+            dcl_temporary_output(&sx, dst, &opcode.dst[0]);
          }
-         dcl_base_output(&sx, ureg,
-                         ureg_DECL_output(ureg,
-                                          translate_system_name(opcode.dcl_siv_name),
-                                          0),
-                         &opcode.dst[0]);
          break;
 
       case D3D10_SB_OPCODE_DCL_TEMPS:
@@ -2154,6 +2277,11 @@ Shader_tgsi_translate(const unsigned *code,
          }
       }
          break;
+      case D3D10_SB_OPCODE_RET:
+         if (parser.header.type == D3D10_SB_VERTEX_SHADER && !inside_sub)
+            emit_output_moves(&sx);
+         ureg_RET(ureg);
+         break;
       case D3D10_SB_OPCODE_RETC:
       case D3D10_SB_OPCODE_CONTINUEC:
       case D3D10_SB_OPCODE_CALLC:
@@ -2175,6 +2303,8 @@ Shader_tgsi_translate(const unsigned *code,
          }
          switch (opcode.type) {
          case D3D10_SB_OPCODE_RETC:
+            if (parser.header.type == D3D10_SB_VERTEX_SHADER && !inside_sub)
+               emit_output_moves(&sx);
             ureg_RET(ureg);
             break;
          case D3D10_SB_OPCODE_CONTINUEC:
@@ -2220,12 +2350,14 @@ Shader_tgsi_translate(const unsigned *code,
       }
          break;
       case D3D10_SB_OPCODE_EMIT:
+         emit_output_moves(&sx);
          ureg_EMIT(ureg, ureg_imm1u(ureg, 0));
          break;
       case D3D10_SB_OPCODE_CUT:
          ureg_ENDPRIM(ureg, ureg_imm1u(ureg, 0));
          break;
       case D3D10_SB_OPCODE_EMITTHENCUT:
+         emit_output_moves(&sx);
          ureg_EMIT(ureg, ureg_imm1u(ureg, 0));
          ureg_ENDPRIM(ureg, ureg_imm1u(ureg, 0));
          break;
@@ -2284,6 +2416,9 @@ Shader_tgsi_translate(const unsigned *code,
    if (inside_sub) {
       ureg_ENDSUB(ureg);
    }
+
+   assert(sx.next_clip_distance == sx.num_clip_distances);
+   assert(sx.next_cull_distance == sx.num_cull_distances);
 
    ureg_END(ureg);
 

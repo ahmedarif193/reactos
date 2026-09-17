@@ -25,6 +25,7 @@
 #include "util/u_memory.h"
 #include "nir.h"
 #include "nir_builder.h"
+#include "nir_builtin_builder.h"
 #include "nir_xfb_info.h"
 
 static enum mesa_prim
@@ -123,6 +124,7 @@ nir_create_passthrough_gs(const nir_shader_compiler_options *options,
                           enum mesa_prim primitive_type,
                           enum mesa_prim output_primitive_type,
                           bool emulate_edgeflags,
+                          bool emulate_cull_distance,
                           bool force_line_strip_out,
                           bool passthrough_prim_id)
 {
@@ -154,6 +156,9 @@ nir_create_passthrough_gs(const nir_shader_compiler_options *options,
    bool handle_flat = output_lines && nir->info.gs.output_primitive != gs_out_prim_for_topology(primitive_type);
    nir_variable *in_vars[VARYING_SLOT_MAX * 4];
    nir_variable *out_vars[VARYING_SLOT_MAX * 4];
+   nir_variable *cull_distance_in = NULL;
+   nir_variable *primitive_id_out = NULL;
+   unsigned cull_distance_offset = 0;
    unsigned num_inputs = 0, num_outputs = 0;
 
    /* Create input/output variables. */
@@ -178,6 +183,33 @@ nir_create_passthrough_gs(const nir_shader_compiler_options *options,
       in->type = glsl_array_type(var->type, 6, false);
       in->data.mode = nir_var_shader_in;
       nir_shader_add_variable(nir, in);
+
+      if (emulate_cull_distance &&
+          prev_stage->info.cull_distance_array_size > 0) {
+         const unsigned clip_size =
+            prev_stage->info.clip_distance_array_size;
+         const unsigned cull_size =
+            prev_stage->info.cull_distance_array_size;
+
+         if (var->data.location == VARYING_SLOT_CULL_DIST0) {
+            cull_distance_in = in;
+            cull_distance_offset = 0;
+         } else if (var->data.compact &&
+                    var->data.location >= VARYING_SLOT_CLIP_DIST0 &&
+                    var->data.location <= VARYING_SLOT_CLIP_DIST1 &&
+                    glsl_type_is_array(var->type)) {
+            const unsigned first =
+               (var->data.location - VARYING_SLOT_CLIP_DIST0) * 4 +
+               var->data.location_frac;
+            const unsigned length = glsl_array_size(var->type);
+
+            if (first <= clip_size &&
+                first + length >= clip_size + cull_size) {
+               cull_distance_in = in;
+               cull_distance_offset = clip_size - first;
+            }
+         }
+      }
 
       in_vars[num_inputs++] = in;
 
@@ -208,15 +240,12 @@ nir_create_passthrough_gs(const nir_shader_compiler_options *options,
        *
        * However, if a geometry shader precedes a fragment shader that reads
        * primitive ID, Vulkan requires that the geometry shader write primitive ID.
-       * To handle this case correctly, we must write primitive ID, copying the
-       * fixed-function gl_PrimitiveIDIn input which matches what the fragment
-       * shader will expect.
+       * Use the canonical system-value load for fixed-function gl_PrimitiveIDIn;
+       * unlike ordinary geometry inputs, it is not a per-vertex array.
        */
-      in_vars[num_inputs++] = nir_create_variable_with_location(
-         nir, nir_var_shader_in, VARYING_SLOT_PRIMITIVE_ID, glsl_int_type());
-
-      out_vars[num_outputs++] = nir_create_variable_with_location(
+      primitive_id_out = nir_create_variable_with_location(
          nir, nir_var_shader_out, VARYING_SLOT_PRIMITIVE_ID, glsl_int_type());
+      primitive_id_out->data.interpolation = INTERP_MODE_FLAT;
    }
 
    unsigned int start_vert = 0;
@@ -237,6 +266,39 @@ nir_create_passthrough_gs(const nir_shader_compiler_options *options,
       break;
    }
 
+   if (emulate_cull_distance) {
+      assert(prev_stage->info.cull_distance_array_size > 0);
+      assert(cull_distance_in);
+
+      nir_def *primitive_culled = nir_imm_false(&b);
+      for (unsigned distance = 0;
+           distance < prev_stage->info.cull_distance_array_size;
+           ++distance) {
+         nir_def *all_vertices_out = nir_imm_true(&b);
+
+         for (unsigned vertex = start_vert; vertex < end_vert;
+              vertex += vert_step) {
+            nir_deref_instr *deref =
+               nir_build_deref_var(&b, cull_distance_in);
+            deref = nir_build_deref_array_imm(&b, deref, vertex);
+            deref = nir_build_deref_array_imm(
+               &b, deref, cull_distance_offset + distance);
+            nir_def *value = nir_load_deref(&b, deref);
+            nir_def *vertex_out =
+               nir_ior(&b, nir_flt_imm(&b, value, 0.0),
+                       nir_fisnan(&b, value));
+
+            all_vertices_out =
+               nir_iand(&b, all_vertices_out, vertex_out);
+         }
+
+         primitive_culled =
+            nir_ior(&b, primitive_culled, all_vertices_out);
+      }
+
+      nir_push_if(&b, nir_inot(&b, primitive_culled));
+   }
+
    nir_variable *edge_var = nir_find_variable_with_location(nir, nir_var_shader_in, VARYING_SLOT_EDGE);
    nir_def *flat_interp_mask_def = nir_load_flat_mask(&b);
    nir_def *last_pv_vert_def = nir_load_provoking_last(&b);
@@ -244,6 +306,7 @@ nir_create_passthrough_gs(const nir_shader_compiler_options *options,
    nir_def *start_vert_index = nir_imm_int(&b, start_vert);
    nir_def *end_vert_index = nir_imm_int(&b, end_vert - 1);
    nir_def *pv_vert_index = nir_bcsel(&b, last_pv_vert_def, end_vert_index, start_vert_index);
+   nir_def *primitive_id = passthrough_prim_id ? nir_load_primitive_id(&b) : NULL;
    for (unsigned i = start_vert; i < end_vert || needs_closing; i += vert_step) {
       int idx = i < end_vert ? i : start_vert;
       /* Copy inputs to outputs. */
@@ -260,14 +323,15 @@ nir_create_passthrough_gs(const nir_shader_compiler_options *options,
             index = nir_bcsel(&b, nir_ieq_imm(&b, nir_iand_imm(&b, flat_interp_mask_def, mask), 0), nir_imm_int(&b, idx), pv_vert_index);
          }
 
-         /* gl_PrimitiveIDIn is not arrayed, all other inputs are */
          nir_deref_instr *value = nir_build_deref_var(&b, in_vars[j]);
-         if (in_vars[j]->data.location != VARYING_SLOT_PRIMITIVE_ID)
-            value = nir_build_deref_array(&b, value, index);
+         value = nir_build_deref_array(&b, value, index);
 
          copy_vars(&b, nir_build_deref_var(&b, out_vars[oj]), value);
          ++oj;
       }
+
+      if (primitive_id_out)
+         nir_store_var(&b, primitive_id_out, primitive_id, 0x1);
 
       if (emulate_edgeflags && !output_lines) {
          nir_def *edge_value = nir_channel(&b, nir_load_array_var_imm(&b, edge_var, idx), 0);
@@ -290,6 +354,8 @@ nir_create_passthrough_gs(const nir_shader_compiler_options *options,
    }
 
    nir_end_primitive(&b, 0);
+   if (emulate_cull_distance)
+      nir_pop_if(&b, NULL);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
    nir_validate_shader(nir, "in nir_create_passthrough_gs");
 

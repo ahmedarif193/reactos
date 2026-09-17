@@ -1132,6 +1132,24 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
         struct v3d_context *v3d = v3d_context(pctx);
 
+        /* V3D does not have a fixed-function cull-distance unit.  Insert a
+         * GPU geometry stage which evaluates the per-primitive Direct3D/GL
+         * rule before any normal draw setup.  Binding it through the regular
+         * Gallium interface keeps shader linking, primitive queries and VPM
+         * configuration on the same path as an application geometry shader.
+         */
+        if (!v3d->prog.bind_gs && v3d->prog.bind_vs &&
+            v3d->prog.bind_vs->base.ir.nir->info.cull_distance_array_size) {
+                struct v3d_uncompiled_shader *gs =
+                        v3d_get_cull_distance_gs(v3d, info->mode);
+
+                pctx->bind_gs_state(pctx, gs);
+                v3d_draw_vbo(pctx, info, drawid_offset, indirect, draws,
+                             num_draws);
+                pctx->bind_gs_state(pctx, NULL);
+                return;
+        }
+
         if (indirect && indirect->buffer && v3d->prog.bind_vs &&
             BITSET_TEST(v3d->prog.bind_vs->base.ir.nir->info.system_values_read,
                         SYSTEM_VALUE_VERTEX_ID_ZERO_BASE)) {
