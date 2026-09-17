@@ -129,7 +129,10 @@ Cleanup:
     if (TopologyMiniport)
         TopologyMiniport->Release();
     if (!NT_SUCCESS(Status))
+    {
+        Adapter->Shutdown();
         Adapter->Release();
+    }
     return Status;
 }
 
@@ -164,7 +167,7 @@ Rpi5HdmiPnp(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         if (Adapter)
         {
             DeviceExtension->Adapter = NULL;
-            Adapter->Stop();
+            Adapter->Shutdown();
             Adapter->Release();
         }
     }

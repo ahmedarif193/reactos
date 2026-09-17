@@ -405,9 +405,49 @@ static PCPROPERTY_ITEM Rpi5HdmiJackProperties[] =
     }
 };
 
+static NTSTATUS NTAPI
+Rpi5HdmiJackEventHandler(PPCEVENT_REQUEST EventRequest)
+{
+    CRpi5HdmiTopology *Topology;
+
+    if (!EventRequest || !EventRequest->MajorTarget)
+        return STATUS_INVALID_PARAMETER;
+
+    switch (EventRequest->Verb)
+    {
+        case PCEVENT_VERB_ADD:
+            if (!EventRequest->EventEntry)
+                return STATUS_INVALID_PARAMETER;
+            Topology = static_cast<CRpi5HdmiTopology *>(
+                static_cast<PMINIPORTTOPOLOGY>(EventRequest->MajorTarget));
+            Topology->AddEventToEventList(EventRequest->EventEntry);
+            return STATUS_SUCCESS;
+
+        case PCEVENT_VERB_REMOVE:
+        case PCEVENT_VERB_SUPPORT:
+            return STATUS_SUCCESS;
+
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+}
+
+static PCEVENT_ITEM Rpi5HdmiJackEvents[] =
+{
+    {
+        &KSEVENTSETID_PinCapsChange,
+        KSEVENT_PINCAPS_JACKINFOCHANGE,
+        PCEVENT_ITEM_FLAG_ENABLE | PCEVENT_ITEM_FLAG_BASICSUPPORT,
+        Rpi5HdmiJackEventHandler
+    }
+};
+
 DEFINE_PCAUTOMATION_TABLE_PROP(Rpi5HdmiVolumeAutomation, Rpi5HdmiVolumeProperties);
 DEFINE_PCAUTOMATION_TABLE_PROP(Rpi5HdmiMuteAutomation, Rpi5HdmiMuteProperties);
-DEFINE_PCAUTOMATION_TABLE_PROP(Rpi5HdmiJackAutomation, Rpi5HdmiJackProperties);
+DEFINE_PCAUTOMATION_TABLE_PROP_EVENT(
+    Rpi5HdmiJackAutomation,
+    Rpi5HdmiJackProperties,
+    Rpi5HdmiJackEvents);
 
 static PCPIN_DESCRIPTOR Rpi5HdmiWavePins[] =
 {
@@ -602,13 +642,19 @@ Rpi5HdmiIsFormatSupported(PKSDATAFORMAT DataFormat)
            DataFormat->SampleSize == RPI5HDMI_BLOCK_ALIGN;
 }
 
-CRpi5HdmiTopology::CRpi5HdmiTopology(CRpi5HdmiAdapter *Adapter) : m_Adapter(Adapter)
+CRpi5HdmiTopology::CRpi5HdmiTopology(CRpi5HdmiAdapter *Adapter)
+    : m_Adapter(Adapter), m_PortEvents(NULL)
 {
     m_Adapter->AddRef();
 }
 
 CRpi5HdmiTopology::~CRpi5HdmiTopology()
 {
+    if (m_PortEvents)
+    {
+        m_PortEvents->Release();
+        m_PortEvents = NULL;
+    }
     m_Adapter->Release();
 }
 
@@ -665,10 +711,34 @@ NTSTATUS
 NTAPI
 CRpi5HdmiTopology::Init(PUNKNOWN UnknownAdapter, PRESOURCELIST ResourceList, PPORTTOPOLOGY Port)
 {
+    NTSTATUS Status;
+
     UNREFERENCED_PARAMETER(UnknownAdapter);
     UNREFERENCED_PARAMETER(ResourceList);
-    UNREFERENCED_PARAMETER(Port);
-    return STATUS_SUCCESS;
+
+    if (!Port)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = Port->QueryInterface(
+        IID_IPortEvents,
+        reinterpret_cast<PVOID *>(&m_PortEvents));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = m_Adapter->RegisterJackEventPort(m_PortEvents);
+    if (!NT_SUCCESS(Status))
+    {
+        m_PortEvents->Release();
+        m_PortEvents = NULL;
+    }
+    return Status;
+}
+
+VOID
+CRpi5HdmiTopology::AddEventToEventList(PKSEVENT_ENTRY EventEntry)
+{
+    if (m_PortEvents && EventEntry)
+        m_PortEvents->AddEventToEventList(EventEntry);
 }
 
 CRpi5HdmiWave::CRpi5HdmiWave(CRpi5HdmiAdapter *Adapter) : m_Adapter(Adapter)

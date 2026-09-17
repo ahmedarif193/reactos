@@ -22,6 +22,7 @@
 #define RPI5HDMI_VOLUME_MAXIMUM 0
 #define RPI5HDMI_VOLUME_STEP (6 * 0x10000)
 #define RPI5HDMI_REGISTER_BLOCK_COUNT 7
+#define RPI5HDMI_HOTPLUG_INTERRUPT_COUNT 2
 
 PVOID
 __cdecl
@@ -78,6 +79,8 @@ class CRpi5HdmiAdapter : public CUnknownImpl<IUnknown>
 
     NTSTATUS Initialize(PDEVICE_OBJECT DeviceObject, PRESOURCELIST ResourceList);
     VOID Stop();
+    VOID Shutdown();
+    NTSTATUS RegisterJackEventPort(PPORTEVENTS PortEvents);
 
     BOOLEAN ClaimStream();
     VOID ReleaseStream();
@@ -103,9 +106,11 @@ class CRpi5HdmiAdapter : public CUnknownImpl<IUnknown>
 
   private:
     static NTSTATUS NTAPI InterruptService(PINTERRUPTSYNC InterruptSync, PVOID Context);
+    static NTSTATUS NTAPI HotPlugInterruptService(PINTERRUPTSYNC InterruptSync, PVOID Context);
     static NTSTATUS NTAPI StartSynchronized(PINTERRUPTSYNC InterruptSync, PVOID Context);
     static NTSTATUS NTAPI StopSynchronized(PINTERRUPTSYNC InterruptSync, PVOID Context);
     static VOID NTAPI DpcRoutine(PRKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
+    static VOID NTAPI HotPlugDpcRoutine(PRKDPC Dpc, PVOID DeferredContext, PVOID SystemArgument1, PVOID SystemArgument2);
 
     VOID CollectRegisterBlocks(PVOID **Mappings, PULONG *Lengths);
     NTSTATUS MapResources(PRESOURCELIST ResourceList);
@@ -118,6 +123,7 @@ class CRpi5HdmiAdapter : public CUnknownImpl<IUnknown>
     VOID BuildControlBlocks();
     VOID ConvertPeriod(ULONG Period);
     VOID ProcessInterrupts();
+    VOID ProcessHotPlugInterrupt();
     BOOLEAN GetDmaBufferOffset(PULONGLONG Offset);
     BOOLEAN IsAudioPathReady();
 
@@ -141,9 +147,15 @@ class CRpi5HdmiAdapter : public CUnknownImpl<IUnknown>
     PHYSICAL_ADDRESS m_HdPhysicalAddress;
 
     PINTERRUPTSYNC m_InterruptSync;
+    PINTERRUPTSYNC m_HotPlugInterruptSync[RPI5HDMI_HOTPLUG_INTERRUPT_COUNT];
     KDPC m_Dpc;
+    KDPC m_HotPlugDpc;
     KSPIN_LOCK m_EventLock;
     volatile LONG m_PendingInterrupts;
+    volatile LONG m_HotPlugDpcPending;
+    volatile LONG m_SinkConnected;
+    volatile LONG m_Shutdown;
+    PVOID volatile m_JackPortEvents;
     volatile LONG m_Running;
     volatile LONG m_StreamOpen;
     volatile LONG m_VolumeLevel[RPI5HDMI_CHANNELS];
@@ -181,8 +193,11 @@ class CRpi5HdmiTopology : public CUnknownImpl<IMiniportTopology>
         return m_Adapter;
     }
 
+    VOID AddEventToEventList(PKSEVENT_ENTRY EventEntry);
+
   private:
     CRpi5HdmiAdapter *m_Adapter;
+    PPORTEVENTS m_PortEvents;
 };
 
 class CRpi5HdmiWave : public CUnknownImpl<IMiniportWaveRT>
