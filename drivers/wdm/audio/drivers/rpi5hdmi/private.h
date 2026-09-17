@@ -99,6 +99,7 @@ class CRpi5HdmiAdapter : public CUnknownImpl<IUnknown>
     NTSTATUS SetVolume(ULONG Channel, LONG Level);
     BOOLEAN GetMute();
     VOID SetMute(BOOLEAN Mute);
+    BOOLEAN IsSinkConnected();
 
   private:
     static NTSTATUS NTAPI InterruptService(PINTERRUPTSYNC InterruptSync, PVOID Context);
@@ -118,6 +119,7 @@ class CRpi5HdmiAdapter : public CUnknownImpl<IUnknown>
     VOID ConvertPeriod(ULONG Period);
     VOID ProcessInterrupts();
     BOOLEAN GetDmaBufferOffset(PULONGLONG Offset);
+    BOOLEAN IsAudioPathReady();
 
     PDEVICE_OBJECT m_DeviceObject;
     PVOID m_CoreRegisters;

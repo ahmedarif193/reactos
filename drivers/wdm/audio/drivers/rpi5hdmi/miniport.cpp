@@ -7,6 +7,8 @@
 
 #include "private.h"
 
+static const ULONG Rpi5HdmiTopologyPinCount = 2;
+
 static KSDATARANGE_AUDIO Rpi5HdmiPcmDataRange =
 {
     {
@@ -47,12 +49,17 @@ static PKSDATARANGE Rpi5HdmiBridgeDataRanges[] =
 };
 
 /*
- * Emits the KSPROPERTY_TYPE_BASICSUPPORT reply shared by the volume and mute
+ * Emits the KSPROPERTY_TYPE_BASICSUPPORT reply shared by the topology property
  * handlers. Returns STATUS_MORE_ENTRIES when the caller's buffer is large
  * enough for a members list, so the caller can append its own.
  */
 static NTSTATUS
-Rpi5HdmiBasicSupport(PPCPROPERTY_REQUEST PropertyRequest, ULONG PropertyType, ULONG DescriptionSize, ULONG MembersListCount)
+Rpi5HdmiBasicSupport(
+    PPCPROPERTY_REQUEST PropertyRequest,
+    ULONG AccessFlags,
+    ULONG PropertyType,
+    ULONG DescriptionSize,
+    ULONG MembersListCount)
 {
     PKSPROPERTY_DESCRIPTION Description;
     ULONG ValueSize = PropertyRequest->ValueSize;
@@ -65,17 +72,25 @@ Rpi5HdmiBasicSupport(PPCPROPERTY_REQUEST PropertyRequest, ULONG PropertyType, UL
 
     if (ValueSize < sizeof(KSPROPERTY_DESCRIPTION))
     {
-        *static_cast<PULONG>(PropertyRequest->Value) = KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_SET;
+        *static_cast<PULONG>(PropertyRequest->Value) = AccessFlags;
         PropertyRequest->ValueSize = sizeof(ULONG);
         return STATUS_SUCCESS;
     }
 
     Description = static_cast<PKSPROPERTY_DESCRIPTION>(PropertyRequest->Value);
-    RtlZeroMemory(Description, ValueSize);
-    Description->AccessFlags = KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_SET;
+    RtlZeroMemory(Description, sizeof(*Description));
+    Description->AccessFlags = AccessFlags;
     Description->DescriptionSize = DescriptionSize;
-    Description->PropTypeSet.Set = KSPROPTYPESETID_General;
-    Description->PropTypeSet.Id = PropertyType;
+    if (PropertyType == VT_ILLEGAL)
+    {
+        Description->PropTypeSet.Set = GUID_NULL;
+        Description->PropTypeSet.Id = 0;
+    }
+    else
+    {
+        Description->PropTypeSet.Set = KSPROPTYPESETID_General;
+        Description->PropTypeSet.Id = PropertyType;
+    }
     Description->MembersListCount = MembersListCount;
     PropertyRequest->ValueSize = sizeof(KSPROPERTY_DESCRIPTION);
 
@@ -97,7 +112,12 @@ Rpi5HdmiVolumePropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
 
     if (PropertyRequest->Verb & KSPROPERTY_TYPE_BASICSUPPORT)
     {
-        NTSTATUS Status = Rpi5HdmiBasicSupport(PropertyRequest, VT_I4, DescriptionSize, 1);
+        NTSTATUS Status = Rpi5HdmiBasicSupport(
+            PropertyRequest,
+            KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_SET,
+            VT_I4,
+            DescriptionSize,
+            1);
 
         if (Status != STATUS_MORE_ENTRIES)
             return Status;
@@ -163,7 +183,12 @@ Rpi5HdmiMutePropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
 
     if (PropertyRequest->Verb & KSPROPERTY_TYPE_BASICSUPPORT)
     {
-        NTSTATUS Status = Rpi5HdmiBasicSupport(PropertyRequest, VT_BOOL, DescriptionSize, 1);
+        NTSTATUS Status = Rpi5HdmiBasicSupport(
+            PropertyRequest,
+            KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_SET,
+            VT_BOOL,
+            DescriptionSize,
+            1);
 
         if (Status != STATUS_MORE_ENTRIES)
             return Status;
@@ -216,6 +241,134 @@ Rpi5HdmiMutePropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
     return STATUS_NOT_SUPPORTED;
 }
 
+template <typename Description>
+static NTSTATUS
+Rpi5HdmiPrepareJackDescription(
+    PPCPROPERTY_REQUEST PropertyRequest,
+    ULONG PinId,
+    PKSMULTIPLE_ITEM *MultipleItem,
+    Description **JackDescription)
+{
+    ULONG DescriptionCount;
+    ULONG RequiredSize;
+
+    if (PinId >= Rpi5HdmiTopologyPinCount)
+        return STATUS_INVALID_PARAMETER;
+
+    DescriptionCount = PinId == 1 ? 1 : 0;
+    RequiredSize = sizeof(KSMULTIPLE_ITEM) +
+                   DescriptionCount * sizeof(Description);
+
+    if (!PropertyRequest->ValueSize)
+    {
+        PropertyRequest->ValueSize = RequiredSize;
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    if (PropertyRequest->ValueSize < RequiredSize)
+    {
+        PropertyRequest->ValueSize = RequiredSize;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    *MultipleItem = static_cast<PKSMULTIPLE_ITEM>(PropertyRequest->Value);
+    (*MultipleItem)->Size = RequiredSize;
+    (*MultipleItem)->Count = DescriptionCount;
+    *JackDescription = DescriptionCount
+        ? reinterpret_cast<Description *>(*MultipleItem + 1)
+        : NULL;
+    PropertyRequest->ValueSize = RequiredSize;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI
+Rpi5HdmiJackDescriptionPropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
+{
+    CRpi5HdmiTopology *Topology;
+    PKSMULTIPLE_ITEM MultipleItem;
+    PKSJACK_DESCRIPTION JackDescription;
+    ULONG PinId;
+    NTSTATUS Status;
+
+    if (!PropertyRequest || !PropertyRequest->MajorTarget ||
+        !PropertyRequest->Instance ||
+        PropertyRequest->InstanceSize < sizeof(ULONG))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    PinId = *static_cast<PULONG>(PropertyRequest->Instance);
+    if (PinId >= Rpi5HdmiTopologyPinCount)
+        return STATUS_INVALID_PARAMETER;
+    if (PropertyRequest->Verb & KSPROPERTY_TYPE_BASICSUPPORT)
+    {
+        return Rpi5HdmiBasicSupport(
+            PropertyRequest,
+            KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_GET,
+            VT_ILLEGAL,
+            sizeof(KSPROPERTY_DESCRIPTION),
+            0);
+    }
+    if (!(PropertyRequest->Verb & KSPROPERTY_TYPE_GET))
+        return STATUS_NOT_SUPPORTED;
+
+    Status = Rpi5HdmiPrepareJackDescription(
+        PropertyRequest, PinId, &MultipleItem, &JackDescription);
+    if (!NT_SUCCESS(Status) || !JackDescription)
+        return Status;
+
+    Topology = static_cast<CRpi5HdmiTopology *>(
+        static_cast<PMINIPORTTOPOLOGY>(PropertyRequest->MajorTarget));
+    RtlZeroMemory(JackDescription, sizeof(*JackDescription));
+    JackDescription->ConnectionType = eConnTypeOtherDigital;
+    JackDescription->GeoLocation = eGeoLocHDMI;
+    JackDescription->GenLocation = eGenLocPrimaryBox;
+    JackDescription->PortConnection = ePortConnJack;
+    JackDescription->IsConnected = Topology->GetAdapter()->IsSinkConnected();
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI
+Rpi5HdmiJackDescription2PropertyHandler(PPCPROPERTY_REQUEST PropertyRequest)
+{
+    PKSMULTIPLE_ITEM MultipleItem;
+    PKSJACK_DESCRIPTION2 JackDescription;
+    ULONG PinId;
+    NTSTATUS Status;
+
+    if (!PropertyRequest || !PropertyRequest->MajorTarget ||
+        !PropertyRequest->Instance ||
+        PropertyRequest->InstanceSize < sizeof(ULONG))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    PinId = *static_cast<PULONG>(PropertyRequest->Instance);
+    if (PinId >= Rpi5HdmiTopologyPinCount)
+        return STATUS_INVALID_PARAMETER;
+    if (PropertyRequest->Verb & KSPROPERTY_TYPE_BASICSUPPORT)
+    {
+        return Rpi5HdmiBasicSupport(
+            PropertyRequest,
+            KSPROPERTY_TYPE_BASICSUPPORT | KSPROPERTY_TYPE_GET,
+            VT_ILLEGAL,
+            sizeof(KSPROPERTY_DESCRIPTION),
+            0);
+    }
+    if (!(PropertyRequest->Verb & KSPROPERTY_TYPE_GET))
+        return STATUS_NOT_SUPPORTED;
+
+    Status = Rpi5HdmiPrepareJackDescription(
+        PropertyRequest, PinId, &MultipleItem, &JackDescription);
+    if (!NT_SUCCESS(Status) || !JackDescription)
+        return Status;
+
+    RtlZeroMemory(JackDescription, sizeof(*JackDescription));
+    JackDescription->JackCapabilities =
+        JACKDESC2_PRESENCE_DETECT_CAPABILITY;
+    return STATUS_SUCCESS;
+}
+
 static PCPROPERTY_ITEM Rpi5HdmiVolumeProperties[] =
 {
     {
@@ -236,8 +389,25 @@ static PCPROPERTY_ITEM Rpi5HdmiMuteProperties[] =
     }
 };
 
+static PCPROPERTY_ITEM Rpi5HdmiJackProperties[] =
+{
+    {
+        &KSPROPSETID_Jack,
+        KSPROPERTY_JACK_DESCRIPTION,
+        KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_BASICSUPPORT,
+        Rpi5HdmiJackDescriptionPropertyHandler
+    },
+    {
+        &KSPROPSETID_Jack,
+        KSPROPERTY_JACK_DESCRIPTION2,
+        KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_BASICSUPPORT,
+        Rpi5HdmiJackDescription2PropertyHandler
+    }
+};
+
 DEFINE_PCAUTOMATION_TABLE_PROP(Rpi5HdmiVolumeAutomation, Rpi5HdmiVolumeProperties);
 DEFINE_PCAUTOMATION_TABLE_PROP(Rpi5HdmiMuteAutomation, Rpi5HdmiMuteProperties);
+DEFINE_PCAUTOMATION_TABLE_PROP(Rpi5HdmiJackAutomation, Rpi5HdmiJackProperties);
 
 static PCPIN_DESCRIPTOR Rpi5HdmiWavePins[] =
 {
@@ -366,7 +536,7 @@ static PCNODE_DESCRIPTOR Rpi5HdmiTopologyNodes[] =
 PCFILTER_DESCRIPTOR Rpi5HdmiTopologyFilterDescriptor =
 {
     0,
-    NULL,
+    &Rpi5HdmiJackAutomation,
     sizeof(PCPIN_DESCRIPTOR),
     RTL_NUMBER_OF(Rpi5HdmiTopologyPins),
     Rpi5HdmiTopologyPins,
