@@ -8056,6 +8056,38 @@ static void test_ShowWindow(void)
     }
 }
 
+static void test_sc_maximize_hidden(void)
+{
+    HWND hwnd;
+    DWORD style;
+    BOOL ret;
+
+    hwnd = CreateWindowExA(0, "MainWindowClass", "sc_maximize",
+                           WS_OVERLAPPEDWINDOW | WS_MAXIMIZE,
+                           100, 100, 400, 300, 0, 0,
+                           GetModuleHandleA(NULL), NULL);
+    ok(hwnd != 0, "CreateWindowEx failed\n");
+
+    ok(!IsWindowVisible(hwnd), "window should not be visible\n");
+    ok(IsZoomed(hwnd), "window should be maximized\n");
+
+    SendMessageA(hwnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+
+    style = GetWindowLongA(hwnd, GWL_STYLE);
+    ok(!(style & WS_VISIBLE), "SC_MAXIMIZE should not show the window, style %08lx\n", style);
+    ok(!IsWindowVisible(hwnd), "SC_MAXIMIZE should not show the window\n");
+    ok(GetActiveWindow() != hwnd, "SC_MAXIMIZE should not activate the window\n");
+
+    ret = ShowWindow(hwnd, SW_SHOW);
+    ok(!ret, "unexpected ret: %d\n", ret);
+    ok(IsWindowVisible(hwnd), "window should be visible\n");
+    ok(GetActiveWindow() == hwnd, "window should be active\n");
+    ok(IsZoomed(hwnd), "window should still be maximized\n");
+
+    DestroyWindow(hwnd);
+    flush_events(TRUE);
+}
+
 static void test_ShowWindow_owned(HWND hwndMain)
 {
     MONITORINFO mon_info = {sizeof(mon_info)};
@@ -14903,6 +14935,7 @@ START_TEST(win)
     test_SetWindowLong();
     test_set_window_style();
     test_ShowWindow();
+    test_sc_maximize_hidden();
     test_ShowWindow_owned(hwndMain);
     test_ShowWindow_child(hwndMain);
     test_ShowWindow_mdichild();
