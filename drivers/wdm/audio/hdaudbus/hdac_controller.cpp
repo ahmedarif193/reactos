@@ -390,7 +390,10 @@ int hda_stream_interrupt(PFDO_CONTEXT fdoCtx, unsigned int status) {
 								stream->isr.CallbackContext,
 								sd_status);
 				}
-				stream->irqReceived = TRUE;
+				/* The ISR can preempt or run concurrently with the DPC.  An
+				 * ordinary byte store here can be overwritten by the DPC's
+				 * clear, permanently losing a period notification. */
+				InterlockedExchange(&stream->notificationPending, TRUE);
 			}
 		}
 	}
@@ -451,8 +454,7 @@ hda_dpc(
 
 	for (UINT32 i = 0; i < fdoCtx->numStreams; i++) {
 		PHDAC_STREAM stream = &fdoCtx->streams[i];
-		if (stream->irqReceived) {
-			stream->irqReceived = FALSE;
+		if (InterlockedExchange(&stream->notificationPending, FALSE)) {
 
 			for (int j = 0; j < MAX_NOTIF_EVENTS; j++) {
 				if (stream->registeredCallbacks[j].InUse) {

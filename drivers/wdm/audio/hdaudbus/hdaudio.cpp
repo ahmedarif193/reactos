@@ -348,6 +348,7 @@ HDA_SetDmaEngineState(
 		WdfInterruptAcquireLock(devData->FdoContext->Interrupt);
 
 		if (StreamState == RunState && !stream->running) {
+			InterlockedExchange(&stream->notificationPending, FALSE);
 			hdac_stream_setup(stream);
 			hdac_stream_start(stream);
 			stream->running = TRUE;
@@ -355,6 +356,7 @@ HDA_SetDmaEngineState(
 		else if ((StreamState == PauseState || StreamState == StopState) && stream->running) {
 			hdac_stream_stop(stream);
 			stream->running = FALSE;
+			InterlockedExchange(&stream->notificationPending, FALSE);
 		}
 		else if (StreamState == ResetState) {
 			if (!stream->running) {
