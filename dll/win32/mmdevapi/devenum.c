@@ -790,15 +790,26 @@ HRESULT load_driver_devices(EDataFlow flow)
     if (FAILED(params.result))
         goto end;
 
+    if (flow == eRender)
+        MMDevice_def_play = NULL;
+    else
+        MMDevice_def_rec = NULL;
+
     for (i = 0; i < params.num; i++) {
         GUID guid;
         MMDevice *dev;
+        DWORD state;
         const WCHAR *name = (WCHAR *)((char *)params.endpoints + params.endpoints[i].name);
         const char *dev_name = (char *)params.endpoints + params.endpoints[i].device;
 
         get_device_guid( flow, dev_name, &guid );
 
-        dev = MMDevice_Create(name, &guid, flow, DEVICE_STATE_ACTIVE, params.default_idx == i);
+#ifdef __REACTOS__
+        state = params.endpoints[i].state;
+#else
+        state = DEVICE_STATE_ACTIVE;
+#endif
+        dev = MMDevice_Create(name, &guid, flow, state, params.default_idx == i);
         if (dev)
             set_format(dev);
     }
@@ -885,11 +896,24 @@ static HRESULT WINAPI MMDevice_Activate(IMMDevice *iface, REFIID riid, DWORD cls
 {
     HRESULT hr = E_NOINTERFACE;
     MMDevice *This = impl_from_IMMDevice(iface);
+    BOOL creates_stream;
 
     TRACE("(%p)->(%s, %lx, %p, %p)\n", iface, debugstr_guid(riid), clsctx, params, ppv);
 
     if (!ppv)
         return E_POINTER;
+    *ppv = NULL;
+
+    creates_stream = IsEqualIID(riid, &IID_IAudioClient) ||
+            IsEqualIID(riid, &IID_IAudioClient2) ||
+            IsEqualIID(riid, &IID_IAudioClient3) ||
+            IsEqualIID(riid, &IID_IBaseFilter) ||
+            IsEqualIID(riid, &IID_IDirectSound) ||
+            IsEqualIID(riid, &IID_IDirectSound8) ||
+            IsEqualIID(riid, &IID_IDirectSoundCapture) ||
+            IsEqualIID(riid, &IID_ISpatialAudioClient);
+    if (creates_stream && This->state != DEVICE_STATE_ACTIVE)
+        return AUDCLNT_E_DEVICE_INVALIDATED;
 
     if (IsEqualIID(riid, &IID_IAudioClient) ||
             IsEqualIID(riid, &IID_IAudioClient2) ||
@@ -1347,9 +1371,17 @@ static HRESULT WINAPI MMDevEnum_GetDefaultAudioEndpoint(IMMDeviceEnumerator *ifa
     }
 
     if (flow == eRender)
+    {
+        if (!MMDevice_def_play)
+            return E_NOTFOUND;
         *device = &MMDevice_def_play->IMMDevice_iface;
+    }
     else
+    {
+        if (!MMDevice_def_rec)
+            return E_NOTFOUND;
         *device = &MMDevice_def_rec->IMMDevice_iface;
+    }
 
     if (!*device)
         return E_NOTFOUND;
@@ -1532,13 +1564,13 @@ static DWORD WINAPI notif_thread_proc(void *user)
         EnterCriticalSection(&g_notif_lock);
 
         notify_if_changed(eRender, eConsole, key, L"DefaultOutput",
-                out_name, &MMDevice_def_play->IMMDevice_iface);
+                out_name, MMDevice_def_play ? &MMDevice_def_play->IMMDevice_iface : NULL);
         notify_if_changed(eRender, eCommunications, key, L"DefaultVoiceOutput",
-                vout_name, &MMDevice_def_play->IMMDevice_iface);
+                vout_name, MMDevice_def_play ? &MMDevice_def_play->IMMDevice_iface : NULL);
         notify_if_changed(eCapture, eConsole, key, L"DefaultInput",
-                in_name, &MMDevice_def_rec->IMMDevice_iface);
+                in_name, MMDevice_def_rec ? &MMDevice_def_rec->IMMDevice_iface : NULL);
         notify_if_changed(eCapture, eCommunications, key, L"DefaultVoiceInput",
-                vin_name, &MMDevice_def_rec->IMMDevice_iface);
+                vin_name, MMDevice_def_rec ? &MMDevice_def_rec->IMMDevice_iface : NULL);
 
         LeaveCriticalSection(&g_notif_lock);
     }

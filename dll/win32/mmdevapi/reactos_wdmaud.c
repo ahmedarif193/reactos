@@ -673,6 +673,28 @@ static BOOL query_preferred_wave_format(EDataFlow flow, DWORD index,
     return TRUE;
 }
 
+static DWORD query_endpoint_state(EDataFlow flow, DWORD index)
+{
+    WDMAUD_DEVICE_INFO info;
+
+    ZeroMemory(&info, sizeof(info));
+    info.DeviceType = device_type_from_flow(flow);
+    info.DeviceIndex = index;
+
+    if (!wdmaud_ioctl(IOCTL_GETENDPOINT_STATE, &info))
+        return WDMAUD_ENDPOINT_STATE_NOTPRESENT;
+
+    if (info.u.EndpointState != WDMAUD_ENDPOINT_STATE_ACTIVE &&
+        info.u.EndpointState != WDMAUD_ENDPOINT_STATE_DISABLED &&
+        info.u.EndpointState != WDMAUD_ENDPOINT_STATE_NOTPRESENT &&
+        info.u.EndpointState != WDMAUD_ENDPOINT_STATE_UNPLUGGED)
+    {
+        return WDMAUD_ENDPOINT_STATE_NOTPRESENT;
+    }
+
+    return info.u.EndpointState;
+}
+
 static void get_device_display_name(EDataFlow flow, DWORD index, WCHAR *name, UINT name_len)
 {
     WDMAUD_DEVICE_INFO caps;
@@ -718,13 +740,13 @@ static void fill_endpoint_ids(struct get_endpoint_ids_params *params)
     {
         params->size = needed;
         params->num = count;
-        params->default_idx = 0;
+        params->default_idx = ~0u;
         params->result = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
         return;
     }
 
     params->num = count;
-    params->default_idx = 0;
+    params->default_idx = ~0u;
     params->result = S_OK;
 
     if (!count)
@@ -748,6 +770,13 @@ static void fill_endpoint_ids(struct get_endpoint_ids_params *params)
         device_name = (char *)(base + needed);
         format_device_name(params->flow, i, device_name, 32);
         needed += 32;
+
+        params->endpoints[i].state = query_endpoint_state(params->flow, i);
+        if (params->default_idx == ~0u &&
+            params->endpoints[i].state == WDMAUD_ENDPOINT_STATE_ACTIVE)
+        {
+            params->default_idx = i;
+        }
     }
 }
 
