@@ -211,6 +211,8 @@ typedef struct
 
     ULONG EventSetCount;
     PKSEVENT_SET EventSet;
+    ULONG RawEventSetCount;
+    const KSEVENT_SET *RawEventSet;
     PLIST_ENTRY EventList;
     PKSPIN_LOCK EventListLock;
 
@@ -222,6 +224,8 @@ typedef struct
     PUNKNOWN UnknownMiniport;
     PUNKNOWN UnknownStream;
     PVOID PortPin;
+    ULONG PinId;
+    BOOLEAN IsPin;
 }SUBDEVICE_DESCRIPTOR, *PSUBDEVICE_DESCRIPTOR;
 
 #undef INTERFACE

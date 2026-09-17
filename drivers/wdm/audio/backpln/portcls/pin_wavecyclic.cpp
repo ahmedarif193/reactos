@@ -991,9 +991,20 @@ CPortPinWaveCyclic::Close(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp)
 {
+    PIO_STACK_LOCATION IoStack;
+
     DPRINT("CPortPinWaveCyclic::Close entered\n");
 
     PC_ASSERT_IRQL(PASSIVE_LEVEL);
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    if (m_Descriptor->EventList && m_Descriptor->EventListLock)
+    {
+        KsFreeEventList(IoStack->FileObject,
+                        m_Descriptor->EventList,
+                        KSEVENTS_SPINLOCK,
+                        m_Descriptor->EventListLock);
+    }
 
     if (m_Format)
     {
@@ -1273,10 +1284,17 @@ CPortPinWaveCyclic::Init(
                                          sizeof(PinWaveCyclicEventSet) / sizeof(KSEVENT_SET),
                                          PinWaveCyclicEventSet,
                                          SubDeviceDescriptor->DeviceDescriptor);
+    if (!NT_SUCCESS(Status))
+    {
+        Subdevice->Release();
+        return Status;
+    }
 
     m_Descriptor->UnknownStream = (PUNKNOWN)m_Stream;
     m_Descriptor->UnknownMiniport = SubDeviceDescriptor->UnknownMiniport;
     m_Descriptor->PortPin = (PVOID)this;
+    m_Descriptor->IsPin = TRUE;
+    m_Descriptor->PinId = ConnectDetails->PinId;
     m_Descriptor->EventList = &m_EventList;
     m_Descriptor->EventListLock = &m_EventListLock;
 

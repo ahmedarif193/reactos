@@ -661,14 +661,19 @@ CPortPinWaveRT::DeviceIoControl(
             return HandleKsProperty(Irp);
 
         case IOCTL_KS_ENABLE_EVENT:
-            /* FIXME UNIMPLEMENTED */
-            UNIMPLEMENTED_ONCE;
-            break;
+            IoStack = IoGetCurrentIrpStackLocation(Irp);
+            Irp->IoStatus.Status = PcHandleEnableEventWithTable(Irp,
+                                                                 m_Descriptor);
+            if (Irp->IoStatus.Status != STATUS_PENDING)
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return Irp->IoStatus.Status;
 
         case IOCTL_KS_DISABLE_EVENT:
-            /* FIXME UNIMPLEMENTED */
-            UNIMPLEMENTED_ONCE;
-            break;
+            Irp->IoStatus.Status = PcHandleDisableEventWithTable(Irp,
+                                                                  m_Descriptor);
+            if (Irp->IoStatus.Status != STATUS_PENDING)
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return Irp->IoStatus.Status;
 
         case IOCTL_KS_HANDSHAKE:
             /* FIXME UNIMPLEMENTED */
@@ -857,6 +862,16 @@ CPortPinWaveRT::Close(
     IN PIRP Irp)
 {
     PCLOSESTREAM_CONTEXT Ctx;
+    PIO_STACK_LOCATION IoStack;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    if (m_Descriptor->EventList && m_Descriptor->EventListLock)
+    {
+        KsFreeEventList(IoStack->FileObject,
+                        m_Descriptor->EventList,
+                        KSEVENTS_SPINLOCK,
+                        m_Descriptor->EventListLock);
+    }
 
     if (m_Stream)
     {
@@ -1056,10 +1071,17 @@ CPortPinWaveRT::Init(
         0,
         NULL,
         SubDeviceDescriptor->DeviceDescriptor);
+    if (!NT_SUCCESS(Status))
+    {
+        Subdevice->Release();
+        goto cleanup;
+    }
 
     m_Descriptor->UnknownStream = (PUNKNOWN)m_Stream;
     m_Descriptor->UnknownMiniport = SubDeviceDescriptor->UnknownMiniport;
     m_Descriptor->PortPin = (PVOID)this;
+    m_Descriptor->IsPin = TRUE;
+    m_Descriptor->PinId = ConnectDetails->PinId;
     m_Descriptor->EventList = &m_EventList;
     m_Descriptor->EventListLock = &m_EventListLock;
 

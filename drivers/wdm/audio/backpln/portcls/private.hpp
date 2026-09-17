@@ -33,6 +33,9 @@
 #define PC_ASSERT_IRQL(x) PC_ASSERT(KeGetCurrentIrql() <= (x))
 #define PC_ASSERT_IRQL_EQUAL(x) PC_ASSERT(KeGetCurrentIrql()==(x))
 
+#define PCEVENT_DESCRIPTOR_IRP_STORAGE(Irp) \
+    (*(PSUBDEVICE_DESCRIPTOR *)&(Irp)->Tail.Overlay.DriverContext[1])
+
 PVOID
 __cdecl
 operator new(
@@ -334,6 +337,17 @@ NTAPI
 PcHandleDisableEventWithTable(
     IN PIRP Irp,
     IN PSUBDEVICE_DESCRIPTOR Descriptor);
+
+VOID
+NTAPI
+PcGenerateEventList(
+    IN PSUBDEVICE_DESCRIPTOR Descriptor,
+    IN GUID *Set OPTIONAL,
+    IN ULONG EventId,
+    IN BOOL PinEvent,
+    IN ULONG PinId,
+    IN BOOL NodeEvent,
+    IN ULONG NodeId);
 
 IIrpTarget *
 NTAPI
