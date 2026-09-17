@@ -660,34 +660,37 @@ D3DUmdRtReleaseResource(HANDLE hRuntimeDevice, HANDLE hRuntimeResource)
 {
     PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hRuntimeDevice);
     PD3DUMDRT_RESOURCE Resource;
-    D3DKMT_DESTROYALLOCATION Destroy;
-    NTSTATUS Status = STATUS_SUCCESS;
+    BOOL FreeResource = FALSE;
 
-    if (Device == NULL || pfnDestroyAllocation == NULL)
+    if (Device == NULL)
         return E_INVALIDARG;
     EnterCriticalSection(&D3DUmdRtDeviceLock);
     Resource = D3DUmdRtResourceLocked(Device, hRuntimeResource);
-    if (Resource == NULL || Resource->Allocating || Resource->Destroying)
+    if (Resource == NULL || !Resource->Registered ||
+        Resource->Allocating)
     {
         LeaveCriticalSection(&D3DUmdRtDeviceLock);
         return E_INVALIDARG;
     }
-    Resource->Destroying = TRUE;
-    ZeroMemory(&Destroy, sizeof(Destroy));
-    Destroy.hDevice = Device->hDevice;
-    Destroy.hResource = Resource->hKMResource;
-    LeaveCriticalSection(&D3DUmdRtDeviceLock);
-    if (Destroy.hResource != 0)
-        Status = pfnDestroyAllocation(&Destroy);
-    EnterCriticalSection(&D3DUmdRtDeviceLock);
-    if (Status >= 0)
+
+    /*
+     * DestroyResource may release the driver's last reference immediately,
+     * but it is also allowed to leave an allocation referenced by queued or
+     * internal driver state.  In the latter case the driver completes the
+     * lifetime later through pfnDeallocateCb/pfnDeallocate2Cb.  Keep the
+     * opaque runtime cookie resolvable until that callback instead of
+     * destroying its kernel resource behind the driver's back.
+     */
+    Resource->Registered = FALSE;
+    if (!Resource->Destroying && Resource->hKMResource == 0)
+    {
         D3DUmdRtUnlinkResourceLocked(Device, Resource);
-    else
-        Resource->Destroying = FALSE;
+        FreeResource = TRUE;
+    }
     LeaveCriticalSection(&D3DUmdRtDeviceLock);
-    if (Status >= 0)
+    if (FreeResource)
         D3DUmdRtFreeResource(Resource);
-    return D3DUmdRtStatusToHresult(Status);
+    return S_OK;
 }
 
 static VOID
