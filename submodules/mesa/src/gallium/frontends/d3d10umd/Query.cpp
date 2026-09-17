@@ -244,7 +244,13 @@ QueryGetData(D3D10DDI_HDEVICE hDevice,                      // IN
       return;
    }
 
-   bool wait = !!(Flags & D3D10_DDI_GET_DATA_DO_NOT_FLUSH);
+   /* QueryGetData is an asynchronous poll.  DO_NOT_FLUSH forbids submitting
+    * partial command buffers; it must never turn the poll into a blocking
+    * wait.  Without the flag the DDI contract requires pending work to be
+    * submitted, but completion may still be reported as WASSTILLDRAWING. */
+   if (!(Flags & D3D10_DDI_GET_DATA_DO_NOT_FLUSH)) {
+      pipe->flush(pipe, NULL, 0);
+   }
    union pipe_query_result result;
 
    memset(&result, 0, sizeof result);
@@ -252,7 +258,7 @@ QueryGetData(D3D10DDI_HDEVICE hDevice,                      // IN
    bool ret;
 
    if (state) {
-      ret = pipe->get_query_result(pipe, state, wait, &result);
+      ret = pipe->get_query_result(pipe, state, false, &result);
    } else {
       LOG_UNSUPPORTED(true);
       ret = true;
