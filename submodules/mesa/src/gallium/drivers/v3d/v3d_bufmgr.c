@@ -432,6 +432,18 @@ v3d_bo_open_name(struct v3d_screen *screen, uint32_t name)
 }
 
 struct v3d_bo *
+v3d_bo_open_kms(struct v3d_screen *screen, uint32_t handle, uint32_t size)
+{
+        if (!handle || !size) {
+                errno = EINVAL;
+                return NULL;
+        }
+
+        mtx_lock(&screen->bo_handles_mutex);
+        return v3d_bo_open_handle(screen, handle, size);
+}
+
+struct v3d_bo *
 v3d_bo_open_dmabuf(struct v3d_screen *screen, int fd)
 {
 #ifdef _WIN32

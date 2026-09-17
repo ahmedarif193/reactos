@@ -35,6 +35,24 @@
 
 #include "DriverIncludes.h"
 
+typedef struct D3D10GalliumResourceDesc
+{
+   D3D10DDIRESOURCE_TYPE ResourceDimension;
+   UINT Usage;
+   UINT BindFlags;
+   UINT MapFlags;
+   UINT MiscFlags;
+   DXGI_FORMAT Format;
+   DXGI_SAMPLE_DESC SampleDesc;
+   UINT MipLevels;
+   UINT ArraySize;
+   UINT Width;
+   UINT Height;
+   UINT Depth;
+   BOOL Primary;
+   D3DDDI_VIDEO_PRESENT_SOURCE_ID PrimaryVidPnSourceId;
+} D3D10GalliumResourceDesc;
+
 SIZE_T APIENTRY CalcPrivateResourceSize(
    D3D10DDI_HDEVICE hDevice,
    __in const D3D10DDIARG_CREATERESOURCE *pCreateResource);

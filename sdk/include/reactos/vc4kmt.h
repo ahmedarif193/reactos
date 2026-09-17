@@ -51,6 +51,13 @@ typedef struct _VC4KMT_RESOURCE
     ULONG Flags;
 } VC4KMT_RESOURCE;
 
+typedef struct _VC4KMT_RESOURCE_OWNER_UPDATE
+{
+    D3DKMT_HANDLE hAllocation;
+    HANDLE ExpectedRuntimeResource;
+    HANDLE RuntimeResource;
+} VC4KMT_RESOURCE_OWNER_UPDATE;
+
 typedef enum _VC4KMT_ENGINE
 {
     Vc4KmtEngine3d = RPI5VC4_NODE_3D,
@@ -133,6 +140,31 @@ vc4kmt_bo_create_resource_ex(
     _In_ ULONG Flags,
     _In_opt_ HANDLE RuntimeResource,
     _Out_ VC4KMT_BO *Bo);
+
+NTSTATUS
+vc4kmt_bo_create_resource_private_ex(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Size,
+    _In_ ULONG Flags,
+    _In_opt_ HANDLE RuntimeResource,
+    _In_reads_bytes_opt_(ResourcePrivateDataSize)
+        const VOID *ResourcePrivateData,
+    _In_ UINT ResourcePrivateDataSize,
+    _Out_ VC4KMT_BO *Bo);
+
+NTSTATUS
+vc4kmt_bo_adopt_resource(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ D3DKMT_HANDLE hAllocation,
+    _In_ UINT Size,
+    _In_ HANDLE RuntimeResource,
+    _Out_ VC4KMT_BO *Bo);
+
+NTSTATUS
+vc4kmt_bo_rebind_resource_owners(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_reads_(UpdateCount) const VC4KMT_RESOURCE_OWNER_UPDATE *Updates,
+    _In_ UINT UpdateCount);
 
 NTSTATUS
 vc4kmt_bo_map(

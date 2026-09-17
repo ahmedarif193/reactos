@@ -218,6 +218,21 @@ Vc4KmtTrackBo(
     return STATUS_SUCCESS;
 }
 
+static VC4KMT_BO_RECORD *
+Vc4KmtFindBoRecord(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ D3DKMT_HANDLE hAllocation)
+{
+    VC4KMT_BO_RECORD *Record;
+
+    for (Record = Device->BoList; Record != NULL; Record = Record->Next)
+    {
+        if (Record->hAllocation == hAllocation)
+            return Record;
+    }
+    return NULL;
+}
+
 static BOOL
 Vc4KmtMarkBoMapped(
     _Inout_ VC4KMT_DEVICE *Device,
@@ -952,19 +967,60 @@ vc4kmt_bo_create_resource_ex(
     _In_opt_ HANDLE RuntimeResource,
     _Out_ VC4KMT_BO *Bo)
 {
+    return vc4kmt_bo_create_resource_private_ex(
+        Device, Size, Flags, RuntimeResource, NULL, 0, Bo);
+}
+
+NTSTATUS
+vc4kmt_bo_create_resource_private_ex(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ UINT Size,
+    _In_ ULONG Flags,
+    _In_opt_ HANDLE RuntimeResource,
+    _In_reads_bytes_opt_(ResourcePrivateDataSize)
+        const VOID *ResourcePrivateData,
+    _In_ UINT ResourcePrivateDataSize,
+    _Out_ VC4KMT_BO *Bo)
+{
     D3DKMT_CREATEALLOCATION CreateData;
     D3DDDI_ALLOCATIONINFO AllocationInfo;
     D3DDDICB_ALLOCATE CallbackCreate;
     D3DDDI_ALLOCATIONINFO2 CallbackAllocationInfo;
     D3DDDI_MAPGPUVIRTUALADDRESS MapGpuVa;
     RPI5VC4_ALLOCATION_DATA PrivateData;
+    const RPI5VC4_RESOURCE_DATA *ResourceData;
+    BOOLEAN PrimaryResource = FALSE;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID PrimaryVidPnSourceId =
+        D3DDDI_ID_UNINITIALIZED;
     NTSTATUS Status;
     UINT SizeInPages;
     UINT64 MappedSize;
 
     if (Device == NULL || Bo == NULL || Size == 0 ||
+        (ResourcePrivateDataSize != 0 && ResourcePrivateData == NULL) ||
+        (ResourcePrivateDataSize != 0 && RuntimeResource == NULL) ||
         (Flags & ~VC4KMT_BO_CREATE_CPU_CACHED) != 0)
         return STATUS_INVALID_PARAMETER;
+
+    ResourceData = (const RPI5VC4_RESOURCE_DATA *)ResourcePrivateData;
+    if (ResourcePrivateDataSize == sizeof(*ResourceData) &&
+        ResourceData != NULL &&
+        ResourceData->Magic == RPI5VC4_RESOURCE_DATA_MAGIC)
+    {
+        if (ResourceData->Version != RPI5VC4_RESOURCE_DATA_VERSION ||
+            (ResourceData->Flags & ~RPI5VC4_RESOURCE_VALID_FLAGS) != 0 ||
+            (((ResourceData->Flags & RPI5VC4_RESOURCE_FLAG_PRIMARY) != 0) !=
+             (ResourceData->PrimaryVidPnSourceId !=
+              RPI5VC4_RESOURCE_INVALID_VIDPN_SOURCE)))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if ((ResourceData->Flags & RPI5VC4_RESOURCE_FLAG_PRIMARY) != 0)
+        {
+            PrimaryResource = TRUE;
+            PrimaryVidPnSourceId = ResourceData->PrimaryVidPnSourceId;
+        }
+    }
 
     RtlZeroMemory(Bo, sizeof(*Bo));
 
@@ -994,6 +1050,10 @@ vc4kmt_bo_create_resource_ex(
                       sizeof(CallbackAllocationInfo));
         CallbackAllocationInfo.PrivateDriverDataSize = sizeof(PrivateData);
         CallbackAllocationInfo.pPrivateDriverData = &PrivateData;
+        CallbackAllocationInfo.Flags.Primary = PrimaryResource;
+        CallbackAllocationInfo.VidPnSourceId = PrimaryVidPnSourceId;
+        CallbackCreate.pPrivateDriverData = ResourcePrivateData;
+        CallbackCreate.PrivateDriverDataSize = ResourcePrivateDataSize;
         CallbackCreate.hResource = RuntimeResource;
         CallbackCreate.NumAllocations = 1;
         CallbackCreate.pAllocationInfo2 = &CallbackAllocationInfo;
@@ -1008,7 +1068,11 @@ vc4kmt_bo_create_resource_ex(
         RtlZeroMemory(&AllocationInfo, sizeof(AllocationInfo));
         AllocationInfo.PrivateDriverDataSize = sizeof(PrivateData);
         AllocationInfo.pPrivateDriverData = &PrivateData;
+        AllocationInfo.Flags.Primary = PrimaryResource;
+        AllocationInfo.VidPnSourceId = PrimaryVidPnSourceId;
         CreateData.hDevice = Device->hDevice;
+        CreateData.pPrivateDriverData = (PVOID)ResourcePrivateData;
+        CreateData.PrivateDriverDataSize = ResourcePrivateDataSize;
         CreateData.NumAllocations = 1;
         CreateData.pAllocationInfo = &AllocationInfo;
         Status = D3DKMTCreateAllocation(&CreateData);
@@ -1059,6 +1123,118 @@ vc4kmt_bo_create_resource_ex(
 fail:
     (void)vc4kmt_bo_destroy(Device, Bo);
     return Status;
+}
+
+NTSTATUS
+vc4kmt_bo_adopt_resource(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ D3DKMT_HANDLE hAllocation,
+    _In_ UINT Size,
+    _In_ HANDLE RuntimeResource,
+    _Out_ VC4KMT_BO *Bo)
+{
+    D3DDDI_MAPGPUVIRTUALADDRESS MapGpuVa;
+    NTSTATUS Status;
+    UINT SizeInPages;
+    UINT64 MappedSize;
+
+    if (Device == NULL || Bo == NULL || hAllocation == 0 || Size == 0 ||
+        RuntimeResource == NULL || !Device->RuntimeCallbacks)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(Bo, sizeof(*Bo));
+    Bo->hAllocation = hAllocation;
+    Bo->Size = Size;
+
+    Status = Vc4KmtTrackBo(Device, hAllocation, RuntimeResource, Size);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(Bo, sizeof(*Bo));
+        return Status;
+    }
+
+    MappedSize = ((UINT64)Size + 4095u) & ~4095ULL;
+    SizeInPages = (UINT)(MappedSize / 4096u);
+    RtlZeroMemory(&MapGpuVa, sizeof(MapGpuVa));
+    MapGpuVa.hAllocation = hAllocation;
+    MapGpuVa.MinimumAddress = RPI5VC4_DYNAMIC_GPUVA_START;
+    MapGpuVa.MaximumAddress = 1ULL << 32;
+    MapGpuVa.SizeInPages = SizeInPages;
+    MapGpuVa.hPagingQueue = Device->hPagingQueue;
+    MapGpuVa.Protection.Write = 1;
+    MapGpuVa.Protection.Execute = 1;
+    Status = Vc4KmtCallbackStatus(
+        Device->Callbacks.pfnMapGpuVirtualAddressCb(
+            Device->RuntimeDevice, &MapGpuVa));
+    if (!NT_SUCCESS(Status))
+        goto fail;
+
+    if (MapGpuVa.VirtualAddress == 0 ||
+        MapGpuVa.VirtualAddress > 0xffffffffULL ||
+        MappedSize > (1ULL << 32) - MapGpuVa.VirtualAddress)
+    {
+        (void)Vc4KmtFreeGpuVaRange(Device,
+                                   MapGpuVa.VirtualAddress,
+                                   MappedSize);
+        Status = STATUS_INVALID_DEVICE_REQUEST;
+        goto fail;
+    }
+
+    Bo->GpuVa = (ULONG)MapGpuVa.VirtualAddress;
+    return STATUS_SUCCESS;
+
+fail:
+    (void)vc4kmt_bo_destroy(Device, Bo);
+    return Status;
+}
+
+NTSTATUS
+vc4kmt_bo_rebind_resource_owners(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_reads_(UpdateCount) const VC4KMT_RESOURCE_OWNER_UPDATE *Updates,
+    _In_ UINT UpdateCount)
+{
+    UINT Index;
+
+    if (Device == NULL || Updates == NULL || UpdateCount == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Validate the complete transaction before changing any owner. */
+    for (Index = 0; Index < UpdateCount; ++Index)
+    {
+        VC4KMT_BO_RECORD *Record;
+        UINT Previous;
+
+        if (Updates[Index].hAllocation == 0 ||
+            Updates[Index].ExpectedRuntimeResource == NULL ||
+            Updates[Index].RuntimeResource == NULL)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        for (Previous = 0; Previous < Index; ++Previous)
+        {
+            if (Updates[Previous].hAllocation == Updates[Index].hAllocation)
+                return STATUS_INVALID_PARAMETER;
+        }
+
+        Record = Vc4KmtFindBoRecord(Device, Updates[Index].hAllocation);
+        if (Record == NULL ||
+            Record->RuntimeResource != Updates[Index].ExpectedRuntimeResource)
+        {
+            return STATUS_INVALID_DEVICE_STATE;
+        }
+    }
+
+    for (Index = 0; Index < UpdateCount; ++Index)
+    {
+        VC4KMT_BO_RECORD *Record =
+            Vc4KmtFindBoRecord(Device, Updates[Index].hAllocation);
+
+        Record->RuntimeResource = Updates[Index].RuntimeResource;
+    }
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
