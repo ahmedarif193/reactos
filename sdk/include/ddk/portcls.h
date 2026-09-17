@@ -375,6 +375,28 @@ typedef struct {
     0                                                                 \
   }
 
+#define DEFINE_PCAUTOMATION_TABLE_PROP_EVENT(AutomationTable,PropertyTable,EventTable) \
+  const PCAUTOMATION_TABLE AutomationTable = {                                   \
+    sizeof(PropertyTable[0]),                                                    \
+    SIZEOF_ARRAY(PropertyTable),                                                 \
+    (const PCPROPERTY_ITEM *) PropertyTable,                                     \
+    0,0,NULL,                                                                    \
+    sizeof(EventTable[0]),                                                       \
+    SIZEOF_ARRAY(EventTable),                                                    \
+    (const PCEVENT_ITEM *) EventTable,                                           \
+    0                                                                            \
+  }
+
+#define DEFINE_PCAUTOMATION_TABLE_EVENT(AutomationTable,EventTable) \
+  const PCAUTOMATION_TABLE AutomationTable = {                      \
+    0,0,NULL,                                                       \
+    0,0,NULL,                                                       \
+    sizeof(EventTable[0]),                                          \
+    SIZEOF_ARRAY(EventTable),                                       \
+    (const PCEVENT_ITEM *) EventTable,                              \
+    0                                                               \
+  }
+
 /* ===============================================================
     IResourceList Interface
 */

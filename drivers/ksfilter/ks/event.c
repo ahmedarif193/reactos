@@ -101,13 +101,14 @@ KspEnableEvent(
     PKSEVENTDATA EventData;
     const KSEVENT_SET *FoundEventSet;
     PKSEVENT_ENTRY EventEntry;
-    ULONG Index, SubIndex, Size;
-    PVOID Object;
+    ULONG Index, SubIndex, Size, ItemSize, RequestType, SupportedTypes;
+    PVOID Object = NULL;
     KSEVENT_CTX Ctx;
     LPGUID Guid;
 
     /* get current stack location */
     IoStack = IoGetCurrentIrpStackLocation(Irp);
+    Irp->IoStatus.Information = 0;
 
     if (IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(KSEVENT))
     {
@@ -120,7 +121,6 @@ KspEnableEvent(
         _SEH2_TRY
         {
            ProbeForRead(IoStack->Parameters.DeviceIoControl.Type3InputBuffer, sizeof(KSEVENT), sizeof(UCHAR));
-           ProbeForRead(Irp->UserBuffer, IoStack->Parameters.DeviceIoControl.OutputBufferLength, sizeof(UCHAR));
            RtlMoveMemory(&Event, IoStack->Parameters.DeviceIoControl.Type3InputBuffer, sizeof(KSEVENT));
            Status = STATUS_SUCCESS;
         }
@@ -146,27 +146,57 @@ KspEnableEvent(
 
     FoundEventItem = NULL;
     FoundEventSet = NULL;
+    ItemSize = EventItemSize ? EventItemSize : sizeof(KSEVENT_ITEM);
 
+    if (ItemSize < sizeof(KSEVENT_ITEM))
+        return STATUS_INVALID_PARAMETER;
 
-    if (IsEqualGUIDAligned(&Event.Set, &GUID_NULL) && Event.Id == 0 && Event.Flags == KSEVENT_TYPE_SETSUPPORT)
+    RequestType = Event.Flags & ~KSEVENT_TYPE_TOPOLOGY;
+    if (RequestType == KSEVENT_TYPE_SETSUPPORT)
     {
-        // store output size
-        Irp->IoStatus.Information = sizeof(GUID) * EventSetsCount;
-        if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(GUID) * EventSetsCount)
+        if (!IsEqualGUIDAligned(&Event.Set, &GUID_NULL))
         {
-            // buffer too small
-            return STATUS_MORE_ENTRIES;
+            for (Index = 0; Index < EventSetsCount; Index++)
+            {
+                if (IsEqualGUIDAligned(&Event.Set, EventSet[Index].Set))
+                    return STATUS_SUCCESS;
+            }
+
+            return STATUS_PROPSET_NOT_FOUND;
         }
 
-        // get output buffer
+        if (Event.Id != 0 || (Event.Flags & KSEVENT_TYPE_TOPOLOGY))
+            return STATUS_INVALID_PARAMETER;
+
+        if (EventSetsCount > MAXULONG / sizeof(GUID))
+            return STATUS_INTEGER_OVERFLOW;
+
+        Irp->IoStatus.Information = sizeof(GUID) * EventSetsCount;
+        if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < Irp->IoStatus.Information)
+            return STATUS_MORE_ENTRIES;
+
         Guid = (LPGUID)Irp->UserBuffer;
 
-       // copy property guids from property sets
-       for(Index = 0; Index < EventSetsCount; Index++)
-       {
-           RtlMoveMemory(&Guid[Index], EventSet[Index].Set, sizeof(GUID));
-       }
-       return STATUS_SUCCESS;
+        if (Irp->RequestorMode == UserMode && Irp->IoStatus.Information)
+        {
+            _SEH2_TRY
+            {
+                ProbeForWrite(Guid, Irp->IoStatus.Information, sizeof(UCHAR));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+
+        for (Index = 0; Index < EventSetsCount; Index++)
+            RtlMoveMemory(&Guid[Index], EventSet[Index].Set, sizeof(GUID));
+
+        return STATUS_SUCCESS;
     }
 
     /* now try to find event set */
@@ -183,10 +213,12 @@ KspEnableEvent(
             /* now find matching event id */
             for(SubIndex = 0; SubIndex < EventSet[Index].EventsCount; SubIndex++)
             {
-                if (EventItem[SubIndex].EventId == Event.Id)
+                EventItem = (PKSEVENT_ITEM)((ULONG_PTR)EventSet[Index].EventItem +
+                                             SubIndex * ItemSize);
+                if (EventItem->EventId == Event.Id)
                 {
                     /* found event item */
-                    FoundEventItem = &EventItem[SubIndex];
+                    FoundEventItem = EventItem;
                     FoundEventSet = &EventSet[Index];
                     break;
                 }
@@ -210,11 +242,60 @@ KspEnableEvent(
 
     }
 
+    if (RequestType == KSEVENT_TYPE_BASICSUPPORT)
+    {
+        KSEVENT_SET_IRP_STORAGE(Irp) = FoundEventSet;
+        KSEVENT_ITEM_IRP_STORAGE(Irp) = FoundEventItem;
+
+        if (FoundEventItem->SupportHandler)
+        {
+            return FoundEventItem->SupportHandler(
+                Irp,
+                (PKSIDENTIFIER)IoStack->Parameters.DeviceIoControl.Type3InputBuffer,
+                Irp->UserBuffer);
+        }
+
+        Irp->IoStatus.Information = sizeof(ULONG);
+        if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(ULONG))
+            return STATUS_BUFFER_TOO_SMALL;
+
+        SupportedTypes = KSEVENT_TYPE_ENABLE | KSEVENT_TYPE_ONESHOT;
+        if (Irp->RequestorMode == UserMode)
+        {
+            _SEH2_TRY
+            {
+                ProbeForWrite(Irp->UserBuffer, sizeof(ULONG), sizeof(UCHAR));
+                *(PULONG)Irp->UserBuffer = SupportedTypes;
+                Status = STATUS_SUCCESS;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+
+            return Status;
+        }
+
+        *(PULONG)Irp->UserBuffer = SupportedTypes;
+        return STATUS_SUCCESS;
+    }
+
+    if (RequestType != KSEVENT_TYPE_ENABLE &&
+        RequestType != KSEVENT_TYPE_ONESHOT)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (FoundEventItem->DataInput < sizeof(KSEVENTDATA))
+        return STATUS_INVALID_PARAMETER;
+
     if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < FoundEventItem->DataInput)
     {
         /* buffer too small */
         DPRINT1("Got %u expected %u\n", IoStack->Parameters.DeviceIoControl.OutputBufferLength, FoundEventItem->DataInput);
-        return STATUS_SUCCESS;
+        Irp->IoStatus.Information = FoundEventItem->DataInput;
+        return STATUS_BUFFER_TOO_SMALL;
     }
 
     if (!FoundEventItem->AddHandler && !EventsList)
@@ -226,11 +307,25 @@ KspEnableEvent(
     /* get event data */
     EventData = Irp->UserBuffer;
 
-    /* sanity check */
-    ASSERT(EventData);
+    if (!EventData)
+        return STATUS_INVALID_PARAMETER;
 
     if (Irp->RequestorMode == UserMode)
     {
+        _SEH2_TRY
+        {
+            ProbeForRead(EventData, FoundEventItem->DataInput, sizeof(UCHAR));
+            Status = STATUS_SUCCESS;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+            return Status;
+
         if (EventData->NotificationType == KSEVENTF_SEMAPHORE_HANDLE)
         {
             /* get semaphore object handle */
@@ -259,6 +354,28 @@ KspEnableEvent(
             return STATUS_INVALID_PARAMETER;
         }
     }
+    else if (EventData->NotificationType == KSEVENTF_SEMAPHORE_HANDLE)
+    {
+        Status = ObReferenceObjectByHandle(EventData->SemaphoreHandle.Semaphore,
+                                           SEMAPHORE_MODIFY_STATE,
+                                           *ExSemaphoreObjectType,
+                                           KernelMode,
+                                           &Object,
+                                           NULL);
+        if (!NT_SUCCESS(Status))
+            return STATUS_INVALID_PARAMETER;
+    }
+    else if (EventData->NotificationType == KSEVENTF_EVENT_HANDLE)
+    {
+        Status = ObReferenceObjectByHandle(EventData->EventHandle.Event,
+                                           EVENT_MODIFY_STATE,
+                                           *ExEventObjectType,
+                                           KernelMode,
+                                           &Object,
+                                           NULL);
+        if (!NT_SUCCESS(Status))
+            return STATUS_INVALID_PARAMETER;
+    }
     else
     {
         if (EventData->NotificationType != KSEVENTF_EVENT_OBJECT &&
@@ -274,6 +391,13 @@ KspEnableEvent(
 
 
     /* calculate request size */
+    if (FoundEventItem->ExtraEntryData > MAXULONG - sizeof(KSEVENT_ENTRY))
+    {
+        if (Object)
+            ObDereferenceObject(Object);
+        return STATUS_INTEGER_OVERFLOW;
+    }
+
     Size = sizeof(KSEVENT_ENTRY) + FoundEventItem->ExtraEntryData;
 
     /* do we have an allocator */
@@ -285,6 +409,8 @@ KspEnableEvent(
         if (!NT_SUCCESS(Status))
         {
             /* failed */
+            if (Object)
+                ObDereferenceObject(Object);
             return Status;
         }
 
@@ -301,6 +427,8 @@ KspEnableEvent(
     if (!EventEntry)
     {
         /* not enough memory */
+        if (Object)
+            ObDereferenceObject(Object);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -313,6 +441,8 @@ KspEnableEvent(
     EventEntry->EventItem = FoundEventItem;
     EventEntry->EventSet = FoundEventSet;
     EventEntry->FileObject = IoStack->FileObject;
+    if (RequestType == KSEVENT_TYPE_ONESHOT)
+        EventEntry->Flags |= KSEVENT_ENTRY_ONESHOT;
 
     switch(EventEntry->NotificationType)
     {
@@ -351,6 +481,12 @@ KspEnableEvent(
             ASSERT(0);
     }
 
+    if (!EventEntry->Object)
+    {
+        KsDiscardEvent(EventEntry);
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (FoundEventItem->AddHandler)
     {
         /* now add the event */
@@ -368,10 +504,16 @@ KspEnableEvent(
         Ctx.List = EventsList;
         Ctx.EventEntry = EventEntry;
 
-         /* add the event */
-        (void)KspSynchronizedEventRoutine(EventsFlags, EventsLock, SyncAddEvent, &Ctx);
-
-        Status = STATUS_SUCCESS;
+        /* add the event */
+        if (KspSynchronizedEventRoutine(EventsFlags, EventsLock, SyncAddEvent, &Ctx))
+        {
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            KsDiscardEvent(EventEntry);
+            Status = STATUS_INVALID_PARAMETER;
+        }
     }
 
     /* done */
@@ -445,9 +587,12 @@ KspDisableEvent(
         /* get event entry */
         EventEntry = (PKSEVENT_ENTRY)CONTAINING_RECORD(Entry, KSEVENT_ENTRY, ListEntry);
 
-        if (EventEntry->EventData == EventData && EventEntry->FileObject == Ctx->FileObject)
+        if (!(EventEntry->Flags & KSEVENT_ENTRY_DELETED) &&
+            EventEntry->EventData == EventData &&
+            EventEntry->FileObject == Ctx->FileObject)
         {
             /* found the entry */
+            EventEntry->Flags |= KSEVENT_ENTRY_DELETED;
             RemoveEntryList(&EventEntry->ListEntry);
             Ctx->EventEntry = EventEntry;
             return TRUE;
@@ -457,7 +602,18 @@ KspDisableEvent(
         Entry = Entry->Flink;
     }
     /* entry not found */
-    return TRUE;
+    return FALSE;
+}
+
+static
+VOID
+KspRemoveAndDiscardEvent(
+    IN PKSEVENT_ENTRY EventEntry)
+{
+    if (EventEntry->EventItem && EventEntry->EventItem->RemoveHandler)
+        EventEntry->EventItem->RemoveHandler(EventEntry->FileObject, EventEntry);
+
+    KsDiscardEvent(EventEntry);
 }
 
 /*
@@ -497,21 +653,15 @@ KsDisableEvent(
     Ctx.Irp = Irp;
     Ctx.EventEntry = NULL;
 
-    if (KspSynchronizedEventRoutine(EventsFlags, EventsLock, KspDisableEvent, &Ctx))
+    (void)KspSynchronizedEventRoutine(EventsFlags, EventsLock, KspDisableEvent, &Ctx);
+
+    if (Ctx.EventEntry)
     {
-        /* was the event entry found */
-        if (Ctx.EventEntry)
-        {
-            /* discard event */
-            KsDiscardEvent(Ctx.EventEntry);
-            return STATUS_SUCCESS;
-        }
-        /* event was not found */
-        return STATUS_UNSUCCESSFUL;
+        KspRemoveAndDiscardEvent(Ctx.EventEntry);
+        return STATUS_SUCCESS;
     }
 
-    /* invalid parameters */
-    return STATUS_INVALID_PARAMETER;
+    return STATUS_NOT_FOUND;
 }
 
 /*
@@ -523,9 +673,6 @@ NTAPI
 KsDiscardEvent(
     IN  PKSEVENT_ENTRY EventEntry)
 {
-    /* sanity check */
-    ASSERT(EventEntry->Object);
-
     if (EventEntry->NotificationType == KSEVENTF_SEMAPHORE_HANDLE || EventEntry->NotificationType == KSEVENTF_EVENT_HANDLE)
     {
         /* release object */
@@ -549,24 +696,24 @@ KspFreeEventList(
     if (!Ctx || !Ctx->List)
         return FALSE;
 
-    if (IsListEmpty(Ctx->List))
-        return FALSE;
-
-    /* remove first entry */
-    Entry = RemoveHeadList(Ctx->List);
-    if (!Entry)
+    Ctx->EventEntry = NULL;
+    Entry = Ctx->List->Flink;
+    while (Entry != Ctx->List)
     {
-        /* list is empty, bye-bye */
-        return FALSE;
+        EventEntry = CONTAINING_RECORD(Entry, KSEVENT_ENTRY, ListEntry);
+        Entry = Entry->Flink;
+
+        if (!(EventEntry->Flags & KSEVENT_ENTRY_DELETED) &&
+            EventEntry->FileObject == Ctx->FileObject)
+        {
+            EventEntry->Flags |= KSEVENT_ENTRY_DELETED;
+            RemoveEntryList(&EventEntry->ListEntry);
+            Ctx->EventEntry = EventEntry;
+            return TRUE;
+        }
     }
 
-    /* get event entry */
-    EventEntry = (PKSEVENT_ENTRY)CONTAINING_RECORD(Entry, KSEVENT_ENTRY, ListEntry);
-
-    /* store event entry */
-    Ctx->EventEntry = EventEntry;
-    /* return success */
-    return TRUE;
+    return FALSE;
 }
 
 
@@ -593,7 +740,7 @@ KsFreeEventList(
     {
         if (Ctx.EventEntry)
         {
-            KsDiscardEvent(Ctx.EventEntry);
+            KspRemoveAndDiscardEvent(Ctx.EventEntry);
         }
     }
 }
@@ -602,11 +749,11 @@ KsFreeEventList(
 /*
     @implemented
 */
-KSDDKAPI
+static
 NTSTATUS
 NTAPI
-KsGenerateEvent(
-    IN  PKSEVENT_ENTRY EntryEvent)
+KspSignalEvent(
+    IN PKSEVENT_ENTRY EntryEvent)
 {
     if (EntryEvent->NotificationType == KSEVENTF_EVENT_HANDLE || EntryEvent->NotificationType == KSEVENTF_EVENT_OBJECT)
     {
@@ -645,8 +792,26 @@ KsGenerateEvent(
 }
 
 /*
-    @unimplemented
+    @implemented
 */
+KSDDKAPI
+NTSTATUS
+NTAPI
+KsGenerateEvent(
+    IN  PKSEVENT_ENTRY EntryEvent)
+{
+    NTSTATUS Status;
+
+    Status = KspSignalEvent(EntryEvent);
+    if (NT_SUCCESS(Status) && (EntryEvent->Flags & KSEVENT_ENTRY_ONESHOT))
+    {
+        EntryEvent->Flags |= KSEVENT_ENTRY_DELETED;
+        KspRemoveAndDiscardEvent(EntryEvent);
+    }
+
+    return Status;
+}
+
 KSDDKAPI
 NTSTATUS
 NTAPI
@@ -655,12 +820,58 @@ KsGenerateDataEvent(
     IN  ULONG DataSize,
     IN  PVOID Data)
 {
-    UNIMPLEMENTED;
-    return STATUS_UNSUCCESSFUL;
+    if (!(EventEntry->Flags & KSEVENT_ENTRY_BUFFERED))
+        return STATUS_INVALID_DEVICE_REQUEST;
+
+    if (!Data || !DataSize)
+        return STATUS_INVALID_PARAMETER;
+
+    return STATUS_NOT_SUPPORTED;
+}
+
+BOOLEAN
+NTAPI
+KspGenerateEventList(
+    IN PKSEVENT_CTX Ctx)
+{
+    LIST_ENTRY *Entry, *Next;
+    PKSEVENT_ENTRY EventEntry;
+
+    if (!Ctx || !Ctx->List || !Ctx->PendingList)
+        return FALSE;
+
+    Entry = Ctx->List->Flink;
+    while (Entry != Ctx->List)
+    {
+        Next = Entry->Flink;
+        EventEntry = CONTAINING_RECORD(Entry, KSEVENT_ENTRY, ListEntry);
+
+        if (!(EventEntry->Flags & KSEVENT_ENTRY_DELETED) &&
+            EventEntry->EventSet && EventEntry->EventItem &&
+            EventEntry->EventItem->EventId == Ctx->EventId &&
+            (!Ctx->EventSet ||
+             IsEqualGUIDAligned(Ctx->EventSet, EventEntry->EventSet->Set)))
+        {
+            if (EventEntry->Flags & KSEVENT_ENTRY_ONESHOT)
+            {
+                EventEntry->Flags |= KSEVENT_ENTRY_DELETED;
+                RemoveEntryList(&EventEntry->ListEntry);
+                InsertTailList(Ctx->PendingList, &EventEntry->ListEntry);
+            }
+            else
+            {
+                (void)KspSignalEvent(EventEntry);
+            }
+        }
+
+        Entry = Next;
+    }
+
+    return TRUE;
 }
 
 /*
-    @unimplemented
+    @implemented
 */
 KSDDKAPI
 VOID
@@ -672,7 +883,32 @@ KsGenerateEventList(
     IN KSEVENTS_LOCKTYPE EventsFlags,
     IN PVOID EventsLock)
 {
-    UNIMPLEMENTED;
+    KSEVENT_CTX Ctx;
+    LIST_ENTRY PendingList;
+    PKSEVENT_ENTRY EventEntry;
+
+    if (!EventsList)
+        return;
+
+    InitializeListHead(&PendingList);
+    RtlZeroMemory(&Ctx, sizeof(Ctx));
+    Ctx.List = EventsList;
+    Ctx.EventSet = Set;
+    Ctx.EventId = EventId;
+    Ctx.PendingList = &PendingList;
+
+    (void)KspSynchronizedEventRoutine(EventsFlags,
+                                      EventsLock,
+                                      KspGenerateEventList,
+                                      &Ctx);
+
+    while (!IsListEmpty(&PendingList))
+    {
+        EventEntry = CONTAINING_RECORD(RemoveHeadList(&PendingList),
+                                       KSEVENT_ENTRY,
+                                       ListEntry);
+        (void)KsGenerateEvent(EventEntry);
+    }
 }
 
 /*
@@ -725,9 +961,6 @@ KsDefaultAddEventHandler(
 
 
 
-/*
-    @unimplemented
-*/
 KSDDKAPI
 void
 NTAPI
@@ -740,5 +973,72 @@ KsGenerateEvents(
     IN PFNKSGENERATEEVENTCALLBACK CallBack OPTIONAL,
     IN PVOID CallBackContext OPTIONAL)
 {
-    UNIMPLEMENTED;
+    PKSBASIC_HEADER Header;
+    PLIST_ENTRY Entry, Next;
+    PKSEVENT_ENTRY EventEntry;
+    LIST_ENTRY PendingList;
+    KIRQL OldIrql;
+    BOOLEAN Generate;
+
+    if (!Object)
+        return;
+
+    Header = (PKSBASIC_HEADER)((ULONG_PTR)Object - sizeof(KSBASIC_HEADER));
+    InitializeListHead(&PendingList);
+
+    KeAcquireSpinLock(&Header->EventListLock, &OldIrql);
+    Entry = Header->EventList.Flink;
+    while (Entry != &Header->EventList)
+    {
+        Next = Entry->Flink;
+        EventEntry = CONTAINING_RECORD(Entry, KSEVENT_ENTRY, ListEntry);
+        Generate = !(EventEntry->Flags & KSEVENT_ENTRY_DELETED) &&
+                   EventEntry->EventSet && EventEntry->EventItem &&
+                   EventEntry->EventItem->EventId == EventId &&
+                   (!EventSet ||
+                    IsEqualGUIDAligned(EventSet, EventEntry->EventSet->Set));
+
+        if (Generate && CallBack)
+            Generate = CallBack(CallBackContext, EventEntry);
+
+        if (Generate)
+        {
+            if (EventEntry->Flags & KSEVENT_ENTRY_ONESHOT)
+            {
+                EventEntry->Flags |= KSEVENT_ENTRY_DELETED;
+                RemoveEntryList(&EventEntry->ListEntry);
+                InsertTailList(&PendingList, &EventEntry->ListEntry);
+            }
+            else if (DataSize)
+            {
+                (void)KsGenerateDataEvent(EventEntry, DataSize, Data);
+            }
+            else
+            {
+                (void)KspSignalEvent(EventEntry);
+            }
+        }
+
+        Entry = Next;
+    }
+    KeReleaseSpinLock(&Header->EventListLock, OldIrql);
+
+    while (!IsListEmpty(&PendingList))
+    {
+        EventEntry = CONTAINING_RECORD(RemoveHeadList(&PendingList),
+                                       KSEVENT_ENTRY,
+                                       ListEntry);
+        if (DataSize)
+        {
+            if (NT_SUCCESS(KsGenerateDataEvent(EventEntry, DataSize, Data)))
+                continue;
+        }
+        else
+        {
+            (void)KsGenerateEvent(EventEntry);
+            continue;
+        }
+
+        KspRemoveAndDiscardEvent(EventEntry);
+    }
 }
