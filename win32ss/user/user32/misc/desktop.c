@@ -132,6 +132,7 @@ RealGetSystemMetrics(int nIndex)
 #ifdef WOW64_I386_RUNTIME
   return (int)NtUserCallOneParam(nIndex, ONEPARAM_ROUTINE_ROS_GETSYSTEMMETRICS);
 #else
+  if (!gpsi) return 0;
   return gpsi->aiSysMet[nIndex];
 #endif
 }

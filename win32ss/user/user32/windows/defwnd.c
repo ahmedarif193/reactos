@@ -23,6 +23,8 @@ GetSysColor(int nIndex)
 #ifdef WOW64_I386_RUNTIME
     return (DWORD)NtUserCallOneParam(nIndex, ONEPARAM_ROUTINE_ROS_GETSYSCOLOR);
 #else
+    if (!gpsi)
+      return 0;
     return gpsi->argbSystem[nIndex];
 #endif
   }
@@ -44,6 +46,8 @@ GetSysColorBrush(int nIndex)
 #ifdef WOW64_I386_RUNTIME
     return (HBRUSH)NtUserCallOneParam(nIndex, ONEPARAM_ROUTINE_ROS_GETSYSCOLORBRUSH);
 #else
+    if (!gpsi)
+      return NULL;
     return gpsi->ahbrSystem[nIndex];
 #endif
   }
