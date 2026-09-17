@@ -53,6 +53,9 @@ struct endpoint
 {
     unsigned int name;
     unsigned int device;
+#ifdef __REACTOS__
+    unsigned int state;
+#endif
 };
 
 struct get_endpoint_ids_params
