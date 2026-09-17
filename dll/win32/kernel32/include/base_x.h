@@ -153,6 +153,7 @@
                                inh ? OBJ_INHERIT : 0,                           \
                                BaseGetNamedObjectDirectory(),                   \
                                NULL);                                           \
+    BasepAdjustObjectAttributesForPrivateNamespace(ObjectAttributes);           \
     Status = NtOpen##ntobj(&Handle, acc, ObjectAttributes);                     \
     if (!NT_SUCCESS(Status))                                                    \
     {                                                                           \

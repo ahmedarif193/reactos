@@ -5,7 +5,7 @@
 @ stub CreateEnlistment
 @ stub CreateResourceManager
 @ stdcall CreateTransaction(ptr ptr long long long long wstr)
-@ stub CreateTransactionManager
+@ stdcall CreateTransactionManager(ptr wstr long long)
 @ stub GetCurrentClockTransactionManager
 @ stub GetEnlistmentId
 @ stub GetEnlistmentRecoveryInformation

@@ -108,6 +108,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/sysinfo.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/timer.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/transaction.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/uuid.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/wddm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/win32k.c
@@ -271,6 +272,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obinit.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/oblife.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/oblink.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obns.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obname.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obref.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ob/obsdcach.c

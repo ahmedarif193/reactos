@@ -935,7 +935,7 @@ IntResolveDesktop(
                                 ExWindowStationObjectType,
                                 UserMode,
                                 NULL,
-                                WINSTA_ACCESS_ALL,
+                                MAXIMUM_ALLOWED,
                                 NULL,
                                 (PHANDLE)&hTempWinSta);
     if (!NT_SUCCESS(Status))
@@ -2659,6 +2659,13 @@ NtUserCreateDesktop(
     TRACE("Enter NtUserCreateDesktop\n");
     UserEnterExclusive();
 
+    if (IntIsJobUiLimited(JOB_OBJECT_UILIMIT_DESKTOP))
+    {
+        UserLeave();
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return NULL;
+    }
+
     Status = IntCreateDesktop(&hDesk,
                               ObjectAttributes,
                               UserMode,
@@ -3065,6 +3072,13 @@ NtUserSwitchDesktop(HDESK hdesk)
 
     UserEnterExclusive();
     TRACE("Enter NtUserSwitchDesktop(0x%p)\n", hdesk);
+
+    if (IntIsJobUiLimited(JOB_OBJECT_UILIMIT_DESKTOP))
+    {
+        UserLeave();
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
 
     Status = IntValidateDesktopHandle(hdesk, UserMode, 0, &pdesk);
     if (!NT_SUCCESS(Status))

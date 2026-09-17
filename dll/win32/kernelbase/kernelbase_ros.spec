@@ -24,9 +24,10 @@
 #@ stdcall AddDllDirectory(wstr)
 @ stdcall AddMandatoryAce(ptr long long long ptr)
 #@ stdcall AddRefActCtx(ptr)
-# #@ stub AddResourceAttributeAce
-# #@ stub AddSIDToBoundaryDescriptor
-# #@ stub AddScopedPolicyIDAce
+@ stdcall AddResourceAttributeAce(ptr long long long ptr ptr ptr)
+@ stdcall AddSIDToBoundaryDescriptor(ptr ptr) kernel32.AddSIDToBoundaryDescriptor
+@ stdcall AddIntegrityLabelToBoundaryDescriptor(ptr ptr) kernel32.AddIntegrityLabelToBoundaryDescriptor
+@ stdcall AddScopedPolicyIDAce(ptr long long long ptr)
 #@ stdcall AddVectoredContinueHandler(long ptr) ntdll.RtlAddVectoredContinueHandler
 #@ stdcall AddVectoredExceptionHandler(long ptr) ntdll.RtlAddVectoredExceptionHandler
 @ stdcall AdjustTokenGroups(long long ptr long ptr ptr)
@@ -37,11 +38,11 @@
 #@ stdcall AllocateUserPhysicalPages(long ptr ptr)
 #@ stdcall AllocateUserPhysicalPagesNuma(long ptr ptr long)
 # #@ stub AppContainerDeriveSidFromMoniker
-# #@ stub AppContainerFreeMemory
+@ stdcall AppContainerFreeMemory(ptr)
 # #@ stub AppContainerLookupDisplayNameMrtReference
-# #@ stub AppContainerLookupMoniker
-# #@ stub AppContainerRegisterSid
-# #@ stub AppContainerUnregisterSid
+@ stdcall AppContainerLookupMoniker(ptr ptr)
+@ stdcall AppContainerRegisterSid(ptr wstr wstr)
+@ stdcall AppContainerUnregisterSid(ptr)
 # #@ stub AppPolicyGetClrCompat
 # #@ stub AppPolicyGetCreateFileAccess
 # #@ stub AppPolicyGetLifecycleManagement
@@ -91,7 +92,7 @@
 #@ stub BaseReleaseProcessDllPath
 #@ stub BaseReleaseProcessExePath
 #@ stub BaseUpdateAppcompatCache
-# #@ stub BasepAdjustObjectAttributesForPrivateNamespace
+@ stdcall BasepAdjustObjectAttributesForPrivateNamespace(ptr) kernel32.BasepAdjustObjectAttributesForPrivateNamespace
 # #@ stub BasepCopyFileCallback
 # #@ stub BasepCopyFileExW
 # #@ stub BasepNotifyTrackingService
@@ -129,9 +130,9 @@
 #@ stub CheckGroupPolicyEnabled
 # #@ stub CheckIfStateChangeNotificationExists
 #@ stdcall CheckRemoteDebuggerPresent(long ptr)
-# #@ stub CheckTokenCapability
+@ stdcall CheckTokenCapability(ptr ptr ptr)
 @ stdcall CheckTokenMembership(long ptr ptr)
-# #@ stub CheckTokenMembershipEx
+@ stdcall CheckTokenMembershipEx(ptr ptr long ptr)
 @ stdcall ChrCmpIA(long long)
 @ stdcall ChrCmpIW(long long)
 #@ stdcall ClearCommBreak(long)
@@ -139,7 +140,7 @@
 # #@ stub CloseGlobalizationUserSettingsKey
 #@ stdcall CloseHandle(long)
 # #@ stub ClosePackageInfo
-# #@ stub ClosePrivateNamespace
+@ stdcall ClosePrivateNamespace(ptr long) kernel32.ClosePrivateNamespace
 @ stdcall ClosePseudoConsole(ptr)
 # #@ stub CloseState
 # #@ stub CloseStateAtom
@@ -176,7 +177,7 @@
 # #@ stub CouldMultiUserAppsBehaviorBePossibleForPackage
 #@ stdcall CreateActCtxW(ptr)
 # #@ stub CreateAppContainerToken
-@ stdcall CreateBoundaryDescriptorW(wstr long)
+@ stdcall CreateBoundaryDescriptorW(wstr long) kernel32.CreateBoundaryDescriptorW
 #@ stdcall CreateConsoleScreenBuffer(long long ptr long ptr)
 #@ stdcall CreateDirectoryA(str ptr)
 #@ stdcall CreateDirectoryExW(wstr wstr ptr)
@@ -204,7 +205,7 @@
 #@ stdcall CreateMutexW(ptr long wstr)
 #@ stdcall CreateNamedPipeW(wstr long long long long long long ptr)
 #@ stdcall CreatePipe(ptr ptr ptr long)
-# #@ stub CreatePrivateNamespaceW
+@ stdcall CreatePrivateNamespaceW(ptr ptr wstr) kernel32.CreatePrivateNamespaceW
 @ stdcall CreatePrivateObjectSecurity(ptr ptr ptr long long ptr)
 @ stdcall CreatePrivateObjectSecurityEx(ptr ptr ptr ptr long long long ptr)
 @ stdcall CreatePrivateObjectSecurityWithMultipleInheritance(ptr ptr ptr ptr long long long long ptr)
@@ -252,7 +253,7 @@
 # #@ stub DelayLoadFailureHookLookup
 @ stdcall DeriveCapabilitySidsFromName(ptr ptr ptr ptr ptr)
 @ stdcall DeleteAce(ptr long)
-# #@ stub DeleteBoundaryDescriptor
+@ stdcall DeleteBoundaryDescriptor(ptr) kernel32.DeleteBoundaryDescriptor
 #@ stdcall DeleteCriticalSection(ptr) ntdll.RtlDeleteCriticalSection
 #@ stdcall DeleteFiber(ptr)
 #@ stdcall DeleteFileA(str)
@@ -416,14 +417,14 @@
 @ stdcall GetAclInformation(ptr ptr long long)
 # #@ stub GetAdjustObjectAttributesForPrivateNamespaceRoutine
 # #@ stub GetAlternatePackageRoots
-# #@ stub GetAppContainerAce
-# #@ stub GetAppContainerNamedObjectPath
+@ stdcall GetAppContainerAce(ptr long ptr ptr)
+@ stdcall GetAppContainerNamedObjectPath(ptr ptr long ptr ptr)
 # #@ stub GetAppDataFolder
 # #@ stub GetAppModelVersion
 # #@ stub GetApplicationRecoveryCallback
 #@ stdcall GetApplicationRestartSettings(long ptr ptr ptr)
 # #@ stub GetApplicationUserModelId
-# #@ stub GetApplicationUserModelIdFromToken
+@ stdcall GetApplicationUserModelIdFromToken(ptr ptr ptr)
 # #@ stub GetAppliedGPOListInternalA
 # #@ stub GetAppliedGPOListInternalW
 #@ stub GetCPFileNameFromRegistry
@@ -624,9 +625,9 @@
 # #@ stub GetPackageApplicationResourcesContext
 # #@ stub GetPackageContext
 @ stdcall GetPackageFamilyName(long ptr ptr)
-# #@ stub GetPackageFamilyNameFromToken
+@ stdcall GetPackageFamilyNameFromToken(ptr ptr ptr)
 #@ stdcall GetPackageFullName(long ptr ptr)
-# #@ stub GetPackageFullNameFromToken
+@ stdcall GetPackageFullNameFromToken(ptr ptr ptr)
 # #@ stub GetPackageId
 # #@ stub GetPackageInfo
 # #@ stub GetPackageInstallTime
@@ -663,7 +664,7 @@
 #@ stdcall GetProcessImageFileNameW(long ptr long)
 @ stdcall GetProcessInformation(long long ptr long) kernel32.GetProcessInformation
 #@ stdcall GetProcessMemoryInfo(long ptr long)
-#@ stdcall GetProcessMitigationPolicy(long long ptr long)
+@ stdcall GetProcessMitigationPolicy(long long ptr long) kernel32.GetProcessMitigationPolicy
 #@ stdcall GetProcessPreferredUILanguages(long ptr ptr ptr)
 #@ stdcall GetProcessPriorityBoost(long ptr)
 #@ stdcall GetProcessShutdownParameters(ptr ptr)
@@ -901,7 +902,7 @@
 #@ stdcall IsNLSDefinedString(long long ptr wstr long)
 #@ stdcall IsNormalizedString(long wstr long)
 # #@ stub IsProcessCritical
-#@ stdcall IsProcessInJob(long long ptr)
+@ stdcall IsProcessInJob(long long ptr) kernel32.IsProcessInJob
 #@ stdcall IsProcessorFeaturePresent(long)
 # #@ stub IsSideloadingEnabled
 # #@ stub IsSideloadingPolicyApplied
@@ -1027,7 +1028,7 @@
 #@ stdcall OpenMutexW(long long wstr)
 # #@ stub OpenPackageInfoByFullName
 # #@ stub OpenPackageInfoByFullNameForUser
-# #@ stub OpenPrivateNamespaceW
+@ stdcall OpenPrivateNamespaceW(ptr wstr) kernel32.OpenPrivateNamespaceW
 #@ stdcall OpenProcess(long long long)
 @ stdcall OpenProcessToken(long long ptr)
 #@ stub OpenRegKey
@@ -1500,7 +1501,7 @@
 #@ stdcall SetProcessDefaultCpuSets(ptr ptr long)
 #@ stdcall SetProcessGroupAffinity(long ptr ptr)
 @ stdcall SetProcessInformation(long long ptr long) kernel32.SetProcessInformation
-#@ stdcall SetProcessMitigationPolicy(long ptr long)
+@ stdcall SetProcessMitigationPolicy(long ptr long) kernel32.SetProcessMitigationPolicy
 #@ stdcall SetProcessPreferredUILanguages(long ptr ptr)
 #@ stdcall SetProcessPriorityBoost(long long)
 @ stdcall SetProcessShutdownParameters(long long) kernel32.SetProcessShutdownParameters

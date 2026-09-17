@@ -471,6 +471,43 @@ IntCheckFontPathNames(
 
 /** Functions ******************************************************************/
 
+static
+BOOL
+IntIsSystemFontPath(
+    _In_ PCUNICODE_STRING FileName)
+{
+    WCHAR PrefixBuffer[MAX_PATH + 16];
+    UNICODE_STRING Prefix, Path = *FileName;
+    ULONG Index;
+    BOOLEAN HasSeparator = FALSE;
+
+    for (Index = 0; Index < Path.Length / sizeof(WCHAR); Index++)
+    {
+        if (Path.Buffer[Index] == L'\\' || Path.Buffer[Index] == L'/')
+        {
+            HasSeparator = TRUE;
+            break;
+        }
+    }
+    if (!HasSeparator)
+        return TRUE;
+
+    if (Path.Length >= 4 * sizeof(WCHAR) && Path.Buffer[0] == L'\\' && Path.Buffer[1] == L'?' && Path.Buffer[2] == L'?' && Path.Buffer[3] == L'\\')
+    {
+        Path.Buffer += 4;
+        Path.Length -= 4 * sizeof(WCHAR);
+    }
+
+    RtlInitEmptyUnicodeString(&Prefix, PrefixBuffer, sizeof(PrefixBuffer));
+    if (!NT_SUCCESS(RtlAppendUnicodeToString(&Prefix, SharedUserData->NtSystemRoot)) ||
+        !NT_SUCCESS(RtlAppendUnicodeToString(&Prefix, L"\\Fonts\\")))
+    {
+        return FALSE;
+    }
+
+    return RtlPrefixUnicodeString(&Prefix, &Path, TRUE);
+}
+
 INT
 APIENTRY
 NtGdiAddFontResourceW(
@@ -518,6 +555,14 @@ NtGdiAddFontResourceW(
     _SEH2_END;
 
     SafeFileName.Buffer[SafeFileName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+    if ((PsGetProcessMitigationPolicyFlags(PsGetCurrentProcess(), 9) & 1) &&
+        !IntIsSystemFontPath(&SafeFileName))
+    {
+        ExFreePoolWithTag(SafeFileName.Buffer, TAG_STRING);
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return 0;
+    }
 
     Ret = IntGdiAddFontResourceEx(&SafeFileName, cFiles, fl, 0);
 

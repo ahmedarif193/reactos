@@ -175,6 +175,10 @@ typedef enum _PS_ATTRIBUTE_NUM
 #define PS_ATTRIBUTE_MITIGATION_OPTIONS (PsAttributeMitigationOptions | PS_ATTRIBUTE_INPUT)
 #define PS_ATTRIBUTE_PROTECTION_LEVEL   (PsAttributeProtectionLevel | PS_ATTRIBUTE_INPUT | PS_ATTRIBUTE_ADDITIVE)
 #define PS_ATTRIBUTE_JOB_LIST           (PsAttributeJobList | PS_ATTRIBUTE_INPUT)
+#define PS_ATTRIBUTE_CHILD_PROCESS_POLICY (PsAttributeChildProcessPolicy | PS_ATTRIBUTE_INPUT)
+#define PS_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY (PsAttributeAllApplicationPackagesPolicy | PS_ATTRIBUTE_INPUT)
+#define PS_ATTRIBUTE_BNO_ISOLATION      (PsAttributeBnoIsolation | PS_ATTRIBUTE_INPUT)
+#define PS_ATTRIBUTE_COMPONENT_FILTER   (PsAttributeComponentFilter | PS_ATTRIBUTE_INPUT)
 
 //
 // PS_CREATE_STATE - process creation result state
@@ -214,6 +218,17 @@ typedef struct _PS_ATTRIBUTE_LIST
     SIZE_T TotalLength;
     PS_ATTRIBUTE Attributes[1];
 } PS_ATTRIBUTE_LIST, *PPS_ATTRIBUTE_LIST;
+
+//
+// PS_BNO_ISOLATION_PARAMETERS - BaseNamedObjects isolation parameters
+//
+typedef struct _PS_BNO_ISOLATION_PARAMETERS
+{
+    UNICODE_STRING IsolationPrefix;
+    ULONG HandleCount;
+    PVOID *Handles;
+    BOOLEAN IsolationEnabled;
+} PS_BNO_ISOLATION_PARAMETERS, *PPS_BNO_ISOLATION_PARAMETERS;
 
 //
 // PS_CREATE_INFO - input/output structure for NtCreateUserProcess
@@ -856,7 +871,7 @@ NTSTATUS
 );
 
 typedef
-NTSTATUS
+PVOID
 (NTAPI *PKWIN32_GLOBALATOMTABLE_CALLOUT)(
     VOID
 );
@@ -1963,6 +1978,10 @@ typedef struct _EPROCESS
     PROCESS_ENERGY_VALUES EnergyValues;
     volatile LONG SignatureMitigationPolicy;
     volatile LONG DynamicCodeMitigationPolicy;
+    volatile LONG SystemCallDisablePolicy;
+    volatile LONG ChildProcessPolicy;
+    volatile LONG ComponentFilter;
+    volatile LONG ExtendedMitigationPolicy[16];
 #endif
 } EPROCESS;
 

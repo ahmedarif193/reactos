@@ -511,6 +511,20 @@ PVOID UserGetObject(PUSER_HANDLE_TABLE ht, HANDLE handle, HANDLE_TYPE type )
    ASSERT(ht);
 
    ptr = UserGetObjectNoErr(ht, handle, type);
+   if (ptr && type == TYPE_WINDOW && ((PWND)ptr)->fnid != FNID_DESKTOP)
+   {
+      PUSER_HANDLE_ENTRY entry;
+      PPROCESSINFO ppiOwner = NULL;
+
+      UserDomainLockShared(DLT_HANDLEMANAGER);
+      entry = handle_to_entry(ht, handle);
+      if (entry && entry->pti)
+         ppiOwner = entry->pti->ppi;
+      UserDomainUnlockShared(DLT_HANDLEMANAGER);
+
+      if (!IntIsJobHandleAccessible(handle, ppiOwner))
+         ptr = NULL;
+   }
    if (!ptr)
    {
       EngSetLastError(ERROR_INVALID_HANDLE);

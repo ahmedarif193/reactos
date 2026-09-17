@@ -1780,6 +1780,13 @@ KiSystemServiceHandler(IN PKTRAP_FRAME TrapFrame,
     /* Get descriptor table */
     DescriptorTable = (PVOID)((ULONG_PTR)Thread->ServiceTable + Offset);
 
+    if ((Offset & SERVICE_TABLE_TEST) &&
+        (ReadAcquire(&PsGetCurrentProcess()->SystemCallDisablePolicy) & 1))
+    {
+        Status = STATUS_INVALID_SYSTEM_SERVICE;
+        goto ExitCall;
+    }
+
     /* Validate the system call number */
     if (__builtin_expect(Id >= DescriptorTable->Limit, 0))
     {

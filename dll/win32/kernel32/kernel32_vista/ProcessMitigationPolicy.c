@@ -7,31 +7,6 @@
 
 #include "k32_vista.h"
 
-typedef enum _PROCESS_MITIGATION_POLICY
-{
-    ProcessDEPPolicy,
-    ProcessASLRPolicy,
-    ProcessDynamicCodePolicy,
-    ProcessStrictHandleCheckPolicy,
-    ProcessSystemCallDisablePolicy,
-    ProcessMitigationOptionsMask,
-    ProcessExtensionPointDisablePolicy,
-    ProcessControlFlowGuardPolicy,
-    ProcessSignaturePolicy,
-    ProcessFontDisablePolicy,
-    ProcessImageLoadPolicy,
-    ProcessSystemCallFilterPolicy,
-    ProcessPayloadRestrictionPolicy,
-    ProcessChildProcessPolicy,
-    ProcessSideChannelIsolationPolicy,
-    ProcessUserShadowStackPolicy,
-    ProcessRedirectionTrustPolicy,
-    ProcessUserPointerAuthPolicy,
-    ProcessSEHOPPolicy,
-    ProcessActivationContextTrustPolicy,
-    MaxProcessMitigationPolicy
-} PROCESS_MITIGATION_POLICY;
-
 typedef struct _K32_PROCESS_MITIGATION_DEP_POLICY
 {
     DWORD Flags;
@@ -44,7 +19,20 @@ typedef struct _K32_PROCESS_MITIGATION_INFORMATION
     ULONG Flags;
 } K32_PROCESS_MITIGATION_INFORMATION;
 
-#define K32_MITIGATION_OPTION_DEP_ENABLE 0x1ULL
+#define K32_PROCESS_SIDE_CHANNEL_ISOLATION_POLICY ((PROCESS_MITIGATION_POLICY)14)
+
+/* One supported value bit for each creation policy implemented below. */
+#define K32_MITIGATION_OPTIONS_WORD1 0x1111101111111101ULL
+
+#define K32_MITIGATION_OPTION2_MODULE_TAMPERING       (0x1ULL << 12)
+#define K32_MITIGATION_OPTION2_RESTRICT_BRANCH        (0x1ULL << 16)
+#define K32_MITIGATION_OPTION2_RESTRICT_CORE_SHARING  (0x1ULL << 52)
+#define K32_MITIGATION_OPTION2_DISABLE_FSCTL          (0x1ULL << 56)
+#define K32_MITIGATION_OPTIONS_WORD2 \
+    (K32_MITIGATION_OPTION2_MODULE_TAMPERING | \
+     K32_MITIGATION_OPTION2_RESTRICT_BRANCH | \
+     K32_MITIGATION_OPTION2_RESTRICT_CORE_SHARING | \
+     K32_MITIGATION_OPTION2_DISABLE_FSCTL)
 
 static BOOL
 K32IsCurrentImageCfgEnabled(VOID)
@@ -71,13 +59,17 @@ GetProcessMitigationPolicy(
     _In_ SIZE_T dwLength)
 {
     PK32_PROCESS_MITIGATION_DEP_POLICY DepPolicy;
-    ULONGLONG OptionsMask = 0;
+    const ULONGLONG OptionsMask[2] =
+    {
+        K32_MITIGATION_OPTIONS_WORD1,
+        K32_MITIGATION_OPTIONS_WORD2
+    };
 #ifndef _WIN64
     DWORD Flags;
     BOOL Permanent;
 #endif
 
-    if ((ULONG)MitigationPolicy >= MaxProcessMitigationPolicy || !lpBuffer)
+    if ((ULONG)MitigationPolicy > (ULONG)K32_PROCESS_SIDE_CHANNEL_ISOLATION_POLICY || !lpBuffer)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
@@ -85,22 +77,16 @@ GetProcessMitigationPolicy(
 
     if (MitigationPolicy == ProcessMitigationOptionsMask)
     {
-        if (dwLength < sizeof(OptionsMask))
+        if (dwLength < sizeof(OptionsMask[0]))
         {
             SetLastError(ERROR_INVALID_PARAMETER);
             return FALSE;
         }
 
-        /*
-         * Creation mitigation flags use two bits per option. Do not advertise
-         * policies that ReactOS accepts but does not enforce. DEP is mandatory
-         * on 64-bit builds and is the only creation policy reported for now.
-         */
-#ifdef _WIN64
-        OptionsMask = K32_MITIGATION_OPTION_DEP_ENABLE;
-#endif
         RtlZeroMemory(lpBuffer, dwLength);
-        RtlCopyMemory(lpBuffer, &OptionsMask, sizeof(OptionsMask));
+        RtlCopyMemory(lpBuffer,
+                      OptionsMask,
+                      min(dwLength, sizeof(OptionsMask)));
         return TRUE;
     }
 
@@ -117,7 +103,16 @@ GetProcessMitigationPolicy(
 
     if (MitigationPolicy == ProcessDynamicCodePolicy ||
         MitigationPolicy == ProcessStrictHandleCheckPolicy ||
-        MitigationPolicy == ProcessSignaturePolicy)
+        MitigationPolicy == ProcessSignaturePolicy ||
+        MitigationPolicy == ProcessSystemCallDisablePolicy ||
+        MitigationPolicy == ProcessChildProcessPolicy ||
+        MitigationPolicy == ProcessASLRPolicy ||
+        MitigationPolicy == ProcessExtensionPointDisablePolicy ||
+        MitigationPolicy == ProcessFontDisablePolicy ||
+        MitigationPolicy == ProcessImageLoadPolicy ||
+        MitigationPolicy == ProcessSystemCallFilterPolicy ||
+        MitigationPolicy == ProcessPayloadRestrictionPolicy ||
+        MitigationPolicy == K32_PROCESS_SIDE_CHANNEL_ISOLATION_POLICY)
     {
         K32_PROCESS_MITIGATION_INFORMATION Information = {MitigationPolicy, 0};
         NTSTATUS Status;
@@ -168,7 +163,7 @@ SetProcessMitigationPolicy(
 {
     PK32_PROCESS_MITIGATION_DEP_POLICY DepPolicy;
 
-    if (MitigationPolicy >= MaxProcessMitigationPolicy)
+    if ((ULONG)MitigationPolicy > (ULONG)K32_PROCESS_SIDE_CHANNEL_ISOLATION_POLICY)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
@@ -176,7 +171,17 @@ SetProcessMitigationPolicy(
 
     if (MitigationPolicy == ProcessDynamicCodePolicy ||
         MitigationPolicy == ProcessStrictHandleCheckPolicy ||
-        MitigationPolicy == ProcessSignaturePolicy)
+        MitigationPolicy == ProcessSignaturePolicy ||
+        MitigationPolicy == ProcessSystemCallDisablePolicy ||
+        MitigationPolicy == ProcessChildProcessPolicy ||
+        MitigationPolicy == ProcessASLRPolicy ||
+        MitigationPolicy == ProcessExtensionPointDisablePolicy ||
+        MitigationPolicy == ProcessControlFlowGuardPolicy ||
+        MitigationPolicy == ProcessFontDisablePolicy ||
+        MitigationPolicy == ProcessImageLoadPolicy ||
+        MitigationPolicy == ProcessSystemCallFilterPolicy ||
+        MitigationPolicy == ProcessPayloadRestrictionPolicy ||
+        MitigationPolicy == K32_PROCESS_SIDE_CHANNEL_ISOLATION_POLICY)
     {
         K32_PROCESS_MITIGATION_INFORMATION Information = {MitigationPolicy, 0};
         NTSTATUS Status;

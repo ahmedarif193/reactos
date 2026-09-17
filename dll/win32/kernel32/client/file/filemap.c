@@ -318,6 +318,7 @@ OpenFileMappingW(IN DWORD dwDesiredAccess,
                                (bInheritHandle ? OBJ_INHERIT : 0),
                                BaseGetNamedObjectDirectory(),
                                NULL);
+    BasepAdjustObjectAttributesForPrivateNamespace(&ObjectAttributes);
 
     /* Convert COPY to READ */
     if (dwDesiredAccess == FILE_MAP_COPY)

@@ -232,10 +232,16 @@ PspSetPrimaryToken(IN PEPROCESS Process,
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     BOOLEAN IsChildOrSibling;
     PACCESS_TOKEN NewToken = Token;
+    PTOKEN ProcessToken = NULL;
     NTSTATUS Status, AccessStatus;
     BOOLEAN Result, SdAllocated;
     PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
     SECURITY_SUBJECT_CONTEXT SubjectContext;
+    PTOKEN OldToken;
+    PTOKEN NewTokenObject;
+    UNICODE_STRING BnoIsolationPrefix;
+
+    RtlInitEmptyUnicodeString(&BnoIsolationPrefix, NULL, 0);
 
     PSTRACE(PS_SECURITY_DEBUG, "Process: %p Token: %p\n", Process, Token);
 
@@ -287,8 +293,65 @@ PspSetPrimaryToken(IN PEPROCESS Process,
         }
     }
 
+    Status = SeSubProcessToken((PTOKEN)NewToken,
+                               &ProcessToken,
+                               FALSE,
+                               MmGetSessionId(Process));
+    if (!NT_SUCCESS(Status))
+    {
+        if (!Token) ObDereferenceObject(NewToken);
+        return Status;
+    }
+
+    NewTokenObject = (PTOKEN)ProcessToken;
+    OldToken = PsReferencePrimaryToken(Process);
+    SepAcquireTokenLockShared(OldToken);
+    if (OldToken->BnoIsolationPrefix.Length)
+    {
+        BnoIsolationPrefix.MaximumLength =
+            OldToken->BnoIsolationPrefix.Length + sizeof(UNICODE_NULL);
+        BnoIsolationPrefix.Buffer = ExAllocatePoolWithTag(
+            PagedPool,
+            BnoIsolationPrefix.MaximumLength,
+            TAG_SE_BNO);
+        if (BnoIsolationPrefix.Buffer)
+        {
+            BnoIsolationPrefix.Length = OldToken->BnoIsolationPrefix.Length;
+            RtlCopyMemory(BnoIsolationPrefix.Buffer,
+                          OldToken->BnoIsolationPrefix.Buffer,
+                          BnoIsolationPrefix.Length);
+            BnoIsolationPrefix.Buffer[BnoIsolationPrefix.Length / sizeof(WCHAR)] =
+                UNICODE_NULL;
+        }
+    }
+    SepReleaseTokenLock(OldToken);
+    ObFastDereferenceObject(&Process->Token, OldToken);
+
+    if (BnoIsolationPrefix.MaximumLength && !BnoIsolationPrefix.Buffer)
+    {
+        ObDereferenceObject(ProcessToken);
+        if (!Token) ObDereferenceObject(NewToken);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
     /* Assign the token */
-    Status = PspAssignPrimaryToken(Process, NULL, NewToken);
+    Status = PspAssignPrimaryToken(Process, NULL, ProcessToken);
+    if (NT_SUCCESS(Status) && BnoIsolationPrefix.Buffer)
+    {
+        SepAcquireTokenLockExclusive(NewTokenObject);
+        if (NewTokenObject->BnoIsolationPrefix.Buffer)
+            ExFreePoolWithTag(NewTokenObject->BnoIsolationPrefix.Buffer, TAG_SE_BNO);
+        NewTokenObject->BnoIsolationPrefix = BnoIsolationPrefix;
+        BnoIsolationPrefix.Buffer = NULL;
+        ExAllocateLocallyUniqueId(&NewTokenObject->ModifiedId);
+        SepReleaseTokenLock(NewTokenObject);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        SeSetObjectMandatoryLabel(Process,
+                                  SepGetTokenIntegrityRid(ProcessToken),
+                                  SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP);
+    }
     if (NT_SUCCESS(Status))
     {
         /*
@@ -358,6 +421,11 @@ PspSetPrimaryToken(IN PEPROCESS Process,
          */
         if (ObIsLUIDDeviceMapsEnabled()) ObDereferenceDeviceMap(Process);
     }
+
+    if (BnoIsolationPrefix.Buffer)
+        ExFreePoolWithTag(BnoIsolationPrefix.Buffer, TAG_SE_BNO);
+
+    ObDereferenceObject(ProcessToken);
 
     /* Dereference the token */
     if (!Token) ObDereferenceObject(NewToken);

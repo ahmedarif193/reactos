@@ -497,6 +497,18 @@ NtUserProcessConnect(
         goto Cleanup;
     }
 
+    if (Process == PsGetCurrentProcess() &&
+        IntGetProcessIntegrity(Process) < SECURITY_MANDATORY_LOW_RID &&
+        (!W32Process->rpdeskStartup ||
+         !W32Process->rpdeskStartup->pDeskInfo ||
+         (W32Process->prpwinsta == InputWindowStation &&
+          !_wcsicmp(W32Process->rpdeskStartup->pDeskInfo->szDesktopName,
+                    L"Default"))))
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto Cleanup;
+    }
+
     _SEH2_TRY
     {
         UINT i;

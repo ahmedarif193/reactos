@@ -945,7 +945,7 @@ LdrpCheckForKnownDll(PWSTR DllName,
                                    NULL);
 
         Status = NtOpenSection(&Section,
-                               SECTION_MAP_READ | SECTION_MAP_EXECUTE | SECTION_MAP_WRITE,
+                               SECTION_MAP_READ | SECTION_MAP_EXECUTE | SECTION_QUERY,
                                &ObjectAttributes);
         if (!NT_SUCCESS(Status))
         {
@@ -1229,7 +1229,7 @@ SkipCheck:
                                 &ViewSize,
                                 ViewShare,
                                 0,
-                                PAGE_READWRITE);
+                                PAGE_EXECUTE_WRITECOPY);
 
     /* Restore */
     Teb->NtTib.ArbitraryUserPointer = ArbitraryUserPointer;

@@ -54,6 +54,7 @@ PsConvertToGuiThread(VOID)
 
     /* Make sure win32k is here */
     if (!PspW32ProcessCallout) return STATUS_ACCESS_DENIED;
+    if (ReadAcquire(&Process->SystemCallDisablePolicy) & 1) return STATUS_INVALID_SYSTEM_SERVICE;
 
     /* Make sure it's not already win32 */
 #if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
@@ -144,6 +145,7 @@ PsEstablishWin32Callouts(IN PWIN32_CALLOUTS_FPNS CalloutData)
     PspW32ProcessCallout = CalloutData->ProcessCallout;
     PspW32ThreadCallout = CalloutData->ThreadCallout;
     PspW32JobCallout = CalloutData->JobCallout;
+    ExpGlobalAtomTableCallout = CalloutData->GlobalAtomTableCallout;
     ExpWindowStationObjectParse = CalloutData->WindowStationParseProcedure;
     ExpWindowStationObjectDelete = CalloutData->WindowStationDeleteProcedure;
     ExpWindowStationObjectOkToClose = CalloutData->WindowStationOkToCloseProcedure;

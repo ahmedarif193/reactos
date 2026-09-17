@@ -340,6 +340,8 @@ AuthPortThreadRoutine(PVOID Param)
 NTSTATUS
 StartAuthenticationPort(VOID)
 {
+    static SECURITY_DESCRIPTOR AuthPortSd;
+    static PACL AuthPortSacl;
     OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING PortName;
     DWORD ThreadId;
@@ -355,11 +357,30 @@ StartAuthenticationPort(VOID)
     RtlInitUnicodeString(&PortName,
                          L"\\LsaAuthenticationPort");
 
+    {
+        SID_IDENTIFIER_AUTHORITY LabelAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
+        PSID UntrustedSid = NULL;
+        ULONG SaclSize;
+
+        Status = RtlAllocateAndInitializeSid(&LabelAuthority, 1, SECURITY_MANDATORY_UNTRUSTED_RID,
+                                             0, 0, 0, 0, 0, 0, 0, &UntrustedSid);
+        if (!NT_SUCCESS(Status)) return Status;
+        SaclSize = sizeof(ACL) + sizeof(SYSTEM_MANDATORY_LABEL_ACE) + RtlLengthSid(UntrustedSid);
+        AuthPortSacl = RtlAllocateHeap(RtlGetProcessHeap(), 0, SaclSize);
+        if (!AuthPortSacl) return STATUS_NO_MEMORY;
+        RtlCreateAcl(AuthPortSacl, SaclSize, ACL_REVISION);
+        RtlAddMandatoryAce(AuthPortSacl, ACL_REVISION, 0, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+                           SYSTEM_MANDATORY_LABEL_ACE_TYPE, UntrustedSid);
+        RtlCreateSecurityDescriptor(&AuthPortSd, SECURITY_DESCRIPTOR_REVISION);
+        RtlSetDaclSecurityDescriptor(&AuthPortSd, TRUE, NULL, FALSE);
+        RtlSetSaclSecurityDescriptor(&AuthPortSd, TRUE, AuthPortSacl, FALSE);
+    }
+
     InitializeObjectAttributes(&ObjectAttributes,
                                &PortName,
                                0,
                                NULL,
-                               NULL);
+                               &AuthPortSd);
 
     Status = NtCreatePort(&AuthPortHandle,
                           &ObjectAttributes,

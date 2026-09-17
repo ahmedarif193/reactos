@@ -470,6 +470,73 @@ IntGrantHandleToJob(
 
 /* PUBLIC FUNCTIONS ***********************************************************/
 
+BOOL
+FASTCALL
+IntIsJobUiLimited(_In_ ULONG Limit)
+{
+    PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
+    PEJOB pEJob;
+
+    if (ppi == NULL || !(ppi->W32PF_flags & W32PF_JOBRESTRICTED) || ppi->peProcess == NULL)
+        return FALSE;
+
+    pEJob = PsGetProcessJob(ppi->peProcess);
+    if (pEJob == NULL)
+        return FALSE;
+
+    return (PsGetJobUIRestrictionsClass(pEJob) & Limit) != 0;
+}
+
+BOOL
+FASTCALL
+IntIsJobHandleAccessible(
+    _In_ HANDLE hUserHandle,
+    _In_opt_ PPROCESSINFO ppiOwner)
+{
+    PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
+    PJOBINFO pJobInfo;
+    PEJOB pEJob;
+
+    if (ppi == NULL || !(ppi->W32PF_flags & W32PF_JOBRESTRICTED) || ppi->peProcess == NULL)
+        return TRUE;
+    if (ppiOwner == NULL || ppiOwner == ppi)
+        return TRUE;
+
+    pEJob = PsGetProcessJob(ppi->peProcess);
+    if (pEJob == NULL || !(PsGetJobUIRestrictionsClass(pEJob) & JOB_OBJECT_UILIMIT_HANDLES))
+        return TRUE;
+    if (ppiOwner->peProcess != NULL && PsGetProcessJob(ppiOwner->peProcess) == pEJob)
+        return TRUE;
+
+    pJobInfo = IntFindJobInfo(pEJob);
+    return pJobInfo != NULL && IntIsHandleGrantedToJob(pJobInfo, hUserHandle);
+}
+
+PVOID
+NTAPI
+Win32kGlobalAtomTableCallout(VOID)
+{
+    PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
+    PJOBINFO pJobInfo;
+    PEJOB pEJob;
+    PRTL_ATOM_TABLE pAtomTable = NULL;
+
+    if (ppi == NULL || !(ppi->W32PF_flags & W32PF_JOBRESTRICTED) || ppi->peProcess == NULL)
+        return NULL;
+
+    pEJob = PsGetProcessJob(ppi->peProcess);
+    if (pEJob == NULL || !(PsGetJobUIRestrictionsClass(pEJob) & JOB_OBJECT_UILIMIT_GLOBALATOMS))
+        return NULL;
+
+    UserEnterShared();
+    pJobInfo = IntFindJobInfo(pEJob);
+    if (pJobInfo != NULL)
+        pAtomTable = pJobInfo->pAtomTable;
+    UserLeave();
+
+    return pAtomTable;
+}
+
 /* Called with the job lock held and without the USER lock */
 NTSTATUS
 NTAPI

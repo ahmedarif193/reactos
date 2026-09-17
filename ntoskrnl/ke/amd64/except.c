@@ -436,8 +436,28 @@ NTSTATUS
 NTAPI
 KeRaiseUserException(IN NTSTATUS ExceptionCode)
 {
-    UNIMPLEMENTED;
-    return STATUS_UNSUCCESSFUL;
+    PKTHREAD Thread = KeGetCurrentThread();
+    PTEB Teb = Thread->Teb;
+    PKTRAP_FRAME TrapFrame = Thread->TrapFrame;
+
+    if (!Teb || !TrapFrame || !KeRaiseUserExceptionDispatcher ||
+        KiUserTrap(TrapFrame) == FALSE)
+    {
+        return ExceptionCode;
+    }
+
+    _SEH2_TRY
+    {
+        Teb->ExceptionCode = ExceptionCode;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    TrapFrame->Rip = (ULONG64)(ULONG_PTR)KeRaiseUserExceptionDispatcher;
+    return ExceptionCode;
 }
 
 

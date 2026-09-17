@@ -15,6 +15,186 @@
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+typedef enum _SEP_CONDITION_RESULT
+{
+    SepConditionFalse,
+    SepConditionTrue,
+    SepConditionUnknown
+} SEP_CONDITION_RESULT;
+
+static
+BOOLEAN
+SepReadConditionUlong(
+    _Inout_ PUCHAR *Cursor,
+    _In_ PUCHAR End,
+    _Out_ PULONG Value)
+{
+    if (*Cursor > End || (SIZE_T)(End - *Cursor) < sizeof(*Value))
+        return FALSE;
+
+    RtlCopyMemory(Value, *Cursor, sizeof(*Value));
+    *Cursor += sizeof(*Value);
+    return TRUE;
+}
+
+static
+BOOLEAN
+SepReadConditionUint64(
+    _Inout_ PUCHAR *Cursor,
+    _In_ PUCHAR End,
+    _Out_ PULONGLONG Value)
+{
+    if (*Cursor > End || (SIZE_T)(End - *Cursor) < sizeof(*Value))
+        return FALSE;
+
+    RtlCopyMemory(Value, *Cursor, sizeof(*Value));
+    *Cursor += sizeof(*Value);
+    return TRUE;
+}
+
+static
+SEP_CONDITION_RESULT
+SepEvaluateProcUniqueCondition(
+    _In_ PACE Ace,
+    _In_ PACCESS_TOKEN AccessToken)
+{
+    static const UCHAR Signature[] = {'a', 'r', 't', 'x'};
+    static const WCHAR AttributeName[] = L"TSA://ProcUnique";
+    PTOKEN Token = (PTOKEN)AccessToken;
+    PISID Sid;
+    PUCHAR Cursor, End, NestedEnd;
+    ULONG SidLength, NameLength, NestedLength, Index;
+    ULONGLONG Values[2];
+    WCHAR Character;
+
+    if (Ace->Header.AceSize <
+        FIELD_OFFSET(KNOWN_ACE, SidStart) +
+        RtlLengthRequiredSid(0))
+    {
+        return SepConditionUnknown;
+    }
+
+    Sid = (PISID)&((PKNOWN_ACE)Ace)->SidStart;
+    SidLength = RtlLengthRequiredSid(Sid->SubAuthorityCount);
+    End = (PUCHAR)Ace + Ace->Header.AceSize;
+    Cursor = (PUCHAR)Sid;
+    if (Cursor > End || (SIZE_T)(End - Cursor) < SidLength)
+        return SepConditionUnknown;
+
+    Cursor += SidLength;
+    if ((SIZE_T)(End - Cursor) < sizeof(Signature) + sizeof(UCHAR) + sizeof(ULONG) ||
+        RtlCompareMemory(Cursor, Signature, sizeof(Signature)) != sizeof(Signature))
+    {
+        return SepConditionUnknown;
+    }
+    Cursor += sizeof(Signature);
+
+    if (*Cursor++ != 0xf8 ||
+        !SepReadConditionUlong(&Cursor, End, &NameLength) ||
+        NameLength != sizeof(AttributeName) - sizeof(UNICODE_NULL) ||
+        Cursor > End || (SIZE_T)(End - Cursor) < NameLength)
+    {
+        return SepConditionUnknown;
+    }
+
+    for (Index = 0; Index < RTL_NUMBER_OF(AttributeName) - 1; Index++)
+    {
+        RtlCopyMemory(&Character, Cursor + Index * sizeof(WCHAR), sizeof(Character));
+        if (RtlUpcaseUnicodeChar(Character) != RtlUpcaseUnicodeChar(AttributeName[Index]))
+            return SepConditionUnknown;
+    }
+    Cursor += NameLength;
+
+    if (Cursor >= End || *Cursor++ != 0x50 ||
+        !SepReadConditionUlong(&Cursor, End, &NestedLength) ||
+        NestedLength > (SIZE_T)(End - Cursor))
+    {
+        return SepConditionUnknown;
+    }
+    NestedEnd = Cursor + NestedLength;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Values); Index++)
+    {
+        if (Cursor >= NestedEnd || *Cursor++ != 0x04 ||
+            !SepReadConditionUint64(&Cursor, NestedEnd, &Values[Index]) ||
+            (SIZE_T)(NestedEnd - Cursor) < 2 ||
+            Cursor[0] != 0x03 || Cursor[1] != 0x02)
+        {
+            return SepConditionUnknown;
+        }
+        Cursor += 2;
+    }
+
+    if (Cursor != NestedEnd || Cursor >= End || *Cursor++ != 0x80)
+        return SepConditionUnknown;
+
+    while (Cursor < End)
+    {
+        if (*Cursor++ != 0)
+            return SepConditionUnknown;
+    }
+
+    if (RtlIsZeroLuid(&Token->ProcUnique))
+        return SepConditionFalse;
+
+    return (Values[0] == (ULONG)Token->ProcUnique.HighPart &&
+            Values[1] == Token->ProcUnique.LowPart) ?
+           SepConditionTrue : SepConditionFalse;
+}
+
+static
+BOOLEAN
+SepAceSidMatchesToken(
+    _In_ PACCESS_TOKEN AccessToken,
+    _In_opt_ PSID PrincipalSelfSid,
+    _In_ PSID Sid,
+    _In_ BOOLEAN DenyAce,
+    _In_ ULONG SidSet,
+    _In_ BOOLEAN TokenIsOwner)
+{
+    if (TokenIsOwner && SeOwnerRightsSid && RtlEqualSid(Sid, SeOwnerRightsSid))
+        return TRUE;
+
+    return SepSidInTokenEx(AccessToken,
+                           PrincipalSelfSid,
+                           Sid,
+                           DenyAce,
+                           SidSet);
+}
+
+static
+BOOLEAN
+SepDaclContainsOwnerRightsAce(
+    _In_ PSECURITY_DESCRIPTOR SecurityDescriptor)
+{
+    PACL Dacl;
+    PACE Ace;
+    PSID Sid;
+    ULONG AceIndex;
+
+    if (!SeOwnerRightsSid)
+        return FALSE;
+
+    Dacl = SepGetDaclFromDescriptor(SecurityDescriptor);
+    if (!Dacl)
+        return FALSE;
+
+    for (AceIndex = 0; AceIndex < Dacl->AceCount; AceIndex++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Dacl, AceIndex, (PVOID *)&Ace)) ||
+            (Ace->Header.AceFlags & INHERIT_ONLY_ACE))
+        {
+            continue;
+        }
+
+        Sid = SepGetSidFromAce(Ace);
+        if (Sid && RtlEqualSid(Sid, SeOwnerRightsSid))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 /**
  * @brief
  * Denies access of a target object and the children objects
@@ -463,7 +643,8 @@ SepAnalyzeAcesFromDacl(
     _In_ PACL Dacl,
     _In_ PACCESS_TOKEN AccessToken,
     _In_ PACCESS_TOKEN PrimaryAccessToken,
-    _In_ BOOLEAN IsTokenRestricted,
+    _In_ ULONG SidSet,
+    _In_ BOOLEAN TokenIsOwner,
     _In_opt_ PSID PrincipalSelfSid,
     _In_ PGENERIC_MAPPING GenericMapping,
     _In_opt_ POBJECT_TYPE_LIST_INTERNAL ObjectTypeList,
@@ -514,13 +695,21 @@ SepAnalyzeAcesFromDacl(
                  */
                 if (!(CurrentAce->Header.AceFlags & INHERIT_ONLY_ACE))
                 {
-                    if (CurrentAce->Header.AceType == ACCESS_DENIED_ACE_TYPE)
+                    if (CurrentAce->Header.AceType == ACCESS_DENIED_ACE_TYPE ||
+                        CurrentAce->Header.AceType == ACCESS_DENIED_CALLBACK_ACE_TYPE)
                     {
                         /* Get the SID from this ACE */
                         Sid = SepGetSidFromAce(CurrentAce);
                         ASSERT(Sid);
 
-                        if (SepSidInTokenEx(AccessToken, PrincipalSelfSid, Sid, TRUE, IsTokenRestricted))
+                        if (SepAceSidMatchesToken(AccessToken,
+                                                 PrincipalSelfSid,
+                                                 Sid,
+                                                 TRUE,
+                                                 SidSet,
+                                                 TokenIsOwner) &&
+                            (CurrentAce->Header.AceType == ACCESS_DENIED_ACE_TYPE ||
+                             SepEvaluateProcUniqueCondition(CurrentAce, AccessToken) != SepConditionFalse))
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
@@ -536,13 +725,21 @@ SepAnalyzeAcesFromDacl(
                             DPRINT("DeniedAccessRights 0x%08lx\n", AccessCheckRights->DeniedAccessRights);
                         }
                     }
-                    else if (CurrentAce->Header.AceType == ACCESS_ALLOWED_ACE_TYPE)
+                    else if (CurrentAce->Header.AceType == ACCESS_ALLOWED_ACE_TYPE ||
+                             CurrentAce->Header.AceType == ACCESS_ALLOWED_CALLBACK_ACE_TYPE)
                     {
                         /* Get the SID from this ACE */
                         Sid = SepGetSidFromAce(CurrentAce);
                         ASSERT(Sid);
 
-                        if (SepSidInTokenEx(AccessToken, PrincipalSelfSid, Sid, FALSE, IsTokenRestricted))
+                        if (SepAceSidMatchesToken(AccessToken,
+                                                 PrincipalSelfSid,
+                                                 Sid,
+                                                 FALSE,
+                                                 SidSet,
+                                                 TokenIsOwner) &&
+                            (CurrentAce->Header.AceType == ACCESS_ALLOWED_ACE_TYPE ||
+                             SepEvaluateProcUniqueCondition(CurrentAce, AccessToken) == SepConditionTrue))
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
@@ -565,7 +762,7 @@ SepAnalyzeAcesFromDacl(
                         ObjectTypeGuid = SepGetObjectTypeGuidFromAce(CurrentAce, TRUE);
                         ASSERT(Sid);
 
-                        if (SepSidInTokenEx(AccessToken, PrincipalSelfSid, Sid, TRUE, IsTokenRestricted))
+                        if (SepAceSidMatchesToken(AccessToken, PrincipalSelfSid, Sid, TRUE, SidSet, TokenIsOwner))
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
@@ -614,7 +811,7 @@ SepAnalyzeAcesFromDacl(
                         ObjectTypeGuid = SepGetObjectTypeGuidFromAce(CurrentAce, FALSE);
                         ASSERT(Sid);
 
-                        if (SepSidInTokenEx(AccessToken, PrincipalSelfSid, Sid, FALSE, IsTokenRestricted))
+                        if (SepAceSidMatchesToken(AccessToken, PrincipalSelfSid, Sid, FALSE, SidSet, TokenIsOwner))
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
@@ -702,13 +899,21 @@ SepAnalyzeAcesFromDacl(
                  */
                 if (!(CurrentAce->Header.AceFlags & INHERIT_ONLY_ACE))
                 {
-                    if (CurrentAce->Header.AceType == ACCESS_DENIED_ACE_TYPE)
+                    if (CurrentAce->Header.AceType == ACCESS_DENIED_ACE_TYPE ||
+                        CurrentAce->Header.AceType == ACCESS_DENIED_CALLBACK_ACE_TYPE)
                     {
                         /* Get the SID from this ACE */
                         Sid = SepGetSidFromAce(CurrentAce);
                         ASSERT(Sid);
 
-                        if (SepSidInTokenEx(AccessToken, PrincipalSelfSid, Sid, TRUE, IsTokenRestricted))
+                        if (SepAceSidMatchesToken(AccessToken,
+                                                 PrincipalSelfSid,
+                                                 Sid,
+                                                 TRUE,
+                                                 SidSet,
+                                                 TokenIsOwner) &&
+                            (CurrentAce->Header.AceType == ACCESS_DENIED_ACE_TYPE ||
+                             SepEvaluateProcUniqueCondition(CurrentAce, AccessToken) != SepConditionFalse))
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
@@ -732,13 +937,21 @@ SepAnalyzeAcesFromDacl(
                             }
                         }
                     }
-                    else if (CurrentAce->Header.AceType == ACCESS_ALLOWED_ACE_TYPE)
+                    else if (CurrentAce->Header.AceType == ACCESS_ALLOWED_ACE_TYPE ||
+                             CurrentAce->Header.AceType == ACCESS_ALLOWED_CALLBACK_ACE_TYPE)
                     {
                         /* Get the SID from this ACE */
                         Sid = SepGetSidFromAce(CurrentAce);
                         ASSERT(Sid);
 
-                        if (SepSidInTokenEx(AccessToken, PrincipalSelfSid, Sid, FALSE, IsTokenRestricted))
+                        if (SepAceSidMatchesToken(AccessToken,
+                                                 PrincipalSelfSid,
+                                                 Sid,
+                                                 FALSE,
+                                                 SidSet,
+                                                 TokenIsOwner) &&
+                            (CurrentAce->Header.AceType == ACCESS_ALLOWED_ACE_TYPE ||
+                             SepEvaluateProcUniqueCondition(CurrentAce, AccessToken) == SepConditionTrue))
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
@@ -765,7 +978,7 @@ SepAnalyzeAcesFromDacl(
                         ObjectTypeGuid = SepGetObjectTypeGuidFromAce(CurrentAce, TRUE);
                         ASSERT(Sid);
 
-                        if (SepSidInTokenEx(AccessToken, PrincipalSelfSid, Sid, TRUE, IsTokenRestricted))
+                        if (SepAceSidMatchesToken(AccessToken, PrincipalSelfSid, Sid, TRUE, SidSet, TokenIsOwner))
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
@@ -815,7 +1028,7 @@ SepAnalyzeAcesFromDacl(
                         ObjectTypeGuid = SepGetObjectTypeGuidFromAce(CurrentAce, FALSE);
                         ASSERT(Sid);
 
-                        if (SepSidInTokenEx(AccessToken, PrincipalSelfSid, Sid, FALSE, IsTokenRestricted))
+                        if (SepAceSidMatchesToken(AccessToken, PrincipalSelfSid, Sid, FALSE, SidSet, TokenIsOwner))
                         {
                             /* Get this access right from the ACE */
                             Access = CurrentAce->AccessMask;
@@ -938,6 +1151,136 @@ SepAnalyzeAcesFromDacl(
  * otherwise.
  */
 static
+ACCESS_MASK
+SepMandatoryIntegrityCheck(
+    _In_ PACCESS_TOKEN _Token,
+    _In_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _In_ PGENERIC_MAPPING GenericMapping)
+{
+    PTOKEN Token = (PTOKEN)_Token;
+    PACL Sacl;
+    ULONG AceIndex;
+    PACE Ace;
+    ULONG ObjectRid = SECURITY_MANDATORY_MEDIUM_RID;
+    ULONG Policy = SYSTEM_MANDATORY_LABEL_NO_WRITE_UP;
+    ULONG TokenRid;
+    ACCESS_MASK Denied = 0;
+
+    if (!(Token->MandatoryPolicy & TOKEN_MANDATORY_POLICY_NO_WRITE_UP))
+        return 0;
+
+    Sacl = SepGetSaclFromDescriptor(SecurityDescriptor);
+    if (Sacl)
+    {
+        for (AceIndex = 0; AceIndex < Sacl->AceCount; AceIndex++)
+        {
+            if (!NT_SUCCESS(RtlGetAce(Sacl, AceIndex, (PVOID*)&Ace)))
+                break;
+            if (Ace->Header.AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+                continue;
+            if (Ace->Header.AceFlags & INHERIT_ONLY_ACE)
+                continue;
+            ObjectRid = *RtlSubAuthoritySid(&((PSYSTEM_MANDATORY_LABEL_ACE)Ace)->SidStart, 0);
+            Policy = Ace->AccessMask & SYSTEM_MANDATORY_LABEL_VALID_MASK;
+            break;
+        }
+    }
+
+    TokenRid = SepGetTokenIntegrityRid(Token);
+    if (TokenRid >= ObjectRid)
+        return 0;
+
+    if (Policy & SYSTEM_MANDATORY_LABEL_NO_WRITE_UP)
+        Denied |= GenericMapping->GenericWrite | DELETE | WRITE_DAC | WRITE_OWNER;
+    if (Policy & SYSTEM_MANDATORY_LABEL_NO_READ_UP)
+        Denied |= GenericMapping->GenericRead;
+    if (Policy & SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP)
+        Denied |= GenericMapping->GenericExecute;
+
+    return Denied & ~(READ_CONTROL | SYNCHRONIZE);
+}
+
+static
+BOOLEAN
+SepUseSidSet(
+    _In_ PACCESS_TOKEN Token,
+    _In_ ULONG SidSet)
+{
+    if (SidSet == SEP_SID_SET_RESTRICTED)
+        return SeTokenIsRestricted(Token);
+    if (SidSet == SEP_SID_SET_CAPABILITIES)
+        return (((PTOKEN)Token)->TokenFlags & TOKEN_LOWBOX) != 0;
+    return FALSE;
+}
+
+static
+VOID
+SepIntersectSecondaryPass(
+    _In_ ULONG SidSet,
+    _In_ PACL Dacl,
+    _In_ PACCESS_TOKEN Token,
+    _In_ PACCESS_TOKEN PrimaryAccessToken,
+    _In_ BOOLEAN TokenIsOwner,
+    _In_opt_ PSID PrincipalSelfSid,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_opt_ POBJECT_TYPE_LIST_INTERNAL ObjectTypeList,
+    _In_ ULONG ObjectTypeListLength,
+    _In_ BOOLEAN UseResultList,
+    _Inout_ PACCESS_CHECK_RIGHTS AccessCheckRights)
+{
+    ACCESS_CHECK_RIGHTS Second = {0};
+    PACCESS_CHECK_RIGHTS Saved = NULL;
+    ULONG Index;
+
+    if (ObjectTypeList && ObjectTypeListLength)
+    {
+        Saved = ExAllocatePoolWithTag(PagedPool,
+                                      ObjectTypeListLength * sizeof(ACCESS_CHECK_RIGHTS),
+                                      TAG_SE_ACCESS_PASS);
+        if (!Saved)
+        {
+            AccessCheckRights->GrantedAccessRights = 0;
+            for (Index = 0; Index < ObjectTypeListLength; Index++)
+                ObjectTypeList[Index].ObjectAccessRights.GrantedAccessRights = 0;
+            return;
+        }
+        for (Index = 0; Index < ObjectTypeListLength; Index++)
+        {
+            Saved[Index] = ObjectTypeList[Index].ObjectAccessRights;
+            ObjectTypeList[Index].ObjectAccessRights.GrantedAccessRights = 0;
+            ObjectTypeList[Index].ObjectAccessRights.DeniedAccessRights = 0;
+        }
+    }
+
+    SepAnalyzeAcesFromDacl(AccessCheckMaximum,
+                           0,
+                           Dacl,
+                           Token,
+                           PrimaryAccessToken,
+                           SidSet,
+                           TokenIsOwner,
+                           PrincipalSelfSid,
+                           GenericMapping,
+                           ObjectTypeList,
+                           ObjectTypeListLength,
+                           UseResultList,
+                           &Second);
+
+    AccessCheckRights->GrantedAccessRights &= Second.GrantedAccessRights;
+    AccessCheckRights->DeniedAccessRights |= Second.DeniedAccessRights;
+
+    if (Saved)
+    {
+        for (Index = 0; Index < ObjectTypeListLength; Index++)
+        {
+            ObjectTypeList[Index].ObjectAccessRights.GrantedAccessRights &= Saved[Index].GrantedAccessRights;
+            ObjectTypeList[Index].ObjectAccessRights.DeniedAccessRights |= Saved[Index].DeniedAccessRights;
+        }
+        ExFreePoolWithTag(Saved, TAG_SE_ACCESS_PASS);
+    }
+}
+
+static
 BOOLEAN
 SepAccessCheckWorker(
     _In_ PSECURITY_DESCRIPTOR SecurityDescriptor,
@@ -968,6 +1311,9 @@ SepAccessCheckWorker(
     BOOLEAN AccessIsGranted = FALSE;
     PACCESS_TOKEN Token = NULL;
     ACCESS_CHECK_RIGHTS AccessCheckRights = {0};
+    ACCESS_MASK MandatoryDenied = 0;
+    ULONG SidSet;
+    BOOLEAN TokenIsOwner;
 
     PAGED_CODE();
 
@@ -1027,7 +1373,25 @@ SepAccessCheckWorker(
      * main process (the actual primary token).
      */
     Token = ClientAccessToken ? ClientAccessToken : PrimaryAccessToken;
+    TokenIsOwner = SepTokenIsOwner(Token, SecurityDescriptor, TRUE);
 
+    MandatoryDenied = SepMandatoryIntegrityCheck(
+        ClientAccessToken && (((PTOKEN)ClientAccessToken)->TokenFlags & TOKEN_LOWBOX) ?
+            PrimaryAccessToken : Token,
+        SecurityDescriptor,
+        GenericMapping);
+    if (MandatoryDenied)
+    {
+        if (((DesiredAccess & ~MAXIMUM_ALLOWED) & MandatoryDenied) ||
+            (!(DesiredAccess & MAXIMUM_ALLOWED) && (PreviouslyGrantedAccess & MandatoryDenied)))
+        {
+            DPRINT("Mandatory integrity check denied 0x%08lx (desired 0x%08lx)\n", MandatoryDenied, DesiredAccess);
+            PreviouslyGrantedAccess = 0;
+            Status = STATUS_ACCESS_DENIED;
+            goto ReturnCommonStatus;
+        }
+        PreviouslyGrantedAccess &= ~MandatoryDenied;
+    }
     /*
      * We should at least expect a primary token
      * to be present if client token is not
@@ -1139,7 +1503,8 @@ SepAccessCheckWorker(
                                Dacl,
                                Token,
                                PrimaryAccessToken,
-                               FALSE,
+                               SEP_SID_SET_GROUPS,
+                               TokenIsOwner,
                                PrincipalSelfSid,
                                GenericMapping,
                                ObjectTypeList,
@@ -1151,20 +1516,22 @@ SepAccessCheckWorker(
          * Perform further access checks if this token
          * has restricted SIDs.
          */
-        if (SeTokenIsRestricted(Token))
+        for (SidSet = SEP_SID_SET_RESTRICTED; SidSet <= SEP_SID_SET_CAPABILITIES; SidSet++)
         {
-            SepAnalyzeAcesFromDacl(AccessCheckMaximum,
-                                   0,
-                                   Dacl,
-                                   Token,
-                                   PrimaryAccessToken,
-                                   TRUE,
-                                   PrincipalSelfSid,
-                                   GenericMapping,
-                                   ObjectTypeList,
-                                   ObjectTypeListLength,
-                                   UseResultList,
-                                   &AccessCheckRights);
+            if (!SepUseSidSet(Token, SidSet))
+                continue;
+
+            SepIntersectSecondaryPass(SidSet,
+                                      Dacl,
+                                      Token,
+                                      PrimaryAccessToken,
+                                      TokenIsOwner,
+                                      PrincipalSelfSid,
+                                      GenericMapping,
+                                      ObjectTypeList,
+                                      ObjectTypeListLength,
+                                      UseResultList,
+                                      &AccessCheckRights);
         }
 
         /* The caller did not provide an object type list, check access only for that object */
@@ -1310,7 +1677,8 @@ SepAccessCheckWorker(
                            Dacl,
                            Token,
                            PrimaryAccessToken,
-                           FALSE,
+                           SEP_SID_SET_GROUPS,
+                           TokenIsOwner,
                            PrincipalSelfSid,
                            GenericMapping,
                            ObjectTypeList,
@@ -1360,14 +1728,18 @@ SepAccessCheckWorker(
      * Perform further access checks if this token
      * has restricted SIDs.
      */
-    if (SeTokenIsRestricted(Token))
+    for (SidSet = SEP_SID_SET_RESTRICTED; SidSet <= SEP_SID_SET_CAPABILITIES; SidSet++)
     {
+        if (!SepUseSidSet(Token, SidSet))
+            continue;
+
         SepAnalyzeAcesFromDacl(AccessCheckRegular,
                                RemainingAccess,
                                Dacl,
                                Token,
                                PrimaryAccessToken,
-                               TRUE,
+                               SidSet,
+                               TokenIsOwner,
                                PrincipalSelfSid,
                                GenericMapping,
                                ObjectTypeList,
@@ -1436,6 +1808,15 @@ SepAccessCheckWorker(
     Status = STATUS_SUCCESS;
 
 ReturnCommonStatus:
+    if (MandatoryDenied && NT_SUCCESS(Status))
+    {
+        PreviouslyGrantedAccess &= ~MandatoryDenied;
+        if (UseResultList)
+        {
+            for (ResultListIndex = 0; ResultListIndex < ObjectTypeListLength; ResultListIndex++)
+                GrantedAccessList[ResultListIndex] &= ~MandatoryDenied;
+        }
+    }
     if (!UseResultList)
     {
         *GrantedAccessList = PreviouslyGrantedAccess;
@@ -1870,14 +2251,18 @@ SepAccessCheck(
     /* Check if the token is the owner and grant WRITE_DAC and READ_CONTROL rights */
     if (DesiredAccess & (WRITE_DAC | READ_CONTROL | MAXIMUM_ALLOWED))
     {
-        if (SepTokenIsOwner(Token, CapturedSecurityDescriptor, FALSE))
+        if (SepTokenIsOwner(Token, CapturedSecurityDescriptor, FALSE) &&
+            !SepDaclContainsOwnerRightsAce(CapturedSecurityDescriptor))
         {
-            if (DesiredAccess & MAXIMUM_ALLOWED)
-                PreviouslyGrantedAccess |= (WRITE_DAC | READ_CONTROL);
-            else
-                PreviouslyGrantedAccess |= (DesiredAccess & (WRITE_DAC | READ_CONTROL));
+            ACCESS_MASK OwnerRights = (WRITE_DAC | READ_CONTROL) &
+                ~SepMandatoryIntegrityCheck(Token, CapturedSecurityDescriptor, GenericMapping);
 
-            DesiredAccess &= ~(WRITE_DAC | READ_CONTROL);
+            if (DesiredAccess & MAXIMUM_ALLOWED)
+                PreviouslyGrantedAccess |= OwnerRights;
+            else
+                PreviouslyGrantedAccess |= (DesiredAccess & OwnerRights);
+
+            DesiredAccess &= ~OwnerRights;
         }
     }
 
@@ -2057,14 +2442,18 @@ SeAccessCheck(
 
         if (SepTokenIsOwner(Token,
                             SecurityDescriptor,
-                            FALSE))
+                            FALSE) &&
+            !SepDaclContainsOwnerRightsAce(SecurityDescriptor))
         {
-            if (DesiredAccess & MAXIMUM_ALLOWED)
-                PreviouslyGrantedAccess |= (WRITE_DAC | READ_CONTROL);
-            else
-                PreviouslyGrantedAccess |= (DesiredAccess & (WRITE_DAC | READ_CONTROL));
+            ACCESS_MASK OwnerRights = (WRITE_DAC | READ_CONTROL) &
+                ~SepMandatoryIntegrityCheck(Token, SecurityDescriptor, GenericMapping);
 
-            DesiredAccess &= ~(WRITE_DAC | READ_CONTROL);
+            if (DesiredAccess & MAXIMUM_ALLOWED)
+                PreviouslyGrantedAccess |= OwnerRights;
+            else
+                PreviouslyGrantedAccess |= (DesiredAccess & OwnerRights);
+
+            DesiredAccess &= ~OwnerRights;
         }
     }
 

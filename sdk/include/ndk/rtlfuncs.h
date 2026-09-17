@@ -1372,6 +1372,78 @@ RtlCopySidAndAttributesArray(
 
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
+PVOID
+NTAPI
+RtlCreateBoundaryDescriptor(
+    _In_ PUNICODE_STRING Name,
+    _In_ ULONG Flags
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlAddSIDToBoundaryDescriptor(
+    _Inout_ PVOID *BoundaryDescriptor,
+    _In_ PSID RequiredSid
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlAddIntegrityLabelToBoundaryDescriptor(
+    _Inout_ PVOID *BoundaryDescriptor,
+    _In_ PSID IntegrityLabel
+);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlDeleteBoundaryDescriptor(
+    _In_ PVOID BoundaryDescriptor
+);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlIsCapabilitySid(
+    _In_ PSID Sid
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetAppContainerSidType(
+    _In_ PSID AppContainerSid,
+    _Out_ PULONG AppContainerSidType
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetAppContainerParent(
+    _In_ PSID AppContainerSid,
+    _Out_ PSID *AppContainerSidParent
+);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlIsParentOfChildAppContainer(
+    _In_ PSID ParentAppContainerSid,
+    _In_ PSID ChildAppContainerSid
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlCheckTokenMembershipEx(
+    _In_opt_ HANDLE TokenHandle,
+    _In_ PSID SidToCheck,
+    _In_ ULONG Flags,
+    _Out_ PBOOLEAN IsMember
+);
+
+NTSYSAPI
 NTSTATUS
 NTAPI
 RtlConvertSidToUnicodeString(

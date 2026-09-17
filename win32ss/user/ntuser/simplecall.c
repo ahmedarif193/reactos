@@ -193,6 +193,7 @@ NtUserCallOneParam(
         case ONEPARAM_ROUTINE_GETKEYBOARDTYPE:
         case ONEPARAM_ROUTINE_GETKEYBOARDLAYOUT:
         case ONEPARAM_ROUTINE_ENUMCLIPBOARDFORMATS:
+        case ONEPARAM_ROUTINE_ISJOBUILIMITED:
         case ONEPARAM_ROUTINE_GETCURSORPOS:
         case ONEPARAM_ROUTINE_GETPROCDEFLAYOUT:
         case ONEPARAM_ROUTINE_DWMISENABLED:
@@ -431,6 +432,10 @@ NtUserCallOneParam(
 
         case ONEPARAM_ROUTINE_ENUMCLIPBOARDFORMATS:
             Result = UserEnumClipboardFormats(Param);
+            break;
+
+        case ONEPARAM_ROUTINE_ISJOBUILIMITED:
+            Result = IntIsJobUiLimited((ULONG)Param);
             break;
 
         case ONEPARAM_ROUTINE_GETCURSORPOS:
@@ -1016,6 +1021,16 @@ NtUserCallHwndParam(
             }
             UserLeave();
             return HandleToUlong(Ret);
+        }
+
+        case HWNDPARAM_ROUTINE_ROS_CHANGEMESSAGEFILTER:
+        {
+            DWORD Ret;
+
+            UserEnterExclusive();
+            Ret = IntChangeWindowMessageFilter(hWnd, (UINT)(Param & 0xFFFF), (DWORD)((Param >> 16) & 0xFF));
+            UserLeave();
+            return Ret;
         }
 
         case HWNDPARAM_ROUTINE_ROS_GETDLGITEM:

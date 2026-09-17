@@ -68,6 +68,7 @@ SepInitExports(VOID)
     SepExports.SeWorldSid = SeWorldSid;
     SepExports.SeLocalSid = SeLocalSid;
     SepExports.SeCreatorOwnerSid = SeCreatorOwnerSid;
+    SepExports.SeOwnerRightsSid = SeOwnerRightsSid;
     SepExports.SeCreatorGroupSid = SeCreatorGroupSid;
     SepExports.SeNtAuthoritySid = SeNtAuthoritySid;
     SepExports.SeDialupSid = SeDialupSid;
@@ -434,7 +435,8 @@ SeQuerySecurityAccessMask(
     *DesiredAccess = 0;
 
     if (SecurityInformation & (OWNER_SECURITY_INFORMATION |
-                               GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION))
+                               GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION |
+                               LABEL_SECURITY_INFORMATION))
     {
         *DesiredAccess |= READ_CONTROL;
     }
@@ -466,7 +468,8 @@ SeSetSecurityAccessMask(
 {
     *DesiredAccess = 0;
 
-    if (SecurityInformation & (OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION))
+    if (SecurityInformation & (OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+                               LABEL_SECURITY_INFORMATION))
     {
         *DesiredAccess |= WRITE_OWNER;
     }

@@ -947,6 +947,12 @@ NtUserGetClipboardData(UINT fmt, PGETCLIPBDATA pgcd)
     if (!pWinStaObj)
         goto cleanup;
 
+    if (IntIsJobUiLimited(JOB_OBJECT_UILIMIT_READCLIPBOARD))
+    {
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        goto cleanup;
+    }
+
     /* Check if the clipboard has been opened */
     if (!IntIsClipboardOpenByMe(pWinStaObj))
     {
@@ -1125,6 +1131,12 @@ NtUserSetClipboardData(UINT fmt, HANDLE hData, PSETCLIPBDATA pUnsafeScd)
     HANDLE hRet;
 
     TRACE("NtUserSetClipboardData(%x %p %p)\n", fmt, hData, pUnsafeScd);
+
+    if (IntIsJobUiLimited(JOB_OBJECT_UILIMIT_WRITECLIPBOARD))
+    {
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return NULL;
+    }
 
     _SEH2_TRY
     {

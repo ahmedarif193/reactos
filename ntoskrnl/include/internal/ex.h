@@ -1720,3 +1720,4 @@ XIPInit(
 #ifdef __cplusplus
 } // extern "C"
 #endif
+extern PKWIN32_GLOBALATOMTABLE_CALLOUT ExpGlobalAtomTableCallout;

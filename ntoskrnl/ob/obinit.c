@@ -395,6 +395,7 @@ ObInitSystem(VOID)
     ObjectTypeInitializer.DeleteProcedure = ObpDeleteDirectoryObject;
     ObjectTypeInitializer.DefaultNonPagedPoolCharge = 344;
     ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ObpDirectoryObjectType);
+    ObpInitializePrivateNamespaces();
     ObpDirectoryObjectType->TypeInfo.ValidAccessMask &= ~SYNCHRONIZE;
 
     /* Create 'symbolic link' object type */

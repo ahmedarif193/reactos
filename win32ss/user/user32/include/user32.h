@@ -40,6 +40,7 @@
 #define NTOS_MODE_USER
 #include <ndk/kefuncs.h>
 #include <ndk/obfuncs.h>
+#include <ndk/psfuncs.h>
 #include <ndk/rtlfuncs.h>
 
 /* PSEH for SEH Support */

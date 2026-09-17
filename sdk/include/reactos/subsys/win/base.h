@@ -29,7 +29,7 @@ BaseSetProcessCreateNotify(IN BASE_PROCESS_CREATE_NOTIFY_ROUTINE ProcessCreateNo
 
 /* Minimal size for the security descriptors of the "\NLS\NlsSection*" sections */
 #define NLS_SECTION_SECURITY_DESCRIPTOR_SIZE \
-    (sizeof(SECURITY_DESCRIPTOR) + sizeof(ACL) + NLS_SIZEOF_ACE_AND_SIDS(1))
+    (sizeof(SECURITY_DESCRIPTOR) + sizeof(ACL) + NLS_SIZEOF_ACE_AND_SIDS(1) + 2 * NLS_SIZEOF_ACE_AND_SIDS(2))
 
 typedef struct _NLS_USER_INFO
 {

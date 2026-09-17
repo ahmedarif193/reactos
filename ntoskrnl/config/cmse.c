@@ -75,6 +75,8 @@ CmpHiveRootSecurityDescriptor(VOID)
         AceLength += SeLengthSid(Sid[i]);
         AclLength += AceLength;
     }
+    AclLength += FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + SeLengthSid(SeAllAppPackagesSid);
+    AclLength += FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + SeLengthSid(SeAllRestrictedAppPackagesSid);
 
     /* Phase 3: Allocate the ACL */
     Acl = ExAllocatePoolWithTag(PagedPool, AclLength, TAG_CMSD);
@@ -89,6 +91,8 @@ CmpHiveRootSecurityDescriptor(VOID)
     Status |= RtlAddAccessAllowedAce(Acl, ACL_REVISION, KEY_ALL_ACCESS, Sid[3]);
     Status |= RtlAddAccessAllowedAce(Acl, ACL_REVISION, KEY_READ, Sid[0]);
     Status |= RtlAddAccessAllowedAce(Acl, ACL_REVISION, KEY_READ, Sid[1]);
+    Status |= RtlAddAccessAllowedAce(Acl, ACL_REVISION, KEY_READ, SeAllAppPackagesSid);
+    Status |= RtlAddAccessAllowedAce(Acl, ACL_REVISION, KEY_READ, SeAllRestrictedAppPackagesSid);
     if (!NT_SUCCESS(Status)) KeBugCheckEx(REGISTRY_ERROR, 11, 5, Status, 0);
 
     /* Phase 5: Make the ACEs inheritable */
@@ -102,6 +106,12 @@ CmpHiveRootSecurityDescriptor(VOID)
     ASSERT(NT_SUCCESS(Status));
     AceHeader->AceFlags |= CONTAINER_INHERIT_ACE;
     Status = RtlGetAce(Acl, 3, (PVOID*)&AceHeader);
+    ASSERT(NT_SUCCESS(Status));
+    AceHeader->AceFlags |= CONTAINER_INHERIT_ACE;
+    Status = RtlGetAce(Acl, 4, (PVOID*)&AceHeader);
+    ASSERT(NT_SUCCESS(Status));
+    AceHeader->AceFlags |= CONTAINER_INHERIT_ACE;
+    Status = RtlGetAce(Acl, 5, (PVOID*)&AceHeader);
     ASSERT(NT_SUCCESS(Status));
     AceHeader->AceFlags |= CONTAINER_INHERIT_ACE;
 
@@ -181,7 +191,8 @@ CmpQuerySecurityDescriptor(IN PCM_KEY_CONTROL_BLOCK Kcb,
     {
         Control |= SE_DACL_PRESENT;
         Dacl = SdSize;
-        AclSize = sizeof(ACL) + sizeof(ACE) + SidSize;
+        AclSize = sizeof(ACL) + sizeof(ACE) + SidSize + sizeof(ACE) + RtlLengthSid(SeAllAppPackagesSid) +
+                  sizeof(ACE) + RtlLengthSid(SeAllRestrictedAppPackagesSid);
         SdSize += AclSize;
     }
 
@@ -229,6 +240,20 @@ CmpQuerySecurityDescriptor(IN PCM_KEY_CONTROL_BLOCK Kcb,
                                             ACL_REVISION,
                                             GENERIC_ALL,
                                             SeWorldSid);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            Status = RtlAddAccessAllowedAce((PACL)((PUCHAR)RelSd + Dacl),
+                                            ACL_REVISION,
+                                            GENERIC_ALL,
+                                            SeAllAppPackagesSid);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            Status = RtlAddAccessAllowedAce((PACL)((PUCHAR)RelSd + Dacl),
+                                            ACL_REVISION,
+                                            GENERIC_ALL,
+                                            SeAllRestrictedAppPackagesSid);
         }
     }
 

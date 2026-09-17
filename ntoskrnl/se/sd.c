@@ -11,6 +11,94 @@
 #define NDEBUG
 #include <debug.h>
 
+static
+BOOLEAN
+SepAceIsMandatoryLabel(
+    _In_ PACE_HEADER Ace)
+{
+    return Ace->AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE;
+}
+
+static
+BOOLEAN
+SepAclHasMandatoryLabel(
+    _In_opt_ PACL Acl)
+{
+    ULONG Index;
+    PACE_HEADER Ace;
+
+    if (!Acl) return FALSE;
+    for (Index = 0; Index < Acl->AceCount; Index++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Acl, Index, (PVOID*)&Ace))) break;
+        if (SepAceIsMandatoryLabel(Ace)) return TRUE;
+    }
+    return FALSE;
+}
+
+static
+ULONG
+SepAclSelectedLength(
+    _In_opt_ PACL Acl,
+    _In_ BOOLEAN Labels)
+{
+    ULONG Index, Length = 0;
+    PACE_HEADER Ace;
+
+    if (!Acl) return 0;
+    for (Index = 0; Index < Acl->AceCount; Index++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Acl, Index, (PVOID*)&Ace))) break;
+        if (SepAceIsMandatoryLabel(Ace) == Labels) Length += Ace->AceSize;
+    }
+    return Length;
+}
+
+static
+VOID
+SepAclCopySelected(
+    _Inout_ PACL Dest,
+    _In_opt_ PACL Source,
+    _In_ BOOLEAN Labels)
+{
+    ULONG Index;
+    PACE_HEADER Ace;
+    PUCHAR Current;
+
+    if (!Source) return;
+    for (Index = 0; Index < Source->AceCount; Index++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Source, Index, (PVOID*)&Ace))) break;
+        if (SepAceIsMandatoryLabel(Ace) != Labels) continue;
+        Current = (PUCHAR)Dest + Dest->AclSize;
+        RtlCopyMemory(Current, Ace, Ace->AceSize);
+        Dest->AclSize += Ace->AceSize;
+        Dest->AceCount++;
+    }
+}
+
+static
+PACL
+SepBuildMergedSacl(
+    _In_opt_ PACL LabelSource,
+    _In_opt_ PACL AuditSource)
+{
+    ULONG Length;
+    PACL Acl;
+
+    Length = sizeof(ACL) + SepAclSelectedLength(LabelSource, TRUE) + SepAclSelectedLength(AuditSource, FALSE);
+    Length = ROUND_UP(Length, 4);
+    Acl = ExAllocatePoolWithTag(PagedPool, Length, TAG_ACL);
+    if (!Acl) return NULL;
+    RtlZeroMemory(Acl, Length);
+    Acl->AclRevision = ACL_REVISION;
+    Acl->AclSize = sizeof(ACL);
+    SepAclCopySelected(Acl, AuditSource, FALSE);
+    SepAclCopySelected(Acl, LabelSource, TRUE);
+    Acl->AclSize = (USHORT)Length;
+    return Acl;
+}
+
 /* GLOBALS ********************************************************************/
 
 PSECURITY_DESCRIPTOR SePublicDefaultSd = NULL;
@@ -608,6 +696,7 @@ SeQuerySecurityDescriptorInfo(
     PSID Group = NULL;
     PACL Dacl = NULL;
     PACL Sacl = NULL;
+    PACL FilteredSacl = NULL;
     ULONG OwnerLength = 0;
     ULONG GroupLength = 0;
     ULONG DaclLength = 0;
@@ -615,6 +704,7 @@ SeQuerySecurityDescriptorInfo(
     SECURITY_DESCRIPTOR_CONTROL Control = 0;
     ULONG_PTR Current;
     ULONG SdLength;
+    SECURITY_INFORMATION SaclInfo;
 
     PAGED_CODE();
 
@@ -670,10 +760,16 @@ SeQuerySecurityDescriptorInfo(
         Control |= (ObjectSd->Control & (SE_DACL_DEFAULTED | SE_DACL_PRESENT));
     }
 
-    if ((*SecurityInformation & SACL_SECURITY_INFORMATION) &&
-        (ObjectSd->Control & SE_SACL_PRESENT))
+    SaclInfo = *SecurityInformation & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION);
+    if (SaclInfo && (ObjectSd->Control & SE_SACL_PRESENT))
     {
         Sacl = SepGetSaclFromDescriptor(ObjectSd);
+        if (Sacl != NULL && SaclInfo != (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION))
+        {
+            FilteredSacl = SepBuildMergedSacl((SaclInfo & LABEL_SECURITY_INFORMATION) ? Sacl : NULL,
+                                              (SaclInfo & SACL_SECURITY_INFORMATION) ? Sacl : NULL);
+            Sacl = FilteredSacl;
+        }
         if (Sacl != NULL)
         {
             SaclLength = ROUND_UP(Sacl->AclSize, 4);
@@ -687,6 +783,7 @@ SeQuerySecurityDescriptorInfo(
     if (*Length < SdLength)
     {
         *Length = SdLength;
+        if (FilteredSacl) ExFreePoolWithTag(FilteredSacl, TAG_ACL);
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -735,6 +832,7 @@ SeQuerySecurityDescriptorInfo(
 
     *Length = SdLength;
 
+    if (FilteredSacl) ExFreePoolWithTag(FilteredSacl, TAG_ACL);
     return STATUS_SUCCESS;
 }
 
@@ -885,6 +983,7 @@ SeSetSecurityDescriptorInfoEx(
     PSID Group;
     PACL Dacl;
     PACL Sacl;
+    PACL MergedSacl = NULL;
     ULONG OwnerLength;
     ULONG GroupLength;
     ULONG DaclLength;
@@ -892,6 +991,7 @@ SeSetSecurityDescriptorInfoEx(
     SECURITY_DESCRIPTOR_CONTROL Control = 0;
     ULONG Current;
     SECURITY_INFORMATION SecurityInformation;
+    SECURITY_INFORMATION SaclInfo;
 
     PAGED_CODE();
 
@@ -947,15 +1047,30 @@ SeSetSecurityDescriptorInfoEx(
     DaclLength = Dacl ? ROUND_UP((ULONG)Dacl->AclSize, 4) : 0;
 
     /* Get SACL and SACL size */
-    if (SecurityInformation & SACL_SECURITY_INFORMATION)
+    SaclInfo = SecurityInformation & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION);
+    if (SaclInfo == (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION))
     {
         Sacl = SepGetSaclFromDescriptor(SecurityDescriptor);
         Control |= (SecurityDescriptor->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT));
     }
-    else
+    else if (SaclInfo == 0)
     {
         Sacl = SepGetSaclFromDescriptor(ObjectSd);
         Control |= (ObjectSd->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT));
+    }
+    else
+    {
+        PACL OldSacl = SepGetSaclFromDescriptor(ObjectSd);
+        PACL NewSacl = SepGetSaclFromDescriptor(SecurityDescriptor);
+
+        if (SaclInfo & LABEL_SECURITY_INFORMATION)
+            MergedSacl = SepBuildMergedSacl(NewSacl, OldSacl);
+        else
+            MergedSacl = SepBuildMergedSacl(OldSacl, NewSacl);
+        if (!MergedSacl)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        Sacl = MergedSacl;
+        Control |= SE_SACL_PRESENT;
     }
     SaclLength = Sacl ? ROUND_UP((ULONG)Sacl->AclSize, 4) : 0;
 
@@ -966,6 +1081,7 @@ SeSetSecurityDescriptorInfoEx(
                                   TAG_SD);
     if (NewSd == NULL)
     {
+        if (MergedSacl) ExFreePoolWithTag(MergedSacl, TAG_ACL);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -1003,6 +1119,7 @@ SeSetSecurityDescriptorInfoEx(
 
     NewSd->Control |= Control;
     *ObjectsSecurityDescriptor = NewSd;
+    if (MergedSacl) ExFreePoolWithTag(MergedSacl, TAG_ACL);
     return STATUS_SUCCESS;
 }
 
@@ -1308,6 +1425,9 @@ SeAssignSecurityEx(
     PACL ParentAcl;
     PACL Dacl = NULL;
     PACL Sacl = NULL;
+    PSID LabelSid = NULL;
+    ULONG LabelAceLength = 0;
+    ULONG TokenRid;
     BOOLEAN DaclIsInherited;
     BOOLEAN SaclIsInherited;
     BOOLEAN DaclPresent;
@@ -1479,6 +1599,23 @@ SeAssignSecurityEx(
         Control |= SE_SACL_PRESENT;
     ASSERT(SaclLength % sizeof(ULONG) == 0);
 
+    if (!SepAclHasMandatoryLabel(Sacl))
+    {
+        TokenRid = SepGetTokenIntegrityRid(Token);
+        if (TokenRid < SECURITY_MANDATORY_MEDIUM_RID)
+        {
+            LabelSid = SepMandatorySidFromRid(TokenRid);
+            if (LabelSid)
+            {
+                LabelAceLength = ALIGN_UP_BY(FIELD_OFFSET(SYSTEM_MANDATORY_LABEL_ACE, SidStart) + RtlLengthSid(LabelSid), sizeof(ULONG));
+                if (SaclLength == 0)
+                    SaclLength = sizeof(ACL);
+                SaclLength += LabelAceLength;
+                Control |= SE_SACL_PRESENT;
+            }
+        }
+    }
+
     /* Allocate and initialize the new security descriptor */
     Length = sizeof(SECURITY_DESCRIPTOR_RELATIVE) +
         OwnerLength + GroupLength + DaclLength + SaclLength;
@@ -1507,15 +1644,38 @@ SeAssignSecurityEx(
 
     if (SaclLength != 0)
     {
-        Status = SepPropagateAcl((PACL)((PUCHAR)Descriptor + Current),
-                                 &SaclLength,
-                                 Sacl,
-                                 Owner,
-                                 Group,
-                                 SaclIsInherited,
-                                 IsDirectoryObject,
-                                 GenericMapping);
-        ASSERT(Status == STATUS_SUCCESS);
+        PACL NewSacl = (PACL)((PUCHAR)Descriptor + Current);
+
+        if (Sacl)
+        {
+            ULONG PropagateLength = SaclLength - LabelAceLength;
+
+            Status = SepPropagateAcl(NewSacl,
+                                     &PropagateLength,
+                                     Sacl,
+                                     Owner,
+                                     Group,
+                                     SaclIsInherited,
+                                     IsDirectoryObject,
+                                     GenericMapping);
+            ASSERT(Status == STATUS_SUCCESS);
+        }
+        else
+        {
+            RtlCreateAcl(NewSacl, SaclLength, ACL_REVISION);
+        }
+
+        if (LabelSid)
+        {
+            NewSacl->AclSize = (USHORT)SaclLength;
+            Status = RtlAddMandatoryAce(NewSacl,
+                                        ACL_REVISION,
+                                        0,
+                                        SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+                                        SYSTEM_MANDATORY_LABEL_ACE_TYPE,
+                                        LabelSid);
+            ASSERT(Status == STATUS_SUCCESS);
+        }
         Descriptor->Sacl = Current;
         Current += SaclLength;
     }

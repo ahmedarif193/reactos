@@ -360,7 +360,9 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
                  IN HANDLE SectionHandle OPTIONAL,
                  IN HANDLE DebugPort OPTIONAL,
                  IN HANDLE ExceptionPort OPTIONAL,
-                 IN BOOLEAN InJob)
+                 IN BOOLEAN InJob,
+                 IN const HANDLE *HandleList OPTIONAL,
+                 IN SIZE_T HandleCount)
 {
     HANDLE hProcess;
     PEPROCESS Process, Parent;
@@ -394,6 +396,12 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 
     /* Validate flags */
     if (Flags & ~PROCESS_CREATE_FLAGS_LEGAL_MASK) return STATUS_INVALID_PARAMETER;
+
+    if ((PreviousMode != KernelMode) &&
+        (ReadAcquire(&CurrentProcess->ChildProcessPolicy) & 1))
+    {
+        return STATUS_CHILD_PROCESS_BLOCKED;
+    }
 
     /* Check for parent */
     if (ParentProcess)
@@ -640,7 +648,9 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
         /* Initialize object manager for the process */
         Status = ObInitProcess(Flags & PROCESS_CREATE_FLAGS_INHERIT_HANDLES ?
                                Parent : NULL,
-                               Process);
+                               Process,
+                               HandleList,
+                               HandleCount);
         if (!NT_SUCCESS(Status)) goto CleanupWithRef;
     }
     else
@@ -835,6 +845,14 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 
     /* Compute Quantum and Priority */
     ASSERT(IsListEmpty(&Process->ThreadListHead) == TRUE);
+
+    {
+        PTOKEN LabelToken = PsReferencePrimaryToken(Process);
+        SeSetObjectMandatoryLabel(Process,
+                                  SepGetTokenIntegrityRid(LabelToken),
+                                  SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP);
+        ObFastDereferenceObject(&Process->Token, LabelToken);
+    }
     Process->Pcb.BasePriority =
         (SCHAR)PspComputeQuantumAndPriority(Process,
                                             PsProcessPriorityBackground,
@@ -971,7 +989,9 @@ PsCreateSystemProcess(OUT PHANDLE ProcessHandle,
                             NULL,
                             NULL,
                             NULL,
-                            FALSE);
+                            FALSE,
+                            NULL,
+                            0);
 }
 
 /*
@@ -1604,7 +1624,9 @@ NtCreateProcessEx(OUT PHANDLE ProcessHandle,
                                   SectionHandle,
                                   DebugPort,
                                   ExceptionPort,
-                                  InJob);
+                                  InJob,
+                                  NULL,
+                                  0);
     }
 
     /* Return Status */
@@ -1959,6 +1981,242 @@ PspPrepareWow64Thread(IN HANDLE ProcessHandle,
 }
 #endif
 
+#define PSP_CHILD_PROCESS_RESTRICTED 0x1
+#define PSP_CHILD_PROCESS_OVERRIDE 0x2
+#define PSP_CHILD_PROCESS_RESTRICTED_UNLESS_SECURE 0x4
+#define PSP_ALL_APPLICATION_PACKAGES_OPT_OUT 0x1
+
+static
+VOID
+PspApplyCreationMitigations(
+    _In_ PEPROCESS Process,
+    _In_reads_(Count) PULONGLONG Map,
+    _In_ ULONG Count)
+{
+    ULONGLONG Options = Count ? Map[0] : 0;
+    ULONG Value;
+
+    Value = (ULONG)((Options >> 28) & 3);
+    if (Value == 1)
+        InterlockedExchange(&Process->SystemCallDisablePolicy, 1);
+
+    Value = (ULONG)((Options >> 36) & 3);
+    if (Value == 1)
+        InterlockedExchange(&Process->DynamicCodeMitigationPolicy, 1);
+    else if (Value == 3)
+        InterlockedExchange(&Process->DynamicCodeMitigationPolicy, 1 | 2);
+
+    Value = (ULONG)((Options >> 44) & 3);
+    if (Value == 1)
+        InterlockedExchange(&Process->SignatureMitigationPolicy, 5);
+
+    if (((Options >> 8) & 3) == 1)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_ASLR_POLICY], 2);
+    if (((Options >> 16) & 3) == 1)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_ASLR_POLICY], 1);
+    if (((Options >> 20) & 3) == 1)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_ASLR_POLICY], 4);
+    if (((Options >> 32) & 3) == 1)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_EXTENSION_POINT_DISABLE_POLICY], 1);
+    if (((Options >> 40) & 3) == 1)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_CONTROL_FLOW_GUARD_POLICY], 1);
+    Value = (ULONG)((Options >> 48) & 3);
+    if (Value == 1)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_FONT_DISABLE_POLICY], 1);
+    else if (Value == 3)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_FONT_DISABLE_POLICY], 2);
+    if (((Options >> 52) & 3) == 1)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_IMAGE_LOAD_POLICY], 1);
+    if (((Options >> 56) & 3) == 1)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_IMAGE_LOAD_POLICY], 2);
+    if (((Options >> 60) & 3) == 1)
+        InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_IMAGE_LOAD_POLICY], 4);
+
+#if (NTDDI_VERSION >= NTDDI_LONGHORN) && (defined(_M_ARM64) || defined(_M_IX86) || defined(_M_AMD64))
+    if (((Options >> 24) & 3) == 1)
+    {
+        PHANDLE_TABLE HandleTable = ObReferenceProcessHandleTable(Process);
+        if (HandleTable)
+        {
+            InterlockedOr((PLONG)&HandleTable->Flags, OB_HANDLE_EXCEPTIONS_ENABLED);
+            ObDereferenceProcessHandleTable(Process);
+        }
+    }
+#endif
+
+    if (Count > 1)
+    {
+        ULONGLONG Options2 = Map[1];
+        if (((Options2 >> 8) & 3) == 1)
+            InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_CONTROL_FLOW_GUARD_POLICY], 4);
+        if (((Options2 >> 16) & 3) == 1)
+            InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_SIDE_CHANNEL_ISOLATION_POLICY], 1);
+        if (((Options2 >> 52) & 3) == 1)
+            InterlockedOr(&Process->ExtendedMitigationPolicy[PSP_SIDE_CHANNEL_ISOLATION_POLICY], 0x10);
+        if (((Options2 >> 56) & 3) == 1)
+            InterlockedOr(&Process->SystemCallDisablePolicy, 4);
+    }
+}
+
+static
+NTSTATUS
+PspApplyBnoIsolation(
+    _In_ PEPROCESS Process,
+    _In_ PUNICODE_STRING Prefix,
+    _In_ BOOLEAN Enabled)
+{
+    PTOKEN Token;
+    UNICODE_STRING NewPrefix;
+
+    RtlInitEmptyUnicodeString(&NewPrefix, NULL, 0);
+    if (Enabled)
+    {
+        NewPrefix.MaximumLength = Prefix->Length + sizeof(UNICODE_NULL);
+        NewPrefix.Buffer = ExAllocatePoolWithTag(PagedPool,
+                                                  NewPrefix.MaximumLength,
+                                                  TAG_SE_BNO);
+        if (!NewPrefix.Buffer)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        NewPrefix.Length = Prefix->Length;
+        RtlCopyMemory(NewPrefix.Buffer, Prefix->Buffer, Prefix->Length);
+        NewPrefix.Buffer[Prefix->Length / sizeof(WCHAR)] = UNICODE_NULL;
+    }
+
+    Token = PsReferencePrimaryToken(Process);
+    SepAcquireTokenLockExclusive(Token);
+    if (Token->BnoIsolationPrefix.Buffer)
+        ExFreePoolWithTag(Token->BnoIsolationPrefix.Buffer, TAG_SE_BNO);
+    Token->BnoIsolationPrefix = NewPrefix;
+    ExAllocateLocallyUniqueId(&Token->ModifiedId);
+    SepReleaseTokenLock(Token);
+    ObFastDereferenceObject(&Process->Token, Token);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+PspSetExtendedMitigationPolicy(
+    _In_ PEPROCESS Process,
+    _In_ ULONG Policy,
+    _In_ ULONG Flags)
+{
+    static const ULONG ValidMask[PSP_EXTENDED_POLICY_COUNT] =
+    {
+        [PSP_DEP_POLICY] = 0x7,
+        [PSP_ASLR_POLICY] = 0xF,
+        [PSP_EXTENSION_POINT_DISABLE_POLICY] = 0x1,
+        [PSP_CONTROL_FLOW_GUARD_POLICY] = 0xF,
+        [PSP_FONT_DISABLE_POLICY] = 0x3,
+        [PSP_IMAGE_LOAD_POLICY] = 0x1F,
+        [PSP_SYSTEM_CALL_FILTER_POLICY] = 0xF,
+        [PSP_PAYLOAD_RESTRICTION_POLICY] = 0xFFF,
+        [PSP_SIDE_CHANNEL_ISOLATION_POLICY] = 0x1F,
+    };
+    LONG OldPolicy;
+
+    if (Policy >= PSP_EXTENDED_POLICY_COUNT || (Flags & ~ValidMask[Policy]))
+        return STATUS_INVALID_PARAMETER;
+    /*
+     * These policies are creation-time/query-only on Windows.  In
+     * particular, ProcessSystemCallFilterPolicy and
+     * ProcessPayloadRestrictionPolicy must not become mutable merely because
+     * their state has a slot in EPROCESS: Chromium probes the runtime setter
+     * and expects STATUS_INVALID_PARAMETER.
+     */
+    if (Policy == PSP_CONTROL_FLOW_GUARD_POLICY ||
+        Policy == PSP_DEP_POLICY ||
+        Policy == PSP_SYSTEM_CALL_FILTER_POLICY ||
+        Policy == PSP_PAYLOAD_RESTRICTION_POLICY)
+        return STATUS_INVALID_PARAMETER;
+
+    do
+    {
+        OldPolicy = ReadAcquire(&Process->ExtendedMitigationPolicy[Policy]);
+        /* Mitigations can be strengthened, but established bits cannot clear. */
+        if (OldPolicy & ~(LONG)Flags)
+            return STATUS_ACCESS_DENIED;
+    } while (InterlockedCompareExchange(&Process->ExtendedMitigationPolicy[Policy], (LONG)Flags, OldPolicy) != OldPolicy);
+
+    return STATUS_SUCCESS;
+}
+
+ULONG
+NTAPI
+PsGetProcessMitigationPolicyFlags(
+    _In_ PEPROCESS Process,
+    _In_ ULONG Policy)
+{
+    switch (Policy)
+    {
+        case PSP_DYNAMIC_CODE_POLICY:
+            return (ULONG)ReadAcquire(&Process->DynamicCodeMitigationPolicy);
+        case PSP_SYSTEM_CALL_DISABLE_POLICY:
+            return (ULONG)ReadAcquire(&Process->SystemCallDisablePolicy);
+        case PSP_SIGNATURE_POLICY:
+            return (ULONG)ReadAcquire(&Process->SignatureMitigationPolicy);
+        case PSP_CHILD_PROCESS_POLICY:
+            return (ULONG)ReadAcquire(&Process->ChildProcessPolicy);
+        default:
+            return Policy < PSP_EXTENDED_POLICY_COUNT ? (ULONG)ReadAcquire(&Process->ExtendedMitigationPolicy[Policy]) : 0;
+    }
+}
+
+NTSTATUS
+NTAPI
+PsCheckImageLoadPolicy(
+    _In_ PFILE_OBJECT FileObject)
+{
+    PEPROCESS Process = PsGetCurrentProcess();
+    ULONG Policy = (ULONG)ReadAcquire(&Process->ExtendedMitigationPolicy[PSP_IMAGE_LOAD_POLICY]);
+    PDEVICE_OBJECT DeviceObject;
+    PSECURITY_DESCRIPTOR SecurityDescriptor;
+    BOOLEAN MemoryAllocated = FALSE, SaclPresent = FALSE, SaclDefaulted = FALSE;
+    PACL Sacl = NULL;
+    PACE_HEADER Ace;
+    ULONG Index, Rid;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!(Policy & 3) || ExGetPreviousMode() == KernelMode)
+        return STATUS_SUCCESS;
+
+    if (Policy & 1)
+    {
+        DeviceObject = IoGetRelatedDeviceObject(FileObject);
+        if (DeviceObject &&
+            ((DeviceObject->Characteristics & FILE_REMOTE_DEVICE) ||
+             DeviceObject->DeviceType == FILE_DEVICE_NETWORK_FILE_SYSTEM ||
+             DeviceObject->DeviceType == FILE_DEVICE_NETWORK))
+        {
+            return STATUS_ACCESS_DENIED;
+        }
+    }
+
+    if (Policy & 2)
+    {
+        if (!NT_SUCCESS(ObGetObjectSecurity(FileObject, &SecurityDescriptor, &MemoryAllocated)) || !SecurityDescriptor)
+            return STATUS_SUCCESS;
+        if (NT_SUCCESS(RtlGetSaclSecurityDescriptor(SecurityDescriptor, &SaclPresent, &Sacl, &SaclDefaulted)) && SaclPresent && Sacl)
+        {
+            for (Index = 0; Index < Sacl->AceCount; Index++)
+            {
+                if (!NT_SUCCESS(RtlGetAce(Sacl, Index, (PVOID*)&Ace))) break;
+                if (Ace->AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
+                Rid = *RtlSubAuthoritySid(&((PSYSTEM_MANDATORY_LABEL_ACE)Ace)->SidStart,
+                                          *RtlSubAuthorityCountSid(&((PSYSTEM_MANDATORY_LABEL_ACE)Ace)->SidStart) - 1);
+                if (Rid < SECURITY_MANDATORY_MEDIUM_RID)
+                {
+                    Status = STATUS_ACCESS_DENIED;
+                }
+                break;
+            }
+        }
+        ObReleaseObjectSecurity(SecurityDescriptor, MemoryAllocated);
+    }
+
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 NtCreateUserProcess(OUT PHANDLE ProcessHandle,
@@ -2005,6 +2263,23 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
 #endif
     CONTEXT ThreadContext;
     PROCESS_BASIC_INFORMATION ProcessBasicInfo;
+    ULONGLONG MitigationOptions[3] = {0, 0, 0};
+    ULONG MitigationOptionsCount = 0;
+    ULONG ChildPolicy = 0;
+    BOOLEAN ChildPolicyPresent = FALSE;
+    ULONG AllAppPackagesPolicy = 0;
+    ULONG ComponentFilter = 0;
+    BOOLEAN ComponentFilterPresent = FALSE;
+    PVOID HandleListPointer = NULL;
+    SIZE_T HandleListSize = 0;
+    SIZE_T HandleCount = 0;
+    PHANDLE CapturedHandleList = NULL;
+    BOOLEAN HandleListPresent = FALSE;
+    PS_BNO_ISOLATION_PARAMETERS BnoIsolation;
+    UNICODE_STRING BnoPrefix;
+    WCHAR BnoPrefixBuffer[256];
+    BOOLEAN BnoIsolationPresent = FALSE;
+    BOOLEAN AttributeError = FALSE;
 #ifdef _WIN64
     PEB32 *Wow64Peb = NULL;
 #endif
@@ -2014,6 +2289,8 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
 
     RtlInitUnicodeString(&ImageName, NULL);
     RtlInitUnicodeString(&CapturedImageName, NULL);
+    RtlZeroMemory(&BnoIsolation, sizeof(BnoIsolation));
+    RtlInitEmptyUnicodeString(&BnoPrefix, BnoPrefixBuffer, sizeof(BnoPrefixBuffer));
 
     /* Validate user-mode parameters */
     if (PreviousMode != KernelMode)
@@ -2133,6 +2410,132 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
                     ImageInfoPtr = (PSECTION_IMAGE_INFORMATION)AttributeList->Attributes[i].ValuePtr;
                     break;
 
+                case PsAttributeMitigationOptions:
+                {
+                    SIZE_T Size = AttributeList->Attributes[i].Size;
+                    PVOID ValuePtr = AttributeList->Attributes[i].ValuePtr;
+
+                    if (Size == sizeof(ULONG))
+                    {
+                        if (PreviousMode != KernelMode) ProbeForRead(ValuePtr, Size, sizeof(ULONG));
+                        MitigationOptions[0] = *(PULONG)ValuePtr;
+                        MitigationOptionsCount = 1;
+                    }
+                    else if (Size == sizeof(ULONGLONG) || Size == 2 * sizeof(ULONGLONG) || Size == 3 * sizeof(ULONGLONG))
+                    {
+                        if (PreviousMode != KernelMode) ProbeForRead(ValuePtr, Size, sizeof(ULONG));
+                        RtlCopyMemory(MitigationOptions, ValuePtr, Size);
+                        MitigationOptionsCount = (ULONG)(Size / sizeof(ULONGLONG));
+                    }
+                    else
+                    {
+                        AttributeError = TRUE;
+                    }
+                    break;
+                }
+
+                case PsAttributeChildProcessPolicy:
+                    if (AttributeList->Attributes[i].Size != sizeof(ULONG))
+                    {
+                        AttributeError = TRUE;
+                        break;
+                    }
+                    if (PreviousMode != KernelMode) ProbeForRead(AttributeList->Attributes[i].ValuePtr, sizeof(ULONG), sizeof(ULONG));
+                    ChildPolicy = *(PULONG)AttributeList->Attributes[i].ValuePtr;
+                    ChildPolicyPresent = TRUE;
+                    break;
+
+                case PsAttributeAllApplicationPackagesPolicy:
+                    if (AttributeList->Attributes[i].Size != sizeof(ULONG))
+                    {
+                        AttributeError = TRUE;
+                        break;
+                    }
+                    if (PreviousMode != KernelMode) ProbeForRead(AttributeList->Attributes[i].ValuePtr, sizeof(ULONG), sizeof(ULONG));
+                    AllAppPackagesPolicy = *(PULONG)AttributeList->Attributes[i].ValuePtr;
+                    break;
+
+                case PsAttributeHandleList:
+                    HandleListSize = AttributeList->Attributes[i].Size;
+                    HandleListPointer = AttributeList->Attributes[i].ValuePtr;
+                    if (!HandleListPointer || !HandleListSize ||
+                        (HandleListSize % sizeof(HANDLE)) != 0)
+                    {
+                        AttributeError = TRUE;
+                        break;
+                    }
+                    if (PreviousMode != KernelMode)
+                        ProbeForRead(HandleListPointer,
+                                     HandleListSize,
+                                     sizeof(HANDLE));
+                    HandleListPresent = TRUE;
+                    break;
+
+                case PsAttributeBnoIsolation:
+                {
+                    PPS_BNO_ISOLATION_PARAMETERS Input;
+                    UNICODE_STRING InputPrefix;
+
+                    if (AttributeList->Attributes[i].Size != sizeof(BnoIsolation))
+                    {
+                        AttributeError = TRUE;
+                        break;
+                    }
+
+                    Input = (PPS_BNO_ISOLATION_PARAMETERS)AttributeList->Attributes[i].ValuePtr;
+                    if (PreviousMode != KernelMode)
+                        ProbeForRead(Input, sizeof(*Input), sizeof(ULONG_PTR));
+                    BnoIsolation = *Input;
+
+                    if (BnoIsolation.HandleCount)
+                    {
+                        if (!BnoIsolation.Handles ||
+                            BnoIsolation.HandleCount > MAXULONG / sizeof(PVOID))
+                        {
+                            AttributeError = TRUE;
+                            break;
+                        }
+                        if (PreviousMode != KernelMode)
+                            ProbeForRead(BnoIsolation.Handles,
+                                         BnoIsolation.HandleCount * sizeof(PVOID),
+                                         sizeof(PVOID));
+                    }
+
+                    if (BnoIsolation.IsolationEnabled)
+                    {
+                        InputPrefix = BnoIsolation.IsolationPrefix;
+                        if (!InputPrefix.Buffer ||
+                            !InputPrefix.Length ||
+                            (InputPrefix.Length & (sizeof(WCHAR) - 1)) ||
+                            InputPrefix.Length > InputPrefix.MaximumLength ||
+                            InputPrefix.Length >= sizeof(BnoPrefixBuffer))
+                        {
+                            AttributeError = TRUE;
+                            break;
+                        }
+                        if (PreviousMode != KernelMode)
+                            ProbeForRead(InputPrefix.Buffer, InputPrefix.Length, sizeof(WCHAR));
+                        RtlCopyMemory(BnoPrefixBuffer, InputPrefix.Buffer, InputPrefix.Length);
+                        BnoPrefixBuffer[InputPrefix.Length / sizeof(WCHAR)] = UNICODE_NULL;
+                        BnoPrefix.Length = InputPrefix.Length;
+                    }
+                    BnoIsolationPresent = TRUE;
+                    break;
+                }
+
+                case PsAttributeComponentFilter:
+                    if (AttributeList->Attributes[i].Size != sizeof(ULONG))
+                    {
+                        AttributeError = TRUE;
+                        break;
+                    }
+                    if (PreviousMode != KernelMode)
+                        ProbeForRead(AttributeList->Attributes[i].ValuePtr,
+                                     sizeof(ULONG), sizeof(ULONG));
+                    ComponentFilter = *(PULONG)AttributeList->Attributes[i].ValuePtr;
+                    ComponentFilterPresent = TRUE;
+                    break;
+
                 default:
                     /* Ignore unknown attributes for forward compatibility */
                     break;
@@ -2145,8 +2548,28 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     }
     _SEH2_END;
 
-    UNREFERENCED_PARAMETER(TokenHandle);
     UNREFERENCED_PARAMETER(TebAddressPtr);
+
+    if (AttributeError)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (ChildPolicyPresent && (ChildPolicy & ~(PSP_CHILD_PROCESS_RESTRICTED |
+                                               PSP_CHILD_PROCESS_OVERRIDE |
+                                               PSP_CHILD_PROCESS_RESTRICTED_UNLESS_SECURE)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (ComponentFilterPresent &&
+        (ComponentFilter & ~PSP_COMPONENT_FILTER_VALID_FLAGS))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (HandleListPresent &&
+        !(ProcessFlags & PROCESS_CREATE_FLAGS_INHERIT_HANDLES))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     /* Image name is required */
     if (!ImageName.Buffer || !ImageName.Length)
@@ -2209,6 +2632,35 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     else
     {
         CapturedImageName = ImageName;
+    }
+
+    if (HandleListPresent)
+    {
+        CapturedHandleList = ExAllocatePoolWithTag(PagedPool,
+                                                   HandleListSize,
+                                                   'lHsP');
+        if (!CapturedHandleList)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+
+        _SEH2_TRY
+        {
+            RtlCopyMemory(CapturedHandleList,
+                          HandleListPointer,
+                          HandleListSize);
+            HandleCount = HandleListSize / sizeof(HANDLE);
+            Status = STATUS_SUCCESS;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
     }
 
     DPRINT("NtCreateUserProcess: Image='%wZ'\n", &CapturedImageName);
@@ -2302,7 +2754,9 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
                               hSection,
                               DebugPort,
                               ExceptionPort,
-                              FALSE);
+                              FALSE,
+                              CapturedHandleList,
+                              HandleCount);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtCreateUserProcess: PspCreateProcess failed, Status=0x%lx\n", Status);
@@ -2365,6 +2819,49 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     if (NT_SUCCESS(Status))
     {
         PVOID ActualBase = Process->SectionBaseAddress;
+
+        if (TokenHandle)
+        {
+            Status = PspSetPrimaryToken(Process, TokenHandle, NULL);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("NtCreateUserProcess: PspSetPrimaryToken failed, Status=0x%lx\n", Status);
+                ObDereferenceObject(Process);
+                Process = NULL;
+                goto Cleanup;
+            }
+        }
+
+        if (BnoIsolationPresent)
+        {
+            Status = PspApplyBnoIsolation(Process,
+                                          &BnoPrefix,
+                                          BnoIsolation.IsolationEnabled);
+            if (!NT_SUCCESS(Status))
+            {
+                ObDereferenceObject(Process);
+                Process = NULL;
+                goto Cleanup;
+            }
+        }
+
+        PspApplyCreationMitigations(Process, MitigationOptions, MitigationOptionsCount);
+        if (ChildPolicyPresent)
+        {
+            InterlockedExchange(&Process->ChildProcessPolicy,
+                                (ChildPolicy & PSP_CHILD_PROCESS_RESTRICTED) ? 1 : 0);
+        }
+        if (ComponentFilterPresent)
+        {
+            InterlockedExchange(&Process->ComponentFilter, ComponentFilter);
+        }
+        if (AllAppPackagesPolicy & PSP_ALL_APPLICATION_PACKAGES_OPT_OUT)
+        {
+            PTOKEN LowBoxToken = PsReferencePrimaryToken(Process);
+            if (LowBoxToken->LowBoxInfo)
+                ((PSEP_LOWBOX_INFO)LowBoxToken->LowBoxInfo)->Flags |= SEP_LOWBOX_LPAC;
+            ObFastDereferenceObject(&Process->Token, LowBoxToken);
+        }
 
 #ifdef _WIN64
         if (ImageInformation.Machine == IMAGE_FILE_MACHINE_I386)
@@ -2757,6 +3254,9 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     }
 
 Cleanup:
+    if (CapturedHandleList)
+        ExFreePoolWithTag(CapturedHandleList, 'lHsP');
+
     /* Release captured image name */
     if (PreviousMode != KernelMode && CapturedImageName.Buffer != ImageName.Buffer)
     {

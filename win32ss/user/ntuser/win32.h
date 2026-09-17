@@ -268,6 +268,20 @@ typedef struct _W32PROCESS
  * PROCESSINFO structure.
  * See also: https://reactos.org/wiki/Techwiki:Win32k/PROCESSINFO
  */
+typedef struct _USER_MSG_FILTER
+{
+    LIST_ENTRY ListEntry;
+    HWND hwnd;
+    UINT message;
+    BOOL allow;
+} USER_MSG_FILTER, *PUSER_MSG_FILTER;
+
+ULONG FASTCALL IntGetProcessIntegrity(PEPROCESS Process);
+BOOL FASTCALL IntUipiIsAllowed(struct _PROCESSINFO *ppiSender, struct _PROCESSINFO *ppiTarget, struct _WND *Window, UINT Msg);
+DWORD FASTCALL IntChangeWindowMessageFilter(HWND hwnd, UINT Msg, DWORD Action);
+VOID FASTCALL IntUipiFreeWindowFilters(struct _WND *Window);
+VOID FASTCALL IntUipiFreeProcessFilters(struct _PROCESSINFO *ppi);
+
 #ifdef __cplusplus
 typedef struct _PROCESSINFO : _W32PROCESS
 {
@@ -318,6 +332,7 @@ typedef struct _PROCESSINFO
     FAST_MUTEX DriverObjListLock;
     LIST_ENTRY DriverObjListHead;
     W32HEAP_USER_MAPPING HeapMappings;
+    LIST_ENTRY MsgFilterList;
     struct _GDI_POOL* pPoolDcAttr;
     struct _GDI_POOL* pPoolBrushAttr;
     struct _GDI_POOL* pPoolRgnAttr;

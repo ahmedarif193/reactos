@@ -41,6 +41,24 @@ K32ValidateAttribute(
         case PROC_THREAD_ATTRIBUTE_PROTECTION_LEVEL:
             return Size == sizeof(DWORD) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
 
+        case PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES:
+            return Size == sizeof(SECURITY_CAPABILITIES) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
+
+        case PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY:
+            return Size == sizeof(GROUP_AFFINITY) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
+
+        case PROC_THREAD_ATTRIBUTE_IDEAL_PROCESSOR:
+            return Size == sizeof(PROCESSOR_NUMBER) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
+
+        case PROC_THREAD_ATTRIBUTE_PREFERRED_NODE:
+            return Size == sizeof(USHORT) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
+
+        case PROC_THREAD_ATTRIBUTE_BNO_ISOLATION:
+            return Size == sizeof(PROC_THREAD_BNOISOLATION_ATTRIBUTE) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
+
+        case PROC_THREAD_ATTRIBUTE_COMPONENT_FILTER:
+            return Size == sizeof(COMPONENT_FILTER) ? ERROR_SUCCESS : ERROR_BAD_LENGTH;
+
         default:
             return ERROR_NOT_SUPPORTED;
     }

@@ -246,6 +246,9 @@ typedef struct _TOKEN
     LUID OriginatingLogonSession;                     /* 0x9C */
     ULONG IntegrityLevelIndex;
     ULONG MandatoryPolicy;
+    LUID ProcUnique;
+    PVOID LowBoxInfo;
+    UNICODE_STRING BnoIsolationPrefix;
 #if DBG
     UCHAR ImageFileName[16];                          /* 0xA4 */
     HANDLE ProcessCid;                                /* 0xB4 */

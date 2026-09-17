@@ -34,6 +34,7 @@ list(APPEND SOURCE
     client/pathansi.c
     client/perfcnt.c
     client/power.c
+    client/privatens.c
     client/proc.c
     client/procansi.c
     client/resntfy.c

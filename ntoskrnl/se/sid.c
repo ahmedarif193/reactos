@@ -21,11 +21,13 @@ SID_IDENTIFIER_AUTHORITY SeLocalSidAuthority = {SECURITY_LOCAL_SID_AUTHORITY};
 SID_IDENTIFIER_AUTHORITY SeCreatorSidAuthority = {SECURITY_CREATOR_SID_AUTHORITY};
 SID_IDENTIFIER_AUTHORITY SeNtSidAuthority = {SECURITY_NT_AUTHORITY};
 SID_IDENTIFIER_AUTHORITY SeMandatoryLabelAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
+SID_IDENTIFIER_AUTHORITY SeAppPackageAuthority = {SECURITY_APP_PACKAGE_AUTHORITY};
 
 PSID SeNullSid = NULL;
 PSID SeWorldSid = NULL;
 PSID SeLocalSid = NULL;
 PSID SeCreatorOwnerSid = NULL;
+PSID SeOwnerRightsSid = NULL;
 PSID SeCreatorGroupSid = NULL;
 PSID SeCreatorOwnerServerSid = NULL;
 PSID SeCreatorGroupServerSid = NULL;
@@ -57,6 +59,8 @@ PSID SeLowMandatorySid = NULL;
 PSID SeMediumMandatorySid = NULL;
 PSID SeHighMandatorySid = NULL;
 PSID SeSystemMandatorySid = NULL;
+PSID SeAllAppPackagesSid = NULL;
+PSID SeAllRestrictedAppPackagesSid = NULL;
 
 typedef struct _SID_VALIDATE
 {
@@ -80,12 +84,15 @@ FreeInitializedSids(VOID)
     if (SeNullSid) ExFreePoolWithTag(SeNullSid, TAG_SID);
     if (SeUntrustedMandatorySid) ExFreePoolWithTag(SeUntrustedMandatorySid, TAG_SID);
     if (SeLowMandatorySid) ExFreePoolWithTag(SeLowMandatorySid, TAG_SID);
+    if (SeAllAppPackagesSid) ExFreePoolWithTag(SeAllAppPackagesSid, TAG_SID);
+    if (SeAllRestrictedAppPackagesSid) ExFreePoolWithTag(SeAllRestrictedAppPackagesSid, TAG_SID);
     if (SeMediumMandatorySid) ExFreePoolWithTag(SeMediumMandatorySid, TAG_SID);
     if (SeHighMandatorySid) ExFreePoolWithTag(SeHighMandatorySid, TAG_SID);
     if (SeSystemMandatorySid) ExFreePoolWithTag(SeSystemMandatorySid, TAG_SID);
     if (SeWorldSid) ExFreePoolWithTag(SeWorldSid, TAG_SID);
     if (SeLocalSid) ExFreePoolWithTag(SeLocalSid, TAG_SID);
     if (SeCreatorOwnerSid) ExFreePoolWithTag(SeCreatorOwnerSid, TAG_SID);
+    if (SeOwnerRightsSid) ExFreePoolWithTag(SeOwnerRightsSid, TAG_SID);
     if (SeCreatorGroupSid) ExFreePoolWithTag(SeCreatorGroupSid, TAG_SID);
     if (SeCreatorOwnerServerSid) ExFreePoolWithTag(SeCreatorOwnerServerSid, TAG_SID);
     if (SeCreatorGroupServerSid) ExFreePoolWithTag(SeCreatorGroupServerSid, TAG_SID);
@@ -139,6 +146,7 @@ SepInitSecurityIDs(VOID)
     SeWorldSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeLocalSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeCreatorOwnerSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
+    SeOwnerRightsSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeCreatorGroupSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeCreatorOwnerServerSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeCreatorGroupServerSid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
@@ -170,9 +178,12 @@ SepInitSecurityIDs(VOID)
     SeMediumMandatorySid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeHighMandatorySid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
     SeSystemMandatorySid = ExAllocatePoolWithTag(PagedPool, SidLength1, TAG_SID);
+    SeAllAppPackagesSid = ExAllocatePoolWithTag(PagedPool, SidLength2, TAG_SID);
+    SeAllRestrictedAppPackagesSid = ExAllocatePoolWithTag(PagedPool, SidLength2, TAG_SID);
 
     if (SeNullSid == NULL || SeWorldSid == NULL ||
         SeLocalSid == NULL || SeCreatorOwnerSid == NULL ||
+        SeOwnerRightsSid == NULL ||
         SeCreatorGroupSid == NULL || SeCreatorOwnerServerSid == NULL ||
         SeCreatorGroupServerSid == NULL || SeNtAuthoritySid == NULL ||
         SeDialupSid == NULL || SeNetworkSid == NULL || SeBatchSid == NULL ||
@@ -187,7 +198,8 @@ SepInitSecurityIDs(VOID)
         SeAnonymousLogonSid == NULL || SeLocalServiceSid == NULL ||
         SeNetworkServiceSid == NULL || SeUntrustedMandatorySid == NULL ||
         SeLowMandatorySid == NULL || SeMediumMandatorySid == NULL ||
-        SeHighMandatorySid == NULL || SeSystemMandatorySid == NULL)
+        SeHighMandatorySid == NULL || SeSystemMandatorySid == NULL ||
+        SeAllAppPackagesSid == NULL || SeAllRestrictedAppPackagesSid == NULL)
     {
         FreeInitializedSids();
         return FALSE;
@@ -199,9 +211,16 @@ SepInitSecurityIDs(VOID)
     RtlInitializeSid(SeMediumMandatorySid, &SeMandatoryLabelAuthority, 1);
     RtlInitializeSid(SeHighMandatorySid, &SeMandatoryLabelAuthority, 1);
     RtlInitializeSid(SeSystemMandatorySid, &SeMandatoryLabelAuthority, 1);
+    RtlInitializeSid(SeAllAppPackagesSid, &SeAppPackageAuthority, 2);
+    RtlInitializeSid(SeAllRestrictedAppPackagesSid, &SeAppPackageAuthority, 2);
+    *RtlSubAuthoritySid(SeAllAppPackagesSid, 0) = SECURITY_APP_PACKAGE_BASE_RID;
+    *RtlSubAuthoritySid(SeAllAppPackagesSid, 1) = SECURITY_BUILTIN_PACKAGE_ANY_PACKAGE;
+    *RtlSubAuthoritySid(SeAllRestrictedAppPackagesSid, 0) = SECURITY_APP_PACKAGE_BASE_RID;
+    *RtlSubAuthoritySid(SeAllRestrictedAppPackagesSid, 1) = SECURITY_BUILTIN_PACKAGE_ANY_RESTRICTED_PACKAGE;
     RtlInitializeSid(SeWorldSid, &SeWorldSidAuthority, 1);
     RtlInitializeSid(SeLocalSid, &SeLocalSidAuthority, 1);
     RtlInitializeSid(SeCreatorOwnerSid, &SeCreatorSidAuthority, 1);
+    RtlInitializeSid(SeOwnerRightsSid, &SeCreatorSidAuthority, 1);
     RtlInitializeSid(SeCreatorGroupSid, &SeCreatorSidAuthority, 1);
     RtlInitializeSid(SeCreatorOwnerServerSid, &SeCreatorSidAuthority, 1);
     RtlInitializeSid(SeCreatorGroupServerSid, &SeCreatorSidAuthority, 1);
@@ -247,6 +266,8 @@ SepInitSecurityIDs(VOID)
     *SubAuthority = SECURITY_LOCAL_RID;
     SubAuthority = RtlSubAuthoritySid(SeCreatorOwnerSid, 0);
     *SubAuthority = SECURITY_CREATOR_OWNER_RID;
+    SubAuthority = RtlSubAuthoritySid(SeOwnerRightsSid, 0);
+    *SubAuthority = SECURITY_CREATOR_OWNER_RIGHTS_RID;
     SubAuthority = RtlSubAuthoritySid(SeCreatorGroupSid, 0);
     *SubAuthority = SECURITY_CREATOR_GROUP_RID;
     SubAuthority = RtlSubAuthoritySid(SeCreatorOwnerServerSid, 0);
@@ -478,7 +499,7 @@ SepSidInTokenEx(
     _In_ PSID PrincipalSelfSid,
     _In_ PSID _Sid,
     _In_ BOOLEAN Deny,
-    _In_ BOOLEAN Restricted)
+    _In_ ULONG SidSet)
 {
     ULONG SidIndex;
     PTOKEN Token = (PTOKEN)_Token;
@@ -486,7 +507,28 @@ SepSidInTokenEx(
     PSID_AND_ATTRIBUTES SidAndAttributes;
     ULONG SidCount, SidLength;
     USHORT SidMetadata;
+    PSEP_LOWBOX_INFO LowBox = Token->LowBoxInfo;
+    BOOLEAN Restricted = (SidSet != SEP_SID_SET_GROUPS);
     PAGED_CODE();
+
+    if (SidSet == SEP_SID_SET_CAPABILITIES)
+    {
+        if (!LowBox) return FALSE;
+        if ((PrincipalSelfSid) && (RtlEqualSid(SePrincipalSelfSid, Sid)))
+            Sid = PrincipalSelfSid;
+        if (RtlEqualSid(Sid, LowBox->PackageSid))
+            return TRUE;
+        if (RtlEqualSid(Sid, SeAllRestrictedAppPackagesSid))
+            return TRUE;
+        if (!(LowBox->Flags & SEP_LOWBOX_LPAC) && RtlEqualSid(Sid, SeAllAppPackagesSid))
+            return TRUE;
+        for (SidIndex = 0; SidIndex < LowBox->CapabilityCount; SidIndex++)
+        {
+            if (RtlEqualSid(Sid, LowBox->Capabilities[SidIndex].Sid))
+                return TRUE;
+        }
+        return FALSE;
+    }
 
     /* Check if a principal SID was given, and this is our current SID already */
     if ((PrincipalSelfSid) && (RtlEqualSid(SePrincipalSelfSid, Sid)))
@@ -582,7 +624,7 @@ SepSidInToken(
     _In_ PSID Sid)
 {
     /* Call extended API */
-    return SepSidInTokenEx(_Token, NULL, Sid, FALSE, FALSE);
+    return SepSidInTokenEx(_Token, NULL, Sid, FALSE, SEP_SID_SET_GROUPS);
 }
 
 /**
@@ -618,6 +660,8 @@ SepGetSidFromAce(
     {
         case ACCESS_DENIED_ACE_TYPE:
         case ACCESS_ALLOWED_ACE_TYPE:
+        case ACCESS_DENIED_CALLBACK_ACE_TYPE:
+        case ACCESS_ALLOWED_CALLBACK_ACE_TYPE:
         case SYSTEM_AUDIT_ACE_TYPE:
         case SYSTEM_ALARM_ACE_TYPE:
         {

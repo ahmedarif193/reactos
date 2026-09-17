@@ -303,7 +303,9 @@ NTSTATUS
 NTAPI
 ObInitProcess(
     IN PEPROCESS Parent OPTIONAL,
-    IN PEPROCESS Process
+    IN PEPROCESS Process,
+    IN const HANDLE *HandleList OPTIONAL,
+    IN SIZE_T HandleCount
 );
 
 PHANDLE_TABLE
@@ -717,6 +719,15 @@ extern ULONG ObpObjectSecurityMode;
 extern ULONG ObpProtectionMode;
 extern ULONG ObpLUIDDeviceMapsDisabled;
 extern ULONG ObpLUIDDeviceMapsEnabled;
+
+VOID
+NTAPI
+ObpInitializePrivateNamespaces(VOID);
+
+VOID
+NTAPI
+ObpRemovePrivateNamespace(
+    _In_ POBJECT_DIRECTORY Directory);
 
 //
 // Inlined Functions

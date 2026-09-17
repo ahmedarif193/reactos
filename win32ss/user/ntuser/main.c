@@ -174,6 +174,7 @@ UserProcessCreate(PEPROCESS Process)
 
     ppiCurrent->peProcess = Process;
     ppiCurrent->W32Pid = HandleToUlong(PsGetProcessId(Process));
+    InitializeListHead(&ppiCurrent->MsgFilterList);
 
     /* Setup process flags */
     ppiCurrent->W32PF_flags |= W32PF_PROCESSCONNECTED;
@@ -212,6 +213,7 @@ UserProcessDestroy(PEPROCESS Process)
 
     /* Destroy user objects */
     UserDestroyObjectsForOwner(gHandleTable, ppiCurrent);
+    IntUipiFreeProcessFilters(ppiCurrent);
 
     TRACE_CH(UserProcess, "Freeing ppi 0x%p\n", ppiCurrent);
 #if DBG
@@ -1150,7 +1152,7 @@ DriverEntry(
     /* Register Object Manager Callbacks */
     CalloutData.ProcessCallout = Win32kProcessCallback;
     CalloutData.ThreadCallout = Win32kThreadCallback;
-    // CalloutData.GlobalAtomTableCallout = NULL;
+    CalloutData.GlobalAtomTableCallout = Win32kGlobalAtomTableCallout;
     CalloutData.PowerEventCallout = IntHandlePowerEvent;
     CalloutData.PowerStateCallout = IntHandlePowerState;
     CalloutData.JobCallout = Win32kJobCallout;

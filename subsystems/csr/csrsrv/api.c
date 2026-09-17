@@ -1001,6 +1001,8 @@ NTSTATUS
 NTAPI
 CsrApiPortInitialize(VOID)
 {
+    static SECURITY_DESCRIPTOR CsrApiPortSd;
+    static PACL CsrApiPortSacl;
     ULONG Size;
     OBJECT_ATTRIBUTES ObjectAttributes;
     NTSTATUS Status;
@@ -1029,14 +1031,31 @@ CsrApiPortInitialize(VOID)
                 sizeof(CSR_API_CONNECTINFO), sizeof(CSR_API_MESSAGE));
     }
 
-    /* FIXME: Create a Security Descriptor */
+    {
+        SID_IDENTIFIER_AUTHORITY LabelAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
+        PSID UntrustedSid = NULL;
+        ULONG SaclSize;
+
+        Status = RtlAllocateAndInitializeSid(&LabelAuthority, 1, SECURITY_MANDATORY_UNTRUSTED_RID,
+                                             0, 0, 0, 0, 0, 0, 0, &UntrustedSid);
+        if (!NT_SUCCESS(Status)) return Status;
+        SaclSize = sizeof(ACL) + sizeof(SYSTEM_MANDATORY_LABEL_ACE) + RtlLengthSid(UntrustedSid);
+        CsrApiPortSacl = RtlAllocateHeap(CsrHeap, 0, SaclSize);
+        if (!CsrApiPortSacl) return STATUS_NO_MEMORY;
+        RtlCreateAcl(CsrApiPortSacl, SaclSize, ACL_REVISION);
+        RtlAddMandatoryAce(CsrApiPortSacl, ACL_REVISION, 0, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+                           SYSTEM_MANDATORY_LABEL_ACE_TYPE, UntrustedSid);
+        RtlCreateSecurityDescriptor(&CsrApiPortSd, SECURITY_DESCRIPTOR_REVISION);
+        RtlSetDaclSecurityDescriptor(&CsrApiPortSd, TRUE, NULL, FALSE);
+        RtlSetSaclSecurityDescriptor(&CsrApiPortSd, TRUE, CsrApiPortSacl, FALSE);
+    }
 
     /* Initialize the Attributes */
     InitializeObjectAttributes(&ObjectAttributes,
                                &CsrApiPortName,
                                0,
                                NULL,
-                               NULL /* FIXME: Use the Security Descriptor */);
+                               &CsrApiPortSd);
 
     /* Create the Port Object */
     Status = NtCreatePort(&CsrApiPort,

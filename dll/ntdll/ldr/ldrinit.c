@@ -45,6 +45,7 @@ PLDR_DATA_TABLE_ENTRY LdrpCurrentDllInitializer;
 PLDR_DATA_TABLE_ENTRY LdrpNtDllDataTableEntry;
 
 static NTSTATUS (WINAPI *Kernel32ProcessInitPostImportFunction)(VOID);
+static PVOID Kernel32ThreadInitThunkFunction;
 static BOOL (WINAPI *Kernel32BaseQueryModuleData)(IN LPSTR ModuleName, IN LPSTR Unk1, IN PVOID Unk2, IN PVOID Unk3, IN PVOID Unk4);
 
 RTL_BITMAP TlsBitMap;
@@ -67,6 +68,34 @@ HANDLE LdrpKnownDllObjectDirectory;
 UNICODE_STRING LdrpKnownDllPath;
 WCHAR LdrpKnownDllPathBuffer[128];
 UNICODE_STRING LdrpDefaultPath;
+static WCHAR LdrpPreferSystem32Buffer[2048];
+
+static
+VOID
+LdrpApplyPreferSystem32Policy(VOID)
+{
+    struct
+    {
+        ULONG Policy;
+        ULONG Flags;
+    } Mitigation = {10, 0};
+    UNICODE_STRING NewPath;
+    NTSTATUS Status;
+
+    Status = NtQueryInformationProcess(NtCurrentProcess(), ProcessMitigationPolicy, &Mitigation, sizeof(Mitigation), NULL);
+    if (!NT_SUCCESS(Status) || !(Mitigation.Flags & 4))
+        return;
+
+    RtlInitEmptyUnicodeString(&NewPath, LdrpPreferSystem32Buffer, sizeof(LdrpPreferSystem32Buffer) - sizeof(UNICODE_NULL));
+    if (!NT_SUCCESS(RtlAppendUnicodeToString(&NewPath, SharedUserData->NtSystemRoot)) ||
+        !NT_SUCCESS(RtlAppendUnicodeToString(&NewPath, L"\\system32;")) ||
+        !NT_SUCCESS(RtlAppendUnicodeStringToString(&NewPath, &LdrpDefaultPath)))
+    {
+        return;
+    }
+    NewPath.Buffer[NewPath.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    LdrpDefaultPath = NewPath;
+}
 
 PEB_LDR_DATA PebLdr;
 
@@ -2335,6 +2364,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     ULONG ComSectionSize;
     ANSI_STRING BaseProcessInitPostImportName = RTL_CONSTANT_STRING("BaseProcessInitPostImport");
     ANSI_STRING BaseQueryModuleDataName = RTL_CONSTANT_STRING("BaseQueryModuleData");
+    ANSI_STRING BaseThreadInitThunkName = RTL_CONSTANT_STRING("BaseThreadInitThunk");
     PVOID OldShimData;
     OBJECT_ATTRIBUTES ObjectAttributes;
     //UNICODE_STRING LocalFileName, FullImageName;
@@ -2733,6 +2763,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
         {
             /* Get the path */
             LdrpDefaultPath = *(PUNICODE_STRING)&ProcessParameters->DllPath;
+            LdrpApplyPreferSystem32Policy();
         }
         else
         {
@@ -2993,6 +3024,14 @@ LdrpInitializeProcess(IN PCONTEXT Context,
         }
 #endif
         Kernel32ProcessInitPostImportFunction = FunctionAddress;
+
+        if (NT_SUCCESS(LdrGetProcedureAddress(Kernel32BaseAddress,
+                                              &BaseThreadInitThunkName,
+                                              0,
+                                              &FunctionAddress)))
+        {
+            Kernel32ThreadInitThunkFunction = FunctionAddress;
+        }
 
         Status = LdrGetProcedureAddress(Kernel32BaseAddress,
                                         &BaseQueryModuleDataName,
@@ -3348,6 +3387,15 @@ LdrpInit(PCONTEXT Context,
                 Context->X1 = (ULONG64)(ULONG_PTR)Peb;
                 Context->Pc = (ULONG64)(ULONG_PTR)RtlUserThreadStart;
                 Context->Lr = (ULONG64)(ULONG_PTR)RtlExitUserThread;
+            }
+#elif defined(_M_AMD64)
+            if (Kernel32ThreadInitThunkFunction &&
+                Context->Rip == (ULONG64)(ULONG_PTR)LdrpImageEntry->EntryPoint)
+            {
+                Context->Rcx = 0;
+                Context->Rdx = (ULONG64)(ULONG_PTR)LdrpImageEntry->EntryPoint;
+                Context->R8 = (ULONG64)(ULONG_PTR)Peb;
+                Context->Rip = (ULONG64)(ULONG_PTR)Kernel32ThreadInitThunkFunction;
             }
 #endif
         }

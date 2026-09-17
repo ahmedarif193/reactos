@@ -49,6 +49,9 @@ SetSecurityAccessMask(IN SECURITY_INFORMATION SecurityInformation,
 
     if (SecurityInformation & SACL_SECURITY_INFORMATION)
         *DesiredAccess |= ACCESS_SYSTEM_SECURITY;
+
+    if (SecurityInformation & LABEL_SECURITY_INFORMATION)
+        *DesiredAccess |= WRITE_OWNER;
 }
 
 /* FIXME: Vista+ API */
@@ -60,7 +63,8 @@ QuerySecurityAccessMask(IN SECURITY_INFORMATION SecurityInformation,
     *DesiredAccess = 0;
 
     if (SecurityInformation & (OWNER_SECURITY_INFORMATION |
-                               GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION))
+                               GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION |
+                               LABEL_SECURITY_INFORMATION))
     {
         *DesiredAccess |= READ_CONTROL;
     }
@@ -803,7 +807,7 @@ AccRewriteGetHandleRights(HANDLE handle,
             }
         }
 
-        if (SecurityInfo & SACL_SECURITY_INFORMATION && ppSacl != NULL)
+        if ((SecurityInfo & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION)) && ppSacl != NULL)
         {
             *ppSacl = NULL;
             if (!GetSecurityDescriptorSacl(pSD,
@@ -1327,6 +1331,42 @@ AccRewriteSetNamedRights(LPWSTR pObjectName,
 }
 
 
+static BOOL
+AccpAppendKeptAces(PACL OldAcl,
+                   PACL NewAcl,
+                   const BOOLEAN *pKeepAce,
+                   DWORD AceCount,
+                   BOOLEAN Audit,
+                   BOOLEAN Denied)
+{
+    DWORD i;
+    PACE_HEADER pAce;
+    BOOLEAN IsAudit, IsDenied;
+
+    if (!OldAcl)
+        return TRUE;
+
+    for (i = 0; i < AceCount; i++)
+    {
+        if (!pKeepAce[i])
+            continue;
+        if (!GetAce(OldAcl, i, (PVOID*)&pAce))
+            return FALSE;
+        IsAudit = (pAce->AceType >= SYSTEM_AUDIT_ACE_TYPE && pAce->AceType != ACCESS_ALLOWED_OBJECT_ACE_TYPE &&
+                   pAce->AceType != ACCESS_DENIED_OBJECT_ACE_TYPE && pAce->AceType != ACCESS_ALLOWED_CALLBACK_ACE_TYPE &&
+                   pAce->AceType != ACCESS_DENIED_CALLBACK_ACE_TYPE && pAce->AceType != ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE &&
+                   pAce->AceType != ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE);
+        IsDenied = (pAce->AceType == ACCESS_DENIED_ACE_TYPE || pAce->AceType == ACCESS_DENIED_OBJECT_ACE_TYPE ||
+                    pAce->AceType == ACCESS_DENIED_CALLBACK_ACE_TYPE || pAce->AceType == ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE);
+        if (IsAudit != Audit || (!Audit && IsDenied != Denied))
+            continue;
+        if (!AddAce(NewAcl, NewAcl->AclRevision, MAXDWORD, pAce, pAce->AceSize))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+
 /**********************************************************************
  * AccRewriteSetEntriesInAcl				EXPORTED
  *
@@ -1457,7 +1497,8 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
         Ret = ERROR_NOT_ENOUGH_MEMORY;
         goto Cleanup;
     }
-    if (!InitializeAcl(pNew, SizeInformation.AclBytesInUse, ACL_REVISION))
+    if (!InitializeAcl(pNew, SizeInformation.AclBytesInUse,
+                       (OldAcl && OldAcl->AclRevision > ACL_REVISION) ? OldAcl->AclRevision : ACL_REVISION))
     {
         Ret = GetLastError();
         goto Cleanup;
@@ -1468,7 +1509,11 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     /* FIXME */
 
     /* 1b) Existing audit entries */
-    /* FIXME */
+    if (!AccpAppendKeptAces(OldAcl, pNew, pKeepAce, SizeInformation.AceCount, TRUE, FALSE))
+    {
+        Ret = GetLastError();
+        goto Cleanup;
+    }
 
     /* 2a) New denied entries (DENY_ACCESS) */
     for (i = 0; i < cCountOfExplicitEntries; i++)
@@ -1510,7 +1555,11 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     }
 
     /* 2b) Existing denied entries */
-    /* FIXME */
+    if (!AccpAppendKeptAces(OldAcl, pNew, pKeepAce, SizeInformation.AceCount, FALSE, TRUE))
+    {
+        Ret = GetLastError();
+        goto Cleanup;
+    }
 
     /* 3a) New allow entries (GRANT_ACCESS, SET_ACCESS) */
     for (i = 0; i < cCountOfExplicitEntries; i++)
@@ -1553,7 +1602,11 @@ AccRewriteSetEntriesInAcl(ULONG cCountOfExplicitEntries,
     }
 
     /* 3b) Existing allow entries */
-    /* FIXME */
+    if (!AccpAppendKeptAces(OldAcl, pNew, pKeepAce, SizeInformation.AceCount, FALSE, FALSE))
+    {
+        Ret = GetLastError();
+        goto Cleanup;
+    }
 
     *NewAcl = pNew;
 

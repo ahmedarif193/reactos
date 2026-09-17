@@ -2474,6 +2474,212 @@ Exit:
    return Ret;
 }
 
+static const UINT gUipiAllowedMessages[] =
+{
+    WM_NULL, WM_MOVE, WM_SIZE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_GETHOTKEY,
+    WM_GETICON, WM_RENDERFORMAT, WM_DRAWCLIPBOARD, WM_CHANGECBCHAIN,
+    WM_GETDLGCODE, WM_THEMECHANGED, WM_DWMCOMPOSITIONCHANGED,
+    0x031F, 0x0320, 0x0321
+};
+
+ULONG FASTCALL
+IntGetProcessIntegrity(PEPROCESS Process)
+{
+    PTOKEN Token;
+    ULONG Rid = SECURITY_MANDATORY_MEDIUM_RID;
+
+    if (!Process) return Rid;
+    Token = PsReferencePrimaryToken(Process);
+    if (Token->IntegrityLevelIndex != 0 &&
+        Token->IntegrityLevelIndex < Token->UserAndGroupCount)
+    {
+        Rid = *RtlSubAuthoritySid(Token->UserAndGroups[Token->IntegrityLevelIndex].Sid, 0);
+    }
+    PsDereferencePrimaryToken(Token);
+    return Rid;
+}
+
+static PUSER_MSG_FILTER
+IntUipiFindFilter(PPROCESSINFO ppi, HWND hwnd, UINT Msg)
+{
+    PLIST_ENTRY Entry;
+    PUSER_MSG_FILTER Filter;
+
+    for (Entry = ppi->MsgFilterList.Flink; Entry != &ppi->MsgFilterList; Entry = Entry->Flink)
+    {
+        Filter = CONTAINING_RECORD(Entry, USER_MSG_FILTER, ListEntry);
+        if (Filter->hwnd == hwnd && Filter->message == Msg)
+            return Filter;
+    }
+    return NULL;
+}
+
+BOOL FASTCALL
+IntUipiIsAllowed(PPROCESSINFO ppiSender, PPROCESSINFO ppiTarget, PWND Window, UINT Msg)
+{
+    ULONG i;
+    PUSER_MSG_FILTER Filter;
+
+    if (!ppiSender || !ppiTarget || ppiSender == ppiTarget)
+        return TRUE;
+    if (IntGetProcessIntegrity(ppiSender->peProcess) >= IntGetProcessIntegrity(ppiTarget->peProcess))
+        return TRUE;
+
+    for (i = 0; i < RTL_NUMBER_OF(gUipiAllowedMessages); i++)
+    {
+        if (gUipiAllowedMessages[i] == Msg)
+            return TRUE;
+    }
+
+    if (Window)
+    {
+        Filter = IntUipiFindFilter(ppiTarget, UserHMGetHandle(Window), Msg);
+        if (Filter)
+            return Filter->allow;
+    }
+    Filter = IntUipiFindFilter(ppiTarget, NULL, Msg);
+    if (Filter)
+        return Filter->allow;
+
+    return FALSE;
+}
+
+DWORD FASTCALL
+IntChangeWindowMessageFilter(HWND hwnd, UINT Msg, DWORD Action)
+{
+    PPROCESSINFO ppi = gptiCurrent ? gptiCurrent->ppi : NULL;
+    PUSER_MSG_FILTER Filter;
+
+    if (!ppi || Msg > 0xFFFF || Action > 2)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    if (hwnd)
+    {
+        PWND Window = UserGetWindowObject(hwnd);
+        if (!Window)
+            return 0;
+        if (Window->head.pti->ppi != ppi)
+        {
+            EngSetLastError(ERROR_ACCESS_DENIED);
+            return 0;
+        }
+        hwnd = UserHMGetHandle(Window);
+    }
+
+    Filter = IntUipiFindFilter(ppi, hwnd, Msg);
+    if (Action == 0)
+    {
+        if (Filter)
+        {
+            RemoveEntryList(&Filter->ListEntry);
+            ExFreePoolWithTag(Filter, USERTAG_MSGFILTER);
+        }
+        return 1;
+    }
+
+    if (!Filter)
+    {
+        Filter = ExAllocatePoolWithTag(PagedPool, sizeof(*Filter), USERTAG_MSGFILTER);
+        if (!Filter)
+        {
+            EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return 0;
+        }
+        Filter->hwnd = hwnd;
+        Filter->message = Msg;
+        InsertTailList(&ppi->MsgFilterList, &Filter->ListEntry);
+    }
+    Filter->allow = (Action == 1);
+    return 1;
+}
+
+VOID FASTCALL
+IntUipiFreeWindowFilters(PWND Window)
+{
+    PPROCESSINFO ppi = Window->head.pti ? Window->head.pti->ppi : NULL;
+    PLIST_ENTRY Entry, Next;
+    PUSER_MSG_FILTER Filter;
+    HWND hwnd = UserHMGetHandle(Window);
+
+    if (!ppi || !ppi->MsgFilterList.Flink) return;
+    for (Entry = ppi->MsgFilterList.Flink; Entry != &ppi->MsgFilterList; Entry = Next)
+    {
+        Next = Entry->Flink;
+        Filter = CONTAINING_RECORD(Entry, USER_MSG_FILTER, ListEntry);
+        if (Filter->hwnd == hwnd)
+        {
+            RemoveEntryList(&Filter->ListEntry);
+            ExFreePoolWithTag(Filter, USERTAG_MSGFILTER);
+        }
+    }
+}
+
+VOID FASTCALL
+IntUipiFreeProcessFilters(PPROCESSINFO ppi)
+{
+    PLIST_ENTRY Entry;
+    PUSER_MSG_FILTER Filter;
+
+    if (!ppi->MsgFilterList.Flink) return;
+    while (!IsListEmpty(&ppi->MsgFilterList))
+    {
+        Entry = RemoveHeadList(&ppi->MsgFilterList);
+        Filter = CONTAINING_RECORD(Entry, USER_MSG_FILTER, ListEntry);
+        ExFreePoolWithTag(Filter, USERTAG_MSGFILTER);
+    }
+}
+
+static BOOL FASTCALL
+IntUipiCheckWindow(HWND hWnd, UINT Msg)
+{
+    PWND Window;
+
+    if (!hWnd || hWnd == HWND_BROADCAST || hWnd == HWND_TOPMOST)
+        return TRUE;
+    Window = UserGetWindowObject(hWnd);
+    if (!Window)
+        return TRUE;
+    if (!IntUipiIsAllowed(gptiCurrent ? gptiCurrent->ppi : NULL, Window->head.pti->ppi, Window, Msg))
+    {
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL FASTCALL
+IntUipiPostBroadcast(UINT Msg, WPARAM wParam, LPARAM lParam)
+{
+    HWND *List;
+    PWND DesktopWindow;
+    ULONG i;
+    PPROCESSINFO ppiSender = gptiCurrent ? gptiCurrent->ppi : NULL;
+
+    if (!is_message_broadcastable(Msg)) return TRUE;
+    DesktopWindow = UserGetDesktopWindow();
+    List = IntWinListChildren(DesktopWindow);
+    if (List == NULL) return TRUE;
+
+    if (IntUipiIsAllowed(ppiSender, DesktopWindow->head.pti->ppi, DesktopWindow, Msg))
+        UserPostMessage(UserHMGetHandle(DesktopWindow), Msg, wParam, lParam);
+    for (i = 0; List[i]; i++)
+    {
+        PWND pwnd = UserGetWindowObject(List[i]);
+        if (!pwnd) continue;
+        if (pwnd->fnid == FNID_MENU ||
+            pwnd->pcls->atomClassName == gpsi->atomSysClass[ICLS_SWITCH])
+            continue;
+        if (!IntUipiIsAllowed(ppiSender, pwnd->head.pti->ppi, pwnd, Msg))
+            continue;
+        UserPostMessage(List[i], Msg, wParam, lParam);
+    }
+    ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
+    return TRUE;
+}
+
 BOOL APIENTRY
 NtUserPostMessage(HWND hWnd,
                   UINT Msg,
@@ -2484,7 +2690,26 @@ NtUserPostMessage(HWND hWnd,
 
     UserEnterExclusive();
 
-    ret = UserPostMessage(hWnd, Msg, wParam, lParam);
+    if (hWnd == HWND_BROADCAST || hWnd == HWND_TOPMOST)
+    {
+        if (is_pointer_message(Msg, wParam))
+        {
+            EngSetLastError(ERROR_MESSAGE_SYNC_ONLY);
+            ret = FALSE;
+        }
+        else
+        {
+            ret = IntUipiPostBroadcast(Msg, wParam, lParam);
+        }
+    }
+    else if (!IntUipiCheckWindow(hWnd, Msg))
+    {
+        ret = FALSE;
+    }
+    else
+    {
+        ret = UserPostMessage(hWnd, Msg, wParam, lParam);
+    }
 
     UserLeave();
 
@@ -3011,6 +3236,23 @@ NtUserMessageCall( HWND hWnd,
     USER_REFERENCE_ENTRY Ref;
 
     UserEnterExclusive();
+
+    switch(dwType)
+    {
+    case FNID_SENDMESSAGE:
+    case FNID_SENDMESSAGEFF:
+    case FNID_SENDMESSAGEWTOOPTION:
+    case FNID_SENDMESSAGECALLBACK:
+    case FNID_SENDNOTIFYMESSAGE:
+        if (!IntUipiCheckWindow(hWnd, Msg))
+        {
+            UserLeave();
+            return FALSE;
+        }
+        break;
+    default:
+        break;
+    }
 
     switch(dwType)
     {

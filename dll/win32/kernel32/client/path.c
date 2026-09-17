@@ -441,6 +441,37 @@ BaseComputeProcessExePath(IN LPWSTR FullPath)
     return BasepComputeProcessPath(PathOrder, NULL, NULL);
 }
 
+static
+LPWSTR
+BasepApplyPreferSystem32(
+    _In_opt_ LPWSTR DllPath)
+{
+    struct
+    {
+        ULONG Policy;
+        ULONG Flags;
+    } Mitigation = {10, 0};
+    WCHAR System32[MAX_PATH];
+    SIZE_T SystemLength, PathLength;
+    LPWSTR NewPath;
+    NTSTATUS Status;
+
+    if (!DllPath) return NULL;
+    Status = NtQueryInformationProcess(NtCurrentProcess(), ProcessMitigationPolicy, &Mitigation, sizeof(Mitigation), NULL);
+    if (!NT_SUCCESS(Status) || !(Mitigation.Flags & 4)) return DllPath;
+
+    SystemLength = GetSystemDirectoryW(System32, RTL_NUMBER_OF(System32));
+    if (!SystemLength || SystemLength >= RTL_NUMBER_OF(System32)) return DllPath;
+    PathLength = wcslen(DllPath);
+    NewPath = RtlAllocateHeap(RtlGetProcessHeap(), 0, (SystemLength + 1 + PathLength + 1) * sizeof(WCHAR));
+    if (!NewPath) return DllPath;
+    RtlCopyMemory(NewPath, System32, SystemLength * sizeof(WCHAR));
+    NewPath[SystemLength] = L';';
+    RtlCopyMemory(NewPath + SystemLength + 1, DllPath, (PathLength + 1) * sizeof(WCHAR));
+    RtlFreeHeap(RtlGetProcessHeap(), 0, DllPath);
+    return NewPath;
+}
+
 LPWSTR
 WINAPI
 BaseComputeProcessDllPath(IN LPWSTR FullPath,
@@ -469,7 +500,7 @@ BaseComputeProcessDllPath(IN LPWSTR FullPath,
         RtlLeaveCriticalSection(&BaseDllDirectoryLock);
 
         /* Return dll path */
-        return DllPath;
+        return BasepApplyPreferSystem32(DllPath);
     }
 
     /* Release DLL directory lock */
@@ -537,7 +568,7 @@ BaseComputeProcessDllPath(IN LPWSTR FullPath,
                                       Environment);
 
     /* Return dll path */
-    return DllPath;
+    return BasepApplyPreferSystem32(DllPath);
 }
 
 static PWSTR

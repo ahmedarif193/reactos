@@ -526,7 +526,7 @@ CsrSrvAttachSharedSection(IN PCSR_PROCESS CsrProcess OPTIONAL,
                                     &ViewSize,
                                     ViewUnmap,
                                     SEC_NO_CHANGE,
-                                    PAGE_EXECUTE_READ);
+                                    PAGE_READONLY);
         if (!NT_SUCCESS(Status)) return Status;
         CsrProcess->Flags |= CsrProcessSharedSectionMapped;
     }

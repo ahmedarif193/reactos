@@ -3300,10 +3300,319 @@ DWORD WINAPI LookupSecurityDescriptorPartsW(TRUSTEEW *owner, TRUSTEEW *group, UL
 /******************************************************************************
  * AddConditionalAce [ADVAPI32.@]
  */
+typedef struct _CONDITIONAL_ACE_VALUE
+{
+    BOOL IsString;
+    ULONGLONG Integer;
+    PCWSTR String;
+    ULONG StringLength;
+} CONDITIONAL_ACE_VALUE, *PCONDITIONAL_ACE_VALUE;
+
+typedef struct _CONDITIONAL_ACE_EXPRESSION
+{
+    PCWSTR Name;
+    ULONG NameLength;
+    ULONG ValueCount;
+    PCONDITIONAL_ACE_VALUE Values;
+    ULONG ApplicationDataLength;
+} CONDITIONAL_ACE_EXPRESSION, *PCONDITIONAL_ACE_EXPRESSION;
+
+static PCWSTR conditional_skip_spaces(PCWSTR current)
+{
+    while (*current == L' ' || *current == L'\t' ||
+           *current == L'\r' || *current == L'\n')
+        current++;
+    return current;
+}
+
+static BOOL conditional_add_size(ULONG *size, ULONG add)
+{
+    if (*size > MAXULONG - add)
+        return FALSE;
+    *size += add;
+    return TRUE;
+}
+
+static BOOL conditional_parse_uint64(PCWSTR *current, ULONGLONG *value)
+{
+    PCWSTR cursor = *current;
+    ULONGLONG result = 0;
+
+    if (*cursor < L'0' || *cursor > L'9')
+        return FALSE;
+
+    do
+    {
+        ULONG digit = *cursor++ - L'0';
+        if (result > (MAXULONGLONG - digit) / 10)
+            return FALSE;
+        result = result * 10 + digit;
+    } while (*cursor >= L'0' && *cursor <= L'9');
+
+    *current = cursor;
+    *value = result;
+    return TRUE;
+}
+
+static BOOL conditional_parse_expression(PWCHAR condition,
+                                         PCONDITIONAL_ACE_EXPRESSION expression)
+{
+    PCONDITIONAL_ACE_VALUE values;
+    PCWSTR cursor, name_end, equal;
+    SIZE_T condition_length, maximum_values;
+    ULONG nested_length = 0, application_length;
+    BOOL parenthesized, string_values = FALSE;
+
+    memset(expression, 0, sizeof(*expression));
+    if (!condition)
+        return FALSE;
+
+    condition_length = wcslen(condition);
+    if (!condition_length || condition_length > MAXUSHORT)
+        return FALSE;
+
+    maximum_values = condition_length / 2 + 1;
+    if (maximum_values > MAXULONG / sizeof(*values))
+        return FALSE;
+    values = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                       maximum_values * sizeof(*values));
+    if (!values)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    cursor = conditional_skip_spaces(condition);
+    parenthesized = (*cursor == L'(');
+    if (parenthesized)
+        cursor = conditional_skip_spaces(cursor + 1);
+
+    expression->Name = cursor;
+    equal = wcsstr(cursor, L"==");
+    if (!equal)
+        goto Invalid;
+    name_end = equal;
+    while (name_end > expression->Name &&
+           (name_end[-1] == L' ' || name_end[-1] == L'\t' ||
+            name_end[-1] == L'\r' || name_end[-1] == L'\n'))
+        name_end--;
+    if (name_end == expression->Name ||
+        (SIZE_T)(name_end - expression->Name) > MAXULONG)
+        goto Invalid;
+    expression->NameLength = (ULONG)(name_end - expression->Name);
+
+    cursor = conditional_skip_spaces(equal + 2);
+    if (*cursor++ != L'{')
+        goto Invalid;
+    cursor = conditional_skip_spaces(cursor);
+
+    while (*cursor && *cursor != L'}')
+    {
+        PCONDITIONAL_ACE_VALUE value;
+        ULONG element_length;
+
+        if (expression->ValueCount >= maximum_values)
+            goto Invalid;
+        value = &values[expression->ValueCount];
+
+        if (*cursor == L'"')
+        {
+            PCWSTR end;
+
+            if (expression->ValueCount && !string_values)
+                goto Invalid;
+            string_values = TRUE;
+            value->IsString = TRUE;
+            value->String = ++cursor;
+            end = wcschr(cursor, L'"');
+            if (!end || (SIZE_T)(end - cursor) > MAXULONG / sizeof(WCHAR))
+                goto Invalid;
+            value->StringLength = (ULONG)(end - cursor);
+            cursor = end + 1;
+            element_length = sizeof(UCHAR) + sizeof(ULONG) +
+                             value->StringLength * sizeof(WCHAR);
+        }
+        else
+        {
+            if (expression->ValueCount && string_values)
+                goto Invalid;
+            if (!conditional_parse_uint64(&cursor, &value->Integer))
+                goto Invalid;
+            element_length = sizeof(UCHAR) + sizeof(ULONGLONG) +
+                             2 * sizeof(UCHAR);
+        }
+
+        if (!conditional_add_size(&nested_length, element_length))
+            goto Invalid;
+        expression->ValueCount++;
+        cursor = conditional_skip_spaces(cursor);
+        if (*cursor == L',')
+        {
+            cursor = conditional_skip_spaces(cursor + 1);
+            if (!*cursor || *cursor == L'}')
+                goto Invalid;
+        }
+        else if (*cursor != L'}')
+        {
+            goto Invalid;
+        }
+    }
+
+    if (!expression->ValueCount || *cursor++ != L'}')
+        goto Invalid;
+    cursor = conditional_skip_spaces(cursor);
+    if (parenthesized)
+    {
+        if (*cursor++ != L')')
+            goto Invalid;
+        cursor = conditional_skip_spaces(cursor);
+    }
+    if (*cursor)
+        goto Invalid;
+
+    application_length = 4;
+    if (!conditional_add_size(&application_length,
+                              sizeof(UCHAR) + sizeof(ULONG) +
+                              expression->NameLength * sizeof(WCHAR)) ||
+        !conditional_add_size(&application_length,
+                              sizeof(UCHAR) + sizeof(ULONG) + nested_length) ||
+        !conditional_add_size(&application_length, sizeof(UCHAR)))
+        goto Invalid;
+    expression->ApplicationDataLength = ALIGN_UP_BY(application_length, sizeof(ULONG));
+    expression->Values = values;
+    return TRUE;
+
+Invalid:
+    HeapFree(GetProcessHeap(), 0, values);
+    SetLastError(ERROR_INVALID_PARAMETER);
+    return FALSE;
+}
+
+static VOID conditional_write_ulong(PBYTE *cursor, ULONG value)
+{
+    memcpy(*cursor, &value, sizeof(value));
+    *cursor += sizeof(value);
+}
+
+static VOID conditional_write_uint64(PBYTE *cursor, ULONGLONG value)
+{
+    memcpy(*cursor, &value, sizeof(value));
+    *cursor += sizeof(value);
+}
+
+static VOID conditional_compile_expression(PCONDITIONAL_ACE_EXPRESSION expression,
+                                           PBYTE application_data)
+{
+    static const BYTE signature[] = {'a', 'r', 't', 'x'};
+    PBYTE cursor = application_data, nested_size;
+    ULONG index, nested_length;
+
+    memcpy(cursor, signature, sizeof(signature));
+    cursor += sizeof(signature);
+
+    *cursor++ = 0xf8; /* Local Attribute */
+    conditional_write_ulong(&cursor, expression->NameLength * sizeof(WCHAR));
+    memcpy(cursor, expression->Name, expression->NameLength * sizeof(WCHAR));
+    cursor += expression->NameLength * sizeof(WCHAR);
+
+    *cursor++ = 0x50; /* Composite literal */
+    nested_size = cursor;
+    cursor += sizeof(ULONG);
+    for (index = 0; index < expression->ValueCount; index++)
+    {
+        PCONDITIONAL_ACE_VALUE value = &expression->Values[index];
+
+        if (value->IsString)
+        {
+            *cursor++ = 0x10; /* Unicode literal */
+            conditional_write_ulong(&cursor, value->StringLength * sizeof(WCHAR));
+            memcpy(cursor, value->String, value->StringLength * sizeof(WCHAR));
+            cursor += value->StringLength * sizeof(WCHAR);
+        }
+        else
+        {
+            *cursor++ = 0x04; /* Signed int64 storage */
+            conditional_write_uint64(&cursor, value->Integer);
+            *cursor++ = 0x03; /* No explicit sign */
+            *cursor++ = 0x02; /* Decimal */
+        }
+    }
+    nested_length = (ULONG)(cursor - nested_size - sizeof(ULONG));
+    memcpy(nested_size, &nested_length, sizeof(nested_length));
+
+    *cursor++ = 0x80; /* Equal */
+    memset(cursor, 0, expression->ApplicationDataLength - (cursor - application_data));
+}
+
 BOOL WINAPI AddConditionalAce(PACL acl, DWORD ace_revision, DWORD ace_flags, UCHAR ace_type,
                                DWORD access_mask, PSID sid, PWCHAR condition, DWORD *length)
 {
-    FIXME("(%p %lx %lx %x %lx %p %s %p) stub\n", acl, ace_revision, ace_flags, ace_type,
-           access_mask, sid, debugstr_w(condition), length);
-    return FALSE;
+    CONDITIONAL_ACE_EXPRESSION expression;
+    ACL_SIZE_INFORMATION size;
+    PACCESS_ALLOWED_CALLBACK_ACE ace;
+    ULONG sid_length, ace_length, required_length;
+    NTSTATUS status;
+
+    TRACE("(%p %lx %lx %x %lx %p %s %p)\n", acl, ace_revision, ace_flags, ace_type,
+          access_mask, sid, debugstr_w(condition), length);
+
+    if (!length || !acl || !IsValidAcl(acl) || !sid || !IsValidSid(sid) ||
+        (ace_revision != ACL_REVISION && ace_revision != ACL_REVISION_DS) ||
+        ace_flags > MAXUCHAR ||
+        (ace_type != ACCESS_ALLOWED_CALLBACK_ACE_TYPE &&
+         ace_type != ACCESS_DENIED_CALLBACK_ACE_TYPE))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!conditional_parse_expression(condition, &expression))
+        return FALSE;
+
+    sid_length = GetLengthSid(sid);
+    ace_length = FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_ACE, SidStart) +
+                 sid_length + expression.ApplicationDataLength;
+    if (ace_length > MAXUSHORT ||
+        !GetAclInformation(acl, &size, sizeof(size), AclSizeInformation) ||
+        size.AclBytesInUse > MAXUSHORT - ace_length)
+    {
+        HeapFree(GetProcessHeap(), 0, expression.Values);
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    required_length = size.AclBytesInUse + ace_length;
+    *length = required_length;
+    if (acl->AclSize < required_length)
+    {
+        HeapFree(GetProcessHeap(), 0, expression.Values);
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    ace = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ace_length);
+    if (!ace)
+    {
+        HeapFree(GetProcessHeap(), 0, expression.Values);
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    ace->Header.AceType = ace_type;
+    ace->Header.AceFlags = (UCHAR)ace_flags;
+    ace->Header.AceSize = (USHORT)ace_length;
+    ace->Mask = access_mask;
+    memcpy(&ace->SidStart, sid, sid_length);
+    conditional_compile_expression(&expression,
+                                   (PBYTE)&ace->SidStart + sid_length);
+
+    status = RtlAddAce(acl, ace_revision, MAXULONG, ace, ace_length);
+    HeapFree(GetProcessHeap(), 0, ace);
+    HeapFree(GetProcessHeap(), 0, expression.Values);
+    if (!NT_SUCCESS(status))
+    {
+        SetLastError(RtlNtStatusToDosError(status));
+        return FALSE;
+    }
+    return TRUE;
 }

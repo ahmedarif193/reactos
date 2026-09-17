@@ -471,6 +471,13 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     /* Check for success */
     if (NT_SUCCESS(Status))
     {
+        {
+            PTOKEN LabelToken = PsReferencePrimaryToken(Process);
+            SeSetObjectMandatoryLabel(Thread,
+                                      SepGetTokenIntegrityRid(LabelToken),
+                                      SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP);
+            ObFastDereferenceObject(&Process->Token, LabelToken);
+        }
         /* Wrap in SEH to protect against bad user-mode pointers */
         _SEH2_TRY
         {

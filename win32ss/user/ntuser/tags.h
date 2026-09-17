@@ -300,3 +300,4 @@
 #define USERTAG_WOWPROCESSINFO           'pwsU'
 #define USERTAG_WOWTHREADINFO            'twsU'
 #define USERTAG_DEFERREDFREE             'rfdU'
+#define USERTAG_MSGFILTER               'tfsU'

@@ -109,6 +109,14 @@ PSID WINAPI GetUserSid(HANDLE);
 BOOL WINAPI CopySystemProfile(ULONG);
 /* end private */
 
+#if (_WIN32_WINNT >= 0x0602)
+HRESULT WINAPI CreateAppContainerProfile(PCWSTR, PCWSTR, PCWSTR, PSID_AND_ATTRIBUTES, DWORD, PSID*);
+HRESULT WINAPI DeleteAppContainerProfile(PCWSTR);
+HRESULT WINAPI DeriveAppContainerSidFromAppContainerName(PCWSTR, PSID*);
+HRESULT WINAPI GetAppContainerFolderPath(_In_ PCWSTR,_Outptr_ PWSTR*);
+HRESULT WINAPI GetAppContainerRegistryLocation(DWORD, HKEY *);
+#endif
+
 #if(WINVER >= 0x0500)
 BOOL WINAPI DeleteProfileA(LPCSTR, LPCSTR, LPCSTR);
 BOOL WINAPI DeleteProfileW(LPCWSTR, LPCWSTR, LPCWSTR);

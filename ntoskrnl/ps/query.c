@@ -1437,7 +1437,10 @@ NtQueryInformationProcess(
 
                 if (Information.Policy != PSP_DYNAMIC_CODE_POLICY &&
                     Information.Policy != PSP_STRICT_HANDLE_CHECK_POLICY &&
-                    Information.Policy != PSP_SIGNATURE_POLICY)
+                    Information.Policy != PSP_SIGNATURE_POLICY &&
+                    Information.Policy != PSP_SYSTEM_CALL_DISABLE_POLICY &&
+                    Information.Policy != PSP_CHILD_PROCESS_POLICY &&
+                    !PspIsExtendedMitigationPolicy(Information.Policy))
                 {
                     Status = STATUS_NOT_SUPPORTED;
                     break;
@@ -1457,6 +1460,18 @@ NtQueryInformationProcess(
             else if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_SIGNATURE_POLICY)
             {
                 Flags = ReadAcquire(&Process->SignatureMitigationPolicy);
+            }
+            else if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_SYSTEM_CALL_DISABLE_POLICY)
+            {
+                Flags = ReadAcquire(&Process->SystemCallDisablePolicy);
+            }
+            else if (ProcessInformationClass == ProcessMitigationPolicy && Information.Policy == PSP_CHILD_PROCESS_POLICY)
+            {
+                Flags = ReadAcquire(&Process->ChildProcessPolicy);
+            }
+            else if (ProcessInformationClass == ProcessMitigationPolicy && PspIsExtendedMitigationPolicy(Information.Policy))
+            {
+                Flags = ReadAcquire(&Process->ExtendedMitigationPolicy[Information.Policy]);
             }
             else
             {
@@ -2621,6 +2636,51 @@ NtSetInformationProcess(
                                                     OldPolicy) != OldPolicy);
                 break;
             }
+            if (Information.Policy == PSP_SYSTEM_CALL_DISABLE_POLICY)
+            {
+                LONG OldPolicy;
+
+                if (Flags & ~3)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+                do
+                {
+                    OldPolicy = ReadAcquire(&Process->SystemCallDisablePolicy);
+                    if ((OldPolicy & 1) && !(Flags & 1))
+                    {
+                        Status = STATUS_ACCESS_DENIED;
+                        break;
+                    }
+                } while (InterlockedCompareExchange(&Process->SystemCallDisablePolicy, Flags, OldPolicy) != OldPolicy);
+                break;
+            }
+            if (Information.Policy == PSP_CHILD_PROCESS_POLICY)
+            {
+                LONG OldPolicy;
+
+                if (Flags & ~7)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+                do
+                {
+                    OldPolicy = ReadAcquire(&Process->ChildProcessPolicy);
+                    if ((OldPolicy & 1) && !(Flags & 1))
+                    {
+                        Status = STATUS_ACCESS_DENIED;
+                        break;
+                    }
+                } while (InterlockedCompareExchange(&Process->ChildProcessPolicy, Flags, OldPolicy) != OldPolicy);
+                break;
+            }
+            if (PspIsExtendedMitigationPolicy(Information.Policy))
+            {
+                Status = PspSetExtendedMitigationPolicy(Process, Information.Policy, Flags);
+                break;
+            }
             if (Information.Policy != PSP_STRICT_HANDLE_CHECK_POLICY)
             {
                 Status = STATUS_NOT_SUPPORTED;
@@ -2638,7 +2698,7 @@ NtSetInformationProcess(
                 Status = STATUS_PROCESS_IS_TERMINATING;
                 break;
             }
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) && (defined(_M_ARM64) || defined(_M_IX86))
+#if (NTDDI_VERSION >= NTDDI_LONGHORN) && (defined(_M_ARM64) || defined(_M_IX86) || defined(_M_AMD64))
             if (Flags)
                 InterlockedOr((PLONG)&HandleTable->Flags, OB_HANDLE_EXCEPTIONS_ENABLED);
             else if (ProcessInformationClass == ProcessMitigationPolicy && HandleTable->EnableHandleExceptions)
@@ -3411,6 +3471,69 @@ NtSetInformationThread(
             }
 
             /* Dereference the thread */
+            ObDereferenceObject(Thread);
+            break;
+        }
+
+        case ThreadGroupInformation:
+        {
+            GROUP_AFFINITY GroupAffinity;
+            KAFFINITY CombinedAffinity;
+
+            if (ThreadInformationLength != sizeof(GROUP_AFFINITY))
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            _SEH2_TRY
+            {
+                GroupAffinity = *(PGROUP_AFFINITY)ThreadInformation;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+                _SEH2_YIELD(break);
+            }
+            _SEH2_END;
+
+            if (GroupAffinity.Group != 0 || !GroupAffinity.Mask ||
+                GroupAffinity.Reserved[0] || GroupAffinity.Reserved[1] || GroupAffinity.Reserved[2])
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            Status = ObReferenceObjectByHandle(ThreadHandle,
+                                               THREAD_SET_INFORMATION,
+                                               PsThreadType,
+                                               PreviousMode,
+                                               (PVOID*)&Thread,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            Process = (PEPROCESS)Thread->ThreadsProcess;
+            if (ExAcquireRundownProtection(&Process->RundownProtect))
+            {
+                KeEnterCriticalRegion();
+                ExAcquirePushLockShared(&Process->ProcessLock);
+
+                CombinedAffinity = GroupAffinity.Mask & Process->Pcb.Affinity;
+                if (CombinedAffinity != GroupAffinity.Mask)
+                    Status = STATUS_INVALID_PARAMETER;
+                else
+                    KeSetAffinityThread(&Thread->Tcb, CombinedAffinity);
+
+                ExReleasePushLockShared(&Process->ProcessLock);
+                KeLeaveCriticalRegion();
+                ExReleaseRundownProtection(&Process->RundownProtect);
+            }
+            else
+            {
+                Status = STATUS_PROCESS_IS_TERMINATING;
+            }
+
             ObDereferenceObject(Thread);
             break;
         }
@@ -4887,7 +5010,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               THREAD_QUERY_LIMITED_INFORMATION,
+                                               Access,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,

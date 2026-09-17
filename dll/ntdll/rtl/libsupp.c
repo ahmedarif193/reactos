@@ -1312,4 +1312,85 @@ RtlGetTickCount(VOID)
     return KiTickCountToMs(TickCount);
 }
 
+static
+NTSTATUS
+RtlpQueryTokenBuffer(
+    _In_ HANDLE Token,
+    _In_ TOKEN_INFORMATION_CLASS Class,
+    _Out_ PVOID *Buffer)
+{
+    ULONG Length = 0;
+    NTSTATUS Status;
+
+    *Buffer = NULL;
+    Status = NtQueryInformationToken(Token, Class, NULL, 0, &Length);
+    if (Status != STATUS_BUFFER_TOO_SMALL && !NT_SUCCESS(Status))
+        return Status;
+    *Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length);
+    if (!*Buffer)
+        return STATUS_NO_MEMORY;
+    Status = NtQueryInformationToken(Token, Class, *Buffer, Length, &Length);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, *Buffer);
+        *Buffer = NULL;
+    }
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+RtlCheckTokenMembershipEx(
+    _In_opt_ HANDLE TokenHandle,
+    _In_ PSID SidToCheck,
+    _In_ ULONG Flags,
+    _Out_ PBOOLEAN IsMember)
+{
+    HANDLE Token = TokenHandle;
+    BOOLEAN Opened = FALSE;
+    PTOKEN_USER User = NULL;
+    PTOKEN_GROUPS Groups = NULL;
+    ULONG Index;
+    NTSTATUS Status;
+
+    if (!IsMember || !SidToCheck || (Flags & ~3))
+        return STATUS_INVALID_PARAMETER;
+    *IsMember = FALSE;
+
+    if (!Token)
+    {
+        Status = NtOpenThreadTokenEx(NtCurrentThread(), TOKEN_QUERY, TRUE, 0, &Token);
+        if (!NT_SUCCESS(Status))
+            Status = NtOpenProcessTokenEx(NtCurrentProcess(), TOKEN_QUERY, 0, &Token);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Opened = TRUE;
+    }
+
+    Status = RtlpQueryTokenBuffer(Token, TokenUser, (PVOID*)&User);
+    if (!NT_SUCCESS(Status)) goto Quit;
+    Status = RtlpQueryTokenBuffer(Token, TokenGroups, (PVOID*)&Groups);
+    if (!NT_SUCCESS(Status)) goto Quit;
+
+    if (RtlEqualSid(User->User.Sid, SidToCheck))
+        *IsMember = TRUE;
+    for (Index = 0; Index < Groups->GroupCount && !*IsMember; Index++)
+    {
+        if ((Groups->Groups[Index].Attributes & SE_GROUP_ENABLED) &&
+            !(Groups->Groups[Index].Attributes & SE_GROUP_USE_FOR_DENY_ONLY) &&
+            RtlEqualSid(Groups->Groups[Index].Sid, SidToCheck))
+        {
+            *IsMember = TRUE;
+        }
+    }
+
+    Status = STATUS_SUCCESS;
+
+Quit:
+    if (Groups) RtlFreeHeap(RtlGetProcessHeap(), 0, Groups);
+    if (User) RtlFreeHeap(RtlGetProcessHeap(), 0, User);
+    if (Opened) NtClose(Token);
+    return Status;
+}
+
 /* EOF */

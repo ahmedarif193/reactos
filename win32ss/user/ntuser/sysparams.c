@@ -663,6 +663,30 @@ SpiGet(PVOID pvParam, PVOID pvData, ULONG cbSize, FLONG fl)
     return SpiMemCopy(pvParam, pvData, cbSize, fl & SPIF_PROTECT);
 }
 
+static
+BOOL
+SpiIsSetAction(UINT uiAction)
+{
+    static const USHORT SetActions[] =
+    {
+        2, 4, 6, 11, 13, 15, 17, 19, 20, 21, 23, 24, 26, 28, 29, 30, 32, 33, 34,
+        36, 37, 42, 44, 46, 47, 49, 51, 53, 55, 57, 59, 61, 63, 65, 67, 69, 71,
+        73, 75, 76, 77, 78, 81, 82, 85, 86, 87, 88, 90, 91, 93, 96, 97, 99, 101,
+        103, 105, 107, 109, 111, 113, 117, 119, 121, 123, 125, 127
+    };
+    ULONG i;
+
+    if (uiAction >= 0x1000)
+        return (uiAction & 1) != 0;
+
+    for (i = 0; i < RTL_NUMBER_OF(SetActions); i++)
+    {
+        if (SetActions[i] == uiAction)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static inline
 UINT_PTR
 SpiSet(PVOID pvData, PVOID pvParam, ULONG cbSize, FLONG fl)
@@ -2499,6 +2523,12 @@ UserSystemParametersInfo(
     }
 
     /* Do the actual operation */
+    if (SpiIsSetAction(uiAction) && IntIsJobUiLimited(JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS))
+    {
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+
     ulResult = SpiGetSet(uiAction, uiParam, pvParam, fWinIni);
 
     /* Did we change something? */
