@@ -40,6 +40,7 @@ WsSockCleanup(VOID)
     {
         /* Destroy it */
         WahDestroyHandleContextTable(WsSockHandleTable);
+        WsSockHandleTable = NULL;
     }
 }
 
@@ -216,6 +217,8 @@ INT
 WSAAPI
 WsSockDisassociateHandle(IN PWSSOCKET Socket)
 {
+    if (!WsSockHandleTable) return WSANOTINITIALISED;
+
     /* Remove it from the list */
     return WahRemoveHandleContext(WsSockHandleTable, (PWAH_HANDLE)Socket);
 }
@@ -229,6 +232,8 @@ WsSockAssociateHandle(IN PWSSOCKET Socket,
     INT ErrorCode = ERROR_SUCCESS;
     PWSSOCKET OldSocket;
 
+    if (!WsSockHandleTable) return WSANOTINITIALISED;
+
     /* Save the socket and provider */
     Socket->IsProvider = IsProvider;
     Socket->Handle = (HANDLE)Handle;
@@ -238,15 +243,15 @@ WsSockAssociateHandle(IN PWSSOCKET Socket,
                                                   (PWAH_HANDLE)Socket);
 
     /* Check if a socket already existed */
-    if (OldSocket != Socket)
-    {
-        /* We'll dereference it */
-        WsSockDereference(OldSocket);
-    }
-    else if (!OldSocket)
+    if (!OldSocket)
     {
         /* No memory to allocate it */
         ErrorCode = WSAENOBUFS;
+    }
+    else if (OldSocket != Socket)
+    {
+        /* We'll dereference it */
+        WsSockDereference(OldSocket);
     }
 
     /* Return */

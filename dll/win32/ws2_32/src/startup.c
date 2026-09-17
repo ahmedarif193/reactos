@@ -212,16 +212,16 @@ WSAStartup(IN WORD wVersionRequested,
         CurrentProcess = WsGetProcess();
         if (CurrentProcess) break;
 
-        /* Setup the process object support */
-        ErrorCode = WsProcStartup();
-        if (ErrorCode != ERROR_SUCCESS) break;
-
-        /* Setup the process object support */
+        /* Setup the socket object support */
         ErrorCode = WsSockStartup();
         if (ErrorCode != ERROR_SUCCESS) break;
 
-        /* Setup the process object support */
+        /* Setup the thread object support */
         ErrorCode = WsThreadStartup();
+        if (ErrorCode != ERROR_SUCCESS) break;
+
+        /* Setup the process object support */
+        ErrorCode = WsProcStartup();
         if (ErrorCode != ERROR_SUCCESS) break;
 
         /* Try getting the process now */
