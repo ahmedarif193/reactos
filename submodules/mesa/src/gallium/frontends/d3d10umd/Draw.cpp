@@ -56,15 +56,19 @@ ClampedUAdd(unsigned a,
 static void
 update_velems(Device *pDevice)
 {
+   struct cso_velems_state empty_state = {};
+   struct cso_velems_state *state;
+
    if (!pDevice->velems_changed)
       return;
 
-   if(pDevice->element_layout) {
-      struct cso_velems_state *state = &pDevice->element_layout->state;
+   state = pDevice->element_layout ? &pDevice->element_layout->state
+                                   : &empty_state;
+   if (pDevice->element_layout) {
       for (unsigned i = 0; i < state->count; i++)
          state->velems[i].src_stride = pDevice->vertex_strides[state->velems[i].vertex_buffer_index];
-      cso_set_vertex_elements(pDevice->cso, state);
    }
+   cso_set_vertex_elements(pDevice->cso, state);
 
    pDevice->velems_changed = false;
 }
