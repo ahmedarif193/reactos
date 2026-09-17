@@ -186,6 +186,11 @@ MiIsEcCodeAddress(
 #ifndef PTE_PROTECT_MASK
 #error Missing ARM64 PTE definitions
 #endif
+#elif defined(_M_RISCV64)
+/* Hardware access definitions are supplied by internal/riscv64/mm.h. */
+#ifndef PTE_PROTECT_MASK
+#error Missing RISC-V PTE definitions
+#endif
 #else
 #error Define these please!
 #endif
@@ -212,6 +217,11 @@ MiIsEcCodeAddress(
 extern const ULONG_PTR MmProtectToPteMask[32];
 extern const ULONG MmProtectToValue[32];
 
+/* Preserve the existing encoding unless the architecture supplies its PFN mask. */
+#ifndef MI_TRANSITION_PFN_MASK
+#define MI_TRANSITION_PFN_MASK (~0xFFF)
+#endif
+
 //
 // Assertions for session images, addresses, and PTEs
 //
@@ -224,6 +234,7 @@ extern const ULONG MmProtectToValue[32];
 #define MI_IS_SESSION_PTE(Pte) \
     ((((PMMPTE)Pte) >= MiSessionBasePte) && (((PMMPTE)Pte) < MiSessionLastPte))
 
+#ifndef MI_IS_PAGE_TABLE_ADDRESS
 #define MI_IS_PAGE_TABLE_ADDRESS(Address) \
     (((PVOID)(Address) >= (PVOID)PTE_BASE) && ((PVOID)(Address) <= (PVOID)PTE_TOP))
 
@@ -232,6 +243,7 @@ extern const ULONG MmProtectToValue[32];
 
 #define MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address) \
     (((PVOID)(Address) >= (PVOID)PTE_BASE) && ((PVOID)(Address) <= (PVOID)MmHyperSpaceEnd))
+#endif
 
 //
 // Creates a software PTE with the given protection
@@ -798,7 +810,7 @@ MiIsUserPte(PVOID Address)
 {
     return ((ULONG_PTR)Address >> 34) == 0x3FFFFDA0ULL;
 }
-#else
+#elif !defined(_M_RISCV64)
 FORCEINLINE
 BOOLEAN
 MiIsUserPde(PVOID Address)
@@ -818,6 +830,7 @@ MiIsUserPte(PVOID Address)
 //
 // Figures out the hardware bits for a PTE
 //
+#if !defined(_M_RISCV64)
 FORCEINLINE
 ULONG_PTR
 MiDetermineUserGlobalPteMask(IN PVOID PointerPte)
@@ -968,7 +981,9 @@ MI_MAKE_HARDWARE_PTE_USER(IN PMMPTE NewPte,
 #endif
 }
 
-#if !defined(_M_AMD64) && !defined(_M_ARM64)
+#endif /* !_M_RISCV64: the address-identity adapter supplies these helpers. */
+
+#if !defined(_M_AMD64) && !defined(_M_ARM64) && !defined(_M_RISCV64)
 //
 // Builds a Prototype PTE for the address of the PTE
 //
@@ -1172,6 +1187,9 @@ MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
 #if defined(_M_ARM64)
     MI_ARM64_FLUSH_VALID_PTE(PointerPte);
 #endif
+#if defined(_M_RISCV64)
+    MI_ARCH_SYNC_PTE_WRITE(PointerPte);
+#endif
 }
 
 //
@@ -1190,6 +1208,9 @@ MI_UPDATE_VALID_PTE(IN PMMPTE PointerPte,
 #if defined(_M_ARM64)
     MiArm64CleanEntryToPoC(PointerPte);
 #endif
+#if defined(_M_RISCV64)
+    MI_ARCH_SYNC_PTE_WRITE(PointerPte);
+#endif
 }
 
 //
@@ -1205,6 +1226,9 @@ MI_WRITE_INVALID_PTE(IN PMMPTE PointerPte,
     *PointerPte = InvalidPte;
 #if defined(_M_ARM64)
     MiArm64CleanEntryToPoC(PointerPte);
+#endif
+#if defined(_M_RISCV64)
+    MI_ARCH_SYNC_PTE_WRITE(PointerPte);
 #endif
 }
 
@@ -1237,6 +1261,9 @@ MI_ERASE_PTE(IN PMMPTE PointerPte)
 #if defined(_M_ARM64)
     MiArm64CleanEntryToPoC(PointerPte);
 #endif
+#if defined(_M_RISCV64)
+    MI_ARCH_SYNC_PTE_WRITE(PointerPte);
+#endif
 }
 
 FORCEINLINE
@@ -1268,6 +1295,9 @@ MI_WRITE_VALID_PDE(IN PMMPDE PointerPde,
 #endif
     ASSERT(TempPde.u.Hard.Valid == 1);
     *PointerPde = TempPde;
+#if defined(_M_RISCV64)
+    MI_ARCH_SYNC_PTE_WRITE(PointerPde);
+#endif
 #if defined(_M_ARM64)
     MiArm64SyncKernelHierarchyEntryWrite((PMMPTE)PointerPde);
 
@@ -1320,6 +1350,9 @@ MI_WRITE_INVALID_PDE(IN PMMPDE PointerPde,
     ASSERT(InvalidPde.u.Soft.Protection == MM_EXECUTE_READWRITE);
 #endif
     *PointerPde = InvalidPde;
+#if defined(_M_RISCV64)
+    MI_ARCH_SYNC_PTE_WRITE(PointerPde);
+#endif
 #if defined(_M_ARM64)
     MiArm64SyncKernelHierarchyEntryWrite((PMMPTE)PointerPde);
 
@@ -2370,7 +2403,7 @@ MiReserveNonPagedPoolExpansionPtes(
     IN ULONG NumberOfPtes
 );
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
 BOOLEAN
 NTAPI
 MiEnsureSystemPtesBacked(
@@ -2384,7 +2417,7 @@ MiEnsureNonPagedPoolExpansionPtesBacked(
     _In_ ULONG NumberOfPtes);
 #endif
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
 BOOLEAN
 NTAPI
 MiEnsureSessionPageTablesBacked(
@@ -3036,7 +3069,9 @@ MiIncrementPageTableReferences(IN PVOID Address)
     PMMPFN Pfn;
 
     /* We should not tinker with this one. */
+#if (_MI_PAGING_LEVELS >= 4)
     ASSERT(PointerPde != (PMMPDE)PXE_SELFMAP);
+#endif
     DPRINT("Incrementing %p from %p\n", Address, _ReturnAddress());
 
     /* Make sure we're locked */
@@ -3062,7 +3097,9 @@ MiDecrementPageTableReferences(IN PVOID Address)
     PMMPFN Pfn;
 
     /* We should not tinker with this one. */
+#if (_MI_PAGING_LEVELS >= 4)
     ASSERT(PointerPde != (PMMPDE)PXE_SELFMAP);
+#endif
 
     DPRINT("Decrementing %p from %p\n", PointerPde, _ReturnAddress());
 

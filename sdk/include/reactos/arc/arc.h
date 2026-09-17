@@ -671,7 +671,14 @@ typedef struct _LOADER_PARAMETER_EXTENSION
 #elif (NTDDI_VERSION == NTDDI_WINBLUE)
     ULONG Reserved:25;
 #elif (NTDDI_VERSION == NTDDI_WIN10)
+#if defined(__REACTOS__)
+    /* Keep the ReactOS loader flags within this version's existing flag word. */
+    ULONG BootViaWinload:1;
+    ULONG BootViaEFI:1;
+    ULONG Reserved:20;
+#else
     ULONG Reserved:22;
+#endif
 #elif defined(__REACTOS__)
     ULONG BootViaWinload:1;
     ULONG BootViaEFI:1;
@@ -833,6 +840,82 @@ typedef struct _ARM64_LOADER_BLOCK
 #endif
 } ARM64_LOADER_BLOCK, *PARM64_LOADER_BLOCK;
 
+/* ReactOS-private RISC-V loader payload. No Microsoft NT/RISC-V loader
+ * contract exists; version and size must be checked before adding fields.
+ * Version 3 (ABI-126) added the early console and device ranges and requires
+ * a direct map built only from 4 KiB leaves (ABI-125). Version 4 adds the
+ * resident per-hart DPC/interrupt stack. */
+#define RISCV64_LOADER_BLOCK_VERSION                 4
+#define RISCV64_LOADER_FLAG_BOOT_HART_VALID          0x0000000000000001ULL
+#define RISCV64_LOADER_FLAG_SV39                     0x0000000000000002ULL
+#define RISCV64_LOADER_FLAG_IDENTITY_MAP_ACTIVE      0x0000000000000004ULL
+#define RISCV64_LOADER_FLAG_BOOTSTRAP_RWX            0x0000000000000008ULL
+#define RISCV64_LOADER_FLAG_DEVICE_TREE_VALID         0x0000000000000010ULL
+/* The direct map contains only 4 KiB leaves, so every direct-map page has a
+ * final-level PTE that the kernel page-table window can address. */
+#define RISCV64_LOADER_FLAG_DIRECT_MAP_4K             0x0000000000000020ULL
+/* EarlyConsole* fields describe a firmware-selected console device. */
+#define RISCV64_LOADER_FLAG_EARLY_CONSOLE_VALID       0x0000000000000040ULL
+#define RISCV64_LOADER_REQUIRED_FLAGS                 0x000000000000003FULL
+#define RISCV64_LOADER_OPTIONAL_FLAGS                 0x0000000000000040ULL
+#define RISCV64_LOADER_PAGE_SHIFT                     12
+#define RISCV64_LOADER_PAGE_SIZE                      (1ULL << RISCV64_LOADER_PAGE_SHIFT)
+#define RISCV64_LOADER_SATP_MODE_SV39                 (8ULL << 60)
+#define RISCV64_LOADER_SATP_MODE_MASK                 (0xFULL << 60)
+#define RISCV64_LOADER_SATP_ASID_MASK                 (0xFFFFULL << 44)
+#define RISCV64_LOADER_SATP_PPN_MASK                  ((1ULL << 44) - 1)
+#define RISCV64_LOADER_DIRECT_MAP_BASE                0xFFFFFFE000000000ULL
+#define RISCV64_LOADER_DIRECT_MAP_SIZE                0x0000002000000000ULL
+#define RISCV64_LOADER_BOOT_PROTOCOL_MINIMUM_REVISION 0x00010000ULL
+#define RISCV64_LOADER_MAX_EARLY_DEVICE_RANGES        8
+
+/* Early console register interfaces (ABI-126). Values are wire constants. */
+#define RISCV64_EARLY_CONSOLE_NONE                    0
+#define RISCV64_EARLY_CONSOLE_NS16550                 1 /* 8250/16550 register file, reg-shift/reg-io-width applied */
+#define RISCV64_EARLY_CONSOLE_SBI_DEBUG               2 /* SBI DBCN extension, no MMIO */
+
+/* Physical device windows the loader mapped into the direct map so the
+ * kernel can use them before MM exists (the early console among them). */
+typedef struct _RISCV64_LOADER_EARLY_DEVICE_RANGE
+{
+    ULONGLONG BaseAddress;
+    ULONGLONG Length;
+} RISCV64_LOADER_EARLY_DEVICE_RANGE, *PRISCV64_LOADER_EARLY_DEVICE_RANGE;
+
+typedef struct _RISCV64_LOADER_BLOCK
+{
+#if defined(_RISCV64_) || defined(_M_RISCV64)
+    ULONG Version;
+    ULONG Size;
+    ULONGLONG Flags;
+    ULONGLONG FirmwareBootProtocolRevision;
+    ULONGLONG BootHartId;
+    ULONGLONG PageTableRoot;
+    ULONGLONG Satp;
+    ULONGLONG DirectMapBase;
+    ULONGLONG DirectMapSize;
+    ULONGLONG HighestMappedPhysicalAddress;
+    ULONGLONG PcrPage;
+    ULONGLONG DpcStack;
+    ULONGLONG SharedUserData;
+    ULONGLONG DeviceTree;
+    ULONGLONG DeviceTreeSize;
+    /* Version 3: firmware-described early console (from /chosen/stdout-path). */
+    ULONGLONG EarlyConsoleAddress;       /* Physical MMIO base, 0 if none. */
+    ULONGLONG EarlyConsoleLength;        /* Length of the register window. */
+    ULONGLONG EarlyConsoleClockFrequency;/* Hz, 0 if unknown (never reprogram). */
+    ULONG EarlyConsoleInterface;         /* RISCV64_EARLY_CONSOLE_* */
+    ULONG EarlyConsoleRegisterShift;     /* reg-shift, default 0. */
+    ULONG EarlyConsoleRegisterWidth;     /* reg-io-width in bytes, default 1. */
+    ULONG EarlyConsoleBaudRate;          /* stdout-path suffix or current-speed, 0 if unknown. */
+    ULONG EarlyDeviceRangeCount;
+    ULONG Reserved0;
+    RISCV64_LOADER_EARLY_DEVICE_RANGE EarlyDeviceRanges[RISCV64_LOADER_MAX_EARLY_DEVICE_RANGES];
+#else
+    ULONG PlaceHolder;
+#endif
+} RISCV64_LOADER_BLOCK, *PRISCV64_LOADER_BLOCK;
+
 //
 // Firmware information block (NT6+)
 //
@@ -955,6 +1038,7 @@ typedef struct _LOADER_PARAMETER_BLOCK
         PPC_LOADER_BLOCK PowerPC;
         ARM_LOADER_BLOCK Arm;
         ARM64_LOADER_BLOCK Arm64;
+        RISCV64_LOADER_BLOCK Riscv64;
     } u;
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     FIRMWARE_INFORMATION_LOADER_BLOCK FirmwareInformation;

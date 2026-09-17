@@ -308,7 +308,7 @@ static void __stdcall do_xor_basic(uint8_t* buf1, uint8_t* buf2, uint32_t len) {
     }
 #endif
 
-#if defined(_AMD64_) || defined(_ARM64_)
+#if defined(_WIN64)
     while (len > 8) {
         *(uint64_t*)buf1 ^= *(uint64_t*)buf2;
         buf1 += 8;

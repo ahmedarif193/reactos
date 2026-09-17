@@ -2576,7 +2576,11 @@ MiSetSystemCodeProtection(
     for (PointerPte = FirstPte; PointerPte <= LastPte; PointerPte++)
     {
         /* Read the PTE */
+#if defined(_M_RISCV64)
+        TempPte.u.Long = __atomic_load_n(&PointerPte->u.Long, __ATOMIC_ACQUIRE);
+#else
         TempPte = *PointerPte;
+#endif
 
         /* Make sure it's valid */
         if (TempPte.u.Hard.Valid != 1)
@@ -2589,6 +2593,28 @@ MiSetSystemCodeProtection(
         }
 
         /* Update the protection */
+#if defined(_M_RISCV64)
+        {
+            ULONG64 Previous = TempPte.u.Long;
+            ULONG64 Access = MI_RISCV_PTE_READ;
+
+            ASSERT(TempPte.u.Hard.Read || TempPte.u.Hard.Execute);
+
+            /* Keep the common readable-image policy. RISC-V has a positive
+             * execute bit and requires read permission for writable leaves. */
+            if (BooleanFlagOn(Protection, IMAGE_SCN_MEM_WRITE)) Access |= MI_RISCV_PTE_WRITE;
+            if (BooleanFlagOn(Protection, IMAGE_SCN_MEM_EXECUTE)) Access |= MI_RISCV_PTE_EXECUTE;
+
+            /* Image mapping lifetime is owned by the caller. Preserve any
+             * concurrent hardware A/D changes while updating only R/W/X. */
+            do
+            {
+                ASSERT(Previous & MI_RISCV_PTE_VALID);
+                ASSERT((Previous & MI_RISCV_PTE_PFN_MASK) == (TempPte.u.Long & MI_RISCV_PTE_PFN_MASK));
+                TempPte.u.Long = (Previous & ~PTE_EXECUTE_READWRITE) | Access;
+            } while (!__atomic_compare_exchange_n(&PointerPte->u.Long, &Previous, TempPte.u.Long, FALSE, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+        }
+#else
         TempPte.u.Hard.Write = BooleanFlagOn(Protection, IMAGE_SCN_MEM_WRITE);
 #if defined(_M_ARM64)
         TempPte.u.Hard.NotDirty = !TempPte.u.Hard.Writable;
@@ -2607,6 +2633,7 @@ MiSetSystemCodeProtection(
 #endif
 
         MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+#endif
     }
 
     /* Flush it all */

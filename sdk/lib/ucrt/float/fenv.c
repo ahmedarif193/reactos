@@ -176,6 +176,95 @@ static void fenv_hw_reset(void)
     __setfpenv(0);
 }
 
+#elif defined(_M_RISCV64) || (defined(__riscv) && (__riscv_xlen == 64))
+
+#define FENV_UNITS 1
+
+/*
+ * The standard RISC-V floating-point extensions accrue the same five IEEE
+ * exception conditions used by the UCRT, but do not provide exception trap
+ * enables.  Report every exception as masked.  Bit 15 is private to the
+ * opaque fenv_t encoding and marks an frm value that the four C rounding-mode
+ * constants cannot represent.  The low two abstract rounding bits then retain
+ * frm[1:0], allowing fegetenv/fesetenv to round-trip frm values 4 through 7.
+ */
+#define FENV_RISCV_NON_C_RM 0x8000
+#define FENV_RISCV_FFLAGS_MASK 0x1F
+#define FENV_RISCV_FRM_SHIFT 5
+#define FENV_RISCV_FRM_MASK 0x07
+
+static const struct { unsigned char flag_shift, rc_shift; unsigned short extra; unsigned long cw_mask; }
+fenv_unit[FENV_UNITS] =
+{
+    { 0, 0, FENV_RISCV_NON_C_RM, _MCW_RC },
+};
+
+static unsigned int riscv_round_from_frm(unsigned int frm)
+{
+    switch (frm)
+    {
+        case 0: return FE_TONEAREST;
+        case 1: return FE_TOWARDZERO;
+        case 2: return FE_DOWNWARD;
+        case 3: return FE_UPWARD;
+        default:
+            return FENV_RISCV_NON_C_RM | ((frm & 3) << 8);
+    }
+}
+
+static unsigned int riscv_frm_from_round(unsigned int ctl)
+{
+    if (ctl & FENV_RISCV_NON_C_RM)
+        return 4 | ((ctl & FE_ROUND_MASK) >> 8);
+
+    switch (ctl & FE_ROUND_MASK)
+    {
+        case FE_TOWARDZERO: return 1;
+        case FE_DOWNWARD: return 2;
+        case FE_UPWARD: return 3;
+        default: return 0;
+    }
+}
+
+static unsigned int riscv_read_fcsr(void)
+{
+    unsigned int fcsr;
+
+    __asm__ __volatile__("frcsr %0" : "=r"(fcsr));
+    return fcsr;
+}
+
+static void riscv_write_frm(unsigned int frm)
+{
+    __asm__ __volatile__("fsrm %0" :: "r"(frm));
+}
+
+static void riscv_write_fflags(unsigned int flags)
+{
+    __asm__ __volatile__("fsflags %0" :: "r"(flags));
+}
+
+static void fenv_hw_get(unsigned int* ctl, unsigned int* stat)
+{
+    unsigned int fcsr = riscv_read_fcsr();
+
+    ctl[0] = FENV_FLAG_MASK |
+             riscv_round_from_frm((fcsr >> FENV_RISCV_FRM_SHIFT) & FENV_RISCV_FRM_MASK);
+    stat[0] = fcsr & FENV_RISCV_FFLAGS_MASK;
+}
+
+static void fenv_hw_set(const unsigned int* ctl, const unsigned int* stat)
+{
+    riscv_write_frm(riscv_frm_from_round(ctl[0]));
+    riscv_write_fflags(stat[0] & FENV_RISCV_FFLAGS_MASK);
+}
+
+static void fenv_hw_reset(void)
+{
+    riscv_write_frm(0);
+    riscv_write_fflags(0);
+}
+
 #elif defined(_M_AMD64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
 
 #ifdef _MSC_VER
@@ -541,6 +630,10 @@ int __cdecl fegetround(void)
     unsigned int ctl[FENV_UNITS], stat[FENV_UNITS];
 
     fenv_hw_get(ctl, stat);
+#ifdef FENV_RISCV_NON_C_RM
+    if (ctl[0] & FENV_RISCV_NON_C_RM)
+        return -1;
+#endif
     return ctl[0] & FE_ROUND_MASK;
 }
 
@@ -554,7 +647,11 @@ int __cdecl fesetround(int round)
 
     fenv_hw_get(ctl, stat);
     for (unit = 0; unit < FENV_UNITS; unit++)
+#ifdef FENV_RISCV_NON_C_RM
+        ctl[unit] = (ctl[unit] & ~(FE_ROUND_MASK | FENV_RISCV_NON_C_RM)) | round;
+#else
         ctl[unit] = (ctl[unit] & ~FE_ROUND_MASK) | round;
+#endif
     fenv_hw_set(ctl, stat);
     return 0;
 }
@@ -698,8 +795,14 @@ static unsigned int apply_cw(unsigned int ctl, unsigned int newval,
                              unsigned int mask, int unit)
 {
     unsigned int m = mask & fenv_unit[unit].cw_mask;
+    unsigned int result;
 
-    return ctl_from_cw((cw_from_ctl(ctl) & ~m) | (newval & m));
+    result = ctl_from_cw((cw_from_ctl(ctl) & ~m) | (newval & m));
+#ifdef FENV_RISCV_NON_C_RM
+    if (!(m & _MCW_RC))
+        result |= ctl & FENV_RISCV_NON_C_RM;
+#endif
+    return result;
 }
 
 unsigned int __cdecl _control87(unsigned int newval, unsigned int mask)
@@ -715,7 +818,12 @@ unsigned int __cdecl _control87(unsigned int newval, unsigned int mask)
         fenv_hw_set(ctl, stat);
         fenv_hw_get(ctl, stat);
     }
+#ifdef FENV_RISCV_NON_C_RM
+    return cw_from_ctl(ctl[0]) |
+           ((ctl[0] & FENV_RISCV_NON_C_RM) ? _EM_AMBIGUIOUS : 0);
+#else
     return cw_from_ctl(ctl[0]);
+#endif
 }
 
 unsigned int __cdecl _controlfp(unsigned int newval, unsigned int mask)

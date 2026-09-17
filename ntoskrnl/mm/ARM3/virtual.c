@@ -3850,6 +3850,12 @@ NtReadVirtualMemory(IN HANDLE ProcessHandle,
     SIZE_T BytesRead = 0;
     PAGED_CODE();
 
+#if defined(_M_RISCV64)
+    if (PreviousMode == UserMode && ProcessHandle == NtCurrentProcess())
+        return KiRiscvReadCurrentProcess(BaseAddress, Buffer, NumberOfBytesToRead,
+                                         NumberOfBytesRead);
+#endif
+
     //
     // Check if we came from user mode
     //
@@ -5668,7 +5674,7 @@ ULONG
 MiGetWorkingSetProtection(
     _In_ PMMPTE Pte)
 {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
     ULONG Protection;
     ULONG_PTR PteProtection = Pte->u.Long & PTE_PROTECT_MASK;
 
@@ -7641,12 +7647,19 @@ NTAPI
 MmGetPhysicalAddress(PVOID Address)
 {
     PHYSICAL_ADDRESS PhysicalAddress;
-#if !defined(_M_ARM64)
+#if defined(_M_RISCV64)
+    MI_RISCV_PAGE_WALK Walk;
+#elif !defined(_M_ARM64)
     MMPDE TempPde;
     MMPTE TempPte;
 #endif
 
-#if defined(_M_ARM64)
+#if defined(_M_RISCV64)
+    if (NT_SUCCESS(MiRiscvWalkCurrentPageTables(Address, &Walk)))
+    {
+        return Walk.PhysicalAddress;
+    }
+#elif defined(_M_ARM64)
     if (MiArm64TranslateToPhysical(Address, &PhysicalAddress))
     {
         return PhysicalAddress;

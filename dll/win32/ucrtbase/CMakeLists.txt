@@ -71,6 +71,10 @@ target_link_libraries(libucrtbase INTERFACE
 
 if(MSVC)
     target_link_libraries(ucrtbase runtmchk)
+elseif(ARCH STREQUAL "riscv64")
+    # The isolated target has no libsupc++. Use the guard implementation owned
+    # by the in-tree RISC-V C++ runtime.
+    target_link_libraries(ucrtbase cpprt)
 else()
     # For __cxa_guard_acquire / __cxa_guard_release
     target_link_libraries(ucrtbase libsupc++)

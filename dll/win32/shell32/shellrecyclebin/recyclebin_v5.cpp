@@ -126,6 +126,16 @@ cleanup:
     return ret;
 }
 
+#ifdef _M_RISCV64
+/* The legacy declaration is the only non-pure IRecycleBin5 method. The
+ * current RISC-V Itanium C++ ABI therefore treats it as the key function and
+ * requires an out-of-line definition for the base-interface vtable. */
+STDMETHODIMP IRecycleBin5::EmptyRecycleBin()
+{
+    return E_NOTIMPL;
+}
+#endif
+
 class RecycleBin5 : public IRecycleBin5
 {
 public:

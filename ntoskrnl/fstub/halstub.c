@@ -121,7 +121,12 @@ NTSTATUS
 NTAPI
 xHalInitPnpDriver(VOID)
 {
+#if defined(_M_RISCV64)
+    extern NTSTATUS NTAPI IopRiscvInitializePlatformBus(VOID);
+    return IopRiscvInitializePlatformBus();
+#else
     return STATUS_NOT_SUPPORTED;
+#endif
 }
 
 NTSTATUS

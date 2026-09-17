@@ -25,6 +25,12 @@ endif()
 add_library(stdc++compat ${SOURCE})
 set_target_cpp_properties(stdc++compat WITH_EXCEPTIONS)
 add_dependencies(stdc++compat xdk)
+# Use the selected STL headers without a link dependency: libsupc++ itself
+# depends on this compatibility archive in GCC builds.
+target_include_directories(stdc++compat PRIVATE
+    "$<TARGET_PROPERTY:cppstl,INTERFACE_INCLUDE_DIRECTORIES>")
+target_compile_definitions(stdc++compat PRIVATE
+    "$<TARGET_PROPERTY:cppstl,INTERFACE_COMPILE_DEFINITIONS>")
 target_link_libraries(stdc++compat libmsvcrt)
 remove_target_compile_option(stdc++compat "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<IN_LIST:cppstl,$<TARGET_PROPERTY:LINK_LIBRARIES>>>>:-nostdinc>")
 target_compile_definitions(stdc++compat PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>" _CRT_DECLARE_NONSTDC_NAMES=1)

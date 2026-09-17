@@ -259,6 +259,104 @@ Zw\Name:
     .set SyscallId, SyscallId + 1
     .endm
 
+#elif defined(_M_RISCV64)
+
+#include <asm/ksriscv64.h>
+
+    /*
+     * Kernel-mode Zw* wrappers (ABI-131). There is no RISC-V user syscall
+     * ABI yet, so a Zw* call from kernel code does not trap: it saves the
+     * caller's PreviousMode, forces KernelMode, calls Nt* directly and
+     * restores PreviousMode, exactly like the ARM64 wrapper above. Calls
+     * with more than eight arguments copy the caller's stack arguments below
+     * the wrapper frame so the callee sees them at sp+0.
+     */
+    .set SyscallId, 0
+
+    .macro STUB_K Name, ArgCount
+    .p2align 2
+    .globl Zw\Name
+Zw\Name:
+    .ifc \Name,GetCurrentProcessorNumber
+    tail KeGetCurrentProcessorNumber
+    .else
+    .ifc \Name,SetLdtEntries
+    /* x86 LDT service slot (ABI-028): rejected without touching arguments. */
+    li a0, 0xc0000002
+    sext.w a0, a0
+    ret
+    .else
+.if \ArgCount > 8
+    .set _nstk, (\ArgCount - 8)
+    .set _save_off, ((_nstk * 8 + 15) & ~15)
+    .set _frame, (_save_off + 32)
+    addi sp, sp, -_frame
+    sd ra, _save_off + 0(sp)
+    sd s0, _save_off + 8(sp)
+    sd s1, _save_off + 16(sp)
+    .set _i, 0
+    .rept _nstk
+    ld t0, _frame + _i * 8(sp)
+    sd t0, _i * 8(sp)
+    .set _i, _i + 1
+    .endr
+    csrr s0, sscratch
+    ld s0, PcCurrentThread(s0)
+    lbu s1, ThPreviousMode(s0)
+    sb zero, ThPreviousMode(s0)
+    call Nt\Name
+    sb s1, ThPreviousMode(s0)
+    ld s1, _save_off + 16(sp)
+    ld s0, _save_off + 8(sp)
+    ld ra, _save_off + 0(sp)
+    addi sp, sp, _frame
+    ret
+.else
+    addi sp, sp, -32
+    sd ra, 24(sp)
+    sd s0, 16(sp)
+    sd s1, 8(sp)
+    csrr s0, sscratch
+    ld s0, PcCurrentThread(s0)
+    lbu s1, ThPreviousMode(s0)
+    sb zero, ThPreviousMode(s0)
+    call Nt\Name
+    sb s1, ThPreviousMode(s0)
+    ld s1, 8(sp)
+    ld s0, 16(sp)
+    ld ra, 24(sp)
+    addi sp, sp, 32
+    ret
+.endif
+    .endif
+    .endif
+    .set SyscallId, SyscallId + 1
+    .endm
+
+    .macro STUB_WRAP Name, ArgCount
+    .p2align 2
+    .globl Nt\Name
+    .globl Zw\Name
+Nt\Name:
+Zw\Name:
+    li t0, SyscallId
+    ecall
+    ret
+    .set SyscallId, SyscallId + 1
+    .endm
+
+    .macro STUB_U Name, ArgCount
+    .p2align 2
+    .globl Nt\Name
+    .globl Zw\Name
+Nt\Name:
+Zw\Name:
+    li t0, SyscallId
+    ecall
+    ret
+    .set SyscallId, SyscallId + 1
+    .endm
+
 #else
 
 #include <asm.inc>

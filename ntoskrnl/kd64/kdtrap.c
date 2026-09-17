@@ -49,6 +49,14 @@
 #define KdpGetParameterThree(Context)  ((Context)->X2)
 #define KdpGetParameterFour(Context)   ((Context)->X3)
 
+#elif defined(_M_RISCV64)
+
+//
+// A2/A3 on RISC-V (debug-service arguments travel in a0-a3)
+//
+#define KdpGetParameterThree(Context)  ((Context)->A2)
+#define KdpGetParameterFour(Context)   ((Context)->A3)
+
 #else
 #error Unsupported Architecture
 #endif

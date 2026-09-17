@@ -24,6 +24,11 @@ PVOID
 NTAPI
 MmAllocateNonCachedMemory(IN SIZE_T NumberOfBytes)
 {
+#if defined(_M_RISCV64)
+    /* Baseline PMAs do not provide an uncached alias of arbitrary RAM. */
+    UNREFERENCED_PARAMETER(NumberOfBytes);
+    return NULL;
+#else
     PFN_COUNT PageCount, MdlPageCount;
     PFN_NUMBER PageFrameIndex;
     PHYSICAL_ADDRESS LowAddress, HighAddress, SkipBytes;
@@ -162,6 +167,7 @@ MmAllocateNonCachedMemory(IN SIZE_T NumberOfBytes)
     //
     return BaseAddress;
 
+#endif
 }
 
 /*

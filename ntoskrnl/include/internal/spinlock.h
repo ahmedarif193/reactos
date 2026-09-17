@@ -12,7 +12,7 @@ NTAPI
 Kii386SpinOnSpinLock(PKSPIN_LOCK SpinLock, ULONG Flags);
 #endif
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
 FORCEINLINE
 ULONG_PTR
 KxLoadAcquirePointer(
@@ -26,6 +26,8 @@ KxLoadAcquirePointer(
                          : "r"(Address)
                          : "memory");
     return Value;
+#elif defined(_M_RISCV64)
+    return (ULONG_PTR)__atomic_load_n(Address, __ATOMIC_ACQUIRE);
 #else
     return (ULONG_PTR)ReadPointerAcquire(Address);
 #endif
@@ -42,6 +44,8 @@ KxStoreReleasePointer(
                          :
                          : "r"(Address), "r"(Value)
                          : "memory");
+#elif defined(_M_RISCV64)
+    __atomic_store_n(Address, Value, __ATOMIC_RELEASE);
 #else
     WritePointerRelease(Address, Value);
 #endif
@@ -144,7 +148,7 @@ KxReleaseSpinLock(
     KeMemoryBarrierWithoutFence();
 }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
 
 #define KX_LOCK_QUEUE_WAIT  ((ULONG_PTR)LOCK_QUEUE_WAIT)
 #define KX_LOCK_QUEUE_OWNER ((ULONG_PTR)LOCK_QUEUE_OWNER)
@@ -284,4 +288,4 @@ KxTryToAcquireQueuedSpinLock(
 #endif
 }
 
-#endif /* defined(_M_AMD64) || defined(_M_ARM64) */
+#endif /* defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64) */

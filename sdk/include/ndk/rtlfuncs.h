@@ -839,7 +839,7 @@ RtlUnwind(
 
 #define RTL_STACK_WALKING_MODE_FRAMES_TO_SKIP_SHIFT 8
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
 
 NTSYSAPI
 PRUNTIME_FUNCTION
@@ -864,7 +864,7 @@ RtlVirtualUnwind(
     _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers
 );
 
-#endif // _M_AMD64 || _M_ARM64
+#endif // _M_AMD64 || _M_ARM64 || _M_RISCV64
 
 //
 // Tracing Functions

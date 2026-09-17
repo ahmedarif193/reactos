@@ -279,7 +279,12 @@ PVOID MmHighestUserAddress;
 PVOID MmSystemRangeStart;
 
 /* Writable alias of KUSER_SHARED_DATA; equals the canonical VA until an arch makes that VA read-only */
+#if defined(_M_RISCV64)
+/* The architecture publishes both aliases after establishing their mappings. */
+PKUSER_SHARED_DATA MmWriteableSharedUserData;
+#else
 PKUSER_SHARED_DATA MmWriteableSharedUserData = SharedUserData;
+#endif
 
 /* And these store the respective highest PTE/PDE address */
 PMMPTE MiHighestUserPte;
@@ -584,6 +589,11 @@ VOID
 NTAPI
 MiComputeColorInformation(VOID)
 {
+#if defined(_M_RISCV64)
+    /* No cache-geometry discovery yet. Use one allocation color rather than
+     * interpreting another architecture's PCR cache fields or byte counts. */
+    MmSecondaryColors = 1;
+#else
     ULONG L2Associativity;
 
     /* Check if no setting was provided already */
@@ -628,9 +638,10 @@ MiComputeColorInformation(VOID)
         }
     }
 
+#endif
     /* Compute the mask and store it */
     MmSecondaryColorMask = MmSecondaryColors - 1;
-#ifndef _M_ARM64
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
     // Win11 arm64 KPRCB has no SecondaryColorMask; Mm only reads the global
     KeGetCurrentPrcb()->SecondaryColorMask = MmSecondaryColorMask;
 #endif
@@ -686,7 +697,7 @@ MiInitializeColorTables(VOID)
     }
 }
 
-#ifndef _M_AMD64
+#if !defined(_M_AMD64) && !defined(_M_RISCV64)
 CODE_SEG("INIT")
 BOOLEAN
 NTAPI
@@ -1439,7 +1450,7 @@ MiInitializePfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Finally add the pages for the PFN database itself */
     MiBuildPfnDatabaseSelf();
 }
-#endif /* !_M_AMD64 */
+#endif /* !_M_AMD64 && !_M_RISCV64: native PFN/table initialization is separate. */
 
 CODE_SEG("INIT")
 VOID
@@ -1771,6 +1782,11 @@ VOID
 NTAPI
 MiAddHalIoMappings(VOID)
 {
+#if defined(_M_RISCV64)
+    /* There is no legacy fixed HAL heap to scan. Native boot-device mapping
+     * adoption must validate PMAs and ownership; this diagnostic is not it. */
+    return;
+#else
     PVOID BaseAddress;
     PMMPDE PointerPde;
 #if !defined(_M_ARM64)
@@ -1858,6 +1874,7 @@ MiAddHalIoMappings(VOID)
         /* Move to the next PDE */
         PointerPde++;
     }
+#endif
 #endif
 }
 
@@ -2511,6 +2528,11 @@ MmArmInitSystem(IN ULONG Phase,
     MMPTE TempPte;
 #endif
 
+#if defined(_M_RISCV64)
+    /* Native boot MM must assign the reservation ledger before shared MM
+     * sizes pools or consumes those ranges. Assignment does not map them. */
+    if (!MiRiscvSystemVaLayoutAssigned()) return FALSE;
+#endif
     /* Dump memory descriptors */
     if (MiDbgEnableMdDump) MiDbgDumpMemoryDescriptors();
 
@@ -3034,7 +3056,7 @@ MmArmInitSystem(IN ULONG Phase,
         MmSystemCacheStart = MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress;
         ASSERT(MmSystemCacheStart != NULL);
 #endif
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
         MmSizeOfSystemCacheInPages = MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes / PAGE_SIZE;
 #else
         MmSizeOfSystemCacheInPages = ((ULONG_PTR)MI_PAGED_POOL_START - (ULONG_PTR)MI_SYSTEM_CACHE_START) / PAGE_SIZE;
@@ -3045,7 +3067,7 @@ MmArmInitSystem(IN ULONG Phase,
             PVOID SystemCacheEnd = Add2Ptr(MmSystemCacheStart, MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes - 1);
             ASSERT(MmSystemCacheEnd == SystemCacheEnd);
         }
-#elif !defined(_M_AMD64)
+#elif !defined(_M_AMD64) && !defined(_M_RISCV64)
         ASSERT(MmSystemCacheEnd == (PVOID)((ULONG_PTR)MI_PAGED_POOL_START - 1));
 #endif
 
@@ -3060,8 +3082,8 @@ MmArmInitSystem(IN ULONG Phase,
         /* Size up paged pool and build the shadow system page directory */
         MiBuildPagedPool();
 
-        /* Debugger physical memory support is now ready to be used */
-        MmDebugPte = MiAddressToPte(MiDebugMapping);
+        /* Only publish physical debug access when an architecture supplied a mapping. */
+        if (MiDebugMapping != NULL) MmDebugPte = MiAddressToPte(MiDebugMapping);
 
         /* Initialize the loaded module list */
         MiInitializeLoadedModuleList(LoaderBlock);

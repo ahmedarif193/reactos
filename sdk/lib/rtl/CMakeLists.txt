@@ -151,6 +151,25 @@ elseif(ARCH STREQUAL "arm64")
         byteswap.c
         dynfntbl.c
         mem.c)
+elseif(ARCH STREQUAL "riscv64")
+    list(REMOVE_ITEM SOURCE slist.c)
+    list(APPEND ASM_SOURCE
+        riscv64/context_asm.S
+        riscv64/restore_asm.S
+        riscv64/except_asm.S)
+    list(APPEND SOURCE
+        bitmap64.c
+        byteswap.c
+        mem.c
+        riscv64/except.c
+        riscv64/context.c
+        riscv64/dispatch.c
+        riscv64/unwind.c
+        riscv64/slist.c)
+    # Captured nonleaf runtime frames must participate in native table walks.
+    set_source_files_properties(exception.c riscv64/context.c riscv64/dispatch.c
+        riscv64/except.c riscv64/unwind.c
+        PROPERTIES COMPILE_OPTIONS "-funwind-tables")
 endif()
 
 add_asm_files(rtl_asm ${ASM_SOURCE})
@@ -171,6 +190,10 @@ list(APPEND SOURCE_VISTA
     unicode_vista.c
     utf8.c
     waitaddr.c)
+
+if(ARCH STREQUAL "riscv64")
+    list(REMOVE_ITEM SOURCE_VISTA slist.c)
+endif()
 
 add_library(rtl_vista ${SOURCE_VISTA})
 add_pch(rtl_vista rtl_vista.h SOURCE_VISTA)

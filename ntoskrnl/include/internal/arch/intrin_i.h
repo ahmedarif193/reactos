@@ -31,6 +31,9 @@
 #include <internal/amd64/intrin_i.h>
 #elif defined(_M_ARM64) || defined(__aarch64__)
 #include <internal/arm64/intrin_i.h>
+#elif defined(_M_RISCV64)
+/* RV64 instruction intrinsics are supplied by the CRT architecture header. */
+#include <intrin.h>
 #else
 #error "Unknown processor"
 #endif

@@ -141,6 +141,11 @@ MiMakeProtectionMask(IN ULONG Protect)
 {
     ULONG Mask1, Mask2, ProtectMask;
 
+#if defined(_M_RISCV64)
+    /* Do not accept a cache override that baseline Sv39 cannot encode. */
+    if (Protect & (PAGE_NOCACHE | PAGE_WRITECOMBINE)) return MM_INVALID_PROTECTION;
+#endif
+
     /* CFG target flags are valid only when the base protection is executable. */
     if (Protect & PAGE_TARGETS_NO_UPDATE)
     {

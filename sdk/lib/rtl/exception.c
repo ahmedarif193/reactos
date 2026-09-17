@@ -20,6 +20,11 @@
 
 PRTLP_UNHANDLED_EXCEPTION_FILTER RtlpUnhandledExceptionFilter;
 
+#if defined(_M_RISCV64)
+VOID NTAPI RtlpRiscv64StepContextToCaller(PCONTEXT Context);
+VOID NTAPI RtlRestoreContext(PCONTEXT Context, PEXCEPTION_RECORD Record);
+#endif
+
 /* FUNCTIONS ***************************************************************/
 
 #if defined(_M_AMD64)
@@ -74,13 +79,17 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
      * continues execution resumes after the raise instead of re-entering here.
      */
     RtlpArm64StepContextToCaller(&Context);
+#elif defined(_M_RISCV64)
+    RtlpRiscv64StepContextToCaller(&Context);
 #endif
 
     /* Save the exception address */
     ExceptionRecord->ExceptionAddress = _ReturnAddress();
 
     /* Write the context flag */
+#if !defined(_M_RISCV64)
     Context.ContextFlags = CONTEXT_FULL;
+#endif
 
     /* Check if user mode debugger is active */
     if (RtlpCheckForActiveDebugger())
@@ -98,7 +107,7 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
         }
         else
         {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
             /* See RtlRaiseStatus: resume the handler-patched context directly;
              * ZwContinue cannot resume a kernel-mode context here. */
             RtlRestoreContext(&Context, ExceptionRecord);
@@ -145,7 +154,9 @@ RtlRaiseStatus(IN NTSTATUS Status)
     ExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE | EXCEPTION_SOFTWARE_ORIGINATE;
 
     /* Write the context flag */
+#if !defined(_M_RISCV64)
     Context.ContextFlags = CONTEXT_FULL;
+#endif
 
 #if defined(_M_AMD64)
     /*
@@ -154,6 +165,8 @@ RtlRaiseStatus(IN NTSTATUS Status)
      * all nonvolatile registers restored.
      */
     RtlpAmd64StepContextToCaller(&Context);
+#elif defined(_M_RISCV64)
+    RtlpRiscv64StepContextToCaller(&Context);
 #endif
 
     /* Check if user mode debugger is active */
@@ -171,7 +184,7 @@ RtlRaiseStatus(IN NTSTATUS Status)
          */
         if (RtlDispatchException(&ExceptionRecord, &Context))
         {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
             /*
              * The ARM64 language handler resolves an __except by patching the
              * context to the handler block and returning continue-execution.

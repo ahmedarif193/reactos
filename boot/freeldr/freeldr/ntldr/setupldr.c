@@ -24,6 +24,8 @@ DBG_DEFAULT_CHANNEL(WINDOWS);
 #define INF_ARCH "arm"
 #elif defined(_M_ARM64)
 #define INF_ARCH "arm64"
+#elif defined(_M_RISCV64)
+#define INF_ARCH "riscv64"
 #endif
 
 // TODO: Move to .h
@@ -417,6 +419,8 @@ LoadReactOSSetup(
         "ARM\\",
 #elif defined(_M_ARM64)
         "ARM64\\",
+#elif defined(_M_RISCV64)
+        "RISCV64\\",
 #elif defined(_M_MPPC)
         "PPC\\",
 #elif defined(_M_MRX000)

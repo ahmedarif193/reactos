@@ -60,6 +60,7 @@ enum _ARCH
     ARCH_ARM,
     ARCH_ARM64,
     ARCH_ARM64EC,
+    ARCH_RISCV64,
     ARCH_PPC
 };
 
@@ -1639,7 +1640,7 @@ void usage(void)
            "  --version=<version>     Sets the version to create exports for\n"
            "  --implib                generate a def file for an import library\n"
            "  --no-private-warnings   suppress warnings about symbols that should be -private\n"
-           "  -a=<arch>               set architecture to <arch> (i386, x86_64, arm, arm64, arm64ec)\n"
+           "  -a=<arch>               set architecture to <arch> (i386, x86_64, arm, arm64, arm64ec, riscv64)\n"
            "  --with-tracing          generate wine-like \"+relay\" trace trampolines (needs -s)\n");
 }
 
@@ -1739,10 +1740,12 @@ int main(int argc, char *argv[])
     else if (strcasecmp(pszArchString, "arm") == 0) giArch = ARCH_ARM;
     else if (strcasecmp(pszArchString, "arm64") == 0) giArch = ARCH_ARM64;
     else if (strcasecmp(pszArchString, "arm64ec") == 0) giArch = ARCH_ARM64EC;
+    else if (strcasecmp(pszArchString, "riscv64") == 0) giArch = ARCH_RISCV64;
     else if (strcasecmp(pszArchString, "ppc") == 0) giArch = ARCH_PPC;
 
     if ((giArch == ARCH_AMD64) || (giArch == ARCH_IA64) ||
-        (giArch == ARCH_ARM64) || (giArch == ARCH_ARM64EC))
+        (giArch == ARCH_ARM64) || (giArch == ARCH_ARM64EC) ||
+        (giArch == ARCH_RISCV64))
     {
         pszArchString2 = "win64";
     }

@@ -80,7 +80,7 @@ typedef struct _POOL_HEADER
     {
         struct
         {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
             USHORT PreviousSize:8;
             USHORT PoolIndex:8;
             USHORT BlockSize:8;
@@ -94,12 +94,12 @@ typedef struct _POOL_HEADER
         };
         ULONG Ulong1;
     };
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
     ULONG PoolTag;
 #endif
     union
     {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
         PEPROCESS ProcessBilled;
 #else
         ULONG PoolTag;

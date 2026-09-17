@@ -133,6 +133,9 @@ VOID
 NTAPI
 MiInitSystemMemoryAreas(VOID)
 {
+#if defined(_M_RISCV64)
+    MiRiscvReserveSystemMemoryAreas();
+#else
     //
     // Create all the static memory areas.
     //
@@ -203,6 +206,7 @@ MiInitSystemMemoryAreas(VOID)
 #endif /* _M_AMD64 || _M_ARM64 */
 
     MmUnlockAddressSpace(MmGetKernelAddressSpace());
+#endif
 }
 
 CODE_SEG("INIT")
@@ -210,6 +214,9 @@ VOID
 NTAPI
 MiDbgDumpAddressSpace(VOID)
 {
+#if defined(_M_RISCV64)
+    MiRiscvDumpSystemVaLayout();
+#else
     //
     // Print the memory layout
     //
@@ -276,6 +283,7 @@ MiDbgDumpAddressSpace(VOID)
     DPRINT1("          0x%p - 0x%p\t%s\n",
             MmNonPagedPoolExpansionStart, MmNonPagedPoolEnd,
             "Non Paged Pool Expansion PTE Space");
+#endif
 }
 
 CODE_SEG("INIT")
@@ -318,6 +326,10 @@ MmInitSystem(IN ULONG Phase,
     /* Initialize the kernel address space */
     ASSERT(Phase == 1);
 
+#if defined(_M_RISCV64)
+    if (!MiRiscvSystemVaLayoutAssigned() || !SharedUserData || !MmWriteableSharedUserData)
+        return FALSE;
+#endif
 #ifdef NEWCC
     InitializeListHead(&MiSegmentList);
     ExInitializeFastMutex(&MiGlobalPageOperation);
@@ -358,7 +370,11 @@ MmInitSystem(IN ULONG Phase,
     //
     // Now get the PTE for shared data, and read the PFN that holds it
     //
+#if defined(_M_RISCV64)
+    PointerPte = MiAddressToPte(SharedUserData);
+#else
     PointerPte = MiAddressToPte((PVOID)KI_USER_SHARED_DATA);
+#endif
     ASSERT(PointerPte->u.Hard.Valid == 1);
     PageFrameNumber = PFN_FROM_PTE(PointerPte);
 

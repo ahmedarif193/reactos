@@ -71,7 +71,7 @@
 
 #define ACPI_MACHINE_WIDTH          64
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
 #define ACPI_MISALIGNMENT_NOT_SUPPORTED
 #endif
 
@@ -128,7 +128,7 @@
 
 #else /* __REACTOS__ */
 
-#if defined(ACPI_APPLICATION) || defined(_M_ARM64)
+#if defined(ACPI_APPLICATION) || defined(_M_ARM64) || defined(_M_RISCV64)
 #define ACPI_FLUSH_CPU_CACHE()
 #else
 #define ACPI_FLUSH_CPU_CACHE()  __wbinvd()

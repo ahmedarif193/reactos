@@ -1555,14 +1555,14 @@ Ndis6CopyNetBufferListInfo(
         NblOriginalInterfaceIfIndex,
         NetBufferListFilteringInfo,
 #endif
-#if NDIS_SUPPORT_NDIS630 && (defined(_AMD64_) || defined(_ARM64_))
+#if NDIS_SUPPORT_NDIS630 && defined(_WIN64)
         VirtualSubnetInfo,
 #endif
 #if NDIS_SUPPORT_NDIS630
         TcpRecvSegCoalesceInfo,
         RscTcpTimestampDelta,
 #endif
-#if NDIS_SUPPORT_NDIS650 && (defined(_AMD64_) || defined(_ARM64_))
+#if NDIS_SUPPORT_NDIS650 && defined(_WIN64)
         GftOffloadInformation,
         GftFlowEntryId,
 #endif
@@ -1584,14 +1584,14 @@ Ndis6CopyNetBufferListInfo(
         TcpReceiveBytesTransferred,
         NetBufferListFilteringInfo,
 #endif
-#if NDIS_SUPPORT_NDIS630 && (defined(_AMD64_) || defined(_ARM64_))
+#if NDIS_SUPPORT_NDIS630 && defined(_WIN64)
         VirtualSubnetInfo,
 #endif
 #if NDIS_SUPPORT_NDIS630
         TcpRecvSegCoalesceInfo,
         RscTcpTimestampDelta,
 #endif
-#if NDIS_SUPPORT_NDIS650 && (defined(_AMD64_) || defined(_ARM64_))
+#if NDIS_SUPPORT_NDIS650 && defined(_WIN64)
         GftOffloadInformation,
         GftFlowEntryId,
 #endif

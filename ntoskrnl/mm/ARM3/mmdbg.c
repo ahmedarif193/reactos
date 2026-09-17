@@ -27,7 +27,12 @@ MmIsSessionAddress(
 
 /* GLOBALS ********************************************************************/
 
+#if defined(_M_RISCV64)
+/* MM must allocate and publish the debug mapping; there is no fixed self-map. */
+PVOID MiDebugMapping = NULL;
+#else
 PVOID MiDebugMapping = MI_DEBUG_MAPPING;
+#endif
 PMMPTE MmDebugPte = NULL;
 
 /* FUNCTIONS ******************************************************************/

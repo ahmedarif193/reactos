@@ -15,8 +15,8 @@
 #include <appmodel.h>
 #include <roapi.h>
 
-// This is simlar to msvcrt.
-#if _M_AMD64 || _M_ARM || _M_ARM64 || _M_HYBRID
+// This is similar to msvcrt.
+#if defined(_WIN64) || defined(_M_ARM) || defined(_M_HYBRID)
 #define FLS_ALWAYS_AVAILABLE 1
 #endif
 

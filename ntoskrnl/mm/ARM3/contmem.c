@@ -389,6 +389,11 @@ MiAllocateContiguousMemory(IN SIZE_T NumberOfBytes,
     PFN_NUMBER SizeInPages;
     MI_PFN_CACHE_ATTRIBUTE CacheAttribute;
 
+#if defined(_M_RISCV64)
+    /* Reject unsupported aliases before removing pages from the PFN lists. */
+    if (CacheType != MmCached) return NULL;
+#endif
+
     //
     // Verify count and cache type
     //

@@ -41,9 +41,7 @@
     ROUND_DOWN(((ULONG)n) + (align) - 1, (align))
 
 /* Public headers */
-#if defined(_M_RISCV64)
-#include <arch/riscv64/boot.h>
-#elif defined(__REACTOS__)
+#if defined(__REACTOS__)
 #include <ntddk.h>
 #include <ntifs.h>
 #include <ioaccess.h>
@@ -66,7 +64,6 @@
 #endif
 
 /* Internal headers */
-#if !defined(_M_RISCV64)
 // #include <arcemul.h>
 #include <arcname.h>
 #include <arcsupp.h>
@@ -135,12 +132,13 @@
 #include <arch/arm/hardware.h>
 #elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
 #include <arch/arm64/arm64.h>
+#elif defined(_M_RISCV64)
+#include <arch/riscv64/riscv64.h>
 #elif defined(_M_MIPS)
 #include <arch/mips/arcbios.h>
 #endif
 
 #include <conversion.h>
-#endif
 
 VOID __cdecl BootMain(IN PCCH CmdLine);
 

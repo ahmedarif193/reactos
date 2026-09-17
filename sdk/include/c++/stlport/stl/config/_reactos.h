@@ -296,6 +296,12 @@
 // terminate function is in global namespace
 #define _STLP_VENDOR_TERMINATE_STD
 
+/* The RISC-V64 port cannot unwind C++ exceptions yet. Fail at the point where
+ * STLPort would throw instead of continuing after an empty throw macro. */
+#if defined (_M_RISCV64) && defined (_STLP_NO_EXCEPTIONS) && !defined (_STLP_THROW)
+#  define _STLP_THROW(__exception) _STLP_ABORT()
+#endif
+
 // We don't want stlport to use its own namespace
 #define _STLP_NO_OWN_NAMESPACE
 

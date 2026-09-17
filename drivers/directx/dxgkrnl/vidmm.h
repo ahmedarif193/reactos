@@ -75,6 +75,9 @@ typedef struct _DXGKRNL_SEGMENT
      */
     PVOID               CpuBase;
 
+    /* Must match the backing allocation, including all kernel/user aliases. */
+    MEMORY_CACHING_TYPE  CpuCacheType;
+
     /* Capability flags (DXGK_SEGMENTFLAG_* bitmask from d3dkmddi.h). */
     DXGK_SEGMENTFLAGS   Flags;
 

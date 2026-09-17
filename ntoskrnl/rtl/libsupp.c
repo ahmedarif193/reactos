@@ -314,7 +314,7 @@ RtlpHandleDpcStackException(IN PEXCEPTION_REGISTRATION_RECORD RegistrationFrame,
     return FALSE;
 }
 
-#if !defined(_ARM_) && !defined(_AMD64_) && !defined(_ARM64_)
+#if !defined(_ARM_) && !defined(_AMD64_) && !defined(_ARM64_) && !defined(_M_RISCV64)
 
 BOOLEAN
 NTAPI
@@ -792,6 +792,23 @@ done:
     return STATUS_SUCCESS;
 }
 
+#if defined(_M_RISCV64)
+DECLSPEC_NORETURN VOID NTAPI RtlpRiscv64RaiseFatal(NTSTATUS Status)
+{
+    KeBugCheckEx(KMODE_EXCEPTION_NOT_HANDLED, Status, 0, 0, 0);
+}
+NTSTATUS NTAPI
+RtlpRiscv64UnwindUserException(ULONG_PTR Pc, ULONG_PTR Low, ULONG_PTR High,
+                              PCONTEXT Context)
+{
+    UNREFERENCED_PARAMETER(Pc);
+    UNREFERENCED_PARAMETER(Low);
+    UNREFERENCED_PARAMETER(High);
+    UNREFERENCED_PARAMETER(Context);
+    return STATUS_NOT_FOUND;
+}
+#endif
+
 NTSTATUS
 NTAPI
 RtlpSafeCopyMemory(
@@ -799,6 +816,9 @@ RtlpSafeCopyMemory(
    _In_reads_bytes_(Length) CONST VOID UNALIGNED *Source,
    _In_ SIZE_T Length)
 {
+#if defined(_M_RISCV64)
+    return KiRiscvReadMemory(Destination, Source, Length);
+#else
     _SEH2_TRY
     {
         RtlCopyMemory(Destination, Source, Length);
@@ -810,6 +830,7 @@ RtlpSafeCopyMemory(
     _SEH2_END;
 
     return STATUS_SUCCESS;
+#endif
 }
 
 BOOLEAN

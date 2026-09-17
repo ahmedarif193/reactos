@@ -1,0 +1,34 @@
+; PROJECT:     ReactOS RISC-V64 LiveCD hive overlay
+; LICENSE:     GPL-2.0+
+; PURPOSE:     First-entry boot-driver quarantine
+
+[AddReg]
+
+; Apply this file after the common and per-driver registry fragments. Keep the
+; first-entry image free of boot drivers until a RISC-V HAL and a platform
+; device contract can support them. The full LiveCD still packages the images.
+HKLM,"SYSTEM\CurrentControlSet\Services\swenum","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\sacdrv","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\Mup","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\usbstor","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\stornvme","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\sffdisk","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\partmgr","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\MountMgr","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\acpi","Start",0x00010001,0x00000004
+; The boot volume is memory-backed; keep physical-device drivers quarantined.
+; Keep the software KsecDD provider from ksecdd_reg.inf enabled: RPC context
+; UUIDs and other user-mode consumers require its random-fill IOCTL.
+HKLM,"SYSTEM\CurrentControlSet\Services\RamDisk","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\fltmgr","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\Disk","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\Cdrom","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\isapnp","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\reshub","Start",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Services\Wdf01000","Start",0x00010001,0x00000004

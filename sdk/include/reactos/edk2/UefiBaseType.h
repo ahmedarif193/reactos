@@ -241,6 +241,11 @@ by Pages.
 ///
 #define EFI_IMAGE_MACHINE_ARMTHUMB_MIXED  0x01C2
 
+///
+/// PE32+ Machine type for RISC-V 64-bit UEFI images.
+///
+#define EFI_IMAGE_MACHINE_RISCV64         0x5064
+
 
 #if   defined (MDE_CPU_IA32)
 
@@ -269,6 +274,13 @@ by Pages.
     (((Machine) == EFI_IMAGE_MACHINE_ARMTHUMB_MIXED) || ((Machine) == EFI_IMAGE_MACHINE_EBC))
 
 #define EFI_IMAGE_MACHINE_CROSS_TYPE_SUPPORTED(Machine) ((Machine) == EFI_IMAGE_MACHINE_ARMTHUMB_MIXED) 
+
+#elif defined (MDE_CPU_RISCV64)
+
+#define EFI_IMAGE_MACHINE_TYPE_SUPPORTED(Machine) \
+    ((Machine) == EFI_IMAGE_MACHINE_RISCV64)
+
+#define EFI_IMAGE_MACHINE_CROSS_TYPE_SUPPORTED(Machine) (FALSE)
 
 #elif defined (MDE_CPU_EBC)
 

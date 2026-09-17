@@ -88,6 +88,22 @@ typedef struct _FREELDR_MEMORY_DESCRIPTOR
 
 #endif
 
+#if defined(_M_RISCV64) || defined(_RISCV64_)
+
+#define MM_PAGE_SIZE    4096
+#define MM_PAGE_MASK    0xFFF
+#define MM_PAGE_SHIFT   12
+/* The initial Sv39 direct map covers physical addresses below 128 GiB.
+ * FreeLdr allocations stay below 8 GiB until the physical-map policy grows. */
+#define MM_MAX_PAGE                0x2000000
+#define MM_MAX_PAGE_LOADER         0x200000
+#define MM_MAX_PAGE_LOADER_MAPPED  0x200000
+
+#define MM_SIZE_TO_PAGES(a)  \
+    ( ((a) >> MM_PAGE_SHIFT) + ((a) & MM_PAGE_MASK ? 1 : 0) )
+
+#endif
+
 // HEAP and STACK size
 #define HEAP_PAGES    0x400
 #define STACK_PAGES    0x00

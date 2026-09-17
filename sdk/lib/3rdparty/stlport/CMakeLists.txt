@@ -47,18 +47,35 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 
 target_include_directories(stlport PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/c++/stlport)
-target_compile_definitions(stlport PRIVATE
-    _STLP_USE_EXCEPTIONS _DLL __USE_CRTIMP
-    _BUILD_STLPORT NATIVE_CPP_INCLUDE=${REACTOS_SOURCE_DIR}/sdk/include/c++)
+if(ARCH STREQUAL "riscv64")
+    target_include_directories(stlport PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/c++)
+    target_compile_definitions(stlport PRIVATE
+        _STLP_NO_EXCEPTIONS _STLP_NO_RTTI _DLL __USE_CRTIMP
+        _STLP_LITTLE_ENDIAN=1 _STLP_MSVC_LIB=1400
+        _BUILD_STLPORT NATIVE_CPP_INCLUDE=${REACTOS_SOURCE_DIR}/sdk/include/c++)
+else()
+    target_compile_definitions(stlport PRIVATE
+        _STLP_USE_EXCEPTIONS _DLL __USE_CRTIMP
+        _BUILD_STLPORT NATIVE_CPP_INCLUDE=${REACTOS_SOURCE_DIR}/sdk/include/c++)
+endif()
 
 target_compile_definitions(stlport PUBLIC
     _CRT_DECLARE_NONSTDC_NAMES=1
     _CRT_NONSTDC_NO_DEPRECATE
 )
 
-target_include_directories(stlport INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:${REACTOS_SOURCE_DIR}/sdk/include/c++/stlport>")
-target_compile_definitions(stlport INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:NATIVE_CPP_INCLUDE=${REACTOS_SOURCE_DIR}/sdk/include/c++>")
-set_target_cpp_properties(stlport WITH_EXCEPTIONS WITH_RTTI)
+target_include_directories(stlport INTERFACE
+    "$<$<COMPILE_LANGUAGE:CXX>:${REACTOS_SOURCE_DIR}/sdk/include/c++/stlport>"
+    "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<STREQUAL:${ARCH},riscv64>>:${REACTOS_SOURCE_DIR}/sdk/include/c++>")
+target_compile_definitions(stlport INTERFACE
+    "$<$<COMPILE_LANGUAGE:CXX>:NATIVE_CPP_INCLUDE=${REACTOS_SOURCE_DIR}/sdk/include/c++>"
+    "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<BOOL:$<TARGET_PROPERTY:WITH_CXX_EXCEPTIONS>>>>:_STLP_NO_EXCEPTIONS>"
+    "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<BOOL:$<TARGET_PROPERTY:WITH_CXX_RTTI>>>>:_STLP_NO_RTTI>"
+    "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<STREQUAL:${ARCH},riscv64>>:_STLP_LITTLE_ENDIAN=1>"
+    "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<STREQUAL:${ARCH},riscv64>>:_STLP_MSVC_LIB=1400>")
+if(NOT ARCH STREQUAL "riscv64")
+    set_target_cpp_properties(stlport WITH_EXCEPTIONS WITH_RTTI)
+endif()
 
 add_dependencies(stlport xdk)
 add_pch(stlport src/stlport_prefix.h SOURCE)

@@ -43,6 +43,12 @@ RtlpSafeCopyMemory(
    _In_reads_bytes_(Length) CONST VOID UNALIGNED *Source,
    _In_ SIZE_T Length);
 
+#ifdef _M_RISCV64
+DECLSPEC_NORETURN VOID NTAPI RtlpRiscv64RaiseFatal(NTSTATUS Status);
+NTSTATUS NTAPI RtlpRiscv64UnwindUserException(ULONG_PTR ControlPc,
+    ULONG_PTR StackLow, ULONG_PTR StackHigh, PCONTEXT Context);
+#endif
+
 #ifndef _BLDR_
 
 VOID
@@ -199,7 +205,7 @@ RtlpExecuteHandlerForUnwind(PEXCEPTION_RECORD ExceptionRecord,
                             PCONTEXT Context,
                             PVOID DispatcherContext,
                             PEXCEPTION_ROUTINE ExceptionHandler);
-#elif !defined(_M_ARM64)
+#elif !defined(_M_ARM64) && !defined(_M_RISCV64)
 EXCEPTION_DISPOSITION
 NTAPI
 RtlpExecuteHandlerForUnwind(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _In_ PVOID DispatcherContext);
@@ -208,7 +214,7 @@ RtlpExecuteHandlerForUnwind(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord, _
 
 /* arm64/except_asm.S */
 
-#ifdef _M_ARM64
+#if defined(_M_ARM64) || defined(_M_RISCV64)
 EXCEPTION_DISPOSITION
 NTAPI
 RtlpExecuteHandlerForException(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _Inout_ PDISPATCHER_CONTEXT DispatcherContext, _In_ PEXCEPTION_ROUTINE ExceptionRoutine);
@@ -216,6 +222,10 @@ RtlpExecuteHandlerForException(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord
 EXCEPTION_DISPOSITION
 NTAPI
 RtlpExecuteHandlerForUnwind(_Inout_ struct _EXCEPTION_RECORD *ExceptionRecord, _In_ PVOID EstablisherFrame, _Inout_ struct _CONTEXT *ContextRecord, _Inout_ PDISPATCHER_CONTEXT DispatcherContext, _In_ PEXCEPTION_ROUTINE ExceptionRoutine);
+
+#endif
+
+#ifdef _M_ARM64
 
 /* arm64/except.c */
 

@@ -1,4 +1,6 @@
-add_subdirectory(buslogic)
+if(NOT ARCH STREQUAL "riscv64")
+    add_subdirectory(buslogic)
+endif()
 add_subdirectory(scsiport)
 add_subdirectory(sdport)
 add_subdirectory(storahci)

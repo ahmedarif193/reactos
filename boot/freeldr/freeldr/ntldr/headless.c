@@ -9,8 +9,10 @@
 /* INCLUDES *******************************************************************/
 
 #include <freeldr.h>
+#if !defined(_M_RISCV64)
 #include <cportlib/cportlib.h>
 #include <cportlib/uartinfo.h>
+#endif
 #include "ntldropts.h"
 
 #include <debug.h> // For _WARN()
@@ -35,16 +37,19 @@ BOOLEAN WinLdrTerminalConnected;
 ULONG WinLdrTerminalDeviceId;
 ULONG WinLdrTerminalDelay;
 
-CPPORT Port[4] =
+#if !defined(_M_RISCV64)
+static CPPORT Port[4] =
 {
     {NULL, 0, TRUE},
     {NULL, 0, TRUE},
     {NULL, 0, TRUE},
     {NULL, 0, TRUE}
 };
+#endif
 
 /* FUNCTIONS ******************************************************************/
 
+#if !defined(_M_RISCV64)
 VOID
 WinLdrLoadGUID(
     _Out_ PGUID SystemGuid)
@@ -227,11 +232,19 @@ WinLdrInitializeHeadlessPort(VOID)
         }
     }
 }
+#endif
 
 VOID
 WinLdrSetupEms(
     _In_ PCSTR BootOptions)
 {
+#if defined(_M_RISCV64)
+    UNREFERENCED_PARAMETER(BootOptions);
+
+    RtlZeroMemory(&LoaderRedirectionInformation, sizeof(LoaderRedirectionInformation));
+    LoaderRedirectionInformation.PciDeviceId = PCI_INVALID_VENDORID;
+    WinLdrTerminalConnected = FALSE;
+#else
     PCSTR Option;
 
     /* Start fresh */
@@ -302,6 +315,7 @@ WinLdrSetupEms(
 
         WinLdrInitializeHeadlessPort();
     }
+#endif
 }
 
 /* EOF */

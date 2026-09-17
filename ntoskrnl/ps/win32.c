@@ -78,7 +78,13 @@ PsConvertToGuiThread(VOID)
         if (!NewStack)
         {
             /* Panic in user-mode */
+#if defined(_M_RISCV64)
+            /* User tp is not a trusted TEB pointer, and this write may fault. */
+            ULONG LastError = ERROR_NOT_ENOUGH_MEMORY;
+            KiRiscvCopyToUser((PUCHAR)Thread->Tcb.Teb + FIELD_OFFSET(TEB, LastErrorValue), &LastError, sizeof(LastError));
+#else
             NtCurrentTeb()->LastErrorValue = ERROR_NOT_ENOUGH_MEMORY;
+#endif
             return STATUS_NO_MEMORY;
         }
 

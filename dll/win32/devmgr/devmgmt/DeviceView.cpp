@@ -409,11 +409,11 @@ unsigned int __stdcall CDeviceView::RefreshThread(void *Param)
     }
     else if (LastSelectedNode->GetNodeType() == ClassNode)
     {
-        LastSelectedNode = new CClassNode(*dynamic_cast<CClassNode *>(LastSelectedNode));
+        LastSelectedNode = new CClassNode(*static_cast<CClassNode *>(LastSelectedNode));
     }
     else if (LastSelectedNode->GetNodeType() == DeviceNode)
     {
-        LastSelectedNode = new CDeviceNode(*dynamic_cast<CDeviceNode *>(LastSelectedNode));
+        LastSelectedNode = new CDeviceNode(*static_cast<CDeviceNode *>(LastSelectedNode));
     }
 
     // Empty the treeview
@@ -670,7 +670,7 @@ CDeviceView::RecurseResources(
 
     // Get the cached device node
     CDeviceNode *DeviceNode;
-    DeviceNode = dynamic_cast<CDeviceNode *>(GetDeviceNode(Device));
+    DeviceNode = GetDeviceNode(Device);
     if (DeviceNode == nullptr)
     {
         return false;
@@ -719,7 +719,7 @@ CDeviceView::RecurseResources(
         if (bSuccess == FALSE)
             break;
 
-        DeviceNode = dynamic_cast<CDeviceNode *>(GetDeviceNode(Device));
+        DeviceNode = GetDeviceNode(Device);
         if (DeviceNode == nullptr)
         {
             continue;
@@ -797,7 +797,7 @@ CDeviceView::RecurseChildDevices(
 
     // Get the cached device node
     CDeviceNode *DeviceNode;
-    DeviceNode = dynamic_cast<CDeviceNode *>(GetDeviceNode(Device));
+    DeviceNode = GetDeviceNode(Device);
     if (DeviceNode == nullptr)
     {
         return false;
@@ -831,7 +831,7 @@ CDeviceView::RecurseChildDevices(
         if (bSuccess == FALSE)
             break;
 
-        DeviceNode = dynamic_cast<CDeviceNode *>(GetDeviceNode(Device));
+        DeviceNode = GetDeviceNode(Device);
         if (DeviceNode == nullptr)
         {
             continue;
@@ -882,7 +882,7 @@ CDeviceView::EnableSelectedDevice(
     _Out_ bool &NeedsReboot
     )
 {
-    CDeviceNode *Node = dynamic_cast<CDeviceNode *>(GetSelectedNode());
+    CDeviceNode *Node = AsDeviceNode(GetSelectedNode());
     if (Node == nullptr)
         return false;
 
@@ -909,7 +909,7 @@ CDeviceView::UpdateSelectedDevice(
     _Out_ bool &NeedsReboot
     )
 {
-    CDeviceNode *Node = dynamic_cast<CDeviceNode *>(GetSelectedNode());
+    CDeviceNode *Node = AsDeviceNode(GetSelectedNode());
     if (Node == nullptr)
         return false;
 
@@ -927,7 +927,7 @@ bool
 CDeviceView::UninstallSelectedDevice(
     )
 {
-    CDeviceNode *Node = dynamic_cast<CDeviceNode *>(GetSelectedNode());
+    CDeviceNode *Node = AsDeviceNode(GetSelectedNode());
     if (Node == nullptr)
         return false;
 
@@ -1017,8 +1017,7 @@ CDeviceView::InsertIntoTreeView(
     tvi.iImage = Node->GetClassImage();
     tvi.iSelectedImage = Node->GetClassImage();
 
-    // try to cast it to a device node. This will only succeed if it's the correct type
-    CDeviceNode *DeviceNode = dynamic_cast<CDeviceNode *>(Node);
+    CDeviceNode *DeviceNode = AsDeviceNode(Node);
     if (DeviceNode && DeviceNode->GetOverlayImage())
     {
         tvi.mask |= TVIF_STATE;
@@ -1056,7 +1055,7 @@ CDeviceView::BuildActionMenuForNode(
     // Device nodes have extra data
     if (Node->GetNodeType() == DeviceNode)
     {
-        CDeviceNode *DeviceNode = dynamic_cast<CDeviceNode *>(Node);
+        CDeviceNode *DeviceNode = AsDeviceNode(Node);
 
         if (DeviceNode->CanUpdate())
         {

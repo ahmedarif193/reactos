@@ -237,6 +237,8 @@ BOOL WINAPI SetWorldTransformForMetafile(HDC hdc, const XFORM *pxform);
 #define DbgRaiseAssertionFailure() __emit(0xdefc)
 #elif REACTOS_TARGET_ARM64_CODEGEN
 #define DbgRaiseAssertionFailure() __break(0xf001)
+#elif defined(_M_RISCV64)
+#define DbgRaiseAssertionFailure() __debugbreak()
 #else
 #define DbgRaiseAssertionFailure() __int2c()
 #endif

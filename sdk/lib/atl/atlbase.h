@@ -193,7 +193,7 @@ typedef _ATL_WIN_MODULE70 _ATL_WIN_MODULE;
 
 #if defined(_M_IX86)
 #define OBJECT_ENTRY_PRAGMA(class) __pragma(comment(linker, "/include:___pobjMap_" #class));
-#elif defined(_M_IA64) || defined(_M_AMD64) || (_M_ARM) || defined(_M_ARM64)
+#elif defined(_WIN64) || defined(_M_ARM)
 #define OBJECT_ENTRY_PRAGMA(class) __pragma(comment(linker, "/include:__pobjMap_" #class));
 #else
 #error  Your platform is not supported.

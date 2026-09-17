@@ -961,6 +961,7 @@ NtSetIntervalProfile(
     _In_ KPROFILE_SOURCE ClockSource
 );
 
+#if !defined(_M_RISCV64)
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -970,6 +971,7 @@ NtSetLdtEntries(
     _In_ ULONG Selector2,
     _In_ LDT_ENTRY LdtEntry2
 );
+#endif
 
 NTSYSCALLAPI
 NTSTATUS
@@ -1167,6 +1169,7 @@ ZwSetIntervalProfile(
     _In_ KPROFILE_SOURCE ClockSource
 );
 
+#if !defined(_M_RISCV64)
 NTSYSAPI
 NTSTATUS
 NTAPI
@@ -1176,6 +1179,7 @@ ZwSetLdtEntries(
     _In_ ULONG Selector2,
     _In_ LDT_ENTRY LdtEntry2
 );
+#endif
 
 NTSYSAPI
 NTSTATUS

@@ -49,6 +49,13 @@
  #if !defined(_M_ARM64)
   #define _M_ARM64 1
  #endif
+#elif defined(__riscv) && (__riscv_xlen == 32)
+ #ifndef _RISCV32_
+  #define _RISCV32_ 1
+ #endif
+ #ifndef _M_RISCV32
+  #define _M_RISCV32 1
+ #endif
 #elif defined(__riscv) && (__riscv_xlen == 64)
  #ifndef _RISCV64_
   #define _RISCV64_ 1
@@ -79,6 +86,17 @@
  #endif
 #else
  #error Unknown architecture
+#endif
+
+/* _WIN64 is the data-model contract shared by all native 64-bit Windows
+ * targets. Keep it independent from the instruction-set selection so a
+ * future PPC64 target follows the same pointer-width paths as AMD64, ARM64,
+ * and RISC-V64. */
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_ARM64EC) || \
+    defined(_M_RISCV64) || defined(_M_IA64) || defined(__powerpc64__)
+# if !defined(_WIN64)
+#  define _WIN64 1
+# endif
 #endif
 
 /* ARM64EC has the AMD64 public ABI, but Clang emits AArch64 instructions. */

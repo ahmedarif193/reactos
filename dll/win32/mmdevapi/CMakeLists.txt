@@ -19,7 +19,7 @@ list(APPEND SOURCE
     precomp.h
     ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi_stubs.c)
 
-if(ARCH STREQUAL "arm64" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386")
+if(ARCH STREQUAL "arm64" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386" OR ARCH STREQUAL "riscv64")
     list(APPEND SOURCE
         reactos_render_engine.c
         reactos_render_engine.h

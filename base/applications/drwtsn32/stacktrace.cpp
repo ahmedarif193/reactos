@@ -65,6 +65,11 @@ void PrintStackBacktrace(FILE* output, DumpData& data, ThreadData& thread)
     StackFrame.AddrPC.Offset = thread.Context.Pc;
     StackFrame.AddrStack.Offset = thread.Context.Sp;
     StackFrame.AddrFrame.Offset = thread.Context.Fp;
+#elif defined(_M_RISCV64)
+    MachineType = IMAGE_FILE_MACHINE_RISCV64;
+    StackFrame.AddrPC.Offset = thread.Context.Pc;
+    StackFrame.AddrStack.Offset = thread.Context.Sp;
+    StackFrame.AddrFrame.Offset = thread.Context.S0;
 #else
 #error "Unknown architecture"
 #endif
@@ -121,6 +126,10 @@ void PrintStackBacktrace(FILE* output, DumpData& data, ThreadData& thread)
                  (ULONG_PTR)StackFrame.Params[2], (ULONG_PTR)StackFrame.Params[3],
                  Module.ModuleName, sym->Name, displacement);
     }
+#if defined(_M_RISCV64)
+    if (first)
+        xfprintf(output, "RISC-V64 symbolic stack walking is not available." NEWLINE);
+#endif
 
     UCHAR stackData[0x10 * 10];
     SIZE_T sizeRead;
@@ -128,7 +137,7 @@ void PrintStackBacktrace(FILE* output, DumpData& data, ThreadData& thread)
     ULONG_PTR stackPointer = thread.Context.Esp;
 #elif defined(_M_AMD64)
     ULONG_PTR stackPointer = thread.Context.Rsp;
-#elif defined(_M_ARM) || defined(_M_ARM64)
+#elif defined(_M_ARM) || defined(_M_ARM64) || defined(_M_RISCV64)
     ULONG_PTR stackPointer = thread.Context.Sp;
 #else
 #error Unknown architecture

@@ -3,23 +3,6 @@ include_directories(include)
 
 add_definitions(-D_CRTBLD)
 
-include(except/except.cmake)
-include(float/float.cmake)
-include(math/math.cmake)
-include(mem/mem.cmake)
-include(misc/misc.cmake)
-include(printf/printf.cmake)
-include(search/search.cmake)
-include(startup/startup.cmake)
-include(stdlib/stdlib.cmake)
-include(string/string.cmake)
-include(wstring/wstring.cmake)
-
-include(crtmath.cmake)
-include(libcntpr.cmake)
-include(msvcrtex.cmake)
-include(oldnames.cmake)
-
 add_library(user32_wsprintf
     printf/streamout.c
     printf/wstreamout.c
@@ -36,6 +19,50 @@ add_library(user32_wsprintf
 
 add_dependencies(user32_wsprintf psdk)
 target_compile_definitions(user32_wsprintf PRIVATE _USER32_WSPRINTF)
+
+if(ARCH STREQUAL "riscv64")
+    # RISC-V uses the portable scalar CRT while its floating-point environment
+    # and stack-probe boundaries remain architecture-specific.
+    include(except/except.cmake)
+    include(float/float.cmake)
+    include(math/math.cmake)
+    include(mem/mem.cmake)
+    include(misc/misc.cmake)
+    include(printf/printf.cmake)
+    include(search/search.cmake)
+    include(startup/startup.cmake)
+    add_library(dbgrpt misc/dbgrpt.cpp)
+    target_link_libraries(dbgrpt chkstk ${PSEH_LIB})
+    target_compile_definitions(dbgrpt PRIVATE
+        _MT
+        _DEBUG)
+    add_dependencies(dbgrpt psdk asm)
+    include(stdlib/stdlib.cmake)
+    include(string/string.cmake)
+    include(wstring/wstring.cmake)
+    include(crtmath.cmake)
+    include(libcntpr.cmake)
+    include(oldnames.cmake)
+    include(msvcrtex.cmake)
+    return()
+endif()
+
+include(except/except.cmake)
+include(float/float.cmake)
+include(math/math.cmake)
+include(mem/mem.cmake)
+include(misc/misc.cmake)
+include(printf/printf.cmake)
+include(search/search.cmake)
+include(startup/startup.cmake)
+include(stdlib/stdlib.cmake)
+include(string/string.cmake)
+include(wstring/wstring.cmake)
+
+include(crtmath.cmake)
+include(libcntpr.cmake)
+include(msvcrtex.cmake)
+include(oldnames.cmake)
 
 if(MSVC AND ARCH STREQUAL "i386")
     add_asm_files(ftol2_asm

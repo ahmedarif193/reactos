@@ -2,6 +2,10 @@
 add_definitions(-D_MIDL_USE_GUIDDEF_)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+if(ARCH STREQUAL "riscv64")
+    include_directories(${REACTOS_SOURCE_DIR}/sdk/include/dxsdk)
+    add_compile_definitions(__REACTOS__ _RISCV64_)
+endif()
 
 list(APPEND SOURCE
 #   access.idl

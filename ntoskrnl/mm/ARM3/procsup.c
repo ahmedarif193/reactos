@@ -813,6 +813,14 @@ MmCreatePeb32(IN PEPROCESS Process,
               IN PSECTION_IMAGE_INFORMATION ImageInformation,
               OUT struct _PEB32 **BasePeb)
 {
+#if defined(_M_RISCV64)
+    /* No WOW64 guest ABI or address limit is selected for this port. */
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(InitialPeb);
+    UNREFERENCED_PARAMETER(ImageInformation);
+    UNREFERENCED_PARAMETER(BasePeb);
+    return STATUS_NOT_IMPLEMENTED;
+#else
     PEB32 *Peb = NULL;
     WOW64INFO *Wow64Info;
     PULONG HeapArray;
@@ -887,6 +895,7 @@ MmCreatePeb32(IN PEPROCESS Process,
     KeDetachProcess();
     if (NT_SUCCESS(Status)) *BasePeb = Peb;
     return Status;
+#endif
 }
 #endif
 
@@ -911,9 +920,13 @@ MmCreateTeb(IN PEPROCESS Process,
 #ifdef _WIN64
     if (Process->Wow64Process)
     {
+#if defined(_M_RISCV64)
+        return STATUS_NOT_IMPLEMENTED;
+#else
         if (!Wow64InitialTeb) return STATUS_INVALID_PARAMETER;
         TebSize = Teb32Offset + ROUND_TO_PAGES(sizeof(TEB32));
         HighestAddress = MM_HIGHEST_USER_ADDRESS_WOW64;
+#endif
     }
 #else
     UNREFERENCED_PARAMETER(Wow64InitialTeb);
@@ -1123,17 +1136,21 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     NTSTATUS Status = STATUS_SUCCESS;
     SIZE_T ViewSize = 0;
     PVOID ImageBase = 0;
-    PMMPTE PointerPte;
     KIRQL OldIrql;
+#if defined(_M_RISCV64)
+    ULONG PreviousInitPhase = Process->AddressSpaceInitialized;
+#else
+    PMMPTE PointerPte;
     PMMPDE PointerPde;
     PMMPFN Pfn;
     PFN_NUMBER PageFrameNumber;
+#endif
     UNICODE_STRING FileName;
     PWCHAR Source;
     PCHAR Destination;
     USHORT Length = 0;
 
-#if (_MI_PAGING_LEVELS >= 3)
+#if !defined(_M_RISCV64) && (_MI_PAGING_LEVELS >= 3)
     PMMPPE PointerPpe;
 #endif
 #if (_MI_PAGING_LEVELS == 4)
@@ -1169,6 +1186,11 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     /* Lock PFN database */
     OldIrql = MiAcquirePfnLock();
 
+#if defined(_M_RISCV64)
+    /* Native MM owns the root, resident table PFNs and working-set mapping;
+     * no recursive PTE address can establish that ownership on RISC-V. */
+    Status = MiRiscvInitializeProcessPageTables(Process);
+#else
     /* Setup the PFN for the PDE base of this process */
 #if (_MI_PAGING_LEVELS == 4)
     PointerPte = MiAddressToPte(PXE_BASE);
@@ -1209,21 +1231,34 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     PageFrameNumber = PFN_FROM_PTE(PointerPte);
     MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
 
-    /* All our pages are now active & valid. Release the lock. */
+#endif
+    /* Release the PFN lock before completing or unwinding initialization. */
     MiReleasePfnLock(OldIrql);
 
+#if defined(_M_RISCV64)
+    if (!NT_SUCCESS(Status))
+    {
+        MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
+        Process->AddressSpaceInitialized = PreviousInitPhase;
+        KeDetachProcess();
+        return Status;
+    }
+#else
     /* This should be in hyper space, but not in the mapping range */
     Process->Vm.VmWorkingSetList = MmWorkingSetList;
     ASSERT(((ULONG_PTR)MmWorkingSetList >= MI_MAPPING_RANGE_END) && ((ULONG_PTR)MmWorkingSetList <= HYPER_SPACE_END));
+#endif
 
     /* Now initialize the working set list */
     MiInitializeWorkingSetList(&Process->Vm);
 
+#if !defined(_M_RISCV64)
     /* The rule is that the owner process is always in the FLINK of the PDE's PFN entry */
     Pfn = MiGetPfnEntry(Process->Pcb.DTB0 >> PAGE_SHIFT);
     ASSERT(Pfn->u4.PteFrame == MiGetPfnEntryIndex(Pfn));
     ASSERT(Pfn->u1.WsIndex == 0);
     Pfn->u1.Event = (PKEVENT)Process;
+#endif
 
     /* Sanity check */
     ASSERT(Process->PhysicalVadRoot == NULL);
@@ -1617,13 +1652,15 @@ VOID
 NTAPI
 MmDeleteProcessAddressSpace(IN PEPROCESS Process)
 {
+#if !defined(_M_RISCV64)
     PMMPFN Pfn1, Pfn2;
-    KIRQL OldIrql;
     PFN_NUMBER PageFrameIndex;
+#endif
+    KIRQL OldIrql;
 
 #if defined(_M_ARM64)
     MiArm64RemoveProcessAddressSpace(Process);
-#elif !defined(_M_AMD64)
+#elif !defined(_M_AMD64) && !defined(_M_RISCV64)
     OldIrql = MiAcquireExpansionLock();
     RemoveEntryList(&Process->MmProcessLinks);
     MiReleaseExpansionLock(OldIrql);
@@ -1642,6 +1679,9 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
     /* Acquire the PFN lock */
     OldIrql = MiAcquirePfnLock();
 
+#if defined(_M_RISCV64)
+    MiRiscvDeleteProcessPageTables(Process);
+#else
     /* Check for fully initialized process */
     if (Process->AddressSpaceInitialized == 2)
     {
@@ -1681,6 +1721,7 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
         DPRINT1("Deleting partially initialized address space of Process %p. Might leak resources.\n",
                 Process);
     }
+#endif
 
     /* Release the PFN lock */
     MiReleasePfnLock(OldIrql);

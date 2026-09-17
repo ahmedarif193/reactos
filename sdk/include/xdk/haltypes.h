@@ -468,7 +468,7 @@ typedef ERROR_SEVERITY
 
 #endif
 
-#if defined(_ARM_) || defined(_ARM64_)
+#if defined(_ARM_) || defined(_ARM64_) || defined(_RISCV64_)
 
 struct _KTRAP_FRAME;
 struct _KEXCEPTION_FRAME;
@@ -483,7 +483,7 @@ typedef VOID
     _In_ struct _KEXCEPTION_FRAME *ExceptionFrame,
     _In_ PVOID Exception);
 
-#endif /* defined(_ARM_) || defined(_ARM64_) */
+#endif /* defined(_ARM_) || defined(_ARM64_) || defined(_RISCV64_) */
 
 #if defined(_X86_) || defined(_IA64_)
 typedef

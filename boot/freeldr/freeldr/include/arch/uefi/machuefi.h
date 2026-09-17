@@ -79,7 +79,7 @@ UefiVideoExitBootServices(VOID);
 VOID
 UefiPcBeep(VOID);
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
 BOOLEAN
 UefiSerialInitialize(VOID);
 

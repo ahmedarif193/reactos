@@ -14,7 +14,7 @@ DBG_DEFAULT_CHANNEL(UserMisc);
 
 C_ASSERT(DWM_ROUTINE_ATTACH == ONEPARAM_ROUTINE_DWMATTACH);
 C_ASSERT(DWM_ROUTINE_GETFRAME == ONEPARAM_ROUTINE_DWMGETFRAME);
-C_ASSERT(DWM_ROUTINE_PRESENTSYNC == ONEPARAM_ROUTINE_DWMPRESENTSYNC);
+C_ASSERT(DWM_ROUTINE_ISENABLED == ONEPARAM_ROUTINE_DWMISENABLED);
 C_ASSERT(DWM_ROUTINE_OPENSURFACE == ONEPARAM_ROUTINE_DWMOPENSURFACE);
 
 /* Registered logon process ID */
@@ -364,10 +364,10 @@ NtUserCallOneParam(
             break;
         }
 
-        case ONEPARAM_ROUTINE_DWMPRESENTSYNC:
+        case ONEPARAM_ROUTINE_DWMISENABLED:
         {
-            /* CDD present bracket around dwm's BitBlt (Param: 1 open, 0 close). */
-            Result = IntCompositionDwmSync((LONG)Param);
+            UNREFERENCED_PARAMETER(Param);
+            Result = IntCompositionIsEnabled();
             break;
         }
 

@@ -56,8 +56,8 @@
 @ stdcall HalProcessorIdle()
 @ stdcall HalQueryDisplayParameters(ptr ptr ptr ptr)
 @ stdcall -arch=arm64 HalQueryPciBusRange(ptr ptr)
-@ stdcall -arch=arm64 HalQueryPciMsiSupport(long long ptr ptr ptr ptr ptr)
-@ stdcall -arch=i386,x86_64 HalQueryPciRoutedInterrupt(long long long long long ptr)
+@ stdcall -arch=arm64,riscv64 HalQueryPciMsiSupport(long long ptr ptr ptr ptr ptr)
+@ stdcall -arch=i386,x86_64,riscv64 HalQueryPciRoutedInterrupt(long long long long long ptr)
 @ stdcall HalQueryRealTimeClock(ptr)
 @ stdcall HalReadDmaCounter(ptr)
 @ stdcall HalReportResourceUsage()
@@ -91,6 +91,11 @@
 @ stdcall HalpRegisterPciRouteQuery(ptr)
 @ stdcall HalpSetPciRoutingMap(ptr long)
 @ stdcall HalpRecordPciMaxGsi(ptr)
+@ stdcall -arch=riscv64 HalpRiscvClockInterrupt(ptr) # ReactOS-private kernel bridge: supervisor timer ISR
+@ stdcall -arch=riscv64 HalpRiscvClaimPlicInterrupt() # ReactOS-private supervisor PLIC claim
+@ stdcall -arch=riscv64 HalpRiscvCompletePlicInterrupt(long) # ReactOS-private supervisor PLIC completion
+@ stdcall -arch=riscv64 HalpRiscvIsDeviceMemory(int64 ptr) # ReactOS-private device PMA query
+@ stdcall -arch=riscv64 HalpRiscvGetPciBusRange(ptr ptr) # ReactOS-private FDT PCI root bus range
 @ stdcall -arch=x86_64,arm64 HalpKdReadPciConfig(long long ptr long long)
 @ stdcall -arch=x86_64,arm64 HalpGetInterruptTargetInformation(ptr)
 @ stdcall -arch=x86_64,arm64 HalpGetMessageRoutingInfo(ptr)
@@ -153,18 +158,18 @@
 @ stdcall -arch=x86_64,arm64 KfRaiseIrql(long) ntoskrnl.KfRaiseIrql
 @ stdcall -arch=x86_64 KfReleaseSpinLock(ptr long)
 @ stdcall -arch=arm64 KfReleaseSpinLock(ptr long) ntoskrnl.KfReleaseSpinLock
-@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_BUFFER_UCHAR(ptr ptr long)
-@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_BUFFER_ULONG(ptr ptr long)
-@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_BUFFER_USHORT(ptr ptr long)
-@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_UCHAR(ptr)
-@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_ULONG(ptr)
-@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_USHORT(ptr)
-@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_BUFFER_UCHAR(ptr ptr long)
-@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_BUFFER_ULONG(ptr ptr long)
-@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_BUFFER_USHORT(ptr ptr long)
-@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_UCHAR(ptr long)
-@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_ULONG(ptr long)
-@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_USHORT(ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 READ_PORT_BUFFER_UCHAR(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 READ_PORT_BUFFER_ULONG(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 READ_PORT_BUFFER_USHORT(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 READ_PORT_UCHAR(ptr)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 READ_PORT_ULONG(ptr)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 READ_PORT_USHORT(ptr)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 WRITE_PORT_BUFFER_UCHAR(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 WRITE_PORT_BUFFER_ULONG(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 WRITE_PORT_BUFFER_USHORT(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 WRITE_PORT_UCHAR(ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 WRITE_PORT_ULONG(ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64,riscv64 WRITE_PORT_USHORT(ptr long)
 @ stdcall -version=0x0502 -arch=x86_64 x86BiosAllocateBuffer(ptr ptr ptr)
 @ stdcall -version=0x0600+ -arch=i386,x86_64 x86BiosAllocateBuffer(ptr ptr ptr)
 @ stdcall -version=0x0502 -arch=x86_64 x86BiosCall(long ptr)

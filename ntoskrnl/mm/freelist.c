@@ -193,6 +193,13 @@ MiAllocatePagesForMdl(IN PHYSICAL_ADDRESS LowAddress,
     PMMPFN Pfn1;
     INT LookForZeroedPages;
 
+#if defined(_M_RISCV64)
+    /* This baseline can only expose ordinary coherent RAM. Fix the default
+     * cache choice now; a later mapper must not reinterpret it as uncached. */
+    if (CacheAttribute == MiNotMapped) CacheAttribute = MiCached;
+    if (CacheAttribute != MiCached) return NULL;
+#endif
+
     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
     DPRINT("ARM3-DEBUG: Being called with %I64x %I64x %I64x %lx %d %lu\n", LowAddress, HighAddress, SkipBytes, TotalBytes, CacheAttribute, MdlFlags);
 

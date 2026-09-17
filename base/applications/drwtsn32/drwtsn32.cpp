@@ -38,7 +38,11 @@ ThreadData::ThreadData(HANDLE handle)
 
 void ThreadData::Update()
 {
+#if defined(_M_RISCV64)
+    Context.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL;
+#else
     Context.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL | CONTEXT_DEBUG_REGISTERS;
+#endif
     GetThreadContext(Handle, &Context);
 }
 
@@ -155,4 +159,3 @@ bool UpdateFromEvent(DEBUG_EVENT& evt, DumpData& data)
     }
     return true;
 }
-

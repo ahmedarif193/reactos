@@ -898,6 +898,20 @@ PeLdrLoadImageEx(
         return FALSE;
     }
 
+#if defined(_M_RISCV64)
+    /* The private RISC-V relocation and unwind contracts are meaningful only
+     * for native images produced by the matching toolchain. Reject a foreign
+     * PE before allocating, relocating, or scanning its imports. */
+    if (NtHeaders->FileHeader.Machine != IMAGE_FILE_MACHINE_RISCV64)
+    {
+        ERR("Wrong machine 0x%x in \"%s\"; expected RISC-V64\n",
+            NtHeaders->FileHeader.Machine,
+            FilePath);
+        ArcClose(FileId);
+        return FALSE;
+    }
+#endif
+
     /* Store number of sections to read and a pointer to the first section */
     NumberOfSections = NtHeaders->FileHeader.NumberOfSections;
     SectionHeader = IMAGE_FIRST_SECTION(NtHeaders);

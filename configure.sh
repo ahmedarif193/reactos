@@ -29,7 +29,7 @@ if [ "${ROSBE_DOCKER_ACTIVE:-0}" = "1" ]; then
 	ROSBE_ROOT="/opt/rosbe"
 	ROSBE_SKIP_HOST_CHECK=1
 	ROSBE_OUTPUT_SUFFIX="-docker"
-elif [ -d "$HOME/.local/opt/rosbe/llvm-mingw" ] || [ -d "$HOME/.local/opt/rosbe/mingw-gcc" ]; then
+elif [ -d "$HOME/.local/opt/rosbe/llvm-mingw" ] || [ -d "$HOME/.local/opt/rosbe/llvm-mingw-riscv24" ] || [ -d "$HOME/.local/opt/rosbe/mingw-gcc" ]; then
 	ROSBE_ROOT="$HOME/.local/opt/rosbe"
 	ROSBE_SKIP_HOST_CHECK=0
 else
@@ -54,7 +54,7 @@ ROSBE_LLVM_ROOT="$ROSBE_ROOT/llvm-mingw"
 
 CMAKE_GENERATOR="Ninja"
 USE_CLANG=1
-ARCH=amd64
+ARCH=riscv64
 BUILD_TYPE=Debug
 BUILD_TYPE_SUFFIX=debug
 ROS_CMAKEOPTS=
@@ -66,9 +66,9 @@ RUN_MENUCONFIG=0
 
 usage() {
 	echo "Usage: configure.sh [options]"
-	echo "  --clang              Use Clang/LLVM from ~/.local/opt/rosbe/llvm-mingw (default)"
+	echo "  --clang              Use RosBE Clang/LLVM (RISC-V: llvm-mingw-riscv24; otherwise: llvm-mingw)"
 	echo "  --gcc                Use GCC from ~/.local/opt/rosbe/mingw-gcc"
-	echo "  -a, --arch <arch>    Target architecture: amd64, i386, arm64, riscv64 (default: amd64)"
+	echo "  -a, --arch <arch>    Target architecture: amd64, i386, arm64, riscv64 (default: riscv64)"
 	echo "  -r, --release        Configure a Release build (default: Debug)"
 	echo "  makefiles            Use Unix Makefiles generator (default: Ninja)"
 	echo "  menuconfig           Open the interactive configuration UI first;"
@@ -147,6 +147,9 @@ optional_fex_warning() {
 }
 
 sync_glmark2_submodule() {
+	# The current RISC-V CMake path selects only FreeLdr and the NT core.
+	[ "$ARCH" = "riscv64" ] && return 0
+
 	GLMARK2_DIR="$REACTOS_SOURCE_DIR/base/applications/cmdutils/glmark2"
 	if [ -f "$GLMARK2_DIR/src/benchmark-collection.cpp" ] &&
 	   [ -f "$GLMARK2_DIR/src/zlib/adler32.c" ]; then
@@ -606,6 +609,9 @@ fi
 # target selection.
 if [ "$USE_CLANG" -eq 1 ]; then
 	TOOLCHAIN_FILE=toolchain-clang.cmake
+	if [ "$ARCH" = "riscv64" ]; then
+		ROSBE_LLVM_ROOT="$ROSBE_ROOT/llvm-mingw-riscv24"
+	fi
 
 	if [ "$ROSBE_SKIP_HOST_CHECK" != "1" ]; then
 		[ -x "$ROSBE_LLVM_ROOT/bin/clang" ] || fail "missing RosBE LLVM toolchain at $ROSBE_LLVM_ROOT"

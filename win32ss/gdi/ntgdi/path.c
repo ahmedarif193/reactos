@@ -1907,7 +1907,15 @@ IntGdiWidenPath(PPATH pPath, UINT penWidth, UINT penStyle, FLOAT eMiterLimit)
         goto Exit;
     }
 
-    KeSaveFloatingPointState(&fpsave);
+    if (!NT_SUCCESS(KeSaveFloatingPointState(&fpsave)))
+    {
+        HPATH hNewPath = pNewPath->BaseObject.hHmgr;
+
+        PATH_UnlockPath(pNewPath);
+        PATH_Delete(hNewPath);
+        pNewPath = NULL;
+        goto Exit;
+    }
 
     for (i = 0; i < numStrokes; i++)
     {

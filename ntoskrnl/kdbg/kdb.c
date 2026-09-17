@@ -17,7 +17,7 @@
 /* DEFINES *******************************************************************/
 
 #define KDB_STACK_SIZE                   (4096*3)
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
 #define KDB_STACK_ALIGN                 16
 #ifdef _M_AMD64
 #define KDB_STACK_RESERVE               (5 * sizeof(PVOID)) /* Home space + return address */
@@ -58,7 +58,9 @@ static PKDB_BREAKPOINT KdbSwBreakPoints[KDB_MAXIMUM_SW_BREAKPOINT_COUNT]; /* Ena
 static PKDB_BREAKPOINT KdbHwBreakPoints[KDB_MAXIMUM_HW_BREAKPOINT_COUNT]; /* Enabled hardware breakpoints, orderless */
 static PKDB_BREAKPOINT KdbBreakPointToReenable = NULL; /* Set to a breakpoint struct when single stepping after
                                                           a software breakpoint was hit, to reenable it */
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
 static BOOLEAN KdbpEvenThoughWeHaveABreakPointToReenableWeAlsoHaveARealSingleStep;
+#endif
 LONG KdbLastBreakPointNr = -1;  /* Index of the breakpoint which cause KDB to be entered */
 ULONG KdbNumSingleSteps = 0; /* How many single steps to do */
 BOOLEAN KdbSingleStepOver = FALSE; /* Whether to step over calls/reps. */
@@ -318,6 +320,22 @@ KdbpShouldStepOverInstruction(
 #if defined(_M_ARM64)
     UNREFERENCED_PARAMETER(Eip);
     return FALSE;
+#elif defined(_M_RISCV64)
+    /* A call is jal/jalr writing ra (x1), or c.jalr. */
+    USHORT Low, High;
+    ULONG Inst;
+
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&Low, (PVOID)Eip, sizeof(Low))))
+    {
+        KdbPrintf("Couldn't access memory at 0x%p\n", Eip);
+        return FALSE;
+    }
+    if ((Low & 3) != 3)
+        return ((Low & 0xF07F) == 0x9002) && ((Low & 0x0F80) != 0); /* c.jalr rs1 */
+    if (!NT_SUCCESS(KdbpSafeReadMemory(&High, (PVOID)(Eip + 2), sizeof(High))))
+        return FALSE;
+    Inst = (ULONG)Low | ((ULONG)High << 16);
+    return (((Inst & 0x7F) == 0x6F) || ((Inst & 0x707F) == 0x0067)) && (((Inst >> 7) & 31) == 1);
 #else
     UCHAR Mem[3];
     ULONG i = 0;
@@ -386,7 +404,8 @@ BOOLEAN
 KdbpStepIntoInstruction(
     ULONG_PTR Eip)
 {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
+    /* No software interrupt gates to follow. */
     UNREFERENCED_PARAMETER(Eip);
     return FALSE;
 #else
@@ -462,6 +481,63 @@ KdbpStepIntoInstruction(
     return TRUE;
 #endif
 }
+
+#if defined(_M_RISCV64)
+/*!\brief Arms one RISC-V single step (or a software-breakpoint re-arm).
+ *
+ * The baseline does not assume Sdtrig, so a temporary breakpoint is placed
+ * on the instruction executed next: the fall-through, the call return for
+ * "next", or the decoded jump/branch target. Returns FALSE (with a message)
+ * when the target cannot be determined.
+ */
+static BOOLEAN
+KdbpRiscvArmSingleStep(
+    IN PCONTEXT Context)
+{
+    ULONG_PTR NextPc;
+    PCSTR Reason;
+    LONG InstLen;
+
+    if (KdbNumSingleSteps > 0 && KdbSingleStepOver &&
+        KdbpShouldStepOverInstruction(KeGetContextPc(Context)))
+    {
+        InstLen = KdbpGetInstLength(KeGetContextPc(Context));
+        if (InstLen < 1)
+        {
+            KdbPuts("Cannot single-step: instruction is not readable.\n");
+            return FALSE;
+        }
+        NextPc = KeGetContextPc(Context) + InstLen;
+    }
+    else if (!KdbpRiscvGetNextPc(Context, &NextPc, &Reason))
+    {
+        KdbPrintf("Cannot single-step on RISC-V: %s.\n", Reason);
+        return FALSE;
+    }
+
+    /* The re-armed breakpoint itself covers a successor that lands on it. */
+    if (KdbBreakPointToReenable && NextPc == KdbBreakPointToReenable->Address)
+    {
+        PKDB_BREAKPOINT BreakPoint = KdbBreakPointToReenable;
+
+        KdbBreakPointToReenable = NULL;
+        if (!NT_SUCCESS(KdbpOverwriteInstruction(KdbCurrentProcess, BreakPoint->Address,
+                                                 KD_BREAKPOINT_VALUE,
+                                                 &BreakPoint->Data.SavedInstruction)))
+        {
+            KdbPrintf("Warning: Couldn't reenable breakpoint %d\n", BreakPoint - KdbBreakPoints);
+        }
+        return TRUE;
+    }
+
+    if (!NT_SUCCESS(KdbpInsertBreakPoint(NextPc, KdbBreakPointTemporary, 0, 0, NULL, FALSE, NULL)))
+    {
+        KdbPrintf("Cannot single-step: temporary breakpoint at 0x%p failed.\n", (PVOID)NextPc);
+        return FALSE;
+    }
+    return TRUE;
+}
+#endif
 
 /*!\brief Gets the number of the next breakpoint >= Start.
  *
@@ -603,6 +679,9 @@ KdbpInsertBreakPoint(
             KdbPuts("ARM64 watchpoints may not wrap or cross an eight-byte boundary.\n");
             return STATUS_UNSUCCESSFUL;
         }
+#elif defined(_M_RISCV64)
+        KdbPuts("Hardware breakpoints are not supported on RISC-V.\n");
+        return STATUS_UNSUCCESSFUL;
 #else
 #if !defined(_M_AMD64)
         if (Size == 8)
@@ -765,7 +844,7 @@ KdbpIsBreakPointOurs(IN NTSTATUS ExceptionCode, IN PCONTEXT Context, IN PEXCEPTI
 
     if (ExceptionCode == STATUS_BREAKPOINT) /* Software interrupt */
     {
-#if defined(_M_ARM64) || defined(_M_AMD64)
+#if defined(_M_ARM64) || defined(_M_AMD64) || defined(_M_RISCV64)
         ULONG_PTR BpPc = KeGetContextPc(Context);
 #else
         ULONG_PTR BpPc = KeGetContextPc(Context) - 1; /* Get EIP of INT3 instruction */
@@ -830,6 +909,9 @@ KdbpIsBreakPointOurs(IN NTSTATUS ExceptionCode, IN PCONTEXT Context, IN PEXCEPTI
         }
 
         return Closest == MAXULONG ? -1 : KdbHwBreakPoints[Closest] - KdbBreakPoints;
+#elif defined(_M_RISCV64)
+        UNREFERENCED_PARAMETER(ExceptionRecord);
+        return -1;
 #else
         UCHAR DebugReg;
 
@@ -866,7 +948,7 @@ KdbpEnableBreakPoint(
     IN OUT PKDB_BREAKPOINT BreakPoint  OPTIONAL)
 {
     NTSTATUS Status;
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
     INT i;
     ULONG ul, Length;
 #endif
@@ -971,6 +1053,9 @@ KdbpEnableBreakPoint(
         KdbTrapFrame.Cpsr &= ~KDB_ARM64_PSTATE_D;
         BreakPoint->Data.Hw.DebugReg = Slot;
         KdbHwBreakPoints[KdbHwBreakPointCount++] = BreakPoint;
+#elif defined(_M_RISCV64)
+        KdbPuts("Hardware breakpoints are not supported on RISC-V.\n");
+        return FALSE;
 #else
         if (BreakPoint->Data.Hw.AccessType == KdbAccessExec)
             ASSERT(BreakPoint->Data.Hw.Size == 1);
@@ -1168,6 +1253,16 @@ KdbpDisableBreakPoint(
 
         if (i != MAXULONG)
             ASSERT(FALSE);
+#elif defined(_M_RISCV64)
+        /* Never enabled on RISC-V; nothing to clear. */
+        for (i = 0; i < KdbHwBreakPointCount; i++)
+        {
+            if (KdbHwBreakPoints[i] == BreakPoint)
+            {
+                KdbHwBreakPoints[i] = KdbHwBreakPoints[--KdbHwBreakPointCount];
+                break;
+            }
+        }
 #else
         /* Clear the breakpoint. */
         KdbTrapFrame.Dr7 &= ~(0x3 << (BreakPoint->Data.Hw.DebugReg * 2));
@@ -1194,7 +1289,11 @@ KdbpDisableBreakPoint(
 
     BreakPoint->Enabled = FALSE;
 
-#if !defined(_M_ARM64)
+#if defined(_M_RISCV64)
+    /* The pending re-arm no longer applies once the breakpoint is disabled. */
+    if (BreakPoint == KdbBreakPointToReenable)
+        KdbBreakPointToReenable = NULL;
+#elif !defined(_M_ARM64)
     /*
      * Disabling the breakpoint whose restored instruction was waiting for a
      * single step must also cancel that step. Otherwise the next instruction
@@ -1704,7 +1803,7 @@ KdbpGetExceptionNumberFromStatus(
 /* Arch hooks to save/restore the interrupted flags state around the debugger
  * critical section. ARM64 has no EFLAGS to preserve here: interrupts are
  * masked via _disable() and the trap frame already carries the saved PSTATE. */
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
 #define KdbpArchSaveInterruptState()          0
 #define KdbpArchRestoreInterruptState(State)  ((VOID)(State))
 #else
@@ -1737,7 +1836,7 @@ KdbEnterDebuggerException(
     PKDB_BREAKPOINT BreakPoint;
     ULONG ExpNr;
     ULONGLONG ull;
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
     BOOLEAN Resume = FALSE;
 #endif
     ULONG_PTR OldInterruptState;
@@ -1748,6 +1847,9 @@ KdbEnterDebuggerException(
 #if defined(_M_ARM64)
     KARM64_VFP_STATE LiveVfpState;
     BOOLEAN LiveVfpStateValid = FALSE;
+#endif
+#if defined(_M_RISCV64)
+    BOOLEAN RiscvStepArmed = FALSE;
 #endif
 
     ExceptionCode = (ExceptionRecord ? ExceptionRecord->ExceptionCode : STATUS_BREAKPOINT);
@@ -1791,7 +1893,7 @@ KdbEnterDebuggerException(
                 KeBugCheck(0); // FIXME: Proper bugcode!
             }
 
-#if !defined(_M_ARM64) && !defined(_M_AMD64)
+#if !defined(_M_ARM64) && !defined(_M_AMD64) && !defined(_M_RISCV64)
             /* Also since we are past the int3 now, decrement EIP in the
                TrapFrame. This is only needed because KDBG insists on working
                with the TrapFrame instead of with the Context, as it is supposed
@@ -1806,7 +1908,7 @@ KdbEnterDebuggerException(
         if ((BreakPoint->Type == KdbBreakPointHardware) &&
             (BreakPoint->Data.Hw.AccessType == KdbAccessExec))
         {
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
             Resume = TRUE; /* Set the resume flag when continuing execution */
 #endif
         }
@@ -1818,7 +1920,36 @@ KdbEnterDebuggerException(
         else if (BreakPoint->Type == KdbBreakPointTemporary &&
                  BreakPoint->Process == KdbCurrentProcess)
         {
-#if !defined(_M_ARM64)
+#if defined(_M_RISCV64)
+            /* Delete the temporary breakpoint that carried the step (or the
+             * re-arm of a software breakpoint whose instruction just ran). */
+            KdbpDeleteBreakPoint(-1, BreakPoint);
+
+            if (KdbBreakPointToReenable)
+            {
+                BreakPoint = KdbBreakPointToReenable;
+                KdbBreakPointToReenable = NULL;
+                if (!NT_SUCCESS(KdbpOverwriteInstruction(KdbCurrentProcess, BreakPoint->Address,
+                                                         KD_BREAKPOINT_VALUE,
+                                                         &BreakPoint->Data.SavedInstruction)))
+                {
+                    KdbPrintf("Warning: Couldn't reenable breakpoint %d\n",
+                              BreakPoint - KdbBreakPoints);
+                }
+                if (KdbNumSingleSteps == 0)
+                    goto continue_execution; /* return */
+            }
+
+            if (KdbNumSingleSteps > 0 && --KdbNumSingleSteps > 0)
+            {
+                if (!KdbpRiscvArmSingleStep(Context))
+                    KdbNumSingleSteps = 0;
+                RiscvStepArmed = TRUE;
+                goto continue_execution; /* return */
+            }
+
+            KdbEnteredOnSingleStep = TRUE;
+#elif !defined(_M_ARM64)
             ASSERT((Context->EFlags & EFLAGS_TF) == 0);
 
             /* Delete the temporary breakpoint which was used to step over or into the instruction */
@@ -1845,7 +1976,12 @@ KdbEnterDebuggerException(
         else if (BreakPoint->Type == KdbBreakPointSoftware ||
                  BreakPoint->Type == KdbBreakPointTemporary)
         {
-#if !defined(_M_ARM64)
+#if defined(_M_RISCV64)
+            /* Re-armed by a temporary breakpoint on the successor instruction
+             * once execution continues (see KdbpRiscvArmSingleStep). */
+            ASSERT(ExceptionCode == STATUS_BREAKPOINT);
+            KdbBreakPointToReenable = BreakPoint;
+#elif !defined(_M_ARM64)
             ASSERT(ExceptionCode == STATUS_BREAKPOINT);
             Context->EFlags |= EFLAGS_TF;
             KdbBreakPointToReenable = BreakPoint;
@@ -1877,7 +2013,7 @@ KdbEnterDebuggerException(
 
         if (BreakPoint->Type == KdbBreakPointSoftware)
         {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
             KdbPrintf("\nEntered debugger on breakpoint #%d: EXEC 0x%p\n",
                       KdbLastBreakPointNr, KeGetContextPc(Context));
 #else
@@ -1897,7 +2033,7 @@ KdbEnterDebuggerException(
     }
     else if (ExceptionCode == STATUS_SINGLE_STEP)
     {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
         if (!EnterConditionMet)
         {
             return kdHandleException;
@@ -1989,7 +2125,7 @@ KdbEnterDebuggerException(
             return kdHandleException;
         }
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
         KdbPrintf("\nEntered debugger on embedded breakpoint at 0x%p.\n",
                   KeGetContextPc(Context));
 #else
@@ -2097,7 +2233,17 @@ EnterKdbg:;
     KdbpInternalEnter(EntryPoint);
 
     /* Check if we should single step */
-#if !defined(_M_ARM64)
+#if defined(_M_RISCV64)
+    /* Step requests and a pending software-breakpoint re-arm both need a
+     * temporary breakpoint on the successor of the instruction at PC. */
+    if (KdbNumSingleSteps > 0 || KdbBreakPointToReenable)
+    {
+        /* KdbTrapFrame is what resumes below, whatever thread was attached. */
+        if (!KdbpRiscvArmSingleStep(&KdbTrapFrame))
+            KdbNumSingleSteps = 0;
+        RiscvStepArmed = TRUE;
+    }
+#elif !defined(_M_ARM64)
     if (KdbNumSingleSteps > 0)
     {
         /* Variable explains itself! */
@@ -2156,7 +2302,13 @@ EnterKdbg:;
     }
 
 continue_execution:
-#if !defined(_M_ARM64)
+#if defined(_M_RISCV64)
+    /* A breakpoint whose original instruction was restored above but whose
+     * hit did not enter the debugger still needs its re-arm scheduled. */
+    if (KdbBreakPointToReenable && !RiscvStepArmed)
+        (VOID)KdbpRiscvArmSingleStep(Context);
+#endif
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
     /*
      * An x86/x64 hardware execution breakpoint raises #DB, which arrives as
      * STATUS_SINGLE_STEP.  Set RF before resuming so the faulting instruction
@@ -2188,6 +2340,15 @@ continue_execution:
         if (KdbLastBreakPointNr < 0)
         {
             KeSetContextPc(Context, KeGetContextPc(Context) + KD_BREAKPOINT_SIZE);
+        }
+#elif defined(_M_RISCV64)
+        /* Only an embedded ebreak/c.ebreak is skipped; a KDBG breakpoint's
+         * original instruction was restored above and must run. */
+        if (KdbLastBreakPointNr < 0)
+        {
+            LONG InstLen = KdbpGetInstLength(KeGetContextPc(Context));
+
+            KeSetContextPc(Context, KeGetContextPc(Context) + (InstLen > 0 ? InstLen : KD_BREAKPOINT_SIZE));
         }
 #elif !defined(_M_ARM64)
 

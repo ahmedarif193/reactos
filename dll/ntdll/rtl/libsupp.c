@@ -247,6 +247,14 @@ RtlWalkFrameChain(OUT PVOID *Callers,
                   IN ULONG Count,
                   IN ULONG Flags)
 {
+#if defined(_M_RISCV64)
+    UNREFERENCED_PARAMETER(Callers);
+    UNREFERENCED_PARAMETER(Count);
+    UNREFERENCED_PARAMETER(Flags);
+
+    /* RVUW decoding is not implemented. Do not follow an x86 frame chain. */
+    return 0;
+#else
     ULONG_PTR Stack, NewStack, StackBegin, StackEnd = 0;
     ULONG_PTR Eip;
     BOOLEAN Result, StopSearch = FALSE;
@@ -355,6 +363,7 @@ RtlWalkFrameChain(OUT PVOID *Callers,
 
     /* Return frames parsed */
     return i;
+#endif
 }
 #endif
 
@@ -1252,6 +1261,39 @@ RtlComputeImportTableHash(IN HANDLE FileHandle,
     return STATUS_NOT_IMPLEMENTED;
 }
 
+#if defined(_M_RISCV64)
+#include <ndk/riscv64/exception.h>
+DECLSPEC_NORETURN VOID NTAPI RtlpRiscv64RaiseFatal(NTSTATUS Status)
+{
+    NtTerminateProcess(NtCurrentProcess(), Status);
+    __fastfail(FAST_FAIL_FATAL_APP_EXIT);
+}
+extern UCHAR KiUserExceptionDispatcher[];
+extern UCHAR KiRiscvUserExceptionDispatcherEnd[];
+NTSTATUS NTAPI RtlpSafeCopyMemory(VOID *Destination, const VOID *Source, SIZE_T Length);
+NTSTATUS NTAPI
+RtlpRiscv64UnwindUserException(ULONG_PTR Pc, ULONG_PTR Low, ULONG_PTR High,
+                              PCONTEXT Context)
+{
+    CONTEXT Saved;
+    ULONG_PTR Stack = Context->Sp;
+    ULONG Required = CONTEXT_CONTROL | CONTEXT_INTEGER;
+    if (Pc < (ULONG_PTR)KiUserExceptionDispatcher ||
+        Pc >= (ULONG_PTR)KiRiscvUserExceptionDispatcherEnd)
+        return STATUS_NOT_FOUND;
+    if ((Stack & 15) || Stack < Low || Stack > High ||
+        High - Stack < sizeof(KUSER_EXCEPTION_STACK) ||
+        !NT_SUCCESS(RtlpSafeCopyMemory(&Saved, (PVOID)Stack, sizeof(Saved))) ||
+        (Saved.ContextFlags & Required) != Required ||
+        Saved.Sp < Stack + sizeof(KUSER_EXCEPTION_STACK) || Saved.Sp > High ||
+        (Saved.Sp & 15) || (Saved.Pc & 1) ||
+        Saved.Pc < 0x10000 || Saved.Pc >= 0x0000004000000000ULL)
+        return STATUS_BAD_STACK;
+    *Context = Saved;
+    return STATUS_SUCCESS;
+}
+#endif
+
 NTSTATUS
 NTAPI
 RtlpSafeCopyMemory(
@@ -1259,6 +1301,10 @@ RtlpSafeCopyMemory(
    _In_reads_bytes_(Length) CONST VOID UNALIGNED *Source,
    _In_ SIZE_T Length)
 {
+#if defined(_M_RISCV64)
+    return NtReadVirtualMemory(NtCurrentProcess(), (PVOID)Source,
+                               Destination, Length, NULL);
+#else
     _SEH2_TRY
     {
         RtlCopyMemory(Destination, Source, Length);
@@ -1270,6 +1316,7 @@ RtlpSafeCopyMemory(
     _SEH2_END;
 
     return STATUS_SUCCESS;
+#endif
 }
 
 /* FIXME: code duplication with kernel32/client/time.c */

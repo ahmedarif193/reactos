@@ -1,7 +1,9 @@
 
-add_subdirectory(bochs)
-add_subdirectory(vbe)
-add_subdirectory(vga)
+if(NOT ARCH STREQUAL "riscv64")
+    add_subdirectory(bochs)
+    add_subdirectory(vbe)
+    add_subdirectory(vga)
+endif()
 #add_subdirectory(vga_new)
 add_subdirectory(uefifb)
 
@@ -11,7 +13,9 @@ if(REACTOS_USE_XPDM)
 endif()
 
 if(REACTOS_USE_XPDM)
-    add_subdirectory(vmx_svga)
+    if(NOT ARCH STREQUAL "riscv64")
+        add_subdirectory(vmx_svga)
+    endif()
     add_subdirectory(virtgpu)
 
     if((ARCH STREQUAL "arm64") AND RPI5_SUPPORT)

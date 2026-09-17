@@ -108,7 +108,7 @@ _STLP_IMPORT_DECLSPEC LONG _STLP_STDCALL InterlockedExchange(IN OUT LONG volatil
 _STLP_IMPORT_DECLSPEC void _STLP_STDCALL Sleep(DWORD);
 #endif
 #      if defined (_WIN64)
-_STLP_IMPORT_DECLSPEC void* _STLP_STDCALL _InterlockedExchangePointer(void* volatile *, void*);
+void* _STLP_STDCALL _InterlockedExchangePointer(void* volatile *, void*);
 #      endif
 #    elif !defined (_STLP_WCE)
 /* boris : for the latest SDK, you may actually need the other version of the declaration (above)

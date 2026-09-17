@@ -4520,6 +4520,7 @@ DxgkCbGetDeviceInformation(
     PDXGKRNL_ADAPTER Adapter;
     PPHYSICAL_MEMORY_RANGE MemoryRanges;
     PPHYSICAL_MEMORY_RANGE Range;
+    ULONGLONG SystemMemorySize;
     ULONGLONG        TotalStart100ns;
 
     PAGED_CODE();
@@ -4549,41 +4550,58 @@ DxgkCbGetDeviceInformation(
     DeviceInformation->PhysicalDeviceObject = Adapter->PhysicalDeviceObject;
     DeviceInformation->DeviceRegistryPath = Adapter->DeviceRegistryPath;
     DeviceInformation->TranslatedResourceList = Adapter->TranslatedResources;
-    DeviceInformation->SystemMemorySize.QuadPart =
-        (LONGLONG)SharedUserData->NumberOfPhysicalPages << PAGE_SHIFT;
     DeviceInformation->DockingState = DockStateUnsupported;
 
     /*
-     * HighestPhysicalAddress is the highest byte in any installed physical
-     * run, not merely (installed-page-count - 1).  Machines with firmware
-     * holes make those values observably different.
+     * Use one memory-manager snapshot for the installed byte count and the
+     * highest physical address.  This also accounts for firmware holes.
      */
     MemoryRanges = MmGetPhysicalMemoryRanges();
-    if (MemoryRanges != NULL)
+    if (MemoryRanges == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    SystemMemorySize = 0;
+    for (Range = MemoryRanges;
+         Range->BaseAddress.QuadPart != 0 ||
+         Range->NumberOfBytes.QuadPart != 0;
+         ++Range)
     {
-        for (Range = MemoryRanges;
-             Range->NumberOfBytes.QuadPart != 0;
-             ++Range)
+        ULONGLONG NumberOfBytes;
+        ULONGLONG EndAddress;
+
+        if (Range->BaseAddress.QuadPart < 0 ||
+            Range->NumberOfBytes.QuadPart <= 0)
         {
-            ULONGLONG EndAddress;
-
-            EndAddress = (ULONGLONG)Range->BaseAddress.QuadPart +
-                         (ULONGLONG)Range->NumberOfBytes.QuadPart - 1;
-            if (EndAddress >
-                (ULONGLONG)DeviceInformation->HighestPhysicalAddress.QuadPart)
-            {
-                DeviceInformation->HighestPhysicalAddress.QuadPart =
-                    (LONGLONG)EndAddress;
-            }
+            ExFreePool(MemoryRanges);
+            return STATUS_DATA_ERROR;
         }
-        ExFreePool(MemoryRanges);
-    }
-    else if (DeviceInformation->SystemMemorySize.QuadPart != 0)
-    {
-        DeviceInformation->HighestPhysicalAddress.QuadPart =
-            DeviceInformation->SystemMemorySize.QuadPart - 1;
-    }
 
+        NumberOfBytes = (ULONGLONG)Range->NumberOfBytes.QuadPart;
+        if (NumberOfBytes > (ULONGLONG)MAXLONGLONG - SystemMemorySize)
+            SystemMemorySize = (ULONGLONG)MAXLONGLONG;
+        else
+            SystemMemorySize += NumberOfBytes;
+
+        if ((ULONGLONG)Range->BaseAddress.QuadPart >
+            (ULONGLONG)MAXLONGLONG - (NumberOfBytes - 1))
+        {
+            EndAddress = (ULONGLONG)MAXLONGLONG;
+        }
+        else
+        {
+            EndAddress = (ULONGLONG)Range->BaseAddress.QuadPart +
+                         NumberOfBytes - 1;
+        }
+
+        if (EndAddress >
+            (ULONGLONG)DeviceInformation->HighestPhysicalAddress.QuadPart)
+        {
+            DeviceInformation->HighestPhysicalAddress.QuadPart =
+                (LONGLONG)EndAddress;
+        }
+    }
+    ExFreePool(MemoryRanges);
+    DeviceInformation->SystemMemorySize.QuadPart = (LONGLONG)SystemMemorySize;
     DXGKRNL_TRACE("DxgkCbGetDeviceInformation: PDO %p SoftwareKey=%wZ "
                   "SysMem=%I64u HighestPA=0x%I64X TransRes=%p\n",
                   Adapter->PhysicalDeviceObject,

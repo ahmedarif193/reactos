@@ -72,9 +72,14 @@ if (TARGET_BUILD_TYPE)
     # Silence warning about unused variable
 endif()
 
+if(ARCH STREQUAL "riscv64")
+    add_host_tool(riscv64-pe riscv64-pe.c)
+    target_link_libraries(riscv64-pe PRIVATE host_includes)
+endif()
+
 if(NOT MSVC)
     add_host_tool(pefixup pefixup.c)
-    if (ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+    if (ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64")
         target_compile_definitions(pefixup PRIVATE _TARGET_PE64)
     endif()
     target_link_libraries(pefixup PRIVATE host_includes)

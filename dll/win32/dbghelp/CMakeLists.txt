@@ -77,6 +77,10 @@ else()
         symbol.c
         type.c)
 
+    if(ARCH STREQUAL "riscv64")
+        list(APPEND SOURCE cpu_riscv64.c)
+    endif()
+
     add_library(dbghelp MODULE
         ${SOURCE}
         version.rc

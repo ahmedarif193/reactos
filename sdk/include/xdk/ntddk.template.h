@@ -125,6 +125,9 @@ $include(arm/ke.h)
 $include(arm/mm.h)
 #elif defined(_M_ARM64)
 $include(arm64/ke.h)
+#elif defined(_M_RISCV64)
+$include(riscv64/ke.h)
+$include(riscv64/mm.h)
 #else
 #error Unknown Architecture
 #endif

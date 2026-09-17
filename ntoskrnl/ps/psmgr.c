@@ -170,7 +170,10 @@ PspLookupKernelUserEntryPoints(VOID)
                                           &KeRaiseUserExceptionDispatcher);
     if (!NT_SUCCESS(Status)) return Status;
 
-    /* Get user-mode SLIST exception functions for page fault rollback race hack */
+#if !defined(_M_RISCV64)
+    /* Get user-mode SLIST exception functions for page fault rollback race hack.
+     * RISC-V serializes pop and link access under its header lock; it has no
+     * speculative pop instruction range to rewind after a concurrent free. */
     Status = PspLookupSystemDllEntryPoint("ExpInterlockedPopEntrySListEnd",
                                           &KeUserPopEntrySListEnd);
     if (!NT_SUCCESS(Status)) { DPRINT1("this not found\n"); return Status; }
@@ -180,6 +183,7 @@ PspLookupKernelUserEntryPoints(VOID)
     Status = PspLookupSystemDllEntryPoint("ExpInterlockedPopEntrySListResume",
                                           &KeUserPopEntrySListResume);
     if (!NT_SUCCESS(Status)) { DPRINT1("this not found\n"); return Status; }
+#endif
 
     /* On x86, there are multiple ways to do a system call, find the right stubs */
 #if defined(_X86_)

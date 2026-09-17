@@ -74,3 +74,8 @@ private:
         );
 };
 
+inline CDeviceNode *AsDeviceNode(CNode *Node)
+{
+    return (Node && Node->GetNodeType() == DeviceNode) ?
+           static_cast<CDeviceNode *>(Node) : nullptr;
+}

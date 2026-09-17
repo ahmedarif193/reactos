@@ -69,7 +69,7 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     // FIXME: This doesn't respect PAE, but we currently don't
     // define a PAE build flag since there is no such build.
     //
-#if !defined(_M_AMD64) && !defined(_M_ARM64)
+#if !defined(_M_AMD64) && !defined(_M_ARM64) && !defined(_M_RISCV64)
     ASSERT(PhysicalAddress.HighPart == 0);
 #endif
 
@@ -78,6 +78,12 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     //
     CacheType &= 0xFF;
     if (CacheType >= MmMaximumCacheType) return NULL;
+
+#if defined(_M_RISCV64)
+    /* Validate the whole page-rounded RAM/device PMA before reserving PTEs. */
+    if (!MiRiscvValidateIoMapping(PhysicalAddress, NumberOfBytes, CacheType))
+        return NULL;
+#endif
 
     //
     // Calculate page count
@@ -104,6 +110,7 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     //
     // Check if this is uncached
     //
+#if !defined(_M_RISCV64)
     if (CacheAttribute != MiCached)
     {
         //
@@ -112,6 +119,7 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
         KeFlushEntireTb(TRUE, TRUE);
         KeInvalidateAllCaches();
     }
+#endif
 
     //
     // Now compute the VA offset
@@ -127,6 +135,11 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     {
         case MiNonCached:
 
+#if defined(_M_RISCV64)
+            /* Validated device PMA, not a RAM cache-mode transition. PBMT
+             * stays zero; baseline Sv39 has no cache-override bits. */
+            ASSERT(IsIoMapping);
+#else
             //
             // Disable the cache
             //
@@ -137,6 +150,7 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
             {
                 MI_SET_PTE_ATTR_INDEX(&TempPte, MI_ARM64_MAIR_DEVICE_nGnRnE_IDX);
             }
+#endif
 #endif
             break;
 
@@ -170,8 +184,10 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     //
     Pfn = (PFN_NUMBER)(PhysicalAddress.QuadPart >> PAGE_SHIFT);
     ASSERT((Pfn1 == MiGetPfnEntry(Pfn)) || (Pfn1 == NULL));
+#if !defined(_M_RISCV64)
     KeFlushEntireTb(TRUE, TRUE);
     KeInvalidateAllCaches();
+#endif
 
     //
     // Do the mapping

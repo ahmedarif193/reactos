@@ -31,4 +31,8 @@ target_compile_definitions(libcntpr
     _LIBCNT_
     __CRT__NO_INLINE
     CRTDLL)
-add_dependencies(libcntpr psdk asm)
+if(ARCH STREQUAL "riscv64")
+    add_dependencies(libcntpr psdk)
+else()
+    add_dependencies(libcntpr psdk asm)
+endif()

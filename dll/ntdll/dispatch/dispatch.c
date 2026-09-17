@@ -23,7 +23,7 @@ typedef NTSTATUS (NTAPI *USER_CALL)(PVOID Argument, ULONG ArgumentLength);
  */
 VOID
 NTAPI
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
 KiUserExceptionDispatcherWorker(PEXCEPTION_RECORD ExceptionRecord,
                                 PCONTEXT Context)
 #else
@@ -45,6 +45,9 @@ KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord,
     if (RtlDispatchException(ExceptionRecord, Context))
     {
         /* Continue executing */
+#if defined(_M_RISCV64)
+        Context->ContextFlags &= ~CONTEXT_UNWOUND_TO_CALL;
+#endif
         Status = NtContinue(Context, FALSE);
     }
     else
@@ -52,6 +55,12 @@ KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord,
         /* Raise an exception */
         Status = NtRaiseException(ExceptionRecord, Context, FALSE);
     }
+
+#if defined(_M_RISCV64)
+    /* Failed continuation/delivery cannot recursively dispatch the failure. */
+    NtTerminateProcess(NtCurrentProcess(), Status);
+    __fastfail(FAST_FAIL_FATAL_APP_EXIT);
+#endif
 
     /* Setup the Exception record */
     NestedExceptionRecord.ExceptionCode = Status;

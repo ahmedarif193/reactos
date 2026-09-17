@@ -1325,8 +1325,10 @@ NtInitializeRegistry(IN USHORT Flag)
     if (KeGetPreviousMode() == UserMode)
         return ZwInitializeRegistry(Flag);
 
-    /* Enough of the system has booted by now */
+#if defined(_M_IX86) || defined(_M_AMD64)
+    /* Enough of the system has booted for the x86 cycle-count measurement. */
     Ki386PerfEnd();
+#endif
 
     /* Validate flag */
     if (Flag > CM_BOOT_FLAG_MAX) return STATUS_INVALID_PARAMETER;

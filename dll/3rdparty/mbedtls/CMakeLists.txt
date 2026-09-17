@@ -93,7 +93,7 @@ add_library(mbedtls MODULE
 
 set_module_type(mbedtls win32dll)
 target_compile_definitions(mbedtls PRIVATE _WIN32)
-if(NOT MSVC)
+if(NOT MSVC AND NOT ARCH STREQUAL "riscv64")
     target_link_libraries(mbedtls libgcc)
 endif()
 add_importlibs(mbedtls advapi32 msvcrt kernel32 ntdll)

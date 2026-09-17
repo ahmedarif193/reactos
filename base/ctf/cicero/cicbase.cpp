@@ -15,12 +15,21 @@
 
 void* operator new(size_t size, const CicNoThrow&) noexcept
 {
+#ifdef _M_RISCV64
+    return calloc(size ? size : 1, 1);
+#else
     return cicMemAllocClear(size);
+#endif
 }
 void* operator new[](size_t size, const CicNoThrow&) noexcept
 {
+#ifdef _M_RISCV64
+    return calloc(size ? size : 1, 1);
+#else
     return cicMemAllocClear(size);
+#endif
 }
+#ifndef _M_RISCV64
 void operator delete(void* ptr) noexcept
 {
     cicMemFree(ptr);
@@ -29,6 +38,7 @@ void operator delete[](void* ptr) noexcept
 {
     cicMemFree(ptr);
 }
+#endif
 void operator delete(void* ptr, size_t size) noexcept
 {
     cicMemFree(ptr);

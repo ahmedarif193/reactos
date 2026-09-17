@@ -143,7 +143,7 @@ int __cdecl WinMainCRTStartup (void);
 int __cdecl WinMainCRTStartup (void)
 {
   int ret = 255;
-#ifdef __SEH__
+#if defined(__SEH__) && !defined(_M_RISCV64)
   asm ("\t.l_startw:\n"
     "\t.seh_handler __C_specific_handler, @except\n"
     "\t.seh_handlerdata\n"
@@ -155,7 +155,7 @@ int __cdecl WinMainCRTStartup (void)
   mingw_app_type = 1;
   __security_init_cookie ();
   ret = __tmainCRTStartup ();
-#ifdef __SEH__
+#if defined(__SEH__) && !defined(_M_RISCV64)
   asm ("\tnop\n"
     "\t.l_endw: nop\n");
 #endif
@@ -178,7 +178,7 @@ int __cdecl mainCRTStartup (void)
       return -1;
   }
 #endif
-#ifdef __SEH__
+#if defined(__SEH__) && !defined(_M_RISCV64)
   asm ("\t.l_start:\n"
     "\t.seh_handler __C_specific_handler, @except\n"
     "\t.seh_handlerdata\n"
@@ -190,7 +190,7 @@ int __cdecl mainCRTStartup (void)
   mingw_app_type = 0;
   __security_init_cookie ();
   ret = __tmainCRTStartup ();
-#ifdef __SEH__
+#if defined(__SEH__) && !defined(_M_RISCV64)
   asm ("\tnop\n"
     "\t.l_end: nop\n");
 #endif

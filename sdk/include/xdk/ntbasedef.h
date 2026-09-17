@@ -68,7 +68,7 @@
  #pragma strict_gs_check(push, on)
 #endif
 
-#if defined(_M_MRX000) || defined(_M_ALPHA) || defined(_M_PPC) || defined(_M_IA64) || defined(_M_AMD64) || defined(_M_ARM) || defined(_M_ARM64)
+#if defined(_M_MRX000) || defined(_M_ALPHA) || defined(_M_PPC) || defined(_M_IA64) || defined(_M_ARM) || defined(_WIN64)
  #define ALIGNMENT_MACHINE
  #define UNALIGNED __unaligned
  #if defined(_WIN64)
@@ -678,6 +678,10 @@ typedef struct _PROCESSOR_NUMBER {
 
 #define ALL_PROCESSOR_GROUPS 0xffff
 
+/* These tags must have file scope even before architecture headers are read. */
+struct _EXCEPTION_RECORD;
+struct _CONTEXT;
+
 typedef
 _IRQL_requires_same_
 _Function_class_(EXCEPTION_ROUTINE)
@@ -815,12 +819,12 @@ $endif(_WINNT_)
 #define RotateRight32 _rotr
 #define RotateRight64 _rotr64
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
  #define RotateLeft8 _rotl8
  #define RotateLeft16 _rotl16
  #define RotateRight8 _rotr8
  #define RotateRight16 _rotr16
-#endif /* _M_AMD64 || _M_ARM64 */
+#endif /* _WIN64 */
 
 /* C_ASSERT Definition */
 #define C_ASSERT(expr) extern char (*c_assert(void)) [(expr) ? 1 : -1]

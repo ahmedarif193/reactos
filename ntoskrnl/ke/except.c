@@ -102,6 +102,29 @@ KiRaiseException(
     /* Check if we need to probe */
     if (PreviousMode != KernelMode)
     {
+#if defined(_M_RISCV64)
+        NTSTATUS Status;
+        Status = KiRiscvCopyFromUser(&LocalContext, Context, sizeof(LocalContext));
+        if (!NT_SUCCESS(Status)) return Status;
+        RtlZeroMemory(&LocalExceptionRecord, sizeof(LocalExceptionRecord));
+        Size = FIELD_OFFSET(EXCEPTION_RECORD, ExceptionInformation);
+        Status = KiRiscvCopyFromUser(&LocalExceptionRecord, ExceptionRecord, Size);
+        if (!NT_SUCCESS(Status)) return Status;
+        ParameterCount = LocalExceptionRecord.NumberParameters;
+        if (ParameterCount > EXCEPTION_MAXIMUM_PARAMETERS) return STATUS_INVALID_PARAMETER;
+        Status = KiRiscvCopyFromUser(LocalExceptionRecord.ExceptionInformation,
+            (PUCHAR)ExceptionRecord + Size, ParameterCount * sizeof(ULONG_PTR));
+        if (!NT_SUCCESS(Status)) return Status;
+        if ((LocalContext.ContextFlags & (CONTEXT_CONTROL | CONTEXT_INTEGER)) !=
+            (CONTEXT_CONTROL | CONTEXT_INTEGER) ||
+            (LocalContext.ContextFlags & ~(CONTEXT_ALL | CONTEXT_UNWOUND_TO_CALL)) ||
+            LocalContext.Pc < MM_ALLOCATION_GRANULARITY || LocalContext.Pc >= MmUserProbeAddress ||
+            (LocalContext.Pc & 1) || LocalContext.Sp < MM_ALLOCATION_GRANULARITY ||
+            LocalContext.Sp >= MmUserProbeAddress || (LocalContext.Sp & 15))
+            return STATUS_INVALID_PARAMETER;
+        Context = &LocalContext;
+        ExceptionRecord = &LocalExceptionRecord;
+#else
         /* Set up SEH */
         _SEH2_TRY
         {
@@ -145,6 +168,7 @@ KiRaiseException(
             _SEH2_YIELD(return _SEH2_GetExceptionCode());
         }
         _SEH2_END;
+#endif
     }
 
     /* Convert the context record */
@@ -175,6 +199,14 @@ NtRaiseException(
     _In_ PCONTEXT Context,
     _In_ BOOLEAN FirstChance)
 {
+#if defined(_M_RISCV64)
+    PKTRAP_FRAME Frame = KeGetCurrentThread()->TrapFrame;
+    NTSTATUS Status;
+    if (!Frame || !KiUserTrap(Frame)) return STATUS_INVALID_DEVICE_STATE;
+    Status = KiRaiseException(ExceptionRecord, Context, NULL, Frame, FirstChance);
+    if (!NT_SUCCESS(Status)) return Status;
+    KiRiscvReturnToUser(Frame);
+#else
     NTSTATUS Status;
     PKTHREAD Thread;
     PKTRAP_FRAME TrapFrame;
@@ -209,6 +241,7 @@ NtRaiseException(
 
     /* It was handled, so exit restoring all state */
     KiExceptionExit(TrapFrame, ExceptionFrame);
+#endif
 }
 
 NTSTATUS
@@ -217,6 +250,24 @@ NtContinueEx(
     _In_ PCONTEXT Context,
     _In_opt_ PKCONTINUE_ARGUMENT ContinueArgument)
 {
+#if defined(_M_RISCV64)
+    KCONTINUE_ARGUMENT CapturedArgument;
+    NTSTATUS Status;
+
+    if ((ULONG_PTR)ContinueArgument <= 0xff)
+        return KiRiscvContinue(Context, ContinueArgument != NULL);
+    if (ExGetPreviousMode() == UserMode)
+    {
+        Status = KiRiscvCopyFromUser(&CapturedArgument, ContinueArgument, sizeof(CapturedArgument));
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+    else
+        CapturedArgument = *ContinueArgument;
+    if (((ULONG)CapturedArgument.ContinueType >= KCONTINUE_LAST) ||
+        (CapturedArgument.ContinueFlags & ~(KCONTINUE_FLAG_TEST_ALERT | KCONTINUE_FLAG_DELIVER_APC)))
+        return STATUS_INVALID_PARAMETER;
+    return KiRiscvContinue(Context, !!(CapturedArgument.ContinueFlags & (KCONTINUE_FLAG_TEST_ALERT | KCONTINUE_FLAG_DELIVER_APC)));
+#else
     KCONTINUE_ARGUMENT CapturedArgument;
     BOOLEAN TestAlert;
 
@@ -245,6 +296,7 @@ NtContinueEx(
     }
 
     return NtContinue(Context, TestAlert);
+#endif
 }
 
 NTSTATUS
@@ -253,6 +305,9 @@ NtContinue(
     _In_ PCONTEXT Context,
     _In_ BOOLEAN TestAlert)
 {
+#if defined(_M_RISCV64)
+    return KiRiscvContinue(Context, TestAlert);
+#else
     PKTHREAD Thread;
     NTSTATUS Status;
     PKTRAP_FRAME TrapFrame;
@@ -284,6 +339,7 @@ NtContinue(
 
     /* Exit to new context */
     KiExceptionExit(TrapFrame, ExceptionFrame);
+#endif
 }
 
 /* EOF */

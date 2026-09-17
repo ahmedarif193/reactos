@@ -39,6 +39,9 @@ static const ULONG BaseArray[] = {0, 0xF1012000};
 // #define QEMUUART ((ULONG)0x09000000)
 #elif defined(_M_ARM64)
 static const ULONG BaseArray[] = {0, 0x09000000};
+#elif defined(_M_RISCV64)
+/* RISC-V platforms do not have an architecture-defined legacy COM address. */
+static const ULONG BaseArray[] = {0};
 #else
 #error Unknown architecture
 #endif

@@ -342,7 +342,7 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 #endif
 
-#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__) || defined(_M_RISCV64)
     {
         PFN_NUMBER StartPage = (ULONG_PTR)WinLdrSystemBlock >> PAGE_SHIFT;
         PFN_NUMBER EndPage = ((ULONG_PTR)WinLdrSystemBlock +
@@ -352,7 +352,7 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
         Status = MempSetupPaging(StartPage, EndPage - StartPage, TRUE);
         if (!Status)
         {
-            ERR("Error during MempSetupPaging of ARM64 loader system block\n");
+            ERR("Error during MempSetupPaging of loader system block\n");
             return FALSE;
         }
     }

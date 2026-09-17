@@ -10,7 +10,9 @@
 
 #include <ntoskrnl.h>
 #include <cportlib/cportlib.h>
+#if !defined(_M_RISCV64)
 #include <cportlib/uartinfo.h>
+#endif
 
 /* GLOBALS *******************************************************************/
 
@@ -83,6 +85,17 @@ InbvPortInitialize(
     _Out_ PULONG PortId,
     _In_ BOOLEAN IsMMIODevice)
 {
+#if defined(_M_RISCV64)
+    UNREFERENCED_PARAMETER(BaudRate);
+    UNREFERENCED_PARAMETER(PortNumber);
+    UNREFERENCED_PARAMETER(PortAddress);
+    UNREFERENCED_PARAMETER(PortId);
+    UNREFERENCED_PARAMETER(IsMMIODevice);
+
+    /* No legacy COM address table applies to RISC-V. A platform-described
+     * MMIO serial transport is not connected to the headless driver yet. */
+    return FALSE;
+#else
     /* Not yet supported */
     ASSERT(IsMMIODevice == FALSE);
 
@@ -130,6 +143,7 @@ InbvPortInitialize(
     CpInitialize(&Port[PortNumber - 1], PortAddress, BaudRate);
     *PortId = PortNumber - 1;
     return TRUE;
+#endif
 }
 
 /* EOF */

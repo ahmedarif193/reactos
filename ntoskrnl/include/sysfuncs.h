@@ -251,7 +251,12 @@
 #endif
     SVC_(SetIntervalProfile, 2)
     SVC_(SetIoCompletion, 5)
+#if defined(_M_RISCV64) && defined(SVC_UNSUPPORTED_)
+    /* Retain the service slot without declaring an x86 LDT ABI. */
+    SVC_UNSUPPORTED_(SetLdtEntries, 6)
+#else
     SVC_(SetLdtEntries, 6)
+#endif
     SVC_(SetLowEventPair, 1)
     SVC_(SetLowWaitHighEventPair, 1)
     SVC_(SetQuotaInformationFile, 4)

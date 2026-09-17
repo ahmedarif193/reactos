@@ -32,6 +32,8 @@
     #define MAXIMUM_PAGEFILE_SIZE   ((4ULL * 1024 * 1024 * 1024 - 1) * PAGE_SIZE)
                                  // PAGE_ROUND_DOWN(16ULL * TERABYTE - 1)
     #endif
+#elif defined(_M_RISCV64)
+    #define MAXIMUM_PAGEFILE_SIZE MI_RISCV_MAXIMUM_PAGEFILE_SIZE
 #elif defined (_M_IA64)
 /* Around 32 TB */
     #define MAXIMUM_PAGEFILE_SIZE   ((8ULL * 1024 * 1024 * 1024 - 1) * PAGE_SIZE)

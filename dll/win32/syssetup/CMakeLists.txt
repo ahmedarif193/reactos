@@ -23,6 +23,13 @@ add_library(syssetup MODULE
 
 add_pch(syssetup precomp.h SOURCE)
 set_module_type(syssetup win32dll UNICODE)
+if(ARCH STREQUAL "riscv64")
+    # InstallLiveCD catches failures from registration and typelib setup before
+    # starting userinit. Keep that handler live on the native RVUW path.
+    set_property(SOURCE install.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+    set_property(SOURCE install.c APPEND PROPERTY COMPILE_DEFINITIONS _USE_NATIVE_SEH=1)
+    set_property(SOURCE install.c APPEND PROPERTY COMPILE_OPTIONS -funwind-tables -Xclang -fasync-exceptions)
+endif()
 target_link_libraries(syssetup uuid wine tzlib bootstatus ${PSEH_LIB})
 add_importlibs(syssetup advapi32 gdi32 user32 samlib userenv comctl32 setupapi rpcrt4 ole32 shell32 shlwapi msvcrt kernel32 ntdll)
 add_cd_file(TARGET syssetup DESTINATION reactos/system32 FOR all)

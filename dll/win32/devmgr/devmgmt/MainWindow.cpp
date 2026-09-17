@@ -366,6 +366,7 @@ void CDeviceManager::UpdateToolbar()
     WORD State;
 
     CNode *Node = m_DeviceView->GetSelectedNode();
+    CDeviceNode *Device = AsDeviceNode(Node);
 
     // properties button
     if (Node->HasProperties())
@@ -381,8 +382,7 @@ void CDeviceManager::UpdateToolbar()
     SendMessageW(m_hToolBar, TB_SETSTATE, IDM_UNINSTALL_DRV, MAKELPARAM(State, 0)); // hack
 
     // enable driver button
-    if (Node->GetNodeType() == DeviceNode &&
-        dynamic_cast<CDeviceNode *>(Node)->IsDisabled())
+    if (Device && Device->IsDisabled())
     {
         State = TBSTATE_ENABLED;
     }
@@ -393,9 +393,7 @@ void CDeviceManager::UpdateToolbar()
     SendMessageW(m_hToolBar, TB_SETSTATE, IDM_ENABLE_DRV, MAKELPARAM(State, 0));
 
     // disable driver button
-    if (Node->GetNodeType() == DeviceNode &&
-        dynamic_cast<CDeviceNode *>(Node)->CanDisable() &&
-        !dynamic_cast<CDeviceNode *>(Node)->IsDisabled())
+    if (Device && Device->CanDisable() && !Device->IsDisabled())
     {
         State = TBSTATE_ENABLED;
     }

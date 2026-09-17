@@ -37,6 +37,7 @@ int main(int argc, char* argv[])
     ASMGENDATA data;
     int i, result = -1;
     int ms_format = 0;
+    int raw_input = 0;
     char header[20];
     uint32_t e_lfanew, signature;
     uint16_t Machine, NumberOfSections, SizeOfOptionalHeader;
@@ -55,7 +56,22 @@ int main(int argc, char* argv[])
     } SECTION;
     SECTION section;
 
-    if (argc >= 4 && _stricmp(argv[3], "-ms") == 0) ms_format = 1;
+    if (argc < 3 || argc > 4)
+    {
+        fprintf(stderr, "Usage: geninc input output [-ms|-raw]\n");
+        return -1;
+    }
+
+    if (argc == 4)
+    {
+        if (_stricmp(argv[3], "-ms") == 0) ms_format = 1;
+        else if (_stricmp(argv[3], "-raw") == 0) raw_input = 1;
+        else
+        {
+            fprintf(stderr, "Unknown option '%s'\n", argv[3]);
+            return -1;
+        }
+    }
 
     /* Open the input file */
     input = fopen(argv[1], "rb");
@@ -73,6 +89,10 @@ int main(int argc, char* argv[])
         fprintf(stderr, "Could not open output file '%s'\n", argv[2]);
         return -1;
     }
+
+    /* ELF targets extract .asmdef without linking a PE executable. The
+     * extracted records use the same target-generated layout and formatter. */
+    if (raw_input) goto read_records;
 
     /* Read the DOS header */
     if (fread(&header, 1, 2, input) != 2)
@@ -166,6 +186,7 @@ int main(int argc, char* argv[])
     /* Read the section table */
     fseek(input, section.RawAddress, SEEK_SET);
 
+read_records:
     while (1)
     {
         /* Read one entry */

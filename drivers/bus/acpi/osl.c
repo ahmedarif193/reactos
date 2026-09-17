@@ -1465,8 +1465,15 @@ AcpiOsEnterSleep(
     UINT32 RegaValue,
     UINT32 RegbValue)
 {
+#if defined(_M_RISCV64)
+    UNREFERENCED_PARAMETER(RegaValue);
+    UNREFERENCED_PARAMETER(RegbValue);
+    DPRINT1("RISC-V64 ACPI sleep state S%u is not supported.\n", SleepState);
+    return AE_SUPPORT;
+#else
     DPRINT1("Entering sleep state S%u.\n", SleepState);
     return AE_OK;
+#endif
 }
 
 ACPI_STATUS

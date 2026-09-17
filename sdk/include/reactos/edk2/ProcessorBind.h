@@ -18,7 +18,11 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 ///
 /// Define the processor type so other code can make processor based choices.
 ///
+#if defined(_M_RISCV64)
+#define MDE_CPU_RISCV64
+#else
 #define MDE_CPU_IA32
+#endif
 
 //
 // Make sure we are using the correct packing rules per EFI specification
@@ -241,7 +245,11 @@ typedef INT64   INTN;
 ///
 /// The stack alignment required for IA-32.
 ///
+#if defined(_M_RISCV64)
+#define CPU_STACK_ALIGNMENT   16
+#else
 #define CPU_STACK_ALIGNMENT   sizeof(UINTN)
+#endif
 
 //
 // Modifier to ensure that all protocol member functions and EFI intrinsics
@@ -252,6 +260,9 @@ typedef INT64   INTN;
 ///
 /// If EFIAPI is already defined, then we use that definition.
 ///
+#elif defined(_M_RISCV64)
+/* RISC-V UEFI uses the platform's standard register calling convention. */
+#define EFIAPI
 #elif defined(_MSC_EXTENSIONS)
 ///
 /// Microsoft* compiler specific method for EFIAPI calling convention.

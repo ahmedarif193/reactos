@@ -907,9 +907,11 @@ KeInitThread(IN OUT PKTHREAD Thread,
                     NULL);
 
     /* Initialize the Suspend Semaphore */
-#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
+#if ((NTDDI_VERSION >= NTDDI_WIN8) && !defined(_M_RISCV64)) || defined(_M_ARM64)
     KeInitializeEvent(&Thread->SuspendEvent, SynchronizationEvent, FALSE);
 #else
+    /* RISC-V's private semaphore is not an alias of the NT10 event. The
+     * suspend/resume and suspend APC paths all use this actual object. */
     KeInitializeSemaphore(&Thread->SuspendSemaphore, 0, 2);
 #endif
 

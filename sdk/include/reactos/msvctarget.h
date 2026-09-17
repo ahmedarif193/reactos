@@ -26,12 +26,19 @@
  #if !defined(_M_ARM)
   #define _M_ARM 1
  #endif
-#elif defined(__arm64__)
+#elif defined(__aarch64__) || defined(__arm64__)
  #if !defined(_ARM64_)
   #define _ARM64_ 1
  #endif
  #if !defined(_M_ARM64)
   #define _M_ARM64 1
+ #endif
+#elif defined(__riscv) && (__riscv_xlen == 32)
+ #ifndef _RISCV32_
+  #define _RISCV32_ 1
+ #endif
+ #ifndef _M_RISCV32
+  #define _M_RISCV32 1
  #endif
 #elif defined(__riscv) && (__riscv_xlen == 64)
  #ifndef _RISCV64_
@@ -63,4 +70,14 @@
  #endif
 #else
 #error Unknown architecture
+#endif
+
+/* Keep the data model separate from the instruction-set selector.  All
+ * native 64-bit Windows targets share _WIN64; RV32 must remain a 32-bit
+ * target even though it is part of the RISC-V family. */
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64) || \
+    defined(_M_IA64) || defined(__powerpc64__)
+# if !defined(_WIN64)
+#  define _WIN64 1
+# endif
 #endif

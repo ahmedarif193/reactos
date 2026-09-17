@@ -18,9 +18,9 @@ Author:
 
 #if defined(_M_IX86)
 #include <i386/asm.h>
-#elif defined(_M_AMD64) || defined(_M_ARM) || defined(_M_PPC) || defined(_M_ARM64)
+#elif defined(_M_AMD64) || defined(_M_ARM) || defined(_M_PPC) || defined(_M_ARM64) || defined(_M_RISCV64)
 //
-// AMD64, ARM and PPC ports don't use asm.h
+// These ports do not use the i386 asm.h interface.
 //
 #if defined(_M_ARM64) && defined(__GNUC__) && !defined(__clang__) && defined(__ASM__) && !defined(__REACTOS_GNU_ARM64_SEH_MACROS)
 #define __REACTOS_GNU_ARM64_SEH_MACROS

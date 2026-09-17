@@ -1,4 +1,21 @@
 
+if(ARCH STREQUAL "riscv64")
+    add_library(genincdata OBJECT genincdata.c)
+    target_link_libraries(genincdata PRIVATE riscv_nt)
+    add_dependencies(genincdata bugcodes psdk xdk)
+    add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/ksriscv64.h"
+        COMMAND ${CMAKE_OBJCOPY} -O binary --only-section=.asmdef
+            $<TARGET_OBJECTS:genincdata> "${CMAKE_CURRENT_BINARY_DIR}/asmdef.bin"
+        COMMAND native-geninc "${CMAKE_CURRENT_BINARY_DIR}/asmdef.bin"
+            "${CMAKE_CURRENT_BINARY_DIR}/ksriscv64.h" -raw
+        DEPENDS genincdata $<TARGET_OBJECTS:genincdata> native-geninc
+        BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/asmdef.bin"
+        COMMAND_EXPAND_LISTS VERBATIM)
+    add_custom_target(asm DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/ksriscv64.h")
+    return()
+endif()
+
 if(ARM64EC_RUNTIME)
     if(NOT ARM64EC_NATIVE_BINARY_DIR OR
        NOT EXISTS "${ARM64EC_NATIVE_BINARY_DIR}/sdk/include/asm/ksarm64.h")

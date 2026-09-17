@@ -891,8 +891,10 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     /* Run the Notification Routines */
     PspRunCreateProcessNotifyRoutines(Process, TRUE);
 
-    /* If 12 processes have been created, enough of user-mode is ready */
+#if defined(_M_IX86) || defined(_M_AMD64)
+    /* Finish the x86 cycle-count measurement after initial user-mode startup. */
     if (++ProcessCount == 12) Ki386PerfEnd();
+#endif
 
 CleanupWithRef:
     /*
@@ -1099,7 +1101,7 @@ PsGetProcessImageFileName(PEPROCESS Process)
     return (LPSTR)Process->ImageFileName;
 }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
 /*
  * @implemented
  */
@@ -1338,6 +1340,8 @@ PsGetProcessMachine(_In_ PEPROCESS Process)
     return IMAGE_FILE_MACHINE_AMD64;
 #elif defined(_M_IX86)
     return IMAGE_FILE_MACHINE_I386;
+#elif defined(_M_RISCV64)
+    return IMAGE_FILE_MACHINE_RISCV64;
 #else
     return IMAGE_FILE_MACHINE_UNKNOWN;
 #endif
@@ -2594,6 +2598,12 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     ThreadContext.Sp = (ULONG)(ULONG_PTR)InitialTeb.StackBase;
     ThreadContext.R0 = (ULONG)(ULONG_PTR)ProcessBasicInfo.PebBaseAddress;
     ThreadContext.Cpsr = 0x10;  /* User mode */
+#elif defined(_M_RISCV64)
+    /* Native NT startup state; the thread initializer installs tp from the
+     * allocated TEB and supplies supervisor-owned user-return status bits. */
+    ThreadContext.Pc = (ULONG64)ImageInformation.TransferAddress;
+    ThreadContext.Sp = (ULONG64)InitialTeb.StackBase & ~15ULL;
+    ThreadContext.A0 = (ULONG64)ProcessBasicInfo.PebBaseAddress;
 #else
 #error "Unsupported architecture"
 #endif

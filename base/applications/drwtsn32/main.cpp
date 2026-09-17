@@ -74,6 +74,27 @@ static void PrintThread(FILE* output, DumpData& data, DWORD tid, ThreadData& thr
 #elif defined(_M_ARM64) || defined(__aarch64__)
         xfprintf(output, "pc:%p lr:%p sp:%p fp:%p cpsr:%p" NEWLINE,
                  ctx.Pc, ctx.Lr, ctx.Sp, ctx.Fp, ctx.Cpsr);
+#elif defined(_M_RISCV64)
+        xfprintf(output, "ra:%p sp:%p gp:%p tp:%p t0:%p t1:%p t2:%p" NEWLINE,
+                 (PVOID)(ULONG_PTR)ctx.Ra, (PVOID)(ULONG_PTR)ctx.Sp,
+                 (PVOID)(ULONG_PTR)ctx.Gp, (PVOID)(ULONG_PTR)ctx.Tp,
+                 (PVOID)(ULONG_PTR)ctx.T0, (PVOID)(ULONG_PTR)ctx.T1,
+                 (PVOID)(ULONG_PTR)ctx.T2);
+        xfprintf(output, "s0:%p s1:%p a0:%p a1:%p a2:%p a3:%p a4:%p a5:%p" NEWLINE,
+                 (PVOID)(ULONG_PTR)ctx.S0, (PVOID)(ULONG_PTR)ctx.S1,
+                 (PVOID)(ULONG_PTR)ctx.A0, (PVOID)(ULONG_PTR)ctx.A1,
+                 (PVOID)(ULONG_PTR)ctx.A2, (PVOID)(ULONG_PTR)ctx.A3,
+                 (PVOID)(ULONG_PTR)ctx.A4, (PVOID)(ULONG_PTR)ctx.A5);
+        xfprintf(output, "a6:%p a7:%p s2:%p s3:%p s4:%p s5:%p s6:%p s7:%p" NEWLINE,
+                 (PVOID)(ULONG_PTR)ctx.A6, (PVOID)(ULONG_PTR)ctx.A7,
+                 (PVOID)(ULONG_PTR)ctx.S2, (PVOID)(ULONG_PTR)ctx.S3,
+                 (PVOID)(ULONG_PTR)ctx.S4, (PVOID)(ULONG_PTR)ctx.S5,
+                 (PVOID)(ULONG_PTR)ctx.S6, (PVOID)(ULONG_PTR)ctx.S7);
+        xfprintf(output, "s8:%p s9:%p s10:%p s11:%p t3:%p t4:%p t5:%p t6:%p" NEWLINE,
+                 (PVOID)(ULONG_PTR)ctx.S8, (PVOID)(ULONG_PTR)ctx.S9,
+                 (PVOID)(ULONG_PTR)ctx.S10, (PVOID)(ULONG_PTR)ctx.S11,
+                 (PVOID)(ULONG_PTR)ctx.T3, (PVOID)(ULONG_PTR)ctx.T4,
+                 (PVOID)(ULONG_PTR)ctx.T5, (PVOID)(ULONG_PTR)ctx.T6);
 #else
 #error Unknown architecture
 #endif
@@ -93,11 +114,16 @@ static void PrintThread(FILE* output, DumpData& data, DWORD tid, ThreadData& thr
 #elif defined(_M_ARM64) || defined(__aarch64__)
         xfprintf(output, "sp:%p fp:%p lr:%p pc:%p" NEWLINE,
                  ctx.Sp, ctx.Fp, ctx.Lr, ctx.Pc);
+#elif defined(_M_RISCV64)
+        xfprintf(output, "sp:%p fp:%p ra:%p pc:%p" NEWLINE,
+                 (PVOID)(ULONG_PTR)ctx.Sp, (PVOID)(ULONG_PTR)ctx.S0,
+                 (PVOID)(ULONG_PTR)ctx.Ra, (PVOID)(ULONG_PTR)ctx.Pc);
 #else
 #error Unknown architecture
 #endif
     }
 
+#if !defined(_M_RISCV64)
     if ((ctx.ContextFlags & CONTEXT_DEBUG_REGISTERS) == CONTEXT_DEBUG_REGISTERS)
     {
 #if defined(_M_IX86) || defined(_M_AMD64)
@@ -119,6 +145,7 @@ static void PrintThread(FILE* output, DumpData& data, DWORD tid, ThreadData& thr
 #error Unknown architecture
 #endif
     }
+#endif
 
     PrintStackBacktrace(output, data, thread);
 }

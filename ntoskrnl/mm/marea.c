@@ -412,6 +412,8 @@ MmCreateMemoryArea(PMMSUPPORT AddressSpace,
     {
         /* Use the static array instead of the pool */
         ASSERT(MiStaticMemoryAreaCount < MI_STATIC_MEMORY_AREAS);
+        if (MiStaticMemoryAreaCount >= MI_STATIC_MEMORY_AREAS)
+            return STATUS_NO_MEMORY;
         MemoryArea = &MiStaticMemoryAreas[MiStaticMemoryAreaCount++];
     }
     else

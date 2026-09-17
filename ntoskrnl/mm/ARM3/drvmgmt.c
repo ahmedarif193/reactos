@@ -89,6 +89,13 @@ NTAPI
 MmAddVerifierThunks(IN PVOID ThunkBuffer,
                     IN ULONG ThunkBufferSize)
 {
+#if defined(_M_RISCV64)
+    /* Verifier thunk registration needs native image ownership and patching
+     * support. Do not classify protected images by a foreign KSEG0 window. */
+    UNREFERENCED_PARAMETER(ThunkBuffer);
+    UNREFERENCED_PARAMETER(ThunkBufferSize);
+    return STATUS_NOT_SUPPORTED;
+#else
     PDRIVER_VERIFIER_THUNK_PAIRS ThunkTable;
     ULONG ThunkCount;
     PDRIVER_SPECIFIED_VERIFIER_THUNKS DriverThunks;
@@ -213,6 +220,7 @@ Cleanup:
     //
     if (DriverThunks) ExFreePoolWithTag(DriverThunks, 'tVmM');
     return Status;
+#endif
 }
 
 /*

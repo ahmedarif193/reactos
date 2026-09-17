@@ -141,6 +141,9 @@ KdSendPacket(
             Result = KdbEnterDebuggerException(&KdbgExceptionRecord,
 #ifdef _M_ARM64
                                                KiGetContextPreviousMode(&KdbgContext),
+#elif defined(_M_RISCV64)
+                                               /* CONTEXT carries no sstatus; user mode does not run yet. */
+                                               KernelMode,
 #else
                                                KdbgContext.SegCs & 1,
 #endif

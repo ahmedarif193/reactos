@@ -36,9 +36,6 @@
     #define MAXIMUM_PAGEFILE_SIZE       MAXIMUM_PAGEFILE_SIZE32
 /* PAE uses the same size as x64 */
     #define MAXIMUM_PAGEFILE_SIZE_PAE   MAXIMUM_PAGEFILE_SIZE64
-#elif defined (_M_AMD64) || defined(_M_ARM64)
-/* Around 16 TB */
-    #define MAXIMUM_PAGEFILE_SIZE       MAXIMUM_PAGEFILE_SIZE64
 #elif defined (_M_IA64)
 /* Around 32 TB */
     #define MAXIMUM_PAGEFILE_SIZE       (32UL * 1024 * 1024 - 1)
@@ -50,14 +47,12 @@
 /* Around 4 GB */
     #define MAXIMUM_PAGEFILE_SIZE       MAXIMUM_PAGEFILE_SIZE32
     #endif
-#else
-/* On unknown architectures, default to either one of the 32 or 64 bit sizes */
-#pragma message("Unknown architecture")
-    #ifdef _WIN64
+#elif defined(_WIN64)
+/* Around 16 TB */
     #define MAXIMUM_PAGEFILE_SIZE       MAXIMUM_PAGEFILE_SIZE64
-    #else
+#else
+/* RV32 and future native 32-bit targets use the common 32-bit limit. */
     #define MAXIMUM_PAGEFILE_SIZE       MAXIMUM_PAGEFILE_SIZE32
-    #endif
 #endif
 
 typedef struct _PAGEFILE

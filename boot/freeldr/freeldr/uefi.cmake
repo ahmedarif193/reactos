@@ -57,6 +57,12 @@ elseif(ARCH STREQUAL "arm64")
         arch/uefi/uefiserial.c)
     list(APPEND UEFILDR_COMMON_ASM_SOURCE
         arch/uefi/arm64/uefiasm.S)
+elseif(ARCH STREQUAL "riscv64")
+    list(APPEND UEFILDR_ARC_SOURCE
+        arch/uefi/uefiserial.c
+        arch/uefi/riscv64/runtime.c)
+    list(APPEND UEFILDR_COMMON_ASM_SOURCE
+        arch/uefi/riscv64/uefiasm.S)
 else()
     #TBD
 endif()
@@ -97,6 +103,9 @@ elseif(ARCH STREQUAL "arm")
 elseif(ARCH STREQUAL "arm64")
     list(APPEND FREELDR_NTLDR_SOURCE
         ntldr/arch/arm64/winldr.c)
+elseif(ARCH STREQUAL "riscv64")
+    list(APPEND FREELDR_NTLDR_SOURCE
+        ntldr/arch/riscv64/winldr.c)
 else()
     #TBD
 endif()
@@ -169,6 +178,8 @@ if(ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "arm64")
     set_image_base(uefildr 0x140000000)
     target_link_options(uefildr PRIVATE -Wl,--stack,0x200000)
+elseif(ARCH STREQUAL "riscv64")
+    target_link_options(uefildr PRIVATE -Wl,--stack,0x200000)
 endif()
 
 if(MSVC)
@@ -182,7 +193,7 @@ endif()
     # We don't need hotpatching
     remove_target_compile_option(uefildr "/hotpatch")
 else()
-    if(ARCH STREQUAL "arm64")
+    if(ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64")
         target_link_options(uefildr PRIVATE -Wl,--exclude-all-symbols,--file-alignment,0x200,--section-alignment,0x1000)
     else()
         target_link_options(uefildr PRIVATE -Wl,--exclude-all-symbols,--file-alignment,0x200,--section-alignment,0x200)
@@ -225,6 +236,10 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 if(ARCH STREQUAL "i386")
     target_link_libraries(uefildr mini_hal)
+endif()
+
+if(ARCH STREQUAL "riscv64")
+    add_custom_target(freeldr_efi DEPENDS uefildr)
 endif()
 
 # dynamic analysis switches

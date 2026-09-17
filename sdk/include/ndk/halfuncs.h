@@ -29,6 +29,17 @@ Author:
 
 #ifndef NTOS_MODE_USER
 
+/* Kernel adapter entry point, also needed when the DDK selects DMA macros. */
+NTHALAPI
+NTSTATUS
+NTAPI
+HalAllocateAdapterChannel(
+    _In_ PADAPTER_OBJECT AdapterObject,
+    _In_ PWAIT_CONTEXT_BLOCK Wcb,
+    _In_ ULONG NumberOfMapRegisters,
+    _In_ PDRIVER_CONTROL ExecutionRoutine
+);
+
 #if defined(_M_ARM64) || defined(__aarch64__)
 typedef struct _HAL_ARM64_TIMER_CONFIG
 {

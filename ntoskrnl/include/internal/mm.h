@@ -65,14 +65,16 @@ typedef ULONG_PTR SWAPENTRY;
 #define MM_SWAP_OFFSET_FROM_ENTRY(x)        ((x) >> 11)
 #define MM_SWAP_ENTRY_FROM_FILE_OFFSET(f,o) ((f) | ((o) << 11) | 0x400)
 
-#if (_MI_PAGING_LEVELS >= 4)
+#if (_MI_PAGING_LEVELS >= 4) || defined(_M_RISCV64)
 /* Dummy values (dynamically assigned) */
 #define MI_PAGED_POOL_START 0
 #define MI_NONPAGED_POOL_END 0
 #define MI_SYSTEM_CACHE_START 0
 #define MI_SYSTEM_CACHE_WS_START 0
 #define MI_DEBUG_MAPPING 0
+#endif
 
+#if (_MI_PAGING_LEVELS >= 4)
 /* The size of the virtual memory area mapped by a single PDE/PPE/PXE. */
 #define PDE_MAPPED_VA (PTE_PER_PAGE * (ULONG64)PAGE_SIZE)
 #define PPE_MAPPED_VA (PDE_PER_PAGE * (ULONG64)PDE_MAPPED_VA)
@@ -101,7 +103,15 @@ typedef enum _MI_ASSIGNED_REGION_TYPES
     AssignedRegionSession = 10,
     AssignedRegionSecureNonPagedPool = 11,
     AssignedRegionSystemImages = 12,
-    AssignedRegionMaximum = 13
+#if defined(_M_RISCV64)
+    AssignedRegionPhysicalMap,
+    AssignedRegionHal,
+    AssignedRegionSharedData,
+    AssignedRegionSystemView,
+    AssignedRegionSystemCacheWs,
+    AssignedRegionBootData,
+#endif
+    AssignedRegionMaximum
 } MI_ASSIGNED_REGION_TYPES, *PMI_ASSIGNED_REGION_TYPES;
 
 typedef struct _MI_SYSTEM_VA_ASSIGNMENT
@@ -116,6 +126,14 @@ VOID
 NTAPI
 MiInitializeKernelVaLayout(
     _In_ const LOADER_PARAMETER_BLOCK* LoaderBlock);
+
+#if defined(_M_RISCV64)
+NTSTATUS
+NTAPI
+MiRiscvPublishSystemVaLayout(
+    _In_reads_(RegionCount) const MI_SYSTEM_VA_ASSIGNMENT *Regions,
+    _In_ ULONG RegionCount);
+#endif
 
 //
 // Pool Quota values
@@ -145,7 +163,9 @@ MiInitializeKernelVaLayout(
 //
 #define MMDBG_COPY_MAX_SIZE         0x8
 
-#if defined(_X86_) || defined(_M_ARM64) // internal for marea.c
+#if defined(_M_RISCV64) // One static reservation per native VA region.
+#define MI_STATIC_MEMORY_AREAS              (AssignedRegionMaximum)
+#elif defined(_X86_) || defined(_M_ARM64) // internal for marea.c
 #define MI_STATIC_MEMORY_AREAS              (14)
 #else
 #define MI_STATIC_MEMORY_AREAS              (13)
@@ -239,13 +259,13 @@ MiInitializeKernelVaLayout(
 //
 #ifdef _M_IX86
 #define MM_WAIT_ENTRY            0x7ffffc00
-#elif defined(_M_AMD64) || defined(_M_ARM64) || defined(__aarch64__)
+#elif defined(_M_AMD64) || defined(_M_ARM64) || defined(__aarch64__) || defined(_M_RISCV64)
 #define MM_WAIT_ENTRY            0x7FFFFFFFFFFFFC00ULL
 #else
 #error Unsupported architecture!
 #endif
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_RISCV64)
 #define InterlockedCompareExchangePte(PointerPte, Exchange, Comperand) \
     InterlockedCompareExchange64((PLONG64)(PointerPte), Exchange, Comperand)
 

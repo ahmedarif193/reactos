@@ -846,6 +846,17 @@ MmMapLockedPagesSpecifyCache(IN PMDL Mdl,
     ULONG MappingFlags;
     ULONG ProtectionMask;
 
+#if defined(_M_RISCV64)
+    /* User mappings need the deferred user-fault/exception path. Kernel
+     * mappings currently support only locked, normally cached RAM pages. */
+    if (AccessMode != KernelMode || CacheType != MmCached || !MiRiscvIsCachedMdl(Mdl))
+    {
+        if (AccessMode == KernelMode && BugCheckOnFailure && !(Mdl->MdlFlags & MDL_MAPPING_CAN_FAIL))
+            KeBugCheckEx(MEMORY_MANAGEMENT, 0x52564341, (ULONG_PTR)Mdl, CacheType, STATUS_NOT_SUPPORTED);
+        return NULL;
+    }
+#endif
+
     //
     // Sanity check
     //
@@ -1941,6 +1952,10 @@ MmMapLockedPagesWithReservedMapping(
     MMPTE TempPte;
 #if defined(_M_ARM64)
     PMMPTE FirstPte;
+#endif
+
+#if defined(_M_RISCV64)
+    if (CacheType != MmCached || !MiRiscvIsCachedMdl(Mdl)) return NULL;
 #endif
 
     ASSERT(Mdl->ByteCount != 0);

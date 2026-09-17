@@ -132,6 +132,9 @@ elseif(ARCH STREQUAL "arm")
 elseif(ARCH STREQUAL "arm64")
     list(APPEND SOURCE
         client/arm64/fiber.c)
+elseif(ARCH STREQUAL "riscv64")
+    list(APPEND SOURCE
+        client/riscv64/fiber.c)
 endif()
 
 add_asm_files(kernel32_asm ${ASM_SOURCE})
@@ -158,6 +161,18 @@ add_pch(kernel32 k32.h SOURCE)
 if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND CMAKE_C_COMPILER_ID STREQUAL "Clang" AND NOT USE_DUMMY_PSEH)
     set_property(SOURCE client/except.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
     set_property(SOURCE client/except.c APPEND PROPERTY COMPILE_OPTIONS -Xclang -fasync-exceptions)
+elseif(ARCH STREQUAL "riscv64")
+    # RaiseException is a non-leaf frame on every software RPC exception path.
+    # It must carry RVUW before callers' native RpcTryExcept scopes can run.
+    set_property(SOURCE client/except.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+    set_property(SOURCE client/except.c APPEND PROPERTY COMPILE_DEFINITIONS _USE_NATIVE_SEH=1)
+    set_property(SOURCE client/except.c APPEND PROPERTY COMPILE_OPTIONS -funwind-tables -Xclang -fasync-exceptions)
+    # OutputDebugStringA raises DBG_PRINTEXCEPTION_C and catches it when no
+    # debugger is attached. The dummy PSEH macros drop that handler and can
+    # terminate setup.exe during the LiveCD's first boot.
+    set_property(SOURCE client/debugger.c PROPERTY SKIP_PRECOMPILE_HEADERS ON)
+    set_property(SOURCE client/debugger.c APPEND PROPERTY COMPILE_DEFINITIONS _USE_NATIVE_SEH=1)
+    set_property(SOURCE client/debugger.c APPEND PROPERTY COMPILE_OPTIONS -funwind-tables -Xclang -fasync-exceptions)
 endif()
 add_dependencies(kernel32 psdk errcodes asm)
 add_cd_file(TARGET kernel32 DESTINATION reactos/system32 FOR all)

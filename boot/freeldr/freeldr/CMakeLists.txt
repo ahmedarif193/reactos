@@ -144,6 +144,10 @@ elseif(ARCH STREQUAL "arm64")
         arch/arm64/gic.c
         arch/arm64/timer.c
         arch/arm64/trap.c)
+elseif(ARCH STREQUAL "riscv64")
+    list(APPEND FREELDR_BOOTLIB_SOURCE
+        lib/math_stubs.c
+        lib/unwind_stubs.c)
 else()
     #TBD
 endif()

@@ -39,7 +39,7 @@ MiCompareExchangeHyperSpacePte(
     _In_ ULONG_PTR Exchange,
     _In_ ULONG_PTR Comparand)
 {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
     return (ULONG_PTR)InterlockedCompareExchange64((PLONG64)PointerPte,
                                                    (LONG64)Exchange,
                                                    (LONG64)Comparand);
@@ -56,7 +56,7 @@ MiExchangeHyperSpacePte(
     _Inout_ PMMPTE PointerPte,
     _In_ ULONG_PTR Value)
 {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
     return (ULONG_PTR)InterlockedExchange64((PLONG64)PointerPte,
                                             (LONG64)Value);
 #else
@@ -295,6 +295,9 @@ MiMapPagesInZeroSpace(IN PMMPFN Pfn1,
     __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
     DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
     __asm__ __volatile__("dsb sy" ::: "memory");
+#elif defined(_M_RISCV64)
+    /* Zero ordinary coherent RAM with its platform memory attributes. Sv39
+     * has no x86 cache-disable or write-through bits in a baseline PTE. */
 #else
     /* Disable cache. Write through */
     MI_PAGE_DISABLE_CACHE(&TempPte);
@@ -370,4 +373,3 @@ MiUnmapPagesInZeroSpace(IN PVOID VirtualAddress,
     //
     RtlZeroMemory(PointerPte, NumberOfPages * sizeof(MMPTE));
 }
-

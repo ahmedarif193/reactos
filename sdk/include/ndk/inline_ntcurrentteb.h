@@ -18,6 +18,10 @@ FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
     return (struct _TEB *)(ULONG_PTR)_MoveFromCoprocessor(CP15_TPIDRURW);
 #elif defined (_M_ARM64)
     return (struct _TEB *)__getReg(18);
+#elif defined(_M_RISCV64)
+    struct _TEB *Teb;
+    __asm__("mv %0, tp" : "=r"(Teb));
+    return Teb;
 // #elif defined(_M_PPC)
 //     return (struct _TEB *)_read_teb_dword(0x18);
 #else

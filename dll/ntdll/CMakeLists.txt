@@ -72,6 +72,12 @@ elseif(ARCH STREQUAL "arm")
 elseif(ARCH STREQUAL "arm64")
     list(APPEND ASM_SOURCE dispatch/arm64/dispatch.S)
     list(APPEND SOURCE dispatch/dispatch.c)
+elseif(ARCH STREQUAL "riscv64")
+    list(APPEND ASM_SOURCE
+        riscv64/dispatch.S
+        riscv64/teb.S)
+    list(APPEND SOURCE dispatch/dispatch.c)
+    set_source_files_properties(dispatch/dispatch.c PROPERTIES COMPILE_OPTIONS "-funwind-tables")
 else()
     list(APPEND SOURCE dispatch/dispatch.c)
 endif()

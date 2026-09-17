@@ -3768,7 +3768,7 @@ typedef struct _ACPI_INTERFACE_STANDARD2 {
   PUNREGISTER_FOR_DEVICE_NOTIFICATIONS2 UnregisterForDeviceNotifications;
 } ACPI_INTERFACE_STANDARD2, *PACPI_INTERFACE_STANDARD2;
 
-#if !defined(_AMD64_) && !defined(_ARM_) && !defined(_ARM64_)
+#if !defined(_WIN64) && !defined(_ARM_)
 #include <pshpack4.h>
 #endif
 
@@ -3980,7 +3980,7 @@ typedef struct _IO_STACK_LOCATION {
   PVOID Context;
 } IO_STACK_LOCATION, *PIO_STACK_LOCATION;
 
-#if !defined(_AMD64_) && !defined(_ARM_) && !defined(_ARM64_)
+#if !defined(_WIN64) && !defined(_ARM_)
 #include "poppack.h"
 #endif
 

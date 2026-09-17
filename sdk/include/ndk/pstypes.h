@@ -1296,12 +1296,14 @@ typedef struct _PROCESS_HANDLE_TRACING_QUERY
 
 #endif
 
+#if !defined(_M_RISCV64) /* RISC-V has no x86 local descriptor tables. */
 typedef struct _PROCESS_LDT_INFORMATION
 {
     ULONG Start;
     ULONG Length;
     LDT_ENTRY LdtEntries[ANYSIZE_ARRAY];
 } PROCESS_LDT_INFORMATION, *PPROCESS_LDT_INFORMATION;
+#endif
 
 typedef struct _PROCESS_LDT_SIZE
 {
@@ -1720,6 +1722,10 @@ typedef struct _ETHREAD
 #if defined(_M_ARM64)
     volatile LONG ExecutableWriteAllowed;
 #endif
+#if defined(__REACTOS__) && defined(_M_RISCV64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* Private storage used by the shared legacy LPC implementation. */
+    ULONG LpcReceivedMessageId;
+#endif
 } ETHREAD;
 
 #if defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WIN10)
@@ -1800,7 +1806,7 @@ typedef struct _EPROCESS
     PVOID LockedPagesList;
     LIST_ENTRY ThreadListHead;
     PVOID SecurityPort;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
     struct _WOW64_PROCESS *Wow64Process;
 #else
     PVOID PaeTop;

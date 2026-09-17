@@ -753,12 +753,14 @@ ExpKdbgPrintPte(IN PVOID Address)
     MMPTE Entry;
 
     KdbpPrint("Virtual address %p\n", Address);
-#if defined(_WIN64)
+#if (_MI_PAGING_LEVELS == 4)
     if (!ExpKdbgReadPte("PXE", (PMMPTE)MiAddressToPxe(Address), &Entry) ||
         !Entry.u.Hard.Valid || MI_IS_PAGE_LARGE(&Entry))
     {
         return;
     }
+#endif
+#if (_MI_PAGING_LEVELS >= 3)
     if (!ExpKdbgReadPte("PPE", (PMMPTE)MiAddressToPpe(Address), &Entry) ||
         !Entry.u.Hard.Valid || MI_IS_PAGE_LARGE(&Entry))
     {

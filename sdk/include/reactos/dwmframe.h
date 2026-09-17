@@ -39,12 +39,18 @@
  * high bytes:
  *   SUPPRESS_CURSOR  - the compositor draws the cursor itself, so cdd stops
  *                      drawing the hardware/software cursor while suppressed.
+ *   COMPOSITION_SYNC - brackets a composed frame in the legacy CDD path.
+ *   REGISTER_VBLANK  - passes the compositor pacing event to dxgkrnl.
  *   PRESENT_STATS    - read-only present-path counters (DXGK_PRESENT_STATS in
  *                      the escape output buffer) so a test can measure how much
  *                      scan-out work a GDI/cursor operation costs.
+ *   PRESENT_BATCH    - brackets a completed classic-GDI paint batch.
  */
 #define CDD_ESCAPE_SUPPRESS_CURSOR  0x44574D01
+#define CDD_ESCAPE_COMPOSITION_SYNC 0x44574D02
+#define CDD_ESCAPE_REGISTER_VBLANK  0x44574D03
 #define CDD_ESCAPE_PRESENT_STATS    0x44574D04
+#define CDD_ESCAPE_PRESENT_BATCH    0x44574D05
 
 /*
  * cdd -> dxgkrnl present-path IOCTLs (kernel side of the same contract).
@@ -58,6 +64,12 @@
  */
 #define IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x920, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x921, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_COMPOSITION_END \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x922, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_REGISTER_VBLANK \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x923, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_VIDEO_DXGK_PRESENT_STATS \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x924, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
@@ -78,7 +90,18 @@
     CTL_CODE(FILE_DEVICE_VIDEO, 0x928, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_VIDEO_DXGK_SYNCHRONIZE_REDIRECTION_SURFACES \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x929, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* Keep the implemented legacy batch channel outside the redirection range. */
+#define IOCTL_VIDEO_DXGK_PRESENT_BATCH_BEGIN \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x92A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DXGK_PRESENT_BATCH_END \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x92B, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #include <pshpack4.h>
+
+typedef struct _DXGK_PRESENT_DIRTY_RECT_INPUT
+{
+    RECTL Rect;
+    ULONG Flags;
+} DXGK_PRESENT_DIRTY_RECT_INPUT, *PDXGK_PRESENT_DIRTY_RECT_INPUT;
 
 typedef struct _DXGK_PRESENT_DIRTY_RECTS_INPUT
 {
@@ -94,6 +117,8 @@ typedef struct _DXGK_PRESENT_DIRTY_RECTS_INPUT
 /* The core present packet has room for this many source subrectangles. */
 #define DXGK_PRESENT_DIRTY_MAX_RECTS 64u
 
+#define DXGK_PRESENT_DIRTY_HOLD    0x00000001u
+#define DXGK_PRESENT_DIRTY_RELEASE 0x00000002u
 #define DXGK_PRESENT_DIRTY_FLUSH   0x00000004u
 
 /*
@@ -122,6 +147,12 @@ typedef struct _DXGK_PRESENT_STATS
     ULONG PresentFailed;
     ULONG PresentRejected;
     ULONG PresentSynchronous;
+    ULONG CompositionActive;
+    ULONG PresentBatchDepth;
+    ULONG PresentBatchBegins;
+    ULONG PresentBatchEnds;
+    ULONG PresentBatchFlushDeferrals;
+    ULONG PresentBatchMaxDepth;
 } DXGK_PRESENT_STATS, *PDXGK_PRESENT_STATS;
 
 /* Kernel-only cdd/dxgkrnl contract for a shareable, CPU-visible window

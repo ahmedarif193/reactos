@@ -267,6 +267,48 @@ elseif(ARCH STREQUAL "arm64")
         math/tanf.c
         math/tanhf.c
     )
+elseif(ARCH STREQUAL "riscv64")
+    # These scalar implementations are portable C. Only _set_statfp is tied
+    # to the architecture floating-point status register.
+    list(APPEND LIBCNTPR_MATH_SOURCE
+        math/arm64/atan.c
+        math/riscv64/_set_statfp.c
+        math/libm_sse2/_handle_error.c
+        math/libm_sse2/atan2.c
+        math/arm64/ceil.c
+        math/cos.c
+        math/arm64/exp.c
+        math/fabs.c
+        math/arm64/floor.c
+        math/arm64/fmod.c
+        math/arm64/logb.c
+        math/arm64/log.c
+        math/arm64/log10.c
+        math/arm64/pow.c
+        math/sin.c
+        math/sqrt.c
+        math/arm64/tan.c
+    )
+    list(APPEND CRT_MATH_SOURCE
+        math/_hypotf.c
+        math/acosf.c
+        math/asinf.c
+        math/atan2f.c
+        math/atanf.c
+        math/ceilf.c
+        math/coshf.c
+        math/expf.c
+        math/fabsf.c
+        math/floorf.c
+        math/fmodf.c
+        math/arm64/ldexp.c
+        math/modff.c
+        math/sinf.c
+        math/sinhf.c
+        math/sqrtf.c
+        math/tanf.c
+        math/tanhf.c
+    )
 endif()
 
 if(NOT ARCH STREQUAL "i386")
@@ -328,6 +370,12 @@ elseif(ARCH STREQUAL "arm64")
     list(APPEND ATAN2_SOURCE
         math/_invoke_matherr.c
         math/arm64/_set_statfp.c
+        math/libm_sse2/_handle_error.c
+        math/libm_sse2/atan2.c)
+elseif(ARCH STREQUAL "riscv64")
+    list(APPEND ATAN2_SOURCE
+        math/_invoke_matherr.c
+        math/riscv64/_set_statfp.c
         math/libm_sse2/_handle_error.c
         math/libm_sse2/atan2.c)
 endif()

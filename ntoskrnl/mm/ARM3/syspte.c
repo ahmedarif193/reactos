@@ -358,7 +358,7 @@ MiEnsureSystemPteRangeBacked(
     _In_ ULONG NumberOfPtes,
     _In_ MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType)
 {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
     if (SystemPtePoolType == SystemPteSpace)
     {
         return MiEnsureSystemPtesBacked(StartingPte, NumberOfPtes);
@@ -553,7 +553,7 @@ MiReserveNonPagedPoolExpansionPtes(IN ULONG NumberOfPtes)
     KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
 
     StartingPte = MiSystemPteFromOffset(NonPagedPoolExpansion, BitIndex);
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_M_AMD64) || defined(_M_ARM64) || defined(_M_RISCV64)
     Backed = MiEnsureNonPagedPoolExpansionPtesBacked(StartingPte, NumberOfPtes);
 #endif
 

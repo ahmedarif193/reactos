@@ -3230,7 +3230,12 @@ LdrpInit(PCONTEXT Context,
 
 #ifdef _WIN64
     /* Set the SList header usage */
+#if defined(_M_RISCV64)
+    /* RISC-V owns a 16-byte-header fallback that does not advertise CAS128. */
+    RtlpUse16ByteSLists = TRUE;
+#else
     RtlpUse16ByteSLists = SharedUserData->ProcessorFeatures[PF_COMPARE_EXCHANGE128];
+#endif
 #endif /* _WIN64 */
 
     /* Check if we have a deallocation stack */

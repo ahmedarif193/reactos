@@ -239,7 +239,7 @@ VideoPortInterlockedExchange(
     return InterlockedExchange(Target, Value);
 }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
 UCHAR
 NTAPI
 VideoPortReadPortUchar(
@@ -470,4 +470,4 @@ VideoPortQuerySystemTime(
     KeQuerySystemTime(CurrentTime);
 }
 
-#endif /* _M_AMD64 || _M_ARM64 */
+#endif /* _WIN64 */

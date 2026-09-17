@@ -76,6 +76,13 @@ add_library(advapi32 MODULE
     advapi32.rc
     ${CMAKE_CURRENT_BINARY_DIR}/advapi32.def)
 
+if(ARCH STREQUAL "riscv64")
+    # The event-log and SCM RPC wrappers use RpcTryExcept to translate
+    # transport exceptions into Win32 errors; generated stubs must unwind.
+    target_compile_definitions(advapi32 PRIVATE _USE_NATIVE_SEH=1)
+    target_compile_options(advapi32 PRIVATE -funwind-tables -Xclang -fasync-exceptions)
+endif()
+
 set_module_type(advapi32 win32dll UNICODE ENTRYPOINT DllMain 12)
 target_link_libraries(advapi32 win32_registry cryptlib csprng wine ${PSEH_LIB})
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)

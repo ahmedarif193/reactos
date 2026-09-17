@@ -100,20 +100,28 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
     ),
 
     /* ProcessLdtInformation */
+#if defined(_M_RISCV64)
+    IQS_NONE, /* No local descriptor table on RISC-V. */
+#else
     IQS_SAME
     (
         PROCESS_LDT_INFORMATION,
         ULONG,
         ICIF_QUERY | ICIF_SET
     ),
+#endif
 
     /* ProcessLdtSize */
+#if defined(_M_RISCV64)
+    IQS_NONE,
+#else
     IQS_SAME
     (
         PROCESS_LDT_SIZE,
         ULONG,
         ICIF_SET
     ),
+#endif
 
     /* ProcessDefaultHardErrorMode */
     IQS_SAME

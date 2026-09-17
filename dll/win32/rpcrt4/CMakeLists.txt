@@ -65,6 +65,11 @@ if(MSVC)
 endif()
 
 set_module_type(rpcrt4 win32dll)
+if(ARCH STREQUAL "riscv64")
+    # RPC exceptions must be able to cross interpreted client/server frames.
+    target_compile_definitions(rpcrt4 PRIVATE _USE_NATIVE_SEH=1)
+    target_compile_options(rpcrt4 PRIVATE -funwind-tables -Xclang -fasync-exceptions)
+endif()
 target_link_libraries(rpcrt4 wine wine_dll_register uuid ${PSEH_LIB} oldnames)
 add_delay_importlibs(rpcrt4 iphlpapi wininet secur32 user32 ole32 oleaut32)
 add_importlibs(rpcrt4 advapi32 advapi32_vista kernel32_vista ws2_32 msvcrt kernel32 ntdll)

@@ -625,6 +625,9 @@ MiCheckPdeForSessionSpace(IN PVOID Address)
         /* Do the swap, we should be good to go */
         Index = ((ULONG_PTR)Address - (ULONG_PTR)MmSessionBase) >> 22;
         PointerPde->u.Long = MmSessionSpace->PageTables[Index].u.Long;
+#if defined(_M_RISCV64)
+        MI_ARCH_SYNC_PTE_WRITE(PointerPde);
+#endif
         if (PointerPde->u.Hard.Valid) return STATUS_WAIT_1;
 
         /* We had not allocated a page table for this session address yet, fail! */
@@ -1207,8 +1210,14 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
         /* Then the page should be marked dirty */
         DirtyPage = TRUE;
 
+#if defined(_M_RISCV64)
+        /* NLS section writes can dirty a page with a demand-zero original PTE. */
+        ASSERT((Pfn1->OriginalPte.u.Soft.Prototype != 0) ||
+               (Pfn1->OriginalPte.u.Soft.PageFileHigh == 0));
+#else
         /* ReactOS check */
         ASSERT(Pfn1->OriginalPte.u.Soft.Prototype != 0);
+#endif
     }
 
     /* Did we get a locked incoming PFN? */
@@ -1490,7 +1499,7 @@ MiResolveTransitionFault(IN BOOLEAN StoreInstruction,
     ASSERT(PointerPte->u.Hard.Valid == 0);
     ASSERT(PointerPte->u.Trans.Prototype == 0);
     ASSERT(PointerPte->u.Trans.Transition == 1);
-    TempPte.u.Long = (PointerPte->u.Long & ~0xFFF) |
+    TempPte.u.Long = (PointerPte->u.Long & MI_TRANSITION_PFN_MASK) |
                      (MmProtectToPteMask[PointerPte->u.Trans.Protection]) |
                      MiDetermineUserGlobalPteMask(PointerPte);
 
@@ -1821,7 +1830,7 @@ MiDispatchFault(IN ULONG FaultCode,
             }
 
             /* Resolve the fault -- this will release the PFN lock */
-            Status = MiResolveProtoPteFault(!MI_IS_NOT_PRESENT_FAULT(FaultCode),
+            Status = MiResolveProtoPteFault(MI_IS_WRITE_ACCESS(FaultCode),
                                             Address,
                                             PointerPte,
                                             PointerProtoPte,
@@ -1905,7 +1914,7 @@ MiDispatchFault(IN ULONG FaultCode,
                     ASSERT(PointerProtoPte->u.Hard.Valid == 0);
                     ASSERT(PointerProtoPte->u.Trans.Prototype == 0);
                     ASSERT(PointerProtoPte->u.Trans.Transition == 1);
-                    TempPte.u.Long = (PointerProtoPte->u.Long & ~0xFFF) |
+                    TempPte.u.Long = (PointerProtoPte->u.Long & MI_TRANSITION_PFN_MASK) |
                                      MmProtectToPteMask[PointerProtoPte->u.Trans.Protection];
                     TempPte.u.Hard.Valid = 1;
                     MI_MAKE_ACCESSED_PAGE(&TempPte);
@@ -1938,7 +1947,7 @@ MiDispatchFault(IN ULONG FaultCode,
                 if (++ProcessedPtes == PteCount)
                 {
                     /* Complete the fault */
-                    MiCompleteProtoPteFault(!MI_IS_NOT_PRESENT_FAULT(FaultCode),
+                    MiCompleteProtoPteFault(MI_IS_WRITE_ACCESS(FaultCode),
                                             Address,
                                             PointerPte,
                                             PointerProtoPte,
@@ -1957,7 +1966,7 @@ MiDispatchFault(IN ULONG FaultCode,
             if (ProcessedPtes)
             {
                 /* Bump the transition count */
-                InterlockedExchangeAddSizeT(&KeGetCurrentPrcb()->MmTransitionCount, ProcessedPtes);
+                InterlockedExchangeAdd(&KeGetCurrentPrcb()->MmTransitionCount, (LONG)ProcessedPtes);
                 ProcessedPtes--;
 
                 /* Loop all the processing we did */
@@ -1977,7 +1986,7 @@ MiDispatchFault(IN ULONG FaultCode,
             ASSERT(PointerPte->u.Hard.Valid == 0);
 
             /* Resolve the fault -- this will release the PFN lock */
-            Status = MiResolveProtoPteFault(!MI_IS_NOT_PRESENT_FAULT(FaultCode),
+            Status = MiResolveProtoPteFault(MI_IS_WRITE_ACCESS(FaultCode),
                                             Address,
                                             PointerPte,
                                             PointerProtoPte,
@@ -2025,7 +2034,7 @@ MiDispatchFault(IN ULONG FaultCode,
         LockIrql = MiAcquirePfnLock();
 
         /* Resolve */
-        Status = MiResolveTransitionFault(!MI_IS_NOT_PRESENT_FAULT(FaultCode), Address, PointerPte, Process, LockIrql, &InPageBlock);
+        Status = MiResolveTransitionFault(MI_IS_WRITE_ACCESS(FaultCode), Address, PointerPte, Process, LockIrql, &InPageBlock);
 
         ASSERT(NT_SUCCESS(Status));
 
@@ -2064,7 +2073,7 @@ MiDispatchFault(IN ULONG FaultCode,
         LockIrql = MiAcquirePfnLock();
 
         /* Resolve */
-        Status = MiResolvePageFileFault(!MI_IS_NOT_PRESENT_FAULT(FaultCode), Address, PointerPte, Process, &LockIrql);
+        Status = MiResolvePageFileFault(MI_IS_WRITE_ACCESS(FaultCode), Address, PointerPte, Process, &LockIrql);
 
         /* And now release the lock and leave*/
         MiReleasePfnLock(LockIrql);
@@ -2891,8 +2900,14 @@ Arm64UserLeafReady:
             if (CurrentProcess->Pcb.Flags.ExecuteEnable)
             {
                 /* Fix up the PTE to be executable */
+#if defined(_M_RISCV64)
+                __atomic_fetch_or(&PointerPte->u.Long, MI_RISCV_PTE_EXECUTE, __ATOMIC_SEQ_CST);
+                KeFlushProcessTb();
+                KeSweepICache(Address, PAGE_SIZE);
+#else
                 TempPte.u.Hard.NoExecute = 0;
                 MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+#endif
 #if defined(_M_ARM64)
                 /* MM owns completion now that the trap layer no longer applies
                    a generic successful-fault invalidate. */
@@ -3180,7 +3195,7 @@ Arm64UserLeafReady:
         /* Run a software access check first, including to detect guard pages */
         Status = MiAccessCheck(Address,
                                PointerPte,
-                               !MI_IS_NOT_PRESENT_FAULT(FaultCode),
+                               MI_IS_WRITE_ACCESS(FaultCode),
                                Mode,
                                ProtectionCode,
                                TrapInformation,

@@ -1,4 +1,9 @@
 
+if(ARCH STREQUAL "riscv64")
+    add_subdirectory(riscv64)
+    return()
+endif()
+
 spec2def(kdcom.dll kdcom.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE

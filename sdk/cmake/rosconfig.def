@@ -36,7 +36,7 @@ config ARCH
     value amd64 "x86-64 (default)"
     value i386  "IA-32 / x86"
     value arm64 "AArch64"
-    value riscv64 "RISC-V 64 (UEFI FreeLdr only)"
+    value riscv64 "RISC-V 64"
     default amd64
     meta
     help

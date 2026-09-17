@@ -276,7 +276,7 @@ typedef struct _DXGK_ALLOCATIONINFO
     DXGK_ALLOCATIONUSAGEHINT* pAllocationUsageHint;
     UINT                      AllocationPriority;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0)
-#if defined(_AMD64_) || defined(_ARM64_)
+#if defined(_WIN64)
     DXGK_ALLOCATIONINFOFLAGS2 Flags2;
 #endif
 #endif
@@ -286,7 +286,7 @@ typedef struct _DXGK_ALLOCATIONINFO
 /* Flags2 occupies the 64-bit tail hole after AllocationPriority, so the
  * structure does not grow; the native 32-bit contract omits Flags2. */
 C_ASSERT(sizeof(DXGK_ALLOCATIONINFO) == 0x58);
-#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0) && (defined(_AMD64_) || defined(_ARM64_))
+#if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM3_0) && defined(_WIN64)
 C_ASSERT(FIELD_OFFSET(DXGK_ALLOCATIONINFO, Flags2) == 0x54);
 #endif
 #else

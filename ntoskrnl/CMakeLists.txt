@@ -42,6 +42,10 @@ endif()
 
 include(ntos.cmake)
 
+if(ARCH STREQUAL "riscv64")
+    include(riscv64.cmake)
+endif()
+
 set(NTOSKRNL_SOURCE ${SOURCE})
 set(NTOSKRNL_ASM_SOURCE ${ASM_SOURCE})
 
@@ -110,7 +114,9 @@ endif()
 add_dependencies(ntoskrnl psdk asm)
 add_cd_file(TARGET ntoskrnl DESTINATION reactos/system32 NO_CAB FOR all)
 
-add_subdirectory(ntkrnlmp)
+if(NOT ARCH STREQUAL "riscv64")
+    add_subdirectory(ntkrnlmp)
+endif()
 
 add_asm_files(ntdllsys_asm ntdll.S)
 add_library(ntdllsys ${ntdllsys_asm})
