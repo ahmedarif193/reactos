@@ -227,11 +227,19 @@ MiChargeProcessCommitment(
         OldTotalCommit = MiTotalCommitCharge;
     }
 
+    Status = PsChargeJobCommitment(Process, PageCount);
+    if (!NT_SUCCESS(Status))
+    {
+        InterlockedExchangeAddSizeT(&MiTotalCommitCharge, -(LONG_PTR)PageCount);
+        return Status;
+    }
+
     /* Charge the page file quota, tracked in pages like the commit
        (ProcessVmCounters and friends convert to bytes on the way out) */
     Status = PsChargeProcessPageFileQuota(Process, PageCount);
     if (!NT_SUCCESS(Status))
     {
+        PsReturnJobCommitment(Process, PageCount);
         InterlockedExchangeAddSizeT(&MiTotalCommitCharge, -(LONG_PTR)PageCount);
         return Status;
     }
@@ -261,6 +269,7 @@ MiReturnProcessCommitment(
         return;
 
     ASSERT(Process->CommitCharge >= PageCount);
+    PsReturnJobCommitment(Process, PageCount);
     InterlockedExchangeAddSizeT(&Process->CommitCharge, -(LONG_PTR)PageCount);
     InterlockedExchangeAddSizeT(&MiTotalCommitCharge, -(LONG_PTR)PageCount);
     InterlockedExchangeAddSizeT(&MmProcessCommit, -(LONG_PTR)PageCount);

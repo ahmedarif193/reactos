@@ -181,6 +181,106 @@ BasepQueryEnvironmentSizeW(
     return NT_SUCCESS(Status) ? STATUS_INVALID_PARAMETER : Status;
 }
 
+static
+BOOL
+BasepOpenAppContainerObjectDirectory(
+    _Out_ PHANDLE Directory)
+{
+    HANDLE Token;
+    ULONG IsAppContainer = 0;
+    ULONG Length;
+    UCHAR Buffer[sizeof(PSID) + SECURITY_MAX_SID_SIZE];
+    PSID PackageSid;
+    UNICODE_STRING SidString, DirectoryName, SessionString;
+    WCHAR NameBuffer[256], SessionBuffer[16];
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    NTSTATUS Status;
+
+    *Directory = NULL;
+    Status = NtOpenProcessToken(NtCurrentProcess(), TOKEN_QUERY, &Token);
+    if (!NT_SUCCESS(Status)) return FALSE;
+
+    Status = NtQueryInformationToken(Token, TokenIsAppContainer, &IsAppContainer, sizeof(IsAppContainer), &Length);
+    if (!NT_SUCCESS(Status) || !IsAppContainer)
+    {
+        NtClose(Token);
+        return FALSE;
+    }
+
+    Status = NtQueryInformationToken(Token, TokenAppContainerSid, Buffer, sizeof(Buffer), &Length);
+    NtClose(Token);
+    if (!NT_SUCCESS(Status)) return FALSE;
+    PackageSid = *(PSID*)Buffer;
+    if (!PackageSid) return FALSE;
+
+    Status = RtlConvertSidToUnicodeString(&SidString, PackageSid, TRUE);
+    if (!NT_SUCCESS(Status)) return FALSE;
+
+    RtlInitEmptyUnicodeString(&SessionString, SessionBuffer, sizeof(SessionBuffer));
+    RtlInitEmptyUnicodeString(&DirectoryName, NameBuffer, sizeof(NameBuffer) - sizeof(UNICODE_NULL));
+    Status = RtlAppendUnicodeToString(&DirectoryName, L"\\Sessions\\");
+    if (NT_SUCCESS(Status)) Status = RtlIntegerToUnicodeString(NtCurrentPeb()->SessionId, 10, &SessionString);
+    if (NT_SUCCESS(Status)) Status = RtlAppendUnicodeStringToString(&DirectoryName, &SessionString);
+    if (NT_SUCCESS(Status)) Status = RtlAppendUnicodeToString(&DirectoryName, L"\\AppContainerNamedObjects\\");
+    if (NT_SUCCESS(Status)) Status = RtlAppendUnicodeStringToString(&DirectoryName, &SidString);
+    RtlFreeUnicodeString(&SidString);
+    if (!NT_SUCCESS(Status)) return FALSE;
+    NameBuffer[DirectoryName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &DirectoryName,
+                               OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+    Status = NtOpenDirectoryObject(Directory,
+                                   DIRECTORY_QUERY | DIRECTORY_TRAVERSE |
+                                   DIRECTORY_CREATE_OBJECT | DIRECTORY_CREATE_SUBDIRECTORY,
+                                   &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("BasepOpenAppContainerObjectDirectory: %wZ failed 0x%lx\n", &DirectoryName, Status);
+    return NT_SUCCESS(Status);
+}
+
+static
+BOOLEAN
+BasepOpenIsolatedObjectDirectory(
+    _Out_ PHANDLE Directory)
+{
+    UCHAR Buffer[sizeof(TOKEN_BNO_ISOLATION_INFORMATION) + 256 * sizeof(WCHAR)];
+    PTOKEN_BNO_ISOLATION_INFORMATION Isolation = (PTOKEN_BNO_ISOLATION_INFORMATION)Buffer;
+    UNICODE_STRING Prefix, Name;
+    WCHAR NameBuffer[384];
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE Token;
+    ULONG Length;
+    NTSTATUS Status;
+
+    *Directory = NULL;
+    Status = NtOpenProcessToken(NtCurrentProcess(), TOKEN_QUERY, &Token);
+    if (!NT_SUCCESS(Status)) return FALSE;
+
+    Status = NtQueryInformationToken(Token, TokenBnoIsolation, Isolation, sizeof(Buffer), &Length);
+    NtClose(Token);
+    if (!NT_SUCCESS(Status) || !Isolation->IsolationEnabled || !Isolation->IsolationPrefix)
+        return FALSE;
+
+    RtlInitUnicodeString(&Prefix, Isolation->IsolationPrefix);
+    RtlInitEmptyUnicodeString(&Name, NameBuffer, sizeof(NameBuffer) - sizeof(UNICODE_NULL));
+    Status = RtlAppendUnicodeStringToString(&Name, &BaseStaticServerData->NamedObjectDirectory);
+    if (NT_SUCCESS(Status)) Status = RtlAppendUnicodeToString(&Name, L"\\");
+    if (NT_SUCCESS(Status)) Status = RtlAppendUnicodeStringToString(&Name, &Prefix);
+    if (!NT_SUCCESS(Status)) return FALSE;
+    NameBuffer[Name.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+    InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, NULL, NULL);
+    Status = NtCreateDirectoryObject(Directory,
+                                     DIRECTORY_QUERY | DIRECTORY_TRAVERSE |
+                                     DIRECTORY_CREATE_OBJECT | DIRECTORY_CREATE_SUBDIRECTORY,
+                                     &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("BasepOpenIsolatedObjectDirectory: %wZ failed 0x%lx\n", &Name, Status);
+    return NT_SUCCESS(Status);
+}
+
 HANDLE
 WINAPI
 BaseGetNamedObjectDirectory(VOID)
@@ -217,6 +317,18 @@ BaseGetNamedObjectDirectory(VOID)
 
     RtlAcquirePebLock();
     if (BaseNamedObjectDirectory) goto Quickie;
+
+    if (BasepOpenAppContainerObjectDirectory(&BnoHandle))
+    {
+        BaseNamedObjectDirectory = BnoHandle;
+        goto Quickie;
+    }
+
+    if (BasepOpenIsolatedObjectDirectory(&BnoHandle))
+    {
+        BaseNamedObjectDirectory = BnoHandle;
+        goto Quickie;
+    }
 
     InitializeObjectAttributes(&ObjectAttributes,
                                &BaseStaticServerData->NamedObjectDirectory,
@@ -463,6 +575,8 @@ BaseFormatObjectAttributes(OUT POBJECT_ATTRIBUTES ObjectAttributes,
                                Attributes,
                                RootDirectory,
                                SecurityDescriptor);
+    if (ObjectName)
+        BasepAdjustObjectAttributesForPrivateNamespace(ObjectAttributes);
     DPRINT("Attributes: %lx, RootDirectory: %p, SecurityDescriptor: %p\n",
             Attributes, RootDirectory, SecurityDescriptor);
     return ObjectAttributes;

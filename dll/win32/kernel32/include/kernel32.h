@@ -31,6 +31,17 @@ typedef struct _BASE_PROC_THREAD_ATTRIBUTE_LIST
     BASE_PROC_THREAD_ATTRIBUTE Attributes[1];
 } BASE_PROC_THREAD_ATTRIBUTE_LIST, *PBASE_PROC_THREAD_ATTRIBUTE_LIST;
 
+NTSTATUS
+WINAPI
+BasepValidateThreadAttributeList(
+    _In_opt_ LPPROC_THREAD_ATTRIBUTE_LIST AttributeList);
+
+NTSTATUS
+WINAPI
+BasepApplyThreadAttributeList(
+    _In_opt_ LPPROC_THREAD_ATTRIBUTE_LIST AttributeList,
+    _In_ HANDLE ThreadHandle);
+
 #if DBG
 #define DEBUG_CHANNEL(ch) static ULONG gDebugChannel = ch;
 #else
@@ -199,6 +210,11 @@ WINAPI
 BaseFormatTimeOut(OUT PLARGE_INTEGER Timeout,
                   IN DWORD dwMilliseconds);
 
+VOID
+WINAPI
+BasepAdjustObjectAttributesForPrivateNamespace(
+    _Inout_ POBJECT_ATTRIBUTES ObjectAttributes);
+
 POBJECT_ATTRIBUTES
 WINAPI
 BaseFormatObjectAttributes(OUT POBJECT_ATTRIBUTES ObjectAttributes,
@@ -262,6 +278,13 @@ DECLSPEC_NORETURN
 VOID
 WINAPI
 BaseThreadStartup(
+    _In_ LPTHREAD_START_ROUTINE lpStartAddress,
+    _In_ LPVOID lpParameter);
+
+VOID
+WINAPI
+BaseThreadInitThunk(
+    _In_ DWORD Unknown,
     _In_ LPTHREAD_START_ROUTINE lpStartAddress,
     _In_ LPVOID lpParameter);
 

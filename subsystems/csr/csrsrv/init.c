@@ -509,6 +509,27 @@ CsrCreateSessionObjectDirectory(IN ULONG Session)
         return Status;
     }
 
+    if (Session == 0)
+    {
+        RtlInitUnicodeString(&SessionString, L"BaseNamedObjects");
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &SessionString,
+                                   OBJ_OPENIF | OBJ_CASE_INSENSITIVE,
+                                   SessionObjectDirectory,
+                                   NULL);
+        Status = NtCreateSymbolicLinkObject(&BnoHandle,
+                                            SYMBOLIC_LINK_ALL_ACCESS,
+                                            &ObjectAttributes,
+                                            &BnoString);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("CSRSS: NtCreateSymbolicLinkObject failed in "
+                    "CsrCreateSessionObjectDirectory - status = %lx\n", Status);
+            FreeDosDevicesProtection(&DosDevicesSd);
+            return Status;
+        }
+    }
+
     /* Next, create a directory for this session's DOS Devices */
     RtlInitUnicodeString(&SessionString, L"DosDevices");
     InitializeObjectAttributes(&ObjectAttributes,

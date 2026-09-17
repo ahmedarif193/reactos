@@ -257,6 +257,13 @@ KiSystemCallHandler(
     DescriptorTable = &((PKSERVICE_TABLE_DESCRIPTOR)Thread->ServiceTable)[TableIndex];
 #endif
 
+    if ((TableIndex == WIN32K_SERVICE_INDEX) &&
+        (ReadAcquire(&PsGetCurrentProcess()->SystemCallDisablePolicy) & 1))
+    {
+        TrapFrame->Rax = STATUS_INVALID_SYSTEM_SERVICE;
+        return (PVOID)NtSyscallFailure;
+    }
+
     /* Validate the system call number */
     if (ServiceNumber >= DescriptorTable->Limit)
     {

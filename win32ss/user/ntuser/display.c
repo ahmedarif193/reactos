@@ -1000,6 +1000,12 @@ NtUserChangeDisplaySettings(
     DEVMODEW dmLocal;
     LONG lRet;
 
+    if (IntIsJobUiLimited(JOB_OBJECT_UILIMIT_DISPLAYSETTINGS))
+    {
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return DISP_CHANGE_FAILED;
+    }
+
     /* Check arguments */
     if ((dwflags != CDS_VIDEOPARAMETERS) && (lParam != NULL))
     {

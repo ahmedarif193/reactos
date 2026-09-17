@@ -392,6 +392,98 @@ PspEnumerateProcessesInJobLocked(
  *     The caller must hold the job lock shared or exclusive.
  *     The caller must ensure that the job has an associated completion port.
  */
+static
+VOID
+PspUpdateJobPeak(
+    _Inout_ PULONG Peak,
+    _In_ ULONG Value)
+{
+    LONG Old;
+
+    do
+    {
+        Old = (LONG)*Peak;
+        if ((ULONG)Old >= Value)
+            return;
+    } while (InterlockedCompareExchange((PLONG)Peak, (LONG)Value, Old) != Old);
+}
+
+NTSTATUS
+NTAPI
+PsChargeJobCommitment(
+    _In_ PEPROCESS Process,
+    _In_ SIZE_T PageCount)
+{
+    PEJOB Job = Process->Job;
+    SIZE_T ProcessCommit;
+    LONG OldUsed;
+    ULONG NewUsed, Message = 0;
+
+    if (!Job || PageCount == 0)
+        return STATUS_SUCCESS;
+
+    ProcessCommit = Process->CommitCharge + PageCount;
+    if (ProcessCommit < PageCount || ProcessCommit > MAXULONG || PageCount > MAXULONG)
+        return STATUS_COMMITMENT_LIMIT;
+
+    if ((Job->LimitFlags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) &&
+        ProcessCommit > Job->ProcessMemoryLimit)
+    {
+        Message = JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT;
+    }
+    else
+    {
+        do
+        {
+            OldUsed = (LONG)Job->CurrentJobMemoryUsed;
+            NewUsed = (ULONG)OldUsed + (ULONG)PageCount;
+            if (NewUsed < (ULONG)OldUsed)
+                return STATUS_COMMITMENT_LIMIT;
+            if ((Job->LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY) && NewUsed > Job->JobMemoryLimit)
+            {
+                Message = JOB_OBJECT_MSG_JOB_MEMORY_LIMIT;
+                break;
+            }
+        } while (InterlockedCompareExchange((PLONG)&Job->CurrentJobMemoryUsed, (LONG)NewUsed, OldUsed) != OldUsed);
+    }
+
+    if (Message)
+    {
+        if (Job->CompletionPort)
+        {
+            ExEnterCriticalRegionAndAcquireResourceShared(&Job->JobLock);
+            if (Job->CompletionPort)
+                PspSendJobMessageLocked(Job, Message, Process->UniqueProcessId, TRUE);
+            ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
+        }
+        return STATUS_COMMITMENT_LIMIT;
+    }
+
+    PspUpdateJobPeak(&Job->PeakProcessMemoryUsed, (ULONG)ProcessCommit);
+    PspUpdateJobPeak(&Job->PeakJobMemoryUsed, NewUsed);
+    return STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+PsReturnJobCommitment(
+    _In_ PEPROCESS Process,
+    _In_ SIZE_T PageCount)
+{
+    PEJOB Job = Process->Job;
+    LONG OldUsed;
+    ULONG NewUsed;
+
+    if (!Job || PageCount == 0)
+        return;
+
+    do
+    {
+        OldUsed = (LONG)Job->CurrentJobMemoryUsed;
+        NewUsed = ((ULONG)OldUsed > PageCount) ? (ULONG)OldUsed - (ULONG)PageCount : 0;
+    } while (InterlockedCompareExchange((PLONG)&Job->CurrentJobMemoryUsed, (LONG)NewUsed, OldUsed) != OldUsed);
+}
+
 NTSTATUS
 NTAPI
 PspSendJobMessageLocked(
@@ -513,6 +605,9 @@ PspAssignProcessToJob(
 
     Job->TotalProcesses++;
     Job->ActiveProcesses++;
+    InterlockedExchangeAdd((PLONG)&Job->CurrentJobMemoryUsed, (LONG)Process->CommitCharge);
+    PspUpdateJobPeak(&Job->PeakProcessMemoryUsed, (ULONG)Process->CommitCharge);
+    PspUpdateJobPeak(&Job->PeakJobMemoryUsed, Job->CurrentJobMemoryUsed);
 
     if (Job->LimitFlags & JOB_OBJECT_LIMIT_AFFINITY)
         KeSetAffinityProcess(&Process->Pcb, Job->Affinity);
@@ -637,6 +732,7 @@ PspRemoveProcessFromJob(
     /* Remove the process from the job's process list */
     RemoveEntryList(&Process->JobLinks);
     InitializeListHead(&Process->JobLinks);
+    PsReturnJobCommitment(Process, Process->CommitCharge);
 
     /* Decrement the job's active process count if it is still active */
     ActiveProcessZero = PspDeactivateProcessFromJobLocked(Job, Process);

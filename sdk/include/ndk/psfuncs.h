@@ -77,6 +77,14 @@ PsGetJobUIRestrictionsClass(
 );
 
 NTKERNELAPI
+ULONG
+NTAPI
+PsGetProcessMitigationPolicyFlags(
+    _In_ PEPROCESS Process,
+    _In_ ULONG Policy
+);
+
+NTKERNELAPI
 VOID
 NTAPI
 PsSetJobUIRestrictionsClass(

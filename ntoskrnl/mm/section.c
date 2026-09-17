@@ -3639,6 +3639,10 @@ MmCreateImageSection(PSECTION *SectionObject,
         return STATUS_INVALID_FILE_FOR_SECTION;
     }
 
+    Status = PsCheckImageLoadPolicy(FileObject);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     if ((UMaximumSize != NULL) && (UMaximumSize->QuadPart < 0))
     {
         return STATUS_SECTION_TOO_BIG;

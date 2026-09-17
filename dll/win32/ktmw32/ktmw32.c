@@ -38,6 +38,17 @@ NtCreateTransaction(
 NTSYSAPI
 NTSTATUS
 NTAPI
+NtCreateTransactionManager(
+    _Out_ PHANDLE TmHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_opt_ PUNICODE_STRING LogFileName,
+    _In_opt_ ULONG CreateOptions,
+    _In_opt_ ULONG CommitStrength);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 NtCommitTransaction(
     _In_ HANDLE TransactionHandle,
     _In_ BOOLEAN Wait);
@@ -57,6 +68,45 @@ static BOOL SetStatus(NTSTATUS Status)
         return FALSE;
     }
     return TRUE;
+}
+
+HANDLE
+WINAPI
+CreateTransactionManager(
+    _In_opt_ LPSECURITY_ATTRIBUTES TransactionAttributes,
+    _In_opt_ LPWSTR LogFileName,
+    _In_opt_ ULONG CreateOptions,
+    _In_opt_ ULONG CommitStrength)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING LogFileNameString;
+    PUNICODE_STRING LogFileNamePointer = NULL;
+    HANDLE Handle = NULL;
+    ULONG Attributes = OBJ_CASE_INSENSITIVE;
+    NTSTATUS Status;
+
+    TRACE("(%p %s %lu %lu)\n", TransactionAttributes,
+          debugstr_w(LogFileName), CreateOptions, CommitStrength);
+
+    if (TransactionAttributes && TransactionAttributes->bInheritHandle)
+        Attributes |= OBJ_INHERIT;
+    InitializeObjectAttributes(&ObjectAttributes, NULL, Attributes, NULL,
+                               TransactionAttributes ?
+                                   TransactionAttributes->lpSecurityDescriptor : NULL);
+
+    if (LogFileName)
+    {
+        RtlInitUnicodeString(&LogFileNameString, LogFileName);
+        LogFileNamePointer = &LogFileNameString;
+    }
+
+    Status = NtCreateTransactionManager(&Handle, TRANSACTION_ALL_ACCESS,
+                                        &ObjectAttributes, LogFileNamePointer,
+                                        CreateOptions, CommitStrength);
+    if (!SetStatus(Status))
+        return INVALID_HANDLE_VALUE;
+
+    return Handle;
 }
 
 HANDLE

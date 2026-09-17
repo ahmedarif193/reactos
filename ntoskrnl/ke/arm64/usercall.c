@@ -189,6 +189,13 @@ KiSystemService(
 
     ServiceNumber = Instruction & SERVICE_NUMBER_MASK;
 
+    if ((TableIndex == SERVICE_TABLE_TEST) &&
+        (ReadAcquire(&PsGetCurrentProcess()->SystemCallDisablePolicy) & 1))
+    {
+        TrapFrame->X0 = STATUS_INVALID_SYSTEM_SERVICE;
+        return;
+    }
+
     if (ServiceNumber >= DescriptorTable->Limit)
     {
         /*

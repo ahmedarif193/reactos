@@ -119,6 +119,10 @@ PsGetProcessStartKey(
 #define PSP_JOB_NOT_REALLY_ACTIVE   0x00000001
 #define PSP_JOB_ACCOUNTING_FOLDED   0x00000002
 
+/* Process component-filter flags supplied at creation time. */
+#define PSP_COMPONENT_FILTER_KTM         0x00000001
+#define PSP_COMPONENT_FILTER_VALID_FLAGS PSP_COMPONENT_FILTER_KTM
+
 //
 // Job Flags
 //
@@ -249,7 +253,9 @@ PspCreateProcess(
     IN HANDLE SectionHandle OPTIONAL,
     IN HANDLE DebugPort OPTIONAL,
     IN HANDLE ExceptionPort OPTIONAL,
-    IN BOOLEAN InJob
+    IN BOOLEAN InJob,
+    IN const HANDLE *HandleList OPTIONAL,
+    IN SIZE_T HandleCount
 );
 
 //
@@ -459,6 +465,20 @@ PsChargeProcessPageFileQuota(
     _In_ SIZE_T Amount
 );
 
+NTSTATUS
+NTAPI
+PsChargeJobCommitment(
+    _In_ PEPROCESS Process,
+    _In_ SIZE_T PageCount
+);
+
+VOID
+NTAPI
+PsReturnJobCommitment(
+    _In_ PEPROCESS Process,
+    _In_ SIZE_T PageCount
+);
+
 VOID
 NTAPI
 PsReturnSharedPoolQuota(
@@ -652,6 +672,45 @@ extern BOOLEAN PsImageNotifyEnabled;
 extern PKWIN32_PROCESS_CALLOUT PspW32ProcessCallout;
 extern PKWIN32_THREAD_CALLOUT PspW32ThreadCallout;
 extern PKWIN32_JOB_CALLOUT PspW32JobCallout;
+
+#define PSP_DEP_POLICY 0
+#define PSP_ASLR_POLICY 1
+#define PSP_EXTENSION_POINT_DISABLE_POLICY 6
+#define PSP_CONTROL_FLOW_GUARD_POLICY 7
+#define PSP_FONT_DISABLE_POLICY 9
+#define PSP_IMAGE_LOAD_POLICY 10
+#define PSP_SYSTEM_CALL_FILTER_POLICY 11
+#define PSP_PAYLOAD_RESTRICTION_POLICY 12
+#define PSP_SIDE_CHANNEL_ISOLATION_POLICY 14
+#define PSP_EXTENDED_POLICY_COUNT 16
+
+FORCEINLINE
+BOOLEAN
+PspIsExtendedMitigationPolicy(
+    _In_ ULONG Policy)
+{
+    return Policy == PSP_DEP_POLICY ||
+           Policy == PSP_ASLR_POLICY ||
+           Policy == PSP_EXTENSION_POINT_DISABLE_POLICY ||
+           Policy == PSP_CONTROL_FLOW_GUARD_POLICY ||
+           Policy == PSP_FONT_DISABLE_POLICY ||
+           Policy == PSP_IMAGE_LOAD_POLICY ||
+           Policy == PSP_SYSTEM_CALL_FILTER_POLICY ||
+           Policy == PSP_PAYLOAD_RESTRICTION_POLICY ||
+           Policy == PSP_SIDE_CHANNEL_ISOLATION_POLICY;
+}
+
+NTSTATUS
+NTAPI
+PspSetExtendedMitigationPolicy(
+    _In_ PEPROCESS Process,
+    _In_ ULONG Policy,
+    _In_ ULONG Flags);
+
+NTSTATUS
+NTAPI
+PsCheckImageLoadPolicy(
+    _In_ PFILE_OBJECT FileObject);
 extern PVOID PspSystemDllEntryPoint;
 extern PVOID PspSystemDllBase;
 extern BOOLEAN PspUseJobSchedulingClasses;

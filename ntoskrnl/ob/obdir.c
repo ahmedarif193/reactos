@@ -41,6 +41,9 @@ ObpDeleteDirectoryObject(IN PVOID Object)
     POBJECT_DIRECTORY Directory = Object;
     ULONG Index;
 
+    if (Directory->NamespaceEntry)
+        ObpRemovePrivateNamespace(Directory);
+
     ASSERT(Directory->DeviceMap == NULL);
     for (Index = 0; Index < NUMBER_HASH_BUCKETS; Index++)
     {
@@ -834,6 +837,8 @@ NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
     }
     Directory->DeviceMap = NULL;
     Directory->SessionId = 0;
+    Directory->NamespaceEntry = NULL;
+    Directory->Flags = 0;
 #if (NTDDI_VERSION == NTDDI_WINXP)
     Directory->Reserved = 0;
     Directory->SymbolicLinkUsageCount = 0;

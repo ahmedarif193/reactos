@@ -448,9 +448,51 @@ CreateLockdownToken(
     return Token;
 }
 
+static BOOL
+AddDefaultDaclEntry(
+    _In_ HANDLE Token,
+    _In_ PSID Sid,
+    _In_ DWORD Access,
+    _In_ PCSTR Tag)
+{
+    PTOKEN_DEFAULT_DACL Old = NULL;
+    TOKEN_DEFAULT_DACL New;
+    EXPLICIT_ACCESSW Entry;
+    PACL Acl = NULL;
+    DWORD Length = 0, Error;
+    BOOL Success = FALSE;
+
+    GetTokenInformation(Token, TokenDefaultDacl, NULL, 0, &Length);
+    if (Length)
+    {
+        Old = HeapAlloc(GetProcessHeap(), 0, Length);
+        if (Old && !GetTokenInformation(Token, TokenDefaultDacl, Old, Length, &Length))
+            Old->DefaultDacl = NULL;
+    }
+    ZeroMemory(&Entry, sizeof(Entry));
+    Entry.grfAccessPermissions = Access;
+    Entry.grfAccessMode = GRANT_ACCESS;
+    Entry.grfInheritance = NO_INHERITANCE;
+    Entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    Entry.Trustee.TrusteeType = TRUSTEE_IS_GROUP;
+    Entry.Trustee.ptstrName = (LPWSTR)Sid;
+    Error = SetEntriesInAclW(1, &Entry, Old ? Old->DefaultDacl : NULL, &Acl);
+    ok(Error == ERROR_SUCCESS, "%s: SetEntriesInAclW failed with %lu\n", Tag, Error);
+    if (Error == ERROR_SUCCESS)
+    {
+        New.DefaultDacl = Acl;
+        Success = SetTokenInformation(Token, TokenDefaultDacl, &New, sizeof(New));
+        ok(Success, "%s: SetTokenInformation(TokenDefaultDacl) failed with %lu\n", Tag, GetLastError());
+        LocalFree(Acl);
+    }
+    if (Old) HeapFree(GetProcessHeap(), 0, Old);
+    return Success;
+}
+
 static HANDLE
 CreateInitialToken(
-    _In_ HANDLE BaseToken)
+    _In_ HANDLE BaseToken,
+    _In_ PSID RandomSid)
 {
     PTOKEN_GROUPS Groups = NULL;
     PTOKEN_USER User = NULL;
@@ -487,6 +529,7 @@ CreateInitialToken(
     ok(Success, "initial: CreateRestrictedToken(%lu restricting SIDs) failed with %lu\n", Count, GetLastError());
     if (!Success) goto Cleanup;
 
+    AddDefaultDaclEntry(Restricted, RandomSid, GENERIC_ALL, "initial");
     SetIntegrity(Restricted, SECURITY_MANDATORY_LOW_RID, "initial");
 
     Success = DuplicateTokenEx(Restricted, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenImpersonation, &Impersonation);
@@ -611,7 +654,7 @@ START_TEST(SandboxLaunch)
     if (!Success) goto Cleanup;
 
     Lockdown = CreateLockdownToken(BaseToken, RandomSid);
-    Initial = CreateInitialToken(BaseToken);
+    Initial = CreateInitialToken(BaseToken, RandomSid);
     Job = CreateLockdownJob();
     TestAlternateDesktop();
 

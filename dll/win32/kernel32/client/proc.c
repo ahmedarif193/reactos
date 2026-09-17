@@ -2207,6 +2207,99 @@ BasepRestrictInheritedHandles(
     return Status;
 }
 
+NTSTATUS
+WINAPI
+BasepValidateThreadAttributeList(
+    _In_opt_ LPPROC_THREAD_ATTRIBUTE_LIST AttributeList)
+{
+    PBASE_PROC_THREAD_ATTRIBUTE_LIST List = (PBASE_PROC_THREAD_ATTRIBUTE_LIST)AttributeList;
+    ULONG Index;
+
+    if (!List)
+        return STATUS_SUCCESS;
+
+    if (List->Count > List->Size)
+        return STATUS_INVALID_PARAMETER;
+
+    for (Index = 0; Index < List->Count; Index++)
+    {
+        PBASE_PROC_THREAD_ATTRIBUTE Attribute = &List->Attributes[Index];
+
+        if (!(Attribute->Attribute & PROC_THREAD_ATTRIBUTE_THREAD))
+            return STATUS_INVALID_PARAMETER;
+
+        if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY)
+        {
+            if (Attribute->Size != sizeof(GROUP_AFFINITY))
+                return STATUS_INVALID_PARAMETER;
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_IDEAL_PROCESSOR)
+        {
+            if (Attribute->Size != sizeof(PROCESSOR_NUMBER))
+                return STATUS_INVALID_PARAMETER;
+        }
+        else
+        {
+            return STATUS_NOT_SUPPORTED;
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+WINAPI
+BasepApplyThreadAttributeList(
+    _In_opt_ LPPROC_THREAD_ATTRIBUTE_LIST AttributeList,
+    _In_ HANDLE ThreadHandle)
+{
+    PBASE_PROC_THREAD_ATTRIBUTE_LIST List = (PBASE_PROC_THREAD_ATTRIBUTE_LIST)AttributeList;
+    NTSTATUS Status;
+    ULONG Index;
+
+    Status = BasepValidateThreadAttributeList(AttributeList);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!List)
+        return STATUS_SUCCESS;
+
+    for (Index = 0; Index < List->Count; Index++)
+    {
+        PBASE_PROC_THREAD_ATTRIBUTE Attribute = &List->Attributes[Index];
+
+        if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_GROUP_AFFINITY)
+        {
+            Status = NtSetInformationThread(ThreadHandle, ThreadGroupInformation, Attribute->Value, sizeof(GROUP_AFFINITY));
+            if (!NT_SUCCESS(Status)) return Status;
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_IDEAL_PROCESSOR)
+        {
+            Status = NtSetInformationThread(ThreadHandle, ThreadIdealProcessorEx, Attribute->Value, sizeof(PROCESSOR_NUMBER));
+            if (!NT_SUCCESS(Status)) return Status;
+        }
+    }
+    return STATUS_SUCCESS;
+}
+
+static
+BOOLEAN
+BasepIsChildProcessBlocked(VOID)
+{
+    struct
+    {
+        ULONG Policy;
+        ULONG Flags;
+    } Information = {13, 0};
+    NTSTATUS Status;
+
+    Status = NtQueryInformationProcess(NtCurrentProcess(),
+                                       ProcessMitigationPolicy,
+                                       &Information,
+                                       sizeof(Information),
+                                       NULL);
+    return NT_SUCCESS(Status) && (Information.Flags & PROCESS_CREATION_CHILD_PROCESS_RESTRICTED);
+}
+
 static
 NTSTATUS
 BasepAssignJobListFromAttributes(
@@ -2246,6 +2339,143 @@ BasepAssignJobListFromAttributes(
     return Status;
 }
 
+#define BASEP_LOWBOX_HANDLE_COUNT 5
+
+static
+NTSTATUS
+BasepCreateAppContainerLink(
+    _In_ HANDLE Directory,
+    _In_ PCWSTR LinkName,
+    _In_ PCWSTR Target,
+    _In_ PSECURITY_DESCRIPTOR Sd,
+    _Out_ PHANDLE Handle)
+{
+    UNICODE_STRING Name, TargetName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&Name, LinkName);
+    RtlInitUnicodeString(&TargetName, Target);
+    InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, Directory, Sd);
+    Status = NtCreateSymbolicLinkObject(Handle, SYMBOLIC_LINK_ALL_ACCESS, &ObjectAttributes, &TargetName);
+    if (Status == STATUS_OBJECT_NAME_COLLISION || Status == STATUS_OBJECT_TYPE_MISMATCH)
+    {
+        InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE, Directory, NULL);
+        Status = NtOpenSymbolicLinkObject(Handle, SYMBOLIC_LINK_QUERY, &ObjectAttributes);
+    }
+    return Status;
+}
+
+static
+NTSTATUS
+BasepCreateAppContainerDirectory(
+    _In_ PSID PackageSid,
+    _Out_writes_(BASEP_LOWBOX_HANDLE_COUNT) PHANDLE Handles,
+    _Out_ PULONG HandleCount)
+{
+    SID_IDENTIFIER_AUTHORITY WorldAuthority = {SECURITY_WORLD_SID_AUTHORITY};
+    SID_IDENTIFIER_AUTHORITY LabelAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
+    UCHAR WorldBuffer[SECURITY_MAX_SID_SIZE], LowBuffer[SECURITY_MAX_SID_SIZE];
+    PSID WorldSid = (PSID)WorldBuffer, LowSid = (PSID)LowBuffer;
+    SECURITY_DESCRIPTOR Sd;
+    PACL Dacl, Sacl;
+    ULONG DaclSize, SaclSize;
+    UNICODE_STRING SidString, Name, SessionString;
+    WCHAR NameBuffer[256], SessionBuffer[16];
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING RpcName;
+    HANDLE Directory = NULL;
+    NTSTATUS Status;
+
+    *HandleCount = 0;
+    RtlInitEmptyUnicodeString(&SessionString, SessionBuffer, sizeof(SessionBuffer));
+    RtlInitializeSid(WorldSid, &WorldAuthority, 1);
+    *RtlSubAuthoritySid(WorldSid, 0) = SECURITY_WORLD_RID;
+    RtlInitializeSid(LowSid, &LabelAuthority, 1);
+    *RtlSubAuthoritySid(LowSid, 0) = SECURITY_MANDATORY_LOW_RID;
+
+    Status = RtlConvertSidToUnicodeString(&SidString, PackageSid, TRUE);
+    if (!NT_SUCCESS(Status)) return Status;
+    RtlInitEmptyUnicodeString(&Name, NameBuffer, sizeof(NameBuffer) - sizeof(UNICODE_NULL));
+    Status = RtlAppendUnicodeToString(&Name, L"\\Sessions\\");
+    if (NT_SUCCESS(Status)) Status = RtlIntegerToUnicodeString(NtCurrentPeb()->SessionId, 10, &SessionString);
+    if (NT_SUCCESS(Status)) Status = RtlAppendUnicodeStringToString(&Name, &SessionString);
+    if (NT_SUCCESS(Status)) Status = RtlAppendUnicodeToString(&Name, L"\\AppContainerNamedObjects\\");
+    if (NT_SUCCESS(Status)) Status = RtlAppendUnicodeStringToString(&Name, &SidString);
+    RtlFreeUnicodeString(&SidString);
+    if (!NT_SUCCESS(Status)) return Status;
+    NameBuffer[Name.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+    DaclSize = sizeof(ACL) + 2 * FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + RtlLengthSid(PackageSid) + RtlLengthSid(WorldSid);
+    SaclSize = sizeof(ACL) + FIELD_OFFSET(SYSTEM_MANDATORY_LABEL_ACE, SidStart) + RtlLengthSid(LowSid);
+    Dacl = RtlAllocateHeap(RtlGetProcessHeap(), 0, DaclSize + SaclSize);
+    if (!Dacl) return STATUS_NO_MEMORY;
+    Sacl = (PACL)((PUCHAR)Dacl + DaclSize);
+
+    Status = RtlCreateAcl(Dacl, DaclSize, ACL_REVISION);
+    if (NT_SUCCESS(Status)) Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, DIRECTORY_ALL_ACCESS, PackageSid);
+    if (NT_SUCCESS(Status)) Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, DIRECTORY_ALL_ACCESS, WorldSid);
+    if (NT_SUCCESS(Status)) Status = RtlCreateAcl(Sacl, SaclSize, ACL_REVISION);
+    if (NT_SUCCESS(Status)) Status = RtlAddMandatoryAce(Sacl, ACL_REVISION, 0, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, SYSTEM_MANDATORY_LABEL_ACE_TYPE, LowSid);
+    if (NT_SUCCESS(Status)) Status = RtlCreateSecurityDescriptor(&Sd, SECURITY_DESCRIPTOR_REVISION);
+    if (NT_SUCCESS(Status)) Status = RtlSetDaclSecurityDescriptor(&Sd, TRUE, Dacl, FALSE);
+    if (NT_SUCCESS(Status)) Status = RtlSetSaclSecurityDescriptor(&Sd, TRUE, Sacl, FALSE);
+    if (NT_SUCCESS(Status))
+    {
+        InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, NULL, &Sd);
+        Status = NtCreateDirectoryObject(&Directory, DIRECTORY_ALL_ACCESS, &ObjectAttributes);
+    }
+    if (!NT_SUCCESS(Status))
+        DPRINT1("AppContainer directory %wZ creation failed 0x%lx\n", &Name, Status);
+    if (NT_SUCCESS(Status))
+    {
+        Handles[(*HandleCount)++] = Directory;
+        Status = BasepCreateAppContainerLink(Directory, L"Global", L"\\BaseNamedObjects", &Sd, &Handles[*HandleCount]);
+        if (NT_SUCCESS(Status)) (*HandleCount)++;
+        else DPRINT1("AppContainer Global link failed 0x%lx\n", Status);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        Status = BasepCreateAppContainerLink(Directory, L"Local", NameBuffer, &Sd, &Handles[*HandleCount]);
+        if (NT_SUCCESS(Status)) (*HandleCount)++;
+    }
+    if (NT_SUCCESS(Status))
+    {
+        Status = BasepCreateAppContainerLink(Directory, L"Session", L"\\Sessions\\BNOLINKS", &Sd, &Handles[*HandleCount]);
+        if (NT_SUCCESS(Status)) (*HandleCount)++;
+    }
+    if (NT_SUCCESS(Status))
+    {
+        RtlInitUnicodeString(&RpcName, L"RPC Control");
+        InitializeObjectAttributes(&ObjectAttributes, &RpcName, OBJ_CASE_INSENSITIVE | OBJ_OPENIF, Directory, &Sd);
+        Status = NtCreateDirectoryObject(&Handles[*HandleCount], DIRECTORY_ALL_ACCESS, &ObjectAttributes);
+        if (NT_SUCCESS(Status)) (*HandleCount)++;
+        else DPRINT1("AppContainer RPC Control directory failed 0x%lx\n", Status);
+    }
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Dacl);
+    if (!NT_SUCCESS(Status))
+    {
+        while (*HandleCount) NtClose(Handles[--(*HandleCount)]);
+    }
+    return Status;
+}
+
+typedef struct _BASE_CREATE_EXTENDED_ATTRIBUTES
+{
+    ULONGLONG MitigationOptions[3];
+    ULONG MitigationCount;
+    ULONG ChildPolicy;
+    BOOL ChildPolicyPresent;
+    ULONG AllAppPackagesPolicy;
+    BOOL AllAppPackagesPresent;
+    PSECURITY_CAPABILITIES SecurityCapabilities;
+    PPROC_THREAD_BNOISOLATION_ATTRIBUTE BnoIsolation;
+    PHANDLE JobList;
+    ULONG JobCount;
+    COMPONENT_FILTER ComponentFilter;
+    BOOL ComponentFilterPresent;
+} BASE_CREATE_EXTENDED_ATTRIBUTES, *PBASE_CREATE_EXTENDED_ATTRIBUTES;
+
 static
 BOOL
 BasepCaptureExtendedAttributes(
@@ -2253,7 +2483,8 @@ BasepCaptureExtendedAttributes(
     _In_ BOOL InheritHandles,
     _Outptr_result_buffer_maybenull_(*HandleCount) PHANDLE *HandleList,
     _Out_ PSIZE_T HandleCount,
-    _Out_ PHANDLE ParentProcess)
+    _Out_ PHANDLE ParentProcess,
+    _Out_ PBASE_CREATE_EXTENDED_ATTRIBUTES Extended)
 {
     PBASE_PROC_THREAD_ATTRIBUTE_LIST List;
     ULONG Index;
@@ -2261,6 +2492,7 @@ BasepCaptureExtendedAttributes(
     *HandleList = NULL;
     *HandleCount = 0;
     *ParentProcess = NtCurrentProcess();
+    RtlZeroMemory(Extended, sizeof(*Extended));
 
     if (StartupInfo->cb < sizeof(STARTUPINFOEXW))
         return TRUE;
@@ -2278,9 +2510,93 @@ BasepCaptureExtendedAttributes(
     {
         PBASE_PROC_THREAD_ATTRIBUTE Attribute = &List->Attributes[Index];
 
+        if (Attribute->Attribute & PROC_THREAD_ATTRIBUTE_THREAD)
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+
         if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_PARENT_PROCESS)
         {
             *ParentProcess = *(PHANDLE)Attribute->Value;
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY)
+        {
+            if (Attribute->Size == sizeof(DWORD))
+            {
+                Extended->MitigationOptions[0] = *(PDWORD)Attribute->Value;
+                Extended->MitigationCount = 1;
+            }
+            else if (Attribute->Size == sizeof(ULONGLONG) ||
+                     Attribute->Size == 2 * sizeof(ULONGLONG) ||
+                     Attribute->Size == 3 * sizeof(ULONGLONG))
+            {
+                RtlCopyMemory(Extended->MitigationOptions, Attribute->Value, Attribute->Size);
+                Extended->MitigationCount = (ULONG)(Attribute->Size / sizeof(ULONGLONG));
+            }
+            else
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY)
+        {
+            if (Attribute->Size != sizeof(DWORD))
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+            Extended->ChildPolicy = *(PDWORD)Attribute->Value;
+            Extended->ChildPolicyPresent = TRUE;
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY)
+        {
+            if (Attribute->Size != sizeof(DWORD))
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+            Extended->AllAppPackagesPolicy = *(PDWORD)Attribute->Value;
+            Extended->AllAppPackagesPresent = TRUE;
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES)
+        {
+            if (Attribute->Size != sizeof(SECURITY_CAPABILITIES))
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+            Extended->SecurityCapabilities = (PSECURITY_CAPABILITIES)Attribute->Value;
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_BNO_ISOLATION)
+        {
+            if (Attribute->Size != sizeof(PROC_THREAD_BNOISOLATION_ATTRIBUTE))
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+            Extended->BnoIsolation = (PPROC_THREAD_BNOISOLATION_ATTRIBUTE)Attribute->Value;
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_JOB_LIST)
+        {
+            if (Attribute->Size == 0 || (Attribute->Size % sizeof(HANDLE)) != 0)
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+            Extended->JobList = (PHANDLE)Attribute->Value;
+            Extended->JobCount = (ULONG)(Attribute->Size / sizeof(HANDLE));
+        }
+        else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_COMPONENT_FILTER)
+        {
+            if (Attribute->Size != sizeof(COMPONENT_FILTER))
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+            Extended->ComponentFilter = *(PCOMPONENT_FILTER)Attribute->Value;
+            Extended->ComponentFilterPresent = TRUE;
         }
         else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_HANDLE_LIST)
         {
@@ -2343,13 +2659,18 @@ BasepCreateUserProcess(IN HANDLE UserToken,
                         IN const HANDLE *HandleList,
                         IN SIZE_T HandleCount,
                         IN PPROCESS_PRIORITY_CLASS PriorityClass,
+                        IN PBASE_CREATE_EXTENDED_ATTRIBUTES Extended,
                         OUT LPPROCESS_INFORMATION ProcessInformation)
 {
     struct
     {
         SIZE_T TotalLength;
-        PS_ATTRIBUTE Attributes[7];
+        PS_ATTRIBUTE Attributes[12];
     } AttributeBuffer;
+    HANDLE LowBoxToken = NULL;
+    HANDLE LowBoxHandles[BASEP_LOWBOX_HANDLE_COUNT];
+    ULONG LowBoxHandleCount = 0;
+    ULONG JobIndex;
     BASE_API_MESSAGE CsrMessage;
     PBASE_CREATE_PROCESS CreateProcessMessage;
     PPS_ATTRIBUTE_LIST AttributeList = (PPS_ATTRIBUTE_LIST)&AttributeBuffer;
@@ -2371,6 +2692,8 @@ BasepCreateUserProcess(IN HANDLE UserToken,
     ULONG AttributeCount = 0, ProcessFlags = InitialProcessFlags, ResumeCount;
     ULONG HardErrorMode, Length;
     NTSTATUS Status;
+    PS_BNO_ISOLATION_PARAMETERS BnoIsolation;
+    ULONG BnoPrefixLength;
 
     Length = GetFullPathNameW(ApplicationPathName, ARRAYSIZE(FullPath), FullPath, NULL);
     ImagePathName = (Length && Length < ARRAYSIZE(FullPath)) ? FullPath : ApplicationPathName;
@@ -2439,7 +2762,7 @@ BasepCreateUserProcess(IN HANDLE UserToken,
         if (!NT_SUCCESS(Status)) goto Failure;
         DebugHandle = DbgUiGetThreadDebugObject();
     }
-    if (CreationFlags & DEBUG_PROCESS) ProcessFlags |= PROCESS_CREATE_FLAGS_BREAKAWAY;
+    if (CreationFlags & CREATE_BREAKAWAY_FROM_JOB) ProcessFlags |= PROCESS_CREATE_FLAGS_BREAKAWAY;
     if (CreationFlags & DEBUG_ONLY_THIS_PROCESS) ProcessFlags |= PROCESS_CREATE_FLAGS_NO_DEBUG_INHERIT;
     if (InheritHandles) ProcessFlags |= PROCESS_CREATE_FLAGS_INHERIT_HANDLES;
 
@@ -2464,6 +2787,51 @@ BasepCreateUserProcess(IN HANDLE UserToken,
         AttributeCount++;
     }
     EffectiveToken = UserToken ? UserToken : SaferToken;
+    if (Extended->SecurityCapabilities)
+    {
+        HANDLE BaseToken = EffectiveToken;
+
+        if (!BaseToken)
+        {
+            Status = NtOpenProcessToken(NtCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY, &BaseToken);
+            if (!NT_SUCCESS(Status)) goto Failure;
+        }
+        BasepCreateAppContainerDirectory(Extended->SecurityCapabilities->AppContainerSid, LowBoxHandles, &LowBoxHandleCount);
+        Status = NtCreateLowBoxToken(&LowBoxToken,
+                                     BaseToken,
+                                     TOKEN_ALL_ACCESS,
+                                     NULL,
+                                     Extended->SecurityCapabilities->AppContainerSid,
+                                     Extended->SecurityCapabilities->CapabilityCount,
+                                     Extended->SecurityCapabilities->Capabilities,
+                                     LowBoxHandleCount,
+                                     LowBoxHandleCount ? LowBoxHandles : NULL);
+        while (LowBoxHandleCount) NtClose(LowBoxHandles[--LowBoxHandleCount]);
+        if (BaseToken != EffectiveToken) NtClose(BaseToken);
+        if (!NT_SUCCESS(Status)) goto Failure;
+        EffectiveToken = LowBoxToken;
+    }
+    if (Extended->MitigationCount)
+    {
+        AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_MITIGATION_OPTIONS;
+        AttributeList->Attributes[AttributeCount].Size = Extended->MitigationCount * sizeof(ULONGLONG);
+        AttributeList->Attributes[AttributeCount].ValuePtr = Extended->MitigationOptions;
+        AttributeCount++;
+    }
+    if (Extended->ChildPolicyPresent)
+    {
+        AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_CHILD_PROCESS_POLICY;
+        AttributeList->Attributes[AttributeCount].Size = sizeof(ULONG);
+        AttributeList->Attributes[AttributeCount].ValuePtr = &Extended->ChildPolicy;
+        AttributeCount++;
+    }
+    if (Extended->AllAppPackagesPresent)
+    {
+        AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY;
+        AttributeList->Attributes[AttributeCount].Size = sizeof(ULONG);
+        AttributeList->Attributes[AttributeCount].ValuePtr = &Extended->AllAppPackagesPolicy;
+        AttributeCount++;
+    }
     if (EffectiveToken)
     {
         AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_TOKEN;
@@ -2478,6 +2846,44 @@ BasepCreateUserProcess(IN HANDLE UserToken,
         AttributeList->Attributes[AttributeCount].Value = (ULONG_PTR)ParentProcess;
         AttributeCount++;
     }
+    if (HandleList)
+    {
+        AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_HANDLE_LIST;
+        AttributeList->Attributes[AttributeCount].Size = HandleCount * sizeof(HANDLE);
+        AttributeList->Attributes[AttributeCount].ValuePtr = (PVOID)HandleList;
+        AttributeCount++;
+    }
+    if (Extended->BnoIsolation)
+    {
+        RtlZeroMemory(&BnoIsolation, sizeof(BnoIsolation));
+        BnoPrefixLength = 0;
+        while (BnoPrefixLength < RTL_NUMBER_OF(Extended->BnoIsolation->IsolationPrefix) &&
+               Extended->BnoIsolation->IsolationPrefix[BnoPrefixLength])
+            BnoPrefixLength++;
+        if (Extended->BnoIsolation->IsolationEnabled &&
+            (BnoPrefixLength == 0 ||
+             BnoPrefixLength == RTL_NUMBER_OF(Extended->BnoIsolation->IsolationPrefix)))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Failure;
+        }
+        BnoIsolation.IsolationPrefix.Buffer = Extended->BnoIsolation->IsolationPrefix;
+        BnoIsolation.IsolationPrefix.Length = (USHORT)(BnoPrefixLength * sizeof(WCHAR));
+        BnoIsolation.IsolationPrefix.MaximumLength =
+            (USHORT)((BnoPrefixLength + 1) * sizeof(WCHAR));
+        BnoIsolation.IsolationEnabled = Extended->BnoIsolation->IsolationEnabled;
+        AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_BNO_ISOLATION;
+        AttributeList->Attributes[AttributeCount].Size = sizeof(BnoIsolation);
+        AttributeList->Attributes[AttributeCount].ValuePtr = &BnoIsolation;
+        AttributeCount++;
+    }
+    if (Extended->ComponentFilterPresent)
+    {
+        AttributeList->Attributes[AttributeCount].Attribute = PS_ATTRIBUTE_COMPONENT_FILTER;
+        AttributeList->Attributes[AttributeCount].Size = sizeof(Extended->ComponentFilter);
+        AttributeList->Attributes[AttributeCount].ValuePtr = &Extended->ComponentFilter;
+        AttributeCount++;
+    }
     AttributeList->TotalLength = FIELD_OFFSET(PS_ATTRIBUTE_LIST, Attributes) + AttributeCount * sizeof(PS_ATTRIBUTE);
 
     ProcessObjectAttributesPtr = BaseFormatObjectAttributes(&ProcessObjectAttributes, ProcessAttributes, NULL);
@@ -2486,8 +2892,11 @@ BasepCreateUserProcess(IN HANDLE UserToken,
     CreateInfo.Size = sizeof(CreateInfo);
     CreateInfo.State = PsCreateInitialState;
     Status = NtCreateUserProcess(&ProcessHandle, &ThreadHandle, PROCESS_ALL_ACCESS, THREAD_ALL_ACCESS, ProcessObjectAttributesPtr, ThreadObjectAttributesPtr, ProcessFlags, THREAD_CREATE_FLAGS_CREATE_SUSPENDED, ProcessParameters, &CreateInfo, AttributeList);
-    if (NT_SUCCESS(Status) && HandleList)
-        Status = BasepRestrictInheritedHandles(ProcessHandle, HandleList, HandleCount, StartupInfo, ProcessParameters->CurrentDirectory.Handle);
+    if (LowBoxToken)
+    {
+        NtClose(LowBoxToken);
+        LowBoxToken = NULL;
+    }
     RtlDestroyProcessParameters(ProcessParameters);
     ProcessParameters = NULL;
 
@@ -2551,6 +2960,12 @@ BasepCreateUserProcess(IN HANDLE UserToken,
     if (NT_SUCCESS(Status)) Status = CsrMessage.Status;
     if (!NT_SUCCESS(Status)) goto Failure;
 
+    for (JobIndex = 0; JobIndex < Extended->JobCount; JobIndex++)
+    {
+        Status = NtAssignProcessToJobObject(Extended->JobList[JobIndex], ProcessHandle);
+        if (!NT_SUCCESS(Status)) goto Failure;
+    }
+
     if (!(CreationFlags & CREATE_SUSPENDED)) NtResumeThread(ThreadHandle, &ResumeCount);
     ProcessInformation->hProcess = ProcessHandle;
     ProcessInformation->hThread = ThreadHandle;
@@ -2611,6 +3026,7 @@ CreateProcessInternalW(IN HANDLE hUserToken,
     HANDLE FileHandle, SectionHandle, ProcessHandle;
     HANDLE ParentProcess, *InheritHandleList;
     SIZE_T InheritHandleCount;
+    BASE_CREATE_EXTENDED_ATTRIBUTES ExtendedAttributes;
     ULONG ResumeCount;
     PROCESS_PRIORITY_CLASS PriorityClass;
     NTSTATUS Status, AppCompatStatus, SaferStatus, IFEOStatus, ImageDbgStatus;
@@ -2699,6 +3115,7 @@ CreateProcessInternalW(IN HANDLE hUserToken,
     ParentProcess = NtCurrentProcess();
     InheritHandleList = NULL;
     InheritHandleCount = 0;
+    RtlZeroMemory(&ExtendedAttributes, sizeof(ExtendedAttributes));
     ClientId.UniqueProcess = ClientId.UniqueThread = 0;
     BaseAddress = (PVOID)1;
 
@@ -2777,6 +3194,12 @@ CreateProcessInternalW(IN HANDLE hUserToken,
 #endif
 
     DPRINT("CreateProcessInternalW: '%S' '%S' %lx\n", lpApplicationName, lpCommandLine, dwCreationFlags);
+
+    if (BasepIsChildProcessBlocked())
+    {
+        BaseSetLastNTError(STATUS_CHILD_PROCESS_BLOCKED);
+        return FALSE;
+    }
 
     /* Finally, set our TEB and PEB */
     Teb = NtCurrentTeb();
@@ -2924,7 +3347,7 @@ CreateProcessInternalW(IN HANDLE hUserToken,
     /* Make a copy of the caller's startup info since we'll modify it */
     StartupInfo = *lpStartupInfo;
     if ((dwCreationFlags & EXTENDED_STARTUPINFO_PRESENT) &&
-        !BasepCaptureExtendedAttributes(lpStartupInfo, bInheritHandles, &InheritHandleList, &InheritHandleCount, &ParentProcess))
+        !BasepCaptureExtendedAttributes(lpStartupInfo, bInheritHandles, &InheritHandleList, &InheritHandleCount, &ParentProcess, &ExtendedAttributes))
     {
         Result = FALSE;
         goto Quickie;
@@ -4165,9 +4588,17 @@ StartScan:
 #ifdef WOW64_I386_RUNTIME
         || NtCurrentTeb()->WOW32Reserved
 #endif
+        || ExtendedAttributes.MitigationCount
+        || ExtendedAttributes.ChildPolicyPresent
+        || ExtendedAttributes.AllAppPackagesPresent
+        || ExtendedAttributes.SecurityCapabilities
+        || InheritHandleList
+        || ExtendedAttributes.JobCount
+        || ExtendedAttributes.BnoIsolation
+        || ExtendedAttributes.ComponentFilterPresent
        )
     {
-        Result = BasepCreateUserProcess(hUserToken, TokenHandle, JobHandle, &PathName, lpApplicationName, lpCommandLine, lpEnvironment, lpCurrentDirectory, &StartupInfo, dwCreationFlags | NoWindow, bInheritHandles, lpProcessAttributes, lpThreadAttributes, ParameterFlags, Flags, ParentProcess, InheritHandleList, InheritHandleCount, &PriorityClass, lpProcessInformation);
+        Result = BasepCreateUserProcess(hUserToken, TokenHandle, JobHandle, &PathName, lpApplicationName, lpCommandLine, lpEnvironment, lpCurrentDirectory, &StartupInfo, dwCreationFlags | NoWindow, bInheritHandles, lpProcessAttributes, lpThreadAttributes, ParameterFlags, Flags, ParentProcess, InheritHandleList, InheritHandleCount, &PriorityClass, &ExtendedAttributes, lpProcessInformation);
         goto Quickie;
     }
 #endif

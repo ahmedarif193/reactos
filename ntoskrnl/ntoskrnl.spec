@@ -1093,6 +1093,7 @@
 @ stdcall PsGetProcessSessionId(ptr)
 @ stdcall PsGetProcessSessionIdEx(ptr)
 @ stdcall PsGetProcessWin32Process(ptr)
+@ stdcall PsGetProcessMitigationPolicyFlags(ptr long)
 @ stdcall PsGetProcessWin32WindowStation(ptr)
 @ stdcall -arch=x86_64,arm64 PsGetProcessWow64Process(ptr)
 @ stdcall PsGetThreadFreezeCount(ptr)
@@ -2743,7 +2744,7 @@
 @ stub -arch=arm64 NtCreateEnlistment
 @ stub -arch=arm64 NtCreateResourceManager
 @ stub -arch=arm64 NtCreateTransaction
-@ stub -arch=arm64 NtCreateTransactionManager
+@ stdcall -arch=arm64 NtCreateTransactionManager(ptr long ptr ptr long long)
 @ stub -arch=arm64 NtEnumerateTransactionObject
 @ stub -arch=arm64 NtFreezeTransactions
 @ stub -arch=arm64 NtGetEnvironmentVariableEx
@@ -3363,7 +3364,7 @@
 @ stub -arch=arm64 ZwCreateResourceManager
 @ stub -arch=arm64 ZwCreateSectionEx
 @ stub -arch=arm64 ZwCreateTransaction
-@ stub -arch=arm64 ZwCreateTransactionManager
+@ stdcall -arch=arm64 ZwCreateTransactionManager(ptr long ptr ptr long long)
 @ stdcall -arch=i386,x86_64,arm64 ZwCreateWaitCompletionPacket(ptr long ptr)
 @ stdcall -version=0x602+ -arch=arm64 ZwCreateWnfStateName(ptr long long long ptr long ptr)
 @ stdcall -version=0x602+ -arch=arm64 ZwDeleteWnfStateData(ptr ptr)

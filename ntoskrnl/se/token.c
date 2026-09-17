@@ -27,6 +27,14 @@ static GENERIC_MAPPING SepTokenMapping = {
     TOKEN_ALL_ACCESS
 };
 
+VOID
+NTAPI
+SepRefreshTokenProcUnique(
+    _Inout_ PTOKEN Token)
+{
+    ExAllocateLocallyUniqueId(&Token->ProcUnique);
+}
+
 /* PRIVATE FUNCTIONS *****************************************************************/
 
 /**
@@ -1394,6 +1402,8 @@ SeSubProcessToken(
                                &NewToken);
     if (NT_SUCCESS(Status))
     {
+        SepRefreshTokenProcUnique(NewToken);
+
         /* Insert it */
         Status = ObInsertObject(NewToken,
                                 NULL,
@@ -1638,6 +1648,15 @@ SepDeleteToken(
     /* Delete the dynamic information area */
     if (AccessToken->DynamicPart)
         ExFreePoolWithTag(AccessToken->DynamicPart, TAG_TOKEN_DYNAMIC);
+
+    if (AccessToken->LowBoxInfo)
+        SepFreeLowBoxInfo(AccessToken->LowBoxInfo);
+
+    if (AccessToken->BnoIsolationPrefix.Buffer)
+    {
+        ExFreePoolWithTag(AccessToken->BnoIsolationPrefix.Buffer, TAG_SE_BNO);
+        RtlInitEmptyUnicodeString(&AccessToken->BnoIsolationPrefix, NULL, 0);
+    }
 }
 
 /**
@@ -2672,13 +2691,79 @@ SeSecurityAttributePresent(
     _In_opt_ PACCESS_TOKEN Token,
     _In_ PCUNICODE_STRING AttributeName)
 {
-    UNREFERENCED_PARAMETER(Token);
+    UNICODE_STRING ProcUniqueName = RTL_CONSTANT_STRING(L"TSA://ProcUnique");
+    PTOKEN AccessToken = (PTOKEN)Token;
 
-    if ((AttributeName == NULL) || (AttributeName->Buffer == NULL) || (AttributeName->Length == 0))
+    if ((AccessToken == NULL) ||
+        (AttributeName == NULL) ||
+        (AttributeName->Buffer == NULL) ||
+        (AttributeName->Length == 0))
         return FALSE;
 
-    /* TokenSecurityAttributes is not populated by the ReactOS token manager. */
-    return FALSE;
+    return !RtlIsZeroLuid(&AccessToken->ProcUnique) &&
+           RtlEqualUnicodeString(AttributeName, &ProcUniqueName, TRUE);
 }
 
 /* EOF */
+
+ULONG
+NTAPI
+SepGetTokenIntegrityRid(
+    _In_ PACCESS_TOKEN _Token)
+{
+    PTOKEN Token = (PTOKEN)_Token;
+
+    if (Token->IntegrityLevelIndex == 0 ||
+        Token->IntegrityLevelIndex >= Token->UserAndGroupCount)
+    {
+        return SECURITY_MANDATORY_MEDIUM_RID;
+    }
+
+    return *RtlSubAuthoritySid(Token->UserAndGroups[Token->IntegrityLevelIndex].Sid, 0);
+}
+
+PSID
+NTAPI
+SepMandatorySidFromRid(
+    _In_ ULONG Rid)
+{
+    switch (Rid)
+    {
+        case SECURITY_MANDATORY_UNTRUSTED_RID: return SeUntrustedMandatorySid;
+        case SECURITY_MANDATORY_LOW_RID: return SeLowMandatorySid;
+        case SECURITY_MANDATORY_MEDIUM_RID: return SeMediumMandatorySid;
+        case SECURITY_MANDATORY_HIGH_RID: return SeHighMandatorySid;
+        case SECURITY_MANDATORY_SYSTEM_RID: return SeSystemMandatorySid;
+        default: return NULL;
+    }
+}
+
+NTSTATUS
+NTAPI
+SeSetObjectMandatoryLabel(
+    _In_ PVOID Object,
+    _In_ ULONG Rid,
+    _In_ ULONG Policy)
+{
+    UCHAR AclBuffer[sizeof(ACL) + sizeof(SYSTEM_MANDATORY_LABEL_ACE) + SECURITY_MAX_SID_SIZE];
+    PACL Acl = (PACL)AclBuffer;
+    SECURITY_DESCRIPTOR Sd;
+    PSID Sid;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Sid = SepMandatorySidFromRid(Rid);
+    if (!Sid) return STATUS_INVALID_PARAMETER;
+
+    Status = RtlCreateAcl(Acl, sizeof(AclBuffer), ACL_REVISION);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = RtlAddMandatoryAce(Acl, ACL_REVISION, 0, Policy, SYSTEM_MANDATORY_LABEL_ACE_TYPE, Sid);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    RtlCreateSecurityDescriptor(&Sd, SECURITY_DESCRIPTOR_REVISION);
+    RtlSetSaclSecurityDescriptor(&Sd, TRUE, Acl, FALSE);
+
+    return ObSetSecurityObjectByPointer(Object, LABEL_SECURITY_INFORMATION, &Sd);
+}

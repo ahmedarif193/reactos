@@ -43,7 +43,9 @@ SepInitDACLs(VOID)
     AclLength = sizeof(ACL) +
                 (sizeof(ACE) + RtlLengthSid(SeWorldSid)) +
                 (sizeof(ACE) + RtlLengthSid(SeLocalSystemSid)) +
-                (sizeof(ACE) + RtlLengthSid(SeAliasAdminsSid));
+                (sizeof(ACE) + RtlLengthSid(SeAliasAdminsSid)) +
+                (sizeof(ACE) + RtlLengthSid(SeAllAppPackagesSid)) +
+                (sizeof(ACE) + RtlLengthSid(SeAllRestrictedAppPackagesSid));
 
     SePublicDefaultDacl = ExAllocatePoolWithTag(PagedPool,
                                                 AclLength,
@@ -62,6 +64,16 @@ SepInitDACLs(VOID)
 
     RtlAddAccessAllowedAce(SePublicDefaultDacl,
                            ACL_REVISION,
+                           GENERIC_EXECUTE,
+                           SeAllAppPackagesSid);
+
+    RtlAddAccessAllowedAce(SePublicDefaultDacl,
+                           ACL_REVISION,
+                           GENERIC_EXECUTE,
+                           SeAllRestrictedAppPackagesSid);
+
+    RtlAddAccessAllowedAce(SePublicDefaultDacl,
+                           ACL_REVISION,
                            GENERIC_ALL,
                            SeLocalSystemSid);
 
@@ -75,6 +87,8 @@ SepInitDACLs(VOID)
                 (sizeof(ACE) + RtlLengthSid(SeWorldSid)) +
                 (sizeof(ACE) + RtlLengthSid(SeLocalSystemSid)) +
                 (sizeof(ACE) + RtlLengthSid(SeAliasAdminsSid)) +
+                (sizeof(ACE) + RtlLengthSid(SeAllAppPackagesSid)) +
+                (sizeof(ACE) + RtlLengthSid(SeAllRestrictedAppPackagesSid)) +
                 (sizeof(ACE) + RtlLengthSid(SeRestrictedCodeSid));
 
     SePublicDefaultUnrestrictedDacl = ExAllocatePoolWithTag(PagedPool,
@@ -91,6 +105,16 @@ SepInitDACLs(VOID)
                            ACL_REVISION,
                            GENERIC_EXECUTE,
                            SeWorldSid);
+
+    RtlAddAccessAllowedAce(SePublicDefaultUnrestrictedDacl,
+                           ACL_REVISION,
+                           GENERIC_EXECUTE,
+                           SeAllAppPackagesSid);
+
+    RtlAddAccessAllowedAce(SePublicDefaultUnrestrictedDacl,
+                           ACL_REVISION,
+                           GENERIC_EXECUTE,
+                           SeAllRestrictedAppPackagesSid);
 
     RtlAddAccessAllowedAce(SePublicDefaultUnrestrictedDacl,
                            ACL_REVISION,
@@ -111,7 +135,9 @@ SepInitDACLs(VOID)
     AclLength = sizeof(ACL) +
                 (sizeof(ACE) + RtlLengthSid(SeWorldSid)) +
                 (sizeof(ACE) + RtlLengthSid(SeLocalSystemSid)) +
-                (sizeof(ACE) + RtlLengthSid(SeAliasAdminsSid));
+                (sizeof(ACE) + RtlLengthSid(SeAliasAdminsSid)) +
+                (sizeof(ACE) + RtlLengthSid(SeAllAppPackagesSid)) +
+                (sizeof(ACE) + RtlLengthSid(SeAllRestrictedAppPackagesSid));
 
     SePublicOpenDacl = ExAllocatePoolWithTag(PagedPool,
                                              AclLength,
@@ -130,6 +156,16 @@ SepInitDACLs(VOID)
 
     RtlAddAccessAllowedAce(SePublicOpenDacl,
                            ACL_REVISION,
+                           GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE,
+                           SeAllAppPackagesSid);
+
+    RtlAddAccessAllowedAce(SePublicOpenDacl,
+                           ACL_REVISION,
+                           GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE,
+                           SeAllRestrictedAppPackagesSid);
+
+    RtlAddAccessAllowedAce(SePublicOpenDacl,
+                           ACL_REVISION,
                            GENERIC_ALL,
                            SeLocalSystemSid);
 
@@ -143,6 +179,8 @@ SepInitDACLs(VOID)
                 (sizeof(ACE) + RtlLengthSid(SeWorldSid)) +
                 (sizeof(ACE) + RtlLengthSid(SeLocalSystemSid)) +
                 (sizeof(ACE) + RtlLengthSid(SeAliasAdminsSid)) +
+                (sizeof(ACE) + RtlLengthSid(SeAllAppPackagesSid)) +
+                (sizeof(ACE) + RtlLengthSid(SeAllRestrictedAppPackagesSid)) +
                 (sizeof(ACE) + RtlLengthSid(SeRestrictedCodeSid));
 
     SePublicOpenUnrestrictedDacl = ExAllocatePoolWithTag(PagedPool,
@@ -159,6 +197,16 @@ SepInitDACLs(VOID)
                            ACL_REVISION,
                            GENERIC_ALL,
                            SeWorldSid);
+
+    RtlAddAccessAllowedAce(SePublicOpenUnrestrictedDacl,
+                           ACL_REVISION,
+                           GENERIC_ALL,
+                           SeAllAppPackagesSid);
+
+    RtlAddAccessAllowedAce(SePublicOpenUnrestrictedDacl,
+                           ACL_REVISION,
+                           GENERIC_ALL,
+                           SeAllRestrictedAppPackagesSid);
 
     RtlAddAccessAllowedAce(SePublicOpenUnrestrictedDacl,
                            ACL_REVISION,
@@ -632,12 +680,23 @@ SepPropagateAcl(
 
         if (AceSource->Header.AceType > ACCESS_MAX_MS_V2_ACE_TYPE)
         {
+            if (AceSource->Header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE &&
+                !SepShouldPropagateAce(AceSource->Header.AceFlags,
+                                       &AceFlags,
+                                       IsInherited,
+                                       IsDirectoryObject))
+            {
+                CurrentSource += AceSource->Header.AceSize;
+                continue;
+            }
             /* FIXME: handle object & compound ACEs */
             AceSize = AceSource->Header.AceSize;
 
             if (*AclLength >= Written + AceSize)
             {
                 RtlCopyMemory(AceDest, AceSource, AceSize);
+                if (AceSource->Header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+                    AceDest->Header.AceFlags = AceFlags;
             }
             CurrentDest += AceSize;
             CurrentSource += AceSize;

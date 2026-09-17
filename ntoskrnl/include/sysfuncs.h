@@ -311,6 +311,9 @@
     SVC_(FlushProcessWriteBuffers, 0)
     SVC_(GetCurrentProcessorNumberEx, 1)
     SVC_(CreateUserProcess, 11)
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    SVC_(CreateTransactionManager, 6)
+#endif
     SVC_(CompareObjects, 2)
     SVC_(AlertMultipleThreadByThreadId, 4)
     SVC_(AllocateReserveObject, 3)
@@ -345,6 +348,14 @@
 #endif
 #if (NTDDI_VERSION >= NTDDI_WIN8)
     SVC_(FlushBuffersFileEx, 5)
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    SVC_(CreateLowBoxToken, 9)
+#endif
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    SVC_(CreatePrivateNamespace, 4)
+    SVC_(DeletePrivateNamespace, 1)
+    SVC_(OpenPrivateNamespace, 4)
 #endif
 #if (NTDDI_VERSION >= NTDDI_WIN10_RS3)
     SVC_(NotifyChangeDirectoryFileEx, 10)

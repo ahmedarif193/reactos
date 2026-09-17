@@ -644,19 +644,25 @@ LRESULT WINAPI ImeWndProcW( HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam )
 #endif
 
 #ifdef __REACTOS__
-//wine/message.c stubs
-typedef struct tagCHANGEFILTERSTRUCT {
-    DWORD cbSize;
-    DWORD ExtStatus;
-} CHANGEFILTERSTRUCT, *PCHANGEFILTERSTRUCT;
+#define HWNDPARAM_ROUTINE_ROS_CHANGEMESSAGEFILTER 0x1007
+DWORD NTAPI NtUserCallHwndParam(HWND hWnd, DWORD_PTR Param, DWORD Routine);
 
 /******************************************************************
  *      ChangeWindowMessageFilter (USER32.@)
  */
 BOOL WINAPI ChangeWindowMessageFilter( UINT message, DWORD flag )
 {
-    FIXME( "%x %08lx\n", message, flag );
-    return TRUE;
+    DWORD action;
+
+    if ((flag != MSGFLT_RESET && flag != MSGFLT_ADD && flag != MSGFLT_REMOVE) ||
+        message > 0xFFFF)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+    action = (flag == MSGFLT_ADD) ? MSGFLT_ALLOW : MSGFLT_RESET;
+    return NtUserCallHwndParam( NULL, (message & 0xFFFF) | (action << 16),
+                                HWNDPARAM_ROUTINE_ROS_CHANGEMESSAGEFILTER ) != 0;
 }
 
 /******************************************************************
@@ -664,7 +670,19 @@ BOOL WINAPI ChangeWindowMessageFilter( UINT message, DWORD flag )
  */
 BOOL WINAPI ChangeWindowMessageFilterEx( HWND hwnd, UINT message, DWORD action, CHANGEFILTERSTRUCT *changefilter )
 {
-    FIXME( "%p %x %ld %p\n", hwnd, message, action, changefilter );
+    DWORD ret;
+
+    if ((action != MSGFLT_ALLOW && action != MSGFLT_DISALLOW) ||
+        message > 0xFFFF ||
+        (changefilter && changefilter->cbSize != sizeof(*changefilter)))
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+    ret = NtUserCallHwndParam( hwnd, (message & 0xFFFF) | (action << 16),
+                               HWNDPARAM_ROUTINE_ROS_CHANGEMESSAGEFILTER );
+    if (!ret) return FALSE;
+    if (changefilter) changefilter->ExtStatus = ret >> 8;
     return TRUE;
 }
 

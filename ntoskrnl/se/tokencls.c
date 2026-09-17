@@ -25,6 +25,102 @@ typedef struct _SEP_TOKEN_APPCONTAINER_INFORMATION
     PSID TokenAppContainer;
 } SEP_TOKEN_APPCONTAINER_INFORMATION, *PSEP_TOKEN_APPCONTAINER_INFORMATION;
 
+#define SEP_TOKEN_SECURITY_ATTRIBUTE_TYPE_UINT64 0x02
+#define SEP_TOKEN_SECURITY_ATTRIBUTE_NON_INHERITABLE 0x0001
+#define SEP_TOKEN_SECURITY_ATTRIBUTE_COMPARE_IGNORE 0x0040
+#define SEP_TOKEN_SECURITY_ATTRIBUTES_INFORMATION_VERSION_V1 1
+
+typedef struct _SEP_TOKEN_SECURITY_ATTRIBUTE_V1
+{
+    UNICODE_STRING Name;
+    USHORT ValueType;
+    USHORT Reserved;
+    ULONG Flags;
+    ULONG ValueCount;
+    union
+    {
+        PLONG64 pInt64;
+        PULONG64 pUint64;
+        PUNICODE_STRING pString;
+        PVOID pFqbn;
+        PVOID pOctetString;
+    } Values;
+} SEP_TOKEN_SECURITY_ATTRIBUTE_V1, *PSEP_TOKEN_SECURITY_ATTRIBUTE_V1;
+
+typedef struct _SEP_TOKEN_SECURITY_ATTRIBUTES_INFORMATION
+{
+    USHORT Version;
+    USHORT Reserved;
+    ULONG AttributeCount;
+    union
+    {
+        PSEP_TOKEN_SECURITY_ATTRIBUTE_V1 pAttributeV1;
+    } Attribute;
+} SEP_TOKEN_SECURITY_ATTRIBUTES_INFORMATION, *PSEP_TOKEN_SECURITY_ATTRIBUTES_INFORMATION;
+
+static const WCHAR SepProcUniqueAttributeName[] = L"TSA://ProcUnique";
+
+static
+ULONG
+SepMarshalProcUniqueAttribute(
+    _In_ PTOKEN Token,
+    _Out_writes_bytes_opt_(BufferLength) PVOID Buffer,
+    _In_ ULONG BufferLength)
+{
+    PSEP_TOKEN_SECURITY_ATTRIBUTES_INFORMATION Information;
+    PSEP_TOKEN_SECURITY_ATTRIBUTE_V1 Attribute;
+    PULONG64 Values;
+    PWSTR Name;
+    ULONG AttributeOffset, NameOffset, ValuesOffset, RequiredLength;
+    BOOLEAN Present = !RtlIsZeroLuid(&Token->ProcUnique);
+
+    if (!Present)
+    {
+        RequiredLength = sizeof(*Information);
+        if (BufferLength >= RequiredLength)
+        {
+            Information = Buffer;
+            Information->Version = SEP_TOKEN_SECURITY_ATTRIBUTES_INFORMATION_VERSION_V1;
+            Information->Reserved = 0;
+            Information->AttributeCount = 0;
+            Information->Attribute.pAttributeV1 = NULL;
+        }
+        return RequiredLength;
+    }
+
+    AttributeOffset = ALIGN_UP_BY(sizeof(*Information), sizeof(PVOID));
+    NameOffset = AttributeOffset + sizeof(*Attribute);
+    ValuesOffset = ALIGN_UP_BY(NameOffset + sizeof(SepProcUniqueAttributeName), sizeof(ULONG64));
+    RequiredLength = ValuesOffset + 2 * sizeof(ULONG64);
+    if (BufferLength < RequiredLength)
+        return RequiredLength;
+
+    Information = Buffer;
+    Attribute = (PVOID)((PUCHAR)Buffer + AttributeOffset);
+    Name = (PVOID)((PUCHAR)Buffer + NameOffset);
+    Values = (PVOID)((PUCHAR)Buffer + ValuesOffset);
+
+    Information->Version = SEP_TOKEN_SECURITY_ATTRIBUTES_INFORMATION_VERSION_V1;
+    Information->Reserved = 0;
+    Information->AttributeCount = 1;
+    Information->Attribute.pAttributeV1 = Attribute;
+
+    Attribute->Name.Buffer = Name;
+    Attribute->Name.Length = sizeof(SepProcUniqueAttributeName) - sizeof(UNICODE_NULL);
+    Attribute->Name.MaximumLength = sizeof(SepProcUniqueAttributeName);
+    Attribute->ValueType = SEP_TOKEN_SECURITY_ATTRIBUTE_TYPE_UINT64;
+    Attribute->Reserved = 0;
+    Attribute->Flags = SEP_TOKEN_SECURITY_ATTRIBUTE_NON_INHERITABLE |
+                       SEP_TOKEN_SECURITY_ATTRIBUTE_COMPARE_IGNORE;
+    Attribute->ValueCount = 2;
+    Attribute->Values.pUint64 = Values;
+
+    RtlCopyMemory(Name, SepProcUniqueAttributeName, sizeof(SepProcUniqueAttributeName));
+    Values[0] = (ULONG)Token->ProcUnique.HighPart;
+    Values[1] = Token->ProcUnique.LowPart;
+    return RequiredLength;
+}
+
 static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
 
     /* Class 0 not used, blame MS! */
@@ -107,9 +203,26 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenRestrictedDeviceGroups */
     IQS_NONE,
     /* TokenSecurityAttributes */
-    IQS_NONE,
+    IQS_SAME(SEP_TOKEN_SECURITY_ATTRIBUTES_INFORMATION, ULONG,
+             ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenIsRestricted */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenProcessTrustLevel */
+    IQS_NONE,
+    /* TokenPrivateNameSpace */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenSingletonAttributes */
+    IQS_NONE,
+    /* TokenBnoIsolation */
+    IQS_SAME(TOKEN_BNO_ISOLATION_INFORMATION, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
+    /* TokenChildProcessFlags */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenIsLessPrivilegedAppContainer */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenIsSandboxed */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    /* TokenOriginatingProcessTrustLevel */
+    IQS_NONE,
 };
 
 /* PRIVATE FUNCTIONS **********************************************************/
@@ -503,6 +616,34 @@ SeQueryInformationToken(
         {
             DPRINT("SeQueryInformationToken(TokenSessionId)\n");
             Status = SeQuerySessionIdToken(Token, (PULONG)TokenInformation);
+            break;
+        }
+
+        case TokenIntegrityLevel:
+        {
+            PTOKEN_MANDATORY_LABEL Label;
+            PSID_AND_ATTRIBUTES Integrity;
+            ULONG SidLength;
+
+            if (Token->IntegrityLevelIndex == 0)
+            {
+                Status = STATUS_NOT_FOUND;
+                break;
+            }
+            Integrity = &Token->UserAndGroups[Token->IntegrityLevelIndex];
+            SidLength = RtlLengthSid(Integrity->Sid);
+            RequiredLength = sizeof(TOKEN_MANDATORY_LABEL) + SidLength;
+            Label = ExAllocatePoolWithTag(PagedPool, RequiredLength, TAG_SE);
+            if (Label == NULL)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+            Label->Label.Sid = (PSID)(Label + 1);
+            Label->Label.Attributes = Integrity->Attributes;
+            RtlCopySid(SidLength, Label->Label.Sid, Integrity->Sid);
+            *TokenInformation = Label;
+            Status = STATUS_SUCCESS;
             break;
         }
 
@@ -1362,6 +1503,71 @@ NtQueryInformationToken(
                 break;
             }
 
+            case TokenSecurityAttributes:
+            {
+                DPRINT("NtQueryInformationToken(TokenSecurityAttributes)\n");
+
+                _SEH2_TRY
+                {
+                    RequiredLength = SepMarshalProcUniqueAttribute(Token,
+                                                                    TokenInformation,
+                                                                    TokenInformationLength);
+                    if (TokenInformationLength < RequiredLength)
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                break;
+            }
+
+            case TokenBnoIsolation:
+            {
+                PTOKEN_BNO_ISOLATION_INFORMATION Isolation = (PTOKEN_BNO_ISOLATION_INFORMATION)TokenInformation;
+                USHORT PrefixLength = Token->BnoIsolationPrefix.Length;
+
+                DPRINT("NtQueryInformationToken(TokenBnoIsolation)\n");
+                RequiredLength = sizeof(TOKEN_BNO_ISOLATION_INFORMATION);
+                if (PrefixLength)
+                    RequiredLength += PrefixLength + sizeof(UNICODE_NULL);
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        if (PrefixLength)
+                        {
+                            Isolation->IsolationPrefix = (PWSTR)(Isolation + 1);
+                            RtlCopyMemory(Isolation->IsolationPrefix,
+                                          Token->BnoIsolationPrefix.Buffer,
+                                          PrefixLength);
+                            Isolation->IsolationPrefix[PrefixLength / sizeof(WCHAR)] = UNICODE_NULL;
+                            Isolation->IsolationEnabled = TRUE;
+                        }
+                        else
+                        {
+                            Isolation->IsolationPrefix = NULL;
+                            Isolation->IsolationEnabled = FALSE;
+                        }
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                break;
+            }
+
             case TokenElevationType:
             case TokenElevation:
             case TokenHasRestrictions:
@@ -1371,11 +1577,20 @@ NtQueryInformationToken(
             case TokenIsAppContainer:
             case TokenAppContainerNumber:
             case TokenIsRestricted:
+            case TokenPrivateNameSpace:
+            case TokenChildProcessFlags:
+            case TokenIsLessPrivilegedAppContainer:
+            case TokenIsSandboxed:
             {
                 ULONG Value;
 
                 DPRINT("NtQueryInformationToken(%d)\n", TokenInformationClass);
                 RequiredLength = sizeof(ULONG);
+                if (TokenInformationClass == TokenIsLessPrivilegedAppContainer && !Token->LowBoxInfo)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
 
                 switch (TokenInformationClass)
                 {
@@ -1385,6 +1600,18 @@ NtQueryInformationToken(
                     case TokenHasRestrictions:
                     case TokenIsRestricted:
                         Value = (Token->RestrictedSidCount != 0);
+                        break;
+                    case TokenIsAppContainer:
+                        Value = (Token->LowBoxInfo != NULL);
+                        break;
+                    case TokenAppContainerNumber:
+                        Value = Token->LowBoxInfo ? ((PSEP_LOWBOX_INFO)Token->LowBoxInfo)->LowBoxNumber : 0;
+                        break;
+                    case TokenIsLessPrivilegedAppContainer:
+                        Value = Token->LowBoxInfo && (((PSEP_LOWBOX_INFO)Token->LowBoxInfo)->Flags & SEP_LOWBOX_LPAC);
+                        break;
+                    case TokenIsSandboxed:
+                        Value = !!(Token->TokenFlags & TOKEN_SANDBOX_INERT);
                         break;
                     default:
                         Value = 0;
@@ -1422,14 +1649,33 @@ NtQueryInformationToken(
 
             case TokenCapabilities:
             {
+                PTOKEN_GROUPS tg = (PTOKEN_GROUPS)TokenInformation;
+                PSEP_LOWBOX_INFO LowBox = Token->LowBoxInfo;
+                ULONG Count = LowBox ? LowBox->CapabilityCount : 0;
+                ULONG SidLen;
+                PSID Sid;
+
                 DPRINT("NtQueryInformationToken(TokenCapabilities)\n");
-                RequiredLength = FIELD_OFFSET(TOKEN_GROUPS, Groups);
+                RequiredLength = FIELD_OFFSET(TOKEN_GROUPS, Groups) +
+                    (Count ? RtlLengthSidAndAttributes(Count, LowBox->Capabilities) : 0);
 
                 _SEH2_TRY
                 {
                     if (TokenInformationLength >= RequiredLength)
                     {
-                        ((PTOKEN_GROUPS)TokenInformation)->GroupCount = 0;
+                        tg->GroupCount = Count;
+                        if (Count)
+                        {
+                            SidLen = RequiredLength - FIELD_OFFSET(TOKEN_GROUPS, Groups) - Count * sizeof(SID_AND_ATTRIBUTES);
+                            Sid = (PSID)((ULONG_PTR)tg + FIELD_OFFSET(TOKEN_GROUPS, Groups) + Count * sizeof(SID_AND_ATTRIBUTES));
+                            Status = RtlCopySidAndAttributesArray(Count,
+                                                                  LowBox->Capabilities,
+                                                                  SidLen,
+                                                                  &tg->Groups[0],
+                                                                  Sid,
+                                                                  &Unused.PSid,
+                                                                  &Unused.Ulong);
+                        }
                     }
                     else
                     {
@@ -1449,14 +1695,26 @@ NtQueryInformationToken(
 
             case TokenAppContainerSid:
             {
+                PSEP_TOKEN_APPCONTAINER_INFORMATION Info = (PSEP_TOKEN_APPCONTAINER_INFORMATION)TokenInformation;
+                PSEP_LOWBOX_INFO LowBox = Token->LowBoxInfo;
+                ULONG SidLen = LowBox ? RtlLengthSid(LowBox->PackageSid) : 0;
+
                 DPRINT("NtQueryInformationToken(TokenAppContainerSid)\n");
-                RequiredLength = sizeof(SEP_TOKEN_APPCONTAINER_INFORMATION);
+                RequiredLength = sizeof(SEP_TOKEN_APPCONTAINER_INFORMATION) + SidLen;
 
                 _SEH2_TRY
                 {
                     if (TokenInformationLength >= RequiredLength)
                     {
-                        ((PSEP_TOKEN_APPCONTAINER_INFORMATION)TokenInformation)->TokenAppContainer = NULL;
+                        if (LowBox)
+                        {
+                            Info->TokenAppContainer = (PSID)(Info + 1);
+                            RtlCopySid(SidLen, Info->TokenAppContainer, LowBox->PackageSid);
+                        }
+                        else
+                        {
+                            Info->TokenAppContainer = NULL;
+                        }
                     }
                     else
                     {
@@ -2156,6 +2414,9 @@ NtSetInformationToken(
                 RtlCopySid(RtlLengthSid(Integrity->Sid), Integrity->Sid, NewSid);
                 ExAllocateLocallyUniqueId(&Token->ModifiedId);
                 SepReleaseTokenLock(Token);
+                SeSetObjectMandatoryLabel(Token,
+                                          NewRid,
+                                          SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP);
                 break;
             }
 

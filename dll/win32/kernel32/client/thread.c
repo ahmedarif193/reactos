@@ -50,6 +50,21 @@ BasepNotifyCsrOfThread(IN HANDLE ThreadHandle,
     return STATUS_SUCCESS;
 }
 
+VOID
+WINAPI
+BaseThreadInitThunk(
+    _In_ DWORD Unknown,
+    _In_ LPTHREAD_START_ROUTINE lpStartAddress,
+    _In_ LPVOID lpParameter)
+{
+    UNREFERENCED_PARAMETER(Unknown);
+    NtSetInformationThread(NtCurrentThread(),
+                           ThreadQuerySetWin32StartAddress,
+                           &lpStartAddress,
+                           sizeof(lpStartAddress));
+    BaseThreadStartup(lpStartAddress, lpParameter);
+}
+
 DECLSPEC_NORETURN
 VOID
 WINAPI
@@ -166,18 +181,38 @@ CreateRemoteThreadEx(IN HANDLE hProcess,
                      IN LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList,
                      OUT LPDWORD lpThreadId)
 {
-    /* Thread attribute lists carry group-affinity/ideal-processor hints; the
-     * base thread creation path does not consume them yet. */
-    if (lpAttributeList != NULL)
-        DPRINT1("CreateRemoteThreadEx: attribute list %p ignored\n", lpAttributeList);
+    HANDLE Thread;
+    NTSTATUS Status;
 
-    return CreateRemoteThread(hProcess,
-                              lpThreadAttributes,
-                              dwStackSize,
-                              lpStartAddress,
-                              lpParameter,
-                              dwCreationFlags,
-                              lpThreadId);
+    Status = BasepValidateThreadAttributeList(lpAttributeList);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return NULL;
+    }
+
+    Thread = CreateRemoteThread(hProcess,
+                                lpThreadAttributes,
+                                dwStackSize,
+                                lpStartAddress,
+                                lpParameter,
+                                lpAttributeList ? (dwCreationFlags | CREATE_SUSPENDED) : dwCreationFlags,
+                                lpThreadId);
+    if (!Thread || !lpAttributeList)
+        return Thread;
+
+    Status = BasepApplyThreadAttributeList(lpAttributeList, Thread);
+    if (!NT_SUCCESS(Status))
+    {
+        NtTerminateThread(Thread, Status);
+        CloseHandle(Thread);
+        BaseSetLastNTError(Status);
+        return NULL;
+    }
+
+    if (!(dwCreationFlags & CREATE_SUSPENDED))
+        NtResumeThread(Thread, NULL);
+    return Thread;
 }
 
 /*

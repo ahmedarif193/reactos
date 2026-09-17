@@ -133,10 +133,12 @@ CreateDefaultProcessSecurityCommon(
     NTSTATUS Status;
     BOOL Success;
     PACL Dacl = NULL;
+    PACL AllocatedDacl = NULL;
     PTOKEN_OWNER OwnerOfToken;
     PTOKEN_PRIMARY_GROUP PrimaryGroupOfToken = NULL;
+    PTOKEN_DEFAULT_DACL DefaultDaclOfToken = NULL;
     SECURITY_DESCRIPTOR AbsoluteSd;
-    ULONG DaclSize, TokenOwnerSize, PrimaryGroupSize, RelativeSDSize = 0;
+    ULONG DaclSize, TokenOwnerSize, PrimaryGroupSize, DefaultDaclSize, RelativeSDSize = 0;
     PSID OwnerSid = NULL, SystemSid = NULL, PrimaryGroupSid = NULL;
     PSECURITY_DESCRIPTOR RelativeSD = NULL;
     static SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
@@ -234,50 +236,84 @@ CreateDefaultProcessSecurityCommon(
     OwnerSid = OwnerOfToken->Owner;
     PrimaryGroupSid = PrimaryGroupOfToken->PrimaryGroup;
 
-    /* Set up the DACL size */
-    DaclSize = sizeof(ACL) +
-               sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(OwnerSid) +
-               sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(SystemSid);
+    Status = NtQueryInformationToken(TokenHandle,
+                                     TokenDefaultDacl,
+                                     NULL,
+                                     0,
+                                     &DefaultDaclSize);
+    if (Status != STATUS_BUFFER_TOO_SMALL)
+    {
+        ERR("CreateDefaultProcessSecurityCommon(): Failed to query default DACL size (Status 0x%08lx)\n", Status);
+        Success = FALSE;
+        goto Quit;
+    }
 
-    /* Allocate buffer for the DACL */
-    Dacl = RtlAllocateHeap(RtlGetProcessHeap(),
-                           HEAP_ZERO_MEMORY,
-                           DaclSize);
+    DefaultDaclOfToken = RtlAllocateHeap(RtlGetProcessHeap(),
+                                         HEAP_ZERO_MEMORY,
+                                         DefaultDaclSize);
+    if (DefaultDaclOfToken == NULL)
+    {
+        ERR("CreateDefaultProcessSecurityCommon(): Failed to allocate default DACL buffer\n");
+        Success = FALSE;
+        goto Quit;
+    }
+
+    Status = NtQueryInformationToken(TokenHandle,
+                                     TokenDefaultDacl,
+                                     DefaultDaclOfToken,
+                                     DefaultDaclSize,
+                                     &DefaultDaclSize);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("CreateDefaultProcessSecurityCommon(): Failed to query default DACL (Status 0x%08lx)\n", Status);
+        Success = FALSE;
+        goto Quit;
+    }
+
+    Dacl = DefaultDaclOfToken->DefaultDacl;
     if (Dacl == NULL)
     {
-        ERR("CreateDefaultProcessSecurityCommon(): Failed to allocate buffer for DACL\n");
-        Success = FALSE;
-        goto Quit;
-    }
+        DaclSize = sizeof(ACL) +
+                   sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(OwnerSid) +
+                   sizeof(ACCESS_ALLOWED_ACE) + GetLengthSid(SystemSid);
 
-    /* Initialize the DACL */
-    if (!InitializeAcl(Dacl, DaclSize, ACL_REVISION))
-    {
-        ERR("CreateDefaultProcessSecurityCommon(): Failed to initialize DACL (error %lu)\n", GetLastError());
-        Success = FALSE;
-        goto Quit;
-    }
+        AllocatedDacl = RtlAllocateHeap(RtlGetProcessHeap(),
+                                       HEAP_ZERO_MEMORY,
+                                       DaclSize);
+        if (AllocatedDacl == NULL)
+        {
+            ERR("CreateDefaultProcessSecurityCommon(): Failed to allocate buffer for DACL\n");
+            Success = FALSE;
+            goto Quit;
+        }
+        Dacl = AllocatedDacl;
 
-    /* Give full powers to the owner */
-    if (!AddAccessAllowedAce(Dacl,
-                             ACL_REVISION,
-                             GENERIC_ALL,
-                             OwnerSid))
-    {
-        ERR("CreateDefaultProcessSecurityCommon(): Failed to set up ACE for owner (error %lu)\n", GetLastError());
-        Success = FALSE;
-        goto Quit;
-    }
+        if (!InitializeAcl(Dacl, DaclSize, ACL_REVISION))
+        {
+            ERR("CreateDefaultProcessSecurityCommon(): Failed to initialize DACL (error %lu)\n", GetLastError());
+            Success = FALSE;
+            goto Quit;
+        }
 
-    /* Give full powers to SYSTEM as well */
-    if (!AddAccessAllowedAce(Dacl,
-                             ACL_REVISION,
-                             GENERIC_ALL,
-                             SystemSid))
-    {
-        ERR("CreateDefaultProcessSecurityCommon(): Failed to set up ACE for SYSTEM (error %lu)\n", GetLastError());
-        Success = FALSE;
-        goto Quit;
+        if (!AddAccessAllowedAce(Dacl,
+                                 ACL_REVISION,
+                                 GENERIC_ALL,
+                                 OwnerSid))
+        {
+            ERR("CreateDefaultProcessSecurityCommon(): Failed to set up ACE for owner (error %lu)\n", GetLastError());
+            Success = FALSE;
+            goto Quit;
+        }
+
+        if (!AddAccessAllowedAce(Dacl,
+                                 ACL_REVISION,
+                                 GENERIC_ALL,
+                                 SystemSid))
+        {
+            ERR("CreateDefaultProcessSecurityCommon(): Failed to set up ACE for SYSTEM (error %lu)\n", GetLastError());
+            Success = FALSE;
+            goto Quit;
+        }
     }
 
     /* Initialize the descriptor in absolute format */
@@ -358,11 +394,14 @@ Quit:
     if (PrimaryGroupOfToken != NULL)
         RtlFreeHeap(RtlGetProcessHeap(), 0, PrimaryGroupOfToken);
 
+    if (DefaultDaclOfToken != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, DefaultDaclOfToken);
+
     if (SystemSid != NULL)
         FreeSid(SystemSid);
 
-    if (Dacl != NULL)
-        RtlFreeHeap(RtlGetProcessHeap(), 0, Dacl);
+    if (AllocatedDacl != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, AllocatedDacl);
 
     return Success;
 }

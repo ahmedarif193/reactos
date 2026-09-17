@@ -4362,6 +4362,195 @@ typedef struct _JOB_SET_ARRAY {
   DWORD Flags;
 } JOB_SET_ARRAY, *PJOB_SET_ARRAY;
 
+typedef struct _SECURITY_CAPABILITIES {
+  PSID AppContainerSid;
+  PSID_AND_ATTRIBUTES Capabilities;
+  DWORD CapabilityCount;
+  DWORD Reserved;
+} SECURITY_CAPABILITIES, *PSECURITY_CAPABILITIES, *LPSECURITY_CAPABILITIES;
+
+typedef enum _PROCESS_MITIGATION_POLICY {
+  ProcessDEPPolicy,
+  ProcessASLRPolicy,
+  ProcessDynamicCodePolicy,
+  ProcessStrictHandleCheckPolicy,
+  ProcessSystemCallDisablePolicy,
+  ProcessMitigationOptionsMask,
+  ProcessExtensionPointDisablePolicy,
+  ProcessControlFlowGuardPolicy,
+  ProcessSignaturePolicy,
+  ProcessFontDisablePolicy,
+  ProcessImageLoadPolicy,
+  ProcessSystemCallFilterPolicy,
+  ProcessPayloadRestrictionPolicy,
+  ProcessChildProcessPolicy,
+  MaxProcessMitigationPolicy
+} PROCESS_MITIGATION_POLICY, *PPROCESS_MITIGATION_POLICY;
+
+typedef struct _PROCESS_MITIGATION_ASLR_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD EnableBottomUpRandomization:1;
+      DWORD EnableForceRelocateImages:1;
+      DWORD EnableHighEntropy:1;
+      DWORD DisallowStrippedImages:1;
+      DWORD ReservedFlags:28;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_ASLR_POLICY, *PPROCESS_MITIGATION_ASLR_POLICY;
+
+typedef struct _PROCESS_MITIGATION_DEP_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD Enable:1;
+      DWORD DisableAtlThunkEmulation:1;
+      DWORD ReservedFlags:30;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+  BOOLEAN Permanent;
+} PROCESS_MITIGATION_DEP_POLICY, *PPROCESS_MITIGATION_DEP_POLICY;
+
+typedef struct _PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD RaiseExceptionOnInvalidHandleReference:1;
+      DWORD HandleExceptionsPermanentlyEnabled:1;
+      DWORD ReservedFlags:30;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY, *PPROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY;
+
+typedef struct _PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD DisallowWin32kSystemCalls:1;
+      DWORD AuditDisallowWin32kSystemCalls:1;
+      DWORD ReservedFlags:30;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY, *PPROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY;
+
+typedef struct _PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD DisableExtensionPoints:1;
+      DWORD ReservedFlags:31;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY, *PPROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY;
+
+typedef struct _PROCESS_MITIGATION_DYNAMIC_CODE_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD ProhibitDynamicCode:1;
+      DWORD AllowThreadOptOut:1;
+      DWORD AllowRemoteDowngrade:1;
+      DWORD AuditProhibitDynamicCode:1;
+      DWORD ReservedFlags:28;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_DYNAMIC_CODE_POLICY, *PPROCESS_MITIGATION_DYNAMIC_CODE_POLICY;
+
+typedef struct _PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD EnableControlFlowGuard:1;
+      DWORD EnableExportSuppression:1;
+      DWORD StrictMode:1;
+      DWORD ReservedFlags:29;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY, *PPROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY;
+
+typedef struct _PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD MicrosoftSignedOnly:1;
+      DWORD StoreSignedOnly:1;
+      DWORD MitigationOptIn:1;
+      DWORD AuditMicrosoftSignedOnly:1;
+      DWORD AuditStoreSignedOnly:1;
+      DWORD ReservedFlags:27;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_BINARY_SIGNATURE_POLICY, *PPROCESS_MITIGATION_BINARY_SIGNATURE_POLICY;
+
+typedef struct _PROCESS_MITIGATION_FONT_DISABLE_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD DisableNonSystemFonts:1;
+      DWORD AuditNonSystemFontLoading:1;
+      DWORD ReservedFlags:30;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_FONT_DISABLE_POLICY, *PPROCESS_MITIGATION_FONT_DISABLE_POLICY;
+
+typedef struct _PROCESS_MITIGATION_IMAGE_LOAD_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD NoRemoteImages:1;
+      DWORD NoLowMandatoryLabelImages:1;
+      DWORD PreferSystem32Images:1;
+      DWORD AuditNoRemoteImages:1;
+      DWORD AuditNoLowMandatoryLabelImages:1;
+      DWORD ReservedFlags:27;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_IMAGE_LOAD_POLICY, *PPROCESS_MITIGATION_IMAGE_LOAD_POLICY;
+
+typedef struct _PROCESS_MITIGATION_SYSTEM_CALL_FILTER_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD FilterId:4;
+      DWORD ReservedFlags:28;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_SYSTEM_CALL_FILTER_POLICY, *PPROCESS_MITIGATION_SYSTEM_CALL_FILTER_POLICY;
+
+typedef struct _PROCESS_MITIGATION_PAYLOAD_RESTRICTION_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD EnableExportAddressFilter:1;
+      DWORD AuditExportAddressFilter:1;
+      DWORD EnableExportAddressFilterPlus:1;
+      DWORD AuditExportAddressFilterPlus:1;
+      DWORD EnableImportAddressFilter:1;
+      DWORD AuditImportAddressFilter:1;
+      DWORD EnableRopStackPivot:1;
+      DWORD AuditRopStackPivot:1;
+      DWORD EnableRopCallerCheck:1;
+      DWORD AuditRopCallerCheck:1;
+      DWORD EnableRopSimExec:1;
+      DWORD AuditRopSimExec:1;
+      DWORD ReservedFlags:20;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_PAYLOAD_RESTRICTION_POLICY, *PPROCESS_MITIGATION_PAYLOAD_RESTRICTION_POLICY;
+
+typedef struct _PROCESS_MITIGATION_CHILD_PROCESS_POLICY {
+  union {
+    DWORD Flags;
+    struct {
+      DWORD NoChildProcessCreation:1;
+      DWORD AuditNoChildProcessCreation:1;
+      DWORD AllowSecureProcessCreation:1;
+      DWORD ReservedFlags:29;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+} PROCESS_MITIGATION_CHILD_PROCESS_POLICY, *PPROCESS_MITIGATION_CHILD_PROCESS_POLICY;
+
 typedef struct _JOBOBJECT_BASIC_ACCOUNTING_INFORMATION {
   LARGE_INTEGER TotalUserTime;
   LARGE_INTEGER TotalKernelTime;

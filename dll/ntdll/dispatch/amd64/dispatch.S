@@ -86,9 +86,25 @@ PUBLIC KiUserApcDispatcher
 
 PUBLIC KiRaiseUserExceptionDispatcher
 .PROC KiRaiseUserExceptionDispatcher
-    .endprolog
-    int 3
+    sub rsp, EXCEPTION_RECORD_LENGTH + HEX(20)
+    .ALLOCSTACK EXCEPTION_RECORD_LENGTH + HEX(20)
+    .ENDPROLOG
 
+    mov rax, gs:[TeSelf]
+    mov eax, [rax + TeExceptionCode]
+    mov [rsp + HEX(20) + ErExceptionCode], eax
+    mov dword ptr [rsp + HEX(20) + ErExceptionFlags], 0
+    mov qword ptr [rsp + HEX(20) + ErExceptionRecord], 0
+    mov rax, [rsp + EXCEPTION_RECORD_LENGTH + HEX(20)]
+    mov [rsp + HEX(20) + ErExceptionAddress], rax
+    mov dword ptr [rsp + HEX(20) + ErNumberParameters], 0
+
+    lea rcx, [rsp + HEX(20)]
+    call RtlRaiseException
+
+    mov eax, [rsp + HEX(20) + ErExceptionCode]
+    add rsp, EXCEPTION_RECORD_LENGTH + HEX(20)
+    ret
 .ENDP
 
 PUBLIC KiUserCallbackDispatcher

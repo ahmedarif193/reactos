@@ -227,6 +227,21 @@ NtDuplicateToken(
     _In_ TOKEN_TYPE TokenType,
     _Out_ PHANDLE NewTokenHandle);
 
+__kernel_entry
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtCreateLowBoxToken(
+    _Out_ PHANDLE TokenHandle,
+    _In_ HANDLE ExistingTokenHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ PSID PackageSid,
+    _In_ ULONG CapabilityCount,
+    _In_reads_opt_(CapabilityCount) PSID_AND_ATTRIBUTES Capabilities,
+    _In_ ULONG HandleCount,
+    _In_reads_opt_(HandleCount) HANDLE *Handles);
+
 _Must_inspect_result_
 __kernel_entry
 NTSYSCALLAPI

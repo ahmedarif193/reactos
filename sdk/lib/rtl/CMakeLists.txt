@@ -85,6 +85,7 @@ list(APPEND SOURCE
     sd.c
     security.c
     sid.c
+    boundary.c
     slist.c
     splaytree.c
     sysvol.c

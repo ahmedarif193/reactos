@@ -2441,8 +2441,11 @@ CreateNlsSecurityDescriptor(
     _In_ ULONG AccessMask)
 {
     static SID_IDENTIFIER_AUTHORITY WorldAuthority = {SECURITY_WORLD_SID_AUTHORITY};
+    static SID_IDENTIFIER_AUTHORITY PackageAuthority = {SECURITY_APP_PACKAGE_AUTHORITY};
     NTSTATUS Status;
     PSID WorldSid;
+    UCHAR PackageBuffer[SECURITY_MAX_SID_SIZE];
+    PSID AllPackagesSid = (PSID)PackageBuffer;
     PACL Dacl;
     ULONG DaclSize;
 
@@ -2490,6 +2493,24 @@ CreateNlsSecurityDescriptor(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to add allowed access ACE for World SID (Status 0x%08x)\n", Status);
+        goto Quit;
+    }
+
+    RtlInitializeSid(AllPackagesSid, &PackageAuthority, 2);
+    *RtlSubAuthoritySid(AllPackagesSid, 0) = SECURITY_APP_PACKAGE_BASE_RID;
+    *RtlSubAuthoritySid(AllPackagesSid, 1) = SECURITY_BUILTIN_PACKAGE_ANY_PACKAGE;
+    Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, AccessMask, AllPackagesSid);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Failed to add allowed access ACE for package SID (Status 0x%08x)\n", Status);
+        goto Quit;
+    }
+
+    *RtlSubAuthoritySid(AllPackagesSid, 1) = SECURITY_BUILTIN_PACKAGE_ANY_RESTRICTED_PACKAGE;
+    Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, AccessMask, AllPackagesSid);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Failed to add allowed access ACE for restricted package SID (Status 0x%08x)\n", Status);
         goto Quit;
     }
 

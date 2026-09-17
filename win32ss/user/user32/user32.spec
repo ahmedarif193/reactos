@@ -285,8 +285,8 @@
 @ stdcall GetCursorFrameInfo(long long long long long)
 @ stdcall GetCursorInfo(ptr) NtUserGetCursorInfo
 @ stdcall GetCursorPos(ptr)
-@ stdcall GetDC(long) NtUserGetDC
-@ stdcall GetDCEx(long long long) NtUserGetDCEx
+@ stdcall GetDC(long) User32GetDC
+@ stdcall GetDCEx(long long long) User32GetDCEx
 # GetDbgTagFlags
 @ stdcall GetDesktopWindow()
 @ stdcall GetDialogBaseUnits()
@@ -414,7 +414,7 @@
 @ stdcall GetWinStationInfo(ptr)
 @ stdcall GetWindow(long long)
 @ stdcall GetWindowContextHelpId(long)
-@ stdcall GetWindowDC(long) NtUserGetWindowDC
+@ stdcall GetWindowDC(long) User32GetWindowDC
 @ stdcall -version=0xA00+ GetWindowDpiAwarenessContext(long)
 @ stdcall -version=0x601+ GetWindowDisplayAffinity(long ptr)
 @ stdcall GetWindowInfo(long ptr)

@@ -868,6 +868,43 @@ NtQuerySecurityObject(IN HANDLE Handle,
 * @remarks None.
 *
 *--*/
+static
+BOOLEAN
+ObpLabelWithinCallerIntegrity(
+    _In_ PSECURITY_DESCRIPTOR SecurityDescriptor)
+{
+    PACL Sacl;
+    ULONG Index;
+    PACE_HEADER Ace;
+    ULONG LabelRid = SECURITY_MANDATORY_UNTRUSTED_RID;
+    PACCESS_TOKEN Token;
+    TOKEN_TYPE TokenType;
+    BOOLEAN EffectiveOnly;
+    SECURITY_IMPERSONATION_LEVEL Level;
+    ULONG TokenRid;
+
+    Sacl = SepGetSaclFromDescriptor(SecurityDescriptor);
+    if (Sacl)
+    {
+        for (Index = 0; Index < Sacl->AceCount; Index++)
+        {
+            if (!NT_SUCCESS(RtlGetAce(Sacl, Index, (PVOID*)&Ace))) break;
+            if (Ace->AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
+            LabelRid = *RtlSubAuthoritySid(&((PSYSTEM_MANDATORY_LABEL_ACE)Ace)->SidStart, 0);
+            break;
+        }
+    }
+
+    Token = PsReferenceEffectiveToken(PsGetCurrentThread(), &TokenType, &EffectiveOnly, &Level);
+    TokenRid = SepGetTokenIntegrityRid(Token);
+    if (TokenType == TokenPrimary)
+        PsDereferencePrimaryToken(Token);
+    else
+        PsDereferenceImpersonationToken(Token);
+
+    return LabelRid <= TokenRid;
+}
+
 NTSTATUS
 NTAPI
 NtSetSecurityObject(IN HANDLE Handle,
@@ -924,6 +961,13 @@ NtSetSecurityObject(IN HANDLE Handle,
         {
             /* Set the failure status */
             Status = STATUS_INVALID_SECURITY_DESCR;
+        }
+        else if ((SecurityInformation & LABEL_SECURITY_INFORMATION) &&
+                 (PreviousMode != KernelMode) &&
+                 !ObpLabelWithinCallerIntegrity((PSECURITY_DESCRIPTOR)CapturedDescriptor) &&
+                 !SeSinglePrivilegeCheck(SeRelabelPrivilege, PreviousMode))
+        {
+            Status = STATUS_INVALID_LABEL;
         }
         else
         {

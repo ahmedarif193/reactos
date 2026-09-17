@@ -175,6 +175,7 @@ SepGetSaclFromDescriptor(
 //
 extern SID_IDENTIFIER_AUTHORITY SeNullSidAuthority;
 extern SID_IDENTIFIER_AUTHORITY SeMandatoryLabelAuthority;
+extern SID_IDENTIFIER_AUTHORITY SeAppPackageAuthority;
 extern SID_IDENTIFIER_AUTHORITY SeWorldSidAuthority;
 extern SID_IDENTIFIER_AUTHORITY SeLocalSidAuthority;
 extern SID_IDENTIFIER_AUTHORITY SeCreatorSidAuthority;
@@ -187,6 +188,7 @@ extern PSID SeNullSid;
 extern PSID SeWorldSid;
 extern PSID SeLocalSid;
 extern PSID SeCreatorOwnerSid;
+extern PSID SeOwnerRightsSid;
 extern PSID SeCreatorGroupSid;
 extern PSID SeCreatorOwnerServerSid;
 extern PSID SeCreatorGroupServerSid;
@@ -204,6 +206,8 @@ extern PSID SeLowMandatorySid;
 extern PSID SeMediumMandatorySid;
 extern PSID SeHighMandatorySid;
 extern PSID SeSystemMandatorySid;
+extern PSID SeAllAppPackagesSid;
+extern PSID SeAllRestrictedAppPackagesSid;
 extern PSID SeAuthenticatedUserSid;
 extern PSID SeRestrictedCodeSid;
 extern PSID SeAliasAdminsSid;
@@ -219,6 +223,9 @@ extern PSID SeRestrictedSid;
 extern PSID SeAnonymousLogonSid;
 extern PSID SeLocalServiceSid;
 extern PSID SeNetworkServiceSid;
+
+extern LUID SeSystemAuthenticationId;
+extern LUID SeAnonymousAuthenticationId;
 
 //
 // Privileges
@@ -355,6 +362,11 @@ VOID
 NTAPI
 SepSetTokenObjectSecurity(
     _In_ PTOKEN Token);
+
+VOID
+NTAPI
+SepRefreshTokenProcUnique(
+    _Inout_ PTOKEN Token);
 
 NTSTATUS
 NTAPI
@@ -634,6 +646,23 @@ SepSidInToken(
     _In_ PACCESS_TOKEN _Token,
     _In_ PSID Sid);
 
+#define SEP_SID_SET_GROUPS       0
+#define SEP_SID_SET_RESTRICTED   1
+#define SEP_SID_SET_CAPABILITIES 2
+
+#define SEP_LOWBOX_LPAC 0x1
+
+typedef struct _SEP_LOWBOX_INFO
+{
+    ULONG Flags;
+    ULONG LowBoxNumber;
+    PSID PackageSid;
+    ULONG CapabilityCount;
+    PSID_AND_ATTRIBUTES Capabilities;
+    ULONG HandleCount;
+    PVOID *Handles;
+} SEP_LOWBOX_INFO, *PSEP_LOWBOX_INFO;
+
 BOOLEAN
 NTAPI
 SepSidInTokenEx(
@@ -641,7 +670,35 @@ SepSidInTokenEx(
     _In_ PSID PrincipalSelfSid,
     _In_ PSID _Sid,
     _In_ BOOLEAN Deny,
-    _In_ BOOLEAN Restricted);
+    _In_ ULONG SidSet);
+
+ULONG
+NTAPI
+SepGetTokenIntegrityRid(
+    _In_ PACCESS_TOKEN Token);
+
+PSID
+NTAPI
+SepMandatorySidFromRid(
+    _In_ ULONG Rid);
+
+NTSTATUS
+NTAPI
+SepCopyLowBoxInfo(
+    _In_ PSEP_LOWBOX_INFO Source,
+    _Out_ PSEP_LOWBOX_INFO *Destination);
+
+VOID
+NTAPI
+SepFreeLowBoxInfo(
+    _In_ PSEP_LOWBOX_INFO LowBox);
+
+NTSTATUS
+NTAPI
+SeSetObjectMandatoryLabel(
+    _In_ PVOID Object,
+    _In_ ULONG Rid,
+    _In_ ULONG Policy);
 
 PSID
 NTAPI

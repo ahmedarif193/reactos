@@ -31,3 +31,7 @@ VOID FASTCALL IntJobDisconnectProcess(_In_ PPROCESSINFO ppi);
 
 _Requires_exclusive_lock_held_(UserLock)
 VOID FASTCALL IntCleanupGrantedHandle(_In_ HANDLE hUserHandle);
+
+BOOL FASTCALL IntIsJobUiLimited(_In_ ULONG Limit);
+BOOL FASTCALL IntIsJobHandleAccessible(_In_ HANDLE hUserHandle, _In_opt_ PPROCESSINFO ppiOwner);
+PVOID NTAPI Win32kGlobalAtomTableCallout(VOID);

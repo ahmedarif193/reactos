@@ -605,6 +605,24 @@ ObpChargeQuotaForObject(IN POBJECT_HEADER ObjectHeader,
     return STATUS_SUCCESS;
 }
 
+static
+BOOLEAN
+ObpSaclHasAuditAces(IN PISECURITY_DESCRIPTOR SecurityDescriptor)
+{
+    PACL Sacl;
+    PACE_HEADER Ace;
+    ULONG Index;
+
+    Sacl = SepGetSaclFromDescriptor(SecurityDescriptor);
+    if (!Sacl) return FALSE;
+    for (Index = 0; Index < Sacl->AceCount; Index++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Sacl, Index, (PVOID*)&Ace))) break;
+        if (Ace->AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE) return TRUE;
+    }
+    return FALSE;
+}
+
 NTSTATUS
 NTAPI
 ObpValidateAccessMask(IN PACCESS_STATE AccessState)
@@ -617,6 +635,7 @@ ObpValidateAccessMask(IN PACCESS_STATE AccessState)
     {
         /* Check if the SD has a system ACL but hasn't been granted access to get/set it */
         if ((SecurityDescriptor->Control & SE_SACL_PRESENT) &&
+            ObpSaclHasAuditAces(SecurityDescriptor) &&
             !(AccessState->PreviouslyGrantedAccess & ACCESS_SYSTEM_SECURITY))
         {
             /* We're gonna need access */
@@ -1954,8 +1973,7 @@ ObpCloseHandle(IN HANDLE Handle,
             /* Check if we came from user mode */
             if (AccessMode != KernelMode)
             {
-                /* Debuggers and the permanent strict-handle opt-in raise. */
-                if (Process->DebugPort || ObpIsStrictHandleCheckingEnabled())
+                if (Process->DebugPort)
                 {
                     /* Make sure we're not attached */
                     if (!KeIsAttachedProcess())
@@ -2180,6 +2198,46 @@ ObpChargeInheritedHandleCallback(IN PHANDLE_TABLE_ENTRY HandleEntry,
     return FALSE;
 }
 
+typedef struct _OBP_INHERIT_HANDLE_CONTEXT
+{
+    PEPROCESS Process;
+    PHANDLE_TABLE HandleTable;
+    const HANDLE *HandleList;
+    SIZE_T HandleCount;
+} OBP_INHERIT_HANDLE_CONTEXT, *POBP_INHERIT_HANDLE_CONTEXT;
+
+static
+BOOLEAN
+NTAPI
+ObpFilterInheritedHandleCallback(
+    IN PHANDLE_TABLE_ENTRY HandleEntry,
+    IN HANDLE Handle,
+    IN PVOID Context)
+{
+    POBP_INHERIT_HANDLE_CONTEXT FilterContext = Context;
+    POBJECT_HEADER ObjectHeader;
+    POBJECT_TYPE ObjectType;
+    PVOID Object;
+    SIZE_T Index;
+
+    for (Index = 0; Index < FilterContext->HandleCount; Index++)
+    {
+        if (FilterContext->HandleList[Index] == Handle)
+        {
+            ExUnlockHandleTableEntry(FilterContext->HandleTable, HandleEntry);
+            return FALSE;
+        }
+    }
+
+    ObjectHeader = ObpGetHandleObject(HandleEntry);
+    ObjectType = ObpGetObjectTypeFromHeader(ObjectHeader);
+    Object = &ObjectHeader->Body;
+    ExDestroyHandle(FilterContext->HandleTable, Handle, HandleEntry);
+    ObpDecrementHandleCount(Object, FilterContext->Process, ObjectType);
+    ObDereferenceObject(Object);
+    return TRUE;
+}
+
 /*++
 * @name ObClearProcessHandleTable
 *
@@ -2260,9 +2318,12 @@ ObClearProcessHandleTable(IN PEPROCESS Process)
 NTSTATUS
 NTAPI
 ObInitProcess(IN PEPROCESS Parent OPTIONAL,
-              IN PEPROCESS Process)
+              IN PEPROCESS Process,
+              IN const HANDLE *HandleList OPTIONAL,
+              IN SIZE_T HandleCount)
 {
     PHANDLE_TABLE ParentTable, ObjectTable;
+    OBP_INHERIT_HANDLE_CONTEXT FilterContext;
 
     /* Check for a parent */
     if (Parent)
@@ -2276,7 +2337,27 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
                                        ParentTable,
                                        ObpDuplicateHandleCallback,
                                        OBJ_INHERIT);
-        if (ObjectTable) ExEnumHandleTable(ObjectTable, ObpChargeInheritedHandleCallback, ObjectTable, NULL);
+        if (ObjectTable && HandleList)
+        {
+            BOOLEAN StrictFifo = ObjectTable->StrictFIFO;
+
+            FilterContext.Process = Process;
+            FilterContext.HandleTable = ObjectTable;
+            FilterContext.HandleList = HandleList;
+            FilterContext.HandleCount = HandleCount;
+            ObjectTable->StrictFIFO = TRUE;
+            KeEnterCriticalRegion();
+            ExSweepHandleTable(ObjectTable,
+                               ObpFilterInheritedHandleCallback,
+                               &FilterContext);
+            KeLeaveCriticalRegion();
+            ObjectTable->StrictFIFO = StrictFifo;
+        }
+        if (ObjectTable)
+            ExEnumHandleTable(ObjectTable,
+                              ObpChargeInheritedHandleCallback,
+                              ObjectTable,
+                              NULL);
     }
     else
     {

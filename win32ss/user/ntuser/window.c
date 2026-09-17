@@ -593,6 +593,7 @@ LRESULT co_UserFreeWindow(PWND Window,
    }
    Window->state2 |= WNDS2_INDESTROY;
    Window->style &= ~WS_VISIBLE;
+   IntUipiFreeWindowFilters(Window);
    Window->head.pti->cVisWindows--;
 
    /* Release the compositor's backing surface for this window (no-op when

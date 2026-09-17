@@ -1658,7 +1658,7 @@ QSI_DEF(SystemHandleInformation)
 
                         /* Filling handle information */
                         HandleInformation->Handles[Index].UniqueProcessId =
-                            (USHORT)(ULONG_PTR) HandleTable->UniqueProcessId;
+                            (ULONG_PTR)HandleTable->UniqueProcessId;
 
                         HandleInformation->Handles[Index].CreatorBackTraceIndex = 0;
 
@@ -1673,7 +1673,7 @@ QSI_DEF(SystemHandleInformation)
                             HandleTableEntry->ObAttributes & OBJ_HANDLE_ATTRIBUTES;
 
                         HandleInformation->Handles[Index].HandleValue =
-                            (USHORT)(ULONG_PTR) Handle.GenericHandleOverlay;
+                            (ULONG_PTR)Handle.GenericHandleOverlay;
 
                         HandleInformation->Handles[Index].Object = &ObjectHeader->Body;
 

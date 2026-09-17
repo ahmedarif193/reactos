@@ -35,6 +35,7 @@ PVOID SmpInitLastCall;
 
 SECURITY_DESCRIPTOR SmpPrimarySDBody, SmpLiberalSDBody, SmpKnownDllsSDBody;
 SECURITY_DESCRIPTOR SmpApiPortSDBody;
+PACL SmpApiPortSacl;
 PISECURITY_DESCRIPTOR SmpPrimarySecurityDescriptor, SmpLiberalSecurityDescriptor;
 PISECURITY_DESCRIPTOR SmpKnownDllsSecurityDescriptor, SmpApiPortSecurityDescriptor;
 
@@ -1031,7 +1032,8 @@ SmpCreateSecurityDescriptors(IN BOOLEAN InitialCall)
 {
     NTSTATUS Status;
     PSID WorldSid = NULL, AdminSid = NULL, SystemSid = NULL;
-    PSID RestrictedSid = NULL, OwnerSid = NULL;
+    PSID RestrictedSid = NULL, OwnerSid = NULL, PackageSid = NULL, RestrictedPackageSid = NULL;
+    SID_IDENTIFIER_AUTHORITY PackageAuthority = {SECURITY_APP_PACKAGE_AUTHORITY};
     SID_IDENTIFIER_AUTHORITY WorldAuthority = {SECURITY_WORLD_SID_AUTHORITY};
     SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
     SID_IDENTIFIER_AUTHORITY CreatorAuthority = {SECURITY_CREATOR_SID_AUTHORITY};
@@ -1086,6 +1088,23 @@ SmpCreateSecurityDescriptors(IN BOOLEAN InitialCall)
                                               NULL,
                                               FALSE);
         ASSERT(NT_SUCCESS(Status));
+        {
+            SID_IDENTIFIER_AUTHORITY LabelAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
+            PSID UntrustedSid = NULL;
+            ULONG SaclSize;
+
+            Status = RtlAllocateAndInitializeSid(&LabelAuthority, 1, SECURITY_MANDATORY_UNTRUSTED_RID,
+                                                 0, 0, 0, 0, 0, 0, 0, &UntrustedSid);
+            ASSERT(NT_SUCCESS(Status));
+            SaclSize = sizeof(ACL) + sizeof(SYSTEM_MANDATORY_LABEL_ACE) + RtlLengthSid(UntrustedSid);
+            SmpApiPortSacl = RtlAllocateHeap(SmpHeap, 0, SaclSize);
+            ASSERT(SmpApiPortSacl);
+            RtlCreateAcl(SmpApiPortSacl, SaclSize, ACL_REVISION);
+            RtlAddMandatoryAce(SmpApiPortSacl, ACL_REVISION, 0, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+                               SYSTEM_MANDATORY_LABEL_ACE_TYPE, UntrustedSid);
+            Status = RtlSetSaclSecurityDescriptor(SmpApiPortSecurityDescriptor, TRUE, SmpApiPortSacl, FALSE);
+            ASSERT(NT_SUCCESS(Status));
+        }
     }
 
     /* Check if protection was requested in the registry (on by default) */
@@ -1150,6 +1169,28 @@ SmpCreateSecurityDescriptors(IN BOOLEAN InitialCall)
         goto Quickie;
     }
 
+    Status = RtlAllocateAndInitializeSid(&PackageAuthority, 2,
+                                         SECURITY_APP_PACKAGE_BASE_RID,
+                                         SECURITY_BUILTIN_PACKAGE_ANY_PACKAGE,
+                                         0, 0, 0, 0, 0, 0,
+                                         &PackageSid);
+    if (!NT_SUCCESS(Status))
+    {
+        PackageSid = NULL;
+        goto Quickie;
+    }
+
+    Status = RtlAllocateAndInitializeSid(&PackageAuthority, 2,
+                                         SECURITY_APP_PACKAGE_BASE_RID,
+                                         SECURITY_BUILTIN_PACKAGE_ANY_RESTRICTED_PACKAGE,
+                                         0, 0, 0, 0, 0, 0,
+                                         &RestrictedPackageSid);
+    if (!NT_SUCCESS(Status))
+    {
+        RestrictedPackageSid = NULL;
+        goto Quickie;
+    }
+
     /* Now check if we're creating the core descriptors */
     if (!InitialCall)
     {
@@ -1185,7 +1226,7 @@ NextAcl:
     /* Allocate an ACL with 6 ACEs, two ACEs per SID */
     SidLength = RtlLengthSid(WorldSid) + RtlLengthSid(RestrictedSid) + RtlLengthSid(AdminSid);
     SidLength *= 2;
-    AclLength = sizeof(ACL) + 6 * sizeof(ACCESS_ALLOWED_ACE) + SidLength;
+    AclLength = sizeof(ACL) + 10 * sizeof(ACCESS_ALLOWED_ACE) + SidLength + 2 * RtlLengthSid(PackageSid) + 2 * RtlLengthSid(RestrictedPackageSid);
     Acl = RtlAllocateHeap(RtlGetProcessHeap(), 0, AclLength);
     if (!Acl) Status = STATUS_NO_MEMORY;
     if (!NT_SUCCESS(Status)) goto NotInitial;
@@ -1205,6 +1246,14 @@ NextAcl:
     ASSERT(NT_SUCCESS(Status));
     Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_ALL, AdminSid);
     ASSERT(NT_SUCCESS(Status));
+    Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_EXECUTE, PackageSid);
+    ASSERT(NT_SUCCESS(Status));
+    Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_EXECUTE, RestrictedPackageSid);
+    ASSERT(NT_SUCCESS(Status));
+    Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_EXECUTE | GENERIC_READ, PackageSid);
+    ASSERT(NT_SUCCESS(Status));
+    Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_EXECUTE | GENERIC_READ, RestrictedPackageSid);
+    ASSERT(NT_SUCCESS(Status));
 
     /* Now edit the last three ACEs and make them inheritable */
     Status = RtlGetAce(Acl, 3, (PVOID)&Ace);
@@ -1214,6 +1263,12 @@ NextAcl:
     ASSERT(NT_SUCCESS(Status));
     Ace->AceFlags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE;
     Status = RtlGetAce(Acl, 5, (PVOID)&Ace);
+    ASSERT(NT_SUCCESS(Status));
+    Ace->AceFlags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE;
+    Status = RtlGetAce(Acl, 8, (PVOID)&Ace);
+    ASSERT(NT_SUCCESS(Status));
+    Ace->AceFlags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE;
+    Status = RtlGetAce(Acl, 9, (PVOID)&Ace);
     ASSERT(NT_SUCCESS(Status));
     Ace->AceFlags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE;
 
@@ -1230,7 +1285,7 @@ NotInitial:
 
     /* Allocate an ACL with 7 ACEs, two ACEs per SID, and one final owner ACE */
     SidLength += RtlLengthSid(OwnerSid);
-    AclLength = sizeof(ACL) + 7 * sizeof (ACCESS_ALLOWED_ACE) + 2 * SidLength;
+    AclLength = sizeof(ACL) + 11 * sizeof (ACCESS_ALLOWED_ACE) + 2 * SidLength + 2 * RtlLengthSid(PackageSid) + 2 * RtlLengthSid(RestrictedPackageSid);
     Acl = RtlAllocateHeap(RtlGetProcessHeap(), 0, AclLength);
     if (!Acl) Status = STATUS_NO_MEMORY;
     if (!NT_SUCCESS(Status)) goto Quickie;
@@ -1252,6 +1307,14 @@ NotInitial:
     ASSERT(NT_SUCCESS(Status));
     Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_ALL, OwnerSid);
     ASSERT(NT_SUCCESS(Status));
+    Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_EXECUTE | GENERIC_READ, PackageSid);
+    ASSERT(NT_SUCCESS(Status));
+    Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_EXECUTE | GENERIC_READ, RestrictedPackageSid);
+    ASSERT(NT_SUCCESS(Status));
+    Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_EXECUTE | GENERIC_READ, PackageSid);
+    ASSERT(NT_SUCCESS(Status));
+    Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION2, GENERIC_EXECUTE | GENERIC_READ, RestrictedPackageSid);
+    ASSERT(NT_SUCCESS(Status));
 
     /* Edit the last 4 ACEs to make then inheritable */
     Status = RtlGetAce(Acl, 3, (PVOID)&Ace);
@@ -1264,6 +1327,12 @@ NotInitial:
     ASSERT(NT_SUCCESS(Status));
     Ace->AceFlags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE;
     Status = RtlGetAce(Acl, 6, (PVOID)&Ace);
+    ASSERT(NT_SUCCESS(Status));
+    Ace->AceFlags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE;
+    Status = RtlGetAce(Acl, 9, (PVOID)&Ace);
+    ASSERT(NT_SUCCESS(Status));
+    Ace->AceFlags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE;
+    Status = RtlGetAce(Acl, 10, (PVOID)&Ace);
     ASSERT(NT_SUCCESS(Status));
     Ace->AceFlags = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE;
 
@@ -1326,6 +1395,8 @@ Quickie:
     if (WorldSid) RtlFreeHeap(RtlGetProcessHeap(), 0, WorldSid);
     if (SystemSid) RtlFreeHeap(RtlGetProcessHeap(), 0, SystemSid);
     if (RestrictedSid) RtlFreeHeap(RtlGetProcessHeap(), 0, RestrictedSid);
+    if (PackageSid) RtlFreeHeap(RtlGetProcessHeap(), 0, PackageSid);
+    if (RestrictedPackageSid) RtlFreeHeap(RtlGetProcessHeap(), 0, RestrictedPackageSid);
     return Status;
 }
 

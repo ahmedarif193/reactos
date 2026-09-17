@@ -33,6 +33,48 @@ PUSER_HANDLE_TABLE gHandleTable = NULL;
 PUSER_HANDLE_ENTRY gHandleEntries = NULL;
 BOOLEAN gfLogonProcess  = FALSE;
 BOOLEAN gfServerProcess = FALSE;
+BOOLEAN gfWin32kLockdown = FALSE;
+
+HDC
+WINAPI
+User32GetDC(
+    _In_opt_ HWND Window)
+{
+    if (gfWin32kLockdown)
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return NULL;
+    }
+    return NtUserGetDC(Window);
+}
+
+HDC
+WINAPI
+User32GetDCEx(
+    _In_opt_ HWND Window,
+    _In_opt_ HRGN ClipRegion,
+    _In_ DWORD Flags)
+{
+    if (gfWin32kLockdown)
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return NULL;
+    }
+    return NtUserGetDCEx(Window, ClipRegion, Flags);
+}
+
+HDC
+WINAPI
+User32GetWindowDC(
+    _In_opt_ HWND Window)
+{
+    if (gfWin32kLockdown)
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return NULL;
+    }
+    return NtUserGetWindowDC(Window);
+}
 BOOLEAN gfFirstThread   = TRUE;
 HICON hIconSmWindows = NULL, hIconWindows = NULL;
 
@@ -140,7 +182,19 @@ end:
 VOID
 LoadAppInitDlls(VOID)
 {
+    struct
+    {
+        ULONG Policy;
+        ULONG Flags;
+    } Mitigation = {6, 0};
+
     szAppInit[0] = UNICODE_NULL;
+
+    if (NT_SUCCESS(NtQueryInformationProcess(NtCurrentProcess(), ProcessMitigationPolicy, &Mitigation, sizeof(Mitigation), NULL)) &&
+        (Mitigation.Flags & 1))
+    {
+        return;
+    }
 
     if (GetDllList())
     {
@@ -441,6 +495,11 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
             Status = NtUserProcessConnect(NtCurrentProcess(),
                                           UserCon,
                                           sizeof(*UserCon));
+            if (Status == STATUS_INVALID_SYSTEM_SERVICE)
+            {
+                gfWin32kLockdown = TRUE;
+                return TRUE;
+            }
             if (!NT_SUCCESS(Status))
             {
 #ifdef _M_ARM64
@@ -574,6 +633,9 @@ DllMain(
 #endif
                 return FALSE;
             }
+
+            if (gfWin32kLockdown)
+                break;
 
             User32InitializeDpiAwareness();
 

@@ -13,12 +13,15 @@ add_subdirectory(wine)
 spec2def(kernelbase_ros.dll kernelbase_ros.spec ADD_IMPORTLIB)
 
 add_library(kernelbase_ros MODULE
+    AppContainer.c
     CancelSynchronousIo.c
     CpuSets.c
     DllMain.c
+    AppModelToken.c
     PackageFamily.c
     PseudoConsole.c
     PssSnapshot.c
+    Security.c
     SyncObjects.c
     VolumeInformation.c
     WerRuntime.c

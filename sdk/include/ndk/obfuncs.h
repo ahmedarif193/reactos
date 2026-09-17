@@ -240,6 +240,33 @@ NtCreateDirectoryObject(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtCreatePrivateNamespace(
+    _Out_ PHANDLE NamespaceHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ PVOID BoundaryDescriptor
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtOpenPrivateNamespace(
+    _Out_ PHANDLE NamespaceHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ PVOID BoundaryDescriptor
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtDeletePrivateNamespace(
+    _In_ HANDLE NamespaceHandle
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtCreateSymbolicLinkObject(
     _Out_ PHANDLE SymbolicLinkHandle,
     _In_ ACCESS_MASK DesiredAccess,

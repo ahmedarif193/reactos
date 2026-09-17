@@ -31,6 +31,10 @@ SepSetTokenObjectSecurity(
 
     PAGED_CODE();
 
+    SeSetObjectMandatoryLabel(Token,
+                              SepGetTokenIntegrityRid(Token),
+                              SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP);
+
     if (!Token->DefaultDacl)
         return;
 
@@ -298,6 +302,8 @@ SepCreateToken(
     AccessToken->TokenId = TokenId;
     AccessToken->TokenType = TokenType;
     AccessToken->ImpersonationLevel = ImpersonationLevel;
+    if (!RtlEqualLuid(AuthenticationId, &SeAnonymousAuthenticationId))
+        SepRefreshTokenProcUnique(AccessToken);
 
     /* Initialise the lock for the access token */
     Status = SepCreateTokenLock(AccessToken);
@@ -642,6 +648,7 @@ SepDuplicateToken(
     AccessToken->ParentTokenId = Token->ParentTokenId;
     AccessToken->ExpirationTime = Token->ExpirationTime;
     AccessToken->OriginatingLogonSession = Token->OriginatingLogonSession;
+    AccessToken->ProcUnique = Token->ProcUnique;
     AccessToken->DynamicCharged = Token->DynamicCharged;
 
     /* Lock the source token and copy the mutable fields */
@@ -768,6 +775,32 @@ SepDuplicateToken(
             DPRINT1("RtlCopySidAndAttributesArray(RestrictedSids) failed (Status 0x%lx)\n", Status);
             goto Quit;
         }
+    }
+
+    AccessToken->LowBoxInfo = NULL;
+    if (Token->LowBoxInfo)
+    {
+        Status = SepCopyLowBoxInfo(Token->LowBoxInfo, (PSEP_LOWBOX_INFO*)&AccessToken->LowBoxInfo);
+        if (!NT_SUCCESS(Status))
+            goto Quit;
+    }
+
+    RtlInitEmptyUnicodeString(&AccessToken->BnoIsolationPrefix, NULL, 0);
+    if (Token->BnoIsolationPrefix.Length)
+    {
+        AccessToken->BnoIsolationPrefix.Buffer = ExAllocatePoolWithTag(PagedPool,
+                                                                       Token->BnoIsolationPrefix.MaximumLength,
+                                                                       TAG_SE_BNO);
+        if (!AccessToken->BnoIsolationPrefix.Buffer)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quit;
+        }
+        RtlCopyMemory(AccessToken->BnoIsolationPrefix.Buffer,
+                      Token->BnoIsolationPrefix.Buffer,
+                      Token->BnoIsolationPrefix.MaximumLength);
+        AccessToken->BnoIsolationPrefix.Length = Token->BnoIsolationPrefix.Length;
+        AccessToken->BnoIsolationPrefix.MaximumLength = Token->BnoIsolationPrefix.MaximumLength;
     }
 
     /* Now allocate the token's dynamic information area and set the data */
@@ -1088,6 +1121,7 @@ SepPerformTokenFiltering(
     AccessToken->AuthenticationId = Token->AuthenticationId;
     AccessToken->ParentTokenId = Token->TokenId;
     AccessToken->OriginatingLogonSession = Token->OriginatingLogonSession;
+    AccessToken->ProcUnique = Token->ProcUnique;
     AccessToken->DynamicCharged = Token->DynamicCharged;
 
     AccessToken->ExpirationTime = Token->ExpirationTime;
@@ -1202,6 +1236,32 @@ SepPerformTokenFiltering(
             DPRINT1("SepPerformTokenFiltering(): Failed to copy the restricted SIDs into token (Status 0x%lx)\n", Status);
             goto Quit;
         }
+    }
+
+    AccessToken->LowBoxInfo = NULL;
+    if (Token->LowBoxInfo)
+    {
+        Status = SepCopyLowBoxInfo(Token->LowBoxInfo, (PSEP_LOWBOX_INFO*)&AccessToken->LowBoxInfo);
+        if (!NT_SUCCESS(Status))
+            goto Quit;
+    }
+
+    RtlInitEmptyUnicodeString(&AccessToken->BnoIsolationPrefix, NULL, 0);
+    if (Token->BnoIsolationPrefix.Length)
+    {
+        AccessToken->BnoIsolationPrefix.Buffer = ExAllocatePoolWithTag(PagedPool,
+                                                                       Token->BnoIsolationPrefix.MaximumLength,
+                                                                       TAG_SE_BNO);
+        if (!AccessToken->BnoIsolationPrefix.Buffer)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quit;
+        }
+        RtlCopyMemory(AccessToken->BnoIsolationPrefix.Buffer,
+                      Token->BnoIsolationPrefix.Buffer,
+                      Token->BnoIsolationPrefix.MaximumLength);
+        AccessToken->BnoIsolationPrefix.Length = Token->BnoIsolationPrefix.Length;
+        AccessToken->BnoIsolationPrefix.MaximumLength = Token->BnoIsolationPrefix.MaximumLength;
     }
 
     /*
@@ -2412,3 +2472,389 @@ Quit:
 }
 
 /* EOF */
+
+static LONG SepLowBoxNumberSeed = 0;
+
+VOID
+NTAPI
+SepFreeLowBoxInfo(
+    _In_ PSEP_LOWBOX_INFO LowBox)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < LowBox->HandleCount; Index++)
+    {
+        if (LowBox->Handles[Index])
+            ObCloseHandle(LowBox->Handles[Index], KernelMode);
+    }
+    ExFreePoolWithTag(LowBox, TAG_SE_LOWBOX);
+}
+
+static
+NTSTATUS
+SepAllocateLowBoxInfo(
+    _In_ PSID PackageSid,
+    _In_ ULONG CapabilityCount,
+    _In_reads_opt_(CapabilityCount) PSID_AND_ATTRIBUTES Capabilities,
+    _In_ ULONG HandleCount,
+    _Out_ PSEP_LOWBOX_INFO *LowBoxInfo)
+{
+    PSEP_LOWBOX_INFO LowBox;
+    ULONG Length, SidsLength, Index;
+    PVOID EndMem;
+    ULONG Remaining;
+    NTSTATUS Status;
+
+    SidsLength = 0;
+    for (Index = 0; Index < CapabilityCount; Index++)
+    {
+        if (!RtlValidSid(Capabilities[Index].Sid))
+            return STATUS_INVALID_SID;
+        SidsLength += ALIGN_UP_BY(RtlLengthSid(Capabilities[Index].Sid), sizeof(ULONG));
+    }
+
+    Length = ALIGN_UP_BY(sizeof(SEP_LOWBOX_INFO), sizeof(PVOID)) +
+             ALIGN_UP_BY(HandleCount * sizeof(PVOID), sizeof(PVOID)) +
+             ALIGN_UP_BY(RtlLengthSid(PackageSid), sizeof(PVOID)) +
+             ALIGN_UP_BY(CapabilityCount * sizeof(SID_AND_ATTRIBUTES), sizeof(PVOID)) +
+             SidsLength;
+
+    LowBox = ExAllocatePoolWithTag(PagedPool, Length, TAG_SE_LOWBOX);
+    if (!LowBox) return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(LowBox, Length);
+
+    EndMem = (PUCHAR)LowBox + ALIGN_UP_BY(sizeof(SEP_LOWBOX_INFO), sizeof(PVOID));
+    LowBox->HandleCount = HandleCount;
+    LowBox->Handles = EndMem;
+    EndMem = (PUCHAR)EndMem + ALIGN_UP_BY(HandleCount * sizeof(PVOID), sizeof(PVOID));
+
+    LowBox->PackageSid = EndMem;
+    RtlCopySid(RtlLengthSid(PackageSid), LowBox->PackageSid, PackageSid);
+    EndMem = (PUCHAR)EndMem + ALIGN_UP_BY(RtlLengthSid(PackageSid), sizeof(PVOID));
+
+    LowBox->CapabilityCount = CapabilityCount;
+    LowBox->Capabilities = EndMem;
+    EndMem = (PUCHAR)EndMem + ALIGN_UP_BY(CapabilityCount * sizeof(SID_AND_ATTRIBUTES), sizeof(PVOID));
+    Remaining = SidsLength;
+    if (CapabilityCount)
+    {
+        Status = RtlCopySidAndAttributesArray(CapabilityCount,
+                                              Capabilities,
+                                              Remaining,
+                                              LowBox->Capabilities,
+                                              EndMem,
+                                              &EndMem,
+                                              &Remaining);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(LowBox, TAG_SE_LOWBOX);
+            return Status;
+        }
+        for (Index = 0; Index < CapabilityCount; Index++)
+            LowBox->Capabilities[Index].Attributes |= SE_GROUP_ENABLED;
+    }
+
+    *LowBoxInfo = LowBox;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+SepCopyLowBoxInfo(
+    _In_ PSEP_LOWBOX_INFO Source,
+    _Out_ PSEP_LOWBOX_INFO *Destination)
+{
+    PSEP_LOWBOX_INFO LowBox;
+    ULONG Index;
+    NTSTATUS Status;
+
+    Status = SepAllocateLowBoxInfo(Source->PackageSid,
+                                   Source->CapabilityCount,
+                                   Source->Capabilities,
+                                   Source->HandleCount,
+                                   &LowBox);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    LowBox->Flags = Source->Flags;
+    LowBox->LowBoxNumber = Source->LowBoxNumber;
+    for (Index = 0; Index < Source->HandleCount; Index++)
+    {
+        PVOID Object;
+        HANDLE KernelHandle = NULL;
+
+        if (Source->Handles[Index] &&
+            NT_SUCCESS(ObReferenceObjectByHandle(Source->Handles[Index], 0, NULL, KernelMode, &Object, NULL)))
+        {
+            if (!NT_SUCCESS(ObOpenObjectByPointer(Object, OBJ_KERNEL_HANDLE, NULL, 0, NULL, KernelMode, &KernelHandle)))
+                KernelHandle = NULL;
+            ObDereferenceObject(Object);
+        }
+        LowBox->Handles[Index] = KernelHandle;
+    }
+
+    *Destination = LowBox;
+    return STATUS_SUCCESS;
+}
+
+static
+BOOLEAN
+SepIsValidPackageSid(
+    _In_ PSID _Sid)
+{
+    PISID Sid = (PISID)_Sid;
+
+    if (!RtlValidSid(Sid)) return FALSE;
+    if (!RtlEqualMemory(&Sid->IdentifierAuthority, &SeAppPackageAuthority, sizeof(SID_IDENTIFIER_AUTHORITY)))
+        return FALSE;
+    if (Sid->SubAuthorityCount < SECURITY_BUILTIN_APP_PACKAGE_RID_COUNT)
+        return FALSE;
+    return Sid->SubAuthority[0] == SECURITY_APP_PACKAGE_BASE_RID;
+}
+
+static
+NTSTATUS
+SepAddPackageSidToDefaultDacl(
+    _Inout_ PTOKEN Token,
+    _In_ PSID PackageSid)
+{
+    PACL OldDacl = Token->DefaultDacl;
+    ULONG AceLength = FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + RtlLengthSid(PackageSid);
+    ULONG NewAclSize = (OldDacl ? OldDacl->AclSize : sizeof(ACL)) + AceLength;
+    ULONG NewDynamicLength = NewAclSize + RtlLengthSid(Token->PrimaryGroup);
+    PACL NewDacl;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    NewDacl = ExAllocatePoolWithTag(PagedPool, NewAclSize, TAG_ACL);
+    if (!NewDacl)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    if (OldDacl)
+    {
+        RtlCopyMemory(NewDacl, OldDacl, OldDacl->AclSize);
+        NewDacl->AclSize = (USHORT)NewAclSize;
+    }
+    else
+    {
+        RtlCreateAcl(NewDacl, NewAclSize, ACL_REVISION);
+    }
+
+    Status = RtlAddAccessAllowedAce(NewDacl, ACL_REVISION, GENERIC_ALL, PackageSid);
+    if (NT_SUCCESS(Status))
+    {
+        if (NewDynamicLength > Token->DynamicCharged)
+            Token->DynamicCharged = NewDynamicLength;
+        Status = SepRebuildDynamicPartOfToken(Token, NewDynamicLength);
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        if (Token->DefaultDacl)
+            Token->DynamicAvailable += Token->DefaultDacl->AclSize;
+        if ((PULONG)Token->PrimaryGroup != Token->DynamicPart)
+        {
+            RtlMoveMemory(Token->DynamicPart, Token->PrimaryGroup, RtlLengthSid(Token->PrimaryGroup));
+            Token->PrimaryGroup = (PSID)Token->DynamicPart;
+        }
+        Token->DynamicAvailable -= NewAclSize;
+        Token->DefaultDacl = (PACL)((ULONG_PTR)Token->DynamicPart + RtlLengthSid(Token->PrimaryGroup));
+        RtlCopyMemory(Token->DefaultDacl, NewDacl, NewAclSize);
+    }
+
+    ExFreePoolWithTag(NewDacl, TAG_ACL);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+NtCreateLowBoxToken(
+    _Out_ PHANDLE TokenHandle,
+    _In_ HANDLE ExistingTokenHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ PSID PackageSid,
+    _In_ ULONG CapabilityCount,
+    _In_reads_opt_(CapabilityCount) PSID_AND_ATTRIBUTES Capabilities,
+    _In_ ULONG HandleCount,
+    _In_reads_opt_(HandleCount) HANDLE *Handles)
+{
+    KPROCESSOR_MODE PreviousMode;
+    PTOKEN Token = NULL, NewToken = NULL;
+    PSID CapturedPackageSid = NULL;
+    PSID_AND_ATTRIBUTES CapturedCapabilities = NULL;
+    HANDLE *CapturedHandles = NULL;
+    PSEP_LOWBOX_INFO LowBox = NULL;
+    PSECURITY_QUALITY_OF_SERVICE CapturedQos = NULL;
+    BOOLEAN QosPresent = FALSE;
+    OBJECT_ATTRIBUTES LocalAttributes;
+    HANDLE hToken;
+    ULONG ResultLength, Index;
+    PSID_AND_ATTRIBUTES Integrity;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    PreviousMode = ExGetPreviousMode();
+
+    if (CapabilityCount > 0x10000 || HandleCount > 0x10000)
+        return STATUS_INVALID_PARAMETER;
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWriteHandle(TokenHandle);
+            if (HandleCount)
+            {
+                ProbeForRead(Handles, HandleCount * sizeof(HANDLE), sizeof(HANDLE));
+                CapturedHandles = ExAllocatePoolWithTag(PagedPool, HandleCount * sizeof(HANDLE), TAG_SE_LOWBOX);
+                if (!CapturedHandles)
+                    _SEH2_YIELD(return STATUS_INSUFFICIENT_RESOURCES);
+                RtlCopyMemory(CapturedHandles, Handles, HandleCount * sizeof(HANDLE));
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            if (CapturedHandles) ExFreePoolWithTag(CapturedHandles, TAG_SE_LOWBOX);
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+    else
+    {
+        CapturedHandles = Handles;
+    }
+
+    Status = SepCaptureSid(PackageSid, PreviousMode, PagedPool, TRUE, &CapturedPackageSid);
+    if (!NT_SUCCESS(Status)) goto Quit;
+
+    if (!SepIsValidPackageSid(CapturedPackageSid))
+    {
+        Status = STATUS_INVALID_SID;
+        goto Quit;
+    }
+
+    if (CapabilityCount)
+    {
+        Status = SeCaptureSidAndAttributesArray(Capabilities,
+                                                CapabilityCount,
+                                                PreviousMode,
+                                                NULL,
+                                                0,
+                                                PagedPool,
+                                                TRUE,
+                                                &CapturedCapabilities,
+                                                &ResultLength);
+        if (!NT_SUCCESS(Status)) goto Quit;
+    }
+
+    Status = SepCaptureSecurityQualityOfService(ObjectAttributes,
+                                                PreviousMode,
+                                                PagedPool,
+                                                FALSE,
+                                                &CapturedQos,
+                                                &QosPresent);
+    if (!NT_SUCCESS(Status)) goto Quit;
+
+    Status = ObReferenceObjectByHandle(ExistingTokenHandle,
+                                       TOKEN_DUPLICATE,
+                                       SeTokenObjectType,
+                                       PreviousMode,
+                                       (PVOID*)&Token,
+                                       NULL);
+    if (!NT_SUCCESS(Status)) goto Quit;
+
+    if (Token->LowBoxInfo)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Quit;
+    }
+
+    Status = SepAllocateLowBoxInfo(CapturedPackageSid,
+                                   CapabilityCount,
+                                   CapturedCapabilities,
+                                   HandleCount,
+                                   &LowBox);
+    if (!NT_SUCCESS(Status)) goto Quit;
+
+    for (Index = 0; Index < HandleCount; Index++)
+    {
+        PVOID Object;
+        HANDLE KernelHandle;
+
+        Status = ObReferenceObjectByHandle(CapturedHandles[Index],
+                                           0,
+                                           NULL,
+                                           PreviousMode,
+                                           &Object,
+                                           NULL);
+        if (!NT_SUCCESS(Status)) goto Quit;
+        Status = ObOpenObjectByPointer(Object, OBJ_KERNEL_HANDLE, NULL, 0, NULL, KernelMode, &KernelHandle);
+        ObDereferenceObject(Object);
+        if (!NT_SUCCESS(Status)) goto Quit;
+        LowBox->Handles[Index] = KernelHandle;
+    }
+    LowBox->LowBoxNumber = (ULONG)InterlockedIncrement(&SepLowBoxNumberSeed);
+
+    InitializeObjectAttributes(&LocalAttributes, NULL, 0, NULL, NULL);
+    Status = SepDuplicateToken(Token,
+                               &LocalAttributes,
+                               FALSE,
+                               Token->TokenType,
+                               QosPresent ? CapturedQos->ImpersonationLevel : Token->ImpersonationLevel,
+                               KernelMode,
+                               &NewToken);
+    if (!NT_SUCCESS(Status)) goto Quit;
+
+    Status = SepAddPackageSidToDefaultDacl(NewToken, CapturedPackageSid);
+    if (!NT_SUCCESS(Status)) goto Quit;
+
+    NewToken->LowBoxInfo = LowBox;
+    LowBox = NULL;
+    NewToken->TokenFlags |= TOKEN_LOWBOX;
+    NewToken->TokenFlags &= ~TOKEN_NOT_LOW;
+    NewToken->ParentTokenId = Token->TokenId;
+
+    if (NewToken->IntegrityLevelIndex != 0)
+    {
+        Integrity = &NewToken->UserAndGroups[NewToken->IntegrityLevelIndex];
+        if (*RtlSubAuthoritySid(Integrity->Sid, 0) > SECURITY_MANDATORY_LOW_RID)
+            RtlCopySid(RtlLengthSid(Integrity->Sid), Integrity->Sid, SeLowMandatorySid);
+    }
+    ExAllocateLocallyUniqueId(&NewToken->ModifiedId);
+
+    Status = ObInsertObject(NewToken,
+                            NULL,
+                            DesiredAccess,
+                            0,
+                            NULL,
+                            &hToken);
+    if (!NT_SUCCESS(Status))
+    {
+        NewToken = NULL;
+        goto Quit;
+    }
+    SepSetTokenObjectSecurity(NewToken);
+    NewToken = NULL;
+
+    _SEH2_TRY
+    {
+        *TokenHandle = hToken;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+Quit:
+    if (NewToken) ObDereferenceObject(NewToken);
+    if (LowBox) SepFreeLowBoxInfo(LowBox);
+    if (Token) ObDereferenceObject(Token);
+    if (CapturedQos) SepReleaseSecurityQualityOfService(CapturedQos, PreviousMode, FALSE);
+    if (CapturedCapabilities) SeReleaseSidAndAttributesArray(CapturedCapabilities, PreviousMode, TRUE);
+    if (CapturedPackageSid) SepReleaseSid(CapturedPackageSid, PreviousMode, TRUE);
+    if (CapturedHandles && PreviousMode != KernelMode) ExFreePoolWithTag(CapturedHandles, TAG_SE_LOWBOX);
+    return Status;
+}

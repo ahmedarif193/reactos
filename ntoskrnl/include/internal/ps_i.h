@@ -21,7 +21,9 @@ typedef struct _PSP_MITIGATION_POLICY_INFORMATION
 
 #define PSP_STRICT_HANDLE_CHECK_POLICY 3
 #define PSP_DYNAMIC_CODE_POLICY 2
+#define PSP_SYSTEM_CALL_DISABLE_POLICY 4
 #define PSP_SIGNATURE_POLICY 8
+#define PSP_CHILD_PROCESS_POLICY 13
 
 //
 // Process Information Classes
@@ -715,7 +717,7 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     (
         GROUP_AFFINITY,
         ULONG,
-        ICIF_QUERY
+        ICIF_QUERY | ICIF_SET
     ),
     /* ThreadUmsInformation */
     IQS_NONE,

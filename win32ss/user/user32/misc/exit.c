@@ -194,6 +194,12 @@ ExitWindowsEx(UINT uFlags,
      * 2- Call SrvRecordShutdownReason.
      */
 
+    if (NtUserCallOneParam(JOB_OBJECT_UILIMIT_EXITWINDOWS, ONEPARAM_ROUTINE_ISJOBUILIMITED))
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+
     return ExitWindowsWorker(uFlags, dwReserved, FALSE);
 
     /* FIXME: Call SrvRecordShutdownReason if we failed */

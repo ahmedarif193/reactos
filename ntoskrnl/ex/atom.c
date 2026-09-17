@@ -23,6 +23,7 @@
  * -Gunnar
  */
 PRTL_ATOM_TABLE GlobalAtomTable;
+PKWIN32_GLOBALATOMTABLE_CALLOUT ExpGlobalAtomTableCallout = NULL;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -42,6 +43,13 @@ NTAPI
 ExpGetGlobalAtomTable(VOID)
 {
     NTSTATUS Status;
+    PRTL_ATOM_TABLE JobTable;
+
+    if (ExpGlobalAtomTableCallout)
+    {
+        JobTable = ExpGlobalAtomTableCallout();
+        if (JobTable) return JobTable;
+    }
 
     /* Return it if we have one */
     if (GlobalAtomTable) return GlobalAtomTable;
