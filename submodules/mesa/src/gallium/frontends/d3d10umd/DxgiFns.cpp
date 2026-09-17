@@ -40,6 +40,12 @@
 
 #include "util/format/u_format.h"
 
+EXTERN_C bool
+d3d10_rotate_resource_identities(struct pipe_context *pipe,
+                                 struct pipe_resource *const *resources,
+                                 void *const *runtime_resources,
+                                 unsigned count);
+
 
 /*
  * ----------------------------------------------------------------------
@@ -184,8 +190,7 @@ _QueryResourceResidency( DXGI_DDI_ARG_QUERYRESOURCERESIDENCY *QueryResourceResid
  *
  * _RotateResourceIdentities --
  *
- *    Rotate a list of resources by recreating their views with
- *    the updated rotations.
+ *    Rotate the kernel and hardware identities of a list of resources.
  *
  * ----------------------------------------------------------------------
  */
@@ -195,67 +200,57 @@ _RotateResourceIdentities( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResour
 {
    LOG_ENTRYPOINT();
 
-   if (RotateResourceIdentities->Resources <= 1) {
-      return S_OK;
-   }
+   if (!RotateResourceIdentities ||
+       !RotateResourceIdentities->hDevice ||
+       !RotateResourceIdentities->pResources ||
+       RotateResourceIdentities->Resources < 2 ||
+       RotateResourceIdentities->Resources > 16)
+      return E_INVALIDARG;
 
    struct pipe_context *pipe = CastPipeDevice(RotateResourceIdentities->hDevice);
-   struct pipe_screen *screen = pipe->screen;
+   if (!pipe)
+      return E_INVALIDARG;
 
-   struct pipe_resource *resource0 = CastPipeResource(RotateResourceIdentities->pResources[0]);
+   Resource *resources[16];
+   struct pipe_resource *pipe_resources[16];
+   void *runtime_resources[16];
 
-   assert(resource0);
-   LOG_UNSUPPORTED(resource0->last_level);
-
-   /*
-    * XXX: Copying is not very efficient, but it is much simpler than the
-    * alternative of recreating all views.
-    */
-
-   struct pipe_resource *temp_resource;
-   temp_resource = screen->resource_create(screen, resource0);
-   assert(temp_resource);
-   if (!temp_resource) {
-      return E_OUTOFMEMORY;
+   for (UINT i = 0; i < RotateResourceIdentities->Resources; ++i) {
+      resources[i] = CastResource(RotateResourceIdentities->pResources[i]);
+      if (!resources[i] || !resources[i]->resource ||
+          !resources[i]->allocation || !resources[i]->runtime_resource)
+         return E_INVALIDARG;
+      for (UINT previous = 0; previous < i; ++previous) {
+         if (resources[previous] == resources[i] ||
+             resources[previous]->allocation == resources[i]->allocation ||
+             resources[previous]->runtime_resource ==
+                resources[i]->runtime_resource)
+            return E_INVALIDARG;
+      }
+      for (UINT subresource = 0;
+           resources[i]->transfers &&
+           subresource < resources[i]->NumSubResources;
+           ++subresource) {
+         if (resources[i]->transfers[subresource])
+            return DXGI_ERROR_INVALID_CALL;
+      }
+      pipe_resources[i] = resources[i]->resource;
+      runtime_resources[i] = resources[i]->runtime_resource;
    }
 
-   struct pipe_box src_box;
-   src_box.x = 0;
-   src_box.y = 0;
-   src_box.z = 0;
-   src_box.width  = resource0->width0;
-   src_box.height = resource0->height0;
-   src_box.depth  = resource0->depth0;
+   /* Windows requires X,Y,Z to become Y,Z,X while the RT handles remain
+    * fixed.  The target rotates the hardware backing in place so existing
+    * Gallium views continue to name their original resource objects. */
+   if (!d3d10_rotate_resource_identities(pipe, pipe_resources,
+                                         runtime_resources,
+                                         RotateResourceIdentities->Resources))
+      return DXGI_ERROR_UNSUPPORTED;
 
-   for (UINT i = 0; i < RotateResourceIdentities->Resources + 1; ++i) {
-      struct pipe_resource *src_resource;
-      struct pipe_resource *dst_resource;
-
-      if (i < RotateResourceIdentities->Resources) {
-         src_resource = CastPipeResource(RotateResourceIdentities->pResources[i]);
-      } else {
-         src_resource = temp_resource;
-      }
-
-      if (i > 0) {
-         dst_resource = CastPipeResource(RotateResourceIdentities->pResources[i - 1]);
-      } else {
-         dst_resource = temp_resource;
-      }
-
-      assert(dst_resource);
-      assert(src_resource);
-
-      pipe->resource_copy_region(pipe,
-                                 dst_resource,
-                                 0, // dst_level
-                                 0, 0, 0, // dst_x,y,z
-                                 src_resource,
-                                 0, // src_level
-                                 &src_box);
-   }
-
-   pipe_resource_reference(&temp_resource, NULL);
+   D3DKMT_HANDLE first_allocation = resources[0]->allocation;
+   for (UINT i = 0; i + 1 < RotateResourceIdentities->Resources; ++i)
+      resources[i]->allocation = resources[i + 1]->allocation;
+   resources[RotateResourceIdentities->Resources - 1]->allocation =
+      first_allocation;
 
    return S_OK;
 }
