@@ -13,6 +13,7 @@
 #include "windef.h"
 #include "winbase.h"
 #include "winreg.h"
+#include "sddl.h"
 #include "objbase.h"
 #include "audioclient.h"
 #include "audiopolicy.h"
@@ -114,17 +115,32 @@ static void unlock_registry(void)
 static BOOL WINAPI initialize_registry(INIT_ONCE *once, void *parameter,
                                        void **context)
 {
+    static const WCHAR registry_sddl[] =
+        L"D:(A;;GA;;;WD)(A;;GA;;;RC)S:(ML;;NW;;;LW)";
+    PSECURITY_DESCRIPTOR security_descriptor = NULL;
+    SECURITY_ATTRIBUTES attributes;
     BOOL initialized = FALSE;
 
     UNREFERENCED_PARAMETER(once);
     UNREFERENCED_PARAMETER(parameter);
     UNREFERENCED_PARAMETER(context);
 
-    registry_mutex = CreateMutexW(NULL, FALSE, session_registry_mutex_name);
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            registry_sddl, SDDL_REVISION_1, &security_descriptor, NULL))
+        goto failed;
+
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = security_descriptor;
+    attributes.bInheritHandle = FALSE;
+
+    /* The audio service runs at low integrity.  Keep the registry local to
+     * the logon session, but make its mutex and mapping writable by both the
+     * sandboxed producer and the medium-integrity volume mixer. */
+    registry_mutex = CreateMutexW(&attributes, FALSE, session_registry_mutex_name);
     if (!registry_mutex)
         goto failed;
 
-    registry_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL,
+    registry_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, &attributes,
                                           PAGE_READWRITE, 0,
                                           sizeof(*registry),
                                           session_registry_name);
@@ -159,6 +175,8 @@ static BOOL WINAPI initialize_registry(INIT_ONCE *once, void *parameter,
     initialized = TRUE;
 
 failed:
+    if (security_descriptor)
+        LocalFree(security_descriptor);
     if (!initialized)
     {
         if (registry)

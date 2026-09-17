@@ -230,18 +230,6 @@ static BOOL open_wdmaud(void)
         goto done;
     }
 
-    {
-        ULONG status, problem;
-
-        if (CM_Get_DevNode_Status(&status, &problem, device.DevInst, 0) != CR_SUCCESS ||
-            !(status & DN_STARTED))
-        {
-            TRACE("WDMAUD interface is present but its device is not started.\n");
-            free(detail);
-            goto done;
-        }
-    }
-
     path = detail->DevicePath;
     if (path[0] == L'\\' && path[1] == L'?')
         path[1] = L'\\';

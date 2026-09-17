@@ -18,12 +18,13 @@ add_executable(mmdevapi_child mmdevapi_child.c ${SESSION_SOURCE})
 target_compile_definitions(mmdevapi_child PRIVATE _FORCENAMELESSUNION _FORCENAMELESSSTRUCT "CONST_VTABLE=")
 set_module_type(mmdevapi_child win32cui)
 target_link_libraries(mmdevapi_child uuid wine)
-add_importlibs(mmdevapi_child ole32 advapi32 msvcrt kernel32 ntdll)
+add_importlibs(mmdevapi_child ole32 setupapi advapi32 msvcrt kernel32 ntdll)
 add_dependencies(mmdevapi_child dxsdk)
 
 add_executable(mmdevapi_apitest
     deviceenum.c
     renderstream.c
+    sandboxaudio.c
     sessionapi.c
     sessioncrossproc.c
     sessionpublic.c

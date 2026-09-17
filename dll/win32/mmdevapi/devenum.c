@@ -217,46 +217,107 @@ BOOL get_device_name_from_guid( const GUID *guid, char **name, EDataFlow *flow )
     return FALSE;
 }
 
+static void hash_device_guid_bytes( ULONGLONG hashes[2], const void *data, SIZE_T size )
+{
+    const BYTE *bytes = data;
+
+    while (size--)
+    {
+        hashes[0] ^= *bytes;
+        hashes[0] *= 1099511628211ULL;
+        hashes[1] ^= *bytes++;
+        hashes[1] *= 14029467366897019727ULL;
+        hashes[1] ^= hashes[1] >> 29;
+    }
+}
+
+static void get_fallback_device_guid( EDataFlow flow, const char *dev_name, GUID *guid )
+{
+    ULONGLONG hashes[2] = {14695981039346656037ULL, 10723151780598845931ULL};
+
+    hash_device_guid_bytes( hashes, drvs.module_name,
+                            (wcslen( drvs.module_name ) + 1) * sizeof(WCHAR) );
+    hash_device_guid_bytes( hashes, &flow, sizeof(flow) );
+    hash_device_guid_bytes( hashes, dev_name, strlen( dev_name ) + 1 );
+    memcpy( guid, hashes, sizeof(*guid) );
+
+    /* Mark the stable, name-derived value as a custom UUID. */
+    guid->Data3 = (guid->Data3 & 0x0fff) | 0x8000;
+    guid->Data4[0] = (guid->Data4[0] & 0x3f) | 0x80;
+}
+
 static void get_device_guid( EDataFlow flow, const char *dev_name, GUID *guid )
 {
     WCHAR name[512];
-    DWORD type, size = sizeof(*guid);
-    HKEY key;
+    DWORD type, size;
+    HKEY key = NULL;
     LSTATUS status;
     int len;
 
+    /* Low-integrity audio clients may only read the endpoint registry.  Keep
+     * a process-independent identity even when no value can be persisted. */
+    get_fallback_device_guid( flow, dev_name, guid );
+
     len = swprintf( name, ARRAY_SIZE(name), L"Software\\Wine\\Drivers\\%s\\devices\\%u,",
                     drvs.module_name, flow == eCapture );
-    MultiByteToWideChar( CP_UNIXCP, 0, dev_name, -1, name + len, ARRAY_SIZE(name) - len );
+    if (len < 0 || len >= ARRAY_SIZE(name) ||
+        !MultiByteToWideChar( CP_UNIXCP, 0, dev_name, -1, name + len, ARRAY_SIZE(name) - len ))
+        goto done;
+
+    status = RegOpenKeyExW( HKEY_CURRENT_USER, name, 0,
+                            KEY_READ | KEY_WOW64_64KEY, &key );
+    if (!status)
+    {
+        size = sizeof(*guid);
+        status = RegQueryValueExW( key, L"guid", 0, &type, (BYTE *)guid, &size );
+        RegCloseKey( key );
+        key = NULL;
+        if (!status && type == REG_BINARY && size == sizeof(*guid))
+            goto done;
+
+        get_fallback_device_guid( flow, dev_name, guid );
+    }
+
     status = RegCreateKeyExW( HKEY_CURRENT_USER, name, 0, NULL, 0,
                               KEY_READ | KEY_WRITE | KEY_WOW64_64KEY, NULL, &key, NULL);
-    if (status)
+    if (!status)
     {
-        ERR( "Failed to create key %s: %lu\n", debugstr_w(name), status );
-        return;
+        GUID persistent_guid;
+
+        size = sizeof(persistent_guid);
+        status = RegQueryValueExW( key, L"guid", 0, &type, (BYTE *)&persistent_guid, &size );
+        if (!status && type == REG_BINARY && size == sizeof(persistent_guid))
+            *guid = persistent_guid;
+        else
+            RegSetValueExW( key, L"guid", 0, REG_BINARY, (BYTE *)guid, sizeof(*guid) );
+
+        RegCloseKey( key );
     }
-    status = RegQueryValueExW( key, L"guid", 0, &type, (BYTE *)guid, &size );
-    if (status != ERROR_SUCCESS || type != REG_BINARY || size != sizeof(*guid))
+    else if (status != ERROR_ACCESS_DENIED)
     {
-        CoCreateGuid( guid );
-        RegSetValueExW( key, L"guid", 0, REG_BINARY, (BYTE *)guid, sizeof(*guid) );
+        WARN( "Failed to open or create key %s: %lu\n", debugstr_w(name), status );
     }
-    RegCloseKey( key );
+
+done:
     if (!find_device_in_cache( guid )) add_device_to_cache( guid, dev_name, flow );
 }
 
-static HRESULT MMDevPropStore_OpenPropKey(const GUID *guid, DWORD flow, HKEY *propkey)
+static HRESULT MMDevPropStore_OpenPropKey(const GUID *guid, DWORD flow, REGSAM access, HKEY *propkey)
 {
     WCHAR buffer[39];
     LONG ret;
-    HKEY key;
+    HKEY key, root = flow == eRender ? key_render : key_capture;
+
+    if (!root)
+        return E_FAIL;
+
     StringFromGUID2(guid, buffer, 39);
-    if ((ret = RegOpenKeyExW(flow == eRender ? key_render : key_capture, buffer, 0, KEY_READ|KEY_WRITE|KEY_WOW64_64KEY, &key)) != ERROR_SUCCESS)
+    if ((ret = RegOpenKeyExW(root, buffer, 0, access | KEY_WOW64_64KEY, &key)) != ERROR_SUCCESS)
     {
         WARN("Opening key %s failed with %lu\n", debugstr_w(buffer), ret);
         return E_FAIL;
     }
-    ret = RegOpenKeyExW(key, L"Properties", 0, KEY_READ|KEY_WRITE|KEY_WOW64_64KEY, propkey);
+    ret = RegOpenKeyExW(key, L"Properties", 0, access | KEY_WOW64_64KEY, propkey);
     RegCloseKey(key);
     if (ret != ERROR_SUCCESS)
     {
@@ -275,7 +336,7 @@ static HRESULT MMDevice_GetPropValue(const GUID *devguid, DWORD flow, REFPROPERT
     HKEY regkey;
     LONG ret;
 
-    hr = MMDevPropStore_OpenPropKey(devguid, flow, &regkey);
+    hr = MMDevPropStore_OpenPropKey(devguid, flow, KEY_READ, &regkey);
     if (FAILED(hr))
         return hr;
     wsprintfW( buffer, propkey_formatW, id->Data1, id->Data2, id->Data3,
@@ -336,7 +397,7 @@ static HRESULT MMDevice_SetPropValue(const GUID *devguid, DWORD flow, REFPROPERT
     HKEY regkey;
     LONG ret;
 
-    hr = MMDevPropStore_OpenPropKey(devguid, flow, &regkey);
+    hr = MMDevPropStore_OpenPropKey(devguid, flow, KEY_READ | KEY_WRITE, &regkey);
     if (FAILED(hr))
         return hr;
     wsprintfW( buffer, propkey_formatW, id->Data1, id->Data2, id->Data3,
@@ -500,7 +561,9 @@ static MMDevice *MMDevice_Create(const WCHAR *name, GUID *id, EDataFlow flow, DW
     else
         root = key_capture;
 
-    if (RegCreateKeyExW(root, guidstr, 0, NULL, 0, KEY_WRITE|KEY_READ|KEY_WOW64_64KEY, NULL, &key, NULL) == ERROR_SUCCESS)
+    if (root && RegCreateKeyExW(root, guidstr, 0, NULL, 0,
+                               KEY_WRITE | KEY_READ | KEY_WOW64_64KEY,
+                               NULL, &key, NULL) == ERROR_SUCCESS)
     {
         HKEY keyprop;
         RegSetValueExW(key, L"DeviceState", 0, REG_DWORD, (const BYTE*)&state, sizeof(DWORD));
@@ -598,30 +661,48 @@ static MMDevice *MMDevice_Create(const WCHAR *name, GUID *id, EDataFlow flow, DW
     return cur;
 }
 
+static LONG open_audio_registry_key(HKEY parent, const WCHAR *name, HKEY *key)
+{
+    LONG ret;
+
+    *key = NULL;
+    ret = RegCreateKeyExW(parent, name, 0, NULL, 0,
+                          KEY_READ | KEY_WRITE | KEY_WOW64_64KEY,
+                          NULL, key, NULL);
+    if (ret != ERROR_SUCCESS)
+        ret = RegOpenKeyExW(parent, name, 0, KEY_READ | KEY_WOW64_64KEY, key);
+    return ret;
+}
+
 HRESULT load_devices_from_reg(void)
 {
     DWORD i = 0;
-    HKEY root, cur;
+    HKEY root = NULL, cur;
     LONG ret;
     DWORD curflow;
 
-    ret = RegCreateKeyExW(HKEY_LOCAL_MACHINE,
-            L"Software\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio", 0, NULL, 0,
-            KEY_WRITE|KEY_READ|KEY_WOW64_64KEY, NULL, &root, NULL);
+    key_capture = key_render = NULL;
+    ret = open_audio_registry_key(HKEY_LOCAL_MACHINE,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio", &root);
     if (ret == ERROR_SUCCESS)
-        ret = RegCreateKeyExW(root, L"Capture", 0, NULL, 0, KEY_READ|KEY_WRITE|KEY_WOW64_64KEY, NULL, &key_capture, NULL);
+        ret = open_audio_registry_key(root, L"Capture", &key_capture);
     if (ret == ERROR_SUCCESS)
-        ret = RegCreateKeyExW(root, L"Render", 0, NULL, 0, KEY_READ|KEY_WRITE|KEY_WOW64_64KEY, NULL, &key_render, NULL);
-    RegCloseKey(root);
-    cur = key_capture;
-    curflow = eCapture;
+        ret = open_audio_registry_key(root, L"Render", &key_render);
+    if (root)
+        RegCloseKey(root);
     if (ret != ERROR_SUCCESS)
     {
-        RegCloseKey(key_capture);
+        if (key_capture)
+            RegCloseKey(key_capture);
+        if (key_render)
+            RegCloseKey(key_render);
         key_render = key_capture = NULL;
-        WARN("Couldn't create key: %lu\n", ret);
+        WARN("Couldn't open MMDevice registry: %lu\n", ret);
         return E_FAIL;
     }
+
+    cur = key_capture;
+    curflow = eCapture;
 
     do {
         WCHAR guidvalue[39];
@@ -718,7 +799,8 @@ HRESULT load_driver_devices(EDataFlow flow)
         get_device_guid( flow, dev_name, &guid );
 
         dev = MMDevice_Create(name, &guid, flow, DEVICE_STATE_ACTIVE, params.default_idx == i);
-        set_format(dev);
+        if (dev)
+            set_format(dev);
     }
 
 end:
@@ -1129,8 +1211,10 @@ void MMDevEnum_Free(void)
 
     LIST_FOR_EACH_ENTRY_SAFE(device, next, &device_list, MMDevice, entry)
         MMDevice_Destroy(device);
-    RegCloseKey(key_render);
-    RegCloseKey(key_capture);
+    if (key_render)
+        RegCloseKey(key_render);
+    if (key_capture)
+        RegCloseKey(key_capture);
     LIST_FOR_EACH_ENTRY_SAFE(dev, dev_next, &devices_cache, struct device, entry)
         free( dev );
 }
@@ -1614,7 +1698,8 @@ static HRESULT WINAPI MMDevPropStore_GetCount(IPropertyStore *iface, DWORD *npro
     TRACE("(%p)->(%p)\n", iface, nprops);
     if (!nprops)
         return E_POINTER;
-    hr = MMDevPropStore_OpenPropKey(&This->parent->devguid, This->parent->flow, &propkey);
+    hr = MMDevPropStore_OpenPropKey(&This->parent->devguid, This->parent->flow,
+                                    KEY_READ, &propkey);
     if (FAILED(hr))
         return hr;
     *nprops = 0;
@@ -1642,7 +1727,8 @@ static HRESULT WINAPI MMDevPropStore_GetAt(IPropertyStore *iface, DWORD prop, PR
     if (!key)
         return E_POINTER;
 
-    hr = MMDevPropStore_OpenPropKey(&This->parent->devguid, This->parent->flow, &propkey);
+    hr = MMDevPropStore_OpenPropKey(&This->parent->devguid, This->parent->flow,
+                                    KEY_READ, &propkey);
     if (FAILED(hr))
         return hr;
 
