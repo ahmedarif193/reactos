@@ -1132,6 +1132,20 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
 
         struct v3d_context *v3d = v3d_context(pctx);
 
+        if (indirect && indirect->buffer && v3d->prog.bind_vs &&
+            BITSET_TEST(v3d->prog.bind_vs->base.ir.nir->info.system_values_read,
+                        SYSTEM_VALUE_VERTEX_ID_ZERO_BASE)) {
+                util_draw_indirect(pctx, info, drawid_offset, indirect);
+                return;
+        }
+
+        uint32_t first_vertex = draws ?
+                (info->index_size ? draws[0].index_bias : draws[0].start) : 0;
+        if (v3d->first_vertex != first_vertex) {
+                v3d->first_vertex = first_vertex;
+                v3d->dirty |= V3D_DIRTY_FIRST_VERTEX;
+        }
+
         if (!indirect &&
             !info->primitive_restart &&
             !u_trim_pipe_prim(info->mode, (unsigned*)&draws[0].count))

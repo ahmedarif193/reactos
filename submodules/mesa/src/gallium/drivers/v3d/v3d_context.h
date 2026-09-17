@@ -66,6 +66,7 @@ void v3d_job_add_bo(struct v3d_job *job, struct v3d_bo *bo);
 #define V3D_DIRTY_GEOMTEX             (1ull <<  5)
 #define V3D_DIRTY_FRAGTEX             (1ull <<  6)
 #define V3D_DIRTY_RASTERIZER_SCISSOR  (1ull <<  7)
+#define V3D_DIRTY_FIRST_VERTEX        (1ull <<  8)
 
 #define V3D_DIRTY_SHADER_IMAGE        (1ull <<  9)
 #define V3D_DIRTY_BLEND_COLOR         (1ull << 10)
@@ -617,6 +618,7 @@ struct v3d_context {
         struct v3d_compiler_state *compiler_state;
 
         uint8_t prim_mode;
+        uint32_t first_vertex;
 
         /** Maximum index buffer valid for the current shader_rec. */
         uint32_t max_index;
