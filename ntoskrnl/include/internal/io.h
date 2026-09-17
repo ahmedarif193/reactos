@@ -1375,6 +1375,17 @@ IopGetSetSecurityObject(
 
 NTSTATUS
 NTAPI
+IopSetDeviceSecurityDescriptors(
+    IN PDEVICE_OBJECT UpperDeviceObject,
+    IN PDEVICE_OBJECT PhysicalDeviceObject,
+    IN PSECURITY_INFORMATION SecurityInformation,
+    IN PSECURITY_DESCRIPTOR SecurityDescriptor,
+    IN POOL_TYPE PoolType,
+    IN PGENERIC_MAPPING GenericMapping
+);
+
+NTSTATUS
+NTAPI
 IopQueryName(
     IN PVOID ObjectBody,
     IN BOOLEAN HasName,

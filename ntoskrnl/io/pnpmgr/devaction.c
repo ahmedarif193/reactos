@@ -125,6 +125,137 @@ IopSetServiceEnumData(
     _In_ HANDLE InstanceHandle);
 
 static
+NTSTATUS
+PiApplyDeviceSecurity(
+    _In_ PDEVICE_NODE DeviceNode,
+    _In_ HANDLE InstanceKey,
+    _In_opt_ HANDLE ClassKey)
+{
+    PKEY_VALUE_FULL_INFORMATION Information = NULL;
+    PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
+    PACL Sacl;
+    PACE_HEADER Ace;
+    PWSTR SecurityString = NULL;
+    PDEVICE_OBJECT UpperDeviceObject;
+    HANDLE HardwareKey = NULL;
+    UNICODE_STRING HardwareKeyName = RTL_CONSTANT_STRING(L"Device Parameters");
+    SECURITY_INFORMATION SecurityInformation = DACL_SECURITY_INFORMATION;
+    BOOLEAN SaclPresent;
+    BOOLEAN SaclDefaulted;
+    ULONG AceIndex;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Status = IopOpenRegistryKeyEx(&HardwareKey,
+                                  InstanceKey,
+                                  &HardwareKeyName,
+                                  KEY_QUERY_VALUE);
+    if (NT_SUCCESS(Status))
+    {
+        Status = IopGetRegistryValue(HardwareKey, L"Security", &Information);
+        ZwClose(HardwareKey);
+    }
+
+    if (!NT_SUCCESS(Status))
+        Status = IopGetRegistryValue(InstanceKey, L"Security", &Information);
+    if (!NT_SUCCESS(Status) && ClassKey != NULL)
+        Status = IopGetRegistryValue(ClassKey, L"Security", &Information);
+
+    if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+        Status == STATUS_OBJECT_PATH_NOT_FOUND)
+    {
+        return STATUS_SUCCESS;
+    }
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Information->Type == REG_SZ)
+    {
+        if (Information->DataLength < sizeof(WCHAR) ||
+            (Information->DataLength % sizeof(WCHAR)) != 0)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+
+        SecurityString = ExAllocatePoolZero(PagedPool,
+                                             Information->DataLength + sizeof(WCHAR),
+                                             TAG_PNP_DEVACTION);
+        if (SecurityString == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+
+        RtlCopyMemory(SecurityString,
+                      (PUCHAR)Information + Information->DataOffset,
+                      Information->DataLength);
+        Status = SeConvertStringSecurityDescriptorToSecurityDescriptor(
+                     SecurityString, 1, &SecurityDescriptor, NULL);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+    else if (Information->Type == REG_BINARY)
+    {
+        SecurityDescriptor = (PSECURITY_DESCRIPTOR)
+            ((PUCHAR)Information + Information->DataOffset);
+        if (!RtlValidRelativeSecurityDescriptor(SecurityDescriptor,
+                                                Information->DataLength,
+                                                DACL_SECURITY_INFORMATION))
+        {
+            Status = STATUS_INVALID_SECURITY_DESCR;
+            goto Cleanup;
+        }
+    }
+    else
+    {
+        Status = STATUS_OBJECT_TYPE_MISMATCH;
+        goto Cleanup;
+    }
+
+    Status = RtlGetSaclSecurityDescriptor(SecurityDescriptor,
+                                          &SaclPresent,
+                                          &Sacl,
+                                          &SaclDefaulted);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (SaclPresent && Sacl != NULL)
+    {
+        for (AceIndex = 0; AceIndex < Sacl->AceCount; AceIndex++)
+        {
+            Status = RtlGetAce(Sacl, AceIndex, (PVOID *)&Ace);
+            if (!NT_SUCCESS(Status))
+                goto Cleanup;
+
+            if (Ace->AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+            {
+                SecurityInformation |= LABEL_SECURITY_INFORMATION;
+                break;
+            }
+        }
+    }
+
+    UpperDeviceObject = IoGetAttachedDeviceReference(DeviceNode->PhysicalDeviceObject);
+    Status = IopSetDeviceSecurityDescriptors(UpperDeviceObject,
+                                             DeviceNode->PhysicalDeviceObject,
+                                             &SecurityInformation,
+                                             SecurityDescriptor,
+                                             PagedPool,
+                                             &IopFileMapping);
+    ObDereferenceObject(UpperDeviceObject);
+
+Cleanup:
+    if (SecurityDescriptor != NULL && Information->Type == REG_SZ)
+        ExFreePool(SecurityDescriptor);
+    if (SecurityString != NULL)
+        ExFreePoolWithTag(SecurityString, TAG_PNP_DEVACTION);
+    ExFreePool(Information);
+    return Status;
+}
+
+static
 BOOLEAN
 IopValidateID(
     _In_ PWCHAR Id,
@@ -1018,6 +1149,21 @@ PiCallDriverAddDevice(
             DPRINT1("DO_DEVICE_INITIALIZING is not cleared on a device 0x%p!\n", attachedDO);
         }
 #endif
+    }
+
+    if (DeviceNode->State == DeviceNodeDriversAdded)
+    {
+        NTSTATUS SecurityStatus;
+
+        SecurityStatus = PiApplyDeviceSecurity(DeviceNode, SubKey, ClassKey);
+        if (!NT_SUCCESS(SecurityStatus))
+        {
+            DPRINT1("Failed to apply device security for %wZ (status %lx)\n",
+                    &DeviceNode->InstancePath, SecurityStatus);
+            PiSetDevNodeProblem(DeviceNode, CM_PROB_REGISTRY);
+            PiSetDevNodeState(DeviceNode, DeviceNodeAwaitingQueuedRemoval);
+            Status = SecurityStatus;
+        }
     }
 
 Cleanup:
