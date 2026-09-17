@@ -34,6 +34,7 @@
  */
 
 #include "v3d_query.h"
+#include "util/os_time.h"
 
 struct v3d_query_pipe
 {
@@ -44,6 +45,8 @@ struct v3d_query_pipe
 
         uint32_t start, end;
         uint32_t result;
+
+        struct pipe_fence_handle *fence;
 
         /* these fields are used for timestamp queries */
         uint64_t time_result;
@@ -59,6 +62,8 @@ v3d_destroy_query_pipe(struct v3d_context *v3d, struct v3d_query *query)
                drmSyncobjDestroy(v3d->fd, pquery->sync[0]);
         if (pquery->sync[1])
                drmSyncobjDestroy(v3d->fd, pquery->sync[1]);
+        v3d->base.screen->fence_reference(v3d->base.screen,
+                                          &pquery->fence, NULL);
         v3d_bo_unreference(&pquery->bo);
         free(pquery);
 }
@@ -69,6 +74,8 @@ v3d_begin_query_pipe(struct v3d_context *v3d, struct v3d_query *query)
         struct v3d_query_pipe *pquery = (struct v3d_query_pipe *)query;
 
         switch (pquery->type) {
+        case PIPE_QUERY_GPU_FINISHED:
+                break;
         case PIPE_QUERY_PRIMITIVES_GENERATED:
                 /* If we are using PRIMITIVE_COUNTS_FEEDBACK to retrieve
                  * primitive counts from the GPU (which we need when a GS
@@ -134,6 +141,13 @@ v3d_end_query_pipe(struct v3d_context *v3d, struct v3d_query *query)
         struct v3d_query_pipe *pquery = (struct v3d_query_pipe *)query;
 
         switch (pquery->type) {
+        case PIPE_QUERY_GPU_FINISHED:
+                /* Snapshot all work submitted before End.  The V3D flush
+                 * implementation returns a clone of the context timeline
+                 * sync object, so later submissions cannot move this query's
+                 * completion point. */
+                v3d->base.flush(&v3d->base, &pquery->fence, 0);
+                return pquery->fence != NULL;
         case PIPE_QUERY_PRIMITIVES_GENERATED:
                 /* If we are using PRIMITIVE_COUNTS_FEEDBACK to retrieve
                  * primitive counts from the GPU (which we need when a GS
@@ -195,6 +209,15 @@ v3d_get_query_result_pipe(struct v3d_context *v3d, struct v3d_query *query,
                           bool wait, union pipe_query_result *vresult)
 {
         struct v3d_query_pipe *pquery = (struct v3d_query_pipe *)query;
+
+        if (pquery->type == PIPE_QUERY_GPU_FINISHED) {
+                if (!pquery->fence)
+                        return false;
+                vresult->b = v3d->base.screen->fence_finish(
+                        v3d->base.screen, &v3d->base, pquery->fence,
+                        wait ? OS_TIMEOUT_INFINITE : 0);
+                return vresult->b;
+        }
 
         if (pquery->bo) {
                 /* For timestamp & time elapsed queries we already flush
