@@ -668,7 +668,8 @@ DllMain(
             if (ghImm32)
                 FreeLibrary(ghImm32);
 
-            Cleanup();
+            if (!gfWin32kLockdown)
+                Cleanup();
             break;
         }
     }
