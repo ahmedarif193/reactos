@@ -221,6 +221,10 @@ CRpi5HdmiAdapter::CRpi5HdmiAdapter()
       m_AudioClockOwned(FALSE),
       m_InterruptSync(NULL),
       m_PendingInterrupts(0),
+      m_HotPlugDpcPending(0),
+      m_SinkConnected(0),
+      m_Shutdown(0),
+      m_JackPortEvents(NULL),
       m_Running(0),
       m_StreamOpen(0),
       m_Mute(FALSE),
@@ -238,6 +242,9 @@ CRpi5HdmiAdapter::CRpi5HdmiAdapter()
       m_PendingConversionPeriod(-1),
       m_NotificationEvent(NULL)
 {
+    for (ULONG Index = 0; Index < RPI5HDMI_HOTPLUG_INTERRUPT_COUNT; ++Index)
+        m_HotPlugInterruptSync[Index] = NULL;
+
     for (ULONG Channel = 0; Channel < RPI5HDMI_CHANNELS; ++Channel)
     {
         m_VolumeLevel[Channel] = RPI5HDMI_VOLUME_MAXIMUM;
@@ -247,18 +254,13 @@ CRpi5HdmiAdapter::CRpi5HdmiAdapter()
     m_ShadowPhysicalAddress.QuadPart = 0;
     m_ControlBlocksPhysicalAddress.QuadPart = 0;
     KeInitializeDpc(&m_Dpc, DpcRoutine, this);
+    KeInitializeDpc(&m_HotPlugDpc, HotPlugDpcRoutine, this);
     KeInitializeSpinLock(&m_EventLock);
 }
 
 CRpi5HdmiAdapter::~CRpi5HdmiAdapter()
 {
-    Stop();
-    if (m_InterruptSync)
-    {
-        m_InterruptSync->Disconnect();
-        m_InterruptSync->Release();
-        m_InterruptSync = NULL;
-    }
+    Shutdown();
     UnmapResources();
 }
 
@@ -291,6 +293,8 @@ CRpi5HdmiAdapter::Initialize(PDEVICE_OBJECT DeviceObject, PRESOURCELIST Resource
     if (!NT_SUCCESS(Status))
         return Status;
 
+    InterlockedExchange(&m_SinkConnected, IsSinkConnected());
+
     Status = PcNewInterruptSync(&m_InterruptSync, NULL, ResourceList, 0, InterruptSyncModeNormal);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -299,7 +303,34 @@ CRpi5HdmiAdapter::Initialize(PDEVICE_OBJECT DeviceObject, PRESOURCELIST Resource
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return m_InterruptSync->Connect();
+    Status = m_InterruptSync->Connect();
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    for (ULONG Index = 0; Index < RPI5HDMI_HOTPLUG_INTERRUPT_COUNT; ++Index)
+    {
+        Status = PcNewInterruptSync(
+            &m_HotPlugInterruptSync[Index],
+            NULL,
+            ResourceList,
+            Index + 1,
+            InterruptSyncModeNormal);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        Status = m_HotPlugInterruptSync[Index]->RegisterServiceRoutine(
+            HotPlugInterruptService,
+            this,
+            FALSE);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        Status = m_HotPlugInterruptSync[Index]->Connect();
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 /* Single definition of the register block order shared by map and unmap. */
@@ -335,7 +366,8 @@ CRpi5HdmiAdapter::MapResources(PRESOURCELIST ResourceList)
     CollectRegisterBlocks(Mappings, Lengths);
 
     if (ResourceList->NumberOfMemories() < RTL_NUMBER_OF(Mappings) ||
-        ResourceList->NumberOfInterrupts() < 1 ||
+        ResourceList->NumberOfInterrupts() <
+            1 + RPI5HDMI_HOTPLUG_INTERRUPT_COUNT ||
         ResourceList->NumberOfDmas() != 1)
     {
         return STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -1026,6 +1058,71 @@ CRpi5HdmiAdapter::Stop()
     DisableAudioClock();
 }
 
+VOID
+CRpi5HdmiAdapter::Shutdown()
+{
+    PPORTEVENTS PortEvents;
+
+    if (InterlockedExchange(&m_Shutdown, 1))
+        return;
+
+    Stop();
+
+    for (ULONG Index = 0; Index < RPI5HDMI_HOTPLUG_INTERRUPT_COUNT; ++Index)
+    {
+        if (m_HotPlugInterruptSync[Index])
+            m_HotPlugInterruptSync[Index]->Disconnect();
+    }
+
+    KeRemoveQueueDpc(&m_HotPlugDpc);
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+        KeFlushQueuedDpcs();
+    InterlockedExchange(&m_HotPlugDpcPending, 0);
+
+    PortEvents = static_cast<PPORTEVENTS>(
+        InterlockedExchangePointer(&m_JackPortEvents, NULL));
+    if (PortEvents)
+        PortEvents->Release();
+
+    for (ULONG Index = 0; Index < RPI5HDMI_HOTPLUG_INTERRUPT_COUNT; ++Index)
+    {
+        if (m_HotPlugInterruptSync[Index])
+        {
+            m_HotPlugInterruptSync[Index]->Release();
+            m_HotPlugInterruptSync[Index] = NULL;
+        }
+    }
+
+    if (m_InterruptSync)
+    {
+        m_InterruptSync->Disconnect();
+        m_InterruptSync->Release();
+        m_InterruptSync = NULL;
+    }
+}
+
+NTSTATUS
+CRpi5HdmiAdapter::RegisterJackEventPort(PPORTEVENTS PortEvents)
+{
+    PVOID Previous;
+
+    if (!PortEvents || InterlockedCompareExchange(&m_Shutdown, 0, 0))
+        return STATUS_INVALID_DEVICE_STATE;
+
+    PortEvents->AddRef();
+    Previous = InterlockedCompareExchangePointer(
+        &m_JackPortEvents,
+        PortEvents,
+        NULL);
+    if (Previous)
+    {
+        PortEvents->Release();
+        return Previous == PortEvents ? STATUS_SUCCESS : STATUS_DEVICE_BUSY;
+    }
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 CRpi5HdmiAdapter::InterruptService(PINTERRUPTSYNC InterruptSync, PVOID Context)
@@ -1053,6 +1150,24 @@ CRpi5HdmiAdapter::InterruptService(PINTERRUPTSYNC InterruptSync, PVOID Context)
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+NTAPI
+CRpi5HdmiAdapter::HotPlugInterruptService(
+    PINTERRUPTSYNC InterruptSync,
+    PVOID Context)
+{
+    CRpi5HdmiAdapter *Adapter = static_cast<CRpi5HdmiAdapter *>(Context);
+    UNREFERENCED_PARAMETER(InterruptSync);
+
+    if (!InterlockedCompareExchange(&Adapter->m_Shutdown, 0, 0) &&
+        !InterlockedExchange(&Adapter->m_HotPlugDpcPending, 1))
+    {
+        KeInsertQueueDpc(&Adapter->m_HotPlugDpc, NULL, NULL);
+    }
+
+    return STATUS_SUCCESS;
+}
+
 VOID
 NTAPI
 CRpi5HdmiAdapter::DpcRoutine(
@@ -1066,6 +1181,48 @@ CRpi5HdmiAdapter::DpcRoutine(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
     Adapter->ProcessInterrupts();
+}
+
+VOID
+NTAPI
+CRpi5HdmiAdapter::HotPlugDpcRoutine(
+    PRKDPC Dpc,
+    PVOID DeferredContext,
+    PVOID SystemArgument1,
+    PVOID SystemArgument2)
+{
+    CRpi5HdmiAdapter *Adapter = static_cast<CRpi5HdmiAdapter *>(DeferredContext);
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    InterlockedExchange(&Adapter->m_HotPlugDpcPending, 0);
+    if (!InterlockedCompareExchange(&Adapter->m_Shutdown, 0, 0))
+        Adapter->ProcessHotPlugInterrupt();
+}
+
+VOID
+CRpi5HdmiAdapter::ProcessHotPlugInterrupt()
+{
+    LONG Connected = IsSinkConnected();
+    LONG Previous = InterlockedExchange(&m_SinkConnected, Connected);
+    PPORTEVENTS PortEvents;
+
+    if (Previous == Connected)
+        return;
+
+    PortEvents = static_cast<PPORTEVENTS>(
+        InterlockedCompareExchangePointer(&m_JackPortEvents, NULL, NULL));
+    if (PortEvents)
+    {
+        PortEvents->GenerateEventList(
+            const_cast<GUID *>(&KSEVENTSETID_PinCapsChange),
+            KSEVENT_PINCAPS_JACKINFOCHANGE,
+            TRUE,
+            1,
+            FALSE,
+            MAXULONG);
+    }
 }
 
 VOID
