@@ -126,15 +126,23 @@ WSAAPI
 WsProcStartup(VOID)
 {
     INT ErrorCode = WSAEFAULT;
+    PWSPROCESS Process;
 
     /* Create a new process */
-    CurrentWsProcess = WsProcAllocate();
+    Process = WsProcAllocate();
 
     /* Initialize it */
-    if (CurrentWsProcess)
+    if (Process)
     {
+        CurrentWsProcess = Process;
+
         /* Initialize the process */
-        ErrorCode = WsProcInitialize(CurrentWsProcess);
+        ErrorCode = WsProcInitialize(Process);
+        if (ErrorCode != ERROR_SUCCESS)
+        {
+            WsProcDelete(Process);
+            CurrentWsProcess = NULL;
+        }
     }
     else
     {
