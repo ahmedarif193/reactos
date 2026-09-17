@@ -17,6 +17,7 @@ set(ROSCONFIG_PROFILE_PACKAGES
     rpi3winsync
     rpiwav
     rpi5hdmi
+    brcml2intc
     rpi5vc4ogl)
 
 if(MESA_GALLIUM_FROM_SOURCE)
