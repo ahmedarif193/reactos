@@ -4358,6 +4358,47 @@ DxgkpDrainPeriodicInterruptHandoff(
 }
 
 /*
+ * Complete the runtime side of the NotifyInterrupt/NotifyDpc contract.
+ *
+ * A hardware ISR normally reaches this path through DxgkpAdapterDpcRoutine,
+ * but a miniport may also produce an interrupt notification from one of its
+ * own DPCs (for example, a timer-backed CRTC-vsync source) and finish it by
+ * calling DxgkCbNotifyDpc directly.  Both entry points must drain every kind
+ * of interrupt state published by DxgkCbNotifyInterrupt.  In particular,
+ * leaving CRTC_VSYNC pending strands synchronized presents in the present
+ * queue until its per-device queued-present limit is reached.
+ *
+ * All drains are safe to repeat: queue handoffs consume their entries and
+ * VsyncPending is claimed with an interlocked exchange.  This also makes the
+ * helper safe when a miniport calls DxgkCbNotifyDpc from inside its
+ * DxgkDdiDpcRoutine and the outer adapter DPC subsequently calls it again.
+ */
+static VOID
+DxgkpDrainDpcNotifications(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    ULONG VsyncMask;
+    ULONG SourceId;
+
+    VidSchNotifyDpc(Adapter);
+    DxgkpDrainPeriodicInterruptHandoff(Adapter);
+#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
+    DxgkpDrainMonitoredFenceInterruptHandoff(Adapter);
+#endif
+
+    /* A target bit maps one-to-one to the implemented source ordinal. */
+    VsyncMask = (ULONG)InterlockedExchange(&Adapter->VsyncPending, 0);
+    for (SourceId = 0; SourceId < 32; SourceId++)
+    {
+        if ((VsyncMask & (1UL << SourceId)) != 0)
+            DxgkpNotifyVSync(Adapter,
+                            (D3DDDI_VIDEO_PRESENT_SOURCE_ID)SourceId);
+    }
+
+    DxgkRetireCompletedDmaBuffers(Adapter);
+}
+
+/*
  * DxgkpAdapterDpcRoutine
  *
  * KDPC callback.  Invoked at DISPATCH_LEVEL by the I/O manager after the
@@ -4427,24 +4468,7 @@ DxgkpAdapterDpcRoutine(
                       Sequence);
     }
 
-    DxgkpDrainPeriodicInterruptHandoff(Adapter);
-#if (REACTOS_WDDM_TARGET_LEVEL >= 2200)
-    DxgkpDrainMonitoredFenceInterruptHandoff(Adapter);
-#endif
-
-    /* A target bit maps one-to-one to the implemented source ordinal. */
-    {
-        ULONG VsyncMask = (ULONG)InterlockedExchange(&Adapter->VsyncPending, 0);
-        ULONG SourceId;
-
-        for (SourceId = 0; SourceId < 32; SourceId++)
-        {
-            if ((VsyncMask & (1UL << SourceId)) != 0)
-                DxgkpNotifyVSync(Adapter, (D3DDDI_VIDEO_PRESENT_SOURCE_ID)SourceId);
-        }
-    }
-
-    DxgkRetireCompletedDmaBuffers(Adapter);
+    DxgkpDrainDpcNotifications(Adapter);
     DxgkpReleaseVidSchCallback(Adapter);
 }
 
@@ -7209,7 +7233,7 @@ DxgkCbNotifyDpc(
     if (!DxgkpAcquireVidSchCallback(Adapter))
         return;
 
-    VidSchNotifyDpc(Adapter);
+    DxgkpDrainDpcNotifications(Adapter);
     DxgkpReleaseVidSchCallback(Adapter);
 }
 
