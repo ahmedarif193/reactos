@@ -65,10 +65,12 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
 
    if (device->pDXGIBaseCallbacks &&
        device->pDXGIBaseCallbacks->pfnPresentCb &&
+       device->hContext &&
        pSrcResource->allocation) {
       DXGIDDICB_PRESENT present = {};
       present.hSrcAllocation = pSrcResource->allocation;
       present.pDXGIContext = pPresentData->pDXGIContext;
+      present.hContext = device->hContext;
 
       if (pPresentData->hDstResource) {
          Resource *pDstResource = CastResource(pPresentData->hDstResource);

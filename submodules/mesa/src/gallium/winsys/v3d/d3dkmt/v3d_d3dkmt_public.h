@@ -34,6 +34,9 @@ uint32_t
 v3d_d3dkmt_resource_allocation(struct pipe_screen *screen,
                                struct pipe_resource *resource);
 
+void *
+v3d_d3dkmt_present_context(struct pipe_screen *screen);
+
 bool
 v3d_d3dkmt_present_frontbuffer(struct pipe_screen *screen,
                                 struct pipe_context *ctx,

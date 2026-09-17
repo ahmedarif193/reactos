@@ -114,6 +114,7 @@ typedef struct _VC4KMT_BO_RECORD
     struct _VC4KMT_BO_RECORD *Next;
     D3DKMT_HANDLE hAllocation;
     HANDLE RuntimeResource;
+    UINT Size;
     BOOL Mapped;
 } VC4KMT_BO_RECORD;
 
@@ -200,7 +201,8 @@ static NTSTATUS
 Vc4KmtTrackBo(
     _Inout_ VC4KMT_DEVICE *Device,
     _In_ D3DKMT_HANDLE hAllocation,
-    _In_opt_ HANDLE RuntimeResource)
+    _In_opt_ HANDLE RuntimeResource,
+    _In_ UINT Size)
 {
     VC4KMT_BO_RECORD *Record;
 
@@ -210,6 +212,7 @@ Vc4KmtTrackBo(
 
     Record->hAllocation = hAllocation;
     Record->RuntimeResource = RuntimeResource;
+    Record->Size = Size;
     Record->Next = Device->BoList;
     Device->BoList = Record;
     return STATUS_SUCCESS;
@@ -709,6 +712,8 @@ vc4kmt_open_umd(
     if (Adapter == NULL || RuntimeDevice == NULL || RuntimeCallbacks == NULL ||
         DeviceOut == NULL ||
         RuntimeCallbacks->pfnEscapeCb == NULL ||
+        RuntimeCallbacks->pfnSubmitCommandCb == NULL ||
+        RuntimeCallbacks->pfnSignalSynchronizationObjectFromGpuCb == NULL ||
         RuntimeCallbacks->pfnCreatePagingQueueCb == NULL ||
         RuntimeCallbacks->pfnDestroyPagingQueueCb == NULL ||
         RuntimeCallbacks->pfnCreateContextVirtualCb == NULL ||
@@ -1015,7 +1020,7 @@ vc4kmt_bo_create_resource_ex(
         return STATUS_INVALID_DEVICE_STATE;
 
     Bo->Size = Size;
-    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, RuntimeResource);
+    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, RuntimeResource, Size);
     if (!NT_SUCCESS(Status))
         goto fail;
 
@@ -1346,7 +1351,7 @@ vc4kmt_bo_open_shared(
     }
 
     Bo->GpuVa = (ULONG)MapGpuVa.VirtualAddress;
-    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, NULL);
+    Status = Vc4KmtTrackBo(Device, Bo->hAllocation, NULL, Size);
 
 Cleanup:
     if (!NT_SUCCESS(Status) && *hResource != 0)
@@ -1605,6 +1610,17 @@ vc4kmt_primary_allocation(
     return Device != NULL ? Device->hPrimaryAllocation : 0;
 }
 
+HANDLE
+vc4kmt_context(
+    _In_ const VC4KMT_DEVICE *Device,
+    _In_ VC4KMT_ENGINE Engine)
+{
+    if (Device == NULL || (UINT)Engine >= RPI5VC4_GPU_NODE_COUNT)
+        return NULL;
+
+    return (HANDLE)(ULONG_PTR)Device->hContext[(UINT)Engine];
+}
+
 NTSTATUS
 vc4kmt_primary_present(
     _In_ VC4KMT_DEVICE *Device,
@@ -1625,6 +1641,7 @@ vc4kmt_primary_present(
     }
 
     RtlZeroMemory(&Present, sizeof(Present));
+    Present.hDevice = Device->hDevice;
     Present.hContext = Device->hContext[RPI5VC4_NODE_TFU];
     Present.hWindow = Window;
     Present.hSource = Device->hPrimaryAllocation;
@@ -1740,6 +1757,150 @@ vc4kmt_bo_destroy(
 }
 
 static NTSTATUS
+Vc4KmtCleanSubmitResources(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
+    _In_ UINT ResourceCount)
+{
+    UINT Index;
+
+    for (Index = 0; Index < ResourceCount; ++Index)
+    {
+        VC4KMT_BO_RECORD *Record;
+        D3DDDICB_INVALIDATECACHE Invalidate;
+        NTSTATUS Status;
+
+        if ((Resources[Index].Flags & ~VC4KMT_RESOURCE_CPU_DIRTY) != 0 ||
+            Resources[Index].hAllocation == 0)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if ((Resources[Index].Flags & VC4KMT_RESOURCE_CPU_DIRTY) == 0)
+            continue;
+
+        for (Record = Device->BoList; Record != NULL; Record = Record->Next)
+        {
+            if (Record->hAllocation == Resources[Index].hAllocation)
+                break;
+        }
+        if (Record == NULL || !Record->Mapped || Record->Size == 0)
+            return STATUS_INVALID_HANDLE;
+
+        RtlZeroMemory(&Invalidate, sizeof(Invalidate));
+        Invalidate.hAllocation = Record->hAllocation;
+        Invalidate.Length = Record->Size;
+        Status = Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnInvalidateCacheCb(
+                Device->RuntimeDevice, &Invalidate));
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+Vc4KmtSubmitVirtualPacket(
+    _In_ VC4KMT_DEVICE *Device,
+    _In_ const VC4KMT_DMA_PACKET *Packet,
+    _In_reads_opt_(ResourceCount) const VC4KMT_RESOURCE *Resources,
+    _In_ UINT ResourceCount,
+    _In_ UINT NodeOrdinal,
+    _Out_ VC4KMT_FENCE *FenceOut)
+{
+    D3DDDICB_SUBMITCOMMAND Submit;
+    D3DDDICB_SIGNALSYNCHRONIZATIONOBJECTFROMGPU Signal;
+    D3DGPU_VIRTUAL_ADDRESS CommandAddress;
+    UINT CommandLength;
+    UINT64 FenceValue;
+    NTSTATUS Status;
+    ULONG Tries;
+
+    if (Packet->Op == VC4KMT_DMA_OP_V3D_JOB)
+    {
+        if (Packet->V3dJob.BclEnd > Packet->V3dJob.BclStart)
+        {
+            CommandAddress = Packet->V3dJob.BclStart;
+            CommandLength = Packet->V3dJob.BclEnd - Packet->V3dJob.BclStart;
+        }
+        else if (Packet->V3dJob.RclEnd > Packet->V3dJob.RclStart)
+        {
+            CommandAddress = Packet->V3dJob.RclStart;
+            CommandLength = Packet->V3dJob.RclEnd - Packet->V3dJob.RclStart;
+        }
+        else
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+    else if (Packet->Op == VC4KMT_DMA_OP_TFU_JOB)
+    {
+        CommandAddress = Packet->TfuJob.Regs[1];
+        CommandLength = sizeof(ULONG);
+    }
+    else
+    {
+        /* CFG5 is the compute shader address with three flag bits. */
+        CommandAddress = Packet->CsdJob.Cfg[5] & ~7u;
+        CommandLength = sizeof(ULONG);
+    }
+    if (CommandAddress == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = Vc4KmtCleanSubmitResources(Device, Resources, ResourceCount);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Submit, sizeof(Submit));
+    Submit.Commands = CommandAddress;
+    Submit.CommandLength = CommandLength;
+    Submit.BroadcastContextCount = 1;
+    Submit.BroadcastContext[0] =
+        (HANDLE)(ULONG_PTR)Device->hContext[NodeOrdinal];
+    Submit.pPrivateDriverData = (VOID *)Packet;
+    Submit.PrivateDriverDataSize = sizeof(*Packet);
+
+    for (Tries = 0; Tries < 4000; ++Tries)
+    {
+        Status = Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnSubmitCommandCb(
+                Device->RuntimeDevice, &Submit));
+        if (Status != STATUS_DEVICE_BUSY)
+            break;
+        Sleep(1);
+    }
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Device->NextFenceValue[NodeOrdinal] == MAXULONGLONG)
+        return STATUS_INTEGER_OVERFLOW;
+    FenceValue = Device->NextFenceValue[NodeOrdinal] + 1;
+
+    RtlZeroMemory(&Signal, sizeof(Signal));
+    Signal.hContext = (HANDLE)(ULONG_PTR)Device->hContext[NodeOrdinal];
+    Signal.ObjectCount = 1;
+    Signal.ObjectHandleArray = &Device->hFence[NodeOrdinal];
+    Signal.MonitoredFenceValueArray = &FenceValue;
+    for (Tries = 0; Tries < 4000; ++Tries)
+    {
+        Status = Vc4KmtCallbackStatus(
+            Device->Callbacks.pfnSignalSynchronizationObjectFromGpuCb(
+                Device->RuntimeDevice, &Signal));
+        if (Status != STATUS_DEVICE_BUSY)
+            break;
+        Sleep(1);
+    }
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Device->NextFenceValue[NodeOrdinal] = FenceValue;
+    FenceOut->hSyncObject = Device->hFence[NodeOrdinal];
+    FenceOut->Value = FenceValue;
+    FenceOut->CpuValue = Device->FenceCpuValue[NodeOrdinal];
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
 Vc4KmtSubmitPacket(
     _In_ VC4KMT_DEVICE *Device,
     _In_ const VC4KMT_DMA_PACKET *Packet,
@@ -1794,6 +1955,13 @@ Vc4KmtSubmitPacket(
     if (Device->hContext[NodeOrdinal] == 0)
     {
         return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    if (Device->RuntimeCallbacks)
+    {
+        return Vc4KmtSubmitVirtualPacket(Device, Packet, Resources,
+                                         ResourceCount, NodeOrdinal,
+                                         FenceOut);
     }
 
     SubmitBytesSize = FixedBytes +

@@ -2688,7 +2688,8 @@ static HRESULT APIENTRY NativePresent(HANDLE runtime_device, DXGIDDICB_PRESENT *
         return context->result;
     }
     D3DKMT_PRESENT present = {};
-    present.hContext = callback->hContext ? static_cast<D3DKMT_HANDLE>(reinterpret_cast<ULONG_PTR>(callback->hContext)) : device->km_device;
+    present.hDevice = device->km_device;
+    present.hContext = callback->hContext ? static_cast<D3DKMT_HANDLE>(reinterpret_cast<ULONG_PTR>(callback->hContext)) : 0;
     present.hWindow = swapchain->window;
     present.hSource = callback->hSrcAllocation;
     present.hDestination = callback->hDstAllocation;

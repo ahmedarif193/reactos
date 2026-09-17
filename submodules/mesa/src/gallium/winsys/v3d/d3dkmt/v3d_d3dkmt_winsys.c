@@ -140,6 +140,7 @@ vc4kmt_status vc4kmt_primary_gpuva(VC4KMT_DEVICE *device,
                                    uint32_t width, uint32_t height,
                                    uint32_t pitch, uint32_t *gpu_va);
 uint32_t vc4kmt_primary_allocation(const VC4KMT_DEVICE *device);
+void *vc4kmt_context(const VC4KMT_DEVICE *device, uint32_t engine);
 vc4kmt_status vc4kmt_primary_present(VC4KMT_DEVICE *device, void *window);
 void vc4kmt_primary_invalidate(VC4KMT_DEVICE *device);
 vc4kmt_status vc4kmt_bo_destroy(VC4KMT_DEVICE *device, VC4KMT_BO *bo);
@@ -1049,6 +1050,20 @@ v3d_d3dkmt_resource_allocation(struct pipe_screen *screen,
       allocation = bo->kmt.allocation;
    mtx_unlock(&device->lock);
    return allocation;
+}
+
+void *
+v3d_d3dkmt_present_context(struct pipe_screen *screen)
+{
+   struct v3d_d3dkmt_device *device;
+
+   if (!screen)
+      return NULL;
+   device = v3d_d3dkmt_device_lookup(v3d_screen(screen)->fd);
+   if (!device)
+      return NULL;
+
+   return vc4kmt_context(device->kmt, VC4KMT_ENGINE_TFU);
 }
 
 void *

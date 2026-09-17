@@ -186,6 +186,11 @@ D3DKMT_HANDLE
 vc4kmt_primary_allocation(
     _In_ const VC4KMT_DEVICE *Device);
 
+HANDLE
+vc4kmt_context(
+    _In_ const VC4KMT_DEVICE *Device,
+    _In_ VC4KMT_ENGINE Engine);
+
 NTSTATUS
 vc4kmt_primary_present(
     _In_ VC4KMT_DEVICE *Device,

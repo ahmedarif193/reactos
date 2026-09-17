@@ -45,6 +45,9 @@ d3d10_create_resource(struct pipe_screen *screen,
                       const struct pipe_resource *templ,
                       void *runtime_resource, D3DKMT_HANDLE *allocation);
 
+extern void *
+d3d10_get_present_context(struct pipe_screen *screen);
+
 static HDC
 d3d10_gdi_acquire_hdc(void *winsys_drawable_handle) {
    D3DKMT_PRESENT *pPresentInfo = (D3DKMT_PRESENT *)winsys_drawable_handle;
@@ -105,6 +108,13 @@ d3d10_create_screen(void *adapter, void *device, const void *callbacks)
 no_screen:
    winsys->destroy(winsys);
 no_winsys:
+   return NULL;
+}
+
+void *
+d3d10_get_present_context(struct pipe_screen *screen)
+{
+   (void)screen;
    return NULL;
 }
 
