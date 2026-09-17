@@ -18,8 +18,10 @@
 #define HDMI_SCHEDULER_CONTROL 0x0e8
 #define HDMI_MISC_CONTROL 0x114
 #define HDMI_DEEP_COLOR_CONFIG_1 0x18c
+#define HDMI_HOTPLUG 0x1c8
 #define HDMI_SCHEDULER_CONTROL_HDMI_ACTIVE (1u << 1)
 #define HDMI_SCHEDULER_CONTROL_MODE_HDMI (1u << 0)
+#define HDMI_HOTPLUG_CONNECTED (1u << 0)
 #define HDMI_MISC_CONTROL_PIXEL_REP_MASK 0x0fu
 #define HDMI_DEEP_COLOR_CONFIG_1_COLOR_DEPTH_MASK 0x0fu
 #define HDMI_COLOR_DEPTH_24BPP 4u
@@ -939,8 +941,6 @@ NTSTATUS
 CRpi5HdmiAdapter::SetStreamState(KSSTATE State)
 {
     NTSTATUS Status;
-    ULONG SchedulerControl;
-    ULONG VideoControl;
 
     if (State != KSSTATE_RUN)
     {
@@ -952,17 +952,9 @@ CRpi5HdmiAdapter::SetStreamState(KSSTATE State)
     if (InterlockedCompareExchange(&m_Running, 1, 1))
         return STATUS_SUCCESS;
 
-    SchedulerControl = ReadRegister(m_CoreRegisters, HDMI_SCHEDULER_CONTROL);
-    VideoControl = ReadRegister(m_HdRegisters, HDMI0_VIDEO_CONTROL);
-    if ((SchedulerControl &
-         (HDMI_SCHEDULER_CONTROL_HDMI_ACTIVE |
-          HDMI_SCHEDULER_CONTROL_MODE_HDMI)) !=
-            (HDMI_SCHEDULER_CONTROL_HDMI_ACTIVE |
-             HDMI_SCHEDULER_CONTROL_MODE_HDMI) ||
-        !(VideoControl & HDMI_VIDEO_CONTROL_ENABLE))
-    {
+    if (!IsAudioPathReady())
         return STATUS_DEVICE_NOT_CONNECTED;
-    }
+
     m_Iec958FrameCounter = 0;
     for (ULONG Period = 0; Period < m_NotificationCount; ++Period)
         ConvertPeriod(Period);
@@ -983,6 +975,36 @@ CRpi5HdmiAdapter::SetStreamState(KSSTATE State)
         DisableAudioClock();
     }
     return Status;
+}
+
+BOOLEAN
+CRpi5HdmiAdapter::IsSinkConnected()
+{
+    if (!m_CoreRegisters)
+        return FALSE;
+
+    return (ReadRegister(m_CoreRegisters, HDMI_HOTPLUG) &
+            HDMI_HOTPLUG_CONNECTED) != 0;
+}
+
+BOOLEAN
+CRpi5HdmiAdapter::IsAudioPathReady()
+{
+    ULONG SchedulerControl;
+    ULONG VideoControl;
+
+    if (!IsSinkConnected() || !m_HdRegisters)
+        return FALSE;
+
+    SchedulerControl = ReadRegister(m_CoreRegisters, HDMI_SCHEDULER_CONTROL);
+    VideoControl = ReadRegister(m_HdRegisters, HDMI0_VIDEO_CONTROL);
+
+    return (SchedulerControl &
+            (HDMI_SCHEDULER_CONTROL_HDMI_ACTIVE |
+             HDMI_SCHEDULER_CONTROL_MODE_HDMI)) ==
+               (HDMI_SCHEDULER_CONTROL_HDMI_ACTIVE |
+                HDMI_SCHEDULER_CONTROL_MODE_HDMI) &&
+           (VideoControl & HDMI_VIDEO_CONTROL_ENABLE) != 0;
 }
 
 VOID
