@@ -10,6 +10,7 @@
 
 extern void func_deviceenum(void);
 extern void func_renderstream(void);
+extern void func_sandboxaudio(void);
 extern void func_sessionapi(void);
 extern void func_sessioncrossproc(void);
 extern void func_sessionregistry(void);
@@ -19,6 +20,7 @@ const struct test winetest_testlist[] =
 {
     { "deviceenum", func_deviceenum },
     { "renderstream", func_renderstream },
+    { "sandboxaudio", func_sandboxaudio },
     { "sessionapi", func_sessionapi },
     { "sessioncrossproc", func_sessioncrossproc },
     { "sessionregistry", func_sessionregistry },
