@@ -274,6 +274,7 @@ typedef struct _RPI5VC4_OPENALLOCATION
 
 typedef struct _RPI5VC4_DMA_PRIVATE_DATA
 {
+    ULONG            Magic;
     UINT             SegmentId;
     PHYSICAL_ADDRESS PhysicalAddress;
     PVOID            VirtualAddress;
@@ -282,6 +283,8 @@ typedef struct _RPI5VC4_DMA_PRIVATE_DATA
      * entry within the range, even when its submission offset is unaligned. */
     UCHAR PendingSubmit[sizeof(RPI5VC4_PENDING_SUBMIT) + TYPE_ALIGNMENT(RPI5VC4_PENDING_SUBMIT) - 1];
 } RPI5VC4_DMA_PRIVATE_DATA, *PRPI5VC4_DMA_PRIVATE_DATA;
+
+#define RPI5VC4_DMA_PRIVATE_DATA_MAGIC 0x35504456u /* 'VDP5' */
 
 struct _RPI5VC4_DEVICE_EXTENSION
 {
@@ -678,6 +681,10 @@ NTSTATUS APIENTRY Rpi5Vc4DdiPatch(
 NTSTATUS APIENTRY Rpi5Vc4DdiSubmitCommand(
     _In_ PVOID MiniportDeviceContext,
     _In_ CONST DXGKARG_SUBMITCOMMAND *SubmitCommand);
+
+NTSTATUS APIENTRY Rpi5Vc4DdiSubmitCommandVirtual(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ CONST DXGKARG_SUBMITCOMMANDVIRTUAL *SubmitCommand);
 
 NTSTATUS APIENTRY Rpi5Vc4DdiPreemptCommand(
     _In_ PVOID MiniportDeviceContext,

@@ -2491,6 +2491,25 @@ Rpi5Vc4DdiPresent(
         Present->pDmaBuffer = (PUCHAR)Present->pDmaBuffer + sizeof(*Tfu);
     }
 
+    if (Present->pDmaBufferPrivateData == NULL ||
+        Present->DmaBufferPrivateDataSize <
+            sizeof(RPI5VC4_DMA_PRIVATE_DATA))
+    {
+        return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    }
+    else
+    {
+        RPI5VC4_DMA_PRIVATE_DATA Data;
+
+        RtlZeroMemory(&Data, sizeof(Data));
+        Data.Magic = RPI5VC4_DMA_PRIVATE_DATA_MAGIC;
+        Data.SegmentId = Present->DmaBufferSegmentId;
+        Data.PhysicalAddress = Present->DmaBufferPhysicalAddress;
+        Data.VirtualAddress = Packet;
+        Data.Size = (ULONG)((PUCHAR)Present->pDmaBuffer - (PUCHAR)Packet);
+        RtlCopyMemory(Present->pDmaBufferPrivateData, &Data, sizeof(Data));
+    }
+
     Present->MultipassOffset = 0;
 
     return STATUS_SUCCESS;
@@ -2518,6 +2537,7 @@ Rpi5Vc4SetDmaPrivateData(
     /* Patch can be repeated or abandoned without SubmitCommand. Keep the CPU
      * mapping with the DMA buffer, not in an adapter-wide pending table. */
     RtlZeroMemory(&Data, sizeof(Data));
+    Data.Magic = RPI5VC4_DMA_PRIVATE_DATA_MAGIC;
     Data.SegmentId = Patch->DmaBufferSegmentId;
     Data.PhysicalAddress = Patch->DmaBufferPhysicalAddress;
     Data.VirtualAddress = Patch->pDmaBuffer;
@@ -2536,7 +2556,10 @@ Rpi5Vc4GetDmaBuffer(
         return NULL;
 
     RtlCopyMemory(&Data, (PUCHAR)SubmitCommand->pDmaBufferPrivateData + SubmitCommand->DmaBufferPrivateDataSubmissionStartOffset, sizeof(Data));
-    if (Data.SegmentId != SubmitCommand->DmaBufferSegmentId || Data.PhysicalAddress.QuadPart != SubmitCommand->DmaBufferPhysicalAddress.QuadPart || Data.Size != SubmitCommand->DmaBufferSize)
+    if (Data.Magic != RPI5VC4_DMA_PRIVATE_DATA_MAGIC ||
+        Data.SegmentId != SubmitCommand->DmaBufferSegmentId ||
+        Data.PhysicalAddress.QuadPart != SubmitCommand->DmaBufferPhysicalAddress.QuadPart ||
+        Data.Size != SubmitCommand->DmaBufferSize)
         return NULL;
     return Data.VirtualAddress;
 }
@@ -2797,6 +2820,201 @@ Rpi5Vc4DdiSubmitCommand(
 
     Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension,
                                              &NeedPoll, &PipelineAborted);
+    KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+
+    if (Completed)
+        Rpi5Vc4QueueFenceDpc(DeviceExtension);
+    if (NeedPoll)
+        Rpi5Vc4ArmV3dPollTimer(DeviceExtension);
+    if (PipelineAborted)
+        return STATUS_DEVICE_HARDWARE_ERROR;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+APIENTRY
+Rpi5Vc4DdiSubmitCommandVirtual(
+    _In_ PVOID MiniportDeviceContext,
+    _In_ CONST DXGKARG_SUBMITCOMMANDVIRTUAL *SubmitCommand)
+{
+    PRPI5VC4_DEVICE_EXTENSION DeviceExtension = MiniportDeviceContext;
+    PRPI5VC4_CONTEXT Context;
+    PRPI5VC4_WDDM_DEVICE KmdDevice;
+    PRPI5VC4_PROCESS Process;
+    PRPI5VC4_PENDING_SUBMIT Entry;
+    RPI5VC4_DMA_PRIVATE_DATA PrivateData;
+    RPI5VC4_DMA_PACKET Job;
+    const VOID *CommandStream = NULL;
+    SIZE_T CommandLength = 0;
+    BOOLEAN HasJob = FALSE;
+    BOOLEAN HasPresent = FALSE;
+    BOOLEAN Completed;
+    BOOLEAN NeedPoll;
+    BOOLEAN PipelineAborted;
+    ULONG ExpectedNode;
+    KIRQL OldIrql;
+
+    if (DeviceExtension == NULL || SubmitCommand == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Context = (PRPI5VC4_CONTEXT)SubmitCommand->hContext;
+    if (Context == NULL || Context->Magic != RPI5VC4_CONTEXT_MAGIC)
+        return STATUS_INVALID_PARAMETER;
+
+    KmdDevice = Context->Device;
+    if (KmdDevice == NULL ||
+        KmdDevice->Magic != RPI5VC4_DEVICE_MAGIC ||
+        KmdDevice->Adapter != DeviceExtension ||
+        KmdDevice->Process == NULL ||
+        KmdDevice->Process->Magic != RPI5VC4_PROCESS_MAGIC ||
+        KmdDevice->Process->Adapter != DeviceExtension)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    Process = KmdDevice->Process;
+
+    if (SubmitCommand->NodeOrdinal >= RPI5VC4_GPU_NODE_COUNT ||
+        SubmitCommand->EngineOrdinal != 0 ||
+        SubmitCommand->DmaBufferVirtualAddress == 0 ||
+        SubmitCommand->DmaBufferVirtualAddress > MAXULONG ||
+        SubmitCommand->DmaBufferSize == 0 ||
+        SubmitCommand->DmaBufferSize >
+            (ULONGLONG)MAXULONG + 1 -
+                SubmitCommand->DmaBufferVirtualAddress ||
+        SubmitCommand->DmaBufferUmdPrivateDataSize >
+            SubmitCommand->DmaBufferPrivateDataSize ||
+        (SubmitCommand->DmaBufferPrivateDataSize != 0 &&
+         SubmitCommand->pDmaBufferPrivateData == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!SubmitCommand->Flags.NullRendering)
+    {
+        /* Present-generated DMA buffers remain CPU mapped until their tracked
+         * fence retires.  A normal WDDM 2 UMD instead carries the miniport's
+         * command packet in its documented private-data prefix. */
+        if (SubmitCommand->DmaBufferPrivateDataSize >= sizeof(PrivateData))
+        {
+            RtlCopyMemory(&PrivateData,
+                          SubmitCommand->pDmaBufferPrivateData,
+                          sizeof(PrivateData));
+            if (PrivateData.Magic == RPI5VC4_DMA_PRIVATE_DATA_MAGIC)
+            {
+                if (PrivateData.VirtualAddress == NULL ||
+                    PrivateData.Size != SubmitCommand->DmaBufferSize)
+                {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                CommandStream = PrivateData.VirtualAddress;
+                CommandLength = PrivateData.Size;
+            }
+        }
+
+        if (CommandStream == NULL)
+        {
+            CommandStream = SubmitCommand->pDmaBufferPrivateData;
+            CommandLength = SubmitCommand->DmaBufferUmdPrivateDataSize;
+        }
+        if (CommandStream == NULL || CommandLength == 0 ||
+            !Rpi5Vc4ParseDmaStream(CommandStream, CommandLength,
+                                   &Job, &HasJob, &HasPresent))
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (HasPresent &&
+            !SubmitCommand->Flags.Present &&
+            !SubmitCommand->Flags.RedirectedPresent)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if ((SubmitCommand->Flags.Present ||
+             SubmitCommand->Flags.RedirectedPresent) &&
+            !HasPresent)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (!HasJob && !HasPresent)
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    ExpectedNode = SubmitCommand->NodeOrdinal;
+    if (HasJob)
+    {
+        if (!DeviceExtension->V3dReady)
+            return STATUS_DEVICE_NOT_READY;
+        if (Job.Op == RPI5VC4_DMA_OP_TFU_JOB &&
+            (Job.TfuJob.Regs[1] == 0 || Job.TfuJob.Regs[6] == 0))
+        {
+            return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
+        }
+        if (Job.Op == RPI5VC4_DMA_OP_TFU_JOB)
+            ExpectedNode = RPI5VC4_NODE_TFU;
+        else if (Job.Op == RPI5VC4_DMA_OP_CSD_JOB)
+            ExpectedNode = RPI5VC4_NODE_CSD;
+        else
+            ExpectedNode = RPI5VC4_NODE_3D;
+        if (ExpectedNode != SubmitCommand->NodeOrdinal)
+            return STATUS_INVALID_PARAMETER;
+    }
+
+    Entry = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Entry),
+                                  RPI5VC4_POOL_TAG);
+    if (Entry == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Entry, sizeof(*Entry));
+    Entry->AllocatedFromPool = TRUE;
+
+    KeAcquireSpinLock(&DeviceExtension->DmaLock, &OldIrql);
+    if (DeviceExtension->StopAccepting)
+    {
+        KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
+        ExFreePoolWithTag(Entry, RPI5VC4_POOL_TAG);
+        return STATUS_DELETE_PENDING;
+    }
+
+    Entry->Fence = SubmitCommand->SubmissionFenceId;
+    Entry->SubmissionSequence = ++DeviceExtension->SubmissionSequence;
+    Entry->NodeOrdinal = SubmitCommand->NodeOrdinal;
+    Entry->ReportNode = SubmitCommand->NodeOrdinal;
+    Entry->Process = Process;
+    if (HasJob)
+    {
+        if (Job.Op == RPI5VC4_DMA_OP_TFU_JOB)
+        {
+            Entry->IsTfuJob = TRUE;
+            RtlCopyMemory(Entry->TfuRegs, Job.TfuJob.Regs,
+                          sizeof(Entry->TfuRegs));
+        }
+        else if (Job.Op == RPI5VC4_DMA_OP_CSD_JOB)
+        {
+            Entry->IsCsdJob = TRUE;
+            RtlCopyMemory(Entry->CsdCfg, Job.CsdJob.Cfg,
+                          sizeof(Entry->CsdCfg));
+        }
+        else
+        {
+            Entry->IsV3dJob = TRUE;
+            Entry->BclStart = Job.V3dJob.BclStart;
+            Entry->BclEnd = Job.V3dJob.BclEnd;
+            Entry->RclStart = Job.V3dJob.RclStart;
+            Entry->RclEnd = Job.V3dJob.RclEnd;
+            Entry->Qma = Job.V3dJob.Qma;
+            Entry->Qms = Job.V3dJob.Qms;
+            Entry->Qts = Job.V3dJob.Qts;
+            Entry->V3dFlags = Job.V3dJob.Flags;
+        }
+    }
+    Rpi5Vc4AppendSubmitLocked(DeviceExtension,
+                              SubmitCommand->NodeOrdinal,
+                              Entry);
+
+    Completed = Rpi5Vc4ProcessPendingLocked(DeviceExtension,
+                                             &NeedPoll,
+                                             &PipelineAborted);
     KeReleaseSpinLock(&DeviceExtension->DmaLock, OldIrql);
 
     if (Completed)
