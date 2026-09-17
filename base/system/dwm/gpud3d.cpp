@@ -246,34 +246,35 @@ BOOL FinishGpuReads()
     State.Context->Flush();
     DWORD Start = GetTickCount();
     BOOL Reported = FALSE;
-    HRESULT Failure = S_OK;
     for (;;)
     {
         BOOL Complete = FALSE;
         HRESULT Status = State.Context->GetData(State.Completion, &Complete, sizeof(Complete),
                                                 D3D11_ASYNC_GETDATA_DONOTFLUSH);
         HRESULT Removed = State.Device->GetDeviceRemovedReason();
-        if (FAILED(Status) && SUCCEEDED(Failure))
-            Failure = Status;
-        if (FAILED(Removed) && SUCCEEDED(Failure))
-            Failure = Removed;
+        if (FAILED(Removed))
+        {
+            State.WorkPending = FALSE;
+            return Result(Removed, "GPU read retirement");
+        }
+        if (FAILED(Status))
+        {
+            State.WorkPending = FALSE;
+            return Result(Status, "GPU completion query");
+        }
         if (Status == S_OK && Complete)
         {
             State.WorkPending = FALSE;
-            return Result(Failure, "GPU completion");
+            return TRUE;
         }
-        if (!Reported && (FAILED(Failure) || GetTickCount() - Start >= 5000))
+        if (!Reported && GetTickCount() - Start >= 5000)
         {
-            if (FAILED(Failure))
-                Result(Failure, "GPU read retirement");
             OutputDebugStringA("DWM: retaining window publications until Direct3D GPU reads complete\n");
             Reported = TRUE;
         }
-        /* Neither a timeout nor a failed execution state proves that earlier
-         * reads have stopped. Keep the published FRONT immutable until the
-         * actual EVENT completes. If device failure prevents that completion,
-         * retain ownership; terminal cancellation needs a separate drain
-         * guarantee before cleanup or the next frame pull can proceed. */
+        /* A healthy device must complete the EVENT before its producers can
+         * reuse published surfaces. A removed device has stopped executing
+         * this command stream, so its resources are released and recreated. */
         Sleep(1);
     }
 }
