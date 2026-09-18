@@ -122,6 +122,8 @@ RtlGetNtGlobalFlags(VOID)
     return pPeb->NtGlobalFlag;
 }
 
+#define RTL_HEAP_LOCK_SPIN_COUNT 4000
+
 NTSTATUS
 NTAPI
 RtlDeleteHeapLock(IN OUT PHEAP_LOCK Lock)
@@ -151,7 +153,12 @@ NTSTATUS
 NTAPI
 RtlInitializeHeapLock(IN OUT PHEAP_LOCK *Lock)
 {
-    return RtlInitializeCriticalSection(&(*Lock)->CriticalSection);
+    /*
+     * The heap lock is the most contended section in a multithreaded process
+     * and its critical path is short, so spin instead of going to the kernel.
+     */
+    return RtlInitializeCriticalSectionAndSpinCount(&(*Lock)->CriticalSection,
+                                                    RTL_HEAP_LOCK_SPIN_COUNT);
 }
 
 NTSTATUS

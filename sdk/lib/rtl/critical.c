@@ -488,6 +488,29 @@ NTAPI
 RtlEnterCriticalSection(PRTL_CRITICAL_SECTION CriticalSection)
 {
     HANDLE Thread = (HANDLE)NtCurrentTeb()->ClientId.UniqueThread;
+    ULONG SpinCount = CriticalSection->SpinCount;
+
+    /*
+     * A contended section is usually released within a few hundred cycles,
+     * while RtlpWaitForCriticalSection costs an event wait. Spin first when
+     * the section asked for it; SpinCount is already forced to 0 on UP.
+     */
+    if (SpinCount != 0 && CriticalSection->OwningThread != Thread)
+    {
+        while (SpinCount-- != 0)
+        {
+            if (CriticalSection->LockCount == -1 &&
+                InterlockedCompareExchange(&CriticalSection->LockCount, 0, -1) == -1)
+            {
+                CriticalSection->OwningThread = Thread;
+                CriticalSection->RecursionCount = 1;
+                NtCurrentTeb()->CountOfOwnedCriticalSections++;
+                return STATUS_SUCCESS;
+            }
+
+            YieldProcessor();
+        }
+    }
 
     /* Try to lock it */
     if (InterlockedIncrement(&CriticalSection->LockCount) != 0)
