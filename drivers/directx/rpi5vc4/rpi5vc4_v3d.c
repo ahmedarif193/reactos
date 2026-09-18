@@ -732,54 +732,63 @@ Rpi5V3dInterruptService(
     return Rpi5V3dInterrupt(ServiceContext);
 }
 
+static NTSTATUS
+Rpi5V3dConnectInterruptResource(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Resource,
+    _Out_ PKINTERRUPT *Interrupt)
+{
+    IO_CONNECT_INTERRUPT_PARAMETERS Params;
+
+    *Interrupt = NULL;
+    if (Resource->Type != CmResourceTypeInterrupt ||
+        Resource->u.Interrupt.Affinity == 0)
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    RtlZeroMemory(&Params, sizeof(Params));
+    Params.Version = CONNECT_FULLY_SPECIFIED;
+    Params.FullySpecified.PhysicalDeviceObject = DeviceExtension->PhysicalDeviceObject;
+    Params.FullySpecified.InterruptObject = Interrupt;
+    Params.FullySpecified.ServiceRoutine = Rpi5V3dInterruptService;
+    Params.FullySpecified.ServiceContext = DeviceExtension;
+    Params.FullySpecified.SynchronizeIrql = (KIRQL)Resource->u.Interrupt.Level;
+    Params.FullySpecified.FloatingSave = FALSE;
+    Params.FullySpecified.ShareVector = Resource->ShareDisposition == CmResourceShareShared;
+    Params.FullySpecified.Vector = Resource->u.Interrupt.Vector;
+    Params.FullySpecified.Irql = (KIRQL)Resource->u.Interrupt.Level;
+    Params.FullySpecified.InterruptMode = (Resource->Flags & CM_RESOURCE_INTERRUPT_LATCHED) ?
+                                           Latched : LevelSensitive;
+    Params.FullySpecified.ProcessorEnableMask = Resource->u.Interrupt.Affinity;
+    return IoConnectInterruptEx(&Params);
+}
+
 BOOLEAN
 Rpi5V3dConnectInterrupt(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    IO_CONNECT_INTERRUPT_PARAMETERS Params;
-    NTSTATUS Status;
-
     if (!DeviceExtension->V3dReady ||
         DeviceExtension->PhysicalDeviceObject == NULL)
     {
         return FALSE;
     }
 
-    RtlZeroMemory(&Params, sizeof(Params));
-    Params.Version = CONNECT_FULLY_SPECIFIED;
-    Params.FullySpecified.PhysicalDeviceObject =
-        DeviceExtension->PhysicalDeviceObject;
-    Params.FullySpecified.InterruptObject = &DeviceExtension->V3dInterrupt;
-    Params.FullySpecified.ServiceRoutine = Rpi5V3dInterruptService;
-    Params.FullySpecified.ServiceContext = DeviceExtension;
-    Params.FullySpecified.SynchronizeIrql = (KIRQL)(DISPATCH_LEVEL + 1);
-    Params.FullySpecified.FloatingSave = FALSE;
-    Params.FullySpecified.ShareVector = FALSE;
-    Params.FullySpecified.Vector = RPI5_V3D_CORE_INTID;
-    Params.FullySpecified.Irql = (KIRQL)(DISPATCH_LEVEL + 1);
-    Params.FullySpecified.InterruptMode = LevelSensitive;
-    Params.FullySpecified.ProcessorEnableMask = 1;
-
-    if (DeviceExtension->V3dCoreInterruptOwnedByDxgk)
+    DeviceExtension->V3dCoreIrqConnected = DeviceExtension->V3dCoreInterruptOwnedByDxgk;
+    if (!DeviceExtension->V3dCoreIrqConnected)
     {
-        DeviceExtension->V3dCoreIrqConnected = TRUE;
-    }
-    else
-    {
-        Status = IoConnectInterruptEx(&Params);
-        if (NT_SUCCESS(Status))
-            DeviceExtension->V3dCoreIrqConnected = TRUE;
-        else
-            DeviceExtension->V3dInterrupt = NULL;
+        DeviceExtension->V3dCoreIrqConnected = NT_SUCCESS(Rpi5V3dConnectInterruptResource(
+            DeviceExtension, &DeviceExtension->V3dCoreInterruptResource,
+            &DeviceExtension->V3dInterrupt));
     }
 
-    Params.FullySpecified.InterruptObject = &DeviceExtension->V3dInterrupt2;
-    Params.FullySpecified.Vector = RPI5_V3D_HUB_INTID;
-    Status = IoConnectInterruptEx(&Params);
-    if (NT_SUCCESS(Status))
-        DeviceExtension->V3dHubIrqConnected = TRUE;
-    else
-        DeviceExtension->V3dInterrupt2 = NULL;
+    DeviceExtension->V3dHubIrqConnected = DeviceExtension->V3dHubInterruptOwnedByDxgk;
+    if (!DeviceExtension->V3dHubIrqConnected)
+    {
+        DeviceExtension->V3dHubIrqConnected = NT_SUCCESS(Rpi5V3dConnectInterruptResource(
+            DeviceExtension, &DeviceExtension->V3dHubInterruptResource,
+            &DeviceExtension->V3dInterrupt2));
+    }
 
     DeviceExtension->V3dIrqConnected =
         DeviceExtension->V3dCoreIrqConnected ||
