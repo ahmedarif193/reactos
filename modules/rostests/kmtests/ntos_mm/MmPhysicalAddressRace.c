@@ -74,6 +74,8 @@ START_TEST(MmPhysicalAddressRace)
     KeRevertToUserAffinityThreadEx(OldAffinity);
     KeFlushQueuedDpcs();
 
+    trace("translations=%I64u mismatches=%I64u interrupt_translations=%ld first_expected=%I64x first_actual=%I64x\n",
+          Samples, Failures, Race.InterruptCount, FirstExpected, FirstActual);
     ok(Race.InterruptCount >= 10, "Only %ld interfering DPCs ran\n", Race.InterruptCount);
     ok(Failures == 0, "%I64u wrong physical addresses in %I64u translations\n", Failures, Samples);
     ok((ULONGLONG)Race.InterruptPhysical == ((ULONGLONG)MmGetMdlPfnArray(Mdl)[1] << PAGE_SHIFT),

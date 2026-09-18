@@ -285,6 +285,8 @@ Arm64SpinLockContention(ULONG Mode)
     ok_eq_ulonglong(Shared.Lock, 0);
     for (Index = 0; Index < LOCK_STRESS_WORDS; Index++)
         ok_eq_ulonglong(Shared.Payload[Index], LockPayload(Shared.Sequence, Index));
+    trace("SPINLOCK_STRESS mode=%lu cpus=%lu rounds=%lu sequence=%lu data_errors=%lu owner_errors=%lu state_errors=%lu\n",
+          Mode, Created, Rounds, Shared.Sequence, DataErrors, OwnerErrors, StateErrors);
     ExFreePoolWithTag(Workers, 'slDK');
 }
 

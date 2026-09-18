@@ -359,6 +359,12 @@ Arm64ClockCatchupCheck(VOID)
             ok_eq_ulong(KeGetCurrentProcessorNumber(), Cpu);
             ok_eq_long(TimerCalls, (LONG)TimerCount);
             ok_eq_long(TimerContext.Errors, 0);
+            trace("CLOCK_CATCHUP cpu=%lu periods=%lu qpc_us=%I64u interrupt_us=%I64u tick_us=%I64u runtime_us=%I64u tolerance_us=%I64u\n",
+                  Cpu, Periods[Index], Elapsed / 10, InterruptElapsed / 10, TickElapsed / 10,
+                  RuntimeElapsed / 10, Tolerance / 10);
+            trace("CLOCK_TIMERS cpu=%lu periods=%lu calls=%ld expected=%lu errors=%ld system_us=%I64d\n",
+                  Cpu, Periods[Index], TimerCalls, TimerCount, TimerContext.Errors,
+                  (SystemAfter.QuadPart - SystemBefore.QuadPart) / 10);
         }
     }
     KeRevertToUserAffinityThreadEx(PreviousAffinity);

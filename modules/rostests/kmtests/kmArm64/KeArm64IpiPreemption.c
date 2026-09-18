@@ -116,6 +116,7 @@ TestProcessor(ULONG Cpu)
     }
 
     KeSetSystemAffinityThread((KAFFINITY)1 << Cpu);
+    trace("IPI_PREEMPTION cpu=%lu: broadcast from physical timer ISR\n", Cpu);
     ArmPhysicalTimer();
     Completed = WaitForTimer(&State);
     ok(Completed, "Physical timer control case timed out\n");
@@ -166,6 +167,8 @@ Cleanup:
                          :: "r"(SavedDeadline), "r"(SavedControl) : "memory");
     KeRevertToUserAffinityThreadEx(PreviousAffinity);
     ok_eq_ulong(CompletedRounds, 128);
+    trace("PPI_REENTRY cpu=%lu controller=%lu rounds=%lu owner_errors=%ld irql_errors=%ld\n",
+          Cpu, ControllerCpu, CompletedRounds, OwnerErrors, IrqlErrors);
 }
 
 typedef struct _PPI_BANKS
@@ -299,6 +302,10 @@ Cleanup:
     ok_eq_ulong(Completed, 128);
     ok_eq_long(State.BadOwner, 0);
     ok_eq_long(State.BadIrql, 0);
+    for (Cpu = 0; Cpu < (ULONG)KeNumberProcessors; Cpu++)
+        trace("PPI_BANK cpu=%lu calls=%ld expected=%u\n", Cpu, State.Calls[Cpu], Cpu ? 128 : 64);
+    trace("PPI_BANK_LIFETIME rounds=%lu owner_errors=%ld irql_errors=%ld\n",
+          Completed, State.BadOwner, State.BadIrql);
 Done:
     KeRevertToUserAffinityThreadEx(PreviousAffinity);
 }
@@ -395,6 +402,9 @@ TestDisabledPending(ULONG Cpu, PKMT_DISABLE_INTERRUPT Disable, PKMT_ENABLE_INTER
     ok_eq_long(EnabledCalls, 1);
     ok_eq_bool(Connected, TRUE);
     ok_eq_long(State.BadOwner, 0);
+    trace("PPI_DISABLE cpu=%lu control=%ld while_high=%ld pending=%u after_disable=%ld after_reenable=%ld owner_errors=%ld\n",
+          Cpu, ControlCalls, HighCalls, (ULONG)((PendingControl & 5) == 5),
+          DisabledCalls, EnabledCalls, State.BadOwner);
 Done:
     KeRevertToUserAffinityThreadEx(PreviousAffinity);
 }

@@ -115,6 +115,7 @@ TestDisconnect(PKMT_DISPATCH_SECONDARY Dispatch, ULONG Vector, KIRQL Irql, ULONG
     BOOLEAN Result;
 
     if (KeNumberProcessors < 2) return;
+    trace("Disconnect case %lu (single, shared head, shared tail, nested)\n", Mode);
     RtlZeroMemory(&State, sizeof(State));
     RtlZeroMemory(&OtherInterrupt, sizeof(OtherInterrupt));
     RtlZeroMemory(&Record, sizeof(Record));
@@ -226,6 +227,8 @@ TestFailedConnection(PKMT_DISPATCH_SECONDARY Dispatch)
     Dispatched = Dispatch(Interrupt.Vector, 0, NULL);
     ok_eq_bool(Dispatched, FALSE);
     ok_eq_ulong(Record.Calls, 0);
+    trace("INTERRUPT_CONNECT_FAILURE result=%u connected=%u dispatched=%u calls=%lu\n",
+          Connected, Interrupt.Connected, Dispatched, Record.Calls);
     if (Interrupt.Connected) KeDisconnectInterrupt(&Interrupt);
     ok_eq_bool(Dispatch(Interrupt.Vector, 0, NULL), FALSE);
 }
@@ -336,6 +339,8 @@ Cleanup:
     ok_eq_ulong(ReturnErrors, 0);
     ok_eq_ulong(DispatchErrors, 0);
     ok_eq_ulong(DisconnectErrors, 0);
+    trace("INTERRUPT_CONNECT_RACE rounds=%lu lost_state=%lu return_errors=%lu dispatch_errors=%lu disconnect_errors=%lu\n",
+          Completed, LostState, ReturnErrors, DispatchErrors, DisconnectErrors);
 }
 
 static VOID
@@ -378,6 +383,8 @@ TestIoAffinity(PKMT_DISPATCH_SECONDARY Dispatch, ULONG Vector, KIRQL Irql,
     KeRevertToUserAffinityThreadEx(PreviousAffinity);
     ok_eq_ulong(Outside, 0);
     ok_eq_ulong(BadOwner, 0);
+    trace("IO_INTERRUPT_AFFINITY mask=0x%Ix shared=%u status=0x%08lx calls=%lu outside=%lu bad_owner=%lu\n",
+          Mask, Shared, Status, Calls, Outside, BadOwner);
 }
 
 START_TEST(KeArm64Interrupt)

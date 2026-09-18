@@ -233,6 +233,10 @@ TestEventConcurrent(
         ok_eq_hex(Status, STATUS_SUCCESS);
         if (Status != STATUS_SUCCESS)
             goto Cleanup;
+        Priority = KeQueryPriorityThread(Threads[i].Thread);
+        if (Priority != 8)
+            trace("Event worker initial priority=%ld base=%d decrement=%d\n",
+                  Priority, Threads[i].Thread->BasePriority, Threads[i].Thread->PriorityDecrement);
         /* Startup can boost the worker; establish the baseline for the event boost. */
         KeSetPriorityThread(Threads[i].Thread, 8);
         Priority = KeQueryPriorityThread(Threads[i].Thread);

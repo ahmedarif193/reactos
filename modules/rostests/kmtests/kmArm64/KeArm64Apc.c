@@ -468,7 +468,18 @@ TimedOut:
         ok_eq_ulong(Context.Cancel.CpuErrors, 0);
         ok_eq_ulong(ControllerWins + DpcWins, Cancelled);
         ok_eq_ulong(Cancelled + Delivered, APC_ROUNDS);
+        trace("APC_CANCEL cpu=%lu mode=%lu rounds=%lu cancelled=%lu delivered=%lu controller_wins=%lu dpc_wins=%lu calls=%lu errors=%lu timeouts=%lu irql_errors=%lu cpu_errors=%lu\n",
+              Cpu, Mode, Completed, Cancelled, Delivered, ControllerWins, DpcWins,
+              Context.Cancel.Calls, CancelErrors, Context.Cancel.Timeouts, Context.Cancel.IrqlErrors,
+              Context.Cancel.CpuErrors);
     }
+    trace("APC_DELIVERY controller=%lu cpu=%lu mode=%lu rounds=%lu kernel=%ld normal=%ld cpus=0x%I64x insert_errors=%lu count_errors=%lu\n",
+          Controller, Cpu, Mode, Completed, Context.KernelCalls, Context.NormalCalls,
+          Context.SeenCpus, InsertErrors, CountErrors);
+    trace("APC_STATE cpu=%lu mode=%lu owner_errors=%ld cpu_errors=%ld irql_errors=%ld argument_errors=%ld blocked_errors=%ld order_errors=%ld timeouts=%ld wait_errors=%ld rundown=%ld\n",
+          Cpu, Mode, Context.OwnerErrors, Context.CpuErrors, Context.IrqlErrors,
+          Context.ArgumentErrors, Context.BlockedErrors, Context.OrderErrors,
+          Context.Timeouts, Context.WaitErrors, Context.Rundowns);
 }
 
 START_TEST(KeArm64Apc)

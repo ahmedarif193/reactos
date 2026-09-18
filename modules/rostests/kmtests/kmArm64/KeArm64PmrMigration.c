@@ -14,6 +14,11 @@ typedef VOID (FASTCALL *PREQUEST_SOFTWARE_INTERRUPT)(KIRQL Level);
 #define MIGRATION_ROUNDS 2048
 #define MIGRATION_PRIORITY_ROUNDS 256
 
+typedef struct _MIGRATION_TIMES
+{
+    LONGLONG Ticks[3];
+} MIGRATION_TIMES;
+
 typedef struct _PMR_MIGRATION
 {
     KEVENT Ready;
@@ -100,6 +105,38 @@ MigrationThread(PVOID Parameter)
 }
 
 static VOID
+ReportMigrationTimes(ULONG Mode, MIGRATION_TIMES *Times, ULONG Count, LONGLONG Frequency)
+{
+    LONGLONG Sum[3] = {0}, Value;
+    ULONG Column, Round, Index;
+    static const PCSTR Names[] = {"call", "arrival", "ack"};
+
+    if (!Count) return;
+    for (Column = 0; Column < RTL_NUMBER_OF(Names); Column++)
+    {
+        for (Round = 0; Round < Count; Round++)
+            Sum[Column] += Times[Round].Ticks[Column];
+        for (Round = 1; Round < Count; Round++)
+        {
+            Value = Times[Round].Ticks[Column];
+            Index = Round;
+            while (Index && Times[Index - 1].Ticks[Column] > Value)
+            {
+                Times[Index].Ticks[Column] = Times[Index - 1].Ticks[Column];
+                Index--;
+            }
+            Times[Index].Ticks[Column] = Value;
+        }
+        trace("MIGRATION_TIME mode=%lu phase=%s samples=%lu sum_us=%I64u p50_us=%I64u p95_us=%I64u p99_us=%I64u max_us=%I64u\n",
+              Mode, Names[Column], Count, Sum[Column] * 1000000 / Frequency,
+              Times[(Count - 1) * 50 / 100].Ticks[Column] * 1000000 / Frequency,
+              Times[(Count - 1) * 95 / 100].Ticks[Column] * 1000000 / Frequency,
+              Times[(Count - 1) * 99 / 100].Ticks[Column] * 1000000 / Frequency,
+              Times[Count - 1].Ticks[Column] * 1000000 / Frequency);
+    }
+}
+
+static VOID
 CheckMigration(ULONG Mode, ULONG Rounds, PMR_MIGRATION *Baseline)
 {
     PMR_MIGRATION Context = {0};
@@ -109,13 +146,19 @@ CheckMigration(ULONG Mode, ULONG Rounds, PMR_MIGRATION *Baseline)
     LARGE_INTEGER Frequency, Timeout;
     LONGLONG Deadline, Start, Returned, End;
     ULONG Cpu, Round, Completed = 0, TimingErrors = 0, PriorityErrors = 0;
-    KPRIORITY PreviousPriority;
+    ULONG BeforeSwitches, CallSwitches = 0, WaitSwitches = 0;
+    ULONG BeforeWait, LateArrivals = 0, LateAcks = 0;
+    KPRIORITY PreviousPriority, PriorityMin = HIGH_PRIORITY, PriorityMax = 0;
+    MIGRATION_TIMES *Times;
     NTSTATUS Status;
 
     Context.GetPmr = Baseline->GetPmr;
     Context.RequestInterrupt = Baseline->RequestInterrupt;
     RtlCopyMemory(Context.Baseline, Baseline->Baseline, sizeof(Context.Baseline));
     Context.SignalAck = (Mode != 0);
+    Times = ExAllocatePoolWithTag(NonPagedPool, Rounds * sizeof(*Times), 'tMmK');
+    ok(Times != NULL, "Mode %lu timing allocation failed\n", Mode);
+    if (!Times) return;
 
     PreviousPriority = KeQueryPriorityThread(Controller);
     if (Mode != 0) KeSetPriorityThread(Controller, 16);
@@ -138,9 +181,12 @@ CheckMigration(ULONG Mode, ULONG Rounds, PMR_MIGRATION *Baseline)
         Context.RequestedCpu = Cpu;
         KeClearEvent(&Context.Ack);
         Start = KeQueryPerformanceCounter(NULL).QuadPart;
+        BeforeSwitches = Controller->ContextSwitches;
         InterlockedExchange(&Context.Request, (LONG)Round + 1);
         KeSetAffinityThread(Thread, (KAFFINITY)1 << Cpu);
         Returned = KeQueryPerformanceCounter(NULL).QuadPart;
+        CallSwitches += Controller->ContextSwitches - BeforeSwitches;
+        BeforeWait = Controller->ContextSwitches;
         Deadline = Returned + Frequency.QuadPart;
         while (Context.Acknowledged != (LONG)Round + 1 && KeQueryPerformanceCounter(NULL).QuadPart < Deadline)
         {
@@ -150,10 +196,18 @@ CheckMigration(ULONG Mode, ULONG Rounds, PMR_MIGRATION *Baseline)
                 KeWaitForSingleObject(&Context.Ack, Executive, KernelMode, FALSE, &Timeout);
         }
         End = KeQueryPerformanceCounter(NULL).QuadPart;
+        WaitSwitches += Controller->ContextSwitches - BeforeWait;
         if (Context.Acknowledged != (LONG)Round + 1) break;
         KeMemoryBarrier();
         if (Context.Received < Start || End < Context.Received || Returned < Start)
             TimingErrors++;
+        Times[Completed].Ticks[0] = Returned - Start;
+        Times[Completed].Ticks[1] = Context.Received - Start;
+        Times[Completed].Ticks[2] = End - Context.Received;
+        if (Context.Received - Returned > Frequency.QuadPart / 1000) LateArrivals++;
+        if (End - Context.Received > Frequency.QuadPart / 1000) LateAcks++;
+        PriorityMin = min(PriorityMin, Context.ReceivedPriority);
+        PriorityMax = max(PriorityMax, Context.ReceivedPriority);
         if (Mode != 0 &&
             (KeQueryPriorityThread(Controller) != 16 ||
              (Mode == 1 && (Context.ReceivedPriority < 8 || Context.ReceivedPriority >= 16)) ||
@@ -175,9 +229,17 @@ Stop:
     ok_eq_ulong(Context.BadDaif, 0);
     ok_eq_ulong(TimingErrors, 0);
     ok_eq_ulong(PriorityErrors, 0);
+    trace("PMR_MIGRATION mode=%lu requests=%lu transitions=%lu migrations=%lu cpus=0x%Ix irql_errors=%lu mask_errors=%lu daif_errors=%lu\n",
+          Mode, Completed, Context.Transitions, Context.Migrations, Context.SeenCpus,
+          Context.BadIrql, Context.BadMask, Context.BadDaif);
+    trace("MIGRATION_SCHED mode=%lu samples=%lu controller=%ld worker_min=%ld worker_max=%ld call_switches=%lu wait_switches=%lu late_arrivals=%lu late_acks=%lu\n",
+          Mode, Completed, KeQueryPriorityThread(Controller), PriorityMin, PriorityMax,
+          CallSwitches, WaitSwitches, LateArrivals, LateAcks);
+    ReportMigrationTimes(Mode, Times, Completed, Frequency.QuadPart);
 
 Cleanup:
     if (Mode != 0) KeSetPriorityThread(Controller, PreviousPriority);
+    ExFreePoolWithTag(Times, 'tMmK');
 }
 
 START_TEST(KeArm64PmrMigration)

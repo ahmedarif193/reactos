@@ -175,6 +175,7 @@ TestConcurrentSamples(KMT_PROFILE_PARAMETERS *Parameters)
     }
     StopProfile(Profile);
     ok_eq_long(Shared.Timeouts, 0);
+    trace("PROFILE_SMP expected=%lu observed=%lu\n", Shared.Count * SAMPLE_COUNT, Parameters->Buffer[0]);
     ok_eq_ulong(Parameters->Buffer[0], Shared.Count * SAMPLE_COUNT);
     ZwClose(Profile);
 }
@@ -308,6 +309,7 @@ TestSharedSource(KMT_PROFILE_PARAMETERS *Parameters)
         StopProfile(First);
         Before = Buffers[2];
         BusySampleWindow();
+        trace("PROFILE_SHARED stop before=%lu after=%lu\n", Before, Buffers[2]);
         ok(Buffers[2] > Before, "Stopping one profile disabled the remaining profile\n");
         if (StartProfile(First))
         {
@@ -315,6 +317,7 @@ TestSharedSource(KMT_PROFILE_PARAMETERS *Parameters)
             First = NULL;
             Before = Buffers[2];
             BusySampleWindow();
+            trace("PROFILE_SHARED close before=%lu after=%lu\n", Before, Buffers[2]);
             ok(Buffers[2] > Before, "Closing one profile disabled the remaining profile\n");
         }
         StopProfile(Second);
@@ -342,9 +345,13 @@ START_TEST(KeArm64Profile)
     Parameters->Buffer = (PULONG)(Parameters + 1);
     Parameters->BufferSize = 2 * sizeof(ULONG);
     Parameters->Source = ProfileAlignmentFixup;
+    DbgPrint("PROFILE_TEST affinity and range\n");
     TestAffinityAndRange(Parameters);
+    DbgPrint("PROFILE_TEST concurrent samples\n");
     TestConcurrentSamples(Parameters);
+    DbgPrint("PROFILE_TEST sample rundown\n");
     TestSampleRundown(Parameters);
+    DbgPrint("PROFILE_TEST shared source\n");
     TestSharedSource(Parameters);
     Size = 0;
     Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Allocation, &Size, MEM_RELEASE);

@@ -121,6 +121,25 @@ SchedulerWorker(PVOID Parameter)
 }
 
 static VOID
+SortSchedulerTimes(LONGLONG *Times, ULONG Count)
+{
+    ULONG Index, Position;
+    LONGLONG Value;
+
+    for (Index = 1; Index < Count; Index++)
+    {
+        Value = Times[Index];
+        Position = Index;
+        while (Position && Times[Position - 1] > Value)
+        {
+            Times[Position] = Times[Position - 1];
+            Position--;
+        }
+        Times[Position] = Value;
+    }
+}
+
+static VOID
 CheckSchedulerCpu(ULONG Controller, ULONG Cpu, ULONG OtherCpu, LONGLONG Frequency)
 {
     static const KPRIORITY ExpectedPriority[SCHEDULER_MODES][2] = {
@@ -272,10 +291,22 @@ CheckSchedulerCpu(ULONG Controller, ULONG Cpu, ULONG OtherCpu, LONGLONG Frequenc
         ok_eq_ulong(AffinityErrors, 0);
         ok_eq_ulong(PriorityErrors, 0);
         ok_eq_ulong(Timeouts, 0);
+        trace("SCHED_TRANSITION controller=%lu cpu=%lu other=%lu mode=%lu rounds=%lu state_errors=%lu order_errors=%lu affinity_errors=%lu priority_errors=%lu timeouts=%lu\n",
+              Controller, Cpu, OtherCpu, Mode, Completed, StateErrors, OrderErrors,
+              AffinityErrors, PriorityErrors, Timeouts);
         if (Mode >= 4 && Completed)
         {
             ok_eq_ulong(LatencyErrors, 0);
             ok(NoRuntimeTick != 0, "CPU %lu mode %lu never dispatched before the next runtime tick\n", Cpu, Mode);
+            SortSchedulerTimes(DispatchTimes, Completed);
+            SortSchedulerTimes(MigrationTimes, Completed);
+            trace("SCHED_LATENCY controller=%lu cpu=%lu mode=%lu samples=%lu no_runtime_tick=%lu p50_us=%I64d p95_us=%I64d max_us=%I64d migrate_p50_us=%I64d migrate_max_us=%I64d\n",
+                  Controller, Cpu, Mode, Completed, NoRuntimeTick,
+                  DispatchTimes[(Completed - 1) / 2] * 1000000 / Frequency,
+                  DispatchTimes[(Completed - 1) * 95 / 100] * 1000000 / Frequency,
+                  DispatchTimes[Completed - 1] * 1000000 / Frequency,
+                  MigrationTimes[(Completed - 1) / 2] * 1000000 / Frequency,
+                  MigrationTimes[Completed - 1] * 1000000 / Frequency);
         }
         if (Timeouts) break;
     }

@@ -110,6 +110,9 @@ START_TEST(KeArm64GenericDpc)
         ok_eq_ulong(Workers[Cpu].Errors, 0);
         ok_eq_long(Workers[Cpu].BadIrql, 0);
         ok_eq_long(Workers[Cpu].BadData, 0);
+        trace("GENERIC_DPC cpu=%lu rounds=%lu phases=%u errors=%lu irql_errors=%ld data_errors=%ld\n",
+              Cpu, Workers[Cpu].Completed, GENERIC_DPC_PHASES, Workers[Cpu].Errors,
+              Workers[Cpu].BadIrql, Workers[Cpu].BadData);
     }
     KeFlushQueuedDpcs();
     ExFreePoolWithTag(Workers, 'gdDK');

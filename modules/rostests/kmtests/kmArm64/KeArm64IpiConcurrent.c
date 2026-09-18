@@ -20,6 +20,7 @@ typedef struct _CONCURRENT_IPI
     volatile LONG64 Mask;
     ULONG Completed;
     ULONG Errors;
+    LONGLONG MaxTicks;
 } CONCURRENT_IPI;
 
 static ULONG_PTR NTAPI
@@ -43,6 +44,7 @@ BroadcastThread(PVOID Context)
     KIRQL OldIrql, EntryIrql, ReturnedIrql;
     ULONG64 SavedDaif, ReturnedDaif, ExpectedDaif;
     ULONG_PTR Result;
+    LONGLONG Begin, Elapsed;
 
     KeSetSystemAffinityThread((KAFFINITY)1 << State->Cpu);
     KeWaitForSingleObject(State->Go, Executive, KernelMode, FALSE, NULL);
@@ -56,7 +58,9 @@ BroadcastThread(PVOID Context)
         __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
         if (Round & 2) __asm__ __volatile__("msr daifset, #2" ::: "memory");
         ExpectedDaif = SavedDaif | ((Round & 2) ? 0x80 : 0);
+        Begin = KeQueryPerformanceCounter(NULL).QuadPart;
         Result = KeIpiGenericCall(ConcurrentBroadcast, (ULONG_PTR)State);
+        Elapsed = KeQueryPerformanceCounter(NULL).QuadPart - Begin;
         ReturnedIrql = KeGetCurrentIrql();
         __asm__ __volatile__("mrs %0, daif" : "=r"(ReturnedDaif));
         __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
@@ -67,6 +71,7 @@ BroadcastThread(PVOID Context)
         {
             State->Errors++;
         }
+        if (Elapsed > State->MaxTicks) State->MaxTicks = Elapsed;
         State->Completed++;
     }
     KeRevertToUserAffinityThread();
@@ -79,11 +84,13 @@ START_TEST(KeArm64IpiConcurrent)
     HANDLE Threads[MAXIMUM_PROCESSORS];
     OBJECT_ATTRIBUTES Attributes;
     KEVENT Go;
+    LARGE_INTEGER Frequency;
     ULONG Cpu, Created = 0;
     NTSTATUS Status;
 
     if (skip(KeNumberProcessors >= 2, "SMP required\n")) return;
     KeInitializeEvent(&Go, NotificationEvent, FALSE);
+    KeQueryPerformanceCounter(&Frequency);
     InitializeObjectAttributes(&Attributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
     for (Cpu = 0; Cpu < (ULONG)KeNumberProcessors; Cpu++)
     {
@@ -104,5 +111,8 @@ START_TEST(KeArm64IpiConcurrent)
         ok_eq_ulong(Workers[Cpu].Completed, BROADCAST_ROUNDS);
         ok_eq_ulong(Workers[Cpu].Errors, 0);
         ok_eq_long(Workers[Cpu].BadCallbackIrql, 0);
+        trace("IPI_CONCURRENT cpu=%lu rounds=%lu errors=%lu max_us=%I64u\n", Cpu,
+              Workers[Cpu].Completed, Workers[Cpu].Errors,
+              (ULONG64)(Workers[Cpu].MaxTicks * 1000000 / Frequency.QuadPart));
     }
 }
