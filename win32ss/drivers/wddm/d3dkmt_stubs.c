@@ -812,10 +812,13 @@ D3DKMTQueryAdapterInfo(
      * GPU-version telemetry is optional too; system monitors poll those
      * classes and a lower-version miniport legitimately refuses them. */
     if (!NT_SUCCESS(Status) &&
-        !(Captured.Type == KMTQAITYPE_UMOPENGLINFO &&
-          Status == STATUS_OBJECT_NAME_NOT_FOUND) &&
+        !(Status == STATUS_OBJECT_NAME_NOT_FOUND &&
+          (Captured.Type == KMTQAITYPE_UMOPENGLINFO ||
+           Captured.Type == KMTQAITYPE_UMDRIVERNAME)) &&
         !(Status == STATUS_INVALID_PARAMETER &&
-          (Captured.Type == KMTQAITYPE_NODEPERFDATA ||
+          (Captured.Type == KMTQAITYPE_ADAPTERADDRESS ||
+           Captured.Type == KMTQAITYPE_PHYSICALADAPTERDEVICEIDS ||
+           Captured.Type == KMTQAITYPE_NODEPERFDATA ||
            Captured.Type == KMTQAITYPE_ADAPTERPERFDATA ||
            Captured.Type == KMTQAITYPE_ADAPTERPERFDATA_CAPS ||
            Captured.Type == KMTQUITYPE_GPUVERSION)))
