@@ -660,7 +660,8 @@ MmCreatePeb(IN PEPROCESS Process,
         // Heap and Debug Data
         //
         Peb->NumberOfProcessors = KeNumberProcessors;
-        Peb->ImageProcessAffinityMask = KeActiveProcessors;
+        /* Leave inherited or explicitly assigned affinity unchanged by default. */
+        Peb->ImageProcessAffinityMask = 0;
         Peb->BeingDebugged = (BOOLEAN)(Process->DebugPort != NULL);
         Peb->NtGlobalFlag = NtGlobalFlag;
         Peb->HeapSegmentReserve = MmHeapSegmentReserve;
@@ -877,7 +878,7 @@ MmCreatePeb32(IN PEPROCESS Process,
         Peb->OSPlatformId = VER_PLATFORM_WIN32_NT;
         Peb->OSCSDVersion = (USHORT)CmNtCSDVersion;
         Peb->NumberOfProcessors = KeNumberProcessors;
-        Peb->ImageProcessAffinityMask = (ULONG)KeActiveProcessors;
+        Peb->ImageProcessAffinityMask = (ULONG)Process->Peb->ImageProcessAffinityMask;
         Peb->NtGlobalFlag = NtGlobalFlag;
         Peb->HeapSegmentReserve = MmHeapSegmentReserve;
         Peb->HeapSegmentCommit = MmHeapSegmentCommit;
