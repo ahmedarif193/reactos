@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS Modern Boot Status
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Borderless boot-status surface with system busy animation
+ * PURPOSE:     Borderless boot-status surface
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif.ing@outlook.com>
  */
 
@@ -15,10 +15,6 @@
 #include <debug.h>
 
 #define BOOT_STATUS_CLASS_NAME L"ReactOSBootStatusWindow"
-#define BOOT_STATUS_TIMER_ID 1
-/* The built-in ocr_wait.ani uses a two-jiffy (1/30 second) frame rate. */
-#define BOOT_STATUS_TIMER_INTERVAL 34
-#define BOOT_STATUS_MAX_CURSOR_FRAMES 64
 #define BOOT_STATUS_COPYDATA_TAG 0x53544252 /* 'RBTS' */
 
 typedef struct _BOOT_STATUS_UPDATE_DATA
@@ -36,15 +32,10 @@ typedef struct _BOOT_STATUS_CONTEXT
     HBITMAP OldBackgroundBitmap;
     HFONT PhaseFont;
     HFONT DetailFont;
-    HCURSOR BusyCursor;
     BOOT_STATUS_UPDATE_DATA Status;
-    UINT Frame;
-    UINT FrameCount;
     BOOL FirstPaintComplete;
     INT Width;
     INT Height;
-    INT CursorWidth;
-    INT CursorHeight;
 } BOOT_STATUS_CONTEXT, *PBOOT_STATUS_CONTEXT;
 
 static VOID
@@ -116,124 +107,31 @@ BootStatusCaptureBackground(
     return TRUE;
 }
 
-static UINT
-BootStatusGetCursorFrameCount(
-    _In_ HCURSOR Cursor)
-{
-    HDC ScreenDc;
-    HDC TestDc = NULL;
-    HBITMAP TestBitmap = NULL;
-    HBITMAP OldBitmap = NULL;
-    UINT FrameCount = 0;
-
-    if (!Cursor)
-        return 0;
-
-    ScreenDc = GetDC(NULL);
-    if (!ScreenDc)
-        return 1;
-
-    TestDc = CreateCompatibleDC(ScreenDc);
-    if (TestDc)
-        TestBitmap = CreateCompatibleBitmap(ScreenDc, 1, 1);
-
-    if (TestDc && TestBitmap)
-    {
-        OldBitmap = SelectObject(TestDc, TestBitmap);
-        if (OldBitmap)
-        {
-            while (FrameCount < BOOT_STATUS_MAX_CURSOR_FRAMES &&
-                   DrawIconEx(TestDc,
-                              0,
-                              0,
-                              Cursor,
-                              1,
-                              1,
-                              FrameCount,
-                              NULL,
-                              DI_NORMAL))
-            {
-                ++FrameCount;
-            }
-
-            SelectObject(TestDc, OldBitmap);
-        }
-    }
-
-    if (TestBitmap)
-        DeleteObject(TestBitmap);
-    if (TestDc)
-        DeleteDC(TestDc);
-    ReleaseDC(NULL, ScreenDc);
-
-    return FrameCount ? FrameCount : 1;
-}
-
 static VOID
 BootStatusGetLayout(
     _In_ PBOOT_STATUS_CONTEXT Context,
-    _Out_opt_ PRECT CursorRect,
     _Out_opt_ PRECT PhaseRect,
     _Out_opt_ PRECT DetailRect)
 {
-    INT CenterX = Context->Width / 2;
     INT CenterY = Context->Height / 2;
-    INT CursorLeft = CenterX - Context->CursorWidth / 2;
-    INT CursorTop = CenterY - Context->CursorHeight - 12;
-
-    if (CursorRect)
-    {
-        SetRect(CursorRect,
-                CursorLeft - 4,
-                CursorTop - 4,
-                CursorLeft + Context->CursorWidth + 4,
-                CursorTop + Context->CursorHeight + 4);
-    }
 
     if (PhaseRect)
     {
         SetRect(PhaseRect,
                 Context->Width / 8,
-                CenterY + 16,
+                CenterY - 19,
                 Context->Width - Context->Width / 8,
-                CenterY + 54);
+                CenterY + 19);
     }
 
     if (DetailRect)
     {
         SetRect(DetailRect,
                 Context->Width / 8,
-                CenterY + 53,
+                CenterY + 18,
                 Context->Width - Context->Width / 8,
-                CenterY + 84);
+                CenterY + 49);
     }
-}
-
-static VOID
-BootStatusDrawBusyCursor(
-    _In_ HDC Dc,
-    _In_ PBOOT_STATUS_CONTEXT Context)
-{
-    RECT CursorRect;
-    INT X;
-    INT Y;
-
-    if (!Context->BusyCursor)
-        return;
-
-    BootStatusGetLayout(Context, &CursorRect, NULL, NULL);
-    X = (CursorRect.left + CursorRect.right - Context->CursorWidth) / 2;
-    Y = (CursorRect.top + CursorRect.bottom - Context->CursorHeight) / 2;
-
-    DrawIconEx(Dc,
-               X,
-               Y,
-               Context->BusyCursor,
-               Context->CursorWidth,
-               Context->CursorHeight,
-               Context->Frame,
-               NULL,
-               DI_NORMAL);
 }
 
 static VOID
@@ -278,7 +176,7 @@ BootStatusDrawText(
     RECT PhaseRect;
     RECT DetailRect;
 
-    BootStatusGetLayout(Context, NULL, &PhaseRect, &DetailRect);
+    BootStatusGetLayout(Context, &PhaseRect, &DetailRect);
     DetailText[0] = UNICODE_NULL;
 
     if (Context->Status.Total)
@@ -342,8 +240,8 @@ BootStatusPaint(
     if (Width <= 0 || Height <= 0)
         return;
 
-    /* The background, text shadow, glyphs and busy cursor form one frame.
-     * Buffer only the invalid area, so animation ticks need a small bitmap. */
+    /* The background, text shadow and glyphs form one frame.
+     * Buffer only the invalid area, so updates need a small bitmap. */
     BufferDc = CreateCompatibleDC(Dc);
     if (BufferDc)
     {
@@ -371,7 +269,6 @@ BootStatusPaint(
         }
     }
 
-    BootStatusDrawBusyCursor(PaintDc, Context);
     BootStatusDrawText(PaintDc, Context);
     if (OldBitmap)
     {
@@ -408,7 +305,7 @@ BootStatusApplyUpdate(
                    0,
                    (LPARAM)Context->Status.PhaseText);
 
-    BootStatusGetLayout(Context, NULL, &PhaseRect, &DetailRect);
+    BootStatusGetLayout(Context, &PhaseRect, &DetailRect);
     UnionRect(&TextRect, &PhaseRect, &DetailRect);
     InvalidateRect(Window, &TextRect, FALSE);
     if (IsWindowVisible(Window))
@@ -448,14 +345,6 @@ BootStatusWindowProc(
 
             Context->Width = GetSystemMetrics(SM_CXSCREEN);
             Context->Height = GetSystemMetrics(SM_CYSCREEN);
-            Context->CursorWidth = GetSystemMetrics(SM_CXCURSOR);
-            Context->CursorHeight = GetSystemMetrics(SM_CYCURSOR);
-            Context->BusyCursor = LoadCursorW(NULL, (LPCWSTR)IDC_WAIT);
-            Context->FrameCount = BootStatusGetCursorFrameCount(Context->BusyCursor);
-            if (!Context->CursorWidth)
-                Context->CursorWidth = 32;
-            if (!Context->CursorHeight)
-                Context->CursorHeight = 32;
 
             Dc = GetDC(NULL);
             if (Dc)
@@ -501,13 +390,6 @@ BootStatusWindowProc(
             return TRUE;
         }
 
-        case WM_CREATE:
-            SetTimer(Window,
-                     BOOT_STATUS_TIMER_ID,
-                     BOOT_STATUS_TIMER_INTERVAL,
-                     NULL);
-            return 0;
-
         case WM_COPYDATA:
         {
             PCOPYDATASTRUCT CopyData = (PCOPYDATASTRUCT)lParam;
@@ -526,18 +408,6 @@ BootStatusWindowProc(
             return TRUE;
         }
 
-        case WM_TIMER:
-            if (Context && wParam == BOOT_STATUS_TIMER_ID)
-            {
-                RECT CursorRect;
-
-                if (Context->FrameCount > 1)
-                    Context->Frame = (Context->Frame + 1) % Context->FrameCount;
-                BootStatusGetLayout(Context, &CursorRect, NULL, NULL);
-                InvalidateRect(Window, &CursorRect, FALSE);
-            }
-            return 0;
-
         case WM_ERASEBKGND:
             return TRUE;
 
@@ -553,11 +423,10 @@ BootStatusWindowProc(
                 if (!Context->FirstPaintComplete)
                 {
                     Context->FirstPaintComplete = TRUE;
-                    DPRINT1("BOOT_STATUS: FIRST_PAINT_COMPLETE window=%p size=%dx%d cursor=IDC_WAIT frames=%u\n",
+                    DPRINT1("BOOT_STATUS: FIRST_PAINT_COMPLETE window=%p size=%dx%d\n",
                             Window,
                             Context->Width,
-                            Context->Height,
-                            Context->FrameCount);
+                            Context->Height);
                 }
             }
             return 0;
@@ -567,7 +436,6 @@ BootStatusWindowProc(
             return 0;
 
         case WM_DESTROY:
-            KillTimer(Window, BOOT_STATUS_TIMER_ID);
             DPRINT1("BOOT_STATUS: DESTROY window=%p\n", Window);
             PostQuitMessage(0);
             return 0;
@@ -660,11 +528,10 @@ BootStatusCreate(
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(Window, NULL, FALSE);
     UpdateWindow(Window);
-    DPRINT1("BOOT_STATUS: READY window=%p phase=%S background=%s cursor=IDC_WAIT frames=%u\n",
+    DPRINT1("BOOT_STATUS: READY window=%p phase=%S background=%s\n",
             Window,
             StatusText ? StatusText : L"",
-            (Context && Context->BackgroundDc) ? "captured" : "solid",
-            Context ? Context->FrameCount : 0);
+            (Context && Context->BackgroundDc) ? "captured" : "solid");
     return Window;
 }
 
