@@ -1307,7 +1307,8 @@ CRpi5HdmiAdapter::GetPosition(PKSAUDIO_POSITION Position)
     }
     Offset %= m_AudioBufferSize;
     Position->PlayOffset = Offset;
-    Position->WriteOffset = Offset;
+    /* The next period is prefetched into IEC958 storage half a period early. */
+    Position->WriteOffset = (Offset + m_AudioBufferSize - m_PeriodBytes - m_PeriodBytes / 2) % m_AudioBufferSize;
     return STATUS_SUCCESS;
 }
 
