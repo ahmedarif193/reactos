@@ -59,8 +59,10 @@ d3d10_get_present_context(struct pipe_screen *screen);
 static void APIENTRY DestroyDevice(D3D10DDI_HDEVICE hDevice);
 static void APIENTRY RelocateDeviceFuncs(D3D10DDI_HDEVICE hDevice,
                                 __in struct D3D10DDI_DEVICEFUNCS *pDeviceFunctions);
+#if SUPPORT_D3D10_1
 static void APIENTRY RelocateDeviceFuncs1(D3D10DDI_HDEVICE hDevice,
                                 __in struct D3D10_1DDI_DEVICEFUNCS *pDeviceFunctions);
+#endif
 #if SUPPORT_D3D11
 static void APIENTRY RelocateDeviceFuncs11(D3D10DDI_HDEVICE hDevice,
                                 __in struct D3D11DDI_DEVICEFUNCS *pDeviceFunctions);
@@ -653,6 +655,7 @@ RelocateDeviceFuncs(D3D10DDI_HDEVICE hDevice,                           // IN
 }
 
 
+#if SUPPORT_D3D10_1
 /*
  * ----------------------------------------------------------------------
  *
@@ -674,6 +677,7 @@ RelocateDeviceFuncs1(D3D10DDI_HDEVICE hDevice,                           // IN
     * Nothing to do as we don't store a pointer to this entity.
     */
 }
+#endif
 
 
 #if SUPPORT_D3D11
