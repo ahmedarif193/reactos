@@ -867,8 +867,8 @@ Rpi5CrtcVBlankSeen(
     return FALSE;
 }
 
-BOOLEAN
-Rpi5CrtcWaitForVBlank(
+static BOOLEAN
+Rpi5CrtcWaitForVBlankLocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
     PVOID Base;
@@ -914,4 +914,17 @@ Rpi5CrtcWaitForVBlank(
      * tear avoidance is optional and presentation still proceeds. */
     DeviceExtension->PvVBlankBroken = TRUE;
     return FALSE;
+}
+
+BOOLEAN
+Rpi5CrtcWaitForVBlank(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    BOOLEAN Result;
+
+    /* Waiters share the VFP latch without blocking cursor updates. */
+    ExAcquireFastMutex(&DeviceExtension->VBlankMutex);
+    Result = Rpi5CrtcWaitForVBlankLocked(DeviceExtension);
+    ExReleaseFastMutex(&DeviceExtension->VBlankMutex);
+    return Result;
 }
