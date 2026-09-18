@@ -876,6 +876,7 @@ translate_operand(struct Shader_xlate *sx,
             reg = sx->outputs[operand->index[0].imm].reg[0];
          } else {
             unsigned i;
+            reg = sx->outputs[operand->index[0].imm].reg[0];
             for (i = 0; i < 4; ++i) {
                unsigned mask = 1 << i;
                if ((writemask & mask)) {
@@ -1032,6 +1033,7 @@ translate_src_operand(struct Shader_xlate *sx,
             /* XXX: Other index representations.
              */
             LOG_UNSUPPORTED(true);
+            reg = ureg_src(ureg_DECL_temporary(sx->ureg));
 
          }
       } else {
@@ -1058,6 +1060,7 @@ translate_src_operand(struct Shader_xlate *sx,
             /* XXX: Other index representations.
              */
             LOG_UNSUPPORTED(true);
+            reg = ureg_src(ureg_DECL_temporary(sx->ureg));
          }
 
          switch (operand->base.index[0].index_rep) {
@@ -1164,6 +1167,7 @@ translate_src_operand(struct Shader_xlate *sx,
          /* XXX: Other index representations.
           */
          LOG_UNSUPPORTED(true);
+         reg = ureg_src(ureg_DECL_temporary(sx->ureg));
       }
 
       break;
@@ -1188,6 +1192,7 @@ translate_src_operand(struct Shader_xlate *sx,
          /* XXX: Other index representations.
           */
          LOG_UNSUPPORTED(true);
+         reg = ureg_src(ureg_DECL_temporary(sx->ureg));
       }
       break;
 
