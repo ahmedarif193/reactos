@@ -1242,9 +1242,7 @@ DevInstallInternal(
                 SearchResult = SearchDriverResult(DevInstData, NULL, CachedInfFile);
                 if (SearchResult == DriverSearchFound)
                 {
-                    DWORD CachedStarted = GetTickCount();
                     retval = CachedNullDriver ? InstallNullDriver(DevInstData) : InstallCurrentDriver(DevInstData);
-                    FIXME("PHASE cinst tid=%lu ms=%lu %ls\n", GetCurrentThreadId(), GetTickCount() - CachedStarted, InstanceId);
                     TRACE("Cached driver install returned %d\n", retval);
                     goto cleanup;
                 }
@@ -1275,11 +1273,7 @@ DevInstallInternal(
         SetLastError(LastError);
         goto cleanup;
     }
-    {
-        DWORD ScanStarted = GetTickCount();
-        SearchResult = ScanFoldersForDriverResult(DevInstData);
-        FIXME("PHASE scan tid=%lu ms=%lu %ls\n", GetCurrentThreadId(), GetTickCount() - ScanStarted, InstanceId);
-    }
+    SearchResult = ScanFoldersForDriverResult(DevInstData);
 handle_search_result:
     if (SearchResult == DriverSearchFound)
     {
@@ -1287,11 +1281,7 @@ handle_search_result:
             NewDevDriverCacheRememberFound(DriverCacheEntry, InstalledInfFile, IsCurrentDriverNullInstall(DevInstData));
 
         /* Driver found; install it. */
-        {
-            DWORD InstStarted = GetTickCount();
-            retval = InstallCurrentDriver(DevInstData);
-            FIXME("PHASE inst tid=%lu ms=%lu %ls\n", GetCurrentThreadId(), GetTickCount() - InstStarted, InstanceId);
-        }
+        retval = InstallCurrentDriver(DevInstData);
         TRACE("InstallCurrentDriver() returned %d\n", retval);
 
         if (retval && Show != SW_HIDE)
@@ -1713,16 +1703,7 @@ DrainBatchInstallQueue(
         if (Index < 0 || Index >= (LONG)Batch->DeviceCount)
             return;
 
-        {
-            DWORD Started = GetTickCount();
-
-            InstallBatchDevice(Batch, Batch->Devices[Index]);
-            FIXME("BATCHPROF tid=%lu idx=%ld ms=%lu %ls\n",
-                  GetCurrentThreadId(),
-                  Index,
-                  GetTickCount() - Started,
-                  Batch->Devices[Index]);
-        }
+        InstallBatchDevice(Batch, Batch->Devices[Index]);
     }
 }
 
