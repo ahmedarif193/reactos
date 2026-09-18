@@ -198,7 +198,7 @@ Rpi5Vc4PresentFixedFirmwarePrimary(
     _In_ SIZE_T SourceBytes,
     _In_ ULONG SourcePitch)
 {
-    RECT FullFrame;
+    RECT Strip;
     SIZE_T RequiredBytes;
 
     if (DeviceExtension == NULL || Source == NULL ||
@@ -218,10 +218,8 @@ Rpi5Vc4PresentFixedFirmwarePrimary(
     if (SourceBytes < RequiredBytes)
         return STATUS_GRAPHICS_INVALID_ALLOCATION_USAGE;
 
-    FullFrame.left = 0;
-    FullFrame.top = 0;
-    FullFrame.right = (LONG)DeviceExtension->ScreenWidth;
-    FullFrame.bottom = (LONG)DeviceExtension->ScreenHeight;
+    Strip.left = 0;
+    Strip.right = (LONG)DeviceExtension->ScreenWidth;
 
     /* The submission fence retired before this DDI was called.  Order the
      * CPU's read of the uncached/WC primary after the device writes. */
@@ -230,10 +228,21 @@ Rpi5Vc4PresentFixedFirmwarePrimary(
 #endif
     KeMemoryBarrier();
 
-    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    ExAcquireFastMutex(&DeviceExtension->FirmwarePresentMutex);
     DeviceExtension->FrameBufferPhysical =
         DeviceExtension->FirmwareFrameBufferPhysical;
-    Rpi5Vc4BlitRect(DeviceExtension, Source, (LONG)SourcePitch, &FullFrame);
+    /* Serialize frames and blanking, but let pointer updates run between strips.
+     * Each strip refreshes the pointer backing before publishing its pixels. */
+    for (Strip.top = 0; Strip.top < (LONG)DeviceExtension->ScreenHeight; Strip.top = Strip.bottom)
+    {
+        Strip.bottom = min(Strip.top + 32, (LONG)DeviceExtension->ScreenHeight);
+        KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
+        Rpi5Vc4BlitRect(DeviceExtension, Source, (LONG)SourcePitch, &Strip);
+#if defined(_M_ARM64)
+        __dsb(_ARM64_BARRIER_SY);
+#endif
+        KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
+    }
 
     /* Publish all writes before the firmware display pipeline fetches the
      * next scanout frame. */
@@ -242,7 +251,7 @@ Rpi5Vc4PresentFixedFirmwarePrimary(
 #endif
     KeMemoryBarrier();
 
-    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    ExReleaseFastMutex(&DeviceExtension->FirmwarePresentMutex);
     return STATUS_SUCCESS;
 }
 
@@ -532,7 +541,10 @@ Rpi5Vc4DdiPresentDisplayOnly(
     }
 
     if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
-        ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    {
+        ExAcquireFastMutex(&DeviceExtension->FirmwarePresentMutex);
+        KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
+    }
 
     /* If a flip ring exists, the live buffer may have missed flipped frames:
      * catch it up before applying this present. */
@@ -609,7 +621,10 @@ Rpi5Vc4DdiPresentDisplayOnly(
     KeMemoryBarrier();
 
     if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
-        ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    {
+        KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
+        ExReleaseFastMutex(&DeviceExtension->FirmwarePresentMutex);
+    }
     return STATUS_SUCCESS;
 }
 

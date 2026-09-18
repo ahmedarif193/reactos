@@ -637,9 +637,9 @@ VOID
 Rpi5HvsInstallScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
     Rpi5HvsInstallScanoutLocked(DeviceExtension);
-    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
 }
 
 BOOLEAN
@@ -890,9 +890,9 @@ Rpi5HvsInstallPlaneList(
 {
     BOOLEAN Result;
 
-    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
     Result = Rpi5HvsInstallPlaneListUnlocked(DeviceExtension, Planes, Count);
-    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
     return Result;
 }
 
@@ -1025,11 +1025,11 @@ Rpi5HvsFlipScanoutEx(
         FrameBufferPhysical.QuadPart != DeviceExtension->FrameBufferPhysical.QuadPart)
         Rpi5CrtcWaitForVBlank(DeviceExtension);
 
-    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
     Result = Rpi5HvsFlipScanoutExUnlocked(DeviceExtension,
                                           FrameBufferPhysical,
                                           WaitVBlank);
-    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
     return Result;
 }
 

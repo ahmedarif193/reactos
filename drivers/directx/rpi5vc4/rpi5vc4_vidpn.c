@@ -581,7 +581,8 @@ Rpi5Vc4DdiSetVidPnSourceVisibility(
 
     if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
     {
-        ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+        ExAcquireFastMutex(&DeviceExtension->FirmwarePresentMutex);
+        KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
         Rpi5Vc4PointerRestore(DeviceExtension->SoftwarePointer);
     }
 
@@ -621,7 +622,8 @@ Rpi5Vc4DdiSetVidPnSourceVisibility(
             __dsb(_ARM64_BARRIER_SY);
 #endif
         }
-        ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+        KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
+        ExReleaseFastMutex(&DeviceExtension->FirmwarePresentMutex);
     }
     return STATUS_SUCCESS;
 }
