@@ -180,9 +180,13 @@ KMT_TESTFUNC Test_KeArm64;
 KMT_TESTFUNC Test_KeArm64AffinityEx;
 KMT_TESTFUNC Test_KeArm64Dispatcher;
 KMT_TESTFUNC Test_KeArm64DpcIpi;
+KMT_TESTFUNC Test_KeArm64PmrMigration;
 KMT_TESTFUNC Test_KeArm64Frames;
 KMT_TESTFUNC Test_KeArm64Intrinsics;
+KMT_TESTFUNC Test_KeArm64Interrupt;
 KMT_TESTFUNC Test_KeArm64IpiBroadcast;
+KMT_TESTFUNC Test_KeArm64IpiConcurrent;
+KMT_TESTFUNC Test_KeArm64IpiPreemption;
 KMT_TESTFUNC Test_KeArm64Irql;
 KMT_TESTFUNC Test_KeArm64LoaderCache;
 KMT_TESTFUNC Test_KeArm64PcrPrcb;
@@ -454,13 +458,17 @@ const KMT_TEST TestList[] =
     { "KeArm64AffinityEx",                  Test_KeArm64AffinityEx },
     { "KeArm64Dispatcher",                  Test_KeArm64Dispatcher },
     { "KeArm64DpcIpi",                      Test_KeArm64DpcIpi },
+    { "KeArm64PmrMigration",                Test_KeArm64PmrMigration },
     { "KeArm64Frames",                      Test_KeArm64Frames },
     { "KeArm64Intrinsics",                  Test_KeArm64Intrinsics },
+    { "KeArm64Interrupt",                   Test_KeArm64Interrupt },
     { "KeArm64Irql",                        Test_KeArm64Irql },
     { "KeArm64LoaderCache",                 Test_KeArm64LoaderCache },
     { "KeArm64PcrPrcb",                     Test_KeArm64PcrPrcb },
     { "KeArm64ProcessorChange",              Test_KeArm64ProcessorChange },
     { "KeArm64IpiBroadcast",                Test_KeArm64IpiBroadcast },
+    { "KeArm64IpiConcurrent",               Test_KeArm64IpiConcurrent },
+    { "KeArm64IpiPreemption",               Test_KeArm64IpiPreemption },
     { "KeArm64Smp",                         Test_KeArm64Smp },
     { "KeArm64SmpChurn",                    Test_KeArm64SmpChurn },
     { "KeArm64SpinLock",                    Test_KeArm64SpinLock },

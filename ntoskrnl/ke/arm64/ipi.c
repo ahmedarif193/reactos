@@ -271,7 +271,7 @@ KeIpiGenericCall(
     _In_ ULONG_PTR Argument)
 {
 #ifdef CONFIG_SMP
-    KIRQL OldIrql, ExecuteIrql;
+    KIRQL OldIrql;
     ULONG_PTR Result;
     KAFFINITY Targets;
     LONG TargetCount;
@@ -290,12 +290,11 @@ KeIpiGenericCall(
     InterruptsEnabled = ((Daif & ARM64_PSTATE_IRQ_MASK) == 0);
 
     /*
-     * Serialize packet ownership below IPI_LEVEL. A processor waiting for an
-     * owner may itself be a target of that owner's generic call and must remain
-     * able to service the SGI. If the caller entered with IRQs masked, process
+     * Block every caller below IPI_LEVEL while owning the packet, but allow
+     * incoming IPIs while waiting for another owner. If IRQs are masked, process
      * the request summary directly while waiting, as the AMD64 packet path does.
      */
-    OldIrql = KfRaiseIrql(SYNCH_LEVEL);
+    OldIrql = KfRaiseIrql(IPI_LEVEL - 1);
 
     SpinCount = 0;
     while (InterlockedCompareExchange(&KiArm64IpiPacket.Busy, 1, 0) != 0)
@@ -355,7 +354,7 @@ KeIpiGenericCall(
      * on Release == 0 -> deadlock. The phase-1 quiesce above already guarantees
      * every target is parked, so releasing first does not lose the rendezvous.
      */
-    ExecuteIrql = KfRaiseIrql(IPI_LEVEL);
+    KfRaiseIrql(IPI_LEVEL);
     InterlockedExchange(&KiArm64IpiPacket.Release, 1);
     KiArm64IpiWakeWaiters();
 
@@ -386,7 +385,6 @@ KeIpiGenericCall(
     }
 
     KiArm64IpiPacket.Function = NULL;
-    KfLowerIrql(ExecuteIrql);
     InterlockedExchange(&KiArm64IpiPacket.Busy, 0);
     KiArm64IpiWakeWaiters();
     KfLowerIrql(OldIrql);

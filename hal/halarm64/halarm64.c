@@ -2676,7 +2676,48 @@ HalpArm64SetPmrExact(
 
 static ULONG HalpArm64DeferredIntId[MAXIMUM_PROCESSORS][HAL_ARM64_DEFERRED_INT_SLOTS];
 static UCHAR HalpArm64DeferredIrql[MAXIMUM_PROCESSORS][HAL_ARM64_DEFERRED_INT_SLOTS];
-static UCHAR HalpArm64DeferredCount[MAXIMUM_PROCESSORS];
+static volatile UCHAR HalpArm64DeferredCount[MAXIMUM_PROCESSORS];
+
+typedef struct _HALP_ARM64_INTERRUPT_STATE
+{
+    BOOLEAN Enabled;
+    ULONG Deferred;
+} HALP_ARM64_INTERRUPT_STATE, *PHALP_ARM64_INTERRUPT_STATE;
+
+static HALP_ARM64_INTERRUPT_STATE HalpArm64PpiState[MAXIMUM_PROCESSORS][16];
+static HALP_ARM64_INTERRUPT_STATE HalpArm64SpiState[1020 - 32];
+static volatile LONG HalpArm64InterruptStateLock;
+
+static
+ULONG64
+HalpArm64LockInterruptState(VOID)
+{
+    ULONG64 Daif;
+
+    /* IRQL lowering also takes this lock; mask IRQs without changing IRQL. */
+    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+    while (InterlockedCompareExchange(&HalpArm64InterruptStateLock, 1, 0) != 0)
+        YieldProcessor();
+    return Daif;
+}
+
+static
+VOID
+HalpArm64UnlockInterruptState(_In_ ULONG64 Daif)
+{
+    InterlockedExchange(&HalpArm64InterruptStateLock, 0);
+    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
+}
+
+static
+PHALP_ARM64_INTERRUPT_STATE
+HalpArm64GetInterruptState(_In_ ULONG Cpu, _In_ ULONG IntId)
+{
+    ASSERT(Cpu < MAXIMUM_PROCESSORS);
+    ASSERT(IntId >= 16 && IntId < 1020);
+    return IntId < 32 ? &HalpArm64PpiState[Cpu][IntId - 16] :
+                        &HalpArm64SpiState[IntId - 32];
+}
 
 // LPIs (MSIs) dropped by the lazy-IRQL deferral path; re-pended via ITS INT once IRQL falls to <= DISPATCH.
 #define HAL_ARM64_DROPPED_LPI_SLOTS 32
@@ -2692,11 +2733,21 @@ HalpArm64DeferInterrupt(
     _In_ KIRQL Irql)
 {
     ULONG Slot;
+    ULONG64 Daif = HalpArm64LockInterruptState();
+    PHALP_ARM64_INTERRUPT_STATE State = HalpArm64GetInterruptState(Cpu, IntId);
+
+    if (!State->Enabled)
+    {
+        HalpGicDisableInterrupt(IntId);
+        HalpArm64UnlockInterruptState(Daif);
+        return;
+    }
 
     for (Slot = 0; Slot < HAL_ARM64_DEFERRED_INT_SLOTS; Slot++)
     {
         if (HalpArm64DeferredIntId[Cpu][Slot] == (IntId + 1))
         {
+            HalpArm64UnlockInterruptState(Daif);
             return;
         }
     }
@@ -2708,12 +2759,15 @@ HalpArm64DeferInterrupt(
             HalpArm64DeferredIntId[Cpu][Slot] = IntId + 1;
             HalpArm64DeferredIrql[Cpu][Slot] = (UCHAR)Irql;
             HalpArm64DeferredCount[Cpu]++;
+            State->Deferred++;
             HalpGicDisableInterrupt(IntId);
+            HalpArm64UnlockInterruptState(Daif);
             return;
         }
     }
 
     HalpArm64SetPmrExact(KeGetCurrentIrql());
+    HalpArm64UnlockInterruptState(Daif);
     DPRINT1("Deferred interrupt table overflow on CPU %lu for INTID %lu at IRQL %u\n",
             Cpu,
             IntId,
@@ -2727,6 +2781,7 @@ HalpArm64UndeferInterrupts(
     _In_ KIRQL Irql)
 {
     ULONG Slot;
+    ULONG64 Daif = HalpArm64LockInterruptState();
 
     for (Slot = 0; Slot < HAL_ARM64_DEFERRED_INT_SLOTS; Slot++)
     {
@@ -2734,12 +2789,50 @@ HalpArm64UndeferInterrupts(
             (HalpArm64DeferredIrql[Cpu][Slot] > Irql))
         {
             ULONG IntId = HalpArm64DeferredIntId[Cpu][Slot] - 1;
+            PHALP_ARM64_INTERRUPT_STATE State = HalpArm64GetInterruptState(Cpu, IntId);
 
             HalpArm64DeferredIntId[Cpu][Slot] = 0;
             HalpArm64DeferredCount[Cpu]--;
-            HalpGicEnableInterrupt(IntId);
+            ASSERT(State->Deferred != 0);
+            State->Deferred--;
+            if (State->Enabled && State->Deferred == 0)
+                HalpGicEnableInterrupt(IntId);
         }
     }
+    HalpArm64UnlockInterruptState(Daif);
+}
+
+static
+VOID
+HalpArm64DisableInterrupt(_In_ ULONG IntId)
+{
+    ULONG Cpu, FirstCpu, LastCpu, Slot;
+    ULONG64 Daif = HalpArm64LockInterruptState();
+    PHALP_ARM64_INTERRUPT_STATE State;
+
+    Cpu = KeGetCurrentProcessorNumber();
+    State = HalpArm64GetInterruptState(Cpu, IntId);
+    State->Enabled = FALSE;
+    if (State->Deferred != 0)
+    {
+        FirstCpu = IntId < 32 ? Cpu : 0;
+        LastCpu = IntId < 32 ? Cpu + 1 : MAXIMUM_PROCESSORS;
+        for (Cpu = FirstCpu; Cpu < LastCpu; Cpu++)
+        {
+            for (Slot = 0; Slot < HAL_ARM64_DEFERRED_INT_SLOTS; Slot++)
+            {
+                if (HalpArm64DeferredIntId[Cpu][Slot] == IntId + 1)
+                {
+                    HalpArm64DeferredIntId[Cpu][Slot] = 0;
+                    HalpArm64DeferredCount[Cpu]--;
+                    State->Deferred--;
+                }
+            }
+        }
+        ASSERT(State->Deferred == 0);
+    }
+    HalpGicDisableInterrupt(IntId);
+    HalpArm64UnlockInterruptState(Daif);
 }
 
 // Record an LPI dropped by the deferral path. Called at DIRQL with IRQ masked; dedup keeps the small per-CPU list bounded.
@@ -4092,8 +4185,7 @@ HalDisableSystemInterrupt(
         return;
     }
 
-    /* PPIs and SPIs: clear the enable bit (redistributor on GICv3, distributor otherwise). */
-    HalpGicDisableInterrupt(Vector);
+    HalpArm64DisableInterrupt(Vector);
 }
 
 VOID
@@ -4173,6 +4265,8 @@ HalEnableSystemInterrupt(
 {
     UCHAR priority;
     BOOLEAN EdgeTriggered;
+    ULONG64 Daif;
+    PHALP_ARM64_INTERRUPT_STATE State;
 
     if (Vector < 16)
     {
@@ -4213,9 +4307,14 @@ HalEnableSystemInterrupt(
     }
 
     /* PPIs and SPIs: set trigger mode, priority, then enable. */
+    Daif = HalpArm64LockInterruptState();
+    State = HalpArm64GetInterruptState(KeGetCurrentProcessorNumber(), Vector);
+    State->Enabled = TRUE;
     HalpArm64ProgramGicTrigger(Vector, EdgeTriggered);
     HalpGicSetInterruptPriority(Vector, priority);
-    HalpGicEnableInterrupt(Vector);
+    if (State->Deferred == 0)
+        HalpGicEnableInterrupt(Vector);
+    HalpArm64UnlockInterruptState(Daif);
 
     return TRUE;
 }
@@ -6250,10 +6349,11 @@ FASTCALL
 HalSetGicPriorityMask(
     _In_ KIRQL Irql)
 {
-    ULONG Cpu = KeGetCurrentProcessorNumber();
+    ULONG Cpu;
     ULONG64 Daif;
 
     __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+    Cpu = KeGetCurrentProcessorNumber();
 
     if (Irql > HIGH_LEVEL)
     {

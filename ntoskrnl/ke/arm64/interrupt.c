@@ -32,10 +32,12 @@ extern BOOLEAN NTAPI HalArm64ProfileSample(ULONG Increment);
 #define ARM64_INTERRUPT_EXIT_APC 0x1
 #define ARM64_INTERRUPT_EXIT_DPC 0x2
 #define KI_ARM64_INTERRUPT_LOCK_NONE ((PKSPIN_LOCK)(LONG_PTR)-3)
-static PKINTERRUPT KiArm64IntTable[ARM64_MAX_INTID] = {0};
+static PKINTERRUPT KiArm64BootIntTable[ARM64_MAX_INTID];
+static PKINTERRUPT *KiArm64IntTables[MAXIMUM_PROCESSORS] = {KiArm64BootIntTable};
+static ULONG KiArm64IntConnections[ARM64_MAX_INTID];
 static KSPIN_LOCK KiArm64IntTableLock;
 /* Simple timer wiring for bring-up */
-static KINTERRUPT KiArm64TimerInterrupt;
+static KINTERRUPT KiArm64TimerInterrupt[MAXIMUM_PROCESSORS];
 static ULONGLONG KiArm64TimerPeriodTicks;
 static ULONGLONG KiArm64TimerFrequency;
 static KINTERRUPT KiArm64IpiInterrupt;
@@ -121,33 +123,30 @@ typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_TIMER_STATE
 
 static KI_ARM64_TIMER_STATE KiArm64TimerState[MAXIMUM_PROCESSORS];
 
-/*
- * Even/odd dispatch epoch per CPU (seqlock-style): odd while an ISR chain is
- * running, so KeDisconnectInterrupt can wait out in-flight dispatches. Each
- * slot is written only by its own CPU but read cross-CPU, so keep the
- * interlocked ordering; the cache-line alignment stops the per-interrupt
- * increments from bouncing one shared line between all CPUs.
- */
-typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_DISPATCH_EPOCH
+/* Include nested and secondary dispatches in interrupt-object rundown. */
+typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_DISPATCH_DEPTH
 {
     volatile LONG Value;
-} KI_ARM64_DISPATCH_EPOCH;
+} KI_ARM64_DISPATCH_DEPTH;
 
-static KI_ARM64_DISPATCH_EPOCH KiArm64DispatchEpoch[MAXIMUM_PROCESSORS];
+static KI_ARM64_DISPATCH_DEPTH KiArm64DispatchDepth[MAXIMUM_PROCESSORS];
 
 static inline
 PKINTERRUPT
 KiArm64LoadInterruptHeadNoFence(
-    _In_ ULONG IntId)
+    _In_ ULONG IntId,
+    _In_ ULONG Cpu)
 {
-    return (PKINTERRUPT)ReadPointerNoFence((PVOID const volatile *)&KiArm64IntTable[IntId]);
+    PKINTERRUPT *Table = (PKINTERRUPT *)ReadPointerNoFence((PVOID const volatile *)&KiArm64IntTables[Cpu]);
+
+    return Table ? (PKINTERRUPT)ReadPointerNoFence((PVOID const volatile *)&Table[IntId]) : NULL;
 }
 
 PKINTERRUPT NTAPI KiArm64QueryInterrupt(_In_ ULONG IntId)
 {
     if (IntId >= ARM64_MAX_INTID)
         return NULL;
-    return KiArm64LoadInterruptHeadNoFence(IntId);
+    return KiArm64LoadInterruptHeadNoFence(IntId, KeGetCurrentProcessorNumber());
 }
 
 ULONG NTAPI KiArm64QueryInterruptLimit(VOID)
@@ -658,14 +657,32 @@ VOID
 NTAPI
 KeStartArm64ProcessorTimer(VOID)
 {
-    ULONG TimerIntId = KiArm64ClockTimerIntId();
+    ULONG Cpu = KeGetCurrentProcessorNumber();
+    PKINTERRUPT Interrupt = &KiArm64TimerInterrupt[Cpu];
+    PKINTERRUPT *Table;
 
-    /*
-     * The ARM generic timer is a per-CPU PPI. The interrupt object is
-     * connected once on the BSP, but every processor must enable its own PPI
-     * bank and program its own local timer registers.
-     */
-    HalEnableSystemInterrupt(TimerIntId, CLOCK_LEVEL, LevelSensitive);
+    ASSERT(Cpu < MAXIMUM_PROCESSORS);
+    if (!KiArm64IntTables[Cpu])
+    {
+        Table = ExAllocatePoolZero(NonPagedPool, sizeof(KiArm64BootIntTable), TAG_KERNEL);
+        if (!Table)
+            KeBugCheckEx(PHASE1_INITIALIZATION_FAILED, STATUS_INSUFFICIENT_RESOURCES, Cpu, 0, 0);
+        InterlockedExchangePointer((PVOID volatile *)&KiArm64IntTables[Cpu], Table);
+    }
+
+    KeInitializeInterrupt(Interrupt,
+                          KiArm64TimerIsr,
+                          &KiArm64TimerPeriodTicks,
+                          KI_ARM64_INTERRUPT_LOCK_NONE,
+                          KiArm64ClockTimerIntId(),
+                          CLOCK_LEVEL,
+                          CLOCK_LEVEL,
+                          LevelSensitive,
+                          FALSE,
+                          (CHAR)Cpu,
+                          FALSE);
+    if (!KeConnectInterrupt(Interrupt))
+        KeBugCheckEx(PHASE1_INITIALIZATION_FAILED, STATUS_UNSUCCESSFUL, Cpu, Interrupt->Vector, 0);
     KiArm64StartLocalTimer();
 }
 
@@ -700,53 +717,8 @@ KeInitInterrupts(VOID)
     (VOID)KeConnectInterrupt(&KiArm64IpiInterrupt);
     KiRawDebugPuts("[KeInitInterrupts] IPI connect done\n");
 
-    KiRawDebugPuts("[KeInitInterrupts] Timer setup\n");
-    /*
-     * Wire the generic timer (PPI) for a periodic clock tick.
-     *
-     * ARM64 Generic Timer PPIs:
-     *   INTID 29 = Secure EL1 Physical Timer (CNTP_S)
-     *   INTID 30 = Non-secure EL1 Physical Timer (CNTP_NS)
-     *   INTID 27 = Virtual Timer (CNTV)
-     *   INTID 26 = Hypervisor Timer (CNTHP)
-     *
-     * We use the virtual timer (27) by default because it remains accessible
-     * from EL1 under hypervisors such as HVF.
-     *
-     * The clock ISR runs at CLOCK_LEVEL (13) which is higher than device
-     * interrupts but lower than IPI_LEVEL. This allows the scheduler
-     * tick to preempt device ISRs for accurate timing.
-     */
-    {
-        ULONG TimerIntId = KiArm64ClockTimerIntId();
-
-        KiRawDebugPuts("[KeInitInterrupts] Timer KeInitializeInterrupt\n");
-        KeInitializeInterrupt(&KiArm64TimerInterrupt,
-                              KiArm64TimerIsr,
-                              &KiArm64TimerPeriodTicks,
-                              KI_ARM64_INTERRUPT_LOCK_NONE,
-                              TimerIntId,
-                              CLOCK_LEVEL,
-                              CLOCK_LEVEL,
-                              LevelSensitive,
-                              FALSE,
-                              0,
-                              FALSE);
-        KiRawDebugPuts("[KeInitInterrupts] Timer KeConnectInterrupt\n");
-        if (KeConnectInterrupt(&KiArm64TimerInterrupt))
-        {
-            KiRawDebugPuts("[KeInitInterrupts] Timer connect OK, starting timer\n");
-            KiArm64StartLocalTimer();
-            KiRawDebugPuts("[KeInitInterrupts] Timer started\n");
-
-            /*
-             * KeInitInterrupts runs before HAL phase 0 configures the GIC.
-             * Do not unmask DAIF or touch ICC_IGRPEN1_EL1 here; the executive
-             * enables CPU interrupt delivery after HalInitSystem(0) completes.
-             */
-            KiRawDebugPuts("[KeInitInterrupts] IRQ delivery remains masked until HAL phase 0\n");
-        }
-    }
+    /* CPU interrupt delivery remains masked until HAL phase 0 completes. */
+    KeStartArm64ProcessorTimer();
     KiRawDebugPuts("[KeInitInterrupts] EXIT\n");
 }
 
@@ -790,25 +762,24 @@ KiArm64CallInterruptServiceRoutine(
 {
     BOOLEAN AcquireLock = (Interrupt->ActualLock != KI_ARM64_INTERRUPT_LOCK_NONE);
     BOOLEAN Handled;
+    KIRQL OldIrql = KeGetCurrentIrql();
+    BOOLEAN RaiseIrql = (OldIrql < Interrupt->SynchronizeIrql);
 
+    if (RaiseIrql) KfRaiseIrql(Interrupt->SynchronizeIrql);
     if (AcquireLock) KxAcquireSpinLock(Interrupt->ActualLock);
     Handled = Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
     if (AcquireLock) KxReleaseSpinLock(Interrupt->ActualLock);
+    if (RaiseIrql) KfLowerIrql(OldIrql);
     return Handled;
 }
 
 static
 VOID
-KiArm64DispatchChain(_In_ ULONG IntId)
+KiArm64DispatchChain(_In_ PKINTERRUPT Head)
 {
-    PKINTERRUPT Head, Interrupt;
+    PKINTERRUPT Interrupt;
     PLIST_ENTRY ListHead, NextEntry;
-    KIRQL RaiseIrql;
     BOOLEAN Handled = FALSE;
-
-    /* Snapshot head without taking the global lock on every interrupt. */
-    Head = KiArm64LoadInterruptHeadNoFence(IntId);
-    if (!Head) return;
 
     ListHead = &Head->InterruptListEntry;
 
@@ -825,20 +796,7 @@ KiArm64DispatchChain(_In_ ULONG IntId)
 
     for (;;)
     {
-        /* Elevate for synchronization if needed */
-        RaiseIrql = 0;
-        if (Interrupt->SynchronizeIrql > Interrupt->Irql)
-        {
-            RaiseIrql = KfRaiseIrql(Interrupt->SynchronizeIrql);
-        }
-
         Handled = KiArm64CallInterruptServiceRoutine(Interrupt);
-
-        if (Interrupt->SynchronizeIrql > Interrupt->Irql)
-        {
-            ASSERT(RaiseIrql == Interrupt->Irql);
-            KfLowerIrql(RaiseIrql);
-        }
 
         if ((Handled) && (Interrupt->Mode == LevelSensitive)) break;
 
@@ -870,16 +828,27 @@ KeDispatchSecondaryInterrupt(
     _In_ ULONG_PTR Flags,
     _In_opt_ PVOID Reserved)
 {
+    ULONG Cpu;
+    KIRQL OldIrql;
+    PKINTERRUPT Head;
+    BOOLEAN Connected;
+
     UNREFERENCED_PARAMETER(Flags);
     UNREFERENCED_PARAMETER(Reserved);
 
-    if (!KiSecondaryInterruptServicesEnabled || Vector >= ARM64_MAX_INTID ||
-        !KiArm64LoadInterruptHeadNoFence(Vector))
-    {
+    if (!KiSecondaryInterruptServicesEnabled || Vector >= ARM64_MAX_INTID)
         return FALSE;
-    }
-    KiArm64DispatchChain(Vector);
-    return TRUE;
+
+    OldIrql = KfRaiseIrql(DISPATCH_LEVEL);
+    Cpu = KeGetCurrentProcessorNumber();
+    ASSERT(Cpu < MAXIMUM_PROCESSORS);
+    InterlockedIncrement(&KiArm64DispatchDepth[Cpu].Value);
+    Head = KiArm64LoadInterruptHeadNoFence(Vector, Cpu);
+    Connected = (Head != NULL);
+    if (Connected) KiArm64DispatchChain(Head);
+    InterlockedDecrement(&KiArm64DispatchDepth[Cpu].Value);
+    KfLowerIrql(OldIrql);
+    return Connected;
 }
 
 static
@@ -891,6 +860,8 @@ KiArm64SoftwareInterrupt(_In_ ULONG IntId)
 
     if (!HalBeginSystemInterrupt(Level, IntId, &OldIrql))
         return 0;
+
+    KeGetCurrentPrcb()->InterruptCount++;
 
     /*
      * Acknowledge the SGI while still on the per-processor ISR stack, but do
@@ -1006,7 +977,10 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
          * an intid-plus-one value and EOI the wrong SGI.
          */
         if (HalBeginSystemInterrupt(HIGH_LEVEL, IntId, &OldIrql))
+        {
+            KeGetCurrentPrcb()->InterruptCount++;
             HalEndSystemInterrupt(OldIrql, NULL);
+        }
         return 0;
     }
 
@@ -1020,6 +994,7 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
         if (HalBeginSystemInterrupt(IPI_LEVEL, IntId, &OldIrql))
         {
             Prcb = KeGetCurrentPrcb();
+            Prcb->InterruptCount++;
             if ((Prcb != NULL) && (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE))
             {
                 Cpu = Prcb->Number;
@@ -1041,7 +1016,10 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
         return 0;
     }
 
-    Head = (IntId < ARM64_MAX_INTID) ? KiArm64IntTable[IntId] : NULL;
+    Cpu = KeGetCurrentProcessorNumber();
+    ASSERT(Cpu < MAXIMUM_PROCESSORS);
+    InterlockedIncrement(&KiArm64DispatchDepth[Cpu].Value);
+    Head = (IntId < ARM64_MAX_INTID) ? KiArm64LoadInterruptHeadNoFence(IntId, Cpu) : NULL;
     if (Head != NULL)
     {
         RequestIrql = Head->Irql;
@@ -1049,13 +1027,14 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
 
     Begun = HalBeginSystemInterrupt(RequestIrql, IntId, &OldIrql);
     if (!Begun)
-        return 0;
-
-    Cpu = KeGetCurrentProcessorNumber();
-    if (Cpu >= MAXIMUM_PROCESSORS)
     {
-        Cpu = 0;
+        InterlockedDecrement(&KiArm64DispatchDepth[Cpu].Value);
+        return 0;
     }
+
+    /* The clock path accounts for its interrupt in KeUpdateSystemTime/RunTime. */
+    if (Head != &KiArm64TimerInterrupt[Cpu])
+        KeGetCurrentPrcb()->InterruptCount++;
 
     /*
      * The clock path consumes PreviousMode/SavedIrql for accounting and Pc
@@ -1076,16 +1055,15 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
 
     if (Head != NULL)
     {
-        InterlockedIncrement(&KiArm64DispatchEpoch[Cpu].Value);
         /* Deassert the level-sensitive timer before nested IRQs are enabled. */
-        if (Head == &KiArm64TimerInterrupt) KiArm64AcknowledgeClockInterrupt(Cpu);
+        if (Head == &KiArm64TimerInterrupt[Cpu]) KiArm64AcknowledgeClockInterrupt(Cpu);
         _enable();
-        KiArm64DispatchChain(IntId);
+        KiArm64DispatchChain(Head);
         _disable();
-        InterlockedIncrement(&KiArm64DispatchEpoch[Cpu].Value);
     }
 
     KiArm64CurrentInterruptTrapFrame[Cpu] = SavedTrapFrame;
+    InterlockedDecrement(&KiArm64DispatchDepth[Cpu].Value);
 
     HalEndSystemInterrupt(OldIrql, NULL);
 
@@ -1095,6 +1073,114 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
 /*
  * KINTERRUPT support (connect/disconnect/synchronize)
  */
+
+typedef struct _KI_ARM64_INTERRUPT_UPDATE
+{
+    PKINTERRUPT Interrupt;
+    ULONG Processor;
+    LONG ProcessorCount;
+    BOOLEAN Connect;
+    BOOLEAN Updated;
+    volatile LONG Arrived;
+    volatile LONG Done;
+} KI_ARM64_INTERRUPT_UPDATE;
+
+static
+BOOLEAN
+KiArm64InterruptsQuiescent(VOID)
+{
+    ULONG Cpu;
+
+    for (Cpu = 0; Cpu < (ULONG)KeNumberProcessors; Cpu++)
+        if (ReadAcquire(&KiArm64DispatchDepth[Cpu].Value) != 0)
+            return FALSE;
+    return TRUE;
+}
+
+static
+ULONG_PTR
+NTAPI
+KiArm64UpdateInterruptChain(_In_ ULONG_PTR Argument)
+{
+    KI_ARM64_INTERRUPT_UPDATE *Update = (KI_ARM64_INTERRUPT_UPDATE *)Argument;
+    PKINTERRUPT Interrupt = Update->Interrupt;
+    PKINTERRUPT *Table = KiArm64IntTables[(UCHAR)Interrupt->Number];
+    PKINTERRUPT Head;
+    KIRQL OldIrql = KfRaiseIrql(HIGH_LEVEL);
+
+    InterlockedIncrement(&Update->Arrived);
+
+    if (KeGetCurrentProcessorNumber() != Update->Processor)
+    {
+        while (!ReadAcquire(&Update->Done)) YieldProcessor();
+        KfLowerIrql(OldIrql);
+        return 0;
+    }
+
+    /* Keep every CPU at the rendezvous until the links have been updated. */
+    while (ReadAcquire(&Update->Arrived) != Update->ProcessorCount) YieldProcessor();
+    if (KiArm64InterruptsQuiescent())
+    {
+        Head = Table[Interrupt->Vector];
+        if (Update->Connect)
+        {
+            InsertTailList(&Head->InterruptListEntry, &Interrupt->InterruptListEntry);
+        }
+        else
+        {
+            if (IsListEmpty(&Head->InterruptListEntry))
+                Table[Interrupt->Vector] = NULL;
+            else
+            {
+                if (Head == Interrupt)
+                    Table[Interrupt->Vector] = CONTAINING_RECORD(Head->InterruptListEntry.Flink, KINTERRUPT, InterruptListEntry);
+                RemoveEntryList(&Interrupt->InterruptListEntry);
+            }
+        }
+        Interrupt->Connected = Update->Connect;
+        Update->Updated = TRUE;
+    }
+    InterlockedExchange(&Update->Done, 1);
+    KfLowerIrql(OldIrql);
+    return 0;
+}
+
+static
+VOID
+KiArm64SynchronizeInterruptChain(_In_ PKINTERRUPT Interrupt, _In_ BOOLEAN Connect)
+{
+    KI_ARM64_INTERRUPT_UPDATE Update;
+    KIRQL OldIrql;
+    KAFFINITY Processors;
+
+    Update.Interrupt = Interrupt;
+    Update.Processor = KeGetCurrentProcessorNumber();
+    Update.Connect = Connect;
+    Update.Updated = FALSE;
+    Update.ProcessorCount = 0;
+    Processors = KeActiveProcessors | KeGetCurrentPrcb()->SetMember;
+    while (Processors)
+    {
+        Update.ProcessorCount++;
+        Processors &= Processors - 1;
+    }
+
+    do
+    {
+        /* Let an interrupted ISR finish before attempting another rendezvous. */
+        while (!KiArm64InterruptsQuiescent()) YieldProcessor();
+        Update.Arrived = 0;
+        Update.Done = 0;
+        if ((KeActiveProcessors & ~KeGetCurrentPrcb()->SetMember) != 0)
+            KeIpiGenericCall(KiArm64UpdateInterruptChain, (ULONG_PTR)&Update);
+        else
+        {
+            OldIrql = KfRaiseIrql(HIGH_LEVEL);
+            KiArm64UpdateInterruptChain((ULONG_PTR)&Update);
+            KfLowerIrql(OldIrql);
+        }
+    } while (!Update.Updated);
+}
 
 VOID
 NTAPI
@@ -1141,21 +1227,46 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
 {
     KIRQL OldIrql;
     PKINTERRUPT Head;
+    PKINTERRUPT *Table;
     ULONG Vector = Interrupt->Vector;
+    ULONG Cpu = (UCHAR)Interrupt->Number;
+    KAFFINITY PreviousAffinity = 0;
+    BOOLEAN RestoreAffinity = FALSE;
+    BOOLEAN Connected;
 
-    if (Vector >= ARM64_MAX_INTID) return FALSE;
-    if (Interrupt->Connected) return TRUE;
+    if (Vector >= ARM64_MAX_INTID || Cpu >= MAXIMUM_PROCESSORS) return FALSE;
+    Table = KiArm64IntTables[Cpu];
+    if (!Table) return FALSE;
+
+    /* SGI/PPI enable registers belong to the target processor. */
+    if (Vector < 32)
+    {
+        if (KeGetCurrentIrql() < DISPATCH_LEVEL)
+        {
+            PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Cpu);
+            RestoreAffinity = TRUE;
+        }
+        else if (Cpu != KeGetCurrentProcessorNumber())
+            return FALSE;
+    }
 
     KeAcquireSpinLock(&KiArm64IntTableLock, &OldIrql);
+    if (Interrupt->Connected) goto Done;
 
-    Head = KiArm64IntTable[Vector];
+    Head = Table[Vector];
     if (!Head)
     {
         InitializeListHead(&Interrupt->InterruptListEntry);
         KeMemoryBarrier();
-        KiArm64IntTable[Vector] = Interrupt;
-        HalEnableSystemInterrupt(Vector, Interrupt->Irql, Interrupt->Mode);
-        Interrupt->Connected = TRUE;
+        Table[Vector] = Interrupt;
+        if ((Vector >= 32 && KiArm64IntConnections[Vector] != 0) ||
+            HalEnableSystemInterrupt(Vector, Interrupt->Irql, Interrupt->Mode))
+        {
+            KiArm64IntConnections[Vector]++;
+            Interrupt->Connected = TRUE;
+        }
+        else
+            KiArm64SynchronizeInterruptChain(Interrupt, FALSE);
     }
     else
     {
@@ -1166,18 +1277,16 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
         }
         else
         {
-            Interrupt->InterruptListEntry.Flink = &Head->InterruptListEntry;
-            Interrupt->InterruptListEntry.Blink = Head->InterruptListEntry.Blink;
-            KeMemoryBarrier();
-            Head->InterruptListEntry.Blink->Flink = &Interrupt->InterruptListEntry;
-            Head->InterruptListEntry.Blink = &Interrupt->InterruptListEntry;
-            Interrupt->Connected = TRUE;
+            KiArm64SynchronizeInterruptChain(Interrupt, TRUE);
         }
     }
 
+Done:
+    Connected = Interrupt->Connected;
     KeReleaseSpinLock(&KiArm64IntTableLock, OldIrql);
+    if (RestoreAffinity) KeRevertToUserAffinityThreadEx(PreviousAffinity);
 
-    return Interrupt->Connected;
+    return Connected;
 }
 
 BOOLEAN
@@ -1187,61 +1296,44 @@ KeDisconnectInterrupt(IN PKINTERRUPT Interrupt)
     KIRQL OldIrql;
     PKINTERRUPT Head;
     ULONG Vector = Interrupt->Vector;
+    ULONG Cpu = (UCHAR)Interrupt->Number;
+    KAFFINITY PreviousAffinity = 0;
+    BOOLEAN RestoreAffinity = FALSE;
+    BOOLEAN Connected;
 
+    if (Vector >= ARM64_MAX_INTID || Cpu >= MAXIMUM_PROCESSORS) return FALSE;
+    if (!KiArm64IntTables[Cpu]) return FALSE;
+    if (Vector < 32)
+    {
+        if (KeGetCurrentIrql() < DISPATCH_LEVEL)
+        {
+            PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Cpu);
+            RestoreAffinity = TRUE;
+        }
+        else if (Cpu != KeGetCurrentProcessorNumber())
+            return FALSE;
+    }
     KeAcquireSpinLock(&KiArm64IntTableLock, &OldIrql);
-    Head = KiArm64IntTable[Vector];
-    if (!Head || !Interrupt->Connected)
+    Head = KiArm64IntTables[Cpu][Vector];
+    Connected = Interrupt->Connected;
+    if (!Head || !Connected)
         goto Done;
 
     if (IsListEmpty(&Head->InterruptListEntry))
     {
         /* Single interrupt case */
         ASSERT(Head == Interrupt);
-        HalDisableSystemInterrupt(Vector, Interrupt->Irql);
-        KiArm64IntTable[Vector] = NULL;
-        Interrupt->Connected = FALSE;
+        ASSERT(KiArm64IntConnections[Vector] != 0);
+        KiArm64IntConnections[Vector]--;
+        if (Vector < 32 || KiArm64IntConnections[Vector] == 0)
+            HalDisableSystemInterrupt(Vector, Interrupt->Irql);
     }
-    else if (Head == Interrupt)
-    {
-        /* Move head to next */
-        PLIST_ENTRY NewHeadEntry = Head->InterruptListEntry.Flink;
-        RemoveTailList(NewHeadEntry);
-        KiArm64IntTable[Vector] = CONTAINING_RECORD(NewHeadEntry, KINTERRUPT, InterruptListEntry);
-        Interrupt->Connected = FALSE;
-    }
-    else
-    {
-        /* Remove from chain */
-        RemoveEntryList(&Interrupt->InterruptListEntry);
-        Interrupt->Connected = FALSE;
-    }
+    KiArm64SynchronizeInterruptChain(Interrupt, FALSE);
 
 Done:
     KeReleaseSpinLock(&KiArm64IntTableLock, OldIrql);
-
-    {
-        ULONG Cpu;
-
-        KeMemoryBarrier();
-        for (Cpu = 0; Cpu < (ULONG)KeNumberProcessors && Cpu < MAXIMUM_PROCESSORS; Cpu++)
-        {
-            LONG Epoch = KiArm64DispatchEpoch[Cpu].Value;
-            ULONG Spins = 0;
-
-            if (!(Epoch & 1))
-                continue;
-
-            while (KiArm64DispatchEpoch[Cpu].Value == Epoch)
-            {
-                YieldProcessor();
-                KeMemoryBarrier();
-                if (++Spins > 2000000UL)
-                    break;
-            }
-        }
-    }
-
-    return TRUE;
+    if (RestoreAffinity) KeRevertToUserAffinityThreadEx(PreviousAffinity);
+    return Connected;
 }
 
 BOOLEAN
