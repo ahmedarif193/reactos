@@ -3315,6 +3315,7 @@ DwmComposeLoop(HANDLE hStopEvent)
     BOOL forceFull = TRUE;
     BOOL gpuDeferred = FALSE;
     DWORD gpuLastOutputCheck = 0;
+    DWORD gpuLastInitTry = 0;
     LONG vw, vh, primW, primH;
     ULONG ViewIndex;
 
@@ -3399,7 +3400,10 @@ DwmComposeLoop(HANDLE hStopEvent)
     if (DwmGpuComposeInitialize(g_W, g_H))
         OutputDebugStringA("DWM: Direct3D composition enabled; GPU copy to scanout\n");
     else
-        DwmLog("DWM: waiting for the native Direct3D compositor\n");
+    {
+        gpuLastInitTry = GetTickCount();
+        DwmLog("DWM: no native Direct3D compositor; composing on the CPU\n");
+    }
 
     if (DwmSettingsRead(&Settings.Effects) != ERROR_SUCCESS)
         DwmLog("DWM: could not read effect preferences\n");
@@ -3434,24 +3438,19 @@ DwmComposeLoop(HANDLE hStopEvent)
         if (WaitForSingleObject(hStopEvent, 0) == WAIT_OBJECT_0)
             break;
 
-        /* Windows 11 desktop composition is a Direct3D/WDDM contract. Keep
-         * the last completed scanout while that contract is unavailable and
-         * recreate the whole device chain; never substitute GDI or WGL. */
         if (!DwmGpuComposeIsActive())
         {
-            if (DwmGpuComposeInitialize(g_W, g_H))
+            DWORD Elapsed = GetTickCount() - gpuLastInitTry;
+
+            if (Elapsed >= 2000)
             {
-                DwmLog("DWM: native Direct3D compositor available\n");
-                forceFull = TRUE;
-                g_lastFrameQpc = 0;
-            }
-            else
-            {
-                DwmSetTimerPrecision(FALSE);
-                if (MsgWaitForMultipleObjects(1, &hStopEvent, FALSE,
-                                              1000, QS_ALLINPUT) == WAIT_OBJECT_0)
-                    break;
-                continue;
+                gpuLastInitTry = GetTickCount();
+                if (DwmGpuComposeInitialize(g_W, g_H))
+                {
+                    DwmLog("DWM: native Direct3D compositor available\n");
+                    forceFull = TRUE;
+                    g_lastFrameQpc = 0;
+                }
             }
         }
 
