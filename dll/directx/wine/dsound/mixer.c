@@ -26,8 +26,14 @@
 #include <float.h>
 #include <stdarg.h>
 #include <math.h>	/* Insomnia - pow() function */
-#ifdef __SSE__
+#if defined(__SSE__) || (defined(__GNUC__) && defined(__i386__))
 #include <xmmintrin.h>
+#define DSOUND_HAVE_SSE
+#endif
+#if defined(__GNUC__) && defined(__i386__)
+#define DSOUND_SSE_TARGET __attribute__((target("sse")))
+#else
+#define DSOUND_SSE_TARGET
 #endif
 
 #define COBJMACROS
@@ -388,13 +394,13 @@ static inline void get_samples(const IDirectSoundBufferImpl *dsb, BYTE *buffer, 
     }
 }
 
-#ifdef __SSE__
+#ifdef DSOUND_HAVE_SSE
 
 /**
  * Note that this function will overwrite up to FIR_WIDTH - 1 frames before and
  * after output[].
  */
-void downsample_sse(LONG64 opos_num, DWORD opos_num_step, float rem_float, float rem_step_float,
+DSOUND_SSE_TARGET void downsample_sse(LONG64 opos_num, DWORD opos_num_step, float rem_float, float rem_step_float,
         float firgain_float, UINT required_input, float *input, float *output)
 {
     __m128 rem = _mm_set1_ps(rem_float);
@@ -469,6 +475,13 @@ static void downsample(DWORD freq_adjust_den, DWORD freq_acc_start, float firgai
 #ifdef __SSE__
     downsample_sse(opos_num, opos_num_step, rem, rem_step, firgain, required_input, input, output);
 #else
+#ifdef DSOUND_HAVE_SSE
+    if (IsProcessorFeaturePresent(PF_XMMI_INSTRUCTIONS_AVAILABLE))
+    {
+        downsample_sse(opos_num, opos_num_step, rem, rem_step, firgain, required_input, input, output);
+        return;
+    }
+#endif
     int j;
     for (j = 0; j < required_input; ++j) {
         /* opos is in the range [-(fir_width - 1), count) */
@@ -491,9 +504,9 @@ static void downsample(DWORD freq_adjust_den, DWORD freq_acc_start, float firgai
 #endif
 }
 
-#ifdef __SSE__
+#ifdef DSOUND_HAVE_SSE
 
-void upsample_sse(LONG64 ipos_num, DWORD ipos_num_step, float rem_inv_float,
+DSOUND_SSE_TARGET void upsample_sse(LONG64 ipos_num, DWORD ipos_num_step, float rem_inv_float,
         float rem_inv_step_float, UINT count, float *input, float *output)
 {
     __m128 rem_inv = _mm_set1_ps(rem_inv_float);
@@ -566,6 +579,13 @@ static void upsample(DWORD freq_adjust_num, DWORD freq_acc_start, UINT count, fl
 #ifdef __SSE__
     upsample_sse(ipos_num, ipos_num_step, rem_inv, rem_inv_step, count, input, output);
 #else
+#ifdef DSOUND_HAVE_SSE
+    if (IsProcessorFeaturePresent(PF_XMMI_INSTRUCTIONS_AVAILABLE))
+    {
+        upsample_sse(ipos_num, ipos_num_step, rem_inv, rem_inv_step, count, input, output);
+        return;
+    }
+#endif
     UINT i;
     for(i = 0; i < count; ++i) {
         UINT ipos = ipos_num >> FREQ_ADJUST_SHIFT;
