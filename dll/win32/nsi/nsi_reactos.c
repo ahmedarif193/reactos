@@ -879,12 +879,19 @@ static DWORD table_hash(const NPI_MODULEID *module, UINT table_id, ULONG *result
 {
     const struct nsi_table *table = find_table(module, table_id);
     struct nsi_enumerate_all_ex params;
-    BYTE *key = NULL, *rw = NULL, *stat = NULL;
+    BYTE *key = NULL, *rw = NULL, *dynamic = NULL, *stat = NULL;
     UINT_PTR count;
+    UINT dynamic_size = 0;
     DWORD error;
     ULONG hash = 2166136261u;
 
     if (!table || !table->enumerate) return ERROR_INVALID_PARAMETER;
+    /* Interface connectivity lives in the dynamic block. Include it so a
+       retained Network List Manager sees link changes, but do not hash the
+       traffic counters or continuously changing ages of other tables. */
+    if (table_id == NSI_IP_INTERFACE_TABLE &&
+        (module_equal(module, &NPI_MS_IPV4_MODULEID) || module_equal(module, &NPI_MS_IPV6_MODULEID)))
+        dynamic_size = table->sizes[2];
     memset(&params, 0, sizeof(params));
     params.module = module;
     params.table = table_id;
@@ -892,8 +899,10 @@ static DWORD table_hash(const NPI_MODULEID *module, UINT table_id, ULONG *result
     count = params.count;
     if (count && table->sizes[0]) key = HeapAlloc(GetProcessHeap(), 0, count * table->sizes[0]);
     if (count && table->sizes[1]) rw = HeapAlloc(GetProcessHeap(), 0, count * table->sizes[1]);
+    if (count && dynamic_size) dynamic = HeapAlloc(GetProcessHeap(), 0, count * dynamic_size);
     if (count && table->sizes[3]) stat = HeapAlloc(GetProcessHeap(), 0, count * table->sizes[3]);
-    if (count && ((!key && table->sizes[0]) || (!rw && table->sizes[1]) || (!stat && table->sizes[3])))
+    if (count && ((!key && table->sizes[0]) || (!rw && table->sizes[1]) ||
+                  (!dynamic && dynamic_size) || (!stat && table->sizes[3])))
     {
         error = ERROR_OUTOFMEMORY;
         goto done;
@@ -902,6 +911,8 @@ static DWORD table_hash(const NPI_MODULEID *module, UINT table_id, ULONG *result
     params.key_size = table->sizes[0];
     params.rw_data = rw;
     params.rw_size = table->sizes[1];
+    params.dynamic_data = dynamic;
+    params.dynamic_size = dynamic_size;
     params.static_data = stat;
     params.static_size = table->sizes[3];
     params.count = count;
@@ -909,11 +920,13 @@ static DWORD table_hash(const NPI_MODULEID *module, UINT table_id, ULONG *result
     hash = hash_data(hash, &count, sizeof(count));
     if (key) hash = hash_data(hash, key, count * table->sizes[0]);
     if (rw) hash = hash_data(hash, rw, count * table->sizes[1]);
+    if (dynamic) hash = hash_data(hash, dynamic, count * dynamic_size);
     if (stat) hash = hash_data(hash, stat, count * table->sizes[3]);
     *result = hash;
 done:
     HeapFree(GetProcessHeap(), 0, key);
     HeapFree(GetProcessHeap(), 0, rw);
+    HeapFree(GetProcessHeap(), 0, dynamic);
     HeapFree(GetProcessHeap(), 0, stat);
     return error;
 }
