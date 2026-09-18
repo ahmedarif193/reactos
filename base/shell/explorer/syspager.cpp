@@ -187,6 +187,18 @@ public:
 };
 
 
+static INT
+TrayIconRenderSize(VOID)
+{
+    return MulDiv(ShellTrayIconSize(), 4, 5);
+}
+
+static INT
+TrayIconRenderPad(VOID)
+{
+    return MulDiv(ShellTrayIconSize(), 3, 5);
+}
+
 static HICON
 TrayCentreIcon(_In_ HIMAGELIST himl, _In_ HICON hIcon)
 {
@@ -938,7 +950,7 @@ BOOL CNotifyToolbar::AddButton(_In_ CONST NOTIFYICONDATA *iconData)
     /* TODO: support VERSION_4 (NIF_GUID, NIF_REALTIME, NIF_SHOWTIP) */
 
     CToolbar::AddButton(&tbBtn);
-    SetButtonSize(ShellTrayIconSize(), ShellTrayIconSize());
+    SetButtonSize(TrayIconRenderSize(), TrayIconRenderSize());
 
     if (iconData->uFlags & NIF_INFO)
     {
@@ -1137,10 +1149,10 @@ VOID CNotifyToolbar::ResizeImagelist()
     if (!ImageList_GetIconSize(m_ImageList, &cx, &cy))
         return;
 
-    if (cx == ShellTrayIconSize() && cy == ShellTrayIconSize())
+    if (cx == TrayIconRenderSize() && cy == TrayIconRenderSize())
         return;
 
-    iml = ImageList_Create(ShellTrayIconSize(), ShellTrayIconSize(), ILC_COLOR32 | ILC_MASK, 0, 1000);
+    iml = ImageList_Create(TrayIconRenderSize(), TrayIconRenderSize(), ILC_COLOR32 | ILC_MASK, 0, 1000);
     if (!iml)
         return;
 
@@ -1160,7 +1172,7 @@ VOID CNotifyToolbar::ResizeImagelist()
         SetButtonInfo(i, &tbbi);
     }
 
-    SetButtonSize(ShellTrayIconSize(), ShellTrayIconSize());
+    SetButtonSize(TrayIconRenderSize(), TrayIconRenderSize());
 }
 
 LRESULT CNotifyToolbar::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -1394,12 +1406,12 @@ void CNotifyToolbar::Initialize(HWND hWndParent, CBalloonQueue * queue)
 
     SetWindowTheme(m_hWnd, L"TrayNotify", NULL);
 
-    m_ImageList = ImageList_Create(ShellTrayIconSize(), ShellTrayIconSize(), ILC_COLOR32 | ILC_MASK, 0, 1000);
+    m_ImageList = ImageList_Create(TrayIconRenderSize(), TrayIconRenderSize(), ILC_COLOR32 | ILC_MASK, 0, 1000);
     SetImageList(m_ImageList);
 
     RefreshToolbarMetrics(TRUE);
 
-    SetButtonSize(ShellTrayIconSize(), ShellTrayIconSize());
+    SetButtonSize(TrayIconRenderSize(), TrayIconRenderSize());
 }
 
 void CNotifyToolbar::RefreshToolbarMetrics(BOOL bForceRefresh = FALSE)
@@ -1414,8 +1426,8 @@ void CNotifyToolbar::RefreshToolbarMetrics(BOOL bForceRefresh = FALSE)
         tbm.cyPad = ShellScaleForDpi(1);
         if (!g_TaskbarSettings.UseCompactTrayIcons())
         {
-            tbm.cxPad = ShellTrayIconSize() / 2;
-            tbm.cyPad = ShellTrayIconSize() / 2;
+            tbm.cxPad = TrayIconRenderPad();
+            tbm.cyPad = TrayIconRenderPad();
         }
         tbm.cxBarPad = ShellScaleForDpi(1);
         tbm.cyBarPad = ShellScaleForDpi(1);
@@ -1559,12 +1571,12 @@ void CSysPagerWnd::GetSize(IN BOOL IsHorizontal, IN PSIZE size)
 #else
     INT rows = 0;
     INT columns = 0;
-    INT cyButton = ShellTrayIconSize() + ShellScaleForDpi(2);
-    INT cxButton = ShellTrayIconSize() + ShellScaleForDpi(2);
+    INT cyButton = TrayIconRenderSize() + ShellScaleForDpi(2);
+    INT cxButton = TrayIconRenderSize() + ShellScaleForDpi(2);
     if (!g_TaskbarSettings.UseCompactTrayIcons())
     {
-        cyButton = MulDiv(ShellTrayIconSize(), 3, 2);
-        cxButton = MulDiv(ShellTrayIconSize(), 3, 2);
+        cyButton = TrayIconRenderSize() + TrayIconRenderPad() + ShellScaleForDpi(1);
+        cxButton = TrayIconRenderSize() + TrayIconRenderPad() + ShellScaleForDpi(1);
     }
     int VisibleButtonCount = Toolbar.GetVisibleButtonCount();
 
