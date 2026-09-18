@@ -936,10 +936,6 @@ Rpi5HvsFlipScanoutExUnlocked(
         if (!WaitVBlank || !Rpi5CrtcWaitForVBlank(DeviceExtension))
             return FALSE;
     }
-    else if (WaitVBlank)
-    {
-        Rpi5CrtcWaitForVBlank(DeviceExtension);
-    }
 
     HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
     if (HvsBase == NULL)
@@ -1022,6 +1018,12 @@ Rpi5HvsFlipScanoutEx(
     _In_ BOOLEAN WaitVBlank)
 {
     BOOLEAN Result;
+
+    /* Cursor moves must not wait behind a pending vertical blank. */
+    if (WaitVBlank && !DeviceExtension->Headless && !DeviceExtension->HvsFlipBroken &&
+        FrameBufferPhysical.QuadPart != 0 &&
+        FrameBufferPhysical.QuadPart != DeviceExtension->FrameBufferPhysical.QuadPart)
+        Rpi5CrtcWaitForVBlank(DeviceExtension);
 
     ExAcquireFastMutex(&DeviceExtension->HvsMutex);
     Result = Rpi5HvsFlipScanoutExUnlocked(DeviceExtension,

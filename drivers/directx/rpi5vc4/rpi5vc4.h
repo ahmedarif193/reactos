@@ -365,6 +365,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
     /* HVS list and cursor state form one atomic display transaction. Pointer
      * callbacks may run alongside GPU escapes, but serialize with presents. */
     FAST_MUTEX HvsMutex;
+    FAST_MUTEX VBlankMutex;
 
     /* Private HVS display-list retirement follows the hardware frame count. */
     ULONG HvsActivePrivateSlot;
