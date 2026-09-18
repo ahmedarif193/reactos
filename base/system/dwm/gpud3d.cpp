@@ -851,7 +851,7 @@ void BuildWeights(ULONG Radius, Constants &Data)
 BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
 {
     ULONG Call = State.BlurCall++;
-    BlurTarget *Oldest = &State.Blurs[0];
+    BlurTarget *Oldest = &State.Blurs[0], *Reusable = NULL;
     for (ULONG Index = 0; Index < ARRAYSIZE(State.Blurs); ++Index)
     {
         BlurTarget *Target = &State.Blurs[Index];
@@ -864,10 +864,15 @@ BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
             ++State.Reused;
             return Target;
         }
+        if (Target->Frame != State.Frame && Target->Call == Call &&
+            Target->Owner.SurfaceId == State.BlurOwner.SurfaceId &&
+            (Reusable == NULL || Target->LastUse > Reusable->LastUse))
+            Reusable = Target;
         if (Target->LastUse < Oldest->LastUse)
             Oldest = Target;
     }
-    BlurTarget *Target = Oldest;
+    /* Invalid pixels can still use the owner's previous texture storage. */
+    BlurTarget *Target = Reusable ? Reusable : Oldest;
     Target->Valid = FALSE;
     Target->Owner = State.BlurOwner;
     LONG Width = Bounds.right - Bounds.left, Height = Bounds.bottom - Bounds.top;
