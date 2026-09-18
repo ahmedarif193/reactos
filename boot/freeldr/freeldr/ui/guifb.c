@@ -11,6 +11,9 @@
 #define FBGUI_PROGRESS_FILL_ATTR      ATTR(COLOR_WHITE, COLOR_WHITE)
 #define FBGUI_PROGRESS_REMAINING_ATTR ATTR(COLOR_GRAY, COLOR_GRAY)
 
+#define FBGUI_PROGRESS_BAR_ROW_NUMERATOR   48
+#define FBGUI_PROGRESS_BAR_ROW_DENOMINATOR 50
+
 static
 BOOLEAN
 FbGuiInitialize(VOID)
@@ -19,6 +22,26 @@ FbGuiInitialize(VOID)
         return FALSE;
 
     return TRUE;
+}
+
+static
+VOID
+FbGuiDrawProgressBarCenter(
+    _In_ PCSTR ProgressText)
+{
+    ULONG Left, Top, Right, Bottom, Width, Height;
+
+    Height = 3;
+    Width  = UiScreenWidth - 4;
+    Left = 2;
+    Bottom = UiScreenHeight * FBGUI_PROGRESS_BAR_ROW_NUMERATOR /
+             FBGUI_PROGRESS_BAR_ROW_DENOMINATOR;
+    if (Bottom + 2 > UiScreenHeight)
+        Bottom = UiScreenHeight - 2;
+    Top = Bottom - (Height - 1);
+    Right = Left + Width - 1;
+
+    MiniTuiDrawProgressBar(Left, Top, Right, Bottom, ProgressText);
 }
 
 static
@@ -88,7 +111,7 @@ const UIVTBL FbGuiVtbl =
     TuiUpdateDateTime,
     TuiMessageBox,
     TuiMessageBoxCritical,
-    MiniTuiDrawProgressBarCenter,
+    FbGuiDrawProgressBarCenter,
     MiniTuiDrawProgressBar,
     FbGuiSetProgressBarText,
     FbGuiTickProgressBar,
