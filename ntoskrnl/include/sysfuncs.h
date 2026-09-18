@@ -398,5 +398,6 @@
 #if defined(WOW64_I386_RUNTIME) || defined(SYSFUNCS_WOW64)
     /* User-mode WoW64 services follow the native syscall table. */
     SVC_(Wow64GetNativeSystemInformation, 4)
+    SVC_(Wow64IsProcessorFeaturePresent, 1)
 #endif
 #endif // SYSFUNCS_NT5_ONLY
