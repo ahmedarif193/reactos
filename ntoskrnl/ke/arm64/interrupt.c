@@ -1096,112 +1096,44 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
  * KINTERRUPT support (connect/disconnect/synchronize)
  */
 
-typedef struct _KI_ARM64_INTERRUPT_UPDATE
-{
-    PKINTERRUPT Interrupt;
-    ULONG Processor;
-    LONG ProcessorCount;
-    BOOLEAN Connect;
-    BOOLEAN Updated;
-    volatile LONG Arrived;
-    volatile LONG Done;
-} KI_ARM64_INTERRUPT_UPDATE;
-
-static
-BOOLEAN
-KiArm64InterruptsQuiescent(VOID)
-{
-    ULONG Cpu;
-
-    for (Cpu = 0; Cpu < (ULONG)KeNumberProcessors; Cpu++)
-        if (ReadAcquire(&KiArm64DispatchDepth[Cpu].Value) != 0)
-            return FALSE;
-    return TRUE;
-}
-
-static
-ULONG_PTR
-NTAPI
-KiArm64UpdateInterruptChain(_In_ ULONG_PTR Argument)
-{
-    KI_ARM64_INTERRUPT_UPDATE *Update = (KI_ARM64_INTERRUPT_UPDATE *)Argument;
-    PKINTERRUPT Interrupt = Update->Interrupt;
-    PKINTERRUPT *Table = KiArm64IntTables[(UCHAR)Interrupt->Number];
-    PKINTERRUPT Head;
-    KIRQL OldIrql = KfRaiseIrql(HIGH_LEVEL);
-
-    InterlockedIncrement(&Update->Arrived);
-
-    if (KeGetCurrentProcessorNumber() != Update->Processor)
-    {
-        while (!ReadAcquire(&Update->Done)) YieldProcessor();
-        KfLowerIrql(OldIrql);
-        return 0;
-    }
-
-    /* Keep every CPU at the rendezvous until the links have been updated. */
-    while (ReadAcquire(&Update->Arrived) != Update->ProcessorCount) YieldProcessor();
-    if (KiArm64InterruptsQuiescent())
-    {
-        Head = Table[Interrupt->Vector];
-        if (Update->Connect)
-        {
-            InsertTailList(&Head->InterruptListEntry, &Interrupt->InterruptListEntry);
-        }
-        else
-        {
-            if (IsListEmpty(&Head->InterruptListEntry))
-                Table[Interrupt->Vector] = NULL;
-            else
-            {
-                if (Head == Interrupt)
-                    Table[Interrupt->Vector] = CONTAINING_RECORD(Head->InterruptListEntry.Flink, KINTERRUPT, InterruptListEntry);
-                RemoveEntryList(&Interrupt->InterruptListEntry);
-            }
-        }
-        Interrupt->Connected = Update->Connect;
-        Update->Updated = TRUE;
-    }
-    InterlockedExchange(&Update->Done, 1);
-    KfLowerIrql(OldIrql);
-    return 0;
-}
-
+/*
+ * Dispatch reads only the current processor's table. Connect/disconnect run
+ * on that processor before taking KiArm64IntTableLock, so raising IRQL here
+ * excludes both hardware and secondary dispatch without stopping other CPUs.
+ * A handler already in progress must have returned before its CPU can run us.
+ */
 static
 VOID
 KiArm64SynchronizeInterruptChain(_In_ PKINTERRUPT Interrupt, _In_ BOOLEAN Connect)
 {
-    KI_ARM64_INTERRUPT_UPDATE Update;
+    ULONG Cpu = KeGetCurrentProcessorNumber();
+    PKINTERRUPT *Table = KiArm64IntTables[Cpu];
+    PKINTERRUPT Head;
     KIRQL OldIrql;
-    KAFFINITY Processors;
 
-    Update.Interrupt = Interrupt;
-    Update.Processor = KeGetCurrentProcessorNumber();
-    Update.Connect = Connect;
-    Update.Updated = FALSE;
-    Update.ProcessorCount = 0;
-    Processors = KeActiveProcessors | KeGetCurrentPrcb()->SetMember;
-    while (Processors)
+    ASSERT(Cpu == (UCHAR)Interrupt->Number);
+    ASSERT(ReadAcquire(&KiArm64DispatchDepth[Cpu].Value) == 0);
+
+    OldIrql = KfRaiseIrql(HIGH_LEVEL);
+    Head = Table[Interrupt->Vector];
+    if (Connect)
     {
-        Update.ProcessorCount++;
-        Processors &= Processors - 1;
+        InsertTailList(&Head->InterruptListEntry, &Interrupt->InterruptListEntry);
     }
-
-    do
+    else
     {
-        /* Let an interrupted ISR finish before attempting another rendezvous. */
-        while (!KiArm64InterruptsQuiescent()) YieldProcessor();
-        Update.Arrived = 0;
-        Update.Done = 0;
-        if ((KeActiveProcessors & ~KeGetCurrentPrcb()->SetMember) != 0)
-            KeIpiGenericCall(KiArm64UpdateInterruptChain, (ULONG_PTR)&Update);
+        if (IsListEmpty(&Head->InterruptListEntry))
+            Table[Interrupt->Vector] = NULL;
         else
         {
-            OldIrql = KfRaiseIrql(HIGH_LEVEL);
-            KiArm64UpdateInterruptChain((ULONG_PTR)&Update);
-            KfLowerIrql(OldIrql);
+            if (Head == Interrupt)
+                Table[Interrupt->Vector] = CONTAINING_RECORD(Head->InterruptListEntry.Flink, KINTERRUPT, InterruptListEntry);
+            RemoveEntryList(&Interrupt->InterruptListEntry);
         }
-    } while (!Update.Updated);
+    }
+    Interrupt->Connected = Connect;
+    KeMemoryBarrier();
+    KfLowerIrql(OldIrql);
 }
 
 VOID
@@ -1260,17 +1192,14 @@ KeConnectInterrupt(IN PKINTERRUPT Interrupt)
     Table = KiArm64IntTables[Cpu];
     if (!Table) return FALSE;
 
-    /* SGI/PPI enable registers belong to the target processor. */
-    if (Vector < 32)
+    /* Pin before locking: every vector's dispatch table belongs to its CPU. */
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
     {
-        if (KeGetCurrentIrql() < DISPATCH_LEVEL)
-        {
-            PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Cpu);
-            RestoreAffinity = TRUE;
-        }
-        else if (Cpu != KeGetCurrentProcessorNumber())
-            return FALSE;
+        PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Cpu);
+        RestoreAffinity = TRUE;
     }
+    else if (Cpu != KeGetCurrentProcessorNumber())
+        return FALSE;
 
     KeAcquireSpinLock(&KiArm64IntTableLock, &OldIrql);
     if (Interrupt->Connected) goto Done;
@@ -1325,16 +1254,14 @@ KeDisconnectInterrupt(IN PKINTERRUPT Interrupt)
 
     if (Vector >= ARM64_MAX_INTID || Cpu >= MAXIMUM_PROCESSORS) return FALSE;
     if (!KiArm64IntTables[Cpu]) return FALSE;
-    if (Vector < 32)
+    /* Wait for the owning CPU at the caller's IRQL, before taking the lock. */
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
     {
-        if (KeGetCurrentIrql() < DISPATCH_LEVEL)
-        {
-            PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Cpu);
-            RestoreAffinity = TRUE;
-        }
-        else if (Cpu != KeGetCurrentProcessorNumber())
-            return FALSE;
+        PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Cpu);
+        RestoreAffinity = TRUE;
     }
+    else if (Cpu != KeGetCurrentProcessorNumber())
+        return FALSE;
     KeAcquireSpinLock(&KiArm64IntTableLock, &OldIrql);
     Head = KiArm64IntTables[Cpu][Vector];
     Connected = Interrupt->Connected;
