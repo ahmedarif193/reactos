@@ -1183,7 +1183,7 @@ can_do_mul_as_add(const struct v3d_device_info *devinfo, enum v3d_qpu_mul_op op)
         }
 }
 
-static enum v3d_qpu_mul_op
+static enum v3d_qpu_add_op
 mul_op_as_add_op(enum v3d_qpu_mul_op op)
 {
         switch (op) {
