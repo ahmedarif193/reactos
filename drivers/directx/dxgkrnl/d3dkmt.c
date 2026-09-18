@@ -3038,8 +3038,22 @@ DxgkpQueryAdapterInfoCaptured(
                                                 ARRAYSIZE(DriverName.UmdFileName));
             if (!NT_SUCCESS(Status))
             {
-                DXGKRNL_WARN("DxgkQueryAdapterInfo: UMDRIVERNAME query failed 0x%08lx\n",
-                             Status);
+                if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+                {
+                    static LONG NoUmdReports = 0;
+
+                    if (InterlockedIncrement(&NoUmdReports) <= 4)
+                    {
+                        DXGKRNL_TRACE("DxgkQueryAdapterInfo: adapter %p publishes no "
+                                      "user-mode driver for version %u\n",
+                                      Adapter, DriverName.Version);
+                    }
+                }
+                else
+                {
+                    DXGKRNL_WARN("DxgkQueryAdapterInfo: UMDRIVERNAME query failed 0x%08lx\n",
+                                 Status);
+                }
                 DXGKP_QUERY_RETURN(Status);
             }
 
