@@ -579,6 +579,12 @@ Rpi5Vc4DdiSetVidPnSourceVisibility(
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
     }
 
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+        Rpi5Vc4PointerRestore(DeviceExtension->SoftwarePointer);
+    }
+
     DeviceExtension->SourceVisible = SetVidPnSourceVisibility->Visible;
 
     if (SetVidPnSourceVisibility->Visible)
@@ -605,6 +611,18 @@ Rpi5Vc4DdiSetVidPnSourceVisibility(
         }
     }
 
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        if (DeviceExtension->SoftwarePointer != NULL &&
+            DeviceExtension->SourceVisible && DeviceExtension->CursorVisible)
+        {
+            Rpi5Vc4PointerDraw(DeviceExtension->SoftwarePointer);
+#if defined(_M_ARM64)
+            __dsb(_ARM64_BARRIER_SY);
+#endif
+        }
+        ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    }
     return STATUS_SUCCESS;
 }
 

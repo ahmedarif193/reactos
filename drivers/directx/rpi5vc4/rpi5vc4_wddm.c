@@ -1440,8 +1440,8 @@ Rpi5Vc4DdiQueryAdapterInfo(
             RtlZeroMemory(Caps, sizeof(DXGK_DRIVERCAPS));
             Caps->HighestAcceptableAddress.QuadPart = (LONGLONG)-1;
 
-            /* 64x64 ARGB hardware cursor on the HVS overlay plane. */
-            if (DeviceExtension->CursorVa != NULL)
+            /* Driver-owned ARGB cursor on both HVS and fixed scanout. */
+            if (DeviceExtension->CursorVa != NULL || DeviceExtension->SoftwarePointer != NULL)
             {
                 Caps->MaxPointerWidth = RPI5VC4_CURSOR_WIDTH;
                 Caps->MaxPointerHeight = RPI5VC4_CURSOR_HEIGHT;
