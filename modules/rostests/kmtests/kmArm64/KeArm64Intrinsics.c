@@ -45,16 +45,121 @@ static __inline ULONG64 ReadSctlrEl1(VOID)
     return V;
 }
 
-static volatile ULONG64 Arm64SctlrByProcessor[MAXIMUM_PROCESSORS];
+typedef struct _ARM64_MEMORY_POLICY
+{
+    ULONG64 Sctlr;
+    ULONG64 Tcr;
+    ULONG64 Mair;
+    ULONG64 Pmcr;
+    ULONG64 Pmcnten;
+    ULONG64 Pmccfiltr;
+} ARM64_MEMORY_POLICY;
+
+static ARM64_MEMORY_POLICY Arm64PolicyByProcessor[MAXIMUM_PROCESSORS];
 
 static ULONG_PTR NTAPI Arm64CaptureSctlrIpi(ULONG_PTR Context)
 {
     ULONG Processor = KeGetCurrentProcessorNumber();
 
     UNREFERENCED_PARAMETER(Context);
-    if (Processor < RTL_NUMBER_OF(Arm64SctlrByProcessor))
-        Arm64SctlrByProcessor[Processor] = ReadSctlrEl1();
+    if (Processor < RTL_NUMBER_OF(Arm64PolicyByProcessor))
+    {
+        ARM64_MEMORY_POLICY *Policy = &Arm64PolicyByProcessor[Processor];
+        ULONG64 Dfr0;
+
+        Policy->Sctlr = ReadSctlrEl1();
+        __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(Policy->Tcr));
+        __asm__ __volatile__("mrs %0, mair_el1" : "=r"(Policy->Mair));
+        __asm__ __volatile__("mrs %0, id_aa64dfr0_el1" : "=r"(Dfr0));
+        if (((Dfr0 >> 8) & 0xF) != 0 && ((Dfr0 >> 8) & 0xF) != 0xF)
+        {
+            __asm__ __volatile__("mrs %0, pmcr_el0" : "=r"(Policy->Pmcr));
+            __asm__ __volatile__("mrs %0, pmcntenset_el0" : "=r"(Policy->Pmcnten));
+            __asm__ __volatile__("mrs %0, pmccfiltr_el0" : "=r"(Policy->Pmccfiltr));
+        }
+    }
     return Processor;
+}
+
+static ULONG64 Arm64TranslateAddress(PVOID Address, BOOLEAN User)
+{
+    ULONG64 SavedPar, Par;
+    KIRQL OldIrql;
+
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    __asm__ __volatile__("mrs %0, par_el1" : "=r"(SavedPar));
+    if (User)
+        __asm__ __volatile__("at s1e0r, %0" :: "r"(Address) : "memory");
+    else
+        __asm__ __volatile__("at s1e1r, %0" :: "r"(Address) : "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+    __asm__ __volatile__("mrs %0, par_el1" : "=r"(Par));
+    __asm__ __volatile__("msr par_el1, %0" :: "r"(SavedPar) : "memory");
+    KeLowerIrql(OldIrql);
+    return Par;
+}
+
+static VOID Arm64MemoryPolicyCheck(VOID)
+{
+    PVOID UserPage = NULL;
+    SIZE_T RegionSize = PAGE_SIZE;
+    ULONG Processor, ProcessorCount = KeQueryActiveProcessorCount(NULL);
+    NTSTATUS Status;
+
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &UserPage, 0, &RegionSize,
+                                     MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    *(volatile ULONG *)UserPage = 0x12345678;
+
+    for (Processor = 0; Processor < min(ProcessorCount, RTL_NUMBER_OF(Arm64PolicyByProcessor)); ++Processor)
+    {
+        ARM64_MEMORY_POLICY *Policy = &Arm64PolicyByProcessor[Processor];
+        ULONG64 UserPar, CodePar, DataPar;
+        ULONG64 Frequency, StartTicks, EndTicks, StartCycles, EndCycles, Mhz1000;
+
+        KeSetSystemAffinityThread((KAFFINITY)1 << Processor);
+        ok_eq_ulong(KeGetCurrentProcessorNumber(), Processor);
+        UserPar = Arm64TranslateAddress(UserPage, TRUE);
+        CodePar = Arm64TranslateAddress((PVOID)Arm64MemoryPolicyCheck, FALSE);
+        DataPar = Arm64TranslateAddress(Policy, FALSE);
+        ok((UserPar & 1) == 0, "CPU %lu user translation failed: %I64x\n", Processor, UserPar);
+        ok((CodePar & 1) == 0, "CPU %lu code translation failed: %I64x\n", Processor, CodePar);
+        ok((DataPar & 1) == 0, "CPU %lu data translation failed: %I64x\n", Processor, DataPar);
+        ok((UserPar >> 56) == 0xFF, "CPU %lu user page is not WB: %I64x\n", Processor, UserPar);
+        ok((CodePar >> 56) == 0xFF, "CPU %lu code page is not WB: %I64x\n", Processor, CodePar);
+        ok((DataPar >> 56) == 0xFF, "CPU %lu data page is not WB: %I64x\n", Processor, DataPar);
+        dump_trace("ARM64_MEMORY cpu=%lu user_par=0x%I64x code_par=0x%I64x data_par=0x%I64x\n",
+                   Processor, UserPar, CodePar, DataPar);
+
+        /* Read the existing cycle counter without changing the PMU configuration. */
+        if ((Policy->Pmcr & 1) && (Policy->Pmcnten & (1ULL << 31)) && !Policy->Pmccfiltr)
+        {
+            __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(Frequency));
+            __asm__ __volatile__("isb" ::: "memory");
+            __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(StartTicks));
+            __asm__ __volatile__("mrs %0, pmccntr_el0" : "=r"(StartCycles));
+            do
+            {
+                __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(EndTicks));
+            } while (EndTicks - StartTicks < Frequency / 100);
+            __asm__ __volatile__("isb" ::: "memory");
+            __asm__ __volatile__("mrs %0, pmccntr_el0" : "=r"(EndCycles));
+            if (!(Policy->Pmcr & (1ULL << 6)))
+                EndCycles = StartCycles + (ULONG)(EndCycles - StartCycles);
+            Mhz1000 = (EndCycles - StartCycles) * (Frequency / 1000) / (EndTicks - StartTicks);
+            if (Policy->Pmcr & (1ULL << 3))
+                Mhz1000 *= 64;
+            dump_trace("ARM64_CLOCK cpu=%lu khz=%I64u cycles=%I64u ticks=%I64u\n",
+                       Processor, Mhz1000, EndCycles - StartCycles, EndTicks - StartTicks);
+        }
+        KeRevertToUserAffinityThread();
+    }
+
+    RegionSize = 0;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(), &UserPage, &RegionSize, MEM_RELEASE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
 }
 
 static VOID Arm64UnalignedHelpersCheck(VOID)
@@ -125,16 +230,22 @@ static VOID Arm64IntrinsicsCheck(VOID)
     ok(Midr != 0ULL, "MIDR_EL1 is zero\n");
     dump_trace("[arm64][KeArm64Intrinsics] MIDR_EL1=0x%I64x\n", Midr);
 
-    RtlZeroMemory((PVOID)Arm64SctlrByProcessor, sizeof(Arm64SctlrByProcessor));
+    RtlZeroMemory(Arm64PolicyByProcessor, sizeof(Arm64PolicyByProcessor));
     KeIpiGenericCall(Arm64CaptureSctlrIpi, 0);
     ProcessorCount = KeQueryActiveProcessorCount(NULL);
-    for (Processor = 0; Processor < min(ProcessorCount, RTL_NUMBER_OF(Arm64SctlrByProcessor)); ++Processor)
+    for (Processor = 0; Processor < min(ProcessorCount, RTL_NUMBER_OF(Arm64PolicyByProcessor)); ++Processor)
     {
-        Sctlr = Arm64SctlrByProcessor[Processor];
+        ARM64_MEMORY_POLICY *Policy = &Arm64PolicyByProcessor[Processor];
+        Sctlr = Policy->Sctlr;
         ok(Sctlr != 0, "CPU %lu did not publish SCTLR_EL1\n", Processor);
         ok((Sctlr & (1ULL << 1)) == 0, "CPU %lu SCTLR_EL1.A is set: 0x%I64x\n", Processor, Sctlr);
-        dump_trace("[arm64][KeArm64Intrinsics] CPU %lu SCTLR_EL1=0x%I64x\n", Processor, Sctlr);
+        ok((Sctlr & 0x1005) == 0x1005, "CPU %lu MMU/cache disabled: SCTLR=0x%I64x\n", Processor, Sctlr);
+        ok((Policy->Tcr & 0x3F00) == 0x3500, "CPU %lu TTBR0 walk is not inner-shareable WB: %I64x\n", Processor, Policy->Tcr);
+        ok(((Policy->Tcr >> 16) & 0x3F00) == 0x3500, "CPU %lu TTBR1 walk is not inner-shareable WB: %I64x\n", Processor, Policy->Tcr);
+        dump_trace("ARM64_POLICY cpu=%lu sctlr=0x%I64x tcr=0x%I64x mair=0x%I64x pmcr=0x%I64x pmcnten=0x%I64x pmccfiltr=0x%I64x\n",
+                   Processor, Sctlr, Policy->Tcr, Policy->Mair, Policy->Pmcr, Policy->Pmcnten, Policy->Pmccfiltr);
     }
+    Arm64MemoryPolicyCheck();
     Arm64UnalignedHelpersCheck();
 
     /* CNTVCT_EL0 monotonic. */
