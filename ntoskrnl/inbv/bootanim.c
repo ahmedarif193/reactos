@@ -678,6 +678,16 @@ DisplayBootBitmap(
             /* BitBlt them on the screen */
             BitBltExpandedFooter(Footer, FooterCenterColor, &DisplayInfo, 59);
             BitBltAligned(Header, FALSE, AL_HORIZONTAL_RIGHT, AL_VERTICAL_TOP, 0, 0, 0, 0);
+
+            if ((SharedUserData->NtProductType == NtProductWinNt) &&
+                (((PBITMAPINFOHEADER)Header)->biHeight > 2))
+            {
+                InbvSolidColorFill(0,
+                                   ((PBITMAPINFOHEADER)Header)->biHeight - 2,
+                                   DisplayInfo.Width - 1,
+                                   ((PBITMAPINFOHEADER)Header)->biHeight - 1,
+                                   BV_COLOR_DARK_GRAY);
+            }
         }
 
         /* Restore the kernel resource section protection to be read-only */
