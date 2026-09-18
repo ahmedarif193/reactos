@@ -75,26 +75,6 @@ RtlCapabilityCheckForSingleSessionSku(
 
 NTSTATUS
 NTAPI
-RtlGetAppContainerSidType(
-    _In_ PSID Sid,
-    _Out_ PULONG SidType)
-{
-    SID_IDENTIFIER_AUTHORITY AppPackageAuthority = {SECURITY_APP_PACKAGE_AUTHORITY};
-    UCHAR Count;
-
-    if (SidType == NULL)
-        return STATUS_INVALID_PARAMETER;
-    *SidType = 0;
-    if (!RtlValidSid(Sid) || (RtlCompareMemory(RtlIdentifierAuthoritySid(Sid), &AppPackageAuthority, sizeof(AppPackageAuthority)) != sizeof(AppPackageAuthority)) || (*RtlSubAuthoritySid(Sid, 0) != SECURITY_APP_PACKAGE_BASE_RID))
-        return (NTSTATUS)0xC000A200;
-
-    Count = *RtlSubAuthorityCountSid(Sid);
-    *SidType = Count == 12 ? 1 : Count == 8 ? 2 : 3;
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
 RtlQueryPackageClaims(
     _In_opt_ PVOID TokenObject,
     _Out_writes_bytes_to_opt_(*PackageSize, *PackageSize) PWSTR PackageFullName,
