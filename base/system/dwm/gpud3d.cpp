@@ -70,6 +70,7 @@ struct Texture
 struct Surface
 {
     Texture Image;
+    ID3D11Texture2D *SharedSource;
     ULONG SurfaceId, Share, Generation, WindowGeneration, LastFrame;
     ULONGLONG UpdateId;
     BOOL Client;
@@ -77,13 +78,14 @@ struct Surface
     void Reset()
     {
         Image.Reset();
+        Release(SharedSource);
     }
 };
 
 struct ClientSource
 {
     ID3D11Texture2D *Resource;
-    ULONG SurfaceId, WindowGeneration, Share, LastFrame;
+    ULONG SurfaceId, Share, LastFrame;
 
     void Reset()
     {
@@ -117,6 +119,12 @@ struct Constants
     FLOAT Taps[33][4];
 };
 
+struct ConstantBuffer
+{
+    ID3D11Buffer *Resource;
+    ConstantBuffer *Next;
+};
+
 enum Shader { Solid, Copy, Window, Filter, Shadow, ShaderCount };
 
 struct Compositor
@@ -131,7 +139,7 @@ struct Compositor
     IDXGISwapChain1 *SwapChain;
     ID3D11VertexShader *VertexShader;
     ID3D11PixelShader *PixelShaders[ShaderCount];
-    ID3D11Buffer *ConstantBuffer;
+    ConstantBuffer *ConstantsHead, *ConstantsTail, *NextConstants;
     ID3D11SamplerState *Sampler;
     ID3D11BlendState *Blend, *PremultipliedBlend;
     ID3D11RasterizerState *Rasterizer;
@@ -215,7 +223,35 @@ BOOL Draw(Texture &Target,
         return TRUE;
     Data.TargetSize[0] = (FLOAT)Target.Width;
     Data.TargetSize[1] = (FLOAT)Target.Height;
-    State.Context->UpdateSubresource(State.ConstantBuffer, 0, NULL, &Data, 0, 0);
+    ConstantBuffer *Upload = State.NextConstants;
+    if (Upload != NULL)
+    {
+        State.NextConstants = Upload->Next;
+        State.Context->UpdateSubresource(Upload->Resource, 0, NULL, &Data, 0, 0);
+    }
+    else
+    {
+        Upload = (ConstantBuffer *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Upload));
+        if (Upload == NULL)
+        {
+            return FALSE;
+        }
+        D3D11_BUFFER_DESC Desc = {};
+        Desc.ByteWidth = sizeof(Data);
+        Desc.Usage = D3D11_USAGE_DEFAULT;
+        Desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_SUBRESOURCE_DATA Initial = {&Data, 0, 0};
+        if (!Result(State.Device->CreateBuffer(&Desc, &Initial, &Upload->Resource), "CreateBuffer"))
+        {
+            HeapFree(GetProcessHeap(), 0, Upload);
+            return FALSE;
+        }
+        if (State.ConstantsTail != NULL)
+            State.ConstantsTail->Next = Upload;
+        else
+            State.ConstantsHead = Upload;
+        State.ConstantsTail = Upload;
+    }
     D3D11_VIEWPORT Viewport = {0, 0, (FLOAT)Target.Width, (FLOAT)Target.Height, 0, 1};
     State.Context->RSSetViewports(1, &Viewport);
     State.Context->RSSetScissorRects(1, &Clip);
@@ -226,8 +262,8 @@ BOOL Draw(Texture &Target,
     State.Context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
     State.Context->VSSetShader(State.VertexShader, NULL, 0);
     State.Context->PSSetShader(State.PixelShaders[Program], NULL, 0);
-    State.Context->VSSetConstantBuffers(0, 1, &State.ConstantBuffer);
-    State.Context->PSSetConstantBuffers(0, 1, &State.ConstantBuffer);
+    State.Context->VSSetConstantBuffers(0, 1, &Upload->Resource);
+    State.Context->PSSetConstantBuffers(0, 1, &Upload->Resource);
     State.Context->PSSetSamplers(0, 1, &State.Sampler);
     ID3D11ShaderResourceView *Views[2] = {Source, Backdrop};
     State.Context->PSSetShaderResources(0, ARRAYSIZE(Views), Views);
@@ -330,12 +366,6 @@ BOOL CreateShaders()
         if (!Result(Status, Entries[Index]))
             return FALSE;
     }
-    D3D11_BUFFER_DESC Buffer = {};
-    Buffer.ByteWidth = sizeof(Constants);
-    Buffer.Usage = D3D11_USAGE_DEFAULT;
-    Buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    if (!Result(State.Device->CreateBuffer(&Buffer, NULL, &State.ConstantBuffer), "CreateBuffer"))
-        return FALSE;
     D3D11_SAMPLER_DESC Sampler = {};
     Sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     Sampler.AddressU = Sampler.AddressV = Sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -596,7 +626,7 @@ ClientSource *ImportClientSource(const DWM_WIN *Window)
         }
         else
         {
-            if (Source->SurfaceId == Window->SurfaceId && Source->WindowGeneration == Window->Generation)
+            if (Source->SurfaceId == Window->SurfaceId)
             {
                 ++OwnerCount;
                 if (Source->Share == Window->DxGlobalShare)
@@ -643,7 +673,6 @@ ClientSource *ImportClientSource(const DWM_WIN *Window)
         Destination->Reset();
         Destination->Resource = Resource;
         Destination->SurfaceId = Window->SurfaceId;
-        Destination->WindowGeneration = Window->Generation;
         Destination->Share = Window->DxGlobalShare;
     }
     Destination->LastFrame = State.Frame;
@@ -665,7 +694,8 @@ void PruneClientSources(const DWM_WIN *Windows, ULONG Count)
         for (ULONG WindowIndex = 0; WindowIndex < Count; ++WindowIndex)
         {
             const DWM_WIN *Window = &Windows[WindowIndex];
-            if (Window->SurfaceId == Source->SurfaceId && Window->Generation == Source->WindowGeneration &&
+            /* A GDI backing resize does not retire the client publication. */
+            if (Window->SurfaceId == Source->SurfaceId &&
                 Window->DxGlobalShare != 0 && Window->DxGeneration != 0 && Window->DxUpdateId != 0 &&
                 Desc.Width == Window->DxWidth && Desc.Height == Window->DxHeight &&
                 Desc.Format == (DXGI_FORMAT)Window->DxFormat)
@@ -723,34 +753,44 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
         Slot->LastFrame = State.Frame;
         return &Slot->Image;
     }
-    if (Slot->Image.Resource == NULL || Slot->Share != Share || Slot->Generation != Generation ||
+    if (Window->BaseUpdateId == 0)
+        return NULL;
+    if (Slot->SharedSource == NULL || Slot->Share != Share || Slot->Generation != Generation ||
         Slot->Image.Width != (LONG)Width || Slot->Image.Height != (LONG)Height)
     {
-        Slot->Image.Reset();
+        Slot->Reset();
         if (!Result(State.Device->OpenSharedResource((HANDLE)(ULONG_PTR)Share,
-            IID_ID3D11Texture2D, (void **)&Slot->Image.Resource), "OpenSharedResource"))
+            IID_ID3D11Texture2D, (void **)&Slot->SharedSource), "OpenSharedResource"))
             return NULL;
         D3D11_TEXTURE2D_DESC Desc;
-        Slot->Image.Resource->GetDesc(&Desc);
+        Slot->SharedSource->GetDesc(&Desc);
         if (Desc.Width != Width || Desc.Height != Height || Desc.MipLevels != 1 || Desc.ArraySize != 1 ||
             Desc.SampleDesc.Count != 1 || !(Desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) ||
             (Desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && Desc.Format != DXGI_FORMAT_B8G8R8X8_UNORM))
         {
-            Slot->Image.Reset();
+            Slot->Reset();
             return NULL;
         }
-        if (!Result(State.Device->CreateShaderResourceView(Slot->Image.Resource, NULL, &Slot->Image.View), "Import shader view"))
+        if (!CreateTexture(Slot->Image, Width, Height, FALSE, NULL, 0, Desc.Format))
         {
-            Slot->Image.Reset();
+            Slot->Reset();
             return NULL;
         }
-        Slot->Image.Width = Width;
-        Slot->Image.Height = Height;
-        Slot->Image.Format = Desc.Format;
         Slot->SurfaceId = Window->SurfaceId;
         Slot->Client = Client;
         Slot->Share = Share;
         Slot->Generation = Generation;
+        Slot->UpdateId = 0;
+    }
+    if (Slot->UpdateId != Window->BaseUpdateId)
+    {
+        /* Keep unchanged GDI publications in a GPU-owned texture. */
+        UnbindTextures();
+        State.Context->CopyResource(Slot->Image.Resource, Slot->SharedSource);
+        State.WorkPending = TRUE;
+        if (!Result(State.Device->GetDeviceRemovedReason(), "GDI texture snapshot"))
+            return NULL;
+        Slot->UpdateId = Window->BaseUpdateId;
     }
     Slot->LastFrame = State.Frame;
     return &Slot->Image;
@@ -1000,7 +1040,13 @@ DwmD3dShutdown(void)
     Release(State.PremultipliedBlend);
     Release(State.Blend);
     Release(State.Sampler);
-    Release(State.ConstantBuffer);
+    while (State.ConstantsHead != NULL)
+    {
+        ConstantBuffer *Upload = State.ConstantsHead;
+        State.ConstantsHead = Upload->Next;
+        Release(Upload->Resource);
+        HeapFree(GetProcessHeap(), 0, Upload);
+    }
     for (ULONG Index = 0; Index < ARRAYSIZE(State.PixelShaders); ++Index)
         Release(State.PixelShaders[Index]);
     Release(State.VertexShader);
@@ -1073,8 +1119,10 @@ DwmD3dNeedsSurfacePixels(const DWM_WIN *Window)
 BOOL
 DwmD3dBegin(ULONG BackdropColor, const BYTE *BackdropPixels, BOOL RefreshBackdrop, const RECT *Damage)
 {
-    if (!State.Active)
+    if (!State.Active || !FinishGpuReads())
         return FALSE;
+    /* Each draw retains its constants until the frame's GPU reads retire. */
+    State.NextConstants = State.ConstantsHead;
     ++State.Frame;
     State.BlurOwnerValid = FALSE;
     RECT Full = {0, 0, State.Width, State.Height};
