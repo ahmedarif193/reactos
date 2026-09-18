@@ -2432,6 +2432,38 @@ DxgkpDestroyDmaBuffer(
     ExFreePoolWithTag(DmaBuffer, TAG_DXGK_SUBMITDMA);
 }
 
+static VOID
+DxgkpRetireDmaBuffer(
+    _In_ PDXGKRNL_DMA_BUFFER DmaBuffer)
+{
+    PDXGKRNL_ADAPTER Adapter = DmaBuffer->OwnerAdapter;
+    BOOLEAN QueueWorker = FALSE;
+    KIRQL OldIrql;
+    LONG ActiveWorkers;
+
+    if (DmaBuffer->VirtualBacking == NULL)
+    {
+        DxgkpDestroyDmaBuffer(DmaBuffer);
+        return;
+    }
+
+    /* GPUVA teardown takes the page-table flush lock before the adapter
+     * transaction. Cache eviction can run with the opposite lock held. */
+    ASSERT(Adapter != NULL);
+    KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
+    InsertTailList(&Adapter->DmaBufferDestroyListHead, &DmaBuffer->CacheListEntry);
+    KeClearEvent(&Adapter->SubmitDmaRetireDrainedEvent);
+    if (InterlockedCompareExchange(&Adapter->SubmitDmaRetireWorkQueued, 1, 0) == 0)
+    {
+        ActiveWorkers = InterlockedIncrement(&Adapter->SubmitDmaRetireActiveWorkers);
+        ASSERT(ActiveWorkers == 1);
+        QueueWorker = TRUE;
+    }
+    KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
+    if (QueueWorker)
+        ExQueueWorkItem(&Adapter->SubmitDmaRetireWorkItem, DelayedWorkQueue);
+}
+
 VOID
 NTAPI
 DxgkFreeDmaBuffer(
@@ -2512,13 +2544,13 @@ DxgkFreeDmaBuffer(
 
             EvictedBuffer = CONTAINING_RECORD(RemoveHeadList(&FreeList), DXGKRNL_DMA_BUFFER, CacheListEntry);
             InitializeListHead(&EvictedBuffer->CacheListEntry);
-            DxgkpDestroyDmaBuffer(EvictedBuffer);
+            DxgkpRetireDmaBuffer(EvictedBuffer);
         }
         if (Cached)
             return;
     }
 
-    DxgkpDestroyDmaBuffer(DmaBuffer);
+    DxgkpRetireDmaBuffer(DmaBuffer);
 }
 
 VOID
@@ -2601,6 +2633,8 @@ DxgkpDrainDmaBufferCache(
         InitializeListHead(&DmaBuffer->CacheListEntry);
         DxgkpDestroyDmaBuffer(DmaBuffer);
     }
+    if (InterlockedCompareExchange(&Adapter->SubmitDmaRetireActiveWorkers, 0, 0) != 0)
+        KeWaitForSingleObject(&Adapter->SubmitDmaRetireDrainedEvent, Executive, KernelMode, FALSE, NULL);
 }
 
 NTSTATUS
@@ -3719,7 +3753,7 @@ DxgkpRetireSubmittedDmaBuffersWorker(
     _In_ PVOID Context)
 {
     PDXGKRNL_ADAPTER Adapter = Context;
-    LIST_ENTRY FreeList;
+    LIST_ENTRY FreeList, BufferList;
     KIRQL OldIrql;
     LONG ActiveWorkers;
     ULONG Batch;
@@ -3730,6 +3764,7 @@ DxgkpRetireSubmittedDmaBuffersWorker(
     for (;;)
     {
         InitializeListHead(&FreeList);
+        InitializeListHead(&BufferList);
         KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
         for (Batch = 0; Batch < 64 && !IsListEmpty(&Adapter->SubmitDmaRetireListHead); Batch++)
         {
@@ -3737,8 +3772,21 @@ DxgkpRetireSubmittedDmaBuffersWorker(
 
             InsertTailList(&FreeList, Link);
         }
+        for (Batch = 0; Batch < 64 && !IsListEmpty(&Adapter->DmaBufferDestroyListHead); Batch++)
+        {
+            PLIST_ENTRY Link = RemoveHeadList(&Adapter->DmaBufferDestroyListHead);
+
+            InsertTailList(&BufferList, Link);
+        }
         KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
 
+        while (!IsListEmpty(&BufferList))
+        {
+            PDXGKRNL_DMA_BUFFER Buffer = CONTAINING_RECORD(RemoveHeadList(&BufferList), DXGKRNL_DMA_BUFFER, CacheListEntry);
+
+            InitializeListHead(&Buffer->CacheListEntry);
+            DxgkpDestroyDmaBuffer(Buffer);
+        }
         while (!IsListEmpty(&FreeList))
         {
             PDXGKRNL_SUBMIT_DMA_BUFFER Entry = CONTAINING_RECORD(RemoveHeadList(&FreeList), DXGKRNL_SUBMIT_DMA_BUFFER, ListEntry);
@@ -3759,7 +3807,8 @@ DxgkpRetireSubmittedDmaBuffersWorker(
         }
 
         KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
-        if (!IsListEmpty(&Adapter->SubmitDmaRetireListHead))
+        if (!IsListEmpty(&Adapter->SubmitDmaRetireListHead) ||
+            !IsListEmpty(&Adapter->DmaBufferDestroyListHead))
         {
             KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
             continue;
@@ -3925,6 +3974,8 @@ DxgkReleaseTrackedDmaBuffers(
         Entry = CONTAINING_RECORD(RemoveHeadList(&CancelList), DXGKRNL_SUBMIT_DMA_BUFFER, ListEntry);
         DxgkpFreeTrackedDmaBufferEntry(Adapter, Entry, FALSE, TRUE, MiniportCallbacksValid);
     }
+    if (InterlockedCompareExchange(&Adapter->SubmitDmaRetireActiveWorkers, 0, 0) != 0)
+        KeWaitForSingleObject(&Adapter->SubmitDmaRetireDrainedEvent, Executive, KernelMode, FALSE, NULL);
 }
 
 /* ========================================================================
@@ -13406,7 +13457,7 @@ DxgkpWaitForTrackedDmaIdle(
 
         DxgkRetireCompletedDmaBuffers(Adapter);
         KeAcquireSpinLock(&Adapter->SubmitDmaLock, &OldIrql);
-        Outstanding = !IsListEmpty(&Adapter->SubmitDmaListHead) || !IsListEmpty(&Adapter->SubmitDmaRetireListHead) || InterlockedCompareExchange(&Adapter->SubmitDmaRetireActiveWorkers, 0, 0) != 0;
+        Outstanding = !IsListEmpty(&Adapter->SubmitDmaListHead) || !IsListEmpty(&Adapter->SubmitDmaRetireListHead) || !IsListEmpty(&Adapter->DmaBufferDestroyListHead) || InterlockedCompareExchange(&Adapter->SubmitDmaRetireActiveWorkers, 0, 0) != 0;
         KeReleaseSpinLock(&Adapter->SubmitDmaLock, OldIrql);
         if (!Outstanding)
             return STATUS_SUCCESS;
@@ -15319,6 +15370,7 @@ DxgkpAddDeviceRegistered(
     InitializeListHead(&Adapter->ChildListHead);
     InitializeListHead(&Adapter->SubmitDmaListHead);
     InitializeListHead(&Adapter->SubmitDmaRetireListHead);
+    InitializeListHead(&Adapter->DmaBufferDestroyListHead);
     InitializeListHead(&Adapter->DmaBufferCacheListHead);
     InitializeListHead(&Adapter->MiniportAdapterListEntry);
     InitializeListHead(&Adapter->GlobalAdapterListEntry);
