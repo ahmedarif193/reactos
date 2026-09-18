@@ -418,6 +418,35 @@ BOOL HasNativeDriver(const LUID &Luid)
     return Status >= 0 && Name.UmdFileName[0] != 0;
 }
 
+BOOL AnyAdapterHasNativeDriver()
+{
+    D3DKMT_ENUMADAPTERS2 Enumeration = {};
+    if (D3DKMTEnumAdapters2(&Enumeration) < 0 || Enumeration.NumAdapters == 0)
+        return FALSE;
+    const ULONG Capacity = Enumeration.NumAdapters;
+    D3DKMT_ADAPTERINFO *Adapters = static_cast<D3DKMT_ADAPTERINFO *>(
+        HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Capacity * sizeof(*Adapters)));
+    if (Adapters == NULL)
+        return FALSE;
+    Enumeration.pAdapters = Adapters;
+    BOOL Found = FALSE;
+    if (D3DKMTEnumAdapters2(&Enumeration) >= 0)
+    {
+        for (ULONG Index = 0; Index < Enumeration.NumAdapters && Index < Capacity; ++Index)
+        {
+            if (Adapters[Index].hAdapter == 0)
+                continue;
+            if (!Found && HasNativeDriver(Adapters[Index].AdapterLuid))
+                Found = TRUE;
+            D3DKMT_CLOSEADAPTER Close = {};
+            Close.hAdapter = Adapters[Index].hAdapter;
+            D3DKMTCloseAdapter(&Close);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, Adapters);
+    return Found;
+}
+
 BOOL CreateDevice(IDXGIAdapter1 **Selected)
 {
     typedef HRESULT (WINAPI *CreateFactoryProc)(REFIID, void **);
@@ -957,6 +986,8 @@ DwmD3dInitialize(LONG Width, LONG Height)
     if (State.Active)
         return TRUE;
     if (Width <= 0 || Height <= 0)
+        return FALSE;
+    if (!AnyAdapterHasNativeDriver())
         return FALSE;
     State.Width = Width;
     State.Height = Height;
