@@ -3358,14 +3358,6 @@ PipDeviceActionWorker(
             KeReleaseSpinLock(&IopDeviceTreeLock, treeIrql);
         }
 
-        {
-            LARGE_INTEGER t0, t1, freq;
-            t0 = KeQueryPerformanceCounter(&freq);
-            DPRINT1("ACTPROF batch=%ld disjoint=%ld\n", count, disjoint);
-            t1 = t0;
-            (VOID)t1;
-        }
-
         if (disjoint < 2 || !PiRunParallel((PVOID *)Batch, disjoint, PipRunDeviceActionRequest))
         {
             for (i = 0; i < disjoint; i++)
