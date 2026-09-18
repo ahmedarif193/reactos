@@ -35,13 +35,20 @@ HRESULT dxgi_get_wddm_adapter_desc(LUID luid, DXGI_ADAPTER_DESC3 *desc)
     query.Type = KMTQAITYPE_PHYSICALADAPTERDEVICEIDS;
     query.pPrivateDriverData = &ids;
     query.PrivateDriverDataSize = sizeof(ids);
-    if (!NT_SUCCESS(D3DKMTQueryAdapterInfo(&query)))
-        goto done;
-
-    desc->VendorId = ids.DeviceIds.VendorID;
-    desc->DeviceId = ids.DeviceIds.DeviceID;
-    desc->SubSysId = ids.DeviceIds.SubVendorID | (ids.DeviceIds.SubSystemID << 16);
-    desc->Revision = ids.DeviceIds.RevisionID;
+    if (NT_SUCCESS(D3DKMTQueryAdapterInfo(&query)))
+    {
+        desc->VendorId = ids.DeviceIds.VendorID;
+        desc->DeviceId = ids.DeviceIds.DeviceID;
+        desc->SubSysId = ids.DeviceIds.SubVendorID | (ids.DeviceIds.SubSystemID << 16);
+        desc->Revision = ids.DeviceIds.RevisionID;
+    }
+    else if (type.SoftwareDevice)
+    {
+        desc->VendorId = 0x1414;
+        desc->DeviceId = 0x008c;
+        desc->SubSysId = 0;
+        desc->Revision = 0;
+    }
     desc->Flags = type.SoftwareDevice ? DXGI_ADAPTER_FLAG3_SOFTWARE : 0;
     query.Type = KMTQAITYPE_ADAPTERREGISTRYINFO;
     query.pPrivateDriverData = &registry;
@@ -51,7 +58,9 @@ HRESULT dxgi_get_wddm_adapter_desc(LUID luid, DXGI_ADAPTER_DESC3 *desc)
     query.Type = KMTQAITYPE_GETSEGMENTSIZE;
     query.pPrivateDriverData = &segments;
     query.PrivateDriverDataSize = sizeof(segments);
-    if (NT_SUCCESS(D3DKMTQueryAdapterInfo(&query)))
+    if (NT_SUCCESS(D3DKMTQueryAdapterInfo(&query))
+            && (segments.DedicatedVideoMemorySize || segments.DedicatedSystemMemorySize
+            || segments.SharedSystemMemorySize))
     {
         desc->DedicatedVideoMemory = segments.DedicatedVideoMemorySize;
         desc->DedicatedSystemMemory = segments.DedicatedSystemMemorySize;
