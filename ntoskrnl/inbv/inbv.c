@@ -315,14 +315,14 @@ InbvReleaseLock(VOID)
 {
     KIRQL OldIrql;
 
-    /* Capture the old IRQL */
+    /* Capture before releasing: another CPU can then overwrite InbvOldIrql. */
     OldIrql = InbvOldIrql;
 
     /* Release the driver lock */
     KiReleaseSpinLock(&BootDriverLock);
 
     /* If we were at dispatch level or lower, restore the old IRQL */
-    if (InbvOldIrql <= DISPATCH_LEVEL) KeLowerIrql(OldIrql);
+    if (OldIrql <= DISPATCH_LEVEL) KeLowerIrql(OldIrql);
 }
 
 VOID
