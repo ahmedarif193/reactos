@@ -32,7 +32,7 @@ add_importlibs(winlogon user32 advapi32 userenv secur32 rpcrt4 mpr msvcrt kernel
 if(ENABLE_EXPERIMENTAL_EARLY_SPLASH)
     target_compile_definitions(winlogon PRIVATE ENABLE_EXPERIMENTAL_EARLY_SPLASH)
     add_importlibs(winlogon gdi32 libpng)
-    add_cd_file(FILE "${REACTOS_SOURCE_DIR}/modules/wallpapers/Sea Bridge.png" DESTINATION reactos/Web/Wallpaper FOR all)
+    add_cd_file(FILE "${REACTOS_SOURCE_DIR}/modules/wallpapers/BlueHorizon.png" DESTINATION reactos/Web/Wallpaper FOR all)
 endif()
 add_pch(winlogon winlogon.h SOURCE)
 add_cd_file(TARGET winlogon DESTINATION reactos/system32 FOR all)
