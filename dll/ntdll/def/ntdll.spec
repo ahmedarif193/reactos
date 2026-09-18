@@ -640,6 +640,7 @@
 @ stdcall NtWaitLowEventPair(ptr)
 @ stdcall -stub -version=0x600+ NtWorkerFactoryWorkerReady(long)
 @ stdcall -arch=i386 NtWow64GetNativeSystemInformation(long ptr long ptr)
+@ stdcall -arch=i386 NtWow64IsProcessorFeaturePresent(long)
 @ stdcall NtWriteFile(long long ptr ptr ptr ptr long ptr ptr)
 @ stdcall NtWriteFileGather(long long ptr ptr ptr ptr long ptr ptr)
 @ stdcall NtWriteRequestData(ptr ptr long ptr long ptr)

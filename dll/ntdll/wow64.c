@@ -34,6 +34,13 @@ NtWow64GetNativeSystemInformation(SYSTEM_INFORMATION_CLASS class, void *info, UL
 {
     return NtQuerySystemInformation(class, info, size, ret_size);
 }
+
+NTSTATUS
+WINAPI
+NtWow64IsProcessorFeaturePresent(ULONG feature)
+{
+    return RtlIsProcessorFeaturePresent(feature);
+}
 #endif
 
 static USHORT

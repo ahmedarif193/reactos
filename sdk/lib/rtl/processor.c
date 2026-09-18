@@ -14,6 +14,9 @@
 
 /* FUNCTIONS *****************************************************************/
 
+#ifdef WOW64_I386_RUNTIME
+NTSTATUS NTAPI NtWow64IsProcessorFeaturePresent(ULONG ProcessorFeature);
+#endif
 
 BOOLEAN
 NTAPI
@@ -24,6 +27,11 @@ RtlIsProcessorFeaturePresent(
     {
         return FALSE;
     }
+
+#ifdef WOW64_I386_RUNTIME
+    if (NtCurrentTeb()->WOW32Reserved)
+        return NtWow64IsProcessorFeaturePresent(ProcessorFeature) != 0;
+#endif
 
     return SharedUserData->ProcessorFeatures[ProcessorFeature] != 0;
 }

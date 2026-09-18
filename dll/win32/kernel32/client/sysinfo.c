@@ -169,7 +169,7 @@ BOOL
 WINAPI
 IsProcessorFeaturePresent(IN DWORD ProcessorFeature)
 {
-#if defined(_M_ARM64EC)
+#if defined(_M_ARM64EC) || (defined(_M_IX86) && DLL_EXPORT_VERSION >= 0xA00)
     return RtlIsProcessorFeaturePresent(ProcessorFeature);
 #else
     if (ProcessorFeature >= PROCESSOR_FEATURE_MAX) return FALSE;

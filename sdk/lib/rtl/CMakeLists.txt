@@ -6,6 +6,10 @@ add_definitions(
     -D_NTDLLBUILD_
     -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 
+if(WOW64_I386_RUNTIME)
+    set_property(SOURCE processor.c APPEND PROPERTY COMPILE_DEFINITIONS WOW64_I386_RUNTIME)
+endif()
+
 if (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Enable this again. CORE-17637
     add_compile_options(-Wunused-result)
