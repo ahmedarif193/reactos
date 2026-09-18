@@ -2159,6 +2159,7 @@ static HRESULT start_physical_stream(struct reactos_stream *stream)
             return hr;
         }
 
+        stream->position_qpc_100ns = query_performance_time_100ns();
         stream->timer_thread = CreateThread(NULL, 0, reactos_timer_thread,
                                             stream, 0, NULL);
         if (!stream->timer_thread)
