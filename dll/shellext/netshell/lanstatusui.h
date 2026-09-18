@@ -5,6 +5,8 @@
 
 #define WM_SHOWSTATUSDLG    (WM_USER+10)
 
+struct INetworkListManager;
+
 typedef struct tagNotificationItem
 {
     struct tagNotificationItem *pNext;
@@ -17,6 +19,7 @@ typedef struct tagNotificationItem
 typedef struct
 {
     INetConnection *pNet;
+    INetworkListManager *pNetworkListManager;
     HWND hwndStatusDlg;         /* LanStatusDlg window */
     HWND hwndDlg;               /* status dialog window */
     DWORD dwAdapterIndex;

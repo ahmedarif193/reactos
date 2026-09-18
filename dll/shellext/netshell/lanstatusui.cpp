@@ -26,19 +26,20 @@ static struct
 
 
 static NLM_CONNECTIVITY
-NetShellGetConnectivity(const GUID *pAdapterId)
+NetShellGetConnectivity(LANSTATUSUI_CONTEXT *pContext, const GUID *pAdapterId)
 {
     CComPtr<IEnumNetworkConnections> pEnum;
     NLM_CONNECTIVITY Result = NLM_CONNECTIVITY_DISCONNECTED;
 
     if (pAdapterId == NULL)
         return Result;
-    CComPtr<INetworkListManager> pMgr;
-
-    if (FAILED(CoCreateInstance(CLSID_NetworkListManager, NULL, CLSCTX_ALL,
-                                IID_PPV_ARG(INetworkListManager, &pMgr))))
+    /* Keep the manager on the status window's thread. Creating it on every
+       timer tick also recreates its interface/address/route notification threads. */
+    if (!pContext->pNetworkListManager &&
+        FAILED(CoCreateInstance(CLSID_NetworkListManager, NULL, CLSCTX_ALL,
+                                IID_PPV_ARG(INetworkListManager, &pContext->pNetworkListManager))))
         return Result;
-    if (FAILED(pMgr->GetNetworkConnections(&pEnum)))
+    if (FAILED(pContext->pNetworkListManager->GetNetworkConnections(&pEnum)))
         return Result;
 
     for (;;)
@@ -467,7 +468,7 @@ UpdateLanStatus(HWND hwndDlg, LANSTATUSUI_CONTEXT * pContext)
 
         nQuality = (IfEntry.dwType == IF_TYPE_IEEE80211) ? NetShellWifiQuality(pGuid)
                                                          : NS_WIFI_NOINFO;
-        Conn = NetShellGetConnectivity(pGuid);
+        Conn = NetShellGetConnectivity(pContext, pGuid);
         nIcon = NetShellTrayIcon(IfEntry.dwType, IfEntry.dwOperStatus, Conn, nQuality);
 
         if (pContext->Status != nIcon)
@@ -1267,6 +1268,11 @@ LANStatusDlg(
                 KillTimer(hwndDlg, pContext->nIDEvent);
                 pContext->nIDEvent = 0;
             }
+            if (pContext && pContext->pNetworkListManager)
+            {
+                pContext->pNetworkListManager->Release();
+                pContext->pNetworkListManager = NULL;
+            }
             SetWindowLongPtr(hwndDlg, DWLP_USER, (LONG_PTR)NULL);
             break;
 
@@ -1443,6 +1449,9 @@ CLanStatus::EnumerateTrayConnections()
         if (!hwndDlg)
         {
             ERR("CreateDialogParamW failed\n");
+            pItem->pNet->Release();
+            CoTaskMemFree(pContext);
+            CoTaskMemFree(pItem);
             continue;
         }
 
@@ -1475,7 +1484,7 @@ CLanStatus::EnumerateTrayConnections()
                                              pProps->Status == NCS_CONNECTED ?
                                                  MIB_IF_OPER_STATUS_CONNECTED :
                                                  MIB_IF_OPER_STATUS_DISCONNECTED,
-                                             NetShellGetConnectivity(&pProps->guidId),
+                                             NetShellGetConnectivity(pContext, &pProps->guidId),
                                              NS_WIFI_NOINFO)),
                                          IMAGE_ICON,
                                          ShellTrayIconSize(),
@@ -1516,6 +1525,9 @@ CLanStatus::EnumerateTrayConnections()
         else
         {
             ERR("Shell_NotifyIconW failed\n");
+            DestroyWindow(hwndDlg);
+            pItem->pNet->Release();
+            CoTaskMemFree(pContext);
             CoTaskMemFree(pItem);
         }
 
