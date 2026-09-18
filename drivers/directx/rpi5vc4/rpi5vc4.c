@@ -87,8 +87,8 @@ Rpi5Vc4IsRpi5Platform(VOID)
     return HalGetCachedAcpiTable(RPI5VC4_ACPI_FADT, NULL, "RPI5") != NULL;
 }
 
-/* Allocate two hardware cursor surfaces so a shape is never rewritten while
- * the HVS is scanning it. */
+/* Fixed scanout keeps cursor pixels and backing in cached memory. HVS uses
+ * two surfaces so an active cursor shape is never rewritten. */
 static VOID
 Rpi5Vc4InitCursor(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
@@ -96,6 +96,26 @@ Rpi5Vc4InitCursor(
     PHYSICAL_ADDRESS Low, High, Boundary;
     const SIZE_T BufferBytes = RPI5VC4_CURSOR_WIDTH * RPI5VC4_CURSOR_HEIGHT * sizeof(ULONG);
     const SIZE_T AllocationBytes = BufferBytes * 2;
+
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        PRPI5VC4_SOFTWARE_POINTER Pointer;
+
+        if (DeviceExtension->SoftwarePointer != NULL)
+            return;
+
+        Pointer = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Pointer), RPI5VC4_POOL_TAG);
+        if (Pointer == NULL)
+            return;
+        RtlZeroMemory(Pointer, sizeof(*Pointer));
+        Pointer->Scanout = DeviceExtension->FrameBufferVa;
+        Pointer->Pitch = DeviceExtension->ScanoutPitch;
+        Pointer->ScreenWidth = DeviceExtension->ScreenWidth;
+        Pointer->ScreenHeight = DeviceExtension->ScreenHeight;
+        Pointer->Rotate90 = DeviceExtension->PathRotation == D3DKMDT_VPPR_ROTATE90;
+        DeviceExtension->SoftwarePointer = Pointer;
+        return;
+    }
 
     if (DeviceExtension->CursorVa != NULL)
         return;
@@ -234,6 +254,12 @@ static VOID
 Rpi5Vc4FreeCursor(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
+    if (DeviceExtension->SoftwarePointer != NULL)
+    {
+        Rpi5Vc4PointerRestore(DeviceExtension->SoftwarePointer);
+        ExFreePoolWithTag(DeviceExtension->SoftwarePointer, RPI5VC4_POOL_TAG);
+        DeviceExtension->SoftwarePointer = NULL;
+    }
     if (DeviceExtension->CursorVa != NULL)
     {
         MmFreeContiguousMemorySpecifyCache(
@@ -671,8 +697,7 @@ Rpi5Vc4DdiStartDevice(
     }
     }
 
-    if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
-        Rpi5Vc4InitCursor(DeviceExtension);
+    Rpi5Vc4InitCursor(DeviceExtension);
 
     /* Local VRAM segment + the in-order submission pipeline. */
     if (!Rpi5Vc4AllocateVram(DeviceExtension))
@@ -1141,6 +1166,12 @@ Rpi5Vc4DdiSetPowerState(
     if (!DeviceExtension->Started)
         return STATUS_SUCCESS;
 
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+        Rpi5Vc4PointerRestore(DeviceExtension->SoftwarePointer);
+    }
+
     if (DevicePowerState == PowerDeviceD0)
     {
         /*
@@ -1181,6 +1212,18 @@ Rpi5Vc4DdiSetPowerState(
         DeviceExtension->SourceVisible = FALSE;
     }
 
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+    {
+        if (DeviceExtension->SoftwarePointer != NULL &&
+            DeviceExtension->SourceVisible && DeviceExtension->CursorVisible)
+        {
+            Rpi5Vc4PointerDraw(DeviceExtension->SoftwarePointer);
+#if defined(_M_ARM64)
+            __dsb(_ARM64_BARRIER_SY);
+#endif
+        }
+        ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    }
     return STATUS_SUCCESS;
 }
 
@@ -1223,7 +1266,7 @@ Rpi5Vc4DdiSetPointerShape(
     if (SetPointerShape->VidPnSourceId != 0)
         return STATUS_INVALID_PARAMETER;
 
-    if (DeviceExtension->CursorVa == NULL)
+    if (DeviceExtension->CursorVa == NULL && DeviceExtension->SoftwarePointer == NULL)
         return STATUS_NOT_SUPPORTED;
 
     /* Only 32bpp ARGB color shapes; the cdd bridge converts mono cursors. */
@@ -1239,6 +1282,30 @@ Rpi5Vc4DdiSetPointerShape(
     }
 
     ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+
+    if (DeviceExtension->SoftwarePointer != NULL)
+    {
+        PRPI5VC4_SOFTWARE_POINTER Pointer = DeviceExtension->SoftwarePointer;
+
+        Rpi5Vc4PointerRestore(Pointer);
+        for (Row = 0; Row < SetPointerShape->Height; ++Row)
+        {
+            RtlCopyMemory(Pointer->Pixels + Row * RPI5VC4_SOFTWARE_POINTER_SIZE,
+                          (const UCHAR *)SetPointerShape->pPixels + Row * SetPointerShape->Pitch,
+                          SetPointerShape->Width * sizeof(ULONG));
+        }
+        Pointer->Width = SetPointerShape->Width;
+        Pointer->Height = SetPointerShape->Height;
+        DeviceExtension->CursorShapeValid = TRUE;
+        if (DeviceExtension->CursorVisible && DeviceExtension->SourceVisible)
+            Rpi5Vc4PointerDraw(Pointer);
+#if defined(_M_ARM64)
+        __dsb(_ARM64_BARRIER_SY);
+#endif
+        KeMemoryBarrier();
+        ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+        return STATUS_SUCCESS;
+    }
 
     NextBuffer = DeviceExtension->CursorShapeValid
                      ? DeviceExtension->CursorBufferIndex ^ 1u
@@ -1292,7 +1359,7 @@ Rpi5Vc4DdiSetPointerPosition(
     if (SetPointerPosition->VidPnSourceId != 0)
         return STATUS_INVALID_PARAMETER;
 
-    if (DeviceExtension->CursorVa == NULL)
+    if (DeviceExtension->CursorVa == NULL && DeviceExtension->SoftwarePointer == NULL)
         return STATUS_NOT_SUPPORTED;
 
     ExAcquireFastMutex(&DeviceExtension->HvsMutex);
@@ -1304,7 +1371,21 @@ Rpi5Vc4DdiSetPointerPosition(
     DeviceExtension->CursorVisible = SetPointerPosition->Flags.Visible &&
                                      DeviceExtension->CursorShapeValid;
 
-    if (DeviceExtension->CursorVisible)
+    if (DeviceExtension->SoftwarePointer != NULL)
+    {
+        PRPI5VC4_SOFTWARE_POINTER Pointer = DeviceExtension->SoftwarePointer;
+
+        Rpi5Vc4PointerRestore(Pointer);
+        Pointer->X = SetPointerPosition->X;
+        Pointer->Y = SetPointerPosition->Y;
+        if (DeviceExtension->CursorVisible && DeviceExtension->SourceVisible)
+            Rpi5Vc4PointerDraw(Pointer);
+#if defined(_M_ARM64)
+        __dsb(_ARM64_BARRIER_SY);
+#endif
+        KeMemoryBarrier();
+    }
+    else if (DeviceExtension->CursorVisible)
     {
         if (!WasVisible || !Rpi5HvsMoveCursorLocked(DeviceExtension))
             Rpi5HvsInstallScanoutLocked(DeviceExtension);

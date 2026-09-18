@@ -90,6 +90,14 @@ Rpi5Vc4BlitRectTo(
 
     for (Row = Top; Row < Bottom; Row++)
     {
+        if (DeviceExtension->SoftwarePointer != NULL)
+        {
+            Rpi5Vc4PointerCopyRow(DeviceExtension->SoftwarePointer,
+                (PULONG)(Destination + (SIZE_T)Row * DeviceExtension->BytesPerScanLine) + Left,
+                (const ULONG *)(Source + (SIZE_T)Row * SourcePitch) + Left,
+                Row, Left, Right);
+            continue;
+        }
         RtlCopyMemory(Destination + (SIZE_T)Row * DeviceExtension->BytesPerScanLine +
                           (SIZE_T)Left * 4,
                       Source + (SIZE_T)Row * SourcePitch + (SIZE_T)Left * 4,
@@ -132,6 +140,12 @@ Rpi5Vc4BlitRectRotate90ToFirmware(
                 RtlCopyMemory(Tile[Y - TileY],
                               Source + (SIZE_T)Y * SourcePitch + (SIZE_T)TileX * sizeof(ULONG),
                               (SIZE_T)(TileRight - TileX) * sizeof(ULONG));
+                if (DeviceExtension->SoftwarePointer != NULL)
+                {
+                    Rpi5Vc4PointerCopyRow(DeviceExtension->SoftwarePointer,
+                                         Tile[Y - TileY], Tile[Y - TileY],
+                                         Y, TileX, TileRight);
+                }
             }
 
             for (X = TileX; X < TileRight; ++X)
@@ -216,6 +230,7 @@ Rpi5Vc4PresentFixedFirmwarePrimary(
 #endif
     KeMemoryBarrier();
 
+    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
     DeviceExtension->FrameBufferPhysical =
         DeviceExtension->FirmwareFrameBufferPhysical;
     Rpi5Vc4BlitRect(DeviceExtension, Source, (LONG)SourcePitch, &FullFrame);
@@ -227,6 +242,7 @@ Rpi5Vc4PresentFixedFirmwarePrimary(
 #endif
     KeMemoryBarrier();
 
+    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
     return STATUS_SUCCESS;
 }
 
@@ -515,6 +531,9 @@ Rpi5Vc4DdiPresentDisplayOnly(
         return STATUS_SUCCESS;
     }
 
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+        ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+
     /* If a flip ring exists, the live buffer may have missed flipped frames:
      * catch it up before applying this present. */
     if (DeviceExtension->FlipBufVa != NULL &&
@@ -589,6 +608,8 @@ Rpi5Vc4DdiPresentDisplayOnly(
 #endif
     KeMemoryBarrier();
 
+    if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
+        ExReleaseFastMutex(&DeviceExtension->HvsMutex);
     return STATUS_SUCCESS;
 }
 
@@ -653,6 +674,7 @@ Rpi5Vc4DdiSystemDisplayEnable(
      * overlay so the panic screen is what the HVS shows.
      */
     DeviceExtension->CursorVisible = FALSE;
+    Rpi5Vc4PointerRestore(DeviceExtension->SoftwarePointer);
     if (!Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
     {
         Rpi5HvsFlipScanout(DeviceExtension,

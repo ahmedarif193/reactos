@@ -33,6 +33,7 @@
 #include <dispmprt.h>
 #include <reactos/rddm/rxgkpresent.h>
 #include <reactos/loader_framebuffer.h>
+#include "rpi5vc4_pointer.h"
 #include <reactos/rpi5vc4_umd.h>
 #include <reactos/rpi5vc4_xpdm.h>
 
@@ -395,6 +396,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
     ULONG PixelValveHactAct;
 
     /* Hardware cursor composited by the HVS as a second display-list plane. */
+    PRPI5VC4_SOFTWARE_POINTER SoftwarePointer;
     PVOID CursorVa;                   /* CPU mapping of the cursor surface      */
     PHYSICAL_ADDRESS CursorPhys;      /* physical base the HVS scans the cursor */
     ULONG CursorWidth;
