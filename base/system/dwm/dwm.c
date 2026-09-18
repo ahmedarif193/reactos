@@ -3381,8 +3381,6 @@ DwmComposeLoop(HANDLE hStopEvent)
         DwmLog("DWM: attach refused (no composition on this display stack)\n");
         return;
     }
-    DwmLog("DWM: attached\n");
-
     if (NtDCompositionCreateConnection(FALSE, hWake, &hConnection) < 0)
     {
         DwmLog("DWM: composition connection creation failed\n");
@@ -3400,10 +3398,7 @@ DwmComposeLoop(HANDLE hStopEvent)
     if (DwmGpuComposeInitialize(g_W, g_H))
         OutputDebugStringA("DWM: Direct3D composition enabled; GPU copy to scanout\n");
     else
-    {
         gpuLastInitTry = GetTickCount();
-        DwmLog("DWM: no native Direct3D compositor; composing on the CPU\n");
-    }
 
     if (DwmSettingsRead(&Settings.Effects) != ERROR_SUCCESS)
         DwmLog("DWM: could not read effect preferences\n");

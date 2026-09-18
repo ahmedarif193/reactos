@@ -2684,9 +2684,7 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Grab the FADT */
-    DbgPrint("HAL: About to lookup FADT (signature=%lx)\n", FADT_SIGNATURE);
     Fadt = HalAcpiGetTable(LoaderBlock, FADT_SIGNATURE);
-    DbgPrint("HAL: HalAcpiGetTable(FADT) returned %p\n", Fadt);
     if (!Fadt)
     {
         /* Fail */
