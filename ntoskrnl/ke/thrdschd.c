@@ -613,21 +613,6 @@ KiSelectNextProcessor(
         PreferredSet &= NonParkedSet;
     *IdleRequest = 0;
 
-#ifdef _M_ARM64
-    /* Favor an unloaded local processor without self-placing a running waiter. */
-    Processor = KeGetCurrentProcessorNumber();
-    Prcb = KeGetCurrentPrcb();
-    if ((Thread != Prcb->CurrentThread) &&
-        (PreferredSet & AFFINITY_MASK(Processor)) &&
-        (Prcb->NextThread == NULL) &&
-        (Prcb->ReadySummary == 0) &&
-        (Prcb->CurrentThread != NULL) &&
-        (Thread->BasePriority >= Prcb->CurrentThread->BasePriority))
-    {
-        return Processor;
-    }
-#endif
-
     /* Claim an allowed idle processor atomically. */
     for (;;)
     {
@@ -1447,10 +1432,7 @@ KiUpdateEffectiveAffinityThread(
 {
     PKPRCB Prcb;
 
-    /* Acquire the thread lock */
-    KiAcquireThreadLock(Thread);
-
-    /* Get the PRCB that the thread is to be run on and lock it */
+    /* The caller holds the thread lock. */
     Prcb = KiProcessorBlock[Thread->NextProcessor];
     KiAcquirePrcbLock(Prcb);
 
@@ -1508,7 +1490,6 @@ KiUpdateEffectiveAffinityThread(
     }
 
     KiReleasePrcbLock(Prcb);
-    KiReleaseThreadLock(Thread);
 }
 #endif // CONFIG_SMP
 
@@ -1518,6 +1499,8 @@ KiSetAffinityThread(IN PKTHREAD Thread,
                     IN KAFFINITY Affinity)
 {
     KAFFINITY OldAffinity;
+
+    KiAcquireThreadLock(Thread);
 
     /* Get the current affinity */
     OldAffinity = KiThreadUserAffinityMask(Thread);
@@ -1545,6 +1528,8 @@ KiSetAffinityThread(IN PKTHREAD Thread,
         KiUpdateEffectiveAffinityThread(Thread);
     }
 #endif
+
+    KiReleaseThreadLock(Thread);
 
     /* Return the old affinity */
     return OldAffinity;
