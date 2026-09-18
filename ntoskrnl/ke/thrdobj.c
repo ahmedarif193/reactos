@@ -688,6 +688,9 @@ KiChpeRingSuspendDoorbell(IN PKTHREAD Thread)
     _SEH2_TRY
     {
         CpuArea = *(PCHPE_V2_CPU_AREA_INFO volatile *)((PUCHAR)Thread->Teb + CHPE_TEB_CPU_AREA_OFFSET);
+        /* Native ARM64 threads do not have a CHPE CPU area. */
+        if (CpuArea == NULL) _SEH2_YIELD(return FALSE);
+
         ProbeForRead(CpuArea, sizeof(CapturedCpuArea), TYPE_ALIGNMENT(CHPE_V2_CPU_AREA_INFO));
         CapturedCpuArea = *CpuArea;
         if ((CapturedCpuArea.SuspendDoorbell != NULL) &&
