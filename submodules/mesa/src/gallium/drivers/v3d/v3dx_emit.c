@@ -293,6 +293,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
 
         if (v3d->dirty & (V3D_DIRTY_RASTERIZER |
                           V3D_DIRTY_ZSA |
+                          V3D_DIRTY_FRAMEBUFFER |
                           V3D_DIRTY_PRIM_MODE |
                           V3D_DIRTY_BLEND)) {
                 const enum mesa_prim reduced_prim =
@@ -347,7 +348,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                         config.early_z_updates_enable =
                                 (job->ez_state != V3D_EZ_DISABLED);
 #endif
-                        if (v3d->zsa->base.depth_enabled) {
+                        if (job->zsbuf.texture && v3d->zsa->base.depth_enabled) {
                                 config.z_updates_enable =
                                         v3d->zsa->base.depth_writemask;
 #if V3D_VERSION == 42
@@ -362,6 +363,7 @@ v3dX(emit_state)(struct pipe_context *pctx)
                         }
 
                         config.stencil_enable =
+                                job->zsbuf.texture &&
                                 v3d->zsa->base.stencil[0].enabled;
 
                         /* Use nicer line caps when line smoothing is
