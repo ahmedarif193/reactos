@@ -21,7 +21,7 @@ UNICODE_STRING BaseUnicodeCommandLine;
 ANSI_STRING BaseAnsiCommandLine;
 UNICODE_STRING BasePathVariableName = RTL_CONSTANT_STRING(L"PATH");
 PLDR_DATA_TABLE_ENTRY BasepExeLdrEntry;
-BOOLEAN g_AppCertInitialized;
+static LONG g_AppCertInitialized;
 BOOLEAN g_HaveAppCerts;
 LIST_ENTRY BasepAppCertDllsList;
 RTL_CRITICAL_SECTION gcsAppCert;
@@ -211,7 +211,8 @@ BasepIsProcessAllowed(IN LPWSTR ApplicationName)
     OBJECT_ATTRIBUTES KeyAttributes = RTL_CONSTANT_OBJECT_ATTRIBUTES(&CertKey, OBJ_CASE_INSENSITIVE);
 
     /* Try to initialize the certification subsystem */
-    while (!g_AppCertInitialized)
+    /* Acquire the published initialization state before reading its results. */
+    while (!InterlockedCompareExchange(&g_AppCertInitialized, 0, 0))
     {
         /* Defaults */
         Status = STATUS_SUCCESS;
@@ -219,7 +220,13 @@ BasepIsProcessAllowed(IN LPWSTR ApplicationName)
 
         /* Acquire the lock while initializing and see if we lost a race */
         RtlEnterCriticalSection(&gcsAppCert);
-        if (g_AppCertInitialized) break;
+        if (g_AppCertInitialized)
+        {
+            /* Another creator initialized it while we waited. Never leave the
+             * lock owned by a shard thread that may exit immediately after. */
+            RtlLeaveCriticalSection(&gcsAppCert);
+            break;
+        }
 
         /* On embedded, there is a special DLL */
         if (SharedUserData->SuiteMask & VER_SUITE_EMBEDDEDNT)
@@ -300,7 +307,7 @@ BasepIsProcessAllowed(IN LPWSTR ApplicationName)
         }
 
         /* We are done the initialization phase, release the lock */
-        g_AppCertInitialized = TRUE;
+        InterlockedExchange(&g_AppCertInitialized, TRUE);
         RtlLeaveCriticalSection(&gcsAppCert);
     }
 
