@@ -97,11 +97,7 @@ Rpi5Vc4BlitRectTo(
     }
 }
 
-/* Rotate a logical dirty rectangle clockwise into the portrait-native linear
- * RP1 DSI framebuffer.  Work in 16x16 tiles: each destination run is
- * contiguous (important for the write-combined mapping), while the source
- * cache lines are reused across the tile instead of walking a full column at
- * source-pitch intervals. */
+/* Stage uncached source rows before rotating into the write-combined scanout. */
 static VOID
 Rpi5Vc4BlitRectRotate90ToFirmware(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
@@ -113,6 +109,8 @@ Rpi5Vc4BlitRectRotate90ToFirmware(
     LONG Top = max(Rect->top, 0);
     LONG Right = min(Rect->right, (LONG)DeviceExtension->ScreenWidth);
     LONG Bottom = min(Rect->bottom, (LONG)DeviceExtension->ScreenHeight);
+    ULONG Tile[16][16];
+    ULONG Row[16];
     LONG TileX;
     LONG TileY;
 
@@ -127,24 +125,25 @@ Rpi5Vc4BlitRectRotate90ToFirmware(
         {
             LONG TileBottom = min(TileY + 16, Bottom);
             LONG X;
+            LONG Y;
+
+            for (Y = TileY; Y < TileBottom; ++Y)
+            {
+                RtlCopyMemory(Tile[Y - TileY],
+                              Source + (SIZE_T)Y * SourcePitch + (SIZE_T)TileX * sizeof(ULONG),
+                              (SIZE_T)(TileRight - TileX) * sizeof(ULONG));
+            }
 
             for (X = TileX; X < TileRight; ++X)
             {
-                const UCHAR *SourcePixel =
-                    Source + (SIZE_T)(TileBottom - 1) * SourcePitch +
-                    (SIZE_T)X * sizeof(ULONG);
-                PULONG DestinationPixel = (PULONG)(
-                    (PUCHAR)DeviceExtension->FrameBufferVa +
-                    (SIZE_T)X * DeviceExtension->ScanoutPitch +
-                    (SIZE_T)(DeviceExtension->ScanoutWidth - TileBottom) *
-                        sizeof(ULONG));
-                LONG Y;
-
                 for (Y = TileBottom - 1; Y >= TileY; --Y)
-                {
-                    *DestinationPixel++ = *(UNALIGNED const ULONG *)SourcePixel;
-                    SourcePixel -= SourcePitch;
-                }
+                    Row[TileBottom - 1 - Y] = Tile[Y - TileY][X - TileX];
+
+                RtlCopyMemory((PUCHAR)DeviceExtension->FrameBufferVa +
+                                  (SIZE_T)X * DeviceExtension->ScanoutPitch +
+                                  (SIZE_T)(DeviceExtension->ScanoutWidth - TileBottom) * sizeof(ULONG),
+                              Row,
+                              (SIZE_T)(TileBottom - TileY) * sizeof(ULONG));
             }
         }
     }
