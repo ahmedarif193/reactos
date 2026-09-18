@@ -283,7 +283,8 @@ SoftGpuAllocateFrameBuffer(
  *
  * Statically-initialised DXGK_DRIVERCAPS advertised to dxgkrnl.
  * All capability fields left at zero except what softgpu actually supports:
- *   - PointerCaps.Color: 64x64 cursor composited directly into scanout
+ *   - PointerCaps.Color: 64x64 cursor, cleared unless a platform backend
+ *     owns a real pointer plane (PlatformHardwarePointer)
  *   - MaxAllocationListSlotId: 255
  *   - GpuEngineTopology: one 3D node, also used for copy work
  *   - WDDMVersion: the highest completed tier, matching the registered table
@@ -1540,6 +1541,15 @@ SoftGpuDdiQueryAdapterInfo(
         {
             ((PDXGK_DRIVERCAPS)pQueryAdapterInfo->pOutputData)
                 ->HighestAcceptableAddress = Device->HighestDmaAddress;
+        }
+        if (!Device->PlatformHardwarePointer)
+        {
+            PDXGK_DRIVERCAPS Caps =
+                (PDXGK_DRIVERCAPS)pQueryAdapterInfo->pOutputData;
+
+            Caps->PointerCaps.Value = 0;
+            Caps->MaxPointerWidth = 0;
+            Caps->MaxPointerHeight = 0;
         }
         return STATUS_SUCCESS;
 
