@@ -2141,8 +2141,6 @@ co_MsqWaitForNewMessages(PTHREADINFO pti, PWND WndFilter,
 
    UserLeaveCo();
 
-   ZwYieldExecution(); // Let someone else run!
-
    ret = KeWaitForSingleObject( pti->pEventQueueServer,
                                 UserRequest,
                                 UserMode,
