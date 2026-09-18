@@ -109,7 +109,16 @@ HalpArm64ApTrampolineEntry:
     msr     cntvoff_el2, xzr
     msr     cptr_el2, xzr
     msr     hstr_el2, xzr
-    msr     mdcr_el2, xzr
+    /* Expose implemented event counters to EL1 instead of reserving all for EL2. */
+    mov     x1, xzr
+    mrs     x0, id_aa64dfr0_el1
+    sbfx    x0, x0, #8, #4
+    cmp     x0, #1
+    b.lt    .Lap_pmu_ready
+    mrs     x1, pmcr_el0
+    ubfx    x1, x1, #11, #5
+.Lap_pmu_ready:
+    msr     mdcr_el2, x1
     msr     vttbr_el2, xzr
 
     mov     x0, #0x3C5
