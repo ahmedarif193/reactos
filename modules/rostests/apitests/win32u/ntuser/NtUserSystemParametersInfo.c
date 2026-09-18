@@ -791,7 +791,7 @@ Test_SPI_GETNONCLIENTMETRICS(void)
     Buffer.Redzone = 0xdeadbeef;
 
     TEST(NtUserSystemParametersInfo(SPI_GETNONCLIENTMETRICS, LegacySize, Metrics, 0) == 1);
-    ok(Metrics->cbSize == LegacySize, "Expected legacy size: %lu, got %lu\n", (ULONG)LegacySize, Metrics->cbSize);
+    ok(Metrics->cbSize == LegacySize, "Expected legacy size: %lu, got %u\n", (ULONG)LegacySize, Metrics->cbSize);
     ok(Buffer.Redzone == 0xdeadbeef, "SPI_GETNONCLIENTMETRICS overwrote the legacy buffer: 0x%08lx\n", Buffer.Redzone);
 }
 
