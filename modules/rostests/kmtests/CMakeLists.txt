@@ -96,6 +96,7 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkCoreConcurrency.c
     directx/DxgkContextSync.c
     directx/DxgkPresentQueue.c
+    directx/Rpi5Vc4Pointer.c
     directx/DxgkSyncWait.c
     directx/DxgkTrackedWork.c
     directx/DxgkVidMmWorkerDrain.c

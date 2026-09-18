@@ -39,6 +39,7 @@ KMT_TESTFUNC Test_DxgkKeyedMutex;
 KMT_TESTFUNC Test_DxgkCoreConcurrency;
 KMT_TESTFUNC Test_DxgkContextSync;
 KMT_TESTFUNC Test_DxgkPresentQueue;
+KMT_TESTFUNC Test_Rpi5Vc4Pointer;
 KMT_TESTFUNC Test_DxgkSyncWait;
 KMT_TESTFUNC Test_DxgkTrackedWork;
 KMT_TESTFUNC Test_DxgkVidMmWorkerDrain;
@@ -342,6 +343,7 @@ const KMT_TEST TestList[] =
     { "DxgkCoreConcurrency",                Test_DxgkCoreConcurrency },
     { "DxgkContextSync",                   Test_DxgkContextSync },
     { "DxgkPresentQueue",                  Test_DxgkPresentQueue },
+    { "Rpi5Vc4Pointer",                    Test_Rpi5Vc4Pointer },
     { "DxgkSyncWait",                      Test_DxgkSyncWait },
     { "DxgkTrackedWork",                   Test_DxgkTrackedWork },
     { "DxgkVidMmWorkerDrain",              Test_DxgkVidMmWorkerDrain },
