@@ -136,7 +136,7 @@ static VOID NTAPI DxgkpVidMmDestroyBatchWorker(_In_ PVOID Context);
 static ULONG DxgkpVidMmForceQuarantinedDestroyBatches(_In_ PDXGKRNL_ADAPTER Adapter);
 static ULONG DxgkpVidMmForceLocalAdapterBackings(_In_ PDXGKRNL_ADAPTER Adapter);
 static NTSTATUS DxgkpVidMmDestroyAllocation(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ PDXGKRNL_DEVICE ExpectedDevice, _In_opt_ PDXGKVMM_RESOURCE ExpectedResource, _In_ HANDLE AllocationHandle);
-static NTSTATUS DxgkpVidMmDestroyAllocationList(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ PDXGKRNL_DEVICE Device, _In_reads_(AllocationCount) CONST D3DKMT_HANDLE *AllocationHandles, _In_ UINT AllocationCount, _In_ BOOLEAN ResourceOperationLockHeld);
+static NTSTATUS DxgkpVidMmDestroyAllocationList(_In_ PDXGKRNL_ADAPTER Adapter, _In_opt_ PDXGKRNL_DEVICE Device, _In_reads_(AllocationCount) CONST D3DKMT_HANDLE *AllocationHandles, _In_ UINT AllocationCount, _In_ BOOLEAN ResourceOperationLockHeld, _Inout_opt_ PBOOLEAN KmdTransactionHeld, _Inout_opt_ PBOOLEAN CallerResourceLockHeld);
 static struct _DXGKVMM_DESTROY_BATCH *DxgkpVidMmAllocateDestroyBatch(_In_ PDXGKRNL_ADAPTER Adapter, _In_ UINT AllocationCount);
 static NTSTATUS DxgkpVidMmActivateUnpublishedDestroyBatch(_In_ struct _DXGKVMM_DESTROY_BATCH *Batch, _In_reads_(Batch->AllocationCount) PDXGKVMM_ALLOCATION *Allocations, _In_opt_ PDXGKVMM_RESOURCE Resource, _In_reads_opt_(Batch->AllocationCount) PHANDLE OpenHandles, _In_opt_ struct _DXGKVMM_OPEN_BINDING_GROUP *OpenBindingGroup, _In_ NTSTATUS FailureStatus, _In_ BOOLEAN TrackUnpublishedObjects, _In_ BOOLEAN AwaitingStopBoundary);
 static VOID DxgkpVidMmFreeDestroyBatch(_In_ struct _DXGKVMM_DESTROY_BATCH *Batch);
@@ -4287,7 +4287,8 @@ DxgkpVidMmDestroyResourceWrapper(
             ExFreePoolWithTag(AllocationHandles, TAG_VIDMM_RESOURCE);
             goto Cleanup;
         }
-        Status = DxgkpVidMmDestroyAllocationList(Adapter, NULL, AllocationHandles, CapturedCount, TRUE);
+        Status = DxgkpVidMmDestroyAllocationList(Adapter, NULL, AllocationHandles, CapturedCount, TRUE,
+                                                &KmdTransactionStarted, &ResourceOperationLockHeld);
         ExFreePoolWithTag(AllocationHandles, TAG_VIDMM_RESOURCE);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
@@ -4348,7 +4349,8 @@ DxgkpVidMmDestroyResourceWrapper(
         goto Cleanup;
 
 ResourceTombstoned:
-    KeReleaseMutex(&Resource->ResourceOperationLock, FALSE);
+    if (ResourceOperationLockHeld)
+        KeReleaseMutex(&Resource->ResourceOperationLock, FALSE);
     ResourceOperationLockHeld = FALSE;
     if (KmdTransactionStarted)
         DxgkEndKmdTransaction(Adapter);
@@ -5831,7 +5833,7 @@ DxgkpVidMmDestroyAllocation(
     else
         Allocation = NULL;
     ExReleaseFastMutex(&DxgkVidMmAllocationListLock);
-    Status = Allocation != NULL ? DxgkpVidMmDestroyAllocationList(Adapter, Device, &Handle, 1, FALSE) : STATUS_INVALID_PARAMETER;
+    Status = Allocation != NULL ? DxgkpVidMmDestroyAllocationList(Adapter, Device, &Handle, 1, FALSE, NULL, NULL) : STATUS_INVALID_PARAMETER;
     if (!NT_SUCCESS(Status))
         DPRINT1("DxgkVidMmDestroyAllocation: invalid handle %p\n", AllocationHandle);
     return Status;
@@ -6548,7 +6550,9 @@ DxgkpVidMmDestroyAllocationList(
     _In_opt_ PDXGKRNL_DEVICE Device,
     _In_reads_(AllocationCount) CONST D3DKMT_HANDLE *AllocationHandles,
     _In_ UINT AllocationCount,
-    _In_ BOOLEAN ResourceOperationLockHeld)
+    _In_ BOOLEAN ResourceOperationLockHeld,
+    _Inout_opt_ PBOOLEAN KmdTransactionHeld,
+    _Inout_opt_ PBOOLEAN CallerResourceLockHeld)
 {
     PDXGKVMM_DESTROY_BATCH Batch = NULL;
     PDXGKVMM_RESOURCE Resource = NULL;
@@ -6726,6 +6730,23 @@ DxgkpVidMmDestroyAllocationList(
             DxgkVidMmDereferenceResource(Batch->Resource);
         DxgkpVidMmFreeDestroyBatch(Batch);
         return Status;
+    }
+
+    /* The unpublished batch retains its allocations and resource. Paging and
+     * retirement need KMD admission, so drain them outside this transaction. */
+    if (KmdTransactionHeld != NULL && *KmdTransactionHeld &&
+        Adapter->KmdTransactionDepth == 1)
+    {
+        if (ResourceOperationLockAcquired ||
+            (CallerResourceLockHeld != NULL && *CallerResourceLockHeld))
+        {
+            KeReleaseMutex(&Resource->ResourceOperationLock, FALSE);
+            ResourceOperationLockAcquired = FALSE;
+            if (CallerResourceLockHeld != NULL)
+                *CallerResourceLockHeld = FALSE;
+        }
+        DxgkEndKmdTransaction(Adapter);
+        *KmdTransactionHeld = FALSE;
     }
 
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
@@ -8387,8 +8408,6 @@ DxgkpCreateAllocationCaptured(
             pCreateAllocation->pAllocationInfo2[MapIndex].GpuVirtualAddress =
                 GpuVirtualAddress;
         }
-        if (NT_SUCCESS(Status))
-            Status = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
     }
 
     if (!NT_SUCCESS(Status))
@@ -8734,6 +8753,27 @@ DxgkpCreateAllocationWithAccessModeVariant(
         }
     }
 
+    if (InfoVersion == DxgkpAllocationInfoVersion2)
+    {
+        PDXGKRNL_ADAPTER Adapter;
+        PDXGKRNL_DEVICE Device = DxgkpVidMmFindDeviceByHandle(InputDevice, &Adapter);
+
+        if (Device == NULL)
+        {
+            Status = STATUS_INVALID_HANDLE;
+            goto Rollback;
+        }
+        /* Paging retirement must not hold the creation transaction or resource lock. */
+        if (Device->ProcessRecord != NULL && Adapter->GpuMmuCapsValid &&
+            Adapter->GpuMmuCaps.PageTableUpdateMode == DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+        {
+            Status = DxgkGpuVaFlushPageTableUpdates(Device->ProcessRecord);
+        }
+        DxgkDereferenceDevice(Device);
+        if (!NT_SUCCESS(Status))
+            goto Rollback;
+    }
+
     for (i = 0; i < InputAllocationCount; ++i)
     {
         if (PrivateCaptures[i].Size != 0)
@@ -8953,13 +8993,6 @@ DxgkDestroyAllocation(
         DxgkGpuVaRecordEvent('D', 0, 0, pDestroyAllocation->hResource);
     }
 
-    if (!DxgkBeginKmdTransaction(Adapter))
-    {
-        Status = STATUS_DEVICE_NOT_READY;
-        goto Cleanup;
-    }
-    KmdTransactionStarted = TRUE;
-
     if (pDestroyAllocation->hResource != 0)
     {
         Status = DxgkVidMmReferenceResource(pDestroyAllocation->hResource, FALSE, Device, &Resource);
@@ -8978,7 +9011,14 @@ DxgkDestroyAllocation(
         goto Cleanup;
     }
 
-    Status = DxgkpVidMmDestroyAllocationList(Adapter, Device, AllocationHandles, pDestroyAllocation->AllocationCount, FALSE);
+    if (!DxgkBeginKmdTransaction(Adapter))
+    {
+        Status = STATUS_DEVICE_NOT_READY;
+        goto Cleanup;
+    }
+    KmdTransactionStarted = TRUE;
+    Status = DxgkpVidMmDestroyAllocationList(Adapter, Device, AllocationHandles,
+                 pDestroyAllocation->AllocationCount, FALSE, &KmdTransactionStarted, NULL);
 
 Cleanup:
     if (Resource != NULL)

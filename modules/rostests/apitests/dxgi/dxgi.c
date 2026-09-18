@@ -24,6 +24,7 @@
 #define DXGI_FORMAT_R8G8B8A8_UNORM 28
 #define DXGI_USAGE_RENDER_TARGET_OUTPUT 0x20
 #define DXGI_SWAP_EFFECT_DISCARD 0
+#define DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL 3
 
 typedef struct test_dxgi_rational
 {
@@ -95,6 +96,12 @@ typedef HRESULT (WINAPI *PFN_IDXGISwapChain_GetBuffer)(void *self,
                                                        UINT buffer,
                                                        REFIID riid,
                                                        void **surface);
+typedef HRESULT (WINAPI *PFN_IDXGISwapChain_ResizeBuffers)(void *self,
+                                                          UINT buffer_count,
+                                                          UINT width,
+                                                          UINT height,
+                                                          UINT format,
+                                                          UINT flags);
 typedef HRESULT (WINAPI *PFN_ID3D11Device_CreateRenderTargetView)(
                                                      void *self,
                                                      void *resource,
@@ -313,7 +320,7 @@ START_TEST(d3d11_render_probe)
         D3D_FEATURE_LEVEL_9_2,
         D3D_FEATURE_LEVEL_9_1
     };
-    const float ClearColor[4] = { 0.10f, 0.20f, 0.40f, 1.00f };
+    float ClearColor[4] = { 0.10f, 0.20f, 0.40f, 1.00f };
     HMODULE D3d11;
     PFN_D3D11CreateDeviceAndSwapChain pD3D11CreateDeviceAndSwapChain;
     test_dxgi_swap_chain_desc Desc;
@@ -326,6 +333,12 @@ START_TEST(d3d11_render_probe)
     UINT FeatureLevel = 0;
     HRESULT hr;
     void **Vtbl;
+    UINT PresentIndex;
+    BOOL PresentsPassed = FALSE;
+    BOOL ResizePassed = FALSE;
+    RECT ClientRect;
+
+    OutputDebugStringA("D3D11_ROTATE_DESTROY_BEGIN\n");
 
     D3d11 = LoadLibraryW(L"d3d11.dll");
     ok(D3d11 != NULL, "LoadLibraryW(d3d11.dll) failed, error %lu\n",
@@ -346,18 +359,27 @@ START_TEST(d3d11_render_probe)
     if (Window == NULL)
         goto done;
 
+    ShowWindow(Window, SW_SHOW);
+    UpdateWindow(Window);
+
+    if (!GetClientRect(Window, &ClientRect))
+    {
+        ok(FALSE, "GetClientRect failed, error %lu\n", GetLastError());
+        goto done;
+    }
+
     ZeroMemory(&Desc, sizeof(Desc));
-    Desc.BufferDesc.Width = 64;
-    Desc.BufferDesc.Height = 64;
+    Desc.BufferDesc.Width = ClientRect.right - ClientRect.left;
+    Desc.BufferDesc.Height = ClientRect.bottom - ClientRect.top;
     Desc.BufferDesc.RefreshRate.Numerator = 60;
     Desc.BufferDesc.RefreshRate.Denominator = 1;
     Desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     Desc.SampleDesc.Count = 1;
     Desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    Desc.BufferCount = 1;
+    Desc.BufferCount = 3;
     Desc.OutputWindow = Window;
     Desc.Windowed = TRUE;
-    Desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    Desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
 
     hr = pD3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL,
                                         0, FeatureLevels,
@@ -422,27 +444,74 @@ START_TEST(d3d11_render_probe)
     if (Vtbl == NULL || Vtbl[50] == NULL)
         goto done;
 
-    ((PFN_ID3D11DeviceContext_ClearRenderTargetView)Vtbl[50])(
-        Context, RenderTargetView, ClearColor);
-    trace("D3D11: clear executed\n");
-
-    Vtbl = com_vtbl(SwapChain);
-    hr = ((PFN_IDXGISwapChain_Present)Vtbl[8])(SwapChain, 0, 0);
-    ok(hr == S_OK, "IDXGISwapChain::Present returned 0x%08lx\n",
-       (ULONG)hr);
-    if (hr == S_OK)
+    for (PresentIndex = 0; PresentIndex < 16; ++PresentIndex)
     {
-        trace("D3D11: Present backend active feature_level=0x%08x\n",
-              FeatureLevel);
+        ClearColor[0] = (float)(PresentIndex & 3) / 3.0f;
+        ClearColor[1] = (float)((PresentIndex + 1) & 3) / 3.0f;
+        ClearColor[2] = (float)((PresentIndex + 2) & 3) / 3.0f;
+
+        Vtbl = com_vtbl(Context);
+        ((PFN_ID3D11DeviceContext_ClearRenderTargetView)Vtbl[50])(
+            Context, RenderTargetView, ClearColor);
+
+        Vtbl = com_vtbl(SwapChain);
+        hr = ((PFN_IDXGISwapChain_Present)Vtbl[8])(SwapChain, 0, 0);
+        ok(hr == S_OK,
+           "IDXGISwapChain::Present(%u) returned 0x%08lx\n",
+           PresentIndex, (ULONG)hr);
+        if (hr != S_OK)
+            break;
+    }
+
+    if (PresentIndex == 16)
+    {
+        PresentsPassed = TRUE;
+        OutputDebugStringA("D3D11_ROTATE_DESTROY_PRESENTS_PASS\n");
     }
 
 done:
     release_object(RenderTargetView);
     release_object(BackBuffer);
-    release_object(Context);
-    release_object(Device);
+    if (SwapChain != NULL)
+    {
+        OutputDebugStringA("D3D11_ROTATE_DESTROY_RESIZE_BEGIN\n");
+        Vtbl = com_vtbl(SwapChain);
+        ok(Vtbl != NULL && Vtbl[13] != NULL,
+           "swapchain ResizeBuffers entry is missing\n");
+        if (Vtbl != NULL && Vtbl[13] != NULL)
+        {
+            hr = ((PFN_IDXGISwapChain_ResizeBuffers)Vtbl[13])(
+                SwapChain, 3, Desc.BufferDesc.Width, Desc.BufferDesc.Height,
+                Desc.BufferDesc.Format, 0);
+            ok(hr == S_OK, "IDXGISwapChain::ResizeBuffers returned 0x%08lx\n",
+               (ULONG)hr);
+            if (hr == S_OK)
+            {
+                ResizePassed = TRUE;
+                OutputDebugStringA("D3D11_ROTATE_DESTROY_RESIZE_PASS\n");
+            }
+        }
+    }
+    OutputDebugStringA("D3D11_ROTATE_DESTROY_RELEASE_SWAPCHAIN\n");
     release_object(SwapChain);
+    SwapChain = NULL;
+    OutputDebugStringA("D3D11_ROTATE_DESTROY_RELEASE_CONTEXT_BEGIN\n");
+    release_object(Context);
+    Context = NULL;
+    OutputDebugStringA("D3D11_ROTATE_DESTROY_RELEASE_CONTEXT_DONE\n");
+    OutputDebugStringA("D3D11_ROTATE_DESTROY_RELEASE_DEVICE_BEGIN\n");
+    release_object(Device);
+    Device = NULL;
+    OutputDebugStringA("D3D11_ROTATE_DESTROY_RELEASE_DEVICE_DONE\n");
     if (Window != NULL)
+    {
+        OutputDebugStringA("D3D11_ROTATE_DESTROY_WINDOW_BEGIN\n");
         DestroyWindow(Window);
+        OutputDebugStringA("D3D11_ROTATE_DESTROY_WINDOW_DONE\n");
+    }
+    OutputDebugStringA("D3D11_ROTATE_DESTROY_UNLOAD_BEGIN\n");
     FreeLibrary(D3d11);
+    OutputDebugStringA("D3D11_ROTATE_DESTROY_UNLOAD_DONE\n");
+    OutputDebugStringA(PresentsPassed && ResizePassed ?
+        "D3D11_ROTATE_DESTROY_PASS\n" : "D3D11_ROTATE_DESTROY_FAIL\n");
 }
