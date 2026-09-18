@@ -29,8 +29,9 @@ extern BOOLEAN ShowProgressBar;
 
 #define INBV_SPINNER_FRAME_MS         33
 #define INBV_SPINNER_PERIOD_MS        4000
-#define INBV_SPINNER_STEPS            (INBV_SPINNER_PERIOD_MS / INBV_SPINNER_FRAME_MS)
 #define INBV_SPINNER_PERIOD_100NS     ((ULONGLONG)INBV_SPINNER_PERIOD_MS * 10000ULL)
+#define INBV_SPINNER_DEFAULT_INCREMENT 100000UL
+#define INBV_SPINNER_POOL_TAG         'pSbI'
 #define INBV_SPINNER_RING_RADIUS      20
 #define INBV_SPINNER_STROKE_HALF_Q8   640
 #define INBV_SPINNER_BBOX_HALF        26
@@ -66,11 +67,15 @@ typedef struct _INBV_SPINNER_STATE
     ULONG RedMax, GreenMax, BlueMax;
 
     ULONG GrayLut[256];
-    ULONGLONG StartTime;
+    LONGLONG FrameInterval;
+    ULONG StepCount;
+    SIZE_T FramePixels;
+    PULONG Frames;
 } INBV_SPINNER_STATE;
 
 static INBV_SPINNER_STATE g_Spinner;
 static ULONG   g_SpinnerFrameBuf[INBV_SPINNER_FB_CAPACITY];
+static UCHAR   g_SpinnerRadialCov[INBV_SPINNER_FB_CAPACITY];
 static KEVENT  g_SpinnerStop;
 static KEVENT  g_SpinnerDone;
 static BOOLEAN g_SpinnerReady = FALSE;
@@ -294,10 +299,12 @@ InbvPiecewise(float t, const float *KeyTimes, const float *KeyVals, ULONG N)
 static VOID
 InbvGopSpinnerResetState(VOID)
 {
+    if (g_Spinner.Frames)
+        ExFreePoolWithTag(g_Spinner.Frames, INBV_SPINNER_POOL_TAG);
     RtlZeroMemory(&g_Spinner, sizeof(g_Spinner));
 }
 
-static VOID
+static BOOLEAN
 InbvGopSpinnerBlitBuffer(
     _In_reads_(g_Spinner.BBoxSize * g_Spinner.BBoxSize) const ULONG *FrameBuffer)
 {
@@ -309,14 +316,142 @@ InbvGopSpinnerBlitBuffer(
                      ((ULONG)S->DestCY - S->BBoxHalf) : 0;
 
     if (!FrameBuffer || fullW == 0)
-        return;
+        return FALSE;
 
     InbvAcquireLock();
+    if (!InbvIsBootDriverInstalled() ||
+        InbvGetDisplayState() != INBV_DISPLAY_STATE_OWNED)
+    {
+        InbvReleaseLock();
+        return FALSE;
+    }
     VidBufferToScreenBlt((PUCHAR)FrameBuffer, x0, y0,
                          fullW, fullW, fullW * sizeof(ULONG));
     InbvReleaseLock();
+    return TRUE;
 }
 
+CODE_SEG("INIT")
+static VOID
+InbvGopSpinnerBuildCoverage(VOID)
+{
+    const INBV_SPINNER_STATE *S = &g_Spinner;
+    const LONG  ring_q8    = S->RingRadiusQ8;
+    const LONG  stroke_q8  = S->StrokeHalfQ8;
+    const LONG  stroke_in  = (stroke_q8 > 128) ? (stroke_q8 - 128) : 0;
+    const LONG  stroke_out = stroke_q8 + 128;
+    const LONG  annulus_outer = ring_q8 + stroke_out;
+    const LONG  annulus_inner = (ring_q8 > stroke_out) ? (ring_q8 - stroke_out) : 0;
+    const LONGLONG annulus_outer_sq = (LONGLONG)annulus_outer * annulus_outer;
+    const LONGLONG annulus_inner_sq = (LONGLONG)annulus_inner * annulus_inner;
+    const ULONG fullW = S->BBoxSize;
+    LONG ry;
+
+    RtlZeroMemory(g_SpinnerRadialCov, sizeof(g_SpinnerRadialCov));
+
+    if (fullW == 0)
+        return;
+
+    for (ry = -(LONG)S->BBoxHalf; ry < (LONG)S->BBoxHalf; ry++)
+    {
+        PUCHAR Row   = g_SpinnerRadialCov + (SIZE_T)(ry + (LONG)S->BBoxHalf) * fullW;
+        LONG   py_q8 = (ry * 256) + 128;
+        LONG   rx;
+
+        for (rx = -(LONG)S->BBoxHalf; rx < (LONG)S->BBoxHalf; rx++)
+        {
+            LONG px_q8 = (rx * 256) + 128;
+            LONGLONG d2 = (LONGLONG)px_q8 * px_q8 + (LONGLONG)py_q8 * py_q8;
+            ULONG cov = 0;
+
+            if (d2 < annulus_outer_sq && d2 > annulus_inner_sq)
+            {
+                ULONG d_q8   = InbvIsqrt((ULONG)d2);
+                LONG  radial = (LONG)d_q8 - ring_q8;
+                if (radial < 0) radial = -radial;
+
+                if (radial <= stroke_in)
+                {
+                    cov = 255;
+                }
+                else if (radial < stroke_out)
+                {
+                    ULONG frac = (ULONG)((stroke_out - radial) * 255) /
+                                 (ULONG)(stroke_out - stroke_in);
+                    cov = frac > 255 ? 255 : frac;
+                }
+            }
+
+            Row[rx + (LONG)S->BBoxHalf] = (UCHAR)cov;
+        }
+    }
+}
+
+CODE_SEG("INIT")
+static VOID
+InbvGopSpinnerBlendCap(
+    _Inout_updates_(INBV_SPINNER_FB_CAPACITY) PULONG FrameBuffer,
+    _In_ LONG CenterXQ8,
+    _In_ LONG CenterYQ8,
+    _In_ LONGLONG CapInSq,
+    _In_ LONGLONG CapOutSq,
+    _In_ LONGLONG CapSpan)
+{
+    const INBV_SPINNER_STATE *S = &g_Spinner;
+    const LONG  half  = (LONG)S->BBoxHalf;
+    const ULONG fullW = S->BBoxSize;
+    const LONG  reach = S->StrokeHalfQ8 + 128;
+    LONG lo_x = (CenterXQ8 - reach - 128) / 256 - 1;
+    LONG hi_x = (CenterXQ8 + reach - 128) / 256 + 1;
+    LONG lo_y = (CenterYQ8 - reach - 128) / 256 - 1;
+    LONG hi_y = (CenterYQ8 + reach - 128) / 256 + 1;
+    LONG ry;
+
+    if (lo_x < -half) lo_x = -half;
+    if (hi_x > half - 1) hi_x = half - 1;
+    if (lo_y < -half) lo_y = -half;
+    if (hi_y > half - 1) hi_y = half - 1;
+
+    for (ry = lo_y; ry <= hi_y; ry++)
+    {
+        PULONG Row   = FrameBuffer + (SIZE_T)(ry + half) * fullW;
+        LONG   py_q8 = (ry * 256) + 128;
+        LONG   dy    = py_q8 - CenterYQ8;
+        LONGLONG dy2 = (LONGLONG)dy * dy;
+        LONG   rx;
+
+        for (rx = lo_x; rx <= hi_x; rx++)
+        {
+            LONG px_q8 = (rx * 256) + 128;
+            LONG dx = px_q8 - CenterXQ8;
+            LONGLONG cd2 = (LONGLONG)dx * dx + dy2;
+            ULONG idx = (ULONG)(rx + half);
+            ULONG c;
+
+            if (cd2 >= CapOutSq)
+                continue;
+
+            if (cd2 <= CapInSq)
+            {
+                c = 255;
+            }
+            else
+            {
+                LONGLONG frac = ((CapOutSq - cd2) * 255) / CapSpan;
+                c = (frac < 0) ? 0 : (frac > 255) ? 255 : (ULONG)frac;
+            }
+
+            /*
+             * GrayLut is monotonic, including for RGB/BGR bitfield formats.
+             * Compare the actual pixel so the second cap cannot dim the first.
+             */
+            if (S->GrayLut[c] > Row[idx])
+                Row[idx] = S->GrayLut[c];
+        }
+    }
+}
+
+CODE_SEG("INIT")
 static VOID
 InbvGopSpinnerRasterizeFrame(
     _In_ float t,
@@ -357,15 +492,9 @@ InbvGopSpinnerRasterizeFrame(
     const LONG  sin_end_q8   = (LONG)(sin_end   * 256.0f);
     const LONG  cos_end_q8   = (LONG)(cos_end   * 256.0f);
 
-    const LONG  ring_q8      = S->RingRadiusQ8;
-    const LONG  stroke_q8    = S->StrokeHalfQ8;
-    const LONG  stroke_in    = (stroke_q8 > 128) ? (stroke_q8 - 128) : 0;
-    const LONG  stroke_out   = stroke_q8 + 128;
-
-    const LONG  annulus_outer = ring_q8 + stroke_out;
-    const LONG  annulus_inner = (ring_q8 > stroke_out) ? (ring_q8 - stroke_out) : 0;
-    const LONGLONG annulus_outer_sq = (LONGLONG)annulus_outer * annulus_outer;
-    const LONGLONG annulus_inner_sq = (LONGLONG)annulus_inner * annulus_inner;
+    const LONG  stroke_q8  = S->StrokeHalfQ8;
+    const LONG  stroke_in  = (stroke_q8 > 128) ? (stroke_q8 - 128) : 0;
+    const LONG  stroke_out = stroke_q8 + 128;
 
     const LONGLONG cap_out_sq = (LONGLONG)stroke_out * stroke_out;
     const LONGLONG cap_in_sq  = (LONGLONG)stroke_in  * stroke_in;
@@ -377,88 +506,37 @@ InbvGopSpinnerRasterizeFrame(
 
     RtlZeroMemory(FrameBuffer, (SIZE_T)fullW * fullW * sizeof(ULONG));
 
-    for (ry = -(LONG)S->BBoxHalf; ry < (LONG)S->BBoxHalf; ry++)
+    if (arc_visible)
     {
-        PULONG Row   = FrameBuffer + (SIZE_T)(ry + (LONG)S->BBoxHalf) * fullW;
-        LONG   py_q8 = (ry * 256) + 128;
-        LONG   rx;
-
-        for (rx = -(LONG)S->BBoxHalf; rx < (LONG)S->BBoxHalf; rx++)
+        for (ry = -(LONG)S->BBoxHalf; ry < (LONG)S->BBoxHalf; ry++)
         {
-            LONG px_q8 = (rx * 256) + 128;
-            LONGLONG d2 = (LONGLONG)px_q8 * px_q8 + (LONGLONG)py_q8 * py_q8;
-            ULONG cov = 0;
+            PULONG  Row   = FrameBuffer + (SIZE_T)(ry + (LONG)S->BBoxHalf) * fullW;
+            PCUCHAR Cov   = g_SpinnerRadialCov + (SIZE_T)(ry + (LONG)S->BBoxHalf) * fullW;
+            LONG    py_q8 = (ry * 256) + 128;
+            ULONG   idx;
 
-            if (arc_visible && d2 < annulus_outer_sq && d2 > annulus_inner_sq)
+            for (idx = 0; idx < fullW; idx++)
             {
-                LONGLONG cross_start =
-                    (LONGLONG)cos_start_q8 * py_q8 - (LONGLONG)sin_start_q8 * px_q8;
-                LONGLONG cross_end =
-                    (LONGLONG)cos_end_q8   * py_q8 - (LONGLONG)sin_end_q8   * px_q8;
+                LONG px_q8;
+                LONGLONG cross_start, cross_end;
+
+                if (Cov[idx] == 0)
+                    continue;
+
+                px_q8 = (((LONG)idx - (LONG)S->BBoxHalf) * 256) + 128;
+                cross_start = (LONGLONG)cos_start_q8 * py_q8 - (LONGLONG)sin_start_q8 * px_q8;
+                cross_end   = (LONGLONG)cos_end_q8   * py_q8 - (LONGLONG)sin_end_q8   * px_q8;
 
                 if (cross_start >= 0 && cross_end <= 0)
-                {
-                    ULONG d_q8     = InbvIsqrt((ULONG)d2);
-                    LONG  radial   = (LONG)d_q8 - ring_q8;
-                    if (radial < 0) radial = -radial;
-
-                    if (radial <= stroke_in)
-                    {
-                        cov = 255;
-                    }
-                    else if (radial < stroke_out)
-                    {
-                        ULONG frac = (ULONG)((stroke_out - radial) * 255) /
-                                     (ULONG)(stroke_out - stroke_in);
-                        cov = frac > 255 ? 255 : frac;
-                    }
-                }
-            }
-
-            {
-                LONG dx = px_q8 - cap1_cx_q8;
-                LONG dy = py_q8 - cap1_cy_q8;
-                LONGLONG cd2 = (LONGLONG)dx * dx + (LONGLONG)dy * dy;
-                if (cd2 < cap_out_sq)
-                {
-                    ULONG c;
-                    if (cd2 <= cap_in_sq)
-                        c = 255;
-                    else
-                    {
-                        LONGLONG frac = ((cap_out_sq - cd2) * 255) / cap_span;
-                        c = (frac < 0) ? 0 : (frac > 255) ? 255 : (ULONG)frac;
-                    }
-                    if (c > cov) cov = c;
-                }
-            }
-
-            {
-                LONG dx = px_q8 - cap2_cx_q8;
-                LONG dy = py_q8 - cap2_cy_q8;
-                LONGLONG cd2 = (LONGLONG)dx * dx + (LONGLONG)dy * dy;
-                if (cd2 < cap_out_sq)
-                {
-                    ULONG c;
-                    if (cd2 <= cap_in_sq)
-                        c = 255;
-                    else
-                    {
-                        LONGLONG frac = ((cap_out_sq - cd2) * 255) / cap_span;
-                        c = (frac < 0) ? 0 : (frac > 255) ? 255 : (ULONG)frac;
-                    }
-                    if (c > cov) cov = c;
-                }
-            }
-
-            if (cov > 0)
-            {
-                ULONG idx = (ULONG)(rx + (LONG)S->BBoxHalf);
-                if (idx < fullW)
-                    Row[idx] = S->GrayLut[cov];
+                    Row[idx] = S->GrayLut[Cov[idx]];
             }
         }
     }
+
+    InbvGopSpinnerBlendCap(FrameBuffer, cap1_cx_q8, cap1_cy_q8,
+                           cap_in_sq, cap_out_sq, cap_span);
+    InbvGopSpinnerBlendCap(FrameBuffer, cap2_cx_q8, cap2_cy_q8,
+                           cap_in_sq, cap_out_sq, cap_span);
 }
 
 static VOID NTAPI
@@ -467,19 +545,22 @@ InbvGopSpinnerThread(PVOID Context)
     INBV_SPINNER_STATE *S = &g_Spinner;
     LARGE_INTEGER Delay;
     NTSTATUS Status;
+    ULONG Step = 0;
 
     UNREFERENCED_PARAMETER(Context);
-    Delay.QuadPart = -(LONGLONG)(INBV_SPINNER_FRAME_MS * 10000LL);
-    S->StartTime = KeQueryInterruptTime();
+    Delay.QuadPart = S->FrameInterval;
 
-    while (TRUE)
+    while (!KeReadStateEvent(&g_SpinnerStop))
     {
-        ULONGLONG Elapsed100ns = KeQueryInterruptTime() - S->StartTime;
-        ULONGLONG Phase100ns   = Elapsed100ns % INBV_SPINNER_PERIOD_100NS;
-        float t = (float)((double)Phase100ns / (double)INBV_SPINNER_PERIOD_100NS);
+        /*
+         * Only a blit at runtime: boot I/O and initialization compete for CPU.
+         * Advance once per displayed frame, even after a delayed wakeup.
+         */
+        if (!InbvGopSpinnerBlitBuffer(S->Frames + Step * S->FramePixels))
+            break;
 
-        InbvGopSpinnerRasterizeFrame(t, g_SpinnerFrameBuf);
-        InbvGopSpinnerBlitBuffer(g_SpinnerFrameBuf);
+        if (++Step >= S->StepCount)
+            Step = 0;
 
         Status = KeWaitForSingleObject(&g_SpinnerStop,
                                        Executive,
@@ -493,6 +574,8 @@ InbvGopSpinnerThread(PVOID Context)
     RtlZeroMemory(g_SpinnerFrameBuf, sizeof(g_SpinnerFrameBuf));
     InbvGopSpinnerBlitBuffer(g_SpinnerFrameBuf);
 
+    /* Release the cache before publishing completion to the stop caller. */
+    InbvGopSpinnerResetState();
     KeSetEvent(&g_SpinnerDone, IO_NO_INCREMENT, FALSE);
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
@@ -506,6 +589,7 @@ InbvGopSpinnerSetup(
     INBV_SPINNER_STATE *S = &g_Spinner;
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
     ULONG HalfHeight, DestY, i;
+    ULONG Increment, Frame100ns;
 
     RtlZeroMemory(S, sizeof(*S));
 
@@ -555,6 +639,40 @@ InbvGopSpinnerSetup(
                                       v, v, v);
     }
 
+    Increment = KeQueryTimeIncrement();
+    if (Increment == 0)
+        Increment = INBV_SPINNER_DEFAULT_INCREMENT;
+
+    Frame100ns = (ULONG)INBV_SPINNER_FRAME_MS * 10000;
+    Frame100ns = ((Frame100ns + Increment - 1) / Increment) * Increment;
+    if (Frame100ns == 0)
+        Frame100ns = Increment;
+
+    S->FrameInterval = -(LONGLONG)Frame100ns;
+    S->StepCount = (ULONG)((INBV_SPINNER_PERIOD_100NS + Frame100ns / 2) / Frame100ns);
+    if (S->StepCount == 0)
+        S->StepCount = 1;
+
+    InbvGopSpinnerBuildCoverage();
+
+    /*
+     * The DPI and frame interval bounds limit this to about 32 MiB at 500%
+     * scaling (about 1 MiB at 100%). Failure must not prevent booting.
+     * The source must remain resident while bootvid blits at DISPATCH_LEVEL.
+     */
+    S->FramePixels = (SIZE_T)S->BBoxSize * S->BBoxSize;
+    S->Frames = ExAllocatePoolWithTag(NonPagedPool,
+                                     S->StepCount * S->FramePixels * sizeof(ULONG),
+                                     INBV_SPINNER_POOL_TAG);
+    if (!S->Frames)
+        return FALSE;
+
+    for (i = 0; i < S->StepCount; ++i)
+    {
+        InbvGopSpinnerRasterizeFrame((float)i / (float)S->StepCount,
+                                     S->Frames + i * S->FramePixels);
+    }
+
     return TRUE;
 }
 
@@ -566,6 +684,9 @@ InbvGopSpinnerStart(
 {
     HANDLE Thread;
     OBJECT_ATTRIBUTES ObjAttr;
+
+    if (g_SpinnerReady)
+        return;
 
     if (!InbvGopSpinnerSetup(ScreenWidth, ScreenHeight))
         return;
@@ -596,7 +717,6 @@ InbvGopSpinnerStop(VOID)
 
     KeSetEvent(&g_SpinnerStop, IO_NO_INCREMENT, FALSE);
     KeWaitForSingleObject(&g_SpinnerDone, Executive, KernelMode, FALSE, NULL);
-    InbvGopSpinnerResetState();
     g_SpinnerReady = FALSE;
 }
 
