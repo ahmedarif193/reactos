@@ -907,6 +907,63 @@ static void free_inf_file( struct inf_file *file )
 }
 
 
+/* Clone only the immutable root parse. Appended Include/Needs files belong to
+ * the consumer's HINF graph and must never escape into the cached template. */
+HINF PARSER_clone_inf(HINF hinf)
+{
+    const struct inf_file *source = hinf;
+    struct inf_file *copy;
+    SIZE_T chars = source->string_pos - source->strings;
+    unsigned int i;
+
+    copy = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*copy));
+    if (!copy) goto failed;
+    copy->strings_section = source->strings_section;
+    copy->strings = HeapAlloc(GetProcessHeap(), 0, (chars ? chars : 1) * sizeof(WCHAR));
+    if (!copy->strings) goto failed;
+    memcpy(copy->strings, source->strings, chars * sizeof(WCHAR));
+    copy->string_pos = copy->strings + chars;
+
+    if (source->filename)
+    {
+        copy->filename = HeapAlloc(GetProcessHeap(), 0, (strlenW(source->filename) + 1) * sizeof(WCHAR));
+        if (!copy->filename) goto failed;
+        strcpyW(copy->filename, source->filename);
+    }
+    if (source->nb_fields)
+    {
+        copy->fields = HeapAlloc(GetProcessHeap(), 0, source->nb_fields * sizeof(*copy->fields));
+        if (!copy->fields) goto failed;
+        copy->nb_fields = copy->alloc_fields = source->nb_fields;
+        for (i = 0; i < source->nb_fields; ++i)
+            copy->fields[i].text = copy->strings + (source->fields[i].text - source->strings);
+    }
+    if (source->nb_sections)
+    {
+        copy->sections = HeapAlloc(GetProcessHeap(), 0, source->nb_sections * sizeof(*copy->sections));
+        if (!copy->sections) goto failed;
+        copy->alloc_sections = source->nb_sections;
+        for (i = 0; i < source->nb_sections; ++i)
+        {
+            const struct section *section = source->sections[i];
+            SIZE_T size = FIELD_OFFSET(struct section, lines) + section->nb_lines * sizeof(struct line);
+            struct section *new_section = HeapAlloc(GetProcessHeap(), 0, size);
+            if (!new_section) goto failed;
+            memcpy(new_section, section, size);
+            new_section->name = copy->strings + (section->name - source->strings);
+            new_section->alloc_lines = new_section->nb_lines;
+            copy->sections[copy->nb_sections++] = new_section;
+        }
+    }
+    return copy;
+
+failed:
+    if (copy) free_inf_file(copy);
+    SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+    return INVALID_HANDLE_VALUE;
+}
+
+
 /* parse a complete buffer */
 static DWORD parse_buffer( struct inf_file *file, const WCHAR *buffer, const WCHAR *end,
                            UINT *error_line )
@@ -2240,13 +2297,23 @@ SetupGetInfFileListW(
     do
     {
         HINF hInf;
+        struct InfFileDetails *details = NULL;
 
         strcpyW(pFileName, wfdFileInfo.cFileName);
-        hInf = SetupOpenInfFileW(
-            pFullFileName,
-            NULL, /* Inf class */
-            InfStyle,
-            NULL /* Error line */);
+        if (InfStyle == INF_STYLE_WIN4)
+        {
+            /* Reuse the immutable parse through a private handle graph. */
+            details = CreateInfFileDetails(pFullFileName);
+            hInf = (details != NULL) ? details->hInf : INVALID_HANDLE_VALUE;
+        }
+        else
+        {
+            hInf = SetupOpenInfFileW(
+                pFullFileName,
+                NULL, /* Inf class */
+                InfStyle,
+                NULL /* Error line */);
+        }
         if (hInf == INVALID_HANDLE_VALUE)
         {
             if (GetLastError() == ERROR_CLASS_MISMATCH)
@@ -2265,7 +2332,11 @@ SetupGetInfFileListW(
             strcpyW(pBuffer, wfdFileInfo.cFileName);
             pBuffer = &pBuffer[len];
         }
-        SetupCloseInfFile(hInf);
+
+        if (details != NULL)
+            DereferenceInfFile(details);
+        else
+            SetupCloseInfFile(hInf);
     } while (FindNextFileW(hSearch, &wfdFileInfo));
     FindClose(hSearch);
 

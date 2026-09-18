@@ -17,6 +17,8 @@
 
 PDEVICE_NODE IopRootDeviceNode;
 KSPIN_LOCK IopDeviceTreeLock;
+/* PASSIVE_LEVEL readers of InstancePath/topology; acquire before the spin lock. */
+ERESOURCE IopDeviceTreeResource;
 
 LONG IopNumberDeviceNodes;
 
@@ -85,6 +87,8 @@ PiInsertDevNode(
 
     ASSERT(DeviceNode->Parent == NULL);
 
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&IopDeviceTreeResource, TRUE);
     KeAcquireSpinLock(&IopDeviceTreeLock, &oldIrql);
     DeviceNode->Parent = ParentNode;
     DeviceNode->Sibling = NULL;
@@ -100,6 +104,8 @@ PiInsertDevNode(
     }
     KeReleaseSpinLock(&IopDeviceTreeLock, oldIrql);
     DeviceNode->Level = ParentNode->Level + 1;
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
 
     DPRINT("Inserted devnode 0x%p to parent 0x%p\n", DeviceNode, ParentNode);
 }
@@ -349,11 +355,15 @@ PiUnlinkDevNode(
     KIRQL OldIrql;
     PDEVICE_NODE PrevSibling = NULL;
 
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&IopDeviceTreeResource, TRUE);
     KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
 
     if (!DeviceNode->Parent)
     {
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+        ExReleaseResourceLite(&IopDeviceTreeResource);
+        KeLeaveCriticalRegion();
         return;
     }
 
@@ -383,6 +393,8 @@ PiUnlinkDevNode(
     DeviceNode->Sibling = NULL;
 
     KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
 }
 
 NTSTATUS

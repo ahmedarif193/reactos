@@ -553,6 +553,7 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ExInitializeResourceLite(&IopDatabaseResource);
     ExInitializeResourceLite(&IopSecurityResource);
     ExInitializeResourceLite(&IopDriverLoadResource);
+    IopInitDriverLoadSlots();
     InitializeListHead(&IopDiskFileSystemQueueHead);
     InitializeListHead(&IopCdRomFileSystemQueueHead);
     InitializeListHead(&IopTapeFileSystemQueueHead);

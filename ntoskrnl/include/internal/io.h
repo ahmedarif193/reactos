@@ -701,6 +701,14 @@ BOOLEAN
 PiProcessChildrenParallel(
     _In_ PDEVICE_NODE Parent);
 
+typedef VOID (NTAPI *PPI_PARALLEL_ROUTINE)(_In_ PVOID Item);
+
+BOOLEAN
+PiRunParallel(
+    _In_ PVOID *Items,
+    _In_ LONG Count,
+    _In_ PPI_PARALLEL_ROUTINE Routine);
+
 #if DBG
 VOID PiDiagAcquireDevNode(_In_ PDEVICE_NODE Node);
 VOID PiDiagReleaseDevNode(_In_ PDEVICE_NODE Node);
@@ -1236,6 +1244,14 @@ IopDeleteDriver(
     IN PVOID ObjectBody
 );
 
+VOID
+IopInitDriverLoadSlots(VOID);
+
+NTSTATUS
+IopReferenceDriverObject(
+    _In_ PCUNICODE_STRING DriverName,
+    _Out_ PDRIVER_OBJECT *DriverObject);
+
 NTSTATUS
 IopLoadDriver(
     _In_ HANDLE ServiceHandle,
@@ -1647,6 +1663,10 @@ extern POBJECT_TYPE IoCompletionType;
 extern POBJECT_TYPE IopWaitCompletionPacketType;
 extern PDEVICE_NODE IopRootDeviceNode;
 extern KSPIN_LOCK IopDeviceTreeLock;
+extern ERESOURCE IopDeviceTreeResource;
+extern KMUTEX IopResourceAssignmentLock;
+#define IOP_SERVICE_ENUM_LOCK_COUNT 32
+extern KMUTEX IopServiceEnumLocks[IOP_SERVICE_ENUM_LOCK_COUNT];
 extern ULONG IopTraceLevel;
 extern GENERAL_LOOKASIDE IopMdlLookasideList;
 extern GENERIC_MAPPING IopCompletionMapping;

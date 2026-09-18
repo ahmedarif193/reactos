@@ -51,9 +51,45 @@ DereferenceInfFile(struct InfFileDetails* infFile)
     }
 }
 
-struct InfFileDetails *
-CreateInfFileDetails(
-    IN LPCWSTR FullInfFileName)
+static CRITICAL_SECTION InfCacheCs;
+static CRITICAL_SECTION_DEBUG InfCacheCsDebug =
+{
+    0, 0, &InfCacheCs,
+    { &InfCacheCsDebug.ProcessLocksList, &InfCacheCsDebug.ProcessLocksList },
+    0, 0, { (DWORD_PTR)(__FILE__ ": InfCacheCs") }
+};
+static CRITICAL_SECTION InfCacheCs = { &InfCacheCsDebug, -1, 0, 0, 0, 0 };
+
+#define INF_CACHE_MAX_ENTRIES 512
+
+struct InfCacheEntry
+{
+    struct InfCacheEntry *Next;
+    struct InfFileDetails *Details;
+    FILETIME LastWriteTime;
+    DWORD FileSizeLow;
+    DWORD FileSizeHigh;
+    WCHAR Path[ANYSIZE_ARRAY];
+};
+
+static struct InfCacheEntry *InfCacheHead;
+static DWORD InfCacheCount;
+
+static BOOL
+InfCacheStampMatches(
+    IN const struct InfCacheEntry *Entry,
+    IN const WIN32_FILE_ATTRIBUTE_DATA *Attributes)
+{
+    return Entry->FileSizeLow == Attributes->nFileSizeLow &&
+           Entry->FileSizeHigh == Attributes->nFileSizeHigh &&
+           Entry->LastWriteTime.dwLowDateTime == Attributes->ftLastWriteTime.dwLowDateTime &&
+           Entry->LastWriteTime.dwHighDateTime == Attributes->ftLastWriteTime.dwHighDateTime;
+}
+
+static struct InfFileDetails *
+OpenInfFileDetails(
+    IN LPCWSTR FullInfFileName,
+    IN HINF Template)
 {
     struct InfFileDetails *details;
     PWCHAR last;
@@ -81,12 +117,125 @@ CreateInfFileDetails(
     else
         details->FileName = details->szData;
     ReferenceInfFile(details);
-    details->hInf = SetupOpenInfFileW(FullInfFileName, NULL, INF_STYLE_WIN4, NULL);
+    details->hInf = (Template != INVALID_HANDLE_VALUE)
+        ? PARSER_clone_inf(Template)
+        : SetupOpenInfFileW(FullInfFileName, NULL, INF_STYLE_WIN4, NULL);
     if (details->hInf == INVALID_HANDLE_VALUE)
     {
+        DWORD lastError = GetLastError();
+
         HeapFree(GetProcessHeap(), 0, details);
+        SetLastError(lastError);
         return NULL;
     }
+    return details;
+}
+
+/*
+ * SetupDiBuildDriverInfoList reparses the whole INF directory once per device,
+ * which dominates device installation. Cache a private, immutable parse
+ * template and clone it for each consumer: Include/Needs mutates HINF graphs.
+ */
+struct InfFileDetails *
+CreateInfFileDetails(
+    IN LPCWSTR FullInfFileName)
+{
+    WIN32_FILE_ATTRIBUTE_DATA attributes;
+    struct InfCacheEntry *entry;
+    struct InfCacheEntry *newEntry;
+    struct InfFileDetails *details;
+    SIZE_T pathLength;
+
+    if (!GetFileAttributesExW(FullInfFileName, GetFileExInfoStandard, &attributes))
+        return OpenInfFileDetails(FullInfFileName, INVALID_HANDLE_VALUE);
+
+    EnterCriticalSection(&InfCacheCs);
+    for (entry = InfCacheHead; entry != NULL; entry = entry->Next)
+    {
+        if (strcmpiW(entry->Path, FullInfFileName) != 0)
+            continue;
+
+        if (InfCacheStampMatches(entry, &attributes))
+        {
+            details = entry->Details;
+            ReferenceInfFile(details);
+            LeaveCriticalSection(&InfCacheCs);
+            {
+                struct InfFileDetails *copy = OpenInfFileDetails(FullInfFileName, details->hInf);
+                DWORD error = GetLastError();
+                DereferenceInfFile(details);
+                SetLastError(error);
+                return copy;
+            }
+        }
+
+        break;
+    }
+    LeaveCriticalSection(&InfCacheCs);
+
+    details = OpenInfFileDetails(FullInfFileName, INVALID_HANDLE_VALUE);
+    if (details == NULL)
+        return NULL;
+
+    pathLength = strlenW(FullInfFileName);
+    newEntry = HeapAlloc(GetProcessHeap(),
+                         0,
+                         FIELD_OFFSET(struct InfCacheEntry, Path) + (pathLength + 1) * sizeof(WCHAR));
+    if (newEntry == NULL)
+        return details;
+
+    /* The template is never returned to a caller or used for installation. */
+    newEntry->Details = OpenInfFileDetails(FullInfFileName, details->hInf);
+    if (newEntry->Details == NULL)
+    {
+        HeapFree(GetProcessHeap(), 0, newEntry);
+        return details;
+    }
+    newEntry->LastWriteTime = attributes.ftLastWriteTime;
+    newEntry->FileSizeLow = attributes.nFileSizeLow;
+    newEntry->FileSizeHigh = attributes.nFileSizeHigh;
+    strcpyW(newEntry->Path, FullInfFileName);
+
+    EnterCriticalSection(&InfCacheCs);
+    for (entry = InfCacheHead; entry != NULL; entry = entry->Next)
+    {
+        if (strcmpiW(entry->Path, FullInfFileName) != 0)
+            continue;
+
+        if (!InfCacheStampMatches(entry, &attributes))
+        {
+            struct InfFileDetails *stale = entry->Details;
+
+            entry->Details = newEntry->Details;
+            entry->LastWriteTime = attributes.ftLastWriteTime;
+            entry->FileSizeLow = attributes.nFileSizeLow;
+            entry->FileSizeHigh = attributes.nFileSizeHigh;
+            LeaveCriticalSection(&InfCacheCs);
+
+            DereferenceInfFile(stale);
+            HeapFree(GetProcessHeap(), 0, newEntry);
+            return details;
+        }
+
+        LeaveCriticalSection(&InfCacheCs);
+        DereferenceInfFile(newEntry->Details);
+        HeapFree(GetProcessHeap(), 0, newEntry);
+        return details;
+    }
+
+    if (InfCacheCount >= INF_CACHE_MAX_ENTRIES)
+    {
+        LeaveCriticalSection(&InfCacheCs);
+        DereferenceInfFile(newEntry->Details);
+        HeapFree(GetProcessHeap(), 0, newEntry);
+        return details;
+    }
+
+    newEntry->Next = InfCacheHead;
+    InfCacheHead = newEntry;
+    InfCacheCount++;
+    LeaveCriticalSection(&InfCacheCs);
+
     return details;
 }
 
@@ -739,6 +888,7 @@ SetupDiBuildDriverInfoList(
         else
         {
             /* Enumerate .inf files */
+            DWORD ListStarted = GetTickCount();
             Result = FALSE;
             RequiredSize = 32768; /* Initial buffer size */
             SetLastError(ERROR_INSUFFICIENT_BUFFER);
@@ -758,6 +908,7 @@ SetupDiBuildDriverInfoList(
                     Buffer, RequiredSize,
                     &RequiredSize);
             }
+            FIXME("PHASE list tid=%lu ms=%lu\n", GetCurrentThreadId(), GetTickCount() - ListStarted);
             if (!Result && GetLastError() == ERROR_FILE_NOT_FOUND)
             {
                 /* No .inf file in specified directory. So, we should

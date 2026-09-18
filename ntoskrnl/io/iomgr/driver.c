@@ -19,8 +19,26 @@
 
 ERESOURCE IopDriverLoadResource;
 
+typedef struct _IOP_DRIVER_LOAD_SLOT
+{
+    LIST_ENTRY ListEntry;
+    UNICODE_STRING DriverName;
+    LONG RefCount;
+    PETHREAD Owner;
+    struct _IOP_DRIVER_LOAD_SLOT *WaitingFor;
+    KEVENT Done;
+} IOP_DRIVER_LOAD_SLOT, *PIOP_DRIVER_LOAD_SLOT;
+
+static LIST_ENTRY IopDriverLoadSlotList;
+static KSPIN_LOCK IopDriverLoadSlotLock;
+static BOOLEAN IopDriverLoadSlotsReady;
+
+
 LIST_ENTRY DriverReinitListHead;
 KSPIN_LOCK DriverReinitListLock;
+/* Protected by DriverReinitListLock; no lock is held across callbacks. */
+static ULONG IopActiveDriverInitializations;
+static BOOLEAN IopReinitializingDrivers;
 PLIST_ENTRY DriverReinitTailEntry;
 
 PLIST_ENTRY DriverBootReinitTailEntry;
@@ -707,6 +725,30 @@ IopNormalizeImagePath(
     return STATUS_SUCCESS;
 }
 
+static
+VOID
+IopDiscardDriverReinitializations(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _Inout_ PLIST_ENTRY List,
+    _Inout_ PKSPIN_LOCK Lock)
+{
+    PLIST_ENTRY Entry, Next;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(Lock, &OldIrql);
+    for (Entry = List->Flink; Entry != List; Entry = Next)
+    {
+        PDRIVER_REINIT_ITEM Item = CONTAINING_RECORD(Entry, DRIVER_REINIT_ITEM, ItemEntry);
+        Next = Entry->Flink;
+        if (Item->DriverObject == DriverObject)
+        {
+            RemoveEntryList(Entry);
+            ExFreePool(Item);
+        }
+    }
+    KeReleaseSpinLock(Lock, OldIrql);
+}
+
 /**
  * @brief      Initialize a loaded driver
  *
@@ -726,8 +768,9 @@ IopNormalizeImagePath(
  *
  * @return     Status of the operation
  */
+static
 NTSTATUS
-IopInitializeDriverModule(
+IopInitializeDriverModuleImpl(
     _In_ PLDR_DATA_TABLE_ENTRY ModuleObject,
     _In_ HANDLE ServiceHandle,
     _Out_ PDRIVER_OBJECT *OutDriverObject,
@@ -990,6 +1033,9 @@ IopInitializeDriverModule(
 
     if (!NT_SUCCESS(Status))
     {
+        /* Failed DriverEntry must not leave callbacks into an unloaded image. */
+        IopDiscardDriverReinitializations(driverObject, &DriverReinitListHead, &DriverReinitListLock);
+        IopDiscardDriverReinitializations(driverObject, &DriverBootReinitListHead, &DriverBootReinitListLock);
         // if the driver entry has been failed, clear the object
         ObMakeTemporaryObject(driverObject);
         ObDereferenceObject(driverObject);
@@ -1003,9 +1049,30 @@ IopInitializeDriverModule(
     /* Set the driver as initialized */
     IopReadyDeviceObjects(driverObject);
 
-    if (PnpSystemInit) IopReinitializeDrivers();
-
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+IopInitializeDriverModule(
+    _In_ PLDR_DATA_TABLE_ENTRY ModuleObject,
+    _In_ HANDLE ServiceHandle,
+    _Out_ PDRIVER_OBJECT *OutDriverObject,
+    _Out_ NTSTATUS *DriverEntryStatus)
+{
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    KeAcquireSpinLock(&DriverReinitListLock, &OldIrql);
+    ++IopActiveDriverInitializations;
+    KeReleaseSpinLock(&DriverReinitListLock, OldIrql);
+
+    Status = IopInitializeDriverModuleImpl(ModuleObject, ServiceHandle,
+                                          OutDriverObject, DriverEntryStatus);
+
+    KeAcquireSpinLock(&DriverReinitListLock, &OldIrql);
+    --IopActiveDriverInitializations;
+    KeReleaseSpinLock(&DriverReinitListLock, OldIrql);
+    return Status;
 }
 
 NTSTATUS
@@ -1809,34 +1876,36 @@ IopReinitializeDrivers(VOID)
 {
     PDRIVER_REINIT_ITEM ReinitItem;
     PLIST_ENTRY Entry;
+    KIRQL OldIrql;
 
-    /* Get the first entry and start looping */
-    Entry = ExInterlockedRemoveHeadList(&DriverReinitListHead,
-                                        &DriverReinitListLock);
-    while (Entry)
+    KeAcquireSpinLock(&DriverReinitListLock, &OldIrql);
+    if (IopReinitializingDrivers)
     {
-        /* Get the item */
+        KeReleaseSpinLock(&DriverReinitListLock, OldIrql);
+        return;
+    }
+    IopReinitializingDrivers = TRUE;
+
+    /* Check and dequeue under the same lock as initialization accounting.
+     * A new DriverEntry may begin during a callback, but its registrations
+     * cannot be dequeued until all active initializations have returned. */
+    while (IopActiveDriverInitializations == 0 && !IsListEmpty(&DriverReinitListHead))
+    {
+        Entry = RemoveHeadList(&DriverReinitListHead);
         ReinitItem = CONTAINING_RECORD(Entry, DRIVER_REINIT_ITEM, ItemEntry);
+        KeReleaseSpinLock(&DriverReinitListLock, OldIrql);
 
-        /* Increment reinitialization counter */
         ReinitItem->DriverObject->DriverExtension->Count++;
-
-        /* Remove the device object flag */
-        ReinitItem->DriverObject->Flags &= ~DRVO_REINIT_REGISTERED;
-
-        /* Call the routine */
+        InterlockedAnd((PLONG)&ReinitItem->DriverObject->Flags, ~DRVO_REINIT_REGISTERED);
         ReinitItem->ReinitRoutine(ReinitItem->DriverObject,
                                   ReinitItem->Context,
-                                  ReinitItem->DriverObject->
-                                  DriverExtension->Count);
-
-        /* Free the entry */
+                                  ReinitItem->DriverObject->DriverExtension->Count);
         ExFreePool(Entry);
 
-        /* Move to the next one */
-        Entry = ExInterlockedRemoveHeadList(&DriverReinitListHead,
-                                            &DriverReinitListLock);
+        KeAcquireSpinLock(&DriverReinitListLock, &OldIrql);
     }
+    IopReinitializingDrivers = FALSE;
+    KeReleaseSpinLock(&DriverReinitListLock, OldIrql);
 }
 
 VOID
@@ -2267,7 +2336,7 @@ IoRegisterDriverReinitialization(IN PDRIVER_OBJECT DriverObject,
     ReinitItem->Context = Context;
 
     /* Set the Driver Object flag and insert the entry into the list */
-    DriverObject->Flags |= DRVO_REINIT_REGISTERED;
+    InterlockedOr((PLONG)&DriverObject->Flags, DRVO_REINIT_REGISTERED);
     ExInterlockedInsertTailList(&DriverReinitListHead,
                                 &ReinitItem->ItemEntry,
                                 &DriverReinitListLock);
@@ -2276,6 +2345,198 @@ IoRegisterDriverReinitialization(IN PDRIVER_OBJECT DriverObject,
 /*
  * @implemented
  */
+
+VOID
+IopInitDriverLoadSlots(VOID)
+{
+    InitializeListHead(&IopDriverLoadSlotList);
+    KeInitializeSpinLock(&IopDriverLoadSlotLock);
+    IopDriverLoadSlotsReady = TRUE;
+}
+
+/**
+ * @brief      Claim the exclusive right to load one particular driver object name.
+ *
+ * Loads of different drivers run concurrently; a second loader of the same name
+ * waits here and is told to re-check whether the driver appeared in the meantime.
+ *
+ * @return     STATUS_SUCCESS when the caller owns the slot and must release it,
+ *             STATUS_RETRY when another loader finished and the caller should
+ *             look the driver object up again.
+ */
+static
+NTSTATUS
+IopAcquireDriverLoadSlot(
+    _In_ PCUNICODE_STRING DriverName,
+    _Out_ PIOP_DRIVER_LOAD_SLOT *Slot)
+{
+    PIOP_DRIVER_LOAD_SLOT newSlot, current;
+    PLIST_ENTRY entry;
+    KIRQL oldIrql;
+    NTSTATUS Status;
+    PETHREAD Thread = PsGetCurrentThread(), Owner;
+
+    PAGED_CODE();
+    *Slot = NULL;
+
+    if (!IopDriverLoadSlotsReady)
+        return STATUS_SUCCESS;
+
+    newSlot = ExAllocatePoolWithTag(NonPagedPool,
+                                    sizeof(*newSlot) + DriverName->Length,
+                                    TAG_IO);
+    if (newSlot == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    newSlot->DriverName.Length = DriverName->Length;
+    newSlot->DriverName.MaximumLength = DriverName->Length;
+    newSlot->DriverName.Buffer = (PWCHAR)(newSlot + 1);
+    Status = RtlUpcaseUnicodeString(&newSlot->DriverName, DriverName, FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(newSlot, TAG_IO);
+        return Status;
+    }
+    newSlot->Owner = Thread;
+    newSlot->WaitingFor = NULL;
+    newSlot->RefCount = 1;
+    KeInitializeEvent(&newSlot->Done, NotificationEvent, FALSE);
+
+    KeAcquireSpinLock(&IopDriverLoadSlotLock, &oldIrql);
+
+    current = NULL;
+    for (entry = IopDriverLoadSlotList.Flink;
+         entry != &IopDriverLoadSlotList;
+         entry = entry->Flink)
+    {
+        PIOP_DRIVER_LOAD_SLOT candidate =
+            CONTAINING_RECORD(entry, IOP_DRIVER_LOAD_SLOT, ListEntry);
+
+        if (candidate->DriverName.Length == newSlot->DriverName.Length &&
+            RtlCompareMemory(candidate->DriverName.Buffer, newSlot->DriverName.Buffer,
+                             newSlot->DriverName.Length) == newSlot->DriverName.Length)
+        {
+            current = candidate;
+            break;
+        }
+    }
+
+    if (current == NULL)
+    {
+        InsertTailList(&IopDriverLoadSlotList, &newSlot->ListEntry);
+        KeReleaseSpinLock(&IopDriverLoadSlotLock, oldIrql);
+        *Slot = newSlot;
+        return STATUS_SUCCESS;
+    }
+
+    /* Reject recursive and cross-thread dependency cycles instead of waiting
+     * forever. Every slot owned by a blocked thread records the same edge. */
+    Owner = current->Owner;
+    while (Owner != NULL && Owner != Thread)
+    {
+        PETHREAD NextOwner = NULL;
+        for (entry = IopDriverLoadSlotList.Flink;
+             entry != &IopDriverLoadSlotList; entry = entry->Flink)
+        {
+            PIOP_DRIVER_LOAD_SLOT candidate = CONTAINING_RECORD(entry, IOP_DRIVER_LOAD_SLOT, ListEntry);
+            if (candidate->Owner == Owner && candidate->WaitingFor != NULL)
+            {
+                NextOwner = candidate->WaitingFor->Owner;
+                break;
+            }
+        }
+        Owner = NextOwner;
+    }
+    if (Owner == Thread)
+    {
+        KeReleaseSpinLock(&IopDriverLoadSlotLock, oldIrql);
+        ExFreePoolWithTag(newSlot, TAG_IO);
+        return STATUS_DEVICE_BUSY;
+    }
+    for (entry = IopDriverLoadSlotList.Flink;
+         entry != &IopDriverLoadSlotList; entry = entry->Flink)
+    {
+        PIOP_DRIVER_LOAD_SLOT candidate = CONTAINING_RECORD(entry, IOP_DRIVER_LOAD_SLOT, ListEntry);
+        if (candidate->Owner == Thread) candidate->WaitingFor = current;
+    }
+    current->RefCount++;
+    KeReleaseSpinLock(&IopDriverLoadSlotLock, oldIrql);
+    ExFreePoolWithTag(newSlot, TAG_IO);
+
+    KeWaitForSingleObject(&current->Done, Executive, KernelMode, FALSE, NULL);
+
+    KeAcquireSpinLock(&IopDriverLoadSlotLock, &oldIrql);
+    for (entry = IopDriverLoadSlotList.Flink;
+         entry != &IopDriverLoadSlotList; entry = entry->Flink)
+    {
+        PIOP_DRIVER_LOAD_SLOT candidate = CONTAINING_RECORD(entry, IOP_DRIVER_LOAD_SLOT, ListEntry);
+        if (candidate->Owner == Thread) candidate->WaitingFor = NULL;
+    }
+    current->RefCount--;
+    if (current->RefCount == 0)
+    {
+        KeReleaseSpinLock(&IopDriverLoadSlotLock, oldIrql);
+        ExFreePoolWithTag(current, TAG_IO);
+    }
+    else
+    {
+        KeReleaseSpinLock(&IopDriverLoadSlotLock, oldIrql);
+    }
+
+    return STATUS_RETRY;
+}
+
+static
+VOID
+IopReleaseDriverLoadSlot(
+    _In_opt_ PIOP_DRIVER_LOAD_SLOT Slot)
+{
+    KIRQL oldIrql;
+    BOOLEAN freeIt;
+
+    if (Slot == NULL)
+        return;
+
+    KeAcquireSpinLock(&IopDriverLoadSlotLock, &oldIrql);
+    RemoveEntryList(&Slot->ListEntry);
+    /* Waiters hold a reference to this slot; retire its dependency edge before
+     * the owner can start another load, even if a waiter has not woken yet. */
+    Slot->Owner = NULL;
+    KeReleaseSpinLock(&IopDriverLoadSlotLock, oldIrql);
+
+    KeSetEvent(&Slot->Done, IO_NO_INCREMENT, FALSE);
+
+    KeAcquireSpinLock(&IopDriverLoadSlotLock, &oldIrql);
+    Slot->RefCount--;
+    freeIt = (Slot->RefCount == 0);
+    KeReleaseSpinLock(&IopDriverLoadSlotLock, oldIrql);
+
+    if (freeIt)
+        ExFreePoolWithTag(Slot, TAG_IO);
+}
+
+NTSTATUS
+IopReferenceDriverObject(
+    _In_ PCUNICODE_STRING DriverName,
+    _Out_ PDRIVER_OBJECT *DriverObject)
+{
+    PIOP_DRIVER_LOAD_SLOT Slot;
+    NTSTATUS Status;
+
+    do
+    {
+        Status = IopAcquireDriverLoadSlot(DriverName, &Slot);
+    } while (Status == STATUS_RETRY);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = ObReferenceObjectByName((PUNICODE_STRING)DriverName,
+                                     OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                                     NULL, 0, IoDriverObjectType, KernelMode,
+                                     NULL, (PVOID *)DriverObject);
+    IopReleaseDriverLoadSlot(Slot);
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 IoAllocateDriverObjectExtension(IN PDRIVER_OBJECT DriverObject,
@@ -2395,6 +2656,8 @@ IopLoadDriver(
     _Out_ PDRIVER_OBJECT *DriverObject)
 {
     UNICODE_STRING ImagePath;
+    UNICODE_STRING DriverName;
+    PIOP_DRIVER_LOAD_SLOT LoadSlot;
     NTSTATUS Status;
     PLDR_DATA_TABLE_ENTRY ModuleObject;
     PVOID BaseAddress;
@@ -2454,8 +2717,39 @@ IopLoadDriver(
 
     DPRINT("FullImagePath: '%wZ'\n", &ImagePath);
 
-    KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&IopDriverLoadResource, TRUE);
+    Status = IopGetDriverNames(ServiceHandle, &DriverName, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeUnicodeString(&ImagePath);
+        return Status;
+    }
+
+    do
+    {
+        Status = IopAcquireDriverLoadSlot(&DriverName, &LoadSlot);
+    } while (Status == STATUS_RETRY);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeUnicodeString(&DriverName);
+        RtlFreeUnicodeString(&ImagePath);
+        return Status;
+    }
+
+    /* Always recheck while owning the slot, including the uncontended path.
+     * A previous initializer may have published its object before we arrived. */
+    Status = ObReferenceObjectByName(&DriverName,
+                                     OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                                     NULL, 0, IoDriverObjectType, KernelMode,
+                                     NULL, (PVOID *)DriverObject);
+    if (NT_SUCCESS(Status))
+    {
+        IopReleaseDriverLoadSlot(LoadSlot);
+        RtlFreeUnicodeString(&DriverName);
+        RtlFreeUnicodeString(&ImagePath);
+        return STATUS_SUCCESS;
+    }
+
+    RtlFreeUnicodeString(&DriverName);
 
     /*
      * Load the driver module
@@ -2467,8 +2761,7 @@ IopLoadDriver(
     if (!NT_SUCCESS(Status))
     {
         DPRINT("MmLoadSystemImage() failed (Status %lx)\n", Status);
-        ExReleaseResourceLite(&IopDriverLoadResource);
-        KeLeaveCriticalRegion();
+        IopReleaseDriverLoadSlot(LoadSlot);
         return Status;
     }
 
@@ -2509,8 +2802,9 @@ IopLoadDriver(
         DPRINT1("IopInitializeDriverModule() failed (Status %lx)\n", Status);
     }
 
-    ExReleaseResourceLite(&IopDriverLoadResource);
-    KeLeaveCriticalRegion();
+    IopReleaseDriverLoadSlot(LoadSlot);
+    /* Reinitializers may load drivers themselves; never call them with a slot. */
+    if (PnpSystemInit) IopReinitializeDrivers();
 
     return Status;
 }
