@@ -98,25 +98,23 @@ mod 360) as at t=0; the loop wraps seamlessly.
 --------------------------------------------------------------------------
 6. Mapping in this port (ntoskrnl/inbv/inbvgop.c)
 --------------------------------------------------------------------------
-The port rasterizes directly into the GOP framebuffer; no Lottie runtime,
-no composition engine. The ring is scaled to a 48x48 bbox (BBOX_HALF = 26
-pixels of safe margin around the stroke annulus).
+The port rasterizes into cached frames and displays them through bootvid;
+no Lottie runtime or composition engine. The bounding box is 52x52 pixels
+at 96 DPI, scaled with the configured framebuffer DPI.
 
 Constants that realize the spec (values as of current source):
-  INBV_SPINNER_FRAME_MS         16         (~60 fps sampling target)
-  INBV_SPINNER_PERIOD_MS        2800       (deviation from spec: spec is 2000;
-                                            bumped for perceived cadence on
-                                            virtualized hosts -- see sec. 7)
-  INBV_SPINNER_STEPS            rounded = (PERIOD_MS + FRAME_MS/2) / FRAME_MS
-                                          = (2800 + 8) / 16 = 175 frames
-  INBV_SPINNER_PERIOD_100NS     PERIOD_MS * 10000                (wall-clock)
+  INBV_SPINNER_FRAME_MS         33         (rounded up to a clock increment)
+  INBV_SPINNER_PERIOD_MS        4000       (nominal cycle; spec is 2000)
+  StepCount                    nearest integer PERIOD / rounded interval
+                                          = 100 frames for a 10 ms tick
+  INBV_SPINNER_PERIOD_100NS     PERIOD_MS * 10000
   INBV_SPINNER_RING_RADIUS      20 px      (35/80 * 48 ~= 21, rounded down)
   INBV_SPINNER_STROKE_HALF_Q8   640 (8.8)  (stroke half-width = 2.5 px)
   INBV_SPINNER_BBOX_HALF        26 px      (ring + stroke + AA margin)
   INBV_SPINNER_MAX_ROTATION_DEG 900.0f     (== spec)
   INBV_SPINNER_MAX_TRIM         0.5f       (== spec)
 
-Keyframe tables in InbvGopSpinnerBuildFrame exactly mirror sections 3 & 4:
+Keyframe tables in InbvGopSpinnerRasterizeFrame mirror sections 3 & 4:
   RotationTimes  = { 0.0, 0.5, 1.0 },  RotationVals  = { 0.0, 450.0, 900.0 }
   TrimEndTimes   = { 0.0, 0.5, 1.0 },  TrimEndVals   = { 0.0, 0.5,   0.5   }
   TrimStartTimes = { 0.0, 0.5, 1.0 },  TrimStartVals = { 0.0, 0.0,   0.5   }
@@ -135,11 +133,17 @@ Rasterization approach:
   - Per-pixel gray value (0..255) is packed to framebuffer format through
     a 256-entry GrayLut built once in InbvGopSpinnerSetup.
 
-Each of the 125 frames is rasterized once into a non-paged-pool buffer at
-setup; the spinner thread only does one VidBufferToScreenBlt per frame
-under a single InbvAcquireLock/InbvReleaseLock pair. Frame index is driven
-by wall-clock time (KeQueryInterruptTime) so the cycle stays locked to
-2000 ms regardless of thread-scheduling jitter on virtualized hosts.
+Radial coverage is computed once at setup; cap tests visit only their own
+bounding boxes. Each frame is then rasterized into a nonpaged pool cache.
+The spinner thread only does one VidBufferToScreenBlt per frame under an
+InbvAcquireLock/InbvReleaseLock pair, after checking display ownership.
+The frame index advances once per displayed frame. Delayed scheduling slows
+the cycle instead of skipping ahead. No rasterization or floating-point work
+runs in the animation thread, whose priority remains the system default.
+
+The cache uses about 1 MiB at 96 DPI and at most about 32 MiB at 480 DPI.
+It is freed before the worker signals completion, or on thread creation
+failure. Allocation failure disables the spinner without blocking boot.
 
 --------------------------------------------------------------------------
 7. Notes / divergences
@@ -153,9 +157,6 @@ by wall-clock time (KeQueryInterruptTime) so the cycle stays locked to
 - Determinate ProgressRing (section 2 of the upstream source) is not ported
   -- this implementation only covers the indeterminate variant since the
   boot UI has no progress value to report at this stage.
-- Cycle duration diverges intentionally: INBV_SPINNER_PERIOD_MS = 2800 vs
-  the Microsoft spec's 2000. Rationale: on virtualized boot (VBox/QEMU)
-  the 2-second cadence feels notably faster than on bare-metal Windows
-  because of different compositor pipelines and frame pacing upstream of
-  the kernel UI; 2800 ms restores the "relaxed" perception. Drop back to
-  2000 to match stock Windows behavior byte-for-byte.
+- The nominal cycle duration is 4000 ms versus the visual spec's 2000 ms.
+  Actual duration also includes rendering and scheduling delays; the animation
+  does not promise a fixed wall-clock cycle under CPU or host contention.
