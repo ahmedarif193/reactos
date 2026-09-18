@@ -6749,11 +6749,8 @@ HalSetEnvironmentVariable(
  * resolution; a coarser requested interval is honored by accumulation in
  * HalArm64ProfileSample, which the clock ISR calls once per tick.
  *
- * Active sources are tracked as a bitmask, not a call counter: profobj.c calls
- * HalStart/StopProfileInterrupt unconditionally on every KeStart/StopProfile
- * (even for an already-started/already-stopped profile), so a counter would
- * drift (sampling forever, or stopping while still active). A per-source bit is
- * idempotent.
+ * The kernel starts each source for its first profile and stops it when the
+ * last profile is removed.
  */
 static volatile LONG HalpArm64ProfileSources = 0;   /* bitmask of active KPROFILE_SOURCEs */
 static ULONG HalpArm64ProfileInterval = 100000;     /* requested interval, 100ns units */
@@ -6977,9 +6974,7 @@ NTAPI
 HalStartProfileInterrupt(
     _In_ KPROFILE_SOURCE ProfileSource)
 {
-    /* Idempotent per source (profobj.c calls this unconditionally on every
-     * KeStartProfile, including already-started ones). Sources >= 31 share the
-     * top bit, which only loses precision between very-high source numbers. */
+    /* Sources >= 31 share the top bit. */
     ULONG Bit = ((ULONG)ProfileSource < 31) ? (ULONG)ProfileSource : 31;
     InterlockedOr(&HalpArm64ProfileSources, (LONG)(1u << Bit));
 }

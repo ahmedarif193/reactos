@@ -125,6 +125,9 @@ KeStartProfile(IN PKPROFILE Profile,
             /* Don't free the pool later on */
             FreeBuffer = FALSE;
         }
+
+        if (++CurrentSource->ReferenceCount == 1)
+            HalStartProfileInterrupt(Profile->Source);
     }
     else
     {
@@ -134,9 +137,6 @@ KeStartProfile(IN PKPROFILE Profile,
 
     /* Release the profile lock */
     KeReleaseSpinLockFromDpcLevel(&KiProfileLock);
-
-    /* Tell HAL to start the profile interrupt */
-    HalStartProfileInterrupt(Profile->Source);
 
     /* Lower back to original IRQL */
     KeLowerIrql(OldIrql);
@@ -182,11 +182,13 @@ KeStopProfile(IN PKPROFILE Profile)
             /* Check if this is the Source Object */
             if (CurrentSource->Source == Profile->Source)
             {
-                /* Remember we found one */
-                SourceFound = TRUE;
-
-                /* Remove it and break out */
-                RemoveEntryList(&CurrentSource->ListEntry);
+                ASSERT(CurrentSource->ReferenceCount != 0);
+                if (--CurrentSource->ReferenceCount == 0)
+                {
+                    RemoveEntryList(&CurrentSource->ListEntry);
+                    HalStopProfileInterrupt(Profile->Source);
+                    SourceFound = TRUE;
+                }
                 break;
             }
         }
@@ -200,9 +202,6 @@ KeStopProfile(IN PKPROFILE Profile)
 
     /* Release the profile lock */
     KeReleaseSpinLockFromDpcLevel(&KiProfileLock);
-
-    /* Stop the profile interrupt */
-    HalStopProfileInterrupt(Profile->Source);
 
     /* Lower back to original IRQL */
     KeLowerIrql(OldIrql);
@@ -323,8 +322,9 @@ KiParseProfileList(IN PKTRAP_FRAME TrapFrame,
 
         /* Check if the source is good, and if it's within the range */
         if ((Profile->Source != Source) ||
+            !(Profile->Affinity & KeGetCurrentPrcb()->SetMember) ||
             (ProgramCounter < (ULONG_PTR)Profile->RangeBase) ||
-            (ProgramCounter > (ULONG_PTR)Profile->RangeLimit))
+            (ProgramCounter >= (ULONG_PTR)Profile->RangeLimit))
         {
             continue;
         }
@@ -354,11 +354,19 @@ NTAPI
 KeProfileInterruptWithSource(IN PKTRAP_FRAME TrapFrame,
                              IN KPROFILE_SOURCE Source)
 {
-    PKPROCESS Process = KeGetCurrentThread()->ApcState.Process;
+    PKPROCESS Process;
+    KIRQL OldIrql = KeGetCurrentIrql();
+
+    if (OldIrql < KiProfileIrql) KeRaiseIrql(KiProfileIrql, &OldIrql);
+    KeAcquireSpinLockAtDpcLevel(&KiProfileLock);
+    Process = KeGetCurrentThread()->ApcState.Process;
 
     /* We have to parse 2 lists. Per-Process and System-Wide */
     KiParseProfileList(TrapFrame, Source, &Process->ProfileListHead);
     KiParseProfileList(TrapFrame, Source, &KiProfileListHead);
+
+    KeReleaseSpinLockFromDpcLevel(&KiProfileLock);
+    KeLowerIrql(OldIrql);
 }
 
 /*

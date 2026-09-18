@@ -20,6 +20,7 @@ typedef struct _WOW64_PROCESS
 typedef struct _KPROFILE_SOURCE_OBJECT
 {
     KPROFILE_SOURCE Source;
+    ULONG ReferenceCount;
     LIST_ENTRY ListEntry;
 } KPROFILE_SOURCE_OBJECT, *PKPROFILE_SOURCE_OBJECT;
 

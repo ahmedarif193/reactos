@@ -12,6 +12,7 @@
 #include "kmtest.h"
 #include <kmt_public.h>
 #include <ndk/exfuncs.h>
+#include <ndk/kefuncs.h>
 
 #include <assert.h>
 #include <debug.h>
@@ -95,6 +96,27 @@ KmtUserCallbackThread(
                 Response.EventPair.WaitHighStatus = NtWaitHighEventPair(EventPairHandle);
                 Response.EventPair.WaitLowStatus = NtWaitLowEventPair(EventPairHandle);
                 if (!DeviceIoControl(LocalKmtHandle, IOCTL_KMTEST_USERMODE_SEND_RESPONSE, &RequestPacket.RequestId, sizeof(RequestPacket.RequestId), &Response, sizeof(Response), &BytesReturned, NULL)) error_goto(Error, cleanup);
+                ASSERT(BytesReturned == 0);
+                break;
+            }
+            case CreateProfile:
+            {
+                KMT_PROFILE_PARAMETERS *Parameters = RequestPacket.Parameters;
+
+                Response.Profile.Handle = NULL;
+                Response.Profile.Status = NtCreateProfile(&Response.Profile.Handle,
+                                                         NtCurrentProcess(),
+                                                         Parameters->RangeBase,
+                                                         Parameters->RangeSize,
+                                                         Parameters->BucketSize,
+                                                         Parameters->Buffer,
+                                                         Parameters->BufferSize,
+                                                         Parameters->Source,
+                                                         Parameters->Affinity);
+                if (!DeviceIoControl(LocalKmtHandle, IOCTL_KMTEST_USERMODE_SEND_RESPONSE,
+                                     &RequestPacket.RequestId, sizeof(RequestPacket.RequestId),
+                                     &Response, sizeof(Response), &BytesReturned, NULL))
+                    error_goto(Error, cleanup);
                 ASSERT(BytesReturned == 0);
                 break;
             }

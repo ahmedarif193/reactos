@@ -69,14 +69,31 @@ typedef struct _KMT_EVENT_PAIR_RESPONSE
 typedef enum _KMT_CALLBACK_INFORMATION_CLASS
 {
     QueryVirtualMemory,
-    QueryEventPairBehavior
+    QueryEventPairBehavior,
+    CreateProfile
 } KMT_CALLBACK_INFORMATION_CLASS, *PKMT_CALLBACK_INFORMATION_CLASS;
+
+typedef struct _KMT_PROFILE_PARAMETERS
+{
+    PVOID RangeBase;
+    SIZE_T RangeSize;
+    ULONG BucketSize;
+    PULONG Buffer;
+    ULONG BufferSize;
+    KPROFILE_SOURCE Source;
+    KAFFINITY Affinity;
+} KMT_PROFILE_PARAMETERS;
 
 /* TODO: "response" is a little generic */
 typedef union _KMT_RESPONSE
 {
     MEMORY_BASIC_INFORMATION MemInfo;
     KMT_EVENT_PAIR_RESPONSE EventPair;
+    struct
+    {
+        NTSTATUS Status;
+        HANDLE Handle;
+    } Profile;
 } KMT_RESPONSE, *PKMT_RESPONSE;
 
 /* this struct is sent from driver to usermode */
