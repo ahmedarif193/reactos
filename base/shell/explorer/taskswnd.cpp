@@ -486,14 +486,6 @@ public:
         }
 
         bHandled = FALSE;
-        if (m_bTrackGlow)
-        {
-            INT hot = GetHotItem();
-            RECT rc;
-
-            if (hot >= 0 && GetItemRect(hot, &rc))
-                InvalidateRect(&rc, FALSE);
-        }
         return 0;
     }
 
@@ -586,9 +578,6 @@ public:
             ::ReleaseCapture();
     }
 
-public:
-    BOOL m_bTrackGlow;
-
     BEGIN_MSG_MAP(CNotifyToolbar)
         MESSAGE_HANDLER(WM_NCHITTEST, OnNcHitTestToolbar)
         MESSAGE_HANDLER(WM_MBUTTONUP, OnMButtonUpToolbar)
@@ -608,7 +597,6 @@ public:
         // HACK & FIXME: CORE-18016
         HWND toolbar = CToolbar::Create(hWndParent, styles);
         m_hWnd = NULL;
-        m_bTrackGlow = FALSE;
         m_bDragArmed = FALSE;
         m_bDragging = FALSE;
         m_iPressIndex = -1;
@@ -642,9 +630,6 @@ class CTaskSwitchWnd :
     INT m_cyTaskRow;
     INT m_HoverIndex;
     BOOL m_HoverPreviewPending;
-    COLORREF m_crGlowCache;
-    INT m_GlowCacheIcon;
-    INT m_GlowCacheCount;
 
     HTHEME m_Theme;
     UINT m_ButtonsPerLine;
@@ -688,9 +673,6 @@ public:
         m_cyTaskRow(0),
         m_HoverIndex(-1),
         m_HoverPreviewPending(FALSE),
-        m_crGlowCache(0),
-        m_GlowCacheIcon(-1),
-        m_GlowCacheCount(0),
         m_Theme(NULL),
         m_ButtonsPerLine(0),
         m_ButtonCount(0),
@@ -3074,8 +3056,6 @@ public:
         else
             m_Theme = NULL;
         m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial, &m_cyTaskRow);
-        m_TaskBar.m_bTrackGlow = m_bMaterial && IsModernTaskbar();
-        m_GlowCacheIcon = -1;
         m_HoverIndex = -1;
         TaskPreview_Hide();
 
@@ -3098,7 +3078,6 @@ public:
 
         SetWindowTheme(m_TaskBar.m_hWnd, m_Tray->IsHorizontal() ? L"TaskBand" : L"TaskBandVert", NULL);
         m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial, &m_cyTaskRow);
-        m_TaskBar.m_bTrackGlow = m_bMaterial && IsModernTaskbar();
 
         m_ImageList = ImageList_Create(GetSystemMetrics(UseSmallTaskIcons() ? SM_CXSMICON : SM_CXICON),
                                        GetSystemMetrics(UseSmallTaskIcons() ? SM_CYSMICON : SM_CYICON),
@@ -3839,228 +3818,82 @@ public:
     }
 
 
-    static COLORREF IconDominantColor(HICON hIcon, COLORREF crFallback)
-    {
-        ICONINFO ii;
-        BITMAP bm;
-        BITMAPINFO bmi;
-        DWORD *pBits = NULL;
-        HDC hdc = NULL;
-        ULONGLONG sumR = 0, sumG = 0, sumB = 0, sumW = 0;
-        COLORREF cr = crFallback;
-        INT x, y, mx;
-
-        if (!hIcon || !GetIconInfo(hIcon, &ii))
-            return crFallback;
-        if (ii.hbmColor && GetObjectW(ii.hbmColor, sizeof(bm), &bm) &&
-            bm.bmWidth > 0 && bm.bmHeight > 0 && bm.bmWidth * bm.bmHeight <= 256 * 256)
-        {
-            ZeroMemory(&bmi, sizeof(bmi));
-            bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
-            bmi.bmiHeader.biWidth = bm.bmWidth;
-            bmi.bmiHeader.biHeight = -bm.bmHeight;
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
-            pBits = (DWORD *)HeapAlloc(hProcessHeap, 0, (SIZE_T)bm.bmWidth * bm.bmHeight * 4);
-            hdc = ::GetDC(NULL);
-            if (pBits && hdc &&
-                GetDIBits(hdc, ii.hbmColor, 0, bm.bmHeight, pBits, &bmi, DIB_RGB_COLORS))
-            {
-                BOOL bHasAlpha = FALSE;
-
-                for (y = 0; y < bm.bmWidth * bm.bmHeight; y++)
-                {
-                    if (pBits[y] & 0xFF000000)
-                    {
-                        bHasAlpha = TRUE;
-                        break;
-                    }
-                }
-                for (y = 0; y < bm.bmHeight; y++)
-                {
-                    for (x = 0; x < bm.bmWidth; x++)
-                    {
-                        DWORD px = pBits[y * bm.bmWidth + x];
-                        INT a = bHasAlpha ? (INT)(px >> 24) : 255;
-                        INT r = (px >> 16) & 0xFF, g = (px >> 8) & 0xFF, b = px & 0xFF;
-                        INT hi = max(r, max(g, b)), lo = min(r, min(g, b));
-                        ULONGLONG w;
-
-                        if (a < 128 || hi < 48)
-                            continue;
-                        w = (ULONGLONG)(hi - lo + 6) * a;
-                        sumR += r * w;
-                        sumG += g * w;
-                        sumB += b * w;
-                        sumW += w;
-                    }
-                }
-                if (sumW != 0)
-                    cr = RGB(sumR / sumW, sumG / sumW, sumB / sumW);
-            }
-            if (hdc)
-                ::ReleaseDC(NULL, hdc);
-            if (pBits)
-                HeapFree(hProcessHeap, 0, pBits);
-        }
-        if (ii.hbmColor)
-            DeleteObject(ii.hbmColor);
-        if (ii.hbmMask)
-            DeleteObject(ii.hbmMask);
-        mx = max(GetRValue(cr), max(GetGValue(cr), GetBValue(cr)));
-        if (mx > 0 && mx < 255)
-        {
-            cr = RGB(min(255, GetRValue(cr) * 255 / mx),
-                     min(255, GetGValue(cr) * 255 / mx),
-                     min(255, GetBValue(cr) * 255 / mx));
-        }
-        return cr;
-    }
-
-    COLORREF GlowColorForIcon(INT IconIndex)
-    {
-        INT count = m_ImageList ? ImageList_GetImageCount(m_ImageList) : 0;
-        HICON hIcon;
-
-        if (IconIndex == m_GlowCacheIcon && count == m_GlowCacheCount)
-            return m_crGlowCache;
-        hIcon = m_ImageList ? ImageList_GetIcon(m_ImageList, IconIndex, ILD_TRANSPARENT) : NULL;
-        m_crGlowCache = IconDominantColor(hIcon, RGB(110, 170, 255));
-        if (hIcon)
-            DestroyIcon(hIcon);
-        m_GlowCacheIcon = IconIndex;
-        m_GlowCacheCount = count;
-        return m_crGlowCache;
-    }
-
-    VOID DrawWin7Well(HDC hdc, const RECT *prc, INT radius, INT liftFill, INT liftEdge,
-                      BOOL bGlow, COLORREF crGlow, POINT ptGlow, INT amp,
-                      HTHEME hTheme, INT state)
+    static VOID TintWell(HDC hdc, const RECT *prc, INT radius, INT tint)
     {
         INT w = prc->right - prc->left, h = prc->bottom - prc->top;
-        COLORREF crFill = ShellLiftColor(m_crMaterial, liftFill);
-        COLORREF crEdge = ShellLiftColor(m_crMaterial, liftEdge);
-        HBRUSH hbrFill = CreateSolidBrush(crFill);
-        HPEN hpenEdge = CreatePen(PS_SOLID, 1, crEdge);
-        HGDIOBJ hbrOld, hpenOld;
+        BITMAPINFO bmi;
+        DWORD *pBits = NULL;
+        HBITMAP hbm;
+        HDC hdcMem = CreateCompatibleDC(hdc);
 
-        if (w <= 0 || h <= 0 || !hbrFill || !hpenEdge)
+        ZeroMemory(&bmi, sizeof(bmi));
+        bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+        bmi.bmiHeader.biWidth = w;
+        bmi.bmiHeader.biHeight = -h;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+        hbm = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (void **)&pBits, NULL, 0);
+        if (hdcMem && hbm && pBits)
         {
-            if (hbrFill) DeleteObject(hbrFill);
-            if (hpenEdge) DeleteObject(hpenEdge);
-            return;
-        }
-        /* Use the task-band artwork, including its translucent face and inner
-           highlight. An opaque material fill hides both the glass and theme. */
-        BOOL bThemed = hTheme && SUCCEEDED(DrawThemeBackground(hTheme, hdc, TP_BUTTON, state, prc, prc));
-        if (!bThemed)
-        {
-            hbrOld = SelectObject(hdc, hbrFill);
-            hpenOld = SelectObject(hdc, GetStockObject(NULL_PEN));
-            RoundRect(hdc, prc->left, prc->top, prc->right + 1, prc->bottom + 1, radius, radius);
-            SelectObject(hdc, hpenOld);
-            SelectObject(hdc, hbrOld);
-        }
-        if (bGlow)
-        {
-            BITMAPINFO bmi;
-            DWORD *pBits = NULL;
-            HBITMAP hbm;
-            HDC hdcMem = CreateCompatibleDC(hdc);
+            HGDIOBJ hbmOld = SelectObject(hdcMem, hbm);
 
-            ZeroMemory(&bmi, sizeof(bmi));
-            bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
-            bmi.bmiHeader.biWidth = w;
-            bmi.bmiHeader.biHeight = -h;
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
-            hbm = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (void **)&pBits, NULL, 0);
-            if (hdcMem && hbm && pBits)
+            if (BitBlt(hdcMem, 0, 0, w, h, hdc, prc->left, prc->top, SRCCOPY))
             {
-                HGDIOBJ hbmOld = SelectObject(hdcMem, hbm);
-                HRGN hrgn = CreateRoundRectRgn(prc->left, prc->top, prc->right + 1,
-                                               prc->bottom + 1, radius, radius);
-                INT gx = ptGlow.x - prc->left, gy = ptGlow.y - prc->top;
-                INT R = max(w, h) * 4 / 5;
-                INT R2 = R * R;
-                INT gr = GetRValue(crGlow), gg = GetGValue(crGlow), gb = GetBValue(crGlow);
-                INT x, y;
+                HRGN hrgn;
+                INT saved, i;
 
-                /* Add the icon glow to the rendered glass, preserving its
-                   reflection and the backdrop underneath it. */
-                BOOL bCopied = BitBlt(hdcMem, 0, 0, w, h, hdc, prc->left, prc->top, SRCCOPY);
                 GdiFlush();
-                for (y = 0; bCopied && y < h; y++)
+                for (i = 0; i < w * h; i++)
                 {
-                    for (x = 0; x < w; x++)
-                    {
-                        INT dx = x - gx, dy = y - gy;
-                        INT d2 = dx * dx + dy * dy;
-                        DWORD px = pBits[y * w + x];
-                        INT r = (px >> 16) & 0xFF, g = (px >> 8) & 0xFF, b = px & 0xFF;
+                    DWORD px = pBits[i];
+                    INT r = min(255, (INT)((px >> 16) & 0xFF) + tint);
+                    INT g = min(255, (INT)((px >> 8) & 0xFF) + tint);
+                    INT b = min(255, (INT)(px & 0xFF) + tint);
 
-                        if (d2 < R2)
-                        {
-                            INT f = 255 - d2 * 255 / R2;
-                            INT t = f * f / 255;
-                            INT add = amp * t / 255;
-
-                            r = min(255, r + gr * add / 255);
-                            g = min(255, g + gg * add / 255);
-                            b = min(255, b + gb * add / 255);
-                        }
-                        pBits[y * w + x] = ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
-                    }
+                    pBits[i] = ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
                 }
-                INT saved = bCopied ? SaveDC(hdc) : 0;
+                hrgn = CreateRoundRectRgn(prc->left, prc->top, prc->right + 1,
+                                          prc->bottom + 1, radius, radius);
+                saved = SaveDC(hdc);
                 if (saved)
                 {
                     if (hrgn)
                         ExtSelectClipRgn(hdc, hrgn, RGN_AND);
-                    /* Keep the theme's two edge pixels crisp. */
-                    if (bThemed)
-                        IntersectClipRect(hdc, prc->left + 2, prc->top + 2, prc->right - 2, prc->bottom - 2);
                     BitBlt(hdc, prc->left, prc->top, w, h, hdcMem, 0, 0, SRCCOPY);
                     RestoreDC(hdc, saved);
                 }
                 if (hrgn)
                     DeleteObject(hrgn);
-                SelectObject(hdcMem, hbmOld);
             }
-            if (hbm)
-                DeleteObject(hbm);
-            if (hdcMem)
-                DeleteDC(hdcMem);
+            SelectObject(hdcMem, hbmOld);
         }
-        if (!bThemed)
-        {
-            hbrOld = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            hpenOld = SelectObject(hdc, hpenEdge);
-            RoundRect(hdc, prc->left, prc->top, prc->right, prc->bottom, radius, radius);
-            SelectObject(hdc, hpenOld);
-            SelectObject(hdc, hbrOld);
-        }
-        DeleteObject(hpenEdge);
-        DeleteObject(hbrFill);
+        if (hbm)
+            DeleteObject(hbm);
+        if (hdcMem)
+            DeleteDC(hdcMem);
     }
 
-    static VOID DrawVertGradient(HDC hdc, const RECT *prc, COLORREF top, COLORREF bottom)
+    VOID DrawWin7Well(HDC hdc, const RECT *prc, INT radius, INT tint, INT liftEdge)
     {
-        int h = prc->bottom - prc->top;
-        if (h <= 0)
+        HPEN hpenEdge;
+        HGDIOBJ hbrOld, hpenOld;
+
+        if (prc->right <= prc->left || prc->bottom <= prc->top)
             return;
-        for (int y = 0; y < h; y++)
-        {
-            RECT rcLine = { prc->left, prc->top + y, prc->right, prc->top + y + 1 };
-            COLORREF clr = RGB(GetRValue(top) + MulDiv(GetRValue(bottom) - GetRValue(top), y, h),
-                               GetGValue(top) + MulDiv(GetGValue(bottom) - GetGValue(top), y, h),
-                               GetBValue(top) + MulDiv(GetBValue(bottom) - GetBValue(top), y, h));
-            HBRUSH hbr = CreateSolidBrush(clr);
-            FillRect(hdc, &rcLine, hbr);
-            DeleteObject(hbr);
-        }
+
+        if (tint > 0)
+            TintWell(hdc, prc, radius, tint);
+
+        hpenEdge = CreatePen(PS_SOLID, 1, ShellLiftColor(m_crMaterial, liftEdge));
+        if (!hpenEdge)
+            return;
+        hbrOld = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        hpenOld = SelectObject(hdc, hpenEdge);
+        RoundRect(hdc, prc->left, prc->top, prc->right, prc->bottom, radius, radius);
+        SelectObject(hdc, hpenOld);
+        SelectObject(hdc, hbrOld);
+        DeleteObject(hpenEdge);
     }
 
     LRESULT DrawWin7TaskButtonWorker(IN OUT NMTBCUSTOMDRAW *nmtbcd, IN INT IconIndex, IN INT nLayers)
@@ -4073,7 +3906,7 @@ public:
         BOOL bPressed = (uState & CDIS_SELECTED);
         INT nStep = ShellScaleForDpi(6);
         RECT rcFace = rc;
-        COLORREF crEdge = 0, crTop = 0, crBottom = 0;
+        COLORREF crEdge = 0, crFace = 0;
         BOOL bFill = FALSE;
 
         if (nLayers > 3)
@@ -4084,48 +3917,19 @@ public:
         if (m_bMaterial && (nLayers > 0 || bHot || bPressed || bChecked))
         {
             BOOL bFlash = (uState & CDIS_MARKED) != 0;
-            HTHEME hButtonTheme = GetWindowTheme(m_TaskBar.m_hWnd);
-            INT state = bPressed ? TS_PRESSED :
-                        bChecked ? (bHot ? TS_HOTCHECKED : TS_CHECKED) :
-                        bHot ? TS_HOT : TS_NORMAL;
             RECT rcWell = rcFace;
             INT radius = ShellScaleForDpi(3);
-            INT liftFill, liftEdge, amp, i;
-            BOOL bGlow = bHot || bChecked || bPressed || bFlash;
-            COLORREF crGlow = 0;
-            POINT ptGlow;
+            INT tint, liftEdge, i;
 
-            if (hButtonTheme && !IsThemePartDefined(hButtonTheme, TP_BUTTON, 0))
-                hButtonTheme = NULL;
             /* The transparent toolbar has already painted the parent backdrop
                before notifying us, including on mouse-move redraws. */
             InflateRect(&rcWell, -ShellScaleForDpi(1), -ShellScaleForDpi(2));
-            if (bFlash)        { liftFill = 12; liftEdge = 60; amp = 40; }
-            else if (bPressed) { liftFill = 5;  liftEdge = 40; amp = 14; }
-            else if (bChecked) { liftFill = 18; liftEdge = 56; amp = bHot ? 38 : 24; }
-            else if (bHot)     { liftFill = 12; liftEdge = 48; amp = 34; }
-            else               { liftFill = 8;  liftEdge = 28; amp = 0; }
+            if (bFlash)        { tint = 30; liftEdge = 66; }
+            else if (bPressed) { tint = 6;  liftEdge = 34; }
+            else if (bChecked) { tint = bHot ? 24 : 16; liftEdge = bHot ? 54 : 44; }
+            else if (bHot)     { tint = 14; liftEdge = 44; }
+            else               { tint = 0;  liftEdge = 22; }
 
-            ptGlow.x = (rcWell.left + rcWell.right) / 2;
-            ptGlow.y = rcWell.bottom - (rcWell.bottom - rcWell.top) / 4;
-            if (bGlow)
-            {
-                if (bFlash)
-                    crGlow = RGB(255, 160, 40);
-                else
-                    crGlow = GlowColorForIcon(IconIndex);
-                if (bHot && !bFlash)
-                {
-                    POINT pt;
-
-                    GetCursorPos(&pt);
-                    ::ScreenToClient(m_TaskBar.m_hWnd, &pt);
-                    if (pt.x >= rcWell.left && pt.x < rcWell.right)
-                        ptGlow.x = pt.x;
-                    if (pt.y >= rcWell.top && pt.y < rcWell.bottom)
-                        ptGlow.y = pt.y;
-                }
-            }
             for (i = nLayers - 1; i >= 1; i--)
             {
                 RECT rcBack = rcWell;
@@ -4134,44 +3938,29 @@ public:
                 INT saved = SaveDC(hdc);
                 if (!saved)
                     continue;
-                /* Only the exposed strip belongs to a rear layer. Blending
-                   whole translucent buttons stacks their reflections across
-                   the front face and leaks their left edges through it. */
-                if (hButtonTheme)
-                    IntersectClipRect(hdc, rcBack.right - nStep, rcBack.top, rcBack.right, rcBack.bottom);
-                DrawWin7Well(hdc, &rcBack, radius, max(0, liftFill - i), max(0, liftEdge - i * 6), FALSE, 0, ptGlow, 0, hButtonTheme, TS_NORMAL);
+                IntersectClipRect(hdc, rcBack.right - nStep, rcBack.top, rcBack.right, rcBack.bottom);
+                DrawWin7Well(hdc, &rcBack, radius, 0, max(0, liftEdge - i * 6));
                 RestoreDC(hdc, saved);
             }
-            DrawWin7Well(hdc, &rcWell, radius, liftFill, liftEdge, bGlow, crGlow, ptGlow, amp, hButtonTheme, state);
-            if (!hButtonTheme && bChecked && !bPressed)
-            {
-                RECT rcLight = { rcWell.left + radius / 2, rcWell.top + 1,
-                                 rcWell.right - radius / 2, rcWell.top + 2 };
-                HBRUSH hbrLight = CreateSolidBrush(ShellLiftColor(m_crMaterial, 72));
-
-                FillRect(hdc, &rcLight, hbrLight);
-                DeleteObject(hbrLight);
-            }
-            crEdge = ShellLiftColor(m_crMaterial, liftEdge);
+            DrawWin7Well(hdc, &rcWell, radius, tint, liftEdge);
             bFill = TRUE;
         }
         else if (bPressed || bChecked)
         {
-            crTop = RGB(26, 29, 32);
-            crBottom = RGB(44, 49, 54);
+            crFace = RGB(38, 42, 47);
             crEdge = RGB(88, 95, 102);
             bFill = TRUE;
         }
         else if (bHot)
         {
-            crTop = RGB(78, 84, 90);
-            crBottom = RGB(46, 51, 56);
+            crFace = RGB(58, 64, 70);
             crEdge = RGB(102, 110, 118);
             bFill = TRUE;
         }
 
         if (bFill && !m_bMaterial)
         {
+            HBRUSH hbrFace = CreateSolidBrush(crFace);
             HBRUSH hbrEdge = CreateSolidBrush(crEdge);
             INT i;
 
@@ -4180,13 +3969,13 @@ public:
                 RECT rcBack = rcFace;
 
                 OffsetRect(&rcBack, i * nStep, 0);
-                DrawVertGradient(hdc, &rcBack, ShellLiftColor(crTop, -8),
-                                 ShellLiftColor(crBottom, -8));
+                FillRect(hdc, &rcBack, hbrFace);
                 FrameRect(hdc, &rcBack, hbrEdge);
             }
-            DrawVertGradient(hdc, &rcFace, crTop, crBottom);
+            FillRect(hdc, &rcFace, hbrFace);
             FrameRect(hdc, &rcFace, hbrEdge);
             DeleteObject(hbrEdge);
+            DeleteObject(hbrFace);
         }
 
         if (IconIndex >= 0 && m_ImageList)
