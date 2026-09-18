@@ -70,8 +70,8 @@ KiCheckForTimerExpiration(
     ULONG Hand;
 
     /* Check for timer expiration */
-    Hand = KeTickCount.LowPart & (TIMER_TABLE_SIZE - 1);
-    if (KiTimerTableListHead[Hand].Time.QuadPart <= (ULONG64)InterruptTime.QuadPart)
+    Hand = KeTickCount.LowPart;
+    if (KiTimerTableListHead[Hand & (TIMER_TABLE_SIZE - 1)].Time.QuadPart <= (ULONG64)InterruptTime.QuadPart)
     {
         /* Check if we are already doing expiration */
         if (!Prcb->TimerRequest)
@@ -93,6 +93,7 @@ KeUpdateSystemTime(IN PKTRAP_FRAME TrapFrame,
     PKPRCB Prcb = KeGetCurrentPrcb();
     LARGE_INTEGER CurrentTime, InterruptTime;
     LONG OldTickOffset;
+    ULONG Ticks;
 
     /* Check if this tick is being skipped */
     if (Prcb->SkipTick)
@@ -135,13 +136,23 @@ KeUpdateSystemTime(IN PKTRAP_FRAME TrapFrame,
     /* Check for full tick */
     if (OldTickOffset <= (LONG)Increment)
     {
+        Ticks = 1 + (Increment - (ULONG)OldTickOffset) / KeMaximumIncrement;
+
+        /* A delayed clock can cross timer buckets that neither endpoint visits. */
+        if (Ticks > 1 && !Prcb->TimerRequest)
+        {
+            Prcb->TimerRequest = (ULONG_PTR)TrapFrame;
+            Prcb->TimerHand = KeTickCount.LowPart;
+            HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
+        }
+
         /* Update the system time */
         CurrentTime.QuadPart = *(ULONGLONG*)&SharedUserData->SystemTime;
-        CurrentTime.QuadPart += KeTimeAdjustment;
+        CurrentTime.QuadPart += (ULONGLONG)Ticks * KeTimeAdjustment;
         KiWriteSystemTime(&MmWriteableSharedUserData->SystemTime, CurrentTime);
 
         /* Update the tick count */
-        CurrentTime.QuadPart = (*(ULONGLONG*)&KeTickCount) + 1;
+        CurrentTime.QuadPart = (*(ULONGLONG*)&KeTickCount) + Ticks;
         KiWriteSystemTime(&KeTickCount, CurrentTime);
 
         /* Update it in the shared user data */
@@ -151,10 +162,10 @@ KeUpdateSystemTime(IN PKTRAP_FRAME TrapFrame,
         KiCheckForTimerExpiration(Prcb, TrapFrame, InterruptTime);
 
         /* Reset the tick offset */
-        KiTickOffset += KeMaximumIncrement;
+        KiTickOffset = KeMaximumIncrement - (Increment - (ULONG)OldTickOffset) % KeMaximumIncrement;
 
         /* Update processor/thread runtime */
-        KeUpdateRunTime(TrapFrame, Irql);
+        KiUpdateRunTime(TrapFrame, Irql, Ticks);
     }
     else
     {
@@ -172,6 +183,15 @@ VOID
 NTAPI
 KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
                 IN KIRQL Irql)
+{
+    KiUpdateRunTime(TrapFrame, Irql, 1);
+}
+
+VOID
+NTAPI
+KiUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
+                IN KIRQL Irql,
+                IN ULONG Ticks)
 {
     PKTHREAD Thread = KeGetCurrentThread();
     PKPRCB Prcb = KeGetCurrentPrcb();
@@ -205,27 +225,27 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
 #endif
     {
         /* Increase thread user time */
-        Prcb->UserTime++;
-        Thread->UserTime++;
+        Prcb->UserTime += Ticks;
+        Thread->UserTime += Ticks;
     }
     else
     {
         /* See if we were in an ISR */
-        Prcb->KernelTime++;
+        Prcb->KernelTime += Ticks;
         if (Irql > DISPATCH_LEVEL)
         {
             /* Handle that */
-            Prcb->InterruptTime++;
+            Prcb->InterruptTime += Ticks;
         }
         else if ((Irql < DISPATCH_LEVEL) || !(Prcb->DpcRoutineActive))
         {
             /* Handle being in kernel mode */
-            Thread->KernelTime++;
+            Thread->KernelTime += Ticks;
         }
         else
         {
             /* Handle being in a DPC */
-            Prcb->DpcTime++;
+            Prcb->DpcTime += Ticks;
 
 #if DBG && (NTDDI_VERSION < NTDDI_LONGHORN)
             /* Update the DPC time (DebugDpcTime removed at Vista+) */
@@ -283,7 +303,10 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     }
 
 #if !defined(_M_AMD64) || (NTDDI_VERSION < NTDDI_LONGHORN)
-    KiDecrementThreadQuantum(Thread, CLOCK_QUANTUM_DECREMENT);
+    if (Ticks == 1)
+        KiDecrementThreadQuantum(Thread, CLOCK_QUANTUM_DECREMENT);
+    else
+        KiSetThreadQuantum(Thread, max(0, KiGetThreadQuantum(Thread) - (LONG)min(Ticks, MAXCHAR) * CLOCK_QUANTUM_DECREMENT));
 #endif
 
     /* Check if the time expired */

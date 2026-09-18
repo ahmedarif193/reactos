@@ -116,7 +116,8 @@ KiTimerExpiration(IN PKDPC Dpc,
 {
     ULARGE_INTEGER SystemTime, InterruptTime;
     LARGE_INTEGER Interval;
-    LONG Limit, Index, i;
+    ULONG Limit, Index;
+    LONG i;
     ULONG Timers, ActiveTimers, DpcCalls;
     PLIST_ENTRY ListHead, NextEntry;
     KIRQL OldIrql;
@@ -139,7 +140,7 @@ KiTimerExpiration(IN PKDPC Dpc,
     _enable();
 
     /* Get the index of the timer and normalize it */
-    Index = PtrToLong(SystemArgument1);
+    Index = PtrToUlong(SystemArgument1);
     if ((Limit - Index) >= TIMER_TABLE_SIZE)
     {
         /* Normalize it */

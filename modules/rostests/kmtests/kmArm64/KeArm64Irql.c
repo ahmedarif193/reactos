@@ -254,6 +254,116 @@ Arm64EffectiveIrqlCheck(
     }
 }
 
+typedef struct _CLOCK_TIMER_CONTEXT
+{
+    ULONG Cpu;
+    volatile LONG Calls;
+    volatile LONG Errors;
+} CLOCK_TIMER_CONTEXT;
+
+static VOID NTAPI
+ClockTimerDpc(PKDPC Dpc, PVOID Parameter, PVOID Argument1, PVOID Argument2)
+{
+    CLOCK_TIMER_CONTEXT *Context = Parameter;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(Argument1);
+    UNREFERENCED_PARAMETER(Argument2);
+    if (KeGetCurrentProcessorNumber() != Context->Cpu || KeGetCurrentIrql() != DISPATCH_LEVEL)
+        InterlockedIncrement(&Context->Errors);
+    InterlockedIncrement(&Context->Calls);
+}
+
+static VOID
+Arm64ClockCatchupCheck(VOID)
+{
+    static const ULONG Periods[] = {2, 15};
+    static const ULONG DuePeriods[] = {1, 4, 9};
+    CLOCK_TIMER_CONTEXT TimerContext;
+    KTIMER Timers[RTL_NUMBER_OF(DuePeriods)];
+    KDPC Dpcs[RTL_NUMBER_OF(DuePeriods)];
+    KAFFINITY PreviousAffinity;
+    PKPRCB Prcb;
+    KIRQL OldIrql;
+    LARGE_INTEGER Frequency, Start, End, TickBefore, TickAfter, Delay, DueTime;
+    LARGE_INTEGER SystemBefore, SystemAfter;
+    ULONGLONG InterruptBefore, InterruptAfter, RuntimeBefore, RuntimeAfter;
+    ULONGLONG Elapsed, InterruptElapsed, TickElapsed, RuntimeElapsed, SystemElapsed, Tolerance;
+    LONGLONG Deadline;
+    ULONG Cpu, Index, Timer, TimerCount, Increment = KeQueryTimeIncrement();
+    LONG TimerCalls;
+
+    KeQueryPerformanceCounter(&Frequency);
+    Tolerance = 3ULL * Increment;
+    Delay.QuadPart = -4LL * Increment;
+    PreviousAffinity = KeSetSystemAffinityThreadEx(1);
+    for (Cpu = 0; Cpu < (ULONG)KeNumberProcessors; Cpu++)
+    {
+        KeSetSystemAffinityThread((KAFFINITY)1 << Cpu);
+        Prcb = KeGetCurrentPrcb();
+        for (Index = 0; Index < RTL_NUMBER_OF(Periods); Index++)
+        {
+            RtlZeroMemory(&TimerContext, sizeof(TimerContext));
+            TimerContext.Cpu = Cpu;
+            TimerCount = Periods[Index] > 9 ? RTL_NUMBER_OF(DuePeriods) : 0;
+            for (Timer = 0; Timer < TimerCount; Timer++)
+            {
+                KeInitializeTimer(&Timers[Timer]);
+                KeInitializeDpc(&Dpcs[Timer], ClockTimerDpc, &TimerContext);
+                KeSetTargetProcessorDpc(&Dpcs[Timer], (CCHAR)Cpu);
+                DueTime.QuadPart = -(LONGLONG)Increment * DuePeriods[Timer];
+                KeSetTimer(&Timers[Timer], DueTime, &Dpcs[Timer]);
+            }
+            KeRaiseIrql(CLOCK_LEVEL, &OldIrql);
+            Start = KeQueryPerformanceCounter(NULL);
+            InterruptBefore = KeQueryInterruptTime();
+            KeQueryTickCount(&TickBefore);
+            KeQuerySystemTime(&SystemBefore);
+            RuntimeBefore = (ULONGLONG)Prcb->KernelTime + Prcb->UserTime;
+            Deadline = Start.QuadPart + Frequency.QuadPart * Increment * Periods[Index] / 10000000;
+            /* Deliberately defer the local clock beyond its old catch-up limit. */
+            while (KeQueryPerformanceCounter(NULL).QuadPart < Deadline)
+                YieldProcessor();
+            KeLowerIrql(OldIrql);
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+            KeRaiseIrql(CLOCK_LEVEL, &OldIrql);
+            End = KeQueryPerformanceCounter(NULL);
+            InterruptAfter = KeQueryInterruptTime();
+            KeQueryTickCount(&TickAfter);
+            KeQuerySystemTime(&SystemAfter);
+            RuntimeAfter = (ULONGLONG)Prcb->KernelTime + Prcb->UserTime;
+            KeLowerIrql(OldIrql);
+            TimerCalls = TimerContext.Calls;
+            for (Timer = 0; Timer < TimerCount; Timer++)
+                KeCancelTimer(&Timers[Timer]);
+            if (TimerCount) KeFlushQueuedDpcs();
+
+            Elapsed = (End.QuadPart - Start.QuadPart) * 10000000ULL / Frequency.QuadPart;
+            InterruptElapsed = InterruptAfter - InterruptBefore;
+            TickElapsed = (TickAfter.QuadPart - TickBefore.QuadPart) * Increment;
+            RuntimeElapsed = (RuntimeAfter - RuntimeBefore) * Increment;
+            SystemElapsed = SystemAfter.QuadPart - SystemBefore.QuadPart;
+            ok(InterruptElapsed + Tolerance >= Elapsed && InterruptElapsed <= Elapsed + Tolerance,
+               "CPU %lu: interrupt clock advanced %I64u for %I64u elapsed (100ns)\n",
+               Cpu, InterruptElapsed, Elapsed);
+            ok(TickElapsed + Tolerance >= Elapsed && TickElapsed <= Elapsed + Tolerance,
+               "CPU %lu: tick clock advanced %I64u for %I64u elapsed (100ns)\n",
+               Cpu, TickElapsed, Elapsed);
+            ok(RuntimeElapsed + Tolerance >= Elapsed && RuntimeElapsed <= Elapsed + Tolerance,
+               "CPU %lu: runtime advanced %I64u for %I64u elapsed (100ns)\n",
+               Cpu, RuntimeElapsed, Elapsed);
+            ok(SystemElapsed + Tolerance >= Elapsed && SystemElapsed <= Elapsed + Tolerance,
+               "CPU %lu: system clock advanced %I64u for %I64u elapsed (100ns)\n",
+               Cpu, SystemElapsed, Elapsed);
+            ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
+            ok_eq_ulong(KeGetCurrentProcessorNumber(), Cpu);
+            ok_eq_long(TimerCalls, (LONG)TimerCount);
+            ok_eq_long(TimerContext.Errors, 0);
+        }
+    }
+    KeRevertToUserAffinityThreadEx(PreviousAffinity);
+}
+
 #endif /* _M_ARM64 */
 
 START_TEST(KeArm64Irql)
@@ -263,7 +373,9 @@ START_TEST(KeArm64Irql)
 #else
     PKMT_KE_GET_EFFECTIVE_IRQL GetEffectiveIrql;
     UNICODE_STRING Name;
+    KAFFINITY PreviousAffinity;
 
+    PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << KeGetCurrentProcessorNumber());
     dump_trace("[arm64][KeArm64Irql] enter\n");
     Arm64IrqlCheck();
     RtlInitUnicodeString(&Name, L"KeGetEffectiveIrql");
@@ -271,8 +383,11 @@ START_TEST(KeArm64Irql)
     if (GetEffectiveIrql == NULL)
     {
         skip(FALSE, "KeGetEffectiveIrql is not exported\n");
+        KeRevertToUserAffinityThreadEx(PreviousAffinity);
         return;
     }
     Arm64EffectiveIrqlCheck(GetEffectiveIrql);
+    KeRevertToUserAffinityThreadEx(PreviousAffinity);
+    Arm64ClockCatchupCheck();
 #endif
 }

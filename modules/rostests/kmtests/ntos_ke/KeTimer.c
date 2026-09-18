@@ -171,7 +171,7 @@ START_TEST(KeTimer)
     {
         /* DRIVER_IRQL_NOT_LESS_OR_EQUAL (TODO: on MP only?) */
         if (Irqls[i] > DISPATCH_LEVEL && KmtIsCheckedBuild)
-            return;
+            continue;
         KeRaiseIrql(Irqls[i], &Irql);
         TestTimerFunctional(&Timer, NotificationTimer, Irqls[i]);
         TestTimerFunctional(&Timer, SynchronizationTimer, Irqls[i]);

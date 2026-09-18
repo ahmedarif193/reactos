@@ -119,6 +119,9 @@ typedef struct DECLSPEC_CACHEALIGN _KI_ARM64_TIMER_STATE
     ULONG Increment;
     ULONG TickOffset;
     ULONGLONG PeriodTicks;
+    ULONGLONG LastCounter;
+    ULONGLONG CounterRemainder;
+    ULONG ElapsedIncrement;
 } KI_ARM64_TIMER_STATE, *PKI_ARM64_TIMER_STATE;
 
 static KI_ARM64_TIMER_STATE KiArm64TimerState[MAXIMUM_PROCESSORS];
@@ -405,9 +408,10 @@ static __inline VOID KiArm64AcknowledgeTimer(ULONGLONG Counter, ULONGLONG Period
 {
     ULONGLONG Deadline = KiArm64ReadTimerCompare();
 
-    /* Preserve cadence unless the deadline is more than ten periods late. */
-    if (Deadline + (Period * 10) < Counter) Deadline = Counter;
-    KiArm64WriteTimerCompare(Deadline + Period);
+    /* Rearm once beyond the current counter, without replaying missed IRQs. */
+    if (Deadline <= Counter)
+        Deadline += ((Counter - Deadline) / Period + 1) * Period;
+    KiArm64WriteTimerCompare(Deadline);
 }
 
 static
@@ -416,6 +420,7 @@ KiArm64AcknowledgeClockInterrupt(
     _In_ ULONG Cpu)
 {
     ULONG Increment;
+    ULONGLONG Counter, Elapsed, Scaled;
     PKI_ARM64_TIMER_STATE TimerState;
 
     Increment = KiArm64CurrentTimerIncrement();
@@ -431,7 +436,15 @@ KiArm64AcknowledgeClockInterrupt(
         TimerState->PeriodTicks = KiArm64ComputeTimerPeriodTicks(Increment);
     }
 
-    KiArm64AcknowledgeTimer(KiArm64ReadCounter(), TimerState->PeriodTicks);
+    Counter = KiArm64ReadCounter();
+    Elapsed = Counter - TimerState->LastCounter;
+    /* Bound the conversion; any remaining time is charged on following IRQs. */
+    Elapsed = min(Elapsed, (ULONGLONG)MAXLONG * KiArm64TimerFrequency / 10000000);
+    Scaled = Elapsed * 10000000 + TimerState->CounterRemainder;
+    TimerState->ElapsedIncrement = (ULONG)(Scaled / KiArm64TimerFrequency);
+    TimerState->CounterRemainder = Scaled % KiArm64TimerFrequency;
+    TimerState->LastCounter += Elapsed;
+    KiArm64AcknowledgeTimer(Counter, TimerState->PeriodTicks);
 }
 
 static __inline VOID KiArm64WriteCntvCtl(ULONG v)
@@ -474,6 +487,7 @@ KiArm64TimerIsr(
 {
     ULONG Increment;
     ULONG RuntimeIncrement;
+    ULONG RuntimeTicks;
     PKTRAP_FRAME TrapFrame;
     PKI_ARM64_TIMER_STATE TimerState;
     ULONG Cpu;
@@ -535,16 +549,21 @@ KiArm64TimerIsr(
      */
     if (Cpu == 0)
     {
-        KeUpdateSystemTime(TrapFrame, Increment, TrapFrame->SavedIrql);
+        KeUpdateSystemTime(TrapFrame, TimerState->ElapsedIncrement, TrapFrame->SavedIrql);
     }
     else
     {
         RuntimeIncrement = KeMaximumIncrement ? KeMaximumIncrement : Increment;
-        TimerState->TickOffset += Increment;
+        TimerState->TickOffset += TimerState->ElapsedIncrement;
         if (TimerState->TickOffset >= RuntimeIncrement)
         {
-            TimerState->TickOffset -= RuntimeIncrement;
-            KeUpdateRunTime(TrapFrame, TrapFrame->SavedIrql);
+            RuntimeTicks = TimerState->TickOffset / RuntimeIncrement;
+            TimerState->TickOffset %= RuntimeIncrement;
+            KiUpdateRunTime(TrapFrame, TrapFrame->SavedIrql, RuntimeTicks);
+        }
+        else
+        {
+            KeGetCurrentPrcb()->InterruptCount++;
         }
     }
 
@@ -624,6 +643,9 @@ KiArm64StartLocalTimer(VOID)
     TimerState->PeriodTicks = KiArm64ComputeTimerPeriodTicks(Increment);
     KiArm64TimerPeriodTicks = TimerState->PeriodTicks;
     Counter = KiArm64ReadCounter();
+    TimerState->LastCounter = Counter;
+    TimerState->CounterRemainder = 0;
+    TimerState->ElapsedIncrement = 0;
     KiArm64WriteTimerCompare(Counter + TimerState->PeriodTicks);
     __asm__ __volatile__("isb" ::: "memory");
 

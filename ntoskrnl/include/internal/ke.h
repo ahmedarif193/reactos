@@ -539,6 +539,14 @@ KeUpdateRunTime(
 
 VOID
 NTAPI
+KiUpdateRunTime(
+    PKTRAP_FRAME TrapFrame,
+    KIRQL Irql,
+    ULONG Ticks
+);
+
+VOID
+NTAPI
 KiExpireTimers(
     PKDPC Dpc,
     PVOID DeferredContext,
