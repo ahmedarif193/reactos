@@ -1329,6 +1329,13 @@ v3d_update_shadow_texture(struct pipe_context *pctx,
             ))
                 return;
 
+#ifdef __REACTOS__
+        /* Untracked shared textures may have new writes in the CPU cache. */
+        if (!orig->bo->private && !orig->external_updates_tracked &&
+            v3d_d3dkmt_bo_mark_external_dirty(v3d->screen->fd, orig->bo->handle) != 0)
+                mesa_loge("Failed to synchronize external V3D texture writes");
+#endif
+
         perf_debug("Updating %dx%d@%d shadow for linear texture\n",
                    orig->base.width0, orig->base.height0,
                    pview->u.tex.first_level);
@@ -1506,7 +1513,11 @@ v3d_resource_context_init(struct pipe_context *pctx)
         pctx->texture_unmap = u_transfer_helper_transfer_unmap;
         pctx->buffer_subdata = u_default_buffer_subdata;
         pctx->texture_subdata = v3d_texture_subdata;
+#ifdef __REACTOS__
+        pctx->resource_copy_region = v3d_resource_copy_region;
+#else
         pctx->resource_copy_region = util_resource_copy_region;
+#endif
         pctx->blit = v3d_blit;
         pctx->generate_mipmap = v3d_generate_mipmap;
         pctx->flush_resource = v3d_flush_resource;

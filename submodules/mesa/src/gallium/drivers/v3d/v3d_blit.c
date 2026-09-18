@@ -30,6 +30,9 @@
 #include "v3d_context.h"
 #include "broadcom/common/v3d_tiling.h"
 #include "broadcom/common/v3d_tfu.h"
+#ifdef __REACTOS__
+#include "v3d/d3dkmt/v3d_d3dkmt_public.h"
+#endif
 
 #define V3D_VERSION 42
 #include "v3dx_format_table.h"
@@ -1213,6 +1216,54 @@ v3d_sand30_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
         info->mask &= ~PIPE_MASK_RGBA;
         return;
 }
+
+#ifdef __REACTOS__
+void
+v3d_resource_copy_region(struct pipe_context *pctx,
+                         struct pipe_resource *dst, unsigned dst_level,
+                         unsigned dst_x, unsigned dst_y, unsigned dst_z,
+                         struct pipe_resource *src, unsigned src_level,
+                         const struct pipe_box *src_box)
+{
+        struct v3d_context *v3d = v3d_context(pctx);
+        enum pipe_format format = util_format_linear(src->format);
+
+        if (!v3d_resource(src)->tiled && !v3d_resource(src)->bo->private &&
+            v3d_d3dkmt_bo_mark_external_dirty(v3d->screen->fd,
+                                             v3d_resource(src)->bo->handle) != 0)
+                mesa_loge("Failed to synchronize external V3D copy source");
+
+        /* Copy supported color textures without mapping GPU-written pixels. */
+        if (src != dst &&
+            src->target == PIPE_TEXTURE_2D && dst->target == PIPE_TEXTURE_2D &&
+            src->nr_samples <= 1 && dst->nr_samples <= 1 &&
+            src->format == dst->format && src_box->depth == 1 &&
+            (format == PIPE_FORMAT_B8G8R8A8_UNORM ||
+             format == PIPE_FORMAT_R8G8B8A8_UNORM)) {
+                struct pipe_blit_info info = {0};
+                info.src.resource = src;
+                info.src.level = src_level;
+                info.src.format = format;
+                info.src.box = *src_box;
+                info.dst.resource = dst;
+                info.dst.level = dst_level;
+                info.dst.format = format;
+                info.dst.box = *src_box;
+                info.dst.box.x = dst_x;
+                info.dst.box.y = dst_y;
+                info.dst.box.z = dst_z;
+                info.mask = PIPE_MASK_RGBA;
+                info.filter = PIPE_TEX_FILTER_NEAREST;
+                if (util_blitter_is_blit_supported(v3d->blitter, &info)) {
+                        v3d_blit(pctx, &info);
+                        return;
+                }
+        }
+
+        util_resource_copy_region(pctx, dst, dst_level, dst_x, dst_y, dst_z,
+                                   src, src_level, src_box);
+}
+#endif
 
 /* Optimal hardware path for blitting pixels.
  * Scaling, format conversion, up- and downsampling (resolve) are allowed.
