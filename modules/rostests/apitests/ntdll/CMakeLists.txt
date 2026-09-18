@@ -58,6 +58,7 @@ list(APPEND SOURCE
     LdrEnumResources.c
     LdrFindResource_U.c
     LdrLoadDll.c
+    LdrQueryProcessModuleInformation.c
     load_notifications.c
     locale.c
     memmove.c
