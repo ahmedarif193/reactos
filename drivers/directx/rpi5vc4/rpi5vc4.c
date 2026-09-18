@@ -31,29 +31,37 @@
 static const GUID g_RxgkShadowPresentInterfaceGuid =
     RXGK_SHADOW_PRESENT_INTERFACE_GUID_INIT;
 
-static BOOLEAN
-Rpi5Vc4DxgkOwnsCoreInterrupt(
-    _In_ PDXGK_INTERFACE DxgkInterface)
+static VOID
+Rpi5Vc4GetInterruptResources(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
+    PDXGK_INTERFACE DxgkInterface = &DeviceExtension->DxgkInterface;
     DXGK_DEVICE_INFO DeviceInfo;
     PCM_RESOURCE_LIST Resources;
     ULONG ListIndex;
+    BOOLEAN FirstInterrupt = TRUE;
 
+    RtlZeroMemory(&DeviceExtension->V3dCoreInterruptResource,
+                  sizeof(DeviceExtension->V3dCoreInterruptResource));
+    RtlZeroMemory(&DeviceExtension->V3dHubInterruptResource,
+                  sizeof(DeviceExtension->V3dHubInterruptResource));
+    DeviceExtension->V3dCoreInterruptOwnedByDxgk = FALSE;
+    DeviceExtension->V3dHubInterruptOwnedByDxgk = FALSE;
     if (DxgkInterface->DxgkCbGetDeviceInformation == NULL)
-        return FALSE;
+        return;
 
     RtlZeroMemory(&DeviceInfo, sizeof(DeviceInfo));
     if (!NT_SUCCESS(DxgkInterface->DxgkCbGetDeviceInformation(
                         DxgkInterface->DeviceHandle, &DeviceInfo)))
     {
-        return FALSE;
+        return;
     }
 
     Resources = DeviceInfo.TranslatedResourceList;
     if (Resources == NULL)
-        return FALSE;
+        return;
 
-    /* Dxgkrnl connects the first translated interrupt descriptor. */
+    /* Dxgkrnl owns the first interrupt; retain the routing for the other line. */
     for (ListIndex = 0; ListIndex < Resources->Count; ++ListIndex)
     {
         PCM_PARTIAL_RESOURCE_LIST Partial =
@@ -69,11 +77,22 @@ Rpi5Vc4DxgkOwnsCoreInterrupt(
 
             if (Descriptor->Type != CmResourceTypeInterrupt)
                 continue;
-            return Descriptor->u.Interrupt.Vector == RPI5_V3D_CORE_INTID;
+            if (!(Descriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+            {
+                if (Descriptor->u.Interrupt.Vector == RPI5_V3D_CORE_INTID)
+                {
+                    DeviceExtension->V3dCoreInterruptResource = *Descriptor;
+                    DeviceExtension->V3dCoreInterruptOwnedByDxgk = FirstInterrupt;
+                }
+                else if (Descriptor->u.Interrupt.Vector == RPI5_V3D_HUB_INTID)
+                {
+                    DeviceExtension->V3dHubInterruptResource = *Descriptor;
+                    DeviceExtension->V3dHubInterruptOwnedByDxgk = FirstInterrupt;
+                }
+            }
+            FirstInterrupt = FALSE;
         }
     }
-
-    return FALSE;
 }
 
 BOOLEAN
@@ -576,8 +595,7 @@ Rpi5Vc4DdiStartDevice(
     RtlCopyMemory(&DeviceExtension->DxgkInterface,
                   DxgkInterface,
                   min(DxgkInterface->Size, sizeof(DXGK_INTERFACE)));
-    DeviceExtension->V3dCoreInterruptOwnedByDxgk =
-        Rpi5Vc4DxgkOwnsCoreInterrupt(DxgkInterface);
+    Rpi5Vc4GetInterruptResources(DeviceExtension);
     Rpi5Vc4DiscoverDisplayOutput(DeviceExtension);
 
     /*

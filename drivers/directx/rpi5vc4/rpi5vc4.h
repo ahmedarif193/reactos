@@ -483,7 +483,10 @@ struct _RPI5VC4_DEVICE_EXTENSION
      * connects the separate hub line.  The poll timer remains a backstop. */
     PKINTERRUPT V3dInterrupt;
     PKINTERRUPT V3dInterrupt2;
+    CM_PARTIAL_RESOURCE_DESCRIPTOR V3dCoreInterruptResource;
+    CM_PARTIAL_RESOURCE_DESCRIPTOR V3dHubInterruptResource;
     BOOLEAN V3dCoreInterruptOwnedByDxgk;
+    BOOLEAN V3dHubInterruptOwnedByDxgk;
     BOOLEAN V3dCoreIrqConnected;
     BOOLEAN V3dHubIrqConnected;
     BOOLEAN V3dIrqConnected;
