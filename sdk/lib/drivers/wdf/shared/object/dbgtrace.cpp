@@ -105,9 +105,8 @@ Return Value:
 #endif
             return;
         }
-        if (DebugPrintLevel <= TRACE_LEVEL_ERROR ||
-            (DebugPrintLevel <= DebugLevel &&
-             ((DebugPrintFlag & DebugFlag) == DebugPrintFlag))) {
+        if (DebugPrintLevel <= DebugLevel &&
+            ((DebugPrintFlag & DebugFlag) == DebugPrintFlag)) {
 #if FX_CORE_MODE==FX_CORE_KERNEL_MODE
             DbgPrint("WDFTrace: %s\n", debugMessageBuffer);
 #else
