@@ -1173,6 +1173,7 @@ struct _DXGKRNL_ADAPTER
     KSPIN_LOCK                  SubmitDmaLock;
     LIST_ENTRY                  SubmitDmaListHead;
     LIST_ENTRY                  SubmitDmaRetireListHead;
+    LIST_ENTRY                  DmaBufferDestroyListHead;
     KSPIN_LOCK                  DmaBufferCacheLock;
     LIST_ENTRY                  DmaBufferCacheListHead;
     ULONG                       DmaBufferCacheCount;
