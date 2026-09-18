@@ -726,7 +726,8 @@ WddmBridgeIsExpectedControlStatus(
      * useful type/size diagnostic itself.  Do not print the same refusal a
      * second time at the transport layer. */
     if (IoControlCode == IOCTL_D3DKMT_QUERYADAPTERINFO &&
-        Status == STATUS_INVALID_PARAMETER)
+        (Status == STATUS_INVALID_PARAMETER ||
+         Status == STATUS_OBJECT_NAME_NOT_FOUND))
         return TRUE;
     if (IoControlCode == IOCTL_D3DKMT_PUBLIC_OPERATION && (Status == STATUS_INVALID_HANDLE || Status == STATUS_INVALID_PARAMETER || Status == STATUS_GRAPHICS_VAIL_STATE_CHANGED))
         return TRUE;
