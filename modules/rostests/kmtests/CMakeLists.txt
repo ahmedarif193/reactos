@@ -317,6 +317,9 @@ if(ARCH STREQUAL "arm64")
         kmArm64/KeArm64AffinityEx.c
         kmArm64/KeArm64Dispatcher.c
         kmArm64/KeArm64DpcIpi.c
+        kmArm64/KeArm64DpcImportance.c
+        kmArm64/KeArm64DpcFlush.c
+        kmArm64/KeArm64GenericDpc.c
         kmArm64/KeArm64PmrMigration.c
         kmArm64/KeArm64Frames.c
         kmArm64/KeArm64Intrinsics.c

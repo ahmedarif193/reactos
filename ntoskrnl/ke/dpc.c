@@ -973,12 +973,9 @@ KeInsertQueueDpc(IN PKDPC Dpc,
                 /* Check if this is the same CPU */
                 if (Prcb != CurrentPrcb)
                 {
-                    /*
-                     * Check if the DPC is of high importance or above the
-                     * maximum depth. If it is, then make sure that the CPU
-                     * isn't idle, or that it's sleeping.
-                     */
+                    /* Medium-high importance requests dispatch without moving to the queue head. */
                     if (((Dpc->Importance == HighImportance) ||
+                        (Dpc->Importance == MediumHighImportance) ||
                         (DpcData->DpcQueueDepth >=
                          Prcb->MaximumDpcQueueDepth)) &&
                         (!(AFFINITY_MASK(Cpu) & KiIdleSummary) ||
@@ -1148,46 +1145,66 @@ KeRemoveQueueDpcEx(
 /*
  * @implemented
  */
+static VOID NTAPI
+KiFlushDpcQueueRoutine(
+    IN PKDPC Dpc,
+    IN PVOID DeferredContext,
+    IN PVOID SystemArgument1,
+    IN PVOID SystemArgument2)
+{
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    KeSetEvent(DeferredContext, IO_NO_INCREMENT, FALSE);
+}
+
+/*
+ * @implemented
+ */
 _IRQL_requires_max_(APC_LEVEL)
 VOID
 NTAPI
 KeFlushQueuedDpcs(VOID)
 {
-    ULONG ProcessorIndex;
+    ULONG ProcessorIndex, DpcType;
     PKPRCB TargetPrcb;
+    KDPC Dpc;
+    KEVENT Event;
+    KIRQL OldIrql;
 
     PAGED_CODE();
-    ASSERT(KeGetCurrentThread()->SystemAffinityActive == FALSE);
+    KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
 
-    /* Loop all processors */
     for (ProcessorIndex = 0; ProcessorIndex < KeNumberProcessors; ProcessorIndex++)
     {
-        /* Get the target processor's PRCB */
         TargetPrcb = KiProcessorBlock[ProcessorIndex];
-
-        /* Check if there are DPCs on either queues */
-        if ((TargetPrcb->DpcData[DPC_NORMAL].DpcQueueDepth > 0) ||
-            (TargetPrcb->DpcData[DPC_THREADED].DpcQueueDepth > 0))
+        for (DpcType = DPC_NORMAL; DpcType <= DPC_THREADED; DpcType++)
         {
-            /* Check if this is the current processor */
-            if (TargetPrcb == KeGetCurrentPrcb())
-            {
-                /* Request a DPC interrupt */
-                HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
-            }
-            else
-            {
-                /* Attach to the target processor. This will cause a DPC
-                   interrupt on the target processor and flush all DPCs. */
-                KeSetSystemAffinityThread(TargetPrcb->SetMember);
-            }
-        }
-    }
+            if (DpcType == DPC_THREADED && !TargetPrcb->ThreadDpcEnable)
+                continue;
 
-    /* Revert back to user affinity */
-    if (KeGetCurrentThread()->SystemAffinityActive)
-    {
-        KeRevertToUserAffinityThread();
+            /* A tail marker covers both queued and already executing callbacks. */
+            if (DpcType == DPC_THREADED)
+                KeInitializeThreadedDpc(&Dpc, KiFlushDpcQueueRoutine, &Event);
+            else
+                KeInitializeDpc(&Dpc, KiFlushDpcQueueRoutine, &Event);
+            KeSetTargetProcessorDpc(&Dpc, (CCHAR)ProcessorIndex);
+            KeInsertQueueDpc(&Dpc, NULL, NULL);
+
+            if (DpcType == DPC_NORMAL)
+            {
+                /* A remote medium-importance insertion may defer its interrupt. */
+                OldIrql = KeRaiseIrqlToDpcLevel();
+                if (TargetPrcb == KeGetCurrentPrcb())
+                    HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
+                else
+                    KiIpiSend(TargetPrcb->SetMember, IPI_DPC);
+                KeLowerIrql(OldIrql);
+            }
+
+            KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        }
     }
 }
 
@@ -1255,23 +1272,15 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
     KIRQL OldIrql;
     KI_GENERIC_DPC_BARRIER Sync;
     PKPRCB CurrentPrcb;
-    PLONG Flags;
+    LONG Flags[MAXIMUM_PROCESSORS];
     CCHAR Number;
     ULONG Count, Index;
     ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
 
     Count = KeNumberProcessors;
-
-    Flags = ExAllocatePoolWithTag(NonPagedPool, Count * sizeof(LONG), 'cpDK');
-    if (Flags == NULL)
-    {
-        Count = 1;
-    }
-    else
-    {
-        for (Index = 0; Index < Count; Index++)
-            Flags[Index] = 0;
-    }
+    ASSERT(Count <= RTL_NUMBER_OF(Flags));
+    for (Index = 0; Index < Count; Index++)
+        Flags[Index] = 0;
 
     Barrier = Count;
     Sync.Reverse.Barrier = Count;
@@ -1284,19 +1293,16 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
     CurrentPrcb = KeGetCurrentPrcb();
 
-    if (Flags != NULL)
+    for (Number = 0; Number < (CCHAR)Count; Number++)
     {
-        for (Number = 0; Number < (CCHAR)Count; Number++)
-        {
-            PKPRCB Prcb = KiProcessorBlock[(UCHAR)Number];
+        PKPRCB Prcb = KiProcessorBlock[(UCHAR)Number];
 
-            if (Prcb == CurrentPrcb) continue;
+        if (Prcb == CurrentPrcb) continue;
 
-            KeInitializeDpc(&Prcb->CallDpc, Routine, Context);
-            KeSetTargetProcessorDpc(&Prcb->CallDpc, Number);
-            KeSetImportanceDpc(&Prcb->CallDpc, HighImportance);
-            KeInsertQueueDpc(&Prcb->CallDpc, (PVOID)&Barrier, (PVOID)&Sync);
-        }
+        KeInitializeDpc(&Prcb->CallDpc, Routine, Context);
+        KeSetTargetProcessorDpc(&Prcb->CallDpc, Number);
+        KeSetImportanceDpc(&Prcb->CallDpc, HighImportance);
+        KeInsertQueueDpc(&Prcb->CallDpc, (PVOID)&Barrier, (PVOID)&Sync);
     }
 
     Routine(&CurrentPrcb->CallDpc, Context, (PVOID)&Barrier, (PVOID)&Sync);
@@ -1307,9 +1313,6 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
     KeLowerIrql(OldIrql);
 
     ExReleaseFastMutex(&KiGenericCallDpcMutex);
-
-    if (Flags != NULL)
-        ExFreePoolWithTag(Flags, 'cpDK');
 }
 
 /*

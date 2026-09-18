@@ -180,6 +180,9 @@ KMT_TESTFUNC Test_KeArm64;
 KMT_TESTFUNC Test_KeArm64AffinityEx;
 KMT_TESTFUNC Test_KeArm64Dispatcher;
 KMT_TESTFUNC Test_KeArm64DpcIpi;
+KMT_TESTFUNC Test_KeArm64DpcFlush;
+KMT_TESTFUNC Test_KeArm64GenericDpc;
+KMT_TESTFUNC Test_KeArm64DpcImportance;
 KMT_TESTFUNC Test_KeArm64PmrMigration;
 KMT_TESTFUNC Test_KeArm64Frames;
 KMT_TESTFUNC Test_KeArm64Intrinsics;
@@ -459,6 +462,9 @@ const KMT_TEST TestList[] =
     { "KeArm64AffinityEx",                  Test_KeArm64AffinityEx },
     { "KeArm64Dispatcher",                  Test_KeArm64Dispatcher },
     { "KeArm64DpcIpi",                      Test_KeArm64DpcIpi },
+    { "KeArm64DpcFlush",                    Test_KeArm64DpcFlush },
+    { "KeArm64GenericDpc",                  Test_KeArm64GenericDpc },
+    { "KeArm64DpcImportance",               Test_KeArm64DpcImportance },
     { "KeArm64PmrMigration",                Test_KeArm64PmrMigration },
     { "KeArm64Frames",                      Test_KeArm64Frames },
     { "KeArm64Intrinsics",                  Test_KeArm64Intrinsics },
