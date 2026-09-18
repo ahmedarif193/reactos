@@ -117,21 +117,21 @@ Rpi5Vc4BlitRectRotate90ToFirmware(
     LONG Top = max(Rect->top, 0);
     LONG Right = min(Rect->right, (LONG)DeviceExtension->ScreenWidth);
     LONG Bottom = min(Rect->bottom, (LONG)DeviceExtension->ScreenHeight);
-    ULONG Tile[16][16];
-    ULONG Row[16];
+    ULONG Tile[32][32];
+    ULONG Row[32];
     LONG TileX;
     LONG TileY;
 
     if (Left >= Right || Top >= Bottom)
         return;
 
-    for (TileX = Left; TileX < Right; TileX += 16)
+    for (TileX = Left; TileX < Right; TileX += 32)
     {
-        LONG TileRight = min(TileX + 16, Right);
+        LONG TileRight = min(TileX + 32, Right);
 
-        for (TileY = Top; TileY < Bottom; TileY += 16)
+        for (TileY = Top; TileY < Bottom; TileY += 32)
         {
-            LONG TileBottom = min(TileY + 16, Bottom);
+            LONG TileBottom = min(TileY + 32, Bottom);
             LONG X;
             LONG Y;
 
