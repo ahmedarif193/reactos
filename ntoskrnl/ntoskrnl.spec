@@ -3042,7 +3042,7 @@
 @ stdcall -arch=i386,x86_64,arm64 RtlGetAcesBufferSize(ptr ptr)
 @ stdcall -arch=i386,x86_64,arm64 RtlGetActiveConsoleId()
 @ stub -arch=arm64 RtlGetAppContainerNamedObjectPath
-@ stub -arch=arm64 RtlGetAppContainerParent
+@ stdcall -arch=arm64 RtlGetAppContainerParent(ptr ptr)
 @ stdcall -arch=i386,x86_64,arm64 RtlGetAppContainerSidType(ptr ptr)
 @ stdcall -arch=i386,x86_64,arm64 RtlGetConsoleSessionForegroundProcessId()
 @ stdcall -arch=i386,x86_64,arm64 RtlGetCurrentServiceSessionId()
