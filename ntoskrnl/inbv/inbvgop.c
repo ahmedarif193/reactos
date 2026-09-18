@@ -848,14 +848,19 @@ InbvGopHandleBootBitmap(
     _In_ BOOLEAN TextMode)
 {
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
+    VID_DISPLAY_INFO DisplayInfo;
     ULONG Width, Height;
     BOOLEAN WordmarkDrawn;
 
     if (!InbvGopQueryInfo(&FbInfo))
         return FALSE;
 
-    Width = FbInfo.HorizontalResolution;
-    Height = FbInfo.VerticalResolution;
+    /* BootVid uses logical dimensions after rotation and DPI scaling. */
+    InbvQueryDisplayInfo(&DisplayInfo);
+    Width = DisplayInfo.Width;
+    Height = DisplayInfo.Height;
+    if ((Width == 0) || (Height == 0))
+        return FALSE;
 
     if (TextMode)
     {
@@ -871,13 +876,11 @@ InbvGopHandleBootBitmap(
     if (!WordmarkDrawn)
     {
         static const CHAR LoadingMsg[] = "ReactOS";
-        VID_DISPLAY_INFO DisplayInfo;
         ULONG CharW;
         ULONG msgPx;
         ULONG x;
         ULONG y;
 
-        InbvQueryDisplayInfo(&DisplayInfo);
         CharW = DisplayInfo.CharacterWidth ? DisplayInfo.CharacterWidth : 8;
         msgPx = (ULONG)(sizeof(LoadingMsg) - 1) * CharW;
         x = (DisplayInfo.Width > msgPx) ? ((DisplayInfo.Width - msgPx) / 2) : 0;
