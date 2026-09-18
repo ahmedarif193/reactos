@@ -204,6 +204,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_mm/MmSecureKM.c
     ntos_mm/MmSection.c
     ntos_mm/MmWddm.c
+    ntos_mm/MmPhysicalAddressRace.c
     ntos_mm/ZwAllocateVirtualMemory.c
     ntos_zw/ZwDuplicateKM.c
     ntos_zw/ZwFileKM.c

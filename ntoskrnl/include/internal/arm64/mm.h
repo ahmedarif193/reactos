@@ -664,7 +664,10 @@ MiArm64ProbeForAccess(
     _In_ BOOLEAN Write)
 {
     ULONG64 Par;
+    BOOLEAN WereEnabled;
 
+    /* PAR_EL1 must not be overwritten by an interrupt's translation. */
+    WereEnabled = KeDisableInterrupts();
     if (Write)
     {
         __asm__ __volatile__("at s1e1w, %0" :: "r"(Address));
@@ -675,6 +678,7 @@ MiArm64ProbeForAccess(
     }
     __asm__ __volatile__("isb" ::: "memory");
     __asm__ __volatile__("mrs %0, par_el1" : "=r"(Par));
+    KeRestoreInterrupts(WereEnabled);
 
     return ((Par & 1ULL) == 0);
 }
@@ -691,9 +695,12 @@ MiArm64TranslateToPhysical(
 {
     ULONG_PTR Va = (ULONG_PTR)Address;
     ULONG64 Par;
+    BOOLEAN WereEnabled;
 
     PhysicalAddress->QuadPart = 0;
 
+    /* Keep the AT result in PAR_EL1 on this CPU until it has been read. */
+    WereEnabled = KeDisableInterrupts();
     if (MiIsUserAddress(Address))
     {
         __asm__ __volatile__(
@@ -714,6 +721,7 @@ MiArm64TranslateToPhysical(
             : "r"(Va)
             : "memory");
     }
+    KeRestoreInterrupts(WereEnabled);
 
     if (Par & 1ULL)
         return FALSE;

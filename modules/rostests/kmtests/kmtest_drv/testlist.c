@@ -233,6 +233,7 @@ KMT_TESTFUNC Test_MmAllocateContiguousNode;
 KMT_TESTFUNC Test_MmMdl;
 KMT_TESTFUNC Test_MmSection;
 KMT_TESTFUNC Test_MmWddmRanges;
+KMT_TESTFUNC Test_MmPhysicalAddressRace;
 KMT_TESTFUNC Test_MmWddmRotate;
 KMT_TESTFUNC Test_MmWddmRotateValid;
 KMT_TESTFUNC Test_MmReservedMapping;
@@ -501,6 +502,7 @@ const KMT_TEST TestList[] =
     { "MmSecureKM",                         Test_MmSecureKM },
     { "MmSection",                          Test_MmSection },
     { "MmWddmRanges",                       Test_MmWddmRanges },
+    { "MmPhysicalAddressRace",              Test_MmPhysicalAddressRace },
     { "MmWddmRotate",                       Test_MmWddmRotate },
     { "MmWddmRotateValid",                  Test_MmWddmRotateValid },
     { "MmMapReserve",                       Test_MmMapReserve },
