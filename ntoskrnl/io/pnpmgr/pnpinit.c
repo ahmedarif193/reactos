@@ -293,6 +293,12 @@ IopInitializePlugPlayServices(VOID)
     UNICODE_STRING PnpManagerDriverName = RTL_CONSTANT_STRING(DRIVER_ROOT_NAME L"PnpManager");
     PDEVICE_OBJECT Pdo;
 
+    /* Initialize locks before publishing the root or starting workers. */
+    Status = ExInitializeResourceLite(&IopDeviceTreeResource);
+    if (!NT_SUCCESS(Status)) return Status;
+    for (ULONG i = 0; i < IOP_SERVICE_ENUM_LOCK_COUNT; ++i)
+        KeInitializeMutex(&IopServiceEnumLocks[i], 0);
+
     /* Initialize locks and such */
     KeInitializeSpinLock(&IopDeviceTreeLock);
     KeInitializeSpinLock(&IopDeviceActionLock);

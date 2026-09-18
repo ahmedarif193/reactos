@@ -1242,7 +1242,9 @@ DevInstallInternal(
                 SearchResult = SearchDriverResult(DevInstData, NULL, CachedInfFile);
                 if (SearchResult == DriverSearchFound)
                 {
+                    DWORD CachedStarted = GetTickCount();
                     retval = CachedNullDriver ? InstallNullDriver(DevInstData) : InstallCurrentDriver(DevInstData);
+                    FIXME("PHASE cinst tid=%lu ms=%lu %ls\n", GetCurrentThreadId(), GetTickCount() - CachedStarted, InstanceId);
                     TRACE("Cached driver install returned %d\n", retval);
                     goto cleanup;
                 }
@@ -1273,7 +1275,11 @@ DevInstallInternal(
         SetLastError(LastError);
         goto cleanup;
     }
-    SearchResult = ScanFoldersForDriverResult(DevInstData);
+    {
+        DWORD ScanStarted = GetTickCount();
+        SearchResult = ScanFoldersForDriverResult(DevInstData);
+        FIXME("PHASE scan tid=%lu ms=%lu %ls\n", GetCurrentThreadId(), GetTickCount() - ScanStarted, InstanceId);
+    }
 handle_search_result:
     if (SearchResult == DriverSearchFound)
     {
@@ -1281,7 +1287,11 @@ handle_search_result:
             NewDevDriverCacheRememberFound(DriverCacheEntry, InstalledInfFile, IsCurrentDriverNullInstall(DevInstData));
 
         /* Driver found; install it. */
-        retval = InstallCurrentDriver(DevInstData);
+        {
+            DWORD InstStarted = GetTickCount();
+            retval = InstallCurrentDriver(DevInstData);
+            FIXME("PHASE inst tid=%lu ms=%lu %ls\n", GetCurrentThreadId(), GetTickCount() - InstStarted, InstanceId);
+        }
         TRACE("InstallCurrentDriver() returned %d\n", retval);
 
         if (retval && Show != SW_HIDE)
@@ -1646,21 +1656,156 @@ cleanup:
 }
 
 
+#define NEWDEV_INSTALL_PARALLEL_MAX 8
+
+static BOOL NewDevEnableParallelInstall = FALSE;
+
+typedef struct _NEWDEV_BATCH_INSTALL
+{
+    PWSTR *Devices;
+    DWORD DeviceCount;
+    volatile LONG NextIndex;
+    volatile LONG CacheBatchActive;
+} NEWDEV_BATCH_INSTALL, *PNEWDEV_BATCH_INSTALL;
+
+static VOID
+InstallBatchDevice(
+    IN PNEWDEV_BATCH_INSTALL Batch,
+    IN PWSTR DeviceInstance)
+{
+    if (DevInstallW(NULL, NULL, DeviceInstance, SW_HIDE) ||
+        _wcsnicmp(DeviceInstance, L"SW\\", 3) != 0)
+    {
+        return;
+    }
+
+    TRACE("DevInstallW failed for %ls (error %lu); retrying without the batch cache\n",
+          DeviceInstance,
+          GetLastError());
+
+    /* A failed discovery may have published a negative cache entry
+     * and CONFIGFLAG_FAILEDINSTALL. Drop the batch cache before the
+     * retry so a transient miss cannot become the final device
+     * state for the rest of this boot. */
+    if (InterlockedCompareExchange(&Batch->CacheBatchActive, 0, 1) == 1)
+        NewDevDriverCacheEndBatch();
+
+    if (!DevInstallInternal(NULL,
+                            NULL,
+                            DeviceInstance,
+                            SW_HIDE,
+                            TRUE))
+    {
+        TRACE("Uncached DevInstallW retry failed for %ls (error %lu)\n",
+              DeviceInstance,
+              GetLastError());
+    }
+}
+
+static VOID
+DrainBatchInstallQueue(
+    IN PNEWDEV_BATCH_INSTALL Batch)
+{
+    for (;;)
+    {
+        LONG Index = InterlockedIncrement(&Batch->NextIndex) - 1;
+
+        if (Index < 0 || Index >= (LONG)Batch->DeviceCount)
+            return;
+
+        {
+            DWORD Started = GetTickCount();
+
+            InstallBatchDevice(Batch, Batch->Devices[Index]);
+            FIXME("BATCHPROF tid=%lu idx=%ld ms=%lu %ls\n",
+                  GetCurrentThreadId(),
+                  Index,
+                  GetTickCount() - Started,
+                  Batch->Devices[Index]);
+        }
+    }
+}
+
+static DWORD WINAPI
+BatchInstallThread(
+    IN LPVOID Parameter)
+{
+    DrainBatchInstallQueue((PNEWDEV_BATCH_INSTALL)Parameter);
+    return 0;
+}
+
+/*
+ * Install every device of the batch. With NewDevEnableParallelInstall the
+ * list is drained by a small worker pool instead of a single thread; each
+ * worker claims the next index and calls DevInstallW on it.
+ */
+static VOID
+RunBatchInstall(
+    IN PNEWDEV_BATCH_INSTALL Batch)
+{
+    HANDLE Threads[NEWDEV_INSTALL_PARALLEL_MAX - 1];
+    SYSTEM_INFO SystemInfo;
+    DWORD ThreadCount = 0;
+    DWORD Wanted;
+    DWORD i;
+
+    if (Batch->DeviceCount == 0)
+        return;
+
+    if (!NewDevEnableParallelInstall || Batch->DeviceCount < 2)
+    {
+        DrainBatchInstallQueue(Batch);
+        return;
+    }
+
+    GetSystemInfo(&SystemInfo);
+    Wanted = SystemInfo.dwNumberOfProcessors;
+    if (Wanted > NEWDEV_INSTALL_PARALLEL_MAX)
+        Wanted = NEWDEV_INSTALL_PARALLEL_MAX;
+    if (Wanted > Batch->DeviceCount)
+        Wanted = Batch->DeviceCount;
+
+    for (i = 0; Wanted >= 2 && i < Wanted - 1; i++)
+    {
+        Threads[ThreadCount] = CreateThread(NULL, 0, BatchInstallThread, Batch, 0, NULL);
+        if (Threads[ThreadCount] == NULL)
+            break;
+
+        ThreadCount++;
+    }
+
+    FIXME("ClientSideInstallW: installing %lu device(s) on %lu thread(s)\n",
+          Batch->DeviceCount,
+          ThreadCount + 1);
+
+    DrainBatchInstallQueue(Batch);
+
+    if (ThreadCount != 0)
+    {
+        WaitForMultipleObjects(ThreadCount, Threads, TRUE, INFINITE);
+
+        for (i = 0; i < ThreadCount; i++)
+            CloseHandle(Threads[i]);
+    }
+}
+
+
 /*
  * Read and install a batch carried by the private ClientSideInstallW pipe
- * extension. Keep all SetupAPI/device commits on one thread; these operations
- * are not independent and native newdev.dll exposes no parallel batch entry.
+ * extension.
  */
 static BOOL
 InstallDevicesFromBatchPipe(
     IN HANDLE hPipe)
 {
     BOOL ReturnValue = FALSE;
-    BOOL CacheBatchActive = FALSE;
+    BOOL ReadComplete = FALSE;
+    NEWDEV_BATCH_INSTALL Batch;
     DWORD DeviceCount;
     DWORD Value;
     DWORD i;
-    PWSTR DeviceInstance = NULL;
+
+    ZeroMemory(&Batch, sizeof(Batch));
 
     if (!ReadPipeData(hPipe, &DeviceCount, sizeof(DeviceCount)))
     {
@@ -1676,84 +1821,78 @@ InstallDevicesFromBatchPipe(
 
     TRACE("ClientSideInstallW: processing batch of %lu device(s)\n", DeviceCount);
     NewDevDriverCacheBeginBatch();
-    CacheBatchActive = TRUE;
+    Batch.CacheBatchActive = 1;
+
+    if (DeviceCount != 0)
+    {
+        Batch.Devices = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, DeviceCount * sizeof(PWSTR));
+        if (!Batch.Devices)
+        {
+            ERR("HeapAlloc(%lu device slots) failed\n", DeviceCount);
+            goto cleanup;
+        }
+    }
 
     for (i = 0; i < DeviceCount; i++)
     {
+        PWSTR DeviceInstance;
+
         if (!ReadPipeData(hPipe, &Value, sizeof(Value)))
         {
             ERR("ReadFile(cbDeviceInstance[%lu]) failed with error %u\n", i, GetLastError());
-            goto cleanup;
+            goto install;
         }
 
         if (Value < sizeof(WCHAR) || Value > (MAX_DEVICE_ID_LEN + 1) * sizeof(WCHAR) || (Value % sizeof(WCHAR)) != 0)
         {
             ERR("Invalid DeviceInstance[%lu] size %lu\n", i, Value);
-            goto cleanup;
+            goto install;
         }
 
         DeviceInstance = HeapAlloc(GetProcessHeap(), 0, Value);
         if (!DeviceInstance)
         {
             ERR("HeapAlloc(DeviceInstance[%lu]) failed\n", i);
-            goto cleanup;
+            goto install;
         }
 
         if (!ReadPipeData(hPipe, DeviceInstance, Value))
         {
             ERR("ReadFile(DeviceInstance[%lu]) failed with error %u\n", i, GetLastError());
-            goto cleanup;
+            HeapFree(GetProcessHeap(), 0, DeviceInstance);
+            goto install;
         }
 
         if (DeviceInstance[Value / sizeof(WCHAR) - 1] != UNICODE_NULL)
         {
             ERR("DeviceInstance[%lu] is not terminated\n", i);
-            goto cleanup;
+            HeapFree(GetProcessHeap(), 0, DeviceInstance);
+            goto install;
         }
 
-        TRACE("ClientSideInstallW: installing [%lu/%lu] %ls\n", i + 1, DeviceCount, DeviceInstance);
-        if (!DevInstallW(NULL, NULL, DeviceInstance, SW_HIDE) &&
-            !_wcsnicmp(DeviceInstance, L"SW\\", 3))
-        {
-            TRACE("DevInstallW failed for %ls (error %lu); retrying without the batch cache\n",
-                  DeviceInstance,
-                  GetLastError());
-
-            /* A failed discovery may have published a negative cache entry
-             * and CONFIGFLAG_FAILEDINSTALL. Drop the batch cache before the
-             * retry so a transient miss cannot become the final device
-             * state for the rest of this boot. */
-            if (CacheBatchActive)
-            {
-                NewDevDriverCacheEndBatch();
-                CacheBatchActive = FALSE;
-            }
-
-            if (!DevInstallInternal(NULL,
-                                    NULL,
-                                    DeviceInstance,
-                                    SW_HIDE,
-                                    TRUE))
-            {
-                TRACE("Uncached DevInstallW retry failed for %ls (error %lu)\n",
-                      DeviceInstance,
-                      GetLastError());
-            }
-        }
-
-        HeapFree(GetProcessHeap(), 0, DeviceInstance);
-        DeviceInstance = NULL;
+        Batch.Devices[i] = DeviceInstance;
+        Batch.DeviceCount = i + 1;
     }
+
+    ReadComplete = TRUE;
+
+install:
+    RunBatchInstall(&Batch);
 
     /* Match the legacy per-device loop: completing the batch protocol is
      * independent of whether every device has a matching driver. */
-    ReturnValue = TRUE;
+    ReturnValue = ReadComplete;
 
 cleanup:
-    if (DeviceInstance)
-        HeapFree(GetProcessHeap(), 0, DeviceInstance);
+    if (Batch.Devices)
+    {
+        for (i = 0; i < Batch.DeviceCount; i++)
+            HeapFree(GetProcessHeap(), 0, Batch.Devices[i]);
 
-    if (CacheBatchActive)
+        HeapFree(GetProcessHeap(), 0, Batch.Devices);
+    }
+
+    if (Batch.CacheBatchActive)
         NewDevDriverCacheEndBatch();
 
     return ReturnValue;

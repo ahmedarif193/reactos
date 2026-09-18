@@ -188,6 +188,8 @@ WaitForInstallClientConnect(
             ErrCode = ERROR_GEN_FAILURE;
 
         CancelIo(hPipe);
+        /* Cancellation completes asynchronously; keep the event and stack alive. */
+        GetOverlappedResult(hPipe, &Overlapped, &BytesTransferred, TRUE);
     }
 
 cleanup:
@@ -196,6 +198,73 @@ cleanup:
         SetLastError(ErrCode);
 
     return Connected;
+}
+
+
+/*
+ * The install pipe is created with FILE_FLAG_OVERLAPPED so the connect can be
+ * cancelled, which makes a WriteFile() with a NULL OVERLAPPED unusable: it
+ * takes kernel32's synchronous path and ends up in NtWaitForSingleObject() on
+ * an asynchronous handle, which never returns once the child is gone.
+ */
+static BOOL
+WriteToInstallPipe(
+    _In_ HANDLE hPipe,
+    _In_ HANDLE hProcess,
+    _In_reads_bytes_(Size) LPCVOID Buffer,
+    _In_ DWORD Size)
+{
+    OVERLAPPED Overlapped;
+    HANDLE WaitHandles[2];
+    DWORD BytesWritten;
+    DWORD ErrCode = ERROR_SUCCESS;
+    DWORD WaitResult;
+    BOOL Written = FALSE;
+
+    ZeroMemory(&Overlapped, sizeof(Overlapped));
+    Overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (Overlapped.hEvent == NULL)
+        return FALSE;
+
+    if (WriteFile(hPipe, Buffer, Size, &BytesWritten, &Overlapped))
+    {
+        Written = (BytesWritten == Size);
+        ErrCode = Written ? ERROR_SUCCESS : ERROR_WRITE_FAULT;
+        goto cleanup;
+    }
+
+    ErrCode = GetLastError();
+    if (ErrCode != ERROR_IO_PENDING)
+        goto cleanup;
+
+    WaitHandles[0] = Overlapped.hEvent;
+    WaitHandles[1] = hProcess;
+    WaitResult = WaitForMultipleObjects(RTL_NUMBER_OF(WaitHandles), WaitHandles, FALSE, INFINITE);
+    if (WaitResult == WAIT_OBJECT_0)
+    {
+        Written = GetOverlappedResult(hPipe, &Overlapped, &BytesWritten, FALSE);
+        ErrCode = Written ? ERROR_SUCCESS : GetLastError();
+        if (Written && BytesWritten != Size)
+        {
+            Written = FALSE;
+            ErrCode = ERROR_WRITE_FAULT;
+        }
+    }
+    else
+    {
+        ErrCode = (WaitResult == WAIT_OBJECT_0 + 1) ? ERROR_PROCESS_ABORTED :
+                  (WaitResult == WAIT_FAILED) ? GetLastError() : ERROR_GEN_FAILURE;
+        CancelIo(hPipe);
+        /* Drain even if cancellation raced with normal completion. */
+        GetOverlappedResult(hPipe, &Overlapped, &BytesWritten, TRUE);
+    }
+
+cleanup:
+    CloseHandle(Overlapped.hEvent);
+    if (!Written)
+        SetLastError(ErrCode);
+
+    return Written;
 }
 
 
@@ -272,7 +341,6 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
 {
     DEVICE_INSTALL_STATE InstallState;
     BOOL DeviceInstalled = FALSE;
-    DWORD BytesWritten;
     DWORD Value;
     DWORD ErrCode;
     HANDLE hInstallEvent;
@@ -400,16 +468,19 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
 
     /* Pass the data. The following output is partly compatible to Windows XP SP2 (researched using a modified newdev.dll to log this stuff) */
     Value = sizeof(InstallEventName);
-    WriteFile(hPipe, &Value, sizeof(Value), &BytesWritten, NULL);
-    WriteFile(hPipe, InstallEventName, Value, &BytesWritten, NULL);
+    if (!WriteToInstallPipe(hPipe, ProcessInfo.hProcess, &Value, sizeof(Value)) ||
+        !WriteToInstallPipe(hPipe, ProcessInfo.hProcess, InstallEventName, Value))
+        goto cleanup;
 
     /* I couldn't figure out what the following value means under WinXP. It's usually 0 in my tests, but was also 5 once.
        Therefore the following line is entirely ReactOS-specific. We use the value here to pass the ShowWizard variable. */
-    WriteFile(hPipe, &ShowWizard, sizeof(ShowWizard), &BytesWritten, NULL);
+    if (!WriteToInstallPipe(hPipe, ProcessInfo.hProcess, &ShowWizard, sizeof(ShowWizard)))
+        goto cleanup;
 
     Value = (wcslen(DeviceInstance) + 1) * sizeof(WCHAR);
-    WriteFile(hPipe, &Value, sizeof(Value), &BytesWritten, NULL);
-    WriteFile(hPipe, DeviceInstance, Value, &BytesWritten, NULL);
+    if (!WriteToInstallPipe(hPipe, ProcessInfo.hProcess, &Value, sizeof(Value)) ||
+        !WriteToInstallPipe(hPipe, ProcessInfo.hProcess, DeviceInstance, Value))
+        goto cleanup;
 
     /* Wait for ClientSideInstallW to report completion or exit early. */
     DeviceInstalled = WaitForInstallCompletion(hInstallEvent,
@@ -458,10 +529,9 @@ cleanup:
  * back to the per-device InstallDevice loop.
  */
 static BOOL
-InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
+InstallDevicesBatchChild(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
 {
     BOOL BatchInstalled = FALSE;
-    DWORD BytesWritten;
     DWORD Value;
     DWORD ErrCode;
     DWORD PipeBufferSize;
@@ -577,8 +647,8 @@ InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
 
     /* Prologue: event name size + event name */
     Value = sizeof(InstallEventName);
-    if (!WriteFile(hPipe, &Value, sizeof(Value), &BytesWritten, NULL) ||
-        !WriteFile(hPipe, InstallEventName, Value, &BytesWritten, NULL))
+    if (!WriteToInstallPipe(hPipe, ProcessInfo.hProcess, &Value, sizeof(Value)) ||
+        !WriteToInstallPipe(hPipe, ProcessInfo.hProcess, InstallEventName, Value))
     {
         DPRINT1("WriteFile(EventName) failed with error %u\n", GetLastError());
         goto cleanup;
@@ -587,7 +657,7 @@ InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
     /* ShowWizard — always FALSE for batch. */
     {
         BOOL ShowWizardFalse = FALSE;
-        if (!WriteFile(hPipe, &ShowWizardFalse, sizeof(ShowWizardFalse), &BytesWritten, NULL))
+        if (!WriteToInstallPipe(hPipe, ProcessInfo.hProcess, &ShowWizardFalse, sizeof(ShowWizardFalse)))
         {
             DPRINT1("WriteFile(ShowWizard) failed with error %u\n", GetLastError());
             goto cleanup;
@@ -596,13 +666,13 @@ InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
 
     /* Batch-specific payload: marker, DeviceCount, then N pairs. */
     Value = NEWDEV_INSTALL_BATCH_MARKER;
-    if (!WriteFile(hPipe, &Value, sizeof(Value), &BytesWritten, NULL))
+    if (!WriteToInstallPipe(hPipe, ProcessInfo.hProcess, &Value, sizeof(Value)))
     {
         DPRINT1("WriteFile(BatchMarker) failed with error %u\n", GetLastError());
         goto cleanup;
     }
 
-    if (!WriteFile(hPipe, &DeviceCount, sizeof(DeviceCount), &BytesWritten, NULL))
+    if (!WriteToInstallPipe(hPipe, ProcessInfo.hProcess, &DeviceCount, sizeof(DeviceCount)))
     {
         DPRINT1("WriteFile(DeviceCount) failed with error %u\n", GetLastError());
         goto cleanup;
@@ -620,8 +690,8 @@ InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
         DPRINT1("Installing: %S\n", currentDev);
 
         Value = (lstrlenW(currentDev) + 1) * sizeof(WCHAR);
-        if (!WriteFile(hPipe, &Value, sizeof(Value), &BytesWritten, NULL) ||
-            !WriteFile(hPipe, currentDev, Value, &BytesWritten, NULL))
+        if (!WriteToInstallPipe(hPipe, ProcessInfo.hProcess, &Value, sizeof(Value)) ||
+            !WriteToInstallPipe(hPipe, ProcessInfo.hProcess, currentDev, Value))
         {
             DPRINT1("WriteFile(DeviceInstance[%lu]) failed with error %u\n", i, GetLastError());
             goto cleanup;
@@ -654,6 +724,137 @@ cleanup:
     }
 
     return BatchInstalled;
+}
+
+
+#define PNP_BATCH_MAX_SHARDS 4
+#define PNP_BATCH_MIN_PER_SHARD 8
+
+typedef struct _PNP_BATCH_SHARD
+{
+    PWSTR List;
+    DWORD Count;
+    HANDLE hThread;
+    BOOL Result;
+} PNP_BATCH_SHARD;
+
+static DWORD WINAPI
+InstallDevicesShardThread(LPVOID Parameter)
+{
+    PNP_BATCH_SHARD *Shard = Parameter;
+
+    Shard->Result = InstallDevicesBatchChild(Shard->List, Shard->Count);
+    return 0;
+}
+
+/*
+ * Spread the batch over several rundll32 children. One child per device was
+ * spawn-bound, but one child for everything serialises on that process's heap
+ * and SetupAPI state, so shard it and give each shard its own process.
+ */
+static BOOL
+InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
+{
+    PNP_BATCH_SHARD Shards[PNP_BATCH_MAX_SHARDS];
+    SYSTEM_INFO SystemInfo;
+    PCWSTR currentDev;
+    SIZE_T ListBytes;
+    DWORD ShardCount;
+    DWORD i;
+    BOOL Result = TRUE;
+
+    if (DeviceCount == 0 || MultiSzDeviceList == NULL)
+        return TRUE;
+
+    GetSystemInfo(&SystemInfo);
+    ShardCount = SystemInfo.dwNumberOfProcessors;
+    if (ShardCount > PNP_BATCH_MAX_SHARDS)
+        ShardCount = PNP_BATCH_MAX_SHARDS;
+    if (ShardCount > DeviceCount / PNP_BATCH_MIN_PER_SHARD)
+        ShardCount = DeviceCount / PNP_BATCH_MIN_PER_SHARD;
+
+    if (ShardCount < 2)
+        return InstallDevicesBatchChild(MultiSzDeviceList, DeviceCount);
+
+    ListBytes = 0;
+    for (currentDev = MultiSzDeviceList;
+         currentDev[0] != UNICODE_NULL;
+         currentDev += lstrlenW(currentDev) + 1)
+    {
+        ListBytes += (lstrlenW(currentDev) + 1) * sizeof(WCHAR);
+    }
+    ListBytes += sizeof(WCHAR);
+
+    ZeroMemory(Shards, sizeof(Shards));
+    for (i = 0; i < ShardCount; i++)
+    {
+        Shards[i].List = HeapAlloc(GetProcessHeap(), 0, ListBytes);
+        if (Shards[i].List == NULL)
+        {
+            while (i-- != 0)
+                HeapFree(GetProcessHeap(), 0, Shards[i].List);
+
+            return InstallDevicesBatchChild(MultiSzDeviceList, DeviceCount);
+        }
+
+        Shards[i].List[0] = UNICODE_NULL;
+    }
+
+    {
+        PWSTR Cursor[PNP_BATCH_MAX_SHARDS];
+
+        for (i = 0; i < ShardCount; i++)
+            Cursor[i] = Shards[i].List;
+
+        i = 0;
+        for (currentDev = MultiSzDeviceList;
+             currentDev[0] != UNICODE_NULL;
+             currentDev += lstrlenW(currentDev) + 1)
+        {
+            DWORD slot = i % ShardCount;
+            SIZE_T cch = lstrlenW(currentDev) + 1;
+
+            memcpy(Cursor[slot], currentDev, cch * sizeof(WCHAR));
+            Cursor[slot] += cch;
+            Shards[slot].Count++;
+            i++;
+        }
+
+        for (i = 0; i < ShardCount; i++)
+            *Cursor[i] = UNICODE_NULL;
+    }
+
+    DPRINT1("Installing: %lu device(s) across %lu batch process(es)\n", DeviceCount, ShardCount);
+
+    for (i = 1; i < ShardCount; i++)
+    {
+        Shards[i].hThread = CreateThread(NULL, 0, InstallDevicesShardThread, &Shards[i], 0, NULL);
+        if (Shards[i].hThread == NULL)
+        {
+            Shards[i].Result = InstallDevicesBatchChild(Shards[i].List, Shards[i].Count);
+        }
+    }
+
+    Shards[0].Result = InstallDevicesBatchChild(Shards[0].List, Shards[0].Count);
+
+    for (i = 1; i < ShardCount; i++)
+    {
+        if (Shards[i].hThread == NULL)
+            continue;
+
+        WaitForSingleObject(Shards[i].hThread, INFINITE);
+        CloseHandle(Shards[i].hThread);
+    }
+
+    for (i = 0; i < ShardCount; i++)
+    {
+        if (!Shards[i].Result)
+            Result = FALSE;
+
+        HeapFree(GetProcessHeap(), 0, Shards[i].List);
+    }
+
+    return Result;
 }
 
 

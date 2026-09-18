@@ -31,7 +31,7 @@
 
 /* GLOBALS *******************************************************************/
 
-extern ERESOURCE IopDriverLoadResource;
+KMUTEX IopServiceEnumLocks[IOP_SERVICE_ENUM_LOCK_COUNT];
 extern BOOLEAN PnpSystemInit;
 extern PDEVICE_NODE IopRootDeviceNode;
 extern BOOLEAN PnPBootDriversLoaded;
@@ -762,15 +762,9 @@ PiAttachFilterDriversCallback(
         goto Cleanup;
     }
 
-    // try to open it
-    Status = ObReferenceObjectByName(&driverName,
-                                     OBJ_OPENIF | OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
-                                     NULL, /* PassedAccessState */
-                                     0, /* DesiredAccess */
-                                     IoDriverObjectType,
-                                     KernelMode,
-                                     NULL, /* ParseContext */
-                                     (PVOID*)&DriverObject);
+    /* Named objects become visible before DriverEntry returns. Join its gate
+     * before looking up an existing driver, including the no-load boot path. */
+    Status = IopReferenceDriverObject(&driverName, &DriverObject);
     RtlFreeUnicodeString(&driverName);
 
     // the driver was not probably loaded, try to load
@@ -1555,6 +1549,10 @@ PiInitializeDevNode(
         return Status;
     }
 
+    /* Lookup and publication form one transaction; no driver calls under it. */
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&IopDeviceTreeResource, TRUE);
+
     /* Verify that this is not a duplicate */
     OldDeviceObject = IopGetDeviceObjectFromDeviceInstance(&InstancePathU);
     if (OldDeviceObject != NULL)
@@ -1580,6 +1578,8 @@ PiInitializeDevNode(
     }
 
     DeviceNode->InstancePath = InstancePathU;
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
 
     DPRINT("InstancePath is %S\n", DeviceNode->InstancePath.Buffer);
 
@@ -1712,7 +1712,9 @@ IopSetServiceEnumData(
     HANDLE ServiceKey = NULL, ServiceEnumKey = NULL;
     ULONG Disposition;
     ULONG Count = 0, NextInstance = 0;
-    WCHAR ValueBuffer[6];
+    WCHAR ValueBuffer[11];
+    ULONG ServiceHash = 0, i;
+    PKMUTEX EnumLock = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
 
     // obtain the device node's ServiceName
@@ -1748,6 +1750,7 @@ IopSetServiceEnumData(
     if (ServiceKeyName.Buffer == NULL)
     {
         DPRINT1("No ServiceKeyName.Buffer!\n");
+        ExFreePool(kvInfo2);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -1770,11 +1773,18 @@ IopSetServiceEnumData(
         goto done;
     }
 
+    /* Case-insensitive stripes serialize one service without blocking unrelated
+     * services. Hash at PASSIVE_LEVEL, before acquiring the sleepable mutex. */
+    for (i = 0; i < ServiceName.Length / sizeof(WCHAR); ++i)
+        ServiceHash = ServiceHash * 65599 + RtlUpcaseUnicodeChar(ServiceName.Buffer[i]);
+    EnumLock = &IopServiceEnumLocks[ServiceHash % IOP_SERVICE_ENUM_LOCK_COUNT];
+    KeWaitForSingleObject(EnumLock, Executive, KernelMode, FALSE, NULL);
+
     RtlInitUnicodeString(&EnumKeyName, L"Enum");
     Status = IopCreateRegistryKeyEx(&ServiceEnumKey,
                                     ServiceKey,
                                     &EnumKeyName,
-                                    KEY_SET_VALUE,
+                                    KEY_QUERY_VALUE | KEY_SET_VALUE,
                                     REG_OPTION_VOLATILE,
                                     &Disposition);
     if (NT_SUCCESS(Status))
@@ -1789,7 +1799,7 @@ IopSetServiceEnumData(
                 goto done;
 
             if ((KeyValueInformation->Type == REG_DWORD) &&
-                (KeyValueInformation->DataLength))
+                (KeyValueInformation->DataLength == sizeof(ULONG)))
             {
                 /* Read it */
                 Count = *(PULONG)((ULONG_PTR)KeyValueInformation +
@@ -1807,7 +1817,7 @@ IopSetServiceEnumData(
                 goto done;
 
             if ((KeyValueInformation->Type == REG_DWORD) &&
-                (KeyValueInformation->DataLength))
+                (KeyValueInformation->DataLength == sizeof(ULONG)))
             {
                 NextInstance = *(PULONG)((ULONG_PTR)KeyValueInformation +
                                          KeyValueInformation->DataOffset);
@@ -1855,6 +1865,8 @@ IopSetServiceEnumData(
     }
 
 done:
+    if (EnumLock) KeReleaseMutex(EnumLock, FALSE);
+
     if (ServiceEnumKey != NULL)
         ZwClose(ServiceEnumKey);
 
@@ -2867,8 +2879,10 @@ PiFakeResourceRebalance(
     if (bootConfig)
     {
         PiSetDevNodeFlag(DeviceNode, DNF_HAS_BOOT_CONFIG);
+        KeWaitForSingleObject(&IopResourceAssignmentLock, Executive, KernelMode, FALSE, NULL);
         IopResDbRelease(DeviceNode);
         IopResDbReserve(DeviceNode, bootConfig, NULL);
+        KeReleaseMutex(&IopResourceAssignmentLock, FALSE);
     }
 
     PiClearDevNodeFlag(DeviceNode, DNF_RESOURCE_REQUIREMENTS_CHANGED);
@@ -3114,6 +3128,168 @@ ActionToStr(
 }
 #endif
 
+/* Actions whose devnode walks touch only that node's own subtree. */
+static
+BOOLEAN
+PipIsParallelAction(
+    _In_ DEVICE_ACTION Action)
+{
+    switch (Action)
+    {
+        case PiActionEnumDeviceTree:
+        case PiActionStartDevice:
+        case PiActionQueryState:
+        case PiActionAddBootDevices:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+/* TRUE when one node lies on the other's parent chain, i.e. their subtree walks overlap. */
+static
+BOOLEAN
+PipDevNodesOverlap(
+    _In_ PDEVICE_NODE First,
+    _In_ PDEVICE_NODE Second)
+{
+    PDEVICE_NODE node;
+
+    for (node = First; node != NULL; node = node->Parent)
+    {
+        if (node == Second)
+            return TRUE;
+    }
+
+    for (node = Second; node != NULL; node = node->Parent)
+    {
+        if (node == First)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+VOID
+NTAPI
+PipRunDeviceActionRequest(
+    _In_ PVOID Item)
+{
+    PDEVICE_ACTION_REQUEST Request = Item;
+    PDEVICE_NODE deviceNode;
+    NTSTATUS status;
+
+    ASSERT(Request->DeviceObject);
+
+    deviceNode = IopGetDeviceNode(Request->DeviceObject);
+    ASSERT(deviceNode);
+
+    status = STATUS_SUCCESS;
+
+    DPRINT("Processing PnP request %p: DeviceObject - %p, Action - %s\n",
+           Request, Request->DeviceObject, ActionToStr(Request->Action));
+
+    switch (Request->Action)
+    {
+        case PiActionAddBootDevices:
+        {
+            if (deviceNode->State == DeviceNodeInitialized &&
+                !(deviceNode->Flags & DNF_HAS_PROBLEM))
+            {
+                status = PiCallDriverAddDevice(deviceNode, PnPBootDriversInitialized);
+            }
+            break;
+        }
+        case PiActionEnumRootDevices:
+        case PiActionEnumDeviceTree:
+            PiSetDevNodeFlag(deviceNode, DNF_REENUMERATE);
+            PiDevNodeStateMachine(deviceNode);
+            break;
+
+        case PiActionResetDevice:
+            // TODO: the operation is a no-op for everything except removed nodes
+            // for removed nodes, it returns them back to DeviceNodeUninitialized
+            if (deviceNode->State == DeviceNodeRemoved)
+            {
+                deviceNode->State = DeviceNodeUninitialized;
+            }
+            status = STATUS_SUCCESS;
+            break;
+
+        case PiActionStartDevice:
+            // This action is triggered from usermode, when a driver is installed
+            // for a non-critical PDO
+            if (deviceNode->State == DeviceNodeInitialized &&
+                !(deviceNode->Flags & DNF_HAS_PROBLEM))
+            {
+                PiDevNodeStateMachine(deviceNode);
+            }
+            else
+            {
+                DPRINT1("NOTE: attempt to start an already started/uninitialized device %wZ\n",
+                        &deviceNode->InstancePath);
+                status = STATUS_UNSUCCESSFUL;
+            }
+            break;
+
+        case PiActionQueryState:
+            // This action is only valid for started devices. If the device is not yet
+            // started, the PnP manager issues IRP_MN_QUERY_PNP_DEVICE_STATE by itself.
+            if (deviceNode->State == DeviceNodeStarted)
+            {
+                // Issue a IRP_MN_QUERY_PNP_DEVICE_STATE request: it will update node's flags
+                // and then do enumeration if something has changed
+                status = PiUpdateDeviceState(deviceNode);
+                if (NT_SUCCESS(status))
+                {
+                    PiDevNodeStateMachine(deviceNode);
+                }
+            }
+            // TODO: Windows may return STATUS_DELETE_PENDING here
+            status = STATUS_SUCCESS;
+            break;
+
+        case PiActionQueryRemoveDevice:
+            /* An unstarted devnode remains registered until uninstall. */
+            if (deviceNode->State == DeviceNodeInitialized)
+                break;
+            status = PipQueryAndRemoveDevice(Request->DeviceObject, Request->RemoveData);
+            break;
+
+        case PiActionRemoveDevice:
+            status = PipQueryAndRemoveDevice(Request->DeviceObject, NULL);
+            break;
+
+        default:
+            DPRINT1("Unimplemented device action %u\n", Request->Action);
+            status = STATUS_NOT_IMPLEMENTED;
+            break;
+    }
+
+    if (Request->CompletionStatus)
+    {
+        *Request->CompletionStatus = status;
+    }
+
+    if (Request->CompletionEvent)
+    {
+        KeSetEvent(Request->CompletionEvent, IO_NO_INCREMENT, FALSE);
+    }
+
+    DPRINT("Finished processing PnP request %p\n", Request);
+    ObDereferenceObject(Request->DeviceObject);
+    ExFreePoolWithTag(Request, TAG_IO);
+}
+
+#define PI_ACTION_BATCH_MAX 8
+
+/**
+ * @brief      Drain the device action queue.
+ *
+ * A run of requests that walk disjoint subtrees is dispatched concurrently;
+ * everything else keeps the queue's original ordering.
+ */
 static
 VOID
 NTAPI
@@ -3121,118 +3297,84 @@ PipDeviceActionWorker(
     _In_opt_ PVOID Context)
 {
     PLIST_ENTRY ListEntry;
-    PDEVICE_ACTION_REQUEST Request;
+    PDEVICE_ACTION_REQUEST Batch[PI_ACTION_BATCH_MAX];
+    PDEVICE_NODE BatchNodes[PI_ACTION_BATCH_MAX];
     KIRQL OldIrql;
-    PDEVICE_NODE deviceNode;
-    NTSTATUS status;
+    LONG count, disjoint, i, j;
+
+    UNREFERENCED_PARAMETER(Context);
 
     KeAcquireSpinLock(&IopDeviceActionLock, &OldIrql);
     while (!IsListEmpty(&IopDeviceActionRequestList))
     {
         ListEntry = RemoveHeadList(&IopDeviceActionRequestList);
-        KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
-        Request = CONTAINING_RECORD(ListEntry, DEVICE_ACTION_REQUEST, RequestListEntry);
+        Batch[0] = CONTAINING_RECORD(ListEntry, DEVICE_ACTION_REQUEST, RequestListEntry);
+        count = 1;
 
-        ASSERT(Request->DeviceObject);
-
-        deviceNode = IopGetDeviceNode(Request->DeviceObject);
-        ASSERT(deviceNode);
-
-        status = STATUS_SUCCESS;
-
-        DPRINT("Processing PnP request %p: DeviceObject - %p, Action - %s\n",
-               Request, Request->DeviceObject, ActionToStr(Request->Action));
-
-        switch (Request->Action)
+        if (PnpEnableParallelEnum && PipIsParallelAction(Batch[0]->Action))
         {
-            case PiActionAddBootDevices:
+            while (count < PI_ACTION_BATCH_MAX && !IsListEmpty(&IopDeviceActionRequestList))
             {
-                if (deviceNode->State == DeviceNodeInitialized &&
-                    !(deviceNode->Flags & DNF_HAS_PROBLEM))
-                {
-                    status = PiCallDriverAddDevice(deviceNode, PnPBootDriversInitialized);
-                }
-                break;
+                PDEVICE_ACTION_REQUEST next;
+
+                next = CONTAINING_RECORD(IopDeviceActionRequestList.Flink,
+                                         DEVICE_ACTION_REQUEST,
+                                         RequestListEntry);
+                if (!PipIsParallelAction(next->Action))
+                    break;
+
+                RemoveHeadList(&IopDeviceActionRequestList);
+                Batch[count++] = next;
             }
-            case PiActionEnumRootDevices:
-            case PiActionEnumDeviceTree:
-                PiSetDevNodeFlag(deviceNode, DNF_REENUMERATE);
-                PiDevNodeStateMachine(deviceNode);
-                break;
+        }
 
-            case PiActionResetDevice:
-                // TODO: the operation is a no-op for everything except removed nodes
-                // for removed nodes, it returns them back to DeviceNodeUninitialized
-                if (deviceNode->State == DeviceNodeRemoved)
-                {
-                    deviceNode->State = DeviceNodeUninitialized;
-                }
-                status = STATUS_SUCCESS;
-                break;
+        KeReleaseSpinLock(&IopDeviceActionLock, OldIrql);
 
-            case PiActionStartDevice:
-                // This action is triggered from usermode, when a driver is installed
-                // for a non-critical PDO
-                if (deviceNode->State == DeviceNodeInitialized &&
-                    !(deviceNode->Flags & DNF_HAS_PROBLEM))
-                {
-                    PiDevNodeStateMachine(deviceNode);
-                }
-                else
-                {
-                    DPRINT1("NOTE: attempt to start an already started/uninitialized device %wZ\n",
-                            &deviceNode->InstancePath);
-                    status = STATUS_UNSUCCESSFUL;
-                }
-                break;
+        disjoint = 1;
+        if (count > 1)
+        {
+            KIRQL treeIrql;
 
-            case PiActionQueryState:
-                // This action is only valid for started devices. If the device is not yet
-                // started, the PnP manager issues IRP_MN_QUERY_PNP_DEVICE_STATE by itself.
-                if (deviceNode->State == DeviceNodeStarted)
+            KeAcquireSpinLock(&IopDeviceTreeLock, &treeIrql);
+            for (i = 0; i < count; i++)
+                BatchNodes[i] = IopGetDeviceNode(Batch[i]->DeviceObject);
+
+            while (disjoint < count && BatchNodes[disjoint] != NULL)
+            {
+                for (j = 0; j < disjoint; j++)
                 {
-                    // Issue a IRP_MN_QUERY_PNP_DEVICE_STATE request: it will update node's flags
-                    // and then do enumeration if something has changed
-                    status = PiUpdateDeviceState(deviceNode);
-                    if (NT_SUCCESS(status))
+                    if (BatchNodes[j] == NULL ||
+                        PipDevNodesOverlap(BatchNodes[j], BatchNodes[disjoint]))
                     {
-                        PiDevNodeStateMachine(deviceNode);
+                        break;
                     }
                 }
-                // TODO: Windows may return STATUS_DELETE_PENDING here
-                status = STATUS_SUCCESS;
-                break;
 
-            case PiActionQueryRemoveDevice:
-                /* An unstarted devnode remains registered until uninstall. */
-                if (deviceNode->State == DeviceNodeInitialized)
+                if (j != disjoint)
                     break;
-                status = PipQueryAndRemoveDevice(Request->DeviceObject, Request->RemoveData);
-                break;
 
-            case PiActionRemoveDevice:
-                status = PipQueryAndRemoveDevice(Request->DeviceObject, NULL);
-                break;
-
-            default:
-                DPRINT1("Unimplemented device action %u\n", Request->Action);
-                status = STATUS_NOT_IMPLEMENTED;
-                break;
+                disjoint++;
+            }
+            KeReleaseSpinLock(&IopDeviceTreeLock, treeIrql);
         }
 
-        if (Request->CompletionStatus)
         {
-            *Request->CompletionStatus = status;
+            LARGE_INTEGER t0, t1, freq;
+            t0 = KeQueryPerformanceCounter(&freq);
+            DPRINT1("ACTPROF batch=%ld disjoint=%ld\n", count, disjoint);
+            t1 = t0;
+            (VOID)t1;
         }
 
-        if (Request->CompletionEvent)
+        if (disjoint < 2 || !PiRunParallel((PVOID *)Batch, disjoint, PipRunDeviceActionRequest))
         {
-            KeSetEvent(Request->CompletionEvent, IO_NO_INCREMENT, FALSE);
+            for (i = 0; i < disjoint; i++)
+                PipRunDeviceActionRequest(Batch[i]);
         }
 
-        DPRINT("Finished processing PnP request %p\n", Request);
-        ObDereferenceObject(Request->DeviceObject);
-        ExFreePoolWithTag(Request, TAG_IO);
+        for (i = disjoint; i < count; i++)
+            PipRunDeviceActionRequest(Batch[i]);
+
         KeAcquireSpinLock(&IopDeviceActionLock, &OldIrql);
     }
     IopDeviceActionInProgress = FALSE;

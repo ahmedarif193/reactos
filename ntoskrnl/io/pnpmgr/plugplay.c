@@ -213,35 +213,40 @@ IopFindDeviceInstanceTraverse(
 PDEVICE_OBJECT
 IopGetDeviceObjectFromDeviceInstance(PUNICODE_STRING DeviceInstance)
 {
-    DEVICETREE_TRAVERSE_CONTEXT Context;
-    IOP_FIND_DEVICE_INSTANCE_TRAVERSE_CONTEXT DeviceInstanceContext;
+    PDEVICE_NODE Node;
+    PDEVICE_OBJECT DeviceObject = NULL;
 
-    if (IopRootDeviceNode == NULL)
-        return NULL;
+    PAGED_CODE();
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&IopDeviceTreeResource, TRUE);
 
-    if (DeviceInstance == NULL ||
-        DeviceInstance->Length == 0)
+    /* No pageable strings or Unicode folding under IopDeviceTreeLock. The
+     * resource also prevents unlink/free until the result is referenced. */
+    Node = IopRootDeviceNode;
+    while (Node)
     {
-        if (IopRootDeviceNode->PhysicalDeviceObject)
+        if (DeviceInstance == NULL || DeviceInstance->Length == 0 ||
+            RtlEqualUnicodeString(&Node->InstancePath, DeviceInstance, TRUE))
         {
-            ObReferenceObject(IopRootDeviceNode->PhysicalDeviceObject);
-            return IopRootDeviceNode->PhysicalDeviceObject;
+            DeviceObject = Node->PhysicalDeviceObject;
+            if (DeviceObject && !ObReferenceObjectSafe(DeviceObject))
+                DeviceObject = NULL;
+            break;
         }
-        else
-            return NULL;
+
+        if (Node->Child)
+        {
+            Node = Node->Child;
+            continue;
+        }
+        while (Node != IopRootDeviceNode && Node->Sibling == NULL)
+            Node = Node->Parent;
+        Node = (Node == IopRootDeviceNode) ? NULL : Node->Sibling;
     }
 
-    /* Traverse the device tree to find the matching device node */
-    DeviceInstanceContext.InstancePath = DeviceInstance;
-    DeviceInstanceContext.DeviceObject = NULL;
-    IopInitDeviceTreeTraverseContext(&Context,
-                                     IopRootDeviceNode,
-                                     IopFindDeviceInstanceTraverse,
-                                     &DeviceInstanceContext);
-    (void)IopTraverseDeviceTree(&Context);
-
-    /* In case of error or instance not found, this will still be NULL from above. */
-    return DeviceInstanceContext.DeviceObject;
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
+    return DeviceObject;
 }
 
 static NTSTATUS

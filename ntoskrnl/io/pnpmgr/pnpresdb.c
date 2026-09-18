@@ -33,6 +33,9 @@ typedef struct _PI_RES_BUCKET
     KSPIN_LOCK Lock;
 } PI_RES_BUCKET;
 
+/* Assignment -> bucket spin lock. Never wait for registry seeding while held. */
+KMUTEX IopResourceAssignmentLock;
+
 static PI_RES_BUCKET IopResBuckets[PiResClassMax];
 static BOOLEAN IopResDbReady = FALSE;
 static volatile LONG IopResDbSeedState = 0;
@@ -44,6 +47,7 @@ VOID
 IopResDbInitialize(VOID)
 {
     ULONG i;
+    KeInitializeMutex(&IopResourceAssignmentLock, 0);
     for (i = 0; i < PiResClassMax; i++)
     {
         InitializeListHead(&IopResBuckets[i].List);
@@ -177,6 +181,7 @@ IopResDbReserve(_In_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST Resourc
     if (!IopResDbReady || ResourceList == NULL || ResourceList->Count == 0)
         return STATUS_SUCCESS;
 
+    KeWaitForSingleObject(&IopResourceAssignmentLock, Executive, KernelMode, FALSE, NULL);
     full = &ResourceList->List[0];
     for (i = 0; i < ResourceList->Count; i++)
     {
@@ -221,6 +226,7 @@ IopResDbReserve(_In_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST Resourc
         full = CmiGetNextResourceDescriptor(full);
     }
 
+    KeReleaseMutex(&IopResourceAssignmentLock, FALSE);
     return STATUS_SUCCESS;
 }
 

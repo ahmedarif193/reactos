@@ -1997,14 +1997,18 @@ IopAssignDeviceResources(
    NTSTATUS Status;
    ULONG ListSize;
 
-   /* Drop this node's boot or prior assignment claim while it is being
-    * replaced. Other devices' boot claims remain visible to the allocator. */
-   IopResDbEnsureSeeded();
-   IopResDbRelease(DeviceNode);
-
+   /* Filtering sends an IRP: do it before entering the allocation transaction.
+    * Seeding may reserve resources itself, so wait for it outside the mutex. */
    Status = IopFilterResourceRequirements(DeviceNode);
    if (!NT_SUCCESS(Status))
-       goto ByeBye;
+       return Status;
+
+   IopResDbEnsureSeeded();
+   KeWaitForSingleObject(&IopResourceAssignmentLock, Executive, KernelMode, FALSE, NULL);
+
+   /* Serialize release, candidate selection, translation and commit against
+    * other assignments and boot-resource reservations on every processor. */
+   IopResDbRelease(DeviceNode);
 
    if (!DeviceNode->BootResources && !DeviceNode->ResourceRequirements)
    {
@@ -2014,6 +2018,7 @@ IopAssignDeviceResources(
       PiSetDevNodeState(DeviceNode, DeviceNodeResourcesAssigned);
       PiSetDevNodeFlag(DeviceNode, DNF_NO_RESOURCE_REQUIRED);
 
+      KeReleaseMutex(&IopResourceAssignmentLock, FALSE);
       return STATUS_SUCCESS;
    }
 
@@ -2097,6 +2102,7 @@ Finish:
 
    PiSetDevNodeState(DeviceNode, DeviceNodeResourcesAssigned);
 
+   KeReleaseMutex(&IopResourceAssignmentLock, FALSE);
    return STATUS_SUCCESS;
 
 ByeBye:
@@ -2113,6 +2119,7 @@ ByeBye:
    if (DeviceNode->BootResources)
        IopResDbReserve(DeviceNode, DeviceNode->BootResources, NULL);
 
+   KeReleaseMutex(&IopResourceAssignmentLock, FALSE);
    return Status;
 }
 
