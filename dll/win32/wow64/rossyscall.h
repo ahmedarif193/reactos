@@ -43,14 +43,17 @@
     ROS_SYSCALL_ENTRY( NtCompressKey ) \
     ROS_SYSCALL_ENTRY( NtCreateEventPair ) \
     ROS_SYSCALL_ENTRY( NtCreateJobSet ) \
+    ROS_SYSCALL_ENTRY( NtCreatePrivateNamespace ) \
     ROS_SYSCALL_ENTRY( NtCreateProcess ) \
     ROS_SYSCALL_ENTRY( NtCreateProfile ) \
+    ROS_SYSCALL_ENTRY( NtCreateTransactionManager ) \
     ROS_SYSCALL_ENTRY( NtCreateWaitCompletionPacket ) \
     ROS_SYSCALL_ENTRY( NtCreateWaitablePort ) \
     ROS_SYSCALL_ENTRY( NtCreateWnfStateName ) \
     ROS_SYSCALL_ENTRY( NtDeleteBootEntry ) \
     ROS_SYSCALL_ENTRY( NtDeleteDriverEntry ) \
     ROS_SYSCALL_ENTRY( NtDeleteObjectAuditAlarm ) \
+    ROS_SYSCALL_ENTRY( NtDeletePrivateNamespace ) \
     ROS_SYSCALL_ENTRY( NtDeleteWnfStateData ) \
     ROS_SYSCALL_ENTRY( NtDeleteWnfStateName ) \
     ROS_SYSCALL_ENTRY( NtEnumerateBootEntries ) \
@@ -73,6 +76,7 @@
     ROS_SYSCALL_ENTRY( NtNotifyChangeDirectoryFileEx ) \
     ROS_SYSCALL_ENTRY( NtOpenEventPair ) \
     ROS_SYSCALL_ENTRY( NtOpenObjectAuditAlarm ) \
+    ROS_SYSCALL_ENTRY( NtOpenPrivateNamespace ) \
     ROS_SYSCALL_ENTRY( NtPlugPlayControl ) \
     ROS_SYSCALL_ENTRY( NtPrivilegeObjectAuditAlarm ) \
     ROS_SYSCALL_ENTRY( NtPrivilegedServiceAuditAlarm ) \

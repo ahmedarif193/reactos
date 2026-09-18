@@ -309,13 +309,17 @@ NTSYSAPI NTSTATUS WINAPI NtCancelWaitCompletionPacket( HANDLE, BOOLEAN );
 NTSYSAPI NTSTATUS WINAPI NtCompactKeys( ULONG, HANDLE * );
 NTSYSAPI NTSTATUS WINAPI NtCompressKey( HANDLE );
 NTSYSAPI NTSTATUS WINAPI NtCreateJobSet( ULONG, JOB_SET_ARRAY64 *, ULONG );
+NTSYSAPI NTSTATUS WINAPI NtCreatePrivateNamespace( HANDLE *, ACCESS_MASK, OBJECT_ATTRIBUTES *, void * );
 NTSYSAPI NTSTATUS WINAPI NtCreateProcessEx( HANDLE *, ACCESS_MASK, OBJECT_ATTRIBUTES *, HANDLE, ULONG, HANDLE, HANDLE, HANDLE, BOOLEAN );
+NTSYSAPI NTSTATUS WINAPI NtCreateTransactionManager( HANDLE *, ACCESS_MASK, OBJECT_ATTRIBUTES *, UNICODE_STRING *, ULONG, ULONG );
 NTSYSAPI NTSTATUS WINAPI NtCreateWaitCompletionPacket( HANDLE *, ACCESS_MASK, OBJECT_ATTRIBUTES * );
 NTSYSAPI NTSTATUS WINAPI NtCreateWaitablePort( HANDLE *, OBJECT_ATTRIBUTES *, ULONG, ULONG, ULONG );
 NTSYSAPI NTSTATUS WINAPI NtCreateWnfStateName( WNF_STATE_NAME *, ULONG, ULONG, BOOLEAN, const WNF_TYPE_ID *, ULONG, SECURITY_DESCRIPTOR * );
 NTSYSAPI NTSTATUS WINAPI NtDeleteBootEntry( ULONG );
 NTSYSAPI NTSTATUS WINAPI NtDeleteDriverEntry( ULONG );
 NTSYSAPI NTSTATUS WINAPI NtDeleteObjectAuditAlarm( UNICODE_STRING *, void *, BOOLEAN );
+NTSYSAPI NTSTATUS WINAPI NtDeletePrivateNamespace( HANDLE );
+NTSYSAPI NTSTATUS WINAPI NtOpenPrivateNamespace( HANDLE *, ACCESS_MASK, OBJECT_ATTRIBUTES *, void * );
 NTSYSAPI NTSTATUS WINAPI NtDeleteWnfStateData( const WNF_STATE_NAME *, const void * );
 NTSYSAPI NTSTATUS WINAPI NtDeleteWnfStateName( const WNF_STATE_NAME * );
 NTSYSAPI NTSTATUS WINAPI NtEnumerateBootEntries( void *, ULONG * );
@@ -721,6 +725,81 @@ NTSTATUS WINAPI wow64_NtCreateJobSet( UINT *args )
         }
     }
     return NtCreateJobSet( count, array, flags );
+}
+
+
+/**********************************************************************
+ *           wow64_NtCreatePrivateNamespace
+ */
+NTSTATUS WINAPI wow64_NtCreatePrivateNamespace( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ACCESS_MASK access = get_ulong( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+    void *boundary = get_ptr( &args );
+    struct object_attr64 attr;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtCreatePrivateNamespace( &handle, access, objattr_32to64( &attr, attr32 ), boundary );
+    put_handle( handle_ptr, handle );
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtCreateTransactionManager
+ */
+NTSTATUS WINAPI wow64_NtCreateTransactionManager( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ACCESS_MASK access = get_ulong( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+    UNICODE_STRING32 *log32 = get_ptr( &args );
+    ULONG options = get_ulong( &args );
+    ULONG strength = get_ulong( &args );
+    struct object_attr64 attr;
+    UNICODE_STRING log;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtCreateTransactionManager( &handle, access, objattr_32to64( &attr, attr32 ),
+                                         unicode_str_32to64( &log, log32 ), options, strength );
+    put_handle( handle_ptr, handle );
+    return status;
+}
+
+
+/**********************************************************************
+ *           wow64_NtDeletePrivateNamespace
+ */
+NTSTATUS WINAPI wow64_NtDeletePrivateNamespace( UINT *args )
+{
+    HANDLE handle = get_handle( &args );
+
+    return NtDeletePrivateNamespace( handle );
+}
+
+
+/**********************************************************************
+ *           wow64_NtOpenPrivateNamespace
+ */
+NTSTATUS WINAPI wow64_NtOpenPrivateNamespace( UINT *args )
+{
+    ULONG *handle_ptr = get_ptr( &args );
+    ACCESS_MASK access = get_ulong( &args );
+    OBJECT_ATTRIBUTES32 *attr32 = get_ptr( &args );
+    void *boundary = get_ptr( &args );
+    struct object_attr64 attr;
+    HANDLE handle = 0;
+    NTSTATUS status;
+
+    *handle_ptr = 0;
+    status = NtOpenPrivateNamespace( &handle, access, objattr_32to64( &attr, attr32 ), boundary );
+    put_handle( handle_ptr, handle );
+    return status;
 }
 
 
