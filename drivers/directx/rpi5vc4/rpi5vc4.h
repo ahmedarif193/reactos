@@ -363,9 +363,9 @@ struct _RPI5VC4_DEVICE_EXTENSION
     ULONG HvsCursorHead;
     BOOLEAN HvsCursorFastValid;
 
-    /* HVS list and cursor state form one atomic display transaction. Pointer
-     * callbacks may run alongside GPU escapes, but serialize with presents. */
-    FAST_MUTEX HvsMutex;
+    /* Serialize HVS and cursor state; queued pointer updates run between strips. */
+    KMUTEX HvsMutex;
+    FAST_MUTEX FirmwarePresentMutex;
     FAST_MUTEX VBlankMutex;
 
     /* Private HVS display-list retirement follows the hardware frame count. */

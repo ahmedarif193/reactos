@@ -429,7 +429,8 @@ Rpi5Vc4DdiAddDevice(
 
     RtlZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
     DeviceExtension->PhysicalDeviceObject = PhysicalDeviceObject;
-    ExInitializeFastMutex(&DeviceExtension->HvsMutex);
+    KeInitializeMutex(&DeviceExtension->HvsMutex, 0);
+    ExInitializeFastMutex(&DeviceExtension->FirmwarePresentMutex);
     ExInitializeFastMutex(&DeviceExtension->VBlankMutex);
     KeInitializeSpinLock(&DeviceExtension->ShadowPresentInterfaceLock);
     KeInitializeEvent(&DeviceExtension->ShadowPresentInterfaceZeroEvent,
@@ -1186,7 +1187,8 @@ Rpi5Vc4DdiSetPowerState(
 
     if (Rpi5Vc4IsFixedFirmwareScanout(DeviceExtension))
     {
-        ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+        ExAcquireFastMutex(&DeviceExtension->FirmwarePresentMutex);
+        KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
         Rpi5Vc4PointerRestore(DeviceExtension->SoftwarePointer);
     }
 
@@ -1240,7 +1242,8 @@ Rpi5Vc4DdiSetPowerState(
             __dsb(_ARM64_BARRIER_SY);
 #endif
         }
-        ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+        KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
+        ExReleaseFastMutex(&DeviceExtension->FirmwarePresentMutex);
     }
     return STATUS_SUCCESS;
 }
@@ -1299,7 +1302,7 @@ Rpi5Vc4DdiSetPointerShape(
         return STATUS_NOT_SUPPORTED;
     }
 
-    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
 
     if (DeviceExtension->SoftwarePointer != NULL)
     {
@@ -1321,7 +1324,7 @@ Rpi5Vc4DdiSetPointerShape(
         __dsb(_ARM64_BARRIER_SY);
 #endif
         KeMemoryBarrier();
-        ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+        KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
         return STATUS_SUCCESS;
     }
 
@@ -1358,7 +1361,7 @@ Rpi5Vc4DdiSetPointerShape(
     if (DeviceExtension->CursorVisible)
         Rpi5HvsInstallScanoutLocked(DeviceExtension);
 
-    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
     return STATUS_SUCCESS;
 }
 
@@ -1380,7 +1383,7 @@ Rpi5Vc4DdiSetPointerPosition(
     if (DeviceExtension->CursorVa == NULL && DeviceExtension->SoftwarePointer == NULL)
         return STATUS_NOT_SUPPORTED;
 
-    ExAcquireFastMutex(&DeviceExtension->HvsMutex);
+    KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
     WasVisible = DeviceExtension->CursorVisible;
 
     /* DXGKARG_SETPOINTERPOSITION X/Y are the cursor image's top-left. */
@@ -1414,6 +1417,6 @@ Rpi5Vc4DdiSetPointerPosition(
         Rpi5HvsInstallScanoutLocked(DeviceExtension);
     }
 
-    ExReleaseFastMutex(&DeviceExtension->HvsMutex);
+    KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
     return STATUS_SUCCESS;
 }
