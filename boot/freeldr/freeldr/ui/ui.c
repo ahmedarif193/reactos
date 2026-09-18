@@ -45,9 +45,9 @@ BOOLEAN UiShowTime;             // Whether to draw the time
 BOOLEAN UiMenuBox;              // Whether to draw a box around the menu
 BOOLEAN UiCenterMenu;           // Whether to use a centered or left-aligned menu
 BOOLEAN UiUseSpecialEffects;    // Whether to use fade effects
+BOOLEAN UiKeepFirmwareScreen;
 
 CHAR UiTitleBoxTitleText[260] = "Boot Menu";    // Title box's title text
-CHAR UiTimeText[260] = "[Time Remaining: %d]";
 
 const PCSTR UiMonthNames[12] = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
 
@@ -144,10 +144,14 @@ BOOLEAN UiInitialize(BOOLEAN ShowUi)
         MachVideoSetDisplayMode(NULL, TRUE);
         UiDisplayMode = VideoTextMode;
         UiVtbl = (UiMinimal ? MiniTuiVtbl : TuiVtbl);
+        UiKeepFirmwareScreen = FALSE;
 #endif
     }
     else
+    {
         UiVtbl = (UiMinimal ? MiniTuiVtbl : TuiVtbl);
+        UiKeepFirmwareScreen = FALSE;
+    }
 
     /* Load the UI and initialize its default settings */
     if (!UiVtbl.Initialize())
@@ -168,7 +172,6 @@ BOOLEAN UiInitialize(BOOLEAN ShowUi)
         } Settings[] =
         {
             {"TitleText", &UiTitleBoxTitleText, sizeof(UiTitleBoxTitleText), 0},
-            {"TimeText" , &UiTimeText, sizeof(UiTimeText), 0},
 
             {"ShowTime"      , &UiShowTime         , 0, 1},
             {"MenuBox"       , &UiMenuBox          , 0, 1},
@@ -228,8 +231,21 @@ BOOLEAN UiInitialize(BOOLEAN ShowUi)
     return TRUE;
 }
 
+VOID
+UiDiscardFirmwareScreen(VOID)
+{
+    if (!UiKeepFirmwareScreen)
+        return;
+
+    UiKeepFirmwareScreen = FALSE;
+    UiProgressBar.Show = FALSE;
+    MachVideoClearScreen(ATTR(UiBackdropFgColor, UiBackdropBgColor));
+    UiFadeInBackdrop();
+}
+
 VOID UiUnInitialize(PCSTR BootText)
 {
+    UiDiscardFirmwareScreen();
     UiDrawBackdrop(UiGetScreenHeight());
     UiDrawStatusText(BootText);
     UiInfoBox(BootText);
@@ -645,6 +661,7 @@ BOOLEAN UiEditBox(PCSTR MessageText, PCHAR EditTextBuffer, ULONG Length)
 VOID
 UiResetForSOS(VOID)
 {
+    UiKeepFirmwareScreen = FALSE;
 #ifdef _M_ARM
     /* Re-initialize the UI */
     UiInitialize(TRUE);

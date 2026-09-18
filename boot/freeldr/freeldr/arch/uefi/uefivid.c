@@ -1400,7 +1400,19 @@ UefiVideoExitBootServices(VOID)
 VOID
 UefiVideoClearScreen(UCHAR Attr)
 {
-    FbConsClearScreen(Attr);
+    if (UiKeepFirmwareScreen && UefiBgrtLogo.Valid &&
+        (UefiBgrtLogo.DrawWidth != 0) && (UefiBgrtLogo.DrawHeight != 0))
+    {
+        FbConsClearScreenExcept(Attr,
+                                UefiBgrtLogo.PositionX,
+                                UefiBgrtLogo.PositionY,
+                                UefiBgrtLogo.DrawWidth,
+                                UefiBgrtLogo.DrawHeight);
+    }
+    else
+    {
+        FbConsClearScreen(Attr);
+    }
     UefiVideoFlushDirty();
 }
 

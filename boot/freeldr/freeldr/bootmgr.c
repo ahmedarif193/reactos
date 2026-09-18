@@ -25,6 +25,9 @@
     "Press F8 for troubleshooting and advanced startup options." \
     "     F2: FreeLdr SETUP"
 
+#define MAIN_BOOT_MENU_PROMPT \
+    "Press any key to enter the FreeLdr boot menu"
+
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WARNING);
 
@@ -387,6 +390,53 @@ MainBootMenuKeyPressFilter(
     }
 }
 
+static BOOLEAN
+BootMenuTimeoutPrompt(
+    _In_ LONG TimeOut,
+    _In_ OperatingSystemItem* OperatingSystemList,
+    _In_ ULONG SelectedOperatingSystem)
+{
+    ULONG LastClockSecond, CurrentClockSecond;
+    ULONG Elapsed = 0;
+    ULONG KeyPress;
+
+    UiDrawProgressBarCenter(MAIN_BOOT_MENU_PROMPT);
+
+    LastClockSecond = ArcGetTime()->Second;
+
+    for (;;)
+    {
+        if (MachConsKbHit())
+        {
+            KeyPress = MachConsGetCh();
+            if (KeyPress == KEY_EXTENDED)
+                KeyPress = MachConsGetCh();
+
+            UiDiscardFirmwareScreen();
+            MainBootMenuKeyPressFilter(KeyPress,
+                                       SelectedOperatingSystem,
+                                       OperatingSystemList);
+            return TRUE;
+        }
+
+        CurrentClockSecond = ArcGetTime()->Second;
+        if (CurrentClockSecond != LastClockSecond)
+        {
+            LastClockSecond = CurrentClockSecond;
+
+            if (++Elapsed >= (ULONG)TimeOut)
+            {
+                UiKeepFirmwareScreen = FALSE;
+                return FALSE;
+            }
+
+            UiUpdateProgressBar(Elapsed * 100 / TimeOut, NULL);
+        }
+
+        MachHwIdle();
+    }
+}
+
 VOID RunLoader(VOID)
 {
     OperatingSystemItem* OperatingSystemList;
@@ -416,6 +466,7 @@ VOID RunLoader(VOID)
     DebugInit(GetBootMgrInfo()->DebugString);
 
     /* UI main initialization. If it fails, fall back to default UI. */
+    UiKeepFirmwareScreen = (GetBootMgrInfo()->TimeOut >= 0);
     if (!UiInitialize(TRUE))
         UiMessageBoxCritical("Unable to initialize UI.");
 
@@ -448,9 +499,25 @@ VOID RunLoader(VOID)
 
     for (;;)
     {
-        /* Redraw the backdrop, but don't overwrite boot options */
-        UiDrawBackdrop(UiGetScreenHeight() - 2);
-        DisplayBootTimeOptions(&OperatingSystemList[SelectedOperatingSystem]);
+        LONG TimeOut = GetBootMgrInfo()->TimeOut;
+
+        if (TimeOut > 0)
+        {
+            if (!BootMenuTimeoutPrompt(TimeOut,
+                                       OperatingSystemList,
+                                       SelectedOperatingSystem))
+            {
+                GetBootMgrInfo()->TimeOut = 0;
+            }
+            TimeOut = GetBootMgrInfo()->TimeOut;
+        }
+
+        if (TimeOut != 0)
+        {
+            /* Redraw the backdrop, but don't overwrite boot options */
+            UiDrawBackdrop(UiGetScreenHeight() - 2);
+            DisplayBootTimeOptions(&OperatingSystemList[SelectedOperatingSystem]);
+        }
 
         /* Show the operating system list menu */
         if (!UiDisplayMenu("Please select the operating system to start:",
@@ -459,7 +526,7 @@ VOID RunLoader(VOID)
                            OperatingSystemDisplayNames,
                            OperatingSystemCount,
                            SelectedOperatingSystem,
-                           GetBootMgrInfo()->TimeOut,
+                           TimeOut,
                            &SelectedOperatingSystem,
                            FALSE,
                            MainBootMenuKeyPressFilter,
@@ -473,6 +540,7 @@ VOID RunLoader(VOID)
         LoadOperatingSystem(&OperatingSystemList[SelectedOperatingSystem]);
 
         GetBootMgrInfo()->TimeOut = -1;
+        UiKeepFirmwareScreen = FALSE;
 
         /* If we get there, the OS loader failed. As it may have
          * messed up the display, re-initialize the UI. */
@@ -483,6 +551,8 @@ VOID RunLoader(VOID)
     }
 
 Fallback:
+    UiDiscardFirmwareScreen();
+
     /* Fall back to the FreeLdr setup menu */
     FreeLdrSetupMenu(NULL);
     UiMessageBox("The system will now reboot.");

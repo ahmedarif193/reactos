@@ -43,9 +43,9 @@ extern BOOLEAN UiShowTime;              // Whether to draw the time
 extern BOOLEAN UiMenuBox;               // Whether to draw a box around the menu
 extern BOOLEAN UiCenterMenu;            // Whether to use a centered or left-aligned menu
 extern BOOLEAN UiUseSpecialEffects;     // Whether to use fade effects
+extern BOOLEAN UiKeepFirmwareScreen;
 
 extern CHAR UiTitleBoxTitleText[260];   // Title box's title text
-extern CHAR UiTimeText[260];
 
 extern const PCSTR UiMonthNames[12];
 
@@ -53,6 +53,7 @@ extern const PCSTR UiMonthNames[12];
 
 BOOLEAN    UiInitialize(BOOLEAN ShowUi);                                // Initialize User-Interface
 VOID    UiUnInitialize(PCSTR BootText);                        // Un-initialize User-Interface
+VOID    UiDiscardFirmwareScreen(VOID);
 VOID    UiDrawBackdrop(ULONG DrawHeight);                      // Fills the entire screen with a backdrop
 VOID    UiFillArea(ULONG Left, ULONG Top, ULONG Right, ULONG Bottom, CHAR FillChar, UCHAR Attr /* Color Attributes */);    // Fills the area specified with FillChar and Attr
 VOID    UiDrawShadow(ULONG Left, ULONG Top, ULONG Right, ULONG Bottom);    // Draws a shadow on the bottom and right sides of the area specified
@@ -214,7 +215,6 @@ typedef struct tagUI_MENU_INFO
 
     PCSTR*  MenuItemList;
     ULONG   MenuItemCount;
-    LONG    MenuTimeRemaining;
     ULONG   SelectedMenuItem;
     PVOID   Context;
 

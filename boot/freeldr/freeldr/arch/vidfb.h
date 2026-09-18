@@ -135,6 +135,14 @@ FbConsClearScreen(
     _In_ UCHAR Attr);
 
 VOID
+FbConsClearScreenExcept(
+    _In_ UCHAR Attr,
+    _In_ ULONG KeepX,
+    _In_ ULONG KeepY,
+    _In_ ULONG KeepWidth,
+    _In_ ULONG KeepHeight);
+
+VOID
 FbConsOutputChar(
     _In_ UCHAR Char,
     _In_ ULONG Column,
