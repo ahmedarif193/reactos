@@ -892,6 +892,13 @@ void v3d_format_get_internal_type_and_bpp(const struct v3d_device_info *devinfo,
 
 void v3d_init_query_functions(struct v3d_context *v3d);
 void v3d_blit(struct pipe_context *pctx, const struct pipe_blit_info *blit_info);
+#ifdef __REACTOS__
+void v3d_resource_copy_region(struct pipe_context *pctx,
+                              struct pipe_resource *dst, unsigned dst_level,
+                              unsigned dst_x, unsigned dst_y, unsigned dst_z,
+                              struct pipe_resource *src, unsigned src_level,
+                              const struct pipe_box *src_box);
+#endif
 void v3d_blitter_save(struct v3d_context *v3d, enum v3d_blitter_op op);
 bool v3d_generate_mipmap(struct pipe_context *pctx,
                          struct pipe_resource *prsc,

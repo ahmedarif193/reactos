@@ -1959,7 +1959,8 @@ Vc4KmtCleanSubmitResources(
             if (Record->hAllocation == Resources[Index].hAllocation)
                 break;
         }
-        if (Record == NULL || !Record->Mapped || Record->Size == 0)
+        /* A shared allocation can be CPU-written through another device. */
+        if (Record == NULL || Record->Size == 0)
             return STATUS_INVALID_HANDLE;
 
         RtlZeroMemory(&Invalidate, sizeof(Invalidate));
