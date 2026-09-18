@@ -670,6 +670,8 @@ NTSTATUS WINAPI wow64_NtQueryInformationProcess( UINT *args )
     case ProcessHandleCount:  /* ULONG */
 #ifdef __REACTOS__
     case ProcessDeviceMap:  /* PROCESS_DEVICEMAP_INFORMATION.Query */
+    case ProcessMitigationPolicy:  /* ULONG policy, ULONG flags */
+    case ProcessHandleCheckingMode:  /* ULONG */
 #endif
     case ProcessSessionInformation:  /* ULONG */
     case ProcessDebugFlags:  /* ULONG */
@@ -1009,6 +1011,10 @@ NTSTATUS WINAPI wow64_NtSetInformationProcess( UINT *args )
     case ProcessPowerThrottlingState:   /* PROCESS_POWER_THROTTLING_STATE */
     case ProcessLeapSecondInformation:   /* PROCESS_LEAP_SECOND_INFO */
     case ProcessWineGrantAdminToken:   /* NULL */
+#ifdef __REACTOS__
+    case ProcessMitigationPolicy:  /* ULONG policy, ULONG flags */
+    case ProcessHandleCheckingMode:  /* ULONG */
+#endif
         return NtSetInformationProcess( handle, class, ptr, len );
 
     case ProcessExecuteFlags:   /* ULONG */
