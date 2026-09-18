@@ -106,7 +106,16 @@ el2_common:
     /* Permit SIMD/FPU and system instructions at EL1 */
     msr cptr_el2, xzr
     msr hstr_el2, xzr
-    msr mdcr_el2, xzr
+    /* Expose implemented event counters to EL1 instead of reserving all for EL2. */
+    mov x2, xzr
+    mrs x1, id_aa64dfr0_el1
+    sbfx x1, x1, #8, #4
+    cmp x1, #1
+    b.lt .Lloader_pmu_ready
+    mrs x2, pmcr_el0
+    ubfx x2, x2, #11, #5
+.Lloader_pmu_ready:
+    msr mdcr_el2, x2
 
     /* Propagate current stack pointer to EL1 */
     mov x1, sp
