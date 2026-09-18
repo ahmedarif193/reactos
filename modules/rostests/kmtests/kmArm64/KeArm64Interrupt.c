@@ -233,6 +233,92 @@ TestFailedConnection(PKMT_DISPATCH_SECONDARY Dispatch)
     ok_eq_bool(Dispatch(Interrupt.Vector, 0, NULL), FALSE);
 }
 
+typedef struct _KMT_INTERRUPT_ISOLATION
+{
+    KMT_ISR_DISCONNECT DispatchState;
+    volatile LONG Release;
+    volatile LONG TimedOut;
+} KMT_INTERRUPT_ISOLATION;
+
+static BOOLEAN NTAPI
+UnrelatedIsr(PKINTERRUPT Interrupt, PVOID Context)
+{
+    KMT_INTERRUPT_ISOLATION *State = Context;
+    LONGLONG Start = KeQueryPerformanceCounter(NULL).QuadPart;
+
+    UNREFERENCED_PARAMETER(Interrupt);
+    InterlockedExchange(&State->DispatchState.Entered, 1);
+    while (!ReadAcquire(&State->Release))
+    {
+        if (KeQueryPerformanceCounter(NULL).QuadPart - Start >= State->DispatchState.HoldTicks)
+        {
+            InterlockedExchange(&State->TimedOut, 1);
+            break;
+        }
+        YieldProcessor();
+    }
+    return TRUE;
+}
+
+static VOID
+TestIndependentInterruptChains(PKMT_DISPATCH_SECONDARY Dispatch, ULONG Vector, KIRQL Irql)
+{
+    KMT_INTERRUPT_ISOLATION State = {0};
+    KMT_ISR_CONTEXT Record = {0};
+    KINTERRUPT Local, Shared, OtherCpu;
+    KAFFINITY PreviousAffinity;
+    LARGE_INTEGER Frequency, Delay;
+    LONGLONG Start;
+    HANDLE Thread;
+    NTSTATUS Status;
+
+    if (skip(KeNumberProcessors >= 2, "Two processors required for independent interrupt chains\n")) return;
+    PreviousAffinity = KeSetSystemAffinityThreadEx(1);
+    State.DispatchState.Dispatch = Dispatch;
+    State.DispatchState.Vector = Vector;
+    State.DispatchState.Irql = Irql;
+    KeQueryPerformanceCounter(&Frequency);
+    State.DispatchState.HoldTicks = 2 * Frequency.QuadPart;
+    KeInitializeInterrupt(&Local, RecordIsr, &Record, NULL,
+                          Vector, Irql, Irql, LevelSensitive, TRUE, 0, FALSE);
+    KeInitializeInterrupt(&Shared, RecordIsr, &Record, NULL,
+                          Vector, Irql, Irql, LevelSensitive, TRUE, 0, FALSE);
+    KeInitializeInterrupt(&OtherCpu, UnrelatedIsr, &State, NULL,
+                          Vector, Irql, Irql, LevelSensitive, FALSE, 1, FALSE);
+    ok_eq_bool(KeConnectInterrupt(&Local), TRUE);
+    ok_eq_bool(KeConnectInterrupt(&OtherCpu), TRUE);
+    if (!Local.Connected || !OtherCpu.Connected) goto Cleanup;
+
+    Status = PsCreateSystemThread(&Thread, THREAD_ALL_ACCESS, NULL, NULL, NULL,
+                                 DispatchWorker, &State.DispatchState);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) goto Cleanup;
+    Start = KeQueryPerformanceCounter(NULL).QuadPart;
+    Delay.QuadPart = -10000;
+    while (!ReadAcquire(&State.DispatchState.Entered) &&
+           KeQueryPerformanceCounter(NULL).QuadPart - Start < Frequency.QuadPart)
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    ok_eq_long(State.DispatchState.Entered, 1);
+
+    /* An ISR using CPU 1's table must not hold up edits to CPU 0's table. */
+    ok_eq_bool(KeConnectInterrupt(&Shared), TRUE);
+    ok_eq_bool(KeDisconnectInterrupt(&Shared), TRUE);
+    ok_eq_bool(KeDisconnectInterrupt(&Local), TRUE);
+    InterlockedExchange(&State.Release, 1);
+    Status = ZwWaitForSingleObject(Thread, FALSE, NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ZwClose(Thread);
+    ok_eq_bool(State.DispatchState.Dispatched, TRUE);
+    ok_eq_long(State.TimedOut, 0);
+    trace("INTERRUPT_CHAIN_ISOLATION unrelated_isr_timed_out=%ld\n", State.TimedOut);
+
+Cleanup:
+    if (Shared.Connected) KeDisconnectInterrupt(&Shared);
+    if (Local.Connected) KeDisconnectInterrupt(&Local);
+    if (OtherCpu.Connected) KeDisconnectInterrupt(&OtherCpu);
+    KeRevertToUserAffinityThreadEx(PreviousAffinity);
+}
+
 #define CONNECT_ROUNDS 2048
 
 typedef struct _CONNECT_RACE
@@ -241,6 +327,7 @@ typedef struct _CONNECT_RACE
     KMT_ISR_CONTEXT Record;
     volatile LONG Phase;
     volatile LONG Done[2];
+    KEVENT Completed[2];
     volatile LONG Stop;
     BOOLEAN Result[2];
 } CONNECT_RACE;
@@ -270,6 +357,7 @@ ConnectWorker(PVOID Parameter)
         }
         Race->Result[Writer->Index] = KeConnectInterrupt(&Race->Interrupt);
         InterlockedExchange(&Race->Done[Writer->Index], Next);
+        KeSetEvent(&Race->Completed[Writer->Index], IO_NO_INCREMENT, FALSE);
         Phase = Next;
     }
     KeRevertToUserAffinityThreadEx(PreviousAffinity);
@@ -281,9 +369,11 @@ TestConcurrentConnection(PKMT_DISPATCH_SECONDARY Dispatch, ULONG Vector, KIRQL I
     CONNECT_RACE Race = {0};
     CONNECT_WRITER Writers[2];
     PKTHREAD Threads[2] = {NULL, NULL};
+    PVOID Events[2];
     KAFFINITY PreviousAffinity;
-    LARGE_INTEGER Frequency;
-    LONGLONG Deadline;
+    LARGE_INTEGER Timeout;
+    ULONGLONG Deadline, Now;
+    NTSTATUS Status;
     ULONG Index, Round, Completed = 0, LostState = 0, ReturnErrors = 0;
     ULONG DispatchErrors = 0, DisconnectErrors = 0;
     BOOLEAN Dispatched;
@@ -294,21 +384,28 @@ TestConcurrentConnection(PKMT_DISPATCH_SECONDARY Dispatch, ULONG Vector, KIRQL I
                           Vector, Irql, Irql, LevelSensitive, FALSE, 0, FALSE);
     for (Index = 0; Index < RTL_NUMBER_OF(Threads); Index++)
     {
+        KeInitializeEvent(&Race.Completed[Index], NotificationEvent, FALSE);
+        Events[Index] = &Race.Completed[Index];
         Writers[Index].Race = &Race;
         Writers[Index].Index = Index;
         Threads[Index] = KmtStartThread(ConnectWorker, &Writers[Index]);
         if (!Threads[Index]) goto Cleanup;
     }
 
-    KeQueryPerformanceCounter(&Frequency);
-    Deadline = KeQueryPerformanceCounter(NULL).QuadPart + 30 * Frequency.QuadPart;
+    Deadline = KeQueryInterruptTime() + 30 * 10000000ULL;
     for (Round = 1; Round <= CONNECT_ROUNDS; Round++)
     {
         Race.Record.Calls = 0;
+        for (Index = 0; Index < RTL_NUMBER_OF(Events); Index++)
+            KeClearEvent(&Race.Completed[Index]);
         InterlockedExchange(&Race.Phase, (LONG)Round);
-        while ((Race.Done[0] != (LONG)Round || Race.Done[1] != (LONG)Round) &&
-               KeQueryPerformanceCounter(NULL).QuadPart < Deadline)
-            YieldProcessor();
+        /* The writers may migrate here to update this CPU's interrupt table. */
+        Now = KeQueryInterruptTime();
+        if (Now >= Deadline) break;
+        Timeout.QuadPart = -(LONGLONG)(Deadline - Now);
+        Status = KeWaitForMultipleObjects(RTL_NUMBER_OF(Events), Events, WaitAll,
+                                          Executive, KernelMode, FALSE, &Timeout, NULL);
+        if (Status != STATUS_SUCCESS) break;
         if (Race.Done[0] != (LONG)Round || Race.Done[1] != (LONG)Round) break;
         KeMemoryBarrier();
         if (!Race.Result[0] || !Race.Result[1]) ReturnErrors++;
@@ -460,6 +557,7 @@ START_TEST(KeArm64Interrupt)
     for (Index = 0; Index < 4; Index++)
         TestDisconnect(Dispatch, Vector, Irql, Index);
     TestFailedConnection(Dispatch);
+    TestIndependentInterruptChains(Dispatch, Vector, Irql);
     TestConcurrentConnection(Dispatch, Vector, Irql);
     TestIoAffinity(Dispatch, Vector, Irql, 1, FALSE);
     TestIoAffinity(Dispatch, Vector, Irql, KeQueryActiveProcessors(), FALSE);
