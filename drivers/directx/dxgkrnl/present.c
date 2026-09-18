@@ -405,6 +405,7 @@ DxgkPresentTryBeginStop(
     if (Adapter == NULL || InterlockedCompareExchange(&Adapter->PresentQueueStopping, 1, 0) != 0)
         return FALSE;
     KeMemoryBarrier();
+    KeSetEvent(&Adapter->PresentStopEvent, IO_NO_INCREMENT, FALSE);
     DxgkpSignalVBlankWaiters(Adapter);
     return TRUE;
 }
@@ -423,6 +424,7 @@ DxgkPresentResume(
     if (Adapter == NULL)
         return;
     InterlockedExchange(&Adapter->VBlankResetActive, 0);
+    KeClearEvent(&Adapter->PresentStopEvent);
     KeMemoryBarrier();
     InterlockedExchange(&Adapter->PresentQueueStopping, 0);
 }
@@ -1759,6 +1761,7 @@ DxgkPresentInit(
         Queues[i].VSyncWorkQueued = 0;
         Queues[i].PendingVBlanks = 0;
         KeInitializeSpinLock(&Queues[i].QueueLock);
+        KeInitializeEvent(&Queues[i].SpaceAvailableEvent, NotificationEvent, TRUE);
         KeInitializeSpinLock(&Queues[i].VBlankWaitLock);
         KeInitializeMutex(&Queues[i].MmioPresentMutex, 0);
         KeInitializeEvent(&Queues[i].MmioVSyncEvent, SynchronizationEvent, FALSE);
@@ -1903,10 +1906,20 @@ DxgkpRemoveQueuedPresent(
     _Out_ PDXGKRNL_PRESENT_ENTRY RemovedEntry)
 {
     DXGKP_PRESENT_QUEUE_MATCH_CONTEXT MatchContext;
+    KIRQL OldIrql;
+    BOOLEAN Removed;
 
     MatchContext.Device = Device;
     MatchContext.Context = Context;
-    return DxgkPresentQueueCoreRemove(&Queue->QueueLock, Queue->Entries, sizeof(Queue->Entries[0]), DXGKRNL_PRESENT_QUEUE_DEPTH, &Queue->Head, &Queue->Tail, &Queue->Count, DxgkpMatchQueuedPresent, &MatchContext, RemovedEntry);
+    Removed = DxgkPresentQueueCoreRemove(&Queue->QueueLock, Queue->Entries, sizeof(Queue->Entries[0]), DXGKRNL_PRESENT_QUEUE_DEPTH, &Queue->Head, &Queue->Tail, &Queue->Count, DxgkpMatchQueuedPresent, &MatchContext, RemovedEntry);
+    if (Removed)
+    {
+        KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
+        if (Queue->Count < DXGKRNL_PRESENT_QUEUE_DEPTH)
+            KeSetEvent(&Queue->SpaceAvailableEvent, IO_NO_INCREMENT, FALSE);
+        KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
+    }
+    return Removed;
 }
 
 static ULONG
@@ -3664,6 +3677,24 @@ DxgkpReleaseOrderedMmioFlip(
     ExFreePoolWithTag(Entry, TAG_DXGK_PRESENT);
 }
 
+static NTSTATUS
+DxgkpCheckPresentAdmission(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ PDXGKRNL_PRESENT_ENTRY Entry)
+{
+    if (PsIsThreadTerminating(PsGetCurrentThread()))
+        return STATUS_THREAD_IS_TERMINATING;
+    if (Adapter->State != DxgkAdapterStateStarted ||
+        InterlockedCompareExchange(&Adapter->PresentQueueStopping, 0, 0) != 0 ||
+        InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
+        return STATUS_DELETE_PENDING;
+    if (InterlockedCompareExchange(&Entry->Device->Destroying, 0, 0) != 0 ||
+        InterlockedCompareExchange(&Entry->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE ||
+        (Entry->Context != NULL && InterlockedCompareExchange(&Entry->Context->Destroying, 0, 0) != 0))
+        return STATUS_DEVICE_REMOVED;
+    return STATUS_SUCCESS;
+}
+
 /* ========================================================================
  * DxgkpQueuePresent
  *
@@ -3683,6 +3714,8 @@ DxgkpQueuePresent(
 {
     PDXGKRNL_PRESENT_QUEUE Queue;
     PDXGKRNL_DEVICE_WORK DeviceWork = NULL;
+    LARGE_INTEGER WaitTimeout;
+    PVOID WaitObjects[2];
     KIRQL OldIrql;
     NTSTATUS Status;
 
@@ -3791,12 +3824,23 @@ DxgkpQueuePresent(
 
     /* --- Enqueue into the circular FIFO --------------------------------- */
 
-    if (!DxgkPresentLimitCoreTryReserve(&Entry->Device->PresentLimit))
+    /* Completion wakes producers; the timeout also observes device teardown. */
+    WaitTimeout.QuadPart = -100 * 10000;
+    WaitObjects[0] = &Entry->Device->PresentLimit.AvailableEvent;
+    WaitObjects[1] = &Adapter->PresentStopEvent;
+    for (;;)
     {
-        DxgkDeviceWorkDestroy(DeviceWork);
-        DxgkpReleasePresentQueues(Adapter);
-        DxgkpReleasePresentEntry(Entry);
-        return STATUS_DEVICE_BUSY;
+        Status = DxgkpCheckPresentAdmission(Adapter, Entry);
+        if (!NT_SUCCESS(Status))
+            goto RejectPresent;
+        if (DxgkPresentLimitCoreTryReserve(&Entry->Device->PresentLimit))
+            break;
+        if (Entry->DoNotWait)
+        {
+            Status = STATUS_DEVICE_BUSY;
+            goto RejectPresent;
+        }
+        KeWaitForMultipleObjects(ARRAYSIZE(WaitObjects), WaitObjects, WaitAny, Executive, KernelMode, FALSE, &WaitTimeout, NULL);
     }
     Entry->PresentLimitReservationOwned = TRUE;
 
@@ -3857,17 +3901,22 @@ DxgkpQueuePresent(
         return Status;
     }
 
-    KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
-
-    if (Queue->Count >= DXGKRNL_PRESENT_QUEUE_DEPTH)
+    WaitObjects[0] = &Queue->SpaceAvailableEvent;
+    for (;;)
     {
+        Status = DxgkpCheckPresentAdmission(Adapter, Entry);
+        if (!NT_SUCCESS(Status))
+            goto RejectPresent;
+        KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
+        if (Queue->Count < DXGKRNL_PRESENT_QUEUE_DEPTH)
+            break;
         KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
-        DXGKRNL_WARN("DxgkpQueuePresent: queue full (VidPnSrc=%u depth=%u)\n",
-                     Entry->VidPnSourceId, DXGKRNL_PRESENT_QUEUE_DEPTH);
-        DxgkDeviceWorkDestroy(DeviceWork);
-        DxgkpReleasePresentQueues(Adapter);
-        DxgkpReleasePresentEntry(Entry);
-        return STATUS_DEVICE_BUSY;
+        if (Entry->DoNotWait)
+        {
+            Status = STATUS_DEVICE_BUSY;
+            goto RejectPresent;
+        }
+        KeWaitForMultipleObjects(ARRAYSIZE(WaitObjects), WaitObjects, WaitAny, Executive, KernelMode, FALSE, &WaitTimeout, NULL);
     }
 
     if (InterlockedCompareExchange(&Entry->Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Entry->Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE || (Entry->Context != NULL && InterlockedCompareExchange(&Entry->Context->Destroying, 0, 0) != 0))
@@ -3914,6 +3963,8 @@ DxgkpQueuePresent(
     Entry->RedirectedBltPresentAdmitted = FALSE;
     Queue->Tail = (Queue->Tail + 1) % DXGKRNL_PRESENT_QUEUE_DEPTH;
     Queue->Count++;
+    if (Queue->Count == DXGKRNL_PRESENT_QUEUE_DEPTH)
+        KeClearEvent(&Queue->SpaceAvailableEvent);
 
     KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
 
@@ -3939,6 +3990,12 @@ DxgkpQueuePresent(
 
     DxgkpReleasePresentQueues(Adapter);
     return STATUS_SUCCESS;
+
+RejectPresent:
+    DxgkDeviceWorkDestroy(DeviceWork);
+    DxgkpReleasePresentEntry(Entry);
+    DxgkpReleasePresentQueues(Adapter);
+    return Status;
 }
 
 /* ========================================================================
@@ -4025,6 +4082,7 @@ DxgkpProcessPresentQueue(
     RtlZeroMemory(&Queue->Entries[Queue->Head], sizeof(Queue->Entries[Queue->Head]));
     Queue->Head = (Queue->Head + 1) % DXGKRNL_PRESENT_QUEUE_DEPTH;
     Queue->Count--;
+    KeSetEvent(&Queue->SpaceAvailableEvent, IO_NO_INCREMENT, FALSE);
     Queue->LastPresentVBlank = Queue->VBlankCount;
 
     KeReleaseSpinLock(&Queue->QueueLock, OldIrql);

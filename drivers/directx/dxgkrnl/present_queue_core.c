@@ -11,6 +11,7 @@ VOID DxgkPresentLimitCoreInitialize(_Out_ PDXGK_PRESENT_LIMIT_CORE State, _In_ U
     ASSERT(State != NULL);
     ASSERT(DefaultLimit != 0);
     KeInitializeSpinLock(&State->Lock);
+    KeInitializeEvent(&State->AvailableEvent, NotificationEvent, TRUE);
     State->Limit = DefaultLimit;
     State->Reserved = 0;
 }
@@ -27,6 +28,10 @@ NTSTATUS DxgkPresentLimitCoreSet(_Inout_ PDXGK_PRESENT_LIMIT_CORE State, _In_ UL
         return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&State->Lock, &OldIrql);
     State->Limit = NewLimit;
+    if (State->Reserved < State->Limit)
+        KeSetEvent(&State->AvailableEvent, IO_NO_INCREMENT, FALSE);
+    else
+        KeClearEvent(&State->AvailableEvent);
     KeReleaseSpinLock(&State->Lock, OldIrql);
     return STATUS_SUCCESS;
 }
@@ -42,6 +47,8 @@ BOOLEAN DxgkPresentLimitCoreTryReserve(_Inout_ PDXGK_PRESENT_LIMIT_CORE State)
     if (State->Limit != 0 && State->Reserved < State->Limit)
     {
         State->Reserved++;
+        if (State->Reserved == State->Limit)
+            KeClearEvent(&State->AvailableEvent);
         Reserved = TRUE;
     }
     KeReleaseSpinLock(&State->Lock, OldIrql);
@@ -58,6 +65,8 @@ VOID DxgkPresentLimitCoreRelease(_Inout_ PDXGK_PRESENT_LIMIT_CORE State)
     ASSERT(State->Reserved != 0);
     if (State->Reserved != 0)
         State->Reserved--;
+    if (State->Reserved < State->Limit)
+        KeSetEvent(&State->AvailableEvent, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&State->Lock, OldIrql);
 }
 

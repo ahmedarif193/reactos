@@ -182,6 +182,7 @@ typedef struct _DXGKRNL_PRESENT_ENTRY
      * D3DDDI_FLIPINTERVAL_ONE       = present at the next VSync.
      */
     D3DDDI_FLIPINTERVAL_TYPE        FlipInterval;
+    BOOLEAN                       DoNotWait;
 
     /* Owned references to the submitting context, when the caller supplied
      * one, and its device.  The DMA tracker takes independent references. */
@@ -229,6 +230,7 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
 
     /* Spinlock protecting Head/Tail/Count and Entries. */
     KSPIN_LOCK                      QueueLock;
+    KEVENT                          SpaceAvailableEvent;
 
     /* Monotonically increasing present ID counter for this source. */
     volatile LONG64                 NextPresentId;

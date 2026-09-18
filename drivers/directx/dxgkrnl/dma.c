@@ -732,6 +732,7 @@ DxgkPresent(
     Entry.hDestination   = pPresent->hDestination;
     Entry.Color          = pPresent->Color;
     Entry.FlipInterval   = pPresent->FlipInterval;
+    Entry.DoNotWait      = pPresent->Flags.FlipDoNotWait;
 
     /*
      * Determine the VidPn source.  If RestrictVidPnSource is set, use the
@@ -1034,12 +1035,7 @@ DxgkPresent(
 
     Status = DxgkpQueuePresent(Adapter, &Entry, &PresentId);
 
-    if (Status == STATUS_DEVICE_BUSY)
-    {
-        DXGKRNL_WARN("DxgkPresent: queue full — present dropped "
-                     "(PresentId=%llu)\n", PresentId);
-    }
-    else if (!NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status) && Status != STATUS_DEVICE_BUSY)
     {
         DXGKRNL_WARN("DxgkPresent: DxgkpQueuePresent returned 0x%08lX\n",
                      Status);

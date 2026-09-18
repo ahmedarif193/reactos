@@ -17,6 +17,7 @@ typedef BOOLEAN (NTAPI *PDXGK_PRESENT_QUEUE_MATCH)(_In_ const VOID *Entry, _In_o
 typedef struct _DXGK_PRESENT_LIMIT_CORE
 {
     KSPIN_LOCK Lock;
+    KEVENT AvailableEvent;
     ULONG Limit;
     ULONG Reserved;
 } DXGK_PRESENT_LIMIT_CORE, *PDXGK_PRESENT_LIMIT_CORE;

@@ -3171,7 +3171,8 @@ static HRESULT APIENTRY NativePresent(HANDLE runtime_device, DXGIDDICB_PRESENT *
     /* Only the privately registered compositor output can be suspended by
      * source ownership. Ordinary client flip chains keep their DXGI contract. */
     context->result = swapchain->primary && status == STATUS_GRAPHICS_PRESENT_OCCLUDED
-            ? DXGI_STATUS_OCCLUDED : StatusToHresult(status);
+            ? DXGI_STATUS_OCCLUDED : status == STATUS_DEVICE_BUSY
+            ? DXGI_ERROR_WAS_STILL_DRAWING : StatusToHresult(status);
     return context->result;
 }
 
