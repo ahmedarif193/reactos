@@ -2849,6 +2849,7 @@ Rpi5Vc4DdiSubmitCommand(
     BOOLEAN Completed;
     BOOLEAN NeedPoll;
     BOOLEAN PipelineAborted;
+    BOOLEAN PresentTfuCopy;
     BOOLEAN Stopping;
     PRPI5VC4_CONTEXT Context;
     PRPI5VC4_WDDM_DEVICE KmdDevice;
@@ -2923,6 +2924,8 @@ Rpi5Vc4DdiSubmitCommand(
             return STATUS_INVALID_PARAMETER;
     }
 
+    PresentTfuCopy = HasPresent && Job.Op == RPI5VC4_DMA_OP_TFU_JOB &&
+                     (SubmitCommand->Flags.Present || SubmitCommand->Flags.RedirectedPresent);
     ExpectedNode = SubmitCommand->NodeOrdinal;
     if (HasJob)
     {
@@ -2937,7 +2940,7 @@ Rpi5Vc4DdiSubmitCommand(
             ExpectedNode = RPI5VC4_NODE_CSD;
         else
             ExpectedNode = RPI5VC4_NODE_3D;
-        if (ExpectedNode != SubmitCommand->NodeOrdinal)
+        if (ExpectedNode != SubmitCommand->NodeOrdinal && !PresentTfuCopy)
             return STATUS_INVALID_PARAMETER;
     }
 
@@ -3044,6 +3047,7 @@ Rpi5Vc4DdiSubmitCommandVirtual(
     BOOLEAN Completed;
     BOOLEAN NeedPoll;
     BOOLEAN PipelineAborted;
+    BOOLEAN PresentTfuCopy;
     ULONG ExpectedNode;
     KIRQL OldIrql;
 
@@ -3132,6 +3136,8 @@ Rpi5Vc4DdiSubmitCommandVirtual(
             return STATUS_INVALID_PARAMETER;
     }
 
+    PresentTfuCopy = HasPresent && Job.Op == RPI5VC4_DMA_OP_TFU_JOB &&
+                     (SubmitCommand->Flags.Present || SubmitCommand->Flags.RedirectedPresent);
     ExpectedNode = SubmitCommand->NodeOrdinal;
     if (HasJob)
     {
@@ -3148,7 +3154,7 @@ Rpi5Vc4DdiSubmitCommandVirtual(
             ExpectedNode = RPI5VC4_NODE_CSD;
         else
             ExpectedNode = RPI5VC4_NODE_3D;
-        if (ExpectedNode != SubmitCommand->NodeOrdinal)
+        if (ExpectedNode != SubmitCommand->NodeOrdinal && !PresentTfuCopy)
             return STATUS_INVALID_PARAMETER;
     }
 
