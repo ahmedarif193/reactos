@@ -40,7 +40,7 @@ extern "C" {
 #if defined(EVENT_TRACING)
 #include "FxObject.tmh"
 #else
-ULONG DebugLevel = TRACE_LEVEL_INFORMATION;
+ULONG DebugLevel = TRACE_LEVEL_CRITICAL;
 ULONG DebugFlag = 0xff;
 #endif
 
