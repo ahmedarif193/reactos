@@ -491,7 +491,8 @@ NtUserProcessConnect(
 
     /* Get Win32 process information */
     W32Process = PsGetProcessWin32Process(Process);
-    if (!W32Process || W32Process->pClientBase)
+    if (!W32Process ||
+        (W32Process->pClientBase && Process != PsGetCurrentProcess()))
     {
         Status = STATUS_UNSUCCESSFUL;
         goto Cleanup;
@@ -518,6 +519,7 @@ NtUserProcessConnect(
 
         ProbeForWrite(pUserConnect, sizeof(*pUserConnect), sizeof(PVOID));
 
+        /* Native and WOW64 clients can reuse the process's USER heap mapping. */
         // FIXME: Instead of assuming that the mapping of the heap desktop
         // also holds there, we **MUST** create and map instead the shared
         // section! Its client base must be stored in W32Process->pClientBase.
