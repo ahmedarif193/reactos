@@ -12,7 +12,7 @@
 #include <reactos/version.rc>
 #include <reactos/manifest_exe.rc>
 
-IDI_SETTINGS ICON "res/dwm-settings.ico"
+IDI_SETTINGS ICON "../control11/res/cat_appearance.ico"
 
 #pragma code_page(65001)
 #include "lang/en-US.rc"
