@@ -399,22 +399,28 @@ static VOID DxgkPresentQueueTestLimits(VOID)
     DxgkPresentLimitCoreInitialize(&State, 3);
     ok_eq_ulong(DxgkPresentLimitCoreGetLimit(&State), 3);
     ok_eq_ulong(DxgkPresentLimitCoreGetReserved(&State), 0);
+    ok_eq_long(KeReadStateEvent(&State.AvailableEvent), 1);
     ok_bool_false(DxgkPresentLimitCoreIsReached(&State), "empty default limit is not reached");
     ok_bool_true(DxgkPresentLimitCoreTryReserve(&State), "first reservation succeeds");
     ok_bool_true(DxgkPresentLimitCoreTryReserve(&State), "second reservation succeeds");
     ok_bool_true(DxgkPresentLimitCoreTryReserve(&State), "third reservation succeeds");
     ok_bool_true(DxgkPresentLimitCoreIsReached(&State), "third reservation reaches default limit");
     ok_bool_false(DxgkPresentLimitCoreTryReserve(&State), "fourth reservation is rejected");
+    ok_eq_long(KeReadStateEvent(&State.AvailableEvent), 0);
     ok_eq_ulong(DxgkPresentLimitCoreGetReserved(&State), 3);
     { NTSTATUS Observed = DxgkPresentLimitCoreSet(&State, 2, 3, 16); ok_eq_hex(Observed, STATUS_SUCCESS); }
     ok_eq_ulong(DxgkPresentLimitCoreGetLimit(&State), 2);
     ok_bool_true(DxgkPresentLimitCoreIsReached(&State), "lowering below current reservations remains reached");
     DxgkPresentLimitCoreRelease(&State);
     ok_bool_true(DxgkPresentLimitCoreIsReached(&State), "count equal to lowered limit remains reached");
+    ok_eq_long(KeReadStateEvent(&State.AvailableEvent), 0);
     DxgkPresentLimitCoreRelease(&State);
     ok_bool_false(DxgkPresentLimitCoreIsReached(&State), "release below limit reopens admission");
+    ok_eq_long(KeReadStateEvent(&State.AvailableEvent), 1);
     ok_bool_true(DxgkPresentLimitCoreTryReserve(&State), "admission resumes below the lowered limit");
+    ok_eq_long(KeReadStateEvent(&State.AvailableEvent), 0);
     { NTSTATUS Observed = DxgkPresentLimitCoreSet(&State, 0, 3, 16); ok_eq_hex(Observed, STATUS_SUCCESS); }
+    ok_eq_long(KeReadStateEvent(&State.AvailableEvent), 1);
     ok_eq_ulong(DxgkPresentLimitCoreGetLimit(&State), 3);
     { NTSTATUS Observed = DxgkPresentLimitCoreSet(&State, 17, 3, 16); ok_eq_hex(Observed, STATUS_INVALID_PARAMETER); }
     ok_eq_ulong(DxgkPresentLimitCoreGetLimit(&State), 3);

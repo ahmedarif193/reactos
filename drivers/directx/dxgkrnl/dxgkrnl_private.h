@@ -1219,6 +1219,7 @@ struct _DXGKRNL_ADAPTER
     volatile LONG               PresentQueueActiveCalls;
     volatile LONG64             VBlankResetGeneration;
     KEVENT                      PresentQueueCallsDrainedEvent;
+    KEVENT                      PresentStopEvent;
 
     /*
      * Video Scheduler (VidSch) context for this adapter.

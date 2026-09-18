@@ -15310,6 +15310,7 @@ DxgkpAddDeviceRegistered(
     KeInitializeEvent(&Adapter->SubmitDmaRetireDrainedEvent, NotificationEvent, TRUE);
     KeInitializeEvent(&Adapter->SubmitDmaReservationsDrainedEvent, NotificationEvent, TRUE);
     KeInitializeEvent(&Adapter->PresentQueueCallsDrainedEvent, NotificationEvent, TRUE);
+    KeInitializeEvent(&Adapter->PresentStopEvent, NotificationEvent, TRUE);
     KeInitializeEvent(&Adapter->VidMmBackingsDrainedEvent, NotificationEvent, TRUE);
     KeInitializeEvent(&Adapter->VidMmDestroyWorkersDrainedEvent, NotificationEvent, TRUE);
 
