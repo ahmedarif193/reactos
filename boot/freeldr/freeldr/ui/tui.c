@@ -240,9 +240,6 @@ BOOLEAN TuiInitialize(VOID)
     RtlStringCbCopyA(UiTitleBoxTitleText, sizeof(UiTitleBoxTitleText),
                      "Boot Menu");
 
-    RtlStringCbCopyA(UiTimeText, sizeof(UiTimeText),
-                     "[Time Remaining: %d]");
-
     return TRUE;
 }
 

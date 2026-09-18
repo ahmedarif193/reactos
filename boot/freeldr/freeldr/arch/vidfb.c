@@ -1038,6 +1038,42 @@ FbConsClearScreen(
     FbConsClearTextCache(Attr);
 }
 
+VOID
+FbConsClearScreenExcept(
+    _In_ UCHAR Attr,
+    _In_ ULONG KeepX,
+    _In_ ULONG KeepY,
+    _In_ ULONG KeepWidth,
+    _In_ ULONG KeepHeight)
+{
+    UINT32 FgColor, BgColor;
+    ULONG ScreenWidth = framebufInfo.ScreenWidth;
+    ULONG ScreenHeight = framebufInfo.ScreenHeight;
+    ULONG KeepRight, KeepBottom;
+
+    FbConsAttrToColors(Attr, &FgColor, &BgColor);
+
+    KeepX = min(KeepX, ScreenWidth);
+    KeepY = min(KeepY, ScreenHeight);
+    KeepRight = min(KeepX + KeepWidth, ScreenWidth);
+    KeepBottom = min(KeepY + KeepHeight, ScreenHeight);
+
+    if (KeepY > 0)
+        VidFbFillRect(0, 0, ScreenWidth, KeepY, BgColor);
+    if (KeepBottom < ScreenHeight)
+        VidFbFillRect(0, KeepBottom, ScreenWidth, ScreenHeight - KeepBottom, BgColor);
+    if (KeepX > 0)
+        VidFbFillRect(0, KeepY, KeepX, KeepBottom - KeepY, BgColor);
+    if (KeepRight < ScreenWidth)
+        VidFbFillRect(KeepRight, KeepY, ScreenWidth - KeepRight, KeepBottom - KeepY, BgColor);
+
+    if (!FbConsEnsureTextCache(FbConsWidth() * FbConsHeight() * VGA_CHAR_SIZE))
+        return;
+
+    FbConsCachedTextBufferValid = TRUE;
+    FbConsClearTextCache(Attr);
+}
+
 /**
  * @brief
  * Displays a character at a given position with specific foreground

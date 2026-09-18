@@ -65,9 +65,6 @@ BOOLEAN MiniTuiInitialize(VOID)
     // TODO: Have a boolean to show/hide title box?
     UiTitleBoxTitleText[0] = ANSI_NULL;
 
-    RtlStringCbCopyA(UiTimeText, sizeof(UiTimeText),
-                     "Seconds until highlighted choice will be started automatically:");
-
     return TRUE;
 }
 
