@@ -156,6 +156,8 @@ CheckImportance(ULONG Cpu, KDPC_IMPORTANCE Importance, BOOLEAN CheckOrder)
            "CPU %lu importance %u: dispatch requested = %u, queue depth = %lu, threshold = %lu\n",
            Cpu, Importance, Requested, Count, Context.MaximumDepth);
     }
+    trace("DPC_IMPORTANCE cpu=%lu importance=%u order=%u requested=%u calls=%lu threshold=%lu attempts=%lu\n",
+          Cpu, Importance, CheckOrder, Requested, Context.Calls, Context.MaximumDepth, Attempt);
 }
 
 START_TEST(KeArm64DpcImportance)

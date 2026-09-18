@@ -179,6 +179,9 @@ TestFlush(ULONG TargetCpu, ULONG BacklogCount, BOOLEAN SystemAffinity)
     ok_eq_uint(Context.ReturnIrql, PASSIVE_LEVEL);
     ok_eq_ulong(Context.ReturnCpu, Context.FlushCpu);
     ok_eq_uint(Context.ReturnSystemAffinity, SystemAffinity);
+    trace("DPC_FLUSH cpu=%lu backlog=%lu system_affinity=%u early=%ld finished=%ld drained=%ld timed_out=%ld\n",
+          TargetCpu, BacklogCount, SystemAffinity, EarlyReturn, Context.FinishedAtReturn,
+          Context.DrainedAtReturn, Context.TimedOut);
     if (Backlog) ExFreePoolWithTag(Backlog, 'tfDK');
 }
 
@@ -286,6 +289,8 @@ TestConcurrentFlush(VOID)
         ok_eq_ulong(Workers[Cpu].Errors, 0);
         ok_eq_long(Workers[Cpu].BadCpu, 0);
         ok_eq_long(Workers[Cpu].BadIrql, 0);
+        trace("DPC_FLUSH_STRESS cpu=%lu rounds=%lu errors=%lu\n",
+              Cpu, Workers[Cpu].Rounds, Workers[Cpu].Errors);
     }
 }
 

@@ -171,6 +171,9 @@ Cleanup:
         ok(Race.ActiveIterations > 0, "Target did not execute during concurrent affinity updates\n");
     if (Mode == 2)
         ok_eq_ulong(Race.WrongCpu, 0);
+    trace("AFFINITY_RACE mode=%lu rounds=%lu errors=%lu duplicate_previous=%lu first_previous=0x%Ix,0x%Ix first_final=0x%Ix active_iterations=%I64u wrong_cpu=%lu final_cpu=%lu\n",
+          Mode, Completed, Errors, DuplicatePrevious, FirstPrevious[0], FirstPrevious[1], FirstFinal,
+          Race.ActiveIterations, Race.WrongCpu, Race.FinalCpu);
 }
 
 START_TEST(KeArm64AffinityRace)
