@@ -38,6 +38,7 @@
 #define CHILD_UIPI_NOTIFY_POSTED 0x01000000
 #define CHILD_UIPI_SEND_SUCCEEDED 0x02000000
 #define CHILD_UIPI_NO_WINDOW 0x04000000
+#define CHILD_WIN32K_DLL_FAILED 0x08000000
 
 #define BROKER_NO_THREAD_TOKEN 0x0001
 #define BROKER_INITIAL_NOT_UNTRUSTED 0x0002
@@ -54,6 +55,7 @@
 #define BROKER_DESKTOP_MISMATCH 0x2000
 #define BROKER_DYNAMIC_CODE_ALLOWED 0x4000
 #define BROKER_UNLISTED_HANDLE_INHERITED 0x8000
+#define BROKER_THREAD_CREATE_FAILED 0x00010000
 
 #define WM_SBX_BROKER (WM_USER + 40)
 
@@ -111,6 +113,58 @@ IsWin32kCallBlocked(VOID)
     return Dc == NULL;
 }
 
+static BOOL
+CheckWin32kUserDlls(VOID)
+{
+    typedef DWORD (WINAPI *PGET_SYS_COLOR)(int);
+    typedef HBRUSH (WINAPI *PGET_SYS_COLOR_BRUSH)(int);
+    typedef int (WINAPI *PGET_SYSTEM_METRICS)(int);
+    HMODULE User32 = NULL, ComCtl32 = NULL;
+    PGET_SYS_COLOR GetSysColorFn;
+    PGET_SYS_COLOR_BRUSH GetSysColorBrushFn;
+    PGET_SYSTEM_METRICS GetSystemMetricsFn;
+    DWORD Error = ERROR_SUCCESS;
+
+    User32 = LoadLibraryW(L"user32.dll");
+    if (!User32)
+        return FALSE;
+
+    GetSysColorFn = (PGET_SYS_COLOR)GetProcAddress(User32, "GetSysColor");
+    GetSysColorBrushFn = (PGET_SYS_COLOR_BRUSH)GetProcAddress(User32,
+                                                              "GetSysColorBrush");
+    GetSystemMetricsFn = (PGET_SYSTEM_METRICS)GetProcAddress(User32,
+                                                              "GetSystemMetrics");
+    if (!GetSysColorFn || !GetSysColorBrushFn || !GetSystemMetricsFn)
+    {
+        Error = GetLastError();
+        goto Cleanup;
+    }
+
+    /* These cached User32 queries must not dereference absent Win32k state. */
+    GetSysColorFn(COLOR_BTNHIGHLIGHT);
+    GetSysColorBrushFn(COLOR_BTNFACE);
+    GetSystemMetricsFn(SM_CXSCREEN);
+
+    /* Chromium reaches this path through its downlevel shell API set. */
+    ComCtl32 = LoadLibraryW(L"comctl32.dll");
+    if (!ComCtl32)
+    {
+        Error = GetLastError();
+        goto Cleanup;
+    }
+
+Cleanup:
+    if (ComCtl32)
+        FreeLibrary(ComCtl32);
+    FreeLibrary(User32);
+    if (Error != ERROR_SUCCESS)
+    {
+        SetLastError(Error);
+        return FALSE;
+    }
+    return TRUE;
+}
+
 static DWORD
 RunWin32kChild(
     _In_ BOOL Runtime)
@@ -141,6 +195,10 @@ RunWin32kChild(
     if (!IsWin32kCallBlocked())
         HelperFail(&Failures, CHILD_WIN32K_CALL_SUCCEEDED,
                    "win32k call succeeded under lockdown", GetLastError());
+
+    if (!CheckWin32kUserDlls())
+        HelperFail(&Failures, CHILD_WIN32K_DLL_FAILED,
+                   "User32/common-controls lockdown load", GetLastError());
 
     if (Runtime)
     {
@@ -593,13 +651,21 @@ GetTokenIntegrityRid(
     return Rid;
 }
 
+static DWORD WINAPI
+BrokerWorkerThread(PVOID Context)
+{
+    InterlockedIncrement((volatile LONG *)Context);
+    return 0x5a;
+}
+
 static DWORD
 RunBrokerChild(int argc, char **argv)
 {
-    DWORD Failures = 0, ParentPid, Length, Rid;
+    DWORD Failures = 0, ParentPid, Length, Rid, ThreadExit = 0;
     HWND ParentWindow;
-    HANDLE InheritedEvent, UnlistedEvent, UntrustedEvent, Token = NULL, Process, Event;
+    HANDLE InheritedEvent, UnlistedEvent, UntrustedEvent, Token = NULL, Process, Event, Thread;
     BOOL InJob = FALSE;
+    volatile LONG ThreadRan = 0;
     PVOID Memory;
     HDESK Desktop;
     WCHAR DesktopName[64], Application[MAX_PATH], CommandLine[MAX_PATH * 2];
@@ -744,6 +810,27 @@ RunBrokerChild(int argc, char **argv)
     if (!IsProcessInJob(GetCurrentProcess(), NULL, &InJob) || !InJob)
         HelperFail(&Failures, BROKER_JOB_NOT_DETECTED,
                    "process not in sandbox job", GetLastError());
+
+    /* Browser sandbox targets must remain able to create their own worker
+     * threads. This also exercises the PAGE_GUARD stack setup performed by
+     * CreateThread after the restricted primary token becomes effective. */
+    Thread = CreateThread(NULL, 0, BrokerWorkerThread, (PVOID)&ThreadRan, 0, NULL);
+    if (!Thread)
+    {
+        HelperFail(&Failures, BROKER_THREAD_CREATE_FAILED,
+                   "worker thread creation failed", GetLastError());
+    }
+    else
+    {
+        if (WaitForSingleObject(Thread, 5000) != WAIT_OBJECT_0 ||
+            !GetExitCodeThread(Thread, &ThreadExit) ||
+            ThreadExit != 0x5a || ThreadRan != 1)
+        {
+            HelperFail(&Failures, BROKER_THREAD_CREATE_FAILED,
+                       "worker thread did not complete", GetLastError());
+        }
+        CloseHandle(Thread);
+    }
 
     ZeroMemory(&Startup, sizeof(Startup));
     Startup.cb = sizeof(Startup);
