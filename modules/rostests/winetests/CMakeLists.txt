@@ -238,3 +238,5 @@ add_subdirectory(xmllite)
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     add_subdirectory(uiautomationcore)
 endif()
+
+add_subdirectory(directmanipulation)

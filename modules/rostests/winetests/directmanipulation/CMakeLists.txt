@@ -1,0 +1,5 @@
+add_executable(directmanipulation_winetest manipulation.c testlist.c)
+target_link_libraries(directmanipulation_winetest uuid)
+set_module_type(directmanipulation_winetest win32cui)
+add_importlibs(directmanipulation_winetest ole32 user32 msvcrt kernel32)
+add_rostests_file(TARGET directmanipulation_winetest)
