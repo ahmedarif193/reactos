@@ -2283,6 +2283,8 @@ DxgkSyncPublishFenceBatch(
     {
         for (Index = 0; Index < ObjectCount; ++Index)
             KeSetEvent(&Objects[Index]->CpuEvent, IO_NO_INCREMENT, FALSE);
+        if (PublicCpuSignal)
+            DxgkContextOrderWakeDevice(Device);
     }
     return Status;
 }
