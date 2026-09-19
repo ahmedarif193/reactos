@@ -3,7 +3,7 @@
 #include <apitest.h>
 #include <initguid.h>
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_4.h>
 #include <dcomp.h>
 
 START_TEST(composition)
@@ -57,6 +57,45 @@ START_TEST(composition)
         ok(Hr == S_OK && Chain, "Zero-usage premultiplied composition: %#lx, %p\n", Hr, Chain);
         if (Chain)
         {
+            IDXGISwapChain3 *Chain3 = NULL;
+            Hr = Chain->QueryInterface(IID_IDXGISwapChain3, reinterpret_cast<void **>(&Chain3));
+            ok(Hr == S_OK && Chain3, "IDXGISwapChain3: %#lx\n", Hr);
+            if (Chain3)
+            {
+                IUnknown *Identity = NULL, *OriginalIdentity = NULL;
+                Chain3->QueryInterface(IID_IUnknown, reinterpret_cast<void **>(&Identity));
+                Chain->QueryInterface(IID_IUnknown, reinterpret_cast<void **>(&OriginalIdentity));
+                ok(Identity == OriginalIdentity, "Swap-chain COM identity differs\n");
+                if (Identity) Identity->Release();
+                if (OriginalIdentity) OriginalIdentity->Release();
+                UINT Support = 0;
+                Hr = Chain3->CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, &Support);
+                ok(Hr == S_OK && (Support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT),
+                   "SDR presentation support: %#lx %#x\n", Hr, Support);
+                Hr = Chain3->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+                ok(Hr == S_OK, "Set SDR color space: %#lx\n", Hr);
+                Hr = Chain3->CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, NULL);
+                ok(FAILED(Hr), "NULL color-space output: %#lx\n", Hr);
+                UINT Width = 0, Height = 0;
+                Hr = Chain3->GetSourceSize(&Width, &Height);
+                ok(Hr == S_OK && Width == Desc.Width && Height == Desc.Height,
+                   "Source size: %#lx %u x %u\n", Hr, Width, Height);
+                Hr = Chain3->SetSourceSize(Desc.Width, Desc.Height);
+                ok(Hr == S_OK, "Set full source size: %#lx\n", Hr);
+                Hr = Chain3->SetSourceSize(0, Desc.Height);
+                ok(FAILED(Hr), "Zero source width: %#lx\n", Hr);
+                DXGI_MATRIX_3X2_F Matrix = {};
+                Hr = Chain3->GetMatrixTransform(&Matrix);
+                ok(Hr == S_OK && Matrix._11 == 1 && Matrix._22 == 1 && !Matrix._12
+                   && !Matrix._21 && !Matrix._31 && !Matrix._32, "Default transform: %#lx\n", Hr);
+                Hr = Chain3->SetMatrixTransform(&Matrix);
+                ok(Hr == S_OK, "Identity transform: %#lx\n", Hr);
+                Hr = Chain3->SetMaximumFrameLatency(1);
+                ok(Hr == DXGI_ERROR_INVALID_CALL, "Latency without waitable flag: %#lx\n", Hr);
+                ok(!Chain3->GetFrameLatencyWaitableObject(), "Unexpected latency handle\n");
+                Hr = Chain3->ResizeBuffers1(0, Desc.Width, Desc.Height, DXGI_FORMAT_UNKNOWN, 0, NULL, NULL);
+                ok(Hr == DXGI_ERROR_INVALID_CALL, "D3D12-only resize on D3D11 chain: %#lx\n", Hr);
+            }
             DXGI_SWAP_CHAIN_DESC1 Actual = {};
             Hr = Chain->GetDesc1(&Actual);
             ok(Hr == S_OK && Actual.BufferUsage == 0 && Actual.AlphaMode == DXGI_ALPHA_MODE_PREMULTIPLIED,
@@ -116,6 +155,8 @@ START_TEST(composition)
                     DXGI_PRESENT_PARAMETERS Params = {1, &Damage, NULL, NULL};
                     Hr = Chain->Present1(0, 0, &Params);
                     ok(Hr == S_OK, "Frame %u full/partial Present1: %#lx\n", Frame, Hr);
+                    if (Chain3) ok(Chain3->GetCurrentBackBufferIndex() == 0,
+                                   "D3D11 must preserve current buffer index zero\n");
                     if (FAILED(Hr)) break;
                     UINT Count = 0;
                     Hr = Chain->GetLastPresentCount(&Count);
@@ -135,6 +176,7 @@ START_TEST(composition)
             if (Visual) Visual->Release();
             if (Target) Target->Release();
             if (Composition) Composition->Release();
+            if (Chain3) Chain3->Release();
             Chain->Release();
         }
     }
