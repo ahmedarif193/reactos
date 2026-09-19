@@ -2953,7 +2953,7 @@ NdisIDispatchPnp(
         return NdisIPnPRemoveDevice(DeviceObject, Irp);
 
       default:
-        NDIS_DbgPrint(MIN_TRACE, ("Unhandled minor function: 0x%X\n", Stack->MinorFunction));
+        NDIS_DbgPrint(MID_TRACE, ("Forwarding minor function 0x%X to the lower device\n", Stack->MinorFunction));
         break;
     }
 

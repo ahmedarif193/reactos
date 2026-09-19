@@ -2543,6 +2543,9 @@ VOID ParaNdis_OnPnPEvent(
         pContext->nPnpEventIndex = 0;
 }
 
+#define VIRTIO_NET_CTRL_POLL_US    10
+#define VIRTIO_NET_CTRL_TIMEOUT_US 100000
+
 static BOOLEAN SendControlMessage(
     PARANDIS_ADAPTER *pContext,
     UCHAR cls,
@@ -2590,6 +2593,14 @@ static BOOLEAN SendControlMessage(
             offset = (offset + 3) & ~3;
             nOut++;
         }
+        {
+            UINT staleLen;
+            while (virtqueue_get_buf(pContext->NetControlQueue, &staleLen) != NULL)
+            {
+                DPrintf(0, ("%s - discarding a late control completion", __FUNCTION__));
+            }
+        }
+
         sg[nOut].physAddr = phBase;
         sg[nOut].physAddr.QuadPart += offset;
         sg[nOut].length = sizeof(virtio_net_ctrl_ack);
@@ -2599,11 +2610,18 @@ static BOOLEAN SendControlMessage(
         {
             UINT len;
             void *p;
+            ULONG waited = 0;
             virtqueue_kick_always(pContext->NetControlQueue);
             p = virtqueue_get_buf(pContext->NetControlQueue, &len);
+            while (p == NULL && waited < VIRTIO_NET_CTRL_TIMEOUT_US)
+            {
+                NdisStallExecution(VIRTIO_NET_CTRL_POLL_US);
+                waited += VIRTIO_NET_CTRL_POLL_US;
+                p = virtqueue_get_buf(pContext->NetControlQueue, &len);
+            }
             if (!p)
             {
-                DPrintf(0, ("%s - ERROR: get_buf failed", __FUNCTION__));
+                DPrintf(0, ("%s - ERROR: no completion after %lu us", __FUNCTION__, waited));
             }
             else if (len != sizeof(virtio_net_ctrl_ack))
             {
