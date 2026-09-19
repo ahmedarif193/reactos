@@ -11,8 +11,6 @@ target_compile_definitions(win32u_winetest PRIVATE __WINESRC__ WINETEST_WAIT_CHI
 
 if(MSVC)
     target_compile_options(win32u_winetest PRIVATE /wd4477)
-else()
-    target_compile_options(win32u_winetest PRIVATE -Wno-format)
 endif()
 
 set_module_type(win32u_winetest win32cui)

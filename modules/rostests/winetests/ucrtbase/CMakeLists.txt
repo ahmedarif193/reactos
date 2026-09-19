@@ -57,10 +57,6 @@ list(APPEND SOURCE
 set_source_files_properties(ucrtbase_winetest.rc OBJECT_DEPENDS threaddll)
 
 add_executable(ucrtbase_winetest ${SOURCE})
-if(NOT MSVC)
-    #set_target_properties(ucrtbase_winetest PROPERTIES LINK_FLAGS "-Wl,--major-os-version,6")
-    target_compile_options(ucrtbase_winetest PRIVATE -Wno-format)
-endif()
 set_module_type(ucrtbase_winetest win32cui)
 
 target_link_libraries(ucrtbase_winetest wine oldnames ${PSEH_LIB} chkstk)

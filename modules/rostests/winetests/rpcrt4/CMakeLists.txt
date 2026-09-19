@@ -49,10 +49,6 @@ endif()
 
 add_executable(rpcrt4_winetest ${SOURCE})
 
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(rpcrt4_winetest PRIVATE "-Wno-format")
-endif()
-
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(rpcrt4_winetest PRIVATE "-Wno-cast-calling-convention")
 endif()

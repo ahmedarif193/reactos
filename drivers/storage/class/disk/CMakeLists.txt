@@ -17,8 +17,8 @@ target_compile_options(disk PUBLIC # NTDDI_WIN8
     -UNTDDI_VERSION -DNTDDI_VERSION=0x06020000)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(disk PRIVATE -Wno-format -Wno-pointer-sign)
-    target_compile_options(disk PRIVATE -Wno-pointer-to-int-cast -Wno-switch)
+    target_compile_options(disk PRIVATE -Wno-pointer-sign)
+    target_compile_options(disk PRIVATE -Wno-switch)
 endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")

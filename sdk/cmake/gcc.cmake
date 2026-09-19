@@ -202,7 +202,6 @@ add_compile_options(
     -Wno-deprecated
     -Wno-deprecated-declarations
     -Wno-unused-result # FIXME To be removed when CORE-17637 is resolved
-    -Wno-format
     -Wno-maybe-uninitialized
     -Wno-nonnull-compare
 )

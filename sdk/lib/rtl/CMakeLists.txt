@@ -14,7 +14,6 @@ if (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Enable this again. CORE-17637
     add_compile_options(-Wunused-result)
 
-    add_compile_options(-Wno-incompatible-pointer-types)
     add_compile_options(-Wno-missing-braces)
 endif()
 

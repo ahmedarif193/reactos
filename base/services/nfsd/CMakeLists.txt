@@ -47,12 +47,6 @@ add_executable(nfsd ${SOURCE} nfsd.rc)
 if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
     # Disable warning C4477 (printf format warnings)
     target_compile_options(nfsd PRIVATE /wd4477)
-else()
-    # FIXME: Tons of warnings.
-    target_compile_options(nfsd PRIVATE "-w")
-endif()
-if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(nfsd PRIVATE -Wno-incompatible-function-pointer-types)
 endif()
 
 target_link_libraries(nfsd ansi_sync_hacks oldnames)

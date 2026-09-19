@@ -51,7 +51,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(udfs PRIVATE -Wno-extern-c-compat -Wno-unused-value)
     target_compile_options(udfs PRIVATE -Wno-tautological-constant-out-of-range-compare)
     target_compile_options(udfs PRIVATE -Wno-tautological-unsigned-zero-compare -Wno-self-assign)
-    target_compile_options(udfs PRIVATE -Wno-sometimes-uninitialized -Wno-parentheses-equality)
+    target_compile_options(udfs PRIVATE -Wno-parentheses-equality)
 endif()
 
 set_module_type(udfs kernelmodedriver)

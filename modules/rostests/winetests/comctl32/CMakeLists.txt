@@ -53,7 +53,7 @@ if(MSVC)
 endif()
 
 target_compile_options(comctl32_winetest PRIVATE
-    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wno-format;-Wno-int-conversion>)
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-Wno-int-conversion>)
 
 set_module_type(comctl32_winetest win32cui)
 target_link_libraries(comctl32_winetest uuid)

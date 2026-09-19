@@ -15,10 +15,6 @@ list(APPEND SOURCE
 add_executable(winmm_winetest ${SOURCE})
 target_sources(winmm_winetest PRIVATE rsrc.rc)
 
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(winmm_winetest PRIVATE "-Wno-format")
-endif()
-
 target_link_libraries(winmm_winetest dxguid)
 set_module_type(winmm_winetest win32cui)
 add_importlibs(winmm_winetest winmm user32 advapi32 ole32 msvcrt kernel32)

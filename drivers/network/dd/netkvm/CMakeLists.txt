@@ -27,8 +27,6 @@ if(NOT MSVC)
     target_compile_options(netkvm PRIVATE
         -Wno-unused-function
         -Wno-pointer-sign
-        -Wno-pointer-to-int-cast
-        -Wno-int-to-pointer-cast
         -Wno-attributes)
 endif()
 

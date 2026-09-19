@@ -93,7 +93,6 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
         -UNTDDI_VERSION -DNTDDI_VERSION=0x0A000007
         -U_WIN32_WINNT -D_WIN32_WINNT=0x0A00
         -UWINVER -DWINVER=0x0A00
-        -Wno-format
         -Wno-int-conversion
         -Wno-old-style-declaration
         -Wno-unused)

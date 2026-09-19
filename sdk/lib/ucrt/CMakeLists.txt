@@ -61,7 +61,6 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
         -Wno-empty-body
         -Wno-tautological-constant-out-of-range-compare
         -Wno-ignored-attributes
-        -Wno-uninitialized
     )
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wno-reorder>)
 endif()

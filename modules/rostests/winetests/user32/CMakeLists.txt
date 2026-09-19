@@ -54,7 +54,6 @@ if(NOT MSVC)
     -UNTDDI_VERSION -DNTDDI_VERSION=0x0A000005
     -U_WIN32_WINNT -D_WIN32_WINNT=0x0A00
     -UWINVER -DWINVER=0x0A00
-    -Wno-format
     -Wno-int-conversion)
 endif()
 
