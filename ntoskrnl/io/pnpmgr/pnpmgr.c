@@ -205,7 +205,11 @@ IopEnsureCriticalDeviceDriverKey(
         DriverValue[GuidBytes / sizeof(WCHAR) + 5] = UNICODE_NULL;
         Status = ZwSetValueKey(InstanceKey, &DriverU, 0, REG_SZ, DriverValue,
                                (GuidBytes / sizeof(WCHAR) + 6) * sizeof(WCHAR));
-        DPRINT1("CDDB: set Driver='%S' for critical device (0x%08lX)\n", DriverValue, Status);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("CDDB: could not set Driver='%S' for critical device (0x%08lX)\n",
+                    DriverValue, Status);
+        }
         ExFreePool(DriverValue);
     }
 

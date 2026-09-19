@@ -388,9 +388,6 @@ NDIS_STATUS NTAPI DriverEntry(PVOID DriverObject,PVOID RegistryPath)
 
     status = NDIS_STATUS_FAILURE;
 
-    DEBUG_ENTRY(0);
-    _LogOutString(0, __DATE__ " " __TIME__);
-
     NdisMInitializeWrapper(&DriverHandle,
                            DriverObject,
                            RegistryPath,

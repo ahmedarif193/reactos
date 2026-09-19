@@ -25,25 +25,22 @@ extern DWORD DebugTraceLevel;
 
 #ifdef _MSC_VER
 
-#define AFD_DbgPrint(_t_, _x_) \
-    if ((_t_ > NORMAL_MASK) \
-        ? (DebugTraceLevel & _t_) > NORMAL_MASK \
-        : (DebugTraceLevel & NORMAL_MASK) >= _t_) { \
-        DbgPrint("(%s:%d) ", __FILE__, __LINE__); \
-        DbgPrint _x_ ; \
-    }
+#define AFD_DbgPrintLine(_f_, ...) \
+    DbgPrint("(%s:%d) " _f_, __FILE__, __LINE__, ##__VA_ARGS__)
 
 #else /* _MSC_VER */
 
+#define AFD_DbgPrintLine(_f_, ...) \
+    DbgPrint("(%s:%d)(%s) " _f_, __FILE__, __LINE__, __FUNCTION__, ##__VA_ARGS__)
+
+#endif /* _MSC_VER */
+
 #define AFD_DbgPrint(_t_, _x_) \
     if ((_t_ > NORMAL_MASK) \
         ? (DebugTraceLevel & _t_) > NORMAL_MASK \
         : (DebugTraceLevel & NORMAL_MASK) >= _t_) { \
-        DbgPrint("(%s:%d)(%s) ", __FILE__, __LINE__, __FUNCTION__); \
-        DbgPrint _x_ ; \
+        AFD_DbgPrintLine _x_ ; \
     }
-
-#endif /* _MSC_VER */
 
 #ifdef ASSERT
 #undef ASSERT

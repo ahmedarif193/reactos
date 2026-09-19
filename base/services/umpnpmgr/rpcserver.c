@@ -208,7 +208,7 @@ ClearDeviceStatus(
     CONFIGRET ret = CR_SUCCESS;
     NTSTATUS Status;
 
-    DPRINT1("ClearDeviceStatus(%S 0x%lx 0x%lx)\n",
+    DPRINT("ClearDeviceStatus(%S 0x%lx 0x%lx)\n",
             pszDeviceID, ulStatus, ulProblem);
 
     RtlInitUnicodeString(&PlugPlayData.DeviceInstance,
@@ -273,7 +273,7 @@ SetDeviceStatus(
     CONFIGRET ret = CR_SUCCESS;
     NTSTATUS Status;
 
-    DPRINT1("SetDeviceStatus(%S 0x%lx 0x%lx)\n",
+    DPRINT("SetDeviceStatus(%S 0x%lx 0x%lx)\n",
             pszDeviceID, ulStatus, ulProblem);
 
     RtlInitUnicodeString(&PlugPlayData.DeviceInstance,
@@ -3409,7 +3409,7 @@ SetupDeviceInstance(
     CONFIGRET ret = CR_SUCCESS;
     NTSTATUS Status;
 
-    DPRINT1("SetupDeviceInstance(%S 0x%08lx)\n",
+    DPRINT("SetupDeviceInstance(%S 0x%08lx)\n",
             pszDeviceInstance, ulMinorAction);
 
     if (IsRootDeviceInstanceID(pszDeviceInstance))
@@ -3671,7 +3671,7 @@ PNP_SetDeviceProblem(
 
     UNREFERENCED_PARAMETER(hBinding);
 
-    DPRINT1("PNP_SetDeviceProblem(%p %S %lu 0x%08lx)\n",
+    DPRINT("PNP_SetDeviceProblem(%p %S %lu 0x%08lx)\n",
            hBinding, pDeviceID, ulProblem, ulFlags);
 
     if (ulFlags & ~CM_SET_DEVNODE_PROBLEM_BITS)

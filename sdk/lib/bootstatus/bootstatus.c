@@ -310,13 +310,6 @@ BootStatusApplyUpdate(
     InvalidateRect(Window, &TextRect, FALSE);
     if (IsWindowVisible(Window))
         UpdateWindow(Window);
-
-    DPRINT1("BOOT_STATUS: UPDATE window=%p phase=%S detail=%S progress=%lu/%lu\n",
-            Window,
-            Context->Status.PhaseText,
-            Context->Status.DetailText,
-            Context->Status.Completed,
-            Context->Status.Total);
 }
 
 static LRESULT CALLBACK
@@ -423,10 +416,6 @@ BootStatusWindowProc(
                 if (!Context->FirstPaintComplete)
                 {
                     Context->FirstPaintComplete = TRUE;
-                    DPRINT1("BOOT_STATUS: FIRST_PAINT_COMPLETE window=%p size=%dx%d\n",
-                            Window,
-                            Context->Width,
-                            Context->Height);
                 }
             }
             return 0;
@@ -436,7 +425,6 @@ BootStatusWindowProc(
             return 0;
 
         case WM_DESTROY:
-            DPRINT1("BOOT_STATUS: DESTROY window=%p\n", Window);
             PostQuitMessage(0);
             return 0;
 
@@ -528,10 +516,6 @@ BootStatusCreate(
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(Window, NULL, FALSE);
     UpdateWindow(Window);
-    DPRINT1("BOOT_STATUS: READY window=%p phase=%S background=%s\n",
-            Window,
-            StatusText ? StatusText : L"",
-            (Context && Context->BackgroundDc) ? "captured" : "solid");
     return Window;
 }
 
