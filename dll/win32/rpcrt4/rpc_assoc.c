@@ -527,9 +527,14 @@ RPC_STATUS RpcServerAssoc_UpdateContextHandle(RpcAssoc *assoc,
     EnterCriticalSection(&assoc->cs);
     if (UuidIsNil(&context_handle->uuid, &status))
     {
+        status = UuidCreate(&context_handle->uuid);
+        if (status != RPC_S_OK)
+        {
+            LeaveCriticalSection(&assoc->cs);
+            return status;
+        }
         /* add a ref for the data being valid */
         context_handle->refs++;
-        UuidCreate(&context_handle->uuid);
         context_handle->rundown_routine = rundown_routine;
         TRACE("allocated uuid %s for context handle %p\n",
               debugstr_guid(&context_handle->uuid), context_handle);
