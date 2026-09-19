@@ -26,6 +26,7 @@
 #include "windef.h"
 #include "winbase.h"
 #include "winuser.h"
+#include "winreg.h"
 
 #include "initguid.h"
 
@@ -1117,22 +1118,48 @@ static HRESULT WINAPI dwritefactory_CreateRenderingParams(IDWriteFactory7 *iface
     return IDWriteFactory7_CreateMonitorRenderingParams(iface, monitor, params);
 }
 
+static DWORD monitor_rendering_value(HKEY root, const WCHAR *key, const WCHAR *name,
+        DWORD fallback, DWORD min_value, DWORD max_value)
+{
+    DWORD value, size = sizeof(value);
+    if (RegGetValueW(root, key, name, RRF_RT_REG_DWORD, NULL, &value, &size) ||
+        value < min_value || value > max_value)
+        return fallback;
+    return value;
+}
+
 static HRESULT WINAPI dwritefactory_CreateMonitorRenderingParams(IDWriteFactory7 *iface, HMONITOR monitor,
     IDWriteRenderingParams **params)
 {
-    IDWriteRenderingParams3 *params3;
-    static int fixme_once = 0;
+    MONITORINFOEXW info = { sizeof(info) };
+    WCHAR key[128];
+    const WCHAR *device;
+    IDWriteRenderingParams3 *params3 = NULL;
+    DWORD gamma = 2000, contrast = 0, cleartype = 0, geometry = DWRITE_PIXEL_GEOMETRY_FLAT;
     HRESULT hr;
 
     TRACE("%p, %p, %p.\n", iface, monitor, params);
+    if (!params) return E_INVALIDARG;
+    *params = NULL;
 
-    if (!fixme_once++)
-        FIXME("(%p): monitor setting ignored\n", monitor);
+    if (GetMonitorInfoW(monitor, (MONITORINFO *)&info))
+    {
+        device = info.szDevice;
+        if (!wcsncmp(device, L"\\\\.\\", 4)) device += 4;
+        wcscpy(key, L"Software\\Microsoft\\Avalon.Graphics\\");
+        wcscat(key, device);
+        gamma = monitor_rendering_value(HKEY_LOCAL_MACHINE, key, L"GammaLevel", gamma, 1000, 2200);
+        gamma = monitor_rendering_value(HKEY_CURRENT_USER, key, L"GammaLevel", gamma, 1000, 2200);
+        geometry = monitor_rendering_value(HKEY_LOCAL_MACHINE, key, L"PixelStructure", geometry, 0, 2);
+        geometry = monitor_rendering_value(HKEY_CURRENT_USER, key, L"PixelStructure", geometry, 0, 2);
+        contrast = monitor_rendering_value(HKEY_CURRENT_USER, key, L"EnhancedContrastLevel", contrast, 0, 1000);
+        cleartype = monitor_rendering_value(HKEY_CURRENT_USER, key, L"ClearTypeLevel", cleartype, 0, 100);
+    }
 
-    /* FIXME: use actual per-monitor gamma factor */
-    hr = IDWriteFactory7_CreateCustomRenderingParams(iface, 2.0f, 0.0f, 1.0f, 0.0f, DWRITE_PIXEL_GEOMETRY_FLAT,
-        DWRITE_RENDERING_MODE1_DEFAULT, DWRITE_GRID_FIT_MODE_DEFAULT, &params3);
-    *params = (IDWriteRenderingParams*)params3;
+    hr = IDWriteFactory7_CreateCustomRenderingParams(iface, gamma / 1000.0f, contrast / 100.0f,
+        1.0f, cleartype / 100.0f, geometry, DWRITE_RENDERING_MODE1_DEFAULT,
+        DWRITE_GRID_FIT_MODE_DEFAULT, &params3);
+    if (SUCCEEDED(hr)) *params = (IDWriteRenderingParams *)params3;
     return hr;
 }
 
