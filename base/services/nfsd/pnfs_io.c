@@ -299,8 +299,11 @@ static enum pnfs_status stripe_next_unit(
     const uint32_t stripe_count = layout->device->stripes.count;
     uint64_t sui = stripe_unit_number(layout, *position, unit_size);
 
-    /* advance to the desired stripeid */
-    sui += abs(stripeid - stripe_index(layout, sui, stripe_count));
+    const uint32_t current_stripe = stripe_index(layout, sui, stripe_count);
+
+    /* Advance to the desired stripe, wrapping at the end of the stripe set. */
+    sui += stripeid >= current_stripe ? stripeid - current_stripe :
+        stripe_count - (current_stripe - stripeid);
 
     io->offset = stripe_unit_offset(layout, sui, unit_size);
     if (io->offset < *position) /* don't start before position */

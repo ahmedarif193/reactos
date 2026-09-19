@@ -504,6 +504,8 @@ static bool_t op_cb_notify_deviceid_args(XDR *xdr, struct cb_notify_deviceid_arg
         free(args->change_list);
     case XDR_ENCODE:
         return TRUE;
+    case XDR_DECODE:
+        break;
     }
 
     /* count the number of device changes */

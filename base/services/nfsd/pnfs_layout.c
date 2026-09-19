@@ -464,6 +464,8 @@ static enum pnfs_status file_layout_fetch(
         /* don't try again at all */
         state->status |= PNFS_LAYOUT_UNAVAILABLE;
         break;
+    default:
+        break;
     }
 
     dprintf(FLLVL, "<-- file_layout_fetch() returning %s\n",

@@ -384,7 +384,7 @@ retry:
                     if (op == OP_LOOKUP) {
                         largs = (nfs41_lookup_args *)argarray[rcount-1].arg;
                         name = largs->name;
-                    } else if (op == OP_OPEN) {
+                    } else { /* OP_OPEN, as checked above */
                         oargs = (nfs41_op_open_args *)argarray[rcount-1].arg;
                         name = oargs->claim->u.null.filename;
                     }
