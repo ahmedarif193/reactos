@@ -267,6 +267,7 @@ wglCreatePbufferARB(HDC hCurrentDC,
     * We need to set a displayable pixel format on the hidden window DC
     * so that wglCreateContext and wglMakeCurrent are not overruled by GDI.
     */
+   pfd = stw_pixelformat_get_info(iDisplayablePixelFormat)->pfd;
    bRet = SetPixelFormat(GetDC(hWnd), iDisplayablePixelFormat, &pfd);
    assert(bRet);
 
