@@ -44,7 +44,7 @@ HRESULT CACListISF::NextLocation()
             {
                 CComHeapPtr<ITEMIDLIST> pidl(ILClone(m_pidlCurDir));
                 hr = SetLocation(pidl.Detach());
-                if (SUCCEEDED(hr))
+                if (hr == S_OK)
                 {
                     TRACE("LT_DIRECTORY\n");
                     return hr;
@@ -60,7 +60,7 @@ HRESULT CACListISF::NextLocation()
                 if (FAILED_UNEXPECTEDLY(hr))
                     return S_FALSE;
                 hr = SetLocation(pidl.Detach());
-                if (SUCCEEDED(hr))
+                if (hr == S_OK)
                 {
                     TRACE("LT_DESKTOP\n");
                     return hr;
@@ -76,7 +76,7 @@ HRESULT CACListISF::NextLocation()
                 if (FAILED_UNEXPECTEDLY(hr))
                     return S_FALSE;
                 hr = SetLocation(pidl.Detach());
-                if (SUCCEEDED(hr))
+                if (hr == S_OK)
                 {
                     TRACE("LT_MYCOMPUTER\n");
                     return hr;
@@ -92,7 +92,7 @@ HRESULT CACListISF::NextLocation()
                 if (FAILED_UNEXPECTEDLY(hr))
                     return S_FALSE;
                 hr = SetLocation(pidl.Detach());
-                if (SUCCEEDED(hr))
+                if (hr == S_OK)
                 {
                     TRACE("LT_FAVORITES\n");
                     return hr;
@@ -142,11 +142,10 @@ HRESULT CACListISF::SetLocation(LPITEMIDLIST pidl)
         Flags |= SHCONTF_NONFOLDERS;
 
     hr = m_pShellFolder->EnumObjects(NULL, Flags, &m_pEnumIDList);
-    if (hr != S_OK)
-    {
-        ERR("EnumObjects failed: 0x%lX\n", hr);
-        hr = E_FAIL;
-    }
+    if (FAILED(hr))
+        return hr;
+    if (!m_pEnumIDList)
+        return S_FALSE;
     return hr;
 }
 
@@ -283,6 +282,9 @@ STDMETHODIMP CACListISF::Reset()
 
     m_iNextLocation = LT_DIRECTORY;
     m_szRawPath = L"";
+    m_pEnumIDList.Release();
+    m_pShellFolder.Release();
+    m_pidlLocation.Free();
 
     SHELLSTATE ss = { 0 };
     SHGetSetSettings(&ss, SSF_SHOWALLOBJECTS, FALSE);
@@ -297,9 +299,6 @@ STDMETHODIMP CACListISF::Reset()
             if (pidl)
                 Initialize(pidl);
         }
-        HRESULT hr = SetLocation(pidl.Detach());
-        if (FAILED_UNEXPECTEDLY(hr))
-            return S_FALSE;
     }
     return S_OK;
 }
@@ -396,7 +395,8 @@ STDMETHODIMP CACListISF::SetOwner(IUnknown *punkOwner)
 {
     TRACE("(%p, %p)\n", this, punkOwner);
     m_pBrowserService.Release();
-    punkOwner->QueryInterface(IID_PPV_ARG(IBrowserService, &m_pBrowserService));
+    if (punkOwner)
+        punkOwner->QueryInterface(IID_PPV_ARG(IBrowserService, &m_pBrowserService));
     return S_OK;
 }
 
