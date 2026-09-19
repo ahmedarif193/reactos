@@ -1,5 +1,7 @@
 add_subdirectory(class)
-add_subdirectory(floppy)
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    add_subdirectory(floppy)
+endif()
 add_subdirectory(ide)
 add_subdirectory(miniport)
 add_subdirectory(mountmgr)
