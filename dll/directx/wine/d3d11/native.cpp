@@ -366,7 +366,7 @@ public:
     void STDMETHODCALLTYPE GenerateMips(ID3D11ShaderResourceView *pShaderResourceView) override;
     void STDMETHODCALLTYPE SetResourceMinLOD(ID3D11Resource *pResource, FLOAT MinLOD) override { Unimplemented("SetResourceMinLOD"); }
     FLOAT STDMETHODCALLTYPE GetResourceMinLOD(ID3D11Resource *pResource) override { Unimplemented("GetResourceMinLOD"); return 0; }
-    void STDMETHODCALLTYPE ResolveSubresource(ID3D11Resource *pDstResource, UINT DstSubresource, ID3D11Resource *pSrcResource, UINT SrcSubresource, DXGI_FORMAT Format) override { Unimplemented("ResolveSubresource"); }
+    void STDMETHODCALLTYPE ResolveSubresource(ID3D11Resource *, UINT, ID3D11Resource *, UINT, DXGI_FORMAT) override;
     void STDMETHODCALLTYPE ExecuteCommandList(ID3D11CommandList *pCommandList, BOOL RestoreContextState) override { Unimplemented("ExecuteCommandList"); }
     void STDMETHODCALLTYPE HSSetShaderResources(UINT StartSlot, UINT NumViews, ID3D11ShaderResourceView *const *ppShaderResourceViews) override { Unimplemented("HSSetShaderResources"); }
     void STDMETHODCALLTYPE HSSetShader(ID3D11HullShader *pHullShader, ID3D11ClassInstance *const *ppClassInstances, UINT NumClassInstances) override { Unimplemented("HSSetShader"); }
@@ -2153,6 +2153,24 @@ void STDMETHODCALLTYPE NativeContext::CopySubresourceRegion(ID3D11Resource *dst,
     NativeLock guard(device);
     device->functions.pfnResourceCopyRegion(device->driver_device, d->handle, dst_subresource,
             x, y, z, s->handle, src_subresource, reinterpret_cast<const D3D10_DDI_BOX *>(box));
+}
+
+void STDMETHODCALLTYPE NativeContext::ResolveSubresource(ID3D11Resource *dst, UINT dst_subresource,
+        ID3D11Resource *src, UINT src_subresource, DXGI_FORMAT format)
+{
+    NativeTexture2D *d = NativeTexture(dst, device), *s = NativeTexture(src, device);
+    if (!d || !s || d == s || !device->functions.pfnResourceResolveSubresource
+            || d->desc.SampleDesc.Count != 1 || s->desc.SampleDesc.Count <= 1
+            || d->desc.Usage != D3D11_USAGE_DEFAULT || format != d->desc.Format || format != s->desc.Format
+            || NativeDepthResourceFormat(format) != DXGI_FORMAT_UNKNOWN
+            || dst_subresource >= d->desc.MipLevels * d->desc.ArraySize
+            || src_subresource >= s->desc.MipLevels * s->desc.ArraySize
+            || max(1u, d->desc.Width >> (dst_subresource % d->desc.MipLevels)) != s->desc.Width
+            || max(1u, d->desc.Height >> (dst_subresource % d->desc.MipLevels)) != s->desc.Height) return;
+    NativeLock guard(device);
+    device->BeginCall();
+    device->functions.pfnResourceResolveSubresource(device->driver_device, d->handle, dst_subresource,
+            s->handle, src_subresource, format);
 }
 
 void STDMETHODCALLTYPE NativeContext::UpdateSubresource(ID3D11Resource *resource, UINT subresource,
