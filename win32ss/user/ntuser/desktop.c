@@ -1536,7 +1536,7 @@ UserMessageWindowProc(PWND pwnd, UINT Msg, WPARAM wParam, LPARAM lParam, LRESULT
         pwnd->fnid |= FNID_DESTROY;
         break;
     default:
-        ERR("UMWP calling IDWP\n");
+        TRACE("UMWP calling IDWP\n");
         *lResult = IntDefWindowProc(pwnd, Msg, wParam, lParam, FALSE);
     }
 
