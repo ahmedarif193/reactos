@@ -16,23 +16,42 @@ WINE_DEFAULT_DEBUG_CHANNEL(msctf);
 
 CRange::CRange(
     _In_ ITfContext *context,
-    _In_ TfAnchor anchorStart,
-    _In_ TfAnchor anchorEnd
+    _In_ LONG anchorStart,
+    _In_ LONG anchorEnd
 )
     : m_cRefs(1)
     , m_context(context)
     , m_anchorStart(anchorStart)
     , m_anchorEnd(anchorEnd)
 {
+    m_link.range = this;
     if (context)
+    {
         context->AddRef();
+        Context_AddRange(context, &m_link.entry);
+    }
+    else
+        list_init(&m_link.entry);
 }
 
 CRange::~CRange()
 {
     TRACE("destroying %p\n", this);
+    list_remove(&m_link.entry);
     if (m_context)
         m_context->Release();
+}
+
+void CRange::OnTextChange(const TS_TEXTCHANGE *change)
+{
+    LONG start = m_anchorStart, end = m_anchorEnd;
+    LONG delta = change->acpNewEnd - change->acpOldEnd;
+    if (start > change->acpOldEnd) start += delta;
+    else if (start > change->acpStart) start = change->acpStart;
+    if (end >= change->acpOldEnd) end += delta;
+    else if (end >= change->acpStart) end = change->acpNewEnd;
+    m_anchorStart = start;
+    m_anchorEnd = max(start, end);
 }
 
 CRange *CRange::_Clone()
@@ -321,20 +340,26 @@ STDMETHODIMP CRange::Clone(
 STDMETHODIMP CRange::GetContext(
     _Out_ ITfContext **ppContext)
 {
-    FIXME("%p\n", ppContext);
-    return E_NOTIMPL;
+    if (!ppContext) return E_INVALIDARG;
+    *ppContext = m_context;
+    if (m_context) m_context->AddRef();
+    return S_OK;
 }
 
 STDMETHODIMP CRange::GetExtent(_Out_ LONG *pacpAnchor, _Out_ LONG *pcch)
 {
-    FIXME("\n");
-    return E_NOTIMPL;
+    if (!pacpAnchor || !pcch) return E_INVALIDARG;
+    *pacpAnchor = m_anchorStart;
+    *pcch = m_anchorEnd - m_anchorStart;
+    return S_OK;
 }
 
 STDMETHODIMP CRange::SetExtent(_In_ LONG acpAnchor, _In_ LONG cch)
 {
-    FIXME("\n");
-    return E_NOTIMPL;
+    if (acpAnchor < 0 || cch < 0 || cch > MAXLONG - acpAnchor) return E_INVALIDARG;
+    m_anchorStart = acpAnchor;
+    m_anchorEnd = acpAnchor + cch;
+    return S_OK;
 }
 
 STDMETHODIMP CRange::GetExtent(_Out_ IAnchor **ppStart, _Out_ IAnchor **ppEnd)
@@ -371,7 +396,7 @@ EXTERN_C
 HRESULT
 Range_Constructor(ITfContext *context, DWORD anchorStart, DWORD anchorEnd, ITfRange **ppOut)
 {
-    CRange *This = new(cicNoThrow) CRange(context, (TfAnchor)anchorStart, (TfAnchor)anchorEnd);
+    CRange *This = new(cicNoThrow) CRange(context, anchorStart, anchorEnd);
     if (!This)
         return E_OUTOFMEMORY;
 
