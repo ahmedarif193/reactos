@@ -196,6 +196,12 @@ static VOID DxgkpContextOrderReleaseSync(_Inout_ PDXGK_CONTEXT_ORDER_OPERATION O
     Operation->Payload = NULL;
     if (Capture == NULL)
         return;
+    /* A CPU notification wakes its owner even if reset/teardown cancelled
+     * prior work. It is not a successful GPU fence signal. Wait until every
+     * broadcast marker has retired before releasing a cancelled event. */
+    if (!NT_SUCCESS(Operation->TerminalStatus) && Capture->EnqueueEvent != NULL &&
+        InterlockedCompareExchange(&Capture->Executed, 0, 0) == 0)
+        KeSetEvent(Capture->EnqueueEvent, IO_NO_INCREMENT, FALSE);
     DxgkContextSyncRelease(Capture);
     ExFreePoolWithTag(Capture, DXGK_CONTEXT_ORDER_OPERATION_TAG);
 }

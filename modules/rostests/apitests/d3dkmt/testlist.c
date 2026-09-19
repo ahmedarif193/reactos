@@ -40,6 +40,7 @@ extern void func_capsaudit(void);
 extern void func_umdabi(void);
 extern void func_adapterid(void);
 extern void func_gpusync(void);
+extern void func_eventcancel(void);
 extern void func_scheduling(void);
 extern void func_umdcallbacks(void);
 extern void func_abifreeze(void);
@@ -118,6 +119,7 @@ const struct test winetest_testlist[] =
     { "umdabi",        func_umdabi },
     { "adapterid",     func_adapterid },
     { "gpusync",       func_gpusync },
+    { "eventcancel",   func_eventcancel },
     { "scheduling",    func_scheduling },
     { "umdcallbacks",  func_umdcallbacks },
     { "abifreeze",     func_abifreeze },
