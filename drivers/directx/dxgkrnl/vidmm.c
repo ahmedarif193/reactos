@@ -5438,19 +5438,6 @@ DxgkpVidMmCreateAllocationTracked(
                                 PrimaryVidPnSourceId != D3DDDI_ID_UNINITIALIZED);
     Alloc->Cached             = (AllocInfo->Flags.Cached != 0);
     Alloc->ExplicitResidencyNotification = (AllocInfo->Flags.ExplicitResidencyNotification != 0);
-    {
-        static LONG AllocLogCount = 0;
-        LONG LogIndex = InterlockedIncrement(&AllocLogCount);
-
-        if (LogIndex <= 16 || (LogIndex % 2048) == 0)
-        {
-            DPRINT1("VidMm alloc #%ld: size=%I64u flags=0x%08x (cpuvisible=%u cached=%u permanentsysmem=%u existingsysmem=%u) flags2=0x%08x supported=0x%x evict=0x%x pref=0x%x align=%u\n",
-                    LogIndex, (ULONGLONG)AllocInfo->Size, AllocInfo->Flags.Value,
-                    AllocInfo->Flags.CpuVisible, AllocInfo->Flags.Cached, AllocInfo->Flags.PermanentSysMem, AllocInfo->Flags.ExistingSysMem,
-                    AllocInfo->FlagsWddm2.Value, AllocInfo->SupportedReadSegmentSet, AllocInfo->EvictionSegmentSet,
-                    AllocInfo->PreferredSegment.Value, AllocInfo->Alignment);
-        }
-    }
     Alloc->Capture            = (AllocInfo->FlagsWddm2.Capture != 0);
     Alloc->Resident           = FALSE;
     Alloc->Resource           = NULL;

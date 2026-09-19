@@ -104,34 +104,51 @@ KBUGCHECK_REASON_CALLBACK_RECORD CallbackRecord;
 #if !defined(WPP_EVENT_TRACING) || defined(WPP_USE_BYPASS)
 #if defined(DPFLTR_MASK)
 
-//common case, except Win2K
-static void __cdecl DebugPrint(const char *fmt, ...)
+static void __cdecl DebugPrintLine(const char *fmt, ...)
 {
     va_list list;
     va_start(list, fmt);
     PrintProcedure(DPFLTR_DEFAULT_ID, 9 | DPFLTR_MASK, fmt, list);
+    va_end(list);
+}
+
+//common case, except Win2K
+static void __cdecl DebugPrint(const char *fmt, ...)
+{
+    va_list list;
+    NTSTATUS status;
+    char buf[512];
+    size_t len;
+
+    va_start(list, fmt);
+    status = RtlStringCbVPrintfA(buf, sizeof(buf), fmt, list);
+    va_end(list);
+
+    if (status != STATUS_SUCCESS && status != STATUS_BUFFER_OVERFLOW)
+        memcpy(buf, "Can't print", 12);
+
+    len = strlen(buf);
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
+        len--;
+    if (len + 2 > sizeof(buf))
+        len = sizeof(buf) - 2;
+    buf[len] = '\n';
+    buf[len + 1] = 0;
+
+    DebugPrintLine("%s", buf);
+
 #if defined(VIRTIO_DBG_USE_IOPORT)
+    // use this way of output only for DISPATCH_LEVEL,
+    // higher requires more protection
+    if (KeGetCurrentIrql() <= DISPATCH_LEVEL)
     {
-        NTSTATUS status;
-        // use this way of output only for DISPATCH_LEVEL,
-        // higher requires more protection
-        if (KeGetCurrentIrql() <= DISPATCH_LEVEL)
+        size_t i;
+        NdisAcquireSpinLock(&CrashLock);
+        for (i = 0; i < len + 1; ++i)
         {
-            char buf[256];
-            size_t len, i;
-            buf[0] = 0;
-            status = RtlStringCbVPrintfA(buf, sizeof(buf), fmt, list);
-            if (status == STATUS_SUCCESS) len = strlen(buf);
-            else if (status == STATUS_BUFFER_OVERFLOW) len = sizeof(buf);
-            else { memcpy(buf, "Can't print", 11); len = 11; }
-            NdisAcquireSpinLock(&CrashLock);
-            for (i = 0; i < len; ++i)
-            {
-                NdisRawWritePortUchar(VIRTIO_DBG_USE_IOPORT, buf[i]);
-            }
-            NdisRawWritePortUchar(VIRTIO_DBG_USE_IOPORT, '\n');
-            NdisReleaseSpinLock(&CrashLock);
+            NdisRawWritePortUchar(VIRTIO_DBG_USE_IOPORT, buf[i]);
         }
+        NdisReleaseSpinLock(&CrashLock);
     }
 #endif
 }

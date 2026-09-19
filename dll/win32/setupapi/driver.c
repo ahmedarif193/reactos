@@ -888,7 +888,6 @@ SetupDiBuildDriverInfoList(
         else
         {
             /* Enumerate .inf files */
-            DWORD ListStarted = GetTickCount();
             Result = FALSE;
             RequiredSize = 32768; /* Initial buffer size */
             SetLastError(ERROR_INSUFFICIENT_BUFFER);
@@ -908,7 +907,6 @@ SetupDiBuildDriverInfoList(
                     Buffer, RequiredSize,
                     &RequiredSize);
             }
-            FIXME("PHASE list tid=%lu ms=%lu\n", GetCurrentThreadId(), GetTickCount() - ListStarted);
             if (!Result && GetLastError() == ERROR_FILE_NOT_FOUND)
             {
                 /* No .inf file in specified directory. So, we should
