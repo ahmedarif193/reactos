@@ -22,6 +22,7 @@ extern void func_DrawIconEx(void);
 extern void func_DrawText(void);
 extern void func_desktop(void);
 extern void func_EmptyClipboard(void);
+extern void func_ClipboardAccess(void);
 extern void func_EnumDisplaySettings(void);
 extern void func_GetClassInfo(void);
 extern void func_GetDCEx(void);
@@ -110,6 +111,7 @@ const struct test winetest_testlist[] =
     { "DrawText", func_DrawText },
     { "desktop", func_desktop },
     { "EmptyClipboard", func_EmptyClipboard },
+    { "ClipboardAccess", func_ClipboardAccess },
     { "EnumDisplaySettings", func_EnumDisplaySettings },
     { "GetClassInfo", func_GetClassInfo },
     { "GetDCEx", func_GetDCEx },
