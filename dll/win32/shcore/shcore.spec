@@ -10,7 +10,7 @@
 @ stdcall GetDpiForMonitor(long long ptr ptr)
 @ stdcall GetDpiForShellUIComponent(long)
 @ stdcall GetFeatureEnabledState(long long)
-# @ stub GetFeatureVariant
+@ stdcall GetFeatureVariant(long long ptr ptr)
 @ stdcall GetProcessDpiAwareness(long ptr)
 @ stdcall GetProcessReference(ptr)
 @ stdcall GetScaleFactorForDevice(long)
@@ -30,8 +30,8 @@
 @ stdcall IsOS(long)
 # @ stub IsProcessInIsolatedContainer
 # @ stub IsProcessInWDAGContainer
-# @ stub RecordFeatureError
-# @ stub RecordFeatureUsage
+@ stdcall RecordFeatureError(long ptr)
+@ stdcall RecordFeatureUsage(long long long str)
 @ stdcall RegisterScaleChangeEvent(ptr ptr)
 @ stdcall RegisterScaleChangeNotifications(long ptr long ptr)
 @ stub RevokeScaleChangeNotifications
@@ -94,7 +94,7 @@
 @ stdcall SetProcessReference(ptr)
 @ stdcall SubscribeFeatureStateChangeNotification(ptr ptr ptr)
 @ stub UnregisterScaleChangeEvent
-# @ stub UnsubscribeFeatureStateChangeNotification
+@ stdcall UnsubscribeFeatureStateChangeNotification(ptr)
 
 100 stub -noname SHManagedCreateStreamOnFile
 101 stub -noname SHManagedCreateFile

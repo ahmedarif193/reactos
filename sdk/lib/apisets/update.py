@@ -24,6 +24,8 @@ REDIRECT_HOSTS = {
 # These contracts are implemented by a more specific ReactOS host than the
 # module-wide fallback above. Contract overrides always take precedence.
 CONTRACT_HOST_OVERRIDES = {
+    'api-ms-win-core-featurestaging-l1-1-0.dll': 'shcore.dll',
+    'api-ms-win-core-featurestaging-l1-1-1.dll': 'shcore.dll',
     'api-ms-win-core-localregistry-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-core-processthreads-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-eventing-provider-l1-1-0.dll': 'kernelbase.dll',
@@ -139,6 +141,14 @@ class CombinedSchemas:
             apiset.add_version(schema.version)
 
     def generate(self, output):
+        # The newer feature-staging contract includes the original exports.
+        # Keep the original contract available even in schema sets that only
+        # list the newer revision.
+        old = 'api-ms-win-core-featurestaging-l1-1-0.dll'
+        new = 'api-ms-win-core-featurestaging-l1-1-1.dll'
+        if old not in self._apisets and new in self._apisets:
+            source = self._apisets[new]
+            self._apisets[old] = Apiset(old, 'shcore.dll', list(source.versions))
         for key in sorted(self._apisets):
             apiset = self._apisets[key]
             output.write(f'{apiset}\n'.encode('utf-8'))
