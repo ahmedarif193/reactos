@@ -4,9 +4,11 @@
 #include <wine/test.h>
 
 extern void func_wtsapi(void);
+extern void func_notification(void);
 
 const struct test winetest_testlist[] =
 {
     { "wtsapi", func_wtsapi },
+    { "notification", func_notification },
     { 0, 0 }
 };
