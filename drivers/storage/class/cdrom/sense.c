@@ -83,7 +83,7 @@ typedef struct _ERROR_LOG_CONTEXT {
     ULONG       BadSector;
 } ERROR_LOG_CONTEXT, *PERROR_LOG_CONTEXT;
 
-NTSTATUS
+VOID
 DeviceErrorHandlerForMmc(
     _In_ PCDROM_DEVICE_EXTENSION  DeviceExtension,
     _In_ PSCSI_REQUEST_BLOCK      Srb,
@@ -109,9 +109,7 @@ Arguments:
 
 Return Value:
 
-    NTSTATUS
-    Status -
-    Retry -
+    None. Status and Retry are updated through the output parameters.
 
 --*/
 {
@@ -344,7 +342,7 @@ Return Value:
                                        &workItem);
             if (!NT_SUCCESS(status))
             {
-                return STATUS_SUCCESS;
+                return;
             }
 
             WdfWorkItemEnqueue(workItem);
@@ -354,10 +352,10 @@ Return Value:
                         DeviceExtension->DeviceObject));
         }
     }
-    return STATUS_SUCCESS;
+    return;
 }
 
-NTSTATUS
+VOID
 DeviceErrorHandlerForHitachiGD2000(
     _In_ PCDROM_DEVICE_EXTENSION  DeviceExtension,
     _In_ PSCSI_REQUEST_BLOCK      Srb,
@@ -396,7 +394,7 @@ Return Value:
 
     if (!TEST_FLAG(Srb->SrbStatus, SRB_STATUS_AUTOSENSE_VALID))
     {
-        return STATUS_SUCCESS; //nobody cares about this return value yet.
+        return;
     }
 
     if (((senseBuffer->SenseKey & 0xf) == SCSI_SENSE_HARDWARE_ERROR) &&
@@ -418,7 +416,7 @@ Return Value:
         DeviceSendStartUnit(DeviceExtension->Device);
     }
 
-    return STATUS_SUCCESS;
+    return;
 }
 
 

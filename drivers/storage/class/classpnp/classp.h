@@ -1274,7 +1274,7 @@ ClasspIsIdleRequest(
 #ifdef _MSC_VER
 #pragma warning(suppress:4305) // truncation is not an issue for this use case
 #endif
-    return ((BOOLEAN)Irp->Tail.Overlay.DriverContext[1]);
+    return (Irp->Tail.Overlay.DriverContext[1] != NULL);
 }
 
 FORCEINLINE

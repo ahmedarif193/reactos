@@ -851,7 +851,7 @@ UDFDoOPC(
     IN PVCB Vcb
     )
 {
-    OSSTATUS RC;
+    OSSTATUS RC = STATUS_SUCCESS;
     if(Vcb->OPCNum && !Vcb->OPCDone) {
         UDFPrint(("UDFDoOPC\n"));
         if(!Vcb->OPCh) {
