@@ -999,13 +999,16 @@ static void MSSTYLES_ParseThemeIni(PTHEME_FILE tf, BOOL setMetrics)
             struct PARSECOLORSTATE colorState;
             struct PARSENONCLIENTSTATE nonClientState;
             
-            parse_init_color (&colorState);
-            parse_init_nonclient (&nonClientState);
+            if (setMetrics)
+            {
+                parse_init_color (&colorState);
+                parse_init_nonclient (&nonClientState);
+            }
 
             while((lpName=UXINI_GetNextValue(ini, &dwLen, &lpValue, &dwValueLen))) {
                 lstrcpynW(szPropertyName, lpName, min(dwLen+1, ARRAY_SIZE(szPropertyName)));
                 if(MSSTYLES_LookupProperty(szPropertyName, &iPropertyPrimitive, &iPropertyId)) {
-                    if(iPropertyId >= TMT_FIRSTCOLOR && iPropertyId <= TMT_LASTCOLOR) {
+                    if(setMetrics && iPropertyId >= TMT_FIRSTCOLOR && iPropertyId <= TMT_LASTCOLOR) {
                         if (!parse_handle_color_property (&colorState, iPropertyId, 
                             lpValue, dwValueLen))
                             FIXME("Invalid color value for %s\n", 
@@ -1015,7 +1018,7 @@ static void MSSTYLES_ParseThemeIni(PTHEME_FILE tf, BOOL setMetrics)
 			BOOL flatMenus = (*lpValue == 'T') || (*lpValue == 't');
 			SystemParametersInfoW (SPI_SETFLATMENU, 0, (PVOID)(INT_PTR)flatMenus, 0);
 		    }
-		    else if ((iPropertyId >= TMT_FIRSTFONT) 
+		    else if (setMetrics && (iPropertyId >= TMT_FIRSTFONT)
 			&& (iPropertyId <= TMT_LASTFONT))
 		    {
 		        if (!parse_handle_nonclient_font (&nonClientState,
@@ -1023,7 +1026,7 @@ static void MSSTYLES_ParseThemeIni(PTHEME_FILE tf, BOOL setMetrics)
                             FIXME("Invalid font value for %s\n", 
                                 debugstr_w(szPropertyName)); 
 		    }
-		    else if ((iPropertyId >= TMT_FIRSTSIZE)
+		    else if (setMetrics && (iPropertyId >= TMT_FIRSTSIZE)
 			&& (iPropertyId <= TMT_LASTSIZE))
 		    {
 		        if (!parse_handle_nonclient_size (&nonClientState,
