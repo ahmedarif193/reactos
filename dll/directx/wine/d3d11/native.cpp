@@ -9,7 +9,7 @@
 #define WIN32_NO_STATUS
 #include <windows.h>
 #include <d3d11_1.h>
-#include <dxgi1_2.h>
+#include <dxgi1_4.h>
 #include <d3dkmthk.h>
 #include <d3d10umddi.h>
 #include <wine/winedxgi.h>
@@ -3184,7 +3184,7 @@ static int NativeTraceCompare(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-class NativeSwapChain final : public IDXGISwapChain1, public NativeAllocation
+class NativeSwapChain final : public IDXGISwapChain3, public NativeAllocation
 {
 public:
     LONG references = 1;
@@ -3246,8 +3246,9 @@ public:
         *out = NULL;
         if (!IsEqualGUID(iid, IID_IUnknown) && !IsEqualGUID(iid, IID_IDXGIObject)
                 && !IsEqualGUID(iid, IID_IDXGIDeviceSubObject) && !IsEqualGUID(iid, IID_IDXGISwapChain)
-                && !IsEqualGUID(iid, IID_IDXGISwapChain1)) return E_NOINTERFACE;
-        *out = static_cast<IDXGISwapChain1 *>(this);
+                && !IsEqualGUID(iid, IID_IDXGISwapChain1) && !IsEqualGUID(iid, IID_IDXGISwapChain2)
+                && !IsEqualGUID(iid, IID_IDXGISwapChain3)) return E_NOINTERFACE;
+        *out = static_cast<IDXGISwapChain3 *>(this);
         AddRef();
         return S_OK;
     }
@@ -3352,6 +3353,59 @@ public:
     HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA *out) override { if (!out) return E_INVALIDARG; NativeLock guard(device); *out = background; return S_OK; }
     HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION rotation) override { return rotation == DXGI_MODE_ROTATION_IDENTITY ? S_OK : DXGI_ERROR_UNSUPPORTED; }
     HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION *out) override { if (!out) return E_INVALIDARG; *out = DXGI_MODE_ROTATION_IDENTITY; return S_OK; }
+    HRESULT STDMETHODCALLTYPE SetSourceSize(UINT width, UINT height) override
+    {
+        NativeLock guard(device);
+        if (!width || !height || width > desc.Width || height > desc.Height) return E_INVALIDARG;
+        /* Publication currently covers the complete texture. Do not silently
+         * accept a crop that the compositor would then ignore. */
+        return width == desc.Width && height == desc.Height ? S_OK : DXGI_ERROR_UNSUPPORTED;
+    }
+    HRESULT STDMETHODCALLTYPE GetSourceSize(UINT *width, UINT *height) override
+    {
+        if (!width || !height) return E_INVALIDARG;
+        NativeLock guard(device);
+        *width = desc.Width; *height = desc.Height;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT) override { return DXGI_ERROR_INVALID_CALL; }
+    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT *) override { return DXGI_ERROR_INVALID_CALL; }
+    HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override { return NULL; }
+    HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F *matrix) override
+    {
+        if (!composition) return DXGI_ERROR_INVALID_CALL;
+        if (!matrix || matrix->_12 != 0 || matrix->_21 != 0) return E_INVALIDARG;
+        return matrix->_11 == 1 && matrix->_22 == 1 && matrix->_31 == 0 && matrix->_32 == 0
+                ? S_OK : DXGI_ERROR_UNSUPPORTED;
+    }
+    HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F *matrix) override
+    {
+        if (!composition) return DXGI_ERROR_INVALID_CALL;
+        if (!matrix) return E_INVALIDARG;
+        *matrix = {1, 0, 0, 1, 0, 0};
+        return S_OK;
+    }
+    /* D3D11 rotates resource identities on Present, so the application's
+     * current buffer remains zero (unlike explicit D3D12 buffer rotation). */
+    UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() override { return 0; }
+    HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE color_space, UINT *support) override
+    {
+        if (!support) return E_INVALIDARG;
+        *support = color_space == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709
+                ? DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT : 0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE color_space) override
+    {
+        /* The current compositor and scanout path interpret RGB as SDR. */
+        return color_space == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 ? S_OK : E_INVALIDARG;
+    }
+    HRESULT STDMETHODCALLTYPE ResizeBuffers1(UINT, UINT, UINT, DXGI_FORMAT, UINT,
+            const UINT *, IUnknown *const *) override
+    {
+        /* This entry point requires a D3D12 command-queue-backed chain. */
+        return DXGI_ERROR_INVALID_CALL;
+    }
 };
 
 HRESULT STDMETHODCALLTYPE NativeSwapChain::SetPrivateData(REFGUID guid, UINT size, const void *data)
@@ -3586,6 +3640,7 @@ static HRESULT APIENTRY NativePresent(HANDLE runtime_device, DXGIDDICB_PRESENT *
 
 HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
 {
+    if (requested.Flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) return DXGI_ERROR_UNSUPPORTED;
     if (!requested.Width || !requested.Height || !requested.BufferCount || requested.BufferCount > 16
             || requested.SampleDesc.Count != 1 || requested.SampleDesc.Quality || requested.Stereo) return DXGI_ERROR_INVALID_CALL;
     bool flip = requested.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL || requested.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD;
