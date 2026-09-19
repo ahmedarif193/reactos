@@ -175,6 +175,10 @@ if(GDB)
     set(_WINKD_ TRUE)
 endif()
 
+if(ARCH STREQUAL "riscv64" AND _WINKD_)
+    message(FATAL_ERROR "The RISC-V external KD transport is unavailable; select KD_DEBUGGER=KDBG or NONE")
+endif()
+
 cmake_dependent_option(ISAPNP_ENABLE "Whether to enable the ISA PnP support." ON
                        "ARCH STREQUAL i386 AND NOT SARCH STREQUAL xbox" OFF)
 

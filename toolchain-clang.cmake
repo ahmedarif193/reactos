@@ -1,3 +1,8 @@
+if(ARCH STREQUAL "riscv64")
+    include("${CMAKE_CURRENT_LIST_DIR}/toolchain-riscv64.cmake")
+    return()
+endif()
+
 macro(require_llvm_program varname execname)
     if(_llvm_tool_bin_hints)
         if(DEFINED CLANG_VERSION)

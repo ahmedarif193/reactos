@@ -39,6 +39,11 @@ elseif(ARCH STREQUAL "arm")
     list(APPEND CHKSTK_ASM_SOURCE except/arm/chkstk_asm.s)
 elseif(ARCH STREQUAL "arm64")
     list(APPEND CHKSTK_ASM_SOURCE except/arm64/chkstk_asm.s)
+elseif(ARCH STREQUAL "riscv64")
+    # Windows/RISC-V uses inline probes at each 4 KiB guard interval. There
+    # is no out-of-line helper ABI and no compatibility symbols to export.
+    add_library(chkstk INTERFACE)
+    return()
 endif()
 
 add_asm_files(chkstk_lib_asm ${CHKSTK_ASM_SOURCE})

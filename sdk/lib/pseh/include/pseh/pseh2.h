@@ -25,7 +25,7 @@
 
 #define __USE_PSEH2__
 
-#if defined(_MSC_VER) || (defined(_USE_NATIVE_SEH) && (!defined(__cplusplus) || defined(_M_ARM64)))
+#if defined(_MSC_VER) || (defined(_USE_NATIVE_SEH) && (!defined(__cplusplus) || defined(_M_ARM64) || defined(_M_RISCV64)))
 
 #define _SEH2_NATIVE_SEH
 

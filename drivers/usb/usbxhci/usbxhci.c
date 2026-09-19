@@ -2908,7 +2908,13 @@ XHCI_GetDmaCacheType(
     if (Extension && (Extension->Quirks & XHCI_QUIRK_NON_COHERENT_DMA))
         return MmNonCached;
 
+#if defined(_M_RISCV64)
+    /* The RISC-V HAL accepts this PCI host only when FDT marks its DMA
+     * coherent; the current RISC-V MM cannot make a noncached RAM alias. */
+    return MmCached;
+#else
     return MmNonCached;
+#endif
 }
 
 static MPSTATUS

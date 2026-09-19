@@ -68,7 +68,7 @@
  #pragma strict_gs_check(push, on)
 #endif
 
-#if defined(_M_MRX000) || defined(_M_ALPHA) || defined(_M_PPC) || defined(_M_IA64) || defined(_M_AMD64) || defined(_M_ARM) || defined(_M_ARM64)
+#if defined(_M_MRX000) || defined(_M_ALPHA) || defined(_M_PPC) || defined(_M_IA64) || defined(_M_ARM) || defined(_WIN64)
  #define ALIGNMENT_MACHINE
  #define UNALIGNED __unaligned
  #if defined(_WIN64)
@@ -119,6 +119,8 @@
 
 #if defined(_AMD64_) || defined(_X86_)
  #define PROBE_ALIGNMENT(_s) TYPE_ALIGNMENT($ULONG)
+#elif defined(_RISCV64_)
+ #define PROBE_ALIGNMENT(_s) max(TYPE_ALIGNMENT(_s), TYPE_ALIGNMENT($ULONG))
 #elif defined(_IA64_) || defined(_ARM_) || defined(_ARM64_)
  #define PROBE_ALIGNMENT(_s) max((TYPE_ALIGNMENT(_s), TYPE_ALIGNMENT($ULONG))
 #elif !defined(RC_INVOKED)
@@ -805,12 +807,12 @@ $endif(_WINNT_)
 #define RotateRight32 _rotr
 #define RotateRight64 _rotr64
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
  #define RotateLeft8 _rotl8
  #define RotateLeft16 _rotl16
  #define RotateRight8 _rotr8
  #define RotateRight16 _rotr16
-#endif /* _M_AMD64 || _M_ARM64 */
+#endif /* _WIN64 */
 
 /* C_ASSERT Definition */
 #define C_ASSERT(expr) extern char (*c_assert(void)) [(expr) ? 1 : -1]

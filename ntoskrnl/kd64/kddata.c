@@ -63,6 +63,17 @@ VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 #define KPRCB_PCR_PAGE_OFFSET          FIELD_OFFSET(KPRCB, PcrPage)
 #define CBSTACK_FRAME_POINTER          DummyFramePointer
 
+#elif defined(_M_RISCV64)
+
+/* ReactOS-private KPCR (ndk/riscv64/ketypes.h): no self pointer, the PRCB is
+ * contained, and the stack bounds live in the thread, not the PCR. */
+#define KPCR_SELF_PCR_OFFSET           0
+#define KPCR_CURRENT_PRCB_OFFSET       FIELD_OFFSET(KPCR, Prcb)
+#define KPCR_CONTAINED_PRCB_OFFSET     FIELD_OFFSET(KPCR, Prcb)
+#define KPCR_INITIAL_STACK_OFFSET      0
+#define KPCR_STACK_LIMIT_OFFSET        0
+#define KPRCB_PCR_PAGE_OFFSET          0
+
 #else
 #error Unsupported Architecture
 #endif
@@ -516,7 +527,7 @@ DBGKD_GET_VERSION64 KdVersionBlock =
     0,
     DBGKD_64BIT_PROTOCOL_VERSION2,
     CURRENT_KD_SECONDARY_VERSION,
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
     DBGKD_VERS_FLAG_DATA | DBGKD_VERS_FLAG_PTR64,
 #else
     DBGKD_VERS_FLAG_DATA,
@@ -549,7 +560,7 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     PtrToUL64(RtlpBreakWithStatusInstruction),
     0,
     FIELD_OFFSET(KTHREAD, CallbackStack),
-#if defined(_M_ARM) || defined(_M_AMD64) || (defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WIN8))
+#if defined(_M_ARM) || defined(_M_AMD64) || defined(_M_RISCV64) || (defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WIN8))
     0,
     0,
 #else
@@ -557,7 +568,11 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     FIELD_OFFSET(KCALLOUT_FRAME, CBSTACK_FRAME_POINTER),
 #endif
     FALSE,
+#if defined(_M_RISCV64)
+    0, // RISC-V user callbacks do not enter through KiCallUserMode
+#else
     PtrToUL64(KiCallUserMode),
+#endif
     0,
     PtrToUL64(&PsLoadedModuleList),
     PtrToUL64(&PsActiveProcessHead),
@@ -653,6 +668,10 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     // Win11 arm64 KPRCB has no CpuType/VendorString; closest equivalents
     FIELD_OFFSET(KPRCB, ProcessorModel),
     FIELD_OFFSET(KPRCB, ProcessorVendorString),
+#elif defined(_M_RISCV64)
+    // ReactOS-private RISC-V KPRCB carries no CPU type or vendor string
+    0,
+    0,
 #else
     FIELD_OFFSET(KPRCB, CpuType),
     FIELD_OFFSET(KPRCB, VendorString),

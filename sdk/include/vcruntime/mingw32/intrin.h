@@ -97,6 +97,8 @@
 #include "intrin_arm.h"
 #elif _VCRT_ARM64_INTRINSICS
 #include "intrin_arm64.h"
+#elif defined(_M_RISCV64)
+#include "intrin_riscv64.h"
 #elif _VCRT_GNU_AMD64_CODEGEN
 /* TODO: the x64 architecture shares most of the i386 intrinsics. It should be easy to support */
 #include "intrin_x86.h"

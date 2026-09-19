@@ -28,7 +28,9 @@
 
 #define inline __inline
 
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(__i386__) || defined(__x86_64__)
 #include <emmintrin.h>
+#endif
 #include <float.h>
 
 

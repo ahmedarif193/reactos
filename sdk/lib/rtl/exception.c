@@ -37,8 +37,18 @@ RtlpAmd64StepContextToCaller(
 VOID
 NTAPI
 RtlpArm64StepContextToCaller(_Inout_ PCONTEXT Context);
+#endif
 
-/* Defined in rtl/arm64/context_asm.S - loads the register file from Context and
+#if defined(_M_RISCV64)
+/* Defined in rtl/riscv64/dispatch.c - the same step for RISC-V. It marks the
+ * context as unwound to a call, so it runs after the context flags are set. */
+VOID
+NTAPI
+RtlpRiscv64StepContextToCaller(_Inout_ PCONTEXT Context);
+#endif
+
+#if defined(_M_ARM64) || defined(_M_RISCV64)
+/* Defined in rtl/<arch>/context_asm.S - loads the register file from Context and
  * branches to Context->Pc (does not return). Used to resume at a handler-patched
  * context; ZwContinue cannot resume a kernel-mode context from a non-trap call
  * site. */
@@ -74,6 +84,8 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
      * continues execution resumes after the raise instead of re-entering here.
      */
     RtlpArm64StepContextToCaller(&Context);
+#elif defined(_M_RISCV64)
+    RtlpRiscv64StepContextToCaller(&Context);
 #endif
 
     /* Save the exception address */
@@ -98,7 +110,7 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
         }
         else
         {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
             /* See RtlRaiseStatus: resume the handler-patched context directly;
              * ZwContinue cannot resume a kernel-mode context here. */
             RtlRestoreContext(&Context, ExceptionRecord);
@@ -154,6 +166,8 @@ RtlRaiseStatus(IN NTSTATUS Status)
      * all nonvolatile registers restored.
      */
     RtlpAmd64StepContextToCaller(&Context);
+#elif defined(_M_RISCV64)
+    RtlpRiscv64StepContextToCaller(&Context);
 #endif
 
     /* Check if user mode debugger is active */
@@ -171,7 +185,7 @@ RtlRaiseStatus(IN NTSTATUS Status)
          */
         if (RtlDispatchException(&ExceptionRecord, &Context))
         {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
             /*
              * The ARM64 language handler resolves an __except by patching the
              * context to the handler block and returning continue-execution.

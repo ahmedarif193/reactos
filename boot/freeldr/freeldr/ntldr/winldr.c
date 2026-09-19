@@ -1763,6 +1763,20 @@ LoadAndBootWindowsCommon(
 
     /* Exit firmware services after the final loader layout is mapped. */
     MachPrepareForReactOS();
+#elif defined(_M_RISCV64)
+    /* RISC-V firmware hands the OS loader an S-mode, bare-address-space
+     * context. Build and validate the complete Sv39 handoff before the
+     * irreversible ExitBootServices call. */
+    WinLdrSetupMachineDependent(LoaderBlock);
+    if (!RiscvLoaderSetupSucceeded() ||
+        !WinLdrSetupMemoryLayout(LoaderBlock) ||
+        !RiscvFinalizePageTables(LoaderBlock))
+    {
+        UiMessageBox("RISC-V kernel address-space preparation failed.");
+        return ENOEXEC;
+    }
+
+    MachPrepareForReactOS();
 #else
     /* "Stop all motors", change videomode */
     MachPrepareForReactOS();
@@ -1795,7 +1809,7 @@ LoadAndBootWindowsCommon(
         RtlZeroMemory(UserSharedData, MM_PAGE_SIZE);
     }
 
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
     WinLdrpDumpMemoryDescriptors(LoaderBlockVA);
     WinLdrpDumpBootDriver(LoaderBlockVA);
 #ifndef _M_AMD64
@@ -1807,6 +1821,10 @@ LoadAndBootWindowsCommon(
     Arm64JumpToKernel((ULONGLONG)(ULONG_PTR)KiSystemStartup,
                       (ULONGLONG)(ULONG_PTR)LoaderBlockVA,
                       (ULONGLONG)LoaderBlock->KernelStack);
+#elif defined(_M_RISCV64)
+    RiscvJumpToKernel((ULONG_PTR)KiSystemStartup,
+                      (ULONG_PTR)LoaderBlockVA,
+                      LoaderBlock->KernelStack);
 #else
     /* Pass control */
     (*KiSystemStartup)(LoaderBlockVA);

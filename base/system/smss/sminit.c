@@ -1902,6 +1902,10 @@ SmpCreateDynamicEnvironmentVariables(VOID)
             ValueData = L"ARM64";
             break;
 
+        case PROCESSOR_ARCHITECTURE_RISCV64:
+            ValueData = L"RISCV64";
+            break;
+
         default:
             ValueData = L"Unknown";
             break;

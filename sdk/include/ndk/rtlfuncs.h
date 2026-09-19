@@ -851,7 +851,7 @@ RtlUnwind(
 
 #define RTL_STACK_WALKING_MODE_FRAMES_TO_SKIP_SHIFT 8
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
 
 NTSYSAPI
 PRUNTIME_FUNCTION
@@ -876,7 +876,28 @@ RtlVirtualUnwind(
     _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers
 );
 
-#endif // _M_AMD64 || _M_ARM64
+#if defined(_M_RISCV64)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlVirtualUnwind2(
+    _In_ ULONG HandlerType,
+    _In_ ULONG_PTR ImageBase,
+    _In_ ULONG_PTR ControlPc,
+    _In_opt_ PRUNTIME_FUNCTION FunctionEntry,
+    _Inout_ PCONTEXT Context,
+    _Out_opt_ PBOOLEAN MachineFrameUnwound,
+    _Out_opt_ PVOID* HandlerData,
+    _Out_opt_ PULONG_PTR EstablisherFrame,
+    _Out_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers,
+    _Out_opt_ PULONG_PTR LowLimit,
+    _Out_opt_ PULONG_PTR HighLimit,
+    _Out_opt_ PEXCEPTION_ROUTINE* HandlerRoutine,
+    _In_ ULONG UnwindFlags
+);
+#endif
+
+#endif // _WIN64
 
 //
 // Tracing Functions

@@ -28,7 +28,7 @@ NTSTATUS
 CreatePin(
     IN PIRP Irp);
 
-#ifndef _M_IX86
+#if !defined(_M_IX86) && !defined(_M_RISCV64)
 #define KeSaveFloatingPointState(x) ((void)(x), STATUS_SUCCESS)
 #define KeRestoreFloatingPointState(x) ((void)0)
 #endif

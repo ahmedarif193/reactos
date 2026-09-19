@@ -321,7 +321,7 @@ UefiGetSmbiosSystemUuid(
     return FALSE;
 }
 
-#if defined(_M_ARM) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#if defined(_M_ARM) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__) || defined(_M_RISCV64)
 
 static
 const CHAR*
@@ -756,6 +756,16 @@ UefiHwDetect(
         RtlStringCbCopyA(SystemIdentifier,
                          sizeof(SystemIdentifier),
                          "ARM processor family");
+        UefiGetSmbiosSystemIdentifier(SystemIdentifier, sizeof(SystemIdentifier));
+        FldrCreateSystemKey(&SystemKey, SystemIdentifier);
+    }
+#elif defined(_M_RISCV64)
+    {
+        CHAR SystemIdentifier[128];
+
+        RtlStringCbCopyA(SystemIdentifier,
+                         sizeof(SystemIdentifier),
+                         "RISC-V processor family");
         UefiGetSmbiosSystemIdentifier(SystemIdentifier, sizeof(SystemIdentifier));
         FldrCreateSystemKey(&SystemKey, SystemIdentifier);
     }

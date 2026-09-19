@@ -923,6 +923,33 @@ BaseInitializeContext(IN PCONTEXT Context,
     }
 
     Context->ContextFlags = CONTEXT_FULL;
+#elif defined(_M_RISCV64)
+    DPRINT("BaseInitializeContext: %p\n", Context);
+    ASSERT(((ULONG_PTR)StackAddress & 15) == 0);
+
+    RtlZeroMemory(Context, sizeof(*Context));
+
+    /* Enter the shared C startup routines using the native argument bank.
+     * The kernel installs the new thread's TEB in tp, not the creator's. */
+    Context->A0 = (ULONG_PTR)StartAddress;
+    Context->A1 = (ULONG_PTR)Parameter;
+    Context->Sp = (ULONG_PTR)StackAddress;
+    Context->Ra = (ULONG_PTR)ExitThread;
+
+    if (ContextType == 1)      /* For Threads */
+    {
+        Context->Pc = (ULONG_PTR)BaseThreadStartup;
+    }
+    else if (ContextType == 2) /* For Fibers */
+    {
+        Context->Pc = (ULONG_PTR)BaseFiberStartup;
+    }
+    else                       /* For first thread in a Process */
+    {
+        Context->Pc = (ULONG_PTR)BaseProcessStartup;
+    }
+
+    Context->ContextFlags = CONTEXT_FULL;
 #elif defined(_M_ARM)
     DPRINT("BaseInitializeContext: %p\n", Context);
 

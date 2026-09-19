@@ -18,6 +18,8 @@ $include(mips/ke.h)
 $include(arm/ke.h)
 #elif defined(_M_ARM64)
 $include(arm64/ke.h)
+#elif defined(_M_RISCV64)
+$include(riscv64/ke.h)
 #else
 #error Unknown Architecture
 #endif

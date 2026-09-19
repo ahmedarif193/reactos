@@ -518,6 +518,8 @@
 #define PROCESSOR_ARCHITECTURE_ARM64 12
 #define PROCESSOR_ARCHITECTURE_ARM32_ON_WIN64 13
 #define PROCESSOR_ARCHITECTURE_IA32_ON_ARM64 14
+/* ReactOS-native RISC-V64 architecture ID (not defined by the Windows SDK). */
+#define PROCESSOR_ARCHITECTURE_RISCV64 15
 #define PROCESSOR_ARCHITECTURE_UNKNOWN 0xFFFF
 
 /* also in ddk/ntifs.h */
@@ -676,6 +678,7 @@ typedef struct _CFG_CALL_TARGET_INFO {
 #define IMAGE_FILE_MACHINE_POWERPC    0x1f0
 #define IMAGE_FILE_MACHINE_POWERPCFP  0x1f1
 #define IMAGE_FILE_MACHINE_R4000      0x166
+#define IMAGE_FILE_MACHINE_RISCV64    0x5064
 #define IMAGE_FILE_MACHINE_SH3        0x1a2
 #define IMAGE_FILE_MACHINE_SH3E       0x01a4
 #define IMAGE_FILE_MACHINE_SH3DSP     0x1a3
@@ -2554,6 +2557,8 @@ typedef struct _DISPATCHER_CONTEXT {
     BOOLEAN ControlPcIsUnwound;
     PBYTE  NonVolatileRegisters;
 } DISPATCHER_CONTEXT, *PDISPATCHER_CONTEXT;
+#elif defined(_M_RISCV64)
+$include(riscv64/ketypes.h)
 #else
 #error "undefined processor type"
 #endif
@@ -5303,6 +5308,22 @@ FORCEINLINE PVOID GetCurrentFiber(VOID)
 {
     return _read_teb_dword(0x10);
 }
+#elif defined(_M_RISCV64)
+/* ReactOS-private NT TEB register; not ELF thread-pointer-relative TLS. */
+FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
+{
+    struct _TEB *Teb;
+    __asm__("mv %0, tp" : "=r"(Teb));
+    return Teb;
+}
+FORCEINLINE PVOID GetCurrentFiber(VOID)
+{
+#ifdef NONAMELESSUNION
+    return ((PNT_TIB)NtCurrentTeb())->DUMMYUNIONNAME.FiberData;
+#else
+    return ((PNT_TIB)NtCurrentTeb())->FiberData;
+#endif
+}
 #else
 #error Unknown architecture
 #endif
@@ -5332,6 +5353,16 @@ DbgRaiseAssertionFailure(VOID)
 #define YieldProcessor __yield
 #elif _VCRT_ARM64_INTRINSICS
 #define YieldProcessor __yield
+#elif defined(_M_RISCV64)
+#ifndef _RISCV64_YIELD_PROCESSOR_DEFINED
+#define _RISCV64_YIELD_PROCESSOR_DEFINED
+FORCEINLINE VOID YieldProcessor(VOID)
+{
+    /* Do not require Zihintpause on the RV64GC baseline. */
+    __asm__ __volatile__("nop" ::: "memory");
+}
+#endif
+#define DbgRaiseAssertionFailure() __debugbreak()
 #else
 #error Unknown architecture
 #endif

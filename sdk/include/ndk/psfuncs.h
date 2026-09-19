@@ -677,7 +677,7 @@ NtCreateUserProcess(
 #endif
 
 #ifndef NTOS_MODE_USER
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
 NTKERNELAPI
 PVOID
 NTAPI
@@ -695,7 +695,7 @@ FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
 #elif defined (_M_ARM)
     // return (struct _TEB *)KeGetPcr()->Used_Self;
     return (struct _TEB *)(ULONG_PTR)_MoveFromCoprocessor(CP15_TPIDRURW);
-#elif defined (_M_ARM64)
+#elif defined (_M_ARM64) || defined(_M_RISCV64)
     return (struct _TEB *)PsGetCurrentThreadTeb();
 // #elif defined(_M_PPC)
 //     return (struct _TEB *)_read_teb_dword(0x18);

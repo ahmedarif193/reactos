@@ -557,6 +557,7 @@ extern "C" {
 #define QUERY_ACTCTX_FLAG_NO_ADDREF 0x80000000
 #if (_WIN32_WINNT >= 0x0600)
 #define SYMBOLIC_LINK_FLAG_DIRECTORY 0x1
+#define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
 #endif
 #endif /* (_WIN32_WINNT >= 0x0501) */
 #if (_WIN32_WINNT >= 0x0500)
@@ -1631,6 +1632,10 @@ HANDLE WINAPI CreateFileMappingW(HANDLE,LPSECURITY_ATTRIBUTES,DWORD,DWORD,DWORD,
 #if (_WIN32_WINNT >= 0x0500)
 BOOL WINAPI CreateHardLinkA(_In_ LPCSTR, _In_ LPCSTR, _Reserved_ LPSECURITY_ATTRIBUTES);
 BOOL WINAPI CreateHardLinkW(_In_ LPCWSTR, _In_ LPCWSTR, _Reserved_ LPSECURITY_ATTRIBUTES);
+#if (_WIN32_WINNT >= 0x0600)
+BOOLEAN WINAPI CreateSymbolicLinkA(_In_ LPCSTR, _In_ LPCSTR, _In_ DWORD);
+BOOLEAN WINAPI CreateSymbolicLinkW(_In_ LPCWSTR, _In_ LPCWSTR, _In_ DWORD);
+#endif
 #endif
 #if (_WIN32_WINNT >= 0x0500)
 _Ret_maybenull_ HANDLE WINAPI CreateJobObjectA(_In_opt_ LPSECURITY_ATTRIBUTES, _In_opt_ LPCSTR);
@@ -2190,6 +2195,9 @@ BOOL WINAPI GetNamedPipeInfo(_In_ HANDLE, _Out_opt_ PDWORD, _Out_opt_ PDWORD, _O
 VOID WINAPI GetNativeSystemInfo(LPSYSTEM_INFO);
 #if (_WIN32_WINNT >= 0x0602)
 BOOL WINAPI GetOsSafeBootMode(_Out_ PDWORD);
+#endif
+#if (_WIN32_WINNT >= 0x0601)
+DWORD WINAPI GetActiveProcessorCount(WORD GroupNumber);
 #endif
 #endif
 

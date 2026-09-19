@@ -178,7 +178,7 @@ NtRaiseException(
     NTSTATUS Status;
     PKTHREAD Thread;
     PKTRAP_FRAME TrapFrame;
-#ifdef _M_IX86
+#if defined(_M_IX86) || defined(_M_RISCV64)
     PKEXCEPTION_FRAME ExceptionFrame = NULL;
 #else
     KEXCEPTION_FRAME LocalExceptionFrame;
@@ -259,7 +259,7 @@ NtContinue(
     PKTHREAD Thread;
     NTSTATUS Status;
     PKTRAP_FRAME TrapFrame;
-#ifdef _M_IX86
+#if defined(_M_IX86) || defined(_M_RISCV64)
     PKEXCEPTION_FRAME ExceptionFrame = NULL;
 #else
     KEXCEPTION_FRAME LocalExceptionFrame;

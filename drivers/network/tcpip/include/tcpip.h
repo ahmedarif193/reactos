@@ -69,7 +69,7 @@
 #define NDIS_BUFFER_TAG FOURCC('n','b','u','f')
 #define NDIS_PACKET_TAG FOURCC('n','p','k','t')
 
-#if defined(i386) || defined(_AMD64_) || defined(_ARM_) || defined(_M_ARM64) || defined(__aarch64__)
+#if defined(i386) || defined(_AMD64_) || defined(_ARM_) || defined(_M_ARM64) || defined(__aarch64__) || defined(_M_RISCV64)
 
 /* DWORD network to host byte order conversion for i386 */
 #define DN2H(dw) \

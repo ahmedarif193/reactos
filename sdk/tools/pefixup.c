@@ -12,6 +12,8 @@
  *   when the struct is exported with the name '_load_config_used'
  */
 
+#include <ctype.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +21,23 @@
 // host_includes
 #include <typedefs.h>
 #include <pecoff.h>
-#include "../../dll/win32/dbghelp/compat.h"
+
+typedef struct _IMAGE_EXPORT_DIRECTORY
+{
+    DWORD Characteristics;
+    DWORD TimeDateStamp;
+    WORD MajorVersion;
+    WORD MinorVersion;
+    DWORD Name;
+    DWORD Base;
+    DWORD NumberOfFunctions;
+    DWORD NumberOfNames;
+    DWORD AddressOfFunctions;
+    DWORD AddressOfNames;
+    DWORD AddressOfNameOrdinals;
+} IMAGE_EXPORT_DIRECTORY, *PIMAGE_EXPORT_DIRECTORY;
+
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
 static const char* g_ApplicationName;
 static const char* g_Target;

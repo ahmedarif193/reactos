@@ -15,7 +15,7 @@
 
 #include <ntoskrnl.h>
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
 #define KBD_PS2_SUPPORTED 0
 #else
 #define KBD_PS2_SUPPORTED 1

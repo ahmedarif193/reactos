@@ -139,7 +139,7 @@ KdSendPacket(
             KD_CONTINUE_TYPE Result;
 
             Result = KdbEnterDebuggerException(&KdbgExceptionRecord,
-#ifdef _M_ARM64
+#if defined(_M_ARM64) || defined(_M_RISCV64)
                                                KiGetContextPreviousMode(&KdbgContext),
 #else
                                                KdbgContext.SegCs & 1,

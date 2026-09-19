@@ -238,6 +238,9 @@ KsecReadMachineSpecificCounters(
         __asm__ volatile("mrs %0, CNTVCT_EL0" : "=r"(cntvct));
         *MachineSpecificCounters = (ULONG)cntvct;
     }
+#elif defined(_M_RISCV64)
+    /* No mandatory, privilege-safe RISC-V counter is available here. */
+    *MachineSpecificCounters = 0;
 #else
     #error Implement me!
 #endif
