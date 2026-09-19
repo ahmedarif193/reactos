@@ -3315,7 +3315,6 @@ DwmComposeLoop(HANDLE hStopEvent)
     BOOL forceFull = TRUE;
     BOOL gpuDeferred = FALSE;
     DWORD gpuLastOutputCheck = 0;
-    DWORD gpuLastInitTry = 0;
     LONG vw, vh, primW, primH;
     ULONG ViewIndex;
 
@@ -3397,8 +3396,6 @@ DwmComposeLoop(HANDLE hStopEvent)
      * ICD contract and is never used to conceal a Direct3D/WDDM failure. */
     if (DwmGpuComposeInitialize(g_W, g_H))
         OutputDebugStringA("DWM: Direct3D composition enabled; GPU copy to scanout\n");
-    else
-        gpuLastInitTry = GetTickCount();
 
     if (DwmSettingsRead(&Settings.Effects) != ERROR_SUCCESS)
         DwmLog("DWM: could not read effect preferences\n");
@@ -3432,22 +3429,6 @@ DwmComposeLoop(HANDLE hStopEvent)
 
         if (WaitForSingleObject(hStopEvent, 0) == WAIT_OBJECT_0)
             break;
-
-        if (!DwmGpuComposeIsActive())
-        {
-            DWORD Elapsed = GetTickCount() - gpuLastInitTry;
-
-            if (Elapsed >= 2000)
-            {
-                gpuLastInitTry = GetTickCount();
-                if (DwmGpuComposeInitialize(g_W, g_H))
-                {
-                    DwmLog("DWM: native Direct3D compositor available\n");
-                    forceFull = TRUE;
-                    g_lastFrameQpc = 0;
-                }
-            }
-        }
 
         if (gpuDeferred)
         {
@@ -3559,6 +3540,8 @@ DwmComposeLoop(HANDLE hStopEvent)
             g_originX = newOriginX;
             g_originY = newOriginY;
             DwmShadowInit(hdcScreen);
+            if (!DwmGpuComposeIsActive() && DwmGpuComposeInitialize(g_W, g_H))
+                DwmLog("DWM: native Direct3D compositor available\n");
             g_lastFrameQpc = 0;
             forceFull = TRUE;
             continue;
