@@ -76,6 +76,7 @@ DWORD enumerate_Cookie(DWORD magic, DWORD *index);
 /* activated text services functions */
 HRESULT add_active_textservice(TF_LANGUAGEPROFILE *lp);
 BOOL get_active_textservice(REFCLSID rclsid, TF_LANGUAGEPROFILE *lp);
+BOOL get_active_textservice_by_category(REFGUID catid, TF_LANGUAGEPROFILE *profile);
 HRESULT activate_textservices(ITfThreadMgrEx *tm);
 HRESULT deactivate_textservices(void);
 

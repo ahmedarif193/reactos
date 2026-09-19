@@ -849,8 +849,35 @@ STDMETHODIMP CInputProcessorProfiles::GetActiveProfile(
     _In_ REFGUID catid,
     _Out_ TF_INPUTPROCESSORPROFILE *pProfile)
 {
-    FIXME("(%p)->(%s %p)\n", this, debugstr_guid(&catid), pProfile);
-    return E_NOTIMPL;
+    TF_LANGUAGEPROFILE languageProfile;
+    TF_INPUTPROCESSORPROFILE profile = {};
+
+    TRACE("(%p)->(%s %p)\n", this, debugstr_guid(&catid), pProfile);
+
+    if (cicIsNullPtr(&catid) || !pProfile || catid != GUID_TFCAT_TIP_KEYBOARD)
+        return E_INVALIDARG;
+
+    profile.catid = catid;
+    profile.dwFlags = TF_IPP_FLAG_ACTIVE | TF_IPP_FLAG_ENABLED;
+    if (get_active_textservice_by_category(catid, &languageProfile))
+    {
+        profile.dwProfileType = TF_PROFILETYPE_INPUTPROCESSOR;
+        profile.langid = languageProfile.langid;
+        profile.clsid = languageProfile.clsid;
+        profile.guidProfile = languageProfile.guidProfile;
+    }
+    else
+    {
+        profile.hkl = GetKeyboardLayout(0);
+        if (!profile.hkl)
+            return S_FALSE;
+
+        profile.dwProfileType = TF_PROFILETYPE_KEYBOARDLAYOUT;
+        profile.langid = LOWORD(HandleToUlong(profile.hkl));
+    }
+
+    *pProfile = profile;
+    return S_OK;
 }
 
 STDMETHODIMP CInputProcessorProfiles::AdviseSink(

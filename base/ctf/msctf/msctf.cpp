@@ -496,6 +496,22 @@ BOOL get_active_textservice(REFCLSID rclsid, TF_LANGUAGEPROFILE *profile)
 }
 
 EXTERN_C
+BOOL get_active_textservice_by_category(REFGUID catid, TF_LANGUAGEPROFILE *profile)
+{
+    AtsEntry *ats;
+
+    LIST_FOR_EACH_ENTRY(ats, &AtsList, AtsEntry, entry)
+    {
+        if (catid == ats->ats->LanguageProfile.catid)
+        {
+            *profile = ats->ats->LanguageProfile;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+EXTERN_C
 HRESULT activate_textservices(ITfThreadMgrEx *tm)
 {
     HRESULT hr = S_OK;

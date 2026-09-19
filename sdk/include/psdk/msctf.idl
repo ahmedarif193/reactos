@@ -105,6 +105,10 @@ cpp_quote("#define TF_MOD_IGNORE_ALL_MODIFIER   0x0400")
 cpp_quote("#define TF_PROFILETYPE_INPUTPROCESSOR  0x0001")
 cpp_quote("#define TF_PROFILETYPE_KEYBOARDLAYOUT  0x0002")
 
+cpp_quote("#define TF_IPP_FLAG_ACTIVE                     0x0001")
+cpp_quote("#define TF_IPP_FLAG_ENABLED                    0x0002")
+cpp_quote("#define TF_IPP_FLAG_SUBSTITUTEDBYINPUTPROCESSOR 0x0004")
+
 cpp_quote("#define TF_IPSINK_FLAG_ACTIVE 0x0001")
 
 interface ITfDocumentMgr;
