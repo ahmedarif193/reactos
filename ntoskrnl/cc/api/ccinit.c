@@ -21,6 +21,8 @@ typedef struct _CC_NT_DEFERRED_WRITE
 
 CC_CACHE CcNtCache;
 
+BOOLEAN CcPfEnablePrefetcher;
+
 ULONG CcLazyWritePages;
 ULONG CcLazyWriteIos;
 ULONG CcMapDataWait;

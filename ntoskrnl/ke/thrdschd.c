@@ -521,8 +521,17 @@ ThreadFound:
         (Thread->Priority > Target->NextThread->Priority))
     {
         DisplacedThread = Target->NextThread;
-        DisplacedThread->Preempted = TRUE;
-        DisplacedThread->State = DeferredReady;
+        /* Affinity changes and parking may select the idle thread. It is
+         * owned by this processor and never enters a dispatcher ready list. */
+        if (DisplacedThread == Target->IdleThread)
+        {
+            DisplacedThread = NULL;
+        }
+        else
+        {
+            DisplacedThread->Preempted = TRUE;
+            DisplacedThread->State = DeferredReady;
+        }
         Thread->State = Standby;
         Target->NextThread = Thread;
         IpiCause = SMPDBG_SCHED_REPLACE_STANDBY;
@@ -922,15 +931,17 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
         /* Check if priority changed */
         if (OldPriority > NextThread->Priority)
         {
-            /* Preempt the thread */
-            NextThread->Preempted = TRUE;
+            /* A displaced idle thread stays owned by its processor. */
+            if (NextThread != Prcb->IdleThread)
+            {
+                NextThread->Preempted = TRUE;
+                NextThread->State = DeferredReady;
+            }
 
             /* Put this one as the next one */
             Thread->State = Standby;
             Prcb->NextThread = Thread;
 
-            /* Set it in deferred ready mode */
-            NextThread->State = DeferredReady;
             KiReleasePrcbLock(Prcb);
             KiReleaseThreadLock(Thread);
 
@@ -945,7 +956,8 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             }
 #endif
 
-            KiDeferredReadyThread(NextThread);
+            if (NextThread != Prcb->IdleThread)
+                KiDeferredReadyThread(NextThread);
             return;
         }
     }
