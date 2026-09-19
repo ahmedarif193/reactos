@@ -75,6 +75,8 @@ static INT  test_OnInitDocumentMgr = SINK_UNEXPECTED;
 static INT  test_OnPushContext = SINK_UNEXPECTED;
 static INT  test_OnPopContext = SINK_UNEXPECTED;
 static INT  test_KEV_OnSetFocus = SINK_UNEXPECTED;
+static unsigned key_callbacks[4];
+static BOOL check_external_edit;
 static INT  test_ACP_AdviseSink = SINK_UNEXPECTED;
 static INT  test_ACP_UnadviseSink = SINK_UNEXPECTED;
 static INT  test_ACP_RequestLock = SINK_UNEXPECTED;
@@ -406,6 +408,7 @@ static HRESULT WINAPI TextStoreACP_GetEndACP(ITextStoreACP *iface,
 static HRESULT WINAPI TextStoreACP_GetActiveView(ITextStoreACP *iface, TsViewCookie *view)
 {
     if (winetest_debug > 1) trace("ITextStoreACP::GetActiveView()\n");
+    *view = 19;
     return S_OK;
 }
 static HRESULT WINAPI TextStoreACP_GetACPFromPoint(ITextStoreACP *iface,
@@ -425,11 +428,13 @@ static HRESULT WINAPI TextStoreACP_GetScreenExt(ITextStoreACP *iface,
         TsViewCookie view, RECT *rect)
 {
     if (winetest_debug > 1) trace("ITextStoreACP::GetScreenExt(view %#lx)\n", view);
+    SetRect(rect, 1, 2, 301, 202);
     return S_OK;
 }
 static HRESULT WINAPI TextStoreACP_GetWnd(ITextStoreACP *iface, TsViewCookie view, HWND *window)
 {
     if (winetest_debug > 1) trace("ITextStoreACP::GetWnd(view %#lx)\n", view);
+    *window = GetDesktopWindow();
     return S_OK;
 }
 
@@ -647,15 +652,15 @@ static ULONG WINAPI TfKeyTraceEventSink_Release(ITfKeyTraceEventSink *iface)
 static HRESULT WINAPI TfKeyTraceEventSink_OnKeyTraceDown(ITfKeyTraceEventSink *iface,
                                                          WPARAM wparam, LPARAM lparam)
 {
-    ok(0, "unexpected call\n");
-    return E_NOTIMPL;
+    ok(wparam == 'Z', "unexpected key trace: %Ix\n", wparam);
+    return S_OK;
 }
 
 static HRESULT WINAPI TfKeyTraceEventSink_OnKeyTraceUp(ITfKeyTraceEventSink *iface,
                                                        WPARAM wparam, LPARAM lparam)
 {
-    ok(0, "unexpected call\n");
-    return E_NOTIMPL;
+    ok(wparam == 'Z', "unexpected key trace: %Ix\n", wparam);
+    return S_OK;
 }
 
 static const ITfKeyTraceEventSinkVtbl TfKeyTraceEventSinkVtbl = {
@@ -1411,28 +1416,36 @@ static HRESULT WINAPI KeyEventSink_OnSetFocus(ITfKeyEventSink *iface,
 static HRESULT WINAPI KeyEventSink_OnTestKeyDown(ITfKeyEventSink *iface,
         ITfContext *pic, WPARAM wParam, LPARAM lParam, BOOL *pfEaten)
 {
-    trace("\n");
+    ++key_callbacks[0];
+    ok(pic != NULL, "missing focused context\n");
+    *pfEaten = wParam == 'Z';
     return S_OK;
 }
 
 static HRESULT WINAPI KeyEventSink_OnTestKeyUp(ITfKeyEventSink *iface,
         ITfContext *pic, WPARAM wParam, LPARAM lParam, BOOL *pfEaten)
 {
-    trace("\n");
+    ++key_callbacks[1];
+    ok(pic != NULL, "missing focused context\n");
+    *pfEaten = wParam == 'Z';
     return S_OK;
 }
 
 static HRESULT WINAPI KeyEventSink_OnKeyDown(ITfKeyEventSink *iface,
         ITfContext *pic, WPARAM wParam, LPARAM lParam, BOOL *pfEaten)
 {
-    trace("\n");
+    ++key_callbacks[2];
+    ok(pic != NULL, "missing focused context\n");
+    *pfEaten = wParam == 'Z';
     return S_OK;
 }
 
 static HRESULT WINAPI KeyEventSink_OnKeyUp(ITfKeyEventSink *iface,
         ITfContext *pic, WPARAM wParam, LPARAM lParam, BOOL *pfEaten)
 {
-    trace("\n");
+    ++key_callbacks[3];
+    ok(pic != NULL, "missing focused context\n");
+    *pfEaten = wParam == 'Z';
     return S_OK;
 }
 
@@ -1497,6 +1510,18 @@ static void test_KeystrokeMgr(void)
     ok(hr == CONNECT_E_ADVISELIMIT,"Wrong return, expected CONNECT_E_ADVISELIMIT\n");
     hr = ITfKeystrokeMgr_AdviseKeyEventSink(keymgr,cid,sink,TRUE);
     ok(hr == E_INVALIDARG,"Wrong return, expected E_INVALIDARG\n");
+
+    {
+        BOOL eaten;
+        hr = ITfKeystrokeMgr_TestKeyDown(keymgr, 'Z', 0, &eaten);
+        ok(hr == S_OK && eaten && key_callbacks[0] == 1, "test down: %lx/%u\n", hr, eaten);
+        hr = ITfKeystrokeMgr_TestKeyUp(keymgr, 'Z', 0, &eaten);
+        ok(hr == S_OK && eaten && key_callbacks[1] == 1, "test up: %lx/%u\n", hr, eaten);
+        hr = ITfKeystrokeMgr_KeyDown(keymgr, 'Z', 0, &eaten);
+        ok(hr == S_OK && eaten && key_callbacks[2] == 1, "key down: %lx/%u\n", hr, eaten);
+        hr = ITfKeystrokeMgr_KeyUp(keymgr, 'Z', 0, &eaten);
+        ok(hr == S_OK && eaten && key_callbacks[3] == 1, "key up: %lx/%u\n", hr, eaten);
+    }
 
     hr =ITfKeystrokeMgr_PreserveKey(keymgr, 0, &CLSID_PreservedKey, &tfpk, NULL, 0);
     ok(hr==E_INVALIDARG,"ITfKeystrokeMgr_PreserveKey improperly succeeded\n");
@@ -1666,6 +1691,37 @@ static HRESULT WINAPI TextEditSink_OnEndEdit(ITfTextEditSink *iface,
     ITfContext *pic, TfEditCookie ecReadOnly, ITfEditRecord *pEditRecord)
 {
     sink_fire_ok(&test_OnEndEdit,"TextEditSink_OnEndEdit");
+    ok(pEditRecord != NULL, "missing edit record\n");
+    if (check_external_edit && pEditRecord)
+    {
+        BOOL changed = FALSE;
+        IEnumTfRanges *enumeration = NULL;
+        ITfRange *range = NULL;
+        ITfRangeACP *acp = NULL;
+        ULONG fetched;
+        LONG start, length;
+        HRESULT hr = ITfEditRecord_GetSelectionStatus(pEditRecord, &changed);
+        ok(hr == S_OK && changed, "selection change: %lx/%u\n", hr, changed);
+        hr = ITfEditRecord_GetTextAndPropertyUpdates(pEditRecord, TF_GTP_INCL_TEXT, NULL, 0, &enumeration);
+        ok(hr == S_OK, "changed ranges: %lx\n", hr);
+        if (enumeration)
+        {
+            hr = IEnumTfRanges_Next(enumeration, 1, &range, &fetched);
+            ok(hr == S_OK && fetched == 1, "changed range count: %lx/%lu\n", hr, fetched);
+            if (range)
+            {
+                ITfRange_QueryInterface(range, &IID_ITfRangeACP, (void **)&acp);
+                if (acp)
+                {
+                    hr = ITfRangeACP_GetExtent(acp, &start, &length);
+                    ok(hr == S_OK && start == 2 && length == 4, "edit extent: %lx/%ld/%ld\n", hr, start, length);
+                    ITfRangeACP_Release(acp);
+                }
+                ITfRange_Release(range);
+            }
+            IEnumTfRanges_Release(enumeration);
+        }
+    }
     return S_OK;
 }
 
@@ -2207,6 +2263,35 @@ static HRESULT EditSession_Constructor(ITfEditSession **ppOut)
     return S_OK;
 }
 
+static LONG layout_refs = 1;
+static unsigned layout_calls;
+static HRESULT WINAPI layout_QueryInterface(ITfTextLayoutSink *iface, REFIID iid, void **out)
+{
+    *out = NULL;
+    if (!IsEqualGUID(iid, &IID_IUnknown) && !IsEqualGUID(iid, &IID_ITfTextLayoutSink)) return E_NOINTERFACE;
+    *out = iface;
+    InterlockedIncrement(&layout_refs);
+    return S_OK;
+}
+static ULONG WINAPI layout_AddRef(ITfTextLayoutSink *iface) { return InterlockedIncrement(&layout_refs); }
+static ULONG WINAPI layout_Release(ITfTextLayoutSink *iface) { return InterlockedDecrement(&layout_refs); }
+static HRESULT WINAPI layout_Changed(ITfTextLayoutSink *iface, ITfContext *context, TfLayoutCode code, ITfContextView *view)
+{
+    HWND window = NULL;
+    RECT rect = {0};
+    HRESULT hr;
+    ++layout_calls;
+    ok(context && view, "missing layout objects\n");
+    if (!view) return E_FAIL;
+    hr = ITfContextView_GetWnd(view, &window);
+    ok(hr == S_OK && window == GetDesktopWindow(), "layout HWND: %lx/%p\n", hr, window);
+    hr = ITfContextView_GetScreenExt(view, &rect);
+    ok(hr == S_OK && rect.left == 1 && rect.bottom == 202, "layout rectangle: %lx\n", hr);
+    return S_OK;
+}
+static const ITfTextLayoutSinkVtbl layout_vtbl = {layout_QueryInterface, layout_AddRef, layout_Release, layout_Changed};
+static ITfTextLayoutSink layout_sink = {&layout_vtbl};
+
 static void test_TStoApplicationText(void)
 {
     HRESULT hr, hrSession;
@@ -2258,6 +2343,53 @@ static void test_TStoApplicationText(void)
     sink_check_ok(&test_OnEndEdit,"OnEndEdit");
     sink_check_ok(&test_DoEditSession,"DoEditSession");
     ok(hrSession == 0xdeadcafe,"Unexpected hrSession (%lx)\n",hrSession);
+
+    if (source)
+    {
+        DWORD layout_cookie;
+        ITfContextView *view = NULL;
+        ITextStoreACPServices *services = NULL;
+        ITfRangeACP *tracked = NULL;
+        TS_TEXTCHANGE change = {2, 4, 6};
+        LONG start, length;
+        hr = ITfSource_AdviseSink(source, &IID_ITfTextLayoutSink, (IUnknown *)&layout_sink, &layout_cookie);
+        ok(hr == S_OK, "advise layout: %lx\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = ITextStoreACPSink_OnLayoutChange(ACPSink, TS_LC_CHANGE, 19);
+            ok(hr == S_OK && layout_calls == 1, "layout event: %lx/%u\n", hr, layout_calls);
+            ITfSource_UnadviseSink(source, layout_cookie);
+        }
+        hr = ITfContext_GetActiveView(cxt, &view);
+        ok(hr == S_OK && view != NULL, "active view: %lx\n", hr);
+        if (view) ITfContextView_Release(view);
+        hr = ITextStoreACPSink_QueryInterface(ACPSink, &IID_ITextStoreACPServices, (void **)&services);
+        if (SUCCEEDED(hr))
+        {
+            hr = ITextStoreACPServices_CreateRange(services, 0, 4, &tracked);
+            ok(hr == S_OK, "tracked range: %lx\n", hr);
+            ITextStoreACPServices_Release(services);
+        }
+        ITextStoreACPSink_OnStartEditTransaction(ACPSink);
+        hr = ITextStoreACPSink_OnTextChange(ACPSink, 0, &change);
+        ok(hr == S_OK, "text notification: %lx\n", hr);
+        hr = ITextStoreACPSink_OnSelectionChange(ACPSink);
+        ok(hr == S_OK, "selection notification: %lx\n", hr);
+        check_external_edit = TRUE;
+        test_ACP_RequestLock = SINK_EXPECTED;
+        test_OnEndEdit = SINK_EXPECTED;
+        hr = ITextStoreACPSink_OnEndEditTransaction(ACPSink);
+        ok(hr == S_OK, "finish transaction: %lx\n", hr);
+        sink_check_ok(&test_OnEndEdit, "external edit");
+        sink_check_ok(&test_ACP_RequestLock, "notification lock");
+        check_external_edit = FALSE;
+        if (tracked)
+        {
+            hr = ITfRangeACP_GetExtent(tracked, &start, &length);
+            ok(hr == S_OK && start == 0 && length == 6, "tracked extent: %lx/%ld/%ld\n", hr, start, length);
+            ITfRangeACP_Release(tracked);
+        }
+    }
 
     if (source)
     {
