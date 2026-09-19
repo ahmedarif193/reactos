@@ -7733,6 +7733,30 @@ DxgkSignalSynchronizationObject2(
     }
     PayloadValue = (SignalFlags & DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT) != 0 ? (UINT64)(ULONG_PTR)pData->CpuEventHandle : pData->Fence.FenceValue;
     Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount, DxgkContextSyncOperationSignal2, pData->ObjectHandleArray, pData->ObjectCount, SignalFlags, PayloadValue, NULL, UserMode);
+    if (Status == STATUS_DEVICE_BUSY &&
+        (SignalFlags & DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT) != 0)
+    {
+        ULONGLONG Deadline = KeQueryInterruptTime() +
+            (ULONGLONG)VIDSCH_CONTEXT_BACKPRESSURE_MS * 10000ULL;
+
+        /* A full stream must not turn a completion notification into a
+         * permanent polling fallback. Failed broadcast admission publishes
+         * no markers. Wait with no admission/miniport lock held, then retry
+         * the entire broadcast atomically, retaining the referenced contexts.
+         * Another submitter can consume the room, so share one deadline. */
+        do
+        {
+            for (CompareIndex = 0; CompareIndex < ContextCount; ++CompareIndex)
+            {
+                Status = DxgkContextOrderWaitForRoom(Contexts[CompareIndex], Deadline);
+                if (!NT_SUCCESS(Status))
+                    goto Cleanup;
+            }
+            Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount,
+                DxgkContextSyncOperationSignal2, pData->ObjectHandleArray,
+                pData->ObjectCount, SignalFlags, PayloadValue, NULL, UserMode);
+        } while (Status == STATUS_DEVICE_BUSY && KeQueryInterruptTime() < Deadline);
+    }
 
 Cleanup:
     while (ContextCount != 0)

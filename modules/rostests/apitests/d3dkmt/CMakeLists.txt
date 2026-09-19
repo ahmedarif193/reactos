@@ -22,6 +22,7 @@ else()
 endif()
 
 list(APPEND SOURCE
+    eventcancel.c
     d3dkmt_adapter.c
     d3dkmt_device.c
     d3dkmt_alloc.c

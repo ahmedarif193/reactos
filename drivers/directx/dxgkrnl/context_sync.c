@@ -258,7 +258,14 @@ DxgkContextSyncExecute(
     if (Capture->Executed != 0)
         Status = STATUS_ALREADY_COMPLETE;
     else if (InterlockedCompareExchange(&Device->Destroying, 0, 0) != 0 || InterlockedCompareExchange(&Device->ExecutionState, 0, 0) != D3DKMT_DEVICEEXECUTION_ACTIVE)
+    {
         Status = STATUS_DEVICE_REMOVED;
+        /* Executed below also records terminal errors. Release a CPU-event
+         * waiter here before marking this operation executed; the retirement
+         * path then avoids signalling an auto-reset event a second time. */
+        if (Capture->EnqueueEvent != NULL)
+            KeSetEvent(Capture->EnqueueEvent, IO_NO_INCREMENT, FALSE);
+    }
     else if (Capture->Operation == DxgkContextSyncOperationLegacyWait || Capture->Operation == DxgkContextSyncOperationWait2)
         Status = DxgkContextSyncCoreExecuteWait(Capture->CoreObjects, Capture->ObjectCount, Capture->PayloadValue, Capture->PerObjectValues ? Capture->PayloadValues : NULL);
     else
