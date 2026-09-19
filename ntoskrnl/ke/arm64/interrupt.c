@@ -11,6 +11,9 @@
  */
 
 #include <ntoskrnl.h>
+#if defined(_M_ARM64)
+#include <reactos/cpuaudit.h>
+#endif
 #define NDEBUG
 #include <debug.h>
 #include <arm64pl011.h>
@@ -83,6 +86,8 @@ typedef struct _KI_ARM64_IRQ_FRAME
     ULONG64 X27;
     ULONG64 X28;
     ULONG64 Reserved2;
+    ULONGLONG AuditEntry;
+    ULONGLONG AuditPad;
     UCHAR RedZone[0x10];
 } KI_ARM64_IRQ_FRAME, *PKI_ARM64_IRQ_FRAME;
 
@@ -93,8 +98,8 @@ C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, V) == 0xE0);
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fpcr) == 0x2E0);
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fpsr) == 0x2E8);
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, X22) == 0x2F0);
-C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, RedZone) == 0x330);
-C_ASSERT(sizeof(KI_ARM64_IRQ_FRAME) == 0x340);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, RedZone) == 0x340);
+C_ASSERT(sizeof(KI_ARM64_IRQ_FRAME) == 0x350);
 
 /*
  * A freeze IPI can interrupt a thread near the end of its kernel stack.  Keep
@@ -526,6 +531,7 @@ KiArm64TimerIsr(
      * accounting. Keep this as a real frame, not a sentinel pointer.
      */
     TrapFrame = KiArm64GetInterruptTrapFrame(Cpu);
+    KiCpuAuditTick(TrapFrame->Pc);
 
     /* SMP boot diagnostics: silent per-CPU tick counter only. The periodic
      * serial dump is disabled for this probe - at 115200 baud it perturbs the
@@ -969,8 +975,8 @@ KiArm64InterruptDispatchExit(
     }
 }
 
-ULONG
-KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqFrame)
+static ULONG
+KiArm64InterruptDispatchEntryInner(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqFrame)
 {
     ULONG IntId;
     ULONG Cpu;
@@ -983,6 +989,7 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
 
     /* Ask HAL for current INTID */
     IntId = HalGetInterruptSource();
+    IrqFrame->Reserved2 = IntId;
 
     if ((IntId == ARM64_SGI_APC) || (IntId == ARM64_SGI_DPC))
     {
@@ -1080,6 +1087,8 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
         /* Deassert the level-sensitive timer before nested IRQs are enabled. */
         if (Head == &KiArm64TimerInterrupt[Cpu]) KiArm64AcknowledgeClockInterrupt(Cpu);
         _enable();
+        if (KiCpuAuditActive && Cpu < CPU_AUDIT_CPUS && IntId < CPU_AUDIT_IRQS)
+            KiCpuAuditIrqs[Cpu][IntId].HandlerCalls++;
         KiArm64DispatchChain(Head);
         _disable();
     }
@@ -1090,6 +1099,24 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId, _In_ PKI_ARM64_IRQ_FRAME IrqF
     HalEndSystemInterrupt(OldIrql, NULL);
 
     return 0;
+}
+
+ULONG
+KiArm64InterruptDispatchEntry(ULONG VectorId, PKI_ARM64_IRQ_FRAME Frame)
+{
+    ULONG Cpu = KeGetCurrentProcessorNumber(), Result;
+    ULONGLONG Begin = KiCpuAuditActive ? KiCpuAuditClock() : 0;
+    Frame->Reserved0 = 0;
+    Result = KiArm64InterruptDispatchEntryInner(VectorId, Frame);
+    if (Begin && Cpu < CPU_AUDIT_CPUS && Frame->Reserved2 < CPU_AUDIT_IRQS)
+    {
+        CPU_AUDIT_IRQ *Irq = &KiCpuAuditIrqs[Cpu][Frame->Reserved2];
+        ULONGLONG Elapsed = KiCpuAuditClock() - Begin;
+        Irq->Count++; Irq->DispatchTicks += Elapsed;
+        if (Elapsed > Irq->MaximumTicks) Irq->MaximumTicks = Elapsed;
+        Frame->Reserved0 = (ULONG_PTR)Irq;
+    }
+    return Result;
 }
 
 /*

@@ -7,6 +7,9 @@
  */
 
 #include <ntoskrnl.h>
+#if defined(_M_ARM64)
+#include <reactos/cpuaudit.h>
+#endif
 #define NDEBUG
 #include <debug.h>
 
@@ -206,6 +209,7 @@ KiReportCpuFeatures(IN PKPRCB Prcb)
 VOID
 KeFlushTb(VOID)
 {
+    KiCpuAuditEvent(CPU_AUDIT_TLB, 0, 1, 0);
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");

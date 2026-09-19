@@ -1325,7 +1325,9 @@ DxgkpProgramSharedPrimaryScanout(
     }
     _SEH2_TRY
     {
+        DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_BLIT);
         Status = DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress)(Adapter->MiniportDeviceContext, SetSourceAddress);
+        DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {

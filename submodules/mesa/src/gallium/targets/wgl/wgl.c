@@ -76,6 +76,8 @@
 #include "v3d/d3dkmt/v3d_d3dkmt_public.h"
 #endif
 
+static struct stw_winsys stw_winsys;
+
 #ifdef GALLIUM_LLVMPIPE
 static bool use_llvmpipe = false;
 #endif
@@ -191,12 +193,18 @@ wgl_screen_create(HDC hDC)
       if (screen) {
          created_driver_name = drivers[i];
 #ifdef GALLIUM_VC4
-         if (use_vc4)
+         if (use_vc4) {
             winsys->destroy(winsys);
+            stw_winsys.presentation_trace = vc4_d3dkmt_trace_control;
+            stw_winsys.presentation_trace_bank = &vc4_present_trace;
+         }
 #endif
 #ifdef GALLIUM_V3D
-         if (use_v3d)
+         if (use_v3d) {
             winsys->destroy(winsys);
+            stw_winsys.presentation_trace = v3d_d3dkmt_trace_control;
+            stw_winsys.presentation_trace_bank = &v3d_present_trace;
+         }
 #endif
          return screen;
       }
@@ -498,7 +506,7 @@ wgl_can_compose(void)
    return false;
 }
 
-static const struct stw_winsys stw_winsys = {
+static struct stw_winsys stw_winsys = {
    &wgl_screen_create,
    &wgl_present,
 #if WINVER >= 0xA00
@@ -517,13 +525,8 @@ static const struct stw_winsys stw_winsys = {
 #endif
    &wgl_create_framebuffer,
    &wgl_get_name,
-#ifdef GALLIUM_VC4
-   &vc4_d3dkmt_trace_control,
-   &vc4_present_trace,
-#else
    NULL,
    NULL,
-#endif
    &wgl_present_region,
    &wgl_can_compose,
 };

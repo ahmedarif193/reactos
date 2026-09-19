@@ -7,6 +7,9 @@
  */
 
 #include <ntoskrnl.h>
+#if defined(_M_ARM64)
+#include <reactos/cpuaudit.h>
+#endif
 #define NDEBUG
 #include <debug.h>
 #include <reactos/smpdbg.h>
@@ -398,6 +401,7 @@ KiSwapContextResume(
         KiChargeThreadCycleTime(Prcb, OldThread);
 #endif
 
+    KiCpuAuditSwitch(OldThread, NewThread);
     NewThread->ContextSwitches++;
 
     /*

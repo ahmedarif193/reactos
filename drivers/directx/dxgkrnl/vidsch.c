@@ -649,6 +649,14 @@ VidSchpDrainRetirements(_In_ PDXGKRNL_ADAPTER Adapter)
                 continue;
             if (Packet->UnboundFence)
                 Packet->SubmissionFenceId = Records[Index].SubmissionFenceId;
+            if (Packet->PresentationRetireTrace.Epoch && Packet->Device != NULL &&
+                Packet->Device->ProcessRecord != NULL)
+                DxgPresentTracePacket(HandleToUlong(PsGetProcessId(Packet->Device->ProcessRecord->Process)),
+                                      Packet->NodeOrdinal, Packet->SubmissionFenceId,
+                                      Packet->PresentationQueueTrace, Packet->PresentationRetireTrace,
+                                      Records[Index].Reason == Dxgmms2RetireCompleted,
+                                      Packet->PresentationWorkerVisit, Packet->PresentationWorkerClaim,
+                                      Packet->PresentationRootTicks);
             /* Every record here is a packet the miniport has handed back,
              * whatever the reason, so this is the one place the node's busy
              * charge has to close. */
@@ -816,6 +824,8 @@ BOOLEAN VidSchIsContextOrderPacketDispatchable(_In_ PVIDSCH_DMA_PACKET Packet)
 
     if (Packet == NULL || Packet->OwnerEngine == NULL || InterlockedCompareExchange(&Packet->ContextOrderState, 0, 0) != VIDSCH_CONTEXT_ORDER_ADMITTED)
         return FALSE;
+    if (Packet->PresentationQueueTrace.Epoch && !Packet->PresentationWorkerVisit)
+        Packet->PresentationWorkerVisit = DptNow();
     Engine = Packet->OwnerEngine;
     Sched = VidSchpScheduler(Engine->Adapter);
     if (Sched == NULL)
@@ -916,6 +926,8 @@ VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet)
     }
     if (InterlockedCompareExchange(&Packet->ContextOrderState, VIDSCH_CONTEXT_ORDER_DISPATCHING, VIDSCH_CONTEXT_ORDER_CLAIMED) != VIDSCH_CONTEXT_ORDER_CLAIMED)
         return;
+    if (Packet->PresentationQueueTrace.Epoch && !Packet->PresentationWorkerClaim)
+        Packet->PresentationWorkerClaim = DptNow();
     Engine = Packet->OwnerEngine;
     if (!VidSchpAcquireCall(Engine->Adapter))
     {
@@ -2344,11 +2356,14 @@ VidSchpSubmitVirtualPacket(
     if (KmdCallAcquired &&
         !(Packet->SubmitFlags & VIDSCH_SUBMITFLAG_NULLRENDERING))
     {
+        ULONGLONG RootStart = Packet->PresentationQueueTrace.Epoch ? DptNow() : 0;
         /* Keep reset rundown across both DDIs so a reset cannot invalidate
          * the root association between publication and command submission. */
         Status = DxgkGpuVaSetRootPageTable(Adapter,
                                           Packet->Device->ProcessRecord,
                                           (PDXGKRNL_CONTEXT)Packet->Context);
+        if (RootStart)
+            Packet->PresentationRootTicks += DptNow() - RootStart;
         if (!NT_SUCCESS(Status))
         {
             DxgkReleaseKmdCall(Adapter);
@@ -3438,6 +3453,8 @@ VidSchSubmitCommandTrackedMeasured(
     ULONG AdmittedFenceId;
     PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched;
     NTSTATUS Status;
+    DPT_SCOPE Trace;
+    BOOLEAN FenceReserved;
 
     PAGED_CODE();
 
@@ -3458,7 +3475,9 @@ VidSchSubmitCommandTrackedMeasured(
     if (!VidSchpAcquireCall(Adapter))
         return STATUS_DELETE_PENDING;
 
+    Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_PACKET_PREPARE);
     Status = VidSchpPrepareSubmit(Adapter, NodeOrdinal, EngineOrdinal, TRUE, &Engine, &Packet);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
     if (!NT_SUCCESS(Status))
     {
         VidSchpReleaseCall(Adapter);
@@ -3472,7 +3491,10 @@ VidSchSubmitCommandTrackedMeasured(
         VidSchpReleaseCall(Adapter);
         return STATUS_INTEGER_OVERFLOW;
     }
-    if (!DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, Packet->SubmissionFenceId, &Packet->FenceIdentityEpoch))
+    Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_FENCE_RESERVE);
+    FenceReserved = DxgkReserveSubmissionFenceIdentity(Adapter, NodeOrdinal, Packet->SubmissionFenceId, &Packet->FenceIdentityEpoch);
+    DptEnd(&g_DxgPresentTrace, Trace, FenceReserved, 0);
+    if (!FenceReserved)
     {
         VidSchpDereferencePacket(Packet);
         VidSchpReleaseCall(Adapter);
@@ -3537,7 +3559,9 @@ VidSchSubmitCommandTrackedMeasured(
         }
         PacketDevice = TrackArgs->Context->Device;
     }
+    Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_TRACK_PREPARE);
     Status = DxgkPrepareTrackedDmaBuffer(Adapter, &LocalTrackArgs, &Reservation);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
     if (!NT_SUCCESS(Status))
     {
         VidSchpDereferencePacket(Packet);
@@ -3606,6 +3630,7 @@ VidSchSubmitCommandTrackedMeasured(
             return STATUS_DELETE_PENDING;
         }
 
+        Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_PATCH);
         _SEH2_TRY
         {
             Status = DXGK_CB_FULL(Adapter, DxgkDdiPatch)(Adapter->MiniportDeviceContext, &PatchArgs);
@@ -3615,6 +3640,7 @@ VidSchSubmitCommandTrackedMeasured(
             Status = _SEH2_GetExceptionCode();
         }
         _SEH2_END;
+        DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
         DxgkReleaseKmdCall(Adapter);
 
         if (!NT_SUCCESS(Status))
@@ -3630,7 +3656,9 @@ VidSchSubmitCommandTrackedMeasured(
      * the adapter consumes the physical DMA buffer directly.  Publish the
      * final byte range itself instead of relying on an unrelated allocation
      * cache clean to evict these writes as a side effect. */
+    Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_DMA_CLEAN);
     Status = DxgkFlushDmaBufferForSubmission(DmaBuffer);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
     if (!NT_SUCCESS(Status))
     {
         DxgkCancelTrackedDmaBuffer(Reservation);
@@ -3640,7 +3668,9 @@ VidSchSubmitCommandTrackedMeasured(
     }
 
     Ctx = (PVIDSCH_CONTEXT)Adapter->VidSchContext;
+    Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_LIFECYCLE_WAIT);
     ExAcquireFastMutex(&Ctx->LifecycleMutex);
+    DptEnd(&g_DxgPresentTrace, Trace, TRUE, 0);
     if (VidSchpReadSchedulerState(Ctx) != VidSchSchedulerRunning)
     {
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
@@ -3668,7 +3698,9 @@ VidSchSubmitCommandTrackedMeasured(
         VidSchpReleaseCall(Adapter);
         return Status;
     }
+    Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_TRACK_ACTIVATE);
     Status = DxgkActivateTrackedDmaBuffer(Reservation);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
     if (!NT_SUCCESS(Status))
     {
         Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
@@ -3690,7 +3722,9 @@ VidSchSubmitCommandTrackedMeasured(
             VidSchpReleaseCall(Adapter);
             return STATUS_DELETE_PENDING;
         }
+        Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_CONTEXT_ADMIT);
         Status = DxgkContextOrderAdmitPacket(OrderedContext, Packet);
+        DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
         if (!NT_SUCCESS(Status))
         {
             ExReleaseRundownProtection(&OrderedContext->StreamAdmissionRundown);
@@ -3707,7 +3741,9 @@ VidSchSubmitCommandTrackedMeasured(
     Packet->TrackerReservation = Reservation;
     DxgkAdoptTrackedDmaBuffer(Reservation);
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
+    Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_SCHED_ADMIT);
     Status = VidSchpAdmitPacket(Adapter, Packet, DXGMMS2_SCHEDULER_ADMIT_CONSUME_RESERVATION, &AdmittedFenceId);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
     if (!NT_SUCCESS(Status))
     {
         Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
@@ -3731,6 +3767,7 @@ VidSchSubmitCommandTrackedMeasured(
     if (OrderedContext != NULL)
         ExReleaseRundownProtection(&OrderedContext->StreamAdmissionRundown);
 
+    Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_CONTEXT_KICK);
     if (KickContext != NULL)
     {
         DxgkContextOrderKickContext(KickContext);
@@ -3738,6 +3775,7 @@ VidSchSubmitCommandTrackedMeasured(
     }
     else if (Packet->ContextOrderOperation == NULL)
         (VOID)VidSchpKickEngine(Engine, NULL);
+    DptEnd(&g_DxgPresentTrace, Trace, TRUE, 0);
     *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;

@@ -17,6 +17,8 @@
 #include <vkd3d_shader.h>
 #include <wine/debug.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d11);
 
@@ -2833,6 +2835,18 @@ void STDMETHODCALLTYPE NativeContext::IASetInputLayout(ID3D11InputLayout *layout
     ReplaceObject(input_layout, layout);
 }
 
+static ULONGLONG NativeTraceNow()
+{
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    return counter.QuadPart;
+}
+static int NativeTraceCompare(const void *a, const void *b)
+{
+    ULONGLONG x = *(const ULONGLONG *)a, y = *(const ULONGLONG *)b;
+    return (x > y) - (x < y);
+}
+
 class NativeSwapChain final : public IDXGISwapChain1, public NativeAllocation
 {
 public:
@@ -2852,6 +2866,13 @@ public:
     bool pending_publication = false;
     HMODULE retirement_module = NULL;
     UINT present_count = 0;
+    struct { ULONGLONG interval, present, consumed, producer, driver, submit, poll, sleeps; } trace_frames[4096] = {};
+    ULONG trace_count = 0, trace_lost = 0;
+    ULONGLONG trace_previous = 0, trace_consumed = 0, trace_producer = 0, trace_driver = 0;
+    ULONGLONG trace_submit = 0, trace_poll = 0, trace_sleeps = 0;
+    HRESULT PresentMeasured(UINT, UINT, const DXGI_PRESENT_PARAMETERS *);
+    HRESULT WaitForPublicationMeasured(bool);
+    void DumpTrace();
     bool primary = false;
 
     NativeSwapChain(NativeDevice *d, IDXGIFactory *f, HWND w) : device(d), factory(f), window(w)
@@ -2861,6 +2882,7 @@ public:
     }
     ~NativeSwapChain()
     {
+        DumpTrace();
         while (pending_publication)
         {
             HRESULT hr = WaitForPublication(true);
@@ -3003,6 +3025,14 @@ DWORD WINAPI NativeSwapChain::DestroyPending(void *argument)
 
 HRESULT NativeSwapChain::WaitForPublication(bool wait)
 {
+    ULONGLONG start = NativeTraceNow();
+    HRESULT hr = WaitForPublicationMeasured(wait);
+    trace_consumed += NativeTraceNow() - start;
+    return hr;
+}
+
+HRESULT NativeSwapChain::WaitForPublicationMeasured(bool wait)
+{
     if (!pending_publication) return S_OK;
     DWORD started = GetTickCount();
     do
@@ -3054,20 +3084,27 @@ HRESULT NativeSwapChain::Publish(NativeTexture2D *texture, UINT flags,
 
     /* A successful driver Present need not mean that its GPU writes have
      * finished. The compositor opens this resource on another device. */
+    ULONGLONG trace_start = NativeTraceNow();
     device->context->End(completion);
     device->context->Flush();
+    trace_submit += NativeTraceNow() - trace_start;
     DWORD started = GetTickCount();
     BOOL done = FALSE;
     do
     {
+        ULONGLONG poll_start = NativeTraceNow();
         hr = device->context->GetData(completion, &done, sizeof(done), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        trace_poll += NativeTraceNow() - poll_start;
         if (FAILED(hr)) return hr;
         if (hr == S_OK && done) break;
         if ((flags & DXGI_PRESENT_DO_NOT_WAIT) || GetTickCount() - started >= 5000)
             return DXGI_ERROR_WAS_STILL_DRAWING;
+        ULONGLONG sleep_start = NativeTraceNow();
         Sleep(1);
+        trace_sleeps += NativeTraceNow() - sleep_start;
     } while (true);
 
+    trace_producer += NativeTraceNow() - trace_start;
     DWM_DX_SURFACE_EXCHANGE exchange = {};
     exchange.StructSize = sizeof(exchange);
     exchange.Action = DWM_DX_SURFACE_PUBLISH;
@@ -3286,6 +3323,65 @@ HRESULT STDMETHODCALLTYPE NativeSwapChain::ResizeBuffers(UINT count, UINT width,
 
 HRESULT STDMETHODCALLTYPE NativeSwapChain::Present1(UINT interval, UINT flags, const DXGI_PRESENT_PARAMETERS *parameters)
 {
+    ULONGLONG start = NativeTraceNow();
+    trace_consumed = trace_producer = trace_driver = 0;
+    trace_submit = trace_poll = trace_sleeps = 0;
+    HRESULT hr = PresentMeasured(interval, flags, parameters);
+    ULONGLONG end = NativeTraceNow();
+    if (hr == S_OK && !(flags & DXGI_PRESENT_TEST))
+    {
+        if (trace_count < ARRAYSIZE(trace_frames))
+        {
+            trace_frames[trace_count].interval = trace_previous ? end - trace_previous : 0;
+            trace_frames[trace_count].present = end - start;
+            trace_frames[trace_count].consumed = trace_consumed;
+            trace_frames[trace_count].producer = trace_producer;
+            trace_frames[trace_count].driver = trace_driver;
+            trace_frames[trace_count].submit = trace_submit;
+            trace_frames[trace_count].poll = trace_poll;
+            trace_frames[trace_count].sleeps = trace_sleeps;
+            ++trace_count;
+        }
+        else ++trace_lost;
+        trace_previous = end;
+    }
+    return hr;
+}
+
+void NativeSwapChain::DumpTrace()
+{
+    const ULONG skip = 60;
+    if (primary || trace_count <= skip) return;
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    ULONGLONG *values = static_cast<ULONGLONG *>(HeapAlloc(GetProcessHeap(), 0, trace_count * sizeof(*values)));
+    if (!values) return;
+    const char *names[] = {"interval", "present", "consumed_wait", "producer_wait", "driver_present", "producer_submit", "producer_poll", "producer_sleeps"};
+    for (ULONG metric = 0; metric < ARRAYSIZE(names); ++metric)
+    {
+        ULONGLONG sum = 0;
+        ULONG count = trace_count - skip;
+        for (ULONG i = skip; i < trace_count; ++i)
+        {
+            auto &f = trace_frames[i];
+            ULONGLONG v = metric == 0 ? f.interval : metric == 1 ? f.present : metric == 2 ? f.consumed : metric == 3 ? f.producer : metric == 4 ? f.driver : metric == 5 ? f.submit : metric == 6 ? f.poll : f.sleeps;
+            values[i - skip] = v; sum += v;
+        }
+        qsort(values, count, sizeof(*values), NativeTraceCompare);
+        char line[384];
+        _snprintf(line, sizeof(line), "NATIVE_PRESENT_TIMING pid=%lu metric=%s samples=%lu lost=%lu avg_us=%I64u p95_us=%I64u p99_us=%I64u max_us=%I64u buffers=%u transport=%u\n",
+            GetCurrentProcessId(), names[metric], count, trace_lost,
+            sum * 1000000 / frequency.QuadPart / count,
+            values[(count - 1) * 95 / 100] * 1000000 / frequency.QuadPart,
+            values[(count - 1) * 99 / 100] * 1000000 / frequency.QuadPart,
+            values[count - 1] * 1000000 / frequency.QuadPart, desc.BufferCount, transport != NULL);
+        line[sizeof(line)-1] = 0; OutputDebugStringA(line);
+    }
+    HeapFree(GetProcessHeap(), 0, values);
+}
+
+HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_PRESENT_PARAMETERS *parameters)
+{
     if (interval > 4 || (flags & ~(DXGI_PRESENT_TEST | DXGI_PRESENT_DO_NOT_WAIT | DXGI_PRESENT_RESTART
             | DXGI_PRESENT_DO_NOT_SEQUENCE))) return DXGI_ERROR_INVALID_CALL;
     if (parameters && ((parameters->DirtyRectsCount && !parameters->pDirtyRects)
@@ -3357,7 +3453,9 @@ HRESULT STDMETHODCALLTYPE NativeSwapChain::Present1(UINT interval, UINT flags, c
     args.Flags.Blt = 1;
     args.FlipInterval = static_cast<DXGI_DDI_FLIP_INTERVAL_TYPE>(interval);
     device->BeginCall();
+    ULONGLONG trace_driver_start = NativeTraceNow();
     HRESULT hr = device->dxgi_functions.pfnPresent(&args);
+    trace_driver += NativeTraceNow() - trace_driver_start;
     if (FAILED(hr)) return hr;
     if (FAILED(device->operation_error)) return device->operation_error;
     if (hr != S_OK) return hr;

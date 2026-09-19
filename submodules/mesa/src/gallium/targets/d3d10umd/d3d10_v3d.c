@@ -25,6 +25,15 @@
 #include "v3d/v3d_resource.h"
 #include "v3d_d3dkmt_public.h"
 
+BOOL WINAPI MesaControlPresentationTraceROS(const void *request, void *output,
+                                          ULONG bytes);
+
+BOOL WINAPI
+MesaControlPresentationTraceROS(const void *request, void *output, ULONG bytes)
+{
+   return v3d_d3dkmt_trace_control(request, output, bytes);
+}
+
 struct pipe_screen *d3d10_create_screen(void *adapter, void *device,
                                         const void *callbacks);
 struct pipe_resource *d3d10_create_resource(

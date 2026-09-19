@@ -11,6 +11,9 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#if defined(_M_ARM64)
+#include <reactos/cpuaudit.h>
+#endif
 #include <reactos/wow64shared.h>
 #define NDEBUG
 #include <debug.h>
@@ -787,6 +790,9 @@ NtQueryInformationProcess(
 
         /* Timing */
         case ProcessTimes:
+#if defined(_M_ARM64)
+            KiCpuAuditProcessTimes();
+#endif
         {
             PKERNEL_USER_TIMES ProcessTime = (PKERNEL_USER_TIMES)ProcessInformation;
             ULONG UserTime, KernelTime;

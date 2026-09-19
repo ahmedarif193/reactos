@@ -2731,7 +2731,7 @@ DxgkpDisplayDispatch(
                 break;
             }
             RtlCopyMemory(&Request, Buffer, sizeof(Request));
-            Result = DptControl(&g_DxgPresentTrace, &Request, Buffer, sizeof(DPT_DOMAIN), 0);
+            Result = DxgPresentTraceControl(&Request, Buffer, sizeof(DPT_DOMAIN));
             Status = Result == 0 ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
             if (NT_SUCCESS(Status))
                 BytesReturned = sizeof(DPT_DOMAIN);

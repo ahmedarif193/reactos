@@ -30,6 +30,7 @@
 #include "context.h"
 #include "vidmm.h"
 #include "vidsch.h"
+#include "presenttrace.h"
 
 /* ========================================================================
  * Global state
@@ -50,6 +51,7 @@ DxgkBeginKmdTransaction(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     PVOID CurrentThread;
+    NTSTATUS WaitStatus;
 
     PAGED_CODE();
     if (Adapter == NULL)
@@ -59,17 +61,34 @@ DxgkBeginKmdTransaction(
     {
         ASSERT(InterlockedCompareExchange(&Adapter->KmdTransactionDepth, 0, 0) > 0);
         InterlockedIncrement(&Adapter->KmdTransactionDepth);
+        Adapter->KmdTraceBeginCaller = _ReturnAddress();
         return TRUE;
     }
-    (VOID)KeWaitForSingleObject(&Adapter->KmdTransactionMutex, Executive, KernelMode, FALSE, NULL);
+    {
+        DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_DEVICE_LOCK);
+        WaitStatus = KeWaitForSingleObject(&Adapter->KmdTransactionMutex, Executive, KernelMode, FALSE, NULL);
+        DptEnd(&g_DxgPresentTrace, Trace, TRUE, 0);
+    }
     if (!DxgkAcquireKmdCall(Adapter))
     {
         KeReleaseMutex(&Adapter->KmdTransactionMutex, FALSE);
         return FALSE;
     }
+    if (Adapter->KmdTransactionOwnerThread != NULL || WaitStatus != STATUS_SUCCESS ||
+        Adapter->KmdTransactionMutex.OwnerThread != CurrentThread)
+        DbgPrint("KMD_TRANSACTION_STATE adapter=%p current=%p pid=%p owner=%p owner_pid=%p depth=%ld wait=%08lx mutex_owner=%p signal=%ld abandoned=%u caller=%p last_begin=%p last_end=%p irql=%u\n",
+                 Adapter, CurrentThread, PsGetCurrentProcessId(),
+                 Adapter->KmdTransactionOwnerThread, Adapter->KmdTraceOwnerPid,
+                 Adapter->KmdTransactionDepth, WaitStatus,
+                 Adapter->KmdTransactionMutex.OwnerThread,
+                 Adapter->KmdTransactionMutex.Header.SignalState,
+                 Adapter->KmdTransactionMutex.Abandoned, _ReturnAddress(),
+                 Adapter->KmdTraceBeginCaller, Adapter->KmdTraceEndCaller, KeGetCurrentIrql());
     ASSERT(Adapter->KmdTransactionOwnerThread == NULL);
     ASSERT(InterlockedCompareExchange(&Adapter->KmdTransactionDepth, 0, 0) == 0);
     InterlockedExchange(&Adapter->KmdTransactionDepth, 1);
+    Adapter->KmdTraceBeginCaller = _ReturnAddress();
+    Adapter->KmdTraceOwnerPid = PsGetCurrentProcessId();
     KeMemoryBarrier();
     Adapter->KmdTransactionOwnerThread = CurrentThread;
     KeMemoryBarrier();
@@ -85,6 +104,7 @@ DxgkEndKmdTransaction(
     PAGED_CODE();
     ASSERT(Adapter != NULL);
     ASSERT(Adapter->KmdTransactionOwnerThread == PsGetCurrentThread());
+    Adapter->KmdTraceEndCaller = _ReturnAddress();
     Depth = InterlockedDecrement(&Adapter->KmdTransactionDepth);
     ASSERT(Depth >= 0);
     if (Depth != 0)

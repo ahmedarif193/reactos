@@ -15,6 +15,7 @@ dep_vc4kmt = cc.find_library(
   static : true,
 )
 dep_v3d_gdi32 = cc.find_library('gdi32', required : true)
+dep_v3d_trace = declare_dependency(include_directories : include_directories(reactos_source_dir / 'sdk/include/reactos'))
 
 libv3dwinsys = static_library(
   'v3dwinsys',
@@ -24,7 +25,7 @@ libv3dwinsys = static_library(
     inc_gallium, inc_gallium_aux, inc_gallium_drivers,
   ],
   gnu_symbol_visibility : 'hidden',
-  dependencies : [idep_mesautil],
+  dependencies : [idep_mesautil, dep_v3d_trace],
 )
 
-v3d_winsys_deps += [dep_vc4kmt, dep_v3d_gdi32]
+v3d_winsys_deps += [dep_vc4kmt, dep_v3d_gdi32, dep_v3d_trace]

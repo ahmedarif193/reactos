@@ -11,7 +11,7 @@
 #include <reactos/dwmpresenttracenames.h>
 #include "profile.h"
 
-#define PROFILE_FRAME_CAPACITY 8192
+#define PROFILE_FRAME_CAPACITY 131072
 #define PROFILE_TOP_FRAMES 20
 
 typedef struct _PROFILE_FRAME

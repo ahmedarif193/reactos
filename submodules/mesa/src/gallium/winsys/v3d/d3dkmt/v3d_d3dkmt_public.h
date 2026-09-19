@@ -8,6 +8,11 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <windows.h>
+
+struct _DPT_BANK;
+extern struct _DPT_BANK v3d_present_trace;
+BOOL v3d_d3dkmt_trace_control(const void *request, void *output, ULONG bytes);
 
 struct pipe_screen;
 struct pipe_context;

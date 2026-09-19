@@ -11,6 +11,9 @@
 /* INCLUDES *****************************************************************/
 
 #include <ntoskrnl.h>
+#if defined(_M_ARM64)
+#include <reactos/cpuaudit.h>
+#endif
 #include <wmidata.h>
 #include <wmistr.h>
 #include <drivers/acpi/acpisystem.h>
@@ -3534,6 +3537,10 @@ NtQuerySystemInformation(
     PAGED_CODE();
 
     PreviousMode = ExGetPreviousMode();
+#if defined(_M_ARM64)
+    if ((ULONG)SystemInformationClass == CPU_AUDIT_CLASS)
+        return KiCpuAuditControl(SystemInformation, SystemInformationLength, PreviousMode);
+#endif
 
     _SEH2_TRY
     {

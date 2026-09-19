@@ -56,6 +56,7 @@
 #include "vidmm_worker_drain_core.h"
 #include "vidsch.h"
 #include "present.h"
+#include "presenttrace.h"
 #include "debug.h"
 #include <ndk/psfuncs.h>
 #include <reactos/dwmframe.h>
@@ -13165,7 +13166,7 @@ DxgkVidMmFillAllocationListEntry(
 
 #if defined(REACTOS_WDDM_TARGET_LEVEL) && (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 static NTSTATUS
-DxgkpVidMmCleanAllocationForSubmissionLocked(
+DxgkpVidMmCleanAllocationForSubmissionLockedImpl(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
@@ -13245,10 +13246,21 @@ DxgkpVidMmCleanAllocationForSubmissionLocked(
     KeMemoryBarrier();
     return STATUS_SUCCESS;
 }
+
+static NTSTATUS
+DxgkpVidMmCleanAllocationForSubmissionLocked(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_CACHE_CLEAN);
+    NTSTATUS Status = DxgkpVidMmCleanAllocationForSubmissionLockedImpl(Allocation, Adapter);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), Allocation->Size);
+    return Status;
+}
 #endif
 
-NTSTATUS
-DxgkVidMmAcquireSubmissionResidencyPinEx(
+static NTSTATUS
+DxgkVidMmAcquireSubmissionResidencyPinExImpl(
     _In_ PDXGKVMM_ALLOCATION Allocation,
     _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
     _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry,
@@ -13299,6 +13311,19 @@ DxgkVidMmAcquireSubmissionResidencyPinEx(
         }
     }
     KeReleaseMutex(&Allocation->ResidencyLock, FALSE);
+    return Status;
+}
+
+NTSTATUS
+DxgkVidMmAcquireSubmissionResidencyPinEx(
+    _In_ PDXGKVMM_ALLOCATION Allocation,
+    _In_ PDXGKRNL_ADAPTER ExpectedAdapter,
+    _Out_opt_ DXGK_ALLOCATIONLIST *ListEntry,
+    _In_ BOOLEAN CpuDirty)
+{
+    DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_RESIDENCY_PIN);
+    NTSTATUS Status = DxgkVidMmAcquireSubmissionResidencyPinExImpl(Allocation, ExpectedAdapter, ListEntry, CpuDirty);
+    DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
     return Status;
 }
 

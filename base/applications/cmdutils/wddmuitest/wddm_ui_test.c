@@ -1622,7 +1622,8 @@ RunDesktopPerf(HWND Owner, ULONG SampleCount)
     for (Phase = 0; Phase < ARRAYSIZE(Names); ++Phase)
     {
         LARGE_INTEGER Start, End, A, B;
-        ULONGLONG Samples[DESKTOP_PERF_LONG_COUNT], CpuStart, CpuEnd, Wall;
+        ULONGLONG Samples[DESKTOP_PERF_LONG_COUNT], PointerSamples[DESKTOP_PERF_LONG_COUNT];
+        ULONGLONG CpuStart, CpuEnd, Wall;
         DXGK_PRESENT_STATS Before, After;
         ULONG Failures = 0, FramesBefore = 0, FramesAfter = 0, QueuedBefore = 0, QueuedAfter = 0;
         BOOL HaveFrames;
@@ -1679,6 +1680,7 @@ RunDesktopPerf(HWND Owner, ULONG SampleCount)
         Next = GetTickCount();
         for (Index = 0; Index < SampleCount; ++Index)
         {
+            PointerSamples[Index] = 0;
             QueryPerformanceCounter(&A);
             if (Phase == 2)
             {
@@ -1688,6 +1690,8 @@ RunDesktopPerf(HWND Owner, ULONG SampleCount)
             {
                 if (!SetCursorPos(Original.left + 40 + Index % 120,
                                    Original.top + 40 + Index % 80)) ++Failures;
+                QueryPerformanceCounter(&B);
+                PointerSamples[Index] = ElapsedMicroseconds(A, B);
             }
             if ((Phase == 4 || Phase == 6) &&
                 !SetWindowPos(Owner, NULL, Original.left + Index % 120,
@@ -1738,10 +1742,11 @@ RunDesktopPerf(HWND Owner, ULONG SampleCount)
             else CleanDragFpsMilli = Fps;
         }
         TestPrint("DWM_PERF phase=%s wall_us=%llu cpu_us=%llu cpu_core_pct=%llu "
-                  "p95_us=%llu presents=%lu scanout=%lu pointer=%lu pointer_fail=%lu failures=%lu kmd_avg_us=%llu hw_pointer=%lu full_stats=%u full_frames=%lu queued=%lu\n",
+                  "p95_us=%llu pointer_p95_us=%llu presents=%lu scanout=%lu pointer=%lu pointer_fail=%lu failures=%lu kmd_avg_us=%llu hw_pointer=%lu full_stats=%u full_frames=%lu queued=%lu\n",
                   Names[Phase], Wall, (CpuEnd - CpuStart) / 10,
                   Wall ? (CpuEnd - CpuStart) * 10 / Wall : 0,
                   Percentile95(Samples, SampleCount),
+                  Percentile95(PointerSamples, SampleCount),
                   After.PresentCalls - Before.PresentCalls,
                   After.ScanoutCopies - Before.ScanoutCopies,
                   After.PointerPositionCalls - Before.PointerPositionCalls,
