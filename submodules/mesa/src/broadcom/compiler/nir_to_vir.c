@@ -2890,9 +2890,14 @@ ntq_emit_load_input(struct v3d_compile *c, nir_intrinsic_instr *instr)
                 * as LDVPMV takes a minimum of 1 instruction but may
                 * be slower if the VPM unit is busy with another QPU.
                 */
+               /* Match the builtin prefix emitted by ntq_setup_vs_inputs,
+                * including the zero-based vertex and Vulkan instance aliases.
+                */
                int index = 0;
                if (BITSET_TEST(c->s->info.system_values_read,
-                               SYSTEM_VALUE_INSTANCE_ID)) {
+                               SYSTEM_VALUE_INSTANCE_ID) ||
+                   BITSET_TEST(c->s->info.system_values_read,
+                               SYSTEM_VALUE_INSTANCE_INDEX)) {
                       index++;
                }
                if (BITSET_TEST(c->s->info.system_values_read,
@@ -2900,7 +2905,9 @@ ntq_emit_load_input(struct v3d_compile *c, nir_intrinsic_instr *instr)
                       index++;
                }
                if (BITSET_TEST(c->s->info.system_values_read,
-                               SYSTEM_VALUE_VERTEX_ID)) {
+                               SYSTEM_VALUE_VERTEX_ID) ||
+                   BITSET_TEST(c->s->info.system_values_read,
+                               SYSTEM_VALUE_VERTEX_ID_ZERO_BASE)) {
                       index++;
                }
 

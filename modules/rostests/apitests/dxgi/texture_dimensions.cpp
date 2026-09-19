@@ -7,17 +7,31 @@
 
 static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
         ID3D11ShaderResourceView *view, const char *source, UINT expected,
-        UINT samples = 1, UINT sample_mask = ~0u, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM)
+        UINT samples = 1, UINT sample_mask = ~0u, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM, UINT width = 1, UINT height = 1,
+        DXGI_FORMAT vertex_format = DXGI_FORMAT_UNKNOWN, UINT vertex_mode = 0)
 {
     HMODULE compiler = LoadLibraryW(L"d3dcompiler_47.dll");
     typedef HRESULT (WINAPI *COMPILE)(const void *, SIZE_T, const char *, const D3D_SHADER_MACRO *,
             ID3DInclude *, const char *, const char *, UINT, UINT, ID3DBlob **, ID3DBlob **);
     COMPILE compile = compiler ? reinterpret_cast<COMPILE>(GetProcAddress(compiler, "D3DCompile")) : NULL;
     if (!compile) { skip("Shader compiler unavailable\n"); return; }
-    const char vs_source[] = "float4 main(uint id : SV_VertexID) : SV_Position {"
+    const char *vs_source = "float4 main(uint id : SV_VertexID) : SV_Position {"
             "return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.0, 1.0);}";
+    if (vertex_format != DXGI_FORMAT_UNKNOWN)
+        vs_source = "struct O {float4 p : SV_Position; float4 c : COLOR;};"
+                "O main(uint id : SV_VertexID, float4 color : COLOR) { O o;"
+                "o.p=float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0,0,1); o.c=color; return o;}";
+    if (vertex_mode == 1)
+        vs_source = "struct O {float4 p : SV_Position; float4 c : COLOR;};"
+                "O main(uint id : SV_VertexID, uint instance : SV_InstanceID, float4 color : COLOR) { O o;"
+                "o.p=float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0,0,1);"
+                "o.c=instance == 0 ? color : float4(1,0,0,1); return o;}";
+    if (vertex_mode == 2)
+        vs_source = "struct O {float4 p : SV_Position; float4 extra : TEXCOORD; float4 c : COLOR;};"
+                "O main(float2 position : POSITION, float4 color : COLOR) { O o;"
+                "o.p=float4(position,0,1); o.extra=o.p; o.c=color; return o;}";
     ID3DBlob *vs_code = NULL, *ps_code = NULL, *errors = NULL;
-    HRESULT hr = compile(vs_source, sizeof(vs_source) - 1, NULL, NULL, NULL, "main", "vs_4_0", 0, 0, &vs_code, &errors);
+    HRESULT hr = compile(vs_source, strlen(vs_source), NULL, NULL, NULL, "main", "vs_4_0", 0, 0, &vs_code, &errors);
     ok(hr == S_OK, "Compile texture vertex shader: %#lx %s\n", hr, errors ? static_cast<const char *>(errors->GetBufferPointer()) : "");
     if (errors) { errors->Release(); errors = NULL; }
     hr = compile(source, strlen(source), NULL, NULL, NULL, "main", "ps_4_0", 0, 0, &ps_code, &errors);
@@ -28,6 +42,9 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
     ID3D11Texture2D *target = NULL, *staging = NULL, *resolved = NULL;
     ID3D11RenderTargetView *rtv = NULL;
     ID3D11SamplerState *sampler = NULL;
+    ID3D11Buffer *vertices = NULL, *positions = NULL;
+    ID3D11InputLayout *layout = NULL;
+    UINT vertex_stride = 0;
     if (vs_code && ps_code)
     {
         hr = device->CreateVertexShader(vs_code->GetBufferPointer(), vs_code->GetBufferSize(), NULL, &vs);
@@ -35,7 +52,7 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
         hr = device->CreatePixelShader(ps_code->GetBufferPointer(), ps_code->GetBufferSize(), NULL, &ps);
         ok(hr == S_OK, "Create texture pixel shader: %#lx\n", hr);
         D3D11_TEXTURE2D_DESC desc = {};
-        desc.Width = desc.Height = desc.MipLevels = desc.ArraySize = 1;
+        desc.Width = width; desc.Height = height; desc.MipLevels = desc.ArraySize = 1;
         desc.SampleDesc.Count = samples;
         desc.Format = format;
         desc.BindFlags = D3D11_BIND_RENDER_TARGET;
@@ -61,9 +78,49 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
         sd.MaxLOD = D3D11_FLOAT32_MAX;
         hr = device->CreateSamplerState(&sd, &sampler);
         ok(hr == S_OK, "Texture sample sampler: %#lx\n", hr);
+        if (vertex_format != DXGI_FORMAT_UNKNOWN)
+        {
+            const UINT unorm[] = {0xff00ff00, 0xff00ff00, 0xff00ff00};
+            const FLOAT floats[] = {0,1,0,1, 0,1,0,1, 0,1,0,1};
+            const USHORT halves[] = {0,0x3c00,0,0x3c00, 0,0x3c00,0,0x3c00, 0,0x3c00,0,0x3c00};
+            vertex_stride = vertex_format == DXGI_FORMAT_R8G8B8A8_UNORM ? 4
+                    : vertex_format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 16;
+            D3D11_BUFFER_DESC bd = {};
+            bd.ByteWidth = 3 * vertex_stride; bd.Usage = D3D11_USAGE_IMMUTABLE; bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA data = {};
+            data.pSysMem = vertex_stride == 4 ? static_cast<const void *>(unorm)
+                    : vertex_stride == 8 ? static_cast<const void *>(halves) : static_cast<const void *>(floats);
+            hr = device->CreateBuffer(&bd, &data, &vertices);
+            ok(hr == S_OK, "Color vertex buffer: %#lx\n", hr);
+            D3D11_INPUT_ELEMENT_DESC elements[] = {
+                {"COLOR", 0, vertex_format, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+                {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 1, 0, D3D11_INPUT_PER_VERTEX_DATA, 0}};
+            hr = device->CreateInputLayout(elements, vertex_mode == 2 ? 2 : 1,
+                    vs_code->GetBufferPointer(), vs_code->GetBufferSize(), &layout);
+            ok(hr == S_OK, "Color input layout format %u: %#lx\n", vertex_format, hr);
+            if (vertex_mode == 2)
+            {
+                const FLOAT xy[] = {-1,1, 3,1, -1,-3};
+                bd.ByteWidth = sizeof(xy);
+                data.pSysMem = xy;
+                hr = device->CreateBuffer(&bd, &data, &positions);
+                ok(hr == S_OK, "Position vertex buffer: %#lx\n", hr);
+            }
+        }
         if (vs && ps && rtv && staging && sampler && (samples == 1 || resolved))
         {
             context->ClearState();
+            if (vertices && layout)
+            {
+                UINT offset = 0;
+                context->IASetInputLayout(layout);
+                context->IASetVertexBuffers(0, 1, &vertices, &vertex_stride, &offset);
+                if (positions)
+                {
+                    UINT position_stride = 2 * sizeof(FLOAT);
+                    context->IASetVertexBuffers(1, 1, &positions, &position_stride, &offset);
+                }
+            }
             const FLOAT black[4] = {0, 0, 0, 0};
             context->ClearRenderTargetView(rtv, black);
             context->OMSetRenderTargets(1, &rtv, NULL);
@@ -73,9 +130,10 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
             context->PSSetShaderResources(0, 1, &view);
             context->PSSetSamplers(0, 1, &sampler);
             context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            D3D11_VIEWPORT viewport = {0, 0, 1, 1, 0, 1};
+            D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(width), static_cast<FLOAT>(height), 0, 1};
             context->RSSetViewports(1, &viewport);
-            context->Draw(3, 0);
+            if (vertex_mode == 1) context->DrawInstanced(3, 1, 0, 0);
+            else context->Draw(3, 0);
             context->ClearState();
             if (resolved) context->ResolveSubresource(resolved, 0, target, 0, format);
             context->CopyResource(staging, resolved ? resolved : target);
@@ -97,10 +155,29 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
                     }
                 }
                 ok(matches, "Sampled texture pixel %#x, expected %#x (resolve tolerance %u)\n", actual, expected, samples > 1 ? 1 : 0);
+                if (width > 1 || height > 1)
+                {
+                    UINT incorrect = 0, first_x = 0, first_y = 0, first_value = 0;
+                    for (UINT y = 0; y < height; ++y)
+                        for (UINT x = 0; x < width; ++x)
+                        {
+                            UINT pixel = reinterpret_cast<const UINT *>(static_cast<const BYTE *>(map.pData) + y * map.RowPitch)[x];
+                            if (pixel != expected)
+                            {
+                                if (!incorrect) { first_x = x; first_y = y; first_value = pixel; }
+                                ++incorrect;
+                            }
+                        }
+                    ok(!incorrect, "Raster coverage: %u bad pixels; first (%u,%u)=%#x expected %#x\n",
+                       incorrect, first_x, first_y, first_value, expected);
+                }
                 context->Unmap(staging, 0);
             }
         }
     }
+    if (positions) positions->Release();
+    if (vertices) vertices->Release();
+    if (layout) layout->Release();
     if (sampler) sampler->Release();
     if (rtv) rtv->Release();
     if (target) target->Release();
@@ -379,6 +456,45 @@ START_TEST(multisample)
         TestSample(device, context, NULL, "float4 main(float4 p : SV_Position) : SV_Target { return float4(0,1,0,1); }",
                 0x80008000, 4, 0x5, formats[i]);
     }
+    context->ClearState();
+    context->Flush();
+    context->Release();
+    device->Release();
+    FreeLibrary(runtime);
+}
+
+START_TEST(raster_coverage)
+{
+    typedef HRESULT (WINAPI *CREATE_DEVICE)(IDXGIAdapter *, D3D_DRIVER_TYPE, HMODULE,
+            UINT, const D3D_FEATURE_LEVEL *, UINT, UINT, ID3D11Device **, D3D_FEATURE_LEVEL *, ID3D11DeviceContext **);
+    HMODULE runtime = LoadLibraryW(L"d3d11.dll");
+    CREATE_DEVICE create = runtime ? reinterpret_cast<CREATE_DEVICE>(GetProcAddress(runtime, "D3D11CreateDevice")) : NULL;
+    if (!create) { skip("D3D11 unavailable\n"); return; }
+    ID3D11Device *device = NULL;
+    ID3D11DeviceContext *context = NULL;
+    HRESULT hr = create(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &device, NULL, &context);
+    if (FAILED(hr)) { skip("Hardware D3D11 unavailable: %#lx\n", hr); FreeLibrary(runtime); return; }
+    const DXGI_FORMAT formats[] = {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM};
+    for (UINT i = 0; i < ARRAYSIZE(formats); ++i)
+    {
+        TestSample(device, context, NULL, "float4 main(float4 p : SV_Position) : SV_Target { return float4(0,1,0,1); }",
+                0xff00ff00, 1, ~0u, formats[i], 992, 509);
+    }
+    const DXGI_FORMAT vertex_formats[] = {DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT};
+    /* Exercise vertex attributes after the vertex/instance ID prefix, and
+     * an attributes-only shader with a sparse, noperspective color varying.
+     */
+    for (UINT mode = 0; mode < 3; ++mode)
+        for (UINT i = 0; i < ARRAYSIZE(vertex_formats); ++i)
+        {
+            trace("Color vertex format %u, mode %u\n", vertex_formats[i], mode);
+            const char *ps = mode == 2
+                    ? "float4 main(float4 p : SV_Position, float4 extra : TEXCOORD, noperspective float4 color : COLOR) : SV_Target { return color; }"
+                    : "float4 main(float4 p : SV_Position, float4 color : COLOR) : SV_Target { return color; }";
+            TestSample(device, context, NULL, ps,
+                    0xff00ff00, 1, ~0u, DXGI_FORMAT_R8G8B8A8_UNORM, 992, 509, vertex_formats[i], mode);
+        }
     context->ClearState();
     context->Flush();
     context->Release();
