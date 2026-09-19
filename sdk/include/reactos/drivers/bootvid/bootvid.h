@@ -59,6 +59,11 @@ VidCleanUp(VOID);
 
 VOID
 NTAPI
+VidFadeToBlack(
+    _In_ ULONG Steps);
+
+VOID
+NTAPI
 VidDisplayString(
     _In_ PCSTR String);
 

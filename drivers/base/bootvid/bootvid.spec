@@ -3,6 +3,7 @@
 @ stdcall VidCleanUp()
 @ stdcall VidDisplayString(str)
 @ stdcall VidDisplayStringXY(str long long long)
+@ stdcall VidFadeToBlack(long)
 @ stdcall VidInitialize(long)
 @ stdcall VidQueryDisplayInfo(ptr)
 @ stdcall VidQueryFrameBufferInfo(ptr)
