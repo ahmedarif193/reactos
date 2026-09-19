@@ -45,3 +45,8 @@ namespace Windows.UI.ViewManagement {
     runtimeclass UIViewSettings;
     runtimeclass InputPane;
 }
+
+import "windows.ui.shell.idl";
+namespace Windows.UI.Shell {
+    runtimeclass TaskbarManager;
+}

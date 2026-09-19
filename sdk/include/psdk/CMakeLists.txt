@@ -274,6 +274,7 @@ list(APPEND SOURCE
     windows.ui.text.core.idl
     windows.ui.text.idl
     windows.ui.viewmanagement.core.idl
+    windows.ui.shell.idl
     windows.ui.viewmanagement.idl
     windows.ui.windowmanagement.idl
     windows.ui.xaml.hosting.desktopwindowxamlsource.idl

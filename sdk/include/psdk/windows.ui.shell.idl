@@ -1,0 +1,44 @@
+/* ReactOS WinRT shell declarations. LGPL-2.1-or-later. */
+#ifdef __WIDL__
+#pragma winrt ns_prefix
+#endif
+import "inspectable.idl";
+import "windowscontracts.idl";
+import "windows.foundation.idl";
+import "windows.applicationmodel.core.idl";
+
+namespace Windows.UI.Shell {
+    interface ITaskbarManager;
+    runtimeclass TaskbarManager;
+
+    [object, uuid(87490a19-1ad9-49f4-b2e8-86738dc5ac40),
+     exclusiveto(Windows.UI.Shell.TaskbarManager),
+     contract(Windows.Foundation.UniversalApiContract, 5.0)]
+    interface ITaskbarManager : IInspectable
+    {
+        [propget] HRESULT IsSupported([out, retval] boolean *value);
+        [propget] HRESULT IsPinningAllowed([out, retval] boolean *value);
+        HRESULT IsCurrentAppPinnedAsync([out, retval] Windows.Foundation.IAsyncOperation<boolean> **operation);
+        HRESULT IsAppListEntryPinnedAsync([in] Windows.ApplicationModel.Core.AppListEntry *entry,
+                                         [out, retval] Windows.Foundation.IAsyncOperation<boolean> **operation);
+        HRESULT RequestPinCurrentAppAsync([out, retval] Windows.Foundation.IAsyncOperation<boolean> **operation);
+        HRESULT RequestPinAppListEntryAsync([in] Windows.ApplicationModel.Core.AppListEntry *entry,
+                                           [out, retval] Windows.Foundation.IAsyncOperation<boolean> **operation);
+    }
+
+    [object, uuid(db32ab74-de52-4fe6-b7b6-95ff9f8395df),
+     exclusiveto(Windows.UI.Shell.TaskbarManager),
+     contract(Windows.Foundation.UniversalApiContract, 5.0)]
+    interface ITaskbarManagerStatics : IInspectable
+    {
+        HRESULT GetDefault([out, retval] Windows.UI.Shell.TaskbarManager **value);
+    }
+
+    [static(Windows.UI.Shell.ITaskbarManagerStatics, Windows.Foundation.UniversalApiContract, 5.0),
+     threading(both), marshaling_behavior(agile),
+     contract(Windows.Foundation.UniversalApiContract, 5.0)]
+    runtimeclass TaskbarManager
+    {
+        [default] interface Windows.UI.Shell.ITaskbarManager;
+    }
+}
