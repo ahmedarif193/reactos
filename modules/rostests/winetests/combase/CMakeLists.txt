@@ -4,6 +4,7 @@ add_definitions(-DUSE_WINE_TODOS)
 include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 spec2def(wine.combase.test.dll wine.combase.test.spec)
 list(APPEND SOURCE
+    integrity.c
     roapi.c
     string.c)
 
