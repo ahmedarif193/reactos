@@ -1763,6 +1763,7 @@ DxgkPresentInit(
         Queues[i].VSyncWorkQueued = 0;
         Queues[i].PendingVBlanks = 0;
         KeInitializeSpinLock(&Queues[i].QueueLock);
+        KeInitializeMutex(&Queues[i].ExecutionMutex, 0);
         KeInitializeEvent(&Queues[i].SpaceAvailableEvent, NotificationEvent, TRUE);
         KeInitializeSpinLock(&Queues[i].VBlankWaitLock);
         KeInitializeMutex(&Queues[i].MmioPresentMutex, 0);
@@ -4009,42 +4010,18 @@ RejectPresent:
  *
  * IRQL: PASSIVE_LEVEL (called from work-item or direct call)
  * ====================================================================== */
-NTSTATUS
-DxgkpProcessPresentQueue(
-    _In_ PDXGKRNL_ADAPTER                  Adapter,
-    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID    VidPnSourceId)
+static NTSTATUS NTAPI
+DxgkpProcessPresentQueueLocked(_In_ PVOID Context)
 {
-    PDXGKRNL_PRESENT_QUEUE Queue;
-    DXGKRNL_PRESENT_ENTRY  Entry;
+    PDXGKRNL_PRESENT_QUEUE Queue = Context;
+    PDXGKRNL_ADAPTER Adapter = Queue->Adapter;
+    DXGKRNL_PRESENT_ENTRY Entry;
     KIRQL OldIrql;
     NTSTATUS Status;
-    PAGED_CODE();
 
-    if (Adapter == NULL)
-        return STATUS_INVALID_PARAMETER;
-
-    if (!DxgkpAcquirePresentQueues(Adapter))
-        return STATUS_DELETE_PENDING;
-
+    /* Admission may have closed while this caller waited for the executor. */
     if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
-    {
-        DxgkpReleasePresentQueues(Adapter);
         return STATUS_DELETE_PENDING;
-    }
-
-    if (Adapter->PresentQueues == NULL)
-    {
-        DxgkpReleasePresentQueues(Adapter);
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (VidPnSourceId >= Adapter->PresentQueueCount)
-    {
-        DxgkpReleasePresentQueues(Adapter);
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[VidPnSourceId];
 
     /* --- Dequeue the head entry under the spinlock ---------------------- */
 
@@ -4053,7 +4030,6 @@ DxgkpProcessPresentQueue(
     if (Queue->Count == 0)
     {
         KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
-        DxgkpReleasePresentQueues(Adapter);
         return STATUS_NO_MORE_ENTRIES;
     }
 
@@ -4073,7 +4049,6 @@ DxgkpProcessPresentQueue(
             {
                 /* Not time yet — leave the entry queued. */
                 KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
-                DxgkpReleasePresentQueues(Adapter);
                 return STATUS_PENDING;
             }
         }
@@ -4128,6 +4103,51 @@ DxgkpProcessPresentQueue(
 
     DxgkpReleasePresentEntry(&Entry);
 
+    return Status;
+}
+
+NTSTATUS
+DxgkpProcessPresentQueue(
+    _In_ PDXGKRNL_ADAPTER                  Adapter,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID    VidPnSourceId)
+{
+    PDXGKRNL_PRESENT_QUEUE Queue;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!DxgkpAcquirePresentQueues(Adapter))
+        return STATUS_DELETE_PENDING;
+
+    if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
+    {
+        DxgkpReleasePresentQueues(Adapter);
+        return STATUS_DELETE_PENDING;
+    }
+
+    if (Adapter->PresentQueues == NULL)
+    {
+        DxgkpReleasePresentQueues(Adapter);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (VidPnSourceId >= Adapter->PresentQueueCount)
+    {
+        DxgkpReleasePresentQueues(Adapter);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Queue = &((PDXGKRNL_PRESENT_QUEUE)Adapter->PresentQueues)[VidPnSourceId];
+
+    /* Serialize dequeue AND execution. The spinlock alone lets the direct
+     * immediate caller and the vblank worker submit adjacent frames backwards.
+     * This is a passive mutex: execution can wait for GPU work or a vblank,
+     * whose DPC and retirement paths do not acquire this mutex. */
+    Status = DxgkPresentQueueCoreProcess(&Queue->ExecutionMutex,
+                                       DxgkpProcessPresentQueueLocked,
+                                       Queue);
     DxgkpReleasePresentQueues(Adapter);
     return Status;
 }

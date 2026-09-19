@@ -39,6 +39,128 @@ typedef struct _DXGK_PRESENT_QUEUE_TEST_MATCH
     PVOID Context;
 } DXGK_PRESENT_QUEUE_TEST_MATCH, *PDXGK_PRESENT_QUEUE_TEST_MATCH;
 
+/* Stall the first consumer after dequeue. A second consumer must not reach
+ * dequeue/submission until the first has completed, even though QueueLock
+ * is no longer held. Both callers use the production execution helper. */
+typedef struct _DXGK_PRESENT_EXECUTION_TEST
+{
+    KMUTEX Mutex;
+    KEVENT FirstDequeued;
+    KEVENT ReleaseFirst;
+    KEVENT SecondAttempting;
+    KEVENT SecondDequeued;
+    volatile LONG Head;
+    volatile LONG Submitted;
+    LONG Order[2];
+    NTSTATUS Status[2];
+} DXGK_PRESENT_EXECUTION_TEST;
+
+static NTSTATUS
+DxgkPresentQueueTestWait(PKEVENT Event, ULONG Milliseconds)
+{
+    LARGE_INTEGER Timeout;
+    Timeout.QuadPart = -(LONGLONG)Milliseconds * 10000;
+    return KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, &Timeout);
+}
+
+static NTSTATUS NTAPI
+DxgkPresentQueueTestExecute(PVOID Context)
+{
+    DXGK_PRESENT_EXECUTION_TEST *Test = Context;
+    LONG Id = InterlockedIncrement(&Test->Head);
+    LONG Slot;
+
+    ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
+    if (Id == 1)
+    {
+        KeSetEvent(&Test->FirstDequeued, IO_NO_INCREMENT, FALSE);
+        KeWaitForSingleObject(&Test->ReleaseFirst, Executive, KernelMode, FALSE, NULL);
+    }
+    else
+    {
+        KeSetEvent(&Test->SecondDequeued, IO_NO_INCREMENT, FALSE);
+    }
+    Slot = InterlockedIncrement(&Test->Submitted) - 1;
+    if (Slot < RTL_NUMBER_OF(Test->Order))
+        Test->Order[Slot] = Id;
+    /* A failed present must also release execution ownership. */
+    return Id == 1 ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+static VOID NTAPI
+DxgkPresentQueueTestFirstConsumer(PVOID Context)
+{
+    DXGK_PRESENT_EXECUTION_TEST *Test = Context;
+    Test->Status[0] = DxgkPresentQueueCoreProcess(&Test->Mutex,
+                                                DxgkPresentQueueTestExecute,
+                                                Test);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static VOID NTAPI
+DxgkPresentQueueTestSecondConsumer(PVOID Context)
+{
+    DXGK_PRESENT_EXECUTION_TEST *Test = Context;
+    KeSetEvent(&Test->SecondAttempting, IO_NO_INCREMENT, FALSE);
+    Test->Status[1] = DxgkPresentQueueCoreProcess(&Test->Mutex,
+                                                DxgkPresentQueueTestExecute,
+                                                Test);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static VOID
+DxgkPresentQueueTestExecutionOrder(VOID)
+{
+    DXGK_PRESENT_EXECUTION_TEST Test;
+    OBJECT_ATTRIBUTES Attributes;
+    HANDLE First = NULL, Second = NULL;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Test, sizeof(Test));
+    KeInitializeMutex(&Test.Mutex, 0);
+    KeInitializeEvent(&Test.FirstDequeued, NotificationEvent, FALSE);
+    KeInitializeEvent(&Test.ReleaseFirst, NotificationEvent, FALSE);
+    KeInitializeEvent(&Test.SecondAttempting, NotificationEvent, FALSE);
+    KeInitializeEvent(&Test.SecondDequeued, NotificationEvent, FALSE);
+    InitializeObjectAttributes(&Attributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = PsCreateSystemThread(&First, THREAD_ALL_ACCESS, &Attributes,
+                                  NULL, NULL, DxgkPresentQueueTestFirstConsumer, &Test);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    Status = DxgkPresentQueueTestWait(&Test.FirstDequeued, 10000);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (Status != STATUS_SUCCESS)
+        goto Cleanup;
+    Status = PsCreateSystemThread(&Second, THREAD_ALL_ACCESS, &Attributes,
+                                  NULL, NULL, DxgkPresentQueueTestSecondConsumer, &Test);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Status = DxgkPresentQueueTestWait(&Test.SecondAttempting, 10000);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = DxgkPresentQueueTestWait(&Test.SecondDequeued, 100);
+    ok_eq_hex(Status, STATUS_TIMEOUT);
+    ok_eq_long(Test.Head, 1);
+    ok_eq_long(Test.Submitted, 0);
+
+Cleanup:
+    KeSetEvent(&Test.ReleaseFirst, IO_NO_INCREMENT, FALSE);
+    /* Join before releasing the stack state, including failed setup paths. */
+    ZwWaitForSingleObject(First, FALSE, NULL);
+    ZwClose(First);
+    if (Second != NULL)
+    {
+        ZwWaitForSingleObject(Second, FALSE, NULL);
+        ZwClose(Second);
+        ok_eq_long(Test.Order[0], 1);
+        ok_eq_long(Test.Order[1], 2);
+        ok_eq_long(Test.Submitted, 2);
+        ok_eq_hex(Test.Status[0], STATUS_UNSUCCESSFUL);
+        ok_eq_hex(Test.Status[1], STATUS_SUCCESS);
+    }
+}
+
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
 static VOID
 DxgkPresentQueueTestRefreshTargets(VOID)
@@ -445,6 +567,7 @@ START_TEST(DxgkPresentQueue)
 #if (REACTOS_WDDM_TARGET_LEVEL >= 1200)
     DxgkPresentQueueTestRefreshTargets();
 #endif
+    DxgkPresentQueueTestExecutionOrder();
     DxgkPresentQueueTestDmaGeometry();
     DxgkPresentQueueTestContract();
     DxgkPresentQueueTestLimits();

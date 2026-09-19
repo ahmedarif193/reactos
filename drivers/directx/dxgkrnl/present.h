@@ -232,6 +232,9 @@ typedef struct _DXGKRNL_PRESENT_QUEUE
     KSPIN_LOCK                      QueueLock;
     KEVENT                          SpaceAvailableEvent;
 
+    /* Serializes passive dequeue-through-submission, outside QueueLock. */
+    KMUTEX                          ExecutionMutex;
+
     /* Monotonically increasing present ID counter for this source. */
     volatile LONG64                 NextPresentId;
 

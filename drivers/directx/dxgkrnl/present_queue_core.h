@@ -14,6 +14,16 @@
 
 typedef BOOLEAN (NTAPI *PDXGK_PRESENT_QUEUE_MATCH)(_In_ const VOID *Entry, _In_opt_ PVOID Context);
 
+typedef NTSTATUS (NTAPI *PDXGK_PRESENT_QUEUE_PROCESS)(_In_ PVOID Context);
+
+/* The callback owns both dequeue and execution. Never wait with QueueLock
+ * held, and retain the queue's lifetime reference until this returns. */
+NTSTATUS
+DxgkPresentQueueCoreProcess(
+    _Inout_ PKMUTEX ExecutionMutex,
+    _In_ PDXGK_PRESENT_QUEUE_PROCESS Process,
+    _In_ PVOID Context);
+
 typedef struct _DXGK_PRESENT_LIMIT_CORE
 {
     KSPIN_LOCK Lock;
