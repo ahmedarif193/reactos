@@ -2948,6 +2948,67 @@ D3DUmdRtSignalSynchronizationObject2Cb(
 
 #endif /* D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WIN8 */
 
+/* Called after the runtime flushes the UMD. The CPU event is one broadcast
+ * marker, so it is set only after every captured engine context reaches it.
+ * This is render completion, not notification that a Present was displayed. */
+HRESULT WINAPI
+D3DUmdRtEnqueueSetEvent(HANDLE hDevice, HANDLE Event)
+{
+#if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WIN8)
+    PD3DUMDRT_DEVICE Device = D3DUmdRtDevice(hDevice);
+    PD3DUMDRT_CONTEXT Context, Captured[D3DDDI_MAX_BROADCAST_CONTEXT + 1];
+    D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2 Signal;
+    UINT Count = 0, Index;
+    HRESULT Result;
+
+    if (Device == NULL || Event == NULL || pfnSignalSynchronizationObject2 == NULL)
+        return E_INVALIDARG;
+    ZeroMemory(&Signal, sizeof(Signal));
+    Signal.Flags.EnqueueCpuEvent = 1;
+    Signal.CpuEventHandle = Event;
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    for (Context = Device->Contexts; Context != NULL; Context = Context->Next)
+    {
+        if (Context->Destroying || Count == ARRAYSIZE(Captured))
+        {
+            LeaveCriticalSection(&D3DUmdRtDeviceLock);
+            return E_NOTIMPL;
+        }
+        Captured[Count++] = Context;
+    }
+    for (Index = 0; Index < Count; ++Index)
+    {
+        ++Captured[Index]->SyncTokenReferences;
+        if (Index == 0)
+            Signal.hContext = Captured[Index]->hContext;
+        else
+            Signal.BroadcastContext[Signal.BroadcastContextCount++] = Captured[Index]->hContext;
+    }
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+
+    if (Count)
+    {
+        NTSTATUS Status = pfnSignalSynchronizationObject2(&Signal);
+        /* Pseudo-handles and handles to another object type are invalid
+         * event arguments too; insufficient event access is not E_FAIL. */
+        Result = Status == STATUS_OBJECT_TYPE_MISMATCH || Status == STATUS_ACCESS_DENIED ?
+            E_INVALIDARG : D3DUmdRtStatusToHresult(Status);
+    }
+    else
+        Result = SetEvent(Event) ? S_OK : E_INVALIDARG;
+
+    EnterCriticalSection(&D3DUmdRtDeviceLock);
+    for (Index = 0; Index < Count; ++Index)
+        --Captured[Index]->SyncTokenReferences;
+    LeaveCriticalSection(&D3DUmdRtDeviceLock);
+    return Result;
+#else
+    UNREFERENCED_PARAMETER(hDevice);
+    UNREFERENCED_PARAMETER(Event);
+    return E_NOTIMPL;
+#endif
+}
+
 #if (D3D_UMD_INTERFACE_VERSION >= D3D_UMD_INTERFACE_VERSION_WDDM2_0)
 
 static HRESULT APIENTRY

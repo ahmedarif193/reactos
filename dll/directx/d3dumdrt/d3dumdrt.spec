@@ -7,3 +7,4 @@
 @ stdcall D3DUmdRtReleaseResource(ptr ptr)
 @ stdcall D3DUmdRtRotateResourceIdentities(ptr ptr long)
 @ stdcall D3DUmdRtGetSingleResourceAllocation(ptr ptr ptr)
+@ stdcall D3DUmdRtEnqueueSetEvent(ptr ptr)

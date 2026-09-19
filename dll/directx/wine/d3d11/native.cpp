@@ -134,7 +134,7 @@ struct NativeSharedTextureData
 static const UINT native_shared_texture_signature = 0x54313144;
 static HRESULT APIENTRY NativePresent(HANDLE, DXGIDDICB_PRESENT *);
 
-class NativeDevice final : public ID3D11Device1, public IDXGIDevice, public IWineDXGISwapChainFactory, public NativeAllocation
+class NativeDevice final : public ID3D11Device1, public IDXGIDevice2, public IWineDXGISwapChainFactory, public NativeAllocation
 {
 public:
     LONG references = 1;
@@ -154,6 +154,7 @@ public:
     HRESULT (WINAPI *adopt_resource)(HANDLE, HANDLE, D3DKMT_HANDLE, D3DKMT_HANDLE) = NULL;
     HRESULT (WINAPI *release_resource)(HANDLE, HANDLE) = NULL;
     HRESULT (WINAPI *rotate_resources)(HANDLE, const HANDLE *, UINT) = NULL;
+    HRESULT (WINAPI *enqueue_event)(HANDLE, HANDLE) = NULL;
     D3D10DDI_HADAPTER driver_adapter = {};
     D3D10DDI_HDEVICE driver_device = {};
     D3D10_2DDI_ADAPTERFUNCS adapter_functions = {};
@@ -206,6 +207,11 @@ public:
     HRESULT STDMETHODCALLTYPE QueryResourceResidency(IUnknown *const *, DXGI_RESIDENCY *, UINT) override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE SetGPUThreadPriority(INT priority) override;
     HRESULT STDMETHODCALLTYPE GetGPUThreadPriority(INT *priority) override;
+    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT latency) override;
+    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT *latency) override;
+    HRESULT STDMETHODCALLTYPE OfferResources(UINT, IDXGIResource *const *, DXGI_OFFER_RESOURCE_PRIORITY) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE ReclaimResources(UINT, IDXGIResource *const *, BOOL *) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE EnqueueSetEvent(HANDLE event) override;
     HRESULT STDMETHODCALLTYPE CreateBuffer(const D3D11_BUFFER_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData, ID3D11Buffer **ppBuffer) override;
     HRESULT STDMETHODCALLTYPE CreateTexture1D(const D3D11_TEXTURE1D_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData, ID3D11Texture1D **ppTexture1D) override { if (ppTexture1D) *ppTexture1D = NULL; Unimplemented("CreateTexture1D"); return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE CreateTexture2D(const D3D11_TEXTURE2D_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData, ID3D11Texture2D **ppTexture2D) override;
@@ -984,6 +990,7 @@ HRESULT NativeDevice::Initialize(IDXGIAdapter *selected_adapter, UINT creation_f
     adopt_resource = reinterpret_cast<decltype(adopt_resource)>(GetProcAddress(runtime, "D3DUmdRtAdoptResource"));
     release_resource = reinterpret_cast<decltype(release_resource)>(GetProcAddress(runtime, "D3DUmdRtReleaseResource"));
     rotate_resources = reinterpret_cast<decltype(rotate_resources)>(GetProcAddress(runtime, "D3DUmdRtRotateResourceIdentities"));
+    enqueue_event = reinterpret_cast<decltype(enqueue_event)>(GetProcAddress(runtime, "D3DUmdRtEnqueueSetEvent"));
     if (!create_callbacks || !destroy_callbacks || !register_resource || !get_resource_handles
             || !adopt_resource || !release_resource) return E_NOINTERFACE;
     /* The allocation array ABI follows the kernel scheduling model, not
@@ -1085,8 +1092,9 @@ HRESULT STDMETHODCALLTYPE NativeDevice::QueryInterface(REFIID iid, void **out)
         *out = static_cast<ID3D11Device *>(this);
     else if (IsEqualGUID(iid, IID_ID3D11Device1))
         *out = static_cast<ID3D11Device1 *>(this);
-    else if (IsEqualGUID(iid, IID_IDXGIObject) || IsEqualGUID(iid, IID_IDXGIDevice))
-        *out = static_cast<IDXGIDevice *>(this);
+    else if (IsEqualGUID(iid, IID_IDXGIObject) || IsEqualGUID(iid, IID_IDXGIDevice)
+            || IsEqualGUID(iid, IID_IDXGIDevice1) || IsEqualGUID(iid, IID_IDXGIDevice2))
+        *out = static_cast<IDXGIDevice2 *>(this);
     else if (IsEqualGUID(iid, IID_IWineDXGISwapChainFactory))
         *out = static_cast<IWineDXGISwapChainFactory *>(this);
     else return E_NOINTERFACE;
@@ -1246,6 +1254,42 @@ HRESULT STDMETHODCALLTYPE NativeDevice::SetExceptionMode(UINT mode) { if (mode &
 UINT STDMETHODCALLTYPE NativeDevice::GetExceptionMode() { return exception_mode; }
 HRESULT STDMETHODCALLTYPE NativeDevice::SetGPUThreadPriority(INT) { return E_NOTIMPL; }
 HRESULT STDMETHODCALLTYPE NativeDevice::GetGPUThreadPriority(INT *out) { if (!out) return E_INVALIDARG; *out = 0; return E_NOTIMPL; }
+
+HRESULT STDMETHODCALLTYPE NativeDevice::SetMaximumFrameLatency(UINT latency)
+{
+    if (latency > 16) return DXGI_ERROR_INVALID_CALL;
+    NativeLock guard(this);
+    D3DKMT_SETQUEUEDLIMIT limit = {};
+    limit.hDevice = km_device;
+    limit.Type = D3DKMT_SET_QUEUEDLIMIT_PRESENT;
+    limit.QueuedPresentLimit = latency;
+    return StatusToHresult(D3DKMTSetQueuedLimit(&limit));
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::GetMaximumFrameLatency(UINT *latency)
+{
+    if (!latency) return DXGI_ERROR_INVALID_CALL;
+    NativeLock guard(this);
+    D3DKMT_SETQUEUEDLIMIT limit = {};
+    limit.hDevice = km_device;
+    limit.Type = D3DKMT_GET_QUEUEDLIMIT_PRESENT;
+    HRESULT hr = StatusToHresult(D3DKMTSetQueuedLimit(&limit));
+    if (SUCCEEDED(hr)) *latency = limit.QueuedPresentLimit;
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE NativeDevice::EnqueueSetEvent(HANDLE event)
+{
+    if (!event) return E_INVALIDARG;
+    NativeLock guard(this);
+    if (!enqueue_event) return E_NOTIMPL;
+    /* Device removal also releases completion waiters. This event says
+     * nothing about whether a swapchain image was actually displayed. */
+    if (FAILED(GetDeviceRemovedReason())) return SetEvent(event) ? S_OK : E_INVALIDARG;
+    context->Flush();
+    if (FAILED(GetDeviceRemovedReason())) return SetEvent(event) ? S_OK : E_INVALIDARG;
+    return enqueue_event(runtime_device, event);
+}
 
 class NativeBuffer : public NativeChild<ID3D11Buffer, &IID_ID3D11Buffer>
 {
