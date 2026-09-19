@@ -216,7 +216,7 @@ public:
     HRESULT STDMETHODCALLTYPE CreateBuffer(const D3D11_BUFFER_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData, ID3D11Buffer **ppBuffer) override;
     HRESULT STDMETHODCALLTYPE CreateTexture1D(const D3D11_TEXTURE1D_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData, ID3D11Texture1D **ppTexture1D) override { if (ppTexture1D) *ppTexture1D = NULL; Unimplemented("CreateTexture1D"); return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE CreateTexture2D(const D3D11_TEXTURE2D_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData, ID3D11Texture2D **ppTexture2D) override;
-    HRESULT STDMETHODCALLTYPE CreateTexture3D(const D3D11_TEXTURE3D_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData, ID3D11Texture3D **ppTexture3D) override { if (ppTexture3D) *ppTexture3D = NULL; Unimplemented("CreateTexture3D"); return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE CreateTexture3D(const D3D11_TEXTURE3D_DESC *, const D3D11_SUBRESOURCE_DATA *, ID3D11Texture3D **) override;
     HRESULT STDMETHODCALLTYPE CreateShaderResourceView(ID3D11Resource *pResource, const D3D11_SHADER_RESOURCE_VIEW_DESC *pDesc, ID3D11ShaderResourceView **ppSRView) override;
     HRESULT STDMETHODCALLTYPE CreateUnorderedAccessView(ID3D11Resource *pResource, const D3D11_UNORDERED_ACCESS_VIEW_DESC *pDesc, ID3D11UnorderedAccessView **ppUAView) override { if (ppUAView) *ppUAView = NULL; Unimplemented("CreateUnorderedAccessView"); return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE CreateRenderTargetView(ID3D11Resource *pResource, const D3D11_RENDER_TARGET_VIEW_DESC *pDesc, ID3D11RenderTargetView **ppRTView) override;
@@ -593,10 +593,97 @@ HRESULT STDMETHODCALLTYPE NativeTextureResource::GetUsage(DXGI_USAGE *out) { if 
 HRESULT STDMETHODCALLTYPE NativeTextureResource::SetEvictionPriority(UINT value) { texture->SetEvictionPriority(value); return S_OK; }
 HRESULT STDMETHODCALLTYPE NativeTextureResource::GetEvictionPriority(UINT *out) { if (!out) return E_INVALIDARG; *out = texture->GetEvictionPriority(); return S_OK; }
 
+class NativeTexture3D : public NativeChild<ID3D11Texture3D, &IID_ID3D11Texture3D>
+{
+public:
+    D3D11_TEXTURE3D_DESC desc = {};
+    D3D10DDI_HRESOURCE handle = {};
+    UINT priority = 0;
+    bool created = false;
+    BYTE *mapped = NULL;
+    explicit NativeTexture3D(NativeDevice *d) : NativeChild(d) {}
+    ~NativeTexture3D()
+    {
+        NativeLock guard(device);
+        if (created) device->functions.pfnDestroyResource(device->driver_device, handle);
+        HeapFree(GetProcessHeap(), 0, handle.pDrvPrivate);
+        HeapFree(GetProcessHeap(), 0, mapped);
+    }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **out) override
+    {
+        if (!out) return E_INVALIDARG;
+        if (IsEqualGUID(iid, IID_ID3D11Resource))
+        {
+            *out = static_cast<ID3D11Texture3D *>(this); AddRef(); return S_OK;
+        }
+        return NativeChild::QueryInterface(iid, out);
+    }
+    void STDMETHODCALLTYPE GetType(D3D11_RESOURCE_DIMENSION *out) override { if (out) *out = D3D11_RESOURCE_DIMENSION_TEXTURE3D; }
+    void STDMETHODCALLTYPE SetEvictionPriority(UINT value) override { priority = value; }
+    UINT STDMETHODCALLTYPE GetEvictionPriority() override { return priority; }
+    void STDMETHODCALLTYPE GetDesc(D3D11_TEXTURE3D_DESC *out) override { if (out) *out = desc; }
+};
+
+/* A borrowed description for operations shared by 2D, cube and volume textures.
+ * Volume subresources index mips only; depth slices are not array subresources. */
+struct NativeTextureInfo
+{
+    ID3D11Resource *resource;
+    D3D11_TEXTURE2D_DESC desc;
+    D3D10DDI_HRESOURCE handle;
+    BYTE *mapped;
+    UINT depth;
+    D3D10DDIRESOURCE_TYPE dimension;
+};
+
+static NativeTextureInfo *GetNativeTexture(ID3D11Resource *resource, NativeDevice *device, NativeTextureInfo *info)
+{
+    if (!resource) return NULL;
+    ID3D11Device *owner = NULL;
+    resource->GetDevice(&owner);
+    bool same = owner == static_cast<ID3D11Device *>(device);
+    if (owner) owner->Release();
+    if (!same) return NULL;
+    D3D11_RESOURCE_DIMENSION dimension;
+    resource->GetType(&dimension);
+    if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
+    {
+        NativeTexture2D *texture = static_cast<NativeTexture2D *>(static_cast<ID3D11Texture2D *>(resource));
+        info->desc = texture->desc;
+        info->handle = texture->handle;
+        info->mapped = texture->mapped;
+        info->depth = 1;
+        info->dimension = texture->desc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE
+                ? D3D10DDIRESOURCE_TEXTURECUBE : D3D10DDIRESOURCE_TEXTURE2D;
+    }
+    else if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D)
+    {
+        NativeTexture3D *texture = static_cast<NativeTexture3D *>(static_cast<ID3D11Texture3D *>(resource));
+        info->desc = {};
+        info->desc.Width = texture->desc.Width;
+        info->desc.Height = texture->desc.Height;
+        info->desc.MipLevels = texture->desc.MipLevels;
+        info->desc.ArraySize = info->desc.SampleDesc.Count = 1;
+        info->desc.Format = texture->desc.Format;
+        info->desc.Usage = texture->desc.Usage;
+        info->desc.BindFlags = texture->desc.BindFlags;
+        info->desc.CPUAccessFlags = texture->desc.CPUAccessFlags;
+        info->desc.MiscFlags = texture->desc.MiscFlags;
+        info->handle = texture->handle;
+        info->mapped = texture->mapped;
+        info->depth = texture->desc.Depth;
+        info->dimension = D3D10DDIRESOURCE_TEXTURE3D;
+    }
+    else return NULL;
+    info->resource = resource;
+    return info;
+}
+
 class NativeRenderTargetView : public NativeChild<ID3D11RenderTargetView, &IID_ID3D11RenderTargetView>
 {
 public:
-    NativeTexture2D *texture = NULL;
+    ID3D11Resource *texture = NULL;
+    D3D10DDI_HRESOURCE resource_handle = {};
     D3D11_RENDER_TARGET_VIEW_DESC desc = {};
     D3D10DDI_HRENDERTARGETVIEW handle = {};
     bool created = false;
@@ -784,7 +871,8 @@ using NativeGeometryShader = NativeShader<ID3D11GeometryShader, &IID_ID3D11Geome
 class NativeShaderResourceView : public NativeChild<ID3D11ShaderResourceView, &IID_ID3D11ShaderResourceView>
 {
 public:
-    NativeTexture2D *texture = NULL;
+    ID3D11Resource *texture = NULL;
+    D3D10DDI_HRESOURCE resource_handle = {};
     D3D11_SHADER_RESOURCE_VIEW_DESC desc = {};
     D3D10DDI_HSHADERRESOURCEVIEW handle = {};
     bool created = false;
@@ -1440,6 +1528,66 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateTexture2D(const D3D11_TEXTURE2D_DE
     return CreateTexture(input, initial, out);
 }
 
+HRESULT STDMETHODCALLTYPE NativeDevice::CreateTexture3D(const D3D11_TEXTURE3D_DESC *input,
+        const D3D11_SUBRESOURCE_DATA *initial, ID3D11Texture3D **out)
+{
+    if (out) *out = NULL;
+    if (!input || !input->Width || !input->Height || !input->Depth
+            || input->Width > D3D11_REQ_TEXTURE3D_U_V_OR_W_DIMENSION
+            || input->Height > D3D11_REQ_TEXTURE3D_U_V_OR_W_DIMENSION
+            || input->Depth > D3D11_REQ_TEXTURE3D_U_V_OR_W_DIMENSION
+            || input->Format == DXGI_FORMAT_UNKNOWN || input->Usage > D3D11_USAGE_STAGING
+            || (input->BindFlags & D3D11_BIND_DEPTH_STENCIL)) return E_INVALIDARG;
+    if (input->MiscFlags & ~(D3D11_RESOURCE_MISC_GENERATE_MIPS | D3D11_RESOURCE_MISC_RESOURCE_CLAMP)) return E_INVALIDARG;
+    if (input->CPUAccessFlags & ~(D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE)) return E_INVALIDARG;
+    if (input->Usage == D3D11_USAGE_STAGING && (input->BindFlags || input->MiscFlags)) return E_INVALIDARG;
+    if (input->Usage == D3D11_USAGE_IMMUTABLE && !initial) return E_INVALIDARG;
+    if ((input->Usage == D3D11_USAGE_DEFAULT || input->Usage == D3D11_USAGE_IMMUTABLE) && input->CPUAccessFlags) return E_INVALIDARG;
+    if (input->Usage == D3D11_USAGE_DYNAMIC && (input->CPUAccessFlags != D3D11_CPU_ACCESS_WRITE
+            || (input->BindFlags & ~D3D11_BIND_SHADER_RESOURCE))) return E_INVALIDARG;
+    UINT maximum_mips = 1;
+    for (UINT dimension = max(input->Depth, max(input->Width, input->Height)); dimension > 1; dimension >>= 1) ++maximum_mips;
+    UINT mip_count = input->MipLevels ? input->MipLevels : maximum_mips;
+    if (mip_count > maximum_mips) return E_INVALIDARG;
+    if (!out) return S_FALSE;
+    NativeLock guard(this);
+    NativeTexture3D *texture = new NativeTexture3D(this);
+    if (!texture) return E_OUTOFMEMORY;
+    texture->desc = *input;
+    texture->desc.MipLevels = mip_count;
+    D3D10DDI_MIPINFO mips[12] = {};
+    for (UINT i = 0; i < mip_count; ++i)
+    {
+        mips[i].TexelWidth = mips[i].PhysicalWidth = max(1u, input->Width >> i);
+        mips[i].TexelHeight = mips[i].PhysicalHeight = max(1u, input->Height >> i);
+        mips[i].TexelDepth = mips[i].PhysicalDepth = max(1u, input->Depth >> i);
+    }
+    D3D11DDIARG_CREATERESOURCE args = {};
+    args.pMipInfoList = mips;
+    args.pInitialDataUP = reinterpret_cast<const D3D10_DDIARG_SUBRESOURCE_UP *>(initial);
+    args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE3D;
+    args.Usage = input->Usage;
+    args.BindFlags = input->BindFlags & ~D3D11_BIND_UNORDERED_ACCESS;
+    if (input->BindFlags & D3D11_BIND_UNORDERED_ACCESS) args.BindFlags |= 0x100;
+    args.MapFlags = input->CPUAccessFlags >> 16;
+    args.MiscFlags = input->MiscFlags;
+    args.Format = input->Format;
+    args.SampleDesc.Count = args.ArraySize = 1;
+    args.MipLevels = mip_count;
+    SIZE_T size = functions.pfnCalcPrivateResourceSize(driver_device, &args);
+    texture->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
+    texture->mapped = static_cast<BYTE *>(HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, mip_count));
+    if (!texture->handle.pDrvPrivate || !texture->mapped) { texture->Release(); return E_OUTOFMEMORY; }
+    D3D10DDI_HRTRESOURCE runtime_resource = {texture};
+    BeginCall();
+    functions.pfnCreateResource(driver_device, &args, texture->handle, runtime_resource);
+    HRESULT hr = operation_error;
+    if (FAILED(hr)) { texture->Release(); return hr; }
+    texture->created = true;
+    *out = texture;
+    return S_OK;
+}
+
 HRESULT NativeDevice::CreateTexture(const D3D11_TEXTURE2D_DESC *input,
         const D3D11_SUBRESOURCE_DATA *initial, ID3D11Texture2D **out,
         bool present, const DXGI_DDI_PRIMARY_DESC *primary)
@@ -1455,7 +1603,8 @@ HRESULT NativeDevice::CreateTexture(const D3D11_TEXTURE2D_DESC *input,
     if (input->Usage == D3D11_USAGE_IMMUTABLE && !initial) return E_INVALIDARG;
     if ((input->Usage == D3D11_USAGE_DEFAULT || input->Usage == D3D11_USAGE_IMMUTABLE) && input->CPUAccessFlags) return E_INVALIDARG;
     if (input->Usage == D3D11_USAGE_DYNAMIC && input->CPUAccessFlags != D3D11_CPU_ACCESS_WRITE) return E_INVALIDARG;
-    if (input->MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE) return E_NOTIMPL;
+    if ((input->MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE) && (input->Width != input->Height
+            || input->ArraySize % 6 || input->SampleDesc.Count != 1)) return E_INVALIDARG;
     if (input->MiscFlags & (D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE)) return E_NOTIMPL;
     if ((input->MiscFlags & D3D11_RESOURCE_MISC_SHARED) && (input->Usage != D3D11_USAGE_DEFAULT
             || input->CPUAccessFlags || input->MipLevels != 1 || input->ArraySize != 1
@@ -1484,7 +1633,8 @@ HRESULT NativeDevice::CreateTexture(const D3D11_TEXTURE2D_DESC *input,
     D3D11DDIARG_CREATERESOURCE args = {};
     args.pMipInfoList = mips;
     args.pInitialDataUP = reinterpret_cast<const D3D10_DDIARG_SUBRESOURCE_UP *>(initial);
-    args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE2D;
+    args.ResourceDimension = input->MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE
+            ? D3D10DDIRESOURCE_TEXTURECUBE : D3D10DDIRESOURCE_TEXTURE2D;
     args.Usage = input->Usage;
     args.BindFlags = input->BindFlags & ~D3D11_BIND_UNORDERED_ACCESS;
     if (input->BindFlags & D3D11_BIND_UNORDERED_ACCESS) args.BindFlags |= 0x100;
@@ -1634,14 +1784,20 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateRenderTargetView(ID3D11Resource *r
         const D3D11_RENDER_TARGET_VIEW_DESC *input, ID3D11RenderTargetView **out)
 {
     if (out) *out = NULL;
-    NativeTexture2D *texture = NativeTexture(resource, this);
+    NativeTextureInfo info;
+    NativeTextureInfo *texture = GetNativeTexture(resource, this, &info);
     if (!texture || !(texture->desc.BindFlags & D3D11_BIND_RENDER_TARGET)) return E_INVALIDARG;
     D3D11_RENDER_TARGET_VIEW_DESC desc = {};
     if (input) desc = *input;
     else
     {
         desc.Format = texture->desc.Format;
-        if (texture->desc.SampleDesc.Count > 1)
+        if (texture->dimension == D3D10DDIRESOURCE_TEXTURE3D)
+        {
+            desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE3D;
+            desc.Texture3D.WSize = texture->depth;
+        }
+        else if (texture->desc.SampleDesc.Count > 1)
             desc.ViewDimension = texture->desc.ArraySize > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY : D3D11_RTV_DIMENSION_TEXTURE2DMS;
         else
             desc.ViewDimension = texture->desc.ArraySize > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DARRAY : D3D11_RTV_DIMENSION_TEXTURE2D;
@@ -1651,37 +1807,57 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateRenderTargetView(ID3D11Resource *r
     D3D10DDIARG_CREATERENDERTARGETVIEW args = {};
     args.hDrvResource = texture->handle;
     args.Format = desc.Format == DXGI_FORMAT_UNKNOWN ? texture->desc.Format : desc.Format;
-    args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE2D;
+    args.ResourceDimension = texture->dimension;
+    if ((desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE3D) != (texture->dimension == D3D10DDIRESOURCE_TEXTURE3D)) return E_INVALIDARG;
     switch (desc.ViewDimension)
     {
         case D3D11_RTV_DIMENSION_TEXTURE2D:
+            if (texture->desc.SampleDesc.Count != 1 || texture->desc.ArraySize != 1) return E_INVALIDARG;
             args.Tex2D.MipSlice = desc.Texture2D.MipSlice;
             args.Tex2D.ArraySize = 1;
             break;
         case D3D11_RTV_DIMENSION_TEXTURE2DARRAY:
+            if (texture->desc.SampleDesc.Count != 1) return E_INVALIDARG;
             args.Tex2D.MipSlice = desc.Texture2DArray.MipSlice;
             args.Tex2D.FirstArraySlice = desc.Texture2DArray.FirstArraySlice;
             args.Tex2D.ArraySize = desc.Texture2DArray.ArraySize;
             break;
         case D3D11_RTV_DIMENSION_TEXTURE2DMS:
+            if (texture->desc.SampleDesc.Count == 1 || texture->desc.ArraySize != 1) return E_INVALIDARG;
             args.Tex2D.ArraySize = 1;
             break;
         case D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY:
+            if (texture->desc.SampleDesc.Count == 1) return E_INVALIDARG;
             args.Tex2D.FirstArraySlice = desc.Texture2DMSArray.FirstArraySlice;
             args.Tex2D.ArraySize = desc.Texture2DMSArray.ArraySize;
             break;
+        case D3D11_RTV_DIMENSION_TEXTURE3D:
+        {
+            UINT mip = desc.Texture3D.MipSlice;
+            if (mip >= texture->desc.MipLevels) return E_INVALIDARG;
+            UINT depth = max(1u, texture->depth >> mip);
+            if (desc.Texture3D.FirstWSlice >= depth) return E_INVALIDARG;
+            if (desc.Texture3D.WSize == ~0u) desc.Texture3D.WSize = depth - desc.Texture3D.FirstWSlice;
+            if (!desc.Texture3D.WSize || desc.Texture3D.WSize > depth - desc.Texture3D.FirstWSlice) return E_INVALIDARG;
+            args.Tex3D.MipSlice = mip;
+            args.Tex3D.FirstW = desc.Texture3D.FirstWSlice;
+            args.Tex3D.WSize = desc.Texture3D.WSize;
+            break;
+        }
         default: return E_INVALIDARG;
     }
-    if (args.Tex2D.MipSlice >= texture->desc.MipLevels || !args.Tex2D.ArraySize
+    if (texture->dimension != D3D10DDIRESOURCE_TEXTURE3D && (args.Tex2D.MipSlice >= texture->desc.MipLevels || !args.Tex2D.ArraySize
             || args.Tex2D.FirstArraySlice >= texture->desc.ArraySize
-            || args.Tex2D.ArraySize > texture->desc.ArraySize - args.Tex2D.FirstArraySlice) return E_INVALIDARG;
+            || args.Tex2D.ArraySize > texture->desc.ArraySize - args.Tex2D.FirstArraySlice)) return E_INVALIDARG;
     if (!out) return S_FALSE;
     NativeLock guard(this);
     NativeRenderTargetView *view = new NativeRenderTargetView(this);
     if (!view) return E_OUTOFMEMORY;
-    view->texture = texture;
-    texture->AddRef();
+    view->texture = resource;
+    resource->AddRef();
+    view->resource_handle = texture->handle;
     view->desc = desc;
+    view->desc.Format = args.Format;
     SIZE_T size = functions.pfnCalcPrivateRenderTargetViewSize(driver_device, &args);
     view->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
     if (!view->handle.pDrvPrivate) { view->Release(); return E_OUTOFMEMORY; }
@@ -1717,7 +1893,16 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CheckFormatSupport(DXGI_FORMAT format, U
     if (ddi_support & 0x400) *support |= D3D11_FORMAT_SUPPORT_BUFFER;
     if (ddi_support & 0x4000) *support |= D3D11_FORMAT_SUPPORT_SHADER_GATHER;
     if (!(ddi_support & 0x80000000) && (ddi_support & 0x7))
-        *support |= D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_MIP | D3D11_FORMAT_SUPPORT_SHADER_LOAD;
+    {
+        *support |= D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_TEXTURECUBE
+                | D3D11_FORMAT_SUPPORT_MIP | D3D11_FORMAT_SUPPORT_SHADER_LOAD;
+        bool block_compressed = (format >= DXGI_FORMAT_BC1_TYPELESS && format <= DXGI_FORMAT_BC5_SNORM)
+                || (format >= DXGI_FORMAT_BC6H_TYPELESS && format <= DXGI_FORMAT_BC7_UNORM_SRGB);
+        bool depth_stencil = NativeDepthResourceFormat(format) != DXGI_FORMAT_UNKNOWN
+                || (format >= DXGI_FORMAT_R32G8X24_TYPELESS && format <= DXGI_FORMAT_X32_TYPELESS_G8X24_UINT)
+                || (format >= DXGI_FORMAT_R24G8_TYPELESS && format <= DXGI_FORMAT_X24_TYPELESS_G8_UINT);
+        if (!block_compressed && !depth_stencil) *support |= D3D11_FORMAT_SUPPORT_TEXTURE3D;
+    }
     /* The DDI has no depth-stencil bit. For a supported typed depth format,
      * its output-merger role follows from the format itself. */
     if (!(ddi_support & 0x80000000) && NativeDepthResourceFormat(format) != DXGI_FORMAT_UNKNOWN)
@@ -1860,7 +2045,8 @@ HRESULT STDMETHODCALLTYPE NativeContext::Map(ID3D11Resource *resource, UINT subr
     ZeroMemory(mapped, sizeof(*mapped));
     if (NativeBuffer *buffer = GetNativeBuffer(resource, device))
         return MapBuffer(device, buffer, subresource, type, flags, mapped);
-    NativeTexture2D *texture = NativeTexture(resource, device);
+    NativeTextureInfo info;
+    NativeTextureInfo *texture = GetNativeTexture(resource, device, &info);
     if (!texture || subresource >= texture->desc.MipLevels * texture->desc.ArraySize || texture->mapped[subresource]
             || (flags & ~D3D11_MAP_FLAG_DO_NOT_WAIT)) return E_INVALIDARG;
     if (type < D3D11_MAP_READ || type > D3D11_MAP_WRITE_NO_OVERWRITE) return E_INVALIDARG;
@@ -1898,7 +2084,8 @@ void STDMETHODCALLTYPE NativeContext::Unmap(ID3D11Resource *resource, UINT subre
         buffer->mapped = false;
         return;
     }
-    NativeTexture2D *texture = NativeTexture(resource, device);
+    NativeTextureInfo info;
+    NativeTextureInfo *texture = GetNativeTexture(resource, device, &info);
     if (!texture || subresource >= texture->desc.MipLevels * texture->desc.ArraySize || !texture->mapped[subresource]) return;
     NativeLock guard(device);
     PFND3D10DDI_RESOURCEUNMAP unmap = texture->desc.Usage == D3D11_USAGE_STAGING
@@ -1923,10 +2110,12 @@ void STDMETHODCALLTYPE NativeContext::GenerateMips(ID3D11ShaderResourceView *res
 {
     if (!resource_view || !device->functions.pfnGenMips) return;
     NativeShaderResourceView *view = static_cast<NativeShaderResourceView *>(resource_view);
-    if (view->device != device || !view->created || !view->texture
-            || view->texture->desc.MipLevels <= 1
-            || !(view->texture->desc.MiscFlags & D3D11_RESOURCE_MISC_GENERATE_MIPS)
-            || !(view->texture->desc.BindFlags & D3D11_BIND_RENDER_TARGET)) return;
+    NativeTextureInfo info;
+    NativeTextureInfo *texture = GetNativeTexture(view->texture, device, &info);
+    if (view->device != device || !view->created || !texture
+            || texture->desc.MipLevels <= 1
+            || !(texture->desc.MiscFlags & D3D11_RESOURCE_MISC_GENERATE_MIPS)
+            || !(texture->desc.BindFlags & D3D11_BIND_RENDER_TARGET)) return;
     NativeLock guard(device);
     device->BeginCall();
     device->functions.pfnGenMips(device->driver_device, view->handle);
@@ -1942,8 +2131,11 @@ void STDMETHODCALLTYPE NativeContext::CopyResource(ID3D11Resource *dst, ID3D11Re
         device->functions.pfnResourceCopy(device->driver_device, d->handle, s->handle);
         return;
     }
-    NativeTexture2D *d = NativeTexture(dst, device), *s = NativeTexture(src, device);
-    if (!d || !s || d == s || d->desc.Width != s->desc.Width || d->desc.Height != s->desc.Height
+    NativeTextureInfo dst_info, src_info;
+    NativeTextureInfo *d = GetNativeTexture(dst, device, &dst_info), *s = GetNativeTexture(src, device, &src_info);
+    if (!d || !s || dst == src || d->depth != s->depth
+            || (d->dimension == D3D10DDIRESOURCE_TEXTURE3D) != (s->dimension == D3D10DDIRESOURCE_TEXTURE3D)
+            || d->desc.Width != s->desc.Width || d->desc.Height != s->desc.Height
             || d->desc.ArraySize != s->desc.ArraySize || d->desc.MipLevels != s->desc.MipLevels
             || d->desc.Format != s->desc.Format || d->desc.SampleDesc.Count != s->desc.SampleDesc.Count
             || d->desc.SampleDesc.Quality != s->desc.SampleDesc.Quality || d->desc.Usage == D3D11_USAGE_IMMUTABLE) return;
@@ -1954,7 +2146,8 @@ void STDMETHODCALLTYPE NativeContext::CopyResource(ID3D11Resource *dst, ID3D11Re
 void STDMETHODCALLTYPE NativeContext::CopySubresourceRegion(ID3D11Resource *dst, UINT dst_subresource,
         UINT x, UINT y, UINT z, ID3D11Resource *src, UINT src_subresource, const D3D11_BOX *box)
 {
-    NativeTexture2D *d = NativeTexture(dst, device), *s = NativeTexture(src, device);
+    NativeTextureInfo dst_info, src_info;
+    NativeTextureInfo *d = GetNativeTexture(dst, device, &dst_info), *s = GetNativeTexture(src, device, &src_info);
     if (!d || !s || dst_subresource >= d->desc.MipLevels * d->desc.ArraySize
             || src_subresource >= s->desc.MipLevels * s->desc.ArraySize || !device->functions.pfnResourceCopyRegion) return;
     NativeLock guard(device);
@@ -1975,7 +2168,8 @@ void STDMETHODCALLTYPE NativeContext::UpdateSubresource(ID3D11Resource *resource
         update(device->driver_device, buffer->handle, 0, reinterpret_cast<const D3D10_DDI_BOX *>(box), data, row_pitch, depth_pitch);
         return;
     }
-    NativeTexture2D *texture = NativeTexture(resource, device);
+    NativeTextureInfo info;
+    NativeTextureInfo *texture = GetNativeTexture(resource, device, &info);
     if (!texture || !data || texture->desc.Usage != D3D11_USAGE_DEFAULT
             || subresource >= texture->desc.MipLevels * texture->desc.ArraySize) return;
     NativeLock guard(device);
@@ -2471,52 +2665,132 @@ HRESULT STDMETHODCALLTYPE NativeDevice::CreateShaderResourceView(ID3D11Resource 
         const D3D11_SHADER_RESOURCE_VIEW_DESC *input, ID3D11ShaderResourceView **out)
 {
     if (out) *out = NULL;
-    NativeTexture2D *texture = NativeTexture(resource, this);
+    NativeTextureInfo info;
+    NativeTextureInfo *texture = GetNativeTexture(resource, this, &info);
     if (!texture || !(texture->desc.BindFlags & D3D11_BIND_SHADER_RESOURCE)) return E_INVALIDARG;
     if (!functions.pfnCalcPrivateShaderResourceViewSize || !functions.pfnCreateShaderResourceView
             || !functions.pfnDestroyShaderResourceView) return E_NOTIMPL;
-    D3D11_SHADER_RESOURCE_VIEW_DESC desc = {};
+    D3D11_SHADER_RESOURCE_VIEW_DESC desc;
+    /* The first union member is shorter than the cube/array descriptors.
+     * Zero all storage before selecting a default view dimension. */
+    ZeroMemory(&desc, sizeof(desc));
     if (input) desc = *input;
     else
     {
         desc.Format = texture->desc.Format;
-        desc.ViewDimension = texture->desc.ArraySize > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DARRAY : D3D11_SRV_DIMENSION_TEXTURE2D;
-        desc.Texture2DArray.MipLevels = texture->desc.MipLevels;
-        desc.Texture2DArray.ArraySize = texture->desc.ArraySize;
+        if (texture->dimension == D3D10DDIRESOURCE_TEXTURE3D)
+        {
+            desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
+            desc.Texture3D.MipLevels = texture->desc.MipLevels;
+        }
+        else if (texture->dimension == D3D10DDIRESOURCE_TEXTURECUBE)
+        {
+            desc.ViewDimension = texture->desc.ArraySize == 6 ? D3D11_SRV_DIMENSION_TEXTURECUBE : D3D11_SRV_DIMENSION_TEXTURECUBEARRAY;
+            desc.TextureCubeArray.MipLevels = texture->desc.MipLevels;
+            desc.TextureCubeArray.NumCubes = texture->desc.ArraySize / 6;
+        }
+        else
+        {
+            desc.ViewDimension = texture->desc.ArraySize > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DARRAY : D3D11_SRV_DIMENSION_TEXTURE2D;
+            desc.Texture2DArray.MipLevels = texture->desc.MipLevels;
+            desc.Texture2DArray.ArraySize = texture->desc.ArraySize;
+            if (texture->desc.SampleDesc.Count > 1)
+            {
+                desc.ViewDimension = texture->desc.ArraySize > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY : D3D11_SRV_DIMENSION_TEXTURE2DMS;
+                desc.Texture2DMSArray.FirstArraySlice = 0;
+                desc.Texture2DMSArray.ArraySize = texture->desc.ArraySize;
+            }
+        }
     }
     D3D11DDIARG_CREATESHADERRESOURCEVIEW args = {};
     args.hDrvResource = texture->handle;
     args.Format = desc.Format == DXGI_FORMAT_UNKNOWN ? texture->desc.Format : desc.Format;
+    UINT mip = 0, mips = 1, first = 0, slices = 1;
+    bool volume = texture->dimension == D3D10DDIRESOURCE_TEXTURE3D;
+    if ((desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE3D) != volume) return E_INVALIDARG;
+    bool multisample = desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DMS
+            || desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY;
+    if (multisample != (texture->desc.SampleDesc.Count > 1)) return E_INVALIDARG;
     args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE2D;
     switch (desc.ViewDimension)
     {
         case D3D11_SRV_DIMENSION_TEXTURE2D:
-            args.Tex2D.MostDetailedMip = desc.Texture2D.MostDetailedMip;
-            args.Tex2D.MipLevels = desc.Texture2D.MipLevels;
-            args.Tex2D.ArraySize = 1;
+            if (texture->desc.ArraySize != 1) return E_INVALIDARG;
+            mip = desc.Texture2D.MostDetailedMip;
+            mips = desc.Texture2D.MipLevels;
             break;
         case D3D11_SRV_DIMENSION_TEXTURE2DARRAY:
-            args.Tex2D.MostDetailedMip = desc.Texture2DArray.MostDetailedMip;
-            args.Tex2D.MipLevels = desc.Texture2DArray.MipLevels;
-            args.Tex2D.FirstArraySlice = desc.Texture2DArray.FirstArraySlice;
-            args.Tex2D.ArraySize = desc.Texture2DArray.ArraySize;
+            mip = desc.Texture2DArray.MostDetailedMip;
+            mips = desc.Texture2DArray.MipLevels;
+            first = desc.Texture2DArray.FirstArraySlice;
+            slices = desc.Texture2DArray.ArraySize;
             break;
-        default: return E_NOTIMPL;
+        case D3D11_SRV_DIMENSION_TEXTURE2DMS:
+            if (texture->desc.ArraySize != 1) return E_INVALIDARG;
+            break;
+        case D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY:
+            first = desc.Texture2DMSArray.FirstArraySlice;
+            slices = desc.Texture2DMSArray.ArraySize;
+            break;
+        case D3D11_SRV_DIMENSION_TEXTURE3D:
+            args.ResourceDimension = D3D10DDIRESOURCE_TEXTURE3D;
+            mip = desc.Texture3D.MostDetailedMip;
+            mips = desc.Texture3D.MipLevels;
+            break;
+        case D3D11_SRV_DIMENSION_TEXTURECUBE:
+            if (texture->dimension != D3D10DDIRESOURCE_TEXTURECUBE) return E_INVALIDARG;
+            args.ResourceDimension = D3D10DDIRESOURCE_TEXTURECUBE;
+            mip = desc.TextureCube.MostDetailedMip;
+            mips = desc.TextureCube.MipLevels;
+            slices = 6;
+            break;
+        case D3D11_SRV_DIMENSION_TEXTURECUBEARRAY:
+            if (texture->dimension != D3D10DDIRESOURCE_TEXTURECUBE
+                    || desc.TextureCubeArray.First2DArrayFace % 6
+                    || desc.TextureCubeArray.NumCubes > texture->desc.ArraySize / 6) return E_INVALIDARG;
+            args.ResourceDimension = D3D10DDIRESOURCE_TEXTURECUBE;
+            mip = desc.TextureCubeArray.MostDetailedMip;
+            mips = desc.TextureCubeArray.MipLevels;
+            first = desc.TextureCubeArray.First2DArrayFace;
+            slices = desc.TextureCubeArray.NumCubes * 6;
+            break;
+        default: return E_INVALIDARG;
     }
-    if (args.Tex2D.MostDetailedMip >= texture->desc.MipLevels) return E_INVALIDARG;
-    if (args.Tex2D.MipLevels == ~0u) args.Tex2D.MipLevels = texture->desc.MipLevels - args.Tex2D.MostDetailedMip;
-    if (!args.Tex2D.MipLevels || args.Tex2D.MipLevels > texture->desc.MipLevels - args.Tex2D.MostDetailedMip
-            || !args.Tex2D.ArraySize || args.Tex2D.FirstArraySlice >= texture->desc.ArraySize
-            || args.Tex2D.ArraySize > texture->desc.ArraySize - args.Tex2D.FirstArraySlice) return E_INVALIDARG;
+    if (mip >= texture->desc.MipLevels) return E_INVALIDARG;
+    if (mips == ~0u) mips = texture->desc.MipLevels - mip;
+    if (!mips || mips > texture->desc.MipLevels - mip || !slices
+            || first >= texture->desc.ArraySize || slices > texture->desc.ArraySize - first) return E_INVALIDARG;
+    if (args.ResourceDimension == D3D10DDIRESOURCE_TEXTURE3D)
+    {
+        args.Tex3D.MostDetailedMip = mip;
+        args.Tex3D.MipLevels = mips;
+        desc.Texture3D.MipLevels = mips;
+    }
+    else if (args.ResourceDimension == D3D10DDIRESOURCE_TEXTURECUBE)
+    {
+        args.TexCube.MostDetailedMip = mip;
+        args.TexCube.MipLevels = mips;
+        args.TexCube.First2DArrayFace = first;
+        args.TexCube.NumCubes = slices / 6;
+        desc.TextureCube.MipLevels = mips;
+    }
+    else
+    {
+        args.Tex2D.MostDetailedMip = mip;
+        args.Tex2D.MipLevels = mips;
+        args.Tex2D.FirstArraySlice = first;
+        args.Tex2D.ArraySize = slices;
+        if (!multisample) desc.Texture2D.MipLevels = mips;
+    }
     if (!out) return S_FALSE;
     NativeLock guard(this);
     NativeShaderResourceView *view = new NativeShaderResourceView(this);
     if (!view) return E_OUTOFMEMORY;
-    view->texture = texture;
-    texture->AddRef();
+    view->texture = resource;
+    resource->AddRef();
+    view->resource_handle = texture->handle;
     view->desc = desc;
     view->desc.Format = args.Format;
-    view->desc.Texture2D.MipLevels = args.Tex2D.MipLevels;
     SIZE_T size = functions.pfnCalcPrivateShaderResourceViewSize(driver_device, &args);
     view->handle.pDrvPrivate = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size ? size : 1);
     if (!view->handle.pDrvPrivate) { view->Release(); return E_OUTOFMEMORY; }
@@ -2692,7 +2966,7 @@ void NativeContext::SetShaderResources(UINT stage, UINT start, UINT count, ID3D1
         handles[i] = view->handle;
         accepted[i] = view;
         if (device->functions.pfnShaderResourceViewReadAfterWriteHazard)
-            device->functions.pfnShaderResourceViewReadAfterWriteHazard(device->driver_device, view->handle, view->texture->handle);
+            device->functions.pfnShaderResourceViewReadAfterWriteHazard(device->driver_device, view->handle, view->resource_handle);
     }
     set(device->driver_device, start, count, handles);
     for (UINT i = 0; i < count; ++i) ReplaceObject(shader_resources[stage][start + i], accepted[i]);
@@ -2724,7 +2998,7 @@ void STDMETHODCALLTYPE NativeContext::OMSetRenderTargets(UINT count, ID3D11Rende
                     SetShaderResources(stage, slot, 1, &null_view);
                 }
         if (device->functions.pfnResourceReadAfterWriteHazard)
-            device->functions.pfnResourceReadAfterWriteHazard(device->driver_device, view->texture->handle);
+            device->functions.pfnResourceReadAfterWriteHazard(device->driver_device, view->resource_handle);
     }
     D3D10DDI_HDEPTHSTENCILVIEW depth_handle = {};
     if (depth_target)
