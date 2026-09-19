@@ -1890,6 +1890,10 @@ CmpParseKey(IN PVOID ParseObject,
     /* Copy the remaining name */
     Current = *RemainingName;
 
+    /* NtOpenKeyEx passes open options through the captured parse context. */
+    if (ParseContext && (ParseContext->CreateOptions & REG_OPTION_OPEN_LINK))
+        Attributes |= OBJ_OPENLINK;
+
     /* Check if this is a create */
     if (!ParseContext || !ParseContext->CreateOperation)
     {
