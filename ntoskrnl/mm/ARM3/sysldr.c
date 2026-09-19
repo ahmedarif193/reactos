@@ -3081,20 +3081,99 @@ LdrpInitSecurityCookie(PLDR_DATA_TABLE_ENTRY LdrEntry)
     return Cookie;
 }
 
+VOID
+NTAPI
+MmFreePreparedSystemImage(
+    _Inout_ PMM_PREPARED_SYSTEM_IMAGE PreparedImage)
+{
+    PAGED_CODE();
+
+    if (PreparedImage->Section) ObDereferenceObject(PreparedImage->Section);
+    if (PreparedImage->FileHandle) ZwClose(PreparedImage->FileHandle);
+    RtlZeroMemory(PreparedImage, sizeof(*PreparedImage));
+}
+
 NTSTATUS
 NTAPI
-MmLoadSystemImage(IN PUNICODE_STRING FileName,
-                  IN PUNICODE_STRING NamePrefix OPTIONAL,
-                  IN PUNICODE_STRING LoadedName OPTIONAL,
-                  IN ULONG Flags,
-                  OUT PVOID *ModuleObject,
-                  OUT PVOID *ImageBaseAddress)
+MmPrepareSystemImage(
+    _In_ PUNICODE_STRING FileName,
+    _In_ ULONG Flags,
+    _Out_ PMM_PREPARED_SYSTEM_IMAGE PreparedImage)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    HANDLE SectionHandle;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    RtlZeroMemory(PreparedImage, sizeof(*PreparedImage));
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               FileName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwOpenFile(&PreparedImage->FileHandle,
+                       FILE_EXECUTE,
+                       &ObjectAttributes,
+                       &IoStatusBlock,
+                       FILE_SHARE_READ | FILE_SHARE_DELETE,
+                       0);
+    if (!NT_SUCCESS(Status)) goto Failure;
+
+    /* Preserve the loader's existing image-validation policy. */
+    Status = MmCheckSystemImage(PreparedImage->FileHandle);
+    if ((Status == STATUS_IMAGE_CHECKSUM_MISMATCH) ||
+        (Status == STATUS_IMAGE_MP_UP_MISMATCH) ||
+        (Status == STATUS_INVALID_IMAGE_PROTECT))
+    {
+        goto Failure;
+    }
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               NULL,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwCreateSection(&SectionHandle,
+                             Flags ? SECTION_MAP_READ | SECTION_MAP_EXECUTE
+                                   : SECTION_ALL_ACCESS,
+                             &ObjectAttributes,
+                             NULL,
+                             PAGE_EXECUTE,
+                             SEC_IMAGE,
+                             PreparedImage->FileHandle);
+    if (!NT_SUCCESS(Status)) goto Failure;
+
+    Status = ObReferenceObjectByHandle(SectionHandle,
+                                       SECTION_MAP_EXECUTE,
+                                       MmSectionObjectType,
+                                       KernelMode,
+                                       &PreparedImage->Section,
+                                       NULL);
+    ZwClose(SectionHandle);
+    if (!NT_SUCCESS(Status)) goto Failure;
+    return STATUS_SUCCESS;
+
+Failure:
+    MmFreePreparedSystemImage(PreparedImage);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+MmLoadSystemImageEx(
+    _In_ PUNICODE_STRING FileName,
+    _In_opt_ PUNICODE_STRING NamePrefix,
+    _In_opt_ PUNICODE_STRING LoadedName,
+    _In_ ULONG Flags,
+    _Inout_opt_ PMM_PREPARED_SYSTEM_IMAGE PreparedImage,
+    _Out_ PVOID *ModuleObject,
+    _Out_ PVOID *ImageBaseAddress)
 {
     PVOID ModuleLoadBase = NULL;
     NTSTATUS Status;
     HANDLE FileHandle = NULL;
-    OBJECT_ATTRIBUTES ObjectAttributes;
-    IO_STATUS_BLOCK IoStatusBlock;
     PIMAGE_NT_HEADERS NtHeader;
     UNICODE_STRING BaseName, BaseDirectory, PrefixName;
     PLDR_DATA_TABLE_ENTRY LdrEntry = NULL;
@@ -3102,8 +3181,6 @@ MmLoadSystemImage(IN PUNICODE_STRING FileName,
     PLOAD_IMPORTS LoadedImports = MM_SYSLDR_NO_IMPORTS;
     PCHAR MissingApiName, Buffer;
     PWCHAR MissingDriverName, PrefixedBuffer = NULL;
-    HANDLE SectionHandle;
-    ACCESS_MASK DesiredAccess;
     PSECTION Section = NULL;
     BOOLEAN LockOwned = FALSE;
     PLIST_ENTRY NextEntry;
@@ -3297,79 +3374,22 @@ LoaderScan:
         /* We don't have a valid entry */
         LdrEntry = NULL;
 
-        /* Setup image attributes */
-        InitializeObjectAttributes(&ObjectAttributes,
-                                   FileName,
-                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                                   NULL,
-                                   NULL);
-
-        /* Open the image */
-        Status = ZwOpenFile(&FileHandle,
-                            FILE_EXECUTE,
-                            &ObjectAttributes,
-                            &IoStatusBlock,
-                            FILE_SHARE_READ | FILE_SHARE_DELETE,
-                            0);
-        if (!NT_SUCCESS(Status))
+        /* Preparation does not publish a module or resolve any imports. */
+        if (PreparedImage && PreparedImage->Section)
         {
-            DPRINT1("ZwOpenFile failed for '%wZ' with status 0x%x\n",
-                    FileName, Status);
-            goto Quickie;
-        }
-
-        /* Validate it */
-        Status = MmCheckSystemImage(FileHandle);
-        if ((Status == STATUS_IMAGE_CHECKSUM_MISMATCH) ||
-            (Status == STATUS_IMAGE_MP_UP_MISMATCH) ||
-            (Status == STATUS_INVALID_IMAGE_PROTECT))
-        {
-            /* Fail loading */
-            goto Quickie;
-        }
-
-        /* Check if this is a session-load */
-        if (Flags)
-        {
-            /* Then we only need read and execute */
-            DesiredAccess = SECTION_MAP_READ | SECTION_MAP_EXECUTE;
+            FileHandle = PreparedImage->FileHandle;
+            Section = PreparedImage->Section;
+            RtlZeroMemory(PreparedImage, sizeof(*PreparedImage));
         }
         else
         {
-            /* Otherwise, we can allow write access */
-            DesiredAccess = SECTION_ALL_ACCESS;
+            MM_PREPARED_SYSTEM_IMAGE Image;
+
+            Status = MmPrepareSystemImage(FileName, Flags, &Image);
+            if (!NT_SUCCESS(Status)) goto Quickie;
+            FileHandle = Image.FileHandle;
+            Section = Image.Section;
         }
-
-        /* Initialize the attributes for the section */
-        InitializeObjectAttributes(&ObjectAttributes,
-                                   NULL,
-                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                                   NULL,
-                                   NULL);
-
-        /* Create the section */
-        Status = ZwCreateSection(&SectionHandle,
-                                 DesiredAccess,
-                                 &ObjectAttributes,
-                                 NULL,
-                                 PAGE_EXECUTE,
-                                 SEC_IMAGE,
-                                 FileHandle);
-        if (!NT_SUCCESS(Status))
-        {
-            DPRINT1("ZwCreateSection failed with status 0x%x\n", Status);
-            goto Quickie;
-        }
-
-        /* Now get the section pointer */
-        Status = ObReferenceObjectByHandle(SectionHandle,
-                                           SECTION_MAP_EXECUTE,
-                                           MmSectionObjectType,
-                                           KernelMode,
-                                           (PVOID*)&Section,
-                                           NULL);
-        ZwClose(SectionHandle);
-        if (!NT_SUCCESS(Status)) goto Quickie;
 
         /* Check if this was supposed to be a session-load */
         if (Flags)
@@ -3649,6 +3669,9 @@ Quickie:
         LockOwned = FALSE;
     }
 
+    /* Release any section left by an early exit. */
+    if (Section) ObDereferenceObject(Section);
+
     /* If we have a file handle, close it */
     if (FileHandle) ZwClose(FileHandle);
 
@@ -3658,6 +3681,24 @@ Quickie:
     /* Free the name buffer and return status */
     ExFreePoolWithTag(Buffer, TAG_LDR_WSTR);
     return Status;
+}
+
+NTSTATUS
+NTAPI
+MmLoadSystemImage(IN PUNICODE_STRING FileName,
+                  IN PUNICODE_STRING NamePrefix OPTIONAL,
+                  IN PUNICODE_STRING LoadedName OPTIONAL,
+                  IN ULONG Flags,
+                  OUT PVOID *ModuleObject,
+                  OUT PVOID *ImageBaseAddress)
+{
+    return MmLoadSystemImageEx(FileName,
+                               NamePrefix,
+                               LoadedName,
+                               Flags,
+                               NULL,
+                               ModuleObject,
+                               ImageBaseAddress);
 }
 
 PLDR_DATA_TABLE_ENTRY
