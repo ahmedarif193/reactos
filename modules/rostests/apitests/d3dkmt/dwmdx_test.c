@@ -271,8 +271,8 @@ C_ASSERT(FIELD_OFFSET(DWM_WIN, BaseDirtyRect) == 216);
 
 C_ASSERT(sizeof(DWM_FRAME_HEADER) == 56);
 C_ASSERT(DWM_WINARRAY_BASE == 56);
-C_ASSERT(DWM_BLURRECTARRAY_BASE == 56 + 256 * 228);
-C_ASSERT(DWM_FRAME_BYTES == 56 + 256 * 228 + 4096 * 16);
+C_ASSERT(DWM_BLURRECTARRAY_BASE == 56 + 256 * 232);
+C_ASSERT(DWM_FRAME_BYTES == 56 + 256 * 232 + 4096 * 16);
 
 START_TEST(dwmdxabi)
 {
@@ -1115,6 +1115,16 @@ TestNativePublicationArguments(PFN_NTUSERCALLONEPARAM pNtUserCallOneParam,
     ok(Exchange.Generation == 0xabcdef && Exchange.UpdateId == 0x123456 &&
        WaitForSingleObject(ReadyEvent, 0) == WAIT_OBJECT_0,
        "rejected PUBLISH must preserve output identity and completion event\n");
+
+    Exchange.Flags = DWM_DX_PUBLISH_PREMULTIPLIED;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_HANDLE,
+       "premultiplied publication must validate resource ownership: 0x%08lX\n", (unsigned long)Status);
+    Exchange.Flags = 2;
+    Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);
+    ok(Status == STATUS_INVALID_PARAMETER,
+       "unknown native publication flags must be rejected: 0x%08lX\n", (unsigned long)Status);
+    Exchange.Flags = 0;
 
     Exchange.Info.Pitch = Client.right * sizeof(ULONG);
     Status = (NTSTATUS)pNtUserCallOneParam((DWORD_PTR)&Exchange, DWM_ROUTINE_DXSURFACE);

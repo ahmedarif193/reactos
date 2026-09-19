@@ -1370,7 +1370,8 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     {
         return FALSE;
     }
-    Premultiplied = (Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA) != 0;
+    Premultiplied = (Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA) != 0 ||
+        (Client && (Window->LayerFlags & DWM_WINDOW_DX_PREMULTIPLIED_ALPHA) != 0);
     PerPixelAlpha = Premultiplied || (Window->BlurFlags & DWM_BLUR_ENABLE) != 0;
 
     /* Client publications must still be sampled before their acknowledgement

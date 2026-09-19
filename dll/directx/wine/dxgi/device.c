@@ -451,6 +451,10 @@ static HRESULT STDMETHODCALLTYPE dxgi_swapchain_factory_create_swapchain(IWineDX
         return E_FAIL;
     }
 
+#ifdef __REACTOS__
+    if (!window && !(window = dxgi_factory_get_device_window(dxgi_factory)))
+        return E_FAIL;
+#endif
     if (FAILED(hr = dxgi_get_output_from_window(&dxgi_factory->IWineDXGIFactory_iface, window, &containing_output)))
     {
         WARN("Failed to get output from window %p, hr %#lx.\n", window, hr);

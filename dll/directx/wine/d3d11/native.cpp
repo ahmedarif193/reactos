@@ -14,6 +14,7 @@
 #include <d3d10umddi.h>
 #include <wine/winedxgi.h>
 #include <dwmframe.h>
+#include <dxgi_dcomp.h>
 #include <vkd3d_shader.h>
 #include <wine/debug.h>
 #include <stddef.h>
@@ -2918,6 +2919,8 @@ public:
     HRESULT WaitForPublicationMeasured(bool);
     void DumpTrace();
     bool primary = false;
+    bool composition = false;
+    bool transport_valid = false;
 
     NativeSwapChain(NativeDevice *d, IDXGIFactory *f, HWND w) : device(d), factory(f), window(w)
     {
@@ -2974,7 +2977,7 @@ public:
         return 0;
     }
     HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID guid, UINT *size, void *data) override { NativeLock guard(device); return private_data.Get(guid, size, data); }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT size, const void *data) override { NativeLock guard(device); return private_data.Set(guid, size, data, NULL); }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID guid, UINT size, const void *data) override;
     HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID guid, const IUnknown *data) override { NativeLock guard(device); return private_data.Set(guid, data ? sizeof(data) : 0, &data, const_cast<IUnknown *>(data)); }
     HRESULT STDMETHODCALLTYPE GetParent(REFIID iid, void **out) override { return factory->QueryInterface(iid, out); }
     HRESULT STDMETHODCALLTYPE GetDevice(REFIID iid, void **out) override { return device->QueryInterface(iid, out); }
@@ -2990,11 +2993,13 @@ public:
     }
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL fullscreen, IDXGIOutput *output) override
     {
+        if (composition) return DXGI_ERROR_INVALID_CALL;
         if (fullscreen || output) return DXGI_ERROR_UNSUPPORTED;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL *fullscreen, IDXGIOutput **output) override
     {
+        if (composition) return DXGI_ERROR_INVALID_CALL;
         if (fullscreen) *fullscreen = !fullscreen_desc.Windowed;
         if (output) *output = NULL;
         return S_OK;
@@ -3025,6 +3030,7 @@ public:
     {
         if (!out) return E_INVALIDARG;
         *out = NULL;
+        if (composition) return DXGI_ERROR_INVALID_CALL;
         HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
         for (UINT index = 0;; ++index)
         {
@@ -3045,8 +3051,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT *out) override { if (!out) return E_INVALIDARG; *out = present_count; return S_OK; }
     HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1 *out) override { if (!out) return E_INVALIDARG; NativeLock guard(device); *out = desc; return S_OK; }
-    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC *out) override { if (!out) return E_INVALIDARG; *out = fullscreen_desc; return S_OK; }
-    HRESULT STDMETHODCALLTYPE GetHwnd(HWND *out) override { if (!out) return E_INVALIDARG; *out = window; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC *out) override { if (!out) return E_INVALIDARG; if (composition) return DXGI_ERROR_INVALID_CALL; *out = fullscreen_desc; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetHwnd(HWND *out) override { if (!out) return E_INVALIDARG; *out = composition ? NULL : window; return composition ? DXGI_ERROR_INVALID_CALL : S_OK; }
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID, void **out) override { if (out) *out = NULL; return DXGI_ERROR_INVALID_CALL; }
     BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override { return FALSE; }
     HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput **out) override { if (!out) return E_INVALIDARG; *out = NULL; return S_OK; }
@@ -3055,6 +3061,33 @@ public:
     HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION rotation) override { return rotation == DXGI_MODE_ROTATION_IDENTITY ? S_OK : DXGI_ERROR_UNSUPPORTED; }
     HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION *out) override { if (!out) return E_INVALIDARG; *out = DXGI_MODE_ROTATION_IDENTITY; return S_OK; }
 };
+
+HRESULT STDMETHODCALLTYPE NativeSwapChain::SetPrivateData(REFGUID guid, UINT size, const void *data)
+{
+    NativeLock guard(device);
+    if (!IsEqualGUID(guid, GUID_ReactOSDXGICompositionWindow))
+        return private_data.Set(guid, size, data, NULL);
+    if (!composition || !data || size != sizeof(reactos_dxgi_composition_target))
+        return E_INVALIDARG;
+    reactos_dxgi_composition_target target;
+    memcpy(&target, data, sizeof(target));
+    if (!IsWindow(target.window)) return E_INVALIDARG;
+    /* The native publication currently represents a complete client layer.
+     * Reject transforms/clips that cannot be represented by that contract. */
+    if (target.offset_x || target.offset_y || (target.has_clip &&
+            (target.clip.left > 0 || target.clip.top > 0 ||
+             target.clip.right < static_cast<LONG>(desc.Width) ||
+             target.clip.bottom < static_cast<LONG>(desc.Height)))) return E_NOTIMPL;
+    if (window != target.window)
+    {
+        HRESULT hr = RetirePublication();
+        if (FAILED(hr)) return hr;
+        window = target.window;
+    }
+    if (transport_valid && !publication.GlobalShare)
+        return Publish(transport, 0, NULL);
+    return S_OK;
+}
 
 DWORD WINAPI NativeSwapChain::DestroyPending(void *argument)
 {
@@ -3167,11 +3200,13 @@ HRESULT NativeSwapChain::Publish(NativeTexture2D *texture, UINT flags,
     exchange.Info.Width = desc.Width;
     exchange.Info.Height = desc.Height;
     exchange.Info.Format = desc.Format;
+    if (desc.AlphaMode == DXGI_ALPHA_MODE_PREMULTIPLIED)
+        exchange.Flags |= DWM_DX_PUBLISH_PREMULTIPLIED;
     exchange.ReadyEvent = reinterpret_cast<ULONG_PTR>(consumed_event);
     exchange.UpdateRect.right = desc.Width;
     exchange.UpdateRect.bottom = desc.Height;
-    if (parameters && parameters->DirtyRectsCount)
-        exchange.UpdateRect = *reinterpret_cast<const RECTL *>(parameters->pDirtyRects);
+    /* transport retains undamaged pixels across Present1 calls. Publish its
+     * complete image, including when the application supplied partial damage. */
     hr = StatusToHresult(static_cast<NTSTATUS>(NtUserCallOneParam(
             reinterpret_cast<DWORD_PTR>(&exchange), DWM_ROUTINE_DXSURFACE)));
     if (FAILED(hr)) return hr;
@@ -3260,13 +3295,13 @@ static HRESULT APIENTRY NativePresent(HANDLE runtime_device, DXGIDDICB_PRESENT *
 HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
 {
     if (!requested.Width || !requested.Height || !requested.BufferCount || requested.BufferCount > 16
-            || requested.SampleDesc.Count != 1 || requested.SampleDesc.Quality || requested.Stereo
-            || !(requested.BufferUsage & DXGI_USAGE_RENDER_TARGET_OUTPUT)) return DXGI_ERROR_INVALID_CALL;
+            || requested.SampleDesc.Count != 1 || requested.SampleDesc.Quality || requested.Stereo) return DXGI_ERROR_INVALID_CALL;
     bool flip = requested.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL || requested.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD;
     if ((flip && requested.BufferCount < 2) || (!flip && requested.SwapEffect != DXGI_SWAP_EFFECT_DISCARD
             && requested.SwapEffect != DXGI_SWAP_EFFECT_SEQUENTIAL)) return DXGI_ERROR_INVALID_CALL;
     if (requested.BufferCount > 1 && (!device->dxgi_functions.pfnRotateResourceIdentities || !device->rotate_resources)) return DXGI_ERROR_UNSUPPORTED;
-    if (requested.AlphaMode != DXGI_ALPHA_MODE_UNSPECIFIED && requested.AlphaMode != DXGI_ALPHA_MODE_IGNORE) return DXGI_ERROR_UNSUPPORTED;
+    if (requested.AlphaMode != DXGI_ALPHA_MODE_UNSPECIFIED && requested.AlphaMode != DXGI_ALPHA_MODE_IGNORE
+            && !(composition && requested.AlphaMode == DXGI_ALPHA_MODE_PREMULTIPLIED)) return DXGI_ERROR_UNSUPPORTED;
     if (!primary && requested.Format != DXGI_FORMAT_B8G8R8A8_UNORM
             && requested.Format != DXGI_FORMAT_R8G8B8A8_UNORM) return DXGI_ERROR_UNSUPPORTED;
     D3D11_TEXTURE2D_DESC texture_desc = {};
@@ -3276,7 +3311,7 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
     texture_desc.Format = requested.Format;
     texture_desc.SampleDesc = requested.SampleDesc;
     texture_desc.Usage = D3D11_USAGE_DEFAULT;
-    texture_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    if (requested.BufferUsage & DXGI_USAGE_RENDER_TARGET_OUTPUT) texture_desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
     if (requested.BufferUsage & DXGI_USAGE_SHADER_INPUT) texture_desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
     if (requested.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS) texture_desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
     DXGI_DDI_PRIMARY_DESC primary_desc = {};
@@ -3297,10 +3332,10 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
         if (FAILED(hr)) break;
         new_buffers[i] = static_cast<NativeTexture2D *>(texture);
     }
-    if (SUCCEEDED(hr) && !primary && requested.BufferCount == 1)
+    if (SUCCEEDED(hr) && !primary && (requested.BufferCount == 1 || composition))
     {
-        /* A one-buffer chain leaves the application's texture writable after
-         * Present. Publish a GPU copy whose lifetime is private to DXGI. */
+        /* Single buffering needs an immutable publication; composition also
+         * needs retained history for damage across rotating back buffers. */
         ID3D11Texture2D *texture = NULL;
         hr = device->CreateTexture(&texture_desc, NULL, &texture, true);
         new_transport = static_cast<NativeTexture2D *>(texture);
@@ -3316,6 +3351,7 @@ HRESULT NativeSwapChain::AllocateBuffers(const DXGI_SWAP_CHAIN_DESC1 &requested)
         }
         if (transport) transport->Release();
         transport = new_transport;
+        transport_valid = false;
         new_transport = NULL;
         desc = requested;
     }
@@ -3330,17 +3366,19 @@ HRESULT STDMETHODCALLTYPE NativeDevice::create_swapchain(IDXGIFactory *factory, 
 {
     if (!out) return E_INVALIDARG;
     *out = NULL;
-    if (!factory || !IsWindow(window) || !requested || !fullscreen) return DXGI_ERROR_INVALID_CALL;
+    if (!factory || (window && !IsWindow(window)) || !requested || !fullscreen) return DXGI_ERROR_INVALID_CALL;
     if (!fullscreen->Windowed || output) return DXGI_ERROR_UNSUPPORTED;
     if (!dxgi_functions.pfnPresent) return DXGI_ERROR_UNSUPPORTED;
     NativeLock guard(this);
     NativeSwapChain *swapchain = new NativeSwapChain(this, factory, window);
     if (!swapchain) return E_OUTOFMEMORY;
     swapchain->fullscreen_desc = *fullscreen;
-    swapchain->primary = GetPropW(window, DWM_PROP_GPU_OUTPUT) != NULL;
+    swapchain->composition = !window;
+    swapchain->primary = window && GetPropW(window, DWM_PROP_GPU_OUTPUT) != NULL;
     DXGI_SWAP_CHAIN_DESC1 desc = *requested;
     RECT client = {};
-    HRESULT hr = GetClientRect(window, &client) ? S_OK : DXGI_ERROR_INVALID_CALL;
+    HRESULT hr = !window || GetClientRect(window, &client) ? S_OK : DXGI_ERROR_INVALID_CALL;
+    if (!window && (!desc.Width || !desc.Height)) hr = DXGI_ERROR_INVALID_CALL;
     if (!desc.Width) desc.Width = max(1l, client.right - client.left);
     if (!desc.Height) desc.Height = max(1l, client.bottom - client.top);
     if (SUCCEEDED(hr)) hr = swapchain->AllocateBuffers(desc);
@@ -3355,8 +3393,8 @@ HRESULT STDMETHODCALLTYPE NativeSwapChain::ResizeBuffers(UINT count, UINT width,
     for (UINT i = 0; i < desc.BufferCount; ++i)
         if (buffers[i] && buffers[i]->references != 1) return DXGI_ERROR_INVALID_CALL;
     DXGI_SWAP_CHAIN_DESC1 requested = desc;
-    RECT client;
-    if (!GetClientRect(window, &client)) return DXGI_ERROR_INVALID_CALL;
+    RECT client = {};
+    if (composition ? (!width || !height) : !GetClientRect(window, &client)) return DXGI_ERROR_INVALID_CALL;
     if (count) requested.BufferCount = count;
     requested.Width = width ? width : max(1l, client.right - client.left);
     requested.Height = height ? height : max(1l, client.bottom - client.top);
@@ -3434,7 +3472,7 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
     NativeLock guard(device);
     HRESULT device_status = device->GetDeviceRemovedReason();
     if (FAILED(device_status)) return device_status;
-    if (!IsWindow(window)) return DXGI_ERROR_INVALID_CALL;
+    if (!(composition && !window) && !IsWindow(window)) return DXGI_ERROR_INVALID_CALL;
     if (IsIconic(window)) return DXGI_STATUS_OCCLUDED;
     if (flags & DXGI_PRESENT_TEST)
     {
@@ -3457,7 +3495,7 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
                     || static_cast<UINT>(rect.right) > desc.Width || static_cast<UINT>(rect.bottom) > desc.Height)
                 return DXGI_ERROR_INVALID_CALL;
         }
-        if (!primary && parameters->DirtyRectsCount)
+        if (!primary && !transport && parameters->DirtyRectsCount)
         {
             const RECT &rect = parameters->pDirtyRects[0];
             /* The current compositor publication carries one complete client
@@ -3476,7 +3514,17 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
         if (transport)
         {
             device->BeginCall();
-            device->context->CopyResource(transport, buffers[0]);
+            if (parameters && parameters->DirtyRectsCount)
+            {
+                for (UINT i = 0; i < parameters->DirtyRectsCount; ++i)
+                {
+                    const RECT &r = parameters->pDirtyRects[i];
+                    D3D11_BOX box = {static_cast<UINT>(r.left), static_cast<UINT>(r.top), 0,
+                                    static_cast<UINT>(r.right), static_cast<UINT>(r.bottom), 1};
+                    device->context->CopySubresourceRegion(transport, 0, r.left, r.top, 0, buffers[0], 0, &box);
+                }
+            }
+            else device->context->CopyResource(transport, buffers[0]);
             if (FAILED(device->operation_error)) return device->operation_error;
         }
     }
@@ -3509,8 +3557,14 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
     if (primary ? !context.submitted : !context.composed) return E_FAIL;
     if (!primary && sequence)
     {
-        hr = Publish(source, flags, parameters);
-        if (FAILED(hr)) return hr;
+        transport_valid = transport != NULL;
+        /* An unbound composition chain retains the latest frame. Commit
+         * publishes it when a visual first acquires a target window. */
+        if (window)
+        {
+            hr = Publish(source, flags, parameters);
+            if (FAILED(hr)) return hr;
+        }
     }
     ++present_count;
     if (desc.BufferCount > 1 && sequence)

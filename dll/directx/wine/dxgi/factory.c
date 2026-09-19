@@ -405,48 +405,30 @@ static HRESULT STDMETHODCALLTYPE dxgi_factory_CreateSwapChainForComposition(IWin
 {
 #ifdef __REACTOS__
     DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc = {0};
-    IWineDXGIFactory *device_factory;
-    struct dxgi_factory *factory;
-    IDXGIDevice *dxgi_device;
-    IDXGIAdapter *adapter;
-    HWND window;
+    IWineDXGISwapChainFactory *swapchain_factory;
     HRESULT hr;
 
-    TRACE("iface %p, device %p, desc %p, output %p, swapchain %p.\n",
-            iface, device, desc, output, swapchain);
-
-    if (!device || !desc || !swapchain)
+    if (!swapchain)
         return DXGI_ERROR_INVALID_CALL;
     *swapchain = NULL;
-
-    if (FAILED(hr = IUnknown_QueryInterface(device, &IID_IDXGIDevice,
-            (void **)&dxgi_device)))
-        return DXGI_ERROR_UNSUPPORTED;
-    hr = IDXGIDevice_GetAdapter(dxgi_device, &adapter);
-    IDXGIDevice_Release(dxgi_device);
-    if (FAILED(hr))
-        return hr;
-
-    hr = IDXGIAdapter_GetParent(adapter, &IID_IWineDXGIFactory,
-            (void **)&device_factory);
-    IDXGIAdapter_Release(adapter);
-    if (FAILED(hr))
-        return hr;
-
-    factory = impl_from_IWineDXGIFactory(device_factory);
-    window = dxgi_factory_get_device_window(factory);
-    if (!window)
-    {
-        IWineDXGIFactory_Release(device_factory);
-        return E_FAIL;
-    }
-
+    if (!device || !desc || !desc->Width || !desc->Height ||
+            desc->Scaling != DXGI_SCALING_STRETCH ||
+            (desc->SwapEffect != DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL &&
+             desc->SwapEffect != DXGI_SWAP_EFFECT_FLIP_DISCARD) ||
+            !dxgi_validate_swapchain_desc(desc))
+        return DXGI_ERROR_INVALID_CALL;
     if (output)
-        FIXME("Ignoring output %p.\n", output);
+        return DXGI_ERROR_UNSUPPORTED;
+    if (FAILED(IUnknown_QueryInterface(device, &IID_IWineDXGISwapChainFactory,
+            (void **)&swapchain_factory)))
+        return DXGI_ERROR_UNSUPPORTED;
+
     fullscreen_desc.Windowed = TRUE;
-    hr = dxgi_factory_CreateSwapChainForHwnd(device_factory, device, window,
-            desc, &fullscreen_desc, NULL, swapchain);
-    IWineDXGIFactory_Release(device_factory);
+    /* The private factory accepts a NULL window for an unbound composition
+     * chain. DirectComposition supplies the target when its tree is committed. */
+    hr = IWineDXGISwapChainFactory_create_swapchain(swapchain_factory,
+            (IDXGIFactory *)iface, NULL, desc, &fullscreen_desc, NULL, swapchain);
+    IWineDXGISwapChainFactory_Release(swapchain_factory);
     return hr;
 #else
     FIXME("iface %p, device %p, desc %p, output %p, swapchain %p stub!\n",

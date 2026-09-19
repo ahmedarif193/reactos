@@ -1,6 +1,7 @@
 
 add_executable(dxgi_apitest
     dxgi.c
+    composition.cpp
     completion_event.cpp
     dwm_render.cpp
     testlist.c)

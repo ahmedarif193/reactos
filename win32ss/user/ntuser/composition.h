@@ -80,6 +80,7 @@ typedef struct _WND_REDIRECT
     ULONGLONG GdiConsumedUpdateId;
     PKEVENT   DxReadyEvent;
     DWM_DX_SHARED_SURFACE_INFO DxInfo;
+    ULONG DxFlags;
 } WND_REDIRECT, *PWND_REDIRECT;
 
 /* Engine lifecycle. */
