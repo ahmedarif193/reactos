@@ -74,7 +74,7 @@ void dprintf(int level, LPCSTR format, ...)
     if (level <= g_debug_level) {
         va_list args;
         va_start(args, format);
-        fprintf(dlog_file, "%04x: ", GetCurrentThreadId());
+        fprintf(dlog_file, "%04lx: ", GetCurrentThreadId());
         vfprintf(dlog_file, format, args);
 #ifndef STANDALONE_NFSD
         fflush(dlog_file);
@@ -87,7 +87,7 @@ void eprintf(LPCSTR format, ...)
 {
     va_list args;
     va_start(args, format);
-    fprintf(elog_file, "%04x: ", GetCurrentThreadId());
+    fprintf(elog_file, "%04lx: ", GetCurrentThreadId());
     vfprintf(elog_file, format, args);
 #ifndef STANDALONE_NFSD
     fflush(elog_file);
@@ -228,45 +228,45 @@ void print_share_mode(int level, DWORD mode)
 void print_file_id_both_dir_info(int level, FILE_ID_BOTH_DIR_INFO *pboth_dir_info)
 {
     if (level > g_debug_level) return;
-    fprintf(dlog_file, "FILE_ID_BOTH_DIR_INFO %p %d\n", 
+    fprintf(dlog_file, "FILE_ID_BOTH_DIR_INFO %p %zu\n",
        pboth_dir_info, sizeof(unsigned char *));
-    fprintf(dlog_file, "\tNextEntryOffset=%ld %d %d\n", 
+    fprintf(dlog_file, "\tNextEntryOffset=%lu %zu %zu\n",
         pboth_dir_info->NextEntryOffset, 
         sizeof(pboth_dir_info->NextEntryOffset), sizeof(DWORD));
-    fprintf(dlog_file, "\tFileIndex=%ld  %d\n", pboth_dir_info->FileIndex, 
+    fprintf(dlog_file, "\tFileIndex=%lu  %zu\n", pboth_dir_info->FileIndex,
         sizeof(pboth_dir_info->FileIndex));
-    fprintf(dlog_file, "\tCreationTime=0x%x %d\n", 
+    fprintf(dlog_file, "\tCreationTime=0x%llx %zu\n",
         pboth_dir_info->CreationTime.QuadPart, 
         sizeof(pboth_dir_info->CreationTime));
-    fprintf(dlog_file, "\tLastAccessTime=0x%x %d\n", 
+    fprintf(dlog_file, "\tLastAccessTime=0x%llx %zu\n",
         pboth_dir_info->LastAccessTime.QuadPart, 
         sizeof(pboth_dir_info->LastAccessTime));
-    fprintf(dlog_file, "\tLastWriteTime=0x%x %d\n", 
+    fprintf(dlog_file, "\tLastWriteTime=0x%llx %zu\n",
         pboth_dir_info->LastWriteTime.QuadPart, 
         sizeof(pboth_dir_info->LastWriteTime));
-    fprintf(dlog_file, "\tChangeTime=0x%x %d\n", 
+    fprintf(dlog_file, "\tChangeTime=0x%llx %zu\n",
         pboth_dir_info->ChangeTime.QuadPart, 
         sizeof(pboth_dir_info->ChangeTime));
-    fprintf(dlog_file, "\tEndOfFile=0x%x %d\n", 
+    fprintf(dlog_file, "\tEndOfFile=0x%llx %zu\n",
         pboth_dir_info->EndOfFile.QuadPart, 
         sizeof(pboth_dir_info->EndOfFile));
-    fprintf(dlog_file, "\tAllocationSize=0x%x %d\n", 
+    fprintf(dlog_file, "\tAllocationSize=0x%llx %zu\n",
         pboth_dir_info->AllocationSize.QuadPart, 
         sizeof(pboth_dir_info->AllocationSize));
-    fprintf(dlog_file, "\tFileAttributes=%ld %d\n", 
+    fprintf(dlog_file, "\tFileAttributes=%lu %zu\n",
         pboth_dir_info->FileAttributes, 
         sizeof(pboth_dir_info->FileAttributes));
-    fprintf(dlog_file, "\tFileNameLength=%ld %d\n", 
+    fprintf(dlog_file, "\tFileNameLength=%lu %zu\n",
         pboth_dir_info->FileNameLength, 
         sizeof(pboth_dir_info->FileNameLength));
-    fprintf(dlog_file, "\tEaSize=%ld %d\n", 
+    fprintf(dlog_file, "\tEaSize=%lu %zu\n",
         pboth_dir_info->EaSize, sizeof(pboth_dir_info->EaSize));
-    fprintf(dlog_file, "\tShortNameLength=%d %d\n", 
+    fprintf(dlog_file, "\tShortNameLength=%d %zu\n",
         pboth_dir_info->ShortNameLength, 
         sizeof(pboth_dir_info->ShortNameLength));
-    fprintf(dlog_file, "\tShortName='%S' %d\n", pboth_dir_info->ShortName, 
+    fprintf(dlog_file, "\tShortName='%S' %zu\n", pboth_dir_info->ShortName,
         sizeof(pboth_dir_info->ShortName));
-    fprintf(dlog_file, "\tFileId=0x%x %d\n", pboth_dir_info->FileId.QuadPart, 
+    fprintf(dlog_file, "\tFileId=0x%llx %zu\n", pboth_dir_info->FileId.QuadPart,
         sizeof(pboth_dir_info->FileId));
     fprintf(dlog_file, "\tFileName='%S' %p\n", pboth_dir_info->FileName, 
         pboth_dir_info->FileName);
@@ -517,7 +517,7 @@ void print_condwait_status(int level, int status)
         case WAIT_ABANDONED: fprintf(dlog_file, "WAIT_ABANDONED\n"); break;
         case WAIT_OBJECT_0: fprintf(dlog_file, "WAIT_OBJECT_0\n"); break;
         case WAIT_TIMEOUT: fprintf(dlog_file, "WAIT_TIMEOUT\n"); break;
-        case WAIT_FAILED: fprintf(dlog_file, "WAIT_FAILED %d\n", GetLastError());
+        case WAIT_FAILED: fprintf(dlog_file, "WAIT_FAILED %lu\n", GetLastError());
         default: fprintf(dlog_file, "unknown status =%d\n", status);
     }
 }
@@ -525,7 +525,7 @@ void print_condwait_status(int level, int status)
 void print_sr_status_flags(int level, int flags)
 {
     if (level > g_debug_level) return;
-    fprintf(dlog_file, "%04x: sr_status_flags: ", GetCurrentThreadId());
+    fprintf(dlog_file, "%04lx: sr_status_flags: ", GetCurrentThreadId());
     if (flags & SEQ4_STATUS_CB_PATH_DOWN) 
         fprintf(dlog_file, "SEQ4_STATUS_CB_PATH_DOWN ");
     if (flags & SEQ4_STATUS_CB_GSS_CONTEXTS_EXPIRING) 

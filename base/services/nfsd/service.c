@@ -64,7 +64,7 @@ LPTSTR GetLastErrorText( LPTSTR lpszBuf, DWORD dwSize );
 //    main service thread.  When the this call returns,
 //    the service has stopped, so exit.
 //
-void __cdecl main(int argc, char **argv)
+int __cdecl main(int argc, char **argv)
 {
    SERVICE_TABLE_ENTRY dispatchTable[] =
    {
@@ -108,6 +108,7 @@ void __cdecl main(int argc, char **argv)
 
    if (!StartServiceCtrlDispatcher(dispatchTable))
       AddToMessageLog(TEXT("StartServiceCtrlDispatcher failed."));
+   return 0;
 }
 
 

@@ -417,7 +417,7 @@ static int recover_delegation_open(
     /* construct a temporary open owner by concatenating the time
      * in seconds with the delegation pointer */
     time((time_t*)owner.owner);
-    memcpy(owner.owner + sizeof(time_t), deleg, sizeof(deleg));
+    memcpy(owner.owner + sizeof(time_t), &deleg, sizeof(deleg));
     owner.owner_len = sizeof(time_t) + sizeof(deleg);
 
     if (*grace) {
