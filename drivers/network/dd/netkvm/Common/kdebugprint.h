@@ -42,13 +42,9 @@ extern int bDebugPrint;
 typedef void (*DEBUGPRINTFUNC)(const char *fmt, ...);
 extern  DEBUGPRINTFUNC pDebugPrint;
 
-void _LogOutEntry(int level, const char *s);
-void _LogOutExitValue(int level, const char *s, ULONG value);
-void _LogOutString(int level, const char *s);
-
-#define DEBUG_ENTRY(level)  _LogOutEntry(level, __FUNCTION__)
-#define DEBUG_EXIT_STATUS(level, status)  _LogOutExitValue(level, __FUNCTION__, status)
-#define DPrintFunctionName(Level) _LogOutString(Level, __FUNCTION__)
+#define DEBUG_ENTRY(level)                ((void)0)
+#define DEBUG_EXIT_STATUS(level, status)  ((void)0)
+#define DPrintFunctionName(Level)         ((void)0)
 
 
 #ifndef WPP_EVENT_TRACING
@@ -58,7 +54,9 @@ void _LogOutString(int level, const char *s);
 
 #define MAX_DEBUG_LEVEL 0
 
-#define DPrintf(Level, Fmt) { if ( (Level) > MAX_DEBUG_LEVEL || (Level) > nDebugLevel || !bDebugPrint ) {} else { pDebugPrint Fmt; } }
+#define DPrintfLine(fmt, ...) pDebugPrint("(%s:%d) " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+
+#define DPrintf(Level, Fmt) { if ( (Level) > MAX_DEBUG_LEVEL || (Level) > nDebugLevel || !bDebugPrint ) {} else { DPrintfLine Fmt; } }
 
 #define DPrintfBypass(Level, Fmt) DPrintf(Level, Fmt)
 
