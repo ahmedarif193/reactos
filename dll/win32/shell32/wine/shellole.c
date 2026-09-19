@@ -1522,6 +1522,8 @@ HRESULT WINAPI WineShell32_GetClassObject(REFCLSID clsid, REFIID riid, void **ob
     }
     classes[] =
     {
+        { &CLSID_ApplicationAssociationRegistration, ApplicationAssociationRegistration_Constructor },
+        { &CLSID_KnownFolderManager, KnownFolderManager_Constructor },
         { &CLSID_ExplorerBrowser, ExplorerBrowser_Constructor },
         { &CLSID_NamespaceTreeControl, NamespaceTreeControl_Constructor },
         { &CLSID_ShellImageDataFactory, ShellImageDataFactory_Constructor },

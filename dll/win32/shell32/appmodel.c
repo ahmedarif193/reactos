@@ -35,15 +35,12 @@ HRESULT WINAPI SHGetStockIconInfo(SHSTOCKICONID siid, UINT uFlags, SHSTOCKICONIN
     return E_NOTIMPL;
 }
 
+HRESULT WINAPI ApplicationAssociationRegistration_Constructor(IUnknown *, REFIID, void **);
+
 HRESULT WINAPI SHCreateAssociationRegistration(REFIID riid, void **ppv)
 {
-    FIXME("(%s, %p): stub\n", debugstr_guid(riid), ppv);
-
-    if (ppv == NULL)
-        return E_INVALIDARG;
-
-    *ppv = NULL;
-    return E_NOTIMPL;
+    if (!ppv) return E_INVALIDARG;
+    return ApplicationAssociationRegistration_Constructor(NULL, riid, ppv);
 }
 
 struct protocol_assoc_handler

@@ -74,6 +74,7 @@ list(APPEND SOURCE
     CDefViewBckgrndMenu.cpp
     stubs.cpp
     systray.cpp
+    CKnownFolderManager.cpp
     CUserNotification.cpp
     CDefaultContextMenu.cpp
     COpenWithMenu.cpp
@@ -99,6 +100,7 @@ list(APPEND WINE_SOURCE
     wine/shell32_main.c
     wine/shellole.c
     wine/shellord.c
+    wine/appassociation.c
     wine/shellpath.c
     wine/shellreg.c
     wine/shellstring.c

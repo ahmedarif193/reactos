@@ -8278,4 +8278,38 @@ HRESULT WINAPI SHGetSpecialFolderLocation(
     hr = SHGetFolderLocation(hwndOwner, nFolder, NULL, 0, ppidl);
     return hr;
 }
+
+HRESULT SHELL_GetKnownFolderInfo(UINT index, KNOWNFOLDERID *id, KF_CATEGORY *category)
+{
+    const CSIDL_DATA *data;
+    if (index >= ARRAY_SIZE(CSIDL_Data)) return E_INVALIDARG;
+    data = &CSIDL_Data[index];
+    if (!data->id || IsEqualGUID(data->id, &GUID_NULL) || data->type == CSIDL_Type_NonExistent)
+        return E_INVALIDARG;
+    *id = *data->id;
+    switch (data->type)
+    {
+    case CSIDL_Type_User:
+    case CSIDL_Type_InMyDocuments:
+    case CSIDL_Type_InAppData:
+        *category = KF_CATEGORY_PERUSER;
+        break;
+    case CSIDL_Type_AllUsers:
+        *category = KF_CATEGORY_COMMON;
+        break;
+    case CSIDL_Type_Disallowed:
+        *category = KF_CATEGORY_VIRTUAL;
+        break;
+    default:
+        *category = KF_CATEGORY_FIXED;
+        break;
+    }
+    return S_OK;
+}
+
+UINT SHELL_GetKnownFolderCount(void)
+{
+    return ARRAY_SIZE(CSIDL_Data);
+}
+
 #endif /* __REACTOS__ */
