@@ -203,7 +203,8 @@ Rpi5Vc4SelectAddressSpaceLocked(
 
 static PRPI5VC4_PROCESS
 Rpi5Vc4OldestQueuedProcessLocked(
-    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
+    _In_opt_ PRPI5VC4_PENDING_SUBMIT Skip)
 {
     PRPI5VC4_PENDING_SUBMIT Oldest = NULL;
     ULONG Node;
@@ -215,6 +216,10 @@ Rpi5Vc4OldestQueuedProcessLocked(
         if (DeviceExtension->NodeQueue[Node].Count == 0)
             continue;
         Head = DeviceExtension->NodeQueue[Node].Head;
+        if (Head == Skip)
+            Head = Head->Next;
+        if (Head == NULL)
+            continue;
         if (!Head->IsV3dJob && !Head->IsTfuJob && !Head->IsCsdJob)
             continue;
         if (Oldest == NULL || (LONGLONG)(Head->SubmissionSequence - Oldest->SubmissionSequence) < 0)
@@ -427,7 +432,7 @@ Rpi5Vc4ProcessPendingLocked(
              * before starting younger work when another process is waiting;
              * otherwise a busy 3D queue can starve the compositor's TFU. */
             if (!Head->BinSubmitted && !Head->RenderSubmitted &&
-                Rpi5Vc4OldestQueuedProcessLocked(DeviceExtension) != Head->Process)
+                Rpi5Vc4OldestQueuedProcessLocked(DeviceExtension, NULL) != Head->Process)
             {
                 *NeedPoll = TRUE;
                 goto NextNode;
@@ -572,7 +577,10 @@ Rpi5Vc4ProcessPendingLocked(
                     Rpi5Vc4UpdateBinCompletionLocked(DeviceExtension, Next,
                                                       &BinComplete);
                 }
-                if (Next != NULL && !Next->BinSubmitted)
+                /* Drain binning as well as rendering before handing the
+                 * shared address space to an older job on another node. */
+                if (Next != NULL && !Next->BinSubmitted &&
+                    Rpi5Vc4OldestQueuedProcessLocked(DeviceExtension, Head) == Next->Process)
                 {
                     BinComplete = FALSE;
                     if (!Rpi5Vc4KickBinLocked(DeviceExtension, Next, Now))
