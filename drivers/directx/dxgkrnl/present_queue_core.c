@@ -6,6 +6,21 @@
 
 #include "present_queue_core.h"
 
+NTSTATUS
+DxgkPresentQueueCoreProcess(
+    _Inout_ PKMUTEX ExecutionMutex,
+    _In_ PDXGK_PRESENT_QUEUE_PROCESS Process,
+    _In_ PVOID Context)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    KeWaitForSingleObject(ExecutionMutex, Executive, KernelMode, FALSE, NULL);
+    Status = Process(Context);
+    KeReleaseMutex(ExecutionMutex, FALSE);
+    return Status;
+}
+
 VOID DxgkPresentLimitCoreInitialize(_Out_ PDXGK_PRESENT_LIMIT_CORE State, _In_ ULONG DefaultLimit)
 {
     ASSERT(State != NULL);
