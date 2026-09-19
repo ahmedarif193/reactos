@@ -27,6 +27,120 @@ HWND hwndSAS = NULL;
 UNICODE_STRING gustrWindowStationsDir;
 HANDLE ghWinStaDir;
 
+typedef struct _SESSION_NOTIFICATION
+{
+    LIST_ENTRY Entry;
+    PWND Window;
+    ULONG Flags;
+    ULONG References;
+} SESSION_NOTIFICATION, *PSESSION_NOTIFICATION;
+
+static LIST_ENTRY SessionNotificationList = { &SessionNotificationList, &SessionNotificationList };
+
+static PSESSION_NOTIFICATION
+IntFindSessionNotification(PWND Window)
+{
+    PLIST_ENTRY Entry;
+
+    NT_ASSERT(UserIsEnteredExclusive());
+    for (Entry = SessionNotificationList.Flink; Entry != &SessionNotificationList; Entry = Entry->Flink)
+    {
+        PSESSION_NOTIFICATION Notification = CONTAINING_RECORD(Entry, SESSION_NOTIFICATION, Entry);
+
+        if (Notification->Window == Window)
+            return Notification;
+    }
+    return NULL;
+}
+
+BOOL FASTCALL
+IntRegisterSessionNotification(PWND Window, ULONG Flags)
+{
+    PSESSION_NOTIFICATION Notification;
+
+    if (Flags > 1)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Notification = IntFindSessionNotification(Window);
+    if (Notification)
+    {
+        if (Notification->References == MAXULONG)
+        {
+            EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return FALSE;
+        }
+        ++Notification->References;
+        return TRUE;
+    }
+
+    Notification = ExAllocatePoolWithTag(PagedPool, sizeof(*Notification), TAG_WINSTA);
+    if (!Notification)
+    {
+        EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
+
+    /* The USER lock protects this pointer; UserFreeWindow removes the entry. */
+    Notification->Window = Window;
+    Notification->Flags = Flags;
+    Notification->References = 1;
+    InsertTailList(&SessionNotificationList, &Notification->Entry);
+    return TRUE;
+}
+
+BOOL FASTCALL
+IntUnregisterSessionNotification(PWND Window, BOOL Destroying)
+{
+    PSESSION_NOTIFICATION Notification = IntFindSessionNotification(Window);
+
+    if (!Notification)
+    {
+        if (!Destroying)
+            EngSetLastError(ERROR_NOT_FOUND);
+        return FALSE;
+    }
+    if (!Destroying && --Notification->References)
+        return TRUE;
+
+    RemoveEntryList(&Notification->Entry);
+    ExFreePoolWithTag(Notification, TAG_WINSTA);
+    return TRUE;
+}
+
+BOOL FASTCALL
+IntNotifySessionChange(ULONG Event, ULONG SessionId)
+{
+    PLIST_ENTRY Entry;
+
+    NT_ASSERT(UserIsEnteredExclusive());
+    if (PsGetCurrentProcessId() != gpidLogon ||
+        SessionId != PsGetProcessSessionId(PsGetCurrentProcess()))
+    {
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    if (Event < WTS_CONSOLE_CONNECT || Event > WTS_SESSION_TERMINATE)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    for (Entry = SessionNotificationList.Flink; Entry != &SessionNotificationList; Entry = Entry->Flink)
+    {
+        PSESSION_NOTIFICATION Notification = CONTAINING_RECORD(Entry, SESSION_NOTIFICATION, Entry);
+        PWND Window = Notification->Window;
+
+        if ((Window->state & WNDS_DESTROYED) || (Window->head.pti->TIF_flags & TIF_INCLEANUP))
+            continue;
+        if (Notification->Flags || PsGetProcessSessionId(Window->head.pti->ppi->peProcess) == SessionId)
+            UserPostMessage(UserHMGetHandle(Window), WM_WTSSESSION_CHANGE, Event, SessionId);
+    }
+    return TRUE;
+}
+
 /* INITIALIZATION FUNCTIONS ****************************************************/
 
 CODE_SEG("INIT")

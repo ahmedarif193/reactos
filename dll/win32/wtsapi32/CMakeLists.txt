@@ -9,6 +9,6 @@ list(APPEND SOURCE
 
 add_library(wtsapi32 MODULE ${SOURCE})
 set_module_type(wtsapi32 win32dll)
-target_link_libraries(wtsapi32 wine)
+target_link_libraries(wtsapi32 wine win32ksys)
 add_importlibs(wtsapi32 user32 advapi32 msvcrt kernel32 ntdll)
 add_cd_file(TARGET wtsapi32 DESTINATION reactos/system32 FOR all)
