@@ -9030,7 +9030,6 @@ DxgkSubmitCommand(
     PDXGKRNL_DEVICE Device;
     PDXGKRNL_CONTEXT Context;
     ULONG FlagsValue;
-    ULONG FenceId;
     NTSTATUS Status;
     BOOLEAN KmdTransaction = FALSE;
 
@@ -9119,7 +9118,7 @@ DxgkSubmitCommand(
 
         for (;;)
         {
-            Status = VidSchSubmitCommandVirtual(Adapter, Context, SubmitCommand->Commands, SubmitCommand->CommandLength, SubmitCommand->pPrivateDriverData, SubmitCommand->PrivateDriverDataSize, SubmitCommand->Flags.NullRendering != 0, &FenceId);
+            Status = VidSchSubmitCommandVirtual(Adapter, Context, SubmitCommand->Commands, SubmitCommand->CommandLength, SubmitCommand->pPrivateDriverData, SubmitCommand->PrivateDriverDataSize, SubmitCommand->Flags.NullRendering != 0);
             if (Status == STATUS_RETRY)
             {
                 Status = DxgkYieldKmdTransactionForContextRoom(

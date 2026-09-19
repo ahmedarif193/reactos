@@ -6,9 +6,8 @@
  * The ordering rules this core enforces are the ones the WDDM scheduler
  * contract depends on:
  *
- *   - Fence order equals queue order equals dispatch order on an engine.  A
- *     packet is appended behind every packet that already carries a fence, so
- *     retirement by fence watermark can never cross un-executed work.
+ *   - Fence order equals dispatch order. Unpublished virtual fence reservations
+ *     may be assigned to ready work; published and patched fences never move.
  *   - A packet that was never dispatched is never retired as completed; only
  *     cancellation or abort may terminate it.
  *   - Every admitted packet reaches exactly one terminal edge, and produces
@@ -93,10 +92,8 @@ Dxgmms2SchedCoreSetAdmission(
 /*
  * Dxgmms2SchedCoreAdmit
  *
- * Appends the packet at the tail of its engine's run queue and assigns the
- * fence that orders it.  Appending unconditionally is what makes fence order
- * equal queue order: a later admission can never be given an earlier fence or
- * overtake work already queued.
+ * Reserve a monotonically ordered fence slot. Unbound virtual submissions
+ * receive their final slot when ready; patched and published fences are fixed.
  */
 NTSTATUS
 Dxgmms2SchedCoreAdmit(
@@ -113,6 +110,11 @@ Dxgmms2SchedCoreAdmit(
         return STATUS_DEVICE_NOT_READY;
     Engine = Dxgmms2SchedCoreEngine(Core, Info->EngineOrdinal);
     if (Engine == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if ((Info->Flags & DXGMMS2_SCHEDULER_ADMIT_UNBOUND_FENCE) != 0 &&
+        ((Info->Flags & DXGMMS2_SCHEDULER_ADMIT_VIRTUAL) == 0 ||
+         (Info->Flags & (DXGMMS2_SCHEDULER_ADMIT_PAGING | DXGMMS2_SCHEDULER_ADMIT_PRESENT)) != 0 ||
+         Info->OwnerCookie == 0))
         return STATUS_INVALID_PARAMETER;
     if (Core->TotalPackets >= DXGMMS2_SCHED_MAX_PACKETS)
         return STATUS_DEVICE_BUSY;
@@ -163,6 +165,8 @@ Dxgmms2SchedCoreAdmit(
     Packet->Dispatched = FALSE;
     Packet->Claimed = FALSE;
     Packet->ClaimToken = 0;
+    Packet->FenceBound = (Info->Flags & DXGMMS2_SCHEDULER_ADMIT_UNBOUND_FENCE) == 0;
+    Packet->Ready = Packet->FenceBound;
 
     InsertTailList(&Engine->RunQueue, &Packet->Entry);
     Engine->PendingPacketCount++;
@@ -174,12 +178,71 @@ Dxgmms2SchedCoreAdmit(
     return STATUS_SUCCESS;
 }
 
+static PDXGMMS2_SCHED_PACKET
+Dxgmms2SchedCoreNextReady(
+    _In_ PDXGMMS2_SCHED_ENGINE Engine,
+    _Out_ PLIST_ENTRY *First)
+{
+    PLIST_ENTRY Entry;
+
+    *First = NULL;
+    if (Engine->State != Dxgmms2EngineIdle && Engine->State != Dxgmms2EngineRunning)
+        return NULL;
+    for (Entry = Engine->RunQueue.Flink; Entry != &Engine->RunQueue; Entry = Entry->Flink)
+    {
+        PDXGMMS2_SCHED_PACKET Packet = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
+
+        if (Packet->Dispatched)
+            continue;
+        if (*First == NULL)
+            *First = Entry;
+        if (Packet->Claimed)
+            return NULL;
+        /* A fixed fence cannot overtake a lower reservation. */
+        if (Packet->FenceBound && *First != Entry)
+            return NULL;
+        if (Packet->Ready)
+            return Packet;
+    }
+    return NULL;
+}
+
+NTSTATUS
+Dxgmms2SchedCoreMarkReady(
+    _Inout_ PDXGMMS2_SCHED_CORE Core,
+    _In_ ULONG EngineOrdinal,
+    _In_ ULONGLONG PacketCookie)
+{
+    PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine(Core, EngineOrdinal);
+    PLIST_ENTRY Entry;
+
+    if (Engine == NULL || PacketCookie == 0)
+        return STATUS_INVALID_PARAMETER;
+    for (Entry = Engine->RunQueue.Flink; Entry != &Engine->RunQueue; Entry = Entry->Flink)
+    {
+        PDXGMMS2_SCHED_PACKET Packet = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
+        PLIST_ENTRY Earlier;
+
+        if (Packet->PacketCookie != PacketCookie)
+            continue;
+        for (Earlier = Engine->RunQueue.Flink; Earlier != Entry; Earlier = Earlier->Flink)
+        {
+            PDXGMMS2_SCHED_PACKET Previous = CONTAINING_RECORD(Earlier, DXGMMS2_SCHED_PACKET, Entry);
+
+            if (!Previous->Dispatched && Previous->OwnerCookie == Packet->OwnerCookie)
+                return STATUS_DEVICE_BUSY;
+        }
+        Packet->Ready = TRUE;
+        return STATUS_SUCCESS;
+    }
+    return STATUS_NOT_FOUND;
+}
+
 /*
  * Dxgmms2SchedCoreClaim
  *
- * Hands the first undispatched packet to one dispatcher.  Dispatched packets
- * form a prefix of the FIFO and remain queued until their fences retire; the
- * next packet after that prefix may be claimed while the GPU owns the prefix.
+ * Hands the first eligible packet to one dispatcher. Dispatched packets form
+ * a prefix of the FIFO and remain queued until their fences retire.
  * Only one dispatch claim may be outstanding on an engine, so miniport submit
  * order cannot diverge from queue order.
  */
@@ -191,23 +254,33 @@ Dxgmms2SchedCoreClaim(
 {
     PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine(Core, EngineOrdinal);
     PDXGMMS2_SCHED_PACKET Packet;
-    PLIST_ENTRY Entry;
+    PLIST_ENTRY First;
 
     if (Engine == NULL || IsListEmpty(&Engine->RunQueue))
         return FALSE;
-    if (Engine->State != Dxgmms2EngineIdle && Engine->State != Dxgmms2EngineRunning)
+    Packet = Dxgmms2SchedCoreNextReady(Engine, &First);
+    if (Packet == NULL)
         return FALSE;
 
-    for (Entry = Engine->RunQueue.Flink;
-         Entry != &Engine->RunQueue;
-         Entry = Entry->Flink)
+    if (&Packet->Entry != First)
     {
-        Packet = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
-        if (!Packet->Dispatched)
-            break;
+        PLIST_ENTRY Entry;
+        ULONG Fence = CONTAINING_RECORD(First, DXGMMS2_SCHED_PACKET, Entry)->SubmissionFenceId;
+
+        /* Keep the reserved identity set and queue's fence order intact while
+         * moving ready work ahead of contexts waiting for dependencies. */
+        for (Entry = First; Entry != &Packet->Entry; Entry = Entry->Flink)
+        {
+            PDXGMMS2_SCHED_PACKET Earlier = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
+            PDXGMMS2_SCHED_PACKET Next = CONTAINING_RECORD(Entry->Flink, DXGMMS2_SCHED_PACKET, Entry);
+
+            ASSERT(!Earlier->FenceBound && !Earlier->Dispatched && !Earlier->Claimed);
+            Earlier->SubmissionFenceId = Next->SubmissionFenceId;
+        }
+        Packet->SubmissionFenceId = Fence;
+        RemoveEntryList(&Packet->Entry);
+        InsertTailList(First, &Packet->Entry);
     }
-    if (Entry == &Engine->RunQueue || Packet->Claimed)
-        return FALSE;
 
     Packet->Claimed = TRUE;
     Packet->ClaimToken = Engine->NextClaimToken++;
@@ -267,6 +340,7 @@ Dxgmms2SchedCorePublishDispatch(
     if (Packet->Dispatched)
         return STATUS_INVALID_DEVICE_STATE;
     Packet->Dispatched = TRUE;
+    Packet->FenceBound = TRUE;
     Packet->DispatchSequence = ++Core->NextDispatchSequence;
     if (Packet->DispatchSequence == 0)
         Packet->DispatchSequence = ++Core->NextDispatchSequence;
@@ -553,22 +627,13 @@ Dxgmms2SchedCorePeekNext(
 {
     PDXGMMS2_SCHED_ENGINE Engine = Dxgmms2SchedCoreEngine((PDXGMMS2_SCHED_CORE)Core, EngineOrdinal);
     PDXGMMS2_SCHED_PACKET Packet;
-    PLIST_ENTRY Entry;
+    PLIST_ENTRY First;
 
     *OutPacketCookie = 0;
     if (Engine == NULL || IsListEmpty(&Engine->RunQueue))
         return FALSE;
-    if (Engine->State != Dxgmms2EngineIdle && Engine->State != Dxgmms2EngineRunning)
-        return FALSE;
-    for (Entry = Engine->RunQueue.Flink;
-         Entry != &Engine->RunQueue;
-         Entry = Entry->Flink)
-    {
-        Packet = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
-        if (!Packet->Dispatched)
-            break;
-    }
-    if (Entry == &Engine->RunQueue || Packet->Claimed)
+    Packet = Dxgmms2SchedCoreNextReady(Engine, &First);
+    if (Packet == NULL)
         return FALSE;
     *OutPacketCookie = Packet->PacketCookie;
     return TRUE;

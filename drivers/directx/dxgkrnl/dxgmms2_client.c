@@ -234,7 +234,8 @@ NTSTATUS DxgkpMms2QuerySchedulerInterface(_In_ DXGMMS2_ADAPTER_HANDLE Mms2Adapte
         Buffer.Interface.ReserveSlot == NULL || Buffer.Interface.ReleaseSlot == NULL ||
         Buffer.Interface.ResetDispatched == NULL || Buffer.Interface.GetOldestDispatched == NULL ||
         Buffer.Interface.PeekNextPacket == NULL ||
-        Buffer.Interface.GetOldestDispatchedOnEngine == NULL)
+        Buffer.Interface.GetOldestDispatchedOnEngine == NULL ||
+        Buffer.Interface.MarkPacketReady == NULL)
         return STATUS_REVISION_MISMATCH;
     *SchedulerInterface = Buffer.Interface;
     return STATUS_SUCCESS;

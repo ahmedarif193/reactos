@@ -385,6 +385,8 @@ VidSchpAdmitPacket(
      */
     Info.EngineOrdinal = Packet->OwnerEngine->SchedulerOrdinal;
     Info.Flags = Flags;
+    if (Packet->UnboundFence)
+        Info.Flags |= DXGMMS2_SCHEDULER_ADMIT_VIRTUAL | DXGMMS2_SCHEDULER_ADMIT_UNBOUND_FENCE;
     /* Snapshot the context at the common admission boundary. Physical
      * escapes and GPU-VA submissions must not silently become priority zero
      * just because their caller did not fill the packet's default priority. */
@@ -645,6 +647,8 @@ VidSchpDrainRetirements(_In_ PDXGKRNL_ADAPTER Adapter)
 
             if (Packet == NULL)
                 continue;
+            if (Packet->UnboundFence)
+                Packet->SubmissionFenceId = Records[Index].SubmissionFenceId;
             /* Every record here is a packet the miniport has handed back,
              * whatever the reason, so this is the one place the node's busy
              * charge has to close. */
@@ -848,6 +852,11 @@ BOOLEAN VidSchIsContextOrderPacketDispatchable(_In_ PVIDSCH_DMA_PACKET Packet)
             return FALSE;
     }
 #endif
+    if (Packet->UnboundFence &&
+        !NT_SUCCESS(Sched->MarkPacketReady(Sched->SchedulerHandle,
+                                           Engine->SchedulerOrdinal,
+                                           (ULONGLONG)(ULONG_PTR)Packet)))
+        return FALSE;
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
     /*
      * Engine state alone does not say whose turn it is.  Ask dxgmms2 which
@@ -2505,7 +2514,7 @@ VidSchpKickEngine(
         }
         ClaimToken = Claim.ClaimToken;
         Packet->SchedulerClaimToken = ClaimToken;
-        if (Packet->SubmissionFenceId == 0)
+        if (Packet->SubmissionFenceId == 0 || Packet->UnboundFence)
             Packet->SubmissionFenceId = Claim.SubmissionFenceId;
 
         /*
@@ -3173,15 +3182,13 @@ VidSchSubmitCommandVirtual(
     _In_ ULONG DmaBufferSize,
     _In_reads_bytes_opt_(DriverPrivateDataSize) PVOID DriverPrivateData,
     _In_ ULONG DriverPrivateDataSize,
-    _In_ BOOLEAN NullRendering,
-    _Out_ ULONG *OutFenceId)
+    _In_ BOOLEAN NullRendering)
 {
     PVIDSCH_CONTEXT Ctx;
     PVIDSCH_ENGINE Engine;
     PVIDSCH_DMA_PACKET Packet;
     PDXGKRNL_CONTEXT KickContext;
     ULONG EngineOrdinal;
-    ULONG FenceId;
     ULONG AdmittedFenceId;
     ULONG KmdPrivateDataSize;
     PDXGMMS2_SCHEDULER_INTERFACE_V1 Sched;
@@ -3189,7 +3196,7 @@ VidSchSubmitCommandVirtual(
 
     PAGED_CODE();
 
-    if (Adapter == NULL || Context == NULL || DmaBufferGpuVa == 0 || DmaBufferSize == 0 || OutFenceId == NULL || (DriverPrivateDataSize != 0 && DriverPrivateData == NULL))
+    if (Adapter == NULL || Context == NULL || DmaBufferGpuVa == 0 || DmaBufferSize == 0 || (DriverPrivateDataSize != 0 && DriverPrivateData == NULL))
         return STATUS_INVALID_PARAMETER;
     KmdPrivateDataSize = Context->ContextInfo.DmaBufferPrivateDataSize;
     if (DriverPrivateDataSize > KmdPrivateDataSize)
@@ -3199,7 +3206,6 @@ VidSchSubmitCommandVirtual(
     if (!NullRendering && DXGK_CB_FULL(Adapter, DxgkDdiSubmitCommandVirtual) == NULL)
         return STATUS_NOT_SUPPORTED;
 
-    *OutFenceId = 0;
     if (!VidSchpAcquireCall(Adapter))
         return STATUS_DELETE_PENDING;
     if (!Context->VirtualAddressing)
@@ -3284,6 +3290,7 @@ VidSchSubmitCommandVirtual(
     }
     Packet->Context = Context;
     Packet->VirtualAddressing = TRUE;
+    Packet->UnboundFence = TRUE;
     Packet->SubmitFlags = NullRendering ? VIDSCH_SUBMITFLAG_NULLRENDERING : 0u;
     Status = DxgkDeviceWorkCreate(Context->Device, &Packet->DeviceWork);
     if (!NT_SUCCESS(Status))
@@ -3367,7 +3374,6 @@ VidSchSubmitCommandVirtual(
         return STATUS_DEVICE_BUSY;
     }
     Packet->FenceIdentityReserved = TRUE;
-    FenceId = Packet->SubmissionFenceId;
     /* Publication can retire the packet and its original context reference
      * before AdmitPacket returns. Pin the later kick before that transfer. */
     KickContext = DxgkReferenceContext(Context) ? Context : NULL;
@@ -3394,7 +3400,6 @@ VidSchSubmitCommandVirtual(
         DxgkContextOrderKickContext(KickContext);
         DxgkDereferenceContext(KickContext);
     }
-    *OutFenceId = FenceId;
     VidSchpReleaseCall(Adapter);
     return STATUS_SUCCESS;
 }
