@@ -62,6 +62,7 @@ struct catadmin
     WCHAR path[MAX_PATH];
     HANDLE find;
     ALG_ID alg;
+    DWORD hashLength;
     const WCHAR *providerName;
     DWORD providerType;
 };
@@ -71,6 +72,68 @@ struct catinfo
     DWORD magic;
     WCHAR file[MAX_PATH];
 };
+
+static const struct
+{
+    const WCHAR *name;
+    ALG_ID id;
+    DWORD length;
+} catalog_hashes[] =
+{
+    {BCRYPT_SHA1_ALGORITHM, CALG_SHA1, 20},
+    {BCRYPT_SHA256_ALGORITHM, CALG_SHA_256, 32},
+    {BCRYPT_SHA384_ALGORITHM, CALG_SHA_384, 48},
+    {BCRYPT_SHA512_ALGORITHM, CALG_SHA_512, 64}
+};
+
+static DWORD catalog_hash_policy(const CERT_STRONG_SIGN_PARA *policy, DWORD *allowed)
+{
+    const CERT_STRONG_SIGN_SERIALIZED_INFO *info;
+    const WCHAR *entry, *end, *slash;
+    DWORD i;
+
+    *allowed = (1u << ARRAY_SIZE(catalog_hashes)) - 1;
+    if (!policy) return ERROR_SUCCESS;
+    if (policy->cbSize != sizeof(*policy)) return ERROR_INVALID_PARAMETER;
+
+    if (policy->dwInfoChoice == CERT_STRONG_SIGN_OID_INFO_CHOICE)
+    {
+        if (!policy->pszOID) return ERROR_INVALID_PARAMETER;
+        if (!strcmp(policy->pszOID, szOID_CERT_STRONG_SIGN_OS_1))
+            *allowed &= ~1u;
+        else if (strcmp(policy->pszOID, szOID_CERT_STRONG_KEY_OS_1))
+            return ERROR_INVALID_PARAMETER;
+        return ERROR_SUCCESS;
+    }
+
+    if (policy->dwInfoChoice != CERT_STRONG_SIGN_SERIALIZED_INFO_CHOICE ||
+        !(info = policy->pSerializedInfo) || !info->pwszCNGSignHashAlgids ||
+        (info->dwFlags & ~(CERT_STRONG_SIGN_ENABLE_CRL_CHECK | CERT_STRONG_SIGN_ENABLE_OCSP_CHECK)))
+        return ERROR_INVALID_PARAMETER;
+
+    *allowed = 0;
+    for (entry = info->pwszCNGSignHashAlgids; *entry; entry = *end ? end + 1 : end)
+    {
+        end = wcschr(entry, ';');
+        if (!end) end = entry + wcslen(entry);
+        slash = wcschr(entry, '/');
+        if (!slash || slash >= end || slash == entry || slash + 1 == end)
+            return ERROR_INVALID_PARAMETER;
+
+        if (!((slash - entry == 3 && !wcsncmp(entry, L"RSA", 3)) ||
+              (slash - entry == 3 && !wcsncmp(entry, L"DSA", 3)) ||
+              (slash - entry == 5 && !wcsncmp(entry, L"ECDSA", 5))))
+            continue;
+
+        for (i = 0; i < ARRAY_SIZE(catalog_hashes); ++i)
+        {
+            SIZE_T length = wcslen(catalog_hashes[i].name);
+            if (end - slash - 1 == length && !wcsncmp(slash + 1, catalog_hashes[i].name, length))
+                *allowed |= 1u << i;
+        }
+    }
+    return ERROR_SUCCESS;
+}
 
 static HCATINFO create_catinfo(const WCHAR *filename)
 {
@@ -142,6 +205,7 @@ BOOL WINAPI CryptCATAdminAcquireContext2(HCATADMIN *catAdmin, const GUID *sys, c
     ALG_ID alg;
     const WCHAR *providerName;
     DWORD providerType;
+    DWORD index, allowed, error;
 
     TRACE("%p %s %s %p %lx\n", catAdmin, debugstr_guid(sys), debugstr_w(algorithm), policy, dwFlags);
 
@@ -151,26 +215,31 @@ BOOL WINAPI CryptCATAdminAcquireContext2(HCATADMIN *catAdmin, const GUID *sys, c
         return FALSE;
     }
 
-    if (policy != NULL)
-        FIXME("strong policy parameter is unimplemented\n");
-
-    if (algorithm == NULL || wcscmp(algorithm, BCRYPT_SHA1_ALGORITHM) == 0)
-    {
-        alg = CALG_SHA1;
-        providerName = MS_DEF_PROV_W;
-        providerType = PROV_RSA_FULL;
-    }
-    else if (wcscmp(algorithm, BCRYPT_SHA256_ALGORITHM) == 0)
-    {
-        alg = CALG_SHA_256;
-        providerName = MS_ENH_RSA_AES_PROV_W;
-        providerType = PROV_RSA_AES;
-    }
-    else
+    for (index = 0; algorithm && index < ARRAY_SIZE(catalog_hashes); ++index)
+        if (!wcscmp(algorithm, catalog_hashes[index].name)) break;
+    if (index == ARRAY_SIZE(catalog_hashes))
     {
         SetLastError(NTE_BAD_ALGID);
         return FALSE;
     }
+
+    error = catalog_hash_policy(policy, &allowed);
+    if (error)
+    {
+        SetLastError(error);
+        return FALSE;
+    }
+
+    /* Select the lowest supported hash that satisfies both inputs. */
+    while (index < ARRAY_SIZE(catalog_hashes) && !(allowed & (1u << index))) ++index;
+    if (index == ARRAY_SIZE(catalog_hashes))
+    {
+        SetLastError(NTE_BAD_ALGID);
+        return FALSE;
+    }
+    alg = catalog_hashes[index].id;
+    providerName = index ? MS_ENH_RSA_AES_PROV_W : MS_DEF_PROV_W;
+    providerType = index ? PROV_RSA_AES : PROV_RSA_FULL;
 
     if (!(ca = malloc(sizeof(*ca))))
     {
@@ -179,6 +248,7 @@ BOOL WINAPI CryptCATAdminAcquireContext2(HCATADMIN *catAdmin, const GUID *sys, c
     }
 
     ca->alg = alg;
+    ca->hashLength = catalog_hashes[index].length;
     ca->providerName = providerName;
     ca->providerType = providerType;
 
@@ -379,7 +449,7 @@ static BOOL catadmin_calc_hash_from_filehandle(HCATADMIN catAdmin, HANDLE hFile,
     ALG_ID alg = CALG_SHA1;
     const WCHAR *providerName = MS_DEF_PROV_W;
     DWORD providerType = PROV_RSA_FULL;
-    DWORD hashLength;
+    DWORD hashLength = 20;
 
     if (!hFile || !pcbHash || dwFlags)
     {
@@ -390,21 +460,9 @@ static BOOL catadmin_calc_hash_from_filehandle(HCATADMIN catAdmin, HANDLE hFile,
     if (ca)
     {
         alg = ca->alg;
+        hashLength = ca->hashLength;
         providerName = ca->providerName;
         providerType = ca->providerType;
-    }
-
-    switch (alg)
-    {
-        case CALG_SHA1:
-            hashLength = 20;
-            break;
-        case CALG_SHA_256:
-            hashLength = 32;
-            break;
-        default:
-            FIXME("unsupported algorithm %x\n", alg);
-            return FALSE;
     }
 
     if (*pcbHash < hashLength)
@@ -518,14 +576,14 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
 
     TRACE("%p %p %ld %lx %p\n", hCatAdmin, pbHash, cbHash, dwFlags, phPrevCatInfo);
 
-    if (!ca || ca->magic != CATADMIN_MAGIC || !pbHash || cbHash != 20 || dwFlags)
+    if (!ca || ca->magic != CATADMIN_MAGIC || !pbHash || cbHash != ca->hashLength || dwFlags)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return NULL;
     }
     if (phPrevCatInfo) prev = *phPrevCatInfo;
 
-    ret = CryptAcquireContextW(&prov, NULL, MS_DEF_PROV_W, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT);
+    ret = CryptAcquireContextW(&prov, NULL, ca->providerName, ca->providerType, CRYPT_VERIFYCONTEXT);
     if (!ret) return NULL;
 
     if (!prev)
@@ -569,6 +627,7 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
         size = (lstrlenW(ca->path) + lstrlenW(data.cFileName) + 2) * sizeof(WCHAR);
         if (!(filename = malloc(size)))
         {
+            CryptReleaseContext(prov, 0);
             SetLastError(ERROR_OUTOFMEMORY);
             return NULL;
         }
@@ -580,7 +639,8 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
         if (hcat == INVALID_HANDLE_VALUE)
         {
             WARN("couldn't open %s (%lu)\n", debugstr_w(filename), GetLastError());
-            continue;
+            free(filename);
+            goto next_catalog;
         }
         while ((member = CryptCATEnumerateMember(hcat, member)))
         {
@@ -608,6 +668,7 @@ HCATINFO WINAPI CryptCATAdminEnumCatalogFromHash(HCATADMIN hCatAdmin, BYTE* pbHa
         CryptCATClose(hcat);
         free(filename);
 
+next_catalog:
         if (!FindNextFileW(ca->find, &data))
         {
             FindClose(ca->find);
