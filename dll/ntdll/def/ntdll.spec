@@ -1708,6 +1708,7 @@
 @ stdcall ZwOpenIoCompletion(ptr long ptr)
 @ stdcall ZwOpenJobObject(ptr long ptr)
 @ stdcall ZwOpenKey(ptr long ptr)
+@ stdcall ZwOpenKeyEx(ptr long ptr long)
 @ stdcall -stub -version=0x600+ ZwOpenKeyTransacted(ptr long ptr ptr)
 @ stdcall ZwOpenKeyedEvent(ptr long ptr)
 @ stdcall ZwOpenMutant(ptr long ptr)

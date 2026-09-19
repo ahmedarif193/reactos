@@ -88,6 +88,7 @@ list(APPEND SOURCE
     NtMapViewOfSection_ImageZeroBits.c
     NtMutant.c
     NtOpenKey.c
+    NtOpenKeyEx.c
     NtOpenProcessToken.c
     NtOpenThreadToken.c
     NtProtectVirtualMemory.c

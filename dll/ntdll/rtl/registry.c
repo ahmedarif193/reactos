@@ -14,22 +14,6 @@
  */
 NTSTATUS
 NTAPI
-NtOpenKeyEx(PHANDLE KeyHandle,
-            ACCESS_MASK DesiredAccess,
-            POBJECT_ATTRIBUTES ObjectAttributes,
-            ULONG OpenOptions)
-{
-    if (OpenOptions & ~REG_OPTION_OPEN_LINK)
-        return STATUS_NOT_SUPPORTED;
-
-    return NtOpenKey(KeyHandle, DesiredAccess, ObjectAttributes);
-}
-
-/*
- * @implemented
- */
-NTSTATUS
-NTAPI
 NtOpenKeyTransactedEx(PHANDLE KeyHandle,
                       ACCESS_MASK DesiredAccess,
                       POBJECT_ATTRIBUTES ObjectAttributes,

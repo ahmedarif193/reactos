@@ -3381,7 +3381,7 @@
 @ stub -arch=arm64 ZwNotifyChangeSession
 @ stub -arch=arm64 ZwOpenCpuPartition
 @ stub -arch=arm64 ZwOpenEnlistment
-@ stub -arch=arm64 ZwOpenKeyEx
+@ stdcall -version=0x601+ ZwOpenKeyEx(ptr long ptr long)
 @ stub -arch=arm64 ZwOpenKeyTransacted
 @ stub -arch=arm64 ZwOpenKeyTransactedEx
 @ stdcall -arch=i386,x86_64,arm64 ZwOpenPartition(ptr long ptr)

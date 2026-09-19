@@ -395,6 +395,7 @@
     SVC_(CreateWaitCompletionPacket, 3)
     SVC_(AssociateWaitCompletionPacket, 8)
     SVC_(CancelWaitCompletionPacket, 2)
+    SVC_(OpenKeyEx, 4)
 #if defined(WOW64_I386_RUNTIME) || defined(SYSFUNCS_WOW64)
     /* User-mode WoW64 services follow the native syscall table. */
     SVC_(Wow64GetNativeSystemInformation, 4)

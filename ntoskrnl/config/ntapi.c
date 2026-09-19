@@ -333,17 +333,21 @@ NtCreateKey(OUT PHANDLE KeyHandle,
 
 NTSTATUS
 NTAPI
-NtOpenKey(OUT PHANDLE KeyHandle,
-          IN ACCESS_MASK DesiredAccess,
-          IN POBJECT_ATTRIBUTES ObjectAttributes)
+NtOpenKeyEx(OUT PHANDLE KeyHandle,
+            IN ACCESS_MASK DesiredAccess,
+            IN POBJECT_ATTRIBUTES ObjectAttributes,
+            IN ULONG OpenOptions)
 {
     CM_PARSE_CONTEXT ParseContext = {0};
     HANDLE Handle;
     NTSTATUS Status;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     PAGED_CODE();
-    DPRINT("NtOpenKey(Path: %wZ, Root %x, Access: %x)\n",
-            ObjectAttributes->ObjectName, ObjectAttributes->RootDirectory, DesiredAccess);
+    /* Backup/restore privilege semantics are not implemented yet. */
+    if (OpenOptions & ~REG_OPTION_OPEN_LINK)
+        return STATUS_NOT_SUPPORTED;
+
+    ParseContext.CreateOptions = OpenOptions;
 
     /* Ignore the WOW64 flag, it's not valid in the kernel */
     DesiredAccess &= ~KEY_WOW64_RES;
@@ -400,6 +404,16 @@ NtOpenKey(OUT PHANDLE KeyHandle,
 
     /* Return status */
     return Status;
+}
+
+
+NTSTATUS
+NTAPI
+NtOpenKey(OUT PHANDLE KeyHandle,
+          IN ACCESS_MASK DesiredAccess,
+          IN POBJECT_ATTRIBUTES ObjectAttributes)
+{
+    return NtOpenKeyEx(KeyHandle, DesiredAccess, ObjectAttributes, 0);
 }
 
 
