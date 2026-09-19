@@ -126,14 +126,16 @@ static HRESULT WINAPI ApplicationAssociationRegistration_QueryCurrentDefault(IAp
 {
     const WCHAR *prefix;
     WCHAR *key, *extension;
-    HKEY root, classes;
+    const HKEY roots[] = {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    HKEY classes;
+    unsigned int i, first, end;
     HRESULT hr = HRESULT_FROM_WIN32(ERROR_NO_ASSOCIATION);
     LONG ret;
     DWORD size;
 
     if (!association) return E_INVALIDARG;
     *association = NULL;
-    if (!query || level < AL_MACHINE || level > AL_EFFECTIVE || type < AT_FILEEXTENSION || type > AT_MIMETYPE)
+    if (!query || level < AL_MACHINE || level > AL_USER || type < AT_FILEEXTENSION || type > AT_MIMETYPE)
         return E_INVALIDARG;
     if ((type == AT_URLPROTOCOL || type == AT_FILEEXTENSION) && !*query) return E_INVALIDARG;
     if (type == AT_FILEEXTENSION && *query != '.') return E_INVALIDARG;
@@ -162,39 +164,48 @@ static HRESULT WINAPI ApplicationAssociationRegistration_QueryCurrentDefault(IAp
         return hr;
     }
 
-    root = level == AL_MACHINE ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
-    if (level == AL_EFFECTIVE) classes = HKEY_CLASSES_ROOT;
-    else if (RegOpenKeyExW(root, L"Software\\Classes", 0, KEY_READ, &classes)) return hr;
+    /* ReactOS does not yet merge per-user classes into every HKCR query.
+     * Resolve the effective class explicitly, retaining user precedence and
+     * keeping machine-only queries independent of the user's defaults. */
+    first = level == AL_MACHINE ? 1 : 0;
+    end = level == AL_USER ? 1 : ARRAY_SIZE(roots);
+    for (i = first; i < end; ++i)
+    {
+        if (RegOpenKeyExW(roots[i], L"Software\\Classes", 0, KEY_READ, &classes))
+            continue;
 
-    if (type == AT_FILEEXTENSION)
-        hr = read_association(classes, query, NULL, association);
-    else if (type == AT_URLPROTOCOL)
-    {
-        /* Legacy protocol handlers use the protocol name itself as their ProgID. */
-        size = 0;
-        ret = RegGetValueW(classes, query, L"URL Protocol", RRF_RT_REG_SZ, NULL, NULL, &size);
-        if (!ret)
+        if (type == AT_FILEEXTENSION)
+            hr = read_association(classes, query, NULL, association);
+        else if (type == AT_URLPROTOCOL)
         {
-            size = (wcslen(query) + 1) * sizeof(WCHAR);
-            if ((*association = CoTaskMemAlloc(size))) { memcpy(*association, query, size); hr = S_OK; }
-            else hr = E_OUTOFMEMORY;
-        }
-    }
-    else if (type == AT_MIMETYPE)
-    {
-        if (!(key = association_key(L"MIME\\Database\\Content Type\\", query, L""))) hr = E_OUTOFMEMORY;
-        else
-        {
-            hr = read_association(classes, key, L"Extension", &extension);
-            CoTaskMemFree(key);
-            if (SUCCEEDED(hr))
+            /* Legacy protocol handlers use the protocol name itself as their ProgID. */
+            size = 0;
+            ret = RegGetValueW(classes, query, L"URL Protocol", RRF_RT_REG_SZ, NULL, NULL, &size);
+            if (!ret)
             {
-                hr = ApplicationAssociationRegistration_QueryCurrentDefault(iface, extension, AT_FILEEXTENSION, level, association);
-                CoTaskMemFree(extension);
+                size = (wcslen(query) + 1) * sizeof(WCHAR);
+                if ((*association = CoTaskMemAlloc(size))) { memcpy(*association, query, size); hr = S_OK; }
+                else hr = E_OUTOFMEMORY;
             }
         }
+        else if (type == AT_MIMETYPE)
+        {
+            if (!(key = association_key(L"MIME\\Database\\Content Type\\", query, L""))) hr = E_OUTOFMEMORY;
+            else
+            {
+                hr = read_association(classes, key, L"Extension", &extension);
+                CoTaskMemFree(key);
+                if (SUCCEEDED(hr))
+                {
+                    hr = ApplicationAssociationRegistration_QueryCurrentDefault(iface, extension, AT_FILEEXTENSION, level, association);
+                    CoTaskMemFree(extension);
+                }
+            }
+        }
+        RegCloseKey(classes);
+        if (SUCCEEDED(hr) || hr == E_OUTOFMEMORY)
+            return hr;
     }
-    if (classes != HKEY_CLASSES_ROOT) RegCloseKey(classes);
     return hr;
 }
 
@@ -226,7 +237,7 @@ static HRESULT WINAPI ApplicationAssociationRegistration_QueryAppIsDefault(IAppl
     if (!is_default) return E_INVALIDARG;
     *is_default = FALSE;
     if (!query || !appname || !*appname || type < AT_FILEEXTENSION || type > AT_MIMETYPE ||
-        level < AL_MACHINE || level > AL_EFFECTIVE) return E_INVALIDARG;
+        level < AL_MACHINE || level > AL_USER) return E_INVALIDARG;
     hr = open_app_capabilities(appname, &capabilities);
     if (FAILED(hr)) return hr;
     hr = read_association(capabilities, subkeys[type], query, &registered);
@@ -255,7 +266,7 @@ static HRESULT WINAPI ApplicationAssociationRegistration_QueryAppIsDefaultAll(IA
     HRESULT hr;
     if (!is_default) return E_INVALIDARG;
     *is_default = FALSE;
-    if (!appname || !*appname || level < AL_MACHINE || level > AL_EFFECTIVE) return E_INVALIDARG;
+    if (!appname || !*appname || level < AL_MACHINE || level > AL_USER) return E_INVALIDARG;
     hr = open_app_capabilities(appname, &capabilities);
     if (FAILED(hr)) return hr;
     for (type = 0; type < ARRAY_SIZE(subkeys); ++type)
