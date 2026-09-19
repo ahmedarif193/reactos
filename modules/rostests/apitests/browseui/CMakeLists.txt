@@ -3,6 +3,7 @@ include_directories(
     includes)
 
 list(APPEND SOURCE
+    ITaskbarList.cpp
     ACListISF.cpp
     IACLCustomMRU.cpp
     IACLHistory.cpp

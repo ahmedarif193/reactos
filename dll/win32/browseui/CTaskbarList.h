@@ -11,7 +11,7 @@
 class CTaskbarList :
     public CComCoClass<CTaskbarList, &CLSID_TaskbarList>,
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
-    public ITaskbarList2
+    public ITaskbarList4
 {
     HWND m_hTaskWnd;
     UINT m_ShellHookMsg;
@@ -22,6 +22,21 @@ class CTaskbarList :
 public:
     CTaskbarList();
     virtual ~CTaskbarList();
+
+    /*** ITaskbarList3 / ITaskbarList4 methods ***/
+    STDMETHOD(SetProgressValue)(HWND hwnd, ULONGLONG completed, ULONGLONG total) override;
+    STDMETHOD(SetProgressState)(HWND hwnd, TBPFLAG flags) override;
+    STDMETHOD(RegisterTab)(HWND tab, HWND mdi) override;
+    STDMETHOD(UnregisterTab)(HWND tab) override;
+    STDMETHOD(SetTabOrder)(HWND tab, HWND before) override;
+    STDMETHOD(SetTabActive)(HWND tab, HWND mdi, DWORD reserved) override;
+    STDMETHOD(ThumbBarAddButtons)(HWND hwnd, UINT count, LPTHUMBBUTTON buttons) override;
+    STDMETHOD(ThumbBarUpdateButtons)(HWND hwnd, UINT count, LPTHUMBBUTTON buttons) override;
+    STDMETHOD(ThumbBarSetImageList)(HWND hwnd, HIMAGELIST images) override;
+    STDMETHOD(SetOverlayIcon)(HWND hwnd, HICON icon, LPCWSTR description) override;
+    STDMETHOD(SetThumbnailTooltip)(HWND hwnd, LPCWSTR tip) override;
+    STDMETHOD(SetThumbnailClip)(HWND hwnd, RECT *clip) override;
+    STDMETHOD(SetTabProperties)(HWND tab, STPFLAG flags) override;
 
     /*** ITaskbarList2 methods ***/
     STDMETHOD(MarkFullscreenWindow)(HWND hwnd, BOOL fFullscreen) override;
@@ -39,6 +54,8 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(CTaskbarList)
+        COM_INTERFACE_ENTRY_IID(IID_ITaskbarList4, ITaskbarList4)
+        COM_INTERFACE_ENTRY_IID(IID_ITaskbarList3, ITaskbarList3)
         COM_INTERFACE_ENTRY_IID(IID_ITaskbarList2, ITaskbarList2)
         COM_INTERFACE_ENTRY_IID(IID_ITaskbarList, ITaskbarList)
     END_COM_MAP()

@@ -9,8 +9,11 @@ extern void func_IAutoComplete(void);
 extern void func_SHEnumClassesOfCategories(void);
 extern void func_SHExplorerParseCmdLine(void);
 
+extern void func_ITaskbarList(void);
+
 const struct test winetest_testlist[] =
 {
+    { "ITaskbarList", func_ITaskbarList },
     { "ACListISF", func_ACListISF },
     { "IACLCustomMRU", func_IACLCustomMRU },
     { "IACLHistory", func_IACLHistory },
