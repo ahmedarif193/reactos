@@ -44,6 +44,7 @@ list(APPEND SOURCE
     devenum.idl
     devicetopology.idl
     dimm.idl
+    directmanipulation.idl
     dispex.idl
     docobj.idl
     docobjectservice.idl
