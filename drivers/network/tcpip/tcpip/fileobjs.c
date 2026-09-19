@@ -443,6 +443,7 @@ NTSTATUS FileOpenAddress(
 
   /* Set our default options */
   AddrFile->TTL = 128;
+  AddrFile->MulticastTTL = 1;
   AddrFile->DF = 0;
   AddrFile->BCast = 1;
   AddrFile->HeaderIncl = 1;
