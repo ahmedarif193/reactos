@@ -126,7 +126,6 @@ VOID ParaNdis_IndicateConnect(PARANDIS_ADAPTER *pContext, BOOLEAN bConnected, BO
     if (bConnected != pContext->bConnected || bForce)
     {
         pContext->bConnected = bConnected;
-        DPrintf(0, ("Indicating %sconnect", bConnected ? "" : "dis"));
         ParaNdis_DebugHistory(pContext, hopConnectIndication, NULL, bConnected, 0, 0);
         NdisMIndicateStatus(
             pContext->MiniportHandle,

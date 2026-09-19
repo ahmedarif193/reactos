@@ -167,21 +167,6 @@ DEBUGPRINTFUNC VirtioDebugPrintProc = DbgPrint;
 
 
 
-void _LogOutEntry(int level, const char *s)
-{
-    DPrintf(level, ("[%s]=>", s));
-}
-
-void _LogOutExitValue(int level, const char *s, ULONG value)
-{
-    DPrintf(level, ("[%s]<=0x%X", s, value));
-}
-
-void _LogOutString(int level, const char *s)
-{
-    DPrintf(level, ("[%s]", s));
-}
-
 VOID WppEnableCallback(
     __in LPCGUID Guid,
     __in __int64 Logger,
