@@ -9,7 +9,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#if defined(_M_ARM64) || defined(_M_AMD64)
+#if defined(_WIN64)
 
 NTSTATUS
 RtlpGetExtendedParameterZeroBits(PMEM_EXTENDED_PARAMETER ExtendedParameters,
@@ -233,7 +233,7 @@ NtMapViewOfSectionEx(HANDLE SectionHandle,
     return Status;
 }
 
-#if defined(_M_AMD64)
+#if defined(_WIN64) && !defined(_M_ARM64)
 NTSTATUS
 NTAPI
 NtSetInformationVirtualMemory(HANDLE ProcessHandle,
@@ -263,4 +263,4 @@ NtUnmapViewOfSectionEx(HANDLE ProcessHandle, PVOID BaseAddress, ULONG Flags)
     return NtUnmapViewOfSection(ProcessHandle, BaseAddress);
 }
 
-#endif /* _M_ARM64 || _M_AMD64 */
+#endif /* _WIN64 */

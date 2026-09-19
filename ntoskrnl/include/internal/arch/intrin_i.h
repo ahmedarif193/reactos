@@ -31,6 +31,8 @@
 #include <internal/amd64/intrin_i.h>
 #elif defined(_M_ARM64) || defined(__aarch64__)
 #include <internal/arm64/intrin_i.h>
+#elif defined(_M_RISCV64)
+#include <internal/riscv64/intrin_i.h>
 #else
 #error "Unknown processor"
 #endif

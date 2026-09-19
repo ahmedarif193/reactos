@@ -140,6 +140,7 @@ typedef struct _GET_SET_CTX_CONTEXT
     KAPC Apc;
     KEVENT Event;
     KPROCESSOR_MODE Mode;
+    NTSTATUS Status;
     CONTEXT Context;
 } GET_SET_CTX_CONTEXT, *PGET_SET_CTX_CONTEXT;
 

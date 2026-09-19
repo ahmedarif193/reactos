@@ -22,6 +22,8 @@
 #define INF_ARCH L"arm"
 #elif defined(_M_ARM64)
 #define INF_ARCH L"arm64"
+#elif defined(_M_RISCV64)
+#define INF_ARCH L"riscv64"
 #elif defined(_M_IA64)
 #define INF_ARCH L"ia64"
 #elif defined(_M_PPC)

@@ -65,6 +65,11 @@ void PrintStackBacktrace(FILE* output, DumpData& data, ThreadData& thread)
     StackFrame.AddrPC.Offset = thread.Context.Pc;
     StackFrame.AddrStack.Offset = thread.Context.Sp;
     StackFrame.AddrFrame.Offset = thread.Context.Fp;
+#elif defined(_M_RISCV64)
+    MachineType = IMAGE_FILE_MACHINE_RISCV64;
+    StackFrame.AddrPC.Offset = thread.Context.Pc;
+    StackFrame.AddrStack.Offset = thread.Context.Sp;
+    StackFrame.AddrFrame.Offset = thread.Context.S0;
 #else
 #error "Unknown architecture"
 #endif
@@ -128,7 +133,7 @@ void PrintStackBacktrace(FILE* output, DumpData& data, ThreadData& thread)
     ULONG_PTR stackPointer = thread.Context.Esp;
 #elif defined(_M_AMD64)
     ULONG_PTR stackPointer = thread.Context.Rsp;
-#elif defined(_M_ARM) || defined(_M_ARM64)
+#elif defined(_M_ARM) || defined(_M_ARM64) || defined(_M_RISCV64)
     ULONG_PTR stackPointer = thread.Context.Sp;
 #else
 #error Unknown architecture

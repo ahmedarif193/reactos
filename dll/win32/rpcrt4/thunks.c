@@ -229,6 +229,45 @@ __ASM_GLOBAL_FUNC( call_stubless_func,
     "b.w call_stubless_func\n" \
     "1:\t.long "#num"\n\t"
 
+#elif defined(__riscv) && (__riscv_xlen == 64)
+
+/* t0 is an ordinary caller-clobbered register and carries the method index.
+ * Each table entry is exactly eight uncompressed bytes. */
+__ASM_GLOBAL_FUNC( call_stubless_func,
+                   "addi sp,sp,-80\n\t"
+                   __ASM_SEH(".seh_set_cfa x2, 80\n\t")
+                   "sd ra,8(sp)\n\t"
+                   __ASM_SEH(".seh_save_gpr x1, -72\n\t")
+                   "sd a0,16(sp)\n\t"
+                   "sd a1,24(sp)\n\t"
+                   "sd a2,32(sp)\n\t"
+                   "sd a3,40(sp)\n\t"
+                   "sd a4,48(sp)\n\t"
+                   "sd a5,56(sp)\n\t"
+                   "sd a6,64(sp)\n\t"
+                   "sd a7,72(sp)\n\t"
+                   __ASM_SEH(".seh_endprologue\n\t")
+                   "mv a0,t0\n\t"
+                   "addi a1,sp,16\n\t"
+                   "li a2,0\n\t"
+                   "call ndr_stubless_client_call\n\t"
+                   __ASM_SEH(".seh_startepilogue\n\t")
+                   "ld ra,8(sp)\n\t"
+                   __ASM_SEH(".seh_same_gpr x1\n\t")
+                   "addi sp,sp,80\n\t"
+                   __ASM_SEH(".seh_set_cfa x2, 0\n\t")
+                   "ret\n\t"
+                   __ASM_SEH(".seh_endepilogue") )
+
+#define T(num) \
+    ".balign 4\n\t" \
+    ".globl ObjectStublessClient" #num "\n" \
+    "ObjectStublessClient" #num ":\n\t" \
+    ".option push\n\t.option norvc\n\t" \
+    "li t0,"#num"\n\t" \
+    "j call_stubless_func\n\t" \
+    ".option pop\n\t"
+
 #endif  /* __i386__ */
 
 __ASM_GLOBAL_FUNC( stubless_thunks, ALL_THUNK_ENTRIES )
@@ -285,6 +324,20 @@ __ASM_GLOBAL_FUNC( stubless_thunks, ALL_THUNK_ENTRIES )
     "ldr r0, [r0, #0x10]\n\t" \
     "ldr ip, [r0]\n\t" \
     "ldr pc, [ip, #(4*"#num")]\n\t"
+
+#elif defined(__riscv) && (__riscv_xlen == 64)
+
+#define T(num) \
+    ".balign 4\n\t" \
+    ".globl NdrProxyForwardingFunction" #num "\n" \
+    "NdrProxyForwardingFunction" #num ":\n\t" \
+    "ld a0,32(a0)\n\t" \
+    "ld t0,0(a0)\n\t" \
+    "li t1,"#num"\n\t" \
+    "slli t1,t1,3\n\t" \
+    "add t0,t0,t1\n\t" \
+    "ld t0,0(t0)\n\t" \
+    "jr t0\n\t"
 
 #endif  /* __i386__ */
 
@@ -540,4 +593,76 @@ __ASM_GLOBAL_FUNC( call_server_func,
                    "ldp x19, x20, [sp, #0x10]\n\t"
                    "ldp x29, x30, [sp], #0x20\n\t"
                    "ret" )
+#elif defined(__riscv) && (__riscv_xlen == 64)
+/* The server's logical argument image is eight-byte slots. a0-a7 consume its
+ * first eight slots; later slots start at outgoing SP. s0 anchors RVUW's CFA
+ * while the outgoing argument area is allocated below this frame. */
+__ASM_GLOBAL_FUNC( call_server_func,
+                   "addi sp,sp,-48\n\t"
+                   __ASM_SEH(".seh_set_cfa x2, 48\n\t")
+                   "sd ra,40(sp)\n\t"
+                   __ASM_SEH(".seh_save_gpr x1, -8\n\t")
+                   "sd s0,32(sp)\n\t"
+                   __ASM_SEH(".seh_save_gpr x8, -16\n\t")
+                   "sd s1,24(sp)\n\t"
+                   __ASM_SEH(".seh_save_gpr x9, -24\n\t")
+                   "sd s2,16(sp)\n\t"
+                   __ASM_SEH(".seh_save_gpr x18, -32\n\t")
+                   "addi s0,sp,48\n\t"
+                   __ASM_SEH(".seh_set_cfa x8, 0\n\t")
+                   __ASM_SEH(".seh_endprologue\n\t")
+                   "mv s1,a0\n\t"
+                   "mv s2,a1\n\t"
+                   "mv t3,a2\n\t"
+                   "li t0,64\n\t"
+                   "bgeu t0,t3,1f\n\t"
+                   "addi t0,t3,-64\n\t"
+                   "addi t0,t0,15\n\t"
+                   "andi t0,t0,-16\n\t"
+                   "sub sp,sp,t0\n\t"
+                   "li t1,64\n"
+                   "2:\n\t"
+                   "bgeu t1,t3,1f\n\t"
+                   "add t0,s2,t1\n\t"
+                   "ld t2,0(t0)\n\t"
+                   "addi t0,t1,-64\n\t"
+                   "add t0,sp,t0\n\t"
+                   "sd t2,0(t0)\n\t"
+                   "addi t1,t1,8\n\t"
+                   "j 2b\n"
+                   "1:\n\t"
+                   "li a0,0\n\tli a1,0\n\tli a2,0\n\tli a3,0\n\t"
+                   "li a4,0\n\tli a5,0\n\tli a6,0\n\tli a7,0\n\t"
+                   "li t0,8\n\t"
+                   "bltu t3,t0,3f\n\tld a0,0(s2)\n"
+                   "3:\n\tli t0,16\n\t"
+                   "bltu t3,t0,3f\n\tld a1,8(s2)\n"
+                   "3:\n\tli t0,24\n\t"
+                   "bltu t3,t0,3f\n\tld a2,16(s2)\n"
+                   "3:\n\tli t0,32\n\t"
+                   "bltu t3,t0,3f\n\tld a3,24(s2)\n"
+                   "3:\n\tli t0,40\n\t"
+                   "bltu t3,t0,3f\n\tld a4,32(s2)\n"
+                   "3:\n\tli t0,48\n\t"
+                   "bltu t3,t0,3f\n\tld a5,40(s2)\n"
+                   "3:\n\tli t0,56\n\t"
+                   "bltu t3,t0,3f\n\tld a6,48(s2)\n"
+                   "3:\n\tli t0,64\n\t"
+                   "bltu t3,t0,3f\n\tld a7,56(s2)\n"
+                   "3:\n\tjalr ra,s1,0\n\t"
+                   __ASM_SEH(".seh_startepilogue\n\t")
+                   "addi sp,s0,-48\n\t"
+                   __ASM_SEH(".seh_set_cfa x2, 48\n\t")
+                   "ld s2,16(sp)\n\t"
+                   __ASM_SEH(".seh_same_gpr x18\n\t")
+                   "ld s1,24(sp)\n\t"
+                   __ASM_SEH(".seh_same_gpr x9\n\t")
+                   "ld s0,32(sp)\n\t"
+                   __ASM_SEH(".seh_same_gpr x8\n\t")
+                   "ld ra,40(sp)\n\t"
+                   __ASM_SEH(".seh_same_gpr x1\n\t")
+                   "addi sp,sp,48\n\t"
+                   __ASM_SEH(".seh_set_cfa x2, 0\n\t")
+                   "ret\n\t"
+                   __ASM_SEH(".seh_endepilogue") )
 #endif

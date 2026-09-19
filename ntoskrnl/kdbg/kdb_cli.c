@@ -1614,7 +1614,7 @@ KdbpCmdSetRegister(ULONG Argc, PCHAR Argv[])
 static BOOLEAN
 KdbpGetFpRegisterStorage(IN PCONTEXT Context, IN PCSTR RegisterName, OUT PVOID *Storage, OUT PULONG Size)
 {
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
     PCHAR End;
     ULONG Index;
 #endif
@@ -1622,7 +1622,24 @@ KdbpGetFpRegisterStorage(IN PCONTEXT Context, IN PCSTR RegisterName, OUT PVOID *
     if (*RegisterName == '$')
         RegisterName++;
 
-#if defined(_M_ARM64)
+#if defined(_M_RISCV64)
+    if (tolower(RegisterName[0]) == 'f' && RegisterName[1] != ANSI_NULL)
+    {
+        Index = strtoul(RegisterName + 1, &End, 10);
+        if (End != RegisterName + 1 && *End == ANSI_NULL && Index < RTL_NUMBER_OF(Context->F))
+        {
+            *Storage = &Context->F[Index];
+            *Size = sizeof(Context->F[Index]);
+            return TRUE;
+        }
+    }
+    if (_stricmp(RegisterName, "fcsr") == 0)
+    {
+        *Storage = &Context->Fcsr;
+        *Size = sizeof(Context->Fcsr);
+        return TRUE;
+    }
+#elif defined(_M_ARM64)
     if (strchr("vqdshb", tolower(RegisterName[0])) != NULL)
     {
         Index = strtoul(RegisterName + 1, &End, 10);
@@ -1721,12 +1738,12 @@ static BOOLEAN
 KdbpCmdFpRegs(ULONG Argc, PCHAR Argv[])
 {
     PCONTEXT Context = KdbCurrentTrapFrame;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
     CHAR Name[8];
 #endif
     PVOID Storage;
     ULONG Size;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
     ULONG Index;
 #endif
 
@@ -1750,7 +1767,16 @@ KdbpCmdFpRegs(ULONG Argc, PCHAR Argv[])
         return TRUE;
     }
 
-#if defined(_M_ARM64)
+#if defined(_M_RISCV64)
+    for (Index = 0; Index < RTL_NUMBER_OF(Context->F); Index++)
+    {
+        sprintf(Name, "f%lu", Index);
+        KdbpPrintFpRegister(Name, &Context->F[Index], sizeof(Context->F[Index]));
+        if (KdbOutputAborted)
+            return TRUE;
+    }
+    KdbpPrintFpRegister("fcsr", &Context->Fcsr, sizeof(Context->Fcsr));
+#elif defined(_M_ARM64)
     for (Index = 0; Index < RTL_NUMBER_OF(Context->V); Index++)
     {
         sprintf(Name, "v%lu", Index);
@@ -2330,7 +2356,23 @@ static KDB_TYPE_FIELD KdbFieldsObjectHeader[] =
     KDB_FIELD(OBJECT_HEADER, Body, "QUAD", KdbFieldHex)
 };
 
-#if defined(_M_ARM64)
+#if defined(_M_RISCV64)
+static KDB_TYPE_FIELD KdbFieldsContext[] =
+{
+    KDB_FIELD(CONTEXT, ContextFlags, "ULONG", KdbFieldHex),
+    KDB_FIELD(CONTEXT, Fcsr, "ULONG", KdbFieldHex),
+    KDB_FIELD(CONTEXT, Pc, "ULONG64", KdbFieldSymbol),
+    KDB_FIELD(CONTEXT, Ra, "ULONG64", KdbFieldSymbol),
+    KDB_FIELD(CONTEXT, Sp, "ULONG64", KdbFieldPointer),
+    KDB_FIELD(CONTEXT, Gp, "ULONG64", KdbFieldPointer),
+    KDB_FIELD(CONTEXT, Tp, "ULONG64", KdbFieldPointer),
+    KDB_FIELD(CONTEXT, S0, "ULONG64", KdbFieldPointer),
+    KDB_FIELD(CONTEXT, A0, "ULONG64", KdbFieldHex),
+    KDB_FIELD(CONTEXT, A1, "ULONG64", KdbFieldHex),
+    KDB_FIELD(CONTEXT, A7, "ULONG64", KdbFieldHex),
+    KDB_FIELD(CONTEXT, T6, "ULONG64", KdbFieldHex)
+};
+#elif defined(_M_ARM64)
 static KDB_TYPE_FIELD KdbFieldsContext[] =
 {
     KDB_FIELD(CONTEXT, ContextFlags, "ULONG", KdbFieldHex),
@@ -2815,7 +2857,7 @@ KdbpCmdDisassembleX(ULONG Argc, PCHAR Argv[])
 static VOID
 KdbpPrintContext(PCONTEXT Context)
 {
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
     INT i;
     static const PCHAR EflagsBits[32] = { " CF", NULL, " PF", " BIT3", " AF", " BIT5",
                                           " ZF", " SF", " TF", " IF", " DF", " OF",
@@ -2912,8 +2954,27 @@ KdbpPrintContext(PCONTEXT Context)
               (PVOID)(ULONG_PTR)Context->X27,
               (PVOID)(ULONG_PTR)Context->X28,
               Context->Cpsr);
+#elif defined(_M_RISCV64)
+    {
+        static const PCHAR Names[32] =
+        {
+            "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
+            "s0", "s1", "a0", "a1", "a2", "a3", "a4", "a5",
+            "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
+            "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
+        };
+        ULONG Index;
+
+        KdbpPrint("pc   0x%p\n", (PVOID)(ULONG_PTR)Context->Pc);
+        for (Index = 1; Index < 32; Index++)
+        {
+            KdbpPrint("%-4s 0x%p%s", Names[Index], (PVOID)(ULONG_PTR)Context->X[Index],
+                      ((Index % 3) == 0 || Index == 31) ? "\n" : "  ");
+        }
+        KdbpPrint("fcsr 0x%08lx\n", Context->Fcsr);
+    }
 #endif
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
     /* Display the EFlags */
     KdbpPrint("EFLAGS  0x%08x ", Context->EFlags);
     for (i = 0; i < 32; i++)
@@ -2945,7 +3006,7 @@ static BOOLEAN
 KdbpCmdRegs(ULONG Argc, PCHAR Argv[])
 {
     PCONTEXT Context = KdbCurrentTrapFrame;
-#if !defined(_M_ARM64)
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
     INT i;
 #endif
 
@@ -2975,7 +3036,21 @@ KdbpCmdRegs(ULONG Argc, PCHAR Argv[])
             CapturedState = &ProcessorState;
             KdbpPrint("CPU %ld frozen control state:\n", KdbSelectedProcessor);
         }
-#if defined(_M_ARM64)
+#if defined(_M_RISCV64)
+        PKSPECIAL_REGISTERS Registers;
+
+        if (CapturedState == NULL)
+        {
+            KiSaveProcessorControlState(&ProcessorState);
+            CapturedState = &ProcessorState;
+        }
+        Registers = &CapturedState->SpecialRegisters;
+        KdbpPrint("sstatus  0x%p  sie      0x%p\n", (PVOID)(ULONG_PTR)Registers->Sstatus, (PVOID)(ULONG_PTR)Registers->Sie);
+        KdbpPrint("stvec    0x%p  sscratch 0x%p\n", (PVOID)(ULONG_PTR)Registers->Stvec, (PVOID)(ULONG_PTR)Registers->Sscratch);
+        KdbpPrint("sepc     0x%p  scause   0x%p\n", (PVOID)(ULONG_PTR)Registers->Sepc, (PVOID)(ULONG_PTR)Registers->Scause);
+        KdbpPrint("stval    0x%p  sip      0x%p\n", (PVOID)(ULONG_PTR)Registers->Stval, (PVOID)(ULONG_PTR)Registers->Sip);
+        KdbpPrint("satp     0x%p\n", (PVOID)(ULONG_PTR)Registers->Satp);
+#elif defined(_M_ARM64)
         ULONG64 CurrentEl, Daif, SpEl0;
         PKARM64_ARCH_STATE ArchState;
 
@@ -3089,6 +3164,8 @@ KdbpCmdRegs(ULONG Argc, PCHAR Argv[])
     {
 #if defined(_M_ARM64)
         KdbpPrint("Segment registers are not present on ARM64.\n");
+#elif defined(_M_RISCV64)
+        KdbpPrint("Segment registers are not present on RISC-V.\n");
 #else
         KdbpPrint("CS  0x%04x  Index 0x%04x  %cDT RPL%d\n", Context->SegCs & 0xffff, (Context->SegCs & 0xffff) >> 3, (Context->SegCs & (1 << 2)) ? 'L' : 'G', Context->SegCs & 3);
         KdbpPrint("DS  0x%04x  Index 0x%04x  %cDT RPL%d\n", Context->SegDs, Context->SegDs >> 3, (Context->SegDs & (1 << 2)) ? 'L' : 'G', Context->SegDs & 3);
@@ -3101,7 +3178,9 @@ KdbpCmdRegs(ULONG Argc, PCHAR Argv[])
     else /* dregs */
     {
         ASSERT(Argv[0][0] == 'd');
-#if defined(_M_ARM64)
+#if defined(_M_RISCV64)
+        KdbpPrint("Debug registers are not supported on RISC-V.\n");
+#elif defined(_M_ARM64)
         ULONG i;
 
         for (i = 0; i < RTL_NUMBER_OF(Context->Bcr); i++)
@@ -3252,6 +3331,8 @@ KdbpCmdTrapFrame(ULONG Argc, PCHAR Argv[])
                            CONTEXT_INTEGER |
                            CONTEXT_DEBUG_REGISTERS |
                            CONTEXT_X18;
+#elif defined(_M_RISCV64)
+    Context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
 #else
     Context.ContextFlags = CONTEXT_CONTROL |
                            CONTEXT_INTEGER |
@@ -3279,6 +3360,8 @@ KdbpCmdTrapFrame(ULONG Argc, PCHAR Argv[])
     KdbpPrint("Trap frame @ %p (inspection only):\n", (PVOID)Address);
 #if defined(_M_ARM64)
     KdbpPrint("FAR 0x%p  ESR 0x%08lx  previous mode %d  previous IRQL %u\n", (PVOID)(ULONG_PTR)TrapFrame.FaultAddress, TrapFrame.Esr, TrapFrame.PreviousMode, TrapFrame.PreviousIrql);
+#elif defined(_M_RISCV64)
+    KdbpPrint("scause 0x%p  stval 0x%p  sstatus 0x%p  previous IRQL %u\n", (PVOID)(ULONG_PTR)TrapFrame.Scause, (PVOID)(ULONG_PTR)TrapFrame.Stval, (PVOID)(ULONG_PTR)TrapFrame.Sstatus, TrapFrame.PreviousIrql);
 #elif defined(_M_AMD64)
     KdbpPrint("Fault address %p  error 0x%p  previous mode %d  previous IRQL %u\n", (PVOID)(ULONG_PTR)TrapFrame.FaultAddress, (PVOID)(ULONG_PTR)TrapFrame.ErrorCode, TrapFrame.PreviousMode, TrapFrame.PreviousIrql);
 #endif
@@ -4022,6 +4105,20 @@ KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[])
             goto CheckForParentTSS;
 
         Address = 0;
+#if defined(_M_RISCV64)
+        /* psABI frame record: [fp-8] = saved ra, [fp-16] = saved fp. */
+        if (Frame < 2 * sizeof(ULONG_PTR) ||
+            !NT_SUCCESS(KdbpSafeReadMemory(&Address, (PVOID)(Frame - sizeof(ULONG_PTR)), sizeof(ULONG_PTR))))
+        {
+            KdbpPrint("Couldn't access memory at 0x%p!\n", Frame - sizeof(ULONG_PTR));
+            goto CheckForParentTSS;
+        }
+
+        if (Address == 0)
+            goto CheckForParentTSS;
+
+        GotNextFrame = NT_SUCCESS(KdbpSafeReadMemory(&Frame, (PVOID)(Frame - 2 * sizeof(ULONG_PTR)), sizeof(ULONG_PTR)));
+#else
         if (!NT_SUCCESS(KdbpSafeReadMemory(&Address, (PVOID)(Frame + sizeof(ULONG_PTR)), sizeof(ULONG_PTR))))
         {
             KdbpPrint("Couldn't access memory at 0x%p!\n", Frame + sizeof(ULONG_PTR));
@@ -4032,6 +4129,7 @@ KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[])
             goto CheckForParentTSS;
 
         GotNextFrame = NT_SUCCESS(KdbpSafeReadMemory(&Frame, (PVOID)Frame, sizeof(ULONG_PTR)));
+#endif
         if (GotNextFrame)
         {
             KeSetContextFrameRegister(&Context, Frame);
@@ -4039,8 +4137,13 @@ KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[])
         // else
             // Frame = 0;
 
+#if defined(_M_RISCV64)
+        /* Print the call site: the return address minus the shortest call. */
+        if (!KdbSymPrintAddress((PVOID)(Address - 2), &Context))
+#else
         /* Print the location of the call instruction (assumed 5 bytes length) */
         if (!KdbSymPrintAddress((PVOID)(Address - 5), &Context))
+#endif
             KdbpPrint("<%p>\n", (PVOID)Address);
         else
             KdbpPrint("\n");
@@ -7295,6 +7398,9 @@ KdbpCmdGdtLdtIdt(ULONG Argc, PCHAR Argv[])
 #if defined(_M_ARM64)
     KdbpPrint("%s is not an ARM64 descriptor-table command.\n", Argv[0]);
     return TRUE;
+#elif defined(_M_RISCV64)
+    KdbpPrint("%s: descriptor tables are not supported on RISC-V.\n", Argv[0]);
+    return TRUE;
 #elif defined(_M_AMD64)
     KDESCRIPTOR Reg;
     ULONG Offset;
@@ -7637,10 +7743,23 @@ KdbpCmdGdtLdtIdt(ULONG Argc, PCHAR Argv[])
 static BOOLEAN
 KdbpCmdPcr(ULONG Argc, PCHAR Argv[])
 {
+#if defined(_M_RISCV64)
+    PKPCR Pcr = KeGetPcr();
+#else
     PKIPCR Pcr = (PKIPCR)KeGetPcr();
+#endif
 
     KdbpPrint("Current PCR is at 0x%p.\n", Pcr);
-#ifdef _M_IX86
+#if defined(_M_RISCV64)
+    KdbpPrint("  HartId:                        0x%Ix\n", Pcr->HartId);
+    KdbpPrint("  CurrentIrql:                   %u\n", Pcr->CurrentIrql);
+    KdbpPrint("  SoftwareInterrupts:            0x%02x\n", Pcr->SoftwareInterrupts);
+    KdbpPrint("  InterruptEnable:               0x%Ix\n", Pcr->InterruptEnable);
+    KdbpPrint("  PanicStack:                    0x%p\n", Pcr->PanicStack);
+    KdbpPrint("  TrapActive:                    %u\n", Pcr->TrapActive);
+    KdbpPrint("  Prcb:                          0x%p\n", &Pcr->Prcb);
+    KdbpPrint("  KdVersionBlock:                0x%p\n", Pcr->KdVersionBlock);
+#elif defined(_M_IX86)
     KdbpPrint("  Tib.ExceptionList:         0x%08x\n"
               "  Tib.StackBase:             0x%08x\n"
               "  Tib.StackLimit:            0x%08x\n"

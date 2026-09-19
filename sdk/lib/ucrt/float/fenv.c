@@ -176,6 +176,69 @@ static void fenv_hw_reset(void)
     __setfpenv(0);
 }
 
+#elif defined(_M_RISCV64)
+
+#define FENV_UNITS 1
+
+/*
+ * The F and D extensions accrue the same five IEEE exception conditions as
+ * the UCRT but have no exception trap enables: every exception reads masked
+ * and only the rounding mode is controllable. C has no constant for frm 4
+ * (to nearest, ties to max magnitude); it reads as to nearest.
+ */
+static const struct { unsigned char flag_shift, rc_shift; unsigned short extra; unsigned long cw_mask; }
+fenv_unit[FENV_UNITS] =
+{
+    { 0, 0, 0, _MCW_RC },
+};
+
+#define RISCV_FFLAGS_MASK 0x1F
+#define RISCV_FRM_SHIFT 5
+#define RISCV_FRM_MASK 0x07
+
+static unsigned int riscv_round_from_frm(unsigned int frm)
+{
+    switch (frm)
+    {
+        case 1: return FE_TOWARDZERO;
+        case 2: return FE_DOWNWARD;
+        case 3: return FE_UPWARD;
+        default: return FE_TONEAREST;
+    }
+}
+
+static unsigned int riscv_frm_from_round(unsigned int ctl)
+{
+    switch (ctl & FE_ROUND_MASK)
+    {
+        case FE_TOWARDZERO: return 1;
+        case FE_DOWNWARD: return 2;
+        case FE_UPWARD: return 3;
+        default: return 0;
+    }
+}
+
+static void fenv_hw_get(unsigned int* ctl, unsigned int* stat)
+{
+    unsigned int fcsr;
+
+    __asm__ __volatile__("frcsr %0" : "=r"(fcsr));
+    ctl[0] = FENV_FLAG_MASK | riscv_round_from_frm((fcsr >> RISCV_FRM_SHIFT) & RISCV_FRM_MASK);
+    stat[0] = fcsr & RISCV_FFLAGS_MASK;
+}
+
+static void fenv_hw_set(const unsigned int* ctl, const unsigned int* stat)
+{
+    __asm__ __volatile__("fsrm %0" :: "r"(riscv_frm_from_round(ctl[0])));
+    __asm__ __volatile__("fsflags %0" :: "r"(stat[0] & RISCV_FFLAGS_MASK));
+}
+
+static void fenv_hw_reset(void)
+{
+    __asm__ __volatile__("fsrm zero");
+    __asm__ __volatile__("fsflags zero");
+}
+
 #elif defined(_M_AMD64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
 
 #ifdef _MSC_VER

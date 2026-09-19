@@ -288,6 +288,17 @@ macro(dir_to_num dir var)
     elseif(${dir} STREQUAL reactos/winsxs/arm64_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef)
         set(${var} 81)
 
+    elseif(${dir} STREQUAL reactos/system32/spool/prtprocs/riscv64)
+        set(${var} 91)
+    elseif(${dir} STREQUAL reactos/winsxs/riscv64_microsoft.windows.common-controls_6595b64144ccf1df_5.82.2600.2982_none_deadbeef)
+        set(${var} 87)
+    elseif(${dir} STREQUAL reactos/winsxs/riscv64_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef)
+        set(${var} 88)
+    elseif(${dir} STREQUAL reactos/winsxs/riscv64_microsoft.windows.gdiplus_6595b64144ccf1df_1.1.7601.23038_none_deadbeef)
+        set(${var} 89)
+    elseif(${dir} STREQUAL reactos/winsxs/riscv64_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef)
+        set(${var} 90)
+
     else()
         message(FATAL_ERROR "Wrong destination: ${dir}")
     endif()
@@ -1149,6 +1160,12 @@ function(create_registry_hives)
     else()
         list(APPEND _livecd_inf_files
             ${CMAKE_SOURCE_DIR}/boot/bootdata/hiveinst.inf)
+    endif()
+    if(ARCH STREQUAL "riscv64")
+        # Apply the FDT platform's ACPI and ramdisk policies after the common
+        # LiveCD and per-driver inputs.
+        list(APPEND _livecd_inf_files
+            ${CMAKE_SOURCE_DIR}/boot/bootdata/riscv64/livecd-hive.inf)
     endif()
     foreach(_livecd_extra_registry_inf IN LISTS LIVECD_EXTRA_REGISTRY_INF)
         if(_livecd_extra_registry_inf STREQUAL "")

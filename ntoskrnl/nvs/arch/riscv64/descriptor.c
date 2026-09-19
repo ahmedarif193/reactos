@@ -11,6 +11,8 @@
 #include "archdef.h"
 #include <nvs/include/miarchcheck.h>
 
+/* Accessed and dirty bits may be updated by hardware (Svadu) or raise a
+ * page fault (Svade); the backend supports both, so neither is assumed. */
 static const MI_ARCH_DESCRIPTOR MiArchDescriptor =
 {
     MI_ARCH_ID_VALUE,
@@ -31,21 +33,23 @@ static const MI_ARCH_DESCRIPTOR MiArchDescriptor =
         { MI_ARCH_L4_SHIFT, MI_ARCH_L4_BITS, (1ULL << MI_ARCH_L4_BITS) - 1, 1ULL << MI_ARCH_L4_BITS },
     },
     0x0000000000010000ULL,
-    0x00007FFFFFFEFFFFULL,
-    0xFFFF800000000000ULL,
+    0x0000003FFFFEFFFFULL,
+    0xFFFFFFC000000000ULL,
     0xFFFFFFFFFFFFFFFFULL,
     FALSE,
     FALSE,
     FALSE,
     FALSE,
     TRUE,
+    TRUE,
     FALSE,
     TRUE,
     TRUE,
     TRUE,
-    TRUE,
     NULL,
-    0
+    0,
+    0,
+    TRUE
 };
 
 const MI_ARCH_DESCRIPTOR *

@@ -43,7 +43,7 @@
 #  define stderr  (&_STLP_VENDOR_CSTD::__files[2])
 #endif
 
-#if defined (_STLP_MSVC_LIB) && (_STLP_MSVC_LIB < 1400) || defined (_STLP_USING_PLATFORM_SDK_COMPILER)
+#if ((defined (_STLP_MSVC_LIB) && (_STLP_MSVC_LIB < 1400)) || defined (_STLP_USING_PLATFORM_SDK_COMPILER)) && !defined (vsnprintf)
 inline int vsnprintf(char *s1, size_t n, const char *s2, va_list v)
 { return _STLP_VENDOR_CSTD::_vsnprintf(s1, n, s2, v); }
 #endif

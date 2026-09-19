@@ -251,6 +251,33 @@ struct thunkCode
 };
 #pragma pack(pop)
 
+#elif defined(_M_RISCV64)
+
+#pragma pack(push,4)
+struct thunkCode
+{
+    DWORD m_auipc_t0;
+    DWORD m_ld_a0;
+    DWORD m_ld_t1;
+    DWORD m_jr_t1;
+    ULONG64 m_this;
+    ULONG64 m_proc;
+
+    void
+    Init(WNDPROC proc, void *pThis)
+    {
+        m_auipc_t0 = 0x00000297; /* auipc t0, 0 */
+        m_ld_a0 = 0x0102B503;    /* ld a0, 16(t0) */
+        m_ld_t1 = 0x0182B303;    /* ld t1, 24(t0) */
+        m_jr_t1 = 0x00030067;    /* jalr zero, 0(t1) */
+        m_this = (ULONG64)pThis;
+        m_proc = (ULONG64)proc;
+        FlushInstructionCache(GetCurrentProcess(), this, sizeof(thunkCode));
+    }
+};
+static_assert(sizeof(thunkCode) == 32, "RISC-V ATL thunk layout changed");
+#pragma pack(pop)
+
 #else
 #error ARCH not supported
 #endif

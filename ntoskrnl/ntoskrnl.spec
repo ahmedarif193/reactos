@@ -58,7 +58,7 @@
 @ stdcall DbgPrompt(str ptr long)
 @ stdcall DbgQueryDebugFilterState(long long)
 @ stdcall DbgSetDebugFilterState(long long long)
-@ stdcall -arch=x86_64,arm64 ExAcquireFastMutex(ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 ExAcquireFastMutex(ptr)
 @ fastcall ExAcquireFastMutexUnsafe(ptr)
 @ stdcall ExAcquireResourceExclusiveLite(ptr long)
 @ stdcall ExAcquireResourceSharedLite(ptr long)
@@ -131,7 +131,7 @@
 @ stdcall ExIsResourceAcquiredSharedLite(ptr)
 @ stdcall ExLocalTimeToSystemTime(ptr ptr)
 @ stdcall ExNotifyCallback(ptr ptr ptr)
-@ stdcall -arch=x86_64,arm64,arm ExQueryDepthSList(ptr) RtlQueryDepthSList
+@ stdcall -arch=x86_64,arm64,arm,riscv64 ExQueryDepthSList(ptr) RtlQueryDepthSList
 @ stdcall ExQueryPoolBlockSize(ptr ptr)
 @ stdcall ExQueueWorkItem(ptr long)
 @ stdcall ExRaiseAccessViolation()
@@ -143,7 +143,7 @@
 @ fastcall ExReInitializeRundownProtectionCacheAware(ptr) ExfReInitializeRundownProtectionCacheAware
 @ stdcall ExRegisterCallback(ptr ptr ptr)
 @ stdcall ExReinitializeResourceLite(ptr)
-@ stdcall -arch=x86_64,arm64 ExReleaseFastMutex(ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 ExReleaseFastMutex(ptr)
 @ fastcall ExReleaseFastMutexUnsafe(ptr)
 @ fastcall ExReleaseFastMutexUnsafeAndLeaveCriticalRegion(ptr)
 @ fastcall ExReleaseResourceAndLeaveCriticalRegion(ptr)
@@ -161,7 +161,7 @@
 @ stdcall ExSizeOfRundownProtectionCacheAware()
 @ stdcall ExSystemExceptionFilter()
 @ stdcall ExSystemTimeToLocalTime(ptr ptr)
-@ stdcall -arch=x86_64,arm64 ExTryToAcquireFastMutex(ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 ExTryToAcquireFastMutex(ptr)
 @ stdcall ExUnregisterCallback(ptr)
 @ stdcall ExUuidCreate(ptr)
 @ stdcall ExVerifySuite(long)
@@ -182,9 +182,9 @@
 @ fastcall ExfReleasePushLockShared(ptr)
 @ fastcall ExfTryToWakePushLock(ptr)
 @ fastcall ExfUnblockPushLock(ptr ptr)
-@ stdcall -arch=x86_64,arm64,arm ExpInterlockedFlushSList(ptr) RtlInterlockedFlushSList
-@ stdcall -arch=x86_64,arm64,arm ExpInterlockedPopEntrySList(ptr ptr) RtlInterlockedPopEntrySList
-@ stdcall -arch=x86_64,arm64,arm ExpInterlockedPushEntrySList(ptr ptr) RtlInterlockedPushEntrySList
+@ stdcall -arch=x86_64,arm64,arm,riscv64 ExpInterlockedFlushSList(ptr) RtlInterlockedFlushSList
+@ stdcall -arch=x86_64,arm64,arm,riscv64 ExpInterlockedPopEntrySList(ptr) RtlInterlockedPopEntrySList
+@ stdcall -arch=x86_64,arm64,arm,riscv64 ExpInterlockedPushEntrySList(ptr ptr) RtlInterlockedPushEntrySList
 @ fastcall -arch=i386 Exfi386InterlockedDecrementLong(ptr)
 @ fastcall -arch=i386 Exfi386InterlockedExchangeUlong(ptr long)
 @ fastcall -arch=i386 Exfi386InterlockedIncrementLong(ptr)
@@ -357,7 +357,7 @@
 @ fastcall -arch=i386 InterlockedPushEntrySList(ptr ptr)
 @ stdcall -arch=arm InterlockedPopEntrySList(ptr) RtlInterlockedPopEntrySList
 @ stdcall -arch=arm InterlockedPushEntrySList(ptr ptr) RtlInterlockedPushEntrySList
-@ stdcall -arch=x86_64,arm64 InitializeSListHead(ptr) RtlInitializeSListHead
+@ stdcall -arch=x86_64,arm64,riscv64 InitializeSListHead(ptr) RtlInitializeSListHead
 @ stdcall IoAcquireCancelSpinLock(ptr)
 @ stdcall IoAcquireRemoveLockEx(ptr ptr str long long)
 @ stdcall IoAcquireVpbSpinLock(ptr)
@@ -466,7 +466,7 @@
 @ stdcall IoInitializeTimer(ptr ptr ptr)
 @ stdcall IoInvalidateDeviceRelations(ptr long)
 @ stdcall IoInvalidateDeviceState(ptr)
-@ stdcall -arch=x86_64,arm64 IoIs32bitProcess(ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 IoIs32bitProcess(ptr)
 @ stdcall IoIsFileOriginRemote(ptr)
 @ stdcall IoIsOperationSynchronous(ptr)
 @ stdcall IoIsSystemThread(ptr)
@@ -555,7 +555,7 @@
 @ stdcall -version=0x602+ IoVolumeDeviceToGuidPath(ptr ptr)
 @ stdcall IoWMIAllocateInstanceIds(ptr long ptr)
 @ stdcall IoWMIDeviceObjectToInstanceName(ptr ptr ptr)
-@ stdcall -arch=x86_64,arm64 IoWMIDeviceObjectToProviderId(ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 IoWMIDeviceObjectToProviderId(ptr)
 @ stdcall IoWMIExecuteMethod(ptr ptr long long ptr ptr)
 @ stdcall IoWMIHandleToInstanceName(ptr ptr ptr)
 @ stdcall IoWMIOpenBlock(ptr long ptr)
@@ -592,7 +592,7 @@
 @ stdcall -arch=i386 Ke386SetIoAccessMap(long ptr)
 @ fastcall KeAcquireGuardedMutex(ptr)
 @ fastcall KeAcquireGuardedMutexUnsafe(ptr)
-@ cdecl -arch=x86_64,arm64 KeAcquireInStackQueuedSpinLock(ptr ptr)
+@ cdecl -arch=x86_64,arm64,riscv64 KeAcquireInStackQueuedSpinLock(ptr ptr)
 @ fastcall KeAcquireInStackQueuedSpinLockAtDpcLevel(ptr ptr)
 @ fastcall KeAcquireInStackQueuedSpinLockForDpc(ptr ptr)
 @ cdecl -arch=x86_64,arm64 KeAcquireInStackQueuedSpinLockRaiseToSynch(ptr ptr)
@@ -601,7 +601,7 @@
 @ cdecl -arch=x86_64,arm64 KeAcquireQueuedSpinLockRaiseToSynch(long)
 @ stdcall KeAcquireSpinLockAtDpcLevel(ptr)
 @ fastcall KeAcquireSpinLockForDpc(ptr)
-@ stdcall -arch=x86_64,arm64 KeAcquireSpinLockRaiseToDpc(ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 KeAcquireSpinLockRaiseToDpc(ptr)
 @ stdcall -arch=x86_64,arm64 KeAcquireSpinLockRaiseToSynch(ptr)
 @ stdcall KeAddSystemServiceTable(ptr ptr long ptr long)
 @ stdcall KeAreAllApcsDisabled()
@@ -627,11 +627,12 @@
 @ stdcall KeFindConfigurationEntry(ptr long long ptr)
 @ stdcall KeFindConfigurationNextEntry(ptr long long ptr ptr)
 @ stdcall KeFlushEntireTb(long long)
-@ stdcall -arch=x86_64,arm,arm64 KeFlushIoBuffers(ptr long long)
+@ stdcall -arch=x86_64,arm,arm64,riscv64 KeFlushIoBuffers(ptr long long)
 @ stdcall KeFlushQueuedDpcs()
 @ stdcall KeGenericCallDpc(ptr ptr)
 @ stdcall KeGetCurrentNodeNumber()
 @ stdcall KeGetCurrentProcessorNumberEx(ptr)
+@ stdcall -arch=riscv64 KeGetCurrentProcessorNumber()
 @ stdcall KeGetCurrentThread()
 @ stdcall KeGetPreviousMode()
 @ stdcall KeGetRecommendedSharedDataAlignment()
@@ -686,18 +687,19 @@
 @ stdcall KeQueryMaximumProcessorCount()
 @ stdcall KeQueryMaximumProcessorCountEx(long)
 @ stdcall KeQueryHighestNodeNumber()
-@ stdcall -arch=i386,arm,arm64 KeQueryInterruptTime()
+@ stdcall -arch=i386,arm,arm64,riscv64 KeQueryInterruptTime()
 @ stdcall KeQueryInterruptTimePrecise(ptr)
 ;@ cdecl -arch=x86_64,arm64 KeQueryMultiThreadProcessorSet
 ;@ cdecl -arch=x86_64,arm64 KeQueryPrcbAddress
 @ stdcall KeQueryPriorityThread(ptr)
 @ stdcall KeQueryRuntimeThread(ptr ptr)
 @ stdcall -arch=arm64 KeQueryPerformanceCounter(ptr) hal.KeQueryPerformanceCounter
-@ stdcall -arch=i386,arm,arm64 KeQuerySystemTime(ptr)
+@ stdcall -arch=i386,arm,arm64,riscv64 KeQuerySystemTime(ptr)
 @ stdcall -version=0x602+ KeQuerySystemTimePrecise(ptr)
-@ stdcall -arch=i386,arm,arm64 KeQueryTickCount(ptr)
+@ stdcall -arch=i386,arm,arm64,riscv64 KeQueryTickCount(ptr)
 @ stdcall KeQueryTimeIncrement()
 @ cdecl -arch=x86_64,arm64 KeRaiseIrqlToDpcLevel() KxRaiseIrqlToDpcLevel
+@ stdcall -arch=riscv64 KeRaiseIrqlToDpcLevel()
 @ stdcall KeRaiseUserException(long)
 @ stdcall KeReadStateEvent(ptr)
 @ stdcall KeReadStateMutant(ptr)
@@ -710,7 +712,7 @@
 @ stdcall KeRegisterNmiCallback(ptr ptr)
 @ fastcall KeReleaseGuardedMutex(ptr)
 @ fastcall KeReleaseGuardedMutexUnsafe(ptr)
-@ cdecl -arch=x86_64,arm64 KeReleaseInStackQueuedSpinLock(ptr)
+@ cdecl -arch=x86_64,arm64,riscv64 KeReleaseInStackQueuedSpinLock(ptr)
 @ fastcall KeReleaseInStackQueuedSpinLockForDpc(ptr)
 @ fastcall KeReleaseInStackQueuedSpinLockFromDpcLevel(ptr)
 @ stdcall KeReleaseInterruptSpinLock(ptr long)
@@ -718,7 +720,7 @@
 @ stdcall KeReleaseMutex(ptr long)
 @ cdecl -arch=x86_64,arm64 KeReleaseQueuedSpinLock(long long)
 @ stdcall KeReleaseSemaphore(ptr long long long)
-@ stdcall -arch=x86_64,arm64 KeReleaseSpinLock(ptr long)
+@ stdcall -arch=x86_64,arm64,riscv64 KeReleaseSpinLock(ptr long)
 @ fastcall KeReleaseSpinLockForDpc(ptr long)
 @ stdcall KeReleaseSpinLockFromDpcLevel(ptr)
 @ stdcall KeRemoveByKeyDeviceQueue(ptr long)
@@ -729,11 +731,11 @@
 @ stdcall KeRemoveQueueDpc(ptr)
 @ stdcall KeRemoveSystemServiceTable(long)
 @ stdcall KeResetEvent(ptr)
-@ stdcall -arch=i386 KeRestoreFloatingPointState(ptr)
+@ stdcall -arch=i386,riscv64 KeRestoreFloatingPointState(ptr)
 @ stdcall -arch=x86_64,arm64 KeRestoreFloatingPointState(ptr) KxRestoreFloatingPointState
 @ stdcall KeRevertToUserAffinityThread()
 @ stdcall KeRundownQueue(ptr)
-@ stdcall -arch=i386 KeSaveFloatingPointState(ptr)
+@ stdcall -arch=i386,riscv64 KeSaveFloatingPointState(ptr)
 @ stdcall -arch=x86_64,arm64 KeSaveFloatingPointState(ptr) KxSaveFloatingPointState
 @ cdecl KeSaveStateForHibernate(ptr)
 @ extern KeServiceDescriptorTable
@@ -750,9 +752,9 @@
 @ stdcall KeSetSystemAffinityThread(long)
 @ stdcall KeSetCoalescableTimer(ptr int64 long long ptr)
 @ stdcall -arch=i386 KeRevertToUserAffinityThreadEx(long)
-@ stdcall -arch=x86_64,arm64 KeRevertToUserAffinityThreadEx(int64)
+@ stdcall -arch=x86_64,arm64,riscv64 KeRevertToUserAffinityThreadEx(int64)
 @ stdcall -arch=i386 KeSetSystemAffinityThreadEx(long)
-@ stdcall -arch=x86_64,arm64 KeSetSystemAffinityThreadEx(int64)
+@ stdcall -arch=x86_64,arm64,riscv64 KeSetSystemAffinityThreadEx(int64)
 @ stdcall KeSetTargetProcessorDpc(ptr long)
 @ stdcall KeSetTimeIncrement(long long)
 @ stdcall KeSetTimer(ptr long long ptr)
@@ -780,6 +782,7 @@
 @ fastcall -arch=i386,arm,arm64 KefReleaseSpinLockFromDpcLevel(ptr)
 @ stdcall -arch=i386 Kei386EoiHelper()
 @ cdecl -arch=x86_64,arm64 KfRaiseIrql(long) KxRaiseIrql
+@ cdecl -arch=riscv64 KfRaiseIrql(long)
 @ fastcall -arch=i386 KiEoiHelper(ptr) #ReactOS-Specific
 @ fastcall -arch=i386,arm,arm64 KiAcquireSpinLock(ptr)
 @ extern KiBugCheckData
@@ -792,6 +795,11 @@
 @ extern -arch=i386,arm,arm64 KiEnableTimerWatchdog
 @ stdcall -arch=i386,arm,arm64 KiIpiServiceRoutine(ptr ptr)
 @ fastcall -arch=i386,arm,arm64 KiReleaseSpinLock(ptr)
+@ stdcall -arch=riscv64 KiRiscvClearSoftwareInterrupt(long)
+@ stdcall -arch=riscv64 KiRiscvQueryFeatureFlags()
+@ stdcall -arch=riscv64 KiRiscvRequestSoftwareInterrupt(long)
+@ stdcall -arch=riscv64 KiRiscvSetInterruptEnabled(ptr long)
+@ stdcall -arch=riscv64 KiRiscvUnimplemented(ptr)
 @ cdecl -arch=i386,arm,arm64 KiUnexpectedInterrupt()
 @ stdcall -arch=i386 Kii386SpinOnSpinLock(ptr long)
 @ stdcall LdrAccessResource(ptr ptr ptr ptr)
@@ -1014,7 +1022,7 @@
 @ stdcall -version=0x602+ PoFxCompleteIdleState(ptr long)
 @ stdcall -version=0x602+ PoFxIdleComponent(ptr long long)
 @ stdcall -version=0x602+ -arch=i386 PoFxPowerControl(ptr ptr ptr long ptr long ptr)
-@ stdcall -version=0x602+ -arch=x86_64,arm64 PoFxPowerControl(ptr ptr ptr ptr ptr ptr ptr)
+@ stdcall -version=0x602+ -arch=x86_64,arm64,riscv64 PoFxPowerControl(ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -version=0x602+ PoFxRegisterDevice(ptr ptr ptr)
 @ stdcall -version=0x602+ PoFxRemoveComponentRelation(ptr long ptr ptr)
 @ stdcall -version=0x602+ PoFxReportDevicePoweredOn(ptr)
@@ -1062,7 +1070,7 @@
 @ stdcall PsGetCurrentProcessId()
 @ stdcall PsGetCurrentProcessSessionId()
 @ stdcall PsGetCurrentProcessWin32Process()
-@ stdcall -arch=x86_64,arm64 PsGetCurrentProcessWow64Process()
+@ stdcall -arch=x86_64,arm64,riscv64 PsGetCurrentProcessWow64Process()
 @ stdcall PsGetCurrentThread() KeGetCurrentThread
 @ stdcall PsGetCurrentThreadId()
 @ stdcall PsGetCurrentThreadPreviousMode()
@@ -1086,7 +1094,7 @@
 @ stdcall PsGetProcessInheritedFromUniqueProcessId(ptr)
 @ stdcall PsGetProcessJob(ptr)
 @ stdcall PsGetProcessPeb(ptr)
-@ stdcall -arch=x86_64,arm64 PsGetProcessPeb32(ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 PsGetProcessPeb32(ptr)
 @ stdcall PsGetProcessPriorityClass(ptr)
 @ stdcall PsGetProcessSectionBaseAddress(ptr)
 @ stdcall PsGetProcessSecurityPort(ptr)
@@ -1095,7 +1103,7 @@
 @ stdcall PsGetProcessWin32Process(ptr)
 @ stdcall PsGetProcessMitigationPolicyFlags(ptr long)
 @ stdcall PsGetProcessWin32WindowStation(ptr)
-@ stdcall -arch=x86_64,arm64 PsGetProcessWow64Process(ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 PsGetProcessWow64Process(ptr)
 @ stdcall PsGetThreadFreezeCount(ptr)
 @ stdcall PsGetThreadHardErrorsAreDisabled(ptr)
 @ stdcall PsGetThreadId(ptr)
@@ -1146,12 +1154,12 @@
 @ stdcall PsTerminateSystemThread(long)
 @ extern PsThreadType
 @ stdcall PsWrapApcWow64Thread(ptr ptr)
-@ stdcall -arch=i386,arm READ_REGISTER_BUFFER_UCHAR(ptr ptr long)
-@ stdcall -arch=i386,arm READ_REGISTER_BUFFER_ULONG(ptr ptr long)
-@ stdcall -arch=i386,arm READ_REGISTER_BUFFER_USHORT(ptr ptr long)
-@ stdcall -arch=i386,arm READ_REGISTER_UCHAR(ptr)
-@ stdcall -arch=i386,arm READ_REGISTER_ULONG(ptr)
-@ stdcall -arch=i386,arm READ_REGISTER_USHORT(ptr)
+@ stdcall -arch=i386,arm,riscv64 READ_REGISTER_BUFFER_UCHAR(ptr ptr long)
+@ stdcall -arch=i386,arm,riscv64 READ_REGISTER_BUFFER_ULONG(ptr ptr long)
+@ stdcall -arch=i386,arm,riscv64 READ_REGISTER_BUFFER_USHORT(ptr ptr long)
+@ stdcall -arch=i386,arm,riscv64 READ_REGISTER_UCHAR(ptr)
+@ stdcall -arch=i386,arm,riscv64 READ_REGISTER_ULONG(ptr)
+@ stdcall -arch=i386,arm,riscv64 READ_REGISTER_USHORT(ptr)
 @ stdcall RtlAbsoluteToSelfRelativeSD(ptr ptr ptr)
 @ stdcall RtlAddAccessAllowedAce(ptr long long ptr)
 @ stdcall RtlAddAccessAllowedAceEx(ptr long long long ptr)
@@ -1243,7 +1251,8 @@
 @ stdcall -arch=win32 RtlExtendedLargeIntegerDivide(long long long ptr)
 @ stdcall -arch=win32 RtlExtendedMagicDivide(long long long long long)
 @ stdcall RtlFillMemory(ptr long long)
-@ stdcall -arch=i386,arm,arm64 RtlFillMemoryUlong(ptr long long)
+@ stdcall -arch=i386,arm,arm64,riscv64 RtlFillMemoryUlong(ptr long long)
+@ stdcall -arch=riscv64 RtlFillMemoryUlonglong(ptr long int64)
 @ stdcall RtlFindClearBits(ptr long long)
 @ stdcall RtlFindClearBitsAndSet(ptr long long)
 @ stdcall RtlFindClearRuns(ptr ptr long long)
@@ -1348,7 +1357,7 @@
 @ stdcall RtlLookupElementGenericTableAvl(ptr ptr)
 @ stdcall RtlLookupElementGenericTableFull(ptr ptr ptr ptr)
 @ stdcall RtlLookupElementGenericTableFullAvl(ptr ptr ptr ptr)
-@ cdecl -arch=x86_64,arm64 RtlLookupFunctionEntry(double ptr ptr)
+@ cdecl -arch=x86_64,arm64,riscv64 RtlLookupFunctionEntry(double ptr ptr)
 @ stdcall RtlMapGenericMask(ptr ptr)
 @ stdcall RtlMapSecurityErrorToNtStatus(long)
 @ stdcall RtlMergeRangeLists(ptr ptr ptr long)
@@ -1447,7 +1456,7 @@
 @ stdcall RtlValidSecurityDescriptor(ptr)
 @ stdcall RtlValidSid(ptr)
 @ stdcall RtlVerifyVersionInfo(ptr long long long)
-@ stdcall -arch=x86_64,arm64,arm RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr)
+@ stdcall -arch=x86_64,arm64,arm,riscv64 RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr)
 @ stdcall RtlVolumeDeviceToDosName(ptr ptr) IoVolumeDeviceToDosName
 @ stdcall RtlWalkFrameChain(ptr long long)
 @ stdcall RtlWeaklyEnumerateEntryHashTable(ptr ptr)
@@ -1516,12 +1525,12 @@
 @ cdecl VfFailDriver(long long long ptr ptr ptr)
 @ cdecl VfFailSystemBIOS(long long long ptr ptr ptr)
 @ stdcall VfIsVerificationEnabled(long ptr)
-@ stdcall -arch=i386,arm WRITE_REGISTER_BUFFER_UCHAR(ptr ptr long)
-@ stdcall -arch=i386,arm WRITE_REGISTER_BUFFER_ULONG(ptr ptr long)
-@ stdcall -arch=i386,arm WRITE_REGISTER_BUFFER_USHORT(ptr ptr long)
-@ stdcall -arch=i386,arm WRITE_REGISTER_UCHAR(ptr long)
-@ stdcall -arch=i386,arm WRITE_REGISTER_ULONG(ptr long)
-@ stdcall -arch=i386,arm WRITE_REGISTER_USHORT(ptr long)
+@ stdcall -arch=i386,arm,riscv64 WRITE_REGISTER_BUFFER_UCHAR(ptr ptr long)
+@ stdcall -arch=i386,arm,riscv64 WRITE_REGISTER_BUFFER_ULONG(ptr ptr long)
+@ stdcall -arch=i386,arm,riscv64 WRITE_REGISTER_BUFFER_USHORT(ptr ptr long)
+@ stdcall -arch=i386,arm,riscv64 WRITE_REGISTER_UCHAR(ptr long)
+@ stdcall -arch=i386,arm,riscv64 WRITE_REGISTER_ULONG(ptr long)
+@ stdcall -arch=i386,arm,riscv64 WRITE_REGISTER_USHORT(ptr long)
 @ stdcall WmiFlushTrace(ptr)
 @ fastcall WmiGetClock(long ptr)
 @ stdcall WmiQueryTrace(ptr)
@@ -1682,7 +1691,7 @@
 @ stdcall ZwWaitForSingleObject(ptr long ptr)
 @ stdcall ZwWriteFile(ptr ptr ptr ptr ptr ptr long ptr ptr)
 @ stdcall ZwYieldExecution()
-@ cdecl -arch=x86_64,arm64,arm __C_specific_handler(ptr long ptr ptr)
+@ cdecl -arch=x86_64,arm64,arm,riscv64 __C_specific_handler(ptr long ptr ptr)
 @ cdecl -arch=arm __jump_unwind()
 @ cdecl -arch=x86_64,arm64 __chkstk()
 ;@ cdecl -arch=x86_64,arm64 __misaligned_access()
@@ -1797,10 +1806,12 @@
 
 ; ARM64 HAL dependencies
 @ stdcall -arch=arm64 KfLowerIrql(long)
+@ stdcall -arch=riscv64 KfLowerIrql(long)
 @ stdcall -arch=arm64 KfAcquireSpinLock(ptr)
 @ stdcall -arch=arm64 KfReleaseSpinLock(ptr long)
 @ stdcall -arch=arm64 KeGetCurrentIrql()
 @ stdcall -arch=x86_64 KeGetCurrentIrql() KxGetCurrentIrql
+@ stdcall -arch=riscv64 KeGetCurrentIrql()
 ; ARM64 SMP diagnostics (smpdbg) recorders, called from the HAL
 @ stdcall -arch=arm64 SmpDbgTimerBegin(long long)
 @ stdcall -arch=arm64 SmpDbgTimerEoi(long long)
@@ -1809,7 +1820,7 @@
 @ stdcall -arch=arm64 KxRestoreFloatingPointState(ptr)
 @ stdcall -arch=arm64 KeAcquireSpinLock(ptr ptr)
 @ stdcall -arch=arm64 KeRaiseIrql(long ptr)
-@ stdcall -arch=arm64 KeRaiseIrqlToSynchLevel()
+@ stdcall -arch=arm64,riscv64 KeRaiseIrqlToSynchLevel()
 
 # ==========================================================================
 # Win11 ARM64 export parity (arm64 only). Generated batch; see commit msg.
@@ -2619,7 +2630,7 @@
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity(ptr)
 @ stdcall -arch=arm64 KeQueryActiveProcessorAffinity2(ptr ptr)
 @ stdcall -arch=arm64 KeQueryAuxiliaryCounterFrequency(ptr)
-@ stdcall -arch=x86_64,arm64 KeQueryDpcWatchdogInformation(ptr)
+@ stdcall -arch=x86_64,arm64,riscv64 KeQueryDpcWatchdogInformation(ptr)
 @ stdcall -arch=arm64 KeQueryEffectivePriorityThread(ptr)
 @ stdcall KeQueryGroupAffinity(long)
 @ stdcall KeQueryGroupAffinityEx(ptr long)
@@ -2660,7 +2671,7 @@
 @ stdcall -arch=arm64 KeSetHeteroCpuPolicyThread(ptr long long)
 @ stdcall -arch=arm64 KeSetSelectedCpuSetsThread(ptr long ptr)
 @ stdcall -arch=x86_64,arm64 KeSetSystemGroupAffinityThread(ptr ptr)
-@ stdcall -arch=i386,x86_64,arm64 KeSetTargetProcessorDpcEx(ptr ptr)
+@ stdcall -arch=i386,x86_64,arm64,riscv64 KeSetTargetProcessorDpcEx(ptr ptr)
 @ stdcall -version=0x603+ -arch=arm64 KeSetTimer2(ptr int64 int64 ptr)
 @ stdcall -arch=x86_64,arm64 KeShouldYieldProcessor()
 @ stdcall -arch=arm64 KeSizeOfAffinityEx(long)
@@ -2889,7 +2900,7 @@
 @ stdcall -arch=i386,x86_64,arm64 PsGetProcessDxgProcess(ptr)
 @ stdcall -arch=i386,x86_64,arm64 PsGetProcessMachine(ptr)
 @ stub -arch=arm64 PsGetProcessProtection
-@ stdcall -arch=i386,x86_64,arm64 PsGetProcessSequenceNumber(ptr)
+@ stdcall -arch=i386,x86_64,arm64,riscv64 PsGetProcessSequenceNumber(ptr)
 @ stdcall -arch=i386,x86_64,arm64 PsGetProcessServerSilo(ptr)
 @ stub -arch=arm64 PsGetProcessSignatureLevel
 @ stub -arch=arm64 PsGetProcessSilo
@@ -3184,6 +3195,7 @@
 @ stub -arch=arm64 RtlUnsignedMultiplyHigh
 @ stub -arch=arm64 RtlValidateCorrelationVector
 @ stub -arch=arm64 RtlVirtualUnwind2
+@ stdcall -arch=riscv64 RtlVirtualUnwind2(long int64 int64 ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
 @ stub -arch=arm64 RtlWriteNonVolatileMemory
 @ stub -arch=arm64 SeAccessCheckEx
 @ stub -arch=arm64 SeAccessCheckFromState

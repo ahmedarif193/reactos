@@ -50,6 +50,8 @@ RtlpNativeMachine(VOID)
     return IMAGE_FILE_MACHINE_AMD64;
 #elif defined(_M_ARM64)
     return IMAGE_FILE_MACHINE_ARM64;
+#elif defined(_M_RISCV64)
+    return IMAGE_FILE_MACHINE_RISCV64;
 #elif defined(_M_IX86)
     return IMAGE_FILE_MACHINE_I386;
 #elif defined(_M_ARM)
@@ -69,7 +71,7 @@ RtlWow64GetCurrentMachine(VOID)
     if (ChpeIsChpeProcess())
         return IMAGE_FILE_MACHINE_AMD64;
 #endif
-#ifdef _WIN64
+#if defined(_WIN64) && !defined(_M_RISCV64)
     if (NtCurrentTeb()->WowTebOffset)
         RtlWow64GetCurrentCpuArea(&machine, NULL, NULL);
 #endif
@@ -157,7 +159,7 @@ RtlIsCurrentProcess(HANDLE process)
     return RtlpIsCurrentProcess(process);
 }
 
-#if defined(_WIN64)
+#if defined(_WIN64) && !defined(_M_RISCV64)
 
 NTSTATUS
 WINAPI
@@ -345,7 +347,7 @@ done:
     return STATUS_SUCCESS;
 }
 
-#endif /* _WIN64 */
+#endif /* _WIN64 && !_M_RISCV64 */
 
 #if defined(_WIN64)
 

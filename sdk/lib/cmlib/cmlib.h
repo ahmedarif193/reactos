@@ -207,7 +207,7 @@
 //
 #ifndef PAGE_SIZE
 #if defined(TARGET_i386) || defined(TARGET_amd64) || \
-    defined(TARGET_arm)  || defined(TARGET_arm64)
+    defined(TARGET_arm)  || defined(TARGET_arm64) || defined(TARGET_riscv64)
 #define PAGE_SIZE 0x1000
 #else
 #error Local PAGE_SIZE definition required when built as host

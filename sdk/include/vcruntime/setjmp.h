@@ -179,6 +179,22 @@ typedef struct __JUMP_BUFFER {
     double D[8];
   } _JUMP_BUFFER;
 
+#elif defined(_M_RISCV64)
+
+/* ReactOS RV64 integer-call ABI: sp and s0-s11 are nonvolatile.
+ * Save caller-clobbered ra as the return continuation. Floating-point
+ * registers are caller-saved under this calling convention. */
+#define _JBLEN 16
+#define _JBTYPE unsigned __int64
+
+typedef struct __JUMP_BUFFER {
+    unsigned __int64 Frame;
+    unsigned __int64 Ra;
+    unsigned __int64 Sp;
+    unsigned __int64 S[12];
+    unsigned __int64 Reserved;
+} _JUMP_BUFFER;
+
 #else
 
 #error Define Setjmp for this architecture!

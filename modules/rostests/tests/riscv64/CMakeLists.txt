@@ -1,0 +1,13 @@
+add_executable(riscv64_porttest main.c seh.c cxx.cpp)
+set_target_cpp_properties(riscv64_porttest WITH_EXCEPTIONS WITH_RTTI)
+target_link_libraries(riscv64_porttest cppstl)
+target_include_directories(riscv64_porttest PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/rtl)
+set_module_type(riscv64_porttest win32cui)
+add_importlibs(riscv64_porttest advapi32 dbghelp msvcrt kernel32 ntdll)
+add_cd_file(TARGET riscv64_porttest DESTINATION reactos/system32 FOR livecd)
+
+add_library(riscv64_porttest_drv MODULE driver.c)
+set_target_properties(riscv64_porttest_drv PROPERTIES OUTPUT_NAME riscv64_porttest)
+set_module_type(riscv64_porttest_drv kernelmodedriver)
+add_importlibs(riscv64_porttest_drv ntoskrnl hal)
+add_cd_file(TARGET riscv64_porttest_drv DESTINATION reactos/system32/drivers FOR livecd)

@@ -177,6 +177,11 @@
    offsets anymore. */
 #define IsPointerOffset(Ptr)  (((ULONG_PTR)(Ptr) & 0xFFFFFF0000000000ULL) == 0)
 
+#elif defined(_M_RISCV64)
+
+/* MM initializes the system range before kernel objects can be created. */
+#define IsPointerOffset(Ptr) ((ULONG_PTR)(Ptr) < (ULONG_PTR)MmSystemRangeStart)
+
 #else
 #error IsPointerOffset() needs to be defined for this architecture
 #endif

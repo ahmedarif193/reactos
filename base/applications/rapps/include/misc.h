@@ -11,6 +11,8 @@
 #define CurrentArchitecture L"arm"
 #elif defined(_M_ARM64)
 #define CurrentArchitecture L"arm64"
+#elif defined(_M_RISCV64)
+#define CurrentArchitecture L"riscv64"
 #elif defined(_M_IA64)
 #define CurrentArchitecture L"ia64"
 #elif defined(_M_PPC)

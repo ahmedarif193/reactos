@@ -1,0 +1,11 @@
+; PROJECT:     ReactOS RISC-V64 LiveCD hive overlay
+; LICENSE:     GPL-2.0+
+; PURPOSE:     Device-tree platform and memory-backed boot volume
+
+[AddReg]
+
+; This HAL enumerates the FDT platform. ACPI discovery is not implemented.
+HKLM,"SYSTEM\CurrentControlSet\Services\acpi","Start",0x00010001,0x00000004
+; FreeLdr supplies the memory-backed boot volume. Other drivers retain their
+; normal service policy and discover hardware through the shared PnP paths.
+HKLM,"SYSTEM\CurrentControlSet\Services\RamDisk","Start",0x00010001,0x00000000

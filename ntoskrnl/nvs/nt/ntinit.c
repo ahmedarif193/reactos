@@ -243,7 +243,12 @@ MiInitializePhase0(
     PhysicalBytes = (ULONG64)MmNumberOfPhysicalPages << PAGE_SHIFT;
     if (MiSystem.Arch->VirtualAddressBits > 32)
     {
+        /* The arena never takes more than an eighth of the system half. */
+        ULONG64 SystemBytes = MiSystem.Arch->SystemAddressEnd - MiSystem.Arch->SystemAddressStart + 1;
+
         SystemPteBytes = MI_SYSPTE_64BIT_PAGES << PAGE_SHIFT;
+        if (SystemPteBytes > SystemBytes / 8)
+            SystemPteBytes = SystemBytes / 8;
         NonPagedBytes = MiClampBytes(PhysicalBytes / 2, 64 * _1MB, 4ULL * _1GB);
         PagedBytes = MiClampBytes(PhysicalBytes, 128 * _1MB, 4ULL * _1GB);
     }
