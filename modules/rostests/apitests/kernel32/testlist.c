@@ -60,6 +60,7 @@ extern void func_ResizePseudoConsole(void);
 extern void func_SetComputerNameExW(void);
 extern void func_SetConsoleWindowInfo(void);
 extern void func_SetCurrentDirectory(void);
+extern void func_SetFileAllocationInfo(void);
 extern void func_SetUnhandledExceptionFilter(void);
 extern void func_SetWaitableTimerEx(void);
 extern void func_SystemFirmware(void);
@@ -71,6 +72,7 @@ extern void func_WideCharToMultiByte(void);
 
 const struct test winetest_testlist[] =
 {
+    { "SetFileAllocationInfo", func_SetFileAllocationInfo },
     { "ActCtxWithXmlNamespaces",     func_ActCtxWithXmlNamespaces },
     { "ApiSetCoreSynch",             func_ApiSetCoreSynch },
     { "Arm64ThreadContext",          func_Arm64ThreadContext },

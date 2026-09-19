@@ -62,6 +62,7 @@ list(APPEND SOURCE
     SetComputerNameExW.c
     SetConsoleWindowInfo.c
     SetCurrentDirectory.c
+    SetFileAllocationInfo.c
     SetUnhandledExceptionFilter.c
     SetWaitableTimerEx.c
     SystemFirmware.c
