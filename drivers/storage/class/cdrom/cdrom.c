@@ -2760,7 +2760,7 @@ Return Value:
 
             status = WdfRequestRetrieveInputBuffer(Request,
                                                    RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                                   &exclusiveAccess,
+                                                   (PVOID*)&exclusiveAccess,
                                                    NULL);
 
             if (NT_SUCCESS(status))
@@ -2962,7 +2962,7 @@ Return Value:
 
             status = WdfRequestRetrieveInputBuffer(Request,
                                                    RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                                   &inputBuffer,
+                                                   (PVOID*)&inputBuffer,
                                                    NULL);
 
             if (NT_SUCCESS(status))

@@ -3024,7 +3024,7 @@ Return Value:
 
     status = WdfRequestRetrieveInputBuffer(Request,
                                            sizeof(PREVENT_MEDIA_REMOVAL),
-                                           &mediaRemoval,
+                                           (PVOID*)&mediaRemoval,
                                            NULL);
 
     if (NT_SUCCESS(status))

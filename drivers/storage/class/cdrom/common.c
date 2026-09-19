@@ -2840,7 +2840,7 @@ Return Value:
     {
         status = WdfRequestRetrieveOutputBuffer(Request,
                                                 RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                &descHeader,
+                                                (PVOID*)&descHeader,
                                                 NULL);
     }
 
@@ -2925,7 +2925,7 @@ Return Value:
     {
         status = WdfRequestRetrieveOutputBuffer(Request,
                                                 RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                &descHeader,
+                                                (PVOID*)&descHeader,
                                                 NULL);
     }
 

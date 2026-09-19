@@ -941,7 +941,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
     }
 
@@ -1108,7 +1108,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
     }
 
@@ -1303,7 +1303,7 @@ Return Value:
 
     status = WdfRequestRetrieveInputBuffer(Request,
                                            RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                           &key,
+                                           (PVOID*)&key,
                                            NULL);
 
     if (NT_SUCCESS(status))
@@ -1470,7 +1470,7 @@ Return Value:
             {
                 status = WdfRequestRetrieveInputBuffer(Request,
                                                        RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                                       &inputBuffer,
+                                                       (PVOID*)&inputBuffer,
                                                        NULL);
             }
 
@@ -1540,7 +1540,7 @@ Return Value:
         // Get the request type using CDROM_SET_SPEED structure
         status = WdfRequestRetrieveInputBuffer(Request,
                                                sizeof(CDROM_SET_SPEED),
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
 
     }
@@ -1632,7 +1632,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &layerNumber,
+                                               (PVOID*)&layerNumber,
                                                NULL);
     }
 
@@ -1738,7 +1738,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
     }
 
@@ -1807,7 +1807,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &sessionId,
+                                               (PVOID*)&sessionId,
                                                NULL);
     }
 
@@ -1876,7 +1876,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &sessionId,
+                                               (PVOID*)&sessionId,
                                                NULL);
     }
 
@@ -1936,7 +1936,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
     }
 
@@ -2005,7 +2005,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &sessionId,
+                                               (PVOID*)&sessionId,
                                                NULL);
     }
 
@@ -2074,7 +2074,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &sessionId,
+                                               (PVOID*)&sessionId,
                                                NULL);
     }
 
@@ -2143,7 +2143,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &sessionId,
+                                               (PVOID*)&sessionId,
                                                NULL);
     }
 
@@ -2213,7 +2213,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
     }
 
@@ -2281,7 +2281,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &exclusiveAccess,
+                                               (PVOID*)&exclusiveAccess,
                                                NULL);
     }
 
@@ -2373,7 +2373,7 @@ Return Value:
 
     status = WdfRequestRetrieveOutputBuffer(Request,
                                             sizeof(CDROM_EXCLUSIVE_LOCK_STATE),
-                                            &exclusiveLockState,
+                                            (PVOID*)&exclusiveLockState,
                                             NULL);
     NT_ASSERT(NT_SUCCESS(status));
 
@@ -2451,7 +2451,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                sizeof(CDROM_EXCLUSIVE_LOCK),
-                                               &exclusiveLock,
+                                               (PVOID*)&exclusiveLock,
                                                NULL);
     }
 
@@ -2607,7 +2607,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                sizeof(PCDROM_EXCLUSIVE_ACCESS),
-                                               &exclusiveAccess,
+                                               (PVOID*)&exclusiveAccess,
                                                NULL);
     }
 
@@ -2657,7 +2657,7 @@ Return Value:
 
     status = WdfRequestRetrieveInputBuffer(Request,
                                            RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                           &inputBuffer,
+                                           (PVOID*)&inputBuffer,
                                            NULL);
 
     if (NT_SUCCESS(status))
@@ -2685,7 +2685,7 @@ Return Value:
 
                 status = WdfRequestRetrieveOutputBuffer(Request,
                                                         RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                        &outputDescriptor,
+                                                        (PVOID*)&outputDescriptor,
                                                         NULL);
 
                 if (NT_SUCCESS(status))
@@ -2773,7 +2773,7 @@ Return Value:
 
                 status = WdfRequestRetrieveOutputBuffer(Request,
                                                         RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                        &outputDescriptor,
+                                                        (PVOID*)&outputDescriptor,
                                                         NULL);
                 if (NT_SUCCESS(status))
                 {
@@ -2832,7 +2832,7 @@ Return Value:
 
     status = WdfRequestRetrieveInputBuffer(Request,
                                            requestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                           &inputBuffer,
+                                           (PVOID*)&inputBuffer,
                                            NULL);
 
     if (NT_SUCCESS(status))
@@ -2889,7 +2889,7 @@ Return Value:
             outLength = requestParameters.Parameters.DeviceIoControl.OutputBufferLength;
             status = WdfRequestRetrieveOutputBuffer(Request,
                                                     requestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                    &descHeader,
+                                                    (PVOID*)&descHeader,
                                                     NULL);
         }
 
@@ -3009,7 +3009,7 @@ Return Value:
 
     status = WdfRequestRetrieveInputBuffer(Request,
                                            requestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                           &query,
+                                           (PVOID*)&query,
                                            NULL);
 
     if (NT_SUCCESS(status))
@@ -3046,7 +3046,7 @@ Return Value:
     {
         status = WdfRequestRetrieveOutputBuffer(Request,
                                                 requestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                &writeCache,
+                                                (PVOID*)&writeCache,
                                                 NULL);
     }
 
@@ -3316,7 +3316,7 @@ Return Value:
 
     status = WdfRequestRetrieveInputBuffer(Request,
                                            RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                           &keyParameters,
+                                           (PVOID*)&keyParameters,
                                            NULL);
 
     if (NT_SUCCESS(status))
@@ -3439,7 +3439,7 @@ Return Value:
 
     status = WdfRequestRetrieveInputBuffer(Request,
                                            RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                           &sessionId,
+                                           (PVOID*)&sessionId,
                                            NULL);
 
     if (NT_SUCCESS(status))
@@ -3492,7 +3492,7 @@ Return Value:
 
     status = WdfRequestRetrieveInputBuffer(Request,
                                            RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                           &sessionId,
+                                           (PVOID*)&sessionId,
                                            NULL);
 
     if (NT_SUCCESS(status))
@@ -3552,7 +3552,7 @@ Return Value:
         // Get the request type using CDROM_STREAMING_CONTROL structure
         status = WdfRequestRetrieveInputBuffer(Request,
                                                sizeof(CDROM_STREAMING_CONTROL),
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
     }
 
@@ -3613,7 +3613,7 @@ Return Value:
         // Get the request type using CDROM_SIMPLE_OPC_INFO structure
         status = WdfRequestRetrieveInputBuffer(Request,
                                                sizeof(CDROM_SIMPLE_OPC_INFO),
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
     }
 
@@ -3692,7 +3692,7 @@ Return Value:
             {
                 status = WdfRequestRetrieveInputBuffer(Request,
                                                        sizeof(CDROM_PERFORMANCE_REQUEST),
-                                                       &performanceRequest,
+                                                       (PVOID*)&performanceRequest,
                                                        NULL);
             }
 
@@ -3980,7 +3980,7 @@ Return Value:
     {
         status = WdfRequestRetrieveOutputBuffer(Request,
                                                 RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                &uniqueId,
+                                                (PVOID*)&uniqueId,
                                                 NULL);
     }
 
@@ -4054,7 +4054,7 @@ Return Value:
     {
         status = WdfRequestRetrieveOutputBuffer(Request,
                                                 RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                &name,
+                                                (PVOID*)&name,
                                                 NULL);
     }
 
@@ -4181,7 +4181,7 @@ Return Value:
     {
         status = WdfRequestRetrieveOutputBuffer(Request,
                                                 RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                &suggestedName,
+                                                (PVOID*)&suggestedName,
                                                 NULL);
     }
 
@@ -4353,7 +4353,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
     }
 
@@ -4700,7 +4700,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &inputBuffer,
+                                               (PVOID*)&inputBuffer,
                                                NULL);
     }
 
@@ -4987,7 +4987,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &verifyInfo,
+                                               (PVOID*)&verifyInfo,
                                                NULL);
     }
 
@@ -5112,7 +5112,7 @@ Return Value:
                 PULONG outputBuffer = NULL;
                 status = WdfRequestRetrieveOutputBuffer(Request,
                                                         RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                        &outputBuffer,
+                                                        (PVOID*)&outputBuffer,
                                                         NULL);
 
                 if (outputBuffer != NULL)
@@ -5312,7 +5312,7 @@ Return Value:
         PSTORAGE_DEVICE_NUMBER deviceNumber = NULL;
         status = WdfRequestRetrieveOutputBuffer(Request,
                                                 RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                &deviceNumber,
+                                                (PVOID*)&deviceNumber,
                                                 NULL);
         if (NT_SUCCESS(status))
         {
@@ -5369,7 +5369,7 @@ Return Value:
         PSTORAGE_HOTPLUG_INFO info = NULL;
         status = WdfRequestRetrieveOutputBuffer(Request,
                                                 RequestParameters.Parameters.DeviceIoControl.OutputBufferLength,
-                                                &info,
+                                                (PVOID*)&info,
                                                 NULL);
         if (NT_SUCCESS(status))
         {
@@ -5430,7 +5430,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &info,
+                                               (PVOID*)&info,
                                                NULL);
     }
 
@@ -5532,7 +5532,7 @@ Return Value:
         if (NT_SUCCESS(status)) {
             status = WdfRequestRetrieveInputBuffer(Request,
                                                    RequestParameters->Parameters.DeviceIoControl.InputBufferLength,
-                                                   &eventBuffer,
+                                                   (PVOID*)&eventBuffer,
                                                    NULL);
             if (NT_SUCCESS(status)) {
                 if ((eventBuffer->Version != STORAGE_EVENT_NOTIFICATION_VERSION_V1) ||
@@ -5626,7 +5626,7 @@ Return Value:
     {
         status = WdfRequestRetrieveInputBuffer(Request,
                                                RequestParameters.Parameters.DeviceIoControl.InputBufferLength,
-                                               &mediaRemoval,
+                                               (PVOID*)&mediaRemoval,
                                                NULL);
     }
 
@@ -5695,7 +5695,7 @@ Return Value:
 
     status = WdfRequestRetrieveInputBuffer(Request,
                                            sizeof(CDROM_STREAMING_CONTROL),
-                                           &inputBuffer,
+                                           (PVOID*)&inputBuffer,
                                            NULL);
 
     if (NT_SUCCESS(status))

@@ -1161,7 +1161,7 @@ DeviceInitializeHotplugInfo(
     _In_ PCDROM_DEVICE_EXTENSION DeviceExtension
     );
 
-NTSTATUS
+VOID
 DeviceErrorHandlerForMmc(
     _In_ PCDROM_DEVICE_EXTENSION  DeviceExtension,
     _In_ PSCSI_REQUEST_BLOCK      Srb,
@@ -1169,7 +1169,7 @@ DeviceErrorHandlerForMmc(
     _Inout_ PBOOLEAN              Retry
     );
 
-NTSTATUS
+VOID
 DeviceErrorHandlerForHitachiGD2000(
     _In_ PCDROM_DEVICE_EXTENSION  DeviceExtension,
     _In_ PSCSI_REQUEST_BLOCK      Srb,
