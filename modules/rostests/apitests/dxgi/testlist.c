@@ -7,6 +7,7 @@ extern void func_dwm_render(void);
 extern void func_completion_event(void);
 extern void func_composition(void);
 extern void func_texture_dimensions(void);
+extern void func_multisample(void);
 
 const struct test winetest_testlist[] =
 {
@@ -16,5 +17,6 @@ const struct test winetest_testlist[] =
     { "completion_event", func_completion_event },
     { "composition", func_composition },
     { "texture_dimensions", func_texture_dimensions },
+    { "multisample", func_multisample },
     { 0, 0 }
 };

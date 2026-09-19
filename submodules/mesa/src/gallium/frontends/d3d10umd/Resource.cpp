@@ -953,7 +953,28 @@ ResourceResolveSubResource(D3D10DDI_HDEVICE hDevice,        // IN
                            UINT SrcSubResource,             // IN
                            DXGI_FORMAT ResolveFormat)       // IN
 {
-   LOG_UNSUPPORTED_ENTRYPOINT();
+   struct pipe_context *pipe = CastPipeContext(hDevice);
+   struct pipe_resource *dst = CastPipeResource(hDstResource);
+   struct pipe_resource *src = CastPipeResource(hSrcResource);
+   if (!dst || !src || src->nr_samples <= 1 || dst->nr_samples > 1)
+      return;
+
+   struct pipe_blit_info blit = {};
+   blit.src.resource = src;
+   blit.dst.resource = dst;
+   blit.src.level = SrcSubResource % (src->last_level + 1);
+   blit.dst.level = DstSubResource % (dst->last_level + 1);
+   blit.src.box.z = SrcSubResource / (src->last_level + 1);
+   blit.dst.box.z = DstSubResource / (dst->last_level + 1);
+   blit.src.box.width = u_minify(src->width0, blit.src.level);
+   blit.src.box.height = u_minify(src->height0, blit.src.level);
+   blit.dst.box.width = u_minify(dst->width0, blit.dst.level);
+   blit.dst.box.height = u_minify(dst->height0, blit.dst.level);
+   blit.src.box.depth = blit.dst.box.depth = 1;
+   blit.src.format = blit.dst.format = FormatTranslate(ResolveFormat, false);
+   blit.mask = PIPE_MASK_RGBA;
+   blit.filter = PIPE_TEX_FILTER_NEAREST;
+   pipe->blit(pipe, &blit);
 }
 
 

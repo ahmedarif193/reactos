@@ -6,7 +6,8 @@
 #include <d3dcompiler.h>
 
 static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
-        ID3D11ShaderResourceView *view, const char *source, UINT expected)
+        ID3D11ShaderResourceView *view, const char *source, UINT expected,
+        UINT samples = 1, UINT sample_mask = ~0u, DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM)
 {
     HMODULE compiler = LoadLibraryW(L"d3dcompiler_47.dll");
     typedef HRESULT (WINAPI *COMPILE)(const void *, SIZE_T, const char *, const D3D_SHADER_MACRO *,
@@ -24,7 +25,7 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
     if (errors) errors->Release();
     ID3D11VertexShader *vs = NULL;
     ID3D11PixelShader *ps = NULL;
-    ID3D11Texture2D *target = NULL, *staging = NULL;
+    ID3D11Texture2D *target = NULL, *staging = NULL, *resolved = NULL;
     ID3D11RenderTargetView *rtv = NULL;
     ID3D11SamplerState *sampler = NULL;
     if (vs_code && ps_code)
@@ -34,14 +35,21 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
         hr = device->CreatePixelShader(ps_code->GetBufferPointer(), ps_code->GetBufferSize(), NULL, &ps);
         ok(hr == S_OK, "Create texture pixel shader: %#lx\n", hr);
         D3D11_TEXTURE2D_DESC desc = {};
-        desc.Width = desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
-        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.Width = desc.Height = desc.MipLevels = desc.ArraySize = 1;
+        desc.SampleDesc.Count = samples;
+        desc.Format = format;
         desc.BindFlags = D3D11_BIND_RENDER_TARGET;
         hr = device->CreateTexture2D(&desc, NULL, &target);
         ok(hr == S_OK, "Texture sample output: %#lx\n", hr);
         if (target) hr = device->CreateRenderTargetView(target, NULL, &rtv);
         ok(hr == S_OK && rtv, "Texture sample output view: %#lx\n", hr);
         desc.BindFlags = 0;
+        desc.SampleDesc.Count = 1;
+        if (samples > 1)
+        {
+            hr = device->CreateTexture2D(&desc, NULL, &resolved);
+            ok(hr == S_OK && resolved, "Resolve destination: %#lx\n", hr);
+        }
         desc.Usage = D3D11_USAGE_STAGING;
         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         hr = device->CreateTexture2D(&desc, NULL, &staging);
@@ -53,12 +61,13 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
         sd.MaxLOD = D3D11_FLOAT32_MAX;
         hr = device->CreateSamplerState(&sd, &sampler);
         ok(hr == S_OK, "Texture sample sampler: %#lx\n", hr);
-        if (vs && ps && rtv && staging && sampler)
+        if (vs && ps && rtv && staging && sampler && (samples == 1 || resolved))
         {
             context->ClearState();
             const FLOAT black[4] = {0, 0, 0, 0};
             context->ClearRenderTargetView(rtv, black);
             context->OMSetRenderTargets(1, &rtv, NULL);
+            context->OMSetBlendState(NULL, NULL, sample_mask);
             context->VSSetShader(vs, NULL, 0);
             context->PSSetShader(ps, NULL, 0);
             context->PSSetShaderResources(0, 1, &view);
@@ -68,14 +77,26 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
             context->RSSetViewports(1, &viewport);
             context->Draw(3, 0);
             context->ClearState();
-            context->CopyResource(staging, target);
+            if (resolved) context->ResolveSubresource(resolved, 0, target, 0, format);
+            context->CopyResource(staging, resolved ? resolved : target);
             D3D11_MAPPED_SUBRESOURCE map = {};
             hr = context->Map(staging, 0, D3D11_MAP_READ, 0, &map);
             ok(hr == S_OK, "Map sampled pixel: %#lx\n", hr);
             if (SUCCEEDED(hr))
             {
                 UINT actual = *static_cast<UINT *>(map.pData);
-                ok(actual == expected, "Sampled texture pixel %#x, expected %#x\n", actual, expected);
+                bool matches = actual == expected;
+                if (samples > 1)
+                {
+                    // UNORM resolve rounding can differ by one least-significant bit.
+                    matches = true;
+                    for (UINT channel = 0; channel < 4; ++channel)
+                    {
+                        int delta = int((actual >> (channel * 8)) & 255) - int((expected >> (channel * 8)) & 255);
+                        if (delta < -1 || delta > 1) matches = false;
+                    }
+                }
+                ok(matches, "Sampled texture pixel %#x, expected %#x (resolve tolerance %u)\n", actual, expected, samples > 1 ? 1 : 0);
                 context->Unmap(staging, 0);
             }
         }
@@ -83,6 +104,7 @@ static void TestSample(ID3D11Device *device, ID3D11DeviceContext *context,
     if (sampler) sampler->Release();
     if (rtv) rtv->Release();
     if (target) target->Release();
+    if (resolved) resolved->Release();
     if (staging) staging->Release();
     if (vs) vs->Release();
     if (ps) ps->Release();
@@ -321,6 +343,41 @@ START_TEST(texture_dimensions)
         trace("Testing texture format %u\n", formats[i]);
         TestCube(device, context, formats[i]);
         TestVolume(device, context, formats[i]);
+    }
+    context->ClearState();
+    context->Flush();
+    context->Release();
+    device->Release();
+    FreeLibrary(runtime);
+}
+
+START_TEST(multisample)
+{
+    typedef HRESULT (WINAPI *CREATE_DEVICE)(IDXGIAdapter *, D3D_DRIVER_TYPE, HMODULE,
+            UINT, const D3D_FEATURE_LEVEL *, UINT, UINT, ID3D11Device **, D3D_FEATURE_LEVEL *, ID3D11DeviceContext **);
+    HMODULE runtime = LoadLibraryW(L"d3d11.dll");
+    CREATE_DEVICE create = runtime ? reinterpret_cast<CREATE_DEVICE>(GetProcAddress(runtime, "D3D11CreateDevice")) : NULL;
+    if (!create) { skip("D3D11 unavailable\n"); return; }
+    ID3D11Device *device = NULL;
+    ID3D11DeviceContext *context = NULL;
+    HRESULT hr = create(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &device, NULL, &context);
+    if (FAILED(hr)) { skip("Hardware D3D11 unavailable: %#lx\n", hr); FreeLibrary(runtime); return; }
+    const DXGI_FORMAT formats[] = {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM};
+    for (UINT i = 0; i < ARRAYSIZE(formats); ++i)
+    {
+        UINT quality = 0, support = 0;
+        hr = device->CheckMultisampleQualityLevels(formats[i], 1, &quality);
+        ok(hr == S_OK && quality > 0, "Single sample format %u: %#lx quality %u\n", formats[i], hr, quality);
+        hr = device->CheckMultisampleQualityLevels(formats[i], 4, &quality);
+        ok(hr == S_OK, "Four samples format %u: %#lx\n", formats[i], hr);
+        if (!quality) { skip("Format %u has no four-sample support\n", formats[i]); continue; }
+        hr = device->CheckFormatSupport(formats[i], &support);
+        ok(hr == S_OK && (support & D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET),
+                "Multisample render-target caps %u: %#lx %#x\n", formats[i], hr, support);
+        // Two of four samples receive green; the rest retain transparent black.
+        // Readback must contain their average, not a copy of one sample.
+        TestSample(device, context, NULL, "float4 main(float4 p : SV_Position) : SV_Target { return float4(0,1,0,1); }",
+                0x80008000, 4, 0x5, formats[i]);
     }
     context->ClearState();
     context->Flush();

@@ -931,12 +931,10 @@ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
       *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_RENDERTARGET;
       *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_BLENDABLE;
 
-#if SUPPORT_MSAA
       if (screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
                                       PIPE_BIND_RENDER_TARGET)) {
          *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
       }
-#endif
    }
 
    format = FormatTranslateSupported(screen, Format, false,
@@ -1005,8 +1003,18 @@ CheckMultisampleQualityLevels(D3D10DDI_HDEVICE hDevice,        // IN
 {
    //LOG_ENTRYPOINT();
 
-   /* XXX: Disable MSAA */
+   struct pipe_screen *screen = CastPipeContext(hDevice)->screen;
    *pNumQualityLevels = 0;
+   if (!SampleCount || SampleCount > 32)
+      return;
+
+   enum pipe_format format = FormatTranslateSupported(screen, Format, false,
+      PIPE_TEXTURE_2D, SampleCount, PIPE_BIND_RENDER_TARGET);
+   if (format == PIPE_FORMAT_NONE)
+      format = FormatTranslateSupported(screen, Format, true,
+         PIPE_TEXTURE_2D, SampleCount, PIPE_BIND_DEPTH_STENCIL);
+   if (format != PIPE_FORMAT_NONE)
+      *pNumQualityLevels = 1;
 }
 
 
