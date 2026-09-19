@@ -383,6 +383,9 @@ Rpi5Vc4ProcessPendingLocked(
     BOOLEAN OutOfMemory = FALSE;
     ULONGLONG Now = KeQueryInterruptTime();
     ULONG Node;
+    ULONG Rescans = 0;
+    BOOLEAN RetiredThisPass;
+    BOOLEAN AddressSpaceWaitThisPass;
 
 #define Queue(n) (&DeviceExtension->NodeQueue[(n)])
 
@@ -400,6 +403,10 @@ Rpi5Vc4ProcessPendingLocked(
         return FALSE;
     }
 
+Rescan:
+    RetiredThisPass = FALSE;
+    AddressSpaceWaitThisPass = FALSE;
+    *NeedPoll = FALSE;
     /* Consume the pipeline-drained completion latches once per pass. */
     if (DeviceExtension->V3dReady && !DeviceExtension->StopAccepting)
     {
@@ -434,12 +441,14 @@ Rpi5Vc4ProcessPendingLocked(
             if (!Head->BinSubmitted && !Head->RenderSubmitted &&
                 Rpi5Vc4OldestQueuedProcessLocked(DeviceExtension, NULL) != Head->Process)
             {
+                AddressSpaceWaitThisPass = TRUE;
                 *NeedPoll = TRUE;
                 goto NextNode;
             }
             if (DeviceExtension->V3dActiveProcess != Head->Process &&
                 Rpi5Vc4GpuJobActiveLocked(DeviceExtension))
             {
+                AddressSpaceWaitThisPass = TRUE;
                 *NeedPoll = TRUE;
                 goto NextNode;
             }
@@ -746,6 +755,7 @@ CompleteHead:
             Completed = TRUE;
         }
         Rpi5Vc4RemoveSubmitLocked(DeviceExtension, Node);
+        RetiredThisPass = TRUE;
     }
 
         goto NextNode;
@@ -758,6 +768,21 @@ AbortPipeline:
         goto Finished;
 
 NextNode:;
+    }
+
+    /* A later node can release the shared address space after an earlier
+     * node was skipped. Reconsider that earlier work while the GPU is idle,
+     * rather than leaving it parked until the polling timer fires. Never
+     * reorder a node's queue or switch address spaces under an active job.
+     * Bound the extra passes to the number of other hardware nodes. */
+    if (RetiredThisPass && AddressSpaceWaitThisPass &&
+        Rescans < RPI5VC4_GPU_NODE_COUNT - 1 &&
+        !Rpi5Vc4GpuJobActiveLocked(DeviceExtension))
+    {
+        ++Rescans;
+        BinComplete = RenderComplete = CsdComplete = OutOfMemory = FALSE;
+        Now = KeQueryInterruptTime();
+        goto Rescan;
     }
 
 Finished:
