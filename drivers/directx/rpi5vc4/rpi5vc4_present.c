@@ -117,8 +117,16 @@ Rpi5Vc4BlitRectRotate90ToFirmware(
     LONG Top = max(Rect->top, 0);
     LONG Right = min(Rect->right, (LONG)DeviceExtension->ScreenWidth);
     LONG Bottom = min(Rect->bottom, (LONG)DeviceExtension->ScreenHeight);
-    ULONG Tile[32][32];
-    ULONG Row[32];
+    union
+    {
+        ULONG Pixels[32][32];
+        ULONGLONG Pairs[32][16];
+    } Tile;
+    union
+    {
+        ULONG Pixels[2][32];
+        ULONGLONG Pairs[2][16];
+    } Rows;
     LONG TileX;
     LONG TileY;
 
@@ -137,26 +145,55 @@ Rpi5Vc4BlitRectRotate90ToFirmware(
 
             for (Y = TileY; Y < TileBottom; ++Y)
             {
-                RtlCopyMemory(Tile[Y - TileY],
+                RtlCopyMemory(Tile.Pixels[Y - TileY],
                               Source + (SIZE_T)Y * SourcePitch + (SIZE_T)TileX * sizeof(ULONG),
                               (SIZE_T)(TileRight - TileX) * sizeof(ULONG));
                 if (DeviceExtension->SoftwarePointer != NULL)
                 {
                     Rpi5Vc4PointerCopyRow(DeviceExtension->SoftwarePointer,
-                                         Tile[Y - TileY], Tile[Y - TileY],
+                                         Tile.Pixels[Y - TileY], Tile.Pixels[Y - TileY],
                                          Y, TileX, TileRight);
                 }
             }
 
-            for (X = TileX; X < TileRight; ++X)
+            /* Transpose two columns together using integer-register pairs. */
+            for (X = TileX; X + 1 < TileRight; X += 2)
+            {
+                LONG Pair = 0;
+
+                for (Y = TileBottom - 1; Y > TileY; Y -= 2, ++Pair)
+                {
+                    ULONGLONG First = Tile.Pairs[Y - TileY][(X - TileX) / 2];
+                    ULONGLONG Second = Tile.Pairs[Y - TileY - 1][(X - TileX) / 2];
+
+                    Rows.Pairs[0][Pair] = (ULONG)First | (Second << 32);
+                    Rows.Pairs[1][Pair] = (First >> 32) | (Second & 0xffffffff00000000ULL);
+                }
+                if (Y == TileY)
+                {
+                    Rows.Pixels[0][Pair * 2] = Tile.Pixels[0][X - TileX];
+                    Rows.Pixels[1][Pair * 2] = Tile.Pixels[0][X - TileX + 1];
+                }
+                RtlCopyMemory((PUCHAR)DeviceExtension->FrameBufferVa +
+                                  (SIZE_T)X * DeviceExtension->ScanoutPitch +
+                                  (SIZE_T)(DeviceExtension->ScanoutWidth - TileBottom) * sizeof(ULONG),
+                              Rows.Pixels[0],
+                              (SIZE_T)(TileBottom - TileY) * sizeof(ULONG));
+                RtlCopyMemory((PUCHAR)DeviceExtension->FrameBufferVa +
+                                  (SIZE_T)(X + 1) * DeviceExtension->ScanoutPitch +
+                                  (SIZE_T)(DeviceExtension->ScanoutWidth - TileBottom) * sizeof(ULONG),
+                              Rows.Pixels[1],
+                              (SIZE_T)(TileBottom - TileY) * sizeof(ULONG));
+            }
+            if (X < TileRight)
             {
                 for (Y = TileBottom - 1; Y >= TileY; --Y)
-                    Row[TileBottom - 1 - Y] = Tile[Y - TileY][X - TileX];
+                    Rows.Pixels[0][TileBottom - 1 - Y] = Tile.Pixels[Y - TileY][X - TileX];
 
                 RtlCopyMemory((PUCHAR)DeviceExtension->FrameBufferVa +
                                   (SIZE_T)X * DeviceExtension->ScanoutPitch +
                                   (SIZE_T)(DeviceExtension->ScanoutWidth - TileBottom) * sizeof(ULONG),
-                              Row,
+                              Rows.Pixels[0],
                               (SIZE_T)(TileBottom - TileY) * sizeof(ULONG));
             }
         }
