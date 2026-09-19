@@ -1189,7 +1189,7 @@ KiReadyThread(IN PKTHREAD Thread)
     {
         /* Increase the stack count */
         ASSERT(Process->StackCount != MAXULONG);
-        Process->StackCount++;
+        InterlockedIncrement((volatile LONG *)&Process->StackCount);
 
         /* Set the thread to transition */
         ASSERT(Thread->State != Transition);

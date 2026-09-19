@@ -233,6 +233,7 @@ KMT_TESTFUNC Test_RtlRandomKM;
 KMT_TESTFUNC Test_ZwSystemInfoKM;
 KMT_TESTFUNC Test_KeQueue;
 KMT_TESTFUNC Test_KeSemaphore;
+KMT_TESTFUNC Test_KeProcessStackCount;
 KMT_TESTFUNC Test_KeProcessor;
 KMT_TESTFUNC Test_KeSpinLock;
 KMT_TESTFUNC Test_KeThreadedDpc;
@@ -515,6 +516,7 @@ const KMT_TEST TestList[] =
     { "KeMutex",                            Test_KeMutex },
     { "KePcr",                              Test_KePcr },
     { "KeQueue",                            Test_KeQueue },
+    { "KeProcessStackCount",                Test_KeProcessStackCount },
     { "KeProcessor",                        Test_KeProcessor },
     { "KeSemaphore",                        Test_KeSemaphore },
     { "KeSpinLock",                         Test_KeSpinLock },
