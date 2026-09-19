@@ -154,10 +154,12 @@ HRESULT WINAPI DECLSPEC_HOTPATCH RoGetActivationFactory(HSTRING classid, REFIID 
     HMODULE module;
     HRESULT hr;
 
-    FIXME("(%s, %s, %p): semi-stub\n", debugstr_hstring(classid), debugstr_guid(iid), class_factory);
+    TRACE("(%s, %s, %p)\n", debugstr_hstring(classid), debugstr_guid(iid), class_factory);
 
     if (!iid || !class_factory)
         return E_INVALIDARG;
+
+    *class_factory = NULL;
 
     if (FAILED(hr = ensure_mta()))
         return hr;
