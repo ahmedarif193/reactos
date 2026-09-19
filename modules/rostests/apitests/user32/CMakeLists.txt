@@ -7,6 +7,7 @@ list(APPEND SOURCE
     CallWindowProc.c
     CharFuncs.c
     CloseWindow.c
+    ClipboardAccess.c
     ComboBox.c
     CopyImage.c
     CopyImage_Icon.c
