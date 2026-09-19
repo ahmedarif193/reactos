@@ -460,17 +460,6 @@ HRESULT WINAPI SHAssocEnumHandlersForProtocolByApplication(const WCHAR *protocol
     return hr;
 }
 
-HRESULT WINAPI SHGetPropertyStoreForWindow(HWND hwnd, REFIID riid, void **ppv)
-{
-    FIXME("(%p, %s, %p): stub\n", hwnd, debugstr_guid(riid), ppv);
-
-    if (ppv == NULL)
-        return E_INVALIDARG;
-
-    *ppv = NULL;
-    return E_NOTIMPL;
-}
-
 HRESULT WINAPI SHQueryUserNotificationState(QUERY_USER_NOTIFICATION_STATE *pquns)
 {
     TRACE("(%p)\n", pquns);
