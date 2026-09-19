@@ -46,6 +46,9 @@ extern "C" {
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
+HRESULT WINAPI ApplicationAssociationRegistration_Constructor(IUnknown *, REFIID, void **);
+HRESULT WINAPI KnownFolderManager_Constructor(IUnknown *, REFIID, void **);
+
 /* explorer ("cabinet") window messages */
 #ifndef CWM_GETISHELLBROWSER
 #define CWM_GETISHELLBROWSER (WM_USER + 7)
