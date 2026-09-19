@@ -8,6 +8,7 @@
  */
 
 #include "precomp.h"
+#include "sinksnapshot.h"
 
 #include <wine/debug.h>
 WINE_DEFAULT_DEBUG_CHANNEL(msctf);
@@ -267,6 +268,7 @@ protected:
     LRESULT _ThreadFocusHookProc(INT nCode, WPARAM wParam, LPARAM lParam);
 
     HRESULT SetupWindowsHook();
+    HRESULT DispatchKey(WPARAM wParam, LPARAM lParam, BOOL *pfEaten, BOOL test, BOOL keyUp);
 };
 
 ////////////////////////////////////////////////////////////////////////////
@@ -971,16 +973,56 @@ STDMETHODIMP CThreadMgr::GetForeground(_Out_ CLSID *pclsid)
     return S_OK;
 }
 
+HRESULT CThreadMgr::DispatchKey(WPARAM wParam, LPARAM lParam, BOOL *pfEaten, BOOL test, BOOL keyUp)
+{
+    if (!pfEaten)
+        return E_INVALIDARG;
+    *pfEaten = FALSE;
+
+    if (!m_focus || !m_foregroundKeyEventSink)
+        return S_OK;
+
+    AddRef();
+    ITfKeyEventSink *sink = m_foregroundKeyEventSink;
+    ITfDocumentMgr *document = m_focus;
+    sink->AddRef();
+    document->AddRef();
+
+    ITfContext *context = NULL;
+    HRESULT hr = document->GetTop(&context);
+    document->Release();
+    if (SUCCEEDED(hr) && context)
+    {
+        if (test)
+            hr = keyUp ? sink->OnTestKeyUp(context, wParam, lParam, pfEaten)
+                       : sink->OnTestKeyDown(context, wParam, lParam, pfEaten);
+        else
+            hr = keyUp ? sink->OnKeyUp(context, wParam, lParam, pfEaten)
+                       : sink->OnKeyDown(context, wParam, lParam, pfEaten);
+        context->Release();
+    }
+    sink->Release();
+    if (!test && SUCCEEDED(hr))
+    {
+        CSinkSnapshot sinks;
+        if (SUCCEEDED(sinks.Capture(&m_KeyTraceEventSink)))
+            for (ULONG i = 0; i < sinks.Count(); ++i)
+            {
+                ITfKeyTraceEventSink *trace = static_cast<ITfKeyTraceEventSink *>(sinks[i]);
+                if (keyUp) trace->OnKeyTraceUp(wParam, lParam);
+                else trace->OnKeyTraceDown(wParam, lParam);
+            }
+    }
+    Release();
+    return hr;
+}
+
 STDMETHODIMP CThreadMgr::TestKeyDown(
     _In_ WPARAM wParam,
     _In_ LPARAM lParam,
     _Out_ BOOL *pfEaten)
 {
-    FIXME("STUB:(%p)\n", this);
-    if (!pfEaten)
-        return E_INVALIDARG;
-    *pfEaten = FALSE;
-    return S_OK;
+    return DispatchKey(wParam, lParam, pfEaten, TRUE, FALSE);
 }
 
 STDMETHODIMP CThreadMgr::TestKeyUp(
@@ -988,11 +1030,7 @@ STDMETHODIMP CThreadMgr::TestKeyUp(
     _In_ LPARAM lParam,
     _Out_ BOOL *pfEaten)
 {
-    FIXME("STUB:(%p)\n", this);
-    if (!pfEaten)
-        return E_INVALIDARG;
-    *pfEaten = FALSE;
-    return S_OK;
+    return DispatchKey(wParam, lParam, pfEaten, TRUE, TRUE);
 }
 
 STDMETHODIMP CThreadMgr::KeyDown(
@@ -1000,11 +1038,7 @@ STDMETHODIMP CThreadMgr::KeyDown(
     _In_ LPARAM lParam,
     _Out_ BOOL *pfEaten)
 {
-    FIXME("STUB:(%p)\n", this);
-    if (!pfEaten)
-        return E_INVALIDARG;
-    *pfEaten = FALSE;
-    return E_NOTIMPL;
+    return DispatchKey(wParam, lParam, pfEaten, FALSE, FALSE);
 }
 
 STDMETHODIMP CThreadMgr::KeyUp(
@@ -1012,11 +1046,7 @@ STDMETHODIMP CThreadMgr::KeyUp(
     _In_ LPARAM lParam,
     _Out_ BOOL *pfEaten)
 {
-    FIXME("STUB:(%p)\n", this);
-    if (!pfEaten)
-        return E_INVALIDARG;
-    *pfEaten = FALSE;
-    return E_NOTIMPL;
+    return DispatchKey(wParam, lParam, pfEaten, FALSE, TRUE);
 }
 
 STDMETHODIMP CThreadMgr::GetPreservedKey(
