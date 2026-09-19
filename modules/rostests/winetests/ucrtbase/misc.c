@@ -1711,6 +1711,50 @@ static void test__get_heap_handle(void)
     ok((HANDLE)_get_heap_handle() == GetProcessHeap(), "Expected _get_heap_handle() to return GetProcessHeap()\n");
 }
 
+static void test_remainderf(void)
+{
+    static const struct { float x, y, expected; } cases[] =
+    {
+        {0.0f, 360.0f, 0.0f}, {-0.0f, 360.0f, -0.0f},
+        {5.0f, 2.0f, 1.0f}, {7.0f, 2.0f, -1.0f},
+        {-5.0f, 2.0f, -1.0f}, {-7.0f, 2.0f, 1.0f},
+        {7.0f, -2.0f, -1.0f}, {540.0f, 360.0f, -180.0f},
+        {900.0f, 360.0f, 180.0f}, {-360.0f, 360.0f, -0.0f},
+        {FLT_MAX, 1.0f, 0.0f}, {FLT_MIN, FLT_MAX, FLT_MIN}
+    };
+    HMODULE module = GetModuleHandleA("ucrtbase.dll");
+    float (__cdecl *funcs[2])(float, float);
+    union { float f; unsigned int u; } result, expected, infinity, nan, tiny;
+    unsigned int i, j;
+    funcs[0] = (void *)GetProcAddress(module, "remainderf");
+    funcs[1] = (void *)GetProcAddress(module, "_o_remainderf");
+    infinity.u = 0x7f800000;
+    nan.u = 0x7fc00001;
+    tiny.u = 1;
+    for (j = 0; j < ARRAY_SIZE(funcs); ++j)
+    {
+        ok(!!funcs[j], "missing remainderf export %u\n", j);
+        if (!funcs[j]) continue;
+        for (i = 0; i < ARRAY_SIZE(cases); ++i)
+        {
+            result.f = funcs[j](cases[i].x, cases[i].y);
+            expected.f = cases[i].expected;
+            ok(result.u == expected.u, "export %u case %u: %#x, expected %#x\n", j, i, result.u, expected.u);
+        }
+        result.f = funcs[j](3.0f * tiny.f, 2.0f * tiny.f);
+        expected.f = -tiny.f;
+        ok(result.u == expected.u, "subnormal tie: %#x\n", result.u);
+        result.f = funcs[j](1.0f, infinity.f);
+        ok(result.f == 1.0f, "finite/infinity: %g\n", result.f);
+        result.f = funcs[j](infinity.f, 1.0f);
+        ok(_isnan(result.f), "infinity numerator: %g\n", result.f);
+        result.f = funcs[j](1.0f, 0.0f);
+        ok(_isnan(result.f), "zero divisor: %g\n", result.f);
+        result.f = funcs[j](nan.f, 1.0f);
+        ok(_isnan(result.f), "NaN numerator: %g\n", result.f);
+    }
+}
+
 START_TEST(misc)
 {
     int arg_c;
@@ -1731,6 +1775,7 @@ START_TEST(misc)
         return;
     }
 
+    test_remainderf();
     test_invalid_parameter_handler();
     test__initialize_onexit_table();
     test__register_onexit_function();
