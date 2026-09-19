@@ -219,6 +219,9 @@ add_custom_command(
     VERBATIM)
 add_custom_target(mesa_gallium DEPENDS "${MESA_GALLIUM_ICD_STAGE}")
 add_cd_file(FILE "${MESA_GALLIUM_ICD_STAGE}" TARGET mesa_gallium DESTINATION reactos/system32 FOR all)
+# ExternalProject DLLs are staged files rather than CMake module targets.
+# Catalog the exact stripped images shipped to the guest.
+set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_FILES "${MESA_GALLIUM_ICD_STAGE}")
 if(_mesa_d3d_umd_enabled)
     add_custom_command(
         OUTPUT "${MESA_D3D_UMD_STAGE}"
@@ -230,5 +233,6 @@ if(_mesa_d3d_umd_enabled)
     add_custom_target(mesa_d3d_umd DEPENDS "${MESA_D3D_UMD_STAGE}")
     add_dependencies(mesa_gallium mesa_d3d_umd)
     add_cd_file(FILE "${MESA_D3D_UMD_STAGE}" TARGET mesa_d3d_umd DESTINATION reactos/system32 FOR all)
+    set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_FILES "${MESA_D3D_UMD_STAGE}")
 endif()
 message(STATUS "Mesa Gallium OpenGL ICD (${ARCH}: ${MESA_GALLIUM_DRIVERS}): Release build from ${MESA_SOURCE_DIR}")
