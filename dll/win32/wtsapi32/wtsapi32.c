@@ -31,6 +31,7 @@
 #include "winnls.h"
 #include "lmcons.h"
 #include "wtsapi32.h"
+#include <reactos/wtssession.h>
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wtsapi);
@@ -690,8 +691,7 @@ BOOL WINAPI WTSQueryUserConfigW(LPWSTR pServerName, LPWSTR pUserName, WTS_CONFIG
  */
 BOOL WINAPI WTSRegisterSessionNotification(HWND hWnd, DWORD dwFlags)
 {
-    FIXME("Stub %p 0x%08lx\n", hWnd, dwFlags);
-    return TRUE;
+    return WTSRegisterSessionNotificationEx(WTS_CURRENT_SERVER_HANDLE, hWnd, dwFlags);
 }
 
 /************************************************************
@@ -699,8 +699,12 @@ BOOL WINAPI WTSRegisterSessionNotification(HWND hWnd, DWORD dwFlags)
  */
 BOOL WINAPI WTSRegisterSessionNotificationEx(HANDLE hServer, HWND hWnd, DWORD dwFlags)
 {
-    FIXME("Stub %p %p 0x%08lx\n", hServer, hWnd, dwFlags);
-    return TRUE;
+    if (hServer != WTS_CURRENT_SERVER_HANDLE)
+    {
+        SetLastError(ERROR_NOT_SUPPORTED);
+        return FALSE;
+    }
+    return NtUserCallTwoParam((DWORD_PTR)hWnd, dwFlags, ROS_WTS_REGISTER);
 }
 
 
@@ -792,8 +796,7 @@ BOOL WINAPI WTSTerminateProcess(HANDLE hServer, DWORD ProcessId, DWORD ExitCode)
  */
 BOOL WINAPI WTSUnRegisterSessionNotification(HWND hWnd)
 {
-    FIXME("Stub %p\n", hWnd);
-    return FALSE;
+    return WTSUnRegisterSessionNotificationEx(WTS_CURRENT_SERVER_HANDLE, hWnd);
 }
 
 /************************************************************
@@ -801,8 +804,12 @@ BOOL WINAPI WTSUnRegisterSessionNotification(HWND hWnd)
  */
 BOOL WINAPI WTSUnRegisterSessionNotificationEx(HANDLE hServer, HWND hWnd)
 {
-    FIXME("Stub %p %p\n", hServer, hWnd);
-    return FALSE;
+    if (hServer != WTS_CURRENT_SERVER_HANDLE)
+    {
+        SetLastError(ERROR_NOT_SUPPORTED);
+        return FALSE;
+    }
+    return NtUserCallTwoParam((DWORD_PTR)hWnd, 0, ROS_WTS_UNREGISTER);
 }
 
 

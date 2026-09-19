@@ -9,6 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include "winlogon.h"
+#include <reactos/wtssession.h>
 
 /* GLOBALS *******************************************************************/
 
@@ -576,11 +577,25 @@ CallNotificationDlls(
 {
     PLIST_ENTRY ListEntry;
     WLX_NOTIFICATION_INFO Info;
+    DWORD Event = 0, SessionId;
 
     /* Check for invalid notification type */
     ASSERT(Type < LastHandler);
 
     TRACE("CallNotificationDlls(%s)\n", FuncNames[Type]);
+
+    switch (Type)
+    {
+        case LogonHandler: Event = WTS_SESSION_LOGON; break;
+        case LogoffHandler: Event = WTS_SESSION_LOGOFF; break;
+        case LockHandler: Event = WTS_SESSION_LOCK; break;
+        case UnlockHandler: Event = WTS_SESSION_UNLOCK; break;
+        case DisconnectHandler: Event = WTS_CONSOLE_DISCONNECT; break;
+        case ReconnectHandler: Event = WTS_CONSOLE_CONNECT; break;
+        default: break;
+    }
+    if (Event && ProcessIdToSessionId(GetCurrentProcessId(), &SessionId))
+        NtUserCallTwoParam(Event, SessionId, ROS_WTS_NOTIFY);
 
     /* Set up the notification info structure template */
     Info.Size = sizeof(Info);

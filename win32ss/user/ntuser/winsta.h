@@ -67,6 +67,10 @@ extern HANDLE gpidLogon;
 extern HWND hwndSAS;
 extern UNICODE_STRING gustrWindowStationsDir;
 
+BOOL FASTCALL IntRegisterSessionNotification(PWND Window, ULONG Flags);
+BOOL FASTCALL IntUnregisterSessionNotification(PWND Window, BOOL Destroying);
+BOOL FASTCALL IntNotifySessionChange(ULONG Event, ULONG SessionId);
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI

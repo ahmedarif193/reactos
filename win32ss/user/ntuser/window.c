@@ -733,6 +733,7 @@ LRESULT co_UserFreeWindow(PWND Window,
    if (gspwndLockUpdate == Window)
       gspwndLockUpdate = NULL;
 
+   IntUnregisterSessionNotification(Window, TRUE);
    IntUnlinkWindow(Window);
 
    if (Window->PropListItems)

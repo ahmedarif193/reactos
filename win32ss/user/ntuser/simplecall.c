@@ -10,6 +10,7 @@
 #include <win32k.h>
 #include <reactos/dwmframe.h>
 #include <reactos/usertouch.h>
+#include <reactos/wtssession.h>
 
 DBG_DEFAULT_CHANNEL(UserMisc);
 
@@ -565,6 +566,27 @@ NtUserCallTwoParam(
 
     switch (Routine)
     {
+        case ROS_WTS_REGISTER:
+        case ROS_WTS_UNREGISTER:
+            Window = UserGetWindowObject((HWND)Param1);
+            Ret = FALSE;
+            if (!Window)
+                break;
+            if (Window->head.pti->ppi != gptiCurrent->ppi)
+            {
+                EngSetLastError(ERROR_ACCESS_DENIED);
+                break;
+            }
+            if (Routine == ROS_WTS_REGISTER)
+                Ret = IntRegisterSessionNotification(Window, (ULONG)Param2);
+            else
+                Ret = IntUnregisterSessionNotification(Window, FALSE);
+            break;
+
+        case ROS_WTS_NOTIFY:
+            Ret = IntNotifySessionChange((ULONG)Param1, (ULONG)Param2);
+            break;
+
         case ROS_TOUCH_REGISTER:
         case ROS_TOUCH_UNREGISTER:
         case ROS_TOUCH_QUERY:
