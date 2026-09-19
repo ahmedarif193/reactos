@@ -66,6 +66,7 @@
 @ cdecl PeLdrScanImportDescriptorTable()
 
 # UI
+@ cdecl UiDiscardFirmwareScreen()
 @ cdecl UiDisplayMenu()
 @ cdecl UiDrawBackdrop()
 @ cdecl UiDrawProgressBarCenter()
@@ -76,6 +77,7 @@
 @ cdecl UiGetScreenHeight()
 @ cdecl UiIndicateProgress()
 @ cdecl UiInitialize()
+@ extern UiKeepFirmwareScreen
 @ cdecl UiMessageBox()
 @ cdecl UiMessageBoxCritical()
 @ cdecl UiResetForSOS()
@@ -106,6 +108,7 @@
 @ cdecl MachPrepareForReactOS()
 @ cdecl MachGetExtendedBIOSData()
 @ cdecl MachVideoGetFontsFromFirmware()
+@ extern MachVtbl
 @ cdecl PxeCallApi()
 @ cdecl RamDiskInitialize()
 @ cdecl Reboot()

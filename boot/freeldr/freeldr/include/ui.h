@@ -43,7 +43,7 @@ extern BOOLEAN UiShowTime;              // Whether to draw the time
 extern BOOLEAN UiMenuBox;               // Whether to draw a box around the menu
 extern BOOLEAN UiCenterMenu;            // Whether to use a centered or left-aligned menu
 extern BOOLEAN UiUseSpecialEffects;     // Whether to use fade effects
-extern BOOLEAN UiKeepFirmwareScreen;
+extern FLDRAPI BOOLEAN UiKeepFirmwareScreen;
 
 extern CHAR UiTitleBoxTitleText[260];   // Title box's title text
 
