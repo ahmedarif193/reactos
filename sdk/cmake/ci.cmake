@@ -11,7 +11,14 @@ set(_ci_files "")
 set(_ci_inputs "")
 foreach(_ci_target IN LISTS _ci_targets)
     list(APPEND _ci_files "$<TARGET_FILE:${_ci_target}>")
-    string(APPEND _ci_inputs "$<TARGET_FILE:${_ci_target}>\n")
+endforeach()
+# Some OS DLLs are produced by nested builds and staged/stripped before
+# installation. Their declared file outputs carry the producer dependencies.
+get_property(_ci_staged_files GLOBAL PROPERTY CI_SYSTEM_FILES)
+list(APPEND _ci_files ${_ci_staged_files})
+list(REMOVE_DUPLICATES _ci_files)
+foreach(_ci_file IN LISTS _ci_files)
+    string(APPEND _ci_inputs "${_ci_file}\n")
 endforeach()
 file(GENERATE OUTPUT "${REACTOS_BINARY_DIR}/sdk/lib/ci/catalog-$<CONFIG>.txt" CONTENT "${_ci_inputs}")
 add_custom_command(

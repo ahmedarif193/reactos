@@ -44,6 +44,7 @@ list(APPEND SOURCE
     LoadLibraryExW.c
     LockFileEx.c
     SandboxLaunch.c
+    SystemImageCatalog.c
     SharedMemorySecurity.c
     SharedMemoryTransfer.c
     LocaleNameToLCID.c
