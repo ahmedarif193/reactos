@@ -3578,8 +3578,9 @@ HalpPhase0GetPciDataByOffsetArm64(
         return 0;
     }
 
+    /* The early diagnostic scan is restricted to QEMU's segment zero. */
     if (HalpArm64AccessPciConfigSpace(FALSE,
-                                      HALP_ACPI_SEGMENT_ANY,
+                                      0,
                                       Bus,
                                       PciSlot,
                                       Buffer,
@@ -3615,8 +3616,9 @@ HalpPhase0SetPciDataByOffsetArm64(
         return 0;
     }
 
+    /* Use the same explicit segment as the diagnostic reads. */
     if (HalpArm64AccessPciConfigSpace(TRUE,
-                                      HALP_ACPI_SEGMENT_ANY,
+                                      0,
                                       Bus,
                                       PciSlot,
                                       Buffer,
@@ -4418,11 +4420,18 @@ HalpAcpiEnumeratePciBusDebug(VOID)
      * separate MCFG segments. This early diagnostic pass runs before the
      * ACPI PCI roots have selected their _SEG/_STA state, so probing an
      * arbitrary segment can manufacture devices from unrelated MMIO data.
-     * Functional PCI discovery is performed later by the segment-aware PnP
-     * bus driver; keep this phase read-only and limited to MCFG reporting.
+     * QEMU's virt machine has a known, active segment-zero root. Retain the
+     * detailed diagnostic scan there when MCFG describes a single window;
+     * other platforms must wait for segment-aware ACPI/PnP discovery.
      */
-    HalpPciLogEcamCoverage();
-    return;
+    if (!HaliGetCachedAcpiTable(FADT_SIGNATURE, "BOCHS", "BXPC") ||
+        !HalpAcpiMcfgAllocations || HalpAcpiMcfgAllocationCount != 1 ||
+        HalpAcpiMcfgAllocations[0].PciSegment != 0 ||
+        HalpAcpiMcfgAllocations[0].StartBusNumber != 0)
+    {
+        DbgPrint("HAL: Early PCI hardware dump deferred to ACPI/PnP discovery.\n");
+        return;
+    }
 #endif
 
     /* Print PCI bus enumeration header */
@@ -4444,6 +4453,11 @@ HalpAcpiEnumeratePciBusDebug(VOID)
     for (BusNumber = 0; BusNumber < 256; BusNumber++)
     {
         BOOLEAN BusHadAnyDevice = FALSE;
+
+#if defined(HALP_ARM64)
+        if (BusNumber > HalpAcpiMcfgAllocations[0].EndBusNumber)
+            break;
+#endif
 
         /* Try to read from bus - if it fails, still try all slots for bus 0 */
         PciSlot.u.AsULONG = 0;
