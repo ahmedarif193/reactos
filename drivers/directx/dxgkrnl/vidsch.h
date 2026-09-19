@@ -86,6 +86,10 @@ typedef enum _VIDSCH_SCHEDULER_STATE
 #define VIDSCH_INLINE_PATCHES       64
 #define VIDSCH_MAX_PENDING_PACKETS  512
 #define VIDSCH_CONTEXT_BACKPRESSURE_MS 100
+/* Bound each producer before assigning fixed hardware fence identities.
+ * Otherwise one immediate-mode producer can reserve 64 packets ahead of
+ * the compositor, which cannot safely overtake those patched fences. */
+#define VIDSCH_CONTEXT_QUEUE_DEPTH     8
 
 /* VIDSCH_DMA_PACKET.SubmitFlags uses the DXGK_SUBMITCOMMANDFLAGS layout. */
 #define VIDSCH_SUBMITFLAG_PAGING        0x00000001u

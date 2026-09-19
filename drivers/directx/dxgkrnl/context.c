@@ -1071,6 +1071,7 @@ DxgkpCreateContextStream(_Inout_ PDXGKRNL_CONTEXT Context)
     Info.Size = DXGMMS2_CREATE_CONTEXT_STREAM_INFO_V1_SIZE;
     Info.Version = DXGMMS2_CONTEXT_STREAM_VERSION_1;
     Info.NodeOrdinal = Context->NodeOrdinal;
+    Info.QueueDepth = VIDSCH_CONTEXT_QUEUE_DEPTH;
     Stream = NULL;
     Status = Interface.CreateContextStream(Interface.AdapterHandle, &Info, &Stream);
     if (!NT_SUCCESS(Status))
