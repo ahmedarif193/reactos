@@ -141,6 +141,8 @@ KiDecrementThreadQuantum(
 
 //
 // Enters a Guarded Region
+// Compiler barriers keep protected memory accesses inside the APC-disabled
+// interval. This is same-thread APC exclusion, not inter-CPU synchronization.
 //
 #define KeEnterGuardedRegionThread(_Thread)                                 \
 {                                                                           \
@@ -152,6 +154,7 @@ KiDecrementThreadQuantum(
                                                                             \
     /* Disable Special APCs */                                              \
     (_Thread)->SpecialApcDisable--;                                         \
+    _ReadWriteBarrier();                                                    \
 }
 
 #define KeEnterGuardedRegion()                                              \
@@ -170,6 +173,8 @@ KiDecrementThreadQuantum(
     ASSERT((_Thread) == KeGetCurrentThread());                              \
     ASSERT((_Thread)->SpecialApcDisable < 0);                               \
                                                                             \
+    /* Keep protected accesses before reenabling APC delivery. */           \
+    _ReadWriteBarrier();                                                    \
     /* Leave region and check if APCs are OK now */                         \
     if (!(++(_Thread)->SpecialApcDisable))                                  \
     {                                                                       \
@@ -201,6 +206,7 @@ KiDecrementThreadQuantum(
                                                                             \
     /* Disable Kernel APCs */                                               \
     (_Thread)->KernelApcDisable--;                                          \
+    _ReadWriteBarrier();                                                    \
 }
 
 #define KeEnterCriticalRegion()                                             \
@@ -218,6 +224,8 @@ KiDecrementThreadQuantum(
     ASSERT((_Thread) == KeGetCurrentThread());                              \
     ASSERT((_Thread)->KernelApcDisable < 0);                                \
                                                                             \
+    /* Keep protected accesses before reenabling APC delivery. */           \
+    _ReadWriteBarrier();                                                    \
     /* Enable Kernel APCs */                                                \
     (_Thread)->KernelApcDisable++;                                          \
                                                                             \
