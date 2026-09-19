@@ -1071,6 +1071,149 @@ TestEnginesAreIndependent(
     ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core), "both engines drained");
 }
 
+static PDXGMMS2_SCHED_PACKET
+AdmitReadyTestPacket(PDXGMMS2_SCHED_TEST_STATE State, ULONG Fence, ULONGLONG Owner, BOOLEAN Unbound)
+{
+    DXGMMS2_SCHEDULER_ADMIT_INFO_V1 Info;
+    PDXGMMS2_SCHED_PACKET Packet = AllocateTestPacket(State);
+    ULONG Assigned;
+    NTSTATUS Status;
+
+    InitAdmitInfo(&Info, 0, (ULONGLONG)(ULONG_PTR)Packet, Owner);
+    Info.Flags = DXGMMS2_SCHEDULER_ADMIT_PREFENCED;
+    if (Unbound)
+        Info.Flags |= DXGMMS2_SCHEDULER_ADMIT_VIRTUAL | DXGMMS2_SCHEDULER_ADMIT_UNBOUND_FENCE;
+    Info.SubmissionFenceId = Fence;
+    Status = Dxgmms2SchedCoreAdmit(&State->Core, &Info, Packet, &Assigned);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Assigned, Fence);
+    return Packet;
+}
+
+static VOID
+TestReadyContextScheduling(PDXGMMS2_SCHED_TEST_STATE State)
+{
+    PDXGMMS2_SCHED_PACKET A, A2, B, Fixed, Failed;
+    PDXGMMS2_SCHED_PACKET Retired[4];
+    DXGMMS2_SCHEDULER_CLAIM_V1 Claim;
+    ULONGLONG Cookie;
+    ULONG Count;
+    NTSTATUS Status;
+
+    RtlZeroMemory(State, sizeof(*State));
+    Dxgmms2SchedCoreInitialize(&State->Core);
+    Status = Dxgmms2SchedCoreStart(&State->Core, 1);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    A = AdmitReadyTestPacket(State, 100, 1, TRUE);
+    A2 = AdmitReadyTestPacket(State, 101, 1, TRUE);
+    B = AdmitReadyTestPacket(State, 102, 2, TRUE);
+    ok_bool_false(Dxgmms2SchedCorePeekNext(&State->Core, 0, &Cookie), "all contexts blocked");
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, A2->PacketCookie);
+    ok_eq_hex(Status, STATUS_DEVICE_BUSY);
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, B->PacketCookie);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_bool_true(Dxgmms2SchedCorePeekNext(&State->Core, 0, &Cookie), "independent context ready");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Cookie, B);
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "claim independent context");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, B);
+    ok_eq_ulong(Claim.SubmissionFenceId, 100);
+    ok_eq_ulong(A->SubmissionFenceId, 101);
+    ok_eq_ulong(A2->SubmissionFenceId, 102);
+    Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, 100, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 0);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, 0, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 1);
+    ok_eq_pointer(Retired[0], B);
+    ok_eq_ulong(State->Core.TotalPackets, 2);
+    Count = Dxgmms2SchedCoreCancelOwner(&State->Core, 1, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 2);
+    ok_eq_ulong(Retired[0]->SubmissionFenceId, 101);
+    ok_eq_ulong(Retired[1]->SubmissionFenceId, 102);
+    ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core), "all reserved identities returned");
+
+    A = AdmitReadyTestPacket(State, 103, 1, TRUE);
+    Fixed = AdmitReadyTestPacket(State, 104, 3, FALSE);
+    B = AdmitReadyTestPacket(State, 105, 2, TRUE);
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, B->PacketCookie);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_bool_false(Dxgmms2SchedCorePeekNext(&State->Core, 0, &Cookie), "fixed fence blocks reordering");
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, A->PacketCookie);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "claim original head");
+    ok_eq_ulong(Claim.SubmissionFenceId, 103);
+    Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Count = Dxgmms2SchedCoreResetDispatched(&State->Core, 0, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 1);
+    ok_bool_true(A->FenceBound, "preemption preserves published fence ownership");
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "claim preempted packet");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, A);
+    ok_eq_ulong(Claim.SubmissionFenceId, 103);
+    Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "fixed packet follows resubmission");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, Fixed);
+    ok_eq_ulong(Claim.SubmissionFenceId, 104);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_CANCELLED, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_pointer(Failed, Fixed);
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "ready packet follows fixed fence");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, B);
+    ok_eq_ulong(Claim.SubmissionFenceId, 105);
+    Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, 105, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 2);
+    ok_eq_pointer(Retired[0], A);
+    ok_eq_pointer(Retired[1], B);
+    ok_bool_true(Dxgmms2SchedCoreIsIdle(&State->Core), "fixed and virtual paths drained");
+
+    /* Reassigning a reservation across wrap must neither produce zero nor
+     * retire the blocked work with the earlier ready packet. */
+    State->Core.Engines[0].LastCompletedFenceId = 0xfffffffc;
+    A = AdmitReadyTestPacket(State, 0xfffffffd, 1, TRUE);
+    A2 = AdmitReadyTestPacket(State, 0xfffffffe, 1, TRUE);
+    Fixed = AdmitReadyTestPacket(State, 0xffffffff, 3, TRUE);
+    B = AdmitReadyTestPacket(State, 1, 2, TRUE);
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, B->PacketCookie);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "claim across wrap");
+    ok_eq_ulong(Claim.SubmissionFenceId, 0xfffffffd);
+    ok_eq_ulong(A->SubmissionFenceId, 0xfffffffe);
+    ok_eq_ulong(A2->SubmissionFenceId, 0xffffffff);
+    ok_eq_ulong(Fixed->SubmissionFenceId, 1);
+    Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, 0xfffffffd, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 1);
+    ok_eq_pointer(Retired[0], B);
+    Count = Dxgmms2SchedCoreAbortAll(&State->Core, TRUE, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 3);
+    ok_eq_ulong(Retired[0]->SubmissionFenceId, 0xfffffffe);
+    ok_eq_ulong(Retired[1]->SubmissionFenceId, 0xffffffff);
+    ok_eq_ulong(Retired[2]->SubmissionFenceId, 1);
+    Status = Dxgmms2SchedCoreStop(&State->Core);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+}
+
 START_TEST(Dxgmms2Scheduler)
 {
     PDXGMMS2_SCHED_TEST_STATE State;
@@ -1097,6 +1240,7 @@ START_TEST(Dxgmms2Scheduler)
     TestEngineStateMachine(State);
     TestEnginesAreIndependent(State);
     TestStopAndRestart(State);
+    TestReadyContextScheduling(State);
 
     ExFreePoolWithTag(State, TAG_DXGMMS2_SCHED_TEST);
 }

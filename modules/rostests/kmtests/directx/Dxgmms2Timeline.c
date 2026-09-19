@@ -487,6 +487,61 @@ Cleanup:
     ExFreePoolWithTag(Timeline, TAG_DXGMMS2_TIMELINE_TEST);
 }
 
+static VOID TestIdentityReuseAndCollisions(VOID)
+{
+    PDXGMMS2_TIMELINE_CONTEXT Timeline;
+    ULONG Generation;
+    ULONG Index;
+    ULONG Fence;
+    NTSTATUS Status;
+
+    Timeline = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Timeline), TAG_DXGMMS2_TIMELINE_TEST);
+    ok(Timeline != NULL, "reuse timeline allocation failed\n");
+    if (Timeline == NULL)
+        return;
+    Dxgmms2TimelineInitialize(Timeline);
+    Status = Dxgmms2TimelineStart(Timeline, DXGMMS2_TIMELINE_MAX_NODES);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+    Generation = (ULONG)InterlockedCompareExchange(&Timeline->Generation, 0, 0);
+
+    for (Index = 0; Index < 2 * DXGMMS2_TIMELINE_IDENTITY_CAPACITY; ++Index)
+    {
+        Fence = Dxgmms2TimelineAllocateFence(Timeline, Generation);
+        ok_bool_true(Dxgmms2TimelineReserveFence(Timeline, Generation, 0, Fence), "reserve reused slot");
+        ok_bool_true(Dxgmms2TimelinePublishFence(Timeline, Generation, 0, Fence), "publish reused slot");
+        ok_bool_true(Dxgmms2TimelineIsFencePublished(Timeline, Generation, 0, Fence), "find reused slot");
+        ok_bool_true(Dxgmms2TimelineReleaseFence(Timeline, Generation, 0, Fence), "release reused slot");
+    }
+    ok_eq_long(InterlockedCompareExchange(&Timeline->LiveIdentityCount, 0, 0), 0);
+
+    for (Index = 0; Index < 64; ++Index)
+    {
+        Fence = 13 + Index * DXGMMS2_TIMELINE_IDENTITY_CAPACITY;
+        ok_bool_true(Dxgmms2TimelineReserveFence(Timeline, Generation, 31, Fence), "reserve colliding identity");
+    }
+    for (Index = 0; Index < 63; ++Index)
+    {
+        Fence = 13 + Index * DXGMMS2_TIMELINE_IDENTITY_CAPACITY;
+        ok_bool_true(Dxgmms2TimelineReleaseFence(Timeline, Generation, 31, Fence), "release collision predecessor");
+    }
+    Fence = 13 + 63 * DXGMMS2_TIMELINE_IDENTITY_CAPACITY;
+    ok_bool_false(Dxgmms2TimelineReserveFence(Timeline, Generation, 31, Fence), "reject duplicate beyond tombstones");
+    ok_bool_true(Dxgmms2TimelinePublishFence(Timeline, Generation, 31, Fence), "publish beyond tombstones");
+    ok_bool_true(Dxgmms2TimelineIsFencePublished(Timeline, Generation, 31, Fence), "find beyond tombstones");
+    ok_bool_true(Dxgmms2TimelineReserveFence(Timeline, Generation, 31, 13), "reuse collision predecessor");
+    ok_eq_long(InterlockedCompareExchange(&Timeline->LiveIdentityCount, 0, 0), 2);
+    Status = Dxgmms2TimelineResetFenceIdentities(Timeline, Generation);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_bool_false(Dxgmms2TimelineIsFencePublished(Timeline, Generation, 31, Fence), "reset collision chain");
+    ok_bool_true(Dxgmms2TimelineReserveFence(Timeline, Generation, 31, Fence), "reserve after reset");
+    ok_bool_true(Dxgmms2TimelineReleaseFence(Timeline, Generation, 31, Fence), "release after reset");
+
+Cleanup:
+    ExFreePoolWithTag(Timeline, TAG_DXGMMS2_TIMELINE_TEST);
+}
+
 START_TEST(Dxgmms2Timeline)
 {
     PDXGMMS2_TIMELINE_CONTEXT Timeline;
@@ -607,4 +662,5 @@ START_TEST(Dxgmms2Timeline)
     TestFenceWrapAcrossRestart();
     TestReserveReleaseStress();
     TestMaintenanceDrainStress();
+    TestIdentityReuseAndCollisions();
 }
