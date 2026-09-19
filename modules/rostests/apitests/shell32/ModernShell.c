@@ -27,6 +27,10 @@ static void test_association_queries(IApplicationAssociationRegistration *regist
     ok(hr == S_OK && value && !lstrcmpW(value, progid), "effective user class: %#lx\n", hr);
     CoTaskMemFree(value);
     value = NULL;
+    hr = IApplicationAssociationRegistration_QueryCurrentDefault(registration, extension, AT_FILEEXTENSION, AL_USER, &value);
+    ok(hr == S_OK && value && !lstrcmpW(value, progid), "explicit user class: %#lx\n", hr);
+    CoTaskMemFree(value);
+    value = NULL;
     hr = IApplicationAssociationRegistration_QueryCurrentDefault(registration, extension, AT_FILEEXTENSION, AL_MACHINE, &value);
     ok(hr == HRESULT_FROM_WIN32(ERROR_NO_ASSOCIATION) && !value, "machine query used user association: %#lx\n", hr);
     CoTaskMemFree(value);
@@ -47,6 +51,10 @@ static void test_association_queries(IApplicationAssociationRegistration *regist
     ok(hr == S_OK && is_default, "QueryAppIsDefault: %#lx, %d\n", hr, is_default);
     hr = IApplicationAssociationRegistration_QueryAppIsDefaultAll(registration, AL_EFFECTIVE, app, &is_default);
     ok(hr == S_OK && is_default, "QueryAppIsDefaultAll: %#lx, %d\n", hr, is_default);
+    hr = IApplicationAssociationRegistration_QueryAppIsDefault(registration, extension, AT_FILEEXTENSION, AL_USER, app, &is_default);
+    ok(hr == S_OK && is_default, "QueryAppIsDefault user: %#lx, %d\n", hr, is_default);
+    hr = IApplicationAssociationRegistration_QueryAppIsDefaultAll(registration, AL_USER, app, &is_default);
+    ok(hr == S_OK && is_default, "QueryAppIsDefaultAll user: %#lx, %d\n", hr, is_default);
     RegSetValueExW(choice, L"ProgId", 0, REG_SZ, (BYTE *)progid, sizeof(progid));
     hr = IApplicationAssociationRegistration_QueryAppIsDefaultAll(registration, AL_EFFECTIVE, app, &is_default);
     ok(hr == S_OK && !is_default, "changed default: %#lx, %d\n", hr, is_default);
