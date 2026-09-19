@@ -268,8 +268,36 @@ static void Test_GradientCaptions(void)
     CloseHandle(g_hSemDisplayChange);
 }
 
+static void test_modern_queries(void)
+{
+    DWORD timeout = 0xdeadbeef, original, size = 0;
+    BOOL ret;
+    ret = SystemParametersInfoW(SPI_GETCARETTIMEOUT, 0, &original, 0);
+    ok(ret, "SPI_GETCARETTIMEOUT failed: %lu\n", GetLastError());
+    if (ret)
+    {
+        ret = SystemParametersInfoW(SPI_SETCARETTIMEOUT, 0, (void *)(ULONG_PTR)7500, 0);
+        ok(ret, "SPI_SETCARETTIMEOUT failed: %lu\n", GetLastError());
+        if (ret)
+        {
+            ret = SystemParametersInfoW(SPI_GETCARETTIMEOUT, 0, &timeout, 0);
+            ok(ret && timeout == 7500, "caret timeout: %lu (success %d)\n", timeout, ret);
+            ret = SystemParametersInfoW(SPI_SETCARETTIMEOUT, 0, (void *)(ULONG_PTR)original, 0);
+            ok(ret, "failed to restore caret timeout\n");
+        }
+    }
+    ret = SystemParametersInfoW(0x2028, 0, &size, 0);
+    ok(ret && size > 0 && size <= 1024, "cursor size: %lu (success %d)\n", size, ret);
+    ret = SystemParametersInfoW(SPI_GETCARETTIMEOUT, 0, NULL, 0);
+    ok(!ret, "NULL timeout output accepted\n");
+    ret = SystemParametersInfoW(0x2028, 0, NULL, 0);
+    ok(!ret, "NULL cursor-size output accepted\n");
+}
+
 START_TEST(SystemParametersInfo)
 {
+    test_modern_queries();
+
     RegisterSimpleClass(SysParamsTestProc, L"sysparamstest");
     hWnd1 = CreateWindowW(L"sysparamstest", L"sysparamstest", WS_OVERLAPPEDWINDOW,
                         20, 20, 300, 300, NULL, NULL, 0, NULL);

@@ -164,6 +164,7 @@ typedef struct _SPIVALUES
     DWORD dwActiveTrackingTimeout;
     DWORD dwForegroundFlashCount;
     DWORD dwCaretWidth;
+    DWORD dwCaretTimeout;
 
     /* Snap */
     // BOOL bWinArranging; (g_bWindowSnapEnabled)
