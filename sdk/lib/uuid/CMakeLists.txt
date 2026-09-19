@@ -31,6 +31,7 @@ list(APPEND IDL_SOURCES
 #    dbgprop.idl
     d3d9on12.idl
     dimm.idl
+    directmanipulation.idl
     dispex.idl
 #    dlmgridl.idl
     docobj.idl

@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#pragma makedep register
+[
+    uuid(54e211b6-3650-4f75-8334-fa359598e1c5),
+    threading(both)
+]
+coclass DirectManipulationManager
+{
+    [default] interface IDirectManipulationManager;
+    interface IDirectManipulationManager2;
+}
