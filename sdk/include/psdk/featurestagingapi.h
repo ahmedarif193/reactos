@@ -26,6 +26,7 @@ extern "C" {
 DECLARE_HANDLE(FEATURE_STATE_CHANGE_SUBSCRIPTION);
 
 typedef void WINAPI FEATURE_STATE_CHANGE_CALLBACK(void*);
+typedef FEATURE_STATE_CHANGE_CALLBACK *PFEATURE_STATE_CHANGE_CALLBACK;
 
 typedef enum FEATURE_CHANGE_TIME
 {
@@ -41,6 +42,32 @@ typedef enum FEATURE_ENABLED_STATE
     FEATURE_ENABLED_STATE_DISABLED,
     FEATURE_ENABLED_STATE_ENABLED
 } FEATURE_ENABLED_STATE;
+
+typedef struct FEATURE_ERROR
+{
+    HRESULT hr;
+    UINT16 lineNumber;
+    PCSTR file;
+    PCSTR process;
+    PCSTR module;
+    UINT32 callerReturnAddressOffset;
+    PCSTR callerModule;
+    PCSTR message;
+    UINT16 originLineNumber;
+    PCSTR originFile;
+    PCSTR originModule;
+    UINT32 originCallerReturnAddressOffset;
+    PCSTR originCallerModule;
+    PCSTR originName;
+} FEATURE_ERROR;
+
+FEATURE_ENABLED_STATE WINAPI GetFeatureEnabledState(UINT32, FEATURE_CHANGE_TIME);
+UINT32 WINAPI GetFeatureVariant(UINT32, FEATURE_CHANGE_TIME, UINT32*, BOOL*);
+void WINAPI RecordFeatureError(UINT32, const FEATURE_ERROR*);
+void WINAPI RecordFeatureUsage(UINT32, UINT32, UINT32, PCSTR);
+void WINAPI SubscribeFeatureStateChangeNotification(FEATURE_STATE_CHANGE_SUBSCRIPTION*,
+                                                    PFEATURE_STATE_CHANGE_CALLBACK, void*);
+void WINAPI UnsubscribeFeatureStateChangeNotification(FEATURE_STATE_CHANGE_SUBSCRIPTION);
 
 #ifdef __cplusplus
 }

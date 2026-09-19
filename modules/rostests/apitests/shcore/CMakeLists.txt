@@ -1,4 +1,5 @@
 list(APPEND SOURCE
+    FeatureStaging.c
     ForwardedOrdinals.c
     RegistryHelpers.c
     Win81ExportSurface.c

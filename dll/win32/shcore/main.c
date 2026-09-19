@@ -2724,7 +2724,9 @@ BOOL WINAPI IsOS(DWORD feature)
 void WINAPI SubscribeFeatureStateChangeNotification(FEATURE_STATE_CHANGE_SUBSCRIPTION *subscription,
                                                     FEATURE_STATE_CHANGE_CALLBACK *callback, void *context)
 {
-    FIXME("(%p, %p, %p) stub\n", subscription, callback, context);
+    TRACE("(%p, %p, %p)\n", subscription, callback, context);
+    /* There are no feature overrides or state transitions to subscribe to. */
+    if (subscription) *subscription = NULL;
 }
 
 /*************************************************************************
@@ -2732,8 +2734,34 @@ void WINAPI SubscribeFeatureStateChangeNotification(FEATURE_STATE_CHANGE_SUBSCRI
  */
 FEATURE_ENABLED_STATE WINAPI GetFeatureEnabledState(UINT32 feature, FEATURE_CHANGE_TIME change_time)
 {
-    FIXME("(%u, %u) stub\n", feature, change_time);
+    TRACE("(%u, %u)\n", feature, change_time);
     return FEATURE_ENABLED_STATE_DEFAULT;
+}
+
+/* Feature staging has no overrides in ReactOS. Leave feature selection to
+ * each caller's compiled defaults, and never report a pending notification. */
+UINT32 WINAPI GetFeatureVariant(UINT32 feature, FEATURE_CHANGE_TIME change_time,
+                               UINT32 *payload, BOOL *notification)
+{
+    TRACE("(%u, %u, %p, %p)\n", feature, change_time, payload, notification);
+    if (payload) *payload = 0;
+    if (notification) *notification = FALSE;
+    return 0;
+}
+
+void WINAPI UnsubscribeFeatureStateChangeNotification(FEATURE_STATE_CHANGE_SUBSCRIPTION subscription)
+{
+    TRACE("(%p)\n", subscription);
+}
+
+void WINAPI RecordFeatureError(UINT32 feature, const FEATURE_ERROR *error)
+{
+    TRACE("(%u, %p)\n", feature, error);
+}
+
+void WINAPI RecordFeatureUsage(UINT32 feature, UINT32 kind, UINT32 addend, const char *origin)
+{
+    TRACE("(%u, %u, %u, %s)\n", feature, kind, addend, debugstr_a(origin));
 }
 
 /*************************************************************************
