@@ -10,13 +10,12 @@
 WINE_DEFAULT_DEBUG_CHANNEL(shcn);
 
 CRITICAL_SECTION SHELL32_ChangenotifyCS;
+static HWND s_hwndServer;
 
 // This function requests creation of the server window if it doesn't exist yet
 static HWND
 GetNotificationServer(BOOL bCreate)
 {
-    static HWND s_hwndServer = NULL;
-
     // use cache if any
     if (s_hwndServer && IsWindow(s_hwndServer))
         return s_hwndServer;
@@ -33,7 +32,8 @@ GetNotificationServer(BOOL bCreate)
     HWND hwndServer = (HWND)SendMessageW(hwndShell, WM_DESKTOP_GET_CNOTIFY_SERVER, bCreate, 0);
     if (!IsWindow(hwndServer))
     {
-        ERR("Unable to get server window\n");
+        if (bCreate)
+            ERR("Unable to get server window\n");
         hwndServer = NULL;
     }
 
@@ -51,9 +51,9 @@ EXTERN_C void InitChangeNotifications(void)
 // This function will be called from DllMain.DLL_PROCESS_DETACH.
 EXTERN_C void FreeChangeNotifications(void)
 {
-    HWND hwndServer = GetNotificationServer(FALSE);
-    if (hwndServer)
-        SendMessageW(hwndServer, CN_UNREGISTER_PROCESS, GetCurrentProcessId(), 0);
+    /* DLL detach must not wait for the shell while holding the loader lock. */
+    if (s_hwndServer && IsWindow(s_hwndServer))
+        PostMessageW(s_hwndServer, CN_UNREGISTER_PROCESS, GetCurrentProcessId(), 0);
     DeleteCriticalSection(&SHELL32_ChangenotifyCS);
 }
 
