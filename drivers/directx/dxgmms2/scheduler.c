@@ -528,6 +528,25 @@ Dxgmms2SchedulerGetOldestDispatchedOnEngine(
     return Found;
 }
 
+static NTSTATUS
+NTAPI
+Dxgmms2SchedulerMarkPacketReady(
+    _In_ DXGMMS2_SCHEDULER_HANDLE Scheduler,
+    _In_ ULONG EngineOrdinal,
+    _In_ ULONGLONG PacketCookie)
+{
+    PDXGMMS2_ADAPTER_CONTEXT Context = Dxgmms2SchedulerContext(Scheduler);
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    if (Context == NULL)
+        return STATUS_INVALID_HANDLE;
+    KeAcquireSpinLock(&Context->SchedulerLock, &OldIrql);
+    Status = Dxgmms2SchedCoreMarkReady(&Context->SchedulerCore, EngineOrdinal, PacketCookie);
+    KeReleaseSpinLock(&Context->SchedulerLock, OldIrql);
+    return Status;
+}
+
 NTSTATUS
 Dxgmms2SchedulerStartAdapter(
     _Inout_ PDXGMMS2_ADAPTER_CONTEXT Context,
@@ -650,11 +669,13 @@ Dxgmms2QuerySchedulerInterface(
     SchedulerInterface->ResetDispatched = Dxgmms2SchedulerResetDispatched;
     SchedulerInterface->GetOldestDispatched = Dxgmms2SchedulerGetOldestDispatched;
     SchedulerInterface->PeekNextPacket = Dxgmms2SchedulerPeekNextPacket;
-    if (Capacity >= DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE)
+    if (Capacity >= FIELD_OFFSET(DXGMMS2_SCHEDULER_INTERFACE_V1, MarkPacketReady))
     {
         SchedulerInterface->GetOldestDispatchedOnEngine =
             Dxgmms2SchedulerGetOldestDispatchedOnEngine;
     }
+    if (Capacity >= DXGMMS2_SCHEDULER_INTERFACE_V1_SIZE)
+        SchedulerInterface->MarkPacketReady = Dxgmms2SchedulerMarkPacketReady;
 
     Dxgmms2DereferenceAdapterContext(Context);
     return STATUS_SUCCESS;

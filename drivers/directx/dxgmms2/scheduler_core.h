@@ -28,6 +28,8 @@ typedef struct _DXGMMS2_SCHED_PACKET
     LONG       Priority;
     BOOLEAN    Dispatched;      /* handed to the miniport at least once */
     BOOLEAN    Claimed;         /* a dispatch claim is outstanding */
+    BOOLEAN    Ready;
+    BOOLEAN    FenceBound;
 } DXGMMS2_SCHED_PACKET, *PDXGMMS2_SCHED_PACKET;
 
 typedef struct _DXGMMS2_SCHED_ENGINE
@@ -80,6 +82,7 @@ NTSTATUS Dxgmms2SchedCoreReserve(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG En
 VOID Dxgmms2SchedCoreUnreserve(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal);
 ULONG Dxgmms2SchedCoreResetDispatched(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Out_writes_to_(Capacity, return) PDXGMMS2_SCHED_PACKET *Packets, _In_ ULONG Capacity);
 BOOLEAN Dxgmms2SchedCorePeekNext(_In_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Out_ PULONGLONG OutPacketCookie);
+NTSTATUS Dxgmms2SchedCoreMarkReady(_Inout_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _In_ ULONGLONG PacketCookie);
 NTSTATUS Dxgmms2SchedCoreStop(_Inout_ PDXGMMS2_SCHED_CORE Core);
 BOOLEAN Dxgmms2SchedCoreGetOldestDispatched(_In_ PDXGMMS2_SCHED_CORE Core, _Out_ PULONG EngineOrdinal, _Out_ PULONG FenceId, _Out_ PULONGLONG PacketCookie);
 BOOLEAN Dxgmms2SchedCoreGetOldestDispatchedOnEngine(_In_ PDXGMMS2_SCHED_CORE Core, _In_ ULONG EngineOrdinal, _Out_ PULONG FenceId, _Out_ PULONGLONG PacketCookie);

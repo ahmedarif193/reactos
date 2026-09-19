@@ -110,7 +110,7 @@ typedef struct _VIDSCH_DMA_PACKET
     /* Dispatch claim dxgmms2 issued for this packet, committed exactly once. */
     ULONGLONG                   SchedulerClaimToken;
 
-    /* Monotonically increasing fence ID assigned at submit time. */
+    /* Reserved at admission; unbound virtual work gets its final ID at claim. */
     ULONG                       SubmissionFenceId;
 
     /* Engine ordinal this packet targets. */
@@ -183,6 +183,8 @@ typedef struct _VIDSCH_DMA_PACKET
     BOOLEAN                     Kicked;
     /* Ownership is valid only until the adapter resets this epoch. */
     BOOLEAN                     FenceIdentityReserved;
+    /* Claims and retirement records own the current reserved identity. */
+    BOOLEAN                     UnboundFence;
     ULONG                       FenceIdentityEpoch;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
     /* Set before the provider retires a faulted packet as a fence watermark. */
@@ -490,8 +492,7 @@ VidSchSubmitCommandVirtual(
     _In_ ULONG DmaBufferSize,
     _In_reads_bytes_opt_(DriverPrivateDataSize) PVOID DriverPrivateData,
     _In_ ULONG DriverPrivateDataSize,
-    _In_ BOOLEAN NullRendering,
-    _Out_ ULONG *OutFenceId);
+    _In_ BOOLEAN NullRendering);
 
 /*
  * VidSchSubmitCommandTracked

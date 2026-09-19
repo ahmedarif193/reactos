@@ -402,7 +402,10 @@ typedef PVOID DXGMMS2_SCHEDULER_HANDLE;
 /* The caller holds a ReserveSlot reservation on this engine; admission
  * consumes it instead of taking a second slot against the depth bound. */
 #define DXGMMS2_SCHEDULER_ADMIT_CONSUME_RESERVATION   0x00000010UL
-#define DXGMMS2_SCHEDULER_ADMIT_VALID_MASK            0x0000001FUL
+/* The reserved fence is unbound until dispatch. No patched command or caller
+ * may retain it; claims and retirement records carry the final identity. */
+#define DXGMMS2_SCHEDULER_ADMIT_UNBOUND_FENCE         0x00000020UL
+#define DXGMMS2_SCHEDULER_ADMIT_VALID_MASK            0x0000003FUL
 
 typedef enum _DXGMMS2_SCHEDULER_ENGINE_STATE
 {
@@ -431,11 +434,9 @@ typedef enum _DXGMMS2_SCHEDULER_RETIRE_REASON
 } DXGMMS2_SCHEDULER_RETIRE_REASON;
 
 /*
- * Admission is strictly FIFO per engine, and deliberately so: dxgkrnl's
- * tracked-DMA retirement requires fence order to equal queue order to equal
- * kick order, so reordering by Priority would let a later fence retire work
- * that has not executed.  Priority is recorded because it ranks eviction
- * victims, not because it reorders dispatch.
+ * Patched and published fence identities retain FIFO order. Unbound virtual
+ * work may use an earlier unpublished reservation once its context is ready.
+ * Priority is recorded for accounting; readiness controls dispatch here.
  */
 typedef struct _DXGMMS2_SCHEDULER_ADMIT_INFO_V1
 {
@@ -520,6 +521,7 @@ typedef VOID     (NTAPI *PDXGMMS2_SCHEDULER_UNRESERVE)(_In_ DXGMMS2_SCHEDULER_HA
 typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_RESET_DISPATCHED)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _Out_writes_to_(Capacity, *Count) ULONGLONG *PacketCookies, _In_ ULONG Capacity, _Out_ PULONG Count);
 typedef BOOLEAN  (NTAPI *PDXGMMS2_SCHEDULER_OLDEST_DISPATCHED)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _Out_ PULONG EngineOrdinal, _Out_ PULONG FenceId, _Out_ PULONGLONG PacketCookie);
 typedef BOOLEAN  (NTAPI *PDXGMMS2_SCHEDULER_OLDEST_DISPATCHED_ON_ENGINE)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _Out_ PULONG FenceId, _Out_ PULONGLONG PacketCookie);
+typedef NTSTATUS (NTAPI *PDXGMMS2_SCHEDULER_MARK_READY)(_In_ DXGMMS2_SCHEDULER_HANDLE Scheduler, _In_ ULONG EngineOrdinal, _In_ ULONGLONG PacketCookie);
 
 typedef struct _DXGMMS2_SCHEDULER_INTERFACE_V1
 {
@@ -550,6 +552,7 @@ typedef struct _DXGMMS2_SCHEDULER_INTERFACE_V1
     PDXGMMS2_SCHEDULER_PEEK_NEXT PeekNextPacket;
     /* Appended so the V1 prefix and every existing slot retain their offsets. */
     PDXGMMS2_SCHEDULER_OLDEST_DISPATCHED_ON_ENGINE GetOldestDispatchedOnEngine;
+    PDXGMMS2_SCHEDULER_MARK_READY MarkPacketReady;
 } DXGMMS2_SCHEDULER_INTERFACE_V1, *PDXGMMS2_SCHEDULER_INTERFACE_V1;
 
 typedef NTSTATUS (NTAPI *PDXGMMS2_QUERY_SCHEDULER_INTERFACE)(_In_ DXGMMS2_ADAPTER_HANDLE Adapter, _Inout_ DXGMMS2_SCHEDULER_INTERFACE_V1 *SchedulerInterface);
