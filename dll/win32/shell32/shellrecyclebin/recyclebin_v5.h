@@ -39,7 +39,7 @@ DECLARE_INTERFACE_(IRecycleBin5, IRecycleBin)
 
     /* IRecycleBin interface */
     STDMETHOD(DeleteFile)(THIS_ IN LPCWSTR szFileName) PURE;
-    STDMETHOD(EmptyRecycleBin)(THIS);
+    STDMETHOD(EmptyRecycleBin)(THIS) PURE;
     STDMETHOD(EnumObjects)(THIS_ OUT IRecycleBinEnumList **ppEnumList) PURE;
     STDMETHOD(GetDirectory)(THIS_ LPWSTR szPath) PURE;
 

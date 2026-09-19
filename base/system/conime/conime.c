@@ -544,7 +544,7 @@ UINT IntGetCharInfoWidth(PCHAR_INFO pCharInfo, UINT cch)
     return ret;
 }
 
-inline UINT IntGetCharDisplayWidth(WCHAR wch)
+static inline UINT IntGetCharDisplayWidth(WCHAR wch)
 {
     return IntIsDoubleWidthChar(wch) ? 2 : 1;
 }
@@ -606,7 +606,7 @@ BOOL IntFillImeDisplayCHT(PCONENTRY pEntry, PIMEDISPLAY pDisplay)
     return TRUE;
 }
 
-inline void IntCopyUnicodeToCharInfo(PCHAR_INFO* ppDest, PCWSTR pszSrc)
+static inline void IntCopyUnicodeToCharInfo(PCHAR_INFO* ppDest, PCWSTR pszSrc)
 {
     if (!ppDest || !*ppDest || !pszSrc)
         return;
@@ -1250,7 +1250,7 @@ BOOL ConIme_OnInit(HWND hwnd, HANDLE hConsole, HWND hwndConsole)
 }
 
 //! WM_CREATE
-inline BOOL ConIme_OnCreate(HWND hwnd)
+static inline BOOL ConIme_OnCreate(HWND hwnd)
 {
     HIMC hIMC = ImmGetContext(hwnd);
     if (hIMC)
@@ -2529,7 +2529,7 @@ BOOL ConIme_OnNotifyOpenCandidate(HWND hwnd, LPARAM lParam, BOOL bOpen)
     return TRUE;
 }
 
-inline BOOL ConIme_OnNotifyChangeCandidate(HWND hwnd, LPARAM lParam)
+static inline BOOL ConIme_OnNotifyChangeCandidate(HWND hwnd, LPARAM lParam)
 {
     return ConIme_OnNotifyOpenCandidate(hwnd, lParam, FALSE);
 }

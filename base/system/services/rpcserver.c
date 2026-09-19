@@ -993,7 +993,8 @@ RCloseServiceHandle(
         return ERROR_SUCCESS;
     }
 
-    DPRINT("Invalid handle tag (Tag %lx)\n", hManager->Handle.Tag);
+    DPRINT("Invalid service handle (manager=%p service=%p)\n",
+           hManager, hService);
 
     return ERROR_INVALID_HANDLE;
 }

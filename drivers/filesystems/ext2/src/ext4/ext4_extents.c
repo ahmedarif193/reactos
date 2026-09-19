@@ -2187,7 +2187,7 @@ fix_extent_len:
  * returns 1 if current index have to be freed (even partial)
  */
 #ifdef __REACTOS__
-inline int
+static inline int
 #else
 static int inline
 #endif
