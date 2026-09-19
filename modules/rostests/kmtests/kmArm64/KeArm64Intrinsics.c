@@ -242,6 +242,12 @@ static VOID Arm64IntrinsicsCheck(VOID)
         ok((Sctlr & 0x1005) == 0x1005, "CPU %lu MMU/cache disabled: SCTLR=0x%I64x\n", Processor, Sctlr);
         ok((Policy->Tcr & 0x3F00) == 0x3500, "CPU %lu TTBR0 walk is not inner-shareable WB: %I64x\n", Processor, Policy->Tcr);
         ok(((Policy->Tcr >> 16) & 0x3F00) == 0x3500, "CPU %lu TTBR1 walk is not inner-shareable WB: %I64x\n", Processor, Policy->Tcr);
+        if ((Midr & 0xff00fff0) == 0x4100d0b0)
+        {
+            ok(((Policy->Pmcr >> 11) & 31) >= 6,
+               "CPU %lu Cortex-A76 event counters hidden from EL1: PMCR=%I64x\n",
+               Processor, Policy->Pmcr);
+        }
         dump_trace("ARM64_POLICY cpu=%lu sctlr=0x%I64x tcr=0x%I64x mair=0x%I64x pmcr=0x%I64x pmcnten=0x%I64x pmccfiltr=0x%I64x\n",
                    Processor, Sctlr, Policy->Tcr, Policy->Mair, Policy->Pmcr, Policy->Pmcnten, Policy->Pmccfiltr);
     }
