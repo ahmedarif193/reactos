@@ -328,7 +328,8 @@ RPC_STATUS WINAPI UuidCreateNil(UUID *Uuid)
  */
 RPC_STATUS WINAPI UuidCreate(UUID *Uuid)
 {
-    RtlGenRandom(Uuid, sizeof(*Uuid));
+    if (!RtlGenRandom(Uuid, sizeof(*Uuid)))
+        return RPC_S_INTERNAL_ERROR;
     /* Clear the version bits and set the version (4) */
     Uuid->Data3 &= 0x0fff;
     Uuid->Data3 |= (4 << 12);

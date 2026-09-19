@@ -60,11 +60,14 @@ static CRITICAL_SECTION ndr_context_cs = { &ndr_context_debug, -1, 0, 0, 0, 0 };
 
 static struct context_handle_entry *get_context_entry(NDR_CCONTEXT CContext)
 {
-    struct context_handle_entry *che = CContext;
+    struct context_handle_entry *che;
 
-    if (che->magic != NDR_CONTEXT_HANDLE_MAGIC)
-        return NULL;
-    return che;
+    /* A closed context can retain the magic in freed heap storage. Checking
+     * the live list also avoids dereferencing a stale or invalid pointer. */
+    LIST_FOR_EACH_ENTRY(che, &context_handle_list, struct context_handle_entry, entry)
+        if (che == CContext)
+            return che->magic == NDR_CONTEXT_HANDLE_MAGIC ? che : NULL;
+    return NULL;
 }
 
 static struct context_handle_entry *context_entry_from_guid(LPCGUID uuid)
@@ -107,6 +110,11 @@ void WINAPI NDRCContextMarshall(NDR_CCONTEXT CContext, void *pBuff)
     {
         EnterCriticalSection(&ndr_context_cs);
         che = get_context_entry(CContext);
+        if (!che)
+        {
+            LeaveCriticalSection(&ndr_context_cs);
+            RpcRaiseException(RPC_X_SS_CONTEXT_MISMATCH);
+        }
         memcpy(pBuff, &che->wire_data, sizeof (ndr_context_handle));
         LeaveCriticalSection(&ndr_context_cs);
     }
