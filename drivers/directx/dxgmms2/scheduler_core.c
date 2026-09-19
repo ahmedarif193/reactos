@@ -184,6 +184,8 @@ Dxgmms2SchedCoreNextReady(
     _Out_ PLIST_ENTRY *First)
 {
     PLIST_ENTRY Entry;
+    PDXGMMS2_SCHED_PACKET Best = NULL;
+    ULONG Dispatched = 0;
 
     *First = NULL;
     if (Engine->State != Dxgmms2EngineIdle && Engine->State != Dxgmms2EngineRunning)
@@ -193,18 +195,34 @@ Dxgmms2SchedCoreNextReady(
         PDXGMMS2_SCHED_PACKET Packet = CONTAINING_RECORD(Entry, DXGMMS2_SCHED_PACKET, Entry);
 
         if (Packet->Dispatched)
+        {
+            if (++Dispatched >= DXGMMS2_SCHED_MAX_DISPATCHED)
+                return NULL;
             continue;
+        }
         if (*First == NULL)
             *First = Entry;
         if (Packet->Claimed)
             return NULL;
-        /* A fixed fence cannot overtake a lower reservation. */
-        if (Packet->FenceBound && *First != Entry)
-            return NULL;
-        if (Packet->Ready)
-            return Packet;
+        /* Published/patched fences are barriers. Only unbound reservations
+         * can exchange fence slots; neither a fixed packet nor anything
+         * after it may pass the earlier reservations. */
+        if (Packet->FenceBound)
+            return *First == Entry && Packet->Ready ? Packet : Best;
+        if (!Packet->Ready)
+            continue;
+        /* MarkReady admits only the first unsubmitted packet of each owner.
+         * Prefer higher priority, and rotate equal-priority ready contexts.
+         * FIFO admission alone lets a busy game delay DWM by a whole batch. */
+        if (Best == NULL || Packet->Priority > Best->Priority ||
+            (Packet->Priority == Best->Priority &&
+             Best->OwnerCookie == Engine->LastDispatchedOwner &&
+             Packet->OwnerCookie != Engine->LastDispatchedOwner))
+        {
+            Best = Packet;
+        }
     }
-    return NULL;
+    return Best;
 }
 
 NTSTATUS
@@ -341,6 +359,7 @@ Dxgmms2SchedCorePublishDispatch(
         return STATUS_INVALID_DEVICE_STATE;
     Packet->Dispatched = TRUE;
     Packet->FenceBound = TRUE;
+    Engine->LastDispatchedOwner = Packet->OwnerCookie;
     Packet->DispatchSequence = ++Core->NextDispatchSequence;
     if (Packet->DispatchSequence == 0)
         Packet->DispatchSequence = ++Core->NextDispatchSequence;

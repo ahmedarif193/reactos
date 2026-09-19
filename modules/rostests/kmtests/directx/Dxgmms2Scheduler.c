@@ -1214,6 +1214,122 @@ TestReadyContextScheduling(PDXGMMS2_SCHED_TEST_STATE State)
     ok_eq_hex(Status, STATUS_SUCCESS);
 }
 
+static VOID
+TestReadyContextFairness(PDXGMMS2_SCHED_TEST_STATE State)
+{
+    PDXGMMS2_SCHED_PACKET A, A2, B, Failed, Retired[3];
+    DXGMMS2_SCHEDULER_CLAIM_V1 Claim;
+    ULONG Count;
+    NTSTATUS Status;
+
+    RtlZeroMemory(State, sizeof(*State));
+    Dxgmms2SchedCoreInitialize(&State->Core);
+    Status = Dxgmms2SchedCoreStart(&State->Core, 1);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    A = AdmitReadyTestPacket(State, 1, 1, TRUE);
+    A2 = AdmitReadyTestPacket(State, 2, 1, TRUE);
+    B = AdmitReadyTestPacket(State, 3, 2, TRUE);
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, A->PacketCookie);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, B->PacketCookie);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "first producer is eligible");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, A);
+    Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, A2->PacketCookie);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "competing context gets the next turn");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, B);
+    ok_eq_ulong(Claim.SubmissionFenceId, 2);
+    ok_eq_ulong(A2->SubmissionFenceId, 3);
+    Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, 2, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 2);
+    ok_eq_pointer(Retired[0], A);
+    ok_eq_pointer(Retired[1], B);
+    ok_bool_false(A2->Dispatched, "later producer packet is not retired early");
+    Count = Dxgmms2SchedCoreAbortAll(&State->Core, TRUE, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 1);
+    ok_eq_pointer(Retired[0], A2);
+    Status = Dxgmms2SchedCoreStop(&State->Core);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+
+    /* A higher priority eligible context wins before an equal-priority turn.
+     * Fixed-fence barriers and same-owner dependencies remain covered above. */
+    RtlZeroMemory(State, sizeof(*State));
+    Dxgmms2SchedCoreInitialize(&State->Core);
+    Status = Dxgmms2SchedCoreStart(&State->Core, 1);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    A = AdmitReadyTestPacket(State, 1, 1, TRUE);
+    B = AdmitReadyTestPacket(State, 2, 2, TRUE);
+    B->Priority = 1;
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, A->PacketCookie);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = Dxgmms2SchedCoreMarkReady(&State->Core, 0, B->PacketCookie);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    InitClaim(&Claim);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "higher priority context first");
+    ok_eq_pointer((PVOID)(ULONG_PTR)Claim.PacketCookie, B);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_CANCELLED, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Count = Dxgmms2SchedCoreAbortAll(&State->Core, TRUE, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 1);
+    Status = Dxgmms2SchedCoreStop(&State->Core);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+}
+
+static VOID
+TestDispatchWindow(PDXGMMS2_SCHED_TEST_STATE State)
+{
+    PDXGMMS2_SCHED_PACKET Packet, Failed;
+    PDXGMMS2_SCHED_PACKET Retired[DXGMMS2_SCHED_MAX_DISPATCHED + 1];
+    DXGMMS2_SCHEDULER_CLAIM_V1 Claim;
+    ULONGLONG Cookie;
+    ULONG Index, Count, Fence;
+    NTSTATUS Status;
+
+    RtlZeroMemory(State, sizeof(*State));
+    Dxgmms2SchedCoreInitialize(&State->Core);
+    Status = Dxgmms2SchedCoreStart(&State->Core, 1);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    for (Index = 0; Index <= DXGMMS2_SCHED_MAX_DISPATCHED; ++Index)
+    {
+        Fence = AdmitOne(State, 0, 1, &Packet);
+        ok_eq_ulong(Fence, Index + 1);
+    }
+    for (Index = 0; Index < DXGMMS2_SCHED_MAX_DISPATCHED; ++Index)
+    {
+        InitClaim(&Claim);
+        ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "pipeline has room");
+        Status = Dxgmms2SchedCorePublishDispatch(&State->Core, 0, Claim.ClaimToken);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_SUCCESS, &Failed);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+    }
+    ok_bool_false(Dxgmms2SchedCorePeekNext(&State->Core, 0, &Cookie), "full hardware window blocks peek");
+    InitClaim(&Claim);
+    ok_bool_false(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "admitted work stays in the scheduler");
+    Count = Dxgmms2SchedCoreNotifyCompletion(&State->Core, 0, 1, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, 1);
+    ok_bool_true(Dxgmms2SchedCoreClaim(&State->Core, 0, &Claim), "retirement opens a pipeline slot");
+    ok_eq_ulong(Claim.SubmissionFenceId, DXGMMS2_SCHED_MAX_DISPATCHED + 1);
+    Status = Dxgmms2SchedCoreCompleteDispatch(&State->Core, 0, Claim.ClaimToken, STATUS_CANCELLED, &Failed);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Count = Dxgmms2SchedCoreAbortAll(&State->Core, TRUE, Retired, RTL_NUMBER_OF(Retired));
+    ok_eq_ulong(Count, DXGMMS2_SCHED_MAX_DISPATCHED - 1);
+    Status = Dxgmms2SchedCoreStop(&State->Core);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+}
+
 START_TEST(Dxgmms2Scheduler)
 {
     PDXGMMS2_SCHED_TEST_STATE State;
@@ -1241,6 +1357,8 @@ START_TEST(Dxgmms2Scheduler)
     TestEnginesAreIndependent(State);
     TestStopAndRestart(State);
     TestReadyContextScheduling(State);
+    TestReadyContextFairness(State);
+    TestDispatchWindow(State);
 
     ExFreePoolWithTag(State, TAG_DXGMMS2_SCHED_TEST);
 }

@@ -15,6 +15,9 @@
 #include <reactos/drivers/directx/dxgmms2.h>
 
 #define DXGMMS2_SCHED_MAX_PACKETS   512
+/* Keep scheduling decisions in the kernel instead of filling a miniport
+ * FIFO with an entire producer backlog. Admission capacity is unchanged. */
+#define DXGMMS2_SCHED_MAX_DISPATCHED 8
 
 typedef struct _DXGMMS2_SCHED_PACKET
 {
@@ -42,6 +45,7 @@ typedef struct _DXGMMS2_SCHED_ENGINE
     ULONG      LastCompletedFenceId;
     volatile LONG NextFenceId;
     ULONGLONG  NextClaimToken;
+    ULONGLONG  LastDispatchedOwner;
 } DXGMMS2_SCHED_ENGINE, *PDXGMMS2_SCHED_ENGINE;
 
 typedef struct _DXGMMS2_SCHED_CORE
