@@ -275,10 +275,22 @@ static const struct IUISettingsVtbl uisettings_vtbl =
 
 DEFINE_IINSPECTABLE( uisettings2, IUISettings2, struct uisettings, IUISettings_iface );
 
+/* Read only DWORD preferences; malformed or absent values use the desktop default. */
+static DWORD get_user_dword( const WCHAR *key, const WCHAR *name, DWORD fallback )
+{
+    DWORD value, size = sizeof(value);
+    if (RegGetValueW( HKEY_CURRENT_USER, key, name, RRF_RT_REG_DWORD, NULL, &value, &size ))
+        return fallback;
+    return value;
+}
+
 static HRESULT WINAPI uisettings2_get_TextScaleFactor( IUISettings2 *iface, DOUBLE *value )
 {
-    FIXME( "iface %p, value %p stub!\n", iface, value );
-    *value = 1.0;
+    DWORD scale;
+    if (!value) return E_POINTER;
+    scale = get_user_dword( L"Software\\Microsoft\\Accessibility", L"TextScaleFactor", 100 );
+    if (scale < 100 || scale > 225) scale = 100;
+    *value = scale / 100.0;
     return S_OK;
 }
 
@@ -449,8 +461,14 @@ DEFINE_IINSPECTABLE( uisettings4, IUISettings4, struct uisettings, IUISettings_i
 
 static HRESULT WINAPI uisettings4_get_AdvancedEffectsEnabled( IUISettings4 *iface, boolean *value )
 {
-    FIXME( "iface %p, value %p stub!.\n", iface, value );
-    *value = TRUE;
+    HIGHCONTRASTW contrast = { sizeof(contrast) };
+    BOOL disabled = FALSE;
+    if (!value) return E_POINTER;
+    SystemParametersInfoW( SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0 );
+    SystemParametersInfoW( SPI_GETDISABLEOVERLAPPEDCONTENT, 0, &disabled, 0 );
+    *value = !(contrast.dwFlags & HCF_HIGHCONTRASTON) && !disabled &&
+        !!get_user_dword( L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                          L"EnableTransparency", 1 );
     return S_OK;
 }
 
@@ -486,8 +504,8 @@ DEFINE_IINSPECTABLE( uisettings5, IUISettings5, struct uisettings, IUISettings_i
 
 static HRESULT WINAPI uisettings5_get_AutoHideScrollBars( IUISettings5 *iface, boolean *value )
 {
-    FIXME( "iface %p, value %p stub!.\n", iface, value );
-    *value = FALSE;
+    if (!value) return E_POINTER;
+    *value = !!get_user_dword( L"Control Panel\\Accessibility", L"DynamicScrollbars", 0 );
     return S_OK;
 }
 

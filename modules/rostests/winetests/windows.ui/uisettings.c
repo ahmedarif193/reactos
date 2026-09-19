@@ -276,6 +276,76 @@ static void test_AnimationsEnabled( IUISettings *uisettings )
     ok( enabled == client_area_animation, "Expected %d, got %d.\n", client_area_animation, enabled );
 }
 
+static void test_modern_preferences(IInspectable *inspectable)
+{
+    static const struct
+    {
+        const WCHAR *key, *name;
+        DWORD value;
+        const IID *iid;
+    } tests[] =
+    {
+        { L"Software\\Microsoft\\Accessibility", L"TextScaleFactor", 150, &IID_IUISettings2 },
+        { L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+          L"EnableTransparency", 0, &IID_IUISettings4 },
+        { L"Control Panel\\Accessibility", L"DynamicScrollbars", 1, &IID_IUISettings5 }
+    };
+    unsigned int i;
+    for (i = 0; i < ARRAY_SIZE(tests); ++i)
+    {
+        IUnknown *settings;
+        BYTE saved[1024];
+        DWORD type, size = sizeof(saved), disposition;
+        BOOL present;
+        HKEY key;
+        LONG status;
+        HRESULT hr = IInspectable_QueryInterface(inspectable, tests[i].iid, (void **)&settings);
+        if (hr == E_NOINTERFACE) { win_skip("settings interface %u unavailable\n", i); continue; }
+        ok(hr == S_OK, "settings interface %u: %#lx\n", i, hr);
+        if (FAILED(hr)) continue;
+        status = RegCreateKeyExW(HKEY_CURRENT_USER, tests[i].key, 0, NULL, 0,
+                                KEY_READ | KEY_WRITE, NULL, &key, &disposition);
+        if (status) { IUnknown_Release(settings); continue; }
+        status = RegQueryValueExW(key, tests[i].name, NULL, &type, saved, &size);
+        present = !status;
+        if (status && status != ERROR_FILE_NOT_FOUND)
+        {
+            skip("cannot preserve preference %u: %ld\n", i, status);
+            RegCloseKey(key);
+            IUnknown_Release(settings);
+            continue;
+        }
+        status = RegSetValueExW(key, tests[i].name, 0, REG_DWORD, (const BYTE *)&tests[i].value, sizeof(DWORD));
+        if (!status)
+        {
+            boolean enabled = 0xff;
+            DOUBLE scale = 0;
+            switch (i)
+            {
+            case 0:
+                hr = IUISettings2_get_TextScaleFactor((IUISettings2 *)settings, &scale);
+                ok(hr == S_OK && scale == 1.5, "TextScaleFactor: %#lx, %f\n", hr, scale);
+                break;
+            case 1:
+                hr = IUISettings4_get_AdvancedEffectsEnabled((IUISettings4 *)settings, &enabled);
+                ok(hr == S_OK && !enabled, "AdvancedEffectsEnabled: %#lx, %u\n", hr, enabled);
+                break;
+            case 2:
+                hr = IUISettings5_get_AutoHideScrollBars((IUISettings5 *)settings, &enabled);
+                ok(hr == S_OK && enabled, "AutoHideScrollBars: %#lx, %u\n", hr, enabled);
+                break;
+            }
+            if (present) status = RegSetValueExW(key, tests[i].name, 0, type, saved, size);
+            else status = RegDeleteValueW(key, tests[i].name);
+            ok(!status, "failed to restore preference %u: %ld\n", i, status);
+        }
+        else skip("cannot set preference %u: %ld\n", i, status);
+        RegCloseKey(key);
+        if (disposition == REG_CREATED_NEW_KEY) RegDeleteKeyW(HKEY_CURRENT_USER, tests[i].key);
+        IUnknown_Release(settings);
+    }
+}
+
 static void test_UISettings(void)
 {
     static const WCHAR *uisettings_name = L"Windows.UI.ViewManagement.UISettings";
@@ -340,6 +410,7 @@ static void test_UISettings(void)
 
     IUISettings2_Release( uisettings2 );
 
+    test_modern_preferences( inspectable );
     test_AnimationsEnabled( uisettings );
     test_AccentColor( uisettings3 );
 
