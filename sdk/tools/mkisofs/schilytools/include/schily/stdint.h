@@ -82,7 +82,7 @@
  */
 #define	TYPE_ISSIGNED(t)	(((t)-1) < ((t)0))
 #define	TYPE_ISUNSIGNED(t)	(!TYPE_ISSIGNED(t))
-#define	TYPE_MSBVAL(t)		((t)(~((t)0) << (sizeof (t)*CHAR_BIT - 1)))
+#define	TYPE_MSBVAL(t)		((t)((ULlong)-1 << (sizeof (t)*CHAR_BIT - 1)))
 #define	TYPE_MINVAL(t)		(TYPE_ISSIGNED(t)			\
 				    ? TYPE_MSBVAL(t)			\
 				    : ((t)0))

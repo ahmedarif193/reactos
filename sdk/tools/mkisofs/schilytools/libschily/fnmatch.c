@@ -369,14 +369,15 @@ rangematch(pattern, test, flags, newp, patmbs)
 					/*
 					 * Convert to the other case
 					 */
-					if (strcmp(class, "upper") == 0)
+					if (strcmp(class, "upper") == 0) {
 						if (iswctype(otest,
 						    wctype("lower")))
 							ok = 1;
-					else if (strcmp(class, "lower") == 0)
+					} else if (strcmp(class, "lower") == 0) {
 						if (iswctype(otest,
 						    wctype("upper")))
 							ok = 1;
+					}
 				}
 				continue;
 			}

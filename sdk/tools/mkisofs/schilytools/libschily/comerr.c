@@ -269,7 +269,7 @@ _comerr(f, exflg, exc, err, msg, args)
 	char	*prognam = get_progname();
 
 	if (silent_error(err)) {
-		js_fprintf(f, "%s: %r", prognam, msg, args);
+		js_fprintf(f, "%s: ", prognam);
 	} else {
 		errnam = errmsgstr(err);
 		if (errnam == NULL) {
@@ -277,8 +277,9 @@ _comerr(f, exflg, exc, err, msg, args)
 						"Error %d", err);
 			errnam = errbuf;
 		}
-		js_fprintf(f, "%s: %s. %r", prognam, errnam, msg, args);
+		js_fprintf(f, "%s: %s. ", prognam, errnam);
 	}
+	js_vfprintf(f, msg, args);
 	if (exflg) {
 		if (exflg & COMERR_EXCODE)
 			err = exc;

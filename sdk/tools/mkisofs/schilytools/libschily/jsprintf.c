@@ -196,3 +196,23 @@ js_fprintf(file, form, va_alist)
 	return (bb.count);
 }
 #endif
+
+/* Format a va_list without passing it through the nonstandard %r conversion. */
+EXPORT int
+js_vfprintf(FILE *file, const char *form, va_list args)
+{
+#ifdef USE_FPRFORMAT
+    return fprformat(file, form, args);
+#else
+    _BUF bb;
+
+    bb.ptr = bb.buf;
+    bb.cnt = BFSIZ;
+    bb.count = 0;
+    bb.f = file;
+    format(_bput, &bb, form, args);
+    if (bb.cnt < BFSIZ)
+        _bflush(&bb);
+    return bb.count;
+#endif
+}
