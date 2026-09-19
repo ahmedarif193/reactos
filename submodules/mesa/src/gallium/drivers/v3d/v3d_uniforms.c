@@ -40,6 +40,9 @@ get_texrect_scale(struct v3d_texture_stateobj *texstate,
         struct pipe_sampler_view *texture = texstate->textures[data];
         uint32_t dim;
 
+        if (!texture)
+                return fui(0.0f);
+
         if (contents == QUNIFORM_TEXRECT_SCALE_X)
                 dim = texture->texture->width0;
         else
@@ -54,6 +57,9 @@ get_texture_size(struct v3d_texture_stateobj *texstate,
                  uint32_t data)
 {
         struct pipe_sampler_view *texture = texstate->textures[data];
+        if (!texture)
+                return 0;
+
         switch (contents) {
         case QUNIFORM_TEXTURE_WIDTH:
                 if (texture->target == PIPE_BUFFER) {
@@ -198,11 +204,11 @@ write_tmu_p1(struct v3d_job *job,
          * sampler and psampler. As an additional assert, we can check that we
          * are not on a texel buffer case, as these don't have a sampler.
          */
-        assert(psview->target != PIPE_BUFFER);
+        assert(!psview || psview->target != PIPE_BUFFER);
         assert(sampler);
         assert(psampler);
 
-        if (sampler->border_color_variants)
+        if (sview && sampler->border_color_variants)
                 variant = sview->sampler_variant;
 
         uint32_t p1_packed = v3d_unit_data_get_offset(data);
@@ -367,7 +373,8 @@ v3d_write_uniforms(struct v3d_context *v3d, struct v3d_job *job,
 
                 case QUNIFORM_TEXTURE_FIRST_LEVEL:
                         cl_aligned_f(&uniforms,
-                                     texstate->textures[data]->u.tex.first_level);
+                                     texstate->textures[data] ?
+                                     texstate->textures[data]->u.tex.first_level : 0);
                         break;
 
                 case QUNIFORM_SPILL_OFFSET:

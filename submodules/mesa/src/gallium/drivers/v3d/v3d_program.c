@@ -587,9 +587,22 @@ v3d_free_compiled_shader(struct v3d_compiled_shader *shader)
 
 static void
 v3d_setup_shared_key(struct v3d_context *v3d, struct v3d_key *key,
-                     struct v3d_texture_stateobj *texstate)
+                     struct v3d_texture_stateobj *texstate,
+                     const nir_shader *shader)
 {
         const struct v3d_device_info *devinfo = &v3d->screen->devinfo;
+
+        /* Null views have zero size. Use the existing null-descriptor
+         * lowering so queries preserve zero instead of minifying it to one.
+         * Keep ordinary shaders on the existing fast path.
+         */
+        for (unsigned i = 0; i < ARRAY_SIZE(texstate->textures); ++i) {
+                if (BITSET_TEST(shader->info.textures_used, i) &&
+                    !texstate->textures[i]) {
+                        key->null_descriptor = true;
+                        break;
+                }
+        }
 
         for (int i = 0; i < texstate->num_textures; i++) {
                 struct pipe_sampler_view *sampler = texstate->textures[i];
@@ -630,7 +643,8 @@ v3d_update_compiled_fs(struct v3d_context *v3d, uint8_t prim_mode)
         }
 
         memset(key, 0, sizeof(*key));
-        v3d_setup_shared_key(v3d, &key->base, &v3d->tex[MESA_SHADER_FRAGMENT]);
+        v3d_setup_shared_key(v3d, &key->base, &v3d->tex[MESA_SHADER_FRAGMENT],
+                             v3d->prog.bind_fs->base.ir.nir);
         key->ucp_enables = v3d->rasterizer->base.clip_plane_enable;
         key->is_points = (prim_mode == MESA_PRIM_POINTS);
         key->is_lines = (prim_mode >= MESA_PRIM_LINES &&
@@ -803,7 +817,8 @@ v3d_update_compiled_gs(struct v3d_context *v3d, uint8_t prim_mode)
         }
 
         memset(key, 0, sizeof(*key));
-        v3d_setup_shared_key(v3d, &key->base, &v3d->tex[MESA_SHADER_GEOMETRY]);
+        v3d_setup_shared_key(v3d, &key->base, &v3d->tex[MESA_SHADER_GEOMETRY],
+                             v3d->prog.bind_gs->base.ir.nir);
         key->base.is_last_geometry_stage = true;
         key->num_used_outputs = v3d->prog.fs->prog_data.fs->num_inputs;
         STATIC_ASSERT(sizeof(key->used_outputs) ==
@@ -875,7 +890,8 @@ v3d_update_compiled_vs(struct v3d_context *v3d, uint8_t prim_mode)
         }
 
         memset(key, 0, sizeof(*key));
-        v3d_setup_shared_key(v3d, &key->base, &v3d->tex[MESA_SHADER_VERTEX]);
+        v3d_setup_shared_key(v3d, &key->base, &v3d->tex[MESA_SHADER_VERTEX],
+                             v3d->prog.bind_vs->base.ir.nir);
         key->base.is_last_geometry_stage = !v3d->prog.bind_gs;
 
         if (!v3d->prog.bind_gs) {
@@ -988,7 +1004,8 @@ v3d_update_compiled_cs(struct v3d_context *v3d)
         }
 
         memset(key, 0, sizeof(*key));
-        v3d_setup_shared_key(v3d, key, &v3d->tex[MESA_SHADER_COMPUTE]);
+        v3d_setup_shared_key(v3d, key, &v3d->tex[MESA_SHADER_COMPUTE],
+                             v3d->prog.bind_compute->base.ir.nir);
 
         struct v3d_compiled_shader *cs =
                 v3d_get_compiled_shader(v3d, key, sizeof(*key),
