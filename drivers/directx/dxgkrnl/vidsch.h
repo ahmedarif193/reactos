@@ -202,6 +202,9 @@ typedef struct _VIDSCH_DMA_PACKET
     ULONG64                     SignalFenceValue;
     DPT_SCOPE                   PresentationQueueTrace;
     DPT_SCOPE                   PresentationRetireTrace;
+    ULONGLONG                   PresentationWorkerVisit;
+    ULONGLONG                   PresentationWorkerClaim;
+    ULONGLONG                   PresentationRootTicks;
     WORK_QUEUE_ITEM             CleanupWorkItem;
     WORK_QUEUE_ITEM             DestroyWorkItem;
 

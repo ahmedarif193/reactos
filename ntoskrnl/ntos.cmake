@@ -482,6 +482,7 @@ elseif(ARCH STREQUAL "arm64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/boot.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/context.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/cpu.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/cpuaudit.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/early_uart.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/hypervisor.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/exceptinit.c

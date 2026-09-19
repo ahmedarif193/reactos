@@ -7,6 +7,9 @@
  */
 
 #include <ntoskrnl.h>
+#if defined(_M_ARM64)
+#include <reactos/cpuaudit.h>
+#endif
 #include <arm64trap.h>
 #define NDEBUG
 #include <debug.h>
@@ -699,7 +702,9 @@ KiArm64SwitchAddressSpace(
        interrupt-driven context switch cannot recurse on the same CPU. */
     __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
     __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
+    ULONGLONG AuditStart = KiCpuAuditActive ? KiCpuAuditClock() : 0;
     KiArm64AcquireAsidLock();
+    ULONGLONG AuditAcquired = AuditStart ? KiCpuAuditClock() : 0;
 
     if (KiArm64AsidsDisabled)
     {
@@ -761,6 +766,7 @@ KiArm64SwitchAddressSpace(
     KiArm64WriteUserTtbr(NewUserRoot, NewKernelRoot, (UCHAR)Asid, FALSE);
     KiArm64ActiveAsid[Processor] = (UCHAR)Asid;
     KiArm64ReleaseAsidLock();
+    if (AuditStart) KiCpuAuditEvent(CPU_AUDIT_ASID, 0, AuditAcquired - AuditStart, KiCpuAuditClock() - AuditStart);
     __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
     return TRUE;
 }

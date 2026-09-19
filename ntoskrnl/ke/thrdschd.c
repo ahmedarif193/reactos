@@ -9,6 +9,9 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#if defined(_M_ARM64)
+#include <reactos/cpuaudit.h>
+#endif
 #include <reactos/smpdbg.h>
 #define NDEBUG
 #include <debug.h>
@@ -721,6 +724,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
     /* Sanity checks */
     ASSERT(Thread->State == DeferredReady);
+#if defined(_M_ARM64)
+    KiCpuAuditReady(Thread);
+#endif
     ASSERT((Thread->Priority >= 0) && (Thread->Priority <= HIGH_PRIORITY));
 
 #if defined(CONFIG_SMP) && defined(_M_AMD64) && \
@@ -881,6 +887,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
     /* Select a processor to run on */
     Processor = KiSelectNextProcessor(Thread, &IdleRequest);
+#if defined(_M_ARM64)
+    KiCpuAuditPlace(Thread, Processor, IdleRequest);
+#endif
     Thread->NextProcessor = Processor;
 
     /* Get the PRCB and lock it */

@@ -660,6 +660,8 @@ struct _DXGKRNL_ADAPTER
     volatile PVOID              KmdExclusiveOwnerThread;
     volatile PVOID              KmdTransactionOwnerThread;
     volatile LONG               KmdTransactionDepth;
+    PVOID                       KmdTraceBeginCaller, KmdTraceEndCaller;
+    HANDLE                      KmdTraceOwnerPid;
     volatile PVOID              Level3TransitionOwnerThread;
     volatile LONG               Level3TransitionDepth;
     volatile LONG               InterruptCallbacksBlocked;
@@ -1462,6 +1464,8 @@ struct _DXGKRNL_CONTEXT
     KSPIN_LOCK                  StreamLock;
     LIST_ENTRY                  StreamOperationList;
     LIST_ENTRY                  StreamReadyEntry;
+    ULONGLONG                   TraceReadyStart;
+    LONG                        TraceReadyEpoch;
     volatile LONG               StreamWorkerQueued;
     volatile LONG               StreamWaitOperationCount;
     volatile LONG               StreamStopping;

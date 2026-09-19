@@ -17,7 +17,11 @@ static __inline const char *DptMetricName(ULONG Metric)
         "kernel_present", "admit_to_dispatch", "dispatch_to_retire", "fence_publish",
         "blur_cache_hit", "blur_filter", "bo_create", "cpu_texture_upload",
         "wgl_flush", "wgl_swap_delay", "wgl_present_callback", "shared_surface_compose",
-        "buffer_fence_wait"
+        "buffer_fence_wait", "submission_cache_clean", "submission_residency_pin",
+        "submission_packet_prepare", "submission_fence_reserve",
+        "submission_tracker_prepare", "submission_patch", "submission_dma_clean",
+        "submission_lifecycle_wait", "submission_tracker_activate",
+        "submission_context_admit", "submission_scheduler_admit", "submission_context_kick"
     };
     C_ASSERT(sizeof(Names) / sizeof(Names[0]) == DPT_METRIC_COUNT);
     return Metric < DPT_METRIC_COUNT ? Names[Metric] : "unknown";

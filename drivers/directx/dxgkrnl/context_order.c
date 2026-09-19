@@ -43,6 +43,7 @@ struct _DXGK_CONTEXT_ORDER_OPERATION
     PDXGK_CONTEXT_ORDER_RELEASE_CALLBACK ReleaseCallback;
     PDXGK_CONTEXT_ORDER_COMPLETION_ROUTINE CompletionRoutine;
     PDXGK_CONTEXT_ORDER_COMPLETION_RELEASE_ROUTINE CompletionReleaseRoutine;
+    DPT_SCOPE TraceStream;
     DXGK_CONTEXT_ORDER_MARKER Markers[ANYSIZE_ARRAY];
 };
 
@@ -131,6 +132,10 @@ static VOID DxgkpContextOrderPublishMarker(_Inout_ PDXGK_CONTEXT_ORDER_OPERATION
 
     ASSERT(Marker->Context == Context && Marker->Sequence == 0 && Sequence != 0 && IsListEmpty(&Marker->ContextEntry));
     Marker->Sequence = Sequence;
+    if (MarkerIndex == 0 && (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WAIT ||
+                            Operation->Type == DXGK_CONTEXT_ORDER_TYPE_SIGNAL))
+        Operation->TraceStream = DxgPresentTraceContextBegin(
+            HandleToUlong(PsGetProcessId(Context->Device->ProcessRecord->Process)));
     KeAcquireSpinLock(&Context->StreamLock, &OldIrql);
     if (Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WAIT)
         InterlockedIncrement(&Context->StreamWaitOperationCount);
@@ -515,6 +520,10 @@ DxgkpContextOrderQueueContext(
     KeAcquireSpinLock(&Scheduler->ContextOrderReadyLock, &OldIrql);
     if (InterlockedCompareExchange(&Scheduler->ContextOrderThreadStopping, 0, 0) == 0)
     {
+        DPT_SCOPE Trace = DxgPresentTraceContextBegin(
+            HandleToUlong(PsGetProcessId(Context->Device->ProcessRecord->Process)));
+        Context->TraceReadyStart = Trace.Start;
+        Context->TraceReadyEpoch = Trace.Epoch;
         ASSERT(IsListEmpty(&Context->StreamReadyEntry));
         InsertTailList(&Scheduler->ContextOrderReadyList, &Context->StreamReadyEntry);
         Queued = TRUE;
@@ -561,6 +570,12 @@ DxgkpContextOrderSchedulerThread(
 
             if (Context == NULL)
                 break;
+            {
+                DPT_SCOPE Trace = {0};
+                Trace.Start = Context->TraceReadyStart;
+                Trace.Epoch = Context->TraceReadyEpoch;
+                DxgPresentTraceContextEnd(Trace, Context->NodeOrdinal, 0);
+            }
             DxgkpContextOrderWorker(Context);
         }
         if (Stop)
@@ -1353,6 +1368,9 @@ DxgkContextOrderRetire(
         return;
     }
     ASSERT(Marker->Context == Context);
+    if (Operation->TraceStream.Epoch && Marker == &Operation->Markers[0])
+        DxgPresentTraceContextEnd(Operation->TraceStream, Context->NodeOrdinal,
+                                 Operation->Type == DXGK_CONTEXT_ORDER_TYPE_WAIT ? 1 : 2);
     Marker->Context = NULL;
     if (!NT_SUCCESS(Retirement->TerminalStatus) && NT_SUCCESS(Operation->TerminalStatus))
         Operation->TerminalStatus = Retirement->TerminalStatus;

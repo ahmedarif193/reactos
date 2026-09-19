@@ -129,7 +129,7 @@ enum Shader { Solid, Copy, Window, Filter, Shadow, ShaderCount };
 
 struct Compositor
 {
-    HMODULE Runtime, Dxgi, Compiler;
+    HMODULE Runtime, Dxgi, Compiler, TraceProvider;
     HWND Window;
     BOOL Registered, Active, FrameValid, WorkPending;
     LONG Width, Height;
@@ -206,8 +206,12 @@ BOOL CreateTexture(Texture &Image, LONG Width, LONG Height, BOOL RenderTarget,
 BOOL EnsureTexture(Texture &Image, LONG Width, LONG Height, BOOL RenderTarget,
                      DXGI_FORMAT Format = DXGI_FORMAT_B8G8R8A8_UNORM)
 {
-    return (Image.Resource != NULL && Image.Width == Width && Image.Height == Height && Image.Format == Format) ||
-           CreateTexture(Image, Width, Height, RenderTarget, NULL, 0, Format);
+    if (Image.Resource != NULL && Image.Width == Width && Image.Height == Height && Image.Format == Format)
+        return TRUE;
+    DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BO_CREATE);
+    BOOL Created = CreateTexture(Image, Width, Height, RenderTarget, NULL, 0, Format);
+    DptEnd(&g_DwmPresentTrace, Trace, Created, Created ? (ULONGLONG)Width * Height * 4 : 0);
+    return Created;
 }
 
 BOOL Draw(Texture &Target,
@@ -227,7 +231,9 @@ BOOL Draw(Texture &Target,
     if (Upload != NULL)
     {
         State.NextConstants = Upload->Next;
+        DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_CPU_UPLOAD);
         State.Context->UpdateSubresource(Upload->Resource, 0, NULL, &Data, 0, 0);
+        DptEnd(&g_DwmPresentTrace, Trace, TRUE, sizeof(Data));
     }
     else
     {
@@ -252,6 +258,7 @@ BOOL Draw(Texture &Target,
             State.ConstantsHead = Upload;
         State.ConstantsTail = Upload;
     }
+    DPT_SCOPE DrawTrace = DptBegin(&g_DwmPresentTrace, DPT_SHARED_COMPOSE);
     D3D11_VIEWPORT Viewport = {0, 0, (FLOAT)Target.Width, (FLOAT)Target.Height, 0, 1};
     State.Context->RSSetViewports(1, &Viewport);
     State.Context->RSSetScissorRects(1, &Clip);
@@ -270,24 +277,42 @@ BOOL Draw(Texture &Target,
     State.Context->Draw(4, 0);
     State.WorkPending = TRUE;
     UnbindTextures();
+    DptEnd(&g_DwmPresentTrace, DrawTrace, TRUE, 0);
     return TRUE;
 }
 
-BOOL FinishGpuReads()
+BOOL FinishGpuReadsImpl(DWM_GPU_WAIT_TIMING *Timing)
 {
     if (!State.WorkPending)
         return TRUE;
 
+    ULONGLONG Tick = Timing ? DptNow() : 0;
     State.Context->End(State.Completion);
+    if (Timing)
+    {
+        Timing->Ticks[DWM_WAIT_END] += DptNow() - Tick;
+        Tick = DptNow();
+    }
     State.Context->Flush();
+    if (Timing)
+        Timing->Ticks[DWM_WAIT_FLUSH] += DptNow() - Tick;
     DWORD Start = GetTickCount();
     BOOL Reported = FALSE;
     for (;;)
     {
         BOOL Complete = FALSE;
+        if (Timing) Tick = DptNow();
         HRESULT Status = State.Context->GetData(State.Completion, &Complete, sizeof(Complete),
                                                 D3D11_ASYNC_GETDATA_DONOTFLUSH);
+        if (Timing)
+        {
+            Timing->Ticks[DWM_WAIT_QUERY] += DptNow() - Tick;
+            ++Timing->Polls;
+            Tick = DptNow();
+        }
         HRESULT Removed = State.Device->GetDeviceRemovedReason();
+        if (Timing)
+            Timing->Ticks[DWM_WAIT_REMOVED] += DptNow() - Tick;
         if (FAILED(Removed))
         {
             State.WorkPending = FALSE;
@@ -311,8 +336,28 @@ BOOL FinishGpuReads()
         /* A healthy device must complete the EVENT before its producers can
          * reuse published surfaces. A removed device has stopped executing
          * this command stream, so its resources are released and recreated. */
+        if (Timing) Tick = DptNow();
         Sleep(1);
+        if (Timing)
+        {
+            ULONGLONG Elapsed = DptNow() - Tick;
+            Timing->Ticks[DWM_WAIT_SLEEP] += Elapsed;
+            Timing->MaxSleep = max(Timing->MaxSleep, Elapsed);
+            ++Timing->Sleeps;
+        }
     }
+}
+
+BOOL FinishGpuReads()
+{
+    if (!State.WorkPending)
+        return TRUE;
+    DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_FENCE_WAIT);
+    DWM_GPU_WAIT_TIMING Timing = {};
+    BOOL Complete = FinishGpuReadsImpl(Trace.Epoch ? &Timing : NULL);
+    DwmPresentTraceGpuWait(Trace, &Timing, Complete);
+    DptEnd(&g_DwmPresentTrace, Trace, Complete, 0);
+    return Complete;
 }
 
 void SetRectangle(Constants &Data, LONGLONG Left, LONGLONG Top, LONGLONG Right, LONGLONG Bottom)
@@ -416,6 +461,42 @@ BOOL HasNativeDriver(const LUID &Luid)
     Close.hAdapter = Open.hAdapter;
     D3DKMTCloseAdapter(&Close);
     return Status >= 0 && Name.UmdFileName[0] != 0;
+}
+
+void SetNativeTraceProvider(IDXGIAdapter1 *Adapter)
+{
+    DXGI_ADAPTER_DESC1 Desc = {};
+    if (FAILED(Adapter->GetDesc1(&Desc)))
+        return;
+    D3DKMT_OPENADAPTERFROMLUID Open = {};
+    Open.AdapterLuid = Desc.AdapterLuid;
+    if (D3DKMTOpenAdapterFromLuid(&Open) < 0)
+        return;
+    D3DKMT_UMDFILENAMEINFO Name = {};
+    Name.Version = KMTUMDVERSION_DX11;
+    D3DKMT_QUERYADAPTERINFO Query = {};
+    Query.hAdapter = Open.hAdapter;
+    Query.Type = KMTQAITYPE_UMDRIVERNAME;
+    Query.pPrivateDriverData = &Name;
+    Query.PrivateDriverDataSize = sizeof(Name);
+    NTSTATUS Status = D3DKMTQueryAdapterInfo(&Query);
+    D3DKMT_CLOSEADAPTER Close = {};
+    Close.hAdapter = Open.hAdapter;
+    D3DKMTCloseAdapter(&Close);
+    if (Status < 0 || Name.UmdFileName[0] == 0 || Name.UmdFileName[ARRAYSIZE(Name.UmdFileName) - 1] != 0)
+        return;
+    HMODULE Provider = NULL;
+    if (!GetModuleHandleExW(0, Name.UmdFileName, &Provider))
+        return;
+    PFNWGLCONTROLPRESENTATIONTRACEROS Control = (PFNWGLCONTROLPRESENTATIONTRACEROS)
+        GetProcAddress(Provider, "MesaControlPresentationTraceROS");
+    if (Control == NULL)
+    {
+        FreeLibrary(Provider);
+        return;
+    }
+    State.TraceProvider = Provider;
+    DwmPresentTraceSetIcd(Control);
 }
 
 BOOL AnyAdapterHasNativeDriver()
@@ -848,7 +929,7 @@ void BuildWeights(ULONG Radius, Constants &Data)
     Data.Filter[2] = (FLOAT)Count;
 }
 
-BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
+BlurTarget *FilterCaptureImpl(const RECT &Bounds, ULONG Radius)
 {
     ULONG Call = State.BlurCall++;
     BlurTarget *Oldest = &State.Blurs[0], *Reusable = NULL;
@@ -884,7 +965,9 @@ BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
         return NULL;
     UnbindTextures();
     D3D11_BOX Box = {(UINT)Bounds.left, (UINT)Bounds.top, 0, (UINT)Bounds.right, (UINT)Bounds.bottom, 1};
+    DPT_SCOPE CaptureTrace = DptBegin(&g_DwmPresentTrace, DPT_BLIT);
     State.Context->CopySubresourceRegion(Target->Capture.Resource, 0, 0, 0, 0, State.Canvas.Resource, 0, &Box);
+    DptEnd(&g_DwmPresentTrace, CaptureTrace, TRUE, 0);
     Constants Data = {};
     SetRectangle(Data, 0, 0, FilterWidth, FilterHeight);
     RECT Clip = {0, 0, FilterWidth, FilterHeight};
@@ -903,6 +986,14 @@ BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
     Target->LastUse = ++State.BlurUse;
     Target->Valid = State.BlurOwnerValid;
     ++State.Filtered;
+    return Target;
+}
+
+BlurTarget *FilterCapture(const RECT &Bounds, ULONG Radius)
+{
+    DPT_SCOPE Trace = DptBegin(&g_DwmPresentTrace, DPT_BLUR_FILTER);
+    BlurTarget *Target = FilterCaptureImpl(Bounds, Radius);
+    DptEnd(&g_DwmPresentTrace, Trace, Target != NULL, 0);
     return Target;
 }
 
@@ -1031,6 +1122,8 @@ DwmD3dInitialize(LONG Width, LONG Height)
     IDXGIAdapter1 *Adapter = NULL;
     BOOL Success = State.Runtime && State.Dxgi && State.Compiler && CreateDevice(&Adapter) &&
         CreateSwapChain(Adapter) && CreateShaders() && CreateTexture(State.Canvas, Width, Height, TRUE);
+    if (Success)
+        SetNativeTraceProvider(Adapter);
     Release(Adapter);
     if (!Success)
     {
@@ -1051,6 +1144,8 @@ const char *DwmD3dRendererName(void) { return State.Active ? State.Renderer : NU
 void
 DwmD3dShutdown(void)
 {
+    if (State.TraceProvider)
+        DwmPresentTraceSetIcd(NULL);
     if (State.Context != NULL)
     {
         FinishGpuReads();
@@ -1095,6 +1190,7 @@ DwmD3dShutdown(void)
         DestroyWindow(State.Window);
     }
     if (State.Compiler) FreeLibrary(State.Compiler);
+    if (State.TraceProvider) FreeLibrary(State.TraceProvider);
     if (State.Dxgi) FreeLibrary(State.Dxgi);
     if (State.Runtime) FreeLibrary(State.Runtime);
     ZeroMemory(&State, sizeof(State));
@@ -1353,13 +1449,17 @@ DwmD3dEnd(void)
         DwmGpuDamageUnion(&Copy, &State.PreviousCopy);
     D3D11_BOX Box = {(UINT)Copy.left, (UINT)Copy.top, 0, (UINT)Copy.right, (UINT)Copy.bottom, 1};
     UnbindTextures();
+    DPT_SCOPE CopyTrace = DptBegin(&g_DwmPresentTrace, DPT_FLUSH);
     State.Context->CopySubresourceRegion(BackBuffer, 0, Copy.left, Copy.top, 0, State.Canvas.Resource, 0, &Box);
+    DptEnd(&g_DwmPresentTrace, CopyTrace, TRUE, 0);
     State.WorkPending = TRUE;
     Release(BackBuffer);
     DXGI_PRESENT_PARAMETERS Present = {};
     Present.DirtyRectsCount = 1;
     Present.pDirtyRects = &Copy;
+    DPT_SCOPE PresentTrace = DptBegin(&g_DwmPresentTrace, DPT_KMT_PRESENT);
     HRESULT Status = State.SwapChain->Present1(1, 0, &Present);
+    DptEnd(&g_DwmPresentTrace, PresentTrace, SUCCEEDED(Status), 0);
     BOOL Finished = FinishGpuReads();
     if (!Finished || !Result(Status, "Present1"))
         return DWM_GPU_FAILED;

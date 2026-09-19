@@ -1,0 +1,5 @@
+add_executable(cpuprof cpuprof.c)
+set_target_properties(cpuprof PROPERTIES OUTPUT_NAME "cpu-profile")
+set_module_type(cpuprof win32cui UNICODE)
+add_importlibs(cpuprof psapi setupapi msvcrt kernel32)
+add_cd_file(TARGET cpuprof DESTINATION reactos/system32 FOR all)

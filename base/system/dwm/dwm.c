@@ -3656,6 +3656,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                 {
                     DPT_SCOPE FrameTrace = DptBegin(&g_DwmPresentTrace, DPT_FRAME);
                     DPT_SCOPE AckTrace;
+                    ULONGLONG TraceDrawStart = 0, TraceDrawEnd = 0, TracePresentEnd = 0;
                     BOOL gpuFrame;
                     DWM_GPU_RESULT gpuResult;
                     RECT gpuDamage = {pl, pt, pr, pb};
@@ -3674,6 +3675,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                                                        &gpuDamage);
 
                     DwmStatCounter(&statBackdropEnd);
+                    if (FrameTrace.Epoch) TraceDrawStart = DptNow();
 
                     DwmStatThreadTime(&statDrawCpuStart);
                     for (i = 0; gpuFrame && i < hdr->Count; i++)
@@ -3710,8 +3712,10 @@ DwmComposeLoop(HANDLE hStopEvent)
                         g_statGpuDrawUser100ns += statDrawCpuEnd.User - statDrawCpuStart.User;
                     }
                     DwmStatCounter(&statComposeEnd);
+                    if (FrameTrace.Epoch) TraceDrawEnd = DptNow();
 
                     gpuResult = gpuFrame ? DwmGpuComposeEnd() : DwmGpuComposeAbort();
+                    if (FrameTrace.Epoch) TracePresentEnd = DptNow();
                     if (gpuResult == DWM_GPU_COMPLETE ||
                         gpuResult == DWM_GPU_DEFERRED)
                     {
@@ -3740,6 +3744,7 @@ DwmComposeLoop(HANDLE hStopEvent)
                                                  statComposeEnd.QuadPart),
                                      (ULONGLONG)((pr - pl) * (pb - pt)));
                         DptEnd(&g_DwmPresentTrace, FrameTrace, TRUE, 0);
+                        DwmPresentTraceFrame(FrameTrace, TraceDrawStart, TraceDrawEnd, TracePresentEnd);
                         ++g_frameSeq;
                         if ((g_frameSeq & 255) == 0)
                             DwmSweepViews();
