@@ -78,7 +78,7 @@ add_host_tool(mkisofs
     schilytools/mkisofs/stream.c
     schilytools/mkisofs/tree.c
     schilytools/mkisofs/write.c)
-target_link_libraries(mkisofs libmdigest libschily libsiconv)
+target_link_libraries(mkisofs libmdigest libsiconv)
 
 if(MSVC)
     # mkisofs uses K&R-style function definitions to support very old compilers.
@@ -103,10 +103,6 @@ if(MSVC)
     target_compile_options(libschily PRIVATE "/wd4244")
     target_compile_options(mkisofs PRIVATE "/wd4244")
 else()
-    # libschily implements an own printf function with support for the %r formatter.
-    # Silence compilers checking for invalid formatting sequences.
-    target_compile_options(libschily PRIVATE "-Wno-format")
-
     # MATCHES must be used here because on macOS, CMake uses the compiler ID "AppleClang".
     if(CMAKE_C_COMPILER_ID MATCHES "Clang$" AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL "15")
         # mkisofs uses K&R-style function definitions to support very old compilers.

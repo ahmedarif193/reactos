@@ -44,8 +44,6 @@ add_cd_file(TARGET virtgpuogl DESTINATION reactos/system32 FOR all)
 
 if(NOT MSVC)
     target_compile_options(virtgpu PRIVATE
-        -Wno-pointer-to-int-cast
-        -Wno-int-to-pointer-cast
         -Wno-unused-function)
     target_compile_options(virtgpu_disp PRIVATE
         -Wno-unused-function)

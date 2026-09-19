@@ -82,10 +82,6 @@ if(MSVC)
     endif()
 endif()
 
-if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(msxml3 PRIVATE -Wno-incompatible-function-pointer-types)
-endif()
-
 add_importlibs(msxml3 libxslt urlmon ws2_32 shlwapi oleaut32 ole32 user32 advapi32 msvcrt kernel32 ntdll)
 # msxml3_v1.tlb needs stdole2.tlb.
 add_dependencies(msxml3 msxml_message_resources xmlparser_idlheader saxreader_extensions_idlheader stdole2)

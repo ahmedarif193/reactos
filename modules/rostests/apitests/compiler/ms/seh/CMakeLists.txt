@@ -23,5 +23,5 @@ if(MSVC)
     target_compile_options(ms_seh_test PRIVATE /wd4189 /wd4197 /wd4532)
 else()
     target_compile_options(ms_seh_test
-        PRIVATE -Wno-format -Wno-implicit-function-declaration -Wno-unused-label -Wno-unused-variable)
+        PRIVATE -Wno-implicit-function-declaration -Wno-unused-label -Wno-unused-variable)
 endif()

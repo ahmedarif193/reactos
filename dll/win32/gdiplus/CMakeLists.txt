@@ -46,8 +46,6 @@ if(MSVC)
         /wd4305 # Disable warning C4305: '=': truncation from 'double' to 'REAL'
         /wd4334 # Disable warning C4334: '<<': result of 32-bit shift implicitly converted to 64 bits (was 64-bit shift intended?)
     )
-else()
-    target_compile_options(gdiplus PRIVATE -Wno-incompatible-pointer-types)
 endif()
 
 set_module_type(gdiplus win32dll)

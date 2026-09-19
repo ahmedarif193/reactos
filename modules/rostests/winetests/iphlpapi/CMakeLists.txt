@@ -17,10 +17,7 @@ endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(iphlpapi_winetest PRIVATE
-        -Wno-format
-        -Wno-int-conversion
-        -Wno-incompatible-pointer-types)
+    target_compile_options(iphlpapi_winetest PRIVATE -Wno-int-conversion)
 endif()
 
 target_compile_definitions(iphlpapi_winetest PRIVATE 

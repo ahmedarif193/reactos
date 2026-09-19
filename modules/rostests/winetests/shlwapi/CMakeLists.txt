@@ -40,10 +40,7 @@ endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
    CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(shlwapi_winetest PRIVATE 
-        -Wno-format
-        -Wno-discarded-qualifiers
-        -Wno-incompatible-pointer-types)
+    target_compile_options(shlwapi_winetest PRIVATE -Wno-discarded-qualifiers)
 endif()
 
 add_pch(shlwapi_winetest precomp.h "${PCH_SKIP_SOURCE}")

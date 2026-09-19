@@ -38,10 +38,6 @@ target_compile_definitions(rtl_test_lib PRIVATE _RTL_TEST _NTSYSTEM_)
 
 add_dependencies(rtl_test_lib asm)
 
-if(NOT MSVC)
-    set_source_files_properties(RtlGetFullPathName_UstrEx.c PROPERTIES COMPILE_OPTIONS "-Wno-format")
-endif()
-
 # RTL tests with static linkage (called unittest, so it won't run in rosautotest)
 add_executable(rtl_unittest
     rtlinit.c
@@ -54,7 +50,3 @@ add_importlibs(rtl_unittest msvcrt advapi32 kernel32 ntdll)
 target_compile_definitions(rtl_unittest PRIVATE KMT_USER_MODE NTDDI_VERSION=NTDDI_WS03SP1)
 
 add_rostests_file(TARGET rtl_unittest)
-
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(rtl_unittest PRIVATE -Wno-format)
-endif()

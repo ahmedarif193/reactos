@@ -21,8 +21,8 @@ add_library(cdrom MODULE ${SOURCE} cdrom.rc)
 set_module_type(cdrom kmdfdriver)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    target_compile_options(cdrom PRIVATE -Wno-format -Wno-unused-variable -Wno-pointer-sign)
-    target_compile_options(cdrom PRIVATE -Wno-unknown-pragmas -Wno-incompatible-pointer-types -Wno-switch)
+    target_compile_options(cdrom PRIVATE -Wno-unused-variable -Wno-pointer-sign)
+    target_compile_options(cdrom PRIVATE -Wno-unknown-pragmas -Wno-switch)
 endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
