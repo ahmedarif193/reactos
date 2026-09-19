@@ -38,6 +38,10 @@
 #define WIDL_using_Windows_UI_ViewManagement
 #include "windows.ui.viewmanagement.h"
 
+#define WIDL_using_Windows_UI_Shell
+#include "windows.ui.shell.h"
+
+extern IActivationFactory *taskbarmanager_factory;
 extern IActivationFactory *accessibilitysettings_factory;
 extern IActivationFactory *uisettings_factory;
 extern IActivationFactory *uiviewsettings_factory;
