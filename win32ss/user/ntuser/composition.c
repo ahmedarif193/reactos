@@ -64,6 +64,7 @@ typedef struct _REDIRECT_ENTRY
 #define COMPOSITION_ANIM_SCALE          65536
 #define COMPOSITION_ANIM_MINIMIZE_100NS (200LL * 10000LL)
 #define COMPOSITION_ANIM_RESTORE_100NS  (250LL * 10000LL)
+#define COMPOSITION_ANIM_MOVE_100NS     (175LL * 10000LL)
 
 static REDIRECT_ENTRY  g_Redirects[COMPOSITION_MAX_WINDOWS];
 static ULONG           g_RedirectHighWater = 0;
@@ -308,6 +309,8 @@ IntCompositionAccumulatePositionDamage(_In_ const RECTL *Rect)
 
     return TRUE;
 }
+
+static VOID IntCompositionCancelAnimation(_Inout_ REDIRECT_ENTRY *Entry);
 
 /* A DX publication replaces client content in its own shared allocation.
  * Recompose its bounds without republishing the unchanged GDI BACK surface.
@@ -959,6 +962,7 @@ IntCompositionOnWindowDestroy(_In_ PWND Wnd)
     if (e == NULL)
         return;
 
+    IntCompositionCancelAnimation(e);
     if (e->WindowRectValid &&
         IntCompositionAccumulatePositionDamage(&e->WindowRect))
     {
@@ -1057,20 +1061,35 @@ IntCompositionQueryMinimizeRect(_In_ PWND Wnd)
     e->MinRectValid = (rc.right > rc.left && rc.bottom > rc.top);
 }
 
+/*
+ * Stop an animation that has not run to completion. The last frame was drawn
+ * at an interpolated rectangle that belongs to neither the window's old nor
+ * its new bounds, so nothing else would ever recompose those pixels.
+ */
+static VOID
+IntCompositionCancelAnimation(_Inout_ REDIRECT_ENTRY *Entry)
+{
+    if (Entry->AnimFlags == 0)
+        return;
+
+    Entry->AnimFlags = 0;
+    if (IntCompositionAccumulatePositionDamage(&Entry->AnimDamage))
+        IntCompositionMarkDamage(FALSE);
+}
+
 static VOID
 IntCompositionStartAnimation(_Inout_ REDIRECT_ENTRY *Entry,
                              _In_ const RECTL *Window, _In_ const RECTL *Target,
                              _In_ ULONG Flags)
 {
+    /* A replaced animation leaves its last frame behind just like a cancelled one */
+    IntCompositionCancelAnimation(Entry);
+
     if (!gspv.animationinfo.iMinAnimate)
-    {
-        Entry->AnimFlags = 0;
         return;
-    }
     if (Window->right <= Window->left || Window->bottom <= Window->top ||
         Target->right <= Target->left || Target->bottom <= Target->top)
     {
-        Entry->AnimFlags = 0;
         return;
     }
 
@@ -1080,9 +1099,12 @@ IntCompositionStartAnimation(_Inout_ REDIRECT_ENTRY *Entry,
     Entry->AnimAnchor.y = Target->top;
     Entry->AnimFlags = Flags;
     Entry->AnimStart = (LONGLONG)KeQueryInterruptTime();
-    Entry->AnimDuration = (Flags == DWM_ANIM_MINIMIZE)
-                              ? COMPOSITION_ANIM_MINIMIZE_100NS
-                              : COMPOSITION_ANIM_RESTORE_100NS;
+    if (Flags == DWM_ANIM_MINIMIZE)
+        Entry->AnimDuration = COMPOSITION_ANIM_MINIMIZE_100NS;
+    else if (Flags == DWM_ANIM_MOVE)
+        Entry->AnimDuration = COMPOSITION_ANIM_MOVE_100NS;
+    else
+        Entry->AnimDuration = COMPOSITION_ANIM_RESTORE_100NS;
     Entry->AnimDamage = (Flags == DWM_ANIM_MINIMIZE) ? *Window : *Target;
     if (Flags == DWM_ANIM_MOVE)
         RECTL_bUnionRect(&Entry->AnimDamage, (PRECTL)Window, (PRECTL)Target);
@@ -1141,6 +1163,10 @@ IntCompositionEvaluateAnimation(_Inout_ REDIRECT_ENTRY *Entry,
     if (!gspv.animationinfo.iMinAnimate || Entry->AnimDuration <= 0 || Elapsed >= Entry->AnimDuration)
     {
         RECTL_bUnionRect(prcDamage, &Entry->AnimDamage, &Entry->AnimRect);
+        /* A move ends at its target, not where it started: the window is drawn
+         * there at full size on this frame, beyond the last interpolated rect. */
+        if (Entry->AnimFlags == DWM_ANIM_MOVE)
+            RECTL_bUnionRect(prcDamage, prcDamage, &Entry->AnimTarget);
         Entry->AnimFlags = 0;
         return FALSE;
     }
@@ -1257,7 +1283,7 @@ IntCompositionOnWindowResize(_In_ PWND Wnd)
 
     if (!IntCompositionIsCompositable(Wnd))
     {
-        e->AnimFlags = 0;
+        IntCompositionCancelAnimation(e);
     }
     else if (Minimized && !e->Minimized)
     {
@@ -1284,7 +1310,7 @@ IntCompositionOnWindowResize(_In_ PWND Wnd)
               OldWindowRect.right != Wnd->rcWindow.right ||
               OldWindowRect.bottom != Wnd->rcWindow.bottom))
     {
-        e->AnimFlags = 0;
+        IntCompositionCancelAnimation(e);
     }
     e->Minimized = Minimized;
     e->Maximized = Maximized;

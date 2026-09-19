@@ -168,6 +168,7 @@ PWND FASTCALL DWP_GetEnabledPopup(PWND pWnd);
 
 BOOL FASTCALL SetLayeredStatus(PWND pWnd, BYTE set);
 BOOL FASTCALL GetLayeredStatus(PWND pWnd);
+BOOL FASTCALL IntSetLayeredWindowAttributes(PWND pWnd, COLORREF crKey, BYTE bAlpha, DWORD dwFlags);
 
 /************** INPUT CONTEXT **************/
 

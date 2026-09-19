@@ -10,384 +10,221 @@
 
 DBG_DEFAULT_CHANNEL(UserWinpos);
 
-/* Snap preview animation constants */
-#define SNAP_ANIM_DURATION_MS 180
-#define SNAP_PREVIEW_FILL_ALPHA 72
-#define SNAP_PREVIEW_BORDER_ALPHA 160
+/*
+ * The snap preview is an ordinary layered popup. The compositor owns its
+ * pixels, its translucency and its grow animation, so nothing here draws on
+ * the screen, saves what is underneath, or has to repaint on a timer. It is
+ * created on the dragging thread, from a server-side class, so showing it
+ * never calls back to user mode.
+ */
+#define SNAP_PREVIEW_ALPHA        110
 #define SNAP_PREVIEW_BORDER_WIDTH 2
+#define SNAP_PREVIEW_ORIGIN_HALF  10
+#define SNAP_PREVIEW_FILL         RGB(176, 214, 244)
+#define SNAP_PREVIEW_BORDER       RGB(94, 150, 214)
 
-/* --- Internal helpers --- */
-
-static VOID
-SnapPreviewDestroyBuffers(SNAP_PREVIEW_STATE *pState)
+static struct
 {
-    if (pState->hdcBackground)
-    {
-        if (pState->hbmBackground && pState->hbmBackgroundOld)
-            NtGdiSelectBitmap(pState->hdcBackground, pState->hbmBackgroundOld);
-        if (pState->hbmBackground)
-            GreDeleteObject(pState->hbmBackground);
-        IntGdiDeleteDC(pState->hdcBackground, FALSE);
-    }
+    HWND hwnd;      /* Preview popup, kept hidden between snap zones */
+    UINT Edge;      /* Armed edge, HTNOWHERE when nothing is armed */
+    RECT rcTarget;  /* Where the window lands if the button is released */
+} gSnapPreview = { NULL, HTNOWHERE, { 0, 0, 0, 0 } };
 
-    if (pState->hdcOverlay)
-    {
-        if (pState->hbmOverlay && pState->hbmOverlayOld)
-            NtGdiSelectBitmap(pState->hdcOverlay, pState->hbmOverlayOld);
-        if (pState->hbmOverlay)
-            GreDeleteObject(pState->hbmOverlay);
-        IntGdiDeleteDC(pState->hdcOverlay, FALSE);
-    }
-
-    pState->hdcBackground = NULL;
-    pState->hbmBackground = NULL;
-    pState->hbmBackgroundOld = NULL;
-    pState->hdcOverlay = NULL;
-    pState->hbmOverlay = NULL;
-    pState->hbmOverlayOld = NULL;
-}
-
-static BOOL
-SnapPreviewCreateBuffers(HDC hdc, SNAP_PREVIEW_STATE *pState, LONG cx, LONG cy)
+static PWND
+IntSnapPreviewWindow(VOID)
 {
-    if (cx <= 0 || cy <= 0 || !pState->hbrFill || !pState->hbrBorder)
-        return FALSE;
+    PWND pwnd;
 
-    SnapPreviewDestroyBuffers(pState);
+    if (gSnapPreview.hwnd == NULL)
+        return NULL;
 
-    pState->hdcBackground = NtGdiCreateCompatibleDC(hdc);
-    if (!pState->hdcBackground)
-        return FALSE;
-
-    pState->hdcOverlay = NtGdiCreateCompatibleDC(hdc);
-    if (!pState->hdcOverlay)
+    pwnd = UserGetWindowObject(gSnapPreview.hwnd);
+    if (pwnd == NULL || pwnd->head.pti != PsGetCurrentThreadWin32Thread())
     {
-        SnapPreviewDestroyBuffers(pState);
-        return FALSE;
+        gSnapPreview.hwnd = NULL;
+        return NULL;
     }
-
-    pState->hbmBackground = NtGdiCreateCompatibleBitmap(hdc, cx, cy);
-    pState->hbmOverlay = NtGdiCreateCompatibleBitmap(hdc, cx, cy);
-    if (!pState->hbmBackground || !pState->hbmOverlay)
-    {
-        SnapPreviewDestroyBuffers(pState);
-        return FALSE;
-    }
-
-    pState->hbmBackgroundOld = NtGdiSelectBitmap(pState->hdcBackground, pState->hbmBackground);
-    pState->hbmOverlayOld = NtGdiSelectBitmap(pState->hdcOverlay, pState->hbmOverlay);
-    if (!pState->hbmBackgroundOld || !pState->hbmOverlayOld)
-    {
-        SnapPreviewDestroyBuffers(pState);
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-static BOOL
-SnapPreviewBlendSolid(HDC hdcDst,
-                      HDC hdcSrc,
-                      HBRUSH hbr,
-                      INT xDst,
-                      INT yDst,
-                      INT cx,
-                      INT cy,
-                      BYTE Alpha,
-                      const RECT *prcExclude)
-{
-    BLENDFUNCTION Blend = { AC_SRC_OVER, 0, Alpha, 0 };
-    HBRUSH hbrOld;
-    BOOL bResult;
-    INT iSaveLevel = 0;
-
-    if (cx <= 0 || cy <= 0)
-        return TRUE;
-
-    hbrOld = NtGdiSelectBrush(hdcSrc, hbr);
-    NtGdiPatBlt(hdcSrc, 0, 0, cx, cy, PATCOPY);
-    NtGdiSelectBrush(hdcSrc, hbrOld);
-
-    if (prcExclude && !RECTL_bIsEmptyRect(prcExclude))
-    {
-        iSaveLevel = NtGdiSaveDC(hdcDst);
-        if (iSaveLevel > 0)
-        {
-            NtGdiExcludeClipRect(hdcDst,
-                                 prcExclude->left,
-                                 prcExclude->top,
-                                 prcExclude->right,
-                                 prcExclude->bottom);
-        }
-    }
-
-    bResult = NtGdiAlphaBlend(hdcDst,
-                              xDst,
-                              yDst,
-                              cx,
-                              cy,
-                              hdcSrc,
-                              0,
-                              0,
-                              cx,
-                              cy,
-                              Blend,
-                              0);
-
-    if (iSaveLevel > 0)
-        NtGdiRestoreDC(hdcDst, -1);
-
-    return bResult;
-}
-
-static BOOL
-SnapPreviewCaptureBackground(HDC hdc, SNAP_PREVIEW_STATE *pState, const RECT *prc)
-{
-    LONG cx = prc->right - prc->left;
-    LONG cy = prc->bottom - prc->top;
-
-    return NtGdiBitBlt(pState->hdcBackground,
-                       0,
-                       0,
-                       cx,
-                       cy,
-                       hdc,
-                       prc->left,
-                       prc->top,
-                       SRCCOPY,
-                       CLR_INVALID,
-                       0);
+    return pwnd;
 }
 
 static VOID
-SnapPreviewRestore(HDC hdc, SNAP_PREVIEW_STATE *pState)
+IntSnapPreviewPaint(PWND pwnd)
 {
-    LONG cx = pState->rcCurrent.right - pState->rcCurrent.left;
-    LONG cy = pState->rcCurrent.bottom - pState->rcCurrent.top;
+    LONG cx = pwnd->rcWindow.right - pwnd->rcWindow.left;
+    LONG cy = pwnd->rcWindow.bottom - pwnd->rcWindow.top;
+    LONG bw = min(SNAP_PREVIEW_BORDER_WIDTH, cx / 2);
+    LONG bh = min(SNAP_PREVIEW_BORDER_WIDTH, cy / 2);
+    HBRUSH hbrFill, hbrBorder, hbrOld;
+    HDC hdc;
 
-    NtGdiBitBlt(hdc,
-                pState->rcCurrent.left,
-                pState->rcCurrent.top,
-                cx,
-                cy,
-                pState->hdcBackground,
-                0,
-                0,
-                SRCCOPY,
-                CLR_INVALID,
-                0);
-}
-
-static VOID
-SnapPreviewInterpolateRect(const RECT *pOrigin, const RECT *pTarget,
-                           ULONG dwElapsed, RECT *pResult)
-{
-    LONG t;
-
-    if (dwElapsed >= SNAP_ANIM_DURATION_MS)
-    {
-        *pResult = *pTarget;
+    hdc = UserGetWindowDC(pwnd);
+    if (hdc == NULL)
         return;
-    }
 
-    /* Fixed-point progress 0..256 */
-    t = (LONG)(dwElapsed * 256 / SNAP_ANIM_DURATION_MS);
-
-    /* Cubic ease-out for a snappier Win7-like expansion */
+    hbrFill = IntGdiCreateSolidBrush(SNAP_PREVIEW_FILL);
+    hbrBorder = IntGdiCreateSolidBrush(SNAP_PREVIEW_BORDER);
+    if (hbrFill && hbrBorder)
     {
-        LONG inv = 256 - t;
-        LONG inv2 = inv * inv;
-        t = 256 - (inv2 * inv / 65536);
+        hbrOld = NtGdiSelectBrush(hdc, hbrFill);
+        NtGdiPatBlt(hdc, 0, 0, cx, cy, PATCOPY);
+
+        NtGdiSelectBrush(hdc, hbrBorder);
+        NtGdiPatBlt(hdc, 0, 0, cx, bh, PATCOPY);
+        NtGdiPatBlt(hdc, 0, cy - bh, cx, bh, PATCOPY);
+        NtGdiPatBlt(hdc, 0, bh, bw, cy - 2 * bh, PATCOPY);
+        NtGdiPatBlt(hdc, cx - bw, bh, bw, cy - 2 * bh, PATCOPY);
+        NtGdiSelectBrush(hdc, hbrOld);
     }
 
-    pResult->left   = pOrigin->left   + (pTarget->left   - pOrigin->left)   * t / 256;
-    pResult->top    = pOrigin->top    + (pTarget->top    - pOrigin->top)    * t / 256;
-    pResult->right  = pOrigin->right  + (pTarget->right  - pOrigin->right)  * t / 256;
-    pResult->bottom = pOrigin->bottom + (pTarget->bottom - pOrigin->bottom) * t / 256;
+    if (hbrFill)
+        GreDeleteObject(hbrFill);
+    if (hbrBorder)
+        GreDeleteObject(hbrBorder);
+
+    UserReleaseDC(pwnd, hdc, FALSE);
 }
 
-static VOID
-SnapPreviewInterpolateCurrentRect(SNAP_PREVIEW_STATE *pState, RECT *pResult)
+static PWND
+co_IntSnapPreviewCreate(PWND pwndDrag, const RECT *prc)
 {
-    ULONG dwElapsed = EngGetTickCount32() - pState->dwStartTime;
+    UNICODE_STRING ClassName;
+    LARGE_STRING WindowName;
+    CREATESTRUCTW Cs;
+    PWND pwnd;
 
-    SnapPreviewInterpolateRect(&pState->rcOrigin, &pState->rcTarget,
-                               dwElapsed, pResult);
-}
+    /* Do not borrow the built-in Message class here. Its shared-heap base can
+     * still be referenced by message-only infrastructure, and asking the class
+     * manager to migrate that live base to a desktop heap is invalid. The
+     * private class uses the same server-side procedure without sharing its
+     * lifetime. */
+    RtlInitUnicodeString(&ClassName, SNAP_PREVIEW_CLASS_NAME);
 
-static BOOL
-SnapPreviewHasReachedTarget(const SNAP_PREVIEW_STATE *pState)
-{
-    return pState->rcCurrent.left   == pState->rcTarget.left  &&
-           pState->rcCurrent.top    == pState->rcTarget.top   &&
-           pState->rcCurrent.right  == pState->rcTarget.right &&
-           pState->rcCurrent.bottom == pState->rcTarget.bottom;
+    RtlZeroMemory(&WindowName, sizeof(WindowName));
+    RtlZeroMemory(&Cs, sizeof(Cs));
+    Cs.x = prc->left;
+    Cs.y = prc->top;
+    Cs.cx = prc->right - prc->left;
+    Cs.cy = prc->bottom - prc->top;
+    Cs.style = WS_POPUP;
+    Cs.dwExStyle = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+    if (pwndDrag->ExStyle & WS_EX_TOPMOST)
+        Cs.dwExStyle |= WS_EX_TOPMOST;
+    Cs.hInstance = hModClient; /* Server side winproc */
+    Cs.lpszName = (LPCWSTR)&WindowName;
+    Cs.lpszClass = (LPCWSTR)&ClassName;
+
+    pwnd = co_UserCreateWindowEx(&Cs, &ClassName, &WindowName, NULL, WINVER);
+    if (pwnd == NULL)
+    {
+        ERR("Could not create the snap preview window\n");
+        return NULL;
+    }
+
+    IntSetLayeredWindowAttributes(pwnd, 0, SNAP_PREVIEW_ALPHA, LWA_ALPHA);
+    gSnapPreview.hwnd = UserHMGetHandle(pwnd);
+    return pwnd;
 }
 
 /* --- Public interface --- */
 
-VOID
-SnapPreviewInit(SNAP_PREVIEW_STATE *pState)
+UINT FASTCALL
+IntSnapPreviewEdge(VOID)
 {
-    RtlZeroMemory(pState, sizeof(*pState));
-    pState->hbrFill = IntGdiCreateSolidBrush(RGB(176, 214, 244));
-    pState->hbrBorder = IntGdiCreateSolidBrush(RGB(94, 150, 214));
-    if (pState->hbrFill)
-        GreSetObjectOwner(pState->hbrFill, GDI_OBJ_HMGR_POWNED);
-    if (pState->hbrBorder)
-        GreSetObjectOwner(pState->hbrBorder, GDI_OBJ_HMGR_POWNED);
+    return gSnapPreview.Edge;
 }
 
-BOOL
-SnapPreviewAdvance(HDC hdc, SNAP_PREVIEW_STATE *pState, const RECT *prcExclude)
+/*
+ * Arm Edge and show where the window will land. Nothing happens when the
+ * same edge and target are already armed, which is the case for nearly
+ * every mouse message while the pointer slides along a screen edge.
+ */
+VOID FASTCALL
+co_IntSnapPreviewShow(PWND pwndDrag, UINT Edge, const RECT *prcTarget, POINT ptCursor)
 {
-    RECT rcNew;
+    USER_REFERENCE_ENTRY Ref;
+    RECTL rcFrom;
+    PWND pwnd;
 
-    if (!pState->bVisible || SnapPreviewHasReachedTarget(pState))
-        return FALSE;
-
-    SnapPreviewInterpolateCurrentRect(pState, &rcNew);
-
-    if (rcNew.left   != pState->rcCurrent.left  ||
-        rcNew.top    != pState->rcCurrent.top    ||
-        rcNew.right  != pState->rcCurrent.right  ||
-        rcNew.bottom != pState->rcCurrent.bottom)
+    if (gSnapPreview.Edge == Edge &&
+        RtlEqualMemory(&gSnapPreview.rcTarget, prcTarget, sizeof(*prcTarget)))
     {
-        LONG cx = rcNew.right - rcNew.left;
-        LONG cy = rcNew.bottom - rcNew.top;
-        LONG bw = min(SNAP_PREVIEW_BORDER_WIDTH, cx / 2);
-        LONG bh = min(SNAP_PREVIEW_BORDER_WIDTH, cy / 2);
-        LONG cyMiddle = max(0, cy - 2 * bh);
-
-        SnapPreviewRestore(hdc, pState);
-        if (!SnapPreviewCaptureBackground(hdc, pState, &rcNew))
-        {
-            pState->bVisible = FALSE;
-            return FALSE;
-        }
-
-        if (!SnapPreviewBlendSolid(hdc, pState->hdcOverlay, pState->hbrFill,
-                                   rcNew.left, rcNew.top, cx, cy,
-                                   SNAP_PREVIEW_FILL_ALPHA, prcExclude))
-        {
-            pState->bVisible = FALSE;
-            return FALSE;
-        }
-
-        SnapPreviewBlendSolid(hdc, pState->hdcOverlay, pState->hbrBorder,
-                              rcNew.left, rcNew.top, cx, bh,
-                              SNAP_PREVIEW_BORDER_ALPHA, prcExclude);
-        SnapPreviewBlendSolid(hdc, pState->hdcOverlay, pState->hbrBorder,
-                              rcNew.left, rcNew.bottom - bh, cx, bh,
-                              SNAP_PREVIEW_BORDER_ALPHA, prcExclude);
-        SnapPreviewBlendSolid(hdc, pState->hdcOverlay, pState->hbrBorder,
-                              rcNew.left, rcNew.top + bh, bw, cyMiddle,
-                              SNAP_PREVIEW_BORDER_ALPHA, prcExclude);
-        SnapPreviewBlendSolid(hdc, pState->hdcOverlay, pState->hbrBorder,
-                              rcNew.right - bw, rcNew.top + bh, bw, cyMiddle,
-                              SNAP_PREVIEW_BORDER_ALPHA, prcExclude);
-
-        pState->rcCurrent = rcNew;
+        return;
     }
 
-    return !SnapPreviewHasReachedTarget(pState);
+    gSnapPreview.Edge = Edge;
+    gSnapPreview.rcTarget = *prcTarget;
+
+    /* Without a compositor the edge stays armed but there is no surface that
+     * could show a translucent preview without fighting the window below. */
+    if (!IntCompositionIsEnabled())
+        return;
+
+    pwnd = IntSnapPreviewWindow();
+    if (pwnd == NULL)
+        pwnd = co_IntSnapPreviewCreate(pwndDrag, prcTarget);
+    if (pwnd == NULL)
+        return;
+
+    UserRefObjectCo(pwnd, &Ref);
+
+    /* Directly below the dragged window, so the window passes over it */
+    co_WinPosSetWindowPos(pwnd,
+                          UserHMGetHandle(pwndDrag),
+                          prcTarget->left,
+                          prcTarget->top,
+                          prcTarget->right - prcTarget->left,
+                          prcTarget->bottom - prcTarget->top,
+                          SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    IntSnapPreviewPaint(pwnd);
+
+    /* The compositor keeps a window out of the scene while its first WM_PAINT
+     * is outstanding, and a thread busy dragging may not dispatch one for the
+     * better part of a second. The contents are complete, so say so. */
+    co_UserRedrawWindow(pwnd, NULL, NULL,
+                        RDW_VALIDATE | RDW_NOFRAME | RDW_NOERASE |
+                        RDW_NOINTERNALPAINT | RDW_ALLCHILDREN);
+
+    rcFrom.left   = max(ptCursor.x - SNAP_PREVIEW_ORIGIN_HALF, prcTarget->left);
+    rcFrom.top    = max(ptCursor.y - SNAP_PREVIEW_ORIGIN_HALF, prcTarget->top);
+    rcFrom.right  = min(ptCursor.x + SNAP_PREVIEW_ORIGIN_HALF, prcTarget->right);
+    rcFrom.bottom = min(ptCursor.y + SNAP_PREVIEW_ORIGIN_HALF, prcTarget->bottom);
+    IntCompositionAnimateMove(pwnd, &rcFrom);
+
+    UserDerefObjectCo(pwnd);
 }
 
-VOID
-SnapPreviewHide(HDC hdc, SNAP_PREVIEW_STATE *pState)
+VOID FASTCALL
+co_IntSnapPreviewHide(VOID)
 {
-    if (pState->bVisible)
-    {
-        SnapPreviewRestore(hdc, pState);
-        pState->bVisible = FALSE;
-    }
-    pState->nSnapEdge = HTNOWHERE;
+    USER_REFERENCE_ENTRY Ref;
+    PWND pwnd;
+
+    gSnapPreview.Edge = HTNOWHERE;
+    RECTL_vSetEmptyRect(&gSnapPreview.rcTarget);
+
+    pwnd = IntSnapPreviewWindow();
+    if (pwnd == NULL || !(pwnd->style & WS_VISIBLE))
+        return;
+
+    UserRefObjectCo(pwnd, &Ref);
+    co_WinPosSetWindowPos(pwnd, NULL, 0, 0, 0, 0,
+                          SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE |
+                          SWP_NOZORDER | SWP_NOACTIVATE);
+    UserDerefObjectCo(pwnd);
 }
 
-VOID
-SnapPreviewShow(HDC hdc, SNAP_PREVIEW_STATE *pState,
-                UINT nEdge, const RECT *pTargetRect, POINT ptCursor,
-                const RECT *prcExclude)
+VOID FASTCALL
+co_IntSnapPreviewDestroy(VOID)
 {
-    if (!pState->hbrFill || !pState->hbrBorder)
-        return;
+    PWND pwnd;
 
-    /* Same edge and same target: advance the animation */
-    if (pState->nSnapEdge == nEdge &&
-        pState->bVisible &&
-        RtlEqualMemory(&pState->rcTarget, pTargetRect, sizeof(*pTargetRect)))
-    {
-        SnapPreviewAdvance(hdc, pState, prcExclude);
-        return;
-    }
+    gSnapPreview.Edge = HTNOWHERE;
+    RECTL_vSetEmptyRect(&gSnapPreview.rcTarget);
 
-    /* New edge: erase any existing preview, start fresh animation */
-    if (pState->bVisible)
-    {
-        SnapPreviewRestore(hdc, pState);
-        pState->bVisible = FALSE;
-    }
-
-    pState->nSnapEdge = nEdge;
-    pState->rcTarget = *pTargetRect;
-    pState->dwStartTime = EngGetTickCount32();
-    if (!SnapPreviewCreateBuffers(hdc,
-                                  pState,
-                                  pTargetRect->right - pTargetRect->left,
-                                  pTargetRect->bottom - pTargetRect->top))
-    {
-        pState->nSnapEdge = HTNOWHERE;
-        return;
-    }
-
-#if(WINVER >= 0x0600)
-    if (SPITESTPREF(UPM_UIEFFECTS) && gspv.bClientAreaAnimation)
-#else
-    if (SPITESTPREF(UPM_UIEFFECTS))
-#endif
-    {
-        /* Animated: start from small rect centered at cursor */
-        pState->rcOrigin.left   = ptCursor.x - 10;
-        pState->rcOrigin.top    = ptCursor.y - 10;
-        pState->rcOrigin.right  = ptCursor.x + 10;
-        pState->rcOrigin.bottom = ptCursor.y + 10;
-    }
-    else
-    {
-        /* No animation: appear instantly at target */
-        pState->rcOrigin = *pTargetRect;
-    }
-
-    pState->rcCurrent = pState->rcOrigin;
-    if (!SnapPreviewCaptureBackground(hdc, pState, &pState->rcCurrent))
-        return;
-
-    if (!SnapPreviewBlendSolid(hdc,
-                               pState->hdcOverlay,
-                               pState->hbrFill,
-                               pState->rcCurrent.left,
-                               pState->rcCurrent.top,
-                               pState->rcCurrent.right - pState->rcCurrent.left,
-                               pState->rcCurrent.bottom - pState->rcCurrent.top,
-                               SNAP_PREVIEW_FILL_ALPHA,
-                               prcExclude))
-        return;
-
-    pState->bVisible = TRUE;
-    SnapPreviewAdvance(hdc, pState, prcExclude);
-}
-
-VOID
-SnapPreviewCleanup(HDC hdc, SNAP_PREVIEW_STATE *pState)
-{
-    SnapPreviewHide(hdc, pState);
-    SnapPreviewDestroyBuffers(pState);
-    if (pState->hbrFill)
-        GreDeleteObject(pState->hbrFill);
-    if (pState->hbrBorder)
-        GreDeleteObject(pState->hbrBorder);
-    pState->hbrFill = NULL;
-    pState->hbrBorder = NULL;
+    pwnd = IntSnapPreviewWindow();
+    gSnapPreview.hwnd = NULL;
+    if (pwnd != NULL)
+        co_UserDestroyWindow(pwnd);
 }
 
 /* --- Window snap logic --- */
@@ -405,6 +242,29 @@ GetSnapActivationPoint(PWND Wnd, POINT pt)
     if (pt.x >= wa.right-1) return HTRIGHT;
     if (pt.y <= wa.top) return HTTOP; /* Maximize */
     return HTNOWHERE;
+}
+
+BOOL
+IsPointHoldingSnapEdge(UINT Edge, POINT pt)
+{
+    RECT wa;
+
+    if (Edge == HTNOWHERE)
+        return FALSE;
+
+    UserSystemParametersInfo(SPI_GETWORKAREA, 0, &wa, 0); /* FIXME: MultiMon of PWND */
+
+    switch (Edge)
+    {
+    case HTLEFT:
+        return pt.x <= wa.left + SNAP_RELEASE_SLACK;
+    case HTRIGHT:
+        return pt.x >= wa.right - 1 - SNAP_RELEASE_SLACK;
+    case HTTOP:
+        return pt.y <= wa.top + SNAP_RELEASE_SLACK;
+    }
+
+    return FALSE;
 }
 
 /* Windows 10 (1903?)
@@ -443,7 +303,7 @@ co_IntCalculateSnapPosition(PWND Wnd, UINT Edge, OUT RECT *Pos)
         height = min(Pos->bottom - Pos->top, maxs.y);
         break;
     case HTLEFT:
-        Pos->right = width;
+        Pos->right = Pos->left + width;
         break;
     case HTRIGHT:
         Pos->left = Pos->right - width;

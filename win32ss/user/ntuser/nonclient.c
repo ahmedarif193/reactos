@@ -257,7 +257,6 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
    BOOL moved = FALSE;
    BOOL DragFullWindows = FALSE;
    BOOL ImeUiUpdatePending = FALSE;
-   SNAP_PREVIEW_STATE snapPreview;
    PWND pWndParent = NULL;
    WPARAM syscommand = (wParam & 0xfff0);
    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
@@ -366,7 +365,6 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
    }
 
    hdc = UserGetDCEx( pWndParent, 0, DCX_CACHE );
-   SnapPreviewInit(&snapPreview);
    if (iconic)
    {
        DragCursor = pwnd->pcls->spicn;
@@ -404,20 +402,7 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
    for(;;)
    {
       int dx = 0, dy = 0;
-      BOOL animating = SnapPreviewAdvance(hdc, &snapPreview, &pwnd->rcWindow);
-
-      if (!co_IntGetPeekMessage(&msg, 0, 0, 0, PM_REMOVE, animating ? FALSE : TRUE))
-      {
-         if (animating)
-         {
-            LARGE_INTEGER Delay;
-
-            Delay.QuadPart = (LONGLONG)-SNAP_ANIM_STEP_DELAY_MS * 10000;
-            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-            continue;
-         }
-         break;
-      }
+      if (!co_IntGetPeekMessage(&msg, 0, 0, 0, PM_REMOVE, TRUE)) break;
       if (msg.message == WM_QUIT)
       {
          MsqPostQuitMessage(pti, (ULONG)msg.wParam);
@@ -440,12 +425,21 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
              IntIsSnapAllowedForWindow(pwnd) && (ExStyle & WS_EX_MDICHILD) == 0)
          {
             BOOLEAN wasSnap = IntIsWindowSnapped(pwnd); /* Need the live snap state, not orgSnap nor maximized state */
-            UINT snapTo = iconic ? HTNOWHERE : GetSnapActivationPoint(pwnd, pt);
+            UINT snapTo;
+
+            /* An armed edge is what the preview shows, so it is what the release
+             * honours even if the pointer has since drifted off the exact edge. */
+            if (iconic)
+                snapTo = HTNOWHERE;
+            else if (IntSnapPreviewEdge() != HTNOWHERE)
+                snapTo = IntSnapPreviewEdge();
+            else
+                snapTo = GetSnapActivationPoint(pwnd, pt);
             if (snapTo)
             {
                 if (DragFullWindows)
                 {
-                    SnapPreviewHide(hdc, &snapPreview);
+                    co_IntSnapPreviewHide();
                     co_IntSnapWindow(pwnd, snapTo);
                     ImeUiUpdatePending = TRUE;
                     if (!wasSnap)
@@ -557,8 +551,9 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                       co_IntCalculateSnapPosition(pwnd, snapTo, &snapPreviewRect);
                       if (DragFullWindows)
                       {
-                          SnapPreviewShow(hdc, &snapPreview, snapTo, &snapPreviewRect, pt, &pwnd->rcWindow);
-                          continue; /* Don't move the actual window while preview is showing */
+                          /* The preview is a window of its own, so the dragged
+                           * window keeps following the pointer on top of it. */
+                          co_IntSnapPreviewShow(pwnd, snapTo, &snapPreviewRect, pt);
                       }
                       else
                       {
@@ -567,10 +562,12 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                           continue;
                       }
                   }
-                  else if (DragFullWindows && snapPreview.bVisible)
+                  else if (DragFullWindows &&
+                           IntSnapPreviewEdge() != HTNOWHERE &&
+                           !IsPointHoldingSnapEdge(IntSnapPreviewEdge(), pt))
                   {
                       /* Cursor moved away from screen edge */
-                      SnapPreviewHide(hdc, &snapPreview);
+                      co_IntSnapPreviewHide();
                   }
               }
 
@@ -665,6 +662,7 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
                     if (hrgnNew) GreDeleteObject(hrgnNew);
                  }
               }
+
               sizingRect = newRect;
         }
       }
@@ -672,7 +670,7 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
 
    pwnd->head.pti->TIF_flags &= ~TIF_MOVESIZETRACKING;
 
-   SnapPreviewCleanup(hdc, &snapPreview);
+   co_IntSnapPreviewDestroy();
 
    IntReleaseCapture();
 

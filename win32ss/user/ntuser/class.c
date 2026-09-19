@@ -111,6 +111,15 @@ REGISTER_SYSCLASS DefaultServerClasses[] =
     NULL,
     FNID_MESSAGEWND,
     ICLS_HWNDMESSAGE
+  },
+  { SNAP_PREVIEW_CLASS_NAME,
+    CS_GLOBALCLASS,
+    NULL, // Reuse the kernel-side message window procedure
+    0,
+    NULL,
+    NULL,
+    FNID_MESSAGEWND,
+    ICLS_HWNDMESSAGE
   }
 };
 
