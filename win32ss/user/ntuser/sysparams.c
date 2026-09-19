@@ -458,6 +458,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     if (gpsi)
         gpsi->dtCaretBlink = SpiLoadInt(KEY_DESKTOP, VAL_CARETRATE, 530);
     gspv.dwCaretWidth = SpiLoadDWord(KEY_DESKTOP, VAL_CARETWIDTH, 1);
+    gspv.dwCaretTimeout = SpiLoadDWord(KEY_DESKTOP, L"CaretTimeout", 5000);
     gspv.dwUserPrefMask = SpiLoadUserPrefMask(UPM_DEFAULT);
     gspv.bMouseClickLock = (gspv.dwUserPrefMask & UPM_CLICKLOCK) != 0;
     gspv.bMouseCursorShadow = (gspv.dwUserPrefMask & UPM_CURSORSHADOW) != 0;
@@ -2108,6 +2109,19 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
         case SPI_SETFOREGROUNDFLASHCOUNT:
             return SpiSetInt(&gspv.dwForegroundFlashCount, uiParam, KEY_MOUSE, L"", fl);
 
+        /* Undocumented cursor-size query used by modern desktop applications. */
+        case 0x2028:
+        {
+            INT size = UserGetSystemMetrics(SM_CXCURSOR);
+            return SpiGetInt(pvParam, &size, fl);
+        }
+
+        case SPI_GETCARETTIMEOUT:
+            return SpiGetInt(pvParam, &gspv.dwCaretTimeout, fl);
+
+        case SPI_SETCARETTIMEOUT:
+            return SpiSetDWord(&gspv.dwCaretTimeout, PtrToUlong(pvParam), KEY_DESKTOP, L"CaretTimeout", fl);
+
         case SPI_GETCARETWIDTH:
             return SpiGetInt(pvParam, &gspv.dwCaretWidth, fl);
 
@@ -2270,6 +2284,8 @@ SpiGetSetProbeBuffer(UINT uiAction, UINT uiParam, PVOID pvParam)
         case SPI_GETACTIVEWNDTRKTIMEOUT:
         case SPI_GETFOREGROUNDFLASHCOUNT:
         case SPI_GETCARETWIDTH:
+        case SPI_GETCARETTIMEOUT:
+        case 0x2028: /* Cursor size, DWORD output. */
         case SPI_GETMOUSECLICKLOCKTIME:
         case SPI_GETFONTSMOOTHINGTYPE:
         case SPI_GETFONTSMOOTHINGCONTRAST:
