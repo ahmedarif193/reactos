@@ -3,6 +3,7 @@ add_definitions(-DUSE_WINE_TODOS)
 
 list(APPEND SOURCE
     asn.c
+    catalog_policy.c
     crypt.c
     register.c
     softpub.c
