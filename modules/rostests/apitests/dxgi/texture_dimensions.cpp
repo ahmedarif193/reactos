@@ -501,3 +501,62 @@ START_TEST(raster_coverage)
     device->Release();
     FreeLibrary(runtime);
 }
+
+
+START_TEST(null_texture)
+{
+    typedef HRESULT (WINAPI *CREATE_DEVICE)(IDXGIAdapter *, D3D_DRIVER_TYPE, HMODULE,
+            UINT, const D3D_FEATURE_LEVEL *, UINT, UINT, ID3D11Device **, D3D_FEATURE_LEVEL *, ID3D11DeviceContext **);
+    HMODULE runtime = LoadLibraryW(L"d3d11.dll");
+    CREATE_DEVICE create = runtime ? reinterpret_cast<CREATE_DEVICE>(GetProcAddress(runtime, "D3D11CreateDevice")) : NULL;
+    if (!create) { skip("D3D11 unavailable\n"); return; }
+    ID3D11Device *device = NULL;
+    ID3D11DeviceContext *context = NULL;
+    HRESULT hr = create(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0, NULL, 0, D3D11_SDK_VERSION, &device, NULL, &context);
+    if (FAILED(hr)) { skip("Hardware D3D11 unavailable: %#lx\n", hr); FreeLibrary(runtime); return; }
+
+    const char *sources[] = {
+        "Texture2D<float4> t : register(t0); SamplerState s : register(s0); float4 main() : SV_Target {return t.SampleLevel(s,float2(0.5,0.5),0);}",
+        "Texture2D<float4> t : register(t0); float4 main() : SV_Target {return t.Load(int3(0,0,0));}",
+        "Texture2D<float4> t : register(t0); float4 main() : SV_Target {uint w,h,l; t.GetDimensions(0,w,h,l); return float4(w,h,l,0);}",
+        "Texture2D<float4> t : register(t0); float4 main() : SV_Target {uint w,h,l; t.GetDimensions(3,w,h,l); return float4(w,h,l,0);}",
+        "Texture3D<float4> t : register(t0); float4 main() : SV_Target {return t.Load(int4(0,0,0,0));}",
+        "Texture3D<float4> t : register(t0); float4 main() : SV_Target {uint w,h,d,l; t.GetDimensions(0,w,h,d,l); return float4(w,h,d,l);}",
+        "Texture2DArray<float4> t : register(t0); float4 main() : SV_Target {uint w,h,a,l; t.GetDimensions(0,w,h,a,l); return float4(w,h,a,l);}",
+        "TextureCube<float4> t : register(t0); SamplerState s : register(s0); float4 main() : SV_Target {return t.SampleLevel(s,float3(1,0,0),0);}"
+    };
+    for (UINT i = 0; i < ARRAYSIZE(sources); ++i)
+    {
+        trace("Unbound texture case %u\n", i);
+        TestSample(device, context, NULL, sources[i], 0);
+    }
+
+    /* A bound view must retain its contents after unbound-view variants. */
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = desc.Height = desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    const UINT green = 0xff00ff00;
+    D3D11_SUBRESOURCE_DATA initial = {};
+    initial.pSysMem = &green; initial.SysMemPitch = sizeof(green);
+    ID3D11Texture2D *texture = NULL;
+    ID3D11ShaderResourceView *view = NULL;
+    hr = device->CreateTexture2D(&desc, &initial, &texture);
+    ok(hr == S_OK, "Bound control texture: %#lx\n", hr);
+    if (texture) hr = device->CreateShaderResourceView(texture, NULL, &view);
+    ok(hr == S_OK && view, "Bound control view: %#lx\n", hr);
+    if (view)
+    {
+        TestSample(device, context, view, sources[0], green);
+        TestSample(device, context, NULL, sources[0], 0);
+        TestSample(device, context, view, sources[0], green);
+        view->Release();
+    }
+    if (texture) texture->Release();
+    context->ClearState();
+    context->Flush();
+    context->Release();
+    device->Release();
+    FreeLibrary(runtime);
+}
