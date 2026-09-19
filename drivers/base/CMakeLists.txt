@@ -1,5 +1,7 @@
 
-add_subdirectory(beep)
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    add_subdirectory(beep)
+endif()
 add_subdirectory(bootvid)
 add_subdirectory(condrv)
 

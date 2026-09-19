@@ -61,6 +61,28 @@ AreDriversLoaded(
 }
 
 static BOOLEAN
+FindDriverInfLine(
+    IN HINF hInf,
+    IN PCWSTR Section,
+    IN PCWSTR Key,
+    OUT PINFCONTEXT Context)
+{
+    WCHAR PlatformSection[64];
+
+    /* Match the architecture-first lookup used for SourceDisksFiles. */
+    if (NT_SUCCESS(RtlStringCchPrintfW(PlatformSection,
+                                       RTL_NUMBER_OF(PlatformSection),
+                                       L"%s." INF_ARCH,
+                                       Section)) &&
+        SpInfFindFirstLine(hInf, PlatformSection, Key, Context))
+    {
+        return TRUE;
+    }
+
+    return SpInfFindFirstLine(hInf, Section, Key, Context);
+}
+
+static BOOLEAN
 InstallDriver(
     IN HINF hInf,
     IN HANDLE hServices,
@@ -91,7 +113,7 @@ InstallDriver(
         return TRUE;
 
     /* Check if we know the hardware */
-    if (!SpInfFindFirstLine(hInf, L"HardwareIdsDatabase", HardwareId, &Context))
+    if (!FindDriverInfLine(hInf, L"HardwareIdsDatabase", HardwareId, &Context))
         return FALSE;
     if (!INF_GetDataField(&Context, 1, &Driver))
         return FALSE;
@@ -102,11 +124,11 @@ InstallDriver(
 
     /* Find associated driver name */
     /* FIXME: check in other sections too! */
-    if (!SpInfFindFirstLine(hInf, L"BootBusExtenders.Load", Driver, &Context)
-     && !SpInfFindFirstLine(hInf, L"BusExtenders.Load", Driver, &Context)
-     && !SpInfFindFirstLine(hInf, L"SCSI.Load", Driver, &Context)
-     && !SpInfFindFirstLine(hInf, L"InputDevicesSupport.Load", Driver, &Context)
-     && !SpInfFindFirstLine(hInf, L"Keyboard.Load", Driver, &Context))
+    if (!FindDriverInfLine(hInf, L"BootBusExtenders.Load", Driver, &Context)
+     && !FindDriverInfLine(hInf, L"BusExtenders.Load", Driver, &Context)
+     && !FindDriverInfLine(hInf, L"SCSI.Load", Driver, &Context)
+     && !FindDriverInfLine(hInf, L"InputDevicesSupport.Load", Driver, &Context)
+     && !FindDriverInfLine(hInf, L"Keyboard.Load", Driver, &Context))
     {
         INF_FreeData(ClassGuid);
         INF_FreeData(Driver);

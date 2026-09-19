@@ -86,11 +86,8 @@ FreeSysPartDiskSpace = 450
 ;
 [SourceDisksFiles]
 nmidebug.sys = 1,,,,,,x,4,,,,1,4
-sacdrv.sys   = 1,,,,,,x,4,,,,1,4
 ;uniata.sys   = 1,,,,,,x,4,,,,1,4
-atapi.sys    = 1,,,,,,x,4,,,,1,4
 buslogic.sys = 1,,,,,,x,4,,,,1,4
-blue.sys     = 1,,,,,,x,4,,,,1,4
 vgafonts.cab = 1,,,,,,,1,,,,1,1
 bootvid.dll  = 1,,,,,,,2,,,,1,2
 c_437.nls    = 1,,,,,,,2,,,,1,2
@@ -98,12 +95,9 @@ c_1252.nls   = 1,,,,,,,2,,,,1,2
 cdfs.sys     = 1,,,,,,x,4,,,,1,4
 cdrom.sys    = 1,,,,,,x,4,,,,1,4
 classpnp.sys = 1,,,,,,,4,,,,1,4
-isapnp.sys   = 1,,,,,,x,4,,,,1,4
 kdcom.dll    = 1,,,,,,,2,,,,1,2
 kdvbox.dll   = 1,,,,,,,2,,,,1,2
 disk.sys     = 1,,,,,,x,4,,,,1,4
-floppy.sys   = 1,,,,,,x,4,,,,1,4
-i8042prt.sys = 1,,,,,,,4,,,,1,4
 hidclass.sys = 1,,,,,,,4,,,,1,4
 hidparse.sys = 1,,,,,,,4,,,,1,4
 hidusb.sys   = 1,,,,,,,4,,,,1,4
@@ -126,7 +120,6 @@ fastfat.sys  = 1,,,,,,x,4,,,,1,4
 btrfs.sys    = 1,,,,,,x,4,,,,1,4
 ntfs.sys    = 1,,,,,,x,4,,,,1,4
 ramdisk.sys  = 1,,,,,,x,4,,,,1,4
-pciide.sys   = 1,,,,,,x,4,,,,1,4
 pciidex.sys  = 1,,,,,,,4,,,,1,4
 pcix.sys     = 1,,,,,,,4,,,,1,4
 pcmcia.sys   = 1,,,,,,,4,,,,1,4
@@ -142,9 +135,23 @@ wdf01000.sys = 1,,,,,,x,4,,,,1,4
 [SourceDisksFiles.x86]
 acpi.sys     = 1,,,,,,,4,1,,,1,4
 legide.sys   = 1,,,,,,,4,,,,1,4
+sacdrv.sys   = 1,,,,,,x,4,,,,1,4
+atapi.sys    = 1,,,,,,x,4,,,,1,4
+blue.sys     = 1,,,,,,x,4,,,,1,4
+isapnp.sys   = 1,,,,,,x,4,,,,1,4
+floppy.sys   = 1,,,,,,x,4,,,,1,4
+i8042prt.sys = 1,,,,,,,4,,,,1,4
+pciide.sys   = 1,,,,,,x,4,,,,1,4
 
 [SourceDisksFiles.amd64]
 acpi.sys     = 1,,,,,,x,4,,,,1,4
+sacdrv.sys   = 1,,,,,,x,4,,,,1,4
+atapi.sys    = 1,,,,,,x,4,,,,1,4
+blue.sys     = 1,,,,,,x,4,,,,1,4
+isapnp.sys   = 1,,,,,,x,4,,,,1,4
+floppy.sys   = 1,,,,,,x,4,,,,1,4
+i8042prt.sys = 1,,,,,,,4,,,,1,4
+pciide.sys   = 1,,,,,,x,4,,,,1,4
 
 [SourceDisksFiles.arm64]
 acpi.sys     = 1,,,,,,x,4,,,,1,4
@@ -158,23 +165,16 @@ rp1gem.sys   = 1,,,,,,x,4,,,,1,4
 [SystemPartitionFiles]
 
 [HardwareIdsDatabase]
-*PNP0A00 = isapnp
 *PNP0A03 = pci
 *PNP0A08 = pci
 *PNP0C08 = acpi
-PCI\CC_0601 = isapnp
 PCI\CC_0604 = pci
 PCI\VEN_104B&CC_0100 = buslogic
-PCI\CC_0101 = pciide
 ;PCI\CC_0104 = uniata
 ;PCI\CC_0105 = uniata
 ;PCI\CC_0106 = uniata
-PCI\CC_0104 = pciide
-PCI\CC_0105 = pciide
 PCI\CC_010601 = storahci
-PCI\CC_0106 = pciide
 ;*PNP0600 = uniata
-*PNP0600 = atapi
 USB\CLASS_09 = usbhub
 USB\ROOT_HUB = usbhub
 USB\ROOT_HUB20 = usbhub
@@ -191,16 +191,42 @@ USB\COMPOSITE = usbccgp
 GenDisk = disk,{4D36E967-E325-11CE-BFC1-08002BE10318}
 USB\Class_03 = hidusb
 GENERIC_HID_DEVICE = hidusb
+ROOT\SWENUM = swenum
+
+[HardwareIdsDatabase.x86]
+*PNP0A00 = isapnp
+PCI\CC_0601 = isapnp
+PCI\CC_0101 = pciide
+PCI\CC_0104 = pciide
+PCI\CC_0105 = pciide
+PCI\CC_0106 = pciide
+*PNP0600 = atapi
 *PNP0303 = i8042prt,{4D36E96B-E325-11CE-BFC1-08002BE10318}
 *PNP030B = i8042prt,{4D36E96B-E325-11CE-BFC1-08002BE10318}
 *nEC1F00 = inport,{4D36E96F-E325-11CE-BFC1-08002BE10318}
-ROOT\SWENUM = swenum
+
+[HardwareIdsDatabase.amd64]
+*PNP0A00 = isapnp
+PCI\CC_0601 = isapnp
+PCI\CC_0101 = pciide
+PCI\CC_0104 = pciide
+PCI\CC_0105 = pciide
+PCI\CC_0106 = pciide
+*PNP0600 = atapi
+*PNP0303 = i8042prt,{4D36E96B-E325-11CE-BFC1-08002BE10318}
+*PNP030B = i8042prt,{4D36E96B-E325-11CE-BFC1-08002BE10318}
+*nEC1F00 = inport,{4D36E96F-E325-11CE-BFC1-08002BE10318}
 
 [BootBusExtenders.Load]
 acpi = acpi.sys
 pci = pci.sys
-isapnp = isapnp.sys
 rp1 = rp1.sys
+
+[BootBusExtenders.Load.x86]
+isapnp = isapnp.sys
+
+[BootBusExtenders.Load.amd64]
+isapnp = isapnp.sys
 
 [InputDevicesSupport.Load]
 usbehci = usbehci.sys
@@ -214,20 +240,41 @@ usbstor = usbstor.sys
 
 [Keyboard.Load]
 kbdhid = kbdhid.sys
+
+[Keyboard.Load.x86]
+i8042prt = i8042prt.sys
+
+[Keyboard.Load.amd64]
 i8042prt = i8042prt.sys
 
 [BusExtenders.Load]
+
+[BusExtenders.Load.x86]
+pciide = pciide.sys
+atapi = atapi.sys
+
+[BusExtenders.Load.amd64]
 pciide = pciide.sys
 atapi = atapi.sys
 
 [SCSI.Load]
 ;uniata = uniata.sys
-atapi = atapi.sys
 buslogic = buslogic.sys
 storahci = storahci.sys
 disk = disk.sys
 
+[SCSI.Load.x86]
+atapi = atapi.sys
+
+[SCSI.Load.amd64]
+atapi = atapi.sys
+
 [MouseDrivers.Load]
+
+[MouseDrivers.Load.x86]
+inport = inport.sys
+
+[MouseDrivers.Load.amd64]
 inport = inport.sys
 
 [Cabinets]
