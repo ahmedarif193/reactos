@@ -1083,6 +1083,52 @@ Cleanup:
 }
 
 NTSTATUS
+DxgkContextOrderCheckRoom(
+    _Inout_ PDXGKRNL_CONTEXT Context)
+{
+    DXGMMS2_CONTEXT_STREAM_INTERFACE_V1 Interface;
+    DXGMMS2_CONTEXT_STREAM_SNAPSHOT_V1 Snapshot;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (Context == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (!ExAcquireRundownProtection(&Context->StreamAdmissionRundown))
+        return STATUS_DELETE_PENDING;
+    (VOID)KeWaitForSingleObject(&Context->StreamAdmissionMutex,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+    if (InterlockedCompareExchange(&Context->StreamStopping, 0, 0) != 0)
+    {
+        Status = STATUS_DELETE_PENDING;
+        goto Cleanup;
+    }
+    Status = DxgkpContextOrderCaptureInterface(Context, TRUE, &Interface);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    /* This is only a capacity hint, not an admission reservation. Do not
+     * drain retirements here: the caller may hold the miniport transaction.
+     * The wait path drains them after yielding that transaction. */
+    RtlZeroMemory(&Snapshot, sizeof(Snapshot));
+    Snapshot.Size = DXGMMS2_CONTEXT_STREAM_SNAPSHOT_V1_SIZE;
+    Snapshot.Version = DXGMMS2_CONTEXT_STREAM_VERSION_1;
+    Status = Interface.QueryContextStream(Interface.AdapterHandle,
+                                          Context->Mms2ContextStream,
+                                          &Snapshot);
+    if (NT_SUCCESS(Status) &&
+        Snapshot.QueuedEntryCount + Snapshot.RetiredEntryCount >= Snapshot.QueueDepth)
+        Status = STATUS_DEVICE_BUSY;
+
+Cleanup:
+    KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
+    ExReleaseRundownProtection(&Context->StreamAdmissionRundown);
+    return Status;
+}
+
+NTSTATUS
 DxgkContextOrderWaitForRoom(
     _Inout_ PDXGKRNL_CONTEXT Context,
     _In_ ULONGLONG Deadline)

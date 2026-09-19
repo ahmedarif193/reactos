@@ -731,6 +731,7 @@ VOID VidSchDispatchClaimedContextOrderPacket(_Inout_ PVIDSCH_DMA_PACKET Packet);
 BOOLEAN VidSchIsContextOrderPacketResubmittable(_In_ PVIDSCH_DMA_PACKET Packet);
 BOOLEAN VidSchDispatchContextOrderPacketResubmission(_Inout_ PVIDSCH_DMA_PACKET Packet);
 NTSTATUS DxgkContextOrderAdmitPacket(_Inout_ PDXGKRNL_CONTEXT Context, _Inout_ PVIDSCH_DMA_PACKET Packet);
+NTSTATUS DxgkContextOrderCheckRoom(_Inout_ PDXGKRNL_CONTEXT Context);
 NTSTATUS DxgkContextOrderWaitForRoom(_Inout_ PDXGKRNL_CONTEXT Context, _In_ ULONGLONG Deadline);
 VOID DxgkContextOrderKickContext(_Inout_ PDXGKRNL_CONTEXT Context);
 VOID DxgkContextOrderScheduleReferenced(_Inout_ PDXGKRNL_CONTEXT Context);

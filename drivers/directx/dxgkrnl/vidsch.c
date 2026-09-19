@@ -3475,6 +3475,26 @@ VidSchSubmitCommandTrackedMeasured(
     if (!VidSchpAcquireCall(Adapter))
         return STATUS_DELETE_PENDING;
 
+    /* A caller holding the miniport transaction can yield and retry before
+     * allocating a packet, reserving a fence, pinning residency or patching.
+     * Final admission remains atomic and handles competing stream markers. */
+    if (TrackArgs->Context != NULL &&
+        Adapter->KmdTransactionOwnerThread == PsGetCurrentThread())
+    {
+        if (TrackArgs->Context->Device == NULL ||
+            TrackArgs->Context->Device->Adapter != Adapter ||
+            (TrackArgs->Device != NULL &&
+             TrackArgs->Device != TrackArgs->Context->Device))
+            Status = STATUS_INVALID_HANDLE;
+        else
+            Status = DxgkContextOrderCheckRoom(TrackArgs->Context);
+        if (!NT_SUCCESS(Status))
+        {
+            VidSchpReleaseCall(Adapter);
+            return Status == STATUS_DEVICE_BUSY ? STATUS_RETRY : Status;
+        }
+    }
+
     Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_PACKET_PREPARE);
     Status = VidSchpPrepareSubmit(Adapter, NodeOrdinal, EngineOrdinal, TRUE, &Engine, &Packet);
     DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
