@@ -119,10 +119,8 @@
 
 #if defined(_AMD64_) || defined(_X86_)
  #define PROBE_ALIGNMENT(_s) TYPE_ALIGNMENT($ULONG)
-#elif defined(_RISCV64_)
+#elif defined(_IA64_) || defined(_ARM_) || defined(_ARM64_) || defined(_RISCV64_)
  #define PROBE_ALIGNMENT(_s) max(TYPE_ALIGNMENT(_s), TYPE_ALIGNMENT($ULONG))
-#elif defined(_IA64_) || defined(_ARM_) || defined(_ARM64_)
- #define PROBE_ALIGNMENT(_s) max((TYPE_ALIGNMENT(_s), TYPE_ALIGNMENT($ULONG))
 #elif !defined(RC_INVOKED)
  #error "Unknown architecture"
 #endif
