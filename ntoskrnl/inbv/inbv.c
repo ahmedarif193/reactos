@@ -53,6 +53,9 @@ static ULONG ResourceCount = 0;
 static PUCHAR ResourceList[1 + IDB_MAX_RESOURCES]; // First entry == NULL, followed by 'ResourceCount' entries.
 static LOADER_PARAMETER_FRAMEBUFFER InbvGopFramebuffer;
 static BOOLEAN InbvGopInfoValid = FALSE;
+
+BOOLEAN InbvBootFadeEnabled = TRUE;
+ULONG InbvBootFadeSteps = 14;
 static LOADER_PARAMETER_BGRT InbvBgrtInfo;
 static BOOLEAN InbvBgrtInfoValid = FALSE;
 
@@ -500,6 +503,23 @@ InbvNotifyDisplayOwnershipLost(
     _In_ INBV_RESET_DISPLAY_PARAMETERS Callback)
 {
     InbvGopSpinnerStop();
+
+    /*
+     * Dim the boot screen out before handing the framebuffer over, so the
+     * boot logo stays up until the display driver replaces it. Only safe
+     * where we can stall, and never while the system is crashing.
+     */
+    if (InbvBootFadeEnabled &&
+        InbvBootDriverInstalled &&
+        (InbvDisplayState == INBV_DISPLAY_STATE_OWNED) &&
+        (KeGetCurrentIrql() <= DISPATCH_LEVEL) &&
+        (KeBugCheckActive == 0))
+    {
+        InbvAcquireLock();
+        if (InbvDisplayState == INBV_DISPLAY_STATE_OWNED)
+            VidFadeToBlack(InbvBootFadeSteps);
+        InbvReleaseLock();
+    }
 
     /* Check if we're installed */
     if (InbvBootDriverInstalled)

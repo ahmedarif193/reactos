@@ -225,6 +225,14 @@ cleanup:
 
 VOID
 NTAPI
+VidFadeToBlack(
+    _In_ ULONG Steps)
+{
+    UNREFERENCED_PARAMETER(Steps);
+}
+
+VOID
+NTAPI
 VidCleanUp(VOID)
 {
     /* Just fill the screen black */

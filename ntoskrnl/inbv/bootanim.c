@@ -905,11 +905,14 @@ FinalizeBootLogo(VOID)
 
     InbvQueryDisplayInfo(&DisplayInfo);
 
-    /* Acquire lock and check the display state */
+    /*
+     * Leave whatever is on screen alone: the boot logo stays up until the
+     * display driver takes the framebuffer over and InbvNotifyDisplayOwnershipLost
+     * fades it out.
+     */
     InbvAcquireLock();
-    if (InbvGetDisplayState() == INBV_DISPLAY_STATE_OWNED)
+    if (!InbvBootFadeEnabled && InbvGetDisplayState() == INBV_DISPLAY_STATE_OWNED)
     {
-        /* Clear the screen */
         VidSolidColorFill(0, 0, DisplayInfo.Width - 1, DisplayInfo.Height - 1, BV_COLOR_BLACK);
     }
 

@@ -30,6 +30,10 @@ static ULONG_PTR FrameBufferStart = 0;
 static ULONG_PTR PhysicalFrameBufferStart = 0;
 static ULONG FrameBufferSize;
 static ULONG ScreenWidth, ScreenHeight, BytesPerScanLine;
+
+#define BV_FADE_MAX_STEPS     32
+#define BV_FADE_STEP_DELAY_US 8000
+#define TAG_BOOTVID_FADE      'fdiV'
 static ULONG FrameBufferWidth, FrameBufferHeight;
 static ULONG FrameBufferRotation;
 static UCHAR BytesPerPixel;
@@ -579,6 +583,102 @@ Failure:
         MmUnmapIoSpace(FrameBufferBase, MappedSize);
 
     return FALSE;
+}
+
+VOID
+NTAPI
+VidFadeToBlack(
+    _In_ ULONG Steps)
+{
+    PULONG Snapshot;
+    SIZE_T Pixels;
+    ULONG Step, x, y;
+    UCHAR Lut[256];
+
+    if (!FrameBufferStart || BytesPerPixel != sizeof(ULONG))
+        return;
+    if (ScreenWidth == 0 || ScreenHeight == 0)
+        return;
+
+    if (Steps < 2)
+        Steps = 2;
+    else if (Steps > BV_FADE_MAX_STEPS)
+        Steps = BV_FADE_MAX_STEPS;
+
+    Pixels = (SIZE_T)ScreenWidth * ScreenHeight;
+    if (Pixels > MAXULONG_PTR / sizeof(ULONG))
+        return;
+
+    /*
+     * Reading the framebuffer back is far too slow to do once per step, so
+     * take one copy into cached memory and scale every step out of that.
+     * Without the copy there is nothing to fade from, so just leave the
+     * screen to the caller.
+     */
+    Snapshot = ExAllocatePoolWithTag(NonPagedPool, Pixels * sizeof(ULONG), TAG_BOOTVID_FADE);
+    if (!Snapshot)
+        return;
+
+    if (FrameBufferRotation == LoaderFramebufferRotationIdentity)
+    {
+        for (y = 0; y < ScreenHeight; ++y)
+        {
+            RtlCopyMemory(Snapshot + (SIZE_T)y * ScreenWidth,
+                          FramePixel(0, y),
+                          (SIZE_T)ScreenWidth * sizeof(ULONG));
+        }
+    }
+    else
+    {
+        for (y = 0; y < ScreenHeight; ++y)
+            for (x = 0; x < ScreenWidth; ++x)
+                Snapshot[(SIZE_T)y * ScreenWidth + x] = *FramePixel(x, y);
+    }
+
+    for (Step = 1; Step < Steps; ++Step)
+    {
+        ULONG Level = Steps - Step;
+        ULONG i;
+
+        for (i = 0; i < 256; ++i)
+            Lut[i] = (UCHAR)(i * Level / Steps);
+
+        for (y = 0; y < ScreenHeight; ++y)
+        {
+            const ULONG *Src = Snapshot + (SIZE_T)y * ScreenWidth;
+
+            if (FrameBufferRotation == LoaderFramebufferRotationIdentity)
+            {
+                PULONG Dst = FramePixel(0, y);
+
+                for (x = 0; x < ScreenWidth; ++x)
+                {
+                    ULONG Pixel = Src[x];
+
+                    Dst[x] = ((ULONG)Lut[(Pixel >> 16) & 0xFF] << 16) |
+                             ((ULONG)Lut[(Pixel >>  8) & 0xFF] <<  8) |
+                              (ULONG)Lut[ Pixel        & 0xFF];
+                }
+            }
+            else
+            {
+                for (x = 0; x < ScreenWidth; ++x)
+                {
+                    ULONG Pixel = Src[x];
+
+                    *FramePixel(x, y) = ((ULONG)Lut[(Pixel >> 16) & 0xFF] << 16) |
+                                        ((ULONG)Lut[(Pixel >>  8) & 0xFF] <<  8) |
+                                         (ULONG)Lut[ Pixel        & 0xFF];
+                }
+            }
+        }
+
+        KeStallExecutionProcessor(BV_FADE_STEP_DELAY_US);
+    }
+
+    ExFreePoolWithTag(Snapshot, TAG_BOOTVID_FADE);
+
+    VidSolidColorFill(0, 0, ScreenWidth - 1, ScreenHeight - 1, BV_COLOR_BLACK);
 }
 
 VOID
