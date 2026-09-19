@@ -1335,12 +1335,22 @@ static void test_bm_get_set_image(void)
     hbmp2x2 = CreateCompatibleBitmap(hdc, 2, 2);
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp1x1, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 1, 1,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %d,%d\n", 1, 1,
        bm.bmWidth, bm.bmHeight);
+#endif
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp2x2, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
+#endif
 
     hmask2x2 = CreateCompatibleBitmap(hdc, 2, 2);
     ZeroMemory(&icon_info2x2, sizeof(icon_info2x2));
@@ -1354,8 +1364,13 @@ static void test_bm_get_set_image(void)
     ok(GetIconInfo(hicon2x2, &icon_info), "Expect GetIconInfo() success\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(icon_info.hbmColor, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
+#endif
     DeleteObject(icon_info.hbmColor);
     DeleteObject(icon_info.hbmMask);
 
@@ -1387,8 +1402,13 @@ static void test_bm_get_set_image(void)
     ok(hbmp != 0, "Expect hbmp != 0\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 1, 1,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %d,%d\n", 1, 1,
        bm.bmWidth, bm.bmHeight);
+#endif
     DestroyWindow(hwnd);
 
     /* Set bitmap without BS_BITMAP */
@@ -1407,8 +1427,13 @@ static void test_bm_get_set_image(void)
     ok(hbmp != 0, "Expect hbmp != 0\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 1, 1,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %d,%d\n", 1, 1,
        bm.bmWidth, bm.bmHeight);
+#endif
     DestroyWindow(hwnd);
 
     /* Set icon with BS_ICON */
@@ -1423,8 +1448,13 @@ static void test_bm_get_set_image(void)
     ok(GetIconInfo(hicon, &icon_info), "Expect GetIconInfo() success\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(icon_info.hbmColor, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
+#endif
     DeleteObject(icon_info.hbmColor);
     DeleteObject(icon_info.hbmMask);
     DestroyWindow(hwnd);
@@ -1440,8 +1470,13 @@ static void test_bm_get_set_image(void)
     ok(GetIconInfo(hicon, &icon_info), "Expect GetIconInfo() success\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(icon_info.hbmColor, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
+#endif
     DeleteObject(icon_info.hbmColor);
     DeleteObject(icon_info.hbmMask);
     DestroyWindow(hwnd);
@@ -1458,8 +1493,13 @@ static void test_bm_get_set_image(void)
     ok(GetIconInfo(hicon, &icon_info), "Expect GetIconInfo() success\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(icon_info.hbmColor, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
+#endif
     DeleteObject(icon_info.hbmColor);
     DeleteObject(icon_info.hbmMask);
     DestroyWindow(hwnd);
@@ -1474,8 +1514,13 @@ static void test_bm_get_set_image(void)
     ok(hbmp != 0, "Expect hbmp != 0\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 1, 1,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %d,%d\n", 1, 1,
        bm.bmWidth, bm.bmHeight);
+#endif
     DestroyWindow(hwnd);
 
     /* Set bitmap with BS_BITMAP and IMAGE_ICON*/
@@ -1488,8 +1533,13 @@ static void test_bm_get_set_image(void)
     ok(hbmp != 0, "Expect hbmp != 0\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 1, 1,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %d,%d\n", 1, 1,
        bm.bmWidth, bm.bmHeight);
+#endif
     DestroyWindow(hwnd);
 
     /* Set icon with BS_ICON and IMAGE_BITMAP */
@@ -1504,8 +1554,13 @@ static void test_bm_get_set_image(void)
     ok(GetIconInfo(hicon, &icon_info), "Expect GetIconInfo() success\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(icon_info.hbmColor, sizeof(BITMAP), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
+#endif
     DeleteObject(icon_info.hbmColor);
     DeleteObject(icon_info.hbmMask);
     DestroyWindow(hwnd);
@@ -1519,8 +1574,13 @@ static void test_bm_get_set_image(void)
     ok(hbmp != 0, "Expect hbmp != 0\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(hbmp, sizeof(bm), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 1, 1,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 1 && bm.bmHeight == 1, "Expect bitmap size: %d,%d, got: %d,%d\n", 1, 1,
        bm.bmWidth, bm.bmHeight);
+#endif
     DestroyWindow(hwnd);
 
     /* Set icon with BS_BITMAP and IMAGE_BITMAP */
@@ -1534,8 +1594,13 @@ static void test_bm_get_set_image(void)
     ok(GetIconInfo(hicon, &icon_info), "Expect GetIconInfo() success\n");
     ZeroMemory(&bm, sizeof(bm));
     ok(GetObjectW(icon_info.hbmColor, sizeof(BITMAP), &bm), "Expect GetObjectW() success\n");
+#ifdef __REACTOS__
+    ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %ld,%ld\n", 2, 2,
+       bm.bmWidth, bm.bmHeight);
+#else
     ok(bm.bmWidth == 2 && bm.bmHeight == 2, "Expect bitmap size: %d,%d, got: %d,%d\n", 2, 2,
        bm.bmWidth, bm.bmHeight);
+#endif
     DeleteObject(icon_info.hbmColor);
     DeleteObject(icon_info.hbmMask);
     DestroyWindow(hwnd);

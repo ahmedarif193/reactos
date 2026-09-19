@@ -6,6 +6,7 @@
  */
 
 #define COBJMACROS
+#define CONST_VTABLE
 
 #include <apitest.h>
 #include <objbase.h>

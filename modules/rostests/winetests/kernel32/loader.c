@@ -3265,7 +3265,7 @@ static BOOL WINAPI dll_entry_point(HINSTANCE hinst, DWORD reason, LPVOID param)
             else
             {
                 ret = WaitForSingleObject(handle, 1000);
-                ok(ret == WAIT_TIMEOUT, "expected WAIT_TIMEOUT, got %#x\n", ret);
+                ok(ret == WAIT_TIMEOUT, "expected WAIT_TIMEOUT, got %#lx\n", ret);
                 CloseHandle(handle);
             }
 #else
@@ -3299,7 +3299,7 @@ static BOOL WINAPI dll_entry_point(HINSTANCE hinst, DWORD reason, LPVOID param)
             else
             {
                 ret = WaitForSingleObject(handle, 1000);
-                ok(ret == WAIT_TIMEOUT, "expected WAIT_TIMEOUT, got %#x\n", ret);
+                ok(ret == WAIT_TIMEOUT, "expected WAIT_TIMEOUT, got %#lx\n", ret);
                 CloseHandle(handle);
             }
 #else

@@ -8,6 +8,8 @@
  * A host UI driver selects the requested visible menu commands and buttons.
  */
 #define COBJMACROS
+#define UNICODE
+#define _UNICODE
 #include <windows.h>
 #include <shlobj.h>
 #include <shlwapi.h>

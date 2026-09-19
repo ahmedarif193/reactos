@@ -345,8 +345,13 @@ static void test_LoadIconWithScaleDown(void)
     ok(res, "Failed to get icon info, error %lu\n", GetLastError());
     bytes = GetObjectA(info.hbmColor, sizeof(bmp), &bmp);
     ok(bytes > 0, "Failed to get bitmap info for icon\n");
+#ifdef __REACTOS__
+    ok(bmp.bmWidth  == GetSystemMetrics(SM_CXSMICON), "Wrong icon width %ld\n", bmp.bmWidth);
+    ok(bmp.bmHeight == GetSystemMetrics(SM_CYSMICON), "Wrong icon height %ld\n", bmp.bmHeight);
+#else
     ok(bmp.bmWidth  == GetSystemMetrics(SM_CXSMICON), "Wrong icon width %d\n", bmp.bmWidth);
     ok(bmp.bmHeight == GetSystemMetrics(SM_CYSMICON), "Wrong icon height %d\n", bmp.bmHeight);
+#endif
     DestroyIcon(icon);
 
     hr = pLoadIconMetric(NULL, (LPWSTR)IDI_APPLICATION, LIM_LARGE, &icon);
@@ -355,8 +360,13 @@ static void test_LoadIconWithScaleDown(void)
     ok(res, "Failed to get icon info, error %lu\n", GetLastError());
     bytes = GetObjectA(info.hbmColor, sizeof(bmp), &bmp);
     ok(bytes > 0, "Failed to get bitmap info for icon\n");
+#ifdef __REACTOS__
+    ok(bmp.bmWidth  == GetSystemMetrics(SM_CXICON), "Wrong icon width %ld\n", bmp.bmWidth);
+    ok(bmp.bmHeight == GetSystemMetrics(SM_CYICON), "Wrong icon height %ld\n", bmp.bmHeight);
+#else
     ok(bmp.bmWidth  == GetSystemMetrics(SM_CXICON), "Wrong icon width %d\n", bmp.bmWidth);
     ok(bmp.bmHeight == GetSystemMetrics(SM_CYICON), "Wrong icon height %d\n", bmp.bmHeight);
+#endif
     DestroyIcon(icon);
 
     hr = pLoadIconWithScaleDown(NULL, (LPWSTR)IDI_APPLICATION, 42, 42, &icon);
@@ -365,8 +375,13 @@ static void test_LoadIconWithScaleDown(void)
     ok(res, "Failed to get icon info, error %lu\n", GetLastError());
     bytes = GetObjectA(info.hbmColor, sizeof(bmp), &bmp);
     ok(bytes > 0, "Failed to get bitmap info for icon\n");
+#ifdef __REACTOS__
+    ok(bmp.bmWidth  == 42, "Wrong icon width %ld\n", bmp.bmWidth);
+    ok(bmp.bmHeight == 42, "Wrong icon height %ld\n", bmp.bmHeight);
+#else
     ok(bmp.bmWidth  == 42, "Wrong icon width %d\n", bmp.bmWidth);
     ok(bmp.bmHeight == 42, "Wrong icon height %d\n", bmp.bmHeight);
+#endif
     DestroyIcon(icon);
 
     /* load icon from file */
@@ -376,8 +391,13 @@ static void test_LoadIconWithScaleDown(void)
     ok(res, "Failed to get icon info, error %lu\n", GetLastError());
     bytes = GetObjectA(info.hbmColor, sizeof(bmp), &bmp);
     ok(bytes > 0, "Failed to get bitmap info for icon\n");
+#ifdef __REACTOS__
+    ok(bmp.bmWidth  == GetSystemMetrics(SM_CXSMICON), "Wrong icon width %ld\n", bmp.bmWidth);
+    ok(bmp.bmHeight == GetSystemMetrics(SM_CYSMICON), "Wrong icon height %ld\n", bmp.bmHeight);
+#else
     ok(bmp.bmWidth  == GetSystemMetrics(SM_CXSMICON), "Wrong icon width %d\n", bmp.bmWidth);
     ok(bmp.bmHeight == GetSystemMetrics(SM_CYSMICON), "Wrong icon height %d\n", bmp.bmHeight);
+#endif
     DestroyIcon(icon);
 
     hr = pLoadIconWithScaleDown(NULL, icon_path, 42, 42, &icon);
@@ -386,8 +406,13 @@ static void test_LoadIconWithScaleDown(void)
     ok(res, "Failed to get icon info, error %lu\n", GetLastError());
     bytes = GetObjectA(info.hbmColor, sizeof(bmp), &bmp);
     ok(bytes > 0, "Failed to get bitmap info for icon\n");
+#ifdef __REACTOS__
+    ok(bmp.bmWidth  == 42, "Wrong icon width %ld\n", bmp.bmWidth);
+    ok(bmp.bmHeight == 42, "Wrong icon height %ld\n", bmp.bmHeight);
+#else
     ok(bmp.bmWidth  == 42, "Wrong icon width %d\n", bmp.bmWidth);
     ok(bmp.bmHeight == 42, "Wrong icon height %d\n", bmp.bmHeight);
+#endif
     DestroyIcon(icon);
 
     DeleteFileW(icon_path);
