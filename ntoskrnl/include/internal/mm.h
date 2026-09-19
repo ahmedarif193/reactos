@@ -1796,6 +1796,39 @@ MmLoadSystemImage(
     OUT PVOID *ImageBaseAddress
 );
 
+/*
+ * A validated image section for the same FileName and Flags passed to the loader.
+ * The caller must free it after loading, including when it was not consumed.
+ */
+typedef struct _MM_PREPARED_SYSTEM_IMAGE
+{
+    HANDLE FileHandle;
+    PVOID Section;
+} MM_PREPARED_SYSTEM_IMAGE, *PMM_PREPARED_SYSTEM_IMAGE;
+
+NTSTATUS
+NTAPI
+MmPrepareSystemImage(
+    _In_ PUNICODE_STRING FileName,
+    _In_ ULONG Flags,
+    _Out_ PMM_PREPARED_SYSTEM_IMAGE PreparedImage);
+
+VOID
+NTAPI
+MmFreePreparedSystemImage(
+    _Inout_ PMM_PREPARED_SYSTEM_IMAGE PreparedImage);
+
+NTSTATUS
+NTAPI
+MmLoadSystemImageEx(
+    _In_ PUNICODE_STRING FileName,
+    _In_opt_ PUNICODE_STRING NamePrefix,
+    _In_opt_ PUNICODE_STRING LoadedName,
+    _In_ ULONG Flags,
+    _Inout_opt_ PMM_PREPARED_SYSTEM_IMAGE PreparedImage,
+    _Out_ PVOID *ModuleObject,
+    _Out_ PVOID *ImageBaseAddress);
+
 NTSTATUS
 NTAPI
 MmUnloadSystemImage(

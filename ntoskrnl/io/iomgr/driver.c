@@ -61,6 +61,22 @@ PLIST_ENTRY IopGroupTable;
 
 /* TYPES *********************************************************************/
 
+typedef struct _IOP_SYSTEM_DRIVER_PREPARATION
+{
+    WORK_QUEUE_ITEM WorkItem;
+    KEVENT Ready;
+    PUNICODE_STRING RegistryPath;
+    UNICODE_STRING ImagePath;
+    MM_PREPARED_SYSTEM_IMAGE Image;
+} IOP_SYSTEM_DRIVER_PREPARATION, *PIOP_SYSTEM_DRIVER_PREPARATION;
+
+static
+NTSTATUS
+IopLoadDriverWithImage(
+    _In_ HANDLE ServiceHandle,
+    _In_opt_ PIOP_SYSTEM_DRIVER_PREPARATION Preparation,
+    _Out_ PDRIVER_OBJECT *DriverObject);
+
 // Parameters packet for Load/Unload work item's context
 typedef struct _LOAD_UNLOAD_PARAMS
 {
@@ -722,6 +738,73 @@ IopNormalizeImagePath(
 
     DPRINT("Normalized image path is '%wZ' for service '%wZ'\n", ImagePath, ServiceName);
 
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+IopGetDriverImagePath(
+    _In_ HANDLE ServiceHandle,
+    _Out_ PUNICODE_STRING ImagePathOut)
+{
+    PKEY_VALUE_FULL_INFORMATION kvInfo;
+    UNICODE_STRING ImagePath, NormalizedPath, ServiceName = {0};
+    NTSTATUS Status;
+
+    Status = IopGetRegistryValue(ServiceHandle, L"ImagePath", &kvInfo);
+    if (NT_SUCCESS(Status))
+    {
+        if ((kvInfo->Type != REG_EXPAND_SZ && kvInfo->Type != REG_SZ) ||
+            (kvInfo->DataLength < sizeof(UNICODE_NULL)) ||
+            (kvInfo->DataLength > UNICODE_STRING_MAX_BYTES) ||
+            ((kvInfo->DataLength % sizeof(WCHAR)) != 0))
+        {
+            DPRINT1("ObjectName invalid (Type = %lu, DataLength = %lu)\n",
+                    kvInfo->Type,
+                    kvInfo->DataLength);
+            ExFreePool(kvInfo);
+            return STATUS_ILL_FORMED_SERVICE_ENTRY;
+        }
+
+        ImagePath.Length = (USHORT)(kvInfo->DataLength - sizeof(UNICODE_NULL));
+        ImagePath.MaximumLength = kvInfo->DataLength;
+        ImagePath.Buffer = ExAllocatePoolWithTag(PagedPool, ImagePath.MaximumLength, TAG_RTLREGISTRY);
+        if (!ImagePath.Buffer)
+        {
+            ExFreePool(kvInfo);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlMoveMemory(ImagePath.Buffer,
+                      (PVOID)((ULONG_PTR)kvInfo + kvInfo->DataOffset),
+                      ImagePath.Length);
+        ImagePath.Buffer[ImagePath.Length / sizeof(WCHAR)] = UNICODE_NULL;
+        ExFreePool(kvInfo);
+    }
+    else
+    {
+        return Status;
+    }
+
+    /* An empty ImagePath uses the service key name as the file name. */
+    if (!ImagePath.Length)
+    {
+        Status = IopGetServiceKeyName(ServiceHandle, &ServiceName);
+        if (!NT_SUCCESS(Status))
+        {
+            RtlFreeUnicodeString(&ImagePath);
+            return Status;
+        }
+    }
+
+    NormalizedPath = ImagePath;
+    Status = IopNormalizeImagePath(&NormalizedPath, &ServiceName);
+    RtlFreeUnicodeString(&ServiceName);
+    if (!NT_SUCCESS(Status) || !ImagePath.Length)
+        RtlFreeUnicodeString(&ImagePath);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    *ImagePathOut = NormalizedPath;
     return STATUS_SUCCESS;
 }
 
@@ -1586,12 +1669,44 @@ IopInitializeBootDrivers(VOID)
                         NULL);
 }
 
+static
+VOID
+NTAPI
+IopPrepareSystemDriver(
+    _Inout_ PVOID Context)
+{
+    PIOP_SYSTEM_DRIVER_PREPARATION Preparation = Context;
+    HANDLE ServiceHandle;
+    NTSTATUS Status;
+
+    /* Only prepare file contents. DriverEntry and imports stay on the boot thread. */
+    Status = IopOpenRegistryKeyEx(&ServiceHandle, NULL, Preparation->RegistryPath, KEY_READ);
+    if (NT_SUCCESS(Status))
+    {
+        Status = IopCheckSafeBootDriver(ServiceHandle);
+        if (NT_SUCCESS(Status))
+            Status = IopGetDriverImagePath(ServiceHandle, &Preparation->ImagePath);
+        ZwClose(ServiceHandle);
+        if (NT_SUCCESS(Status))
+            MmPrepareSystemImage(&Preparation->ImagePath, 0, &Preparation->Image);
+    }
+
+    /* Last access to the packet: the boot thread may now consume or reuse it. */
+    KeSetEvent(&Preparation->Ready, IO_NO_INCREMENT, FALSE);
+}
+
 CODE_SEG("INIT")
 VOID
 FASTCALL
 IopInitializeSystemDrivers(VOID)
 {
     PUNICODE_STRING *DriverList, *SavedList;
+    IOP_SYSTEM_DRIVER_PREPARATION Preparation[2] = {0};
+    PIOP_SYSTEM_DRIVER_PREPARATION Current, Next;
+    PDRIVER_OBJECT DriverObject;
+    HANDLE ServiceHandle;
+    ULONG Slot = 0, i;
+    BOOLEAN PrepareImages;
 
     PiPerformSyncDeviceAction(IopRootDeviceNode->PhysicalDeviceObject, PiActionEnumDeviceTree);
 
@@ -1606,11 +1721,62 @@ IopInitializeSystemDrivers(VOID)
     SavedList = DriverList = CmGetSystemDriverList();
     ASSERT(DriverList);
 
+    /* Two alternating packets bound the lookahead to one driver. */
+    PrepareImages = (PsGetCurrentProcess() == PsInitialSystemProcess);
+    if (PrepareImages && *DriverList)
+    {
+        for (i = 0; i < RTL_NUMBER_OF(Preparation); ++i)
+        {
+            KeInitializeEvent(&Preparation[i].Ready, NotificationEvent, FALSE);
+            ExInitializeWorkItem(&Preparation[i].WorkItem,
+                                 IopPrepareSystemDriver,
+                                 &Preparation[i]);
+        }
+        Preparation[0].RegistryPath = *DriverList;
+        ExQueueWorkItem(&Preparation[0].WorkItem, DelayedWorkQueue);
+    }
+
     /* Loop it */
     while (*DriverList)
     {
-        /* Load the driver */
-        ZwLoadDriver(*DriverList);
+        if (PrepareImages)
+        {
+            Current = &Preparation[Slot];
+            KeWaitForSingleObject(&Current->Ready, Executive, KernelMode, FALSE, NULL);
+
+            /* Prepare the next image while this driver's normal load runs. */
+            if (DriverList[1])
+            {
+                Next = &Preparation[Slot ^ 1];
+                Next->RegistryPath = DriverList[1];
+                KeClearEvent(&Next->Ready);
+                ExQueueWorkItem(&Next->WorkItem, DelayedWorkQueue);
+            }
+
+            if (Current->Image.Section)
+            {
+                if (NT_SUCCESS(IopOpenRegistryKeyEx(&ServiceHandle, NULL, *DriverList, KEY_READ)))
+                {
+                    DriverObject = NULL;
+                    IopLoadDriverWithImage(ServiceHandle, Current, &DriverObject);
+                    ZwClose(ServiceHandle);
+                }
+            }
+            else
+            {
+                /* Speculative preparation may fail before a dependency starts. */
+                ZwLoadDriver(*DriverList);
+            }
+
+            MmFreePreparedSystemImage(&Current->Image);
+            RtlFreeUnicodeString(&Current->ImagePath);
+            RtlZeroMemory(&Current->ImagePath, sizeof(Current->ImagePath));
+            Slot ^= 1;
+        }
+        else
+        {
+            ZwLoadDriver(*DriverList);
+        }
 
         /* Free the entry */
         RtlFreeUnicodeString(*DriverList);
@@ -1621,7 +1787,7 @@ IopInitializeSystemDrivers(VOID)
         DriverList++;
     }
 
-    /* Free the list */
+    /* Every queued preparation has completed before its list entry is freed. */
     ExFreePool(SavedList);
 
     PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
@@ -2650,9 +2816,11 @@ IoGetDriverObjectExtension(IN PDRIVER_OBJECT DriverObject,
     return DriverExtensions + 1;
 }
 
+static
 NTSTATUS
-IopLoadDriver(
+IopLoadDriverWithImage(
     _In_ HANDLE ServiceHandle,
+    _In_opt_ PIOP_SYSTEM_DRIVER_PREPARATION Preparation,
     _Out_ PDRIVER_OBJECT *DriverObject)
 {
     UNICODE_STRING ImagePath;
@@ -2669,53 +2837,8 @@ IopLoadDriver(
         return Status;
     }
 
-    PKEY_VALUE_FULL_INFORMATION kvInfo;
-    Status = IopGetRegistryValue(ServiceHandle, L"ImagePath", &kvInfo);
-    if (NT_SUCCESS(Status))
-    {
-        if ((kvInfo->Type != REG_EXPAND_SZ && kvInfo->Type != REG_SZ) ||
-            (kvInfo->DataLength < sizeof(UNICODE_NULL)) ||
-            (kvInfo->DataLength > UNICODE_STRING_MAX_BYTES) ||
-            ((kvInfo->DataLength % sizeof(WCHAR)) != 0))
-        {
-            DPRINT1("ObjectName invalid (Type = %lu, DataLength = %lu)\n",
-                    kvInfo->Type,
-                    kvInfo->DataLength);
-            ExFreePool(kvInfo);
-            return STATUS_ILL_FORMED_SERVICE_ENTRY;
-        }
-
-        ImagePath.Length = (USHORT)(kvInfo->DataLength - sizeof(UNICODE_NULL));
-        ImagePath.MaximumLength = kvInfo->DataLength;
-        ImagePath.Buffer = ExAllocatePoolWithTag(PagedPool, ImagePath.MaximumLength, TAG_RTLREGISTRY);
-        if (!ImagePath.Buffer)
-        {
-            ExFreePool(kvInfo);
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        RtlMoveMemory(ImagePath.Buffer,
-                      (PVOID)((ULONG_PTR)kvInfo + kvInfo->DataOffset),
-                      ImagePath.Length);
-        ImagePath.Buffer[ImagePath.Length / sizeof(WCHAR)] = UNICODE_NULL;
-        ExFreePool(kvInfo);
-    }
-    else
-    {
-        return Status;
-    }
-
-    /*
-     * Normalize the image path for all later processing.
-     */
-    Status = IopNormalizeImagePath(&ImagePath, NULL);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT("IopNormalizeImagePath() failed (Status %x)\n", Status);
-        return Status;
-    }
-
-    DPRINT("FullImagePath: '%wZ'\n", &ImagePath);
+    Status = IopGetDriverImagePath(ServiceHandle, &ImagePath);
+    if (!NT_SUCCESS(Status)) return Status;
 
     Status = IopGetDriverNames(ServiceHandle, &DriverName, NULL);
     if (!NT_SUCCESS(Status))
@@ -2755,7 +2878,16 @@ IopLoadDriver(
      * Load the driver module
      */
     DPRINT("Loading module from %wZ\n", &ImagePath);
-    Status = MmLoadSystemImage(&ImagePath, NULL, NULL, 0, (PVOID)&ModuleObject, &BaseAddress);
+    /* Re-read policy and ImagePath at load time; only reuse a matching image. */
+    Status = MmLoadSystemImageEx(&ImagePath,
+                                 NULL,
+                                 NULL,
+                                 0,
+                                 Preparation &&
+                                 RtlEqualUnicodeString(&ImagePath, &Preparation->ImagePath, TRUE)
+                                     ? &Preparation->Image : NULL,
+                                 (PVOID *)&ModuleObject,
+                                 &BaseAddress);
     RtlFreeUnicodeString(&ImagePath);
 
     if (!NT_SUCCESS(Status))
@@ -2807,6 +2939,14 @@ IopLoadDriver(
     if (PnpSystemInit) IopReinitializeDrivers();
 
     return Status;
+}
+
+NTSTATUS
+IopLoadDriver(
+    _In_ HANDLE ServiceHandle,
+    _Out_ PDRIVER_OBJECT *DriverObject)
+{
+    return IopLoadDriverWithImage(ServiceHandle, NULL, DriverObject);
 }
 
 static
