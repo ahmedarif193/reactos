@@ -315,10 +315,13 @@ HRESULT WINAPI DllGetActivationFactory( HSTRING classid, IActivationFactory **fa
 
     TRACE( "classid %s, factory %p.\n", debugstr_hstring( classid ), factory );
 
+    if (!factory) return E_POINTER;
     *factory = NULL;
 
     if (!wcscmp( name, RuntimeClass_Windows_System_Profile_SystemIdentification ))
         IActivationFactory_QueryInterface( system_id_factory, &IID_IActivationFactory, (void **)factory );
+    else if (!wcscmp( name, RuntimeClass_Windows_System_Profile_WindowsIntegrityPolicy ))
+        IActivationFactory_QueryInterface( integrity_policy_factory, &IID_IActivationFactory, (void **)factory );
 
     if (*factory) return S_OK;
     return CLASS_E_CLASSNOTAVAILABLE;

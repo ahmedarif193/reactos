@@ -1,6 +1,6 @@
 spec2def(windows.system.profile.systemid.dll windows.system.profile.systemid.spec)
 
-add_library(windows_system_profile_systemid MODULE main.c ${CMAKE_CURRENT_BINARY_DIR}/windows.system.profile.systemid.def ${CMAKE_CURRENT_BINARY_DIR}/windows.system.profile.systemid_stubs.c)
+add_library(windows_system_profile_systemid MODULE main.c integrity.c ${CMAKE_CURRENT_BINARY_DIR}/windows.system.profile.systemid.def ${CMAKE_CURRENT_BINARY_DIR}/windows.system.profile.systemid_stubs.c)
 set_target_properties(windows_system_profile_systemid PROPERTIES OUTPUT_NAME "windows.system.profile.systemid")
 add_idl_reg_scripts(windows_system_profile_systemid winrt classes.idl)
 set_module_type(windows_system_profile_systemid win32dll)
