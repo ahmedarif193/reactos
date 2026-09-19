@@ -1057,7 +1057,8 @@ BOOL DrawLayer(const DWM_WIN *Window, const BYTE *Pixels, BOOL Client, LONG Orig
     SetColor(Data.ColorKey, Window->ColorKey);
     Data.Flags[0] = (FLOAT)Glass;
     Data.Flags[1] = Window->BackdropRegion == DWM_BACKDROP_REGION_WINDOW;
-    BOOL Premultiplied = !!(Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA);
+    BOOL Premultiplied = !!(Window->LayerFlags & DWM_WINDOW_PREMULTIPLIED_ALPHA) ||
+        (Client && !!(Window->LayerFlags & DWM_WINDOW_DX_PREMULTIPLIED_ALPHA));
     Data.Flags[2] = !!((Window->BlurFlags & DWM_BLUR_ENABLE) || Premultiplied);
     Data.Flags[3] = !!(Window->LayerFlags & DWM_LWA_COLORKEY);
     Data.Extra[0] = min(Window->BackdropOpacity, 255u) / 255.0f;

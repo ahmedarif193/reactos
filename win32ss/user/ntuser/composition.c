@@ -501,6 +501,7 @@ IntCompositionFreeDxSurface(_Inout_ PWND_REDIRECT r)
     r->DxGeneration = 0;
     RtlZeroMemory(&r->DxAdapterLuid, sizeof(r->DxAdapterLuid));
     r->DxWindow = 0;
+    r->DxFlags = 0;
     r->DxClientX = 0;
     r->DxClientY = 0;
     r->DxIssuedUpdateId = 0;
@@ -2347,6 +2348,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
             }
             g_DwmFrameWindows[count].Alpha = alpha;
             g_DwmFrameWindows[count].ColorKey = (ULONG)key;
+            if (e->Redirect.DxFlags & DWM_DX_PUBLISH_PREMULTIPLIED)
+                lf |= DWM_WINDOW_DX_PREMULTIPLIED_ALPHA;
             g_DwmFrameWindows[count].LayerFlags = lf;
         }
         if (AtomDwmSystemBackdropType != 0)
@@ -2968,7 +2971,7 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             if (Publish)
             {
                 if (Request.Info.Version != DWM_DX_SURFACE_INFO_VERSION_GPU ||
-                    Request.Info.Pitch != 0 || Request.Flags != 0 ||
+                    Request.Info.Pitch != 0 || (Request.Flags & ~DWM_DX_PUBLISH_PREMULTIPLIED) != 0 ||
                     (Request.Info.Format != DWM_DX_FORMAT_B8G8R8A8_UNORM &&
                      Request.Info.Format != DWM_DX_FORMAT_R8G8B8A8_UNORM) ||
                     Request.UpdateRect.left != 0 || Request.UpdateRect.top != 0 ||
@@ -3076,6 +3079,7 @@ IntCompositionDwmDxSurface(_In_ PVOID pUser)
             Entry->Redirect.DxGlobalShare = Request.GlobalShare;
             Entry->Redirect.DxAdapterLuid = Request.AdapterLuid;
             Entry->Redirect.DxInfo = Request.Info;
+            Entry->Redirect.DxFlags = Publish ? Request.Flags : 0;
             Entry->Redirect.DxWindow = Request.Window;
             Entry->Redirect.DxClientX =
                 SourceWnd->rcClient.left - TopWnd->rcWindow.left;

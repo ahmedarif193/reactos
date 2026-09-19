@@ -29,7 +29,7 @@ interface IWineDXGISwapChainFactory : IUnknown
 {
     HRESULT create_swapchain(
         [in] IDXGIFactory *factory,
-        [in] HWND window,
+        [in] HWND window, /* ReactOS: NULL creates an unbound composition chain. */
         [in] const DXGI_SWAP_CHAIN_DESC1 *desc,
         [in] const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen_desc,
         [in] IDXGIOutput *output,
