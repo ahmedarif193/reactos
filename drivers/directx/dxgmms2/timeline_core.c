@@ -102,8 +102,11 @@ static BOOLEAN Dxgmms2TimelineLookupPublished(_Inout_ PDXGMMS2_TIMELINE_CONTEXT 
     LONG64 PublishedIdentity = (LONG64)((ULONGLONG)Identity | DXGMMS2_TIMELINE_PUBLISHED_BIT);
     ULONG StartSlot = Dxgmms2TimelineHashIdentity(Identity);
     ULONG Probe;
+    ULONG ProbeCount;
 
-    for (Probe = 0; Probe < DXGMMS2_TIMELINE_IDENTITY_CAPACITY; ++Probe)
+    ProbeCount = (ULONG)InterlockedCompareExchange(
+        &Timeline->IdentityProbeCount[StartSlot], 0, 0);
+    for (Probe = 0; Probe < ProbeCount; ++Probe)
     {
         ULONG Slot = (StartSlot + Probe) & (DXGMMS2_TIMELINE_IDENTITY_CAPACITY - 1);
         LONG64 CurrentIdentity = InterlockedCompareExchange64(&Timeline->Identities[Slot], 0, 0);
@@ -187,7 +190,10 @@ NTSTATUS Dxgmms2TimelineStart(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, _In_ U
         goto Exit;
     }
     for (Slot = 0; Slot < DXGMMS2_TIMELINE_IDENTITY_CAPACITY; ++Slot)
+    {
         InterlockedExchange64(&Timeline->Identities[Slot], 0);
+        Timeline->IdentityProbeCount[Slot] = 0;
+    }
     RtlZeroMemory((PVOID)Timeline->NodeLastSubmittedFenceId, sizeof(Timeline->NodeLastSubmittedFenceId));
     RtlZeroMemory((PVOID)Timeline->NodeLastCompletedFenceId, sizeof(Timeline->NodeLastCompletedFenceId));
     Timeline->LastCompletedFenceId = 0;
@@ -334,7 +340,12 @@ BOOLEAN Dxgmms2TimelineReserveFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
                 goto Exit;
             if (CurrentIdentity == DXGMMS2_TIMELINE_TOMBSTONE && FirstTombstone == DXGMMS2_TIMELINE_IDENTITY_CAPACITY)
                 FirstTombstone = Slot;
-            if (CurrentIdentity == 0)
+            /* Tombstones preserve probe chains but never terminate them.
+             * Only this home bucket's insertion range can contain a duplicate. */
+            if (CurrentIdentity == 0 ||
+                (FirstTombstone != DXGMMS2_TIMELINE_IDENTITY_CAPACITY &&
+                 Probe + 1 >= (ULONG)InterlockedCompareExchange(
+                     &Timeline->IdentityProbeCount[StartSlot], 0, 0)))
                 break;
         }
         if (Probe == DXGMMS2_TIMELINE_IDENTITY_CAPACITY && FirstTombstone == DXGMMS2_TIMELINE_IDENTITY_CAPACITY)
@@ -343,6 +354,22 @@ BOOLEAN Dxgmms2TimelineReserveFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
             ULONG TargetSlot = FirstTombstone != DXGMMS2_TIMELINE_IDENTITY_CAPACITY ? FirstTombstone : Slot;
             LONG64 TargetValue = FirstTombstone != DXGMMS2_TIMELINE_IDENTITY_CAPACITY ? DXGMMS2_TIMELINE_TOMBSTONE : 0;
             LONG LiveIdentityCount;
+            LONG ProbeCount;
+            LONG RequiredProbeCount =
+                ((TargetSlot - StartSlot) & (DXGMMS2_TIMELINE_IDENTITY_CAPACITY - 1)) + 1;
+
+            /* Publish the upper bound before the identity. Failed insertions
+             * may widen it; only drained maintenance may shorten it. */
+            do
+            {
+                ProbeCount = InterlockedCompareExchange(
+                    &Timeline->IdentityProbeCount[StartSlot], 0, 0);
+                if (ProbeCount >= RequiredProbeCount)
+                    break;
+            } while (InterlockedCompareExchange(
+                         &Timeline->IdentityProbeCount[StartSlot],
+                         RequiredProbeCount,
+                         ProbeCount) != ProbeCount);
 
             InterlockedIncrement(&Timeline->LiveIdentityCount);
             if (InterlockedCompareExchange64(&Timeline->Identities[TargetSlot], Identity, TargetValue) == TargetValue)
@@ -366,6 +393,7 @@ BOOLEAN Dxgmms2TimelinePublishFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
     LONG64 PublishedIdentity;
     ULONG StartSlot;
     ULONG Probe;
+    ULONG ProbeCount;
     LONG State;
     BOOLEAN Published = FALSE;
 
@@ -376,7 +404,9 @@ BOOLEAN Dxgmms2TimelinePublishFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
     Identity = Dxgmms2TimelineMakeIdentity(NodeOrdinal, FenceId);
     PublishedIdentity = (LONG64)((ULONGLONG)Identity | DXGMMS2_TIMELINE_PUBLISHED_BIT);
     StartSlot = Dxgmms2TimelineHashIdentity(Identity);
-    for (Probe = 0; Probe < DXGMMS2_TIMELINE_IDENTITY_CAPACITY; ++Probe)
+    ProbeCount = (ULONG)InterlockedCompareExchange(
+        &Timeline->IdentityProbeCount[StartSlot], 0, 0);
+    for (Probe = 0; Probe < ProbeCount; ++Probe)
     {
         ULONG Slot = (StartSlot + Probe) & (DXGMMS2_TIMELINE_IDENTITY_CAPACITY - 1);
         LONG64 CurrentIdentity = InterlockedCompareExchange64(&Timeline->Identities[Slot], 0, 0);
@@ -458,6 +488,7 @@ BOOLEAN Dxgmms2TimelineReleaseFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
     LONG64 PublishedIdentity;
     ULONG StartSlot;
     ULONG Probe;
+    ULONG ProbeCount;
     LONG State;
     BOOLEAN Released = FALSE;
 
@@ -468,7 +499,9 @@ BOOLEAN Dxgmms2TimelineReleaseFence(_Inout_ PDXGMMS2_TIMELINE_CONTEXT Timeline, 
     Identity = Dxgmms2TimelineMakeIdentity(NodeOrdinal, FenceId);
     PublishedIdentity = (LONG64)((ULONGLONG)Identity | DXGMMS2_TIMELINE_PUBLISHED_BIT);
     StartSlot = Dxgmms2TimelineHashIdentity(Identity);
-    for (Probe = 0; Probe < DXGMMS2_TIMELINE_IDENTITY_CAPACITY; ++Probe)
+    ProbeCount = (ULONG)InterlockedCompareExchange(
+        &Timeline->IdentityProbeCount[StartSlot], 0, 0);
+    for (Probe = 0; Probe < ProbeCount; ++Probe)
     {
         ULONG Slot = (StartSlot + Probe) & (DXGMMS2_TIMELINE_IDENTITY_CAPACITY - 1);
         LONG64 CurrentIdentity = InterlockedCompareExchange64(&Timeline->Identities[Slot], 0, 0);
@@ -511,7 +544,10 @@ NTSTATUS Dxgmms2TimelineResetFenceIdentities(_Inout_ PDXGMMS2_TIMELINE_CONTEXT T
     Dxgmms2TimelineCloseFastCalls(Timeline);
     Dxgmms2TimelineDrainFastCalls(Timeline);
     for (Slot = 0; Slot < DXGMMS2_TIMELINE_IDENTITY_CAPACITY; ++Slot)
+    {
         InterlockedExchange64(&Timeline->Identities[Slot], 0);
+        Timeline->IdentityProbeCount[Slot] = 0;
+    }
     InterlockedExchange(&Timeline->LiveIdentityCount, 0);
     Dxgmms2TimelineOpenFastCalls(Timeline);
     Status = STATUS_SUCCESS;
