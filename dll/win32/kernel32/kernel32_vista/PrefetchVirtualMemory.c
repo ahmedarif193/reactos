@@ -27,7 +27,7 @@ PrefetchVirtualMemory(
         return FALSE;
     }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
     NTSTATUS Status;
     ULONG PrefetchFlags = Flags;
 

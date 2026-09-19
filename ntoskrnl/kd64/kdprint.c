@@ -333,7 +333,7 @@ KdpCommandString(IN PSTRING NameString,
 
     /* Check if we need to do anything */
     if ((PreviousMode != KernelMode) || (KdDebuggerNotPresent)) return;
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
     if (TrapFrame == NULL) return;
 #endif
 
@@ -376,7 +376,7 @@ KdpSymbol(IN PSTRING DllPath,
 
     /* Check if we need to do anything */
     if ((PreviousMode != KernelMode) || (KdDebuggerNotPresent)) return;
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_RISCV64)
     if (TrapFrame == NULL) return;
 #endif
 

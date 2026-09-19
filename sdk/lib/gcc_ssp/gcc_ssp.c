@@ -55,11 +55,13 @@ print_caller_helper(char* fmt, ...)
 
 #endif
 
+#include <intrin.h>
+
 /* Should be random :-/ */
 void * __stack_chk_guard = (void*)0xb00fbeefbaafb00f;
 
 void __stack_chk_fail()
 {
     print_caller();
-    __asm__("int $3");
+    __debugbreak();
 }

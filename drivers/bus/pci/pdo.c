@@ -2187,7 +2187,7 @@ PciPdoRoutedInterruptLine(
     _In_ UCHAR InterruptPin,
     _In_ UCHAR InterruptLine)
 {
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_RISCV64)
     PPDO_DEVICE_EXTENSION CurrentExtension = DeviceExtension;
     PFDO_DEVICE_EXTENSION CurrentFdoExtension;
     UCHAR CurrentPin = InterruptPin;
@@ -2237,6 +2237,12 @@ PciPdoRoutedInterruptLine(
         CurrentExtension = CurrentFdoExtension->ParentPdo;
         Depth++;
     }
+#endif
+
+#if defined(_M_RISCV64)
+    /* On the FDT PCI host, the firmware map is authoritative. A config-space
+     * InterruptLine value is only a placeholder until that map is applied. */
+    return 0;
 #endif
 
     return InterruptLine;
@@ -2901,8 +2907,15 @@ PdoQueryResourceRequirements(
             {
                 Dest->ShareDisposition = CmResourceShareShared;
                 Dest->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+#if defined(_M_RISCV64)
+                Dest->u.Interrupt.MinimumVector =
+                    PciPdoRoutedInterruptLine(DeviceExtension, InterruptPin,
+                                              PciConfig.u.type0.InterruptLine);
+                Dest->u.Interrupt.MaximumVector = Dest->u.Interrupt.MinimumVector;
+#else
                 Dest->u.Interrupt.MinimumVector = 0;
                 Dest->u.Interrupt.MaximumVector = 0xFF;
+#endif
             }
             else
             {

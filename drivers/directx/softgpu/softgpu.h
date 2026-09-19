@@ -71,6 +71,14 @@
 #include <ntddk.h>
 #include <wdm.h>
 
+/* This segment is consumed by the software engine, not device DMA. Keep
+ * normal RAM cached on baseline RISC-V, which has no PTE cache override. */
+#if defined(_M_RISCV64)
+#define SOFTGPU_FRAMEBUFFER_CACHE_TYPE MmCached
+#else
+#define SOFTGPU_FRAMEBUFFER_CACHE_TYPE MmWriteCombined
+#endif
+
 /* ---- Windows base types (UINT/BYTE/DWORD/BOOL/POINT/RECT) needed by
  *      d3dukmdt.h.  Supplied by windef.h exactly as dxgkrnl_private.h does. */
 #include <windef.h>
@@ -253,9 +261,10 @@ typedef struct _SOFTGPU_DEVICE
     ULONG               NumChildren;
 
     /*
-     * Mode-sized write-combined contiguous framebuffer segment.
-     * FrameBufferPhys is the physical address for segment reporting and
-     * FrameBuffer is the matching kernel mapping.
+     * Mode-sized contiguous framebuffer segment using
+     * SOFTGPU_FRAMEBUFFER_CACHE_TYPE (cached RAM on native RISC-V).
+     * FrameBufferPhys is the physical address for segment reporting.
+     * FrameBuffer     is the kernel-virtual mapping (always valid).
      */
     PVOID               FrameBuffer;
     PHYSICAL_ADDRESS    FrameBufferPhys;

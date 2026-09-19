@@ -1,0 +1,15 @@
+/*
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF
+ */
+
+// Standard C variable-argument declarations for C++.
+
+#pragma once
+
+#include <stdarg.h>
+
+namespace std
+{
+    using ::va_list;
+}

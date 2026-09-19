@@ -310,7 +310,7 @@ extern "C" {
 
 #if(defined(_X86_) && !defined(__x86_64))
 #define _ALLOCA_S_MARKER_SIZE 8
-#elif defined(__ia64__) || defined(__x86_64) || defined(__arm64__)
+#elif defined(__ia64__) || defined(__x86_64) || defined(__arm64__) || defined(_M_RISCV64)
 #define _ALLOCA_S_MARKER_SIZE 16
 #elif defined(__arm__)
 #define _ALLOCA_S_MARKER_SIZE 8

@@ -232,7 +232,7 @@ SoftGpuAllocateFrameBuffer(
                          LowAddress,
                          HighAddress,
                          SkipBytes,
-                         MmWriteCombined);
+                         SOFTGPU_FRAMEBUFFER_CACHE_TYPE);
     if (NewFrameBuffer == NULL)
     {
         DPRINT1("SOFTGPU: failed to allocate %Iu-byte framebuffer\n",
@@ -258,7 +258,7 @@ SoftGpuAllocateFrameBuffer(
     {
         MmFreeContiguousMemorySpecifyCache(OldFrameBuffer,
                                            OldFrameBufferSize,
-                                           MmWriteCombined);
+                                           SOFTGPU_FRAMEBUFFER_CACHE_TYPE);
     }
 
     DPRINT("SOFTGPU: framebuffer virt=%p phys=0x%I64x size=%Iu "
@@ -1330,7 +1330,7 @@ SoftGpuDdiRemoveDevice(
     {
         MmFreeContiguousMemorySpecifyCache(Device->FrameBuffer,
                                            Device->FrameBufferSize,
-                                           MmWriteCombined);
+                                           SOFTGPU_FRAMEBUFFER_CACHE_TYPE);
         Device->FrameBuffer = NULL;
         Device->FrameBufferSize = 0;
         Device->FrameBufferPhys.QuadPart = 0;

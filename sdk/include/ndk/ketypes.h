@@ -112,6 +112,8 @@ Author:
 #define PROCESSOR_ARCHITECTURE_ALPHA64  7
 #define PROCESSOR_ARCHITECTURE_MSIL     8
 #define PROCESSOR_ARCHITECTURE_AMD64    9
+/* ReactOS-native RISC-V64 architecture ID; keep in sync with winnt_old.h. */
+#define PROCESSOR_ARCHITECTURE_RISCV64  15
 #define PROCESSOR_ARCHITECTURE_UNKNOWN  0xFFFF
 
 //
@@ -2571,7 +2573,7 @@ typedef struct _KTHREAD
         };
     };
     KSPIN_LOCK ApcQueueLock;
-#if !defined(_M_AMD64) && !defined(_M_ARM64) // [
+#if !defined(_WIN64) // [
     ULONG ContextSwitches;
     volatile UCHAR State;
     UCHAR NpxState;
@@ -2621,7 +2623,7 @@ typedef struct _KTHREAD
         SINGLE_LIST_ENTRY SwapListEntry;
     };
     PKQUEUE Queue;
-#if !defined(_M_AMD64) && !defined(_M_ARM64) // [
+#if !defined(_WIN64) // [
     ULONG WaitTime;
     union
     {
@@ -3323,7 +3325,7 @@ typedef struct _KTHREAD
     union
     {
         KEVENT SuspendEvent;
-#if defined(__REACTOS__) && defined(_M_IX86)
+#if defined(__REACTOS__) && (defined(_M_IX86) || defined(_M_RISCV64))
         KEVENT SuspendSemaphore;
 #endif
     };
@@ -3397,6 +3399,17 @@ typedef struct _KTHREAD
     PVOID CallbackStack;
     UCHAR LargeStack;
     UCHAR Iopl;
+#elif defined(__REACTOS__) && defined(_M_RISCV64)
+    /* ReactOS-private thread state; no Windows RV64 layout is claimed. */
+    KSPIN_LOCK ApcQueueLock;
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    PKAPC_STATE ApcStatePointer[2];
+    CHAR DecayBoost;
+    LONG RealtimePriorityFloor;
+#endif
+    KAPC SuspendApc;
+    UCHAR LargeStack;
+    PVOID CallbackStack;
 #endif
 } KTHREAD;
 

@@ -94,7 +94,7 @@ MempAddMemoryBlock(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
     MadCount++;
 }
 
-VOID
+BOOLEAN
 MempSetupPagingForRegion(
     PFN_NUMBER BasePage,
     PFN_NUMBER PageCount,
@@ -106,7 +106,7 @@ MempSetupPagingForRegion(
           BasePage, PageCount, Type);
 
     /* Make sure we don't map too high */
-    if (BasePage + PageCount > MmGetLoaderPagesSpanned()) return;
+    if (BasePage + PageCount > MmGetLoaderPagesSpanned()) return TRUE;
 
     switch (Type)
     {
@@ -163,6 +163,7 @@ MempSetupPagingForRegion(
     {
         ERR("Error during MempSetupPaging\n");
     }
+    return Status;
 }
 
 #ifdef _M_ARM
@@ -238,7 +239,8 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
         if ((MemoryMap[i].PageAllocated != LastPageType) ||
             (i == NoEntries - 1))
         {
-            MempSetupPagingForRegion(LastPageIndex, i - LastPageIndex, LastPageType);
+            if (!MempSetupPagingForRegion(LastPageIndex, i - LastPageIndex, LastPageType))
+                return FALSE;
             LastPageIndex = i;
             LastPageType = MemoryMap[i].PageAllocated;
         }
@@ -342,7 +344,7 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 #endif
 
-#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__) || defined(_M_RISCV64)
     {
         PFN_NUMBER StartPage = (ULONG_PTR)WinLdrSystemBlock >> PAGE_SHIFT;
         PFN_NUMBER EndPage = ((ULONG_PTR)WinLdrSystemBlock +
@@ -352,7 +354,7 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
         Status = MempSetupPaging(StartPage, EndPage - StartPage, TRUE);
         if (!Status)
         {
-            ERR("Error during MempSetupPaging of ARM64 loader system block\n");
+            ERR("Error during MempSetupPaging of loader system block\n");
             return FALSE;
         }
     }

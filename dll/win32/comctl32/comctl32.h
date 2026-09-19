@@ -46,9 +46,11 @@
 #define COMCTL32_VERSION_MINOR 82
 #endif
 #endif
+#if defined(__REACTOS__) || __WINE_COMCTL32_VERSION == 6
 #include "uxtheme.h"
 #include "vsstyle.h"
 #include "vssym32.h"
+#endif
 
 extern HMODULE COMCTL32_hModule;
 extern HBRUSH  COMCTL32_hPattern55AABrush;

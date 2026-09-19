@@ -186,6 +186,7 @@ CheckSectionValid(
     static const WCHAR ExtensionArchitectureia64[]  = {'I','A','6','4',0};
     static const WCHAR ExtensionArchitecturemips[]  = {'m','i','p','s',0};
     static const WCHAR ExtensionArchitectureppc[]  = {'p','p','c',0};
+    static const WCHAR ExtensionArchitectureriscv64[]  = {'R','I','S','C','V','6','4',0};
     static const WCHAR ExtensionArchitecturex86[]  = {'x','8','6',0};
 
     TRACE("%s(%s %p 0x%x 0x%x)\n",
@@ -239,6 +240,9 @@ CheckSectionValid(
             break;
         case PROCESSOR_ARCHITECTURE_PPC:
             pExtensionArchitecture = ExtensionArchitectureppc;
+            break;
+        case PROCESSOR_ARCHITECTURE_RISCV64:
+            pExtensionArchitecture = ExtensionArchitectureriscv64;
             break;
         default:
             ERR("Unknown processor architecture 0x%x\n", PlatformInfo->ProcessorArchitecture);

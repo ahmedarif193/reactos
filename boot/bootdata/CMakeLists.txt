@@ -38,6 +38,8 @@ elseif(ARCH STREQUAL "amd64")
     add_registry_inf(hivesys_x86.inf hivesys_amd64.inf)
 elseif(ARCH STREQUAL "i386")
     add_registry_inf(hivesys_x86.inf hivesys_i386.inf)
+elseif(ARCH STREQUAL "riscv64")
+    add_registry_inf(hivesys_riscv64.inf)
 endif()
 
 if(LATTEPANDAMU_SUPPORT)

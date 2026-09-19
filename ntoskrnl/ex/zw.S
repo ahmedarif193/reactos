@@ -10,7 +10,7 @@
 
 #include <sysfuncs.h>
 
-#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__) || defined(_M_RISCV64)
 
     .text
 
@@ -38,6 +38,6 @@ EXTERN KiZwSystemService:PROC
 
 #endif
 
-#ifndef _M_ARM64
+#if !defined(_M_ARM64) && !defined(_M_RISCV64)
     END
 #endif

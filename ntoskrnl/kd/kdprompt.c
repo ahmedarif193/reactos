@@ -58,6 +58,16 @@ KdIoReadLine(
     BOOLEAN EchoOn = !(KdbDebugState & KD_DEBUG_KDNOECHO);
     LONG CmdHistIndex = -1; // Start at end of history.
 
+#if defined(_M_RISCV64)
+    /* DbgPrompt can run before the first KDBG output initializes serial input. */
+    static BOOLEAN TerminalInitialized = FALSE;
+    if (!TerminalInitialized)
+    {
+        TerminalInitialized = TRUE;
+        KdpInitTerminal();
+    }
+#endif
+
     /* Flush the input buffer */
     KdpFlushTerminalInput();
 
@@ -68,6 +78,12 @@ KdIoReadLine(
     for (;;)
     {
         Key = KdpReadTermKey(&ScanCode);
+
+#if defined(_M_RISCV64)
+        /* A terminal without input can return -1 without a scan code. */
+        if ((Key == -1) && (ScanCode == 0))
+            continue;
+#endif
 
         /* Check for return or newline */
         if ((Key == '\r') || (Key == '\n'))

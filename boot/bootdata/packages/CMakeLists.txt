@@ -68,6 +68,14 @@ elseif(ARCH STREQUAL "arm64")
 85 = system32\arm64ec
 ]=])
     endif()
+elseif(ARCH STREQUAL "riscv64")
+    string(APPEND REACTOS_DFF_ARCH_DIRECTORIES [=[
+87 = winsxs\riscv64_microsoft.windows.common-controls_6595b64144ccf1df_5.82.2600.2982_none_deadbeef
+88 = winsxs\riscv64_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef
+89 = winsxs\riscv64_microsoft.windows.gdiplus_6595b64144ccf1df_1.1.7601.23038_none_deadbeef
+90 = winsxs\riscv64_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef
+91 = system32\spool\prtprocs\riscv64
+]=])
 endif()
 
 configure_file(

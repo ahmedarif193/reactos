@@ -17,7 +17,7 @@ RamDiskDeriveDiskSignature(IN PVOID BaseAddress,
     ULONG Signature = 0x52444B58u; /* 'RDKX' */
 
     Signature ^= (ULONG)(Address & 0xFFFFFFFFu);
-#if defined(_M_AMD64) || defined(__x86_64__) || defined(_M_ARM64) || defined(__aarch64__)
+#if defined(_WIN64)
     Signature ^= (ULONG)(Address >> 32);
 #endif
     Signature ^= (ULONG)(DiskSize & 0xFFFFFFFFu);

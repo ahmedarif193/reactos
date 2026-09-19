@@ -41,7 +41,7 @@
 #define _VCRT_X86_INTRINSICS 0
 #endif
 
-#if defined(_M_ARM) || _VCRT_ARM64_CODEGEN || _VCRT_AMD64_INTRINSICS
+#if defined(_M_ARM) || defined(_WIN64)
 #define _VCRT_64BIT_INTERLOCKED_INTRINSICS 1
 #else
 #define _VCRT_64BIT_INTERLOCKED_INTRINSICS 0

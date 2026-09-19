@@ -127,7 +127,7 @@ static ULONGLONG RamDiskOffset;      // Current position in the Ramdisk.
 static ULONGLONG RamDiskRequestedSize = 0;
 static BOOLEAN   RamDiskErrorShown = FALSE;
 
-#if defined(_M_AMD64) || defined(__x86_64__) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#if defined(_WIN64)
 #ifndef MM_MAX_PAGE_LOADER_MAPPED
 #define MM_MAX_PAGE_LOADER_MAPPED MM_MAX_PAGE_LOADER
 #endif
@@ -2545,7 +2545,7 @@ RamDiskLoadVirtualFile(
     }
 
     /* Enforce the legacy 4GB limit on 32-bit builds */
-#if !defined(_M_AMD64) && !defined(__x86_64__) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
+#if !defined(_WIN64)
     if (RamDiskFileSize >= 0x100000000ULL)
     {
         ArcClose(RamFileId);
@@ -2554,7 +2554,7 @@ RamDiskLoadVirtualFile(
         return ENOMEM;
     }
 #endif
-#if !defined(_M_AMD64) && !defined(__x86_64__) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
+#if !defined(_WIN64)
     ASSERT(RamDiskFileSize < 0x100000000); // Legacy limit on 32-bit builds.
 #endif
 
@@ -2587,7 +2587,7 @@ RamDiskLoadVirtualFile(
     if (ChunkSize == 0)
         ChunkSize = ISO_SECTOR_SIZE;
 
-#if defined(_M_AMD64) || defined(__x86_64__) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#if defined(_WIN64)
     /* Use LoaderXIPRom for unique identification by IopStartRamdisk */
     RamDiskBase = MmAllocateMemoryWithType(RamDiskFileSize, LoaderXIPRom);
     if (!RamDiskBase)

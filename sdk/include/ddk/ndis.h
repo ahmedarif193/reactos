@@ -6755,7 +6755,7 @@ typedef enum _NDIS_NET_BUFFER_LIST_INFO {
   UdpRecvSegCoalesceOffloadInfo = TcpReceiveBytesTransferred,
 #endif
 #if NDIS_SUPPORT_NDIS630
-#if defined(_AMD64_) || defined(_ARM64_)
+#if defined(_WIN64)
   SwitchForwardingReserved,
   SwitchForwardingDetail,
   VirtualSubnetInfo,
@@ -6768,7 +6768,7 @@ typedef enum _NDIS_NET_BUFFER_LIST_INFO {
   RscTcpTimestampDelta,
   TcpSendOffloadsSupplementalNetBufferListInfo = RscTcpTimestampDelta,
 #if NDIS_SUPPORT_NDIS650
-#if defined(_AMD64_) || defined(_ARM64_)
+#if defined(_WIN64)
   GftOffloadInformation,
   GftFlowEntryId,
 #endif
@@ -6781,7 +6781,7 @@ typedef enum _NDIS_NET_BUFFER_LIST_INFO {
 #endif
 #endif
 #endif
-#if NDIS_SUPPORT_NDIS682 && !defined(_AMD64_) && !defined(_ARM64_)
+#if NDIS_SUPPORT_NDIS682 && !defined(_WIN64)
   SwitchForwardingReserved,
   SwitchForwardingDetail_b0_to_b31,
   SwitchForwardingDetail_b32_to_b63,

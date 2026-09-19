@@ -77,6 +77,11 @@ else()
         symbol.c
         type.c)
 
+    if(ARCH STREQUAL "riscv64")
+        include_directories(${REACTOS_SOURCE_DIR}/sdk/lib/rtl)
+        list(APPEND SOURCE cpu_riscv64.c)
+    endif()
+
     add_library(dbghelp MODULE
         ${SOURCE}
         version.rc
@@ -85,6 +90,9 @@ else()
 
     set_module_type(dbghelp win32dll)
     target_link_libraries(dbghelp wine ${PSEH_LIB} oldnames zlib)
+    if(ARCH STREQUAL "riscv64")
+        target_link_libraries(dbghelp riscv64_rvuw)
+    endif()
     add_delay_importlibs(dbghelp version)
     add_importlibs(dbghelp psapi msvcrt kernel32_vista kernel32 ntdll)
     add_cd_file(TARGET dbghelp DESTINATION reactos/system32 FOR all)

@@ -169,6 +169,12 @@ target_compile_definitions(symcrypt_km PRIVATE
     __WINE_PE_BUILD
     SYMCRYPT_PLATFORM_WINE=1
     _KERNEL_MODE=1)
+if(ARCH STREQUAL "riscv64")
+    # SymCrypt has no RISC-V optimized backend. Select its architecture-neutral
+    # C implementation for both the library and every consumer of its layouts.
+    target_compile_definitions(symcrypt PUBLIC SYMCRYPT_IGNORE_PLATFORM)
+    target_compile_definitions(symcrypt_km PUBLIC SYMCRYPT_IGNORE_PLATFORM)
+endif()
 target_include_directories(symcrypt
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inc
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/lib)

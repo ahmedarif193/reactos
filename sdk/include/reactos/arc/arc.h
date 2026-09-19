@@ -654,7 +654,14 @@ typedef struct _LOADER_PARAMETER_EXTENSION
 #elif (NTDDI_VERSION == NTDDI_WINBLUE)
     ULONG Reserved:25;
 #elif (NTDDI_VERSION == NTDDI_WIN10)
+#if defined(__REACTOS__)
+    /* Keep the ReactOS loader flags within this version's existing flag word. */
+    ULONG BootViaWinload:1;
+    ULONG BootViaEFI:1;
+    ULONG Reserved:20;
+#else
     ULONG Reserved:22;
+#endif
 #elif defined(__REACTOS__)
     ULONG BootViaWinload:1;
     ULONG BootViaEFI:1;
@@ -817,6 +824,81 @@ typedef struct _ARM64_LOADER_BLOCK
 #endif
 } ARM64_LOADER_BLOCK, *PARM64_LOADER_BLOCK;
 
+/* ReactOS-private RISC-V loader payload. No Microsoft NT/RISC-V loader
+ * contract exists; version and size must be checked before adding fields.
+ *
+ * The loader hands over one Sv39 root whose supervisor half is laid out as:
+ *
+ *   0xFFFFFFC000000000  KSEG0: loader allocations at KSEG0 + physical address,
+ *                       4 KiB leaves, boot images with their section
+ *                       protections and all other pages read/write/no-execute
+ *   0xFFFFFFD000000000  direct map: every RAM page and early device window at
+ *                       direct map + physical address, read/write/no-execute
+ *   0xFFFFFFE000000000  owned by the memory manager, except the shared user
+ *                       data page the loader maps at KI_USER_SHARED_DATA
+ *
+ * The low half holds a temporary identity map that the kernel removes. */
+#define RISCV64_LOADER_BLOCK_VERSION                 5
+#define RISCV64_LOADER_FLAG_BOOT_HART_VALID          0x0000000000000001ULL
+#define RISCV64_LOADER_FLAG_SV39                     0x0000000000000002ULL
+#define RISCV64_LOADER_FLAG_IDENTITY_MAP_ACTIVE      0x0000000000000004ULL
+/* Boot images carry their section protections; other KSEG0 pages are NX. */
+#define RISCV64_LOADER_FLAG_IMAGE_PROTECTIONS        0x0000000000000008ULL
+#define RISCV64_LOADER_FLAG_DEVICE_TREE_VALID         0x0000000000000010ULL
+/* KSEG0 contains only 4 KiB leaves, so the memory manager can protect and
+ * release loader pages individually. */
+#define RISCV64_LOADER_FLAG_KSEG0_4K                  0x0000000000000020ULL
+/* EarlyConsole* fields describe a firmware-selected console device. */
+#define RISCV64_LOADER_FLAG_EARLY_CONSOLE_VALID       0x0000000000000040ULL
+#define RISCV64_LOADER_REQUIRED_FLAGS                 0x000000000000003FULL
+#define RISCV64_LOADER_OPTIONAL_FLAGS                 0x0000000000000040ULL
+#define RISCV64_LOADER_PAGE_SHIFT                     12
+#define RISCV64_LOADER_PAGE_SIZE                      (1ULL << RISCV64_LOADER_PAGE_SHIFT)
+#define RISCV64_LOADER_SATP_MODE_SV39                 (8ULL << 60)
+#define RISCV64_LOADER_SATP_MODE_MASK                 (0xFULL << 60)
+#define RISCV64_LOADER_SATP_ASID_MASK                 (0xFFFFULL << 44)
+#define RISCV64_LOADER_SATP_PPN_MASK                  ((1ULL << 44) - 1)
+#define RISCV64_LOADER_KSEG0_BASE                     0xFFFFFFC000000000ULL
+#define RISCV64_LOADER_DIRECT_MAP_BASE                0xFFFFFFD000000000ULL
+/* Both windows cover the same physical range. */
+#define RISCV64_LOADER_PHYSICAL_LIMIT                 0x0000001000000000ULL
+#define RISCV64_LOADER_BOOT_PROTOCOL_MINIMUM_REVISION 0x00010000ULL
+
+/* Early console register interfaces (ABI-126). Values are wire constants. */
+#define RISCV64_EARLY_CONSOLE_NONE                    0
+#define RISCV64_EARLY_CONSOLE_NS16550                 1 /* 8250/16550 register file, reg-shift/reg-io-width applied */
+#define RISCV64_EARLY_CONSOLE_SBI_DEBUG               2 /* SBI DBCN extension, no MMIO */
+
+typedef struct _RISCV64_LOADER_BLOCK
+{
+#if defined(_RISCV64_) || defined(_M_RISCV64)
+    ULONG Version;
+    ULONG Size;
+    ULONGLONG Flags;
+    ULONGLONG FirmwareBootProtocolRevision;
+    ULONGLONG BootHartId;
+    ULONGLONG PageTableRoot;
+    ULONGLONG Satp;
+    ULONGLONG Kseg0Base;
+    ULONGLONG DirectMapBase;
+    ULONGLONG PhysicalLimit;             /* Size of both windows. */
+    ULONGLONG HighestMappedPhysicalAddress; /* Highest RAM byte in the direct map. */
+    ULONGLONG PcrPage;
+    ULONGLONG DpcStack;
+    ULONGLONG SharedUserDataPage;        /* Physical address of the page at KI_USER_SHARED_DATA. */
+    ULONGLONG DeviceTree;
+    ULONGLONG DeviceTreeSize;
+    /* Version 3: firmware-described early console (from /chosen/stdout-path). */
+    ULONGLONG EarlyConsoleAddress;       /* Physical MMIO base, 0 if none. */
+    ULONGLONG EarlyConsoleLength;        /* Length of the register window. */
+    ULONG EarlyConsoleInterface;         /* RISCV64_EARLY_CONSOLE_* */
+    ULONG EarlyConsoleRegisterShift;     /* reg-shift, default 0. */
+    ULONG EarlyConsoleRegisterWidth;     /* reg-io-width in bytes, default 1. */
+#else
+    ULONG PlaceHolder;
+#endif
+} RISCV64_LOADER_BLOCK, *PRISCV64_LOADER_BLOCK;
+
 //
 // Firmware information block (NT6+)
 //
@@ -939,6 +1021,7 @@ typedef struct _LOADER_PARAMETER_BLOCK
         PPC_LOADER_BLOCK PowerPC;
         ARM_LOADER_BLOCK Arm;
         ARM64_LOADER_BLOCK Arm64;
+        RISCV64_LOADER_BLOCK Riscv64;
     } u;
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     FIRMWARE_INFORMATION_LOADER_BLOCK FirmwareInformation;

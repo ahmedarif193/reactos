@@ -103,6 +103,15 @@ KdbpGetInstLength(
 BOOLEAN
 KdbpDisassemblerSelfTest(VOID);
 
+#if defined(_M_RISCV64)
+/* from riscv64/riscv64-dis.c */
+BOOLEAN
+KdbpRiscvGetNextPc(
+   IN PCONTEXT Context,
+   OUT PULONG_PTR NextPc,
+   OUT PCSTR *Reason);
+#endif
+
 /* from i386/kdb_help.S */
 
 VOID NTAPI

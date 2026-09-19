@@ -72,7 +72,8 @@ extern char **environ;
 #  define O_BINARY 0
 # endif
 # ifndef __int64
-#   if defined(__x86_64__) || defined(__aarch64__) || defined(__powerpc64__)
+#   if defined(__x86_64__) || defined(__aarch64__) || defined(__powerpc64__) || \
+       (defined(__riscv) && (__riscv_xlen == 64))
 #     define __int64 long
 #   else
 #     define __int64 long long
@@ -97,7 +98,7 @@ extern char **environ;
 
 struct target
 {
-    enum { CPU_i386, CPU_x86_64, CPU_ARM, CPU_ARM64, CPU_ARM64EC } cpu;
+    enum { CPU_i386, CPU_x86_64, CPU_ARM, CPU_ARM64, CPU_ARM64EC, CPU_RISCV64 } cpu;
 
     enum
     {
@@ -499,6 +500,8 @@ static inline struct target get_default_target(void)
     target.cpu = CPU_ARM;
 #elif defined(__aarch64__)
     target.cpu = CPU_ARM64;
+#elif defined(__riscv) && __riscv_xlen == 64
+    target.cpu = CPU_RISCV64;
 #else
 #error Unsupported CPU
 #endif
@@ -534,6 +537,7 @@ static inline unsigned int get_target_ptr_size( struct target target )
         [CPU_ARM]       = 4,
         [CPU_ARM64]     = 8,
         [CPU_ARM64EC]   = 8,
+        [CPU_RISCV64]   = 8,
     };
     return sizes[target.cpu];
 }
@@ -555,6 +559,8 @@ static inline void set_target_ptr_size( struct target *target, unsigned int size
     case CPU_ARM64:
     case CPU_ARM64EC:
         if (size == 4) target->cpu = CPU_ARM;
+        break;
+    case CPU_RISCV64:
         break;
     }
 }
@@ -579,6 +585,7 @@ static inline int get_cpu_from_name( const char *name )
         { "arm64ec",   CPU_ARM64EC },
         { "arm64",     CPU_ARM64 },
         { "arm",       CPU_ARM },
+        { "riscv64",   CPU_RISCV64 },
     };
     unsigned int i;
 
@@ -626,6 +633,7 @@ static inline const char *get_arch_dir( struct target target )
         [CPU_ARM]     = "arm",
         [CPU_ARM64]   = "aarch64",
         [CPU_ARM64EC] = "aarch64",
+        [CPU_RISCV64] = "riscv64",
     };
 
     if (!cpu_names[target.cpu]) return "";

@@ -38,16 +38,18 @@ typedef union
 } FT;
 
 #ifndef _MSC_VER
-#if defined(_WIN64) && !defined(_M_ARM64) && !defined(__aarch64__)
+#if defined(_WIN64) && !defined(_M_ARM64) && !defined(__aarch64__) && !defined(_M_RISCV64)
 NTSYSAPI PRUNTIME_FUNCTION WINAPI RtlLookupFunctionEntry(ULONG_PTR, ULONG_PTR*, PUNWIND_HISTORY_TABLE);
 NTSYSAPI PEXCEPTION_ROUTINE WINAPI RtlVirtualUnwind(ULONG, ULONG_PTR, ULONG_PTR, PRUNTIME_FUNCTION, CONTEXT*, void**, ULONG_PTR*, PKNONVOLATILE_CONTEXT_POINTERS);
 #endif
+#if !defined(_M_RISCV64)
 static EXCEPTION_RECORD GS_ExceptionRecord;
 static CONTEXT GS_ContextRecord;
 
 static const EXCEPTION_POINTERS GS_ExceptionPointers = {
   &GS_ExceptionRecord,&GS_ContextRecord
 };
+#endif
 #endif
 
 DECLSPEC_SELECTANY UINT_PTR __security_cookie = DEFAULT_SECURITY_COOKIE;
@@ -105,6 +107,10 @@ __declspec(noreturn) void __cdecl __report_gsfailure (ULONG_PTR);
 __declspec(noreturn) void __cdecl
 __report_gsfailure (ULONG_PTR StackCookie)
 {
+#ifdef _M_RISCV64
+  (void)StackCookie;
+  __fastfail(FAST_FAIL_STACK_COOKIE_CHECK_FAILURE);
+#else
   volatile UINT_PTR cookie[2] __MINGW_ATTRIB_UNUSED;
 #ifdef _WIN64
 #if !defined(_M_ARM64) && !defined(__aarch64__)
@@ -158,5 +164,6 @@ __report_gsfailure (ULONG_PTR StackCookie)
   UnhandledExceptionFilter ((EXCEPTION_POINTERS *) &GS_ExceptionPointers);
   TerminateProcess (GetCurrentProcess (), STATUS_STACK_BUFFER_OVERRUN);
   abort();
+#endif
 }
 #endif /* !_MSC_VER */

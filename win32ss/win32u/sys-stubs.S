@@ -11,7 +11,7 @@
 
     END
 
-#elif SYSCALLS_ARM64_STUBS
+#elif SYSCALLS_ARM64_STUBS || defined(_M_RISCV64)
 
     .text
     .set SyscallId, 0x1000

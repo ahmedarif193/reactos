@@ -2,6 +2,14 @@
 option(ENABLE_ROSAPPS "Enable building the ReactOS extra applications" OFF)
 option(ENABLE_WALLPAPERS "Integrate wallpapers into the built ISOs" OFF)
 option(ENABLE_KMTESTS "Build kernel-mode tests without the full test suite" OFF)
+option(ENABLE_RISCV64_TESTS "Build and package the RISC-V port regression tests" OFF)
+
+if(ENABLE_RISCV64_TESTS)
+    if(NOT ARCH STREQUAL "riscv64")
+        message(FATAL_ERROR "ENABLE_RISCV64_TESTS requires ARCH=riscv64")
+    endif()
+    add_subdirectory(rostests/tests/riscv64)
+endif()
 
 if(ENABLE_ROSAPPS)
     add_subdirectory(rosapps)

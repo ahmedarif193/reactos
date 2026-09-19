@@ -29,7 +29,7 @@ if [ "${ROSBE_DOCKER_ACTIVE:-0}" = "1" ]; then
 	ROSBE_ROOT="/opt/rosbe"
 	ROSBE_SKIP_HOST_CHECK=1
 	ROSBE_OUTPUT_SUFFIX="-docker"
-elif [ -d "$HOME/.local/opt/rosbe/llvm-mingw" ] || [ -d "$HOME/.local/opt/rosbe/mingw-gcc" ]; then
+elif [ -d "$HOME/.local/opt/rosbe/llvm-mingw" ] || [ -d "$HOME/.local/opt/rosbe/llvm-mingw-riscv24" ] || [ -d "$HOME/.local/opt/rosbe/mingw-gcc" ]; then
 	ROSBE_ROOT="$HOME/.local/opt/rosbe"
 	ROSBE_SKIP_HOST_CHECK=0
 else
@@ -67,9 +67,9 @@ SKIP_FEEDS_UPDATE=0
 
 usage() {
 	echo "Usage: configure.sh [options]"
-	echo "  --clang              Use Clang/LLVM from ~/.local/opt/rosbe/llvm-mingw (default)"
+	echo "  --clang              Use RosBE Clang/LLVM (RISC-V: llvm-mingw-riscv24; otherwise: llvm-mingw)"
 	echo "  --gcc                Use GCC from ~/.local/opt/rosbe/mingw-gcc"
-	echo "  -a, --arch <arch>    Target architecture: amd64, i386, arm64 (default: amd64)"
+	echo "  -a, --arch <arch>    Target architecture: amd64, i386, arm64, riscv64 (default: amd64)"
 	echo "  -r, --release        Configure a Release build (default: Debug)"
 	echo "  makefiles            Use Unix Makefiles generator (default: Ninja)"
 	echo "  menuconfig           Open the interactive configuration UI first;"
@@ -271,6 +271,9 @@ normalize_arch() {
 		arm64|aarch64)
 			echo arm64
 			;;
+		riscv64|rv64)
+			echo riscv64
+			;;
 		arm)
 			echo arm
 			;;
@@ -383,7 +386,7 @@ if [ "$REACTOS_START_DIR" != "$REACTOS_SOURCE_DIR" ]; then
 		CACHED_ARCH=$(cmake_cache_get "$CURRENT_CMAKE_CACHE" ARCH)
 		[ -n "$CACHED_ARCH" ] || CACHED_ARCH=$(rosconfig_file_get "$CURRENT_ROSCONFIG_CACHE" ARCH)
 		case "$CACHED_ARCH" in
-			amd64|i386|arm64|arm) ARCH=$CACHED_ARCH ;;
+			amd64|i386|arm64|arm|riscv64) ARCH=$CACHED_ARCH ;;
 		esac
 	fi
 	if [ "$USER_TOOLCHAIN" = "0" ]; then
@@ -480,7 +483,7 @@ if [ "$RUN_MENUCONFIG" = "1" ]; then
 		ARCH=$(rosconfig_file_get "$ROSCONFIG_MENU_CACHE" ARCH)
 	fi
 	case "$ARCH" in
-		amd64|i386|arm64|arm) ;;
+		amd64|i386|arm64|arm|riscv64) ;;
 		*) fail "menuconfig selected an unsupported architecture: $ARCH" ;;
 	esac
 
@@ -537,6 +540,23 @@ fi
 # target selection.
 if [ "$USE_CLANG" -eq 1 ]; then
 	TOOLCHAIN_FILE=toolchain-clang.cmake
+	if [ "$ARCH" = "riscv64" ]; then
+		ROSBE_LLVM_ROOT="$ROSBE_ROOT/llvm-mingw-riscv24"
+	fi
+	LLVM_ROOT_OVERRIDE=${REACTOS_CLANG_LLVM_MINGW_ROOT:-}
+	for LLVM_ROOT_ARG in $ROS_CMAKEOPTS; do
+		case "$LLVM_ROOT_ARG" in
+			-DREACTOS_CLANG_LLVM_MINGW_ROOT=*|-DREACTOS_CLANG_LLVM_MINGW_ROOT:*=*)
+				LLVM_ROOT_OVERRIDE=${LLVM_ROOT_ARG#*=}
+				;;
+		esac
+	done
+	if [ -z "$LLVM_ROOT_OVERRIDE" ]; then
+		LLVM_ROOT_OVERRIDE=$(cmake_cache_get "$BUILD_DIR/CMakeCache.txt" REACTOS_CLANG_LLVM_MINGW_ROOT)
+	fi
+	if [ -n "$LLVM_ROOT_OVERRIDE" ]; then
+		ROSBE_LLVM_ROOT=$LLVM_ROOT_OVERRIDE
+	fi
 
 	if [ "$ROSBE_SKIP_HOST_CHECK" != "1" ]; then
 		[ -x "$ROSBE_LLVM_ROOT/bin/clang" ] || fail "missing RosBE LLVM toolchain at $ROSBE_LLVM_ROOT"

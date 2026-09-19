@@ -38,7 +38,10 @@ ThreadData::ThreadData(HANDLE handle)
 
 void ThreadData::Update()
 {
-    Context.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL | CONTEXT_DEBUG_REGISTERS;
+    Context.ContextFlags = CONTEXT_INTEGER | CONTEXT_CONTROL;
+#ifdef CONTEXT_DEBUG_REGISTERS
+    Context.ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+#endif
     GetThreadContext(Handle, &Context);
 }
 

@@ -20,8 +20,10 @@
 #include <freeldr.h>
 #include <debug.h>
 
-#if defined(UEFIBOOT) && defined(_M_ARM64)
+#if defined(UEFIBOOT) && (defined(_M_ARM64) || defined(_M_RISCV64))
+#if defined(_M_ARM64)
 #include <reactos/arm64/early_uart.h>
+#endif
 BOOLEAN UefiSerialInitialize(VOID);
 VOID UefiSerialPutChar(_In_ UCHAR Character);
 #endif
@@ -56,17 +58,19 @@ PUCHAR ComPortAddress = NULL;
 
 BOOLEAN DebugStartOfLine = TRUE;
 
-#if defined(UEFIBOOT) && defined(_M_ARM64)
+#if defined(UEFIBOOT) && (defined(_M_ARM64) || defined(_M_RISCV64))
 static VOID
-DebugArm64UefiSerialPutChar(
+DebugUefiSerialPutChar(
     _In_ UCHAR Character)
 {
+#if defined(_M_ARM64)
     if (EarlyUartReady())
     {
         EarlyUartPutc(Character);
         if (EarlyUartReady())
             return;
     }
+#endif
 
     UefiSerialPutChar(Character);
 }
@@ -199,9 +203,11 @@ DebugInit(
 Done:
     Initialized = TRUE;
 
-#if defined(UEFIBOOT) && defined(_M_ARM64)
+#if defined(UEFIBOOT) && (defined(_M_ARM64) || defined(_M_RISCV64))
     UefiSerialInitialize();
+#if defined(_M_ARM64)
     EarlyUartInitialize(0);
+#endif
     DebugPort |= RS232;
 #else
     /* Try to initialize the port; if it fails, remove the corresponding flag */
@@ -220,11 +226,11 @@ VOID DebugPrintChar(UCHAR Character)
 
     if (DebugPort & RS232)
     {
-#if defined(UEFIBOOT) && defined(_M_ARM64)
+#if defined(UEFIBOOT) && (defined(_M_ARM64) || defined(_M_RISCV64))
         if (Character == '\n')
-            DebugArm64UefiSerialPutChar('\r');
+            DebugUefiSerialPutChar('\r');
 
-        DebugArm64UefiSerialPutChar(Character);
+        DebugUefiSerialPutChar(Character);
 #else
         if (Character == '\n')
             Rs232PortPutByte('\r');

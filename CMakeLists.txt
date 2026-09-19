@@ -12,6 +12,10 @@ endif()
 
 project(REACTOS)
 
+if(ARCH STREQUAL "riscv64" AND CMAKE_CROSSCOMPILING)
+    set(PCH OFF CACHE BOOL "Whether to use precompiled headers")
+endif()
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_INCLUDE_DIRECTORIES_PROJECT_BEFORE ON)
 set(CMAKE_SHARED_LIBRARY_PREFIX "")
@@ -26,7 +30,7 @@ set(CMAKE_CXX_STANDARD 11)
 
 # check that the ARCH (target architecture) variable is defined
 if(NOT ARCH)
-    message(FATAL_ERROR "Target architecture (ARCH) is not defined. Please, choose one of: i386, amd64, arm, arm64")
+    message(FATAL_ERROR "Target architecture (ARCH) is not defined. Please, choose one of: i386, amd64, arm, arm64, riscv64")
 endif()
 # Now the ARCH variable will be in lowercase.
 # It is needed because STREQUAL comparison
@@ -36,7 +40,7 @@ endif()
 string(TOLOWER ${ARCH} ARCH)
 
 # set possible values for cmake GUI
-set_property(CACHE ARCH PROPERTY STRINGS "i386" "amd64" "arm" "arm64")
+set_property(CACHE ARCH PROPERTY STRINGS "i386" "amd64" "arm" "arm64" "riscv64")
 
 # Alternative WinNT-compatible architecture string
 if(ARCH STREQUAL "i386")
@@ -304,6 +308,9 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
         if(SARCH STREQUAL "omap3-zoom2")
             add_definitions(-D_ZOOM2_)
         endif()
+    elseif(ARCH STREQUAL "riscv64")
+        # Clang defines _M_RISCV64 with the Microsoft-compatible value (100).
+        add_compile_definitions(_RISCV64_ _WIN64)
     elseif(ARCH STREQUAL "arm64")
         if(ARM64EC_RUNTIME)
             # ARM64EC has the x64 ABI/type model while emitting ARM64 code.
@@ -328,6 +335,8 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
         add_compile_definitions(USE_COMPILER_EXCEPTIONS)
     elseif(ARCH STREQUAL "arm64")
         add_compile_definitions(USE_COMPILER_EXCEPTIONS)
+    elseif(ARCH STREQUAL "riscv64")
+        add_compile_definitions(USE_COMPILER_EXCEPTIONS)
     endif()
 
     # Activate support for assembly source files
@@ -347,7 +356,9 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     set_i18n_language(${I18N_LANG})
 
     # Compiler specific definitions and macros
-    if(MSVC)
+    if(ARCH STREQUAL "riscv64")
+        include(sdk/cmake/riscv64.cmake)
+    elseif(MSVC)
         include(sdk/cmake/msvc.cmake)
     elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
         set(_REACTOS_CLANG_BUILD_CONFIG TRUE)
@@ -391,7 +402,9 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
 
     add_subdirectory(sdk/include)
 
-    if(ARCH MATCHES "64$")
+    if(ARCH STREQUAL "riscv64")
+        include(sdk/cmake/baseaddress_riscv64.cmake)
+    elseif(ARCH MATCHES "64$")
         include(sdk/cmake/baseaddress64.cmake)
         if(ARCH STREQUAL "arm64")
             get_cmake_property(_baseaddress_vars VARIABLES)

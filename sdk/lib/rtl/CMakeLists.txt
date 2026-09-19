@@ -155,10 +155,32 @@ elseif(ARCH STREQUAL "arm64")
         byteswap.c
         dynfntbl.c
         mem.c)
+elseif(ARCH STREQUAL "riscv64")
+    list(REMOVE_ITEM SOURCE slist.c)
+    list(APPEND ASM_SOURCE
+        riscv64/context_asm.S
+        riscv64/restore_asm.S
+        riscv64/except_asm.S)
+    list(APPEND SOURCE
+        bitmap64.c
+        byteswap.c
+        mem.c
+        riscv64/except.c
+        riscv64/context.c
+        riscv64/dispatch.c
+        riscv64/unwind.c
+        riscv64/slist.c)
 endif()
 
 add_asm_files(rtl_asm ${ASM_SOURCE})
 add_library(rtl ${SOURCE} ${rtl_asm})
+if(ARCH STREQUAL "riscv64")
+    # One reader-driven decoder shared by native RTL and remote DbgHelp walks.
+    add_library(riscv64_rvuw STATIC riscv64/rvuw.c)
+    target_include_directories(riscv64_rvuw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_dependencies(riscv64_rvuw xdk psdk)
+    target_link_libraries(rtl PRIVATE riscv64_rvuw)
+endif()
 target_link_libraries(rtl PRIVATE pseh)
 add_pch(rtl rtl.h SOURCE)
 add_dependencies(rtl psdk asm)
@@ -185,6 +207,10 @@ list(APPEND SOURCE_VISTA
     unicode_vista.c
     utf8.c
     waitaddr.c)
+
+if(ARCH STREQUAL "riscv64")
+    list(REMOVE_ITEM SOURCE_VISTA slist.c)
+endif()
 
 add_library(rtl_vista ${SOURCE_VISTA})
 add_pch(rtl_vista rtl_vista.h SOURCE_VISTA)

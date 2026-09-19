@@ -4704,6 +4704,7 @@ DxgkVidMmInitializeAdapter(
         /* Segment IDs are 1-based per WDDM convention. */
         Seg->SegmentId    = i + 1;
         Seg->CpuBase      = NULL;   /* mapped lazily on first CPU access */
+        Seg->CpuCacheType = MmWriteCombined;
 
         if (UsingSeg4)
             VIDMM_READ_SEGMENT_DESC(DXGK_SEGMENTDESCRIPTOR4);
@@ -4711,6 +4712,14 @@ DxgkVidMmInitializeAdapter(
             VIDMM_READ_SEGMENT_DESC(DXGK_SEGMENTDESCRIPTOR3);
         else
             VIDMM_READ_SEGMENT_DESC(DXGK_SEGMENTDESCRIPTOR);
+
+#if defined(_M_RISCV64)
+        /* BasicDisplay's CPU-only software segment uses normal cached RAM.
+         * Do not change the cache policy of hardware miniports or apertures. */
+        if (Adapter->MiniportContext->IsBasicDisplayFallback && Seg->Flags.PopulatedFromSystemMemory &&
+            VidMmSegmentIsCpuVisible(Seg) && !VidMmSegmentIsAperture(Seg))
+            Seg->CpuCacheType = MmCached;
+#endif
 
         /*
          * CommitLimit is defined only for aperture segments.  Native
@@ -10309,9 +10318,9 @@ DxgkVidMmInvalidateReferencedAllocationCache(
     }
 
     /*
-     * Non-aperture GPU memory is exposed through MmWriteCombined mappings,
-     * never through the CPU cache.  It needs ordering, but has no dirty cache
-     * lines to write back or stale cache lines to invalidate.
+     * Non-aperture hardware segments use write-combined mappings. The native
+     * BasicDisplay software segment is cached but has only CPU consumers.
+     * Both need ordering here, not a device-DMA cache-maintenance operation.
      */
     if (!CachedBacking)
     {
@@ -12396,7 +12405,7 @@ VidMmMapSegmentCpu(
         return STATUS_SUCCESS;
     }
 
-    Segment->CpuBase = MmMapIoSpace(Segment->CpuTranslatedAddress, (SIZE_T)Segment->Size, MmWriteCombined);
+    Segment->CpuBase = MmMapIoSpace(Segment->CpuTranslatedAddress, (SIZE_T)Segment->Size, Segment->CpuCacheType);
 
     if (Segment->CpuBase == NULL)
     {
@@ -13638,6 +13647,24 @@ DxgkpVidMmBuildAllocationUserMdl(
 
         if (!VidMmSegmentIsCpuVisible(Segment))
             return STATUS_INVALID_PARAMETER;
+
+        if (Segment->CpuCacheType == MmCached)
+        {
+            /* Describe the existing RAM mapping rather than label its PFNs
+             * as device I/O space or manufacture a differently cached alias. */
+            if (Allocation->SegmentOffset > Segment->Size || Allocation->Size > Segment->Size - Allocation->SegmentOffset)
+                return STATUS_INVALID_PARAMETER;
+            Status = VidMmMapSegmentCpu(Segment);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            Mdl = IoAllocateMdl((PUCHAR)Segment->CpuBase + (SIZE_T)Allocation->SegmentOffset, (ULONG)Allocation->Size, FALSE, FALSE, NULL);
+            if (Mdl == NULL)
+                return STATUS_INSUFFICIENT_RESOURCES;
+            MmBuildMdlForNonPagedPool(Mdl);
+            *OutMdl = Mdl;
+            *OutCacheType = Segment->CpuCacheType;
+            return STATUS_SUCCESS;
+        }
     }
 
     PhysicalAddress = Allocation->PhysicalAddress;

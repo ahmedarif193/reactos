@@ -287,6 +287,10 @@ ExpandInstallerPath(
             StringCchCat(lpInstallerPath, PathSize, TEXT("AMD64"));
             break;
 
+        case PROCESSOR_ARCHITECTURE_RISCV64:
+            StringCchCat(lpInstallerPath, PathSize, TEXT("RISCV64"));
+            break;
+
         // case PROCESSOR_ARCHITECTURE_MSIL: /* .NET CPU-independent code */
         case PROCESSOR_ARCHITECTURE_UNKNOWN:
         default:

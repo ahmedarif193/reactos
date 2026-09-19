@@ -1,6 +1,8 @@
 
-if(NOT ARCH STREQUAL "arm")
-add_subdirectory(acpi)
+if(NOT (ARCH STREQUAL "arm" OR ARCH STREQUAL "riscv64"))
+    # RISC-V currently discovers its platform through the device tree. Its
+    # HAL does not implement the ACPI interrupt and PCI routing interfaces.
+    add_subdirectory(acpi)
 endif()
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     add_subdirectory(isapnp)

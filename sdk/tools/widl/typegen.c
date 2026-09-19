@@ -457,6 +457,7 @@ static unsigned int get_stack_size( const var_t *var, unsigned int *stack_align,
             by_val = (stack_size == 1 || stack_size == 2 || stack_size == 4 || stack_size == 8);
             break;
         case CPU_ARM64:
+        case CPU_RISCV64:
             by_val = (stack_size <= 2 * pointer_size);
             break;
         case CPU_ARM:
@@ -1423,16 +1424,22 @@ static unsigned int fill_params_array( const type_t *iface, const var_t *func,
         offset = ROUND_SIZE( offset, align );
         pos = offset / pointer_size;
 
-        if (target.cpu == CPU_ARM64)
+        if (target.cpu == CPU_ARM64 || target.cpu == CPU_RISCV64)
         {
             switch (type)
             {
             case TYPE_BASIC_FLOAT:
             case TYPE_BASIC_DOUBLE:
-                if (double_count >= 8) break;
-                params[pos] = 0x88 + double_count++;
-                offset += size;
-                continue;
+                /* The current RISC-V Windows target uses the soft-float
+                 * lp64 ABI: even scalar FP arguments use integer slots. */
+                if (target.cpu == CPU_ARM64)
+                {
+                    if (double_count >= 8) break;
+                    params[pos] = 0x88 + double_count++;
+                    offset += size;
+                    continue;
+                }
+                /* fall through */
 
             default:
                 reg_count = ROUND_SIZE( reg_count, align / pointer_size );
@@ -1641,6 +1648,7 @@ static void write_proc_func_interp( FILE *file, int indent, const type_t *iface,
     }
     case CPU_ARM:
     case CPU_ARM64:
+    case CPU_RISCV64:
     {
         unsigned int i, len, count = stack_size / pointer_size;
         unsigned char *params = xmalloc( count );

@@ -179,6 +179,7 @@ PsGetContextThread(IN PETHREAD Thread,
     RtlZeroMemory(&GetSetContext.Context, Size);
     GetSetContext.Context.ContextFlags = Flags;
     GetSetContext.Mode = PreviousMode;
+    GetSetContext.Status = STATUS_SUCCESS;
 
     /* Check if we're running in the same thread */
     if (Thread == PsGetCurrentThread())
@@ -231,6 +232,11 @@ PsGetContextThread(IN PETHREAD Thread,
                                            NULL);
         }
     }
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!NT_SUCCESS(GetSetContext.Status))
+        return GetSetContext.Status;
 
     _SEH2_TRY
     {
@@ -303,6 +309,7 @@ PsSetContextThread(IN PETHREAD Thread,
     /* Set the flags and previous mode */
     GetSetContext.Context.ContextFlags = Flags;
     GetSetContext.Mode = PreviousMode;
+    GetSetContext.Status = STATUS_SUCCESS;
 
     /* Check if we're running in the same thread */
     if (Thread == PsGetCurrentThread())
@@ -356,8 +363,8 @@ PsSetContextThread(IN PETHREAD Thread,
         }
     }
 
-    /* Return status */
-    return Status;
+    /* Return an architecture failure after the APC completed. */
+    return NT_SUCCESS(Status) ? GetSetContext.Status : Status;
 }
 
 NTSTATUS

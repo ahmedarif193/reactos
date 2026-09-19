@@ -1,3 +1,10 @@
+if(ARCH STREQUAL "riscv64")
+    # The matching LLVM package owns allocation, exceptions, RTTI and guards.
+    add_library(cpprt INTERFACE)
+    target_link_libraries(cpprt INTERFACE libsupc++ riscv64_libcxx)
+    return()
+endif()
+
 
 include_directories(
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/include

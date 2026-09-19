@@ -35,8 +35,8 @@
 #  include <stl/_threads.h>
 #endif
 
-#ifndef _STLP_STRING_FWD_H
-#  include <stl/_string_fwd.h>
+#ifndef _STLP_INTERNAL_STRING_H
+#  include <stl/_string.h>
 #endif
 
 #include <stl/_facets_fwd.h>
@@ -151,8 +151,13 @@ public:
   template <class _Facet>
   locale combine(const locale& __loc) const {
     _Facet *__facet = 0;
-    if (!_STLP_PRIV _HasFacet(__loc, __facet))
+    if (!_STLP_PRIV _HasFacet(__loc, __facet)) {
+#if defined (_STLP_NO_EXCEPTIONS)
+      _STLP_ABORT();
+#else
       _M_throw_on_combine_error(__loc.name());
+#endif
+    }
 
     return locale(*this, _STLP_PRIV _UseFacet(__loc, __facet));
   }
@@ -249,8 +254,13 @@ public:
   template <class _Facet>
   locale combine(const locale& __loc) const {
     _Facet *__facet = 0;
-    if (!_STLP_PRIV _HasFacet(__loc, __facet))
+    if (!_STLP_PRIV _HasFacet(__loc, __facet)) {
+#if defined (_STLP_NO_EXCEPTIONS)
+      _STLP_ABORT();
+#else
       _M_throw_on_combine_error(__loc.name());
+#endif
+    }
 
     return locale(*this, _STLP_PRIV _UseFacet(__loc, __facet));
   }
@@ -361,4 +371,3 @@ _STLP_END_NAMESPACE
 // Local Variables:
 // mode:C++
 // End:
-

@@ -12,7 +12,7 @@ NTAPI
 Kii386SpinOnSpinLock(PKSPIN_LOCK SpinLock, ULONG Flags);
 #endif
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
 FORCEINLINE
 ULONG_PTR
 KxLoadAcquirePointer(
@@ -144,7 +144,7 @@ KxReleaseSpinLock(
     KeMemoryBarrierWithoutFence();
 }
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
 
 #define KX_LOCK_QUEUE_WAIT  ((ULONG_PTR)LOCK_QUEUE_WAIT)
 #define KX_LOCK_QUEUE_OWNER ((ULONG_PTR)LOCK_QUEUE_OWNER)
@@ -284,4 +284,4 @@ KxTryToAcquireQueuedSpinLock(
 #endif
 }
 
-#endif /* defined(_M_AMD64) || defined(_M_ARM64) */
+#endif /* defined(_WIN64) */

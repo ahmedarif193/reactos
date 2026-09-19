@@ -9,7 +9,9 @@
 //
 
 #include <internal_shared.h>
+#if _VCRT_X86_INTRINSICS
 #include <immintrin.h>
+#endif
 
 #ifdef _WIN64
 #define DEFAULT_SECURITY_COOKIE 0x00002B992DDFA232ull

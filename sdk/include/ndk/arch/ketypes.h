@@ -32,6 +32,8 @@ Author:
 #include <arm/ketypes.h>
 #elif defined(_M_ARM64)
 #include <arm64/ketypes.h>
+#elif defined(_M_RISCV64)
+#include <riscv64/ketypes.h>
 #else
 #error "Unknown processor"
 #endif

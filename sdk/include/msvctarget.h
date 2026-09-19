@@ -49,6 +49,13 @@
  #if !defined(_M_ARM64)
   #define _M_ARM64 1
  #endif
+#elif defined(__riscv) && (__riscv_xlen == 64)
+ #ifndef _RISCV64_
+  #define _RISCV64_ 1
+ #endif
+ #ifndef _M_RISCV64
+  #define _M_RISCV64 1
+ #endif
 #elif defined(__ia64__)
  #if !defined(_IA64_)
   #define _IA64_ 1

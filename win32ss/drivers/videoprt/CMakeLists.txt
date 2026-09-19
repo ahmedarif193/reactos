@@ -5,7 +5,7 @@ spec2def(videoprt.sys videoprt.spec ADD_IMPORTLIB)
 
 # Embed RTC libs
 if (STACK_PROTECTOR)
-    target_sources(libvideoprt PRIVATE $<TARGET_OBJECTS:gcc_ssp_videoprt>)
+    target_link_libraries(libvideoprt INTERFACE gcc_ssp_videoprt)
 endif()
 
 list(APPEND SOURCE

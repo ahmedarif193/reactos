@@ -1,0 +1,85 @@
+/*
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF
+ */
+
+/* Native RV64 offsets are evaluated with the NT target's actual headers. */
+HEADER("Context"),
+OFFSET(CxFlags, CONTEXT, ContextFlags),
+OFFSET(CxFcsr, CONTEXT, Fcsr),
+OFFSET(CxPc, CONTEXT, Pc),
+OFFSET(CxX, CONTEXT, X),
+OFFSET(CxF, CONTEXT, F),
+SIZE(ContextLength, CONTEXT),
+CONSTANT(CONTEXT_RISCV64),
+CONSTANT(STATUS_NOT_IMPLEMENTED),
+CONSTANT(RISCV_DEBUG_SERVICE_CALL),
+
+HEADER("Kernel floating-point save"),
+OFFSET(FsF, KFLOATING_SAVE, F),
+OFFSET(FsFcsr, KFLOATING_SAVE, Fcsr),
+OFFSET(FsIrql, KFLOATING_SAVE, Irql),
+OFFSET(FsOwner, KFLOATING_SAVE, Owner),
+CONSTANT(STATUS_INVALID_DEVICE_STATE),
+
+HEADER("SEH nonvolatile snapshot"),
+OFFSET(NvVersion, RISCV64_NONVOLATILE_CONTEXT_V1, Version),
+OFFSET(NvSize, RISCV64_NONVOLATILE_CONTEXT_V1, Size),
+OFFSET(NvS, RISCV64_NONVOLATILE_CONTEXT_V1, S),
+SIZE(NonvolatileContextLength, RISCV64_NONVOLATILE_CONTEXT_V1),
+CONSTANT(RISCV64_NONVOLATILE_CONTEXT_VERSION),
+
+HEADER("Processor control region"),
+OFFSET(PcIrql, KPCR, CurrentIrql),
+OFFSET(PcPanicStack, KPCR, PanicStack),
+OFFSET(PcTrapScratch, KPCR, TrapScratch),
+OFFSET(PcTrapScratch2, KPCR, TrapScratch2),
+OFFSET(PcTrapStack, KPCR, TrapStack),
+OFFSET(PcTrapActive, KPCR, TrapActive),
+OFFSET(PcPanicFrame, KPCR, PanicFrame),
+
+HEADER("Trap frame"),
+OFFSET(TfSstatus, KTRAP_FRAME, Sstatus),
+OFFSET(TfScause, KTRAP_FRAME, Scause),
+OFFSET(TfStval, KTRAP_FRAME, Stval),
+OFFSET(TfPreviousTrapFrame, KTRAP_FRAME, PreviousTrapFrame),
+OFFSET(TfPreviousIrql, KTRAP_FRAME, PreviousIrql),
+SIZE(TrapFrameLength, KTRAP_FRAME),
+
+HEADER("Processor control block"),
+OFFSET(PcPrcb, KPCR, Prcb),
+OFFSET(PcCurrentThread, KPCR, Prcb.CurrentThread),
+OFFSET(PbCurrentThread, KPRCB, CurrentThread),
+OFFSET(PbNextThread, KPRCB, NextThread),
+OFFSET(PbIdleThread, KPRCB, IdleThread),
+OFFSET(PbDpcStack, KPRCB, DpcStack),
+
+HEADER("Thread"),
+
+HEADER("Start frame"),
+OFFSET(SfSystemRoutine, KSTART_FRAME, SystemRoutine),
+OFFSET(SfStartRoutine, KSTART_FRAME, StartRoutine),
+OFFSET(SfStartContext, KSTART_FRAME, StartContext),
+OFFSET(SfReturn, KSTART_FRAME, Return),
+SIZE(StartFrameLength, KSTART_FRAME),
+
+HEADER("Switch frame"),
+OFFSET(SwS0, KSWITCH_FRAME, S0),
+OFFSET(SwRa, KSWITCH_FRAME, Ra),
+OFFSET(SwApcBypass, KSWITCH_FRAME, ApcBypass),
+SIZE(SwitchFrameLength, KSWITCH_FRAME),
+
+HEADER("User callback kernel frame"),
+OFFSET(CoS1, KCALLOUT_FRAME, S1),
+OFFSET(CoGp, KCALLOUT_FRAME, Gp),
+OFFSET(CoTp, KCALLOUT_FRAME, Tp),
+OFFSET(CoSstatus, KCALLOUT_FRAME, Sstatus),
+OFFSET(CoFs, KCALLOUT_FRAME, Fs),
+OFFSET(CoFcsr, KCALLOUT_FRAME, Fcsr),
+OFFSET(CoOutputBuffer, KCALLOUT_FRAME, OutputBuffer),
+OFFSET(CoOutputLength, KCALLOUT_FRAME, OutputLength),
+OFFSET(CoS0, KCALLOUT_FRAME, S0),
+OFFSET(CoRa, KCALLOUT_FRAME, Ra),
+SIZE(CalloutFrameLength, KCALLOUT_FRAME),
+
+HEADER("Interrupt request levels"),

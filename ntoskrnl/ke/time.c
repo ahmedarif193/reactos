@@ -218,7 +218,9 @@ KiUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
     Prcb->InterruptCount++;
 
     /* Check if we came from user mode */
-#if !defined(_M_ARM) && !defined(_M_ARM64)
+#if defined(_M_RISCV64)
+    if (KiUserTrap(TrapFrame))
+#elif !defined(_M_ARM) && !defined(_M_ARM64)
     if (KiUserTrap(TrapFrame) || (TrapFrame->EFlags & EFLAGS_V86_MASK))
 #else
     if (TrapFrame->PreviousMode == UserMode)

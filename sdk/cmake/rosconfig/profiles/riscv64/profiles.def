@@ -1,0 +1,9 @@
+config PROFILE_RISCV64
+    prompt "Target profile"
+    type choice
+    var ROSCONFIG_PROFILE
+    value generic "Generic RISC-V"
+    default generic
+    depends ARCH=riscv64
+    help
+      Select the generic RISC-V target without board-specific packages.

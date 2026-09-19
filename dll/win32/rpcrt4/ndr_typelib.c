@@ -892,7 +892,7 @@ static unsigned int get_stack_size(ITypeInfo *typeinfo, TYPEDESC *desc, unsigned
     {
 #ifdef __x86_64__
         byval = (size == 1 || size == 2 || size == 4 || size == 8);
-#elif defined __aarch64__
+#elif defined __aarch64__ || (defined(__riscv) && (__riscv_xlen == 64))
         byval = (size <= 16);
 #endif
     }
@@ -1118,7 +1118,7 @@ static HRESULT write_param_fs(ITypeInfo *typeinfo, unsigned char *type,
     return hr;
 }
 
-#if defined __arm__ || defined __aarch64__
+#if defined __arm__ || defined __aarch64__ || (defined(__riscv) && (__riscv_xlen == 64))
 
 /* replace consecutive params code by a repeat sequence: 0x9d code<1> repeat_count<2> */
 static unsigned int compress_params_array( unsigned char *params, unsigned int count )
@@ -1147,6 +1147,10 @@ static unsigned int fill_params_array( ITypeInfo *typeinfo, FUNCDESC *desc,
     unsigned int reg_count = 0, float_count = 0, double_count = 0, stack_pos = 0, offset = 0;
     unsigned int i, size, pos, align;
 
+#if defined(__riscv) && (__riscv_xlen == 64)
+    (void)double_count;
+#endif
+
     memset( params, 0x9f /* padding */, count );
 
     /* This pointer */
@@ -1161,15 +1165,19 @@ static unsigned int fill_params_array( ITypeInfo *typeinfo, FUNCDESC *desc,
         offset = ROUND_SIZE( offset, align );
         pos = offset / pointer_size;
 
-#ifdef __aarch64__
+#if defined(__aarch64__) || (defined(__riscv) && (__riscv_xlen == 64))
         switch (basetype)
         {
         case FC_FLOAT:
         case FC_DOUBLE:
+#ifdef __aarch64__
             if (double_count >= 8) break;
             params[pos] = 0x88 + double_count++;
             offset += size;
             continue;
+#endif
+            /* RISC-V lp64 passes scalar FP values in integer slots. */
+            /* fall through */
 
         default:
             reg_count = ROUND_SIZE( reg_count, align / pointer_size );
@@ -1234,7 +1242,7 @@ static unsigned int fill_params_array( ITypeInfo *typeinfo, FUNCDESC *desc,
     return count;
 }
 
-#endif  /* __arm__ || __aarch64__ */
+#endif  /* __arm__ || __aarch64__ || __riscv */
 
 static void write_proc_func_header(ITypeInfo *typeinfo, FUNCDESC *desc,
         WORD proc_idx, unsigned char *proc, size_t *proclen)

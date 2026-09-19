@@ -162,9 +162,18 @@ const char* wine_dbgstr_addr(const ADDRESS64* addr)
 #endif
 
 extern struct cpu       cpu_i386, cpu_x86_64, cpu_arm, cpu_arm64;
+#if defined(__riscv) && __riscv_xlen == 64
+extern struct cpu       cpu_riscv64;
+#endif
 
 #if !defined(__REACTOS__) || !defined(DBGHELP_STATIC_LIB)
-static struct cpu*      dbghelp_cpus[] = {&cpu_i386, &cpu_x86_64, &cpu_arm, &cpu_arm64, NULL};
+static struct cpu*      dbghelp_cpus[] = {
+    &cpu_i386, &cpu_x86_64, &cpu_arm, &cpu_arm64,
+#if defined(__riscv) && __riscv_xlen == 64
+    &cpu_riscv64,
+#endif
+    NULL
+};
 #elif defined(TARGET_i386)
 static struct cpu*      dbghelp_cpus[] = {&cpu_i386, NULL};
 #elif defined(TARGET_amd64)
@@ -189,6 +198,8 @@ struct cpu*             dbghelp_current_cpu =
     &cpu_arm
 #elif defined(__aarch64__)
     &cpu_arm64
+#elif defined(__riscv) && __riscv_xlen == 64
+    &cpu_riscv64
 #else
 #error define support for your CPU
 #endif

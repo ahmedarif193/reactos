@@ -53,6 +53,12 @@ MemoryBarrier (
 # define _ReleaseBarrier()                    __dmb(_ARM64_BARRIER_ISH)
 # define _DataSynchronizationBarrier()        __dsb(_ARM64_BARRIER_SY)
 # define _InstructionSynchronizationBarrier() __isb(_ARM64_BARRIER_SY)
+#elif defined(_M_RISCV64)
+# define MemoryBarrier()                      __asm__ __volatile__("fence iorw, iorw" ::: "memory")
+# define _AcquireBarrier()                    __asm__ __volatile__("fence r, rw" ::: "memory")
+# define _ReleaseBarrier()                    __asm__ __volatile__("fence rw, w" ::: "memory")
+# define _DataSynchronizationBarrier()        MemoryBarrier()
+# define _InstructionSynchronizationBarrier() __asm__ __volatile__("fence.i" ::: "memory")
 #else
 #error Unsupported architecture
 #endif /* _M_ARM */

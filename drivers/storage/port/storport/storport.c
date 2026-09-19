@@ -2012,7 +2012,7 @@ StorPortExtendedFunction(
             }
             RtlZeroMemory(Watchdog, sizeof(*Watchdog));
             Status = STOR_STATUS_UNSUCCESSFUL;
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
             {
                 KDPC_WATCHDOG_INFORMATION KernelInfo;
 
@@ -2907,7 +2907,7 @@ StorPortPauseDevice(
 }
 
 
-#if defined(_M_AMD64) || defined(_M_ARM64)
+#if defined(_WIN64)
 /*
  * @implemented
  */
@@ -2923,7 +2923,7 @@ StorPortQuerySystemTime(
 
     KeQuerySystemTime(CurrentTime);
 }
-#endif /* defined(_M_AMD64) || defined(_M_ARM64) */
+#endif /* defined(_WIN64) */
 
 
 /*

@@ -9,11 +9,11 @@
 #pragma once
 
 #include <intrin.h>
-#include <immintrin.h>
 #include <isa_availability.h>
 #include <stdint.h>
 
 #if (defined _M_IX86 || defined _M_X64) && !defined(_M_HYBRID_X86_ARM64) && !defined(_M_ARM64EC)
+    #include <immintrin.h>
     #define _CRT_SIMD_SUPPORT_AVAILABLE
 #endif
 

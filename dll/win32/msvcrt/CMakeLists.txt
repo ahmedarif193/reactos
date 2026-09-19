@@ -93,6 +93,10 @@ elseif(ARCH STREQUAL "arm64")
     list(APPEND SHARED_SOURCE
         except_arm64.c
     )
+elseif(ARCH STREQUAL "riscv64")
+    list(APPEND SHARED_SOURCE
+        except_riscv64.c
+    )
 endif()
 
 # MSVC asm code

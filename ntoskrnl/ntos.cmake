@@ -439,6 +439,49 @@ elseif(ARCH STREQUAL "arm64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm64/ehandler.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm64/rtlexcpt.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm64/rtlstubs.c)
+elseif(ARCH STREQUAL "riscv64")
+    list(APPEND ASM_SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/ctxswitch.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/entry.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/float.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/stack.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/trap.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/usercall.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/usercopy.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/syscall.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/riscv64/capture.S)
+    list(APPEND SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/config/riscv64/cmhardwr.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/riscv64/ioaccess.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/riscv64/kdsup.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/cache.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/console.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/context.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/cpu.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/features.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/interrupt.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/irql.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/kiinit.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/pcr.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/spinlock.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/stack.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/stubs.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/syscall.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/thrdini.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/tlb.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/trap.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/usercall.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/usercopy.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/riscv64/psctx.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/riscv64/rtlexcpt.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/riscv64/slist.c)
+    # KeSwitchKernelStack relocates the live conversion chain's frame records.
+    # These callers also reload explicit pointers into the moved stack.
+    set_property(SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/win32.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/syscall.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/riscv64/trap.c
+        APPEND PROPERTY COMPILE_OPTIONS -fno-omit-frame-pointer)
 endif()
 
 if(NOT _WINKD_)
@@ -465,6 +508,12 @@ endif()
         if(KDBG)
             list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/kdb_help.S)
             list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/arm64-dis.c)
+        endif()
+    elseif(ARCH STREQUAL "riscv64")
+        list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/riscv64/kdserial.c)
+        if(KDBG)
+            list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/riscv64/kdb_help.S)
+            list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/riscv64/riscv64-dis.c)
         endif()
     endif()
 

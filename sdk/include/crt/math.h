@@ -149,8 +149,8 @@ _Check_return_ _CRTIMP double __cdecl _atof_l(_In_z_ const char *str, _In_opt_ _
 
 #ifndef _SIGN_DEFINED
 #define _SIGN_DEFINED
-_Check_return_ _CRTIMP double __cdecl _copysign(_In_ double x, _In_ double sgn);
-_Check_return_ _CRTIMP double __cdecl _chgsign(_In_ double x);
+_Check_return_ __MINGW_NOTHROW _CRTIMP double __cdecl _copysign(_In_ double x, _In_ double sgn);
+_Check_return_ __MINGW_NOTHROW _CRTIMP double __cdecl _chgsign(_In_ double x);
 #endif
 
 _Check_return_ _CRTIMP double __cdecl _cabs(_In_ struct _complex a);
@@ -158,8 +158,8 @@ _Check_return_ _CRTIMP double __cdecl _hypot(_In_ double x, _In_ double y);
 _Check_return_ _CRTIMP double __cdecl _j0(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _j1(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _jn(_In_ int x, _In_ double y);
-_Check_return_ _CRTIMP double __cdecl _nextafter(_In_ double x, _In_ double y);
-_Check_return_ _CRTIMP int __cdecl _isnan(_In_ double x);
+_Check_return_ __MINGW_NOTHROW _CRTIMP double __cdecl _nextafter(_In_ double x, _In_ double y);
+_Check_return_ __MINGW_NOTHROW _CRTIMP int __cdecl _isnan(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _y0(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _y1(_In_ double x);
 _Check_return_ _CRTIMP double __cdecl _yn(_In_ int x, _In_ double y);
@@ -200,12 +200,10 @@ _Check_return_ _CRTIMP int __cdecl _fpclassf(_In_ float x);
 #endif
 #endif
 
-#if defined(__x86_64) || defined(_M_AMD64) || \
-    defined(__arm__) || defined(_M_ARM)  || \
-    defined(__arm64__) || defined(_M_ARM64)
+#if defined(_WIN64) || defined(__arm__) || defined(_M_ARM)
 _Check_return_ _CRTIMP int __cdecl _finitef(_In_ float x);
 _Check_return_ _CRTIMP float __cdecl _logbf(_In_ float x);
-#endif /* _M_AMD64 || _M_ARM || _M_ARM64 */
+#endif /* _WIN64 || ARM */
 
 #if defined(__ia64__) || defined (_M_IA64)
 _Check_return_ _CRTIMP float __cdecl ldexpf(_In_ float x, _In_ int y);

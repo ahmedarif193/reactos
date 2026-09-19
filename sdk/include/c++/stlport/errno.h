@@ -20,6 +20,13 @@
 #  define _STLP_DONT_POP_HEADER_ID
 #endif
 
+/* ReactOS' native CRT may have provided errno before this compatibility
+ * wrapper is reached through windows.h. Recognize its include guard rather
+ * than treating the existing errno macro as an unresolved include cycle. */
+#if defined (__REACTOS__) && defined (_INC_ERRNO) && !defined (_STLP_NATIVE_ERRNO_H_INCLUDED)
+#  define _STLP_NATIVE_ERRNO_H_INCLUDED
+#endif
+
 #ifdef _STLP_WCE
 /* only show message when directly including this file in a non-library build */
 #  if !defined(__BUILDING_STLPORT) && (_STLP_OUTERMOST_HEADER_ID == 0x205)

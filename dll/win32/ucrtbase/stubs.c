@@ -36,7 +36,7 @@ int __cdecl __acrt_initialize_sse2(void)
     return 0;
 }
 
-#ifdef _M_ARM64
+#if defined(_M_ARM64) || defined(_M_RISCV64)
 int __cdecl _set_FMA3_enable(int flag)
 {
     (void)flag;

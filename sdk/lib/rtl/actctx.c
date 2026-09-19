@@ -645,6 +645,8 @@ static const WCHAR current_archW[] = L"arm64";
 static const WCHAR current_archW[] = L"amd64";
 #elif defined __arm__
 static const WCHAR current_archW[] = L"arm";
+#elif defined _M_RISCV64 || (defined __riscv && __riscv_xlen == 64)
+static const WCHAR current_archW[] = L"riscv64";
 #else
 static const WCHAR current_archW[] = L"none";
 #endif
