@@ -7,6 +7,8 @@
  */
 
 #include "precomp.h"
+#include "sinksnapshot.h"
+#include "range.h"
 
 #include <wine/debug.h>
 WINE_DEFAULT_DEBUG_CHANNEL(msctf);
@@ -39,6 +41,9 @@ public:
     HRESULT Initialize(ITfDocumentMgr *manager);
     HRESULT Uninitialize();
     HRESULT Cleanup(TfClientId tid);
+    HRESULT RequestNotificationLock();
+    HRESULT NotifyTextEdit();
+    void AddRange(struct list *entry) { list_add_tail(&m_ranges, entry); }
 
     // ** IUnknown methods **
     STDMETHODIMP QueryInterface(REFIID riid, void **ppvObj) override;
@@ -195,6 +200,11 @@ protected:
     ITfCleanupContextSink *m_pCleanupContextSink;
     TfClientId m_cleanupSinkClientId;
     ITfEditSession *m_currentEditSession;
+    BOOL m_selectionChanged;
+    BOOL m_textChanged;
+    LONG m_changeStart, m_changeEnd;
+    ULONG m_editTransactions;
+    struct list m_ranges;
 
     // kept as separate lists to reduce unnecessary iterations
     struct list m_pContextKeyEventSink;
@@ -212,6 +222,8 @@ typedef struct tagEditCookie
     CContext *pOwningContext;
 } EditCookie;
 
+#include "contextview.h"
+
 ////////////////////////////////////////////////////////////////////////////
 
 CContext::CContext()
@@ -224,8 +236,14 @@ CContext::CContext()
     , m_pCleanupContextSink(NULL)
     , m_cleanupSinkClientId(0)
     , m_currentEditSession(NULL)
+    , m_selectionChanged(FALSE)
+    , m_textChanged(FALSE)
+    , m_changeStart(0)
+    , m_changeEnd(0)
+    , m_editTransactions(0)
 {
     ZeroMemory(&m_documentStatus, sizeof(m_documentStatus));
+    list_init(&m_ranges);
     list_init(&m_pContextKeyEventSink);
     list_init(&m_pEditTransactionSink);
     list_init(&m_pStatusSink);
@@ -459,6 +477,7 @@ CContext::SetSelection(
     }
 
     hr = m_pITextStoreACP->SetSelection(ulCount, acp);
+    if (SUCCEEDED(hr)) m_selectionChanged = TRUE;
 
     cicMemFree(acp);
 
@@ -519,8 +538,15 @@ CContext::GetEnd(
 
 STDMETHODIMP CContext::GetActiveView(_Out_ ITfContextView **ppView)
 {
-    FIXME("STUB:(%p)\n", this);
-    return E_NOTIMPL;
+    if (!ppView) return E_INVALIDARG;
+    *ppView = NULL;
+    if (!m_connected) return TF_E_DISCONNECTED;
+    if (!m_pITextStoreACP) return E_NOTIMPL;
+    TsViewCookie view;
+    HRESULT hr = m_pITextStoreACP->GetActiveView(&view);
+    if (FAILED(hr)) return hr;
+    *ppView = new(cicNoThrow) CContextView(this, m_pITextStoreACP, view);
+    return *ppView ? S_OK : E_OUTOFMEMORY;
 }
 
 STDMETHODIMP CContext::EnumViews(_Out_ IEnumTfContextViews **ppEnum)
@@ -679,8 +705,10 @@ STDMETHODIMP CContext::TerminateComposition(_In_ ITfCompositionView *pCompositio
 
 STDMETHODIMP CContext::OnLayoutChange()
 {
-    TRACE("(%p)\n", this);
-    return S_OK;
+    if (!m_pITextStoreACP) return S_OK;
+    TsViewCookie view;
+    HRESULT hr = m_pITextStoreACP->GetActiveView(&view);
+    return FAILED(hr) ? hr : OnLayoutChange(TS_LC_CHANGE, view);
 }
 
 STDMETHODIMP CContext::OnAttributeChange(_In_ REFGUID rguidAttribute)
@@ -722,7 +750,15 @@ STDMETHODIMP CContext::InsertTextAtSelection(
 
     hr = m_pITextStoreACP->InsertTextAtSelection(dwFlags, pchText, cch, &acpStart, &acpEnd, &change);
     if (SUCCEEDED(hr))
-        Range_Constructor(this, change.acpStart, change.acpNewEnd, ppRange);
+    {
+        if (!(dwFlags & TF_IAS_QUERYONLY))
+        {
+            OnTextChange(0, &change);
+            acpStart = change.acpStart;
+            acpEnd = change.acpNewEnd;
+        }
+        if (ppRange) hr = Range_Constructor(this, acpStart, acpEnd, ppRange);
+    }
 
     return hr;
 }
@@ -776,21 +812,100 @@ STDMETHODIMP CContext::OnTextChange(
     _In_ DWORD dwFlags,
     _In_ const TS_TEXTCHANGE *pChange)
 {
-    FIXME("STUB:(%p)\n", this);
-    return S_OK;
+    if (!pChange || pChange->acpStart < 0 || pChange->acpOldEnd < pChange->acpStart ||
+        pChange->acpNewEnd < pChange->acpStart)
+        return E_INVALIDARG;
+    struct list *cursor;
+    LIST_FOR_EACH(cursor, &m_ranges)
+        LIST_ENTRY(cursor, ContextRange, entry)->range->OnTextChange(pChange);
+    if (m_textChanged)
+    {
+        if (m_changeEnd >= pChange->acpOldEnd)
+            m_changeEnd += pChange->acpNewEnd - pChange->acpOldEnd;
+        m_changeStart = min(m_changeStart, pChange->acpStart);
+        m_changeEnd = max(m_changeEnd, pChange->acpNewEnd);
+    }
+    else
+    {
+        m_changeStart = pChange->acpStart;
+        m_changeEnd = pChange->acpNewEnd;
+    }
+    m_textChanged = TRUE;
+    return RequestNotificationLock();
 }
 
 STDMETHODIMP CContext::OnSelectionChange()
 {
-    FIXME("STUB:(%p)\n", this);
-    return S_OK;
+    m_selectionChanged = TRUE;
+    return RequestNotificationLock();
 }
 
 STDMETHODIMP CContext::OnLayoutChange(
     _In_ TsLayoutCode lcode,
     _In_ TsViewCookie vcView)
 {
-    FIXME("STUB:(%p)\n", this);
+    TfLayoutCode code;
+    switch (lcode)
+    {
+        case TS_LC_CREATE: code = TF_LC_CREATE; break;
+        case TS_LC_CHANGE: code = TF_LC_CHANGE; break;
+        case TS_LC_DESTROY: code = TF_LC_DESTROY; break;
+        default: return E_INVALIDARG;
+    }
+    if (!m_pITextStoreACP) return E_UNEXPECTED;
+    if (list_empty(&m_pTextLayoutSink)) return S_OK;
+    CSinkSnapshot sinks;
+    HRESULT hr = sinks.Capture(&m_pTextLayoutSink);
+    if (FAILED(hr)) return hr;
+    ITfContextView *view = new(cicNoThrow) CContextView(this, m_pITextStoreACP, vcView);
+    if (!view) return E_OUTOFMEMORY;
+    for (ULONG i = 0; i < sinks.Count(); ++i)
+        static_cast<ITfTextLayoutSink *>(sinks[i])->OnLayoutChange(this, code, view);
+    view->Release();
+    return S_OK;
+}
+
+HRESULT CContext::RequestNotificationLock()
+{
+    if (m_currentEditSession || m_editTransactions) return S_OK;
+    if (list_empty(&m_pTextEditSink))
+    {
+        m_textChanged = m_selectionChanged = FALSE;
+        return S_OK;
+    }
+    if (!m_pITextStoreACP) return E_UNEXPECTED;
+    HRESULT session;
+    HRESULT hr = m_pITextStoreACP->RequestLock(TS_LF_READ, &session);
+    return FAILED(hr) ? hr : session;
+}
+
+HRESULT CContext::NotifyTextEdit()
+{
+    CSinkSnapshot sinks;
+    HRESULT hr = sinks.Capture(&m_pTextEditSink);
+    if (FAILED(hr)) return hr;
+    ITfRange *range = NULL;
+    if (m_textChanged)
+    {
+        hr = Range_Constructor(this, m_changeStart, m_changeEnd, &range);
+        if (FAILED(hr)) return hr;
+    }
+    CEditRecord *record = new(cicNoThrow) CEditRecord(m_selectionChanged, range);
+    if (range) range->Release();
+    if (!record) return E_OUTOFMEMORY;
+    EditCookie *cookie = static_cast<EditCookie *>(cicMemAlloc(sizeof(*cookie)));
+    if (!cookie) { record->Release(); return E_OUTOFMEMORY; }
+    cookie->lockType = TS_LF_READ;
+    cookie->pOwningContext = this;
+    TfEditCookie ec = generate_Cookie(COOKIE_MAGIC_EDITCOOKIE, cookie);
+    if (!ec) { cicMemFree(cookie); record->Release(); return E_OUTOFMEMORY; }
+    m_selectionChanged = m_textChanged = FALSE;
+    AddRef();
+    for (ULONG i = 0; i < sinks.Count(); ++i)
+        static_cast<ITfTextEditSink *>(sinks[i])->OnEndEdit(this, ec, record);
+    cicMemFree(remove_Cookie(ec));
+    record->Release();
+    Release();
     return S_OK;
 }
 
@@ -827,28 +942,19 @@ STDMETHODIMP CContext::OnAttrsChange(
 STDMETHODIMP CContext::OnLockGranted(_In_ DWORD dwLockFlags)
 {
     HRESULT hr;
-    EditCookie *cookie, *sinkcookie;
+    EditCookie *cookie;
     TfEditCookie ec;
-    struct list *cursor;
 
     TRACE("(%p) %x\n", this, dwLockFlags);
 
     if (!m_currentEditSession)
     {
-        FIXME("OnLockGranted called for something other than an EditSession\n");
-        return S_OK;
+        return m_textChanged || m_selectionChanged ? NotifyTextEdit() : S_OK;
     }
 
     cookie = (EditCookie *)cicMemAlloc(sizeof(EditCookie));
     if (!cookie)
         return E_OUTOFMEMORY;
-
-    sinkcookie = (EditCookie *)cicMemAlloc(sizeof(EditCookie));
-    if (!sinkcookie)
-    {
-        cicMemFree(cookie);
-        return E_OUTOFMEMORY;
-    }
 
     cookie->lockType = dwLockFlags;
     cookie->pOwningContext = this;
@@ -857,22 +963,7 @@ STDMETHODIMP CContext::OnLockGranted(_In_ DWORD dwLockFlags)
     hr = m_currentEditSession->DoEditSession(ec);
 
     if ((dwLockFlags & TS_LF_READWRITE) == TS_LF_READWRITE)
-    {
-        ITfTextEditSink *sink;
-        TfEditCookie sc;
-
-        sinkcookie->lockType = TS_LF_READ;
-        sinkcookie->pOwningContext = this;
-        sc = generate_Cookie(COOKIE_MAGIC_EDITCOOKIE, sinkcookie);
-
-        /*TODO: implement ITfEditRecord */
-        SINK_FOR_EACH(cursor, &m_pTextEditSink, ITfTextEditSink, sink)
-        {
-            sink->OnEndEdit(static_cast<ITfContext *>(this), sc, NULL);
-        }
-        sinkcookie = (EditCookie *)remove_Cookie(sc);
-    }
-    cicMemFree(sinkcookie);
+        NotifyTextEdit();
 
     m_currentEditSession->Release();
     m_currentEditSession = NULL;
@@ -886,14 +977,15 @@ STDMETHODIMP CContext::OnLockGranted(_In_ DWORD dwLockFlags)
 
 STDMETHODIMP CContext::OnStartEditTransaction()
 {
-    FIXME("STUB:(%p)\n", this);
-    return E_NOTIMPL;
+    ++m_editTransactions;
+    return S_OK;
 }
 
 STDMETHODIMP CContext::OnEndEditTransaction()
 {
-    FIXME("STUB:(%p)\n", this);
-    return E_NOTIMPL;
+    if (!m_editTransactions) return E_UNEXPECTED;
+    --m_editTransactions;
+    return m_textChanged || m_selectionChanged ? RequestNotificationLock() : S_OK;
 }
 
 STDMETHODIMP CContext::Serialize(
@@ -1082,4 +1174,9 @@ HRESULT Context_Uninitialize(ITfContext *iface)
 {
     CContext *This = static_cast<CContext *>(iface);
     return This->Uninitialize();
+}
+
+EXTERN_C void Context_AddRange(ITfContext *context, struct list *entry)
+{
+    static_cast<CContext *>(context)->AddRange(entry);
 }
