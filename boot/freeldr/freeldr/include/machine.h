@@ -78,7 +78,7 @@ typedef struct tagMACHVTBL
     VOID (*HwIdle)(VOID);
 } MACHVTBL, *PMACHVTBL;
 
-extern MACHVTBL MachVtbl;
+extern FLDRAPI MACHVTBL MachVtbl;
 
 /* NOTE: Implemented by each architecture */
 VOID MachInit(const char *CmdLine);

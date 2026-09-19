@@ -194,6 +194,7 @@ list(APPEND PCATLDR_BASE_SOURCE
     ${FREELDR_BASE_SOURCE})
 
 add_executable(freeldr_pe ${PCATLDR_BASE_SOURCE})
+target_compile_definitions(freeldr_pe PRIVATE _FRLDRLIB_)
 
 set_target_properties(freeldr_pe
     PROPERTIES

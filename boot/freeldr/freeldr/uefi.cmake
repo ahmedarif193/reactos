@@ -159,7 +159,7 @@ endif()
 add_executable(uefildr ${UEFILDR_BASE_SOURCE})
 set_target_properties(uefildr PROPERTIES SUFFIX ".efi")
 
-target_compile_definitions(uefildr PRIVATE UEFIBOOT)
+target_compile_definitions(uefildr PRIVATE _FRLDRLIB_ UEFIBOOT)
 
 # On AMD64 we only map 1GB with freeloader, tell UEFI to keep us low.
 # On ARM64, match the Windows boot manager preferred base to keep PE metadata
