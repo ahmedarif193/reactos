@@ -4110,10 +4110,17 @@ static void test_GetNamedSecurityInfoA(void)
            || broken(flags == CONTAINER_INHERIT_ACE), /* win 10 */
            "Builtin Users ACE has unexpected flags (0x%x != 0x%x)\n", flags,
            INHERIT_ONLY_ACE|CONTAINER_INHERIT_ACE);
+#ifdef __REACTOS__
+        ok(ace->Mask == GENERIC_READ
+           || broken(ace->Mask == KEY_READ), /* win 10 */
+           "Builtin Users ACE has unexpected mask (0x%lx != 0x%lx)\n",
+                                      ace->Mask, GENERIC_READ);
+#else
         ok(ace->Mask == GENERIC_READ
            || broken(ace->Mask == KEY_READ), /* win 10 */
            "Builtin Users ACE has unexpected mask (0x%lx != 0x%x)\n",
                                       ace->Mask, GENERIC_READ);
+#endif
     }
     ok(admins_ace_id != -1, "Builtin Admins ACE not found.\n");
     if (admins_ace_id != -1)
@@ -4840,8 +4847,13 @@ static void test_GetSecurityInfo(void)
         ok(flags == (INHERIT_ONLY_ACE|CONTAINER_INHERIT_ACE),
            "Domain Users ACE has unexpected flags (0x%x != 0x%x)\n", flags,
            INHERIT_ONLY_ACE|CONTAINER_INHERIT_ACE);
+#ifdef __REACTOS__
+        ok(ace->Mask == GENERIC_READ, "Domain Users ACE has unexpected mask (0x%lx != 0x%lx)\n",
+                                      ace->Mask, GENERIC_READ);
+#else
         ok(ace->Mask == GENERIC_READ, "Domain Users ACE has unexpected mask (0x%lx != 0x%x)\n",
                                       ace->Mask, GENERIC_READ);
+#endif
     }
     ok(admins_ace_id != -1 || broken(admins_ace_id == -1) /* xp */,
        "Builtin Admins ACE not found.\n");
@@ -4851,8 +4863,13 @@ static void test_GetSecurityInfo(void)
         ok(bret, "Failed to get Builtin Admins ACE.\n");
         flags = ((ACE_HEADER *)ace)->AceFlags;
         ok(flags == 0x0, "Builtin Admins ACE has unexpected flags (0x%x != 0x0)\n", flags);
+#ifdef __REACTOS__
+        ok(ace->Mask == PROCESS_ALL_ACCESS || broken(ace->Mask == 0x1f0fff) /* win2k */,
+           "Builtin Admins ACE has unexpected mask (0x%lx != 0x%lx)\n", ace->Mask, PROCESS_ALL_ACCESS);
+#else
         ok(ace->Mask == PROCESS_ALL_ACCESS || broken(ace->Mask == 0x1f0fff) /* win2k */,
            "Builtin Admins ACE has unexpected mask (0x%lx != 0x%x)\n", ace->Mask, PROCESS_ALL_ACCESS);
+#endif
     }
     LocalFree(pSD);
 
