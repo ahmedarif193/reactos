@@ -123,6 +123,7 @@ DxgkYieldKmdTransactionForContextRoom(
     _Inout_ PBOOLEAN TransactionHeld)
 {
     NTSTATUS Status;
+    DPT_SCOPE Trace;
 
     PAGED_CODE();
     if (Adapter == NULL || Context == NULL || TransactionHeld == NULL ||
@@ -139,8 +140,11 @@ DxgkYieldKmdTransactionForContextRoom(
     Status = DxgkContextOrderWaitForRoom(Context, Deadline);
     if (!NT_SUCCESS(Status))
         return Status;
-    if (!DxgkBeginKmdTransaction(Adapter))
-        return STATUS_DELETE_PENDING;
+    Trace = DxgPresentTraceProducerBegin(Context, DxgTraceTransactionReacquire);
+    Status = DxgkBeginKmdTransaction(Adapter) ? STATUS_SUCCESS : STATUS_DELETE_PENDING;
+    DxgPresentTraceProducerEnd(Trace, Status);
+    if (!NT_SUCCESS(Status))
+        return Status;
     *TransactionHeld = TRUE;
     return STATUS_SUCCESS;
 }

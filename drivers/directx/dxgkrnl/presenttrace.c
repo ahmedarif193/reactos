@@ -17,6 +17,113 @@ static struct
 static ULONGLONG PacketScratch[DXGK_TRACE_PACKET_CAPACITY];
 static volatile LONG PacketCount, PacketReadyEpoch, PacketControl;
 static ULONG PacketPid;
+#define DXGK_TRACE_PRODUCER_CAPACITY 64
+static KSPIN_LOCK ProducerLock;
+static ULONG ProducerCount, ProducerOverflow;
+static struct
+{
+    ULONG Pid, Context, Node;
+    DPT_COUNTER Counter[DxgTraceProducerStageCount];
+} ProducerTimings[DXGK_TRACE_PRODUCER_CAPACITY];
+
+/* Context handles include their generation. Keep only scalar identities, not
+ * object pointers, so teardown cannot invalidate an active/frozen capture.
+ * No allocation or printing occurs on the submission path. */
+DPT_SCOPE DxgPresentTraceProducerBegin(PDXGKRNL_CONTEXT Context, ULONG Stage)
+{
+    DPT_SCOPE Scope = {0};
+    ULONG Pid, Handle, Node, Index;
+    LONG Epoch = DPT_READ(&PacketReadyEpoch);
+    KIRQL Irql;
+
+    if (!Epoch || DPT_READ(&g_DxgPresentTrace.Epoch) != Epoch ||
+        Stage >= DxgTraceProducerStageCount)
+        return Scope;
+    Pid = Context && Context->Device && Context->Device->OwnerProcess ?
+        HandleToUlong(PsGetProcessId(Context->Device->OwnerProcess)) :
+        HandleToUlong(PsGetCurrentProcessId());
+    Handle = Context ? Context->Handle : 0;
+    Node = Context ? Context->NodeOrdinal : MAXULONG;
+    InterlockedIncrement(&g_DxgPresentTrace.Writers);
+    if (DPT_READ(&g_DxgPresentTrace.Epoch) == Epoch &&
+        DPT_READ(&PacketReadyEpoch) == Epoch)
+    {
+        KeAcquireSpinLock(&ProducerLock, &Irql);
+        for (Index = 0; Index < ProducerCount; ++Index)
+            if (ProducerTimings[Index].Pid == Pid &&
+                ProducerTimings[Index].Context == Handle &&
+                ProducerTimings[Index].Node == Node)
+                break;
+        if (Index < DXGK_TRACE_PRODUCER_CAPACITY)
+        {
+            if (Index == ProducerCount)
+            {
+                ProducerTimings[Index].Pid = Pid;
+                ProducerTimings[Index].Context = Handle;
+                ProducerTimings[Index].Node = Node;
+                ++ProducerCount;
+            }
+            ++ProducerTimings[Index].Counter[Stage].Entered;
+            Scope.Epoch = Epoch;
+            Scope.Metric = Index * DxgTraceProducerStageCount + Stage;
+            Scope.Start = DptNow();
+        }
+        else
+            ++ProducerOverflow;
+        KeReleaseSpinLock(&ProducerLock, Irql);
+    }
+    InterlockedDecrement(&g_DxgPresentTrace.Writers);
+    return Scope;
+}
+
+VOID DxgPresentTraceProducerEnd(DPT_SCOPE Scope, NTSTATUS Status)
+{
+    DPT_COUNTER *Counter;
+    ULONGLONG Ticks;
+    KIRQL Irql;
+
+    if (!Scope.Epoch || DPT_READ(&g_DxgPresentTrace.Epoch) != Scope.Epoch)
+        return;
+    Ticks = DptNow() - Scope.Start;
+    InterlockedIncrement(&g_DxgPresentTrace.Writers);
+    if (DPT_READ(&g_DxgPresentTrace.Epoch) == Scope.Epoch &&
+        DPT_READ(&PacketReadyEpoch) == Scope.Epoch)
+    {
+        KeAcquireSpinLock(&ProducerLock, &Irql);
+        Counter = &ProducerTimings[Scope.Metric / DxgTraceProducerStageCount]
+            .Counter[Scope.Metric % DxgTraceProducerStageCount];
+        ++Counter->Completed;
+        Counter->Failed += !NT_SUCCESS(Status);
+        Counter->Ticks += Ticks;
+        Counter->MaxTicks = max(Counter->MaxTicks, Ticks);
+        KeReleaseSpinLock(&ProducerLock, Irql);
+    }
+    InterlockedDecrement(&g_DxgPresentTrace.Writers);
+}
+
+static VOID DxgDumpProducers(ULONGLONG Frequency)
+{
+    static const char *Names[] = {"command_admission", "context_room", "transaction_reacquire"};
+    ULONG Index, Stage;
+
+    if (!Frequency)
+        return;
+    DbgPrint("DXGK_PRODUCER_COUNTS contexts=%lu overflow=%lu\n", ProducerCount, ProducerOverflow);
+    for (Index = 0; Index < ProducerCount; ++Index)
+        for (Stage = 0; Stage < DxgTraceProducerStageCount; ++Stage)
+        {
+            DPT_COUNTER *Counter = &ProducerTimings[Index].Counter[Stage];
+            if (!Counter->Entered)
+                continue;
+            DbgPrint("DXGK_PRODUCER_TIMING pid=%lu context=%08lx node=%lu phase=%s entered=%llu completed=%llu unfinished=%llu failed=%llu total_us=%llu avg_us=%llu max_us=%llu\n",
+                     ProducerTimings[Index].Pid, ProducerTimings[Index].Context,
+                     ProducerTimings[Index].Node, Names[Stage], Counter->Entered,
+                     Counter->Completed, Counter->Entered - Counter->Completed,
+                     Counter->Failed, Counter->Ticks * 1000000 / Frequency,
+                     Counter->Completed ? Counter->Ticks * 1000000 / Frequency / Counter->Completed : 0,
+                     Counter->MaxTicks * 1000000 / Frequency);
+        }
+}
 static struct
 {
     volatile LONG64 Total, Maximum;
@@ -179,6 +286,9 @@ LONG DxgPresentTraceControl(const DPT_REQUEST *Request, DPT_DOMAIN *Output, ULON
     {
         InterlockedExchange(&PacketReadyEpoch, 0);
         PacketCount = 0;
+        KeInitializeSpinLock(&ProducerLock);
+        ProducerCount = ProducerOverflow = 0;
+        RtlZeroMemory(ProducerTimings, sizeof(ProducerTimings));
         RtlZeroMemory(ContextTimings, sizeof(ContextTimings));
         PacketPid = HandleToUlong(PsGetCurrentProcessId());
         InterlockedExchange(&PacketReadyEpoch, DPT_READ(&g_DxgPresentTrace.Epoch));
@@ -187,6 +297,7 @@ LONG DxgPresentTraceControl(const DPT_REQUEST *Request, DPT_DOMAIN *Output, ULON
              InterlockedExchange(&PacketReadyEpoch, 0) != 0)
     {
         DxgDumpPackets(Output->Frequency, Output->Start);
+        DxgDumpProducers(Output->Frequency);
     }
     InterlockedExchange(&PacketControl, 0);
     return Result;

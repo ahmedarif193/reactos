@@ -5,6 +5,15 @@
 #define DPT_KERNEL
 #include <reactos/dwmpresenttracecore.h>
 extern DPT_BANK g_DxgPresentTrace;
+enum DXGK_TRACE_PRODUCER_STAGE
+{
+    DxgTraceCommandAdmission,
+    DxgTraceContextRoom,
+    DxgTraceTransactionReacquire,
+    DxgTraceProducerStageCount
+};
+DPT_SCOPE DxgPresentTraceProducerBegin(PDXGKRNL_CONTEXT Context, ULONG Stage);
+VOID DxgPresentTraceProducerEnd(DPT_SCOPE Scope, NTSTATUS Status);
 DPT_SCOPE DxgPresentTraceContextBegin(ULONG Pid);
 VOID DxgPresentTraceContextEnd(DPT_SCOPE Scope, ULONG Node, ULONG Kind);
 LONG DxgPresentTraceControl(const DPT_REQUEST *Request, DPT_DOMAIN *Output, ULONG Bytes);
