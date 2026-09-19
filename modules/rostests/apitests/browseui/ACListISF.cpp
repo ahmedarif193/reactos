@@ -10,6 +10,7 @@
 #define UNICODE
 #include <apitest.h>
 #include <shlobj.h>
+#include <shdeprecated.h>
 #include <atlbase.h>
 #include <tchar.h>      //
 #include <atlcom.h>     // These 3 includes only exist here to make gcc happy about (unused) templates..
@@ -731,6 +732,33 @@ START_TEST(ACListISF)
     {
         skip("CoInitialize failed\n");
         return;
+    }
+
+    {
+        CComPtr<IACList2> list;
+        HRESULT hr = CoCreateInstance(CLSID_ACListISF, NULL, CLSCTX_INPROC_SERVER,
+                                      IID_IACList2, (void **)&list);
+        ok(hr == S_OK, "create for detach: %lx\n", hr);
+        if (list)
+        {
+            CComPtr<IShellService> service;
+            hr = list->QueryInterface(IID_IShellService, (void **)&service);
+            ok(hr == S_OK, "shell service: %lx\n", hr);
+            if (service)
+            {
+                hr = service->SetOwner(NULL);
+                ok(hr == S_OK, "detach owner: %lx\n", hr);
+            }
+            CComPtr<IEnumString> enumeration;
+            list->QueryInterface(IID_IEnumString, (void **)&enumeration);
+            list->SetOptions(ACLO_CURRENTDIR);
+            if (enumeration)
+            {
+                hr = enumeration->Reset();
+                ok(SUCCEEDED(hr), "reset without browser owner: %lx\n", hr);
+                test_at_end(enumeration);
+            }
+        }
     }
 
     test_ACListISF_NONE();

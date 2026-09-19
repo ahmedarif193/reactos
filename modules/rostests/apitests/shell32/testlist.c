@@ -2,6 +2,7 @@
 #define STANDALONE
 #include <wine/test.h>
 
+extern void func_WindowPropertyStore(void);
 extern void func_AddCommas(void);
 extern void func_AssocCreateElement(void);
 extern void func_Control_RunDLLW(void);
@@ -68,6 +69,7 @@ extern void func_Win81Ordinals(void);
 
 const struct test winetest_testlist[] =
 {
+    { "WindowPropertyStore", func_WindowPropertyStore },
     { "StartMenuPin", func_StartMenuPin },
     { "AddCommas", func_AddCommas },
     { "AssocCreateElement", func_AssocCreateElement },
