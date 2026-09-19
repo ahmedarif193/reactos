@@ -10,7 +10,7 @@ VOID Test_KeArm64Apc(VOID);
 NTSYSAPI BOOLEAN NTAPI KeRemoveQueueApc(PKAPC Apc);
 
 #define APC_ROUNDS 32
-#define APC_MODES 8
+#define APC_MODES 9
 
 typedef struct _APC_TEST_CONTEXT APC_TEST_CONTEXT;
 
@@ -23,6 +23,8 @@ typedef struct _APC_TEST_SLOT
     volatile LONG KernelCalls;
     volatile LONG NormalCalls;
     LONG Order;
+    PVOID ExpectedArgument1;
+    PVOID ExpectedArgument2;
 } APC_TEST_SLOT;
 
 typedef struct _APC_CANCEL
@@ -34,6 +36,10 @@ typedef struct _APC_CANCEL
     volatile LONG Ready;
     volatile LONG Go;
     BOOLEAN Removed;
+    BOOLEAN Insert;
+    BOOLEAN Inserted;
+    PVOID Argument1;
+    PVOID Argument2;
     ULONG Calls;
     ULONG Cpu;
     ULONG CpuErrors;
@@ -102,7 +108,11 @@ CancelApcDpc(PKDPC Dpc, PVOID Parameter, PVOID Argument1, PVOID Argument2)
         YieldProcessor();
     if (Cancel->Go)
     {
-        Cancel->Removed = KeRemoveQueueApc(Cancel->Apc);
+        if (Cancel->Insert)
+            Cancel->Inserted = KeInsertQueueApc(Cancel->Apc, Cancel->Argument1,
+                                                Cancel->Argument2, IO_NO_INCREMENT);
+        else
+            Cancel->Removed = KeRemoveQueueApc(Cancel->Apc);
         Cancel->Calls++;
     }
     else
@@ -135,8 +145,7 @@ CheckApcCallback(APC_TEST_SLOT *Slot, KIRQL Irql, PVOID Argument1, PVOID Argumen
     InterlockedOr64(&Context->SeenCpus, (LONG64)1 << Cpu);
     if (KeGetCurrentIrql() != Irql || !KmtAreInterruptsEnabled())
         InterlockedIncrement(&Context->IrqlErrors);
-    if (Argument1 != (PVOID)(ULONG_PTR)(Slot->Round + 1) ||
-        Argument2 != (PVOID)(ULONG_PTR)(0xa900 + Slot->Kind))
+    if (Argument1 != Slot->ExpectedArgument1 || Argument2 != Slot->ExpectedArgument2)
         InterlockedIncrement(&Context->ArgumentErrors);
     if (Context->Guard > 1 || (Context->Guard && Slot->Kind != 0))
         InterlockedIncrement(&Context->BlockedErrors);
@@ -295,6 +304,8 @@ CheckRemoteApc(ULONG Cpu, ULONG Mode)
     ULONG Round, Index, Completed = 0, InsertErrors = 0, CountErrors = 0;
     ULONG CancelErrors = 0, Cancelled = 0, Delivered = 0, CancelIndex;
     ULONG ControllerWins = 0, DpcWins = 0;
+    ULONG DuplicateErrors = 0;
+    BOOLEAN ControllerInserted;
     LONG ExpectedKernel = 0, ExpectedNormal = 0;
     ULONG CurrentCpu = Cpu, NextCpu = Cpu;
     ULONG Controller = (Cpu + 1) % (ULONG)KeNumberProcessors;
@@ -315,6 +326,7 @@ CheckRemoteApc(ULONG Cpu, ULONG Mode)
     KeInitializeEvent(&Context.NormalDone, SynchronizationEvent, FALSE);
     KeInitializeEvent(&Context.Cancel.Done, SynchronizationEvent, FALSE);
     Context.Cancel.Frequency = Frequency.QuadPart;
+    Context.Cancel.Insert = (Mode == 8);
     Context.Cancel.Cpu = (Cpu + 2) % (ULONG)KeNumberProcessors;
     KeInitializeDpc(&Context.Cancel.Dpc, CancelApcDpc, &Context.Cancel);
     KeSetTargetProcessorDpc(&Context.Cancel.Dpc, (CCHAR)Context.Cancel.Cpu);
@@ -345,6 +357,8 @@ CheckRemoteApc(ULONG Cpu, ULONG Mode)
             Slot->Round = Round;
             Slot->KernelCalls = Slot->NormalCalls = 0;
             Slot->Order = 0;
+            Slot->ExpectedArgument1 = (PVOID)(ULONG_PTR)(Round + 1);
+            Slot->ExpectedArgument2 = (PVOID)(ULONG_PTR)(0xa900 + Index);
             KeInitializeApc(&Slot->Apc, Thread, OriginalApcEnvironment, ApcKernelRoutine,
                             ApcRundownRoutine, Index ? ApcNormalRoutine : NULL, KernelMode, Slot);
         }
@@ -357,12 +371,14 @@ CheckRemoteApc(ULONG Cpu, ULONG Mode)
         /* Queue normal first so blocked cases also check special-APC ordering. */
         for (Index = 2; Index-- != 0;)
         {
+            if (Mode == 8 && Index == (Round & 1))
+                continue;
             if (!KeInsertQueueApc(&Context.Slots[Index].Apc,
                                  (PVOID)(ULONG_PTR)(Round + 1),
                                  (PVOID)(ULONG_PTR)(0xa900 + Index), IO_NO_INCREMENT))
                 InsertErrors++;
         }
-        if (Mode >= 6)
+        if (Mode == 6 || Mode == 7)
         {
             CancelIndex = Round & 1;
             Context.Cancel.Apc = &Context.Slots[CancelIndex].Apc;
@@ -391,6 +407,40 @@ CheckRemoteApc(ULONG Cpu, ULONG Mode)
             else Delivered++;
             if (Mode == 6 && !Removed[CancelIndex]) CancelErrors++;
             if (KeRemoveQueueApc(Context.Cancel.Apc)) CancelErrors++;
+        }
+        if (Mode == 8)
+        {
+            APC_TEST_SLOT *Slot = &Context.Slots[Round & 1];
+
+            Context.Cancel.Apc = &Slot->Apc;
+            Context.Cancel.Ready = Context.Cancel.Go = 0;
+            Context.Cancel.Inserted = FALSE;
+            Context.Cancel.Argument1 = (PVOID)(ULONG_PTR)(0x10000 + Round);
+            Context.Cancel.Argument2 = (PVOID)(ULONG_PTR)(0xb900 + Slot->Kind);
+            if (!KeInsertQueueDpc(&Context.Cancel.Dpc, NULL, NULL))
+            {
+                DuplicateErrors++;
+                break;
+            }
+            if (!WaitApcCancelReady(&Context.Cancel)) goto TimedOut;
+            /* Exercise either CPU winning as well as simultaneous insertion. */
+            if (Round % 3 != 2) InterlockedExchange(&Context.Cancel.Go, 1);
+            if (Round % 3 == 1 && !WaitApcEvent(&Context.Cancel.Done)) goto TimedOut;
+            ControllerInserted = KeInsertQueueApc(&Slot->Apc,
+                Slot->ExpectedArgument1, Slot->ExpectedArgument2, IO_NO_INCREMENT);
+            if (Round % 3 == 2) InterlockedExchange(&Context.Cancel.Go, 1);
+            if (Round % 3 != 1 && !WaitApcEvent(&Context.Cancel.Done)) goto TimedOut;
+            if (ControllerInserted == Context.Cancel.Inserted) DuplicateErrors++;
+            if (ControllerInserted) ControllerWins++;
+            if (Context.Cancel.Inserted)
+            {
+                DpcWins++;
+                Slot->ExpectedArgument1 = Context.Cancel.Argument1;
+                Slot->ExpectedArgument2 = Context.Cancel.Argument2;
+            }
+            /* A rejected duplicate must not replace the winner's arguments. */
+            if (KeInsertQueueApc(&Slot->Apc, (PVOID)1, (PVOID)2, IO_NO_INCREMENT))
+                DuplicateErrors++;
         }
         if (Mode == 1)
         {
@@ -459,7 +509,7 @@ TimedOut:
     ok_eq_long(Context.OrderErrors, 0);
     ok_eq_long(Context.Timeouts, 0);
     ok_eq_long(Context.WaitErrors, 0);
-    if (Mode >= 6)
+    if (Mode == 6 || Mode == 7)
     {
         ok_eq_ulong(CancelErrors, 0);
         ok_eq_ulong(Context.Cancel.Calls, APC_ROUNDS);
@@ -472,6 +522,20 @@ TimedOut:
               Cpu, Mode, Completed, Cancelled, Delivered, ControllerWins, DpcWins,
               Context.Cancel.Calls, CancelErrors, Context.Cancel.Timeouts, Context.Cancel.IrqlErrors,
               Context.Cancel.CpuErrors);
+    }
+    if (Mode == 8)
+    {
+        ok_eq_ulong(DuplicateErrors, 0);
+        ok_eq_ulong(ControllerWins + DpcWins, APC_ROUNDS);
+        ok(ControllerWins >= APC_ROUNDS / 3 && DpcWins >= APC_ROUNDS / 3,
+           "Both insertion orders must be covered: controller=%lu dpc=%lu\n",
+           ControllerWins, DpcWins);
+        ok_eq_ulong(Context.Cancel.Calls, APC_ROUNDS);
+        ok_eq_ulong(Context.Cancel.Timeouts, 0);
+        ok_eq_ulong(Context.Cancel.IrqlErrors, 0);
+        ok_eq_ulong(Context.Cancel.CpuErrors, 0);
+        trace("APC_DUPLICATE cpu=%lu rounds=%lu controller_wins=%lu dpc_wins=%lu errors=%lu\n",
+              Cpu, Completed, ControllerWins, DpcWins, DuplicateErrors);
     }
     trace("APC_DELIVERY controller=%lu cpu=%lu mode=%lu rounds=%lu kernel=%ld normal=%ld cpus=0x%I64x insert_errors=%lu count_errors=%lu\n",
           Controller, Cpu, Mode, Completed, Context.KernelCalls, Context.NormalCalls,

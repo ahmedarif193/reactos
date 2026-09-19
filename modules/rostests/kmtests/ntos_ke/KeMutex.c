@@ -334,6 +334,122 @@ TestMutex(VOID)
     CheckApcs(0, 0, FALSE, PASSIVE_LEVEL);
 }
 
+#define MUTEX_CONTENTION_WORKERS 4
+#define MUTEX_CONTENTION_ROUNDS 4000
+
+typedef struct _MUTEX_CONTENTION
+{
+    KMUTEX Mutex;
+    KEVENT Start;
+    volatile LONG Inside, Stop, WorkerIndex, Completed;
+    volatile LONG WaitErrors, OwnerErrors, OverlapErrors, RecursiveErrors;
+} MUTEX_CONTENTION;
+
+static VOID NTAPI
+MutexContentionWorker(PVOID Parameter)
+{
+    MUTEX_CONTENTION *Test = Parameter;
+    LONG Worker = InterlockedIncrement(&Test->WorkerIndex) - 1;
+    ULONG Round;
+    NTSTATUS Status;
+    LARGE_INTEGER Delay;
+    PKTHREAD Current = KeGetCurrentThread();
+
+    Delay.QuadPart = -10000;
+    KeWaitForSingleObject(&Test->Start, Executive, KernelMode, FALSE, NULL);
+    for (Round = 0; Round < MUTEX_CONTENTION_ROUNDS && !Test->Stop; ++Round)
+    {
+        /* Follow timed waits with contended, untimed mutex waits. */
+        if (((Round + Worker) & 7) == 0)
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        Status = KeWaitForSingleObject(&Test->Mutex, Executive, KernelMode, FALSE, NULL);
+        if (Status != STATUS_SUCCESS)
+        {
+            trace("Mutex contention worker %ld round %lu wait %lx owner %p current %p state %ld\n",
+                  Worker, Round, Status, Test->Mutex.OwnerThread, Current, Test->Mutex.Header.SignalState);
+            InterlockedIncrement(&Test->WaitErrors);
+            InterlockedExchange(&Test->Stop, 1);
+            if (Test->Mutex.OwnerThread == Current)
+                KeReleaseMutex(&Test->Mutex, FALSE);
+            break;
+        }
+        if (Test->Mutex.OwnerThread != Current || Test->Mutex.Header.SignalState != 0)
+        {
+            InterlockedIncrement(&Test->OwnerErrors);
+            InterlockedExchange(&Test->Stop, 1);
+            if (Test->Mutex.OwnerThread == Current)
+                KeReleaseMutex(&Test->Mutex, FALSE);
+            break;
+        }
+        if (InterlockedIncrement(&Test->Inside) != 1)
+        {
+            InterlockedIncrement(&Test->OverlapErrors);
+            InterlockedExchange(&Test->Stop, 1);
+        }
+        else
+        {
+            Status = KeWaitForSingleObject(&Test->Mutex, Executive, KernelMode, FALSE, NULL);
+            if (Status != STATUS_SUCCESS || Test->Mutex.OwnerThread != Current ||
+                Test->Mutex.Header.SignalState != -1)
+            {
+                InterlockedIncrement(&Test->RecursiveErrors);
+                InterlockedExchange(&Test->Stop, 1);
+            }
+            if (Test->Mutex.OwnerThread == Current && Test->Mutex.Header.SignalState < 0)
+                KeReleaseMutex(&Test->Mutex, FALSE);
+            if (((Round + Worker) & 63) == 0)
+                KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+            else
+                YieldProcessor();
+            InterlockedIncrement(&Test->Completed);
+        }
+        InterlockedDecrement(&Test->Inside);
+        if (Test->Mutex.OwnerThread == Current)
+            KeReleaseMutex(&Test->Mutex, FALSE);
+        else
+        {
+            InterlockedIncrement(&Test->OwnerErrors);
+            InterlockedExchange(&Test->Stop, 1);
+        }
+    }
+}
+
+static VOID
+TestMutexContention(VOID)
+{
+    MUTEX_CONTENTION *Test;
+    PKTHREAD Threads[MUTEX_CONTENTION_WORKERS] = {0};
+    ULONG Index, Created = 0;
+
+    Test = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Test), 'cMmK');
+    if (skip(Test != NULL, "Could not allocate mutex contention state\n"))
+        return;
+    RtlZeroMemory(Test, sizeof(*Test));
+    KeInitializeMutex(&Test->Mutex, 0);
+    KeInitializeEvent(&Test->Start, NotificationEvent, FALSE);
+    for (Index = 0; Index < ARRAYSIZE(Threads); ++Index)
+    {
+        Threads[Index] = KmtStartThread(MutexContentionWorker, Test);
+        if (Threads[Index] == NULL)
+            break;
+        ++Created;
+    }
+    KeSetEvent(&Test->Start, IO_NO_INCREMENT, FALSE);
+    for (Index = 0; Index < Created; ++Index)
+        KmtFinishThread(Threads[Index], NULL);
+    ok_eq_ulong(Created, MUTEX_CONTENTION_WORKERS);
+    ok_eq_long(Test->WaitErrors, 0);
+    ok_eq_long(Test->OwnerErrors, 0);
+    ok_eq_long(Test->OverlapErrors, 0);
+    ok_eq_long(Test->RecursiveErrors, 0);
+    ok_eq_long(Test->Completed, Created * MUTEX_CONTENTION_ROUNDS);
+    ok_eq_long(Test->Inside, 0);
+    ok_eq_long(Test->Mutex.Header.SignalState, 1);
+    ok_eq_pointer(Test->Mutex.OwnerThread, NULL);
+    trace("Mutex contention: %lu workers, %ld completed acquisitions\n", Created, Test->Completed);
+    ExFreePoolWithTag(Test, 'cMmK');
+}
+
 START_TEST(KeMutex)
 {
     pKeAreAllApcsDisabled = KmtGetSystemRoutineAddress(L"KeAreAllApcsDisabled");
@@ -344,4 +460,5 @@ START_TEST(KeMutex)
 
     TestMutant();
     TestMutex();
+    TestMutexContention();
 }
