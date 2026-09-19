@@ -1342,10 +1342,11 @@ static void check_refcount( HMODULE mod, unsigned int refcount )
         ret = FreeLibrary( mod );
 #ifdef __REACTOS__
         ok( ret || broken( refcount == ~0u && GetLastError() == ERROR_MOD_NOT_FOUND && (i == 2) ) /* Win8 */ || broken( refcount == 2 && GetLastError() == ERROR_MOD_NOT_FOUND && i == 1 ) /* WS03 */,
+            "Refcount test failed, i %u, error %lu, refcount %u.\n", i, GetLastError(), refcount );
 #else
         ok( ret || broken( refcount == ~0u && GetLastError() == ERROR_MOD_NOT_FOUND && i == 2 ) /* Win8 */,
-#endif
             "Refcount test failed, i %u, error %lu.\n", i, GetLastError(), refcount );
+#endif
         if (!ret) return;
     }
     if (refcount != ~0u)

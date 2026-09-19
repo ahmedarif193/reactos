@@ -2942,7 +2942,7 @@ static void test_QueryInformationJobObject(void)
     ok(ret_len == sizeof(basic_accounting_info), "QueryInformationJobObject returned ret_len=%lu\n", ret_len);
     expect_eq_d(3, basic_accounting_info.TotalProcesses);
 #if defined(__REACTOS__)
-    ok(basic_accounting_info.ActiveProcesses == 2 || broken(basic_accounting_info.ActiveProcesses == 3) /* Win8+ */, "Expected %d == %d\n", basic_accounting_info.ActiveProcesses, 2);
+    ok(basic_accounting_info.ActiveProcesses == 2 || broken(basic_accounting_info.ActiveProcesses == 3) /* Win8+ */, "Expected %lu == %d\n", basic_accounting_info.ActiveProcesses, 2);
 #else
     expect_eq_d(2, basic_accounting_info.ActiveProcesses);
 #endif
