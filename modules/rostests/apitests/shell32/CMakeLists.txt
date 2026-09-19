@@ -2,6 +2,7 @@
 spec2def(shell32_apitest.exe shell32_apitest.spec)
 
 list(APPEND SOURCE
+    WindowPropertyStore.cpp
     AddCommas.cpp
     AssocCreateElement.cpp
     CFSFolder.cpp
