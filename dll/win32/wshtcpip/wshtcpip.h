@@ -51,6 +51,8 @@ typedef struct _SOCKET_CONTEXT {
     SOCKET_STATE SocketState;
     PQUEUED_REQUEST RequestQueue;
     BOOL DontRoute;
+    ULONG MulticastInterface;
+    ULONG MulticastTTL;
 } SOCKET_CONTEXT, *PSOCKET_CONTEXT;
 
 INT

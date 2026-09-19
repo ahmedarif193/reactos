@@ -65,7 +65,8 @@ NTSTATUS AddGenericHeaderIPv4(
     /* One fragment at offset 0 */
     IPHeader->FlagsFragOfs = 0;
     /* Time-to-Live */
-    IPHeader->Ttl = AddrFile->TTL;
+    IPHeader->Ttl = (DN2H(RemoteAddress->Address.IPv4Address) & 0xf0000000) == 0xe0000000 ?
+                   AddrFile->MulticastTTL : AddrFile->TTL;
     /* Protocol */
     IPHeader->Protocol = Protocol;
     /* Checksum is 0 (for later calculation of this) */
@@ -214,7 +215,19 @@ NTSTATUS RawIPSendDatagram(
     TI_DbgPrint(MID_TRACE,("About to get route to destination\n"));
 
     LocalAddress = AddrFile->Address;
-    if (AddrIsUnspecified(&LocalAddress))
+    if ((DN2H(RemoteAddress.Address.IPv4Address) & 0xf0000000) == 0xe0000000)
+    {
+        ULONG Selector = AddrFile->MulticastInterface;
+        if (!Selector) Selector = LocalAddress.Address.IPv4Address;
+        NCE = RouteGetMulticastRoute(&RemoteAddress, Selector);
+        if (!NCE)
+        {
+            UnlockObject(AddrFile);
+            return STATUS_NETWORK_UNREACHABLE;
+        }
+        if (AddrIsUnspecified(&LocalAddress)) LocalAddress = NCE->Interface->Unicast;
+    }
+    else if (AddrIsUnspecified(&LocalAddress))
     {
         /* If the local address is unspecified (0),
          * then use the unicast address of the

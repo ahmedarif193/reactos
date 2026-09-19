@@ -347,6 +347,22 @@ PNEIGHBOR_CACHE_ENTRY RouterGetRoute(PIP_ADDRESS Destination)
     return BestNCE;
 }
 
+PNEIGHBOR_CACHE_ENTRY RouteGetMulticastRoute(PIP_ADDRESS Destination, ULONG Selector)
+{
+    PIP_INTERFACE Interface = GetMulticastInterface(Selector);
+    PNEIGHBOR_CACHE_ENTRY Neighbor;
+    ULONG Address = DN2H(Destination->Address.IPv4Address);
+    UCHAR LinkAddress[6] = {0x01, 0x00, 0x5e, (Address >> 16) & 0x7f,
+                           (Address >> 8) & 0xff, Address & 0xff};
+    if (!Interface) return NULL;
+    Neighbor = NBLocateNeighbor(Destination, Interface);
+    if (!Neighbor && (Interface->AddressLength == sizeof(LinkAddress) || Interface == Loopback))
+        Neighbor = NBAddNeighbor(Interface, Destination, Interface == Loopback ? NULL : LinkAddress,
+                                 Interface->AddressLength, NUD_PERMANENT, 0);
+    IPDereferenceInterface(Interface);
+    return Neighbor;
+}
+
 PNEIGHBOR_CACHE_ENTRY RouteGetRouteToDestination(PIP_ADDRESS Destination)
 /*
  * FUNCTION: Locates an RCN describing a route to a destination address

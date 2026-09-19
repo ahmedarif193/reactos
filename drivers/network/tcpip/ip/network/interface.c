@@ -86,6 +86,26 @@ NTSTATUS GetInterfaceName( PIP_INTERFACE Interface,
     return Status;
 }
 
+PIP_INTERFACE GetMulticastInterface(ULONG Selector)
+{
+    ULONG HostSelector = DN2H(Selector);
+    PIP_INTERFACE Interface = NULL;
+    KIRQL OldIrql;
+    IF_LIST_ITER(CurrentIF);
+
+    if (!Selector) return GetDefaultInterface();
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
+    ForEachInterface(CurrentIF) {
+        if ((HostSelector < 0x01000000 && CurrentIF->Index == HostSelector) ||
+            (HostSelector >= 0x01000000 && CurrentIF->Unicast.Address.IPv4Address == Selector)) {
+            if (IPReferenceInterface(CurrentIF)) Interface = CurrentIF;
+            break;
+        }
+    } EndFor(CurrentIF);
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+    return Interface;
+}
+
 PIP_INTERFACE AddrLocateInterface(
     PIP_ADDRESS MatchAddress)
 {

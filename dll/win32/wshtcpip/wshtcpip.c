@@ -186,6 +186,14 @@ GetTdiTypeId(
                 *TdiId = AO_OPTION_TTL;
                 return;
 
+             case IP_MULTICAST_IF:
+                *TdiId = AO_OPTION_MCASTIF;
+                return;
+
+             case IP_MULTICAST_TTL:
+                *TdiId = AO_OPTION_MCASTTTL;
+                return;
+
              case IP_DONTFRAGMENT:
                  *TdiId = AO_OPTION_IP_DONTFRAGMENT;
                  return;
@@ -237,6 +245,18 @@ WSHGetSocketInformation(
     OUT PCHAR OptionValue,
     OUT LPINT OptionLength)
 {
+    PSOCKET_CONTEXT Context = HelperDllSocketContext;
+    if (Level == IPPROTO_IP && (OptionName == IP_MULTICAST_IF || OptionName == IP_MULTICAST_TTL))
+    {
+        if (Context->SocketType != SOCK_DGRAM && Context->SocketType != SOCK_RAW)
+            return WSAENOPROTOOPT;
+        if (!OptionLength || !OptionValue || *OptionLength < sizeof(ULONG))
+            return WSAEFAULT;
+        memcpy(OptionValue, OptionName == IP_MULTICAST_IF ? &Context->MulticastInterface :
+                                                         &Context->MulticastTTL, sizeof(ULONG));
+        *OptionLength = sizeof(ULONG);
+        return NO_ERROR;
+    }
     UNIMPLEMENTED;
 
     DPRINT1("Get: Unknown level/option name: %d %d\n", Level, OptionName);
@@ -709,11 +729,53 @@ WSHOpenSocket2(
     Context->Protocol      = *Protocol;
     Context->Flags         = Flags;
     Context->SocketState   = SocketStateCreated;
+    Context->MulticastTTL  = 1;
 
     *HelperDllSocketContext = Context;
     *NotificationEvents = WSH_NOTIFY_CLOSE | WSH_NOTIFY_BIND;
 
     return NO_ERROR;
+}
+
+static INT ValidateMulticastInterface(ULONG Selector)
+{
+    HANDLE TcpFile;
+    TDIEntityID *Entities;
+    DWORD Count, i, j, AddressCount;
+    IPAddrEntry *Addresses;
+    NTSTATUS Status;
+    INT Result = WSAEADDRNOTAVAIL;
+    ULONG HostSelector = ntohl(Selector);
+
+    if (!Selector) return NO_ERROR;
+    Status = openTcpFile(&TcpFile, FILE_READ_DATA | FILE_WRITE_DATA);
+    if (!NT_SUCCESS(Status)) return WSAENETDOWN;
+    Status = tdiGetEntityIDSet(TcpFile, &Entities, &Count);
+    if (!NT_SUCCESS(Status))
+    {
+        closeTcpFile(TcpFile);
+        return WSAENETDOWN;
+    }
+    for (i = 0; i < Count && Result; ++i)
+    {
+        if (Entities[i].tei_entity != CL_NL_ENTITY) continue;
+        Status = tdiGetSetOfThings(TcpFile, INFO_CLASS_PROTOCOL, INFO_TYPE_PROVIDER,
+                                  IP_MIB_ADDRTABLE_ENTRY_ID, Entities[i].tei_entity,
+                                  Entities[i].tei_instance, 0, sizeof(*Addresses),
+                                  (PVOID *)&Addresses, &AddressCount);
+        if (!NT_SUCCESS(Status)) continue;
+        for (j = 0; j < AddressCount; ++j)
+            if ((HostSelector < 0x01000000 && Addresses[j].iae_index == HostSelector) ||
+                (HostSelector >= 0x01000000 && Addresses[j].iae_addr == Selector))
+            {
+                Result = NO_ERROR;
+                break;
+            }
+        tdiFreeThingSet(Addresses);
+    }
+    tdiFreeThingSet(Entities);
+    closeTcpFile(TcpFile);
+    return Result;
 }
 
 INT
@@ -769,6 +831,18 @@ WSHSetSocketInformation(
         case IPPROTO_IP:
             switch (OptionName)
             {
+                case IP_MULTICAST_IF:
+                case IP_MULTICAST_TTL:
+                    if (Context->SocketType != SOCK_DGRAM && Context->SocketType != SOCK_RAW)
+                        return WSAENOPROTOOPT;
+                    if (!OptionValue || OptionLength < sizeof(ULONG))
+                        return WSAEFAULT;
+                    Status = OptionName == IP_MULTICAST_IF ? ValidateMulticastInterface(*(ULONG *)OptionValue) :
+                                                           (*(ULONG *)OptionValue > 255 ? WSAEINVAL : NO_ERROR);
+                    if (Status) return Status;
+                    OptionLength = sizeof(ULONG);
+                    break;
+
                 case IP_TTL:
                 case IP_DONTFRAGMENT:
                 case IP_HDRINCL:
@@ -854,10 +928,18 @@ WSHSetSocketInformation(
             Context->RequestQueue->Info = Info;
         }
 
+        if (Level == IPPROTO_IP && OptionName == IP_MULTICAST_IF)
+            memcpy(&Context->MulticastInterface, OptionValue, sizeof(ULONG));
+        if (Level == IPPROTO_IP && OptionName == IP_MULTICAST_TTL)
+            memcpy(&Context->MulticastTTL, OptionValue, sizeof(ULONG));
         return 0;
     }
 
     Status = SendRequest(Info, sizeof(*Info) + Info->BufferSize, IOCTL_TCP_SET_INFORMATION_EX);
+    if (!Status && Level == IPPROTO_IP && OptionName == IP_MULTICAST_IF)
+        memcpy(&Context->MulticastInterface, OptionValue, sizeof(ULONG));
+    if (!Status && Level == IPPROTO_IP && OptionName == IP_MULTICAST_TTL)
+        memcpy(&Context->MulticastTTL, OptionValue, sizeof(ULONG));
 
     HeapFree(GetProcessHeap(), 0, Info);
 
