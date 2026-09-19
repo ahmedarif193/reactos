@@ -305,7 +305,7 @@ PspDeleteProcess(IN PVOID ObjectBody)
     }
 
     /* Increase the stack count */
-    Process->Pcb.StackCount++;
+    InterlockedIncrement((volatile LONG *)&Process->Pcb.StackCount);
 
     /* Check if we have a debug port */
     if (Process->DebugPort)

@@ -644,7 +644,7 @@ KeStartThread(IN OUT PKTHREAD Thread)
 
     /* Increase the stack count */
     ASSERT(Process->StackCount != MAXULONG);
-    Process->StackCount++;
+    InterlockedIncrement((volatile LONG *)&Process->StackCount);
 
     /* Release locks and return */
     KiReleaseProcessLock(&LockHandle);
@@ -1776,8 +1776,8 @@ KeTerminateThread(IN KPRIORITY Increment)
     /* Decrease stack count */
     ASSERT(Process->StackCount != 0);
     ASSERT(Process->State == ProcessInMemory);
-    Process->StackCount--;
-    if (!(Process->StackCount) && !(IsListEmpty(&Process->ThreadListHead)))
+    if (!InterlockedDecrement((volatile LONG *)&Process->StackCount) &&
+        !IsListEmpty(&Process->ThreadListHead))
     {
         /* FIXME: Swap stacks */
     }

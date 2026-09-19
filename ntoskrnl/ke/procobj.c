@@ -94,7 +94,7 @@ KiAttachProcess(IN PKTHREAD Thread,
 
     /* Increase Stack Count */
     ASSERT(Process->StackCount != MAXULONG);
-    Process->StackCount++;
+    InterlockedIncrement((volatile LONG *)&Process->StackCount);
 
     /* Swap the APC Environment */
     KiMoveApcState(&Thread->ApcState, SavedApcState);
@@ -731,13 +731,13 @@ KeDetachProcess(VOID)
     /* Acquire the process object */
     KiAcquireDispatcherObject(&Process->Header);
 
-    /* Decrease the stack count */
+    /* Thread creation and exit use different locks from attach/detach,
+     * so the shared stack reference count must be updated atomically. */
     ASSERT(Process->StackCount != 0);
     ASSERT(Process->State == ProcessInMemory);
-    Process->StackCount--;
 
     /* Check if we can swap the process out */
-    if (!Process->StackCount)
+    if (!InterlockedDecrement((volatile LONG *)&Process->StackCount))
     {
         /* FIXME: Swap the process out */
     }
@@ -889,13 +889,13 @@ KeUnstackDetachProcess(IN PRKAPC_STATE ApcState)
     /* Acquire the process object */
     KiAcquireDispatcherObject(&Process->Header);
 
-    /* Decrease the stack count */
+    /* Thread creation and exit use different locks from attach/detach,
+     * so the shared stack reference count must be updated atomically. */
     ASSERT(Process->StackCount != 0);
     ASSERT(Process->State == ProcessInMemory);
-    Process->StackCount--;
 
     /* Check if we can swap the process out */
-    if (!Process->StackCount)
+    if (!InterlockedDecrement((volatile LONG *)&Process->StackCount))
     {
         /* FIXME: Swap the process out */
     }
