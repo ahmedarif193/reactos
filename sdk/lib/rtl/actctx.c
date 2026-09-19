@@ -3176,7 +3176,11 @@ static NTSTATUS get_manifest_in_pe_file( struct actctx_loader* acl, struct assem
     offset.QuadPart = 0;
     count = 0;
     base = NULL;
-    status = NtMapViewOfSection( mapping, GetCurrentProcess(), &base, 0, 0, &offset,
+    /* This is a raw resource mapping, not an image load. Use the same
+     * internal mapping entry point as LdrpCheckForLoadedDll: image-load
+     * interceptors can already be installed while the process activation
+     * context is built, before the executable's imports are resolved. */
+    status = ZwMapViewOfSection( mapping, GetCurrentProcess(), &base, 0, 0, &offset,
                                  &count, ViewShare, 0, PAGE_READONLY );
     NtClose( mapping );
     if (status != STATUS_SUCCESS) return status;
