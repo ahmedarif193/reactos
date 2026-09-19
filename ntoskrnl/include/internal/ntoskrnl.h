@@ -166,24 +166,17 @@
  * Use IsPointerOffset to test whether a pointer should be interpreted as an offset
  * or as a pointer
  */
-#if defined(_X86_) || defined(_M_AMD64) || defined(_MIPS_) || defined(_PPC_) || defined(_ARM_)
+#ifdef _WIN64
 
-/* for x86 and x86-64 the MSB is 1 so we can simply test on that */
-#define IsPointerOffset(Ptr) ((LONG_PTR)(Ptr) >= 0)
-
-#elif defined(_IA64_) || defined(_M_ARM64) || defined(__aarch64__)
-
-/* on Itanium if the 24 most significant bits are set, we're not dealing with
-   offsets anymore. */
+/* Kernel pointers are in the upper half of the address space: if the 24 most
+   significant bits are set, we're not dealing with offsets anymore. */
 #define IsPointerOffset(Ptr)  (((ULONG_PTR)(Ptr) & 0xFFFFFF0000000000ULL) == 0)
 
-#elif defined(_M_RISCV64)
-
-/* MM initializes the system range before kernel objects can be created. */
-#define IsPointerOffset(Ptr) ((ULONG_PTR)(Ptr) < (ULONG_PTR)MmSystemRangeStart)
-
 #else
-#error IsPointerOffset() needs to be defined for this architecture
+
+/* Kernel pointers are above the 2 GB user space: the MSB is set */
+#define IsPointerOffset(Ptr) ((LONG_PTR)(Ptr) >= 0)
+
 #endif
 
 #endif

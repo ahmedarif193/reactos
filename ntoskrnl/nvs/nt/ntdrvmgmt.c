@@ -112,8 +112,8 @@ MmAddVerifierThunks(IN PVOID ThunkBuffer,
 
     for (i = 0; i < ThunkCount; i++)
     {
-        if (((ULONG_PTR)ThunkTable->PristineRoutine < (ULONG_PTR)ModuleBase) ||
-            ((ULONG_PTR)ThunkTable->PristineRoutine >= (ULONG_PTR)ModuleEnd))
+        if (((ULONG_PTR)ThunkTable[i].PristineRoutine < (ULONG_PTR)ModuleBase) ||
+            ((ULONG_PTR)ThunkTable[i].PristineRoutine >= (ULONG_PTR)ModuleEnd))
         {
             Status = STATUS_INVALID_PARAMETER_2;
             goto Cleanup;
