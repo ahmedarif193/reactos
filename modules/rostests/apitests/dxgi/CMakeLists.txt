@@ -1,6 +1,7 @@
 
 add_executable(dxgi_apitest
     dxgi.c
+    texture_dimensions.cpp
     composition.cpp
     completion_event.cpp
     dwm_render.cpp
