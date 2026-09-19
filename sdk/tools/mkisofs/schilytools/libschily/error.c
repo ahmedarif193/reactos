@@ -56,7 +56,7 @@ error(fmt, va_alist)
 #else
 	va_start(args);
 #endif
-	ret = js_fprintf(stderr, "%r", fmt, args);
+	ret = js_vfprintf(stderr, fmt, args);
 	va_end(args);
 	return (ret);
 }
@@ -82,7 +82,7 @@ js_error(fmt, va_alist)
 #else
 	va_start(args);
 #endif
-	ret = js_fprintf(stderr, "%r", fmt, args);
+	ret = js_vfprintf(stderr, fmt, args);
 	va_end(args);
 	return (ret);
 }

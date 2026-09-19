@@ -488,6 +488,11 @@ extern	int	js_dprintf	__PR((int, const char *, ...))
 /*PRINTFLIKE2*/
 extern	int	js_fprintf	__PR((FILE *, const char *, ...))
 							__printflike__(2, 3);
+#ifdef va_arg
+extern int js_vfprintf __PR((FILE *, const char *, va_list));
+#else
+extern int js_vfprintf __PR((FILE *, const char *, void *));
+#endif
 #endif	/* EOF */
 /*PRINTFLIKE1*/
 extern	int	js_printf	__PR((const char *, ...)) __printflike__(1, 2);
