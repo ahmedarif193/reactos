@@ -996,8 +996,8 @@ VOID DxgkContextOrderScheduleReferenced(_Inout_ PDXGKRNL_CONTEXT Context)
     DxgkDereferenceContext(Context);
 }
 
-NTSTATUS
-DxgkContextOrderWaitForRoom(
+static NTSTATUS
+DxgkpContextOrderWaitForRoomMeasured(
     _Inout_ PDXGKRNL_CONTEXT Context,
     _In_ ULONGLONG Deadline)
 {
@@ -1073,6 +1073,17 @@ Cleanup:
         KeReleaseMutex(&Context->StreamAdmissionMutex, FALSE);
     if (RundownHeld)
         ExReleaseRundownProtection(&Context->StreamAdmissionRundown);
+    return Status;
+}
+
+NTSTATUS
+DxgkContextOrderWaitForRoom(
+    _Inout_ PDXGKRNL_CONTEXT Context,
+    _In_ ULONGLONG Deadline)
+{
+    DPT_SCOPE Trace = DxgPresentTraceProducerBegin(Context, DxgTraceContextRoom);
+    NTSTATUS Status = DxgkpContextOrderWaitForRoomMeasured(Context, Deadline);
+    DxgPresentTraceProducerEnd(Trace, Status);
     return Status;
 }
 

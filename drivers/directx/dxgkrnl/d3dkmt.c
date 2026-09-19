@@ -4668,7 +4668,9 @@ DxgkpSubmitVirtGpuCommandEscape(
     _In_ ULONG64 SignalFenceValue)
 {
     DPT_SCOPE Trace = DptBegin(&g_DxgPresentTrace, DPT_KERNEL_ADMIT);
+    DPT_SCOPE ProducerTrace = DxgPresentTraceProducerBegin(Context, DxgTraceCommandAdmission);
     NTSTATUS Result = DxgkpSubmitVirtGpuCommandEscapeMeasured(Adapter, Device, Context, CommandBuffer, CommandBytes, ResourceEntries, ResourceHandleCount, ResourceEntrySize, RequestedDmaBufferBytes, SignalSyncObject, SignalFenceValue);
+    DxgPresentTraceProducerEnd(ProducerTrace, Result);
     DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Result), CommandBytes);
     return Result;
 }
