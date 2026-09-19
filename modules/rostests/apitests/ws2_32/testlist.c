@@ -2,6 +2,7 @@
 #define STANDALONE
 #include <apitest.h>
 
+extern void func_MulticastInterface(void);
 extern void func_bind(void);
 extern void func_close(void);
 extern void func_connect_select(void);
@@ -26,6 +27,7 @@ extern void func_WSAStartup(void);
 
 const struct test winetest_testlist[] =
 {
+    { "MulticastInterface", func_MulticastInterface },
     { "bind", func_bind },
     { "close", func_close },
     { "connect_select", func_connect_select },

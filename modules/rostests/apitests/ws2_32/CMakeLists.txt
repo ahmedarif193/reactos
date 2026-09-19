@@ -1,5 +1,6 @@
 
 list(APPEND SOURCE
+    MulticastInterface.c
     bind.c
     close.c
     connect_select.c
