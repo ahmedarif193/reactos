@@ -4135,14 +4135,13 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
     SIZE_T CurrentLength;
     ULONG ix;
     BOOLEAN WriteToDevice;
-    PHYSICAL_ADDRESS PhAddr = {{0, 0}};
     PHYSICAL_ADDRESS PhAddress = {{0, 0}};
     ULONG TransferLength;
     SIZE_T SgCurrentLength;
     SIZE_T ElementLength;
     PUSBPORT_DEVICE_HANDLE DeviceHandle;
     PDMA_OPERATIONS DmaOperations;
-    USBD_STATUS USBDStatus;
+    USBD_STATUS USBDStatus = USBD_STATUS_SUCCESS;
     LIST_ENTRY List;
     PUSBPORT_TRANSFER transfer;
     LONG CallbackState;
@@ -4186,7 +4185,7 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
     ix = 0;
     CurrentLength = 0;
 
-    do
+    while (CurrentLength < Transfer->TransferParameters.TransferBufferLength)
     {
         WriteToDevice = Transfer->Direction == USBPORT_DMA_DIRECTION_TO_DEVICE;
         ASSERT(Transfer->Direction != 0);
@@ -4202,6 +4201,17 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
                PhAddress.LowPart,
                PhAddress.HighPart,
                TransferLength);
+
+        /* MapTransfer advances through the MDL by byte count. Different
+         * virtual pages can legitimately map the same physical page (for
+         * example, a read-only zero-filled buffer). Address repetition is
+         * not a lack of progress and must not truncate the SG list. */
+        if (TransferLength == 0 ||
+            TransferLength > Transfer->TransferParameters.TransferBufferLength - CurrentLength)
+        {
+            USBDStatus = USBD_STATUS_INTERNAL_HC_ERROR;
+            break;
+        }
 
         SgCurrentLength = TransferLength;
 
@@ -4243,21 +4253,12 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
             while (SgCurrentLength);
         }
 
-        if (PhAddr.QuadPart == PhAddress.QuadPart)
-        {
-            DPRINT1("USBPORT_MapTransfer: PhAddr == PhAddress\n");
-            break;
-        }
-
-        PhAddr = PhAddress;
-
         CurrentLength += TransferLength;
         CurrentVa += TransferLength;
 
         TransferLength = Transfer->TransferParameters.TransferBufferLength -
                          CurrentLength;
     }
-    while (CurrentLength != Transfer->TransferParameters.TransferBufferLength);
 
     sgList->SgElementCount = ix;
 
@@ -4278,7 +4279,15 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     Transfer->Flags |= TRANSFER_FLAG_DMA_MAPPED;
 
-    if ((Transfer->Flags & TRANSFER_FLAG_ISO) == 0)
+    if (USBDStatus != USBD_STATUS_SUCCESS)
+    {
+        KeAcquireSpinLock(&Endpoint->EndpointSpinLock,
+                          &Endpoint->EndpointOldIrql);
+        USBPORT_QueueDoneTransfer(Transfer, USBDStatus, TRUE);
+        KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
+                          Endpoint->EndpointOldIrql);
+    }
+    else if ((Transfer->Flags & TRANSFER_FLAG_ISO) == 0)
     {
         KeAcquireSpinLock(&Endpoint->EndpointSpinLock,
                           &Endpoint->EndpointOldIrql);
