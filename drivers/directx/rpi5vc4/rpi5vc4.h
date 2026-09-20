@@ -365,6 +365,7 @@ struct _RPI5VC4_DEVICE_EXTENSION
 
     /* Serialize HVS and cursor state; queued pointer updates run between strips. */
     KMUTEX HvsMutex;
+    KMUTEX HvsFlipMutex; /* Programming and activation of one primary flip. */
     FAST_MUTEX FirmwarePresentMutex;
     FAST_MUTEX VBlankMutex;
 

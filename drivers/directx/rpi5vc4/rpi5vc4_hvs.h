@@ -188,14 +188,6 @@ Rpi5HvsFlipScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ PHYSICAL_ADDRESS FrameBufferPhysical);
 
-/* WaitVBlank=FALSE: atomic no-wait flip for the triple-buffered present
- * ring (pointer words latch at frame start). */
-BOOLEAN
-Rpi5HvsFlipScanoutEx(
-    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _In_ PHYSICAL_ADDRESS FrameBufferPhysical,
-    _In_ BOOLEAN WaitVBlank);
-
 /* One plane of a multi-plane (MPO) composition, bottom-up layer order. */
 typedef struct _RPI5VC4_HVS_PLANE
 {

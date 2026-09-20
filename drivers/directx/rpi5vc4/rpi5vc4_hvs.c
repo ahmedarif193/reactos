@@ -723,7 +723,8 @@ static BOOLEAN
 Rpi5HvsInstallPlaneListUnlocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_reads_(Count) CONST RPI5VC4_HVS_PLANE *Planes,
-    _In_ ULONG Count)
+    _In_ ULONG Count,
+    _In_ BOOLEAN ConfigureArbiter)
 {
     if (DeviceExtension->Headless)
         return TRUE;
@@ -768,7 +769,9 @@ Rpi5HvsInstallPlaneListUnlocked(
     /* Linux vc6_hvs_hw_init parity (it-30/31): the firmware handover
      * leaves the HVS AXI request cap and arbiter priority unprogrammed;
      * an uncapped HVS scanning the slab starves the V3D PTB final flush
-     * (the slab-region wedge).  Cap to Linux's values once. */
+     * (the slab-region wedge).  Cap to Linux's values once.
+     * A primary address flip retains the existing arbitration policy. */
+    if (ConfigureArbiter)
     {
         ULONG NewControl = Control;
 
@@ -869,6 +872,8 @@ Rpi5HvsInstallPlaneListUnlocked(
     LptrsVal = (LptrsVal & ~RPI5_HVS_LPTRS_HEAD_MASK) | Slot;
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
     DeviceExtension->HvsActivePrivateSlot = Slot;
+    DeviceExtension->HvsLptrsReg = LptrsReg;
+    DeviceExtension->HvsLptrsVal = LptrsVal;
 
     /* Keep the cursor-move fast path alive on the private list. */
     if (CursorAt != 0)
@@ -891,32 +896,27 @@ Rpi5HvsInstallPlaneList(
     BOOLEAN Result;
 
     KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
-    Result = Rpi5HvsInstallPlaneListUnlocked(DeviceExtension, Planes, Count);
+    Result = Rpi5HvsInstallPlaneListUnlocked(DeviceExtension, Planes, Count, TRUE);
     KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
     return Result;
 }
 
 static BOOLEAN
-Rpi5HvsFlipScanoutExUnlocked(
+Rpi5HvsFlipScanoutUnlocked(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _In_ PHYSICAL_ADDRESS FrameBufferPhysical,
-    _In_ BOOLEAN WaitVBlank)
+    _In_ PHYSICAL_ADDRESS FrameBufferPhysical)
 {
     if (DeviceExtension->Headless)
         return TRUE;
 
     volatile ULONG *Dlist;
     PVOID HvsBase;
-    ULONG LptrsD, LptrsReg, LptrsVal, Head, Control, Ctl0, Ptr0, Ptr1;
-    ULONG CurrentHigh, TargetHigh;
+    ULONG LptrsReg, LptrsVal, Head, Ctl0, Ptr0, Ptr1;
     ULONGLONG Phys = (ULONGLONG)FrameBufferPhysical.QuadPart;
     ULONGLONG CurrentPhys = (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart;
 
     if (Phys == 0)
         return FALSE;
-
-    if (Phys == CurrentPhys)
-        return TRUE;
 
     /* Latched off after repeated silicon failures: fail FAST so the
      * present path doesn't burn a vblank wait per frame (this is what
@@ -924,25 +924,14 @@ Rpi5HvsFlipScanoutExUnlocked(
     if (DeviceExtension->HvsFlipBroken)
         return FALSE;
 
-    CurrentHigh = (ULONG)((CurrentPhys >> 32) & 0xff);
-    TargetHigh = (ULONG)((Phys >> 32) & 0xff);
-
-    /* The HVS latches a display-list pointer at frame start. A flip within
-     * one 4 GB window therefore consists of one atomic PTR1 write and needs
-     * no scan-beam wait. Crossing a window changes both pointer words and is
-     * allowed only after a real vblank has been observed. */
-    if (CurrentHigh != TargetHigh)
-    {
-        if (!WaitVBlank || !Rpi5CrtcWaitForVBlank(DeviceExtension))
-            return FALSE;
-    }
+    if (Phys == CurrentPhys)
+        return TRUE;
 
     HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
     if (HvsBase == NULL)
         return FALSE;
 
     Dlist = (volatile ULONG *)((PUCHAR)HvsBase + RPI5_HVS_DLIST_OFFSET);
-    (VOID)Control; (VOID)LptrsD;
 
     if (!Rpi5HvsSelectHead(DeviceExtension, HvsBase,
                            &LptrsReg, &LptrsVal, &Head,
@@ -977,17 +966,18 @@ Rpi5HvsFlipScanoutExUnlocked(
         goto FlipFailed;
     }
 
-    if ((Ptr0 & 0xff) != TargetHigh)
+    /* Publish a complete inactive list. Editing PTR1 in the live list is an
+     * asynchronous plane update and can change its source during a raster. */
     {
-        Ptr0 = (Ptr0 & ~0xffu) | TargetHigh;
-        WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + 5], Ptr0);
+        RPI5VC4_HVS_PLANE Plane = {0};
+        Plane.Phys = Phys;
+        Plane.Width = DeviceExtension->ScreenWidth;
+        Plane.Height = DeviceExtension->ScreenHeight;
+        Plane.PitchBytes = DeviceExtension->BytesPerScanLine;
+        Plane.Opaque = TRUE;
+        if (!Rpi5HvsInstallPlaneListUnlocked(DeviceExtension, &Plane, 1, FALSE))
+            goto FlipFailed;
     }
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + 6], (ULONG)(Phys & 0xffffffff));
-
-#if defined(_M_ARM64)
-    __dsb(_ARM64_BARRIER_SY);
-#endif
-    KeMemoryBarrier();
 
     DeviceExtension->FrameBufferPhysical = FrameBufferPhysical;
 
@@ -1011,26 +1001,57 @@ FlipFailed:
     return FALSE;
 }
 
-BOOLEAN
-Rpi5HvsFlipScanoutEx(
+/* LPTRS is the requested list; LACT identifies the list actually scanned.
+ * A programmed flip does not release the previous surface until LACT changes.
+ * Match the primary address as a cursor update may replace the list meanwhile. */
+static BOOLEAN
+Rpi5HvsWaitForScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
-    _In_ PHYSICAL_ADDRESS FrameBufferPhysical,
-    _In_ BOOLEAN WaitVBlank)
+    _In_ PHYSICAL_ADDRESS Address)
 {
-    BOOLEAN Result;
+    PVOID Base = (PVOID)Rpi5HvsMap(DeviceExtension);
+    volatile ULONG *Dlist;
+    ULONG ActiveReg, Head, Ptr0, Ptr1, Words;
+    ULONGLONG Start = KeQueryInterruptTime();
+    LARGE_INTEGER Interval;
 
-    /* Cursor moves must not wait behind a pending vertical blank. */
-    if (WaitVBlank && !DeviceExtension->Headless && !DeviceExtension->HvsFlipBroken &&
-        FrameBufferPhysical.QuadPart != 0 &&
-        FrameBufferPhysical.QuadPart != DeviceExtension->FrameBufferPhysical.QuadPart)
-        Rpi5CrtcWaitForVBlank(DeviceExtension);
+    if (Base == NULL)
+        return FALSE;
 
-    KeWaitForSingleObject(&DeviceExtension->HvsMutex, Executive, KernelMode, FALSE, NULL);
-    Result = Rpi5HvsFlipScanoutExUnlocked(DeviceExtension,
-                                          FrameBufferPhysical,
-                                          WaitVBlank);
-    KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
-    return Result;
+    Dlist = (volatile ULONG *)((PUCHAR)Base + RPI5_HVS_DLIST_OFFSET);
+    Words = Rpi5HvsGetDlistDwords(Base);
+    ActiveReg = DeviceExtension->HvsLptrsReg == RPI5_HVS_LPTRS_D ?
+                    RPI5_HVS_ACTIVE_DL_D : RPI5_HVS_ACTIVE_DL_C;
+    Interval.QuadPart = -10000;
+    for (;;)
+    {
+        Head = READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + ActiveReg)) &
+                   RPI5_HVS_LPTRS_HEAD_MASK;
+        if (Words > 6 && Head < Words - 6)
+        {
+            Ptr0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 5]);
+            Ptr1 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 6]);
+            if ((READ_REGISTER_ULONG((PULONG)&Dlist[Head]) &
+                    RPI5_HVS_CTL0_VALID) &&
+                (Ptr0 & 0xffu) == (((ULONGLONG)Address.QuadPart >> 32) & 0xffu) &&
+                Ptr1 == (ULONG)Address.QuadPart &&
+                Head == (READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + ActiveReg)) &
+                             RPI5_HVS_LPTRS_HEAD_MASK))
+            {
+                return TRUE;
+            }
+        }
+
+        if (KeQueryInterruptTime() - Start >= 100 * 10000ULL)
+        {
+            /* A timeout is not proof that the old primary can be reused. */
+            DbgPrint("RPI5VC4: scanout latch timeout head=%lu target=%I64x\n",
+                     Head, Address.QuadPart);
+            DeviceExtension->HvsFlipBroken = TRUE;
+            return FALSE;
+        }
+        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+    }
 }
 
 BOOLEAN
@@ -1038,5 +1059,19 @@ Rpi5HvsFlipScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ PHYSICAL_ADDRESS FrameBufferPhysical)
 {
-    return Rpi5HvsFlipScanoutEx(DeviceExtension, FrameBufferPhysical, TRUE);
+    BOOLEAN Result;
+
+    /* Keep flips ordered through activation, but let cursor updates acquire
+     * HvsMutex while the display finishes its previous frame. An inactive
+     * list can be armed immediately; no preliminary PixelValve wait is needed. */
+    KeWaitForSingleObject(&DeviceExtension->HvsFlipMutex,
+                         Executive, KernelMode, FALSE, NULL);
+    KeWaitForSingleObject(&DeviceExtension->HvsMutex,
+                         Executive, KernelMode, FALSE, NULL);
+    Result = Rpi5HvsFlipScanoutUnlocked(DeviceExtension, FrameBufferPhysical);
+    KeReleaseMutex(&DeviceExtension->HvsMutex, FALSE);
+    if (Result && !DeviceExtension->Headless)
+        Result = Rpi5HvsWaitForScanout(DeviceExtension, FrameBufferPhysical);
+    KeReleaseMutex(&DeviceExtension->HvsFlipMutex, FALSE);
+    return Result;
 }
