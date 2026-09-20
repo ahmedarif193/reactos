@@ -25,14 +25,14 @@
 
 /* UTILITY FUNCTIONS *********************************************************/
 
-#include <mm/ARM3/miarm.h> // For MiIsMemoryTypeInvisible()
+#include <vmm/vmm.h> // For MiIsMemoryTypeInvisible()
 
 /**
  * @brief
  * Retrieves the total size of the memory before Mm is initialized,
  * by counting the number of physical pages. Useful for debug logging.
  *
- * Adapted from mm/ARM3/mminit.c!MiScanMemoryDescriptors().
+ * Adapted from vmm/mminit.c!MiScanMemoryDescriptors().
  **/
 static
 SIZE_T

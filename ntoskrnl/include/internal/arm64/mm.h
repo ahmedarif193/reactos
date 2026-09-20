@@ -1333,7 +1333,7 @@ MI_IS_PHYSICAL_ADDRESS(
  *   Kernel non-exec:    PXN=1, UXN=1  (neither can execute)
  *
  * The generic PTE_EXECUTE / PTE_EXECUTE_READ / PTE_EXECUTE_READWRITE macros
- * in miarm.h use USER semantics (PXN=1, UXN=0) because MmProtectToPteMask[]
+ * in vmm.h use USER semantics (PXN=1, UXN=0) because MmProtectToPteMask[]
  * is consumed by MI_MAKE_HARDWARE_PTE / MI_MAKE_HARDWARE_PTE_USER which
  * create user-mode page table entries.
  *

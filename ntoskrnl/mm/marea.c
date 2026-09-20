@@ -43,10 +43,10 @@
 
 #include <ntoskrnl.h>
 #define NDEBUG
-#include <cache/section/newmm.h>
+#include <mm/rosmm.h>
 #include <debug.h>
 
-#include "ARM3/miarm.h"
+#include <vmm/vmm.h>
 
 MEMORY_AREA MiStaticMemoryAreas[MI_STATIC_MEMORY_AREAS];
 ULONG MiStaticMemoryAreaCount;
@@ -154,13 +154,9 @@ MmInsertMemoryArea(
     if (marea->VadNode.EndingVpn + 1 < (ULONG_PTR)MmSystemRangeStart >> PAGE_SHIFT)
     {
         ASSERT(Process != NULL);
-        if (marea->Type != MEMORY_AREA_OWNED_BY_ARM3)
+        if (marea->Type != MEMORY_AREA_OWNED_BY_VMM)
         {
-#ifdef NEWCC
-            ASSERT(marea->Type == MEMORY_AREA_SECTION_VIEW || marea->Type == MEMORY_AREA_CACHE);
-#else
             ASSERT(marea->Type == MEMORY_AREA_SECTION_VIEW);
-#endif
 
             /* Insert the VAD */
             MiLockProcessWorkingSetUnsafe(PsGetCurrentProcess(), PsGetCurrentThread());
@@ -274,7 +270,7 @@ MmFreeMemoryArea(
     /* Check magic */
     ASSERT(MemoryArea->Magic == 'erAM');
 
-    if (MemoryArea->Type != MEMORY_AREA_OWNED_BY_ARM3)
+    if (MemoryArea->Type != MEMORY_AREA_OWNED_BY_VMM)
     {
         PEPROCESS CurrentProcess = PsGetCurrentProcess();
         PEPROCESS Process = MmGetAddressSpaceOwner(AddressSpace);
@@ -318,11 +314,7 @@ MmFreeMemoryArea(
         if (MemoryArea->VadNode.StartingVpn < (ULONG_PTR)MmSystemRangeStart >> PAGE_SHIFT)
         {
             ASSERT(MemoryArea->VadNode.EndingVpn + 1 < (ULONG_PTR)MmSystemRangeStart >> PAGE_SHIFT);
-#ifdef NEWCC
-            ASSERT(MemoryArea->Type == MEMORY_AREA_SECTION_VIEW || MemoryArea->Type == MEMORY_AREA_CACHE);
-#else
             ASSERT(MemoryArea->Type == MEMORY_AREA_SECTION_VIEW);
-#endif
 
             /* We do not have fake ARM3 memory areas anymore. */
             ASSERT(MI_IS_MEMORY_AREA_VAD(&MemoryArea->VadNode));
@@ -435,7 +427,7 @@ MmCreateMemoryArea(PMMSUPPORT AddressSpace,
     MemoryArea->Magic = 'erAM';
     MemoryArea->DeleteInProgress = FALSE;
     MI_SET_MEMORY_AREA_VAD(&MemoryArea->VadNode);
-    if (MemoryArea->Type != MEMORY_AREA_OWNED_BY_ARM3)
+    if (MemoryArea->Type != MEMORY_AREA_OWNED_BY_VMM)
     {
         MI_SET_ROSMM_VAD(&MemoryArea->VadNode);
     }
@@ -480,7 +472,7 @@ MmCreateMemoryArea(PMMSUPPORT AddressSpace,
         }
 
         /* No need to check ARM3 owned memory areas, the range MUST be free */
-        if (MemoryArea->Type != MEMORY_AREA_OWNED_BY_ARM3)
+        if (MemoryArea->Type != MEMORY_AREA_OWNED_BY_VMM)
         {
             if (!MmIsAddressRangeFree(AddressSpace, *BaseAddress, tmpLength))
             {
@@ -526,12 +518,6 @@ MiRosCleanupMemoryArea(
     {
         Status = MiRosUnmapViewOfSection(Process, MemoryArea, BaseAddress, Process->ProcessExiting);
     }
-#ifdef NEWCC
-    else if (MemoryArea->Type == MEMORY_AREA_CACHE)
-    {
-        Status = MmUnmapViewOfCacheSegment(&Process->Vm, BaseAddress);
-    }
-#endif
     else
     {
         /* There shouldn't be anything else! */

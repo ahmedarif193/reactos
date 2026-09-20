@@ -17,8 +17,8 @@
 
 #define NDEBUG
 #include <debug.h>
-/* miarm.h uses DPRINT, so it must follow debug.h. */
-#include <mm/ARM3/miarm.h>
+/* vmm.h uses DPRINT, so it must follow debug.h. */
+#include <vmm/vmm.h>
 
 #define KI_BUGCHECK_BACKTRACE_FRAMES 8
 #define KI_BUGCHECK_MAX_MODULES 4096

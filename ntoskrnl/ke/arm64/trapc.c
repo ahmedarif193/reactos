@@ -13,7 +13,7 @@
 #include <arm64trap.h>
 #define NDEBUG
 #include <debug.h>
-#include <mm/ARM3/miarm.h>
+#include <vmm/vmm.h>
 #ifdef KDBG
 #include <kdbg/kdb.h>
 #endif

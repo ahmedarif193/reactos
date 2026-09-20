@@ -11,7 +11,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#include <mm/ARM3/miarm.h>
+#include <vmm/vmm.h>
 #include <fltkernel.h>
 
 /* Random seed */

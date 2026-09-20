@@ -14,8 +14,8 @@
 #define NDEBUG
 #include <debug.h>
 
-#define MODULE_INVOLVED_IN_ARM3
-#include "ARM3/miarm.h"
+#define MODULE_INVOLVED_IN_VMM
+#include <vmm/vmm.h>
 
 #define ASSERT_IS_ROS_PFN(x) ASSERT(MI_IS_ROS_PFN(x) == TRUE);
 

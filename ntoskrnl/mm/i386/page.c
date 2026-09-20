@@ -13,7 +13,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#include <mm/ARM3/miarm.h>
+#include <vmm/vmm.h>
 
 #ifndef _MI_PAGING_LEVELS
 #error "Dude, fix your stuff before using this file"

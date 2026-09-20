@@ -2,7 +2,7 @@
  *                                                                           *
  *     This file is current kept ONLY for DOCUMENTATION purposes, until      *
  *  we are sure that all the functionality (e.g. regarding the "big pages")  *
- * are fully present in Mm and in mm/ARM3/mmdbg.c that supersedes this file. *
+ * are fully present in Mm and in vmm/mmdbg.c that supersedes this file. *
  *                                                                           *
 \*****************************************************************************/
 

@@ -9,8 +9,8 @@
 #define NDEBUG
 #include <debug.h>
 
-#define MODULE_INVOLVED_IN_ARM3
-#include <mm/ARM3/miarm.h>
+#define MODULE_INVOLVED_IN_VMM
+#include <vmm/vmm.h>
 
 /* ARM64 PTE address mask - extracts physical address from page table entry (bits 47:12) */
 #ifndef ARM64_PTE_ADDR_MASK
@@ -43,7 +43,7 @@ MiArm64IsResidentPte(_In_ MMPTE Pte)
 }
 
 /* MI_ARM64_USER_PTE_WALK lives in internal/arm64/mm.h; the AWE support in
- * ARM3/awesup.c shares the walk and release helpers. */
+ * vmm/awesup.c shares the walk and release helpers. */
 
 /*
  * Sanity-check a table physical address without probing or mapping. The
