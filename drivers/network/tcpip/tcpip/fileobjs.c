@@ -26,6 +26,57 @@ LIST_ENTRY ConnectionEndpointListHead;
 KSPIN_LOCK ConnectionEndpointListLock;
 
 /*
+ * FUNCTION: Takes a reference on an address file that is still live
+ * ARGUMENTS:
+ *     AddrFile = Address file found on the global list
+ * RETURNS:
+ *     TRUE if a reference was taken, FALSE if the object is being freed
+ * NOTES:
+ *     The caller must hold AddressFileListLock to keep the object allocated.
+ *     The last dereference of an address file runs AddrFileFree, which only
+ *     then takes AddressFileListLock to unlink it. Until that happens the
+ *     object is still on the list with a zero count, so a search holding the
+ *     lock can reach it. Adopting it there would resurrect an object whose
+ *     Free routine is already running. Take the reference only while the
+ *     count is non-zero so such an entry is skipped instead.
+ */
+static BOOLEAN AddrFileReferenceLive(
+    PADDRESS_FILE AddrFile)
+{
+    LONG Current, Previous;
+
+    Current = AddrFile->RefCount;
+    while (Current != 0)
+    {
+        Previous = InterlockedCompareExchange(&AddrFile->RefCount,
+                                              Current + 1,
+                                              Current);
+        if (Previous == Current)
+            return TRUE;
+        Current = Previous;
+    }
+
+    return FALSE;
+}
+
+/*
+ * FUNCTION: Advances a list entry to the next address file that is still live
+ * NOTES:
+ *     Requires AddressFileListLock; returns a referenced entry or the list head.
+ */
+static PLIST_ENTRY AddrFileNextLive(
+    PLIST_ENTRY Entry)
+{
+    while (Entry != &AddressFileListHead &&
+           !AddrFileReferenceLive(CONTAINING_RECORD(Entry, ADDRESS_FILE, ListEntry)))
+    {
+        Entry = Entry->Flink;
+    }
+
+    return Entry;
+}
+
+/*
  * FUNCTION: Searches through address file entries to find the first match
  * ARGUMENTS:
  *     Address       = IP address
@@ -33,7 +84,7 @@ KSPIN_LOCK ConnectionEndpointListLock;
  *     Protocol      = Protocol number
  *     SearchContext = Pointer to search context
  * RETURNS:
- *     Pointer to address file, NULL if none was found
+ *     Pointer to referenced address file, NULL if none was found
  */
 PADDRESS_FILE AddrSearchFirst(
     PIP_ADDRESS Address,
@@ -49,10 +100,8 @@ PADDRESS_FILE AddrSearchFirst(
 
     TcpipAcquireSpinLock(&AddressFileListLock, &OldIrql);
 
-    SearchContext->Next = AddressFileListHead.Flink;
-
-    if (!IsListEmpty(&AddressFileListHead))
-        ReferenceObject(CONTAINING_RECORD(SearchContext->Next, ADDRESS_FILE, ListEntry));
+    /* AddrFileNextLive takes the reference that pins this entry. */
+    SearchContext->Next = AddrFileNextLive(AddressFileListHead.Flink);
 
     TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
 
@@ -275,7 +324,10 @@ PADDRESS_FILE AddrSearchNext(
         /* See if this address matches the search criteria */
         if ((Current->Port    == SearchContext->Port) &&
             (Current->Protocol == SearchContext->Protocol) &&
-            (AddrReceiveMatch(IPAddress, SearchContext->Address))) {
+            (AddrReceiveMatch(IPAddress, SearchContext->Address)) &&
+            /* This also takes the reference returned to the caller. An
+             * address file being freed is not a match. */
+            AddrFileReferenceLive(Current)) {
             /* We've found a match */
             Found = TRUE;
             break;
@@ -285,17 +337,11 @@ PADDRESS_FILE AddrSearchNext(
 
     if (Found)
     {
-        SearchContext->Next = CurrentEntry->Flink;
-
-        if (SearchContext->Next != &AddressFileListHead)
-        {
-            /* Reference the next address file to prevent the link from disappearing behind our back */
-            ReferenceObject(CONTAINING_RECORD(SearchContext->Next, ADDRESS_FILE, ListEntry));
-        }
-
-        /* Reference the returned address file before dereferencing the starting
-         * address file because it may be that Current == StartingAddrFile */
-        ReferenceObject(Current);
+        /* Pin the next surviving address file so the link cannot disappear
+         * behind our back. The reference on the returned file was already
+         * taken by the match above, before the starting file is released
+         * below, which matters when Current == StartingAddrFile. */
+        SearchContext->Next = AddrFileNextLive(CurrentEntry->Flink);
     }
     else
         Current = NULL;
