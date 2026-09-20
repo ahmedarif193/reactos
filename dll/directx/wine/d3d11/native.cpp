@@ -3648,8 +3648,26 @@ static HRESULT APIENTRY NativePresent(HANDLE runtime_device, DXGIDDICB_PRESENT *
         present.SubRectCnt = context->parameters->DirtyRectsCount;
         present.pSrcSubRects = context->parameters->pDirtyRects;
     }
-    NTSTATUS status = D3DKMTPresent(&present);
+    /* The UMD flushed before this callback, but its rendering and present
+     * contexts can use different GPU engines. Retire the producing work
+     * before the kernel may select this private compositor primary. */
+    D3DKMT_WAITFORIDLE ready = {};
+    ready.hDevice = device->km_device;
+    NTSTATUS status = D3DKMTWaitForIdle(&ready);
+    if (status != STATUS_SUCCESS)
+    {
+        context->result = StatusToHresult(status);
+        return context->result;
+    }
+    status = D3DKMTPresent(&present);
     context->submitted = status == STATUS_SUCCESS;
+    if (context->submitted)
+    {
+        /* This private compositor chain reuses two primary buffers. Its GPU
+         * EVENT query only covers rendering: the accepted present still owns
+         * its source until the kernel's passive scanout step completes. */
+        status = D3DKMTWaitForIdle(&ready);
+    }
     /* Only the privately registered compositor output can be suspended by
      * source ownership. Ordinary client flip chains keep their DXGI contract. */
     context->result = swapchain->primary && status == STATUS_GRAPHICS_PRESENT_OCCLUDED
@@ -3853,6 +3871,9 @@ HRESULT NativeSwapChain::PresentMeasured(UINT interval, UINT flags, const DXGI_P
         if (status == STATUS_SUCCESS) return S_OK;
         return status < 0 ? StatusToHresult(status) : E_UNEXPECTED;
     }
+    /* The private compositor primary has a blocking retirement contract.
+     * Ordinary client swap chains retain their nonblocking publication path. */
+    if (primary && (flags & DXGI_PRESENT_DO_NOT_WAIT)) return DXGI_ERROR_INVALID_CALL;
     if (parameters)
     {
         for (UINT i = 0; i < parameters->DirtyRectsCount; ++i)
