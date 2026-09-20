@@ -59,6 +59,11 @@ static GENERIC_MAPPING PopPowerRequestMapping =
 
 static volatile LONG PopProcessorPolicyMinimum = 5;
 static volatile LONG PopProcessorPolicyMaximum = 100;
+static KSPIN_LOCK PopIdlenessLock;
+static ULONG PopLastTotalTicks[MAXIMUM_PROCESSORS];
+static ULONG PopLastIdleTicks[MAXIMUM_PROCESSORS];
+static ULONGLONG PopLastIdleSampleTime;
+static ULONG PopLastIdleness;
 volatile LONG PopLatencySensitivityState;
 volatile LONG PopVSyncState;
 volatile LONG PopUserPresentReason;
@@ -68,6 +73,38 @@ volatile LONG64 PopUserPresentTime;
 extern PKWIN32_POWEREVENT_CALLOUT PopEventCallout;
 
 /* PRIVATE FUNCTIONS *********************************************************/
+
+static
+ULONG
+PopQuerySystemIdleness(VOID)
+{
+    ULONGLONG Now, TotalDelta = 0, IdleDelta = 0;
+    ULONG i, TotalTicks, IdleTicks, Idleness;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&PopIdlenessLock, &OldIrql);
+    Now = KeQueryInterruptTime();
+    /* Share a sample across callers rather than measuring fractions of a tick. */
+    if (Now - PopLastIdleSampleTime >= 100 * 10000)
+    {
+        for (i = 0; i < (ULONG)KeNumberProcessors; ++i)
+        {
+            PKPRCB Prcb = KiProcessorBlock[i];
+            TotalTicks = ReadULongAcquire(&Prcb->KernelTime) + ReadULongAcquire(&Prcb->UserTime);
+            IdleTicks = ReadULongAcquire(&Prcb->IdleThread->KernelTime);
+            TotalDelta += (ULONG)(TotalTicks - PopLastTotalTicks[i]);
+            IdleDelta += (ULONG)(IdleTicks - PopLastIdleTicks[i]);
+            PopLastTotalTicks[i] = TotalTicks;
+            PopLastIdleTicks[i] = IdleTicks;
+        }
+        if (TotalDelta)
+            PopLastIdleness = (ULONG)(min(IdleDelta, TotalDelta) * 100 / TotalDelta);
+        PopLastIdleSampleTime = Now;
+    }
+    Idleness = PopLastIdleness;
+    KeReleaseSpinLock(&PopIdlenessLock, OldIrql);
+    return Idleness;
+}
 
 static
 NTSTATUS
@@ -1507,6 +1544,10 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
            InputBuffer, InputBufferLength,
            OutputBuffer, OutputBufferLength);
 
+    if (PowerInformationLevel == SystemPowerInformation &&
+        (!OutputBuffer || !OutputBufferLength))
+        return STATUS_INVALID_PARAMETER;
+
     if (PreviousMode != KernelMode)
     {
         _SEH2_TRY
@@ -1523,6 +1564,36 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
 
     switch (PowerInformationLevel)
     {
+        case SystemPowerInformation:
+        {
+            SYSTEM_POWER_INFORMATION Information = {0};
+
+            if (InputBufferLength)
+            {
+                if (!SeSinglePrivilegeCheck(SeShutdownPrivilege, PreviousMode))
+                    return STATUS_PRIVILEGE_NOT_HELD;
+                return STATUS_INVALID_PARAMETER;
+            }
+            if (OutputBufferLength < sizeof(Information))
+                return STATUS_BUFFER_TOO_SMALL;
+
+            /* No system idle policy/timer is armed: threshold and remaining time are zero. */
+            Information.Idleness = PopQuerySystemIdleness();
+            Information.CoolingMode = PopQuerySystemCoolingMode();
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(OutputBuffer, &Information, sizeof(Information));
+                Status = STATUS_SUCCESS;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
         case PowerRequestCreate:
         {
             COUNTED_REASON_CONTEXT Context;

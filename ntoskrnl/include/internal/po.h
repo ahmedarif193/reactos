@@ -373,6 +373,7 @@ PopApplyProcessorPowerSetting(
 );
 
 VOID NTAPI PopInitializeThermalRequests(VOID);
+UCHAR NTAPI PopQuerySystemCoolingMode(VOID);
 
 typedef struct _POP_TTM_PROVIDER
 {

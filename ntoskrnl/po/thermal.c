@@ -216,6 +216,29 @@ VOID NTAPI PopInitializeThermalRequests(VOID)
     ExInitializeFastMutex(&PopThermalLock);
 }
 
+UCHAR NTAPI PopQuerySystemCoolingMode(VOID)
+{
+    PLIST_ENTRY Link;
+    PPOP_THERMAL_TARGET Target;
+    UCHAR Mode = 2; /* PO_TZ_INVALID_MODE: no cooling interface. */
+
+    PAGED_CODE();
+    ExAcquireFastMutex(&PopThermalLock);
+    for (Link = PopThermalTargetList.Flink; Link != &PopThermalTargetList; Link = Link->Flink)
+    {
+        Target = CONTAINING_RECORD(Link, POP_THERMAL_TARGET, Link);
+        if (Target->Interface.PassiveCooling && Target->EffectivePassiveThrottle < 100)
+        {
+            Mode = 1; /* PO_TZ_PASSIVE */
+            break;
+        }
+        if (Target->Interface.ActiveCooling || Target->Interface.PassiveCooling)
+            Mode = 0; /* PO_TZ_ACTIVE: no passive throttling in effect. */
+    }
+    ExReleaseFastMutex(&PopThermalLock);
+    return Mode;
+}
+
 NTSTATUS NTAPI PoCreateThermalRequest(PVOID *ThermalRequest, PDEVICE_OBJECT TargetDeviceObject, PDEVICE_OBJECT PolicyDeviceObject, PCOUNTED_REASON_CONTEXT Context, ULONG Flags)
 {
     PPOP_THERMAL_TARGET CandidateTarget;
