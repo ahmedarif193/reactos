@@ -116,6 +116,28 @@ volatile ULONG TokenOperationListIdentifier = (ULONG)-1;
 LIST_ENTRY IdlePowerFDOList = {0};
 KGUARDED_MUTEX IdlePowerFDOListMutex;
 
+/* Device nodes can be started or removed concurrently on different PnP branches. */
+static KSPIN_LOCK ClasspAllFdosListLock = 0;
+
+/* Keep the raised-IRQL section out of the pageable start/remove routines. */
+static DECLSPEC_NOINLINE VOID
+ClasspUpdateAllFdosList(PLIST_ENTRY Entry, BOOLEAN Insert)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&ClasspAllFdosListLock, &OldIrql);
+    if (Insert) {
+        InsertTailList(&AllFdosList, Entry);
+    } else {
+        /* Failed initialization may never have linked this device. */
+        if (Entry->Flink && Entry->Blink) {
+            RemoveEntryList(Entry);
+        }
+        InitializeListHead(Entry);
+    }
+    KeReleaseSpinLock(&ClasspAllFdosListLock, OldIrql);
+}
+
 //
 // Handle used to register for power setting notifications.
 //
@@ -1989,9 +2011,9 @@ NTSTATUS ClassPnpStartDevice(IN PDEVICE_OBJECT DeviceObject)
 
             /*
              *  Anchor the FDO in our static list.
-             *  Pnp is synchronized, so we shouldn't need any synchronization here.
+             *  Other device nodes may be starting in parallel.
              */
-            InsertTailList(&AllFdosList, &fdoExtension->PrivateFdoData->AllFdosListEntry);
+            ClasspUpdateAllFdosList(&fdoExtension->PrivateFdoData->AllFdosListEntry, TRUE);
 
             //
             // NOTE: the old interface allowed the class driver to allocate
@@ -10542,14 +10564,7 @@ ClassRemoveDevice(
                     // else we will access invalid memory.
                     //
                     PLIST_ENTRY allFdosListEntry = &fdoExtension->PrivateFdoData->AllFdosListEntry;
-                    if (allFdosListEntry->Flink && allFdosListEntry->Blink) {
-                        //
-                        //  Remove the FDO from the static list.
-                        //  Pnp is synchronized so this shouldn't need any synchronization.
-                        //
-                        RemoveEntryList(allFdosListEntry);
-                    }
-                    InitializeListHead(allFdosListEntry);
+                    ClasspUpdateAllFdosList(allFdosListEntry, FALSE);
 
                     DestroyAllTransferPackets(DeviceObject);
 
@@ -16565,4 +16580,3 @@ Return Value:
 
     return status;
 }
-
