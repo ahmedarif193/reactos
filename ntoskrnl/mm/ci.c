@@ -6,7 +6,7 @@
  */
 
 #include <ntoskrnl.h>
-#include <cache/section/newmm.h>
+#include <mm/rosmm.h>
 #include <reactos/ci.h>
 #include "catalog.h"
 #define NDEBUG

@@ -44,13 +44,12 @@
 /* INCLUDES *****************************************************************/
 
 #include <ntoskrnl.h>
-#include <cache/newcc.h>
-#include <cache/section/newmm.h>
+#include <mm/rosmm.h>
 #define NDEBUG
 #include <debug.h>
 #include <reactos/exeformat.h>
 
-#include "ARM3/miarm.h"
+#include <vmm/vmm.h>
 
 #undef MmSetPageEntrySectionSegment
 #define MmSetPageEntrySectionSegment(S,O,E) \
@@ -67,7 +66,6 @@ typedef struct _MM_SECTION_FILE_OBJECT_REF
 static LARGE_INTEGER TinyTime = {{-1L, -1L}};
 static ULONG_PTR MiRosSystemCacheViewHint;
 
-#ifndef NEWCC
 KEVENT MmWaitPageEvent;
 
 VOID
@@ -88,7 +86,6 @@ _MmUnlockSectionSegment(PMM_SECTION_SEGMENT Segment, const char *file, int line)
     ExReleaseFastMutex(&Segment->Lock);
     //DPRINT("MmUnlockSectionSegment(%p,%s:%d)\n", Segment, file, line);
 }
-#endif
 
 PMM_SECTION_SEGMENT
 MiGrabDataSection(PSECTION_OBJECT_POINTERS SectionObjectPointer)
@@ -307,7 +304,7 @@ MiRosFindSystemCacheView(
 
 NTSTATUS
 NTAPI
-MmCreateArm3Section(OUT PVOID *SectionObject,
+MmCreateVmmSection(OUT PVOID *SectionObject,
                     IN ACCESS_MASK DesiredAccess,
                     IN POBJECT_ATTRIBUTES ObjectAttributes OPTIONAL,
                     IN PLARGE_INTEGER InputMaximumSize,
@@ -318,7 +315,7 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
 
 NTSTATUS
 NTAPI
-MmMapViewOfArm3Section(
+MmMapViewOfVmmSection(
     _In_ PVOID SectionObject,
     _In_ PEPROCESS Process,
     _Outptr_result_bytebuffer_(*ViewSize)
@@ -2515,7 +2512,7 @@ MmpDeleteSection(PVOID ObjectBody)
     /* Check if it's an ARM3, or ReactOS section */
     if (!MiIsRosSectionObject(Section))
     {
-        MiDeleteARM3Section(ObjectBody);
+        MiDeleteVmmSection(ObjectBody);
         return;
     }
 
@@ -3861,15 +3858,6 @@ MmMapViewOfSegment(
     else
         Granularity = PAGE_SIZE;
 
-#ifdef NEWCC
-    if (*Segment->Flags & MM_DATAFILE_SEGMENT)
-    {
-        LARGE_INTEGER FileOffset;
-        FileOffset.QuadPart = ViewOffset;
-        ObReferenceObject(Section);
-        return _MiMapViewOfSegment(AddressSpace, Segment, BaseAddress, ViewSize, Protect, &FileOffset, AllocationType, __FILE__, __LINE__);
-    }
-#endif
     Status = MmCreateMemoryArea(AddressSpace,
                                 MEMORY_AREA_SECTION_VIEW,
                                 BaseAddress,
@@ -4009,16 +3997,6 @@ MmUnmapViewOfSegment(PMMSUPPORT AddressSpace,
 
     Segment = MemoryArea->SectionData.Segment;
 
-#ifdef NEWCC
-    if (*Segment->Flags & MM_DATAFILE_SEGMENT)
-    {
-        MmUnlockAddressSpace(AddressSpace);
-        Status = MmUnmapViewOfCacheSegment(AddressSpace, BaseAddress);
-        MmLockAddressSpace(AddressSpace);
-
-        return Status;
-    }
-#endif
 
     if (MemoryArea->SectionData.WritableUserReference)
     {
@@ -4079,15 +4057,11 @@ MiRosUnmapViewOfSection(
     AddressSpace = &Process->Vm;
 
     if (MemoryArea == NULL ||
-#ifdef NEWCC
-            ((MemoryArea->Type != MEMORY_AREA_SECTION_VIEW) && (MemoryArea->Type != MEMORY_AREA_CACHE)) ||
-#else
             (MemoryArea->Type != MEMORY_AREA_SECTION_VIEW) ||
-#endif
             MemoryArea->DeleteInProgress)
 
     {
-        if (MemoryArea) ASSERT(MemoryArea->Type != MEMORY_AREA_OWNED_BY_ARM3);
+        if (MemoryArea) ASSERT(MemoryArea->Type != MEMORY_AREA_OWNED_BY_VMM);
 
         DPRINT1("Unable to find memory area at address %p.\n", BaseAddress);
         return STATUS_NOT_MAPPED_VIEW;
@@ -4484,7 +4458,7 @@ MmMapViewOfSection(
     {
         DPRINT("Mapping ARM3 section into %s\n", Process->ImageFileName);
         ASSERT(SectionOffset != NULL);
-        return MmMapViewOfArm3Section(SectionObject,
+        return MmMapViewOfVmmSection(SectionObject,
                                       Process,
                                       BaseAddress,
                                       ZeroBits,
@@ -5228,7 +5202,7 @@ MmCreateSection (OUT PVOID  * Section,
     {
         if (!(FileObject) && !(FileHandle))
         {
-            return MmCreateArm3Section(Section,
+            return MmCreateVmmSection(Section,
                                        DesiredAccess,
                                        ObjectAttributes,
                                        MaximumSize,
@@ -5357,23 +5331,10 @@ MmCreateSection (OUT PVOID  * Section,
         }
     }
 
-#ifndef NEWCC
     if (!(AllocationAttributes & SEC_IMAGE))
     {
         Status = MmCreateDataFileSection(SectionObject, DesiredAccess, ObjectAttributes, MaximumSize, SectionPageProtection, AllocationAttributes, FileObject, FileHandle != NULL, HaveFileObject ? NULL : FileHandle);
     }
-#else
-    else
-    {
-        Status = MmCreateCacheSection(SectionObject,
-                                      DesiredAccess,
-                                      ObjectAttributes,
-                                      MaximumSize,
-                                      SectionPageProtection,
-                                      AllocationAttributes,
-                                      FileObject);
-    }
-#endif
 
 Exit:
 

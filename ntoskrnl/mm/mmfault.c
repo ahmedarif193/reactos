@@ -9,12 +9,12 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
-#include <cache/section/newmm.h>
+#include <mm/rosmm.h>
 #define NDEBUG
 #include <debug.h>
 
-#define MODULE_INVOLVED_IN_ARM3
-#include "ARM3/miarm.h"
+#define MODULE_INVOLVED_IN_VMM
+#include <vmm/vmm.h>
 
 extern MM_AVL_TABLE MiRosKernelVadRoot;
 
@@ -198,17 +198,6 @@ MmpAccessFault(KPROCESSOR_MODE Mode,
         case MEMORY_AREA_SECTION_VIEW:
             Status = MmAccessFaultSectionView(Mode, FaultCode, AddressSpace, MemoryArea, (PVOID)Address, TRUE);
             break;
-#ifdef NEWCC
-        case MEMORY_AREA_CACHE:
-            // This code locks for itself to keep from having to break a lock
-            // passed in.
-            if (!AddressSpaceLocked)
-                MmUnlockAddressSpace(AddressSpace);
-            Status = MmAccessFaultCacheSection(Mode, Address, AddressSpaceLocked);
-            if (!AddressSpaceLocked)
-                MmLockAddressSpace(AddressSpace);
-            break;
-#endif
         default:
             Status = STATUS_ACCESS_VIOLATION;
             break;
@@ -290,20 +279,6 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
                                                   (PVOID)Address,
                                                   TRUE);
             break;
-#ifdef NEWCC
-        case MEMORY_AREA_CACHE:
-            // This code locks for itself to keep from having to break a lock
-            // passed in.
-            if (!AddressSpaceLocked)
-                MmUnlockAddressSpace(AddressSpace);
-            Status = MmNotPresentFaultCacheSection(Mode,
-                                                   Address,
-                                                   AddressSpaceLocked,
-                                                   MI_IS_WRITE_ACCESS(FaultCode));
-            if (!AddressSpaceLocked)
-                MmLockAddressSpace(AddressSpace);
-            break;
-#endif
         default:
             Status = STATUS_ACCESS_VIOLATION;
             break;
@@ -335,7 +310,7 @@ MmAccessFaultEx(IN ULONG FaultCode,
 {
     PMMVAD Vad = NULL;
     NTSTATUS Status;
-    BOOLEAN IsArm3Fault = FALSE;
+    BOOLEAN IsVmmFault = FALSE;
     MI_FAULT_WS_STATE FaultWsState;
 
     /* Cute little hack for ROS */
@@ -374,7 +349,7 @@ MmAccessFaultEx(IN ULONG FaultCode,
 
             if ((Vad != NULL) && !MI_IS_ROSMM_VAD(Vad))
             {
-                IsArm3Fault = TRUE;
+                IsVmmFault = TRUE;
             }
 
             MiUnlockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
@@ -387,7 +362,7 @@ MmAccessFaultEx(IN ULONG FaultCode,
 
             if ((Vad != NULL) && !MI_IS_ROSMM_VAD(Vad))
             {
-                IsArm3Fault = TRUE;
+                IsVmmFault = TRUE;
             }
 
             MiUnlockProcessWorkingSetShared(PsGetCurrentProcess(), PsGetCurrentThread());
@@ -395,7 +370,7 @@ MmAccessFaultEx(IN ULONG FaultCode,
     }
 
     /* Is this an ARM3 VAD, or is there no address space yet? */
-    if (IsArm3Fault ||
+    if (IsVmmFault ||
         ((Vad == NULL) &&
          ((ULONG_PTR)Address >= (ULONG_PTR)MmPagedPoolStart) &&
          ((ULONG_PTR)Address < (ULONG_PTR)MmPagedPoolEnd)) ||

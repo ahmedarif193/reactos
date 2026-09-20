@@ -12,7 +12,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#include "ARM3/miarm.h"
+#include <vmm/vmm.h>
 
 
 /* TYPES ********************************************************************/

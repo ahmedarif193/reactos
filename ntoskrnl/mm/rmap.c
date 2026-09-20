@@ -10,7 +10,7 @@
 /* INCLUDES *****************************************************************/
 
 #include <ntoskrnl.h>
-#include <cache/section/newmm.h>
+#include <mm/rosmm.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -288,14 +288,6 @@ GetEntry:
 
         if (Released) return STATUS_SUCCESS;
     }
-#ifdef NEWCC
-    else if (Type == MEMORY_AREA_CACHE)
-    {
-        /* NEWCC does locking itself */
-        MmUnlockAddressSpace(AddressSpace);
-        Status = MmpPageOutPhysicalAddress(Page);
-    }
-#endif
     else
     {
         KeBugCheck(MEMORY_MANAGEMENT);

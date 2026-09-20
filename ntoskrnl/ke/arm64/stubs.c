@@ -9,8 +9,8 @@
 #include <ntoskrnl.h>
 #include <debug.h>
 
-#define MODULE_INVOLVED_IN_ARM3
-#include <mm/ARM3/miarm.h>
+#define MODULE_INVOLVED_IN_VMM
+#include <vmm/vmm.h>
 
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
 

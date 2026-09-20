@@ -156,10 +156,7 @@ MiInitializeKernelVaLayout(
 #endif
 
 #define MEMORY_AREA_SECTION_VIEW            (1)
-#ifdef NEWCC
-#define MEMORY_AREA_CACHE                   (2)
-#endif
-#define MEMORY_AREA_OWNED_BY_ARM3           (15)
+#define MEMORY_AREA_OWNED_BY_VMM           (15)
 #define MEMORY_AREA_STATIC                  (0x80000000)
 
 /* Although Microsoft says this isn't hardcoded anymore,
@@ -599,7 +596,7 @@ typedef struct _MMFREE_POOL_ENTRY
 } MMFREE_POOL_ENTRY, *PMMFREE_POOL_ENTRY;
 
 /* Signature of a freed block */
-#define MM_FREE_POOL_SIGNATURE 'ARM3'
+#define MM_FREE_POOL_SIGNATURE 'VMM '
 
 /* Paged pool information */
 typedef struct _MM_PAGED_POOL_INFO
