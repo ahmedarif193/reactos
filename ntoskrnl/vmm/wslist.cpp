@@ -361,18 +361,6 @@ MiInsertInWorkingSetList(
 _Use_decl_annotations_
 VOID
 NTAPI
-MiRemoveFromWorkingSetList(
-    _Inout_ PMMSUPPORT Vm,
-    _In_ PVOID Address)
-{
-    RemoveFromWsList(Vm->VmWorkingSetList, Address);
-
-    Vm->WorkingSetSize -= PAGE_SIZE;
-}
-
-_Use_decl_annotations_
-VOID
-NTAPI
 MiInitializeWorkingSetList(_Inout_ PMMSUPPORT WorkingSet)
 {
     PMMWSL WsList = WorkingSet->VmWorkingSetList;

@@ -147,18 +147,6 @@ ExpRemovePoolHeadList(IN PLIST_ENTRY ListHead)
     return Entry;
 }
 
-PLIST_ENTRY
-NTAPI
-ExpRemovePoolTailList(IN PLIST_ENTRY ListHead)
-{
-    PLIST_ENTRY Entry, Blink;
-    Entry = ExpDecodePoolLink(ListHead->Blink);
-    Blink = ExpDecodePoolLink(Entry->Blink);
-    ListHead->Blink = ExpEncodePoolLink(Blink);
-    Blink->Flink = ExpEncodePoolLink(ListHead);
-    return Entry;
-}
-
 VOID
 NTAPI
 ExpInsertPoolTailList(IN PLIST_ENTRY ListHead,

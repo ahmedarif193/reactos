@@ -123,14 +123,6 @@ MMPTE MmDecommittedPte = {{0}};
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
-VOID
-NTAPI
-MiFlushTlb(IN PMMPTE PointerPte,
-           IN PVOID Address)
-{
-    UNIMPLEMENTED_DBGBREAK();
-}
-
 BOOLEAN
 NTAPI
 MmCreateProcessAddressSpace(IN ULONG MinWs,
@@ -163,13 +155,6 @@ MmCreateVirtualMapping(IN PEPROCESS Process,
 {
     UNIMPLEMENTED_DBGBREAK();
     return STATUS_SUCCESS;
-}
-
-VOID
-NTAPI
-MmRawDeleteVirtualMapping(IN PVOID Address)
-{
-    UNIMPLEMENTED_DBGBREAK();
 }
 
 VOID
@@ -208,15 +193,6 @@ MmGetPfnForProcess(IN PEPROCESS Process,
 {
     UNIMPLEMENTED_DBGBREAK();
     return 0;
-}
-
-BOOLEAN
-NTAPI
-MmIsDirtyPage(IN PEPROCESS Process,
-              IN PVOID Address)
-{
-    UNIMPLEMENTED_DBGBREAK();
-    return FALSE;
 }
 
 VOID

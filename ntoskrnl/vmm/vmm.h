@@ -2272,30 +2272,6 @@ MmInitializeMemoryLimits(
     IN PBOOLEAN IncludeType
 );
 
-PFN_NUMBER
-NTAPI
-MiPagesInLoaderBlock(
-    IN PLOADER_PARAMETER_BLOCK LoaderBlock,
-    IN PBOOLEAN IncludeType
-);
-
-VOID
-FASTCALL
-MiSyncVmmWithRos(
-    IN PVOID AddressStart,
-    IN PVOID AddressEnd
-);
-
-NTSTATUS
-NTAPI
-MiRosProtectVirtualMemory(
-    IN PEPROCESS Process,
-    IN OUT PVOID *BaseAddress,
-    IN OUT PSIZE_T NumberOfBytesToProtect,
-    IN ULONG NewAccessProtection,
-    OUT PULONG OldAccessProtection OPTIONAL
-);
-
 NTSTATUS
 NTAPI
 MmArmAccessFault(

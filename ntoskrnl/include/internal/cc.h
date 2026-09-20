@@ -363,10 +363,6 @@ VOID
 NTAPI
 CcInitView(VOID);
 
-VOID
-NTAPI
-CcShutdownLazyWriter(VOID);
-
 CODE_SEG("INIT")
 BOOLEAN
 CcInitializeCacheManager(VOID);
