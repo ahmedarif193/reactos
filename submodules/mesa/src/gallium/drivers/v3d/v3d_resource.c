@@ -150,6 +150,30 @@ v3d_resource_bo_alloc(struct v3d_resource *rsc)
         return true;
 }
 
+#ifdef __REACTOS__
+static void
+v3d_resource_transfer_flush_region(struct pipe_context *pctx,
+                                   struct pipe_transfer *ptrans,
+                                   const struct pipe_box *box)
+{
+        struct v3d_resource *rsc = v3d_resource(ptrans->resource);
+
+        if (!(ptrans->usage & PIPE_MAP_WRITE) || !box->width ||
+            !box->height || !box->depth)
+                return;
+
+        /* A VBO can be mapped for its next draw before the previous draw is
+         * submitted. That submission consumes the dirty flag set at map
+         * time, before the caller has written the next range. Re-publish at
+         * flush/unmap so the next submit cleans the new CPU-cached data. */
+        if (v3d_d3dkmt_bo_mark_cpu_dirty(v3d_context(pctx)->fd,
+                                         rsc->bo->handle) != 0) {
+                mesa_loge("Failed to publish mapped BO writes");
+                abort();
+        }
+}
+#endif
+
 static void
 v3d_resource_transfer_unmap(struct pipe_context *pctx,
                             struct pipe_transfer *ptrans)
@@ -181,6 +205,9 @@ v3d_resource_transfer_unmap(struct pipe_context *pctx,
                 free(trans->map);
         }
 
+#ifdef __REACTOS__
+        v3d_resource_transfer_flush_region(pctx, ptrans, &ptrans->box);
+#endif
         pipe_resource_reference(&ptrans->resource, NULL);
         slab_free(&v3d->transfer_pool, ptrans);
 }
@@ -1461,7 +1488,11 @@ static const struct u_transfer_vtbl transfer_vtbl = {
         .resource_destroy         = v3d_resource_destroy,
         .transfer_map             = v3d_resource_transfer_map,
         .transfer_unmap           = v3d_resource_transfer_unmap,
+#ifdef __REACTOS__
+        .transfer_flush_region    = v3d_resource_transfer_flush_region,
+#else
         .transfer_flush_region    = u_default_transfer_flush_region,
+#endif
         .get_internal_format      = v3d_resource_get_internal_format,
         .set_stencil              = v3d_resource_set_stencil,
         .get_stencil              = v3d_resource_get_stencil,

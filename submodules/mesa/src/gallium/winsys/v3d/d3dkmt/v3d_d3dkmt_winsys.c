@@ -1269,6 +1269,28 @@ v3d_d3dkmt_bo_prepare_cpu_access(int fd, uint32_t handle, int write)
    return status;
 }
 
+/* A mapped range can be written after an earlier submission cleared dirty.
+ * Publish those writes without invalidating the CPU cache containing them. */
+int
+v3d_d3dkmt_bo_mark_cpu_dirty(int fd, uint32_t handle)
+{
+   struct v3d_d3dkmt_device *device = v3d_d3dkmt_device_lookup(fd);
+   struct v3d_d3dkmt_bo *bo;
+   int result = -1;
+
+   if (!device)
+      return -1;
+
+   v3d_d3dkmt_lock(device);
+   bo = v3d_d3dkmt_bo_lookup_locked(device, handle);
+   if (bo) {
+      bo->cpu_dirty = true;
+      result = 0;
+   }
+   mtx_unlock(&device->lock);
+   return result;
+}
+
 int
 v3d_d3dkmt_bo_copy_cpu_contents(int fd, uint32_t source_handle,
                                  uint32_t destination_handle, uint32_t size)

@@ -67,6 +67,9 @@ int
 v3d_d3dkmt_bo_prepare_cpu_access(int fd, uint32_t handle, int write);
 
 int
+v3d_d3dkmt_bo_mark_cpu_dirty(int fd, uint32_t handle);
+
+int
 v3d_d3dkmt_bo_copy_cpu_contents(int fd, uint32_t source_handle,
                                  uint32_t destination_handle, uint32_t size);
 
