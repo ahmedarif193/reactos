@@ -20,6 +20,7 @@ list(APPEND SOURCE
     ServiceArgs.c
     ServiceEnv.c
     ServiceNetwork.c
+    TraceGuids.c
     svchlp.c)
 
 list(APPEND PCH_SKIP_SOURCE
