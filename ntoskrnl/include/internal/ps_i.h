@@ -467,7 +467,12 @@ static const INFORMATION_CLASS_INFO PsProcessInfoClass[] =
         ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE
     ),
     /* ProcessPowerThrottlingState */
-    IQS_NONE,
+    IQS_SAME
+    (
+        PROCESS_POWER_THROTTLING_STATE,
+        ULONG,
+        ICIF_QUERY
+    ),
     /* ProcessReserved3Information */
     IQS_NONE,
     /* ProcessWin32kSyscallFilterInformation */

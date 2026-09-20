@@ -67,6 +67,7 @@ extern void func_SetWaitableTimerEx(void);
 extern void func_SystemFirmware(void);
 extern void func_TerminateProcess(void);
 extern void func_ThreadPowerThrottling(void);
+extern void func_ProcessPowerThrottling(void);
 extern void func_TunnelCache(void);
 extern void func_UEFIFirmware(void);
 extern void func_WideCharToMultiByte(void);
@@ -138,6 +139,7 @@ const struct test winetest_testlist[] =
     { "SystemFirmware",              func_SystemFirmware },
     { "TerminateProcess",            func_TerminateProcess },
     { "ThreadPowerThrottling",       func_ThreadPowerThrottling },
+    { "ProcessPowerThrottling",      func_ProcessPowerThrottling },
     { "TunnelCache",                 func_TunnelCache },
     { "UEFIFirmware",                func_UEFIFirmware },
     { "WideCharToMultiByte",         func_WideCharToMultiByte },

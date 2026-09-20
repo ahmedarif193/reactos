@@ -69,6 +69,7 @@ list(APPEND SOURCE
     SystemFirmware.c
     TerminateProcess.c
     ThreadPowerThrottling.c
+    ProcessPowerThrottling.c
     TunnelCache.c
     UEFIFirmware.c
     WideCharToMultiByte.c

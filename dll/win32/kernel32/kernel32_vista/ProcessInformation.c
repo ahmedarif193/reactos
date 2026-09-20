@@ -22,6 +22,10 @@ GetProcessInformation(
 
     switch (ProcessInformationClass)
     {
+        case ProcessPowerThrottling:
+            Status = NtQueryInformationProcess(hProcess, ProcessPowerThrottlingState, ProcessInformation, ProcessInformationSize, NULL);
+            break;
+
         case ProcessMemoryPriority:
             Status = NtQueryInformationProcess(hProcess, ProcessPagePriority, ProcessInformation, ProcessInformationSize, NULL);
             break;
