@@ -430,6 +430,7 @@ Rpi5Vc4DdiAddDevice(
     RtlZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
     DeviceExtension->PhysicalDeviceObject = PhysicalDeviceObject;
     KeInitializeMutex(&DeviceExtension->HvsMutex, 0);
+    KeInitializeMutex(&DeviceExtension->HvsFlipMutex, 0);
     ExInitializeFastMutex(&DeviceExtension->FirmwarePresentMutex);
     ExInitializeFastMutex(&DeviceExtension->VBlankMutex);
     KeInitializeSpinLock(&DeviceExtension->ShadowPresentInterfaceLock);

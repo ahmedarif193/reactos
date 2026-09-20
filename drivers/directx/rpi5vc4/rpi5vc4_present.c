@@ -383,8 +383,7 @@ Rpi5Vc4EnsureFlipRing(
     DeviceExtension->FlipBufPhys =
         MmGetPhysicalAddress(DeviceExtension->FlipBufVa);
 
-    /* Atomic no-wait flips are a single PTR1 write: every buffer must share
-     * the high address byte with the ring base. */
+    /* Keep the contiguous ring inside a single address window. */
     if ((ULONGLONG)(DeviceExtension->FlipBufPhys.QuadPart) >> 32 !=
         (ULONGLONG)(DeviceExtension->FlipBufPhys.QuadPart +
                     (LONGLONG)BufSize * Count - 1) >> 32)
@@ -520,10 +519,9 @@ Rpi5Vc4FlipPresent(
 
     BackPhys.QuadPart = DeviceExtension->FlipBufPhys.QuadPart +
                         (LONGLONG)Back * DeviceExtension->FlipBufSize;
-    /* The ring is allocated inside one 4 GB window. Switching its scanout
-     * address is consequently one atomic PTR1 write which the HVS latches at
-     * frame start; no unreliable PixelValve polling is involved. */
-    if (!Rpi5HvsFlipScanoutEx(DeviceExtension, BackPhys, FALSE))
+    /* Wait for the inactive list to become active before reusing the old
+     * scanout buffer on a later present. */
+    if (!Rpi5HvsFlipScanout(DeviceExtension, BackPhys))
     {
         /* Screen still shows the old buffer, which missed this present:
          * over-mark everything and let the caller run the classic path. */
