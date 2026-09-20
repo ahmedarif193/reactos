@@ -1661,6 +1661,45 @@ NtQueryInformationProcess(
             break;
         }
 
+        case ProcessPowerThrottlingState:
+        {
+            PROCESS_POWER_THROTTLING_STATE Information;
+
+            Length = sizeof(Information);
+            if (ProcessInformationLength != Length)
+            {
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+                break;
+            }
+
+            Status = PspReferenceProcessForLimitedQuery(ProcessHandle, PreviousMode, &Process);
+            if (!NT_SUCCESS(Status))
+                break;
+
+            _SEH2_TRY
+            {
+                RtlCopyMemory(&Information, ProcessInformation, sizeof(Information));
+                if (Information.Version != PROCESS_POWER_THROTTLING_CURRENT_VERSION)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                }
+                else
+                {
+                    /* No process-level power throttling overrides are applied. */
+                    Information.ControlMask = 0;
+                    Information.StateMask = 0;
+                    RtlCopyMemory(ProcessInformation, &Information, sizeof(Information));
+                }
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            ObDereferenceObject(Process);
+            break;
+        }
+
         case ProcessPagePriority:
         {
             PPAGE_PRIORITY_INFORMATION PagePriority = (PPAGE_PRIORITY_INFORMATION)ProcessInformation;
