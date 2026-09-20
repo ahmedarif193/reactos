@@ -32,8 +32,9 @@ MiniportHalt(
 
     ASSERT(Adapter != NULL);
 
-    /* First disable sending / receiving */
-    NICDisableTxRx(Adapter);
+    /* Failed initialization also enters here, possibly before registers are mapped. */
+    if (Adapter->IoBase)
+        NICDisableTxRx(Adapter);
 
     /* Then unregister interrupts */
     NICUnregisterInterrupts(Adapter);
