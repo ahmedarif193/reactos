@@ -74,6 +74,7 @@ list(APPEND SOURCE
     SetScrollInfo.c
     SetScrollRange.c
     SetWindowPlacement.c
+    WindowDisplayAffinity.c
     ShowWindow.c
     SwitchToThisWindow.c
     SystemMenu.c
