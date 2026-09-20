@@ -5349,28 +5349,6 @@ Exit:
 /* This function is not used. It is left for future use, when per-process
  * address space is considered. */
 #if 0
-BOOLEAN
-NTAPI
-MmArePagesResident(
-    _In_opt_ PEPROCESS Process,
-    _In_ PVOID Address,
-    _In_ ULONG Length)
-{
-    PMEMORY_AREA MemoryArea;
-    BOOLEAN Ret = TRUE;
-    PMM_SECTION_SEGMENT Segment;
-    LARGE_INTEGER SegmentOffset, RangeEnd;
-    PMMSUPPORT AddressSpace = Process ? &Process->Vm : MmGetKernelAddressSpace();
-
-    MmLockAddressSpace(AddressSpace);
-
-    MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, Address);
-    if (MemoryArea == NULL)
-    {
-        MmUnlockAddressSpace(AddressSpace);
-        return FALSE;
-    }
-
     /* Only supported in old Mm for now */
     ASSERT(MemoryArea->Type == MEMORY_AREA_SECTION_VIEW);
     /* For file mappings */
@@ -5925,28 +5903,6 @@ MmCheckDirtySegment(
 /* This function is not used. It is left for future use, when per-process
  * address space is considered. */
 #if 0
-NTSTATUS
-NTAPI
-MmMakePagesDirty(
-    _In_opt_ PEPROCESS Process,
-    _In_ PVOID Address,
-    _In_ ULONG Length)
-{
-    PMEMORY_AREA MemoryArea;
-    PMM_SECTION_SEGMENT Segment;
-    LARGE_INTEGER SegmentOffset, RangeEnd;
-    PMMSUPPORT AddressSpace = Process ? &Process->Vm : MmGetKernelAddressSpace();
-
-    MmLockAddressSpace(AddressSpace);
-
-    MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, Address);
-    if (MemoryArea == NULL)
-    {
-        DPRINT1("Unable to find memory area at address %p.\n", Address);
-        MmUnlockAddressSpace(AddressSpace);
-        return STATUS_NOT_MAPPED_VIEW;
-    }
-
     /* Only supported in old Mm for now */
     ASSERT(MemoryArea->Type == MEMORY_AREA_SECTION_VIEW);
     /* For file mappings */

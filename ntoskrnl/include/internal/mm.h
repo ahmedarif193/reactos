@@ -1081,14 +1081,6 @@ MmInsertRmap(
 
 VOID
 NTAPI
-MmDeleteAllRmaps(
-    PFN_NUMBER Page,
-    PVOID Context,
-    VOID (*DeleteMapping)(PVOID Context, struct _EPROCESS *Process, PVOID Address)
-);
-
-VOID
-NTAPI
 MmDeleteRmap(
     PFN_NUMBER Page,
     struct _EPROCESS *Process,
@@ -1389,13 +1381,6 @@ MmSetDirtyBit(PEPROCESS Process, PVOID Address, BOOLEAN Bit);
 #define MmSetCleanPage(__P, __A) MmSetDirtyBit(__P, __A, FALSE)
 #define MmSetDirtyPage(__P, __A) MmSetDirtyBit(__P, __A, TRUE)
 
-VOID
-NTAPI
-MmDeletePageTable(
-    struct _EPROCESS *Process,
-    PVOID Address
-);
-
 PFN_NUMBER
 NTAPI
 MmGetPfnForProcess(
@@ -1608,15 +1593,6 @@ MmNotPresentFaultSectionView(
     BOOLEAN Locked
 );
 
-NTSTATUS
-NTAPI
-MmPageOutSectionView(
-    PMMSUPPORT AddressSpace,
-    PMEMORY_AREA MemoryArea,
-    PVOID Address,
-    ULONG_PTR Entry
-);
-
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI
@@ -1632,10 +1608,6 @@ MmAccessFaultSectionView(
     PVOID Address,
     BOOLEAN Locked
 );
-
-VOID
-NTAPI
-MmFreeSectionSegments(PFILE_OBJECT FileObject);
 
 /* Exported from NT 6.2 onward. We keep it internal. */
 NTSTATUS

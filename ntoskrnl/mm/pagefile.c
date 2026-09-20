@@ -71,11 +71,6 @@ PFN_COUNT MiUsedSwapPages;
 BOOLEAN MmZeroPageFile;
 
 /*
- * Number of pages that have been reserved for swapping but not yet allocated
- */
-static PFN_COUNT MiReservedSwapPages;
-
-/*
  * Ratio between reserved and available swap pages, e.g. setting this to five
  * forces one swap page to be available for every five swap pages that are
  * reserved. Setting this to zero turns off commit checking altogether.
@@ -277,7 +272,6 @@ MmInitPagingFile(VOID)
 
     MiFreeSwapPages = 0;
     MiUsedSwapPages = 0;
-    MiReservedSwapPages = 0;
 
     for (i = 0; i < MAX_PAGING_FILES; i++)
     {

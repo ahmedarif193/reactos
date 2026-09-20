@@ -1084,7 +1084,6 @@ VOID
 MiArm64SyncKernelLeafPteWrite(
     _In_ PMMPTE PointerPte)
 {
-    PMMPTE PteForAddr;
     PVOID VirtualAddress;
     PMMPTE Kseg0Pte;
 

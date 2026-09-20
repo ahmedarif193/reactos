@@ -418,20 +418,3 @@ CcUninitializeCacheMap (
     return NT_SUCCESS(Status);
 }
 
-BOOLEAN
-NTAPI
-CcGetFileSizes (
-    IN PFILE_OBJECT FileObject,
-    IN PCC_FILE_SIZES FileSizes)
-{
-    PROS_SHARED_CACHE_MAP SharedCacheMap;
-
-    SharedCacheMap = FileObject->SectionObjectPointer->SharedCacheMap;
-
-    if (!SharedCacheMap)
-        return FALSE;
-
-    FileSizes->AllocationSize = SharedCacheMap->SectionSize;
-    FileSizes->FileSize = FileSizes->ValidDataLength = SharedCacheMap->FileSize;
-    return TRUE;
-}

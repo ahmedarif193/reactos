@@ -27,7 +27,6 @@ MM_ALLOCATION_REQUEST, *PMM_ALLOCATION_REQUEST;
 
 MM_MEMORY_CONSUMER MiMemoryConsumers[MC_MAXIMUM];
 static ULONG MiMinimumAvailablePages;
-static ULONG MiMinimumPagesPerRun;
 static CLIENT_ID MiBalancerThreadId;
 static HANDLE MiBalancerThreadHandle = NULL;
 static KEVENT MiBalancerEvent;
@@ -47,7 +46,6 @@ MmInitializeBalancer(ULONG NrAvailablePages, ULONG NrSystemPages)
 
     /* Set up targets. */
     MiMinimumAvailablePages = 256;
-    MiMinimumPagesPerRun = 256;
     MiMemoryConsumers[MC_USER].PagesTarget = NrAvailablePages / 2;
 }
 
