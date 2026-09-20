@@ -98,12 +98,45 @@ DwmGpuSceneWindowSameForCapture(const DWM_WIN *Current, const DWM_WIN *Old,
                               OldRects, OldRectCount))
         return TRUE;
 
+    if (Current->AnimFlags != 0 || Old->AnimFlags != 0)
+        return FALSE;
+
+    CurrentKey = *Current;
+    OldKey = *Old;
+    if (Current->DxUpdateId != Old->DxUpdateId)
+    {
+        DWM_GPU_WINDOW_GEOMETRY Owner, Client;
+
+        /* A client publication changes client pixels, not the surrounding
+         * shadow. A capture can intersect that shadow while lying entirely
+         * outside the client. Include a sampling guard and keep comparing
+         * every other field below, so geometry, resource and visual changes
+         * still invalidate the cached backdrop. */
+        if (Current->DxGlobalShare == 0 || Old->DxGlobalShare == 0 ||
+            Old->DxUpdateId == 0 || Current->DxUpdateId <= Old->DxUpdateId ||
+            !DwmGpuWindowGeometry(Current, Space->OriginX, Space->OriginY, &Owner) ||
+            !DwmGpuClientGeometry(Current, &Owner, &Client))
+            return FALSE;
+
+        if (DwmGpuDamageBounds(&Changed, Space->Width, Space->Height,
+                               Client.Left - 1, Client.Top - 1,
+                               Client.Left + Client.Width + 1,
+                               Client.Top + Client.Height + 1) &&
+            (DwmGpuDamageIntersects(&Changed, CurrentInterest) ||
+             DwmGpuDamageIntersects(&Changed, OldInterest)))
+            return FALSE;
+
+        CurrentKey.DxUpdateId = OldKey.DxUpdateId;
+        if (DwmGpuSceneWindowSame(&CurrentKey, &OldKey, CurrentRects, CurrentRectCount,
+                                  OldRects, OldRectCount))
+            return TRUE;
+    }
+
     /* One completed GDI FRONT publication supplies its exact dirty bounds.
      * A lower window can change elsewhere without changing this capture.
      * The previous ID must match the snapshot: otherwise an intervening
      * publication could have touched the capture outside the latest rect. */
-    if (Current->AnimFlags != 0 || Old->AnimFlags != 0 ||
-        Old->BaseUpdateId == 0 ||
+    if (Old->BaseUpdateId == 0 ||
         Current->BaseUpdateId <= Old->BaseUpdateId ||
         Current->BasePreviousUpdateId != Old->BaseUpdateId ||
         Dirty->left < 0 || Dirty->top < 0 ||
@@ -120,8 +153,6 @@ DwmGpuSceneWindowSameForCapture(const DWM_WIN *Current, const DWM_WIN *Old,
          DwmGpuDamageIntersects(&Changed, OldInterest)))
         return FALSE;
 
-    CurrentKey = *Current;
-    OldKey = *Old;
     CurrentKey.BaseUpdateId = OldKey.BaseUpdateId;
     CurrentKey.BasePreviousUpdateId = OldKey.BasePreviousUpdateId;
     CurrentKey.BaseDirtyRect = OldKey.BaseDirtyRect;
