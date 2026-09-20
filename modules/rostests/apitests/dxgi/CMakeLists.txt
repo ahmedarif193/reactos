@@ -4,6 +4,7 @@ add_executable(dxgi_apitest
     texture_dimensions.cpp
     composition.cpp
     completion_event.cpp
+    buffer_copy.cpp
     dwm_render.cpp
     testlist.c)
 

@@ -2146,6 +2146,26 @@ void STDMETHODCALLTYPE NativeContext::CopyResource(ID3D11Resource *dst, ID3D11Re
 void STDMETHODCALLTYPE NativeContext::CopySubresourceRegion(ID3D11Resource *dst, UINT dst_subresource,
         UINT x, UINT y, UINT z, ID3D11Resource *src, UINT src_subresource, const D3D11_BOX *box)
 {
+    if (NativeBuffer *db = GetNativeBuffer(dst, device))
+    {
+        /* A buffer is one subresource addressed in bytes along the box's x axis. */
+        NativeBuffer *sb = GetNativeBuffer(src, device);
+        if (!sb || sb == db || dst_subresource || src_subresource || y || z || db->mapped || sb->mapped
+                || db->desc.Usage == D3D11_USAGE_IMMUTABLE || !device->functions.pfnResourceCopyRegion) return;
+        D3D10_DDI_BOX bytes = {0, 0, 0, static_cast<LONG>(sb->desc.ByteWidth), 1, 1};
+        if (box)
+        {
+            if (box->left >= box->right || box->top >= box->bottom || box->front >= box->back) return;
+            if (box->top || box->bottom != 1 || box->front || box->back != 1 || box->right > sb->desc.ByteWidth) return;
+            bytes.left = static_cast<LONG>(box->left);
+            bytes.right = static_cast<LONG>(box->right);
+        }
+        UINT count = static_cast<UINT>(bytes.right - bytes.left);
+        if (x > db->desc.ByteWidth || count > db->desc.ByteWidth - x) return;
+        NativeLock guard(device);
+        device->functions.pfnResourceCopyRegion(device->driver_device, db->handle, 0, x, 0, 0, sb->handle, 0, &bytes);
+        return;
+    }
     NativeTextureInfo dst_info, src_info;
     NativeTextureInfo *d = GetNativeTexture(dst, device, &dst_info), *s = GetNativeTexture(src, device, &src_info);
     if (!d || !s || dst_subresource >= d->desc.MipLevels * d->desc.ArraySize
