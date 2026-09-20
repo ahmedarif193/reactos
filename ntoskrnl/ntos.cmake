@@ -380,7 +380,7 @@ if(ARCH STREQUAL "i386")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/usercall.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/v86vdm.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/i386/page.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/i386/procsup.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/i386/procsup.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/i386/init.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/i386/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/i386/psldt.c
@@ -410,9 +410,9 @@ elseif(ARCH STREQUAL "amd64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/smpdbg.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/spinlock.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/thrdini.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/amd64/init.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/kvalayout.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/amd64/procsup.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/amd64/init.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/kvalayout.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/amd64/procsup.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/amd64/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/stubs.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/traphandler.c
@@ -482,9 +482,9 @@ elseif(ARCH STREQUAL "arm64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/trapc.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/trapdump.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/usercall.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/kvalayout.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/kvalayout.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/arm64/page.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/arm64/procsup.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/arm64/procsup.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/arm64/init.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/vmm/arm64/maputils.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/arm64/psctx.c
