@@ -329,7 +329,12 @@ NICAllocateIoResources(
                              Adapter->AdapterHandle,
                              Adapter->IoAddress,
                              Adapter->IoLength);
-
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        Adapter->IoBase = NULL;
+        NDIS_DbgPrint(MIN_TRACE, ("Unable to map adapter registers (0x%x)\n", Status));
+        return NDIS_STATUS_RESOURCES;
+    }
 
     NdisMAllocateSharedMemory(Adapter->AdapterHandle,
                               sizeof(E1000_TRANSMIT_DESCRIPTOR) * NUM_TRANSMIT_DESCRIPTORS,
