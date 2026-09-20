@@ -12,6 +12,56 @@
 
 #define FIXME DPRINT1
 
+typedef struct _ETW_CLASSIC_PROVIDER
+{
+    LIST_ENTRY Entry;
+    TRACEHANDLE Handle;
+    GUID ControlGuid;
+    WMIDPREQUEST Callback;
+    PVOID Context;
+    GUID ClassGuids[ANYSIZE_ARRAY];
+} ETW_CLASSIC_PROVIDER;
+
+static RTL_SRWLOCK EtwpClassicLock = RTL_SRWLOCK_INIT;
+static LIST_ENTRY EtwpClassicProviders = { &EtwpClassicProviders, &EtwpClassicProviders };
+static TRACEHANDLE EtwpNextClassicHandle;
+
+static ULONG
+EtwpRegisterClassicProvider(WMIDPREQUEST Callback, PVOID Context, LPCGUID ControlGuid,
+                            ULONG GuidCount, PTRACE_GUID_REGISTRATION TraceGuidReg,
+                            PTRACEHANDLE RegistrationHandle)
+{
+    ETW_CLASSIC_PROVIDER *Provider;
+    ULONG i;
+
+    if (!Callback || !ControlGuid || !RegistrationHandle || (GuidCount && !TraceGuidReg))
+        return ERROR_INVALID_PARAMETER;
+    for (i = 0; i < GuidCount; ++i)
+        if (!TraceGuidReg[i].Guid) return ERROR_INVALID_PARAMETER;
+
+    if (GuidCount > (MAXULONG_PTR - FIELD_OFFSET(ETW_CLASSIC_PROVIDER, ClassGuids)) / sizeof(GUID))
+        return ERROR_NOT_ENOUGH_MEMORY;
+    Provider = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY,
+                              FIELD_OFFSET(ETW_CLASSIC_PROVIDER, ClassGuids) + (SIZE_T)GuidCount * sizeof(GUID));
+    if (!Provider) return ERROR_NOT_ENOUGH_MEMORY;
+    Provider->ControlGuid = *ControlGuid;
+    Provider->Callback = Callback;
+    Provider->Context = Context;
+    for (i = 0; i < GuidCount; ++i)
+        Provider->ClassGuids[i] = *TraceGuidReg[i].Guid;
+
+    RtlAcquireSRWLockExclusive(&EtwpClassicLock);
+    Provider->Handle = ++EtwpNextClassicHandle;
+    InsertTailList(&EtwpClassicProviders, &Provider->Entry);
+    RtlReleaseSRWLockExclusive(&EtwpClassicLock);
+
+    for (i = 0; i < GuidCount; ++i)
+        TraceGuidReg[i].RegHandle = &Provider->ClassGuids[i];
+    *RegistrationHandle = Provider->Handle;
+    /* No trace controller is active, so no enable callback is delivered. */
+    return ERROR_SUCCESS;
+}
+
 /*
  * @unimplemented
  */
@@ -68,8 +118,8 @@ EtwGetTraceEnableFlags(
     TRACEHANDLE TraceHandle
 )
 {
-    FIXME("EtwGetTraceEnableFlags stub()\n");
-    return 0xFF;
+    /* There are currently no enabled trace sessions. */
+    return 0;
 }
 
 UCHAR
@@ -78,8 +128,7 @@ EtwGetTraceEnableLevel(
     TRACEHANDLE TraceHandle
 )
 {
-    FIXME("EtwGetTraceEnableLevel stub()\n");
-    return 0xFF;
+    return 0;
 }
 
 ULONG
@@ -88,8 +137,23 @@ EtwUnregisterTraceGuids(
     TRACEHANDLE RegistrationHandle
 )
 {
-    FIXME("EtwUnregisterTraceGuids stub()\n");
-    return ERROR_SUCCESS;
+    PLIST_ENTRY Entry;
+    ETW_CLASSIC_PROVIDER *Provider;
+
+    RtlAcquireSRWLockExclusive(&EtwpClassicLock);
+    for (Entry = EtwpClassicProviders.Flink; Entry != &EtwpClassicProviders; Entry = Entry->Flink)
+    {
+        Provider = CONTAINING_RECORD(Entry, ETW_CLASSIC_PROVIDER, Entry);
+        if (Provider->Handle == RegistrationHandle)
+        {
+            RemoveEntryList(Entry);
+            RtlReleaseSRWLockExclusive(&EtwpClassicLock);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Provider);
+            return ERROR_SUCCESS;
+        }
+    }
+    RtlReleaseSRWLockExclusive(&EtwpClassicLock);
+    return ERROR_INVALID_HANDLE;
 }
 
 ULONG
@@ -105,8 +169,8 @@ EtwRegisterTraceGuidsA(
     PTRACEHANDLE RegistrationHandle
 )
 {
-    FIXME("EtwRegisterTraceGuidsA stub()\n");
-    return ERROR_SUCCESS;
+    return EtwpRegisterClassicProvider(RequestAddress, RequestContext, ControlGuid,
+                                       GuidCount, TraceGuidReg, RegistrationHandle);
 }
 
 ULONG
@@ -122,8 +186,8 @@ EtwRegisterTraceGuidsW(
     PTRACEHANDLE RegistrationHandle
 )
 {
-    FIXME("EtwRegisterTraceGuidsW stub()\n");
-    return ERROR_SUCCESS;
+    return EtwpRegisterClassicProvider(RequestAddress, RequestContext, ControlGuid,
+                                       GuidCount, TraceGuidReg, RegistrationHandle);
 }
 
 ULONG WINAPI EtwStartTraceW( PTRACEHANDLE pSessionHandle, LPCWSTR SessionName, PEVENT_TRACE_PROPERTIES Properties )
