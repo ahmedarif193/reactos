@@ -150,6 +150,41 @@ MmInitializeHandBuiltProcess2(
     return STATUS_SUCCESS;
 }
 
+static
+VOID
+MiSelectBottomUpBase(
+    _In_ PEPROCESS Process,
+    _In_ PMI_SECTION_OBJECT Section)
+{
+    PMI_ADDRESS_SPACE Space = MiSpaceOfProcess(Process);
+    PMI_CONTROL_AREA Control = Section->Control;
+    ULONG DllCharacteristics = Control->ImageInformation.DllCharacteristics;
+    ULONG64 Floor = Space->LowestVa;
+    ULONG64 Slots = MI_NT_BOTTOM_UP_SLOTS;
+    ULONG Seed;
+
+    if (!Control->Image || !(DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE))
+        return;
+
+    if (Control->Image64 && (DllCharacteristics & IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA))
+    {
+        Floor = MI_NT_HIGH_ENTROPY_FLOOR;
+        Slots = (MI_NT_HIGH_ENTROPY_LIMIT - MI_NT_HIGH_ENTROPY_FLOOR) / MI_ALLOCATION_GRANULARITY;
+    }
+
+    if (Floor < Space->LowestVa || Floor + Slots * MI_ALLOCATION_GRANULARITY > Space->HighestVa)
+        return;
+
+    Seed = KeQueryPerformanceCounter(NULL).LowPart ^ (ULONG)KeQueryInterruptTime() ^ (ULONG)(ULONG_PTR)Process;
+    Space->BottomUpVa = Floor + (RtlRandomEx(&Seed) % Slots) * MI_ALLOCATION_GRANULARITY;
+
+    if (Control->Image64 && MI_NT_TOP_DOWN_CEILING <= Space->HighestVa)
+    {
+        Space->TopDownVa = MI_NT_TOP_DOWN_CEILING -
+                           (RtlRandomEx(&Seed) % MI_NT_BOTTOM_UP_SLOTS) * MI_ALLOCATION_GRANULARITY;
+    }
+}
+
 NTSTATUS
 NTAPI
 MmInitializeProcessAddressSpace(
@@ -200,6 +235,8 @@ MmInitializeProcessAddressSpace(
                 goto CloneDone;
         }
         MiCleanAddressSpace(&Target->Space);
+        Target->Space.BottomUpVa = Source->Space.BottomUpVa;
+        Target->Space.TopDownVa = Source->Space.TopDownVa;
         Status = MiCloneAddressSpace(&Source->Space, &Target->Space);
         if (NT_SUCCESS(Status))
         {
@@ -273,6 +310,7 @@ CloneDone:
 
     if (NT_SUCCESS(Status))
     {
+        MiSelectBottomUpBase(Process, Section);
         Status = MmMapViewOfSection(Section, Process, &ImageBase, 0, 0, NULL, &ViewSize, ViewShare, MEM_COMMIT,
                                     PAGE_READWRITE);
         Process->SectionBaseAddress = ImageBase;
@@ -336,8 +374,7 @@ MiCreatePebOrTeb(
     do
     {
         Status = MiAllocateVirtualMemoryEx(MiSpaceOfProcess(Process), &Address, &RegionSize,
-                                           MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_TOP_DOWN, MI_PROT_READWRITE,
-                                           HighestAddress);
+                                           MI_MEM_RESERVE | MI_MEM_COMMIT, MI_PROT_READWRITE, HighestAddress);
     } while (NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
 
     *Base = (ULONG_PTR)Address;
@@ -364,7 +401,7 @@ MmCreatePeb(
     KeAttachProcess(&Process->Pcb);
 
     Status = MmMapViewOfSection(ExpNlsSectionPointer, Process, &TableBase, 0, 0, &SectionOffset, &ViewSize,
-                                ViewShare, MEM_TOP_DOWN, PAGE_READONLY);
+                                ViewShare, 0, PAGE_READONLY);
     if (NT_SUCCESS(Status))
         Status = MiCreatePebOrTeb(Process, sizeof(PEB), (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS, (PULONG_PTR)&Peb);
 
