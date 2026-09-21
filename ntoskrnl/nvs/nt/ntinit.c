@@ -303,6 +303,26 @@ MiInitializePhase0(
     if (!NT_SUCCESS(Status))
         KeBugCheckEx(MEMORY_MANAGEMENT, 0x50524F43, (ULONG_PTR)Status, 0, 0);
 
+    {
+        MI_FRAME_NUMBER SharedFrame = (MI_FRAME_NUMBER)(SharedPhysical >> PAGE_SHIFT);
+        ULONG64 SharedAlias = MiReserveSystemPtes(&MiSystem, 1);
+
+        if (SharedAlias == 0 ||
+            !NT_SUCCESS(MiSystemMapFrames(&MiSystem, SharedAlias, &SharedFrame, 1, MI_PROT_READWRITE, 0, FALSE)))
+        {
+            KeBugCheckEx(MEMORY_MANAGEMENT, 0x4B555341, SharedAlias, 0, 0);
+        }
+
+        MmWriteableSharedUserData = (PKUSER_SHARED_DATA)(ULONG_PTR)SharedAlias;
+
+        if (MiSystem.Arch->SharedUserDataReadOnly)
+        {
+            Status = MiSystemProtect(&MiSystem, (ULONG64)KI_USER_SHARED_DATA, 1, MI_PROT_READONLY);
+            if (!NT_SUCCESS(Status))
+                KeBugCheckEx(MEMORY_MANAGEMENT, 0x4B555350, (ULONG_PTR)Status, 0, 0);
+        }
+    }
+
     MmWriteableSharedUserData->LargePageMinimum = MiSystem.Arch->SupportsLargePages
         ? (ULONG)MiSystem.Arch->LargePageSize : 0;
 

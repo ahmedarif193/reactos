@@ -46,7 +46,8 @@ static const MI_ARCH_DESCRIPTOR MiArchDescriptor =
     TRUE,
     NULL,
     0,
-    0xFFFF808000000000ULL
+    0xFFFF808000000000ULL,
+    TRUE
 };
 
 const MI_ARCH_DESCRIPTOR *

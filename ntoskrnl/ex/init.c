@@ -1191,8 +1191,8 @@ ExpInitializeExecutive(IN ULONG Cpu,
 
     /* Get the string from KUSER_SHARED_DATA's buffer */
     RtlInitEmptyUnicodeString(&NtSystemRoot,
-                              SharedUserData->NtSystemRoot,
-                              sizeof(SharedUserData->NtSystemRoot));
+                              MmWriteableSharedUserData->NtSystemRoot,
+                              sizeof(MmWriteableSharedUserData->NtSystemRoot));
     /* Now fill it in */
     Status = RtlAnsiStringToUnicodeString(&NtSystemRoot, &AnsiPath, FALSE);
     if (!NT_SUCCESS(Status)) KeBugCheck(SESSION3_INITIALIZATION_FAILED);
