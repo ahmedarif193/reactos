@@ -1714,6 +1714,18 @@ NtUnmapViewOfSection(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    if (MI_PROCESS_OF(Process) != NULL)
+    {
+        ULONG64 Start, End;
+
+        MiVadRangeForAddress(MiSpaceOfProcess(Process), (ULONG64)(ULONG_PTR)BaseAddress, &Start, &End);
+        if (MiSecureRangeConflict(Process, Start, End, TRUE, 0))
+        {
+            ObDereferenceObject(Process);
+            return STATUS_UNABLE_TO_FREE_VM;
+        }
+    }
+
     Status = MmUnmapViewOfSection(Process, BaseAddress);
     ObDereferenceObject(Process);
     return Status;

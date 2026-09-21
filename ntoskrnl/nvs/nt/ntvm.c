@@ -156,6 +156,22 @@ MiReturnRegion(
     return Status;
 }
 
+VOID
+MiVadRangeForAddress(
+    _In_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 Address,
+    _Out_ PULONG64 Start,
+    _Out_ PULONG64 End)
+{
+    PMI_VAD Vad;
+
+    MI_RW_ACQUIRE_SHARED(&Space->Lock);
+    Vad = MiVadLocate(Space, Address);
+    *Start = (Vad != NULL) ? (Vad->Node.StartingVpn << PAGE_SHIFT) : (Address & ~((ULONG64)PAGE_SIZE - 1));
+    *End = (Vad != NULL) ? ((Vad->Node.EndingVpn + 1) << PAGE_SHIFT) : *Start + PAGE_SIZE;
+    MI_RW_RELEASE_SHARED(&Space->Lock);
+}
+
 BOOLEAN
 MiDynamicCodeBlocked(
     _In_ PEPROCESS Process)
@@ -370,7 +386,7 @@ NtFreeVirtualMemory(
     _In_ ULONG FreeType)
 {
     MI_PROCESS_REFERENCE Target;
-    ULONG64 Base, Size;
+    ULONG64 Base, Size, VadStart;
     PVOID BaseAddress;
     SIZE_T RegionSize;
     NTSTATUS Status;
@@ -393,6 +409,18 @@ NtFreeVirtualMemory(
     Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_OPERATION, &Target);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    Base = (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress);
+    if (RegionSize == 0)
+        MiVadRangeForAddress(MiSpaceOfProcess(Target.Process), Base, &VadStart, &Size);
+    else
+        Size = ((ULONG64)(ULONG_PTR)BaseAddress + RegionSize + PAGE_SIZE - 1) & ~((ULONG64)PAGE_SIZE - 1);
+
+    if (MiSecureRangeConflict(Target.Process, Base, Size, TRUE, 0))
+    {
+        MiReleaseTargetProcess(&Target);
+        return (FreeType == MEM_RELEASE) ? STATUS_UNABLE_TO_FREE_VM : STATUS_UNABLE_TO_DECOMMIT_VM;
+    }
 
     Base = (ULONG64)(ULONG_PTR)BaseAddress;
     Size = RegionSize;
@@ -497,6 +525,15 @@ NtProtectVirtualMemory(
     Status = MiReferenceTargetProcess(ProcessHandle, PROCESS_VM_OPERATION, &Target);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    if (MiSecureRangeConflict(Target.Process, (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress),
+                              ((ULONG64)(ULONG_PTR)BaseAddress + RegionSize + PAGE_SIZE - 1) &
+                                  ~((ULONG64)PAGE_SIZE - 1),
+                              FALSE, Protection))
+    {
+        MiReleaseTargetProcess(&Target);
+        return STATUS_INVALID_PAGE_PROTECTION;
+    }
 
     Status = MiProtectVirtualMemoryNt(Target.Process, &BaseAddress, &RegionSize, NewAccessProtection,
                                       &OldProtection,

@@ -637,6 +637,111 @@ MmMapMemoryDumpMdl(
         (VOID)MmMapLockedPagesSpecifyCache(Mdl, KernelMode, MmCached, NULL, FALSE, HighPagePriority);
 }
 
+typedef struct _MI_SECURE_RANGE
+{
+    LIST_ENTRY Link;
+    PEPROCESS Process;
+    ULONG64 Start;
+    ULONG64 End;
+    ULONG Mode;
+} MI_SECURE_RANGE, *PMI_SECURE_RANGE;
+
+static LIST_ENTRY MiSecureRanges = { &MiSecureRanges, &MiSecureRanges };
+static KSPIN_LOCK MiSecureRangeLock;
+
+BOOLEAN
+MiSecureRangeConflict(
+    _In_ PEPROCESS Process,
+    _In_ ULONG64 Start,
+    _In_ ULONG64 End,
+    _In_ BOOLEAN Release,
+    _In_ ULONG NewProtection)
+{
+    BOOLEAN Conflict = FALSE;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    if (IsListEmpty(&MiSecureRanges))
+        return FALSE;
+
+    KeAcquireSpinLock(&MiSecureRangeLock, &OldIrql);
+
+    for (Entry = MiSecureRanges.Flink; Entry != &MiSecureRanges && !Conflict; Entry = Entry->Flink)
+    {
+        PMI_SECURE_RANGE Range = CONTAINING_RECORD(Entry, MI_SECURE_RANGE, Link);
+
+        if (Range->Process != Process || End <= Range->Start || Start >= Range->End)
+            continue;
+
+        if (Release || (NewProtection & MI_PROT_GUARD))
+            Conflict = TRUE;
+        else if (Range->Mode == PAGE_READWRITE)
+            Conflict = (BOOLEAN)(!MI_PROT_IS_WRITABLE(NewProtection) && !MI_PROT_IS_COPY(NewProtection));
+        else
+            Conflict = (BOOLEAN)!MI_PROT_IS_READABLE(NewProtection);
+    }
+
+    KeReleaseSpinLock(&MiSecureRangeLock, OldIrql);
+    return Conflict;
+}
+
+VOID
+MiSecureRangePurgeProcess(
+    _In_ PEPROCESS Process)
+{
+    LIST_ENTRY Purged;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    if (IsListEmpty(&MiSecureRanges))
+        return;
+
+    InitializeListHead(&Purged);
+    KeAcquireSpinLock(&MiSecureRangeLock, &OldIrql);
+
+    for (Entry = MiSecureRanges.Flink; Entry != &MiSecureRanges;)
+    {
+        PMI_SECURE_RANGE Range = CONTAINING_RECORD(Entry, MI_SECURE_RANGE, Link);
+
+        Entry = Entry->Flink;
+        if (Range->Process == Process)
+        {
+            RemoveEntryList(&Range->Link);
+            InsertTailList(&Purged, &Range->Link);
+        }
+    }
+
+    KeReleaseSpinLock(&MiSecureRangeLock, OldIrql);
+
+    while (!IsListEmpty(&Purged))
+        ExFreePoolWithTag(CONTAINING_RECORD(RemoveHeadList(&Purged), MI_SECURE_RANGE, Link), 'eSmM');
+}
+
+static
+BOOLEAN
+MiSecureRangeRemove(
+    _In_ PMI_SECURE_RANGE Target)
+{
+    BOOLEAN Found = FALSE;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&MiSecureRangeLock, &OldIrql);
+
+    for (Entry = MiSecureRanges.Flink; Entry != &MiSecureRanges; Entry = Entry->Flink)
+    {
+        if (Entry == &Target->Link)
+        {
+            RemoveEntryList(Entry);
+            Found = TRUE;
+            break;
+        }
+    }
+
+    KeReleaseSpinLock(&MiSecureRangeLock, OldIrql);
+    return Found;
+}
+
 HANDLE
 NTAPI
 MmSecureVirtualMemory(
@@ -647,9 +752,24 @@ MmSecureVirtualMemory(
     PMI_ADDRESS_SPACE Space = MiSpaceOfProcess(PsGetCurrentProcess());
     ULONG64 Va = (ULONG64)(ULONG_PTR)PAGE_ALIGN(Address);
     ULONG64 End = (ULONG64)(ULONG_PTR)Address + Length;
+    PMI_SECURE_RANGE Range;
+    KIRQL OldIrql;
 
-    if (Length == 0 || MI_IS_SYSTEM_VA(Address) || End < Va)
+    if (Length == 0 || MI_IS_SYSTEM_VA(Address) || End < Va || (Mode != PAGE_READONLY && Mode != PAGE_READWRITE))
         return NULL;
+
+    Range = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Range), 'eSmM');
+    if (Range == NULL)
+        return NULL;
+
+    Range->Process = PsGetCurrentProcess();
+    Range->Start = Va;
+    Range->End = (End + PAGE_SIZE - 1) & ~((ULONG64)PAGE_SIZE - 1);
+    Range->Mode = Mode;
+
+    KeAcquireSpinLock(&MiSecureRangeLock, &OldIrql);
+    InsertTailList(&MiSecureRanges, &Range->Link);
+    KeReleaseSpinLock(&MiSecureRangeLock, OldIrql);
 
     while (Va < End)
     {
@@ -659,13 +779,15 @@ MmSecureVirtualMemory(
             !MI_PROT_IS_ACCESSIBLE(Info.Protect) ||
             (Mode == PAGE_READWRITE && !MI_PROT_IS_WRITABLE(Info.Protect) && !MI_PROT_IS_COPY(Info.Protect)))
         {
+            MiSecureRangeRemove(Range);
+            ExFreePoolWithTag(Range, 'eSmM');
             return NULL;
         }
 
         Va = Info.BaseAddress + Info.RegionSize;
     }
 
-    return (HANDLE)Address;
+    return (HANDLE)Range;
 }
 
 VOID
@@ -673,5 +795,8 @@ NTAPI
 MmUnsecureVirtualMemory(
     _In_ HANDLE SecureMem)
 {
-    UNREFERENCED_PARAMETER(SecureMem);
+    PMI_SECURE_RANGE Range = (PMI_SECURE_RANGE)SecureMem;
+
+    if (Range != NULL && MiSecureRangeRemove(Range))
+        ExFreePoolWithTag(Range, 'eSmM');
 }
