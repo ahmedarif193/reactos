@@ -182,6 +182,16 @@ IopWriteIoStatusBlock(PIO_STATUS_BLOCK Destination,
     ((PEXTENDED_DRIVER_EXTENSION)                       \
      ((DriverObject)->DriverExtension))
 
+VOID
+NTAPI
+IopAcquirePnpUnloadBarrier(
+    _In_ PDRIVER_OBJECT DriverObject);
+
+VOID
+NTAPI
+IopReleasePnpUnloadBarrier(
+    _In_ PDRIVER_OBJECT DriverObject);
+
 /*
  * VOID
  * IopDeviceNodeSetFlag(
