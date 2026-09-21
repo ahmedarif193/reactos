@@ -215,6 +215,22 @@ NTAPI
 MmGetVirtualForPhysical(
     _In_ PHYSICAL_ADDRESS PhysicalAddress)
 {
+    ULONG64 Frame = (ULONG64)PhysicalAddress.QuadPart >> PAGE_SHIFT;
+
+    if (Frame < MiSystem.Pfn.FrameCount)
+    {
+        PMI_PFN Entry = &MiSystem.Pfn.Pfn[Frame];
+        ULONG64 Slot = Entry->PteAddress;
+        ULONG64 Va, Mapped;
+
+        if (Slot != 0 && !(MI_PFN_FLAGS(Entry) & (MI_PFN_FLAG_PROTOTYPE | MI_PFN_FLAG_PAGE_TABLE)) &&
+            MiPtVirtualAddressFromSlot(&MiSystem.SystemSpace, Slot, &Va) &&
+            MiPtTranslate(&MiSystem.SystemSpace, Va, &Mapped, NULL) && (Mapped >> PAGE_SHIFT) == Frame)
+        {
+            return (PVOID)(ULONG_PTR)(Va + BYTE_OFFSET(PhysicalAddress.LowPart));
+        }
+    }
+
     return MiArchMapFrame((ULONG64)PhysicalAddress.QuadPart >> PAGE_SHIFT) == NULL
                ? NULL
                : (PVOID)((PUCHAR)MiArchMapFrame((ULONG64)PhysicalAddress.QuadPart >> PAGE_SHIFT) +

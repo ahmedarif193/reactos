@@ -174,6 +174,44 @@ MiPtSlotAddress(
     return ((ULONG64)TableFrame << PAGE_SHIFT) + ((ULONG_PTR)Slot & (PAGE_SIZE - 1));
 }
 
+BOOLEAN
+MiPtVirtualAddressFromSlot(
+    _In_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 SlotAddress,
+    _Out_ PULONG64 VirtualAddress)
+{
+    const MI_ARCH_DESCRIPTOR *Arch = Space->System->Arch;
+    PMI_PFN_DATABASE Db = &Space->System->Pfn;
+    ULONG64 Va = 0;
+    ULONG Level;
+
+    for (Level = 0; Level < Arch->PagingLevels; Level++)
+    {
+        ULONG64 Frame = SlotAddress >> Arch->PageShift;
+
+        Va |= ((SlotAddress & (Arch->PageSize - 1)) / Arch->PteBytes) << Arch->Level[Level].Shift;
+
+        if (Frame == Space->RootFrame)
+        {
+            if (Level != (ULONG)Arch->PagingLevels - 1)
+                return FALSE;
+
+            if (Space->IsSystem)
+                Va |= ~((1ULL << Arch->VirtualAddressBits) - 1);
+
+            *VirtualAddress = Va;
+            return TRUE;
+        }
+
+        if (Frame >= Db->FrameCount || !(MI_PFN_FLAGS(&Db->Pfn[Frame]) & MI_PFN_FLAG_PAGE_TABLE))
+            return FALSE;
+
+        SlotAddress = Db->Pfn[Frame].PteAddress;
+    }
+
+    return FALSE;
+}
+
 ULONG64
 MiPtNextTableBoundary(
     _In_ PMI_ADDRESS_SPACE Space,
