@@ -825,6 +825,8 @@ VOID CywReleaseRxBuffer(_In_ PCYW_ADAPTER Adapter, _In_ PCYW_RX_BUF RxBuffer);
 BOOLEAN CywQueueWorkItem(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_IO_WORKITEM_ROUTINE Routine, _In_opt_ PVOID Context);
 VOID CywCompleteWorkItem(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_HANDLE WorkItem);
 NTSTATUS CywStartBusThread(_In_ PCYW_ADAPTER Adapter);
+NTSTATUS CywSdioFifo(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Write,
+                    _Inout_updates_bytes_(Length) PUCHAR Buffer, _In_ ULONG Length);
 VOID CywStopBusThread(_In_ PCYW_ADAPTER Adapter);
 VOID CywDrainTxQueue(_In_ PCYW_ADAPTER Adapter);
 ULONG CywBuildBssList(_In_ PCYW_ADAPTER Adapter, _Out_ PUCHAR Buffer, _In_ ULONG BufferLength, _Out_ PULONG BytesNeeded);

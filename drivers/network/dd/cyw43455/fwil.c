@@ -25,8 +25,6 @@
 #define CYW_RXBOUND             50
 #define CYW_RX_POLL_FALLBACK    (-100000LL) /* 10 ms; interrupts are primary */
 
-#define SDIO_F2_FIFO            0x8000
-
 static
 VOID
 CywWriteSdpcmHeader(
@@ -56,47 +54,6 @@ CywWriteSdpcmHeader(
     }
     Sw[1] = Channel;
     Sw[3] = (UCHAR)HdrLen;
-}
-
-/* Move Length bytes to/from the F2 FIFO as whole blocks plus a ULONG-aligned
- * byte remainder. Length is expected block-or-ULONG sized by the caller. */
-static
-NTSTATUS
-CywSdpcmF2Fifo(
-    _In_ PCYW_ADAPTER Adapter,
-    _In_ BOOLEAN Write,
-    _In_ PUCHAR Buffer,
-    _In_ ULONG Length)
-{
-    ULONG Blocks = Length / CYW_F2_BLOCKSIZE;
-    ULONG Done = 0;
-    NTSTATUS Status = STATUS_SUCCESS;
-
-    if (Adapter == NULL || Buffer == NULL || Length == 0)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (Blocks > 0)
-    {
-        ULONG BlockBytes = Blocks * CYW_F2_BLOCKSIZE;
-        Status = Write
-            ? CywSdioWriteBlocks(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                 Buffer, BlockBytes, CYW_F2_BLOCKSIZE)
-            : CywSdioReadBlocks(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                Buffer, BlockBytes, CYW_F2_BLOCKSIZE);
-        Done = BlockBytes;
-    }
-    if (NT_SUCCESS(Status) && Done < Length)
-    {
-        ULONG Rest = ALIGN_UP(Length - Done, ULONG);
-        Status = Write
-            ? CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                Buffer + Done, Rest)
-            : CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                               Buffer + Done, Rest);
-    }
-    return Status;
 }
 
 static
@@ -131,7 +88,7 @@ CywSdpcmSendCtl(
 
     KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
     Frame[SDPCM_HEADER_LEN - 8] = Adapter->TxSeq;
-    Status = CywSdpcmF2Fifo(Adapter, TRUE, Frame, Padded);
+    Status = CywSdioFifo(Adapter, TRUE, Frame, Padded);
     if (NT_SUCCESS(Status))
     {
         Adapter->TxSeq++;
@@ -204,7 +161,7 @@ CywSdpcmSendData(
     RtlCopyMemory(Frame + SDPCM_HEADER_LEN + BCDC_HEADER_LEN, Eth, EthLen);
 
     Frame[SDPCM_HEADER_LEN - 8] = Adapter->TxSeq;
-    Status = CywSdpcmF2Fifo(Adapter, TRUE, Frame, Padded);
+    Status = CywSdioFifo(Adapter, TRUE, Frame, Padded);
     if (NT_SUCCESS(Status))
     {
         Adapter->TxSeq = (UCHAR)(Adapter->TxSeq + 1);
@@ -271,7 +228,7 @@ CywSdpcmSendNb(
     Frame[SDPCM_HEADER_LEN] = (UCHAR)(BCDC_PROTO_VER << 4);
     Frame[SDPCM_HEADER_LEN - 8] = Adapter->TxSeq;
 
-    Status = CywSdpcmF2Fifo(Adapter, TRUE, Frame, TxPadded);
+    Status = CywSdioFifo(Adapter, TRUE, Frame, TxPadded);
     if (NT_SUCCESS(Status))
     {
         Adapter->TxSeq = (UCHAR)(Adapter->TxSeq + 1);
@@ -310,8 +267,7 @@ CywSdpcmRecvCtl(
 
     for (Retry = 0; Retry < 1000; Retry++)
     {
-        Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                  Frame, SDPCM_HEADER_LEN);
+        Status = CywSdioFifo(Adapter, FALSE, Frame, SDPCM_HEADER_LEN);
         if (NT_SUCCESS(Status))
         {
             FrameLen = ReadUnalignedU16((PUSHORT)Frame);
@@ -327,9 +283,9 @@ CywSdpcmRecvCtl(
                     UCHAR Channel = Frame[SDPCM_CHANNEL_OFFSET] & 0x0F;
                     if (FrameLen > SDPCM_HEADER_LEN)
                     {
-                        Status = CywSdpcmF2Fifo(Adapter, FALSE,
-                                                Frame + SDPCM_HEADER_LEN,
-                                                ALIGN_UP(FrameLen - SDPCM_HEADER_LEN, ULONG));
+                        Status = CywSdioFifo(Adapter, FALSE,
+                                             Frame + SDPCM_HEADER_LEN,
+                                             ALIGN_UP(FrameLen - SDPCM_HEADER_LEN, ULONG));
                         if (!NT_SUCCESS(Status))
                         {
                             Delay.QuadPart = -10000LL;
@@ -1938,7 +1894,7 @@ CywBusThread(
                 ReadAhead = FALSE;
             }
 
-            Status = CywSdpcmF2Fifo(Adapter, FALSE, Frame, FirstRead);
+            Status = CywSdioFifo(Adapter, FALSE, Frame, FirstRead);
             if (!NT_SUCCESS(Status))
             {
                 NextLen = 0;
@@ -2002,7 +1958,7 @@ CywBusThread(
 
             if (FrameLen > FirstRead)
             {
-                Status = CywSdpcmF2Fifo(Adapter, FALSE, Frame + FirstRead, FrameLen - FirstRead);
+                Status = CywSdioFifo(Adapter, FALSE, Frame + FirstRead, FrameLen - FirstRead);
                 if (!NT_SUCCESS(Status))
                 {
                     NextLen = 0;
