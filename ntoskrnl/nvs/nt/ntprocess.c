@@ -293,6 +293,7 @@ MmCleanProcessAddressSpace(
         return;
 
     MiProcessQueryCounters(Native, &(MI_PROCESS_COUNTERS){0});
+    MiSecureRangePurgeProcess(Process);
     MiCleanAddressSpace(&Native->Space);
     Process->Vm.WorkingSetSize = 0;
     Process->VirtualSize = 0;
