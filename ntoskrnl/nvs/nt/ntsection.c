@@ -865,7 +865,7 @@ MiMapPhysicalView(
     for (i = 0; i < Count; i++)
         Frames[i] = (MI_FRAME_NUMBER)(FirstFrame + i);
 
-    Status = MiMapFramesUser(Space, Frames, Count, Protection & ~MI_PROT_NOCACHE, LeafFlags, &Base);
+    Status = MiMapFramesUser(Space, Frames, Count, Protection & ~MI_PROT_NOCACHE, LeafFlags, FALSE, &Base);
     ExFreePoolWithTag(Frames, 'hPmM');
 
     if (!NT_SUCCESS(Status))
@@ -1082,7 +1082,7 @@ MmUnmapViewOfSection(
 
     Status = MiUnmapView(MiSpaceOfProcess(Process), (ULONG64)(ULONG_PTR)BaseAddress);
     if (Status == STATUS_NOT_MAPPED_VIEW)
-        Status = MiUnmapFramesUser(MiSpaceOfProcess(Process), (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress));
+        Status = MiUnmapFramesUser(MiSpaceOfProcess(Process), (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress), FALSE);
 
     if (Attached)
         KeUnstackDetachProcess(&ApcState);

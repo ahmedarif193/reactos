@@ -587,7 +587,7 @@ SysMdl(void)
         CHECK(NT_SUCCESS(UserWrite64(&World, 0, Payload + 0x1008, 0xFEED)));
         Mdl = MiMdlAllocate(&Process, Payload, 0x3000);
         CHECK(NT_SUCCESS(MiProbeAndLockPages(Mdl, TRUE, TRUE)));
-        CHECK(NT_SUCCESS(MiMapFramesUser(&Process, Mdl->Frames, 3, MI_PROT_READWRITE, 0, &UserMapping)));
+        CHECK(NT_SUCCESS(MiMapFramesUser(&Process, Mdl->Frames, 3, MI_PROT_READWRITE, 0, TRUE, &UserMapping)));
         CHECK(UserMapping != 0 && UserMapping != Payload);
         CHECK(UserRead64(&World, 0, UserMapping + 0x1008, &Status) == 0xFEED);
         CHECK(NT_SUCCESS(UserWrite64(&World, 0, UserMapping + 0x2000, 0xBEEF)));
@@ -595,12 +595,14 @@ SysMdl(void)
         CHECK(MiTrimAddressSpace(&Process, 1000, TRUE) != 0);
         CHECK(UserRead64(&World, 0, UserMapping + 0x1008, &Status) == 0xFEED && NT_SUCCESS(Status));
         CHECK(MiFreeVirtualMemory(&Process, &(ULONG64){UserMapping}, &(ULONG64){0}, MI_MEM_RELEASE) ==
-              STATUS_UNABLE_TO_FREE_VM);
-        CHECK(MiUnmapFramesUser(&Process, Payload) == STATUS_NOT_MAPPED_VIEW);
-        CHECK(NT_SUCCESS(MiUnmapFramesUser(&Process, UserMapping)));
+              STATUS_UNABLE_TO_DELETE_SECTION);
+        CHECK(MiUnmapFramesUser(&Process, Payload, TRUE) == STATUS_NOT_MAPPED_VIEW);
+        CHECK(MiUnmapFramesUser(&Process, UserMapping + 0x2FFF, FALSE) == STATUS_INVALID_PAGE_PROTECTION);
+        CHECK(UserRead64(&World, 0, UserMapping + 0x1008, &Status) == 0xFEED && NT_SUCCESS(Status));
+        CHECK(NT_SUCCESS(MiUnmapFramesUser(&Process, UserMapping, TRUE)));
         UserRead64(&World, 0, UserMapping, &Status);
         CHECK(Status == STATUS_ACCESS_VIOLATION);
-        CHECK(NT_SUCCESS(MiMapFramesUser(&Process, Mdl->Frames, 3, MI_PROT_READONLY, 0, &UserMapping)));
+        CHECK(NT_SUCCESS(MiMapFramesUser(&Process, Mdl->Frames, 3, MI_PROT_READONLY, 0, TRUE, &UserMapping)));
         CHECK(UserWrite64(&World, 0, UserMapping, 1) == STATUS_ACCESS_VIOLATION);
         MiUnlockPages(Mdl);
         MiMdlFree(Mdl);

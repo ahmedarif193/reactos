@@ -176,6 +176,7 @@ typedef struct _MI_VAD
     BOOLEAN Inherit;
     BOOLEAN CacheView;
     BOOLEAN WritableUser;
+    BOOLEAN LockedPages;
     volatile LONG PteTouched;
     struct _MI_SEGMENT *Segment;
     ULONG64 SegmentPageOffset;
@@ -272,8 +273,9 @@ NTSTATUS MiRotateApply(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddr
                        _In_opt_ const MI_FRAME_NUMBER *Frames, _In_ ULONG LeafFlags);
 VOID MiCleanAddressSpace(_Inout_ PMI_ADDRESS_SPACE Space);
 NTSTATUS MiMapFramesUser(_Inout_ PMI_ADDRESS_SPACE Space, _In_ const MI_FRAME_NUMBER *Frames, _In_ ULONG PageCount,
-                         _In_ ULONG Protection, _In_ ULONG LeafFlags, _Inout_ PULONG64 BaseAddress);
-NTSTATUS MiUnmapFramesUser(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAddress);
+                         _In_ ULONG Protection, _In_ ULONG LeafFlags, _In_ BOOLEAN LockedPages,
+                         _Inout_ PULONG64 BaseAddress);
+NTSTATUS MiUnmapFramesUser(_Inout_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 BaseAddress, _In_ BOOLEAN LockedPages);
 VOID MiUnmapFramesUserLocked(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PMI_VAD Vad);
 NTSTATUS MiAllocateLargePages(_Inout_ PMI_ADDRESS_SPACE Space, _Inout_ PULONG64 BaseAddress,
                               _Inout_ PULONG64 RegionSize, _In_ ULONG AllocationType, _In_ ULONG Protection,
