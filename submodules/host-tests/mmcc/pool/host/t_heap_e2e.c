@@ -379,7 +379,7 @@ SmpWorker(void *Argument)
         else if ((Rng(&Seed) & 3) == 0)
         {
             ULONG Box = (ULONG)(Rng(&Seed) % SMP_MAILBOXES);
-            PVOID Previous = __sync_lock_test_and_set(&Context->Mailbox[Box], Local[Slot]);
+            PVOID Previous = __atomic_exchange_n(&Context->Mailbox[Box], Local[Slot], __ATOMIC_ACQ_REL);
 
             Local[Slot] = NULL;
             if (Previous != NULL)
