@@ -67,6 +67,16 @@ MiSpaceOfProcess(
 }
 
 FORCEINLINE
+BOOLEAN
+MiProcessHasSecureRanges(
+    _In_ PEPROCESS Process)
+{
+    PMI_PROCESS Native = MI_PROCESS_OF(Process);
+
+    return (BOOLEAN)(Native != NULL && MI_ATOMIC_READ32(&Native->SecureRangeCount) != 0);
+}
+
+FORCEINLINE
 PMI_ADDRESS_SPACE
 MiSpaceForAddress(
     _In_ PVOID Address)

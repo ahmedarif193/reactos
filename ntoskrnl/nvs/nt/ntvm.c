@@ -417,16 +417,19 @@ NtFreeVirtualMemory(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Base = (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress);
-    if (RegionSize == 0)
-        MiVadRangeForAddress(MiSpaceOfProcess(Target.Process), Base, &VadStart, &Size);
-    else
-        Size = ((ULONG64)(ULONG_PTR)BaseAddress + RegionSize + PAGE_SIZE - 1) & ~((ULONG64)PAGE_SIZE - 1);
-
-    if (MiSecureRangeConflict(Target.Process, Base, Size, TRUE, 0))
+    if (MiProcessHasSecureRanges(Target.Process))
     {
-        MiReleaseTargetProcess(&Target);
-        return (FreeType == MEM_RELEASE) ? STATUS_UNABLE_TO_FREE_VM : STATUS_UNABLE_TO_DECOMMIT_VM;
+        Base = (ULONG64)(ULONG_PTR)PAGE_ALIGN(BaseAddress);
+        if (RegionSize == 0)
+            MiVadRangeForAddress(MiSpaceOfProcess(Target.Process), Base, &VadStart, &Size);
+        else
+            Size = ((ULONG64)(ULONG_PTR)BaseAddress + RegionSize + PAGE_SIZE - 1) & ~((ULONG64)PAGE_SIZE - 1);
+
+        if (MiSecureRangeConflict(Target.Process, Base, Size, TRUE, 0))
+        {
+            MiReleaseTargetProcess(&Target);
+            return (FreeType == MEM_RELEASE) ? STATUS_UNABLE_TO_FREE_VM : STATUS_UNABLE_TO_DECOMMIT_VM;
+        }
     }
 
     Base = (ULONG64)(ULONG_PTR)BaseAddress;

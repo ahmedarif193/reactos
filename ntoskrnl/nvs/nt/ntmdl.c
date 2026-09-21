@@ -664,7 +664,7 @@ MiSecureRangeConflict(
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
 
-    if (IsListEmpty(&MiSecureRanges))
+    if (!MiProcessHasSecureRanges(Process))
         return FALSE;
 
     KeAcquireSpinLock(&MiSecureRangeLock, &OldIrql);
@@ -696,7 +696,7 @@ MiSecureRangePurgeProcess(
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
 
-    if (IsListEmpty(&MiSecureRanges))
+    if (!MiProcessHasSecureRanges(Process))
         return;
 
     InitializeListHead(&Purged);
@@ -711,6 +711,7 @@ MiSecureRangePurgeProcess(
         {
             RemoveEntryList(&Range->Link);
             InsertTailList(&Purged, &Range->Link);
+            InterlockedDecrement(&MI_PROCESS_OF(Process)->SecureRangeCount);
         }
     }
 
@@ -736,6 +737,7 @@ MiSecureRangeRemove(
         if (Entry == &Target->Link)
         {
             RemoveEntryList(Entry);
+            InterlockedDecrement(&MI_PROCESS_OF(Target->Process)->SecureRangeCount);
             Found = TRUE;
             break;
         }
@@ -772,6 +774,7 @@ MmSecureVirtualMemory(
 
     KeAcquireSpinLock(&MiSecureRangeLock, &OldIrql);
     InsertTailList(&MiSecureRanges, &Range->Link);
+    InterlockedIncrement(&MI_PROCESS_OF(Range->Process)->SecureRangeCount);
     KeReleaseSpinLock(&MiSecureRangeLock, OldIrql);
 
     while (Va < End)
